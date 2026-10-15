@@ -40,7 +40,9 @@ export const Cell = styled.div<{ state: "idle" | "current" | "found" }>`
   ${({ state }) =>
     state === "current"
       ? css`
-          animation: ${anim.pop} 350ms ${anim.easing.out};
+          box-shadow: 0 0 0 4px ${color.accentSoft}, 0 6px 16px -6px ${color.accent};
+          transform: translateY(-2px);
+          animation: ${anim.pop} 420ms ${anim.easing.spring};
         `
       : state === "found"
         ? css`

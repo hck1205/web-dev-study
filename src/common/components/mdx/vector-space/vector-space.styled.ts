@@ -32,11 +32,17 @@ export const Dot = styled("circle", { shouldForwardProp: forward })<{ dim: boole
   transform-origin: center;
   transition:
     opacity 300ms ease,
-    r 300ms ease;
+    r 300ms ease,
+    filter 300ms ease;
+  ${({ focus }) =>
+    focus &&
+    css`
+      filter: drop-shadow(0 0 5px ${color.accent});
+    `}
   ${({ intro, order }) =>
     intro &&
     css`
-      animation: ${anim.pop} 450ms ${anim.easing.out} ${order * 60}ms backwards;
+      animation: ${anim.pop} 520ms ${anim.easing.spring} ${order * 60}ms backwards;
     `}
 `;
 
@@ -58,7 +64,8 @@ export const Query = styled.path`
   stroke-width: 2;
   transform-box: fill-box;
   transform-origin: center;
-  animation: ${anim.dropIn} 450ms ${anim.easing.out};
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.25));
+  animation: ${anim.dropIn} 520ms ${anim.easing.spring};
 `;
 
 export const Ring = styled.circle`
@@ -96,6 +103,7 @@ export const Hop = styled.circle`
   stroke: ${color.surface};
   stroke-width: 2;
   opacity: 0;
+  filter: drop-shadow(0 0 4px ${color.accent});
   animation: ${anim.travel} 500ms ${anim.easing.inOut} forwards;
 `;
 
