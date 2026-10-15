@@ -10,8 +10,8 @@ export function StackDemo() {
   return (
     <Page>
       <header>
-        <Title>Stack check</Title>
-        <Lead>Emotion, Jotai, Axios, TanStack Query가 함께 동작하는지 확인하는 페이지입니다.</Lead>
+        <Title>Labs</Title>
+        <Lead>사이트에 쓰는 라이브러리(Jotai, Axios, TanStack Query)를 직접 만져보는 실험 페이지입니다.</Lead>
       </header>
 
       <Card>

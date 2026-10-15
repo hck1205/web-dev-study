@@ -5,10 +5,10 @@ import { SiteHeader } from "../site-header";
 import { Frame, Main } from "./shell.styled";
 import type { ShellProps } from "./shell.type";
 
-export function Shell({ children }: ShellProps) {
+export function Shell({ navItems, children }: ShellProps) {
   return (
     <Frame>
-      <SiteHeader />
+      <SiteHeader items={navItems} />
       <Main>{children}</Main>
       <SiteFooter />
     </Frame>

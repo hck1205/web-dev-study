@@ -1,6 +1,6 @@
-export interface NavItem {
-  label: string;
-  href: string;
-  /** 이 prefix로 시작하는 경로에서 활성 상태로 표시한다 */
-  prefix: string;
+import type { NavNode } from "../nav-tree";
+
+export interface SiteHeaderProps {
+  /** 상단 메뉴. 각 항목은 children으로 하위 메뉴를 임의 깊이까지 가질 수 있다. */
+  items: NavNode[];
 }

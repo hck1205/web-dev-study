@@ -1,0 +1,16 @@
+/** 토픽 트리의 한 노드. children에 같은 구조를 중첩해 임의 깊이의 하위 메뉴를 만들 수 있다. */
+export interface Topic {
+  /** URL 세그먼트. kebab-case (예: "server-infra") */
+  id: string;
+  label: string;
+  description?: string;
+  children?: Topic[];
+}
+
+/** 트리를 평탄화한 항목. path는 루트부터 이 노드까지의 id 목록. */
+export interface FlatTopic {
+  topic: Topic;
+  path: string[];
+  /** 루트부터 이 노드까지(자기 자신 포함)의 토픽 목록. 브레드크럼에 쓴다. */
+  trail: Topic[];
+}

@@ -1,18 +1,9 @@
 import { POSTS } from "./posts";
 import { postHref } from "./utils";
 
-export type { Category, CategoryId, Difficulty, Post } from "./types";
+export type { Difficulty, Post } from "./types";
 export { POSTS } from "./posts";
-export {
-  CATEGORIES,
-  DIFFICULTY_LABELS,
-  filterByCategory,
-  formatDate,
-  getCategory,
-  isCategoryId,
-  postHref,
-  sortByDateDesc,
-} from "./utils";
+export { DIFFICULTY_LABELS, formatDate, postHref, sortByDateDesc } from "./utils";
 
 export const getPostBySlug = (slug: string) => POSTS.find((post) => post.slug === slug);
 

@@ -103,16 +103,34 @@ src/
 UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 값을 직접 쓰지 않는다.
 
 - **tokens**: `color`(CSS 변수 참조, 라이트/다크 자동), `space`, `radius`, `font`, `shadow`, `layout`, `zIndex`, `motion`. 새 색이 필요하면 `tokens/types.ts`·`palette.ts`의 라이트·다크 **양쪽**에 추가한다. hex 값을 컴포넌트에 하드코딩하지 않는다.
-- **components**: `Button`, `Badge`, `Card`, `Container`, `IconButton` (+ `icons`). 새 공용 UI는 `design-system/components/{name}/`에 같은 파일 패턴으로 만들고 `index.ts`에 등록한다. 반복되는 UI가 두 군데 이상이면 먼저 DS 컴포넌트로 올린다.
+- **components**: `Button`, `Badge`, `Card`, `Container`, `IconButton` (+ `icons`). 블로그 톤에 맞게 꼭 필요한 곳에만 쓴다. 새 공용 UI는 `design-system/components/{name}/`에 같은 파일 패턴으로 만들고 `index.ts`에 등록한다. 반복되는 UI가 두 군데 이상이면 먼저 DS 컴포넌트로 올린다.
 - **테마**: 라이트/다크/시스템. `html[data-theme]`로 전환하고 `common/atoms/theme`(get/set/reset)로 상태를 다룬다. `layout.tsx`의 초기 스크립트가 FOUC를 막는다. 다크 모드에서도 가독성을 확인한다.
 - **폰트**: Pretendard Variable(동적 서브셋), 코드는 `font.mono`.
 - **레이아웃**: 페이지는 `Container`(`wide` 72rem / `narrow` 44rem)로 감싼다. `Shell`(헤더·푸터)은 폭을 제한하지 않는다.
-- 글 상세는 `features/posts/components/post-layout`(헤더 + 본문 + 목차)이 담당한다.
+- 글 상세는 `features/posts/components/post-layout`(토픽 경로 + 제목 + 본문 + 목차)이 담당한다. 홈·목록·토픽 페이지는 `Container size="narrow"`로 읽기 좋은 폭을 유지한다.
+
+## 토픽 (메뉴·분류)
+
+토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
+
+- 최상위: `Programming`(AI, Algorithms, Backend, Common, Computer Science, Database, Frontend, Network, OS, Server/Infra, System Design), `자기개발`(English)
+- **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
+- 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
+- 메뉴 UI는 `common/components/nav-tree`(재귀 트리)와 `site-header`가 담당하며 features를 직접 import하지 않는다. `layout.tsx`가 `TOPIC_NAV`를 `Shell`에 props로 넘긴다.
 
 ## 글 추가
 
 1. `src/app/posts/{slug}/page.mdx` 를 만든다. 첫 줄에 `export const metadata = getPostMetadata("{slug}")`.
-2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, category, tags, date)를 추가한다. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다.
+2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, tags, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 카드에 토픽이 표시되지 않으니 `topics.ts`와 맞춘다.
+3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다.
+
+## 블로그 톤
+
+이 사이트는 서비스나 제품이 아니라 **개인 블로그**다. 글이 중심이고 장식은 최소화한다.
+
+- 마케팅 문구, 히어로, CTA 버튼("시작하기", "둘러보기" 등), 로고 마크, 기능 소개 카드, 안내성 문구를 넣지 않는다.
+- 글 목록은 카드 그리드가 아니라 날짜·제목·요약·태그로 이루어진 **목록(`PostItem`)** 으로 보여준다.
+- 문구는 담백하게 쓴다. 홈은 사이트 이름과 한 줄 소개, 최근 글, 주제 링크만 둔다.
 
 ## 기타
 
