@@ -18,7 +18,7 @@ export const Root = styled.article`
   }
 `;
 
-export const Date = styled.time`
+export const PublishedAt = styled.time`
   padding-top: 0.25rem;
   color: ${color.textSubtle};
   font-size: ${font.size.sm};

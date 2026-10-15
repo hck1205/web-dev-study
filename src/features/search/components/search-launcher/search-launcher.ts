@@ -65,6 +65,21 @@ export function useSearchLauncher() {
     setQuery("");
   };
 
+  // Tab 포커스가 모달 밖(뒤 페이지)으로 빠져나가지 않게 처음과 끝을 잇는다.
+  const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab") return;
+    const focusables = event.currentTarget.querySelectorAll<HTMLElement>("input, button, a[href]");
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const onChange = (value: string) => {
     setQuery(value);
     setActiveIndex(0);
@@ -97,5 +112,6 @@ export function useSearchLauncher() {
     onKeyDown,
     setActiveIndex,
     selectResult,
+    trapFocus,
   };
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { SITE } from "@/common/config/site";
 import { Container } from "@/common/design-system";
 import { Root, Row } from "./site-footer.styled";
 
@@ -8,7 +9,7 @@ export function SiteFooter() {
     <Root>
       <Container>
         <Row>
-          <span>© {new Date().getFullYear()} web-dev-study</span>
+          <span>© {new Date().getFullYear()} {SITE.name}</span>
         </Row>
       </Container>
     </Root>

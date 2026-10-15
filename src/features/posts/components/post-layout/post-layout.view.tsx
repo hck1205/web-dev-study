@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Container, Tag } from "@/common/design-system";
+import { Container } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
-import { DIFFICULTY_LABELS } from "../../registry";
+import { DifficultyBadge } from "../difficulty-badge";
+import { PostTags } from "../post-tags";
 import { usePostLayout } from "./post-layout";
 import {
   BadgeRow,
@@ -25,8 +26,6 @@ import {
 import type { PostLayoutProps } from "./post-layout.type";
 import type { TocItem } from "./hooks/use-post-toc";
 
-const DIFFICULTY_TONE = { easy: "success", medium: "warning", hard: "danger" } as const;
-
 function TocLinks({ items, activeId }: { items: TocItem[]; activeId: string | null }) {
   return (
     <TocList>
@@ -42,7 +41,7 @@ function TocLinks({ items, activeId }: { items: TocItem[]; activeId: string | nu
 }
 
 export function PostLayout({ children }: PostLayoutProps) {
-  const { bodyRef, post, crumbs, date, tags, toc } = usePostLayout();
+  const { bodyRef, post, crumbs, date, toc } = usePostLayout();
 
   return (
     <Container>
@@ -60,19 +59,13 @@ export function PostLayout({ children }: PostLayoutProps) {
                       </span>
                     ))}
                   </Crumbs>
-                  {post.difficulty && (
-                    <Badge tone={DIFFICULTY_TONE[post.difficulty]}>{DIFFICULTY_LABELS[post.difficulty]}</Badge>
-                  )}
+                  {post.difficulty && <DifficultyBadge difficulty={post.difficulty} />}
                 </BadgeRow>
                 <Title>{post.title}</Title>
                 <Summary>{post.summary}</Summary>
                 <Meta>
                   <time dateTime={post.date}>{date}</time>
-                  {tags.map((tag) => (
-                    <Tag key={tag.slug} href={tag.href}>
-                      {tag.label}
-                    </Tag>
-                  ))}
+                  <PostTags tags={post.tags} />
                 </Meta>
               </Header>
             )}

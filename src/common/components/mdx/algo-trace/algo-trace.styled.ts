@@ -1,32 +1,6 @@
 import styled from "@emotion/styled";
-import { color, font, motion, radius, space } from "@/common/design-system";
-import { media } from "@/common/styles/breakpoints";
-
-export const Frame = styled.figure`
-  margin: ${space[6]} 0;
-  overflow: hidden;
-  border: 1px solid ${color.border};
-  background: ${color.surface};
-  margin-left: calc(-1 * ${space[4]});
-  margin-right: calc(-1 * ${space[4]});
-  border-left: 0;
-  border-right: 0;
-
-  ${media.tablet} {
-    margin-left: 0;
-    margin-right: 0;
-    border-left: 1px solid ${color.border};
-    border-right: 1px solid ${color.border};
-    border-radius: ${radius.lg};
-  }
-`;
-
-export const Caption = styled.figcaption`
-  padding: ${space[3]} ${space[4]};
-  border-bottom: 1px solid ${color.border};
-  color: ${color.textMuted};
-  font-size: ${font.size.sm};
-`;
+import { css } from "@emotion/react";
+import { anim, color, font, motion, radius, space } from "@/common/design-system";
 
 export const Stage = styled.div`
   padding: ${space[5]} ${space[4]} ${space[4]};
@@ -63,6 +37,17 @@ export const Cell = styled.div<{ state: "idle" | "current" | "found" }>`
   transition:
     background ${motion.base},
     border-color ${motion.base};
+  ${({ state }) =>
+    state === "current"
+      ? css`
+          animation: ${anim.pop} 350ms ${anim.easing.out};
+        `
+      : state === "found"
+        ? css`
+            color: ${color.success};
+            animation: ${anim.glow} 900ms ${anim.easing.out};
+          `
+        : ""}
 `;
 
 export const Index = styled.span`
@@ -77,6 +62,7 @@ export const Pointer = styled.span<{ visible: boolean }>`
   font-size: ${font.size.sm};
   line-height: 1;
   visibility: ${({ visible }) => (visible ? "visible" : "hidden")};
+  animation: ${anim.bounce} 600ms ${anim.easing.out};
 `;
 
 export const Memory = styled.div`
@@ -100,7 +86,19 @@ export const Chips = styled.div`
   min-height: 2.25rem;
 `;
 
-export const Chip = styled.span`
+export const Chip = styled.span<{ motion?: "enter" | "leave" }>`
+  overflow: hidden;
+  white-space: nowrap;
+  ${({ motion: m }) =>
+    m === "enter"
+      ? css`
+          animation: ${anim.dropIn} 380ms ${anim.easing.out};
+        `
+      : m === "leave"
+        ? css`
+            animation: ${anim.liftOut} 520ms ${anim.easing.out} forwards;
+          `
+        : ""}
   padding: ${space[1]} ${space[3]};
   border-radius: ${radius.full};
   background: ${color.accentSoft};
@@ -117,6 +115,7 @@ export const Empty = styled.span`
 `;
 
 export const Say = styled.p`
+  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
   margin: 0;
   padding: ${space[4]};
   border-top: 1px solid ${color.border};

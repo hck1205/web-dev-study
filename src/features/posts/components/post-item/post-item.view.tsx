@@ -1,16 +1,18 @@
 "use client";
 
-import { Badge, Tag } from "@/common/design-system";
+import { DifficultyBadge } from "../difficulty-badge";
+import { PostTags } from "../post-tags";
 import { usePostItem } from "./post-item";
-import { Body, Date, Meta, Root, Summary, Title, TitleLink } from "./post-item.styled";
+import { Body, Meta, PublishedAt, Root, Summary, Title, TitleLink } from "./post-item.styled";
 import type { PostItemProps } from "./post-item.type";
 
+/** 글 목록의 한 줄: 날짜 · 제목 · 요약 · 토픽 · 난이도 · 태그 */
 export function PostItem({ post }: PostItemProps) {
-  const { href, topicLabel, date, difficulty, tags } = usePostItem(post);
+  const { href, topicLabel, date } = usePostItem(post);
 
   return (
     <Root>
-      <Date dateTime={post.date}>{date}</Date>
+      <PublishedAt dateTime={post.date}>{date}</PublishedAt>
       <Body>
         <Title>
           <TitleLink href={href}>{post.title}</TitleLink>
@@ -18,12 +20,8 @@ export function PostItem({ post }: PostItemProps) {
         <Summary>{post.summary}</Summary>
         <Meta>
           {topicLabel && <span>{topicLabel}</span>}
-          {difficulty && <Badge tone={difficulty.tone}>{difficulty.label}</Badge>}
-          {tags.map((tag) => (
-            <Tag key={tag.slug} href={tag.href}>
-              {tag.label}
-            </Tag>
-          ))}
+          {post.difficulty && <DifficultyBadge difficulty={post.difficulty} />}
+          <PostTags tags={post.tags} />
         </Meta>
       </Body>
     </Root>

@@ -1,33 +1,5 @@
 import styled from "@emotion/styled";
-import { color, font, radius, space } from "@/common/design-system";
-import { media } from "@/common/styles/breakpoints";
-
-export const Frame = styled.figure`
-  margin: ${space[6]} 0;
-  overflow: hidden;
-  border: 1px solid ${color.border};
-  background: ${color.surface};
-  margin-left: calc(-1 * ${space[4]});
-  margin-right: calc(-1 * ${space[4]});
-  border-left: 0;
-  border-right: 0;
-
-  ${media.tablet} {
-    margin-left: 0;
-    margin-right: 0;
-    border-left: 1px solid ${color.border};
-    border-right: 1px solid ${color.border};
-    border-radius: ${radius.lg};
-  }
-`;
-
-export const Caption = styled.figcaption`
-  padding: ${space[3]} ${space[4]};
-  border-top: 1px solid ${color.border};
-  color: ${color.textMuted};
-  font-size: ${font.size.sm};
-  word-break: keep-all;
-`;
+import { anim, color, font } from "@/common/design-system";
 
 export const Svg = styled.svg`
   display: block;
@@ -76,4 +48,11 @@ export const EdgeLabel = styled.text`
 
 export const Head = styled.path`
   fill: ${color.textSubtle};
+`;
+
+/** 화살표를 따라 흘러가는 점. --dx, --dy 로 이동 거리, animation-delay 로 엇갈리게 출발한다. */
+export const Flow = styled.circle`
+  fill: ${color.accent};
+  opacity: 0;
+  animation: ${anim.travel} 2400ms ${anim.easing.inOut} infinite;
 `;

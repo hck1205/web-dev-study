@@ -1,11 +1,13 @@
 "use client";
 
 import { useId } from "react";
+import { useInView } from "@/common/hooks/use-in-view";
 import type { ConceptDiagramProps } from "./concept-diagram.type";
 import { clipToNode } from "./concept-diagram.utils";
 
 export function useConceptDiagram({ nodes, edges }: ConceptDiagramProps) {
   const uid = useId().replace(/:/g, "");
+  const { ref, inView } = useInView<HTMLDivElement>();
   const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
 
   const lines = edges.flatMap((edge, index) => {
@@ -17,5 +19,5 @@ export function useConceptDiagram({ nodes, edges }: ConceptDiagramProps) {
     return [{ key: index, edge, start, end, mid: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 } }];
   });
 
-  return { uid, lines };
+  return { uid, ref, inView, lines };
 }

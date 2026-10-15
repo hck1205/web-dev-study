@@ -56,7 +56,7 @@ export const MobileOnly = styled.div`
   }
 `;
 
-const navItemStyle = (active: boolean) => `
+const navItemStyle = `
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;
@@ -68,7 +68,7 @@ const navItemStyle = (active: boolean) => `
 `;
 
 export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
-  ${({ active }) => navItemStyle(active)}
+  ${navItemStyle}
   border-radius: ${radius.md};
   background: ${({ active }) => (active ? color.accentSoft : "transparent")};
   color: ${({ active }) => (active ? color.accent : color.textMuted)};
@@ -85,8 +85,11 @@ export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "act
   }
 `;
 
-export const NavButton = styled.button<{ active: boolean; open: boolean }>`
-  ${({ active }) => navItemStyle(active)}
+export const NavButton = styled("button", { shouldForwardProp: (prop) => prop !== "active" && prop !== "open" })<{
+  active: boolean;
+  open: boolean;
+}>`
+  ${navItemStyle}
   border-radius: ${radius.md};
   background: ${({ active, open }) => (active || open ? color.accentSoft : "transparent")};
   color: ${({ active, open }) => (active || open ? color.accent : color.textMuted)};

@@ -1,7 +1,7 @@
 import type { ConceptNode } from "./concept-diagram.type";
 
-export const NODE_W = 120;
-export const NODE_H = 44;
+const NODE_W = 120;
+const NODE_H = 44;
 
 export const nodeSize = (node: ConceptNode) => ({ w: node.w ?? NODE_W, h: node.h ?? NODE_H });
 

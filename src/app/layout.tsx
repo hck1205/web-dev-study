@@ -1,15 +1,17 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
+// atoms/theme의 index.ts는 클라이언트 전용(jotai)이라, 서버인 layout에서는 상수 파일만 직접 가져온다.
 import { THEME_STORAGE_KEY } from "@/common/atoms/theme/constants";
+import { SITE } from "@/common/config/site";
 import { Shell } from "@/common/components/shell";
 import { AppProviders } from "@/common/providers/app-providers";
 import { SearchLauncher } from "@/features/search/components/search-launcher";
 import { TOPIC_NAV } from "@/features/topics/registry";
 
 export const metadata: Metadata = {
-  title: { default: "web-dev-study", template: "%s · web-dev-study" },
-  description: "개발하며 공부한 것들을 기록하는 블로그",
+  title: { default: SITE.name, template: `%s · ${SITE.name}` },
+  description: SITE.description,
 };
 
 export const viewport: Viewport = {

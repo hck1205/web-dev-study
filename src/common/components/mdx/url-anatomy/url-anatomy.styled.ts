@@ -1,34 +1,6 @@
 import styled from "@emotion/styled";
-import { color, font, motion, radius, space } from "@/common/design-system";
-import { media } from "@/common/styles/breakpoints";
-
-export const Frame = styled.figure`
-  margin: ${space[6]} 0;
-  overflow: hidden;
-  border: 1px solid ${color.border};
-  border-radius: ${radius.lg};
-  background: ${color.surface};
-  margin-left: calc(-1 * ${space[4]});
-  margin-right: calc(-1 * ${space[4]});
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0;
-
-  ${media.tablet} {
-    margin-left: 0;
-    margin-right: 0;
-    border-left: 1px solid ${color.border};
-    border-right: 1px solid ${color.border};
-    border-radius: ${radius.lg};
-  }
-`;
-
-export const Caption = styled.figcaption`
-  padding: ${space[3]} ${space[4]};
-  border-bottom: 1px solid ${color.border};
-  color: ${color.textMuted};
-  font-size: ${font.size.sm};
-`;
+import { css, keyframes } from "@emotion/react";
+import { anim, color, font, motion, radius, space } from "@/common/design-system";
 
 export const Line = styled.div`
   display: flex;
@@ -51,7 +23,25 @@ export const Sep = styled.span`
   color: ${color.textSubtle};
 `;
 
-export const Chip = styled.button<{ active: boolean }>`
+/** 조각을 눌러볼 수 있다는 걸 알려주는 한 번의 반짝임 */
+const hint = keyframes`
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px ${color.accentSoft}; border-color: ${color.accent}; }
+`;
+
+export const Chip = styled("button", {
+  shouldForwardProp: (prop) => !["active", "intro", "order"].includes(prop),
+})<{ active: boolean; intro: boolean; order: number }>`
+  ${({ intro, order }) =>
+    intro &&
+    css`
+      animation: ${hint} 700ms ${anim.easing.out} ${order * 180}ms;
+    `}
+  ${({ active }) =>
+    active &&
+    css`
+      animation: ${anim.pop} 320ms ${anim.easing.out};
+    `}
   padding: ${space[1]} ${space[2]};
   min-height: 2.25rem;
   border: 1px solid ${({ active }) => (active ? color.accent : color.border)};
@@ -71,6 +61,7 @@ export const Chip = styled.button<{ active: boolean }>`
 `;
 
 export const Detail = styled.div`
+  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
   padding: ${space[4]};
   border-top: 1px solid ${color.border};
 

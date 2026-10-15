@@ -2,11 +2,14 @@
 export * from "./tokens";
 export { globalStyle } from "./global-style";
 export * from "./icons";
+export * as anim from "./motion";
 export { Badge } from "./components/badge";
 export type { BadgeProps, BadgeTone } from "./components/badge";
 export { Button } from "./components/button";
 export type { ButtonProps } from "./components/button";
 export { Card } from "./components/card";
 export { Container } from "./components/container";
+export { EmptyState } from "./components/empty-state";
 export { IconButton } from "./components/icon-button";
+export { PageHeader } from "./components/page-header";
 export { Tag } from "./components/tag";

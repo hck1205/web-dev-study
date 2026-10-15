@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { CloseIcon, IconButton, SearchIcon, Tag } from "@/common/design-system";
 import { postHref, tagLabel } from "@/features/posts";
 import { useSearchLauncher } from "./search-launcher";
@@ -22,70 +23,72 @@ import {
 export function SearchLauncher() {
   const s = useSearchLauncher();
 
+  const dialog = (
+    <Backdrop onMouseDown={(event) => event.target === event.currentTarget && s.close()}>
+      <Panel role="dialog" aria-modal="true" aria-label="글 검색" onKeyDown={s.trapFocus}>
+        <InputRow>
+          <SearchIcon size={20} />
+          <Input
+            ref={s.inputRef}
+            value={s.query}
+            onChange={(event) => s.onChange(event.target.value)}
+            onKeyDown={s.onKeyDown}
+            placeholder="제목, 태그, 토픽으로 검색"
+            aria-label="검색어"
+            enterKeyHint="search"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <IconButton label="검색 닫기" onClick={s.close}>
+            <CloseIcon />
+          </IconButton>
+        </InputRow>
+
+        <Body>
+          {s.query.trim() === "" ? (
+            <>
+              <Hint>태그로 바로 찾아보세요.</Hint>
+              <Tags>
+                {s.suggestedTags.map((tag) => (
+                  <Tag key={tag.slug} href={tag.href} onClick={s.selectResult}>
+                    {tag.label}
+                  </Tag>
+                ))}
+              </Tags>
+            </>
+          ) : s.results.length === 0 ? (
+            <Empty>&ldquo;{s.query}&rdquo;에 대한 글이 없습니다.</Empty>
+          ) : (
+            <ResultList role="listbox" aria-label="검색 결과">
+              {s.results.map(({ post, topicPath }, index) => (
+                <li key={post.slug} role="option" aria-selected={index === s.activeIndex}>
+                  <ResultLink
+                    href={postHref(post.slug)}
+                    active={index === s.activeIndex}
+                    onMouseEnter={() => s.setActiveIndex(index)}
+                    onClick={s.selectResult}
+                  >
+                    <ResultTitle>{post.title}</ResultTitle>
+                    <ResultMeta>
+                      {topicPath} · {post.tags.map((tag) => `#${tagLabel(tag)}`).join(" ")}
+                    </ResultMeta>
+                  </ResultLink>
+                </li>
+              ))}
+            </ResultList>
+          )}
+        </Body>
+      </Panel>
+    </Backdrop>
+  );
+
   return (
     <>
       <IconButton label="검색 (/)" onClick={s.openSearch}>
         <SearchIcon />
       </IconButton>
-
-      {s.open && (
-        <Backdrop onMouseDown={(event) => event.target === event.currentTarget && s.close()}>
-          <Panel role="dialog" aria-modal="true" aria-label="글 검색">
-            <InputRow>
-              <SearchIcon size={20} />
-              <Input
-                ref={s.inputRef}
-                value={s.query}
-                onChange={(event) => s.onChange(event.target.value)}
-                onKeyDown={s.onKeyDown}
-                placeholder="제목, 태그, 토픽으로 검색"
-                aria-label="검색어"
-                enterKeyHint="search"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <IconButton label="검색 닫기" onClick={s.close}>
-                <CloseIcon />
-              </IconButton>
-            </InputRow>
-
-            <Body>
-              {s.query.trim() === "" ? (
-                <>
-                  <Hint>태그로 바로 찾아보세요.</Hint>
-                  <Tags>
-                    {s.suggestedTags.map((tag) => (
-                      <Tag key={tag.slug} href={tag.href} onClick={s.selectResult}>
-                        {tag.label}
-                      </Tag>
-                    ))}
-                  </Tags>
-                </>
-              ) : s.results.length === 0 ? (
-                <Empty>&ldquo;{s.query}&rdquo;에 대한 글이 없습니다.</Empty>
-              ) : (
-                <ResultList role="listbox" aria-label="검색 결과">
-                  {s.results.map(({ post, topicPath }, index) => (
-                    <li key={post.slug} role="option" aria-selected={index === s.activeIndex}>
-                      <ResultLink
-                        href={postHref(post.slug)}
-                        active={index === s.activeIndex}
-                        onMouseEnter={() => s.setActiveIndex(index)}
-                        onClick={s.selectResult}
-                      >
-                        <ResultTitle>{post.title}</ResultTitle>
-                        <ResultMeta>
-                          {topicPath} · {post.tags.map((tag) => `#${tagLabel(tag)}`).join(" ")}
-                        </ResultMeta>
-                      </ResultLink>
-                    </li>
-                  ))}
-                </ResultList>
-              )}
-            </Body>
-          </Panel>
-        </Backdrop>
-      )}
+      {/* 헤더에 backdrop-filter가 있어 그 안의 fixed 요소는 헤더 기준으로 배치된다. body로 포털 렌더링해 화면 전체를 덮는다. */}
+      {s.open && createPortal(dialog, document.body)}
     </>
   );
 }

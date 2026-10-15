@@ -29,7 +29,7 @@ function Items({ nodes, nested, onNavigate, ...tree }: ItemsProps) {
                   {node.label}
                 </NodeLink>
               ) : (
-                <NodeLabel active={false}>{node.label}</NodeLabel>
+                <NodeLabel>{node.label}</NodeLabel>
               )}
               {hasChildren && (
                 <Toggle

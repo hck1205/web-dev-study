@@ -1,5 +1,5 @@
 import type { Post } from "@/features/posts";
-import { TOPIC_TREE, findTopic } from "@/features/topics/registry";
+import { findTopicByKey } from "@/features/topics/registry";
 import type { SearchResult } from "./types";
 
 const normalize = (text: string) => text.toLowerCase().normalize("NFC");
@@ -7,8 +7,8 @@ const normalize = (text: string) => text.toLowerCase().normalize("NFC");
 /** "#Hash Table" → "hashtable" 처럼 해시 기호와 공백을 무시해 태그를 비교한다. */
 const squash = (text: string) => normalize(text).replace(/[#\s]/g, "");
 
-export function topicLabels(post: Post): string[] {
-  return findTopic(TOPIC_TREE, post.topic.split("/"))?.trail.map((topic) => topic.label) ?? [];
+function topicLabels(post: Post): string[] {
+  return findTopicByKey(post.topic)?.trail.map((topic) => topic.label) ?? [];
 }
 
 /**

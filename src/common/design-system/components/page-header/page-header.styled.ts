@@ -1,17 +1,20 @@
 import styled from "@emotion/styled";
-import { color, font, space } from "@/common/design-system";
 import { media } from "@/common/styles/breakpoints";
+import { color, font, space } from "../../tokens";
 
-export const Page = styled.div`
-  padding: ${space[8]} 0 0;
+export const Root = styled.header`
+  padding-top: ${space[8]};
+  margin-bottom: ${space[6]};
 
   ${media.tablet} {
     padding-top: ${space[12]};
+    margin-bottom: ${space[8]};
   }
 `;
 
-export const Back = styled.p`
+export const Eyebrow = styled.div`
   margin-bottom: ${space[3]};
+  color: ${color.textSubtle};
   font-size: ${font.size.sm};
 
   a {
@@ -26,7 +29,9 @@ export const Back = styled.p`
 export const Title = styled.h1`
   font-size: ${font.size["3xl"]};
   font-weight: ${font.weight.extrabold};
+  line-height: ${font.leading.tight};
   letter-spacing: -0.03em;
+  text-wrap: balance;
 
   ${media.tablet} {
     font-size: ${font.size["4xl"]};
@@ -34,14 +39,7 @@ export const Title = styled.h1`
 `;
 
 export const Lead = styled.p`
-  margin: ${space[2]} 0 ${space[6]};
+  margin-top: ${space[2]};
   color: ${color.textMuted};
-`;
-
-export const Count = styled.strong`
-  color: ${color.text};
-`;
-
-export const List = styled.div`
-  border-top: 1px solid ${color.border};
+  word-break: keep-all;
 `;

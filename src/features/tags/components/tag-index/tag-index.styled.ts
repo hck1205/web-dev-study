@@ -1,26 +1,6 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, motion, radius, space } from "@/common/design-system";
-import { media } from "@/common/styles/breakpoints";
-
-export const Page = styled.div`
-  padding: ${space[8]} 0 0;
-
-  ${media.tablet} {
-    padding-top: ${space[12]};
-  }
-`;
-
-export const Title = styled.h1`
-  margin-bottom: ${space[6]};
-  font-size: ${font.size["3xl"]};
-  font-weight: ${font.weight.extrabold};
-  letter-spacing: -0.03em;
-
-  ${media.tablet} {
-    font-size: ${font.size["4xl"]};
-  }
-`;
 
 export const List = styled.ul`
   display: flex;
@@ -56,9 +36,4 @@ export const TagChip = styled(Link)`
 export const Count = styled.span`
   color: ${color.textSubtle};
   font-size: ${font.size.xs};
-`;
-
-export const Empty = styled.p`
-  padding: ${space[10]} 0;
-  color: ${color.textSubtle};
 `;
