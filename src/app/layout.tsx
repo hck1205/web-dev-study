@@ -12,6 +12,7 @@ import { TOPIC_NAV } from "@/features/topics/registry";
 export const metadata: Metadata = {
   title: { default: SITE.name, template: `%s · ${SITE.name}` },
   description: SITE.description,
+  appleWebApp: { capable: true, title: SITE.name, statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

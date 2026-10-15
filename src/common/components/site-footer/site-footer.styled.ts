@@ -13,5 +13,6 @@ export const Row = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: ${space[2]} ${space[6]};
+  align-items: center;
   justify-content: space-between;
 `;
