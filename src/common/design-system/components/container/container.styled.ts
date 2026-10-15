@@ -2,7 +2,7 @@ import styled from "@emotion/styled";
 import { media } from "@/common/styles/breakpoints";
 import { layout, space } from "../../tokens";
 
-export const Box = styled.div<{ size: "narrow" | "wide" }>`
+export const Box = styled("div", { shouldForwardProp: (prop) => prop !== "size" })<{ size: "narrow" | "wide" }>`
   width: 100%;
   max-width: ${({ size }) => layout[size]};
   margin: 0 auto;

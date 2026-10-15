@@ -1,37 +1,7 @@
 import styled from "@emotion/styled";
-import { color, font, radius, space } from "@/common/design-system";
-import { media } from "@/common/styles/breakpoints";
+import { keyframes } from "@emotion/react";
+import { anim, color, font, radius, space } from "@/common/design-system";
 import type { StepState } from "./sequence-diagram.type";
-
-export const Frame = styled.figure`
-  margin: ${space[6]} 0;
-  overflow: hidden;
-  border: 1px solid ${color.border};
-  border-radius: ${radius.lg};
-  background: ${color.surface};
-
-  /* 모바일: 본문 좌우 여백까지 펼쳐 그림을 최대한 크게 보여준다 */
-  margin-left: calc(-1 * ${space[4]});
-  margin-right: calc(-1 * ${space[4]});
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0;
-
-  ${media.tablet} {
-    margin-left: 0;
-    margin-right: 0;
-    border-left: 1px solid ${color.border};
-    border-right: 1px solid ${color.border};
-    border-radius: ${radius.lg};
-  }
-`;
-
-export const Caption = styled.figcaption`
-  padding: ${space[3]} ${space[4]};
-  border-bottom: 1px solid ${color.border};
-  color: ${color.textMuted};
-  font-size: ${font.size.sm};
-`;
 
 export const Svg = styled.svg`
   display: block;
@@ -62,8 +32,15 @@ export const ActorText = styled.text`
 const strokeBy = (state: StepState) =>
   state === "active" ? color.accent : state === "past" ? color.textSubtle : color.borderStrong;
 
+const appear = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
+`;
+
 export const Arrow = styled.path<{ state: StepState }>`
   fill: none;
+  /* 현재 단계 화살표(화살촉 포함)는 선이 다 그려진 뒤에 나타난다 */
+  animation: ${({ state }) => (state === "active" ? appear : "none")} 150ms 450ms backwards;
   stroke: ${({ state }) => strokeBy(state)};
   stroke-width: ${({ state }) => (state === "active" ? 2.5 : 1.5)};
   opacity: ${({ state }) => (state === "ghost" ? 0.35 : 1)};
@@ -126,4 +103,38 @@ export const Detail = styled.div`
     line-height: 1.6;
     white-space: pre;
   }
+`;
+
+/* ---- 현재 단계 강조 애니메이션 ---- */
+
+/** 현재 단계 선이 출발점에서 도착점으로 그려진다 */
+export const DrawPath = styled.path`
+  fill: none;
+  stroke: ${color.accent};
+  stroke-width: 2.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ${anim.draw} 500ms ${anim.easing.out} forwards;
+`;
+
+/** 메시지(점)가 화살표를 따라 날아간다 */
+export const Packet = styled.circle`
+  fill: ${color.accent};
+  stroke: ${color.surface};
+  stroke-width: 2;
+  animation: ${anim.travel} 650ms ${anim.easing.inOut} forwards;
+`;
+
+/** 단계 번호에서 물결이 퍼진다 */
+export const Ripple = styled.circle`
+  fill: none;
+  stroke: ${color.accent};
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ${anim.ripple} 900ms ${anim.easing.out} forwards;
+`;
+
+export const DetailBody = styled.div`
+  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
 `;

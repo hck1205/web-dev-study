@@ -2,8 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { isNodeInTrail } from "../nav-tree/nav-tree.utils";
-import type { NavNode } from "../nav-tree";
+import { isNodeInTrail, type NavNode } from "../nav-tree";
 import { useDropdown } from "./hooks/use-dropdown";
 
 export function useSiteHeader(items: NavNode[]) {

@@ -92,8 +92,8 @@ src/
 
 ## MDX
 
-- 본문은 `src/app/**/page.mdx`에 쓴다. `export const metadata = { title: "..." }`로 페이지 title을 지정한다.
-- `mdx-components.tsx`(루트)는 `@/common/components/mdx`의 `mdxComponents`와 글 레이아웃(`PostLayout`) wrapper를 연결한다. 본문 스타일은 `prose`, 표는 `mdx-table`(모바일 가로 스크롤), 강조 박스는 `<Callout kind="note|tip|warning">`를 쓴다.
+- 본문은 `src/app/posts/{slug}/page.mdx`에 쓴다. title은 `getPostMetadata(slug)`로 레지스트리에서 가져온다 (아래 "글 추가").
+- `mdx-components.tsx`(루트)는 `@/common/components/mdx`의 `mdxComponents`와 글 레이아웃(`PostLayout`) wrapper를 연결한다. 본문 스타일은 `prose`, 표는 `mdx-table`(모바일 가로 스크롤), 경고 박스는 `<Callout kind="note|tip|warning">`(남발 금지), 시각화는 아래 "그림과 애니메이션" 표를 따른다.
 - 새 MDX 전용 컴포넌트는 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.ts`에 등록한다.
 - **루트 `mdx-components.tsx`의 `MdxWrapper`는 서버 컴포넌트로 유지한다.** wrapper를 클라이언트 컴포넌트로 직접 연결하면 Next.js가 넘기는 `searchParams`가 직렬화되어 MDX 페이지가 동적 렌더링으로 바뀐다. `children`만 넘기는 서버 래퍼를 거친다.
 - 플러그인은 `next.config.ts`에 문자열 이름으로 지정한다(Turbopack): `remark-gfm`(표), `rehype-slug`(헤딩 id), `rehype-highlight`(코드 하이라이트). 하이라이트 색은 `prose.styled.ts`에서 관리한다.
@@ -102,58 +102,73 @@ src/
 
 UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 값을 직접 쓰지 않는다.
 
-- **tokens**: `color`(CSS 변수 참조, 라이트/다크 자동), `space`, `radius`, `font`, `shadow`, `layout`, `zIndex`, `motion`. 새 색이 필요하면 `tokens/types.ts`·`palette.ts`의 라이트·다크 **양쪽**에 추가한다. hex 값을 컴포넌트에 하드코딩하지 않는다.
-- **components**: `Button`, `Badge`, `Card`, `Container`, `IconButton` (+ `icons`). 블로그 톤에 맞게 꼭 필요한 곳에만 쓴다. 새 공용 UI는 `design-system/components/{name}/`에 같은 파일 패턴으로 만들고 `index.ts`에 등록한다. 반복되는 UI가 두 군데 이상이면 먼저 DS 컴포넌트로 올린다.
+- **tokens**: `color`(CSS 변수 참조, 라이트/다크 자동. 범주형 데이터 색 `series1~3` 포함), `space`, `radius`, `font`, `shadow`, `layout`, `zIndex`, `motion`. **anim**: 공용 키프레임(`draw`, `fadeUp`, `pop`, `dropIn`, `liftOut`, `ripple`, `bounce`, `travel`, `glow`)과 `easing`. 새 색이 필요하면 `tokens/types.ts`·`palette.ts`의 라이트·다크 **양쪽**에 추가한다. hex 값을 컴포넌트에 하드코딩하지 않는다.
+- **components**: `PageHeader`(페이지 제목 영역), `EmptyState`(빈 상태), `Container`, `Badge`, `Tag`(해시태그), `Button`, `Card`, `IconButton` (+ `icons`). 블로그 톤에 맞게 꼭 필요한 곳에만 쓴다. 새 공용 UI는 `design-system/components/{name}/`에 같은 파일 패턴으로 만들고 `index.ts`에 등록한다. 반복되는 UI가 두 군데 이상이면 먼저 DS 컴포넌트로 올린다.
 - **테마**: 라이트/다크/시스템. `html[data-theme]`로 전환하고 `common/atoms/theme`(get/set/reset)로 상태를 다룬다. `layout.tsx`의 초기 스크립트가 FOUC를 막는다. 다크 모드에서도 가독성을 확인한다.
 - **폰트**: Pretendard Variable(동적 서브셋), 코드는 `font.mono`.
-- **레이아웃**: 페이지는 `Container`(`wide` 72rem / `narrow` 44rem)로 감싼다. `Shell`(헤더·푸터)은 폭을 제한하지 않는다.
+- **레이아웃**: 페이지는 `Container`(`wide` 72rem / `narrow` 44rem)로 감싸고, 제목은 `PageHeader`로 만든다. `Shell`(헤더·푸터)은 폭을 제한하지 않는다.
+- **사이트 이름·소개**: `@/common/config/site`의 `SITE` 하나만 고친다 (헤더·푸터·홈·`<title>`이 모두 참조).
 - 글 상세는 `features/posts/components/post-layout`(토픽 경로 + 제목 + 본문 + 목차)이 담당한다. 홈·목록·토픽 페이지는 `Container size="narrow"`로 읽기 좋은 폭을 유지한다.
 
 ## 토픽 (메뉴·분류)
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend, Common, Computer Science, Database, Frontend, Network, OS, Server/Infra, System Design), `자기개발`(English, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend, Common › Git, Computer Science, Database, Frontend, Network, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, System Design), `자기개발`(English, 아이디어, 역사, 인문학)
+- 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
 - 메뉴 UI는 `common/components/nav-tree`(재귀 트리)와 `site-header`가 담당하며 features를 직접 import하지 않는다. `layout.tsx`가 `TOPIC_NAV`를 `Shell`에 props로 넘긴다.
 
-## 글 작성 원칙: 파인만 기법 + 시각화
+## 글 작성 원칙: 사람이 쓴 블로그 글 + 움직이는 그림
 
-이 블로그의 글은 **아주 쉬운 말**로, **텍스트보다 시각화**로 설명한다. 독자는 해당 분야를 모른다고 가정하고, 12살에게 설명한다는 마음으로 쓴다.
+이 블로그의 글은 **개인 개발 블로그에 사람이 직접 쓴 글**처럼 읽혀야 한다. 쉽게 설명하는 것(파인만 기법)은 유지하되, 틀에 맞춘 학습 자료처럼 보이면 안 된다.
 
-**말투·문장**
-- 전문 용어는 처음 나올 때 쉬운 말로 풀거나 비유로 먼저 설명한다. 정의는 비유 뒤에 둔다.
-- 짧은 문장, 한 문단에 한 가지 생각. 존댓말(~해요)로 부드럽게 쓴다.
-- 모르는 척하고 질문하며 끌고 간다("왜 쿠폰을 먼저 줄까요?"). 이해를 막는 지점을 미리 찾아 풀어 준다.
+### 문체
+- **평서체(~다)** 로 쓴다. 담백하게, 설명하듯 말한다. 필요하면 1인칭("나도 처음엔 헷갈렸다")을 가볍게 쓴다. 단, 겪지 않은 구체적인 경험을 지어내지 않는다.
+- 문장은 짧게, 문단 길이는 내용에 따라 자연스럽게 다르게. 한 문단에 한 생각.
+- 전문 용어는 처음 나올 때 쉬운 말로 풀어 쓴다. 비유는 글 전체에서 한두 개만 쓰고, 정했으면 끝까지 같은 비유로 간다.
+- 글은 계기나 실제 상황으로 시작한다("검색창에 ~를 쳤는데 ~가 안 나온다"). 정의부터 늘어놓지 않는다.
+- 소제목은 그 글의 내용을 담은 말로 짓는다("버튼을 누르면 일어나는 일", "하나하나 다 재면 느리다"). 글마다 같은 소제목을 반복하지 않는다.
+- 마무리는 짧게. 한 문단으로 핵심을 다시 짚거나, 다음에 볼 것을 적는다. 읽고 나서 독자가 자기 말로 설명할 수 있을 만큼 핵심이 분명해야 한다(파인만 기법의 목표).
 
-**글의 뼈대 (파인만 기법의 4단계)**: 아래 순서를 기본으로 한다. 주제에 맞게 조절하되 1, 2, 마지막은 반드시 넣는다.
-1. `## 한 줄로 말하면` — 핵심을 한 문장으로.
-2. `## 비유로 이해하기` — 일상 속 비유 (호텔 키, 냉장고, 접시 쌓기 …).
-3. `## 그림으로 보기` — 시각화 컴포넌트. 가능한 한 직접 눌러서 따라가게 한다.
-4. 단계별 설명, 비교 표, 코드.
-5. `## 헷갈리는 부분` — 흔한 오해와 막히는 곳. `<Callout kind="warning">` 사용.
-6. `## 내 말로 다시 설명해보기` — `<details><summary>Q…</summary>` 질문 2~3개와, `<Callout kind="tip" title="12살 친구에게 설명한다면">`로 마무리.
+### AI가 쓴 티가 나는 패턴 — 쓰지 않는다
+- 모든 글에 같은 뼈대: "한 줄로 말하면 / 비유로 이해하기 / 헷갈리는 부분 / 정리" 같은 고정 소제목
+- 학습 장치: "Q1. …" 퀴즈, `<details>` 정답 토글, "12살 친구에게 설명한다면" 같은 상자
+- 콜아웃 남발. `<Callout>`은 글 하나에 0~2개, 정말 따로 떼어야 할 경고에만
+- 굵은 글씨 남발. 한 문단에 많아야 하나
+- 과한 친절체(~해요 연발), 감탄, 이모지, "자, 이제 ~해 볼까요?"
+- 상투적인 연결 표현: "핵심은 ~입니다", "결론적으로", "요약하자면", "다음과 같습니다", "~라는 점", "~하는 것이 중요합니다"
+- 번역투: "~를 가지다", "~에 대해", "~를 통해", "~함으로써"
+- 스스로 묻고 답하기 반복("왜 그럴까요? 그 이유는 …")
+- 항목 수와 길이가 똑같은 불릿, 습관적인 3개짜리 나열, 섹션마다 끝에 붙는 요약
+- 습관적인 표. 비교가 정말 필요할 때만 쓴다
+- 근거 없는 일반론("많은 개발자들이 …")
 
-**시각화 컴포넌트** (`common/components/mdx`, MDX에서 import 없이 바로 사용)
+### 그림과 애니메이션
+- 설명의 중심은 그림이다. 글은 그림을 보기 전에 맥락을 주고, 본 뒤에 의미를 정리한다. 그림은 본문 흐름 안에서 자연스럽게 소개한다("아래 그림에서 다음을 누르면 …").
+- 그림은 **움직여야** 한다. 메시지가 날아가고, 값이 쌓였다 빠지고, 선이 그려지는 것처럼 변화가 눈에 보여야 직관적으로 이해된다. 정지된 도식만 있는 글은 만들지 않는다.
+- 그림 안의 단계 설명(steps의 title·detail·caption)도 본문과 같은 평서체로 짧게 쓴다.
 
-| 컴포넌트 | 언제 쓰나 |
-|---|---|
-| `<SequenceDiagram actors steps />` | 주체들이 메시지를 주고받는 흐름 (인증, 네트워크 요청 등). 단계별 설명·payload 표시, 자기 자신에게 하는 동작 지원 |
-| `<ConceptDiagram nodes edges />` | 용어들의 관계도. 좌표를 직접 지정 |
-| `<UrlAnatomy base params />` | 긴 URL·헤더·설정을 조각으로 나눠 눌러서 읽기 |
-| `<AlgoTrace cells steps />` | 배열·문자열을 훑으며 스택/해시맵 같은 "기억 장소"가 변하는 과정 |
-| `<Callout kind>` / 표 | 보조 설명, 비교 |
+| 컴포넌트 | 언제 쓰나 | 움직임 |
+|---|---|---|
+| `<SequenceDiagram actors steps />` | 주체들이 메시지를 주고받는 흐름 (인증, 네트워크 요청, RAG 등) | 단계마다 화살표가 그려지고 메시지 점이 날아가며 번호에 물결이 퍼진다 |
+| `<ConceptDiagram nodes edges />` | 용어·주체 사이의 관계도 | 화살표 방향으로 점이 계속 흐른다 |
+| `<UrlAnatomy base params />` | 긴 URL·헤더·설정을 조각으로 나눠 읽기 | 처음 보일 때 조각이 차례로 반짝이고, 고른 조각이 튀어나온다 |
+| `<AlgoTrace cells steps />` | 배열·문자열을 훑으며 스택/해시맵이 변하는 과정 | 현재 칸이 튀어나오고 값이 떨어져 쌓였다가 위로 빠진다 |
+| `<VectorSpace points groups query edges steps />` | 거리·유사도·최근접 탐색·그래프 탐색 | 점이 퍼지듯 나타나고, 질문 점·이웃 선·반경·탐색 경로가 단계별로 그려진다 |
 
-- 새 시각화가 필요하면 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.ts`에 등록한다. 단계 재생이 필요하면 `common/hooks/use-step-player`와 `step-controls`를 재사용한다.
-- 시각화는 모바일 폭(390px)에서도 읽히게 한다: SVG는 `viewBox`로 비율 유지, 라벨은 짧게(영문 약 16자 이내), 설명은 SVG 밖 HTML 패널에 쓴다. 색은 디자인 토큰만 쓴다.
-- 글 안에 직접 눌러보는 요소가 있다면 안내 문구로 알려준다("**다음**을 눌러 따라가 보세요").
+- 새 시각화는 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.ts`에 등록한다. 틀은 `viz-frame`, 단계 재생은 `common/hooks/use-step-player` + `step-controls`, 화면 진입 시 재생은 `common/hooks/use-in-view`, 움직임은 `@/common/design-system`의 `anim`(공용 키프레임)을 쓴다.
+- 애니메이션은 단계가 바뀔 때 `key`를 바꿔 다시 재생한다. 화면 밖에서 끝나 버리지 않게 `useInView`로 시작 시점을 잡는다.
+- 움직임 줄이기 설정(`prefers-reduced-motion`)을 켠 사용자에게는 애니메이션이 즉시 끝난 상태로 보인다(글로벌 스타일). 그래서 애니메이션이 끝난 최종 모습만으로도 의미가 통해야 한다.
+- 모바일 폭(390px)에서도 읽혀야 한다: SVG는 `viewBox`로 비율 유지, 라벨은 짧게(영문 약 16자 이내), 긴 설명은 SVG 밖 HTML 패널에.
+- 색은 디자인 토큰만 쓴다. 범주를 색으로 구분할 때는 `color.series1~3`을 이 순서대로 쓰고(산점도는 3개까지, dataviz 검증 통과값), 점마다 이름표와 범례를 붙여 색에만 의존하지 않는다.
 
 ## 글 추가
 
 1. `src/app/posts/{slug}/page.mdx` 를 만든다. 첫 줄에 `export const metadata = getPostMetadata("{slug}")`.
-2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, **tags**, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 토픽이 표시되지 않으니 `topics.ts`와 맞춘다. 요약(summary)도 쉬운 말로 쓴다.
-3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다.
+2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, **tags**, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 토픽이 표시되지 않으니 `topics.ts`와 맞춘다.
+3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다. 요약(summary)도 본문과 같은 평서체로 쓴다.
 4. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다. 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
 
 ## 검색
@@ -167,7 +182,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 이 사이트는 서비스나 제품이 아니라 **개인 블로그**다. 글이 중심이고 장식은 최소화한다.
 
 - 마케팅 문구, 히어로, CTA 버튼("시작하기", "둘러보기" 등), 로고 마크, 기능 소개 카드, 안내성 문구를 넣지 않는다.
-- 글 목록은 카드 그리드가 아니라 날짜·제목·요약·태그로 이루어진 **목록(`PostItem`)** 으로 보여준다.
+- 글 목록은 카드 그리드가 아니라 날짜·제목·요약·태그로 이루어진 **목록**으로 보여준다. 어디서든 `features/posts/components/post-item-list`(`PostItemList`)를 쓴다. 난이도는 `DifficultyBadge`, 태그는 `PostTags`를 재사용한다.
 - 문구는 담백하게 쓴다. 홈은 사이트 이름과 한 줄 소개, 최근 글, 주제 링크만 둔다.
 
 ## 기타

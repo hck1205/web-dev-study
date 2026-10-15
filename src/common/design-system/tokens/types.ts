@@ -31,4 +31,8 @@ export interface ThemeColors {
   syntaxNumber: string;
   syntaxTitle: string;
   syntaxType: string;
+  /** 범주형 데이터 색 (고정 순서, 산점도는 3개까지). dataviz 검증 통과값 */
+  series1: string;
+  series2: string;
+  series3: string;
 }

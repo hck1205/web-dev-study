@@ -1,5 +1,6 @@
 "use client";
 
+import { SITE } from "@/common/config/site";
 import { ChevronDownIcon, CloseIcon, Container, IconButton, MenuIcon } from "@/common/design-system";
 import { NavTree } from "../nav-tree";
 import { ThemeToggle } from "../theme-toggle";
@@ -26,9 +27,7 @@ export function SiteHeader({ items, actions }: SiteHeaderProps) {
     <Root>
       <Container>
         <Bar>
-          <Brand href="/">
-            web-dev-study
-          </Brand>
+          <Brand href="/">{SITE.name}</Brand>
 
           <DesktopNav aria-label="주요 메뉴" ref={dropdown.rootRef}>
             {entries.map(({ item, active }) =>

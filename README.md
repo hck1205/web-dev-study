@@ -1,4 +1,4 @@
-# web-dev-study
+# Matt's Blog
 
 웹 개발, 네트워크, 인프라, 알고리즘 등 CS 전반을 공부하는 공간.
 

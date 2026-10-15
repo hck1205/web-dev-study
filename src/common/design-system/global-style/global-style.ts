@@ -80,8 +80,14 @@ export const globalStyle = css`
     html {
       scroll-behavior: auto;
     }
-    * {
+    *,
+    *::before,
+    *::after {
       transition: none !important;
+      /* 애니메이션은 즉시 끝난 상태로 보여준다 (반복 애니메이션도 1회로) */
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
     }
   }
 `;

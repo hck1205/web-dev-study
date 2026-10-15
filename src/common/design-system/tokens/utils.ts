@@ -2,7 +2,7 @@ import type { ThemeColors } from "./types";
 
 const kebab = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 
-export const cssVarName = (key: string) => `--ds-color-${kebab(key)}`;
+const cssVarName = (key: string) => `--ds-color-${kebab(key)}`;
 
 /** { bg: "#fff" } → "--ds-color-bg: #fff;" */
 export function toCssVars(colors: ThemeColors): string {

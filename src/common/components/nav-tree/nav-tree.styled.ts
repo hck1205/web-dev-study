@@ -41,7 +41,7 @@ export const NodeLink = styled(Link, { shouldForwardProp: (prop) => prop !== "ac
   }
 `;
 
-export const NodeLabel = styled.span<{ active: boolean }>`
+export const NodeLabel = styled.span`
   flex: 1;
   padding: 0 ${space[3]};
   color: ${color.textMuted};
