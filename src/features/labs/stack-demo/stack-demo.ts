@@ -1,22 +1,18 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { atom, useAtom } from "jotai";
-import { httpClient } from "@/common/api/http-client";
-import type { HelloResponse } from "@/features/labs/hello";
-
-const countAtom = atom(0);
+import { useGetCount, useResetCount, useSetCount } from "@/features/labs/atoms/count";
+import { useHelloQuery } from "@/features/labs/query/hello";
 
 export function useStackDemo() {
-  const [count, setCount] = useAtom(countAtom);
-  const hello = useQuery({
-    queryKey: ["hello"],
-    queryFn: async () => (await httpClient.get<HelloResponse>("/hello")).data,
-  });
+  const count = useGetCount();
+  const setCount = useSetCount();
+  const resetCount = useResetCount();
+  const hello = useHelloQuery();
 
   return {
     count,
     increase: () => setCount((c) => c + 1),
+    resetCount,
     hello,
   };
 }

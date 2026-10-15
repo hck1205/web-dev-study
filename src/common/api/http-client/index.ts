@@ -1,1 +1,3 @@
-export { httpClient } from "./http-client";
+import { createHttpClient } from "./utils";
+
+export const httpClient = createHttpClient();

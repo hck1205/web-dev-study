@@ -4,12 +4,12 @@ import { useStackDemo } from "./stack-demo";
 import { Button } from "./stack-demo.styled";
 
 export function StackDemo() {
-  const { count, increase, hello } = useStackDemo();
+  const { count, increase, resetCount, hello } = useStackDemo();
 
   return (
     <section>
       <h2>Jotai</h2>
-      <Button onClick={increase}>count: {count}</Button>
+      <Button onClick={increase}>count: {count}</Button> <Button onClick={resetCount}>reset</Button>
 
       <h2>Axios + TanStack Query</h2>
       {hello.isPending && <p>loading...</p>}
