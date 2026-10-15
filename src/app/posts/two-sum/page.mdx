@@ -1,10 +1,8 @@
-export const metadata = { title: "Two Sum" };
+import { getPostMetadata } from "@/features/posts";
 
-# Two Sum
+export const metadata = getPostMetadata("two-sum");
 
-`Easy` · `Array` · `Hash Table`
-
-정수 배열 `nums`와 정수 `target`이 주어질 때, 합이 `target`이 되는 두 원소의 인덱스를 반환하세요.
+정수 배열 `nums`와 정수 `target`이 주어질 때, 합이 `target`이 되는 두 원소의 **인덱스**를 반환하세요.
 답은 정확히 하나 존재하며, 같은 원소를 두 번 쓸 수 없습니다.
 
 ```text
@@ -43,3 +41,8 @@ function twoSum(nums: number[], target: number): [number, number] {
 <Callout kind="warning">
   같은 원소를 두 번 쓰면 안 되므로, 현재 값을 맵에 넣기 **전에** 짝을 먼저 조회해야 합니다.
 </Callout>
+
+## 정리
+
+- "짝을 찾는" 문제는 **이미 본 값을 저장**해 두면 순회 한 번으로 풀리는 경우가 많습니다.
+- 시간을 줄이는 대신 공간을 쓰는 **time-space trade-off**의 가장 기본적인 예입니다.
