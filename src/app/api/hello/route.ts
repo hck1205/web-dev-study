@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
+import { createHelloResponse } from "@/features/labs/hello";
 
 export const dynamic = "force-dynamic";
 
 export function GET() {
-  return NextResponse.json({
-    message: "hello from route handler",
-    time: new Date().toISOString(),
-  });
+  return NextResponse.json(createHelloResponse());
 }

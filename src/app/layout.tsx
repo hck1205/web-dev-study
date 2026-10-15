@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { Shell } from "@/components/Shell";
-import { Providers } from "./providers";
+import { Shell } from "@/common/components/shell";
+import { AppProviders } from "@/common/providers/app-providers";
 
 export const metadata: Metadata = {
   title: { default: "web-dev-study", template: "%s · web-dev-study" },
@@ -12,9 +12,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko">
       <body>
-        <Providers>
+        <AppProviders>
           <Shell>{children}</Shell>
-        </Providers>
+        </AppProviders>
       </body>
     </html>
   );

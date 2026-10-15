@@ -1,12 +1,6 @@
-"use client";
+import { css } from "@emotion/react";
 
-import { Global, css } from "@emotion/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Provider as JotaiProvider } from "jotai";
-import { useState, type ReactNode } from "react";
-import { EmotionRegistry } from "@/lib/emotion-registry";
-
-const globalStyles = css`
+export const globalStyles = css`
   *,
   *::before,
   *::after {
@@ -55,18 +49,3 @@ const globalStyles = css`
     }
   }
 `;
-
-export function Providers({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(
-    () => new QueryClient({ defaultOptions: { queries: { staleTime: 30_000 } } }),
-  );
-
-  return (
-    <EmotionRegistry>
-      <Global styles={globalStyles} />
-      <QueryClientProvider client={queryClient}>
-        <JotaiProvider>{children}</JotaiProvider>
-      </QueryClientProvider>
-    </EmotionRegistry>
-  );
-}

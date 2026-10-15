@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { StackDemo } from "./StackDemo";
+import { StackDemo } from "@/features/labs/stack-demo";
 
 export const metadata: Metadata = { title: "Stack check" };
 

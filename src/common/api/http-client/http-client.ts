@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const http = axios.create({
+export const httpClient = axios.create({
   baseURL: "/api",
   timeout: 10_000,
 });
