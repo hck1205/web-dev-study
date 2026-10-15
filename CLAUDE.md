@@ -60,7 +60,7 @@ src/
 - **모든 코드는 클라이언트 컴포넌트로 작성한다.** container(`{name}.ts`), view(`{name}.view.tsx`), `page.tsx`에 `"use client"`를 선언한다. 서버 컴포넌트/SSR이 필요해지면 사용자가 요청할 때 전환한다.
   - 예외: `layout.tsx`(metadata export를 위해 서버 유지, 최소한의 html 셸만), `route.ts`(Route Handler), `page.mdx`(콘텐츠). client `page.tsx`는 `metadata`를 export할 수 없다.
 - 여러 scope에서 쓰이는 것은 `common`으로 옮긴다. 한 scope에서만 쓰이면 그 scope에 둔다.
-- 서버(Route Handler)와 클라이언트가 함께 쓰는 코드는 React에 의존하지 않게 만든다 (예: `features/labs/hello`).
+- 서버(`layout.tsx`, Route Handler)와 클라이언트가 함께 쓰는 코드는 React에 의존하지 않게 만든다 (예: `features/posts/registry`, `common/config/site`).
 
 ## 데이터 레이어 (api / query / atoms)
 
@@ -75,7 +75,8 @@ src/
 
 - 컴포넌트·container에서 axios, `useQuery`, `useAtom`을 직접 쓰지 않고 위 모듈의 훅/함수만 사용한다.
 - `query`, `atoms`의 `index.ts`는 클라이언트 전용이다. 서버 컴포넌트·Route Handler에서 import하지 않는다.
-- 서버와 클라이언트가 함께 쓰는 응답 타입은 React/axios에 의존하지 않는 모듈에 두고 `api/{name}/types.ts`에서 re-export한다 (예: `features/labs/hello`).
+- 서버와 클라이언트가 함께 쓰는 응답 타입은 React/axios에 의존하지 않는 모듈에 두고 `api/{name}/types.ts`에서 re-export한다.
+- 현재 예시: atoms는 `common/atoms/theme`, `features/search/atoms/search-open`. api·query는 아직 쓰는 곳이 없고, 외부 API가 필요해지면 `common/api/http-client`(axios 인스턴스)를 써서 이 패턴대로 추가한다.
 
 ## 반응형 (mobile-first)
 
