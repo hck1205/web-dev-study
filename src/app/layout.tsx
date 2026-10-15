@@ -25,6 +25,7 @@ export const viewport: Viewport = {
 const NAV_ITEMS = [
   ...TOPIC_NAV,
   { id: "tags", label: "Tags", href: "/tags" },
+  { id: "quiz", label: "퀴즈", href: "/quiz" },
   { id: "bookmarks", label: "즐겨찾기", href: "/bookmarks" },
 ];
 

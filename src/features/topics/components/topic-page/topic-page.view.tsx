@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { Container, PageHeader } from "@/common/design-system";
 import { PostItemList } from "@/features/posts/components/post-item-list";
+import { QuizLink } from "@/features/quiz/components/quiz-link";
 import { TopicLinkList } from "../topic-groups";
 import { useTopicPage } from "./topic-page";
-import { Section } from "./topic-page.styled";
+import { QuizSection, Section } from "./topic-page.styled";
 
 export function TopicPage() {
   const page = useTopicPage();
@@ -21,7 +22,7 @@ export function TopicPage() {
     );
   }
 
-  const { topic, crumbs, subtopics, posts } = page;
+  const { topic, topicKey, crumbs, subtopics, posts } = page;
 
   return (
     <Container size="narrow">
@@ -48,6 +49,10 @@ export function TopicPage() {
       )}
 
       <PostItemList posts={posts} emptyMessage="아직 이 토픽에 글이 없습니다." />
+
+      <QuizSection>
+        <QuizLink topic={topicKey} />
+      </QuizSection>
     </Container>
   );
 }

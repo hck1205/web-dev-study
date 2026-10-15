@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Container } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
 import { BookmarkButton } from "@/features/bookmarks/components/bookmark-button";
+import { QuizLink } from "@/features/quiz/components/quiz-link";
 import { DifficultyBadge } from "../difficulty-badge";
 import { PostTags } from "../post-tags";
 import { usePostLayout } from "./post-layout";
@@ -19,6 +20,7 @@ import {
   MetaEnd,
   MobileToc,
   Page,
+  PostQuiz,
   Summary,
   TocLink,
   TocList,
@@ -87,6 +89,12 @@ export function PostLayout({ children }: PostLayoutProps) {
             <Body ref={bodyRef}>
               <Prose>{children}</Prose>
             </Body>
+
+            {post && (
+              <PostQuiz>
+                <QuizLink topic={post.topic} />
+              </PostQuiz>
+            )}
           </Column>
 
           {toc.items.length > 0 && (

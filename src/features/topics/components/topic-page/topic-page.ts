@@ -16,6 +16,7 @@ export function useTopicPage() {
   return {
     found: true as const,
     topic: found.topic,
+    topicKey: key,
     crumbs: topicCrumbs(found),
     subtopics: (found.topic.children ?? []).map((child) => toLinkData(child, found.path)),
     posts: sortByDateDesc(POSTS.filter((post) => isInTopic(post.topic, key))),
