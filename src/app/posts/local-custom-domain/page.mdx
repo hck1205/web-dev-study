@@ -1,0 +1,354 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("local-custom-domain");
+
+로컬에서는 프론트엔드를 `localhost:3000`, API를 `localhost:8080`에 띄워 두고 개발한다. 로그인도 되고 API 호출도 잘 된다. 그런데 배포 환경은 `https://app.example.com`과 `https://api.example.com`이다. 올리고 나서야 쿠키가 안 실리고, CORS 에러가 나고, OAuth 로그인 후 돌아오는 주소가 안 맞는다. 로컬에서 한 번도 겪지 않은 문제들이다.
+
+이유는 간단하다. 로컬과 배포의 모양이 다르다. 이 글은 로컬에서도 `https://app.matt.test`, `https://api.matt.test`처럼 배포와 같은 모양의 주소로 개발하는 방법을 정리한다. 이름을 내 컴퓨터로 돌리고, 리버스 프록시로 서비스를 나누고, 브라우저가 믿는 인증서를 붙이는 세 단계다.
+
+## localhost가 감춰 주는 것들
+
+localhost는 브라우저가 특별 대우하는 이름이다. 그 대우 덕분에 개발이 편한데, 같은 이유로 배포에서 터질 문제를 미리 보지 못한다.
+
+첫째, 보안 컨텍스트다. 서비스 워커, 클립보드 API, `crypto.subtle` 같은 기능은 HTTPS 페이지에서만 동작한다. 그런데 `http://localhost`는 HTTPS가 아니어도 안전한 출처로 쳐 준다. 크롬과 파이어폭스는 `Secure` 쿠키도 `http://localhost`에서는 저장해 준다. 로컬에서는 HTTP로 다 되던 게, 다른 이름으로 가면 HTTPS 없이는 안 된다.
+
+둘째, 쿠키다. 쿠키는 포트로 나뉘지 않는다. `localhost:3000`이 받은 쿠키는 `localhost:8080`으로 가는 요청에도 실린다. 배포에서 `api.example.com`이 심은 쿠키를 `app.example.com`과 나눠 쓰려면 `Domain=example.com`을 정확히 적어야 하는데, 로컬에서는 그걸 안 적어도 돌아가 버린다. 반대로 여러 프로젝트를 localhost에서 번갈아 띄우면 `session` 같은 이름의 쿠키가 서로 덮어쓴다.
+
+셋째, CORS다. 개발 서버 프록시로 `/api`를 백엔드에 넘기면 브라우저는 같은 출처로만 요청한다. 배포에서 출처가 갈리면 그때 처음 CORS 설정을 시험하게 된다. CORS가 어디서 막히는지는 [CORS 글](/posts/cors)에 따로 정리했다.
+
+넷째, OAuth 리다이렉트 주소다. 많은 제공자가 `http://localhost`는 예외로 받아 주지만, 배포 주소는 HTTPS로 따로 등록해야 한다. 로컬과 배포의 콜백 처리가 미묘하게 달라질 여지가 생긴다.
+
+로컬 도메인을 쓰면 이 차이가 대부분 사라진다. `app.matt.test`와 `api.matt.test`는 배포처럼 출처가 다르고, 같은 사이트(`matt.test`)를 공유하고, HTTPS가 있어야 쿠키와 브라우저 기능이 제대로 동작한다.
+
+## 어떤 도메인을 쓸까
+
+아무 이름이나 쓰면 안 된다. 실제로 존재하는 도메인을 hosts 파일로 가로채면 그 사이트에 접속이 안 되고, 일부 최상위 도메인(TLD)은 브라우저가 특별하게 다룬다.
+
+| TLD | 어떻게 되나 |
+|---|---|
+| `.test` | RFC 2606이 테스트용으로 예약했다. 실제 인터넷에 등록될 일이 없어서 로컬 개발에 가장 무난하다 |
+| `.localhost` | RFC 6761이 루프백으로 돌리라고 정했다. 크롬·파이어폭스는 hosts 설정 없이도 `app.localhost`를 127.0.0.1로 보낸다. 브라우저 밖 도구는 OS와 버전마다 다르다 |
+| `.dev` | 구글이 운영하는 실제 TLD이고 TLD 전체가 HSTS 프리로드 목록에 있다. 브라우저가 항상 HTTPS로 바꿔 접속한다 |
+| `.local` | 멀티캐스트 DNS(mDNS, macOS의 Bonjour)가 쓰는 이름이다. hosts에 적어도 조회가 느려지거나 엉뚱하게 해석될 수 있다 |
+
+`.dev`는 예전에 로컬 개발용으로 많이 쓰이던 이름이라 오래된 문서에 자주 나온다. 지금 쓰면 HTTP로 띄운 개발 서버에 접속할 수 없다. 2024년에 ICANN이 사설 용도로 남겨 둔 `.internal`도 후보지만, 개발용이라는 의도가 가장 분명한 건 `.test`다. 이 글은 `matt.test` 아래에 서비스별 하위 도메인을 두는 방식으로 간다.
+
+## 이름을 127.0.0.1로 돌리기
+
+`app.matt.test`는 어떤 DNS 서버에도 없는 이름이다. 브라우저가 이 이름을 물으면 내 컴퓨터(127.0.0.1)라고 답하게 만들어야 한다.
+
+가장 간단한 방법은 hosts 파일이다. OS는 DNS 서버에 묻기 전에 이 파일을 먼저 본다. macOS·리눅스는 `/etc/hosts`, 윈도우는 `C:\Windows\System32\drivers\etc\hosts`다. hosts 파일이 어떻게 동작하는지는 [hosts 파일 글](/posts/hosts-file)에 정리했다.
+
+```
+127.0.0.1  app.matt.test
+127.0.0.1  api.matt.test
+```
+
+hosts 파일은 와일드카드를 지원하지 않는다. `*.matt.test`라고 적어도 동작하지 않고, 서비스가 늘 때마다 줄을 하나씩 더해야 한다. 서비스가 많거나 브랜치별로 `pr-123.matt.test` 같은 주소를 만들고 싶다면 로컬 DNS 서버인 dnsmasq를 쓴다. 아래 한 줄이면 `matt.test`와 그 아래 모든 이름이 127.0.0.1이 된다.
+
+```
+# dnsmasq.conf
+address=/matt.test/127.0.0.1
+```
+
+그다음 OS가 `matt.test`만 dnsmasq에 묻도록 연결한다. macOS는 `/etc/resolver/matt.test` 파일에 `nameserver 127.0.0.1`을 적으면 그 도메인만 해당 서버로 보낸다. 리눅스는 systemd-resolved나 NetworkManager를 쓰는지에 따라 설정 위치가 다르다.
+
+## 포트 대신 Host 헤더로 나누기
+
+이름은 둘 다 127.0.0.1로 간다. 그러면 `app.matt.test`는 Next.js(3000번)로, `api.matt.test`는 API 서버(8080번)로 어떻게 나눌까. 주소에 포트를 붙이는 대신 443번에서 받는 리버스 프록시를 하나 두고, 요청의 `Host` 헤더를 보고 나눈다. 배포 환경의 로드 밸런서가 하는 일과 같다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="이름은 모두 127.0.0.1로 가고, 프록시가 Host 헤더를 보고 서비스로 나눈다."
+  nodes={[
+    { id: "hosts", label: "hosts·dnsmasq", sub: "→ 127.0.0.1", x: 70, y: 40, w: 116 },
+    { id: "browser", label: "브라우저", x: 70, y: 130, w: 100 },
+    { id: "ca", label: "mkcert CA", sub: "신뢰 저장소", x: 70, y: 215, w: 108 },
+    { id: "proxy", label: "Caddy :443", sub: "Host로 분기", x: 210, y: 130, w: 104 },
+    { id: "app", label: "Next.js", sub: ":3000", x: 345, y: 55, w: 92 },
+    { id: "api", label: "API", sub: ":8080", x: 345, y: 205, w: 92 },
+  ]}
+  edges={[
+    { from: "browser", to: "hosts", label: "이름 조회", arrow: "both" },
+    { from: "ca", to: "browser", label: "인증서 신뢰", dashed: true },
+    { from: "browser", to: "proxy", label: "HTTPS" },
+    { from: "proxy", to: "app", label: "app" },
+    { from: "proxy", to: "api", label: "api" },
+  ]}
+/>
+
+프록시로는 Caddy가 설정이 짧아서 편하다. 아래 Caddyfile은 두 이름을 받아서 각 개발 서버로 넘긴다. `tls` 줄의 인증서는 다음 섹션에서 mkcert로 만든다.
+
+```
+app.matt.test {
+	tls ./certs/matt.test.pem ./certs/matt.test-key.pem
+	reverse_proxy localhost:3000
+}
+
+api.matt.test {
+	tls ./certs/matt.test.pem ./certs/matt.test-key.pem
+	reverse_proxy localhost:8080
+}
+```
+
+Caddy는 주소에 도메인을 적으면 HTTPS로 받고, 80번으로 들어온 HTTP 요청은 HTTPS로 리다이렉트한다. `tls` 줄을 빼면 Caddy는 그 이름으로 공개 인증서를 받으려 한다. `.test`는 공개 인증서를 받을 수 없는 이름이라 실패하니, 직접 만든 인증서를 지정하거나 `tls internal`로 Caddy 자체 CA를 쓰게 해야 한다.
+
+nginx라면 `server_name`으로 나누고, 개발 서버의 HMR(코드를 고치면 화면이 바로 바뀌는 기능)이 웹소켓을 쓰므로 업그레이드 헤더를 직접 넘겨야 한다. Caddy는 웹소켓을 따로 설정하지 않아도 넘긴다.
+
+```
+server {
+  listen 443 ssl;
+  server_name app.matt.test;
+  ssl_certificate     certs/matt.test.pem;
+  ssl_certificate_key certs/matt.test-key.pem;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+  }
+}
+```
+
+프록시가 개발 서버로 넘기는 요청은 브라우저가 보낸 것과 조금 다르다. 개발 서버 입장에서는 HTTP로 들어온 요청이라, 원래 어떤 요청이었는지를 헤더로 전해 받는다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="Caddy가 localhost:3000으로 넘기는 요청"
+  base="GET / HTTP/1.1"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "Host",
+      display: "Host: app.matt.test",
+      title: "원래 요청한 이름",
+      description: "Caddy는 기본으로 Host 헤더를 바꾸지 않고 그대로 넘긴다. 개발 서버는 localhost:3000이 아니라 app.matt.test로 요청받은 줄 안다. 그래서 다음 섹션의 허용 호스트 설정이 필요해진다.",
+      required: true,
+    },
+    {
+      key: "X-Forwarded-Proto",
+      display: "X-Forwarded-Proto: https",
+      title: "브라우저는 HTTPS로 왔다",
+      description: "프록시와 개발 서버 사이는 HTTP라서, 원래 HTTPS였다는 걸 이 헤더로 알린다. 서버가 이 값을 믿지 않으면 자기가 HTTP로 서비스 중이라고 판단해 HTTPS로 리다이렉트를 반복하거나 Secure 쿠키를 내려보내지 않는다.",
+      code: "// Express라면 프록시를 믿도록 설정해야\n// req.secure가 true가 되고 Secure 세션 쿠키가 나간다\napp.set(\"trust proxy\", \"loopback\");",
+    },
+    {
+      key: "X-Forwarded-For",
+      display: "X-Forwarded-For: 127.0.0.1",
+      title: "원래 클라이언트 주소",
+      description: "프록시가 받은 연결의 IP다. 로컬에서는 항상 127.0.0.1이라 의미가 적지만, 배포에서 IP 기반 제한이나 로그를 다룰 때 같은 코드가 그대로 쓰인다.",
+    },
+    {
+      key: "X-Forwarded-Host",
+      display: "X-Forwarded-Host: app.matt.test",
+      title: "원래 Host",
+      description: "프록시가 Host를 바꾸는 구성에서도 원래 이름을 알 수 있게 남겨 둔다. 절대 URL을 만들거나 리다이렉트 주소를 계산하는 코드가 이 값을 본다.",
+    },
+  ]}
+/>
+
+80번과 443번은 1024보다 작은 포트라서 OS가 보통 특권을 요구한다. 리눅스에서는 root로 띄우거나, `sudo setcap cap_net_bind_service=+ep $(which caddy)`로 실행 파일에 그 포트를 열 권한만 따로 준다. macOS는 Mojave부터 이 제한이 많이 풀렸지만 환경에 따라 권한 오류가 날 수 있다.
+
+## 브라우저가 믿는 인증서 만들기
+
+HTTPS로 받으려면 인증서가 필요하다. 그냥 자체 서명 인증서를 만들면 브라우저가 "연결이 비공개로 설정되어 있지 않습니다" 경고를 띄운다. 경고를 매번 넘기면서 쓸 수는 있지만, `fetch`로 부르는 API 쪽 인증서는 넘길 화면조차 없어서 요청이 그냥 실패한다.
+
+mkcert는 이 문제를 내 컴퓨터 안에서만 통하는 인증 기관(CA)으로 푼다. 처음 한 번 로컬 CA를 만들어 OS와 브라우저의 신뢰 저장소에 넣고, 그 CA로 원하는 이름의 인증서를 발급한다. 브라우저는 신뢰 저장소에 있는 CA가 서명했으니 진짜 인증서처럼 받아들인다.
+
+```bash
+mkcert -install                 # 로컬 CA 생성 + 신뢰 저장소에 등록
+mkcert -cert-file certs/matt.test.pem -key-file certs/matt.test-key.pem \
+  "*.matt.test" matt.test       # 인증서 하나에 두 이름을 함께 넣는다
+```
+
+파일 이름을 지정하지 않으면 mkcert가 `_wildcard.matt.test+1.pem`처럼 정한다. 위 Caddyfile과 맞추려고 `-cert-file`, `-key-file`로 지정했다. 와일드카드 `*.matt.test`는 한 단계만 덮는다. `app.matt.test`는 되지만 `matt.test` 자체와 `a.b.matt.test`는 안 된다. 그래서 `matt.test`를 따로 넣었다. `*.test`처럼 TLD 바로 아래 와일드카드는 브라우저가 거부하니 한 단계 더 내려서 만든다.
+
+`mkcert -install`은 OS 신뢰 저장소에 넣고, 파이어폭스처럼 자기 저장소(NSS)를 쓰는 브라우저는 `certutil`이 설치돼 있을 때만 함께 등록한다. 파이어폭스에서만 경고가 뜨면 이걸 먼저 의심한다.
+
+<Callout kind="warning" title="rootCA-key.pem은 절대 공유하지 않는다">
+`mkcert -CAROOT`가 가리키는 폴더의 `rootCA-key.pem`은 내 브라우저가 믿는 CA의 개인 키다. 이 파일을 가진 사람은 내 컴퓨터에서 통하는 어떤 사이트의 인증서든 만들 수 있다. 저장소에 커밋하거나 팀원과 나누지 말고, 인증서는 각자 자기 컴퓨터에서 발급한다.
+</Callout>
+
+브라우저 말고 Node.js도 신경 써야 한다. Next.js 서버 코드가 `https://api.matt.test`를 부르면 Node는 OS 신뢰 저장소를 기본으로 쓰지 않아서 `unable to get local issuer certificate` 같은 오류를 낸다. 개발 서버를 띄울 때 환경 변수로 mkcert CA를 알려 준다.
+
+```bash
+NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem" pnpm dev
+```
+
+`NODE_TLS_REJECT_UNAUTHORIZED=0`으로 검증을 끄는 방법도 돌아다니는데, 그 프로세스의 모든 HTTPS 검증이 꺼지니 쓰지 않는 편이 낫다.
+
+## 브라우저 요청이 서비스에 닿기까지
+
+여기까지 만든 것을 한 번에 따라가 보자. 아래 그림에서 "다음"을 누르면 브라우저 주소창에 `https://app.matt.test`를 입력한 뒤의 흐름이 진행된다.
+
+<SequenceDiagram
+  caption="이름 조회, TLS, Host 분기를 거쳐 개발 서버에 닿는다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "os", label: "OS·hosts" },
+    { id: "caddy", label: "Caddy" },
+    { id: "next", label: "Next.js" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "os",
+      label: "app.matt.test?",
+      title: "이름을 묻는다",
+      detail: "브라우저가 OS에 IP를 묻는다. OS는 DNS 서버에 가기 전에 hosts 파일을 먼저 본다.",
+    },
+    {
+      from: "os",
+      to: "browser",
+      label: "127.0.0.1",
+      title: "내 컴퓨터라는 답이 온다",
+      detail: "hosts 파일이나 dnsmasq가 127.0.0.1을 돌려준다. 외부 DNS 서버에는 묻지 않는다.",
+      payload: "127.0.0.1  app.matt.test",
+    },
+    {
+      from: "browser",
+      to: "caddy",
+      label: "TLS :443 (SNI)",
+      title: "443번으로 TLS 연결을 시작한다",
+      detail: "포트를 안 적었으니 HTTPS 기본 포트 443으로 간다. 핸드셰이크 첫 메시지에 접속하려는 이름(SNI)을 실어서, Caddy가 어느 인증서를 내밀지 고를 수 있게 한다.",
+      payload: "ClientHello\n  server_name: app.matt.test",
+    },
+    {
+      from: "caddy",
+      to: "browser",
+      label: "인증서",
+      title: "mkcert로 만든 인증서를 내민다",
+      detail: "브라우저는 인증서의 이름이 app.matt.test와 맞는지, 서명한 CA가 신뢰 저장소에 있는지 확인한다. mkcert -install로 넣어 둔 로컬 CA라 통과한다.",
+      payload: "subject: *.matt.test\nissuer:  mkcert development CA",
+    },
+    {
+      from: "browser",
+      to: "caddy",
+      label: "GET /",
+      title: "암호화된 연결로 요청을 보낸다",
+      detail: "Host 헤더에 app.matt.test가 실린다.",
+      payload: "GET / HTTP/2\nHost: app.matt.test",
+    },
+    {
+      from: "caddy",
+      to: "caddy",
+      label: "Host 분기",
+      title: "Host를 보고 넘길 곳을 고른다",
+      detail: "Caddyfile에서 app.matt.test 블록을 찾는다. 대상은 localhost:3000이다.",
+    },
+    {
+      from: "caddy",
+      to: "next",
+      label: "HTTP :3000",
+      title: "개발 서버로 넘긴다",
+      detail: "프록시와 개발 서버 사이는 평범한 HTTP다. 원래 요청 정보는 X-Forwarded 헤더로 전한다.",
+      payload: "GET / HTTP/1.1\nHost: app.matt.test\nX-Forwarded-Proto: https\nX-Forwarded-For: 127.0.0.1",
+    },
+    {
+      from: "next",
+      to: "browser",
+      label: "200 HTML",
+      title: "응답이 같은 길로 돌아간다",
+      detail: "개발 서버가 허용하는 호스트라면 페이지가 뜬다. 허용하지 않는 호스트라면 여기서 차단 메시지가 돌아온다.",
+    },
+  ]}
+/>
+
+마지막 단계에 붙은 조건이 다음 섹션이다.
+
+## 개발 서버가 낯선 호스트를 막는다
+
+프록시까지 붙였는데 화면에 "Blocked request" 같은 메시지가 뜨거나, 페이지는 뜨는데 HMR만 안 붙는 경우가 있다. 개발 서버가 모르는 이름으로 들어온 요청을 일부러 막고 있는 것이다. DNS 리바인딩이라는 공격 때문이다. 공격자가 자기 도메인의 IP를 잠깐 127.0.0.1로 바꿔서, 내 브라우저가 공격자 페이지에서 내 로컬 개발 서버로 요청하게 만들 수 있다. 개발 서버가 `Host`를 확인하면 이 경로가 막힌다.
+
+Vite는 `server.allowedHosts`로 허락한다. 점으로 시작하면 그 도메인과 모든 하위 도메인을 허락한다. 기본으로는 localhost와 IP 주소 정도만 허용한다.
+
+```ts
+// vite.config.ts
+export default defineConfig({
+  server: {
+    allowedHosts: [".matt.test"],
+  },
+});
+```
+
+`allowedHosts: true`로 전부 열 수도 있지만, 막으려던 공격을 다시 여는 셈이라 이름을 적는 편이 낫다.
+
+Next.js는 `next.config.ts`의 `allowedDevOrigins`다. 다른 이름으로 열린 페이지가 개발 서버의 `/_next` 리소스와 HMR에 접근하는 걸 허락한다. 값은 호스트 이름이고 `*.`로 하위 도메인을 묶을 수 있다. 버전에 따라 설정이 없을 때 경고만 하거나 실제로 차단하니, 쓰는 버전의 문서를 확인한다.
+
+```ts
+// next.config.ts
+const nextConfig = {
+  allowedDevOrigins: ["app.matt.test", "*.matt.test"],
+};
+```
+
+webpack-dev-server 기반 도구라면 "Invalid Host header"가 같은 이유로 나는 메시지이고, 거기도 `allowedHosts` 옵션이 있다.
+
+## 잘 연결됐는지 확인하기
+
+브라우저에서 안 될 때 어느 단계가 문제인지 가르려면 단계를 하나씩 떼어 확인한다.
+
+먼저 이름이다. `nslookup`이나 `dig`는 DNS 서버에 직접 물어서 hosts 파일을 보지 않는다. hosts가 적용됐는지 보려면 OS 리졸버를 거치는 명령을 쓴다.
+
+```bash
+getent hosts app.matt.test                       # 리눅스
+dscacheutil -q host -a name app.matt.test        # macOS
+```
+
+다음은 프록시와 인증서다. curl의 `--resolve`는 이름 조회를 건너뛰고 지정한 IP로 바로 붙는다. hosts를 건드리지 않고도 프록시 분기와 인증서를 확인할 수 있다. `--cacert`로 mkcert CA를 직접 넘기면 OS 신뢰 저장소 설정과 상관없이 검증된다.
+
+```bash
+curl -v --resolve app.matt.test:443:127.0.0.1 \
+  --cacert "$(mkcert -CAROOT)/rootCA.pem" \
+  https://app.matt.test/
+```
+
+`-v` 출력에서 `subject`와 `issuer`가 mkcert 인증서인지, 응답이 Next.js에서 온 것인지 본다. 여기서 되는데 브라우저에서 안 되면 브라우저 쪽 문제다.
+
+## 안 될 때 의심할 곳
+
+hosts 파일을 고쳤는데 브라우저가 예전 결과를 쓰는 경우가 많다. 브라우저도 OS도 DNS 결과를 캐시한다. 크롬은 `chrome://net-internals/#dns`에서 호스트 캐시를 비우고, macOS는 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`, 윈도우는 `ipconfig /flushdns`로 OS 캐시를 비운다. VPN이나 회사 프록시가 DNS를 가로채는 환경에서는 hosts 설정이 무시되기도 하고, 브라우저의 보안 DNS(DoH) 설정이 영향을 주는 경우도 있으니 하나씩 꺼 보며 확인한다.
+
+HTTP로 들어가려는데 자꾸 HTTPS로 바뀐다면 HSTS다. 한 번이라도 그 이름에서 `Strict-Transport-Security` 헤더를 받았다면 브라우저가 기억해 둔다. 크롬은 `chrome://net-internals/#hsts`에서 그 도메인을 지울 수 있다. 다만 `.dev`처럼 프리로드 목록에 있는 이름은 브라우저에 박혀 있어서 지울 수 없다.
+
+Docker 컨테이너 안의 서비스가 `api.matt.test`를 부르는 경우도 따로 봐야 한다. 컨테이너는 자기 hosts 파일을 쓰고, 그 안의 127.0.0.1은 내 컴퓨터가 아니라 컨테이너 자신이다. Docker Desktop이라면 `host.docker.internal`로 호스트를 가리키거나, compose의 `extra_hosts`로 이름을 넣어 준다.
+
+마지막으로 쿠키다. `api.matt.test`가 내려 준 로그인 쿠키를 `app.matt.test`에서도 쓰려면 `Domain=matt.test`를 적는다. 두 이름은 같은 사이트라 `SameSite=Lax` 쿠키도 `fetch(..., { credentials: "include" })`에 실린다. 하지만 출처는 다르니 API 서버가 `https://app.matt.test`를 CORS 허락 목록에 넣고 `Access-Control-Allow-Credentials: true`를 보내야 응답을 읽을 수 있다. 배포에서 해야 할 설정을 로컬에서 그대로 하게 되는 셈이고, 이게 이 구성의 목적이다.
+
+## 배포와 같은 모양으로
+
+로컬 도메인 구성은 이름(hosts나 dnsmasq로 127.0.0.1), 분기(443번 리버스 프록시가 Host로 나눔), 신뢰(mkcert 로컬 CA) 세 층으로 이루어진다. 각 층은 배포 환경의 DNS, 로드 밸런서, 공개 인증서와 일대일로 대응한다. localhost가 봐주던 쿠키·보안 컨텍스트·CORS 문제를 로컬에서 먼저 만나게 되는 게 이 수고의 대가이자 이유다.
+
+## 면접에서 나올 만한 질문
+
+### 로컬 개발에서 localhost 대신 커스텀 도메인을 쓰는 이유는요?
+
+배포 환경과 같은 조건에서 개발하려고 쓴다. localhost는 HTTP여도 보안 컨텍스트로 인정받고, 쿠키가 포트로 나뉘지 않아서 배포에서 생길 쿠키 도메인·SameSite·CORS 문제가 가려진다. `app.matt.test`와 `api.matt.test`처럼 나누면 출처가 갈리고 HTTPS가 필요해져서, 배포 전에 같은 문제를 만나고 고칠 수 있다.
+
+### 로컬 개발용 도메인으로 `.test`를 고르는 이유는요? `.dev`나 `.local`은 왜 피하나요?
+
+`.test`는 RFC 2606이 테스트용으로 예약해서 실제 도메인과 충돌하지 않는다. `.dev`는 실제 TLD이고 HSTS 프리로드 목록에 있어서 브라우저가 항상 HTTPS를 강제한다. `.local`은 mDNS가 쓰는 이름이라 조회가 느려지거나 꼬일 수 있다. `.localhost`도 브라우저가 루프백으로 보내 주지만 브라우저 밖 도구의 동작이 환경마다 다르다.
+
+### hosts 파일과 dnsmasq는 어떻게 다른가요?
+
+hosts 파일은 OS가 DNS보다 먼저 보는 고정 목록이라 설정이 쉽지만 와일드카드를 쓸 수 없어서 이름마다 한 줄씩 적어야 한다. dnsmasq는 로컬 DNS 서버라 `address=/matt.test/127.0.0.1` 한 줄로 모든 하위 도메인을 처리한다. 대신 OS가 그 도메인을 dnsmasq에 묻도록 리졸버 설정을 따로 해야 한다.
+
+### 여러 서비스가 모두 127.0.0.1로 가는데 어떻게 구분하나요?
+
+443번에서 받는 리버스 프록시가 요청의 Host 헤더(TLS 단계에서는 SNI)를 보고 서비스별 포트로 넘긴다. 배포 환경의 로드 밸런서가 가상 호스트로 나누는 것과 같은 원리다. 프록시 뒤의 서버는 HTTP로 요청을 받으므로 X-Forwarded-Proto 같은 헤더를 믿도록 설정해야 Secure 쿠키나 리다이렉트가 제대로 동작한다.
+
+### mkcert는 어떻게 브라우저 경고 없이 HTTPS를 만드나요?
+
+로컬 전용 CA를 만들어 OS와 브라우저의 신뢰 저장소에 등록하고, 그 CA로 개발용 도메인의 인증서를 서명한다. 브라우저는 신뢰하는 CA가 서명한 인증서라 경고 없이 받아들인다. 그래서 CA 개인 키(`rootCA-key.pem`)가 새면 그 컴퓨터에서 통하는 가짜 인증서를 누구나 만들 수 있으니 절대 공유하면 안 된다. Node.js는 OS 저장소를 기본으로 쓰지 않아 `NODE_EXTRA_CA_CERTS`로 따로 알려 줘야 한다.
+
+### 개발 서버가 커스텀 도메인 요청을 막는 이유는요?
+
+DNS 리바인딩 공격을 막기 위해서다. 공격자 도메인이 127.0.0.1로 해석되게 바꾸면 피해자 브라우저가 로컬 개발 서버에 요청할 수 있는데, 개발 서버가 Host 헤더를 허용 목록과 비교하면 이걸 막을 수 있다. 그래서 Vite는 `server.allowedHosts`, Next.js는 `allowedDevOrigins`에 쓰는 도메인을 등록해야 한다.
+
+### hosts 파일을 고쳤는데 반영이 안 되면 무엇을 확인하나요?
+
+먼저 OS 리졸버를 거치는 `getent hosts`나 `dscacheutil`로 이름이 바뀌었는지 본다. `dig`나 `nslookup`은 hosts를 보지 않아서 확인용으로 맞지 않다. OS가 맞게 답하면 브라우저 DNS 캐시, VPN이나 보안 DNS 설정, HSTS 기록을 차례로 의심하고, `curl --resolve`로 프록시와 인증서만 따로 떼어 확인한다.

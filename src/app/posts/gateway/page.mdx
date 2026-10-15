@@ -1,0 +1,422 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("gateway");
+
+쇼핑 앱 하나를 서비스 여러 개로 쪼갰다고 해 보자. 주문, 회원, 상품, 결제가 각자 따로 배포된다. 그러면 앱은 이제 주소를 네 개 알아야 한다. 서비스마다 토큰을 검증하는 코드가 들어가고, 요청 수 제한도 서비스마다 따로 만든다. 홈 화면 하나 그리려고 앱이 서버를 네 번 부른다. 서비스를 하나 더 쪼갤 때마다 앱도 같이 고쳐야 한다. 게이트웨이는 이 바깥쪽 문제를 한곳으로 모으려고 생겼다.
+
+## 입구를 하나로 모으기
+
+API 게이트웨이는 클라이언트와 내부 서비스들 사이에 서는 단일 입구다. 앱은 `api.shop.example.com` 하나만 알고, 그 뒤에서 어느 서비스로 갈지는 게이트웨이가 정한다. 그러면서 모든 서비스가 각자 하던 공통 작업을 대신 맡는다.
+
+라우팅은 기본이다. `/orders`는 주문 서비스로, `/users`는 회원 서비스로 보낸다. 서비스 주소가 바뀌어도 앱은 모른다. 인증 오프로딩은 토큰 검증을 입구에서 한 번만 하는 것이다. 게이트웨이가 JWT 서명과 만료를 확인하고, 통과한 요청에만 사용자 ID를 헤더로 붙여 넘긴다. 요청 수 제한은 사용자나 API 키마다 초당 몇 번까지만 받고, 넘으면 429 Too Many Requests를 돌려준다. 관측도 한곳에서 된다. 모든 요청이 여기를 지나니 접근 로그, 지연 시간, 에러율을 같은 형식으로 남길 수 있고, 추적 ID(`traceparent` 헤더)를 붙여 서비스 사이 호출을 이어 볼 수 있다.
+
+요청 묶기(aggregation)도 있다. 홈 화면에 주문 내역과 회원 정보가 함께 필요하면, 앱이 두 번 부르는 대신 게이트웨이가 두 서비스를 동시에 불러 하나의 응답으로 합친다. 모바일처럼 왕복 한 번이 비싼 환경에서 효과가 크다.
+
+아래 그림에서 다음을 누르면 홈 화면 요청 하나가 게이트웨이를 지나는 과정이 나온다.
+
+<SequenceDiagram
+  caption="API 게이트웨이를 지나는 요청"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "gw", label: "게이트웨이" },
+    { id: "orders", label: "주문 서비스" },
+    { id: "users", label: "회원 서비스" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "gw",
+      label: "GET /home",
+      title: "앱은 입구 하나만 부른다",
+      detail: "앱은 내부에 서비스가 몇 개인지 모른다. 로그인 때 받은 액세스 토큰을 붙여 게이트웨이를 부른다.",
+      payload: "GET /home\nHost: api.shop.example.com\nAuthorization: Bearer eyJhbGciOi...",
+    },
+    {
+      from: "gw",
+      to: "gw",
+      label: "토큰 검증",
+      title: "입구에서 토큰을 확인한다",
+      detail: "서명, 만료 시각, 발급자(iss), 대상(aud)을 본다. 실패하면 서비스까지 가지 않고 여기서 401을 돌려준다.",
+    },
+    {
+      from: "gw",
+      to: "gw",
+      label: "요청 수 확인",
+      title: "이 사용자가 너무 많이 부르지 않았는지 본다",
+      detail: "사용자 42의 남은 허용량을 확인한다. 다 썼으면 429와 함께 Retry-After 헤더로 언제 다시 오라고 알려 준다.",
+    },
+    {
+      from: "gw",
+      to: "orders",
+      label: "GET /orders",
+      title: "주문 서비스를 부른다",
+      detail: "검증이 끝난 사용자 ID를 헤더로 넘긴다. 추적 ID도 붙여서 나중에 로그를 이어 볼 수 있게 한다.",
+      payload: "GET /orders?user=42&limit=3\nX-User-Id: 42\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    },
+    {
+      from: "gw",
+      to: "users",
+      label: "GET /users/42",
+      title: "회원 서비스도 동시에 부른다",
+      detail: "두 호출은 서로 기다릴 이유가 없어서 병렬로 보낸다. 전체 시간은 둘 중 느린 쪽에 맞춰진다.",
+    },
+    {
+      from: "orders",
+      to: "gw",
+      label: "200 주문 3건",
+      title: "주문 목록이 온다",
+      detail: "최근 주문 세 건이 돌아온다.",
+    },
+    {
+      from: "users",
+      to: "gw",
+      label: "200 회원 정보",
+      title: "회원 정보가 온다",
+      detail: "이름과 등급이 돌아온다.",
+    },
+    {
+      from: "gw",
+      to: "app",
+      label: "200 합친 JSON",
+      title: "하나로 합쳐서 돌려준다",
+      detail: "앱은 한 번 불러서 화면에 필요한 걸 다 받는다. 그 사이에 몇 번의 호출이 있었는지는 모른다.",
+      payload: "{\n  \"user\": { \"name\": \"matt\", \"grade\": \"gold\" },\n  \"recentOrders\": [ ... 3건 ... ]\n}",
+    },
+  ]}
+/>
+
+이렇게 화면 단위로 응답을 맞춰 주는 층을 따로 떼어 낸 게 BFF(Backend For Frontend)다. 웹과 모바일이 필요한 데이터 모양이 다르면 게이트웨이 하나에 두 가지 요구를 다 넣는 대신, 웹용 BFF와 모바일용 BFF를 따로 둔다. 각 프론트엔드 팀이 자기 BFF를 고칠 수 있으니 공용 게이트웨이가 병목이 되지 않는다.
+
+## 로드 밸런서, 리버스 프록시와 무엇이 다른가
+
+세 단어가 섞여 쓰여서 처음엔 구분이 잘 안 된다. 하는 일의 범위로 보면 정리가 된다.
+
+로드 밸런서는 같은 일을 하는 서버 여러 대에 요청을 나눠 주는 게 목적이다. L4 로드 밸런서는 IP와 포트만 보고 TCP 연결을 나눈다. 내용을 안 보니 빠르고, HTTP가 아닌 프로토콜도 다룬다. L7 로드 밸런서는 HTTP를 해석해서 경로나 헤더로 나눌 수 있다.
+
+리버스 프록시는 서버들 앞에 서서 서버 대신 요청을 받는 중계자다. 클라이언트는 뒤에 무엇이 있는지 모른다. TLS 종료, 캐시, 압축, 정적 파일 서빙, 그리고 뒤쪽 서버 여러 대로 나눠 주기까지 한다. nginx를 서버 앞에 두는 게 전형적인 예다. 그러니 L7 로드 밸런서는 리버스 프록시가 하는 일 중 하나라고 봐도 된다.
+
+API 게이트웨이는 API 트래픽에 특화된 리버스 프록시다. 바이트나 HTTP 수준을 넘어서 "누가 어떤 API를 얼마나 부르는가"를 다룬다. 인증, 사용자별 요청 수 제한, API 키 관리, 요청·응답 변환, 응답 묶기가 여기에 들어간다. Kong, AWS API Gateway, Spring Cloud Gateway가 이 범주다. 실제 제품들은 경계를 넘나들어서, nginx에 모듈을 붙이면 게이트웨이 노릇도 하고 Envoy는 셋 다 된다. 이름보다는 지금 이 지점에서 어떤 책임을 맡기는지가 구분 기준이다.
+
+## 게이트웨이가 너무 똑똑해지면
+
+모든 요청이 지나가는 곳이라 이것저것 넣고 싶어진다. 그런데 입구가 하나라는 장점은 그대로 약점이 된다.
+
+게이트웨이가 죽으면 모든 서비스가 같이 죽는다. 여러 대를 띄우고 앞에 로드 밸런서를 둬야 하고, 배포도 조심스러워진다. 홉이 하나 늘어나니 지연도 조금 늘어난다. 보통 몇 밀리초 수준이지만, 응답 묶기에서 느린 서비스 하나가 전체 응답을 붙잡는 건 별개 문제라서 서비스별 타임아웃과 실패 시 부분 응답 전략이 필요하다.
+
+더 흔한 실수는 비즈니스 로직이 스며드는 것이다. "주문이 3건 이상이면 쿠폰 정보도 붙여 준다" 같은 규칙이 게이트웨이에 들어가기 시작하면, 게이트웨이를 고치지 않고는 아무 기능도 못 내는 상태가 된다. 게이트웨이에는 모든 API에 똑같이 적용되는 횡단 관심사만 두고, 화면 맞춤 로직은 BFF로, 도메인 규칙은 서비스로 보낸다.
+
+인증도 경계를 정확히 그어야 한다. 게이트웨이가 토큰을 검증했다고 서비스가 아무 요청이나 믿으면 안 된다. 게이트웨이는 "이 토큰이 진짜인가"를 확인할 뿐이고, "사용자 42가 주문 77번을 볼 수 있는가" 같은 인가는 데이터를 가진 서비스만 판단할 수 있다. 내부 네트워크에서 누가 게이트웨이를 건너뛰고 서비스를 직접 부르면 `X-User-Id` 헤더를 위조할 수 있으니, 서비스는 게이트웨이에서 온 요청만 받도록 네트워크 정책이나 mTLS로 막아 둔다.
+
+요청 수 제한은 게이트웨이를 여러 대 띄우는 순간 까다로워진다. 각 인스턴스가 자기 메모리에서 "초당 100번"을 세면, 세 대일 때 실제 허용량은 300번이 된다. 정확하게 막으려면 Redis 같은 공유 저장소나 별도 제한 서비스에 카운터를 두고, 그 저장소가 느려지거나 죽었을 때 요청을 다 막을지 다 통과시킬지도 정해야 한다.
+
+## 쿠버네티스의 입구, Ingress로는 부족했던 것
+
+쿠버네티스에서 이 입구 역할을 해 온 게 Ingress다. 로드 밸런서 하나 뒤에서 host와 path로 여러 Service에 나눠 보내는 규칙이다. 자세한 흐름은 [Ingress 글](/posts/kubernetes-ingress)에 정리했다.
+
+Ingress는 스펙이 작다. host, path, backend, tls 정도다. 헤더로 나누기, 가중치로 나누기, 타임아웃, 경로 재작성은 표준에 없어서 컨트롤러마다 어노테이션을 만들었다. `nginx.ingress.kubernetes.io/canary-weight`는 nginx 전용이라 컨트롤러를 바꾸면 다시 써야 한다. 그리고 리소스 하나에 로드 밸런서 쪽 설정과 앱 라우팅이 함께 들어 있다. 인증서와 리스너는 플랫폼 팀이, 경로는 앱 팀이 관리하고 싶은데 둘 다 같은 객체를 고쳐야 한다. HTTP 말고 TCP, gRPC 같은 프로토콜도 제대로 다루지 못한다.
+
+쿠버네티스 SIG Network는 Ingress를 더 늘리지 않고 새 API를 만들었다. 그게 Gateway API다. 2023년 10월 v1.0에서 GatewayClass, Gateway, HTTPRoute가 GA가 됐고, 지금은 CRD로 설치해서 쓴다. 이름이 게이트웨이지만 앞에서 본 API 게이트웨이 제품과는 결이 다르다. 인증이나 요청 수 제한을 직접 정의하기보다는, 트래픽이 어디로 어떻게 갈지를 표준으로 적는 라우팅 API다.
+
+## 리소스를 역할별로 나눈 Gateway API
+
+Gateway API의 가장 큰 변화는 리소스를 사람의 역할에 맞춰 쪼갠 것이다. 회사에는 보통 세 부류가 있다. 클라우드나 프록시 구현을 제공하는 인프라 제공자, 클러스터의 공용 입구를 운영하는 플랫폼 팀, 자기 서비스의 경로만 관리하는 앱 개발자. 각자 자기 리소스만 만지면 된다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="왼쪽 세 리소스가 역할별로 나뉜 입구 설정이다. HTTPRoute가 Gateway에 매달리고, Gateway가 GatewayClass를 고른다."
+  nodes={[
+    { id: "gc", label: "GatewayClass", sub: "인프라 제공자", x: 100, y: 45, w: 140 },
+    { id: "gw", label: "Gateway", sub: "클러스터 운영자", x: 100, y: 155, w: 140 },
+    { id: "route", label: "HTTPRoute", sub: "앱 개발자", x: 100, y: 265, w: 140 },
+    { id: "sec", label: "Secret", sub: "TLS 인증서", x: 330, y: 45, w: 140 },
+    { id: "rg", label: "ReferenceGrant", sub: "참조 허락", x: 330, y: 155, w: 140 },
+    { id: "svc", label: "Service", sub: "backendRefs", x: 330, y: 265, w: 140 },
+  ]}
+  edges={[
+    { from: "gw", to: "gc", label: "class" },
+    { from: "gw", to: "sec", label: "인증서" },
+    { from: "route", to: "gw", label: "parentRefs" },
+    { from: "route", to: "svc", label: "backendRefs" },
+    { from: "rg", to: "route", label: "허락", dashed: true },
+  ]}
+/>
+
+GatewayClass는 "어떤 구현체로 입구를 만들 것인가"다. IngressClass와 비슷하다. `controllerName`에 구현체 이름이 들어가고, 보통 구현체를 설치하면 함께 생긴다. Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, Kong, Traefik, 그리고 GKE 같은 클라우드의 관리형 구현이 있다.
+
+Gateway는 실제 입구 하나다. 어느 포트로 어떤 프로토콜을 받을지(리스너), 어떤 인증서를 쓸지, 어느 네임스페이스의 라우트가 여기에 매달릴 수 있는지를 정한다. Gateway를 만들면 구현체가 그에 맞는 프록시와 로드 밸런서를 띄운다. 플랫폼 팀이 관리한다.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public
+  namespace: infra
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-example-com
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              gateway-access: "true"
+```
+
+`allowedRoutes`가 눈여겨볼 부분이다. 이 Gateway에는 `gateway-access: "true"` 라벨이 붙은 네임스페이스의 라우트만 매달릴 수 있다. 플랫폼 팀이 입구를 열어 두되 아무나 붙지는 못하게 한다. `from`은 `Same`(Gateway와 같은 네임스페이스, 기본값), `All`, `Selector` 중 하나다.
+
+## HTTPRoute 뜯어보기
+
+앱 개발자는 HTTPRoute만 쓴다. 자기 네임스페이스에서 "이 Gateway의 이 리스너에 붙어서, 이런 요청은 내 Service로 보내 달라"고 적는다. shop 팀이 API 새 버전(api-v2)을 조금씩 내보내는 상황을 예로 들어 보자.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shop
+  namespace: shop
+spec:
+  parentRefs:
+    - name: public
+      namespace: infra
+      sectionName: https
+  hostnames:
+    - shop.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          headers:
+            - name: x-canary
+              value: "true"
+      backendRefs:
+        - name: api-v2
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: api-v1
+          port: 8080
+          weight: 90
+        - name: api-v2
+          port: 8080
+          weight: 10
+```
+
+조각을 눌러 보면 각 필드가 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="HTTPRoute의 주요 필드"
+  base="kind: HTTPRoute"
+  separator=" · "
+  joiner=" · "
+  params={[
+    {
+      key: "parentRefs",
+      display: "parentRefs: infra/public",
+      title: "어느 입구에 매달릴지",
+      description: "infra 네임스페이스의 public Gateway, 그중 https 리스너(sectionName)에 붙는다. Gateway의 allowedRoutes가 shop 네임스페이스를 허락해야 실제로 붙는다. 붙었는지는 HTTPRoute status의 Accepted 조건으로 확인한다.",
+      code: "parentRefs:\n  - name: public\n    namespace: infra\n    sectionName: https",
+      required: true,
+    },
+    {
+      key: "hostnames",
+      display: "hostnames: shop.example.com",
+      title: "어느 도메인의 요청인지",
+      description: "리스너의 hostname(*.example.com)과 겹치는 부분만 유효하다. shop.example.com은 와일드카드 안에 들어가니 받아들여진다. 겹치지 않으면 라우트가 그 리스너에 붙지 못한다.",
+    },
+    {
+      key: "path",
+      display: "PathPrefix: /api",
+      title: "경로 조건",
+      description: "Ingress의 Prefix처럼 / 마디 단위로 앞부분을 비교한다. Exact도 있고, RegularExpression은 구현체마다 지원 여부와 문법이 다르다.",
+    },
+    {
+      key: "headers",
+      display: "x-canary: true",
+      title: "헤더 조건",
+      description: "Ingress 표준에는 없던 기능이다. 같은 matches 항목 안의 조건(path와 headers)은 모두 맞아야 하고(AND), matches 목록의 항목끼리는 하나만 맞으면 된다(OR). 헤더 이름은 대소문자를 가리지 않는다.",
+      code: "matches:\n  - path:\n      type: PathPrefix\n      value: /api\n    headers:\n      - name: x-canary\n        value: \"true\"",
+    },
+    {
+      key: "weight",
+      display: "weight: 90 / 10",
+      title: "비율로 나누기",
+      description: "가중치는 합에 대한 비율이다. 90과 10이면 90%, 10%다. 9와 1로 적어도 같다. 0이면 트래픽을 받지 않는다. 적지 않으면 1이다.",
+      code: "backendRefs:\n  - name: api-v1\n    port: 8080\n    weight: 90\n  - name: api-v2\n    port: 8080\n    weight: 10",
+    },
+    {
+      key: "backendRefs",
+      display: "backendRefs: api-v2:8080",
+      title: "어디로 보낼지",
+      description: "기본은 같은 네임스페이스의 Service다. 다른 네임스페이스의 Service를 가리키려면 그쪽에 ReferenceGrant가 있어야 한다. 가리킨 Service가 없거나 허락되지 않으면, 그 백엔드 몫의 요청은 500을 받는다.",
+      required: true,
+    },
+  ]}
+/>
+
+## 헤더로 고르고 비율로 나누기
+
+위 HTTPRoute에는 `/api`에 맞는 규칙이 두 개다. 하나는 경로와 헤더를, 다른 하나는 경로만 본다. 둘 다 맞는 요청은 어디로 갈까. Gateway API는 우선순위를 정해 두었다. 경로가 Exact인 쪽, 그다음 접두사가 긴 쪽, 그다음 메서드 조건이 있는 쪽, 그다음 헤더 조건이 많은 쪽, 그다음 쿼리 조건이 많은 쪽이 이긴다. 그래서 `x-canary: true`가 붙은 요청은 헤더 조건이 있는 첫 규칙이 가져가고, 나머지는 두 번째 규칙으로 가서 9:1로 나뉜다.
+
+아래 그림은 요청 세 개가 각각 어디로 가는지 보여 준다.
+
+<SequenceDiagram
+  caption="헤더 매칭과 가중치 분배"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "gw", label: "Gateway" },
+    { id: "v1", label: "api-v1" },
+    { id: "v2", label: "api-v2" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "gw",
+      label: "GET /api/items",
+      title: "평범한 요청이 들어온다",
+      detail: "x-canary 헤더가 없다. 첫 번째 규칙은 헤더 조건이 맞지 않으니 탈락하고 두 번째 규칙이 맞는다.",
+      payload: "GET /api/items\nHost: shop.example.com",
+    },
+    {
+      from: "gw",
+      to: "v1",
+      label: "90% 쪽",
+      title: "가중치에 따라 v1로 간다",
+      detail: "90:10 비율로 고른 결과 v1이 뽑혔다. 대부분의 요청은 이렇게 기존 버전으로 간다.",
+    },
+    {
+      from: "client",
+      to: "gw",
+      label: "x-canary: true",
+      title: "테스터가 헤더를 붙여 보낸다",
+      detail: "QA 팀이 새 버전을 확인하려고 헤더를 붙였다. 두 규칙 모두 맞지만 헤더 조건이 있는 첫 규칙이 더 구체적이라 이긴다.",
+      payload: "GET /api/items\nHost: shop.example.com\nx-canary: true",
+    },
+    {
+      from: "gw",
+      to: "v2",
+      label: "항상 v2",
+      title: "비율과 상관없이 v2로 간다",
+      detail: "첫 규칙의 backendRefs에는 api-v2 하나뿐이다. 헤더만 붙이면 언제든 새 버전을 볼 수 있다.",
+    },
+    {
+      from: "client",
+      to: "gw",
+      label: "GET /api/items",
+      title: "다시 평범한 요청",
+      detail: "앞의 첫 요청과 똑같은 요청이다.",
+    },
+    {
+      from: "gw",
+      to: "v2",
+      label: "10% 쪽",
+      title: "이번엔 v2가 뽑혔다",
+      detail: "가중치 분배는 대개 요청 단위라 같은 사용자도 v1과 v2를 오갈 수 있다. 버전 사이에 응답 모양이 다르면 화면이 깨질 수 있으니, 고정이 필요하면 헤더나 쿠키 조건으로 나눈다.",
+    },
+  ]}
+/>
+
+카나리 배포는 이 두 장치를 섞어서 한다. 먼저 헤더 규칙으로 내부 사람만 새 버전을 써 보고, 문제가 없으면 가중치를 10, 25, 50, 100으로 올린다. 에러율이 오르면 가중치를 0으로 돌리면 된다. Argo Rollouts나 Flagger 같은 도구는 이 가중치를 지표에 따라 자동으로 바꾼다. 같은 일을 Ingress에서 하려면 nginx의 canary 어노테이션을 단 두 번째 Ingress를 만들어야 했다.
+
+HTTPRoute에는 filters도 있다. 요청 헤더 추가·삭제(RequestHeaderModifier), 리다이렉트(RequestRedirect), 경로 재작성(URLRewrite), 요청 복제(RequestMirror)가 표준이다. Ingress에서 어노테이션으로 하던 일이 필드로 올라왔다. 반면 JWT 검증이나 요청 수 제한 같은 API 게이트웨이 기능은 여전히 표준 HTTPRoute에 없다. 구현체마다 정책 CRD(예: Envoy Gateway의 SecurityPolicy, BackendTrafficPolicy)를 만들어 Gateway나 HTTPRoute에 붙이는 방식으로 제공한다. 그 부분은 구현체를 바꾸면 다시 써야 한다.
+
+## 네임스페이스를 넘어 참조하기
+
+역할을 나누면 리소스가 서로 다른 네임스페이스에 흩어진다. Gateway는 infra에, HTTPRoute는 shop에 있다. 여기서 아무 제한 없이 참조를 허용하면 문제가 생긴다. 다른 팀 네임스페이스의 Service로 트래픽을 끌어가거나, 남의 인증서 Secret을 내 리스너에 걸 수 있게 된다.
+
+Gateway API는 방향마다 허락하는 쪽을 정했다. 라우트가 다른 네임스페이스의 Gateway에 붙는 건 Gateway가 `allowedRoutes`로 허락한다. 입구 주인이 누구를 받을지 정하는 것이다. 반대로 라우트가 다른 네임스페이스의 Service를 가리키거나, Gateway가 다른 네임스페이스의 Secret을 쓰는 건 참조당하는 쪽이 ReferenceGrant로 허락한다.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-shop-routes
+  namespace: payments
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: shop
+  to:
+    - group: ""
+      kind: Service
+```
+
+이 ReferenceGrant는 payments 네임스페이스에 있다. "shop 네임스페이스의 HTTPRoute는 우리 Service를 가리켜도 된다"는 뜻이다. 가리키는 쪽이 아니라 가리킴을 당하는 쪽이 만든다. 자원을 가진 팀이 공유를 결정하는 구조다. `to`에 `name`을 적으면 특정 Service 하나로 좁힐 수 있다.
+
+허락이 없으면 라우트는 만들어지지만 동작하지 않는다. 이럴 때 HTTPRoute의 status를 보면 이유가 적혀 있다. `ResolvedRefs` 조건이 False이고 reason이 `RefNotPermitted`라면 ReferenceGrant가 없거나 틀린 것이다. `Accepted`가 False면 Gateway 쪽 allowedRoutes나 hostname이 맞지 않는 경우가 많다. Ingress는 이런 상태 보고가 빈약해서 컨트롤러 로그를 뒤져야 했는데, Gateway API는 리소스마다 조건을 표준으로 남긴다.
+
+## Ingress에서 옮겨 갈 때
+
+둘을 나란히 놓으면 이렇다.
+
+| | Ingress | Gateway API |
+|---|---|---|
+| 리소스 | Ingress 하나 (+ IngressClass) | GatewayClass, Gateway, HTTPRoute 등 |
+| 역할 분리 | 인프라 설정과 라우팅이 한 객체에 | 제공자·운영자·개발자별로 나뉨 |
+| 매칭 | host, path | host, path, 헤더, 쿼리, 메서드 |
+| 가중치 분배 | 표준 없음 (어노테이션) | backendRefs의 weight |
+| 프로토콜 | HTTP, HTTPS | HTTP, gRPC 등 (TCP·UDP는 실험 단계) |
+| 네임스페이스 넘나들기 | 불가 | allowedRoutes, ReferenceGrant |
+| 상태 | 기능 동결 | 계속 확장 중 |
+
+옮기는 작업은 대개 Ingress 하나를 Gateway(입구 부분)와 HTTPRoute(규칙 부분)로 쪼개는 일이다. kubernetes-sigs의 ingress2gateway 도구가 기본 필드와 일부 컨트롤러의 어노테이션을 변환해 준다. 다만 컨트롤러 전용 어노테이션은 대응하는 표준 필드가 없는 것도 많아서, 결국 목록을 뽑아 하나씩 옮길 곳을 정해야 한다. 한동안은 Ingress와 Gateway를 같은 클러스터에 함께 두고, DNS를 조금씩 새 입구로 돌리는 방식이 안전하다.
+
+모든 Ingress를 당장 바꿔야 하는 건 아니다. 도메인 하나에 경로 몇 개짜리라면 Ingress로도 충분하다. 다만 커뮤니티 ingress-nginx가 은퇴하면서 어차피 컨트롤러를 바꿔야 하는 팀이 많고, 그 김에 Gateway API로 넘어가는 경우가 늘었다. 여러 팀이 입구를 공유하거나 카나리 배포를 표준 방식으로 하고 싶다면 그 시점이 기회다.
+
+## 입구 하나, 규칙은 여러 사람이
+
+게이트웨이는 흩어진 서비스 앞에 입구를 하나 세우고, 라우팅·인증·요청 수 제한·관측 같은 공통 일을 그곳에 모은다. 대신 모든 트래픽이 지나는 곳이라 가볍게 유지해야 하고, 비즈니스 로직과 세밀한 인가는 서비스에 남긴다. 쿠버네티스의 Gateway API는 이 입구를 GatewayClass, Gateway, HTTPRoute로 쪼개 각자 맡은 사람이 관리하게 했고, Ingress에서 어노테이션으로 하던 헤더 매칭과 가중치 분배를 표준 필드로 올렸다.
+
+## 면접에서 나올 만한 질문
+
+### API 게이트웨이는 무엇이고 왜 쓰나요?
+
+클라이언트와 여러 내부 서비스 사이에 두는 단일 입구다. 라우팅, 토큰 검증, 요청 수 제한, 로깅과 추적 같은 공통 작업을 서비스마다 반복하지 않고 한곳에서 처리한다. 클라이언트는 주소 하나만 알면 되니 내부 구조가 바뀌어도 영향을 받지 않는다.
+
+### 리버스 프록시, 로드 밸런서와는 어떻게 다른가요?
+
+로드 밸런서는 같은 서버 여러 대에 부하를 나누는 게 목적이고, 리버스 프록시는 서버 앞에서 대신 요청을 받아 TLS 종료나 캐시, 분배를 하는 중계자다. API 게이트웨이는 API에 특화된 리버스 프록시로, 사용자·API 키 단위의 인증, 요청 수 제한, 응답 묶기처럼 API 의미를 아는 기능을 더한다. 실제 제품은 경계가 겹쳐서 어떤 책임을 맡기느냐로 구분하는 게 정확하다.
+
+### API 게이트웨이의 단점이나 주의할 점은요?
+
+모든 트래픽이 지나가니 단일 장애점이 되고 홉 하나만큼 지연이 생긴다. 그래서 여러 대로 띄우고 서비스별 타임아웃을 둔다. 가장 흔한 실수는 비즈니스 로직이 스며드는 것이라, 게이트웨이에는 모든 API에 공통인 일만 두고 화면 맞춤은 BFF로, 도메인 규칙은 서비스로 보낸다.
+
+### 게이트웨이에서 인증하면 서비스는 검증을 안 해도 되나요?
+
+토큰이 진짜인지 확인하는 인증은 게이트웨이에 맡길 수 있지만, 이 사용자가 이 자원에 접근해도 되는지 판단하는 인가는 데이터를 가진 서비스가 해야 한다. 그리고 누군가 게이트웨이를 건너뛰어 사용자 ID 헤더를 위조할 수 있으므로, 서비스는 게이트웨이에서 온 요청만 받도록 네트워크 정책이나 mTLS로 막아야 한다.
+
+### 게이트웨이를 여러 대 띄우면 요청 수 제한은 어떻게 하나요?
+
+인스턴스마다 메모리에서 세면 허용량이 인스턴스 수만큼 곱해진다. 정확히 막으려면 Redis 같은 공유 저장소나 전역 제한 서비스에 카운터를 둔다. 그 저장소가 장애일 때 전부 막을지(fail closed) 전부 통과시킬지(fail open)도 미리 정해 둬야 한다.
+
+### Gateway API는 Ingress와 무엇이 다른가요?
+
+Ingress는 리소스 하나에 입구 설정과 라우팅을 다 넣고 확장 기능은 컨트롤러별 어노테이션에 맡겼다. Gateway API는 GatewayClass(구현 제공자), Gateway(클러스터 운영자), HTTPRoute(앱 개발자)로 역할을 나누고, 헤더 매칭, 가중치 분배, 리다이렉트, 경로 재작성을 표준 필드로 갖는다. 리소스마다 status 조건을 남겨서 왜 동작하지 않는지 확인하기도 쉽다.
+
+### Gateway API로 카나리 배포는 어떻게 하나요?
+
+HTTPRoute의 backendRefs에 기존 버전과 새 버전 Service를 함께 적고 weight로 비율을 정한다. 90과 10이면 10%가 새 버전으로 간다. 헤더 조건이 있는 규칙을 하나 더 두면 특정 헤더를 붙인 요청만 항상 새 버전으로 보낼 수 있고, 이상이 생기면 가중치를 0으로 돌린다.
+
+### ReferenceGrant는 왜 필요한가요?
+
+다른 네임스페이스의 Service나 Secret을 마음대로 참조하게 두면, 남의 Service로 트래픽을 끌어가거나 남의 인증서를 쓸 수 있다. ReferenceGrant는 참조당하는 쪽 네임스페이스에 만들어 "어느 네임스페이스의 어떤 종류 리소스가 우리 것을 가리켜도 된다"고 허락하는 리소스다. 허락이 없으면 HTTPRoute status의 ResolvedRefs가 False(RefNotPermitted)로 표시된다.
