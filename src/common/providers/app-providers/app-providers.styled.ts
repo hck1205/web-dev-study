@@ -6,6 +6,12 @@ export const globalStyles = css`
   *::after {
     box-sizing: border-box;
   }
+  :root {
+    --bg: #fff;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
   html,
   body {
     margin: 0;
@@ -21,7 +27,7 @@ export const globalStyles = css`
       sans-serif;
     line-height: 1.7;
     color: #1a1a1a;
-    background: #fff;
+    background: var(--bg);
   }
   a {
     color: #0b5fff;
@@ -36,10 +42,16 @@ export const globalStyles = css`
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.9em;
   }
+  img {
+    max-width: 100%;
+    height: auto;
+  }
   @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111;
+    }
     body {
       color: #ececec;
-      background: #111;
     }
     a {
       color: #7aa7ff;

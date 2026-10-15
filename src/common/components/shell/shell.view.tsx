@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useShell } from "./shell";
-import { Brand, Header, Main } from "./shell.styled";
+import { Brand, Header, Main, Nav, NavLink } from "./shell.styled";
 import type { ShellProps } from "./shell.type";
 
 export function Shell({ children }: ShellProps) {
@@ -12,11 +11,13 @@ export function Shell({ children }: ShellProps) {
     <>
       <Header>
         <Brand href="/">web-dev-study</Brand>
-        {navItems.map((item) => (
-          <Link key={item.href} href={item.href}>
-            {item.label}
-          </Link>
-        ))}
+        <Nav aria-label="주요 메뉴">
+          {navItems.map((item) => (
+            <NavLink key={item.href} href={item.href} active={item.active}>
+              {item.label}
+            </NavLink>
+          ))}
+        </Nav>
       </Header>
       <Main>{children}</Main>
     </>

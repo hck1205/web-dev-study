@@ -14,8 +14,17 @@ export const metadata = { title: "Two Sum" };
 
 ## 접근
 
-1. **브루트포스**: 모든 쌍을 확인합니다. 시간 `O(n²)`, 공간 `O(1)`.
-2. **해시맵**: 각 원소를 보면서 `target - x`가 이미 나왔는지 조회합니다. 시간 `O(n)`, 공간 `O(n)`.
+1. **브루트포스**: 모든 쌍을 확인합니다.
+2. **해시맵**: 각 원소를 보면서 `target - x`가 이미 나왔는지 조회합니다.
+
+| 방법 | 시간 | 공간 | 비고 |
+|---|---|---|---|
+| 브루트포스 | `O(n²)` | `O(1)` | 구현이 단순하지만 입력이 크면 느림 |
+| 해시맵 | `O(n)` | `O(n)` | 한 번의 순회로 해결 |
+
+<Callout kind="tip" title="핵심 아이디어">
+  "지금까지 본 값"을 해시맵에 저장해 두면, 짝을 찾는 비용을 `O(n)`에서 `O(1)`로 줄일 수 있습니다.
+</Callout>
 
 ## 풀이
 
@@ -30,3 +39,7 @@ function twoSum(nums: number[], target: number): [number, number] {
   throw new Error("no solution");
 }
 ```
+
+<Callout kind="warning">
+  같은 원소를 두 번 쓰면 안 되므로, 현재 값을 맵에 넣기 **전에** 짝을 먼저 조회해야 합니다.
+</Callout>
