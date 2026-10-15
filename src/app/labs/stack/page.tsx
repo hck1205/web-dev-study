@@ -1,7 +1,6 @@
-import type { Metadata } from "next";
-import { StackDemo } from "@/features/labs/stack-demo";
+"use client";
 
-export const metadata: Metadata = { title: "Stack check" };
+import { StackDemo } from "@/features/labs/stack-demo";
 
 export default function StackPage() {
   return (

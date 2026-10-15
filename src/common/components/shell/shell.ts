@@ -1,3 +1,5 @@
+"use client";
+
 import type { NavItem } from "./shell.type";
 
 export const NAV_ITEMS: NavItem[] = [

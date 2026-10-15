@@ -1,3 +1,5 @@
+"use client";
+
 import type { HomeSection } from "./home.type";
 
 export const HOME_SECTIONS: HomeSection[] = [
