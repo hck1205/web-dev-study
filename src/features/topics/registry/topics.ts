@@ -45,6 +45,7 @@ export const TOPICS: Topic[] = [
           },
         ],
       },
+      { id: "security", label: "Security", description: "웹 보안, 브라우저 보안 정책, 공격과 방어" },
       { id: "system-design", label: "System Design", description: "대규모 시스템 설계" },
     ],
   },
@@ -57,6 +58,8 @@ export const TOPICS: Topic[] = [
       { id: "ideas", label: "아이디어", description: "떠오른 생각과 만들고 싶은 것들" },
       { id: "history", label: "역사", description: "지난 일에서 배우는 이야기" },
       { id: "humanities", label: "인문학", description: "사람과 삶, 생각하는 법" },
+      { id: "math", label: "수학", description: "정리와 증명, 손으로 따라가 보는 수학" },
+      { id: "science", label: "과학", description: "자연 현상과 그 원리" },
     ],
   },
 ];

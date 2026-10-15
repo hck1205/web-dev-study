@@ -3,6 +3,15 @@ import type { Post } from "./types";
 // 새 글을 추가하는 방법: src/app/posts/{slug}/page.mdx 를 만들고 여기에 항목을 추가한다.
 export const POSTS: Post[] = [
   {
+    slug: "pythagorean-theorem",
+    title: "피타고라스 정리, 삼각형 네 개를 옮겨 보면",
+    summary: "거리 계산 코드마다 들어 있는 a² + b² = c². 삼각형 네 개의 자리만 바꾸는 증명과 피타고라스 수, 역, 그리고 n차원 거리 공식까지 이어 봤다.",
+    topic: "self-development/math",
+    tags: ["Math", "Geometry", "Algorithm"],
+    date: "2026-10-15",
+    keywords: ["피타고라스 정리", "유클리드 거리", "피타고라스 수"],
+  },
+  {
     slug: "what-happens-google-com",
     title: "주소창에 google.com을 치면 일어나는 일",
     summary: "엔터를 누른 순간부터 화면이 뜰 때까지. URL 해석과 HSTS, DNS 조회, TCP·TLS 핸드셰이크, HTTP/2 요청과 리다이렉트, 렌더링 파이프라인을 순서대로 따라갔다.",
