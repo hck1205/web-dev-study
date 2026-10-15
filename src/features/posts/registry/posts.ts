@@ -3,6 +3,15 @@ import type { Post } from "./types";
 // 새 글을 추가하는 방법: src/app/posts/{slug}/page.mdx 를 만들고 여기에 항목을 추가한다.
 export const POSTS: Post[] = [
   {
+    slug: "what-happens-google-com",
+    title: "주소창에 google.com을 치면 일어나는 일",
+    summary: "엔터를 누른 순간부터 화면이 뜰 때까지. URL 해석과 HSTS, DNS 조회, TCP·TLS 핸드셰이크, HTTP/2 요청과 리다이렉트, 렌더링 파이프라인을 순서대로 따라갔다.",
+    topic: "programming/network",
+    tags: ["DNS", "TCP", "TLS", "HTTP", "Browser"],
+    date: "2026-10-15",
+    keywords: ["DNS", "HTTPS", "TLS 핸드셰이크", "3-way handshake", "HSTS", "렌더링 파이프라인", "HTTP/2"],
+  },
+  {
     slug: "cookie-session-login",
     title: "쿠키와 세션으로 로그인 상태 유지하기",
     summary: "HTTP는 방금 누가 왔는지 기억하지 못한다. 서버가 세션을 보관하고 쿠키로 번호표를 돌려주는 흐름과 쿠키 옵션, CSRF까지 정리했다.",
