@@ -1,6 +1,7 @@
 "use client";
 
-import { Badge, Container } from "@/common/design-system";
+import Link from "next/link";
+import { Badge, Container, Tag } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
 import { DIFFICULTY_LABELS } from "../../registry";
 import { usePostLayout } from "./post-layout";
@@ -8,6 +9,7 @@ import {
   BadgeRow,
   Body,
   Column,
+  Crumbs,
   DesktopToc,
   Grid,
   Header,
@@ -40,7 +42,7 @@ function TocLinks({ items, activeId }: { items: TocItem[]; activeId: string | nu
 }
 
 export function PostLayout({ children }: PostLayoutProps) {
-  const { bodyRef, post, category, date, toc } = usePostLayout();
+  const { bodyRef, post, crumbs, date, tags, toc } = usePostLayout();
 
   return (
     <Container>
@@ -50,7 +52,14 @@ export function PostLayout({ children }: PostLayoutProps) {
             {post && (
               <Header>
                 <BadgeRow>
-                  {category && <Badge tone="accent">{category.label}</Badge>}
+                  <Crumbs aria-label="토픽 경로">
+                    {crumbs.map((crumb, index) => (
+                      <span key={crumb.href}>
+                        {index > 0 && " / "}
+                        <Link href={crumb.href}>{crumb.label}</Link>
+                      </span>
+                    ))}
+                  </Crumbs>
                   {post.difficulty && (
                     <Badge tone={DIFFICULTY_TONE[post.difficulty]}>{DIFFICULTY_LABELS[post.difficulty]}</Badge>
                   )}
@@ -59,7 +68,11 @@ export function PostLayout({ children }: PostLayoutProps) {
                 <Summary>{post.summary}</Summary>
                 <Meta>
                   <time dateTime={post.date}>{date}</time>
-                  {post.tags.length > 0 && <span>{post.tags.map((tag) => `#${tag}`).join("  ")}</span>}
+                  {tags.map((tag) => (
+                    <Tag key={tag.slug} href={tag.href}>
+                      {tag.label}
+                    </Tag>
+                  ))}
                 </Meta>
               </Header>
             )}
@@ -81,7 +94,7 @@ export function PostLayout({ children }: PostLayoutProps) {
           {toc.items.length > 0 && (
             <DesktopToc>
               <nav aria-label="목차">
-                <TocTitle>On this page</TocTitle>
+                <TocTitle>목차</TocTitle>
                 <TocLinks items={toc.items} activeId={toc.activeId} />
               </nav>
             </DesktopToc>

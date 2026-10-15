@@ -9,7 +9,6 @@ export function SiteFooter() {
       <Container>
         <Row>
           <span>© {new Date().getFullYear()} web-dev-study</span>
-          <span>Web · Network · Infra · Algorithms · CS</span>
         </Row>
       </Container>
     </Root>

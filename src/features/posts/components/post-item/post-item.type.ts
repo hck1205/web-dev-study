@@ -1,5 +1,5 @@
 import type { Post } from "../../registry";
 
-export interface PostCardProps {
+export interface PostItemProps {
   post: Post;
 }

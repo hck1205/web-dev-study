@@ -1,6 +1,6 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
-import { color, font, layout, motion, radius, zIndex } from "@/common/design-system";
+import { color, font, layout, motion, radius, shadow, zIndex } from "@/common/design-system";
 import { media } from "@/common/styles/breakpoints";
 
 export const Root = styled.header`
@@ -37,18 +37,6 @@ export const Brand = styled(Link)`
   }
 `;
 
-export const BrandMark = styled.span`
-  display: inline-grid;
-  place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: ${radius.md};
-  background: ${color.accent};
-  color: ${color.onAccent};
-  font-size: ${font.size.sm};
-  font-weight: ${font.weight.extrabold};
-`;
-
 // 모바일: 햄버거 패널 / tablet 이상: 가로 메뉴
 export const DesktopNav = styled.nav`
   display: none;
@@ -68,11 +56,19 @@ export const MobileOnly = styled.div`
   }
 `;
 
-export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
+const navItemStyle = (active: boolean) => `
   display: inline-flex;
+  gap: 0.25rem;
   align-items: center;
   min-height: 2.5rem;
   padding: 0 0.875rem;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+`;
+
+export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
+  ${({ active }) => navItemStyle(active)}
   border-radius: ${radius.md};
   background: ${({ active }) => (active ? color.accentSoft : "transparent")};
   color: ${({ active }) => (active ? color.accent : color.textMuted)};
@@ -89,14 +85,64 @@ export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "act
   }
 `;
 
-export const MobilePanel = styled.nav`
-  display: grid;
-  gap: 0.25rem;
-  padding: 0.5rem 0 1rem;
-  border-top: 1px solid ${color.border};
+export const NavButton = styled.button<{ active: boolean; open: boolean }>`
+  ${({ active }) => navItemStyle(active)}
+  border-radius: ${radius.md};
+  background: ${({ active, open }) => (active || open ? color.accentSoft : "transparent")};
+  color: ${({ active, open }) => (active || open ? color.accent : color.textMuted)};
+  font-size: ${font.size.sm};
+  font-weight: ${font.weight.semibold};
 
-  a {
-    min-height: 3rem;
-    font-size: ${font.size.base};
+  &:hover {
+    background: ${({ active, open }) => (active || open ? color.accentSoft : color.surfaceHover)};
+    color: ${({ active, open }) => (active || open ? color.accent : color.text)};
   }
+  svg {
+    transition: transform ${motion.fast};
+    transform: rotate(${({ open }) => (open ? "180deg" : "0deg")});
+  }
+`;
+
+export const Dropdown = styled.div`
+  position: relative;
+`;
+
+export const DropdownPanel = styled.div`
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  z-index: ${zIndex.overlay};
+  min-width: 17rem;
+  max-height: min(32rem, calc(100dvh - 6rem));
+  padding: 0.5rem;
+  overflow-y: auto;
+  border: 1px solid ${color.border};
+  border-radius: ${radius.lg};
+  background: ${color.surface};
+  box-shadow: ${shadow.lg};
+`;
+
+export const PanelAll = styled(Link)`
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+  margin-bottom: 0.25rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid ${color.border};
+  color: ${color.textSubtle};
+  font-size: ${font.size.xs};
+  font-weight: ${font.weight.bold};
+  letter-spacing: 0.04em;
+  text-decoration: none;
+
+  &:hover {
+    color: ${color.accent};
+  }
+`;
+
+export const MobilePanel = styled.nav`
+  max-height: calc(100dvh - ${layout.header} - 1rem);
+  padding: 0.5rem 0 1rem;
+  overflow-y: auto;
+  border-top: 1px solid ${color.border};
 `;

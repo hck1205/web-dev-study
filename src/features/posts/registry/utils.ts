@@ -1,12 +1,4 @@
-import type { Category, CategoryId, Difficulty, Post } from "./types";
-
-export const CATEGORIES: Category[] = [
-  { id: "web", label: "Web", description: "브라우저, 렌더링, React · Next.js" },
-  { id: "network", label: "Network", description: "HTTP, TCP/IP, DNS, 캐시, 보안" },
-  { id: "infra", label: "Infra", description: "Docker, CI/CD, 배포, 관측성" },
-  { id: "algorithms", label: "Algorithms", description: "문제 풀이와 해설, 자료구조" },
-  { id: "cs", label: "CS", description: "OS, 데이터베이스, 시스템 디자인" },
-];
+import type { Difficulty, Post } from "./types";
 
 export const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   easy: "Easy",
@@ -14,20 +6,45 @@ export const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   hard: "Hard",
 };
 
-export const getCategory = (id: CategoryId) => CATEGORIES.find((category) => category.id === id);
-
-export const isCategoryId = (value: string | null): value is CategoryId =>
-  CATEGORIES.some((category) => category.id === value);
-
 export const postHref = (slug: string) => `/posts/${slug}`;
 
 export const sortByDateDesc = (posts: Post[]) => [...posts].sort((a, b) => b.date.localeCompare(a.date));
-
-export const filterByCategory = (posts: Post[], category?: CategoryId) =>
-  category ? posts.filter((post) => post.category === category) : posts;
 
 export function formatDate(date: string) {
   return new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }).format(
     new Date(date),
   );
 }
+
+// ---- 해시태그 ----
+
+/** 태그 표기: 공백을 없앤 해시태그 형태. "Hash Table" → "HashTable" */
+export const tagLabel = (tag: string) => tag.replace(/\s+/g, "");
+
+/** URL 슬러그: 소문자 + 공백은 하이픈. "Hash Table" → "hash-table" */
+export const tagSlug = (tag: string) => tag.trim().toLowerCase().replace(/\s+/g, "-");
+
+export const tagHref = (tag: string) => `/tags/${tagSlug(tag)}`;
+
+export interface TagCount {
+  tag: string;
+  slug: string;
+  count: number;
+}
+
+/** 글 전체에서 태그를 모아 사용 횟수 내림차순(같으면 ABC 순)으로 정렬한다. 대소문자만 다른 태그는 하나로 합친다. */
+export function collectTags(posts: Post[]): TagCount[] {
+  const map = new Map<string, TagCount>();
+  for (const post of posts) {
+    for (const tag of post.tags) {
+      const slug = tagSlug(tag);
+      const current = map.get(slug);
+      if (current) current.count += 1;
+      else map.set(slug, { tag, slug, count: 1 });
+    }
+  }
+  const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+  return [...map.values()].sort((a, b) => b.count - a.count || collator.compare(a.tag, b.tag));
+}
+
+export const postsWithTag = (posts: Post[], slug: string) => posts.filter((post) => post.tags.some((tag) => tagSlug(tag) === slug));

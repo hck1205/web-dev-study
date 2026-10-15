@@ -2,25 +2,27 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import type { NavItem } from "./site-header.type";
+import { isNodeInTrail } from "../nav-tree/nav-tree.utils";
+import type { NavNode } from "../nav-tree";
+import { useDropdown } from "./hooks/use-dropdown";
 
-export const NAV_ITEMS: NavItem[] = [
-  { label: "글", href: "/posts", prefix: "/posts" },
-  { label: "Labs", href: "/labs/stack", prefix: "/labs" },
-];
-
-export function useSiteHeader() {
+export function useSiteHeader(items: NavNode[]) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const dropdown = useDropdown();
+  const { close } = dropdown;
 
-  // 페이지 이동 시 모바일 메뉴를 닫는다.
+  // 페이지 이동 시 모바일 메뉴와 드롭다운을 닫는다.
   useEffect(() => {
     setMenuOpen(false);
-  }, [pathname]);
+    close();
+  }, [pathname, close]);
 
   return {
-    navItems: NAV_ITEMS.map((item) => ({ ...item, active: pathname.startsWith(item.prefix) })),
+    dropdown,
     menuOpen,
     toggleMenu: () => setMenuOpen((open) => !open),
+    closeMenu: () => setMenuOpen(false),
+    entries: items.map((item) => ({ item, active: isNodeInTrail(item, pathname) })),
   };
 }

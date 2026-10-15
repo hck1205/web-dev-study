@@ -33,8 +33,23 @@ export const Column = styled.div`
 export const BadgeRow = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: ${space[2]};
+  gap: ${space[2]} ${space[3]};
+  align-items: center;
   margin-bottom: ${space[4]};
+`;
+
+export const Crumbs = styled.nav`
+  color: ${color.textSubtle};
+  font-size: ${font.size.sm};
+  font-weight: ${font.weight.semibold};
+
+  a {
+    color: ${color.accent};
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
 `;
 
 export const Title = styled.h1`
@@ -62,7 +77,8 @@ export const Summary = styled.p`
 export const Meta = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: ${space[1]} ${space[3]};
+  gap: ${space[2]} ${space[3]};
+  align-items: center;
   margin-top: ${space[5]};
   padding-top: ${space[4]};
   border-top: 1px solid ${color.border};
@@ -127,8 +143,6 @@ export const TocTitle = styled.p`
   color: ${color.textSubtle};
   font-size: ${font.size.xs};
   font-weight: ${font.weight.bold};
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 `;
 
 export const TocList = styled.ul`
