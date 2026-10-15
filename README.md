@@ -17,8 +17,10 @@ pnpm typecheck
 
 ## Layout
 
-- `src/app` — 라우트. 노트/문제는 `page.mdx`로 작성
-- `src/app/labs` — 서버 기능(Route Handler 등) 실험
-- `src/lib` — 공용 유틸 (axios 인스턴스, Emotion SSR 레지스트리)
+- `src/app` — 라우팅 전용. 노트/문제는 `page.mdx`로 작성
+- `src/common` — 공용 모듈 (components, providers, api ...)
+- `src/features/{scope}/{name}` — scope별 모듈
+
+폴더 구조와 파일 역할(`{name}.ts` / `.view.tsx` / `.styled.ts` / `.utils.ts` / `.type.ts` / `index.ts`)은 [CLAUDE.md](./CLAUDE.md)를 참고하세요.
 
 배포는 Vercel(Git 연동)을 사용합니다.
