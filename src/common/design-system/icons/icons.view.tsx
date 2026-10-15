@@ -64,3 +64,10 @@ export const ChevronDownIcon = (props: IconProps) => (
     <path d="M6 9l6 6 6-6" />
   </Svg>
 );
+
+export const SearchIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-3.5-3.5" />
+  </Svg>
+);

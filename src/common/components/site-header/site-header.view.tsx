@@ -19,7 +19,7 @@ import {
 } from "./site-header.styled";
 import type { SiteHeaderProps } from "./site-header.type";
 
-export function SiteHeader({ items }: SiteHeaderProps) {
+export function SiteHeader({ items, actions }: SiteHeaderProps) {
   const { dropdown, menuOpen, toggleMenu, closeMenu, entries } = useSiteHeader(items);
 
   return (
@@ -60,6 +60,7 @@ export function SiteHeader({ items }: SiteHeaderProps) {
             )}
           </DesktopNav>
 
+          {actions}
           <ThemeToggle />
           <MobileOnly>
             <IconButton label={menuOpen ? "메뉴 닫기" : "메뉴 열기"} aria-expanded={menuOpen} onClick={toggleMenu}>

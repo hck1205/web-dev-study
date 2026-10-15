@@ -1,0 +1,329 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("oauth");
+
+## 한 줄로 말하면
+
+OAuth는 **"내 비밀번호는 알려주지 않고, 필요한 만큼만 열쇠를 빌려주는 방법"** 이에요.
+
+## 비유로 이해하기: 발렛 키
+
+호텔 앞에서 주차 요원에게 차를 맡긴다고 생각해 보세요.
+
+- 차 열쇠 **전부**(마스터 키)를 주면? 트렁크도, 보관함도 열 수 있어요. 불안하죠.
+- 그래서 많은 차에는 **발렛 키**가 있어요. 시동은 걸 수 있지만 트렁크는 못 열고, 멀리 갈 수도 없어요.
+
+OAuth가 바로 이 **발렛 키**를 만드는 규칙이에요.
+
+- 마스터 키 = 내 **비밀번호**
+- 발렛 키 = **액세스 토큰** (정해진 일만 할 수 있고, 시간이 지나면 못 쓰는 열쇠)
+- 주차 요원 = 내 정보를 쓰고 싶은 **앱**
+
+<Callout kind="note" title="앱에 비밀번호를 주면 안 되는 이유">
+  앱에 비밀번호를 주면 그 앱은 내 계정으로 **무엇이든** 할 수 있어요. 앱이 해킹당하면 내 계정도 같이 털리고, 나중에 "이제 그만 쓸래" 하려면 비밀번호를 바꿔야 해요. 발렛 키는 그 키만 없애면 끝이에요.
+</Callout>
+
+## 등장인물은 네 명
+
+OAuth 이야기에는 늘 네 명이 나와요. 이름은 어렵지만 역할은 간단해요.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="화살표를 따라가며 누가 누구에게 무엇을 하는지 보세요."
+  nodes={[
+    { id: "user", label: "나", sub: "리소스 소유자", x: 90, y: 50 },
+    { id: "app", label: "앱", sub: "클라이언트", x: 310, y: 50 },
+    { id: "auth", label: "인가 서버", sub: "열쇠를 만들어줌", x: 90, y: 200 },
+    { id: "api", label: "API 서버", sub: "내 정보를 보관", x: 310, y: 200 },
+  ]}
+  edges={[
+    { from: "user", to: "app", label: "내 정보 써도 돼", arrow: "end" },
+    { from: "user", to: "auth", label: "로그인·동의", arrow: "both" },
+    { from: "app", to: "auth", label: "열쇠 주세요" },
+    { from: "app", to: "api", label: "열쇠로 요청" },
+    { from: "auth", to: "api", label: "열쇠 확인", dashed: true, arrow: "none" },
+  ]}
+/>
+
+| 이름 | 쉬운 말 | 예시 |
+|---|---|---|
+| 리소스 소유자 | 정보의 주인, 바로 **나** | 구글 계정을 가진 나 |
+| 클라이언트 | 내 정보를 쓰고 싶은 **앱** | 일정 정리 앱 |
+| 인가 서버 | **열쇠를 만들어 주는 곳** | 구글 로그인 서버 |
+| 리소스 서버 | **정보를 보관하는 곳** | 구글 캘린더 서버 |
+
+## 전체 흐름을 그림으로 보기
+
+"구글로 계속하기"를 누르면 무슨 일이 일어날까요? **다음** 버튼을 눌러 한 단계씩 따라가 보세요. 화살표를 직접 눌러도 돼요.
+
+이 방식의 이름은 **인가 코드 흐름(Authorization Code Flow)** 이에요. 열쇠를 바로 주지 않고, 먼저 **임시 쿠폰(code)** 을 주는 게 핵심이에요.
+
+<SequenceDiagram
+  caption="인가 코드 흐름: 열쇠를 받기까지"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "app", label: "앱" },
+    { id: "auth", label: "인가 서버" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "app",
+      label: "로그인 클릭",
+      title: "내가 '구글로 계속하기'를 눌러요",
+      detail: "앱 화면에서 버튼을 눌러요. 아직 비밀번호는 아무도 몰라요.",
+    },
+    {
+      from: "app",
+      to: "browser",
+      label: "302 이동!",
+      title: "앱이 나를 인가 서버로 보내요",
+      detail: "앱은 로그인을 직접 받지 않아요. 대신 '구글 문 앞으로 가세요' 하고 안내해요(리다이렉트). 어떤 앱인지, 어떤 권한이 필요한지는 주소에 적어서 보내요.",
+      payload: "Location: https://auth.example.com/authorize\n  ?response_type=code\n  &client_id=my-app\n  &redirect_uri=https://app.example.com/callback\n  &scope=profile\n  &state=xK3f9",
+    },
+    {
+      from: "browser",
+      to: "auth",
+      label: "GET /authorize",
+      title: "브라우저가 인가 서버에 도착해요",
+      detail: "여기서부터는 앱 화면이 아니라 구글 화면이에요. 비밀번호는 오직 여기에서만 입력해요.",
+    },
+    {
+      from: "auth",
+      to: "browser",
+      label: "동의 화면",
+      title: "'이 앱에 프로필을 빌려줄까요?' 하고 물어봐요",
+      detail: "로그인이 끝나면, 앱이 어떤 권한을 원하는지 보여주고 허락을 구해요.",
+    },
+    {
+      from: "browser",
+      to: "auth",
+      label: "허용 클릭",
+      title: "내가 '허용'을 눌러요",
+      detail: "빌려줄 범위를 정하는 사람은 앱이 아니라 나예요.",
+    },
+    {
+      from: "auth",
+      to: "browser",
+      label: "302 + code",
+      title: "인가 서버가 '임시 쿠폰'을 줘요",
+      detail: "열쇠를 바로 주지 않고, 한 번만 쓸 수 있는 짧은 임시 쿠폰(인가 코드)을 줘요. 브라우저는 이 쿠폰을 들고 앱으로 돌아가요.",
+      payload: "Location: https://app.example.com/callback\n  ?code=AUTH_CODE_123\n  &state=xK3f9",
+    },
+    {
+      from: "browser",
+      to: "app",
+      label: "GET /callback",
+      title: "쿠폰을 들고 앱으로 돌아와요",
+      detail: "앱은 먼저 돌아온 state가 처음에 보낸 값(xK3f9)과 같은지 확인해요. 다르면 누가 끼어든 가짜 요청이니 멈춰요.",
+    },
+    {
+      from: "app",
+      to: "auth",
+      label: "POST /token",
+      title: "앱이 쿠폰을 열쇠로 바꿔 달라고 해요",
+      detail: "이 단계는 브라우저를 거치지 않고, 앱 서버가 인가 서버에 직접 해요. 앱만 아는 비밀(client_secret)도 함께 보내서 '진짜 그 앱'이라는 걸 증명해요.",
+      payload: "POST /token\n\ngrant_type=authorization_code\ncode=AUTH_CODE_123\nredirect_uri=https://app.example.com/callback\nclient_id=my-app\nclient_secret=앱만_아는_비밀",
+    },
+    {
+      from: "auth",
+      to: "app",
+      label: "access_token",
+      title: "열쇠(액세스 토큰)를 받아요",
+      detail: "쿠폰이 진짜이고 앱도 진짜라면 드디어 열쇠가 나와요. 이 열쇠는 보통 1시간쯤 쓸 수 있어요.",
+      payload: "{\n  \"access_token\": \"eyJhbGciOi...\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600,\n  \"refresh_token\": \"8xLOxBtZp8\",\n  \"scope\": \"profile\"\n}",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "Bearer 토큰",
+      title: "열쇠를 보여주고 정보를 달라고 해요",
+      detail: "앱은 요청마다 열쇠를 함께 내밀어요. 비밀번호는 한 번도 오가지 않았어요.",
+      payload: "GET /me\nAuthorization: Bearer eyJhbGciOi...",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "200 데이터",
+      title: "열쇠가 맞으면 정보를 줘요",
+      detail: "열쇠에 적힌 범위(scope)만큼만 줘요. 프로필만 허락했다면 이메일 목록은 볼 수 없어요.",
+    },
+  ]}
+/>
+
+<Callout kind="tip" title="왜 쿠폰(code)을 한 번 거칠까요?">
+  브라우저 주소창은 기록에 남고 남에게 보이기 쉬워요. 그래서 **진짜 열쇠는 브라우저를 거치지 않는 길(앱 서버 ↔ 인가 서버)** 로만 전달해요. 쿠폰은 훔쳐 가도 혼자서는 쓸모가 없어요. 앱의 비밀까지 있어야 열쇠로 바꿀 수 있거든요.
+</Callout>
+
+## 주소를 뜯어보기
+
+2번 단계에서 앱이 나를 보낸 주소는 길어 보이지만, 사실 **쪽지 여러 장**을 붙여 놓은 거예요. 조각을 눌러서 하나씩 읽어 보세요.
+
+<UrlAnatomy
+  caption="인가 요청 주소(Authorization URL)"
+  base="https://auth.example.com/authorize"
+  params={[
+    {
+      key: "response_type",
+      value: "code",
+      title: "어떤 걸 받고 싶은지",
+      description: "'열쇠 말고 임시 쿠폰(code)부터 주세요'라는 뜻이에요. 인가 코드 흐름에서는 항상 code예요.",
+      required: true,
+    },
+    {
+      key: "client_id",
+      value: "my-app",
+      title: "나는 누구인지",
+      description: "앱의 이름표예요. 인가 서버는 미리 등록된 앱인지 이걸로 확인해요. 비밀이 아니라 누구에게 보여도 괜찮아요.",
+      required: true,
+    },
+    {
+      key: "redirect_uri",
+      value: "https://app.example.com/callback",
+      title: "쿠폰을 어디로 돌려줄지",
+      description: "허락이 끝나면 브라우저를 이 주소로 보내요. 미리 등록해 둔 주소와 글자 하나까지 똑같아야 해요. 그렇지 않으면 쿠폰이 엉뚱한 곳으로 갈 수 있기 때문이에요.",
+      required: true,
+    },
+    {
+      key: "scope",
+      value: "profile%20email",
+      title: "어디까지 빌려 달라는지",
+      description: "발렛 키의 '권한 범위'예요. 여기서는 프로필과 이메일만 요청했어요. %20은 띄어쓰기를 주소에 쓰는 방법이에요. 필요한 만큼만 요청하는 게 좋아요.",
+    },
+    {
+      key: "state",
+      value: "xK3f9",
+      title: "내가 보낸 요청이 맞는지 확인하는 도장",
+      description: "앱이 무작위로 만든 값이에요. 쿠폰과 함께 그대로 돌아와야 해요. 다르면 누군가 가짜 요청을 끼워 넣은 거예요.",
+      required: true,
+    },
+  ]}
+/>
+
+## 열쇠는 두 종류예요
+
+앞에서 받은 응답에는 열쇠가 두 개 있었어요.
+
+| | 액세스 토큰 | 리프레시 토큰 |
+|---|---|---|
+| 비유 | 오늘 하루 쓰는 **출입증** | 출입증을 다시 받는 **재발급 쿠폰** |
+| 하는 일 | API에 보여주고 정보를 받음 | 새 액세스 토큰을 받음 |
+| 수명 | 짧음 (보통 몇 분~1시간) | 길음 (며칠~몇 달) |
+| 얼마나 자주 보내나 | 요청할 때마다 | 출입증이 만료됐을 때만 |
+
+<Callout kind="note" title="왜 출입증 수명을 짧게 할까요?">
+  출입증을 잃어버리거나 도둑맞아도 **금방 쓸모가 없어지게** 하려는 거예요. 대신 매번 로그인하면 불편하니까, 재발급 쿠폰(리프레시 토큰)으로 조용히 새 출입증을 받아요.
+</Callout>
+
+## 휴대폰 앱은 왜 PKCE가 필요할까요?
+
+앞의 방법에는 약점이 하나 있어요. **앱만 아는 비밀(client_secret)** 이 있어야 한다는 점이에요. 그런데 휴대폰 앱이나 웹 브라우저에서 도는 앱은 코드가 사용자 손에 그대로 있어서, 비밀을 숨길 수 없어요.
+
+그래서 **비밀을 미리 정해 두는 대신, 그때그때 새로 만드는 비밀**을 써요. 이게 PKCE(픽시)예요.
+
+- **비밀 문구(code_verifier)**: 앱이 매번 새로 만드는 긴 무작위 문자열
+- **지문(code_challenge)**: 비밀 문구를 되돌릴 수 없게 바꾼 값. 지문만 보고는 원래 문구를 알 수 없어요.
+
+<SequenceDiagram
+  caption="PKCE: 쿠폰을 훔쳐도 쓸 수 없는 이유"
+  actors={[
+    { id: "app", label: "앱(휴대폰)" },
+    { id: "auth", label: "인가 서버" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "app",
+      label: "비밀 문구 만들기",
+      title: "앱이 비밀 문구를 만들어요",
+      detail: "무작위로 긴 문자열(code_verifier)을 만들어요. 아직 누구에게도 보여주지 않아요.",
+      payload: "code_verifier = dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    },
+    {
+      from: "app",
+      to: "app",
+      label: "지문 만들기",
+      title: "비밀 문구로 '지문'을 만들어요",
+      detail: "SHA-256이라는 계산으로 문구를 지문(code_challenge)으로 바꿔요. 이 계산은 한쪽으로만 가능해서, 지문에서 문구를 되돌릴 수 없어요.",
+      payload: "code_challenge = SHA256(code_verifier)",
+    },
+    {
+      from: "app",
+      to: "auth",
+      label: "authorize + 지문",
+      title: "지문을 함께 보내며 로그인을 요청해요",
+      detail: "인가 요청에 지문을 실어 보내요. 인가 서버는 이 지문을 기억해 둬요. 비밀 문구 자체는 아직 안 보냈어요.",
+    },
+    {
+      from: "auth",
+      to: "app",
+      label: "code(쿠폰)",
+      title: "임시 쿠폰을 받아요",
+      detail: "앞에서와 같아요. 누가 이 쿠폰을 중간에서 훔치더라도, 비밀 문구를 모르면 열쇠로 바꿀 수 없어요.",
+    },
+    {
+      from: "app",
+      to: "auth",
+      label: "token + 문구",
+      title: "쿠폰과 함께 '비밀 문구'를 보여줘요",
+      detail: "열쇠로 바꿀 때 처음 만든 비밀 문구를 처음으로 보여줘요.",
+      payload: "POST /token\n\ncode=AUTH_CODE_123\ncode_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    },
+    {
+      from: "auth",
+      to: "auth",
+      label: "지문 비교",
+      title: "인가 서버가 지문을 맞춰 봐요",
+      detail: "받은 문구로 지문을 다시 만들어서, 아까 기억해 둔 지문과 같은지 비교해요. 같아야 '처음 요청한 바로 그 앱'이에요.",
+    },
+    {
+      from: "auth",
+      to: "app",
+      label: "access_token",
+      title: "열쇠를 받아요",
+      detail: "지문이 같으면 열쇠를 줘요. 쿠폰만 훔친 사람은 비밀 문구가 없으니 여기서 막혀요.",
+    },
+  ]}
+/>
+
+## 헷갈리는 부분
+
+<Callout kind="warning" title="OAuth는 '로그인'이 아니에요">
+  OAuth는 "이 앱이 내 정보를 **써도 되나요?**"(인가, Authorization)를 다루는 규칙이에요. "이 사람이 **누구인가요?**"(인증, Authentication)는 OAuth 위에 얹은 **OpenID Connect** 가 맡아요. 그래서 "구글로 로그인"은 사실 OAuth + OpenID Connect 를 같이 쓰는 거예요.
+</Callout>
+
+- **쿠폰(code)과 열쇠(token)가 왜 따로 있나요?** 열쇠가 브라우저를 거치지 않게 하려는 거예요. 위의 팁 상자를 다시 보세요.
+- **state는 꼭 필요한가요?** 네, 꼭 확인하세요. 안 하면 누군가 자기 쿠폰을 내 앱에 끼워 넣는 공격(CSRF)에 당할 수 있어요.
+- **redirect_uri를 느슨하게 검사해도 되나요?** 안 돼요. 일부만 비교하면 쿠폰이 공격자 주소로 새어 나갈 수 있어요. 등록한 주소와 **완전히 같을 때만** 허용해요.
+- **옛날 방식(Implicit Flow)은요?** 열쇠를 브라우저 주소에 바로 실어 보내서 위험해요. 지금은 쓰지 않고, 브라우저 앱도 **인가 코드 + PKCE** 를 써요.
+
+## 내 말로 다시 설명해보기
+
+파인만 기법의 마지막 단계는 **쉬운 말로 다시 설명해 보는 것**이에요. 아래 질문에 먼저 스스로 답해 보고, 눌러서 맞춰 보세요.
+
+<details>
+<summary>Q1. 앱에 비밀번호를 주지 않고도 내 정보를 쓰게 할 수 있는 이유는?</summary>
+
+비밀번호 대신 **범위와 시간이 제한된 열쇠(액세스 토큰)** 를 주기 때문이에요. 열쇠는 정해 둔 일만 할 수 있고, 금방 만료되고, 필요하면 그 열쇠만 취소할 수 있어요.
+
+</details>
+
+<details>
+<summary>Q2. 인가 서버가 열쇠 대신 '임시 쿠폰(code)'을 먼저 주는 이유는?</summary>
+
+열쇠가 **브라우저 주소창을 거치지 않게** 하려고요. 쿠폰은 브라우저로 전달되지만, 쿠폰을 열쇠로 바꾸는 일은 앱 서버와 인가 서버가 직접 해요.
+
+</details>
+
+<details>
+<summary>Q3. PKCE는 무엇을 막아 주나요?</summary>
+
+휴대폰·브라우저 앱처럼 **비밀을 숨길 수 없는 앱**에서, 누가 쿠폰을 훔쳐도 열쇠로 바꾸지 못하게 해요. 처음 요청한 앱만 아는 비밀 문구가 필요하기 때문이에요.
+
+</details>
+
+<Callout kind="tip" title="12살 친구에게 설명한다면">
+  "OAuth는 **발렛 키** 같은 거야. 차 주인(나)이 마스터 키(비밀번호) 대신, 시동만 걸 수 있고 금방 못 쓰게 되는 작은 열쇠를 주차 요원(앱)에게 빌려주는 거지. 열쇠를 줄 때는 먼저 임시 쿠폰을 주고, 그 쿠폰을 열쇠로 바꿔 가게 해서 중간에 아무도 못 가로채게 하는 거야."
+</Callout>

@@ -9,3 +9,4 @@ export type { ButtonProps } from "./components/button";
 export { Card } from "./components/card";
 export { Container } from "./components/container";
 export { IconButton } from "./components/icon-button";
+export { Tag } from "./components/tag";

@@ -25,6 +25,11 @@ export const TOPICS: Topic[] = [
     id: "self-development",
     label: "자기개발",
     description: "개발 밖에서 성장하기 위한 기록",
-    children: [{ id: "english", label: "English", description: "영어 학습" }],
+    children: [
+      { id: "english", label: "English", description: "영어 학습" },
+      { id: "ideas", label: "아이디어", description: "떠오른 생각과 만들고 싶은 것들" },
+      { id: "history", label: "역사", description: "지난 일에서 배우는 이야기" },
+      { id: "humanities", label: "인문학", description: "사람과 삶, 생각하는 법" },
+    ],
   },
 ];

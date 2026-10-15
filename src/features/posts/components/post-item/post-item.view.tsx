@@ -1,12 +1,12 @@
 "use client";
 
-import { Badge } from "@/common/design-system";
+import { Badge, Tag } from "@/common/design-system";
 import { usePostItem } from "./post-item";
 import { Body, Date, Meta, Root, Summary, Title, TitleLink } from "./post-item.styled";
 import type { PostItemProps } from "./post-item.type";
 
 export function PostItem({ post }: PostItemProps) {
-  const { href, topicLabel, date, difficulty } = usePostItem(post);
+  const { href, topicLabel, date, difficulty, tags } = usePostItem(post);
 
   return (
     <Root>
@@ -19,7 +19,11 @@ export function PostItem({ post }: PostItemProps) {
         <Meta>
           {topicLabel && <span>{topicLabel}</span>}
           {difficulty && <Badge tone={difficulty.tone}>{difficulty.label}</Badge>}
-          {post.tags.length > 0 && <span>{post.tags.map((tag) => `#${tag}`).join(" ")}</span>}
+          {tags.map((tag) => (
+            <Tag key={tag.slug} href={tag.href}>
+              {tag.label}
+            </Tag>
+          ))}
         </Meta>
       </Body>
     </Root>

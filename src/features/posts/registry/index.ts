@@ -1,9 +1,20 @@
 import { POSTS } from "./posts";
-import { postHref } from "./utils";
+import { collectTags, postHref } from "./utils";
 
 export type { Difficulty, Post } from "./types";
 export { POSTS } from "./posts";
-export { DIFFICULTY_LABELS, formatDate, postHref, sortByDateDesc } from "./utils";
+export type { TagCount } from "./utils";
+export {
+  DIFFICULTY_LABELS,
+  collectTags,
+  formatDate,
+  postHref,
+  postsWithTag,
+  sortByDateDesc,
+  tagHref,
+  tagLabel,
+  tagSlug,
+} from "./utils";
 
 export const getPostBySlug = (slug: string) => POSTS.find((post) => post.slug === slug);
 
@@ -15,3 +26,5 @@ export function getPostMetadata(slug: string) {
   if (!post) throw new Error(`Unknown post slug: ${slug}`);
   return { title: post.title, description: post.summary };
 }
+
+export const ALL_TAGS = collectTags(POSTS);

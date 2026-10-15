@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Container } from "@/common/design-system";
+import { Badge, Container, Tag } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
 import { DIFFICULTY_LABELS } from "../../registry";
 import { usePostLayout } from "./post-layout";
@@ -42,7 +42,7 @@ function TocLinks({ items, activeId }: { items: TocItem[]; activeId: string | nu
 }
 
 export function PostLayout({ children }: PostLayoutProps) {
-  const { bodyRef, post, crumbs, date, toc } = usePostLayout();
+  const { bodyRef, post, crumbs, date, tags, toc } = usePostLayout();
 
   return (
     <Container>
@@ -68,7 +68,11 @@ export function PostLayout({ children }: PostLayoutProps) {
                 <Summary>{post.summary}</Summary>
                 <Meta>
                   <time dateTime={post.date}>{date}</time>
-                  {post.tags.length > 0 && <span>{post.tags.map((tag) => `#${tag}`).join("  ")}</span>}
+                  {tags.map((tag) => (
+                    <Tag key={tag.slug} href={tag.href}>
+                      {tag.label}
+                    </Tag>
+                  ))}
                 </Meta>
               </Header>
             )}

@@ -43,24 +43,52 @@ export const Article = styled.div`
     scroll-margin-top: 5rem;
   }
 
-  p,
-  ul,
-  ol,
-  blockquote {
+  /* 시각화(figure) 컴포넌트 내부는 각자 스타일을 가지므로 본문 규칙에서 제외한다 */
+  p:not(figure *),
+  ul:not(figure *),
+  ol:not(figure *),
+  blockquote:not(figure *) {
     margin: ${space[5]} 0;
   }
-  ul,
-  ol {
+  ul:not(figure *),
+  ol:not(figure *) {
     padding-left: ${space[6]};
   }
-  li + li {
+  li:not(figure *) + li {
     margin-top: ${space[2]};
   }
-  li > p {
+  li > p:not(figure *) {
     margin: ${space[2]} 0;
   }
   strong {
     font-weight: ${font.weight.bold};
+  }
+
+  /* 정답 확인용 접이식 (<details>) */
+  details {
+    margin: ${space[3]} 0;
+    border: 1px solid ${color.border};
+    border-radius: ${radius.md};
+    background: ${color.bgSubtle};
+  }
+  summary {
+    display: flex;
+    align-items: center;
+    min-height: 3rem;
+    padding: ${space[2]} ${space[4]};
+    font-weight: ${font.weight.semibold};
+    line-height: ${font.leading.snug};
+    cursor: pointer;
+  }
+  details[open] > summary {
+    border-bottom: 1px solid ${color.border};
+    color: ${color.accent};
+  }
+  details > :not(summary) {
+    padding: 0 ${space[4]};
+  }
+  details > p:not(figure *) {
+    margin: ${space[3]} 0;
   }
   a {
     font-weight: ${font.weight.medium};
@@ -87,7 +115,7 @@ export const Article = styled.div`
   }
 
   /* 인라인 코드 */
-  :not(pre) > code {
+  :not(pre, figure *) > code {
     padding: 0.15em 0.4em;
     border: 1px solid ${color.codeBorder};
     border-radius: ${radius.sm};
@@ -98,7 +126,7 @@ export const Article = styled.div`
   }
 
   /* 코드 블록: 모바일에서는 화면 양끝까지 펼친다 */
-  pre {
+  pre:not(figure *) {
     margin: ${space[6]} calc(-1 * ${space[4]});
     padding: ${space[4]};
     overflow-x: auto;
@@ -117,7 +145,7 @@ export const Article = styled.div`
     }
   }
   ${media.tablet} {
-    pre {
+    pre:not(figure *) {
       margin: ${space[6]} 0;
       padding: ${space[5]};
       border-width: 1px;

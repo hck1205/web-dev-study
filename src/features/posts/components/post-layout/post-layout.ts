@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useRef } from "react";
 import { TOPIC_TREE, findTopic, topicHref } from "@/features/topics/registry";
-import { formatDate, getPostByPathname } from "../../registry";
+import { formatDate, getPostByPathname, tagHref, tagLabel, tagSlug } from "../../registry";
 import { usePostToc } from "./hooks/use-post-toc";
 
 export function usePostLayout() {
@@ -22,6 +22,7 @@ export function usePostLayout() {
       href: topicHref(found!.path.slice(0, index + 1)),
     })),
     date: post ? formatDate(post.date) : undefined,
+    tags: (post?.tags ?? []).map((tag) => ({ slug: tagSlug(tag), label: tagLabel(tag), href: tagHref(tag) })),
     toc,
   };
 }
