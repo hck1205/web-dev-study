@@ -1,6 +1,6 @@
 "use client";
 
-import { StackDemo } from "@/features/labs/stack-demo";
+import { StackDemo } from "@/features/labs/components/stack-demo";
 
 export default function StackPage() {
   return (
