@@ -1,22 +1,23 @@
 import styled from "@emotion/styled";
-import { media } from "@/common/styles/breakpoints";
+import { color, font, radius, space } from "@/common/design-system";
 
-export const Box = styled.aside<{ accent: string }>`
-  margin: 1.25rem 0;
-  padding: 0.75rem 1rem;
-  border-left: 4px solid ${({ accent }) => accent};
-  border-radius: 0 8px 8px 0;
-  background: rgb(128 128 128 / 0.1);
-
-  ${media.tablet} {
-    padding: 1rem 1.25rem;
-  }
+export const Box = styled.aside<{ fg: string; bg: string }>`
+  margin: ${space[6]} 0;
+  padding: ${space[4]} ${space[5]};
+  border: 1px solid color-mix(in srgb, ${({ fg }) => fg} 30%, transparent);
+  border-radius: ${radius.md};
+  background: ${({ bg }) => bg};
+  color: ${color.text};
+  font-size: 1rem;
+  line-height: ${font.leading.normal};
 
   p {
-    margin: 0.25rem 0 0;
+    margin: ${space[1]} 0 0;
   }
 `;
 
-export const Title = styled.strong<{ accent: string }>`
-  color: ${({ accent }) => accent};
+export const Title = styled.strong<{ fg: string }>`
+  display: block;
+  color: ${({ fg }) => fg};
+  font-weight: ${font.weight.bold};
 `;

@@ -1,13 +1,8 @@
+import { color } from "@/common/design-system";
 import type { CalloutKind } from "./callout.type";
 
-export const CALLOUT_COLORS: Record<CalloutKind, string> = {
-  note: "#0b5fff",
-  tip: "#1a9d5b",
-  warning: "#d98a00",
-};
-
-export const CALLOUT_LABELS: Record<CalloutKind, string> = {
-  note: "Note",
-  tip: "Tip",
-  warning: "Warning",
+export const CALLOUT_TONES: Record<CalloutKind, { fg: string; bg: string; label: string }> = {
+  note: { fg: color.info, bg: color.infoSoft, label: "Note" },
+  tip: { fg: color.success, bg: color.successSoft, label: "Tip" },
+  warning: { fg: color.warning, bg: color.warningSoft, label: "Warning" },
 };

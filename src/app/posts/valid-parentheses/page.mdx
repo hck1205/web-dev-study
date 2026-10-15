@@ -1,0 +1,54 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("valid-parentheses");
+
+`'('`, `')'`, `'{'`, `'}'`, `'['`, `']'`로만 이루어진 문자열 `s`가 올바른 괄호 문자열인지 판별하세요.
+
+- 열린 괄호는 같은 종류의 닫는 괄호로 닫혀야 합니다.
+- 열린 괄호는 올바른 **순서**로 닫혀야 합니다.
+
+```text
+입력: s = "()[]{}"   출력: true
+입력: s = "(]"       출력: false
+입력: s = "([)]"     출력: false
+```
+
+## 접근
+
+가장 **최근에 열린** 괄호가 가장 **먼저 닫혀야** 합니다. 마지막에 들어간 것이 먼저 나오는 구조, 즉 **스택**이 정확히 맞습니다.
+
+1. 여는 괄호를 만나면 스택에 넣습니다.
+2. 닫는 괄호를 만나면 스택의 top이 짝이 맞는 여는 괄호인지 확인하고 꺼냅니다.
+3. 끝까지 읽은 뒤 스택이 비어 있어야 합니다.
+
+## 풀이
+
+```ts
+function isValid(s: string): boolean {
+  const pairs: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  const stack: string[] = [];
+
+  for (const ch of s) {
+    if (ch in pairs) {
+      if (stack.pop() !== pairs[ch]) return false;
+    } else {
+      stack.push(ch);
+    }
+  }
+  return stack.length === 0;
+}
+```
+
+| 항목 | 값 |
+|---|---|
+| 시간 복잡도 | `O(n)` |
+| 공간 복잡도 | `O(n)` |
+
+<Callout kind="warning">
+  끝에서 `stack.length === 0`을 확인하지 않으면 `"(("`처럼 닫히지 않은 경우를 놓칩니다.
+</Callout>
+
+## 정리
+
+- "가장 최근 것부터 처리"라는 표현이 보이면 스택을 먼저 떠올립니다.
+- 닫는 괄호를 만났을 때 스택이 비어 있는 경우는 `pop()`이 `undefined`를 반환해 자연스럽게 `false`가 됩니다.

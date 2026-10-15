@@ -1,0 +1,52 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("http-caching");
+
+같은 리소스를 매번 서버에서 내려받으면 느리고 비쌉니다. HTTP 캐시는 **응답을 저장해 두었다가 재사용**해서 네트워크 요청 자체를 줄이거나, 요청하더라도 본문 전송을 생략하게 해 줍니다.
+
+## 캐시가 동작하는 두 단계
+
+1. **신선도(freshness) 확인**: 저장된 응답이 아직 유효하면 서버에 묻지 않고 그대로 씁니다.
+2. **재검증(revalidation)**: 유효기간이 지났으면 서버에 "바뀌었나요?"라고 물어봅니다. 바뀌지 않았다면 본문 없이 `304 Not Modified`만 받습니다.
+
+## 주요 헤더
+
+| 헤더 | 역할 |
+|---|---|
+| `Cache-Control: max-age=N` | N초 동안 신선한 것으로 간주 |
+| `Cache-Control: no-cache` | 저장은 하되 사용 전에 **항상 재검증** |
+| `Cache-Control: no-store` | 저장하지 않음 (민감한 응답) |
+| `ETag` / `If-None-Match` | 콘텐츠 버전 식별자로 재검증 |
+| `Last-Modified` / `If-Modified-Since` | 수정 시각으로 재검증 |
+
+<Callout kind="note" title="no-cache는 캐시하지 말라는 뜻이 아닙니다">
+  이름과 달리 `no-cache`는 "저장하지 말라"가 아니라 "쓰기 전에 서버에 확인하라"는 의미입니다. 저장 자체를 막으려면 `no-store`를 씁니다.
+</Callout>
+
+## 재검증 예시
+
+```http
+GET /app.js HTTP/1.1
+If-None-Match: "v42"
+
+HTTP/1.1 304 Not Modified
+ETag: "v42"
+```
+
+## 정적 자산 전략
+
+빌드 결과물의 파일 이름에 **해시**를 넣으면(`app.3f9a1c.js`) 내용이 바뀔 때 URL도 바뀝니다. 그래서 오래 캐시해도 안전합니다.
+
+```http
+Cache-Control: public, max-age=31536000, immutable
+```
+
+반면 HTML은 URL이 고정이므로 짧게 캐시하거나 재검증하게 합니다.
+
+```http
+Cache-Control: no-cache
+```
+
+<Callout kind="tip">
+  "해시가 붙은 정적 파일은 1년 + immutable, HTML은 no-cache"가 가장 흔한 기본 조합입니다.
+</Callout>
