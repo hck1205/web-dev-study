@@ -1,0 +1,32 @@
+export const metadata = { title: "Two Sum" };
+
+# Two Sum
+
+`Easy` · `Array` · `Hash Table`
+
+정수 배열 `nums`와 정수 `target`이 주어질 때, 합이 `target`이 되는 두 원소의 인덱스를 반환하세요.
+답은 정확히 하나 존재하며, 같은 원소를 두 번 쓸 수 없습니다.
+
+```text
+입력: nums = [2, 7, 11, 15], target = 9
+출력: [0, 1]
+```
+
+## 접근
+
+1. **브루트포스**: 모든 쌍을 확인합니다. 시간 `O(n²)`, 공간 `O(1)`.
+2. **해시맵**: 각 원소를 보면서 `target - x`가 이미 나왔는지 조회합니다. 시간 `O(n)`, 공간 `O(n)`.
+
+## 풀이
+
+```ts
+function twoSum(nums: number[], target: number): [number, number] {
+  const seen = new Map<number, number>();
+  for (let i = 0; i < nums.length; i++) {
+    const j = seen.get(target - nums[i]);
+    if (j !== undefined) return [j, i];
+    seen.set(nums[i], i);
+  }
+  throw new Error("no solution");
+}
+```
