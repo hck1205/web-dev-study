@@ -12,6 +12,7 @@ import { TOPIC_NAV } from "@/features/topics/registry";
 export const metadata: Metadata = {
   title: { default: SITE.name, template: `%s · ${SITE.name}` },
   description: SITE.description,
+  appleWebApp: { capable: true, title: SITE.name, statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -22,7 +23,12 @@ export const viewport: Viewport = {
 };
 
 // 상단 메뉴: 토픽 트리(ABC 순) + 고정 메뉴
-const NAV_ITEMS = [...TOPIC_NAV, { id: "tags", label: "Tags", href: "/tags" }];
+const NAV_ITEMS = [
+  ...TOPIC_NAV,
+  { id: "tags", label: "Tags", href: "/tags" },
+  { id: "quiz", label: "퀴즈", href: "/quiz" },
+  { id: "bookmarks", label: "즐겨찾기", href: "/bookmarks" },
+];
 
 // 첫 페인트 전에 저장된 테마를 적용해 화면 깜빡임(FOUC)을 막는다.
 const themeScript = `try{var t=JSON.parse(localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)}));if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;

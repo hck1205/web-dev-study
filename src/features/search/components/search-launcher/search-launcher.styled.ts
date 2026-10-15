@@ -2,6 +2,7 @@ import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, motion, radius, shadow, space, zIndex } from "@/common/design-system";
 import { media } from "@/common/styles/breakpoints";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Backdrop = styled.div`
   position: fixed;
@@ -87,7 +88,7 @@ export const ResultList = styled.ul`
   list-style: none;
 `;
 
-export const ResultLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
+export const ResultLink = styled(Link, omitProps("active"))<{ active: boolean }>`
   display: block;
   padding: ${space[3]};
   border-radius: ${radius.md};

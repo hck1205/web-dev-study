@@ -98,6 +98,14 @@ export const Article = styled.div`
   a:hover {
     text-decoration-color: currentColor;
   }
+  /* 다른 글로 가는 링크(백링크 포함)는 새 창에서 열린다는 표시 */
+  a[target="_blank"]::after {
+    content: "↗";
+    margin-left: 0.1em;
+    font-size: 0.75em;
+    vertical-align: 0.15em;
+    text-decoration: none;
+  }
   blockquote {
     padding: ${space[1]} ${space[5]};
     border-left: 3px solid ${color.borderStrong};

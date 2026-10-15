@@ -2,6 +2,7 @@
 
 import { VizFrame } from "../viz-frame";
 import { StepControls } from "../step-controls";
+import { StepDetail } from "../step-detail";
 import { useSequenceDiagram } from "./sequence-diagram";
 import {
   ActorBox,
@@ -10,13 +11,13 @@ import {
   ArrowLabel,
   Badge,
   BadgeText,
-  Detail,
-  DetailBody,
   DrawPath,
   Lifeline,
   MarkerPath,
   Packet,
+  RowGlow,
   Ripple,
+  Trail,
   Svg,
 } from "./sequence-diagram.styled";
 import type { SequenceDiagramProps, StepState } from "./sequence-diagram.type";
@@ -34,12 +35,23 @@ interface ActiveMotionProps {
   badgeY: number;
 }
 
-/** 현재 단계가 바뀔 때마다(key) 다시 재생된다: 선 그리기 → 메시지 이동 → 번호 물결 */
+/**
+ * 현재 단계가 바뀔 때마다(key) 다시 재생된다:
+ * 선 그리기 → 꼬리를 단 메시지가 날아감 → 번호와 도착 지점에 물결
+ */
 function ActiveMotion({ d, x1, x2, y, self, badgeX, badgeY }: ActiveMotionProps) {
+  const travel = { ["--dx" as string]: `${x2 - x1}px`, ["--dy" as string]: "0px" };
   return (
     <g pointerEvents="none">
       <DrawPath d={d} pathLength={1} />
-      {!self && <Packet cx={x1} cy={y} r={4.5} style={{ ["--dx" as string]: `${x2 - x1}px`, ["--dy" as string]: "0px" }} />}
+      {!self && (
+        <>
+          <Trail cx={x1} cy={y} r={3} style={{ ...travel, animationDelay: "90ms" }} />
+          <Trail cx={x1} cy={y} r={3.75} style={{ ...travel, animationDelay: "45ms" }} />
+          <Packet cx={x1} cy={y} r={5} style={travel} />
+          <Ripple cx={x2} cy={y} r={6} style={{ animationDelay: "600ms" }} />
+        </>
+      )}
       <Ripple cx={badgeX} cy={badgeY} r={7} />
     </g>
   );
@@ -89,10 +101,27 @@ export function SequenceDiagram(props: SequenceDiagramProps) {
             ))}
           </defs>
 
+          {inView && (
+            <RowGlow key={`row-${player.index}`} x={0} y={rowY(player.index) - 20} width={width} height={34} rx={6} />
+          )}
+
           {actors.map((actor) => (
             <g key={actor.id}>
-              <Lifeline x1={actorX[actor.id]} x2={actorX[actor.id]} y1={headerHeight - 4} y2={height - 4} />
-              <ActorBox x={actorX[actor.id] - lane * 0.42} y={4} width={lane * 0.84} height={headerHeight - 12} rx={8} />
+              <Lifeline
+                x1={actorX[actor.id]}
+                x2={actorX[actor.id]}
+                y1={headerHeight - 4}
+                y2={height - 4}
+                active={actor.id === step.from || actor.id === step.to}
+              />
+              <ActorBox
+                x={actorX[actor.id] - lane * 0.42}
+                y={4}
+                width={lane * 0.84}
+                height={headerHeight - 12}
+                rx={8}
+                active={actor.id === step.from || actor.id === step.to}
+              />
               <ActorText x={actorX[actor.id]} y={4 + (headerHeight - 12) / 2}>
                 {actor.label}
               </ActorText>
@@ -127,19 +156,13 @@ export function SequenceDiagram(props: SequenceDiagramProps) {
         </Svg>
       </div>
 
-      <Detail aria-live="polite">
-        <DetailBody key={player.index}>
-          <h4>
-            {player.index + 1}. {step.title}
-          </h4>
-          <p>{step.detail}</p>
-          {step.payload && (
-            <pre>
-              <code>{step.payload}</code>
-            </pre>
-          )}
-        </DetailBody>
-      </Detail>
+      <StepDetail index={player.index} title={step.title} detail={step.detail}>
+        {step.payload && (
+          <pre>
+            <code>{step.payload}</code>
+          </pre>
+        )}
+      </StepDetail>
 
       <StepControls player={player} />
     </VizFrame>

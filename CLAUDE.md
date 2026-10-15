@@ -103,7 +103,7 @@ src/
 
 UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 값을 직접 쓰지 않는다.
 
-- **tokens**: `color`(CSS 변수 참조, 라이트/다크 자동. 범주형 데이터 색 `series1~3` 포함), `space`, `radius`, `font`, `shadow`, `layout`, `zIndex`, `motion`. **anim**: 공용 키프레임(`draw`, `fadeUp`, `pop`, `dropIn`, `liftOut`, `ripple`, `bounce`, `travel`, `glow`)과 `easing`. 새 색이 필요하면 `tokens/types.ts`·`palette.ts`의 라이트·다크 **양쪽**에 추가한다. hex 값을 컴포넌트에 하드코딩하지 않는다.
+- **tokens**: `color`(CSS 변수 참조, 라이트/다크 자동. 범주형 데이터 색 `series1~3` 포함), `space`, `radius`, `font`, `shadow`, `layout`, `zIndex`, `motion`. **anim**: 공용 키프레임(`draw`, `fadeUp`, `pop`, `dropIn`, `liftOut`, `ripple`, `bounce`, `travel`, `glow`, `shake`, `slideIn`, `fillTo`)과 `easing`(`out`, `inOut`, 튀어나오는 강조에만 쓰는 `spring`). 새 색이 필요하면 `tokens/types.ts`·`palette.ts`의 라이트·다크 **양쪽**에 추가한다. hex 값을 컴포넌트에 하드코딩하지 않는다.
 - **components**: `PageHeader`(페이지 제목 영역), `EmptyState`(빈 상태), `Container`, `Badge`, `Tag`(해시태그), `Button`, `Card`, `IconButton` (+ `icons`). 블로그 톤에 맞게 꼭 필요한 곳에만 쓴다. 새 공용 UI는 `design-system/components/{name}/`에 같은 파일 패턴으로 만들고 `index.ts`에 등록한다. 반복되는 UI가 두 군데 이상이면 먼저 DS 컴포넌트로 올린다.
 - **테마**: 라이트/다크/시스템. `html[data-theme]`로 전환하고 `common/atoms/theme`(get/set/reset)로 상태를 다룬다. `layout.tsx`의 초기 스크립트가 FOUC를 막는다. 다크 모드에서도 가독성을 확인한다.
 - **폰트**: Pretendard Variable(동적 서브셋), 코드는 `font.mono`.
@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend, Common › Git, Computer Science, Database, Frontend, Network, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, System Design), `자기개발`(English, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database, Frontend, Network, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, Security, System Design), `자기개발`(English, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -133,9 +133,16 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 소제목은 그 글의 내용을 담은 말로 짓는다("버튼을 누르면 일어나는 일", "하나하나 다 재면 느리다"). 글마다 같은 소제목을 반복하지 않는다.
 - 마무리는 짧게. 한 문단으로 핵심을 다시 짚거나, 다음에 볼 것을 적는다. 읽고 나서 독자가 자기 말로 설명할 수 있을 만큼 핵심이 분명해야 한다(파인만 기법의 목표).
 
+### 깊이: 이직 면접에서 답할 수 있을 만큼
+- 글 하나를 읽고 나면 그 주제로 나오는 면접 질문과 **꼬리 질문까지** 답할 수 있어야 한다. 쉬운 말로 쓰되 내용은 얕게 쓰지 않는다.
+- 반드시 다룬다: 이 기술이 **왜** 생겼는지(어떤 문제를 풀려고), 동작 원리를 단계별로, **대안과 트레이드오프**(언제 무엇을 고르나), 보안·성능·장애 같은 **엣지 케이스**, 실무에서 쓰는 설정값과 **흔한 실수**.
+- 글의 마지막 섹션은 `## 면접에서 나올 만한 질문`. 질문은 `###` 소제목으로 쓰고, 바로 아래에 실제 면접에서 말하듯 평서체로 **결론부터** 2~5문장 답한다. 본문에서 자세히 다룬 내용은 짧게 요약만 한다. 5~8개 정도, 기본 질문부터 꼬리 질문 순서로.
+- 이 섹션은 아래 금지 목록의 "퀴즈"와 다르다. 정답을 숨기는 토글, "Q1." 번호, "정답은?" 같은 장치는 여전히 쓰지 않는다.
+- 사실관계는 검증한다. 버전·브라우저별 차이처럼 단정하기 어려운 건 범위를 밝혀 쓴다("크롬 계열은 …, 모든 브라우저가 그렇지는 않다"). 예시 값(토큰, 해시, 좌표, 계산 결과)은 실제로 계산해서 넣는다.
+
 ### AI가 쓴 티가 나는 패턴 — 쓰지 않는다
 - 모든 글에 같은 뼈대: "한 줄로 말하면 / 비유로 이해하기 / 헷갈리는 부분 / 정리" 같은 고정 소제목
-- 학습 장치: "Q1. …" 퀴즈, `<details>` 정답 토글, "12살 친구에게 설명한다면" 같은 상자
+- 학습 장치: "Q1. …" 번호 퀴즈, `<details>` 정답 토글, "12살 친구에게 설명한다면" 같은 상자 (면접 질문 섹션은 위 형식대로라면 예외)
 - 콜아웃 남발. `<Callout>`은 글 하나에 0~2개, 정말 따로 떼어야 할 경고에만
 - 굵은 글씨 남발. 한 문단에 많아야 하나
 - 과한 친절체(~해요 연발), 감탄, 이모지, "자, 이제 ~해 볼까요?"
@@ -158,6 +165,8 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 | `<UrlAnatomy base params />` | 긴 URL·헤더·설정을 조각으로 나눠 읽기 | 처음 보일 때 조각이 차례로 반짝이고, 고른 조각이 튀어나온다 |
 | `<AlgoTrace cells steps />` | 배열·문자열을 훑으며 스택/해시맵이 변하는 과정 | 현재 칸이 튀어나오고 값이 떨어져 쌓였다가 위로 빠진다 |
 | `<VectorSpace points groups query edges steps />` | 거리·유사도·최근접 탐색·그래프 탐색 | 점이 퍼지듯 나타나고, 질문 점·이웃 선·반경·탐색 경로가 단계별로 그려진다 |
+| `<GeometryMorph width height shapes steps />` | 도형을 옮기거나 바꾸는 증명, 넓이·모양 변화 | 다각형 꼭짓점이 단계 사이를 미끄러지듯 이동하고(rAF 보간), 강조 도형이 빛난다 |
+| `<CodePlayground initialCode functionName tests solution />` | 독자가 코드를 직접 고쳐 실행해 볼 때 (알고리즘 글, 계산 예제) | 실행하면 테스트 결과가 차례로 튀어나오고 통과율 막대가 차오른다 |
 
 - 새 시각화는 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.ts`에 등록한다. 틀은 `viz-frame`, 단계 재생은 `common/hooks/use-step-player` + `step-controls`, 화면 진입 시 재생은 `common/hooks/use-in-view`, 움직임은 `@/common/design-system`의 `anim`(공용 키프레임)을 쓴다.
 - 애니메이션은 단계가 바뀔 때 `key`를 바꿔 다시 재생한다. 화면 밖에서 끝나 버리지 않게 `useInView`로 시작 시점을 잡는다.
@@ -165,18 +174,78 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 모바일 폭(390px)에서도 읽혀야 한다: SVG는 `viewBox`로 비율 유지, 라벨은 짧게(영문 약 16자 이내), 긴 설명은 SVG 밖 HTML 패널에.
 - 색은 디자인 토큰만 쓴다. 범주를 색으로 구분할 때는 `color.series1~3`을 이 순서대로 쓰고(산점도는 3개까지, dataviz 검증 통과값), 점마다 이름표와 범례를 붙여 색에만 의존하지 않는다.
 
+### 애니메이션 품질 기준
+
+그림은 "움직이기만" 해서는 부족하다. 무엇이 바뀌었는지 눈이 먼저 따라가게 만든다.
+
+- **인과 순서대로 움직인다.** 원인 → 결과 순으로 시차를 둔다(선이 그려지고 → 메시지가 날아가고 → 도착 지점에 물결). 한꺼번에 다 움직이면 눈이 어디를 봐야 할지 모른다.
+- **지금 단계의 주인공을 밝힌다.** 참여하는 주체·행·도형을 강조색과 옅은 띠(`accentSoft`), 은은한 빛(`drop-shadow`)으로 띄우고 나머지는 흐리게 둔다.
+- **연속성을 지킨다.** 같은 물체는 사라졌다 나타나지 말고 제자리에서 이동한다(`GeometryMorph`의 보간, `travel`). 새로 생긴 것만 `pop`/`dropIn`, 사라지는 것은 `liftOut`이나 투명도로.
+- **이징**: 들어오고 멈추는 움직임은 `easing.out`, 오가는 이동은 `easing.inOut`, 튀어나오는 강조만 `easing.spring`. 길이는 강조 300~500ms, 이동 600~900ms. 1초를 넘기지 않는다(자동 재생 간격은 `useStepPlayer`의 두 번째 인자).
+- **여러 개는 엇갈려 등장한다**(stagger 40~90ms). 목록, 테스트 결과, 점 무리에 쓴다.
+- 단계형 그림은 모두 `StepControls`를 쓴다. 진행 막대를 눌러 원하는 단계로 바로 갈 수 있고, 자동 재생 중에는 현재 칸이 남은 시간만큼 차오른다.
+- 새 시각화를 만들면 390px에서 단계를 끝까지 넘겨 보며 스크린샷으로 중간 프레임과 마지막 프레임을 확인한다.
+
+### 직접 실행해 보는 코드 (CodePlayground)
+
+- 알고리즘 글, 계산이 있는 글에는 독자가 고쳐서 돌려 볼 수 있는 `<CodePlayground>`를 넣는다. 빈 함수 틀(`initialCode`)과 테스트(`tests`), 풀이(`solution`)를 함께 준다.
+  ```mdx
+  <CodePlayground
+    caption="Two Sum"
+    functionName="twoSum"
+    initialCode={`function twoSum(nums, target) {\n  return [];\n}`}
+    solution={`...`}
+    tests={[{ args: [[2, 7, 11, 15], 9], expected: [0, 1] }, { args: [[3, 2, 4], 6], expected: [1, 2], compare: "unordered" }]}
+  />
+  ```
+- `language="typescript"`면 타입만 지우고 실행한다(타입 검사는 하지 않는다). `functionName`이 없으면 코드를 그대로 실행하고 console 출력만 보여 준다.
+- 코드는 Web Worker에서 돌아서 페이지를 멈추지 않고, `timeoutMs`(기본 2초)를 넘기면 끊는다. 결과 비교는 값 비교(JSON 직렬화)이고, 순서가 상관없으면 `compare: "unordered"`.
+- 테스트의 `expected`는 직접 실행해서 확인한 값만 적는다. 짐작으로 쓰지 않는다.
+
 ## 글 추가
 
 1. `src/app/posts/{slug}/page.mdx` 를 만든다. 첫 줄에 `export const metadata = getPostMetadata("{slug}")`.
 2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, **tags**, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 토픽이 표시되지 않으니 `topics.ts`와 맞춘다.
 3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다. 요약(summary)도 본문과 같은 평서체로 쓴다.
-4. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다. 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
+4. **퀴즈**: `src/features/quiz/registry/questions/{slug}.ts`에 글 내용으로 4지선다 문제를 5~7개 쓰고, `questions/index.ts`의 `QUESTION_SETS`에 추가한다(아래 "퀴즈" 참고).
+5. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다. 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
+
+## 백링크 (글 사이 자동 링크)
+
+- `posts.ts`의 각 글에 `keywords`를 적는다. 다른 글 본문에 그 단어가 나오면 빌드 시점에 이 글로 가는 링크가 자동으로 걸린다. 글 하나에서 대상 글마다 **처음 한 번만** 걸리고, 자기 자신은 링크하지 않는다.
+- 구현은 remark 플러그인 `src/common/mdx-plugins/remark-backlinks/index.mjs`. Turbopack은 플러그인을 함수로 받지 못해 `next.config.ts`에서 **절대 경로 문자열**과 직렬화 가능한 옵션(`{ posts: [{ slug, title, keywords }] }`)으로 등록한다.
+- 제목, 코드(인라인 포함), 이미 링크인 텍스트는 건너뛴다. 영문 키워드는 단어 경계를 지킨다(`IndexedDB` 안의 `DB`에 걸리지 않음). 긴 키워드부터 찾는다.
+- `/posts/...`로 가는 링크는 직접 쓴 것까지 모두 새 창(`target="_blank"`, `rel="noopener noreferrer"`)으로 열리고, 본문에서 ↗ 표시가 붙는다. 직접 링크한 글은 자동으로 한 번 더 링크하지 않는다.
+- 키워드는 그 글을 대표하는 말만 2~5개 적는다. "토큰", "서버"처럼 너무 흔한 단어는 엉뚱한 곳에 링크가 걸리니 피한다(대신 "액세스 토큰", "세션 쿠키"처럼 구체적으로).
+
+## 퀴즈 (토픽별 Flash 퀴즈)
+
+글을 쓸 때마다 문제가 쌓이고, 토픽별로 묶여서 풀린다. 문제는 글이 속한 토픽과 그 상위 토픽 퀴즈에 모두 자동으로 들어간다(예: `programming/backend/auth` 글의 문제는 Auth, Backend, Programming 퀴즈에 나온다).
+
+- 데이터: `features/quiz/registry/questions/{slug}.ts`에 `QuizQuestion[]`을 export한다. 필드는 `id`(`{slug}-{번호}`), `post`(slug), `question`, `choices`(보기 4개), `answer`(정답 인덱스), `explanation`, `anchor`.
+- 문제는 글에 실제로 나온 내용으로만 낸다. 외워서 맞히는 문제보다 이유를 알아야 맞히는 문제("왜 ~할까", "~하면 어떻게 되나")를 우선한다. 오답 보기도 그럴듯하게(흔한 오해, 비슷한 옵션 이름) 만든다. 정답 위치는 문제마다 섞는다(풀 때 보기 순서도 무작위로 섞인다).
+- `explanation`은 본문과 같은 평서체로 2~3문장. 왜 정답인지, 오답이 왜 틀렸는지 하나쯤 짚는다.
+- `anchor`는 근거가 되는 `##` 소제목의 id(rehype-slug 규칙: 소문자, 공백 → `-`, 괄호·쉼표·마침표 등 제거, 한글 유지. 예: "## 이름을 IP로 바꾸기 (DNS)" → `이름을-ip로-바꾸기-dns`). 해설의 "관련 글" 링크가 그 위치로 새 창에서 열린다. 추가한 뒤 실제 페이지에 그 id가 있는지 확인한다.
+- 빌드 시 `validateQuestions`가 중복 id, 없는 글, 보기 개수(2~5), 정답 범위를 검사해 틀리면 빌드를 멈춘다.
+- UI: `/quiz`(문제가 있는 토픽 목록), `/quiz/{토픽 경로}`(풀기). 숫자 키로 고르고 Enter로 넘어간다. 결과 화면에서 틀린 문제만 다시 풀 수 있다. 토픽 페이지와 글 끝에 `QuizLink`가 자동으로 붙는다.
+
+## 즐겨찾기 (로컬)
+
+- 로그인 없이 이 브라우저의 localStorage(`bookmarks` 키)에만 저장한다. 상태는 `features/bookmarks/atoms/bookmarks`(get/set/reset, `atomWithStorage`)로 다룬다.
+- 별 버튼 `BookmarkButton`은 글 목록 줄(`PostItem`)과 글 상단(`PostLayout`, `withLabel`)에 있다. 목록 줄에서는 제목 링크가 줄 전체를 덮으므로 버튼을 `position: relative; z-index: 1`로 올려 둔다.
+- `/bookmarks`는 최근에 추가한 순서로 보여 주고, 레지스트리에서 사라진 글의 slug는 건너뛴다.
 
 ## 검색
 
 - 헤더의 검색 아이콘, `/` 키, `Ctrl/⌘ + K`로 연다. 정적 사이트라 브라우저에서 글 메타데이터(제목 > 태그 > 토픽 > 요약 순 가중치, 모든 단어 AND 매칭)를 검색한다. 엔진은 `features/search/engine`, UI는 `features/search/components/search-launcher`다.
 - 검색 버튼은 `common`이 features를 import하지 않도록 `layout.tsx`가 `Shell`의 `headerActions`로 주입한다.
 - 본문 전문 검색은 아직 없다. 필요해지면 빌드 시 본문 텍스트 색인을 만드는 방식으로 확장한다.
+
+## 앱 설치 (PWA)
+
+- `src/app/manifest.ts`(웹 앱 매니페스트), `public/icons/*`(192·512, maskable 겸용), `src/app/icon.svg`·`apple-icon.png`가 설치 아이콘이다. 아이콘을 바꾸면 세 곳을 함께 바꾼다.
+- `public/sw.js` 서비스 워커는 프로덕션에서만 등록된다(`common/hooks/use-service-worker`). 빌드 산출물·아이콘은 캐시 우선, 페이지는 네트워크 우선이고 오프라인이면 마지막으로 본 페이지를 보여 준다. 캐시 방식을 바꾸면 `VERSION`을 올린다.
+- 설치 버튼(`common/components/install-app`)은 푸터에 있고, 브라우저가 설치를 허락할 때(`beforeinstallprompt`)만 보인다. iOS 사파리에는 "홈 화면에 추가" 안내 문구를 보여 준다.
 
 ## 블로그 톤
 

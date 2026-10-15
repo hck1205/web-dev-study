@@ -165,3 +165,11 @@ export const TocLink = styled.a<{ active: boolean; level: 2 | 3 }>`
     color: ${color.text};
   }
 `;
+
+export const MetaEnd = styled.span`
+  margin-left: auto;
+`;
+
+export const PostQuiz = styled.div`
+  margin-top: ${space[10]};
+`;

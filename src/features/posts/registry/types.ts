@@ -12,4 +12,9 @@ export interface Post {
   date: string;
   /** 알고리즘 문제 글에만 사용 */
   difficulty?: Difficulty;
+  /**
+   * 다른 글 본문에 이 단어가 나오면 이 글로 자동 링크된다(백링크, 새 창).
+   * 글 하나당 처음 한 번만 걸린다. 너무 흔한 단어는 피하고, 이 글을 대표하는 말만 적는다.
+   */
+  keywords?: string[];
 }

@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, motion, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const List = styled.ul<{ nested?: boolean }>`
   margin: 0;
@@ -21,7 +22,7 @@ export const Row = styled.div`
   align-items: center;
 `;
 
-export const NodeLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
+export const NodeLink = styled(Link, omitProps("active"))<{ active: boolean }>`
   display: flex;
   flex: 1;
   align-items: center;

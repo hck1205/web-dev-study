@@ -10,7 +10,12 @@ export const TOPICS: Topic[] = [
     children: [
       { id: "ai", label: "AI", description: "머신러닝, LLM, 에이전트" },
       { id: "algorithms", label: "Algorithms", description: "문제 풀이와 해설, 자료구조" },
-      { id: "backend", label: "Backend", description: "서버 애플리케이션, API 설계" },
+      {
+        id: "backend",
+        label: "Backend",
+        description: "서버 애플리케이션, API 설계",
+        children: [{ id: "auth", label: "Auth", description: "로그인, 세션, 토큰, 권한 위임" }],
+      },
       {
         id: "common",
         label: "Common",
@@ -40,6 +45,7 @@ export const TOPICS: Topic[] = [
           },
         ],
       },
+      { id: "security", label: "Security", description: "웹 보안, 브라우저 보안 정책, 공격과 방어" },
       { id: "system-design", label: "System Design", description: "대규모 시스템 설계" },
     ],
   },
@@ -52,6 +58,8 @@ export const TOPICS: Topic[] = [
       { id: "ideas", label: "아이디어", description: "떠오른 생각과 만들고 싶은 것들" },
       { id: "history", label: "역사", description: "지난 일에서 배우는 이야기" },
       { id: "humanities", label: "인문학", description: "사람과 삶, 생각하는 법" },
+      { id: "math", label: "수학", description: "정리와 증명, 손으로 따라가 보는 수학" },
+      { id: "science", label: "과학", description: "자연 현상과 그 원리" },
     ],
   },
 ];

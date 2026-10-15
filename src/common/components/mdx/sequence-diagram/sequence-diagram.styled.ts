@@ -1,7 +1,8 @@
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
-import { anim, color, font, radius, space } from "@/common/design-system";
+import { anim, color, font, space } from "@/common/design-system";
 import type { StepState } from "./sequence-diagram.type";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Svg = styled.svg`
   display: block;
@@ -11,14 +12,36 @@ export const Svg = styled.svg`
   font-family: ${font.sans};
 `;
 
-export const Lifeline = styled.line`
-  stroke: ${color.border};
+const withActive = omitProps("active");
+
+/** 이번 단계에 참여하는 주체는 세로선과 상자가 강조색으로 바뀐다. */
+export const Lifeline = styled("line", withActive)<{ active: boolean }>`
+  stroke: ${({ active }) => (active ? color.accent : color.border)};
   stroke-dasharray: 3 4;
+  stroke-opacity: ${({ active }) => (active ? 0.55 : 1)};
+  transition:
+    stroke 300ms ease,
+    stroke-opacity 300ms ease;
 `;
 
-export const ActorBox = styled.rect`
-  fill: ${color.bgSubtle};
-  stroke: ${color.borderStrong};
+export const ActorBox = styled("rect", withActive)<{ active: boolean }>`
+  fill: ${({ active }) => (active ? color.accentSoft : color.bgSubtle)};
+  stroke: ${({ active }) => (active ? color.accent : color.borderStrong)};
+  stroke-width: ${({ active }) => (active ? 1.5 : 1)};
+  transition:
+    fill 300ms ease,
+    stroke 300ms ease;
+`;
+
+const rowIn = keyframes`
+  from { opacity: 0; }
+  to { opacity: 1; }
+`;
+
+/** 현재 단계 줄 뒤에 깔리는 옅은 띠 */
+export const RowGlow = styled.rect`
+  fill: ${color.accentSoft};
+  animation: ${rowIn} 300ms ease both;
 `;
 
 export const ActorText = styled.text`
@@ -74,36 +97,6 @@ export const MarkerPath = styled.path<{ state: StepState }>`
   fill: ${({ state }) => strokeBy(state)};
 `;
 
-export const Detail = styled.div`
-  padding: ${space[4]};
-  border-top: 1px solid ${color.border};
-
-  h4 {
-    margin: 0 0 ${space[2]};
-    font-size: ${font.size.base};
-    font-weight: ${font.weight.bold};
-    color: ${color.text};
-  }
-  p {
-    margin: 0;
-    color: ${color.textMuted};
-    font-size: ${font.size.base};
-    line-height: ${font.leading.relaxed};
-    word-break: keep-all;
-  }
-  pre {
-    margin: ${space[3]} 0 0;
-    padding: ${space[3]};
-    overflow-x: auto;
-    border: 1px solid ${color.codeBorder};
-    border-radius: ${radius.md};
-    background: ${color.codeBg};
-    font-family: ${font.mono};
-    font-size: 0.75rem;
-    line-height: 1.6;
-    white-space: pre;
-  }
-`;
 
 /* ---- 현재 단계 강조 애니메이션 ---- */
 
@@ -117,12 +110,19 @@ export const DrawPath = styled.path`
   animation: ${anim.draw} 500ms ${anim.easing.out} forwards;
 `;
 
-/** 메시지(점)가 화살표를 따라 날아간다 */
+/** 메시지(점)가 화살표를 따라 날아간다. 은은하게 빛나고 뒤로 꼬리(Trail)가 따라온다. */
 export const Packet = styled.circle`
   fill: ${color.accent};
   stroke: ${color.surface};
   stroke-width: 2;
-  animation: ${anim.travel} 650ms ${anim.easing.inOut} forwards;
+  filter: drop-shadow(0 0 4px ${color.accent});
+  animation: ${anim.travel} 650ms ${anim.easing.inOut} both;
+`;
+
+export const Trail = styled.circle`
+  fill: ${color.accent};
+  fill-opacity: 0.35;
+  animation: ${anim.travel} 650ms ${anim.easing.inOut} both;
 `;
 
 /** 단계 번호에서 물결이 퍼진다 */
@@ -132,9 +132,5 @@ export const Ripple = styled.circle`
   stroke-width: 2;
   transform-box: fill-box;
   transform-origin: center;
-  animation: ${anim.ripple} 900ms ${anim.easing.out} forwards;
-`;
-
-export const DetailBody = styled.div`
-  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
+  animation: ${anim.ripple} 900ms ${anim.easing.out} both;
 `;

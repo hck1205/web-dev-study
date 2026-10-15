@@ -1,0 +1,347 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("what-happens-google-com");
+
+"브라우저 주소창에 google.com을 입력하고 엔터를 치면 무슨 일이 일어나나요?" 면접에서 워낙 자주 나와서 오히려 대충 외우고 넘어가기 쉬운 질문이다. 그런데 하나씩 풀어 보면 네트워크, 보안, 브라우저가 한 번에 다 들어 있다. 엔터를 누른 순간부터 화면에 검색창이 뜰 때까지를 순서대로 따라가 본다.
+
+큰 흐름은 이렇다. 브라우저가 입력을 주소로 해석하고, DNS로 서버의 IP를 알아내고, 그 서버와 TCP 연결을 맺고, TLS로 암호화 채널을 만들고, HTTP로 페이지를 요청하고, 받은 HTML을 화면에 그린다. 사이사이에 캐시가 끼어들어 단계를 건너뛰게 해 준다.
+
+## 검색어인가, 주소인가
+
+주소창은 검색창이기도 하다. 브라우저는 먼저 입력이 주소처럼 생겼는지 본다. `google.com`은 점이 있고 알려진 최상위 도메인(`.com`)으로 끝나니 주소로 판단한다. `구글`처럼 주소 같지 않으면 기본 검색 엔진으로 검색어를 보낸다.
+
+다음은 `https://`를 붙일지 `http://`를 붙일지다. 입력에는 스킴이 없다. 크롬 같은 최신 브라우저는 직접 입력한 주소에 기본으로 HTTPS를 먼저 시도한다. 여기에 HSTS가 더해진다. 서버가 `Strict-Transport-Security` 응답 헤더를 보내면 브라우저는 "이 도메인은 앞으로 HTTPS로만 접속한다"고 기억해 두고, 그 뒤로는 HTTP 요청을 아예 보내지 않는다. 첫 접속 전부터 이 규칙을 적용하고 싶은 도메인을 위해, 브라우저에 미리 내장해 두는 HSTS 프리로드 목록도 있다.
+
+결국 브라우저가 만든 주소는 이런 모양이다. 조각을 눌러 보면 각각의 역할이 나온다.
+
+<UrlAnatomy
+  caption="브라우저가 완성한 주소"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "scheme",
+      display: "https://",
+      title: "어떤 규칙으로 통신할지",
+      description: "HTTPS는 HTTP를 TLS로 암호화한 것이다. 입력에는 없었지만 브라우저의 HTTPS 우선 정책(그리고 이전 방문에서 기억한 HSTS) 때문에 https가 붙는다.",
+    },
+    {
+      key: "host",
+      display: "google.com",
+      title: "어느 서버로 갈지",
+      description: "사람이 읽는 이름이라 컴퓨터는 이걸로 바로 찾아갈 수 없다. 이 이름을 IP 주소로 바꾸는 일이 다음 단계인 DNS다.",
+      required: true,
+    },
+    {
+      key: "port",
+      display: ":443",
+      title: "서버의 몇 번 문으로 들어갈지",
+      description: "주소에는 안 보이지만 https의 기본 포트 443이 쓰인다. http였다면 80이다.",
+    },
+    {
+      key: "path",
+      display: "/",
+      title: "서버의 어떤 자원을 원하는지",
+      description: "경로가 비어 있으면 루트(/)를 요청한다.",
+    },
+  ]}
+/>
+
+이 시점에 브라우저는 캐시부터 확인한다. 같은 주소의 응답이 아직 유효하게 저장돼 있으면 네트워크로 나가지 않고 바로 쓸 수 있다. 처음 방문했다고 치고 계속 가 보자.
+
+## 이름을 IP로 바꾸기: DNS
+
+컴퓨터끼리는 IP 주소로 통신한다. `google.com`이라는 이름을 IP로 바꿔 주는 게 DNS다. 전화번호부에서 이름으로 번호를 찾는 것과 같은데, 이 전화번호부는 한 권이 아니라 층층이 나뉘어 있다.
+
+아래 그림에서 "다음"을 누르면 이름 하나를 찾으러 여러 서버를 거치는 과정이 나온다.
+
+<SequenceDiagram
+  caption="DNS로 google.com의 IP 찾기"
+  actors={[
+    { id: "pc", label: "내 컴퓨터" },
+    { id: "resolver", label: "리졸버" },
+    { id: "root", label: "루트" },
+    { id: "tld", label: ".com" },
+    { id: "ns", label: "구글 NS" },
+  ]}
+  steps={[
+    {
+      from: "pc",
+      to: "pc",
+      label: "캐시 확인",
+      title: "가까운 곳부터 찾아본다",
+      detail: "브라우저의 DNS 캐시, 운영체제의 캐시, hosts 파일 순서로 찾는다. 최근에 방문했다면 여기서 바로 끝난다.",
+    },
+    {
+      from: "pc",
+      to: "resolver",
+      label: "google.com?",
+      title: "리졸버에게 물어본다",
+      detail: "보통 통신사나 공용 DNS(8.8.8.8, 1.1.1.1 같은) 리졸버다. 내 컴퓨터는 \"답을 다 찾아서 알려 달라\"고 한 번만 묻는다(재귀 질의). 전통적으로 UDP 53번 포트를 쓰고, 요즘은 HTTPS로 감싸는 DoH도 쓴다.",
+    },
+    {
+      from: "resolver",
+      to: "resolver",
+      label: "캐시 확인",
+      title: "리졸버도 자기 캐시를 먼저 본다",
+      detail: "google.com처럼 많이 찾는 이름은 대부분 리졸버 캐시에 있다. 여기서는 없다고 치고 처음부터 찾아간다.",
+    },
+    {
+      from: "resolver",
+      to: "root",
+      label: "google.com?",
+      title: "루트 서버에 묻는다",
+      detail: "루트 서버는 전 세계에 이름 13개(a~m)로 운영되고, 실제로는 같은 주소를 여러 곳에서 응답하는 애니캐스트로 수많은 서버가 나눠 맡는다.",
+    },
+    {
+      from: "root",
+      to: "resolver",
+      label: ".com은 저기",
+      title: "루트는 답 대신 다음에 물을 곳을 알려 준다",
+      detail: "루트는 google.com을 모른다. 대신 .com을 담당하는 서버 목록을 알려 준다.",
+      payload: "com.  NS  a.gtld-servers.net.\ncom.  NS  b.gtld-servers.net.\n...",
+    },
+    {
+      from: "resolver",
+      to: "tld",
+      label: "google.com?",
+      title: ".com 서버에 묻는다",
+      detail: "리졸버가 다음 서버로 직접 다시 묻는다. 리졸버가 이렇게 한 단계씩 따라가는 걸 반복 질의라고 한다.",
+    },
+    {
+      from: "tld",
+      to: "resolver",
+      label: "구글 NS는 저기",
+      title: ".com 서버는 구글의 네임서버를 알려 준다",
+      detail: "google.com의 최종 답은 구글이 직접 운영하는 권한 있는 네임서버가 가지고 있다.",
+      payload: "google.com.  NS  ns1.google.com.\ngoogle.com.  NS  ns2.google.com.\n...",
+    },
+    {
+      from: "resolver",
+      to: "ns",
+      label: "google.com?",
+      title: "구글 네임서버에 묻는다",
+      detail: "IPv4 주소(A 레코드)와 IPv6 주소(AAAA 레코드)를 묻는다.",
+    },
+    {
+      from: "ns",
+      to: "resolver",
+      label: "A 142.250.x.x",
+      title: "드디어 IP 주소를 받는다",
+      detail: "TTL은 이 답을 몇 초 동안 캐시해도 되는지다. 구글은 사용자 위치에 따라 가까운 데이터센터의 IP를 돌려주기 때문에 사람마다 받는 주소가 다를 수 있다.",
+      payload: "google.com.  300  IN  A  142.250.196.110   (예시)",
+    },
+    {
+      from: "resolver",
+      to: "pc",
+      label: "142.250.x.x",
+      title: "리졸버가 답을 돌려주고 캐시한다",
+      detail: "리졸버와 내 컴퓨터 모두 TTL 동안 이 답을 기억한다. 다음 사람, 다음 요청은 루트까지 가지 않는다.",
+    },
+  ]}
+/>
+
+## 서버와 연결 맺기: TCP와 TLS
+
+IP를 알았으니 서버에 연결한다. HTTP/1.1과 HTTP/2는 TCP 위에서 동작하고, HTTPS라면 그 위에 TLS를 한 겹 더 얹는다. TCP는 "데이터가 빠짐없이 순서대로 도착하게" 해 주고, TLS는 "중간에서 아무도 못 읽고 못 바꾸게" 해 준다. 각각 시작할 때 서로 확인하는 절차(핸드셰이크)가 있다.
+
+<SequenceDiagram
+  caption="TCP 3-way handshake → TLS 1.3 handshake"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "구글 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "SYN",
+      title: "연결하고 싶다고 알린다",
+      detail: "내가 보낼 데이터의 시작 번호(시퀀스 번호)를 함께 보낸다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "SYN + ACK",
+      title: "서버가 받았다고 답하며 자기도 연결을 청한다",
+      detail: "브라우저의 번호를 잘 받았다는 확인(ACK)과 서버 자신의 시작 번호(SYN)를 한 번에 보낸다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "ACK",
+      title: "서버의 번호도 받았다고 답한다",
+      detail: "이제 양쪽 모두 상대가 보내는 걸 받을 수 있다는 게 확인됐다. 여기까지 왕복 한 번(1 RTT)이 걸렸다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "ClientHello",
+      title: "TLS 시작: 쓸 수 있는 방식과 키 재료를 보낸다",
+      detail: "지원하는 암호 방식, 키 교환에 쓸 값(key_share), 접속하려는 도메인 이름(SNI), 쓸 수 있는 HTTP 버전(ALPN: h2, http/1.1)을 보낸다. SNI 덕분에 IP 하나에 여러 도메인이 있어도 서버가 맞는 인증서를 고를 수 있다.",
+      payload: "ClientHello\n  cipher_suites: TLS_AES_128_GCM_SHA256, ...\n  key_share: x25519\n  server_name: google.com\n  alpn: h2, http/1.1",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "ServerHello + 인증서",
+      title: "서버가 방식을 고르고 인증서를 보낸다",
+      detail: "서버도 키 재료를 보내면 양쪽이 같은 세션 키를 계산할 수 있다. 이 뒤의 메시지부터는 이미 암호화된다. 서버는 인증서와, 그 인증서의 개인 키를 정말 가지고 있다는 서명, 그리고 핸드셰이크를 마친다는 Finished를 한 번에 보낸다.",
+      payload: "ServerHello (key_share)\n{EncryptedExtensions: alpn=h2}\n{Certificate}\n{CertificateVerify}\n{Finished}",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "인증서 검증",
+      title: "브라우저가 인증서를 검증한다",
+      detail: "인증서가 믿을 수 있는 인증 기관(CA)까지 서명으로 이어지는지, 인증서에 적힌 도메인이 google.com과 맞는지, 유효 기간이 지나지 않았는지, 폐기되지 않았는지 본다. 하나라도 틀리면 경고 화면을 띄우고 멈춘다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "Finished + 요청",
+      title: "핸드셰이크를 마치고 곧바로 HTTP 요청을 보낸다",
+      detail: "TLS 1.3은 왕복 한 번 만에 핸드셰이크가 끝나서, 브라우저의 Finished와 첫 HTTP 요청을 함께 보낼 수 있다. TLS 1.2는 왕복이 두 번 필요했다.",
+    },
+  ]}
+/>
+
+구글처럼 HTTP/3를 지원하는 서버라면 다음 접속부터는 이 그림이 달라진다. HTTP/3는 TCP 대신 UDP 위의 QUIC을 쓰고, QUIC은 연결 설정과 TLS 1.3 핸드셰이크를 하나로 합쳐 왕복 한 번에 끝낸다. 브라우저는 첫 응답의 `Alt-Svc` 헤더를 보고 HTTP/3를 쓸 수 있다는 걸 알게 된다.
+
+## 페이지를 요청하고 받기: HTTP
+
+이제 암호화된 연결 위로 HTTP 요청을 보낸다. ALPN에서 h2로 합의했으니 HTTP/2다. 그런데 첫 요청에는 페이지가 아니라 다른 주소로 가라는 답이 온다.
+
+<SequenceDiagram
+  caption="리다이렉트를 거쳐 HTML을 받기까지"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "구글 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "GET / (google.com)",
+      title: "루트 경로를 요청한다",
+      detail: "HTTP/2에서는 요청 줄이 :method, :path 같은 가상 헤더로 바뀐다. 압축된 응답을 받을 수 있다는 것(accept-encoding)과 브라우저 정보도 함께 보낸다.",
+      payload: ":method: GET\n:scheme: https\n:authority: google.com\n:path: /\naccept: text/html,...\naccept-encoding: gzip, deflate, br\nuser-agent: Mozilla/5.0 ...",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "301 → www",
+      title: "www.google.com으로 가라는 답이 온다",
+      detail: "구글은 google.com을 www.google.com으로 영구 이동(301)시킨다. 브라우저는 Location의 주소로 다시 요청한다. 새 이름이라 DNS 조회부터 다시 할 수도 있지만, 같은 IP이고 인증서가 두 이름을 모두 포함하면 HTTP/2 연결을 그대로 재사용할 수 있다.",
+      payload: "HTTP/2 301\nlocation: https://www.google.com/",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "GET / (www)",
+      title: "www.google.com을 요청한다",
+      detail: "이번에는 :authority가 www.google.com이다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "200 text/html",
+      title: "HTML이 압축되어 온다",
+      detail: "본문은 br(브로틀리)이나 gzip으로 압축되어 온다. 검색 결과처럼 사람마다 다른 페이지라서 공용 캐시에 저장하지 말라는 Cache-Control이 붙고, 쿠키 설정 헤더도 함께 올 수 있다.",
+      payload: "HTTP/2 200\ncontent-type: text/html; charset=UTF-8\ncontent-encoding: br\ncache-control: private, max-age=0\nset-cookie: ...",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "HTML 파싱",
+      title: "다 받기 전부터 읽기 시작한다",
+      detail: "HTML은 조각조각 도착하는 대로 파싱한다. 문서를 끝까지 기다리지 않는다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "GET CSS·JS·이미지",
+      title: "HTML에 적힌 다른 자원들을 요청한다",
+      detail: "HTTP/2는 연결 하나에서 여러 요청을 동시에 주고받는다(멀티플렉싱). HTTP/1.1처럼 연결을 여러 개 열지 않아도 된다. 브라우저의 프리로드 스캐너는 파서보다 앞서 HTML을 훑어 필요한 자원을 미리 요청한다.",
+    },
+  ]}
+/>
+
+HTTP/2의 멀티플렉싱에도 약점이 하나 있다. 요청은 여러 개가 동시에 오가지만 아래의 TCP 연결은 하나다. 패킷 하나가 유실되면 TCP는 그게 다시 올 때까지 뒤의 데이터를 전부 붙잡고 기다리는데, 그 사이 상관없는 다른 요청들까지 멈춘다(TCP 수준의 head-of-line blocking). HTTP/3가 TCP를 버리고 QUIC으로 간 가장 큰 이유가 이거다. QUIC은 요청마다 흐름을 따로 관리해서, 한 요청의 유실이 다른 요청을 막지 않는다.
+
+## 받은 HTML을 화면에 그리기
+
+이제 브라우저 안의 일이다. 텍스트로 된 HTML과 CSS가 픽셀이 되기까지 몇 단계를 거친다. 점이 흐르는 방향이 데이터가 가공되는 순서다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="HTML과 CSS가 각각 트리가 되고, 합쳐져서 배치되고, 그려진다."
+  nodes={[
+    { id: "html", label: "HTML", x: 44, y: 40, w: 68 },
+    { id: "dom", label: "DOM", sub: "문서 구조 트리", x: 188, y: 40, w: 100 },
+    { id: "css", label: "CSS", x: 44, y: 125, w: 68 },
+    { id: "cssom", label: "CSSOM", sub: "스타일 트리", x: 188, y: 125, w: 100 },
+    { id: "render", label: "렌더 트리", sub: "보이는 것만", x: 338, y: 82, w: 100 },
+    { id: "layout", label: "레이아웃", sub: "위치·크기 계산", x: 338, y: 175, w: 100 },
+    { id: "paint", label: "페인트", sub: "픽셀 채우기", x: 338, y: 255, w: 100 },
+    { id: "composite", label: "합성", sub: "레이어 합치기", x: 188, y: 255, w: 100 },
+  ]}
+  edges={[
+    { from: "html", to: "dom", label: "파싱" },
+    { from: "css", to: "cssom", label: "파싱" },
+    { from: "dom", to: "render" },
+    { from: "cssom", to: "render" },
+    { from: "render", to: "layout" },
+    { from: "layout", to: "paint" },
+    { from: "paint", to: "composite" },
+  ]}
+/>
+
+HTML은 DOM이라는 트리가 되고, CSS는 CSSOM이라는 트리가 된다. 둘을 합친 게 렌더 트리다. 여기에는 화면에 실제로 보이는 것만 들어간다. `display: none`인 요소나 `<head>`는 빠진다. 그다음 레이아웃 단계에서 각 요소의 정확한 위치와 크기를 계산하고, 페인트 단계에서 글자·색·그림자를 픽셀로 채운다. 마지막으로 여러 레이어를 합성해 화면에 내보낸다.
+
+이 순서를 알면 성능 이야기가 쉬워진다. 요소의 크기나 위치를 바꾸면 레이아웃부터 다시 해야 한다(리플로우). 색만 바꾸면 페인트부터 다시 한다(리페인트). `transform`과 `opacity`만 바꾸는 애니메이션은 합성 단계에서 처리할 수 있어서 가장 가볍다.
+
+중간에 끼어드는 것들도 있다. CSS는 렌더링을 막는다. CSSOM이 완성되기 전에 그리면 스타일 없는 화면이 번쩍 보이니, 브라우저는 CSS를 다 받을 때까지 그리지 않는다. 자바스크립트는 파싱을 막는다. 평범한 `<script>`를 만나면 HTML 파싱을 멈추고 스크립트를 받아 실행한 뒤에 이어 간다. 스크립트가 DOM을 바꿀 수 있기 때문이다. 이걸 피하려고 `defer`(받는 건 병렬로, 실행은 파싱이 끝난 뒤 순서대로)나 `async`(받는 건 병렬로, 받는 즉시 실행)를 붙인다.
+
+## 캐시가 단계를 건너뛰게 해 준다
+
+두 번째 방문부터는 이 과정의 상당 부분이 생략된다. DNS 답은 TTL 동안 브라우저와 OS, 리졸버에 남아 있다. 서버와의 연결도 잠깐 유지되어 다시 쓸 수 있다. TLS는 세션 재개로 핸드셰이크를 줄이고, HTTP/3의 0-RTT는 첫 패킷부터 요청을 실어 보낸다(재전송 공격 위험 때문에 안전한 요청에만 쓴다). 정적 파일은 HTTP 캐시에서 바로 꺼내 쓴다. 우리가 "두 번째는 빠르다"고 느끼는 건 이 캐시들이 겹겹이 작동한 결과다.
+
+## 정리
+
+엔터 한 번에 브라우저는 입력을 HTTPS 주소로 만들고, DNS로 여러 단계를 거쳐 IP를 찾고, TCP와 TLS 핸드셰이크로 안전한 연결을 맺는다. 그다음 HTTP로 리다이렉트를 따라가 HTML을 받고, DOM과 CSSOM을 만들어 레이아웃·페인트·합성 순서로 화면을 그린다. 단계마다 캐시가 있어 다시 방문할 때는 대부분을 건너뛴다. 면접에서는 전체 흐름을 먼저 한 문단으로 말하고, 면접관이 파고드는 단계에서 깊게 들어가면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 주소창에 google.com을 입력하면 무슨 일이 일어나나요?
+
+브라우저가 입력을 주소로 해석하고 HTTPS 우선 정책과 HSTS에 따라 https 주소로 만든다. 캐시를 확인한 뒤 DNS로 IP를 얻고, TCP 3-way handshake와 TLS 핸드셰이크로 암호화된 연결을 맺는다. HTTP 요청을 보내 301 리다이렉트를 따라 www.google.com의 HTML을 받고, DOM·CSSOM·렌더 트리를 만들어 레이아웃, 페인트, 합성 순서로 화면을 그린다. 이후 CSS·JS 같은 하위 자원을 같은 연결로 받아 페이지를 완성한다.
+
+### DNS는 어떻게 동작하나요? 재귀 질의와 반복 질의의 차이는요?
+
+브라우저와 OS 캐시에 없으면 리졸버에게 묻는다. 내 컴퓨터와 리졸버 사이는 "최종 답을 달라"는 재귀 질의이고, 리졸버는 루트 → TLD(.com) → 권한 있는 네임서버 순서로 직접 한 단계씩 묻는 반복 질의를 한다. 받은 답은 TTL 동안 각 단계에 캐시된다.
+
+### TCP는 왜 3-way handshake를 하나요? 2번이면 안 되나요?
+
+양쪽이 서로의 시작 시퀀스 번호를 주고받고, 상대가 그걸 받았는지 확인해야 하기 때문이다. SYN으로 내 번호를 보내고, SYN+ACK로 상대가 내 번호를 받았다는 확인과 자기 번호를 보내고, 마지막 ACK로 상대 번호를 받았다고 확인한다. 두 번으로 끝내면 서버는 자기 번호가 클라이언트에게 갔는지 알 수 없고, 지연된 옛 SYN이 도착했을 때 잘못된 연결을 열 수 있다.
+
+### TLS 핸드셰이크에서는 무슨 일이 일어나고, 인증서는 어떻게 검증하나요?
+
+클라이언트가 지원하는 암호 방식과 키 교환 값을 보내고, 서버가 방식을 골라 자기 키 교환 값과 인증서, 서명을 보낸다. 양쪽이 같은 세션 키를 계산해서 이후 통신을 대칭키로 암호화한다. 인증서는 신뢰하는 루트 CA까지 서명 체인이 이어지는지, 도메인이 맞는지, 유효 기간과 폐기 여부를 검증한다. TLS 1.3은 이 과정을 왕복 한 번에 끝낸다.
+
+### HTTP/1.1, HTTP/2, HTTP/3의 차이는요?
+
+HTTP/1.1은 한 연결에서 요청을 하나씩 처리해서 브라우저가 연결을 여러 개 연다. HTTP/2는 연결 하나에서 여러 요청을 동시에 주고받는 멀티플렉싱과 헤더 압축을 지원하지만, TCP 위라서 패킷 하나가 유실되면 모든 요청이 기다린다. HTTP/3는 UDP 기반 QUIC 위에서 요청별로 흐름을 나눠 이 문제를 없애고, 연결과 TLS 설정을 합쳐 더 빨리 시작한다.
+
+### 301과 302는 어떻게 다르고, HSTS는 무엇인가요?
+
+301은 영구 이동이라 브라우저와 검색 엔진이 새 주소를 기억하고, 302는 임시 이동이라 다음에도 원래 주소로 요청한다. HSTS는 서버가 "앞으로 이 도메인은 HTTPS로만 접속하라"고 알려 주는 헤더다. 브라우저가 이를 기억해 HTTP 요청 자체를 보내지 않게 하고, 프리로드 목록에 오른 도메인은 첫 접속부터 적용된다.
+
+### 브라우저는 HTML을 어떻게 화면에 그리나요? 리플로우와 리페인트는요?
+
+HTML로 DOM, CSS로 CSSOM을 만들고 합쳐서 화면에 보이는 요소만 담은 렌더 트리를 만든다. 레이아웃에서 위치와 크기를 계산하고, 페인트에서 픽셀을 채우고, 합성에서 레이어를 합친다. 크기·위치가 바뀌면 레이아웃부터 다시 하는 리플로우가, 색처럼 모양만 바뀌면 리페인트가 일어난다. transform과 opacity는 합성만 다시 하면 돼서 애니메이션에 유리하다.
+
+### script 태그의 async와 defer는 어떻게 다른가요?
+
+일반 script는 HTML 파싱을 멈추고 받아서 실행한다. async는 파싱과 병렬로 받고 받는 즉시 실행해서, 실행 순서가 보장되지 않는다. defer는 병렬로 받고 파싱이 끝난 뒤 문서에 적힌 순서대로 실행한다. 다른 스크립트나 DOM에 의존하면 defer, 독립적인 분석 스크립트 같은 건 async가 맞다.

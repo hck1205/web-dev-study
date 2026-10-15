@@ -48,6 +48,9 @@ export const globalStyle = css`
   h4 {
     margin: 0;
     letter-spacing: -0.02em;
+    /* 한글 제목이 단어 중간에서 끊기지 않게 */
+    word-break: keep-all;
+    overflow-wrap: break-word;
   }
   p {
     margin: 0;

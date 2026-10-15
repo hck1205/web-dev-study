@@ -53,6 +53,7 @@ export const Head = styled.path`
 /** 화살표를 따라 흘러가는 점. --dx, --dy 로 이동 거리, animation-delay 로 엇갈리게 출발한다. */
 export const Flow = styled.circle`
   fill: ${color.accent};
+  filter: drop-shadow(0 0 3px ${color.accent});
   opacity: 0;
   animation: ${anim.travel} 2400ms ${anim.easing.inOut} infinite;
 `;

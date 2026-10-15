@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { Container, PageHeader } from "@/common/design-system";
 import { PostItemList } from "@/features/posts/components/post-item-list";
+import { QuizLink } from "@/features/quiz/components/quiz-link";
 import { TopicLinkList } from "../topic-groups";
 import { useTopicPage } from "./topic-page";
-import { Section } from "./topic-page.styled";
+import { QuizSection, Section } from "./topic-page.styled";
+import { CrumbLinks } from "@/common/components/crumb-links";
 
 export function TopicPage() {
   const page = useTopicPage();
@@ -21,20 +23,14 @@ export function TopicPage() {
     );
   }
 
-  const { topic, crumbs, subtopics, posts } = page;
+  const { topic, topicKey, crumbs, subtopics, posts } = page;
 
   return (
     <Container size="narrow">
       <PageHeader
         eyebrow={
           <nav aria-label="경로">
-            <Link href="/topics">Topics</Link>
-            {crumbs.slice(0, -1).map((crumb) => (
-              <span key={crumb.href}>
-                {" / "}
-                <Link href={crumb.href}>{crumb.label}</Link>
-              </span>
-            ))}
+            <CrumbLinks items={[{ label: "Topics", href: "/topics" }, ...crumbs.slice(0, -1)]} />
           </nav>
         }
         title={topic.label}
@@ -48,6 +44,10 @@ export function TopicPage() {
       )}
 
       <PostItemList posts={posts} emptyMessage="아직 이 토픽에 글이 없습니다." />
+
+      <QuizSection>
+        <QuizLink topic={topicKey} />
+      </QuizSection>
     </Container>
   );
 }

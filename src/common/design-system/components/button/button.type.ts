@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost";
 export type ButtonSize = "md" | "lg";
@@ -10,4 +10,4 @@ interface ButtonBaseProps {
 }
 
 export type ButtonProps = ButtonBaseProps &
-  (({ href?: undefined } & ComponentPropsWithoutRef<"button">) | ({ href: string } & Omit<ComponentPropsWithoutRef<"a">, "href">));
+  (({ href?: undefined } & ComponentProps<"button">) | ({ href: string } & Omit<ComponentProps<"a">, "href">));

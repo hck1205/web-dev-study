@@ -57,3 +57,24 @@ export const glow = keyframes`
   0% { box-shadow: 0 0 0 0 currentColor; }
   100% { box-shadow: 0 0 0 10px transparent; }
 `;
+
+/** 좌우로 짧게 흔들린다 (오답) */
+export const shake = keyframes`
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+`;
+
+/** 오른쪽에서 미끄러져 들어온다 (다음 카드) */
+export const slideIn = keyframes`
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+`;
+
+/** 선이 --to 비율까지만 채워진다 (진행률 고리). 대상 path에 pathLength="1" 이 있어야 한다. */
+export const fillTo = keyframes`
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: var(--to); }
+`;

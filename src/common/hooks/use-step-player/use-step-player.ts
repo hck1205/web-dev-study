@@ -24,6 +24,7 @@ export function useStepPlayer(total: number, intervalMs = 1800): StepPlayer {
     index,
     total,
     playing,
+    intervalMs,
     isFirst: index === 0,
     isLast: index >= total - 1,
     next: () => goTo(index + 1),
