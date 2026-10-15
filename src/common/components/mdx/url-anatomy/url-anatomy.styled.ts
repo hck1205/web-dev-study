@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
 import { css, keyframes } from "@emotion/react";
 import { anim, color, font, motion, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Line = styled.div`
   display: flex;
@@ -29,9 +30,7 @@ const hint = keyframes`
   50% { box-shadow: 0 0 0 3px ${color.accentSoft}; border-color: ${color.accent}; }
 `;
 
-export const Chip = styled("button", {
-  shouldForwardProp: (prop) => !["active", "intro", "order"].includes(prop),
-})<{ active: boolean; intro: boolean; order: number }>`
+export const Chip = styled("button", omitProps("active", "intro", "order"))<{ active: boolean; intro: boolean; order: number }>`
   ${({ intro, order }) =>
     intro &&
     css`

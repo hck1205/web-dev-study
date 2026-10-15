@@ -1,5 +1,5 @@
 import styled from "@emotion/styled";
-import { anim, color, font, radius, space } from "@/common/design-system";
+import { anim, color, font, space } from "@/common/design-system";
 
 export const Root = styled.section`
   animation: ${anim.fadeUp} 400ms ${anim.easing.out} both;
@@ -94,19 +94,6 @@ export const ReviewItem = styled.li`
   a:hover {
     text-decoration: underline;
   }
-`;
-
-export const ReviewMark = styled("span", { shouldForwardProp: (prop) => prop !== "correct" })<{ correct: boolean }>`
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: ${radius.full};
-  background: ${({ correct }) => (correct ? color.successSoft : color.dangerSoft)};
-  color: ${({ correct }) => (correct ? color.success : color.danger)};
-  font-size: ${font.size.xs};
-  font-weight: ${font.weight.bold};
 `;
 
 export const ReviewQuestion = styled.p`

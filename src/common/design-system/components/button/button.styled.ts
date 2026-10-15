@@ -3,6 +3,7 @@ import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, motion, radius } from "../../tokens";
 import type { ButtonSize, ButtonVariant } from "./button.type";
+import { omitProps } from "@/common/styles/omit-props";
 
 interface StyleProps {
   variant: ButtonVariant;
@@ -77,7 +78,7 @@ const base = ({ variant, size }: StyleProps) => css`
   }
 `;
 
-const forward = { shouldForwardProp: (prop: string) => prop !== "variant" && prop !== "size" };
+const forward = omitProps("variant", "size");
 
 export const ButtonRoot = styled("button", forward)<StyleProps>(base);
 export const ButtonLinkRoot = styled(Link, forward)<StyleProps>(base);

@@ -7,6 +7,7 @@ import { QuizProgress } from "./quiz-progress";
 import { QuizResult } from "./quiz-result";
 import { useQuizSession } from "./quiz-session";
 import { Intro, IntroMeta, Sources } from "./quiz-session.styled";
+import { CrumbLinks } from "@/common/components/crumb-links";
 
 export function QuizSession() {
   const quiz = useQuizSession();
@@ -24,13 +25,7 @@ export function QuizSession() {
       <PageHeader
         eyebrow={
           <nav aria-label="경로">
-            <Link href="/quiz">퀴즈</Link>
-            {quiz.crumbs.slice(0, -1).map((crumb) => (
-              <span key={crumb.href}>
-                {" / "}
-                {crumb.label}
-              </span>
-            ))}
+            <CrumbLinks items={[{ label: "퀴즈", href: "/quiz" }, ...quiz.crumbs.slice(0, -1)]} />
           </nav>
         }
         title={`${quiz.label} 퀴즈`}

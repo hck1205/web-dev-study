@@ -1,6 +1,7 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { anim, color, font, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Svg = styled.svg`
   display: block;
@@ -22,9 +23,7 @@ export const Edge = styled.line`
   animation: ${anim.fadeUp} 400ms ${anim.easing.out};
 `;
 
-const forward = (prop: string) => !["dim", "focus", "intro", "order"].includes(prop);
-
-export const Dot = styled("circle", { shouldForwardProp: forward })<{ dim: boolean; focus: boolean; intro: boolean; order: number }>`
+export const Dot = styled("circle", omitProps("dim", "focus", "intro", "order"))<{ dim: boolean; focus: boolean; intro: boolean; order: number }>`
   stroke: ${color.surface};
   stroke-width: 2;
   opacity: ${({ dim }) => (dim ? 0.3 : 1)};
@@ -46,7 +45,7 @@ export const Dot = styled("circle", { shouldForwardProp: forward })<{ dim: boole
     `}
 `;
 
-export const Label = styled("text", { shouldForwardProp: forward })<{ dim: boolean; focus: boolean }>`
+export const Label = styled("text", omitProps("dim", "focus", "intro", "order"))<{ dim: boolean; focus: boolean }>`
   fill: ${color.text};
   font-size: 10.5px;
   font-weight: ${({ focus }) => (focus ? font.weight.bold : font.weight.medium)};
@@ -138,7 +137,7 @@ export const Legend = styled.ul`
   }
 `;
 
-export const Swatch = styled("span", { shouldForwardProp: (prop) => prop !== "tone" })<{ tone: string }>`
+export const Swatch = styled("span", omitProps("tone"))<{ tone: string }>`
   width: 0.625rem;
   height: 0.625rem;
   border-radius: 50%;

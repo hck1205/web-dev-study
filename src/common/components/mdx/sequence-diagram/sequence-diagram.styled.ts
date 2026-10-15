@@ -1,7 +1,8 @@
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
-import { anim, color, font, radius, space } from "@/common/design-system";
+import { anim, color, font, space } from "@/common/design-system";
 import type { StepState } from "./sequence-diagram.type";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Svg = styled.svg`
   display: block;
@@ -11,7 +12,7 @@ export const Svg = styled.svg`
   font-family: ${font.sans};
 `;
 
-const withActive = { shouldForwardProp: (prop: string) => prop !== "active" };
+const withActive = omitProps("active");
 
 /** 이번 단계에 참여하는 주체는 세로선과 상자가 강조색으로 바뀐다. */
 export const Lifeline = styled("line", withActive)<{ active: boolean }>`
@@ -96,36 +97,6 @@ export const MarkerPath = styled.path<{ state: StepState }>`
   fill: ${({ state }) => strokeBy(state)};
 `;
 
-export const Detail = styled.div`
-  padding: ${space[4]};
-  border-top: 1px solid ${color.border};
-
-  h4 {
-    margin: 0 0 ${space[2]};
-    font-size: ${font.size.base};
-    font-weight: ${font.weight.bold};
-    color: ${color.text};
-  }
-  p {
-    margin: 0;
-    color: ${color.textMuted};
-    font-size: ${font.size.base};
-    line-height: ${font.leading.relaxed};
-    word-break: keep-all;
-  }
-  pre {
-    margin: ${space[3]} 0 0;
-    padding: ${space[3]};
-    overflow-x: auto;
-    border: 1px solid ${color.codeBorder};
-    border-radius: ${radius.md};
-    background: ${color.codeBg};
-    font-family: ${font.mono};
-    font-size: 0.75rem;
-    line-height: 1.6;
-    white-space: pre;
-  }
-`;
 
 /* ---- 현재 단계 강조 애니메이션 ---- */
 
@@ -162,8 +133,4 @@ export const Ripple = styled.circle`
   transform-box: fill-box;
   transform-origin: center;
   animation: ${anim.ripple} 900ms ${anim.easing.out} both;
-`;
-
-export const DetailBody = styled.div`
-  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
 `;

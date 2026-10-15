@@ -12,4 +12,6 @@ export { Container } from "./components/container";
 export { EmptyState } from "./components/empty-state";
 export { IconButton } from "./components/icon-button";
 export { PageHeader } from "./components/page-header";
+export { ResultMark } from "./components/result-mark";
+export type { ResultMarkProps } from "./components/result-mark";
 export { Tag } from "./components/tag";

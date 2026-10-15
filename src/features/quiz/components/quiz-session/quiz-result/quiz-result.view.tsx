@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { CSSProperties } from "react";
-import { Button } from "@/common/design-system";
+import { Button, ResultMark } from "@/common/design-system";
 import { questionHref } from "../../../registry";
 import {
   Actions,
@@ -10,7 +10,6 @@ import {
   Review,
   ReviewAnswer,
   ReviewItem,
-  ReviewMark,
   ReviewQuestion,
   Ring,
   RingLabel,
@@ -53,9 +52,7 @@ export function QuizResult({ deck, answers, score, onRetryWrong, onRestart }: Qu
           const answer = answers[i];
           return (
             <ReviewItem key={question.id} style={{ animationDelay: `${300 + i * 40}ms` }}>
-              <ReviewMark correct={answer.correct} aria-label={answer.correct ? "맞음" : "틀림"}>
-                {answer.correct ? "✓" : "✕"}
-              </ReviewMark>
+              <ResultMark pass={answer.correct} label={answer.correct ? "맞음" : "틀림"} />
               <div>
                 <ReviewQuestion>{question.question}</ReviewQuestion>
                 {!answer.correct && <ReviewAnswer>고른 답: {question.choices[answer.picked]}</ReviewAnswer>}

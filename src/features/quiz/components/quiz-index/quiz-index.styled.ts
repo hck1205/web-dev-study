@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
 import { anim, color, font, motion, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Rows = styled.ul`
   margin: 0;
@@ -8,7 +9,7 @@ export const Rows = styled.ul`
   list-style: none;
 `;
 
-export const Row = styled("li", { shouldForwardProp: (prop) => prop !== "depth" })<{ depth: number }>`
+export const Row = styled("li", omitProps("depth"))<{ depth: number }>`
   padding-left: calc(${space[4]} * ${({ depth }) => depth});
   animation: ${anim.fadeUp} 360ms ${anim.easing.out} both;
 

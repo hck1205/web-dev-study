@@ -2,6 +2,7 @@ import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, layout, motion, radius, shadow, zIndex } from "@/common/design-system";
 import { media } from "@/common/styles/breakpoints";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Root = styled.header`
   position: sticky;
@@ -67,7 +68,7 @@ const navItemStyle = `
   font-family: inherit;
 `;
 
-export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "active" })<{ active: boolean }>`
+export const NavLink = styled(Link, omitProps("active"))<{ active: boolean }>`
   ${navItemStyle}
   border-radius: ${radius.md};
   background: ${({ active }) => (active ? color.accentSoft : "transparent")};
@@ -85,7 +86,7 @@ export const NavLink = styled(Link, { shouldForwardProp: (prop) => prop !== "act
   }
 `;
 
-export const NavButton = styled("button", { shouldForwardProp: (prop) => prop !== "active" && prop !== "open" })<{
+export const NavButton = styled("button", omitProps("active", "open"))<{
   active: boolean;
   open: boolean;
 }>`

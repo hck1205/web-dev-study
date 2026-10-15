@@ -1,9 +1,8 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { anim, color, font, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 import type { MorphTone } from "./geometry-morph.type";
-
-const omit = (...names: string[]) => ({ shouldForwardProp: (prop: string) => !names.includes(prop) });
 
 export const Stage = styled.div`
   padding: ${space[4]};
@@ -41,7 +40,7 @@ const shapeTone = (tone: MorphTone) =>
         stroke: ${toneColor[tone]};
       `;
 
-export const Shape = styled("polygon", omit("tone", "visible", "focused"))<{
+export const Shape = styled("polygon", omitProps("tone", "visible", "focused"))<{
   tone: MorphTone;
   visible: boolean;
   focused: boolean;
@@ -63,7 +62,7 @@ export const Shape = styled("polygon", omit("tone", "visible", "focused"))<{
 
 const labelSize = { sm: "13px", md: "17px", lg: "24px" };
 
-export const Label = styled("text", omit("tone", "size"))<{ tone: MorphTone | "text"; size: "sm" | "md" | "lg" }>`
+export const Label = styled("text", omitProps("tone", "size"))<{ tone: MorphTone | "text"; size: "sm" | "md" | "lg" }>`
   fill: ${({ tone }) => (tone === "text" ? color.text : toneColor[tone])};
   font-family: ${font.sans};
   font-size: ${({ size }) => labelSize[size]};
@@ -75,26 +74,4 @@ export const Label = styled("text", omit("tone", "size"))<{ tone: MorphTone | "t
   stroke-width: 4px;
   stroke-linejoin: round;
   animation: ${anim.fadeUp} 420ms ${anim.easing.out} both;
-`;
-
-export const Detail = styled.div`
-  padding: ${space[4]};
-  border-top: 1px solid ${color.border};
-
-  h4 {
-    margin: 0 0 ${space[2]};
-    color: ${color.text};
-    font-size: ${font.size.base};
-    font-weight: ${font.weight.bold};
-  }
-  p {
-    margin: 0;
-    color: ${color.textMuted};
-    line-height: ${font.leading.relaxed};
-    word-break: keep-all;
-  }
-`;
-
-export const DetailBody = styled.div`
-  animation: ${anim.fadeUp} 300ms ${anim.easing.out};
 `;

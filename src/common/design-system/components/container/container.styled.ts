@@ -1,8 +1,9 @@
 import styled from "@emotion/styled";
 import { media } from "@/common/styles/breakpoints";
 import { layout, space } from "../../tokens";
+import { omitProps } from "@/common/styles/omit-props";
 
-export const Box = styled("div", { shouldForwardProp: (prop) => prop !== "size" })<{ size: "narrow" | "wide" }>`
+export const Box = styled("div", omitProps("size"))<{ size: "narrow" | "wide" }>`
   width: 100%;
   max-width: ${({ size }) => layout[size]};
   margin: 0 auto;

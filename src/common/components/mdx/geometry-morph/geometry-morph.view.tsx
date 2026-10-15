@@ -1,9 +1,10 @@
 "use client";
 
 import { StepControls } from "../step-controls";
+import { StepDetail } from "../step-detail";
 import { VizFrame } from "../viz-frame";
 import { useGeometryMorph } from "./geometry-morph";
-import { Detail, DetailBody, Label, Shape, Stage, Svg } from "./geometry-morph.styled";
+import { Label, Shape, Stage, Svg } from "./geometry-morph.styled";
 import type { GeometryMorphProps } from "./geometry-morph.type";
 import { toPoints } from "./geometry-morph.utils";
 
@@ -41,14 +42,7 @@ export function GeometryMorph(props: GeometryMorphProps) {
           </g>
         </Svg>
       </Stage>
-      <Detail aria-live="polite">
-        <DetailBody key={index}>
-          <h4>
-            {index + 1}. {step.title}
-          </h4>
-          {step.detail && <p>{step.detail}</p>}
-        </DetailBody>
-      </Detail>
+      <StepDetail index={index} title={step.title} detail={step.detail} />
       <StepControls player={player} />
     </VizFrame>
   );

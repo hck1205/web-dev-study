@@ -2,18 +2,18 @@
 
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getPostBySlug, postHref } from "@/features/posts/registry";
 import { findTopicByKey, topicCrumbs, topicKey } from "@/features/topics/registry";
 import { questionsForTopic, type QuizQuestion } from "../../registry";
 import { useQuizKeys } from "./hooks/use-quiz-keys";
 import type { DeckItem, QuizAnswer, QuizPhase } from "./quiz-session.type";
-import { buildDeck, countCorrect, sourceSlugs } from "./quiz-session.utils";
+import { buildDeck, countCorrect, sourcePosts } from "./quiz-session.utils";
 
 export function useQuizSession() {
   const params = useParams<{ path?: string[] }>();
   const key = topicKey(params.path ?? []);
   const found = findTopicByKey(key);
   const questions = useMemo(() => questionsForTopic(key), [key]);
+  const sources = useMemo(() => sourcePosts(questions), [questions]);
 
   const [phase, setPhase] = useState<QuizPhase>("intro");
   const [deck, setDeck] = useState<DeckItem[]>([]);
@@ -66,10 +66,7 @@ export function useQuizSession() {
     label: found?.topic.label ?? "",
     crumbs: found ? topicCrumbs(found) : [],
     questions,
-    sources: sourceSlugs(questions)
-      .map(getPostBySlug)
-      .filter((post) => post !== undefined)
-      .map((post) => ({ slug: post.slug, title: post.title, href: postHref(post.slug) })),
+    sources,
     phase,
     deck,
     index,

@@ -1,6 +1,7 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { anim, color, font, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Root = styled.div`
   margin-bottom: ${space[5]};
@@ -53,7 +54,7 @@ const fills: Record<SegmentState, ReturnType<typeof css>> = {
   `,
 };
 
-export const Segment = styled("span", { shouldForwardProp: (prop) => prop !== "state" })<{ state: SegmentState }>`
+export const Segment = styled("span", omitProps("state"))<{ state: SegmentState }>`
   position: relative;
   flex: 1;
   overflow: hidden;

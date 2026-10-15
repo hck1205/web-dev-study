@@ -2,8 +2,9 @@ import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { anim, color, font, motion, radius, shadow, space } from "@/common/design-system";
 import type { ChoiceState } from "./question-card.type";
+import { omitProps } from "@/common/styles/omit-props";
 
-const noState = { shouldForwardProp: (prop: string) => prop !== "state" && prop !== "correct" };
+const noState = omitProps("state", "correct");
 
 export const Root = styled.article`
   padding: ${space[5]};

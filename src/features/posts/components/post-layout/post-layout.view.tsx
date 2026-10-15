@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Container } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
 import { BookmarkButton } from "@/features/bookmarks/components/bookmark-button";
@@ -29,6 +28,7 @@ import {
 } from "./post-layout.styled";
 import type { PostLayoutProps } from "./post-layout.type";
 import type { TocItem } from "./hooks/use-post-toc";
+import { CrumbLinks } from "@/common/components/crumb-links";
 
 function TocLinks({ items, activeId }: { items: TocItem[]; activeId: string | null }) {
   return (
@@ -56,12 +56,7 @@ export function PostLayout({ children }: PostLayoutProps) {
               <Header>
                 <BadgeRow>
                   <Crumbs aria-label="토픽 경로">
-                    {crumbs.map((crumb, index) => (
-                      <span key={crumb.href}>
-                        {index > 0 && " / "}
-                        <Link href={crumb.href}>{crumb.label}</Link>
-                      </span>
-                    ))}
+                    <CrumbLinks items={crumbs} />
                   </Crumbs>
                   {post.difficulty && <DifficultyBadge difficulty={post.difficulty} />}
                 </BadgeRow>

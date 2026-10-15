@@ -2,6 +2,7 @@
 
 import { VizFrame } from "../viz-frame";
 import { StepControls } from "../step-controls";
+import { StepDetail } from "../step-detail";
 import { useSequenceDiagram } from "./sequence-diagram";
 import {
   ActorBox,
@@ -10,8 +11,6 @@ import {
   ArrowLabel,
   Badge,
   BadgeText,
-  Detail,
-  DetailBody,
   DrawPath,
   Lifeline,
   MarkerPath,
@@ -157,19 +156,13 @@ export function SequenceDiagram(props: SequenceDiagramProps) {
         </Svg>
       </div>
 
-      <Detail aria-live="polite">
-        <DetailBody key={player.index}>
-          <h4>
-            {player.index + 1}. {step.title}
-          </h4>
-          <p>{step.detail}</p>
-          {step.payload && (
-            <pre>
-              <code>{step.payload}</code>
-            </pre>
-          )}
-        </DetailBody>
-      </Detail>
+      <StepDetail index={player.index} title={step.title} detail={step.detail}>
+        {step.payload && (
+          <pre>
+            <code>{step.payload}</code>
+          </pre>
+        )}
+      </StepDetail>
 
       <StepControls player={player} />
     </VizFrame>

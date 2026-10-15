@@ -1,6 +1,7 @@
 import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import { anim, color, font, motion, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const Root = styled.div`
   padding: ${space[3]};
@@ -22,9 +23,7 @@ const fillUp = keyframes`
 type SegmentState = "done" | "current" | "todo";
 
 /** 칸 하나. 보이는 막대는 6px이지만 누르기 쉽게 버튼 높이를 넉넉히 둔다. */
-export const Segment = styled("button", {
-  shouldForwardProp: (prop) => prop !== "state" && prop !== "timing",
-})<{ state: SegmentState; timing: number }>`
+export const Segment = styled("button", omitProps("state", "timing"))<{ state: SegmentState; timing: number }>`
   position: relative;
   flex: 1;
   height: 1.25rem;
@@ -83,7 +82,7 @@ export const Counter = styled.span`
   font-variant-numeric: tabular-nums;
 `;
 
-export const Button = styled("button", { shouldForwardProp: (prop) => prop !== "primary" })<{ primary?: boolean }>`
+export const Button = styled("button", omitProps("primary"))<{ primary?: boolean }>`
   min-width: 2.75rem;
   min-height: 2.75rem;
   padding: 0 ${space[4]};

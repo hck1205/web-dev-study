@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/common/design-system";
+import { Button, ResultMark } from "@/common/design-system";
 import { VizFrame } from "../viz-frame";
 import { useCodePlayground } from "./code-playground";
 import {
@@ -13,7 +13,6 @@ import {
   Row,
   RowDetail,
   RowLabel,
-  RowMark,
   Shortcut,
   Summary,
   SummaryBar,
@@ -76,9 +75,7 @@ export function CodePlayground(props: CodePlaygroundProps) {
               <ol>
                 {result.tests.map((test, i) => (
                   <Row key={i} style={{ animationDelay: `${120 + i * 70}ms` }}>
-                    <RowMark pass={test.pass} aria-label={test.pass ? "통과" : "실패"}>
-                      {test.pass ? "✓" : "✕"}
-                    </RowMark>
+                    <ResultMark pass={test.pass} label={test.pass ? "통과" : "실패"} size="sm" />
                     <div>
                       <RowLabel>{test.label}</RowLabel>
                       {test.pass ? (

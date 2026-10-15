@@ -1,8 +1,9 @@
 import styled from "@emotion/styled";
 import { anim, color, font, radius, space } from "@/common/design-system";
 import { media } from "@/common/styles/breakpoints";
+import { omitProps } from "@/common/styles/omit-props";
 
-const noProps = { shouldForwardProp: (prop: string) => !["allPass", "pass", "fail"].includes(prop) };
+const noProps = omitProps("allPass", "fail");
 
 export const Toolbar = styled.div`
   display: flex;
@@ -135,22 +136,6 @@ export const Row = styled.li`
   & > div {
     min-width: 0;
   }
-`;
-
-export const RowMark = styled("span", noProps)<{ pass: boolean }>`
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 1.375rem;
-  height: 1.375rem;
-  margin-top: 0.125rem;
-  border-radius: ${radius.full};
-  background: ${({ pass }) => (pass ? color.successSoft : color.dangerSoft)};
-  color: ${({ pass }) => (pass ? color.success : color.danger)};
-  font-size: ${font.size.xs};
-  font-weight: ${font.weight.bold};
-  animation: ${anim.pop} 380ms ${anim.easing.spring} both;
-  animation-delay: inherit;
 `;
 
 export const RowLabel = styled.code`

@@ -7,6 +7,7 @@ import { QuizLink } from "@/features/quiz/components/quiz-link";
 import { TopicLinkList } from "../topic-groups";
 import { useTopicPage } from "./topic-page";
 import { QuizSection, Section } from "./topic-page.styled";
+import { CrumbLinks } from "@/common/components/crumb-links";
 
 export function TopicPage() {
   const page = useTopicPage();
@@ -29,13 +30,7 @@ export function TopicPage() {
       <PageHeader
         eyebrow={
           <nav aria-label="경로">
-            <Link href="/topics">Topics</Link>
-            {crumbs.slice(0, -1).map((crumb) => (
-              <span key={crumb.href}>
-                {" / "}
-                <Link href={crumb.href}>{crumb.label}</Link>
-              </span>
-            ))}
+            <CrumbLinks items={[{ label: "Topics", href: "/topics" }, ...crumbs.slice(0, -1)]} />
           </nav>
         }
         title={topic.label}

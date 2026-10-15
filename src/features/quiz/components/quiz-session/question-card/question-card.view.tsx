@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Button } from "@/common/design-system";
 import { useQuestionCard } from "./question-card";
 import {
@@ -19,6 +18,7 @@ import {
 } from "./question-card.styled";
 import type { QuestionCardProps } from "./question-card.type";
 import { choiceState } from "./question-card.utils";
+import { CrumbLinks } from "@/common/components/crumb-links";
 
 export function QuestionCard({ item, number, answer, isLast, onPick, onNext }: QuestionCardProps) {
   const { question, nextRef, related } = useQuestionCard(item, answer);
@@ -58,12 +58,7 @@ export function QuestionCard({ item, number, answer, isLast, onPick, onNext }: Q
               <div>
                 <dt>관련 토픽</dt>
                 <dd>
-                  {related.topics.map((crumb, i) => (
-                    <span key={crumb.href}>
-                      {i > 0 && " / "}
-                      <Link href={crumb.href}>{crumb.label}</Link>
-                    </span>
-                  ))}
+                  <CrumbLinks items={related.topics} />
                 </dd>
               </div>
             )}
