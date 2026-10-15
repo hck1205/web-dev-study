@@ -77,6 +77,27 @@ src/
 - `query`, `atoms`의 `index.ts`는 클라이언트 전용이다. 서버 컴포넌트·Route Handler에서 import하지 않는다.
 - 서버와 클라이언트가 함께 쓰는 응답 타입은 React/axios에 의존하지 않는 모듈에 두고 `api/{name}/types.ts`에서 re-export한다 (예: `features/labs/hello`).
 
+## 반응형 (mobile-first)
+
+- 주 사용 환경은 **모바일**이다. 기본 스타일을 모바일 기준으로 작성하고, `min-width` 미디어 쿼리로 tablet(≥768px) / desktop(≥1024px)에서 확장한다. `max-width` 쿼리는 쓰지 않는다.
+- 미디어 쿼리는 하드코딩하지 말고 `@/common/styles/breakpoints`의 `media.tablet`, `media.desktop`을 사용한다.
+  ```ts
+  styled.div`
+    padding: 1rem;
+    ${media.tablet} { padding: 2rem; }
+  `
+  ```
+- 터치 대상(링크·버튼)은 높이 44px 이상으로 한다. 노치 대응이 필요한 가장자리 padding에는 `env(safe-area-inset-*)`를 쓴다.
+- 새 UI를 만든 뒤에는 390px(모바일) / 820px(태블릿) / 1280px(PC)에서 가로 스크롤이 생기지 않는지 확인한다.
+
+## MDX
+
+- 본문은 `src/app/**/page.mdx`에 쓴다. `export const metadata = { title: "..." }`로 페이지 title을 지정한다.
+- `mdx-components.tsx`(루트)는 `@/common/components/mdx`의 `mdxComponents`만 연결한다. 본문 스타일은 `prose`(wrapper), 표는 `mdx-table`(모바일 가로 스크롤), 강조 박스는 `<Callout kind="note|tip|warning">`를 쓴다.
+- 새 MDX 전용 컴포넌트는 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.tsx`에 등록한다.
+- **`common/components/mdx/mdx.tsx`는 서버 컴포넌트로 유지한다.** wrapper를 클라이언트 컴포넌트로 직접 연결하면 Next.js가 넘기는 `searchParams`가 직렬화되어 MDX 페이지가 동적 렌더링으로 바뀐다. `children`만 넘기는 서버 래퍼를 거친다.
+- 플러그인은 `next.config.ts`에 문자열 이름으로 지정한다(Turbopack): `remark-gfm`(표), `rehype-slug`(헤딩 id), `rehype-highlight`(코드 하이라이트). 하이라이트 색은 `prose.styled.ts`에서 관리한다.
+
 ## 기타
 
 - Emotion은 `jsxImportSource`를 설정하지 않는다 (서버 컴포넌트에서 `createContext` 오류가 난다).
