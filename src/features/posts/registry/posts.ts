@@ -9,6 +9,7 @@ export const POSTS: Post[] = [
     topic: "programming/backend/auth",
     tags: ["Authentication", "Cookie", "Session", "Security"],
     date: "2026-10-15",
+    keywords: ["쿠키 세션", "세션 쿠키", "세션 ID", "Set-Cookie", "CSRF"],
   },
   {
     slug: "token-login",
@@ -17,6 +18,7 @@ export const POSTS: Post[] = [
     topic: "programming/backend/auth",
     tags: ["Authentication", "JWT", "Token", "Security"],
     date: "2026-10-15",
+    keywords: ["JWT", "리프레시 토큰", "액세스 토큰"],
   },
   {
     slug: "oauth",
@@ -25,6 +27,7 @@ export const POSTS: Post[] = [
     topic: "programming/backend/auth",
     tags: ["OAuth", "Security", "HTTP", "Authorization"],
     date: "2026-10-15",
+    keywords: ["OAuth", "PKCE", "인가 코드"],
   },
   {
     slug: "vector-db",
@@ -33,5 +36,6 @@ export const POSTS: Post[] = [
     topic: "programming/database",
     tags: ["VectorDB", "Embedding", "AI", "Search"],
     date: "2026-10-15",
+    keywords: ["벡터 DB", "임베딩", "HNSW", "RAG"],
   },
 ];

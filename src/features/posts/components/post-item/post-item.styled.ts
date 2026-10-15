@@ -29,6 +29,18 @@ export const Body = styled.div`
   min-width: 0;
 `;
 
+export const TitleRow = styled.div`
+  display: flex;
+  gap: ${space[2]};
+  align-items: flex-start;
+  justify-content: space-between;
+
+  /* 별 버튼(44px)이 제목 첫 줄과 높이를 맞추도록 살짝 끌어올린다 */
+  & > button {
+    margin: -0.55rem -0.5rem 0 0;
+  }
+`;
+
 export const Title = styled.h3`
   font-size: ${font.size.xl};
   font-weight: ${font.weight.bold};

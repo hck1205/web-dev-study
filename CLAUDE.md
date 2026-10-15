@@ -172,6 +172,20 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다. 요약(summary)도 본문과 같은 평서체로 쓴다.
 4. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다. 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
 
+## 백링크 (글 사이 자동 링크)
+
+- `posts.ts`의 각 글에 `keywords`를 적는다. 다른 글 본문에 그 단어가 나오면 빌드 시점에 이 글로 가는 링크가 자동으로 걸린다. 글 하나에서 대상 글마다 **처음 한 번만** 걸리고, 자기 자신은 링크하지 않는다.
+- 구현은 remark 플러그인 `src/common/mdx-plugins/remark-backlinks/index.mjs`. Turbopack은 플러그인을 함수로 받지 못해 `next.config.ts`에서 **절대 경로 문자열**과 직렬화 가능한 옵션(`{ posts: [{ slug, title, keywords }] }`)으로 등록한다.
+- 제목, 코드(인라인 포함), 이미 링크인 텍스트는 건너뛴다. 영문 키워드는 단어 경계를 지킨다(`IndexedDB` 안의 `DB`에 걸리지 않음). 긴 키워드부터 찾는다.
+- `/posts/...`로 가는 링크는 직접 쓴 것까지 모두 새 창(`target="_blank"`, `rel="noopener noreferrer"`)으로 열리고, 본문에서 ↗ 표시가 붙는다. 직접 링크한 글은 자동으로 한 번 더 링크하지 않는다.
+- 키워드는 그 글을 대표하는 말만 2~5개 적는다. "토큰", "서버"처럼 너무 흔한 단어는 엉뚱한 곳에 링크가 걸리니 피한다(대신 "액세스 토큰", "세션 쿠키"처럼 구체적으로).
+
+## 즐겨찾기 (로컬)
+
+- 로그인 없이 이 브라우저의 localStorage(`bookmarks` 키)에만 저장한다. 상태는 `features/bookmarks/atoms/bookmarks`(get/set/reset, `atomWithStorage`)로 다룬다.
+- 별 버튼 `BookmarkButton`은 글 목록 줄(`PostItem`)과 글 상단(`PostLayout`, `withLabel`)에 있다. 목록 줄에서는 제목 링크가 줄 전체를 덮으므로 버튼을 `position: relative; z-index: 1`로 올려 둔다.
+- `/bookmarks`는 최근에 추가한 순서로 보여 주고, 레지스트리에서 사라진 글의 slug는 건너뛴다.
+
 ## 검색
 
 - 헤더의 검색 아이콘, `/` 키, `Ctrl/⌘ + K`로 연다. 정적 사이트라 브라우저에서 글 메타데이터(제목 > 태그 > 토픽 > 요약 순 가중치, 모든 단어 AND 매칭)를 검색한다. 엔진은 `features/search/engine`, UI는 `features/search/components/search-launcher`다.

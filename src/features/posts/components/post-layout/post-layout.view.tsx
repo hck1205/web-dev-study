@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Container } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
+import { BookmarkButton } from "@/features/bookmarks/components/bookmark-button";
 import { DifficultyBadge } from "../difficulty-badge";
 import { PostTags } from "../post-tags";
 import { usePostLayout } from "./post-layout";
@@ -15,6 +16,7 @@ import {
   Grid,
   Header,
   Meta,
+  MetaEnd,
   MobileToc,
   Page,
   Summary,
@@ -66,6 +68,9 @@ export function PostLayout({ children }: PostLayoutProps) {
                 <Meta>
                   <time dateTime={post.date}>{date}</time>
                   <PostTags tags={post.tags} />
+                  <MetaEnd>
+                    <BookmarkButton slug={post.slug} withLabel />
+                  </MetaEnd>
                 </Meta>
               </Header>
             )}
