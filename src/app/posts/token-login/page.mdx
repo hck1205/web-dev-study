@@ -1,0 +1,240 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("token-login");
+
+[쿠키 기반 로그인](/posts/cookie-session-login)에서는 서버가 세션을 보관하고 브라우저는 번호표만 들고 다녔다. 토큰 기반 로그인은 정반대로 간다. 서버는 아무것도 기억하지 않는다. 대신 "이 사람은 42번 사용자다"라는 내용 자체를 위조할 수 없게 서명해서 클라이언트에게 들려 보낸다. 모바일 앱이나 여러 서비스가 같은 로그인을 나눠 쓰는 구조에서 자주 쓰는 방식이라, 쿠키 세션과 무엇이 다른지 비교하며 정리했다.
+
+## 명단 대신 손목 팔찌
+
+외투 보관소 비유를 이어 가 보면, 쿠키 세션은 직원이 번호표를 받아 안쪽 옷걸이(세션 저장소)를 확인하는 방식이었다. 토큰 방식은 페스티벌 입장 팔찌에 가깝다. 입구에서 한 번 신분을 확인하고 팔찌를 채워 준다. 그다음부터 공연장 직원들은 명단을 찾아보지 않고 팔찌만 보고 들여보낸다. 팔찌에는 위조할 수 없는 도장이 찍혀 있고, 언제까지 유효한지도 적혀 있다.
+
+이 팔찌가 토큰이고, 도장이 서명이다. 웹에서는 JWT(JSON Web Token)라는 형식을 가장 많이 쓴다.
+
+## 로그인하고 API를 부르기까지
+
+<SequenceDiagram
+  caption="토큰 기반 로그인"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "server", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "server",
+      label: "POST /login",
+      title: "아이디와 비밀번호를 보낸다",
+      detail: "여기까지는 쿠키 세션과 같다.",
+      payload: "POST /login\nContent-Type: application/json\n\n{ \"email\": \"matt@example.com\", \"password\": \"********\" }",
+    },
+    {
+      from: "server",
+      to: "server",
+      label: "토큰 서명",
+      title: "서버가 토큰을 만들어 서명한다",
+      detail: "누구인지, 언제 만료되는지를 담은 JSON을 만들고 서버만 아는 비밀 키로 서명한다. 세션 저장소에는 아무것도 저장하지 않는다.",
+    },
+    {
+      from: "server",
+      to: "client",
+      label: "access_token",
+      title: "토큰을 응답 본문으로 돌려준다",
+      detail: "쿠키처럼 브라우저가 알아서 저장해 주지 않는다. 어디에 보관할지는 클라이언트가 정한다.",
+      payload: "{\n  \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0Mi...\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 900\n}",
+    },
+    {
+      from: "client",
+      to: "client",
+      label: "토큰 보관",
+      title: "클라이언트가 토큰을 보관한다",
+      detail: "앱이라면 기기의 보안 저장소, 웹이라면 메모리나 쿠키 같은 곳에 둔다. 어디에 두느냐가 보안을 꽤 많이 좌우한다. 아래에서 따로 다룬다.",
+    },
+    {
+      from: "client",
+      to: "server",
+      label: "Bearer 토큰",
+      title: "요청마다 토큰을 직접 붙인다",
+      detail: "Authorization 헤더에 토큰을 싣는다. 자동으로 붙는 쿠키와 달리 코드가 직접 붙여야 한다.",
+      payload: "GET /me\nAuthorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    },
+    {
+      from: "server",
+      to: "server",
+      label: "서명·만료 확인",
+      title: "서버는 저장소를 찾지 않고 토큰만 검사한다",
+      detail: "비밀 키로 서명을 다시 계산해 맞는지, exp가 지나지 않았는지만 확인한다. DB나 세션 저장소를 들르지 않아서 빠르고, 어느 서버가 받아도 같은 결과가 나온다.",
+    },
+    {
+      from: "server",
+      to: "client",
+      label: "200 내 정보",
+      title: "토큰 안의 정보로 요청을 처리한다",
+      detail: "토큰의 sub(사용자 ID)와 role 같은 값을 믿고 응답한다.",
+    },
+  ]}
+/>
+
+6번이 이 방식의 핵심이다. 서버가 상태를 갖지 않으니(stateless), 서버를 몇 대로 늘리든 비밀 키만 같으면 된다. 쿠키 세션에서 필요했던 공용 세션 저장소가 없어도 된다.
+
+## JWT 뜯어보기
+
+3번에서 받은 토큰은 점(`.`) 두 개로 나뉜 세 조각이다. 조각을 누르면 각 부분을 디코딩한 내용이 나온다.
+
+<UrlAnatomy
+  caption="JWT = header.payload.signature"
+  separator=""
+  joiner="."
+  params={[
+    {
+      key: "header",
+      display: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+      title: "어떤 방식으로 서명했는지",
+      description: "JSON을 BASE64URL로 인코딩한 것이다. 암호화가 아니라 단순한 인코딩이라 누구나 디코딩할 수 있다. HS256은 HMAC-SHA256, 즉 서버 하나가 가진 비밀 키 하나로 서명하고 검증하는 방식이다.",
+      code: "{\n  \"alg\": \"HS256\",\n  \"typ\": \"JWT\"\n}",
+    },
+    {
+      key: "payload",
+      display: "eyJzdWIiOiI0MiIsIm5hbWUiOiJtYXR0Iiwicm9sZSI6InVzZXIiLCJpYXQiOjE3OTIwMjI0MDAsImV4cCI6MTc5MjAyMzMwMH0",
+      title: "담긴 내용 (클레임)",
+      description: "sub는 사용자 ID, iat는 발급 시각, exp는 만료 시각이다(초 단위 유닉스 시간). 이 토큰은 2026년 10월 15일 0시(UTC)에 발급돼 15분 뒤 만료된다. 여기도 인코딩일 뿐이라 누구나 읽을 수 있다. 비밀번호나 개인정보를 넣으면 안 된다.",
+      code: "{\n  \"sub\": \"42\",\n  \"name\": \"matt\",\n  \"role\": \"user\",\n  \"iat\": 1792022400,\n  \"exp\": 1792023300\n}",
+    },
+    {
+      key: "signature",
+      display: "aHlCCf2XvzSvsqYBl99-SNUKz0cD-vxkVi_dWUFcTic",
+      title: "위조를 막는 서명",
+      description: "앞의 두 조각을 서버의 비밀 키로 HMAC-SHA256 계산한 값이다. 비밀 키를 모르면 이 값을 만들 수 없다. 이 예시는 비밀 키 my-server-secret으로 실제 계산한 값이다.",
+      code: "HMACSHA256(\n  base64url(header) + \".\" + base64url(payload),\n  \"my-server-secret\"\n)",
+      required: true,
+    },
+  ]}
+/>
+
+처음 JWT를 디코딩해 보면 "다 보이네?" 싶어서 당황하게 된다. JWT가 지키는 건 비밀이 아니라 무결성이다. 내용은 누구나 읽을 수 있지만, 한 글자라도 바꾸면 서버가 바로 알아챈다.
+
+## 내용을 바꾸면 어떻게 될까
+
+payload의 `"role": "user"`를 `"admin"`으로 바꿔서 보내 보면 서명이 어떤 일을 하는지 보인다.
+
+<SequenceDiagram
+  caption="변조한 토큰이 거절되는 과정"
+  actors={[
+    { id: "attacker", label: "공격자" },
+    { id: "server", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "attacker",
+      to: "attacker",
+      label: "payload 수정",
+      title: "payload를 디코딩해서 role을 바꾼다",
+      detail: "BASE64URL은 누구나 디코딩하고 다시 인코딩할 수 있다. role을 admin으로 고쳐서 payload 조각을 새로 만든다. 서명 조각은 비밀 키가 없으니 원래 것을 그대로 붙인다.",
+      payload: "{ \"sub\": \"42\", \"name\": \"matt\", \"role\": \"admin\", ... }\n→ eyJzdWIiOiI0MiIsIm5hbWUiOiJtYXR0Iiwicm9sZSI6ImFkbWluIiwi...",
+    },
+    {
+      from: "attacker",
+      to: "server",
+      label: "변조 토큰",
+      title: "바꾼 토큰으로 관리자 API를 부른다",
+      detail: "header.바뀐payload.원래signature 모양의 토큰을 보낸다.",
+      payload: "DELETE /admin/users/7\nAuthorization: Bearer eyJhbGci...eyJzdWIiOiI0Mi...(admin)...aHlCCf2Xvz...",
+    },
+    {
+      from: "server",
+      to: "server",
+      label: "서명 재계산",
+      title: "서버가 받은 header.payload로 서명을 다시 계산한다",
+      detail: "비밀 키로 다시 계산한 값은 8lUJeN...로 시작한다. 토큰에 붙어 온 aHlCCf...와 다르다. payload가 한 글자만 달라도 서명은 완전히 달라진다.",
+    },
+    {
+      from: "server",
+      to: "attacker",
+      label: "401",
+      title: "서명이 맞지 않으니 거절한다",
+      detail: "토큰 안의 내용은 아예 믿지 않고 버린다.",
+      payload: "HTTP/1.1 401 Unauthorized",
+    },
+  ]}
+/>
+
+그래서 서버의 비밀 키가 곧 모든 사용자의 도장이다. 이 키가 새면 누구든 아무 토큰이나 만들 수 있다. 서명을 검증하지 않고 디코딩만 해서 쓰는 코드도 같은 구멍이 된다.
+
+## 한 번 준 토큰은 되돌리기 어렵다
+
+서버가 아무것도 기억하지 않는다는 장점은 그대로 약점이 된다. 쿠키 세션은 서버가 세션을 지우면 끝이었다. 토큰은 서버가 기억하는 게 없으니 지울 대상도 없다. 로그아웃 버튼을 눌러도 클라이언트가 토큰을 버릴 뿐이고, 누가 미리 복사해 둔 토큰은 exp까지 계속 통한다.
+
+그래서 보통 액세스 토큰은 15분 정도로 아주 짧게 주고, 대신 리프레시 토큰을 하나 더 준다. 액세스 토큰이 만료되면 리프레시 토큰으로 새 액세스 토큰을 받는다. 리프레시 토큰은 서버가 저장해 두고 관리하므로, 로그아웃할 때 이걸 폐기하면 길어야 액세스 토큰 수명만큼만 더 버틴다.
+
+<SequenceDiagram
+  caption="액세스 토큰이 만료됐을 때"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "server", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "server",
+      label: "GET /me",
+      title: "만료된 액세스 토큰으로 요청한다",
+      detail: "15분이 지나서 exp를 넘겼다.",
+    },
+    {
+      from: "server",
+      to: "client",
+      label: "401 expired",
+      title: "서버가 만료됐다고 알려 준다",
+      detail: "클라이언트는 이 응답을 보고 사용자에게 다시 로그인하라고 하는 대신, 조용히 재발급을 시도한다.",
+    },
+    {
+      from: "client",
+      to: "server",
+      label: "POST /refresh",
+      title: "리프레시 토큰을 보낸다",
+      detail: "리프레시 토큰은 이 재발급 요청에만 쓴다. 일반 API 요청에는 싣지 않는다.",
+    },
+    {
+      from: "server",
+      to: "server",
+      label: "확인 후 교체",
+      title: "리프레시 토큰을 확인하고 새것으로 바꾼다",
+      detail: "저장해 둔 리프레시 토큰과 맞는지, 폐기되지 않았는지 본다. 그리고 쓴 리프레시 토큰은 버리고 새것을 발급한다(rotation). 이미 쓴 리프레시 토큰이 다시 들어오면 탈취를 의심하고 그 사용자의 토큰을 모두 끊을 수 있다.",
+    },
+    {
+      from: "server",
+      to: "client",
+      label: "새 토큰 2개",
+      title: "새 액세스 토큰과 새 리프레시 토큰을 받는다",
+      detail: "클라이언트는 두 토큰을 모두 새것으로 바꿔 둔다. 이전 리프레시 토큰은 이제 쓸 수 없다.",
+    },
+    {
+      from: "client",
+      to: "server",
+      label: "GET /me 재요청",
+      title: "실패했던 요청을 다시 보낸다",
+      detail: "사용자는 이 과정이 있었는지 모른다.",
+    },
+  ]}
+/>
+
+리프레시 토큰을 서버에 저장하는 순간, 완전히 상태가 없는 방식은 아니게 된다. 실무에서는 대부분 이렇게 섞어 쓴다. 자주 오가는 요청은 저장소 없이 빠르게 검증하고, 드물게 일어나는 재발급과 로그아웃만 서버가 관리한다.
+
+## 토큰은 어디에 둘까
+
+웹에서 가장 고민되는 부분이다. `localStorage`에 두면 쓰기는 편하지만, 페이지에 악성 스크립트가 끼어드는 XSS가 하나만 생겨도 토큰을 그대로 읽어 간다. 자바스크립트 변수(메모리)에만 두면 읽어 가기 어렵지만 새로고침하면 사라진다. 그래서 리프레시 토큰은 `HttpOnly` 쿠키에 두고, 액세스 토큰은 메모리에 두는 조합을 많이 쓴다. 새로고침하면 리프레시 토큰 쿠키로 액세스 토큰을 다시 받으면 된다.
+
+결국 웹 브라우저에서는 다시 쿠키를 쓰게 되는 셈이다. 차이는 쿠키에 담기는 것이 세션 번호표냐, 서명된 토큰이냐다. 쿠키를 쓰는 이상 [앞 글](/posts/cookie-session-login)에서 본 SameSite와 CSRF 대비도 그대로 필요하다.
+
+## 쿠키 세션과 나란히 놓고 보면
+
+| | 쿠키 세션 | 토큰(JWT) |
+|---|---|---|
+| 로그인 정보를 누가 들고 있나 | 서버(세션 저장소) | 클라이언트(토큰 안에) |
+| 요청마다 서버가 하는 일 | 저장소에서 세션 조회 | 서명과 만료만 계산 |
+| 즉시 로그아웃 | 세션을 지우면 끝 | 어렵다. 짧은 수명 + 리프레시 토큰으로 보완 |
+| 서버를 늘릴 때 | 공용 세션 저장소가 필요 | 비밀 키만 공유하면 된다 |
+| 잘 맞는 곳 | 브라우저 위주의 웹 서비스 | 모바일 앱, 여러 서비스가 같은 로그인을 공유하는 구조 |
+
+## 정리
+
+토큰 기반 로그인은 로그인 정보를 서버에 보관하지 않고, 위조할 수 없게 서명한 토큰을 클라이언트가 들고 다니게 하는 방식이다. 서버는 요청마다 서명과 만료만 확인하면 되니 가볍고 늘리기 쉽다. 대신 한 번 내준 토큰을 거둬들이기 어려워서, 짧은 액세스 토큰과 서버가 관리하는 리프레시 토큰을 함께 쓴다. 토큰을 다른 서비스에 위임하는 규칙은 [OAuth 2.0 글](/posts/oauth)에서 이어진다.

@@ -10,7 +10,12 @@ export const TOPICS: Topic[] = [
     children: [
       { id: "ai", label: "AI", description: "머신러닝, LLM, 에이전트" },
       { id: "algorithms", label: "Algorithms", description: "문제 풀이와 해설, 자료구조" },
-      { id: "backend", label: "Backend", description: "서버 애플리케이션, API 설계" },
+      {
+        id: "backend",
+        label: "Backend",
+        description: "서버 애플리케이션, API 설계",
+        children: [{ id: "auth", label: "Auth", description: "로그인, 세션, 토큰, 권한 위임" }],
+      },
       {
         id: "common",
         label: "Common",

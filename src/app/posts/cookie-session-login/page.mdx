@@ -1,0 +1,230 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cookie-session-login");
+
+로그인을 한 번 하면 새로고침을 해도, 다른 페이지로 넘어가도 로그인 상태가 그대로다. 당연해 보이지만 HTTP만 놓고 보면 이상한 일이다. HTTP는 요청 하나하나가 서로 독립이라, 서버는 방금 들어온 요청이 1초 전에 로그인한 그 사람이 보낸 건지 알 방법이 없다. 이걸 이어 주는 가장 오래되고 지금도 널리 쓰이는 방법이 쿠키와 세션이다. 인증 글을 정리하면서 여기서부터 시작한다.
+
+## 외투 보관소 번호표
+
+공연장 외투 보관소를 떠올리면 구조가 그대로 보인다. 외투를 맡기면 직원은 외투를 안쪽 옷걸이에 걸고 번호표를 준다. 다시 찾으러 갈 때는 번호표만 내밀면 된다. 직원은 내 얼굴을 기억할 필요가 없다.
+
+쿠키 세션 방식에서 외투는 "이 사람은 42번 사용자다" 같은 로그인 정보다. 서버가 이걸 세션 저장소에 보관하고, 브라우저에는 번호표, 즉 세션 ID만 쿠키로 돌려준다. 이후 요청마다 브라우저가 번호표를 붙여 보내면, 서버는 저장소에서 그 번호를 찾아 누구인지 알아낸다.
+
+## 로그인부터 로그아웃까지
+
+아래 그림에서 "다음"을 누르면 로그인, 로그인 후 요청, 로그아웃이 차례로 진행된다.
+
+<SequenceDiagram
+  caption="쿠키 세션 로그인의 전체 흐름"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "서버" },
+    { id: "store", label: "세션 저장소" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "POST /login",
+      title: "아이디와 비밀번호를 보낸다",
+      detail: "로그인 폼을 제출한다. 비밀번호가 오가는 건 이때 한 번뿐이다.",
+      payload: "POST /login\nContent-Type: application/x-www-form-urlencoded\n\nemail=matt@example.com&password=********",
+    },
+    {
+      from: "server",
+      to: "store",
+      label: "세션 생성",
+      title: "서버가 세션을 만들어 보관한다",
+      detail: "비밀번호가 맞으면, 추측할 수 없는 무작위 세션 ID를 만들고 그 ID에 사용자 정보를 묶어 저장소에 넣는다.",
+      payload: "sid_a3f9c1e7 → { userId: 42, createdAt: ... }",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "Set-Cookie: sid",
+      title: "브라우저에 번호표를 준다",
+      detail: "응답 헤더의 Set-Cookie로 세션 ID를 내려보낸다. 사용자 정보 자체는 보내지 않는다.",
+      payload: "HTTP/1.1 200 OK\nSet-Cookie: sid=a3f9c1e7; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "쿠키 저장",
+      title: "브라우저가 쿠키를 저장한다",
+      detail: "이 사이트 주소와 함께 쿠키를 저장해 둔다. 개발자 도구의 Application 탭에서 볼 수 있다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "GET /me + Cookie",
+      title: "다음 요청부터 쿠키가 자동으로 붙는다",
+      detail: "프론트엔드 코드가 따로 할 일은 없다. 같은 사이트로 가는 요청이면 브라우저가 알아서 Cookie 헤더를 붙인다.",
+      payload: "GET /me\nCookie: sid=a3f9c1e7",
+    },
+    {
+      from: "server",
+      to: "store",
+      label: "sid 조회",
+      title: "서버가 번호표로 세션을 찾는다",
+      detail: "요청마다 저장소를 한 번 찾아본다. 이 조회가 쿠키 세션 방식의 비용이다.",
+    },
+    {
+      from: "store",
+      to: "server",
+      label: "userId: 42",
+      title: "누구인지 알아낸다",
+      detail: "세션이 있으면 그 안의 사용자 정보로 요청을 처리한다. 없거나 만료됐으면 401을 돌려준다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "200 내 정보",
+      title: "로그인된 사용자로 응답한다",
+      detail: "브라우저 입장에서는 그냥 로그인 상태가 유지되는 것처럼 보인다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "POST /logout",
+      title: "로그아웃을 누른다",
+      detail: "이번에도 쿠키가 자동으로 붙어 간다.",
+    },
+    {
+      from: "server",
+      to: "store",
+      label: "세션 삭제",
+      title: "서버가 세션을 지운다",
+      detail: "저장소에서 세션을 지우는 순간 그 번호표는 쓸모가 없어진다. 누가 이 쿠키를 훔쳐 갔더라도 마찬가지다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "쿠키 만료",
+      title: "브라우저의 쿠키도 지운다",
+      detail: "같은 이름의 쿠키를 Max-Age=0으로 내려보내면 브라우저가 지운다.",
+      payload: "Set-Cookie: sid=; Max-Age=0; Path=/",
+    },
+  ]}
+/>
+
+로그아웃 단계가 이 방식의 큰 장점이다. 세션의 주인은 서버라서, 서버가 지우면 그 즉시 끝난다. "모든 기기에서 로그아웃", "관리자가 특정 사용자 강제 로그아웃" 같은 기능도 저장소에서 세션을 지우는 것으로 간단히 만들 수 있다.
+
+## 쿠키에 붙는 옵션들
+
+3번 단계의 `Set-Cookie`는 세션 ID 뒤에 옵션이 줄줄이 붙어 있다. 이 옵션들이 쿠키를 얼마나 안전하게 쓰는지를 거의 다 결정한다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="Set-Cookie 응답 헤더"
+  base="Set-Cookie: sid=a3f9c1e7"
+  separator="; "
+  joiner="; "
+  params={[
+    {
+      key: "HttpOnly",
+      title: "자바스크립트가 못 읽게 한다",
+      description: "document.cookie로 이 쿠키를 읽을 수 없게 된다. 페이지에 악성 스크립트가 끼어드는 XSS가 생겨도 세션 ID를 빼 가지 못한다. 세션 쿠키에는 사실상 필수다.",
+      required: true,
+    },
+    {
+      key: "Secure",
+      title: "HTTPS로만 보낸다",
+      description: "암호화되지 않은 HTTP 요청에는 쿠키를 싣지 않는다. 같은 와이파이에 있는 누군가가 통신을 엿봐도 세션 ID를 볼 수 없다.",
+      required: true,
+    },
+    {
+      key: "SameSite",
+      value: "Lax",
+      title: "다른 사이트에서 온 요청에는 조심해서 붙인다",
+      description: "다른 사이트에서 시작된 요청에는 기본적으로 쿠키를 붙이지 않는다. 링크를 눌러 이동하는 GET 요청처럼 최상위 이동일 때만 예외로 붙인다. 아래에서 볼 CSRF를 막는 첫 번째 방어선이다. Strict는 이 예외도 없고, None은 항상 붙인다(None은 Secure가 함께 있어야 한다).",
+    },
+    {
+      key: "Path",
+      value: "/",
+      title: "어느 경로에 보낼지",
+      description: "이 경로와 그 아래로 가는 요청에만 쿠키를 붙인다. /면 사이트 전체다.",
+    },
+    {
+      key: "Max-Age",
+      value: "86400",
+      title: "얼마 동안 유지할지",
+      description: "초 단위다. 86400초면 하루 뒤에 브라우저가 지운다. 이 옵션과 Expires가 둘 다 없으면 브라우저를 닫을 때 사라지는 세션 쿠키가 된다. 서버 쪽 세션에도 만료 시간을 따로 둬야 한다. 쿠키가 살아 있어도 서버 세션이 만료됐으면 로그아웃 상태다.",
+    },
+  ]}
+/>
+
+## 자동으로 붙는다는 것의 함정, CSRF
+
+쿠키는 브라우저가 알아서 붙여 준다. 편한 대신 문제가 하나 생긴다. 내가 은행 사이트에 로그인한 상태로 다른 사이트를 구경한다고 해 보자. 그 사이트에 은행으로 송금 요청을 보내는 폼이 숨어 있으면, 그 요청에도 은행 쿠키가 붙을 수 있다. 은행 서버 입장에서는 내가 보낸 요청과 구별할 방법이 없다. 이게 CSRF(Cross-Site Request Forgery)다.
+
+<SequenceDiagram
+  caption="CSRF: 남의 사이트가 내 쿠키로 요청을 보내게 만들기"
+  actors={[
+    { id: "browser", label: "내 브라우저" },
+    { id: "evil", label: "악성 사이트" },
+    { id: "bank", label: "은행 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "evil",
+      label: "페이지 방문",
+      title: "은행에 로그인한 채로 다른 사이트에 들어간다",
+      detail: "브라우저에는 은행 세션 쿠키가 살아 있다.",
+    },
+    {
+      from: "evil",
+      to: "browser",
+      label: "숨은 폼",
+      title: "페이지에 자동 제출되는 폼이 숨어 있다",
+      detail: "화면에는 아무것도 안 보이지만, 페이지가 열리자마자 은행으로 송금 요청을 보내도록 만들어져 있다.",
+      payload: "<form action=\"https://bank.example.com/transfer\" method=\"POST\">\n  <input name=\"to\" value=\"attacker\" />\n  <input name=\"amount\" value=\"1000000\" />\n</form>\n<script>document.forms[0].submit()</script>",
+    },
+    {
+      from: "browser",
+      to: "bank",
+      label: "POST /transfer",
+      title: "브라우저가 은행으로 요청을 보낸다",
+      detail: "SameSite=None인 쿠키라면 이 요청에 은행 세션 쿠키가 붙어 간다. SameSite=Lax나 Strict라면 다른 사이트에서 시작된 POST에는 쿠키가 붙지 않는다.",
+      payload: "POST /transfer\nCookie: sid=...   ← SameSite=None일 때만 붙는다",
+    },
+    {
+      from: "bank",
+      to: "browser",
+      label: "결과",
+      title: "쿠키가 붙었다면 내가 보낸 요청으로 처리된다",
+      detail: "쿠키가 없으면 로그인되지 않은 요청이라 거절된다. 그래서 SameSite가 첫 번째 방어선이다. 중요한 요청에는 페이지마다 다른 CSRF 토큰을 폼에 넣어서, 서버가 그 값까지 확인하게 하는 두 번째 방어선을 둔다.",
+    },
+  ]}
+/>
+
+크롬 계열 브라우저는 SameSite를 지정하지 않은 쿠키를 Lax처럼 다루지만, 모든 브라우저가 그렇지는 않다. 그래서 브라우저 기본값에 기대지 말고 직접 적어 둔다. 돈이 오가는 요청처럼 중요한 곳에는 CSRF 토큰도 같이 쓴다.
+
+## 서버가 여러 대가 되면
+
+서버가 한 대일 때는 세션을 서버 메모리에 둬도 된다. 서버를 두 대 이상으로 늘리면 문제가 생긴다. 로그인은 A 서버에서 했는데 다음 요청이 B 서버로 가면, B는 그 세션을 모른다. 그래서 세션은 보통 모든 서버가 함께 보는 별도 저장소(대개 Redis 같은 인메모리 DB)에 둔다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="어느 서버로 요청이 가든 같은 저장소에서 세션을 찾는다."
+  nodes={[
+    { id: "browser", label: "브라우저", x: 46, y: 125, w: 76 },
+    { id: "lb", label: "로드 밸런서", x: 160, y: 125, w: 92 },
+    { id: "a", label: "서버 A", x: 262, y: 50, w: 76 },
+    { id: "b", label: "서버 B", x: 262, y: 200, w: 76 },
+    { id: "redis", label: "세션 저장소", sub: "Redis", x: 356, y: 125, w: 80 },
+  ]}
+  edges={[
+    { from: "browser", to: "lb", label: "쿠키" },
+    { from: "lb", to: "a" },
+    { from: "lb", to: "b" },
+    { from: "a", to: "redis", arrow: "both" },
+    { from: "b", to: "redis", arrow: "both" },
+  ]}
+/>
+
+다른 방법으로 같은 사용자를 계속 같은 서버로 보내는 고정 세션(sticky session)도 있다. 다만 그 서버가 죽으면 거기 있던 세션이 전부 사라진다. 저장소를 따로 두는 쪽이 더 흔하다.
+
+## 정리
+
+쿠키 세션 방식에서 서버는 로그인 정보를 직접 보관하고, 브라우저는 그걸 찾을 번호표만 쿠키로 들고 다닌다. 세션을 지우면 바로 로그아웃되고, HttpOnly·Secure·SameSite만 잘 붙이면 웹에서 꽤 안전하게 쓸 수 있다. 대신 요청마다 저장소를 찾아봐야 하고, 쿠키가 자동으로 붙는 만큼 CSRF를 신경 써야 한다. 서버가 아무것도 기억하지 않는 반대쪽 방식은 [토큰 기반 로그인](/posts/token-login)에서 이어서 정리한다.

@@ -81,6 +81,18 @@ export const Detail = styled.div`
     line-height: ${font.leading.relaxed};
     word-break: keep-all;
   }
+  pre {
+    margin: ${space[3]} 0 0;
+    padding: ${space[3]};
+    overflow-x: auto;
+    border: 1px solid ${color.codeBorder};
+    border-radius: ${radius.md};
+    background: ${color.codeBg};
+    font-family: ${font.mono};
+    font-size: 0.75rem;
+    line-height: 1.6;
+    white-space: pre;
+  }
 `;
 
 export const Required = styled.span`
