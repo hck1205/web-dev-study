@@ -23,7 +23,7 @@ export function wordPattern(word: string, forms: string[] = []) {
  * 중복 표제어(대소문자 무시), 소문자가 아닌 표제어, 예문 부족, 표제어가 없는 예문, 같은 예문 반복을 잡는다.
  */
 /** 단어 하나에 필요한 최소 예문 수 */
-export const MIN_EXAMPLES = 3;
+export const MIN_EXAMPLES = 6;
 
 export function validateVocabulary(entries: VocabEntry[]) {
   const seen = new Map<string, number>();
