@@ -1,0 +1,451 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("core-web-vitals");
+
+로컬에서 Lighthouse를 돌리면 성능 점수가 98이 나온다. 그런데 Search Console의 Core Web Vitals 보고서를 열면 모바일 URL 대부분이 "개선 필요"로 묶여 있고, LCP가 3.4초라고 적혀 있다. 내 노트북에서는 1초 만에 뜨는 페이지다.
+
+둘 중 하나가 틀린 게 아니다. 둘은 서로 다른 것을 잰다. 하나는 정해진 조건에서 한 번 돌린 실험 결과이고, 다른 하나는 실제 사용자 수만 명의 기록을 모은 분포다. Core Web Vitals를 제대로 보려면 세 지표가 무엇을 재는지와 함께, 이 두 숫자가 왜 갈리는지부터 알아야 한다.
+
+## 세 숫자가 각각 재는 것
+
+Core Web Vitals는 구글이 사용자 경험을 대표한다고 고른 세 가지 지표다. 질문으로 바꾸면 이렇다.
+
+- LCP(Largest Contentful Paint): 화면에서 가장 큰 내용이 언제 그려졌나. 로딩이 체감상 끝난 시점이다.
+- INP(Interaction to Next Paint): 사용자가 누르거나 타이핑했을 때 다음 화면이 그려지기까지 얼마나 걸렸나. 반응성이다.
+- CLS(Cumulative Layout Shift): 읽던 내용이 예고 없이 얼마나 밀렸나. 시각적 안정성이다.
+
+좋음 기준은 LCP 2.5초 이하, INP 200ms 이하, CLS 0.1 이하다. 나쁨은 LCP 4초 초과, INP 500ms 초과, CLS 0.25 초과이고, 그 사이는 "개선 필요"다. 이 기준은 평균이 아니라 75번째 백분위수(p75)에 적용한다. 방문 100번을 빠른 순으로 줄 세웠을 때 75번째 방문이 기준 안에 들어와야 한다. 평균은 아주 빠른 데스크톱 몇 개가 느린 모바일을 가려 버리고, 중앙값은 절반의 사용자를 버린다. p75는 대부분의 사용자가 이 정도는 겪는다는 선을 잡으면서도 극단값 몇 개에 흔들리지 않는다. 모바일과 데스크톱은 따로 평가한다.
+
+INP는 2024년 3월에 FID(First Input Delay)를 대신해 들어왔다. FID는 첫 번째 입력 하나만, 그것도 이벤트 핸들러가 시작되기 전까지 기다린 시간만 쟀다. 핸들러가 300ms 동안 돌아도, 두 번째 클릭부터 버벅여도 FID는 좋게 나왔다. 그래서 대부분의 사이트가 FID 기준을 쉽게 통과했고, 실제 사용자가 느끼는 버벅임은 지표에 잡히지 않았다. INP는 페이지에 머무는 동안 일어난 모든 클릭·탭·키 입력을 보고, 대기부터 화면에 결과가 그려질 때까지 전체를 잰다.
+
+## 실험실 점수와 사용자 점수가 다른 이유
+
+처음 장면의 두 숫자는 출처가 다르다.
+
+Lighthouse는 실험실(lab) 데이터다. 정해진 기기 성능과 네트워크를 흉내 내서 페이지를 한 번 불러 보고 잰다. 조건이 고정되어 있으니 같은 코드를 두 번 재면 비슷하게 나오고, 배포 전에 회귀를 잡는 데 좋다. 대신 실제 사용자의 기기, 네트워크, 캐시 상태, 로그인 여부, 광고 노출은 반영하지 못한다. 그리고 아무도 클릭하지 않으니 INP를 잴 수 없다. Lighthouse는 대신 TBT(Total Blocking Time, 메인 스레드가 50ms 넘게 막힌 시간의 합)를 보여 준다. 10 버전 이후 성능 점수는 FCP 10%, Speed Index 10%, LCP 25%, TBT 30%, CLS 25%로 가중 평균한 값이다. 점수 98은 이 실험 한 번의 결과다.
+
+Search Console이 보여 주는 건 현장(field) 데이터, CrUX(Chrome UX Report)다. 사용 통계 전송에 동의한 크롬 사용자의 실제 방문에서 모은 값을 지난 28일 동안 굴려서 p75로 낸다. 그래서 오늘 고친 것이 보고서에 다 반영되려면 몇 주가 걸린다. 크롬 사용자만 들어가고, 트래픽이 적은 페이지는 아예 데이터가 없거나 출처 단위로만 나온다.
+
+현장 데이터를 내 손으로 모으는 게 RUM(Real User Monitoring)이다. 브라우저가 제공하는 성능 API로 사용자 기기에서 직접 재서 내 서버로 보낸다. 구글이 만든 `web-vitals` 라이브러리가 CrUX와 같은 규칙으로 계산해 준다. 실험실은 원인을 찾는 데, 현장은 실제로 문제가 있는지 판단하는 데 쓴다. 둘이 다르면 현장을 믿는다.
+
+## 가장 큰 그림이 늦게 뜨는 과정
+
+LCP 후보가 되는 건 `<img>`, `<video>`의 포스터 이미지, CSS `background-image`로 깔린 이미지, 텍스트가 든 블록 요소 같은 것들이다. 브라우저는 로딩 중에 더 큰 요소가 그려질 때마다 후보를 바꾸고, 사용자가 클릭·스크롤·키 입력을 하면 기록을 멈춘다. 마지막 후보가 그 페이지의 LCP다. 투명도가 0인 요소나, 크롬에서는 화면 크기에 비해 정보량이 너무 적은 흐릿한 자리표시 이미지도 후보에서 빠진다.
+
+상품 상세 페이지에서 첫 화면을 꽉 채우는 상품 사진이 LCP라고 하자. 그런데 이 사진의 주소가 HTML에 없고, 자바스크립트가 API를 부른 뒤에야 `<img>`를 만든다. 아래 그림에서 다음을 누르면 사진이 그려지기까지의 과정이 진행된다.
+
+<SequenceDiagram
+  caption="사진 주소를 늦게 알게 되면 그만큼 LCP가 밀린다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "웹 서버" },
+    { id: "cdn", label: "이미지 CDN" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "GET /item/7",
+      title: "HTML을 요청한다",
+      detail: "DNS 조회, 연결, 서버 처리를 거쳐 HTML의 첫 바이트가 올 때까지의 시간이 TTFB다. 여기까지는 아직 아무것도 그릴 수 없다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "HTML",
+      title: "HTML에는 빈 껍데기뿐이다",
+      detail: "HTML 안에는 CSS와 번들 스크립트 링크만 있고 상품 사진의 주소는 없다. 브라우저는 사진이 필요하다는 것을 아직 모른다.",
+      payload: "<link rel=\"stylesheet\" href=\"/app.css\">\n<script src=\"/main.js\" defer></script>\n<div id=\"root\"></div>",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "main.js",
+      title: "스크립트를 받아 실행한다",
+      detail: "번들을 내려받고 파싱하고 실행한다. 컴포넌트가 마운트된 뒤에야 상품 API를 부른다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "상품 JSON",
+      title: "이제야 사진 주소를 안다",
+      detail: "응답에 imageUrl이 들어 있다. HTML을 받은 뒤 여기까지 걸린 시간이 그대로 리소스 로드 지연이 된다.",
+      payload: "{ \"id\": 7, \"imageUrl\": \"https://img.example.com/7.avif\" }",
+    },
+    {
+      from: "browser",
+      to: "cdn",
+      label: "GET 7.avif",
+      title: "사진을 요청한다",
+      detail: "이 시점에는 다른 스크립트·폰트 요청과 대역폭을 나눠 쓴다. 우선순위를 따로 주지 않으면 사진이 뒤로 밀리기도 한다.",
+    },
+    {
+      from: "cdn",
+      to: "browser",
+      label: "이미지",
+      title: "사진이 다 도착한다",
+      detail: "첫 바이트부터 마지막 바이트까지가 리소스 로드 시간이다. 파일이 클수록, 네트워크가 느릴수록 길어진다.",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "그리기",
+      title: "그릴 수 있을 때 그린다",
+      detail: "메인 스레드가 다른 스크립트를 실행하느라 바쁘거나 CSS가 아직 오지 않았다면 사진이 있어도 바로 그리지 못한다. 실제로 그려진 순간이 LCP다.",
+    },
+  ]}
+/>
+
+3번과 4번 단계가 통째로 낭비다. 사진 주소가 처음부터 HTML에 있었다면 브라우저의 프리로드 스캐너(HTML을 파싱하면서 앞쪽을 미리 훑어 필요한 리소스를 먼저 요청하는 장치)가 2번 단계에서 바로 사진을 요청했을 것이다.
+
+## LCP를 네 조각으로 나눠 보기
+
+LCP가 3.4초라는 숫자만으로는 무엇을 고칠지 모른다. 위 과정을 네 조각으로 자르면 어디서 시간이 새는지 보인다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="LCP 3.4초를 네 조각으로 나눈 예"
+  base="LCP 3400ms"
+  separator=" = "
+  joiner=" + "
+  params={[
+    {
+      key: "ttfb",
+      display: "TTFB 600",
+      title: "첫 바이트까지 (TTFB)",
+      description: "페이지 이동을 시작해 HTML의 첫 바이트를 받을 때까지. 리다이렉트, DNS, 연결, 서버 처리 시간이 모두 들어간다. CDN 캐시, 정적 생성, 리다이렉트 줄이기로 줄인다.",
+      required: true,
+    },
+    {
+      key: "delay",
+      display: "로드 지연 1200",
+      title: "리소스 로드 지연",
+      description: "TTFB부터 LCP 이미지 요청을 시작할 때까지. 브라우저가 사진의 존재를 늦게 알수록 길어진다. 이 예에서는 스크립트를 실행하고 API를 다녀오느라 1.2초를 썼다. 텍스트가 LCP라면 이 조각은 0이다.",
+      required: true,
+    },
+    {
+      key: "duration",
+      display: "로드 시간 900",
+      title: "리소스 로드 시간",
+      description: "이미지 자체를 내려받는 시간. 크기를 줄이고(AVIF·WebP, 화면에 맞는 해상도), 가까운 CDN에서 받고, 다른 요청과 경쟁하지 않게 하면 줄어든다.",
+      required: true,
+    },
+    {
+      key: "render",
+      display: "렌더 지연 700",
+      title: "요소 렌더 지연",
+      description: "이미지를 다 받은 뒤 실제로 그려질 때까지. 렌더링을 막는 CSS, 메인 스레드를 붙잡은 긴 스크립트, 화면을 숨겨 두는 A/B 테스트 스크립트가 원인이다.",
+      required: true,
+      code: "600 + 1200 + 900 + 700 = 3400ms",
+    },
+  ]}
+/>
+
+web.dev의 권장은 TTFB와 로드 시간이 각각 40% 안팎을 차지하고, 로드 지연과 렌더 지연은 각각 10% 아래로 두는 것이다. 이 예에서는 로드 지연(1200ms, 35%)과 렌더 지연(700ms, 21%)이 너무 크다. 이미지를 압축하는 것보다 사진을 일찍 발견하게 만드는 쪽이 효과가 크다는 뜻이다.
+
+어떤 요소가 LCP인지는 크롬 개발자 도구 Performance 패널에서 바로 보인다. 코드로 확인하려면 `PerformanceObserver`를 쓴다.
+
+```js
+new PerformanceObserver((list) => {
+  const entries = list.getEntries();
+  const last = entries[entries.length - 1];
+  console.log(Math.round(last.startTime), last.element);
+}).observe({ type: "largest-contentful-paint", buffered: true });
+```
+
+후보가 바뀔 때마다 기록이 추가되니 마지막 항목을 본다. `buffered: true`는 관찰을 시작하기 전에 이미 생긴 기록까지 달라는 뜻이다.
+
+## 히어로 이미지를 빨리 받는 법
+
+LCP 이미지 태그 하나에 고칠 곳이 몰려 있다. 속성을 눌러 보자.
+
+<UrlAnatomy
+  caption="첫 화면 대표 이미지에 붙이는 속성들"
+  base="<img"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "src",
+      value: "\"/7-800.avif\"",
+      title: "HTML에 주소를 직접 쓴다",
+      description: "주소가 HTML에 있어야 프리로드 스캐너가 파싱 초기에 요청한다. 자바스크립트로 만들거나 CSS background-image로 깔면 발견이 늦어진다.",
+      required: true,
+    },
+    {
+      key: "srcset",
+      value: "\"…400w, …800w\"",
+      title: "화면에 맞는 크기를 고르게 한다",
+      description: "sizes와 함께 쓰면 브라우저가 기기 폭과 화소 밀도에 맞는 파일을 고른다. 모바일에 데스크톱용 원본을 보내면 로드 시간이 그대로 늘어난다.",
+    },
+    {
+      key: "width",
+      value: "\"800\"",
+      display: "width=800 height=600",
+      title: "자리를 미리 잡는다",
+      description: "width와 height가 있으면 브라우저가 이미지가 오기 전에 가로세로 비율로 자리를 잡아 둔다. CSS에서 width: 100%; height: auto를 줘도 비율은 유지된다. CLS를 막는 장치다.",
+      required: true,
+    },
+    {
+      key: "fetchpriority",
+      value: "\"high\"",
+      title: "먼저 받으라고 알린다",
+      description: "크롬은 화면 안 이미지인지 레이아웃이 끝나야 알기 때문에 처음에는 이미지를 낮은 우선순위로 요청한다. high를 주면 처음부터 높은 우선순위로 받는다. 페이지에 한두 개만 쓴다. 모두 high면 아무것도 high가 아니다.",
+    },
+    {
+      key: "loading",
+      value: "\"eager\"",
+      title: "LCP 이미지는 지연 로딩하지 않는다",
+      description: "loading=\"lazy\"는 레이아웃을 마친 뒤 화면 근처에 있을 때만 요청한다. 모든 이미지에 일괄로 lazy를 붙이면 LCP 이미지까지 늦어진다. 기본값이 eager이니 그냥 빼도 된다.",
+    },
+  ]}
+/>
+
+주소를 HTML에 쓸 수 없는 경우도 있다. CSS 배경 이미지거나, 폰트가 LCP 텍스트를 그리는 데 필요할 때다. 그럴 때는 `<head>`에서 미리 알려 준다.
+
+```html
+<link rel="preload" as="image" href="/hero.avif" fetchpriority="high" />
+<link rel="preload" as="font" href="/fonts/body.woff2" type="font/woff2" crossorigin />
+```
+
+폰트 preload에는 `crossorigin`이 꼭 있어야 한다. 폰트는 같은 출처라도 CORS 모드로 요청되는데, 빠뜨리면 preload로 받은 파일을 재사용하지 못하고 두 번 받는다. preload는 남용하면 정말 급한 리소스와 대역폭을 다투니, 늦게 발견되는 LCP 리소스에만 쓴다.
+
+렌더 지연 쪽은 렌더링 파이프라인의 문제다. CSS는 다 받을 때까지 그리기를 막고, `defer` 없는 스크립트는 파싱을 막는다. 이 과정은 [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)에서 다뤘다. 클라이언트 렌더링 앱이라면 번들이 다 실행되어야 첫 내용이 생기니, 서버 렌더링이나 정적 생성으로 HTML에 내용을 담아 보내는 것이 가장 큰 개선이다. 번들 자체를 줄이는 방법은 [번들 쪼개기: 코드 스플리팅과 트리 셰이킹](/posts/code-splitting)에 정리했다.
+
+## 눌렀는데 화면이 늦게 바뀐다
+
+장바구니 버튼을 눌렀는데 0.5초 동안 아무 반응이 없다가 숫자가 바뀐다. INP는 이런 순간을 잰다. 한 번의 상호작용은 세 구간으로 나뉜다. 아래 그림은 버튼을 누른 순간 메인 스레드가 이미 다른 일을 하고 있던 경우다.
+
+<SequenceDiagram
+  caption="입력부터 다음 화면까지가 상호작용 하나의 지연 시간이다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "main", label: "메인 스레드" },
+    { id: "screen", label: "화면" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "main",
+      label: "탭",
+      title: "사용자가 버튼을 누른다",
+      detail: "입력 이벤트가 큐에 들어간다. 그런데 메인 스레드는 분석 스크립트가 시작한 180ms짜리 작업을 실행하는 중이다.",
+    },
+    {
+      from: "main",
+      to: "main",
+      label: "입력 지연",
+      title: "앞선 작업이 끝날 때까지 기다린다",
+      detail: "메인 스레드는 한 번에 하나만 한다. 실행 중인 작업은 중간에 끊을 수 없어서, 이벤트는 남은 시간만큼 기다린다. 이 기다림이 입력 지연이다.",
+      payload: "inputDelay: 120ms",
+    },
+    {
+      from: "main",
+      to: "main",
+      label: "핸들러 실행",
+      title: "이벤트 핸들러가 돈다",
+      detail: "click 핸들러가 장바구니 상태를 바꾸고, 프레임워크가 다시 렌더링할 컴포넌트를 계산한다. pointerdown, pointerup, click처럼 같은 입력에 붙은 핸들러가 모두 이 구간에 들어간다.",
+      payload: "processingDuration: 250ms",
+    },
+    {
+      from: "main",
+      to: "screen",
+      label: "다음 프레임",
+      title: "스타일·레이아웃·페인트를 거쳐 그린다",
+      detail: "바뀐 DOM을 다시 계산해 그린다. DOM이 크거나 레이아웃을 넓게 무효화했다면 여기서도 시간이 든다. 이 구간이 표시 지연이다.",
+      payload: "presentationDelay: 60ms",
+    },
+    {
+      from: "screen",
+      to: "user",
+      label: "430ms",
+      title: "사용자가 결과를 본다",
+      detail: "120 + 250 + 60 = 430ms. 200ms를 넘었으니 이 상호작용은 '개선 필요'다. 네트워크 응답을 기다리는 시간은 들어가지 않는다. INP는 다음 화면이 그려질 때까지만 잰다.",
+    },
+  ]}
+/>
+
+마지막 단계에서 네트워크가 빠진다는 데 주목한다. 버튼을 누르고 서버 응답을 기다리는 동안 스피너라도 바로 그렸다면 INP는 짧다. INP가 재는 건 "무언가 반응했다"는 첫 시각적 피드백까지다.
+
+페이지 전체의 INP는 머무는 동안의 상호작용 중 가장 느린 것에 가깝다. 정확히는 상호작용 50번마다 가장 느린 것 하나를 빼고 그다음으로 느린 값을 쓴다. 오래 머물며 수백 번 누르는 페이지에서 우연한 한두 번 때문에 점수가 망가지지 않게 하려는 장치다. 스크롤과 마우스 올리기는 상호작용으로 치지 않는다.
+
+입력 지연을 만드는 주범은 긴 작업(long task)이다. 메인 스레드를 50ms 넘게 붙잡는 작업을 말한다. 50ms라는 숫자는, 사용자가 100ms 안의 반응을 즉각적이라고 느낀다는 연구에서 나왔다. 작업이 50ms 안에 끝나면 그 사이에 들어온 입력도 남은 50ms 안에 처리할 수 있다. 개발자 도구 Performance 패널에서 오른쪽 위에 빨간 삼각형이 붙은 회색 막대가 긴 작업이다.
+
+## 긴 작업을 쪼개서 양보하기
+
+긴 작업을 짧게 만들 수 없다면 쪼갠다. 작업 중간에 메인 스레드를 한 번 내려놓으면, 그 사이에 브라우저가 쌓인 입력을 처리하고 화면을 그릴 수 있다. 이걸 양보(yield)라고 한다.
+
+```js
+function yieldToMain() {
+  if (globalThis.scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function onAddToCart() {
+  updateCartBadge(); // 눈에 보이는 반응을 먼저
+  await yieldToMain(); // 여기서 한 번 그릴 기회를 준다
+  saveToStorage();
+  sendAnalytics();
+}
+```
+
+`scheduler.yield()`는 크롬 129부터 쓸 수 있다. `setTimeout`으로 양보하면 이어지는 작업이 태스크 큐 맨 뒤로 가서 다른 스크립트에 새치기당할 수 있는데, `scheduler.yield()`는 양보한 작업을 앞쪽에 다시 넣어 준다. 지원하지 않는 브라우저를 위해 위처럼 `setTimeout`으로 물러선다. React라면 급하지 않은 상태 변경을 `startTransition`으로 감싸서 렌더링을 끊어 갈 수 있게 한다.
+
+처리 시간 자체를 키우는 흔한 실수는 레이아웃 스래싱(layout thrashing)이다. 스타일을 바꾼 직후에 `offsetWidth`나 `getBoundingClientRect()` 같은 크기 값을 읽으면, 브라우저는 정확한 값을 주려고 그 자리에서 레이아웃을 다시 계산한다. 이걸 반복문 안에서 하면 레이아웃을 수백 번 한다.
+
+```js
+// 읽고 쓰고, 읽고 쓰고: 매번 강제 레이아웃
+for (const card of cards) {
+  card.style.height = `${container.offsetWidth / 2}px`;
+}
+
+// 먼저 다 읽고, 그다음 다 쓴다: 레이아웃은 한 번
+const half = container.offsetWidth / 2;
+for (const card of cards) {
+  card.style.height = `${half}px`;
+}
+```
+
+표시 지연은 DOM 크기와 렌더링 범위에 달렸다. 노드가 수천 개면 작은 변경도 스타일 계산이 오래 걸린다. 긴 목록은 가상 스크롤로 보이는 줄만 그리고, 화면 밖 영역은 `content-visibility: auto`로 렌더링을 미루는 방법이 있다. 계산이 무거운 일은 메인 스레드 밖, Web Worker로 옮긴다.
+
+## 화면이 밀리는 양을 재는 법
+
+기사를 읽다가 링크를 누르려는 순간 위에 광고가 들어오면서 글이 밀리고, 엉뚱한 링크를 누른다. CLS는 이 밀림을 숫자로 만든다.
+
+밀림 하나의 점수는 영향 비율 × 거리 비율이다. 영향 비율은 움직인 요소가 이동 전후에 차지한 영역을 합친 것이 화면에서 차지하는 비율이고, 거리 비율은 가장 많이 움직인 거리를 화면의 긴 변으로 나눈 값이다. 화면 높이의 절반을 차지하는 요소가 화면 높이의 25%만큼 아래로 밀렸다면, 이동 전후 영역을 합쳐 화면의 75%를 덮으니 0.75 × 0.25 = 0.1875다. 이 밀림 하나로 이미 "개선 필요"다.
+
+사용자가 누르거나 키를 입력한 뒤 500ms 안에 일어난 밀림은 세지 않는다. 아코디언을 펼치면 아래 내용이 밀리는 건 사용자가 기대한 움직임이기 때문이다. `transform`으로 움직이는 애니메이션도 레이아웃을 바꾸지 않으니 세지 않는다. 반대로 `top`이나 `margin`을 바꾸는 애니메이션은 매 프레임 밀림으로 잡힌다.
+
+원인은 대개 넷 중 하나다.
+
+- 크기를 모르는 이미지와 영상. `width`·`height` 속성이나 CSS `aspect-ratio`가 없으면 파일이 도착하는 순간 자리가 생기면서 아래가 밀린다.
+- 광고, 임베드, iframe. 높이가 응답에 따라 달라지니, 가장 흔한 크기로 `min-height`를 잡아 둔다. 광고가 안 나왔다고 그 자리를 접어 버리면 그것도 밀림이다.
+- 나중에 끼워 넣는 내용. 쿠키 동의 띠나 "앱으로 보기" 배너를 콘텐츠 위에 밀어 넣으면 전체가 내려간다. 겹쳐 띄우거나(position: fixed) 자리를 미리 둔다.
+- 늦게 오는 웹 폰트. `font-display: swap`이면 대체 폰트로 먼저 그렸다가 웹 폰트로 바꾸는데, 두 폰트의 글자 폭과 줄 높이가 다르면 문단 길이가 바뀐다. 대체 폰트의 `@font-face`에 `size-adjust`, `ascent-override`를 줘서 크기를 맞추거나, 첫 방문에는 대체 폰트를 그대로 쓰는 `font-display: optional`을 고른다. Next.js의 `next/font`는 대체 폰트 크기 맞추기를 자동으로 해 준다.
+
+## 밀림을 세션 창으로 묶어 센다
+
+이름에 "누적"이 들어가 있지만, 지금의 CLS는 페이지에 머문 동안의 밀림을 전부 더한 값이 아니다. 예전에는 다 더했는데, 그러면 무한 스크롤 피드나 몇 시간씩 열어 두는 앱이 오래 머물수록 점수가 끝없이 나빠졌다. 그래서 2021년부터는 밀림을 세션 창(session window)으로 묶는다. 앞 밀림과 1초 넘게 떨어지면 새 창을 열고, 한 창은 최대 5초까지만 이어진다. 그리고 가장 큰 창의 합이 CLS다.
+
+아래 그림에서 칸은 밀림이 일어난 시각이다. 다음을 누르며 창이 어떻게 묶이는지 보자.
+
+<AlgoTrace
+  caption="밀림 여섯 번의 합은 0.23이지만 CLS는 0.12다"
+  memoryLabel="세션 창"
+  cells={["0.3s", "0.8s", "1.5s", "4.0s", "4.6s", "9.0s"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["창1 0.05"],
+      caption: "0.3초에 0.05만큼 밀린다. 첫 밀림이니 창 1을 연다.",
+    },
+    {
+      pointer: 1,
+      memory: ["창1 0.08"],
+      caption: "0.8초에 0.03. 앞 밀림과 0.5초 차이라 같은 창에 더한다.",
+    },
+    {
+      pointer: 2,
+      memory: ["창1 0.10"],
+      caption: "1.5초에 0.02. 0.7초 차이라 아직 창 1이다. 합이 0.10이다.",
+    },
+    {
+      pointer: 3,
+      memory: ["창1 0.10", "창2 0.08"],
+      caption: "4.0초에 0.08. 앞 밀림과 2.5초나 떨어졌으니 창 1을 닫고 창 2를 연다.",
+    },
+    {
+      pointer: 4,
+      memory: ["창1 0.10", "창2 0.12"],
+      caption: "4.6초에 0.04. 창 2에 더해 0.12가 된다.",
+    },
+    {
+      pointer: 5,
+      memory: ["창1 0.10", "창2 0.12", "창3 0.01"],
+      caption: "9.0초에 0.01. 또 멀리 떨어졌으니 창 3을 연다.",
+    },
+    {
+      found: [3, 4],
+      memory: ["창2 0.12"],
+      caption: "가장 큰 창은 창 2다. CLS는 0.12로, 0.1을 넘어 '개선 필요'다. 고칠 곳은 4초 무렵의 두 밀림이다.",
+    },
+  ]}
+/>
+
+마지막 단계가 실무에서 쓸모 있다. CLS를 줄이려면 모든 밀림을 쫓을 필요 없이, 가장 큰 창을 만든 밀림부터 잡으면 된다. 같은 규칙을 직접 짜 보면 경계 조건이 눈에 들어온다. 인자는 `[시각(초), 점수]` 쌍의 배열이고 시각 순으로 정렬되어 있다. 소수 넷째 자리로 반올림해 돌려준다.
+
+<CodePlayground
+  caption="세션 창으로 CLS 계산하기"
+  functionName="cls"
+  initialCode={`function cls(shifts) {\n  // shifts: [[시각(초), 점수], ...]\n  // 앞 밀림과 1초 이상 떨어지거나, 창이 시작된 지 5초가 넘으면 새 창\n  return 0;\n}`}
+  solution={`function cls(shifts) {\n  let max = 0;\n  let sum = 0;\n  let first = null;\n  let last = null;\n  for (const [t, score] of shifts) {\n    if (first !== null && t - last < 1 && t - first < 5) {\n      sum += score;\n    } else {\n      sum = score;\n      first = t;\n    }\n    last = t;\n    max = Math.max(max, sum);\n  }\n  return Math.round(max * 10000) / 10000;\n}`}
+  tests={[
+    { label: "그림의 예", args: [[[0.3, 0.05], [0.8, 0.03], [1.5, 0.02], [4.0, 0.08], [4.6, 0.04], [9.0, 0.01]]], expected: 0.12 },
+    { label: "밀림 없음", args: [[]], expected: 0 },
+    { label: "큰 밀림 하나", args: [[[0, 0.2]]], expected: 0.2 },
+    { label: "1.2초 간격", args: [[[0, 0.06], [1.2, 0.06]]], expected: 0.06 },
+    { label: "5초 상한", args: [[[0, 0.04], [0.9, 0.04], [1.8, 0.04], [2.7, 0.04], [3.6, 0.04], [4.5, 0.04], [5.4, 0.04]]], expected: 0.24 },
+  ]}
+/>
+
+마지막 테스트는 0.9초 간격으로 일곱 번 밀린다. 간격만 보면 전부 한 창이지만, 5.4초의 밀림은 창이 시작된 지 5초를 넘겼으니 새 창으로 간다. 그래서 0.28이 아니라 0.24다.
+
+## 실제 사용자 기기에서 모으기
+
+현장 데이터를 직접 모으면 CrUX가 알려 주지 않는 것까지 볼 수 있다. 어떤 요소가 LCP였는지, 어떤 버튼의 INP가 나빴는지다. `web-vitals`의 attribution 빌드는 앞에서 본 조각들을 그대로 계산해 준다.
+
+```js
+import { onCLS, onINP, onLCP } from "web-vitals/attribution";
+
+function send({ name, value, rating, id, attribution }) {
+  const body = JSON.stringify({ name, value, rating, id, attribution });
+  navigator.sendBeacon("/rum", body);
+}
+
+onLCP(send); // attribution.resourceLoadDelay, elementRenderDelay ...
+onINP(send); // attribution.inputDelay, processingDuration, presentationDelay ...
+onCLS(send); // attribution.largestShiftTarget ...
+```
+
+CLS와 INP는 페이지를 떠날 때까지 값이 바뀔 수 있어서, 라이브러리가 탭이 숨겨지는 순간(`visibilitychange`)에 보고한다. 페이지가 닫히는 중에도 전송이 살아남도록 `fetch` 대신 `sendBeacon`을 쓴다. 서버에서는 평균을 내지 말고 p75로 집계하고, 기기 종류와 페이지 유형별로 나눠 본다.
+
+실험실에서 원인을 찾을 때도 실제 기기에 가깝게 맞춘다. 개발자 도구의 CPU 4배·6배 감속은 고성능 노트북 CPU를 느리게 할 뿐이라 저가형 안드로이드의 열 제한이나 메모리 부족까지 흉내 내지는 못한다. 실제 안드로이드 폰을 USB로 연결해 `chrome://inspect`로 원격 디버깅하면 그 기기에서 Performance 기록을 뜰 수 있다. RUM 데이터에서 INP가 나쁜 기기 모델을 찾고, 그 급의 기기를 하나 구해 두는 게 가장 정직한 실험실이다.
+
+브라우저 지원도 범위를 알고 써야 한다. 이 지표들의 측정 API는 크롬 계열에서 먼저 나왔고, 다른 브라우저는 지원 여부와 시점이 지표마다 다르다. CrUX도 크롬 사용자만 담는다. iOS 사용자 비중이 큰 서비스라면 RUM 수치가 전체 사용자를 대표하지 않을 수 있다는 걸 염두에 둔다.
+
+## 점수보다 분포를 본다
+
+처음 장면의 Lighthouse 98점과 LCP 3.4초는 모순이 아니었다. 빠른 노트북에서 한 번 잰 실험 결과와, 느린 폰을 쓰는 사용자까지 포함한 28일치 분포의 75번째 값이다. 고칠 곳은 실험실이 아니라 현장 수치가 가리키고, 원인은 LCP 네 조각, INP 세 구간, 가장 큰 CLS 세션 창으로 쪼개서 찾는다. 쪼개 놓으면 "이미지를 압축하자" 같은 막연한 처방 대신 "사진 주소를 HTML에 넣자"처럼 정확한 처방이 나온다.
+
+## 면접에서 나올 만한 질문
+
+### Core Web Vitals의 세 지표와 기준을 설명해 주세요.
+
+LCP는 가장 큰 내용이 그려진 시점으로 로딩을, INP는 입력부터 다음 화면이 그려질 때까지로 반응성을, CLS는 예기치 않은 레이아웃 밀림으로 시각적 안정성을 잰다. 좋음 기준은 LCP 2.5초, INP 200ms, CLS 0.1 이하다. 평균이 아니라 실제 사용자 방문의 75번째 백분위수에 적용하고, 모바일과 데스크톱을 따로 본다.
+
+### 왜 평균이 아니라 p75를 쓰나요?
+
+평균은 빠른 기기 몇 개가 느린 사용자를 가려 버리고, 극단값 하나에도 크게 흔들린다. 중앙값은 절반의 사용자를 무시한다. p75는 대부분의 사용자가 겪는 수준을 보장하면서도 이상치에 덜 민감해서 기준선으로 쓴다.
+
+### FID가 INP로 바뀐 이유는요?
+
+FID는 첫 입력 하나의 대기 시간만 쟀다. 핸들러 실행 시간과 화면을 다시 그리는 시간, 두 번째 이후 입력이 모두 빠져 있어서 실제로 버벅이는 페이지도 통과했다. INP는 머무는 동안의 모든 클릭·탭·키 입력에서 입력 지연, 처리 시간, 표시 지연을 합친 전체 지연을 보고 가장 나쁜 쪽에 가까운 값을 쓴다. 2024년 3월에 교체됐다.
+
+### Lighthouse 점수는 좋은데 Search Console에서는 나쁘게 나옵니다. 왜 그런가요?
+
+Lighthouse는 정해진 조건에서 한 번 돌린 실험실 데이터이고, Search Console은 CrUX, 실제 크롬 사용자 28일치의 p75다. 실제 사용자는 더 느린 기기와 네트워크, 다른 캐시 상태, 광고나 로그인 상태를 겪는다. Lighthouse는 클릭을 하지 않아 INP도 재지 못하고 TBT로 대신한다. 판단은 현장 데이터로 하고, 원인 분석은 실험실에서 실제 기기 조건에 가깝게 맞춰서 한다.
+
+### LCP가 느리면 어떻게 진단하나요?
+
+먼저 LCP 요소가 무엇인지 찾고, 시간을 TTFB, 리소스 로드 지연, 리소스 로드 시간, 요소 렌더 지연 네 조각으로 나눈다. 로드 지연이 크면 이미지가 HTML에 없어 늦게 발견된 것이니 HTML에 직접 넣거나 preload하고 `fetchpriority="high"`를 준다. 로드 시간이 크면 크기와 포맷, CDN을, 렌더 지연이 크면 렌더링을 막는 CSS·JS와 클라이언트 렌더링을 본다. LCP 이미지에 `loading="lazy"`를 붙이는 실수도 자주 확인한다.
+
+### INP를 개선하려면 무엇을 하나요?
+
+입력 지연, 처리 시간, 표시 지연 중 어디가 큰지 먼저 본다. 입력 지연은 다른 긴 작업이 메인 스레드를 붙잡아서 생기니 50ms 넘는 작업을 쪼개고 `scheduler.yield()`나 `setTimeout`으로 양보한다. 처리 시간은 핸들러에서 눈에 보이는 업데이트만 먼저 하고 나머지는 뒤로 미루며, 레이아웃 스래싱을 없앤다. 표시 지연은 DOM 크기를 줄이고 긴 목록은 가상화한다.
+
+### 레이아웃 스래싱이 뭔가요?
+
+스타일을 바꾼 직후 `offsetWidth` 같은 기하 값을 읽으면 브라우저가 그 자리에서 레이아웃을 다시 계산해야 한다. 이 읽기·쓰기를 반복문 안에서 번갈아 하면 레이아웃을 매번 강제로 돌리게 된다. 읽기를 먼저 모아 하고 쓰기를 나중에 몰아서 하면 레이아웃은 한 번만 일어난다.
+
+### CLS는 어떻게 계산하고, 주로 무엇 때문에 나빠지나요?
+
+밀림 하나의 점수는 영향 비율 × 거리 비율이고, 1초 간격·최대 5초짜리 세션 창으로 묶어서 가장 큰 창의 합을 CLS로 쓴다. 사용자 입력 후 500ms 안의 밀림과 `transform` 애니메이션은 세지 않는다. 크기 없는 이미지, 자리를 잡지 않은 광고와 임베드, 기존 콘텐츠 위에 끼워 넣는 배너, 대체 폰트와 크기가 다른 웹 폰트가 주된 원인이다. 각각 `width`·`height`나 `aspect-ratio`, `min-height`, 겹쳐 띄우기, `size-adjust`나 `font-display: optional`로 막는다.

@@ -48,3 +48,16 @@ export function collectTags(posts: Post[]): TagCount[] {
 }
 
 export const postsWithTag = (posts: Post[], slug: string) => posts.filter((post) => post.tags.some((tag) => tagSlug(tag) === slug));
+
+// ---- 회사 라벨 ----
+
+/** 회사 이름을 태그 맨 앞에 붙인다(이미 있으면 그대로). 회사 라벨이 붙은 글을 해시태그·검색으로 모아 볼 수 있게 한다. */
+export function withCompanyTags(post: Post): Post {
+  if (!post.companies?.length) return post;
+  const companySlugs = new Set(post.companies.map(tagSlug));
+  return { ...post, tags: [...post.companies, ...post.tags.filter((tag) => !companySlugs.has(tagSlug(tag)))] };
+}
+
+/** 회사 라벨별 글 수. 많은 순(같으면 ABC 순). */
+export const collectCompanies = (posts: Post[]): TagCount[] =>
+  collectTags(posts.map((post) => ({ ...post, tags: post.companies ?? [] })));

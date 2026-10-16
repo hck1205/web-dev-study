@@ -21,7 +21,7 @@ export function TagPage() {
       <PageHeader
         eyebrow={<Link href="/tags">태그</Link>}
         title={`#${page.label}`}
-        lead={`글 ${page.posts.length}개`}
+        lead={page.isCompany ? `${page.label} 채용 공고에서 뽑은 주제 · 글 ${page.posts.length}개` : `글 ${page.posts.length}개`}
       />
       <PostItemList posts={page.posts} />
     </Container>

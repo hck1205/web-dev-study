@@ -8,6 +8,8 @@ export type { BadgeProps, BadgeTone } from "./components/badge";
 export { Button } from "./components/button";
 export type { ButtonProps } from "./components/button";
 export { Card } from "./components/card";
+export { ChoiceChip } from "./components/choice-chip";
+export type { ChoiceChipProps } from "./components/choice-chip";
 export { Container } from "./components/container";
 export { EmptyState } from "./components/empty-state";
 export { IconButton } from "./components/icon-button";

@@ -4,6 +4,7 @@ import { Container } from "@/common/design-system";
 import { Prose } from "@/common/components/mdx/prose";
 import { BookmarkButton } from "@/features/bookmarks/components/bookmark-button";
 import { QuizLink } from "@/features/quiz/components/quiz-link";
+import { CompanyLabels } from "../company-labels";
 import { DifficultyBadge } from "../difficulty-badge";
 import { PostTags } from "../post-tags";
 import { usePostLayout } from "./post-layout";
@@ -58,6 +59,7 @@ export function PostLayout({ children }: PostLayoutProps) {
                   <Crumbs aria-label="토픽 경로">
                     <CrumbLinks items={crumbs} />
                   </Crumbs>
+                  <CompanyLabels companies={post.companies} />
                   {post.difficulty && <DifficultyBadge difficulty={post.difficulty} />}
                 </BadgeRow>
                 <Title>{post.title}</Title>

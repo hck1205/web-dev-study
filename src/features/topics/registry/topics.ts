@@ -24,7 +24,17 @@ export const TOPICS: Topic[] = [
       },
       { id: "computer-science", label: "Computer Science", description: "컴퓨터 과학 기초 이론" },
       { id: "database", label: "Database", description: "RDB, NoSQL, 쿼리와 인덱스" },
-      { id: "frontend", label: "Frontend", description: "브라우저, 렌더링, React · Next.js" },
+      {
+        id: "frontend",
+        label: "Frontend",
+        description: "브라우저, 렌더링, React · Next.js",
+        children: [
+          { id: "architecture", label: "Architecture", description: "프런트엔드 구조 설계, 마이크로 프런트엔드" },
+          { id: "javascript", label: "JavaScript", description: "언어와 런타임, 이벤트 루프, 메모리" },
+          { id: "performance", label: "Performance", description: "웹 성능 지표, 로딩·렌더링 최적화" },
+          { id: "react", label: "React", description: "렌더링 모델, 상태, 렌더링 전략" },
+        ],
+      },
       { id: "network", label: "Network", description: "HTTP, TCP/IP, DNS, 캐시, 보안" },
       { id: "os", label: "OS", description: "프로세스, 스레드, 메모리, 파일 시스템" },
       {
@@ -54,7 +64,12 @@ export const TOPICS: Topic[] = [
     label: "자기개발",
     description: "개발 밖에서 성장하기 위한 기록",
     children: [
-      { id: "english", label: "English", description: "영어 학습" },
+      {
+        id: "english",
+        label: "English",
+        description: "영어 학습",
+        children: [{ id: "vocabulary", label: "어휘", description: "고급 영어 어휘 사전과 학습", href: "/vocabulary" }],
+      },
       { id: "ideas", label: "아이디어", description: "떠오른 생각과 만들고 싶은 것들" },
       { id: "history", label: "역사", description: "지난 일에서 배우는 이야기" },
       { id: "humanities", label: "인문학", description: "사람과 삶, 생각하는 법" },

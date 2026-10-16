@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { ALL_TAGS, POSTS, postsWithTag, sortByDateDesc, tagLabel } from "@/features/posts";
+import { ALL_COMPANIES, ALL_TAGS, POSTS, postsWithTag, sortByDateDesc, tagLabel } from "@/features/posts";
 
 export function useTagPage() {
   const params = useParams<{ tag?: string }>();
@@ -14,6 +14,7 @@ export function useTagPage() {
   return {
     found: true as const,
     label: tagLabel(found.tag),
+    isCompany: ALL_COMPANIES.some((company) => company.slug === slug),
     posts: sortByDateDesc(postsWithTag(POSTS, slug)),
   };
 }

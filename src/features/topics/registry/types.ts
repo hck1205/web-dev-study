@@ -4,6 +4,8 @@ export interface Topic {
   id: string;
   label: string;
   description?: string;
+  /** 글 목록 대신 별도 페이지로 가는 토픽(예: 어휘 사전)이면 그 주소. 메뉴와 토픽 링크가 이곳으로 간다 */
+  href?: string;
   children?: Topic[];
 }
 

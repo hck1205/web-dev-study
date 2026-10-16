@@ -1,0 +1,400 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("http-caching-cdn");
+
+배포를 마쳤는데 일부 사용자에게서 "아직 예전 화면이 보인다"는 말이 나온다. 강력 새로고침을 하면 새 화면이 나온다고 한다. 더 곤란한 쪽은 반대 경우다. 어떤 사용자는 흰 화면만 보는데, 콘솔에는 `GET /assets/chunk-8a1f.js 404`가 찍혀 있다. 예전 HTML이 이미 지워진 예전 JS 파일을 찾고 있는 것이다.
+
+두 증상 모두 같은 질문으로 돌아간다. 이 응답을 누가, 어디에, 얼마 동안 저장했고, 언제 서버에 다시 물어보는가. HTTP 캐시와 CDN이 그 질문에 답하는 방식을 순서대로 보자.
+
+## 응답은 여러 곳에 복사된다
+
+주소창에 주소를 치고 화면이 뜨기까지의 과정은 [google.com을 입력하면 일어나는 일](/posts/what-happens-google-com)에서 따라가 봤다. 거기서 HTTP 응답은 서버에서 브라우저로 한 번에 오는 것처럼 그렸지만, 실제로는 그 사이 여러 곳에 사본이 남는다.
+
+캐시는 크게 두 종류다. 브라우저 안의 캐시는 그 사용자 한 명만 쓴다. 이걸 개인 캐시(private cache)라고 한다. CDN이나 회사 프록시의 캐시는 여러 사용자가 같은 사본을 나눠 쓴다. 이걸 공유 캐시(shared cache)라고 한다. 이 구분이 중요한 이유는 간단하다. 내 주문 내역이 브라우저 캐시에 남는 건 괜찮지만, CDN에 남으면 다른 사람이 받아 갈 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="요청은 가까운 캐시부터 차례로 확인하고, 모두 비어 있을 때만 오리진까지 간다"
+  nodes={[
+    { id: "browser", label: "브라우저 캐시", sub: "개인 캐시", x: 90, y: 40, w: 130 },
+    { id: "edge", label: "CDN 엣지", sub: "공유 캐시", x: 90, y: 135, w: 130 },
+    { id: "shield", label: "오리진 실드", sub: "공유 캐시", x: 90, y: 230, w: 130 },
+    { id: "origin", label: "오리진", sub: "웹 서버·S3", x: 320, y: 230, w: 120 },
+    { id: "other", label: "다른 사용자", x: 320, y: 135, w: 120 },
+  ]}
+  edges={[
+    { from: "browser", to: "edge", label: "미스" },
+    { from: "other", to: "edge", label: "같은 사본" },
+    { from: "edge", to: "shield", label: "미스" },
+    { from: "shield", to: "origin", label: "미스" },
+  ]}
+/>
+
+CDN(Content Delivery Network)은 사용자 가까운 곳에 서버(엣지, PoP)를 깔아 두고 응답 사본을 저장하는 공유 캐시의 묶음이다. 서울 사용자가 미국 서버의 이미지를 받을 때, 서울 엣지에 사본이 있으면 태평양을 건너지 않는다. 지연이 줄고, 오리진(원래 응답을 만드는 서버)이 받는 요청도 줄어든다. 엣지가 수백 곳이면 각 엣지가 따로 오리진에 묻기 때문에, 그 사이에 실드(shield)라는 캐시 한 층을 더 두어 오리진으로 가는 요청을 한 곳으로 모으기도 한다. CloudFront에서는 Origin Shield라는 옵션이 이 역할을 한다.
+
+## 신선한 동안은 묻지도 않는다
+
+캐시가 사본을 꺼내 쓸지 정하는 기준은 신선도(freshness)다. 응답이 "이 사본은 600초 동안 믿고 써도 된다"고 알려 주면, 그 시간 안에는 서버에 아무것도 묻지 않고 바로 쓴다. 네트워크 요청 자체가 없다. 개발자 도구 네트워크 탭에서 `(disk cache)`나 `(memory cache)`로 표시되는 게 이 경우다.
+
+신선도는 두 숫자를 비교해서 정한다. 사본이 믿을 만한 시간(freshness lifetime)과 사본의 나이(age)다. 나이가 시간보다 작으면 신선하고, 같거나 크면 상한(stale) 것이다.
+
+여기서 나이는 브라우저가 받은 뒤 흐른 시간만이 아니다. CDN이 응답을 540초 동안 들고 있다가 내주면 `Age: 540` 헤더가 붙는다. 브라우저는 이 값을 나이에 더한다. `max-age=600`이어도 이 응답은 브라우저에서 60초 뒤에 상한다. 캐시가 겹겹이 있어도 사본의 유통기한은 처음 만들어진 시점부터 하나로 이어진다.
+
+응답에 유통기한이 아예 없으면 어떻게 될까. `Cache-Control`도 `Expires`도 없고 `Last-Modified`만 있으면, 캐시는 스스로 기한을 추측해도 된다(heuristic freshness). 흔한 구현은 마지막 수정 후 흐른 시간의 10%다. 열흘 전에 수정된 파일이면 하루 동안 신선하다고 본다. 아무 헤더도 안 붙였는데 배포한 파일이 하루 동안 안 바뀌는 이유가 이것일 때가 있다. 그래서 캐시를 원하든 원하지 않든 `Cache-Control`은 명시하는 편이 낫다.
+
+아래 함수는 이 판단을 흉내 낸다. `Cache-Control` 값과 사본의 나이(초), 공유 캐시인지 여부를 받아 바로 쓸지(`"fresh"`), 서버에 물어볼지(`"revalidate"`), 저장조차 못 하는지(`"no-store"`)를 돌려준다. 다음 섹션에서 볼 지시어 몇 개가 들어 있으니 그걸 읽은 뒤에 고쳐 봐도 좋다.
+
+<CodePlayground
+  caption="이 사본, 지금 써도 될까"
+  functionName="cacheDecision"
+  initialCode={`function cacheDecision(cacheControl, age, shared) {
+  // cacheControl: "public, max-age=60, s-maxage=600" 같은 문자열
+  // age: 사본의 나이(초), shared: CDN 같은 공유 캐시면 true
+  // 반환: "fresh" | "stale-while-revalidate" | "revalidate" | "no-store"
+  return "revalidate";
+}`}
+  solution={`function cacheDecision(cacheControl, age, shared) {
+  const d = {};
+  for (const part of cacheControl.toLowerCase().split(",")) {
+    const [key, value] = part.trim().split("=");
+    if (key) d[key] = value === undefined ? true : Number(value);
+  }
+  if (d["no-store"]) return "no-store";
+  if (shared && d["private"]) return "no-store";
+  if (d["no-cache"]) return "revalidate";
+
+  // 공유 캐시는 s-maxage가 있으면 그것을 먼저 쓴다
+  const lifetime = shared && d["s-maxage"] !== undefined ? d["s-maxage"] : d["max-age"];
+  if (lifetime === undefined) return "revalidate";
+  if (age < lifetime) return "fresh";
+
+  const swr = d["stale-while-revalidate"];
+  if (swr !== undefined && age < lifetime + swr) return "stale-while-revalidate";
+  return "revalidate";
+}`}
+  tests={[
+    { label: "max-age=3600, 나이 120", args: ["max-age=3600", 120, false], expected: "fresh" },
+    { label: "max-age=3600, 나이 3600", args: ["max-age=3600", 3600, false], expected: "revalidate" },
+    { label: "CDN은 s-maxage를 본다", args: ["public, max-age=60, s-maxage=600", 300, true], expected: "fresh" },
+    { label: "브라우저는 max-age를 본다", args: ["public, max-age=60, s-maxage=600", 300, false], expected: "revalidate" },
+    { label: "private는 CDN에 못 남는다", args: ["private, max-age=600", 10, true], expected: "no-store" },
+    { label: "no-cache는 매번 묻는다", args: ["no-cache", 0, false], expected: "revalidate" },
+    { label: "no-store가 이긴다", args: ["no-store, max-age=600", 0, false], expected: "no-store" },
+    { label: "swr 구간 안", args: ["max-age=60, stale-while-revalidate=30", 75, false], expected: "stale-while-revalidate" },
+    { label: "swr 구간 밖", args: ["max-age=60, stale-while-revalidate=30", 95, false], expected: "revalidate" },
+    { label: "대소문자 무시", args: ["Max-Age=31536000, Immutable", 86400, false], expected: "fresh" },
+  ]}
+/>
+
+실제 캐시는 여기에 `Expires`, 추측 기한, `must-revalidate` 같은 규칙을 더 얹지만 뼈대는 이 비교 하나다.
+
+## Cache-Control 한 줄 뜯어 보기
+
+신선도와 저장 규칙은 응답의 `Cache-Control` 헤더로 정한다. 아래는 자주 쓰는 지시어를 한 줄에 모아 둔 것이다. 실제 응답에 이걸 다 쓰지는 않고, 서로 부딪히는 것도 섞여 있다. 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="한 응답에 다 쓰지는 않는다. 자주 쓰는 지시어를 모아 봤다."
+  base="Cache-Control:"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "max-age",
+      value: "600",
+      title: "신선한 시간(초)",
+      description: "응답이 만들어진 뒤 600초 동안은 서버에 묻지 않고 쓴다. 브라우저와 CDN 모두에 적용된다. 옛 헤더인 Expires(절대 시각)보다 우선한다.",
+    },
+    {
+      key: "s-maxage",
+      value: "3600",
+      title: "공유 캐시만의 신선한 시간",
+      description: "CDN 같은 공유 캐시는 max-age 대신 이 값을 쓴다. 브라우저는 무시한다. 브라우저에는 짧게, CDN에는 길게 두고 배포 때 CDN만 무효화하는 구성에 쓴다.",
+      code: "Cache-Control: public, max-age=0, s-maxage=3600",
+    },
+    {
+      key: "no-cache",
+      title: "저장은 하되 쓸 때마다 묻는다",
+      description: "이름과 달리 캐시하지 말라는 뜻이 아니다. 저장은 해 두고, 쓰기 전에 매번 서버에 아직 유효한지 확인(재검증)하라는 뜻이다. 바뀌지 않았으면 304로 본문 없이 끝나서 대역폭을 아낀다. HTML에 자주 쓴다.",
+    },
+    {
+      key: "no-store",
+      title: "아예 저장하지 않는다",
+      description: "어떤 캐시도 사본을 남기면 안 된다. 계좌 내역처럼 디스크에 남는 것 자체가 문제인 응답에 쓴다. 다른 지시어와 같이 있으면 이게 이긴다.",
+    },
+    {
+      key: "private",
+      title: "브라우저에만 저장",
+      description: "개인 캐시만 저장할 수 있고 CDN·프록시는 저장하지 않는다. 로그인한 사용자에게 맞춘 페이지에 붙인다.",
+    },
+    {
+      key: "public",
+      title: "공유 캐시도 저장해도 된다",
+      description: "보통은 안 써도 max-age만 있으면 공유 캐시가 저장한다. 차이는 Authorization 헤더가 실린 요청의 응답이다. 공유 캐시는 원래 이런 응답을 저장하지 않는데, public(또는 s-maxage)이 있으면 저장한다. 인증 API에 습관적으로 public을 붙이면 위험한 이유다.",
+    },
+    {
+      key: "immutable",
+      title: "신선한 동안은 새로고침해도 묻지 않는다",
+      description: "내용이 절대 바뀌지 않는 파일(이름에 해시가 든 정적 파일)에 붙인다. 사용자가 새로고침해도 재검증 요청을 보내지 않는다. 파이어폭스와 사파리가 이 지시어를 지킨다. 크롬은 지시어를 따로 구현하지 않았지만, 일반 새로고침에서 신선한 하위 자원을 재검증하지 않도록 바뀌어서 결과가 비슷하다.",
+      code: "Cache-Control: public, max-age=31536000, immutable",
+    },
+    {
+      key: "stale-while-revalidate",
+      value: "60",
+      title: "상한 뒤 60초는 일단 주고 뒤에서 갱신",
+      description: "신선한 시간이 지난 뒤 60초 안의 요청에는 상한 사본을 바로 내주고, 그 사이 뒤에서 서버에 새 응답을 받아 둔다. 사용자는 기다리지 않는다. 최신 브라우저 대부분과 여러 CDN(CloudFront 포함)이 지원하지만, 쓰려는 CDN에서 지원하는지는 확인해야 한다.",
+      code: "Cache-Control: max-age=60, stale-while-revalidate=60",
+    },
+    {
+      key: "must-revalidate",
+      title: "상한 사본은 절대 그냥 쓰지 않는다",
+      description: "캐시는 오리진이 죽었을 때 상한 사본이라도 내주는 경우가 있다. 이 지시어가 있으면 상하면 반드시 재검증해야 하고, 오리진에 닿지 못하면 504 에러를 낸다. 틀린 값을 보여 주느니 에러가 낫다는 응답에 쓴다.",
+    },
+  ]}
+/>
+
+헷갈리기 가장 쉬운 짝이 `no-cache`와 `no-store`다. `no-cache`는 "쓸 때마다 확인해", `no-store`는 "저장하지 마"다. 성능을 생각하면 대부분의 경우 `no-cache`가 맞다. 확인 요청은 가지만 바뀐 게 없으면 본문을 다시 받지 않기 때문이다. `no-store`는 저장 자체가 보안 문제일 때만 쓴다. 뒤로 가기 캐시(bfcache) 같은 브라우저 최적화도 `no-store` 페이지에는 적용되지 않는 경우가 있어서, 아무 데나 붙이면 사이트 전체가 느려진다.
+
+## 상한 사본이 아직 맞는지 묻기
+
+신선한 시간이 지났다고 사본이 틀린 건 아니다. 내용은 그대로일 수 있다. 그래서 캐시는 사본을 버리지 않고 서버에 "내가 가진 이 버전이 아직 최신이냐"고 묻는다. 이걸 재검증(revalidation)이라고 하고, 묻는 데 쓰는 값을 검증자(validator)라고 한다.
+
+검증자는 두 가지다. `ETag`는 서버가 응답 내용마다 붙이는 버전 표식이다. 보통 내용의 해시나 파일 크기와 수정 시각으로 만든다. `Last-Modified`는 마지막으로 바뀐 시각이다. 캐시는 이 값을 기억했다가 다음 요청에 `If-None-Match`(ETag)나 `If-Modified-Since`(시각)로 보낸다. 서버가 보기에 그대로면 본문 없이 `304 Not Modified`를 돌려준다.
+
+아래 그림은 CDN을 사이에 둔 흐름이다. 처음 요청은 끝까지 가고, 두 번째 사용자는 엣지에서 끝나고, 시간이 지나 상한 뒤에는 304로 사본을 되살린다.
+
+<SequenceDiagram
+  caption="미스, 히트, 그리고 304로 되살리기"
+  actors={[
+    { id: "a", label: "브라우저 A" },
+    { id: "b", label: "브라우저 B" },
+    { id: "edge", label: "CDN 엣지" },
+    { id: "origin", label: "오리진" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "edge",
+      label: "GET /main.css",
+      title: "브라우저 A가 처음 요청한다",
+      detail: "A의 브라우저 캐시에는 아무것도 없다. 가장 가까운 CDN 엣지로 요청이 간다.",
+      payload: "GET /main.css HTTP/2\nHost: www.example.com",
+    },
+    {
+      from: "edge",
+      to: "origin",
+      label: "미스",
+      title: "엣지에도 없으니 오리진에 묻는다",
+      detail: "캐시 키(호스트 + 경로)에 맞는 사본이 없다. 이걸 캐시 미스라고 한다.",
+    },
+    {
+      from: "origin",
+      to: "edge",
+      label: "200 + ETag",
+      title: "오리진이 본문과 캐시 규칙을 함께 보낸다",
+      detail: "공유 캐시에서는 10분, 브라우저에서는 1분 쓰라고 알려 주고, 버전 표식인 ETag를 붙인다.",
+      payload: "HTTP/2 200\nCache-Control: public, max-age=60, s-maxage=600\nETag: \"5f2a9c\"\nContent-Length: 48213",
+    },
+    {
+      from: "edge",
+      to: "a",
+      label: "200 Miss",
+      title: "엣지가 사본을 저장하고 A에게 넘긴다",
+      detail: "엣지는 이 응답을 저장한다. 이번 응답은 오리진에서 막 가져온 것이라 미스로 표시된다.",
+      payload: "HTTP/2 200\nX-Cache: Miss from cloudfront\nETag: \"5f2a9c\"",
+    },
+    {
+      from: "b",
+      to: "edge",
+      label: "GET /main.css",
+      title: "2분 뒤 다른 사용자가 같은 파일을 요청한다",
+      detail: "B는 A와 다른 사람이지만 캐시 키가 같다. 공유 캐시라서 A 때 저장한 사본을 쓸 수 있다.",
+    },
+    {
+      from: "edge",
+      to: "b",
+      label: "200 Hit",
+      title: "오리진에 가지 않고 바로 응답한다",
+      detail: "s-maxage 600초 중 120초가 지났으니 신선하다. Age 헤더로 사본의 나이를 알려 준다. B의 브라우저는 이 나이를 반영해서 max-age 60초가 이미 지난 것으로 본다. 다음에 B가 이 파일을 쓸 때는 바로 재검증부터 한다.",
+      payload: "HTTP/2 200\nAge: 120\nX-Cache: Hit from cloudfront",
+    },
+    {
+      from: "edge",
+      to: "origin",
+      label: "If-None-Match",
+      title: "15분 뒤, 상한 사본을 들고 묻는다",
+      detail: "s-maxage가 지났다. 엣지는 사본을 버리지 않고, 가지고 있는 ETag로 아직 같은지 묻는다.",
+      payload: "GET /main.css HTTP/2\nIf-None-Match: \"5f2a9c\"",
+    },
+    {
+      from: "origin",
+      to: "edge",
+      label: "304",
+      title: "그대로라는 답은 본문 없이 온다",
+      detail: "파일이 바뀌지 않았으니 48KB 본문 대신 헤더만 온다. 엣지는 사본의 나이를 0으로 되돌리고 다시 10분 동안 쓴다.",
+      payload: "HTTP/2 304 Not Modified\nCache-Control: public, max-age=60, s-maxage=600\nETag: \"5f2a9c\"",
+    },
+    {
+      from: "edge",
+      to: "a",
+      label: "200 RefreshHit",
+      title: "그때 요청한 사용자는 저장된 본문을 받는다",
+      detail: "CloudFront는 재검증으로 되살린 사본을 RefreshHit으로 표시한다. 브라우저가 직접 If-None-Match를 보냈다면 엣지도 304로 답할 수 있다.",
+      payload: "HTTP/2 200\nX-Cache: RefreshHit from cloudfront",
+    },
+  ]}
+/>
+
+둘 다 있으면 `ETag`가 우선한다. `Last-Modified`는 초 단위라서 1초 안에 두 번 바뀌면 구분하지 못하고, 내용은 같은데 배포 때 파일 시각만 바뀌어도 바뀐 것으로 본다. ETag에도 함정이 있다. 로드밸런서 뒤의 서버들이 같은 파일에 서로 다른 ETag를 만들면(예전 아파치처럼 파일 inode를 섞어 만들면) 요청이 다른 서버로 갈 때마다 304가 아니라 200이 나간다. `W/"5f2a9c"`처럼 앞에 `W/`가 붙은 약한 ETag는 "의미상 같다"는 뜻이라, 압축 방식만 다른 응답에 같은 값을 줄 때 쓴다.
+
+## 무엇을 같은 요청으로 보나
+
+캐시가 사본을 찾을 때 쓰는 이름표가 캐시 키다. 기본은 메서드와 URL(스킴, 호스트, 경로, 쿼리)이다. 쿼리가 키에 들어간다는 게 생각보다 자주 문제가 된다. `/main.css?utm_source=mail`과 `/main.css`는 다른 키라서, 광고 파라미터가 붙을 때마다 미스가 난다. 반대로 `?v=2`를 붙여 캐시를 깨는 방법이 통하는 것도 같은 이유다. CDN에서는 캐시 키에 어떤 쿼리를 넣을지 고르고, 순서를 정렬해 같은 키로 모으는 설정이 있다.
+
+같은 URL인데 요청에 따라 응답이 다르면 어떻게 할까. 압축이 대표적이다. `Accept-Encoding: br`을 보낸 브라우저에는 브로틀리 응답을, 압축을 모르는 클라이언트에는 원본을 줘야 한다. 이때 서버는 `Vary: Accept-Encoding`을 붙인다. 캐시에 "이 응답은 요청의 Accept-Encoding 값까지 키에 넣어서 따로 보관하라"고 알리는 것이다. CORS에서 `Vary: Origin`을 붙이는 이유도 같다.
+
+`Vary`는 키를 쪼개는 만큼 적중률을 떨어뜨린다. `Vary: User-Agent`를 붙이면 브라우저 버전마다 사본이 따로 생겨 사실상 캐시가 안 된다. `Vary: Cookie`도 사용자마다 쿠키가 다르니 마찬가지다. CDN마다 Vary를 다루는 방식도 다르다. CloudFront는 캐시 키에 어떤 헤더, 쿠키, 쿼리 문자열을 넣을지를 캐시 정책(cache policy)에서 따로 정하고, 키에 넣은 값만 오리진으로 넘기도록 구성하는 게 기본이다.
+
+## 이름에 해시를 넣으면 영원히 캐시할 수 있다
+
+이제 처음 장면을 풀 수 있다. 정적 파일을 오래 캐시하고 싶지만, 오래 캐시하면 배포 뒤에 옛 파일이 남는다. 이 둘을 동시에 만족시키는 방법이 파일 이름에 내용 해시를 넣는 것이다.
+
+빌드 도구는 `main.css`를 `main.3f9c2b1e.css`처럼 내용의 해시가 든 이름으로 내보낸다. 내용이 한 글자라도 바뀌면 이름이 바뀐다. 이름이 같으면 내용도 같다는 보장이 생기니, 이런 파일은 1년(`max-age=31536000`)에 `immutable`을 붙여 다시는 묻지 않게 해도 된다. 바뀐 내용은 새 이름, 즉 새 캐시 키로 받아 간다.
+
+대신 그 이름들을 담고 있는 HTML은 짧게 캐시해야 한다. HTML이 옛날 것이면 옛 파일 이름을 가리키기 때문이다. 보통 HTML에는 `no-cache`를 주고 ETag로 재검증하게 한다. 서버 부하가 걱정되면 브라우저에는 `max-age=0`, CDN에는 `s-maxage=60` 정도를 주고 배포 때 CDN의 HTML만 무효화한다.
+
+```
+/index.html               Cache-Control: no-cache
+/assets/main.3f9c2b1e.css  Cache-Control: public, max-age=31536000, immutable
+/assets/chunk-8a1f.js      Cache-Control: public, max-age=31536000, immutable
+```
+
+처음 장면의 두 증상은 이 규칙이 깨진 경우다. "예전 화면이 보인다"는 HTML이 길게 캐시된 경우다. HTML에 `max-age=3600`을 줬다면 배포 후 한 시간 동안 일부 사용자는 옛 HTML을 본다. 흰 화면은 반대로 옛 HTML을 들고 있는 사용자가 있는데 배포에서 옛 파일을 지워 버린 경우다. 이미 페이지를 열어 둔 사용자가 나중에 다른 화면으로 이동하면, 지연 로딩되는 옛 청크를 요청하다 404를 받는다. 그래서 배포할 때 옛 정적 파일을 바로 지우지 않고 며칠 남겨 두는 게 안전하다. S3에 올린다면 새 파일을 먼저 올리고, HTML을 마지막에 바꾸고, 옛 파일은 수명 주기 규칙으로 나중에 지운다.
+
+## 엣지에서 기한을 정하는 쪽은 누구인가
+
+CDN은 오리진의 `Cache-Control`을 따르는 게 기본이지만, CDN 쪽 설정이 그 위에 겹친다. CloudFront의 캐시 정책에는 최소·기본·최대 TTL이 있다. 오리진이 보낸 `max-age`나 `s-maxage`는 최소와 최대 사이로 잘리고, 오리진이 아무 지시어도 보내지 않으면 기본 TTL을 쓴다. AWS의 관리형 정책인 CachingOptimized는 기본 TTL이 하루(86400초)라서, 헤더 없이 내보낸 HTML이 엣지에 하루 동안 남는 일이 생긴다.
+
+그래서 "CDN이 안 바뀐다"는 문제를 볼 때는 두 군데를 같이 본다. 오리진이 무엇을 보냈는지, 그리고 CDN 정책이 그걸 어떻게 덮어썼는지다. 엣지에서 오래 두고 브라우저에서는 짧게 두고 싶다면 `s-maxage`와 `max-age`를 나눠 보내는 쪽이 정책을 건드리는 것보다 의도가 잘 드러난다.
+
+## 한꺼번에 만료되면 오리진이 몰린다
+
+인기 있는 페이지의 사본이 만료되는 순간을 생각해 보자. 초당 수천 개의 요청이 같은 키로 들어오는데 사본이 상했다. 캐시가 요청마다 따로 오리진에 묻는다면, 만료 직후 수천 개의 요청이 한꺼번에 오리진으로 쏟아진다. 이걸 캐시 스탬피드(cache stampede)라고 한다. 평소에는 캐시 덕에 버티던 오리진이 이 순간에 쓰러지고, 응답이 느려지니 사본은 더 늦게 채워지는 악순환이 생긴다.
+
+<SequenceDiagram
+  caption="같은 키의 미스를 하나로 합치면 오리진은 한 번만 일한다"
+  actors={[
+    { id: "users", label: "사용자 수천 명" },
+    { id: "edge", label: "CDN 엣지" },
+    { id: "origin", label: "오리진" },
+  ]}
+  steps={[
+    {
+      from: "users",
+      to: "edge",
+      label: "GET /ranking",
+      title: "사본이 만료된 순간 요청이 몰린다",
+      detail: "같은 1초 안에 수천 개의 요청이 같은 캐시 키로 들어온다. 사본은 방금 상했다.",
+    },
+    {
+      from: "edge",
+      to: "origin",
+      label: "요청 1개만",
+      title: "엣지가 미스를 하나로 합친다",
+      detail: "첫 요청만 오리진으로 보내고, 같은 키의 나머지 요청은 그 응답을 기다리게 줄 세운다. 요청 병합(request collapsing)이라고 한다.",
+    },
+    {
+      from: "origin",
+      to: "edge",
+      label: "200",
+      title: "오리진은 한 번만 응답을 만든다",
+      detail: "무거운 랭킹 계산이 수천 번이 아니라 한 번 일어난다.",
+      payload: "Cache-Control: public, s-maxage=30, stale-while-revalidate=30",
+    },
+    {
+      from: "edge",
+      to: "users",
+      label: "200 × 수천",
+      title: "기다리던 요청이 같은 응답을 받는다",
+      detail: "다음 만료 때 stale-while-revalidate가 있으면, 기다리게 하지도 않고 상한 사본을 주면서 뒤에서 한 번만 갱신한다.",
+    },
+  ]}
+/>
+
+막는 방법은 층마다 있다. CDN에서는 요청 병합과 `stale-while-revalidate`를 쓰고, 오리진 실드를 두어 엣지 수백 곳의 미스가 오리진에 따로 닿지 않게 한다. 다만 병합은 캐시할 수 있는 응답에만 의미가 있고, 쿠키를 키에 넣어 사용자마다 키가 다르면 합칠 대상이 없다. 애플리케이션 안의 Redis 같은 캐시라면 CDN이 대신해 주지 않으니 직접 짠다. 키를 다시 채우는 동안 락을 잡아 한 요청만 계산하게 하거나, 만료 시각에 무작위 오차(jitter)를 섞어 여러 키가 같은 순간에 만료되지 않게 하거나, 만료 직전에 확률적으로 미리 갱신한다.
+
+## 지우는 데도 시간이 걸린다
+
+엣지에 이미 들어간 사본을 TTL이 끝나기 전에 바꾸고 싶으면 무효화(invalidation, purge)를 요청한다. CloudFront에서는 `/index.html`이나 `/blog/*` 같은 경로를 넣어 무효화를 만든다. 매달 처음 1,000개 경로는 무료이고 그 뒤로는 경로마다 요금이 붙는다. 와일드카드 `/*`는 경로 하나로 센다. 전 세계 엣지에 퍼지는 데 시간이 걸려서, 버튼을 누르는 순간 바로 바뀌는 게 아니라 보통 몇 분 안에 반영된다.
+
+<Callout kind="warning" title="CDN을 비워도 브라우저 캐시는 그대로다">
+무효화는 CDN의 사본만 지운다. 이미 사용자 브라우저에 `max-age=86400`으로 들어간 응답은 서버가 지울 방법이 없고, 그 사용자가 하루 동안 옛 버전을 본다. 그래서 무효화에 기대는 설계보다, 바뀔 수 있는 파일은 브라우저 `max-age`를 짧게 두고 바뀌지 않는 파일은 이름을 바꾸는 설계가 먼저다.
+</Callout>
+
+무효화를 배포의 일부로 매번 `/*`에 거는 구성도 흔한데, 그러면 해시 이름이 붙은 파일까지 모든 엣지에서 다시 받아 가느라 배포 직후 오리진 요청이 튄다. 해시 파일은 무효화할 필요가 없으니 HTML과 해시 없는 몇 개 경로만 무효화하는 편이 낫다. Fastly처럼 응답에 태그(surrogate key)를 달아 두고 태그 단위로 지우는 기능을 주는 CDN도 있어서, "상품 42가 바뀌면 그 상품이 나온 페이지를 다 지운다" 같은 처리를 할 수 있다.
+
+## 사람마다 다른 페이지를 공유 캐시에 두면
+
+가장 비싼 캐시 사고는 개인화된 응답이 공유 캐시에 들어가는 것이다. 로그인한 A의 마이페이지가 CDN에 저장되면, 같은 URL을 요청한 B가 A의 이름과 주소를 받는다.
+
+특히 `Set-Cookie`가 위험하다. HTTP 캐시 명세(RFC 9111)는 `Set-Cookie`가 있다고 캐시를 막지 않는다고 적고 있다. 로그인 직후 응답에 세션 쿠키를 굽는 페이지가 `public, max-age=300`으로 나가면, 캐시가 그 쿠키까지 저장해 다른 사용자에게 내줄 수 있다. 그러면 B는 A의 세션으로 로그인된다. CDN마다 `Set-Cookie`가 붙은 응답을 저장하지 않거나 헤더를 떼어 내는 안전장치를 두기도 하지만, 그 동작에 기대지 않는다. 사용자마다 다른 응답에는 `private`(디스크에 남는 것도 싫다면 `no-store`)를 명시한다.
+
+경로로 속이는 공격도 있다. CDN이 "확장자가 `.css`면 캐시한다" 같은 규칙을 쓰고, 오리진은 `/account/profile.css`를 `/account/profile`과 같은 페이지로 처리한다고 하자. 공격자가 피해자에게 `/account/profile.css` 링크를 누르게 하면, 피해자의 개인 정보가 담긴 페이지가 정적 파일인 척 CDN에 저장되고 공격자가 같은 URL로 꺼내 간다. 웹 캐시 속임(web cache deception)이라고 부른다. 확장자가 아니라 오리진의 `Cache-Control`을 기준으로 캐시하고, 오리진은 없는 경로에 404를 돌려주면 막힌다.
+
+그렇다고 로그인 사용자가 있는 사이트는 CDN을 못 쓰는 건 아니다. 사람마다 같은 부분(상품 상세, 목록, 정적 파일)은 CDN에 캐시하고, 사람마다 다른 부분(장바구니 개수, 이름)은 브라우저가 따로 API로 받아 끼워 넣는다. 그 API 응답에 `private`나 `no-store`를 준다. 페이지 껍데기를 공유하고 개인 데이터만 따로 받는 구조다.
+
+## 응답 헤더로 확인한다
+
+캐시 문제는 짐작하지 말고 헤더를 보는 게 빠르다. `curl -I`로 헤더만 받아 보면 된다.
+
+```
+$ curl -sI https://www.example.com/assets/main.3f9c2b1e.css
+HTTP/2 200
+cache-control: public, max-age=31536000, immutable
+etag: "5f2a9c"
+age: 5130
+x-cache: Hit from cloudfront
+x-amz-cf-pop: ICN57-P1
+```
+
+`x-cache`가 `Hit`이면 엣지에서 끝났고, `Miss`면 오리진까지 갔고, `RefreshHit`이면 재검증해서 되살렸다. 이름은 CDN마다 달라서 Cloudflare는 `cf-cache-status`를 쓰고, 표준으로 정한 `Cache-Status` 헤더(RFC 9211)를 내보내는 곳도 있다. `age`는 그 사본이 캐시에 들어간 지 몇 초인지다. 배포했는데 `age`가 계속 커지고 있으면 그 사본은 배포 전 것이다. 같은 URL을 연달아 요청했는데 매번 `Miss`라면 캐시 키를 의심한다. 쿠키나 쿼리, `Vary`가 키를 쪼개고 있을 가능성이 크다.
+
+브라우저 쪽은 개발자 도구 네트워크 탭에서 본다. 상태가 `200 (disk cache)`면 서버에 묻지도 않았고, `304`면 재검증했고, 그냥 `200`이면 본문을 새로 받았다. 테스트할 때 "캐시 사용 중지"를 켜 두었는지 먼저 확인한다. 켜 두면 모든 요청이 캐시를 건너뛰어서, 캐시 동작을 확인하려던 실험이 의미가 없어진다.
+
+## 처음 장면을 다시 보면
+
+예전 화면이 보이던 건 HTML이 길게 캐시됐기 때문이고, 흰 화면은 옛 HTML이 가리키던 파일을 지웠기 때문이다. HTML은 `no-cache`로 매번 확인하게 하고, 해시가 든 정적 파일은 1년 `immutable`로 두고, 옛 파일은 한동안 남겨 두면 둘 다 사라진다. HTTP 캐시는 신선한 동안은 묻지 않고, 상하면 ETag로 물어 304로 되살리는 규칙이다. CDN은 그 규칙을 여러 사용자가 나눠 쓰는 공유 캐시라서, 사람마다 다른 응답만큼은 절대 들어가지 않게 막아야 한다.
+
+## 면접에서 나올 만한 질문
+
+### 브라우저 캐시와 CDN 캐시는 무엇이 다른가요?
+
+브라우저 캐시는 그 사용자 한 명만 쓰는 개인 캐시이고, CDN은 여러 사용자가 같은 사본을 나눠 쓰는 공유 캐시다. 그래서 `private` 응답은 브라우저에만 저장되고, `s-maxage`는 공유 캐시에만 적용된다. 개인화된 응답이 공유 캐시에 들어가면 다른 사용자에게 노출되므로 이 구분이 보안과 직결된다.
+
+### no-cache와 no-store의 차이는요?
+
+`no-cache`는 저장은 하되 쓰기 전에 매번 서버에 재검증하라는 뜻이고, `no-store`는 아예 저장하지 말라는 뜻이다. `no-cache`는 바뀌지 않았으면 304로 본문 없이 끝나서 대역폭을 아끼므로 HTML에 잘 맞는다. `no-store`는 민감한 데이터처럼 저장 자체가 문제일 때만 쓴다.
+
+### ETag와 304 응답은 어떻게 동작하나요?
+
+서버가 응답에 버전 표식인 ETag를 붙이면 캐시가 기억해 두었다가, 사본이 상한 뒤 `If-None-Match`로 그 값을 보낸다. 서버의 현재 버전과 같으면 본문 없이 `304 Not Modified`를 돌려주고, 캐시는 사본의 신선도를 갱신해 그대로 쓴다. `Last-Modified`와 `If-Modified-Since`도 같은 역할이지만 초 단위라 정밀도가 낮고, 둘 다 있으면 ETag가 우선한다.
+
+### 정적 파일과 HTML의 캐시 전략을 어떻게 나누나요?
+
+빌드 결과 파일은 이름에 내용 해시를 넣고 `max-age=31536000, immutable`로 길게 캐시한다. 내용이 바뀌면 이름이 바뀌니 옛 사본과 충돌하지 않는다. 그 이름을 담은 HTML은 `no-cache`로 매번 재검증하거나 CDN에서만 짧게 캐시한다. 배포 때 옛 해시 파일을 바로 지우면 옛 HTML을 가진 사용자가 404를 받으니 한동안 남겨 둔다.
+
+### Vary 헤더는 왜 필요하고, 남용하면 어떻게 되나요?
+
+같은 URL이라도 요청 헤더에 따라 응답이 다를 때, 그 헤더를 캐시 키에 넣으라고 캐시에 알리는 헤더다. `Accept-Encoding`이나 CORS의 `Origin`이 대표적이고, 빠뜨리면 압축 형식이나 허락 헤더가 다른 응답이 엉뚱한 클라이언트에 나간다. `User-Agent`나 `Cookie`처럼 값이 다양한 헤더로 Vary를 걸면 키가 잘게 쪼개져 적중률이 거의 0이 된다.
+
+### CDN에서 캐시 무효화를 했는데도 사용자가 옛 버전을 보는 이유는요?
+
+무효화는 CDN 엣지의 사본만 지우고, 사용자 브라우저에 이미 저장된 사본은 지우지 못한다. 브라우저 `max-age`가 길었다면 그 시간 동안 옛 버전이 보인다. 무효화가 모든 엣지에 퍼지는 데도 몇 분이 걸린다. 그래서 바뀌는 파일은 브라우저 max-age를 짧게, 바뀌지 않는 파일은 해시 이름으로 관리한다.
+
+### 캐시 스탬피드는 무엇이고 어떻게 막나요?
+
+인기 있는 키가 만료되는 순간 동시에 들어온 요청이 모두 미스가 나서 오리진으로 몰리는 현상이다. CDN에서는 같은 키의 미스를 하나로 합치는 요청 병합, 상한 사본을 주면서 뒤에서 갱신하는 `stale-while-revalidate`, 오리진 실드로 막는다. 애플리케이션 캐시라면 재계산 락, 만료 시각 jitter, 만료 전 미리 갱신을 쓴다.
+
+### 로그인 사용자의 페이지는 CDN에 캐시해도 되나요?
+
+사람마다 다른 응답은 공유 캐시에 넣으면 안 되고 `private`나 `no-store`를 명시한다. 특히 `Set-Cookie`가 붙은 응답이 캐시되면 다른 사용자가 그 세션을 받을 수 있다. 대신 모두에게 같은 페이지 껍데기는 CDN에 캐시하고, 개인 데이터는 브라우저가 별도 API로 받아 채우는 식으로 나눈다. 확장자 기준으로 캐시하는 규칙은 웹 캐시 속임 공격에 취약하니 오리진의 Cache-Control을 기준으로 삼는다.

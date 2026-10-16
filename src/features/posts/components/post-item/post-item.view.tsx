@@ -1,6 +1,7 @@
 "use client";
 
 import { BookmarkButton } from "@/features/bookmarks/components/bookmark-button";
+import { CompanyLabels } from "../company-labels";
 import { DifficultyBadge } from "../difficulty-badge";
 import { PostTags } from "../post-tags";
 import { usePostItem } from "./post-item";
@@ -23,6 +24,7 @@ export function PostItem({ post }: PostItemProps) {
         </TitleRow>
         <Summary>{post.summary}</Summary>
         <Meta>
+          <CompanyLabels companies={post.companies} />
           {topicLabel && <span>{topicLabel}</span>}
           {post.difficulty && <DifficultyBadge difficulty={post.difficulty} />}
           <PostTags tags={post.tags} />
