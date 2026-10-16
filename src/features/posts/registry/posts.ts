@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "docker-network-volume",
+    title: "Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기",
+    summary: "컨테이너 안의 localhost가 왜 DB에 닿지 않는지, docker rm 한 번에 데이터가 왜 사라지는지에서 출발해 사용자 정의 브리지와 내장 DNS, -p가 만드는 DNAT, named volume과 bind mount, 볼륨 백업까지 따라간다.",
+    topic: "programming/server-infra/docker",
+    tags: ["Docker", "Network", "Linux", "DevOps"],
+    date: "2026-10-16",
+    keywords: ["named volume", "bind mount", "사용자 정의 브리지", "host.docker.internal"],
+  },
+  {
+    slug: "docker-compose",
+    title: "Docker Compose로 여러 컨테이너 한 번에 띄우기",
+    summary: "nginx, Node, Postgres, Redis를 compose.yaml 하나로 띄우면서 depends_on과 healthcheck로 정하는 시작 순서, .env 보간, down -v의 위험, 개발·운영 설정 분리까지 정리한다.",
+    topic: "programming/server-infra/docker",
+    tags: ["Docker", "DevOps", "Linux"],
+    date: "2026-10-16",
+    keywords: ["Docker Compose", "compose.yaml", "depends_on"],
+  },
+  {
+    slug: "docker-container-basics",
+    title: "컨테이너는 무엇인가: Docker로 처음 띄워 보기",
+    summary: "컨테이너가 VM과 달리 호스트 커널을 함께 쓰는 프로세스이고 namespace와 cgroups로 격리된다는 것을 직접 확인한 뒤, Ubuntu에 Docker를 설치해 컨테이너를 띄우고 들여다보고 멈추고 지우는 데까지 간다.",
+    topic: "programming/server-infra/docker",
+    tags: ["Docker", "Container", "Linux", "DevOps"],
+    date: "2026-10-16",
+    keywords: ["cgroups", "namespace", "Docker Engine", "컨테이너 이미지"],
+  },
+  {
+    slug: "dockerfile-image-layers",
+    title: "Dockerfile과 이미지 레이어: 빠르고 작은 이미지 만들기",
+    summary: "Dockerfile 명령이 레이어가 되고 빌드 캐시가 처음 바뀐 줄에서 끊기는 원리를 보고, 의존성 먼저 복사하기, 멀티 스테이지 빌드, 베이스 이미지 선택, BuildKit 캐시 마운트로 빌드를 빠르게, 이미지를 작게 만든다.",
+    topic: "programming/server-infra/docker",
+    tags: ["Docker", "Container", "DevOps", "Performance"],
+    date: "2026-10-16",
+    keywords: ["Dockerfile", "멀티 스테이지 빌드", "빌드 캐시", "BuildKit", "distroless"],
+  },
+  {
     slug: "base64",
     title: "Base64는 왜 쓰고 어떻게 바뀌나",
     summary: "바이트를 3개씩 묶어 6비트 글자 4개로 바꾸는 Base64의 규칙과 패딩, base64url, 33% 늘어나는 크기를 직접 계산하며 본다. 암호화가 아니라서 Basic 인증과 JWT 페이로드가 누구에게나 읽힌다는 점도 짚는다.",

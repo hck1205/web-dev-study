@@ -1,0 +1,606 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("docker-compose");
+
+[네트워크와 볼륨 글](/posts/docker-network-volume)에서 앱과 Postgres를 띄울 때 `docker run`을 네 번 쳤다. 네트워크 만들고, 볼륨 만들고, DB 띄우고, 앱 띄우고. 여기에 Redis와 nginx까지 붙이면 명령이 열 줄을 넘는다. 옵션 하나를 빠뜨리면 DB가 0.0.0.0에 열리거나 볼륨 없이 뜬다. 순서를 틀리면 앱이 DB보다 먼저 떠서 접속 에러를 내고 죽는다. 그리고 이 명령들은 내 셸 히스토리에만 있다.
+
+Docker Compose는 이 명령 묶음을 `compose.yaml` 파일 하나에 선언으로 적어 두고, `docker compose up` 한 번으로 그 상태를 만들어 주는 도구다. 파일이 곧 문서라서 저장소에 같이 커밋하면 누가 받아도 같은 구성을 띄울 수 있다. 컨테이너, 이미지, 네트워크, 볼륨 자체는 [컨테이너 기초](/posts/docker-container-basics), [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers), 네트워크와 볼륨 글에서 다뤘으니 이 글은 그것들을 Compose로 엮는 데 집중한다.
+
+기준은 Ubuntu 24.04 LTS에 Docker 공식 apt 저장소로 Docker Engine과 Compose 플러그인을 설치한 환경이다. 22.04도 같다. 사용자는 `docker` 그룹에 들어 있다고 보고 `sudo` 없이 적었다.
+
+## docker-compose와 docker compose
+
+먼저 이름부터 정리하자. 검색하면 `docker-compose`(하이픈)와 `docker compose`(띄어쓰기)가 섞여 나온다. 하이픈이 붙은 쪽은 Python으로 만든 Compose v1이고, 2023년 여름부터 업데이트가 끊겼다. 지금 쓰는 건 Go로 다시 만든 Compose v2이고, Docker CLI의 플러그인이라 `docker compose`로 부른다.
+
+```bash
+# 1) 확인: v2 플러그인이 깔려 있는지
+docker compose version
+
+# 2) 없으면 설치한다 (Docker 공식 apt 저장소를 이미 등록한 상태)
+sudo apt-get update
+sudo apt-get install -y docker-compose-plugin
+
+# Ubuntu 기본 저장소의 docker.io를 쓰고 있다면 패키지 이름이 다르다
+# sudo apt-get install -y docker-compose-v2
+```
+
+`Docker Compose version v2.`로 시작하는 줄이 나오면 된다. RHEL·Rocky 계열도 Docker 저장소를 등록했다면 `sudo dnf install docker-compose-plugin`으로 같은 플러그인을 깐다.
+
+v1에서 넘어오면 바로 눈에 띄는 차이가 둘 있다. 컨테이너 이름의 구분자가 밑줄에서 하이픈으로 바뀌었다(`shop_web_1` → `shop-web-1`). 그리고 파일 맨 위의 `version: "3.8"` 같은 줄은 이제 쓰지 않는다. v2는 이 줄을 무시하고 `the attribute version is obsolete` 경고만 띄운다. 파일 이름도 `compose.yaml`이 기본이고, 예전 이름인 `docker-compose.yml`도 계속 읽는다.
+
+## 서비스 넷을 파일 하나에
+
+예제로 쓸 구성은 이렇다. 바깥 요청은 nginx(`proxy`)가 80에서 받아 Node 앱(`web`)으로 넘기고, 앱은 Postgres(`db`)와 Redis(`redis`)를 쓴다. 바깥에 열리는 포트는 nginx의 80 하나뿐이다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="Compose 프로젝트 shop. 네 서비스가 shop_default 네트워크 하나에 붙고, 서로를 서비스 이름으로 부른다. 데이터는 이름 있는 볼륨에 남는다."
+  nodes={[
+    { id: "host", label: "호스트 :80", sub: "유일한 게시 포트", x: 220, y: 40, w: 140 },
+    { id: "proxy", label: "proxy", sub: "nginx", x: 220, y: 120, w: 110 },
+    { id: "web", label: "web", sub: "Node :3000", x: 220, y: 200, w: 110 },
+    { id: "db", label: "db", sub: "Postgres :5432", x: 90, y: 270, w: 130 },
+    { id: "redis", label: "redis", sub: ":6379", x: 350, y: 270, w: 110 },
+    { id: "pg", label: "shop_pgdata", sub: "volume", x: 70, y: 175, w: 120 },
+    { id: "rd", label: "shop_redisdata", sub: "volume", x: 375, y: 175, w: 130 },
+  ]}
+  edges={[
+    { from: "host", to: "proxy", label: "DNAT" },
+    { from: "proxy", to: "web", label: "web:3000" },
+    { from: "web", to: "db", label: "db:5432" },
+    { from: "web", to: "redis", label: "redis:6379" },
+    { from: "db", to: "pg", dashed: true },
+    { from: "redis", to: "rd", dashed: true },
+  ]}
+/>
+
+프로젝트 디렉터리는 이렇게 생겼다.
+
+```text
+shop/
+├── compose.yaml
+├── compose.override.yaml
+├── .env
+├── .env.example
+├── Dockerfile
+├── nginx/
+│   └── default.conf
+└── src/
+```
+
+그리고 `compose.yaml` 전체다. 아래에서 부분별로 뜯어본다.
+
+```yaml
+name: shop
+
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shop-web:${WEB_TAG:-dev}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/app
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - path: ./web.env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:4
+    profiles: ["tools"]
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
+  redisdata:
+```
+
+최상위 키는 셋이다. `services`는 띄울 컨테이너의 설계도이고, `volumes`는 이 프로젝트가 쓰는 이름 있는 볼륨 목록이다. `networks`는 적지 않았는데, 적지 않으면 Compose가 `{프로젝트}_default` 네트워크를 하나 만들어 모든 서비스를 거기에 붙인다. `name: shop`은 프로젝트 이름이다.
+
+`env_file`의 `required: false`는 파일이 없어도 에러를 내지 않게 하는 옵션으로, Compose 2.24부터 쓸 수 있다. 그보다 오래된 버전이라면 `env_file: ./web.env`로 짧게 쓰고 파일을 꼭 만들어 둔다.
+
+## 서비스 블록 하나 뜯어보기
+
+가장 옵션이 많은 `web` 서비스의 키를 조각으로 떼어 놓았다. 눌러 보면 각 키가 하는 일과 흔한 실수가 나온다.
+
+<UrlAnatomy
+  caption="compose.yaml의 web 서비스"
+  base="web:"
+  separator=" "
+  joiner=" · "
+  params={[
+    {
+      key: "build",
+      display: "build: .",
+      title: "이미지를 직접 빌드한다",
+      description: "context 디렉터리의 Dockerfile로 이미지를 만든다. image와 같이 쓰면 빌드한 결과에 그 이름과 태그를 붙인다. image만 있으면 레지스트리에서 받아 온다. 소스를 고친 뒤 up만 하면 예전 이미지를 그대로 쓰니, 다시 빌드하려면 --build를 붙인다.",
+      code: "build:\n  context: .\n  dockerfile: Dockerfile\n  target: prod   # 멀티 스테이지의 특정 단계",
+    },
+    {
+      key: "image",
+      display: "image: shop-web:${WEB_TAG:-dev}",
+      title: "이미지 이름과 태그",
+      description: "${WEB_TAG:-dev}는 셸이나 .env에 WEB_TAG가 없으면 dev를 쓰라는 보간 문법이다. 운영에서는 latest 대신 커밋 해시나 버전 태그를 넣어 무엇이 떠 있는지 알 수 있게 한다.",
+    },
+    {
+      key: "environment",
+      display: "environment",
+      title: "컨테이너에 넣을 환경 변수",
+      description: "컨테이너 안의 앱이 읽는 값이다. 접속 주소의 호스트 자리에 서비스 이름(db, redis)을 쓴다. 같은 키가 env_file에도 있으면 environment가 이긴다.",
+      code: "DATABASE_URL: postgres://app:…@db:5432/app\nREDIS_URL: redis://redis:6379",
+      required: true,
+    },
+    {
+      key: "env_file",
+      display: "env_file: web.env",
+      title: "환경 변수를 파일에서 읽는다",
+      description: "파일의 KEY=VALUE 줄을 그대로 컨테이너 환경 변수로 넣는다. 프로젝트의 .env와 이름이 비슷하지만 하는 일이 다르다. .env는 compose.yaml 안의 ${…}를 채우는 데 쓰이고, env_file은 컨테이너 안으로 들어간다.",
+    },
+    {
+      key: "depends_on",
+      display: "depends_on: service_healthy",
+      title: "누구를 기다렸다가 뜰지",
+      description: "condition 없이 이름만 적으면 그 컨테이너가 시작된 뒤에 뜰 뿐, 준비가 끝났는지는 보지 않는다. service_healthy는 상대의 healthcheck가 통과할 때까지 기다린다. 마이그레이션처럼 끝나야 하는 작업은 service_completed_successfully를 쓴다.",
+      required: true,
+    },
+    {
+      key: "healthcheck",
+      display: "healthcheck",
+      title: "준비됐는지 스스로 확인하는 명령",
+      description: "interval마다 test를 실행해 종료 코드 0이면 healthy다. retries번 연속 실패하면 unhealthy가 되고, start_period 동안의 실패는 세지 않는다. test에 쓴 명령(wget, curl)이 이미지에 없으면 계속 실패하니 이미지에 있는 도구를 쓴다.",
+      code: "test: [\"CMD\", \"wget\", \"-qO-\", \"http://127.0.0.1:3000/healthz\"]\ninterval: 10s\ntimeout: 3s\nretries: 3\nstart_period: 20s",
+    },
+    {
+      key: "restart",
+      display: "restart: unless-stopped",
+      title: "죽었을 때 다시 띄울지",
+      description: "no(기본), always, on-failure, unless-stopped 중 하나다. unless-stopped는 프로세스가 죽거나 호스트가 재부팅돼도 다시 띄우고, 사람이 stop한 경우만 그대로 둔다. unhealthy가 됐다고 다시 띄우지는 않는다.",
+    },
+  ]}
+/>
+
+`command`와 `entrypoint`도 알아 둘 만하다. `command`는 이미지의 `CMD`를, `entrypoint`는 `ENTRYPOINT`를 덮어쓴다. 위 예제의 redis는 `command`로 AOF 저장을 켰다. `entrypoint`를 덮어쓰면 이미지에 있던 기본 `CMD`도 같이 지워진다는 점은 놓치기 쉽다. 그리고 `["redis-server", "--appendonly", "yes"]`처럼 배열로 적어야 셸을 거치지 않고 바로 실행돼서, 종료 신호(SIGTERM)가 프로세스에 제대로 전달된다.
+
+## .env는 컨테이너에 들어가지 않는다
+
+Compose를 처음 쓸 때 가장 많이 헷갈리는 게 `.env`다. 프로젝트 디렉터리의 `.env` 파일은 Compose가 `compose.yaml`을 읽을 때 `${POSTGRES_PASSWORD}` 같은 자리를 채우는 데만 쓴다. 이 파일에 적었다고 해서 컨테이너 환경 변수가 되지는 않는다. 컨테이너에 넣으려면 `environment`에서 `${…}`로 꺼내 쓰거나, `env_file`로 파일을 지정한다.
+
+```bash
+# .env는 저장소에 올리지 않는다. 대신 키만 적은 .env.example을 올린다
+cat > .env <<'EOF'
+POSTGRES_PASSWORD=2f9c1e7a5b3d48c0a6e1f4b2
+WEB_TAG=dev
+EOF
+
+# .gitignore에 추가
+echo ".env" >> .gitignore
+echo "web.env" >> .gitignore
+```
+
+값을 정하는 우선순위도 알아 두자. 같은 변수가 여러 곳에 있으면 셸에서 export한 값이 `.env`의 값보다 이긴다. 그래서 `POSTGRES_PASSWORD=other docker compose up`처럼 실행하면 `.env`를 고치지 않고도 값을 바꿀 수 있다. `--env-file .env.prod`로 다른 파일을 지정할 수도 있다.
+
+보간 문법은 셸과 비슷하다. `${VAR:-기본값}`은 비었거나 없으면 기본값을 쓰고, `${VAR:?메시지}`는 비었거나 없으면 메시지를 띄우고 멈춘다. 비밀번호처럼 빠지면 안 되는 값에 `:?`를 걸어 두면, `.env`를 깜빡한 채 띄웠을 때 빈 비밀번호로 DB가 초기화되는 사고를 막는다. 이때 Compose는 `required variable POSTGRES_PASSWORD is missing a value`로 시작하는 에러를 내고 아무것도 띄우지 않는다. 값에 `$` 문자가 그대로 필요하면 `$$`로 적는다.
+
+보간이 어떻게 됐는지는 띄우기 전에 `config`로 본다.
+
+```bash
+# 보간과 병합이 끝난 최종 설정을 출력한다 (문법 오류가 있으면 여기서 에러)
+docker compose config
+
+# 서비스 이름만, 또는 문법 검사만
+docker compose config --services
+docker compose config --quiet && echo OK
+```
+
+```text
+name: shop
+services:
+  db:
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: 2f9c1e7a5b3d48c0a6e1f4b2
+      POSTGRES_USER: app
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U app -d app
+      timeout: 3s
+      interval: 5s
+      retries: 5
+      start_period: 10s
+    image: postgres:16-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        volume: {}
+```
+
+`db` 부분만 잘랐다. `${POSTGRES_PASSWORD}`가 실제 값으로 바뀌었고, 짧게 쓴 `pgdata:/var/lib/...`가 `type: volume` 긴 형식으로 펼쳐졌다. 적지 않은 `networks: default`도 들어가 있다. 이 출력에 비밀번호가 그대로 찍히니, CI 로그에 `config`를 남길 때는 조심한다.
+
+## up 한 번에 일어나는 순서
+
+이제 띄운다.
+
+```bash
+# 이미지를 (다시) 빌드하고 백그라운드로 띄운다
+docker compose up -d --build
+```
+
+```text
+[+] Running 7/7
+ ✔ Network shop_default      Created                                0.1s
+ ✔ Volume "shop_pgdata"      Created                                0.0s
+ ✔ Volume "shop_redisdata"   Created                                0.0s
+ ✔ Container shop-db-1       Healthy                               11.3s
+ ✔ Container shop-redis-1    Healthy                                6.2s
+ ✔ Container shop-web-1      Healthy                               33.8s
+ ✔ Container shop-proxy-1    Started                               34.1s
+```
+
+이름을 보면 규칙이 보인다. 네트워크와 볼륨은 `{프로젝트}_{이름}`, 컨테이너는 `{프로젝트}-{서비스}-{번호}`다. 프로젝트 이름은 `name:` 키, `-p` 옵션, `COMPOSE_PROJECT_NAME` 환경 변수 순으로 정해지고, 아무것도 없으면 디렉터리 이름을 쓴다. 같은 compose.yaml을 다른 디렉터리에 복사해 띄우면 볼륨도 네트워크도 따로 생기는 이유가 이것이다.
+
+시간이 db 11초, web 34초로 벌어진 건 `depends_on`이 healthcheck를 기다렸기 때문이다. 아래 그림에서 다음을 누르면 Compose가 서비스를 어떤 순서로 띄우는지 한 단계씩 보인다.
+
+<AlgoTrace
+  caption="depends_on과 healthcheck가 정하는 시작 순서"
+  memoryLabel="서비스 상태"
+  cells={["network", "volumes", "db", "redis", "web", "proxy"]}
+  steps={[
+    { caption: "compose.yaml을 읽고 의존 관계를 그린다. proxy는 web을, web은 db와 redis를 기다려야 한다." },
+    { pointer: 0, found: [0], memory: ["net 생성"], caption: "shop_default 네트워크를 먼저 만든다. 모든 컨테이너가 여기에 붙는다." },
+    { pointer: 1, found: [0, 1], memory: ["net 생성", "볼륨 2개"], caption: "선언한 볼륨이 없으면 만든다. 이미 있으면 그대로 쓴다." },
+    { pointer: 2, found: [0, 1], memory: ["db: starting"], caption: "아무것도 기다리지 않는 db와 redis를 함께 띄운다. 프로세스가 떴어도 아직 starting이다." },
+    { pointer: 3, found: [0, 1], memory: ["db: starting", "redis: starting"], caption: "redis도 시작했다. web은 두 서비스가 healthy가 될 때까지 만들지 않는다." },
+    { pointer: 3, found: [0, 1, 3], memory: ["db: starting", "redis: healthy"], caption: "redis-cli ping이 PONG을 받아 redis가 먼저 healthy가 된다. db는 아직 초기화 중이다." },
+    { pointer: 2, found: [0, 1, 2, 3], memory: ["db: healthy", "redis: healthy"], caption: "pg_isready가 성공했다. 이제 web의 조건이 모두 채워졌다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["db: healthy", "redis: healthy", "web: starting"], caption: "web을 띄운다. start_period 20초 동안은 healthcheck가 실패해도 세지 않는다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["db: healthy", "redis: healthy", "web: healthy"], caption: "/healthz가 200을 돌려줘 web이 healthy가 됐다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["web: healthy", "proxy: started"], caption: "마지막으로 proxy를 띄운다. healthcheck가 없으니 시작되면 끝이다." },
+  ]}
+/>
+
+`depends_on`에 조건 없이 이름만 적으면 4단계에서 기다리지 않는다. db 컨테이너가 시작되자마자 web이 뜨고, Postgres가 아직 초기화 중이라 web이 `ECONNREFUSED`를 내고 죽는다. 그래서 `condition: service_healthy`와 healthcheck를 짝으로 쓴다.
+
+다만 이건 `up`할 때의 순서일 뿐이다. 돌다가 db가 재시작되면 web은 그 사실을 모른다. 앱은 여전히 DB 연결이 끊겼을 때 다시 붙는 재시도 로직을 가져야 한다. 그리고 Docker Engine은 unhealthy가 된 컨테이너를 다시 띄워 주지 않는다. healthcheck는 상태를 표시하고 `depends_on`이 그걸 볼 뿐이다. 프로세스가 죽지 않고 멈춰만 있는 경우까지 자동으로 살리려면 쿠버네티스의 liveness probe 같은 상위 도구가 필요하다.
+
+`up`에 `--wait`를 붙이면 모든 서비스가 healthy(또는 running)가 될 때까지 기다렸다가 끝나서, 배포 스크립트에서 성공 여부를 판단하기 좋다.
+
+## 요청 하나가 서비스를 건너가는 길
+
+Compose 프로젝트 안에서 서비스 이름이 주소가 되는 건, 기본 네트워크가 사용자 정의 브리지라서 Docker 내장 DNS가 서비스 이름을 풀어 주기 때문이다. 원리는 [네트워크와 볼륨 글](/posts/docker-network-volume)에서 봤다. nginx 설정은 이렇게 쓴다.
+
+```nginx
+# nginx/default.conf
+server {
+    listen 80;
+
+    # Docker 내장 DNS. 10초마다 이름을 다시 푼다
+    resolver 127.0.0.11 valid=10s;
+
+    location / {
+        set $upstream http://web:3000;
+        proxy_pass $upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+`resolver`와 `set $upstream`을 쓴 이유가 있다. `proxy_pass http://web:3000;`처럼 이름을 바로 적으면 nginx는 시작할 때 한 번만 이름을 풀고 그 IP를 계속 쓴다. 그런데 `docker compose up -d --build`로 web을 다시 만들면 새 컨테이너가 다른 IP를 받을 수 있다. 그러면 nginx는 사라진 IP로 계속 보내다 502를 낸다. 변수를 거치면 nginx가 요청 때마다 resolver에게 다시 물어서 이 문제가 없다. 시작할 때 `web`이라는 이름이 아예 안 풀리면 nginx가 `host not found in upstream` 에러로 뜨지도 못하는데, 이것도 같이 피한다.
+
+아래 그림에서 다음을 누르면 브라우저 요청이 proxy, web, db를 지나 돌아오는 과정이 보인다.
+
+<SequenceDiagram
+  caption="브라우저에서 db까지, 서비스 이름으로 이어지는 요청"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "proxy", label: "proxy" },
+    { id: "web", label: "web" },
+    { id: "db", label: "db" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "proxy",
+      label: "GET /orders",
+      title: "호스트 80으로 들어온다",
+      detail: "호스트의 80은 proxy 컨테이너의 80으로 DNAT된다. 프로젝트에서 바깥에 열린 포트는 이것 하나다.",
+      payload: "GET /orders HTTP/1.1\nHost: shop.example.com",
+    },
+    {
+      from: "proxy",
+      to: "proxy",
+      label: "web → 172.19.0.4",
+      title: "서비스 이름을 푼다",
+      detail: "nginx가 127.0.0.11에 web을 묻는다. 내장 DNS가 shop_default 네트워크에서 web 컨테이너의 IP를 돌려준다. 스케일해서 web이 여럿이면 IP도 여럿 나온다.",
+    },
+    {
+      from: "proxy",
+      to: "web",
+      label: "web:3000",
+      title: "web으로 넘긴다",
+      detail: "원래 클라이언트 정보는 헤더로 넘긴다. web은 출발지 IP로 proxy의 주소만 보게 된다.",
+      payload: "GET /orders HTTP/1.1\nHost: shop.example.com\nX-Forwarded-For: 198.51.100.7\nX-Forwarded-Proto: http",
+    },
+    {
+      from: "web",
+      to: "db",
+      label: "db:5432",
+      title: "DATABASE_URL의 db로 접속한다",
+      detail: "environment에 적은 postgres://app:…@db:5432/app의 호스트 db도 같은 방식으로 풀린다. db는 포트를 게시하지 않았지만 같은 네트워크라 닿는다.",
+      payload: "SELECT id, total FROM orders\nORDER BY id DESC LIMIT 20;",
+    },
+    {
+      from: "db",
+      to: "web",
+      label: "rows",
+      title: "결과가 돌아온다",
+      detail: "db의 데이터는 shop_pgdata 볼륨에 있어서, 컨테이너를 다시 만들어도 같은 결과가 나온다.",
+    },
+    {
+      from: "web",
+      to: "proxy",
+      label: "200 OK",
+      title: "web이 응답한다",
+      detail: "web은 응답만 만들면 된다. TLS나 압축은 앞단 proxy에서 처리하게 둘 수 있다.",
+    },
+    {
+      from: "proxy",
+      to: "browser",
+      label: "200 OK",
+      title: "proxy가 브라우저로 돌려준다",
+      detail: "conntrack이 DNAT를 되돌려, 브라우저는 호스트의 80과 통신했다고 본다.",
+    },
+  ]}
+/>
+
+같은 원리로 `docker compose up -d --scale web=3`을 하면 web 컨테이너가 셋이 되고, `web`이라는 이름이 IP 세 개로 풀린다. 다만 `container_name`을 고정했거나 `ports`에 호스트 포트를 박아 둔 서비스는 이름이나 포트가 겹쳐서 늘릴 수 없다. 앱 서비스에 호스트 포트를 주지 않고 프록시 뒤에 두는 이유이기도 하다.
+
+## 매일 쓰는 명령
+
+띄운 뒤 상태부터 본다.
+
+```bash
+# 프로젝트의 컨테이너와 상태, 포트
+docker compose ps
+```
+
+```text
+NAME           IMAGE                COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+shop-db-1      postgres:16-alpine   "docker-entrypoint.s…"   db        48 seconds ago   Up 47 seconds (healthy)   5432/tcp
+shop-proxy-1   nginx:1.27-alpine    "/docker-entrypoint.…"   proxy     48 seconds ago   Up 14 seconds             0.0.0.0:80->80/tcp, [::]:80->80/tcp
+shop-redis-1   redis:7-alpine       "docker-entrypoint.s…"   redis     48 seconds ago   Up 47 seconds (healthy)   6379/tcp
+shop-web-1     shop-web:dev         "docker-entrypoint.s…"   web       48 seconds ago   Up 36 seconds (healthy)   3000/tcp
+```
+
+`STATUS`의 괄호가 healthcheck 결과다. `(health: starting)`이 오래 가거나 `(unhealthy)`면 healthcheck 명령부터 의심한다. `PORTS`에서 `0.0.0.0:...->`가 붙은 건 proxy 하나뿐이고, 나머지의 `5432/tcp`는 이미지가 EXPOSE한 포트일 뿐 바깥에 게시되지 않았다는 뜻이다.
+
+```bash
+# web 로그를 마지막 50줄부터 따라간다 (Ctrl+C로 빠져나와도 컨테이너는 계속 돈다)
+docker compose logs -f --tail=50 web
+
+# 돌고 있는 db 컨테이너 안에서 psql을 연다
+docker compose exec db psql -U app -d app
+
+# 일회성 작업: web 이미지로 새 컨테이너를 띄워 마이그레이션을 돌리고 지운다
+docker compose run --rm web npm run migrate
+
+# 레지스트리 이미지(nginx, postgres, redis)의 새 버전을 받는다
+docker compose pull
+
+# 컨테이너 프로세스만 다시 시작한다
+docker compose restart web
+```
+
+`exec`와 `run`은 비슷해 보이지만 다르다. `exec`는 이미 돌고 있는 컨테이너 안에서 명령을 하나 더 실행하고, `run`은 그 서비스 설정으로 새 컨테이너를 하나 만든다. `run`은 의존 서비스를 먼저 띄우고(`--no-deps`로 끌 수 있다), 서비스의 `ports`는 게시하지 않는다(`--service-ports`로 켠다). 파이프로 SQL을 흘려 넣을 때는 `exec -T`로 TTY를 끈다.
+
+`restart`는 흔히 오해한다. compose.yaml을 고친 뒤 `restart`를 하면 바뀐 설정이 적용되지 않는다. 같은 컨테이너를 껐다 켤 뿐이기 때문이다. 환경 변수, 이미지, 포트를 바꿨으면 `docker compose up -d`를 다시 실행한다. `up`은 설정이 바뀐 서비스의 컨테이너만 골라 새로 만들고, 그대로인 서비스는 건드리지 않는다. 이미지를 받은 뒤(`pull`)에도 `up -d`를 해야 새 이미지로 바뀐다.
+
+## down과 down -v는 한 글자 차이다
+
+멈추는 명령도 여럿이다. `stop`은 컨테이너를 멈추기만 하고, `down`은 컨테이너와 기본 네트워크를 지운다. 이름 있는 볼륨은 `down`으로는 지워지지 않으니 다시 `up`하면 데이터가 그대로다. 그런데 `-v`를 붙이면 compose.yaml의 `volumes:`에 선언한 볼륨과 익명 볼륨까지 지운다.
+
+<Callout kind="warning" title="docker compose down -v는 DB 데이터를 지운다">
+  `down -v`는 개발 환경을 깨끗하게 초기화할 때 쓰는 명령이다. 운영 서버에서 습관처럼 치면 `shop_pgdata`와 `shop_redisdata`가 디스크에서 바로 사라지고 되돌릴 수 없다. 실행 전에 `docker compose exec -T db pg_dump -U app app > backup.sql`로 덤프를 떠 두면, 다시 `up -d`한 뒤 `docker compose exec -T db psql -U app -d app < backup.sql`로 되살릴 수 있다. 실수로 지워지면 안 되는 볼륨은 따로 만들어 두고 `external: true`로 선언하면 `down -v`가 건드리지 않는다.
+</Callout>
+
+```bash
+# 1) 확인: 이 프로젝트의 볼륨
+docker volume ls --filter label=com.docker.compose.project=shop
+
+# 2) 컨테이너와 네트워크만 지운다 (볼륨은 남는다)
+docker compose down
+
+# 3) 확인: 볼륨이 그대로 있는지
+docker volume ls --filter label=com.docker.compose.project=shop
+```
+
+```text
+DRIVER    VOLUME NAME
+local     shop_pgdata
+local     shop_redisdata
+```
+
+Compose가 만든 리소스에는 `com.docker.compose.project` 같은 라벨이 붙어서, 이렇게 프로젝트 단위로 걸러 볼 수 있다. Compose가 "이 컨테이너는 내 것"이라고 알아보는 것도 이 라벨 덕분이다.
+
+## 개발과 운영을 파일로 나누기
+
+개발할 때와 운영할 때 바라는 게 다르다. 개발할 때는 소스를 고치면 바로 반영되길 원하고 DB에 GUI 도구로 붙고 싶다. 운영에서는 이미지에 소스를 구워 넣고, 바깥에 여는 포트는 최소로 한다. Compose는 파일 여러 개를 겹쳐 읽는 방식으로 이 차이를 다룬다.
+
+`compose.yaml` 옆에 `compose.override.yaml`이 있으면 `docker compose up`이 두 파일을 자동으로 합쳐 읽는다. 기본 파일에는 운영에 가까운 설정을 두고, 개발용 차이만 override에 적는다.
+
+```yaml
+# compose.override.yaml (개발용. docker compose up 하면 자동으로 합쳐진다)
+services:
+  web:
+    build:
+      target: dev
+    command: ["npm", "run", "dev"]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./src:/app/src
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+```
+
+바인드 마운트로 호스트의 `./src`를 컨테이너에 비추니, 에디터에서 저장하면 dev 서버가 바로 다시 읽는다. 바인드 마운트가 이미지 안의 `/app/src`를 가리기 때문에 이미지를 다시 빌드할 필요가 없다. DB 포트도 개발용으로 루프백에만 열었다.
+
+합치는 규칙은 키마다 다르다. `image`, `command`처럼 값이 하나인 키는 뒤 파일이 덮어쓴다. `environment`는 키 단위로 합쳐지고, `volumes`는 컨테이너 쪽 경로 단위로 합쳐진다. `ports`는 이어 붙는다. 그래서 override로 기본 파일의 포트를 지울 수는 없다. 운영 파일에서 포트를 빼야 한다면 Compose 2.24부터 쓸 수 있는 `!reset` 태그(`ports: !reset []`)를 쓰거나, 처음부터 기본 파일에 포트를 넣지 않는다.
+
+운영 서버에서는 override를 자동으로 읽지 않게 `-f`로 파일을 직접 지정한다. `-f`를 쓰면 `compose.override.yaml`은 무시된다.
+
+```bash
+# 운영: 기본 파일 + 운영 파일만 합친다
+docker compose -f compose.yaml -f compose.prod.yaml config --quiet && echo OK
+docker compose -f compose.yaml -f compose.prod.yaml up -d --wait
+```
+
+바인드 마운트 대신 Compose의 `develop.watch`를 쓰는 방법도 있다. 파일이 바뀌면 컨테이너로 복사하거나(`sync`) 이미지를 다시 빌드한다(`rebuild`). `docker compose watch`로 켠다. 바인드 마운트에서 생기는 파일 소유자(UID) 문제나, 맥에서 파일 시스템 공유가 느린 문제를 피할 수 있다.
+
+```yaml
+services:
+  web:
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+        - action: rebuild
+          path: package.json
+```
+
+## 비밀 값은 어디에 두나
+
+`.env`를 저장소에 올리지 않는 건 기본이다. 그런데 `.env`에서 환경 변수로 넣은 비밀번호도 완전히 안전하지는 않다. 환경 변수는 `docker inspect`로 그대로 보이고, 앱이 에러 리포트에 환경 변수를 통째로 찍어 보내는 경우도 있다.
+
+Compose의 `secrets`는 값을 파일로 넣어 준다. 최상위 `secrets:`에 파일을 선언하고 서비스에서 이름으로 고르면, 컨테이너 안의 `/run/secrets/{이름}`에 읽기 전용으로 붙는다. Postgres 공식 이미지는 `_FILE`로 끝나는 변수를 보면 그 파일에서 값을 읽는다.
+
+```yaml
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+```
+
+Swarm이 아닌 단일 호스트 Compose에서 이 기능은 사실 그 파일을 바인드 마운트하는 것과 같다. 암호화해 주지는 않는다. 그래도 `inspect`에 값이 안 보이고, 앱 코드가 "비밀은 파일에서 읽는다"는 규칙을 따르게 되어 나중에 쿠버네티스 Secret이나 클라우드 비밀 관리 서비스로 옮기기 쉽다. 이미지를 빌드할 때 비밀 값을 `ARG`나 `ENV`로 넘기면 이미지 레이어에 남으니, 빌드 단계의 비밀은 BuildKit의 `--secret`을 쓴다.
+
+## Compose로 버티는 데까지
+
+Compose는 한 대의 호스트에서 여러 컨테이너를 선언적으로 띄우는 도구다. 개발 환경, CI의 통합 테스트, 트래픽이 크지 않은 사이드 프로젝트나 사내 도구의 운영에는 이걸로 충분하다.
+
+한계는 "한 대"에서 온다. 호스트가 죽으면 서비스 전체가 죽는다. `up -d`로 web을 새 이미지로 바꾸는 순간 기존 컨테이너가 내려가고 새 컨테이너가 뜨기까지 잠깐 끊긴다. 컨테이너가 응답 없이 멈춰도 다시 띄워 주지 않는다. 트래픽에 따라 컨테이너 수를 늘리고 줄이지도 않는다.
+
+이 중 하나가 실제로 문제가 되기 시작하면, 곧 서버를 여러 대로 늘려야 하거나 배포 중 끊김이 허용되지 않거나 장애 복구를 사람이 하기 버거워지면 쿠버네티스를 검토할 때다. 쿠버네티스는 여러 노드에 걸쳐 Pod를 배치하고, readiness·liveness probe로 준비 상태와 생존을 보고, 롤링 업데이트로 끊김 없이 바꾼다. Compose의 서비스 이름 DNS는 Service로, nginx 리버스 프록시는 [Ingress](/posts/kubernetes-ingress)로 이어진다. 그 중간에 Docker Swarm이 있는데, Compose 파일을 거의 그대로 여러 노드에 올릴 수 있지만 생태계가 쿠버네티스 쪽으로 기울어서 새로 고르는 경우는 드물다.
+
+## 파일 하나가 구성 전체를 말한다
+
+Compose는 `docker run` 명령 묶음을 `compose.yaml`이라는 선언으로 바꾼다. 프로젝트 이름으로 네트워크와 볼륨을 묶고, 기본 네트워크의 DNS 덕분에 서비스 이름이 곧 주소가 되며, `depends_on`과 healthcheck로 띄우는 순서를 정한다. `.env`는 파일 속 `${…}`를 채울 뿐 컨테이너에 들어가지 않고, `down -v`는 데이터까지 지운다는 것 정도만 기억하면 대부분의 사고는 피할 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### Docker Compose는 무엇을 해결하나요?
+
+여러 컨테이너를 띄우는 docker run 명령과 네트워크·볼륨 설정을 compose.yaml 하나에 선언으로 적고, up 한 번으로 그 상태를 맞춰 준다. 파일을 저장소에 함께 두면 누구나 같은 구성을 재현할 수 있다. 프로젝트 단위로 기본 네트워크를 만들어 서비스 이름으로 서로를 찾게 해 주는 것도 큰 부분이다.
+
+### depends_on만 쓰면 DB가 준비된 뒤에 앱이 뜨나요?
+
+조건 없이 쓰면 DB 컨테이너가 시작된 뒤에 앱을 띄울 뿐, DB가 접속을 받을 준비가 됐는지는 보지 않는다. condition: service_healthy와 DB의 healthcheck(pg_isready 같은)를 함께 써야 준비될 때까지 기다린다. 이것도 up할 때의 순서일 뿐이라, 앱에는 연결이 끊겼을 때 재시도하는 로직이 여전히 필요하다.
+
+### healthcheck가 unhealthy가 되면 Docker가 컨테이너를 다시 띄워 주나요?
+
+Docker Engine과 Compose는 다시 띄우지 않는다. healthcheck는 상태를 표시하고, depends_on 조건이나 모니터링이 그걸 참고할 뿐이다. restart 정책은 프로세스가 종료됐을 때만 동작한다. unhealthy를 보고 재시작하는 건 Swarm이나 쿠버네티스의 liveness probe 같은 오케스트레이터의 일이다.
+
+### .env 파일과 env_file은 무엇이 다른가요?
+
+프로젝트 디렉터리의 .env는 Compose가 compose.yaml 안의 `${VAR}`를 채우는 데 쓰는 파일이고, 컨테이너 환경 변수로 자동으로 들어가지 않는다. env_file은 지정한 파일의 KEY=VALUE를 컨테이너 환경 변수로 넣는다. 보간 값은 셸 환경 변수가 .env보다 우선하고, docker compose config로 최종 결과를 확인할 수 있다.
+
+### 같은 compose 프로젝트의 서비스끼리는 어떻게 통신하나요?
+
+Compose가 프로젝트마다 `{프로젝트}_default`라는 사용자 정의 브리지 네트워크를 만들고 모든 서비스를 붙인다. 이 네트워크의 Docker 내장 DNS(127.0.0.11)가 서비스 이름을 컨테이너 IP로 풀어 주므로 db:5432처럼 접속한다. 그래서 서비스끼리 통신할 때는 ports로 게시할 필요가 없고, 바깥에 열 서비스에만 ports를 준다.
+
+### docker compose down과 down -v의 차이는요?
+
+down은 컨테이너와 기본 네트워크를 지우고 이름 있는 볼륨은 남겨서, 다시 up하면 데이터가 그대로다. down -v는 compose.yaml에 선언한 볼륨과 익명 볼륨까지 지워 DB 데이터가 사라진다. 운영에서는 쓰지 않고, 쓰기 전에 덤프를 뜨거나 중요한 볼륨을 external로 선언해 보호한다.
+
+### 개발 환경과 운영 환경의 compose 설정은 어떻게 나누나요?
+
+기본 compose.yaml에 공통·운영 설정을 두고, compose.override.yaml에 소스 바인드 마운트, dev 명령, 디버그 포트 같은 개발용 차이를 둔다. override는 up할 때 자동으로 합쳐진다. 운영에서는 -f compose.yaml -f compose.prod.yaml처럼 파일을 지정해 override를 빼고, 소스를 구운 이미지를 태그로 고정해 쓴다.
+
+### Compose에서 쿠버네티스로 넘어가야 하는 시점은 언제인가요?
+
+Compose는 단일 호스트 도구라서, 여러 서버로 나눠야 하거나 호스트 장애에도 서비스가 살아 있어야 할 때 한계가 온다. 배포 중 끊김 없는 롤링 업데이트, 멈춘 컨테이너의 자동 복구, 트래픽에 따른 자동 확장이 필요해져도 마찬가지다. 그 전까지는 Compose가 단순하고 운영 비용이 낮아서 충분히 좋은 선택이다.

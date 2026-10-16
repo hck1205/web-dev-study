@@ -6,6 +6,10 @@ import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { DNS } from "./dns";
+import { DOCKER_COMPOSE } from "./docker-compose";
+import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
+import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
+import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_LOOP } from "./event-loop";
 import { GATEWAY } from "./gateway";
@@ -47,6 +51,10 @@ export const QUESTION_SETS = [
   CORE_WEB_VITALS,
   CORS,
   DNS,
+  DOCKER_COMPOSE,
+  DOCKER_CONTAINER_BASICS,
+  DOCKER_NETWORK_VOLUME,
+  DOCKERFILE_IMAGE_LAYERS,
   ELASTICSEARCH_INVERTED_INDEX,
   EVENT_LOOP,
   GATEWAY,
