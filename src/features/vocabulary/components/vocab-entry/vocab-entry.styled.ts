@@ -168,3 +168,37 @@ export const Nav = styled.nav`
     text-decoration: none;
   }
 `;
+
+export const ExampleTools = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${space[2]};
+  margin-bottom: ${space[4]};
+`;
+
+export const ExampleContext = styled.span`
+  display: inline-block;
+  margin-bottom: ${space[2]};
+  color: ${color.accent};
+  font-size: ${font.size.xs};
+  font-weight: ${font.weight.semibold};
+  letter-spacing: 0.04em;
+`;
+
+export const RevealButton = styled.button`
+  width: 100%;
+  min-height: 2.75rem;
+  margin-top: ${space[2]};
+  border: 1px dashed ${color.borderStrong};
+  border-radius: ${radius.md};
+  background: transparent;
+  color: ${color.textSubtle};
+  font: inherit;
+  font-size: ${font.size.sm};
+  cursor: pointer;
+
+  &:hover {
+    border-color: ${color.accent};
+    color: ${color.accent};
+  }
+`;

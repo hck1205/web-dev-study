@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Button, Container, PageHeader } from "@/common/design-system";
+import { Badge, Button, ChoiceChip, Container, PageHeader } from "@/common/design-system";
 import { HighlightedSentence } from "../highlighted-sentence";
 import { SpeakButton } from "../speak-button";
 import { STATUS_LABELS } from "../../atoms/vocab-progress";
@@ -12,8 +12,10 @@ import {
   Confusable,
   Definition,
   Example,
+  ExampleContext,
   ExampleList,
   ExampleText,
+  ExampleTools,
   Explanation,
   Head,
   Ipa,
@@ -21,6 +23,7 @@ import {
   Meta,
   Nav,
   Note,
+  RevealButton,
   Section,
   SectionTitle,
   Translation,
@@ -73,18 +76,38 @@ export function VocabEntry() {
       <Explanation>{entry.explanation}</Explanation>
 
       <Section>
-        <SectionTitle>예문</SectionTitle>
+        <SectionTitle>예문 {entry.examples.length}개</SectionTitle>
+        <ExampleTools>
+          <ChoiceChip selected={page.context === "all"} onClick={() => page.setContext("all")}>
+            전체
+          </ChoiceChip>
+          {page.contexts.map((context) => (
+            <ChoiceChip key={context} selected={page.context === context} onClick={() => page.setContext(context)}>
+              {THEME_LABELS[context]}
+            </ChoiceChip>
+          ))}
+          <ChoiceChip selected={page.hideTranslation} onClick={page.toggleHideTranslation}>
+            번역 가리기
+          </ChoiceChip>
+        </ExampleTools>
         <ExampleList>
-          {entry.examples.map((example, index) => (
-            <Example key={example.en} style={{ animationDelay: `${index * 70}ms` }}>
+          {page.examples.map((example, order) => (
+            <Example key={example.en} style={{ animationDelay: `${order * 60}ms` }}>
+              {example.context && <ExampleContext>{THEME_LABELS[example.context]}</ExampleContext>}
               <ExampleText>
                 <p lang="en">
                   <HighlightedSentence sentence={example.en} entry={entry} />
                 </p>
                 <SpeakButton text={example.en} label="예문 듣기" slow size="sm" />
               </ExampleText>
-              <Translation>{example.ko}</Translation>
-              {example.note && <Note>{example.note}</Note>}
+              {page.isRevealed(example.index) ? (
+                <Translation>{example.ko}</Translation>
+              ) : (
+                <RevealButton type="button" onClick={() => page.reveal(example.index)}>
+                  뜻을 떠올린 뒤 눌러서 번역 보기
+                </RevealButton>
+              )}
+              {example.note && page.isRevealed(example.index) && <Note>{example.note}</Note>}
             </Example>
           ))}
         </ExampleList>

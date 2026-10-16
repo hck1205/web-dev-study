@@ -20,8 +20,11 @@ export function wordPattern(word: string, forms: string[] = []) {
 
 /**
  * 사전 데이터가 잘못되면 빌드를 멈춘다.
- * 중복 표제어(대소문자 무시), 소문자가 아닌 표제어, 예문 3개 미만, 표제어가 없는 예문을 잡는다.
+ * 중복 표제어(대소문자 무시), 소문자가 아닌 표제어, 예문 부족, 표제어가 없는 예문, 같은 예문 반복을 잡는다.
  */
+/** 단어 하나에 필요한 최소 예문 수 */
+export const MIN_EXAMPLES = 3;
+
 export function validateVocabulary(entries: VocabEntry[]) {
   const seen = new Map<string, number>();
   entries.forEach((entry, index) => {
@@ -29,7 +32,10 @@ export function validateVocabulary(entries: VocabEntry[]) {
     if (seen.has(key)) throw new Error(`[vocabulary] 중복된 표제어: "${entry.word}" (이미 있는 단어다)`);
     seen.set(key, index);
     if (entry.word !== key) throw new Error(`[vocabulary] 표제어는 소문자 원형으로 쓴다: "${entry.word}"`);
-    if (entry.examples.length < 3) throw new Error(`[vocabulary] ${entry.word}: 예문은 3개 이상`);
+    if (entry.examples.length < MIN_EXAMPLES) throw new Error(`[vocabulary] ${entry.word}: 예문은 ${MIN_EXAMPLES}개 이상`);
+    if (new Set(entry.examples.map((example) => example.en.trim())).size !== entry.examples.length) {
+      throw new Error(`[vocabulary] ${entry.word}: 같은 예문이 두 번 들어 있다`);
+    }
     for (const example of entry.examples) {
       if (!wordPattern(entry.word, entry.forms).test(example.en)) {
         throw new Error(`[vocabulary] ${entry.word}: 예문에 표제어가 없다 → "${example.en}"`);

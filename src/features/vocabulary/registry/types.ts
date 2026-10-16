@@ -13,6 +13,8 @@ export interface VocabExample {
   ko: string;
   /** 이 예문에서 볼 점 (쓰임, 뉘앙스, 문법). 없어도 된다 */
   note?: string;
+  /** 어떤 상황의 문장인지. 상세 페이지에서 라벨로 보여 준다 */
+  context?: VocabTheme;
 }
 
 export interface VocabConfusable {
@@ -40,7 +42,7 @@ export interface VocabEntry {
   definition: string;
   /** 한국어 상세 설명: 뉘앙스, 어떤 글·상황에서 쓰는지, 격식 정도, 비슷한 말과의 차이. 3~5문장 */
   explanation: string;
-  /** 3~4개. 업무·기술·일상 등 서로 다른 상황으로 */
+  /** 6~8개. 업무·기술·학술·일상 등 서로 다른 상황과 서로 다른 문장 형태(변화형, 위치, 질문·대화체)로 */
   examples: VocabExample[];
   /** 자주 같이 쓰는 표현 3~5개 (예: "ameliorate the situation") */
   collocations: string[];
