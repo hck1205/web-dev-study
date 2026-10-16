@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "redis-basics",
+    title: "Redis는 왜 빠른가: 메모리, 단일 스레드, 자료구조",
+    summary: "Redis가 빠른 이유와 느린 명령 하나가 서버 전체를 멈추는 이유는 같은 곳에 있다. 메모리와 단일 스레드 이벤트 루프 구조를 보고, Ubuntu에 설치해 자료구조별 명령을 직접 실행해 본다.",
+    topic: "programming/database/redis",
+    tags: ["Redis", "Database", "NoSQL", "Cache", "Performance"],
+    date: "2026-10-16",
+    keywords: ["Redis", "Memcached", "I/O 다중화", "분산 락"],
+  },
+  {
+    slug: "caching-strategies",
+    title: "캐시 전략: 언제 넣고 언제 지우나",
+    summary: "cache-aside부터 write-behind까지 캐시를 채우고 지우는 패턴을 비교하고, DB와 캐시 사이의 경쟁, 스탬피드, 관통, 눈사태, 핫 키를 막는 방법을 정리한다.",
+    topic: "programming/system-design",
+    tags: ["Cache", "Redis", "System Design", "Performance"],
+    date: "2026-10-16",
+    keywords: ["cache-aside", "write-through", "write-behind", "캐시 관통", "핫 키"],
+  },
+  {
     slug: "frontend-browser-cache",
     title: "프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지",
     summary: "요청 하나가 메모리 캐시, Service Worker, HTTP 캐시를 차례로 거치는 과정과 bfcache, Cache Storage 전략, 새 Service Worker가 기다리는 이유를 이 블로그의 sw.js로 따라간다. 데이터 저장소의 용량과 지워지는 규칙, 미리 받기 힌트까지 정리한다.",

@@ -2,6 +2,7 @@ import { AB_TESTING } from "./ab-testing";
 import { BASE64 } from "./base64";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
@@ -38,6 +39,7 @@ import { OAUTH } from "./oauth";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
+import { REDIS_BASICS } from "./redis-basics";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
@@ -51,6 +53,7 @@ export const QUESTION_SETS = [
   BASE64,
   BIG_O_NOTATION,
   BROWSER_FETCH,
+  CACHING_STRATEGIES,
   CLIENT_DATA_CACHE,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
@@ -87,6 +90,7 @@ export const QUESTION_SETS = [
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,
   REALTIME_COMMUNICATION,
+  REDIS_BASICS,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
