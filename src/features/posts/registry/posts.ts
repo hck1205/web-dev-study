@@ -1,7 +1,9 @@
 import type { Post } from "./types";
+import { withCompanyTags } from "./utils";
 
 // 새 글을 추가하는 방법: src/app/posts/{slug}/page.mdx 를 만들고 여기에 항목을 추가한다.
-export const POSTS: Post[] = [
+// 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
+const ENTRIES: Post[] = [
   {
     slug: "dns",
     title: "DNS는 어떻게 이름을 IP로 바꾸나",
@@ -37,6 +39,7 @@ export const POSTS: Post[] = [
     tags: ["Kubernetes", "Gateway", "Ingress", "HTTP"],
     date: "2026-10-15",
     keywords: ["API 게이트웨이", "Gateway API", "HTTPRoute", "ReferenceGrant", "BFF"],
+    companies: ["coupang"],
   },
   {
     slug: "cors",
@@ -111,3 +114,5 @@ export const POSTS: Post[] = [
     keywords: ["벡터 DB", "임베딩", "HNSW", "RAG"],
   },
 ];
+
+export const POSTS: Post[] = ENTRIES.map(withCompanyTags);

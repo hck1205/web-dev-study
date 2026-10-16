@@ -1,11 +1,12 @@
 import { POSTS } from "./posts";
-import { collectTags, postHref } from "./utils";
+import { collectCompanies, collectTags, postHref } from "./utils";
 
 export type { Difficulty, Post } from "./types";
 export { POSTS } from "./posts";
 export type { TagCount } from "./utils";
 export {
   DIFFICULTY_LABELS,
+  collectCompanies,
   collectTags,
   formatDate,
   postHref,
@@ -28,3 +29,6 @@ export function getPostMetadata(slug: string) {
 }
 
 export const ALL_TAGS = collectTags(POSTS);
+
+/** 회사 라벨 목록 (채용 공고에서 나온 글). 각 회사는 같은 이름의 해시태그 페이지를 가진다. */
+export const ALL_COMPANIES = collectCompanies(POSTS);

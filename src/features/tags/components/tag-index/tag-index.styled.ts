@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
 import { color, font, motion, radius, space } from "@/common/design-system";
+import { omitProps } from "@/common/styles/omit-props";
 
 export const List = styled.ul`
   display: flex;
@@ -11,7 +12,7 @@ export const List = styled.ul`
   list-style: none;
 `;
 
-export const TagChip = styled(Link)`
+export const TagChip = styled(Link, omitProps("company"))<{ company?: boolean }>`
   display: inline-flex;
   gap: ${space[2]};
   align-items: center;
@@ -31,6 +32,26 @@ export const TagChip = styled(Link)`
     border-color: ${color.accent};
     color: ${color.accent};
   }
+  ${({ company }) =>
+    company &&
+    `
+    border-color: ${color.accent};
+    background: ${color.accentSoft};
+    color: ${color.accent};
+    font-weight: ${font.weight.semibold};
+  `}
+`;
+
+export const Section = styled.section`
+  margin-bottom: ${space[8]};
+`;
+
+export const SectionTitle = styled.h2`
+  margin: 0 0 ${space[3]};
+  color: ${color.textSubtle};
+  font-size: ${font.size.sm};
+  font-weight: ${font.weight.semibold};
+  letter-spacing: 0.04em;
 `;
 
 export const Count = styled.span`
