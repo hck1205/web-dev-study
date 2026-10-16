@@ -4,7 +4,7 @@ import type { FlatTopic } from "./types";
 import { findTopic, flattenTopics, sortTopics, topicHref } from "./utils";
 
 export type { FlatTopic, Topic } from "./types";
-export { findTopic, flattenTopics, isInTopic, sortTopics, topicHref, topicKey } from "./utils";
+export { findTopic, flattenTopics, isInTopic, sortTopics, topicHref, topicKey, topicLinkHref } from "./utils";
 
 /** ABC 순으로 정렬된 토픽 트리 */
 export const TOPIC_TREE = sortTopics(TOPICS);

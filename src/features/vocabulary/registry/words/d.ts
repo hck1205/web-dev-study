@@ -1,0 +1,262 @@
+import type { VocabEntry } from "../types";
+
+export const WORDS_D: VocabEntry[] = [
+  {
+    word: "daunting",
+    pos: ["adjective"],
+    ipa: "/ˈdɔːntɪŋ/",
+    level: "C1",
+    meaning: "벅찬, 기가 꺾이는, 엄두가 안 나는",
+    definition: "Seeming difficult to deal with in a way that makes you feel less confident.",
+    explanation:
+      "일이나 과제가 너무 크거나 어려워 보여서 시작하기도 전에 자신감이 꺾이는 느낌을 나타낸다. difficult가 객관적인 난이도를 말한다면 daunting은 그 일을 마주한 사람의 심리적 부담에 초점이 있다. task, challenge, prospect 같은 명사와 자주 붙고, 'a daunting task'는 거의 굳은 표현이다. 회의나 기사, 일상 대화에서 두루 쓰이며 격식 정도는 중간이다. 동사 daunt는 주로 'be daunted by'나 부정문 'not daunted'로 쓰고, 사람이 주어일 때 'I am daunting'이 아니라 'I am daunted'라고 해야 한다.",
+    examples: [
+      {
+        en: "Migrating a ten-year-old monolith to microservices is a daunting task for a team of four.",
+        ko: "10년 된 모놀리스를 마이크로서비스로 옮기는 건 네 명짜리 팀에게 벅찬 일이다.",
+        note: "a daunting task는 가장 흔한 결합이다. 일 자체가 사람을 주눅 들게 한다는 뜻이라 주어는 일이다.",
+      },
+      {
+        en: "The prospect of presenting to the entire board was daunting, so she rehearsed it a dozen times.",
+        ko: "이사회 전체 앞에서 발표한다는 게 부담스러워서 그녀는 열두 번이나 리허설을 했다.",
+        note: "the prospect of ~ is daunting은 '~할 생각만 해도 막막하다'는 느낌을 준다.",
+      },
+      {
+        en: "Researchers face the daunting challenge of analyzing millions of genomes with limited funding.",
+        ko: "연구자들은 한정된 예산으로 수백만 개의 유전체를 분석해야 하는 버거운 과제를 안고 있다.",
+      },
+      {
+        en: "Starting a new language at forty can feel daunting, but small daily habits add up.",
+        ko: "마흔에 새 언어를 시작하는 건 막막하게 느껴질 수 있지만, 작은 습관이 매일 쌓이면 달라진다.",
+      },
+    ],
+    collocations: ["a daunting task", "a daunting challenge", "the daunting prospect of", "seem daunting", "feel daunting"],
+    synonyms: ["intimidating", "formidable", "overwhelming", "challenging"],
+    antonyms: ["easy", "manageable", "reassuring"],
+    family: ["daunt (v.)", "daunted (adj.)", "dauntingly (adv.)", "undaunted (adj.)", "dauntless (adj.)"],
+    confusedWith: [
+      { word: "daunted", note: "daunting은 일이 사람을 주눅 들게 할 때(일이 주어), daunted는 사람이 주눅 든 상태(사람이 주어)다. 'I felt daunted'가 맞고 'I felt daunting'은 틀리다." },
+    ],
+    origin: "라틴어 domitare(길들이다)에서 고대 프랑스어 danter를 거쳐 왔다. '사람의 기를 꺾어 길들이다'로 외우면 쉽다.",
+    themes: ["emotion", "everyday"],
+  },
+  {
+    word: "deference",
+    pos: ["noun"],
+    ipa: "/ˈdefərəns/",
+    level: "C2",
+    meaning: "존중, 경의, (남의 의견·권위에) 따름",
+    definition: "Polite submission and respect shown to someone's opinions, wishes, or authority.",
+    explanation:
+      "상대의 지위나 판단, 경험을 존중해서 내 의견을 앞세우지 않고 따르는 태도를 말한다. respect보다 '굽혀 준다'는 행동의 뉘앙스가 강하고, 격식 있는 글이나 법률·외교·조직 문화를 다루는 글에서 자주 쓴다. 'in deference to'(~을 존중하여, ~을 고려해)와 'out of deference to'(~에 대한 존중에서)가 대표적인 형태다. 불가산 명사라서 'a deference'처럼 쓰지 않는다. 지나치면 '눈치 보기'나 '맹목적 순종'이라는 부정적인 뜻으로도 읽힌다.",
+    examples: [
+      {
+        en: "In deference to the security team's concerns, we postponed the release by a week.",
+        ko: "보안팀의 우려를 존중해 우리는 출시를 일주일 미뤘다.",
+        note: "in deference to ~는 '~을 존중해서, ~을 감안해서'라는 굳은 표현이다. 전치사 to를 쓴다.",
+      },
+      {
+        en: "Junior engineers sometimes show too much deference to senior staff and stay silent about obvious bugs.",
+        ko: "주니어 엔지니어들은 때로 선배를 지나치게 어려워해서 뻔한 버그를 보고도 입을 다문다.",
+        note: "show deference to ~ 형태. 여기서는 지나친 순종이라는 부정적인 뉘앙스로 쓰였다.",
+      },
+      {
+        en: "Courts traditionally give considerable deference to an agency's interpretation of its own rules.",
+        ko: "법원은 전통적으로 행정기관이 스스로 만든 규정을 해석한 내용을 상당히 존중해 왔다.",
+      },
+      {
+        en: "Out of deference to her grandmother, she wore a dress to the family dinner.",
+        ko: "할머니를 생각해서 그녀는 가족 저녁 식사에 원피스를 입고 갔다.",
+      },
+    ],
+    collocations: ["in deference to", "out of deference to", "show deference to", "pay deference to", "due deference"],
+    synonyms: ["respect", "regard", "submission", "compliance"],
+    antonyms: ["disrespect", "defiance", "contempt"],
+    family: ["defer (v.)", "deferential (adj.)", "deferentially (adv.)"],
+    confusedWith: [
+      { word: "difference", note: "철자와 발음이 비슷하지만 difference는 '차이'다. deference는 첫 음절 de-에 강세가 오고 '존중'을 뜻한다." },
+      { word: "reverence", note: "reverence는 경외심에 가까운 깊은 존경이라는 감정이고, deference는 상대의 뜻을 따라 주는 행동·태도에 초점이 있다." },
+    ],
+    origin: "defer(양보하다, 따르다)의 명사형이다. 라틴어 deferre(de- 아래로 + ferre 나르다)에서 왔다.",
+    themes: ["business", "academic"],
+  },
+  {
+    word: "delineate",
+    pos: ["verb"],
+    ipa: "/dɪˈlɪnieɪt/",
+    level: "C2",
+    meaning: "(경계·내용을) 명확히 하다, 윤곽을 그리다, 상세히 기술하다",
+    definition: "To describe, mark, or show the exact limits or details of something.",
+    explanation:
+      "선(line)을 그어 어디부터 어디까지인지 분명하게 나누거나, 계획·역할·차이를 자세하고 정확하게 설명한다는 뜻이다. describe보다 '경계를 긋는다'는 정밀함이 강해서 역할 분담, 책임 범위, 경계선 같은 말과 잘 어울린다. 계약서, 기획서, 논문처럼 격식 있는 글에서 주로 쓰고 일상 대화에서는 거의 쓰지 않는다. 타동사이므로 'delineate about'처럼 전치사를 붙이지 않는다. 지도나 그림에서 윤곽을 실제로 그린다는 뜻으로도 쓴다.",
+    examples: [
+      {
+        en: "The design doc clearly delineates which service owns user data and which only caches it.",
+        ko: "설계 문서는 어떤 서비스가 사용자 데이터를 소유하고 어떤 서비스가 캐시만 하는지 명확히 구분해 둔다.",
+        note: "책임의 경계를 긋는다는 뜻이다. 타동사라 목적어(which 절)가 바로 온다.",
+      },
+      {
+        en: "The contract delineates the responsibilities of each party in the event of a data breach.",
+        ko: "계약서에는 데이터 유출이 일어났을 때 각 당사자의 책임이 상세히 규정되어 있다.",
+      },
+      {
+        en: "The border between the two regions was never formally delineated, which led to decades of dispute.",
+        ko: "두 지역 사이의 경계는 공식적으로 획정된 적이 없었고, 그 때문에 수십 년간 분쟁이 이어졌다.",
+        note: "실제 경계선을 긋는다는 원래 뜻에 가까운 쓰임이다. 수동태로도 자주 쓴다.",
+      },
+    ],
+    collocations: ["clearly delineate", "delineate the boundaries", "delineate responsibilities", "delineate the differences between"],
+    synonyms: ["outline", "define", "describe", "demarcate", "specify"],
+    antonyms: ["blur", "obscure"],
+    family: ["delineation (n.)"],
+    confusedWith: [
+      { word: "outline", note: "outline은 큰 줄기만 대략 보여 주는 것이고, delineate는 경계와 세부를 정확하게 그어 보여 주는 것이다." },
+    ],
+    origin: "라틴어 delineare(de- + linea 선)에서 왔다. '선을 그어 나누다'로 외우면 쉽다.",
+    themes: ["academic", "business"],
+  },
+  {
+    word: "deleterious",
+    pos: ["adjective"],
+    ipa: "/ˌdeləˈtɪriəs/",
+    level: "C2",
+    meaning: "해로운, 유해한",
+    definition: "Causing harm or damage, often in a way that is not immediately obvious.",
+    explanation:
+      "harmful과 같은 뜻이지만 훨씬 격식 있고 학술적인 말이다. 의학, 환경, 공학, 정책 문서에서 '건강·성능·시스템에 해로운 영향'을 말할 때 주로 쓰고, 'deleterious effect(s) on ~'이 가장 흔한 형태다. 전치사는 on이나 to를 쓴다('deleterious to health'). 일상 대화에서 쓰면 과하게 딱딱하게 들리므로 bad나 harmful이 자연스럽다. 당장 눈에 띄지 않게 서서히 해를 끼친다는 느낌이 담길 때가 많다.",
+    examples: [
+      {
+        en: "Excessive logging can have a deleterious effect on throughput in high-traffic services.",
+        ko: "트래픽이 많은 서비스에서 로그를 과하게 남기면 처리량에 악영향을 줄 수 있다.",
+        note: "have a deleterious effect on ~는 가장 전형적인 패턴이다. 전치사 on에 주의한다.",
+      },
+      {
+        en: "The study found that chronic sleep deprivation is deleterious to memory consolidation.",
+        ko: "연구에 따르면 만성적인 수면 부족은 기억 공고화에 해롭다.",
+        note: "be deleterious to ~ 형태도 쓴다. 학술 논문의 전형적인 문체다.",
+      },
+      {
+        en: "Analysts warned that the tariffs could prove deleterious to small exporters.",
+        ko: "분석가들은 그 관세가 소규모 수출업체에 해가 될 수 있다고 경고했다.",
+      },
+    ],
+    collocations: ["deleterious effect on", "deleterious consequences", "deleterious to health", "deleterious impact"],
+    synonyms: ["harmful", "damaging", "detrimental", "injurious", "adverse"],
+    antonyms: ["beneficial", "advantageous", "salutary"],
+    family: ["deleteriously (adv.)"],
+    confusedWith: [
+      { word: "detrimental", note: "뜻은 거의 같고 둘 다 격식체다. detrimental이 비즈니스 글에서 더 흔하고, deleterious는 의학·과학 글에서 더 자주 보인다." },
+    ],
+    origin: "그리스어 dēlētērios(해로운)에서 중세 라틴어를 거쳐 왔다. 철자가 비슷한 delete와는 어원이 다르다.",
+    themes: ["academic"],
+  },
+  {
+    word: "discern",
+    pos: ["verb"],
+    ipa: "/dɪˈsɜːrn/",
+    level: "C1",
+    meaning: "알아차리다, 분간하다, 식별하다",
+    definition: "To notice, recognize, or understand something that is not obvious, often with some effort.",
+    explanation:
+      "잘 드러나지 않는 것을 애써 보거나 생각해서 알아낸다는 뜻이다. see나 notice보다 격식 있고, '흐릿하거나 복잡한 가운데서 구별해 낸다'는 노력의 뉘앙스가 있다. 눈으로 보는 것(shape, figure)과 머리로 파악하는 것(pattern, intention, difference) 모두에 쓴다. 'discern A from B'나 'discern between A and B'로 구별의 뜻을 나타낸다. 진행형으로는 잘 쓰지 않는다.",
+    examples: [
+      {
+        en: "It took us weeks of profiling to discern a pattern in the intermittent memory leaks.",
+        ko: "간헐적인 메모리 누수에서 패턴을 찾아내기까지 몇 주 동안 프로파일링을 해야 했다.",
+        note: "흐릿한 데이터 속에서 규칙을 '알아낸다'는 노력의 뉘앙스가 잘 드러난다.",
+      },
+      {
+        en: "Investors struggled to discern the company's real strategy from its vague press releases.",
+        ko: "투자자들은 그 회사의 모호한 보도자료로는 실제 전략이 무엇인지 파악하기 어려웠다.",
+      },
+      {
+        en: "Young children cannot always discern fact from fiction in online videos.",
+        ko: "어린아이들은 온라인 영상에서 사실과 허구를 늘 구분하지는 못한다.",
+        note: "discern A from B는 'A와 B를 구별하다'. between A and B로도 쓴다.",
+      },
+      {
+        en: "Through the fog, we could barely discern the outline of the bridge.",
+        ko: "안개 속에서 다리의 윤곽이 겨우 보였다.",
+      },
+    ],
+    collocations: ["discern a pattern", "discern the difference between", "discern fact from fiction", "difficult to discern", "barely discern"],
+    synonyms: ["perceive", "detect", "distinguish", "make out", "recognize"],
+    antonyms: ["overlook", "miss"],
+    family: ["discernible (adj.)", "discerning (adj.)", "discernment (n.)"],
+    confusedWith: [
+      { word: "concern", note: "철자 끝이 같아 헷갈리기 쉽지만 concern은 '관련되다, 걱정시키다'이다. discern은 '분간하다'다." },
+    ],
+    origin: "라틴어 discernere(dis- 따로 + cernere 체로 거르다)에서 왔다. '체로 걸러 가려내다'로 외우면 쉽다.",
+    themes: ["academic", "argument"],
+  },
+  {
+    word: "disparity",
+    pos: ["noun"],
+    ipa: "/dɪˈsperəti/",
+    level: "C1",
+    meaning: "격차, 불균형, 차이",
+    definition: "A large difference between two or more things, especially one that is considered unfair.",
+    explanation:
+      "둘 이상의 대상 사이에 크고, 대개 불공정하다고 여겨지는 차이를 말한다. difference보다 훨씬 격식 있고 '바람직하지 않은 격차'라는 평가가 들어 있어서 소득, 임금, 건강, 성별, 지역 격차를 다루는 기사나 보고서에서 자주 쓴다. 'disparity between A and B'와 'disparity in ~'(~에서의 격차)이 기본 형태다. 가산 명사라 여러 격차를 말할 때 disparities로 쓴다. 단순한 수치 불일치에는 discrepancy가 더 맞다.",
+    examples: [
+      {
+        en: "There is a striking disparity between p50 and p99 latency, which suggests a few slow queries dominate the tail.",
+        ko: "p50과 p99 지연 시간 사이에 큰 격차가 있다. 느린 쿼리 몇 개가 꼬리 지연을 좌우한다는 뜻이다.",
+        note: "disparity between A and B. '눈에 띄게 크다'는 striking, huge, wide 같은 형용사와 잘 붙는다.",
+      },
+      {
+        en: "The report highlights the growing disparity in pay between executives and frontline workers.",
+        ko: "보고서는 경영진과 현장 직원 사이에 벌어지는 임금 격차를 집중 조명한다.",
+        note: "disparity in pay처럼 in으로 격차가 나는 영역을 밝힐 수 있다.",
+      },
+      {
+        en: "Regional disparities in access to healthcare widened during the pandemic.",
+        ko: "팬데믹 동안 의료 접근성의 지역 격차가 더 벌어졌다.",
+      },
+    ],
+    collocations: ["wide disparity", "growing disparity", "income disparity", "disparity between A and B", "reduce disparities"],
+    synonyms: ["gap", "inequality", "imbalance", "difference"],
+    antonyms: ["parity", "equality", "similarity"],
+    family: ["disparate (adj.)"],
+    confusedWith: [
+      { word: "discrepancy", note: "discrepancy는 원래 같아야 할 두 수치·진술이 맞지 않는 '불일치'이고, disparity는 집단·대상 사이의 '불공정한 격차'다." },
+    ],
+    origin: "라틴어 dispar(dis- 아님 + par 같은)에서 왔다. parity(동등)의 반대말로 외우면 쉽다.",
+    themes: ["academic", "business"],
+  },
+  {
+    word: "disseminate",
+    pos: ["verb"],
+    ipa: "/dɪˈsemɪneɪt/",
+    level: "C1",
+    meaning: "(정보·지식을) 퍼뜨리다, 보급하다, 전파하다",
+    definition: "To spread information, ideas, or knowledge widely so that many people receive it.",
+    explanation:
+      "정보나 지식, 연구 결과를 많은 사람에게 널리 퍼뜨린다는 뜻이다. spread보다 격식 있고, 조직이 의도적·체계적으로 배포한다는 느낌이 강해서 정부, 연구 기관, 기업 커뮤니케이션 문서에서 자주 쓴다. 목적어로 information, findings, knowledge, guidelines가 흔하고, 대상은 'to ~'로 나타낸다. 질병이나 소문처럼 저절로 퍼지는 것에는 spread가 더 자연스럽다(의학에서 'disseminated' 질환처럼 전문 용어로는 쓴다).",
+    examples: [
+      {
+        en: "We use a weekly changelog to disseminate API changes to every client team.",
+        ko: "우리는 주간 변경 기록으로 API 변경 사항을 모든 클라이언트 팀에 전파한다.",
+        note: "disseminate A to B. 조직이 의도적으로 정보를 배포하는 상황에 딱 맞는다.",
+      },
+      {
+        en: "The institute receives public funding to disseminate its research findings free of charge.",
+        ko: "그 연구소는 연구 결과를 무료로 보급하는 조건으로 공적 자금을 받는다.",
+        note: "research findings는 disseminate의 가장 흔한 목적어 중 하나다.",
+      },
+      {
+        en: "False rumors were disseminated through group chats faster than officials could respond.",
+        ko: "거짓 소문이 단체 대화방을 통해 당국이 대응하는 속도보다 빠르게 퍼졌다.",
+      },
+    ],
+    collocations: ["disseminate information", "disseminate findings", "widely disseminated", "disseminate knowledge", "disseminate to the public"],
+    synonyms: ["spread", "circulate", "distribute", "broadcast", "propagate"],
+    antonyms: ["suppress", "withhold", "conceal"],
+    family: ["dissemination (n.)"],
+    confusedWith: [
+      { word: "dissipate", note: "dissipate는 '흩어져 사라지다, 낭비하다'로 없어지는 쪽이다. disseminate는 정보가 널리 '퍼져 닿는' 쪽이다." },
+    ],
+    origin: "라틴어 disseminare(dis- 사방으로 + seminare 씨를 뿌리다)에서 왔다. semen(씨앗)과 같은 뿌리다.",
+    themes: ["academic", "business"],
+  },
+];

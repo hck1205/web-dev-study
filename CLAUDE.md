@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database, Frontend, Network, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, Security, System Design), `자기개발`(English, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database, Frontend, Network, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -218,6 +218,17 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 각 글은 토픽 트리의 가장 구체적인 노드에 둔다. 맞는 노드가 없으면 하위 토픽을 만든다(예: `Frontend › Performance`).
 - `posts.ts`에 `companies: ["coupang"]`처럼 회사 이름(소문자)을 적는다. 그러면 글 목록과 글 상단에 회사 라벨이 붙고, 같은 이름의 해시태그(`#coupang`)가 자동으로 추가된다. `/tags/coupang`에서 그 회사 글만 모아 보고, 검색창에서 회사 이름으로 찾을 수 있다. `/tags` 맨 위에 회사 목록이 따로 나온다.
 - 본문에는 회사 이야기를 쓰지 않는다. 글은 주제 자체를 설명하고, 회사와의 연결은 라벨이 맡는다. 퀴즈 문제도 다른 글과 똑같이 쓴다.
+
+## 어휘 사전 (English › 어휘)
+
+고급(C1~C2) 영어 어휘를 공부하는 사전이다. 토픽 `self-development/english/vocabulary`는 `href: "/vocabulary"`로 사전 페이지에 바로 연결된다(토픽에 `href`를 주면 메뉴·토픽 링크가 그 주소로 간다).
+
+- 데이터: `features/vocabulary/registry/words/{첫 글자}.ts`에 `VocabEntry`를 추가한다. 필드 설명은 `registry/types.ts` 주석이 기준이다. 새 글자 파일을 만들면 `registry/index.ts`의 import와 배열에도 넣는다.
+- **중복 방지**: 추가하기 전에 `grep -rn 'word: "단어"' src/features/vocabulary/registry/words`로 찾아본다. 빌드 시 `validateVocabulary`가 대소문자를 무시하고 같은 표제어를 찾으면 빌드를 멈춘다. 표제어는 소문자 원형으로 쓴다.
+- 항목 기준: 한국어 핵심 뜻 + 영영 정의 + 한국어 상세 설명(뉘앙스, 격식, 비슷한 말과의 차이, 흔한 실수 3~5문장) + 예문 3~4개(기술·업무·학술·일상 등 서로 다른 상황, 번역, 쓰임 메모) + 연어 + 동의어·반의어 + 파생어 + 헷갈리는 말 + 어원 + 주제.
+- 예문에는 표제어나 그 변화형이 꼭 들어간다(빈칸 퀴즈가 그 자리를 가린다). 어간이 바뀌는 변화형(viable → viability)은 `forms`에 적는다. 없으면 빌드가 멈춘다.
+- 화면: `/vocabulary`(검색·난이도·주제·학습 상태 필터, A~Z 이동), `/vocabulary/{word}`(상세, 발음·예문 듣기), `/vocabulary/study`(학습).
+- 학습: 카드(뒤집기, 스스로 판정), 뜻 고르기, 빈칸 채우기, 듣고 고르기(Web Speech API, 지원하는 브라우저만). 라이트너 상자 방식으로 맞히면 다음 복습 간격이 1→2→4→7→15일로 늘고, 틀리면 다음 날 다시 나온다. 학습 기록은 `features/vocabulary/atoms/vocab-progress`(get/set/reset, localStorage `vocab-progress`)에 저장된다.
 
 ## 백링크 (글 사이 자동 링크)
 

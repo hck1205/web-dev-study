@@ -13,6 +13,9 @@ export const topicKey = (path: string[]) => path.join("/");
 
 export const topicHref = (path: string[]) => `/topics/${topicKey(path)}`;
 
+/** 메뉴·목록에서 이 토픽을 눌렀을 때 갈 주소. 별도 페이지가 있는 토픽은 그 주소로 간다. */
+export const topicLinkHref = (topic: Topic, path: string[]) => topic.href ?? topicHref(path);
+
 export function flattenTopics(topics: Topic[], parentPath: string[] = [], parentTrail: Topic[] = []): FlatTopic[] {
   return topics.flatMap((topic) => {
     const path = [...parentPath, topic.id];
