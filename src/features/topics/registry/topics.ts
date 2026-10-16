@@ -23,7 +23,16 @@ export const TOPICS: Topic[] = [
         children: [{ id: "git", label: "Git", description: "버전 관리, 브랜치, 협업 흐름" }],
       },
       { id: "computer-science", label: "Computer Science", description: "컴퓨터 과학 기초 이론" },
-      { id: "database", label: "Database", description: "RDB, NoSQL, 쿼리와 인덱스" },
+      {
+        id: "database",
+        label: "Database",
+        description: "RDB, NoSQL, 쿼리와 인덱스",
+        children: [
+          { id: "redis", label: "Redis", description: "인메모리 자료구조 저장소, 캐시, 메모리 관리" },
+          { id: "sql", label: "SQL", description: "SQL 문법, 인덱스, 쿼리 튜닝, 테이블 설계, 트랜잭션" },
+          { id: "sqld", label: "SQLD", description: "SQLD(SQL 개발자) 시험 범위를 주제별로" },
+        ],
+      },
       {
         id: "frontend",
         label: "Frontend",
@@ -53,6 +62,7 @@ export const TOPICS: Topic[] = [
         description: "컨테이너, 배포, 운영",
         children: [
           { id: "docker", label: "Docker", description: "컨테이너 이미지와 실행" },
+          { id: "nginx", label: "Nginx", description: "웹 서버, 리버스 프록시, 로드 밸런싱" },
           { id: "kubernetes", label: "Kubernetes", description: "컨테이너 오케스트레이션" },
           {
             id: "ci-cd",
