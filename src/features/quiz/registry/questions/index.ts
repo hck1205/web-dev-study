@@ -15,6 +15,8 @@ import { HTTP_METHODS } from "./http-methods";
 import { HTTP_STATUS_CODES } from "./http-status-codes";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
+import { IPTABLES_BASICS } from "./iptables-basics";
+import { IPTABLES_NAT } from "./iptables-nat";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
@@ -52,6 +54,8 @@ export const QUESTION_SETS = [
   HTTP_STATUS_CODES,
   HTTP_VERSIONS,
   HTTPS_TLS,
+  IPTABLES_BASICS,
+  IPTABLES_NAT,
   JS_MEMORY_LEAK,
   KUBERNETES_INGRESS,
   LOCAL_CUSTOM_DOMAIN,

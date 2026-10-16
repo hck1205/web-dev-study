@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "iptables-basics",
+    title: "iptables로 리눅스 방화벽 이해하기",
+    summary: "패킷이 netfilter의 다섯 검문소를 어떻게 지나고 규칙이 위에서부터 어떻게 맞춰지는지 보고, Ubuntu 서버에서 SSH와 웹만 여는 규칙을 잠기지 않게 만들어 저장하는 데까지 간다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Network", "Security", "Firewall"],
+    date: "2026-10-16",
+    keywords: ["iptables", "netfilter", "conntrack", "ip6tables", "iptables-persistent"],
+  },
+  {
+    slug: "iptables-nat",
+    title: "iptables NAT와 포트 포워딩: 사설망, Docker, Kubernetes까지",
+    summary: "SNAT·DNAT·MASQUERADE로 주소를 바꾸고 conntrack이 그 변환을 기억하는 원리를 보고, 게이트웨이와 포트 포워딩을 직접 구성한 뒤 Docker와 kube-proxy가 같은 규칙을 어떻게 쓰는지 따라간다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Network", "Docker", "Kubernetes", "Firewall"],
+    date: "2026-10-16",
+    keywords: ["MASQUERADE", "포트 포워딩", "DNAT", "DOCKER-USER", "kube-proxy"],
+  },
+  {
     slug: "http-message",
     title: "HTTP 메시지는 어떻게 생겼나",
     summary: "HTTP 메시지는 첫 줄, 헤더, 빈 줄, 본문으로 된 텍스트다. Host, Content-Type, Content-Length와 chunked, 콘텐츠 협상과 압축, 본문 형식까지 헤더 한 줄이 무엇을 결정하는지 curl로 뜯어본다.",
