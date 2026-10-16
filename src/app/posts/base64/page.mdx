@@ -1,0 +1,470 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("base64");
+
+프로필 API 응답을 열어 보면 가끔 이런 필드가 있다.
+
+```json
+{
+  "name": "Matt",
+  "avatar": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAA..."
+}
+```
+
+`avatar`는 PNG 이미지다. 그런데 JSON 문자열 안에 글자로 들어 있다. 로그인하고 받은 JWT도 비슷하다. `eyJ`로 시작하는 긴 문자열인데, 가운데 조각을 복사해 터미널에서 풀면 내 아이디와 권한이 그대로 나온다. 암호화된 줄 알았던 값이 누구에게나 읽힌다.
+
+둘 다 Base64다. 바이트를 글자 64개만으로 다시 쓰는 방법이다. 이미지가 왜 글자로 바뀌어야 했는지, 그 글자는 어떻게 정해지는지, 그리고 왜 아무나 풀 수 있는지를 차례로 본다. 터미널 예시는 Ubuntu 24.04(GNU coreutils 9.4) 기준이고, 22.04에서도 출력이 같다.
+
+## 글자만 다니는 길에 바이트를 실으려면
+
+이미지, 압축 파일, 암호화 결과 같은 바이너리는 0부터 255까지 아무 바이트나 섞여 있다. 그중에는 화면에 찍을 수 없는 제어 문자도 있고, 줄바꿈(0x0A)이나 NUL(0x00)도 있다. 문제는 세상에 "글자만 지나간다고 가정한" 통로가 많다는 것이다.
+
+- 이메일은 원래 7비트 ASCII 텍스트만 오가도록 만들어졌다. 줄 길이 제한도 있고, 중간 서버가 줄 끝을 바꾸기도 한다. 첨부 파일을 그대로 실으면 깨진다.
+- JSON 문자열은 유니코드 텍스트다. 임의의 바이트열은 올바른 UTF-8이 아닐 수 있어서 문자열에 그대로 넣을 수 없다.
+- HTTP 헤더 값과 URL은 쓸 수 있는 글자가 더 좁다. 줄바꿈 하나만 섞여도 헤더가 끊긴다.
+
+그래서 "어떤 바이트든 안전한 글자 몇 개로만 다시 쓰자"는 약속이 필요했다. 안전한 글자로 고른 것이 영문 대문자 26개, 소문자 26개, 숫자 10개, 그리고 `+`와 `/`. 합쳐서 64개다. 64는 2의 6제곱이니 글자 하나가 정확히 6비트를 맡는다. 이메일 첨부(MIME), JSON에 실은 이미지, CSS의 data URL, HTTP Basic 인증 헤더, JWT가 모두 이 약속을 쓴다.
+
+Base64는 압축도 암호화도 아니다. 같은 내용을 다른 글자로 옮겨 적는 인코딩이고, 규칙이 공개되어 있으니 누구나 되돌릴 수 있다.
+
+## 3바이트가 4글자가 되는 과정
+
+바이트는 8비트, Base64 글자는 6비트다. 8과 6의 최소공배수는 24라서, 3바이트(24비트)를 모으면 6비트 조각 4개로 딱 나뉜다. 순서는 이렇다.
+
+1. 입력에서 바이트 3개를 가져와 비트를 한 줄로 이어 붙인다.
+2. 앞에서부터 6비트씩 잘라 0~63 사이 숫자 4개를 만든다.
+3. 숫자를 표에서 글자로 바꾼다. 0~25는 `A`~`Z`, 26~51은 `a`~`z`, 52~61은 `0`~`9`, 62는 `+`, 63은 `/`.
+
+`Man`으로 해 보자. 아래 그림에서 다음을 누르면 바이트가 비트로 쌓이고, 6비트씩 잘려 글자로 바뀐다.
+
+<AlgoTrace
+  caption="Man → TWFu. 위 칸은 입력 바이트(16진수)와 잘린 6비트 조각이다"
+  memoryLabel="쌓인 것"
+  cells={["4D", "61", "6E", "010011", "010110", "000101", "101110"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["01001101"],
+      caption: "M은 ASCII 0x4D, 비트로 01001101이다.",
+    },
+    {
+      pointer: 1,
+      memory: ["01001101", "01100001"],
+      caption: "a는 0x61, 01100001. 뒤에 이어 붙인다.",
+    },
+    {
+      pointer: 2,
+      memory: ["01001101", "01100001", "01101110"],
+      caption: "n은 0x6E, 01101110. 24비트가 다 모였다.",
+    },
+    {
+      pointer: 3,
+      memory: ["T"],
+      caption: "앞의 6비트 010011은 19. 표의 19번째는 T다.",
+    },
+    {
+      pointer: 4,
+      memory: ["T", "W"],
+      caption: "다음 6비트 010110은 22, W다.",
+    },
+    {
+      pointer: 5,
+      memory: ["T", "W", "F"],
+      caption: "000101은 5, F다.",
+    },
+    {
+      pointer: 6,
+      found: [3, 4, 5, 6],
+      memory: ["T", "W", "F", "u"],
+      caption: "101110은 46. 26을 빼면 20이니 소문자 u다. 결과는 TWFu.",
+    },
+  ]}
+/>
+
+바이트 경계와 글자 경계가 어긋나 있다는 점을 눈여겨보자. 두 번째 글자 `W`는 `M`의 마지막 2비트와 `a`의 앞 4비트로 만들어졌다. 그래서 Base64 문자열을 중간에서 아무렇게나 자르면 뜻이 없다. 자를 거라면 4글자 단위로 잘라야 3바이트 단위로 정확히 되돌아간다.
+
+디코딩은 이 과정을 거꾸로 돈다. 글자 4개를 표에서 숫자로 바꾸고, 6비트씩 이어 붙인 24비트를 8비트씩 나눠 바이트 3개를 얻는다.
+
+## 모자란 바이트는 등호로 채운다
+
+입력이 3의 배수가 아니면 마지막 묶음이 모자란다. 이때는 빈 자리를 0비트로 채워 6비트 조각을 만들고, 실제 데이터가 없는 조각 자리에는 글자 대신 `=`를 쓴다. 이게 패딩이다.
+
+<AlgoTrace
+  caption="Ma → TWE=. 0으로 채운 비트와 = 자리를 본다"
+  memoryLabel="쌓인 것"
+  cells={["4D", "61", "010011", "010110", "000100", "(없음)"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["01001101"],
+      caption: "M 한 바이트를 비트로 놓는다.",
+    },
+    {
+      pointer: 1,
+      memory: ["01001101", "01100001"],
+      caption: "a까지 16비트. 24비트에서 8비트가 모자란다.",
+    },
+    {
+      pointer: 2,
+      memory: ["T"],
+      caption: "010011은 19, T. 여기까지는 Man과 같다.",
+    },
+    {
+      pointer: 3,
+      memory: ["T", "W"],
+      caption: "010110은 22, W.",
+    },
+    {
+      pointer: 4,
+      memory: ["T", "W", "E"],
+      caption: "남은 0001 뒤에 0을 두 개 붙여 000100. 4는 E다.",
+    },
+    {
+      pointer: 5,
+      found: [2, 3, 4],
+      memory: ["T", "W", "E", "="],
+      caption: "마지막 조각은 데이터가 하나도 없다. 글자 대신 =를 쓴다. 결과는 TWE=.",
+    },
+  ]}
+/>
+
+한 바이트만 남으면 8비트에 0을 4개 붙여 12비트, 글자 2개가 되고 `=`가 두 개 붙는다. `M`은 `TQ==`다. 정리하면 남은 바이트가 2개면 `=` 하나, 1개면 `=` 두 개, 0개면 없다. `=`가 세 개 붙는 경우는 없다.
+
+패딩은 "원래 바이트가 몇 개였는지"를 알려 준다. 그래서 Base64 문자열 길이는 항상 4의 배수다. 길이를 이미 알 수 있는 상황이면 패딩은 없어도 되는데, 뒤에서 볼 base64url이 그렇게 쓴다.
+
+0으로 채운 비트에는 함정이 하나 있다. `TQ==`의 `Q`(16, 010000)에서 뒤 4비트는 버려지는 자리다. 그래서 `TR==`(R은 17, 010001)도 너그러운 디코더에서는 똑같이 `M`이 된다. Node의 `Buffer`와 브라우저의 `atob`가 그렇다. 서로 다른 문자열이 같은 바이트로 풀린다는 뜻이라, Base64 문자열 자체를 키로 쓰거나 서명 대상 비교에 쓰면 우회 구멍이 생길 수 있다. 비교는 디코딩한 바이트로 하거나, 다시 인코딩해서 원래 문자열과 같은지 확인한다.
+
+## 한글은 UTF-8 바이트부터 만든다
+
+Base64는 바이트를 다룬다. 글자를 넣으려면 먼저 글자를 바이트로 바꿔야 하고, 웹에서는 거의 항상 UTF-8을 쓴다. `한`은 UTF-8로 `ED 95 9C` 세 바이트다.
+
+```text
+ED       95       9C
+11101101 10010101 10011100
+111011 011001 010110 011100
+  59     25     22     28
+  7      Z      W      c
+```
+
+59는 52를 빼면 7이니 숫자 `7`, 25는 `Z`, 22는 `W`, 28은 소문자 `c`다. 그래서 `한`은 `7ZWc`, `한글`은 여섯 바이트라 `7ZWc6riA`가 된다.
+
+같은 글자라도 어떤 바이트로 바꾸느냐에 따라 결과가 달라진다. `é`를 UTF-8로 바꾸면 `C3 A9`라 `w6k=`이고, Latin-1 한 바이트 `E9`로 바꾸면 `6Q==`다. 받는 쪽이 다른 문자 인코딩으로 풀면 글자가 깨진다. Base64 앞뒤의 문자 인코딩은 보내는 쪽과 받는 쪽이 따로 맞춰야 한다.
+
+## 인코더를 직접 짜 보기
+
+바이트 배열을 받아 Base64 문자열을 돌려주는 함수를 만들어 보자. `btoa`나 `Buffer`는 쓰지 않는다. 3바이트씩 끊어 24비트 정수를 만들고, `>>`와 `& 63`으로 6비트씩 꺼내면 된다.
+
+<CodePlayground
+  caption="encodeBase64: 바이트 배열 → Base64"
+  functionName="encodeBase64"
+  initialCode={`function encodeBase64(bytes) {
+  // bytes: 0~255 숫자 배열. 예) [77, 97, 110]
+  // 반환: Base64 문자열. 예) "TWFu"
+  const ALPHABET =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  return "";
+}`}
+  solution={`function encodeBase64(bytes) {
+  const ALPHABET =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    // 세 바이트를 24비트 정수 하나로 붙인다
+    const n = (b0 << 16) | (b1 << 8) | b2;
+    out += ALPHABET[(n >> 18) & 63];
+    out += ALPHABET[(n >> 12) & 63];
+    // 남은 바이트 수에 따라 뒤 두 글자는 = 로 채운다
+    out += i + 1 < bytes.length ? ALPHABET[(n >> 6) & 63] : "=";
+    out += i + 2 < bytes.length ? ALPHABET[n & 63] : "=";
+  }
+  return out;
+}`}
+  tests={[
+    { label: "Man", args: [[77, 97, 110]], expected: "TWFu" },
+    { label: "Ma (패딩 1개)", args: [[77, 97]], expected: "TWE=" },
+    { label: "M (패딩 2개)", args: [[77]], expected: "TQ==" },
+    { label: "빈 배열", args: [[]], expected: "" },
+    { label: "한 (UTF-8)", args: [[237, 149, 156]], expected: "7ZWc" },
+    { label: "Hello", args: [[72, 101, 108, 108, 111]], expected: "SGVsbG8=" },
+    { label: "+ 와 / 가 나오는 값", args: [[251, 255, 191]], expected: "+/+/" },
+  ]}
+/>
+
+마지막 테스트 `FB FF BF`는 비트가 거의 1이라 62번 `+`와 63번 `/`가 번갈아 나온다. 이 두 글자가 다음 이야기의 주인공이다.
+
+## 3분의 4만큼 커진다
+
+3바이트가 4글자가 되니 크기는 항상 약 4/3, 33% 늘어난다. 정확히는 `4 × ceil(n / 3)`글자다. 100바이트는 136글자, 1,000바이트는 1,336글자다. 글자 하나가 ASCII 1바이트이니 그대로 바이트 수다.
+
+이메일(MIME)은 여기에 줄바꿈이 더해진다. MIME은 Base64 본문을 한 줄에 76글자 이하로 끊으라고 정했고, 줄마다 CRLF 2바이트가 붙는다. 그래서 첨부 파일은 원본보다 37% 정도 커진다. 메일 서비스의 첨부 용량 제한이 체감보다 빨리 차는 이유다.
+
+gzip 같은 압축과의 순서도 정해져 있다. Base64 결과는 64가지 글자만 쓰니 압축이 잘 안 될 것 같지만, 실제로는 원본의 반복이 글자 패턴으로 남아 있어서 HTTP 압축이 꽤 줄여 준다. 그래도 바이트를 먼저 압축하고 마지막에 Base64로 감싸는 쪽이 훨씬 작다.
+
+다른 선택지와 비교하면 위치가 보인다. 16진수(hex)는 1바이트를 2글자로 써서 두 배가 되지만 사람이 읽기 쉽고, 해시값을 보여 줄 때 많이 쓴다. Base32는 60% 커지는 대신 대소문자를 구분하지 않아서, 사람이 받아 적는 OTP 시크릿 키에 쓴다. 정말 크기가 문제라면 인코딩을 아예 하지 않는 게 답이다. 파일 업로드에 `multipart/form-data`를 쓰면 바이트를 그대로 싣는다. JSON에 큰 파일을 Base64로 넣는 API는 33%를 더 보내고, 서버와 클라이언트가 그만큼 큰 문자열을 메모리에 들고 있어야 한다.
+
+## URL에 넣으면 더하기와 슬래시가 말썽이다
+
+표준 Base64의 `+`, `/`, `=`는 URL에서 다른 뜻이 있다. `/`는 경로 구분자, `=`는 쿼리의 키와 값 구분자이고, `+`는 폼 쿼리 문자열에서 공백으로 읽힌다. 토큰을 쿼리에 그대로 넣으면 서버가 `+`를 공백으로 바꿔 읽어서 서명 검증이 깨지는 일이 생긴다.
+
+그래서 URL과 파일 이름에 안전한 변형이 따로 있다. base64url은 `+` 대신 `-`, `/` 대신 `_`를 쓰고, 길이로 패딩을 알 수 있으니 보통 `=`를 뺀다. 나머지 62글자는 같다.
+
+```text
+바이트 FB FF BF   →  base64: +/+/    base64url: -_-_
+문자열 "~~~"      →  base64: fn5+    base64url: fn5-
+문자열 "Ma"       →  base64: TWE=    base64url: TWE
+```
+
+JWT의 세 조각이 base64url이다. [토큰 로그인](/posts/token-login)에서 본 헤더 `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9`를 풀면 `{"alg":"HS256","typ":"JWT"}`가 나온다. JSON이 늘 `{"`로 시작하니 `eyJ`도 늘 같다. 토큰 앞부분이 다 똑같아 보이는 이유다.
+
+base64url을 표준 디코더에 넣을 때는 글자를 되돌리고 패딩을 채워야 한다. 길이를 4로 나눈 나머지가 2면 `==`, 3이면 `=`를 붙인다. 나머지가 1이면 어떤 경우에도 나올 수 없는 길이라 잘못된 입력이다.
+
+## 인코딩은 자물쇠가 아니다
+
+HTTP Basic 인증은 아이디와 비밀번호를 `아이디:비밀번호`로 이어 Base64로 바꾼 뒤 헤더에 싣는다. 헤더에 콜론이나 한글이 섞여도 안전하게 지나가게 하려는 것이지, 숨기려는 게 아니다. 아래 그림에서 HTTPS 없이 이 헤더를 보내면 어떻게 되는지 따라가 보자.
+
+<SequenceDiagram
+  caption="Base64로 감싼 비밀번호는 그대로 읽힌다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "spy", label: "같은 와이파이" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "GET /admin",
+      title: "인증 없이 요청한다",
+      detail: "관리자 페이지를 처음 연다. 아직 Authorization 헤더가 없다.",
+      payload: "GET /admin HTTP/1.1\nHost: intranet.example.com",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "401 Basic",
+      title: "서버가 Basic 인증을 요구한다",
+      detail: "WWW-Authenticate 헤더를 본 브라우저가 아이디와 비밀번호를 묻는 창을 띄운다.",
+      payload: "HTTP/1.1 401 Unauthorized\nWWW-Authenticate: Basic realm=\"admin\", charset=\"UTF-8\"",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "Authorization",
+      title: "Base64로 감싸 보낸다",
+      detail: "matt:secret을 Base64로 바꾼 값이다. 이후 같은 영역의 요청마다 브라우저가 이 헤더를 다시 붙인다.",
+      payload: "GET /admin HTTP/1.1\nAuthorization: Basic bWF0dDpzZWNyZXQ=",
+    },
+    {
+      from: "spy",
+      to: "spy",
+      label: "base64 -d",
+      title: "옆에서 패킷을 본 사람이 푼다",
+      detail: "평문 HTTP라 헤더가 그대로 보인다. 키도 필요 없이 한 줄로 비밀번호가 나온다.",
+      payload: "$ echo bWF0dDpzZWNyZXQ= | base64 -d\nmatt:secret",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "같은 헤더, TLS 안",
+      title: "HTTPS로 보내면 길에서는 안 보인다",
+      detail: "헤더 전체가 TLS로 암호화되어 지나간다. 비밀을 지키는 건 Base64가 아니라 TLS다.",
+      payload: "(암호화된 TLS 레코드)",
+    },
+  ]}
+/>
+
+Basic 인증을 쓰려면 반드시 [HTTPS](/posts/https-tls) 위에서 써야 한다. JWT도 같다. 서명은 내용이 바뀌지 않았다는 걸 보장할 뿐, 내용을 숨기지 않는다. 비밀번호, 주민등록번호 같은 값을 JWT 페이로드에 넣으면 토큰을 손에 넣은 누구나 읽는다. 숨겨야 하면 JWE처럼 실제로 암호화하는 방식을 쓴다.
+
+Base64를 난독화 용도로 쓰는 것도 같은 이유로 효과가 없다. 설정 파일의 비밀번호를 Base64로 바꿔 두면 눈으로 바로 읽히지 않을 뿐이다. 쿠버네티스 Secret의 값이 Base64인 것도 YAML에 바이너리를 담기 위해서지 보안 장치가 아니다.
+
+## 브라우저의 btoa는 한글을 받지 못한다
+
+브라우저에는 오래전부터 `btoa`(바이너리 → ASCII, 인코딩)와 `atob`(디코딩)가 있다. 이름이 헷갈리는데, 이 함수는 문자열의 각 글자를 한 바이트로 보고 인코딩한다. 그래서 코드 포인트가 255를 넘는 글자가 있으면 바이트로 바꿀 수 없어서 예외를 던진다.
+
+```js
+btoa("Man"); // "TWFu"
+btoa("한");  // InvalidCharacterError
+atob("7ZWc"); // "í\x95\x9c" 처럼 깨진 세 글자
+```
+
+`atob`도 같은 이유로 바이트 하나를 글자 하나로 돌려준다. UTF-8 바이트를 다시 글자로 조립하지 않으니 한글이 깨진다. 방법은 글자와 바이트 사이를 `TextEncoder`/`TextDecoder`로 직접 건너는 것이다.
+
+```js
+// 문자열 → UTF-8 바이트 → Base64
+function toBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+// Base64 → 바이트 → 문자열
+function fromBase64(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+toBase64("한글");        // "7ZWc6riA"
+fromBase64("7ZWc6riA");  // "한글"
+```
+
+예전 코드에서 보이는 `btoa(unescape(encodeURIComponent(s)))`도 같은 일을 하지만 `unescape`는 폐기 예정 함수라 새로 쓰지 않는다. `String.fromCharCode(...bytes)`처럼 펼침 연산자를 쓰면 큰 배열에서 인자 개수 한도를 넘어 에러가 나니, 위처럼 반복문으로 붙이거나 조각으로 나눠 처리한다.
+
+최근에는 `Uint8Array`에 Base64 메서드가 표준으로 들어왔다. `bytes.toBase64()`와 `Uint8Array.fromBase64(str)`이고, `{ alphabet: "base64url", omitPadding: true }` 옵션으로 base64url도 바로 만든다. 파이어폭스 133, 사파리 18.2부터 들어갔고 크롬 계열은 그보다 늦게 2025년 하반기 버전부터 지원한다. 오래된 브라우저와 Node.js 22에는 없으니 `typeof Uint8Array.prototype.toBase64 === "function"`으로 확인하고 없으면 위 방식으로 대신한다.
+
+Node.js에서는 `Buffer`가 문자 인코딩까지 처리해 준다. `"base64url"`도 지원한다.
+
+```js
+Buffer.from("한글").toString("base64");          // "7ZWc6riA" (기본 UTF-8)
+Buffer.from("7ZWc6riA", "base64").toString();    // "한글"
+Buffer.from("~~~").toString("base64url");        // "fn5-"
+```
+
+디코더가 얼마나 너그러운지도 다르다. `atob`는 공백과 줄바꿈을 무시하고 패딩이 빠져도 받아 준다. Node의 `Buffer`는 더 너그러워서 알파벳 밖의 글자를 조용히 건너뛴다. 반면 엄격한 디코더는 둘 다 에러로 본다. 외부 입력을 검증할 때 "디코딩에 성공했으니 올바른 Base64"라고 판단하면 안 되는 이유다.
+
+## 터미널에서 base64 다루기
+
+Ubuntu에는 coreutils의 `base64` 명령이 기본으로 들어 있다. 설치할 것은 없다.
+
+```bash
+# 문자열을 인코딩한다. -n 으로 echo의 줄바꿈을 뺀다
+echo -n 'Man' | base64
+
+# -n 을 빼먹으면 줄바꿈(0x0A)까지 인코딩된다
+echo 'Man' | base64
+
+# 디코딩한다
+echo -n 'TWFu' | base64 -d
+```
+
+```text
+TWFu
+TWFuCg==
+Man
+```
+
+두 번째 줄을 보자. `TWFu` 뒤에 `Cg==`가 붙었다. `Cg==`는 줄바꿈 한 바이트다. 쿠버네티스 Secret이나 환경 변수에 비밀번호를 Base64로 넣었는데 인증이 안 될 때 가장 먼저 의심할 곳이다. 비밀번호 끝에 줄바꿈이 붙어 있다.
+
+긴 입력은 기본으로 76글자마다 줄을 바꾼다. 한 줄로 받으려면 `-w 0`을 준다.
+
+```bash
+# 100바이트를 인코딩한다. 기본은 76글자에서 줄이 바뀐다
+head -c 100 /dev/zero | base64
+
+# 줄바꿈 없이 한 줄로. 개행이 없으니 글자 수를 세어 본다
+head -c 100 /dev/zero | base64 -w 0 | wc -c
+
+# 파일을 인코딩해 저장하고, 다시 풀어 원본과 같은지 비교한다
+base64 -w 0 avatar.png > avatar.b64
+base64 -d avatar.b64 > restored.png
+cmp avatar.png restored.png && echo same
+```
+
+```text
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+136
+same
+```
+
+136은 앞에서 계산한 `4 × ceil(100 / 3)`과 같다. `cmp`는 두 파일이 같으면 아무것도 출력하지 않고 성공하므로 `same`이 찍힌다.
+
+base64url은 `base64`가 모른다. 같은 coreutils의 `basenc`를 쓴다. 다만 `basenc`도 패딩이 빠진 입력은 앞부분만 풀고 에러로 끝나니, JWT 조각을 풀 때는 `=`를 채워 준다.
+
+```bash
+# base64url로 인코딩한다
+echo -n '~~~' | basenc --base64url
+
+# JWT 페이로드 조각(38글자, 4로 나눈 나머지 2)에 == 를 붙여 푼다
+echo -n 'eyJzdWIiOiJtYXR0IiwiYWRtaW4iOmZhbHNlfQ==' | basenc --base64url -d
+```
+
+```text
+fn5-
+{"sub":"matt","admin":false}
+```
+
+패딩 없이 `TWE`를 `base64 -d`에 넣으면 `Ma`를 출력한 뒤 `base64: invalid input`을 내고 종료 코드 1로 끝난다. 스크립트에서 디코딩 결과를 쓸 때는 종료 코드를 확인해야 반쯤 풀린 값을 쓰지 않는다. macOS의 `base64`는 BSD 계열이라 옵션이 다르다(`-d` 대신 `-D`를 쓰던 버전도 있다). 스크립트를 여러 OS에서 돌린다면 확인해 둔다.
+
+## data URL은 요청 하나를 아끼는 대신
+
+CSS나 HTML에 이미지를 파일 대신 글자로 박아 넣는 방법이 data URL이다. 형식은 `data:[미디어 타입][;base64],데이터`다. 아래는 8×8 빨간 원 SVG(107바이트)를 넣은 예다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="data URL 하나. 미디어 타입, 인코딩 표시, 데이터 순서다"
+  base="data:"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "type",
+      display: "image/svg+xml",
+      title: "미디어 타입",
+      description: "브라우저가 이 바이트를 무엇으로 해석할지 정한다. 생략하면 text/plain;charset=US-ASCII로 본다.",
+      required: true,
+    },
+    {
+      key: "enc",
+      display: ";base64",
+      title: "Base64 표시",
+      description: "데이터가 Base64라는 뜻이다. 없으면 퍼센트 인코딩된 텍스트로 읽는다. SVG처럼 원래 텍스트인 것은 Base64 대신 퍼센트 인코딩을 쓰는 편이 대개 더 작다.",
+    },
+    {
+      key: "data",
+      display: ",PHN2ZyB4bWxucz0i…",
+      title: "데이터",
+      description: "쉼표 뒤가 데이터다. 107바이트 SVG가 144글자가 됐다. 4 × ceil(107 / 3) = 144다.",
+      code: "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxjaXJjbGUgY3g9IjQiIGN5PSI0IiByPSI0IiBmaWxsPSJyZWQiLz48L3N2Zz4=",
+      required: true,
+    },
+  ]}
+/>
+
+이득은 요청 하나가 줄어든다는 것이다. 아이콘 몇 개 때문에 왕복을 늘리지 않아도 되고, 이미지를 따로 배포할 필요도 없다. HTTP/1.1 시절에는 연결 수가 제한돼서 이 이득이 컸다.
+
+대가는 생각보다 크다. 첫째, 33% 커진다. 둘째, 따로 캐시되지 않는다. 이미지가 CSS나 HTML 안에 들어 있으니 이미지 하나만 바꿔도 그 파일 전체를 다시 받아야 하고, 여러 페이지가 같은 이미지를 써도 페이지마다 다시 내려받는다. 셋째, 렌더링을 늦춘다. CSS는 렌더링을 막는 리소스라, CSS에 큰 data URL을 넣으면 그 바이트를 다 받고 파싱할 때까지 화면이 그려지지 않는다. 별도 파일이었다면 텍스트 먼저 보이고 이미지는 나중에 채워졌을 것이다. 디코딩에도 CPU와 메모리가 든다.
+
+그래서 쓰는 곳은 좁다. 1~2KB 이하의 작은 아이콘, 처음 화면에 꼭 필요한 아주 작은 자리 표시 이미지 정도다. HTTP/2 이상에서는 한 연결로 요청을 여러 개 동시에 보내니 요청 수를 줄이는 이득도 작아졌다. 빌드 도구들도 기본값이 보수적이다. Vite는 4KB 미만 에셋만 자동으로 인라인한다.
+
+보안 쪽으로는 브라우저가 최상위 탐색으로 data URL을 여는 걸 막는다는 점을 알아 둔다. 링크로 `data:text/html,...`을 열게 해서 피싱 페이지를 띄우는 수법 때문에 크롬과 파이어폭스는 주소창 이동을 차단한다. CSP를 쓴다면 `img-src`에 `data:`를 허용해야 data URL 이미지가 뜬다. `script-src`에 `data:`를 넣는 건 사실상 인라인 스크립트를 열어 주는 것이라 피한다.
+
+## 다시 JSON 속 긴 문자열로
+
+처음 본 `avatar` 값은 PNG 바이트를 3개씩 묶어 6비트 조각 4개로 바꾼 것이다. `iVBORw0KGgo`는 모든 PNG가 공통으로 시작하는 8바이트 서명이 바뀐 모양이라, 앞만 봐도 PNG인 걸 알 수 있다. 그 대신 33% 더 크고, 따로 캐시되지 않고, 누구나 풀 수 있다. Base64는 글자만 다니는 길에 바이트를 태우는 포장일 뿐이니, 크기가 문제면 바이트를 그대로 보내는 길을 찾고 비밀이 문제면 암호화를 찾는다.
+
+## 면접에서 나올 만한 질문
+
+### Base64는 왜 쓰나요?
+
+바이너리를 텍스트만 다닐 수 있는 통로로 보내기 위해서다. 이메일 MIME, JSON 문자열, HTTP 헤더, URL, data URL은 아무 바이트나 담을 수 없어서, 바이트를 안전한 ASCII 글자 64개로 다시 쓴다. 압축이나 암호화가 아니라 표현만 바꾸는 인코딩이다.
+
+### 인코딩 과정을 설명해 보세요.
+
+3바이트(24비트)를 모아 6비트씩 4조각으로 나누고, 각 조각(0~63)을 `A-Z`, `a-z`, `0-9`, `+`, `/` 표에서 글자로 바꾼다. `Man`은 `4D 61 6E`에서 19, 22, 5, 46이 나와 `TWFu`가 된다. 디코딩은 거꾸로 글자를 6비트로 바꿔 이어 붙인 뒤 8비트씩 자른다.
+
+### 패딩 =는 언제 붙고 왜 필요한가요?
+
+입력 길이가 3의 배수가 아닐 때 붙는다. 마지막에 2바이트가 남으면 `=` 하나, 1바이트가 남으면 두 개다. 원래 바이트 수를 알려 주고 결과 길이를 4의 배수로 맞춰 준다. 길이로 알 수 있는 경우엔 생략할 수 있어서 JWT 같은 base64url은 보통 뺀다.
+
+### 크기는 얼마나 늘어나나요? 큰 파일을 JSON에 Base64로 넣는 건 괜찮나요?
+
+3바이트가 4글자가 되니 약 33% 늘고, MIME처럼 76글자마다 줄바꿈하면 37% 정도다. 큰 파일을 JSON에 넣으면 전송량이 늘고 양쪽이 거대한 문자열을 메모리에 올려야 해서 좋지 않다. 파일은 `multipart/form-data`나 바이너리 본문으로 그대로 보내고, JSON에는 업로드 후 받은 URL이나 ID만 넣는 편이 낫다.
+
+### base64url은 무엇이 다른가요?
+
+`+`를 `-`로, `/`를 `_`로 바꾸고 보통 패딩을 뺀다. 표준 글자는 URL에서 `/`가 경로 구분자, `+`가 공백, `=`가 키-값 구분자로 읽혀서 토큰이 깨지기 때문이다. JWT의 세 조각이 base64url이고, 표준 디코더로 풀려면 글자를 되돌리고 패딩을 채워야 한다.
+
+### Base64로 인코딩하면 안전한가요? Basic 인증은 왜 HTTPS가 필수인가요?
+
+안전하지 않다. 규칙이 공개돼 있고 키가 없어서 누구나 바로 되돌린다. Basic 인증 헤더 `Basic bWF0dDpzZWNyZXQ=`는 풀면 `matt:secret`이라 평문 HTTP면 비밀번호를 그대로 보낸 것과 같다. 기밀성은 TLS가 맡고, JWT 페이로드처럼 Base64로 된 값에는 민감한 정보를 넣지 않는다.
+
+### 브라우저에서 btoa로 한글을 인코딩하면 어떻게 되나요?
+
+`InvalidCharacterError`가 난다. `btoa`는 문자열의 글자 하나를 한 바이트로 보는데 한글은 코드 포인트가 255를 넘기 때문이다. `TextEncoder`로 UTF-8 바이트를 만든 뒤 그 바이트를 인코딩하고, 디코딩도 `atob` 결과를 바이트 배열로 바꿔 `TextDecoder`로 푼다. 지원하는 환경이면 `Uint8Array.prototype.toBase64()`를, Node에서는 `Buffer`를 쓴다.
+
+### data URL은 언제 쓰고 언제 피하나요?
+
+1~2KB 이하 작은 아이콘처럼 요청 하나를 아끼는 이득이 클 때만 쓴다. 33% 커지고, 담긴 CSS·HTML과 따로 캐시되지 않으며, 렌더링을 막는 CSS 안에 넣으면 첫 화면이 늦어진다. HTTP/2 이후로는 요청 수를 줄이는 이득도 작아져서, 대부분은 별도 파일로 두고 캐시에 맡기는 편이 낫다.

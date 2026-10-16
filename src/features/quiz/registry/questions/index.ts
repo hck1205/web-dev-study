@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { BASE64 } from "./base64";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
@@ -9,6 +10,7 @@ import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_LOOP } from "./event-loop";
 import { GATEWAY } from "./gateway";
 import { HOSTS_FILE } from "./hosts-file";
+import { HTML_FORM_HTTP } from "./html-form-http";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
 import { HTTP_MESSAGE } from "./http-message";
 import { HTTP_METHODS } from "./http-methods";
@@ -38,6 +40,7 @@ import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  BASE64,
   BROWSER_FETCH,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
@@ -48,6 +51,7 @@ export const QUESTION_SETS = [
   EVENT_LOOP,
   GATEWAY,
   HOSTS_FILE,
+  HTML_FORM_HTTP,
   HTTP_CACHING_CDN,
   HTTP_MESSAGE,
   HTTP_METHODS,

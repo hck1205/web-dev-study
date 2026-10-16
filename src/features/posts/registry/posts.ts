@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "base64",
+    title: "Base64는 왜 쓰고 어떻게 바뀌나",
+    summary: "바이트를 3개씩 묶어 6비트 글자 4개로 바꾸는 Base64의 규칙과 패딩, base64url, 33% 늘어나는 크기를 직접 계산하며 본다. 암호화가 아니라서 Basic 인증과 JWT 페이로드가 누구에게나 읽힌다는 점도 짚는다.",
+    topic: "programming/computer-science",
+    tags: ["Encoding", "HTTP", "Browser", "Security"],
+    date: "2026-10-16",
+    keywords: ["Base64", "base64url", "data URL", "Basic 인증"],
+  },
+  {
+    slug: "html-form-http",
+    title: "HTML form은 어떻게 HTTP 요청이 되나",
+    summary: "브라우저가 폼 입력값을 골라 urlencoded 쿼리나 multipart 본문으로 바꾸는 규칙을 따라간다. FormData와 fetch, PRG, CSRF 토큰, 서버 검증까지 폼을 보낸 뒤 생기는 문제도 함께 본다.",
+    topic: "programming/frontend",
+    tags: ["HTTP", "Browser", "Frontend", "Encoding", "Security"],
+    date: "2026-10-16",
+    keywords: ["HTML 폼", "FormData", "application/x-www-form-urlencoded", "URLSearchParams"],
+  },
+  {
     slug: "iptables-basics",
     title: "iptables로 리눅스 방화벽 이해하기",
     summary: "패킷이 netfilter의 다섯 검문소를 어떻게 지나고 규칙이 위에서부터 어떻게 맞춰지는지 보고, Ubuntu 서버에서 SSH와 웹만 여는 규칙을 잠기지 않게 만들어 저장하는 데까지 간다.",
