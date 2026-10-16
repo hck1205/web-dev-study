@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "frontend-browser-cache",
+    title: "프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지",
+    summary: "요청 하나가 메모리 캐시, Service Worker, HTTP 캐시를 차례로 거치는 과정과 bfcache, Cache Storage 전략, 새 Service Worker가 기다리는 이유를 이 블로그의 sw.js로 따라간다. 데이터 저장소의 용량과 지워지는 규칙, 미리 받기 힌트까지 정리한다.",
+    topic: "programming/frontend/performance",
+    tags: ["Cache", "Browser", "Performance", "Frontend"],
+    date: "2026-10-16",
+    keywords: ["Service Worker", "bfcache", "Cache Storage", "skipWaiting", "Speculation Rules"],
+  },
+  {
+    slug: "client-data-cache",
+    title: "화면 데이터 캐시: TanStack Query와 SWR로 같은 요청 줄이기",
+    summary: "같은 API를 여러 컴포넌트가 부를 때 요청을 하나로 합치고, staleTime과 gcTime으로 언제 다시 받고 언제 버릴지 정하는 방법을 다룬다. 뮤테이션 뒤 캐시 맞추기, 낙관적 업데이트, 흔한 실수와 LRU 메모이제이션까지 이어 간다.",
+    topic: "programming/frontend/performance",
+    tags: ["Cache", "React", "Performance", "Frontend"],
+    date: "2026-10-16",
+    keywords: ["TanStack Query", "staleTime", "gcTime", "낙관적 업데이트", "서버 상태"],
+  },
+  {
     slug: "json-crud-http",
     title: "JSON으로 데이터 주고받기: 조회·생성·수정·삭제 끝까지",
     summary: "할 일 자원 하나를 curl과 fetch로 만들고 읽고 고치고 지우면서 실제 요청과 응답을 본다. JSON.stringify가 바꾸는 값, 큰 정수 ID, 201과 Location, PUT과 Merge Patch, 415·422·412, 204에서 터지는 res.json()까지 다룬다.",

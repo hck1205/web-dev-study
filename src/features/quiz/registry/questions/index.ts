@@ -2,6 +2,7 @@ import { AB_TESTING } from "./ab-testing";
 import { BASE64 } from "./base64";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
@@ -13,6 +14,7 @@ import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_LOOP } from "./event-loop";
+import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
@@ -49,6 +51,7 @@ export const QUESTION_SETS = [
   BASE64,
   BIG_O_NOTATION,
   BROWSER_FETCH,
+  CLIENT_DATA_CACHE,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
@@ -60,6 +63,7 @@ export const QUESTION_SETS = [
   DOCKERFILE_IMAGE_LAYERS,
   ELASTICSEARCH_INVERTED_INDEX,
   EVENT_LOOP,
+  FRONTEND_BROWSER_CACHE,
   GATEWAY,
   HOSTS_FILE,
   HTML_FORM_HTTP,
