@@ -1,0 +1,408 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mongodb-document-model");
+
+주문 상세 화면 하나를 그리려면 관계형 DB에서는 테이블 다섯 개를 조인한다. 주문(`orders`), 주문 상품(`order_items`), 상품(`products`), 회원(`users`), 배송지(`addresses`). 화면에서는 한 덩어리인데 저장할 때는 잘게 쪼개 두었다가, 읽을 때마다 다시 붙이는 셈이다.
+
+MongoDB는 이 덩어리를 그대로 저장한다. 주문 하나가 문서 하나다. 그래서 읽기가 단순해지는데, 대신 테이블을 설계할 때 하지 않던 고민이 생긴다. 무엇을 한 문서에 넣고 무엇을 따로 둘지, 그 결정이 성능과 정합성을 거의 다 정한다. 이 글은 그 결정을 내리는 기준을 정리한 것이다.
+
+## 주문 하나가 문서 하나
+
+MongoDB의 문서는 JSON처럼 생긴 BSON(바이너리 JSON) 객체다. 필드 안에 배열과 객체를 얼마든지 중첩할 수 있다. 아래 주문 문서의 조각을 눌러 보면, 관계형이었다면 각각 어느 테이블에 있었을지 보인다.
+
+<UrlAnatomy
+  caption="orders 컬렉션의 문서 하나"
+  base="db.orders"
+  separator=" { "
+  joiner=", "
+  params={[
+    {
+      key: "_id",
+      display: "_id",
+      title: "기본 키",
+      description: "모든 문서에 있어야 하고 컬렉션 안에서 유일하다. 따로 주지 않으면 드라이버가 ObjectId를 만든다. ObjectId 12바이트 중 앞 4바이트는 생성 시각(초)이라 대략 시간 순으로 커진다. 이 성질은 샤딩에서 다시 문제가 된다.",
+      code: "_id: ObjectId(\"6710a4c2e13f8a5b9c0d1e2f\")",
+      required: true,
+    },
+    {
+      key: "user",
+      display: "user",
+      title: "회원: 참조 + 필요한 필드만 복사",
+      description: "회원 문서 전체를 넣지 않는다. id로 가리키고, 주문 화면에 늘 필요한 이름만 같이 적어 둔다(확장 참조 패턴). 회원이 이름을 바꿔도 주문 당시 이름이 남는다.",
+      code: "user: { _id: ObjectId(\"...\"), name: \"김철수\" }",
+    },
+    {
+      key: "items",
+      display: "items: [ … ]",
+      title: "주문 상품: 내장",
+      description: "관계형이라면 order_items 테이블이다. 주문 상품은 주문과 늘 함께 읽히고, 개수가 한정돼 있고, 주문 없이 혼자 쓰일 일이 없다. 그래서 배열로 넣는다. 가격은 상품 문서를 참조하지 않고 주문 당시 값을 복사한다. 상품 가격이 나중에 바뀌어도 주문 금액은 바뀌면 안 되기 때문이다.",
+      code: "items: [\n  { productId: 1042, name: \"무선 이어폰\",\n    price: 39000, qty: 2 },\n  { productId: 2210, name: \"충전 케이스\",\n    price: 15000, qty: 1 }\n]",
+    },
+    {
+      key: "shipping",
+      display: "shipping: { … }",
+      title: "배송지: 내장",
+      description: "회원의 주소록에서 고른 주소를 주문 시점 그대로 복사한다. 회원이 나중에 주소록을 고쳐도 이미 나간 택배의 주소가 바뀌면 안 된다.",
+      code: "shipping: { zip: \"06236\", line1: \"서울 강남구 ...\",\n  receiver: \"김철수\" }",
+    },
+    {
+      key: "status",
+      display: "status",
+      title: "상태",
+      description: "조회 조건으로 자주 쓰여 인덱스에 들어갈 후보다.",
+      code: "status: \"paid\"",
+    },
+    {
+      key: "total",
+      display: "total",
+      title: "합계",
+      description: "items에서 계산할 수 있지만, 목록 화면에서 매번 계산하지 않도록 저장해 둔다. 대신 items를 바꿀 때 같이 고쳐야 한다. 한 문서 안이라 한 번의 쓰기로 둘 다 바뀐다.",
+      code: "total: 93000,\ncreatedAt: ISODate(\"2026-10-16T03:12:00Z\")",
+    },
+  ]}
+/>
+
+이 문서 하나로 주문 상세 화면이 그려진다. 조인이 없고, 디스크에서도 한 곳에 모여 있어 한 번에 읽힌다. 문서 모델의 장점은 이게 거의 전부이고, 나머지는 이 장점을 지키면서 생기는 부작용을 다루는 이야기다.
+
+관계형 모델은 반대 방향에서 출발한다. 데이터를 중복 없이 정규화해 두고, 어떤 질문이 와도 조인으로 답할 수 있게 한다. 질문을 미리 몰라도 된다는 게 강점이다. 문서 모델은 질문(접근 패턴)을 먼저 알고, 그 질문에 맞는 모양으로 저장한다. 질문이 바뀌면 모양도 바꿔야 한다.
+
+## 넣을까, 가리킬까
+
+문서 설계의 대부분은 관련 데이터를 내장(embed)할지 참조(reference)할지 고르는 일이다. 기준은 몇 가지로 정리된다.
+
+함께 읽히는가. 주문 상품처럼 부모를 읽을 때 늘 같이 읽으면 넣는다. 따로 읽히는 일이 많으면 나눈다.
+
+얼마나 많은가. MongoDB 쪽에서 자주 쓰는 구분이 있다.
+
+- 1 대 몇 개(one-to-few): 회원의 배송지 서너 개. 그냥 배열로 넣는다.
+- 1 대 여러 개(one-to-many): 상품 하나의 리뷰 수백~수천 개. 부모에 넣으면 문서가 계속 커진다. 리뷰를 별도 컬렉션에 두고 `productId`로 부모를 가리키되, 상품 문서에는 최근 리뷰 몇 개와 리뷰 수만 복사해 둔다(subset 패턴). 상품 페이지 첫 화면은 상품 문서 하나로 그린다.
+- 1 대 엄청 많이(one-to-squillions): 서버 하나의 로그 수억 건. 부모에 id 배열조차 둘 수 없다. 로그 쪽에 부모 id를 적는다.
+
+크기 제한. 문서 하나는 최대 16MB다. 이 제한에 실제로 부딪히는 경우는 대부분 끝없이 자라는 배열(unbounded array) 때문이다. 리뷰나 댓글, 이벤트 기록을 부모 배열에 계속 `$push`하는 설계는 언젠가 16MB에 닿는다. 그 전에도 문제가 생긴다. 문서가 클수록 읽을 때마다 메모리에 올리는 양이 커지고, 배열에 걸린 인덱스 항목도 원소 수만큼 늘어난다.
+
+바뀌는가, 고정인가. 주문의 상품 가격과 배송지는 주문 시점에 고정돼야 해서 일부러 복사한다. 이건 중복이 아니라 스냅샷이다. 반대로 상품 설명처럼 자주 바뀌고 여러 곳에서 보여 주는 값을 여기저기 복사하면, 바꿀 때마다 모든 사본을 찾아 고쳐야 한다.
+
+참조한 데이터를 같이 읽어야 할 때는 애플리케이션에서 쿼리를 두 번 하거나 집계의 `$lookup`으로 붙인다. `$lookup`은 조인과 비슷하지만, 관계형 DB만큼 최적화돼 있다고 기대하면 안 된다. 화면마다 `$lookup`이 필요하다면 문서 경계를 잘못 그은 신호인 경우가 많다.
+
+## 스키마가 없다는 건 검사도 내가 한다는 뜻
+
+MongoDB는 컬렉션에 어떤 모양의 문서든 넣을 수 있다. 처음엔 편하다. 필드를 하나 추가할 때 마이그레이션이 필요 없다. 그런데 시간이 지나면 같은 컬렉션 안에 `price`가 숫자인 문서와 문자열인 문서, `status`가 `"paid"`인 문서와 `"PAID"`인 문서가 섞인다. 코드는 모든 경우를 처리해야 하고, 쿼리는 조용히 일부 문서를 놓친다.
+
+그래서 운영하는 컬렉션에는 검증 규칙을 거는 편이 낫다. `$jsonSchema`로 필수 필드와 타입, 허용 값을 정한다.
+
+```js
+db.createCollection("orders", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["user", "items", "status", "total"],
+      properties: {
+        status: { enum: ["pending", "paid", "shipped", "cancelled"] },
+        total: { bsonType: "number", minimum: 0 },  // int·long·double 모두 허용
+        items: { bsonType: "array", minItems: 1 },
+      },
+    },
+  },
+  validationLevel: "strict",   // 모든 쓰기를 검사
+  validationAction: "error",   // 어기면 거절 ("warn"은 로그만)
+});
+```
+
+이미 데이터가 있는 컬렉션에 규칙을 새로 걸 때는 `validationLevel: "moderate"`가 쓸모 있다. 이미 규칙을 어기던 문서를 수정할 때는 검사하지 않아서, 옛 문서를 한 번에 고치지 않고도 새 문서부터 규칙을 지키게 할 수 있다. 스키마가 바뀌는 중간 기간에는 문서에 `schemaVersion` 필드를 두고, 읽을 때 버전에 따라 변환하거나 백그라운드로 천천히 옮긴다.
+
+## 인덱스 필드 순서는 ESR
+
+인덱스가 없으면 MongoDB도 컬렉션 전체를 훑는다(COLLSCAN). 인덱스 구조는 관계형 DB와 같은 B-tree 계열이라, 복합 인덱스는 앞 필드부터 정렬된다. 그래서 필드 순서가 중요하다. MongoDB 문서가 권하는 규칙이 ESR이다. 같음(Equality) 조건 필드를 먼저, 정렬(Sort) 필드를 다음, 범위(Range) 조건 필드를 마지막에 둔다.
+
+예를 들어 "이 회원의 결제 완료 주문 중 5만 원 이상을 최근 순으로"라는 쿼리가 있다.
+
+```js
+db.orders.find({ "user._id": uid, status: "paid", total: { $gte: 50000 } })
+         .sort({ createdAt: -1 })
+         .limit(20);
+```
+
+아래 인덱스 정의를 조각별로 눌러 보면 각 자리의 이유가 나온다.
+
+<UrlAnatomy
+  caption="ESR 순서로 만든 복합 인덱스"
+  base="createIndex"
+  separator="({ "
+  joiner=", "
+  params={[
+    {
+      key: "E (1)",
+      display: "user._id: 1",
+      title: "Equality: 같음 조건",
+      description: "값이 하나로 정해지는 조건은 맨 앞에 둔다. 인덱스에서 이 회원의 구간으로 바로 뛰어간다.",
+      required: true,
+    },
+    {
+      key: "E (2)",
+      display: "status: 1",
+      title: "Equality: 같음 조건",
+      description: "같음 조건끼리는 순서가 크게 상관없다. 여기까지 오면 '이 회원의 paid 주문' 구간 하나만 남는다.",
+      required: true,
+    },
+    {
+      key: "S",
+      display: "createdAt: -1",
+      title: "Sort: 정렬",
+      description: "같음 조건으로 좁힌 구간 안에서 항목이 이미 최신순으로 놓여 있다. 따로 정렬하지 않고 앞에서부터 읽으면 된다.",
+      code: "explain 결과에 SORT 단계가 없다",
+    },
+    {
+      key: "R",
+      display: "total: 1",
+      title: "Range: 범위 조건",
+      description: "범위는 마지막이다. 순서대로 읽으면서 5만 원 미만을 건너뛰고, 20개를 채우면 멈춘다. total을 createdAt 앞에 두면 구간 안이 금액 순으로 놓여서, 최신순으로 다시 정렬(메모리 안 SORT)해야 한다.",
+      code: "// 피해야 할 순서\n{ \"user._id\": 1, status: 1, total: 1, createdAt: -1 }",
+    },
+  ]}
+/>
+
+인덱스가 제대로 쓰이는지는 `explain("executionStats")`로 확인한다. 볼 숫자는 세 개다. 돌려준 문서 수(`nReturned`), 훑은 인덱스 키 수(`totalKeysExamined`), 읽은 문서 수(`totalDocsExamined`). 셋이 비슷할수록 좋은 인덱스다. 20개를 돌려주려고 문서 10만 개를 읽었다면 인덱스가 조건을 못 걸러 주고 있는 것이고, 실행 계획에 `SORT` 단계가 보이면 정렬을 메모리에서 하고 있는 것이다.
+
+알아 둘 성질이 몇 가지 더 있다. 복합 인덱스 `{a, b, c}`는 `a`, `a+b`, `a+b+c`로 시작하는 쿼리에 쓰이지만 `b`만으로는 못 쓴다(접두사 규칙). 배열 필드에 인덱스를 걸면 원소마다 항목이 생기는 멀티키 인덱스가 되는데, 복합 인덱스 하나에 배열 필드를 두 개 넣을 수는 없다. 인덱스는 쓰기마다 함께 갱신되니, 읽기를 빠르게 하는 만큼 쓰기를 느리게 하고 메모리를 차지한다. 자주 쓰는 인덱스가 메모리(WiredTiger 캐시)에 다 올라가 있는지가 성능을 크게 가른다.
+
+## 문서 하나는 원자적이다
+
+MongoDB에서 문서 하나에 대한 쓰기는 원자적이다. 문서 안의 배열과 중첩 객체까지 포함해서, 한 번의 `updateOne`은 전부 반영되거나 하나도 반영되지 않는다. 위 주문에서 `items`에 상품을 추가하고 `total`을 고치는 건 한 번의 쓰기로 끝난다.
+
+```js
+db.orders.updateOne(
+  { _id: orderId, status: "pending" },
+  {
+    $push: { items: { productId: 3001, name: "이어팁", price: 5000, qty: 1 } },
+    $inc: { total: 5000 },
+  }
+);
+```
+
+여러 문서를 묶는 트랜잭션도 있다. 4.0부터 복제본 셋에서, 4.2부터 샤드 클러스터에서 쓸 수 있다. 재고 차감과 주문 생성을 한 번에 처리하는 식으로 쓴다. 그런데도 MongoDB에서는 트랜잭션이 필요 없도록 설계하라고 권한다. 이유는 비용이다.
+
+- 트랜잭션이 열려 있는 동안 바뀐 내용을 캐시에 붙잡아 두므로, 길어지면 메모리 압박이 커진다. 기본 실행 시간 제한은 60초(`transactionLifetimeLimitSeconds`)다.
+- 같은 문서를 건드리는 다른 트랜잭션과 부딪히면(write conflict) 한쪽이 실패하고, 애플리케이션이 `TransientTransactionError`를 보고 다시 시도해야 한다. 드라이버의 `withTransaction`이 이 재시도를 해 준다.
+- 샤드 여러 개에 걸치면 샤드끼리 2단계 커밋을 하므로 더 느리다.
+
+트랜잭션이 자주 필요하다면, 함께 바뀌어야 하는 데이터가 여러 문서로 흩어져 있다는 뜻이다. 먼저 문서 경계를 다시 그어 볼 일이다. 그래도 계좌 이체나 재고처럼 여러 엔티티가 꼭 같이 바뀌어야 하는 곳에는 트랜잭션을 쓰는 게 맞다. 문서 하나 안에서는 `{ _id, status: "pending" }`처럼 조건을 걸고 업데이트해서, 다른 요청이 먼저 바꿨으면 아무 일도 안 일어나게 하는 방식(낙관적 동시성 제어)도 자주 쓴다.
+
+## 쓰기가 끝났다는 건 어디까지인가
+
+운영 환경의 MongoDB는 보통 복제본 셋(replica set)이다. 프라이머리 하나가 쓰기를 받고, 세컨더리 둘 이상이 프라이머리의 변경 기록(oplog)을 가져가 똑같이 적용한다. 프라이머리가 죽으면 남은 멤버끼리 투표해서 새 프라이머리를 뽑는다. 투표에서 과반이 필요하니 멤버는 보통 3개 이상 홀수로 둔다.
+
+여기서 문제가 하나 생긴다. 앱이 쓰기 성공 응답을 받은 시점에, 그 데이터는 몇 대에 있을까. 이걸 정하는 게 쓰기 확인 수준(write concern)이다. 아래 그림은 `w: "majority"`로 주문을 넣는 과정이다.
+
+<SequenceDiagram
+  caption="w: majority는 과반이 받아야 성공이라고 답한다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "primary", label: "프라이머리" },
+    { id: "s1", label: "세컨더리 1" },
+    { id: "s2", label: "세컨더리 2" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "primary",
+      label: "insertOne",
+      title: "주문을 넣는다",
+      detail: "쓰기는 항상 프라이머리로 간다. 몇 대가 받아야 성공으로 볼지 함께 보낸다.",
+      payload: "db.orders.insertOne(order,\n  { writeConcern: { w: \"majority\" } })",
+    },
+    {
+      from: "primary",
+      to: "primary",
+      label: "적용+oplog",
+      title: "프라이머리가 먼저 적용한다",
+      detail: "문서를 쓰고 같은 변경을 oplog에 한 줄 남긴다. w: 1이었다면 여기서 바로 성공 응답을 보낸다.",
+    },
+    {
+      from: "primary",
+      to: "s1",
+      label: "oplog",
+      title: "세컨더리가 oplog를 받아 간다",
+      detail: "실제로는 세컨더리가 프라이머리의 oplog를 계속 당겨 가는 방식이다. 받은 연산을 순서대로 자기 데이터에 적용한다.",
+    },
+    {
+      from: "s1",
+      to: "primary",
+      label: "적용 완료",
+      title: "세컨더리 1이 따라왔다",
+      detail: "어디까지 적용했는지 프라이머리에 알린다. 이제 3대 중 2대, 과반에 이 주문이 들어 있다.",
+    },
+    {
+      from: "primary",
+      to: "app",
+      label: "성공",
+      title: "과반을 확인하고 응답한다",
+      detail: "세컨더리 2는 아직이어도 상관없다. 과반이 가진 데이터는 이후 어떤 멤버가 프라이머리가 되어도 사라지지 않는다.",
+    },
+    {
+      from: "primary",
+      to: "s2",
+      label: "oplog",
+      title: "나머지도 곧 따라온다",
+      detail: "세컨더리 2는 조금 늦게 적용한다. 이 짧은 사이에 세컨더리 2에서 읽으면 새 주문이 아직 없다.",
+    },
+  ]}
+/>
+
+`w: 1`이면 프라이머리 한 대만 쓰고 바로 성공이라고 답한다. 빠르지만, 그 직후 세컨더리로 복제되기 전에 프라이머리가 죽으면 새 프라이머리에는 그 주문이 없다. 옛 프라이머리가 돌아오면 자기만 가진 쓰기를 되돌린다(rollback). 앱은 성공 응답을 받았는데 데이터는 사라지는 것이다. `w: "majority"`는 과반이 가진 데이터만 성공으로 답해서 이걸 막는다. 5.0부터는 대부분의 구성에서 기본 write concern이 `majority`다(아비터가 있는 일부 구성은 예외). `j: true`를 함께 주면 디스크 저널까지 기록된 뒤에 확인한다.
+
+읽기 쪽에도 두 개의 손잡이가 있다.
+
+- read preference: 어느 멤버에서 읽을지. 기본은 `primary`다. `secondaryPreferred`로 읽기를 세컨더리에 나누면 프라이머리 부하가 줄지만, 복제가 늦은 만큼 옛 데이터를 읽는다. 주문 직후 "내 주문 목록"을 세컨더리에서 읽으면 방금 한 주문이 안 보일 수 있다.
+- read concern: 어떤 상태의 데이터를 읽을지. 기본 `local`은 그 멤버가 가진 최신 값을 읽는데, 나중에 rollback될 수도 있는 값이다. `majority`는 과반에 반영된 값만 읽는다. `linearizable`은 가장 강하지만 느리다.
+
+내가 쓴 걸 내가 바로 읽어야 하는 화면은 프라이머리에서 읽거나, 인과적 일관성(causal consistency) 세션과 majority 읽기·쓰기를 함께 써서 순서를 보장한다.
+
+## 샤드 키 하나가 클러스터 모양을 정한다
+
+데이터나 쓰기량이 서버 한 대(정확히는 복제본 셋 하나)를 넘으면 샤딩으로 가로로 나눈다. 각 샤드가 하나의 복제본 셋이고, 앱은 라우터인 `mongos`에 연결한다. `mongos`는 설정 서버(config server)에 저장된 "어떤 범위의 키가 어느 샤드에 있는지" 정보를 보고 요청을 보낸다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="샤드 키가 쿼리에 있으면 mongos가 해당 샤드로만 보낸다. 없으면 모든 샤드에 묻는다."
+  nodes={[
+    { id: "app", label: "앱", x: 60, y: 50, w: 80 },
+    { id: "mongos", label: "mongos", sub: "라우터", x: 200, y: 50, w: 100 },
+    { id: "config", label: "config", sub: "키 범위 지도", x: 335, y: 50, w: 100 },
+    { id: "a", label: "샤드 A", sub: "복제본 셋", x: 70, y: 220, w: 100 },
+    { id: "b", label: "샤드 B", sub: "복제본 셋", x: 200, y: 220, w: 100 },
+    { id: "c", label: "샤드 C", sub: "복제본 셋", x: 330, y: 220, w: 100 },
+  ]}
+  edges={[
+    { from: "app", to: "mongos", label: "쿼리" },
+    { from: "mongos", to: "config", label: "지도", dashed: true },
+    { from: "mongos", to: "a" },
+    { from: "mongos", to: "b", label: "키 범위" },
+    { from: "mongos", to: "c" },
+  ]}
+/>
+
+샤드 키는 컬렉션의 문서를 나누는 기준 필드다. 좋은 샤드 키를 고를 때 보는 성질은 이렇다.
+
+카디널리티. 서로 다른 값이 충분히 많아야 한다. `status`처럼 값이 네 개뿐인 필드로 나누면 데이터를 네 덩어리 이상으로 쪼갤 수 없다.
+
+빈도. 특정 값에 몰리면 안 된다. 회원 id로 나눴는데 대형 판매자 계정 하나가 주문의 절반을 만든다면 그 키가 있는 샤드만 바쁘다.
+
+단조 증가 여부. 가장 흔한 실수가 여기서 나온다. 기본 `_id`(ObjectId)나 `createdAt`처럼 시간이 갈수록 커지는 값으로 범위 샤딩을 하면, 새 문서가 전부 가장 큰 키 범위, 즉 마지막 샤드 한 곳으로 몰린다. 샤드가 열 개여도 쓰기는 한 대가 다 받는 핫스팟이 된다. 해시 샤딩(`{ _id: "hashed" }`)으로 바꾸면 쓰기가 고르게 퍼지지만, 이번엔 "최근 일주일 주문" 같은 범위 쿼리가 모든 샤드로 흩어진다.
+
+쿼리 격리. 자주 하는 쿼리에 샤드 키가 들어 있어야 `mongos`가 샤드 하나로만 보낸다(targeted query). 없으면 모든 샤드에 묻고 결과를 모은다(scatter-gather). 샤드가 늘수록 비싸진다.
+
+그래서 주문 컬렉션이라면 `{ "user._id": 1, createdAt: 1 }`처럼 복합 키를 고려한다. 회원 id로 고르게 퍼지고, "내 주문 목록"은 샤드 하나에서 끝나며, 같은 회원 안에서는 시간 순 범위 조회가 된다. 샤드 키는 예전엔 한 번 정하면 못 바꿨지만, 4.4부터 키 뒤에 필드를 덧붙이는 refine이, 5.0부터 아예 다른 키로 다시 나누는 resharding이 가능하다. 그래도 resharding은 컬렉션 전체를 옮기는 무거운 작업이라, 처음 고를 때 신중해야 한다는 건 그대로다.
+
+## 모아서 계산하기: 집계 파이프라인
+
+"회원별 결제 금액 합계 순위" 같은 질문은 `find`로 못 한다. 집계 파이프라인을 쓴다. 문서들이 단계(stage)를 차례로 통과하면서 걸러지고, 묶이고, 정렬된다.
+
+```js
+db.orders.aggregate([
+  { $match: { status: "paid" } },
+  { $group: { _id: "$user.name", total: { $sum: "$total" } } },
+  { $sort: { total: -1 } },
+]);
+```
+
+아래 그림에서 "다음"을 누르면 주문 다섯 건이 이 파이프라인을 지나간다. 금액 단위는 만 원이다.
+
+<AlgoTrace
+  caption="$match → $group → $sort"
+  memoryLabel="$group 누적값"
+  cells={["kim 3", "lee 6", "kim 2 취소", "park 4", "kim 2"]}
+  steps={[
+    { caption: "주문 다섯 건이 들어온다. 세 번째는 취소된 주문이다." },
+    { pointer: 0, memory: ["kim: 3"], caption: "$match를 통과했다. $group이 kim 칸을 새로 만들고 3을 더한다." },
+    { pointer: 1, memory: ["kim: 3", "lee: 6"], caption: "lee도 새 칸이다." },
+    { pointer: 2, memory: ["kim: 3", "lee: 6"], caption: "status가 cancelled라 $match에서 걸러진다. 누적값은 그대로다." },
+    { pointer: 3, memory: ["kim: 3", "lee: 6", "park: 4"], caption: "park이 새로 생긴다." },
+    { pointer: 4, memory: ["kim: 5", "lee: 6", "park: 4"], caption: "kim은 이미 있는 칸이다. 3에 2를 더해 5가 된다." },
+    { found: [1], memory: ["lee: 6", "kim: 5", "park: 4"], caption: "$sort가 합계 내림차순으로 줄을 세운다. 1등은 lee다." },
+  ]}
+/>
+
+같은 일을 코드로 해 보면 각 단계가 무슨 일을 하는지 더 분명해진다. `status`가 `"paid"`인 주문만 회원별로 합쳐 합계 내림차순으로 돌려주면 된다. 합계가 같으면 `_id` 오름차순으로 둔다(실제 `$sort`는 같은 값의 순서를 보장하지 않아서, 필요하면 정렬 키를 하나 더 준다).
+
+<CodePlayground
+  caption="$match + $group + $sort 직접 구현하기"
+  functionName="totalByUser"
+  initialCode={`function totalByUser(orders) {
+  // orders: [{ user, amount, status }]
+  // 결과: [{ _id: user, total }] 합계 내림차순
+  return [];
+}`}
+  solution={`function totalByUser(orders) {
+  const totals = new Map();
+  for (const o of orders) {
+    if (o.status !== "paid") continue;          // $match
+    totals.set(o.user, (totals.get(o.user) ?? 0) + o.amount); // $group + $sum
+  }
+  return [...totals]
+    .map(([_id, total]) => ({ _id, total }))
+    .sort((a, b) => b.total - a.total || (a._id < b._id ? -1 : 1)); // $sort
+}`}
+  tests={[
+    {
+      label: "그림의 주문 다섯 건",
+      args: [[
+        { user: "kim", amount: 30000, status: "paid" },
+        { user: "lee", amount: 60000, status: "paid" },
+        { user: "kim", amount: 20000, status: "cancelled" },
+        { user: "park", amount: 40000, status: "paid" },
+        { user: "kim", amount: 20000, status: "paid" },
+      ]],
+      expected: [{ _id: "lee", total: 60000 }, { _id: "kim", total: 50000 }, { _id: "park", total: 40000 }],
+    },
+    { label: "빈 컬렉션", args: [[]], expected: [] },
+    { label: "전부 취소", args: [[{ user: "kim", amount: 1000, status: "cancelled" }]], expected: [] },
+    {
+      label: "합계가 같을 때",
+      args: [[{ user: "lee", amount: 5000, status: "paid" }, { user: "kim", amount: 5000, status: "paid" }]],
+      expected: [{ _id: "kim", total: 5000 }, { _id: "lee", total: 5000 }],
+    },
+  ]}
+/>
+
+파이프라인에서 성능을 가르는 건 순서다. `$match`와 `$sort`를 맨 앞에 두면 인덱스를 쓸 수 있지만, `$group`이나 `$project` 뒤로 가면 인덱스를 못 쓰고 이미 메모리에 올린 문서들을 대상으로 돈다. 그래서 거를 수 있는 건 최대한 일찍 거른다. `$group`이나 `$sort` 같은 단계는 단계마다 메모리 100MB 제한이 있고, 넘으면 디스크를 쓰도록(`allowDiskUse`) 해야 한다. 6.0부터는 이게 기본으로 허용된다.
+
+그 밖에 자주 쓰는 단계로는 배열을 원소마다 한 문서로 펼치는 `$unwind`(상품별 판매량을 셀 때 `items`를 펼친다), 다른 컬렉션을 붙이는 `$lookup`, 한 번에 여러 집계를 돌리는 `$facet`이 있다. 대시보드처럼 같은 집계를 자주 돌린다면 결과를 `$merge`로 별도 컬렉션에 저장해 두고 그걸 읽는 것도 방법이다.
+
+## 결국 읽는 모양에서 출발한다
+
+MongoDB 설계는 화면과 API가 데이터를 어떤 모양으로 읽는지에서 출발한다. 함께 읽는 건 한 문서에 넣고, 끝없이 자라거나 따로 읽히는 건 나눠서 참조한다. 그러면 대부분의 쓰기가 문서 하나에서 끝나 트랜잭션 없이도 원자적이고, 인덱스는 ESR 순서로 그 읽기를 받쳐 준다. 규모가 커지면 그 읽기 패턴에 맞춰 샤드 키를 고른다. 스키마가 자유로운 만큼, 검증 규칙과 쓰기 확인 수준은 내가 정해 줘야 한다.
+
+## 면접에서 나올 만한 질문
+
+### 문서 모델은 관계형 모델과 무엇이 다른가요?
+
+관계형은 데이터를 정규화해 테이블로 나누고 읽을 때 조인으로 붙인다. 문서 모델은 함께 읽는 데이터를 한 문서에 중첩해 저장해서 조인 없이 한 번에 읽는다. 관계형은 질문을 미리 몰라도 대응할 수 있고, 문서 모델은 접근 패턴을 먼저 정하고 그 모양에 맞춰 저장한다. 그래서 접근 패턴이 바뀌면 문서 구조도 바꿔야 한다.
+
+### 내장과 참조는 어떤 기준으로 고르나요?
+
+함께 읽히고, 개수가 한정돼 있고, 부모 없이 쓰이지 않으면 내장한다. 수백 개 이상으로 자라거나 따로 조회되거나 여러 곳에서 공유되며 자주 바뀌면 참조한다. 끝없이 자라는 배열은 16MB 제한에 닿고 성능도 나빠지므로 피한다. 주문의 가격처럼 시점 값을 남겨야 하는 경우는 일부러 복사해 스냅샷으로 둔다.
+
+### 스키마가 없으면 어떤 문제가 생기고 어떻게 막나요?
+
+같은 필드가 문서마다 다른 타입이나 값으로 섞여서 코드가 모든 경우를 처리해야 하고 쿼리가 조용히 문서를 놓친다. `$jsonSchema` 검증 규칙으로 필수 필드와 타입, 허용 값을 강제한다. 기존 데이터가 있으면 `validationLevel: "moderate"`로 새 쓰기부터 지키게 하고, `schemaVersion` 필드로 점진적으로 옮긴다.
+
+### 복합 인덱스의 필드 순서는 어떻게 정하나요?
+
+ESR 규칙을 따른다. 같음 조건 필드, 정렬 필드, 범위 조건 필드 순이다. 범위를 정렬 앞에 두면 인덱스 구간이 범위 필드 순으로 놓여 메모리 정렬이 필요해진다. explain의 nReturned, totalKeysExamined, totalDocsExamined가 비슷하고 SORT 단계가 없는지로 확인한다.
+
+### MongoDB도 트랜잭션이 있는데 왜 피하라고 하나요?
+
+4.0부터 복제본 셋, 4.2부터 샤드 클러스터에서 다중 문서 트랜잭션을 쓸 수 있다. 하지만 캐시에 변경을 붙잡아 두고, 충돌 시 재시도가 필요하고, 샤드에 걸치면 2단계 커밋으로 느려진다. 문서 하나의 쓰기는 원자적이니 함께 바뀌는 데이터를 한 문서에 두면 대부분 트랜잭션이 필요 없다. 여러 엔티티가 꼭 같이 바뀌어야 하는 곳에만 쓴다.
+
+### write concern w:1과 majority는 무엇이 다른가요?
+
+w:1은 프라이머리만 쓰면 성공으로 답해서 빠르지만, 복제 전에 프라이머리가 죽으면 그 쓰기가 롤백되어 사라질 수 있다. majority는 과반 멤버가 적용한 뒤 답하므로 장애 조치 후에도 남는다. 5.0부터 대부분의 구성에서 기본값이 majority다. 세컨더리에서 읽으면 복제 지연 때문에 방금 쓴 값이 안 보일 수 있으니 read preference와 read concern도 함께 정한다.
+
+### 샤드 키는 어떻게 고르고, ObjectId로 샤딩하면 왜 문제가 되나요?
+
+카디널리티가 높고, 값이 고르게 분포하고, 자주 하는 쿼리에 포함되는 필드를 고른다. ObjectId는 앞부분이 시각이라 계속 커지므로 범위 샤딩하면 새 쓰기가 전부 마지막 샤드로 몰리는 핫스팟이 된다. 해시 샤딩은 쓰기를 퍼뜨리지만 범위 쿼리가 모든 샤드로 흩어진다. 그래서 회원 id와 시간 같은 복합 키를 많이 고려한다.
+
+### 집계 파이프라인 성능을 위해 무엇을 신경 쓰나요?
+
+`$match`와 `$sort`를 앞에 둬서 인덱스를 쓰고 이후 단계로 넘어가는 문서 수를 줄인다. 블로킹 단계는 단계마다 메모리 100MB 제한이 있어 넘으면 디스크를 써야 한다. `$lookup`이 자주 필요하면 문서 경계를 다시 보고, 반복되는 무거운 집계는 `$merge`로 결과를 저장해 둔다.

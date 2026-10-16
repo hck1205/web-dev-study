@@ -24,7 +24,7 @@ import { formatMs } from "./code-playground.utils";
 
 /** 글 안에서 코드를 고쳐 바로 실행하고, 테스트 결과와 console 출력을 본다. */
 export function CodePlayground(props: CodePlaygroundProps) {
-  const { initialCode, language = "javascript", caption } = props;
+  const { language = "javascript", caption } = props;
   const pg = useCodePlayground(props);
   const { result } = pg;
 
@@ -49,7 +49,7 @@ export function CodePlayground(props: CodePlaygroundProps) {
       </Toolbar>
 
       <EditorBox ref={pg.editor.containerRef} data-ready={pg.editor.ready}>
-        {!pg.editor.ready && <Fallback>{initialCode}</Fallback>}
+        {!pg.editor.ready && <Fallback>{pg.editor.pendingDoc}</Fallback>}
       </EditorBox>
 
       {result && (

@@ -1,28 +1,56 @@
+import { AB_TESTING } from "./ab-testing";
+import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
+import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { DNS } from "./dns";
+import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
+import { EVENT_LOOP } from "./event-loop";
 import { GATEWAY } from "./gateway";
 import { HOSTS_FILE } from "./hosts-file";
+import { HTTP_CACHING_CDN } from "./http-caching-cdn";
+import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
+import { MICRO_FRONTENDS } from "./micro-frontends";
+import { MICROSERVICES } from "./microservices";
+import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
+import { MVC_PATTERN } from "./mvc-pattern";
 import { OAUTH } from "./oauth";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
+import { REACT_RERENDER } from "./react-rerender";
+import { RENDERING_STRATEGIES } from "./rendering-strategies";
+import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { TOKEN_LOGIN } from "./token-login";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  AB_TESTING,
+  CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
-  TOKEN_LOGIN,
+  CORE_WEB_VITALS,
+  CORS,
+  DNS,
+  ELASTICSEARCH_INVERTED_INDEX,
+  EVENT_LOOP,
+  GATEWAY,
+  HOSTS_FILE,
+  HTTP_CACHING_CDN,
+  JS_MEMORY_LEAK,
+  KUBERNETES_INGRESS,
+  LOCAL_CUSTOM_DOMAIN,
+  MICRO_FRONTENDS,
+  MICROSERVICES,
+  MONGODB_DOCUMENT_MODEL,
+  MVC_PATTERN,
   OAUTH,
+  PYTHAGOREAN_THEOREM,
+  REACT_RERENDER,
+  RENDERING_STRATEGIES,
+  RESILIENCE_PATTERNS,
+  TOKEN_LOGIN,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,
-  PYTHAGOREAN_THEOREM,
-  DNS,
-  HOSTS_FILE,
-  KUBERNETES_INGRESS,
-  GATEWAY,
-  CORS,
-  LOCAL_CUSTOM_DOMAIN,
 ];

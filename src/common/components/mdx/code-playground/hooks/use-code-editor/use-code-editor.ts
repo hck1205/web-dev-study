@@ -15,6 +15,9 @@ export function useCodeEditor({ initialDoc, language, onRun }: UseCodeEditorOpti
   const viewRef = useRef<EditorView | null>(null);
   const onRunRef = useRef(onRun);
   const [ready, setReady] = useState(false);
+  // 에디터가 붙기 전에 바뀐 내용(풀이 보기 등). 붙을 때 이 내용으로 시작하고, 그 전까지는 fallback으로 보여 준다.
+  const [pendingDoc, setPendingDoc] = useState(initialDoc);
+  const pendingRef = useRef(initialDoc);
 
   useEffect(() => {
     onRunRef.current = onRun;
@@ -45,7 +48,7 @@ export function useCodeEditor({ initialDoc, language, onRun }: UseCodeEditorOpti
       ]);
 
       viewRef.current = new EditorView({
-        doc: initialDoc,
+        doc: pendingRef.current,
         parent: containerRef.current,
         extensions: [
           basicSetup,
@@ -65,17 +68,21 @@ export function useCodeEditor({ initialDoc, language, onRun }: UseCodeEditorOpti
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-    // 처음 붙일 때의 코드·언어만 쓴다. 이후 내용 교체는 setDoc으로 한다.
+    // 처음 붙일 때의 코드(또는 그 전에 바뀐 내용)·언어만 쓴다. 이후 내용 교체는 setDoc으로 한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const getDoc = useCallback(() => viewRef.current?.state.doc.toString() ?? initialDoc, [initialDoc]);
+  const getDoc = useCallback(() => viewRef.current?.state.doc.toString() ?? pendingRef.current, []);
 
   const setDoc = useCallback((text: string) => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view) {
+      pendingRef.current = text;
+      setPendingDoc(text);
+      return;
+    }
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
   }, []);
 
-  return { containerRef, ready, getDoc, setDoc };
+  return { containerRef, ready, getDoc, setDoc, pendingDoc };
 }

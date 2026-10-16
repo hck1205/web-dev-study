@@ -1,0 +1,590 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-rerender");
+
+상품이 2,000개쯤 있는 목록 위에 검색창을 하나 달았다. 입력값으로 목록을 거르는 아주 평범한 코드다. 그런데 휴대폰에서 글자를 치면 입력창이 한 박자씩 늦게 따라온다. "ㅅ"을 쳤는데 화면에는 잠시 뒤에야 찍힌다.
+
+```tsx
+function SearchPage({ products }) {
+  const [query, setQuery] = useState("");
+  const visible = products.filter((p) => p.name.includes(query));
+
+  return (
+    <>
+      <Header />
+      <input value={query} onChange={(e) => setQuery(e.target.value)} />
+      <ProductList items={visible} onSelect={(id) => openDetail(id)} />
+    </>
+  );
+}
+```
+
+React DevTools의 Profiler로 한 글자 입력을 녹화해 보면 `ProductItem` 2,000개가 전부 다시 렌더링된다. 걸러진 결과가 거의 그대로인데도 그렇다. 이 글은 이 장면을 고치면서 React가 언제, 무엇을 다시 그리는지 따라간다.
+
+## 렌더와 커밋은 다른 일이다
+
+"다시 렌더링된다"는 말을 들으면 화면이 다시 그려진다고 생각하기 쉽다. 나도 처음엔 그렇게 이해했다. React에서 렌더링은 컴포넌트 함수를 호출해서 "화면이 이렇게 생겨야 한다"는 설계도(React 엘리먼트 트리)를 새로 만드는 일이다. 실제 DOM을 고치는 건 그다음 단계인 커밋이다.
+
+아래 그림에서 "다음"을 누르면 입력 한 번이 화면에 반영되기까지의 순서가 나온다.
+
+<SequenceDiagram
+  caption="렌더는 계산이고, DOM을 바꾸는 건 커밋이다"
+  actors={[
+    { id: "handler", label: "이벤트 핸들러" },
+    { id: "react", label: "React" },
+    { id: "dom", label: "DOM·브라우저" },
+  ]}
+  steps={[
+    {
+      from: "handler",
+      to: "react",
+      label: "setQuery(\"ㅅ\")",
+      title: "상태를 바꿔 달라고 요청한다",
+      detail: "setState는 값을 그 자리에서 바꾸지 않는다. 업데이트를 큐에 넣고 렌더링을 예약할 뿐이다. 그래서 바로 다음 줄에서 query를 읽으면 아직 이전 값이다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "render",
+      title: "컴포넌트 함수를 다시 호출한다",
+      detail: "업데이트가 생긴 컴포넌트부터 아래로 함수를 호출해 새 엘리먼트 트리를 얻는다. 여기까지는 계산일 뿐이고 화면은 그대로다. 동시성 기능을 쓰면 이 단계는 중간에 멈추거나 통째로 버려질 수 있다.",
+      payload: "SearchPage() → Header() → ProductList() → ProductItem() × 2000",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "비교",
+      title: "이전 트리와 비교한다",
+      detail: "새 트리와 이전 트리를 맞대어 바뀐 곳만 골라낸다. 이 비교를 재조정(reconciliation)이라고 부른다.",
+    },
+    {
+      from: "react",
+      to: "dom",
+      label: "commit",
+      title: "바뀐 곳만 DOM에 반영한다",
+      detail: "커밋은 멈추지 않고 한 번에 끝낸다. 렌더 결과가 이전과 같으면 DOM은 건드리지 않는다. ProductItem 2,000개를 다시 렌더링했어도 DOM 변경은 입력창 하나뿐일 수 있다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "layout effect",
+      title: "그리기 전에 useLayoutEffect를 실행한다",
+      detail: "DOM은 바뀌었지만 아직 화면에 그리기 전이다. 요소 크기를 재서 위치를 고치는 일처럼 깜빡임 없이 처리해야 하는 코드가 여기서 동기로 돈다. 오래 걸리면 그만큼 화면이 늦게 뜬다.",
+    },
+    {
+      from: "dom",
+      to: "dom",
+      label: "paint",
+      title: "브라우저가 화면을 그린다",
+      detail: "레이아웃을 계산하고 픽셀을 칠한다. 사용자가 변화를 보는 건 이때다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "useEffect",
+      title: "보통은 그린 뒤에 effect를 실행한다",
+      detail: "데이터 요청, 구독 같은 부수 효과가 여기서 돈다. 클릭 같은 상호작용으로 생긴 업데이트가 아니면 React는 보통 브라우저가 먼저 그리게 둔 뒤 실행한다.",
+    },
+  ]}
+/>
+
+두 단계를 나눠 두면 문제를 정확히 말할 수 있다. 검색창이 느린 이유는 DOM을 많이 바꿔서가 아니라 2번 단계, 렌더에서 함수 2,000개를 호출하고 그 결과를 비교하느라 메인 스레드를 붙잡고 있어서다. 그 동안 브라우저는 다음 키 입력을 처리하지 못한다.
+
+렌더 단계는 순수해야 한다. 같은 props와 state면 같은 결과를 내고, 바깥을 바꾸지 않아야 한다. 개발 모드의 `StrictMode`가 컴포넌트 함수를 일부러 두 번 호출하는 것도 이 규칙을 어긴 코드를 드러내려고 그러는 것이다. 렌더 중에 API를 부르거나 전역 변수를 고치는 코드는 거기서 티가 난다.
+
+## 다시 렌더링되는 이유는 따로 있다
+
+컴포넌트가 다시 렌더링되는 경우는 생각보다 적다.
+
+첫째, 자기 state가 바뀔 때다. `setState`에 넘긴 값이 지금 값과 `Object.is`로 같으면 React는 그 컴포넌트와 자식의 렌더링을 건너뛴다. 다만 건너뛰기 전에 그 컴포넌트를 한 번 호출해 보는 경우가 있어서, "같은 값을 넣으면 함수가 절대 안 불린다"고 믿으면 안 된다.
+
+둘째, 부모가 다시 렌더링될 때다. 이게 가장 흔하고 가장 오해받는다. React는 기본적으로 부모가 렌더링되면 그 아래 자식을 전부 다시 렌더링한다. props가 바뀌었는지는 보지 않는다. "props가 바뀌면 리렌더링된다"는 말은 반만 맞다. props가 그대로여도 부모가 렌더링되면 자식도 렌더링된다.
+
+셋째, 읽고 있는 context 값이 바뀔 때다. `useContext`로 값을 읽는 컴포넌트는 Provider의 `value`가 이전과 `Object.is`로 달라지면 중간에 무엇이 있든 다시 렌더링된다.
+
+Redux, Zustand, Jotai 같은 외부 상태 라이브러리도 결국 구독한 컴포넌트의 state를 바꾸는 방식이라 첫째 경우에 들어간다. 그리고 엄밀히 말하면 리렌더링은 아니지만, `key`가 바뀌면 컴포넌트는 버려지고 새로 만들어진다.
+
+처음 코드의 구조를 트리로 그리면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="query가 SearchPage에 있으니, 글자 하나에 SearchPage 아래가 전부 다시 렌더링된다"
+  nodes={[
+    { id: "page", label: "SearchPage", sub: "state: query", x: 200, y: 40, w: 130 },
+    { id: "header", label: "Header", sub: "props 없음", x: 70, y: 130, w: 104 },
+    { id: "input", label: "input", sub: "value=query", x: 200, y: 130, w: 104 },
+    { id: "list", label: "ProductList", sub: "items, onSelect", x: 330, y: 130, w: 116 },
+    { id: "item", label: "ProductItem", sub: "× 2000", x: 330, y: 215, w: 116 },
+  ]}
+  edges={[
+    { from: "page", to: "header", label: "렌더" },
+    { from: "page", to: "input", label: "렌더" },
+    { from: "page", to: "list", label: "렌더" },
+    { from: "list", to: "item", label: "렌더" },
+  ]}
+/>
+
+`Header`는 props가 하나도 없는데도 글자마다 렌더링된다. 부모가 렌더링됐기 때문이다. 이 사실에서 리렌더링을 줄이는 방법이 두 갈래로 나온다. 부모가 덜 렌더링되게 상태를 옮기거나, 자식이 "props가 같으면 건너뛰겠다"고 선언하게 하는 것이다. 뒤에서 둘 다 본다.
+
+## 이전 트리와 짝을 맞추는 규칙
+
+렌더가 끝나면 React는 새 트리와 이전 트리를 비교한다. 두 트리의 차이를 최소로 구하는 일반적인 알고리즘은 노드 수가 n일 때 O(n³)이 걸린다. 요소가 천 개면 10억 번 단위의 연산이라 매 입력마다 할 수 없다. 그래서 React는 두 가지 가정을 두고 O(n)으로 끝낸다.
+
+하나는 타입이다. 같은 자리에 같은 타입(같은 컴포넌트, 같은 태그)이 오면 기존 것을 유지하고 props만 바꾼다. 타입이 다르면 그 아래를 통째로 버리고 새로 만든다. 그 안에 있던 state도 함께 사라진다. 컴포넌트 안에서 컴포넌트를 정의하면 안 되는 이유가 여기 있다. 렌더할 때마다 새 함수가 만들어지니 React 눈에는 매번 다른 타입이고, 자식이 매번 새로 마운트되면서 입력값과 포커스가 날아간다.
+
+다른 하나는 key다. 형제 목록에서는 위치가 아니라 key로 짝을 찾는다. key를 안 주면 React는 인덱스를 key처럼 쓰고 경고를 띄운다. 인덱스를 key로 쓰면 무엇이 문제인지는 그림으로 보는 게 빠르다.
+
+목록 A, B, C의 각 줄에 메모를 적는 입력칸이 있고, A 줄에 "선물용"이라고 적어 두었다. 이제 맨 앞에 Z를 끼워 넣는다. 아래 칸은 새로 렌더링한 목록의 순서다.
+
+<AlgoTrace
+  caption="인덱스 key와 id key로 맨 앞에 Z를 넣었을 때"
+  memoryLabel="React의 판단"
+  cells={["Z", "A", "B", "C"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["key0 A→Z 갱신"],
+      caption: "인덱스를 key로 쓰면 Z의 key는 0이다. 이전 key 0은 A였으니 같은 컴포넌트로 보고 props만 Z로 바꾼다. A 줄 입력칸의 '선물용'은 그 자리에 남아 이제 Z 옆에 붙는다.",
+    },
+    {
+      pointer: 1,
+      memory: ["key0 A→Z 갱신", "key1 B→A 갱신"],
+      caption: "A는 key 1을 받았다. 이전 key 1은 B였으니 B의 컴포넌트에 A의 props를 넣는다.",
+    },
+    {
+      pointer: 2,
+      memory: ["key0 A→Z 갱신", "key1 B→A 갱신", "key2 C→B 갱신"],
+      caption: "C의 자리에는 B가 들어간다. 한 칸씩 밀리면서 모든 줄의 내용이 바뀐다.",
+    },
+    {
+      pointer: 3,
+      memory: ["key0 A→Z 갱신", "key1 B→A 갱신", "key2 C→B 갱신", "key3 새로 생성"],
+      caption: "마지막 key 3은 처음 보는 key라 새로 만든다. 바뀐 건 맨 앞 한 줄인데 네 줄을 모두 고쳤고, 입력칸 상태는 한 칸씩 어긋났다.",
+    },
+    {
+      pointer: 0,
+      memory: ["Z 새로 생성"],
+      caption: "이번엔 상품 id를 key로 쓴다. key z는 이전 목록에 없으니 새로 만든다.",
+    },
+    {
+      pointer: 1,
+      found: [1],
+      memory: ["Z 새로 생성", "A 그대로"],
+      caption: "key a는 이전에도 있었다. 같은 컴포넌트를 그대로 쓴다. '선물용'도 A 옆에 그대로 있다.",
+    },
+    {
+      pointer: 3,
+      found: [1, 2, 3],
+      memory: ["Z 새로 생성", "A 그대로", "B 그대로", "C 그대로"],
+      caption: "B와 C도 key로 짝을 찾는다. DOM 노드는 자리만 옮기고 새로 만들지 않는다. 실제로 생긴 일은 Z 하나를 넣은 것뿐이다.",
+    },
+  ]}
+/>
+
+인덱스 key가 늘 틀린 건 아니다. 목록이 정렬되거나 중간에 끼워지거나 지워지는 일이 없고, 줄마다 state도 없다면 문제가 드러나지 않는다. 문제는 순서가 바뀌는 목록, 그리고 줄 안에 입력칸이나 펼침 상태처럼 state가 있는 경우다. 렌더할 때마다 `Math.random()`이나 `crypto.randomUUID()`로 key를 만드는 것도 흔한 실수다. 매번 key가 달라지니 모든 줄이 매번 새로 마운트된다.
+
+이걸 거꾸로 이용하는 방법도 있다. 다른 사용자의 프로필로 넘어갈 때 폼 상태를 깨끗이 비우고 싶다면 `<ProfileForm key={userId} />`처럼 key를 바꾸면 된다. effect로 state를 하나하나 초기화하는 것보다 단순하다.
+
+아래 함수는 이전 key 목록과 새 key 목록을 받아 React가 무엇을 유지하고, 새로 만들고, 버리는지 돌려준다. 실제 React의 비교는 이보다 복잡하지만 key로 짝을 찾는 부분은 같다. 인덱스 key로 가운데 줄을 지우는 테스트를 보면, 지운 건 B인데 버려지는 건 key 2(원래 C의 컴포넌트)라는 게 보인다.
+
+<CodePlayground
+  caption="key로 짝 맞추기"
+  functionName="diffKeys"
+  initialCode={`function diffKeys(oldKeys, newKeys) {
+  const ops = [];
+  // 새 목록 순서대로 "keep k" 또는 "mount k"를 넣고,
+  // 새 목록에 없는 이전 key는 마지막에 "unmount k"로 넣는다
+  return ops;
+}`}
+  solution={`function diffKeys(oldKeys, newKeys) {
+  const before = new Set(oldKeys);
+  const after = new Set(newKeys);
+  const ops = [];
+  for (const key of newKeys) {
+    ops.push(before.has(key) ? "keep " + key : "mount " + key);
+  }
+  for (const key of oldKeys) {
+    if (!after.has(key)) ops.push("unmount " + key);
+  }
+  return ops;
+}`}
+  tests={[
+    { args: [["0", "1", "2"], ["0", "1", "2", "3"]], expected: ["keep 0", "keep 1", "keep 2", "mount 3"], label: "인덱스 key, 맨 앞에 Z 추가" },
+    { args: [["a", "b", "c"], ["z", "a", "b", "c"]], expected: ["mount z", "keep a", "keep b", "keep c"], label: "id key, 맨 앞에 Z 추가" },
+    { args: [["0", "1", "2"], ["0", "1"]], expected: ["keep 0", "keep 1", "unmount 2"], label: "인덱스 key, B 삭제" },
+    { args: [["a", "b", "c"], ["a", "c"]], expected: ["keep a", "keep c", "unmount b"], label: "id key, B 삭제" },
+    { args: [["a"], ["a2"]], expected: ["mount a2", "unmount a"], label: "key를 바꿔 초기화" },
+  ]}
+/>
+
+## 내용이 같아도 다른 객체
+
+React가 무언가를 "같다"고 판단할 때는 거의 항상 `Object.is`로 비교한다. state 비교, `memo`의 props 비교, `useEffect`·`useMemo`·`useCallback`의 의존성 배열이 모두 그렇다. 숫자나 문자열은 값이 같으면 같다. 객체, 배열, 함수는 내용이 아니라 참조(메모리상의 같은 물체인지)를 본다.
+
+```js
+Object.is("a", "a");          // true
+Object.is({ gap: 8 }, { gap: 8 }); // false
+Object.is(() => {}, () => {});     // false
+```
+
+컴포넌트 함수 안에서 만든 객체와 함수는 렌더링할 때마다 새로 만들어진다. 그래서 이 줄은 겉보기와 달리 매번 다른 props를 넘긴다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="memo로 감싼 ProductItem에 넘기는 props"
+  base="<ProductItem"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "key",
+      display: "key={p.id}",
+      title: "key는 props가 아니다",
+      description: "컴포넌트에 전달되지 않고 memo 비교 대상도 아니다. 형제 사이에서 짝을 찾는 이름표일 뿐이다.",
+    },
+    {
+      key: "item",
+      display: "item={p}",
+      title: "같은 객체면 통과한다",
+      description: "같은 배열에서 꺼낸 같은 객체라면 참조가 같다. 서버에서 데이터를 다시 받아 새 배열을 만들면 내용이 같아도 참조가 바뀐다. TanStack Query는 기본으로 structural sharing을 해서, 바뀌지 않은 부분은 이전 객체를 그대로 돌려준다.",
+    },
+    {
+      key: "onSelect",
+      display: "onSelect={() => open(p.id)}",
+      title: "렌더링마다 새 함수",
+      description: "화살표 함수는 렌더링할 때마다 새로 만들어진다. 이 하나 때문에 memo가 매번 '다르다'고 판단한다.",
+      required: true,
+      code: "const handleSelect = useCallback((id) => openDetail(id), []);\n<ProductItem item={p} onSelect={handleSelect} />",
+    },
+    {
+      key: "style",
+      display: "style={{ gap: 8 }}",
+      title: "객체 리터럴도 매번 새 객체",
+      description: "바뀌지 않는 값이면 컴포넌트 밖 상수로 빼거나 스타일 파일로 옮긴다.",
+      required: true,
+      code: "const ROW_STYLE = { gap: 8 };",
+    },
+    {
+      key: "selected",
+      display: "selected={p.id === selectedId}",
+      title: "원시값은 값으로 비교한다",
+      description: "true/false는 값이 같으면 같다. 선택된 id 객체 대신 이 줄이 선택됐는지만 넘기면, 선택이 바뀔 때 다시 렌더링되는 줄은 이전 줄과 새 줄 두 개뿐이다.",
+    },
+  ]}
+/>
+
+## memo와 useMemo, useCallback이 듣는 경우
+
+`memo`로 컴포넌트를 감싸면 부모가 렌더링되어도 props가 이전과 모두 같을 때(각 prop을 `Object.is`로 비교) 그 컴포넌트의 렌더링을 건너뛴다. 앞에서 본 "부모가 렌더링되면 자식도 렌더링된다"는 기본 동작을 끊는 장치다. 자기 state가 바뀌거나 읽는 context가 바뀌면 `memo`여도 렌더링된다.
+
+`useCallback`과 `useMemo`는 그 자체로 렌더링을 줄여 주지 않는다. 렌더링 사이에 같은 함수, 같은 값을 돌려줄 뿐이다. 그래서 쓸모가 있는 경우가 정해져 있다.
+
+- `memo`로 감싼 자식에 넘기는 함수나 객체라서, 참조가 유지되어야 `memo`가 동작할 때
+- 다른 훅의 의존성 배열에 들어가서, 참조가 바뀌면 effect가 매번 다시 돌 때
+- 계산 자체가 비쌀 때(수천 개를 정렬하거나 거르는 경우). `useMemo`로 의존 값이 바뀔 때만 다시 계산한다
+
+반대로 `memo` 없는 자식에 넘기는 함수를 `useCallback`으로 감싸면 비용만 는다. 자식은 어차피 부모를 따라 렌더링되고, React는 의존성 배열을 비교하는 일과 이전 함수를 기억하는 일을 덤으로 한다. 값싼 컴포넌트를 전부 `memo`로 감싸는 것도 마찬가지로, 렌더링보다 비교가 더 비싼 경우가 생긴다.
+
+`memo`를 깨뜨리는 흔한 실수가 몇 가지 있다.
+
+- 함수나 객체 리터럴을 그대로 넘긴다. 앞의 그림의 `onSelect`, `style`이다.
+- `children`을 넘긴다. JSX 자식은 렌더링마다 새 엘리먼트 객체라서 `<Card>{content}</Card>` 같은 컴포넌트에 `memo`를 붙여도 거의 매번 다시 렌더링된다.
+- `useCallback`의 의존성에 매 렌더링 바뀌는 값을 넣는다. 그러면 매번 새 함수를 돌려준다. 함수 안에서 state를 읽기만 한다면 `setItems((prev) => ...)`처럼 업데이터 함수를 쓰면 의존성에서 뺄 수 있다.
+
+처음 코드는 `ProductItem`을 `memo`로 감싸고 `onSelect`를 `useCallback`으로 고정하는 것만으로도 크게 좋아진다. 글자를 쳐도 결과에 남아 있는 줄은 props가 같으니 건너뛴다. 그래도 `visible`을 거르는 계산과 `ProductList` 자체의 렌더링은 남는다. 이건 뒤에서 transition으로 다룬다.
+
+## 상태는 내리고 내용은 올린다
+
+`memo`를 붙이기 전에 먼저 해 볼 것이 있다. 상태를 옮기는 것이다. `memo`는 "렌더링될 뻔한 걸 막는" 방법이고, 상태를 옮기는 건 처음부터 렌더링될 일이 없게 만드는 방법이다.
+
+첫 번째는 상태를 쓰는 곳 가까이 내리는 것(state colocation)이다. 페이지 전체가 알 필요 없는 상태가 페이지 꼭대기에 있으면 그 상태가 바뀔 때마다 페이지 전체가 렌더링된다. 모달의 열림 여부, 툴팁 위치, 입력 중인 텍스트 같은 건 그걸 쓰는 컴포넌트 안으로 내린다. 그러면 렌더링 범위가 그 컴포넌트 아래로 줄어든다.
+
+두 번째는 내용을 위로 올리는 것이다. 스크롤 위치를 state로 들고 있는 헤더가 그 아래 본문 전체를 감싸고 있다고 하자. 스크롤할 때마다 헤더가 렌더링되고, 그 안의 본문도 따라 렌더링된다. 이때 본문을 헤더 안에서 만들지 않고 부모에서 만들어 `children`으로 넘기면 상황이 바뀐다.
+
+```tsx
+function ScrollShell({ children }) {
+  const [scrollY, setScrollY] = useState(0);
+  // ...scroll 구독
+  return (
+    <div>
+      <StickyBar shrink={scrollY > 80} />
+      {children}
+    </div>
+  );
+}
+
+function Page() {
+  return (
+    <ScrollShell>
+      <Article />
+    </ScrollShell>
+  );
+}
+```
+
+`ScrollShell`이 다시 렌더링되어도 `children`은 `Page`가 이전에 만들어 둔 엘리먼트 객체 그대로다. React는 같은 엘리먼트 객체를 받으면 그 아래를 다시 렌더링하지 않는다. `memo` 없이도 `Article`이 렌더링을 건너뛴다.
+
+<ConceptDiagram
+  width={400}
+  height={240}
+  caption="Article은 Page가 만들고 ScrollShell은 받아서 꽂기만 한다. scrollY가 바뀌어도 Article은 렌더링되지 않는다."
+  nodes={[
+    { id: "page", label: "Page", sub: "상태 없음", x: 200, y: 40, w: 110 },
+    { id: "shell", label: "ScrollShell", sub: "state: scrollY", x: 100, y: 130, w: 130 },
+    { id: "article", label: "Article", sub: "무거운 본문", x: 300, y: 130, w: 120 },
+    { id: "bar", label: "StickyBar", sub: "shrink", x: 100, y: 210, w: 120 },
+  ]}
+  edges={[
+    { from: "page", to: "shell", label: "렌더" },
+    { from: "page", to: "article", label: "만들어서 넘김" },
+    { from: "shell", to: "bar", label: "렌더" },
+    { from: "shell", to: "article", label: "children", dashed: true },
+  ]}
+/>
+
+이 패턴은 Context Provider에서도 똑같이 통한다. Provider 컴포넌트가 state를 들고 `children`을 받는 구조면, Provider의 state가 바뀌어도 `children` 전체가 렌더링되지는 않고 그 context를 읽는 컴포넌트만 렌더링된다.
+
+## context는 값이 바뀌면 구독자를 전부 깨운다
+
+context는 props를 여러 단계로 내려보내는 번거로움을 없애 준다. 대신 렌더링 비용을 숨기기 쉽다. Provider의 `value`가 바뀌면 그 context를 읽는 모든 컴포넌트가 다시 렌더링되고, 중간에 있는 `memo`도 이걸 막지 못한다.
+
+가장 흔한 실수는 매 렌더링 새 객체를 `value`로 넘기는 것이다.
+
+```tsx
+function CartProvider({ children }) {
+  const [items, setItems] = useState([]);
+  // 렌더링마다 새 객체라서, items가 그대로여도 구독자 전부가 다시 렌더링된다
+  return <CartContext.Provider value={{ items, setItems }}>{children}</CartContext.Provider>;
+}
+```
+
+`value`를 `useMemo`로 감싸면 `items`가 바뀔 때만 새 객체가 된다. 그래도 남는 문제가 있다. `useContext`는 context 값 전체를 구독한다. 장바구니 개수만 보여 주는 헤더 배지도, 장바구니에 담기 버튼만 쓰는 상품 카드도 `items`가 바뀌면 전부 렌더링된다. 버튼은 `setItems`만 필요한데도 그렇다.
+
+그래서 context를 나눈다. 자주 바뀌는 값과 거의 안 바뀌는 값, 상태와 그걸 바꾸는 함수를 서로 다른 context에 둔다. `useState`의 setter와 `useReducer`의 `dispatch`는 참조가 바뀌지 않으므로, 이것만 담은 context는 사실상 한 번도 구독자를 깨우지 않는다.
+
+```tsx
+const CartItemsContext = createContext([]);
+const CartActionsContext = createContext(null);
+
+function CartProvider({ children }) {
+  const [items, dispatch] = useReducer(cartReducer, []);
+  return (
+    <CartActionsContext.Provider value={dispatch}>
+      <CartItemsContext.Provider value={items}>{children}</CartItemsContext.Provider>
+    </CartActionsContext.Provider>
+  );
+}
+```
+
+context에는 "이 값 중 일부만 구독하겠다"는 selector가 없다. 값 일부만 구독해야 하는 상황이 많아지면 context를 계속 쪼개기보다 Zustand, Jotai, Redux처럼 selector나 작은 단위(atom) 구독을 지원하는 외부 저장소를 쓰는 편이 낫다. 이런 라이브러리는 `useSyncExternalStore`로 저장소를 구독하고, 고른 값이 바뀐 컴포넌트만 렌더링한다. context는 테마, 로그인 사용자, 언어 설정처럼 드물게 바뀌는 값에 잘 맞는다.
+
+## 여러 번 바꿔도 렌더링은 한 번
+
+핸들러 하나에서 `setState`를 세 번 부르면 렌더링이 세 번 일어날까. 일어나지 않는다. React는 같은 작업 안에서 생긴 업데이트를 모아 두었다가 한 번에 렌더링한다. 이걸 배칭(batching)이라고 한다.
+
+React 17까지는 React 이벤트 핸들러 안에서만 배칭했다. `setTimeout`, Promise의 `then`, `await` 뒤, 직접 단 DOM 이벤트 리스너 안의 업데이트는 `setState`를 부를 때마다 바로 렌더링했다. React 18부터는 `createRoot`로 띄운 앱이면 어디서 생긴 업데이트든 자동으로 배칭한다. 예전 `ReactDOM.render`로 띄우면 18에서도 옛 동작이 남는다.
+
+아래는 비동기 핸들러에서 업데이트가 큐에 쌓이고 빠지는 과정이다.
+
+```tsx
+async function handleRefresh() {
+  setLoading(true);
+  setError(null);
+  const data = await fetchProducts();
+  setProducts(data);
+  setLoading(false);
+}
+```
+
+<AlgoTrace
+  caption="React 18의 자동 배칭: await를 사이에 두고 렌더링 두 번"
+  memoryLabel="업데이트 큐"
+  cells={["setLoading", "setError", "await", "setProducts", "setLoading", "끝"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["loading=true"],
+      caption: "setLoading(true)는 바로 렌더링하지 않고 큐에 넣는다.",
+    },
+    {
+      pointer: 1,
+      memory: ["loading=true", "error=null"],
+      caption: "setError(null)도 같은 큐에 쌓인다.",
+    },
+    {
+      pointer: 2,
+      memory: [],
+      caption: "await에서 함수가 멈추면 지금 작업이 끝난다. 쌓인 두 업데이트를 한 번에 처리해 렌더링 1번.",
+    },
+    {
+      pointer: 3,
+      memory: ["products=data"],
+      caption: "응답이 오면 이어서 실행된다. React 17은 여기서 setState마다 바로 렌더링했다. 18은 다시 큐에 넣는다.",
+    },
+    {
+      pointer: 4,
+      memory: ["products=data", "loading=false"],
+      caption: "setLoading(false)도 같은 큐로 들어간다.",
+    },
+    {
+      pointer: 5,
+      found: [2, 5],
+      memory: [],
+      caption: "이 작업이 끝나면 두 업데이트를 한 번에 렌더링한다. React 18은 모두 2번, 17은 3번 렌더링한다. 17에서는 products만 바뀌고 loading은 아직 true인 중간 화면이 한 번 그려졌다.",
+    },
+  ]}
+/>
+
+배칭 때문에 생기는 오해도 있다. `setCount(count + 1)`을 세 번 부르면 1만 오른다. 세 번 모두 같은 렌더링의 `count`를 읽었기 때문이다. 이전 값에 이어서 계산하려면 `setCount((c) => c + 1)`처럼 업데이터 함수를 넘긴다. 큐에 쌓인 순서대로 이전 결과를 받아 계산한다.
+
+드물게 업데이트 직후 DOM을 바로 읽어야 할 때가 있다. 새 메시지를 추가하고 그 메시지로 스크롤하는 경우다. 이때는 `react-dom`의 `flushSync`로 감싸 그 업데이트를 바로 렌더링하고 커밋하게 할 수 있다. 배칭을 끄는 셈이라 성능에 좋지 않으니 꼭 필요한 곳에만 쓴다.
+
+## 급한 업데이트와 미뤄도 되는 업데이트
+
+`memo`와 상태 옮기기로 렌더링 양을 줄여도, 결과가 실제로 많이 바뀌는 경우는 남는다. 검색어가 바뀌면 걸러진 목록은 정말로 다시 그려야 한다. 이때 문제는 렌더링이 일어난다는 사실이 아니라, 그 렌더링이 끝날 때까지 키 입력이 막힌다는 것이다.
+
+React 18의 동시성 렌더링은 업데이트에 우선순위를 둔다. 입력창의 글자처럼 바로 보여야 하는 업데이트는 급한 것으로, 목록을 다시 거르는 것처럼 조금 늦어도 되는 업데이트는 transition으로 처리한다. transition 렌더링은 중간에 브라우저에 일을 양보하고, 그 사이 급한 업데이트가 들어오면 하던 렌더링을 버리고 새 값으로 다시 시작한다.
+
+처음 코드에는 `useDeferredValue`가 잘 맞는다.
+
+```tsx
+function SearchPage({ products }) {
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const visible = useMemo(
+    () => products.filter((p) => p.name.includes(deferredQuery)),
+    [products, deferredQuery],
+  );
+  const isStale = query !== deferredQuery;
+
+  return (
+    <>
+      <input value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div style={{ opacity: isStale ? 0.6 : 1 }}>
+        <ProductList items={visible} />
+      </div>
+    </>
+  );
+}
+
+const ProductList = memo(function ProductList({ items }) { /* ... */ });
+```
+
+아래 그림에서 사용자가 "니"를 치는 도중에 "닉"을 이어 치는 상황을 따라가 보자.
+
+<SequenceDiagram
+  caption="입력창은 바로 그리고, 목록은 뒤에서 그리다가 새 입력이 오면 버린다"
+  actors={[
+    { id: "input", label: "입력창" },
+    { id: "react", label: "React" },
+    { id: "list", label: "ProductList" },
+  ]}
+  steps={[
+    {
+      from: "input",
+      to: "react",
+      label: "\"니\" 입력",
+      title: "급한 업데이트가 들어온다",
+      detail: "query는 '니'가 됐다. deferredQuery는 이번 렌더링에서 아직 이전 값을 돌려준다.",
+    },
+    {
+      from: "react",
+      to: "input",
+      label: "급한 렌더",
+      title: "입력창부터 그린다",
+      detail: "deferredQuery가 그대로라 visible도 그대로고, memo로 감싼 ProductList는 렌더링을 건너뛴다. 이 렌더링은 금방 끝나서 글자가 바로 보인다.",
+    },
+    {
+      from: "react",
+      to: "list",
+      label: "뒤에서 렌더",
+      title: "새 값으로 목록을 그리기 시작한다",
+      detail: "이번에는 deferredQuery가 '니'인 렌더링을 우선순위 낮게 시작한다. 조금씩 일하고 브라우저에 양보한다.",
+    },
+    {
+      from: "input",
+      to: "react",
+      label: "\"닉\" 입력",
+      title: "그리는 도중에 새 입력이 온다",
+      detail: "양보한 틈에 다음 키 입력이 처리된다. 메인 스레드가 막혀 있지 않으니 입력이 밀리지 않는다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "버리기",
+      title: "하던 렌더링을 버린다",
+      detail: "'니'로 그리던 목록은 이미 낡은 결과다. 커밋하지 않고 버린 뒤 '닉' 입력창부터 그린다.",
+    },
+    {
+      from: "react",
+      to: "list",
+      label: "커밋",
+      title: "마지막 값으로 끝까지 그린다",
+      detail: "'닉'으로 목록 렌더링을 마치고 커밋한다. 그 사이 사용자는 흐릿한 이전 목록을 보고 있었다.",
+    },
+  ]}
+/>
+
+`useTransition`은 같은 일을 업데이트하는 쪽에서 한다. `startTransition(() => setTab("reviews"))`처럼 감싼 업데이트가 transition이 되고, `isPending`으로 진행 중 표시를 할 수 있다. 상태를 바꾸는 코드에 접근할 수 있으면 `useTransition`, 값을 props로 받기만 해서 업데이트를 감쌀 수 없으면 `useDeferredValue`를 쓴다. 입력창의 `value`로 쓰는 state 자체를 transition으로 바꾸면 안 된다. 입력창이 늦게 따라오는 처음 문제가 그대로 돌아온다.
+
+디바운스와 헷갈리기 쉬운데 성격이 다르다. 디바운스는 정해진 시간(예: 300ms)을 무조건 기다린다. 빠른 기기에서도 기다리고, 기다린 뒤 시작한 렌더링이 오래 걸리면 그 동안은 또 막힌다. transition은 고정된 지연이 없어서 빠른 기기에서는 바로 끝나고, 느린 기기에서는 렌더링 도중에도 입력을 받는다. 반대로 transition은 렌더링을 미룰 뿐 요청 횟수를 줄여 주지 않는다. 글자마다 서버 검색 API를 부르는 걸 줄이려면 디바운스가 여전히 필요하다.
+
+`useDeferredValue`를 쓰면서 `ProductList`를 `memo`로 감싸지 않으면 효과가 없다. 급한 렌더링에서 부모가 렌더링될 때 목록도 같이 렌더링되기 때문이다. 미룬 값은 그 값을 받는 쪽이 건너뛸 수 있어야 의미가 있다.
+
+## 고치기 전에 잰다
+
+리렌더링을 줄이는 작업은 측정부터 시작한다. 짐작으로 `memo`를 붙이면 느린 곳은 그대로 두고 코드만 복잡해진다.
+
+React DevTools의 Profiler 탭에서 녹화하고, 느린 동작을 한 번 한 뒤 멈춘다. Flamegraph는 커밋 한 번에서 어떤 컴포넌트가 얼마나 걸렸는지 트리로 보여 주고, Ranked는 오래 걸린 순서로 줄 세운다. 설정에서 "Record why each component rendered while profiling"을 켜 두면 컴포넌트를 눌렀을 때 렌더링된 이유가 나온다. "The parent component rendered", "Props changed: (onSelect)", "Hook 2 changed" 같은 식이다. 앞에서 본 세 가지 이유 중 어느 것인지 바로 알 수 있다. "Highlight updates when components render"를 켜면 화면에서 렌더링되는 영역이 테두리로 깜빡여서, 입력 한 번에 페이지 어디까지 번지는지 눈으로 보인다.
+
+코드로 재고 싶으면 `<Profiler id="list" onRender={...}>`로 감싼다. `onRender`는 커밋마다 `actualDuration`(이번에 실제로 걸린 시간)과 `baseDuration`(memo 없이 전부 렌더링했다면 걸렸을 시간 추정)을 넘겨준다. 둘의 차이가 크면 memo가 일을 하고 있다는 뜻이다. 프로덕션 빌드에서는 프로파일링이 기본으로 꺼져 있어서 프로파일링용 빌드(`react-dom/profiling`)를 따로 써야 한다.
+
+why-did-you-render 같은 라이브러리는 React에 끼어들어서 "props 내용은 같은데 참조만 달라서 렌더링됐다" 같은 피할 수 있었던 렌더링을 콘솔에 알려 준다. 개발 모드에서만 쓰고, React 버전마다 지원 범위가 다르니 확인하고 붙인다.
+
+잴 때 놓치기 쉬운 점이 있다. 개발 모드는 검사 코드가 많아서 프로덕션보다 느리고, `StrictMode` 때문에 렌더링이 두 번 일어난다. 절대 시간은 프로덕션 빌드로 재야 한다. 개발자 노트북은 사용자의 휴대폰보다 몇 배 빠르니 크롬 Performance 패널에서 CPU를 4배나 6배 느리게 걸고 본다. 사용자가 느끼는 반응성은 Core Web Vitals의 INP(Interaction to Next Paint)로 나타나는데, 입력부터 다음 화면이 그려지기까지의 시간이라 앞의 렌더 단계가 길면 그대로 늘어난다.
+
+## React Compiler가 대신해 주는 것
+
+`useMemo`와 `useCallback`을 손으로 넣고 의존성을 관리하는 일은 실수하기 쉽다. React Compiler는 빌드할 때 코드를 분석해서 이 메모이제이션을 자동으로 넣어 주는 도구다. Babel 플러그인으로 동작하고, 2025년 10월에 1.0이 나왔다. React 19와 쓰는 걸 기본으로 하고, 17과 18은 별도 런타임 패키지를 함께 깔아야 한다.
+
+컴파일러는 컴포넌트 안의 값과 JSX를 의존성 단위로 잘게 캐시한다. 그래서 앞에서 본 `onSelect={() => ...}` 같은 인라인 함수도 의존 값이 그대로면 같은 참조가 된다. 손으로 쓴 `useMemo`보다 촘촘하게 들어가는 경우도 많다.
+
+다만 만능은 아니다. 렌더 중에 props를 고치거나 조건문 안에서 훅을 부르는 것처럼 React의 규칙을 어긴 컴포넌트는 최적화하지 않고 건너뛴다. 상태를 어디에 둘지, context를 어떻게 나눌지 같은 구조 문제는 그대로 남는다. 2,000줄을 한 번에 다시 거르는 비싼 렌더링도 메모이제이션으로는 사라지지 않아서 transition이나 목록 가상화(화면에 보이는 줄만 렌더링하는 방법)가 여전히 필요하다. 컴파일러를 켜도 측정은 계속 해야 한다.
+
+## 처음 검색창으로 돌아가서
+
+글자 하나에 2,000줄이 다시 그려진 건, 상태가 페이지 꼭대기에 있었고 부모가 렌더링되면 자식도 따라 렌더링되는 React의 기본 동작 때문이었다. 렌더링은 함수를 다시 호출해 설계도를 만드는 일이고, DOM을 바꾸는 커밋과는 다르다. 줄이는 방법은 순서대로 고르면 된다. 먼저 상태를 쓰는 곳으로 내리고 내용은 `children`으로 올린다. 그래도 남는 비싼 자식은 `memo`로 감싸고 넘기는 참조를 고정한다. 결과가 정말 많이 바뀌는 업데이트는 transition으로 미뤄 입력을 막지 않게 한다. 그리고 이 모든 건 Profiler로 이유를 확인한 다음에 한다. 다음에는 이 렌더링이 서버와 브라우저 중 어디서 일어나는지를 다룬 [렌더링 전략](/posts/rendering-strategies) 글로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### React 컴포넌트는 언제 다시 렌더링되나요?
+
+자기 state가 바뀔 때, 부모가 다시 렌더링될 때, 읽고 있는 context 값이 바뀔 때다. 가장 흔한 건 부모 렌더링이고, 이때 자식은 props가 바뀌지 않았어도 기본으로 다시 렌더링된다. setState에 지금과 `Object.is`로 같은 값을 넣으면 렌더링을 건너뛴다.
+
+### 렌더링되면 DOM도 매번 바뀌나요?
+
+아니다. 렌더는 컴포넌트 함수를 호출해 새 엘리먼트 트리를 만드는 계산이고, 이전 트리와 비교해서 실제로 다른 부분만 커밋 단계에서 DOM에 반영한다. 그래서 렌더링이 많아도 DOM 변경은 적을 수 있고, 성능 문제는 대개 렌더 단계의 함수 호출과 비교가 메인 스레드를 오래 잡는 데서 온다.
+
+### 리스트에 인덱스를 key로 쓰면 왜 문제인가요?
+
+React는 형제 사이에서 key로 이전 컴포넌트와 짝을 찾는다. 인덱스를 쓰면 맨 앞에 항목을 넣거나 중간을 지울 때 모든 key가 다른 항목을 가리키게 되어, 바뀌지 않은 줄까지 props가 바뀌고 줄 안의 입력값 같은 state가 엉뚱한 항목에 붙는다. 순서가 바뀌지 않고 state가 없는 정적 목록이면 괜찮지만, 보통은 데이터의 고유 id를 쓴다.
+
+### memo, useMemo, useCallback은 언제 쓰나요? 다 감싸면 안 되나요?
+
+`memo`는 부모가 렌더링될 때 props가 같으면 자식 렌더링을 건너뛰게 한다. `useCallback`과 `useMemo`는 참조를 유지해 주는 도구라서 memo로 감싼 자식에 넘기거나 훅 의존성에 들어갈 때, 또는 계산이 비쌀 때만 의미가 있다. 다 감싸면 비교와 메모리 비용만 늘고, 인라인 객체나 `children` 하나로도 쉽게 깨진다. Profiler로 느린 곳을 찾은 뒤 거기에만 쓴다.
+
+### Context를 쓰면 성능 문제가 생기는 이유와 해결 방법은요?
+
+Provider의 `value`가 바뀌면 그 context를 읽는 모든 컴포넌트가 memo와 상관없이 다시 렌더링되고, 일부 값만 구독할 방법도 없다. 먼저 `value`를 매 렌더링 새 객체로 만들지 않게 `useMemo`로 고정한다. 그다음 상태와 dispatch, 자주 바뀌는 값과 드물게 바뀌는 값을 다른 context로 나눈다. 부분 구독이 많이 필요하면 selector를 지원하는 외부 저장소를 쓴다.
+
+### React 18의 자동 배칭은 무엇이 바뀐 건가요?
+
+17까지는 React 이벤트 핸들러 안의 업데이트만 묶어서 한 번에 렌더링했고, `setTimeout`이나 `await` 뒤의 업데이트는 setState마다 바로 렌더링했다. 18은 `createRoot`로 띄우면 어디서 생긴 업데이트든 같은 작업 안이면 묶는다. 렌더링 횟수가 줄고 중간 상태가 화면에 그려지지 않는다. 바로 반영해야 하면 `flushSync`를 쓴다.
+
+### useTransition, useDeferredValue, 디바운스는 어떻게 다른가요?
+
+transition은 업데이트를 낮은 우선순위로 렌더링해서, 렌더링 도중에도 입력을 받고 낡은 렌더링은 버린다. 업데이트 코드를 감쌀 수 있으면 `useTransition`, 값만 받을 수 있으면 `useDeferredValue`를 쓴다. 디바운스는 고정 시간을 기다리는 방식이라 빠른 기기에서도 늦고, 렌더링이 시작되면 막힌다. 대신 디바운스는 API 호출 횟수를 줄여 주므로 둘은 목적이 다르고 함께 쓸 수 있다.
+
+### 불필요한 리렌더링은 어떻게 찾나요?
+
+React DevTools Profiler로 느린 동작을 녹화하고, "왜 렌더링됐는지 기록" 옵션을 켜서 컴포넌트마다 부모 렌더링 때문인지, 어떤 prop이나 훅이 바뀌었는지 본다. 화면에서 렌더링 영역을 강조하는 옵션으로 범위를 눈으로 확인하고, 절대 시간은 프로덕션 빌드에서 CPU를 느리게 걸고 잰다. 원인을 확인한 뒤 상태 위치를 옮기거나 memo를 붙인다.
