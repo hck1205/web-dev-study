@@ -41,7 +41,12 @@ export const TOPICS: Topic[] = [
         description: "HTTP, TCP/IP, DNS, 캐시, 보안",
         children: [{ id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" }],
       },
-      { id: "os", label: "OS", description: "프로세스, 스레드, 메모리, 파일 시스템" },
+      {
+        id: "os",
+        label: "OS",
+        description: "프로세스, 스레드, 메모리, 파일 시스템",
+        children: [{ id: "linux", label: "Linux", description: "Ubuntu 기준 리눅스 운영, 네트워크, 방화벽" }],
+      },
       {
         id: "server-infra",
         label: "Server/Infra",

@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database, Frontend › {Architecture, JavaScript, Performance, React}, Network › HTTP, OS, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database, Frontend › {Architecture, JavaScript, Performance, React}, Network › HTTP, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -185,6 +185,14 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - **여러 개는 엇갈려 등장한다**(stagger 40~90ms). 목록, 테스트 결과, 점 무리에 쓴다.
 - 단계형 그림은 모두 `StepControls`를 쓴다. 진행 막대를 눌러 원하는 단계로 바로 갈 수 있고, 자동 재생 중에는 현재 칸이 남은 시간만큼 차오른다.
 - 새 시각화를 만들면 390px에서 단계를 끝까지 넘겨 보며 스크린샷으로 중간 프레임과 마지막 프레임을 확인한다.
+
+### 리눅스·명령어가 나오는 글
+
+- 기준 OS는 서버에서 가장 많이 쓰는 **Ubuntu LTS**(현재 24.04, 22.04도 고려)로 잡고 글 앞부분에 밝힌다. 배포판마다 다른 부분(RHEL 계열의 firewalld·dnf 등)은 차이만 짧게 덧붙인다.
+- 개념을 설명하면 바로 아래에 그대로 따라 칠 수 있는 명령어를 ```bash 코드 블록으로 함께 쓴다. `sudo`가 필요한 명령은 붙여 쓰고, 명령마다 주석으로 무엇을 하는지 적는다.
+- 명령의 출력 예시도 ```text 블록으로 보여 주고, 출력의 어느 부분을 봐야 하는지 본문에서 짚는다. 출력은 실제 형식대로 쓴다(지어낸 형식 금지).
+- 위험한 명령(원격 서버에서 방화벽 정책을 DROP으로 바꾸기, 규칙 전체 삭제 등)은 `<Callout kind="warning">`으로 경고하고, 되돌리는 방법이나 안전장치를 함께 적는다.
+- 확인·되돌리기 순서까지 쓴다: 바꾸기 전 상태 확인 → 변경 → 동작 확인 → 영구 저장 → 되돌리는 법.
 
 ### 직접 실행해 보는 코드 (CodePlayground)
 
