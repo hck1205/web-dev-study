@@ -35,7 +35,12 @@ export const TOPICS: Topic[] = [
           { id: "react", label: "React", description: "렌더링 모델, 상태, 렌더링 전략" },
         ],
       },
-      { id: "network", label: "Network", description: "HTTP, TCP/IP, DNS, 캐시, 보안" },
+      {
+        id: "network",
+        label: "Network",
+        description: "HTTP, TCP/IP, DNS, 캐시, 보안",
+        children: [{ id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" }],
+      },
       { id: "os", label: "OS", description: "프로세스, 스레드, 메모리, 파일 시스템" },
       {
         id: "server-infra",
