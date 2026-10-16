@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "json-crud-http",
+    title: "JSON으로 데이터 주고받기: 조회·생성·수정·삭제 끝까지",
+    summary: "할 일 자원 하나를 curl과 fetch로 만들고 읽고 고치고 지우면서 실제 요청과 응답을 본다. JSON.stringify가 바꾸는 값, 큰 정수 ID, 201과 Location, PUT과 Merge Patch, 415·422·412, 204에서 터지는 res.json()까지 다룬다.",
+    topic: "programming/network/http",
+    tags: ["HTTP", "REST", "API", "JSON", "JavaScript"],
+    date: "2026-10-16",
+    keywords: ["JSON.stringify", "JSON.parse", "reviver", "415 Unsupported Media Type"],
+  },
+  {
+    slug: "big-o-notation",
+    title: "Big O 표기법: 입력이 커질 때 얼마나 느려지나",
+    summary: "100건에서는 빠르던 코드가 10만 건에서 시간 초과가 나는 이유를 Big O로 따라간다. 자주 만나는 복잡도와 실제 숫자, 최악과 분할 상환, 공간 복잡도, 해시맵과 이진 탐색으로 줄이는 법, 자바스크립트에 숨은 반복문까지 다룬다.",
+    topic: "programming/algorithms",
+    tags: ["Algorithm", "JavaScript", "Performance"],
+    date: "2026-10-16",
+    keywords: ["Big O", "시간 복잡도", "공간 복잡도", "분할 상환"],
+  },
+  {
     slug: "docker-network-volume",
     title: "Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기",
     summary: "컨테이너 안의 localhost가 왜 DB에 닿지 않는지, docker rm 한 번에 데이터가 왜 사라지는지에서 출발해 사용자 정의 브리지와 내장 DNS, -p가 만드는 DNAT, named volume과 bind mount, 볼륨 백업까지 따라간다.",

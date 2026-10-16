@@ -1,5 +1,6 @@
 import { AB_TESTING } from "./ab-testing";
 import { BASE64 } from "./base64";
+import { BIG_O_NOTATION } from "./big-o-notation";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
@@ -24,6 +25,7 @@ import { HTTPS_TLS } from "./https-tls";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
+import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { MICRO_FRONTENDS } from "./micro-frontends";
@@ -45,6 +47,7 @@ import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 export const QUESTION_SETS = [
   AB_TESTING,
   BASE64,
+  BIG_O_NOTATION,
   BROWSER_FETCH,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
@@ -69,6 +72,7 @@ export const QUESTION_SETS = [
   IPTABLES_BASICS,
   IPTABLES_NAT,
   JS_MEMORY_LEAK,
+  JSON_CRUD_HTTP,
   KUBERNETES_INGRESS,
   LOCAL_CUSTOM_DOMAIN,
   MICRO_FRONTENDS,
