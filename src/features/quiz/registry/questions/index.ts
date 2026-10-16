@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { BROWSER_FETCH } from "./browser-fetch";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
@@ -9,6 +10,11 @@ import { EVENT_LOOP } from "./event-loop";
 import { GATEWAY } from "./gateway";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
+import { HTTP_MESSAGE } from "./http-message";
+import { HTTP_METHODS } from "./http-methods";
+import { HTTP_STATUS_CODES } from "./http-status-codes";
+import { HTTP_VERSIONS } from "./http-versions";
+import { HTTPS_TLS } from "./https-tls";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
@@ -19,8 +25,10 @@ import { MVC_PATTERN } from "./mvc-pattern";
 import { OAUTH } from "./oauth";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
+import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
+import { REST_API_DESIGN } from "./rest-api-design";
 import { TOKEN_LOGIN } from "./token-login";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -28,6 +36,7 @@ import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  BROWSER_FETCH,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
@@ -38,6 +47,11 @@ export const QUESTION_SETS = [
   GATEWAY,
   HOSTS_FILE,
   HTTP_CACHING_CDN,
+  HTTP_MESSAGE,
+  HTTP_METHODS,
+  HTTP_STATUS_CODES,
+  HTTP_VERSIONS,
+  HTTPS_TLS,
   JS_MEMORY_LEAK,
   KUBERNETES_INGRESS,
   LOCAL_CUSTOM_DOMAIN,
@@ -48,8 +62,10 @@ export const QUESTION_SETS = [
   OAUTH,
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,
+  REALTIME_COMMUNICATION,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
+  REST_API_DESIGN,
   TOKEN_LOGIN,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,

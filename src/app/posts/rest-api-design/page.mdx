@@ -1,0 +1,489 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rest-api-design");
+
+무한 스크롤 피드에서 "아래로 내리다 보면 같은 글이 두 번 나온다"는 제보가 들어왔다. 앱은 `GET /posts?page=2&size=20`으로 다음 묶음을 받는다. 서버 코드를 봐도 쿼리는 맞고, 앱 코드도 받은 걸 그대로 붙일 뿐이다. 버그는 코드가 아니라 API를 처음 설계할 때 고른 페이지 방식에 있었다.
+
+REST API를 만들 때는 이런 결정이 생각보다 많다. 주소를 어떻게 지을지, 에러를 어떤 모양으로 줄지, 필드를 바꿀 때 기존 앱을 어떻게 살릴지. 한번 공개하면 바꾸기 어려운 것들이라 처음에 정해 두는 게 싸다. 이 글은 그 결정들을 차례로 짚는다. HTTP 메시지의 생김새와 메서드, 상태 코드 자체는 [HTTP 메서드](/posts/http-methods)와 [HTTP 상태 코드](/posts/http-status-codes)에 따로 정리했다.
+
+## 주소는 자원의 이름이다
+
+REST에서 URL은 자원(resource)을 가리킨다. 자원은 API가 다루는 대상, 주문이나 회원이나 상품 같은 명사다. 그래서 주소에는 명사를 쓰고, 무엇을 할지는 HTTP 메서드가 말하게 한다.
+
+```
+GET    /getOrders           ✗ 동사가 주소에 들어갔다
+POST   /orders/delete/42    ✗ 지우는 데 POST, 동작이 주소에
+
+GET    /orders              주문 목록
+POST   /orders              주문 만들기
+GET    /orders/42           42번 주문
+PATCH  /orders/42           42번 주문 일부 고치기
+DELETE /orders/42           42번 주문 지우기
+```
+
+자원은 두 가지 모양으로 나온다. 여러 개를 담은 컬렉션(`/orders`)과 그 안의 하나인 아이템(`/orders/42`)이다. 컬렉션 이름은 복수형으로 통일하는 게 보통이다. `/order/42`와 `/orders`가 섞여 있으면 쓰는 사람이 매번 문서를 찾아봐야 한다. 주소에 여러 단어가 들어가면 `/order-items`처럼 소문자와 하이픈을 쓰는 경우가 많다.
+
+자원 사이에 소속 관계가 있으면 주소로 계층을 표현한다. 아래 그림에서 화살표를 따라 점이 흐르는 방향이 "이 안에 속한다"는 뜻이다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="소속은 주소의 계층으로, 깊이는 두 단계 정도에서 끊는다"
+  nodes={[
+    { id: "users", label: "/users", sub: "컬렉션", x: 80, y: 40, w: 110 },
+    { id: "user", label: "/users/7", sub: "아이템", x: 80, y: 130, w: 110 },
+    { id: "uorders", label: "/users/7/orders", sub: "7번 회원의 주문", x: 80, y: 220, w: 150 },
+    { id: "orders", label: "/orders", sub: "컬렉션", x: 310, y: 40, w: 110 },
+    { id: "order", label: "/orders/42", sub: "아이템", x: 310, y: 130, w: 120 },
+    { id: "items", label: "/orders/42/items", sub: "하위 컬렉션", x: 310, y: 220, w: 150 },
+  ]}
+  edges={[
+    { from: "users", to: "user", label: "id로 하나" },
+    { from: "user", to: "uorders", label: "소속" },
+    { from: "orders", to: "order", label: "id로 하나" },
+    { from: "order", to: "items", label: "소속" },
+    { from: "uorders", to: "order", label: "같은 주문", dashed: true },
+  ]}
+/>
+
+점선이 중요하다. 7번 회원의 42번 주문을 `/users/7/orders/42`로도, `/orders/42`로도 찾을 수 있게 하면 같은 자원에 주소가 둘 생긴다. 계층이 깊어질수록 주소를 만들려면 부모 id를 전부 알아야 해서 클라이언트가 불편해진다. 그래서 흔히 쓰는 규칙은 이렇다. 아이템은 자기 id만으로 찾을 수 있으면 최상위에 두고(`/orders/42`), 계층 주소는 "누구의 목록"을 거를 때만 쓴다(`/users/7/orders`). `/users/7/orders/42/items/3/options`처럼 세 단계를 넘어가면 다시 생각해 본다.
+
+## CRUD로 안 떨어지는 동작
+
+주문 취소, 비밀번호 재설정, 결제 환불 같은 동작은 명사로 바꾸기 애매하다. 방법이 몇 가지 있다.
+
+상태를 바꾸는 것으로 볼 수 있으면 `PATCH /orders/42`에 `{ "status": "cancelled" }`를 보낸다. 다만 취소에 환불, 재고 복구, 알림 같은 일이 딸려 있으면 필드 하나 바꾸는 모양이 오히려 그 무게를 숨긴다. 이럴 때는 동작 자체를 자원으로 만든다. `POST /orders/42/cancellation`은 "취소 하나를 만든다"로 읽힌다. 환불도 `POST /refunds`로 환불 자원을 만들면, 나중에 `GET /refunds/9`로 환불 상태를 조회할 수 있어서 자연스럽다. Google의 API 설계 가이드처럼 `POST /orders/42:cancel`이라는 별도 표기(custom method)를 규칙으로 정한 곳도 있다. 어느 쪽이든 팀 안에서 하나로 정해 두는 게 중요하다.
+
+## 메서드와 상태 코드를 제대로 쓴다
+
+메서드의 의미를 지키면 클라이언트, 프록시, 캐시가 그 의미를 믿고 동작한다. GET은 아무것도 바꾸지 않아야 한다. GET으로 삭제하는 링크를 만들었다가 링크 미리보기 봇이 들르는 바람에 데이터가 지워지는 일이 실제로 생긴다. PUT은 자원 전체를 보낸 값으로 바꾸고, PATCH는 일부만 고친다.
+
+PATCH의 본문 형식도 정해야 한다. 가장 흔한 건 JSON Merge Patch(RFC 7396, `application/merge-patch+json`)다. 보낸 필드만 바꾸고, `null`을 보내면 그 필드를 지운다. 단순하지만 배열은 통째로 바뀌고, "값을 null로 만들기"와 "필드 지우기"를 구분하지 못한다. 배열의 한 원소만 바꾸는 식의 세밀한 수정이 필요하면 연산 목록을 보내는 JSON Patch(RFC 6902)를 쓴다.
+
+상태 코드는 클라이언트가 분기하는 기준이니 일관되게 고른다. 자주 헷갈리는 것만 짚으면 이렇다.
+
+- 만들기에 성공하면 201과 함께 `Location: /orders/42` 헤더로 새 자원의 주소를 준다. 본문이 없는 성공은 204.
+- 문법이 틀린 요청은 400, 형식은 맞는데 값이 규칙에 어긋나면 422로 나누는 곳이 많다. 둘 다 400으로 쓰는 API도 있다. 어느 쪽이든 섞지만 않으면 된다.
+- 401은 "누군지 모르겠다", 403은 "누군지 아는데 권한이 없다"다. 남의 비공개 자원은 존재 자체를 숨기려고 403 대신 404를 주기도 한다.
+- 지금 상태와 충돌하면 409. 이미 취소된 주문을 또 취소하려 할 때다.
+
+409와 이웃한 문제가 하나 있다. 관리자 두 명이 같은 상품을 동시에 고치는 경우다.
+
+<SequenceDiagram
+  caption="If-Match로 남이 고친 걸 덮어쓰지 않게 한다"
+  actors={[
+    { id: "a", label: "관리자 A" },
+    { id: "api", label: "API" },
+    { id: "b", label: "관리자 B" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "api",
+      label: "GET",
+      title: "A가 상품을 연다",
+      detail: "응답의 ETag는 지금 이 자원의 버전 표시다.",
+      payload: "GET /products/7\n\n200 OK\nETag: \"v3\"\n{\"price\":12000,\"stock\":5}",
+    },
+    {
+      from: "b",
+      to: "api",
+      label: "GET",
+      title: "B도 같은 상품을 연다",
+      detail: "B도 v3를 받았다. 두 사람이 같은 버전을 들고 있다.",
+      payload: "ETag: \"v3\"",
+    },
+    {
+      from: "a",
+      to: "api",
+      label: "PATCH (v3)",
+      title: "A가 가격을 바꾼다",
+      detail: "내가 본 게 v3일 때만 바꾸라고 조건을 붙인다. 서버의 현재 버전도 v3라 통과한다.",
+      payload: "PATCH /products/7\nIf-Match: \"v3\"\n{\"price\":11000}\n\n200 OK\nETag: \"v4\"",
+    },
+    {
+      from: "b",
+      to: "api",
+      label: "PATCH (v3)",
+      title: "B가 재고를 바꾸려 한다",
+      detail: "B가 들고 있는 건 v3인데 서버는 이미 v4다.",
+      payload: "PATCH /products/7\nIf-Match: \"v3\"\n{\"stock\":3}",
+    },
+    {
+      from: "api",
+      to: "b",
+      label: "412",
+      title: "조건이 맞지 않아 거절한다",
+      detail: "그대로 받았다면 B의 화면에 있던 옛 가격이 함께 저장될 수도 있었다. B는 다시 받아서 바뀐 내용을 보고 고친다.",
+      payload: "412 Precondition Failed",
+    },
+  ]}
+/>
+
+이게 HTTP로 하는 낙관적 잠금이다. 잠금을 미리 잡지 않고, 저장할 때 버전이 그대로인지만 확인한다. 클라이언트가 `If-Match`를 빼먹는 걸 막고 싶으면 조건 없는 수정 요청에 428 Precondition Required를 돌려준다.
+
+## 목록을 거르고 줄 세우기
+
+목록 API에는 거의 항상 필터, 정렬, 페이지가 붙는다. 이건 쿼리 문자열로 받는다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="주문 목록 요청 하나 뜯어 보기"
+  base="GET /v1/orders"
+  params={[
+    {
+      key: "status",
+      value: "paid",
+      title: "필터",
+      description: "필드 이름을 그대로 파라미터로 쓰면 읽기 쉽다. 여러 값은 status=paid,shipped처럼 쉼표로 받는 곳이 많다.",
+    },
+    {
+      key: "createdAfter",
+      value: "2026-10-01",
+      title: "범위 필터",
+      description: "같음이 아닌 비교는 이름에 뜻을 담거나(createdAfter) created[gte]=처럼 연산자를 붙인다. 날짜는 ISO 8601로 받는다.",
+    },
+    {
+      key: "sort",
+      value: "-createdAt",
+      title: "정렬",
+      description: "앞의 -는 내림차순이다. 여러 기준은 쉼표로 잇는다. 정렬할 수 있는 필드는 인덱스가 있는 것만 열어 둔다. 아무 필드나 허용하면 큰 테이블에서 풀 스캔이 난다.",
+      code: "sort=-createdAt,id",
+    },
+    {
+      key: "limit",
+      value: "20",
+      title: "한 번에 몇 개",
+      description: "기본값과 상한을 둔다. 상한이 없으면 limit=1000000 한 번에 서버가 눕는다. 상한을 넘으면 잘라서 주거나 400으로 알린다.",
+    },
+    {
+      key: "cursor",
+      value: "eyJjcmVhdGVk…",
+      title: "어디서부터",
+      description: "앞 페이지 응답이 준 값을 그대로 돌려보낸다. 클라이언트가 해석하지 않는 불투명한 문자열이다. 아래에서 자세히 본다.",
+      code: "base64url 해독:\n{\"createdAt\":\"2026-10-15T09:30:00Z\",\"id\":\"ord_812\"}",
+    },
+    {
+      key: "fields",
+      value: "id,total,status",
+      title: "받을 필드",
+      description: "필요한 필드만 달라고 한다. 모바일 목록 화면처럼 몇 개만 쓰는 곳에서 응답 크기를 줄인다.",
+    },
+  ]}
+/>
+
+## 같은 글이 두 번 나온 이유
+
+처음 제보로 돌아가자. `page=2&size=20`은 결국 SQL의 `OFFSET 20 LIMIT 20`이다. "앞에서 20개를 건너뛰고 20개"라는 뜻이다. 문제는 첫 페이지를 받은 뒤 두 번째 페이지를 받기 전까지 목록이 그대로라는 보장이 없다는 데 있다. 피드는 최신 글이 맨 위에 오고, 그 사이에도 글은 계속 올라온다.
+
+아래 그림은 한 페이지에 3개씩 받는 피드다. 칸은 두 번째 요청을 보내는 순간의 목록이다.
+
+<AlgoTrace
+  caption="offset은 밀리고, 커서는 제자리를 기억한다"
+  memoryLabel="앱이 받은 글"
+  cells={["글12", "글11", "글10", "글9", "글8", "글7", "글6", "글5"]}
+  steps={[
+    { caption: "최신 글이 위에 오는 피드다. 첫 페이지를 받을 때는 글12와 글11이 아직 없었다." },
+    { found: [2, 3, 4], memory: ["글10", "글9", "글8"], caption: "offset=0, limit=3으로 첫 페이지를 받는다. 그때 맨 위 세 개다." },
+    { found: [0, 1], memory: ["글10", "글9", "글8"], caption: "스크롤하는 사이 새 글 두 개가 맨 위에 올라왔다. 기존 글이 모두 두 칸씩 밀린다." },
+    { pointer: 3, found: [3, 4, 5], memory: ["글10", "글9", "글8", "글9", "글8", "글7"], caption: "offset=3으로 두 번째 페이지를 받는다. 지금 목록의 4~6번째는 글9, 글8, 글7이다. 두 개가 겹친다." },
+    { found: [4], memory: ["글10", "글9", "글8"], caption: "이번에는 커서로 해 본다. 첫 페이지의 마지막 글8을 커서로 기억해 둔다." },
+    { pointer: 5, found: [5, 6, 7], memory: ["글10", "글9", "글8", "글7", "글6", "글5"], caption: "글8보다 오래된 것 세 개를 달라고 한다. 위에 몇 개가 끼어들었든 글7, 글6, 글5가 온다." },
+  ]}
+/>
+
+반대로 첫 페이지를 받은 뒤 글이 지워지면 offset 방식은 글을 건너뛴다. 뒤의 글이 한 칸씩 당겨지면서 두 번째 페이지의 첫 글이 첫 페이지 범위로 넘어가 버리기 때문이다. 중복은 앱에서 id로 걸러 낼 수라도 있지만, 건너뛴 글은 앱이 알 방법이 없다.
+
+offset에는 성능 문제도 있다. `OFFSET 100000 LIMIT 20`이라고 해도 데이터베이스는 10만 개를 읽고 버린 다음 20개를 준다. 뒤 페이지로 갈수록 느려진다.
+
+커서 방식(keyset pagination이라고도 한다)은 "몇 개를 건너뛸까" 대신 "어디서부터"를 묻는다. 마지막으로 받은 행의 정렬 키 값을 기억해 두고, 그보다 뒤에 오는 행만 달라고 한다.
+
+```sql
+-- 정렬: created_at 내림차순, 같으면 id 내림차순
+SELECT * FROM posts
+WHERE created_at < :cursorCreatedAt
+   OR (created_at = :cursorCreatedAt AND id < :cursorId)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+`(created_at, id)` 복합 인덱스가 있으면 데이터베이스는 커서 위치로 바로 찾아가서 20개만 읽는다. 몇 번째 페이지든 속도가 같다. 정렬 키에 `id`를 덧붙인 이유가 있다. `created_at`만 쓰면 같은 시각에 만들어진 글이 여러 개일 때 페이지 경계에서 일부가 빠지거나 겹친다. 정렬 키는 전체가 유일해야 한다.
+
+직접 짜 보자. `list`는 `createdAt` 내림차순, 같으면 `id` 내림차순으로 이미 정렬돼 있다. 커서가 `null`이면 처음부터, 아니면 커서보다 뒤에 오는 것부터 `limit`개를 준다. `nextCursor`는 꽉 찬 페이지를 줬을 때 마지막 항목의 `createdAt`과 `id`이고, 덜 찼으면 `null`이다.
+
+<CodePlayground
+  caption="커서로 다음 페이지 받기"
+  functionName="nextPage"
+  initialCode={`function nextPage(list, cursor, limit) {
+  // list: [{ id, createdAt }] createdAt 내림차순, 같으면 id 내림차순
+  // cursor: null 또는 { createdAt, id }
+  // 반환: { ids: [...], nextCursor: { createdAt, id } 또는 null }
+  return { ids: [], nextCursor: null };
+}`}
+  solution={`function nextPage(list, cursor, limit) {
+  const after = cursor === null
+    ? list
+    : list.filter((it) =>
+        it.createdAt < cursor.createdAt ||
+        (it.createdAt === cursor.createdAt && it.id < cursor.id));
+  const page = after.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    ids: page.map((it) => it.id),
+    nextCursor: page.length === limit ? { createdAt: last.createdAt, id: last.id } : null,
+  };
+}`}
+  tests={[
+    {
+      label: "첫 페이지",
+      args: [[{ id: 10, createdAt: 100 }, { id: 9, createdAt: 90 }, { id: 8, createdAt: 80 }, { id: 7, createdAt: 70 }, { id: 6, createdAt: 60 }, { id: 5, createdAt: 50 }], null, 3],
+      expected: { ids: [10, 9, 8], nextCursor: { createdAt: 80, id: 8 } },
+    },
+    {
+      label: "새 글 두 개가 끼어든 뒤",
+      args: [[{ id: 12, createdAt: 120 }, { id: 11, createdAt: 110 }, { id: 10, createdAt: 100 }, { id: 9, createdAt: 90 }, { id: 8, createdAt: 80 }, { id: 7, createdAt: 70 }, { id: 6, createdAt: 60 }, { id: 5, createdAt: 50 }], { createdAt: 80, id: 8 }, 3],
+      expected: { ids: [7, 6, 5], nextCursor: { createdAt: 50, id: 5 } },
+    },
+    {
+      label: "같은 시각의 글",
+      args: [[{ id: 20, createdAt: 100 }, { id: 19, createdAt: 100 }, { id: 18, createdAt: 100 }, { id: 17, createdAt: 90 }], { createdAt: 100, id: 19 }, 2],
+      expected: { ids: [18, 17], nextCursor: { createdAt: 90, id: 17 } },
+    },
+    {
+      label: "마지막 페이지",
+      args: [[{ id: 10, createdAt: 100 }, { id: 9, createdAt: 90 }, { id: 8, createdAt: 80 }, { id: 7, createdAt: 70 }, { id: 6, createdAt: 60 }, { id: 5, createdAt: 50 }], { createdAt: 60, id: 6 }, 3],
+      expected: { ids: [5], nextCursor: null },
+    },
+  ]}
+/>
+
+세 번째 테스트에서 `createdAt`만 비교했다면 커서와 같은 시각인 18번이 통째로 빠진다.
+
+커서에도 대가가 있다. "15페이지로 바로 가기"가 안 된다. 앞에서부터 차례로 넘겨야 한다. 정렬 기준을 바꾸면 이전 커서는 쓸 수 없다. 그래서 고르는 기준은 이렇다. 데이터가 크거나 계속 바뀌는 목록, 무한 스크롤, 외부에 공개하는 API에는 커서. 관리자 화면처럼 데이터가 작고 페이지 번호로 이동해야 하는 표에는 offset도 충분하다.
+
+커서 값은 정렬 키를 JSON으로 묶어 base64url로 인코딩한 불투명한 문자열로 주는 게 보통이다. 클라이언트가 안을 들여다보고 직접 만들기 시작하면 나중에 정렬 키를 바꿀 수 없게 되니, 문서에도 "해석하지 말고 그대로 돌려보내라"고 적는다. 서버는 받은 커서를 믿지 말고 형식을 검증한다. 변조한 커서로 이상한 쿼리를 만들게 두면 안 된다.
+
+## 다음 페이지 주소를 알려 주는 방법
+
+다음 페이지를 어떻게 알려 줄지도 정해야 한다. 본문에 담는 방식이 가장 흔하다.
+
+```json
+{
+  "data": [{ "id": "ord_812", "total": 32000 }],
+  "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTEwLTE1VDA5OjMwOjAwWiIsImlkIjoib3JkXzgxMiJ9",
+  "hasMore": true
+}
+```
+
+헤더로 주는 방식도 있다. `Link` 헤더(RFC 8288)에 다음 페이지 주소를 통째로 넣는다. GitHub API가 이렇게 한다. 본문은 배열 그대로 두고 탐색 정보는 헤더에 둘 수 있다는 게 장점이다. 브라우저에서 다른 출처로 부른다면 `Access-Control-Expose-Headers`에 `Link`를 넣어야 스크립트가 읽을 수 있다.
+
+```
+Link: <https://api.example.com/v1/orders?cursor=eyJjcmVh...&limit=20>; rel="next"
+```
+
+전체 개수(`total`)는 신중하게 준다. 큰 테이블에서 조건에 맞는 행을 다 세는 `COUNT(*)`는 목록을 가져오는 쿼리보다 비쌀 때가 많다. 무한 스크롤에는 "더 있는지"(`hasMore`)만 있으면 된다. `limit`보다 하나 더(`limit + 1`) 읽어 보면 추가 쿼리 없이 알 수 있다.
+
+## 에러 응답도 모양을 정한다
+
+에러 본문이 엔드포인트마다 다르면 클라이언트는 에러를 처리하는 코드를 화면마다 새로 짜야 한다. 어떤 곳은 `{ "error": "..." }`, 어떤 곳은 `{ "message": "...", "code": 1003 }`인 API가 생각보다 흔하다.
+
+표준이 있다. RFC 9457 Problem Details다(2023년에 예전 RFC 7807을 대체했다). `Content-Type: application/problem+json`으로 아래 필드를 준다.
+
+```
+HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/problems/out-of-stock",
+  "title": "재고가 부족하다",
+  "status": 422,
+  "detail": "상품 7번의 재고가 2개 남았는데 3개를 주문했다.",
+  "instance": "/v1/orders/requests/9f1c",
+  "errors": [{ "pointer": "#/items/0/qty", "detail": "2 이하여야 한다" }]
+}
+```
+
+`type`은 문제의 종류를 가리키는 URI다. 클라이언트가 분기할 때는 사람이 읽는 `title`이나 `detail`이 아니라 이 값을 본다. 문구는 고칠 수 있어도 `type`은 계약이다. 따로 정하지 않으면 `about:blank`로 두고, 그때는 상태 코드가 곧 문제의 종류다. `title`은 같은 종류면 늘 같은 짧은 설명, `detail`은 이번 건에 대한 구체적인 설명이다. `errors`처럼 필요한 필드를 더 붙여도 된다(확장 멤버). 폼 검증 에러를 필드별로 돌려줄 때 이렇게 한다.
+
+에러 본문에 넣지 말아야 할 것도 있다. 스택 트레이스, SQL 문, 내부 호스트 이름은 공격자에게 지도를 준다. 이런 정보는 서버 로그에 남기고, 응답에는 로그를 찾을 수 있는 요청 id만 준다.
+
+## 필요한 만큼만 받기
+
+상품 상세 응답에 필드가 60개 있는데 목록 화면은 이름, 가격, 썸네일만 쓴다. 모바일 네트워크에서 이 차이는 체감된다. 앞의 `fields=id,total,status`처럼 필요한 필드를 고르게 하는 방식을 부분 응답(partial response)이라고 한다. Google API가 `fields` 파라미터를 쓰고, JSON:API 명세는 `fields[articles]=title,body`처럼 자원 종류별로 고르게 한다.
+
+반대 방향도 있다. 주문을 받으면서 주문한 회원 정보도 함께 받고 싶다. 기본 응답에는 `customer: "cus_31"`처럼 id만 두고, `expand=customer`를 주면 그 자리에 회원 객체를 펼쳐 주는 방식이다. Stripe API가 이렇게 한다. 화면 하나를 그리려고 요청을 여러 번 보내는 문제를 줄인다.
+
+둘 다 서버 구현이 복잡해지고 응답 캐시의 키가 늘어난다는 대가가 있다. 클라이언트마다 원하는 모양이 이 정도로 다르다면 뒤에서 볼 GraphQL이나 클라이언트 전용 서버(BFF)가 맞는 답일 수 있다.
+
+## 버전을 올리지 않고 바꾸는 법
+
+API를 공개한 뒤에는 이미 배포된 앱이 그 모양에 맞춰 돌고 있다. 특히 모바일 앱은 사용자가 업데이트하지 않으면 몇 달, 몇 년 된 버전이 계속 API를 부른다. 그래서 변경을 두 종류로 나눠서 생각한다.
+
+기존 클라이언트를 깨지 않는 변경은 이런 것들이다. 응답에 필드를 추가한다. 새 엔드포인트를 만든다. 요청에 선택 파라미터를 추가한다. 반대로 깨는 변경은 필드를 지우거나 이름을 바꾸는 것, 타입을 바꾸는 것(숫자였던 `price`를 문자열로), 선택이던 요청 필드를 필수로 바꾸는 것, 기본 동작을 바꾸는 것이다.
+
+가장 위험한 건 필드의 의미를 바꾸는 것이다. `status: "done"`이 "결제 완료"였는데 "배송 완료"로 바꾸면 타입도 이름도 그대로라 테스트가 통과한다. 옛 앱은 아무 에러 없이 틀린 화면을 보여 준다. 의미가 바뀌면 새 필드를 만들고 옛 필드는 그대로 둔다.
+
+enum에 값을 추가하는 것도 조심한다. 서버 입장에서는 추가지만, `switch`로 모든 값을 처리하던 클라이언트는 모르는 값을 만나 터질 수 있다. 그래서 클라이언트 쪽 원칙도 함께 정한다. 모르는 필드는 무시하고, 모르는 enum 값은 기본 처리로 넘긴다. 이걸 tolerant reader라고 부른다. 서버는 보낼 때 엄격하게, 클라이언트는 받을 때 너그럽게 만드는 것이다.
+
+필드를 언젠가 지워야 한다면 바로 지우지 않고 예고한다. 표준 헤더가 있다. `Deprecation` 헤더(RFC 9745)는 이 자원이 언제부터 사용 중단 상태인지, `Sunset` 헤더(RFC 8594)는 언제 실제로 사라지는지 알린다. 그동안 어떤 클라이언트가 아직 그 기능을 쓰는지 로그로 확인한다.
+
+```
+Deprecation: @1767225600
+Sunset: Wed, 01 Jul 2026 00:00:00 GMT
+Link: <https://api.example.com/docs/migrate-v2>; rel="deprecation"
+```
+
+`@1767225600`은 유닉스 시각으로 2026년 1월 1일 0시(UTC)다.
+
+## 그래도 버전을 나눠야 할 때
+
+깨는 변경을 피할 수 없으면 버전을 나눈다. 버전을 어디에 적느냐가 세 갈래다.
+
+URL에 넣는 방식(`/v1/orders`, `/v2/orders`)이 가장 흔하다. 눈에 보이고, 브라우저 주소창이나 curl로 바로 시험할 수 있고, 게이트웨이에서 경로로 나눠 다른 서버로 보내기도 쉽다. 순수주의 쪽에서는 "같은 주문인데 주소가 둘"이라고 비판하지만, 실무에서는 단순함이 이긴다.
+
+헤더에 넣는 방식은 URL을 깨끗하게 둔다. GitHub REST API는 `X-GitHub-Api-Version: 2022-11-28`처럼 날짜로 버전을 고른다. Stripe는 계정마다 처음 API를 쓴 날의 버전으로 고정하고, `Stripe-Version` 헤더로 바꿔 시험할 수 있게 한다. 날짜 버전은 작은 깨는 변경을 자주 내면서도 기존 사용자는 그대로 두는 데 잘 맞는다. 대신 서버가 버전마다 응답을 바꿔 주는 변환 계층을 유지해야 한다.
+
+미디어 타입에 넣는 방식은 `Accept: application/vnd.example.v2+json`처럼 콘텐츠 협상으로 고른다. HTTP의 원래 설계에 가장 가깝지만 쓰기도 시험하기도 번거롭다. GitHub도 예전에 이 방식을 썼다.
+
+헤더나 미디어 타입으로 버전을 고른다면 응답에 `Vary`를 걸어 캐시가 버전을 섞지 않게 해야 한다. 이 부분은 [HTTP 캐시와 CDN](/posts/http-caching-cdn)의 `Vary` 이야기와 같다. 어떤 방식이든 버전은 드물게 올리는 게 좋다. 버전마다 유지보수 비용이 붙고, 앞 절의 호환 규칙만 지켜도 대부분의 변경은 버전 없이 할 수 있다.
+
+## POST를 두 번 받아도 괜찮게
+
+모바일 앱이 주문 요청을 보냈는데 지하철에서 연결이 끊겼다. 앱은 주문이 됐는지 모른다. 다시 보내면 주문이 두 개 생길 수 있다. GET, PUT, DELETE는 멱등해서 다시 보내도 괜찮지만 POST는 그렇지 않다.
+
+해법은 클라이언트가 요청마다 고유한 `Idempotency-Key` 헤더를 붙이고, 서버는 같은 키로 온 요청에 처음 결과를 그대로 돌려주는 것이다. 동작 방식과 구현할 때 빠지기 쉬운 곳은 [장애가 번지지 않게 막는 패턴](/posts/resilience-patterns)에 자세히 적었다. API 설계 쪽에서 정할 건 이 정도다. 어떤 엔드포인트가 키를 받는지(돈이 오가거나 무언가를 만드는 POST), 키를 얼마나 보관하는지, 같은 키로 처리 중인 요청이 또 오면 무엇을 돌려주는지. IETF 초안은 처리 중이면 409, 같은 키에 다른 본문이 오면 422를 제안한다. 이걸 문서에 적어 둔다.
+
+## 너무 많이 부르는 클라이언트
+
+API를 공개하면 실수로든 일부러든 짧은 시간에 요청을 쏟아붓는 클라이언트가 생긴다. 그래서 클라이언트별로 요청 수를 제한한다. 제한에 걸리면 429 Too Many Requests를 돌려주고, 얼마나 남았는지는 헤더로 알려 준다.
+
+<SequenceDiagram
+  caption="남은 횟수를 미리 알려 주고, 넘으면 언제 다시 오라고 말한다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "api",
+      label: "GET /v1/orders",
+      title: "평소처럼 요청한다",
+      detail: "1분에 100번까지 허용하는 정책이다.",
+    },
+    {
+      from: "api",
+      to: "client",
+      label: "200 · 남은 1",
+      title: "응답에 남은 횟수를 실어 준다",
+      detail: "클라이언트는 이 값을 보고 스스로 속도를 줄일 수 있다.",
+      payload: "HTTP/1.1 200 OK\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 1\nX-RateLimit-Reset: 1792130430",
+    },
+    {
+      from: "client",
+      to: "api",
+      label: "GET × 2",
+      title: "남은 횟수를 무시하고 계속 보낸다",
+      detail: "마지막 한 번은 통과하고, 그다음 요청부터 한도를 넘는다.",
+    },
+    {
+      from: "api",
+      to: "client",
+      label: "429",
+      title: "거절하면서 언제 다시 오라고 알린다",
+      detail: "Retry-After는 초 단위 숫자나 HTTP 날짜다. 본문은 다른 에러와 같은 Problem Details로 준다.",
+      payload: "HTTP/1.1 429 Too Many Requests\nRetry-After: 30\nContent-Type: application/problem+json",
+    },
+    {
+      from: "client",
+      to: "client",
+      label: "30초 대기",
+      title: "클라이언트가 기다린다",
+      detail: "바로 다시 보내면 또 429다. Retry-After가 있으면 그 시간을, 없으면 지수 백오프로 기다린다.",
+    },
+    {
+      from: "client",
+      to: "api",
+      label: "GET /v1/orders",
+      title: "창이 바뀐 뒤 다시 보낸다",
+      detail: "새 1분이 시작돼서 다시 100번이 생겼다.",
+      payload: "HTTP/1.1 200 OK\nX-RateLimit-Remaining: 99",
+    },
+  ]}
+/>
+
+`X-RateLimit-*` 헤더는 GitHub 등 여러 API가 쓰는 관례일 뿐 표준이 아니다. `Reset`이 유닉스 시각인 곳도 있고 남은 초인 곳도 있다. IETF에서 이걸 `RateLimit`과 `RateLimit-Policy` 헤더로 표준화하는 초안이 진행 중인데, 초안이 바뀌면서 형식도 여러 번 바뀌었다. 최근 초안은 `RateLimit-Policy: "default";q=100;w=60`(60초에 100번), `RateLimit: "default";r=1;t=30`(1번 남음, 30초 뒤 초기화) 같은 모양이다. 지금 새로 만든다면 어느 형식을 따르는지 문서에 분명히 적는다.
+
+제한 단위도 정한다. API 키별, 사용자별, IP별로 셀 수 있고, 비싼 엔드포인트(검색, 내보내기)는 따로 더 낮게 잡는다. 서버가 여러 대면 카운터를 Redis 같은 공유 저장소에 둬야 한다. 이건 게이트웨이에서 하는 경우가 많아서 [API 게이트웨이](/posts/gateway) 글에서도 다뤘다. 429와 503은 구분한다. 429는 "네가 너무 많이 보냈다", 503은 "내가 지금 감당을 못 한다"다.
+
+## 이름과 값의 모양을 통일한다
+
+필드 이름 규칙은 무엇을 고르느냐보다 하나로 통일하는 게 중요하다. JSON 필드에 `camelCase`를 쓰면 자바스크립트 클라이언트가 그대로 쓰기 편하고, Google의 JSON 스타일 가이드도 이걸 권한다. `snake_case`는 Stripe나 GitHub처럼 Python, Ruby 서버 문화에서 흔하다. 한 API 안에서 `createdAt`과 `updated_at`이 섞이는 게 최악이다. 서버 프레임워크의 직렬화 설정으로 강제해 두면 사람이 실수할 틈이 줄어든다.
+
+값의 모양도 정한다. 날짜는 `2026-10-16T09:30:00Z`처럼 시간대를 포함한 RFC 3339 문자열로 준다. 시간대 없는 `2026-10-16 09:30`은 받는 쪽이 어느 시간대로 해석할지 모른다.
+
+큰 숫자 id는 문자열로 준다. 자바스크립트의 숫자는 2^53 - 1(`9007199254740991`)까지만 정확하다. 서버가 `9007199254740993`이라는 id를 숫자로 주면 `JSON.parse` 결과는 `9007199254740992`가 된다. 다른 글의 id로 바뀌어 버린다. 트위터 API가 `id`와 별도로 `id_str`을 둔 이유가 이것이다.
+
+돈은 부동소수점으로 주지 않는다. `0.1 + 0.2`가 `0.30000000000000004`가 되는 세계에서 금액을 계산하면 안 된다. Stripe처럼 가장 작은 단위의 정수(1000은 10.00달러)로 주거나, 소수 문자열과 통화 코드를 함께 준다. 원화처럼 소수 단위가 없는 통화도 있으니 통화 코드는 꼭 붙인다.
+
+## 링크를 따라가는 API
+
+REST라는 이름을 만든 로이 필딩의 정의를 엄격하게 따르면, 지금까지 본 대부분의 API는 REST가 아니다. 필딩은 클라이언트가 주소를 미리 알 필요 없이 응답에 담긴 링크를 따라 다음 동작을 찾아가야 한다고 했다. 웹 브라우저가 HTML의 링크와 폼을 따라가듯이. 이걸 HATEOAS(Hypermedia as the Engine of Application State)라고 부른다.
+
+```json
+{
+  "id": "ord_42",
+  "status": "paid",
+  "_links": {
+    "self": { "href": "/v1/orders/ord_42" },
+    "cancel": { "href": "/v1/orders/ord_42/cancellation", "method": "POST" }
+  }
+}
+```
+
+배송이 시작된 주문에는 `cancel` 링크가 빠지는 식으로, 지금 할 수 있는 동작을 서버가 알려 준다. 이론상 깔끔하지만 실제로 이걸 따라 움직이는 범용 클라이언트를 만드는 경우는 드물다. 앱 개발자는 결국 문서를 보고 주소를 코드에 적는다. 그래서 현실적인 타협은 이 정도다. 페이지 이동 링크(`next`), 새로 만든 자원의 `Location`, 상태에 따라 가능한 동작 정도만 링크나 플래그로 준다. 레너드 리처드슨의 성숙도 모델로 말하면 대부분의 API는 자원과 메서드를 제대로 쓰는 2단계에 머물고, 그걸로 충분한 경우가 많다.
+
+## REST가 맞지 않는 곳
+
+REST는 공개 API, 여러 회사가 붙는 API에 잘 맞는다. HTTP의 의미를 그대로 쓰니 캐시, 프록시, 모니터링 도구가 별도 지원 없이 동작하고, curl 하나로 시험할 수 있다. OpenAPI 명세로 문서와 클라이언트 코드를 생성하는 생태계도 크다.
+
+GraphQL은 화면마다 필요한 데이터 모양이 크게 다를 때 맞는다. 클라이언트가 필요한 필드와 관계를 쿼리로 적으면 한 번에 받는다. 앞에서 `fields`와 `expand`로 애써 풀던 문제를 기본으로 해결한다. 대신 보통 엔드포인트 하나에 POST로 보내서 HTTP 캐시를 그대로 쓰기 어렵고(쿼리를 미리 등록해 GET으로 보내는 방식으로 보완한다), 관계를 따라가다 데이터베이스 쿼리가 폭증하는 N+1 문제를 DataLoader 같은 묶음 처리로 막아야 하며, 깊고 비싼 쿼리를 막는 비용 제한도 직접 넣어야 한다.
+
+gRPC는 서비스끼리의 내부 통신에 맞는다. Protocol Buffers로 스키마를 정의하고 양쪽 코드를 생성하니 타입이 맞지 않는 실수가 컴파일 단계에서 걸린다. HTTP/2 위에서 바이너리로 주고받아 빠르고, 양방향 스트리밍도 된다. 브라우저에서 바로 부르기는 어려워서 gRPC-Web 같은 중간 계층이 필요하다. 그래서 바깥은 REST나 GraphQL, 안쪽 [마이크로서비스](/posts/microservices) 사이는 gRPC로 나누는 구성이 흔하다.
+
+## 다시 무한 스크롤로
+
+같은 글이 두 번 나온 건 계속 바뀌는 목록에 "앞에서 몇 개 건너뛰기"라는 페이지 방식을 썼기 때문이었다. 마지막으로 본 위치를 기억하는 커서로 바꾸면 사라진다. REST API 설계는 이런 결정의 묶음이다. 자원을 명사로 짓고, 메서드와 상태 코드를 의미대로 쓰고, 에러와 페이지의 모양을 한 가지로 정하고, 바꿀 때는 추가만 하는 규칙을 지킨다. 한 번 공개한 모양은 오래 남으니, 처음 정할 때 클라이언트 입장에서 한 번 더 써 보는 게 가장 싼 테스트다.
+
+## 면접에서 나올 만한 질문
+
+### RESTful한 URL은 어떻게 설계하나요?
+
+자원을 명사로 짓고 동작은 HTTP 메서드로 표현한다. 컬렉션은 `/orders`처럼 복수형, 아이템은 `/orders/42`로 두고, 소속 관계는 `/users/7/orders`처럼 계층으로 표현하되 두 단계 정도에서 끊는다. CRUD로 안 떨어지는 취소 같은 동작은 `POST /orders/42/cancellation`처럼 동작 자체를 자원으로 만들거나 팀에서 정한 별도 규칙을 쓴다.
+
+### offset 페이지네이션과 커서 페이지네이션의 차이는요?
+
+offset은 앞에서 몇 개를 건너뛸지로 페이지를 정하고, 커서는 마지막으로 본 항목의 정렬 키 다음부터 가져온다. offset은 그 사이 데이터가 추가되면 중복이, 삭제되면 누락이 생기고, 뒤 페이지일수록 건너뛸 행을 다 읽어서 느려진다. 커서는 인덱스로 위치를 바로 찾아 페이지 위치와 상관없이 빠르고 안정적이지만, 특정 페이지로 바로 이동할 수 없다. 큰 데이터나 무한 스크롤에는 커서, 작은 관리자 표에는 offset을 쓴다.
+
+### 커서 페이지네이션에서 정렬 키는 어떻게 정하나요?
+
+전체가 유일하도록 정한다. `createdAt`만 쓰면 같은 시각의 행이 페이지 경계에서 빠지거나 겹치니 `(createdAt, id)`처럼 유일한 값을 덧붙이고, 같은 순서의 복합 인덱스를 만든다. 커서는 그 값을 인코딩한 불투명한 문자열로 주고, 서버는 받은 커서를 검증한다.
+
+### API 에러 응답은 어떤 형식으로 주나요?
+
+모든 엔드포인트가 같은 형식을 쓰게 하고, 표준인 RFC 9457 Problem Details를 쓰는 걸 먼저 고려한다. `application/problem+json`으로 type, title, status, detail, instance를 주고, 필드별 검증 에러 같은 건 확장 필드로 붙인다. 클라이언트는 문구가 아니라 `type`으로 분기하고, 스택 트레이스 같은 내부 정보는 응답에 넣지 않는다.
+
+### API 버전 관리는 어떻게 하나요?
+
+먼저 버전을 올리지 않아도 되게 바꾼다. 필드 추가나 새 엔드포인트는 기존 클라이언트를 깨지 않고, 필드 삭제·이름 변경·타입 변경·의미 변경이 깨는 변경이다. 깨는 변경이 불가피하면 URL(`/v2`), 헤더(GitHub의 날짜 버전), 미디어 타입 중 하나로 나누는데, URL 방식이 가장 단순해서 흔하다. 필드의 의미만 바꾸는 건 테스트도 통과하고 옛 앱이 에러 없이 틀린 화면을 보여 줘서 가장 위험하니, 그럴 땐 새 필드를 만든다. 옛 버전은 Deprecation과 Sunset 헤더로 예고하고 사용량을 보며 내린다.
+
+### 동시에 같은 자원을 수정하는 문제는 어떻게 막나요?
+
+ETag와 `If-Match`로 낙관적 잠금을 건다. 클라이언트는 받을 때의 ETag를 수정 요청의 `If-Match`에 실어 보내고, 서버는 현재 버전과 다르면 412 Precondition Failed로 거절한다. 거절당한 쪽은 다시 받아서 바뀐 내용을 보고 고친다. 조건 없는 수정을 막으려면 428을 쓴다.
+
+### 요청 수 제한은 클라이언트에 어떻게 알리나요?
+
+한도를 넘으면 429 Too Many Requests와 `Retry-After`로 언제 다시 올지 알린다. 평소 응답에는 한도, 남은 횟수, 초기화 시각을 헤더로 실어 클라이언트가 스스로 속도를 줄이게 한다. 지금은 `X-RateLimit-*` 관례가 흔하고 IETF에서 `RateLimit` 헤더를 표준화하는 중이라 어느 형식인지 문서에 적는다. 서버 과부하는 503으로 구분한다.
+
+### REST 대신 GraphQL이나 gRPC를 고르는 경우는요?
+
+화면마다 필요한 데이터 모양이 크게 달라 과다·과소 요청이 문제라면 GraphQL이 맞다. 대신 HTTP 캐시 활용, N+1, 쿼리 비용 제한을 따로 챙겨야 한다. 서비스 사이 내부 통신에서 성능과 타입 안정성, 스트리밍이 중요하면 gRPC를 쓴다. 공개 API처럼 다양한 클라이언트가 붙고 HTTP 도구와 캐시를 그대로 쓰고 싶으면 REST가 무난하다.
