@@ -1,0 +1,423 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-type-embedded");
+
+서점 앱을 지하철에서 연다. 전파가 끊겨 있는데도 장바구니에 담아 둔 책 두 권이 그대로 보이고, 한 권을 더 담을 수도 있다. 이 장바구니는 서버 DB가 아니라 휴대폰 안의 파일 하나에 있다. 접속할 주소도, 띄워 둔 서버 프로세스도 없다. 앱이 라이브러리를 불러 그 파일을 직접 읽고 쓴다.
+
+이렇게 프로그램 안에 들어가서 도는 DB를 임베디드(embedded) DB라고 한다. 가장 유명한 것은 SQLite이고, 서버 DB의 밑바닥에 들어가는 RocksDB도 같은 부류다. 이 글은 [DB 종류 시리즈](/posts/db-types-overview)의 아홉 번째 글로, 서버 없이 도는 DB가 무엇을 얻고 무엇을 포기하는지 SQLite 3.45를 직접 돌려 보며 정리한다. 명령은 Ubuntu 24.04 기준이다(`sudo apt install sqlite3`).
+
+## 서버 없이 라이브러리로 돈다
+
+PostgreSQL이나 MySQL은 서버 프로세스다. 앱은 네트워크(또는 소켓)로 접속해서 SQL을 보내고 결과를 받는다. 접속마다 인증을 하고, 서버가 여러 접속의 동시 요청을 조율한다.
+
+SQLite는 앱 프로세스 안에 링크되는 C 라이브러리다. `SELECT`를 실행하면 앱의 스레드가 그 자리에서 파일을 열어 B-tree를 따라가고 결과를 돌려준다. 네트워크 왕복이 없으니 쿼리 하나가 함수 호출 하나만큼 가볍다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="서버 DB는 네트워크 너머에 있고, 임베디드 DB는 앱 프로세스 안에서 파일을 직접 연다"
+  nodes={[
+    { id: "app1", label: "서버 앱", x: 80, y: 50, w: 110 },
+    { id: "pg", label: "PostgreSQL", sub: "별도 프로세스", x: 80, y: 150, w: 120 },
+    { id: "disk1", label: "데이터 디렉터리", x: 80, y: 230, w: 130 },
+    { id: "app2", label: "모바일 앱", sub: "SQLite 라이브러리", x: 300, y: 80, w: 150, h: 64 },
+    { id: "file", label: "shop.db", sub: "파일 하나", x: 300, y: 210, w: 110 },
+  ]}
+  edges={[
+    { from: "app1", to: "pg", label: "TCP 접속" },
+    { from: "pg", to: "disk1" },
+    { from: "app2", to: "file", label: "함수 호출" },
+  ]}
+/>
+
+대신 서버가 하던 일이 사라진다. 다른 기계에서 접속할 방법이 없고, 사용자 계정과 권한이 없고, 여러 프로세스가 동시에 쓰는 것을 조율해 줄 중재자도 없다. 이 차이가 임베디드 DB의 쓰임새를 거의 다 정한다.
+
+## 장바구니를 SQLite에 담아 보기
+
+`sqlite3` 명령에 파일 이름을 주면 그 파일이 DB가 된다. 없으면 새로 만든다.
+
+```bash
+# shop.db 파일을 DB로 열고 대화형 셸에 들어간다
+sqlite3 shop.db
+```
+
+```sql
+CREATE TABLE books (
+  id    INTEGER PRIMARY KEY,    -- 행 id(rowid)와 같은 컬럼이 된다
+  title TEXT NOT NULL,
+  price INTEGER NOT NULL
+);
+CREATE TABLE cart_items (
+  book_id  INTEGER NOT NULL REFERENCES books(id),
+  qty      INTEGER NOT NULL DEFAULT 1,
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))  -- 시각은 보통 ISO 문자열로 둔다
+);
+INSERT INTO books (id, title, price) VALUES
+  (42, '데이터 중심 애플리케이션 설계', 36000),
+  (43, '리눅스 커널 이야기', 28000),
+  (44, '그림으로 배우는 SQL', 18000);
+INSERT INTO cart_items (book_id, qty) VALUES (42, 1), (44, 2);
+
+.headers on
+SELECT b.title, c.qty, b.price * c.qty AS amount
+FROM cart_items c JOIN books b ON b.id = c.book_id;
+```
+
+```text
+title|qty|amount
+데이터 중심 애플리케이션 설계|1|36000
+그림으로 배우는 SQL|2|36000
+```
+
+조인, 인덱스, 트랜잭션, 윈도우 함수, JSON 함수까지 대부분의 SQL이 된다. 인덱스도 똑같이 쓰고, 실행 계획은 `EXPLAIN QUERY PLAN`으로 본다.
+
+```sql
+CREATE INDEX cart_items_book ON cart_items(book_id);
+EXPLAIN QUERY PLAN SELECT * FROM cart_items WHERE book_id = 42;
+EXPLAIN QUERY PLAN SELECT * FROM cart_items WHERE qty > 1;
+```
+
+```text
+QUERY PLAN
+`--SEARCH cart_items USING INDEX cart_items_book (book_id=?)
+QUERY PLAN
+`--SCAN cart_items
+```
+
+`SEARCH ... USING INDEX`는 인덱스로 찾았다는 뜻이고, `SCAN`은 테이블 전체를 훑었다는 뜻이다. PostgreSQL의 Index Scan과 Seq Scan에 해당한다.
+
+DB 전체가 파일 하나다. 테이블, 인덱스, 스키마가 4096바이트(`PRAGMA page_size` 기본값) 페이지들로 그 안에 들어 있다. 파일을 복사하면 DB가 복사되고, 이메일로 보낼 수도 있다. 파일 형식은 3.0(2004년) 이후 하위 호환을 지켜 왔고, 미국 의회도서관이 장기 보존용 권장 형식으로 꼽기도 한다.
+
+## 타입을 적어도 검사하지 않는다
+
+PostgreSQL에서 넘어오면 가장 먼저 놀라는 부분이다. SQLite는 컬럼 타입을 "선호하는 타입" 정도로만 쓴다(type affinity). 맞지 않는 값을 넣어도 에러가 나지 않는다.
+
+```sql
+INSERT INTO books (id, title, price) VALUES (45, '가격 실수', '삼만원');
+INSERT INTO books (id, title, price) VALUES (46, '문자열 숫자', '21000');
+SELECT id, price, typeof(price) FROM books WHERE id >= 45;
+```
+
+```text
+id|price|typeof(price)
+45|삼만원|text
+46|21000|integer
+```
+
+INTEGER 컬럼에 '삼만원'이 문자열로 들어갔다. 숫자로 바꿀 수 있는 '21000'은 정수로 바꿔 저장했다. 3.37부터는 테이블 끝에 `STRICT`를 붙여 타입을 검사하게 할 수 있다.
+
+```sql
+CREATE TABLE books_strict (
+  id    INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  price INTEGER NOT NULL
+) STRICT;
+INSERT INTO books_strict VALUES (45, '가격 실수', '삼만원');
+```
+
+```text
+Runtime error near line 6: cannot store TEXT value in INTEGER column books_strict.price (19)
+```
+
+외래 키도 비슷하다. 하위 호환 때문에 기본으로 꺼져 있고, 연결마다 켜야 한다.
+
+```sql
+.headers on
+INSERT INTO cart_items (book_id, qty) VALUES (999, 1);   -- 없는 책인데 들어간다
+PRAGMA foreign_keys;                                       -- 0: 꺼져 있다
+PRAGMA foreign_keys = ON;                                  -- 이 연결에서만 켠다
+INSERT INTO cart_items (book_id, qty) VALUES (998, 1);
+```
+
+```text
+foreign_keys
+0
+Runtime error near line 5: FOREIGN KEY constraint failed (19)
+```
+
+`PRAGMA foreign_keys`는 파일에 저장되지 않고 연결에만 붙는 설정이라, 앱이 DB를 열 때마다 실행해야 한다. 한 군데라도 빠뜨리면 그 코드 경로로 고아 행이 쌓인다.
+
+## 쓰는 사람은 한 번에 하나
+
+SQLite의 동시성 규칙은 단순하다. 읽기는 여럿이 동시에 할 수 있지만, 쓰기는 DB 파일 전체에서 한 번에 한 트랜잭션만 한다. 행 단위 잠금이 없다. 두 번째 쓰기는 기다리거나 `database is locked`(SQLITE_BUSY) 에러를 받는다.
+
+그리고 기본 저널 모드(`DELETE`, rollback journal)에서는 쓰기와 읽기도 부딪힌다. 커밋하는 순간 DB 파일을 직접 고쳐야 해서, 읽고 있는 연결이 있으면 커밋을 못 한다. 파이썬 `sqlite3` 모듈로 연결 셋을 열어 확인했다. 기다리지 않게 `timeout=0`으로 열었다.
+
+```python
+# wal_demo.py: reader가 읽는 중에 writer가 재고를 1 줄이고, writer2도 쓰려고 한다
+reader.execute("BEGIN")
+reader.execute("SELECT qty FROM stock")                     # 5
+writer.execute("BEGIN IMMEDIATE")                           # 쓰기 잠금을 먼저 잡는다
+writer.execute("UPDATE stock SET qty = qty - 1 WHERE book_id = 42")
+writer2.execute("BEGIN IMMEDIATE")                          # 두 번째 쓰기
+writer.execute("COMMIT")
+```
+
+```bash
+# 저널 모드를 바꿔 가며 같은 순서로 실행한다
+python3 wal_demo.py delete
+python3 wal_demo.py wal
+```
+
+```text
+journal_mode: delete
+reader  보는 재고: 5
+writer2 BEGIN: database is locked
+writer  COMMIT: database is locked
+reader  다시 읽기: 5
+writer  다시 COMMIT: 성공
+reader  새 트랜잭션: 4
+파일: ['demo.db']
+---
+journal_mode: wal
+reader  보는 재고: 5
+writer2 BEGIN: database is locked
+writer  COMMIT: 성공
+reader  다시 읽기: 5
+reader  새 트랜잭션: 4
+파일: ['demo.db', 'demo.db-shm', 'demo.db-wal']
+```
+
+두 모드 모두 writer2는 막혔다. 쓰기는 하나뿐이라는 규칙은 같다. 차이는 writer의 COMMIT이다. DELETE 모드에서는 reader가 읽고 있어서 커밋이 막혔고, reader가 끝난 뒤에야 성공했다. WAL 모드에서는 reader가 읽는 중에도 커밋이 바로 성공했고, reader는 자기 트랜잭션이 끝날 때까지 옛 값 5를 계속 봤다. 마지막 줄을 보면 WAL 모드에는 `-wal`과 `-shm` 파일이 따로 생겨 있다.
+
+## WAL 모드에서는 변경을 옆 파일에 쌓는다
+
+WAL(Write-Ahead Log) 모드에서 쓰기는 DB 파일을 직접 고치지 않는다. 바뀐 페이지를 `-wal` 파일 끝에 붙이고, 커밋 표시를 남긴다. 읽는 쪽은 트랜잭션을 시작할 때 WAL의 어디까지가 커밋됐는지(read mark)를 기억해 두고, 페이지를 찾을 때 그 지점까지의 WAL을 먼저 보고 없으면 DB 파일을 본다. `-shm` 파일은 "이 페이지의 최신 버전이 WAL 몇 번째 칸에 있나"를 빨리 찾기 위한 공유 메모리 색인이다. 아래 그림에서 다음을 누르면 읽기와 쓰기가 어떻게 서로를 막지 않는지 보인다.
+
+<SequenceDiagram
+  caption="WAL 모드에서 읽기, 쓰기, 체크포인트"
+  actors={[
+    { id: "reader", label: "읽는 연결" },
+    { id: "writer", label: "쓰는 연결" },
+    { id: "wal", label: "shop.db-wal" },
+    { id: "db", label: "shop.db" },
+  ]}
+  steps={[
+    {
+      from: "reader",
+      to: "wal",
+      label: "read mark=0",
+      title: "읽기 트랜잭션이 시작한다",
+      detail: "지금 WAL에 커밋된 칸이 없다. 이 연결은 끝날 때까지 'WAL 0칸까지 + DB 파일'을 본다.",
+    },
+    {
+      from: "writer",
+      to: "wal",
+      label: "페이지 추가",
+      title: "쓰기는 WAL 끝에 붙인다",
+      detail: "재고가 든 페이지를 통째로 새로 써서 WAL 끝에 붙이고, 커밋 표시를 남긴다. DB 파일은 건드리지 않는다.",
+      payload: "frame 1: page 2 (qty = 4), commit",
+    },
+    {
+      from: "reader",
+      to: "db",
+      label: "옛 페이지",
+      title: "읽기는 여전히 옛 값을 본다",
+      detail: "read mark가 0이라 frame 1은 보지 않는다. DB 파일의 page 2(qty = 5)를 읽는다. 쓰기와 서로 기다리지 않는다.",
+    },
+    {
+      from: "reader",
+      to: "wal",
+      label: "read mark=1",
+      title: "새 트랜잭션은 새 값을 본다",
+      detail: "읽기 트랜잭션을 다시 시작하면 read mark가 1로 올라가 frame 1의 qty = 4를 읽는다.",
+    },
+    {
+      from: "wal",
+      to: "db",
+      label: "체크포인트",
+      title: "WAL의 페이지를 DB 파일로 옮긴다",
+      detail: "WAL이 1000페이지(기본값)쯤 쌓이면 커밋할 때 체크포인트가 돈다. 아직 옛 칸을 보는 읽기가 있으면 그 앞까지만 옮긴다.",
+    },
+  ]}
+/>
+
+이 규칙을 코드로 옮기면 짧다. DB 파일의 페이지들, WAL 칸 목록, 읽는 쪽의 read mark가 주어질 때, 그 읽기가 보는 페이지 값을 돌려주자.
+
+<CodePlayground
+  caption="WAL 모드의 읽기: read mark까지의 최신 칸"
+  functionName="readPage"
+  initialCode={`function readPage(dbPages, wal, readMark, page) {
+  // dbPages: { 페이지 번호: 값 } (DB 파일)
+  // wal: [{ page, value }, ...] 앞에서부터 붙은 칸들
+  // readMark: 이 읽기가 볼 수 있는 WAL 칸 수
+  return null;
+}`}
+  solution={`function readPage(dbPages, wal, readMark, page) {
+  // read mark 앞쪽 칸 중 가장 뒤(최신)부터 찾는다
+  for (let i = Math.min(readMark, wal.length) - 1; i >= 0; i--) {
+    if (wal[i].page === page) return wal[i].value;
+  }
+  return dbPages[page];   // WAL에 없으면 DB 파일의 값
+}`}
+  tests={[
+    { label: "read mark 0이면 DB 파일만", args: [{ 1: "A0", 2: "B0" }, [{ page: 1, value: "A1" }, { page: 2, value: "B1" }, { page: 1, value: "A2" }], 0, 1], expected: "A0" },
+    { label: "두 칸까지 보면 A1", args: [{ 1: "A0", 2: "B0" }, [{ page: 1, value: "A1" }, { page: 2, value: "B1" }, { page: 1, value: "A2" }], 2, 1], expected: "A1" },
+    { label: "같은 페이지는 가장 뒤 칸이 최신", args: [{ 1: "A0", 2: "B0" }, [{ page: 1, value: "A1" }, { page: 2, value: "B1" }, { page: 1, value: "A2" }], 3, 1], expected: "A2" },
+    { label: "page 2 최신", args: [{ 1: "A0", 2: "B0" }, [{ page: 1, value: "A1" }, { page: 2, value: "B1" }, { page: 1, value: "A2" }], 3, 2], expected: "B1" },
+    { label: "read mark 1이면 page 2는 아직 옛 값", args: [{ 1: "A0", 2: "B0" }, [{ page: 1, value: "A1" }, { page: 2, value: "B1" }, { page: 1, value: "A2" }], 1, 2], expected: "B0" },
+    { label: "WAL이 비었을 때", args: [{ 1: "A0", 2: "B0" }, [], 0, 2], expected: "B0" },
+  ]}
+/>
+
+체크포인트는 WAL 칸을 DB 파일로 옮기는 일이다. 아래 그림은 칸 네 개가 쌓였다가 옮겨지는 모습이다. 같은 페이지가 여러 번 바뀌었으면 마지막 값만 DB 파일에 남는다.
+
+<AlgoTrace
+  caption="WAL 칸이 쌓이고 체크포인트로 옮겨진다"
+  memoryLabel="shop.db 파일의 페이지"
+  cells={["p2 qty=4", "p3 카트+1", "p2 qty=3", "p5 리뷰"]}
+  steps={[
+    { memory: ["p2 qty=5", "p3 카트", "p5 비어 있음"], caption: "DB 파일에는 마지막 체크포인트 때의 페이지가 있다." },
+    { pointer: 0, memory: ["p2 qty=5", "p3 카트", "p5 비어 있음"], caption: "재고를 줄였다. 바뀐 page 2가 WAL 첫 칸에 붙는다. DB 파일은 그대로다." },
+    { pointer: 2, memory: ["p2 qty=5", "p3 카트", "p5 비어 있음"], caption: "장바구니 추가, 재고 한 번 더. page 2는 WAL에 두 번 있다. 읽기는 뒤 칸을 본다." },
+    { pointer: 3, memory: ["p2 qty=5", "p3 카트", "p5 비어 있음"], caption: "리뷰도 붙었다. WAL은 커밋마다 길어지기만 한다." },
+    { found: [1, 2, 3], memory: ["p2 qty=3", "p3 카트+1", "p5 리뷰"], caption: "체크포인트. 페이지마다 최신 칸만 DB 파일로 옮긴다. page 2의 첫 칸(qty=4)은 건너뛴다." },
+    { memory: ["p2 qty=3", "p3 카트+1", "p5 리뷰"], caption: "WAL은 처음부터 다시 쓴다. 옮기는 동안 읽기가 옛 칸을 보고 있으면 그 칸은 남겨 둔다." },
+  ]}
+/>
+
+체크포인트가 막히는 경우가 실무에서 문제가 된다. 읽기 트랜잭션 하나가 오래 열려 있으면 그 뒤 칸을 옮기지 못하고, WAL 파일이 끝없이 커진다(checkpoint starvation). 앱에서 커서를 닫지 않거나, 긴 읽기 트랜잭션을 열어 둔 채 다른 일을 하면 생긴다. 직접 확인해 보면 이렇다. 자동 체크포인트를 끄고(`PRAGMA wal_autocheckpoint = 0`) 행 200개를 하나씩 커밋한 뒤, 파일 크기를 보고, `PRAGMA wal_checkpoint(TRUNCATE)`로 옮긴 다음 다시 봤다(파이썬에서 실행해 결과가 튜플로 나온다).
+
+```text
+-rw-r--r-- 1 root root   4096 Oct 17 22:51 w.db
+-rw-r--r-- 1 root root 844632 Oct 17 22:51 w.db-wal
+
+(0, 0, 0)
+-rw-r--r-- 1 root root  16384 Oct 17 22:51 w.db
+-rw-r--r-- 1 root root      0 Oct 17 22:51 w.db-wal
+```
+
+행 200개, 데이터로는 몇 kB인데 WAL은 825kB가 됐다. 커밋마다 바뀐 페이지를 4kB씩 통째로 새로 쓰기 때문이다(칸 205개 × 4,120바이트 + 머리말 32바이트). `wal_checkpoint`의 결과 `(0, 0, 0)`은 차례로 막힘 여부(0이면 안 막힘), WAL의 칸 수, 옮긴 칸 수다. TRUNCATE 모드는 다 옮긴 뒤 파일을 0으로 줄이고 그 숫자를 0으로 보고한다.
+
+## 커밋은 모아서 한다
+
+위 숫자는 SQLite에서 가장 흔한 성능 실수를 그대로 보여 준다. 자동 커밋으로 한 줄씩 넣으면 줄마다 페이지를 새로 쓰고 디스크에 동기화(fsync)한다. 같은 1만 줄을 두 가지로 넣고 걸린 시간과 WAL 파일 바이트 수를 출력했다(`synchronous=FULL`, 이 컨테이너 디스크 기준).
+
+```python
+# 한 줄마다 자동 커밋
+for i in range(10000):
+    c.execute("INSERT INTO page_views VALUES (datetime('now'), ?)", (i,))
+
+# 트랜잭션 하나로 묶기
+c.execute("BEGIN")
+for i in range(10000):
+    c.execute("INSERT INTO page_views VALUES (datetime('now'), ?)", (i,))
+c.execute("COMMIT")
+```
+
+```text
+each 4707 ms 41797432
+batch 27 ms 313152
+```
+
+170배 넘게 차이 난다. 휴대폰 앱이 동기화로 받은 책 목록 수천 개를 저장할 때, 테스트 데이터를 넣을 때 트랜잭션으로 묶는 것만으로 이만큼 빨라진다.
+
+## 연결을 열 때마다 거는 설정
+
+앞에서 본 것들을 모으면, SQLite를 앱의 저장소로 쓸 때 연결마다 거는 설정이 거의 정해져 있다. 조각을 눌러 보면 각각의 이유가 나온다.
+
+<UrlAnatomy
+  caption="SQLite 연결을 열 때 흔히 거는 PRAGMA"
+  base="PRAGMA"
+  separator=" "
+  joiner="; "
+  params={[
+    {
+      key: "journal_mode",
+      display: "journal_mode = WAL",
+      title: "WAL 모드",
+      description: "읽기와 쓰기가 서로를 막지 않는다. 이 설정은 연결이 아니라 DB 파일에 저장돼서 한 번만 켜면 유지된다. 네트워크 파일 시스템(NFS) 위의 파일에서는 공유 메모리가 제대로 동작하지 않아 쓰면 안 된다.",
+      required: true,
+    },
+    {
+      key: "synchronous",
+      display: "synchronous = NORMAL",
+      title: "동기화 수준",
+      description: "WAL 모드에서 NORMAL이면 커밋마다 fsync하지 않고 체크포인트 때 한다. 전원이 나가면 마지막 몇 개 트랜잭션이 사라질 수 있지만 파일이 깨지지는 않는다. 돈처럼 잃으면 안 되는 데이터면 FULL을 쓴다.",
+    },
+    {
+      key: "busy_timeout",
+      display: "busy_timeout = 5000",
+      title: "잠겨 있으면 기다리기",
+      description: "다른 연결이 쓰는 중이면 바로 database is locked를 던지지 않고 최대 5초 동안 다시 시도한다. 기본값은 0이라 바로 에러다. 언어별 드라이버가 따로 기본값을 두기도 한다.",
+      required: true,
+    },
+    {
+      key: "foreign_keys",
+      display: "foreign_keys = ON",
+      title: "외래 키 검사",
+      description: "기본으로 꺼져 있고 연결마다 켜야 한다. 앱의 DB 열기 함수 한곳에 모아 둔다.",
+      required: true,
+    },
+  ]}
+/>
+
+busy_timeout을 걸어도 막히는 경우가 있다. 읽기 트랜잭션(`BEGIN`)을 시작해 읽은 다음 같은 트랜잭션 안에서 쓰려고 하면, 그 사이 다른 연결이 먼저 썼을 때 SQLite는 기다려도 소용없다고 판단해 바로 SQLITE_BUSY를 돌려준다. 쓸 트랜잭션은 처음부터 `BEGIN IMMEDIATE`로 열어 쓰기 잠금을 먼저 잡는다.
+
+## SQLite가 들어가 있는 곳
+
+SQLite는 공식 문서가 "세계에서 가장 널리 배포된 DB"라고 소개할 만큼 많은 곳에 들어 있다. 안드로이드와 iOS가 기본으로 포함하고, 크롬과 파이어폭스가 방문 기록과 쿠키 같은 데이터를 SQLite 파일로 저장한다. 데스크톱 앱 설정, 메신저의 대화 기록처럼 기기 하나에 사는 데이터가 주 무대다.
+
+서버 쪽에서도 쓰인다.
+
+- 읽기가 대부분이고 쓰기가 적은 작은 웹 서비스. 서버 한 대에 SQLite 파일 하나면 DB 서버 운영이 아예 없다. 백업은 Litestream처럼 WAL을 S3 같은 저장소로 계속 복사하는 도구로 한다.
+- 엣지(edge). Cloudflare D1은 SQLite 기반이고, libSQL(SQLite 포크)을 쓰는 Turso는 복제본을 사용자 가까이 둔다.
+- 데이터 교환과 도구. 파일 하나로 주고받을 수 있어서 분석 결과나 설정 묶음을 나르는 형식으로 쓴다.
+
+테스트용 DB로 SQLite를 쓰는 것은 조심해야 한다. 운영이 PostgreSQL인데 테스트를 SQLite로 돌리면, 타입 검사, 외래 키 기본값, 날짜 함수, `ON CONFLICT` 세부 동작, 동시성이 전부 달라서 테스트가 통과해도 운영에서 깨진다. 운영과 같은 DB를 컨테이너로 띄워 테스트하는 편이 안전하다.
+
+## RocksDB는 다른 DB 밑에 들어간다
+
+임베디드 DB에는 SQL이 없는 것도 있다. RocksDB는 페이스북이 LevelDB를 고쳐 만든 키-값 라이브러리다. 키와 바이트 배열 값을 넣고, 키로 꺼내고, 키 순서대로 훑는 것이 전부다. 대신 쓰기가 아주 빠르다. 내부가 LSM 트리라서 쓰기를 메모리(memtable)에 모았다가 정렬된 파일(SST)로 한 번에 내리고, 뒤에서 파일을 합친다(compaction). LSM 트리가 어떻게 도는지는 [와이드 컬럼 DB 글](/posts/db-type-wide-column)에서 Cassandra와 함께 자세히 다룬다.
+
+RocksDB를 앱이 직접 쓰는 일은 드물고, 대개 다른 시스템의 저장 엔진으로 들어간다.
+
+- [분산 SQL](/posts/db-type-newsql)의 TiKV가 노드마다 RocksDB에 데이터를 저장하고, YugabyteDB도 고쳐 쓴 RocksDB 위에 있다. CockroachDB는 처음에 RocksDB를 쓰다가 Go로 다시 만든 Pebble로 바꿨다.
+- MySQL의 MyRocks는 InnoDB 대신 RocksDB를 저장 엔진으로 쓴다. 압축률이 좋아 저장 공간을 줄이려고 쓴다.
+- Kafka Streams와 Apache Flink는 처리 중인 상태를 각 작업 노드의 로컬 RocksDB에 둔다.
+
+이런 시스템을 운영하면 RocksDB의 설정이 결국 내 문제가 된다. 쓰기 하나가 compaction 때문에 디스크에 여러 번 다시 쓰이는 쓰기 증폭(write amplification), memtable과 블록 캐시가 차지하는 메모리, compaction이 밀려 쓰기가 느려지는 write stall이 대표적이다. 문서를 보다가 이런 단어가 나오면 엔진이 RocksDB 계열이라는 뜻이다.
+
+분석용 임베디드 DB도 있다. DuckDB는 SQLite처럼 프로세스 안에서 돌지만 컬럼으로 저장해서 집계가 빠르다. 그 차이는 [컬럼형 분석 DB 글](/posts/db-type-columnar-olap)에서 같은 주문 데이터로 비교했다.
+
+## 서버 DB와 나눠 맡기
+
+임베디드 DB와 서버 DB는 경쟁하기보다 역할을 나눈다. 서점 앱이라면 이렇다. 주문, 결제, 재고는 서버의 PostgreSQL에 있다. 휴대폰의 SQLite에는 장바구니, 최근 본 책, 내려받은 책 목록의 사본, 아직 서버에 못 보낸 변경이 있다. 전파가 돌아오면 앱이 쌓아 둔 변경을 서버로 보내고, 서버의 최신 상태를 받아 로컬 사본을 고친다.
+
+이 동기화가 오프라인 우선(offline-first) 앱에서 가장 어려운 부분이다. 휴대폰에서 장바구니에 담는 사이 다른 기기에서 같은 책을 지웠다면 어느 쪽이 맞을까. 마지막에 쓴 쪽을 이기게 할지, 둘을 합칠지 정해야 한다. 이건 DB 하나의 문제가 아니라 여러 복제본 사이의 일관성 문제라서, [CAP과 PACELC 글](/posts/db-consistency-cap)에서 이어서 다룬다.
+
+임베디드 DB를 고르지 않는 경우도 분명하다. 여러 서버가 같은 데이터를 써야 하면 SQLite 파일을 네트워크 디스크에 두고 공유하면 안 된다. 잠금이 제대로 동작하지 않아 파일이 깨질 수 있다. 쓰기가 초당 수천 건씩 여러 곳에서 몰리면 쓰기 하나뿐인 규칙이 병목이 된다. 사용자별 권한이 필요하거나 다른 기계에서 접속해야 하면 서버 DB를 쓴다.
+
+## 서버를 빼고 남는 것
+
+임베디드 DB는 서버 프로세스와 네트워크를 빼고 DB를 라이브러리와 파일로 만든 것이다. 그래서 설치와 운영이 없고, 쿼리가 함수 호출처럼 빠르고, 파일째 복사하고 옮길 수 있다. 대신 쓰기는 한 번에 하나, 접속은 같은 기계에서만, 권한은 없다. SQLite를 쓴다면 WAL 모드, busy_timeout, foreign_keys를 연결마다 걸고, 쓰기는 `BEGIN IMMEDIATE`로 모아서 커밋하고, 긴 읽기 트랜잭션을 열어 두지 않는다. 다음 글에서는 지금까지 본 DB들을 [일관성과 지연의 기준](/posts/db-consistency-cap)으로 한자리에 놓아 본다.
+
+## 면접에서 나올 만한 질문
+
+### 임베디드 DB와 서버 DB의 차이는 무엇인가요?
+
+서버 DB는 별도 프로세스로 돌며 앱이 네트워크로 접속하고, 서버가 인증과 동시 접속을 조율한다. 임베디드 DB는 앱 프로세스 안에 라이브러리로 들어가 파일을 직접 읽고 쓴다. 네트워크 왕복과 운영 부담이 없는 대신 다른 기계에서 접속할 수 없고, 권한 관리가 없고, 여러 쓰기를 조율하는 능력이 제한된다. 모바일 앱, 브라우저, 데스크톱 앱, 작은 단일 서버 서비스에 맞다.
+
+### SQLite에서 database is locked 에러는 왜 나고 어떻게 줄이나요?
+
+SQLite는 DB 파일 전체에서 쓰기 트랜잭션을 한 번에 하나만 허용해서, 다른 연결이 쓰는 중이면 SQLITE_BUSY가 난다. 기본 rollback journal 모드에서는 읽는 연결이 있어도 커밋이 막힌다. WAL 모드로 읽기와 쓰기가 서로 막지 않게 하고, busy_timeout으로 잠시 기다리게 하고, 쓰는 트랜잭션은 BEGIN IMMEDIATE로 시작하고, 트랜잭션을 짧게 유지한다.
+
+### WAL 모드는 어떻게 읽기와 쓰기를 동시에 하나요?
+
+쓰기는 바뀐 페이지를 DB 파일이 아니라 -wal 파일 끝에 붙인다. 읽기는 시작할 때 WAL의 어디까지를 볼지 기억하고, 그 지점까지의 WAL에서 최신 페이지를 찾고 없으면 DB 파일을 읽는다. 그래서 쓰는 중에도 읽기는 시작 시점의 일관된 모습을 본다. 쌓인 WAL은 체크포인트가 DB 파일로 옮긴다.
+
+### WAL 파일이 계속 커지는 건 왜인가요?
+
+체크포인트는 아직 옛 칸을 보는 읽기 트랜잭션이 있으면 그 뒤를 옮기지 못한다. 오래 열린 읽기 트랜잭션이나 닫지 않은 커서가 있으면 WAL이 끝없이 자란다. 트랜잭션과 커서를 빨리 닫고, 필요하면 한가할 때 `PRAGMA wal_checkpoint(TRUNCATE)`로 직접 옮긴다.
+
+### SQLite에 1만 건을 넣는데 느리다면 무엇부터 보나요?
+
+자동 커밋으로 한 줄씩 넣고 있는지 본다. 커밋마다 페이지를 새로 쓰고 디스크에 동기화하니, 실험에서 한 줄씩 넣으면 4.7초, 트랜잭션 하나로 묶으면 27ms였다. 묶어서 커밋하고, 데이터 성격에 따라 WAL 모드의 synchronous=NORMAL을 검토한다.
+
+### 운영은 PostgreSQL인데 테스트는 SQLite로 돌려도 되나요?
+
+권하지 않는다. SQLite는 타입을 기본으로 검사하지 않고, 외래 키가 꺼져 있고, 날짜·JSON 함수와 충돌 처리, 동시성 동작이 달라서 테스트가 통과해도 운영에서 깨질 수 있다. 테스트도 같은 PostgreSQL을 컨테이너로 띄워 돌리는 편이 안전하다.
+
+### RocksDB는 어디에 쓰이나요?
+
+RocksDB는 LSM 트리 기반의 임베디드 키-값 라이브러리로, 앱이 직접 쓰기보다 다른 시스템의 저장 엔진으로 들어간다. TiKV, YugabyteDB, MySQL의 MyRocks, Kafka Streams와 Flink의 상태 저장소가 대표적이다. 쓰기가 빠른 대신 compaction으로 생기는 쓰기 증폭과 write stall, 메모리 설정을 운영하면서 챙겨야 한다.

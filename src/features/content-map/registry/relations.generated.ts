@@ -2,13 +2,87 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "db-type-time-series": {
+    "links": [
+      "db-types-overview",
+      "db-index",
+      "db-type-columnar-olap",
+      "db-type-relational"
+    ],
+    "mentions": [
+      "sqld-group-by-having",
+      "db-replication-sharding",
+      "http-status-codes"
+    ]
+  },
+  "db-type-columnar-olap": {
+    "links": [
+      "db-types-overview",
+      "db-type-relational",
+      "db-type-time-series",
+      "db-type-embedded",
+      "db-architecture-by-scale",
+      "db-type-newsql"
+    ],
+    "mentions": [
+      "postgres-advanced-sql"
+    ]
+  },
+  "db-type-newsql": {
+    "links": [
+      "db-replication-sharding",
+      "db-types-overview",
+      "db-transaction-isolation",
+      "db-consistency-cap",
+      "db-type-columnar-olap",
+      "db-type-key-value",
+      "db-type-wide-column"
+    ],
+    "mentions": [
+      "postgres-getting-started"
+    ]
+  },
+  "db-type-embedded": {
+    "links": [
+      "db-types-overview",
+      "db-type-wide-column",
+      "db-type-newsql",
+      "db-type-columnar-olap",
+      "db-consistency-cap"
+    ],
+    "mentions": [
+      "sql-basics",
+      "sqld-window-functions",
+      "postgres-architecture"
+    ]
+  },
+  "db-consistency-cap": {
+    "links": [
+      "db-types-overview",
+      "db-transaction-isolation",
+      "db-type-newsql",
+      "db-replication-sharding",
+      "db-type-wide-column",
+      "redis-persistence-ha"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "mongodb-document-model",
+      "redis-basics"
+    ]
+  },
   "db-types-overview": {
     "links": [
       "db-architecture-by-scale",
+      "db-consistency-cap",
       "db-type-relational",
       "db-type-key-value",
       "db-type-wide-column",
       "db-type-graph",
+      "db-type-time-series",
+      "db-type-columnar-olap",
+      "db-type-newsql",
+      "db-type-embedded",
       "mongodb-document-model",
       "elasticsearch-inverted-index",
       "vector-db",
@@ -26,6 +100,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "db-transaction-isolation",
       "sql-basics",
+      "db-type-newsql",
+      "db-type-columnar-olap",
       "db-type-graph",
       "db-type-wide-column",
       "mongodb-document-model",
@@ -33,6 +109,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale"
     ],
     "mentions": [
+      "db-type-time-series",
       "db-type-key-value",
       "sqld-top-n-hierarchical-pivot",
       "postgres-architecture",
@@ -47,7 +124,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics",
       "redis-memory-eviction",
       "redis-persistence-ha",
+      "db-type-embedded",
       "db-type-relational",
+      "db-type-newsql",
+      "db-consistency-cap",
       "caching-strategies",
       "db-type-wide-column"
     ],
@@ -58,7 +138,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "db-type-wide-column": {
     "links": [
       "db-type-key-value",
+      "db-type-columnar-olap",
       "db-replication-sharding",
+      "db-consistency-cap",
+      "db-type-time-series",
       "db-type-graph"
     ],
     "mentions": [
@@ -69,7 +152,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "db-type-graph": {
     "links": [
       "db-type-wide-column",
-      "sqld-top-n-hierarchical-pivot"
+      "sqld-top-n-hierarchical-pivot",
+      "db-type-time-series"
     ],
     "mentions": [
       "db-type-relational"
@@ -422,7 +506,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale"
     ],
     "mentions": [
+      "db-consistency-cap",
       "redis-persistence-ha",
+      "db-type-newsql",
       "db-type-wide-column",
       "db-type-key-value",
       "redis-basics",
@@ -444,7 +530,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "db-type-time-series",
       "postgres-advanced-sql",
+      "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
       "db-type-wide-column",
       "db-type-key-value",
@@ -583,6 +671,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "db-type-columnar-olap",
       "db-replication-sharding",
       "dns"
     ]
@@ -986,6 +1075,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "db-type-columnar-olap",
       "client-data-cache",
       "http-versions",
       "js-memory-leak",

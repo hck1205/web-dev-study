@@ -9,13 +9,18 @@ import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
+import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
+import { DB_TYPE_COLUMNAR_OLAP } from "./db-type-columnar-olap";
+import { DB_TYPE_EMBEDDED } from "./db-type-embedded";
 import { DB_TYPE_GRAPH } from "./db-type-graph";
 import { DB_TYPE_KEY_VALUE } from "./db-type-key-value";
+import { DB_TYPE_NEWSQL } from "./db-type-newsql";
 import { DB_TYPE_RELATIONAL } from "./db-type-relational";
+import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DNS } from "./dns";
@@ -104,13 +109,18 @@ export const QUESTION_SETS = [
   CORE_WEB_VITALS,
   CORS,
   DB_ARCHITECTURE_BY_SCALE,
+  DB_CONSISTENCY_CAP,
   DB_INDEX,
   DB_MODELING_NORMALIZATION,
   DB_REPLICATION_SHARDING,
   DB_TRANSACTION_ISOLATION,
+  DB_TYPE_COLUMNAR_OLAP,
+  DB_TYPE_EMBEDDED,
   DB_TYPE_GRAPH,
   DB_TYPE_KEY_VALUE,
+  DB_TYPE_NEWSQL,
   DB_TYPE_RELATIONAL,
+  DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
   DNS,

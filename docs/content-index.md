@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 92편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 97편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -198,8 +198,8 @@
 - 길이: 1161줄 (긴 글)
 - 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 주문 테이블을 달마다 나눈다 / 조건에 맞는 파티션만 읽는다 / 오래된 달은 통째로 떼어 낸다 / 목록과 해시로도 나눈다 / 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 언제 다음 단계로 넘어가나 / 나누는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, sql-query-tuning, caching-strategies, microservices, mongodb-document-model, db-architecture-by-scale
-- 키워드 백링크 →: redis-persistence-ha, db-type-wide-column, db-type-key-value, redis-basics, postgres-architecture, dns
-- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-index, db-modeling-normalization, db-type-relational, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
+- 키워드 백링크 →: db-consistency-cap, redis-persistence-ha, db-type-newsql, db-type-wide-column, db-type-key-value, redis-basics, postgres-architecture, dns
+- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
 
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
 
@@ -220,7 +220,7 @@
 - 길이: 409줄
 - 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: db-type-relational, db-index, db-replication-sharding, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index
 
 #### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
 
@@ -234,6 +234,39 @@
 
 ### Programming › Database › DB Types (`programming/database/db-types`)
 
+#### `db-consistency-cap` — CAP과 PACELC로 DB 종류 비교하기
+
+- 요약: 네트워크가 끊겼을 때와 멀쩡할 때 각각 무엇을 포기하는지 CAP과 PACELC로 정리한다. 선형화부터 최종 일관성까지의 단계, 쿼럼과 충돌 해결, DB마다 서 있는 자리와 설정으로 그 자리가 바뀌는 방법을 본다.
+- 태그: Database, Distributed Systems, System Design, NoSQL
+- 키워드: CAP 정리, PACELC, 선형화 가능성, 최종 일관성, read-your-writes
+- 길이: 310줄
+- 소제목: 끊긴 회선 앞에서 고르는 두 가지 / CAP이 말하지 않는 것 / 회선이 멀쩡해도 고르는 것 / 일관성은 켜고 끄는 게 아니라 사다리다 / 쿼럼으로 일관성을 고르는 DB / AP를 고르면 충돌을 누가 푸나 / DB 종류마다 서 있는 자리 / 데이터마다 얼마나 틀려도 되는지 정한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-types-overview, db-transaction-isolation, db-type-newsql, db-replication-sharding, db-type-wide-column, redis-persistence-ha
+- 키워드 백링크 →: db-type-key-value, mongodb-document-model, redis-basics
+- 이 글로 오는 글 ←: db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview
+
+#### `db-type-columnar-olap` — 컬럼형 분석 DB: OLTP와 OLAP을 나누는 이유
+
+- 요약: 같은 주문 500만 건의 매출 쿼리가 PostgreSQL과 DuckDB에서 열 배 넘게 차이 나는 이유를 컬럼 저장, 압축, 벡터화 실행, 건너뛰기로 따라간다. ClickHouse와 BigQuery의 쓰임새, 운영 DB에서 CDC로 옮기는 길도 다룬다.
+- 태그: Database, Performance, System Design, PostgreSQL
+- 키워드: 컬럼형 저장, OLAP, ClickHouse, DuckDB, 변경 데이터 캡처
+- 길이: 485줄
+- 소제목: 주문을 받는 질문과 매출을 보는 질문 / 실험에 쓸 주문 500만 건 / 행으로 저장하면 안 쓰는 컬럼도 읽는다 / 같은 컬럼끼리 모이면 잘 눌린다 / 한 번에 값 하나가 아니라 묶음으로 계산한다 / 건너뛸 수 있는 덩어리는 아예 열지 않는다 / ClickHouse 테이블은 정렬 키부터 정한다 / 분석 DB가 잘 못 하는 것 / 클라우드 데이터 웨어하우스와 DuckDB / 운영 DB에서 분석 DB로 옮기는 길 / 컬럼형을 고르기 전에 / 읽는 방향에 맞춰 놓는다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-types-overview, db-type-relational, db-type-time-series, db-type-embedded, db-architecture-by-scale, db-type-newsql
+- 키워드 백링크 →: postgres-advanced-sql
+- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-type-embedded, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, db-types-overview, microservices
+
+#### `db-type-embedded` — 임베디드 DB: SQLite, RocksDB처럼 앱 안에 들어가는 DB
+
+- 요약: 서버 없이 앱 프로세스 안에서 파일을 직접 읽고 쓰는 임베디드 DB를 SQLite로 직접 돌려 본다. 타입과 외래 키의 함정, 쓰기 하나뿐인 규칙과 WAL 모드, 커밋 묶기, RocksDB가 다른 DB 밑에서 하는 일까지 다룬다.
+- 태그: Database, SQL, Performance
+- 키워드: 임베디드 DB, SQLite, RocksDB, WAL 모드
+- 길이: 424줄
+- 소제목: 서버 없이 라이브러리로 돈다 / 장바구니를 SQLite에 담아 보기 / 타입을 적어도 검사하지 않는다 / 쓰는 사람은 한 번에 하나 / WAL 모드에서는 변경을 옆 파일에 쌓는다 / 커밋은 모아서 한다 / 연결을 열 때마다 거는 설정 / SQLite가 들어가 있는 곳 / RocksDB는 다른 DB 밑에 들어간다 / 서버 DB와 나눠 맡기 / 서버를 빼고 남는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-types-overview, db-type-wide-column, db-type-newsql, db-type-columnar-olap, db-consistency-cap
+- 키워드 백링크 →: sql-basics, sqld-window-functions, postgres-architecture
+- 이 글로 오는 글 ←: db-type-columnar-olap, db-type-key-value, db-types-overview
+
 #### `db-type-graph` — 그래프 DB: 관계를 따라가는 질의
 
 - 요약: 친구의 친구가 산 책을 추천하는 질문을 Neo4j Cypher와 PostgreSQL 재귀 CTE로 나란히 풀어 본다. index-free adjacency, 단계가 늘 때 폭발하는 탐색 범위, 그래프 DB가 맞는 곳과 확장의 어려움을 정리한다.
@@ -241,7 +274,7 @@
 - 키워드: 그래프 DB, Neo4j, Cypher, index-free adjacency
 - 길이: 429줄
 - 소제목: 친구의 친구가 산 책 / 점과 선으로 저장하기 / Cypher로 그림 그리듯 묻기 / 관계형에서 같은 질문을 하면 / 단계가 늘면 닿는 사람이 폭발한다 / 이웃을 바로 찾아가는 구조 / 너비 우선으로 따라가 보기 / 그래프 DB가 맞는 곳과 아닌 곳 / 관계형 DB와 함께 쓰기 / 관계를 저장하면 질문이 짧아진다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-type-wide-column, sqld-top-n-hierarchical-pivot
+- 직접 링크 →: db-type-wide-column, sqld-top-n-hierarchical-pivot, db-type-time-series
 - 키워드 백링크 →: db-type-relational
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-type-relational, db-type-wide-column, db-types-overview
 
@@ -252,9 +285,20 @@
 - 키워드: 키-값 저장소, DynamoDB, etcd, 핫 파티션, 단일 테이블 설계
 - 길이: 460줄
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-relational, caching-strategies, db-type-wide-column
+- 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-relational, db-type-wide-column, db-types-overview
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview
+
+#### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
+
+- 요약: 샤드를 넘는 트랜잭션을 DB가 대신 처리하는 Spanner, CockroachDB, TiDB의 구조를 따라간다. 키 범위 구간과 Raft 복제, 분산 트랜잭션과 시계, 재시도와 핫스팟처럼 수평 확장의 대가도 정리한다.
+- 태그: Database, Distributed Systems, Scalability, SQL
+- 키워드: NewSQL, 분산 SQL, CockroachDB, TrueTime, TiDB
+- 길이: 404줄
+- 소제목: SQL은 그대로, 저장은 여러 대에 / 행 하나가 키 하나가 된다 / 구간이 커지면 둘로 쪼갠다 / 구간마다 Raft로 과반에 적는다 / 구간 두 개에 걸친 트랜잭션 / 시계가 다르면 순서도 다르다 / 충돌하면 다시 하라고 돌려보낸다 / 멀리 있는 사용자의 데이터는 가까이 둔다 / 호환된다는 말의 범위 / 분산 SQL을 고르기 전에 / 샤딩을 DB 안으로 옮긴 값 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-replication-sharding, db-types-overview, db-transaction-isolation, db-consistency-cap, db-type-columnar-olap, db-type-key-value, db-type-wide-column
+- 키워드 백링크 →: postgres-getting-started
+- 이 글로 오는 글 ←: db-consistency-cap, db-replication-sharding, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview
 
 #### `db-type-relational` — 관계형 DB: 왜 여전히 기본값인가
 
@@ -263,9 +307,20 @@
 - 키워드: 관계형 DB, RDBMS, 해시 조인
 - 길이: 481줄
 - 소제목: 미리 몰랐던 질문에 답하기 / 표와 키로 나눠 담는 이유 / 잘못된 데이터를 DB가 막는다 / 무엇을 원하는지만 쓰면 방법은 DB가 고른다 / 해시 조인을 손으로 따라가기 / 커밋이 끝났다는 건 로그가 디스크에 닿았다는 뜻 / 표 여러 개를 한 번에 바꾸는 트랜잭션 / PostgreSQL, MySQL, Oracle, SQL Server / 한 대를 넘어서면 어려워지는 것 / 다른 DB를 붙여도 원본은 여기에 둔다 / 기본값인 이유와 그 값 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-types-overview, db-modeling-normalization, sql-query-tuning, db-index, db-replication-sharding, db-transaction-isolation, sql-basics, db-type-graph, db-type-wide-column, mongodb-document-model, caching-strategies, db-architecture-by-scale
-- 키워드 백링크 →: db-type-key-value, sqld-top-n-hierarchical-pivot, postgres-architecture, postgres-jsonb-search, postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-graph, db-type-key-value, db-type-wide-column, db-types-overview, mongodb-document-model, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, sqld-data-modeling
+- 직접 링크 →: db-types-overview, db-modeling-normalization, sql-query-tuning, db-index, db-replication-sharding, db-transaction-isolation, sql-basics, db-type-newsql, db-type-columnar-olap, db-type-graph, db-type-wide-column, mongodb-document-model, caching-strategies, db-architecture-by-scale
+- 키워드 백링크 →: db-type-time-series, db-type-key-value, sqld-top-n-hierarchical-pivot, postgres-architecture, postgres-jsonb-search, postgres-getting-started
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, mongodb-document-model, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, sqld-data-modeling
+
+#### `db-type-time-series` — 시계열 DB: 시간 순서로 쌓이는 데이터
+
+- 요약: 페이지 조회와 서버 지표처럼 끝에만 붙는 데이터를 PostgreSQL 16에 쌓아 보며 BRIN, 시간 단위 파티션, 다운샘플링, 압축을 따라간다. TimescaleDB와 Prometheus가 같은 문제를 어떻게 자동화하는지, 카디널리티 폭발을 어떻게 막는지도 정리한다.
+- 태그: Database, PostgreSQL, Performance, System Design
+- 키워드: 시계열 DB, TimescaleDB, 다운샘플링, 카디널리티 폭발
+- 길이: 598줄
+- 소제목: 시간이 키가 되는 데이터 / 측정값 하나를 이루는 조각 / PostgreSQL에 그대로 쌓아 보기 / 시간 순서로 쌓이면 범위만 적어 둬도 된다 / 구간으로 묶어 읽기 / 오래된 데이터는 요약으로 바꾼다 / 기간 통째로 버리기 / 같은 시계열끼리 붙이면 잘 눌린다 / TimescaleDB는 PostgreSQL 안에서 같은 일을 한다 / Prometheus는 최근 몇 시간을 메모리에 둔다 / 레이블 하나가 시계열을 수백만 개로 만든다 / 어떤 시계열 저장소를 고를까 / 시계열 DB를 고르지 않아도 되는 경우 / 끝에 붙이고, 덩어리로 버린다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-types-overview, db-index, db-type-columnar-olap, db-type-relational
+- 키워드 백링크 →: sqld-group-by-having, db-replication-sharding, http-status-codes
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-relational, db-type-wide-column, db-types-overview
 
 #### `db-type-wide-column` — 와이드 컬럼 DB: Cassandra와 쿼리 먼저 설계하기
 
@@ -274,9 +329,9 @@
 - 키워드: 와이드 컬럼, Cassandra, LSM 트리, SSTable, 툼스톤
 - 길이: 410줄
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-type-key-value, db-replication-sharding, db-type-graph
+- 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: db-type-relational, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-graph, db-type-key-value, db-type-relational, db-types-overview
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -285,8 +340,8 @@
 - 키워드: DB 종류, 데이터 모델 비교, 원본과 사본
 - 길이: 262줄
 - 소제목: 같은 주문을 여러 모양으로 저장하기 / 무엇으로 찾는지가 먼저다 / 빠른 이유는 저마다 하나씩 / 질문 여섯 개로 서점의 저장소 고르기 / 원본에서 사본으로 흘러가는 길 / 시리즈 지도 / 모양과 질문을 먼저 적는다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-architecture-by-scale, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
-- 이 글로 오는 글 ←: db-modeling-normalization, db-type-key-value, db-type-relational
+- 직접 링크 →: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, db-type-time-series, db-type-columnar-olap, db-type-newsql, db-type-embedded, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
+- 이 글로 오는 글 ←: db-consistency-cap, db-modeling-normalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
@@ -299,7 +354,7 @@
 - 소제목: 예제로 쓸 작은 서점 / 넣은 행을 바로 돌려받는 RETURNING / 있으면 더하고 없으면 넣기 / 조회하고 넣으면 생기는 틈 / 원본 데이터와 맞춰 놓는 MERGE / WITH로 긴 쿼리를 문단처럼 나누기 / 한 문장으로 행을 옮기는 쓰기 CTE / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / CTE가 최적화를 막던 시절 / 문장 하나로 끝내는 습관 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-roles-security, db-transaction-isolation, sqld-top-n-hierarchical-pivot, caching-strategies, sqld-window-functions, db-index, postgres-functions-triggers
 - 키워드 백링크 →: postgres-data-types, sqld-group-by-having, postgres-getting-started, sql-query-tuning
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, postgres-functions-triggers, sqld-rollup-cube-grouping-sets
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-type-columnar-olap, postgres-functions-triggers, sqld-rollup-cube-grouping-sets
 
 #### `postgres-architecture` — PostgreSQL 내부 구조: 프로세스, 공유 메모리, 페이지, WAL, 체크포인트
 
@@ -310,7 +365,7 @@
 - 소제목: 연결 하나에 프로세스 하나 / 백그라운드에서 도는 프로세스들 / 함께 쓰는 메모리와 혼자 쓰는 메모리 / 같은 페이지가 두 번 캐시된다 / 데이터 디렉터리 들여다보기 / 8KB 페이지 한 장의 구조 / 페이지에 빈자리를 남기는 fillfactor / 큰 값은 TOAST로 따로 둔다 / 먼저 로그에 쓰고 나중에 파일에 쓴다 / LSN은 WAL 안의 바이트 주소다 / 체크포인트 직후의 첫 수정은 페이지 통째로 / 체크포인트가 하는 일 / 서버가 죽었다 다시 뜰 때 / fsync와 synchronous_commit / 다시 64GB 서버로 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, postgres-jsonb-search, sql-query-tuning, postgres-operations, postgres-mvcc-vacuum, db-index, db-transaction-isolation, db-replication-sharding
 - 키워드 백링크 →: db-architecture-by-scale, db-type-relational
-- 이 글로 오는 글 ←: db-modeling-normalization, db-replication-sharding, db-type-relational, postgres-data-types, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-query-tuning
+- 이 글로 오는 글 ←: db-modeling-normalization, db-replication-sharding, db-type-embedded, db-type-relational, postgres-data-types, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-query-tuning
 
 #### `postgres-data-types` — 타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range
 
@@ -343,7 +398,7 @@
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
 - 키워드 백링크 →: postgres-operations, db-type-relational
-- 이 글로 오는 글 ←: db-transaction-isolation, db-type-relational, db-types-overview, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
+- 이 글로 오는 글 ←: db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -398,7 +453,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: db-type-relational, event-loop, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-replication-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -420,7 +475,7 @@
 - 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, redis-memory-eviction
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: caching-strategies, db-replication-sharding, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-replication-sharding, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
 
 ### Programming › Database › SQL (`programming/database/sql`)
 
@@ -433,7 +488,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / B-tree가 아닌 인덱스들 / MySQL 8은 표 자체가 인덱스다 / 찾아보기를 만들기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-replication-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, db-type-relational, mongodb-document-model, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, db-type-relational, db-type-time-series, mongodb-document-model, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
 
 #### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
 
@@ -455,7 +510,7 @@
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD 시험 포인트 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices
 - 키워드 백링크 →: postgres-mvcc-vacuum, postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-modeling-normalization, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics, sql-basics, sql-query-tuning
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics, sql-basics, sql-query-tuning
 
 #### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
 
@@ -466,7 +521,7 @@
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / Oracle과 SQL Server에서는 이렇게 다르다 / 다음은 빈 칸을 채울 차례 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, sql-query-tuning, db-transaction-isolation, sqld-data-modeling
 - 키워드 백링크 →: sqld-group-by-having, postgres-operations, postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, db-type-relational, postgres-advanced-sql, postgres-data-types, postgres-getting-started, postgres-operations, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, db-type-embedded, db-type-relational, postgres-advanced-sql, postgres-data-types, postgres-getting-started, postgres-operations, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
 
 #### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
 
@@ -511,7 +566,7 @@
 - 길이: 746줄
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
-- 이 글로 오는 글 ←: postgres-advanced-sql, sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -577,7 +632,7 @@
 - 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: postgres-advanced-sql, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: db-type-embedded, postgres-advanced-sql, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -816,7 +871,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, http-versions, what-happens-google-com, dns
-- 이 글로 오는 글 ←: browser-fetch, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, mvc-pattern, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
+- 이 글로 오는 글 ←: browser-fetch, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, mvc-pattern, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -1003,7 +1058,7 @@
 - 길이: 590줄
 - 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction
-- 키워드 백링크 →: db-replication-sharding, dns
+- 키워드 백링크 →: db-type-columnar-olap, db-replication-sharding, dns
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-key-value, db-type-relational, frontend-browser-cache, postgres-advanced-sql, redis-basics, redis-memory-eviction
 
 #### `db-architecture-by-scale` — 서비스 규모별 DB 설계: 한 대에서 여러 저장소까지
@@ -1014,8 +1069,8 @@
 - 길이: 727줄
 - 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
-- 키워드 백링크 →: postgres-advanced-sql, postgres-mvcc-vacuum, db-type-wide-column, db-type-key-value, db-type-relational, db-type-graph, http-caching-cdn, postgres-operations, postgres-jsonb-search, sql-basics
-- 이 글로 오는 글 ←: db-replication-sharding, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-query-tuning
+- 키워드 백링크 →: db-type-time-series, postgres-advanced-sql, db-type-columnar-olap, postgres-mvcc-vacuum, db-type-wide-column, db-type-key-value, db-type-relational, db-type-graph, http-caching-cdn, postgres-operations, postgres-jsonb-search, sql-basics
+- 이 글로 오는 글 ←: db-replication-sharding, db-type-columnar-olap, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-query-tuning
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -1025,7 +1080,7 @@
 - 길이: 317줄
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, gateway
-- 키워드 백링크 →: db-architecture-by-scale, client-data-cache, http-versions, js-memory-leak, http-methods
+- 키워드 백링크 →: db-architecture-by-scale, db-type-columnar-olap, client-data-cache, http-versions, js-memory-leak, http-methods
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-transaction-isolation, micro-frontends, rest-api-design
 
 #### `resilience-patterns` — 장애가 번지지 않게: 타임아웃, 재시도, 서킷 브레이커
@@ -1077,6 +1132,7 @@
 - 그래프 DB → `db-type-graph`
 - 낙관적 업데이트 → `client-data-cache`
 - 논리적 실행 순서 → `sqld-group-by-having`
+- 다운샘플링 → `db-type-time-series`
 - 단방향 데이터 흐름 → `mvc-pattern`
 - 단일 테이블 설계 → `db-type-key-value`
 - 단일행 함수 → `sqld-single-row-functions`
@@ -1110,6 +1166,7 @@
 - 배제 제약 → `postgres-data-types`
 - 벌크헤드 → `resilience-patterns`
 - 벡터 DB → `vector-db`
+- 변경 데이터 캡처 → `db-type-columnar-olap`
 - 병합 충돌 → `git-branch-merge`
 - 복제 지연 → `db-replication-sharding`
 - 복합 인덱스 → `db-index`
@@ -1117,6 +1174,7 @@
 - 부분 인덱스 → `db-index`
 - 부분 clone → `git-remote-collaboration`
 - 분산 락 → `redis-basics`
+- 분산 SQL → `db-type-newsql`
 - 분할 상환 → `big-o-notation`
 - 비식별 관계 → `sqld-entity-attribute-relationship`
 - 빈약한 도메인 모델 → `mvc-pattern`
@@ -1129,6 +1187,7 @@
 - 서버 상태 → `client-data-cache`
 - 서버 컴포넌트 → `rendering-strategies`
 - 서킷 브레이커 → `resilience-patterns`
+- 선형화 가능성 → `db-consistency-cap`
 - 세션 쿠키 → `cookie-session-login`
 - 세션 ID → `cookie-session-login`
 - 스칼라 서브쿼리 → `sqld-subquery-set-operators`
@@ -1137,6 +1196,7 @@
 - 스트리밍 복제 → `db-replication-sharding`
 - 스트리밍 SSR → `rendering-strategies`
 - 시간 복잡도 → `big-o-notation`
+- 시계열 DB → `db-type-time-series`
 - 시점 복구 → `postgres-operations`
 - 쓰기 왜곡 → `db-transaction-isolation`
 - 쓰기 CTE → `postgres-advanced-sql`
@@ -1159,6 +1219,7 @@
 - 인증서 체인 → `https-tls`
 - 일관된 해싱 → `db-replication-sharding`
 - 읽기 복제본 → `db-replication-sharding`
+- 임베디드 DB → `db-type-embedded`
 - 임베딩 → `vector-db`
 - 자동 배칭 → `react-rerender`
 - 작업 트리 → `git-internals-basics`
@@ -1175,7 +1236,9 @@
 - 집계 함수 → `sqld-group-by-having`
 - 집합 연산자 → `sqld-subquery-set-operators`
 - 체크포인트 → `postgres-architecture`
+- 최종 일관성 → `db-consistency-cap`
 - 축출 정책 → `redis-memory-eviction`
+- 카디널리티 폭발 → `db-type-time-series`
 - 카티션 곱 → `sqld-joins`
 - 캐시 관통 → `caching-strategies`
 - 캐시 무효화 → `http-caching-cdn`
@@ -1183,6 +1246,7 @@
 - 커버링 인덱스 → `db-index`
 - 커서 페이지네이션 → `rest-api-design`
 - 컨테이너 이미지 → `docker-container-basics`
+- 컬럼형 저장 → `db-type-columnar-olap`
 - 코드 스플리팅 → `code-splitting`
 - 콘텐츠 협상 → `http-message`
 - 쿠키 세션 → `cookie-session-login`
@@ -1239,14 +1303,17 @@
 - cache-aside → `caching-strategies`
 - Cache-Control → `http-caching-cdn`
 - cannot lock ref → `git-troubleshooting`
+- CAP 정리 → `db-consistency-cap`
 - Cassandra → `db-type-wide-column`
 - cert-manager → `kubernetes-ingress`
 - certbot → `nginx-https-performance`
 - cgroups → `docker-container-basics`
 - cherry-pick → `git-tips-advanced`
+- ClickHouse → `db-type-columnar-olap`
 - CLS → `core-web-vitals`
 - CNAME → `dns`
 - COALESCE → `sqld-single-row-functions`
+- CockroachDB → `db-type-newsql`
 - commit-msg 훅 → `git-tips-advanced`
 - compose.yaml → `docker-compose`
 - CONNECT 터널 → `proxy-reverse-proxy`
@@ -1277,6 +1344,7 @@
 - DOCKER-USER → `iptables-nat`
 - Dockerfile → `dockerfile-image-layers`
 - DoH → `dns`
+- DuckDB → `db-type-columnar-olap`
 - DynamoDB → `db-type-key-value`
 - Elasticsearch → `elasticsearch-inverted-index`
 - ERD → `sqld-data-modeling`
@@ -1370,13 +1438,16 @@
 - NATURAL JOIN → `sqld-joins`
 - Neo4j → `db-type-graph`
 - netfilter → `iptables-basics`
+- NewSQL → `db-type-newsql`
 - nginx.conf → `nginx-basics`
 - Non-EQUI JOIN → `sqld-joins`
 - nsswitch.conf → `hosts-file`
 - NVL → `sqld-single-row-functions`
 - OAuth → `oauth`
+- OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
 - OUTER JOIN → `sqld-joins`
+- PACELC → `db-consistency-cap`
 - peer 인증 → `postgres-getting-started`
 - pg_basebackup → `postgres-operations`
 - pg_dump → `postgres-operations`
@@ -1405,6 +1476,7 @@
 - RDB 스냅샷 → `redis-persistence-ha`
 - RDBMS → `db-type-relational`
 - React.memo → `react-rerender`
+- read-your-writes → `db-consistency-cap`
 - Redis → `redis-basics`
 - Redis Cluster → `redis-persistence-ha`
 - Redis Sentinel → `redis-persistence-ha`
@@ -1412,6 +1484,7 @@
 - reflog → `git-undo`
 - REST API → `rest-api-design`
 - reviver → `json-crud-http`
+- RocksDB → `db-type-embedded`
 - ROLLUP → `sqld-rollup-cube-grouping-sets`
 - Row Level Security → `postgres-roles-security`
 - ROW_NUMBER → `sqld-window-functions`
@@ -1434,17 +1507,21 @@
 - SKIP LOCKED → `db-architecture-by-scale`
 - skipWaiting → `frontend-browser-cache`
 - Speculation Rules → `frontend-browser-cache`
+- SQLite → `db-type-embedded`
 - squash 머지 → `git-branching-strategy`
 - SSG → `rendering-strategies`
 - SSTable → `db-type-wide-column`
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
 - TanStack Query → `client-data-cache`
+- TiDB → `db-type-newsql`
+- TimescaleDB → `db-type-time-series`
 - timestamptz → `postgres-data-types`
 - TLS 1.3 → `https-tls`
 - TLS 핸드셰이크 → `https-tls`
 - TOAST → `postgres-architecture`
 - Transfer-Encoding → `http-message`
+- TrueTime → `db-type-newsql`
 - TRUNCATE → `sql-basics`
 - try_files → `nginx-basics`
 - tstzrange → `postgres-data-types`
@@ -1459,6 +1536,7 @@
 - UUID v7 → `postgres-data-types`
 - VACUUM FULL → `postgres-mvcc-vacuum`
 - visibility map → `postgres-mvcc-vacuum`
+- WAL 모드 → `db-type-embedded`
 - WeakMap → `js-memory-leak`
 - WebSocket → `realtime-communication`
 - worktree → `git-tips-advanced`
@@ -1475,11 +1553,29 @@
 - `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, 게이트웨이)
 - `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
+- `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `db-type-time-series` ↔ `db-type-columnar-olap`
+- `db-type-time-series` ↔ `db-types-overview`
+- `db-type-time-series` ↔ `db-type-relational`
+- `db-type-columnar-olap` ↔ `db-type-newsql`
+- `db-type-columnar-olap` ↔ `db-type-embedded`
+- `db-type-columnar-olap` ↔ `db-types-overview`
+- `db-type-columnar-olap` ↔ `db-type-relational`
+- `db-type-columnar-olap` ↔ `db-architecture-by-scale`
+- `db-type-newsql` ↔ `db-consistency-cap`
+- `db-type-newsql` ↔ `db-types-overview`
+- `db-type-newsql` ↔ `db-type-key-value`
+- `db-type-newsql` ↔ `db-replication-sharding`
+- `db-type-embedded` ↔ `db-types-overview`
+- `db-consistency-cap` ↔ `db-types-overview`
+- `db-consistency-cap` ↔ `db-type-key-value`
+- `db-consistency-cap` ↔ `db-type-wide-column`
+- `db-consistency-cap` ↔ `db-replication-sharding`
 - `db-types-overview` ↔ `db-type-relational`
 - `db-types-overview` ↔ `db-type-key-value`
 - `db-type-relational` ↔ `db-type-key-value`
