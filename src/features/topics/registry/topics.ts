@@ -28,6 +28,7 @@ export const TOPICS: Topic[] = [
         label: "Database",
         description: "RDB, NoSQL, 쿼리와 인덱스",
         children: [
+          { id: "db-types", label: "DB Types", description: "관계형, 키-값, 문서, 컬럼, 그래프, 시계열 등 DB 종류별 장단점과 쓰임새" },
           { id: "postgresql", label: "PostgreSQL", description: "설치부터 내부 구조, 운영, 튜닝, 백업까지" },
           { id: "redis", label: "Redis", description: "인메모리 자료구조 저장소, 캐시, 메모리 관리" },
           { id: "sql", label: "SQL", description: "SQL 문법, 인덱스, 쿼리 튜닝, 테이블 설계, 트랜잭션" },
