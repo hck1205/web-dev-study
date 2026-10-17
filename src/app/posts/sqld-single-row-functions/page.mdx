@@ -1,0 +1,1102 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-single-row-functions");
+
+영업부 사원들의 이번 달 지급액을 뽑는 쿼리를 짰다. 급여(`SAL`)에 커미션(`COMM`)을 더하면 끝이라고 생각했다. `SELECT ename, sal + comm FROM emp WHERE deptno = 30`. 결과를 보니 여섯 명 중 BLAKE와 JAMES의 지급액이 빈칸이다. 급여는 분명히 2850과 950이 들어 있는데 더한 값이 통째로 사라졌다.
+
+범인은 `COMM` 칸의 NULL이다. NULL에 무엇을 더해도 NULL이 된다. SQLD 시험에서도 이 성질이 함수 문제, 집계 문제, 조인 문제에 모양을 바꿔 가며 계속 나온다. 이 글은 이 장면에서 시작해서 한 행씩 값을 바꾸는 단일행 함수(문자, 숫자, 날짜, 변환, NULL, CASE)를 정리한다.
+
+SQLD 문제는 주로 Oracle 문법으로 나오고, SQL Server와 다른 점을 묻는 문제가 섞여 나온다. 그래서 SQL은 Oracle 문법을 먼저 쓰고, PostgreSQL 16과 SQL Server에서 다른 부분을 옆에 적었다. 결과 표는 모두 PostgreSQL 16.15에 같은 데이터를 넣고 실제로 돌린 출력이다. `NVL`, `DECODE`처럼 Oracle에만 있는 함수는 PostgreSQL에서 같은 뜻의 식으로 돌렸고, 결과 값은 Oracle과 같다. psql은 NULL을 빈칸으로 보여 주는데, 눈에 띄게 `(null)`로 표시하도록 설정했다.
+
+## 이 글에서 쓸 사원 테이블
+
+Oracle을 설치하면 따라오는 SCOTT 계정의 `EMP`(사원)와 `DEPT`(부서) 테이블을 쓴다. SQLD 교재와 기출이 거의 다 이 데이터로 문제를 낸다. 집계와 조인을 다루는 다음 글들도 이 테이블을 그대로 쓴다.
+
+```sql
+-- 부서: 부서 번호, 이름, 위치
+CREATE TABLE dept (
+  deptno integer PRIMARY KEY,   -- Oracle: NUMBER(2)
+  dname  varchar(14),           -- Oracle: VARCHAR2(14)
+  loc    varchar(13)
+);
+
+-- 사원: 사번, 이름, 직무, 상사 사번, 입사일, 급여, 커미션, 부서 번호
+CREATE TABLE emp (
+  empno    integer PRIMARY KEY, -- Oracle: NUMBER(4)
+  ename    varchar(10),
+  job      varchar(9),
+  mgr      integer,             -- 상사의 empno. 사장(KING)은 상사가 없어서 NULL
+  hiredate date,
+  sal      numeric,             -- Oracle: NUMBER(7,2)
+  comm     numeric,             -- 영업직(SALESMAN)만 값이 있고 나머지는 NULL
+  deptno   integer REFERENCES dept (deptno)
+);
+
+INSERT INTO dept VALUES
+  (10, 'ACCOUNTING', 'NEW YORK'), (20, 'RESEARCH', 'DALLAS'),
+  (30, 'SALES', 'CHICAGO'),       (40, 'OPERATIONS', 'BOSTON');
+
+INSERT INTO emp VALUES
+  (7369, 'SMITH',  'CLERK',     7902, '1980-12-17',  800, NULL, 20),
+  (7499, 'ALLEN',  'SALESMAN',  7698, '1981-02-20', 1600,  300, 30),
+  (7521, 'WARD',   'SALESMAN',  7698, '1981-02-22', 1250,  500, 30),
+  (7566, 'JONES',  'MANAGER',   7839, '1981-04-02', 2975, NULL, 20),
+  (7654, 'MARTIN', 'SALESMAN',  7698, '1981-09-28', 1250, 1400, 30),
+  (7698, 'BLAKE',  'MANAGER',   7839, '1981-05-01', 2850, NULL, 30),
+  (7782, 'CLARK',  'MANAGER',   7839, '1981-06-09', 2450, NULL, 10),
+  (7788, 'SCOTT',  'ANALYST',   7566, '1987-04-19', 3000, NULL, 20),
+  (7839, 'KING',   'PRESIDENT', NULL, '1981-11-17', 5000, NULL, 10),
+  (7844, 'TURNER', 'SALESMAN',  7698, '1981-09-08', 1500,    0, 30),
+  (7876, 'ADAMS',  'CLERK',     7788, '1987-05-23', 1100, NULL, 20),
+  (7900, 'JAMES',  'CLERK',     7698, '1981-12-03',  950, NULL, 30),
+  (7902, 'FORD',   'ANALYST',   7566, '1981-12-03', 3000, NULL, 20),
+  (7934, 'MILLER', 'CLERK',     7782, '1982-01-23', 1300, NULL, 10);
+
+SELECT * FROM emp ORDER BY empno;
+SELECT * FROM dept;
+```
+
+```text
+ empno | ename  |    job    |  mgr   |  hiredate  | sal  |  comm  | deptno
+-------+--------+-----------+--------+------------+------+--------+--------
+  7369 | SMITH  | CLERK     |   7902 | 1980-12-17 |  800 | (null) |     20
+  7499 | ALLEN  | SALESMAN  |   7698 | 1981-02-20 | 1600 |    300 |     30
+  7521 | WARD   | SALESMAN  |   7698 | 1981-02-22 | 1250 |    500 |     30
+  7566 | JONES  | MANAGER   |   7839 | 1981-04-02 | 2975 | (null) |     20
+  7654 | MARTIN | SALESMAN  |   7698 | 1981-09-28 | 1250 |   1400 |     30
+  7698 | BLAKE  | MANAGER   |   7839 | 1981-05-01 | 2850 | (null) |     30
+  7782 | CLARK  | MANAGER   |   7839 | 1981-06-09 | 2450 | (null) |     10
+  7788 | SCOTT  | ANALYST   |   7566 | 1987-04-19 | 3000 | (null) |     20
+  7839 | KING   | PRESIDENT | (null) | 1981-11-17 | 5000 | (null) |     10
+  7844 | TURNER | SALESMAN  |   7698 | 1981-09-08 | 1500 |      0 |     30
+  7876 | ADAMS  | CLERK     |   7788 | 1987-05-23 | 1100 | (null) |     20
+  7900 | JAMES  | CLERK     |   7698 | 1981-12-03 |  950 | (null) |     30
+  7902 | FORD   | ANALYST   |   7566 | 1981-12-03 | 3000 | (null) |     20
+  7934 | MILLER | CLERK     |   7782 | 1982-01-23 | 1300 | (null) |     10
+(14 rows)
+
+ deptno |   dname    |   loc
+--------+------------+----------
+     10 | ACCOUNTING | NEW YORK
+     20 | RESEARCH   | DALLAS
+     30 | SALES      | CHICAGO
+     40 | OPERATIONS | BOSTON
+(4 rows)
+```
+
+몇 가지를 기억해 두면 뒤에서 편하다. 사원은 14명이고 부서는 10, 20, 30에만 있다. 40번 OPERATIONS에는 사원이 없다. `COMM`은 14명 중 4명만 값이 있고, 그중 TURNER는 0이다. 0은 값이 있는 것이고 NULL은 값이 없는 것이라 둘은 다르게 취급된다. 사장 KING은 `MGR`이 NULL이다.
+
+Oracle의 `DATE`는 날짜와 시각(초 단위)을 함께 담는다. PostgreSQL의 `date`는 날짜만 담고, Oracle `DATE`에 가까운 건 `timestamp(0)`이다. 이 데이터는 입사일에 시각이 없어서 어느 쪽이든 결과가 같다.
+
+## 지급액이 빈칸이 된 이유
+
+처음 쿼리를 다시 돌려 본다.
+
+```sql
+SELECT ename, sal, comm, sal + comm AS total
+FROM emp
+WHERE deptno = 30
+ORDER BY empno;
+```
+
+```text
+ ename  | sal  |  comm  | total
+--------+------+--------+--------
+ ALLEN  | 1600 |    300 |   1900
+ WARD   | 1250 |    500 |   1750
+ MARTIN | 1250 |   1400 |   2650
+ BLAKE  | 2850 | (null) | (null)
+ TURNER | 1500 |      0 |   1500
+ JAMES  |  950 | (null) | (null)
+(6 rows)
+```
+
+NULL은 "0"이 아니라 "모른다"는 표시다. 커미션을 모르니 급여와 더한 값도 모른다. 그래서 `2850 + NULL`은 2850이 아니라 NULL이다. 사칙연산 어디에 NULL이 끼어도 결과는 NULL이다. TURNER는 커미션이 0으로 들어 있어서 1500이 제대로 나왔다. 아래 그림에서 다음을 누르면 한 행씩 계산되는 모습이 나온다.
+
+<AlgoTrace
+  caption="SAL + COMM을 한 행씩 계산하기"
+  memoryLabel="total 결과"
+  cells={["ALLEN", "WARD", "MARTIN", "BLAKE", "TURNER", "JAMES"]}
+  steps={[
+    { memory: [], caption: "30번 부서 여섯 명을 한 행씩 읽으며 sal + comm을 계산한다." },
+    { pointer: 0, found: [0], memory: ["1900"], caption: "ALLEN: 1600 + 300 = 1900." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1900", "1750", "2650"], caption: "WARD 1750, MARTIN 2650. 커미션이 있는 사람은 문제없다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["1900", "1750", "2650", "NULL"], caption: "BLAKE: 2850 + NULL. 모르는 값을 더했으니 결과도 NULL이다. 급여 2850까지 같이 사라진다." },
+    { pointer: 4, found: [0, 1, 2, 4], memory: ["1900", "1750", "2650", "NULL", "1500"], caption: "TURNER: 커미션이 0이다. 0은 값이니 1500 + 0 = 1500." },
+    { pointer: 5, found: [0, 1, 2, 4], memory: ["1900", "1750", "2650", "NULL", "1500", "NULL"], caption: "JAMES도 NULL. 여섯 명 중 둘의 지급액이 빈칸이 됐다." },
+    { pointer: 3, found: [0, 1, 2, 3, 4, 5], memory: ["1900", "1750", "2650", "2850", "1500", "950"], caption: "NVL(comm, 0)으로 NULL을 0으로 바꾼 뒤 더하면 여섯 명 모두 값이 나온다." },
+  ]}
+/>
+
+고치는 방법은 더하기 전에 NULL을 0으로 바꾸는 것이다. Oracle은 `NVL`, 표준 SQL과 PostgreSQL은 `COALESCE`, SQL Server는 `ISNULL`을 쓴다.
+
+```sql
+-- Oracle
+SELECT ename, sal, comm, sal + NVL(comm, 0) AS total
+FROM emp WHERE deptno = 30 ORDER BY empno;
+
+-- PostgreSQL (Oracle에서도 그대로 된다)
+SELECT ename, sal, comm, sal + COALESCE(comm, 0) AS total
+FROM emp WHERE deptno = 30 ORDER BY empno;
+
+-- SQL Server
+SELECT ename, sal, comm, sal + ISNULL(comm, 0) AS total
+FROM emp WHERE deptno = 30 ORDER BY empno;
+```
+
+```text
+ ename  | sal  |  comm  | total
+--------+------+--------+-------
+ ALLEN  | 1600 |    300 |  1900
+ WARD   | 1250 |    500 |  1750
+ MARTIN | 1250 |   1400 |  2650
+ BLAKE  | 2850 | (null) |  2850
+ TURNER | 1500 |      0 |  1500
+ JAMES  |  950 | (null) |   950
+(6 rows)
+```
+
+NULL 함수는 뒤에서 자세히 본다. 그 전에 함수가 어떻게 나뉘는지부터 짚는다.
+
+## 한 행에 하나씩 돌려주는 함수
+
+`NVL(comm, 0)`은 행마다 한 번씩 실행되고, 행마다 결과를 하나씩 돌려준다. 입력이 6행이면 출력도 6행이다. 이런 함수를 단일행 함수라고 한다. `SUM`, `COUNT`, `AVG`처럼 여러 행을 받아 값 하나로 줄이는 함수는 다중행 함수(집계 함수)다.
+
+<ConceptDiagram
+  width={400}
+  height={240}
+  caption="단일행 함수는 행 수를 그대로 두고, 다중행 함수는 여러 행을 하나로 줄인다"
+  nodes={[
+    { id: "rows1", label: "10번 부서 3행", x: 80, y: 60, w: 130 },
+    { id: "single", label: "UPPER(ename)", sub: "단일행 함수", x: 230, y: 60, w: 120 },
+    { id: "out1", label: "3행", x: 350, y: 60, w: 70 },
+    { id: "rows2", label: "10번 부서 3행", x: 80, y: 180, w: 130 },
+    { id: "multi", label: "SUM(sal)", sub: "다중행 함수", x: 230, y: 180, w: 120 },
+    { id: "out2", label: "1행", x: 350, y: 180, w: 70 },
+  ]}
+  edges={[
+    { from: "rows1", to: "single" },
+    { from: "single", to: "out1" },
+    { from: "rows2", to: "multi" },
+    { from: "multi", to: "out2" },
+  ]}
+/>
+
+```sql
+-- 단일행 함수: 3행이 들어가서 3행이 나온다
+SELECT ename, UPPER(ename), LENGTH(ename) FROM emp WHERE deptno = 10 ORDER BY empno;
+
+-- 다중행 함수: 3행이 들어가서 1행이 나온다
+SELECT COUNT(*), SUM(sal) FROM emp WHERE deptno = 10;
+```
+
+```text
+ ename  | upper  | length
+--------+--------+--------
+ CLARK  | CLARK  |      5
+ KING   | KING   |      4
+ MILLER | MILLER |      6
+(3 rows)
+
+ count | sum
+-------+------
+     3 | 8750
+(1 row)
+```
+
+단일행 함수는 `SELECT`, `WHERE`, `ORDER BY` 어디에나 쓸 수 있고, 함수 안에 함수를 넣을 수도 있다(`UPPER(SUBSTR(ename, 1, 3))`). 중첩하면 안쪽부터 계산한다. 인자는 여러 개여도(`SUBSTR(ename, 1, 3)`) 결과는 행마다 하나다. 다중행 함수는 `WHERE`에 쓸 수 없는데, 이건 [집계와 GROUP BY 글](/posts/sqld-group-by-having)에서 실행 순서와 함께 다룬다.
+
+함수 결과만 보고 싶을 때가 있다. `SELECT UPPER('sql')`처럼 테이블이 필요 없는 계산이다. Oracle은 `SELECT`에 반드시 `FROM`이 있어야 해서, 한 행 한 열짜리 가짜 테이블 `DUAL`을 쓴다. 소유자는 SYS이고 모든 사용자가 쓸 수 있다.
+
+```sql
+-- Oracle
+SELECT UPPER('sql') FROM DUAL;
+
+-- PostgreSQL, SQL Server: FROM 없이 된다
+SELECT UPPER('sql');
+```
+
+Oracle도 23ai부터는 `FROM` 없이 쓸 수 있지만, 시험은 `FROM DUAL`을 기준으로 낸다. 이 글의 함수 예제 중 테이블 없는 것은 Oracle이라면 끝에 `FROM DUAL`을 붙인다고 보면 된다.
+
+## 문자를 다듬는 함수
+
+### 대소문자 바꾸기
+
+`LOWER`는 소문자로, `UPPER`는 대문자로, `INITCAP`은 단어마다 첫 글자만 대문자로 바꾼다. 검색할 때 대소문자를 무시하려고 `WHERE UPPER(ename) = 'SMITH'`처럼 많이 쓴다.
+
+```sql
+SELECT LOWER('SQL Expert') AS lo, UPPER('sql expert') AS up, INITCAP('sql expert') AS ini;
+```
+
+```text
+     lo     |     up     |    ini
+------------+------------+------------
+ sql expert | SQL EXPERT | Sql Expert
+(1 row)
+```
+
+SQL Server에는 `INITCAP`이 없다. `LOWER`, `UPPER`만 있다.
+
+### 이어 붙이기
+
+Oracle은 `||` 연산자나 `CONCAT` 함수로 문자열을 잇는다. Oracle의 `CONCAT`은 인자를 딱 두 개만 받는다는 게 자주 나오는 함정이다. 셋 이상이면 `CONCAT(CONCAT(a, b), c)`처럼 감싸거나 `||`를 쓴다.
+
+```sql
+SELECT CONCAT(ename, job) AS c1,
+       ename || ' is a ' || job AS c2
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+      c1       |         c2
+---------------+---------------------
+ CLARKMANAGER  | CLARK is a MANAGER
+ KINGPRESIDENT | KING is a PRESIDENT
+ MILLERCLERK   | MILLER is a CLERK
+(3 rows)
+```
+
+PostgreSQL의 `concat`은 인자를 몇 개든 받는다(`concat('A', 'B', 'C')` → `ABC`). SQL Server는 `+` 연산자로 잇고(`ename + ' is a ' + job`), `CONCAT`은 2012 버전부터 여러 인자를 받는다. NULL을 이을 때의 차이는 NULL 절에서 따로 본다.
+
+### 잘라 내고 위치 찾기
+
+`SUBSTR(문자열, 시작, 길이)`는 시작 위치부터 길이만큼 잘라 낸다. 위치는 1부터 센다. 길이를 빼면 끝까지 가져간다. 시작 위치가 음수면 뒤에서부터 센다. `SUBSTR('CLARK', -3)`은 뒤에서 세 번째 글자부터라서 `ARK`다.
+
+`INSTR(문자열, 찾을 문자열, 시작, 몇 번째)`은 찾는 문자열이 처음 나오는 위치를 돌려준다. 없으면 0이다. 세 번째, 네 번째 인자로 "어디서부터 찾기 시작해서 몇 번째로 나오는 것"을 고를 수 있다. Oracle 문서에도 나오는 예제로 보자. 아래 그림에서 다음을 누르면 `INSTR('CORPORATE FLOOR', 'OR', 3, 2)`가 위치를 찾는 과정이 나온다.
+
+<AlgoTrace
+  caption="INSTR('CORPORATE FLOOR', 'OR', 3, 2)"
+  memoryLabel="찾은 OR의 위치"
+  cells={["C", "O", "R", "P", "O", "R", "A", "T", "E", "␣", "F", "L", "O", "O", "R"]}
+  steps={[
+    { memory: [], caption: "15글자 문자열이다. 그림의 번호는 0부터지만 SQL의 위치는 1부터 센다. 칸 번호에 1을 더해서 읽는다." },
+    { pointer: 1, memory: [], caption: "2번 위치에도 OR이 있다. 그런데 세 번째 인자가 3이라 3번 위치부터 찾는다. 이건 세지 않는다." },
+    { pointer: 4, found: [4, 5], memory: ["5"], caption: "3번부터 훑다가 5번 위치에서 첫 번째 OR을 만난다. 네 번째 인자가 2라서 하나 더 찾아야 한다." },
+    { pointer: 13, found: [4, 5, 13, 14], memory: ["5", "14"], caption: "FLOOR 안의 14번 위치에서 두 번째 OR을 만난다. 결과는 14다." },
+    { pointer: 10, found: [10, 11, 12], memory: ["14"], caption: "SUBSTR('CORPORATE FLOOR', -5, 3)은 뒤에서 다섯 번째인 11번 F부터 세 글자, FLO다." },
+  ]}
+/>
+
+사원 이름에 적용하면 이렇다. PostgreSQL에는 `INSTR`이 없어서 `strpos`(또는 `position('A' IN ename)`)로 돌렸다. 시작 위치나 몇 번째를 지정하는 인자는 없다.
+
+```sql
+-- Oracle
+SELECT ename, SUBSTR(ename, 2, 3) AS s1, SUBSTR(ename, 3) AS s2, SUBSTR(ename, -3) AS s3
+FROM emp WHERE deptno = 10 ORDER BY empno;
+
+SELECT ename, INSTR(ename, 'A') AS pos_a, INSTR(ename, 'L') AS pos_l
+FROM emp WHERE deptno = 30 ORDER BY empno;
+```
+
+```text
+ ename  | s1  |  s2  | s3
+--------+-----+------+-----
+ CLARK  | LAR | ARK  | ARK
+ KING   | ING | NG   | ING
+ MILLER | ILL | LLER | LER
+(3 rows)
+
+ ename  | pos_a | pos_l
+--------+-------+-------
+ ALLEN  |     1 |     2
+ WARD   |     2 |     0
+ MARTIN |     2 |     0
+ BLAKE  |     3 |     2
+ TURNER |     0 |     0
+ JAMES  |     2 |     0
+(6 rows)
+```
+
+`s3` 열은 PostgreSQL에서 `right(ename, 3)`으로 구한 값이다. PostgreSQL의 `substr`에 음수 시작 위치를 주면 뒤에서 세지 않는다. 실제로 `substr('CLARK', -3)`을 돌리면 `CLARK`가 그대로 나온다(0, -1, -2 같은 가상의 위치부터 센다). Oracle에서 옮긴 쿼리가 조용히 다른 값을 내는 대표적인 경우다. SQL Server는 `SUBSTRING(ename, 2, 3)`처럼 길이 인자가 꼭 있어야 하고, 위치 찾기는 `CHARINDEX('A', ename)`이다.
+
+### 길이와 공백
+
+`LENGTH`는 글자 수를 센다. SQL Server는 `LEN`이고, 끝의 공백은 세지 않는다.
+
+```sql
+SELECT ename, LENGTH(ename) FROM emp WHERE LENGTH(ename) >= 6 ORDER BY empno;
+```
+
+```text
+ ename  | length
+--------+--------
+ MARTIN |      6
+ TURNER |      6
+ MILLER |      6
+(3 rows)
+```
+
+`LTRIM`, `RTRIM`은 왼쪽, 오른쪽에서 지정한 문자들을 지운다. 두 번째 인자를 빼면 공백을 지운다. 두 번째 인자는 "문자열"이 아니라 "문자 집합"으로 읽힌다. `LTRIM('xyxSMITH', 'xy')`는 x와 y를 만나는 동안 계속 지워서 `SMITH`가 된다. `TRIM`은 양쪽을 지우는데, Oracle의 `TRIM`은 `TRIM('x' FROM ...)`처럼 한 글자만 지정할 수 있다. 가운데에 있는 문자는 어느 함수도 건드리지 않는다.
+
+```sql
+SELECT LTRIM('xxSMITHxx', 'x') AS l,
+       RTRIM('xxSMITHxx', 'x') AS r,
+       TRIM('x' FROM 'xxSMITHxx') AS t,     -- 기본은 BOTH(양쪽)
+       '[' || TRIM('  SQL  ') || ']' AS t2;  -- 공백 지우기
+
+SELECT LTRIM('0012300', '0') AS a, RTRIM('0012300', '0') AS b, TRIM('0' FROM '0012300') AS c;
+```
+
+```text
+    l    |    r    |   t   |  t2
+---------+---------+-------+-------
+ SMITHxx | xxSMITH | SMITH | [SQL]
+(1 row)
+
+   a   |   b   |  c
+-------+-------+-----
+ 12300 | 00123 | 123
+(1 row)
+```
+
+`TRIM('0' FROM '0012300')`이 `123`이 되는 걸 봐 둔다. 숫자 끝의 0까지 지워 버린다. SQL Server의 `LTRIM`, `RTRIM`은 오래 공백만 지웠고, 지울 문자를 고르는 인자는 2022 버전에서 들어왔다.
+
+### 채우기와 바꾸기
+
+`LPAD(문자열, 전체 길이, 채울 문자)`는 왼쪽을 채워서 전체 길이를 맞춘다. `RPAD`는 오른쪽이다. 채울 문자를 빼면 공백으로 채운다. 전체 길이가 원래보다 짧으면 잘라 낸다는 점이 함정이다.
+
+```sql
+SELECT ename,
+       LPAD(ename, 8, '*') AS lp,
+       RPAD(ename, 8, '-') AS rp,
+       LPAD(sal, 6, '0')   AS lsal,   -- PostgreSQL은 sal::text로 바꿔서 넘긴다
+       LPAD(ename, 3)      AS cut     -- 3글자보다 길면 잘린다
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+ ename  |    lp    |    rp    |  lsal  | cut
+--------+----------+----------+--------+-----
+ CLARK  | ***CLARK | CLARK--- | 002450 | CLA
+ KING   | ****KING | KING---- | 005000 | KIN
+ MILLER | **MILLER | MILLER-- | 001300 | MIL
+(3 rows)
+```
+
+`REPLACE(문자열, 찾을 것, 바꿀 것)`은 찾은 부분을 모두 바꾼다. Oracle은 세 번째 인자를 빼면 찾은 부분을 지운다. PostgreSQL과 SQL Server는 세 번째 인자가 꼭 있어야 해서 `''`을 넘겼다.
+
+```sql
+SELECT job,
+       REPLACE(job, 'MAN', 'PERSON') AS r,
+       REPLACE(job, 'A') AS r2          -- Oracle. PostgreSQL은 REPLACE(job, 'A', '')
+FROM emp WHERE job IN ('SALESMAN', 'MANAGER') GROUP BY job ORDER BY job;
+```
+
+```text
+   job    |      r      |   r2
+----------+-------------+--------
+ MANAGER  | PERSONAGER  | MNGER
+ SALESMAN | SALESPERSON | SLESMN
+(2 rows)
+```
+
+`MANAGER`가 `PERSONAGER`가 됐다. `REPLACE`는 단어를 보지 않고 글자 조각이 맞으면 바꾼다.
+
+## 숫자를 자르고 올리는 함수
+
+`ROUND(n, d)`는 소수점 아래 d자리로 반올림하고, `TRUNC(n, d)`는 d자리 아래를 버린다. d를 빼면 0이다. d가 음수면 소수점 왼쪽으로 간다. -1은 일의 자리, -2는 십의 자리에서 반올림하거나 버린다.
+
+```sql
+SELECT ROUND(1234.5678, 2)  AS r2,   -- 소수 셋째 자리에서 반올림
+       ROUND(1234.5678)     AS r0,
+       ROUND(1234.5678, -1) AS rm1,  -- 일의 자리에서 반올림
+       ROUND(1234.5678, -2) AS rm2,  -- 십의 자리에서 반올림
+       ROUND(1250, -2)      AS r1250,
+       ROUND(1249, -2)      AS r1249;
+
+SELECT TRUNC(1234.5678, 2) AS t2, TRUNC(1234.5678) AS t0, TRUNC(1234.5678, -2) AS tm2,
+       TRUNC(-1.5) AS tneg, ROUND(-1.5) AS rneg;
+```
+
+```text
+   r2    |  r0  | rm1  | rm2  | r1250 | r1249
+---------+------+------+------+-------+-------
+ 1234.57 | 1235 | 1230 | 1200 |  1300 |  1200
+(1 row)
+
+   t2    |  t0  | tm2  | tneg | rneg
+---------+------+------+------+------
+ 1234.56 | 1234 | 1200 |   -1 |   -2
+(1 row)
+```
+
+`ROUND(1234.5678, -2)`가 헷갈리면 "-2는 백의 자리까지 남긴다"로 읽으면 된다. 십의 자리 3을 보고 버려서 1200이다. `ROUND(1250, -2)`는 십의 자리가 5라 올려서 1300이다. 음수의 반올림은 0에서 먼 쪽으로 간다. `ROUND(-1.5)`는 -2, `TRUNC(-1.5)`는 그냥 소수를 버려서 -1이다.
+
+`CEIL`은 그 수보다 크거나 같은 가장 작은 정수, `FLOOR`는 작거나 같은 가장 큰 정수다. 양수에서는 올림, 버림처럼 보이지만 음수에서 차이가 난다. `FLOOR(-3.1)`은 -3이 아니라 -4다. `TRUNC`는 0 쪽으로 버리고 `FLOOR`는 아래쪽으로 내린다.
+
+```sql
+SELECT CEIL(3.1) AS c1, CEIL(-3.1) AS c2, FLOOR(3.9) AS f1, FLOOR(-3.1) AS f2;
+
+SELECT MOD(17, 5) AS m1, MOD(-17, 5) AS m2, MOD(17, -5) AS m3,
+       ABS(-17) AS a, SIGN(-17) AS s1, SIGN(0) AS s0, SIGN(3.5) AS s2;
+```
+
+```text
+ c1 | c2 | f1 | f2
+----+----+----+----
+  4 | -3 |  3 | -4
+(1 row)
+
+ m1 | m2 | m3 | a  | s1 | s0 | s2
+----+----+----+----+----+----+----
+  2 | -2 |  2 | 17 | -1 |  0 |  1
+(1 row)
+```
+
+`MOD`는 나머지다. 결과의 부호는 나눠지는 수(첫 번째 인자)를 따른다. `MOD(-17, 5)`는 -2다. Oracle은 `MOD(17, 0)`이 17을 돌려주지만 PostgreSQL은 0으로 나눴다는 에러를 낸다. `ABS`는 절댓값, `SIGN`은 양수면 1, 0이면 0, 음수면 -1이다. SQL Server는 `CEIL` 대신 `CEILING`, `MOD` 대신 `%` 연산자를 쓴다.
+
+사원 급여를 12로 나눠 월급을 구해 보면 함수마다 차이가 보인다.
+
+```sql
+SELECT ename, sal,
+       ROUND(sal / 12, 1) AS monthly,  -- 소수 첫째 자리까지
+       TRUNC(sal / 12)    AS mt,       -- 원 단위 버림
+       CEIL(sal / 12)     AS mc,       -- 원 단위 올림
+       ROUND(sal, -3)     AS r3        -- 천 단위 반올림
+FROM emp WHERE deptno = 20 ORDER BY empno;
+```
+
+```text
+ ename | sal  | monthly | mt  | mc  |  r3
+-------+------+---------+-----+-----+------
+ SMITH |  800 |    66.7 |  66 |  67 | 1000
+ JONES | 2975 |   247.9 | 247 | 248 | 3000
+ SCOTT | 3000 |   250.0 | 250 | 250 | 3000
+ ADAMS | 1100 |    91.7 |  91 |  92 | 1000
+ FORD  | 3000 |   250.0 | 250 | 250 | 3000
+(5 rows)
+```
+
+PostgreSQL은 `ROUND(250, 1)`을 `250.0`으로 보여 주고, Oracle은 같은 값을 `250`으로 보여 준다. 값은 같고 표시만 다르다.
+
+아래 칸에서 Oracle의 `ROUND(n, d)`를 직접 만들어 볼 수 있다. 음수 자릿수와 음수의 반올림이 모두 맞아야 통과한다.
+
+<CodePlayground
+  caption="Oracle ROUND(n, d) 만들기"
+  functionName="oracleRound"
+  initialCode={`function oracleRound(n, d = 0) {
+  // d가 2면 소수 둘째 자리까지, -2면 백의 자리까지 남긴다
+  // 반올림은 0에서 먼 쪽으로: ROUND(-1.5) = -2
+  return n;
+}`}
+  solution={`function oracleRound(n, d = 0) {
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  if (d >= 0) {
+    // 부동소수 오차를 줄이려고 지수 표기로 자릿수를 옮긴다
+    return sign * Number(Math.round(Number(abs + "e" + d)) + "e-" + d);
+  }
+  const f = 10 ** -d; // d = -2 → 100으로 나눈다
+  return sign * Math.round(abs / f) * f;
+}`}
+  tests={[
+    { label: "ROUND(1234.5678, 2)", args: [1234.5678, 2], expected: 1234.57 },
+    { label: "ROUND(1234.5678)", args: [1234.5678], expected: 1235 },
+    { label: "ROUND(1234.5678, -2)", args: [1234.5678, -2], expected: 1200 },
+    { label: "ROUND(1250, -2)", args: [1250, -2], expected: 1300 },
+    { label: "ROUND(-1.5)", args: [-1.5], expected: -2 },
+    { label: "ROUND(2975 / 12, 1)", args: [2975 / 12, 1], expected: 247.9 },
+    { label: "ROUND(1.005, 2)", args: [1.005, 2], expected: 1.01 },
+  ]}
+/>
+
+마지막 테스트가 까다롭다. 자바스크립트에서 `1.005 * 100`은 `100.49999999999999`라 그냥 곱해서 반올림하면 1이 나온다. Oracle의 `NUMBER`는 십진수로 저장해서 이런 오차가 없다. 돈 계산을 DB에서 `NUMBER`(PostgreSQL은 `numeric`)로 하는 이유가 이것이다.
+
+## 날짜는 숫자처럼 더하고 뺀다
+
+Oracle은 날짜에 숫자를 더하면 그만큼의 일(day)을 더한다. 날짜에서 날짜를 빼면 두 날짜 사이의 일수가 숫자로 나온다. `SYSDATE`는 지금 날짜와 시각이다. 이 글에서는 결과가 매일 바뀌지 않게 `SYSDATE` 대신 `DATE '2026-10-17'`을 오늘로 썼다.
+
+```sql
+SELECT ename, hiredate,
+       hiredate + 30                 AS plus30,  -- 30일 뒤
+       DATE '2026-10-17' - hiredate  AS days     -- 입사 후 지난 일수
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+ ename  |  hiredate  |   plus30   | days
+--------+------------+------------+-------
+ CLARK  | 1981-06-09 | 1981-07-09 | 16566
+ KING   | 1981-11-17 | 1981-12-17 | 16405
+ MILLER | 1982-01-23 | 1982-02-22 | 16338
+(3 rows)
+```
+
+Oracle의 `DATE`에는 시각이 있어서 1시간은 `1/24`, 1분은 `1/1440`로 더한다. `SYSDATE - hiredate`는 시각까지 계산해서 `16566.5868...` 같은 소수가 나온다. 그래서 `TRUNC(SYSDATE)`로 시각을 자정으로 버리고 쓰는 경우가 많다. PostgreSQL은 `date + 정수`, `date - date`가 Oracle과 같게 동작하고, 시각은 `timestamp + interval '1 hour'`처럼 `interval`로 더한다. SQL Server는 `GETDATE()`, `DATEADD(day, 30, hiredate)`, `DATEDIFF(day, hiredate, GETDATE())`를 쓴다.
+
+### 달 단위 계산
+
+달은 길이가 28일부터 31일까지 달라서 숫자로 더할 수 없다. `ADD_MONTHS(날짜, n)`은 n달 뒤를, `MONTHS_BETWEEN(날짜1, 날짜2)`는 두 날짜 사이가 몇 달인지를 돌려준다. `MONTHS_BETWEEN`은 앞 날짜에서 뒤 날짜를 뺀다. 순서를 바꾸면 음수가 나온다.
+
+```sql
+-- Oracle
+SELECT ename, hiredate,
+       ADD_MONTHS(hiredate, 6)                           AS add6,
+       TRUNC(MONTHS_BETWEEN(DATE '2026-10-17', hiredate)) AS months
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+ ename  |  hiredate  |    add6    | months
+--------+------------+------------+--------
+ CLARK  | 1981-06-09 | 1981-12-09 |    544
+ KING   | 1981-11-17 | 1982-05-17 |    539
+ MILLER | 1982-01-23 | 1982-07-23 |    536
+(3 rows)
+```
+
+PostgreSQL에는 두 함수가 없다. `add6`은 `hiredate + interval '6 months'`로 구했다. `months`는 Oracle 문서에 적힌 계산 방식대로 식을 세워 구했다. 날짜(일)가 같으면 정수 개월이고, 다르면 일 차이를 31로 나눈 소수가 붙는다. KING은 입사일이 17일이라 딱 539개월이다. CLARK은 `544 + (17 - 9) / 31` = 544.258...이고, `TRUNC`로 소수를 버렸다.
+
+`ADD_MONTHS`에는 말일 규칙이 있다. 1월 31일에 한 달을 더하면 2월 31일이 없으니 2월 말일(1981-02-28)이 된다. 여기까지는 PostgreSQL도 같다. 그런데 Oracle은 입력이 그달의 말일이면 결과도 말일로 맞춘다. `ADD_MONTHS(DATE '2024-02-29', 1)`은 2024-03-31이다. PostgreSQL의 `date '2024-02-29' + interval '1 month'`는 2024-03-29다. 월말 정산 쿼리를 옮길 때 조심할 부분이다.
+
+`EXTRACT(YEAR FROM hiredate)`는 날짜에서 연, 월, 일을 숫자로 꺼낸다. Oracle의 `DATE`에서는 `YEAR`, `MONTH`, `DAY`만 꺼낼 수 있고, 시, 분, 초는 `TIMESTAMP`여야 한다. 이 밖에 `LAST_DAY(날짜)`(그달 말일), `NEXT_DAY(날짜, '금요일')`(다음 금요일)도 있다.
+
+```sql
+SELECT ename, EXTRACT(YEAR FROM hiredate) AS y, EXTRACT(MONTH FROM hiredate) AS m,
+       EXTRACT(DAY FROM hiredate) AS d
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+ ename  |  y   | m  | d
+--------+------+----+----
+ CLARK  | 1981 |  6 |  9
+ KING   | 1981 | 11 | 17
+ MILLER | 1982 |  1 | 23
+(3 rows)
+```
+
+### 시각 때문에 사라지는 행
+
+날짜 비교에서 가장 흔한 실수가 있다. Oracle에 `SYSDATE`로 넣은 행에는 시각이 붙어 있다. 그런데 `WHERE created = DATE '2026-10-17'`로 찾으면 자정(00:00:00)과 정확히 같은 행만 나온다. 행 세 개(10월 17일 00:00:00, 10월 17일 14:05:09, 10월 16일 23:59:59)로 실험하면 이렇다.
+
+```sql
+SELECT COUNT(*) FROM t WHERE created = DATE '2026-10-17';                                -- 1
+SELECT COUNT(*) FROM t WHERE TRUNC(created) = DATE '2026-10-17';                         -- 2
+SELECT COUNT(*) FROM t WHERE created >= DATE '2026-10-17' AND created < DATE '2026-10-18'; -- 2
+```
+
+PostgreSQL에서는 `TRUNC(created)` 자리에 `date_trunc('day', created)`를 써서 같은 값(1, 2, 2)이 나왔다. 두 번째와 세 번째는 결과가 같지만, 컬럼에 인덱스가 있으면 세 번째가 낫다. 이유는 형 변환 절에서 본다.
+
+## TO_CHAR 형식 문자열 읽기
+
+날짜를 원하는 모양의 문자로 바꿀 때는 `TO_CHAR(날짜, '형식')`을 쓴다. 반대로 문자를 날짜로 읽을 때는 `TO_DATE(문자, '형식')`이다. 형식 문자열은 조각마다 뜻이 정해져 있다. 아래 조각을 눌러 보면 각각 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="TO_CHAR 형식 문자열을 조각으로 읽기"
+  base="TO_CHAR(d, '"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "YYYY",
+      title: "YYYY: 네 자리 연도",
+      description: "2026처럼 연도를 네 자리로 쓴다. YY는 끝 두 자리(26)다. Oracle에는 RR도 있는데, 두 자리 연도를 읽을 때 50을 기준으로 앞 세기와 뒤 세기를 나눈다.",
+      code: "d = 2026-10-17 14:05:09\nYYYY → 2026",
+    },
+    {
+      key: "-MM",
+      display: "-MM",
+      title: "MM: 두 자리 월",
+      description: "01~12. 문자 -는 그대로 찍힌다. MON은 영어 약자(OCT), MONTH는 전체 이름이다. 언어 설정(NLS_DATE_LANGUAGE)이 한국어면 10월로 나온다.",
+      code: "MM  → 10\nMON → OCT",
+    },
+    {
+      key: "-DD",
+      display: "-DD",
+      title: "DD: 두 자리 일",
+      description: "01~31. DY는 요일 약자(SAT), DAY는 요일 전체 이름, D는 요일 번호, Q는 분기다.",
+      code: "DD → 17\nDY → SAT",
+    },
+    {
+      key: " HH24",
+      display: " HH24",
+      title: "HH24: 0~23시",
+      description: "24시간제 시각이다. HH나 HH12는 12시간제라서 오후 2시가 02로 나온다. 오전, 오후는 AM이나 PM을 붙여야 구분된다.",
+      code: "HH24 → 14\nHH12 → 02",
+    },
+    {
+      key: ":MI",
+      display: ":MI",
+      title: "MI: 분 (MM이 아니다)",
+      description: "분은 MI다. 월이 MM을 먼저 차지했기 때문이다. HH:MM:SS로 쓰면 에러 없이 월이 분 자리에 들어간다. 시험에 자주 나오는 함정이다.",
+      code: "HH24:MI:SS → 14:05:09\nHH:MM:SS   → 02:10:09  ← 10은 월",
+    },
+    {
+      key: ":SS'",
+      display: ":SS')",
+      title: "SS: 초",
+      description: "00~59. 형식 안에 글자를 그대로 넣고 싶으면 큰따옴표로 감싼다. 'YYYY\"년\"'처럼 쓴다.",
+      code: "SS → 09",
+    },
+  ]}
+/>
+
+```sql
+SELECT ename,
+       TO_CHAR(hiredate, 'YYYY-MM-DD')             AS a,
+       TO_CHAR(hiredate, 'YYYY"년" MM"월" DD"일"') AS b,
+       TO_CHAR(hiredate, 'DY')                     AS c,
+       TO_CHAR(hiredate, 'MON')                    AS d,
+       TO_CHAR(hiredate, 'Q')                      AS q
+FROM emp WHERE deptno = 10 ORDER BY empno;
+
+SELECT TO_CHAR(TIMESTAMP '2026-10-17 14:05:09', 'YYYY-MM-DD HH24:MI:SS') AS ok,
+       TO_CHAR(TIMESTAMP '2026-10-17 14:05:09', 'YYYY-MM-DD HH:MM:SS')   AS wrong,
+       TO_CHAR(TIMESTAMP '2026-10-17 14:05:09', 'HH12:MI AM')            AS h12;
+```
+
+```text
+ ename  |     a      |        b         |  c  |  d  | q
+--------+------------+------------------+-----+-----+---
+ CLARK  | 1981-06-09 | 1981년 06월 09일 | TUE | JUN | 2
+ KING   | 1981-11-17 | 1981년 11월 17일 | TUE | NOV | 4
+ MILLER | 1982-01-23 | 1982년 01월 23일 | SAT | JAN | 1
+(3 rows)
+
+         ok          |        wrong        |   h12
+---------------------+---------------------+----------
+ 2026-10-17 14:05:09 | 2026-10-17 02:10:09 | 02:05 PM
+(1 row)
+```
+
+`wrong` 열을 보면 분 자리에 월(10)이 들어갔다. 에러가 나지 않아서 더 위험하다. 요일(`DY`)과 월 이름(`MON`)은 영어 언어 설정 기준이다.
+
+숫자에도 형식이 있다. `9`는 숫자 한 자리, `0`은 빈자리를 0으로 채우는 자리, `,`는 천 단위 구분자다. 형식만 주면 부호 자리로 앞에 공백이 하나 붙는데, `FM`을 앞에 붙이면 공백을 뗀다.
+
+```sql
+SELECT TO_DATE('19811203', 'YYYYMMDD') AS d,
+       TO_NUMBER('1,250', '9,999')     AS n,
+       TO_CHAR(1250, '9,999')          AS c1,   -- 앞에 공백 한 칸
+       TO_CHAR(1250, 'FM9,999')        AS c2;
+```
+
+```text
+     d      |  n   |   c1   |  c2
+------------+------+--------+-------
+ 1981-12-03 | 1250 |  1,250 | 1,250
+(1 row)
+```
+
+SQL Server는 `TO_CHAR` 대신 `CONVERT(VARCHAR, hiredate, 23)`처럼 스타일 번호를 쓰거나 `FORMAT(hiredate, 'yyyy-MM-dd')`를 쓴다. `FORMAT`의 형식은 .NET 규칙이라 월이 대문자 `MM`, 분이 소문자 `mm`이다.
+
+## 형 변환은 직접 적는다
+
+`TO_CHAR`, `TO_DATE`, `TO_NUMBER`, `CAST`처럼 함수로 타입을 바꾸는 것이 명시적 형 변환이다. 함수를 안 써도 DB가 알아서 타입을 맞춰 주는 경우가 있는데, 이것이 암시적 형 변환이다. Oracle에서 `WHERE empno = '7369'`는 문자 `'7369'`를 숫자로 바꿔서 비교하니 문제없이 돈다.
+
+문제는 반대 방향이다. Oracle은 문자와 숫자를 비교하면 문자 쪽을 숫자로 바꾼다. 문자가 상수면 상관없지만, 문자가 컬럼이면 컬럼 전체에 `TO_NUMBER`가 씌워진다. 인덱스는 컬럼에 저장된 원래 값으로 정렬돼 있어서, 함수를 거친 값으로는 인덱스를 찾을 수 없다. 사번 코드를 `'007369'` 같은 문자열 컬럼에 담은 테이블을 생각해 보자. 아래 그림에서 다음을 누르면 Oracle이 이 쿼리를 어떻게 처리하는지 나온다.
+
+<SequenceDiagram
+  caption="문자 컬럼을 숫자와 비교하면 인덱스를 못 쓴다"
+  actors={[
+    { id: "app", label: "SQL" },
+    { id: "opt", label: "옵티마이저" },
+    { id: "tbl", label: "인덱스·테이블" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "opt",
+      label: "emp_code = 7369",
+      title: "문자 컬럼을 숫자와 비교한다",
+      detail: "emp_code는 VARCHAR2이고 '007369'처럼 저장돼 있다. 비교 대상 7369는 숫자다.",
+    },
+    {
+      from: "opt",
+      to: "opt",
+      label: "TO_NUMBER 씌움",
+      title: "Oracle은 문자 쪽을 숫자로 바꾼다",
+      detail: "조건이 TO_NUMBER(emp_code) = 7369로 바뀐다. 사용자는 함수를 쓴 적이 없는데 컬럼에 함수가 씌워졌다.",
+      payload: "WHERE TO_NUMBER(emp_code) = 7369",
+    },
+    {
+      from: "opt",
+      to: "tbl",
+      label: "전체 스캔",
+      title: "인덱스를 건너뛴다",
+      detail: "emp_code 인덱스는 '000001', '000002' 같은 문자열 순으로 정렬돼 있다. TO_NUMBER를 거친 값으로는 그 순서를 따라갈 수 없어서 모든 행을 읽으며 하나씩 바꿔 비교한다.",
+    },
+    {
+      from: "tbl",
+      to: "app",
+      label: "느림 또는 에러",
+      title: "숫자가 아닌 값이 하나라도 있으면",
+      detail: "'A00001' 같은 행을 만나면 TO_NUMBER가 실패해서 ORA-01722(invalid number) 에러로 쿼리가 멈춘다.",
+    },
+    {
+      from: "app",
+      to: "tbl",
+      label: "emp_code = '007369'",
+      title: "타입을 맞춰서 비교한다",
+      detail: "상수를 문자로 쓰면 변환이 필요 없다. 인덱스로 바로 찾는다.",
+    },
+  ]}
+/>
+
+PostgreSQL은 이 상황에서 아예 변환해 주지 않고 에러를 낸다. 20만 행짜리 테이블에 실험했다.
+
+```sql
+CREATE TABLE emp_big AS
+SELECT i AS empno,
+       lpad(i::text, 6, '0')::varchar(6) AS emp_code,   -- '000001' ~ '200000'
+       date '1980-01-01' + (i % 15000) AS hiredate
+FROM generate_series(1, 200000) AS i;
+CREATE INDEX emp_big_code_idx ON emp_big (emp_code);
+CREATE INDEX emp_big_hire_idx ON emp_big (hiredate);
+VACUUM ANALYZE emp_big;
+
+SELECT * FROM emp_big WHERE emp_code = 7369;
+```
+
+```text
+ERROR:  operator does not exist: character varying = integer
+LINE 1: SELECT * FROM emp_big WHERE emp_code = 7369;
+                                             ^
+HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+```
+
+Oracle이 몰래 하던 일을 직접 적으면(`emp_code::integer = 7369`) 실행 계획으로 차이를 볼 수 있다.
+
+```sql
+-- Oracle의 TO_NUMBER(emp_code) = 7369와 같은 모양
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM emp_big WHERE emp_code::integer = 7369;
+```
+
+```text
+                                                      QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..4240.82 rows=1000 width=15) (actual time=0.800..12.190 rows=1 loops=1)
+   Workers Planned: 1
+   Workers Launched: 1
+   Buffers: shared hit=1082
+   ->  Parallel Seq Scan on emp_big  (cost=0.00..3140.82 rows=588 width=15) (actual time=3.541..7.979 rows=0 loops=2)
+         Filter: ((emp_code)::integer = 7369)
+         Rows Removed by Filter: 100000
+         Buffers: shared hit=1082
+ Planning:
+   Buffers: shared hit=86
+ Planning Time: 0.386 ms
+ Execution Time: 12.277 ms
+(12 rows)
+```
+
+```sql
+-- 타입을 맞춘 비교
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM emp_big WHERE emp_code = '007369';
+```
+
+```text
+                                                        QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------
+ Index Scan using emp_big_code_idx on emp_big  (cost=0.42..8.44 rows=1 width=15) (actual time=0.022..0.023 rows=1 loops=1)
+   Index Cond: ((emp_code)::text = '007369'::text)
+   Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=12
+ Planning Time: 0.133 ms
+ Execution Time: 0.033 ms
+(7 rows)
+```
+
+첫 번째 계획에서 볼 줄은 `Parallel Seq Scan`과 `Filter`, `Rows Removed by Filter: 100000`이다. 조건이 `Filter`에 들어갔다는 건 행을 다 읽고 나서 하나씩 검사했다는 뜻이다. 두 워커가 10만 행씩 버려서 1행을 남겼고, 테이블 전체인 1,082페이지를 읽었다. 두 번째는 `Index Scan`과 `Index Cond`가 나오고 4페이지를 읽었다. 시간은 12ms에서 0.03ms가 됐다. 행이 2천만 개라면 이 차이가 100배 더 커진다.
+
+날짜도 같다. 앞에서 본 `TRUNC(created) = DATE '...'`나 `TO_CHAR(hiredate, 'YYYYMMDD') = '19811203'`도 컬럼에 함수를 씌운 모양이다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM emp_big WHERE TO_CHAR(hiredate, 'YYYYMMDD') = '19811203';
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM emp_big WHERE hiredate = DATE '1981-12-03';
+```
+
+```text
+-- TO_CHAR로 컬럼을 바꾼 경우
+               ->  Parallel Seq Scan on emp_big  (cost=0.00..3146.82 rows=588 width=0) (actual time=0.717..31.537 rows=7 loops=2)
+                     Filter: (to_char((hiredate)::timestamp with time zone, 'YYYYMMDD'::text) = '19811203'::text)
+                     Rows Removed by Filter: 99993
+                     Buffers: shared hit=1088
+ Execution Time: 35.911 ms
+
+-- 컬럼은 그대로 두고 상수를 날짜로 쓴 경우
+   ->  Index Only Scan using emp_big_hire_idx on emp_big  (cost=0.29..8.52 rows=13 width=0) (actual time=0.025..0.026 rows=14 loops=1)
+         Index Cond: (hiredate = '1981-12-03'::date)
+         Heap Fetches: 0
+         Buffers: shared hit=1 read=2
+ Execution Time: 0.044 ms
+```
+
+규칙은 하나다. 컬럼은 그대로 두고 상수 쪽을 컬럼 타입에 맞춘다. 시각이 있는 컬럼이면 `TRUNC` 대신 `>= 오늘 AND < 내일` 범위로 쓴다. 정말로 함수를 씌운 값으로 찾아야 한다면 Oracle과 PostgreSQL 모두 함수 기반 인덱스(`CREATE INDEX ... ON emp (UPPER(ename))`)를 만들 수 있다. 실행 계획을 읽는 방법은 [인덱스 글](/posts/db-index)에 자세히 있다.
+
+SQL Server는 타입 우선순위 표를 따라 낮은 쪽을 높은 쪽으로 바꾼다. `int`가 `varchar`보다 높아서 `varchar` 컬럼과 숫자를 비교하면 역시 컬럼 쪽이 바뀌고, 인덱스를 제대로 못 쓴다.
+
+## NULL은 값이 아니라 빈칸이다
+
+처음 장면으로 돌아간다. NULL에는 규칙이 몇 개 있고, 시험은 이 규칙을 그대로 묻는다.
+
+첫째, NULL이 낀 산술 연산은 NULL이다. 연봉을 `sal * 12 + comm`으로 구하면 커미션이 NULL인 BLAKE와 JAMES는 연봉이 NULL이다.
+
+```sql
+SELECT ename, comm, sal * 12 + comm AS annual, sal * 12 + NVL(comm, 0) AS annual2
+FROM emp WHERE deptno = 30 ORDER BY empno;
+```
+
+```text
+ ename  |  comm  | annual | annual2
+--------+--------+--------+---------
+ ALLEN  |    300 |  19500 |   19500
+ WARD   |    500 |  15500 |   15500
+ MARTIN |   1400 |  16400 |   16400
+ BLAKE  | (null) | (null) |   34200
+ TURNER |      0 |  18000 |   18000
+ JAMES  | (null) | (null) |   11400
+(6 rows)
+```
+
+둘째, NULL과 비교하면 참도 거짓도 아닌 "알 수 없음"(UNKNOWN)이 된다. `WHERE`는 참인 행만 남기니 UNKNOWN인 행은 빠진다. 그래서 `comm = NULL`은 한 행도 못 찾는다. NULL은 `IS NULL`, `IS NOT NULL`로만 찾는다.
+
+```sql
+SELECT COUNT(*) FROM emp WHERE comm = NULL;           -- 0
+SELECT COUNT(*) FROM emp WHERE comm IS NULL;          -- 10
+SELECT COUNT(*) FROM emp WHERE comm IS NOT NULL;      -- 4
+SELECT COUNT(*) FROM emp WHERE comm <> 0;             -- 3 (300, 500, 1400)
+SELECT COUNT(*) FROM emp WHERE comm > 0 OR comm <= 0; -- 4
+SELECT COUNT(*) FROM emp WHERE deptno IN (10, NULL);     -- 3
+SELECT COUNT(*) FROM emp WHERE deptno NOT IN (10, NULL); -- 0
+```
+
+`comm <> 0`이 3인 걸 봐 둔다. "커미션이 0이 아닌 사람"을 찾았는데 NULL인 10명은 빠졌다. `comm > 0 OR comm <= 0`처럼 모든 경우를 덮는 것 같은 조건도 NULL은 못 잡는다. 마지막 줄이 가장 무섭다. `NOT IN (10, NULL)`은 `deptno <> 10 AND deptno <> NULL`이고, 뒤쪽이 늘 UNKNOWN이라 전체가 참이 될 수 없다. 결과는 0행이다. `IN (10, NULL)`은 `OR`로 풀려서 10번 부서 3행이 나온다.
+
+셋째, Oracle에서 빈 문자열 `''`은 NULL이다. Oracle은 길이가 0인 문자열을 따로 두지 않는다. 그래서 `WHERE ename = ''`는 `ename = NULL`과 같아서 한 행도 안 나오고, `LENGTH('')`는 0이 아니라 NULL이다. PostgreSQL과 SQL Server에서 `''`은 NULL이 아닌 빈 문자열이고 길이는 0이다.
+
+넷째, 문자열 이어 붙이기는 DB마다 다르다. Oracle의 `||`는 NULL을 빈 문자열처럼 보고 무시한다. `'A' || NULL`이 `'A'`다. PostgreSQL의 `||`는 표준대로 NULL을 돌려준다. PostgreSQL에서 NULL을 무시하고 이으려면 `concat`을 쓴다.
+
+```sql
+-- PostgreSQL 16
+SELECT NULL + 1 AS a, NULL || 'x' AS b, concat(NULL, 'x') AS c, length('') AS d, '' IS NULL AS e;
+```
+
+```text
+   a    |   b    | c | d | e
+--------+--------+---+---+---
+ (null) | (null) | x | 0 | f
+(1 row)
+```
+
+같은 쿼리를 Oracle에서 돌리면 `b`는 `x`, `d`는 NULL, `e`는 참이 된다. Oracle에서 쓰던 `ename || ' (' || comm || ')'` 같은 식을 PostgreSQL로 옮기면 커미션이 없는 행이 통째로 NULL이 된다.
+
+## NULL을 다른 값으로 바꾸는 함수
+
+NULL 함수는 다섯 개만 알면 된다. 모두 PostgreSQL에서 같은 뜻의 식으로 돌린 결과다.
+
+`NVL(a, b)`는 a가 NULL이면 b, 아니면 a다. 두 인자의 타입이 맞아야 한다. `NVL(comm, '없음')`은 숫자 컬럼에 문자를 넣으려 해서 에러가 난다.
+
+`NVL2(a, b, c)`는 a가 NULL이 아니면 b, NULL이면 c다. 이름은 비슷하지만 하는 일이 다르다. NULL이 "아닐 때"가 먼저 온다는 순서를 자주 묻는다.
+
+`NULLIF(a, b)`는 a와 b가 같으면 NULL, 다르면 a다. 0으로 나누기를 피할 때 `sal / NULLIF(comm, 0)`처럼 쓴다. 0을 NULL로 바꾸면 에러 대신 NULL이 나온다.
+
+```sql
+-- Oracle
+SELECT ename, comm,
+       NVL(comm, 0)                 AS nvl_comm,
+       NVL2(comm, sal + comm, sal)  AS nvl2_total,  -- comm이 있으면 sal+comm, 없으면 sal
+       NULLIF(comm, 0)              AS nullif_comm  -- 0이면 NULL로
+FROM emp WHERE deptno = 30 ORDER BY empno;
+```
+
+```text
+ ename  |  comm  | nvl_comm | nvl2_total | nullif_comm
+--------+--------+----------+------------+-------------
+ ALLEN  |    300 |      300 |       1900 |         300
+ WARD   |    500 |      500 |       1750 |         500
+ MARTIN |   1400 |     1400 |       2650 |        1400
+ BLAKE  | (null) |        0 |       2850 |      (null)
+ TURNER |      0 |        0 |       1500 |      (null)
+ JAMES  | (null) |        0 |        950 |      (null)
+(6 rows)
+```
+
+TURNER의 `nullif_comm`이 NULL이 된 걸 본다. 커미션 0이 `NULLIF`를 지나며 NULL로 바뀌었다.
+
+`COALESCE(a, b, c, ...)`는 인자를 왼쪽부터 보다가 처음 나오는 NULL 아닌 값을 돌려준다. 모두 NULL이면 NULL이다. 인자가 두 개면 `NVL`과 같다. 표준 SQL이라 Oracle, PostgreSQL, SQL Server에서 다 된다.
+
+```sql
+SELECT ename, comm, mgr, COALESCE(comm, mgr, 0) AS c
+FROM emp WHERE empno IN (7369, 7499, 7839) ORDER BY empno;
+```
+
+```text
+ ename |  comm  |  mgr   |  c
+-------+--------+--------+------
+ SMITH | (null) |   7902 | 7902
+ ALLEN |    300 |   7698 |  300
+ KING  | (null) | (null) |    0
+(3 rows)
+```
+
+SMITH는 커미션이 없어서 다음 인자인 상사 번호 7902가 나왔다. KING은 둘 다 없어서 0이다. 뜻은 없는 예제지만 "처음으로 값이 있는 것"이라는 동작을 보기엔 좋다.
+
+SQL Server의 `ISNULL(a, b)`는 `NVL`과 같다. 결과 타입은 첫 번째 인자를 따르니, 첫 인자가 `VARCHAR(2)`면 두 번째 값이 길어도 잘린다. 같은 이름의 `ISNULL`이 MySQL에서는 인자 하나를 받아 NULL인지(1, 0)를 돌려주는 전혀 다른 함수라는 것도 알아 둔다.
+
+아래 칸에서 `COALESCE`를 직접 만들어 볼 수 있다. 자바스크립트의 `null`을 SQL의 NULL로 본다.
+
+<CodePlayground
+  caption="COALESCE 만들기"
+  functionName="coalesce"
+  initialCode={`function coalesce(...values) {
+  // 왼쪽부터 보다가 처음 나오는 null이 아닌 값을 돌려준다
+  // 모두 null이면 null
+  return null;
+}`}
+  solution={`function coalesce(...values) {
+  for (const v of values) {
+    // || 를 쓰면 0도 건너뛴다. TURNER의 커미션 0은 값이다
+    if (v !== null) return v;
+  }
+  return null;
+}`}
+  tests={[
+    { label: "COALESCE(300, 0)", args: [300, 0], expected: 300 },
+    { label: "COALESCE(NULL, 0)", args: [null, 0], expected: 0 },
+    { label: "COALESCE(NULL, 7902, 0)", args: [null, 7902, 0], expected: 7902 },
+    { label: "COALESCE(0, 999)", args: [0, 999], expected: 0 },
+    { label: "COALESCE(NULL, NULL)", args: [null, null], expected: null },
+  ]}
+/>
+
+`return values.find(Boolean) ?? null` 같은 짧은 답은 네 번째 테스트에서 걸린다. 0을 "없음"으로 보면 안 된다. SQL에서도 NULL과 0은 다르다.
+
+## 조건에 따라 값을 고르는 CASE와 DECODE
+
+`CASE`는 SQL 안의 if문이다. 두 가지 모양이 있다. 단순 CASE는 `CASE 컬럼 WHEN 값 THEN ...`처럼 한 컬럼을 여러 값과 같은지 비교한다. 검색 CASE는 `CASE WHEN 조건 THEN ...`처럼 WHEN마다 아무 조건이나 쓴다. 범위 비교(`>=`)는 검색 CASE로만 된다.
+
+```sql
+-- 단순 CASE: deptno가 10이면, 20이면
+SELECT ename, deptno,
+       CASE deptno WHEN 10 THEN 'ACCOUNTING'
+                   WHEN 20 THEN 'RESEARCH'
+                   ELSE 'ETC' END AS simple_case
+FROM emp WHERE empno IN (7369, 7499, 7782) ORDER BY empno;
+```
+
+```text
+ ename | deptno | simple_case
+-------+--------+-------------
+ SMITH |     20 | RESEARCH
+ ALLEN |     30 | ETC
+ CLARK |     10 | ACCOUNTING
+(3 rows)
+```
+
+```sql
+-- 검색 CASE: 위에서부터 처음 참인 WHEN 하나만 고른다
+SELECT ename, sal,
+       CASE WHEN sal >= 3000 THEN 'HIGH'
+            WHEN sal >= 1500 THEN 'MID'
+            ELSE 'LOW' END AS band
+FROM emp ORDER BY sal DESC, empno;
+```
+
+```text
+ ename  | sal  | band
+--------+------+------
+ KING   | 5000 | HIGH
+ SCOTT  | 3000 | HIGH
+ FORD   | 3000 | HIGH
+ JONES  | 2975 | MID
+ BLAKE  | 2850 | MID
+ CLARK  | 2450 | MID
+ ALLEN  | 1600 | MID
+ TURNER | 1500 | MID
+ MILLER | 1300 | LOW
+ WARD   | 1250 | LOW
+ MARTIN | 1250 | LOW
+ ADAMS  | 1100 | LOW
+ JAMES  |  950 | LOW
+ SMITH  |  800 | LOW
+(14 rows)
+```
+
+KING의 5000은 두 번째 조건(`>= 1500`)도 만족하지만 첫 번째에서 이미 골랐으니 `HIGH` 하나만 나온다. WHEN의 순서가 결과를 바꾼다. `ELSE`를 빼면 아무 WHEN에도 맞지 않는 행은 NULL이 된다.
+
+Oracle에는 단순 CASE를 함수로 쓴 `DECODE(컬럼, 값1, 결과1, 값2, 결과2, ..., 기본값)`이 있다. 인자 수가 짝수면 마지막이 기본값이 아니라 마지막 결과라서, 맞는 게 없으면 NULL이다.
+
+```sql
+-- Oracle: 위의 단순 CASE와 결과가 같다
+SELECT ename, deptno, DECODE(deptno, 10, 'ACCOUNTING', 20, 'RESEARCH', 'ETC') AS d
+FROM emp WHERE empno IN (7369, 7499, 7782) ORDER BY empno;
+```
+
+둘이 갈리는 지점은 NULL이다. 단순 CASE의 `WHEN NULL`은 내부적으로 `comm = NULL` 비교라서 절대 맞지 않는다. `DECODE`는 NULL과 NULL을 같다고 본다. 그래서 `DECODE(comm, NULL, 'none', 'has')`는 NULL인 행에 `none`을 돌려준다. 검색 CASE로 `WHEN comm IS NULL`을 쓰면 `DECODE`와 같은 결과가 나온다.
+
+```sql
+SELECT ename, comm,
+       CASE comm WHEN NULL THEN 'none' ELSE 'has' END AS simple_null,   -- 늘 has
+       CASE WHEN comm IS NULL THEN 'none' ELSE 'has' END AS searched_null
+       -- Oracle: DECODE(comm, NULL, 'none', 'has')는 searched_null과 같다
+FROM emp WHERE deptno = 30 ORDER BY empno;
+```
+
+```text
+ ename  |  comm  | simple_null | searched_null
+--------+--------+-------------+---------------
+ ALLEN  |    300 | has         | has
+ WARD   |    500 | has         | has
+ MARTIN |   1400 | has         | has
+ BLAKE  | (null) | has         | none
+ TURNER |      0 | has         | has
+ JAMES  | (null) | has         | none
+(6 rows)
+```
+
+`DECODE`는 Oracle에만 있다. 이식성을 생각하면 `CASE`를 쓴다. `CASE`는 집계 함수 안에 넣어 부서별 직무 수를 세는 식으로도 많이 쓰는데, 그건 [집계 글](/posts/sqld-group-by-having)에서 이어서 본다.
+
+## SQLD 시험 포인트
+
+함수 문제는 "결과로 옳은 것은?" 형식으로 짧은 쿼리를 주고 값을 고르게 한다. 외울 건 많지 않고, 아래 함정에서 대부분 나온다.
+
+- NULL이 낀 사칙연산은 NULL이다. `sal + comm`, `sal * 12 + comm`의 결과를 묻는 문제는 NULL인 행을 먼저 찾는다.
+- `= NULL`은 늘 0행이다. `NOT IN` 목록에 NULL이 있으면 결과가 0행이다. `comm <> 0`은 NULL인 행을 포함하지 않는다.
+- `NVL2(a, b, c)`는 a가 NULL이 아니면 b다. `NULLIF(a, b)`는 같으면 NULL이다. `COALESCE`는 처음으로 NULL이 아닌 값이다.
+- Oracle에서 `''`은 NULL이다. `'A' || NULL`은 `'A'`다.
+- `DECODE`는 NULL끼리 같다고 보고, 단순 CASE의 `WHEN NULL`은 절대 맞지 않는다. `ELSE`가 없는 CASE는 NULL을 돌려준다.
+- `SUBSTR`의 음수 시작 위치는 뒤에서 센다. `INSTR`은 없으면 0이다. Oracle `CONCAT`은 인자 두 개다.
+- `ROUND(n, -1)`은 일의 자리에서 반올림한다. `TRUNC`는 0 쪽으로, `FLOOR`는 아래쪽으로 간다(`FLOOR(-3.1)` = -4). `MOD`의 부호는 첫 인자를 따른다.
+- 날짜 + 숫자는 일 단위다. 날짜 - 날짜는 일수(숫자)다. `MONTHS_BETWEEN(뒤, 앞)` 순서로 써야 양수다.
+- 분은 `MI`, 월은 `MM`이다. 24시간제는 `HH24`다.
+- 문자 컬럼을 숫자 상수와 비교하면 컬럼이 변환돼 인덱스를 못 쓴다. 숫자 컬럼을 문자 상수와 비교하면 상수가 바뀌어서 괜찮다.
+- SQL Server 대응: `ISNULL`, `+`(이어 붙이기), `LEN`, `SUBSTRING`, `CHARINDEX`, `CEILING`, `%`, `GETDATE()`, `DATEADD`, `CONVERT`. `DUAL`이 없다.
+
+## 면접에서 나올 만한 질문
+
+### 단일행 함수와 다중행 함수는 어떻게 다른가요?
+
+단일행 함수는 행마다 한 번씩 실행되어 행마다 결과 하나를 돌려주고, 입력 행 수와 출력 행 수가 같다. `UPPER`, `SUBSTR`, `ROUND`, `NVL`이 여기에 속하고 `SELECT`, `WHERE`, `ORDER BY` 어디에나 쓸 수 있다. 다중행 함수는 여러 행을 받아 값 하나로 줄이는 집계 함수로, `WHERE`에는 쓸 수 없고 `SELECT`, `HAVING`, `ORDER BY`에 쓴다.
+
+### NULL이 있는 컬럼으로 계산하면 어떻게 되나요?
+
+산술 연산에 NULL이 하나라도 끼면 결과가 NULL이다. NULL을 0이 아니라 "모르는 값"으로 보기 때문이다. 예제에서 `sal + comm`은 커미션이 없는 BLAKE의 급여 2850까지 같이 지워 버렸다. 계산 전에 `NVL(comm, 0)`이나 `COALESCE(comm, 0)`으로 바꾸되, NULL과 0이 업무적으로 같은 뜻인지 먼저 확인한다.
+
+### NVL, NVL2, NULLIF, COALESCE의 차이는요?
+
+`NVL(a, b)`는 a가 NULL이면 b로 바꾼다. `NVL2(a, b, c)`는 a가 NULL이 아니면 b, NULL이면 c를 돌려줘서 두 경우의 값을 따로 정할 수 있다. `NULLIF(a, b)`는 반대로 두 값이 같으면 NULL을 만들고, 0으로 나누기를 피할 때 쓴다. `COALESCE`는 인자 여러 개 중 처음으로 NULL이 아닌 값을 고르는 표준 함수라 DB를 옮겨도 그대로 쓸 수 있다.
+
+### WHERE comm = NULL은 왜 아무것도 못 찾나요?
+
+NULL과의 비교는 참도 거짓도 아닌 UNKNOWN이 되고, `WHERE`는 참인 행만 남기기 때문이다. NULL은 `IS NULL`로 찾는다. 같은 이유로 `NOT IN` 목록이나 서브쿼리 결과에 NULL이 하나라도 있으면 조건이 참이 될 수 없어서 결과가 0행이 된다. 실무에서는 `NOT EXISTS`를 쓰거나 NULL을 먼저 걸러 낸다.
+
+### 암시적 형 변환이 왜 성능 문제가 되나요?
+
+Oracle은 문자와 숫자를 비교하면 문자 쪽을 숫자로 바꾸는데, 그 문자가 컬럼이면 `TO_NUMBER(컬럼)`이 씌워진다. 인덱스는 원래 값 순서로 정렬돼 있어서 함수를 거친 값으로는 탐색할 수 없고, 전체 스캔으로 바뀐다. 예제에서 20만 행 테이블이 4페이지 대신 1,082페이지를 읽었다. 숫자가 아닌 값이 섞여 있으면 ORA-01722 에러까지 난다. 상수를 컬럼 타입에 맞춰 쓰는 게 기본이다.
+
+### 컬럼에 함수를 꼭 써야 하면 인덱스는 포기해야 하나요?
+
+두 가지 방법이 있다. 하나는 조건을 컬럼이 그대로 남게 다시 쓰는 것이다. `TRUNC(created) = 날짜`는 `created >= 날짜 AND created < 날짜 + 1`로, `TO_CHAR(hiredate, 'YYYY') = '1981'`은 1981년 1월 1일부터 1982년 1월 1일 전까지의 범위로 바꾼다. 다른 하나는 `UPPER(ename)`처럼 식 자체로 함수 기반 인덱스를 만드는 것이다. 다만 쿼리의 식이 인덱스 식과 정확히 같아야 쓰이고 쓰기 비용이 늘어난다.
+
+### CASE와 DECODE는 무엇이 다른가요?
+
+`DECODE`는 Oracle 전용 함수로, 한 값을 여러 값과 같은지 비교하는 단순 CASE와 하는 일이 같다. `CASE`는 표준 SQL이고, 검색 CASE로 범위나 여러 컬럼에 걸친 조건도 쓸 수 있다. NULL 처리도 다르다. `DECODE`는 NULL과 NULL을 같다고 보지만 단순 CASE의 `WHEN NULL`은 맞지 않아서 `WHEN comm IS NULL`로 써야 한다. 새로 짜는 쿼리는 이식성과 가독성 때문에 `CASE`를 쓴다.
+
+### Oracle에서 PostgreSQL로 옮길 때 함수 쪽에서 조심할 점은요?
+
+Oracle은 빈 문자열을 NULL로 보고 `||`가 NULL을 무시하지만, PostgreSQL은 `''`을 값으로 보고 `||`에 NULL이 끼면 결과가 NULL이다. `SUBSTR`의 음수 시작 위치도 PostgreSQL에서는 뒤에서 세지 않는다. `ADD_MONTHS`의 말일 규칙, `NVL`, `DECODE`, `DUAL`처럼 없는 함수도 있다. 에러가 나는 것보다 조용히 다른 값을 내는 것이 더 위험해서, 결과를 비교하는 테스트를 같이 옮긴다.

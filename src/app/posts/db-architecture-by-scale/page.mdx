@@ -1,0 +1,726 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-architecture-by-scale");
+
+주말에 작은 쇼핑몰을 사이드 프로젝트로 만들기 시작했다. DB를 고르려고 검색하면 말이 갈린다. 나중에 커지면 RDB는 확장이 안 되니 처음부터 MongoDB나 DynamoDB로 가라는 글이 있고, 마이크로서비스로 갈 거면 서비스마다 DB를 따로 두라는 글이 있고, 검색은 Elasticsearch, 통계는 데이터 웨어하우스, 캐시는 Redis가 기본이라는 글도 있다. 다 따르면 사용자가 0명인 서비스에 저장소가 다섯 개 생긴다.
+
+이 글들이 틀린 말을 하는 건 아니다. 각각 어떤 규모에서, 어떤 문제가 생겼을 때의 답이다. 이 글은 서비스가 작을 때부터 커질 때까지를 단계로 나눠서, 각 단계에서 무엇을 두고, 어떤 숫자가 보이면 다음 단계로 넘어가는지를 정리한다. 단계를 건너뛰면 그 단계의 비용을 문제가 생기기도 전에 미리 낸다.
+
+기준은 Ubuntu 24.04 LTS의 PostgreSQL 16(16.15)이다. 아래 SQL의 출력은 이 환경에서 실제로 돌린 결과다. 예제는 [복제와 샤딩 글](/posts/db-replication-sharding)과 같은 회원(`users`)과 주문(`orders`) 테이블이다. 테이블을 어떻게 쪼개고 묶을지는 [모델링 글](/posts/db-modeling-normalization)에, 트랜잭션이 서로 어떻게 보이는지는 [격리 수준 글](/posts/db-transaction-isolation)에 따로 있다.
+
+## 처음엔 PostgreSQL 한 대면 된다
+
+새 서비스의 데이터는 대부분 관계가 있다. 회원이 주문을 하고, 주문에 상품이 들어 있고, 결제가 주문에 붙는다. 그리고 처음에는 어떤 화면이 어떤 쿼리를 낼지 다 알지 못한다. 관계형 DB는 이 두 조건에 잘 맞는다. 데이터를 정규화해 두면 나중에 생긴 화면도 조인으로 만들 수 있고, 트랜잭션과 제약 조건이 "주문은 있는데 회원이 없는" 데이터를 DB 차원에서 막아 준다.
+
+그중에서도 PostgreSQL은 한 대로 버티는 범위가 넓다. 구조가 자주 바뀌는 부분은 `jsonb` 열에 넣고 인덱스를 걸 수 있고, 위치 검색(PostGIS), 벡터 검색(pgvector), 간단한 전문 검색과 부분 일치 검색(`pg_trgm`)까지 확장으로 붙는다. 뒤에서 별도 저장소로 분리하는 일들을 처음에는 한 DB 안에서 해 볼 수 있다는 뜻이다.
+
+처음 스키마에서 아끼지 말아야 할 것은 제약 조건이다. 데이터가 적을 때 거는 건 공짜지만, 이미 틀린 데이터가 쌓인 뒤에 걸려면 그 데이터부터 고쳐야 한다.
+
+```sql
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email      text NOT NULL UNIQUE,                         -- 같은 이메일로 두 번 가입 못 한다
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users(id),         -- 없는 회원의 주문은 못 넣는다
+  amount     integer NOT NULL CHECK (amount > 0),          -- 0원, 음수 주문을 막는다
+  status     text NOT NULL CHECK (status IN ('paid', 'shipped', 'canceled')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- "내 주문 내역" 화면의 쿼리에 맞춘 인덱스
+CREATE INDEX orders_user_created_idx ON orders (user_id, created_at DESC);
+```
+
+제약 조건이 실제로 막아 주는지 넣어 본다.
+
+```sql
+INSERT INTO users (email, name) VALUES ('minji@example.com', '민지');
+INSERT INTO orders (user_id, amount, status) VALUES (1, 0, 'paid');      -- 0원 주문
+INSERT INTO orders (user_id, amount, status) VALUES (99, 1000, 'paid');  -- 없는 회원
+```
+
+```text
+INSERT 0 1
+ERROR:  new row for relation "orders" violates check constraint "orders_amount_check"
+DETAIL:  Failing row contains (1, 1, 0, paid, 2026-10-17 02:53:35.707865+00).
+ERROR:  insert or update on table "orders" violates foreign key constraint "orders_user_id_fkey"
+DETAIL:  Key (user_id)=(99) is not present in table "users".
+```
+
+앱 코드에서 검사를 빠뜨려도, 배치 스크립트가 엉뚱한 값을 넣어도 DB가 거절한다. 실패한 `INSERT`도 identity 번호는 하나씩 써 버리기 때문에 주문 번호에는 빈 번호가 생길 수 있다. 번호가 빠짐없이 이어져야 한다는 요구(세금계산서 번호 같은)는 identity로 풀지 않는다.
+
+인덱스는 테이블을 만들 때 감으로 거는 게 아니라 실제로 나가는 쿼리에 맞춘다. 마이페이지가 `WHERE user_id = ? ORDER BY created_at DESC`를 낸다면 그 순서대로 `(user_id, created_at)`이다. 왜 이 순서인지는 [인덱스 글](/posts/db-index)에 있다.
+
+이 단계의 구성은 단순하다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="1단계: 앱과 DB 사이에 커넥션 풀, DB 옆에는 백업. 저장소는 하나다."
+  nodes={[
+    { id: "app", label: "앱 서버", sub: "여러 인스턴스", x: 200, y: 40, w: 140 },
+    { id: "pool", label: "PgBouncer", sub: "커넥션 풀", x: 200, y: 130, w: 140 },
+    { id: "pg", label: "PostgreSQL", sub: "프라이머리 1대", x: 200, y: 225, w: 150 },
+    { id: "backup", label: "백업 저장소", sub: "base + WAL", x: 340, y: 130, w: 100 },
+  ]}
+  edges={[
+    { from: "app", to: "pool", label: "연결 수백" },
+    { from: "pool", to: "pg", label: "연결 수십" },
+    { from: "pg", to: "backup", label: "WAL", dashed: true },
+  ]}
+/>
+
+## 연결은 풀로 묶어서 쓴다
+
+PostgreSQL은 연결 하나마다 서버 프로세스를 하나씩 띄운다. 연결이 놀고 있어도 프로세스와 메모리는 그대로 쓴다. 기본 최대 연결 수는 100이다.
+
+```sql
+SHOW max_connections;
+
+-- 지금 연결 상태별 개수 (active: 쿼리 실행 중, idle: 놀고 있음)
+SELECT state, count(*) FROM pg_stat_activity
+WHERE backend_type = 'client backend'
+GROUP BY state;
+```
+
+```text
+ max_connections
+-----------------
+ 100
+(1 row)
+
+ state  | count
+--------+-------
+ active |     1
+(1 row)
+```
+
+앱 서버가 한 대일 때는 앱 안의 커넥션 풀(HikariCP, node-postgres의 Pool 등)로 충분하다. 문제는 앱 인스턴스가 늘 때 온다. 인스턴스 20개가 각자 풀을 10개씩 열면 200개라 기본 한도를 넘는다. 서버리스 함수처럼 인스턴스가 수백 개로 늘었다 줄었다 하면 더 심하다. 그래서 앱과 DB 사이에 PgBouncer 같은 풀러를 둔다. 앱은 PgBouncer에 수백 개를 열고, PgBouncer는 DB에 수십 개만 열어 돌려 쓴다.
+
+PgBouncer의 transaction 모드는 트랜잭션이 끝날 때마다 DB 연결을 다른 클라이언트에게 넘긴다. 연결을 가장 알뜰하게 쓰지만, 연결에 붙어 있는 상태가 다음 트랜잭션까지 이어지지 않는다. 트랜잭션 밖에서 `SET`한 설정, `LISTEN`, 세션 단위 advisory lock이 그렇다. 프로토콜 수준의 prepared statement는 PgBouncer 1.21부터 `max_prepared_statements`를 켜면 transaction 모드에서도 쓸 수 있다.
+
+DB 쪽 연결 수를 크게 잡는다고 빨라지지 않는다. 동시에 실제로 일할 수 있는 건 CPU 코어 수 근처라, 그보다 훨씬 많은 쿼리가 동시에 돌면 서로 CPU와 잠금을 다투며 다 같이 느려진다. 풀 크기는 코어 수의 2~4배 정도에서 시작해 대기 시간을 보며 조정한다. 사용 중인 연결이 `max_connections`의 80%를 자주 넘기면 한도를 올리기 전에 풀러부터 본다.
+
+## 백업은 복원해 봐야 안다
+
+백업에는 두 가지가 있다. `pg_dump`는 DB를 SQL 수준으로 떠내는 논리 백업이다. 테이블 하나만 복원하거나 다른 버전으로 옮길 때 편하다. 대신 뜬 시점의 사진이라, 매일 새벽 3시에 떴다면 오후 2시에 사고가 나면 11시간을 잃는다.
+
+```bash
+# 압축된 사용자 정의 형식(-Fc)으로 백업. 복원할 때 테이블을 골라 낼 수 있다
+sudo -u postgres pg_dump -Fc -f /backup/shop-$(date +%Y%m%d).dump shop
+
+# 복원 연습: 빈 DB를 만들어 거기에 풀어 본다
+sudo -u postgres createdb shop_restore_test
+sudo -u postgres pg_restore -d shop_restore_test /backup/shop-20261017.dump
+
+# 데이터가 다 왔는지 센다
+sudo -u postgres psql -d shop_restore_test -c "SELECT count(*) FROM orders"
+```
+
+```text
+ count
+-------
+     6
+(1 row)
+```
+
+다른 하나는 물리 백업과 WAL 보관을 합친 시점 복구(PITR, Point-In-Time Recovery)다. `pg_basebackup`으로 데이터 디렉터리 전체를 떠 두고, 그 뒤로 생기는 WAL 파일을 계속 다른 곳에 보관한다. 복원할 때는 베이스 백업을 풀고 WAL을 원하는 시각까지 재생한다. 누가 실수로 `DELETE FROM orders`를 14시 03분에 날렸다면 14시 02분까지만 재생해서 그 직전으로 돌아갈 수 있다. 설정의 뼈대는 이렇다.
+
+```bash
+# /etc/postgresql/16/main/postgresql.conf
+archive_mode = on                                    # 바꾸면 재시작이 필요하다
+archive_command = 'test ! -f /archive/%f && cp %p /archive/%f'   # 다 찬 WAL 파일을 보관소로 복사
+
+# 복원할 때 (복원할 데이터 디렉터리에서)
+restore_command = 'cp /archive/%f %p'
+recovery_target_time = '2026-10-17 14:02:00+09'
+```
+
+위의 `cp`는 원리를 보여 주려는 예시다. 실제로는 다른 서버나 오브젝트 스토리지로 보내고, 보관과 복원을 관리해 주는 pgBackRest나 WAL-G 같은 도구를 쓰는 편이 안전하다. 관리형 DB(RDS, Cloud SQL 등)는 이 기능을 "특정 시점으로 복원"이라는 버튼으로 제공한다.
+
+백업에서 가장 흔한 실수는 복원해 본 적이 없는 것이다. 백업 작업이 매일 "성공"으로 끝나도, 권한 문제로 빈 파일이 쌓이고 있거나 WAL 하나가 빠져 재생이 중간에 멈출 수 있다. 분기마다 한 번은 실제로 다른 서버에 복원해서 행 수를 세고, 복원에 걸린 시간을 재 둔다. 데이터가 500GB면 복원에 몇 시간이 걸리고, 그 시간이 곧 장애 시간이다.
+
+## 읽기가 몰리면 캐시와 복제본
+
+서비스가 알려지고 사용자가 늘면 DB가 먼저 바빠진다. 대부분 읽기 때문이다. 상품 목록과 상세는 모두가 같은 것을 수없이 읽는다. 이때 첫 번째 도구는 캐시다. 같은 결과를 Redis에 몇 분 담아 두면 DB에 가는 읽기가 크게 준다. 어떤 데이터를 얼마나 오래 담고 언제 지울지는 [캐시 전략 글](/posts/caching-strategies)에, Redis 자체는 [Redis 글](/posts/redis-basics)에 있다.
+
+캐시로 못 줄이는 읽기도 있다. 사람마다 다른 주문 내역, 검색 조건이 매번 다른 목록이다. 이런 읽기는 프라이머리의 WAL을 받아 같은 데이터를 유지하는 읽기 복제본으로 보낸다. 복제본은 조금 늦을 수 있어서, 방금 쓴 데이터를 읽는 화면은 프라이머리로 보내야 한다. 그 이야기와 설정은 [복제와 샤딩 글](/posts/db-replication-sharding)에 자세히 있다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="2단계: 반복되는 읽기는 캐시가, 나머지 읽기는 복제본이 받는다. 쓰기는 여전히 프라이머리 한 대."
+  nodes={[
+    { id: "app", label: "앱 서버", x: 200, y: 40, w: 120 },
+    { id: "redis", label: "Redis", sub: "캐시", x: 65, y: 130, w: 100 },
+    { id: "primary", label: "프라이머리", sub: "쓰기와 중요한 읽기", x: 200, y: 230, w: 150 },
+    { id: "replica", label: "복제본", sub: "목록, 검색", x: 335, y: 130, w: 100 },
+  ]}
+  edges={[
+    { from: "app", to: "redis", label: "캐시 조회" },
+    { from: "app", to: "primary", label: "쓰기" },
+    { from: "app", to: "replica", label: "읽기" },
+    { from: "primary", to: "replica", label: "WAL", dashed: true },
+  ]}
+/>
+
+이 단계로 넘어갈 신호는 이렇다. 쿼리와 인덱스를 손봤는데도 바쁜 시간대에 프라이머리 CPU가 70% 이상에 머문다. 같은 쿼리가 초당 수백 번씩 반복된다(`pg_stat_statements`의 `calls`가 유독 큰 쿼리). 주요 API의 p99 응답 시간이 DB 대기 때문에 목표를 넘는다. 이때 복제본보다 캐시가 먼저인 경우가 많다. 복제본은 DB 한 대 값이 그대로 들고, 캐시는 같은 읽기를 수십 배 싸게 처리한다.
+
+## 분석 쿼리는 다른 곳에서 돌린다
+
+주문이 수천만 건이 되자 운영팀이 매일 아침 "지난 90일 카테고리별 매출" 같은 쿼리를 돌린다. 이 쿼리가 프라이머리에서 몇 분씩 돌면서 디스크를 다 읽는 동안 결제 API가 느려진다. 두 쿼리는 성격이 정반대다.
+
+결제 같은 쿼리를 OLTP(Online Transaction Processing)라고 한다. 행 몇 개를 정확히 찾아 읽고 쓰며, 수 ms 안에 끝나야 하고, 동시에 수천 개가 온다. 매출 분석 같은 쿼리는 OLAP(Online Analytical Processing)다. 수천만 행의 몇 개 열만 훑어 합치며, 몇 초 걸려도 되지만 한 번에 읽는 양이 엄청나다.
+
+PostgreSQL은 행 단위로 저장한다. 한 행의 모든 열이 디스크에 붙어 있어서 주문 하나를 통째로 읽기는 좋지만, `amount` 열 하나의 합계를 구할 때도 모든 열을 같이 읽는다. 분석용 데이터 웨어하우스(BigQuery, Redshift, Snowflake)나 ClickHouse 같은 컬럼 저장소는 열 단위로 저장한다. `amount` 열만 따로 모여 있어서 그것만 읽고, 같은 종류의 값이 붙어 있으니 압축도 잘 된다. 같은 집계가 수십 배 적게 읽는다. 대신 행 하나를 고치는 일에는 약하다.
+
+그래서 분석 데이터는 운영 DB에서 웨어하우스로 복사해 두고 거기서 돌린다. 매일 밤 전체를 덤프해 옮기는 배치가 가장 단순하다. 하루 늦은 데이터로 충분하면 이걸로 된다. 더 빨리 따라와야 하면 CDC(Change Data Capture, 변경 데이터 캡처)를 쓴다. Debezium 같은 도구가 PostgreSQL의 논리 디코딩(`wal_level = logical`과 복제 슬롯)으로 WAL에서 행 변경을 읽어 Kafka 같은 메시지 브로커에 이벤트로 흘린다. 웨어하우스, 검색 색인, 캐시 무효화처럼 그 변경이 필요한 곳들이 각자 이벤트를 받아 간다. 앱 코드에 "웨어하우스에도 써라"를 넣지 않아도 되고, 커밋된 변경만 순서대로 나온다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="3단계: 원본은 PostgreSQL 하나. 변경은 WAL에서 읽어 브로커로 흘리고, 분석과 검색은 각자 맞는 저장소에서 한다."
+  nodes={[
+    { id: "app", label: "앱 서버", x: 90, y: 40, w: 110 },
+    { id: "pg", label: "PostgreSQL", sub: "원본 (OLTP)", x: 90, y: 150, w: 130 },
+    { id: "cdc", label: "Debezium", sub: "WAL 읽기", x: 280, y: 150, w: 120 },
+    { id: "kafka", label: "Kafka", sub: "변경 이벤트", x: 280, y: 40, w: 120 },
+    { id: "dw", label: "웨어하우스", sub: "컬럼 저장", x: 90, y: 260, w: 120 },
+    { id: "search", label: "OpenSearch", sub: "검색 색인", x: 280, y: 260, w: 130 },
+  ]}
+  edges={[
+    { from: "app", to: "pg", label: "읽기, 쓰기" },
+    { from: "pg", to: "cdc", label: "논리 디코딩" },
+    { from: "cdc", to: "kafka" },
+    { from: "kafka", to: "dw", dashed: true },
+    { from: "kafka", to: "search", dashed: true },
+  ]}
+/>
+
+CDC에는 함정이 있다. Debezium이 쓰는 복제 슬롯은 Debezium이 읽어 가기 전의 WAL을 지우지 못하게 한다. Debezium이 며칠 멈춰 있으면 프라이머리 디스크에 WAL이 쌓여 가득 찬다. `max_slot_wal_keep_size`로 상한을 두고 슬롯 상태를 감시한다. 테이블 구조를 바꾸면 이벤트 모양도 바뀌니, 이벤트를 받는 쪽과 함께 배포 순서를 맞춘다.
+
+## 검색과 작업 큐도 따로 떼어 낸다
+
+상품 검색창에 "무선 키보드"를 치면 `WHERE name LIKE '%무선 키보드%'`가 나간다. 앞에 `%`가 붙으면 B-tree 인덱스를 못 탄다. 처음에는 `pg_trgm` 확장의 GIN 인덱스로 부분 일치를 빠르게 할 수 있다. 하지만 오타 교정, 형태소 분석("키보드를"에서 "키보드" 찾기), 관련도 순 정렬, 필터별 개수 집계가 필요해지면 Elasticsearch나 OpenSearch 같은 검색 엔진이 맞다. 역색인이 어떻게 동작하는지는 [Elasticsearch 글](/posts/elasticsearch-inverted-index)에 있다. 검색 엔진은 원본이 아니라 원본에서 만든 색인이다. 언제든 원본에서 다시 만들 수 있게 두고, CDC나 이벤트로 따라오게 한다.
+
+주문이 들어오면 메일 보내기, 포인트 적립, 재고 알림처럼 바로 끝나지 않아도 되는 일이 따라온다. 이걸 요청 안에서 다 하면 응답이 느려지고, 메일 서버가 죽으면 주문까지 실패한다. 이런 일은 큐에 넣고 작업자가 따로 처리한다. 작은 규모에서는 PostgreSQL 테이블 하나를 큐로 써도 충분하다(뒤에서 볼 `FOR UPDATE SKIP LOCKED`가 그 장치다). 초당 수천 건 이상이거나 여러 서비스가 같은 이벤트를 받아야 하면 Kafka, RabbitMQ, SQS 같은 전용 브로커로 옮긴다.
+
+이 단계의 신호는 저장소마다 다르다. 분석 쿼리가 프라이머리의 p99를 눈에 띄게 올리거나 복제본에서 `canceling statement due to conflict with recovery`로 계속 끊긴다면 웨어하우스로 뺀다. 검색 요구가 `LIKE`와 `pg_trgm`으로 표현이 안 되면 검색 엔진을 둔다. 다만 저장소를 하나 더할 때마다 백업, 모니터링, 버전 업그레이드, 장애 대응이 하나씩 늘어난다는 것도 같이 센다.
+
+## 서비스마다 DB를 따로 둔다
+
+조직이 커져서 주문, 회원, 상품을 다른 팀이 맡고 서비스도 나뉘었다고 하자. 그런데 세 서비스가 여전히 같은 PostgreSQL의 같은 테이블들을 쓴다. 이 상태를 공유 DB라고 하는데, 서비스를 나눈 의미를 대부분 지운다.
+
+회원팀이 `users.name` 열을 `nickname`으로 바꾸고 싶어도, 주문 서비스의 어느 쿼리가 그 열을 쓰는지 모른다. 바꾸는 순간 다른 팀 서비스가 깨진다. 결국 스키마를 바꾸려면 모든 팀이 같이 배포해야 하고, 서비스를 따로 배포한다는 장점이 사라진다. 한 서비스가 무거운 쿼리를 날리면 같은 DB를 쓰는 다른 서비스도 같이 느려진다. 테이블의 주인이 누구인지도 흐려진다. 마이크로서비스를 왜 나누는지는 [마이크로서비스 글](/posts/microservices)에 있다.
+
+서비스마다 DB(database per service)는 각 서비스가 자기 데이터를 혼자 갖고, 다른 서비스는 그 DB에 직접 접근하지 못하게 하는 규칙이다. 데이터가 필요하면 API로 묻거나 이벤트로 받는다. 꼭 서버를 따로 둘 필요는 없다. 처음에는 같은 PostgreSQL 클러스터 안에서 서비스마다 DB(또는 스키마)와 계정을 나누고, 다른 서비스의 계정에는 권한을 주지 않는 것만으로도 경계가 생긴다. 부하가 서로 영향을 줄 정도가 되면 그때 서버를 나눈다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="4단계: 각 서비스는 자기 DB만 직접 만진다. 다른 서비스의 데이터는 API나 이벤트로 받는다."
+  nodes={[
+    { id: "order", label: "주문 서비스", x: 70, y: 50, w: 115 },
+    { id: "user", label: "회원 서비스", x: 200, y: 50, w: 115 },
+    { id: "catalog", label: "상품 서비스", x: 330, y: 50, w: 115 },
+    { id: "odb", label: "주문 DB", sub: "PostgreSQL", x: 70, y: 150, w: 110 },
+    { id: "udb", label: "회원 DB", sub: "PostgreSQL", x: 200, y: 150, w: 110 },
+    { id: "cdb", label: "상품 DB", sub: "MongoDB", x: 330, y: 150, w: 110 },
+    { id: "bus", label: "이벤트 브로커", sub: "OrderPaid 등", x: 200, y: 250, w: 150 },
+  ]}
+  edges={[
+    { from: "order", to: "odb" },
+    { from: "user", to: "udb" },
+    { from: "catalog", to: "cdb" },
+    { from: "odb", to: "bus", label: "아웃박스" },
+    { from: "bus", to: "user", label: "구독", dashed: true },
+  ]}
+/>
+
+대가도 분명하다. 주문 목록에 회원 이름을 붙이는 `JOIN`을 더 이상 쓸 수 없다. 주문 서비스가 회원 서비스 API를 부르거나(API 조합), 회원 이름을 이벤트로 받아 자기 DB에 사본을 둔다. 사본은 원본이 바뀐 뒤 조금 늦게 따라온다(결과적 일관성). 주문과 포인트 차감처럼 두 서비스에 걸친 작업은 한 트랜잭션으로 묶을 수 없어서, 각자의 로컬 트랜잭션을 이어 붙이고 실패하면 보상 작업을 하는 사가로 푼다. 그리고 "DB에 쓰고 이벤트를 보낸다"는 가장 흔한 동작에서 바로 문제가 생긴다.
+
+## DB에 쓰고 이벤트를 보내는 사이
+
+주문 서비스가 결제를 마친 주문을 저장하고 `OrderPaid` 이벤트를 브로커에 보낸다고 하자. 순서가 어떻든 둘 중 하나만 성공하는 순간이 있다. DB 커밋 후 이벤트를 보내기 직전에 서버가 죽으면 주문은 있는데 포인트가 안 쌓인다. 이벤트를 먼저 보내고 DB 커밋이 실패하면 없는 주문에 포인트가 쌓인다. DB와 브로커는 서로 다른 시스템이라 한 트랜잭션으로 묶이지 않는다. 이걸 이중 쓰기(dual write) 문제라고 한다.
+
+트랜잭셔널 아웃박스는 이벤트를 브로커에 바로 보내지 않고, 같은 DB의 `outbox` 테이블에 주문과 같은 트랜잭션으로 넣는다. 그러면 주문과 이벤트는 같이 커밋되거나 같이 사라진다. 브로커로 보내는 일은 따로 도는 릴레이가 `outbox`를 읽어서 한다.
+
+```sql
+CREATE TABLE outbox (
+  id           bigserial   PRIMARY KEY,         -- 넣은 순서
+  aggregate_id bigint      NOT NULL,            -- 어떤 주문의 이벤트인가
+  event_type   text        NOT NULL,            -- OrderPaid, OrderShipped ...
+  payload      jsonb       NOT NULL,            -- 이벤트 내용
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz                      -- 보냈으면 채운다. NULL이면 아직
+);
+
+-- 아직 안 보낸 것만 담는 부분 인덱스. 보낸 행이 수백만 개여도 이 인덱스는 작다
+CREATE INDEX outbox_unpublished_idx ON outbox (id) WHERE published_at IS NULL;
+
+-- 주문과 이벤트를 한 트랜잭션으로. 주문 번호는 DB가 정하니 RETURNING으로 받아 넘긴다
+BEGIN;
+WITH new_order AS (
+  INSERT INTO orders (user_id, amount, status)
+  VALUES (1, 41000, 'paid')
+  RETURNING id, amount
+)
+INSERT INTO outbox (aggregate_id, event_type, payload)
+SELECT id, 'OrderPaid', jsonb_build_object('orderId', id, 'amount', amount)
+FROM new_order;
+COMMIT;
+```
+
+이벤트가 몇 개 쌓인 상태다.
+
+```text
+ id | aggregate_id |  event_type   | published_at
+----+--------------+---------------+--------------
+  1 |          107 | OrderPaid     |
+  2 |          103 | OrderShipped  |
+  3 |          108 | OrderPaid     |
+  4 |          102 | OrderCanceled |
+(4 rows)
+```
+
+릴레이는 안 보낸 행을 몇 개씩 가져와 보내고 표시한다. 릴레이를 두 개 띄워 둘 때 같은 행을 두 번 집지 않게 하는 장치가 `FOR UPDATE SKIP LOCKED`다. `FOR UPDATE`는 읽은 행에 잠금을 걸고, `SKIP LOCKED`는 다른 트랜잭션이 이미 잠근 행을 기다리지 않고 건너뛴다. 릴레이 A가 트랜잭션을 연 채 1, 2번을 보내는 동안 릴레이 B가 같은 쿼리를 냈다.
+
+```sql
+-- 릴레이 A와 B가 똑같이 실행하는 쿼리
+BEGIN;
+SELECT id, aggregate_id, event_type
+FROM outbox
+WHERE published_at IS NULL
+ORDER BY id
+LIMIT 2
+FOR UPDATE SKIP LOCKED;
+-- (브로커로 보낸 뒤)
+UPDATE outbox SET published_at = now() WHERE id IN (1, 2);
+COMMIT;
+```
+
+```text
+-- 릴레이 A
+ id | aggregate_id |  event_type
+----+--------------+--------------
+  1 |          107 | OrderPaid
+  2 |          103 | OrderShipped
+(2 rows)
+
+-- 릴레이 B (A가 아직 커밋하기 전)
+ id | aggregate_id |  event_type
+----+--------------+---------------
+  3 |          108 | OrderPaid
+  4 |          102 | OrderCanceled
+(2 rows)
+```
+
+B는 A가 잠근 1, 2번을 건너뛰고 3, 4번을 가져갔다. `SKIP LOCKED` 없이 `FOR UPDATE`만 쓰면 B는 A가 끝날 때까지 기다린다. `lock_timeout`을 0.5초로 걸고 돌려 보니 이렇게 끊겼다.
+
+```text
+ERROR:  canceling statement due to lock timeout
+CONTEXT:  while locking tuple (0,1) in relation "outbox"
+```
+
+아래 그림에서 다음을 누르면 아웃박스가 이벤트를 전달하는 과정과, 릴레이가 하필 나쁜 순간에 죽었을 때 무슨 일이 생기는지가 차례로 보인다.
+
+<SequenceDiagram
+  caption="아웃박스 릴레이와, 보낸 뒤 표시하기 전에 죽으면"
+  actors={[
+    { id: "svc", label: "주문 앱" },
+    { id: "db", label: "주문 DB" },
+    { id: "relay", label: "릴레이" },
+    { id: "broker", label: "브로커" },
+    { id: "consumer", label: "포인트 앱" },
+  ]}
+  steps={[
+    {
+      from: "svc",
+      to: "db",
+      label: "orders + outbox",
+      title: "주문과 이벤트를 한 트랜잭션에 쓴다",
+      detail: "둘 다 커밋되거나 둘 다 없던 일이 된다. 브로커가 죽어 있어도 주문은 받는다.",
+      payload: "BEGIN;\nINSERT INTO orders ...;\nINSERT INTO outbox ...;\nCOMMIT;",
+    },
+    {
+      from: "relay",
+      to: "db",
+      label: "SKIP LOCKED",
+      title: "릴레이가 안 보낸 이벤트를 집는다",
+      detail: "1초쯤마다 published_at이 NULL인 행을 몇 개씩 잠그며 가져온다. 다른 릴레이가 잡은 행은 건너뛴다.",
+      payload: "WHERE published_at IS NULL\nORDER BY id LIMIT 100\nFOR UPDATE SKIP LOCKED",
+    },
+    {
+      from: "relay",
+      to: "broker",
+      label: "OrderPaid 107",
+      title: "브로커로 보낸다",
+      detail: "브로커가 받았다고 확인하면 다음으로 간다. 실패하면 표시하지 않고 다음 차례에 다시 보낸다.",
+    },
+    {
+      from: "relay",
+      to: "relay",
+      label: "죽음",
+      title: "표시하기 전에 릴레이가 죽는다",
+      detail: "브로커에는 이미 갔는데 published_at을 채우지 못했다. 열려 있던 트랜잭션은 롤백되고 잠금도 풀린다.",
+    },
+    {
+      from: "relay",
+      to: "broker",
+      label: "OrderPaid 107",
+      title: "다시 뜬 릴레이가 같은 이벤트를 또 보낸다",
+      detail: "DB에는 여전히 안 보낸 것으로 남아 있기 때문이다. 아웃박스는 적어도 한 번은 보내 주지만, 두 번 보낼 수도 있다.",
+    },
+    {
+      from: "broker",
+      to: "consumer",
+      label: "같은 이벤트 2번",
+      title: "받는 쪽이 중복을 걸러 낸다",
+      detail: "이벤트 id를 처리한 기록과 함께 저장해 두고, 이미 본 id면 건너뛴다. 포인트는 한 번만 쌓인다.",
+      payload: "INSERT INTO processed_events (event_id)\nVALUES (1) ON CONFLICT DO NOTHING;",
+    },
+  ]}
+/>
+
+마지막 단계가 아웃박스의 대가다. "정확히 한 번"은 보장하지 않는다. 적어도 한 번 보내고, 받는 쪽이 같은 이벤트를 두 번 받아도 결과가 같게(멱등하게) 만든다. 순서도 완벽하지 않다. 릴레이가 둘이면 B가 보낸 3번이 A가 보낸 1번보다 먼저 도착할 수 있다. 같은 주문의 이벤트끼리는 순서가 중요하니, Kafka라면 `aggregate_id`를 메시지 키로 줘서 같은 주문은 같은 파티션으로 가게 하고, 이벤트에 주문별 버전 번호를 넣어 받는 쪽이 옛 버전을 무시하게 한다.
+
+아래 함수는 받는 쪽의 그 규칙을 구현한다. 메시지가 도착한 순서대로 들어온다. 이미 처리한 `eventId`는 건너뛰고, 같은 주문(`orderId`)에서 이미 처리한 것보다 `version`이 작거나 같으면 늦게 도착한 옛 이벤트라 버린다. 실제로 반영한 `eventId`만 순서대로 돌려준다.
+
+<CodePlayground
+  caption="중복과 늦게 온 이벤트를 걸러 내는 소비자"
+  functionName="consume"
+  initialCode={`function consume(messages) {
+  // messages: [{ eventId, orderId, version, type }] 도착 순서
+  // 1) 이미 본 eventId는 건너뛴다
+  // 2) 그 주문에서 처리한 version 이하면 버린다
+  // 반영한 eventId 목록을 돌려준다
+  const applied = [];
+  for (const m of messages) {
+    applied.push(m.eventId);
+  }
+  return applied;
+}`}
+  solution={`function consume(messages) {
+  const seen = new Set();          // 처리한 이벤트 id
+  const lastVersion = {};          // 주문별 마지막으로 반영한 버전
+  const applied = [];
+  for (const m of messages) {
+    if (seen.has(m.eventId)) continue;
+    seen.add(m.eventId);
+    if ((lastVersion[m.orderId] ?? 0) >= m.version) continue;
+    lastVersion[m.orderId] = m.version;
+    applied.push(m.eventId);
+  }
+  return applied;
+}`}
+  tests={[
+    {
+      label: "평소: 모두 반영",
+      args: [[
+        { eventId: 1, orderId: 107, version: 1, type: "OrderPaid" },
+        { eventId: 2, orderId: 103, version: 2, type: "OrderShipped" },
+        { eventId: 3, orderId: 108, version: 1, type: "OrderPaid" },
+      ]],
+      expected: [1, 2, 3],
+    },
+    {
+      label: "릴레이가 죽었다 살아나 1, 2를 다시 보냄",
+      args: [[
+        { eventId: 1, orderId: 107, version: 1, type: "OrderPaid" },
+        { eventId: 2, orderId: 103, version: 2, type: "OrderShipped" },
+        { eventId: 1, orderId: 107, version: 1, type: "OrderPaid" },
+        { eventId: 2, orderId: 103, version: 2, type: "OrderShipped" },
+        { eventId: 3, orderId: 108, version: 1, type: "OrderPaid" },
+      ]],
+      expected: [1, 2, 3],
+    },
+    {
+      label: "배송(v2)이 결제(v1)보다 먼저 도착",
+      args: [[
+        { eventId: 5, orderId: 107, version: 2, type: "OrderShipped" },
+        { eventId: 1, orderId: 107, version: 1, type: "OrderPaid" },
+        { eventId: 6, orderId: 107, version: 3, type: "OrderDelivered" },
+      ]],
+      expected: [5, 6],
+    },
+    {
+      label: "중복과 다른 주문이 섞임",
+      args: [[
+        { eventId: 4, orderId: 102, version: 2, type: "OrderCanceled" },
+        { eventId: 7, orderId: 102, version: 3, type: "RefundDone" },
+        { eventId: 4, orderId: 102, version: 2, type: "OrderCanceled" },
+        { eventId: 9, orderId: 103, version: 3, type: "OrderDelivered" },
+      ]],
+      expected: [4, 7, 9],
+    },
+    { label: "메시지 없음", args: [[]], expected: [] },
+  ]}
+/>
+
+실제 서비스에서는 `seen`과 `lastVersion`이 메모리가 아니라 DB에 있어야 한다. 그리고 "이벤트 id 기록"과 "포인트 적립"을 같은 트랜잭션에 넣어야 한다. 따로 커밋하면 그 사이에 죽었을 때 다시 어긋난다. 이 받는 쪽 장치를 인박스(inbox)라고 부르기도 한다.
+
+아웃박스 테이블은 계속 커지니 보낸 행은 며칠 뒤 지운다. 양이 많으면 `created_at`으로 하루 단위 파티션을 만들어 통째로 떼어 낸다. 폴링 대신 Debezium으로 `outbox` 테이블의 INSERT를 WAL에서 읽어 보내는 방법도 있다. 폴링 쿼리가 없어지고 지연이 짧아지는 대신, 앞에서 본 복제 슬롯 관리가 따라온다.
+
+## 저장소는 접근 패턴으로 고른다
+
+서비스마다 DB를 두면 서비스마다 다른 종류의 DB를 고를 수도 있다. 데이터의 모양과 읽는 방식에 맞춰 여러 저장소를 섞어 쓰는 걸 폴리글랏 퍼시스턴스(polyglot persistence)라고 한다. 이때 기준은 "확장이 잘 되는가"가 아니라 "이 데이터를 어떻게 읽고 쓰는가"다. 고르기 전에 그 서비스의 쿼리를 적어 본다. 무엇으로 찾는가(키 하나, 범위, 조건 조합, 관계를 몇 단계 따라가기), 얼마나 자주, 얼마나 빨라야 하는가, 쓰자마자 모두에게 맞아야 하는가, 데이터가 얼마나 빨리 불어나는가.
+
+| 읽는 방식 | 어울리는 저장소 | 예 |
+|---|---|---|
+| 조건이 다양하고 조인과 트랜잭션이 필요 | 관계형 | PostgreSQL, MySQL |
+| 한 덩어리를 통째로 읽고 쓰고, 모양이 제각각 | 문서형 | MongoDB |
+| 키 하나로 넣고 빼기, 아주 빠르게 | 키-값 | Redis, DynamoDB |
+| 정해진 키로 엄청난 쓰기, 쿼리 모양이 고정 | 와이드 컬럼 | Cassandra, ScyllaDB |
+| 관계를 여러 단계 따라가기 | 그래프 | Neo4j |
+| 시간순으로 쌓고 시간 범위로 집계 | 시계열 | TimescaleDB, InfluxDB |
+| 의미가 비슷한 것 찾기 | 벡터 | pgvector, 전용 벡터 DB |
+
+문서형 DB는 주문 하나에 주문 상품, 배송지, 결제 정보를 한 문서로 담아 한 번에 읽고 쓴다. 상품마다 속성이 제각각인 상품 카탈로그에도 잘 맞는다. 대신 여러 문서를 가로지르는 조인과 집계는 관계형보다 불편하고, 문서를 어떻게 묶느냐가 곧 쿼리 성능이 된다. 자세한 건 [MongoDB 글](/posts/mongodb-document-model)에 있다.
+
+Cassandra나 DynamoDB 같은 저장소는 처음부터 여러 노드에 나눠 저장하도록 설계됐다. 쓰기가 초당 수십만 건이어도 노드를 더하면 버틴다. 대신 쿼리를 먼저 정하고 그 쿼리에 맞춰 테이블을 만든다. Cassandra는 파티션 키로 노드를 고르고 클러스터링 키로 그 안을 정렬한다. "회원별 최근 알림 50개"라면 파티션 키를 `user_id`, 클러스터링 키를 `created_at`으로 잡는다. 이 테이블로 "오늘 보낸 전체 알림 수"를 구하는 건 거의 불가능해서, 그런 쿼리가 필요하면 그 쿼리용 테이블을 하나 더 만들어 같은 데이터를 두 번 쓴다. DynamoDB도 파티션 키와 정렬 키로 같은 식으로 생각한다.
+
+그래프 DB는 "내 친구의 친구가 산 상품" 같은 쿼리가 핵심일 때 쓴다. 관계형에서는 단계마다 조인이 늘어 3~4단계부터 급격히 느려지는데, 그래프 DB는 노드에서 이웃으로 바로 건너간다. 시계열 DB는 센서 값이나 서버 지표처럼 시간순으로 쌓이고 시간 범위로 집계하며 오래된 건 지우거나 줄여 남기는 데이터에 맞는다. TimescaleDB는 PostgreSQL 확장이라 앞의 파티셔닝을 자동으로 해 주는 것에 가깝다. 벡터 DB는 임베딩으로 의미가 비슷한 것을 찾을 때 쓴다. [벡터 DB 글](/posts/vector-db)에 동작 원리가 있다. 데이터가 수백만 개 정도까지라면 pgvector로 기존 PostgreSQL에 붙여 시작해도 된다.
+
+저장소를 하나 더할 때마다 그 저장소의 백업, 복원 연습, 모니터링, 보안 패치, 장애 대응을 누군가 해야 한다. 데이터가 두 곳에 있으면 둘을 맞추는 일(CDC, 이벤트, 재처리)도 생긴다. 그래서 "이 저장소가 더 잘 맞는다"만으로는 부족하고, "기존 PostgreSQL로는 이 접근 패턴을 감당할 수 없다"가 보일 때 더한다.
+
+## 열 이름 하나를 다섯 단계로 바꾼다
+
+서비스가 커지면 스키마 변경이 장애가 된다. 먼저 `ALTER TABLE` 하나가 서비스를 세우는 장면을 보자. 오래 걸리는 트랜잭션이 `users`를 읽고 있는 동안 열을 추가하고, 그 뒤에 평범한 조회가 들어왔다.
+
+```sql
+-- 누가 누구를 막고 있나
+SELECT pid, pg_blocking_pids(pid) AS blocked_by, wait_event_type, wait_event,
+       left(query, 45) AS query
+FROM pg_stat_activity
+WHERE datname = 'shop' AND pid <> pg_backend_pid()
+ORDER BY backend_start;
+```
+
+```text
+ pid  | blocked_by | wait_event_type | wait_event |                     query
+------+------------+-----------------+------------+-----------------------------------------------
+ 4924 | {}         | Timeout         | PgSleep    | BEGIN; SELECT count(*) FROM users; SELECT pg_
+ 4928 | {4924}     | Lock            | relation   | ALTER TABLE users ADD COLUMN phone text
+ 4932 | {4928}     | Lock            | relation   | SELECT id, email FROM users WHERE id = 1
+(3 rows)
+```
+
+`ADD COLUMN phone text`는 메타데이터만 바꾸는 순간적인 작업이다. 그런데 테이블에 가장 강한 잠금(ACCESS EXCLUSIVE)이 필요해서, 4924의 트랜잭션이 끝나기를 기다린다. 문제는 세 번째 줄이다. 평범한 `SELECT`(4932)가 4924가 아니라 대기 중인 `ALTER`(4928)에 막혔다. 잠금은 줄을 서는데, 앞에 강한 잠금이 기다리고 있으면 뒤에 오는 약한 잠금도 끼어들지 못한다. 긴 트랜잭션 하나와 짧은 DDL 하나가 만나 그 테이블의 모든 쿼리가 멈춘다. 그래서 DDL에는 항상 `lock_timeout`을 건다.
+
+```sql
+SET lock_timeout = '2s';
+ALTER TABLE users ADD COLUMN phone text;
+```
+
+```text
+ERROR:  canceling statement due to lock timeout
+```
+
+2초 안에 잠금을 못 얻으면 포기한다. 뒤의 쿼리는 2초만 기다리고 풀린다. 마이그레이션 도구가 잠시 뒤 다시 시도하게 한다.
+
+이제 열 이름을 바꾸는 경우다. `ALTER TABLE users RENAME COLUMN name TO nickname`은 순식간에 끝나지만, 배포 중에는 옛 코드와 새 코드가 함께 돈다. 옛 코드는 `name`을 찾다가 에러가 난다. 그래서 늘렸다가 줄이는(expand/contract) 방식으로 나눠서 바꾼다. 아래 그림에서 다음을 누르면 단계마다 DB와 앱이 어떤 상태인지 보인다.
+
+<AlgoTrace
+  caption="users.name을 nickname으로 바꾸는 다섯 단계"
+  memoryLabel="DB 열 · 앱이 쓰는 열"
+  cells={["열 추가", "둘 다 쓰기", "옛 행 채우기", "새 열 읽기", "옛 열 삭제"]}
+  steps={[
+    { memory: ["DB: name", "앱: name"], caption: "지금은 name만 있고 앱도 name만 읽고 쓴다." },
+    { pointer: 0, memory: ["DB: name, nickname", "앱: name"], caption: "nickname 열을 NULL 허용으로 추가한다. 옛 앱은 새 열을 모르니 아무 영향이 없다." },
+    { pointer: 1, memory: ["DB: name, nickname", "앱: 둘 다 씀"], caption: "앱을 배포해 쓸 때 두 열에 같은 값을 쓴다. 읽기는 아직 name이다. 이 버전으로 되돌려도 안전하다." },
+    { pointer: 2, memory: ["DB: nickname 채움", "앱: 둘 다 씀"], caption: "nickname이 비어 있는 옛 행을 천 건씩 나눠 채운다. 다 채우면 NOT NULL을 건다." },
+    { pointer: 3, memory: ["DB: name, nickname", "앱: nickname 읽음"], caption: "앱이 nickname을 읽게 배포한다. 문제가 생기면 앞 버전으로 돌아가도 두 열이 같으니 괜찮다." },
+    { pointer: 4, found: [4], memory: ["DB: nickname", "앱: nickname"], caption: "앱이 name을 완전히 잊은 뒤에 name 열을 지운다. 이 단계만은 되돌릴 수 없으니 맨 마지막이다." },
+  ]}
+/>
+
+SQL로 쓰면 이렇다. 모두 실제로 돌려 본 순서다.
+
+```sql
+SET lock_timeout = '3s';                 -- 모든 DDL에 건다
+
+-- 1. 늘리기: NULL 허용 열 추가는 테이블을 다시 쓰지 않아 즉시 끝난다
+ALTER TABLE users ADD COLUMN nickname text;
+
+-- 2. (앱 배포: name과 nickname 둘 다 쓴다)
+
+-- 3. 옛 행 채우기. 한 번에 다 하지 않고 천 건씩 반복한다 (UPDATE 0이 나올 때까지)
+UPDATE users SET nickname = name
+WHERE id IN (SELECT id FROM users WHERE nickname IS NULL ORDER BY id LIMIT 1000);
+
+-- 3-1. NOT NULL 걸기: 먼저 검사 없이 제약만 붙이고(NOT VALID), 따로 검사한다
+ALTER TABLE users ADD CONSTRAINT users_nickname_not_null
+  CHECK (nickname IS NOT NULL) NOT VALID;
+ALTER TABLE users VALIDATE CONSTRAINT users_nickname_not_null;
+--      유효한 CHECK가 있으면 SET NOT NULL은 테이블을 다시 훑지 않는다
+ALTER TABLE users ALTER COLUMN nickname SET NOT NULL;
+ALTER TABLE users DROP CONSTRAINT users_nickname_not_null;
+
+-- 3-2. 인덱스는 쓰기를 막지 않는 CONCURRENTLY로
+CREATE INDEX CONCURRENTLY users_nickname_idx ON users (nickname);
+
+-- 4. (앱 배포: nickname만 읽고 쓴다)
+
+-- 5. 줄이기: 아무도 안 쓰는 걸 확인한 뒤
+ALTER TABLE users DROP COLUMN name;
+```
+
+한꺼번에 `UPDATE users SET nickname = name`을 하면 수천만 행이 한 트랜잭션에서 잠기고, 그동안 생긴 죽은 행과 WAL이 한꺼번에 쏟아져 복제본이 뒤처진다. 천 건씩 나누면 각 트랜잭션이 짧아서 잠금이 금방 풀린다.
+
+`NOT VALID`로 붙인 제약은 새로 들어오는 행만 검사하고 기존 행은 건너뛴다. `VALIDATE CONSTRAINT`는 기존 행을 훑지만 쓰기를 막지 않는 약한 잠금만 잡는다. 그냥 `SET NOT NULL`을 하면 강한 잠금을 잡은 채 테이블 전체를 훑는다. PostgreSQL 12부터는 유효한 `CHECK (nickname IS NOT NULL)`이 있으면 `SET NOT NULL`이 그 훑기를 건너뛴다.
+
+`CREATE INDEX CONCURRENTLY`는 테이블을 두 번 훑으며 쓰기를 막지 않고 인덱스를 만든다. 대신 트랜잭션 안에서는 못 쓴다.
+
+```text
+BEGIN;
+CREATE INDEX CONCURRENTLY orders_status_idx ON orders (status);
+ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+```
+
+마이그레이션 도구가 파일마다 트랜잭션으로 감싸는 경우가 많으니 이 파일만 트랜잭션을 끄는 옵션을 쓴다. 중간에 실패하면 `INVALID` 상태의 인덱스가 남는다. `\d users`에서 `INVALID`가 붙은 인덱스를 지우고 다시 만든다.
+
+기본값이 있는 열 추가도 확인해 둘 만하다. `ADD COLUMN ... DEFAULT 0`처럼 상수 기본값은 PostgreSQL 11부터 테이블을 다시 쓰지 않는다. `DEFAULT now()`나 `gen_random_uuid()`처럼 행마다 값이 다른 기본값은 모든 행을 다시 쓰느라 오래 잠근다. MySQL 8은 `ALGORITHM=INSTANT`로 즉시 끝나는 변경이 있고, 그렇지 않은 큰 변경에는 gh-ost나 pt-online-schema-change 같은 도구로 복사본 테이블을 만들어 바꿔치기한다.
+
+## 앱 계정에는 필요한 권한만 준다
+
+처음에는 편해서 앱이 `postgres` 슈퍼유저로 접속하는 경우가 있다. 그러면 SQL 인젝션 하나, 실수 하나가 `DROP TABLE`까지 간다. 역할을 셋으로 나눈다. 테이블을 만들고 바꾸는 마이그레이션 계정(테이블 소유자), 데이터만 읽고 쓰는 앱 계정, 읽기만 하는 분석 계정이다.
+
+```sql
+-- 앱 계정과 읽기 전용 계정
+CREATE ROLE shop_app      LOGIN PASSWORD 'change-me';
+CREATE ROLE shop_readonly LOGIN PASSWORD 'change-me';
+
+GRANT CONNECT ON DATABASE shop TO shop_app, shop_readonly;
+GRANT USAGE ON SCHEMA public TO shop_app, shop_readonly;
+
+-- 앱: 데이터 읽고 쓰기만. 테이블 구조는 못 바꾼다
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shop_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO shop_app;
+-- 분석: 읽기만
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO shop_readonly;
+
+-- 앞으로 마이그레이션 계정이 만들 테이블에도 같은 권한이 붙게
+-- (이 명령을 실행한 역할이 만드는 테이블에 적용된다. 마이그레이션 계정으로 실행한다)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shop_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO shop_readonly;
+
+-- 계정별 안전장치: 연결 수 상한, 쿼리 시간 상한, 읽기 전용
+ALTER ROLE shop_app CONNECTION LIMIT 80;
+ALTER ROLE shop_app SET statement_timeout = '5s';
+ALTER ROLE shop_readonly SET default_transaction_read_only = on;
+```
+
+앱 계정으로 위험한 일을 시도해 본다.
+
+```sql
+SET ROLE shop_app;
+DROP TABLE orders;
+TRUNCATE outbox;
+RESET ROLE;
+```
+
+```text
+ERROR:  must be owner of table orders
+ERROR:  permission denied for table outbox
+```
+
+`TRUNCATE`는 `DELETE`와 다른 권한이라 주지 않았다. `statement_timeout`을 계정에 걸어 두면, 실수로 인덱스 없는 쿼리를 배포해도 5초에서 끊겨 DB 전체를 끌고 내려가지 않는다. 분석 계정은 이보다 길게 잡고 복제본이나 웨어하우스로만 보낸다. 비밀번호는 코드에 두지 않고 비밀 관리 도구에 두며, `pg_hba.conf`에서 앱 서버 주소만 허용한다.
+
+## 매일 볼 숫자들
+
+어느 단계로 넘어갈지는 감이 아니라 숫자로 정한다. 그러려면 평소의 숫자를 알고 있어야 한다. PostgreSQL에서 기본으로 볼 것들이다.
+
+```sql
+-- DB별 커밋 수와 캐시 적중률 (두 번 재서 차이를 보면 초당 트랜잭션 수가 된다)
+SELECT datname, numbackends, xact_commit, xact_rollback,
+       round(100.0 * blks_hit / nullif(blks_hit + blks_read, 0), 2) AS cache_hit_pct
+FROM pg_stat_database WHERE datname = 'shop';
+
+-- 5분 넘게 열려 있는 트랜잭션 (VACUUM을 막고 DDL을 막는다)
+SELECT pid, usename, now() - xact_start AS xact_age, state, left(query, 40) AS query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND now() - xact_start > interval '5 minutes'
+ORDER BY xact_age DESC;
+```
+
+```text
+ datname | numbackends | xact_commit | xact_rollback | cache_hit_pct
+---------+-------------+-------------+---------------+---------------
+ shop    |           1 |         135 |             4 |         96.78
+(1 row)
+
+ pid | usename | xact_age | state | query
+-----+---------+----------+-------+-------
+(0 rows)
+```
+
+`cache_hit_pct`는 읽은 페이지 중 PostgreSQL 메모리(shared buffers)에서 찾은 비율이다. 막 띄운 실험 DB라 96.78%지만, 운영 중인 OLTP DB는 보통 99% 근처에 있다. 이 값이 꾸준히 떨어지면 자주 읽는 데이터가 메모리에 다 안 들어간다는 뜻이다. 운영체제 페이지 캐시에서 찾은 것도 "읽음"으로 세기 때문에 실제 디스크 읽기는 이보다 적을 수 있다. 오래 열린 트랜잭션은 0개여야 정상이다. `idle in transaction` 상태로 몇 분씩 남아 있다면 앱 어딘가에서 트랜잭션을 열고 닫지 않은 것이다. `idle_in_transaction_session_timeout`으로 끊을 수 있다.
+
+나머지는 모니터링 도구(postgres_exporter와 Prometheus, 관리형 DB의 대시보드)로 그래프를 그려 둔다. 사용 중인 연결 수와 `max_connections`의 비율, 초당 트랜잭션 수, 주요 쿼리의 p99 응답 시간(`pg_stat_statements`), 복제본이 있다면 바이트 단위 복제 지연, 테이블별 죽은 행 수와 마지막 autovacuum 시각, 디스크 사용량과 WAL 증가 속도, 잠금 대기다. 단계를 넘어갈 신호는 대부분 이 그래프에서 먼저 보인다.
+
+## 단계를 넘어가는 신호
+
+숫자는 장비와 쿼리에 따라 크게 달라서 출발점으로 본다.
+
+PostgreSQL 한 대(와 장애 대비 스탠바이)는 생각보다 오래 간다. 데이터가 수백 GB, 초당 수천 건의 단순한 쿼리 정도는 적절한 인덱스와 커넥션 풀만 있으면 한 대가 받는다. 이 단계에서 할 일은 저장소를 늘리는 게 아니라 느린 쿼리를 고치고, 백업과 복원을 연습하고, 위의 숫자를 모으는 것이다.
+
+캐시와 복제본은 쿼리를 손본 뒤에도 프라이머리 CPU가 바쁜 시간에 70%를 넘고, 그 대부분이 읽기일 때 붙인다. 연결 수가 `max_connections`의 80%를 자주 넘으면 풀러부터 둔다.
+
+웨어하우스와 검색 엔진은 분석 쿼리가 운영 쿼리의 p99를 흔들거나, 검색 요구가 SQL로 표현되지 않을 때 둔다. 쓰기가 프라이머리 한 대의 한계에 닿거나 데이터가 수 TB가 되어 백업 복원에 반나절이 걸린다면 [파티셔닝과 샤딩](/posts/db-replication-sharding)을 본다.
+
+서비스별 DB는 규모보다 조직의 신호다. 스키마 변경 하나에 여러 팀의 배포 일정을 맞춰야 하거나, 한 서비스의 쿼리가 다른 서비스를 자주 느리게 만들 때다. 개발자 몇 명이 서비스 하나를 만드는 동안에는 모듈 경계만 잘 나눠 두면 된다.
+
+## 자주 보는 실수
+
+사용자가 없는데 샤딩부터 한다. 샤딩은 쿼리, 트랜잭션, ID 생성, 운영 방식을 모두 바꾼다. 처음에는 어떤 쿼리가 중요한지 모르니 샤드 키도 제대로 고를 수 없다. 잘못 고른 샤드 키는 샤딩하지 않은 것보다 나쁘다. 한 대의 한계에 닿았다는 숫자를 보기 전에는 하지 않는다.
+
+서비스는 나눴는데 DB는 하나를 같이 쓴다. 배포는 따로인데 스키마는 같이 묶여 있어서 마이크로서비스의 비용(네트워크 호출, 분산 추적, 장애 지점)은 다 내고 장점(독립 배포, 장애 격리)은 못 받는다. 같은 클러스터를 쓰더라도 서비스마다 DB와 계정을 나누고, 다른 서비스의 테이블은 직접 읽지 않는다.
+
+"확장성" 때문에 NoSQL을 고르고 접근 패턴을 정하지 않는다. Cassandra나 DynamoDB는 쿼리 모양을 먼저 정해야 하는 저장소라, 나중에 "이 조건으로도 찾아 주세요"가 생기면 테이블을 새로 만들고 데이터를 옮겨야 한다. MongoDB도 문서를 어떻게 묶을지가 쿼리를 정한다. 확장이 필요한 규모가 오기 전까지는 그 대가만 낸다.
+
+복제본을 붙이고 모든 읽기를 넘긴다. 결제 직후 주문이 사라지는 문의가 들어온다. 읽기마다 얼마나 늦어도 되는지 정하고, 방금 쓴 것을 읽는 경로는 프라이머리로 보낸다.
+
+백업은 있는데 복원해 본 적이 없다. 복원 시간도 모른다. 장애가 났을 때 처음 복원을 해 보게 된다.
+
+## 규모보다 읽는 방식이 먼저다
+
+새 서비스는 PostgreSQL 한 대에 제약 조건과 쿼리에 맞춘 인덱스, 커넥션 풀, 복원까지 확인한 백업으로 시작한다. 읽기가 늘면 캐시와 복제본으로 나누고, 분석과 검색처럼 성격이 다른 일은 CDC로 데이터를 흘려 맞는 저장소로 보낸다. 팀과 서비스가 나뉘면 DB도 서비스별로 나누되, 조인 대신 API와 이벤트, 분산 트랜잭션 대신 아웃박스와 사가라는 대가를 받아들인다. 어느 단계든 다음으로 넘어가는 기준은 유행이 아니라 연결 수, CPU, p99, 복제 지연 같은 숫자와 그 데이터를 어떻게 읽느냐다.
+
+## 면접에서 나올 만한 질문
+
+### 새 서비스의 DB는 무엇으로 시작하겠나요?
+
+특별한 접근 패턴이 없다면 PostgreSQL 같은 관계형 DB 한 대로 시작한다. 초기에는 어떤 쿼리가 중요해질지 모르는데, 정규화된 스키마와 조인이면 새 화면에도 대응할 수 있고 트랜잭션과 제약 조건이 데이터 정합성을 지켜 준다. JSONB, 전문 검색, pgvector 같은 확장으로 초기의 다양한 요구도 한 DB 안에서 받을 수 있다. 커넥션 풀과 PITR 백업, 장애 대비 스탠바이는 처음부터 둔다.
+
+### 서비스마다 DB를 따로 두는 이유와 대가는 무엇인가요?
+
+서비스가 자기 데이터와 스키마를 혼자 가져야 다른 팀과 맞추지 않고 배포할 수 있고, 한 서비스의 무거운 쿼리나 장애가 다른 서비스로 번지지 않는다. 대가로 서비스 간 조인이 안 되어 API 조합이나 데이터 사본이 필요하고, 사본은 결과적 일관성을 갖는다. 여러 서비스에 걸친 작업은 한 트랜잭션으로 묶을 수 없어 사가와 아웃박스로 푼다. 처음에는 같은 클러스터 안에서 DB와 계정만 나눠도 된다.
+
+### 트랜잭셔널 아웃박스 패턴은 어떤 문제를 푸나요?
+
+DB에 쓰고 브로커에 이벤트를 보내는 두 동작은 한 트랜잭션이 아니라서 중간에 죽으면 하나만 성공한다. 아웃박스는 이벤트를 같은 DB의 outbox 테이블에 업무 데이터와 같은 트랜잭션으로 넣고, 별도 릴레이가 그 테이블을 읽어 브로커로 보낸다. 보낸 뒤 표시하기 전에 죽으면 다시 보내므로 적어도 한 번 전달이 되고, 받는 쪽은 이벤트 id로 중복을 걸러 멱등하게 처리해야 한다.
+
+### FOR UPDATE SKIP LOCKED는 언제 쓰나요?
+
+여러 작업자가 같은 테이블에서 할 일을 나눠 가져갈 때 쓴다. FOR UPDATE로 가져간 행을 잠그고, SKIP LOCKED로 다른 작업자가 잠근 행은 기다리지 않고 건너뛰어서 같은 일을 두 번 집지 않으면서 서로 기다리지도 않는다. 아웃박스 릴레이나 PostgreSQL 테이블로 만든 작업 큐가 대표적이다. 건너뛴 행 때문에 처리 순서가 엄격하지 않으니 순서가 중요하면 키별 순서와 버전을 따로 관리한다.
+
+### 운영 중인 큰 테이블의 열 이름을 무중단으로 바꾸려면 어떻게 하나요?
+
+expand/contract로 나눈다. 새 열을 추가하고, 앱이 두 열에 함께 쓰게 배포하고, 옛 행을 작은 배치로 채운 뒤 NOT NULL은 NOT VALID 제약과 VALIDATE로 건다. 앱이 새 열을 읽게 배포하고, 옛 열을 아무도 안 쓸 때 지운다. 각 단계에서 앞 버전으로 되돌릴 수 있고, 모든 DDL에는 lock_timeout을 걸어 잠금 대기열이 쿼리 전체를 막지 않게 한다.
+
+### ALTER TABLE ADD COLUMN 같은 짧은 DDL이 왜 장애를 낼 수 있나요?
+
+DDL은 ACCESS EXCLUSIVE 잠금이 필요해서 긴 트랜잭션이 그 테이블을 쓰고 있으면 기다린다. 기다리는 동안 그 뒤에 오는 평범한 SELECT까지 잠금 대기열에서 막혀 테이블 전체가 멈춘다. 그래서 DDL 전에 lock_timeout을 짧게 걸어 잠금을 못 얻으면 포기하고 다시 시도하게 하고, 오래 열린 트랜잭션을 감시한다.
+
+### OLTP와 OLAP 저장소를 왜 나누나요?
+
+OLTP는 행 몇 개를 빠르게 읽고 쓰는 쿼리가 많이 오고, OLAP은 많은 행의 일부 열을 훑어 집계한다. 행 단위로 저장하는 운영 DB에서 큰 집계를 돌리면 디스크와 캐시를 다 써서 운영 쿼리의 응답 시간이 흔들린다. 컬럼 저장소는 필요한 열만 읽고 압축이 잘 돼 집계에 유리하다. 운영 DB에서 배치나 CDC로 데이터를 옮겨 분석은 그쪽에서 한다.
+
+### NoSQL은 언제 고르나요?
+
+확장성이라는 막연한 이유가 아니라 접근 패턴이 맞을 때 고른다. 한 덩어리를 통째로 읽고 쓰며 모양이 제각각이면 문서형, 정해진 키로 엄청난 쓰기를 받고 쿼리 모양이 고정이면 Cassandra나 DynamoDB 같은 와이드 컬럼이나 키-값 저장소가 맞다. 이런 저장소는 쿼리를 먼저 정하고 그에 맞춰 데이터를 설계하므로, 새로운 조회 조건이 생기면 테이블을 새로 만들고 데이터를 다시 써야 한다는 대가를 같이 본다.

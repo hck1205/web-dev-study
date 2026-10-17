@@ -1,0 +1,648 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("proxy-reverse-proxy");
+
+사내망 서버에서 외부 API가 살아 있는지 보려고 `curl`을 쳤다. 한참 멈춰 있다가 실패한다.
+
+```text
+$ curl --connect-timeout 5 https://example.com
+curl: (28) Failed to connect to example.com port 443 after 5001 ms: Timeout was reached
+```
+
+같은 자리에서 브라우저로는 그 주소가 잘 열린다. 사내 위키를 뒤지면 `export https_proxy=http://10.0.0.10:3128`을 먼저 치라는 한 줄이 나오고, 그걸 치면 `curl`도 된다.
+
+반대쪽 장면도 있다. 서비스 앱 로그에 찍힌 접속 IP가 전부 `10.0.0.5`다. 전 세계 사용자가 한 컴퓨터에서 접속할 리는 없다. `10.0.0.5`는 앱 바로 앞에 있는 로드 밸런서 주소다.
+
+두 장면 모두 가운데에 프록시가 끼어 있다. 첫 번째는 내 쪽에 선 프록시이고, 두 번째는 서버 쪽에 선 프록시다. 같은 "대신 전달해 주는 중계자"인데 누구를 대신하느냐에 따라 이름도, 생기는 문제도 달라진다. 명령어가 나오는 부분은 Ubuntu 24.04(22.04도 같다)를 기준으로 쓴다.
+
+## 프록시는 누구를 대신하나
+
+프록시(proxy)는 원래 "대리인"이라는 뜻이다. 클라이언트와 서버 사이에서 요청을 받아 대신 보내고, 응답을 받아 대신 돌려준다. 양쪽 끝에서 보면 상대가 프록시로 바뀌어 보인다.
+
+포워드 프록시(forward proxy)는 클라이언트를 대신한다. 회사 직원들의 컴퓨터가 인터넷에 나갈 때 거치는 프록시가 대표적이다. 클라이언트는 프록시가 있다는 걸 알고 일부러 그쪽으로 요청을 보낸다. 서버는 요청이 프록시 주소에서 왔다고만 알 뿐, 뒤에 직원이 몇 명 있는지 모른다.
+
+리버스 프록시(reverse proxy)는 서버를 대신한다. 서비스 앞단에 선 nginx나 로드 밸런서가 그렇다. 클라이언트는 `shop.example.com`이라는 서버 하나와 이야기한다고 믿는다. 그 뒤에 앱 서버가 몇 대 있는지, 어디에 있는지 모른다. 이번에는 서버 쪽이 프록시를 알고 있고, 클라이언트는 모른다.
+
+아래 그림에서 위쪽 줄과 아래쪽 줄의 점이 흐르는 방향은 같다. 다른 건 프록시가 어느 편 울타리 안에 서 있느냐다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="위는 클라이언트 편의 포워드 프록시, 아래는 서버 편의 리버스 프록시다."
+  nodes={[
+    { id: "pc", label: "직원 PC", sub: "프록시를 안다", x: 65, y: 55, w: 110 },
+    { id: "fwd", label: "포워드 프록시", sub: "회사망 출구", x: 200, y: 55, w: 120 },
+    { id: "web", label: "외부 서버들", sub: "프록시 IP만 봄", x: 335, y: 55, w: 110 },
+    { id: "user", label: "사용자들", sub: "프록시를 모른다", x: 65, y: 200, w: 110 },
+    { id: "rev", label: "리버스 프록시", sub: "서비스 입구", x: 200, y: 200, w: 120 },
+    { id: "app", label: "앱 서버들", sub: "숨어 있다", x: 335, y: 200, w: 110 },
+  ]}
+  edges={[
+    { from: "pc", to: "fwd", label: "설정" },
+    { from: "fwd", to: "web" },
+    { from: "user", to: "rev", label: "DNS" },
+    { from: "rev", to: "app", label: "분배" },
+  ]}
+/>
+
+그래서 "누가 그 존재를 아는가"로 구분하면 헷갈리지 않는다. 포워드 프록시는 클라이언트가 설정해서 쓰고(설정 파일, 환경 변수, 브라우저 옵션), 리버스 프록시는 DNS가 그쪽을 가리키게 해서 클라이언트 모르게 앞에 세운다.
+
+포워드 프록시를 두는 이유는 대부분 조직의 출구 통제다. 회사는 업무망에서 인터넷으로 나가는 길을 프록시 하나로 모은 뒤, 방화벽에서는 프록시만 밖으로 나갈 수 있게 막는다. 처음 장면에서 `curl`이 타임아웃 난 이유가 이것이다. 프록시를 거치지 않는 연결은 방화벽에서 그냥 버려진다. 길을 하나로 모으면 접속 기록을 남기고, 위험한 사이트나 파일을 걸러 내고, 사용자 인증을 붙일 수 있다. 같은 파일을 여러 명이 받을 때 프록시가 캐시해 대역폭을 아끼기도 하고, 반대로 개인이 자기 IP를 숨기려고 공개 프록시나 VPN을 쓰는 경우도 같은 구조다.
+
+## 프록시에게 보내는 HTTP 요청은 모양이 다르다
+
+평소 브라우저가 서버에 보내는 요청 첫 줄은 경로만 담는다. `GET /index.html HTTP/1.1`이고, 어느 서버인지는 `Host` 헤더에 따로 적는다. 서버 입장에선 이미 자기에게 연결이 왔으니 경로만 알면 된다.
+
+포워드 프록시에게 보낼 때는 다르다. 연결은 프록시와 맺었으니, 프록시가 어디로 전달할지 알 수 있게 첫 줄에 전체 URL을 적는다. HTTP 명세(RFC 9112)는 이걸 absolute-form이라고 부른다. 아래 그림에서 "다음"을 누르면 평문 HTTP 요청이 프록시를 지나간다.
+
+<SequenceDiagram
+  caption="평문 HTTP는 프록시가 요청과 응답을 전부 읽고 전달한다."
+  actors={[
+    { id: "curl", label: "curl" },
+    { id: "proxy", label: "회사 프록시" },
+    { id: "origin", label: "example.com" },
+  ]}
+  steps={[
+    {
+      from: "curl",
+      to: "proxy",
+      label: "GET 전체 URL",
+      title: "프록시에게 전체 URL을 건넨다",
+      detail: "TCP 연결은 프록시(10.0.0.10:3128)와 맺는다. 첫 줄에 스킴과 호스트까지 담아서 어디로 갈지 알려 준다.",
+      payload: "GET http://example.com/ HTTP/1.1\nHost: example.com\nUser-Agent: curl/8.5.0\nAccept: */*\nProxy-Connection: Keep-Alive",
+    },
+    {
+      from: "proxy",
+      to: "proxy",
+      label: "정책 검사",
+      title: "프록시가 요청을 읽고 판단한다",
+      detail: "평문이라 URL, 헤더, 본문이 다 보인다. 차단 목록에 있으면 403을 돌려주고, 로그인이 필요하면 407을 돌려준다. 캐시에 있으면 여기서 바로 응답하기도 한다.",
+    },
+    {
+      from: "proxy",
+      to: "origin",
+      label: "GET /",
+      title: "프록시가 자기 이름으로 다시 요청한다",
+      detail: "프록시가 example.com과 새 연결을 맺고 평범한 요청으로 바꿔 보낸다. 서버가 보는 상대 IP는 회사 프록시의 공인 IP다.",
+      payload: "GET / HTTP/1.1\nHost: example.com\nVia: 1.1 proxy.corp.example",
+    },
+    {
+      from: "origin",
+      to: "proxy",
+      label: "200 OK",
+      title: "응답은 프록시가 먼저 받는다",
+      detail: "프록시는 응답을 검사하고, 캐시해도 되는 응답이면 저장해 둔다.",
+    },
+    {
+      from: "proxy",
+      to: "curl",
+      label: "200 OK",
+      title: "클라이언트는 프록시가 준 응답을 받는다",
+      detail: "curl은 응답이 example.com에서 직접 왔는지 프록시 캐시에서 왔는지 구분하기 어렵다. Via나 Age 헤더가 단서가 된다.",
+    },
+  ]}
+/>
+
+2번 단계에서 나올 수 있는 `407 Proxy Authentication Required`는 프록시가 "너 누구냐"고 묻는 상태 코드다. 서버의 401과 짝을 이루고, 클라이언트는 `Proxy-Authorization` 헤더로 답한다. 프록시 주소에 `http://user:pass@10.0.0.10:3128`처럼 계정을 넣으면 `curl`이 이 헤더를 만들어 준다. 다만 그 비밀번호는 셸 기록과 환경 변수에 그대로 남는다.
+
+## HTTPS는 CONNECT로 터널을 판다
+
+HTTPS 요청은 프록시가 위처럼 읽고 다시 보낼 수가 없다. 내용이 암호화돼 있어서 프록시는 무엇을 전달해야 할지 모른다. 그래서 클라이언트는 프록시에게 요청 대신 통로를 부탁한다. `CONNECT` 메서드다.
+
+<SequenceDiagram
+  caption="CONNECT 뒤로는 프록시가 암호문 바이트를 양쪽으로 옮겨 줄 뿐이다."
+  actors={[
+    { id: "curl", label: "curl" },
+    { id: "proxy", label: "회사 프록시" },
+    { id: "origin", label: "example.com" },
+  ]}
+  steps={[
+    {
+      from: "curl",
+      to: "proxy",
+      label: "CONNECT :443",
+      title: "목적지까지 통로를 부탁한다",
+      detail: "요청 첫 줄에 경로 대신 호스트와 포트만 적는다. 프록시가 알게 되는 건 어디로 가려는지뿐이다.",
+      payload: "CONNECT example.com:443 HTTP/1.1\nHost: example.com:443\nUser-Agent: curl/8.5.0\nProxy-Connection: Keep-Alive",
+    },
+    {
+      from: "proxy",
+      to: "origin",
+      label: "TCP 연결",
+      title: "프록시가 목적지와 TCP를 맺는다",
+      detail: "정책상 example.com:443으로 나가도 된다면 프록시가 직접 연결을 연다. 막힌 도메인이면 여기서 403으로 끝난다.",
+    },
+    {
+      from: "proxy",
+      to: "curl",
+      label: "200 established",
+      title: "통로가 열렸다고 알린다",
+      detail: "이 응답 뒤로 이 TCP 연결은 HTTP가 아니다. 프록시는 한쪽에서 온 바이트를 반대쪽으로 그대로 흘려보낸다.",
+      payload: "HTTP/1.1 200 Connection established",
+    },
+    {
+      from: "curl",
+      to: "origin",
+      label: "TLS 핸드셰이크",
+      title: "TLS는 curl과 서버가 직접 맺는다",
+      detail: "Client Hello가 터널을 지나 서버에 닿는다. 인증서 검증, 키 교환 모두 양 끝에서 일어난다. 프록시는 중간에서 암호문만 본다.",
+      payload: "ClientHello (SNI: example.com, ALPN: h2,http/1.1)",
+    },
+    {
+      from: "curl",
+      to: "origin",
+      label: "GET / (암호화)",
+      title: "실제 요청은 터널 안에서 오간다",
+      detail: "경로, 쿠키, 본문은 프록시가 볼 수 없다. HTTP/2도 ALPN으로 양 끝이 정하므로 터널 안에서 그대로 쓸 수 있다.",
+    },
+  ]}
+/>
+
+그러니 일반적인 포워드 프록시가 HTTPS에서 알 수 있는 건 목적지 호스트와 포트, 그리고 주고받은 양과 시간 정도다. 접속 기록에 `example.com:443`은 남아도 `/admin?token=...` 같은 경로는 남지 않는다. TLS 안의 SNI에도 호스트 이름이 평문으로 실리므로, 프록시가 아닌 투명한 장비도 호스트 이름까지는 볼 수 있다. 자물쇠가 무엇을 가리고 무엇을 못 가리는지는 [HTTPS와 TLS 글](/posts/https-tls)에 따로 정리했다.
+
+`CONNECT`는 원래 웹을 위해 만든 것이라, 프록시들은 보통 443 같은 허용 포트로만 터널을 열어 준다. 아무 포트나 열어 주면 사내망 사람이 프록시를 거쳐 외부 SSH나 메일 서버에 붙는 통로가 된다. Squid 기본 설정도 SSL 포트(443) 이외의 `CONNECT`를 거부한다.
+
+## 회사 프록시가 TLS를 열어 볼 때
+
+일부 회사는 HTTPS 안쪽까지 검사한다. 악성 파일이 암호화된 채로 들어오는 걸 막거나 정보 유출을 감시하려는 목적이다. 방법은 프록시가 가운데서 TLS를 두 번 맺는 것이다. 직원 PC와는 프록시가 `example.com`인 척하며 TLS를 맺고, `example.com`과는 프록시가 클라이언트로서 TLS를 따로 맺는다. 그 사이에서 평문을 읽는다.
+
+이게 경고 없이 동작하려면 프록시가 즉석에서 만든 `example.com` 인증서를 직원 PC가 믿어야 한다. 그래서 회사는 자기 루트 인증서를 모든 PC의 신뢰 목록에 미리 깔아 둔다. 브라우저는 OS 신뢰 목록을 보니 문제없이 열리는데, 터미널 도구는 자기만의 인증서 묶음을 쓰는 경우가 많아서 여기서 막힌다.
+
+```text
+$ curl https://example.com
+curl: (60) SSL certificate problem: self-signed certificate in certificate chain
+More details here: https://curl.se/docs/sslcerts.html
+```
+
+Ubuntu에서는 회사 루트 인증서를 시스템 신뢰 목록에 넣으면 `curl`, `apt`, `wget`이 함께 믿게 된다.
+
+```bash
+# 회사에서 받은 루트 인증서(PEM)를 .crt 확장자로 복사한다
+sudo cp corp-root-ca.crt /usr/local/share/ca-certificates/
+
+# /etc/ssl/certs 묶음을 다시 만든다
+sudo update-ca-certificates
+```
+
+```text
+Updating certificates in /etc/ssl/certs...
+1 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+```
+
+`1 added`가 보이면 들어간 것이다. 그래도 Node.js와 Python `requests`는 자기 묶음을 따로 들고 다녀서 각각 `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` 환경 변수로 이 파일을 알려 줘야 한다. 인증서 고정(pinning)을 하는 모바일 앱이나 일부 도구는 아예 동작하지 않으니, 회사들은 보통 은행·의료 사이트와 그런 도메인을 검사 대상에서 뺀다. 같은 원리 때문에, 모르는 루트 인증서를 깔라는 요청은 내 HTTPS를 전부 열어 볼 권한을 달라는 뜻과 같다.
+
+## 설정 없이 지나가는 프록시와 PAC 파일
+
+지금까지 본 건 명시적(explicit) 프록시다. 클라이언트가 프록시 주소를 알고 거기로 요청을 보낸다. 반대로 투명(transparent) 프록시는 클라이언트 설정이 없다. 네트워크 장비나 게이트웨이가 80번 포트로 나가는 패킷을 몰래 프록시로 돌려보낸다(리눅스라면 iptables `REDIRECT`). 클라이언트는 `example.com`과 직접 이야기한다고 믿는다. 평문 HTTP는 이렇게 가로채서 걸러 낼 수 있지만, HTTPS는 앞에서 본 대로 SNI 정도만 보이고, 내용까지 보려면 결국 루트 인증서를 깔아야 한다.
+
+브라우저가 되는데 `curl`이 안 되는 처음 장면은 PAC 파일로 설명되는 경우가 많다. PAC(Proxy Auto-Config)는 URL마다 어느 프록시를 쓸지 정하는 자바스크립트 파일이다.
+
+```js
+function FindProxyForURL(url, host) {
+  // 사내 도메인과 점 없는 호스트 이름은 바로 간다
+  if (isPlainHostName(host) || dnsDomainIs(host, ".corp.example")) return "DIRECT";
+  // 나머지는 프록시로, 프록시가 죽었으면 직접 시도한다
+  return "PROXY proxy.corp.example:3128; DIRECT";
+}
+```
+
+회사는 이 파일의 주소를 브라우저 정책으로 배포하거나, WPAD(Web Proxy Auto-Discovery)로 자동으로 찾게 한다. WPAD는 DHCP 옵션이나 `wpad.<내 도메인>`이라는 DNS 이름으로 PAC 파일 위치를 찾는다. 편하지만, 같은 네트워크의 공격자가 `wpad` 이름을 먼저 차지하면 모든 트래픽을 자기 프록시로 끌어오는 오래된 공격 경로이기도 하다. 그리고 `curl`과 `apt`는 PAC를 읽지 않는다. 브라우저는 PAC 덕분에 알아서 프록시를 쓰고, 터미널은 아무 설정이 없으니 직접 나가려다 방화벽에 막힌 것이다.
+
+## HTTP를 모르는 프록시, SOCKS5
+
+지금까지 본 HTTP 프록시는 HTTP 요청을 이해한다. SOCKS5(RFC 1928)는 한 단계 아래에서 동작한다. "이 호스트의 이 포트로 연결해 줘"라는 요청만 받고, 그 위로 무엇이 오가는지 상관하지 않는다. HTTP가 아닌 DB 연결, SSH, 게임 트래픽도 지나갈 수 있고 UDP도 중계할 수 있다. 대신 캐시나 URL 필터 같은 HTTP를 아는 기능은 없다.
+
+개발자가 가장 자주 만나는 SOCKS5는 SSH가 만들어 주는 것이다. 배스천 서버를 거쳐서만 닿는 사내 주소를 내 노트북에서 열어 볼 때 쓴다.
+
+```bash
+# 배스천에 SSH로 붙으면서 내 PC의 1080번 포트에 SOCKS5 프록시를 연다
+ssh -N -D 1080 user@bastion.corp.example
+
+# socks5h는 DNS 조회까지 프록시 쪽에서 하게 한다 (사내 DNS 이름을 쓸 때 필요)
+curl --proxy socks5h://127.0.0.1:1080 http://grafana.internal.corp.example
+```
+
+`socks5://`와 `socks5h://`의 차이가 실수가 잦은 곳이다. `h`가 없으면 내 PC가 이름을 먼저 풀어서 IP로 넘기는데, 내 PC의 DNS는 사내 이름을 모르니 실패한다.
+
+## Ubuntu에서 프록시 쓰게 하기
+
+리눅스의 명령줄 도구들은 대부분 환경 변수로 프록시를 찾는다. 이름은 관례일 뿐 표준이 아니라서, 도구마다 읽는 이름이 조금씩 다르다.
+
+```bash
+# HTTP 요청에 쓸 프록시 (curl은 이 이름을 소문자로만 읽는다)
+export http_proxy=http://10.0.0.10:3128
+# HTTPS 요청에 쓸 프록시. 값의 스킴은 대개 http다 (프록시와는 평문으로 CONNECT를 보내니까)
+export https_proxy=http://10.0.0.10:3128
+# 프록시를 거치지 않을 주소. 쉼표로 나열하고, .corp.example은 그 하위 도메인 전체
+export no_proxy=localhost,127.0.0.1,.corp.example,10.0.0.0/8
+
+# 대문자 이름만 읽는 프로그램을 위해 같이 둔다
+export HTTPS_PROXY=$https_proxy NO_PROXY=$no_proxy
+```
+
+헷갈리는 부분이 대소문자다. `curl`은 `http_proxy`만 소문자로 받는다. 웹 서버가 요청 헤더를 `HTTP_` 접두사 환경 변수로 넘기는 CGI 방식에서, 공격자가 `Proxy:` 헤더를 보내면 `HTTP_PROXY`가 만들어져 서버의 바깥 요청이 공격자 프록시로 가는 문제(httpoxy, 2016)가 있었기 때문이다. `https_proxy`와 `no_proxy`는 `curl`도 대소문자 둘 다 읽는다. Go는 대문자를 먼저 보고 소문자도 받고, `wget`은 소문자만 본다. 그래서 실무에서는 두 벌을 같이 둔다.
+
+`no_proxy`도 도구마다 해석이 다르다. `curl` 7.86 이상, Go, Python `requests`는 `10.0.0.0/8` 같은 CIDR을 이해하지만, `wget`처럼 도메인 끝부분 비교만 하는 도구도 있다. `*.corp.example` 같은 와일드카드는 대부분 의도대로 동작하지 않으니 `.corp.example`로 쓴다. 내부 API 호출이 이유 없이 느리거나 407이 난다면 사내 주소가 `no_proxy`에서 빠져서 프록시로 돌아 나가고 있는지부터 본다.
+
+설정이 실제로 먹는지는 `curl -v`로 본다. 앞에서 본 `CONNECT`가 그대로 찍힌다.
+
+```bash
+# 환경 변수의 프록시를 쓰는지, CONNECT가 성공하는지 본다
+curl -v -o /dev/null https://example.com
+
+# 환경 변수와 상관없이 이번 한 번만 프록시를 지정한다
+curl -x http://10.0.0.10:3128 -I https://example.com
+
+# 환경 변수가 있어도 이번에는 프록시 없이 간다
+curl --noproxy '*' -I http://intranet.corp.example
+```
+
+```text
+* Uses proxy env variable https_proxy == 'http://10.0.0.10:3128'
+*   Trying 10.0.0.10:3128...
+* Connected to 10.0.0.10 (10.0.0.10) port 3128
+* CONNECT tunnel: HTTP/1.1 negotiated
+* allocate connect buffer
+* Establish HTTP proxy tunnel to example.com:443
+> CONNECT example.com:443 HTTP/1.1
+> Host: example.com:443
+> User-Agent: curl/8.5.0
+> Proxy-Connection: Keep-Alive
+>
+< HTTP/1.1 200 Connection established
+<
+* CONNECT phase completed
+* CONNECT tunnel established, response 200
+* ALPN: curl offers h2,http/1.1
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+```
+
+첫 줄의 `Uses proxy env variable`이 어떤 변수를 읽었는지 알려 준다. `Connected to`가 프록시 주소인지, `< HTTP/1.1 200`이 오는지 본다. 여기서 `407`이 오면 계정 문제, `403`이면 프록시 정책에서 막힌 것이고, `200` 뒤의 TLS 단계에서 실패하면 앞 절의 인증서 문제다.
+
+셸에서 `export`한 값은 그 셸에만 있다. 로그인하는 모든 세션에 적용하려면 `/etc/environment`에 `http_proxy="http://10.0.0.10:3128"`처럼 `KEY=value` 줄로 적는다. 셸 스크립트가 아니라서 `export`나 `$변수`를 쓸 수 없고, 다시 로그인해야 반영된다.
+
+`apt`는 환경 변수에 기대지 않는 게 안전하다. `sudo`는 기본 설정(`env_reset`)에서 환경 변수를 초기화하므로, 내 셸에 있는 프록시가 `sudo apt`에 넘어가지 않을 수 있다. `apt` 전용 설정 파일에 적는다.
+
+```bash
+# apt 전용 프록시 설정 파일을 만든다
+sudo tee /etc/apt/apt.conf.d/95proxy > /dev/null <<'EOF'
+Acquire::http::Proxy "http://10.0.0.10:3128/";
+Acquire::https::Proxy "http://10.0.0.10:3128/";
+EOF
+
+# apt가 설정을 읽었는지 확인한다
+apt-config dump | grep -i proxy
+```
+
+```text
+Acquire::http::Proxy "http://10.0.0.10:3128/";
+Acquire::https::Proxy "http://10.0.0.10:3128/";
+```
+
+되돌릴 때는 이 파일만 지우면 된다(`sudo rm /etc/apt/apt.conf.d/95proxy`).
+
+Docker는 한 번 더 헷갈린다. `docker pull`로 이미지를 받는 주체는 내 셸이 아니라 systemd가 띄운 `dockerd` 데몬이라서, 셸의 환경 변수를 모른다. 데몬에 따로 알려 줘야 한다.
+
+```bash
+# dockerd 서비스에 환경 변수를 덧붙이는 systemd 설정 조각을 만든다
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf > /dev/null <<'EOF'
+[Service]
+Environment="HTTP_PROXY=http://10.0.0.10:3128"
+Environment="HTTPS_PROXY=http://10.0.0.10:3128"
+Environment="NO_PROXY=localhost,127.0.0.1,.corp.example"
+EOF
+
+# 설정을 다시 읽고 데몬을 재시작한다
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 데몬이 값을 받았는지 확인한다
+sudo systemctl show --property=Environment docker
+```
+
+Docker Engine 23 이상은 `/etc/docker/daemon.json`의 `proxies` 항목으로도 같은 설정을 할 수 있다. 이건 이미지를 받는 데몬의 설정이고, 컨테이너 안의 프로그램이나 `docker build` 중의 `RUN apt-get`이 쓸 프록시는 `~/.docker/config.json`의 `proxies`로 따로 넣는다. 데몬 설정만 하고 빌드가 왜 안 되냐고 헤매는 일이 흔하다.
+
+## 서버 앞을 지키는 리버스 프록시
+
+이제 반대편이다. 서비스를 운영하면 앱 서버를 인터넷에 바로 내놓지 않고 앞에 리버스 프록시를 세운다. 사용자 요청은 리버스 프록시가 먼저 받고, 리버스 프록시가 뒤쪽 앱 서버(업스트림, 오리진)에 다시 요청한다.
+
+앞에 하나를 더 세우는 이유는 앱 서버가 하기 귀찮거나 위험한 일을 한곳에 모으기 위해서다.
+
+- TLS 종료: 인증서와 TLS 핸드셰이크를 프록시가 맡고, 뒤쪽은 평문 HTTP나 내부용 TLS로 받는다. 인증서 갱신도 한 곳에서 한다.
+- 부하 분산: 앱 서버 여러 대에 요청을 나누고, 죽은 서버는 헬스 체크로 빼낸다. 배포할 때 한 대씩 빼고 넣을 수 있다.
+- 캐시와 압축: 정적 파일이나 자주 같은 응답을 저장해 두고, gzip이나 Brotli로 줄여 보낸다.
+- 경로 라우팅: `/api`는 API 서버로, `/`는 프론트엔드 서버로, 같은 도메인 아래 여러 서비스를 나눠 붙인다.
+- 원본 보호: 앱 서버의 실제 주소를 숨기고, 느린 클라이언트가 연결을 오래 붙잡는 공격(Slowloris 같은)을 프록시가 버퍼링으로 받아 낸다. 요청 크기 제한, 접근 제한, 요청 수 제한도 여기에 건다.
+
+리버스 프록시가 받는 요청은 평범한 origin-form이다. 사용자는 이게 프록시인지 모르니 `GET /cart HTTP/1.1`을 보낸다. nginx로 이걸 실제로 설정하는 방법은 [nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)에, 캐시를 CDN까지 넓힌 이야기는 [HTTP 캐시와 CDN 글](/posts/http-caching-cdn)에 있다. 로컬 개발에서 `app.matt.test`, `api.matt.test`를 리버스 프록시로 나누는 예는 [내 도메인으로 개발하기](/posts/local-custom-domain)에서 다뤘다.
+
+## 앱에는 로드 밸런서 주소만 보인다
+
+리버스 프록시가 공짜는 아니다. 처음의 두 번째 장면이 그 대가다. 프록시는 사용자 요청을 받아 자기가 새 TCP 연결을 열고 앱에 다시 보낸다. 앱이 보는 상대 주소(소켓의 원격 주소, nginx로 치면 `$remote_addr`)는 사용자가 아니라 프록시다. 모든 요청이 `10.0.0.5`에서 온 것처럼 보이는 이유다.
+
+이러면 접속 로그가 쓸모없어지고, IP별 요청 수 제한은 모든 사용자를 한 사람으로 취급하며, IP 기반 차단은 로드 밸런서를 차단한다. 국가별 처리도 할 수 없다. TLS를 프록시가 끝냈다면 앱은 사용자가 HTTPS로 왔는지도 모른다.
+
+그래서 프록시들은 원래 정보를 헤더에 적어 넘기는 관례를 만들었다. 표준으로 정해지기 전에 널리 퍼진 `X-Forwarded-*` 헤더들이다.
+
+- `X-Forwarded-For`: 요청이 거쳐 온 클라이언트 IP들. 프록시마다 자기가 받은 연결의 상대 주소를 끝에 덧붙인다.
+- `X-Forwarded-Proto`: 사용자가 처음 들어온 스킴(`https`). 앱이 리다이렉트 URL을 만들거나 `Secure` 쿠키를 판단할 때 쓴다.
+- `X-Forwarded-Host`: 사용자가 요청한 원래 `Host`. 프록시가 업스트림으로 보낼 때 `Host`를 바꿨다면 필요하다.
+
+`X-Forwarded-Proto`를 빠뜨렸을 때 증상이 독특하다. 앱이 "HTTP로 왔으니 HTTPS로 가라"고 301을 보내고, 브라우저는 HTTPS로 다시 오지만 프록시가 TLS를 끝내고 앱에는 또 HTTP로 넘기니, 앱은 다시 301을 보낸다. 브라우저에 "리디렉션한 횟수가 너무 많습니다"가 뜬다. 앱 프레임워크에 "앞에 프록시가 있으니 이 헤더를 믿어라"라고 알려 주면 풀린다(Express의 `trust proxy`, Spring Boot의 `server.forward-headers-strategy`).
+
+## X-Forwarded-For 한 줄 뜯어보기
+
+`X-Forwarded-For`는 쉼표로 이어진 목록이다. 왼쪽이 가장 먼 쪽(처음 요청을 보낸 쪽), 오른쪽이 나와 가장 가까운 쪽이다. 각 프록시는 받은 헤더 끝에 자기가 본 상대 주소를 붙인다. 그래서 바로 앞 프록시의 주소는 목록에 없고, 앱이 보는 소켓 원격 주소로만 알 수 있다.
+
+CDN, 로드 밸런서, nginx를 거쳐 앱에 도착한 헤더를 조각내 보면 이렇다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="왼쪽일수록 멀고, 오른쪽일수록 나와 가깝다"
+  base="X-Forwarded-For:"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "spoofed",
+      display: "1.2.3.4",
+      title: "사용자가 직접 써 넣은 값",
+      description: "사용자가 처음부터 X-Forwarded-For: 1.2.3.4를 붙여 보내면, CDN은 그 뒤에 덧붙이기만 한다. 그래서 가장 왼쪽 값은 아무나 지어낼 수 있다. 여기를 클라이언트 IP로 쓰면 요청 수 제한과 IP 차단을 쉽게 피해 간다.",
+    },
+    {
+      key: "client",
+      display: "203.0.113.7",
+      title: "CDN이 본 사용자 주소",
+      description: "CDN 엣지가 받은 TCP 연결의 상대 주소다. 믿을 수 있는 첫 번째 프록시가 직접 확인한 값이라 이게 진짜 클라이언트 IP다.",
+      required: true,
+    },
+    {
+      key: "cdn",
+      display: "198.51.100.20",
+      title: "로드 밸런서가 본 CDN 주소",
+      description: "로드 밸런서에 연결해 온 상대, 즉 CDN 엣지 서버의 주소다. CDN 대역을 믿는 프록시 목록에 넣어야 이 값을 건너뛴다.",
+    },
+    {
+      key: "lb",
+      display: "10.0.0.5",
+      title: "nginx가 본 로드 밸런서 주소",
+      description: "nginx가 받은 연결의 상대다. nginx는 $proxy_add_x_forwarded_for로 들어온 헤더 끝에 이 값을 붙여 앱에 넘긴다. nginx 자신의 주소(10.0.1.10)는 목록에 없고, 앱의 소켓 원격 주소로 보인다.",
+      code: "앱이 보는 것\nremoteAddr        10.0.1.10\nX-Forwarded-For   1.2.3.4, 203.0.113.7, 198.51.100.20, 10.0.0.5",
+    },
+  ]}
+/>
+
+그래서 진짜 클라이언트 IP를 고르는 규칙은 "가장 왼쪽"이 아니라 "오른쪽부터 거슬러 가면서 내가 믿는 프록시를 건너뛰고, 처음 나오는 모르는 주소"다. 내 인프라가 덧붙인 값은 믿을 수 있고, 그보다 왼쪽은 남이 써 준 것이기 때문이다. 바로 앞 연결이 믿는 프록시가 아니라면 헤더는 아예 보지 않는다. 사용자가 직접 붙은 경우라서 헤더가 전부 지어낸 값이다.
+
+<Callout kind="warning" title="믿는 프록시 목록을 넓게 잡지 않는다">
+nginx `set_real_ip_from 0.0.0.0/0;`이나 Express `app.set("trust proxy", true)`는 누가 보낸 헤더든 다 믿겠다는 뜻이다. 이러면 가장 왼쪽 값이 클라이언트 IP가 되어 위조가 그대로 통한다. 실제로 앞에 있는 로드 밸런서와 CDN의 주소 대역만 적고, 앱 서버는 그 프록시를 거치지 않는 연결을 받지 않게 방화벽이나 보안 그룹으로 막는다.
+</Callout>
+
+## 진짜 클라이언트 IP 고르기
+
+위 규칙을 직접 짜 보자. `xff`는 헤더 값 문자열, `remoteAddr`는 소켓의 원격 주소, `trustedProxies`는 믿는 프록시 IP 배열이다. 실제 코드라면 CIDR 대역으로 비교하지만 여기서는 정확히 같은 IP만 본다. 헤더가 비었거나 목록이 전부 믿는 프록시라면 알 수 있는 가장 먼 주소를 돌려준다.
+
+<CodePlayground
+  caption="X-Forwarded-For를 오른쪽부터 거슬러 올라가기"
+  functionName="clientIp"
+  initialCode={`function clientIp(xff, remoteAddr, trustedProxies) {
+  // xff: "1.2.3.4, 203.0.113.7, 10.0.0.5" 같은 헤더 값 (없으면 "")
+  // remoteAddr: 나에게 직접 연결한 상대 주소
+  // trustedProxies: 믿는 프록시 IP 배열
+  // 1. remoteAddr가 믿는 프록시가 아니면 그게 클라이언트다
+  // 2. 아니면 xff를 오른쪽부터 보며 믿는 프록시를 건너뛴다
+  return remoteAddr;
+}`}
+  solution={`function clientIp(xff, remoteAddr, trustedProxies) {
+  const trusted = new Set(trustedProxies);
+  // 직접 붙은 상대가 믿는 프록시가 아니면 헤더는 볼 필요도 없다
+  if (!trusted.has(remoteAddr)) return remoteAddr;
+  const hops = xff
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  // 오른쪽(나와 가까운 쪽)부터 거슬러 올라간다
+  for (let i = hops.length - 1; i >= 0; i--) {
+    if (!trusted.has(hops[i])) return hops[i];
+  }
+  // 전부 믿는 프록시라면 가장 왼쪽이 알 수 있는 가장 먼 주소다
+  return hops.length > 0 ? hops[0] : remoteAddr;
+}`}
+  tests={[
+    { args: ["", "203.0.113.7", ["10.0.0.5"]], expected: "203.0.113.7", label: "프록시 없이 직접 접속" },
+    { args: ["1.2.3.4", "203.0.113.7", ["10.0.0.5"]], expected: "203.0.113.7", label: "직접 접속 + 위조 헤더" },
+    { args: ["203.0.113.7", "10.0.0.5", ["10.0.0.5"]], expected: "203.0.113.7", label: "LB 하나 뒤" },
+    {
+      args: ["203.0.113.7, 198.51.100.20, 10.0.0.5", "10.0.1.10", ["198.51.100.20", "10.0.0.5", "10.0.1.10"]],
+      expected: "203.0.113.7",
+      label: "CDN, LB, nginx 뒤",
+    },
+    {
+      args: ["1.2.3.4, 203.0.113.7, 198.51.100.20, 10.0.0.5", "10.0.1.10", ["198.51.100.20", "10.0.0.5", "10.0.1.10"]],
+      expected: "203.0.113.7",
+      label: "왼쪽에 위조 값",
+    },
+    {
+      args: ["203.0.113.7,198.51.100.20", "10.0.0.5", ["10.0.0.5"]],
+      expected: "198.51.100.20",
+      label: "CDN을 목록에 안 넣음",
+    },
+    {
+      args: ["10.0.0.9, 10.0.0.5", "10.0.1.10", ["10.0.0.9", "10.0.0.5", "10.0.1.10"]],
+      expected: "10.0.0.9",
+      label: "전부 믿는 프록시",
+    },
+    { args: ["", "10.0.0.5", ["10.0.0.5"]], expected: "10.0.0.5", label: "믿는 프록시인데 헤더 없음" },
+  ]}
+/>
+
+여섯 번째 테스트가 실무에서 자주 나는 실수다. CDN을 앞에 새로 붙이고 믿는 목록에 CDN 대역을 넣지 않으면, 모든 사용자 IP가 CDN 엣지 주소로 바뀐다. 처음 장면의 `10.0.0.5`와 같은 증상이 한 단계 바깥에서 다시 생긴 것이다. 이 규칙은 nginx `realip` 모듈이 `real_ip_recursive on`일 때 하는 일과 같다.
+
+```nginx
+# 이 대역에서 온 연결이 보낸 X-Forwarded-For만 믿는다
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 198.51.100.0/24;   # CDN 대역 (CDN이 공개하는 목록으로 채운다)
+real_ip_header X-Forwarded-For;
+# 오른쪽부터 믿는 주소를 건너뛰고 처음 나오는 모르는 주소를 $remote_addr로 쓴다
+real_ip_recursive on;
+```
+
+가장 바깥 프록시에서는 반대로 들어온 헤더를 버리고 새로 쓰는 방법도 있다. 엣지 nginx에서 `proxy_set_header X-Forwarded-For $remote_addr;`라고 쓰면 사용자가 붙여 온 값이 사라지고 뒤쪽은 위조를 걱정할 필요가 없다. 안쪽 프록시는 `$proxy_add_x_forwarded_for`로 덧붙이기만 하면 된다.
+
+## 표준 헤더 Forwarded
+
+`X-` 헤더들은 관례라서 표기가 들쭉날쭉했다. IP 목록, 스킴, 호스트가 각각 다른 헤더에 흩어져 있어서 어느 프록시가 어느 값을 붙였는지 짝을 맞출 수도 없다. 그래서 2014년 RFC 7239가 이걸 `Forwarded` 헤더 하나로 묶었다.
+
+```text
+Forwarded: for=203.0.113.7;proto=https;host=shop.example.com, for=198.51.100.20
+```
+
+쉼표로 나뉜 한 덩어리가 프록시 하나의 기록이고, 그 안에 `for`(상대 주소), `proto`, `host`, `by`(받은 프록시 자신)를 세미콜론으로 붙인다. IPv6는 `for="[2001:db8:cafe::17]:4711"`처럼 따옴표와 대괄호로 감싸야 하고, 주소를 숨기고 싶으면 `for=unknown`이나 `for=_hidden` 같은 가명을 쓸 수 있다.
+
+설계는 더 깔끔하지만 아직 `X-Forwarded-For`만큼 퍼지지 않았다. nginx는 이 헤더를 기본으로 만들지 않고, 많은 클라우드 로드 밸런서와 프레임워크도 `X-Forwarded-*`가 기본이다. 두 헤더를 섞어 쓰면 값이 어긋날 수 있으니, 구간마다 무엇을 쓸지 하나로 정한다. 위조 문제와 오른쪽부터 읽는 규칙은 `Forwarded`에도 똑같이 적용된다.
+
+## 헤더를 못 붙이는 L4 로드 밸런서와 PROXY protocol
+
+`X-Forwarded-For`는 HTTP 헤더라서, HTTP를 열어 보는 프록시만 붙일 수 있다. TCP 연결만 이어 주는 L4 로드 밸런서는 요청을 해석하지 않으니 헤더를 고칠 수 없다. TLS를 뒤쪽 nginx에서 끝내는 구성이라면 L4 장비가 보는 건 암호문뿐이다.
+
+이럴 때 쓰는 게 HAProxy가 만든 PROXY protocol이다. 로드 밸런서가 뒤쪽과 TCP 연결을 맺자마자, 실제 데이터를 보내기 전에 원래 연결 정보를 한 줄 먼저 보낸다. 버전 1은 사람이 읽을 수 있는 텍스트 한 줄이다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="TCP 연결의 맨 앞에 붙는 한 줄. 끝은 \r\n이다"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "PROXY",
+      title: "시그니처",
+      description: "받는 쪽은 연결의 첫 바이트가 이 글자로 시작하는지 본다. 버전 2는 같은 정보를 정해진 12바이트 시그니처 뒤에 이진 형식으로 담는다.",
+      required: true,
+    },
+    {
+      key: "TCP4",
+      title: "주소 종류",
+      description: "IPv4면 TCP4, IPv6면 TCP6이다. 헬스 체크처럼 원래 연결 정보가 없으면 UNKNOWN을 쓰고 나머지를 생략할 수 있다.",
+      required: true,
+    },
+    {
+      key: "src",
+      display: "203.0.113.7",
+      title: "원래 출발지 IP",
+      description: "로드 밸런서가 받은 연결의 상대, 즉 사용자 IP다. nginx에서는 $proxy_protocol_addr로 읽는다.",
+      required: true,
+    },
+    {
+      key: "dst",
+      display: "198.51.100.50",
+      title: "원래 목적지 IP",
+      description: "사용자가 접속한 주소, 로드 밸런서의 공인 IP다.",
+      required: true,
+    },
+    {
+      key: "sport",
+      display: "51234",
+      title: "출발지 포트",
+      description: "사용자 쪽 임시 포트다. 공유기 뒤의 여러 사람이 같은 공인 IP를 쓸 때 IP와 포트를 함께 남겨야 한 사람을 가려낼 수 있다.",
+      required: true,
+    },
+    {
+      key: "dport",
+      display: "443",
+      title: "목적지 포트",
+      description: "사용자가 붙은 포트다. 이 줄 바로 뒤에 TLS Client Hello 같은 원래 데이터가 이어진다.",
+      required: true,
+      code: "PROXY TCP4 203.0.113.7 198.51.100.50 51234 443\\r\\n\n(이어서 TLS ClientHello 바이트...)",
+    },
+  ]}
+/>
+
+받는 쪽도 이 줄을 기대하고 있어야 한다. nginx라면 `listen 443 ssl proxy_protocol;`로 켜고, `set_real_ip_from`과 `real_ip_header proxy_protocol;`로 이 값을 `$remote_addr`로 바꾼다. 양쪽 설정이 어긋나면 바로 깨진다. 로드 밸런서만 켜면 nginx는 TLS 대신 `PROXY ...` 글자를 받아서 핸드셰이크가 실패하고, nginx만 켜면 PROXY 줄을 기다리다 모든 연결을 거부한다. 그래서 둘을 바꿀 때는 같은 배포에서 함께 바꾼다. AWS NLB는 대상 그룹 속성으로 버전 2를 켤 수 있고, HAProxy는 `send-proxy`, `send-proxy-v2` 옵션으로 보낸다.
+
+## CDN에서 앱까지, 헤더가 붙는 자리
+
+실제 서비스는 프록시가 한 겹이 아니다. 흔한 구성은 CDN 엣지 → 클라우드 로드 밸런서 → nginx → 앱이다. 각 단계가 무엇을 덧붙이는지 따라가 보면, 앱에 도착한 헤더를 어떻게 읽어야 하는지가 보인다.
+
+<SequenceDiagram
+  caption="프록시마다 자기가 본 상대 주소를 X-Forwarded-For 끝에 붙인다."
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "cdn", label: "CDN" },
+    { id: "lb", label: "LB" },
+    { id: "nginx", label: "nginx" },
+    { id: "app", label: "앱" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "cdn",
+      label: "GET /cart",
+      title: "사용자는 CDN과 이야기한다",
+      detail: "DNS가 shop.example.com을 CDN 엣지로 가리킨다. TLS도 엣지에서 끝난다. 사용자가 X-Forwarded-For를 지어 붙였을 수도 있다.",
+      payload: "GET /cart HTTP/2\n:authority: shop.example.com",
+    },
+    {
+      from: "cdn",
+      to: "lb",
+      label: "XFF +사용자",
+      title: "CDN이 사용자 주소를 적는다",
+      detail: "CDN은 받은 연결의 상대 203.0.113.7을 X-Forwarded-For에 넣고, 처음 스킴을 X-Forwarded-Proto에 적는다. 일부 CDN은 클라이언트 IP 전용 헤더(Cloudflare의 CF-Connecting-IP 등)도 따로 붙인다.",
+      payload: "X-Forwarded-For: 203.0.113.7\nX-Forwarded-Proto: https",
+    },
+    {
+      from: "lb",
+      to: "nginx",
+      label: "XFF +CDN",
+      title: "로드 밸런서가 CDN 주소를 덧붙인다",
+      detail: "LB가 보는 상대는 CDN 엣지 198.51.100.20이다. 이걸 목록 끝에 붙이고 여러 nginx 중 하나를 고른다.",
+      payload: "X-Forwarded-For: 203.0.113.7, 198.51.100.20\nX-Forwarded-Proto: https",
+    },
+    {
+      from: "nginx",
+      to: "app",
+      label: "XFF +LB",
+      title: "nginx가 로드 밸런서 주소를 덧붙인다",
+      detail: "$proxy_add_x_forwarded_for가 들어온 값 끝에 10.0.0.5를 붙인다. Host와 X-Forwarded-Proto도 그대로 넘겨 준다.",
+      payload: "X-Forwarded-For: 203.0.113.7, 198.51.100.20, 10.0.0.5\nX-Forwarded-Proto: https\nHost: shop.example.com",
+    },
+    {
+      from: "app",
+      to: "app",
+      label: "오른쪽부터",
+      title: "앱이 믿는 프록시를 건너뛴다",
+      detail: "소켓 상대는 nginx 10.0.1.10이다. 오른쪽부터 10.0.0.5(LB), 198.51.100.20(CDN)을 건너뛰고, 처음 만나는 모르는 주소 203.0.113.7을 사용자 IP로 쓴다.",
+      payload: "remoteAddr = 10.0.1.10\nclientIp   = 203.0.113.7",
+    },
+  ]}
+/>
+
+앱 쪽에서 정해 둘 것은 둘이다. 어느 주소들을 믿을지(LB와 nginx의 사설 대역, CDN이 공개한 대역), 그리고 앱 서버가 이 경로 밖에서 들어오는 연결을 받지 않게 막는 것이다. 누군가 CDN을 건너뛰고 로드 밸런서나 원본에 직접 붙을 수 있다면, 믿는 목록이 아무리 정확해도 그 사람은 CDN의 보안 규칙을 통째로 피해 간다.
+
+## 리버스 프록시, 로드 밸런서, API 게이트웨이
+
+셋은 자주 섞어 부른다. 실제로 겹치는 부분이 많아서다.
+
+로드 밸런서는 이름 그대로 같은 일을 하는 서버 여러 대에 연결이나 요청을 나누는 게 목적이다. 어느 층에서 나누느냐로 둘로 갈린다. L4 로드 밸런서는 IP와 포트만 보고 TCP 연결 단위로 나눈다. 내용을 열어 보지 않으니 빠르고 HTTP가 아닌 프로토콜도 받지만, 경로별 라우팅이나 헤더 추가는 못 한다. 그래서 앞에서 본 PROXY protocol이 필요하다. L7 로드 밸런서는 HTTP를 해석해서 요청 단위로 나눈다. 경로·헤더·쿠키를 보고 보낼 곳을 정하고, `X-Forwarded-For`도 붙인다. L7 로드 밸런서는 사실상 부하 분산에 초점을 둔 리버스 프록시다.
+
+리버스 프록시는 더 넓은 말이다. 서버 앞에서 대신 받는 중계자라면 다 여기에 들어가고, 부하 분산은 그 기능 중 하나다. 서버가 한 대여도 TLS 종료와 캐시를 위해 리버스 프록시를 둔다.
+
+API 게이트웨이는 API 트래픽에 특화된 리버스 프록시다. 인증, API 키별 요청 수 제한, 요청·응답 변환처럼 "누가 어떤 API를 부르는가"를 아는 기능을 더한다. 경계와 고르는 기준은 [게이트웨이 글](/posts/gateway)에서 자세히 비교했다. 제품 이름보다 그 자리에서 어떤 책임을 맡기는지로 구분하는 게 정확하다. nginx 한 대가 리버스 프록시, L7 로드 밸런서, 간단한 게이트웨이를 동시에 하는 경우도 흔하다.
+
+## 다시 두 장면으로
+
+사내 서버의 `curl`은 클라이언트를 대신하는 포워드 프록시를 몰라서 방화벽에 막혔다. 브라우저는 PAC로 프록시를 알고 있었고, 터미널은 `https_proxy`를 알려 주자 `CONNECT`로 터널을 열어 지나갔다. 앱 로그의 `10.0.0.5`는 서버를 대신하는 리버스 프록시가 새 연결을 맺은 결과다. 원래 주소는 `X-Forwarded-For`나 PROXY protocol로 따라오고, 앱은 내가 믿는 프록시를 오른쪽부터 건너뛰어 처음 만나는 주소를 사용자 IP로 쓴다. 프록시를 하나 더 붙일 때마다, 누가 무엇을 덧붙이는지와 누구를 믿는지를 같이 고쳐야 한다.
+
+## 면접에서 나올 만한 질문
+
+### 포워드 프록시와 리버스 프록시는 어떻게 다른가요?
+
+누구를 대신하느냐가 다르다. 포워드 프록시는 클라이언트 편에 서서 클라이언트 대신 외부로 요청을 보내고, 클라이언트가 직접 설정해서 쓰며 서버는 프록시 IP만 본다. 리버스 프록시는 서버 편에 서서 서버 대신 요청을 받고, DNS로 앞에 세우기 때문에 클라이언트는 그 존재를 모른다. 앞은 출구 통제·필터링·캐시에, 뒤는 TLS 종료·부하 분산·캐시·원본 보호에 쓴다.
+
+### 포워드 프록시를 거치는 HTTPS 요청은 어떻게 동작하나요? 프록시가 내용을 볼 수 있나요?
+
+클라이언트가 `CONNECT example.com:443`으로 프록시에게 TCP 통로를 부탁하고, 프록시가 `200 Connection established`를 주면 그 뒤로는 바이트만 중계한다. TLS 핸드셰이크는 클라이언트와 서버가 직접 하므로 프록시는 경로나 본문을 볼 수 없고, 목적지 호스트와 포트, 트래픽 양 정도만 안다. 평문 HTTP는 첫 줄에 전체 URL을 담은 absolute-form으로 보내고 프록시가 내용을 다 읽는다.
+
+### 그런데 회사 프록시가 HTTPS 내용을 검사한다는 건 어떻게 가능한가요?
+
+TLS 가로채기다. 프록시가 클라이언트와는 목적지 서버인 척 TLS를 맺고, 서버와는 따로 TLS를 맺어 중간에서 평문을 본다. 즉석에서 만든 인증서를 클라이언트가 믿게 하려고 회사 루트 인증서를 모든 PC에 미리 설치한다. 그래서 자기 인증서 묶음을 쓰는 도구나 인증서 고정을 하는 앱은 실패하고, 그런 도구에는 회사 루트 인증서를 따로 알려 줘야 한다.
+
+### 리버스 프록시 뒤에서 앱이 진짜 클라이언트 IP를 알려면 어떻게 하나요?
+
+프록시가 새 연결을 맺기 때문에 소켓 상대 주소는 프록시다. 그래서 프록시가 `X-Forwarded-For`(또는 표준 `Forwarded`) 헤더에 자기가 본 상대 주소를 덧붙이고, 앱은 이 목록을 읽는다. 읽을 때는 오른쪽부터 내가 믿는 프록시 주소를 건너뛰고 처음 나오는 모르는 주소를 클라이언트로 쓴다. nginx의 `real_ip_recursive on`, Express의 `trust proxy`에 대역을 주는 설정이 이 일을 한다.
+
+### X-Forwarded-For의 가장 왼쪽 값을 쓰면 왜 안 되나요?
+
+가장 왼쪽은 클라이언트가 직접 써 넣을 수 있는 값이기 때문이다. 프록시는 받은 헤더를 지우지 않고 끝에 덧붙이기만 하므로, 사용자가 `1.2.3.4`를 붙여 보내면 그 값이 맨 왼쪽에 남는다. 이걸 믿으면 IP 기반 요청 수 제한, 차단, 감사 로그를 쉽게 속일 수 있다. 내 인프라가 덧붙인 오른쪽 부분만 믿고, 엣지에서 들어온 헤더를 덮어쓰거나 원본에 직접 붙는 길을 막는 것까지 해야 안전하다.
+
+### L4 로드 밸런서 뒤에서는 클라이언트 IP를 어떻게 넘기나요?
+
+L4는 HTTP를 해석하지 않으니 헤더를 붙일 수 없다. 대신 PROXY protocol로 TCP 연결 맨 앞에 `PROXY TCP4 출발지IP 목적지IP 출발지포트 목적지포트` 한 줄(v1)이나 이진 헤더(v2)를 먼저 보낸다. 받는 쪽도 이걸 기대하도록 설정해야 하고, 한쪽만 켜면 모든 연결이 깨지므로 양쪽을 함께 바꾼다. 출발지 IP를 바꾸지 않고 그대로 전달하는 방식의 로드 밸런서도 있는데, 그때는 응답이 다시 로드 밸런서를 지나도록 라우팅을 맞춰야 한다.
+
+### HTTPS로 접속했는데 앱이 계속 HTTPS로 리다이렉트해서 무한 루프가 나요. 왜 그런가요?
+
+프록시가 TLS를 끝내고 앱에는 HTTP로 넘기는데, 앱이 그걸 사용자가 HTTP로 왔다고 판단하기 때문이다. 프록시가 `X-Forwarded-Proto: https`를 넘기고, 앱 프레임워크에 앞단 프록시를 믿으라고 설정해야 원래 스킴을 안다. 같은 이유로 `Secure` 쿠키가 안 붙거나 절대 URL이 `http://`로 만들어지는 문제도 함께 풀린다.
+
+### 리버스 프록시, 로드 밸런서, API 게이트웨이는 어떻게 구분하나요?
+
+리버스 프록시는 서버 앞에서 대신 받는 중계자 전체를 말하고, 로드 밸런서는 그중 여러 서버에 나누는 역할에 집중한 것이다. L4 로드 밸런서는 TCP 연결 단위로, L7은 HTTP 요청 단위로 나누며 L7은 사실상 리버스 프록시다. API 게이트웨이는 인증, API 키별 요청 수 제한, 변환처럼 API 의미를 아는 기능을 더한 리버스 프록시다. 제품은 경계가 겹치니 그 자리에서 맡는 책임으로 구분한다.

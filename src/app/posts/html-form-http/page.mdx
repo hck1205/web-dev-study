@@ -1,0 +1,484 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("html-form-http");
+
+블로그 검색창에 `http form`을 치고 엔터를 누르면 주소가 `/search?q=http+form`으로 바뀐다. 공백이 `+`가 됐다. 이 주소를 복사해 친구에게 보내면 친구도 같은 검색 결과를 본다.
+
+같은 방식으로 로그인 폼을 만들면 큰일이 난다. 주소가 `/login?id=matt&pw=p%40ss+w%26rd`가 되고, 비밀번호가 방문 기록과 서버 접근 로그에 그대로 남는다. 두 폼의 차이는 `<form>` 태그 속성 하나다.
+
+자바스크립트 없이 HTML만으로도 폼은 HTTP 요청을 만든다. 브라우저가 입력값을 어떤 규칙으로 모으고, 어떤 모양의 요청으로 바꾸는지 따라가 본다. fetch로 직접 보낼 때 무엇이 달라지는지, 보낸 뒤에 생기는 중복 제출과 CSRF 문제도 함께 본다.
+
+## form 태그의 속성 세 개가 요청을 정한다
+
+폼이 만들 요청은 세 속성이 정한다.
+
+```html
+<form action="/search" method="get" enctype="application/x-www-form-urlencoded">
+  <input name="q" />
+  <button>검색</button>
+</form>
+```
+
+`action`은 요청을 보낼 주소다. 없으면 지금 페이지 주소로 보낸다. `method`는 `get` 또는 `post`이고, 없으면 `get`이다. `enctype`은 POST 본문을 어떤 형식으로 만들지 정한다. 기본값은 `application/x-www-form-urlencoded`이고, 그 밖에 `multipart/form-data`와 `text/plain`만 고를 수 있다. GET이면 본문이 없으니 `enctype`은 무시되고 값은 늘 주소의 쿼리 문자열로 간다.
+
+제출 버튼이 이 값을 덮어쓸 수도 있다. `<button formaction="/drafts" formmethod="post">`처럼 쓰면 그 버튼으로 제출할 때만 주소와 메서드가 바뀐다. 한 폼에서 "임시 저장"과 "발행"을 다른 주소로 보낼 때 쓴다.
+
+## 입력값이 쿼리 문자열이 되기까지
+
+제출하면 브라우저는 폼 안의 컨트롤을 문서 순서대로 훑으며 `이름=값` 쌍 목록을 만든다. 스펙에서는 이걸 form data set이라고 부른다. 모든 컨트롤이 들어가지는 않는다. 아래 폼으로 확인해 보자.
+
+```html
+<form action="/search">
+  <input name="q" value="http form" />
+  <select name="lang"><option value="ko" selected>한국어</option></select>
+  <input type="checkbox" name="exact" />
+  <input type="checkbox" name="tag" value="html" checked />
+  <input type="checkbox" name="tag" value="http" checked />
+  <input name="page" value="1" disabled />
+  <input value="이름이 없다" />
+  <button name="sort" value="new">최신순</button>
+</form>
+```
+
+아래 그림에서 다음을 누르면 브라우저가 컨트롤을 하나씩 보며 쌍을 고르는 과정이 보인다. 체크하지 않은 체크박스는 비어 있는 상태다.
+
+<AlgoTrace
+  caption="'최신순' 버튼으로 제출했을 때 만들어지는 쌍 목록"
+  memoryLabel="보낼 쌍"
+  cells={["q", "lang", "exact ☐", "tag=html ☑", "tag=http ☑", "page 비활성", "name 없음", "sort 버튼"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["q=http form"],
+      caption: "텍스트 입력은 이름과 현재 값을 그대로 넣는다. 인코딩은 마지막에 한 번에 한다.",
+    },
+    {
+      pointer: 1,
+      memory: ["q=http form", "lang=ko"],
+      caption: "select는 선택된 option의 value를 넣는다.",
+    },
+    {
+      pointer: 2,
+      memory: ["q=http form", "lang=ko"],
+      caption: "체크하지 않은 체크박스는 아예 빠진다. exact=false 같은 값은 가지 않는다.",
+    },
+    {
+      pointer: 3,
+      memory: ["q=http form", "lang=ko", "tag=html"],
+      caption: "체크한 체크박스는 value를 넣는다. value가 없었다면 on이 간다.",
+    },
+    {
+      pointer: 4,
+      memory: ["q=http form", "lang=ko", "tag=html", "tag=http"],
+      caption: "같은 이름이 또 나오면 덮어쓰지 않고 쌍을 하나 더 만든다.",
+    },
+    {
+      pointer: 5,
+      memory: ["q=http form", "lang=ko", "tag=html", "tag=http"],
+      caption: "disabled 컨트롤은 빠진다. 보내고 싶으면 readonly를 쓴다.",
+    },
+    {
+      pointer: 6,
+      memory: ["q=http form", "lang=ko", "tag=html", "tag=http"],
+      caption: "name이 없으면 값이 있어도 빠진다. 폼 값이 안 넘어올 때 가장 먼저 볼 곳이다.",
+    },
+    {
+      pointer: 7,
+      found: [0, 1, 3, 4, 7],
+      memory: ["q=http form", "lang=ko", "tag=html", "tag=http", "sort=new"],
+      caption: "제출 버튼은 실제로 누른 버튼일 때만 들어간다. 엔터로 제출하면 첫 번째 제출 버튼이 대신한다.",
+    },
+  ]}
+/>
+
+모은 쌍을 인코딩해 `&`로 이으면 요청 주소가 된다.
+
+```text
+GET /search?q=http+form&lang=ko&tag=html&tag=http&sort=new HTTP/1.1
+```
+
+빠지는 규칙에서 실수가 자주 나온다. 체크박스가 빠진다는 건 서버 입장에서 "꺼졌다"와 "그런 필드를 안 보냈다"가 구별되지 않는다는 뜻이다. 설정 화면에서 체크를 해제했는데 서버가 값을 바꾸지 않는 버그가 여기서 생긴다. 서버가 없는 필드를 false로 읽거나, 체크박스 앞에 같은 이름의 `type="hidden"` 입력을 기본값으로 두는 식으로 푼다. Rails의 체크박스 헬퍼가 이 숨은 입력을 자동으로 넣는다.
+
+같은 이름이 여러 개면 서버 프레임워크마다 읽는 법이 다르다. Express의 기본 쿼리 파서는 `tag`를 배열로 주지만 하나만 오면 문자열로 준다. PHP는 이름을 `tag[]`로 써야 배열로 읽는다. Spring은 `List<String>`으로 받으면 모아 준다. 값 하나일 때와 여러 개일 때 타입이 바뀌는 쪽은 코드에서 따로 처리해야 한다.
+
+## 공백은 더하기, 나머지는 퍼센트로
+
+쌍을 문자열로 바꾸는 규칙이 `application/x-www-form-urlencoded`다. 이름과 값 각각에 이렇게 한다.
+
+1. 글자를 UTF-8 바이트로 바꾼다. 문서 인코딩이 UTF-8이면 그렇다.
+2. 영문자, 숫자, `*`, `-`, `.`, `_`는 그대로 둔다.
+3. 공백(0x20)은 `+`로 바꾼다.
+4. 나머지 바이트는 모두 `%`와 16진수 두 자리로 바꾼다.
+
+그다음 `이름=값`을 `&`로 잇는다. 그래서 값 안에 든 `&`, `=`, `+`는 반드시 `%26`, `%3D`, `%2B`가 된다. 그러지 않으면 서버가 구분자로 읽는다. 받는 쪽이 `+`를 공백으로 되돌리기 때문에, 원래 `+`였던 글자는 꼭 `%2B`로 보내야 한다. 전화번호 `+82`가 서버에서 ` 82`로 바뀌는 버그가 이 규칙을 모르고 문자열을 직접 이어 붙여서 생긴다.
+
+이 `+` 규칙이 폼에만 있다는 점도 헷갈린다. URL 경로에서 공백은 `%20`이고 `+`는 그냥 `+`다. 자바스크립트의 `encodeURIComponent`는 공백을 `%20`으로 바꾸고 `!`, `'`, `(`, `)`, `~`는 그대로 둔다. 폼 형식과 정확히 같은 결과가 필요하면 `URLSearchParams`를 쓴다.
+
+```js
+encodeURIComponent("a b+c");                     // "a%20b%2Bc"
+new URLSearchParams({ q: "a b+c" }).toString();  // "q=a+b%2Bc"
+```
+
+`URLSearchParams`가 하는 일을 직접 만들어 보자. `[이름, 값]` 쌍 배열을 받아 폼 형식 문자열을 돌려주면 된다. 아래 테스트의 기대값은 Node.js에서 `new URLSearchParams(fields).toString()`을 실행해 얻은 값이다.
+
+<CodePlayground
+  caption="encodeForm: 쌍 목록 → urlencoded 문자열"
+  functionName="encodeForm"
+  initialCode={`function encodeForm(fields) {
+  // fields: [["q", "http form"], ["tag", "html"]]
+  // 반환: "q=http+form&tag=html"
+  return "";
+}`}
+  solution={`function encodeForm(fields) {
+  const encode = (s) =>
+    encodeURIComponent(s)
+      // encodeURIComponent가 남겨 두는 ! ' ( ) ~ 도 인코딩한다
+      .replace(/[!'()~]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+      // 공백은 %20이 아니라 + 로 쓴다
+      .replace(/%20/g, "+");
+  return fields.map(([name, value]) => encode(name) + "=" + encode(value)).join("&");
+}`}
+  tests={[
+    { label: "공백과 한글", args: [[["q", "base64 한글"], ["sort", "new"]]], expected: "q=base64+%ED%95%9C%EA%B8%80&sort=new" },
+    { label: "구분 문자가 든 값", args: [[["memo", "a&b=c+d"]]], expected: "memo=a%26b%3Dc%2Bd" },
+    { label: "같은 이름 두 번", args: [[["tag", "http"], ["tag", "form"]]], expected: "tag=http&tag=form" },
+    { label: "남겨 두는 글자", args: [[["s", "*-._~!'()"]]], expected: "s=*-._%7E%21%27%28%29" },
+    { label: "% 자체", args: [[["e", "50% off"]]], expected: "e=50%25+off" },
+    { label: "이름의 공백", args: [[["my name", "x"]]], expected: "my+name=x" },
+    { label: "빈 값", args: [[["empty", ""], ["k", "v"]]], expected: "empty=&k=v" },
+    { label: "줄바꿈", args: [[["line", "a\r\nb"]]], expected: "line=a%0D%0Ab" },
+    { label: "빈 목록", args: [[]], expected: "" },
+  ]}
+/>
+
+줄바꿈 테스트가 `\r\n`인 이유가 있다. `textarea`에 엔터로 넣은 줄바꿈은 제출할 때 브라우저가 CRLF로 맞춰 보낸다. 서버에서 글자 수를 셀 때 줄바꿈 하나가 두 글자로 세어져서, 화면의 `maxlength`는 통과했는데 서버 검증에서 걸리는 일이 생긴다.
+
+## 주소에 실리면 남는다
+
+GET 폼의 값은 URL에 들어간다. URL은 생각보다 많은 곳에 남는다. 브라우저 방문 기록과 자동 완성, 서버와 프록시의 접근 로그, 다른 사이트로 가는 링크를 눌렀을 때의 `Referer` 헤더, 공유하려고 복사한 링크. 비밀번호나 개인 정보가 GET으로 가면 이 모든 곳에 흔적이 생긴다. HTTPS를 써도 마찬가지다. TLS는 길에서 엿보는 걸 막을 뿐, 양 끝에 남는 기록은 막지 못한다.
+
+길이도 걸린다. HTTP 스펙은 URL 길이 상한을 정하지 않고 최소 8,000바이트는 받으라고 권할 뿐이다. 실제로는 서버마다 한도가 있어서 nginx는 기본 설정에서 요청 줄이 8KB를 넘으면 `414 URI Too Long`을 돌려준다. 긴 글을 GET으로 보내면 안 되는 이유다.
+
+반대로 GET이 맞는 폼도 많다. 검색, 필터, 페이지 이동처럼 서버 상태를 바꾸지 않는 폼은 GET이어야 결과를 북마크하고 공유하고 캐시할 수 있다. 뒤로 가기를 눌러도 경고 없이 다시 불러온다. 기준은 단순하다. 서버 상태를 바꾸거나 민감한 값을 보내면 POST, 조회만 하면 GET이다. 메서드가 지닌 약속은 [HTTP 메서드](/posts/http-methods)에서 자세히 다뤘다.
+
+## POST 본문의 세 가지 모양
+
+POST로 바꾸면 같은 쌍 목록이 본문으로 간다. 본문 모양은 `enctype`이 정한다. `curl -v`나 개발자 도구 Network 탭에서 요청 원문을 보면 차이가 바로 보인다. 본문 형식 자체의 일반론은 [HTTP 메시지](/posts/http-message)에서 다뤘으니, 여기서는 폼이 실제로 만드는 바이트만 본다.
+
+기본값인 urlencoded는 쿼리 문자열과 똑같은 문자열이 본문에 들어간다.
+
+```text
+POST /login HTTP/1.1
+Host: example.com
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 24
+
+id=matt&pw=p%40ss+w%26rd
+```
+
+curl로 같은 요청을 만들려면 `--data-urlencode`를 쓴다. 그냥 `-d`는 값을 인코딩하지 않고 그대로 붙여서, 값에 `&`가 있으면 필드가 쪼개진다.
+
+```bash
+# 값을 하나씩 인코딩해 urlencoded 본문으로 보낸다
+curl -v https://example.com/login \
+  --data-urlencode 'id=matt' \
+  --data-urlencode 'pw=p@ss w&rd'
+```
+
+파일을 보내야 하면 `enctype="multipart/form-data"`가 필요하다. urlencoded로 파일 입력을 보내면 파일 내용이 아니라 파일 이름만 간다. multipart는 본문을 경계 문자열(boundary)로 나눠, 필드마다 작은 헤더와 값을 따로 싣는다. 경계 값은 브라우저가 본문에 나오지 않을 만한 무작위 문자열로 만든다. 크롬 계열은 `----WebKitFormBoundary` 뒤에 16글자를 붙인다. 아래 그림의 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="제목과 사진 하나를 올리는 multipart 요청. 위에서 아래로 읽는다"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "ct",
+      display: "Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gWx",
+      title: "경계 값은 헤더에 있다",
+      description: "본문을 자를 기준 문자열이다. 본문에서는 앞에 --를 하나 더 붙여 쓴다. 이 값이 빠지면 서버는 본문을 나눌 수 없다.",
+      required: true,
+    },
+    {
+      key: "d1",
+      display: "------WebKitFormBoundary7MA4YWxkTrZu0gWx",
+      title: "첫 부분의 시작",
+      description: "-- + 경계 값이 한 줄에 단독으로 나오면 새 부분이 시작된다. 줄 끝은 CRLF다.",
+    },
+    {
+      key: "p1",
+      display: "Content-Disposition: form-data; name=\"title\"",
+      title: "텍스트 필드의 헤더",
+      description: "필드 이름만 있다. 빈 줄 다음이 값이고, 값은 퍼센트 인코딩하지 않은 UTF-8 그대로다.",
+      code: "Content-Disposition: form-data; name=\"title\"\r\n\r\n여름 바다\r\n",
+    },
+    {
+      key: "p2",
+      display: "Content-Disposition: form-data; name=\"photo\"; filename=\"beach.png\"",
+      title: "파일 필드의 헤더",
+      description: "filename은 사용자 컴퓨터의 파일 이름이다. 서버는 이 이름을 믿고 경로에 그대로 쓰면 안 된다. ../ 같은 글자로 다른 위치에 저장될 수 있다.",
+      required: true,
+    },
+    {
+      key: "p2t",
+      display: "Content-Type: image/png",
+      title: "파일의 타입",
+      description: "브라우저가 확장자로 짐작한 값이다. 모르면 application/octet-stream이 간다. 공격자가 마음대로 바꿀 수 있으니 서버는 파일 내용을 직접 확인한다.",
+    },
+    {
+      key: "bytes",
+      display: "(PNG 바이트 204,800개)",
+      title: "파일 내용",
+      description: "빈 줄 다음에 파일 바이트가 인코딩 없이 그대로 들어간다. Base64처럼 33% 커지지 않는다.",
+    },
+    {
+      key: "end",
+      display: "------WebKitFormBoundary7MA4YWxkTrZu0gWx--",
+      title: "끝 표시",
+      description: "경계 값 뒤에 --가 붙으면 마지막이다. 이 본문 전체의 Content-Length는 205,088이다.",
+      required: true,
+    },
+  ]}
+/>
+
+파일 바이트를 그대로 싣는 대신 부분마다 헤더와 경계 줄이 붙는다. 이 예에서 파일 외의 바이트는 288개였다. 짧은 텍스트 필드 몇 개만 보낸다면 urlencoded가 더 작다. 파일이 있을 때만 multipart를 고른다.
+
+세 번째 `text/plain`은 `이름=값`을 줄마다 하나씩 쓴다. 인코딩을 하나도 하지 않아서, 값에 `=`나 줄바꿈이 들어 있으면 받는 쪽이 원래 쌍을 되살릴 수 없다. 사람이 읽기 위한 형식이고 서버가 파싱할 형식이 아니다.
+
+```text
+POST /feedback HTTP/1.1
+Content-Type: text/plain
+
+id=matt
+pw=p@ss w&rd
+```
+
+이 형식이 쓸모 있는 곳은 엉뚱하게도 공격자 쪽이다. 뒤에서 CSRF를 볼 때 다시 나온다.
+
+## 파일을 올릴 때 챙길 것
+
+파일 입력은 이렇게 쓴다.
+
+```html
+<form action="/photos" method="post" enctype="multipart/form-data">
+  <input type="file" name="photos" accept="image/png, image/jpeg" multiple />
+  <button>올리기</button>
+</form>
+```
+
+`multiple`이면 여러 파일을 고를 수 있고, 같은 `name`으로 부분이 여러 개 생긴다. `accept`는 파일 선택 창에서 보여 줄 형식을 거르는 힌트일 뿐이다. 사용자가 "모든 파일"을 고르면 다른 파일도 올라간다. 형식과 크기는 서버가 다시 검사해야 한다.
+
+크기 제한은 여러 겹이다. nginx의 `client_max_body_size`는 기본 1MB라서, 그 앞에 아무 설정도 안 했다면 2MB 사진에서 `413`이 난다. 스펙의 이름은 `413 Content Too Large`이고, 예전 이름 `Request Entity Too Large`로 응답하는 서버도 많다. 앱 서버의 multipart 파서에도 따로 한도가 있다. Spring Boot는 기본으로 파일 하나 1MB, 요청 전체 10MB다. 어느 층에서 막혔는지에 따라 에러 모양이 달라서, nginx가 막으면 앱 로그에는 아무것도 남지 않는다.
+
+큰 파일을 서버가 받아서 다시 스토리지로 보내는 구조는 서버 메모리와 대역폭을 두 번 쓴다. 그래서 큰 업로드는 서버가 S3 같은 스토리지의 미리 서명된 URL(presigned URL)을 발급하고, 브라우저가 스토리지로 바로 올리는 방식을 많이 쓴다. 이때 서버로는 업로드가 끝난 파일의 키만 보낸다.
+
+## fetch로 보낼 때는 FormData를 쓴다
+
+자바스크립트로 폼을 보내면 페이지를 새로 그리지 않고 결과를 다룰 수 있다. 이때 폼의 값을 모으는 일을 `FormData`가 맡는다. `new FormData(form)`은 제출할 때와 같은 규칙으로 쌍을 모은다. 빠지는 컨트롤도 같다. 아래 그림에서 흐름을 따라가 보자.
+
+<SequenceDiagram
+  caption="FormData를 fetch로 보내는 흐름"
+  actors={[
+    { id: "js", label: "페이지 JS" },
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    {
+      from: "js",
+      to: "js",
+      label: "new FormData",
+      title: "폼에서 값을 모은다",
+      detail: "submit 이벤트에서 기본 동작을 막고, 폼 요소로 FormData를 만든다. 파일 입력의 File 객체도 들어간다.",
+      payload: "event.preventDefault();\nconst data = new FormData(event.currentTarget);",
+    },
+    {
+      from: "js",
+      to: "browser",
+      label: "fetch(body)",
+      title: "Content-Type은 비워 둔다",
+      detail: "body에 FormData를 넘기기만 한다. 헤더를 직접 적으면 boundary가 빠져 서버가 본문을 못 나눈다.",
+      payload: "await fetch(\"/photos\", { method: \"POST\", body: data });",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "POST multipart",
+      title: "브라우저가 경계 값을 만들어 붙인다",
+      detail: "multipart 본문을 만들고 같은 boundary를 헤더에 적는다. 같은 출처면 쿠키도 붙는다.",
+      payload: "POST /photos HTTP/1.1\nContent-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gWx",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "201 JSON",
+      title: "서버가 결과를 돌려준다",
+      detail: "폼 제출과 달리 페이지가 바뀌지 않는다. 응답은 JS가 받는다.",
+      payload: "HTTP/1.1 201 Created\nContent-Type: application/json\n\n{\"id\":42}",
+    },
+    {
+      from: "browser",
+      to: "js",
+      label: "Response",
+      title: "결과로 화면을 고친다",
+      detail: "res.ok를 확인하고 목록에 새 항목을 넣는다. 4xx·5xx여도 fetch는 성공하니 상태 코드를 직접 본다.",
+      payload: "if (!res.ok) throw new Error(String(res.status));",
+    },
+  ]}
+/>
+
+`FormData`를 쓸 때 가장 흔한 실수는 그림 두 번째 단계의 헤더다. 습관처럼 `"Content-Type": "multipart/form-data"`를 적으면 브라우저가 boundary를 붙일 자리가 사라진다. axios는 FormData를 감지해서 알아서 처리하지만, 공용 인스턴스에 `Content-Type: application/json`을 기본 헤더로 박아 둔 경우엔 버전에 따라 결과가 달라지니 실제 요청을 확인한다. fetch 자체의 동작과 에러 처리는 [브라우저 fetch](/posts/browser-fetch)에서 다뤘다.
+
+파일이 없고 서버가 urlencoded를 기대한다면 `URLSearchParams`로 바꿔 보낸다. 이때는 브라우저가 `Content-Type: application/x-www-form-urlencoded;charset=UTF-8`을 붙인다.
+
+```js
+const data = new FormData(form);
+await fetch("/login", { method: "POST", body: new URLSearchParams(data) });
+```
+
+FormData에 파일이 들어 있으면 이 변환은 조용히 틀린다. 파일이 `[object File]`이라는 글자로 바뀌어 `photo=%5Bobject+File%5D`가 간다. 타입스크립트도 이 변환에 경고를 낸다.
+
+업로드 진행률이 필요하면 fetch로는 부족하다. fetch에는 업로드 진행 이벤트가 없다. `XMLHttpRequest`의 `xhr.upload.onprogress`를 쓰거나, 브라우저에서 XHR로 동작하는 axios의 `onUploadProgress`를 쓴다. fetch로 요청 본문을 스트림으로 흘려 보내는 방법도 있지만 `duplex: "half"` 옵션이 필요하고 크롬 계열에서 HTTP/2 이상일 때만 되는 등 아직 제약이 많다.
+
+## 폼은 GET과 POST만 보낸다
+
+`method="delete"`라고 써도 브라우저는 GET으로 보낸다. HTML 폼이 만들 수 있는 요청은 GET과 POST뿐이다(`method="dialog"`는 요청을 보내지 않고 대화 상자를 닫는다). REST API에 맞춰 PUT이나 DELETE를 보내고 싶으면 프레임워크들은 POST 폼에 숨은 필드를 넣는다.
+
+```html
+<form action="/posts/42" method="post">
+  <input type="hidden" name="_method" value="DELETE" />
+  <button>삭제</button>
+</form>
+```
+
+Rails와 Laravel이 `_method` 필드를, 일부 API는 `X-HTTP-Method-Override` 헤더를 읽어 메서드를 바꿔 처리한다. 이 바꿔 읽기는 POST에만 허용해야 한다. GET에도 허용하면 링크 하나로 삭제가 일어난다.
+
+## 새로고침하면 두 번 주문된다
+
+POST 폼을 제출하고 서버가 결과 HTML을 바로 돌려주면, 사용자가 그 화면에서 새로고침을 누를 때 브라우저는 마지막 요청인 POST를 다시 보내려 한다. "양식을 다시 제출하시겠습니까?" 창이 뜨고, 확인을 누르면 주문이 하나 더 생긴다. 뒤로 가기로 돌아왔다가 앞으로 가기를 눌러도 같은 일이 생긴다.
+
+그래서 POST를 처리한 서버는 결과 화면을 바로 주지 않고 `303 See Other`로 결과 주소를 알려 준다. 브라우저는 그 주소를 GET으로 연다. 이게 Post/Redirect/Get(PRG)이다.
+
+<SequenceDiagram
+  caption="PRG: 마지막 요청을 GET으로 바꾼다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "browser",
+      label: "주문하기",
+      title: "제출 버튼을 누른다",
+      detail: "폼의 값이 urlencoded 본문으로 묶인다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "POST /orders",
+      title: "주문을 보낸다",
+      detail: "서버는 주문을 저장한다. 여기까지는 한 번만 일어나야 한다.",
+      payload: "POST /orders HTTP/1.1\nContent-Type: application/x-www-form-urlencoded\n\nitem=book&qty=1",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "303 Location",
+      title: "결과 주소만 알려 준다",
+      detail: "HTML 대신 303과 Location을 준다. 303은 다음 요청을 무조건 GET으로 하라는 뜻이다.",
+      payload: "HTTP/1.1 303 See Other\nLocation: /orders/1017",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "GET /orders/1017",
+      title: "결과 화면을 GET으로 연다",
+      detail: "주소창이 /orders/1017로 바뀐다. 방문 기록의 마지막 항목도 이 GET이다.",
+      payload: "GET /orders/1017 HTTP/1.1",
+    },
+    {
+      from: "user",
+      to: "browser",
+      label: "새로고침",
+      title: "새로고침은 GET만 다시 보낸다",
+      detail: "주문 상세를 다시 불러올 뿐이다. 재제출 경고도 없고 주문도 늘지 않는다.",
+    },
+  ]}
+/>
+
+303이 아니라 302를 써도 브라우저는 대부분 GET으로 바꾸지만, 그건 오래된 관행이고 의도를 정확히 말하는 코드는 303이다. 307이나 308을 쓰면 POST가 그대로 다시 가니 PRG가 되지 않는다. 상태 코드 사이의 차이는 [HTTP 상태 코드](/posts/http-status-codes)에서 정리했다.
+
+PRG는 새로고침만 막는다. 사용자가 버튼을 빠르게 두 번 누르거나 네트워크가 느려 다시 누르는 경우는 못 막는다. 제출 중에는 버튼을 비활성화하고, 서버는 폼에 숨겨 둔 일회용 키(멱등성 키)로 같은 제출을 한 번만 처리하게 만든다.
+
+## 다른 사이트도 내 서버로 폼을 보낼 수 있다
+
+폼의 `action`에는 아무 주소나 쓸 수 있다. 공격자 사이트에 `action="https://bank.example.com/transfer"`인 숨은 폼을 만들고 페이지가 열리자마자 자바스크립트로 제출하면, 브라우저는 그 요청을 은행으로 보낸다. 은행 쿠키가 따라가면 로그인한 사용자의 이체 요청이 된다. 이게 CSRF다.
+
+여기서 [CORS](/posts/cors)는 도움이 안 된다. CORS는 다른 출처의 응답을 자바스크립트가 읽는 걸 막는 장치이고, 폼이 보내는 세 가지 `enctype`은 모두 사전 요청(preflight) 없이 바로 나가는 "단순 요청"이다. 요청은 이미 서버에 도착해서 처리된다. 앞에서 본 `text/plain`이 여기서 쓰인다. 이름을 `{"amount":1000,"x":"`, 값을 `"}`로 두면 본문이 `{"amount":1000,"x":"="}`가 되어 JSON처럼 보인다. `Content-Type`을 확인하지 않고 본문을 JSON으로 파싱하는 API는 이 폼에 당한다.
+
+막는 방법은 두 겹이다. 첫째, 쿠키의 `SameSite`다. `Lax`면 다른 사이트에서 시작된 POST에는 쿠키가 실리지 않는다. 크롬 계열은 `SameSite`를 적지 않은 쿠키를 `Lax`로 취급하지만, 모든 브라우저가 그렇지는 않고 크롬도 갓 만든 쿠키에는 2분 동안 예외를 둔다. 그래서 쿠키에 직접 적는다. 둘째, CSRF 토큰이다. 서버가 세션마다 예측할 수 없는 값을 만들어 폼에 숨은 필드로 넣고, 제출된 값이 세션의 값과 같은지 확인한다. 공격자 사이트는 그 값을 읽을 수 없어서 맞는 폼을 만들지 못한다. 쿠키 쪽 설정과 공격 시나리오는 [쿠키 세션 로그인](/posts/cookie-session-login)에서 자세히 다뤘다.
+
+```html
+<form action="/transfer" method="post">
+  <input type="hidden" name="csrf_token" value="Zk2v9Qx..." />
+  ...
+</form>
+```
+
+## 브라우저 검증은 친절일 뿐이다
+
+HTML 폼에는 검증 속성이 있다. `required`, `minlength`, `maxlength`, `pattern`, `min`, `max`, 그리고 `type="email"`, `type="url"` 같은 입력 타입이다. 조건이 안 맞으면 브라우저가 제출을 막고 말풍선을 띄운다. 자바스크립트로는 `form.checkValidity()`, `input.setCustomValidity()`로 같은 시스템을 다룬다.
+
+```html
+<input name="zip" required pattern="[0-9]{5}" title="숫자 다섯 자리" />
+```
+
+`pattern`은 값 전체와 맞아야 통과한다. 앞뒤에 `^`, `$`를 쓰지 않아도 전체 일치로 검사한다. 디자인을 직접 하고 싶으면 폼에 `novalidate`를 붙여 기본 말풍선을 끄고, `:invalid` 같은 선택자와 `checkValidity()`로 직접 보여 준다.
+
+이 검증은 사용자를 돕는 장치다. 개발자 도구에서 속성을 지우거나, `curl`로 요청을 직접 만들면 브라우저를 거치지 않는다. 위에서 본 대로 다른 사이트의 폼이 보낼 수도 있다. 서버는 요청이 어디서 왔는지 모르니 모든 값을 처음 보는 값으로 다시 검증해야 한다. 길이, 형식, 범위, 그리고 이 사용자가 이 일을 할 권한이 있는지까지. 클라이언트 검증은 왕복을 아끼고 빨리 알려 주는 용도이고, 안전은 서버 검증이 맡는다.
+
+## 자바스크립트가 없어도 폼은 동작한다
+
+지금까지 본 폼은 자바스크립트 없이도 요청을 보낸다. 이 위에 자바스크립트로 더 나은 경험을 얹는 방식을 점진적 향상(progressive enhancement)이라고 한다. 번들이 아직 내려오지 않았거나 스크립트가 실패해도 폼은 제출된다. 처음부터 `onSubmit`과 fetch로만 만든 폼은 스크립트가 없으면 아무 일도 안 하거나, `action`이 없어서 현재 주소로 GET 제출이 일어나 입력값이 주소창에 드러난다.
+
+React 19는 이 방향으로 폼을 다시 다룬다. `<form action={fn}>`처럼 `action`에 함수를 넘기면 제출할 때 React가 `FormData`를 그 함수에 넘겨 준다. 처리 중 상태는 `useFormStatus`, 결과와 에러는 `useActionState`로 받는다. Next.js의 서버 액션을 `action`에 넘기면 하이드레이션 전에 제출해도 일반 POST로 동작한다. 결국 밑에서는 이 글에서 본 POST 요청이 오간다.
+
+## 다시 검색창과 로그인 폼으로
+
+검색 폼은 GET이라 값이 `q=http+form`으로 주소에 붙고, 그래서 공유하고 북마크할 수 있다. 로그인 폼은 POST여야 값이 본문으로 가고 주소와 기록에 남지 않는다. 그 사이에서 브라우저는 이름 있는 컨트롤만 골라 쌍을 만들고, 공백은 `+`로, 나머지는 `%XX`로 바꾸고, 파일이 있으면 경계 문자열로 본문을 나눈다. 보낸 뒤에는 303으로 새로고침을 안전하게 만들고, CSRF 토큰과 SameSite로 다른 사이트의 제출을 막고, 서버에서 값을 다시 검증한다.
+
+## 면접에서 나올 만한 질문
+
+### 폼의 GET과 POST 제출은 어떻게 다른가요?
+
+GET은 입력값을 urlencoded 쿼리 문자열로 만들어 URL에 붙이고, POST는 같은 값을 `enctype`에 맞는 본문으로 보낸다. URL은 방문 기록, 서버 로그, Referer에 남으니 민감한 값이나 상태를 바꾸는 요청은 POST로 보낸다. 검색이나 필터처럼 조회만 하는 폼은 GET이어야 결과를 북마크하고 공유하고 캐시할 수 있다.
+
+### application/x-www-form-urlencoded 인코딩 규칙을 설명해 보세요.
+
+글자를 UTF-8 바이트로 바꾼 뒤 영문자, 숫자, `*-._`는 그대로 두고 공백은 `+`, 나머지는 `%XX`로 바꾼다. 그다음 `이름=값`을 `&`로 잇는다. 그래서 값에 든 `+`는 `%2B`로 보내야 하고, 그러지 않으면 서버가 공백으로 읽는다. `encodeURIComponent`는 공백을 `%20`으로 바꾸고 일부 글자를 남겨 두므로 같은 결과가 필요하면 `URLSearchParams`를 쓴다.
+
+### 폼을 제출했는데 어떤 값이 서버에 안 넘어옵니다. 무엇을 확인하나요?
+
+먼저 그 입력에 `name`이 있는지 본다. name이 없거나, `disabled`이거나, 체크하지 않은 체크박스·라디오면 아예 보내지 않는다. 제출 버튼의 값은 실제로 누른 버튼일 때만 간다. 체크박스는 해제 상태가 "필드 없음"으로 오니 서버가 없는 값을 false로 처리하거나 숨은 입력으로 기본값을 둔다.
+
+### urlencoded, multipart/form-data, text/plain은 언제 쓰나요?
+
+파일이 없으면 urlencoded, 파일이 있으면 multipart다. multipart는 boundary로 본문을 나눠 파일 바이트를 인코딩 없이 싣기 때문에 큰 파일에 유리하지만, 부분마다 헤더가 붙어 작은 텍스트에는 오히려 크다. text/plain은 인코딩을 안 해서 원래 값을 되살릴 수 없으니 서버가 파싱할 용도로는 쓰지 않는다.
+
+### fetch로 FormData를 보낼 때 Content-Type을 직접 넣으면 어떻게 되나요?
+
+`boundary` 파라미터가 빠져서 서버가 본문을 나누지 못하고 파싱에 실패한다. FormData를 body로 넘기면 브라우저가 경계 값을 만들어 헤더에 직접 붙이므로 헤더는 비워 둔다. 파일 없이 urlencoded로 보내고 싶으면 `new URLSearchParams(formData)`를 body로 넘기면 되는데, 파일이 들어 있으면 `[object File]`이라는 글자로 바뀌니 주의한다.
+
+### PRG 패턴은 무엇이고 왜 필요한가요?
+
+POST를 처리한 뒤 결과 HTML 대신 `303 See Other`와 Location을 주고, 브라우저가 결과 화면을 GET으로 열게 하는 패턴이다. 이렇게 하면 마지막 요청이 GET이 되어 새로고침이나 앞으로 가기가 POST를 다시 보내지 않는다. 다만 버튼 연타는 막지 못하니 제출 중 버튼 비활성화와 서버의 멱등성 키를 함께 쓴다.
+
+### 다른 사이트의 폼 제출은 CORS로 막히지 않나요? CSRF는 어떻게 막나요?
+
+막히지 않는다. 폼이 만드는 요청은 preflight 없는 단순 요청이라 서버에 그대로 도착하고, CORS는 응답을 자바스크립트가 읽는 것만 막는다. 쿠키에 `SameSite=Lax` 이상을 직접 지정해 다른 사이트에서 시작된 POST에 쿠키가 실리지 않게 하고, 세션마다 다른 CSRF 토큰을 숨은 필드로 넣어 서버에서 대조한다. JSON API라면 `Content-Type`이 `application/json`인지도 확인해 text/plain 폼으로 흉내 낸 본문을 거절한다.
+
+### HTML에 required와 pattern을 넣었는데 서버 검증도 필요한가요?
+
+반드시 필요하다. 브라우저 검증은 개발자 도구로 속성을 지우거나 curl로 요청을 직접 만들면 거치지 않고, 다른 사이트의 폼도 그대로 보낼 수 있다. 클라이언트 검증은 빠른 피드백을 위한 것이고, 형식·길이·범위·권한 검증은 서버가 모든 요청에 대해 다시 해야 한다.

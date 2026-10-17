@@ -1,0 +1,803 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("json-crud-http");
+
+할 일 앱에 저장 버튼을 붙였다. 화면에서 이렇게 보냈다.
+
+```js
+await fetch("/api/todos", {
+  method: "POST",
+  body: JSON.stringify({ title: "장보기" }),
+});
+```
+
+서버 로그에는 요청이 찍히는데 핸들러에서 `req.body`가 비어 있다. 본문은 분명히 보냈다. 원인은 헤더 한 줄이다. `fetch`는 문자열 본문을 받으면 `Content-Type`을 `text/plain;charset=UTF-8`로 붙인다. 서버의 JSON 파서는 "JSON이 아니네" 하고 본문을 읽지 않고 넘겼다. Express의 `express.json()`이 이렇게 동작한다.
+
+JSON으로 데이터를 주고받는 일은 너무 흔해서 대충 해도 대부분 돌아간다. 그런데 이런 한 줄짜리 어긋남이 꽤 많다. 이 글에서는 `/api/todos`라는 자원 하나를 만들고, 읽고, 고치고, 지우는 과정을 curl과 fetch로 끝까지 따라가면서 요청과 응답이 실제로 어떻게 생겼는지 본다. 메서드의 의미와 멱등성은 [HTTP 메서드와 멱등성](/posts/http-methods)에서, 메시지의 생김새는 [HTTP 메시지는 어떻게 생겼나](/posts/http-message)에서 다뤘으니 여기서는 JSON과 CRUD를 붙이는 쪽에 집중한다.
+
+## JSON은 자바스크립트 객체가 아니다
+
+JSON은 자바스크립트 객체 문법에서 빌려 온 텍스트 형식이지만 훨씬 좁다. 표준(RFC 8259)이 허락하는 값은 여섯 가지뿐이다. 객체, 배열, 문자열, 숫자, `true`/`false`, `null`. 날짜 타입도, `undefined`도 없다.
+
+문법도 깐깐하다. 자바스크립트에서는 되는데 JSON에서는 안 되는 것들이 있다.
+
+```text
+{ title: "장보기" }          키에 따옴표가 없다        → 오류
+{ 'title': '장보기' }        작은따옴표               → 오류
+{ "title": "장보기", }       끝에 쉼표                → 오류
+{ "title": "장보기" // 메모 } 주석                    → 오류
+{ "count": NaN }             NaN, Infinity, undefined → 오류
+{ "n": 0x1F }                16진수, 앞의 +, .5 같은 숫자 → 오류
+```
+
+키는 항상 큰따옴표 문자열이다. 그래서 `{ 1: "a" }` 같은 숫자 키도 JSON에서는 `{"1":"a"}`가 된다. 같은 키가 두 번 나오면 표준은 "이름은 유일해야 한다(SHOULD)"고만 하고 결과는 구현마다 다르다. `JSON.parse('{"a":1,"a":2}')`은 마지막 값을 써서 `{ a: 2 }`가 되지만, 앞의 값을 쓰거나 오류를 내는 파서도 있다. 검증 계층과 실제 처리 계층이 서로 다른 파서를 쓰면 이 차이가 보안 구멍이 되기도 한다.
+
+주석을 넣고 싶은 설정 파일에는 JSON이 맞지 않는다. `tsconfig.json`에 주석을 쓸 수 있는 건 TypeScript가 JSONC라는 확장 문법으로 읽어서다. API 본문은 표준 JSON만 쓴다.
+
+## stringify가 조용히 바꾸는 값
+
+`JSON.stringify`는 JSON에 없는 값을 만나면 오류를 내지 않고 다른 값으로 바꾸거나 빼 버린다. 이게 버그의 출처가 된다. 아래는 Node.js에서 실제로 돌려 본 결과다.
+
+```js
+JSON.stringify({
+  due: new Date(Date.UTC(2026, 9, 16, 1)),
+  memo: undefined,
+  onClick() {},
+  ratio: NaN,
+  limit: Infinity,
+  tags: new Map([["a", 1]]),
+  ids: new Set([1]),
+});
+// '{"due":"2026-10-16T01:00:00.000Z","ratio":null,"limit":null,"tags":{},"ids":{}}'
+
+JSON.stringify([undefined, () => 1, NaN]);
+// '[null,null,null]'
+
+JSON.stringify({ id: 10n });
+// TypeError: Do not know how to serialize a BigInt
+```
+
+`Date`는 ISO 8601 문자열이 된다. `Date`에 `toJSON` 메서드가 있어서다. 객체 안의 `undefined`와 함수는 키째로 사라지고, 배열 안에서는 자리를 지키려고 `null`이 된다. `NaN`과 `Infinity`도 `null`이다. `Map`과 `Set`은 열거할 수 있는 자기 속성이 없어서 빈 객체 `{}`가 된다. 서버에서 받은 `tags`가 텅 비어 있다면 이걸 의심한다. `BigInt`는 아예 `TypeError`를 던지고, 객체가 자기 자신을 가리키는 순환 참조도 `TypeError`다.
+
+여기서 PATCH와 관련된 함정이 하나 생긴다. 폼에서 메모를 지운 사용자를 반영하려고 `memo: undefined`를 보내면, 그 키는 본문에서 사라져서 서버는 "메모는 건드리지 말라"로 읽는다. 지우려면 `null`을 보내야 한다. 이 차이는 뒤의 PATCH 절에서 다시 나온다.
+
+바꾸는 방식을 직접 정할 수도 있다. 객체에 `toJSON`을 만들어 두면 그 반환값이 대신 직렬화된다. 두 번째 인자 `replacer`는 함수면 키마다 불려서 `undefined`를 돌려준 키를 빼고, 배열이면 그 키만 남긴다. 세 번째 인자는 들여쓰기다.
+
+```js
+class Money {
+  constructor(won) { this.won = won; }
+  toJSON() { return { amount: String(this.won), currency: "KRW" }; }
+}
+JSON.stringify({ price: new Money(15000) });
+// '{"price":{"amount":"15000","currency":"KRW"}}'
+
+JSON.stringify(user, (key, value) => (key === "password" ? undefined : value));
+JSON.stringify({ a: 1, b: 2, c: 3 }, ["a", "c"]); // '{"a":1,"c":3}'
+JSON.stringify(data, null, 2);                    // 사람이 읽을 로그용
+```
+
+`replacer`로 비밀번호를 빼는 건 마지막 안전망 정도로 생각한다. 응답에 실을 필드를 처음부터 골라 담는 쪽(DTO)이 새는 필드가 생길 여지가 적다. 들여쓰기는 로그를 볼 때만 쓰고 API 응답에는 쓰지 않는다. 공백도 전송되는 바이트다.
+
+## 날짜는 문자열로 와서 문자열로 남는다
+
+`Date`가 문자열로 나갔으니 돌아올 때도 문자열이다. `JSON.parse`는 그게 날짜인지 모른다. 응답의 `dueDate`에 `getTime()`을 부르면 "is not a function"이 난다.
+
+두 번째 인자 `reviver`로 읽으면서 바꿀 수 있다. 가장 안쪽 값부터 바깥으로 올라가며 키와 값마다 한 번씩 불린다.
+
+```js
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+const todo = JSON.parse(text, (key, value) =>
+  typeof value === "string" && ISO.test(value) ? new Date(value) : value,
+);
+todo.dueDate instanceof Date; // true
+```
+
+모양만 보고 바꾸면 우연히 날짜처럼 생긴 메모 문자열까지 `Date`가 된다. 실무에서는 키 이름으로 고르거나(`key.endsWith("At")`), zod 같은 스키마 검증 라이브러리로 응답을 검사하면서 바꾸는 편이 안전하다.
+
+날짜를 주고받을 때는 시간대를 꼭 붙인다. `"2026-10-20 09:00"`처럼 시간대가 없는 문자열은 서버와 브라우저가 각자 자기 시간대로 해석한다. UTC로 `Z`를 붙이거나 `+09:00` 같은 오프셋을 함께 쓴다. 생일처럼 시각이 없는 날짜는 `"2026-10-20"`만 보낸다. 이걸 `new Date()`에 넣으면 UTC 자정으로 읽혀서, 미국 시간대 브라우저에서는 하루 전 날짜로 보인다.
+
+## 큰 숫자 ID는 문자열로 보낸다
+
+JSON 표준은 숫자의 크기를 제한하지 않는다. 문제는 받는 쪽이다. 자바스크립트의 `number`는 64비트 부동소수점이라 2⁵³(9,007,199,254,740,992)을 넘는 정수는 정확히 표현하지 못한다.
+
+```js
+JSON.parse('{"id":9007199254740993}').id;
+// 9007199254740992  ← 1이 사라졌다
+Number.MAX_SAFE_INTEGER; // 9007199254740991
+```
+
+오류도 경고도 없이 다른 ID가 된다. 이 ID로 상세를 조회하면 엉뚱한 글이 나오거나 404가 난다. 트위터의 스노플레이크 ID처럼 시간과 서버 번호를 섞어 만든 64비트 ID는 금방 이 범위를 넘는다. 트위터 API가 `id`와 함께 문자열 `id_str`을 따로 내려 준 이유다. DB의 `BIGINT` 기본 키도 마찬가지다.
+
+방법은 ID를 처음부터 문자열로 보내는 것이다. 이 글의 할 일 ID도 `"104"`처럼 문자열로 둔다. ID는 더하거나 빼는 값이 아니라 이름이라서 문자열이 더 맞기도 하다. 금액처럼 정밀도가 중요한 소수도 `0.1 + 0.2` 문제가 있으니 원 단위 정수나 문자열(`"15000.50"`)로 보낸다.
+
+## 할 일 하나의 일생
+
+이제 자원을 하나 정하자. `/api/todos`는 할 일 모음이고, `/api/todos/104`는 그중 하나다. 할 일은 이렇게 생겼다.
+
+```json
+{
+  "id": "104",
+  "title": "장보기",
+  "done": false,
+  "dueDate": "2026-10-20T09:00:00.000Z",
+  "memo": "우유랑 계란"
+}
+```
+
+`id`는 서버가 정하고, `title`은 필수, `done`은 기본값 `false`, `dueDate`는 없으면 `null`, `memo`는 있을 때만 들어가는 선택 필드다. 아래 그림에서 다음을 누르면 할 일 104가 만들어져서 지워질 때까지 앱, API 서버, DB 사이에 오가는 요청을 차례로 볼 수 있다.
+
+<SequenceDiagram
+  caption="할 일 104의 일생"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "api", label: "API 서버" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "api",
+      label: "GET /todos",
+      title: "목록을 달라",
+      detail: "몇 개씩 몇 번째부터 줄지 쿼리 문자열로 정한다. 본문은 없다.",
+      payload: "GET /api/todos?limit=2&offset=0 HTTP/1.1\nAccept: application/json",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "SELECT LIMIT 2",
+      title: "필요한 만큼만 읽는다",
+      detail: "서버는 limit에 상한을 둔다. 클라이언트가 limit=100000을 보내도 그대로 따르지 않는다.",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "200 items",
+      title: "목록과 전체 개수",
+      detail: "배열을 바로 주지 않고 객체로 감싼다. 나중에 total이나 다음 페이지 정보를 붙일 자리가 생긴다.",
+      payload: "HTTP/1.1 200 OK\nContent-Type: application/json; charset=utf-8\n\n{\"items\":[...],\"total\":3,\"limit\":2,\"offset\":0}",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "POST /todos",
+      title: "새 할 일을 보낸다",
+      detail: "id 없이 내용만 보낸다. 모음 주소로 보내고, 주소는 서버가 정한다.",
+      payload: "POST /api/todos HTTP/1.1\nContent-Type: application/json\n\n{\"title\":\"장보기\",\"dueDate\":\"2026-10-20T09:00:00.000Z\"}",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "INSERT 104",
+      title: "검증하고 저장한다",
+      detail: "title이 비었는지, dueDate가 날짜인지 확인한 뒤 기본값을 채워 저장한다. id 104가 생긴다.",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "201 Location",
+      title: "만들었다, 주소는 여기",
+      detail: "201 Created와 함께 새 주소를 Location에, 저장된 모습을 본문에 담는다. 기본값이 채워진 done:false가 보인다.",
+      payload: "HTTP/1.1 201 Created\nLocation: /api/todos/104\nETag: \"1\"\n\n{\"id\":\"104\",\"title\":\"장보기\",\"done\":false,...}",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "PUT /todos/104",
+      title: "통째로 바꾼다",
+      detail: "완료로 바꾸려고 PUT을 보냈는데 dueDate를 빠뜨렸다. PUT에서 빠진 필드는 기본값이 된다.",
+      payload: "PUT /api/todos/104 HTTP/1.1\nContent-Type: application/json\n\n{\"title\":\"장보기\",\"done\":true}",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "UPDATE 전체",
+      title: "보낸 모습으로 덮어쓴다",
+      detail: "dueDate는 null이 된다. 클라이언트가 보낸 것이 새 모습의 전부라는 게 PUT의 뜻이다.",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "PATCH /todos/104",
+      title: "메모만 붙인다",
+      detail: "Merge Patch 형식으로 고칠 필드만 보낸다. 나머지는 그대로다.",
+      payload: "PATCH /api/todos/104 HTTP/1.1\nContent-Type: application/merge-patch+json\n\n{\"memo\":\"우유랑 계란\"}",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "UPDATE memo",
+      title: "한 필드만 바뀐다",
+      detail: "title, done, dueDate는 손대지 않는다. 버전이 올라가 ETag가 \"3\"이 된다.",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "DELETE /todos/104",
+      title: "지운다",
+      detail: "본문 없이 주소만 보낸다.",
+      payload: "DELETE /api/todos/104 HTTP/1.1",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "204",
+      title: "지웠고, 줄 내용은 없다",
+      detail: "204 No Content에는 본문이 없다. 여기에 res.json()을 부르면 실패한다.",
+      payload: "HTTP/1.1 204 No Content",
+    },
+  ]}
+/>
+
+이제 단계마다 curl과 fetch로 직접 보내 보고, 응답을 한 줄씩 본다. 서버는 `http://localhost:3000`에 떠 있다고 하고, 응답은 중요한 헤더만 남겼다. curl의 `-i`는 응답 헤더까지 보여 주는 옵션이다.
+
+## 목록은 감싸서 준다
+
+```bash
+# 2개씩, 처음부터
+curl -i 'http://localhost:3000/api/todos?limit=2&offset=0'
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{"items":[{"id":"101","title":"우유 사기","done":false,"dueDate":null},{"id":"102","title":"이력서 고치기","done":true,"dueDate":"2026-10-20T09:00:00.000Z"}],"total":3,"limit":2,"offset":0}
+```
+
+주소에 `&`가 있으면 셸이 명령을 둘로 자르니 주소를 따옴표로 감싼다. 브라우저에서는 쿼리 문자열을 직접 이어 붙이지 말고 `URLSearchParams`로 만든다. 값에 `&`나 한글이 들어가도 알아서 인코딩해 준다.
+
+```js
+const params = new URLSearchParams({ limit: "2", offset: "0" });
+const res = await fetch(`/api/todos?${params}`, {
+  headers: { Accept: "application/json" },
+});
+if (!res.ok) throw new Error(`HTTP ${res.status}`);
+const page = await res.json(); // { items: [...], total: 3, limit: 2, offset: 0 }
+```
+
+`res.ok`를 먼저 보는 이유는 `fetch`가 404나 500에서도 reject하지 않기 때문이다. 자세한 건 [fetch 제대로 쓰기](/posts/browser-fetch)에 있다.
+
+목록을 배열 그대로(`[...]`) 주지 않고 `items`로 감싼 데는 이유가 있다. 배열로 시작한 API에 나중에 `total`이나 다음 페이지 커서를 붙이려면 응답 모양을 바꿔야 하고, 그건 클라이언트를 깨는 변경이다. 객체로 감싸 두면 필드를 더하기만 하면 된다. offset 방식은 중간에 글이 추가되면 같은 항목이 두 번 나오는 문제가 있어서, 무한 스크롤이라면 커서 방식이 낫다. 이 비교는 [REST API 설계](/posts/rest-api-design)에서 다뤘다.
+
+조건에 맞는 항목이 하나도 없을 때는 404가 아니라 `200`과 빈 배열 `{"items":[],"total":0,...}`이다. 모음 자원은 존재하고, 비어 있을 뿐이다.
+
+## 하나를 달라고 했는데 없으면 404
+
+```bash
+curl -i http://localhost:3000/api/todos/101
+curl -i http://localhost:3000/api/todos/999
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+ETag: "4"
+
+{"id":"101","title":"우유 사기","done":false,"dueDate":null}
+```
+
+```text
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"todo 999가 없다"}
+```
+
+하나짜리 자원 응답에는 `ETag`가 붙어 있다. 지금 이 할 일의 버전 표시다. 뒤에서 동시 수정을 막을 때 쓴다.
+
+404 본문은 `application/problem+json` 형식이다. 에러 응답의 모양을 표준으로 정한 Problem Details(RFC 9457)다. 에러 본문 설계는 [HTTP 상태 코드](/posts/http-status-codes)에서 따로 봤고, 여기서는 400·422 절에서 다시 쓴다.
+
+```js
+const res = await fetch("/api/todos/999");
+if (res.status === 404) return null; // 없는 건 예외가 아니라 정상적인 결과일 수 있다
+if (!res.ok) throw await toApiError(res);
+const todo = await res.json();
+```
+
+## 만들 때는 201과 Location
+
+이번엔 본문을 보낸다. curl의 `-d`는 기본으로 `Content-Type: application/x-www-form-urlencoded`를 붙이니, JSON이면 헤더를 직접 정해 줘야 한다. curl 7.82.0부터는 `--json` 하나로 `Content-Type`과 `Accept`를 둘 다 `application/json`으로 붙이고 POST로 보낸다.
+
+```bash
+curl -i http://localhost:3000/api/todos \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"장보기","dueDate":"2026-10-20T09:00:00.000Z"}'
+
+# curl 7.82.0 이상
+curl -i --json '{"title":"장보기","dueDate":"2026-10-20T09:00:00.000Z"}' \
+  http://localhost:3000/api/todos
+```
+
+fetch도 마찬가지다. 처음 장면의 버그가 바로 이 헤더를 빠뜨린 것이다.
+
+```js
+const res = await fetch("/api/todos", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Accept: "application/json" },
+  body: JSON.stringify({ title: "장보기", dueDate: "2026-10-20T09:00:00.000Z" }),
+});
+if (res.status !== 201) throw await toApiError(res);
+const location = res.headers.get("Location"); // "/api/todos/104"
+const created = await res.json();
+```
+
+돌아온 응답 한 통을 조각으로 나눠 보자. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="POST /api/todos에 대한 응답"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "status",
+      display: "HTTP/1.1 201 Created",
+      title: "새 자원이 생겼다",
+      description: "요청을 처리했고 그 결과로 자원이 하나 생겼다는 뜻이다. 200도 틀린 건 아니지만, 201이면 클라이언트가 '새로 만들어졌다'는 사실을 상태 코드만 보고 안다.",
+      required: true,
+    },
+    {
+      key: "Location",
+      display: "Location: /api/todos/104",
+      title: "새 자원의 주소",
+      description: "서버가 정한 새 주소다. 클라이언트는 id를 조립하지 않고 이 값을 그대로 따라가면 된다. 상대 주소면 요청 주소를 기준으로 푼다.",
+      code: "new URL(res.headers.get(\"Location\"), res.url).href\n// \"http://localhost:3000/api/todos/104\"",
+    },
+    {
+      key: "ETag",
+      display: "ETag: \"1\"",
+      title: "지금 버전",
+      description: "만들어진 할 일의 첫 버전이다. 나중에 고칠 때 If-Match에 실어 보내면, 그사이 누가 바꿨는지 서버가 확인할 수 있다. 브라우저에서 읽으려면 다른 출처일 때 Access-Control-Expose-Headers에 ETag와 Location을 넣어야 한다.",
+    },
+    {
+      key: "Content-Type",
+      display: "Content-Type: application/json; charset=utf-8",
+      title: "본문은 JSON",
+      description: "JSON은 UTF-8로 주고받는 게 표준이다. RFC 8259는 application/json에 charset 파라미터를 정의하지 않았고 붙여도 효과가 없다고 적었다. Express 같은 프레임워크가 습관처럼 붙일 뿐이다.",
+    },
+    {
+      key: "Content-Length",
+      display: "Content-Length: 82",
+      title: "본문 바이트 수",
+      description: "글자 수가 아니라 바이트 수다. 이 본문은 76글자지만 한글 '장보기' 세 글자가 UTF-8로 9바이트라서 82바이트다.",
+      code: "Buffer.byteLength(body) // 82\nbody.length            // 76",
+    },
+    {
+      key: "blank",
+      display: "(빈 줄)",
+      title: "헤더 끝",
+      description: "여기서부터 본문이다.",
+      required: true,
+    },
+    {
+      key: "body",
+      display: "{\"id\":\"104\",\"title\":\"장보기\",\"done\":false,\"dueDate\":\"2026-10-20T09:00:00.000Z\"}",
+      title: "저장된 그대로의 모습",
+      description: "보낸 내용을 되돌려 주는 게 아니라 서버가 저장한 결과다. 서버가 정한 id, 기본값 done:false가 채워져 있다. 이걸 받아 두면 화면을 그리려고 GET을 한 번 더 보낼 필요가 없다.",
+    },
+  ]}
+/>
+
+본문에 만든 결과를 실을지는 선택이다. 본문 없이 `201`과 `Location`만 줘도 된다. 그러면 클라이언트가 GET을 한 번 더 보내야 하니, 화면을 바로 그리는 앱이라면 실어 주는 편이 편하다.
+
+POST는 멱등이 아니라서 응답이 유실된 뒤 다시 보내면 할 일이 두 개 생긴다. 막는 방법(멱등성 키, 클라이언트가 만든 id로 PUT)은 [HTTP 메서드와 멱등성](/posts/http-methods)에 있다.
+
+## PUT은 빠진 필드를 기본값으로 만든다
+
+할 일을 완료로 바꾸려고 PUT을 보냈다. 화면에 있던 제목과 완료 여부만 담았다.
+
+```bash
+curl -i -X PUT http://localhost:3000/api/todos/104 \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"장보기","done":true}'
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+ETag: "2"
+
+{"id":"104","title":"장보기","done":true,"dueDate":null}
+```
+
+마감일이 사라졌다. 서버가 틀린 게 아니다. PUT은 "이 본문이 자원의 새 모습 전체"라는 뜻이라서 본문에 없는 `dueDate`는 기본값 `null`로 돌아간다. PUT으로 일부만 고치고 싶다면 GET으로 받은 전체 객체에서 바꿀 필드만 고친 뒤 통째로 보내야 한다.
+
+```js
+const current = await (await fetch("/api/todos/104")).json();
+const res = await fetch("/api/todos/104", {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ ...current, done: true }),
+});
+```
+
+이렇게 읽고 고쳐서 덮어쓰는 방식은 그사이 다른 사람이 바꾼 내용을 지울 수 있다. 이건 412 절에서 막는다.
+
+PUT 응답은 `200`과 바뀐 모습, 또는 본문 없는 `204 No Content` 중 하나다. 그 주소에 자원이 없어서 PUT이 새로 만들었다면 `201`이다. 본문의 `id`가 주소의 id와 다르면(`PUT /api/todos/104`에 `"id":"105"`) 조용히 무시하지 말고 400이나 422로 거절하는 게 낫다. 어느 쪽을 믿어야 할지 서버도 모른다.
+
+## PATCH에서 null은 지우라는 뜻이다
+
+일부만 고치려면 PATCH를 쓴다. PATCH 본문의 형식은 `Content-Type`으로 밝히는데, JSON API에서 가장 흔한 건 JSON Merge Patch(RFC 7396)다. 미디어 타입은 `application/merge-patch+json`이다.
+
+```bash
+curl -i -X PATCH http://localhost:3000/api/todos/104 \
+  -H 'Content-Type: application/merge-patch+json' \
+  -d '{"memo":"우유랑 계란"}'
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+ETag: "3"
+
+{"id":"104","title":"장보기","done":true,"dueDate":null,"memo":"우유랑 계란"}
+```
+
+규칙은 네 줄이면 된다. 패치에 적은 키만 건드린다. 값이 `null`이면 그 키를 지운다. 값이 객체면 안쪽으로 들어가 같은 규칙을 다시 적용한다. 그 밖의 값(문자열, 숫자, 배열)은 통째로 덮어쓴다. 아래 그림에서 다음을 누르면, 알림 설정(`remind`)이 붙은 할 일에 패치 하나가 키별로 적용되는 과정이 보인다.
+
+<AlgoTrace
+  caption="패치 {done: true, memo: null, remind: {repeat: null}} 적용"
+  memoryLabel="할 일 104"
+  cells={["done: true", "memo: null", "remind: {…}", "repeat: null"]}
+  steps={[
+    {
+      memory: ["title 장보기", "done false", "memo 우유랑 계란", "remind.at 09:00", "remind.repeat daily"],
+      caption: "처음 상태. 매일 9시에 알림이 오는 할 일이다.",
+    },
+    {
+      pointer: 0,
+      memory: ["title 장보기", "done true", "memo 우유랑 계란", "remind.at 09:00", "remind.repeat daily"],
+      caption: "done: true. 보통 값이라 그대로 덮어쓴다.",
+    },
+    {
+      pointer: 1,
+      memory: ["title 장보기", "done true", "remind.at 09:00", "remind.repeat daily"],
+      caption: "memo: null. 값이 null이면 그 키를 지운다. memo가 빠졌다.",
+    },
+    {
+      pointer: 2,
+      memory: ["title 장보기", "done true", "remind.at 09:00", "remind.repeat daily"],
+      caption: "remind는 객체다. 덮어쓰지 않고 안으로 들어가 같은 규칙을 적용한다.",
+    },
+    {
+      pointer: 3,
+      found: [0, 1, 2, 3],
+      memory: ["title 장보기", "done true", "remind.at 09:00"],
+      caption: "remind.repeat: null. 반복만 지우고 at은 남긴다. 패치에 없던 title도 그대로다.",
+    },
+  ]}
+/>
+
+이 규칙 때문에 Merge Patch로는 필드 값을 진짜 `null`로 만들 수 없다. `"dueDate": null`을 보내면 키가 지워지고, 서버가 그걸 기본값 `null`로 보여 줄 뿐이다. 배열도 통째로만 바뀐다. 태그 하나를 빼려면 남길 태그 전체를 보내야 한다. 배열 중간에 끼워 넣거나 "지금 값이 이럴 때만 바꿔라" 같은 조건이 필요하면 변경 지시 목록인 JSON Patch(RFC 6902)를 쓴다. 두 형식의 비교와 멱등성 차이는 [HTTP 메서드와 멱등성](/posts/http-methods)에 정리했다.
+
+앞에서 본 `undefined` 함정이 여기서 터진다. 메모를 지우려고 `{ memo: undefined }`를 `JSON.stringify`하면 `{}`가 나가고, 서버는 아무것도 바꾸지 않는다. 지우려면 `null`이다.
+
+규칙을 직접 짜 보자. `applyMergePatch(target, patch)`는 RFC 7396의 규칙대로 새 객체를 돌려준다. 패치가 객체가 아니면(배열, 문자열, `null`) 패치 자체가 결과다. 원래 객체는 바꾸지 않는다.
+
+<CodePlayground
+  caption="JSON Merge Patch 구현하기"
+  functionName="applyMergePatch"
+  initialCode={`function applyMergePatch(target, patch) {
+  // patch가 객체가 아니면 patch가 그대로 결과다
+  // null이면 키를 지우고, 객체면 안쪽으로 들어가 다시 적용한다
+  return target;
+}`}
+  solution={`function applyMergePatch(target, patch) {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
+    return patch;
+  }
+  const isObject = target !== null && typeof target === "object" && !Array.isArray(target);
+  const result = isObject ? { ...target } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete result[key];
+    else result[key] = applyMergePatch(result[key], value);
+  }
+  return result;
+}`}
+  tests={[
+    {
+      label: "값 덮어쓰기",
+      args: [{ title: "우유 사기", done: false, memo: "저지방" }, { done: true }],
+      expected: { title: "우유 사기", done: true, memo: "저지방" },
+    },
+    {
+      label: "null은 키를 지운다",
+      args: [{ title: "우유 사기", done: false, memo: "저지방" }, { memo: null }],
+      expected: { title: "우유 사기", done: false },
+    },
+    {
+      label: "배열은 통째로 바뀐다",
+      args: [{ title: "우유 사기", tags: ["장보기", "급함"] }, { tags: ["장보기"] }],
+      expected: { title: "우유 사기", tags: ["장보기"] },
+    },
+    {
+      label: "중첩 객체는 안쪽만",
+      args: [{ title: "a", remind: { at: "09:00", repeat: "daily" } }, { remind: { repeat: null } }],
+      expected: { title: "a", remind: { at: "09:00" } },
+    },
+    {
+      label: "없던 객체는 새로 만든다",
+      args: [{ title: "a", remind: "none" }, { remind: { at: "09:00", off: null } }],
+      expected: { title: "a", remind: { at: "09:00" } },
+    },
+    {
+      label: "원래 있던 null은 그대로",
+      args: [{ e: null }, { a: 1 }],
+      expected: { e: null, a: 1 },
+    },
+    {
+      label: "패치가 배열이면 통째로",
+      args: [{ a: "b" }, ["c"]],
+      expected: ["c"],
+    },
+    {
+      label: "패치가 null이면 null",
+      args: [{ a: "foo" }, null],
+      expected: null,
+    },
+    {
+      label: "빈 객체 안쪽으로",
+      args: [{}, { a: { bb: { ccc: null } } }],
+      expected: { a: { bb: {} } },
+    },
+  ]}
+/>
+
+테스트 대부분은 RFC 7396 부록의 예시를 할 일 모양으로 옮긴 것이다. 같은 패치를 두 번 적용해도 결과가 같다는 것도 확인해 볼 만하다. 키를 덮어쓰거나 지우기만 하니 Merge Patch는 멱등이다.
+
+서버에서 이 함수를 그대로 쓰면 한 가지 구멍이 있다. 패치에 `"__proto__"` 같은 키가 오면 `result[key] = ...`가 객체의 프로토타입을 바꿔 버린다. 공격자가 보낸 JSON으로 객체의 동작을 바꾸는 프로토타입 오염의 출발점이다. 서버 구현에서는 `__proto__`, `constructor`, `prototype` 키를 거절하거나, 스키마에 정의된 필드만 받는다.
+
+## 지운 걸 또 지우면
+
+```bash
+curl -i -X DELETE http://localhost:3000/api/todos/104
+curl -i -X DELETE http://localhost:3000/api/todos/104
+```
+
+```text
+HTTP/1.1 204 No Content
+
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"todo 104가 없다"}
+```
+
+처음엔 지웠으니 `204`, 두 번째는 지울 게 없으니 `404`다. 응답은 달라도 서버 상태는 "104가 없다"로 같으니 DELETE는 여전히 멱등이다. 두 번째에도 `204`를 주는 API도 있다. "결국 없다"는 결과가 같으니 그것도 맞다. 재시도가 잦은 클라이언트라면 404를 성공으로 처리해 두는 편이 편하다.
+
+```js
+const res = await fetch("/api/todos/104", { method: "DELETE" });
+if (res.status !== 204 && res.status !== 404) throw await toApiError(res);
+// 여기서 res.json()을 부르지 않는다. 204에는 본문이 없다.
+```
+
+## 형식이 다르면 415
+
+처음 장면으로 돌아가자. `Content-Type` 없이 문자열을 보내면 `text/plain;charset=UTF-8`이 붙는다. 꼼꼼한 서버는 이걸 `415 Unsupported Media Type`으로 거절한다. 대충 만든 서버는 본문을 비운 채 핸들러로 넘기고, 핸들러는 "title이 없다"는 엉뚱한 에러를 낸다. 415를 주는 쪽이 원인을 찾기 훨씬 쉽다.
+
+```text
+HTTP/1.1 415 Unsupported Media Type
+Accept-Patch: application/merge-patch+json
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Unsupported Media Type","status":415,"detail":"application/json 본문만 받는다"}
+```
+
+PATCH를 `application/json`으로 보냈는데 서버가 Merge Patch만 받는다면 이렇게 `Accept-Patch`로 받을 수 있는 형식을 알려 준다(RFC 5789). 반대 방향도 있다. 클라이언트가 `Accept: application/json`을 보냈는데 서버가 그 형식으로 줄 수 없으면 `406 Not Acceptable`이다.
+
+`Content-Type: application/json`은 브라우저 입장에서도 의미가 있다. CORS에서 아무 확인 없이 보낼 수 있는 단순 요청의 `Content-Type`은 HTML 폼이 만들 수 있는 세 가지(`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`)뿐이다. 다른 출처로 JSON을 POST하면 브라우저가 먼저 OPTIONS로 허락을 받는다. 같은 출처면 상관없다.
+
+문자 인코딩은 신경 쓸 게 거의 없다. RFC 8259는 닫힌 시스템 바깥으로 주고받는 JSON은 UTF-8이어야 한다고 정했다. `fetch`의 `res.json()`도 응답 헤더의 charset과 상관없이 본문을 UTF-8로 읽는다. 서버가 EUC-KR로 내보내면 한글이 깨지니, 레거시 서버라면 응답 바이트부터 확인한다. 문자열 안의 한글은 그대로 써도 되고 `장` 같은 이스케이프로 써도 같은 값이다.
+
+## 문법은 400, 내용은 422
+
+본문이 들어왔다고 끝이 아니다. 깨진 JSON과, JSON으로는 멀쩡하지만 규칙에 맞지 않는 값은 다르게 답한다.
+
+```bash
+# 끝에 쉼표 → 파싱 자체가 안 된다
+curl -i --json '{"title":"장보기",}' http://localhost:3000/api/todos
+
+# 파싱은 되지만 title이 비었고 dueDate가 날짜가 아니다
+curl -i --json '{"title":"","dueDate":"다음 주"}' http://localhost:3000/api/todos
+```
+
+```text
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"본문이 올바른 JSON이 아니다"}
+```
+
+```text
+HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
+
+{
+  "type": "https://example.com/problems/validation",
+  "title": "입력값이 올바르지 않다",
+  "status": 422,
+  "errors": [
+    { "pointer": "#/title", "detail": "1~100자여야 한다" },
+    { "pointer": "#/dueDate", "detail": "ISO 8601 날짜여야 한다" }
+  ]
+}
+```
+
+400은 "요청을 읽을 수 없다", 422는 "읽었는데 처리할 수 없다"다. 422의 이름은 원래 WebDAV에서 온 Unprocessable Entity였고, RFC 9110이 HTTP 일반 상태 코드로 옮기면서 Unprocessable Content로 바꿨다. 검증 실패도 400으로 통일하는 API가 많고, 그것도 틀리지 않다. 한 API 안에서 일관되게 쓰면 된다.
+
+`errors`는 Problem Details에 붙인 확장 필드다. 어느 필드가 왜 틀렸는지 JSON Pointer로 짚어 주면 클라이언트가 그 입력칸 옆에 메시지를 바로 띄울 수 있다. 에러를 한꺼번에 모아서 주는 것도 중요한 배려다. 첫 번째 에러만 주면 사용자는 고치고 보내고 또 고치기를 반복한다.
+
+서버는 크기 제한도 둔다. 10MB짜리 JSON을 받으면 파싱에만 메모리와 CPU를 쓴다. Express의 `express.json()`은 기본 한도가 100kb이고, 넘으면 `413 Content Too Large`를 낸다. 깊게 중첩된 JSON도 파서를 괴롭히는 방법이라 깊이 제한을 두는 서버도 있다.
+
+## 동시에 고치면 412
+
+같은 할 일을 폰과 노트북에서 동시에 열어 둔 상황을 보자. 둘 다 버전 `"3"`을 받아 갔다. 둘이 각자 고쳐 저장하면 나중에 저장한 쪽이 앞의 수정을 지운다. 이걸 막는 게 조건부 요청이다.
+
+<SequenceDiagram
+  caption="If-Match로 늦게 온 수정을 막는다"
+  actors={[
+    { id: "phone", label: "폰" },
+    { id: "laptop", label: "노트북" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "phone",
+      to: "api",
+      label: "GET /todos/104",
+      title: "폰이 읽는다",
+      detail: "할 일과 함께 버전 ETag \"3\"을 받는다.",
+      payload: "HTTP/1.1 200 OK\nETag: \"3\"\n\n{\"id\":\"104\",\"title\":\"장보기\",...}",
+    },
+    {
+      from: "laptop",
+      to: "api",
+      label: "GET /todos/104",
+      title: "노트북도 읽는다",
+      detail: "같은 버전 \"3\"을 받는다. 둘 다 같은 모습을 보고 있다.",
+    },
+    {
+      from: "phone",
+      to: "api",
+      label: "PATCH If-Match 3",
+      title: "폰이 먼저 고친다",
+      detail: "받아 둔 ETag를 If-Match에 싣는다. 서버의 현재 버전도 \"3\"이니 통과한다.",
+      payload: "PATCH /api/todos/104 HTTP/1.1\nIf-Match: \"3\"\nContent-Type: application/merge-patch+json\n\n{\"title\":\"장보기 (마트)\"}",
+    },
+    {
+      from: "api",
+      to: "phone",
+      label: "200 ETag 4",
+      title: "버전이 올라간다",
+      detail: "저장하고 새 ETag \"4\"를 준다.",
+    },
+    {
+      from: "laptop",
+      to: "api",
+      label: "PATCH If-Match 3",
+      title: "노트북이 낡은 버전으로 고친다",
+      detail: "노트북은 아직 \"3\"을 들고 있다. 그사이 바뀐 걸 모른다.",
+      payload: "PATCH /api/todos/104 HTTP/1.1\nIf-Match: \"3\"\nContent-Type: application/merge-patch+json\n\n{\"title\":\"장보기 (편의점)\"}",
+    },
+    {
+      from: "api",
+      to: "laptop",
+      label: "412",
+      title: "조건이 맞지 않아 거절한다",
+      detail: "현재 버전은 \"4\"라서 412 Precondition Failed다. 아무것도 바뀌지 않았다.",
+      payload: "HTTP/1.1 412 Precondition Failed\nETag: \"4\"",
+    },
+    {
+      from: "laptop",
+      to: "api",
+      label: "GET 다시",
+      title: "새 버전을 받아 다시 고친다",
+      detail: "최신 내용을 보여 주고 사용자가 고르게 하거나, 겹치지 않는 필드면 자동으로 다시 적용한다.",
+    },
+  ]}
+/>
+
+fetch로는 이렇게 쓴다. 받은 `ETag`를 그대로 보관했다가 `If-Match`에 넣는다.
+
+```js
+const res = await fetch("/api/todos/104", {
+  method: "PATCH",
+  headers: { "Content-Type": "application/merge-patch+json", "If-Match": etag },
+  body: JSON.stringify({ title: "장보기 (편의점)" }),
+});
+if (res.status === 412) {
+  // 최신 버전을 다시 받아 사용자에게 보여 준다
+}
+```
+
+`If-Match`가 빠진 요청은 그냥 받아 줄 수도 있지만, 덮어쓰기가 위험한 자원이라면 `428 Precondition Required`로 "조건을 붙여서 다시 보내라"고 요구할 수 있다(RFC 6585).
+
+412와 헷갈리는 게 `409 Conflict`다. 412는 클라이언트가 붙인 조건(If-Match)이 틀렸을 때만 쓴다. 409는 요청이 자원의 현재 상태와 충돌할 때 쓴다. 이미 쓰고 있는 이메일로 가입하거나, 보관 처리된 할 일을 고치려 할 때처럼 조건 헤더와 상관없이 지금 상태로는 받아 줄 수 없는 경우다. 409 본문에도 왜 충돌했는지 Problem Details로 적어 준다.
+
+## res.json()이 터지는 응답들
+
+`res.json()`은 본문을 텍스트로 다 읽고 `JSON.parse`를 하는 함수다. 그래서 본문이 JSON이 아니면 실패한다. Node.js에서 실제로 나는 에러는 이렇다.
+
+```js
+await new Response(null, { status: 204 }).json();
+// SyntaxError: Unexpected end of JSON input
+
+await new Response("<html>...", { status: 502 }).json();
+// SyntaxError: Unexpected token '<', "<html>..." is not valid JSON
+```
+
+첫 번째는 204처럼 본문이 없는 응답이다. 두 번째는 더 흔하다. API 서버가 죽어서 앞단의 nginx나 로드 밸런서가 HTML 에러 페이지를 돌려준 경우다. `res.ok`만 보고 JSON을 기대하면 502일 때 진짜 원인 대신 `Unexpected token '<'`만 보게 된다.
+
+그래서 JSON API를 부르는 함수 하나를 만들어 두고 모든 호출을 거기로 보낸다. 상태 코드와 `Content-Type`을 보고 나서 읽는다.
+
+```js
+async function requestJson(url, { body, headers, ...init } = {}) {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(body !== undefined && { "Content-Type": "application/json" }),
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const type = res.headers.get("Content-Type") ?? "";
+  const isJson = /^application\/([\w.-]+\+)?json/.test(type); // problem+json, merge-patch+json 포함
+  const data = res.status === 204 || !isJson ? null : await res.json();
+
+  if (!res.ok) {
+    throw Object.assign(new Error(data?.title ?? `HTTP ${res.status}`), { status: res.status, problem: data });
+  }
+  return { status: res.status, etag: res.headers.get("ETag"), data };
+}
+```
+
+`Content-Type` 정규식에 `+json`을 넣은 건 `application/problem+json` 같은 JSON 계열 타입도 받기 위해서다. 본문이 크고 텍스트로 먼저 보고 싶다면 `res.text()`로 읽은 다음 `JSON.parse`를 `try`로 감싸는 방법도 있다. 본문은 한 번만 읽을 수 있으니 `text()`와 `json()`을 둘 다 부르면 안 된다.
+
+## 폼으로 보낼 때와 무엇이 다른가
+
+JSON 대신 HTML 폼 형식(`application/x-www-form-urlencoded`)으로 보낼 수도 있다. `title=%EC%9E%A5%EB%B3%B4%EA%B8%B0&done=true` 같은 모양이다. 폼 형식은 모든 값이 문자열이고 구조가 평평하다. `done=true`가 불리언인지 문자열 `"true"`인지는 서버가 정해야 하고, 중첩 객체나 배열은 `remind[at]=09:00`처럼 프레임워크마다 다른 관례로 흉내 낸다. 빈 값과 값이 없는 것도 구분하기 어렵다.
+
+JSON은 타입과 구조가 본문에 그대로 담긴다. `true`는 불리언이고 `null`은 비어 있다는 뜻이다. 대신 자바스크립트 없이 보낼 수 없다. `<form>`은 JSON을 만들지 못하고, 다른 출처라면 CORS preflight도 거친다.
+
+정리하면 API 서버와 앱이 주고받는 데이터는 JSON, 자바스크립트 없이도 동작해야 하는 로그인·검색 폼은 폼 형식이 맞다. 파일을 올릴 때는 둘 다 아니고 `multipart/form-data`다. 폼이 요청을 만드는 과정은 [HTML 폼이 보내는 HTTP 요청](/posts/html-form-http)에서 다뤘다.
+
+## 다시 빈 req.body로
+
+처음 장면의 버그는 `Content-Type` 한 줄이었다. JSON으로 CRUD를 할 때 문제가 되는 곳은 대부분 이런 경계다. 보낼 때는 `JSON.stringify`가 무엇을 바꾸는지(`undefined`, `Date`, `Map`, `BigInt`), 헤더가 본문 형식을 제대로 말하는지 본다. 받을 때는 상태 코드와 `Content-Type`을 보고 나서 본문을 읽고, 큰 정수와 날짜는 문자열로 온다고 생각한다. 그리고 각 메서드에 맞는 응답(201과 Location, PUT의 전체 교체, Merge Patch의 null, 204의 빈 본문, 412의 버전 확인)을 지키면 클라이언트와 서버가 서로를 짐작하지 않아도 된다.
+
+## 면접에서 나올 만한 질문
+
+### REST API로 자원을 만들 때 응답은 어떻게 주나요?
+
+`201 Created`와 함께 새 자원의 주소를 `Location` 헤더에 담는다. 본문에는 서버가 정한 id와 기본값이 채워진 저장 결과를 실어 주면 클라이언트가 GET을 한 번 더 보내지 않아도 된다. 버전 관리를 한다면 `ETag`도 같이 준다. POST는 멱등이 아니라서 재시도에 대비해 멱등성 키를 받는 것도 고려한다.
+
+### PUT으로 일부 필드만 보내면 어떻게 되나요?
+
+본문에 없는 필드는 기본값이나 `null`로 바뀌는 게 맞는 동작이다. PUT은 본문이 자원의 새 모습 전체라는 뜻이기 때문이다. 일부만 바꾸려면 PATCH를 쓰거나, PUT이라면 현재 모습을 읽어서 바꿀 필드만 고친 전체를 보내야 한다. 이때 그사이 다른 수정이 있었는지 `If-Match`로 확인한다.
+
+### JSON Merge Patch에서 null은 어떤 의미인가요?
+
+그 필드를 지우라는 뜻이다. 그래서 Merge Patch로는 필드 값을 진짜 `null`로 저장할 수 없고, 배열도 통째로만 바꿀 수 있다. 자바스크립트에서 `undefined`를 보내면 `JSON.stringify`가 키를 빼 버려서 "바꾸지 않음"이 되니 지울 때는 꼭 `null`을 보낸다. 배열 일부 수정이나 조건부 수정이 필요하면 JSON Patch를 쓴다.
+
+### 400과 422는 어떻게 나누나요?
+
+400은 JSON 문법이 깨졌거나 요청 자체를 읽을 수 없을 때, 422는 JSON으로는 올바르지만 값이 규칙에 맞지 않을 때 쓴다. 검증 실패를 400으로 통일하는 API도 있고 그것도 틀리지 않다. 중요한 건 한 API 안에서 일관되게 쓰고, Problem Details 본문에 어느 필드가 왜 틀렸는지 모아서 알려 주는 것이다.
+
+### JSON으로 64비트 정수 ID를 숫자로 보내면 어떤 문제가 생기나요?
+
+자바스크립트의 숫자는 배정밀도 부동소수점이라 2⁵³을 넘는 정수는 정확히 표현하지 못하고, `JSON.parse`가 오류 없이 가까운 다른 값으로 바꾼다. 9007199254740993이 9007199254740992가 되는 식이다. 그래서 큰 ID는 문자열로 보낸다. 금액처럼 정밀도가 필요한 소수도 정수 단위나 문자열로 보낸다.
+
+### JSON.stringify에서 값이 사라지거나 바뀌는 경우를 말해 보세요.
+
+객체 안의 `undefined`와 함수는 키째로 빠지고 배열 안에서는 `null`이 된다. `NaN`과 `Infinity`는 `null`, `Date`는 `toJSON` 때문에 ISO 문자열, `Map`과 `Set`은 빈 객체가 된다. `BigInt`와 순환 참조는 `TypeError`를 던진다. 받는 쪽에서 날짜를 다시 `Date`로 만들려면 `reviver`나 스키마 검증으로 바꿔야 한다.
+
+### fetch로 204나 502 응답에 res.json()을 부르면 어떻게 되나요?
+
+본문이 비어 있으면 `Unexpected end of JSON input`, HTML 에러 페이지가 오면 `Unexpected token '<'` 같은 `SyntaxError`로 reject된다. 그래서 상태 코드가 204인지, `Content-Type`이 JSON 계열인지 먼저 확인하고 읽는다. 이 처리를 공용 요청 함수 하나에 모아 두면 모든 호출이 같은 방식으로 에러를 다룬다.
+
+### 두 사용자가 같은 자원을 동시에 수정하는 걸 어떻게 막나요?
+
+읽을 때 받은 `ETag`를 수정 요청의 `If-Match`에 실어 보내게 한다. 그사이 다른 수정으로 버전이 바뀌었으면 서버가 `412 Precondition Failed`로 거절하고, 클라이언트는 최신 버전을 다시 받아 사용자에게 보여 준다. 조건 없는 수정을 막고 싶으면 `428 Precondition Required`를 쓴다. 조건과 상관없이 현재 상태와 충돌하는 요청은 `409 Conflict`로 구분한다.

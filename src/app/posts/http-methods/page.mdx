@@ -1,0 +1,454 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("http-methods");
+
+비밀번호 없이 메일로 로그인 링크를 보내는 기능을 만들었다고 해 보자. 링크는 `GET /login/verify?token=...`이고, 서버는 이 주소가 열리면 토큰을 확인해 세션을 만들고 토큰을 지운다. 한 번 쓰면 끝나는 링크다. 그런데 회사 메일을 쓰는 사용자들이 "링크를 눌렀더니 이미 사용된 링크라고 나온다"고 한다.
+
+사용자보다 먼저 링크를 연 쪽이 있었다. 기업용 메일 보안 서비스는 메일 속 링크가 피싱 사이트인지 확인하려고 받은 링크를 미리 열어 본다. 메신저가 링크 미리보기를 만들 때도 같은 일이 일어난다. 이들은 GET 요청이라면 열어 봐도 아무것도 바뀌지 않는다고 믿는다. 그 믿음은 근거가 있다. HTTP가 GET에 그런 약속을 붙여 두었기 때문이다. 이 링크는 약속을 어겼다.
+
+HTTP 메서드는 요청 줄 맨 앞의 단어 하나지만, 그 단어에는 "이 요청은 무엇을 바꾸는가", "두 번 보내도 되는가" 같은 약속이 담겨 있다. 메시지의 생김새는 [HTTP 메시지는 어떻게 생겼나](/posts/http-message)에서 봤고, 여기서는 그 첫 단어가 하는 약속을 본다.
+
+## 메서드는 서버와 맺는 약속이다
+
+자주 쓰는 메서드는 일곱 개다. 조각을 눌러 보면 각각이 무엇을 요청하는지, 어떤 성질을 갖는지 나온다.
+
+<UrlAnatomy
+  caption="메서드마다 붙은 약속"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "GET",
+      title: "표현을 달라",
+      description: "대상 자원의 현재 표현을 요청한다. 가장 흔한 메서드이고, 브라우저 주소창·링크·이미지가 모두 GET이다. 본문은 싣지 않는다.",
+      code: "안전 O · 멱등 O · 캐시 O",
+    },
+    {
+      key: "HEAD",
+      title: "머리만 달라",
+      description: "GET과 똑같이 처리하되 응답 본문을 빼고 헤더만 돌려준다. 파일 크기나 수정 시각을 내려받지 않고 확인할 때 쓴다.",
+      code: "안전 O · 멱등 O · 캐시 O",
+    },
+    {
+      key: "POST",
+      title: "이걸 처리해 달라",
+      description: "보낸 본문을 대상 자원이 정한 방식대로 처리하게 한다. 새 자원 만들기, 폼 제출, 결제 같은 '무언가를 일으키는' 요청을 다 받는다. 결과로 새 자원이 생기면 201과 Location으로 주소를 알려 준다.",
+      code: "안전 X · 멱등 X · 캐시 거의 X",
+    },
+    {
+      key: "PUT",
+      title: "이 상태로 바꿔라",
+      description: "대상 자원을 보낸 본문으로 통째로 바꾼다. 없으면 만든다. POST와 달리 주소를 클라이언트가 정한다. 새로 만들었으면 201, 바꿨으면 200이나 204다.",
+      code: "안전 X · 멱등 O · 캐시 X",
+    },
+    {
+      key: "PATCH",
+      title: "일부만 고쳐라",
+      description: "본문에 적은 변경 지시대로 자원의 일부만 바꾼다. RFC 5789에 따로 정의되어 있다. 변경 지시를 어떻게 쓰느냐에 따라 멱등일 수도, 아닐 수도 있다.",
+      code: "안전 X · 멱등 보장 X · 캐시 X",
+    },
+    {
+      key: "DELETE",
+      title: "지워라",
+      description: "대상 자원을 지운다. 이미 없는 걸 또 지워도 서버 상태는 같으므로 멱등이다. 두 번째 응답이 404여도 그렇다.",
+      code: "안전 X · 멱등 O · 캐시 X",
+    },
+    {
+      key: "OPTIONS",
+      title: "무엇이 되는지 알려 달라",
+      description: "대상 자원에 쓸 수 있는 메서드나 기능을 묻는다. 지금은 대부분 브라우저의 CORS preflight로 만난다.",
+      code: "안전 O · 멱등 O · 캐시 X",
+    },
+  ]}
+/>
+
+이 밖에 프록시에 터널을 뚫어 달라는 `CONNECT`, 받은 요청을 그대로 되돌려 달라는 `TRACE`가 있다. 둘은 뒤에서 짧게 본다.
+
+## 안전, 멱등, 캐시 가능
+
+위의 성질 세 가지는 HTTP 의미론 표준(RFC 9110)에 정의가 있다. 말이 비슷해 보여도 가리키는 대상이 다르다.
+
+안전(safe)은 클라이언트가 이 요청으로 서버 상태가 바뀌기를 요청하지도, 기대하지도 않는다는 뜻이다. GET, HEAD, OPTIONS, TRACE가 안전하다. 여기서 중요한 단어는 "요청하지도 기대하지도"다. 서버가 GET을 받고 접근 로그를 남기거나 조회수를 올리는 건 상관없다. 그건 서버가 알아서 한 일이고, 클라이언트가 바란 게 아니다. 다만 그 부수 효과로 문제가 생기면 책임은 서버에 있다. 처음 장면의 로그인 링크가 바로 그 경우다. 크롤러, 메일 스캐너, 브라우저 프리페치처럼 사람이 누르지 않아도 GET을 보내는 프로그램은 모두 이 약속을 믿고 움직인다.
+
+멱등(idempotent)은 같은 요청을 여러 번 보냈을 때 서버에 의도한 효과가 한 번 보낸 것과 같다는 뜻이다. PUT과 DELETE, 그리고 안전한 메서드 전부가 멱등이다. 아무것도 바꾸지 않으면 몇 번을 해도 같으니, 안전한 메서드는 자동으로 멱등이다. 반대는 성립하지 않는다. DELETE는 멱등하지만 안전하지 않다.
+
+멱등은 응답이 같다는 말이 아니다. `DELETE /orders/7`을 두 번 보내면 처음엔 204, 다음엔 404가 온다. 그래도 서버 상태는 "주문 7이 없다"로 같으니 멱등이다. 반대로 `DELETE /orders/latest`처럼 주소가 매번 다른 대상을 가리키게 설계하면 메서드가 DELETE여도 두 번 보낼 때 두 개가 지워진다. 멱등성은 메서드 이름이 보장해 주는 게 아니라, 서버가 그 의미대로 구현해야 생기는 성질이다.
+
+캐시 가능(cacheable)은 응답을 저장했다가 다음 요청에 재사용해도 되느냐다. 표준이 캐시 가능하다고 정한 메서드는 GET, HEAD, POST다. POST는 응답에 명시적인 유효 기간과 `Content-Location`이 있어야 한다는 까다로운 조건이 붙어서, 실제로 POST 응답을 캐시하는 브라우저나 CDN은 거의 없다. 사실상 GET과 HEAD만 캐시된다고 보면 된다. 캐시 규칙은 [HTTP 캐시와 CDN](/posts/http-caching-cdn)에서 자세히 다뤘다.
+
+멱등이 왜 따로 이름을 가질 만큼 중요하냐면, 네트워크에서는 "요청이 갔는지 모르는" 상황이 늘 생기기 때문이다. 요청을 보냈는데 응답이 오기 전에 연결이 끊겼다. 서버가 처리를 했는지 안 했는지 클라이언트는 알 수 없다. 멱등한 요청이면 고민할 것 없이 다시 보내면 된다. 그래서 HTTP 클라이언트와 프록시는 멱등한 요청만 자동으로 재시도한다. nginx도 1.9.13부터 POST, PATCH 같은 멱등하지 않은 요청은 이미 뒷단에 보냈다면 다른 서버로 다시 보내지 않는다(`proxy_next_upstream`에 `non_idempotent`를 주지 않는 한).
+
+## 같은 요청을 두 번 보내면
+
+장바구니 자원 하나에 메서드별로 같은 요청을 두 번씩 보내 보자. 처음 장바구니에는 사과 하나와 쿠폰이 들어 있다. 아래 그림에서 칸이 요청이고, 오른쪽이 요청을 처리한 뒤의 장바구니다.
+
+<AlgoTrace
+  caption="두 번째 요청이 상태를 또 바꾸는가"
+  memoryLabel="장바구니"
+  cells={["PUT", "PUT", "PATCH", "PATCH", "POST", "POST", "DELETE", "DELETE"]}
+  steps={[
+    {
+      memory: ["apple", "쿠폰 WELCOME"],
+      caption: "처음 상태. 사과 하나와 WELCOME 쿠폰이 있다.",
+    },
+    {
+      pointer: 0,
+      memory: ["pear"],
+      caption: "PUT { items: [pear] }. 보낸 본문으로 통째로 바꾼다. 본문에 쿠폰이 없으니 쿠폰도 사라진다.",
+    },
+    {
+      pointer: 1,
+      found: [1],
+      memory: ["pear"],
+      caption: "같은 PUT을 한 번 더. 이미 그 상태라 바뀌는 게 없다. 멱등이다.",
+    },
+    {
+      pointer: 2,
+      found: [1],
+      memory: ["pear", "메모 문 앞"],
+      caption: "PATCH { memo: \"문 앞\" }. 적은 필드만 고친다. items는 그대로다.",
+    },
+    {
+      pointer: 3,
+      found: [1, 3],
+      memory: ["pear", "메모 문 앞"],
+      caption: "같은 PATCH를 한 번 더. memo를 같은 값으로 덮을 뿐이라 결과가 같다. 이 PATCH는 멱등이다.",
+    },
+    {
+      pointer: 4,
+      found: [1, 3],
+      memory: ["pear", "milk", "메모 문 앞"],
+      caption: "POST /cart/items { milk }. 항목을 하나 추가한다.",
+    },
+    {
+      pointer: 5,
+      found: [1, 3],
+      memory: ["pear", "milk", "milk", "메모 문 앞"],
+      caption: "같은 POST를 한 번 더. 우유가 두 개가 됐다. 멱등이 아니다.",
+    },
+    {
+      pointer: 6,
+      found: [1, 3],
+      memory: [],
+      caption: "DELETE. 장바구니가 사라진다. 응답은 204.",
+    },
+    {
+      pointer: 7,
+      found: [1, 3, 7],
+      memory: [],
+      caption: "DELETE를 한 번 더. 응답은 404지만 상태는 여전히 '없음'이다. 응답이 달라도 멱등이다.",
+    },
+  ]}
+/>
+
+이 규칙을 코드로 짜 보자. `applyRequest`는 현재 장바구니(`state`, 없으면 `null`)와 요청 하나를 받아 처리 후 상태를 돌려준다. PUT은 본문으로 통째로 바꾸고, PATCH는 아래에서 볼 JSON Merge Patch 규칙으로 일부를 고치고(값이 `null`이면 그 필드를 지운다), POST는 `items`에 본문을 하나 추가하고, DELETE는 `null`을 돌려준다. 장바구니가 없을 때 PATCH와 POST는 404라서 상태를 바꾸지 않는다. `run`은 요청 목록을 차례로 적용한다.
+
+<CodePlayground
+  caption="두 번 보내 보기"
+  functionName="run"
+  initialCode={`function applyRequest(state, req) {
+  // state: { items: [...], ... } 또는 null
+  // req: { method: "PUT" | "PATCH" | "POST" | "DELETE" | "GET", body }
+  return state;
+}
+
+function run(initial, requests) {
+  let state = initial;
+  for (const req of requests) state = applyRequest(state, req);
+  return state;
+}`}
+  solution={`function mergePatch(target, patch) {
+  const result = { ...target };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete result[key];
+    } else if (typeof value === "object" && !Array.isArray(value)) {
+      const base = result[key] && typeof result[key] === "object" && !Array.isArray(result[key]) ? result[key] : {};
+      result[key] = mergePatch(base, value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function applyRequest(state, req) {
+  switch (req.method) {
+    case "PUT":
+      return JSON.parse(JSON.stringify(req.body));
+    case "PATCH":
+      return state === null ? null : mergePatch(state, req.body);
+    case "POST":
+      return state === null ? null : { ...state, items: [...(state.items ?? []), req.body] };
+    case "DELETE":
+      return null;
+    default:
+      return state; // GET, HEAD는 아무것도 바꾸지 않는다
+  }
+}
+
+function run(initial, requests) {
+  let state = initial;
+  for (const req of requests) state = applyRequest(state, req);
+  return state;
+}`}
+  tests={[
+    {
+      label: "PUT 한 번",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "PUT", body: { items: ["pear"] } }]],
+      expected: { items: ["pear"] },
+    },
+    {
+      label: "PUT 두 번도 같다",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "PUT", body: { items: ["pear"] } }, { method: "PUT", body: { items: ["pear"] } }]],
+      expected: { items: ["pear"] },
+    },
+    {
+      label: "PATCH 한 번",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "PATCH", body: { coupon: null, memo: "문 앞" } }]],
+      expected: { items: ["apple"], memo: "문 앞" },
+    },
+    {
+      label: "Merge Patch 두 번도 같다",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "PATCH", body: { coupon: null, memo: "문 앞" } }, { method: "PATCH", body: { coupon: null, memo: "문 앞" } }]],
+      expected: { items: ["apple"], memo: "문 앞" },
+    },
+    {
+      label: "POST 한 번",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "POST", body: "milk" }]],
+      expected: { items: ["apple", "milk"], coupon: "WELCOME" },
+    },
+    {
+      label: "POST 두 번은 다르다",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "POST", body: "milk" }, { method: "POST", body: "milk" }]],
+      expected: { items: ["apple", "milk", "milk"], coupon: "WELCOME" },
+    },
+    {
+      label: "DELETE 두 번",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "DELETE" }, { method: "DELETE" }]],
+      expected: null,
+    },
+    {
+      label: "중첩 객체는 안쪽까지 합친다",
+      args: [{ items: ["apple"] }, [{ method: "PATCH", body: { address: { city: "Seoul", zip: "04524" } } }, { method: "PATCH", body: { address: { zip: null } } }]],
+      expected: { items: ["apple"], address: { city: "Seoul" } },
+    },
+    {
+      label: "GET은 바꾸지 않는다",
+      args: [{ items: ["apple"], coupon: "WELCOME" }, [{ method: "GET" }]],
+      expected: { items: ["apple"], coupon: "WELCOME" },
+    },
+    {
+      label: "없는 장바구니에 PATCH",
+      args: [null, [{ method: "PATCH", body: { memo: "문 앞" } }]],
+      expected: null,
+    },
+  ]}
+/>
+
+결과를 비교할 때 객체의 키 순서도 본다. 원래 키 뒤에 새 키가 붙는 자연스러운 순서로 만들면 통과한다.
+
+## PUT은 통째로, PATCH는 일부만
+
+위에서 PUT 한 번에 쿠폰이 사라졌다. PUT은 "이 본문이 자원의 새 모습 전체"라는 뜻이라서, 본문에 없는 필드는 지워지는 게 맞다. 실무에서 이름은 PUT인데 보낸 필드만 고치는 API를 자주 본다. 그렇게 만들면 클라이언트는 "빠진 필드는 지워지는지, 그대로인지"를 문서를 봐야만 알 수 있다. 일부만 고치려면 PATCH를 쓴다.
+
+PUT은 주소도 클라이언트가 정한다. `PUT /users/matt/avatar`는 그 주소에 이 내용을 두라는 뜻이고, 몇 번을 보내도 그 자리 하나만 덮어쓴다. POST는 `POST /orders`처럼 모음(collection)에 보내고, 새 주문의 주소는 서버가 정해 `Location`으로 알려 준다. 그래서 같은 POST를 두 번 보내면 주소가 다른 주문이 두 개 생긴다.
+
+PATCH 본문의 형식은 정해져 있지 않다. 그래서 형식을 `Content-Type`으로 밝히는데, 표준으로 정해진 JSON 형식이 두 가지 있다.
+
+JSON Merge Patch(RFC 7396, `application/merge-patch+json`)는 고칠 필드만 적은 JSON이다. 위 연습에서 쓴 방식이다. 적은 필드는 덮어쓰고, 값이 `null`이면 지우고, 객체는 안쪽까지 합친다. 읽고 쓰기 쉽다. 대신 필드 값을 진짜 `null`로 만들 수 없고, 배열은 통째로 바꾸는 것만 된다. 배열 중간에 항목 하나를 넣는 건 표현할 수 없다.
+
+JSON Patch(RFC 6902, `application/json-patch+json`)는 변경 지시의 목록이다.
+
+```json
+[
+  { "op": "test", "path": "/version", "value": 3 },
+  { "op": "replace", "path": "/memo", "value": "문 앞" },
+  { "op": "add", "path": "/items/-", "value": "milk" }
+]
+```
+
+`add`, `remove`, `replace`, `move`, `copy`, `test` 여섯 가지가 있고, 목록 전체가 한 번에 적용되거나 하나라도 실패하면 아무것도 적용되지 않는다. 배열 끝에 추가하는 `/items/-` 같은 표현이 가능한 대신, 이 지시는 보낼 때마다 우유가 하나씩 늘어난다. 같은 PATCH라도 Merge Patch는 멱등이고 이 JSON Patch는 멱등이 아니다. PATCH가 "멱등 보장 X"인 이유다. 맨 앞의 `test`처럼 현재 값이 예상과 같을 때만 적용하게 하면 다시 보내도 두 번째는 실패하므로 안전해진다.
+
+멱등이라고 해서 동시에 고치는 문제까지 풀리는 건 아니다. 나와 동료가 같은 문서를 열어 각자 PUT으로 저장하면 나중에 저장한 쪽이 앞사람의 수정을 통째로 지운다(lost update). 이건 조건부 요청으로 막는다. 문서를 읽을 때 받은 `ETag`를 `If-Match`에 실어 보내면, 그사이 누가 바꿔서 ETag가 달라졌을 때 서버가 `412 Precondition Failed`로 거절한다.
+
+```
+PUT /docs/42 HTTP/1.1
+If-Match: "v7"
+Content-Type: application/json
+
+{"title":"회의록","body":"..."}
+```
+
+## POST를 다시 보내면 주문이 두 개
+
+멱등이 아닌 요청을 재시도하면 어떻게 되는지 그림으로 보자. 주문 버튼을 눌렀고, 서버는 주문을 만들었는데 응답이 돌아오는 길에 연결이 끊겼다.
+
+<SequenceDiagram
+  caption="응답만 사라져도 클라이언트는 실패로 본다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "api", label: "주문 서버" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "api",
+      label: "POST /orders",
+      title: "주문을 보낸다",
+      detail: "주문 내용을 본문에 실어 모음 주소로 보낸다. 주문 번호는 서버가 정한다.",
+      payload: "POST /orders HTTP/1.1\nContent-Type: application/json\n\n{\"item\":\"keyboard\",\"qty\":1}",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "INSERT 1001",
+      title: "서버는 주문을 만든다",
+      detail: "주문 1001이 저장되고 결제도 진행된다. 여기까지는 정상이다.",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "201 (유실)",
+      title: "응답이 오는 길에 끊긴다",
+      detail: "모바일 네트워크가 바뀌거나 중간 프록시가 타임아웃으로 연결을 닫았다. 앱은 응답을 받지 못했다.",
+    },
+    {
+      from: "app",
+      to: "app",
+      label: "타임아웃",
+      title: "앱은 결과를 모른다",
+      detail: "실패인지 성공인지 알 수 없다. 사용자는 화면이 멈춘 걸 보고 버튼을 다시 누른다.",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "POST /orders",
+      title: "같은 요청을 다시 보낸다",
+      detail: "서버 입장에서는 새 주문 요청과 구별할 방법이 없다.",
+    },
+    {
+      from: "api",
+      to: "db",
+      label: "INSERT 1002",
+      title: "주문이 두 개가 된다",
+      detail: "같은 키보드 주문이 두 번 들어가고, 결제도 두 번 된다.",
+    },
+    {
+      from: "app",
+      to: "api",
+      label: "POST + 키",
+      title: "요청마다 고유한 키를 붙이면",
+      detail: "앱이 주문 화면에 들어올 때 만든 UUID를 Idempotency-Key 헤더에 넣는다. 재시도할 때도 같은 키를 쓴다.",
+      payload: "POST /orders HTTP/1.1\nIdempotency-Key: 8e0f6a2c-...\n\n{\"item\":\"keyboard\",\"qty\":1}",
+    },
+    {
+      from: "api",
+      to: "app",
+      label: "201 (저장본)",
+      title: "서버는 처음 결과를 다시 준다",
+      detail: "이미 처리한 키라면 주문을 새로 만들지 않고, 처음 처리할 때 저장해 둔 응답(주문 1001)을 그대로 돌려준다.",
+    },
+  ]}
+/>
+
+POST를 멱등하게 만드는 방법은 두 가지다. 하나는 그림 끝처럼 멱등성 키를 쓰는 것이다. 키를 언제 저장하고 얼마나 보관하는지, 처리 중에 같은 키가 또 오면 어떻게 하는지는 [장애가 번지지 않게](/posts/resilience-patterns)에서 다뤘다. 다른 하나는 클라이언트가 주문 번호를 먼저 만들어 `PUT /orders/{uuid}`로 보내는 것이다. 주소가 고정되니 몇 번 보내도 그 자리 하나만 덮어쓴다.
+
+브라우저에서도 같은 문제가 있다. POST로 폼을 제출한 결과 페이지에서 새로고침을 누르면 브라우저가 "양식을 다시 제출하겠느냐"고 묻는다. POST를 다시 보내면 무슨 일이 생길지 모르기 때문이다. 그래서 폼 처리 후에는 결과를 바로 그리지 않고 `303 See Other`로 결과 페이지에 보내서 GET으로 다시 열게 한다. Post/Redirect/Get(PRG) 패턴이다. 그러면 새로고침은 안전한 GET만 다시 보낸다.
+
+## GET에 본문을 싣지 않는 이유
+
+검색 조건이 길어지면 GET에 JSON 본문을 싣고 싶어진다. 스펙(RFC 9110)은 GET 요청 본문에 정해진 의미가 없고, 본문이 요청의 의미나 대상을 바꿀 수 없으며, 일부 구현이 요청 스머글링 위험 때문에 그런 요청을 거절하고 연결을 끊을 수 있다고 적어 두었다. 실제로 막히는 곳이 많다.
+
+- 브라우저 `fetch`는 GET이나 HEAD에 `body`를 주면 요청을 보내지도 않고 `TypeError`를 던진다.
+- 캐시는 주소만 키로 쓰고 본문은 보지 않는다. 본문만 다른 두 GET이 같은 캐시 사본을 받는다.
+- 프록시나 로드 밸런서, API 게이트웨이 중 일부는 GET 본문을 버리거나 요청을 거절한다.
+
+Elasticsearch의 `_search`처럼 GET 본문을 받아 주는 서버도 있지만, 그런 API도 같은 요청을 POST로 받게 열어 둔다. 조건이 길면 POST로 검색을 보내는 게 현실적이다. 대신 POST라서 캐시와 자동 재시도의 혜택을 잃는다. 이 틈을 메우려고 IETF에서 본문을 실을 수 있는 안전한 메서드 `QUERY`를 표준화하는 작업이 진행되어 왔지만, 이 글을 쓰는 시점에 지원하는 서버와 CDN이 넓지 않다.
+
+## HEAD와 OPTIONS는 묻기만 한다
+
+HEAD는 GET과 같은 처리를 하고 본문만 빼서 돌려준다. 그래서 응답 헤더도 GET과 같아야 한다. 2GB짜리 파일을 내려받기 전에 `Content-Length`로 크기를 보거나, `Last-Modified`와 `ETag`로 바뀌었는지 확인하거나, 링크가 살아 있는지 점검할 때 쓴다. 헤더를 만들려면 결국 GET만큼 일을 하는 서버도 많으니 무조건 가볍다고 보면 안 된다. 많은 프레임워크가 GET 라우트를 만들면 HEAD를 자동으로 붙여 준다.
+
+OPTIONS는 원래 "이 자원에 무엇을 할 수 있는가"를 묻는 메서드다. 응답의 `Allow` 헤더에 쓸 수 있는 메서드를 적는다. 지금은 대부분 CORS preflight로 만난다. 다른 출처로 PUT이나 JSON POST를 보내기 전에 브라우저가 OPTIONS로 허락을 먼저 받는 절차다. 자세한 흐름은 [CORS](/posts/cors)에 있다. preflight 요청에는 쿠키나 `Authorization`이 실리지 않으니, 인증 미들웨어가 OPTIONS까지 막아서 401을 내면 실제 요청은 영원히 나가지 못한다.
+
+## 405와 Allow, 대소문자
+
+자원은 있는데 그 메서드를 받지 않으면 `405 Method Not Allowed`다. 이때 서버는 `Allow` 헤더로 쓸 수 있는 메서드를 반드시 알려야 한다.
+
+```
+HTTP/1.1 405 Method Not Allowed
+Allow: GET, HEAD, OPTIONS
+```
+
+서버가 아예 모르는 메서드라면 `501 Not Implemented`다. 405는 "이 자원에는 안 된다", 501은 "이 서버는 그런 메서드를 모른다"다.
+
+메서드 이름은 대소문자를 가린다. `GET`과 `get`은 다른 메서드다. 헤더 이름이 대소문자를 가리지 않는 것과 반대라서 헷갈린다. 여기서 실무 함정이 하나 나온다. 브라우저 `fetch`는 `get`, `post`, `put`, `delete`, `head`, `options`는 대문자로 바꿔 주지만 `patch`는 바꾸지 않는다. `fetch(url, { method: "patch" })`는 소문자 `patch`를 그대로 보내고, 서버는 모르는 메서드로 보고 거절한다. PATCH는 항상 대문자로 쓴다.
+
+## 폼은 GET과 POST만 안다
+
+HTML `<form>`의 `method`는 `get`과 `post`만 HTTP 요청이 된다(`dialog`는 대화 상자를 닫는 용도라 요청을 보내지 않는다). `method="delete"`라고 적으면 브라우저는 GET으로 보낸다. 자바스크립트 없이 PUT이나 DELETE를 보낼 방법이 없어서, Rails나 Laravel 같은 프레임워크는 POST 폼에 `_method=DELETE` 같은 숨은 필드를 넣고 서버가 메서드를 바꿔 읽는 방식(method override)을 쓴다. `X-HTTP-Method-Override` 헤더로 같은 일을 하는 API도 있다.
+
+이 기능은 POST에서만 허용해야 한다. GET에도 override를 허용하면 `/posts/42?_method=DELETE` 같은 링크 하나로 글이 지워진다. 다른 사이트에 이 링크를 심어 두고 로그인한 사용자가 누르게 하면, 쿠키가 따라가서 CSRF 공격이 된다. 링크로 넘어가는 최상위 GET에는 `SameSite=Lax` 쿠키도 실린다.
+
+## CONNECT와 TRACE
+
+CONNECT는 프록시에게 "이 호스트까지 TCP 터널을 뚫어 달라"고 하는 메서드다. 회사망처럼 HTTP 프록시를 거쳐야 하는 환경에서 HTTPS 사이트에 접속하면, 클라이언트는 먼저 프록시에 CONNECT를 보내고 터널이 열리면 그 안에서 TLS를 시작한다. 프록시 설정이 된 환경에서 `curl -v`를 해 보면 첫 줄에 이게 보인다.
+
+```
+> CONNECT example.com:443 HTTP/1.1
+> Host: example.com:443
+```
+
+다른 메서드와 달리 요청 대상이 경로가 아니라 `호스트:포트`다. 프록시는 암호화된 내용을 보지 못하고 바이트만 넘긴다.
+
+TRACE는 서버가 받은 요청을 그대로 본문에 담아 돌려주는 디버깅용 메서드다. 중간 프록시가 요청을 어떻게 바꿨는지 볼 수 있다. 그런데 이걸로 자바스크립트가 읽을 수 없게 해 둔 `HttpOnly` 쿠키를 응답 본문에서 읽어 내는 공격(Cross-Site Tracing)이 알려진 뒤로 대부분의 서버가 꺼 둔다. 브라우저도 `fetch`와 `XMLHttpRequest`에서 CONNECT, TRACE를 금지 메서드로 막는다.
+
+## 스펙대로 하지 않는 서버들
+
+메서드의 의미는 약속일 뿐, 서버가 지키지 않아도 요청은 처리된다. 그래서 어긴 대가는 늦게, 엉뚱한 곳에서 나타난다.
+
+상태를 바꾸는 GET이 가장 흔하다. 처음 장면의 로그인 링크, `GET /logout`, 관리 화면의 삭제 링크가 그렇다. 크롤러와 메일 스캐너, 링크 미리보기, 브라우저의 프리페치와 프리렌더가 사람 대신 이 주소를 연다. 보안 문제도 있다. 쿠키의 `SameSite=Lax`는 다른 사이트에서 넘어오는 최상위 GET 이동에는 쿠키를 붙여 준다. 상태를 바꾸는 GET은 이 보호를 그대로 통과한다. 쿠키와 CSRF 이야기는 [쿠키와 세션으로 로그인 상태 유지하기](/posts/cookie-session-login)에 있다.
+
+반대로 모든 걸 POST로 보내는 API도 있다. GraphQL이 대표적이다. 조회도 POST로 보내면 HTTP 캐시와 CDN을 쓸 수 없고, 클라이언트가 실패한 요청을 안심하고 재시도할 수 없다. 그래서 GraphQL 서버들도 조회는 GET으로 받아 CDN에 캐시하는 방법(persisted query 등)을 따로 지원한다.
+
+상태 코드도 비슷하다. 실패했는데 `200 OK`에 `{"error": ...}`를 담아 보내면 프록시, 모니터링, 재시도 로직이 모두 성공으로 읽는다. 이건 [HTTP 상태 코드](/posts/http-status-codes)에서 이어서 다룬다.
+
+## 다시 메일 링크로
+
+로그인 링크는 GET으로 열리는 확인 페이지만 보여 주고, 실제 로그인은 그 페이지의 버튼이 보내는 POST에서 하게 바꾸면 된다. 스캐너는 링크를 열어도 버튼을 누르지 않는다. 메서드는 요청 줄의 단어 하나지만, 그 단어를 보고 브라우저, 캐시, 프록시, 크롤러, 재시도 로직이 각자 행동을 정한다. GET은 읽기만 하고, PUT과 DELETE는 몇 번 보내도 같고, POST는 한 번만 보내야 한다. 이 약속을 지키면 중간의 모든 프로그램이 나를 도와주고, 어기면 그 프로그램들이 사고를 낸다.
+
+## 면접에서 나올 만한 질문
+
+### 안전한 메서드와 멱등한 메서드의 차이는요?
+
+안전은 클라이언트가 서버 상태 변경을 요청하지 않는다는 뜻이고, GET·HEAD·OPTIONS·TRACE가 해당한다. 멱등은 같은 요청을 여러 번 보내도 서버에 의도한 효과가 한 번과 같다는 뜻이고, 안전한 메서드에 PUT과 DELETE가 더해진다. 안전하면 항상 멱등이지만, DELETE처럼 멱등이어도 안전하지 않은 메서드가 있다. 로그 기록 같은 서버의 부수 효과는 이 정의에 포함되지 않는다.
+
+### DELETE를 두 번 보내면 두 번째는 404인데, 그래도 멱등인가요?
+
+멱등이다. 멱등성은 응답이 아니라 서버 상태에 대한 정의이고, 두 번 보낸 뒤에도 "그 자원이 없다"는 상태는 같다. 다만 `/orders/latest`처럼 요청할 때마다 다른 자원을 가리키는 주소를 만들면 DELETE여도 멱등이 깨진다. 멱등성은 메서드 이름이 아니라 서버 구현이 지켜야 하는 성질이다.
+
+### PUT과 PATCH는 어떻게 다른가요?
+
+PUT은 본문을 자원의 새 모습 전체로 보고 통째로 바꾸므로, 본문에 없는 필드는 사라진다. PATCH는 본문에 적은 변경 지시대로 일부만 바꾼다. PUT은 멱등이지만 PATCH는 형식에 따라 다르다. JSON Merge Patch처럼 값을 덮어쓰는 방식은 멱등이고, JSON Patch의 배열 추가(`/items/-`)처럼 상대적인 변경은 멱등이 아니다.
+
+### POST는 왜 멱등이 아니고, 결제 같은 요청은 어떻게 안전하게 재시도하나요?
+
+POST는 모음에 보내 서버가 새 자원과 주소를 정하므로, 두 번 보내면 자원이 두 개 생긴다. 응답만 유실된 경우 클라이언트는 성공 여부를 알 수 없어 재시도가 위험하다. 클라이언트가 고유한 멱등성 키를 헤더에 붙이고 서버가 키별로 처음 결과를 저장했다가 돌려주거나, 클라이언트가 ID를 정해 PUT으로 보내는 방식으로 멱등하게 만든다.
+
+### 멱등한 요청이면 동시에 보내도 문제가 없나요?
+
+아니다. 멱등성은 같은 요청을 반복할 때의 이야기이고, 서로 다른 클라이언트가 같은 자원을 고치는 경쟁은 막지 못한다. 두 사람이 각자 PUT하면 나중 요청이 앞의 수정을 덮는다. 읽을 때 받은 ETag를 `If-Match`에 실어 보내고, 그사이 바뀌었으면 412로 거절하는 조건부 요청으로 막는다.
+
+### GET 요청에 본문을 넣으면 안 되나요?
+
+스펙상 GET 본문에는 정해진 의미가 없고, 일부 구현은 스머글링 위험 때문에 거절한다. 브라우저 fetch는 아예 에러를 내고, 캐시는 본문을 키로 쓰지 않아 다른 요청이 같은 사본을 받을 수 있다. 조건이 길면 POST로 검색하거나 쿼리 문자열을 쓴다. 이 틈을 메우려는 QUERY 메서드가 표준화 중이지만 아직 지원이 넓지 않다.
+
+### OPTIONS 메서드는 어디에 쓰이나요?
+
+대상 자원이 지원하는 메서드를 묻는 용도이고, 응답의 `Allow`에 목록을 적는다. 실무에서는 대부분 CORS preflight로 만난다. 브라우저가 교차 출처로 PUT이나 JSON POST를 보내기 전에 OPTIONS로 허락을 받는다. preflight에는 인증 정보가 없으므로 서버는 OPTIONS를 인증 없이 통과시켜야 한다.
+
+### GET으로 상태를 바꾸면 어떤 문제가 생기나요?
+
+크롤러, 메일 보안 스캐너, 링크 미리보기, 브라우저 프리페치가 GET은 안전하다고 믿고 사람 대신 주소를 열어서 의도치 않은 변경이 일어난다. 보안 면에서는 `<img>` 태그 하나로 요청을 일으킬 수 있고, SameSite=Lax 쿠키도 최상위 GET 이동에는 실리므로 CSRF에 그대로 노출된다. 상태 변경은 POST·PUT·PATCH·DELETE로 하고, 링크로 시작해야 하면 확인 페이지에서 POST를 보내게 한다.

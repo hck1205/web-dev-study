@@ -1,0 +1,745 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-group-by-having");
+
+급여 합계가 9000을 넘는 부서만 보고 싶었다. 조건이니까 `WHERE`에 쓰면 된다고 생각하고 이렇게 짰다.
+
+```sql
+SELECT deptno, SUM(sal) FROM emp WHERE SUM(sal) > 9000 GROUP BY deptno;
+```
+
+```text
+ERROR:  aggregate functions are not allowed in WHERE
+LINE 1: SELECT deptno, SUM(sal) FROM emp WHERE SUM(sal) > 9000 GROUP...
+                                               ^
+```
+
+PostgreSQL은 "WHERE에는 집계 함수를 쓸 수 없다"고 하고, Oracle은 `ORA-00934: group function is not allowed here`를 낸다. 문장은 SQL 문법에 맞게 생겼는데 왜 안 될까. `SUM(sal)`은 부서별로 행을 묶은 다음에야 계산되는 값이고, `WHERE`는 묶기 전에 행을 거르는 단계라서다. 순서가 맞지 않는다.
+
+이 글은 이 에러에서 시작해 집계 함수, `GROUP BY`, `HAVING`, `ORDER BY`를 SQL이 실행되는 논리적 순서 위에서 정리한다. 순서를 한 번 잡아 두면 SQLD에 나오는 "에러가 나는 SQL은?" 문제 대부분이 같은 이유로 풀린다.
+
+예제는 [단일행 함수 글](/posts/sqld-single-row-functions)에서 만든 SCOTT의 `EMP`(14명)와 `DEPT`(4개 부서)를 그대로 쓴다. 다시 짚으면 사원은 10, 20, 30번 부서에만 있고, `COMM`은 영업직 4명만 값이 있으며(그중 TURNER는 0), KING은 `MGR`이 NULL이다. SQL은 Oracle 문법을 기준으로 쓰고, 결과는 PostgreSQL 16.15에서 실제로 돌린 출력이다. Oracle 전용 문법은 같은 뜻의 PostgreSQL 식으로 돌렸고, 값은 같다. NULL은 `(null)`로 표시했다.
+
+## 여러 행을 하나로 줄이는 집계 함수
+
+집계 함수(다중행 함수)는 여러 행을 받아 값 하나를 돌려준다. `COUNT`, `SUM`, `AVG`, `MAX`, `MIN`이 기본이다. `GROUP BY` 없이 쓰면 테이블 전체가 한 그룹이 되어 결과는 한 행이다.
+
+```sql
+SELECT SUM(sal), ROUND(AVG(sal), 2), MAX(sal), MIN(sal),
+       MAX(hiredate), MIN(hiredate), MAX(ename), MIN(ename)
+FROM emp;
+```
+
+```text
+  sum  |  round  | max  | min |    max     |    min     | max  |  min
+-------+---------+------+-----+------------+------------+------+-------
+ 29025 | 2073.21 | 5000 | 800 | 1987-05-23 | 1980-12-17 | WARD | ADAMS
+(1 row)
+```
+
+`SUM`과 `AVG`는 숫자에만 쓰지만 `MAX`, `MIN`은 날짜와 문자에도 된다. 날짜는 가장 늦은 날과 이른 날, 문자는 사전 순으로 마지막과 처음이다.
+
+### COUNT는 세 가지다
+
+`COUNT(*)`는 행 수를 센다. NULL이든 아니든 행이 있으면 센다. `COUNT(컬럼)`은 그 컬럼이 NULL이 아닌 행만 센다. `COUNT(DISTINCT 컬럼)`은 NULL을 빼고 서로 다른 값의 개수를 센다.
+
+```sql
+SELECT COUNT(*)               AS cnt_all,
+       COUNT(comm)            AS cnt_comm,
+       COUNT(mgr)             AS cnt_mgr,
+       COUNT(DISTINCT job)    AS jobs,
+       COUNT(DISTINCT deptno) AS depts
+FROM emp;
+```
+
+```text
+ cnt_all | cnt_comm | cnt_mgr | jobs | depts
+---------+----------+---------+------+-------
+      14 |        4 |      13 |    5 |     3
+(1 row)
+```
+
+`COUNT(comm)`은 4다. TURNER의 0은 값이라 세고, NULL인 10명은 안 센다. `COUNT(mgr)`이 13인 건 KING의 NULL 하나가 빠져서다. `COUNT(DISTINCT deptno)`는 3이다. `DEPT`에는 부서가 4개지만 `EMP`에는 40번이 없다. `COUNT(1)`, `COUNT(empno)`처럼 NULL이 없는 값을 넣으면 `COUNT(*)`와 같은 14가 나온다. 성능 차이도 없다.
+
+### 집계 함수는 NULL을 건너뛴다
+
+`COUNT(*)`를 뺀 모든 집계 함수는 NULL인 행을 아예 없는 것처럼 무시한다. 평균에서 이 성질이 결과를 크게 바꾼다. 아래 그림에서 다음을 누르면 `AVG(comm)`이 14행을 지나가며 무엇을 세는지 나온다.
+
+<AlgoTrace
+  caption="AVG(comm)은 NULL을 건너뛰고 평균을 낸다"
+  memoryLabel="평균에 들어간 값"
+  cells={["N", "300", "500", "N", "1400", "N", "N", "N", "N", "0", "N", "N", "N", "N"]}
+  steps={[
+    { memory: [], caption: "14명의 comm을 사번 순으로 늘어놓았다. N은 NULL이다. 값이 있는 칸은 넷뿐이다." },
+    { pointer: 0, memory: [], caption: "SMITH는 NULL이다. AVG는 이 행을 건너뛴다. 분모에도 들어가지 않는다." },
+    { pointer: 2, found: [1, 2], memory: ["300", "500"], caption: "ALLEN 300, WARD 500. 값이 있으니 합계와 개수에 더한다." },
+    { pointer: 4, found: [1, 2, 4], memory: ["300", "500", "1400"], caption: "MARTIN 1400. 사이의 JONES(NULL)는 건너뛰었다." },
+    { pointer: 9, found: [1, 2, 4, 9], memory: ["300", "500", "1400", "0"], caption: "TURNER 0. 0은 NULL이 아니라 값이다. 개수에 들어간다." },
+    { pointer: 13, found: [1, 2, 4, 9], memory: ["300", "500", "1400", "0"], caption: "끝까지 읽었다. 합계 2200을 값 4개로 나눠 AVG(comm) = 550이다." },
+    { pointer: 13, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], memory: ["2200 / 14"], caption: "AVG(NVL(comm, 0))은 NULL을 0으로 바꿔 14명 모두 센다. 2200 / 14 = 157.14다." },
+  ]}
+/>
+
+```sql
+SELECT SUM(comm),
+       ROUND(AVG(comm), 2)         AS avg_comm,  -- 값 있는 4명의 평균
+       ROUND(AVG(NVL(comm, 0)), 2) AS avg_nvl,   -- 14명 전체 평균. PostgreSQL은 COALESCE
+       MAX(comm), MIN(comm)
+FROM emp;
+```
+
+```text
+ sum  | avg_comm | avg_nvl | max  | min
+------+----------+---------+------+-----
+ 2200 |   550.00 |  157.14 | 1400 |   0
+(1 row)
+```
+
+둘 중 어느 쪽이 맞는지는 질문에 달렸다. "커미션을 받는 사람의 평균 커미션"이면 550이고, "사원 한 명당 평균 커미션"이면 157.14다. `AVG(comm)`은 `SUM(comm) / COUNT(comm)`과 같고, `SUM(comm) / COUNT(*)`와는 다르다. 시험에서 이 둘을 섞어 보기로 낸다. `MIN(comm)`이 0인 것도 본다. NULL은 최솟값 후보에도 들지 않는다.
+
+`SUM(comm)`이 2200으로 잘 나온 것도 같은 성질 덕분이다. 행 단위 산술(`sal + comm`)에서는 NULL이 하나만 껴도 NULL이 되지만, 집계 함수는 NULL을 빼고 더한다. 그래서 `SUM(sal + comm)`과 `SUM(sal) + SUM(comm)`은 결과가 다르다. 앞의 것은 행마다 먼저 더하면서 커미션이 NULL인 10명의 급여를 통째로 잃는다.
+
+## 묶어서 세는 GROUP BY
+
+`GROUP BY 컬럼`은 그 컬럼 값이 같은 행끼리 묶고, 묶음마다 집계 함수를 계산한다. 결과는 묶음 하나에 한 행이다.
+
+```sql
+SELECT deptno, COUNT(*), SUM(sal), ROUND(AVG(sal), 2) AS avg_sal, MAX(sal), MIN(sal)
+FROM emp
+GROUP BY deptno
+ORDER BY deptno;
+```
+
+```text
+ deptno | count |  sum  | avg_sal | max  | min
+--------+-------+-------+---------+------+------
+     10 |     3 |  8750 | 2916.67 | 5000 | 1300
+     20 |     5 | 10875 | 2175.00 | 3000 |  800
+     30 |     6 |  9400 | 1566.67 | 2850 |  950
+(3 rows)
+```
+
+컬럼을 여러 개 쓰면 값의 조합마다 묶는다. 부서와 직무로 묶으면 9개 묶음이 나온다.
+
+```sql
+SELECT deptno, job, COUNT(*), SUM(sal)
+FROM emp GROUP BY deptno, job ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | count | sum
+--------+-----------+-------+------
+     10 | CLERK     |     1 | 1300
+     10 | MANAGER   |     1 | 2450
+     10 | PRESIDENT |     1 | 5000
+     20 | ANALYST   |     2 | 6000
+     20 | CLERK     |     2 | 1900
+     20 | MANAGER   |     1 | 2975
+     30 | CLERK     |     1 |  950
+     30 | MANAGER   |     1 | 2850
+     30 | SALESMAN  |     4 | 5600
+(9 rows)
+```
+
+### SELECT에는 묶은 컬럼과 집계만 올 수 있다
+
+`GROUP BY deptno`를 하면 10번 부서 3명이 한 행이 된다. 그 한 행의 `ename`은 CLARK일까, KING일까. 정할 수가 없다. 그래서 `SELECT`에는 `GROUP BY`에 쓴 컬럼이나 집계 함수(또는 그것으로 만든 식, 상수)만 올 수 있다.
+
+```sql
+SELECT deptno, ename, SUM(sal) FROM emp GROUP BY deptno;
+```
+
+```text
+ERROR:  column "emp.ename" must appear in the GROUP BY clause or be used in an aggregate function
+LINE 1: SELECT deptno, ename, SUM(sal) FROM emp GROUP BY deptno;
+                       ^
+```
+
+Oracle은 `ORA-00979: not a GROUP BY expression`을 낸다. 반대로 `GROUP BY`에 쓴 컬럼을 `SELECT`에 안 써도 된다. `SELECT SUM(sal) FROM emp GROUP BY deptno`는 부서 번호 없이 합계 세 줄을 보여 준다.
+
+PostgreSQL은 `GROUP BY`의 컬럼이 기본 키면 같은 테이블의 다른 컬럼을 `SELECT`에 쓰도록 봐준다(기본 키가 같으면 나머지도 하나로 정해지니까). Oracle과 SQL Server는 이걸 허용하지 않는다. MySQL은 `ONLY_FULL_GROUP_BY` 설정을 끄면 아무 행의 값이나 골라서 보여 주는데, 결과가 정해지지 않으니 끄지 않는다.
+
+### NULL도 하나의 묶음이 된다
+
+`WHERE`에서는 NULL끼리 같다고 보지 않지만, `GROUP BY`는 NULL인 행들을 한 묶음으로 모은다. 상사 번호로 묶으면 KING 혼자 NULL 묶음이 된다.
+
+```sql
+SELECT mgr, COUNT(*) FROM emp GROUP BY mgr ORDER BY mgr;
+```
+
+```text
+  mgr   | count
+--------+-------
+   7566 |     2
+   7698 |     5
+   7782 |     1
+   7788 |     1
+   7839 |     3
+   7902 |     1
+ (null) |     1
+(7 rows)
+```
+
+`COUNT(DISTINCT mgr)`로 세면 6이다. `DISTINCT`는 NULL을 세지 않지만 `GROUP BY`는 NULL 묶음을 결과 행으로 만든다. 같은 데이터에서 6과 7이 갈리는 지점이라 시험에 잘 나온다.
+
+## 묶은 다음에 거르는 HAVING
+
+처음의 에러로 돌아간다. 묶은 결과를 거르는 조건은 `HAVING`에 쓴다.
+
+```sql
+SELECT deptno, SUM(sal)
+FROM emp
+GROUP BY deptno
+HAVING SUM(sal) > 9000
+ORDER BY deptno;
+```
+
+```text
+ deptno |  sum
+--------+-------
+     20 | 10875
+     30 |  9400
+(2 rows)
+```
+
+`WHERE`는 묶기 전에 행을 거르고, `HAVING`은 묶은 뒤에 묶음을 거른다. 한 쿼리에 둘 다 쓰면 결과가 달라진다. "사장을 빼고 계산한 평균 급여가 2000 이상인 부서"를 구해 보자. 아래 그림에서 다음을 누르면 14행이 각 단계를 지나는 모습이 나온다.
+
+<AlgoTrace
+  caption="WHERE → GROUP BY → HAVING을 지나는 14행"
+  memoryLabel="남은 묶음"
+  cells={["SMITH", "ALLEN", "WARD", "JONES", "MARTIN", "BLAKE", "CLARK", "SCOTT", "KING", "TURNER", "ADAMS", "JAMES", "FORD", "MILLER"]}
+  steps={[
+    { memory: [], caption: "FROM emp: 14행을 읽는다. 아직 아무것도 거르지 않았다." },
+    { pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13], memory: [], caption: "WHERE job <> 'PRESIDENT': 행 하나하나를 본다. KING만 떨어져 13행이 남는다." },
+    { found: [6, 13], memory: ["10: 2명"], caption: "GROUP BY deptno: 10번에는 이제 CLARK와 MILLER 둘뿐이다." },
+    { found: [0, 3, 7, 10, 12], memory: ["10: 2명", "20: 5명"], caption: "20번은 SMITH, JONES, SCOTT, ADAMS, FORD 다섯 명이다." },
+    { found: [1, 2, 4, 5, 9, 11], memory: ["10: 2명", "20: 5명", "30: 6명"], caption: "30번은 여섯 명이다. 13행이 묶음 3개가 됐다." },
+    { memory: ["10: 1875", "20: 2175", "30: 1566.67"], caption: "묶음마다 AVG(sal)을 계산한다. 10번은 KING이 빠져서 (2450 + 1300) / 2 = 1875다." },
+    { found: [0, 3, 7, 10, 12], memory: ["20: 2175"], caption: "HAVING AVG(sal) >= 2000: 묶음 단위로 거른다. 20번만 남는다." },
+  ]}
+/>
+
+```sql
+-- 사장을 빼고(WHERE) 부서별 평균을 낸 뒤 2000 이상만(HAVING)
+SELECT deptno, COUNT(*) AS cnt, ROUND(AVG(sal), 2)
+FROM emp
+WHERE job <> 'PRESIDENT'
+GROUP BY deptno
+HAVING AVG(sal) >= 2000
+ORDER BY deptno;
+
+-- WHERE 없이 같은 HAVING
+SELECT deptno, ROUND(AVG(sal), 2)
+FROM emp
+GROUP BY deptno
+HAVING AVG(sal) >= 2000
+ORDER BY deptno;
+```
+
+```text
+ deptno | cnt |  round
+--------+-----+---------
+     20 |   5 | 2175.00
+(1 row)
+
+ deptno |  round
+--------+---------
+     10 | 2916.67
+     20 | 2175.00
+(2 rows)
+```
+
+`WHERE`가 없으면 10번 부서는 KING의 5000 덕분에 평균이 2916.67이라 통과한다. `WHERE`로 KING을 먼저 빼면 1875로 떨어져 탈락한다. 집계 전에 뺄 행인지, 집계 결과를 보고 뺄 묶음인지가 `WHERE`와 `HAVING`을 가르는 기준이다.
+
+`HAVING`에 집계가 아닌 조건을 쓸 수도 있다. `HAVING deptno <> 20`은 문법상 되고 결과도 `WHERE deptno <> 20`과 같다(10번 8750, 30번 9400). 그래도 묶기 전에 거를 수 있는 조건은 `WHERE`에 쓰는 게 원칙이다. 읽는 사람이 단계를 헷갈리지 않고, 묶을 행 자체가 줄어든다. PostgreSQL은 이런 조건을 알아서 `WHERE`로 내려 보낸다. 실행 계획에서 확인할 수 있다.
+
+```sql
+EXPLAIN SELECT deptno, SUM(sal) FROM emp GROUP BY deptno HAVING deptno <> 20;
+EXPLAIN SELECT deptno, SUM(sal) FROM emp GROUP BY deptno HAVING SUM(sal) > 9000;
+```
+
+```text
+                       QUERY PLAN
+---------------------------------------------------------
+ HashAggregate  (cost=1.22..1.26 rows=3 width=36)
+   Group Key: deptno
+   ->  Seq Scan on emp  (cost=0.00..1.18 rows=9 width=9)
+         Filter: (deptno <> 20)
+(4 rows)
+
+                        QUERY PLAN
+----------------------------------------------------------
+ HashAggregate  (cost=1.21..1.26 rows=1 width=36)
+   Group Key: deptno
+   Filter: (sum(sal) > '9000'::numeric)
+   ->  Seq Scan on emp  (cost=0.00..1.14 rows=14 width=9)
+(4 rows)
+```
+
+계획은 안쪽(`->`)부터 읽는다. 첫 번째에서 `deptno <> 20`은 `Seq Scan` 아래의 `Filter`에 붙어 있다. 테이블을 읽는 단계에서 이미 걸렀다는 뜻이고, 그래서 묶을 행 예상이 `rows=9`로 줄었다. 두 번째의 `SUM(sal) > 9000`은 바깥 `HashAggregate`의 `Filter`에 붙어 있다. 14행을 다 묶고 합계를 낸 다음에야 거를 수 있어서다. 옵티마이저가 이렇게 옮겨 주는 건 실행 방법(물리적 순서)의 이야기이고, SQL을 읽는 규칙(논리적 순서)은 바뀌지 않는다. 데이터가 작아 비용 차이는 미미하지만, 수백만 행이면 묶기 전에 거르는 쪽이 정렬이나 해시에 쓰는 메모리부터 적다.
+
+`GROUP BY` 없이 `HAVING`만 쓰면 테이블 전체가 한 묶음이다. `SELECT COUNT(*) FROM emp HAVING COUNT(*) > 10`은 14 한 행을, 조건이 `> 20`이면 0행을 돌려준다.
+
+## SQL은 적은 순서대로 실행되지 않는다
+
+SQL은 `SELECT`부터 적지만, DB가 논리적으로 처리하는 순서는 다르다. 아래 조각을 눌러 보면 각 절이 몇 번째로 실행되는지 나온다.
+
+<UrlAnatomy
+  caption="SELECT 문 조각마다 실행 순서 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "SELECT deptno, SUM(sal) AS total",
+      display: "⑤ SELECT deptno, SUM(sal) AS total",
+      title: "5번째: SELECT",
+      description: "남은 묶음마다 보여 줄 값을 계산하고 별칭(total)을 붙인다. 별칭은 여기서 처음 생긴다. 그래서 앞 단계(WHERE, GROUP BY, HAVING)에서는 이 별칭을 모른다.",
+    },
+    {
+      key: "FROM emp",
+      display: "① FROM emp",
+      title: "1번째: FROM",
+      description: "어떤 테이블에서 읽을지 정한다. 조인이 있으면 여기서 테이블을 붙인다. 14행이 준비된다.",
+    },
+    {
+      key: "WHERE",
+      display: "② WHERE sal >= 1000",
+      title: "2번째: WHERE",
+      description: "행 하나하나를 조건으로 거른다. 아직 묶기 전이라 SUM 같은 집계 함수는 쓸 수 없다. SMITH(800)와 JAMES(950)가 떨어져 12행이 남는다.",
+    },
+    {
+      key: "GROUP BY",
+      display: "③ GROUP BY deptno",
+      title: "3번째: GROUP BY",
+      description: "남은 행을 deptno 값별로 묶는다. 이 뒤로는 행이 아니라 묶음 단위로 다룬다.",
+    },
+    {
+      key: "HAVING",
+      display: "④ HAVING SUM(sal) > 9000",
+      title: "4번째: HAVING",
+      description: "묶음마다 집계를 계산해서 조건에 맞는 묶음만 남긴다. 20번은 SMITH가 빠져 10075로 통과하고, 30번은 JAMES가 빠져 8450이라 떨어진다.",
+      code: "10: 8750  → 탈락\n20: 10075 → 통과\n30: 8450  → 탈락",
+    },
+    {
+      key: "ORDER BY",
+      display: "⑥ ORDER BY total DESC",
+      title: "6번째: ORDER BY",
+      description: "맨 마지막에 정렬한다. SELECT가 끝난 뒤라 별칭 total을 쓸 수 있다.",
+    },
+  ]}
+/>
+
+FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY. 이 순서 하나로 시험의 단골 문제 세 개가 풀린다. 아래 그림에서 다음을 누르면 위 쿼리가 단계마다 몇 행을 넘기는지 나온다.
+
+<SequenceDiagram
+  caption="논리적 실행 순서와 단계마다 넘어가는 행"
+  actors={[
+    { id: "tbl", label: "emp 테이블" },
+    { id: "exec", label: "실행기" },
+    { id: "out", label: "결과" },
+  ]}
+  steps={[
+    {
+      from: "tbl",
+      to: "exec",
+      label: "FROM: 14행",
+      title: "FROM: 테이블을 읽는다",
+      detail: "emp의 14행이 실행기로 넘어간다.",
+    },
+    {
+      from: "exec",
+      to: "exec",
+      label: "WHERE: 12행",
+      title: "WHERE: 행을 거른다",
+      detail: "sal >= 1000이 아닌 SMITH, JAMES를 버린다. 행 단위라 집계 함수와 SELECT 별칭은 아직 쓸 수 없다.",
+    },
+    {
+      from: "exec",
+      to: "exec",
+      label: "GROUP BY: 3묶음",
+      title: "GROUP BY: 묶는다",
+      detail: "12행을 부서별로 묶어 3묶음이 된다.",
+      payload: "10: CLARK, KING, MILLER\n20: JONES, SCOTT, ADAMS, FORD\n30: ALLEN, WARD, MARTIN, BLAKE, TURNER",
+    },
+    {
+      from: "exec",
+      to: "exec",
+      label: "HAVING: 1묶음",
+      title: "HAVING: 묶음을 거른다",
+      detail: "묶음마다 SUM(sal)을 구해 9000을 넘는 묶음만 남긴다.",
+      payload: "10: 8750  → 탈락\n20: 10075 → 통과\n30: 8450  → 탈락",
+    },
+    {
+      from: "exec",
+      to: "exec",
+      label: "SELECT: total",
+      title: "SELECT: 값을 계산한다",
+      detail: "남은 묶음에서 deptno와 SUM(sal)을 꺼내고 total이라는 별칭을 붙인다.",
+    },
+    {
+      from: "exec",
+      to: "out",
+      label: "ORDER BY: 1행",
+      title: "ORDER BY: 정렬해서 내보낸다",
+      detail: "total 기준으로 정렬한다. 별칭을 쓸 수 있는 유일한 절이다.",
+      payload: " deptno | total\n--------+-------\n     20 | 10075",
+    },
+  ]}
+/>
+
+```sql
+SELECT deptno, SUM(sal) AS total
+FROM emp
+WHERE sal >= 1000
+GROUP BY deptno
+HAVING SUM(sal) > 9000
+ORDER BY total DESC;
+```
+
+```text
+ deptno | total
+--------+-------
+     20 | 10075
+(1 row)
+```
+
+첫째, `WHERE`에 집계 함수를 쓸 수 없다. 2번째 단계에서는 묶음이 아직 없다.
+
+둘째, `SELECT`에서 붙인 별칭은 `ORDER BY`에서만 쓸 수 있고 `WHERE`에서는 못 쓴다. 별칭이 5번째 단계에서 생기기 때문이다.
+
+```sql
+SELECT ename, sal * 12 AS annual FROM emp WHERE annual > 30000;
+```
+
+```text
+ERROR:  column "annual" does not exist
+LINE 1: SELECT ename, sal * 12 AS annual FROM emp WHERE annual > 300...
+                                                        ^
+```
+
+```sql
+-- WHERE에는 식을 다시 쓰고, ORDER BY에는 별칭을 쓴다
+SELECT ename, sal * 12 AS annual FROM emp
+WHERE sal * 12 > 30000
+ORDER BY annual DESC, ename;
+```
+
+```text
+ ename | annual
+-------+--------
+ KING  |  60000
+ FORD  |  36000
+ SCOTT |  36000
+ JONES |  35700
+ BLAKE |  34200
+(5 rows)
+```
+
+`GROUP BY`와 `HAVING`도 `SELECT`보다 먼저라서 원칙적으로 별칭을 못 쓴다. Oracle(19c까지)과 SQL Server는 `GROUP BY total`이나 `HAVING total > 9000`을 에러로 낸다. PostgreSQL과 MySQL은 `GROUP BY`의 별칭을 봐준다. Oracle도 23ai부터 `GROUP BY`와 `HAVING`에 별칭을 허용하지만, 시험은 "안 된다"를 기준으로 낸다.
+
+셋째, `ORDER BY`에는 `SELECT`에 없는 컬럼도 쓸 수 있다. 정렬은 맨 마지막이지만, `GROUP BY`가 없는 쿼리라면 원래 행의 컬럼이 아직 남아 있다.
+
+```sql
+-- sal은 SELECT에 없지만 정렬 기준으로 쓸 수 있다
+SELECT ename, job FROM emp WHERE deptno = 10 ORDER BY sal DESC;
+```
+
+```text
+ ename  |    job
+--------+-----------
+ KING   | PRESIDENT
+ CLARK  | MANAGER
+ MILLER | CLERK
+(3 rows)
+```
+
+단, `GROUP BY`가 있으면 묶음 단위로 바뀌었으니 `ORDER BY`에도 묶은 컬럼이나 집계 함수만 쓸 수 있다. `SELECT DISTINCT`도 같은 이유로 `SELECT`에 있는 컬럼으로만 정렬한다.
+
+```sql
+SELECT deptno, SUM(sal) FROM emp GROUP BY deptno ORDER BY sal;       -- 에러
+SELECT deptno, SUM(sal) FROM emp GROUP BY deptno ORDER BY COUNT(*) DESC; -- 된다
+```
+
+```text
+ERROR:  column "emp.sal" must appear in the GROUP BY clause or be used in an aggregate function
+LINE 1: ...LECT deptno, SUM(sal) FROM emp GROUP BY deptno ORDER BY sal;
+                                                                   ^
+
+ deptno |  sum
+--------+-------
+     30 |  9400
+     20 | 10875
+     10 |  8750
+(3 rows)
+```
+
+두 번째 쿼리는 `COUNT(*)`를 `SELECT`에 안 썼는데도 인원 순(6, 5, 3명)으로 정렬됐다. 집계 함수는 묶음마다 계산할 수 있으니 `ORDER BY`에서 새로 써도 된다.
+
+## ORDER BY에서 헷갈리는 것들
+
+`ASC`(오름차순)가 기본이고 `DESC`는 내림차순이다. 정렬 기준을 여러 개 쓰면 앞의 기준이 같을 때 다음 기준으로 정렬한다. 방향은 기준마다 따로 붙는다. `ORDER BY deptno, sal DESC`에서 `DESC`는 `sal`에만 걸리고 `deptno`는 오름차순이다.
+
+컬럼 이름 대신 `SELECT` 목록의 위치 번호를 쓸 수도 있다. `ORDER BY 2 DESC`는 두 번째 컬럼으로 정렬한다. 이름, 별칭, 번호를 한 `ORDER BY`에 섞어 써도 된다. 다만 `SELECT` 목록에 없는 번호(`ORDER BY 3`인데 컬럼이 둘)는 에러다.
+
+```sql
+SELECT deptno, SUM(sal) FROM emp GROUP BY deptno ORDER BY 2 DESC;
+```
+
+```text
+ deptno |  sum
+--------+-------
+     20 | 10875
+     30 |  9400
+     10 |  8750
+(3 rows)
+```
+
+정렬 기준에서 값이 같은 행끼리의 순서는 정해져 있지 않다. FORD와 SCOTT는 급여가 3000으로 같아서, `ORDER BY sal DESC`만 쓰면 실행할 때마다 순서가 바뀔 수 있다. 화면이나 페이지 나누기에 쓰는 정렬에는 사번처럼 겹치지 않는 컬럼을 마지막 기준으로 붙인다.
+
+### NULL은 어디로 가나
+
+NULL을 정렬할 때 DB마다 위치가 다르다. Oracle과 PostgreSQL은 NULL을 가장 큰 값처럼 다룬다. 그래서 오름차순이면 NULL이 맨 뒤, 내림차순이면 맨 앞에 온다. SQL Server와 MySQL은 반대로 NULL을 가장 작은 값처럼 다뤄서, 오름차순에서 NULL이 맨 앞에 온다.
+
+```sql
+SELECT ename, comm FROM emp WHERE deptno = 30 ORDER BY comm;       -- ASC
+SELECT ename, comm FROM emp WHERE deptno = 30 ORDER BY comm DESC;
+```
+
+```text
+ ename  |  comm
+--------+--------
+ TURNER |      0
+ ALLEN  |    300
+ WARD   |    500
+ MARTIN |   1400
+ BLAKE  | (null)
+ JAMES  | (null)
+(6 rows)
+
+ ename  |  comm
+--------+--------
+ BLAKE  | (null)
+ JAMES  | (null)
+ MARTIN |   1400
+ WARD   |    500
+ ALLEN  |    300
+ TURNER |      0
+(6 rows)
+```
+
+Oracle과 PostgreSQL에서는 `NULLS FIRST`, `NULLS LAST`로 위치를 직접 정한다. "커미션이 높은 순, 없는 사람은 맨 뒤"라면 `ORDER BY comm DESC NULLS LAST`다. SQL Server에는 이 문법이 없어서 `ORDER BY CASE WHEN comm IS NULL THEN 1 ELSE 0 END, comm DESC`처럼 CASE로 순서를 만든다.
+
+```sql
+SELECT ename, comm FROM emp WHERE deptno = 30 ORDER BY comm DESC NULLS LAST;
+```
+
+```text
+ ename  |  comm
+--------+--------
+ MARTIN |   1400
+ WARD   |    500
+ ALLEN  |    300
+ TURNER |      0
+ BLAKE  | (null)
+ JAMES  | (null)
+(6 rows)
+```
+
+## 행이 없어도 한 줄은 나온다
+
+사원이 없는 40번 부서의 급여를 집계해 보자.
+
+```sql
+SELECT COUNT(*), COUNT(comm), SUM(sal), AVG(sal), MAX(sal) FROM emp WHERE deptno = 40;
+```
+
+```text
+ count | count |  sum   |  avg   |  max
+-------+-------+--------+--------+--------
+     0 |     0 | (null) | (null) | (null)
+(1 row)
+```
+
+`WHERE`를 통과한 행이 하나도 없는데 결과는 한 행이다. `GROUP BY`가 없으면 테이블 전체가 한 묶음이고, 그 묶음은 비어 있어도 존재한다. `COUNT`는 0을, 나머지 집계는 NULL을 돌려준다. 합계가 0이 아니라 NULL이라는 점이 함정이다. 화면에 0을 보여 주려면 `NVL(SUM(sal), 0)`으로 감싼다. `SUM(NVL(sal, 0))`은 행이 아예 없으니 여전히 NULL이다.
+
+`GROUP BY`를 붙이면 달라진다.
+
+```sql
+SELECT deptno, COUNT(*), SUM(sal) FROM emp WHERE deptno = 40 GROUP BY deptno;
+```
+
+```text
+ deptno | count | sum
+--------+-------+-----
+(0 rows)
+```
+
+`GROUP BY`는 있는 행으로 묶음을 만드는데, 행이 없으니 묶음도 없다. 결과는 0행이다. "부서별 인원을 보여 줬더니 40번이 빠졌다"는 문제는 집계로는 못 고친다. `DEPT`를 기준으로 `EMP`를 붙이는 OUTER JOIN이 필요하고, 그건 [조인 글](/posts/sqld-joins)에서 다룬다.
+
+## CASE를 넣어 가로로 세기
+
+부서별로 직무 인원을 한 줄에 펼쳐서 보고 싶다. `GROUP BY deptno, job`은 9행으로 세로로 길어진다. 집계 함수 안에 `CASE`를 넣으면 가로로 펼칠 수 있다.
+
+```sql
+SELECT deptno,
+       COUNT(CASE WHEN job = 'CLERK'    THEN 1 END) AS clerk,
+       COUNT(CASE WHEN job = 'MANAGER'  THEN 1 END) AS manager,
+       COUNT(CASE WHEN job = 'SALESMAN' THEN 1 END) AS salesman,
+       COUNT(CASE WHEN job IN ('ANALYST', 'PRESIDENT') THEN 1 END) AS etc
+FROM emp
+GROUP BY deptno
+ORDER BY deptno;
+```
+
+```text
+ deptno | clerk | manager | salesman | etc
+--------+-------+---------+----------+-----
+     10 |     1 |       1 |        0 |   1
+     20 |     2 |       1 |        0 |   2
+     30 |     1 |       1 |        4 |   0
+(3 rows)
+```
+
+동작은 단순하다. `CASE`는 행마다 조건에 맞으면 1, 아니면 `ELSE`가 없으니 NULL을 낸다. `COUNT`는 NULL을 안 세니 조건에 맞는 행만 센다. 여기서 `ELSE 0`을 붙이면 큰일 난다. 0도 값이라 `COUNT`가 모든 행을 센다. 같은 일을 `SUM`으로 할 때는 반대로 `THEN 1 ELSE 0`을 쓴다.
+
+```sql
+SELECT COUNT(CASE WHEN job = 'CLERK' THEN 1 END)        AS a,  -- 4
+       SUM(CASE WHEN job = 'CLERK' THEN 1 ELSE 0 END)   AS b,  -- 4
+       COUNT(CASE WHEN job = 'CLERK' THEN 1 ELSE 0 END) AS c   -- 14
+FROM emp;
+```
+
+```text
+ a | b | c
+---+---+----
+ 4 | 4 | 14
+(1 row)
+```
+
+금액도 같은 방식으로 펼친다. 부서를 열로 펼치면 `GROUP BY` 없이 한 줄이 된다.
+
+```sql
+SELECT SUM(CASE WHEN deptno = 10 THEN sal END) AS d10,
+       SUM(CASE WHEN deptno = 20 THEN sal END) AS d20,
+       SUM(CASE WHEN deptno = 30 THEN sal END) AS d30,
+       SUM(CASE WHEN deptno = 40 THEN sal END) AS d40
+FROM emp;
+```
+
+```text
+ d10  |  d20  | d30  |  d40
+------+-------+------+--------
+ 8750 | 10875 | 9400 | (null)
+(1 row)
+```
+
+`d40`이 NULL인 건 앞 절의 규칙 그대로다. 더할 값이 하나도 없으면 `SUM`은 NULL이다. Oracle은 `CASE` 대신 `DECODE(deptno, 10, sal)`을 넣어 같은 결과를 내고, Oracle 11g부터는 `PIVOT` 절도 있다. PostgreSQL에는 `COUNT(*) FILTER (WHERE job = 'CLERK')`라는 짧은 문법도 있다.
+
+아래 칸에서 `GROUP BY`와 NULL을 건너뛰는 `AVG`를 직접 만들어 볼 수 있다. 행은 `{ deptno, comm }` 객체이고, `null`은 SQL의 NULL이다.
+
+<CodePlayground
+  caption="GROUP BY와 AVG 만들기"
+  functionName="groupAvg"
+  initialCode={`function groupAvg(rows, key, col) {
+  // SELECT key, COUNT(*), COUNT(col), AVG(col) ... GROUP BY key ORDER BY key
+  // 반환: [[키, COUNT(*), COUNT(col), AVG(col)], ...]
+  // AVG는 null을 건너뛰고, 값이 하나도 없으면 null. 소수 둘째 자리까지 반올림
+  return [];
+}`}
+  solution={`function groupAvg(rows, key, col) {
+  const groups = new Map();
+  for (const row of rows) {
+    const k = row[key];
+    if (!groups.has(k)) groups.set(k, { all: 0, cnt: 0, sum: 0 });
+    const g = groups.get(k);
+    g.all += 1;                 // COUNT(*)는 모든 행
+    if (row[col] !== null) {    // 나머지는 NULL을 건너뛴다
+      g.cnt += 1;
+      g.sum += row[col];
+    }
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([k, g]) => [k, g.all, g.cnt, g.cnt === 0 ? null : Math.round((g.sum / g.cnt) * 100) / 100]);
+}`}
+  tests={[
+    {
+      label: "EMP의 deptno, comm",
+      args: [
+        [
+          { deptno: 20, comm: null }, { deptno: 30, comm: 300 }, { deptno: 30, comm: 500 },
+          { deptno: 20, comm: null }, { deptno: 30, comm: 1400 }, { deptno: 30, comm: null },
+          { deptno: 10, comm: null }, { deptno: 20, comm: null }, { deptno: 10, comm: null },
+          { deptno: 30, comm: 0 }, { deptno: 20, comm: null }, { deptno: 30, comm: null },
+          { deptno: 20, comm: null }, { deptno: 10, comm: null },
+        ],
+        "deptno",
+        "comm",
+      ],
+      expected: [[10, 3, 0, null], [20, 5, 0, null], [30, 6, 4, 550]],
+    },
+    {
+      label: "0은 값으로 센다",
+      args: [[{ deptno: 30, comm: 0 }, { deptno: 30, comm: null }], "deptno", "comm"],
+      expected: [[30, 2, 1, 0]],
+    },
+    {
+      label: "평균 반올림",
+      args: [[{ deptno: 10, sal: 2450 }, { deptno: 10, sal: 5000 }, { deptno: 10, sal: 1300 }], "deptno", "sal"],
+      expected: [[10, 3, 3, 2916.67]],
+    },
+    {
+      label: "행이 없으면 묶음도 없다",
+      args: [[], "deptno", "sal"],
+      expected: [],
+    },
+  ]}
+/>
+
+마지막 테스트가 앞 절의 내용이다. `GROUP BY`가 있으면 빈 입력에서 0행이 나온다.
+
+## SQLD 시험 포인트
+
+집계 문제는 대개 "결과로 옳은 것은?"이나 "에러가 나는 SQL은?"으로 나온다. 실행 순서와 NULL 규칙으로 거의 다 풀린다.
+
+- `COUNT(*)`는 NULL 행도 세고, `COUNT(컬럼)`은 NULL을 뺀다. `COUNT(DISTINCT 컬럼)`도 NULL을 뺀다. 예제에서 `COUNT(*)` 14, `COUNT(comm)` 4, `COUNT(mgr)` 13.
+- 집계 함수는 NULL을 무시한다. `AVG(comm)` 550과 `AVG(NVL(comm, 0))` 157.14를 구분한다. `SUM(sal + comm)`과 `SUM(sal) + SUM(comm)`은 다르다.
+- `SELECT`에는 `GROUP BY` 컬럼과 집계 함수만 쓴다. `GROUP BY`에 쓴 컬럼을 `SELECT`에서 빼는 건 괜찮다.
+- `WHERE`에 집계 함수는 에러다. `HAVING`에는 집계 조건을 쓰고, 집계 아닌 조건도 문법상 된다.
+- 순서는 FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY. `SELECT` 별칭은 `ORDER BY`에서만 쓴다.
+- `ORDER BY`는 `SELECT`에 없는 컬럼으로도 되지만, `GROUP BY`나 `DISTINCT`가 있으면 안 된다. 위치 번호(`ORDER BY 2`)도 된다. `DESC`는 바로 앞 기준에만 걸린다.
+- Oracle은 NULL을 가장 큰 값으로 보아 `ASC`에서 맨 뒤, SQL Server는 맨 앞이다. Oracle은 `NULLS FIRST/LAST`로 바꾼다.
+- `GROUP BY` 없는 집계는 행이 없어도 한 행(`COUNT` 0, `SUM` NULL)을 돌려주고, `GROUP BY`가 있으면 0행이다.
+- `GROUP BY`는 NULL끼리 한 묶음으로 모은다.
+- `COUNT(CASE WHEN ... THEN 1 END)`에 `ELSE 0`을 붙이면 전체 행 수가 된다.
+- Oracle은 `MAX(AVG(sal))`처럼 집계 함수를 두 겹으로 쓰는 것을 `GROUP BY`와 함께 허용한다(결과는 부서 평균 중 최댓값 2916.67). PostgreSQL과 SQL Server는 에러를 내서 서브쿼리로 감싼다.
+
+## 면접에서 나올 만한 질문
+
+### WHERE와 HAVING은 어떻게 다른가요?
+
+`WHERE`는 그룹을 만들기 전에 행 하나하나를 거르고, `HAVING`은 `GROUP BY`로 묶은 뒤 묶음을 거른다. 그래서 `WHERE`에는 집계 함수를 쓸 수 없고, 집계 결과로 거르는 조건은 `HAVING`에 쓴다. 같은 쿼리에서 둘을 함께 쓰면 결과가 달라질 수 있다. 예제에서 사장을 `WHERE`로 먼저 빼면 10번 부서 평균이 2916.67에서 1875로 떨어져 `HAVING`을 통과하지 못했다.
+
+### SQL의 논리적 실행 순서를 설명해 주세요.
+
+FROM으로 테이블을 준비하고, WHERE로 행을 거르고, GROUP BY로 묶고, HAVING으로 묶음을 거르고, SELECT로 값을 계산하고, 마지막에 ORDER BY로 정렬한다. 그래서 `SELECT`의 별칭은 그보다 앞인 `WHERE`에서 못 쓰고 뒤인 `ORDER BY`에서만 쓴다. 이건 결과를 정의하는 논리적 순서이고, 옵티마이저는 결과가 같다면 실제 실행 순서를 바꾼다. PostgreSQL이 집계 아닌 `HAVING` 조건을 스캔 단계로 내리는 것이 그 예다.
+
+### COUNT(*)와 COUNT(컬럼)은 무엇이 다른가요?
+
+`COUNT(*)`는 행 수를 세고 NULL 여부를 보지 않는다. `COUNT(컬럼)`은 그 컬럼이 NULL이 아닌 행만 센다. 예제의 `EMP`에서 `COUNT(*)`는 14, `COUNT(comm)`은 4다. `COUNT(1)`은 `COUNT(*)`와 같은 결과를 내고 성능 차이도 없다. "값이 있는 행 수"를 셀 의도인지 "전체 행 수"를 셀 의도인지에 따라 고른다.
+
+### 평균을 구할 때 NULL은 어떻게 처리되나요?
+
+`AVG`는 NULL인 행을 분자와 분모 모두에서 뺀다. 그래서 `AVG(comm)`은 커미션이 있는 4명의 평균 550이고, 전체 사원 기준 평균이 필요하면 `AVG(NVL(comm, 0))`으로 157.14를 구한다. 어느 쪽이 맞는지는 업무 정의에 달렸다. NULL을 0으로 볼지 "해당 없음"으로 볼지를 먼저 정해야 한다.
+
+### GROUP BY를 쓸 때 SELECT에 아무 컬럼이나 못 쓰는 이유는요?
+
+묶음 하나가 결과 한 행이 되는데, 묶이지 않은 컬럼은 묶음 안에 값이 여러 개라 하나를 고를 수 없어서다. 그래서 `SELECT`에는 `GROUP BY`에 쓴 컬럼, 집계 함수, 상수만 올 수 있다. MySQL은 `ONLY_FULL_GROUP_BY`를 끄면 임의의 값을 보여 주는데 결과가 정해지지 않으니 켜 두는 게 맞다. PostgreSQL은 기본 키로 묶었을 때만 같은 테이블의 다른 컬럼을 허용한다.
+
+### 데이터가 하나도 없을 때 SUM은 무엇을 돌려주나요?
+
+`GROUP BY` 없이 집계하면 행이 없어도 결과는 한 행이고, `COUNT`는 0, `SUM`과 `AVG`는 NULL이다. 화면에 0을 보이려면 `NVL(SUM(sal), 0)`처럼 바깥을 감싼다. `GROUP BY`가 있으면 묶음이 만들어지지 않아 0행이 나온다. 그래서 부서별 집계에서 사원 없는 부서까지 보이려면 부서 테이블 기준의 OUTER JOIN이 필요하다.
+
+### ORDER BY에서 NULL은 어디에 오나요?
+
+Oracle과 PostgreSQL은 NULL을 가장 큰 값처럼 다뤄서 오름차순에서 맨 뒤, 내림차순에서 맨 앞에 둔다. SQL Server와 MySQL은 반대로 오름차순에서 맨 앞이다. Oracle과 PostgreSQL은 `NULLS FIRST`, `NULLS LAST`로 위치를 정할 수 있고, SQL Server는 CASE로 정렬 키를 하나 더 만든다. DB를 옮길 때 목록 순서가 바뀌는 흔한 원인이다.

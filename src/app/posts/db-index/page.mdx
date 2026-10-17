@@ -1,0 +1,1245 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-index");
+
+마이페이지의 주문 내역 화면은 쿼리 하나로 끝난다. `SELECT * FROM orders WHERE user_id = 42`. 서비스 초기에 주문이 몇천 건일 때는 아무도 이 쿼리를 신경 쓰지 않았다. 주문이 100만 건을 넘기자 같은 쿼리가 35ms씩 걸리기 시작한다. 한 번이면 참을 만한데, 마이페이지는 초당 수백 번 열린다. DB 서버의 CPU가 이 쿼리 하나로 차오른다.
+
+이 쿼리는 회원 한 명의 주문 8건을 찾으려고 주문 100만 건을 전부 읽고 있었다. 두꺼운 책에서 "B-tree"라는 단어가 나오는 쪽을 찾으려고 첫 쪽부터 끝까지 넘기는 것과 같다. 보통은 책 뒤의 찾아보기를 편다. 단어가 가나다순으로 정렬돼 있고 옆에 쪽수가 적혀 있다. 인덱스가 바로 이 찾아보기다. 이 글은 이 비유 하나로 끝까지 간다.
+
+기준은 Ubuntu 24.04에 설치한 PostgreSQL 16(16.15)이다. 아래에 나오는 실행 계획은 모두 이 환경에서 실제로 돌린 출력이다. 시간(ms)은 장비와 캐시 상태에 따라 달라지니 자릿수만 보면 된다. MySQL 8과 다른 부분은 마지막에 따로 모았다.
+
+## 실험에 쓸 작은 쇼핑몰
+
+글 전체에서 같은 테이블 세 개를 쓴다. 회원(`users`), 상품(`products`), 주문(`orders`)이다.
+
+```sql
+-- 회원
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- 1, 2, 3 ... 자동 증가
+  email      text NOT NULL,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 상품
+CREATE TABLE products (
+  id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name  text NOT NULL,
+  price integer NOT NULL
+);
+
+-- 주문: 누가(user_id) 무엇을(product_id) 얼마에(amount) 샀나
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id),
+  product_id bigint NOT NULL REFERENCES products (id),
+  status     text NOT NULL,          -- pending, paid, delivered, cancelled
+  amount     integer NOT NULL,
+  created_at timestamptz NOT NULL
+);
+```
+
+처음에는 몇 줄만 넣는다. 회원 셋, 상품 셋, 주문 다섯 건이다.
+
+```sql
+INSERT INTO users (email, name, created_at) VALUES
+  ('kim@example.com',  'kim',  '2025-10-01 09:00+09'),
+  ('lee@example.com',  'lee',  '2025-10-02 10:30+09'),
+  ('park@example.com', 'park', '2025-10-03 14:10+09');
+
+INSERT INTO products (name, price) VALUES
+  ('무선 이어폰', 39000),
+  ('충전 케이스', 15000),
+  ('이어팁', 5000);
+
+INSERT INTO orders (user_id, product_id, status, amount, created_at) VALUES
+  (1, 1, 'delivered', 39000, '2025-10-27 11:00+09'),
+  (1, 3, 'delivered',  5000, '2025-10-27 11:00+09'),
+  (2, 2, 'paid',      15000, '2025-10-28 20:15+09'),
+  (3, 1, 'cancelled', 39000, '2025-10-29 08:40+09'),
+  (1, 2, 'pending',   15000, '2025-10-30 23:05+09');
+
+SELECT * FROM orders ORDER BY id;
+```
+
+```text
+ id | user_id | product_id |  status   | amount |       created_at
+----+---------+------------+-----------+--------+------------------------
+  1 |       1 |          1 | delivered |  39000 | 2025-10-27 11:00:00+09
+  2 |       1 |          3 | delivered |   5000 | 2025-10-27 11:00:00+09
+  3 |       2 |          2 | paid      |  15000 | 2025-10-28 20:15:00+09
+  4 |       3 |          1 | cancelled |  39000 | 2025-10-29 08:40:00+09
+  5 |       1 |          2 | pending   |  15000 | 2025-10-30 23:05:00+09
+(5 rows)
+```
+
+다섯 줄짜리 테이블에서는 인덱스가 있든 없든 차이가 없다. 그래서 `generate_series`로 회원 10만 명, 상품 1,000개, 주문 100만 건까지 채운다. `generate_series(4, 100000)`은 4부터 100000까지 숫자를 한 줄씩 만들어 주는 함수다. 그 숫자로 이메일과 시간을 만든다.
+
+```sql
+SELECT setseed(0.42);  -- random() 결과를 매번 같게 고정한다
+
+-- 회원 4번 ~ 100000번
+INSERT INTO users (email, name, created_at)
+SELECT 'user' || i || '@example.com',
+       'user' || i,
+       timestamptz '2025-10-04 00:00+09' + i * interval '1 minute'
+FROM generate_series(4, 100000) AS i;
+
+-- 상품 4번 ~ 1000번
+INSERT INTO products (name, price)
+SELECT '상품 ' || i, (1 + floor(random() * 100)::int) * 1000
+FROM generate_series(4, 1000) AS i;
+
+-- 주문 6번 ~ 1000000번: 30초마다 한 건, 회원과 상품은 무작위
+INSERT INTO orders (user_id, product_id, status, amount, created_at)
+SELECT 1 + floor(random() * 100000)::bigint,
+       1 + floor(random() * 1000)::bigint,
+       CASE WHEN r < 0.80 THEN 'delivered'   -- 80%
+            WHEN r < 0.94 THEN 'paid'        -- 14%
+            WHEN r < 0.99 THEN 'cancelled'   -- 5%
+            ELSE 'pending' END,              -- 1%
+       (1 + floor(random() * 100)::int) * 1000,
+       timestamptz '2025-10-31 00:00+09' + i * interval '30 seconds'
+FROM (SELECT i, random() AS r FROM generate_series(6, 1000000) AS i) AS s;
+
+VACUUM ANALYZE;  -- 통계를 모으고 정리한다 (뒤에서 다시 나온다)
+```
+
+```sql
+SELECT status, count(*) FROM orders GROUP BY status ORDER BY status;
+```
+
+```text
+  status   | count
+-----------+--------
+ cancelled |  50171
+ delivered | 799279
+ paid      | 140528
+ pending   |  10022
+(4 rows)
+```
+
+주문은 2025년 10월 말부터 2026년 10월 13일까지 시간 순서대로 들어 있다. 회원 한 명당 주문은 평균 10건이다. 이제 처음의 쿼리를 다시 돌린다.
+
+## 100만 줄을 처음부터 끝까지 읽는 계획
+
+쿼리 앞에 `EXPLAIN`을 붙이면 DB가 이 쿼리를 어떻게 실행할지(실행 계획)를 보여 준다. `ANALYZE`를 더하면 실제로 실행하고 걸린 시간과 행 수를 함께 적는다. `BUFFERS`는 메모리나 디스크에서 페이지를 몇 개 읽었는지 보여 준다. 성능을 볼 때는 이 셋을 같이 쓴다.
+
+```sql
+-- 실제로 실행하고, 읽은 페이지 수까지 보여 달라
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE user_id = 42;
+```
+
+```text
+                                                     QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..15555.43 rows=11 width=45) (actual time=2.877..35.116 rows=8 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=9346
+   ->  Parallel Seq Scan on orders  (cost=0.00..14554.33 rows=5 width=45) (actual time=5.122..28.438 rows=3 loops=3)
+         Filter: (user_id = 42)
+         Rows Removed by Filter: 333331
+         Buffers: shared hit=9346
+ Planning:
+   Buffers: shared hit=72
+ Planning Time: 0.308 ms
+ Execution Time: 35.175 ms
+(12 rows)
+```
+
+실행 계획은 나무 모양이다. `->`로 들여 쓴 줄이 안쪽 단계이고, 안쪽부터 실행해서 결과를 바깥으로 올린다. 여기서는 `Parallel Seq Scan`이 테이블을 읽고, 바깥의 `Gather`가 워커들의 결과를 모은다. PostgreSQL은 큰 테이블을 통째로 읽을 때 워커 프로세스를 여러 개 띄워 나눠 읽는다. 지금은 워커 2개와 원래 프로세스, 합쳐서 셋이 나눠 읽었다.
+
+Seq Scan(순차 스캔)은 테이블의 페이지를 처음부터 끝까지 읽으면서 행마다 조건을 검사한다. 책을 첫 쪽부터 넘기는 방법이다. 줄 하나에 정보가 많이 담겨 있으니 조각으로 나눠 읽어 보자. 아래 줄의 조각을 눌러 보면 각각 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="실행 계획 한 줄을 조각으로 읽기"
+  base="Parallel Seq Scan on orders"
+  separator="  "
+  joiner=" "
+  params={[
+    {
+      key: "cost",
+      value: "0.00..14554.33",
+      title: "예상 비용: 첫 행..마지막 행",
+      description: "플래너가 계산한 비용이다. 단위는 ms가 아니라 '페이지 하나를 순서대로 읽는 비용 = 1'로 잡은 상대값이다. 앞 숫자는 첫 행을 내놓기까지, 뒤 숫자는 끝까지 걸리는 비용이다. 플래너는 후보 계획들 중 이 값이 가장 작은 것을 고른다.",
+      code: "페이지 9346개 × 1.0 (seq_page_cost)\n+ 행 100만 × 0.01 (cpu_tuple_cost)\n+ 조건 검사 100만 × 0.0025 (cpu_operator_cost)\n= 21846  ← 병렬이 아니면 이 값\n\n병렬일 때 CPU 몫을 2.4로 나눈다\n9346 + 12500 / 2.4 = 14554.33",
+    },
+    {
+      key: "rows",
+      value: "5",
+      title: "예상 행 수",
+      description: "조건을 통과할 것으로 예상한 행 수다. 병렬 노드에서는 워커 하나당 값이라 5로 나왔고, 바깥 Gather에는 전체 예상치 11이 적혀 있다. 통계를 보고 추측한 값이라 실제와 다를 수 있다.",
+    },
+    {
+      key: "width",
+      value: "45",
+      title: "행 하나의 평균 크기",
+      description: "결과 행 하나가 평균 몇 바이트인지다. 정렬이나 해시에 메모리가 얼마나 필요할지 짐작할 때 쓴다.",
+    },
+    {
+      key: "actual time",
+      value: "5.122..28.438",
+      title: "실제 시간: 첫 행..마지막 행 (ms)",
+      description: "ANALYZE를 붙였을 때만 나온다. 첫 행이 나오기까지 5.1ms, 마지막 행까지 28.4ms 걸렸다. loops가 2 이상이면 한 번 실행했을 때의 평균이다.",
+    },
+    {
+      key: "actual rows",
+      display: "rows=3",
+      title: "실제로 나온 행 수",
+      description: "한 번 실행할 때 평균 3행이 나왔다. 실제 행 수는 rows × loops로 계산한다. 3 × 3 = 9 근처인데, 평균을 반올림한 값이라 진짜 결과는 8행이다.",
+    },
+    {
+      key: "loops",
+      value: "3",
+      title: "이 단계를 몇 번 실행했나",
+      description: "워커 2개와 원래 프로세스까지 셋이 나눠 읽어서 3이다. 조인 안쪽에서는 바깥 행 수만큼 반복돼 수천, 수만이 되기도 한다. 시간과 행 수에 이 값을 곱해야 전체가 나온다.",
+    },
+  ]}
+/>
+
+나머지 줄도 하나씩 보면 이렇다.
+
+`Rows Removed by Filter: 333331`은 조건에 맞지 않아 버린 행 수다(이것도 루프당 평균). 셋이 합쳐 100만 행을 검사해서 8행을 남기고 나머지를 다 버렸다. 버린 행이 결과보다 압도적으로 많으면 인덱스가 필요하다는 신호다.
+
+`Buffers: shared hit=9346`은 PostgreSQL의 메모리 캐시(shared buffers)에서 페이지 9,346개를 읽었다는 뜻이다. PostgreSQL은 테이블을 8KB짜리 페이지로 나눠 저장한다. `orders` 테이블은 73MB, 페이지로는 정확히 9,346개다. 테이블 전체를 한 번씩 다 읽은 것이다. `hit`은 캐시에 있었다는 뜻이고, 캐시에 없어서 운영체제에 요청했으면 `read`로 따로 센다. 지금은 테이블이 전부 캐시에 올라와 있어서 35ms로 끝났다. 디스크에서 읽어야 했다면 훨씬 오래 걸렸을 것이다.
+
+```sql
+-- 테이블이 몇 페이지인지는 pg_class에 있다
+SELECT relpages, pg_size_pretty(pg_relation_size('orders')) AS size
+FROM pg_class WHERE relname = 'orders';
+```
+
+```text
+ relpages | size
+----------+-------
+     9346 | 73 MB
+(1 row)
+```
+
+정리하면 이 쿼리는 8행을 위해 9,346페이지를 읽었다. 시간은 캐시 상태에 따라 오르내리지만, 읽은 페이지 수는 데이터가 같으면 그대로다. 그래서 튜닝할 때는 시간보다 `Buffers`가 더 믿을 만한 숫자다.
+
+## 찾아보기를 하나 만들면
+
+`user_id`에 인덱스를 만든다.
+
+```sql
+-- orders.user_id 값으로 찾는 찾아보기를 만든다
+CREATE INDEX orders_user_id_idx ON orders (user_id);
+
+-- 인덱스 크기
+SELECT pg_size_pretty(pg_relation_size('orders_user_id_idx'));
+```
+
+```text
+ pg_size_pretty
+----------------
+ 9088 kB
+(1 row)
+```
+
+같은 쿼리를 다시 본다. 아래는 캐시가 데워진 상태에서 두 번째로 돌린 출력이다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE user_id = 42;
+```
+
+```text
+                                                         QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=4.51..47.52 rows=11 width=45) (actual time=0.020..0.032 rows=8 loops=1)
+   Recheck Cond: (user_id = 42)
+   Heap Blocks: exact=8
+   Buffers: shared hit=11
+   ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.013..0.014 rows=8 loops=1)
+         Index Cond: (user_id = 42)
+         Buffers: shared hit=3
+ Planning Time: 0.062 ms
+ Execution Time: 0.047 ms
+(9 rows)
+```
+
+먼저 볼 숫자는 `Buffers`다. 9,346에서 11로 줄었다. 시간은 35ms에서 0.05ms가 됐다. 비용 추정도 15555에서 47.52로 줄어서, 플래너가 이 계획을 고른 이유가 보인다.
+
+읽은 11페이지를 나눠 보면 이렇다. 안쪽의 `Bitmap Index Scan`이 인덱스에서 3페이지를 읽고(`Buffers: shared hit=3`), 바깥의 `Bitmap Heap Scan`이 테이블에서 8페이지를 읽었다(`Heap Blocks: exact=8`). 주문 8건이 서로 다른 페이지 8곳에 흩어져 있어서다. `Filter`와 `Rows Removed by Filter`가 사라지고 `Index Cond`가 생긴 것도 봐 둔다. 조건을 행마다 검사해서 버린 게 아니라, 인덱스에서 바로 맞는 위치만 찾았다는 뜻이다.
+
+인덱스에서 3페이지를 읽어서 어떻게 주문 8건의 위치를 알았을까. 인덱스 안을 열어 보면 알 수 있다.
+
+## B-tree는 세 번 만에 잎에 닿는다
+
+`CREATE INDEX`는 따로 지정하지 않으면 B-tree 인덱스를 만든다. B-tree는 정렬된 값을 페이지 단위로 나눠 담고, 그 위에 "어느 페이지에 어디부터 어디까지 있다"는 안내 페이지를 층층이 쌓은 나무다. 맨 위가 루트, 맨 아래가 잎(leaf), 사이가 중간 페이지다.
+
+책 찾아보기에 비유하면 잎 페이지가 찾아보기 본문이다. `user_id` 값이 정렬돼 있고, 값마다 그 행이 테이블의 어디에 있는지 적혀 있다. 이 위치를 ctid라고 부른다. `(470,90)`이면 테이블의 470번 페이지, 90번째 칸이라는 뜻이다. 찾아보기의 쪽수에 해당한다. 테이블 본체는 인덱스와 구분해서 힙(heap)이라고 부른다. 행이 정렬되지 않고 들어온 순서대로 쌓여 있어서 붙은 이름이다.
+
+```sql
+-- 회원 42번 주문이 힙의 어디에 있는지
+SELECT ctid, id FROM orders WHERE user_id = 42 ORDER BY id;
+```
+
+```text
+   ctid    |   id
+-----------+--------
+ (470,90)  |  50380
+ (622,9)   |  66563
+ (1735,41) | 185686
+ (2634,28) | 281866
+ (2805,4)  | 300139
+ (6058,86) | 648292
+ (7031,12) | 752329
+ (9334,15) | 998753
+(8 rows)
+```
+
+인덱스 구조는 `pageinspect` 확장으로 직접 들여다볼 수 있다. 슈퍼유저만 쓸 수 있으니 실습용 DB에서만 쓴다.
+
+```sql
+CREATE EXTENSION pageinspect;
+
+-- 루트 페이지 번호와 나무 높이 (level 2 = 루트 아래로 두 층)
+SELECT root, level FROM bt_metap('orders_user_id_idx');
+
+-- 페이지 종류별 개수 (l = 잎, i = 중간, r = 루트)
+SELECT count(*) FILTER (WHERE type = 'l') AS leaf_pages,
+       count(*) FILTER (WHERE type = 'i') AS internal_pages,
+       count(*) FILTER (WHERE type = 'r') AS root_pages
+FROM generate_series(1, 1135) AS b, bt_page_stats('orders_user_id_idx', b);
+```
+
+```text
+ root | level
+------+-------
+  290 |     2
+(1 row)
+
+ leaf_pages | internal_pages | root_pages
+------------+----------------+------------
+       1130 |              4 |          1
+(1 row)
+```
+
+루트 1페이지, 중간 4페이지, 잎 1,130페이지다. 루트에는 경계값이 세 개 있다. 16진수로 저장돼 있는데 풀면 25143, 50318, 75490이다. "25143보다 작으면 첫 번째 중간 페이지로, 50318보다 작으면 두 번째로" 같은 안내다. 아래 그림에서 다음을 누르면 `user_id = 42`를 찾아 내려가는 과정이 나온다.
+
+<AlgoTrace
+  caption="user_id = 42를 찾아 내려가기"
+  memoryLabel="찾아 둔 ctid"
+  cells={["루트", "중간", "잎", "470", "622", "1735", "2634", "2805", "6058", "7031", "9334"]}
+  steps={[
+    { memory: [], caption: "인덱스 루트 페이지(290번)에서 시작한다. 경계값은 25143, 50318, 75490 세 개다." },
+    { pointer: 0, memory: [], caption: "42는 25143보다 작다. 첫 번째 중간 페이지로 내려간다. 읽은 페이지 1개." },
+    { pointer: 1, memory: [], caption: "중간 페이지에는 경계값이 285개 있다. 정렬돼 있으니 이진 탐색으로 42가 들어갈 잎을 고른다. 읽은 페이지 2개." },
+    { pointer: 2, memory: ["(470,90)", "(622,9)", "(1735,41)", "(2634,28)", "(2805,4)", "(6058,86)", "(7031,12)", "(9334,15)"], caption: "잎 페이지에는 user_id 1~91이 정렬돼 있다. 42 옆에 적힌 ctid 8개를 가져온다. 인덱스는 3페이지 읽고 끝." },
+    { pointer: 3, found: [3], memory: ["(622,9)", "(1735,41)", "(2634,28)", "(2805,4)", "(6058,86)", "(7031,12)", "(9334,15)"], caption: "이제 힙(테이블)으로 간다. 470번 페이지를 읽어 90번째 칸의 행을 꺼낸다." },
+    { pointer: 4, found: [3, 4], memory: ["(1735,41)", "(2634,28)", "(2805,4)", "(6058,86)", "(7031,12)", "(9334,15)"], caption: "622번 페이지. 주문이 페이지마다 흩어져 있어서 한 행에 한 페이지씩 읽는다." },
+    { pointer: 10, found: [3, 4, 5, 6, 7, 8, 9, 10], memory: [], caption: "나머지 6페이지도 읽으면 끝난다. 인덱스 3 + 힙 8 = 11페이지. 실행 계획의 Buffers: shared hit=11과 같다." },
+  ]}
+/>
+
+100만 행인데 나무 높이가 겨우 3층인 이유는 페이지 하나에 경계값이 수백 개 들어가기 때문이다. 한 층 내려갈 때마다 범위가 수백분의 1로 좁아진다. 이 인덱스는 루트에서 4갈래, 중간에서 각각 약 285갈래로 나뉘어 잎 1,130개에 닿는다. 행이 수억 개로 늘어도 4~5층이면 된다. 찾는 비용이 행 수 n에 비례하지 않고 log n에 비례한다는 말이 이 뜻이다.
+
+잎 페이지끼리는 옆으로도 이어져 있다. `user_id BETWEEN 40 AND 200` 같은 범위 조건이면 시작 잎을 찾은 다음 옆 잎으로 넘어가며 읽으면 된다. 값이 정렬돼 있으니 `ORDER BY user_id`도 정렬 없이 잎을 순서대로 읽어서 해결된다. 해시 인덱스는 이 두 가지를 못 한다. B-tree가 기본값인 이유다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="인덱스는 값과 위치(ctid)만 가지고, 행은 힙에 있다"
+  nodes={[
+    { id: "root", label: "루트", sub: "경계값 3개", x: 200, y: 40, w: 110 },
+    { id: "inner", label: "중간 페이지", sub: "경계값 285개", x: 200, y: 125, w: 130 },
+    { id: "leaf1", label: "잎", sub: "user 1~91", x: 110, y: 210, w: 110 },
+    { id: "leaf2", label: "옆 잎", sub: "user 92~", x: 290, y: 210, w: 110 },
+    { id: "h1", label: "힙 470", x: 60, y: 295, w: 80 },
+    { id: "h2", label: "힙 622", x: 160, y: 295, w: 80 },
+    { id: "h3", label: "힙 9334", x: 300, y: 295, w: 90 },
+  ]}
+  edges={[
+    { from: "root", to: "inner" },
+    { from: "inner", to: "leaf1" },
+    { from: "leaf1", to: "leaf2", label: "범위 스캔", dashed: true, arrow: "both" },
+    { from: "leaf1", to: "h1", label: "ctid" },
+    { from: "leaf1", to: "h2" },
+    { from: "leaf1", to: "h3" },
+  ]}
+/>
+
+그림에서 인덱스와 힙이 따로 있다는 점을 기억해 두면 뒤의 내용이 쉽다. 인덱스로 위치를 찾은 다음에도 힙을 한 번 더 가야 행 전체를 얻는다. 인덱스 튜닝의 상당 부분은 이 두 번째 방문을 줄이는 일이다.
+
+## 같은 인덱스를 읽는 네 가지 방법
+
+앞에서 나온 `Bitmap Heap Scan`은 인덱스를 쓰는 방법 중 하나다. 플래너는 몇 행이 나올지 예상해서 넷 중 하나를 고른다.
+
+Index Scan은 인덱스에서 하나 찾을 때마다 바로 힙에 가서 행을 가져온다. 결과가 한두 행일 때 흔하다. 기본 키로 찾으면 이렇게 나온다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE id = 500000;
+```
+
+```text
+                                                     QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------
+ Index Scan using orders_pkey on orders  (cost=0.42..8.44 rows=1 width=45) (actual time=0.010..0.011 rows=1 loops=1)
+   Index Cond: (id = 500000)
+   Buffers: shared hit=4
+ Planning Time: 0.017 ms
+ Execution Time: 0.019 ms
+(5 rows)
+```
+
+인덱스 3층에 힙 1페이지, 합쳐서 4페이지다. `PRIMARY KEY`를 선언하면 PostgreSQL이 `orders_pkey`라는 유니크 인덱스를 자동으로 만든다.
+
+Bitmap Heap Scan은 결과가 수십~수천 행일 때 나온다. 인덱스로 찾은 위치를 바로 따라가지 않고, 먼저 모아서 페이지 번호 순으로 정렬한다(비트맵). 그다음 힙을 앞에서 뒤로 한 번에 읽는다. 같은 페이지에 행이 여러 개 있으면 그 페이지를 한 번만 읽으면 되고, 디스크에서도 앞뒤로 왔다 갔다 하지 않는다. 아래 그림에서 다음을 누르면 순서가 나온다.
+
+<SequenceDiagram
+  caption="Bitmap Heap Scan은 위치를 모아 정렬한 뒤 힙을 읽는다"
+  actors={[
+    { id: "exec", label: "실행기" },
+    { id: "idx", label: "인덱스" },
+    { id: "heap", label: "힙" },
+  ]}
+  steps={[
+    {
+      from: "exec",
+      to: "idx",
+      label: "user_id = 42",
+      title: "인덱스에 위치를 묻는다",
+      detail: "Bitmap Index Scan 단계다. 루트에서 잎까지 3페이지를 내려간다.",
+    },
+    {
+      from: "idx",
+      to: "exec",
+      label: "ctid 8개",
+      title: "위치 목록을 받는다",
+      detail: "행은 아직 하나도 안 읽었다. 받은 건 (470,90) 같은 페이지 번호와 칸 번호뿐이다.",
+      payload: "(470,90) (622,9) (1735,41) (2634,28)\n(2805,4) (6058,86) (7031,12) (9334,15)",
+    },
+    {
+      from: "exec",
+      to: "exec",
+      label: "페이지 순 정렬",
+      title: "비트맵을 만든다",
+      detail: "페이지마다 비트 하나를 켜서 '읽을 페이지 목록'을 만든다. 같은 페이지는 한 번만 읽게 되고, 읽는 순서도 앞에서 뒤로 정해진다.",
+    },
+    {
+      from: "exec",
+      to: "heap",
+      label: "470, 622, …",
+      title: "힙을 앞에서부터 읽는다",
+      detail: "Bitmap Heap Scan 단계다. 켜진 페이지 8개만 순서대로 읽는다. 실행 계획의 Heap Blocks: exact=8이 이 숫자다.",
+    },
+    {
+      from: "heap",
+      to: "exec",
+      label: "8행",
+      title: "조건을 다시 확인한다",
+      detail: "비트맵이 너무 커지면 칸 번호를 버리고 페이지만 기억한다(lossy). 그러면 페이지 안의 모든 행을 조건으로 다시 걸러야 해서 Recheck Cond가 붙어 있다.",
+    },
+  ]}
+/>
+
+Index Only Scan은 힙을 아예 안 간다. 쿼리가 필요로 하는 컬럼이 모두 인덱스 안에 있을 때 가능하다. 회원 42번의 주문 개수만 세면 `user_id` 말고는 필요한 게 없다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders WHERE user_id = 42;
+```
+
+```text
+                                                              QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=4.64..4.65 rows=1 width=8) (actual time=0.022..0.023 rows=1 loops=1)
+   Buffers: shared hit=4
+   ->  Index Only Scan using orders_user_id_idx on orders  (cost=0.42..4.62 rows=11 width=0) (actual time=0.016..0.018 rows=8 loops=1)
+         Index Cond: (user_id = 42)
+         Heap Fetches: 0
+         Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.049 ms
+ Execution Time: 0.033 ms
+(10 rows)
+```
+
+여기서 볼 줄은 `Heap Fetches: 0`이다. PostgreSQL은 한 행의 여러 버전을 힙에 두고(MVCC), 지금 트랜잭션에서 그 행이 보여도 되는지는 힙에만 적어 둔다. 인덱스만 보고는 그 행이 아직 살아 있는지 모른다. 그래서 가시성 맵(visibility map)을 본다. 페이지마다 "이 페이지의 모든 행은 모두에게 보인다"는 표시가 있고, 표시가 켜진 페이지는 힙을 건너뛴다. 이 표시는 `VACUUM`이 켠다. 수정이 잦은 테이블에서 VACUUM이 밀리면 `Heap Fetches`가 늘어나고, Index Only Scan이 이름과 달리 힙을 많이 읽는다. 위에서 4페이지는 인덱스 3페이지와 가시성 맵 1페이지다.
+
+마지막은 Seq Scan이다. 인덱스가 있어도 결과가 테이블의 큰 부분이면 플래너는 그냥 처음부터 읽는다. 이건 뒤에서 다시 본다.
+
+## 여러 컬럼 인덱스는 순서가 결과를 바꾼다
+
+관리자 화면에 "결제 대기 중인 주문을 최근 순으로 20건" 보여 주는 목록이 생겼다. 대기 주문(`pending`)은 전체의 1%다.
+
+```sql
+SELECT id, user_id, amount, created_at FROM orders
+WHERE status = 'pending' AND created_at >= '2026-10-06'
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+`status`에만 인덱스를 만들면 이렇게 나온다.
+
+```sql
+CREATE INDEX orders_status_idx ON orders (status);
+```
+
+```text
+                                                                   QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=10077.97..10078.02 rows=20 width=28) (actual time=8.226..8.231 rows=20 loops=1)
+   Buffers: shared hit=6226 read=11
+   ->  Sort  (cost=10077.97..10078.51 rows=215 width=28) (actual time=8.224..8.227 rows=20 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=6226 read=11
+         ->  Bitmap Heap Scan on orders  (cost=119.98..10072.25 rows=215 width=28) (actual time=8.018..8.173 rows=213 loops=1)
+               Recheck Cond: (status = 'pending'::text)
+               Filter: (created_at >= '2026-10-06 00:00:00+09'::timestamp with time zone)
+               Rows Removed by Filter: 9809
+               Heap Blocks: exact=6223
+               Buffers: shared hit=6223 read=11
+               ->  Bitmap Index Scan on orders_status_idx  (cost=0.00..119.92 rows=10600 width=0) (actual time=0.650..0.651 rows=10022 loops=1)
+                     Index Cond: (status = 'pending'::text)
+                     Buffers: shared read=11
+ Planning:
+   Buffers: shared hit=50 read=1
+ Planning Time: 0.280 ms
+ Execution Time: 8.259 ms
+(19 rows)
+```
+
+안쪽부터 읽는다. 인덱스로 대기 주문 10,022건을 찾고(`rows=10022`), 힙 6,223페이지를 읽어 날짜 조건으로 9,809건을 버린다(`Rows Removed by Filter`). 남은 213건을 정렬(`Sort`)해서 20건만 남긴다. 인덱스가 날짜를 모르니 날짜 거르기와 정렬을 모두 힙에서 한다.
+
+두 컬럼을 묶은 복합 인덱스를 만든다. 순서는 `(status, created_at)`이다.
+
+```sql
+DROP INDEX orders_status_idx;
+CREATE INDEX orders_status_created_idx ON orders (status, created_at);
+```
+
+```text
+                                                                      QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..61.05 rows=20 width=28) (actual time=0.026..0.042 rows=20 loops=1)
+   Buffers: shared hit=9 read=3
+   ->  Index Scan Backward using orders_status_created_idx on orders  (cost=0.42..652.17 rows=215 width=28) (actual time=0.026..0.039 rows=20 loops=1)
+         Index Cond: ((status = 'pending'::text) AND (created_at >= '2026-10-06 00:00:00+09'::timestamp with time zone))
+         Buffers: shared hit=9 read=3
+ Planning:
+   Buffers: shared hit=19 read=1
+ Planning Time: 0.209 ms
+ Execution Time: 0.055 ms
+(9 rows)
+```
+
+6,237페이지가 12페이지가 됐다. `Sort`도 사라졌다. 두 조건이 모두 `Index Cond`에 들어갔고, `Index Scan Backward`로 인덱스를 뒤에서부터 읽으며 20건을 채우자마자 멈췄다.
+
+복합 인덱스는 첫 번째 컬럼으로 정렬하고, 첫 번째 값이 같은 것끼리는 두 번째 컬럼으로 정렬한다. 찾아보기로 치면 단어를 가나다순으로 늘어놓고, 같은 단어 안에서는 쪽수 순으로 적어 둔 것이다. 그래서 `pending`이면서 10월 6일 이후인 주문은 인덱스 안에서 한 덩어리로 붙어 있다. 아래 그림의 칸은 `(status, 날짜)`로 정렬된 인덱스의 잎 일부를 줄여 그린 것이다.
+
+<AlgoTrace
+  caption="(status, created_at) 순서: 찾는 값이 한 덩어리로 붙어 있다"
+  memoryLabel="결과"
+  cells={["can 10-02", "can 10-09", "del 09-11", "del 10-03", "paid 09-30", "paid 10-11", "pen 09-05", "pen 09-14", "pen 10-07", "pen 10-12"]}
+  steps={[
+    { memory: [], caption: "조건은 status = pending, 날짜 ≥ 10-06. 인덱스는 status로 먼저, 같은 status 안에서는 날짜로 정렬돼 있다." },
+    { pointer: 8, found: [8], memory: ["pen 10-07"], caption: "루트에서 내려와 (pending, 10-06)이 들어갈 자리로 바로 간다. 그 앞의 칸은 볼 필요가 없다." },
+    { pointer: 9, found: [8, 9], memory: ["pen 10-07", "pen 10-12"], caption: "옆 칸으로 가며 읽는다. 끝까지 pending이고 날짜도 조건 안이다. 버리는 칸이 하나도 없다." },
+  ]}
+/>
+
+순서를 뒤집어 `(created_at, status)`로 만들면 어떨까. 날짜로 먼저 정렬했으니 10월 6일 이후 주문은 한 덩어리지만, 그 안에서 `pending`은 여기저기 흩어져 있다. 날짜 범위에 들어온 칸을 하나하나 보면서 status를 확인해야 한다.
+
+<AlgoTrace
+  caption="(created_at, status) 순서: 범위 안을 전부 훑어야 한다"
+  memoryLabel="결과"
+  cells={["09-05 pen", "09-11 del", "09-30 paid", "10-02 can", "10-03 del", "10-07 pen", "10-08 del", "10-09 can", "10-11 paid", "10-12 pen"]}
+  steps={[
+    { memory: [], caption: "같은 데이터를 날짜로 먼저 정렬했다. pending이 여기저기 흩어져 있다." },
+    { pointer: 5, found: [5], memory: ["10-07 pen"], caption: "날짜 ≥ 10-06이 시작되는 칸으로 내려온다. 여기까지는 같다." },
+    { pointer: 6, found: [5], memory: ["10-07 pen"], caption: "다음 칸은 delivered. 날짜는 맞지만 버린다." },
+    { pointer: 8, found: [5], memory: ["10-07 pen"], caption: "cancelled, paid도 버린다. 범위 안의 칸을 전부 읽어야 끝을 안다." },
+    { pointer: 9, found: [5, 9], memory: ["10-07 pen", "10-12 pen"], caption: "결과는 같지만 읽은 칸이 훨씬 많다. 실제 데이터에서는 이 차이가 50배를 넘는다." },
+  ]}
+/>
+
+실제로 재 보면 차이가 숫자로 나온다. 기간을 한 달로 늘려 대기 주문 수를 센다. 두 인덱스를 하나씩 만들어 같은 쿼리를 돌렸다.
+
+```sql
+-- 최근 한 달 동안 들어온 결제 대기 주문 수 (결과 869건)
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders
+WHERE status = 'pending' AND created_at >= '2026-09-13';
+```
+
+```text
+-- (created_at, status) 인덱스
+   ->  Index Only Scan using orders_created_status_idx on orders  (cost=0.42..2561.01 rows=928 width=0) (actual time=0.044..4.199 rows=869 loops=1)
+         Index Cond: ((created_at >= '2026-09-13 00:00:00+09'::timestamp with time zone) AND (status = 'pending'::text))
+         Heap Fetches: 0
+         Buffers: shared hit=1 read=417
+
+-- (status, created_at) 인덱스
+   ->  Index Only Scan using orders_status_created_idx on orders  (cost=0.42..38.98 rows=928 width=0) (actual time=0.040..0.152 rows=869 loops=1)
+         Index Cond: ((status = 'pending'::text) AND (created_at >= '2026-09-13 00:00:00+09'::timestamp with time zone))
+         Heap Fetches: 0
+         Buffers: shared hit=1 read=7
+```
+
+둘 다 `Index Cond`에 두 조건이 다 들어가 있어서 겉으로는 비슷해 보인다. 그런데 앞의 것은 한 달 치 주문 8만 7천 건의 인덱스 항목을 다 훑느라 418페이지를 읽었고, 뒤의 것은 8페이지를 읽었다. `Index Cond`에 조건이 들어갔다고 안심하지 말고 `Buffers`를 봐야 하는 이유다.
+
+여기서 복합 인덱스의 규칙이 나온다. 같다(`=`)로 비교하는 컬럼을 앞에, 범위(`>=`, `BETWEEN`, `<`)로 비교하는 컬럼을 뒤에 둔다. 범위 조건이 걸린 컬럼 다음에 오는 컬럼은 인덱스 안에서 정렬 순서가 끊겨서 범위를 좁히는 데 못 쓴다. `ORDER BY`도 같은 원리라서 `WHERE status = ? ORDER BY created_at`은 `(status, created_at)` 인덱스가 정렬까지 해결한다.
+
+반대 방향도 있다. 인덱스는 왼쪽 컬럼부터 차례로만 쓸 수 있다(leftmost prefix). `(status, created_at)` 인덱스는 `status`만 있는 조건에도 쓰이지만, `created_at`만 있는 조건에는 쓰이지 않는다. 찾아보기에서 단어를 모르고 쪽수만으로 찾을 수는 없는 것과 같다.
+
+```sql
+-- status 조건 없이 날짜만으로 찾는다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders WHERE created_at >= '2026-10-12';
+```
+
+```text
+                                                              QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=15558.14..15558.15 rows=1 width=8) (actual time=40.249..45.426 rows=1 loops=1)
+   Buffers: shared hit=9346
+   ->  Gather  (cost=15557.92..15558.13 rows=2 width=8) (actual time=40.171..45.420 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=9346
+         ->  Partial Aggregate  (cost=14557.92..14557.93 rows=1 width=8) (actual time=35.334..35.335 rows=1 loops=3)
+               Buffers: shared hit=9346
+               ->  Parallel Seq Scan on orders  (cost=0.00..14554.33 rows=1436 width=0) (actual time=35.142..35.267 rows=1174 loops=3)
+                     Filter: (created_at >= '2026-10-12 00:00:00+09'::timestamp with time zone)
+                     Rows Removed by Filter: 332160
+                     Buffers: shared hit=9346
+ Planning Time: 0.027 ms
+ Execution Time: 45.445 ms
+(14 rows)
+```
+
+다시 테이블 전체(9,346페이지)를 읽었다. 첫 컬럼의 값 종류가 적으면 각 값마다 건너뛰며 찾는 skip scan이라는 방법이 있는데, PostgreSQL은 18부터 B-tree에 들어갔고 16에는 없다. MySQL은 8.0.13부터 있다. 그래도 skip scan은 특수한 경우를 구제하는 장치라서, 자주 쓰는 조건이면 그 컬럼이 앞에 오는 인덱스를 따로 둔다.
+
+복합 인덱스가 생기면 앞부분이 겹치는 단일 인덱스는 지워도 된다. `(status, created_at)`이 있으면 `(status)` 인덱스가 하던 일을 다 한다. 둘 다 두면 쓰기 비용만 두 번 낸다.
+
+## 표까지 가지 않는 커버링 인덱스
+
+이번에는 같은 조건에서 날짜와 금액을 가져온다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT created_at, amount FROM orders
+WHERE status = 'pending' AND created_at >= '2026-09-13';
+```
+
+```text
+                                                                QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using orders_status_created_idx on orders  (cost=0.42..2692.58 rows=928 width=12) (actual time=0.008..0.681 rows=869 loops=1)
+   Index Cond: ((status = 'pending'::text) AND (created_at >= '2026-09-13 00:00:00+09'::timestamp with time zone))
+   Buffers: shared hit=545
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.079 ms
+ Execution Time: 0.732 ms
+(7 rows)
+```
+
+`count(*)`일 때는 8페이지였는데 545페이지가 됐다. `amount`가 인덱스에 없어서 869건마다 힙을 찾아갔기 때문이다. 이럴 때 `INCLUDE`로 `amount`를 인덱스 잎에 같이 담는다.
+
+```sql
+-- 검색 키는 (status, created_at), 잎에는 amount도 함께 적어 둔다
+CREATE INDEX orders_status_created_incl_idx
+  ON orders (status, created_at) INCLUDE (amount);
+```
+
+```text
+                                                                    QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Only Scan using orders_status_created_incl_idx on orders  (cost=0.42..42.98 rows=928 width=12) (actual time=0.163..0.342 rows=869 loops=1)
+   Index Cond: ((status = 'pending'::text) AND (created_at >= '2026-09-13 00:00:00+09'::timestamp with time zone))
+   Heap Fetches: 0
+   Buffers: shared hit=1 read=7
+ Planning:
+   Buffers: shared hit=21 read=1
+ Planning Time: 0.218 ms
+ Execution Time: 0.405 ms
+(8 rows)
+```
+
+545페이지가 8페이지로 줄었다. 쿼리에 필요한 컬럼을 모두 가진 인덱스를 커버링 인덱스라고 한다. 찾아보기에 쪽수만 적지 않고 짧은 설명까지 적어 두면 본문을 펼칠 필요가 없는 것과 같다. 위 출력은 새 인덱스를 처음 읽는 순간이라 `read=7`로 디스크에서 가져왔고, 그래서 시간은 오히려 조금 길게 나왔다. 같은 조건에서 비교하려면 이번에도 `Buffers`를 본다.
+
+`INCLUDE` 컬럼은 잎에만 저장되고 정렬 기준에 들어가지 않는다. `(status, created_at, amount)`로 만들어도 Index Only Scan은 되지만, `amount`까지 정렬 키가 되면 중간 페이지에도 실려서 인덱스가 커진다. 정렬이나 검색에 쓰지 않는 컬럼은 `INCLUDE`가 맞다. 대가는 크기다.
+
+```sql
+SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes WHERE relname = 'orders';
+```
+
+```text
+          indexrelname          |  size
+--------------------------------+---------
+ orders_pkey                    | 21 MB
+ orders_user_id_idx             | 9088 kB
+ orders_status_created_idx      | 37 MB
+ orders_status_created_incl_idx | 46 MB
+(4 rows)
+```
+
+37MB가 46MB가 됐다. 컬럼을 계속 넣으면 인덱스가 테이블만큼 커진다. 자주 돌고 느린 쿼리 몇 개에만 쓴다. 비교가 끝났으니 `orders_status_created_incl_idx`는 지운다.
+
+## 일부 줄만 담는 부분 인덱스
+
+관리자 화면이 찾는 건 늘 `pending`뿐이다. 그런데 `(status, created_at)` 인덱스는 배송 완료된 주문 80만 건까지 다 담고 있다. 이럴 때 조건에 맞는 행만 담는 부분 인덱스(partial index)를 만든다.
+
+```sql
+-- status = 'pending'인 행만 담는다
+CREATE INDEX orders_pending_created_idx
+  ON orders (created_at) WHERE status = 'pending';
+
+SELECT pg_size_pretty(pg_relation_size('orders_pending_created_idx'));
+```
+
+```text
+ pg_size_pretty
+----------------
+ 240 kB
+(1 row)
+```
+
+37MB 대신 240kB다. 같은 쿼리는 이 인덱스를 탄다.
+
+```text
+ Aggregate  (cost=30.85..30.86 rows=1 width=8) (actual time=0.200..0.201 rows=1 loops=1)
+   Buffers: shared hit=1 read=4
+   ->  Index Only Scan using orders_pending_created_idx on orders  (cost=0.29..28.53 rows=928 width=0) (actual time=0.035..0.113 rows=869 loops=1)
+         Index Cond: (created_at >= '2026-09-13 00:00:00+09'::timestamp with time zone)
+         Heap Fetches: 0
+         Buffers: shared hit=1 read=4
+```
+
+`Index Cond`에 status가 없다. 인덱스 자체가 이미 `pending`만 담고 있어서다. 인덱스가 작으니 다른 데이터와 함께 메모리에 머물기도 쉽고, `delivered` 주문이 들어오거나 바뀔 때는 이 인덱스를 고칠 필요도 없다.
+
+조건이 쿼리와 맞아야만 쓰인다는 게 단점이다. `WHERE status = 'paid'`는 이 인덱스로 못 찾는다. 응용 코드가 `status = $1`처럼 값을 파라미터로 넘기면, 플래너가 값을 모르는 일반 계획에서는 부분 인덱스를 쓸지 판단하지 못할 수 있다. 부분 인덱스를 쓸 쿼리는 조건을 SQL에 그대로 적는 편이 안전하다. 비슷한 쓰임으로 `WHERE deleted_at IS NULL`(지우지 않은 행만)이나 "같은 회원의 대기 주문은 하나만" 같은 조건부 유니크 제약이 있다.
+
+```sql
+-- 회원마다 결제 대기 주문은 하나만 허용한다
+CREATE UNIQUE INDEX orders_one_pending_per_user
+  ON orders (user_id) WHERE status = 'pending';
+```
+
+```text
+ERROR:  could not create unique index "orders_one_pending_per_user"
+DETAIL:  Key (user_id)=(70593) is duplicated.
+```
+
+예제 데이터는 무작위로 만들어서 대기 주문이 두 건 이상인 회원이 483명 있다. 그래서 실패했다. 실제 서비스에서 이런 규칙을 걸 때도 기존 데이터가 규칙을 지키는지 먼저 확인한다. 비교가 끝났으니 `orders_pending_created_idx`도 지운다.
+
+## 함수를 씌운 컬럼과 유니크 인덱스
+
+로그인할 때 이메일을 대소문자 구분 없이 찾는다. `users.email`에 인덱스가 있는데도 이렇게 나온다.
+
+```sql
+CREATE INDEX users_email_idx ON users (email);
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, name FROM users WHERE lower(email) = 'kim@example.com';
+```
+
+```text
+                                              QUERY PLAN
+------------------------------------------------------------------------------------------------------
+ Seq Scan on users  (cost=0.00..2435.00 rows=500 width=17) (actual time=0.225..28.330 rows=1 loops=1)
+   Filter: (lower(email) = 'kim@example.com'::text)
+   Rows Removed by Filter: 99999
+   Buffers: shared hit=935
+ Planning:
+   Buffers: shared hit=34 read=1
+ Planning Time: 0.166 ms
+ Execution Time: 28.372 ms
+(8 rows)
+```
+
+인덱스는 `email` 원래 값으로 정렬돼 있다. `lower(email)`의 결과는 인덱스에 없으니, 행마다 `lower()`를 계산해서 비교할 수밖에 없다. 찾아보기는 "Kim"으로 정리돼 있는데 "kim"으로 찾으려는 것과 같다. 예상 행 수 `rows=500`은 플래너가 함수 결과의 통계를 몰라서 넣은 기본값(전체의 0.5%)이다.
+
+해결은 함수 결과 자체로 인덱스를 만드는 식 인덱스(expression index)다. 대소문자만 다른 이메일로 두 번 가입하는 것도 막아야 하니 유니크로 만든다.
+
+```sql
+DROP INDEX users_email_idx;
+
+-- lower(email) 값으로 정렬하고, 같은 값이 두 번 들어오지 못하게 한다
+CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
+```
+
+```text
+                                                          QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using users_email_lower_key on users  (cost=0.42..8.44 rows=1 width=17) (actual time=0.023..0.024 rows=1 loops=1)
+   Index Cond: (lower(email) = 'kim@example.com'::text)
+   Buffers: shared hit=1 read=3
+ Planning:
+   Buffers: shared hit=19 read=1
+ Planning Time: 0.188 ms
+ Execution Time: 0.041 ms
+(7 rows)
+```
+
+```sql
+-- 대소문자만 다른 이메일로 가입해 본다
+INSERT INTO users (email, name) VALUES ('Kim@Example.com', 'kim2');
+```
+
+```text
+ERROR:  duplicate key value violates unique constraint "users_email_lower_key"
+DETAIL:  Key (lower(email))=(kim@example.com) already exists.
+```
+
+식 인덱스는 쿼리의 식이 인덱스의 식과 글자 그대로 같아야 쓰인다. `lower(email)`로 만들었으면 `upper(email)`이나 `lower(trim(email))`로는 못 찾는다. 식 인덱스를 만들면 `ANALYZE`가 그 식의 결과로도 통계를 모아서, 예상 행 수도 정확해진다.
+
+유니크 인덱스는 값이 겹치지 않는다는 보장을 준다. `UNIQUE` 제약을 걸면 PostgreSQL이 내부적으로 유니크 인덱스를 만들고, 기본 키도 마찬가지다. 플래너는 "많아야 1행"이라는 사실을 알고 계획을 세운다. 하나 조심할 것은 NULL이다. 기본 동작에서 NULL끼리는 서로 다른 값으로 보기 때문에 NULL은 여러 개 들어간다. PostgreSQL 15부터는 `UNIQUE NULLS NOT DISTINCT`로 NULL도 하나만 허용할 수 있다.
+
+## 인덱스가 있는데 안 타는 경우
+
+인덱스를 만들었는데 실행 계획에 계속 Seq Scan이 나오면 보통 아래 중 하나다.
+
+첫째, 컬럼에 함수나 연산을 씌웠다. 바로 위의 `lower(email)`이 그 예다. `WHERE created_at::date = '2026-10-12'`나 `WHERE amount * 1.1 > 50000`도 같다. 컬럼을 그대로 두고 반대편 값을 바꾸면 인덱스를 탄다(`created_at >= '2026-10-12' AND created_at < '2026-10-13'`).
+
+둘째, 타입이 달라서 컬럼 쪽이 변환됐다. 겉으로 안 보여서 더 찾기 어렵다.
+
+```sql
+EXPLAIN SELECT * FROM orders WHERE user_id = 42.0;   -- 42.0은 numeric
+EXPLAIN SELECT * FROM orders WHERE user_id = '42';   -- 따옴표 리터럴
+```
+
+```text
+                                 QUERY PLAN
+-----------------------------------------------------------------------------
+ Gather  (cost=1000.00..17096.00 rows=5000 width=45)
+   Workers Planned: 2
+   ->  Parallel Seq Scan on orders  (cost=0.00..15596.00 rows=2083 width=45)
+         Filter: ((user_id)::numeric = 42.0)
+(4 rows)
+
+                                    QUERY PLAN
+----------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=4.51..47.52 rows=11 width=45)
+   Recheck Cond: (user_id = '42'::bigint)
+   ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.51 rows=11 width=0)
+         Index Cond: (user_id = '42'::bigint)
+(4 rows)
+```
+
+`(user_id)::numeric`이 단서다. bigint 컬럼을 numeric 값과 비교하려고 컬럼 쪽을 numeric으로 바꿨고, 그 결과는 인덱스에 없다. 반면 따옴표로 쓴 `'42'`는 타입이 정해지지 않은 리터럴이라 컬럼 타입(bigint)에 맞춰 변환되고 인덱스를 탄다. 응용 코드에서 숫자를 소수 타입으로 바인딩하는 드라이버 설정이 이런 문제를 만든다. MySQL은 반대 방향이 함정이다. 문자열 컬럼(`VARCHAR`)을 숫자와 비교하면(`WHERE phone = 01012345678`) 행마다 문자열을 숫자로 바꿔 비교해서 인덱스를 못 쓴다.
+
+셋째, `LIKE`의 앞에 와일드카드가 있다. B-tree는 앞에서부터 정렬돼 있어서 `'kim%'`처럼 앞부분이 정해진 검색만 범위로 바꿀 수 있다. `'%kim%'`는 시작점을 모른다. 그리고 하나 더 있다. DB의 정렬 규칙(collation)이 `C`가 아니면 `'kim%'`조차 일반 B-tree를 못 쓴다. 이 실습 DB는 `C.UTF-8`인데도 그랬다. 이때는 `text_pattern_ops`로 만든 인덱스가 따로 필요하다.
+
+```sql
+-- 앞부분 일치 검색용: 글자 코드 순서로 비교하는 연산자 클래스
+CREATE INDEX users_email_pattern_idx ON users (lower(email) text_pattern_ops);
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id FROM users WHERE lower(email) LIKE 'kim%';
+```
+
+```text
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using users_email_pattern_idx on users  (cost=0.42..8.44 rows=10 width=8) (actual time=0.032..0.032 rows=1 loops=1)
+   Index Cond: ((lower(email) ~>=~ 'kim'::text) AND (lower(email) ~<~ 'kin'::text))
+   Filter: (lower(email) ~~ 'kim%'::text)
+   Buffers: shared hit=1 read=3
+ Planning:
+   Buffers: shared hit=100 read=1
+ Planning Time: 0.519 ms
+ Execution Time: 0.055 ms
+(8 rows)
+```
+
+`Index Cond`를 보면 `LIKE 'kim%'`가 "kim 이상, kin 미만"이라는 범위로 바뀌었다. 중간 일치(`'%kim%'`)가 꼭 필요하면 B-tree 대신 `pg_trgm` 확장의 GIN 인덱스를 쓴다. 뒤에서 다룬다.
+
+넷째, 조건에 맞는 행이 너무 많다. `delivered`는 전체의 80%다.
+
+```sql
+EXPLAIN SELECT count(*) FROM orders WHERE status = 'delivered';
+EXPLAIN SELECT count(*) FROM orders WHERE status = 'pending';
+```
+
+```text
+                                        QUERY PLAN
+------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=16389.69..16389.70 rows=1 width=8)
+   ->  Gather  (cost=16389.47..16389.68 rows=2 width=8)
+         Workers Planned: 2
+         ->  Partial Aggregate  (cost=15389.47..15389.48 rows=1 width=8)
+               ->  Parallel Seq Scan on orders  (cost=0.00..14554.33 rows=334055 width=0)
+                     Filter: (status = 'delivered'::text)
+(6 rows)
+
+                                               QUERY PLAN
+---------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=416.43..416.44 rows=1 width=8)
+   ->  Index Only Scan using orders_status_created_idx on orders  (cost=0.42..389.93 rows=10600 width=0)
+         Index Cond: (status = 'pending'::text)
+(3 rows)
+```
+
+같은 인덱스, 같은 모양의 쿼리인데 값에 따라 계획이 다르다. 80만 행을 인덱스로 하나씩 찾아가면 같은 페이지를 여러 번 들르며 띄엄띄엄 읽게 된다. 어차피 거의 모든 페이지를 읽을 거라면 처음부터 순서대로 읽는 게 싸다. 책의 80%를 봐야 한다면 찾아보기를 펴지 않고 그냥 넘기는 것과 같다. 몇 퍼센트에서 바뀌는지 정해진 숫자는 없다. 플래너가 비용으로 판단하고, 그 비용에는 `random_page_cost`(띄엄띄엄 읽는 비용, 기본 4.0) 같은 설정이 들어간다. SSD를 쓰는 서버에서는 이 값을 1.1 정도로 낮추는 경우가 많고, 그러면 인덱스를 더 적극적으로 쓴다. 이런 컬럼은 단독 인덱스보다 다른 컬럼과 묶은 복합 인덱스나 부분 인덱스로 쓰는 게 낫다.
+
+다섯째, `OR`로 다른 컬럼을 묶었다.
+
+```sql
+-- product_id에는 아직 인덱스가 없다
+EXPLAIN SELECT * FROM orders WHERE user_id = 42 OR product_id = 7;
+```
+
+```text
+                                 QUERY PLAN
+----------------------------------------------------------------------------
+ Gather  (cost=1000.00..16696.40 rows=1004 width=45)
+   Workers Planned: 2
+   ->  Parallel Seq Scan on orders  (cost=0.00..15596.00 rows=418 width=45)
+         Filter: ((user_id = 42) OR (product_id = 7))
+(4 rows)
+```
+
+`user_id` 인덱스로 회원 42번 주문은 찾을 수 있지만, `product_id = 7`인 행은 어디 있는지 모른다. 결국 전부 읽는다. 양쪽 컬럼에 인덱스가 다 있으면 PostgreSQL은 비트맵 두 개를 합친다(`BitmapOr`).
+
+```sql
+CREATE INDEX orders_product_id_idx ON orders (product_id);
+```
+
+```text
+ Bitmap Heap Scan on orders  (cost=16.88..2930.99 rows=1004 width=45) (actual time=0.260..1.503 rows=1023 loops=1)
+   Recheck Cond: ((user_id = 42) OR (product_id = 7))
+   Heap Blocks: exact=977
+   Buffers: shared hit=983 read=4
+   ->  BitmapOr  (cost=16.88..16.88 rows=1004 width=0) (actual time=0.140..0.141 rows=0 loops=1)
+         Buffers: shared hit=6 read=4
+         ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.025..0.025 rows=8 loops=1)
+               Index Cond: (user_id = 42)
+               Buffers: shared hit=6
+         ->  Bitmap Index Scan on orders_product_id_idx  (cost=0.00..11.87 rows=993 width=0) (actual time=0.114..0.114 rows=1015 loops=1)
+               Index Cond: (product_id = 7)
+               Buffers: shared read=4
+```
+
+MySQL에도 같은 역할의 index merge가 있다. 플래너가 합치기를 고르지 않을 때는 OR를 쿼리 두 개로 쪼개 `UNION`으로 붙이면 각각 인덱스를 탄다. 양쪽 조건에 다 맞는 행이 두 번 나오지 않게 `UNION ALL`이 아니라 `UNION`을 쓴다.
+
+여섯째, 통계가 낡았다. 플래너는 테이블을 직접 세지 않는다. `ANALYZE`가 표본을 뽑아 저장해 둔 통계(값 분포, 자주 나오는 값, 서로 다른 값의 수)를 보고 행 수를 추측한다. 데이터가 크게 바뀌었는데 통계가 그대로면 추측이 틀린다. 대량 마이그레이션 직후를 흉내 내서, 트랜잭션 안에서 배송 완료 주문 80만 건을 `pending`으로 바꿔 본다.
+
+```sql
+BEGIN;
+UPDATE orders SET status = 'pending' WHERE status = 'delivered';  -- 799279행
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT id, amount FROM orders WHERE status = 'pending';
+
+ANALYZE orders;  -- 통계를 새로 모은다
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT id, amount FROM orders WHERE status = 'pending';
+ROLLBACK;
+```
+
+```text
+-- ANALYZE 전
+ Bitmap Heap Scan on orders  (cost=493.91..18326.84 rows=18772 width=12) (actual time=43.202..203.452 rows=809301 loops=1)
+   Recheck Cond: (status = 'pending'::text)
+   Heap Blocks: exact=13693
+   Buffers: shared hit=4346 read=12843 written=5355
+   ->  Bitmap Index Scan on orders_status_created_idx  (cost=0.00..489.22 rows=18772 width=0) (actual time=40.964..40.965 rows=809301 loops=1)
+         Index Cond: (status = 'pending'::text)
+         Buffers: shared hit=1627 read=1869 written=991
+ Planning:
+   Buffers: shared hit=2 read=4 dirtied=2
+ Planning Time: 0.155 ms
+ Execution Time: 241.242 ms
+
+-- ANALYZE 후
+ Seq Scan on orders  (cost=0.00..29316.00 rows=806267 width=12) (actual time=0.014..140.750 rows=809301 loops=1)
+   Filter: (status = 'pending'::text)
+   Rows Removed by Filter: 190699
+   Buffers: shared hit=10085 read=6731
+ Planning:
+   Buffers: shared hit=34 read=7
+ Planning Time: 0.194 ms
+ Execution Time: 175.897 ms
+```
+
+`ANALYZE` 전에는 `rows=18772`로 예상했는데 실제로는 `rows=809301`이 나왔다. 43배 틀렸다. 대기 주문이 1%라는 옛 통계를 믿고 인덱스를 골랐다가 80만 행을 띄엄띄엄 찾아갔다. 통계를 새로 모으자 예상이 806267로 맞아졌고, 플래너는 Seq Scan으로 바꿨다. 이 예에서는 241ms가 176ms가 된 정도지만, 조인이 붙으면 틀린 행 수 예측 하나가 조인 방법 전체를 잘못 고르게 만든다.
+
+평소에는 autovacuum이 알아서 `ANALYZE`를 돌린다. 기준은 "50행 + 테이블의 10%"가 바뀌었을 때다(`autovacuum_analyze_threshold`, `autovacuum_analyze_scale_factor`). 100만 행이면 10만 행이 바뀌어야 돈다. 대량으로 넣거나 바꾼 직후에는 직접 `ANALYZE`를 돌리는 습관을 들인다. 실행 계획에서 `rows` 예상과 실제가 열 배 넘게 차이 나면 통계부터 의심한다.
+
+## 인덱스는 쓰기를 느리게 한다
+
+읽기가 빨라지는 대가는 쓰기에서 낸다. 행을 하나 넣으면 힙에 한 번, 인덱스마다 한 번씩 더 쓴다. 인덱스가 넷이면 다섯 군데를 고친다. 이걸 쓰기 증폭이라고 한다. 같은 주문 20만 건을 인덱스 없는 테이블과 인덱스 4개(기본 키 포함)가 있는 테이블에 넣어 봤다.
+
+```sql
+CREATE TABLE orders_noidx (LIKE orders);                    -- 인덱스 없음
+CREATE TABLE orders_idx   (LIKE orders INCLUDING INDEXES);  -- orders의 인덱스 4개를 복사
+
+\timing on
+INSERT INTO orders_noidx SELECT * FROM orders WHERE id <= 200000;
+INSERT INTO orders_idx   SELECT * FROM orders WHERE id <= 200000;
+```
+
+```text
+INSERT 0 200000
+Time: 227.384 ms
+INSERT 0 200000
+Time: 1758.580 ms (00:01.759)
+```
+
+이 장비에서 7배 넘게 차이가 났다. 크기도 15MB와 38MB로 갈렸다. `user_id`와 `product_id`는 무작위 값이라 인덱스의 여기저기에 끼워 넣어야 하고, 꽉 찬 페이지에 끼워 넣으려면 페이지를 둘로 쪼개야 해서 더 비싸다.
+
+UPDATE는 조금 더 복잡하다. PostgreSQL의 UPDATE는 행을 고치지 않고 새 버전을 쓴다. 새 버전의 위치(ctid)가 바뀌니 원래는 모든 인덱스에 새 항목을 넣어야 한다. 이걸 피하는 장치가 HOT(Heap-Only Tuple) 업데이트다. 두 가지가 맞으면 인덱스를 건드리지 않는다. 바꾼 컬럼 중에 인덱스에 들어간 컬럼이 없을 것, 그리고 새 버전이 같은 페이지에 들어갈 빈자리가 있을 것.
+
+대량으로 채운 테이블은 페이지가 꽉 차 있어서 HOT이 잘 안 된다. 페이지에 빈자리를 남겨 두는 설정이 `fillfactor`다. 아래는 `orders`의 `fillfactor`를 90으로 낮추고 테이블을 다시 쓴 다음 잰 결과다.
+
+```sql
+ALTER TABLE orders SET (fillfactor = 90);  -- 페이지의 10%를 비워 둔다
+VACUUM FULL orders;                        -- 테이블을 새로 써서 설정을 적용한다 (잠금 주의)
+
+-- 이 테이블의 통계 카운터를 0으로 돌려 둔다
+SELECT pg_stat_reset_single_table_counters('orders'::regclass);
+
+UPDATE orders SET amount = amount + 1000 WHERE user_id = 46;  -- amount: 인덱스에 없음 (3행)
+UPDATE orders SET status = 'paid' WHERE user_id = 47;         -- status: 인덱스에 있음 (6행)
+
+-- 수정된 행 수와 그중 HOT으로 처리된 수 (통계는 1초쯤 늦게 반영된다)
+SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'orders';
+```
+
+```text
+ n_tup_upd | n_tup_hot_upd
+-----------+---------------
+         9 |             3
+(1 row)
+```
+
+9행 중 3행만 HOT이었다. `amount`를 바꾼 3행은 인덱스를 안 건드렸고, `status`를 바꾼 6행은 `(status, created_at)` 인덱스 때문에 HOT이 안 됐다. "혹시 쓸지도 모르니" 만든 인덱스가 수정이 잦은 컬럼에 걸려 있으면 이렇게 모든 UPDATE를 비싸게 만든다. `VACUUM FULL`은 테이블 전체에 배타적 잠금을 걸어 그동안 읽기도 막으니, 운영 중에는 쓰지 않는다. 운영 테이블이라면 `fillfactor`는 테이블을 만들 때 정해 둔다. 실험이 끝났으면 `ALTER TABLE orders RESET (fillfactor);` 후 다시 `VACUUM FULL orders;`로 되돌린다.
+
+그래서 안 쓰는 인덱스는 찾아서 지운다. PostgreSQL은 인덱스마다 사용 횟수를 센다. 아래는 실험용 인덱스를 정리하고 `user_id`, `(status, created_at)`, `product_id` 인덱스만 남긴 뒤, 통계를 리셋하고 쿼리 몇 개를 돌린 다음의 출력이다.
+
+```sql
+-- 사용 횟수가 적은 인덱스부터. 유니크 인덱스(제약 역할)는 뺀다
+SELECT s.relname AS table_name,
+       s.indexrelname AS index_name,
+       s.idx_scan,
+       pg_size_pretty(pg_relation_size(s.indexrelid)) AS size
+FROM pg_stat_user_indexes AS s
+JOIN pg_index AS i ON i.indexrelid = s.indexrelid
+WHERE NOT i.indisunique
+ORDER BY s.idx_scan, pg_relation_size(s.indexrelid) DESC;
+```
+
+```text
+ table_name |        index_name         | idx_scan |  size
+------------+---------------------------+----------+---------
+ orders     | orders_product_id_idx     |        0 | 7104 kB
+ orders     | orders_status_created_idx |        1 | 37 MB
+ orders     | orders_user_id_idx        |        2 | 9088 kB
+(3 rows)
+```
+
+`idx_scan`이 0이면 후보다. 지우기 전에 세 가지를 확인한다. 이 숫자는 통계를 리셋한 시점부터 센 것이라 기간이 충분한지(`pg_stat_database.stats_reset`), 읽기 복제본에서만 쓰는 인덱스는 아닌지(복제본의 통계는 따로 센다), 외래 키 컬럼은 아닌지. 위의 `orders_product_id_idx`는 조회에 안 쓰였어도 상품을 지울 때 그 상품의 주문이 남아 있는지 확인하는 데 쓰인다. 이 인덱스가 없으면 상품 하나를 지울 때마다 `orders` 전체를 훑는다.
+
+## 운영 중인 테이블에 인덱스 추가하기
+
+그냥 `CREATE INDEX`를 하면 인덱스를 다 만들 때까지 그 테이블의 INSERT, UPDATE, DELETE가 막힌다. 읽기는 된다. 100만 행이면 1초 안팎이지만, 1억 행이면 몇 분이 걸리고 그동안 주문이 안 들어간다. 운영 중에는 `CONCURRENTLY`를 붙인다.
+
+```sql
+-- 쓰기를 막지 않고 만든다. 트랜잭션 블록(BEGIN ... COMMIT) 안에서는 실행할 수 없다
+CREATE INDEX CONCURRENTLY orders_user_id_idx ON orders (user_id);
+```
+
+대신 테이블을 두 번 훑고, 진행 중인 트랜잭션이 끝나기를 기다리느라 더 오래 걸린다. 그 사이 실패하면 인덱스가 사라지지 않고 쓸 수 없는 상태(INVALID)로 남는다. 이 인덱스는 조회에는 안 쓰이면서 쓰기 비용은 계속 먹는다.
+
+```sql
+-- 만들다 실패한 인덱스 찾기
+SELECT indexrelid::regclass AS index_name
+FROM pg_index
+WHERE NOT indisvalid;
+
+-- 지우고 다시 만든다 (지울 때도 CONCURRENTLY)
+DROP INDEX CONCURRENTLY orders_user_id_idx;
+CREATE INDEX CONCURRENTLY orders_user_id_idx ON orders (user_id);
+```
+
+<Callout kind="warning" title="CONCURRENTLY도 잠깐은 기다린다">
+`CONCURRENTLY`도 시작할 때와 끝날 때 오래 열린 트랜잭션이 끝나기를 기다린다. 그 뒤에 일반 `ALTER TABLE` 같은 명령이 줄을 서면 그 명령 뒤의 모든 쿼리가 함께 막힌다. 마이그레이션 세션에서는 `SET lock_timeout = '5s';`를 먼저 걸어 오래 기다리지 않고 실패하게 하고, 실패하면 INVALID 인덱스를 지운 뒤 다시 시도한다. 부풀어 오른 인덱스를 다시 만들 때는 `REINDEX INDEX CONCURRENTLY`(PostgreSQL 12부터)를 쓴다.
+</Callout>
+
+ORM의 마이그레이션 도구는 기본적으로 마이그레이션 하나를 트랜잭션으로 감싼다. 그 안에서는 `CONCURRENTLY`가 실패하니, 그 마이그레이션만 트랜잭션을 끄는 옵션을 찾아 쓴다.
+
+## B-tree가 아닌 인덱스들
+
+B-tree가 거의 모든 경우를 맡지만, 데이터 모양에 따라 더 맞는 인덱스가 있다.
+
+해시 인덱스는 값의 해시만 저장해서 `=` 비교만 한다. 범위와 정렬은 못 하고, 유니크와 여러 컬럼도 안 된다. PostgreSQL 10부터 장애 복구에 안전해졌지만, 아주 긴 문자열을 같다로만 찾을 때 크기가 작다는 정도 말고는 B-tree보다 나은 경우가 드물다.
+
+GIN은 값 하나가 여러 조각을 가진 데이터에 쓴다. 배열의 원소, `jsonb`의 키, 문서의 단어, 그리고 문자열을 세 글자씩 자른 조각(trigram)이다. 앞에서 못 했던 `'%kim%'` 검색이 이걸로 된다.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- lower(email)을 세 글자 조각으로 잘라 색인한다
+CREATE INDEX users_email_trgm_idx ON users USING gin (lower(email) gin_trgm_ops);
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id FROM users WHERE lower(email) LIKE '%kim%';
+```
+
+```text
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on users  (cost=12.86..49.91 rows=10 width=8) (actual time=0.030..0.031 rows=1 loops=1)
+   Recheck Cond: (lower(email) ~~ '%kim%'::text)
+   Heap Blocks: exact=1
+   Buffers: shared hit=4
+   ->  Bitmap Index Scan on users_email_trgm_idx  (cost=0.00..12.86 rows=10 width=0) (actual time=0.020..0.020 rows=1 loops=1)
+         Index Cond: (lower(email) ~~ '%kim%'::text)
+         Buffers: shared hit=3
+```
+
+GIN 인덱스가 없을 때는 같은 쿼리가 Seq Scan으로 935페이지를 다 읽고 35ms가 걸렸다. GIN은 행 하나에 조각이 여러 개라 쓰기가 B-tree보다 무겁다. 검색이 중심인 컬럼에 쓴다.
+
+BRIN은 반대로 아주 작은 인덱스다. 페이지 묶음(기본 128페이지)마다 최솟값과 최댓값만 적어 둔다. `orders.created_at`처럼 행이 들어온 순서와 값의 순서가 같은 컬럼에서 잘 맞는다.
+
+```sql
+CREATE INDEX orders_created_btree ON orders (created_at);
+CREATE INDEX orders_created_brin  ON orders USING brin (created_at);
+
+SELECT pg_size_pretty(pg_relation_size('orders_created_btree')) AS btree,
+       pg_size_pretty(pg_relation_size('orders_created_brin'))  AS brin;
+```
+
+```text
+ btree | brin
+-------+-------
+ 21 MB | 24 kB
+(1 row)
+```
+
+```sql
+-- B-tree는 지우고 BRIN만 남긴 상태에서 하루 치 주문을 센다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders
+WHERE created_at >= '2026-10-12' AND created_at < '2026-10-13';
+```
+
+```text
+ Aggregate  (cost=10039.92..10039.93 rows=1 width=8) (actual time=1.622..1.623 rows=1 loops=1)
+   Buffers: shared hit=133
+   ->  Bitmap Heap Scan on orders  (cost=12.71..10033.11 rows=2722 width=0) (actual time=1.011..1.458 rows=2880 loops=1)
+         Recheck Cond: ((created_at >= '2026-10-12 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-13 00:00:00+09'::timestamp with time zone))
+         Rows Removed by Index Recheck: 10816
+         Heap Blocks: lossy=128
+         Buffers: shared hit=133
+         ->  Bitmap Index Scan on orders_created_brin  (cost=0.00..12.03 rows=13514 width=0) (actual time=0.027..0.028 rows=1280 loops=1)
+               Index Cond: ((created_at >= '2026-10-12 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-13 00:00:00+09'::timestamp with time zone))
+               Buffers: shared hit=5
+```
+
+`Heap Blocks: lossy=128`은 "이 128페이지 안에 있을 수도 있다"는 덩어리 하나를 통째로 읽었다는 뜻이다. 그래서 `Rows Removed by Index Recheck`로 1만 행을 다시 걸러 냈다. 정확하진 않지만 9,346페이지 대신 133페이지를 읽었고, 인덱스는 B-tree의 1천분의 1 크기다. 로그나 이벤트처럼 쌓이기만 하는 큰 테이블의 시간 컬럼에 맞다. 값이 들어온 순서와 상관없이 흩어진 컬럼(`user_id` 같은)에서는 모든 묶음의 범위가 넓어져 쓸모가 없다. 이 정렬 정도는 `pg_stats.correlation`으로 볼 수 있고, `created_at`은 1, `user_id`는 0.01이었다.
+
+이 밖에 위치나 범위 겹침을 찾는 GiST와 SP-GiST가 있다. 지도 좌표, 예약 시간 겹침 같은 곳에 쓴다.
+
+## MySQL 8은 표 자체가 인덱스다
+
+MySQL의 기본 저장 엔진인 InnoDB는 테이블을 저장하는 방식부터 다르다. PostgreSQL은 행을 힙에 들어온 순서대로 쌓고, 인덱스는 모두 ctid로 힙을 가리킨다. 기본 키 인덱스도 다른 인덱스와 다를 게 없다. InnoDB는 테이블 자체가 기본 키로 정렬된 B-tree다. 기본 키 인덱스의 잎에 행 전체가 들어 있어서 클러스터드 인덱스라고 부른다. 기본 키가 없으면 NOT NULL인 첫 유니크 인덱스를, 그것도 없으면 숨은 6바이트 행 번호를 기본 키로 쓴다.
+
+그러면 `user_id` 같은 보조 인덱스(secondary index)의 잎에는 무엇이 들어 있을까. 위치 대신 그 행의 기본 키 값이 들어 있다. 보조 인덱스로 찾으면 기본 키를 얻고, 그 기본 키로 클러스터드 인덱스를 한 번 더 내려가야 행이 나온다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="InnoDB 보조 인덱스는 기본 키를 가리키고, 기본 키 B-tree의 잎에 행이 있다"
+  nodes={[
+    { id: "q", label: "user_id = 42", x: 200, y: 35, w: 140 },
+    { id: "sec", label: "보조 인덱스", sub: "user_id → id", x: 100, y: 135, w: 130 },
+    { id: "pk", label: "기본 키 B-tree", sub: "id 순 정렬", x: 300, y: 135, w: 140 },
+    { id: "row", label: "잎 = 행 전체", sub: "id, user_id, …", x: 300, y: 245, w: 140 },
+    { id: "cover", label: "커버링이면 끝", sub: "id는 이미 있다", x: 100, y: 245, w: 130 },
+  ]}
+  edges={[
+    { from: "q", to: "sec", label: "1번 탐색" },
+    { from: "sec", to: "pk", label: "id로 2번 탐색" },
+    { from: "pk", to: "row" },
+    { from: "sec", to: "cover", dashed: true },
+  ]}
+/>
+
+이 구조에서 나오는 결과가 몇 가지 있다.
+
+기본 키로 찾는 게 가장 빠르고, 기본 키 범위 조회는 행이 물리적으로 붙어 있어서 특히 빠르다. 보조 인덱스에는 기본 키가 공짜로 따라오니 `SELECT id FROM orders WHERE user_id = 42`는 따로 설정하지 않아도 커버링이다. MySQL은 `INCLUDE` 문법이 없어서, 다른 컬럼을 커버링하려면 인덱스 컬럼 끝에 붙인다.
+
+기본 키를 무작위 UUID로 잡으면 아프다. 새 행이 B-tree의 아무 데나 끼어드니 꽉 찬 페이지가 계속 쪼개지고, 페이지가 반쯤 빈 채로 흩어져 테이블이 커진다. 최근에 쓴 페이지만 메모리에 두면 되던 것이 테이블 전체를 메모리에 올려야 하는 상황이 된다. 게다가 보조 인덱스마다 기본 키가 복사되니, 8바이트 `BIGINT` 대신 36자 문자열 UUID를 쓰면 모든 보조 인덱스가 같이 커진다. 순서대로 늘어나는 `BIGINT AUTO_INCREMENT`를 쓰거나, UUID가 꼭 필요하면 시간 순으로 커지는 UUIDv7을 `BINARY(16)`으로 저장한다. PostgreSQL은 힙이 정렬되지 않아 덜 아프지만, 기본 키 인덱스 자체는 같은 이유로 흩어지고 커진다. PostgreSQL 18부터는 `uuidv7()` 함수가 들어 있다.
+
+실행 계획 모양도 다르다. MySQL의 기본 `EXPLAIN`은 표로 나온다. 아래는 같은 쿼리를 인덱스 전후로 본 예시 출력이다.
+
+```sql
+-- MySQL 8
+EXPLAIN SELECT * FROM orders WHERE user_id = 42;
+```
+
+```text
+-- 인덱스 없음 (예시 출력)
++----+-------------+--------+------------+------+---------------+------+---------+------+--------+----------+-------------+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra       |
++----+-------------+--------+------------+------+---------------+------+---------+------+--------+----------+-------------+
+|  1 | SIMPLE      | orders | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 996520 |    10.00 | Using where |
++----+-------------+--------+------------+------+---------------+------+---------+------+--------+----------+-------------+
+
+-- idx_user_id 생성 후 (예시 출력)
++----+-------------+--------+------------+------+---------------+-------------+---------+-------+------+----------+-------+
+| id | select_type | table  | partitions | type | possible_keys | key         | key_len | ref   | rows | filtered | Extra |
++----+-------------+--------+------------+------+---------------+-------------+---------+-------+------+----------+-------+
+|  1 | SIMPLE      | orders | NULL       | ref  | idx_user_id   | idx_user_id | 8       | const |    8 |   100.00 | NULL  |
++----+-------------+--------+------------+------+---------------+-------------+---------+-------+------+----------+-------+
+```
+
+`type` 열부터 본다. `ALL`은 테이블 전체 스캔, `index`는 인덱스 전체 스캔, `range`는 인덱스 범위, `ref`는 인덱스로 같은 값 찾기, `eq_ref`와 `const`는 유니크하게 한 행 찾기다. 뒤로 갈수록 좋다. `rows`는 예상치이고, `key_len`은 복합 인덱스에서 몇 번째 컬럼까지 썼는지 가늠하는 데 쓴다. `Extra`의 `Using index`는 커버링(PostgreSQL의 Index Only Scan), `Using filesort`는 인덱스로 정렬을 못 해 따로 정렬했다는 뜻이다.
+
+MySQL 8.0.18부터는 `EXPLAIN ANALYZE`가 있고, PostgreSQL처럼 나무 모양으로 실제 시간과 행 수를 보여 준다.
+
+```text
+-- MySQL 8 EXPLAIN ANALYZE (예시 출력)
+-> Index lookup on orders using idx_user_id (user_id=42)  (cost=2.8 rows=8) (actual time=0.0412..0.0503 rows=8 loops=1)
+```
+
+기능 차이도 몇 가지 알아 둔다. MySQL에는 부분 인덱스가 없다. 식 인덱스는 8.0.13부터 `CREATE INDEX idx_email_lower ON users ((lower(email)))`처럼 괄호를 한 번 더 써서 만든다. 인덱스를 지우기 전에 `ALTER TABLE orders ALTER INDEX idx_user_id INVISIBLE`로 플래너에서만 숨겨 볼 수 있어서, 문제가 생기면 바로 되돌릴 수 있다. PostgreSQL에는 이 기능이 없다. 보조 인덱스 추가는 InnoDB의 온라인 DDL로 쓰기를 막지 않고 진행된다.
+
+## 찾아보기를 만들기 전에
+
+인덱스는 정렬된 사본이다. 정렬돼 있어서 몇 페이지만 내려가면 원하는 값에 닿고, 사본이라서 쓸 때마다 같이 고쳐야 한다. 그래서 인덱스를 만들기 전에는 실제로 느린 쿼리의 실행 계획부터 본다. `Rows Removed by Filter`가 결과보다 훨씬 크고 `Buffers`가 많으면 인덱스 후보다. 컬럼 순서는 같다 비교 다음 범위 비교로 정하고, 만든 뒤에는 `Buffers`가 실제로 줄었는지 확인한다. 다음 글 [느린 쿼리 고치기](/posts/sql-query-tuning)에서는 이 테이블 그대로 느린 쿼리를 찾아내는 방법과 조인, 페이지네이션, N+1을 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 인덱스가 무엇이고, 왜 조회가 빨라지나요?
+
+컬럼 값을 정렬해서 행의 위치와 함께 따로 저장해 둔 자료구조다. 인덱스가 없으면 조건에 맞는 행을 찾으려고 테이블 전체를 읽어야 하지만, 정렬된 B-tree에서는 루트부터 몇 페이지만 내려가면 위치를 안다. 예제의 주문 100만 건에서는 9,346페이지를 읽던 쿼리가 인덱스 3페이지와 힙 8페이지, 합쳐 11페이지로 줄었다. 대가로 저장 공간과 쓰기 비용이 든다.
+
+### 왜 해시나 이진 트리가 아니라 B-tree를 쓰나요?
+
+B-tree는 페이지 하나에 키를 수백 개 담아서 나무가 아주 낮다. 100만 행이 3층, 수억 행도 4~5층이라 디스크 페이지를 몇 번만 읽으면 된다. 이진 트리는 노드마다 둘로만 갈라져 층이 깊다. 해시는 같다 비교만 되지만 B-tree는 정렬돼 있어서 범위 조건, `ORDER BY`, 앞부분 일치 `LIKE`까지 처리한다.
+
+### 복합 인덱스의 컬럼 순서는 어떻게 정하나요?
+
+같다로 비교하는 컬럼을 앞에, 범위로 비교하거나 정렬하는 컬럼을 뒤에 둔다. 복합 인덱스는 앞 컬럼 순으로 정렬되고 같은 값 안에서 다음 컬럼 순으로 정렬돼서, 이 순서여야 찾는 행이 한 덩어리로 붙는다. 예제에서 `(status, created_at)`은 8페이지, `(created_at, status)`는 418페이지를 읽었다. 그리고 왼쪽 컬럼부터만 쓸 수 있어서 `(status, created_at)`은 `created_at`만 있는 조건에는 쓰이지 않는다.
+
+### 커버링 인덱스는 무엇이고, 언제 쓰나요?
+
+쿼리에 필요한 컬럼이 전부 인덱스 안에 있어서 테이블(힙)을 읽지 않아도 되는 인덱스다. PostgreSQL에서는 `INCLUDE`로 검색 키가 아닌 컬럼을 잎에 담고, 실행 계획에 Index Only Scan으로 나온다. 다만 가시성 맵이 켜진 페이지만 힙을 건너뛰니 VACUUM이 잘 돌아야 하고, `Heap Fetches`로 확인한다. 인덱스가 커지니 자주 돌고 느린 쿼리에만 쓴다.
+
+### 인덱스를 만들었는데 쿼리가 안 타요. 무엇을 확인하나요?
+
+먼저 `EXPLAIN ANALYZE`로 계획과 예상 행 수를 본다. 컬럼에 함수나 형 변환이 씌워졌는지(`lower(email)`, `(user_id)::numeric`), `LIKE '%..'`처럼 앞이 열려 있는지, 조건에 맞는 행이 너무 많아 Seq Scan이 더 싼 건 아닌지, OR로 인덱스 없는 컬럼이 묶였는지, 복합 인덱스의 첫 컬럼이 조건에 없는지 확인한다. 예상 행 수가 실제와 크게 다르면 통계가 낡은 것이니 `ANALYZE`를 돌린다.
+
+### 인덱스를 많이 만들면 왜 안 되나요?
+
+행을 쓸 때마다 모든 인덱스를 함께 고쳐야 해서 INSERT와 UPDATE가 느려지고 저장 공간과 WAL이 늘어난다. 예제에서는 인덱스 4개가 있는 테이블에 넣는 것이 7배 넘게 느렸다. PostgreSQL에서는 인덱스에 걸린 컬럼을 바꾸면 HOT 업데이트가 안 돼서 UPDATE가 더 비싸진다. `pg_stat_user_indexes.idx_scan`으로 안 쓰는 인덱스를 찾아 지우되, 외래 키나 복제본에서 쓰는지 먼저 확인한다.
+
+### 운영 DB에 큰 테이블의 인덱스를 추가할 때 주의할 점은요?
+
+일반 `CREATE INDEX`는 끝날 때까지 쓰기를 막으니 `CREATE INDEX CONCURRENTLY`를 쓴다. 트랜잭션 안에서는 못 돌리고, 시간이 더 걸리며, 실패하면 INVALID 인덱스가 남으니 `pg_index.indisvalid`로 확인해서 지우고 다시 만든다. 오래 열린 트랜잭션을 기다리는 동안 다른 잠금이 줄 서지 않게 `lock_timeout`을 걸어 둔다. MySQL은 InnoDB 온라인 DDL로 보조 인덱스를 추가한다.
+
+### MySQL InnoDB에서 기본 키로 무작위 UUID를 쓰면 왜 안 좋나요?
+
+InnoDB는 테이블이 기본 키 순으로 정렬된 B-tree(클러스터드 인덱스)라서, 무작위 키는 새 행을 트리 여기저기에 끼워 넣게 만든다. 페이지 분할이 잦아지고 페이지가 반쯤 빈 채 흩어지며, 메모리에 올려야 할 페이지가 늘어난다. 보조 인덱스마다 기본 키 값이 들어가니 키가 길면 모든 인덱스가 커진다. 자동 증가 `BIGINT`나 시간 순으로 커지는 UUIDv7을 `BINARY(16)`으로 쓴다.

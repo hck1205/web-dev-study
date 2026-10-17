@@ -1,0 +1,578 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("client-data-cache");
+
+화면 위쪽 헤더는 사용자 이름을, 사이드바는 프로필 사진을, 설정 메뉴는 권한을 보여 준다. 세 컴포넌트가 각자 `useEffect` 안에서 `/api/me`를 부른다. Network 탭을 열면 같은 요청이 세 줄 찍혀 있다. 글 목록에서 글을 하나 열었다가 뒤로 가면, 방금 보던 목록인데도 스피너가 돌고 처음부터 다시 받는다.
+
+두 장면 모두 "이미 받은 데이터를 기억해 두지 않아서" 생긴다. 컴포넌트가 데이터를 자기 `useState`에 들고 있으면 컴포넌트가 사라질 때 데이터도 사라지고, 옆 컴포넌트와 나눠 쓸 방법도 없다. 이 글은 화면이 쓰는 데이터를 메모리에 캐시하는 방법, 그중에서도 TanStack Query가 그 캐시를 어떻게 다루는지를 따라간다. 브라우저의 HTTP 캐시와 Service Worker 이야기는 [프런트엔드에서 쓰는 캐시](/posts/frontend-browser-cache)에서 했다. 여기서는 그 위, 자바스크립트 메모리 안의 캐시다.
+
+## 서버에서 빌려 온 상태
+
+화면이 다루는 상태는 출처가 두 가지다. 모달이 열렸는지, 입력창에 뭘 쳤는지, 다크 모드인지 같은 값은 브라우저가 원본이다. 내가 바꾸지 않으면 바뀌지 않는다. 이걸 클라이언트 상태라고 부른다.
+
+내 프로필, 글 목록, 장바구니는 다르다. 원본은 서버 DB에 있고, 화면은 어느 순간에 받아 온 사본을 들고 있을 뿐이다. 다른 탭이나 다른 사용자가 원본을 바꿀 수 있으니 사본은 시간이 지나면 낡는다. 이걸 서버 상태라고 부른다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="서버 상태는 원본이 밖에 있는 사본이다. 낡으면 다시 받아 와야 한다."
+  nodes={[
+    { id: "ui", label: "컴포넌트", sub: "화면", x: 200, y: 45 },
+    { id: "cache", label: "쿼리 캐시", sub: "서버 상태 사본", x: 95, y: 150 },
+    { id: "atom", label: "useState·atom", sub: "클라이언트 상태", x: 305, y: 150 },
+    { id: "db", label: "서버 DB", sub: "원본", x: 95, y: 250 },
+  ]}
+  edges={[
+    { from: "db", to: "cache", label: "응답" },
+    { from: "cache", to: "ui", label: "구독" },
+    { from: "atom", to: "ui", label: "구독" },
+    { from: "cache", to: "db", label: "낡으면 다시", dashed: true },
+  ]}
+/>
+
+둘을 같은 도구로 다루면 서버 상태 쪽에서 일이 늘어난다. 로딩과 에러를 따로 들고 있어야 하고, 같은 데이터를 쓰는 컴포넌트끼리 나눠 가져야 하고, 언제 다시 받을지 정해야 하고, 늦게 온 응답이 최신 응답을 덮지 않게 막아야 한다. Redux나 전역 store에 API 응답을 넣고 이 일을 손으로 하던 코드가 그래서 길었다. TanStack Query와 SWR은 서버 상태만 맡는 캐시다. 클라이언트 상태는 그대로 `useState`나 Jotai 같은 도구에 둔다. 이 블로그도 테마나 검색창 열림 같은 값은 Jotai atom에 둔다.
+
+## 쿼리 키 하나가 캐시 한 칸이다
+
+TanStack Query의 캐시는 커다란 Map이라고 생각하면 된다. 키는 `queryKey`, 값은 그 키로 받은 데이터와 상태(언제 받았는지, 지금 받고 있는지, 에러가 났는지)다.
+
+```ts
+useQuery({ queryKey: ["me"], queryFn: getMe });
+useQuery({ queryKey: ["posts", { tag: "react", page: 2 }], queryFn: () => getPosts({ tag: "react", page: 2 }) });
+```
+
+키는 배열이고, 라이브러리가 이 배열을 결정적으로 직렬화해 해시를 만든다. 객체 안의 속성 순서는 상관없어서 `{ tag, page }`와 `{ page, tag }`는 같은 칸이다. 배열의 순서는 상관있다. 키는 `queryFn`이 쓰는 모든 변수를 담아야 한다. 이 규칙이 뒤에서 볼 가장 흔한 실수와 연결된다.
+
+같은 키를 쓰는 컴포넌트가 여럿이면 요청은 한 번만 나간다. 처음 장면의 세 컴포넌트가 모두 `["me"]`를 쓰면 어떻게 되는지 보자.
+
+<SequenceDiagram
+  caption="같은 키의 요청이 진행 중이면 새로 보내지 않고 기다린다"
+  actors={[
+    { id: "header", label: "Header" },
+    { id: "side", label: "Sidebar" },
+    { id: "cache", label: "쿼리 캐시" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    {
+      from: "header",
+      to: "cache",
+      label: "['me'] 구독",
+      title: "Header가 먼저 마운트된다",
+      detail: "캐시에 ['me'] 칸을 만들고 구독자로 등록한다. 칸은 비어 있다.",
+    },
+    {
+      from: "cache",
+      to: "api",
+      label: "GET /me",
+      title: "데이터가 없으니 요청을 보낸다",
+      detail: "칸의 상태가 fetching이 되고, 진행 중인 Promise를 칸에 붙여 둔다.",
+      payload: "status: 'pending'\nfetchStatus: 'fetching'",
+    },
+    {
+      from: "side",
+      to: "cache",
+      label: "['me'] 구독",
+      title: "Sidebar가 마운트된다",
+      detail: "같은 칸이 이미 받는 중이다. 새 요청을 보내지 않고 구독자로만 붙는다. 설정 메뉴도 마찬가지다.",
+    },
+    {
+      from: "api",
+      to: "cache",
+      label: "200",
+      title: "응답이 한 번 온다",
+      detail: "데이터와 받은 시각(dataUpdatedAt)을 칸에 적는다.",
+      payload: "{ \"id\": 7, \"name\": \"matt\" }",
+    },
+    {
+      from: "cache",
+      to: "header",
+      label: "data",
+      title: "구독자에게 알린다",
+      detail: "Header와 Sidebar가 같은 객체를 받아 함께 다시 렌더링된다. Network 탭에는 한 줄만 남는다.",
+    },
+  ]}
+/>
+
+요청 중복을 막아 주는 이 동작은 브라우저 HTTP 캐시가 해 주지 못한다. 거의 동시에 출발한 두 요청은 첫 응답이 캐시에 들어가기 전이라 둘 다 서버까지 간다. 이 부분은 [브라우저의 fetch](/posts/browser-fetch)에서도 짧게 다뤘다.
+
+## 신선한 시간과 남겨 두는 시간
+
+캐시 칸에는 시간이 두 개 붙는다. 이름이 비슷해서 가장 많이 헷갈리는 부분이다.
+
+`staleTime`은 받은 데이터를 신선하다고 믿는 시간이다. 이 시간 안에는 같은 키를 다시 쓰는 컴포넌트가 마운트돼도 요청하지 않고 캐시를 그대로 준다. 시간이 지나면 데이터는 상한(stale) 상태가 된다. 상했다고 지워지는 게 아니라, 다음 기회에 뒤에서 다시 받아 오라는 표시가 붙을 뿐이다. 기본값은 0이다. 받는 순간부터 상한 것으로 본다.
+
+`gcTime`은 아무도 구독하지 않는 칸을 메모리에 남겨 두는 시간이다. 마지막 구독자가 언마운트되면 타이머가 돌기 시작하고, 그 안에 누가 다시 구독하면 타이머가 취소된다. 시간이 다 가면 칸이 지워진다. 브라우저에서 기본값은 5분이다. v4까지는 이 옵션의 이름이 `cacheTime`이었는데, "캐시 시간"이라는 이름 때문에 신선한 시간으로 오해하는 일이 많아 v5에서 `gcTime`으로 바뀌었다.
+
+정리하면 `staleTime`은 "언제 다시 물어볼까"이고 `gcTime`은 "안 쓰면 언제 버릴까"다. 둘은 서로 관계가 없다. `staleTime`이 `gcTime`보다 길어도 된다. 아래 그림은 이 블로그의 기본값인 `staleTime` 30초, `gcTime` 5분으로 `["me"]` 칸 하나가 사는 모습이다.
+
+<AlgoTrace
+  caption="['me'] 칸 하나의 일생 (staleTime 30초, gcTime 5분)"
+  memoryLabel="쿼리 캐시"
+  cells={["0s 마운트", "0.3s 응답", "10s 마운트", "30.3s", "45s 포커스", "60s 떠남", "2m 돌아옴", "2m30s 떠남", "7m30s"]}
+  steps={[
+    { pointer: 0, memory: ["me · 받는 중"], caption: "Header가 마운트된다. 칸이 비어 있으니 요청을 보낸다. 화면은 로딩 상태다." },
+    { pointer: 1, memory: ["me · fresh"], caption: "응답이 왔다. 30.3초까지는 신선하다." },
+    { pointer: 2, memory: ["me · fresh · 구독 2"], caption: "Sidebar가 마운트된다. 신선하니 요청 없이 캐시를 바로 준다." },
+    { pointer: 3, memory: ["me · stale · 구독 2"], caption: "30초가 지나 상했다. 상한다고 요청이 나가지는 않는다. 표시만 바뀐다." },
+    { pointer: 4, memory: ["me · stale · 갱신 중"], caption: "다른 탭에 갔다가 돌아왔다. 상했으니 뒤에서 다시 받는다. 화면은 옛 데이터를 그대로 보여 준다." },
+    { pointer: 5, memory: ["me · 구독 0 · 5분"], caption: "45.3초에 새 데이터가 왔고, 60초에 다른 페이지로 가서 구독자가 0이 됐다. gcTime 타이머가 돈다." },
+    { pointer: 6, found: [6], memory: ["me · stale · 갱신 중"], caption: "5분 안에 돌아왔다. 캐시가 남아 있어 스피너 없이 바로 그리고, 상했으니 뒤에서 다시 받는다." },
+    { pointer: 7, memory: ["me · 구독 0 · 5분"], caption: "다시 떠났다. 타이머가 처음부터 다시 돈다." },
+    { pointer: 8, memory: [], caption: "5분 동안 아무도 구독하지 않았다. 칸을 지운다. 다음 마운트는 처음처럼 로딩부터 시작한다." },
+  ]}
+/>
+
+처음 장면의 "뒤로 가면 스피너가 다시 돈다"는 2분 지점의 반대 상황이다. 데이터를 컴포넌트의 `useState`에 두면 떠나는 순간 사라지니 돌아올 때마다 0초 지점부터 다시 시작한다. 쿼리 캐시에 두면 `gcTime` 안에 돌아온 사용자는 바로 화면을 보고, 새 데이터는 뒤에서 조용히 바뀐다.
+
+상했는지 판단하는 규칙은 단순하다. 데이터가 없으면 상한 것이고, 있으면 `받은 시각 + staleTime`이 지났는지를 본다. `staleTime: Infinity`면 지날 일이 없으니 직접 무효화하기 전까지 다시 받지 않는다. v5 후반 버전에는 무효화해도 다시 받지 않는 `"static"`도 있다.
+
+이 규칙과 앞의 중복 제거를 합쳐서 직접 세어 보자. 호출 목록 `[시각, 키]`가 시각 순서로 들어오고, 요청 하나는 `duration`ms 걸린다. 같은 키가 받는 중이면 합류하고, 받은 데이터가 아직 신선하면 캐시를 쓴다. 실제로 나간 요청 수를 돌려준다.
+
+<CodePlayground
+  caption="같은 요청 몇 번 나갈까"
+  functionName="countFetches"
+  initialCode={`function countFetches(calls, staleTime, duration) {
+  // calls: [[시각(ms), 키], ...] 시각 순서
+  // 받는 중이면 합류, 신선하면 캐시. 나머지는 새 요청
+  let count = 0;
+  return count;
+}`}
+  solution={`function countFetches(calls, staleTime, duration) {
+  const doneAt = new Map(); // 키 -> 응답이 도착하는(한) 시각
+  let count = 0;
+  for (const [t, key] of calls) {
+    const end = doneAt.get(key);
+    if (end !== undefined && t < end) continue; // 받는 중: 같은 Promise에 합류
+    if (end !== undefined && t < end + staleTime) continue; // 신선: 캐시에서
+    doneAt.set(key, t + duration);
+    count += 1;
+  }
+  return count;
+}`}
+  tests={[
+    { label: "세 컴포넌트가 거의 동시에", args: [[[0, "me"], [5, "me"], [8, "me"]], 0, 300], expected: 1 },
+    { label: "staleTime 0, 응답 뒤 다시", args: [[[0, "me"], [400, "me"]], 0, 300], expected: 2 },
+    { label: "staleTime 30초 안", args: [[[0, "me"], [400, "me"], [20000, "me"]], 30000, 300], expected: 1 },
+    { label: "키가 다르면 따로", args: [[[0, "user:1"], [0, "user:2"], [100, "user:1"]], 0, 300], expected: 2 },
+    { label: "신선 경계 직전", args: [[[0, "me"], [1299, "me"]], 1000, 300], expected: 1 },
+    { label: "신선 경계", args: [[[0, "me"], [1300, "me"]], 1000, 300], expected: 2 },
+    { label: "상한 뒤 다시 합류", args: [[[0, "me"], [100, "me"], [31000, "me"], [31100, "me"]], 30000, 300], expected: 2 },
+    { label: "호출 없음", args: [[], 30000, 300], expected: 0 },
+  ]}
+/>
+
+두 번째 테스트가 기본값의 모습이다. `staleTime`이 0이면 중복 제거는 진행 중인 요청끼리만 일어나고, 응답이 온 뒤에 마운트된 컴포넌트는 다시 요청한다. 경계 테스트에서는 응답이 300ms에 왔으니 신선한 기간이 1300ms 직전까지다. 1300ms에는 이미 상했다.
+
+## 언제 다시 받아 오나
+
+상한 데이터라고 아무 때나 다시 받지는 않는다. 다시 받을 계기가 있어야 한다. TanStack Query의 기본 계기는 이렇다.
+
+- `refetchOnMount`: 이 키를 쓰는 컴포넌트가 새로 마운트될 때. 기본 켜짐.
+- `refetchOnWindowFocus`: 다른 탭이나 앱에 갔다가 돌아와 창이 다시 보일 때. 기본 켜짐.
+- `refetchOnReconnect`: 네트워크가 끊겼다 다시 연결될 때. 기본 켜짐.
+- `refetchInterval`: 정해진 간격마다. 기본 꺼짐. 탭이 뒤에 있으면 멈추고, `refetchIntervalInBackground`로 바꿀 수 있다.
+
+앞의 세 계기는 모두 데이터가 상했을 때만 움직인다. 그래서 `staleTime`을 늘리면 이 요청들이 함께 줄어든다. 개발 중에 다른 창에 갔다 올 때마다 요청이 찍히는 걸 보고 놀라는 경우가 많은데, 기본값 `staleTime: 0`과 창 포커스 계기가 만난 결과다. 고장이 아니라 설계다. 데이터 성격에 맞게 `staleTime`을 정하는 게 먼저다. 내 프로필처럼 거의 안 바뀌는 건 몇 분, 주문 상태처럼 자주 바뀌는 건 0이나 몇 초, 코드 목록처럼 배포 전까지 안 바뀌는 건 `Infinity`가 맞다.
+
+실패하면 기본 3번 재시도한다. 간격은 1초, 2초, 4초처럼 두 배씩 늘고 30초를 넘지 않는다. 그동안 화면은 로딩 상태라서, 404처럼 다시 해도 소용없는 에러까지 7초를 기다리게 된다. `retry`에 함수를 줘서 4xx는 바로 실패시키는 경우가 많다.
+
+## 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다
+
+TanStack Query의 상태 값이 두 갈래인 이유가 여기 있다. `status`는 데이터가 있는지(`pending`, `success`, `error`), `fetchStatus`는 지금 요청이 나가 있는지(`fetching`, `idle`, `paused`)다. 컴포넌트에서는 이렇게 나뉜다.
+
+```tsx
+const { data, isPending, isFetching } = useMeQuery();
+
+if (isPending) return <ProfileSkeleton />; // 데이터가 아예 없다: 첫 로딩
+return (
+  <>
+    <Profile me={data} />
+    {isFetching && <SmallSpinner />} {/* 데이터는 있고 뒤에서 갱신 중 */}
+  </>
+);
+```
+
+스켈레톤은 `isPending`일 때만, 즉 처음 한 번만 보인다. 그 뒤의 갱신은 화면을 갈아엎지 않고 구석에 작은 표시만 하거나 아무것도 안 한다. 데이터가 오면 바뀐 부분만 다시 그린다. TanStack Query는 새 응답을 옛 데이터와 비교해 바뀌지 않은 부분의 객체 참조를 그대로 유지한다(structural sharing). 그래서 응답이 매번 새 객체로 와도, 아무것도 안 바뀌었으면 `data` 참조가 그대로라 다시 렌더링하지 않는다. 일부만 바뀌었다면 바뀌지 않은 하위 객체를 props로 받는 `memo` 컴포넌트는 건너뛴다. 왜 참조가 같아야 렌더링이 줄어드는지는 [React 리렌더링](/posts/react-rerender)에서 다뤘다.
+
+HTTP의 `Cache-Control: stale-while-revalidate`와 같은 생각이다. 사용자는 기다리지 않고, 데이터는 결국 최신이 된다. 대가는 잠깐 낡은 값이 보인다는 것이다. 잔액이나 재고처럼 낡은 값을 보여 주면 안 되는 화면에서는 `staleTime`을 0으로 두고, 갱신 중에는 숫자를 흐리게 하거나 결제 버튼을 잠그는 식으로 사용자에게 알린다.
+
+## 바꾼 뒤에는 캐시도 바꾼다
+
+데이터를 바꾸는 요청(뮤테이션)을 보내면 캐시 속 사본은 그 순간 틀린 값이 된다. 맞추는 방법은 두 가지다.
+
+```ts
+const queryClient = useQueryClient();
+
+const { mutate } = useMutation({
+  mutationFn: updateProfile,
+  onSuccess: (updated) => {
+    // 1) 응답에 바뀐 값이 다 있으면 캐시에 바로 쓴다. 요청이 더 나가지 않는다
+    queryClient.setQueryData(["me"], updated);
+    // 2) 영향이 넓으면 상했다고 표시하고 다시 받게 한다
+    queryClient.invalidateQueries({ queryKey: ["posts"] });
+  },
+});
+```
+
+`setQueryData`는 서버 응답에 바뀐 결과가 그대로 들어 있을 때 쓴다. 요청이 하나 줄고 화면이 즉시 맞는다. 다만 서버가 계산하는 값(정렬 순서, 집계, 다른 목록에 미치는 영향)까지 클라이언트가 흉내 내야 하면 틀리기 쉽다. 업데이터 함수로 쓸 때는 기존 객체를 고치지 말고 새 객체를 돌려줘야 한다. 같은 객체를 고치면 라이브러리가 바뀐 줄 모른다.
+
+`invalidateQueries`는 키가 앞에서부터 일치하는 모든 칸을 상했다고 표시하고, 지금 화면에 구독자가 있는 칸은 바로 다시 받는다. `["posts"]`를 무효화하면 `["posts", { tag: "react", page: 2 }]`도 함께 걸린다. 구독자가 없는 칸은 표시만 해 두었다가 다음에 쓰일 때 받는다. 서버가 계산한 결과를 그대로 받으니 정확하고, 대신 요청이 늘어난다. 확실하지 않으면 무효화부터 하고, 요청이 아까운 자리만 `setQueryData`로 바꾼다.
+
+## 누르자마자 바뀌는 화면
+
+좋아요 버튼을 눌렀는데 서버 응답을 기다렸다가 하트를 채우면 모바일에서 0.5초쯤 멈춘 것처럼 보인다. 낙관적 업데이트는 성공할 거라 믿고 캐시부터 바꾸고, 실패하면 되돌린다.
+
+<SequenceDiagram
+  caption="낙관적 업데이트: 먼저 바꾸고, 실패하면 되돌리고, 끝나면 맞춘다"
+  actors={[
+    { id: "ui", label: "화면" },
+    { id: "cache", label: "쿼리 캐시" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    {
+      from: "ui",
+      to: "cache",
+      label: "onMutate",
+      title: "누르자마자 onMutate가 돈다",
+      detail: "먼저 이 키로 진행 중인 요청을 취소한다. 늦게 온 옛 응답이 방금 바꾼 값을 덮어쓰지 않게 하려는 것이다. 그리고 지금 값을 스냅숏으로 떠 둔다.",
+      payload: "await queryClient.cancelQueries({ queryKey })\nconst previous = queryClient.getQueryData(queryKey)",
+    },
+    {
+      from: "cache",
+      to: "ui",
+      label: "liked: true",
+      title: "캐시를 바꾸면 화면이 바로 바뀐다",
+      detail: "setQueryData로 하트를 채우고 숫자를 1 올린다. 요청은 아직 출발도 안 했다.",
+      payload: "{ \"liked\": true, \"likes\": 13 }",
+    },
+    {
+      from: "ui",
+      to: "api",
+      label: "POST /like",
+      title: "그다음 실제 요청을 보낸다",
+      detail: "mutationFn이 서버에 요청한다.",
+    },
+    {
+      from: "api",
+      to: "ui",
+      label: "500",
+      title: "서버가 실패했다",
+      detail: "onError에 onMutate가 돌려준 스냅숏이 넘어온다.",
+    },
+    {
+      from: "ui",
+      to: "cache",
+      label: "롤백",
+      title: "스냅숏으로 되돌린다",
+      detail: "하트가 다시 비고 숫자가 12로 돌아간다. 사용자에게는 실패했다고 알린다.",
+      payload: "{ \"liked\": false, \"likes\": 12 }",
+    },
+    {
+      from: "cache",
+      to: "api",
+      label: "다시 받기",
+      title: "성공이든 실패든 onSettled에서 맞춘다",
+      detail: "무효화해서 서버의 진짜 값을 다시 받는다. 그사이 다른 사람이 누른 좋아요까지 반영된다.",
+    },
+  ]}
+/>
+
+```ts
+useMutation({
+  mutationFn: (postId: string) => likePost(postId),
+  onMutate: async (postId) => {
+    const queryKey = ["post", postId];
+    await queryClient.cancelQueries({ queryKey });
+    const previous = queryClient.getQueryData<Post>(queryKey);
+    queryClient.setQueryData<Post>(queryKey, (old) => old && { ...old, liked: true, likes: old.likes + 1 });
+    return { previous }; // onError로 넘어간다
+  },
+  onError: (_error, postId, snapshot) => {
+    if (snapshot?.previous) queryClient.setQueryData(["post", postId], snapshot.previous);
+  },
+  onSettled: (_data, _error, postId) => queryClient.invalidateQueries({ queryKey: ["post", postId] }),
+});
+```
+
+스냅숏으로 되돌리는 방식은 같은 칸을 짧은 시간에 여러 번 바꾸면 꼬일 수 있다. 첫 번째 요청이 실패해서 되돌릴 때 두 번째 낙관적 변경까지 함께 지워 버리는 식이다. 그래서 마지막에 무효화로 서버 값에 다시 맞추는 단계가 빠지면 안 된다. 캐시를 건드리지 않는 더 단순한 방법도 있다. `useMutation`이 돌려주는 `variables`와 `isPending`으로 진행 중인 변경을 화면에서만 덧그리는 것이다. 한 화면에서만 보이는 변경이라면 이쪽이 되돌릴 것도 없어서 안전하다. 여러 화면에 동시에 보여야 하면 캐시를 바꾼다.
+
+## 들어가기 전에 미리 받기
+
+목록에서 글 제목에 포인터를 올리면 글 상세를 미리 받아 둘 수 있다. 클릭하는 순간에는 이미 캐시에 있어서 바로 그린다.
+
+```tsx
+const queryClient = useQueryClient();
+
+<Link
+  href={`/posts/${slug}`}
+  onMouseEnter={() =>
+    queryClient.prefetchQuery({ queryKey: ["post", slug], queryFn: () => getPost(slug), staleTime: 60_000 })
+  }
+>
+  {title}
+</Link>;
+```
+
+`prefetchQuery`는 칸이 이미 신선하면 아무것도 하지 않고, 실패해도 에러를 던지지 않는다. 미리 받기는 해도 그만 안 해도 그만인 일이기 때문이다. 받아 둔 칸은 구독자가 없으니 `gcTime`이 바로 돌기 시작한다. 모바일에는 마우스 올리기가 없으니 `onTouchStart`나 화면에 보일 때(`IntersectionObserver`) 받는 식으로 바꾼다. 라우터가 지원하면 경로에 들어가기 전 로더에서 받기도 한다. 남발하면 쓰지도 않을 요청이 쌓이니, 누를 가능성이 높은 곳에만 단다.
+
+## 처음 값을 미리 넣어 두기
+
+쿼리가 처음 받기 전에 보여 줄 값을 넣는 옵션이 둘 있는데, 동작이 다르다.
+
+`initialData`는 진짜 데이터로 캐시에 들어간다. 목록 응답에 글 제목과 요약이 이미 있을 때 상세 쿼리의 처음 값으로 넣는 식이다. 캐시에 저장되고 다른 컴포넌트도 그 값을 본다. `staleTime` 안이면 신선하다고 보고 다시 받지 않는데, 그 값이 언제 받은 것인지 모르면 너무 오래 믿을 수 있다. 그래서 `initialDataUpdatedAt`에 원래 받은 시각을 같이 준다.
+
+`placeholderData`는 캐시에 들어가지 않는 임시 값이다. 화면은 이 값을 그리지만 쿼리는 데이터가 없는 것으로 보고 바로 받으러 간다. `isPlaceholderData`가 `true`라서 흐리게 그리거나 버튼을 잠글 수 있다. 페이지를 넘길 때 새 페이지가 올 때까지 이전 페이지를 계속 보여 주는 용도로 많이 쓴다. v4의 `keepPreviousData: true` 옵션이 v5에서 이 방식으로 바뀌었다.
+
+```ts
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+
+useQuery({
+  queryKey: ["posts", { page }],
+  queryFn: () => getPosts({ page }),
+  placeholderData: keepPreviousData, // 2페이지를 받는 동안 1페이지를 그대로 보여 준다
+});
+```
+
+진짜 데이터면 `initialData`, 화면을 비워 두지 않으려는 임시 값이면 `placeholderData`다.
+
+## 페이지가 여러 장인 목록
+
+페이지 번호로 넘기는 목록은 위 코드처럼 페이지마다 칸이 따로 생긴다. `["posts", { page: 1 }]`, `["posts", { page: 2 }]`가 각각의 칸이고 각자 신선해지고 상한다.
+
+아래로 스크롤하면 이어 붙는 무한 목록은 다르다. 칸 하나에 페이지 배열이 들어간다.
+
+```ts
+useInfiniteQuery({
+  queryKey: ["posts", { tag }],
+  queryFn: ({ pageParam }) => getPosts({ tag, cursor: pageParam }),
+  initialPageParam: null as string | null,
+  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined, // undefined면 다음 페이지 없음
+  maxPages: 10, // 캐시에 들고 있을 페이지 수 상한
+});
+// data: { pages: [page0, page1, page2], pageParams: [null, "c_20", "c_40"] }
+```
+
+칸이 하나라서 다시 받을 때도 통째로 다룬다. 상한 무한 목록을 다시 받으면 첫 페이지부터 차례로 받고, 각 페이지의 다음 커서를 방금 받은 응답에서 다시 계산한다. 그사이 맨 앞에 글이 하나 추가됐다면 커서가 밀린 만큼 맞춰지니 중복이나 누락이 없다. 대신 10페이지까지 내린 사용자의 목록이 상하면 요청 10개가 줄줄이 나간다. 그래서 무한 목록은 `staleTime`을 넉넉히 주거나 `maxPages`로 들고 있는 양을 제한한다. 커서 방식 페이지네이션 자체는 [REST API 설계](/posts/rest-api-design)에서 다뤘다.
+
+## 서버가 받아 둔 데이터를 넘겨받기
+
+서버에서 렌더링하는 페이지라면 서버가 이미 데이터를 받아 HTML을 만들었다. 클라이언트가 그 데이터를 또 받으면 낭비다. 서버의 쿼리 캐시를 직렬화해 HTML에 실어 보내고, 클라이언트 캐시에 그대로 채워 넣는 걸 하이드레이션이라고 한다.
+
+```tsx
+// 서버 컴포넌트
+export default async function PostsPage() {
+  const queryClient = new QueryClient(); // 요청마다 새로 만든다
+  await queryClient.prefetchQuery({ queryKey: ["posts"], queryFn: getPosts });
+  return (
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <PostList /> {/* 안에서 useQuery(["posts"])를 부르면 요청 없이 바로 데이터가 있다 */}
+    </HydrationBoundary>
+  );
+}
+```
+
+두 가지를 지킨다. 서버의 `QueryClient`는 요청마다 새로 만든다. 모듈 전역에 하나 두면 서버 프로세스가 사용자 여러 명의 요청을 처리하는 동안 한 사용자의 데이터가 다른 사용자의 HTML에 섞여 나갈 수 있다. 그리고 클라이언트의 `staleTime`을 0보다 크게 준다. 0이면 하이드레이션한 데이터가 받자마자 상한 것이 되어, 마운트하자마자 같은 요청을 다시 보낸다. 렌더링 방식별 차이는 [렌더링 전략](/posts/rendering-strategies)에서 다뤘다.
+
+## SWR로 쓰면
+
+SWR도 같은 문제를 푼다. 이름부터 stale-while-revalidate다. 차이는 기본 철학이다. SWR에는 `staleTime`이 없다. 데이터는 언제나 상한 것으로 보고, 마운트나 포커스 같은 계기가 오면 다시 받는다. 대신 너무 잦은 요청은 시간 창으로 거른다.
+
+```ts
+const { data, error, isLoading, isValidating, mutate } = useSWR("/api/me", fetcher, {
+  dedupingInterval: 2000, // 기본값. 2초 안에 같은 키로 부르면 요청 하나로 합친다
+  revalidateOnFocus: true, // 기본값. 창이 다시 보이면 다시 받는다(5초에 한 번까지)
+  revalidateOnReconnect: true,
+  refreshInterval: 0, // 0이면 주기적으로 받지 않는다
+});
+```
+
+TanStack Query의 이름과 짝을 지으면 이렇다. 중복 제거는 진행 중인 요청 대신 `dedupingInterval`이라는 시간 창으로 한다. `isLoading`이 첫 로딩, `isValidating`이 뒤에서 갱신 중이다. 무효화와 직접 쓰기는 `mutate` 하나가 맡는다. 인자 없이 부르면 다시 받고, 값을 주면 캐시에 쓴다. 낙관적 업데이트는 옵션으로 붙는다.
+
+```ts
+await mutate(likePost(postId), {
+  optimisticData: (current) => ({ ...current, liked: true, likes: current.likes + 1 }),
+  rollbackOnError: true, // 실패하면 이전 값으로 되돌린다
+  populateCache: true, // 응답을 캐시에 쓴다
+  revalidate: false,
+});
+```
+
+SWR은 가볍고 API가 작다. 키가 보통 URL 문자열이라 처음 쓰기 쉽다. TanStack Query는 `gcTime`, 쿼리 단위 재시도·취소, 뮤테이션 상태, 무한 목록, 개발자 도구가 더 갖춰져 있다. 읽기 위주의 작은 화면이면 SWR로 충분하고, 뮤테이션이 많고 캐시 수명을 세밀하게 다뤄야 하면 TanStack Query 쪽이 편하다. SWR의 기본 캐시는 전역 Map이라 TanStack Query처럼 안 쓰는 항목을 시간이 지나면 지우는 동작이 기본으로 들어 있지 않다는 것도 기억해 둔다.
+
+## 이 블로그에서 쿼리를 두는 자리
+
+이 블로그는 TanStack Query를 쓰고, 화면 코드가 `useQuery`나 axios를 직접 부르지 않게 층을 나눠 둔다. 요청 함수는 `api/{이름}`, 그 함수를 감싼 쿼리 훅은 `query/{이름}`에 둔다. 아직 외부 API를 쓰는 화면이 없어서 실제 파일은 없지만, `/me`를 붙인다면 규칙대로 이렇게 된다.
+
+```ts
+// common/api/me/index.ts: axios 요청만 한다
+import { httpClient } from "@/common/api/http-client";
+import type { Me } from "./types";
+import { ME_ENDPOINT } from "./utils";
+
+export const getMe = (signal?: AbortSignal) => httpClient.get<Me>(ME_ENDPOINT, { signal }).then((res) => res.data);
+```
+
+```ts
+// common/query/me/index.ts: 쿼리 키와 옵션을 한곳에서 정한다
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { getMe } from "@/common/api/me";
+import type { UseMeQueryOptions } from "./types";
+import { meQueryKey } from "./utils"; // export const meQueryKey = ["me"] as const;
+
+export function useMeQuery(options?: UseMeQueryOptions) {
+  return useQuery({ queryKey: meQueryKey, queryFn: ({ signal }) => getMe(signal), ...options });
+}
+```
+
+처음 장면의 세 컴포넌트는 모두 `useMeQuery()`만 부른다. 키가 한곳에 있으니 오타로 칸이 갈라질 일이 없고, 무효화할 때도 같은 `meQueryKey`를 가져다 쓴다. `queryFn`이 받는 `signal`을 axios에 넘겨 두면, 결과를 기다리던 컴포넌트가 모두 사라졌을 때 라이브러리가 요청을 취소한다. 앱 전체의 기본값은 `QueryClient`를 만들 때 정하는데, 이 블로그는 `staleTime`을 30초로 두었다.
+
+## 캐시가 틀린 값을 보여 주는 경우
+
+캐시는 빨라지는 만큼 틀린 값을 보여 줄 기회도 생긴다. 실무에서 자주 걸리는 경우는 이렇다.
+
+키에 변수가 빠진 경우가 가장 흔하다.
+
+```ts
+// 잘못: filter가 바뀌어도 키가 같아서 다시 받지 않는다
+useQuery({ queryKey: ["todos"], queryFn: () => getTodos(filter) });
+// 맞음: queryFn이 쓰는 값은 모두 키에 넣는다
+useQuery({ queryKey: ["todos", filter], queryFn: () => getTodos(filter) });
+```
+
+앞의 코드에서는 필터를 "완료"로 바꿔도 "전체"의 데이터가 그대로 보인다. 더 나쁜 건 다른 화면에서 같은 `["todos"]`를 다른 필터로 쓰면 두 화면이 서로의 데이터를 덮어쓴다는 것이다. `@tanstack/eslint-plugin-query`의 `exhaustive-deps` 규칙이 이걸 잡아 준다. 앞에서 본 것처럼 키를 `query/{이름}/utils.ts`에 함수로 모아 두면 사람이 실수할 자리도 줄어든다.
+
+무효화를 너무 넓게 거는 경우도 있다. `invalidateQueries()`를 인자 없이 부르면 캐시 전체가 상하고, 화면에 보이는 쿼리가 한꺼번에 다시 받는다. 글 하나를 고쳤는데 사용자 정보, 알림, 설정까지 다시 받는 식이다. 키를 `["posts", "list", ...]`, `["posts", "detail", id]`처럼 계층으로 짜 두면 무효화 범위를 정확히 고를 수 있다. 딱 그 칸만 원하면 `exact: true`를 준다.
+
+로그아웃 뒤에 이전 사용자의 데이터가 남는 경우는 보안 문제다. 쿼리 캐시는 메모리에 있으니 페이지를 새로 불러오지 않는 한 남는다. 로그아웃 후 다른 계정으로 로그인하면 `gcTime` 안의 `["me"]`, `["orders"]` 칸이 앞 사람의 데이터로 잠깐 그려진다. 로그아웃할 때 `queryClient.clear()`로 캐시를 통째로 비운다. 캐시를 localStorage에 저장하는 퍼시스터를 쓰고 있다면 그 저장소도 함께 지운다. 사용자마다 다른 데이터라면 키에 사용자 ID를 넣는 것도 방법이다.
+
+메모리가 계속 자라는 경우도 있다. 검색어를 칠 때마다 `["search", q]` 칸이 하나씩 생기는데 `gcTime: Infinity`로 두면 지워지지 않는다. 큰 목록을 `maxPages` 없이 무한 스크롤하는 것도 같다. 오래 켜 두는 대시보드라면 개발자 도구의 메모리 탭에서 힙이 계속 오르는지 본다. 메모리 누수를 찾는 방법은 [자바스크립트 메모리 누수](/posts/js-memory-leak)에서 다뤘다.
+
+마지막으로, 쿼리 캐시를 클라이언트 상태 저장소로 쓰지 않는다. 입력 중인 값을 `setQueryData`로 캐시에 넣어 두면, 창 포커스 한 번에 서버 응답이 그 값을 덮어쓴다. 서버가 원본인 데이터만 쿼리 캐시에 둔다.
+
+## 계산 결과를 기억하기
+
+지금까지는 요청 결과를 기억했다. 같은 생각을 무거운 계산에도 쓴다. React에서는 `useMemo`가 컴포넌트 안에서 계산 결과를, `React.memo`가 같은 props일 때 렌더링 결과를 기억한다.
+
+```tsx
+const visible = useMemo(() => posts.filter((post) => post.tags.includes(tag)), [posts, tag]);
+```
+
+`useMemo`는 의존성 배열이 이전 렌더링과 같으면 계산을 건너뛴다. 기억하는 건 직전 값 하나뿐이고, 컴포넌트가 언마운트되면 함께 사라진다. 다른 컴포넌트와 나눠 쓰지도 않는다. 그래서 요청을 줄이는 도구가 아니다. `useEffect` 안의 fetch를 `useMemo`로 감싸도 처음 장면의 세 요청은 그대로다. 언제 이 도구들이 효과가 있는지는 [React 리렌더링](/posts/react-rerender)에서 다뤘다.
+
+컴포넌트 밖에서, 여러 곳이 같은 입력으로 같은 계산을 부른다면 함수 단위로 기억한다. `Map`에 입력을 키로 결과를 넣어 두는 메모이제이션이다. 문제는 크기다. 입력이 다양하면 Map이 끝없이 자란다. 그래서 개수 상한을 두고, 넘치면 가장 오래 안 쓴 것부터 버린다. LRU(Least Recently Used) 방식이다. 자바스크립트의 `Map`은 넣은 순서를 기억하니, 쓸 때마다 지웠다 다시 넣어 맨 뒤로 보내고, 넘치면 맨 앞을 지우면 된다.
+
+```js
+function memoize(fn, { max = 100 } = {}) {
+  const cache = new Map();
+  return (key) => {
+    if (cache.has(key)) {
+      const value = cache.get(key);
+      cache.delete(key); // 지웠다가
+      cache.set(key, value); // 다시 넣어 맨 뒤(가장 최근)로 보낸다
+      return value;
+    }
+    const value = fn(key);
+    cache.set(key, value);
+    if (cache.size > max) cache.delete(cache.keys().next().value); // 맨 앞이 가장 오래 안 쓴 것
+    return value;
+  };
+}
+
+const highlight = memoize((code) => expensiveHighlight(code), { max: 50 });
+```
+
+상한이 2일 때 검색어 여섯 개가 들어오면 이렇게 움직인다. 기억 칸은 왼쪽이 가장 오래 안 쓴 것이다.
+
+<AlgoTrace
+  caption="LRU 상한 2: 맞힌 건 한 번뿐이다"
+  memoryLabel="Map (오래된 순)"
+  cells={["react", "vue", "react", "svelte", "vue", "react"]}
+  steps={[
+    { pointer: 0, memory: ["react"], caption: "처음 보는 키라 계산하고 넣는다." },
+    { pointer: 1, memory: ["react", "vue"], caption: "vue도 처음이다. 계산해서 뒤에 넣는다. 이제 꽉 찼다." },
+    { pointer: 2, found: [2], memory: ["vue", "react"], caption: "react는 있다. 계산을 건너뛰고, 최근에 썼으니 맨 뒤로 옮긴다." },
+    { pointer: 3, found: [2], memory: ["react", "svelte"], caption: "svelte를 넣으니 세 개가 됐다. 맨 앞의 vue를 버린다." },
+    { pointer: 4, found: [2], memory: ["svelte", "vue"], caption: "vue는 방금 버렸으니 다시 계산한다. 이번엔 react가 밀려난다." },
+    { pointer: 5, found: [2], memory: ["vue", "react"], caption: "react도 다시 계산한다. 여섯 번 중 한 번만 맞혔다. 상한이 너무 작으면 서로 밀어내기만 한다." },
+  ]}
+/>
+
+이 trace를 직접 만들어 보자. 상한과 키 목록을 받아 키마다 `"hit"` 또는 `"miss"`를 돌려준다.
+
+<CodePlayground
+  caption="LRU 캐시가 맞히는지 세기"
+  functionName="lruTrace"
+  initialCode={`function lruTrace(capacity, keys) {
+  // 키마다 "hit" 또는 "miss"를 순서대로 돌려준다
+  // 꽉 차면 가장 오래 안 쓴 키를 버린다
+  const result = [];
+  return result;
+}`}
+  solution={`function lruTrace(capacity, keys) {
+  const cache = new Map();
+  const result = [];
+  for (const key of keys) {
+    if (cache.has(key)) {
+      const value = cache.get(key);
+      cache.delete(key);
+      cache.set(key, value);
+      result.push("hit");
+    } else {
+      result.push("miss");
+      cache.set(key, true);
+      if (cache.size > capacity) cache.delete(cache.keys().next().value);
+    }
+  }
+  return result;
+}`}
+  tests={[
+    { label: "그림의 예", args: [2, ["react", "vue", "react", "svelte", "vue", "react"]], expected: ["miss", "miss", "hit", "miss", "miss", "miss"] },
+    { label: "상한 3", args: [3, ["a", "b", "c", "a", "d", "b", "e", "a"]], expected: ["miss", "miss", "miss", "hit", "miss", "miss", "miss", "miss"] },
+    { label: "상한 1", args: [1, ["a", "a", "b", "a"]], expected: ["miss", "hit", "miss", "miss"] },
+    { label: "빈 목록", args: [2, []], expected: [] },
+  ]}
+/>
+
+두 번째 테스트에서 `a`를 다시 쓴 덕분에 `d`가 들어올 때 `a` 대신 `b`가 밀려난다. 넣은 순서만 보는 FIFO였다면 `a`가 밀려났을 것이다. 키가 객체라면 `Map`은 참조로 비교하니 내용이 같아도 다른 키가 된다. `JSON.stringify`로 문자열 키를 만들 수 있지만 그 비용도 계산에 든다. 객체가 사라지면 결과도 함께 사라지게 하고 싶다면 `WeakMap`을 쓴다. 대신 `WeakMap`은 크기를 셀 수 없어서 LRU 상한은 걸 수 없다.
+
+## 처음 세 컴포넌트로 돌아가서
+
+세 컴포넌트가 같은 `/me`를 세 번 부르던 건, 같은 키의 칸 하나를 나눠 쓰게 하면 한 번으로 준다. 뒤로 가면 스피너가 돌던 건, 데이터를 컴포넌트가 아니라 `gcTime` 동안 남는 캐시에 두면 바로 그려진다. 그다음은 데이터마다 `staleTime`을 정하는 일이다. 얼마 동안 믿을지 정하면 언제 다시 물을지가 정해지고, 바꾼 뒤에는 무효화나 직접 쓰기로 사본을 원본에 맞춘다. 서버 상태는 언제나 빌려 온 사본이라는 것만 잊지 않으면 나머지 옵션은 그 위에 얹힌다.
+
+## 면접에서 나올 만한 질문
+
+### 서버 상태와 클라이언트 상태를 왜 나눠서 다루나요?
+
+클라이언트 상태는 브라우저가 원본이라 내가 바꾸지 않으면 그대로지만, 서버 상태는 원본이 서버에 있고 화면은 사본을 들고 있을 뿐이라 시간이 지나면 낡는다. 그래서 서버 상태에는 로딩·에러, 중복 요청 제거, 언제 다시 받을지, 바꾼 뒤 맞추기 같은 일이 따라온다. 이걸 전역 store에서 손으로 하면 코드가 길어지니, 서버 상태는 TanStack Query나 SWR 같은 캐시에 맡기고 클라이언트 상태는 `useState`나 Jotai 같은 도구에 둔다.
+
+### staleTime과 gcTime은 어떻게 다른가요?
+
+`staleTime`은 받은 데이터를 신선하다고 믿는 시간으로, 이 안에서는 마운트나 포커스가 와도 다시 받지 않는다. 기본값은 0이다. `gcTime`은 구독자가 하나도 없는 캐시를 메모리에 남겨 두는 시간으로, 기본 5분이 지나면 지운다. v4까지는 `cacheTime`이라고 불렀다. 앞은 "언제 다시 물을까", 뒤는 "안 쓰면 언제 버릴까"라서 서로 독립적이다.
+
+### 같은 쿼리를 컴포넌트 세 곳에서 쓰면 요청이 몇 번 나가나요?
+
+같은 `queryKey`라면 동시에 마운트돼도 요청은 한 번이다. 진행 중인 요청이 있으면 나중 컴포넌트는 구독자로만 붙어서 같은 결과를 받는다. 응답이 온 뒤에 마운트된 컴포넌트는 데이터가 상했는지를 보는데, `staleTime`이 0이면 다시 받고 신선하면 캐시를 쓴다. 그래서 `staleTime`을 정하는 게 요청 수를 줄이는 첫 번째 방법이다.
+
+### 뮤테이션 후에 화면을 어떻게 맞추나요?
+
+응답에 바뀐 결과가 그대로 있으면 `setQueryData`로 캐시에 직접 쓴다. 요청이 하나 줄고 즉시 맞는다. 정렬이나 집계처럼 서버가 계산하는 영향이 넓으면 `invalidateQueries`로 관련 키를 상했다고 표시해서 다시 받는다. 무효화는 키 앞부분이 일치하는 칸을 모두 잡으니 키를 계층으로 짜 두고 범위를 좁게 건다.
+
+### 낙관적 업데이트는 어떻게 구현하고, 실패하면 어떻게 하나요?
+
+`onMutate`에서 진행 중인 같은 키의 요청을 취소하고, 지금 값을 스냅숏으로 떠 둔 뒤 캐시를 먼저 바꾼다. 실패하면 `onError`에서 스냅숏으로 되돌리고 사용자에게 알린다. 성공이든 실패든 `onSettled`에서 무효화해 서버의 진짜 값으로 맞춘다. 같은 칸을 연달아 바꾸면 스냅숏 롤백이 꼬일 수 있어서 마지막 무효화가 꼭 필요하고, 한 화면에서만 보이는 변경이면 `variables`로 덧그리는 방식이 더 단순하다.
+
+### initialData와 placeholderData의 차이는요?
+
+`initialData`는 진짜 데이터로 캐시에 저장되고 다른 컴포넌트도 그 값을 보며, `staleTime` 안이면 다시 받지 않는다. 언제 받은 값인지 `initialDataUpdatedAt`으로 알려 주지 않으면 너무 오래 믿을 수 있다. `placeholderData`는 캐시에 들어가지 않는 임시 값이라 쿼리는 곧바로 받으러 가고, `isPlaceholderData`로 구분할 수 있다. 페이지를 넘길 때 이전 페이지를 유지하는 `keepPreviousData`가 그 예다.
+
+### 로그아웃 후 다른 계정으로 로그인했는데 이전 사용자 정보가 잠깐 보입니다. 왜 그런가요?
+
+쿼리 캐시는 메모리에 있어서 페이지를 다시 불러오지 않으면 `gcTime` 동안 남는다. 새 사용자의 화면이 같은 `["me"]` 키를 쓰니 앞 사람의 데이터가 먼저 그려지고 뒤에서 바뀐다. 로그아웃할 때 `queryClient.clear()`로 비우고, 캐시를 localStorage에 저장하고 있다면 그것도 지운다. SSR에서는 서버의 `QueryClient`를 요청마다 새로 만들어야 사용자 사이에 데이터가 섞이지 않는다.
+
+### useMemo로 API 응답을 캐시하면 안 되나요?
+
+`useMemo`는 한 컴포넌트 안에서 직전 계산 결과 하나만 기억하고, 언마운트되면 사라지며 다른 컴포넌트와 나눠 쓰지 않는다. 요청 중복 제거, 만료, 다시 받기 같은 기능도 없다. 렌더링 중 무거운 계산을 건너뛰는 용도이고, 서버 데이터의 캐시는 키로 나눠 쓰는 쿼리 캐시가 맡는다. 컴포넌트 밖에서 계산을 기억할 때는 `Map`에 상한을 둔 LRU로 메모리가 끝없이 자라지 않게 한다.

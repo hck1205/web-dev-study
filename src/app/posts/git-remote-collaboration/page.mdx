@@ -1,0 +1,859 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-remote-collaboration");
+
+로그인 기능을 다 만들고 커밋한 뒤 `git push`를 쳤는데 이런 메시지가 돌아왔다.
+
+```text
+To github.com:matt/shop.git
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'github.com:matt/shop.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+```
+
+그 사이 동료가 장바구니 기능을 먼저 올렸다. 시키는 대로 `git pull`을 치면 이번엔 "divergent branches"라는 긴 힌트와 함께 멈춘다. 여기서 검색해서 나온 `git push -f`를 붙여 넣으면 동료의 커밋이 원격에서 사라진다.
+
+이 글은 원격 저장소가 무엇인지, `origin/main`이 정확히 무엇을 가리키는지부터 보고, fetch·pull·push가 각각 무엇을 바꾸는지, 거절당한 푸시를 안전하게 고치는 법, 강제 푸시를 덜 위험하게 쓰는 법, PR과 포크로 협업하는 흐름, 큰 저장소를 빨리 받는 법까지 간다. 커밋과 브랜치 자체의 구조는 [Git 내부 구조 글](/posts/git-internals-basics)과 [브랜치와 머지 글](/posts/git-branch-merge)에서 다룬다.
+
+기준은 Ubuntu 24.04 LTS에 기본으로 들어 있는 Git 2.43이다. 22.04는 2.34.1이라 몇몇 설정이 없는데, 그때마다 적는다. 출력은 모두 2.43에서 실제로 실행한 결과이고, 진행률 줄(`Enumerating objects: ...`)은 지면 때문에 뺐다.
+
+```bash
+# 설치와 버전 확인 (Ubuntu)
+sudo apt update && sudo apt install -y git
+git --version
+
+# 22.04에서 최신 Git이 필요하면 공식 PPA를 쓴다
+sudo add-apt-repository -y ppa:git-core/ppa && sudo apt install -y git
+```
+
+```text
+git version 2.43.0
+```
+
+## 원격은 주소록에 적힌 다른 저장소다
+
+Git에서 원격(remote)은 "다른 곳에 있는 같은 프로젝트의 저장소"에 붙인 별명이다. GitHub에 있는 저장소일 수도 있고, 사내 GitLab일 수도 있고, 같은 컴퓨터의 다른 폴더일 수도 있다. `git clone`을 하면 받아 온 주소가 `origin`이라는 이름으로 자동 등록된다. `origin`은 관례일 뿐 특별한 이름이 아니다.
+
+```bash
+# 등록된 원격과 주소 보기 (fetch용, push용이 따로 나온다)
+git remote -v
+
+# 원격 하나의 자세한 상태 (추적 중인 브랜치, push/pull 대상)
+git remote show origin
+```
+
+```text
+origin	git@github.com:matt/shop.git (fetch)
+origin	git@github.com:matt/shop.git (push)
+```
+
+```text
+* remote origin
+  Fetch URL: git@github.com:matt/shop.git
+  Push  URL: git@github.com:matt/shop.git
+  HEAD branch: main
+  Remote branch:
+    main tracked
+  Local branch configured for 'git pull':
+    main merges with remote main
+  Local ref configured for 'git push':
+    main pushes to main (up to date)
+```
+
+`remote show`의 아래 두 덩어리를 봐 둔다. `git pull`을 하면 어느 원격 브랜치를 합치는지, `git push`를 하면 어디로 보내는지가 적혀 있다. 이 연결을 upstream이라고 부르고 뒤에서 다시 본다.
+
+원격은 얼마든지 늘리고 고칠 수 있다.
+
+```bash
+# 원격 추가: 이름과 주소
+git remote add teammate git@github.com:jisoo/shop.git
+
+# 이름 바꾸기 (origin → upstream). 원격 추적 브랜치 이름도 같이 바뀐다
+git remote rename origin upstream
+
+# 주소만 바꾸기: 저장소를 옮겼거나 HTTPS에서 SSH로 갈아탈 때
+git remote set-url origin git@github.com:matt/shop.git
+
+# 원격 지우기 (원격 저장소가 지워지는 게 아니라 내 주소록에서만 빠진다)
+git remote remove teammate
+```
+
+주소는 두 가지 모양이 흔하다. `https://github.com/matt/shop.git`은 443 포트로 붙고 사내 프록시나 방화벽 뒤에서도 잘 통한다. 대신 인증에 비밀번호가 아니라 개인 액세스 토큰이 필요하다. `git@github.com:matt/shop.git`은 SSH(22 포트)로 붙고, 키를 한 번 등록하면 매번 묻지 않는다. 22 포트가 막힌 네트워크라면 GitHub는 `ssh.github.com`의 443 포트로도 SSH를 받는다.
+
+## SSH 키로 GitHub에 붙기
+
+Ubuntu에서 SSH 키를 만들어 GitHub에 등록하는 순서다. ed25519는 RSA보다 키가 짧고 빠르며, 지금 GitHub가 권하는 방식이다.
+
+```bash
+# 키 만들기. -C는 키에 붙이는 메모라 보통 이메일을 쓴다. 암호(passphrase)를 걸어 둔다
+ssh-keygen -t ed25519 -C "matt@example.com"
+
+# ssh-agent에 키를 올려 두면 암호를 세션마다 한 번만 묻는다
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+
+# 공개 키 내용 출력. 이걸 GitHub Settings > SSH and GPG keys에 붙여 넣는다
+cat ~/.ssh/id_ed25519.pub
+
+# gh CLI를 쓴다면 붙여 넣는 대신 이렇게 올려도 된다
+gh ssh-key add ~/.ssh/id_ed25519.pub --title "ubuntu-laptop"
+
+# 연결 확인
+ssh -T git@github.com
+```
+
+공개 키는 `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... matt@example.com`처럼 한 줄이다. GitHub에 올리는 건 `.pub`이 붙은 공개 키뿐이고, 확장자 없는 `id_ed25519`는 내 컴퓨터 밖으로 나가면 안 된다.
+
+`ssh -T`를 처음 치면 서버 지문을 믿겠냐고 묻는다. GitHub 문서에 공개된 지문과 같은지 보고 `yes`를 친다. 성공하면 "Hi matt! You've successfully authenticated, but GitHub does not provide shell access."처럼 계정 이름이 담긴 인사가 나온다. 셸을 주지 않는다는 말은 정상이다. `Permission denied (publickey)`가 나오면 키가 agent에 안 올라갔거나 GitHub에 등록한 키와 다른 키를 쓰는 경우다. `ssh -vT git@github.com`으로 어떤 키 파일을 시도하는지 볼 수 있다.
+
+## 원격 추적 브랜치는 마지막으로 본 원격의 사진이다
+
+푸시가 거절된 이유를 이해하려면 브랜치가 세 군데 있다는 걸 알아야 한다. 내 저장소의 `main`, GitHub에 있는 `main`, 그리고 내 저장소 안에 있는 `origin/main`이다.
+
+`origin/main`은 원격 추적 브랜치(remote-tracking branch)라고 부른다. "마지막으로 origin과 통신했을 때 origin의 main이 가리키던 커밋"을 내 저장소에 적어 둔 것이다. 원격 저장소에 실시간으로 연결된 게 아니라 사진이다. 동료가 그 뒤에 푸시를 했어도 내가 fetch를 하기 전까지 `origin/main`은 옛날 커밋을 가리킨다. 그리고 이건 내가 직접 커밋할 수 없는 읽기 전용 이름표다. fetch나 push가 성공할 때만 움직인다.
+
+아래 그림에서 점이 흐르는 방향이 데이터가 움직이는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="내 main, origin/main, GitHub의 main은 서로 다른 이름표다. fetch와 push만 저장소 사이를 오간다."
+  nodes={[
+    { id: "gh", label: "GitHub main", sub: "진짜 원격 브랜치", x: 200, y: 45, w: 130, h: 46 },
+    { id: "jisoo", label: "Jisoo의 main", sub: "동료 저장소", x: 335, y: 150, w: 110, h: 46 },
+    { id: "track", label: "origin/main", sub: "내 저장소 안의 사진", x: 70, y: 150, w: 120, h: 46 },
+    { id: "mine", label: "내 main", sub: "내가 커밋하는 곳", x: 200, y: 255, w: 120, h: 46 },
+  ]}
+  edges={[
+    { from: "gh", to: "track", label: "fetch" },
+    { from: "track", to: "mine", label: "merge·rebase" },
+    { from: "mine", to: "gh", label: "push" },
+    { from: "jisoo", to: "gh", label: "push", dashed: true },
+  ]}
+/>
+
+로컬 브랜치와 원격 추적 브랜치는 이렇게 본다.
+
+```bash
+# 원격 추적 브랜치 목록
+git branch -r
+
+# 로컬 브랜치마다 연결된 upstream과 마지막 커밋
+git branch -vv
+```
+
+```text
+  origin/HEAD -> origin/main
+  origin/feature/coupon
+  origin/main
+```
+
+```text
+* main 74e1bf1 [origin/main] feat: add login
+```
+
+## fetch는 가져오기만, pull은 가져와서 합친다
+
+`git fetch`는 원격에서 내가 없는 커밋을 받아 오고 원격 추적 브랜치를 옮긴다. 내 브랜치와 작업 폴더는 건드리지 않는다. 그래서 언제 쳐도 안전하다. `git pull`은 fetch를 한 다음 이어서 지금 브랜치에 그 결과를 합친다. 합치는 방식은 설정에 따라 merge이거나 rebase다.
+
+처음 상황을 처음부터 다시 따라가 보자. 다음을 누르면 한 단계씩 넘어간다.
+
+<SequenceDiagram
+  caption="동료가 먼저 푸시했을 때 내 푸시가 거절되고 다시 통과하기까지"
+  actors={[
+    { id: "matt", label: "내 저장소" },
+    { id: "origin", label: "origin" },
+    { id: "jisoo", label: "Jisoo" },
+  ]}
+  steps={[
+    {
+      from: "jisoo",
+      to: "origin",
+      label: "push 38f3560",
+      title: "동료가 먼저 올린다",
+      detail: "origin의 main이 001aa83에서 38f3560으로 앞으로 간다. 내 저장소는 아직 이 사실을 모른다. 내 origin/main은 여전히 001aa83이다.",
+      payload: "   001aa83..38f3560  main -> main",
+    },
+    {
+      from: "matt",
+      to: "matt",
+      label: "commit login",
+      title: "나는 옛 사진 위에서 커밋한다",
+      detail: "내 main은 001aa83 다음에 login 커밋을 하나 더 얹는다. git status는 origin/main보다 1개 앞서 있다고만 말한다. 사진이 오래됐기 때문이다.",
+      payload: "Your branch is ahead of 'origin/main' by 1 commit.",
+    },
+    {
+      from: "matt",
+      to: "origin",
+      label: "push → 거절",
+      title: "origin이 푸시를 거절한다",
+      detail: "푸시는 원격 브랜치를 내 커밋으로 옮겨 달라는 요청이다. 그런데 원격의 38f3560이 내 커밋의 조상이 아니다. 받아 주면 38f3560이 브랜치에서 떨어져 나가니 거절한다.",
+      payload: " ! [rejected]        main -> main (fetch first)",
+    },
+    {
+      from: "origin",
+      to: "matt",
+      label: "fetch",
+      title: "사진을 새로 찍는다",
+      detail: "fetch로 38f3560을 받아 오고 origin/main을 옮긴다. 이제 status가 갈라졌다고 정확히 말한다. 내 main은 그대로다.",
+      payload: "   001aa83..38f3560  main       -> origin/main\nYour branch and 'origin/main' have diverged,\nand have 1 and 1 different commits each, respectively.",
+    },
+    {
+      from: "matt",
+      to: "matt",
+      label: "rebase",
+      title: "내 커밋을 동료 커밋 뒤로 옮긴다",
+      detail: "git pull --rebase는 fetch 뒤에 내 login 커밋을 38f3560 위에 다시 만든다. 내용은 같지만 부모가 바뀌었으니 새 해시 74e1bf1이 된다.",
+      payload: "Successfully rebased and updated refs/heads/main.",
+    },
+    {
+      from: "matt",
+      to: "origin",
+      label: "push 74e1bf1",
+      title: "이번엔 앞으로만 가는 이동이라 통과한다",
+      detail: "74e1bf1의 조상에 38f3560이 있으니 원격 브랜치를 앞으로 옮기기만 하면 된다. 이걸 fast-forward라고 한다.",
+      payload: "   38f3560..74e1bf1  main -> main",
+    },
+    {
+      from: "origin",
+      to: "jisoo",
+      label: "pull (ff)",
+      title: "동료는 그냥 따라오면 된다",
+      detail: "동료 쪽에서는 갈라진 게 없으니 pull이 fast-forward로 끝난다. 아무도 커밋을 잃지 않았다.",
+    },
+  ]}
+/>
+
+거절은 Git이 고장 난 게 아니라 커밋을 지키는 장치다. 원격 브랜치는 기본적으로 앞으로만 움직이게 되어 있다. 지금 가리키는 커밋이 새 커밋의 조상일 때만 옮긴다. 그래서 고치는 순서도 정해져 있다. 먼저 받아 오고, 합치고, 다시 민다.
+
+```bash
+# 1. 원격 상태를 받아 온다 (내 브랜치는 안 바뀐다)
+git fetch origin
+
+# 2. 무엇이 갈라졌는지 본다: <는 내 main에만, >는 origin/main에만 있는 커밋
+git log --oneline --left-right --graph main...origin/main
+
+# 3. 내 커밋을 원격 위로 옮긴다 (merge를 원하면 git merge origin/main)
+git rebase origin/main
+
+# 4. 다시 민다
+git push
+```
+
+```text
+< 10f0702 feat: add login
+> 38f3560 feat: add cart
+```
+
+`<`가 내 main에만, `>`가 origin/main에만 있는 커밋이다. 각각 하나씩이니 갈라진 상태다. `git pull --rebase`는 1번과 3번을 한 번에 한다. 출력 첫 줄이 `!`로 시작하는 줄이 진짜 결과다. 괄호 안의 이유는 두 가지가 흔하다. `(fetch first)`는 내가 아직 받지도 않은 커밋이 원격에 있다는 뜻이고, `(non-fast-forward)`는 원격 커밋을 받긴 했는데 내 브랜치가 그걸 포함하지 않는다는 뜻이다. 이미 푸시한 커밋을 amend하거나 rebase한 뒤에 자주 본다. 이때 hint 문구도 "the tip of your current branch is behind its remote counterpart"로 바뀐다.
+
+## 갈라진 브랜치를 합치는 세 가지 방법
+
+Git 2.27부터 `git pull`은 합치는 방식을 정하지 않은 채 쓰면 경고를 냈고, 2.33.1 무렵부터는 브랜치가 갈라진 경우 아예 멈춘다. 처음 상황에서 `git pull`을 친 결과가 이거다.
+
+```text
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: You can do so by running one of the following commands sometime before
+hint: your next pull:
+hint: 
+hint:   git config pull.rebase false  # merge
+hint:   git config pull.rebase true   # rebase
+hint:   git config pull.ff only       # fast-forward only
+hint: 
+hint: You can replace "git config" with "git config --global" to set a default
+hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+hint: or --ff-only on the command line to override the configured default per
+hint: invocation.
+fatal: Need to specify how to reconcile divergent branches.
+```
+
+세 줄이 세 가지 선택지다. 아래 그림에서 각각이 커밋 그래프를 어떻게 바꾸는지 본다. 회색으로 먼저 보이는 점은 그 단계에서 아직 만들어지지 않은 커밋이다.
+
+<VectorSpace
+  caption="갈라진 두 커밋을 merge로 묶거나 rebase로 한 줄로 편다"
+  width={400}
+  height={240}
+  groups={[
+    { id: "base", label: "공통 조상" },
+    { id: "remote", label: "원격 (동료)" },
+    { id: "local", label: "내 커밋" },
+  ]}
+  points={[
+    { id: "a", label: "001aa83 init", x: 40, y: 120, group: "base" },
+    { id: "b", label: "38f3560 cart", x: 150, y: 60, group: "remote" },
+    { id: "c", label: "login", x: 150, y: 180, group: "local" },
+    { id: "m", label: "Merge", x: 270, y: 120, group: "local" },
+    { id: "c2", label: "74e1bf1 login'", x: 270, y: 40, group: "local", labelAt: "left" },
+  ]}
+  steps={[
+    { path: ["b", "a", "c"], caption: "001aa83에서 두 갈래로 갈라졌다. 위는 동료가 올린 cart, 아래는 내 login이다. pull --ff-only는 여기서 멈춘다. 앞으로 옮기기만으로는 둘을 합칠 수 없어서다." },
+    { path: ["b", "m", "c"], caption: "pull.rebase false(merge)는 부모가 둘인 Merge 커밋을 새로 만든다. 기존 커밋은 그대로라 안전하지만, 매번 pull할 때마다 이런 커밋이 쌓여 그래프가 지저분해진다." },
+    { path: ["a", "b", "c2"], caption: "pull.rebase true는 내 login을 cart 뒤에 다시 만든다. 그래프가 한 줄이 되고, 내용은 같지만 해시가 74e1bf1로 바뀐다. 아직 푸시하지 않은 커밋이라 해시가 바뀌어도 문제없다." },
+  ]}
+/>
+
+팀에서 많이 쓰는 기본값은 이렇다. 내 브랜치에서 하는 pull은 rebase로, 실수로 갈라졌을 때 조용히 merge 커밋이 생기는 일은 막는다.
+
+```bash
+# pull할 때 내 로컬 커밋을 원격 위로 옮긴다
+git config --global pull.rebase true
+
+# 또는: 앞으로 가기만 허용하고, 갈라졌으면 멈춰서 내가 직접 고르게 한다
+git config --global pull.ff only
+
+# rebase 전에 작업 중인 변경을 자동으로 stash했다가 되돌린다
+git config --global rebase.autoStash true
+```
+
+`pull.ff only`를 켠 상태에서 갈라지면 이렇게 멈춘다.
+
+```text
+hint: Diverging branches can't be fast-forwarded, you need to either:
+hint: 
+hint: 	git merge --no-ff
+hint: 
+hint: or:
+hint: 
+hint: 	git rebase
+hint: 
+hint: Disable this message with "git config advice.diverging false"
+fatal: Not possible to fast-forward, aborting.
+```
+
+rebase가 늘 정답은 아니다. 여러 사람이 같이 커밋하는 공유 브랜치에서 이미 푸시한 커밋을 rebase하면 다른 사람이 가진 커밋과 해시가 어긋난다. 규칙은 하나다. 아직 아무도 받지 않은 내 커밋만 rebase한다. rebase가 정확히 무엇을 하는지는 [rebase 글](/posts/git-rebase)에서 자세히 다룬다.
+
+## upstream과 ahead, behind
+
+로컬 브랜치에는 "짝꿍" 원격 브랜치를 하나 정해 둘 수 있다. 이걸 upstream(추적 브랜치)이라고 한다. 정해 두면 `git pull`, `git push`를 인자 없이 쓸 수 있고, `git status`가 앞서거나 뒤처진 커밋 수를 알려 준다.
+
+새 브랜치를 처음 밀면 upstream이 없어서 이렇게 멈춘다.
+
+```text
+fatal: The current branch feature/coupon has no upstream branch.
+To push the current branch and set the remote as upstream, use
+
+    git push --set-upstream origin feature/coupon
+
+To have this happen automatically for branches without a tracking
+upstream, see 'push.autoSetupRemote' in 'git help config'.
+```
+
+```bash
+# 처음 밀면서 upstream을 정한다 (-u는 --set-upstream의 줄임)
+git push -u origin feature/coupon
+
+# 이미 있는 브랜치에 upstream만 연결하거나 바꾼다
+git branch --set-upstream-to=origin/feature/coupon
+
+# upstream 연결 끊기
+git branch --unset-upstream
+
+# 한 줄 요약 상태: 브랜치...upstream [ahead N, behind M]
+git status -sb
+```
+
+```text
+ * [new branch]      feature/coupon -> feature/coupon
+branch 'feature/coupon' set up to track 'origin/feature/coupon'.
+```
+
+GitHub로 새 브랜치를 밀면 이 아래에 `remote: Create a pull request for 'feature/coupon' on GitHub by visiting:`과 PR 만들기 링크가 함께 나온다.
+
+`git status -sb`의 첫 줄은 이런 모양이다.
+
+```text
+## feature/coupon...origin/feature/coupon [ahead 1, behind 1]
+```
+
+ahead는 나에게만 있는 커밋 수, behind는 origin에만 있는 커밋 수다. 둘 다 0보다 크면 갈라진 상태라 그냥 push는 거절된다. 여기서 숫자는 마지막 fetch 기준이라는 걸 잊으면 안 된다. 오래 fetch하지 않았다면 behind 0은 아무 의미가 없다.
+
+매번 `-u`를 붙이기 귀찮다면 Git 2.37부터 있는 설정을 켠다. Ubuntu 22.04의 2.34에는 없다.
+
+```bash
+# upstream이 없는 브랜치를 push하면 같은 이름으로 원격에 만들고 upstream으로 연결한다 (2.37+)
+git config --global push.autoSetupRemote true
+```
+
+`push.default`의 기본값 `simple`은 현재 브랜치를 같은 이름의 upstream으로만 민다. 다른 브랜치까지 한꺼번에 밀리는 일은 없으니 바꾸지 않는 게 좋다.
+
+## 강제 푸시는 남의 커밋을 지운다
+
+이미 푸시한 커밋의 메시지를 고치거나 rebase로 정리하면 원격에 있는 커밋과 해시가 달라진다. 그대로 밀면 non-fast-forward로 거절되니, 원격 브랜치를 내 것으로 덮어쓰는 강제 푸시가 필요하다.
+
+문제는 `git push --force`가 확인 없이 덮어쓴다는 것이다. 내가 마지막으로 fetch한 뒤에 동료가 같은 브랜치에 푸시한 커밋이 있으면, 그 커밋은 원격 브랜치에서 떨어져 나간다. 동료의 로컬에는 남아 있겠지만 동료도 모르는 사이에 지워진 상태가 된다.
+
+<Callout kind="warning" title="--force 대신 --force-with-lease">
+공유 브랜치(main, develop, release 등)에는 강제 푸시를 하지 않는다. 내 기능 브랜치라도 `--force`가 아니라 `--force-with-lease`를 쓴다. 덮어쓴 뒤라도 되돌릴 수 있다. 덮어쓰기 직전 원격이 가리키던 해시가 푸시 출력의 `+ 288efaf...fc62204`처럼 왼쪽에 찍히므로, `git push --force-with-lease origin 288efaf:feature/coupon`으로 그 커밋을 다시 밀면 된다. 동료 저장소나 GitHub의 PR 화면에 남은 해시로도 같은 일을 할 수 있다. 실수할 여지를 처음부터 없애려면 브랜치 보호 규칙에서 강제 푸시를 막는다.
+</Callout>
+
+`--force-with-lease`는 "원격 브랜치가 내가 알고 있는 그 커밋일 때만 덮어써라"라는 조건을 붙인다. 내가 알고 있는 커밋은 기본으로 원격 추적 브랜치(`origin/feature/coupon`)다. 동료가 그 사이에 커밋을 올렸다면 조건이 깨져서 거절된다.
+
+```bash
+# 이미 푸시한 커밋 메시지를 고친 뒤
+git commit --amend -m "feat: add coupon API"
+
+# 그냥 push는 거절된다. lease를 걸고 강제로 민다
+git push --force-with-lease
+```
+
+동료가 먼저 커밋을 올린 상태라면 이렇게 막힌다.
+
+```text
+To github.com:matt/shop.git
+ ! [rejected]        feature/coupon -> feature/coupon (stale info)
+error: failed to push some refs to 'github.com:matt/shop.git'
+```
+
+`stale info`는 "네가 알고 있는 원격 정보가 낡았다"는 뜻이다. 이때 할 일은 fetch해서 동료 커밋을 확인하고, 내 브랜치를 그 위로 다시 올린 뒤 민다.
+
+그런데 함정이 하나 있다. 에디터나 IDE가 백그라운드에서 자동으로 fetch를 하면 원격 추적 브랜치가 동료 커밋까지 따라가 버린다. 그러면 나는 그 커밋을 본 적도 없는데 lease 조건이 맞아서 덮어쓰기가 통과한다. 이걸 막는 옵션이 Git 2.30에 들어온 `--force-if-includes`다. 원격 추적 브랜치의 끝 커밋이 내 브랜치의 reflog(내 브랜치가 지나온 기록)에 있는지, 다시 말해 내가 정말 그 커밋을 내 브랜치에 받아들인 적이 있는지까지 확인한다.
+
+```bash
+# fetch는 했지만 동료 커밋을 내 브랜치에 합치지 않은 상태에서
+git fetch
+git push --force-with-lease --force-if-includes
+```
+
+```text
+To github.com:matt/shop.git
+ ! [rejected]        feature/coupon -> feature/coupon (remote ref updated since checkout)
+error: failed to push some refs to 'github.com:matt/shop.git'
+hint: Updates were rejected because the tip of the remote-tracking branch has
+hint: been updated since the last checkout. If you want to integrate the
+hint: remote changes, use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+```
+
+fetch만 하고 합치지 않았으니 거절된다. 동료 커밋을 rebase로 받아들인 다음에야 통과한다. 통과하면 이런 줄이 나온다.
+
+```text
+To github.com:matt/shop.git
+ + 288efaf...fc62204 feature/coupon -> feature/coupon (forced update)
+```
+
+점 두 개(`..`)가 아니라 세 개(`...`)이고 앞에 `+`가 붙으면 강제 갱신이다. 매번 길게 치기 싫다면 별칭을 둔다.
+
+```bash
+# git pushf 한 단어로 안전한 강제 푸시
+git config --global alias.pushf "push --force-with-lease --force-if-includes"
+```
+
+어떤 조건을 걸어 덮어쓰는지 조각별로 보면 이렇다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="안전장치를 명시적으로 건 강제 푸시"
+  base="git push"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "--force-with-lease",
+      display: "--force-with-lease=feature/coupon:7f27c52",
+      title: "이 커밋일 때만 덮어쓴다",
+      description: "원격의 feature/coupon이 7f27c52일 때만 덮어쓴다. 값을 생략하면 원격 추적 브랜치 origin/feature/coupon이 가리키는 커밋이 기대값이 된다. 백그라운드 fetch가 이 기대값을 몰래 옮길 수 있다는 게 약점이다.",
+      required: true,
+    },
+    {
+      key: "--force-if-includes",
+      title: "본 적 있는 커밋인지도 확인 (2.30+)",
+      description: "원격 추적 브랜치의 끝이 내 로컬 브랜치 reflog에 들어 있어야 통과한다. fetch만 하고 합치지 않은 커밋을 덮어쓰는 사고를 막는다. --force-with-lease 없이 혼자 쓰면 아무 효과가 없다.",
+    },
+    {
+      key: "origin",
+      title: "어느 원격으로",
+      description: "생략하면 지금 브랜치의 upstream 원격으로 간다.",
+    },
+    {
+      key: "feature/coupon",
+      title: "어느 브랜치를",
+      description: "로컬:원격 형식으로 이름을 다르게 줄 수도 있다. 예를 들어 HEAD:feature/coupon. 브랜치를 생략하고 --force 계열을 쓰면 push.default 설정에 따라 대상이 정해지므로, 강제 푸시에는 브랜치 이름을 적어 두는 편이 안전하다.",
+    },
+  ]}
+/>
+
+## 끝난 브랜치 지우고 정리하기
+
+PR이 머지되고 나면 원격 브랜치를 지운다. GitHub에는 머지 후 자동으로 지우는 저장소 설정이 있다. 직접 지울 때는 이렇게 한다.
+
+```bash
+# 원격 브랜치 삭제
+git push origin --delete feature/coupon
+
+# 로컬 브랜치도 지운다 (머지되지 않았으면 -d가 거부한다. 강제로 지우려면 -D)
+git branch -d feature/coupon
+```
+
+```text
+To github.com:matt/shop.git
+ - [deleted]         feature/coupon
+```
+
+동료 저장소에는 지워진 브랜치의 원격 추적 브랜치(`origin/feature/coupon`)가 그대로 남는다. fetch는 기본으로 지워진 것을 정리하지 않기 때문이다. `--prune`을 줘야 지운다.
+
+```bash
+# 원격에서 사라진 원격 추적 브랜치를 정리하면서 fetch
+git fetch --prune
+
+# 매번 붙이기 싫으면 기본값으로
+git config --global fetch.prune true
+
+# upstream이 사라진(gone) 로컬 브랜치 찾기
+git branch -vv | grep ': gone]'
+```
+
+```text
+From github.com:matt/shop
+ - [deleted]         (none)     -> origin/feature/coupon
+```
+
+```text
+* feature/coupon fbbf1cc [origin/feature/coupon: gone] test: coupon limit
+  main           38f3560 [origin/main: behind 1] feat: add cart
+```
+
+`gone`은 upstream으로 정해 둔 원격 브랜치가 없어졌다는 표시다. 이런 로컬 브랜치는 대개 머지가 끝난 것이니 지워도 된다. 다만 squash 머지로 합쳐진 브랜치는 Git이 머지됐다고 알아보지 못해 `-d`가 거부할 수 있다. 그 이야기는 [브랜치 전략 글](/posts/git-branching-strategy)에서 다룬다. 오래 prune하지 않으면 뒤에서 볼 `cannot lock ref` 오류를 만나기도 한다.
+
+## 태그는 따로 밀어야 올라간다
+
+태그는 특정 커밋에 붙이는 움직이지 않는 이름표다. 릴리스 버전을 표시하는 데 쓴다. 두 종류가 있다.
+
+```bash
+# 가벼운(lightweight) 태그: 커밋을 가리키는 이름만 만든다
+git tag v1.0.0-light
+
+# 주석(annotated) 태그: 만든 사람, 날짜, 메시지를 담은 태그 객체를 만든다
+git tag -a v1.0.0 -m "Release 1.0.0"
+
+# 둘의 차이: 가리키는 객체 종류
+git cat-file -t v1.0.0-light
+git cat-file -t v1.0.0
+
+# 태그 정보와 가리키는 커밋 보기
+git show v1.0.0 --stat
+```
+
+```text
+commit
+tag
+```
+
+```text
+tag v1.0.0
+Tagger: Matt <matt@example.com>
+Date:   Sat Oct 17 08:34:06 2026 +0000
+
+Release 1.0.0
+
+commit 74e1bf1454fe21c599570671345537e9e5da4d7c
+Author: Matt <matt@example.com>
+Date:   Sat Oct 17 08:33:28 2026 +0000
+
+    feat: add login
+```
+
+가벼운 태그는 커밋을 바로 가리키고, 주석 태그는 Tagger와 메시지를 담은 별도 객체다. 릴리스에는 주석 태그를 쓴다. `git describe`는 기본으로 주석 태그만 보고, GPG나 SSH 서명도 주석 태그에만 걸 수 있다.
+
+가장 많이 하는 실수는 태그를 만들고 `git push`만 치는 것이다. 브랜치만 올라가고 태그는 안 올라간다.
+
+```bash
+# 태그 하나만 밀기
+git push origin v1.0.0
+
+# 지금 밀고 있는 커밋에 닿는 주석 태그만 함께 밀기 (가벼운 태그는 제외)
+git push --follow-tags
+
+# 원격에 있는 태그 확인
+git ls-remote --tags origin
+
+# 잘못 만든 태그 지우기: 로컬, 원격 각각
+git tag -d v1.0.0
+git push origin --delete v1.0.0
+```
+
+```text
+ * [new tag]         v1.0.0 -> v1.0.0
+```
+
+```text
+5a78950cd798b6c3244f47bfe0025f613ab2790c	refs/tags/v1.0.0
+74e1bf1454fe21c599570671345537e9e5da4d7c	refs/tags/v1.0.0^{}
+```
+
+`ls-remote`에 같은 태그가 두 줄 나온다. 위는 태그 객체의 해시, `^{}`가 붙은 아래는 그 태그가 최종으로 가리키는 커밋이다. 주석 태그라서 두 줄이고, 가벼운 태그였다면 한 줄이다. `git push --tags`는 로컬 태그를 전부 미는데, 실험용으로 만든 태그까지 올라가니 `--follow-tags`를 기본으로 쓰는 편이 낫다(`git config --global push.followTags true`). 이미 공개한 태그를 다른 커밋으로 옮기는 건 피한다. 이미 받아 간 사람의 태그는 자동으로 바뀌지 않아 같은 이름이 다른 커밋을 가리키게 된다.
+
+## PR 한 건이 머지되기까지
+
+PR(Pull Request, GitLab에서는 Merge Request)은 Git 기능이 아니라 GitHub·GitLab 같은 호스팅 서비스의 기능이다. "내 브랜치를 main에 합쳐 달라"는 요청에 리뷰, 자동 검사, 토론을 붙여 둔 것이다. 처음부터 끝까지 따라가 본다.
+
+<SequenceDiagram
+  caption="기능 브랜치 하나가 PR을 거쳐 main에 들어가는 흐름"
+  actors={[
+    { id: "dev", label: "내 저장소" },
+    { id: "gh", label: "GitHub" },
+    { id: "ci", label: "CI" },
+    { id: "rev", label: "리뷰어" },
+  ]}
+  steps={[
+    {
+      from: "dev",
+      to: "dev",
+      label: "switch -c",
+      title: "최신 main에서 브랜치를 딴다",
+      detail: "먼저 main을 최신으로 받는다. 오래된 main에서 시작하면 PR을 열자마자 충돌이 난다.",
+      payload: "git switch main && git pull\ngit switch -c feature/coupon",
+    },
+    {
+      from: "dev",
+      to: "gh",
+      label: "push -u",
+      title: "브랜치를 올린다",
+      detail: "작게 나눈 커밋을 올린다. GitHub가 PR을 만들라는 링크를 출력해 준다.",
+      payload: "git push -u origin feature/coupon",
+    },
+    {
+      from: "dev",
+      to: "gh",
+      label: "PR 열기",
+      title: "PR을 연다",
+      detail: "무엇을, 왜 바꿨는지, 어떻게 확인했는지 적는다. 아직 덜 됐으면 Draft로 연다.",
+      payload: "gh pr create --base main --title \"feat: add coupon\" --draft",
+    },
+    {
+      from: "gh",
+      to: "ci",
+      label: "checks 실행",
+      title: "CI가 돈다",
+      detail: "푸시할 때마다 테스트, 린트, 빌드가 돌고 결과가 PR에 붙는다. 브랜치 보호 규칙에서 필수로 정한 검사가 실패하면 머지 버튼이 막힌다.",
+    },
+    {
+      from: "rev",
+      to: "gh",
+      label: "리뷰",
+      title: "리뷰어가 보고 의견을 남긴다",
+      detail: "줄마다 코멘트를 달고 Approve나 Request changes로 결론을 낸다.",
+    },
+    {
+      from: "dev",
+      to: "gh",
+      label: "수정 push",
+      title: "리뷰를 반영해 다시 민다",
+      detail: "같은 브랜치에 커밋을 더 올리면 PR이 자동으로 갱신된다. 리뷰 도중에는 강제 푸시보다 커밋 추가가 리뷰어에게 친절하다. 무엇이 바뀌었는지 따로 볼 수 있어서다.",
+      payload: "git commit -m \"fix: validate coupon code\"\ngit push",
+    },
+    {
+      from: "gh",
+      to: "gh",
+      label: "merge",
+      title: "main에 합친다",
+      detail: "승인과 검사가 모두 통과하면 merge commit, squash, rebase 중 저장소가 허용한 방식으로 합친다. 원격 브랜치는 자동 삭제 설정이 있으면 지워진다.",
+    },
+    {
+      from: "gh",
+      to: "dev",
+      label: "pull, prune",
+      title: "로컬을 정리한다",
+      detail: "main을 받아 오고, 끝난 브랜치를 지운다.",
+      payload: "git switch main && git pull --prune\ngit branch -d feature/coupon",
+    },
+  ]}
+/>
+
+`gh` CLI를 쓰면 브라우저 없이도 PR을 다룰 수 있다. 출력은 계정과 저장소에 따라 다르니 명령만 적는다.
+
+```bash
+# 로그인 (브라우저 인증 또는 토큰)
+gh auth login
+
+# PR 만들기, 목록, 상태
+gh pr create --base main --fill
+gh pr list
+gh pr status
+
+# 남의 PR 브랜치를 내 로컬로 받아 와서 직접 돌려 보기
+gh pr checkout 42
+
+# CI 결과 기다리기, 머지하기 (squash로 합치고 브랜치 삭제)
+gh pr checks 42 --watch
+gh pr merge 42 --squash --delete-branch
+```
+
+`gh` 없이 남의 PR을 받아 보고 싶으면 GitHub가 PR마다 만들어 두는 특별한 참조를 fetch한다. `git fetch origin pull/42/head:pr-42`로 로컬에 `pr-42` 브랜치가 생긴다.
+
+## 포크에서 기여하기
+
+오픈소스처럼 원본 저장소에 쓰기 권한이 없을 때는 포크(fork)를 쓴다. GitHub에서 원본을 내 계정으로 복사한 저장소가 포크다. 이때 원격이 둘이 된다. 관례상 내 포크를 `origin`, 원본을 `upstream`이라고 부른다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="원본에서 받고, 내 포크로 밀고, PR로 원본에 제안한다"
+  nodes={[
+    { id: "up", label: "upstream", sub: "원본 저장소", x: 90, y: 50, w: 120, h: 46 },
+    { id: "fork", label: "origin", sub: "내 포크 (GitHub)", x: 310, y: 50, w: 120, h: 46 },
+    { id: "local", label: "내 로컬 저장소", sub: "clone한 곳", x: 200, y: 245, w: 130, h: 46 },
+  ]}
+  edges={[
+    { from: "up", to: "fork", label: "fork", dashed: true },
+    { from: "up", to: "local", label: "fetch upstream" },
+    { from: "local", to: "fork", label: "push" },
+    { from: "fork", to: "up", label: "PR", dashed: true },
+  ]}
+/>
+
+```bash
+# 내 포크를 받는다 (origin = 내 포크)
+git clone git@github.com:matt/shop.git && cd shop
+
+# 원본을 upstream으로 등록한다
+git remote add upstream https://github.com/acme/shop.git
+git remote -v
+
+# gh를 쓴다면 포크와 upstream 등록을 한 번에
+gh repo fork acme/shop --clone
+```
+
+```text
+origin	git@github.com:matt/shop.git (fetch)
+origin	git@github.com:matt/shop.git (push)
+upstream	https://github.com/acme/shop.git (fetch)
+upstream	https://github.com/acme/shop.git (push)
+```
+
+포크는 만든 순간의 사진이라 원본이 앞서 나가도 자동으로 따라가지 않는다. 새 작업을 시작하기 전에 원본을 받아 내 포크의 main을 맞춘다.
+
+```bash
+# 원본의 최신 커밋을 받는다
+git fetch upstream
+
+# 내 main을 원본 main으로 앞으로 옮긴다 (내 main에 커밋을 안 했다면 늘 fast-forward)
+git switch main
+git merge --ff-only upstream/main
+
+# 내 포크에도 반영
+git push origin main
+
+# 그다음 새 브랜치
+git switch -c fix/typo
+```
+
+```text
+From github.com:acme/shop
+ * [new branch]      main       -> upstream/main
+Updating d7dc7e0..d049f35
+Fast-forward
+ x.txt | 1 +
+To github.com:matt/shop.git
+   d7dc7e0..d049f35  main -> main
+```
+
+포크의 main에는 직접 커밋하지 않는다. 그래야 동기화가 늘 fast-forward로 끝난다. 작업은 항상 브랜치에서 하고, 그 브랜치를 `origin`에 밀어서 `upstream`으로 PR을 연다. GitHub 웹 화면의 "Sync fork" 버튼이나 `gh repo sync matt/shop`도 같은 일을 한다.
+
+## 리뷰를 주고받을 때
+
+리뷰하기 좋은 PR은 작다. 바뀐 줄이 수백 줄을 넘으면 리뷰어는 세부를 보기보다 훑게 된다. 기능 하나가 크면 리팩터링, 인터페이스 추가, 실제 동작 변경처럼 순서대로 PR을 나눈다. 포맷터를 돌려 생긴 대량 변경은 따로 떼어야 진짜 변경이 묻히지 않는다.
+
+PR 설명에는 무엇을 바꿨는지보다 왜 바꿨는지, 어떻게 확인했는지를 적는다. 화면이 바뀌면 전후 스크린샷을 붙인다. 리뷰어가 먼저 봐야 할 파일이 있으면 알려 준다.
+
+리뷰를 반영할 때는 커밋을 추가해서 민다. 리뷰 도중 rebase와 강제 푸시를 하면 GitHub가 "어디까지 봤는지"를 잃어서 리뷰어가 처음부터 다시 봐야 한다. 커밋 정리는 승인을 받은 뒤 squash 머지에 맡기거나, `git commit --fixup`으로 고칠 커밋을 표시해 두었다가 마지막에 `git rebase -i --autosquash`로 합친다.
+
+리뷰하는 쪽에서는 의견의 무게를 밝혀 두면 오해가 줄어든다. 꼭 고쳐야 하는 문제와 취향 차이를 구분하고, 취향이면 "nit:"처럼 표시한다. 큰 PR은 `gh pr checkout`으로 받아서 직접 돌려 보는 편이 화면으로만 읽는 것보다 빠르다.
+
+## 비밀번호 대신 토큰과 자격 증명 도우미
+
+GitHub는 2021년 8월부터 HTTPS로 Git 작업을 할 때 계정 비밀번호를 받지 않는다. HTTPS 주소를 쓰면 비밀번호 자리에 개인 액세스 토큰(PAT)을 넣는다. 가능하면 저장소와 권한을 좁게 고를 수 있는 fine-grained 토큰을 만들고, 만료일을 둔다.
+
+매번 토큰을 붙여 넣지 않으려면 자격 증명 도우미(credential helper)에 맡긴다.
+
+```bash
+# 가장 쉬운 방법: gh가 토큰을 관리하고 git의 credential helper로 등록된다
+gh auth login
+gh auth setup-git
+
+# 메모리에 잠깐만 기억 (기본 15분, 여기서는 1시간)
+git config --global credential.helper 'cache --timeout=3600'
+
+# 지금 어떤 helper를 쓰는지 확인
+git config --show-origin --get-all credential.helper
+```
+
+`credential.helper store`도 있지만 토큰을 `~/.git-credentials`에 평문으로 저장한다. 공용 서버에서는 쓰지 않는다. 데스크톱 Ubuntu라면 GNOME 키링을 쓰는 libsecret 도우미가 있고, 여러 OS를 오간다면 Git Credential Manager를 쓴다. 서버에서 배포용으로 저장소를 받아야 하면 개인 토큰보다 그 저장소에만 읽기 권한을 주는 deploy key가 낫다.
+
+## 큰 저장소를 빨리 받기
+
+수년 된 모노레포를 처음 clone하면 전체 히스토리와 모든 파일 버전을 받느라 오래 걸린다. 필요한 만큼만 받는 방법이 세 가지 있다.
+
+```bash
+# 1. 얕은 clone: 최근 커밋 1개의 히스토리만 받는다 (CI에서 흔히 쓴다)
+git clone --depth 1 git@github.com:matt/shop.git
+
+# 얕은지 확인, 나중에 전체 히스토리가 필요해지면 채운다
+git rev-parse --is-shallow-repository
+git fetch --unshallow
+
+# 2. 부분 clone: 커밋과 트리는 다 받고, 파일 내용(blob)은 필요할 때 받는다
+git clone --filter=blob:none git@github.com:matt/shop.git
+
+# 3. sparse-checkout: 작업 폴더에 일부 디렉터리만 꺼낸다 (부분 clone과 같이 쓰면 효과가 크다)
+git clone --filter=blob:none --sparse git@github.com:matt/shop.git && cd shop
+git sparse-checkout set apps/web
+git sparse-checkout list
+
+# 다시 전체를 꺼내려면
+git sparse-checkout disable
+```
+
+```text
+true
+```
+
+```text
+apps/web
+```
+
+얕은 clone은 빠르지만 히스토리가 잘려 있어서 `git log`, `git blame`, merge base를 찾는 작업이 제대로 안 된다. 커밋이 33개인 저장소를 `--depth 1`로 받아 보면 `git log --oneline | wc -l`이 1이고, `--unshallow` 뒤에야 33이 된다. 배포 빌드처럼 최신 코드만 필요할 때 쓴다. GitHub Actions의 `actions/checkout`도 기본이 depth 1이라 태그나 이전 커밋이 필요한 작업(예: 변경된 파일 비교, 버전 계산)에서는 `fetch-depth: 0`을 준다.
+
+부분 clone은 히스토리는 온전하고 파일 내용만 늦게 받는다. 일상 개발에는 이쪽이 낫다. 대신 오래된 커밋을 checkout하거나 blame할 때 그제야 네트워크로 받으니, 오프라인에서는 그 작업이 안 된다. 받은 저장소의 `.git/config`에 `promisor = true`, `partialclonefilter = blob:none`이 적혀 있다. 서버가 필터를 지원해야 하는데 GitHub와 GitLab은 지원한다.
+
+sparse-checkout은 받는 양이 아니라 작업 폴더에 꺼내는 양을 줄인다. 위 예에서 `set apps/web` 뒤에 작업 폴더에는 루트 파일들과 `apps/web`만 남는다. 커밋할 때는 꺼내지 않은 파일도 그대로 히스토리에 남아 있으니 걱정할 필요 없다.
+
+## 다시 처음의 거절로
+
+원격 브랜치는 앞으로만 움직이고, 내 저장소는 원격을 `origin/main`이라는 사진으로만 안다. 푸시가 거절되면 사진을 새로 찍고(fetch), 내 커밋을 그 위로 옮기고(rebase 또는 merge), 다시 민다. 덮어써야 할 때는 `--force-with-lease --force-if-includes`로 "내가 본 원격일 때만"이라는 조건을 건다. 이 글에서 다루지 않은 거절·충돌 메시지들은 [Git 문제 해결 글](/posts/git-troubleshooting)에 증상별로 모아 두었다.
+
+## 면접에서 나올 만한 질문
+
+### git fetch와 git pull은 무엇이 다른가요?
+
+fetch는 원격의 새 커밋을 받아 원격 추적 브랜치(origin/main 등)만 옮기고, 내 브랜치와 작업 폴더는 건드리지 않는다. pull은 fetch에 이어 지금 브랜치에 그 결과를 merge하거나 rebase한다. 그래서 fetch는 언제 해도 안전하고, 무엇이 들어왔는지 먼저 보고 합치고 싶을 때 fetch 후 `git log main..origin/main`으로 확인한다.
+
+### origin/main은 무엇인가요? origin의 main과 같은 건가요?
+
+같지 않다. origin/main은 내 저장소 안에 있는 원격 추적 브랜치로, 마지막으로 fetch나 push를 했을 때 origin의 main이 가리키던 커밋을 기록한 것이다. 그 뒤에 원격이 바뀌어도 fetch하기 전까지는 옛 커밋을 가리킨다. 그래서 git status의 ahead, behind 숫자도 마지막 fetch 기준이다.
+
+### push가 rejected될 때 왜 그런 건가요? 어떻게 고치나요?
+
+원격 브랜치가 가리키는 커밋이 내가 미는 커밋의 조상이 아니라서, 받아 주면 원격 커밋이 떨어져 나가기 때문이다. 동료가 먼저 푸시했거나, 내가 이미 푸시한 커밋을 amend·rebase한 경우다. 앞의 경우는 fetch 후 rebase나 merge로 합치고 다시 밀고, 뒤의 경우는 내 브랜치일 때만 `--force-with-lease`로 덮어쓴다.
+
+### --force와 --force-with-lease의 차이는 무엇인가요? --force-if-includes는 왜 필요한가요?
+
+--force는 무조건 덮어쓰고, --force-with-lease는 원격 브랜치가 내가 알고 있는 커밋(기본은 원격 추적 브랜치)일 때만 덮어쓴다. 그런데 IDE의 백그라운드 fetch처럼 원격 추적 브랜치가 내가 모르는 사이 갱신되면 lease 조건이 맞아 버려 남의 커밋을 지울 수 있다. Git 2.30의 --force-if-includes는 그 커밋이 내 브랜치 reflog에 있는지, 즉 내가 실제로 받아들였는지까지 확인해서 이 구멍을 막는다.
+
+### pull할 때 merge와 rebase 중 무엇을 쓰나요?
+
+아직 푸시하지 않은 내 커밋을 최신 원격 위로 올리는 상황이라면 rebase가 그래프를 한 줄로 유지해서 보기 좋다. 이미 다른 사람이 받은 커밋이 섞인 공유 브랜치라면 해시를 바꾸지 않는 merge가 안전하다. 팀 기본값으로는 `pull.rebase true`나 `pull.ff only`를 두고, 갈라지면 의식적으로 고르게 하는 경우가 많다.
+
+### upstream(추적 브랜치)을 설정하면 무엇이 달라지나요?
+
+로컬 브랜치마다 짝이 되는 원격 브랜치를 정해 두는 것이라, 인자 없이 `git pull`, `git push`를 쓸 수 있고 `git status`가 ahead, behind를 보여 준다. 처음 밀 때 `git push -u`로 정하고, 나중에는 `git branch --set-upstream-to`로 바꾼다. Git 2.37부터는 `push.autoSetupRemote`를 켜면 첫 push에서 자동으로 정해진다.
+
+### 포크로 기여할 때 원본의 변경을 어떻게 따라가나요?
+
+원본을 upstream이라는 원격으로 추가하고, `git fetch upstream` 후 내 main을 `git merge --ff-only upstream/main`으로 앞으로 옮긴 다음 내 포크(origin)에 민다. 포크의 main에 직접 커밋하지 않으면 이 동기화는 늘 fast-forward로 끝난다. 작업 브랜치는 그 main에서 새로 따서 origin에 밀고, upstream으로 PR을 연다.
+
+### 대형 저장소를 CI에서 빨리 받으려면 어떻게 하나요?
+
+최신 코드만 빌드하면 `--depth 1` 얕은 clone이 가장 빠르다. 히스토리가 필요한 작업(변경 파일 비교, 버전 태그 계산)이 있으면 `--filter=blob:none` 부분 clone으로 커밋은 다 받고 파일 내용만 필요할 때 받는다. 모노레포에서 일부 디렉터리만 필요하면 sparse-checkout을 같이 써서 작업 폴더에 꺼내는 양도 줄인다.

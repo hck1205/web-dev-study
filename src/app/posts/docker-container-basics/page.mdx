@@ -1,0 +1,849 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("docker-container-basics");
+
+노트북에서 잘 돌던 API 서버를 새로 받은 Ubuntu 서버에 올렸다. `npm start`를 치자마자 네이티브 모듈을 불러오지 못한다는 에러가 난다. 노트북은 Node 22인데 서버에는 apt로 깐 Node 18이 있고, 이미지 처리 라이브러리가 기대하는 시스템 라이브러리 버전도 다르다. 흔히 "내 PC에서는 되는데 서버에서는 안 된다"고 말하는 상황이다.
+
+컨테이너는 이 문제를 "앱과 앱이 기대하는 환경을 통째로 묶어서 옮긴다"는 방식으로 푼다. 이 글은 컨테이너가 가상 머신과 어떻게 다른지, 리눅스 커널의 어떤 기능으로 만들어지는지부터 보고, Ubuntu에 Docker를 설치해 nginx 컨테이너를 띄우고 들여다보고 멈추고 지우는 데까지 간다. 이미지를 직접 만드는 Dockerfile 이야기는 [다음 글](/posts/dockerfile-image-layers)에서 이어 간다.
+
+기준은 Ubuntu 24.04 LTS다. 22.04도 설치 명령이 같고, 다른 부분은 그때그때 적는다. 명령과 출력 예시는 Docker Engine 29 기준이다.
+
+## 서버마다 환경이 달라서 생기는 일
+
+앱은 코드만으로 돌지 않는다. 런타임(Node, Python, JVM)의 버전, OS가 깔아 둔 공유 라이브러리(glibc, OpenSSL, libvips), 환경 변수, 설정 파일 위치까지 맞아야 한다. 이게 서버마다 조금씩 다르면 같은 코드가 어떤 서버에서는 돌고 어떤 서버에서는 죽는다.
+
+예전에는 이걸 문서와 스크립트로 맞췄다. "Node 22를 깔고, libvips 8.15를 깔고, 이 순서로 설정한다." 서버가 늘수록 문서와 실제가 어긋나고, 한 서버에 앱 두 개가 서로 다른 버전을 원하면 답이 없다.
+
+가상 머신(VM)으로 앱마다 OS를 통째로 따로 주면 충돌은 없어진다. 대신 앱 하나 띄우는 데 OS 하나를 부팅해야 하니 무겁다. 컨테이너는 그 중간쯤에 있다. OS 커널은 하나를 같이 쓰고, 그 위에서 프로세스마다 보이는 세상만 따로 잘라 준다.
+
+## 가상 머신은 커널까지, 컨테이너는 그 위만
+
+VM은 하이퍼바이저가 CPU·메모리·디스크를 흉내 낸 가짜 하드웨어를 만들고, 그 위에서 게스트 OS가 자기 커널로 부팅한다. 게스트 안의 앱은 게스트 커널에 시스템 콜을 한다. 커널이 둘이니 격리가 강하다. 게스트 커널이 뚫려도 하이퍼바이저라는 벽이 하나 더 있다.
+
+컨테이너에는 게스트 커널이 없다. 컨테이너 안의 nginx는 그냥 호스트 커널 위에서 도는 리눅스 프로세스다. 다만 커널이 그 프로세스에게 "너만의 파일 시스템, 너만의 네트워크, 너만의 프로세스 목록"을 보여 주고, 쓸 수 있는 CPU와 메모리에 상한을 건다. 아래 그림에서 왼쪽 VM은 앱마다 게스트 OS를 거치고, 오른쪽 컨테이너는 바로 호스트 커널에 닿는다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="VM은 앱마다 게스트 커널을 하나씩 띄운다. 컨테이너는 호스트 커널 하나를 함께 쓴다."
+  nodes={[
+    { id: "vmapp", label: "앱 A", sub: "libs·런타임", x: 100, y: 40, w: 120 },
+    { id: "guest", label: "게스트 OS", sub: "자기 커널", x: 100, y: 120, w: 120 },
+    { id: "hyper", label: "하이퍼바이저", sub: "가짜 하드웨어", x: 100, y: 200, w: 120 },
+    { id: "capp", label: "컨테이너 A", sub: "libs·런타임", x: 300, y: 40, w: 120 },
+    { id: "engine", label: "컨테이너 런타임", sub: "dockerd·runc", x: 300, y: 120, w: 120 },
+    { id: "kernel", label: "호스트 커널", sub: "namespace·cgroups", x: 200, y: 290, w: 150 },
+  ]}
+  edges={[
+    { from: "vmapp", to: "guest", label: "syscall" },
+    { from: "guest", to: "hyper", label: "가상 장치" },
+    { from: "hyper", to: "kernel" },
+    { from: "capp", to: "kernel", label: "syscall" },
+    { from: "engine", to: "capp", label: "생성", dashed: true },
+  ]}
+/>
+
+이 차이에서 나머지가 다 따라 나온다. 컨테이너는 부팅이 없으니 프로세스 하나 띄우는 속도(보통 1초 안쪽)로 뜬다. 게스트 OS 메모리가 없으니 한 서버에 훨씬 많이 올릴 수 있다. 대신 커널을 같이 쓰니 커널 버전에 묶인다. 리눅스 컨테이너는 리눅스 커널 위에서만 돈다. 맥이나 윈도우의 Docker Desktop이 뒤에서 작은 리눅스 VM을 하나 띄우는 이유다. 그리고 커널 취약점 하나가 모든 컨테이너에 영향을 준다. 남의 코드를 돌리는 멀티테넌트 환경에서 gVisor나 Firecracker 같은 더 두꺼운 격리를 쓰는 것도 이 때문이다.
+
+## 프로세스마다 다른 세상을 보여 주는 namespace
+
+컨테이너라는 단어는 커널에 없다. 커널이 주는 건 namespace와 cgroups라는 두 기능이고, Docker는 이것들을 조합해 컨테이너처럼 보이게 만든다.
+
+namespace는 프로세스가 볼 수 있는 시스템 자원의 범위를 나눈다. 같은 namespace에 있는 프로세스끼리는 같은 것을 보고, 다른 namespace에 있으면 서로 다른 것을 본다. Docker가 컨테이너마다 새로 만드는 것은 아래와 같다.
+
+- pid: 프로세스 번호. 컨테이너 안에서 첫 프로세스는 PID 1로 보이고, 호스트의 다른 프로세스는 보이지 않는다.
+- net: 네트워크 장치, IP, 라우팅 표, 포트. 그래서 컨테이너 여러 개가 각자 80번 포트를 열 수 있다.
+- mnt: 마운트 목록. 컨테이너는 이미지에서 온 파일 시스템을 `/`로 본다.
+- uts: 호스트 이름. 컨테이너의 hostname은 기본으로 컨테이너 ID 앞 12자리다.
+- ipc: 공유 메모리, 세마포어 같은 프로세스 간 통신 자원.
+- user: UID 매핑. 컨테이너 안의 root(UID 0)를 호스트에서는 일반 UID로 바꿔 보이게 한다. Docker는 이건 기본으로 쓰지 않는다.
+- cgroup: 자기 cgroup 경로를 루트처럼 보이게 한다. cgroup v2에서는 기본으로 따로 만든다.
+
+user namespace를 기본으로 쓰지 않는다는 점이 중요하다. 컨테이너 안의 root는 호스트에서도 UID 0이다. 다른 namespace와 기능 제한(capabilities, seccomp)으로 막혀 있을 뿐, 탈출하는 순간 진짜 root다. 이 이야기는 뒤에서 docker 그룹을 다룰 때 다시 나온다.
+
+아래 그림은 같은 호스트 커널 위의 두 컨테이너가 namespace를 어떻게 나눠 갖는지 보여 준다. 컨테이너마다 자기 net·pid·mnt를 받고, user namespace는 호스트 것을 그대로 쓴다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="두 컨테이너는 net·pid·mnt를 따로 받고, 같은 커널과 같은 user namespace를 쓴다."
+  nodes={[
+    { id: "web", label: "web", sub: "nginx PID 1", x: 90, y: 45, w: 110 },
+    { id: "api", label: "api", sub: "node PID 1", x: 310, y: 45, w: 110 },
+    { id: "nsweb", label: "net·pid·mnt", sub: "uts·ipc·cgroup", x: 90, y: 150, w: 120 },
+    { id: "nsapi", label: "net·pid·mnt", sub: "uts·ipc·cgroup", x: 310, y: 150, w: 120 },
+    { id: "user", label: "user ns", sub: "호스트와 공유", x: 200, y: 150, w: 90 },
+    { id: "kernel", label: "호스트 커널", sub: "하나뿐", x: 200, y: 260, w: 140 },
+  ]}
+  edges={[
+    { from: "web", to: "nsweb" },
+    { from: "api", to: "nsapi" },
+    { from: "web", to: "user", dashed: true },
+    { from: "api", to: "user", dashed: true },
+    { from: "nsweb", to: "kernel" },
+    { from: "nsapi", to: "kernel" },
+    { from: "user", to: "kernel" },
+  ]}
+/>
+
+직접 확인해 보자. Docker 설치는 뒤에서 하니, 설치를 마친 뒤 돌아와서 쳐 봐도 된다.
+
+```bash
+# nginx 컨테이너를 하나 띄운다 (설치 전이면 아래 설치 절을 먼저)
+docker run -d --name web nginx
+
+# 컨테이너의 첫 프로세스가 호스트에서 몇 번 PID인지 본다
+PID=$(docker inspect -f '{{.State.Pid}}' web)
+echo $PID
+
+# 그 프로세스가 속한 namespace 목록 (호스트 기준이라 sudo)
+sudo lsns -p $PID
+
+# 같은 정보를 /proc에서 직접 본다. 괄호 안 숫자가 namespace 번호다
+sudo ls -l /proc/$PID/ns
+
+# 비교용: 지금 내 셸의 namespace
+ls -l /proc/self/ns
+```
+
+```text
+        NS TYPE   NPROCS   PID USER COMMAND
+4026531837 user      142     1 root /sbin/init
+4026532264 mnt         5  6425 root nginx: master process nginx -g daemon off;
+4026532265 uts         5  6425 root nginx: master process nginx -g daemon off;
+4026532266 ipc         5  6425 root nginx: master process nginx -g daemon off;
+4026532267 pid         5  6425 root nginx: master process nginx -g daemon off;
+4026532268 net         5  6425 root nginx: master process nginx -g daemon off;
+4026532269 cgroup      5  6425 root nginx: master process nginx -g daemon off;
+```
+
+PID 열을 본다. user 줄만 PID 1(호스트의 systemd)이 주인이고, 나머지는 전부 nginx 마스터 프로세스가 처음 만든 namespace다. NPROCS가 5인 건 nginx 마스터 하나와 워커 넷이 같은 namespace에 있어서다. user 줄의 142는 호스트 전체 프로세스 수다. 컨테이너가 user namespace를 따로 받지 않았다는 증거다. runc 버전에 따라 time namespace 줄이 하나 더 보이기도 한다.
+
+호스트 쪽에서 컨테이너의 프로세스를 보면 더 분명하다.
+
+```bash
+# 컨테이너 안 프로세스를 호스트 PID로 보여 준다
+docker top web
+
+# 컨테이너 안에서 본 hostname (uts namespace)
+docker exec web hostname
+```
+
+```text
+UID                 PID                 PPID                C                   STIME               TTY                 TIME                CMD
+root                6425                6402                0                   11:20               ?                   00:00:00            nginx: master process nginx -g daemon off;
+101                 6470                6425                0                   11:20               ?                   00:00:00            nginx: worker process
+101                 6471                6425                0                   11:20               ?                   00:00:00            nginx: worker process
+```
+
+컨테이너 안에서 nginx 마스터는 PID 1이지만 호스트에서는 6425번이다. 워커는 nginx 이미지가 만든 UID 101 사용자로 돈다. 호스트에 UID 101인 계정이 있으면 이 열에 그 계정 이름이 찍힌다. 전혀 상관없는 계정 이름이 보여도 놀랄 필요는 없다. 숫자가 같을 뿐이다. user namespace가 없으니 UID는 숫자 그대로 공유된다.
+
+## 쓸 수 있는 양을 묶는 cgroups
+
+namespace는 무엇이 보이는지를 나누지, 얼마나 쓸 수 있는지는 정하지 않는다. 컨테이너 하나가 메모리를 다 먹으면 호스트 전체가 느려지고, 커널의 OOM killer가 엉뚱한 프로세스를 죽인다. 이 상한을 거는 게 cgroups(control groups)다.
+
+cgroups는 프로세스를 묶음으로 만들고 묶음마다 CPU 시간, 메모리, 디스크 I/O, 프로세스 개수에 한도를 건다. 설정은 `/sys/fs/cgroup` 아래의 파일로 보이고, 파일에 숫자를 쓰면 한도가 바뀐다. Ubuntu 22.04부터는 cgroup v2가 기본이다. v2는 컨트롤러별로 따로 있던 트리를 하나로 합친 구조이고, Docker는 v2에서 systemd에게 cgroup 관리를 맡긴다(cgroup driver가 systemd).
+
+```bash
+# cgroup 버전 확인. cgroup2fs면 v2다
+stat -fc %T /sys/fs/cgroup/
+
+# Docker가 쓰는 cgroup 드라이버와 버전
+docker info --format '{{.CgroupDriver}} v{{.CgroupVersion}}'
+
+# 메모리 256MiB, CPU 1.5개로 제한한 컨테이너
+docker run -d --name limited --memory 256m --cpus 1.5 nginx
+
+# 이 컨테이너의 cgroup 디렉터리 (systemd 드라이버 기준 경로)
+CID=$(docker inspect -f '{{.Id}}' limited)
+ls /sys/fs/cgroup/system.slice/docker-$CID.scope/
+
+# 메모리 상한 (바이트)
+cat /sys/fs/cgroup/system.slice/docker-$CID.scope/memory.max
+
+# CPU 상한: 기간(100000µs)마다 쓸 수 있는 시간
+cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.max
+```
+
+```text
+cgroup2fs
+systemd v2
+268435456
+150000 100000
+```
+
+`268435456`은 256 × 1024 × 1024다. `cpu.max`의 `150000 100000`은 100ms마다 150ms만큼 CPU를 쓸 수 있다는 뜻이고, 그래서 "CPU 1.5개"다. 코어 하나를 꽉 채우고 다른 코어를 절반 쓰든, 코어 셋을 반씩 쓰든 합만 맞으면 된다. 기간 안에 할당량을 다 쓰면 다음 기간까지 멈춘다(throttling). 응답 지연이 들쭉날쭉한데 CPU 사용률은 낮아 보인다면 이 throttling을 의심한다. `cpu.stat`의 `nr_throttled`가 늘고 있는지 본다.
+
+메모리는 다르게 동작한다. CPU는 넘으면 기다리게 하면 되지만 메모리는 빼앗을 수가 없다. 한도를 넘기면 커널이 그 cgroup 안의 프로세스를 죽인다.
+
+```bash
+# 메모리 64MiB 컨테이너 안에서 문자열을 계속 두 배로 키운다
+docker run --name oom --memory 64m --memory-swap 64m alpine:3.20 \
+  sh -c 'x=a; while true; do x="$x$x"; done'
+echo "exit=$?"
+
+# OOM으로 죽었는지, 종료 코드는 무엇인지
+docker inspect oom --format '{{.State.OOMKilled}} {{.State.ExitCode}}'
+
+# 확인했으면 지운다
+docker rm oom
+```
+
+```text
+exit=137
+true 137
+```
+
+137은 128 + 9, 즉 SIGKILL로 죽었다는 뜻이다. `OOMKilled: true`가 같이 보이면 메모리 한도 때문이다. `--memory-swap`을 `--memory`와 같게 준 건 스왑까지 막으려고서다. 빼면 스왑이 켜진 시스템에서는 메모리 한도만큼 스왑을 더 쓸 수 있어서, 바로 죽는 대신 한참 느려지다가 죽는다.
+
+한도를 아예 안 주면 컨테이너는 호스트 메모리를 다 쓸 수 있다. 운영에서는 거의 항상 메모리 한도를 준다. 그리고 JVM이나 Node처럼 힙 크기를 스스로 정하는 런타임은 cgroup 한도를 읽는지 확인해야 한다. 요즘 JVM(10 이후)은 읽지만, Node는 버전에 따라 힙 상한을 `--max-old-space-size`로 직접 맞춰 주는 편이 안전하다.
+
+## 이미지는 틀, 컨테이너는 찍어 낸 것
+
+namespace와 cgroups로 프로세스를 가뒀으면, 그 프로세스가 볼 파일 시스템이 필요하다. 이걸 담은 게 이미지다.
+
+이미지는 앱과 앱이 기대하는 파일들(OS 유틸, 라이브러리, 런타임, 코드)을 담은 읽기 전용 묶음이다. 컨테이너는 그 이미지로 띄운 실행 중인 인스턴스다. 클래스와 인스턴스 관계와 비슷하다. 이미지 하나로 컨테이너를 몇 개든 만들 수 있고, 컨테이너를 지워도 이미지는 남는다.
+
+이미지는 통짜 파일이 아니라 레이어 여러 장을 겹친 것이다. 맨 아래에 Debian 같은 베이스 OS 레이어가 있고, 그 위에 nginx를 설치한 레이어, 설정 파일을 넣은 레이어가 쌓인다. 레이어는 모두 읽기 전용이다. 컨테이너를 만들면 Docker가 그 위에 얇은 쓰기 가능 레이어를 한 장 더 얹고, overlayfs로 전부 합쳐서 하나의 디렉터리처럼 보여 준다.
+
+컨테이너 안에서 파일을 고치면 아래 레이어의 원본은 그대로 두고, 그 파일을 쓰기 레이어로 복사한 뒤 고친다(copy-on-write). 그래서 같은 이미지로 컨테이너 열 개를 띄워도 이미지 레이어는 디스크에 한 벌만 있다.
+
+```bash
+# 컨테이너 안에 파일 하나를 만든다
+docker exec web sh -c 'echo hi > /usr/share/nginx/html/hi.txt'
+
+# 이미지와 비교해서 바뀐 파일 목록 (A 추가, C 변경, D 삭제)
+docker diff web
+
+# SIZE 열: 쓰기 레이어 크기 (virtual은 이미지까지 합친 크기)
+docker ps -s
+```
+
+```text
+C /run
+A /run/nginx.pid
+C /usr
+C /usr/share
+C /usr/share/nginx
+C /usr/share/nginx/html
+A /usr/share/nginx/html/hi.txt
+```
+
+```text
+CONTAINER ID   IMAGE     COMMAND                  CREATED         STATUS         PORTS     NAMES     SIZE
+051d6cdacfff   nginx     "/docker-entrypoint.…"   5 minutes ago   Up 5 minutes   80/tcp    web       86kB (virtual 177MB)
+```
+
+`86kB`가 이 컨테이너만의 쓰기 레이어이고, `virtual 177MB`는 이미지 레이어까지 합친 크기다. 이 쓰기 레이어는 컨테이너를 `docker rm`으로 지우면 같이 사라진다. 데이터베이스 파일이나 업로드 파일처럼 남아야 하는 건 볼륨(`-v`)으로 컨테이너 밖에 둔다. 컨테이너는 언제든 버리고 새로 띄울 수 있어야 하고, 그러려면 상태를 안에 두지 않아야 한다.
+
+레이어가 어떻게 쌓이고 캐시되는지는 [Dockerfile 글](/posts/dockerfile-image-layers)에서 자세히 본다. Docker 29부터 새로 설치하면 이미지 저장을 containerd가 맡는다(containerd image store). `docker info`의 `Storage Driver: overlayfs`, `driver-type: io.containerd.snapshotter.v1`이 그 표시다. 22.04에서 오래 쓰던 설치를 업그레이드했다면 예전 `overlay2` 드라이버가 그대로 보일 수 있다. 쓰는 입장에서는 거의 차이가 없다.
+
+## Ubuntu 24.04에 Docker Engine 설치하기
+
+Ubuntu 저장소에도 `docker.io` 패키지가 있지만, 버전이 늦고 buildx·compose 플러그인 구성이 다르다. Docker가 직접 운영하는 apt 저장소에서 받는다. 순서는 이전 패키지 확인과 제거, 저장소 등록, 설치, 동작 확인이다.
+
+```bash
+# 0. 지금 깔려 있는 Docker 관련 패키지 확인
+dpkg -l | grep -E 'docker|containerd|runc|podman-docker'
+
+# 1. 충돌하는 옛 패키지 제거 (없으면 없다고만 나온다. /var/lib/docker의 데이터는 남는다)
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+  sudo apt-get remove -y $pkg
+done
+
+# 2. 저장소 서명 키를 받을 준비
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+
+# 3. Docker 공식 GPG 키를 받아 모두 읽을 수 있게 둔다
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# 4. 저장소 등록 (deb822 형식). Suites는 24.04면 noble, 22.04면 jammy가 들어간다
+sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+# 5. 목록을 갱신하고 엔진, CLI, containerd, buildx·compose 플러그인을 설치
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+예전 문서나 다른 글에는 4번이 `/etc/apt/sources.list.d/docker.list`에 `deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable` 한 줄을 넣는 방식으로 나온다. 같은 저장소다. 둘 다 만들면 apt가 같은 저장소가 두 번 등록됐다고 경고하니 하나만 둔다. RHEL·Rocky 계열은 `dnf config-manager`로 저장소를 추가하고 `dnf install`로 같은 패키지 이름을 설치한다.
+
+설치가 끝나면 서비스가 떠 있는지, 부팅 때 켜지는지, 실제로 컨테이너가 도는지 본다.
+
+```bash
+# 데몬이 돌고 있는지, 부팅 시 자동 시작인지
+sudo systemctl is-active docker
+sudo systemctl is-enabled docker
+
+# 클라이언트와 서버 버전 (서버가 안 보이면 데몬 연결 문제)
+sudo docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}'
+
+# 테스트 이미지를 받아 실행하고 끝나면 지운다
+sudo docker run --rm hello-world
+```
+
+```text
+active
+enabled
+client 29.8.2 / server 29.8.2
+
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+```
+
+이 상태에서는 매번 `sudo`를 붙여야 한다. Docker CLI는 `/var/run/docker.sock` 유닉스 소켓으로 데몬과 이야기하는데, 이 소켓은 root와 `docker` 그룹만 쓸 수 있다. 내 계정을 `docker` 그룹에 넣으면 `sudo` 없이 쓸 수 있다.
+
+```bash
+# docker 그룹에 현재 사용자를 추가 (그룹은 패키지 설치 때 이미 만들어진다)
+sudo usermod -aG docker $USER
+
+# 새 그룹을 지금 셸에 반영 (또는 로그아웃 후 다시 로그인)
+newgrp docker
+
+# sudo 없이 되는지 확인
+docker ps
+```
+
+<Callout kind="warning" title="docker 그룹은 사실상 root다">
+  docker 그룹에 들어간 사용자는 `docker run -v /:/host -it alpine chroot /host` 한 줄로 호스트 루트 파일 시스템을 root 권한으로 연다. 비밀번호도 묻지 않고 sudo 로그에도 남지 않는다. 그러니 docker 그룹에는 sudo를 줘도 되는 사람만 넣는다. 같은 이유로 `/var/run/docker.sock`을 컨테이너 안에 마운트하는 것도 그 컨테이너에 호스트 root를 주는 일이다. 되돌릴 때는 `sudo gpasswd -d 사용자이름 docker` 후 다시 로그인한다. 권한을 나눠야 하는 서버라면 데몬 자체를 일반 사용자로 띄우는 rootless 모드(`dockerd-rootless-setuptool.sh install`)를 검토한다.
+</Callout>
+
+Docker를 완전히 지우는 방법도 알아 두자. 패키지를 지워도 이미지·컨테이너·볼륨이 든 디렉터리는 남는다.
+
+```bash
+# 패키지 제거
+sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras
+
+# 이미지·컨테이너·볼륨 데이터까지 지운다 (되돌릴 수 없다)
+sudo rm -rf /var/lib/docker /var/lib/containerd
+
+# 저장소와 키 제거
+sudo rm /etc/apt/sources.list.d/docker.sources /etc/apt/keyrings/docker.asc
+```
+
+## docker run 한 줄이 지나가는 길
+
+`docker`라는 명령 하나로 다 되는 것 같지만, 실제로는 프로그램 네 개가 차례로 일을 넘긴다. `docker`는 CLI일 뿐이고 REST API로 `dockerd`(Docker 데몬)에 요청한다. dockerd는 네트워크·볼륨·이미지 이름 같은 Docker다운 기능을 맡고, 컨테이너의 실제 생명주기는 `containerd`에 넘긴다. containerd는 이미지를 받아 풀고, 컨테이너마다 `containerd-shim-runc-v2`를 하나 띄워 `runc`를 부른다. runc가 namespace와 cgroup을 만들고 그 안에서 프로세스를 실행하는 마지막 주자다.
+
+이 분리 덕분에 dockerd를 재시작해도 컨테이너가 계속 돌 수 있고(live-restore 설정 시), 쿠버네티스는 dockerd 없이 containerd에 바로 붙는다. runc의 동작 규격은 OCI 런타임 스펙으로 표준화돼 있어서 runc 대신 crun이나 gVisor의 runsc로 바꿔 끼울 수 있다.
+
+아래 그림에서 다음을 누르면 로컬에 nginx 이미지가 없는 상태에서 `docker run -d --name web -p 8080:80 nginx`가 진행된다.
+
+<SequenceDiagram
+  caption="docker run이 컨테이너가 되기까지"
+  actors={[
+    { id: "cli", label: "docker CLI" },
+    { id: "dockerd", label: "dockerd" },
+    { id: "ctrd", label: "containerd" },
+    { id: "runc", label: "runc" },
+  ]}
+  steps={[
+    {
+      from: "cli",
+      to: "dockerd",
+      label: "POST create",
+      title: "컨테이너 생성을 요청한다",
+      detail: "CLI는 /var/run/docker.sock 소켓에 HTTP 요청을 보낸다. 이미지 이름, 포트, 이름 같은 옵션이 JSON 본문에 들어간다.",
+      payload: "POST /containers/create?name=web\n{\n  \"Image\": \"nginx\",\n  \"HostConfig\": {\n    \"PortBindings\": { \"80/tcp\": [{ \"HostPort\": \"8080\" }] }\n  }\n}",
+    },
+    {
+      from: "dockerd",
+      to: "cli",
+      label: "404 no such image",
+      title: "이미지가 없다고 답한다",
+      detail: "로컬에 nginx:latest가 없다. CLI는 이 응답을 받고 Unable to find image 'nginx:latest' locally를 찍는다.",
+    },
+    {
+      from: "cli",
+      to: "dockerd",
+      label: "POST images/create",
+      title: "CLI가 pull을 대신 요청한다",
+      detail: "docker run은 사실 create, pull, create, start를 묶은 명령이다. 이미지가 없으면 CLI가 pull 요청을 보낸다.",
+      payload: "POST /images/create?fromImage=nginx&tag=latest",
+    },
+    {
+      from: "dockerd",
+      to: "ctrd",
+      label: "pull",
+      title: "containerd가 레지스트리에서 받는다",
+      detail: "docker.io에서 매니페스트를 받아 이 CPU 아키텍처에 맞는 것을 고르고, 레이어를 내려받아 다이제스트를 검증한 뒤 스냅숏으로 푼다.",
+    },
+    {
+      from: "cli",
+      to: "dockerd",
+      label: "POST create",
+      title: "다시 생성을 요청한다",
+      detail: "이번에는 이미지가 있으니 dockerd가 컨테이너 설정을 저장하고 쓰기 레이어를 준비한 뒤 64자리 컨테이너 ID를 돌려준다.",
+    },
+    {
+      from: "cli",
+      to: "dockerd",
+      label: "POST start",
+      title: "시작을 요청한다",
+      detail: "-d 옵션이 있으니 CLI는 start 요청만 보내고 로그에는 붙지 않는다.",
+      payload: "POST /containers/051d6cdacfff.../start",
+    },
+    {
+      from: "dockerd",
+      to: "dockerd",
+      label: "네트워크 준비",
+      title: "포트 연결 규칙을 만든다",
+      detail: "veth 한 쌍을 만들어 docker0 브리지에 꽂을 준비를 하고, 호스트 8080으로 온 패킷을 컨테이너 IP의 80으로 보내는 iptables DNAT 규칙을 넣는다.",
+    },
+    {
+      from: "dockerd",
+      to: "ctrd",
+      label: "task 생성 (gRPC)",
+      title: "실행을 containerd에 넘긴다",
+      detail: "dockerd가 OCI 규격의 실행 설정(config.json)을 만들어 넘긴다. 어떤 namespace를 만들지, cgroup 한도, 마운트, 실행할 명령이 모두 들어 있다.",
+    },
+    {
+      from: "ctrd",
+      to: "runc",
+      label: "shim → runc create",
+      title: "shim이 runc를 부른다",
+      detail: "containerd는 컨테이너마다 shim 프로세스를 하나 띄우고, shim이 runc를 실행한다. runc는 namespace와 cgroup을 만들고 루트 파일 시스템을 바꾼 뒤 /docker-entrypoint.sh를 실행한다.",
+    },
+    {
+      from: "runc",
+      to: "ctrd",
+      label: "runc 종료",
+      title: "runc는 빠지고 shim이 남는다",
+      detail: "runc는 프로세스를 띄운 뒤 바로 끝난다. 이후 컨테이너 프로세스의 부모는 shim이다. 그래서 dockerd나 containerd가 재시작돼도 컨테이너는 죽지 않는다.",
+    },
+    {
+      from: "dockerd",
+      to: "cli",
+      label: "204",
+      title: "CLI가 ID를 찍고 끝난다",
+      detail: "CLI는 컨테이너 ID를 출력하고 종료한다. 컨테이너는 백그라운드에서 계속 돈다.",
+    },
+  ]}
+/>
+
+2~3번이 의외일 수 있다. pull을 결정하는 건 데몬이 아니라 CLI다. 그래서 `docker run --pull always`처럼 pull 정책 옵션도 CLI 쪽에 있다. 7번은 [iptables NAT 글](/posts/iptables-nat)에서 자세히 다루는 DNAT 그대로다. 여기서 실무에서 자주 겪는 함정이 하나 나온다. Docker가 넣는 규칙은 ufw 규칙보다 먼저 처리되는 체인에 들어가서, ufw로 8080을 막아 놔도 `-p 8080:80`으로 연 포트는 밖에서 그대로 열린다. 외부에 열 필요가 없는 포트는 `-p 127.0.0.1:8080:80`처럼 루프백에만 묶는다.
+
+## docker run 옵션 뜯어보기
+
+`docker run`에는 옵션이 수십 개 있지만 자주 쓰는 건 정해져 있다. 실무에서 웹 서버 하나를 띄울 때 쓰는 줄을 조각으로 나눠 놓았다. 눌러 보면 각각이 무슨 일을 하는지 나온다.
+
+<UrlAnatomy
+  caption="docker run 한 줄의 옵션"
+  base="docker run"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "-d",
+      display: "-d",
+      title: "백그라운드로 띄운다 (detach)",
+      description: "빼면 터미널이 컨테이너의 표준 출력에 붙고, Ctrl+C가 컨테이너에 SIGINT로 전달된다. 서버에서는 거의 항상 붙인다. 로그는 나중에 docker logs로 본다.",
+    },
+    {
+      key: "--name",
+      value: "web",
+      display: "--name web",
+      title: "이름을 붙인다",
+      description: "안 붙이면 admiring_turing 같은 임의 이름이 생긴다. 이름은 호스트에서 유일해야 해서, 같은 이름으로 다시 띄우려면 먼저 docker rm으로 지워야 한다.",
+    },
+    {
+      key: "-p",
+      value: "8080:80",
+      display: "-p 127.0.0.1:8080:80",
+      title: "포트를 연다 (호스트:컨테이너)",
+      description: "호스트의 8080으로 온 연결을 컨테이너의 80으로 보낸다. IP를 빼고 -p 8080:80이라고 쓰면 0.0.0.0, 즉 모든 인터페이스에 열리고 ufw 규칙도 거치지 않는다. 밖에 열 필요가 없으면 127.0.0.1을 붙인다.",
+      code: "-p 8080:80              # 모든 인터페이스\n-p 127.0.0.1:8080:80    # 이 서버 안에서만\n-p 8080:80/udp          # UDP",
+    },
+    {
+      key: "--restart",
+      value: "unless-stopped",
+      display: "--restart unless-stopped",
+      title: "죽거나 재부팅되면 다시 띄운다",
+      description: "기본값은 no다. 직접 멈춘 경우만 빼고 항상 다시 띄우려면 unless-stopped를 쓴다. 아래 재시작 정책 절에서 넷을 비교한다.",
+    },
+    {
+      key: "--memory",
+      value: "256m",
+      display: "--memory 256m --cpus 1",
+      title: "자원 상한을 건다",
+      description: "cgroups로 메모리와 CPU에 한도를 건다. 메모리를 넘으면 OOM으로 죽고(종료 코드 137), CPU는 넘으면 기다린다. 한도가 없으면 호스트 자원을 다 쓸 수 있다.",
+    },
+    {
+      key: "-e",
+      value: "TZ=Asia/Seoul",
+      display: "-e TZ=Asia/Seoul",
+      title: "환경 변수를 넘긴다",
+      description: "여러 개면 -e를 반복하거나 --env-file .env로 파일에서 읽는다. 비밀번호를 -e로 넘기면 docker inspect에 그대로 보이니, 민감한 값은 파일 마운트나 시크릿 관리 도구를 쓴다.",
+    },
+    {
+      key: "-v",
+      value: "./html:/usr/share/nginx/html:ro",
+      display: "-v ./html:/usr/share/nginx/html:ro",
+      title: "호스트 디렉터리를 연결한다",
+      description: "컨테이너를 지워도 남아야 하는 데이터나 설정 파일을 바깥에 둔다. 끝의 :ro는 읽기 전용이다. 경로 대신 이름(-v pgdata:/var/lib/postgresql/data)을 쓰면 Docker가 관리하는 볼륨이 된다.",
+    },
+    {
+      key: "image",
+      display: "nginx:1.27-alpine",
+      title: "실행할 이미지",
+      description: "옵션은 모두 이미지 이름 앞에 온다. 이미지 이름 뒤에 쓴 것은 컨테이너 안에서 실행할 명령으로 넘어간다. docker run nginx -p 80:80은 nginx에게 -p 옵션을 주는 것이 된다.",
+      required: true,
+    },
+  ]}
+/>
+
+## 띄우고, 들여다보고, 멈추고, 지우기
+
+nginx를 띄우고 생명주기를 한 바퀴 돌아 보자. 먼저 띄우기 전 상태부터 본다.
+
+```bash
+# 돌고 있는 컨테이너와 멈춘 컨테이너까지 모두 본다
+docker ps -a
+
+# 8080 포트를 이미 누가 쓰고 있지 않은지 확인
+sudo ss -ltnp | grep ':8080' || echo "8080 비어 있음"
+
+# 웹 서버를 띄운다
+docker run -d --name web -p 8080:80 nginx
+
+# 다시 목록을 본다
+docker ps -a
+```
+
+```text
+CONTAINER ID   IMAGE     COMMAND                  CREATED         STATUS         PORTS                  NAMES
+051d6cdacfff   nginx     "/docker-entrypoint.…"   4 seconds ago   Up 3 seconds   0.0.0.0:8080->80/tcp   web
+```
+
+STATUS 열이 `Up`이면 돌고 있는 것이다. 멈춘 컨테이너는 `Exited (0) 2 minutes ago`처럼 괄호 안에 종료 코드가 나온다. 0이면 정상 종료, 137이면 SIGKILL(OOM이나 강제 종료), 143이면 SIGTERM을 받고 끝난 것이다. PORTS 열의 `0.0.0.0:8080->80/tcp`는 모든 인터페이스의 8080이 컨테이너 80으로 연결됐다는 뜻이다.
+
+동작 확인과 로그 보기는 이렇게 한다.
+
+```bash
+# 응답 헤더만 받아 본다
+curl -sI http://localhost:8080 | head -n 2
+
+# 지금까지의 로그. -f를 붙이면 tail -f처럼 계속 따라간다 (Ctrl+C로 빠져나옴)
+docker logs -f web
+
+# 최근 20줄만, 시간 표시와 함께
+docker logs --tail 20 -t web
+```
+
+```text
+HTTP/1.1 200 OK
+Server: nginx/1.31.7
+```
+
+`docker logs`가 보여 주는 건 컨테이너 PID 1의 표준 출력과 표준 에러다. 앱이 로그를 파일에 쓰면 여기에는 아무것도 안 나온다. nginx 공식 이미지가 `/var/log/nginx/access.log`를 `/dev/stdout`으로 링크해 둔 이유다. 컨테이너용 앱은 로그를 표준 출력으로 내보내는 게 원칙이다.
+
+기본 로그 드라이버(json-file)는 크기 제한이 없어서, 오래 도는 컨테이너는 `/var/lib/docker/containers/<ID>/<ID>-json.log`가 디스크를 채운다. 데몬 설정으로 기본값을 바꿔 둔다.
+
+```bash
+# 현재 설정 확인 (없으면 파일이 없다고 나온다)
+sudo cat /etc/docker/daemon.json
+
+# 로그 파일을 10MB씩 3개까지만 남기게 한다
+sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+EOF
+
+# 문법 확인 후 데몬 재시작 (재시작 정책이 없는 컨테이너는 멈춘 채로 남는다)
+sudo dockerd --validate --config-file /etc/docker/daemon.json
+sudo systemctl restart docker
+
+# 새로 만든 컨테이너에만 적용된다. 확인
+docker run -d --name logtest nginx
+docker inspect -f '{{.HostConfig.LogConfig}}' logtest
+```
+
+```text
+configuration OK
+{json-file map[max-file:3 max-size:10m]}
+```
+
+되돌리려면 `daemon.json`에서 해당 줄을 지우고 다시 `systemctl restart docker` 한다. 이미 만든 컨테이너의 로그 설정은 바뀌지 않으니 다시 만들어야 한다.
+
+컨테이너 안에 들어가서 확인할 때는 `exec`를 쓴다.
+
+```bash
+# 컨테이너 안에서 셸을 연다 (-i 입력 유지, -t 터미널 할당)
+docker exec -it web sh
+
+# 셸 없이 명령 하나만 실행
+docker exec web nginx -t
+```
+
+`exec`는 이미 돌고 있는 컨테이너의 namespace에 새 프로세스를 하나 더 넣는 것이다. 여기서 빠져나와도(`exit`) 컨테이너는 계속 돈다. 이미지에 따라 `bash`가 없을 수 있다. Alpine 기반은 `sh`만 있고, distroless 이미지는 셸 자체가 없다.
+
+멈추고, 다시 켜고, 지우는 건 이렇다.
+
+```bash
+# SIGTERM을 보내고 기다린다. 10초 안에 안 끝나면 SIGKILL
+docker stop web
+
+# 같은 컨테이너를 다시 시작 (쓰기 레이어 그대로)
+docker start web
+
+# stop 후 start
+docker restart web
+
+# 멈춘 컨테이너를 지운다. 돌고 있으면 거부된다
+docker stop web && docker rm web
+
+# 돌고 있어도 강제로 지운다 (SIGKILL)
+docker rm -f web
+```
+
+`stop`과 `rm`의 차이를 구분하자. 멈춘 컨테이너는 쓰기 레이어와 설정이 남아 있어서 `start`로 그대로 되살릴 수 있다. `rm`하면 쓰기 레이어까지 사라진다. `docker run --rm`으로 띄우면 컨테이너가 끝날 때 자동으로 지워진다. 한 번 쓰고 버리는 작업에 쓴다.
+
+### docker inspect에서 볼 곳
+
+`docker inspect`는 컨테이너의 모든 설정과 상태를 JSON으로 보여 준다. 수백 줄이라 다 읽을 필요는 없고, 볼 곳만 알면 된다.
+
+```bash
+# 상태: 실행 중인지, 호스트 PID, 종료 코드, OOM 여부
+docker inspect -f '{{json .State}}' web
+
+# 실제로 실행된 명령 (ENTRYPOINT + CMD)
+docker inspect -f '{{.Path}} {{json .Args}}' web
+
+# 컨테이너 IP (Docker 29부터 .NetworkSettings.IPAddress는 없다. 네트워크별로 본다)
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web
+
+# 포트 연결, 재시작 정책, 메모리 한도
+docker inspect -f '{{json .HostConfig.PortBindings}} {{.HostConfig.RestartPolicy.Name}} {{.HostConfig.Memory}}' web
+```
+
+```text
+{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":6425,"ExitCode":0,"Error":"","StartedAt":"2026-10-16T11:19:58.727835409Z","FinishedAt":"0001-01-01T00:00:00Z"}
+/docker-entrypoint.sh ["nginx","-g","daemon off;"]
+172.17.0.2
+{"80/tcp":[{"HostIp":"","HostPort":"8080"}]} no 0
+```
+
+장애 때 가장 먼저 보는 건 `State`다. 컨테이너가 계속 재시작한다면 `ExitCode`와 `OOMKilled`, `FinishedAt`으로 왜 죽었는지 좁힌다. 두 번째 줄은 이미지의 ENTRYPOINT(`/docker-entrypoint.sh`)에 CMD(`nginx -g "daemon off;"`)가 인자로 붙어 실행됐다는 뜻이다. 메모리 한도가 `0`이면 무제한이다. 인터넷에 돌아다니는 `.NetworkSettings.IPAddress` 템플릿은 Docker 29에서 `map has no entry for key "IPAddress"` 에러를 낸다. 컨테이너 IP는 `docker0` 브리지 안에서만 의미가 있고 재시작하면 바뀔 수 있으니, 컨테이너끼리는 IP 대신 사용자 정의 네트워크의 이름으로 부른다.
+
+## 재시작 정책과 PID 1
+
+서버를 재부팅하면 컨테이너는 어떻게 될까. 기본 재시작 정책은 `no`라서 Docker 데몬이 다시 떠도 컨테이너는 멈춘 채로 남는다. 정책은 네 가지다.
+
+- `no`: 다시 띄우지 않는다. 기본값이다.
+- `on-failure[:횟수]`: 종료 코드가 0이 아닐 때만 다시 띄운다. `on-failure:5`처럼 횟수를 제한할 수 있다.
+- `always`: 어떻게 끝나든 다시 띄운다. 직접 `docker stop`한 것도 데몬이 재시작되면 다시 띄운다.
+- `unless-stopped`: `always`와 같지만, 직접 멈춘 컨테이너는 데몬이 재시작돼도 멈춘 채로 둔다.
+
+운영 서버의 단일 컨테이너에는 `unless-stopped`가 무난하다. 점검하려고 일부러 멈춰 둔 컨테이너가 재부팅 뒤에 멋대로 살아나지 않는다. 다시 띄울 때는 100ms부터 시작해 간격을 두 배씩 늘린다(최대 1분). 컨테이너가 10초 이상 버티면 간격이 처음으로 돌아간다. 이미 만든 컨테이너는 `docker update`로 정책만 바꿀 수 있다.
+
+```bash
+# 지금 정책 확인
+docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' web
+
+# 지우지 않고 정책만 바꾼다
+docker update --restart unless-stopped web
+
+# 몇 번 다시 떴는지
+docker inspect -f '{{.RestartCount}}' web
+```
+
+재시작 정책은 한 서버 안의 이야기다. 서버 자체가 죽으면 다른 서버로 옮겨 띄워 주지 않는다. 그 일은 쿠버네티스 같은 오케스트레이터가 맡는다.
+
+`docker stop`은 컨테이너 PID 1에 SIGTERM을 보내고, 기본 10초를 기다렸다가 그래도 살아 있으면 SIGKILL을 보낸다. 앱은 SIGTERM을 받으면 새 요청을 그만 받고, 처리 중인 요청을 끝내고, DB 연결을 닫고 나가야 한다. 이걸 graceful shutdown이라고 한다.
+
+그런데 PID 1은 리눅스에서 특별하다. 커널은 PID 1에게는 시그널 기본 동작을 적용하지 않는다. 보통 프로세스는 SIGTERM 핸들러가 없으면 기본 동작대로 죽지만, PID 1은 핸들러가 없으면 그냥 무시한다. 셸 스크립트나 `sh -c`로 앱을 띄워 셸이 PID 1이 되면, 셸은 SIGTERM을 무시하고 자식에게 전달하지도 않는다. 그 결과 `docker stop`은 늘 10초를 다 기다린 뒤 SIGKILL로 끝난다. 직접 재 보면 차이가 보인다.
+
+```bash
+# 셸이 PID 1인 컨테이너: SIGTERM이 무시된다
+docker run -d --rm --name sig1 alpine:3.20 sh -c 'sleep 1000; echo done'
+time docker stop sig1
+
+# --init: 작은 init(tini)이 PID 1이 되어 시그널을 전달하고 좀비를 거둔다
+docker run -d --rm --init --name sig2 alpine:3.20 sh -c 'sleep 1000; echo done'
+time docker stop sig2
+```
+
+```text
+sig1
+
+real	0m10.208s
+user	0m0.010s
+sys	0m0.030s
+sig2
+
+real	0m0.210s
+user	0m0.019s
+sys	0m0.027s
+```
+
+10.2초와 0.2초다. 첫 번째는 SIGKILL로 끝났으니 처리 중이던 요청이 그대로 끊긴다. 고치는 방법은 셋이다. 앱이 PID 1이 되도록 exec 형식으로 실행하고(Dockerfile 글에서 다룬다), 앱이 SIGTERM 핸들러를 갖게 하고, 자식 프로세스를 여럿 띄우는 앱이면 `--init`으로 tini를 PID 1에 둔다. 종료에 10초보다 오래 걸리는 앱은 `docker stop -t 30`이나 `docker run --stop-timeout 30`으로 기다리는 시간을 늘린다.
+
+## 자원과 디스크 들여다보기
+
+컨테이너가 자원을 얼마나 쓰는지는 `docker stats`로 본다. `top`처럼 계속 갱신되고, `--no-stream`을 붙이면 한 번만 찍는다.
+
+```bash
+# 모든 컨테이너의 CPU·메모리·네트워크·디스크 I/O 한 번만
+docker stats --no-stream
+```
+
+```text
+CONTAINER ID   NAME      CPU %     MEM USAGE / LIMIT   MEM %     NET I/O       BLOCK I/O   PIDS
+051d6cdacfff   web       0.00%     5MiB / 15.72GiB     0.03%     1.2kB / 84B   0B / 0B     5
+b7e2c0d91a44   limited   0.00%     4.8MiB / 256MiB     1.88%     876B / 0B     0B / 0B     5
+```
+
+LIMIT 열을 본다. 한도를 안 준 `web`은 호스트 메모리 전체(15.72GiB)가 한도로 나오고, `limited`는 256MiB다. CPU %는 코어 하나가 100%라서 코어가 넷이면 400%까지 올라갈 수 있다.
+
+Docker를 오래 쓰면 디스크가 조용히 찬다. 안 쓰는 이미지, 멈춘 컨테이너, 빌드 캐시가 쌓인다.
+
+```bash
+# 종류별 사용량과 지울 수 있는 양
+docker system df
+
+# 자세히: 이미지·컨테이너·볼륨 하나하나
+docker system df -v
+```
+
+```text
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          2         1         317.8MB   74.47MB (23%)
+Containers      1         1         53.25kB   0B (0%)
+Local Volumes   0         0         0B        0B
+Build Cache     0         0         0B        0B
+```
+
+RECLAIMABLE이 지금 아무 컨테이너도 쓰지 않아서 지울 수 있는 양이다. 정리는 범위가 좁은 것부터 한다.
+
+```bash
+# 멈춘 컨테이너만 지운다
+docker container prune
+
+# 태그 없는 이미지(dangling)만 지운다
+docker image prune
+
+# 빌드 캐시 중 일주일 넘게 안 쓴 것만
+docker builder prune --filter until=168h
+
+# 멈춘 컨테이너, 안 쓰는 네트워크, dangling 이미지, 빌드 캐시를 한 번에
+docker system prune
+```
+
+<Callout kind="warning" title="prune에 -a와 --volumes를 붙이기 전에">
+  `docker system prune -a`는 지금 돌고 있는 컨테이너가 쓰지 않는 이미지를 전부 지운다. 멈춰 둔 컨테이너의 이미지도 지워져서, 다음에 띄울 때 레지스트리에서 다시 받아야 한다. `--volumes`까지 붙이면 어떤 컨테이너에도 연결되지 않은 볼륨이 지워지는데, 잠깐 컨테이너를 지워 둔 데이터베이스 볼륨도 여기에 걸린다. 볼륨은 되돌릴 방법이 없다. 먼저 `docker system df -v`와 `docker volume ls -f dangling=true`로 지워질 목록을 보고, 남길 볼륨은 `docker run --rm -v pgdata:/data -v $PWD:/backup alpine tar czf /backup/pgdata.tgz -C /data .`처럼 백업한 뒤 지운다.
+</Callout>
+
+## 이미지 이름은 레지스트리부터 다이제스트까지
+
+`nginx`라고만 쓴 이미지 이름은 사실 많이 줄인 것이다. 생략된 부분을 채우면 `docker.io/library/nginx:latest`가 된다. 레지스트리 주소가 없으면 Docker Hub(`docker.io`)이고, 공식 이미지는 `library/` 아래에 있고, 태그가 없으면 `latest`다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="이미지 참조를 조각으로 나눠 보기"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "registry",
+      display: "docker.io/",
+      title: "레지스트리",
+      description: "이미지를 보관하는 서버다. 생략하면 Docker Hub다. GitHub은 ghcr.io, AWS는 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com 같은 주소를 쓴다. 첫 조각에 점이나 콜론이 있거나 localhost면 레지스트리 주소로 읽는다.",
+    },
+    {
+      key: "repository",
+      display: "library/nginx",
+      title: "저장소 (네임스페이스/이름)",
+      description: "Docker Hub 공식 이미지는 library/ 아래에 있어서 생략할 수 있다. 개인이나 회사 이미지는 bitnami/redis, myteam/api처럼 계정 이름이 앞에 붙는다.",
+      required: true,
+    },
+    {
+      key: "tag",
+      display: ":1.27-alpine",
+      title: "태그",
+      description: "사람이 붙인 이름표다. 같은 태그가 나중에 다른 이미지를 가리키도록 옮겨질 수 있다. 1.27-alpine은 1.27의 패치가 나오면 새 이미지로 옮겨 가고, latest는 그냥 마지막으로 푸시된 것이다. 생략하면 latest다.",
+    },
+    {
+      key: "digest",
+      display: "@sha256:65645c7b…2a10",
+      title: "다이제스트",
+      description: "이미지 매니페스트 내용의 SHA-256 해시다. 내용이 바뀌면 값도 바뀌니, 다이제스트로 지정하면 언제 받아도 정확히 같은 이미지가 온다. 태그와 함께 쓰면 태그는 읽기용이고 실제로는 다이제스트로 받는다.",
+      code: "docker pull nginx:1.27-alpine\n# Digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10\n\ndocker inspect nginx:1.27-alpine --format '{{json .RepoDigests}}'\n# [\"nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10\"]",
+    },
+  ]}
+/>
+
+`latest`는 "가장 최신"이라는 약속이 아니다. 아무 태그 없이 푸시하면 붙는 기본 이름일 뿐이다. 운영에서 `nginx:latest`로 띄우면 오늘과 다음 달에 받은 이미지가 다를 수 있고, 서버 두 대가 서로 다른 nginx를 돌릴 수도 있다. 장애가 났을 때 어느 버전으로 돌아가야 할지도 알 수 없다.
+
+그래서 운영에서는 적어도 `nginx:1.27-alpine`처럼 버전이 담긴 태그를 쓰고, 재현성이 정말 중요하면 다이제스트로 고정한다. 다이제스트로 고정하면 보안 패치가 나와도 자동으로 받지 않으니, 갱신은 Renovate나 Dependabot 같은 도구로 다이제스트를 올리는 PR을 받아서 한다. 위 예의 `1.27`도 이 글을 쓰는 시점에는 지원이 끝난 옛 버전이다. 태그를 고정했으면 주기적으로 올려 줘야 한다.
+
+```bash
+# 다이제스트로 받기
+docker pull nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+
+# 로컬 이미지가 레지스트리의 어떤 다이제스트에서 왔는지
+docker image inspect nginx:1.27-alpine --format '{{json .RepoDigests}}'
+
+# 내려받은 이미지 목록. CONTENT SIZE는 압축 크기, DISK USAGE는 풀어 놓은 것까지
+docker image ls
+```
+
+```text
+IMAGE               ID             DISK USAGE   CONTENT SIZE   EXTRA
+nginx:1.27-alpine   65645c7bb6a0       74.5MB         21.9MB
+nginx:latest        332d0beea97c        243MB         66.8MB   U
+```
+
+EXTRA의 `U`는 지금 컨테이너가 쓰고 있는(in use) 이미지라는 표시다. 같은 nginx라도 Debian 기반 `latest`와 Alpine 기반은 크기가 세 배쯤 차이 난다. 이 차이가 어디서 오는지, 어떤 베이스를 고를지는 Dockerfile 글에서 다룬다.
+
+Docker Hub는 로그인하지 않은 pull에 IP 단위 횟수 제한을 둔다. CI 서버 여러 대가 같은 NAT IP로 나가면 `429 Too Many Requests`를 만나기 쉽다. `docker login`으로 인증하거나, 사내 레지스트리에 미러를 두거나, 클라우드 레지스트리의 pull-through 캐시를 쓴다.
+
+## 컨테이너를 다시 정리하면
+
+컨테이너는 호스트 커널을 함께 쓰는 평범한 프로세스이고, namespace로 보이는 범위를 자르고 cgroups로 쓸 수 있는 양을 묶은 것이다. 이미지는 읽기 전용 레이어를 겹친 파일 시스템 묶음이고, 컨테이너는 그 위에 쓰기 레이어 한 장을 얹어 실행한 것이다. 처음 상황으로 돌아가면, Node 버전과 시스템 라이브러리까지 이미지에 담아 두면 노트북과 서버가 같은 파일 시스템을 보게 되니 "내 PC에서는 된다"가 서버에서도 그대로 된다. 커널만은 서버의 것을 쓴다는 한계와 함께. 다음 글에서는 그 이미지를 직접 만든다.
+
+## 면접에서 나올 만한 질문
+
+### 컨테이너와 가상 머신은 무엇이 다른가요?
+
+VM은 하이퍼바이저 위에서 게스트 OS가 자기 커널로 부팅하고, 컨테이너는 호스트 커널 하나를 함께 쓰는 격리된 프로세스다. 그래서 컨테이너는 1초 안쪽으로 뜨고 메모리 오버헤드가 작지만, 호스트와 같은 커널 계열의 OS만 돌릴 수 있고 커널 취약점의 영향을 함께 받는다. 격리 강도가 중요한 멀티테넌트 환경에서는 VM이나 gVisor·Firecracker 같은 중간 형태를 쓴다.
+
+### 컨테이너는 리눅스의 어떤 기능으로 만들어지나요?
+
+namespace와 cgroups다. namespace는 pid, net, mnt, uts, ipc, user, cgroup처럼 자원별로 프로세스가 볼 수 있는 범위를 나누고, cgroups는 CPU·메모리·I/O·프로세스 수 같은 사용량에 한도를 건다. 여기에 overlayfs로 이미지 레이어를 합친 루트 파일 시스템, capabilities와 seccomp로 권한 제한을 더한다. runc가 OCI 규격에 맞춰 이것들을 조합해 프로세스를 띄운다.
+
+### 컨테이너 안의 root는 호스트의 root와 같은가요?
+
+Docker 기본 설정에서는 같다. user namespace를 기본으로 쓰지 않아서 컨테이너 안 UID 0은 호스트에서도 UID 0이다. capabilities가 줄어 있고 seccomp로 위험한 시스템 콜이 막혀 있어 바로 호스트를 건드리지는 못하지만, 탈출 취약점이나 잘못된 마운트가 있으면 호스트 root가 된다. 그래서 이미지 안에서 일반 사용자로 실행하고, 필요하면 userns-remap이나 rootless 모드를 쓴다.
+
+### 메모리 한도를 넘으면 어떻게 되나요? CPU는요?
+
+메모리는 빼앗을 수 없어서 한도를 넘으면 커널 OOM killer가 그 cgroup 안의 프로세스를 SIGKILL로 죽이고, 종료 코드 137과 OOMKilled: true가 남는다. CPU는 기간마다 쓸 수 있는 시간(cpu.max)을 다 쓰면 다음 기간까지 멈추는 throttling이 일어난다. 그래서 CPU 한도가 빡빡하면 죽지는 않지만 지연이 튄다.
+
+### 이미지와 컨테이너는 어떻게 다른가요?
+
+이미지는 읽기 전용 레이어를 겹친 파일 시스템과 실행 설정의 묶음이고, 컨테이너는 그 위에 쓰기 가능한 레이어 한 장을 얹어 실행한 인스턴스다. 컨테이너 안에서 파일을 바꾸면 copy-on-write로 쓰기 레이어에만 기록되고, 같은 이미지의 다른 컨테이너는 영향을 받지 않는다. 쓰기 레이어는 컨테이너를 지우면 사라지므로 남아야 할 데이터는 볼륨에 둔다.
+
+### docker stop이 항상 10초씩 걸립니다. 왜 그런가요?
+
+PID 1이 SIGTERM을 처리하지 못해서 10초 타임아웃 뒤 SIGKILL로 끝나는 경우다. 커널은 PID 1에 시그널 기본 동작을 적용하지 않아서 핸들러가 없으면 SIGTERM을 무시한다. 셸 형식 CMD나 `sh -c`로 띄워 셸이 PID 1이 된 경우가 흔하다. exec 형식으로 앱이 직접 PID 1이 되게 하고, 앱에 SIGTERM 핸들러를 넣고, 자식이 많으면 `--init`으로 tini를 둔다.
+
+### docker 그룹에 사용자를 넣으면 무엇이 위험한가요?
+
+docker 그룹은 Docker 소켓에 쓸 수 있고, 그건 호스트 root와 같다. 호스트의 `/`를 마운트한 컨테이너를 띄우면 비밀번호 없이 호스트 파일을 root로 고칠 수 있다. 같은 이유로 컨테이너 안에 docker.sock을 마운트하는 것도 위험하다. 권한을 나눠야 하면 rootless 모드를 쓴다.
+
+### 운영에서 latest 태그를 쓰면 안 되는 이유는 무엇인가요?
+
+latest는 최신을 보장하지 않고 마지막에 푸시된 이미지를 가리키는 움직이는 이름표라서, 언제 어느 서버가 받았느냐에 따라 다른 이미지가 돈다. 장애 때 어떤 버전이 돌았는지, 어디로 롤백할지도 알 수 없다. 버전 태그를 쓰고, 재현성이 필요하면 다이제스트로 고정한 뒤 자동화 도구로 갱신한다.
+
+### -p 8080:80으로 연 포트를 ufw로 막았는데 밖에서 접속됩니다. 왜 그런가요?
+
+Docker가 포트를 열 때 넣는 iptables DNAT 규칙이 ufw 규칙보다 먼저 처리되는 경로에 있어서다. 외부로 들어온 패킷이 INPUT이 아니라 FORWARD로 컨테이너에 가기 때문에 ufw의 INPUT 규칙을 거치지 않는다. 밖에 열 필요가 없으면 `-p 127.0.0.1:8080:80`처럼 바인딩 주소를 제한하고, 꼭 필터링해야 하면 DOCKER-USER 체인에 규칙을 넣는다.

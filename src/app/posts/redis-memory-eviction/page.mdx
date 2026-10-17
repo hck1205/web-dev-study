@@ -1,0 +1,751 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("redis-memory-eviction");
+
+저녁 8시, 주문이 몰리는 시간에 장바구니 담기 API가 500을 내기 시작한다. 상품 목록은 잘 보이고 로그인도 된다. 장바구니에 담는 순간만 실패한다. 애플리케이션 로그에는 Redis가 돌려준 에러가 한 줄 찍혀 있다.
+
+```text
+(error) OOM command not allowed when used memory > 'maxmemory'.
+```
+
+같은 회사의 다른 서버에서는 반대 일이 생긴다. 이쪽은 에러가 없다. 대신 Redis 프로세스가 통째로 사라졌다가 systemd가 다시 띄웠고, 그 사이 캐시가 전부 비어서 DB가 몇 분 동안 몰매를 맞았다. 커널 로그에 범인이 남아 있다.
+
+```text
+[Fri Oct 16 20:03:11 2026] Out of memory: Killed process 2154 (redis-server) total-vm:8312040kB, anon-rss:7614208kB, file-rss:1792kB, shmem-rss:0kB, UID:110 pgtables:15200kB oom_score_adj:0
+```
+
+앞의 것은 Redis가 스스로 정한 한도(`maxmemory`)에 걸려 쓰기를 거절한 것이고, 뒤의 것은 한도를 정하지 않아서 리눅스 커널이 메모리를 되찾으려고 프로세스를 죽인 것이다. 둘 다 "메모리가 가득 차면 무엇을 할지"를 미리 정하지 않아서 생긴 장애다. 이 글은 Redis가 메모리를 어디에 쓰는지부터 보고, 한도와 축출 정책을 고르는 법, 리눅스 쪽에서 챙길 설정, 한도를 몇 GB로 잡을지까지 따라간다.
+
+기준은 Ubuntu 24.04 LTS의 `redis-server` 패키지(7.0.15)다. 예제는 [Redis 기본 글](/posts/redis-basics)의 쇼핑몰을 그대로 쓴다. 상품 캐시 `cache:product:{id}`(JSON 문자열, 1시간 TTL) 20만 개, 로그인 세션 `session:{id}`(해시, 30분 TTL) 5만 개, 오늘의 판매 순위 `rank:daily`(정렬된 셋, 30만 개 상품)가 들어 있다. 노트북에서 재현하려고 실제보다 작게 만들었다.
+
+## 키 하나가 실제로 차지하는 크기
+
+상품 캐시 하나를 보자. 값은 266바이트짜리 JSON이다.
+
+```bash
+# 값의 길이(바이트)
+redis-cli STRLEN cache:product:1001
+
+# 이 키가 메모리에서 실제로 차지하는 바이트 (키 이름, 값, 관리 구조 포함)
+redis-cli MEMORY USAGE cache:product:1001
+```
+
+```text
+(integer) 266
+(integer) 392
+```
+
+값은 266바이트인데 키 하나가 392바이트를 쓴다. 나머지 126바이트는 키 이름 문자열, 값을 감싸는 객체 헤더, 해시 테이블에서 이 키를 가리키는 항목, 그리고 메모리 할당기(jemalloc)가 크기를 정해진 단위로 올려 잡으면서 생기는 여유분이다. TTL이 걸린 키는 만료 시각을 따로 담는 테이블에도 항목이 하나 더 생긴다. `MEMORY STATS`로 보면 이 예제에서 키 25만 개를 찾는 메인 해시 테이블이 약 12MB, 만료 테이블이 약 8MB였다.
+
+그래서 작은 값을 아주 많이 넣을수록 관리 비용의 비율이 커진다. 값이 10바이트짜리 카운터라도 키 하나에 수십 바이트가 붙는다. 용량을 어림할 때 "값 크기 × 키 개수"로 계산하면 실제보다 한참 작게 나오는 이유다.
+
+## 작은 컬렉션은 압축된 모양으로 산다
+
+해시, 셋, 정렬된 셋 같은 컬렉션은 크기에 따라 내부 표현(인코딩)이 바뀐다. 원소가 적을 때는 원소를 한 줄로 이어 붙인 연속 메모리(listpack)에 담고, 커지면 포인터로 연결된 해시 테이블이나 스킵 리스트로 바꾼다. 연속 메모리는 원소마다 포인터와 헤더를 두지 않아서 훨씬 작다. 대신 원소를 찾을 때 처음부터 훑어야 하니, 작을 때만 쓴다.
+
+회원 42의 프로필 해시로 확인해 보자.
+
+```bash
+# 필드 세 개짜리 해시를 만든다
+redis-cli HSET user:42 name kim grade gold point 3200
+
+# 내부 인코딩과 메모리
+redis-cli OBJECT ENCODING user:42
+redis-cli MEMORY USAGE user:42
+
+# 65바이트짜리 값을 넣으면 (hash-max-listpack-value 64를 넘는다)
+redis-cli HSET user:42 memo "$(printf 'a%.0s' {1..65})"
+redis-cli OBJECT ENCODING user:42
+redis-cli MEMORY USAGE user:42
+
+# 긴 필드를 지워도
+redis-cli HDEL user:42 memo
+redis-cli OBJECT ENCODING user:42
+redis-cli MEMORY USAGE user:42
+```
+
+```text
+(integer) 3
+"listpack"
+(integer) 104
+(integer) 1
+"hashtable"
+(integer) 376
+(integer) 1
+"hashtable"
+(integer) 264
+```
+
+필드 세 개일 때는 104바이트다. 값 하나가 64바이트를 넘자 해시 테이블로 바뀌면서 376바이트가 됐고, 그 필드를 지워도 해시 테이블로 남아 264바이트를 쓴다. 한 번 커진 인코딩은 원소가 줄어도 되돌아가지 않는다. 재시작하며 RDB에서 다시 읽을 때 기준에 맞으면 작은 인코딩으로 돌아온다.
+
+전환 기준은 설정으로 정해져 있다. Redis 7.0 기본값은 이렇다.
+
+```bash
+# 해시: 필드 512개 이하, 각 값 64바이트 이하면 listpack
+redis-cli CONFIG GET hash-max-listpack-*
+
+# 정렬된 셋: 원소 128개 이하, 각 값 64바이트 이하면 listpack
+redis-cli CONFIG GET zset-max-listpack-*
+
+# 셋: 원소가 모두 정수이고 512개 이하면 intset
+redis-cli CONFIG GET set-max-intset-entries
+```
+
+```text
+1) "hash-max-listpack-entries"
+2) "512"
+3) "hash-max-listpack-value"
+4) "64"
+1) "zset-max-listpack-value"
+2) "64"
+3) "zset-max-listpack-entries"
+4) "128"
+1) "set-max-intset-entries"
+2) "512"
+```
+
+정수만 담은 셋은 intset이라는 정렬된 정수 배열이 된다. 상품 1001의 태그 id `{1, 2, 3}`을 담은 셋은 `"intset"`이었다가, 문자열 `audio`를 하나 넣자 `"hashtable"`로 바뀌었다. 문자열 값도 마찬가지로 `12345` 같은 정수는 `int`, 44바이트 이하의 짧은 문자열은 객체 헤더와 붙어 한 번에 할당되는 `embstr`, 그보다 길면 `raw`가 된다. 상품 캐시는 266바이트라 `raw`다. Redis 6 이전 문서에는 listpack 대신 ziplist라는 이름이 나오는데, 7.0에서 listpack으로 바뀌었고 옛 설정 이름(`hash-max-ziplist-entries`)도 별칭으로 남아 있다.
+
+이 기준을 알면 설계에서 메모리를 아낄 수 있다. 회원 정보를 `user:42:name`, `user:42:grade`처럼 필드마다 키로 나누면 키마다 관리 비용이 붙는다. 해시 하나에 필드로 담으면 listpack 하나로 끝난다. 반대로 순위표처럼 원소가 수십만 개인 컬렉션은 처음부터 큰 인코딩이고, 그 키 하나가 수십 MB를 차지한다.
+
+## INFO memory를 한 줄씩 읽기
+
+메모리 상태를 볼 때 가장 먼저 치는 명령이 `INFO memory`다. 처음 보면 줄이 50개가 넘는데, 장애 때 보는 줄은 몇 개 안 된다.
+
+```bash
+# 메모리 관련 지표 전체
+redis-cli INFO memory
+```
+
+장애를 노트북에서 재현해 봤다. 예제 데이터를 넣은 뒤 `maxmemory`를 100MB로 낮춘 상태다. 아래는 그 출력에서 주요 줄만 추린 것이다(순서는 실제 출력과 같다).
+
+```text
+# Memory
+used_memory:136342624
+used_memory_human:130.03M
+used_memory_rss:145338368
+used_memory_rss_human:138.61M
+used_memory_peak:136375168
+used_memory_peak_human:130.06M
+used_memory_overhead:21070792
+used_memory_startup:876248
+used_memory_dataset:115271832
+used_memory_dataset_perc:85.09%
+total_system_memory:16874930176
+total_system_memory_human:15.72G
+maxmemory:104857600
+maxmemory_human:100.00M
+maxmemory_policy:noeviction
+mem_fragmentation_ratio:1.07
+mem_fragmentation_bytes:9058736
+mem_not_counted_for_evict:0
+mem_replication_backlog:0
+mem_clients_normal:0
+mem_allocator:jemalloc-5.3.0
+```
+
+아래 그림에서 각 줄을 눌러 보면 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="INFO memory에서 장애 때 보는 줄"
+  base="INFO memory"
+  separator=" → "
+  joiner="  "
+  params={[
+    {
+      key: "used_memory",
+      display: "used_memory 130M",
+      title: "Redis가 할당받아 쓰고 있는 양",
+      description: "Redis가 할당기(jemalloc)에 요청해 받은 메모리의 합이다. 데이터, 키 관리 구조, 클라이언트 버퍼, 복제 버퍼가 다 들어간다. maxmemory와 비교하는 값이 바로 이것이다(복제·AOF 버퍼는 비교할 때 뺀다).",
+      code: "used_memory:136342624\nused_memory_human:130.03M",
+      required: true,
+    },
+    {
+      key: "used_memory_rss",
+      display: "rss 138M",
+      title: "운영체제가 보는 실제 사용량",
+      description: "프로세스가 실제로 물리 메모리를 차지하는 양(Resident Set Size)이다. ps나 top의 RES와 같은 값이다. 할당기가 OS에 돌려주지 않고 쥐고 있는 빈 공간까지 포함해서 used_memory보다 크다. OOM 킬러가 보는 것도 이쪽이다.",
+      code: "used_memory_rss:145338368\nused_memory_rss_human:138.61M",
+      required: true,
+    },
+    {
+      key: "used_memory_peak",
+      display: "peak 130M",
+      title: "지금까지의 최고치",
+      description: "재시작 이후 used_memory가 가장 높았던 값이다. 지금은 낮아도 피크가 maxmemory 근처였다면 그때 축출이나 OOM 에러가 났을 수 있다. 서버 메모리를 정할 때 평소 값이 아니라 이 값을 본다.",
+      code: "used_memory_peak_human:130.06M",
+    },
+    {
+      key: "dataset",
+      display: "dataset 85%",
+      title: "데이터와 관리 비용의 비율",
+      description: "used_memory_overhead는 키 해시 테이블, 만료 테이블, 클라이언트·복제 버퍼처럼 데이터가 아닌 부분이고, used_memory_dataset은 나머지다. 작은 키가 많을수록 overhead 비율이 커진다.",
+      code: "used_memory_overhead:21070792\nused_memory_dataset:115271832\nused_memory_dataset_perc:85.09%",
+    },
+    {
+      key: "maxmemory",
+      display: "maxmemory 100M",
+      title: "스스로 정한 한도",
+      description: "used_memory가 이 값을 넘으면 정책에 따라 키를 지우거나 쓰기를 거절한다. 0이면 한도가 없다는 뜻이고, 64비트 서버의 기본값이다.",
+      code: "maxmemory:104857600\nmaxmemory_human:100.00M",
+      required: true,
+    },
+    {
+      key: "maxmemory_policy",
+      display: "noeviction",
+      title: "가득 찼을 때 할 일",
+      description: "noeviction은 아무것도 지우지 않고 메모리를 늘리는 쓰기 명령을 거절한다. 장바구니 담기가 OOM 에러로 실패한 이유다. 읽기와 DEL은 계속 된다.",
+      code: "maxmemory_policy:noeviction",
+      required: true,
+    },
+    {
+      key: "frag",
+      display: "frag 1.07",
+      title: "단편화 비율",
+      description: "rss를 할당한 양으로 나눈 값이다. 1.0~1.5 정도가 보통이다. 많이 크면 빈 조각이 많은 것이고, 1보다 작으면 일부가 스왑으로 나가 있다는 신호다. 데이터가 몇 MB뿐인 서버는 기본 상주 메모리 때문에 비율이 크게 나오니 무시해도 된다.",
+      code: "mem_fragmentation_ratio:1.07\nmem_fragmentation_bytes:9058736",
+    },
+  ]}
+/>
+
+이 출력에서 장애 원인은 세 줄로 읽힌다. `used_memory`(130M)가 `maxmemory`(100M)를 넘었고, 정책이 `noeviction`이라 Redis는 지울 키를 고르지 않고 쓰기를 거절했다. 같은 상태에서 명령을 보내면 이렇게 된다.
+
+```bash
+redis-cli SET cart:42 '[1001,1003]'          # 쓰기: 거절된다
+redis-cli GET cache:product:1 | head -c 40    # 읽기: 된다
+redis-cli DEL cache:product:2                 # 삭제: 된다
+```
+
+```text
+(error) OOM command not allowed when used memory > 'maxmemory'.
+{"id":1,"name":"product-1","price":1001,
+(integer) 1
+```
+
+빈 서버에서 같은 명령을 치면 `mem_fragmentation_ratio`가 7이 넘게 나오기도 한다. 이 예제 서버도 데이터를 넣기 전에는 7.84였다. 데이터가 1MB도 안 되는데 프로세스 기본 상주 메모리가 수 MB라서 그렇다. 비율은 데이터가 수백 MB 이상일 때 의미가 있다.
+
+## 어떤 키가 메모리를 먹고 있나
+
+전체 양을 봤으면 범인을 찾는다. `redis-cli`에 키 공간을 훑어 큰 키를 찾아 주는 옵션이 두 개 있다.
+
+```bash
+# 자료형별로 원소 수(문자열은 길이)가 가장 큰 키
+redis-cli --bigkeys
+
+# 자료형별로 메모리를 가장 많이 쓰는 키 (키마다 MEMORY USAGE를 부른다)
+redis-cli --memkeys
+
+# 운영 서버라면 SCAN 100번마다 0.1초 쉬게 해서 부하를 줄인다
+redis-cli --memkeys -i 0.1
+```
+
+`--memkeys`의 요약 부분이다.
+
+```text
+-------- summary -------
+
+Sampled 250005 keys in the keyspace!
+Total key length in bytes is 4527835 (avg len 18.11)
+
+Biggest   hash found '"user:42"' has 264 bytes
+Biggest string found '"cache:product:46655"' has 392 bytes
+Biggest    set found '"tags:1001"' has 272 bytes
+Biggest   zset found '"rank:daily"' has 34612256 bytes
+
+0 lists with 0 bytes (00.00% of keys, avg size 0.00)
+50001 hashs with 6000264 bytes (20.00% of keys, avg size 120.00)
+200002 strings with 78400128 bytes (80.00% of keys, avg size 392.00)
+0 streams with 0 bytes (00.00% of keys, avg size 0.00)
+1 sets with 272 bytes (00.00% of keys, avg size 272.00)
+1 zsets with 34612256 bytes (00.00% of keys, avg size 34612256.00)
+```
+
+자료형별 합계 줄이 쓸모 있다. 상품 캐시 20만 개가 78MB, 세션 5만 개가 6MB, 그리고 `rank:daily` 키 하나가 34MB다. 키 하나가 전체의 4분의 1을 차지한다. 이런 키는 메모리뿐 아니라 지울 때도 문제가 된다. `DEL rank:daily`는 원소 30만 개를 메인 스레드에서 해제하느라 그동안 다른 명령을 세운다. 큰 키는 `UNLINK`로 지워서 해제를 백그라운드 스레드에 넘긴다.
+
+두 옵션 다 `SCAN`으로 키 공간 전체를 한 바퀴 돈다. 서버를 막지는 않지만 키가 수천만 개면 오래 걸리고 CPU를 쓴다. 운영 중이라면 레플리카에서 돌리거나 `-i`로 쉬어 가며 돌린다. `--bigkeys`는 문자열은 길이, 컬렉션은 원소 수로 비교하니 "원소는 적은데 값이 큰" 해시를 놓친다. 메모리가 궁금하면 `--memkeys`를 쓴다.
+
+키 하나를 자세히 볼 때는 `MEMORY USAGE`다. 컬렉션은 기본으로 원소 5개만 표본으로 재서 전체를 추정한다. 원소 크기가 들쭉날쭉하면 `SAMPLES 0`으로 전부 센다.
+
+```bash
+# 원소 5개를 표본으로 추정 (기본)
+redis-cli MEMORY USAGE rank:daily
+
+# 원소를 전부 세서 정확히 (큰 키에서는 느리다)
+redis-cli MEMORY USAGE rank:daily SAMPLES 0
+```
+
+```text
+(integer) 33652256
+(integer) 34285456
+```
+
+`MEMORY DOCTOR`는 단편화가 심하거나 피크가 현재보다 훨씬 높거나 클라이언트 버퍼가 큰 경우처럼 알려진 문제를 찾아 문장으로 알려 준다. 문제가 없으면 이렇게 답한다.
+
+```text
+Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.
+```
+
+## maxmemory를 정하지 않으면 생기는 일
+
+64비트 서버에서 `maxmemory`의 기본값은 0, 한도 없음이다. Ubuntu 패키지의 `/etc/redis/redis.conf`도 `# maxmemory <bytes>`가 주석으로 막혀 있다. 이 상태에서 데이터가 계속 늘면 Redis는 끝까지 메모리를 요청한다. 서버의 물리 메모리와 스왑이 바닥나면 리눅스 커널의 OOM 킬러가 메모리를 가장 많이 쓰는 프로세스를 골라 죽이는데, Redis 서버라면 그게 거의 항상 `redis-server`다. 글 첫머리의 두 번째 장애가 이것이다.
+
+```bash
+# 커널 로그에서 OOM 킬러 기록 찾기
+sudo journalctl -k | grep -i "killed process"
+
+# systemd 쪽 기록
+sudo journalctl -u redis-server | grep -i oom
+```
+
+```text
+Oct 16 20:03:11 shop-redis-1 kernel: Out of memory: Killed process 2154 (redis-server) total-vm:8312040kB, anon-rss:7614208kB, file-rss:1792kB, shmem-rss:0kB, UID:110 pgtables:15200kB oom_score_adj:0
+Oct 16 20:03:11 shop-redis-1 systemd[1]: redis-server.service: A process of this unit has been killed by the OOM killer.
+```
+
+`anon-rss`가 프로세스가 실제로 쓰던 메모리다. 8GB 서버에서 Redis 혼자 7.3GB를 쓰고 있었다. OOM 킬러는 `SIGKILL`로 죽이니 Redis가 마지막 스냅샷을 남길 틈도 없다.
+
+그래서 한도는 반드시 정한다. 실행 중에 바로 바꾸고, 설정 파일에도 남긴다.
+
+```bash
+# 실행 중인 서버에 바로 적용 (재시작 필요 없음)
+redis-cli CONFIG SET maxmemory 2gb
+redis-cli CONFIG SET maxmemory-policy allkeys-lru
+
+# 확인 (바이트로 나온다)
+redis-cli CONFIG GET maxmemory
+
+# 지금 설정을 redis.conf에 다시 써서 재시작 후에도 유지
+redis-cli CONFIG REWRITE
+```
+
+```text
+OK
+OK
+1) "maxmemory"
+2) "2147483648"
+OK
+```
+
+`CONFIG SET`만 하고 끝내면 재시작하는 순간 원래대로 돌아간다. `CONFIG REWRITE`는 현재 설정을 `redis.conf`에 반영한다(파일에 쓸 권한이 있어야 한다). 직접 고치고 싶으면 `/etc/redis/redis.conf`에 아래 두 줄을 넣고 `sudo systemctl restart redis-server`로 다시 시작해도 된다.
+
+```text
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+```
+
+현재 사용량보다 작은 값으로 줄이면 Redis 로그에 경고가 남고, 정책에 따라 바로 키를 지우기 시작하거나 쓰기를 거절한다. 운영 중에 낮출 때는 정책부터 확인한다.
+
+```text
+# WARNING: the new maxmemory value set via CONFIG SET (104857600) is smaller than the current memory usage (136714648). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.
+```
+
+## 가득 찼을 때 지울 키를 고르는 정책
+
+`maxmemory-policy`는 두 가지를 정한다. 어느 키 중에서 고를지(전체 키인지, TTL이 걸린 키만인지), 그리고 무엇을 기준으로 고를지다.
+
+- `noeviction`: 기본값. 아무것도 지우지 않고 메모리를 늘리는 쓰기를 OOM 에러로 거절한다.
+- `allkeys-lru`: 모든 키 중에서 가장 오래 안 쓰인 키를 지운다.
+- `allkeys-lfu`: 모든 키 중에서 가장 드물게 쓰인 키를 지운다(4.0부터).
+- `allkeys-random`: 모든 키 중에서 아무거나 지운다.
+- `volatile-lru`, `volatile-lfu`, `volatile-random`: 위와 같지만 TTL이 걸린 키 중에서만 고른다.
+- `volatile-ttl`: TTL이 걸린 키 중 만료가 가장 가까운 키부터 지운다.
+
+어떤 걸 고를지는 Redis에 무엇을 담느냐로 정해진다.
+
+전부 캐시라면 `allkeys-lru`가 무난한 출발점이다. 원본은 DB에 있으니 무엇이 지워져도 다시 채우면 되고, 최근에 쓴 것이 또 쓰일 가능성이 높다는 가정은 대부분의 캐시에서 맞는다. 인기 상품처럼 오랫동안 꾸준히 읽히는 키와 한 번 훑고 마는 키가 섞여 있으면 `allkeys-lfu`가 낫다. 관리자 배치가 상품 10만 개를 한 번씩 읽고 지나가면 LRU에서는 그 10만 개가 모두 "최근에 쓴 키"가 되어 진짜 인기 키를 밀어낸다. LFU는 횟수를 보니 한 번 읽힌 키가 오래 버티지 못한다.
+
+캐시와 지우면 안 되는 데이터가 한 서버에 섞여 있다면 `volatile-*`를 쓴다. 캐시에는 TTL을 걸고 장바구니나 세션처럼 지우면 안 되는 키에는 TTL을 걸지 않으면, TTL 없는 키는 축출 대상이 아니다. 다만 이건 차선책이다. TTL을 깜빡한 캐시 키가 쌓이면 지울 후보가 모자라고, TTL이 걸린 키가 하나도 없으면 `volatile-*`는 `noeviction`처럼 쓰기를 거절한다. 성격이 다른 데이터는 서버(또는 인스턴스)를 나누는 편이 깔끔하다.
+
+`noeviction`은 Redis를 주 저장소로 쓰는 경우, 즉 데이터가 사라지면 안 되는 경우에 맞다. 가득 차면 에러가 나는 게 데이터가 조용히 사라지는 것보다 낫기 때문이다. 대신 used_memory를 모니터링하다 한도에 가까워지면 미리 늘려야 한다. 장바구니 장애가 난 서버는 캐시 서버인데 기본값 `noeviction`을 그대로 둔 경우였다.
+
+정책이 키를 지우는 시점은 명령이 들어올 때다. 아래 그림은 `allkeys-lru`인 서버에 쓰기 명령이 왔을 때 일어나는 일이다.
+
+<SequenceDiagram
+  caption="한도를 넘은 서버에 쓰기 명령이 오면"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "redis", label: "Redis" },
+    { id: "replica", label: "레플리카" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "redis",
+      label: "SET cart:42",
+      title: "쓰기 명령이 들어온다",
+      detail: "Redis는 명령을 실행하기 전에 used_memory가 maxmemory를 넘었는지 본다. 읽기 명령이어도 이 확인은 한다.",
+      payload: "SET cart:42 \"[1001,1003]\"",
+    },
+    {
+      from: "redis",
+      to: "redis",
+      label: "한도 확인",
+      title: "넘었으면 지울 키를 고른다",
+      detail: "noeviction이면 여기서 바로 OOM 에러를 돌려준다. allkeys-lru면 키를 몇 개 표본으로 뽑아 가장 오래 쉰 키를 고른다.",
+      payload: "used_memory 100.2M > maxmemory 100M",
+    },
+    {
+      from: "redis",
+      to: "redis",
+      label: "축출",
+      title: "한도 아래로 내려갈 때까지 지운다",
+      detail: "한 키를 지워도 모자라면 다시 고르고 지운다. 한 번에 너무 오래 붙잡지 않도록 시간 제한이 있고, 다 못 지우면 나머지는 백그라운드 타이머가 이어서 지운다.",
+      payload: "evicted: cache:product:1003",
+    },
+    {
+      from: "redis",
+      to: "replica",
+      label: "DEL",
+      title: "지운 키는 DEL로 전파된다",
+      detail: "레플리카는 스스로 축출하지 않는다(replica-ignore-maxmemory yes). 프라이머리가 지운 키를 DEL 명령으로 받아 똑같이 지운다. AOF에도 DEL이 기록된다.",
+      payload: "DEL cache:product:1003",
+    },
+    {
+      from: "redis",
+      to: "app",
+      label: "OK",
+      title: "그다음 명령을 실행한다",
+      detail: "앱은 축출이 있었는지 모른다. 얼마나 지웠는지는 INFO stats의 evicted_keys로 본다.",
+    },
+  ]}
+/>
+
+실제로 앞의 재현 서버에서 정책을 `allkeys-lru`로 바꾸고 쓰기 하나를 보내 봤다. `SET`은 바로 `OK`를 받았고, 그 직후 `evicted_keys`는 3424였다. 2초 뒤에 다시 보니 84697이 되어 있었고 `used_memory`는 정확히 100MB에 멈췄다. 한도를 30MB나 넘긴 상태라 한 번에 다 못 지우고 백그라운드에서 이어서 지운 것이다.
+
+```bash
+# 축출된 키 수, 만료된 키 수
+redis-cli INFO stats | grep -E "evicted_keys|expired_keys"
+```
+
+```text
+expired_keys:0
+evicted_keys:84697
+```
+
+`evicted_keys`가 계속 오른다면 캐시 공간이 모자라 아직 쓸 키까지 밀려나고 있을 가능성이 있다. 캐시 적중률(`keyspace_hits`, `keyspace_misses`)과 함께 본다. 적중률이 떨어지면서 축출이 늘면 메모리를 늘릴 때다.
+
+## LRU를 정확하게 하지 않는 이유
+
+정확한 LRU는 모든 키를 마지막 사용 시각 순으로 줄 세워 두는 것이다. 키를 쓸 때마다 줄의 맨 뒤로 옮기고, 지울 때는 맨 앞에서 뺀다. 아래 그림은 칸이 세 개뿐인 캐시에 상품 키가 차례로 접근될 때다. 오른쪽 상자는 왼쪽이 가장 오래 안 쓰인 키다.
+
+<AlgoTrace
+  caption="정확한 LRU, 용량 3"
+  memoryLabel="캐시 (왼쪽이 가장 오래됨)"
+  cells={["1001", "1002", "1003", "1001", "1004", "1005", "1002", "1001"]}
+  steps={[
+    { caption: "상품 키 여덟 번의 접근이 이 순서로 온다. 캐시에는 세 개까지 들어간다." },
+    { pointer: 0, memory: ["1001"], caption: "1001은 처음이다. 빈 자리에 넣는다." },
+    { pointer: 1, memory: ["1001", "1002"], caption: "1002도 넣는다." },
+    { pointer: 2, memory: ["1001", "1002", "1003"], caption: "1003까지 넣으니 가득 찼다." },
+    { pointer: 3, found: [3], memory: ["1002", "1003", "1001"], caption: "1001은 이미 있다. 방금 썼으니 줄의 맨 뒤로 옮긴다." },
+    { pointer: 4, memory: ["1003", "1001", "1004"], caption: "1004를 넣을 자리가 없다. 맨 앞의 1002를 지운다." },
+    { pointer: 5, memory: ["1001", "1004", "1005"], caption: "1005가 들어오며 1003이 밀려난다." },
+    { pointer: 6, memory: ["1004", "1005", "1002"], caption: "1002가 다시 왔다. 이미 지워져서 DB에서 다시 읽어 넣고, 1001이 밀려난다." },
+    { pointer: 7, memory: ["1005", "1002", "1001"], caption: "1001도 다시 읽는다. 지금까지 지워진 순서는 1002, 1003, 1001, 1004다." },
+  ]}
+/>
+
+이걸 키 수천만 개에 그대로 하려면 키마다 앞뒤 포인터 두 개(16바이트)를 붙이고, 읽기 명령마다 연결 리스트를 고쳐야 한다. 메모리와 시간이 아까운 데 비해, 캐시 적중률은 거의 같은 결과를 더 싸게 얻을 수 있다. 그래서 Redis는 근사 LRU를 쓴다.
+
+키마다 마지막으로 쓰인 시각을 24비트(초 단위 시계)로만 적어 둔다. 지울 때가 되면 키를 `maxmemory-samples`개(기본 5개) 무작위로 뽑아, 그중 가장 오래 쉰 키를 지운다. 여기에 후보 풀(eviction pool) 16칸을 두어서, 이전 표본에서 뽑혔지만 지워지지 않은 오래된 키를 기억해 둔다. 아래 그림은 표본을 3개로 줄여서 이 과정을 본 것이다. 각 칸의 숫자는 그 키가 마지막으로 쓰인 뒤 지난 시간이다.
+
+<AlgoTrace
+  caption="근사 LRU: 표본 3개와 후보 풀"
+  memoryLabel="후보 풀 (오른쪽이 가장 오래 쉼)"
+  cells={["1001 40s", "1002 3s", "1003 95s", "1004 12s", "1005 60s", "1006 1s", "1007 30s", "1008 7s"]}
+  steps={[
+    { caption: "키 여덟 개가 있다. 정확한 LRU라면 95초 동안 안 쓰인 1003을 지워야 한다." },
+    { pointer: 3, memory: ["1004 12s"], caption: "첫 번째 축출. 무작위로 고른 표본의 첫 키 1004를 후보 풀에 넣는다." },
+    { pointer: 6, memory: ["1004 12s", "1007 30s"], caption: "두 번째 표본 1007. 풀은 쉰 시간 순으로 정렬된다." },
+    { pointer: 1, memory: ["1002 3s", "1004 12s", "1007 30s"], caption: "세 번째 표본 1002. 표본을 다 봤다." },
+    { found: [6], memory: ["1002 3s", "1004 12s"], caption: "풀의 맨 오른쪽 1007을 지운다. 진짜 가장 오래된 1003은 표본에 없어서 살아남았다." },
+    { pointer: 2, memory: ["1002 3s", "1004 12s", "1003 95s"], caption: "다음 축출 때 새 표본에서 1003이 뽑혔다. 앞서 남은 후보와 함께 줄을 선다." },
+    { found: [2], memory: ["1002 3s", "1004 12s"], caption: "이번에는 1003이 지워진다. 표본이 쌓일수록 오래된 키가 걸러진다." },
+  ]}
+/>
+
+표본을 늘리면 정확한 LRU에 가까워지고 CPU를 더 쓴다. Redis 문서의 실험에서는 기본값 5로도 정확한 LRU와 꽤 비슷한 결과가 나온다. 10으로 올리면 거의 구별이 안 되지만 축출할 때마다 CPU를 조금 더 쓴다. 대부분은 기본값을 그대로 둔다.
+
+```bash
+# 표본 크기 확인과 변경
+redis-cli CONFIG GET maxmemory-samples
+redis-cli CONFIG SET maxmemory-samples 10
+```
+
+여기서 키 하나가 마지막으로 쓰인 뒤 몇 초 지났는지는 `OBJECT IDLETIME 키`로 볼 수 있다(LFU 정책일 때는 쓸 수 없다).
+
+정확한 LRU를 직접 구현해 보면 두 방식의 차이가 더 잘 보인다. 아래 함수는 용량과 접근 순서를 받아 지워진 키를 순서대로 돌려줘야 한다. 자바스크립트의 `Map`은 넣은 순서를 기억하니, 키를 쓸 때마다 지웠다 다시 넣으면 맨 앞이 가장 오래된 키가 된다.
+
+<CodePlayground
+  caption="정확한 LRU로 지워지는 키 구하기"
+  functionName="lruEvict"
+  initialCode={`function lruEvict(capacity, accesses) {
+  // capacity: 캐시에 들어가는 키 수
+  // accesses: 접근한 키 순서. 없는 키면 새로 넣는다
+  // 결과: 지워진 키를 지워진 순서대로
+  return [];
+}`}
+  solution={`function lruEvict(capacity, accesses) {
+  const cache = new Map();   // 넣은 순서 = 오래된 순서
+  const evicted = [];
+  for (const key of accesses) {
+    if (cache.has(key)) {
+      cache.delete(key);     // 썼으니 맨 뒤로 보내려고 뺀다
+    } else if (cache.size === capacity) {
+      const oldest = cache.keys().next().value;
+      cache.delete(oldest);  // 맨 앞이 가장 오래 안 쓰인 키
+      evicted.push(oldest);
+    }
+    cache.set(key, true);    // 맨 뒤에 넣는다
+  }
+  return evicted;
+}`}
+  tests={[
+    {
+      label: "그림의 접근 순서, 용량 3",
+      args: [3, ["1001", "1002", "1003", "1001", "1004", "1005", "1002", "1001"]],
+      expected: ["1002", "1003", "1001", "1004"],
+    },
+    { label: "다시 쓴 키는 살아남는다", args: [2, ["a", "b", "a", "c", "b", "a"]], expected: ["b", "a", "c"] },
+    { label: "용량 안에서만 돌면 축출 없음", args: [3, ["a", "b", "c", "a", "b", "c"]], expected: [] },
+    { label: "용량 1", args: [1, ["x", "y", "x", "x", "z"]], expected: ["x", "y", "x"] },
+    { label: "한 번씩만 훑는 접근", args: [2, ["a", "b", "c", "d"]], expected: ["a", "b"] },
+  ]}
+/>
+
+마지막 테스트가 LRU의 약점이다. 한 번씩만 훑고 지나가는 접근이 오면 캐시가 그 키들로 갈아 치워진다. LFU가 나온 이유가 이것이다.
+
+## LFU 카운터는 로그로 오르고 시간이 지나면 내려간다
+
+LFU 정책에서는 키마다 적어 두던 24비트를 둘로 쪼갠다. 16비트에는 카운터를 마지막으로 줄인 시각(분 단위), 8비트에는 접근 빈도 카운터를 둔다. 8비트면 최대 255까지인데, 초당 수만 번 읽히는 키도 있으니 접근할 때마다 1씩 올리면 금방 찬다. 그래서 카운터가 클수록 오를 확률이 작아지는 로그 카운터를 쓴다. 대략 카운터가 c일 때 1 / ((c − 5) × lfu-log-factor + 1)의 확률로 1 오른다.
+
+새 키는 카운터 5에서 시작한다. 0에서 시작하면 방금 넣은 키가 다음 축출에 바로 지워질 테니 기회를 주는 것이다. 직접 올려 보자.
+
+```bash
+# LFU 정책으로 바꾸고 새 키를 넣는다
+redis-cli CONFIG SET maxmemory-policy allkeys-lfu
+redis-cli SET hot:product:1001 a
+redis-cli OBJECT FREQ hot:product:1001
+
+# 100번 읽은 뒤
+for i in $(seq 100); do redis-cli GET hot:product:1001 > /dev/null; done
+redis-cli OBJECT FREQ hot:product:1001
+```
+
+```text
+OK
+OK
+(integer) 5
+(integer) 9
+```
+
+100번 읽었는데 카운터는 4밖에 안 올랐다. 1000번 더 읽자 21이 됐다. 기본 `lfu-log-factor` 10에서는 100만 번쯤 읽혀야 255에 닿는다. 그래서 "자주 읽힌 키"와 "엄청나게 자주 읽힌 키"를 구별할 수 있다.
+
+시간이 지나면 카운터가 내려간다. `lfu-decay-time`(기본 1분)마다, 그 키가 쉬고 있던 시간만큼 카운터를 줄인다. 어제 인기였던 상품이 오늘은 아무도 안 찾는다면 카운터가 점점 내려가 축출 후보가 된다. 이 감소는 타이머가 도는 게 아니라 그 키를 다시 보거나 축출 표본으로 뽑을 때 계산된다.
+
+```bash
+# 기본값 확인
+redis-cli CONFIG GET lfu-*
+```
+
+```text
+1) "lfu-log-factor"
+2) "10"
+3) "lfu-decay-time"
+4) "1"
+```
+
+정책을 LRU에서 LFU로 바꾸면, 그전까지 키에 적혀 있던 값은 LRU용 시각이라 LFU로는 의미가 없다. 한동안 축출 품질이 떨어지다 접근이 쌓이며 자리를 잡는다. LFU가 아닐 때 `OBJECT FREQ`를 치면 Redis도 그 점을 에러 문구에 적어 둔다.
+
+```text
+(error) ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.
+```
+
+## 만료된 키가 바로 사라지지 않는 이유
+
+TTL이 지난 키는 언제 메모리에서 빠질까. Redis는 두 가지 방법을 같이 쓴다.
+
+게으른 삭제(lazy expiration). 누가 키에 접근할 때 만료 시각을 보고, 지났으면 그때 지우고 없는 키처럼 답한다. 비용이 거의 없지만, 아무도 다시 안 찾는 키는 영원히 남는다.
+
+주기적 삭제(active expire cycle). 그래서 서버가 1초에 `hz`번(기본 10번) 만료 시각이 걸린 키를 조금씩 훑어서, 한 번에 20개씩 보고 지난 키를 지운다. 본 키 중 만료된 비율이 10%를 넘으면 아직 많이 남았다는 뜻이라 한 번 더 돈다. 다만 이 작업이 CPU의 25%를 넘지 않도록 시간 제한이 있다.
+
+그래서 만료된 키도 잠깐은 메모리에 남는다. 2초짜리 상품 캐시 20만 개를 넣고 지켜봤다.
+
+```bash
+# 넣은 직후 키 수
+redis-cli INFO keyspace
+
+# 만료 시각이 지나고 1초 뒤
+sleep 3; redis-cli INFO keyspace; redis-cli INFO stats | grep expired
+```
+
+```text
+# Keyspace
+db0:keys=200000,expires=200000,avg_ttl=1698
+# Keyspace
+db0:keys=317,expires=317,avg_ttl=0
+expired_keys:199683
+expired_stale_perc:46.89
+expired_time_cap_reached_count:14
+```
+
+만료 1초 뒤에도 317개가 남아 있었다. 몇 초 더 지나자 0이 됐다. `expired_stale_perc`는 메모리에 남아 있는 만료된 키의 추정 비율이고, `expired_time_cap_reached_count`는 주기적 삭제가 시간 제한에 걸려 멈춘 횟수다. 한꺼번에 만료되는 키가 많으면 이 숫자가 오른다.
+
+이게 메모리 문제와 이어지는 지점이 있다. 축출은 "만료된 키부터 지우는" 게 아니다. 만료됐지만 아직 안 지워진 키가 많으면 used_memory가 실제 필요보다 높게 보이고, 그 사이 축출이 살아 있는 키를 지울 수 있다. TTL을 같은 값으로 일제히 걸면 같은 순간에 대량으로 만료되면서 주기적 삭제가 시간 제한에 걸리고 DB로 요청도 몰린다. 상품 캐시에 `3600 + 랜덤 0~600초`처럼 TTL을 흩어 두는 이유다(이 패턴은 [캐시 전략 글](/posts/caching-strategies)에서 더 다룬다). 만료 정리를 더 적극적으로 하고 싶으면 `active-expire-effort`(1~10, 기본 1)를 올릴 수 있는데, 그만큼 CPU를 더 쓴다.
+
+레플리카는 스스로 만료 키를 지우지 않는다. 프라이머리가 지우면서 보내는 `DEL`을 받아 지운다. 대신 3.2부터는 레플리카에서 만료된 키를 읽으면 아직 지워지지 않았어도 없는 키로 답한다.
+
+## 단편화와 activedefrag
+
+앞에서 `allkeys-lru`로 8만 개를 축출한 직후 `INFO memory`를 다시 봤다.
+
+```text
+used_memory_human:100.00M
+used_memory_rss_human:138.50M
+mem_fragmentation_ratio:1.39
+```
+
+축출 전에는 used_memory 130M, rss 138M, 비율 1.06이었다. 키를 30MB어치 지웠는데 rss는 그대로다. 할당기는 페이지(4KB) 안의 일부가 비었다고 그 페이지를 OS에 돌려줄 수 없다. 지운 키들이 여러 페이지에 흩어져 있으면, 페이지마다 구멍이 생길 뿐 통째로 빈 페이지는 적다. 이 구멍이 단편화다. 크기가 다른 값을 계속 덮어쓰거나 대량으로 지운 뒤에 커진다.
+
+단편화를 줄이는 방법은 둘이다. 하나는 재시작이다. RDB나 AOF에서 다시 읽으면 메모리가 촘촘하게 다시 채워진다. 레플리카가 있다면 레플리카부터 재시작해 승격하는 식으로 무중단으로 할 수 있다. 다른 하나는 Redis 4.0부터 있는 능동 조각 모음(active defragmentation)이다. 실행 중에 값을 새 위치로 복사해 구멍을 메운다.
+
+```bash
+# 능동 조각 모음 켜기
+redis-cli CONFIG SET activedefrag yes
+```
+
+그런데 Ubuntu 24.04 패키지에서 이 명령을 치면 이렇게 실패한다.
+
+```text
+(error) ERR CONFIG SET failed (possibly related to argument 'activedefrag') - Active defragmentation cannot be enabled: it requires a Redis server compiled with a modified Jemalloc like the one shipped by default with the Redis source distribution
+```
+
+조각 모음은 Redis 소스에 들어 있는, Redis용으로 고친 jemalloc이 있어야 동작한다. Ubuntu·Debian 패키지는 시스템의 jemalloc 라이브러리에 연결해서 빌드하기 때문에 이 기능을 쓸 수 없다. 단편화가 자주 문제가 되는 서버라면 Redis 소스 빌드나 Redis가 운영하는 배포본처럼 번들 jemalloc으로 빌드된 것을 쓰는지 확인한다. 켤 수 있는 환경이라면 기본값이 보수적으로 잡혀 있다. 단편화된 양이 100MB(`active-defrag-ignore-bytes`)를 넘고 비율이 10%(`active-defrag-threshold-lower`)를 넘을 때 시작하고, CPU는 1~25%(`active-defrag-cycle-min`, `-max`) 안에서 쓴다.
+
+## 리눅스 쪽에서 챙길 설정
+
+Redis 로그를 처음 열어 보면 경고가 한두 개 있는 경우가 많다. 무시하기 쉬운데, 메모리 장애와 직접 이어지는 것들이다.
+
+```bash
+# 시작할 때 남긴 경고 확인
+sudo grep -i warning /var/log/redis/redis-server.log
+```
+
+```text
+# WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+```
+
+overcommit. Redis는 RDB를 저장하거나 레플리카에 데이터를 보낼 때 `fork()`로 자식 프로세스를 만든다. 자식은 부모의 메모리를 복사하지 않고 공유하다가, 부모가 페이지를 고칠 때만 그 페이지를 복사한다(copy-on-write). 그래서 실제로는 메모리가 두 배로 들지 않는다. 그런데 커널 기본값(`vm.overcommit_memory=0`)은 휴리스틱으로 "이 fork가 메모리를 다 쓰면 모자라겠다"고 판단해 fork를 거절할 수 있다. 그러면 백그라운드 저장이 `fork: Cannot allocate memory`로 실패하고, 기본 설정에서는 그 뒤로 쓰기까지 막힌다. 이 과정은 [영속성과 고가용성 글](/posts/redis-persistence-ha)에서 자세히 본다.
+
+```bash
+# 현재 값 (0이면 기본 휴리스틱)
+cat /proc/sys/vm/overcommit_memory
+
+# 바로 적용
+sudo sysctl vm.overcommit_memory=1
+
+# 재부팅 후에도 유지
+echo 'vm.overcommit_memory = 1' | sudo tee /etc/sysctl.d/90-redis.conf
+sudo sysctl --system
+```
+
+`1`은 커널이 메모리 요청을 따지지 않고 다 허락한다는 뜻이다. 그만큼 진짜로 메모리가 모자라면 OOM 킬러가 나설 수 있으니, `maxmemory`와 여유 공간을 제대로 잡는 것과 짝으로 간다.
+
+투명 거대 페이지(THP). 커널이 4KB 페이지 대신 2MB 페이지를 자동으로 쓰는 기능이다. Redis에서는 fork 뒤 쓰기 한 번에 2MB를 통째로 복사하게 되어 copy-on-write 비용과 지연이 커진다. Ubuntu 24.04의 기본값은 `madvise`(요청한 프로그램만 사용)라 보통 문제가 없고, Redis 7.0은 `disable-thp yes`가 기본이라 자기 프로세스에서는 THP를 끈다. `always`로 바꾼 서버에서 그마저 실패하면 로그에 `You have Transparent Huge Pages (THP) support enabled in your kernel.`로 시작하는 경고가 남는다.
+
+```bash
+# 대괄호 안이 현재 값
+cat /sys/kernel/mm/transparent_hugepage/enabled
+```
+
+```text
+always [madvise] never
+```
+
+스왑. Redis의 데이터가 스왑으로 밀려나면, 그 키를 읽는 명령 하나가 디스크를 기다리는 동안 단일 스레드인 Redis 전체가 멈춘다. 메모리가 빠듯한데도 OOM 킬러 대신 지연 폭증으로 나타나서 원인을 찾기 더 어렵다. `mem_fragmentation_ratio`가 1보다 작게 나오면 rss가 할당량보다 작다는 것, 즉 일부가 스왑에 나가 있다는 신호다. 스왑 사용량은 프로세스 단위로 확인할 수 있다.
+
+```bash
+# redis-server 프로세스가 스왑에 내보낸 양
+grep VmSwap /proc/$(pidof redis-server)/status
+```
+
+```text
+VmSwap:	       0 kB
+```
+
+스왑을 아예 끌지는 의견이 갈린다. 끄면 메모리가 바닥났을 때 지연 없이 바로 OOM 킬러가 나서고, 켜 두면 잠깐은 버티지만 느려진다. 어느 쪽이든 답은 스왑에 닿지 않게 `maxmemory`를 잡는 것이다.
+
+## 서버 메모리의 몇 퍼센트를 maxmemory로 줄까
+
+8GB 서버라고 `maxmemory 8gb`로 잡으면 안 된다. `maxmemory`는 Redis가 쓰는 메모리 전부가 아니다. 아래 그림에서 점이 흘러 들어가는 곳이 OS가 보는 Redis의 실제 메모리(rss)이고, maxmemory가 다스리는 건 그중 데이터 쪽 하나뿐이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="maxmemory 밖에서 메모리를 먹는 것들"
+  nodes={[
+    { id: "data", label: "데이터", sub: "maxmemory가 다스림", x: 85, y: 45, w: 140, h: 46 },
+    { id: "frag", label: "단편화", sub: "할당기의 빈 조각", x: 315, y: 45, w: 130, h: 46 },
+    { id: "rss", label: "실제 메모리", sub: "rss", x: 200, y: 150, w: 120, h: 46 },
+    { id: "cow", label: "fork 복사", sub: "저장·복제 중", x: 70, y: 255, w: 120, h: 46 },
+    { id: "repl", label: "복제 버퍼", sub: "backlog·레플리카", x: 200, y: 255, w: 120, h: 46 },
+    { id: "client", label: "클라이언트 버퍼", sub: "큰 응답·pub/sub", x: 330, y: 255, w: 130, h: 46 },
+  ]}
+  edges={[
+    { from: "data", to: "rss" },
+    { from: "frag", to: "rss" },
+    { from: "cow", to: "rss", dashed: true },
+    { from: "repl", to: "rss" },
+    { from: "client", to: "rss" },
+  ]}
+/>
+
+fork 복사. RDB 저장이나 레플리카 전체 동기화 중에 쓰기가 많으면 copy-on-write로 복사되는 페이지가 늘어난다. 쓰기가 계속 들어오는 상태에서 130MB 데이터를 저장해 보니 로그에 `Fork CoW for RDB: current 76 MB, peak 76 MB`가 찍혔다. 데이터의 절반이 넘게 복사된 것이다. 최악의 경우는 데이터 크기만큼이다. 이 메모리는 자식 프로세스 몫이라 `used_memory`에는 안 잡힌다.
+
+복제 버퍼. 레플리카 재접속용 backlog(`repl-backlog-size`, 기본 1MB)와, 레플리카마다 보낼 데이터를 쌓아 두는 출력 버퍼가 있다. 레플리카용 출력 버퍼는 기본 한도가 256MB(60초 동안 64MB를 넘어도 끊는다)라, 전체 동기화 중에 쓰기가 몰리면 수백 MB까지 찰 수 있다. 이 버퍼들은 축출 계산에서 빠진다(`mem_not_counted_for_evict`). 즉 maxmemory 위에 얹힌다.
+
+클라이언트 버퍼. 큰 키를 통째로 읽는 `HGETALL`이나 `LRANGE 0 -1`, 느린 pub/sub 구독자에게 쌓이는 메시지가 출력 버퍼를 키운다. 일반 클라이언트는 기본으로 한도가 없다(`client-output-buffer-limit normal 0 0 0`). Redis 7.0부터는 `maxmemory-clients`로 클라이언트 버퍼 전체에 한도를 걸 수 있다.
+
+그래서 흔히 쓰는 어림셈은 이렇다. RDB·AOF 재작성·레플리카처럼 fork가 일어나는 서버에서 쓰기가 많다면 물리 메모리의 50~60% 정도를 `maxmemory`로 준다. fork가 없는 순수 캐시 서버라면 75% 안팎까지 올려도 된다. 8GB 서버면 각각 4~5GB, 6GB 정도다. 나머지는 위의 버퍼, 단편화, OS와 다른 프로세스 몫이다. AWS ElastiCache도 이런 이유로 기본 파라미터 그룹에서 메모리의 25%를 데이터 밖 용도로 남겨 둔다(`reserved-memory-percent`).
+
+숫자를 정한 뒤에는 실제로 확인한다. 피크 시간대에 `used_memory_peak`, `used_memory_rss`, 저장 중의 CoW 로그를 보고, 그 합이 물리 메모리에 충분히 못 미치는지 본다. 데이터가 늘어날 속도도 같이 잡아 둔다. 한 달에 10%씩 는다면 지금 여유가 반년 뒤에도 있는지 계산해 둔다.
+
+마지막으로 OOM 킬러가 결국 나섰을 때 Redis 대신 다른 걸 먼저 죽이게 하는 장치도 있다. Redis 6.2부터 있는 `oom-score-adj` 설정, 또는 systemd 유닛의 `OOMScoreAdjust`로 점수를 조정한다. 다만 이건 순서를 바꿀 뿐이고, 메모리가 모자란 문제는 그대로 남는다.
+
+## 가득 차기 전에 정해 둘 것
+
+Redis의 메모리는 데이터만이 아니라 키 관리 구조, 버퍼, 단편화, fork 복사까지 합친 것이다. 그래서 `maxmemory`를 정하지 않으면 OOM 킬러에게 죽고, 정하더라도 기본 `noeviction`이면 가득 찬 순간 쓰기가 실패한다. 캐시라면 `allkeys-lru`나 `allkeys-lfu`로 오래된 것을 스스로 지우게 하고, 지우면 안 되는 데이터라면 `noeviction`에 모니터링을 붙인다. LRU와 LFU는 표본을 뽑는 근사라서 싸게 돌고, 만료된 키는 조금 늦게 빠진다. 한도는 물리 메모리 전부가 아니라 fork와 버퍼를 위한 여유를 남기고 잡는다.
+
+## 면접에서 나올 만한 질문
+
+### Redis 메모리가 maxmemory에 도달하면 어떻게 되나요?
+
+`maxmemory-policy`에 따라 다르다. 기본값 `noeviction`이면 아무것도 지우지 않고 메모리를 늘리는 쓰기 명령을 OOM 에러로 거절한다. 읽기와 DEL은 계속 된다. LRU나 LFU 같은 축출 정책이면 명령을 실행하기 전에 키를 골라 한도 아래로 내려갈 때까지 지우고, 지운 키는 레플리카와 AOF에 DEL로 전파된다.
+
+### maxmemory를 설정하지 않으면 어떤 문제가 생기나요?
+
+64비트에서 기본값은 0이라 한도가 없다. 데이터가 계속 늘면 물리 메모리를 다 쓰고 스왑으로 밀려 지연이 폭증하거나, 리눅스 OOM 킬러가 redis-server를 SIGKILL로 죽인다. 마지막 스냅샷도 못 남기고 죽으니 캐시가 통째로 비어 DB로 요청이 몰린다.
+
+### allkeys-lru와 volatile-lru, allkeys-lfu는 언제 쓰나요?
+
+전부 캐시라면 allkeys-lru가 기본 선택이다. 꾸준히 인기 있는 키와 한 번 훑고 지나가는 키가 섞여 있으면 접근 횟수를 보는 allkeys-lfu가 낫다. volatile-lru는 TTL이 걸린 키만 지우니 캐시와 지우면 안 되는 데이터를 섞어 둘 때 쓰지만, TTL 있는 키가 없으면 noeviction처럼 쓰기를 거절한다. 성격이 다른 데이터는 인스턴스를 나누는 게 더 안전하다.
+
+### Redis의 LRU는 정확한 LRU인가요?
+
+아니다. 모든 키를 사용 순서로 연결해 두면 키마다 포인터 비용이 들고 읽을 때마다 리스트를 고쳐야 해서, Redis는 키마다 24비트 시각만 적어 둔다. 지울 때 maxmemory-samples개(기본 5개)를 무작위로 뽑아 가장 오래 쉰 키를 지우고, 16칸짜리 후보 풀로 이전 표본의 오래된 키를 기억해 정확도를 높인다. 표본을 늘리면 더 정확해지지만 CPU를 더 쓴다.
+
+### LFU 카운터는 어떻게 동작하나요?
+
+키마다 8비트 카운터와 16비트 감소 시각을 둔다. 카운터는 접근마다 1씩 오르지 않고, 값이 클수록 오를 확률이 줄어드는 로그 카운터라 255 안에서 아주 많이 읽힌 키까지 구별한다. 새 키는 바로 지워지지 않도록 5에서 시작하고, lfu-decay-time마다 쉬고 있던 시간만큼 줄어들어 예전에만 인기 있던 키가 결국 지워진다.
+
+### TTL이 지난 키는 바로 메모리에서 지워지나요?
+
+바로 지워지지는 않는다. 접근할 때 확인해 지우는 게으른 삭제와, 1초에 hz번 만료 키를 표본으로 훑어 지우는 주기적 삭제를 같이 쓴다. 주기적 삭제는 CPU 25% 시간 제한이 있어서 한꺼번에 많이 만료되면 일부가 잠깐 남는다. 그래서 TTL을 같은 값으로 일제히 걸지 않고 흩어 두는 게 좋다.
+
+### INFO memory에서 used_memory와 used_memory_rss가 크게 다르면 무엇을 의심하나요?
+
+rss가 훨씬 크면 단편화다. 대량 삭제나 축출, 크기가 다른 값의 반복 덮어쓰기 뒤에 할당기가 빈 조각을 OS에 못 돌려준 상태다. 재시작하거나, Redis용 jemalloc으로 빌드된 서버라면 activedefrag를 켠다. 반대로 rss가 used_memory보다 작으면, 즉 비율이 1 미만이면 일부가 스왑에 나가 있다는 신호라 더 급하다.
+
+### 8GB 서버에서 maxmemory는 얼마로 잡나요?
+
+8GB를 다 주지 않는다. RDB 저장이나 복제 때 fork의 copy-on-write로 복사되는 메모리, 레플리카와 클라이언트 출력 버퍼, 단편화는 maxmemory 밖에서 늘어난다. fork가 일어나고 쓰기가 많은 서버면 50~60%, 순수 캐시면 75% 안팎이 흔한 출발점이고, 피크 때 rss와 CoW 로그를 보고 조정한다. 리눅스에서는 vm.overcommit_memory=1로 fork 실패를 막는다.
