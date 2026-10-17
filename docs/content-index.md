@@ -1,0 +1,1374 @@
+# 글 지도 (콘텐츠 색인)
+
+> 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
+> 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
+
+글 78편 · 토픽 39개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+
+## 토픽별 글
+
+### Programming › Algorithms (`programming/algorithms`)
+
+#### `big-o-notation` — Big O 표기법: 입력이 커질 때 얼마나 느려지나
+
+- 요약: 100건에서는 빠르던 코드가 10만 건에서 시간 초과가 나는 이유를 Big O로 따라간다. 자주 만나는 복잡도와 실제 숫자, 최악과 분할 상환, 공간 복잡도, 해시맵과 이진 탐색으로 줄이는 법, 자바스크립트에 숨은 반복문까지 다룬다.
+- 태그: Algorithm, JavaScript, Performance
+- 키워드: Big O, 시간 복잡도, 공간 복잡도, 분할 상환
+- 길이: 363줄
+- 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
+
+### Programming › Backend (`programming/backend`)
+
+#### `mvc-pattern` — MVC 패턴: 웹 애플리케이션을 나누는 방법
+
+- 요약: MVC는 화면과 입력 처리에서 업무 규칙을 떼어 내자는 약속이다. Smalltalk에서 웹 MVC, MVP·MVVM, Flux의 단방향 흐름까지 그 약속이 어떻게 바뀌었는지 따라간다.
+- 태그: coupang, Architecture, MVC, Backend, Frontend · 회사: coupang
+- 키워드: MVC 패턴, MVVM, 프론트 컨트롤러, 빈약한 도메인 모델, 단방향 데이터 흐름
+- 길이: 335줄
+- 소제목: 요청 하나가 지나가는 길 / 원래 MVC는 웹을 위한 게 아니었다 / HTTP 위로 옮기면서 생긴 변화 / 컨트롤러가 뚱뚱해지는 이유 / 업무 규칙은 서비스와 모델에 둔다 / MVP와 MVVM은 무엇을 바꿨나 / 브라우저로 옮겨 온 MVC와 양방향 바인딩의 한계 / 서비스가 커지면 계층보다 기능으로 나눈다 / 다시 쿠폰 입력칸으로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: client-data-cache, http-status-codes, gateway
+
+#### `rest-api-design` — REST API를 설계할 때 정할 것들
+
+- 요약: 자원 이름, 메서드와 상태 코드, 필터와 페이지, 에러 형식, 버전과 하위 호환처럼 REST API를 공개하기 전에 정해야 할 것들을 짚는다. 무한 스크롤에서 offset이 글을 중복시키는 이유와 커서 페이지네이션도 직접 따라가 본다.
+- 태그: HTTP, REST, API, Backend
+- 키워드: REST API, 커서 페이지네이션, API 버전 관리, HATEOAS
+- 길이: 490줄
+- 소제목: 주소는 자원의 이름이다 / CRUD로 안 떨어지는 동작 / 메서드와 상태 코드를 제대로 쓴다 / 목록을 거르고 줄 세우기 / 같은 글이 두 번 나온 이유 / 다음 페이지 주소를 알려 주는 방법 / 에러 응답도 모양을 정한다 / 필요한 만큼만 받기 / 버전을 올리지 않고 바꾸는 법 / 그래도 버전을 나눠야 할 때 / POST를 두 번 받아도 괜찮게 / 너무 많이 부르는 클라이언트 / 이름과 값의 모양을 통일한다 / 링크를 따라가는 API / REST가 맞지 않는 곳 / 다시 무한 스크롤로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-methods, http-status-codes, http-caching-cdn, resilience-patterns, gateway, microservices
+- 키워드 백링크 →: base64, db-index, http-message, http-versions, redis-basics, sql-query-tuning
+- 이 글로 오는 글 ←: browser-fetch, client-data-cache, docker-container-basics, html-form-http, http-status-codes, json-crud-http, sql-query-tuning
+
+### Programming › Backend › Auth (`programming/backend/auth`)
+
+#### `cookie-session-login` — 쿠키와 세션으로 로그인 상태 유지하기
+
+- 요약: HTTP는 방금 누가 왔는지 기억하지 못한다. 서버가 세션을 보관하고 쿠키로 번호표를 돌려주는 흐름과 쿠키 옵션, CSRF까지 정리했다.
+- 태그: Authentication, Cookie, Session, Security
+- 키워드: 쿠키 세션, 세션 쿠키, 세션 ID, Set-Cookie, CSRF
+- 길이: 274줄
+- 소제목: 외투 보관소 번호표 / 로그인부터 로그아웃까지 / 쿠키에 붙는 옵션들 / 자동으로 붙는다는 것의 함정, CSRF / 세션을 노리는 공격들 / 서버가 여러 대가 되면 / 정리 / 면접에서 나올 만한 질문
+- 직접 링크 →: token-login
+- 키워드 백링크 →: html-form-http, redis-basics, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, cors, html-form-http, http-caching-cdn, http-message, http-methods, local-custom-domain, nginx-https-performance, oauth, token-login
+
+#### `oauth` — OAuth 2.0, 비밀번호 대신 열쇠를 빌려주는 규칙
+
+- 요약: '구글로 계속하기' 버튼 뒤에서 오가는 요청을 한 단계씩 따라가 봤다. 인가 코드 흐름과 PKCE까지.
+- 태그: OAuth, Security, HTTP, Authorization
+- 키워드: OAuth, PKCE, 인가 코드
+- 길이: 316줄
+- 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 정리 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: token-login, cookie-session-login
+- 이 글로 오는 글 ←: local-custom-domain, token-login
+
+#### `token-login` — 토큰으로 로그인하기: JWT와 리프레시 토큰
+
+- 요약: 서버가 아무것도 기억하지 않고 서명된 토큰만 확인하는 방식. JWT를 뜯어보고, 변조가 막히는 이유와 리프레시 토큰, 쿠키 세션과의 차이를 따라가 봤다.
+- 태그: Authentication, JWT, Token, Security
+- 키워드: JWT, 리프레시 토큰, 액세스 토큰
+- 길이: 292줄
+- 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 정리 / 면접에서 나올 만한 질문
+- 직접 링크 →: cookie-session-login, oauth
+- 키워드 백링크 →: base64
+- 이 글로 오는 글 ←: base64, cookie-session-login, gateway, git-remote-collaboration, http-message, http-status-codes, oauth
+
+### Programming › Common (`programming/common`)
+
+#### `local-custom-domain` — localhost 대신 내 도메인으로 개발하기
+
+- 요약: app.matt.test, api.matt.test처럼 배포와 같은 모양의 주소로 로컬 개발 환경을 만든다. hosts·dnsmasq로 이름을 돌리고, 리버스 프록시로 나누고, mkcert로 브라우저가 믿는 HTTPS를 붙인다.
+- 태그: DNS, HTTPS, Local Dev, Browser
+- 키워드: mkcert, dnsmasq, 로컬 도메인, allowedDevOrigins
+- 길이: 355줄
+- 소제목: localhost가 감춰 주는 것들 / 어떤 도메인을 쓸까 / 이름을 127.0.0.1로 돌리기 / 포트 대신 Host 헤더로 나누기 / 브라우저가 믿는 인증서 만들기 / 브라우저 요청이 서비스에 닿기까지 / 개발 서버가 낯선 호스트를 막는다 / 잘 연결됐는지 확인하기 / 안 될 때 의심할 곳 / 배포와 같은 모양으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: cors, hosts-file
+- 키워드 백링크 →: proxy-reverse-proxy, nginx-basics, http-versions, what-happens-google-com, cookie-session-login, oauth, dns
+- 이 글로 오는 글 ←: cors, hosts-file, https-tls, proxy-reverse-proxy
+
+### Programming › Common › Git (`programming/common/git`)
+
+#### `git-branch-merge` — 브랜치와 병합: 포인터 하나가 움직일 뿐
+
+- 요약: 브랜치가 커밋을 가리키는 이름표라는 데서 시작해 fast-forward와 3-way 병합이 어떻게 갈리는지 보고, 두 사람이 같은 줄을 고쳐 생긴 충돌을 마커 읽기부터 rerere까지 단계별로 푼다.
+- 태그: Git, DevOps
+- 키워드: fast-forward, 3-way 병합, 병합 충돌, detached HEAD, merge base
+- 길이: 948줄 (긴 글)
+- 소제목: 브랜치는 커밋에 붙은 이름표다 / switch와 checkout은 무엇이 다른가 / HEAD가 브랜치를 떠나면 / fast-forward를 막거나 강제하기 / 곧게 이어지지 않으면 세 스냅샷을 비교한다 / 같은 줄을 둘이 고쳤을 때 / 충돌 중에 Git이 들고 있는 것 / 충돌을 푸는 순서 / 같은 충돌을 두 번 풀지 않게 / 다 쓴 브랜치는 지운다 / 원격 브랜치와 얼마나 차이 나는지 / 충돌을 덜 만드는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-undo, git-branching-strategy, git-remote-collaboration, git-rebase
+- 이 글로 오는 글 ←: git-branching-strategy, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced, git-troubleshooting, git-undo
+
+#### `git-branching-strategy` — 브랜치 전략: Git Flow, GitHub Flow, 트렁크 기반 개발
+
+- 요약: develop에 덜 된 기능이 쌓인 릴리스 날에 운영 핫픽스를 어디서 고칠지에서 출발해 Git Flow, GitHub Flow, GitLab Flow, 트렁크 기반 개발을 비교한다. PR 머지 방식, Conventional Commits, SemVer 태그, 브랜치 보호 규칙까지 실제 명령으로 본다.
+- 태그: Git, DevOps, Feature Flag
+- 키워드: Git Flow, GitHub Flow, 트렁크 기반 개발, Conventional Commits, squash 머지
+- 길이: 511줄
+- 소제목: 전략이 정하는 것은 통합하는 때와 곳이다 / Git Flow는 브랜치를 역할별로 나눈다 / Git Flow로 핫픽스 내보내기 / 릴리스 브랜치의 수정은 cherry-pick으로 돌려보낸다 / GitHub Flow는 main 하나로 버틴다 / GitLab Flow는 환경마다 브랜치를 둔다 / 트렁크 기반 개발은 하루에도 여러 번 합친다 / 무엇을 고를지는 배포 주기가 정한다 / PR을 합치는 세 가지 버튼 / 커밋 메시지에 규칙을 둔다 / 버전 번호와 태그 / main을 지키는 규칙은 서버에 둔다 / 모노레포에서는 브랜치보다 경로가 경계다 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-branch-merge, git-remote-collaboration, git-tips-advanced
+- 키워드 백링크 →: ab-testing
+- 이 글로 오는 글 ←: git-branch-merge, git-rebase, git-remote-collaboration, git-tips-advanced
+
+#### `git-internals-basics` — Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역
+
+- 요약: blob·tree·commit 객체를 직접 열어 보고, 파일이 작업 트리·인덱스·저장소를 어떻게 오가는지 따라간다. add 뒤에 고친 내용이 왜 커밋에 안 들어가는지부터 log, .gitignore, 설정까지 정리한다.
+- 태그: Git, DevOps
+- 키워드: 스테이징 영역, 작업 트리, .gitignore, git add -p
+- 길이: 1153줄 (긴 글)
+- 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 파일은 세 구역을 오간다 / 파일의 상태는 두 글자로 읽는다 / 커밋하고 히스토리를 읽는 명령 / 올리지 않을 파일은 .gitignore로 / 설정은 세 겹으로 쌓인다 / 줄바꿈 문자가 diff 전체를 바꿀 때 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-branch-merge, git-remote-collaboration, git-undo
+- 키워드 백링크 →: git-tips-advanced
+- 이 글로 오는 글 ←: git-branch-merge, git-rebase, git-remote-collaboration, git-troubleshooting, git-undo
+
+#### `git-rebase` — rebase: 커밋을 다시 쓰는 일
+
+- 요약: rebase가 커밋을 새 받침 위에 다시 만드는 과정을 보고, merge와의 트레이드오프, 충돌 처리, interactive rebase와 autosquash, --onto와 --update-refs, 공유 브랜치를 다시 썼을 때 생기는 일과 복구법까지 다룬다.
+- 태그: Git, DevOps
+- 키워드: interactive rebase, git rebase, autosquash, pull.rebase
+- 길이: 791줄
+- 소제목: rebase는 커밋을 새로 만든다 / merge로 할지 rebase로 할지 / 다시 적용하다 충돌이 나면 / 커밋을 고르고 합치고 고쳐 쓰기 / 고칠 커밋을 미리 표시해 두기 / 브랜치 일부만 다른 곳으로 / 쌓아 올린 브랜치를 한꺼번에 / pull할 때마다 생기는 병합 커밋 / 공유한 커밋은 다시 쓰지 않는다 / rebase를 잘못했을 때 / 병합 커밋까지 옮겨야 할 때 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-branch-merge, git-branching-strategy, git-remote-collaboration, git-undo
+- 키워드 백링크 →: git-tips-advanced, git-internals-basics
+- 이 글로 오는 글 ←: git-branch-merge, git-remote-collaboration, git-troubleshooting
+
+#### `git-remote-collaboration` — 원격 저장소와 협업: fetch, pull, push
+
+- 요약: 동료가 먼저 푸시해서 내 push가 거절되는 장면에서 시작해 origin/main의 정체, fetch와 pull의 차이, upstream, --force-with-lease와 --force-if-includes, 태그, PR과 포크 흐름, 큰 저장소를 빨리 받는 법까지 실제 출력으로 따라간다.
+- 태그: Git, DevOps
+- 키워드: force-with-lease, 원격 추적 브랜치, 얕은 clone, 부분 clone
+- 길이: 860줄
+- 소제목: 원격은 주소록에 적힌 다른 저장소다 / SSH 키로 GitHub에 붙기 / 원격 추적 브랜치는 마지막으로 본 원격의 사진이다 / fetch는 가져오기만, pull은 가져와서 합친다 / 갈라진 브랜치를 합치는 세 가지 방법 / upstream과 ahead, behind / 강제 푸시는 남의 커밋을 지운다 / 끝난 브랜치 지우고 정리하기 / 태그는 따로 밀어야 올라간다 / PR 한 건이 머지되기까지 / 포크에서 기여하기 / 리뷰를 주고받을 때 / 비밀번호 대신 토큰과 자격 증명 도우미 / 큰 저장소를 빨리 받기 / 다시 처음의 거절로 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-branch-merge, git-rebase, git-branching-strategy, git-troubleshooting
+- 키워드 백링크 →: git-undo, token-login, what-happens-google-com
+- 이 글로 오는 글 ←: git-branch-merge, git-branching-strategy, git-internals-basics, git-rebase, git-troubleshooting
+
+#### `git-tips-advanced` — 알아 두면 편한 Git 기능: bisect, cherry-pick, worktree, hooks
+
+- 요약: 200개 커밋 중 버그가 들어온 커밋을 bisect run으로 여덟 번 만에 찾고, cherry-pick, worktree, blame과 pickaxe, commit-msg 훅, .gitattributes, 서브모듈과 subtree, 커밋 서명, 켜 두면 편한 설정까지 실제 출력으로 본다.
+- 태그: Git, DevOps
+- 키워드: git bisect, cherry-pick, worktree, git blame, commit-msg 훅
+- 길이: 895줄
+- 소제목: 200개 커밋을 여덟 번 만에 좁힌다 / 테스트 스크립트로 bisect를 자동으로 돌린다 / 커밋 하나만 가져오는 cherry-pick / 브랜치를 바꾸지 않고 다른 폴더에서 일한다 / 이 줄은 누가 왜 바꿨나 / 코드가 생기고 사라진 커밋을 찾는다 / 저장소 안을 찾고 기여를 센다 / 커밋 전에 규칙을 검사하는 훅 / 파일마다 다른 규칙을 주는 .gitattributes / 서브모듈과 subtree / 저장소를 가볍게 유지하는 gc와 maintenance / 커밋에 서명하기 / 켜 두면 편한 설정과 별칭 / 도구를 꺼낼 때를 아는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-branching-strategy, git-troubleshooting, git-branch-merge
+- 키워드 백링크 →: dockerfile-image-layers
+- 이 글로 오는 글 ←: git-branching-strategy, git-internals-basics, git-rebase, git-troubleshooting, git-undo
+
+#### `git-troubleshooting` — Git 문제 해결 시나리오 모음
+
+- 요약: push 거절, unrelated histories, detached HEAD, 지운 브랜치, 락파일 충돌, 큰 파일과 비밀 값 커밋, CRLF, cannot lock ref, index 손상까지 자주 만나는 Git 오류를 실제 메시지로 재현하고 원인과 해결 명령, 예방법을 정리한다.
+- 태그: Git, DevOps
+- 키워드: unrelated histories, git-filter-repo, cannot lock ref, index.lock
+- 길이: 1030줄 (긴 글)
+- 소제목: 문제가 어디서 났는지부터 가른다 / 푸시가 fetch first로 거절된다 / pull이 divergent branches라며 멈춘다 / refusing to merge unrelated histories / 바꾼 파일이 덮어써진다며 브랜치를 못 바꾼다 / stash pop에서 충돌이 났다 / detached HEAD에서 만든 커밋이 사라졌다 / 브랜치를 실수로 지웠다 / 이미 푸시한 커밋 메시지가 틀렸다 / rebase가 끝나지 않은 채로 남아 있다 / pnpm-lock.yaml에서 충돌이 났다 / 큰 파일을 커밋해서 푸시가 안 된다 / 비밀 값이 든 .env를 커밋했다 / .gitignore에 적었는데 계속 추적된다 / 줄바꿈 때문에 파일 전체가 바뀌었다고 나온다 / 권한만 바뀐 파일이 diff에 나온다 / 대소문자만 바꾼 파일 이름이 반영되지 않는다 / cannot lock ref 오류가 난다 / index.lock 파일이 있다며 아무것도 안 된다 / index file corrupt / not a git repository / 서브모듈 폴더가 비어 있다 / Author identity unknown / 오류를 만났을 때의 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-undo, git-rebase, git-remote-collaboration, git-tips-advanced, git-internals-basics
+- 키워드 백링크 →: git-branch-merge, db-modeling-normalization
+- 이 글로 오는 글 ←: git-remote-collaboration, git-tips-advanced, git-undo
+
+#### `git-undo` — 되돌리기 총정리: restore, reset, revert, reflog
+
+- 요약: 실수가 작업 트리, 인덱스, 로컬 커밋, 푸시한 커밋 중 어디에 있는지로 명령을 고르고, stash와 reflog로 사라진 것을 찾는다. 잘못된 브랜치에 한 커밋, 지운 파일, 히스토리에 들어간 비밀 키까지 처리한다.
+- 태그: Git, DevOps
+- 키워드: reflog, git reset, git revert, git stash, git restore
+- 길이: 992줄 (긴 글)
+- 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 잠깐 치워 두기 / reset --hard 뒤에 사라진 커밋 찾기 / 엉뚱한 브랜치에 커밋했을 때 / 지운 파일을 히스토리에서 꺼내기 / 비밀 값을 커밋했을 때 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-troubleshooting
+- 키워드 백링크 →: git-branch-merge, git-tips-advanced
+- 이 글로 오는 글 ←: git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-troubleshooting
+
+### Programming › Computer Science (`programming/computer-science`)
+
+#### `base64` — Base64는 왜 쓰고 어떻게 바뀌나
+
+- 요약: 바이트를 3개씩 묶어 6비트 글자 4개로 바꾸는 Base64의 규칙과 패딩, base64url, 33% 늘어나는 크기를 직접 계산하며 본다. 암호화가 아니라서 Basic 인증과 JWT 페이로드가 누구에게나 읽힌다는 점도 짚는다.
+- 태그: Encoding, HTTP, Browser, Security
+- 키워드: Base64, base64url, data URL, Basic 인증
+- 길이: 471줄
+- 소제목: 글자만 다니는 길에 바이트를 실으려면 / 3바이트가 4글자가 되는 과정 / 모자란 바이트는 등호로 채운다 / 한글은 UTF-8 바이트부터 만든다 / 인코더를 직접 짜 보기 / 3분의 4만큼 커진다 / URL에 넣으면 더하기와 슬래시가 말썽이다 / 인코딩은 자물쇠가 아니다 / 브라우저의 btoa는 한글을 받지 못한다 / 터미널에서 base64 다루기 / data URL은 요청 하나를 아끼는 대신 / 다시 JSON 속 긴 문자열로 / 면접에서 나올 만한 질문
+- 직접 링크 →: token-login, https-tls
+- 키워드 백링크 →: http-versions, what-happens-google-com
+- 이 글로 오는 글 ←: html-form-http, http-message, realtime-communication, rest-api-design, token-login
+
+### Programming › Database (`programming/database`)
+
+#### `db-replication-sharding` — DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩
+
+- 요약: 읽기가 몰리면 복제본으로, 테이블이 너무 커지면 파티션으로, 쓰기와 데이터가 한 대를 넘으면 샤드로 나눈다. PostgreSQL 16에서 복제 지연, 파티션 가지치기, 일관된 해싱을 직접 돌려 보며 각 단계가 푸는 문제와 새로 생기는 문제를 정리한다.
+- 태그: Database, PostgreSQL, Distributed Systems, Scalability, System Design
+- 키워드: 읽기 복제본, 스트리밍 복제, 파티셔닝, 일관된 해싱, 복제 지연
+- 길이: 1161줄 (긴 글)
+- 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 주문 테이블을 달마다 나눈다 / 조건에 맞는 파티션만 읽는다 / 오래된 달은 통째로 떼어 낸다 / 목록과 해시로도 나눈다 / 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 언제 다음 단계로 넘어가나 / 나누는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, sql-query-tuning, caching-strategies, microservices, mongodb-document-model, db-architecture-by-scale
+- 키워드 백링크 →: redis-persistence-ha, redis-basics, dns
+- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-index, db-modeling-normalization, mongodb-document-model
+
+#### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
+
+- 요약: LIKE 검색이 느린 이유에서 출발해 분석기, 역색인, BM25 점수, refresh와 세그먼트, 샤드 구성을 따라간다. 쇼핑몰 검색에서 부딪히는 동의어·오타·패싯·깊은 페이지와 DB 동기화도 다룬다.
+- 태그: coupang, Elasticsearch, Search, Database · 회사: coupang
+- 키워드: Elasticsearch, 역색인, BM25, 형태소 분석기, search_after
+- 길이: 427줄
+- 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 다시 찾아보기로 / 면접에서 나올 만한 질문
+- 직접 링크 →: vector-db
+- 키워드 백링크 →: mongodb-document-model, db-modeling-normalization
+- 이 글로 오는 글 ←: db-architecture-by-scale, http-methods
+
+#### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
+
+- 요약: 주문 하나를 문서 하나로 저장하는 문서 모델에서 내장과 참조를 고르는 기준을 정리했다. 스키마 검증, ESR 인덱스, 트랜잭션, write concern, 샤드 키, 집계 파이프라인까지 다룬다.
+- 태그: coupang, MongoDB, NoSQL, Database · 회사: coupang
+- 키워드: MongoDB, ESR 규칙, 샤드 키, write concern, 집계 파이프라인
+- 길이: 409줄
+- 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: db-index, db-replication-sharding, db-modeling-normalization
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, elasticsearch-inverted-index
+
+#### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
+
+- 요약: 글자가 아니라 뜻으로 검색한다는 게 무슨 뜻일까. 임베딩, 코사인 유사도, HNSW 그래프 탐색, RAG까지 그림으로 따라가 봤다.
+- 태그: VectorDB, Embedding, AI, Search
+- 키워드: 벡터 DB, 임베딩, HNSW, RAG
+- 길이: 285줄
+- 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / 정리 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: pythagorean-theorem, db-modeling-normalization
+- 이 글로 오는 글 ←: db-architecture-by-scale, elasticsearch-inverted-index, pythagorean-theorem
+
+### Programming › Database › Redis (`programming/database/redis`)
+
+#### `redis-basics` — Redis는 왜 빠른가: 메모리, 단일 스레드, 자료구조
+
+- 요약: Redis가 빠른 이유와 느린 명령 하나가 서버 전체를 멈추는 이유는 같은 곳에 있다. 메모리와 단일 스레드 이벤트 루프 구조를 보고, Ubuntu에 설치해 자료구조별 명령을 직접 실행해 본다.
+- 태그: Redis, Database, NoSQL, Cache, Performance
+- 키워드: Redis, Memcached, I/O 다중화, 분산 락
+- 길이: 818줄
+- 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
+- 키워드 백링크 →: event-loop, db-transaction-isolation, dns
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-replication-sharding, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design
+
+#### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
+
+- 요약: maxmemory를 정하지 않으면 OOM 킬러에게 죽고, 기본 noeviction이면 가득 찬 순간 쓰기가 실패한다. INFO memory를 읽는 법부터 축출 정책 고르기, 근사 LRU와 LFU의 동작, 만료와 단편화, 리눅스 설정과 여유 메모리 계산까지 정리한다.
+- 태그: Redis, Database, Cache, Performance, Linux
+- 키워드: maxmemory, 축출 정책, allkeys-lru, 메모리 단편화
+- 길이: 752줄
+- 소제목: 키 하나가 실제로 차지하는 크기 / 작은 컬렉션은 압축된 모양으로 산다 / INFO memory를 한 줄씩 읽기 / 어떤 키가 메모리를 먹고 있나 / maxmemory를 정하지 않으면 생기는 일 / 가득 찼을 때 지울 키를 고르는 정책 / LRU를 정확하게 하지 않는 이유 / LFU 카운터는 로그로 오르고 시간이 지나면 내려간다 / 만료된 키가 바로 사라지지 않는 이유 / 단편화와 activedefrag / 리눅스 쪽에서 챙길 설정 / 서버 메모리의 몇 퍼센트를 maxmemory로 줄까 / 가득 차기 전에 정해 둘 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-basics, caching-strategies, redis-persistence-ha
+- 키워드 백링크 →: dns
+- 이 글로 오는 글 ←: caching-strategies, js-memory-leak, redis-basics, redis-persistence-ha
+
+#### `redis-persistence-ha` — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
+
+- 요약: 재부팅 한 번에 세션이 사라지지 않게 RDB와 AOF가 각각 무엇을 지키고 무엇을 잃는지 보고, 비동기 복제와 Sentinel 장애 조치, Cluster의 해시 슬롯과 MOVED·ASK까지 직접 돌려 보며 정리한다.
+- 태그: Redis, Database, Distributed Systems, Linux
+- 키워드: RDB 스냅샷, AOF, Redis Sentinel, Redis Cluster, 해시 슬롯
+- 길이: 910줄 (긴 글)
+- 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-basics, redis-memory-eviction
+- 키워드 백링크 →: dns
+- 이 글로 오는 글 ←: caching-strategies, db-replication-sharding, docker-compose, redis-basics, redis-memory-eviction
+
+### Programming › Database › SQL (`programming/database/sql`)
+
+#### `db-index` — 인덱스: 책 뒤의 찾아보기
+
+- 요약: 주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾고, 복합·커버링·부분·식 인덱스를 언제 쓰며, 인덱스가 왜 안 타고 무엇을 대가로 내는지 정리한다.
+- 태그: Database, SQL, PostgreSQL, Index, Performance
+- 키워드: 복합 인덱스, 커버링 인덱스, 부분 인덱스, Index Only Scan
+- 길이: 1246줄 (긴 글)
+- 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / B-tree가 아닌 인덱스들 / MySQL 8은 표 자체가 인덱스다 / 찾아보기를 만들기 전에 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-query-tuning
+- 키워드 백링크 →: db-replication-sharding, db-transaction-isolation, sql-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, mongodb-document-model, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
+
+#### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
+
+- 요약: 전화번호 하나 바꾸는 데 300줄을 고쳐야 하는 테이블에서 시작해, 함수 종속을 기준으로 1NF부터 BCNF까지 나눠 본다. 반정규화는 언제 들이고 원본과 어떻게 맞추는지도 실제 SQL로 따라간다.
+- 태그: Database, SQL, PostgreSQL, SQLD
+- 키워드: 정규화, 반정규화, 함수 종속, 대리 키, 부분 유니크 인덱스
+- 길이: 1034줄 (긴 글)
+- 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 자연 키와 대리 키, 그리고 UUID / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / 주문 당시 가격은 중복이 아니다 / 일부러 다시 합칠 때 (반정규화) / JSONB 열은 어디까지 괜찮나 / 자주 보는 설계 실수 / SQLD 시험 포인트 / 중복을 어디에 둘지 고르는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index
+- 키워드 백링크 →: json-crud-http, sqld-entity-attribute-relationship, db-transaction-isolation, db-replication-sharding
+- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, elasticsearch-inverted-index, git-troubleshooting, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
+
+#### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
+
+- 요약: 마지막 재고 1개를 두 사람이 동시에 사서 재고가 -1이 되는 장면을 두 세션으로 재현하고, 격리 수준이 실제로 무엇을 막는지 PostgreSQL과 MySQL을 나란히 본다. 조건부 UPDATE, 비관적·낙관적 잠금, 교착 상태와 오래 열린 트랜잭션까지 다룬다.
+- 태그: Database, SQL, PostgreSQL, SQLD, Transaction, Concurrency
+- 키워드: 격리 수준, MVCC, 갱신 손실, 쓰기 왜곡, 교착 상태
+- 길이: 1081줄 (긴 글)
+- 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD 시험 포인트 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
+- 직접 링크 →: microservices
+- 키워드 백링크 →: sql-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-modeling-normalization, redis-basics, sql-basics, sql-query-tuning
+
+#### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
+
+- 요약: 빈 DB에서 테이블 세 개를 만들고 행을 넣고 읽고 고치고 지워 본다. DDL·DML·DCL·TCL, 제약 조건, NULL과 3값 논리, DELETE·TRUNCATE·DROP의 차이, Oracle·SQL Server와 다른 점까지 실제 출력으로 확인한다.
+- 태그: Database, SQL, PostgreSQL
+- 키워드: DDL, TRUNCATE, 3값 논리, UPSERT
+- 길이: 1354줄 (긴 글)
+- 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / Oracle과 SQL Server에서는 이렇게 다르다 / 다음은 빈 칸을 채울 차례 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, sql-query-tuning, db-transaction-isolation, sqld-data-modeling
+- 키워드 백링크 →: sqld-group-by-having
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
+
+#### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
+
+- 요약: pg_stat_statements로 느린 쿼리를 찾고 EXPLAIN ANALYZE를 안쪽부터 읽은 뒤, sargable 조건, 키셋 페이지네이션, N+1 제거, 배치 쓰기, 트랜잭션과 타임아웃 관리로 고친 전후를 실행 계획으로 비교한다.
+- 태그: Database, SQL, PostgreSQL, Performance
+- 키워드: EXPLAIN ANALYZE, N+1, 키셋 페이지네이션, pg_stat_statements
+- 길이: 1109줄 (긴 글)
+- 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 느린 쿼리를 고치는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index
+- 키워드 백링크 →: db-architecture-by-scale, rest-api-design, db-transaction-isolation
+- 이 글로 오는 글 ←: db-index, db-replication-sharding, rest-api-design, sql-basics, sqld-joins
+
+### Programming › Database › SQLD (`programming/database/sqld`)
+
+#### `sqld-data-modeling` — SQLD 데이터 모델링: 개념·논리·물리와 3단계 스키마
+
+- 요약: 학원 수강신청 요구사항 한 장을 개념, 논리, 물리 모델을 거쳐 PostgreSQL 테이블로 만든다. ERD 표기법과 작성 순서, 3단계 스키마와 데이터 독립성을 뷰와 실행 계획으로 확인한다.
+- 태그: Database, SQL, PostgreSQL, SQLD
+- 키워드: 3단계 스키마, 데이터 독립성, ERD, 개념적 모델링
+- 길이: 519줄
+- 소제목: 현실을 줄여서 그리는 일 / 무엇을 보고 그리나: 데이터, 프로세스, 그리고 둘의 관계 / 개념에서 논리로, 논리에서 물리로 / ERD는 이 순서로 그린다 / 까마귀 발과 바커 표기 읽기 / 보는 사람마다 다른 화면, 하나의 DB / 좋은 모델인지 가늠하는 여섯 가지 / SQLD 시험 포인트 / 문서에서 테이블까지 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-entity-attribute-relationship, db-modeling-normalization, db-index
+- 키워드 백링크 →: sql-basics
+- 이 글로 오는 글 ←: sql-basics, sqld-entity-attribute-relationship
+
+#### `sqld-entity-attribute-relationship` — SQLD 엔터티·속성·관계·식별자
+
+- 요약: 출석은 학생에 붙을까, 강좌에 붙을까. 엔터티와 속성의 분류, 관계 읽는 법, 주식별자의 네 조건을 학원 예제로 정리하고, 식별 관계와 비식별 관계의 차이를 실제 테이블로 비교한다.
+- 태그: Database, SQL, PostgreSQL, SQLD
+- 키워드: 주식별자, 비식별 관계, 교차 엔터티
+- 길이: 564줄
+- 소제목: 엔터티가 되려면 갖춰야 할 것 / 엔터티를 나누는 두 가지 기준 / 속성은 더 쪼갤 수 없는 값 하나 / 관계: 엔터티끼리 맺는 연결 / 식별자: 인스턴스 하나를 집어내는 열쇠 / 식별 관계와 비식별 관계 / SQLD 시험 포인트 / 출석은 어디에 붙나 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-data-modeling, db-modeling-normalization
+- 키워드 백링크 →: json-crud-http, http-status-codes, sql-basics
+- 이 글로 오는 글 ←: db-modeling-normalization, sqld-data-modeling
+
+#### `sqld-group-by-having` — SQLD 집계와 GROUP BY, 그리고 실행 순서
+
+- 요약: WHERE에 SUM을 썼다가 난 에러에서 출발해 집계 함수의 NULL 처리, GROUP BY 규칙, HAVING과 WHERE의 차이를 논리적 실행 순서 위에서 정리한다. ORDER BY의 NULL 위치, 빈 집합 집계, CASE로 가로로 세기까지 EMP 데이터로 확인한다.
+- 태그: Database, SQL, SQLD, Oracle
+- 키워드: GROUP BY, HAVING, 집계 함수, 논리적 실행 순서
+- 길이: 746줄
+- 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-single-row-functions, sqld-joins
+- 이 글로 오는 글 ←: sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+
+#### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
+
+- 요약: 사원이 없는 부서가 보고서에서 사라지는 장면에서 시작해 EQUI, Non-EQUI, NATURAL, USING, OUTER, CROSS, SELF JOIN을 EMP와 DEPT, SALGRADE로 실제 결과 행과 함께 본다. Oracle (+) 표기의 규칙과 한계, Nested Loop, Sort Merge, Hash Join을 언제 고르는지도 정리한다.
+- 태그: Database, SQL, SQLD, Oracle
+- 키워드: OUTER JOIN, NATURAL JOIN, 카티션 곱, SELF JOIN, Non-EQUI JOIN
+- 길이: 771줄
+- 소제목: 조인은 짝을 찾는 일이다 / 범위로 짝을 찾는 Non-EQUI JOIN / ANSI 문법으로 쓰는 INNER JOIN / 짝이 없는 행을 살리는 OUTER JOIN / Oracle 전통 문법의 OUTER JOIN 표기 / 모든 조합을 만드는 CROSS JOIN / 자기 자신과 붙이는 SELF JOIN / 세 테이블을 붙이기 / DB가 짝을 찾는 세 가지 방법 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-single-row-functions, sqld-group-by-having, sql-query-tuning
+- 키워드 백링크 →: sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: sqld-group-by-having, sqld-subquery-set-operators
+
+#### `sqld-rollup-cube-grouping-sets` — SQLD ROLLUP, CUBE, GROUPING SETS
+
+- 요약: 부서 소계와 전체 합계가 있는 인건비 보고서를 쿼리 하나로 만들면서 ROLLUP, CUBE, GROUPING SETS가 만드는 묶음과 결과 행 수를 EMP 데이터로 센다. GROUPING 함수로 소계 줄에 이름표를 붙이고 부분 ROLLUP까지 정리한다.
+- 태그: Database, SQL, SQLD
+- 키워드: ROLLUP, GROUPING SETS, GROUPING_ID
+- 길이: 571줄
+- 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
+- 키워드 백링크 →: json-crud-http, sqld-single-row-functions
+- 이 글로 오는 글 ←: sqld-window-functions
+
+#### `sqld-single-row-functions` — SQLD 단일행 함수와 NULL 다루기
+
+- 요약: 커미션이 NULL인 사원의 지급액이 보고서에서 사라지는 장면에서 시작해 문자, 숫자, 날짜, 변환 함수를 EMP 데이터로 하나씩 돌려 본다. NVL, NVL2, NULLIF, COALESCE와 CASE, DECODE의 NULL 처리 차이, 암시적 형 변환이 인덱스를 막는 이유까지 Oracle과 PostgreSQL, SQL Server를 나란히 본다.
+- 태그: Database, SQL, SQLD, Oracle
+- 키워드: NVL, COALESCE, DECODE, 단일행 함수, 암시적 형 변환
+- 길이: 1103줄 (긴 글)
+- 소제목: 이 글에서 쓸 사원 테이블 / 지급액이 빈칸이 된 이유 / 한 행에 하나씩 돌려주는 함수 / 문자를 다듬는 함수 / 숫자를 자르고 올리는 함수 / 날짜는 숫자처럼 더하고 뺀다 / TO_CHAR 형식 문자열 읽기 / 형 변환은 직접 적는다 / NULL은 값이 아니라 빈칸이다 / NULL을 다른 값으로 바꾸는 함수 / 조건에 따라 값을 고르는 CASE와 DECODE / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-group-by-having, db-index
+- 이 글로 오는 글 ←: sqld-group-by-having, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-subquery-set-operators, sqld-window-functions
+
+#### `sqld-subquery-set-operators` — SQLD 서브쿼리와 집합 연산자
+
+- 요약: '자기 부서 평균보다 많이 받는 사람'을 쿼리 하나로 구하면서 서브쿼리의 세 자리와 단일행·다중행 연산자, 상관 서브쿼리, NOT IN에 NULL이 섞이면 0행이 되는 함정을 SCOTT 데이터로 따라간다. UNION과 UNION ALL의 비용 차이, MINUS와 EXCEPT, 집합 연산자의 규칙과 DB별 우선순위도 정리한다.
+- 태그: Database, SQL, SQLD
+- 키워드: 상관 서브쿼리, 스칼라 서브쿼리, 인라인 뷰, UNION ALL, 집합 연산자
+- 길이: 984줄 (긴 글)
+- 소제목: 예제로 쓸 EMP와 DEPT / 쿼리를 넣을 수 있는 세 자리 / 몇 줄이 돌아오느냐로 연산자가 바뀐다 / ANY와 ALL은 최솟값과 최댓값으로 바꿔 읽는다 / EXISTS는 있는지만 본다 / NOT IN에 NULL이 하나 섞이면 / 바깥 행마다 다시 도는 상관 서브쿼리 / SELECT 절에는 값 하나만 들어간다 / 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다 / 결과를 위아래로 붙이는 집합 연산자 / 집합 연산자의 규칙 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-single-row-functions, sqld-joins, db-index, sqld-window-functions
+- 키워드 백링크 →: sqld-group-by-having, sql-basics
+- 이 글로 오는 글 ←: sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot, sqld-window-functions
+
+#### `sqld-top-n-hierarchical-pivot` — SQLD Top-N, 계층형 쿼리, PIVOT
+
+- 요약: 급여 상위 3명과 조직도 화면을 만들면서 ROWNUM이 정렬보다 먼저 붙는 함정, WITH TIES, CONNECT BY와 PostgreSQL의 재귀 CTE, WHERE와 CONNECT BY 조건의 차이를 SCOTT 데이터로 확인한다. PIVOT과 UNPIVOT, 정규 표현식 함수도 함께 본다.
+- 태그: Database, SQL, SQLD
+- 키워드: ROWNUM, 계층형 쿼리, CONNECT BY, 재귀 CTE, PIVOT
+- 길이: 787줄
+- 소제목: ROWNUM은 정렬보다 먼저 붙는다 / 동점자까지 보여 주는 WITH TIES / 상사를 따라 내려가는 계층형 쿼리 / 계층형 쿼리가 주는 가상 컬럼 / WHERE에 거는 조건과 CONNECT BY에 거는 조건 / PostgreSQL과 SQL Server는 재귀 CTE로 쓴다 / 행을 열로 돌리는 PIVOT / 열을 행으로 되돌리는 UNPIVOT / 패턴으로 찾는 정규 표현식 함수 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-window-functions
+- 키워드 백링크 →: sqld-group-by-having
+- 이 글로 오는 글 ←: sqld-joins, sqld-window-functions
+
+#### `sqld-window-functions` — SQLD 윈도우 함수: 순위, 누적합, 앞뒤 행
+
+- 요약: 부서별 급여 순위와 누적 급여를 셀프 조인 없이 구하면서 RANK, DENSE_RANK, ROW_NUMBER가 동점에서 갈리는 모습과 ROWS와 RANGE 프레임의 차이를 실제 숫자로 본다. LAST_VALUE의 기본 프레임 함정, LAG와 LEAD, 비율과 분위 함수, WHERE에 못 쓰는 이유까지 다룬다.
+- 태그: Database, SQL, SQLD
+- 키워드: 윈도우 함수, DENSE_RANK, 윈도우 프레임, ROW_NUMBER
+- 길이: 624줄
+- 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
+- 키워드 백링크 →: sqld-group-by-having
+- 이 글로 오는 글 ←: sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
+
+### Programming › Frontend (`programming/frontend`)
+
+#### `html-form-http` — HTML form은 어떻게 HTTP 요청이 되나
+
+- 요약: 브라우저가 폼 입력값을 골라 urlencoded 쿼리나 multipart 본문으로 바꾸는 규칙을 따라간다. FormData와 fetch, PRG, CSRF 토큰, 서버 검증까지 폼을 보낸 뒤 생기는 문제도 함께 본다.
+- 태그: HTTP, Browser, Frontend, Encoding, Security
+- 키워드: HTML 폼, FormData, application/x-www-form-urlencoded, URLSearchParams
+- 길이: 485줄
+- 소제목: form 태그의 속성 세 개가 요청을 정한다 / 입력값이 쿼리 문자열이 되기까지 / 공백은 더하기, 나머지는 퍼센트로 / 주소에 실리면 남는다 / POST 본문의 세 가지 모양 / 파일을 올릴 때 챙길 것 / fetch로 보낼 때는 FormData를 쓴다 / 폼은 GET과 POST만 보낸다 / 새로고침하면 두 번 주문된다 / 다른 사이트도 내 서버로 폼을 보낼 수 있다 / 브라우저 검증은 친절일 뿐이다 / 자바스크립트가 없어도 폼은 동작한다 / 다시 검색창과 로그인 폼으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-methods, http-message, browser-fetch, http-status-codes, cors, cookie-session-login
+- 키워드 백링크 →: rest-api-design, base64, http-versions, rendering-strategies, client-data-cache, resilience-patterns, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, cookie-session-login, http-message, http-status-codes, json-crud-http
+
+### Programming › Frontend › Architecture (`programming/frontend/architecture`)
+
+#### `ab-testing` — A/B 테스트와 피처 플래그
+
+- 요약: 사용자를 해시로 일관되게 나누고, 화면을 본 사람만 세고, 정해 둔 표본을 모은 뒤 판정해야 숫자 차이를 변경의 효과라고 말할 수 있다. 플래그 종류, 깜빡임, 노출 로깅, 표본 크기와 엿보기, SRM, 실험이 싸지는 화면 설계까지 정리했다.
+- 태그: coupang, Experimentation, Feature Flag, Frontend, Architecture · 회사: coupang
+- 키워드: A/B 테스트, 피처 플래그, 킬 스위치, 표본 비율 불일치
+- 길이: 393줄
+- 소제목: 지난주와 비교하면 안 되는 이유 / 배포와 공개를 떼어 놓는 스위치 / 같은 사람에게는 항상 같은 쪽을 / 직접 버킷을 계산해 보기 / 어디서 나누느냐에 따라 화면이 깜빡인다 / 보여 준 사람만 센다 / 무엇이 나아져야 이긴 건가 / 몇 명이 필요한가 / 중간에 들여다보면 거짓 승리가 늘어난다 / 처음에만 반짝하는 효과 / 반반으로 나눴는데 반반이 아니다 / 실험이 싸지려면 화면이 설정을 받아야 한다 / 끝난 플래그는 빚이 된다 / 다시 4.8%와 5.3%로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: rendering-strategies, db-modeling-normalization, core-web-vitals
+- 이 글로 오는 글 ←: core-web-vitals, git-branching-strategy
+
+#### `micro-frontends` — 마이크로 프런트엔드: 큰 웹 앱을 팀별로 나눠 배포하기
+
+- 요약: 여러 팀이 하나의 웹 앱에 묶여 서로의 배포를 기다리는 문제를 셸과 리모트 구조로 푸는 방법을 정리했다. 합치는 방식, React 싱글턴과 버전 스큐, 독립 배포와 롤백, 그리고 모노레포로 충분한 경우까지 다룬다.
+- 태그: coupang, Architecture, Frontend, React, Micro Frontends · 회사: coupang
+- 키워드: 마이크로 프런트엔드, 마이크로 프론트엔드, Module Federation, 멀티 존
+- 길이: 344줄
+- 소제목: 같은 배포 열차에 모두 타고 있다 / 껍데기 앱과 조각 앱 / 언제 합치느냐가 갈림길이다 / 런타임에 리모트를 불러오는 과정 / 설정 한 덩어리 뜯어보기 / React가 두 개 뜨면 생기는 일 / 주소창은 셸이 쥔다 / 버튼이 팀마다 달라 보이지 않게 / 앱끼리 말을 거는 방법 / 따로 배포하면 따로 되돌린다 / 쪼갠 만큼 무거워진다 / 대부분은 모노레포로 충분하다 / 다시 목요일 배포로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: microservices
+
+### Programming › Frontend › JavaScript (`programming/frontend/javascript`)
+
+#### `browser-fetch` — 브라우저에서 HTTP 요청 보내기: fetch 제대로 쓰기
+
+- 요약: fetch가 500에서도 성공하는 이유와 res.ok 확인, 한 번만 읽히는 본문, credentials·keepalive 같은 옵션을 짚는다. AbortController로 늦게 온 응답과 타임아웃을 다루고, XHR·axios와 무엇이 다른지 비교한다.
+- 태그: HTTP, JavaScript, Browser, Frontend
+- 키워드: AbortController, AbortSignal, sendBeacon, keepalive
+- 길이: 488줄
+- 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 다시 처음 코드로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn
+- 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, dns
+- 이 글로 오는 글 ←: client-data-cache, html-form-http, json-crud-http, nginx-reverse-proxy
+
+#### `event-loop` — 자바스크립트 이벤트 루프: 브라우저와 Node.js
+
+- 요약: 콜 스택, 태스크 큐, 마이크로태스크 큐가 어떤 순서로 돌고 렌더링이 어디에 끼어드는지 출력 순서 퍼즐로 따라간다. 긴 작업이 INP를 망치는 이유와 작업을 쪼개는 방법, Node.js의 단계와 process.nextTick까지 다룬다.
+- 태그: coupang, JavaScript, Browser, Performance, Node.js · 회사: coupang
+- 키워드: 이벤트 루프, 마이크로태스크, 태스크 큐, process.nextTick, setImmediate
+- 길이: 505줄
+- 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: core-web-vitals
+- 이 글로 오는 글 ←: core-web-vitals, js-memory-leak, nginx-basics, redis-basics
+
+#### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
+
+- 요약: GC가 무엇을 쓰레기로 보는지에서 출발해 SPA에서 참조가 새는 자리와 WeakMap·WeakRef의 쓰임을 정리한다. 크롬 힙 스냅샷 비교와 Retainers 경로로 범인을 찾는 순서, Node.js 서버의 메모리 문제를 다루는 방법도 담았다.
+- 태그: coupang, JavaScript, Browser, Performance, Node.js · 회사: coupang
+- 키워드: 메모리 누수, 힙 스냅샷, 가비지 컬렉션, WeakMap, detached DOM
+- 길이: 436줄
+- 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, dns
+- 이 글로 오는 글 ←: client-data-cache, microservices
+
+### Programming › Frontend › Performance (`programming/frontend/performance`)
+
+#### `client-data-cache` — 화면 데이터 캐시: TanStack Query와 SWR로 같은 요청 줄이기
+
+- 요약: 같은 API를 여러 컴포넌트가 부를 때 요청을 하나로 합치고, staleTime과 gcTime으로 언제 다시 받고 언제 버릴지 정하는 방법을 다룬다. 뮤테이션 뒤 캐시 맞추기, 낙관적 업데이트, 흔한 실수와 LRU 메모이제이션까지 이어 간다.
+- 태그: Cache, React, Performance, Frontend
+- 키워드: TanStack Query, staleTime, gcTime, 낙관적 업데이트, 서버 상태
+- 길이: 579줄
+- 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
+- 키워드 백링크 →: http-caching-cdn
+- 이 글로 오는 글 ←: browser-fetch, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, microservices, mvc-pattern, react-rerender, resilience-patterns
+
+#### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
+
+- 요약: 큰 번들이 모바일에서 왜 다운로드보다 실행에서 더 비싼지 보고, 동적 import로 청크를 나누는 법과 트리 셰이킹이 안 쓰는 코드를 빼는 원리를 따라간다. sideEffects, CommonJS, 배럴 파일의 함정과 prefetch, 내용 해시 캐시, 과도한 분할로 생기는 워터폴까지 다룬다.
+- 태그: coupang, Performance, JavaScript, Webpack, Bundler · 회사: coupang
+- 키워드: 코드 스플리팅, 트리 셰이킹, 배럴 파일, 동적 import
+- 길이: 434줄
+- 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
+- 직접 링크 →: core-web-vitals
+- 키워드 백링크 →: http-versions, rendering-strategies
+- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions
+
+#### `core-web-vitals` — Core Web Vitals: LCP, INP, CLS
+
+- 요약: LCP, INP, CLS가 각각 무엇을 재는지, Lighthouse 점수와 실제 사용자 수치가 왜 다르게 나오는지 따라간다. LCP 네 조각과 INP 세 구간, CLS 세션 창으로 원인을 쪼개 찾고 고치는 방법까지 다룬다.
+- 태그: coupang, Performance, Browser, JavaScript, Core Web Vitals · 회사: coupang
+- 키워드: Core Web Vitals, LCP, INP, CLS, 레이아웃 스래싱
+- 길이: 452줄
+- 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com, code-splitting
+- 키워드 백링크 →: ab-testing, event-loop, cors, dns
+- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, react-rerender, rendering-strategies
+
+#### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
+
+- 요약: 요청 하나가 메모리 캐시, Service Worker, HTTP 캐시를 차례로 거치는 과정과 bfcache, Cache Storage 전략, 새 Service Worker가 기다리는 이유를 이 블로그의 sw.js로 따라간다. 데이터 저장소의 용량과 지워지는 규칙, 미리 받기 힌트까지 정리한다.
+- 태그: Cache, Browser, Performance, Frontend
+- 키워드: Service Worker, bfcache, Cache Storage, skipWaiting, Speculation Rules
+- 길이: 605줄
+- 소제목: 요청 하나가 거치는 캐시들 / HTTP 캐시는 서버가 정한 기한을 따른다 / 뒤로 가기가 즉시 뜨는 bfcache / 페이지 앞에 선 프록시, Service Worker / 설치, 활성화, 가로채기 / 캐시를 먼저 볼까 네트워크를 먼저 볼까 / 미리 담기와 쓰면서 담기 / 이 블로그의 sw.js 읽기 / 버전을 올리고 옛 캐시를 지운다 / 새 Service Worker는 기다린다 / Workbox를 쓰면 / 데이터는 어디에 저장하나 / 용량과 지워지는 순서 / 다음에 필요한 것을 미리 받기 / 개발자 도구에서 확인하기 / 처음 장면으로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-caching-cdn, caching-strategies, client-data-cache, core-web-vitals, code-splitting
+- 키워드 백링크 →: realtime-communication, what-happens-google-com, cors
+- 이 글로 오는 글 ←: browser-fetch, client-data-cache, http-caching-cdn
+
+### Programming › Frontend › React (`programming/frontend/react`)
+
+#### `react-rerender` — React는 언제 다시 그리나
+
+- 요약: 검색창 글자 하나에 목록 전체가 다시 렌더링되는 장면에서 출발해 렌더와 커밋, 리렌더링이 일어나는 이유, key와 재조정, memo·useCallback이 듣는 경우와 안 듣는 경우를 따라간다. context 분리, 상태 위치 옮기기, 자동 배칭, transition, Profiler로 원인 찾기까지 다룬다.
+- 태그: coupang, React, Performance, Rendering · 회사: coupang
+- 키워드: 리렌더링, 재조정, React.memo, 자동 배칭, useDeferredValue
+- 길이: 591줄
+- 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies
+- 키워드 백링크 →: core-web-vitals, client-data-cache
+- 이 글로 오는 글 ←: client-data-cache, rendering-strategies
+
+#### `rendering-strategies` — CSR, SSR, SSG, ISR, 스트리밍: HTML은 어디서 만들어지나
+
+- 요약: 같은 상품 페이지의 HTML을 브라우저, 요청 시 서버, 빌드, 뒤늦은 재생성, 조각 전송 중 어디서 만드느냐에 따라 TTFB·LCP·서버 비용·신선도가 어떻게 달라지는지 비교한다. 하이드레이션과 불일치, ISR 갱신 방식, 스트리밍의 제약, 서버 컴포넌트, 쇼핑몰 페이지별 선택까지 다룬다.
+- 태그: coupang, React, SSR, Next.js, Performance, Rendering · 회사: coupang
+- 키워드: 하이드레이션, ISR, 스트리밍 SSR, 서버 컴포넌트, SSG
+- 길이: 467줄
+- 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
+- 직접 링크 →: react-rerender
+- 키워드 백링크 →: http-caching-cdn, http-status-codes, core-web-vitals
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, react-rerender
+
+### Programming › Network (`programming/network`)
+
+#### `dns` — DNS는 어떻게 이름을 IP로 바꾸나
+
+- 요약: 도메인 이름이 루트, TLD, 권한 있는 네임서버를 거쳐 IP가 되는 과정과 TTL 캐시가 만드는 시차를 따라간다. 레코드 종류, apex CNAME 제약, UDP와 TCP, DoH와 DNSSEC, dig로 장애를 찾는 법까지 다룬다.
+- 태그: DNS, Network, Security
+- 키워드: DNS, 재귀 리졸버, 권한 있는 네임서버, DNSSEC, CNAME, DoH, TTL
+- 길이: 451줄
+- 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com, hosts-file
+- 키워드 백링크 →: http-versions
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, local-custom-domain, nginx-https-performance, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, what-happens-google-com
+
+#### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
+
+- 요약: 운영체제가 DNS보다 먼저 확인하는 hosts 파일의 형식과 조회 순서, 로컬 개발과 서버 이전 테스트에 쓰는 법을 정리한다. 고쳤는데 반영되지 않는 이유와 포트·와일드카드가 안 되는 이유, 보안 위험도 다룬다.
+- 태그: DNS, Network, Browser, Security
+- 키워드: hosts 파일, /etc/hosts, nsswitch.conf
+- 길이: 338줄
+- 소제목: DNS보다 먼저 보는 파일 / 한 줄 뜯어보기 / 이름을 찾는 순서 / 어디에 쓰나 / 고쳤는데 그대로인 이유 / 포트도, 와일드카드도 안 된다 / 악성코드가 노리는 파일 / 가장 앞에 있는 한 줄짜리 DNS / 면접에서 나올 만한 질문
+- 직접 링크 →: dns
+- 키워드 백링크 →: proxy-reverse-proxy, local-custom-domain, http-versions, what-happens-google-com
+- 이 글로 오는 글 ←: dns, local-custom-domain, what-happens-google-com
+
+#### `http-caching-cdn` — HTTP 캐시와 CDN
+
+- 요약: 배포했는데 옛 화면이 보이거나 흰 화면이 뜨는 이유를 HTTP 캐시 규칙으로 푼다. Cache-Control, ETag와 304, 캐시 키와 Vary, CDN 엣지와 무효화, 개인화 페이지를 캐시하면 안 되는 이유까지 다룬다.
+- 태그: coupang, HTTP, Cache, CDN, Performance, Browser · 회사: coupang
+- 키워드: Cache-Control, ETag, 캐시 무효화, 캐시 스탬피드, stale-while-revalidate
+- 길이: 401줄
+- 소제목: 응답은 여러 곳에 복사된다 / 신선한 동안은 묻지도 않는다 / Cache-Control 한 줄 뜯어 보기 / 상한 사본이 아직 맞는지 묻기 / 무엇을 같은 요청으로 보나 / 이름에 해시를 넣으면 영원히 캐시할 수 있다 / 엣지에서 기한을 정하는 쪽은 누구인가 / 한꺼번에 만료되면 오리진이 몰린다 / 지우는 데도 시간이 걸린다 / 사람마다 다른 페이지를 공유 캐시에 두면 / 응답 헤더로 확인한다 / 처음 장면을 다시 보면 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com
+- 키워드 백링크 →: http-message, frontend-browser-cache, http-versions, redis-basics, cookie-session-login, cors, dns
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nginx-https-performance, proxy-reverse-proxy, rendering-strategies, rest-api-design, what-happens-google-com
+
+#### `proxy-reverse-proxy` — 프록시와 리버스 프록시: 누구를 대신하나
+
+- 요약: 사내망에서 curl이 막히는 이유와 앱 로그에 로드 밸런서 IP만 찍히는 이유를 프록시가 누구 편에 서 있는지로 푼다. CONNECT 터널과 TLS 가로채기, Ubuntu 프록시 설정, X-Forwarded-For를 오른쪽부터 읽는 법과 PROXY protocol까지 다룬다.
+- 태그: Network, HTTP, Security, Proxy, TLS, Linux
+- 키워드: 포워드 프록시, 리버스 프록시, X-Forwarded-For, CONNECT 터널, PROXY protocol
+- 길이: 649줄
+- 소제목: 프록시는 누구를 대신하나 / 프록시에게 보내는 HTTP 요청은 모양이 다르다 / HTTPS는 CONNECT로 터널을 판다 / 회사 프록시가 TLS를 열어 볼 때 / 설정 없이 지나가는 프록시와 PAC 파일 / HTTP를 모르는 프록시, SOCKS5 / Ubuntu에서 프록시 쓰게 하기 / 서버 앞을 지키는 리버스 프록시 / 앱에는 로드 밸런서 주소만 보인다 / X-Forwarded-For 한 줄 뜯어보기 / 진짜 클라이언트 IP 고르기 / 표준 헤더 Forwarded / 헤더를 못 붙이는 L4 로드 밸런서와 PROXY protocol / CDN에서 앱까지, 헤더가 붙는 자리 / 리버스 프록시, 로드 밸런서, API 게이트웨이 / 다시 두 장면으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: https-tls, nginx-reverse-proxy, http-caching-cdn, local-custom-domain, gateway
+- 키워드 백링크 →: docker-container-basics, iptables-basics, http-versions, http-status-codes, what-happens-google-com, dns
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, local-custom-domain, nginx-basics, nginx-reverse-proxy, realtime-communication
+
+#### `realtime-communication` — 서버가 먼저 말하게 하기: 폴링, 롱 폴링, SSE, WebSocket
+
+- 요약: 요청-응답뿐인 HTTP에서 서버가 먼저 소식을 보내는 네 가지 방법을 비교했다. 롱 폴링의 타임아웃, SSE의 재연결과 Last-Event-ID, WebSocket 업그레이드와 프레임, 여러 서버로 늘릴 때의 문제까지 다룬다.
+- 태그: WebSocket, HTTP, Network
+- 키워드: WebSocket, Server-Sent Events, 롱 폴링, EventSource
+- 길이: 527줄
+- 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 무엇을 고를까 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-versions, cors, resilience-patterns
+- 키워드 백링크 →: nginx-reverse-proxy, json-crud-http, proxy-reverse-proxy, base64, redis-basics, http-status-codes
+- 이 글로 오는 글 ←: frontend-browser-cache, nginx-basics, nginx-reverse-proxy
+
+#### `what-happens-google-com` — 주소창에 google.com을 치면 일어나는 일
+
+- 요약: 엔터를 누른 순간부터 화면이 뜰 때까지. URL 해석과 HSTS, DNS 조회, TCP·TLS 핸드셰이크, HTTP/2 요청과 리다이렉트, 렌더링 파이프라인을 순서대로 따라갔다.
+- 태그: DNS, TCP, TLS, HTTP, Browser
+- 키워드: HTTPS, 3-way handshake, HSTS, 렌더링 파이프라인
+- 길이: 348줄
+- 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 정리 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, http-versions
+- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, kubernetes-ingress, local-custom-domain, nginx-basics, nginx-https-performance, nginx-reverse-proxy, proxy-reverse-proxy
+
+### Programming › Network › HTTP (`programming/network/http`)
+
+#### `http-message` — HTTP 메시지는 어떻게 생겼나
+
+- 요약: HTTP 메시지는 첫 줄, 헤더, 빈 줄, 본문으로 된 텍스트다. Host, Content-Type, Content-Length와 chunked, 콘텐츠 협상과 압축, 본문 형식까지 헤더 한 줄이 무엇을 결정하는지 curl로 뜯어본다.
+- 태그: HTTP, Network, Browser
+- 키워드: 콘텐츠 협상, Transfer-Encoding, Accept-Encoding, multipart/form-data, 요청 스머글링
+- 길이: 494줄
+- 소제목: curl로 날것의 메시지를 본다 / 텍스트 몇 줄이 전부다 / 응답도 같은 모양이다 / Host가 없으면 400이다 / 본문이 어디서 끝나는지 알려 주기 / 연결을 끊을지 말지 / 같은 주소, 다른 표현 / 압축은 Accept-Encoding으로 고른다 / 본문 형식은 Content-Type이 말한다 / 헤더 이름과 크기에 관한 규칙 / HTTP/2에서는 모양이 바뀐다 / 다시 415로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com, http-status-codes, http-methods, http-caching-cdn, cookie-session-login, token-login, http-versions
+- 키워드 백링크 →: https-tls, html-form-http, kubernetes-ingress, base64, db-modeling-normalization
+- 이 글로 오는 글 ←: html-form-http, http-caching-cdn, http-methods, http-status-codes, http-versions, json-crud-http, rest-api-design
+
+#### `http-methods` — HTTP 메서드와 안전성·멱등성
+
+- 요약: GET, POST, PUT, PATCH, DELETE는 서버와 맺는 약속이다. 안전과 멱등의 정확한 뜻, PUT과 PATCH의 차이, POST를 다시 보내면 생기는 일과 GET으로 상태를 바꾸면 안 되는 이유를 정리한다.
+- 태그: HTTP, REST, Network
+- 키워드: 멱등성, 안전한 메서드, JSON Merge Patch, JSON Patch, PUT과 PATCH
+- 길이: 455줄
+- 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 다시 메일 링크로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes
+- 키워드 백링크 →: json-crud-http, elasticsearch-inverted-index, gateway, client-data-cache, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, html-form-http, http-message, http-status-codes, http-versions, https-tls, json-crud-http, microservices, nginx-reverse-proxy, resilience-patterns, rest-api-design
+
+#### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
+
+- 요약: 상태 코드는 본문을 열어 보지 않는 캐시, 프록시, 모니터링, 재시도 로직이 읽는 유일한 신호다. 리다이렉트 다섯 종류의 차이, 401과 403, 502와 504를 누가 만드는지, 어떤 실패를 재시도할지, Problem Details로 에러 본문을 쓰는 법을 정리했다.
+- 태그: HTTP, Network, Backend, API
+- 키워드: 상태 코드, Problem Details, PRG 패턴, 308 Permanent Redirect
+- 길이: 367줄
+- 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, resilience-patterns
+- 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, http-versions, what-happens-google-com, dns
+- 이 글로 오는 글 ←: browser-fetch, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, mvc-pattern, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
+
+#### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
+
+- 요약: HTTP는 버전마다 앞 버전이 남긴 기다림을 하나씩 없앴다. 파이프라이닝이 꺼진 이유부터 HTTP/2의 프레임과 HPACK, TCP 수준의 줄 막힘, QUIC의 0-RTT와 연결 이전, 개발자가 버려야 할 HTTP/1.1 시절 꼼수까지 따라간다.
+- 태그: HTTP, Network, Performance, TLS
+- 키워드: HTTP/2, HTTP/3, QUIC, 멀티플렉싱, HPACK, 도메인 샤딩
+- 길이: 370줄
+- 소제목: 요청마다 연결을 새로 맺던 HTTP/1.0 / 연결을 재사용하는 HTTP/1.1 / 텍스트를 프레임으로 쪼갠 HTTP/2 / TCP 아래에서 다시 막히는 줄 / UDP 위에 새로 만든 QUIC / 브라우저는 HTTP/3를 어떻게 알아내나 / 개발자가 바꿀 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com, http-message, http-status-codes, code-splitting
+- 키워드 백링크 →: https-tls, http-methods, dns
+- 이 글로 오는 글 ←: base64, code-splitting, dns, hosts-file, html-form-http, http-caching-cdn, http-message, http-status-codes, https-tls, iptables-nat, local-custom-domain, microservices, nginx-https-performance, proxy-reverse-proxy, realtime-communication, rest-api-design, what-happens-google-com
+
+#### `json-crud-http` — JSON으로 데이터 주고받기: 조회·생성·수정·삭제 끝까지
+
+- 요약: 할 일 자원 하나를 curl과 fetch로 만들고 읽고 고치고 지우면서 실제 요청과 응답을 본다. JSON.stringify가 바꾸는 값, 큰 정수 ID, 201과 Location, PUT과 Merge Patch, 415·422·412, 204에서 터지는 res.json()까지 다룬다.
+- 태그: HTTP, REST, API, JSON, JavaScript
+- 키워드: JSON.stringify, JSON.parse, reviver, 415 Unsupported Media Type
+- 길이: 804줄
+- 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
+- 키워드 백링크 →: cors, client-data-cache, resilience-patterns, http-caching-cdn
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets
+
+### Programming › OS › Linux (`programming/os/linux`)
+
+#### `iptables-basics` — iptables로 리눅스 방화벽 이해하기
+
+- 요약: 패킷이 netfilter의 다섯 검문소를 어떻게 지나고 규칙이 위에서부터 어떻게 맞춰지는지 보고, Ubuntu 서버에서 SSH와 웹만 여는 규칙을 잠기지 않게 만들어 저장하는 데까지 간다.
+- 태그: Linux, Network, Security, Firewall
+- 키워드: iptables, netfilter, conntrack, ip6tables, iptables-persistent
+- 길이: 810줄
+- 소제목: 방화벽 상태부터 확인한다 / 커널 안의 다섯 검문소 / 테이블은 검문소에서 하는 일의 종류 / 위에서부터, 처음 맞는 규칙에서 끝난다 / 명령어 한 줄 뜯어보기 / 연결을 기억하는 conntrack / SSH와 웹만 여는 규칙 세트 / 재부팅하면 사라진다 / IPv6는 따로 막아야 한다 / ufw, nftables, iptables는 같은 걸 만진다 / 막힌 패킷을 찾는 법 / SSH 무차별 대입 늦추기 / 결국 위에서부터 읽히는 목록 / 면접에서 나올 만한 질문
+- 직접 링크 →: iptables-nat
+- 키워드 백링크 →: what-happens-google-com, dns
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-nat, proxy-reverse-proxy
+
+#### `iptables-nat` — iptables NAT와 포트 포워딩: 사설망, Docker, Kubernetes까지
+
+- 요약: SNAT·DNAT·MASQUERADE로 주소를 바꾸고 conntrack이 그 변환을 기억하는 원리를 보고, 게이트웨이와 포트 포워딩을 직접 구성한 뒤 Docker와 kube-proxy가 같은 규칙을 어떻게 쓰는지 따라간다.
+- 태그: Linux, Network, Docker, Kubernetes, Firewall
+- 키워드: MASQUERADE, 포트 포워딩, DNAT, DOCKER-USER, kube-proxy
+- 길이: 663줄
+- 소제목: 주소를 바꿔 쓰는 세 가지 방법 / 바꾼 주소는 conntrack이 기억한다 / 먼저 포워딩을 켠다 / 내부망을 인터넷에 내보내는 게이트웨이 / 바깥 포트를 내부 서버로 넘기는 포트 포워딩 / 같은 서버 안에서 포트만 바꾸는 REDIRECT / Docker가 만드는 규칙 / 쿠버네티스 Service는 nat 규칙 묶음이다 / NAT가 안 될 때 따라가는 순서 / 주소를 바꾸고 기억하는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: iptables-basics, kubernetes-ingress
+- 키워드 백링크 →: proxy-reverse-proxy, http-versions, what-happens-google-com, dns
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, kubernetes-ingress
+
+### Programming › Security (`programming/security`)
+
+#### `cors` — CORS: 서버는 응답했는데 브라우저가 막는 이유
+
+- 요약: 다른 출처로 보낸 요청은 서버까지 가는데, 응답을 읽을지는 브라우저가 서버의 허락 헤더를 보고 정한다. 같은 출처 정책, preflight, credentials, 흔한 설정 실수와 CSRF와의 관계까지 정리했다.
+- 태그: CORS, Security, HTTP, Browser
+- 키워드: CORS, Same-Origin Policy, 같은 출처 정책, preflight, Access-Control-Allow-Origin
+- 길이: 435줄
+- 소제목: 서버는 응답했는데 콘솔은 빨갛다 / 출처를 가르는 세 가지 / 남의 응답을 읽지 못하게 하는 이유 / 응답 헤더로 허락을 받는다 / 먼저 물어보는 요청 (preflight) / 허락 헤더 하나씩 / 쿠키까지 보내려면 / 열어 두다가 뚫리는 경우 / CORS는 브라우저가 지킨다 / CORS는 CSRF를 막지 못한다 / 개발할 때는 프록시로 돌아간다 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: local-custom-domain, cookie-session-login
+- 키워드 백링크 →: json-crud-http, http-caching-cdn
+- 이 글로 오는 글 ←: browser-fetch, core-web-vitals, frontend-browser-cache, html-form-http, http-caching-cdn, http-methods, json-crud-http, kubernetes-ingress, local-custom-domain, realtime-communication
+
+#### `https-tls` — HTTPS는 무엇을 지켜 주나: TLS 1.3
+
+- 요약: 자물쇠가 보장하는 기밀성·무결성·인증과, 그래도 보이는 SNI. 인증서 체인 검증, TLS 1.3 핸드셰이크와 ECDHE, 0-RTT의 재전송 위험, TLS 종료와 mTLS, 자주 만나는 인증서 오류까지 정리했다.
+- 태그: TLS, HTTPS, Security, Network
+- 키워드: TLS 1.3, TLS 핸드셰이크, 인증서 체인, 중간 인증서, 전방향 안전성, mTLS
+- 길이: 476줄
+- 소제목: 자물쇠가 약속하는 세 가지 / 암호화해도 보이는 것 / 인증서 한 장 뜯어보기 / 믿음은 루트에서 내려온다 / 브라우저가 인증서를 검사하는 순서 / 인증서를 자동으로 받는 방법: ACME / TLS 1.3 핸드셰이크 한 단계씩 / 키를 보내지 않고 같은 키를 만든다 / 본문은 대칭키로 빠르게 / 다시 올 때는 0-RTT, 대신 재전송을 조심 / TLS를 어디서 끝낼까 / 서버끼리도 서로 확인한다: mTLS / 자주 마주치는 인증서 오류 / 자물쇠 하나에 들어 있는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: dns, local-custom-domain, what-happens-google-com, resilience-patterns, gateway
+- 키워드 백링크 →: kubernetes-ingress, nginx-basics, nginx-https-performance, http-versions, http-methods
+- 이 글로 오는 글 ←: base64, gateway, http-message, http-status-codes, http-versions, kubernetes-ingress, nginx-https-performance, proxy-reverse-proxy, what-happens-google-com
+
+### Programming › Server/Infra › Docker (`programming/server-infra/docker`)
+
+#### `docker-compose` — Docker Compose로 여러 컨테이너 한 번에 띄우기
+
+- 요약: nginx, Node, Postgres, Redis를 compose.yaml 하나로 띄우면서 depends_on과 healthcheck로 정하는 시작 순서, .env 보간, down -v의 위험, 개발·운영 설정 분리까지 정리한다.
+- 태그: Docker, DevOps, Linux
+- 키워드: Docker Compose, compose.yaml, depends_on
+- 길이: 607줄
+- 소제목: docker-compose와 docker compose / 서비스 넷을 파일 하나에 / 서비스 블록 하나 뜯어보기 / .env는 컨테이너에 들어가지 않는다 / up 한 번에 일어나는 순서 / 요청 하나가 서비스를 건너가는 길 / 매일 쓰는 명령 / down과 down -v는 한 글자 차이다 / 개발과 운영을 파일로 나누기 / 비밀 값은 어디에 두나 / Compose로 버티는 데까지 / 파일 하나가 구성 전체를 말한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: docker-network-volume, docker-container-basics, dockerfile-image-layers, kubernetes-ingress
+- 키워드 백링크 →: iptables-basics, proxy-reverse-proxy, redis-basics, iptables-nat, redis-persistence-ha, dns
+- 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers
+
+#### `docker-container-basics` — 컨테이너는 무엇인가: Docker로 처음 띄워 보기
+
+- 요약: 컨테이너가 VM과 달리 호스트 커널을 함께 쓰는 프로세스이고 namespace와 cgroups로 격리된다는 것을 직접 확인한 뒤, Ubuntu에 Docker를 설치해 컨테이너를 띄우고 들여다보고 멈추고 지우는 데까지 간다.
+- 태그: Docker, Container, Linux, DevOps
+- 키워드: cgroups, namespace, Docker Engine, 컨테이너 이미지
+- 길이: 850줄
+- 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: dockerfile-image-layers, iptables-nat
+- 키워드 백링크 →: iptables-basics, rest-api-design
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, proxy-reverse-proxy
+
+#### `docker-network-volume` — Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기
+
+- 요약: 컨테이너 안의 localhost가 왜 DB에 닿지 않는지, docker rm 한 번에 데이터가 왜 사라지는지에서 출발해 사용자 정의 브리지와 내장 DNS, -p가 만드는 DNAT, named volume과 bind mount, 볼륨 백업까지 따라간다.
+- 태그: Docker, Network, Linux, DevOps
+- 키워드: named volume, bind mount, 사용자 정의 브리지, host.docker.internal
+- 길이: 715줄
+- 소제목: 컨테이너 안의 localhost는 컨테이너 자신이다 / 네트워크 드라이버 다섯 가지 / 이름으로 찾아가는 사용자 정의 브리지 / -p 한 줄이 만드는 것 / 컨테이너에서 호스트로 가는 길 / docker rm 하면 데이터가 왜 사라지나 / 데이터를 바깥에 두는 네 가지 방법 / -v와 --mount 읽기 / 볼륨을 만들고 들여다보기 / 볼륨을 tar로 백업하고 되살리기 / 바인드 마운트와 UID / Postgres와 앱을 처음부터 다시 띄우기 / 격리를 얼마나 풀어 줄지 정하는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: docker-container-basics, dockerfile-image-layers, iptables-nat, docker-compose
+- 키워드 백링크 →: nginx-basics, iptables-basics, proxy-reverse-proxy, redis-basics, dns
+- 이 글로 오는 글 ←: docker-compose
+
+#### `dockerfile-image-layers` — Dockerfile과 이미지 레이어: 빠르고 작은 이미지 만들기
+
+- 요약: Dockerfile 명령이 레이어가 되고 빌드 캐시가 처음 바뀐 줄에서 끊기는 원리를 보고, 의존성 먼저 복사하기, 멀티 스테이지 빌드, 베이스 이미지 선택, BuildKit 캐시 마운트로 빌드를 빠르게, 이미지를 작게 만든다.
+- 태그: Docker, Container, DevOps, Performance
+- 키워드: Dockerfile, 멀티 스테이지 빌드, 빌드 캐시, BuildKit, distroless
+- 길이: 640줄
+- 소제목: 문제가 된 Dockerfile / 명령어 한 줄씩 읽기 / ENTRYPOINT와 CMD, exec 형식과 셸 형식 / 명령 하나가 레이어 한 장 / 캐시는 처음 바뀐 줄에서 끊긴다 / 잘 안 바뀌는 것을 위에 둔다 / .dockerignore로 보내는 것부터 줄인다 / 빌드 도구는 두고 결과만 옮기는 멀티 스테이지 빌드 / 베이스 이미지: slim, alpine, distroless / root가 아닌 사용자로, 상태는 HEALTHCHECK로 / BuildKit 캐시 마운트와 여러 아키텍처 빌드 / 태그 붙여 올리고, 올리기 전에 검사하기 / 처음 문제로 돌아가면 / 면접에서 나올 만한 질문
+- 직접 링크 →: docker-container-basics
+- 키워드 백링크 →: docker-compose, dns
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, git-tips-advanced
+
+### Programming › Server/Infra › Kubernetes (`programming/server-infra/kubernetes`)
+
+#### `gateway` — 게이트웨이: API 게이트웨이에서 Kubernetes Gateway API까지
+
+- 요약: 흩어진 서비스 앞에 입구를 하나 세우는 API 게이트웨이를 리버스 프록시·로드 밸런서와 비교하고, Ingress의 뒤를 잇는 Gateway API가 역할을 어떻게 나누는지 정리한다.
+- 태그: coupang, Kubernetes, Gateway, Ingress, HTTP · 회사: coupang
+- 키워드: API 게이트웨이, Gateway API, HTTPRoute, ReferenceGrant, BFF
+- 길이: 423줄
+- 소제목: 입구를 하나로 모으기 / 로드 밸런서, 리버스 프록시와 무엇이 다른가 / 게이트웨이가 너무 똑똑해지면 / 쿠버네티스의 입구, Ingress로는 부족했던 것 / 리소스를 역할별로 나눈 Gateway API / HTTPRoute 뜯어보기 / 헤더로 고르고 비율로 나누기 / 네임스페이스를 넘어 참조하기 / Ingress에서 옮겨 갈 때 / 입구 하나, 규칙은 여러 사람이 / 면접에서 나올 만한 질문
+- 직접 링크 →: kubernetes-ingress
+- 키워드 백링크 →: docker-container-basics, proxy-reverse-proxy, token-login, redis-basics, what-happens-google-com, https-tls, dns
+- 이 글로 오는 글 ←: http-methods, http-status-codes, https-tls, kubernetes-ingress, microservices, mvc-pattern, nginx-reverse-proxy, proxy-reverse-proxy, resilience-patterns, rest-api-design
+
+#### `kubernetes-ingress` — Kubernetes Ingress: 로드 밸런서 하나로 여러 서비스 열기
+
+- 요약: 서비스마다 로드 밸런서를 다는 대신 Ingress 규칙과 컨트롤러로 입구를 하나로 합친다. host·path 라우팅, TLS 종료와 cert-manager, 요청이 Pod에 닿는 경로와 흔한 에러까지 따라가 본다.
+- 태그: Kubernetes, Ingress, HTTP, TLS
+- 키워드: Ingress, Ingress Controller, ingress-nginx, IngressClass, cert-manager
+- 길이: 396줄
+- 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
+- 직접 링크 →: gateway
+- 키워드 백링크 →: proxy-reverse-proxy, iptables-nat, docker-container-basics, https-tls, http-status-codes, what-happens-google-com, cors, dns
+- 이 글로 오는 글 ←: docker-compose, gateway, http-message, https-tls, iptables-nat
+
+### Programming › Server/Infra › Nginx (`programming/server-infra/nginx`)
+
+#### `nginx-basics` — Nginx 기본: 설정 파일을 읽는 법
+
+- 요약: 설치했는데 기본 페이지나 403만 보이는 상황에서 출발해 master·worker 구조, Ubuntu의 sites-enabled 배치, server와 location이 골라지는 순서, root와 alias, try_files를 따라간다. nginx -t와 reload로 안전하게 바꾸고 로그로 원인을 찾는 법까지 정리한다.
+- 태그: Nginx, Linux, HTTP, DevOps
+- 키워드: nginx.conf, server_name, try_files, sites-enabled, location 블록
+- 길이: 792줄
+- 소제목: 설치하고 떠 있는지 확인하기 / master 하나와 worker 몇 개 / Ubuntu의 설정 파일 배치 / 블록은 안쪽으로 상속된다 / 요청 하나를 받을 server 고르기 / location은 이 순서로 고른다 / root와 alias는 경로를 다르게 만든다 / index와 try_files / 403이 나는 이유 / 바꾸기 전에 -t, 적용은 reload / 로그를 읽는 법 / 설정은 nginx가 읽는 순서대로 읽는다 / 면접에서 나올 만한 질문
+- 직접 링크 →: nginx-reverse-proxy, nginx-https-performance
+- 키워드 백링크 →: realtime-communication, proxy-reverse-proxy, event-loop, http-status-codes, what-happens-google-com, db-modeling-normalization
+- 이 글로 오는 글 ←: docker-network-volume, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, what-happens-google-com
+
+#### `nginx-https-performance` — Nginx HTTPS·성능·보안 설정
+
+- 요약: certbot으로 인증서를 받아 자동 갱신하고 HTTPS 리다이렉트, TLS와 HTTP/2, HSTS를 붙인다. gzip과 정적 파일 캐시 헤더, proxy_cache, limit_req 속도 제한, 보안 헤더를 설정한 뒤 curl과 openssl로 바깥에서 확인한다.
+- 태그: Nginx, HTTPS, TLS, Performance, Security
+- 키워드: certbot, proxy_cache, limit_req, gzip_types
+- 길이: 781줄
+- 소제목: 인증서는 certbot에게 맡긴다 / HTTP는 HTTPS로 돌려보낸다 / TLS 버전과 암호, HTTP2 켜기 / 압축은 텍스트에만 / 정적 파일 캐시 헤더 / 업스트림 응답을 nginx에 저장하기 / 요청 수를 제한한다 / 보안 헤더와 숨길 것 / 바깥에서 확인하기 / 앞단에서 한 번에 처리한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: nginx-reverse-proxy, https-tls, http-caching-cdn, nginx-basics, http-versions
+- 키워드 백링크 →: cookie-session-login, what-happens-google-com, dns
+- 이 글로 오는 글 ←: https-tls, nginx-basics, nginx-reverse-proxy
+
+#### `nginx-reverse-proxy` — Nginx 리버스 프록시와 로드 밸런싱
+
+- 요약: proxy_pass의 끝 슬래시 규칙, 앱에 넘겨야 할 Host·X-Forwarded-* 헤더, upstream과 로드 밸런싱 방식, 실패한 서버를 빼는 법과 keepalive를 설정으로 따라간다. 502와 504가 생기는 자리, WebSocket, 버퍼링, 413까지 로그와 함께 본다.
+- 태그: Nginx, HTTP, Network, DevOps
+- 키워드: proxy_pass, upstream 블록, least_conn, proxy_set_header
+- 길이: 621줄
+- 소제목: proxy_pass 한 줄로 넘기기 / 끝 슬래시 하나가 경로를 바꾼다 / 앱에게 진짜 손님 정보를 넘긴다 / upstream으로 서버 여럿에 나누기 / 502와 504가 나는 자리 / WebSocket은 연결을 바꿔 달라고 요청한다 / 버퍼링은 켜 두고, 흘려보낼 때만 끈다 / 업로드는 1MB에서 막힌다 / 앞에 서서 대신 받아 주는 자리 / 면접에서 나올 만한 질문
+- 직접 링크 →: proxy-reverse-proxy, nginx-basics, http-status-codes, realtime-communication, nginx-https-performance, gateway
+- 키워드 백링크 →: browser-fetch, redis-basics, resilience-patterns, what-happens-google-com, http-methods
+- 이 글로 오는 글 ←: nginx-basics, nginx-https-performance, proxy-reverse-proxy, realtime-communication
+
+### Programming › System Design (`programming/system-design`)
+
+#### `caching-strategies` — 캐시 전략: 언제 넣고 언제 지우나
+
+- 요약: cache-aside부터 write-behind까지 캐시를 채우고 지우는 패턴을 비교하고, DB와 캐시 사이의 경쟁, 스탬피드, 관통, 눈사태, 핫 키를 막는 방법을 정리한다.
+- 태그: Cache, Redis, System Design, Performance
+- 키워드: cache-aside, write-through, write-behind, 캐시 관통, 핫 키
+- 길이: 590줄
+- 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction
+- 키워드 백링크 →: db-replication-sharding, dns
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, frontend-browser-cache, redis-basics, redis-memory-eviction
+
+#### `db-architecture-by-scale` — 서비스 규모별 DB 설계: 한 대에서 여러 저장소까지
+
+- 요약: 새 서비스는 PostgreSQL 한 대에서 시작해, 연결 수, CPU, p99, 복제 지연 같은 숫자가 보일 때 캐시와 복제본, 분석과 검색 저장소, 서비스별 DB로 넘어간다. 아웃박스, 무중단 스키마 변경, 권한 분리처럼 각 단계에서 필요한 실무 장치도 SQL로 함께 본다.
+- 태그: Database, PostgreSQL, System Design, Architecture, Scalability
+- 키워드: 폴리글랏 퍼시스턴스, database per service, expand/contract, SKIP LOCKED, PgBouncer
+- 길이: 727줄
+- 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
+- 키워드 백링크 →: http-caching-cdn, sql-basics
+- 이 글로 오는 글 ←: db-replication-sharding, microservices, sql-query-tuning
+
+#### `microservices` — 모놀리스에서 마이크로서비스로
+
+- 요약: 서비스를 쪼개면 독립 배포와 팀 자율성을 얻는 대신 네트워크 호출, 분산 트랜잭션, 데이터 소유권 문제가 생긴다. 바운디드 컨텍스트로 경계를 긋는 법, 동기와 비동기 통신, 사가와 아웃박스, 모듈러 모놀리스와 스트랭글러 피그 이전까지 다룬다.
+- 태그: coupang, MSA, Distributed Systems, System Design · 회사: coupang
+- 키워드: 마이크로서비스, 모놀리스, 사가 패턴, 트랜잭셔널 아웃박스, 스트랭글러 피그
+- 길이: 317줄
+- 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: resilience-patterns, gateway
+- 키워드 백링크 →: db-architecture-by-scale, client-data-cache, http-versions, js-memory-leak, http-methods
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-transaction-isolation, micro-frontends, rest-api-design
+
+#### `resilience-patterns` — 장애가 번지지 않게: 타임아웃, 재시도, 서킷 브레이커
+
+- 요약: 느린 의존성 하나가 스레드 풀을 바닥내며 번지는 연쇄 장애를 따라가고, 타임아웃과 데드라인 전파, 지터 섞인 백오프와 재시도 예산, 멱등성 키, 서킷 브레이커, 벌크헤드, 폴백, 부하 차단으로 막는 법을 정리한다. 프런트엔드의 AbortSignal 타임아웃과 기능 축소 화면도 다룬다.
+- 태그: coupang, Resilience, Distributed Systems, System Design · 회사: coupang
+- 키워드: 서킷 브레이커, 지수 백오프, 멱등성 키, 벌크헤드, 연쇄 장애
+- 길이: 414줄
+- 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
+- 직접 링크 →: gateway
+- 키워드 백링크 →: client-data-cache, http-methods
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, html-form-http, http-methods, http-status-codes, https-tls, json-crud-http, microservices, nginx-reverse-proxy, realtime-communication, rest-api-design
+
+### 자기개발 › 수학 (`self-development/math`)
+
+#### `pythagorean-theorem` — 피타고라스 정리, 삼각형 네 개를 옮겨 보면
+
+- 요약: 거리 계산 코드마다 들어 있는 a² + b² = c². 삼각형 네 개의 자리만 바꾸는 증명과 피타고라스 수, 역, 그리고 n차원 거리 공식까지 이어 봤다.
+- 태그: Math, Geometry, Algorithm
+- 키워드: 피타고라스 정리, 유클리드 거리, 피타고라스 수
+- 길이: 267줄
+- 소제목: 직각삼각형의 세 변 사이에 있는 규칙 / 삼각형 네 개를 옮겨 보면 / 3, 4, 5 같은 숫자들 / 거꾸로도 성립한다 / 거리 공식이 되기까지 / 이름은 피타고라스지만 / 정리 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: vector-db
+- 이 글로 오는 글 ←: vector-db
+
+## 키워드 소유 (백링크 대상)
+
+같은 키워드를 두 글이 가지면 긴 키워드·먼저 찾은 글로만 링크된다. 새 글의 키워드는 여기 없는 말로 고른다.
+
+- .gitignore → `git-internals-basics`
+- /etc/hosts → `hosts-file`
+- 3-way 병합 → `git-branch-merge`
+- 3-way handshake → `what-happens-google-com`
+- 308 Permanent Redirect → `http-status-codes`
+- 3값 논리 → `sql-basics`
+- 3단계 스키마 → `sqld-data-modeling`
+- 415 Unsupported Media Type → `json-crud-http`
+- 가비지 컬렉션 → `js-memory-leak`
+- 같은 출처 정책 → `cors`
+- 개념적 모델링 → `sqld-data-modeling`
+- 갱신 손실 → `db-transaction-isolation`
+- 격리 수준 → `db-transaction-isolation`
+- 계층형 쿼리 → `sqld-top-n-hierarchical-pivot`
+- 공간 복잡도 → `big-o-notation`
+- 교차 엔터티 → `sqld-entity-attribute-relationship`
+- 교착 상태 → `db-transaction-isolation`
+- 권한 있는 네임서버 → `dns`
+- 낙관적 업데이트 → `client-data-cache`
+- 논리적 실행 순서 → `sqld-group-by-having`
+- 단방향 데이터 흐름 → `mvc-pattern`
+- 단일행 함수 → `sqld-single-row-functions`
+- 대리 키 → `db-modeling-normalization`
+- 데이터 독립성 → `sqld-data-modeling`
+- 도메인 샤딩 → `http-versions`
+- 동적 import → `code-splitting`
+- 레이아웃 스래싱 → `core-web-vitals`
+- 렌더링 파이프라인 → `what-happens-google-com`
+- 로컬 도메인 → `local-custom-domain`
+- 롱 폴링 → `realtime-communication`
+- 리렌더링 → `react-rerender`
+- 리버스 프록시 → `proxy-reverse-proxy`
+- 리프레시 토큰 → `token-login`
+- 마이크로 프런트엔드 → `micro-frontends`
+- 마이크로 프론트엔드 → `micro-frontends`
+- 마이크로서비스 → `microservices`
+- 마이크로태스크 → `event-loop`
+- 멀티 스테이지 빌드 → `dockerfile-image-layers`
+- 멀티 존 → `micro-frontends`
+- 멀티플렉싱 → `http-versions`
+- 메모리 누수 → `js-memory-leak`
+- 메모리 단편화 → `redis-memory-eviction`
+- 멱등성 → `http-methods`
+- 멱등성 키 → `resilience-patterns`
+- 모놀리스 → `microservices`
+- 반정규화 → `db-modeling-normalization`
+- 배럴 파일 → `code-splitting`
+- 벌크헤드 → `resilience-patterns`
+- 벡터 DB → `vector-db`
+- 병합 충돌 → `git-branch-merge`
+- 복제 지연 → `db-replication-sharding`
+- 복합 인덱스 → `db-index`
+- 부분 유니크 인덱스 → `db-modeling-normalization`
+- 부분 인덱스 → `db-index`
+- 부분 clone → `git-remote-collaboration`
+- 분산 락 → `redis-basics`
+- 분할 상환 → `big-o-notation`
+- 비식별 관계 → `sqld-entity-attribute-relationship`
+- 빈약한 도메인 모델 → `mvc-pattern`
+- 빌드 캐시 → `dockerfile-image-layers`
+- 사가 패턴 → `microservices`
+- 사용자 정의 브리지 → `docker-network-volume`
+- 상관 서브쿼리 → `sqld-subquery-set-operators`
+- 상태 코드 → `http-status-codes`
+- 샤드 키 → `mongodb-document-model`
+- 서버 상태 → `client-data-cache`
+- 서버 컴포넌트 → `rendering-strategies`
+- 서킷 브레이커 → `resilience-patterns`
+- 세션 쿠키 → `cookie-session-login`
+- 세션 ID → `cookie-session-login`
+- 스칼라 서브쿼리 → `sqld-subquery-set-operators`
+- 스테이징 영역 → `git-internals-basics`
+- 스트랭글러 피그 → `microservices`
+- 스트리밍 복제 → `db-replication-sharding`
+- 스트리밍 SSR → `rendering-strategies`
+- 시간 복잡도 → `big-o-notation`
+- 쓰기 왜곡 → `db-transaction-isolation`
+- 안전한 메서드 → `http-methods`
+- 암시적 형 변환 → `sqld-single-row-functions`
+- 액세스 토큰 → `token-login`
+- 얕은 clone → `git-remote-collaboration`
+- 역색인 → `elasticsearch-inverted-index`
+- 연쇄 장애 → `resilience-patterns`
+- 요청 스머글링 → `http-message`
+- 원격 추적 브랜치 → `git-remote-collaboration`
+- 윈도우 프레임 → `sqld-window-functions`
+- 윈도우 함수 → `sqld-window-functions`
+- 유클리드 거리 → `pythagorean-theorem`
+- 이벤트 루프 → `event-loop`
+- 인가 코드 → `oauth`
+- 인라인 뷰 → `sqld-subquery-set-operators`
+- 인증서 체인 → `https-tls`
+- 일관된 해싱 → `db-replication-sharding`
+- 읽기 복제본 → `db-replication-sharding`
+- 임베딩 → `vector-db`
+- 자동 배칭 → `react-rerender`
+- 작업 트리 → `git-internals-basics`
+- 재귀 리졸버 → `dns`
+- 재귀 CTE → `sqld-top-n-hierarchical-pivot`
+- 재조정 → `react-rerender`
+- 전방향 안전성 → `https-tls`
+- 정규화 → `db-modeling-normalization`
+- 주식별자 → `sqld-entity-attribute-relationship`
+- 중간 인증서 → `https-tls`
+- 지수 백오프 → `resilience-patterns`
+- 집계 파이프라인 → `mongodb-document-model`
+- 집계 함수 → `sqld-group-by-having`
+- 집합 연산자 → `sqld-subquery-set-operators`
+- 축출 정책 → `redis-memory-eviction`
+- 카티션 곱 → `sqld-joins`
+- 캐시 관통 → `caching-strategies`
+- 캐시 무효화 → `http-caching-cdn`
+- 캐시 스탬피드 → `http-caching-cdn`
+- 커버링 인덱스 → `db-index`
+- 커서 페이지네이션 → `rest-api-design`
+- 컨테이너 이미지 → `docker-container-basics`
+- 코드 스플리팅 → `code-splitting`
+- 콘텐츠 협상 → `http-message`
+- 쿠키 세션 → `cookie-session-login`
+- 키셋 페이지네이션 → `sql-query-tuning`
+- 킬 스위치 → `ab-testing`
+- 태스크 큐 → `event-loop`
+- 트랜잭셔널 아웃박스 → `microservices`
+- 트렁크 기반 개발 → `git-branching-strategy`
+- 트리 셰이킹 → `code-splitting`
+- 파티셔닝 → `db-replication-sharding`
+- 포워드 프록시 → `proxy-reverse-proxy`
+- 포트 포워딩 → `iptables-nat`
+- 폴리글랏 퍼시스턴스 → `db-architecture-by-scale`
+- 표본 비율 불일치 → `ab-testing`
+- 프론트 컨트롤러 → `mvc-pattern`
+- 피처 플래그 → `ab-testing`
+- 피타고라스 수 → `pythagorean-theorem`
+- 피타고라스 정리 → `pythagorean-theorem`
+- 하이드레이션 → `rendering-strategies`
+- 함수 종속 → `db-modeling-normalization`
+- 핫 키 → `caching-strategies`
+- 해시 슬롯 → `redis-persistence-ha`
+- 형태소 분석기 → `elasticsearch-inverted-index`
+- 힙 스냅샷 → `js-memory-leak`
+- A/B 테스트 → `ab-testing`
+- AbortController → `browser-fetch`
+- AbortSignal → `browser-fetch`
+- Accept-Encoding → `http-message`
+- Access-Control-Allow-Origin → `cors`
+- allkeys-lru → `redis-memory-eviction`
+- allowedDevOrigins → `local-custom-domain`
+- AOF → `redis-persistence-ha`
+- API 게이트웨이 → `gateway`
+- API 버전 관리 → `rest-api-design`
+- application/x-www-form-urlencoded → `html-form-http`
+- autosquash → `git-rebase`
+- Base64 → `base64`
+- base64url → `base64`
+- Basic 인증 → `base64`
+- bfcache → `frontend-browser-cache`
+- BFF → `gateway`
+- Big O → `big-o-notation`
+- bind mount → `docker-network-volume`
+- BM25 → `elasticsearch-inverted-index`
+- BuildKit → `dockerfile-image-layers`
+- Cache Storage → `frontend-browser-cache`
+- cache-aside → `caching-strategies`
+- Cache-Control → `http-caching-cdn`
+- cannot lock ref → `git-troubleshooting`
+- cert-manager → `kubernetes-ingress`
+- certbot → `nginx-https-performance`
+- cgroups → `docker-container-basics`
+- cherry-pick → `git-tips-advanced`
+- CLS → `core-web-vitals`
+- CNAME → `dns`
+- COALESCE → `sqld-single-row-functions`
+- commit-msg 훅 → `git-tips-advanced`
+- compose.yaml → `docker-compose`
+- CONNECT 터널 → `proxy-reverse-proxy`
+- CONNECT BY → `sqld-top-n-hierarchical-pivot`
+- conntrack → `iptables-basics`
+- Conventional Commits → `git-branching-strategy`
+- Core Web Vitals → `core-web-vitals`
+- CORS → `cors`
+- CSRF → `cookie-session-login`
+- data URL → `base64`
+- database per service → `db-architecture-by-scale`
+- DDL → `sql-basics`
+- DECODE → `sqld-single-row-functions`
+- DENSE_RANK → `sqld-window-functions`
+- depends_on → `docker-compose`
+- detached DOM → `js-memory-leak`
+- detached HEAD → `git-branch-merge`
+- distroless → `dockerfile-image-layers`
+- DNAT → `iptables-nat`
+- DNS → `dns`
+- dnsmasq → `local-custom-domain`
+- DNSSEC → `dns`
+- Docker Compose → `docker-compose`
+- Docker Engine → `docker-container-basics`
+- DOCKER-USER → `iptables-nat`
+- Dockerfile → `dockerfile-image-layers`
+- DoH → `dns`
+- Elasticsearch → `elasticsearch-inverted-index`
+- ERD → `sqld-data-modeling`
+- ESR 규칙 → `mongodb-document-model`
+- ETag → `http-caching-cdn`
+- EventSource → `realtime-communication`
+- expand/contract → `db-architecture-by-scale`
+- EXPLAIN ANALYZE → `sql-query-tuning`
+- fast-forward → `git-branch-merge`
+- force-with-lease → `git-remote-collaboration`
+- FormData → `html-form-http`
+- Gateway API → `gateway`
+- gcTime → `client-data-cache`
+- git add -p → `git-internals-basics`
+- git bisect → `git-tips-advanced`
+- git blame → `git-tips-advanced`
+- Git Flow → `git-branching-strategy`
+- git rebase → `git-rebase`
+- git reset → `git-undo`
+- git restore → `git-undo`
+- git revert → `git-undo`
+- git stash → `git-undo`
+- git-filter-repo → `git-troubleshooting`
+- GitHub Flow → `git-branching-strategy`
+- GROUP BY → `sqld-group-by-having`
+- GROUPING SETS → `sqld-rollup-cube-grouping-sets`
+- GROUPING_ID → `sqld-rollup-cube-grouping-sets`
+- gzip_types → `nginx-https-performance`
+- HATEOAS → `rest-api-design`
+- HAVING → `sqld-group-by-having`
+- HNSW → `vector-db`
+- host.docker.internal → `docker-network-volume`
+- hosts 파일 → `hosts-file`
+- HPACK → `http-versions`
+- HSTS → `what-happens-google-com`
+- HTML 폼 → `html-form-http`
+- HTTP/2 → `http-versions`
+- HTTP/3 → `http-versions`
+- HTTPRoute → `gateway`
+- HTTPS → `what-happens-google-com`
+- I/O 다중화 → `redis-basics`
+- Index Only Scan → `db-index`
+- index.lock → `git-troubleshooting`
+- Ingress → `kubernetes-ingress`
+- Ingress Controller → `kubernetes-ingress`
+- ingress-nginx → `kubernetes-ingress`
+- IngressClass → `kubernetes-ingress`
+- INP → `core-web-vitals`
+- interactive rebase → `git-rebase`
+- ip6tables → `iptables-basics`
+- iptables → `iptables-basics`
+- iptables-persistent → `iptables-basics`
+- ISR → `rendering-strategies`
+- JSON Merge Patch → `http-methods`
+- JSON Patch → `http-methods`
+- JSON.parse → `json-crud-http`
+- JSON.stringify → `json-crud-http`
+- JWT → `token-login`
+- keepalive → `browser-fetch`
+- kube-proxy → `iptables-nat`
+- LCP → `core-web-vitals`
+- least_conn → `nginx-reverse-proxy`
+- limit_req → `nginx-https-performance`
+- location 블록 → `nginx-basics`
+- MASQUERADE → `iptables-nat`
+- maxmemory → `redis-memory-eviction`
+- Memcached → `redis-basics`
+- merge base → `git-branch-merge`
+- mkcert → `local-custom-domain`
+- Module Federation → `micro-frontends`
+- MongoDB → `mongodb-document-model`
+- mTLS → `https-tls`
+- multipart/form-data → `http-message`
+- MVC 패턴 → `mvc-pattern`
+- MVCC → `db-transaction-isolation`
+- MVVM → `mvc-pattern`
+- N+1 → `sql-query-tuning`
+- named volume → `docker-network-volume`
+- namespace → `docker-container-basics`
+- NATURAL JOIN → `sqld-joins`
+- netfilter → `iptables-basics`
+- nginx.conf → `nginx-basics`
+- Non-EQUI JOIN → `sqld-joins`
+- nsswitch.conf → `hosts-file`
+- NVL → `sqld-single-row-functions`
+- OAuth → `oauth`
+- OUTER JOIN → `sqld-joins`
+- pg_stat_statements → `sql-query-tuning`
+- PgBouncer → `db-architecture-by-scale`
+- PIVOT → `sqld-top-n-hierarchical-pivot`
+- PKCE → `oauth`
+- preflight → `cors`
+- PRG 패턴 → `http-status-codes`
+- Problem Details → `http-status-codes`
+- process.nextTick → `event-loop`
+- PROXY protocol → `proxy-reverse-proxy`
+- proxy_cache → `nginx-https-performance`
+- proxy_pass → `nginx-reverse-proxy`
+- proxy_set_header → `nginx-reverse-proxy`
+- pull.rebase → `git-rebase`
+- PUT과 PATCH → `http-methods`
+- QUIC → `http-versions`
+- RAG → `vector-db`
+- RDB 스냅샷 → `redis-persistence-ha`
+- React.memo → `react-rerender`
+- Redis → `redis-basics`
+- Redis Cluster → `redis-persistence-ha`
+- Redis Sentinel → `redis-persistence-ha`
+- ReferenceGrant → `gateway`
+- reflog → `git-undo`
+- REST API → `rest-api-design`
+- reviver → `json-crud-http`
+- ROLLUP → `sqld-rollup-cube-grouping-sets`
+- ROW_NUMBER → `sqld-window-functions`
+- ROWNUM → `sqld-top-n-hierarchical-pivot`
+- Same-Origin Policy → `cors`
+- search_after → `elasticsearch-inverted-index`
+- SELF JOIN → `sqld-joins`
+- sendBeacon → `browser-fetch`
+- server_name → `nginx-basics`
+- Server-Sent Events → `realtime-communication`
+- Service Worker → `frontend-browser-cache`
+- Set-Cookie → `cookie-session-login`
+- setImmediate → `event-loop`
+- sites-enabled → `nginx-basics`
+- SKIP LOCKED → `db-architecture-by-scale`
+- skipWaiting → `frontend-browser-cache`
+- Speculation Rules → `frontend-browser-cache`
+- squash 머지 → `git-branching-strategy`
+- SSG → `rendering-strategies`
+- stale-while-revalidate → `http-caching-cdn`
+- staleTime → `client-data-cache`
+- TanStack Query → `client-data-cache`
+- TLS 1.3 → `https-tls`
+- TLS 핸드셰이크 → `https-tls`
+- Transfer-Encoding → `http-message`
+- TRUNCATE → `sql-basics`
+- try_files → `nginx-basics`
+- TTL → `dns`
+- UNION ALL → `sqld-subquery-set-operators`
+- unrelated histories → `git-troubleshooting`
+- UPSERT → `sql-basics`
+- upstream 블록 → `nginx-reverse-proxy`
+- URLSearchParams → `html-form-http`
+- useDeferredValue → `react-rerender`
+- WeakMap → `js-memory-leak`
+- WebSocket → `realtime-communication`
+- worktree → `git-tips-advanced`
+- write concern → `mongodb-document-model`
+- write-behind → `caching-strategies`
+- write-through → `caching-strategies`
+- X-Forwarded-For → `proxy-reverse-proxy`
+
+## 겹칠 수 있는 글 (자동 추정)
+
+제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
+
+- `proxy-reverse-proxy` ↔ `gateway` (13%: 프록시와, 리버스, 밸런서, 게이트웨이)
+
+## 서로 이어진 글
+
+양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
+
+- `git-internals-basics` ↔ `git-branch-merge`
+- `git-internals-basics` ↔ `git-undo`
+- `git-internals-basics` ↔ `git-remote-collaboration`
+- `git-branch-merge` ↔ `git-rebase`
+- `git-branch-merge` ↔ `git-undo`
+- `git-branch-merge` ↔ `git-remote-collaboration`
+- `git-branch-merge` ↔ `git-branching-strategy`
+- `git-rebase` ↔ `git-remote-collaboration`
+- `git-undo` ↔ `git-troubleshooting`
+- `git-remote-collaboration` ↔ `git-branching-strategy`
+- `git-remote-collaboration` ↔ `git-troubleshooting`
+- `git-branching-strategy` ↔ `git-tips-advanced`
+- `git-troubleshooting` ↔ `git-tips-advanced`
+- `sqld-subquery-set-operators` ↔ `sqld-window-functions`
+- `sqld-window-functions` ↔ `sqld-top-n-hierarchical-pivot`
+- `sql-basics` ↔ `sqld-data-modeling`
+- `sql-basics` ↔ `db-transaction-isolation`
+- `sql-basics` ↔ `db-index`
+- `sqld-data-modeling` ↔ `sqld-entity-attribute-relationship`
+- `sqld-entity-attribute-relationship` ↔ `db-modeling-normalization`
+- `sqld-single-row-functions` ↔ `sqld-group-by-having`
+- `sqld-group-by-having` ↔ `sqld-joins`
+- `db-replication-sharding` ↔ `db-architecture-by-scale`
+- `db-replication-sharding` ↔ `db-index`
+- `db-replication-sharding` ↔ `caching-strategies`
+- `db-replication-sharding` ↔ `mongodb-document-model`
+- `db-architecture-by-scale` ↔ `microservices`
+- `db-index` ↔ `sql-query-tuning`
+- `sql-query-tuning` ↔ `rest-api-design`
+- `nginx-basics` ↔ `nginx-reverse-proxy`
+- `nginx-basics` ↔ `nginx-https-performance`
+- `nginx-basics` ↔ `what-happens-google-com`
+- `nginx-reverse-proxy` ↔ `nginx-https-performance`
+- `nginx-reverse-proxy` ↔ `proxy-reverse-proxy`
+- `nginx-reverse-proxy` ↔ `realtime-communication`
+- `nginx-https-performance` ↔ `https-tls`
+- `redis-memory-eviction` ↔ `redis-persistence-ha`
+- `redis-memory-eviction` ↔ `redis-basics`
+- `redis-memory-eviction` ↔ `caching-strategies`
+- `redis-persistence-ha` ↔ `redis-basics`
+- `proxy-reverse-proxy` ↔ `http-status-codes`
+- `proxy-reverse-proxy` ↔ `gateway`
+- `proxy-reverse-proxy` ↔ `local-custom-domain`
+- `redis-basics` ↔ `caching-strategies`
+- `frontend-browser-cache` ↔ `client-data-cache`
+- `frontend-browser-cache` ↔ `http-caching-cdn`
+- `client-data-cache` ↔ `browser-fetch`
+- `client-data-cache` ↔ `js-memory-leak`
+- `client-data-cache` ↔ `react-rerender`
+- `json-crud-http` ↔ `http-methods`
+- `json-crud-http` ↔ `browser-fetch`
+- `json-crud-http` ↔ `cors`
+- `docker-network-volume` ↔ `docker-compose`
+- `docker-compose` ↔ `dockerfile-image-layers`
+- `docker-container-basics` ↔ `dockerfile-image-layers`
+- `base64` ↔ `token-login`
+- `html-form-http` ↔ `http-message`
+- `html-form-http` ↔ `browser-fetch`
+- `html-form-http` ↔ `http-status-codes`
+- `html-form-http` ↔ `cookie-session-login`
+- `iptables-basics` ↔ `iptables-nat`
+- `iptables-nat` ↔ `kubernetes-ingress`
+- `http-message` ↔ `http-methods`
+- `http-message` ↔ `http-status-codes`
+- `http-message` ↔ `http-versions`
+- `http-message` ↔ `http-caching-cdn`
+- `http-methods` ↔ `http-status-codes`
+- `http-methods` ↔ `resilience-patterns`
+- `https-tls` ↔ `http-versions`
+- `https-tls` ↔ `kubernetes-ingress`
+- `https-tls` ↔ `gateway`
+- `https-tls` ↔ `what-happens-google-com`
+- `rest-api-design` ↔ `http-status-codes`
+- `http-status-codes` ↔ `http-versions`
+- `http-versions` ↔ `code-splitting`
+- `http-versions` ↔ `dns`
+- `http-versions` ↔ `what-happens-google-com`
+- `event-loop` ↔ `core-web-vitals`
+- `ab-testing` ↔ `core-web-vitals`
+- `core-web-vitals` ↔ `code-splitting`
+- `http-caching-cdn` ↔ `cors`
+- `http-caching-cdn` ↔ `what-happens-google-com`
+- `react-rerender` ↔ `rendering-strategies`
+- `dns` ↔ `hosts-file`
+- `dns` ↔ `what-happens-google-com`
+- `hosts-file` ↔ `local-custom-domain`
+- `hosts-file` ↔ `what-happens-google-com`
+- `kubernetes-ingress` ↔ `gateway`
+- `cors` ↔ `local-custom-domain`
+- `pythagorean-theorem` ↔ `vector-db`
+- `cookie-session-login` ↔ `token-login`
+- `token-login` ↔ `oauth`
+
+## 긴 글 (900줄 초과, 쪼갤 후보)
+
+- `sql-basics` 1354줄 — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
+- `db-index` 1246줄 — 인덱스: 책 뒤의 찾아보기
+- `db-replication-sharding` 1161줄 — DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩
+- `git-internals-basics` 1153줄 — Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역
+- `sql-query-tuning` 1109줄 — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
+- `sqld-single-row-functions` 1103줄 — SQLD 단일행 함수와 NULL 다루기
+- `db-transaction-isolation` 1081줄 — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
+- `db-modeling-normalization` 1034줄 — 테이블을 어떻게 나누나: 정규화와 반정규화
+- `git-troubleshooting` 1030줄 — Git 문제 해결 시나리오 모음
+- `git-undo` 992줄 — 되돌리기 총정리: restore, reset, revert, reflog
+- `sqld-subquery-set-operators` 984줄 — SQLD 서브쿼리와 집합 연산자
+- `git-branch-merge` 948줄 — 브랜치와 병합: 포인터 하나가 움직일 뿐
+- `redis-persistence-ha` 910줄 — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
+
+## 다른 글과 연결이 없는 글
+
+- `big-o-notation` — Big O 표기법: 입력이 커질 때 얼마나 느려지나
