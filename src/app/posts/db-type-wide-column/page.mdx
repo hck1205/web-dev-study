@@ -1,0 +1,409 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-type-wide-column");
+
+서점 책 상세 페이지 아래에 "최근 본 책" 줄이 있다. 회원이 책을 볼 때마다 조회 이벤트를 하나씩 남기고, 이 줄에는 최근 50권을 보여 준다. 처음에는 PostgreSQL의 `page_views` 테이블 하나로 충분했다. 그런데 회원이 늘고 앱 푸시로 몰려 들어오는 시간대가 생기자, 이 테이블 하나에 초당 수만 건의 INSERT가 몰린다. 주문과 결제도 같은 프라이머리 한 대가 받고 있다. 조회 이벤트 때문에 결제가 느려지는 건 곤란하다.
+
+이 데이터의 성격을 보면 관계형 DB가 잘하는 것을 거의 쓰지 않는다. 조인이 없고, 트랜잭션도 필요 없고, 읽는 방식은 "이 회원의 최근 것"으로 정해져 있다. 대신 쓰기가 끝없이 들어오고, 서버 한 대로는 받을 수 없다. 와이드 컬럼 DB는 이런 데이터를 위해 만들어졌다. 이 글은 Apache Cassandra로 그 구조를 본다. [키-값 저장소](/posts/db-type-key-value)에서 이어지는 네 번째 글이다.
+
+이 컨테이너에는 Cassandra가 없어서 CQL은 문법대로 적고, 출력은 예시로 표시했다. 계산한 숫자는 계산했다고 적었다.
+
+## 쓰기가 한 대를 넘을 때
+
+Cassandra는 2008년 페이스북이 받은편지함 검색에 쓰려고 만들어 공개했고, 이후 Apache 프로젝트가 됐다. 설계는 두 논문에서 빌려 왔다. 데이터를 어떻게 나누고 복제할지는 아마존의 Dynamo(2007)에서, 한 서버 안에서 데이터를 어떻게 저장할지는 구글의 Bigtable(2006)에서 가져왔다.
+
+Dynamo 쪽에서 온 성질이 "주인이 없는 클러스터"다. 관계형 DB의 복제는 프라이머리 한 대가 쓰기를 받고 나머지가 따라온다. Cassandra는 모든 노드가 대등하다. 어느 노드든 쓰기를 받을 수 있고, 키에 따라 정해진 노드들에 나눠 저장한다. 그래서 쓰기가 늘면 노드를 더하면 된다. 프라이머리가 죽어 장애 조치를 기다리는 일도 없다.
+
+Bigtable 쪽에서 온 것이 데이터 모델과 저장 방식이다. "와이드 컬럼"이라는 이름은 한 파티션 안에 행이 정렬된 채로 아주 많이(넓게) 들어갈 수 있다는 데서 왔다. 이름이 비슷한 [컬럼형 분석 DB](/posts/db-type-columnar-olap)와는 다른 것이다. 컬럼형은 열 단위로 디스크에 저장해 집계를 빠르게 하고, 와이드 컬럼은 파티션 단위로 행을 모아 키로 찾기와 쓰기를 빠르게 한다.
+
+## 테이블보다 쿼리를 먼저 정한다
+
+관계형 DB에서는 데이터를 사실 단위로 나눠 두고 질문은 나중에 정했다. Cassandra는 순서가 반대다. 먼저 화면이 하는 질문을 적고, 질문마다 그 질문에 딱 맞는 테이블을 하나씩 만든다. 같은 데이터가 여러 테이블에 중복돼도 괜찮다. 조인이 없으니 읽을 때 한 테이블, 한 파티션에서 끝나야 한다.
+
+"최근 본 책" 줄의 질문은 하나다. 회원 한 명이 최근에 본 책 50권, 최신순. 테이블은 이렇게 만든다.
+
+```sql
+-- 복제본 3개. 데이터센터 dc1에 세 노드씩 복사한다
+CREATE KEYSPACE bookstore
+  WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3};
+
+CREATE TABLE bookstore.views_by_user (
+  user_id   bigint,
+  viewed_at timestamp,
+  book_id   bigint,
+  title     text,                       -- 화면에 바로 쓸 제목도 같이 넣는다
+  PRIMARY KEY ((user_id), viewed_at, book_id)
+) WITH CLUSTERING ORDER BY (viewed_at DESC, book_id ASC);
+```
+
+문법은 SQL과 비슷하지만 `PRIMARY KEY` 한 줄의 의미가 전혀 다르다. 조각을 눌러 보면 각 자리가 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="views_by_user의 기본 키"
+  base="PRIMARY KEY"
+  separator=" ("
+  joiner=", "
+  params={[
+    {
+      key: "partition",
+      display: "(user_id)",
+      title: "파티션 키: 어느 노드에 둘까",
+      description: "안쪽 괄호가 파티션 키다. 이 값을 해시해서 토큰(정수)을 만들고, 토큰으로 이 파티션을 맡을 노드를 고른다. 같은 회원의 조회 기록은 모두 같은 노드들에 모인다. 조회할 때는 파티션 키를 반드시 같음(=) 조건으로 줘야 한다.",
+      code: "token(42) = -4069959284402364209  ← 예시 값",
+      required: true,
+    },
+    {
+      key: "clustering1",
+      display: "viewed_at",
+      title: "클러스터링 키: 파티션 안의 순서",
+      description: "파티션 안의 행은 클러스터링 키 순서로 디스크에 정렬돼 있다. CLUSTERING ORDER BY로 내림차순을 정했으니 최신 조회가 맨 앞이다. LIMIT 50이면 앞에서 50줄만 읽고 멈춘다. 정렬을 따로 하지 않는다.",
+      required: true,
+    },
+    {
+      key: "clustering2",
+      display: "book_id",
+      title: "같은 시각을 구분하는 키",
+      description: "기본 키가 같으면 Cassandra는 에러 없이 덮어쓴다(INSERT가 사실상 upsert다). 같은 밀리초에 두 권을 봤을 때 하나가 사라지지 않게 book_id를 붙였다.",
+    },
+  ]}
+/>
+
+읽기는 파티션 하나를 앞에서부터 읽는 일이 된다.
+
+```sql
+SELECT book_id, title, viewed_at
+FROM bookstore.views_by_user
+WHERE user_id = 42
+LIMIT 50;
+```
+
+```text
+ book_id | title             | viewed_at
+---------+-------------------+---------------------------------
+     103 | 그래프로 생각하기 | 2026-10-17 01:12:09.120000+0000
+     101 | 분산 시스템 입문  | 2026-10-16 13:40:51.004000+0000
+     102 | SQL 연습장        | 2026-10-15 22:03:17.388000+0000
+
+(3 rows)
+```
+
+(출력 형식은 cqlsh 기준 예시다.)
+
+그런데 "101번 책을 본 사람들"을 같은 테이블에 물으면 거절당한다.
+
+```sql
+SELECT user_id FROM bookstore.views_by_user WHERE book_id = 101;
+```
+
+```text
+InvalidRequest: Error from server: code=2200 [Invalid query] message="Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
+```
+
+파티션 키 없이 찾으려면 모든 노드의 모든 파티션을 열어 봐야 한다. Cassandra는 그걸 기본으로 막아 둔다. 메시지대로 `ALLOW FILTERING`을 붙이면 돌아가긴 하지만, 운영 테이블에서는 데이터가 늘수록 클러스터 전체를 느리게 만든다. 이 질문이 필요하면 그 질문용 테이블을 하나 더 만든다.
+
+```sql
+-- 책별 조회 기록. 하루 단위로 파티션을 끊는다
+CREATE TABLE bookstore.views_by_book (
+  book_id   bigint,
+  day       date,
+  viewed_at timestamp,
+  user_id   bigint,
+  PRIMARY KEY ((book_id, day), viewed_at, user_id)
+) WITH CLUSTERING ORDER BY (viewed_at DESC, user_id ASC);
+```
+
+파티션 키에 `day`를 함께 넣은 이유는 크기다. 베스트셀러는 하루에 조회가 수십만 건 생길 수 있다. 행 하나를 약 50바이트로 잡으면 하루 100만 건이면 50MB, 한 달이면 1.5GB다(단순 곱셈으로 계산한 값). 파티션 하나는 한 노드(와 복제본)에 통째로 살기 때문에, 끝없이 자라는 파티션은 그 노드만 무겁게 만들고 컴팩션과 복구를 느리게 한다. 흔히 파티션 하나를 100MB 아래로 유지하라고 권한다. 시간처럼 계속 늘어나는 데이터는 이렇게 날짜나 시간 단위로 끊는다(bucketing).
+
+이제 조회 이벤트 하나가 들어오면 두 테이블에 같이 쓴다.
+
+```sql
+BEGIN BATCH
+  INSERT INTO bookstore.views_by_user (user_id, viewed_at, book_id, title)
+  VALUES (42, '2026-10-17 10:12:09+0900', 103, '그래프로 생각하기');
+  INSERT INTO bookstore.views_by_book (book_id, day, viewed_at, user_id)
+  VALUES (103, '2026-10-17', '2026-10-17 10:12:09+0900', 42);
+APPLY BATCH;
+```
+
+여기서 `BATCH`는 관계형 DB의 트랜잭션이 아니다. 묶은 쓰기가 결국 모두 반영되도록 보장할 뿐(배치 로그에 먼저 적어 두고, 중간에 실패하면 다시 실행한다), 다른 클라이언트가 중간 상태를 못 보게 막지는 않는다. 성능을 위해 여러 파티션의 쓰기를 배치로 묶는 건 오히려 느려지는 흔한 실수다. 배치는 이렇게 같은 사실을 여러 테이블에 맞춰 쓸 때만 쓴다.
+
+## 파티션 키는 노드를, 클러스터링 키는 순서를
+
+파티션 키를 해시한 토큰은 원 위의 한 점이다. 노드들도 원 위에 자기 구간을 갖는다. 키가 해시 원 위에서 노드를 찾아가는 일관된 해싱 자체는 [복제와 샤딩 글](/posts/db-replication-sharding)에서 직접 계산해 봤다. Cassandra는 여기에 복제를 더한다. 토큰에서 시계 방향으로 처음 만나는 노드가 첫 복제본이고, 그 다음 노드들이 나머지 복제본이 된다. 아래 그림에서 다음을 누르면 42번 회원의 파티션이 복제본 세 개를 찾아간다.
+
+<VectorSpace
+  caption="복제본 3개는 토큰에서 시계 방향으로 세 노드에 놓인다"
+  groups={[
+    { id: "node", label: "노드" },
+    { id: "key", label: "파티션 토큰" },
+  ]}
+  points={[
+    { id: "a", label: "노드 A", x: 200, y: 30, group: "node" },
+    { id: "t42", label: "user 42", x: 250, y: 43, group: "key" },
+    { id: "b", label: "노드 B", x: 287, y: 80, group: "node" },
+    { id: "c", label: "노드 C", x: 287, y: 180, group: "node" },
+    { id: "d", label: "노드 D", x: 200, y: 230, group: "node" },
+    { id: "e", label: "노드 E", x: 113, y: 180, group: "node", labelAt: "left" },
+    { id: "f", label: "노드 F", x: 113, y: 80, group: "node", labelAt: "left" },
+  ]}
+  edges={[
+    ["a", "t42"],
+    ["t42", "b"],
+    ["b", "c"],
+    ["c", "d"],
+    ["d", "e"],
+    ["e", "f"],
+    ["f", "a"],
+  ]}
+  steps={[
+    { showEdges: true, caption: "노드 여섯 대가 토큰 원을 나눠 맡는다. user_id 42를 Murmur3로 해시한 토큰이 A와 B 사이에 떨어졌다." },
+    { showEdges: true, path: ["t42", "b"], caption: "시계 방향으로 처음 만나는 노드 B가 첫 번째 복제본이다." },
+    { showEdges: true, path: ["t42", "b", "c"], caption: "다음 노드 C가 두 번째 복제본이다." },
+    { showEdges: true, path: ["t42", "b", "c", "d"], caption: "D까지 세 대가 이 파티션을 똑같이 갖는다. 어느 하나가 죽어도 나머지 둘이 답한다." },
+    { showEdges: true, path: ["t42", "b", "c", "d"], caption: "같은 회원의 조회 기록은 모두 B, C, D에만 있다. 클러스터가 백 대여도 이 회원을 읽을 때는 이 세 대만 본다." },
+  ]}
+/>
+
+실제로는 노드 하나가 원 위에 여러 자리(가상 노드)를 갖는다. Cassandra 4.0부터 기본값은 노드당 16개(`num_tokens: 16`)이고, 그 전에는 256개였다. 복제본을 고를 때 같은 랙에 몰리지 않게 `NetworkTopologyStrategy`가 랙과 데이터센터를 고려한다. 노드를 더하면 새 노드가 원의 일부 구간을 넘겨받고, 그 구간의 데이터만 스트리밍으로 옮긴다.
+
+파티션 키가 이렇게 모든 걸 정하니, 고를 때 따질 것이 키-값 저장소와 같다. 값 종류가 많아 고르게 퍼지는가, 한 키에 쓰기가 몰리지 않는가, 파티션이 끝없이 자라지 않는가, 자주 하는 질문이 파티션 하나에서 끝나는가.
+
+## 쓰기는 덧붙이기만 한다
+
+Cassandra의 쓰기가 빠른 이유는 쓸 때 정렬된 자리를 찾지 않기 때문이다. B-tree는 행 하나를 넣을 때마다 그 행이 들어갈 페이지를 찾아 고친다. Cassandra는 이렇게 한다.
+
+1. 커밋 로그(commit log) 파일 끝에 덧붙인다. 장애 대비용이다.
+2. 메모리의 멤테이블(memtable)에 넣는다. 멤테이블은 키 순서로 정렬된 메모리 구조다.
+3. 응답한다. 디스크의 데이터 파일은 건드리지 않았다.
+4. 멤테이블이 차면 통째로 디스크에 SSTable(Sorted String Table) 파일로 내린다(flush). 한 번 쓴 SSTable은 다시 고치지 않는다.
+
+디스크에 하는 일은 순서대로 덧붙이기뿐이다. 이런 구조를 LSM 트리(Log-Structured Merge tree)라고 부른다. 아래 그림에서 다음을 누르면 책 가격 기록 여섯 개가 차례로 들어온다(이해를 돕는 단순한 예다).
+
+<AlgoTrace
+  caption="멤테이블에 쌓였다가 SSTable로 내려간다"
+  memoryLabel="멤테이블과 SSTable"
+  cells={["b101 36000", "b102 22000", "b101 34000", "b104 28000", "b102 삭제", "b105 19000"]}
+  steps={[
+    { memory: [], caption: "쓰기 여섯 개가 순서대로 들어온다. 모든 쓰기는 먼저 커밋 로그 끝에 덧붙여진다." },
+    { pointer: 0, memory: ["mem b101=36000"], caption: "멤테이블에 b101을 넣는다. 디스크 데이터 파일은 그대로다." },
+    { pointer: 1, memory: ["mem b101=36000", "mem b102=22000"], caption: "멤테이블은 키 순서로 정렬된 채 유지된다." },
+    { pointer: 2, memory: ["mem b101=34000", "mem b102=22000"], caption: "같은 키가 또 오면 메모리 안에서 새 값으로 바뀐다." },
+    { memory: ["SST1 b101,b102"], caption: "멤테이블이 찼다. 정렬된 그대로 SSTable 파일 하나로 내린다. 이 파일은 다시 고치지 않는다." },
+    { pointer: 3, memory: ["SST1 b101,b102", "mem b104=28000"], caption: "새 멤테이블이 다시 쓰기를 받는다." },
+    { pointer: 4, memory: ["SST1 b101,b102", "mem b104=28000", "mem b102=묘비"], caption: "삭제도 쓰기다. SST1의 b102를 지우지 못하니 '지워졌다'는 표시(툼스톤)를 새로 쓴다." },
+    { pointer: 5, memory: ["SST1 b101,b102", "SST2 b102묘비,b104,b105"], caption: "다시 flush. 이제 b102는 SST1에는 값이, SST2에는 툼스톤이 있다." },
+  ]}
+/>
+
+대신 읽기가 일을 더 한다. 같은 키의 값이 멤테이블과 여러 SSTable에 흩어져 있을 수 있기 때문이다. 읽을 때는 멤테이블과 그 키를 가졌을 법한 SSTable을 모두 보고, 쓰기 시각(timestamp)이 가장 늦은 값을 고른다. SSTable마다 블룸 필터(bloom filter)가 있어서 "이 파일에 이 파티션은 확실히 없다"를 디스크를 읽지 않고 판단한다. 블룸 필터는 "없다"는 틀리지 않고 "있을지도"는 가끔 틀리는 작은 비트 배열이다.
+
+## 파일을 합쳐 읽기를 되찾는 컴팩션
+
+SSTable이 계속 쌓이면 읽기 한 번에 열어 볼 파일이 늘어난다. 그래서 백그라운드에서 SSTable 여러 개를 합쳐 하나로 다시 쓴다. 이게 컴팩션(compaction)이다. 합치면서 같은 키는 최신 값만 남기고, 충분히 오래된 툼스톤과 그 툼스톤이 가리던 옛 값을 함께 버린다.
+
+모든 파일이 키 순서로 정렬돼 있어서, 합치는 일은 정렬된 목록 여러 개를 하나로 합치는 병합(merge)이다. 직접 짜 보자. SSTable 목록을 받아, 키마다 쓰기 시각이 가장 늦은 값을 남기고, 툼스톤(`null`)이 이긴 키는 지우고, 키 순서로 정렬해 돌려준다(툼스톤 보관 기간이 이미 지났다고 가정한다).
+
+<CodePlayground
+  caption="SSTable 컴팩션 직접 짜 보기"
+  functionName="compact"
+  initialCode={`function compact(tables) {
+  // tables: [[ [key, value, ts], ... ], ...]
+  // value가 null이면 툼스톤(삭제 표시)
+  // 결과: 키 순서로 정렬된 [key, value, ts] 목록 (툼스톤이 이긴 키는 뺀다)
+  return [];
+}`}
+  solution={`function compact(tables) {
+  const latest = new Map();
+  for (const table of tables) {
+    for (const [key, value, ts] of table) {
+      const prev = latest.get(key);
+      if (!prev || ts > prev.ts) latest.set(key, { value, ts }); // 늦은 쓰기가 이긴다
+    }
+  }
+  return [...latest]
+    .filter(([, e]) => e.value !== null)          // 툼스톤이 이기면 버린다
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, e]) => [key, e.value, e.ts]);
+}`}
+  tests={[
+    {
+      label: "SSTable 세 개",
+      args: [[
+        [["b101", "36000", 1], ["b102", "22000", 2], ["b103", "30000", 3]],
+        [["b101", "34000", 5], ["b104", "28000", 6]],
+        [["b102", null, 8], ["b105", "19000", 9]],
+      ]],
+      expected: [["b101", "34000", 5], ["b103", "30000", 3], ["b104", "28000", 6], ["b105", "19000", 9]],
+    },
+    { label: "삭제가 더 늦다", args: [[[["a", "1", 1]], [["a", null, 2]]]], expected: [] },
+    { label: "삭제 뒤에 다시 썼다", args: [[[["a", "2", 3]], [["a", null, 2]]]], expected: [["a", "2", 3]] },
+    { label: "빈 입력", args: [[]], expected: [] },
+  ]}
+/>
+
+두 번째와 세 번째 테스트가 보여 주듯, 순서를 정하는 건 파일 순서가 아니라 쓰기 시각이다. 그래서 Cassandra는 노드들의 시계를 NTP로 맞춰 두는 것이 운영의 기본이다. 시계가 틀린 노드가 쓴 값은 엉뚱하게 이기거나 진다.
+
+컴팩션 방식은 테이블마다 고른다.
+
+- SizeTieredCompactionStrategy(STCS): 크기가 비슷한 SSTable이 몇 개 모이면 합친다. 오래 기본값이었고 쓰기가 많을 때 유리하다. 대신 한 키가 여러 파일에 퍼지기 쉽고, 합치는 동안 디스크가 잠깐 두 배 필요할 수 있다.
+- LeveledCompactionStrategy(LCS): 파일을 레벨로 나눠 한 레벨 안에서는 키가 겹치지 않게 유지한다. 읽기가 많을 때 유리하지만 다시 쓰는 양(쓰기 증폭)이 크다.
+- TimeWindowCompactionStrategy(TWCS): 시간 창(예: 하루)마다 파일을 묶는다. TTL로 만료되는 시계열 데이터에 맞다. 하루치 파일이 통째로 만료되면 파일을 그냥 지운다.
+
+Cassandra 5.0에는 이들을 하나로 묶은 UnifiedCompactionStrategy도 들어왔다. 조회 이벤트처럼 시간순으로 쌓이고 일정 기간 뒤 버리는 데이터라면 TWCS와 TTL을 함께 쓴다.
+
+## 몇 대가 대답해야 성공인가
+
+복제본이 세 개면 "쓰기 성공"을 언제 말할지 정해야 한다. Cassandra는 이걸 요청마다 고르게 한다. 이걸 일관성 수준(consistency level)이라고 한다. 클라이언트가 요청을 보낸 노드가 코디네이터가 되어 복제본들에 요청을 나눠 보내고, 정해진 수만큼 답이 오면 응답한다.
+
+- `ONE`: 복제본 하나만 답하면 성공. 가장 빠르지만 그 하나가 늦은 값을 가질 수 있다.
+- `QUORUM`: 과반(복제본 3개면 2개)이 답해야 성공.
+- `LOCAL_QUORUM`: 코디네이터가 있는 데이터센터 안에서 과반. 여러 데이터센터를 쓸 때 대륙 간 왕복을 피하려고 가장 많이 쓴다.
+- `ALL`: 전부 답해야 성공. 한 대만 죽어도 실패한다.
+
+아래 그림은 `QUORUM`으로 조회 이벤트 하나를 쓰는 과정이다. 복제본 D는 마침 응답이 느리다.
+
+<SequenceDiagram
+  caption="QUORUM 쓰기: 셋 중 둘이 답하면 성공이다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "coord", label: "코디네이터" },
+    { id: "b", label: "복제본 B" },
+    { id: "c", label: "복제본 C" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "coord",
+      label: "INSERT QUORUM",
+      title: "아무 노드에나 보낸다",
+      detail: "드라이버는 보통 토큰을 계산해 복제본 중 하나를 코디네이터로 고른다. 일관성 수준을 함께 보낸다.",
+      payload: "CONSISTENCY QUORUM;\nINSERT INTO views_by_user ...",
+    },
+    {
+      from: "coord",
+      to: "b",
+      label: "write",
+      title: "복제본 세 곳에 동시에 보낸다",
+      detail: "B, C, D 세 곳 모두에 같은 쓰기를 보낸다. 그림에는 B와 C만 그렸다.",
+    },
+    {
+      from: "coord",
+      to: "c",
+      label: "write",
+      title: "C에도 보낸다",
+      detail: "각 복제본은 커밋 로그에 덧붙이고 멤테이블에 넣은 뒤 답한다. 디스크의 정렬된 자리를 찾지 않으니 몇 ms 안에 끝난다.",
+    },
+    {
+      from: "b",
+      to: "coord",
+      label: "ack",
+      title: "B가 답했다",
+      detail: "하나 왔다. QUORUM은 둘이 필요하다.",
+    },
+    {
+      from: "c",
+      to: "coord",
+      label: "ack",
+      title: "C도 답했다",
+      detail: "셋 중 둘, 과반이 모였다. D는 아직이지만 기다리지 않는다.",
+    },
+    {
+      from: "coord",
+      to: "app",
+      label: "성공",
+      title: "앱에 성공을 알린다",
+      detail: "D가 끝내 못 받으면 코디네이터가 힌트(hint)로 적어 뒀다가 D가 돌아오면 전해 준다. 읽을 때 복제본끼리 값이 다르면 맞춰 주는 read repair도 있다.",
+    },
+  ]}
+/>
+
+읽기도 같은 방식으로 수준을 고른다. 쓰기에 답한 복제본 수를 W, 읽기에 답한 수를 R, 복제본 수를 N이라 하면, R + W > N일 때 읽기에 답한 복제본 중 적어도 하나는 마지막 쓰기를 가진다. N = 3에서 쓰기와 읽기를 모두 QUORUM(2)으로 하면 2 + 2 = 4 > 3이라, 방금 쓴 값을 읽는다. 쓰기 ONE, 읽기 ONE이면 1 + 1 = 2라 겹치지 않을 수 있다. 빠르지만 잠깐 옛 값을 볼 수 있다는 뜻이다. "최근 본 책" 줄이라면 ONE으로도 충분하다. 1초 늦게 보여도 아무도 손해를 보지 않는다. 이 선택이 CAP과 PACELC에서 어디쯤인지는 [CAP 글](/posts/db-consistency-cap)에서 이어서 본다.
+
+여기서 흔한 오해가 하나 있다. QUORUM이 관계형 DB의 트랜잭션처럼 동시에 쓴 두 값 사이의 순서를 정해 주지는 않는다. 같은 칸을 두 클라이언트가 동시에 쓰면 쓰기 시각이 늦은 쪽이 이긴다(last write wins). "없을 때만 넣기" 같은 비교 후 쓰기가 필요하면 경량 트랜잭션(`IF NOT EXISTS`, `IF col = ?`)을 쓰는데, 내부에서 Paxos 합의를 하느라 복제본과 여러 번 왕복하므로 일반 쓰기보다 훨씬 비싸다. 재고처럼 이런 쓰기가 계속 필요한 데이터는 애초에 Cassandra에 두지 않는 편이 낫다.
+
+운영 중에는 노드 상태를 이렇게 본다.
+
+```bash
+# 클러스터 노드 상태와 토큰 소유 비율
+nodetool status bookstore
+```
+
+```text
+Datacenter: dc1
+===============
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address    Load       Tokens  Owns (effective)  Host ID                               Rack
+UN  10.0.1.11  41.2 GiB   16      50.1%             6c0f4a1e-...                          rack1
+UN  10.0.1.12  40.8 GiB   16      49.7%             a91b2d33-...                          rack2
+DN  10.0.1.13  39.9 GiB   16      50.2%             e2d7c8f0-...                          rack3
+```
+
+(예시 출력이다.) 앞의 두 글자를 본다. `UN`은 Up·Normal, `DN`은 Down·Normal이다. 노드 여섯 대에 복제본 3개라 `Owns (effective)`가 50% 근처다. 한 대가 `DN`이어도 QUORUM 요청은 남은 복제본으로 계속 성공한다. 그 노드가 힌트 보관 시간(`max_hint_window`, 기본 3시간)보다 오래 내려가 있었다면 돌아온 뒤 `nodetool repair`로 빠진 데이터를 맞춰야 한다.
+
+## 지우는 것도 쓰기다
+
+앞 그림에서 본 것처럼 삭제는 툼스톤을 쓰는 일이다. 툼스톤은 바로 사라지지 않는다. 테이블의 `gc_grace_seconds`(기본 864000초, 10일)가 지나야 컴팩션에서 버린다. 너무 빨리 버리면, 그 사이 내려가 있던 복제본이 돌아와 "나는 아직 값이 있다"며 지운 데이터를 되살릴 수 있기 때문이다. 그래서 이 기간 안에 repair를 한 번은 돌려야 한다.
+
+이 구조 때문에 Cassandra로 큐를 만들면 곤란해진다. 작업을 넣고(INSERT) 처리한 뒤 지우는(DELETE) 패턴은 파티션 앞부분에 툼스톤을 계속 쌓는다. "남은 작업 하나 꺼내기" 읽기가 지나간 툼스톤 수천 개를 훑어야 해서 점점 느려진다. 쿼리 하나가 훑는 툼스톤이 경고 기준(`tombstone_warn_threshold`, 기본 1,000)을 넘으면 로그에 경고가 남고, 실패 기준(`tombstone_failure_threshold`, 기본 100,000)을 넘으면 쿼리가 실패한다. 지울 데이터는 DELETE보다 TTL로 만료시키고, TWCS로 파일째 버리는 편이 낫다.
+
+```sql
+-- 조회 기록은 90일 뒤 자동으로 사라지게 한다
+ALTER TABLE bookstore.views_by_user WITH default_time_to_live = 7776000;
+```
+
+## Cassandra가 힘들어하는 질문
+
+정리하면 Cassandra는 "파티션 키로 파티션 하나를 골라, 클러스터링 키 순서로 앞부분을 읽는" 질문에 최적화돼 있다. 그 바깥은 대부분 어렵다.
+
+- 조인이 없다. 필요한 값은 미리 테이블에 넣어 둔다(위의 `title`).
+- 파티션을 가로지르는 집계가 어렵다. "오늘 전체 조회 수"는 모든 파티션을 읽어야 한다. 이런 질문은 카운터 테이블을 따로 두거나 [분석 DB](/posts/db-type-columnar-olap)로 보낸다.
+- 보조 인덱스는 조심해서 쓴다. 예전 보조 인덱스는 노드마다 자기 데이터만 색인해서, 파티션 키 없이 쓰면 모든 노드에 묻는다. 5.0의 SAI(Storage-Attached Index)가 이를 많이 개선했지만, 여전히 파티션 키와 함께 쓸 때 가장 싸다.
+- 질문이 바뀌면 테이블을 새로 만들고 데이터를 다시 채워야 한다. 관리자 화면처럼 조건이 계속 바뀌는 곳에는 맞지 않는다.
+- 여러 행을 묶는 강한 트랜잭션이 없다. 경량 트랜잭션은 비싸다.
+
+## 어디에 쓰이나
+
+공개된 사례를 보면 쓰임새가 비슷하다. 넷플릭스는 시청 기록 같은 데이터를 오래 Cassandra에 저장해 왔다고 여러 차례 발표했다. 디스코드는 메시지를 채널과 시간 구간으로 파티션을 나눠 Cassandra에 저장했다가, 2023년에 Cassandra 호환 DB인 ScyllaDB로 옮겼다고 공개했다. 둘 다 쓰기가 아주 많고, 키(회원, 채널)와 시간으로 읽는 데이터다.
+
+같은 모양의 데이터는 서점에도 있다. 페이지 조회 이벤트와 최근 본 책, 알림함, 회원별 활동 기록, 기기에서 올라오는 상태 값이 그렇다. 와이드 컬럼 계열에는 Cassandra 말고도 C++로 다시 짠 ScyllaDB, HDFS 위에서 도는 HBase, 구글의 관리형 서비스 Bigtable이 있다. 쿼리 모델은 조금씩 달라도 "키로 노드를 고르고 그 안은 정렬해 둔다"는 생각은 같다.
+
+## 관계형 DB와 나눠 맡기
+
+서점이라면 회원, 주문, 결제, 재고는 PostgreSQL에 그대로 둔다. 조회 이벤트처럼 쓰기가 많고 조금 늦어도 되고 잃어도 큰일이 아닌 데이터만 Cassandra로 뺀다. 이렇게 나누면 조회 이벤트가 몰려도 결제 쪽 프라이머리는 영향을 받지 않는다.
+
+그 전에 따져 볼 것이 있다. 초당 수천 건 정도라면 PostgreSQL에서 테이블을 날짜별 파티션으로 나누고 묶어서 넣는 것만으로 버티는 경우가 많다. 조회 이벤트가 분석용이라면 [시계열 DB](/posts/db-type-time-series)나 컬럼형 분석 DB가 더 맞을 수 있다. Cassandra를 고르는 신호는 쓰기가 서버 한 대의 한계를 넘어서고, 질문이 키와 시간으로 고정돼 있으며, 프라이머리 장애 조치 없이 늘 쓰기를 받아야 할 때다. 노드 여러 대의 repair, 컴팩션, 디스크 여유 공간을 관리할 사람이 있는지도 함께 봐야 한다.
+
+## 쓰기를 싸게 하고, 질문을 고정한다
+
+와이드 컬럼 DB는 쓰기를 덧붙이기만으로 끝내고 정렬과 정리를 컴팩션으로 미룬다. 파티션 키로 노드를 정하니 노드를 더하는 만큼 쓰기를 더 받고, 복제본 수와 일관성 수준으로 속도와 정확함 사이를 요청마다 고른다. 그 대가로 질문을 먼저 정해야 하고, 질문마다 테이블을 따로 만들어 같은 데이터를 여러 번 쓴다. 다음 글은 반대로 관계 자체를 저장의 중심에 두는 [그래프 DB](/posts/db-type-graph)다.
+
+## 면접에서 나올 만한 질문
+
+### 와이드 컬럼 DB는 어떤 문제를 풀려고 나왔나요?
+
+쓰기가 서버 한 대를 넘는 규모에서 늘 쓰기를 받기 위해서다. Cassandra는 모든 노드가 대등해 어느 노드든 쓰기를 받고, 파티션 키 해시로 데이터를 나눠 노드를 더한 만큼 처리량이 는다. 프라이머리가 없으니 장애 조치를 기다리는 시간도 없다. 대신 조인, 자유로운 조건 검색, 여러 행 트랜잭션을 내려놓았다.
+
+### 파티션 키와 클러스터링 키의 차이는 무엇인가요?
+
+파티션 키는 해시해서 데이터를 저장할 노드를 정하고, 조회할 때 같음 조건으로 반드시 줘야 한다. 클러스터링 키는 한 파티션 안의 행 정렬 순서를 정해 범위 조회와 LIMIT을 정렬 없이 처리하게 한다. 그래서 `((user_id), viewed_at)`이면 회원별 최근 기록을 앞에서부터 읽는다.
+
+### Cassandra 쓰기가 빠른 이유는 무엇인가요?
+
+LSM 트리 구조라 쓰기가 커밋 로그 덧붙이기와 메모리 멤테이블 삽입으로 끝나기 때문이다. 멤테이블이 차면 정렬된 SSTable로 한 번에 내리고, 파일은 다시 고치지 않는다. B-tree처럼 정렬된 자리를 찾아 페이지를 고치는 무작위 쓰기가 없다. 대신 읽기는 여러 SSTable을 합쳐 봐야 해서 블룸 필터와 컴팩션으로 그 비용을 줄인다.
+
+### 컴팩션은 왜 필요하고 전략은 어떻게 고르나요?
+
+SSTable이 쌓이면 읽기 한 번에 볼 파일이 늘어나고, 옛 값과 툼스톤이 공간을 차지한다. 컴팩션이 파일을 병합해 최신 값만 남기고 오래된 툼스톤을 버린다. 쓰기가 많으면 STCS, 읽기가 많고 갱신이 잦으면 LCS, TTL로 만료되는 시계열이면 TWCS를 쓴다.
+
+### QUORUM으로 읽고 쓰면 무엇이 보장되나요?
+
+복제본 수 N에서 읽기 R과 쓰기 W가 R + W > N이면 읽기에 답한 복제본 중 하나는 마지막 성공한 쓰기를 가진다. N = 3에서 둘 다 QUORUM이면 2 + 2 > 3이라 방금 쓴 값을 읽는다. 하지만 동시에 쓴 두 값의 순서는 쓰기 시각으로 정해지는 last write wins라, 비교 후 쓰기가 필요하면 Paxos 기반 경량 트랜잭션을 써야 하고 그건 비싸다.
+
+### 툼스톤이 왜 문제가 되나요?
+
+삭제가 툼스톤이라는 쓰기로 남고, gc_grace_seconds(기본 10일)가 지나야 컴팩션에서 사라진다. 지우고 넣기를 반복하는 큐 같은 패턴은 파티션에 툼스톤이 쌓여 읽기가 그걸 다 훑어야 하므로 점점 느려지고, 기준을 넘으면 쿼리가 실패한다. 그래서 지울 데이터는 TTL과 TWCS로 파일째 만료시키고, 그 기간 안에 repair를 돌려 지운 데이터가 되살아나지 않게 한다.
+
+### Cassandra를 고르지 말아야 할 때는 언제인가요?
+
+질문이 자주 바뀌거나 조건 조합 검색이 필요한 화면, 파티션을 가로지르는 집계가 중심인 리포트, 재고나 결제처럼 비교 후 쓰기와 여러 행 트랜잭션이 필요한 데이터다. 쓰기가 서버 한 대로 감당되는 규모라면 PostgreSQL의 파티셔닝과 배치 삽입이 더 단순하다. 노드 여러 대의 repair와 컴팩션을 운영할 여력이 있는지도 함께 본다.

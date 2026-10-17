@@ -2,6 +2,79 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "db-types-overview": {
+    "links": [
+      "db-architecture-by-scale",
+      "db-type-relational",
+      "db-type-key-value",
+      "db-type-wide-column",
+      "db-type-graph",
+      "mongodb-document-model",
+      "elasticsearch-inverted-index",
+      "vector-db",
+      "redis-basics",
+      "postgres-getting-started"
+    ],
+    "mentions": []
+  },
+  "db-type-relational": {
+    "links": [
+      "db-types-overview",
+      "db-modeling-normalization",
+      "sql-query-tuning",
+      "db-index",
+      "db-replication-sharding",
+      "db-transaction-isolation",
+      "sql-basics",
+      "db-type-graph",
+      "db-type-wide-column",
+      "mongodb-document-model",
+      "caching-strategies",
+      "db-architecture-by-scale"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "sqld-top-n-hierarchical-pivot",
+      "postgres-architecture",
+      "postgres-jsonb-search",
+      "postgres-getting-started"
+    ]
+  },
+  "db-type-key-value": {
+    "links": [
+      "db-types-overview",
+      "postgres-jsonb-search",
+      "redis-basics",
+      "redis-memory-eviction",
+      "redis-persistence-ha",
+      "db-type-relational",
+      "caching-strategies",
+      "db-type-wide-column"
+    ],
+    "mentions": [
+      "dns"
+    ]
+  },
+  "db-type-wide-column": {
+    "links": [
+      "db-type-key-value",
+      "db-replication-sharding",
+      "db-type-graph"
+    ],
+    "mentions": [
+      "db-type-relational",
+      "dns"
+    ]
+  },
+  "db-type-graph": {
+    "links": [
+      "db-type-wide-column",
+      "sqld-top-n-hierarchical-pivot"
+    ],
+    "mentions": [
+      "db-type-relational"
+    ]
+  },
   "postgres-architecture": {
     "links": [
       "postgres-getting-started",
@@ -14,7 +87,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding"
     ],
     "mentions": [
-      "db-architecture-by-scale"
+      "db-architecture-by-scale",
+      "db-type-relational"
     ]
   },
   "postgres-mvcc-vacuum": {
@@ -38,6 +112,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "db-type-relational",
       "postgres-getting-started",
       "sql-basics"
     ]
@@ -91,7 +166,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-roles-security"
     ],
     "mentions": [
-      "postgres-operations"
+      "postgres-operations",
+      "db-type-relational"
     ]
   },
   "postgres-data-types": {
@@ -271,6 +347,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-data-types",
+      "db-type-relational",
       "sql-basics"
     ]
   },
@@ -319,6 +396,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture",
       "json-crud-http",
       "postgres-advanced-sql",
+      "db-types-overview",
       "sqld-entity-attribute-relationship",
       "db-transaction-isolation",
       "db-replication-sharding"
@@ -345,6 +423,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "redis-persistence-ha",
+      "db-type-wide-column",
+      "db-type-key-value",
       "redis-basics",
       "postgres-architecture",
       "dns"
@@ -366,6 +446,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-advanced-sql",
       "postgres-mvcc-vacuum",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "db-type-relational",
+      "db-type-graph",
       "http-caching-cdn",
       "postgres-operations",
       "postgres-jsonb-search",
@@ -484,6 +568,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "caching-strategies"
     ],
     "mentions": [
+      "db-type-relational",
       "event-loop",
       "db-transaction-isolation",
       "dns"
@@ -869,6 +954,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "mongodb-document-model": {
     "links": [],
     "mentions": [
+      "db-type-relational",
       "db-index",
       "db-replication-sharding",
       "db-modeling-normalization"

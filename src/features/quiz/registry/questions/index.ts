@@ -13,6 +13,11 @@ import { DB_INDEX } from "./db-index";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
+import { DB_TYPE_GRAPH } from "./db-type-graph";
+import { DB_TYPE_KEY_VALUE } from "./db-type-key-value";
+import { DB_TYPE_RELATIONAL } from "./db-type-relational";
+import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
+import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -103,6 +108,11 @@ export const QUESTION_SETS = [
   DB_MODELING_NORMALIZATION,
   DB_REPLICATION_SHARDING,
   DB_TRANSACTION_ISOLATION,
+  DB_TYPE_GRAPH,
+  DB_TYPE_KEY_VALUE,
+  DB_TYPE_RELATIONAL,
+  DB_TYPE_WIDE_COLUMN,
+  DB_TYPES_OVERVIEW,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
