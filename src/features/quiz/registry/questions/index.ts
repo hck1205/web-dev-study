@@ -35,6 +35,9 @@ import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { NGINX_BASICS } from "./nginx-basics";
+import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
+import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
@@ -89,6 +92,9 @@ export const QUESTION_SETS = [
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  NGINX_BASICS,
+  NGINX_HTTPS_PERFORMANCE,
+  NGINX_REVERSE_PROXY,
   OAUTH,
   PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,

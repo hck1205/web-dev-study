@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "nginx-basics",
+    title: "Nginx 기본: 설정 파일을 읽는 법",
+    summary: "설치했는데 기본 페이지나 403만 보이는 상황에서 출발해 master·worker 구조, Ubuntu의 sites-enabled 배치, server와 location이 골라지는 순서, root와 alias, try_files를 따라간다. nginx -t와 reload로 안전하게 바꾸고 로그로 원인을 찾는 법까지 정리한다.",
+    topic: "programming/server-infra/nginx",
+    tags: ["Nginx", "Linux", "HTTP", "DevOps"],
+    date: "2026-10-16",
+    keywords: ["nginx.conf", "server_name", "try_files", "sites-enabled", "location 블록"],
+  },
+  {
+    slug: "nginx-reverse-proxy",
+    title: "Nginx 리버스 프록시와 로드 밸런싱",
+    summary: "proxy_pass의 끝 슬래시 규칙, 앱에 넘겨야 할 Host·X-Forwarded-* 헤더, upstream과 로드 밸런싱 방식, 실패한 서버를 빼는 법과 keepalive를 설정으로 따라간다. 502와 504가 생기는 자리, WebSocket, 버퍼링, 413까지 로그와 함께 본다.",
+    topic: "programming/server-infra/nginx",
+    tags: ["Nginx", "HTTP", "Network", "DevOps"],
+    date: "2026-10-16",
+    keywords: ["proxy_pass", "upstream 블록", "least_conn", "proxy_set_header"],
+  },
+  {
+    slug: "nginx-https-performance",
+    title: "Nginx HTTPS·성능·보안 설정",
+    summary: "certbot으로 인증서를 받아 자동 갱신하고 HTTPS 리다이렉트, TLS와 HTTP/2, HSTS를 붙인다. gzip과 정적 파일 캐시 헤더, proxy_cache, limit_req 속도 제한, 보안 헤더를 설정한 뒤 curl과 openssl로 바깥에서 확인한다.",
+    topic: "programming/server-infra/nginx",
+    tags: ["Nginx", "HTTPS", "TLS", "Performance", "Security"],
+    date: "2026-10-16",
+    keywords: ["certbot", "proxy_cache", "limit_req", "gzip_types"],
+  },
+  {
     slug: "redis-memory-eviction",
     title: "Redis 메모리가 가득 차면: maxmemory와 축출 정책",
     summary: "maxmemory를 정하지 않으면 OOM 킬러에게 죽고, 기본 noeviction이면 가득 찬 순간 쓰기가 실패한다. INFO memory를 읽는 법부터 축출 정책 고르기, 근사 LRU와 LFU의 동작, 만료와 단편화, 리눅스 설정과 여유 메모리 계산까지 정리한다.",
