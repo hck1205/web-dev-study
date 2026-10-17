@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "git-remote-collaboration",
+    title: "원격 저장소와 협업: fetch, pull, push",
+    summary: "동료가 먼저 푸시해서 내 push가 거절되는 장면에서 시작해 origin/main의 정체, fetch와 pull의 차이, upstream, --force-with-lease와 --force-if-includes, 태그, PR과 포크 흐름, 큰 저장소를 빨리 받는 법까지 실제 출력으로 따라간다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["force-with-lease", "원격 추적 브랜치", "얕은 clone", "부분 clone"],
+  },
+  {
+    slug: "git-branching-strategy",
+    title: "브랜치 전략: Git Flow, GitHub Flow, 트렁크 기반 개발",
+    summary: "develop에 덜 된 기능이 쌓인 릴리스 날에 운영 핫픽스를 어디서 고칠지에서 출발해 Git Flow, GitHub Flow, GitLab Flow, 트렁크 기반 개발을 비교한다. PR 머지 방식, Conventional Commits, SemVer 태그, 브랜치 보호 규칙까지 실제 명령으로 본다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps", "Feature Flag"],
+    date: "2026-10-17",
+    keywords: ["Git Flow", "GitHub Flow", "트렁크 기반 개발", "Conventional Commits", "squash 머지"],
+  },
+  {
+    slug: "git-troubleshooting",
+    title: "Git 문제 해결 시나리오 모음",
+    summary: "push 거절, unrelated histories, detached HEAD, 지운 브랜치, 락파일 충돌, 큰 파일과 비밀 값 커밋, CRLF, cannot lock ref, index 손상까지 자주 만나는 Git 오류를 실제 메시지로 재현하고 원인과 해결 명령, 예방법을 정리한다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["unrelated histories", "git-filter-repo", "cannot lock ref", "index.lock"],
+  },
+  {
+    slug: "git-tips-advanced",
+    title: "알아 두면 편한 Git 기능: bisect, cherry-pick, worktree, hooks",
+    summary: "200개 커밋 중 버그가 들어온 커밋을 bisect run으로 여덟 번 만에 찾고, cherry-pick, worktree, blame과 pickaxe, commit-msg 훅, .gitattributes, 서브모듈과 subtree, 커밋 서명, 켜 두면 편한 설정까지 실제 출력으로 본다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["git bisect", "cherry-pick", "worktree", "git blame", "commit-msg 훅"],
+  },
+  {
     slug: "sqld-subquery-set-operators",
     title: "SQLD 서브쿼리와 집합 연산자",
     summary: "'자기 부서 평균보다 많이 받는 사람'을 쿼리 하나로 구하면서 서브쿼리의 세 자리와 단일행·다중행 연산자, 상관 서브쿼리, NOT IN에 NULL이 섞이면 0행이 되는 함정을 SCOTT 데이터로 따라간다. UNION과 UNION ALL의 비용 차이, MINUS와 EXCEPT, 집합 연산자의 규칙과 DB별 우선순위도 정리한다.",

@@ -1,0 +1,894 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-tips-advanced");
+
+장바구니 합계 테스트가 깨졌다. 두 달 전에 태그를 붙인 v2.3.0에서는 통과했다. 그 뒤로 커밋이 200개 가까이 쌓였고, 이름만 봐서는 어느 커밋이 범인인지 알 수 없다. 하나씩 checkout해서 테스트를 돌리면 최악의 경우 199번이다.
+
+Git에는 이런 일을 대신해 주는 도구가 있다. 이 글은 그중 실무에서 자주 꺼내는 것들을 모았다. 버그가 들어온 커밋을 반씩 잘라 찾는 bisect, 커밋 하나만 옮기는 cherry-pick, 브랜치를 바꾸지 않고 다른 폴더에서 일하는 worktree, 코드의 내력을 캐는 blame과 pickaxe, 커밋 전에 규칙을 검사하는 훅, 파일마다 다른 규칙을 주는 `.gitattributes`, 서브모듈과 subtree, 그리고 켜 두면 편한 설정들이다.
+
+기준은 Ubuntu 24.04의 Git 2.43이다. 22.04의 2.34에는 없는 기능은 버전을 함께 적었다. 출력은 모두 직접 만든 저장소에서 실행한 결과다.
+
+## 200개 커밋을 여덟 번 만에 좁힌다
+
+`git bisect`는 이진 탐색이다. "여기서는 됐다(good)"는 커밋과 "여기서는 안 된다(bad)"는 커밋을 알려 주면, 그 사이 가운데 커밋을 꺼내 준다. 테스트해 보고 good인지 bad인지 알려 주면 범위가 반으로 준다. 이걸 반복한다.
+
+```bash
+# bisect 시작
+git bisect start
+
+# 지금(HEAD)은 깨져 있다
+git bisect bad
+
+# v2.3.0에서는 됐다
+git bisect good v2.3.0
+```
+
+```text
+status: waiting for both good and bad commits
+status: waiting for good commit(s), bad commit known
+Bisecting: 99 revisions left to test after this (roughly 7 steps)
+[70736203fcb94a420c60e23eaf91095d30f5a131] chore: change 99
+```
+
+Git이 99번째 커밋을 꺼내 놓았다. 작업 폴더가 그 커밋 상태가 됐으니 테스트를 돌려 보고 `git bisect good`이나 `git bisect bad`를 친다. 판단할 수 없는 커밋(빌드가 안 되는 커밋 등)이면 `git bisect skip`으로 건너뛴다. 아래 그림이 실제로 범위가 좁혀진 순서다. 칸의 번호는 v2.3.0을 0으로 센 커밋 순번이다.
+
+<AlgoTrace
+  caption="good과 bad 사이의 가운데를 시험하면서 범위를 반씩 버린다"
+  memoryLabel="남은 범위"
+  cells={["#0 v2.3.0", "#99", "#124", "#136", "#137", "#138", "#139", "#142", "#149", "#199 HEAD"]}
+  steps={[
+    {
+      pointer: 1,
+      memory: ["good #0", "bad #199", "후보 199개"],
+      caption: "v2.3.0이 good, HEAD가 bad다. 후보는 그 사이 199개. 가운데쯤인 #99를 꺼내 테스트하니 통과한다.",
+    },
+    {
+      pointer: 8,
+      memory: ["good #99", "bad #199", "후보 100개"],
+      caption: "#99가 good이니 앞쪽 절반은 버린다. 남은 범위의 가운데 #149는 테스트가 깨진다.",
+    },
+    {
+      pointer: 2,
+      memory: ["good #99", "bad #149", "후보 50개"],
+      caption: "이번엔 뒤쪽 절반을 버린다. #124는 통과한다.",
+    },
+    {
+      pointer: 3,
+      memory: ["good #124", "bad #149", "후보 25개"],
+      caption: "#136도 통과한다. 범인은 #137에서 #149 사이에 있다.",
+    },
+    {
+      pointer: 7,
+      memory: ["good #136", "bad #149", "후보 13개"],
+      caption: "#142는 깨진다.",
+    },
+    {
+      pointer: 6,
+      memory: ["good #136", "bad #142", "후보 6개"],
+      caption: "#139도 깨진다.",
+    },
+    {
+      pointer: 5,
+      memory: ["good #136", "bad #139", "후보 3개"],
+      caption: "#138도 깨진다. 남은 후보는 #137 하나다.",
+    },
+    {
+      found: [4],
+      memory: ["good #136", "first bad #137"],
+      caption: "#137을 확인하니 역시 깨진다. 바로 앞 #136은 good이었으니 #137이 처음 깨진 커밋이다. 여덟 번 테스트로 찾았다.",
+    },
+  ]}
+/>
+
+한 번 테스트할 때마다 후보가 절반이 되니, 후보가 n개면 대략 log₂n번이면 하나만 남는다. 199개는 2⁷ = 128보다 많고 2⁸ = 256보다 적어서 7~8번이다. 커밋이 1,000개면 10번, 100만 개라도 20번 안팎이다. Git이 처음에 "roughly 7 steps"라고 한 것도 이 계산이고, 실제로는 Git이 고르는 가운데 커밋이 정확히 절반이 아니어서 여덟 번이 걸렸다.
+
+직접 짜 보면 감이 온다. 0번은 good, n−1번은 bad라고 알고 시작한다. `firstBad`번부터 뒤가 모두 깨져 있을 때, 처음 깨진 커밋 번호와 테스트한 횟수를 돌려준다.
+
+<CodePlayground
+  caption="bisect가 처음 깨진 커밋을 찾는 데 몇 번 테스트하나"
+  functionName="bisect"
+  initialCode={`function bisect(n, firstBad) {
+  // i번 커밋을 테스트하면 깨졌는지 알려 준다
+  const isBad = (i) => i >= firstBad;
+  let good = 0;      // 됐다고 알고 있는 커밋
+  let bad = n - 1;   // 깨졌다고 알고 있는 커밋
+  let steps = 0;     // 테스트 횟수
+
+  // good과 bad 사이에 후보가 남아 있는 동안 가운데를 테스트한다
+
+  return [bad, steps];
+}`}
+  solution={`function bisect(n, firstBad) {
+  const isBad = (i) => i >= firstBad;
+  let good = 0;
+  let bad = n - 1;
+  let steps = 0;
+
+  // good 바로 다음이 bad가 되면 bad가 처음 깨진 커밋이다
+  while (bad - good > 1) {
+    const mid = Math.floor((good + bad) / 2);
+    steps++;
+    if (isBad(mid)) bad = mid;  // 깨졌으면 범인은 mid이거나 그 앞
+    else good = mid;            // 됐으면 범인은 mid 뒤
+  }
+  return [bad, steps];
+}`}
+  tests={[
+    { args: [200, 137], expected: [137, 7], label: "200개, #137부터 깨짐" },
+    { args: [200, 199], expected: [199, 8], label: "200개, 마지막만 깨짐" },
+    { args: [2, 1], expected: [1, 0], label: "good 바로 다음이 bad" },
+    { args: [10, 3], expected: [3, 3], label: "10개, #3부터 깨짐" },
+    { args: [1000, 500], expected: [500, 9], label: "1,000개" },
+    { args: [1000000, 777777], expected: [777777, 20], label: "100만 개" },
+  ]}
+/>
+
+같은 200개라도 범인 위치에 따라 7번이나 8번이 나온다. 그래도 200번과 8번의 차이에 비하면 사소하다. 대신 이 방법이 통하려면 조건이 하나 있다. 한 번 깨진 뒤로는 계속 깨져 있어야 한다. 중간에 누가 고쳤다가 다시 깨뜨렸다면 bisect는 그중 하나를 찾을 뿐이다.
+
+## 테스트 스크립트로 bisect를 자동으로 돌린다
+
+매번 손으로 테스트하고 good, bad를 치는 대신, 판정을 스크립트에 맡길 수 있다. `git bisect run`은 커밋마다 명령을 실행하고 종료 코드로 판정한다. 0이면 good, 125면 skip, 1~127(125 제외)이면 bad, 128 이상이면 bisect 자체를 멈춘다.
+
+```bash
+# 깨지는 상황만 확인하는 작은 테스트 (통과하면 0, 아니면 1로 끝난다)
+cat test.js
+```
+
+```text
+const { total } = require("./price");
+const got = total([{ price: 1200, qty: 2 }, { price: 300, qty: 1 }]);
+if (got !== 2700) { console.error(`expected 2700, got ${got}`); process.exit(1); }
+```
+
+```bash
+# 처음부터 다시 한다면 범위를 한 줄로 지정: bad 다음에 good
+git bisect reset
+git bisect start HEAD v2.3.0
+
+# 커밋마다 node test.js를 돌려 자동 판정
+git bisect run node test.js
+```
+
+```text
+running 'node' 'test.js'
+Bisecting: 49 revisions left to test after this (roughly 6 steps)
+[09c1fa70793f6cd61a525d390c3ef1365285bfef] chore: change 149
+running 'node' 'test.js'
+expected 2700, got 3900
+Bisecting: 24 revisions left to test after this (roughly 5 steps)
+[27ae3feb0fa312d60342a84223dc64c90c5b7dee] chore: change 124
+running 'node' 'test.js'
+Bisecting: 12 revisions left to test after this (roughly 4 steps)
+[dd780b73f8c3c2f91a2a8835f8e82b861c06e385] chore: change 136
+running 'node' 'test.js'
+Bisecting: 6 revisions left to test after this (roughly 3 steps)
+[c3796c343cd4edb6c38c628e7c1c2ba2833459ab] chore: change 142
+running 'node' 'test.js'
+expected 2700, got 3900
+Bisecting: 2 revisions left to test after this (roughly 2 steps)
+[a1ae025a97b8f857abb48bd47b82f678ac60ed7f] chore: change 139
+running 'node' 'test.js'
+expected 2700, got 3900
+Bisecting: 0 revisions left to test after this (roughly 1 step)
+[a431fda518f559211e14ab8dad19fba6b1ed0f92] chore: change 138
+running 'node' 'test.js'
+expected 2700, got 3900
+Bisecting: 0 revisions left to test after this (roughly 0 steps)
+[b180d73ec6f62267249867de6ad28325f63a980e] refactor(cart): default qty to 1
+running 'node' 'test.js'
+expected 2700, got 3900
+b180d73ec6f62267249867de6ad28325f63a980e is the first bad commit
+commit b180d73ec6f62267249867de6ad28325f63a980e
+Author: Matt <matt@example.com>
+Date:   Sat Oct 17 08:37:27 2026 +0000
+
+    refactor(cart): default qty to 1
+
+ price.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+bisect found first bad commit
+```
+
+start가 #99를 꺼내는 부분은 앞과 같아서 뺐다. 첫 줄의 `running`이 그 #99를 테스트한 것이고, 에러 없이 끝나 good이 됐다. `expected 2700, got 3900`이 찍혔다면 그 위 대괄호 줄의 커밋이 bad로 판정된 것이다. 마지막 블록이 결과다. 수량 기본값을 1로 바꾸는 리팩터링(`b180d73`)에서 계산식이 틀어졌다. 끝나면 꼭 원래 브랜치로 돌아온다.
+
+```bash
+# 지금까지의 판정 기록 (다른 사람에게 공유하거나 replay로 다시 돌릴 수 있다)
+git bisect log > bisect.log
+
+# bisect를 끝내고 시작했던 브랜치로 돌아간다
+git bisect reset
+```
+
+```text
+Previous HEAD position was b180d73 refactor(cart): default qty to 1
+Switched to branch 'main'
+```
+
+몇 가지를 알아 두면 덜 헤맨다. 테스트 스크립트는 bisect 도중 checkout으로 바뀌지 않도록 저장소 밖에 두거나, 버그가 생기기 전 커밋에도 있는 파일이어야 한다. 빌드가 깨진 커밋에서는 `exit 125`로 skip하게 만든다. 머지 커밋이 많은 저장소에서는 Git 2.29부터 있는 `git bisect start --first-parent`로 main의 머지 커밋만 따라가면 "어느 PR이 범인인가"부터 빨리 찾는다. 버그가 아니라 성능 변화처럼 good, bad라는 말이 어색하면 `git bisect start --term-old=fast --term-new=slow`로 이름을 바꿀 수 있다.
+
+## 커밋 하나만 가져오는 cherry-pick
+
+다른 브랜치의 커밋 중 하나만 지금 브랜치로 가져올 때 쓴다. 릴리스 브랜치에 버그 수정만 옮기는 경우가 가장 흔하다. cherry-pick은 그 커밋이 만든 변경(부모와의 diff)을 지금 브랜치에 다시 적용해 새 커밋을 만든다.
+
+```bash
+# 가져올 커밋 확인
+git log --oneline feature
+```
+
+```text
+02aa1e1 fix: app crash
+83d0d82 fix: c
+21c9105 fix: b
+c2054cc feat: a
+e6035a3 chore: init
+```
+
+```bash
+# release/1.0으로 가서 커밋 하나를 가져온다. -x는 원본 해시를 메시지에 남긴다
+git switch release/1.0
+git cherry-pick -x 21c9105
+```
+
+```text
+[release/1.0 9c19b61] fix: b
+ Date: Sat Oct 17 08:38:13 2026 +0000
+ 1 file changed, 1 insertion(+)
+ create mode 100644 b.txt
+```
+
+여러 커밋을 범위로 가져올 때는 범위 표기에 주의한다. `A..B`는 A는 빼고 A 다음부터 B까지다.
+
+```bash
+# 21c9105(fix: b)는 빠지고 83d0d82(fix: c)만 들어온다
+git cherry-pick 21c9105..83d0d82
+
+# A까지 포함하려면 A^..B (A의 부모부터 셈)
+git cherry-pick c2054cc^..83d0d82
+```
+
+```text
+[release/1.0 73268e7] fix: c
+ Date: Sat Oct 17 08:38:13 2026 +0000
+ 1 file changed, 1 insertion(+)
+ create mode 100644 c.txt
+```
+
+가져온 커밋이 release 쪽에서 이미 바뀐 줄을 건드리면 충돌한다.
+
+```text
+Auto-merging app.txt
+CONFLICT (content): Merge conflict in app.txt
+error: could not apply 02aa1e1... fix: app crash
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+```
+
+```bash
+# 충돌을 고치고 이어 가기
+git add app.txt
+git cherry-pick --continue
+
+# 또는 이 cherry-pick 전체를 취소하고 시작 전으로
+git cherry-pick --abort
+```
+
+`-n`(`--no-commit`)은 변경만 작업 폴더에 적용하고 커밋은 하지 않는다. 여러 커밋을 하나로 묶어 가져올 때 쓴다. 머지 커밋을 cherry-pick하려면 어느 부모 기준의 diff인지 `-m 1`처럼 정해 줘야 한다. cherry-pick은 같은 변경을 담은 다른 커밋을 만드는 것이라, 나중에 두 브랜치를 합치면 Git이 대개 같은 변경으로 알아보지만 그 사이에 같은 줄이 또 바뀌었다면 충돌이 날 수 있다. 자주 cherry-pick해야 한다면 브랜치 전략이 맞지 않는다는 신호일 수 있다. 그 이야기는 [브랜치 전략 글](/posts/git-branching-strategy)에 있다.
+
+## 브랜치를 바꾸지 않고 다른 폴더에서 일한다
+
+기능 작업이 반쯤 되어 커밋하기 애매한 상태인데 급한 핫픽스 요청이 들어왔다. stash로 치우고 브랜치를 바꾸면 `node_modules`나 빌드 캐시가 그 브랜치에 맞지 않아 다시 설치해야 하기도 한다. `git worktree`는 같은 저장소의 다른 브랜치를 다른 폴더에 동시에 꺼낸다. clone을 하나 더 하는 것과 달리 `.git`의 객체와 브랜치를 함께 쓰니 디스크도 덜 들고, 한쪽에서 만든 커밋이 다른 쪽에서 바로 보인다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="저장소 하나(.git)에 작업 폴더 여러 개가 붙는다. 브랜치 하나는 한 폴더에서만 꺼낼 수 있다."
+  nodes={[
+    { id: "git", label: "shop/.git", sub: "객체·브랜치 공유", x: 200, y: 150, w: 130, h: 50 },
+    { id: "main", label: "shop/", sub: "feature (작업 중)", x: 90, y: 45, w: 120, h: 46 },
+    { id: "hot", label: "shop-hotfix/", sub: "hotfix/login", x: 310, y: 45, w: 120, h: 46 },
+    { id: "rev", label: "shop-review/", sub: "PR #42 확인용", x: 200, y: 265, w: 120, h: 46 },
+  ]}
+  edges={[
+    { from: "main", to: "git", arrow: "both" },
+    { from: "hot", to: "git", arrow: "both" },
+    { from: "rev", to: "git", arrow: "both", dashed: true },
+  ]}
+/>
+
+```bash
+# 지금 폴더는 그대로 두고, release/1.0에서 hotfix/login 브랜치를 새로 만들어 옆 폴더에 꺼낸다
+git worktree add ../shop-hotfix -b hotfix/login release/1.0
+
+# 연결된 작업 폴더 목록
+git worktree list
+```
+
+```text
+Preparing worktree (new branch 'hotfix/login')
+HEAD is now at 73268e7 fix: c
+/home/matt/shop         02aa1e1 [feature]
+/home/matt/shop-hotfix  73268e7 [hotfix/login]
+```
+
+```bash
+# 옆 폴더에서 고치고 커밋한다. 원래 폴더의 작업 중인 변경은 그대로다
+cd ../shop-hotfix
+git commit -am "fix: login"
+git push -u origin hotfix/login
+
+# 다 끝나면 폴더를 정리한다 (브랜치는 남는다)
+cd ../shop
+git worktree remove ../shop-hotfix
+```
+
+규칙이 몇 가지 있다. 같은 브랜치를 두 폴더에서 동시에 꺼낼 수 없다.
+
+```text
+fatal: 'release/1.0' is already used by worktree at '/home/matt/shop-x'
+```
+
+커밋하지 않은 변경이 있는 폴더는 지우지 않는다. 정말 버릴 거면 `--force`를 붙인다.
+
+```text
+fatal: '../shop-x' contains modified or untracked files, use --force to delete it
+```
+
+폴더를 `rm -rf`로 그냥 지웠다면 `git worktree prune`으로 남은 기록을 정리한다. 각 폴더는 독립된 작업 폴더라 `node_modules`도 따로 설치해야 한다. 그래서 핫픽스, PR 리뷰처럼 잠깐 쓰고 지우는 용도나, 오래 걸리는 테스트를 한 폴더에서 돌리며 다른 폴더에서 일하는 용도에 잘 맞는다. 앞의 [문제 해결 글](/posts/git-troubleshooting)에서 rebase 도중 브랜치를 못 바꿀 때 Git이 `git worktree add`를 권하던 것도 이 때문이다.
+
+## 이 줄은 누가 왜 바꿨나
+
+bisect로 범인 커밋을 찾았다. 이제 그 줄의 내력을 본다. `git blame`은 파일의 줄마다 마지막으로 바꾼 커밋을 보여 준다.
+
+```bash
+# 1~3번째 줄만 (-L 시작,끝)
+git blame -L 1,3 price.js
+```
+
+```text
+^021e704 (Matt 2026-10-17 08:37:26 +0000 1) function total(items) {
+b180d73e (Matt 2026-10-17 08:37:27 +0000 2)   return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+^021e704 (Matt 2026-10-17 08:37:26 +0000 3) }
+```
+
+`^`가 붙은 해시는 그 줄이 blame 범위의 맨 처음 커밋부터 있었다는 뜻이다. 2번째 줄이 bisect가 찾은 `b180d73`이다. `git show b180d73`으로 그 커밋 전체와 메시지를 보면 왜 바꿨는지 알 수 있다. 커밋 메시지를 잘 써야 하는 이유가 여기서 드러난다.
+
+blame을 방해하는 흔한 일이 포매팅 커밋이다. 누군가 들여쓰기를 2칸에서 4칸으로 바꾸면 모든 줄의 blame이 그 커밋이 된다.
+
+```bash
+# 포매팅 커밋 뒤에 blame하면
+git blame -L 2,2 price.js
+
+# -w: 공백만 바뀐 변경은 무시하고 그 전 커밋을 보여 준다
+git blame -w -L 2,2 price.js
+```
+
+```text
+a8de61c7 (Matt 2026-10-17 08:37:57 +0000 2)     return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+b180d73e (Matt 2026-10-17 08:37:27 +0000 2)     return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+```
+
+공백 말고 따옴표나 세미콜론까지 바꾸는 포매터라면 `-w`로는 부족하다. 그 커밋 자체를 blame에서 건너뛰게 한다. Git 2.23부터 된다.
+
+```bash
+# 한 번만 건너뛰기
+git blame --ignore-rev a8de61c7 -L 2,2 price.js
+
+# 저장소에 목록을 두고 늘 건너뛰기 (GitHub의 blame 화면도 이 파일 이름을 인식한다)
+echo "# style: reformat with 4-space indent" > .git-blame-ignore-revs
+git rev-parse a8de61c7 >> .git-blame-ignore-revs
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+코드를 다른 파일로 옮기면 옮긴 커밋이 blame에 나온다. `-C`는 다른 파일에서 옮겨 오거나 복사한 줄을 찾아 원래 커밋을 보여 준다. 한 번 주면 같은 커밋에서 바뀐 파일 안에서, 두 번 주면 그 줄이 처음 생긴 커밋의 모든 파일에서 찾는다.
+
+```bash
+# price.js에서 util.js로 함수를 옮긴 뒤
+git blame -L 3,3 util.js
+git blame -C -C -L 3,3 util.js
+```
+
+```text
+621b089d (Matt 2026-10-17 08:38:06 +0000 3)     return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+b180d73e price.js (Matt 2026-10-17 08:37:27 +0000 3)     return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+```
+
+두 번째 출력은 해시 옆에 원래 파일 이름 `price.js`가 붙어 있다. 옮기기 전 `b180d73`까지 거슬러 올라갔다.
+
+## 코드가 생기고 사라진 커밋을 찾는다
+
+blame은 지금 있는 줄의 내력만 보여 준다. 이미 지워진 코드는 blame으로 못 찾는다. 이럴 때 `git log`의 pickaxe 옵션을 쓴다.
+
+```bash
+# -S: 이 문자열이 등장한 횟수가 바뀐 커밋 (생기거나 사라진 커밋)
+git log -S "it.qty || 1" --oneline
+
+# -G: 바뀐 줄이 이 정규식에 맞는 커밋 (같은 줄 안에서 고친 것도 잡힌다)
+git log -G "qty\s*\|\|" --oneline
+
+# 변경 내용까지 보려면 -p
+git log -S "it.qty || 1" -p
+```
+
+```text
+b180d73 refactor(cart): default qty to 1
+b180d73 refactor(cart): default qty to 1
+```
+
+`-S`는 문자열 개수가 늘거나 줄어야 잡는다. 그 문자열이 있는 줄을 고쳐도 개수가 그대로면 안 나온다. `-G`는 diff의 추가·삭제 줄에 정규식이 맞으면 다 잡으니 결과가 더 많다. "이 함수 호출이 언제 없어졌지"는 `-S`, "이 설정값을 누가 계속 바꾸지"는 `-G`가 맞는다.
+
+함수 하나의 역사만 보고 싶으면 `-L`에 함수 이름을 준다. Git이 언어별 규칙으로 함수의 범위를 알아내고, 그 범위가 바뀐 커밋과 diff만 보여 준다.
+
+```bash
+# price.js의 total 함수가 바뀐 역사
+git log -L :total:price.js --oneline
+```
+
+```text
+b180d73 refactor(cart): default qty to 1
+
+diff --git a/price.js b/price.js
+--- a/price.js
++++ b/price.js
+@@ -1,3 +1,3 @@
+ function total(items) {
+-  return items.reduce((sum, it) => sum + it.price * it.qty, 0);
++  return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+ }
+021e704 feat: add total
+
+diff --git a/price.js b/price.js
+--- a/price.js
++++ b/price.js
+@@ -0,0 +1,3 @@
++function total(items) {
++  return items.reduce((sum, it) => sum + it.price * it.qty, 0);
++}
+```
+
+줄 번호로 `-L 10,20:price.js`처럼 줄 범위를 줄 수도 있다. 이 역사를 보면 버그의 원인이 분명하다. `qty`가 2일 때 `price * 2`에 `price`를 한 번 더 더한다. 1200원짜리 2개와 300원짜리 1개면 2,700원이어야 하는데 1,200원이 더 붙어 3,900원이 됐다.
+
+## 저장소 안을 찾고 기여를 센다
+
+`git grep`은 Git이 추적하는 파일만 찾아서 `node_modules`나 빌드 결과를 자연스럽게 건너뛴다. 특정 커밋이나 태그의 코드에서도 찾을 수 있다.
+
+```bash
+# 줄 번호와 함께 찾기
+git grep -n "qty"
+
+# 파일마다 몇 번 나오나
+git grep -c "change" -- '*.txt'
+
+# 체크아웃하지 않고 v2.3.0 시점의 코드에서 찾기
+git grep -n "qty" v2.3.0
+
+# 함수 단위로 보기 (-W: 맞은 줄이 들어 있는 함수 전체)
+git grep -W "reduce" -- '*.js'
+```
+
+```text
+test.js:2:const got = total([{ price: 1200, qty: 2 }, { price: 300, qty: 1 }]);
+util.js:3:    return items.reduce((sum, it) => sum + it.price * (it.qty || 1) + (it.qty > 1 ? it.price : 0), 0);
+```
+
+```text
+CHANGELOG.txt:198
+```
+
+```text
+v2.3.0:price.js:2:  return items.reduce((sum, it) => sum + it.price * it.qty, 0);
+v2.3.0:test.js:2:const got = total([{ price: 1200, qty: 2 }, { price: 300, qty: 1 }]);
+```
+
+태그를 주면 결과 앞에 `v2.3.0:`이 붙는다. 그 시점에는 함수가 아직 `price.js`에 있었고 계산식도 단순했다는 게 checkout 없이 보인다.
+
+`git shortlog`는 작성자별로 커밋을 묶는다. 처음 보는 코드베이스에서 이 부분을 누구에게 물어보면 될지 찾을 때 쓴다.
+
+```bash
+# 작성자별 커밋 수, 많은 순 (-s 숫자만, -n 정렬)
+git shortlog -sn HEAD
+
+# 머지 커밋 빼고, 이메일까지, 특정 경로만
+git shortlog -sne --no-merges HEAD -- src/cart/
+```
+
+```text
+   202	Matt
+     3	Jisoo
+     1	Minho
+```
+
+한 사람이 이메일을 여러 개 써서 따로 세어진다면 저장소 루트의 `.mailmap`에 `Matt <matt@example.com> <matt@old-company.example>`처럼 적어 하나로 묶는다. 커밋 수는 기여의 크기가 아니다. 사람을 평가하는 데 쓰는 숫자가 아니라 누구에게 물어볼지 찾는 숫자로 쓴다.
+
+## 커밋 전에 규칙을 검사하는 훅
+
+훅(hook)은 Git이 특정 시점에 실행하는 스크립트다. `.git/hooks/` 폴더에 정해진 이름의 실행 파일을 두면 된다. `git init`을 하면 예제가 `.sample` 확장자로 들어 있다.
+
+```bash
+ls .git/hooks
+```
+
+```text
+applypatch-msg.sample
+commit-msg.sample
+fsmonitor-watchman.sample
+post-update.sample
+pre-applypatch.sample
+pre-commit.sample
+pre-merge-commit.sample
+pre-push.sample
+pre-rebase.sample
+pre-receive.sample
+prepare-commit-msg.sample
+push-to-checkout.sample
+sendemail-validate.sample
+update.sample
+```
+
+어느 훅이 언제 도는지 커밋 하나와 푸시 하나를 따라가며 본다.
+
+<SequenceDiagram
+  caption="커밋과 푸시 사이에 훅이 끼어드는 자리"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "git", label: "로컬 git" },
+    { id: "hook", label: "로컬 훅" },
+    { id: "server", label: "원격 서버" },
+  ]}
+  steps={[
+    {
+      from: "dev",
+      to: "git",
+      label: "git commit",
+      title: "커밋을 시작한다",
+      detail: "메시지를 쓰기 전에 먼저 스테이징된 내용을 검사할 기회가 온다.",
+    },
+    {
+      from: "git",
+      to: "hook",
+      label: "pre-commit",
+      title: "pre-commit: 내용 검사",
+      detail: "린트, 포맷, 비밀 값 검사처럼 빨리 끝나는 것을 돌린다. 0이 아닌 값으로 끝나면 커밋이 만들어지지 않는다.",
+      payload: "npx lint-staged",
+    },
+    {
+      from: "git",
+      to: "hook",
+      label: "commit-msg",
+      title: "commit-msg: 메시지 검사",
+      detail: "메시지가 담긴 파일 경로를 인자로 받는다. 형식이 틀리면 거부한다. prepare-commit-msg는 이보다 앞서 메시지 기본값(예: 브랜치 이름의 이슈 번호)을 채우는 데 쓴다.",
+      payload: "$1 = .git/COMMIT_EDITMSG",
+    },
+    {
+      from: "hook",
+      to: "dev",
+      label: "post-commit",
+      title: "커밋이 만들어진다",
+      detail: "post-commit은 결과를 바꿀 수 없고 알림 같은 뒷일에만 쓴다.",
+    },
+    {
+      from: "dev",
+      to: "hook",
+      label: "pre-push",
+      title: "pre-push: 밀기 전 마지막 검사",
+      detail: "어느 원격으로 무엇을 미는지 받는다. 테스트처럼 오래 걸리는 검사는 커밋마다가 아니라 여기서 돌린다.",
+    },
+    {
+      from: "git",
+      to: "server",
+      label: "push",
+      title: "서버 훅이 최종 판정한다",
+      detail: "서버의 pre-receive, update 훅이나 GitHub의 브랜치 보호 규칙은 클라이언트가 건너뛸 수 없다. 로컬 훅은 --no-verify로 건너뛸 수 있으니 꼭 지켜야 할 규칙은 서버와 CI에 둔다.",
+    },
+  ]}
+/>
+
+Conventional Commits 형식을 강제하는 commit-msg 훅을 직접 만들어 본다. `.git/hooks`는 저장소에 커밋되지 않으니, 팀이 같이 쓰려면 저장소 안 폴더에 두고 Git이 그 폴더를 훅 폴더로 쓰게 한다(`core.hooksPath`, 2.9+).
+
+```bash
+# 저장소 안에 훅 폴더를 만든다
+mkdir -p .githooks
+cat > .githooks/commit-msg <<'EOF'
+#!/bin/sh
+# commit-msg 훅: 첫 줄이 Conventional Commits 형식인지 검사한다
+msg_file="$1"
+first_line=$(head -n 1 "$msg_file")
+
+# Merge, Revert, fixup!/squash! 커밋은 Git이 만든 메시지라 통과시킨다
+case "$first_line" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,72}$'
+if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
+  echo "commit-msg: 첫 줄이 Conventional Commits 형식이 아니다" >&2
+  echo "  받은 메시지: $first_line" >&2
+  echo "  예) feat(cart): add coupon field" >&2
+  exit 1
+fi
+EOF
+
+# 실행 권한을 주고, 이 폴더를 훅 폴더로 쓴다
+chmod +x .githooks/commit-msg
+git config core.hooksPath .githooks
+```
+
+형식이 틀린 메시지로 커밋하면 거부된다.
+
+```bash
+git commit -m "update stuff"
+```
+
+```text
+commit-msg: 첫 줄이 Conventional Commits 형식이 아니다
+  받은 메시지: update stuff
+  예) feat(cart): add coupon field
+```
+
+종료 코드는 1이고 커밋은 만들어지지 않았다. 형식을 맞추면 통과한다.
+
+```bash
+git commit -m "feat(cart): add coupon field"
+```
+
+```text
+[main (root-commit) 593f63f] feat(cart): add coupon field
+ 2 files changed, 18 insertions(+)
+ create mode 100755 .githooks/commit-msg
+ create mode 100644 a
+```
+
+`create mode 100755`가 실행 권한까지 저장소에 기록됐다는 표시다. 권한이 없으면 Git은 훅을 조용히 건너뛰고 `hint: The '.githooks/commit-msg' hook was ignored because it's not set as executable.`이라는 안내만 낸다. 급할 때는 `git commit --no-verify`로 pre-commit과 commit-msg를 건너뛸 수 있다. 그래서 훅은 편의 장치이고, 반드시 지켜야 할 규칙은 CI에서 한 번 더 검사한다.
+
+`core.hooksPath`는 clone할 때마다 각자 설정해야 한다. JavaScript 프로젝트에서는 husky가 `npm install` 때 이 설정을 자동으로 해 주고, lefthook은 YAML 하나로 훅을 정의하고 여러 검사를 병렬로 돌린다. 둘 다 하는 일은 결국 이 훅 폴더를 채우는 것이다. 커밋 메시지 규칙 자체는 [브랜치 전략 글](/posts/git-branching-strategy)에서 다뤘다.
+
+## 파일마다 다른 규칙을 주는 .gitattributes
+
+`.gitattributes`는 경로 패턴마다 Git이 파일을 어떻게 다룰지 정한다. 저장소에 커밋되니 모두에게 같은 규칙이 적용된다.
+
+```text
+# 줄바꿈: 텍스트는 LF로 저장, 윈도우 배치 파일만 CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# 바이너리: 줄바꿈 변환도 텍스트 diff도 하지 않는다
+*.png binary
+
+# GitHub의 언어 통계와 PR diff에서 생성 파일로 접어 둔다
+pnpm-lock.yaml linguist-generated=true
+dist/** linguist-generated=true
+
+# 머지할 때 늘 내 쪽을 쓴다 (git config merge.ours.driver true 가 함께 필요하다)
+CHANGELOG.md merge=ours
+
+# diff의 @@ 머리말에 함수 대신 마크다운 제목을 보여 준다 (내장 diff 드라이버)
+*.md diff=markdown
+```
+
+`merge=ours`를 실제로 돌려 보면, 두 브랜치가 각자 `CHANGELOG.md`를 고쳐도 충돌 없이 지금 브랜치의 내용이 남는다. 이 드라이버는 Git에 이름만 정해져 있어서 `git config merge.ours.driver true`를 따로 해 줘야 한다. 브랜치마다 달라야 하는 설정 파일에 쓰지만, 상대 쪽 변경이 아무 경고 없이 버려진다는 걸 알고 써야 한다.
+
+```text
+Auto-merging CHANGELOG.md
+Merge made by the 'ort' strategy.
+```
+
+어떤 속성이 적용되는지는 `git check-attr`로 확인한다.
+
+```bash
+git check-attr -a pnpm-lock.yaml
+```
+
+```text
+pnpm-lock.yaml: linguist-generated: true
+```
+
+diff 드라이버에 `textconv`를 주면 바이너리 파일을 텍스트로 바꿔서 비교할 수 있다. 예를 들어 `*.png diff=exif`로 지정하고 `git config diff.exif.textconv exiftool`을 하면 이미지의 메타데이터 차이가 diff에 나온다. 반대로 락파일에 `-diff`를 주면 diff를 아예 "Binary files differ"로 줄이는데, 의존성 변경을 리뷰에서 못 보게 되니 `linguist-generated` 쪽이 낫다. 줄바꿈 문제를 고치는 순서는 [문제 해결 글](/posts/git-troubleshooting)에 있다.
+
+## 서브모듈과 subtree
+
+다른 저장소의 코드를 내 저장소 안에 두는 방법이 둘 있다.
+
+서브모듈은 "이 경로에는 저 저장소의 이 커밋"이라는 포인터만 기록한다. 코드는 각자의 저장소에 있고, 부모는 어느 커밋을 쓸지만 정한다.
+
+```bash
+# 서브모듈 추가: .gitmodules 파일과 커밋 포인터가 생긴다
+git submodule add git@github.com:acme/lib.git vendor/lib
+git commit -m "chore: add lib submodule"
+cat .gitmodules
+
+# 받는 쪽: clone할 때 같이 받거나, 나중에 초기화
+git clone --recurse-submodules git@github.com:matt/shop.git
+git submodule update --init --recursive
+
+# 서브모듈을 원격의 최신 커밋으로 올리고, 바뀐 포인터를 부모에 커밋
+git submodule update --remote vendor/lib
+git add vendor/lib && git commit -m "chore: bump lib"
+```
+
+```text
+[submodule "vendor/lib"]
+	path = vendor/lib
+	url = git@github.com:acme/lib.git
+```
+
+subtree는 다른 저장소의 내용을 내 저장소의 하위 폴더로 통째로 복사해 넣는다. Ubuntu의 git 패키지에 함께 들어 있다.
+
+```bash
+# lib 저장소의 main을 vendor/lib2 폴더로 가져온다. --squash는 그쪽 히스토리를 커밋 하나로 줄인다
+git subtree add --prefix=vendor/lib2 git@github.com:acme/lib.git main --squash
+
+# 나중에 업데이트 받기, 내가 고친 것을 원래 저장소로 보내기
+git subtree pull --prefix=vendor/lib2 git@github.com:acme/lib.git main --squash
+git subtree push --prefix=vendor/lib2 git@github.com:acme/lib.git my-fix
+```
+
+```text
+git fetch git@github.com:acme/lib.git main
+From github.com:acme/lib
+ * branch            main       -> FETCH_HEAD
+Added dir 'vendor/lib2'
+```
+
+```text
+d6b81bc Merge commit '65817d2a7fda5dc6eee8a14b6aafc8409d4366e0' as 'vendor/lib2'
+65817d2 Squashed 'vendor/lib2/' content from commit c34ecee
+```
+
+고르는 기준은 누가 그 코드를 받는가다. subtree는 내용이 내 저장소에 그대로 들어 있어서 받는 사람이 아무것도 몰라도 된다. clone 한 번이면 끝이고, 서브모듈이 비어 있는 사고가 없다. 대신 저장소가 커지고, 원래 저장소와 주고받는 명령이 길고 헷갈린다. 서브모듈은 부모가 정확히 어느 커밋을 쓰는지 고정되고 저장소가 가볍지만, 모든 사람이 `--recurse-submodules`를 알아야 하고, 서브모듈 안은 detached HEAD라 거기서 바로 커밋하면 길을 잃기 쉽다. 여러 프로젝트가 같은 코드를 쓰고 그 코드를 따로 버전 관리한다면 요즘은 둘 다 피하고 패키지(npm 사설 레지스트리 등)로 배포하는 경우가 많다.
+
+## 저장소를 가볍게 유지하는 gc와 maintenance
+
+Git은 커밋할 때마다 객체를 낱개 파일로 쓰고, 가끔 이것들을 압축 파일(pack)로 묶는다. `git gc`가 그 일을 하고, 대부분의 명령이 필요하면 알아서(`gc --auto`) 부른다.
+
+```bash
+# 묶고 정리하기
+git gc
+
+# 낱개 객체 수(count)와 pack 크기 확인
+git count-objects -vH | grep -E "count|size-pack"
+```
+
+```text
+count: 0
+size-pack: 76.01 KiB
+```
+
+큰 저장소에서는 `git maintenance`가 낫다. 커밋 그래프 갱신, 백그라운드 prefetch, 작은 pack 묶기 같은 일을 나눠서 정기적으로 한다. `git maintenance start`(2.31+)는 이 저장소를 등록하고 systemd 타이머나 cron으로 일정을 건다. 수동으로 한 가지만 돌릴 수도 있다(`git maintenance run --task=commit-graph`). 작은 저장소라면 신경 쓰지 않아도 된다.
+
+## 커밋에 서명하기
+
+커밋의 작성자 이름과 이메일은 아무나 아무 값으로 쓸 수 있다. 정말 그 사람이 만든 커밋인지 증명하려면 서명한다. 예전에는 GPG 키만 썼는데, Git 2.34부터는 이미 갖고 있는 SSH 키로도 서명할 수 있어서 훨씬 간단하다.
+
+```bash
+# SSH 키로 서명하도록 설정 (2.34+)
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+
+# 모든 커밋과 태그에 자동 서명
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+
+# 서명 확인
+git log --show-signature -1
+```
+
+GitHub에 같은 공개 키를 Signing key로 등록하면 커밋 옆에 Verified 표시가 붙는다. 로컬에서 `--show-signature`로 검증하려면 믿을 키 목록 파일을 `gpg.ssh.allowedSignersFile`에 지정해야 한다. 브랜치 보호 규칙의 "서명된 커밋 요구"와 함께 쓰면 서명 없는 커밋은 main에 들어갈 수 없다.
+
+## 켜 두면 편한 설정과 별칭
+
+```bash
+# 새 저장소의 기본 브랜치 이름 (2.28+)
+git config --global init.defaultBranch main
+
+# pull은 rebase로, push는 upstream 자동 연결 (2.37+), fetch는 prune까지
+git config --global pull.rebase true
+git config --global push.autoSetupRemote true
+git config --global fetch.prune true
+
+# 한 번 푼 충돌을 기억했다가 같은 충돌이 다시 나면 자동으로 적용
+git config --global rerere.enabled true
+
+# 더 읽기 좋은 diff
+git config --global diff.algorithm histogram
+
+# 충돌 표시에 공통 조상(base)까지 보여 준다 (2.35+)
+git config --global merge.conflictstyle zdiff3
+
+# 브랜치 목록을 최근 커밋 순으로
+git config --global branch.sort -committerdate
+```
+
+`rerere`(reuse recorded resolution)는 같은 충돌을 여러 번 푸는 일을 없앤다. 오래 사는 브랜치를 main에 자주 rebase하거나, 머지를 시험해 보고 되돌렸다가 다시 하는 경우에 효과가 크다. 충돌을 푸는 과정 자체는 [브랜치와 머지 글](/posts/git-branch-merge)에 있다.
+
+```text
+Auto-merging f
+CONFLICT (content): Merge conflict in f
+Recorded preimage for 'f'
+Automatic merge failed; fix conflicts and then commit the result.
+Recorded resolution for 'f'.
+```
+
+처음 충돌을 풀고 커밋하면 `Recorded resolution`으로 풀이를 저장한다. 머지를 되돌리고 같은 머지를 다시 하면 이렇게 나온다.
+
+```text
+Auto-merging f
+CONFLICT (content): Merge conflict in f
+Resolved 'f' using previous resolution.
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+파일은 이미 예전 풀이대로 고쳐져 있다. 충돌로 표시되긴 하니 확인하고 `git add`만 하면 된다. 잘못 기억한 풀이는 `git rerere forget f`로 지운다.
+
+`zdiff3`은 충돌 표시에 양쪽뿐 아니라 원래 모습(공통 조상)을 함께 보여 준다.
+
+```text
+<<<<<<< HEAD
+M
+||||||| a203de0
+base
+=======
+A
+>>>>>>> a
+```
+
+기본 스타일에서는 `M`과 `A`만 보여서 둘 중 누가 원래 값을 바꿨는지 알 수 없다. `|||||||` 아래의 `base`를 보면 양쪽이 모두 원래 값을 바꿨다는 걸 알 수 있고, 그래서 어느 한쪽을 고르는 게 아니라 두 의도를 합쳐야 한다는 판단이 선다. 22.04의 2.34라면 `zdiff3` 대신 `diff3`을 쓴다.
+
+별칭은 자주 치는 긴 명령에만 만든다.
+
+```bash
+# 그래프로 보기
+git config --global alias.lg "log --oneline --graph --decorate --all"
+
+# 짧은 상태
+git config --global alias.st "status -sb"
+
+# 안전한 강제 푸시
+git config --global alias.pushf "push --force-with-lease --force-if-includes"
+
+# 마지막 커밋 취소 (변경은 스테이징에 남긴다)
+git config --global alias.uncommit "reset --soft HEAD~1"
+
+# 설정이 어느 파일에서 왔는지까지 모두 보기
+git config --list --show-origin
+```
+
+## 도구를 꺼낼 때를 아는 것
+
+처음 상황으로 돌아가면, 200개 커밋에서 범인을 찾는 데 bisect run으로 테스트 여덟 번이 걸렸고, `git log -L`로 그 함수의 역사를 보니 원인이 바로 보였다. 고친 커밋을 운영 중인 릴리스 브랜치로 보낼 때는 cherry-pick -x를, 작업 중에 끼어든 핫픽스는 worktree를 쓰면 된다. 훅과 `.gitattributes`, 설정 몇 줄은 이런 일이 애초에 덜 생기게 해 준다.
+
+## 면접에서 나올 만한 질문
+
+### git bisect는 어떻게 동작하나요? 커밋이 1,000개면 몇 번 테스트하나요?
+
+good으로 알려 준 커밋과 bad로 알려 준 커밋 사이의 가운데 커밋을 꺼내고, 그 결과에 따라 후보 범위를 반씩 버리는 이진 탐색이다. 후보가 n개면 대략 log₂n번, 1,000개면 10번 안팎이다. `git bisect run`에 테스트 명령을 주면 종료 코드 0은 good, 125는 skip, 그 밖의 1~127은 bad로 자동 판정한다. 한 번 깨진 뒤 계속 깨져 있어야 정확히 찾는다.
+
+### cherry-pick은 무엇을 하나요? 언제 쓰고 무엇을 조심하나요?
+
+다른 브랜치의 커밋이 만든 변경을 지금 브랜치에 다시 적용해 새 커밋을 만든다. 릴리스 브랜치에 버그 수정만 옮길 때 주로 쓰고, `-x`로 원본 해시를 남겨 추적한다. 해시가 다른 별개 커밋이라 나중에 브랜치를 합칠 때 같은 줄이 또 바뀌었다면 충돌이 날 수 있다. 범위 `A..B`는 A를 포함하지 않는다는 것도 자주 틀린다.
+
+### git worktree는 stash나 clone과 비교해 무엇이 좋나요?
+
+같은 저장소의 다른 브랜치를 다른 폴더에 동시에 꺼내서, 하던 작업을 치우지 않고 핫픽스나 리뷰를 할 수 있다. clone과 달리 객체와 브랜치를 공유하니 디스크를 덜 쓰고, 한쪽에서 만든 커밋이 다른 쪽에서 바로 보인다. 같은 브랜치는 한 폴더에서만 꺼낼 수 있고, 의존성 설치는 폴더마다 따로 해야 한다.
+
+### git blame이 포매팅 커밋만 보여 줄 때는 어떻게 하나요?
+
+공백만 바뀌었으면 `-w`로 무시한다. 포매터가 따옴표나 세미콜론까지 바꿨다면 그 커밋 해시를 `.git-blame-ignore-revs`에 적고 `blame.ignoreRevsFile`로 지정해 blame에서 건너뛰게 한다. GitHub의 blame 화면도 이 파일을 인식한다. 코드를 다른 파일로 옮겼다면 `-C -C`로 원래 파일의 커밋까지 따라간다.
+
+### 이미 지워진 코드가 언제 사라졌는지 어떻게 찾나요?
+
+blame은 지금 있는 줄만 다루니 `git log -S "문자열"`을 쓴다. 그 문자열의 등장 횟수가 바뀐 커밋, 즉 생기거나 사라진 커밋을 찾아 준다. 같은 줄 안의 수정까지 찾으려면 정규식으로 diff를 거르는 `-G`를 쓰고, 함수 하나의 변천은 `git log -L :함수명:파일`로 본다.
+
+### Git 훅으로 커밋 규칙을 강제하면 충분한가요?
+
+충분하지 않다. 로컬 훅은 `.git/hooks`에 있어서 저장소에 커밋되지 않고, `--no-verify`로 언제든 건너뛸 수 있다. 팀 공유는 `core.hooksPath`나 husky, lefthook으로 하되, 반드시 지켜야 할 규칙은 CI와 서버 쪽(브랜치 보호 규칙, pre-receive 훅)에서 한 번 더 검사한다. 로컬 훅은 빨리 알려 주는 편의 장치로 본다.
+
+### 서브모듈과 subtree는 어떻게 다른가요?
+
+서브모듈은 다른 저장소의 특정 커밋을 가리키는 포인터만 기록해서 저장소가 가볍고 버전이 정확히 고정되지만, 받는 사람이 `--recurse-submodules`나 `submodule update --init`을 해야 하고 서브모듈 안이 detached HEAD라 다루기 까다롭다. subtree는 내용을 하위 폴더에 복사해 넣어서 clone 한 번이면 되지만, 저장소가 커지고 원래 저장소와 변경을 주고받는 명령이 번거롭다. 공용 코드를 독립적으로 버전 관리한다면 패키지로 배포하는 것도 대안이다.
+
+### rerere는 언제 유용한가요?
+
+같은 충돌을 반복해서 풀어야 할 때다. 오래 사는 브랜치를 main 위로 여러 번 rebase하거나, 통합 브랜치에서 머지를 시험했다가 되돌리고 다시 할 때 처음 푼 방법을 기록해 두었다가 자동으로 적용한다. `rerere.enabled true`로 켜고, 잘못 기억된 풀이는 `git rerere forget`으로 지운다. 자동 적용 뒤에도 파일은 충돌로 표시되니 확인하고 add한다.
