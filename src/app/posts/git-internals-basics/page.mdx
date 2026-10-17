@@ -1,0 +1,1152 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-internals-basics");
+
+`app.js`에 함수 하나를 추가하고 `git add app.js`를 쳤다. 커밋하기 전에 한 줄이 더 생각나서 `module.exports`를 붙이고 저장했다. 이제 커밋만 하면 된다고 생각하고 확인 삼아 `git diff`를 쳤는데, 방금 추가한 함수는 안 보이고 마지막에 쓴 한 줄만 나온다. `git status`에는 같은 파일이 "커밋할 변경"과 "커밋하지 않은 변경" 양쪽에 두 번 나온다. 이 상태에서 `git commit`을 치면 마지막 한 줄은 커밋에 들어가지 않는다.
+
+이상해 보이지만 Git은 정확히 시킨 대로 했다. `git add`는 "이 파일을 커밋 대상으로 표시해"가 아니라 "지금 이 순간의 파일 내용을 따로 떠 둬"라는 명령이다. 그 뒤에 파일을 고치면 떠 둔 것과 디스크의 파일이 따로 논다. 이걸 이해하려면 Git이 파일을 어디에, 어떤 모양으로 저장하는지부터 봐야 한다.
+
+이 글은 Git이 저장하는 객체 네 가지를 직접 열어 보고, 작업 트리·인덱스·저장소라는 세 구역 사이에서 파일이 어떻게 옮겨 다니는지 따라간 뒤, 매일 쓰는 기본 명령과 `.gitignore`, 설정까지 정리한다. 브랜치와 병합은 [다음 글](/posts/git-branch-merge)에서 이어 간다.
+
+명령과 출력은 Ubuntu 24.04 LTS의 기본 패키지인 Git 2.43.0에서 실제로 실행한 것이다. Ubuntu 22.04의 기본 패키지는 2.34.1이고, 버전에 따라 다른 부분은 그때그때 적는다. 커밋 해시는 작성자, 시각, 내용이 모두 들어간 값이라 따라 해 보면 다른 값이 나온다. 파일 내용만으로 정해지는 blob 해시는 같은 내용이면 누구 컴퓨터에서든 똑같이 나온다.
+
+```bash
+# 설치된 Git 버전 확인
+git --version
+
+# Ubuntu에서 설치 (24.04는 2.43, 22.04는 2.34가 들어온다)
+sudo apt update && sudo apt install -y git
+
+# 커밋에 들어갈 이름과 이메일 (처음 한 번)
+git config --global user.name "Matt"
+git config --global user.email "matt@example.com"
+
+# 새 저장소의 기본 브랜치 이름을 main으로 (2.28부터 있는 설정)
+git config --global init.defaultBranch main
+```
+
+```text
+git version 2.43.0
+```
+
+`init.defaultBranch`를 정하지 않으면 2.43은 여전히 `master`로 만들고 안내 문구를 띄운다. GitHub와 GitLab은 새 저장소의 기본 브랜치를 `main`으로 만드니 맞춰 두는 편이 덜 헷갈린다.
+
+## 서버 하나에 모든 걸 맡기지 않으려고
+
+Git 이전에 널리 쓰던 Subversion(SVN) 같은 도구는 중앙 서버 하나가 히스토리 전체를 갖고, 개발자 컴퓨터에는 최신 파일만 있는 구조였다. 커밋은 곧 서버에 올리는 일이라 네트워크가 끊기면 커밋을 못 하고, 로그를 보거나 옛 버전과 비교할 때도 서버에 물어봐야 했다. 서버 디스크가 날아가면 히스토리도 같이 날아간다.
+
+Git은 2005년 리눅스 커널 개발에서 나왔다. 커널 팀이 쓰던 상용 분산 버전 관리 도구 BitKeeper의 무료 사용이 끝나자 리누스 토르발스가 직접 만들었다. 목표는 수천 명이 동시에 패치를 주고받아도 빠르고, 데이터가 조용히 깨지지 않는 것이었다.
+
+분산 버전 관리에서는 `git clone`을 하면 히스토리 전체가 내 컴퓨터로 복사된다. 커밋, 로그, 비교, 브랜치는 모두 로컬에서 끝나고, 네트워크는 `push`와 `fetch`로 다른 저장소와 맞출 때만 쓴다. 저장소마다 전체 사본이 있으니 서버가 망가져도 누군가의 클론에서 되살릴 수 있다. GitHub 같은 서버는 기술적으로 특별한 존재가 아니라 "다들 거기에 맞추기로 약속한 저장소" 하나일 뿐이다.
+
+대가도 있다. 히스토리 전체를 받으니 동영상이나 디자인 원본 같은 큰 바이너리가 쌓이면 클론이 무거워진다. 그래서 큰 파일은 Git LFS로 따로 두거나, `git clone --depth 1`(얕은 클론), `--filter=blob:none`(필요할 때 파일 내용을 받는 부분 클론)으로 받는 양을 줄인다. 큰 파일을 잠가 두고 한 사람만 고치는 작업 방식도 중앙 집중형이 더 잘 맞는다.
+
+## 변경분이 아니라 스냅샷을 찍는다
+
+예전 도구들은 파일마다 "이전 버전에서 무엇이 바뀌었나"를 쌓는 방식이 많았다. Git은 커밋할 때마다 프로젝트 전체의 사진(스냅샷)을 찍는다. 그렇다고 매번 모든 파일을 새로 복사하지는 않는다. 바뀌지 않은 파일은 지난 사진의 것을 그대로 가리킨다.
+
+이게 가능한 이유는 Git이 파일을 이름이 아니라 내용으로 찾기 때문이다. 파일 내용을 해시 함수에 넣어 나온 40자리 값이 그 내용의 주소가 된다. 내용이 같으면 주소도 같으니 한 번만 저장된다. 이 방식을 내용 주소 지정(content addressing)이라고 한다.
+
+빈 저장소에서 직접 확인해 보자.
+
+```bash
+# todo-app이라는 새 저장소를 만든다
+git init todo-app
+cd todo-app
+
+# 파일 두 개를 만든다
+printf "# todo-app\n" > README.md
+printf "function add(a, b) {\n  return a + b;\n}\n" > app.js
+
+# 두 파일을 인덱스에 올리고 커밋한다
+git add README.md app.js
+git commit -m "첫 커밋: README와 app.js"
+```
+
+```text
+Initialized empty Git repository in /tmp/git-demo-1/todo-app/.git/
+[main (root-commit) 2a8cce0] 첫 커밋: README와 app.js
+ 2 files changed, 4 insertions(+)
+ create mode 100644 README.md
+ create mode 100644 app.js
+```
+
+`root-commit`은 부모가 없는 첫 커밋이라는 뜻이다. `2a8cce0`은 이 커밋의 해시 앞 일곱 자리다. 이제 이 커밋이 실제로 무엇으로 이루어져 있는지 연다.
+
+## 객체 네 가지를 직접 열어 본다
+
+`.git/objects` 안에는 네 종류의 객체가 있다. 파일 내용인 blob, 폴더 목록인 tree, 스냅샷 한 장인 commit, 그리고 이름표 중에서 정보를 담는 annotated tag다. `git cat-file`은 이 객체를 꺼내 보는 저수준 명령이다. `-t`는 종류를, `-p`는 내용을 사람이 읽을 수 있게 보여 준다.
+
+```bash
+# HEAD(지금 커밋)의 종류
+git cat-file -t HEAD
+
+# 커밋 객체의 내용
+git cat-file -p HEAD
+
+# 그 커밋이 가리키는 tree의 내용 (^{tree}는 "이 커밋의 tree")
+git cat-file -p 'HEAD^{tree}'
+
+# tree가 가리키는 blob, 즉 app.js의 내용
+git cat-file -p HEAD:app.js
+```
+
+```text
+commit
+
+tree e330fc9cf3e0520af90cd1e2fa6f38c6dde5afb4
+author Matt <matt@example.com> 1792198860 +0900
+committer Matt <matt@example.com> 1792198860 +0900
+
+첫 커밋: README와 app.js
+
+100644 blob 3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b	README.md
+100644 blob 86eb6d1316ee4af8b4b9709edbf12ea37e170244	app.js
+
+function add(a, b) {
+  return a + b;
+}
+```
+
+커밋 객체에는 파일 내용이 없다. 최상위 tree의 해시, 작성자와 시각, 메시지가 전부다. tree에는 파일마다 모드(`100644`는 일반 파일, `100755`는 실행 파일, `040000`은 하위 폴더), 종류, 해시, 이름이 한 줄씩 있다. 파일 이름은 blob이 아니라 tree에 있다. 그래서 내용은 그대로 두고 이름만 바꾸면 blob은 새로 생기지 않고 tree만 새로 생긴다.
+
+`sub` 함수를 추가해서 두 번째 커밋을 만든 뒤 그 커밋을 열면 `parent` 줄이 하나 생긴다.
+
+```bash
+# 두 번째 커밋 객체
+git cat-file -p 06e8251
+
+# 두 번째 커밋의 tree
+git cat-file -p '06e8251^{tree}'
+```
+
+```text
+tree fa9a1c6a28eb0336981cddc734ae59598750dbb6
+parent 2a8cce00ee30d50dea8d6c5219751694fe7827af
+author Matt <matt@example.com> 1792198920 +0900
+committer Matt <matt@example.com> 1792198920 +0900
+
+sub 함수 추가
+
+100644 blob 3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b	README.md
+100644 blob 80cae42e4faff29c6ff21dcea21369e0fbe6cdb1	app.js
+```
+
+README.md의 blob이 첫 커밋과 똑같은 `3a928f9`다. 내용이 안 바뀌었으니 같은 객체를 가리킨다. app.js만 `86eb6d1`에서 `80cae42`로 바뀌었다. 아래 그림은 두 커밋이 객체를 어떻게 나눠 갖는지 보여 준다. 점이 흐르는 방향이 "가리킨다"는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="두 번째 커밋은 첫 커밋을 부모로 가리키고, 바뀌지 않은 README.md의 blob은 함께 쓴다"
+  nodes={[
+    { id: "c2", label: "commit 06e8251", sub: "sub 함수 추가", x: 105, y: 40, w: 128, h: 46 },
+    { id: "c1", label: "commit 2a8cce0", sub: "첫 커밋", x: 295, y: 40, w: 128, h: 46 },
+    { id: "t2", label: "tree fa9a1c6", sub: "두 번째 스냅샷", x: 105, y: 145, w: 120, h: 46 },
+    { id: "t1", label: "tree e330fc9", sub: "첫 스냅샷", x: 295, y: 145, w: 120, h: 46 },
+    { id: "a2", label: "blob 80cae42", sub: "app.js 새 내용", x: 62, y: 255, w: 112, h: 46 },
+    { id: "r", label: "blob 3a928f9", sub: "README.md", x: 200, y: 255, w: 112, h: 46 },
+    { id: "a1", label: "blob 86eb6d1", sub: "app.js 처음", x: 338, y: 255, w: 112, h: 46 },
+  ]}
+  edges={[
+    { from: "c2", to: "c1", label: "parent" },
+    { from: "c2", to: "t2" },
+    { from: "c1", to: "t1" },
+    { from: "t2", to: "a2" },
+    { from: "t2", to: "r" },
+    { from: "t1", to: "r" },
+    { from: "t1", to: "a1" },
+  ]}
+/>
+
+커밋은 부모를 가리키고, 부모는 또 자기 부모를 가리킨다. 이렇게 이어진 사슬이 히스토리다. 화살표가 과거 쪽으로만 향한다는 걸 기억해 두면 브랜치와 병합이 훨씬 쉬워진다. 커밋은 자식이 누구인지 모른다.
+
+커밋 객체 한 장을 조각으로 나눠 보면 이렇다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="git cat-file -p 06e8251로 본 커밋 객체"
+  base="commit"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "tree",
+      display: "tree fa9a1c6",
+      title: "이 커밋의 스냅샷",
+      description: "프로젝트 최상위 폴더의 tree 해시다. 커밋 하나에 tree는 하나만 있고, 하위 폴더는 그 tree 안에 tree로 들어 있다. 이 해시가 같으면 두 커밋의 파일 내용은 완전히 같다.",
+      required: true,
+    },
+    {
+      key: "parent",
+      display: "parent 2a8cce0",
+      title: "바로 앞 커밋",
+      description: "첫 커밋에는 이 줄이 없고, 병합 커밋에는 두 줄 이상 있다. 부모의 해시가 이 커밋 내용에 들어가니, 과거 커밋 하나를 고치면 그 뒤의 모든 커밋 해시가 연쇄적으로 바뀐다. Git 히스토리를 조용히 조작하기 어려운 이유다.",
+    },
+    {
+      key: "author",
+      display: "author Matt",
+      title: "변경을 처음 만든 사람",
+      description: "이름, 이메일, 유닉스 시각(1792198860), 시간대(+0900)가 들어간다. 이 시각은 처음 커밋했을 때의 값이고 rebase나 cherry-pick으로 커밋을 옮겨도 그대로 유지된다.",
+      code: "author Matt <matt@example.com> 1792198920 +0900",
+      required: true,
+    },
+    {
+      key: "committer",
+      display: "committer Matt",
+      title: "이 커밋 객체를 만든 사람",
+      description: "보통은 author와 같다. 남의 패치를 대신 적용하거나 rebase로 커밋을 다시 만들면 committer와 그 시각만 바뀐다. git log --format=fuller로 둘을 같이 볼 수 있다.",
+      required: true,
+    },
+    {
+      key: "message",
+      display: "sub 함수 추가",
+      title: "커밋 메시지",
+      description: "빈 줄 하나 뒤에 메시지가 온다. 첫 줄은 요약으로 50자 안팎, 그다음 빈 줄, 그 아래에 왜 바꿨는지를 쓰는 게 관례다. git log --oneline은 첫 줄만 보여 준다.",
+      required: true,
+    },
+  ]}
+/>
+
+네 번째 객체인 tag도 열어 본다. 태그에는 두 종류가 있다. `git tag v1.0`처럼 만든 가벼운 태그는 커밋 해시 하나를 적은 파일일 뿐이고, `-a`를 붙인 annotated tag는 만든 사람과 날짜, 메시지를 담은 별도 객체다.
+
+```bash
+# 메시지가 있는 태그 (tag 객체가 생긴다)
+git tag -a v1.0 -m "첫 릴리스"
+
+# 가벼운 태그 (커밋을 직접 가리키는 이름표)
+git tag lightweight-v1
+
+# 두 태그의 종류를 비교
+git cat-file -t v1.0
+git cat-file -t lightweight-v1
+
+# tag 객체의 내용
+git cat-file -p v1.0
+```
+
+```text
+tag
+commit
+object b17978b7d09b77c54a6ae592fc20ee1e764c9bed
+type commit
+tag v1.0
+tagger Matt <matt@example.com> 1792200060 +0900
+
+첫 릴리스
+```
+
+릴리스에는 annotated tag를 쓴다. `git describe`가 기본으로 annotated tag만 보고, GPG나 SSH 서명도 tag 객체에 붙는다. 가벼운 태그는 혼자 잠깐 표시해 둘 때 쓴다.
+
+## 해시는 내용에서 나온다
+
+blob의 해시는 파일 내용만으로 계산한다. 정확히는 `blob <바이트 수>` 다음에 널 문자(`\0`) 하나, 그 뒤에 파일 내용을 이어 붙인 바이트 열을 SHA-1에 넣는다. 파일 이름이나 만든 시각은 들어가지 않는다. 그래서 같은 내용이면 누구의 컴퓨터에서든 같은 해시가 나온다.
+
+```bash
+# 표준 입력으로 받은 내용의 blob 해시를 계산만 한다 (저장하지 않음)
+printf 'hello\n' | git hash-object --stdin
+
+# 파일의 blob 해시. 위 cat-file 출력의 README.md 해시와 같다
+git hash-object README.md
+```
+
+```text
+ce013625030ba8dba906f756967f9e9ca394464a
+3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b
+```
+
+`hello\n`의 blob 해시 `ce01362…`는 이 글을 읽는 사람의 컴퓨터에서도 똑같다. 아래에서 직접 만들어 보자. SHA-1 함수는 미리 넣어 두었고, `gitBlobId`만 채우면 된다. 바이트 수는 글자 수가 아니라 UTF-8로 바꾼 길이라는 데 주의한다. 한글 한 글자는 3바이트다.
+
+<CodePlayground
+  caption="Git blob 해시 직접 계산하기"
+  functionName="gitBlobId"
+  initialCode={`// 바이트 배열(Uint8Array)의 SHA-1을 40자리 16진수 문자열로
+function sha1(bytes) {
+  const ml = bytes.length;
+  const total = Math.ceil((ml + 9) / 64) * 64;
+  const msg = new Uint8Array(total);
+  msg.set(bytes);
+  msg[ml] = 0x80;
+  const view = new DataView(msg.buffer);
+  view.setUint32(total - 8, Math.floor((ml * 8) / 2 ** 32));
+  view.setUint32(total - 4, (ml * 8) >>> 0);
+  let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0;
+  const w = new Uint32Array(80);
+  const rotl = (x, n) => (x << n) | (x >>> (32 - n));
+  for (let off = 0; off < total; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4);
+    for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let i = 0; i < 80; i++) {
+      let f, k;
+      if (i < 20) { f = (b & c) | (~b & d); k = 0x5a827999; }
+      else if (i < 40) { f = b ^ c ^ d; k = 0x6ed9eba1; }
+      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc; }
+      else { f = b ^ c ^ d; k = 0xca62c1d6; }
+      const t = (rotl(a, 5) + f + e + k + w[i]) >>> 0;
+      e = d; d = c; c = rotl(b, 30) >>> 0; b = a; a = t;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+  return [h0, h1, h2, h3, h4].map((h) => h.toString(16).padStart(8, "0")).join("");
+}
+
+// 파일 내용(문자열)의 Git blob 해시
+function gitBlobId(content) {
+  // 1) content를 UTF-8 바이트로 바꾼다: new TextEncoder().encode(content)
+  // 2) 앞에 "blob " + 바이트 수 + "\\0" 을 붙인다
+  // 3) 이어 붙인 바이트 전체를 sha1에 넣는다
+  return "";
+}`}
+  solution={`function sha1(bytes) {
+  const ml = bytes.length;
+  const total = Math.ceil((ml + 9) / 64) * 64;
+  const msg = new Uint8Array(total);
+  msg.set(bytes);
+  msg[ml] = 0x80;
+  const view = new DataView(msg.buffer);
+  view.setUint32(total - 8, Math.floor((ml * 8) / 2 ** 32));
+  view.setUint32(total - 4, (ml * 8) >>> 0);
+  let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0;
+  const w = new Uint32Array(80);
+  const rotl = (x, n) => (x << n) | (x >>> (32 - n));
+  for (let off = 0; off < total; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4);
+    for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let i = 0; i < 80; i++) {
+      let f, k;
+      if (i < 20) { f = (b & c) | (~b & d); k = 0x5a827999; }
+      else if (i < 40) { f = b ^ c ^ d; k = 0x6ed9eba1; }
+      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc; }
+      else { f = b ^ c ^ d; k = 0xca62c1d6; }
+      const t = (rotl(a, 5) + f + e + k + w[i]) >>> 0;
+      e = d; d = c; c = rotl(b, 30) >>> 0; b = a; a = t;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+  return [h0, h1, h2, h3, h4].map((h) => h.toString(16).padStart(8, "0")).join("");
+}
+
+function gitBlobId(content) {
+  const encoder = new TextEncoder();
+  const body = encoder.encode(content);
+  // 글자 수(content.length)가 아니라 바이트 수(body.length)
+  const header = encoder.encode("blob " + body.length + "\\0");
+  const all = new Uint8Array(header.length + body.length);
+  all.set(header);
+  all.set(body, header.length);
+  return sha1(all);
+}`}
+  tests={[
+    { label: "hello + 줄바꿈", args: ["hello\n"], expected: "ce013625030ba8dba906f756967f9e9ca394464a" },
+    { label: "빈 파일", args: [""], expected: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" },
+    { label: "README.md", args: ["# todo-app\n"], expected: "3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b" },
+    { label: "첫 app.js", args: ["function add(a, b) {\n  return a + b;\n}\n"], expected: "86eb6d1316ee4af8b4b9709edbf12ea37e170244" },
+    { label: "한글은 바이트 수로", args: ["안녕\n"], expected: "f11e853aef637e047f1436e6143f83310b3e7540" },
+    { label: "줄바꿈 하나 차이", args: ["hello"], expected: "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0" },
+  ]}
+/>
+
+마지막 테스트가 보여 주듯 끝의 줄바꿈 하나만 달라도 해시가 완전히 달라진다. 빈 파일의 해시 `e69de29…`는 외워 둘 만하다. 빈 파일이 여러 개 있어도 저장소에는 이 blob 하나만 있다. 이 글의 예제 저장소에서 빈 `.env.example`과 빈 `logs/keep.log`가 같은 blob을 가리킨다.
+
+```bash
+# 이 글의 예제를 끝까지 진행한 뒤의 tree. 빈 파일 .env.example의 blob이 e69de29다
+git ls-tree HEAD
+```
+
+```text
+100644 blob e69de29bb2d1d6434b8b29ae775ad8c2e48c5391	.env.example
+100644 blob 041b0ceb50bfefef2e1da41dec94e3662a3da04c	.gitignore
+100644 blob a22a2da24d1ceeef3d0c2f1f4f68923f55b8d4cc	LICENSE
+100644 blob fcb755c70732e3c37a26020c6a560d40537d2c20	README.md
+100644 blob 8696ea8d15918809e635aca43f4c79f0d02ed20d	app.js
+040000 tree da3fbbc11234eb0a9983ee8d3887382469866dc0	logs
+```
+
+SHA-1은 2017년에 구글과 CWI가 실제 충돌(같은 해시가 나오는 서로 다른 PDF 두 개)을 만들어 보였다. Git은 2.13부터 그런 공격 패턴을 감지하는 SHA-1DC를 기본으로 써서 이 방식의 충돌은 막는다. 더 근본적인 해결은 SHA-256으로 바꾸는 것이다. `git init --object-format=sha256`으로 64자리 해시를 쓰는 저장소를 만들 수 있다. 2.29에 들어왔고 2.42부터는 실험 기능 딱지를 뗐지만, 기존 SHA-1 저장소와 섞어 쓸 수 없고 호스팅 서비스의 지원도 아직 제한적이라 실무 저장소는 대부분 SHA-1이다.
+
+```bash
+# SHA-256 저장소를 만들어 같은 내용의 해시를 비교해 본다
+git init --object-format=sha256 sha-repo
+cd sha-repo
+printf "hello\n" > a.txt
+git hash-object a.txt
+git rev-parse --show-object-format
+
+# 원래 저장소로 돌아간다
+cd ..
+```
+
+```text
+2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4
+sha256
+```
+
+"스냅샷을 찍으면 저장소가 금방 커지지 않나"는 질문도 여기서 답이 된다. 처음에는 객체가 하나씩 zlib으로 압축된 파일(loose object)로 쌓인다. `git gc`가 돌면, 또는 push와 fetch로 주고받을 때 Git은 객체를 packfile 하나로 묶고, 비슷한 객체끼리는 차이(delta)만 저장한다. 논리적으로는 스냅샷이고, 디스크에서는 변경분으로 압축되는 셈이다.
+
+```bash
+# 이 글의 예제를 끝까지 진행한 저장소에서 낱개 객체를 packfile로 묶는다
+# (보통은 Git이 알아서 가끔 돌린다)
+git gc -q
+
+# 낱개 객체 수와 packfile 상태
+git count-objects -v
+```
+
+```text
+count: 0
+size: 0
+in-pack: 29
+packs: 1
+size-pack: 4
+prune-packable: 0
+garbage: 0
+size-garbage: 0
+```
+
+`count`가 낱개 객체 수, `in-pack`이 packfile에 들어간 객체 수다. `size-pack`은 KiB 단위다.
+
+## .git 폴더가 저장소의 전부다
+
+`git init`이 만든 `.git` 폴더가 저장소 자체다. 이 폴더를 다른 곳에 복사하면 히스토리 전체가 옮겨 가고, 지우면 히스토리가 사라지고 파일만 남는다. 아래 출력은 첫 커밋만 있던 때에 본 것이다.
+
+```bash
+# .git 안의 주요 항목
+ls .git
+
+# 지금 어느 브랜치에 있는지
+cat .git/HEAD
+
+# 브랜치는 커밋 해시 하나를 적은 파일이다
+ls .git/refs/heads
+cat .git/refs/heads/main
+
+# 첫 커밋 직후의 객체 파일들. 해시 앞 두 자리가 폴더 이름이다
+find .git/objects -type f
+```
+
+```text
+COMMIT_EDITMSG
+HEAD
+branches
+config
+description
+hooks
+index
+info
+logs
+objects
+refs
+
+ref: refs/heads/main
+
+main
+
+2a8cce00ee30d50dea8d6c5219751694fe7827af
+
+.git/objects/2a/8cce00ee30d50dea8d6c5219751694fe7827af
+.git/objects/e3/30fc9cf3e0520af90cd1e2fa6f38c6dde5afb4
+.git/objects/86/eb6d1316ee4af8b4b9709edbf12ea37e170244
+.git/objects/3a/928f95c6e7c505c37c1e3fbf0db664a1ddbe7b
+```
+
+첫 커밋 하나에 객체가 넷이다. 커밋(`2a8cce0`), tree(`e330fc9`), blob 두 개. 앞에서 `cat-file`로 본 해시와 그대로 맞는다.
+
+각 항목이 하는 일은 이렇다.
+
+- `HEAD`: 지금 서 있는 곳. 보통은 `ref: refs/heads/main`처럼 브랜치 이름을 가리키고, 브랜치가 다시 커밋을 가리킨다.
+- `refs/heads/`: 로컬 브랜치. `refs/tags/`에는 태그가, `refs/remotes/`에는 원격 브랜치의 마지막 위치가 있다. 브랜치가 많아지면 `packed-refs` 파일 하나에 모아 두기도 한다.
+- `objects/`: 앞에서 본 네 종류의 객체.
+- `index`: 다음 커밋에 들어갈 파일 목록. 바로 아래에서 자세히 본다.
+- `logs/`: 브랜치와 HEAD가 언제 어디로 움직였는지 기록하는 reflog. 실수를 되돌릴 때 생명줄이 된다.
+- `config`: 이 저장소에만 적용되는 설정.
+- `hooks/`: 커밋 전후, 푸시 전에 자동으로 돌릴 스크립트 자리.
+
+브랜치가 파일 하나라는 사실이 중요하다. 브랜치를 만드는 건 41바이트짜리 파일 하나를 쓰는 일이라 아무리 큰 저장소에서도 순식간에 끝난다. 이 이야기는 [브랜치 글](/posts/git-branch-merge)에서 이어진다.
+
+## 파일은 세 구역을 오간다
+
+이제 처음 상황으로 돌아간다. Git에는 파일이 머무는 구역이 세 개 있다.
+
+- 작업 트리(working tree): 에디터로 열어 고치는 실제 파일들.
+- 인덱스(index): 다음 커밋에 들어갈 스냅샷의 초안. 스테이징 영역(staging area)이라고도 부른다. `.git/index` 파일 하나다.
+- 저장소(repository): 커밋된 스냅샷들. HEAD가 가리키는 커밋이 마지막으로 찍은 사진이다.
+
+`git add`는 작업 트리의 파일 내용을 blob으로 저장하고, 인덱스의 그 파일 항목이 새 blob을 가리키게 바꾼다. `git commit`은 인덱스를 그대로 tree로 만들어 커밋을 찍는다. 작업 트리는 쳐다보지도 않는다. 아래 그림에서 다음을 누르면 명령마다 세 구역의 app.js가 어느 blob을 가리키는지 바뀌는 게 보인다.
+
+<AlgoTrace
+  caption="app.js 하나가 작업 트리, 인덱스, HEAD에서 각각 어느 내용인지"
+  memoryLabel="각 구역의 app.js"
+  cells={["작업 트리", "인덱스", "HEAD"]}
+  steps={[
+    { memory: ["트리 86eb6d1", "인덱스 86eb6d1", "HEAD 86eb6d1"], caption: "첫 커밋 직후. 세 구역의 app.js가 모두 같은 blob 86eb6d1이다. git status는 깨끗하다." },
+    { pointer: 0, memory: ["트리 80cae42", "인덱스 86eb6d1", "HEAD 86eb6d1"], caption: "sub 함수를 추가하고 저장했다. 바뀐 건 작업 트리뿐이다. git status -s는 ' M'을 보여 준다." },
+    { pointer: 1, memory: ["트리 80cae42", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git add app.js. 지금 내용이 blob 80cae42로 저장되고 인덱스가 그걸 가리킨다. 상태는 'M '." },
+    { pointer: 0, memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "module.exports 한 줄을 더 쓰고 저장했다. 세 구역이 모두 다르다. 상태는 'MM'." },
+    { found: [0, 1], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff는 작업 트리와 인덱스를 비교한다. 차이는 module.exports 한 줄뿐이다." },
+    { found: [1, 2], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff --staged는 인덱스와 HEAD를 비교한다. 지금 커밋하면 들어갈 sub 함수가 보인다." },
+    { found: [0, 2], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff HEAD는 작업 트리와 HEAD를 바로 비교한다. 두 변경이 다 나온다." },
+    { pointer: 2, memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 80cae42"], caption: "git commit. 인덱스가 그대로 찍혀 HEAD가 80cae42가 된다. module.exports는 작업 트리에만 남는다." },
+  ]}
+/>
+
+같은 상황을 명령으로 재현하면 이렇다.
+
+```bash
+# sub 함수를 추가하고 인덱스에 올린다
+printf "function add(a, b) {\n  return a + b;\n}\n\nfunction sub(a, b) {\n  return a - b;\n}\n" > app.js
+git add app.js
+
+# 인덱스에 올린 뒤에 한 줄을 더 쓴다
+printf "function add(a, b) {\n  return a + b;\n}\n\nfunction sub(a, b) {\n  return a - b;\n}\n\nmodule.exports = { add, sub };\n" > app.js
+
+# 상태를 본다
+git status
+```
+
+```text
+On branch main
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	modified:   app.js
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app.js
+```
+
+`Changes to be committed`는 인덱스와 HEAD가 다르다는 뜻이고, `Changes not staged for commit`은 작업 트리와 인덱스가 다르다는 뜻이다. 한 파일이 양쪽에 다 나올 수 있다. 세 가지 diff로 각각을 확인한다.
+
+```bash
+# 작업 트리 ↔ 인덱스: 아직 add하지 않은 변경
+git diff
+
+# 인덱스 ↔ HEAD: 지금 커밋하면 들어갈 변경 (--cached와 같다)
+git diff --staged
+```
+
+```text
+diff --git a/app.js b/app.js
+index 80cae42..4b52f4f 100644
+--- a/app.js
++++ b/app.js
+@@ -5,3 +5,5 @@ function add(a, b) {
+ function sub(a, b) {
+   return a - b;
+ }
++
++module.exports = { add, sub };
+
+diff --git a/app.js b/app.js
+index 86eb6d1..80cae42 100644
+--- a/app.js
++++ b/app.js
+@@ -1,3 +1,7 @@
+ function add(a, b) {
+   return a + b;
+ }
++
++function sub(a, b) {
++  return a - b;
++}
+```
+
+두 출력의 `index` 줄을 보면 그림과 똑같다. 첫 번째는 `80cae42..4b52f4f`(인덱스 → 작업 트리), 두 번째는 `86eb6d1..80cae42`(HEAD → 인덱스)다. `@@ -5,3 +5,5 @@`는 원래 파일의 5번째 줄부터 3줄이 새 파일에서 5번째 줄부터 5줄이 됐다는 뜻이다.
+
+인덱스 안을 직접 보는 명령도 있다. `git ls-files -s`는 인덱스에 들어 있는 파일마다 모드, blob 해시, 스테이지 번호, 경로를 보여 준다. 스테이지 번호는 평소엔 0이고, 병합 충돌 중에만 1·2·3이 나온다.
+
+```bash
+# 인덱스의 내용
+git ls-files -s
+
+# 인덱스에 올라간 버전의 파일 내용 (콜론 앞이 비면 인덱스)
+git show :app.js
+```
+
+```text
+100644 3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b 0	README.md
+100644 80cae42e4faff29c6ff21dcea21369e0fbe6cdb1 0	app.js
+
+function add(a, b) {
+  return a + b;
+}
+
+function sub(a, b) {
+  return a - b;
+}
+```
+
+인덱스는 "바뀐 파일 목록"이 아니라 다음 커밋의 전체 파일 목록이다. 바뀌지 않은 README.md도 들어 있다. 그래서 `git commit`은 작업 트리를 다시 훑을 필요 없이 인덱스만 보고 tree를 만든다.
+
+처음 상황의 해결법은 둘 중 하나다. 마지막 한 줄까지 커밋에 넣고 싶으면 `git add app.js`를 한 번 더 하고 커밋한다. 수정한 파일 전체를 넣을 거라면 `git commit -a`(추적 중인 파일을 모두 add하고 커밋)를 쓴다. `-a`는 새로 만든 파일(untracked)은 넣지 않는다.
+
+```bash
+# 마지막 변경까지 인덱스에 올리고 커밋
+git add app.js
+git commit -m "모듈로 내보내기"
+```
+
+이 흐름을 객체 수준에서 정리하면 아래 그림과 같다. 다음을 누르면 `git add`부터 `git commit`까지 어떤 객체가 언제 생기는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="git add와 git commit이 .git 안에서 하는 일"
+  actors={[
+    { id: "wt", label: "작업 트리" },
+    { id: "idx", label: "인덱스" },
+    { id: "odb", label: "objects" },
+    { id: "ref", label: "refs/heads" },
+  ]}
+  steps={[
+    {
+      from: "wt",
+      to: "odb",
+      label: "blob 80cae42",
+      title: "git add가 파일 내용을 blob으로 쓴다",
+      detail: "add하는 순간 파일 내용이 압축되어 objects에 저장된다. 커밋을 하지 않아도 객체는 이미 있다. 그래서 add만 해 두고 날린 파일도 나중에 git fsck로 찾아낼 수 있다.",
+      payload: ".git/objects/80/cae42e4faff29c6ff21dcea21369e0fbe6cdb1",
+    },
+    {
+      from: "odb",
+      to: "idx",
+      label: "app.js → 80cae42",
+      title: "인덱스의 항목을 바꾼다",
+      detail: "인덱스에서 app.js 줄이 새 blob을 가리키게 된다. 파일 크기와 수정 시각도 함께 적어 두어서, 다음 git status가 파일을 다시 해시하지 않고 바뀌었는지 빨리 판단한다.",
+      payload: "100644 80cae42e4faff29c6ff21dcea21369e0fbe6cdb1 0\tapp.js",
+    },
+    {
+      from: "idx",
+      to: "odb",
+      label: "tree fa9a1c6",
+      title: "git commit이 인덱스로 tree를 만든다",
+      detail: "인덱스의 목록을 폴더 단위 tree 객체로 바꿔 저장한다. 작업 트리는 보지 않는다. add하지 않은 변경이 커밋에 안 들어가는 이유가 이 단계에 있다.",
+    },
+    {
+      from: "odb",
+      to: "odb",
+      label: "commit 06e8251",
+      title: "커밋 객체를 쓴다",
+      detail: "tree 해시, 부모 커밋(지금 HEAD), 작성자, 시각, 메시지를 담은 커밋 객체를 만든다. 부모 해시가 들어가므로 히스토리가 한 줄로 이어진다.",
+      payload: "tree fa9a1c6a28eb0336981cddc734ae59598750dbb6\nparent 2a8cce00ee30d50dea8d6c5219751694fe7827af\nauthor Matt <matt@example.com> 1792198920 +0900\n...\n\nsub 함수 추가",
+    },
+    {
+      from: "odb",
+      to: "ref",
+      label: "main → 06e8251",
+      title: "브랜치 파일을 새 해시로 바꾼다",
+      detail: "HEAD가 가리키는 브랜치(main)의 파일 내용을 새 커밋 해시로 덮어쓴다. 이 이동은 .git/logs의 reflog에도 한 줄 남는다. 커밋은 이걸로 끝이다.",
+      payload: "$ cat .git/refs/heads/main\n06e8251...",
+    },
+  ]}
+/>
+
+## 파일의 상태는 두 글자로 읽는다
+
+`git status`의 긴 출력은 안내 문구가 많아서 매일 보기엔 길다. `-s`(short)를 붙이면 파일마다 두 글자로 줄여 준다. 첫 글자는 인덱스와 HEAD의 차이, 둘째 글자는 작업 트리와 인덱스의 차이다.
+
+```bash
+# 짧은 형식
+git status -s
+
+# 브랜치 정보까지 한 줄 더 (원격보다 앞섰는지, 뒤처졌는지)
+git status -sb
+```
+
+```text
+MM app.js
+
+## main
+ M app.js
+```
+
+자주 보는 조합은 이렇다.
+
+- `??`: 추적하지 않는(untracked) 새 파일. Git이 아직 모른다.
+- `A `: 새 파일을 인덱스에 올렸다.
+- ` M`: 고쳤지만 아직 add하지 않았다.
+- `M `: 고친 것을 add했다. 이대로 커밋하면 들어간다.
+- `MM`: add한 뒤에 또 고쳤다. 처음 상황이 이것이다.
+- `D ` / ` D`: 삭제를 인덱스에 반영했다 / 파일만 지웠다.
+- `UU`: 병합 충돌 중인 파일.
+
+파일 하나의 일생으로 보면 untracked → staged → committed(깨끗함) → modified → staged → committed를 오간다. `.gitignore`에 걸린 파일은 이 목록에 아예 나오지 않는다(ignored).
+
+변경 중 일부만 커밋하고 싶을 때는 `git add -p`(patch)를 쓴다. 바뀐 덩어리(hunk)마다 넣을지 물어본다.
+
+```bash
+# 바뀐 덩어리마다 y(넣기) / n(건너뛰기) / s(더 잘게 쪼개기) / q(그만)를 고른다
+git add -p app.js
+```
+
+```text
+diff --git a/app.js b/app.js
+index 4b52f4f..8696ea8 100644
+--- a/app.js
++++ b/app.js
+@@ -6,4 +6,8 @@ function sub(a, b) {
+   return a - b;
+ }
+ 
+-module.exports = { add, sub };
++function mul(a, b) {
++  return a * b;
++}
++
++module.exports = { add, sub, mul };
+(1/1) Stage this hunk [y,n,q,a,d,e,?]? 
+```
+
+`y`로 이 덩어리를 넣으면 app.js만 인덱스에 올라가고, 같이 고친 README.md는 작업 트리에 남는다. `git status -s`가 `M  app.js`와 ` M README.md`로 갈린다. 디버깅용 `console.log`는 빼고 기능만 커밋하거나, 한 파일에 섞인 두 가지 변경을 두 커밋으로 나눌 때 쓴다. 덩어리가 붙어 있어 `s`로 안 쪼개지면 `e`로 직접 고칠 수 있다.
+
+## 커밋하고 히스토리를 읽는 명령
+
+새 프로젝트는 `git init`, 이미 있는 저장소는 `git clone`으로 시작한다. 클론하면 원격 저장소가 `origin`이라는 이름으로 등록되고, 원격의 기본 브랜치가 로컬 브랜치로 체크아웃된다.
+
+```bash
+# 원격 저장소 복제 (보통은 https나 ssh 주소. 여기서는 로컬 경로)
+git clone todo-app todo-clone
+cd todo-clone
+
+# 원격과 비교한 상태
+git status -sb
+
+# 로컬과 원격 추적 브랜치 목록
+git branch -a
+
+# 다시 원래 저장소로
+cd ../todo-app
+```
+
+```text
+Cloning into 'todo-clone'...
+done.
+
+## main...origin/main
+
+* main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/feature/div
+  remotes/origin/main
+```
+
+`remotes/origin/...`는 원격 브랜치가 마지막으로 어디 있었는지 기억해 둔 사본이다. 원격과 주고받는 이야기는 [원격 협업 글](/posts/git-remote-collaboration)에서 다룬다.
+
+커밋 메시지는 `-m`으로 바로 쓰거나, 빼면 에디터가 열린다. `-v`를 붙이면 에디터 아래에 이번 커밋의 diff가 함께 나와서 무엇을 커밋하는지 보면서 메시지를 쓸 수 있다. 방금 한 커밋을 고치는 `--amend`는 아래 `.gitignore` 부분에서 직접 써 본다.
+
+히스토리를 볼 때는 `git log`에 옵션을 붙여 필요한 것만 본다.
+
+```bash
+# 한 줄씩, 브랜치 갈래와 이름표까지, 모든 브랜치
+git log --oneline --graph --decorate --all
+
+# 마지막 커밋에서 바뀐 파일과 줄 수
+git log --stat -1
+```
+
+```text
+* d953796 (HEAD -> main) 라이선스 추가
+| * deb48d4 (feature/div) div 함수
+|/  
+* b490154 mul 함수와 README 설명 추가
+* 0cb225b 모듈로 내보내기
+* 06e8251 sub 함수 추가
+* 2a8cce0 첫 커밋: README와 app.js
+
+commit d9537965efb063fab0b30321fc2052806082379a
+Author: Matt <matt@example.com>
+Date:   Sat Oct 17 10:06:00 2026 +0900
+
+    라이선스 추가
+
+ LICENSE | 1 +
+ 1 file changed, 1 insertion(+)
+```
+
+`--graph`는 위가 최신이다. `*`는 커밋, `|`는 이어지는 갈래, `|/`는 옆 갈래가 그 아래 커밋에서 갈라져 나왔다는 표시다. `(HEAD -> main)`은 HEAD가 main을 가리키고 main이 이 커밋에 있다는 뜻이다. 매번 치기 길어서 별칭으로 등록해 두는 경우가 많다. 아래 설정 부분에서 다룬다.
+
+경로를 붙이면 그 파일을 바꾼 커밋만 보고, `-p`를 더하면 변경 내용까지 나온다. `--` 뒤에 경로를 쓰는 건 브랜치 이름과 파일 이름이 겹칠 때 헷갈리지 않게 하려는 것이다.
+
+```bash
+# README.md를 바꾼 마지막 커밋과 그 diff
+git log -p -1 -- README.md
+```
+
+```text
+commit b49015474bb12ab040966fedc9247733d8c19663
+Author: Jane <jane@example.com>
+Date:   Sat Oct 17 10:04:00 2026 +0900
+
+    mul 함수와 README 설명 추가
+
+diff --git a/README.md b/README.md
+index 3a928f9..fcb755c 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,3 @@
+ # todo-app
++
++계산 함수 모음
+```
+
+무언가를 찾을 때 쓰는 옵션도 알아 두면 좋다.
+
+```bash
+# 코드에 "mul("이 처음 생기거나 없어진 커밋 (pickaxe)
+git log --oneline -S"mul("
+
+# 작성자로 거르기 (부분 일치)
+git log --oneline --author=Jane
+
+# 날짜로 거르기. "2 weeks ago" 같은 표현도 된다
+git log --oneline --since="2026-10-17 10:03"
+
+# 원하는 형식으로 출력
+git log --format="%h %an %ad %s" --date=short
+```
+
+```text
+b490154 mul 함수와 README 설명 추가
+
+b490154 mul 함수와 README 설명 추가
+
+d953796 라이선스 추가
+b490154 mul 함수와 README 설명 추가
+0cb225b 모듈로 내보내기
+
+d953796 Matt 2026-10-17 라이선스 추가
+b490154 Jane 2026-10-17 mul 함수와 README 설명 추가
+0cb225b Matt 2026-10-17 모듈로 내보내기
+06e8251 Matt 2026-10-17 sub 함수 추가
+2a8cce0 Matt 2026-10-17 첫 커밋: README와 app.js
+```
+
+`-S`는 그 문자열이 나오는 횟수가 바뀐 커밋만 찾는다. "이 함수는 언제 생겼지", "이 설정값은 누가 지웠지"를 찾을 때 가장 빠르다. 줄 안에서 값만 바뀐 경우까지 찾으려면 정규식으로 diff를 훑는 `-G`를 쓴다. 특정 줄을 누가 마지막으로 바꿨는지는 `git blame -L 5,8 app.js`로 본다.
+
+`git show`는 커밋 하나를 자세히 보거나, 특정 시점의 파일을 꺼낼 때 쓴다. `HEAD~1`은 HEAD의 부모, `HEAD~3`은 부모를 세 번 거슬러 간 커밋이다.
+
+```bash
+# 한 커밋의 메타데이터와 바뀐 파일
+git show --stat HEAD~1
+
+# 세 커밋 전의 app.js 내용 (파일을 바꾸지 않고 화면에만)
+git show HEAD~3:app.js
+```
+
+```text
+commit b49015474bb12ab040966fedc9247733d8c19663
+Author: Jane <jane@example.com>
+Date:   Sat Oct 17 10:04:00 2026 +0900
+
+    mul 함수와 README 설명 추가
+
+ README.md | 2 ++
+ app.js    | 6 +++++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+function add(a, b) {
+  return a + b;
+}
+
+function sub(a, b) {
+  return a - b;
+}
+```
+
+## 올리지 않을 파일은 .gitignore로
+
+`node_modules`, 빌드 결과, 로그, 비밀 값이 든 `.env`는 저장소에 넣지 않는다. 무시할 패턴을 `.gitignore`에 적으면 `git status`에 나오지 않고, `git add .`로도 들어가지 않는다.
+
+```bash
+# 무시할 파일이 섞인 상태를 만든다
+mkdir -p node_modules/lodash logs build src/build
+touch node_modules/lodash/index.js logs/app.log logs/keep.log build/out.js src/build/x.js .env .env.example debug.log
+
+# -uall: 폴더로 뭉뚱그리지 않고 파일을 하나씩 보여 준다
+git status -s -uall
+```
+
+```text
+?? .env
+?? .env.example
+?? build/out.js
+?? debug.log
+?? logs/app.log
+?? logs/keep.log
+?? node_modules/lodash/index.js
+?? src/build/x.js
+```
+
+`.gitignore`를 이렇게 쓴다.
+
+```text
+# 의존성
+node_modules/
+
+# 로그는 무시하되 keep.log만 남긴다
+*.log
+!logs/keep.log
+
+# 루트의 build 폴더만
+/build/
+
+# 비밀 값. 예시 파일은 올린다
+.env
+!.env.example
+```
+
+```bash
+# 다시 상태를 본다
+git status -s -uall
+```
+
+```text
+?? .env.example
+?? .gitignore
+?? logs/keep.log
+?? src/build/x.js
+```
+
+패턴 규칙을 정리하면 이렇다.
+
+- 슬래시가 없는 패턴(`*.log`, `.env`)은 어느 깊이에서든 이름이 맞으면 걸린다.
+- 끝에 `/`를 붙이면(`node_modules/`) 폴더에만 걸린다. 같은 이름의 파일은 무시하지 않는다.
+- 앞에 `/`를 붙이면(`/build/`) 그 `.gitignore`가 있는 폴더 기준으로만 맞춘다. 그래서 `src/build/x.js`는 살아남았다.
+- `**/`는 아무 깊이의 폴더(`**/temp`), `/**`는 그 안의 모든 것(`docs/**`)이다.
+- `!`는 앞에서 무시한 것을 다시 살린다.
+
+`!`에는 함정이 하나 있다. 폴더 자체를 무시하면 그 안의 파일은 `!`로 되살릴 수 없다. Git이 무시한 폴더 안으로는 아예 들어가 보지 않기 때문이다.
+
+```bash
+# 폴더를 통째로 무시하고 그 안의 파일 하나를 살리려 하면
+printf 'logs/\n!logs/keep.log\n' > .gitignore
+git status -s -uall
+
+# 폴더가 아니라 폴더 안의 내용을 무시하면 살릴 수 있다
+printf 'logs/*\n!logs/keep.log\n' > .gitignore
+git status -s -uall
+```
+
+```text
+?? .gitignore
+
+?? .gitignore
+?? logs/keep.log
+```
+
+어떤 파일이 왜 무시되는지 모르겠으면 `git check-ignore -v`로 묻는다. 어느 파일의 몇 번째 줄 패턴에 걸렸는지 알려 준다. 출력에 안 나오는 파일은 무시되지 않는다는 뜻이다. `!`로 되살린 파일은 그 `!` 줄이 나온다.
+
+```bash
+# 파일마다 어떤 규칙에 걸리는지
+git check-ignore -v debug.log logs/keep.log node_modules/lodash/index.js src/build/x.js build/out.js
+```
+
+```text
+.gitignore:5:*.log	debug.log
+.gitignore:6:!logs/keep.log	logs/keep.log
+.gitignore:2:node_modules/	node_modules/lodash/index.js
+.gitignore:9:/build/	build/out.js
+```
+
+가장 흔한 실수는 이미 커밋한 파일을 나중에 `.gitignore`에 넣는 경우다. `.gitignore`는 추적하지 않는 파일에만 적용된다. 이미 추적 중인 파일은 계속 변경이 잡힌다.
+
+```bash
+# config.local을 먼저 커밋해 둔 상태에서
+echo "SECRET=abc" > config.local
+git add config.local
+git commit -m "로컬 설정"
+
+# 나중에 무시 목록에 넣고 내용을 바꾸면
+echo "config.local" >> .gitignore
+echo "SECRET=xyz" > config.local
+git status -s
+
+# 인덱스에서만 빼고 디스크의 파일은 남긴다
+git rm --cached config.local
+git status -s
+```
+
+```text
+ M config.local
+?? .gitignore
+
+rm 'config.local'
+D  config.local
+?? .gitignore
+```
+
+`git rm --cached`는 인덱스에서만 지운다. 이걸 커밋하면 다음 커밋부터 그 파일은 빠지고, 내 디스크의 파일은 남는다. 단, 지난 커밋에는 여전히 들어 있다. 비밀 값이었다면 히스토리에서 지우는 작업과 키 교체가 따로 필요하다. 그 방법은 [되돌리기 글](/posts/git-undo)에서 다룬다. 다른 사람이 이 커밋을 pull하면 그쪽 디스크에서는 파일이 지워진다는 것도 알아 둔다.
+
+이제 `.gitignore`와 함께 커밋한다. 커밋하고 나서 메시지가 마음에 안 들면 `--amend`로 마지막 커밋을 다시 만든다. 빠뜨린 파일이 있으면 add한 뒤 `--amend --no-edit`으로 메시지는 그대로 두고 내용만 보탠다.
+
+```bash
+# .gitignore, 예시 env, 남길 로그 파일, config.local 삭제를 함께 커밋
+git add .gitignore .env.example logs/keep.log
+git commit -m ".gitignore 추가"
+
+# 메시지를 고쳐서 마지막 커밋을 다시 만든다
+git commit --amend -m ".gitignore와 예시 env 추가"
+git log --oneline -2
+```
+
+```text
+[main c2ee5c2] .gitignore 추가
+ 4 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 .env.example
+ create mode 100644 .gitignore
+ delete mode 100644 config.local
+ create mode 100644 logs/keep.log
+
+[main b17978b] .gitignore와 예시 env 추가
+ 4 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 .env.example
+ create mode 100644 .gitignore
+ delete mode 100644 config.local
+ create mode 100644 logs/keep.log
+
+b17978b .gitignore와 예시 env 추가
+7260ee7 로컬 설정
+```
+
+해시가 `c2ee5c2`에서 `b17978b`로 바뀌었다. amend는 커밋을 고치는 게 아니라 같은 부모 위에 새 커밋을 만들고 브랜치를 옮기는 일이다. 메시지가 커밋 객체에 들어가 있으니 메시지만 바꿔도 해시가 달라진다. 그래서 이미 푸시한 커밋을 amend하면 원격과 어긋난다. 되돌리기 전반은 [되돌리기 글](/posts/git-undo)에서 정리한다.
+
+무시 규칙을 둘 곳은 세 군데다.
+
+- 저장소의 `.gitignore`: 팀 모두에게 적용된다. 커밋해서 공유한다.
+- `.git/info/exclude`: 나만 쓰는 이 저장소 전용 규칙. 커밋되지 않는다.
+- 전역 무시 파일: 모든 저장소에 적용되는 나만의 규칙. 기본 위치는 `~/.config/git/ignore`이고, `core.excludesFile`로 바꿀 수 있다. `.DS_Store`나 `.idea/`처럼 내 OS와 에디터가 만드는 파일은 프로젝트 `.gitignore`보다 여기에 두는 게 맞다.
+
+```bash
+# 전역 무시 파일을 만든다
+mkdir -p ~/.config/git
+printf '.DS_Store\n.idea/\n*.swp\n' >> ~/.config/git/ignore
+```
+
+빈 폴더는 Git이 추적하지 못한다. Git은 파일만 저장하고 폴더는 tree로만 존재하기 때문이다. 빈 폴더를 남겨야 하면 안에 `.gitkeep` 같은 빈 파일을 하나 두는 관례가 있다.
+
+## 설정은 세 겹으로 쌓인다
+
+`git config`는 세 단계에 저장된다. 아래로 갈수록 범위가 좁고 우선순위가 높다.
+
+- `--system`: 이 컴퓨터의 모든 사용자. `/etc/gitconfig`.
+- `--global`: 나의 모든 저장소. `~/.gitconfig` 또는 `~/.config/git/config`.
+- `--local`: 이 저장소만. `.git/config`. 옵션을 안 붙이면 기본이 이것이다.
+
+회사 저장소에서만 회사 이메일을 쓰고 싶을 때 이 구조가 쓸모 있다.
+
+```bash
+# 이 저장소에서만 다른 이메일을 쓴다
+git config --local user.email matt@company.example
+
+# 실제로 적용되는 값과 그 값이 어느 파일에서 왔는지
+git config --show-origin user.email
+
+# 같은 키가 여러 단계에 있으면 전부, 단계 이름과 함께
+git config --show-scope --get-all user.email
+
+# 설정 전체와 출처
+git config --list --show-origin
+```
+
+```text
+file:.git/config	matt@company.example
+
+global	matt@example.com
+local	matt@company.example
+
+file:/tmp/git-demo-home/.gitconfig	user.name=Matt
+file:/tmp/git-demo-home/.gitconfig	user.email=matt@example.com
+file:/tmp/git-demo-home/.gitconfig	init.defaultbranch=main
+file:.git/config	core.repositoryformatversion=0
+file:.git/config	core.filemode=true
+file:.git/config	core.bare=false
+file:.git/config	core.logallrefupdates=true
+file:.git/config	user.email=matt@company.example
+```
+
+"커밋 작성자가 왜 이 이메일로 찍히지?"를 물어볼 때 `--show-origin`이 바로 답을 준다. 이 예시는 `HOME`을 임시 폴더로 바꿔서 실행해 전역 파일 경로가 `/tmp/...`로 나왔다. 보통은 `~/.gitconfig`가 나온다. 폴더별로 설정을 나누고 싶으면 전역 설정에 `[includeIf "gitdir:~/work/"]`를 두고 회사용 설정 파일을 따로 불러오는 방법도 있다.
+
+자주 치는 명령은 별칭으로 줄인다.
+
+```bash
+# git lg: 그래프 로그
+git config --global alias.lg "log --oneline --graph --decorate --all"
+
+# git st: 짧은 상태
+git config --global alias.st "status -sb"
+
+# 등록한 별칭 확인
+git config --get-regexp alias
+```
+
+```text
+alias.lg log --oneline --graph --decorate --all
+alias.st status -sb
+```
+
+여기에 함께 켜 두면 편한 설정이 몇 가지 있다. `git config --global diff.colorMoved zebra`는 위치만 옮긴 줄을 다른 색으로 보여 준다. `git config --global commit.verbose true`는 커밋할 때마다 `-v`를 붙인 것처럼 diff를 에디터에 띄운다. `git config --global core.editor "code --wait"`는 에디터를 VS Code로 바꾼다. `--wait`를 빼면 에디터가 열리자마자 Git이 빈 메시지로 보고 커밋을 취소한다.
+
+## 줄바꿈 문자가 diff 전체를 바꿀 때
+
+Windows는 줄 끝에 CRLF(`\r\n`), 리눅스와 macOS는 LF(`\n`)를 쓴다. 섞이면 내용은 그대로인데 모든 줄이 바뀐 것처럼 diff가 나온다. `core.autocrlf`가 이 변환을 맡는다.
+
+- `true`: 저장소에는 LF로 넣고, 꺼낼 때 CRLF로 바꾼다. Windows에서 쓴다.
+- `input`: 넣을 때만 CRLF를 LF로 바꾸고, 꺼낼 때는 그대로 둔다. 리눅스와 macOS에서 쓴다.
+- `false`: 아무것도 바꾸지 않는다.
+
+```bash
+# 넣을 때 CRLF → LF
+git config core.autocrlf input
+
+# CRLF 파일을 만들어 add한다
+printf 'line1\r\nline2\r\n' > win.txt
+git add win.txt
+
+# 인덱스(i/)와 작업 트리(w/)의 줄바꿈을 비교한다
+git ls-files --eol win.txt
+```
+
+```text
+warning: in the working copy of 'win.txt', CRLF will be replaced by LF the next time Git touches it
+i/lf    w/crlf  attr/                 	win.txt
+```
+
+`i/lf w/crlf`는 인덱스에는 LF로 들어갔고 작업 트리 파일은 아직 CRLF라는 뜻이다. 사람마다 `core.autocrlf`를 다르게 두면 또 어긋나므로, 팀에서는 저장소에 `.gitattributes`를 두고 `* text=auto eol=lf`처럼 규칙을 고정하는 편이 확실하다. 셸 스크립트가 CRLF로 체크아웃되면 리눅스 컨테이너에서 `/bin/bash^M: bad interpreter` 같은 오류가 나니, `*.sh text eol=lf`는 따로 적어 두기도 한다.
+
+## 다시 정리하면
+
+Git은 파일 내용을 해시로 이름 붙인 blob, 폴더 목록인 tree, 스냅샷 한 장인 commit을 `.git/objects`에 쌓고, 브랜치는 그 커밋을 가리키는 파일 하나로 둔다. 작업 트리에서 고친 내용은 `git add`로 인덱스에 떠 두어야 커밋에 들어가고, 커밋은 작업 트리가 아니라 인덱스를 찍는다. 처음의 `git diff`가 마지막 한 줄만 보여 준 이유는 그 명령이 작업 트리와 인덱스를 비교했기 때문이다. 다음 글에서는 브랜치가 이 커밋 사슬 위에서 어떻게 움직이고 합쳐지는지 본다.
+
+## 면접에서 나올 만한 질문
+
+### Git과 SVN 같은 중앙 집중형 버전 관리의 차이는 무엇인가요?
+
+Git은 클론마다 히스토리 전체를 갖는 분산형이라 커밋, 로그, 비교, 브랜치가 모두 로컬에서 네트워크 없이 끝난다. 원격 서버는 저장소 사본 중 하나일 뿐이고, 서버가 망가져도 아무 클론에서나 복구할 수 있다. 중앙 집중형은 서버 하나가 히스토리를 갖고 커밋이 곧 서버 반영이라 단순하고 파일 잠금 같은 통제가 쉽지만, 서버와 네트워크에 묶인다. 큰 바이너리가 많은 저장소에서는 Git도 LFS나 부분 클론을 함께 쓴다.
+
+### Git은 변경분(diff)을 저장하나요, 스냅샷을 저장하나요?
+
+논리적으로는 커밋마다 프로젝트 전체의 스냅샷을 저장한다. 커밋은 최상위 tree를 가리키고, tree는 파일 내용인 blob들을 가리킨다. 바뀌지 않은 파일은 같은 blob을 그대로 가리키니 중복 저장되지 않는다. 디스크에서는 gc나 전송 때 packfile로 묶으면서 비슷한 객체끼리 delta 압축을 하지만, 그건 저장 방식의 최적화이고 모델은 스냅샷이다.
+
+### Git의 객체 종류와 각각의 역할을 설명해 주세요.
+
+blob은 파일 내용만 담고 이름은 모른다. tree는 폴더 하나의 목록으로, 항목마다 모드·종류·해시·이름을 담는다. commit은 최상위 tree, 부모 커밋, 작성자와 커미터, 메시지를 담는다. annotated tag는 특정 객체를 가리키며 태그한 사람과 메시지, 서명을 담는다. 네 객체 모두 "종류 크기\0내용"의 SHA-1 해시로 이름이 정해져서, 내용이 같으면 같은 객체가 된다.
+
+### 커밋 해시는 무엇으로 결정되나요? 메시지만 고쳐도 바뀌나요?
+
+커밋 객체 전체, 즉 tree 해시, 부모 해시, author와 committer(시각 포함), 메시지의 해시라서 메시지만 고쳐도 바뀐다. 부모 해시가 들어가므로 과거 커밋 하나를 바꾸면 그 뒤 모든 커밋의 해시가 바뀐다. 그래서 amend나 rebase는 커밋을 고치는 게 아니라 새 커밋을 만드는 일이고, 이미 공유한 커밋에 하면 다른 사람의 히스토리와 어긋난다.
+
+### 스테이징 영역(인덱스)은 왜 있나요?
+
+다음 커밋의 스냅샷을 미리 조립하는 곳이다. 작업 트리에 여러 변경이 섞여 있어도 `git add -p`로 일부만 골라 의미 있는 단위로 커밋을 나눌 수 있다. 내부적으로는 다음 커밋의 전체 파일 목록과 blob 해시, 파일 시각을 담은 `.git/index` 파일이라, 커밋할 때 작업 트리를 다시 해시하지 않고 바로 tree를 만들고 status도 빠르게 판단한다. 병합 충돌 중에는 파일마다 base·ours·theirs 세 버전을 스테이지 1·2·3으로 담는 역할도 한다.
+
+### git add 후에 파일을 또 수정하면 커밋에는 어떤 내용이 들어가나요?
+
+add한 시점의 내용만 들어간다. add는 그 순간의 내용을 blob으로 저장하고 인덱스가 그걸 가리키게 할 뿐이고, 커밋은 인덱스를 찍는다. 이후 수정은 작업 트리에만 있어서 `git status`에 같은 파일이 staged와 unstaged 양쪽에 나오고, `git diff`는 그 나중 수정만, `git diff --staged`는 커밋될 내용을 보여 준다. 다 넣으려면 다시 add하거나 `commit -a`를 쓴다.
+
+### .gitignore에 추가했는데 파일이 계속 변경으로 잡힙니다. 왜 그런가요?
+
+그 파일이 이미 추적 중이기 때문이다. .gitignore는 추적하지 않는 파일에만 적용된다. `git rm --cached 파일`로 인덱스에서 빼고 커밋하면 디스크의 파일은 남기고 추적만 멈춘다. 과거 커밋에는 여전히 남아 있으니 비밀 값이었다면 키를 교체하고 히스토리 정리 도구를 써야 하고, 무엇이 왜 무시되는지는 `git check-ignore -v`로 확인한다.
+
+### git diff, git diff --staged, git diff HEAD는 각각 무엇을 비교하나요?
+
+`git diff`는 작업 트리와 인덱스, 즉 아직 add하지 않은 변경을 보여 준다. `git diff --staged`(`--cached`)는 인덱스와 HEAD, 즉 지금 커밋하면 들어갈 변경이다. `git diff HEAD`는 작업 트리와 HEAD를 바로 비교해서 add 여부와 상관없이 마지막 커밋 이후의 모든 변경을 보여 준다. 커밋 직전에는 `--staged`로 들어갈 내용을 확인하는 습관이 실수를 줄인다.

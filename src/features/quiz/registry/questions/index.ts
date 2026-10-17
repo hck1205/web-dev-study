@@ -22,10 +22,14 @@ import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_LOOP } from "./event-loop";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
+import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
+import { GIT_INTERNALS_BASICS } from "./git-internals-basics";
+import { GIT_REBASE } from "./git-rebase";
 import { GIT_REMOTE_COLLABORATION } from "./git-remote-collaboration";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
+import { GIT_UNDO } from "./git-undo";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
@@ -99,10 +103,14 @@ export const QUESTION_SETS = [
   EVENT_LOOP,
   FRONTEND_BROWSER_CACHE,
   GATEWAY,
+  GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
+  GIT_INTERNALS_BASICS,
+  GIT_REBASE,
   GIT_REMOTE_COLLABORATION,
   GIT_TIPS_ADVANCED,
   GIT_TROUBLESHOOTING,
+  GIT_UNDO,
   HOSTS_FILE,
   HTML_FORM_HTTP,
   HTTP_CACHING_CDN,

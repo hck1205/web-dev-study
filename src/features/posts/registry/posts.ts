@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "git-internals-basics",
+    title: "Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역",
+    summary: "blob·tree·commit 객체를 직접 열어 보고, 파일이 작업 트리·인덱스·저장소를 어떻게 오가는지 따라간다. add 뒤에 고친 내용이 왜 커밋에 안 들어가는지부터 log, .gitignore, 설정까지 정리한다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["스테이징 영역", "작업 트리", ".gitignore", "git add -p"],
+  },
+  {
+    slug: "git-branch-merge",
+    title: "브랜치와 병합: 포인터 하나가 움직일 뿐",
+    summary: "브랜치가 커밋을 가리키는 이름표라는 데서 시작해 fast-forward와 3-way 병합이 어떻게 갈리는지 보고, 두 사람이 같은 줄을 고쳐 생긴 충돌을 마커 읽기부터 rerere까지 단계별로 푼다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["fast-forward", "3-way 병합", "병합 충돌", "detached HEAD", "merge base"],
+  },
+  {
+    slug: "git-rebase",
+    title: "rebase: 커밋을 다시 쓰는 일",
+    summary: "rebase가 커밋을 새 받침 위에 다시 만드는 과정을 보고, merge와의 트레이드오프, 충돌 처리, interactive rebase와 autosquash, --onto와 --update-refs, 공유 브랜치를 다시 썼을 때 생기는 일과 복구법까지 다룬다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["interactive rebase", "git rebase", "autosquash", "pull.rebase"],
+  },
+  {
+    slug: "git-undo",
+    title: "되돌리기 총정리: restore, reset, revert, reflog",
+    summary: "실수가 작업 트리, 인덱스, 로컬 커밋, 푸시한 커밋 중 어디에 있는지로 명령을 고르고, stash와 reflog로 사라진 것을 찾는다. 잘못된 브랜치에 한 커밋, 지운 파일, 히스토리에 들어간 비밀 키까지 처리한다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-17",
+    keywords: ["reflog", "git reset", "git revert", "git stash", "git restore"],
+  },
+  {
     slug: "git-remote-collaboration",
     title: "원격 저장소와 협업: fetch, pull, push",
     summary: "동료가 먼저 푸시해서 내 push가 거절되는 장면에서 시작해 origin/main의 정체, fetch와 pull의 차이, upstream, --force-with-lease와 --force-if-includes, 태그, PR과 포크 흐름, 큰 저장소를 빨리 받는 법까지 실제 출력으로 따라간다.",

@@ -1,0 +1,790 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-rebase");
+
+블로그에 검색 기능을 붙이는 `feature/search` 브랜치에서 일주일 동안 작업했다. 그사이 main에 다른 사람의 커밋이 계속 들어와서, 뒤처질 때마다 `git merge main`으로 받아 왔다. PR을 올리려고 히스토리를 봤더니 이렇게 생겼다.
+
+```text
+*   17a555e Merge branch 'main' into feature/search
+|\  
+| * 382b36f 글 스타일
+* | f883ba8 검색 UI
+* | a6d4f37 Merge branch 'main' into feature/search
+|\| 
+| * fe45de8 페이지 크기 설정
+* | 57d95ec 검색 함수
+|/  
+* c2af67d README
+* 5c97558 글 목록
+```
+
+내가 한 일은 커밋 두 개(검색 함수, 검색 UI)인데, main을 받아 온 병합 커밋 두 개가 사이사이에 끼어 선이 얽혔다. 리뷰어는 "main 기준으로 rebase해서 올려 주세요"라고 한다. rebase를 하면 이 브랜치는 main 끝에 커밋 두 개가 일자로 붙은 모양이 된다. 그 대신 커밋 해시가 전부 바뀐다. 해시가 바뀐다는 게 무슨 뜻이고 언제 위험한지 알아야 rebase를 겁내지 않고, 사고도 내지 않는다.
+
+이 글은 rebase가 실제로 무엇을 하는지 그림으로 보고, merge와 비교해서 언제 무엇을 쓸지, 충돌이 났을 때와 커밋을 정리하는 interactive rebase, `--onto`와 `--update-refs` 같은 고급 옵션, 공유한 브랜치를 rebase했을 때 팀원에게 일어나는 일과 망쳤을 때 되돌리는 법까지 다룬다. 브랜치와 병합의 기초는 [앞 글](/posts/git-branch-merge)에 있다. 명령은 Ubuntu 24.04의 Git 2.43.0에서 실행했다.
+
+## rebase는 커밋을 새로 만든다
+
+`git rebase main`은 "내 브랜치의 받침을 main 끝으로 바꿔라"라는 명령이다. 이름은 그렇지만 커밋을 들어서 옮기는 게 아니다. 커밋은 부모 해시가 내용에 들어 있어서 부모를 바꾸면 다른 커밋이 된다. 그래서 Git은 내 커밋이 바꾼 내용(diff)을 하나씩 꺼내 main 끝 위에 다시 적용하고, 그때마다 새 커밋을 만든다.
+
+순서는 이렇다. 먼저 현재 브랜치와 main의 공통 조상을 찾는다. 공통 조상 이후 현재 브랜치에만 있는 커밋을 목록으로 만든다. HEAD를 main 끝으로 옮긴 뒤(detached HEAD), 목록의 커밋을 하나씩 cherry-pick하듯 적용한다. 다 끝나면 브랜치 이름표를 마지막 새 커밋으로 옮긴다. 아래 그림에서 다음을 누르면 이 과정이 단계별로 보인다.
+
+<GeometryMorph
+  width={385}
+  height={200}
+  caption="rebase는 커밋을 옮기는 게 아니라 같은 변경으로 새 커밋을 만든다"
+  shapes={[{"id":"eab","tone":"muted"},{"id":"ebm1","tone":"muted"},{"id":"em12","tone":"muted"},{"id":"gbf1","tone":"outline"},{"id":"g12","tone":"outline"},{"id":"g1","tone":"outline"},{"id":"g2","tone":"outline"},{"id":"ebf1","tone":"series2"},{"id":"ef12","tone":"series2"},{"id":"a","tone":"muted"},{"id":"b","tone":"muted"},{"id":"m1","tone":"series1"},{"id":"m2","tone":"series1"},{"id":"f1","tone":"series2"},{"id":"f2","tone":"series2"},{"id":"main","tone":"series1"},{"id":"feat","tone":"series2"}]}
+  steps={[{"title":"feature가 옛 main에서 갈라져 있다","detail":"feature는 B에서 갈라져 F1, F2를 쌓았다. 그사이 main에는 M1, M2가 들어왔다. feature에서 보면 main의 새 커밋이 없다.","shapes":{"a":[[51.1,144.6],[44.6,151.1],[35.4,151.1],[28.9,144.6],[28.9,135.4],[35.4,128.9],[44.6,128.9],[51.1,135.4]],"b":[[111.1,144.6],[104.6,151.1],[95.4,151.1],[88.9,144.6],[88.9,135.4],[95.4,128.9],[104.6,128.9],[111.1,135.4]],"m1":[[171.1,144.6],[164.6,151.1],[155.4,151.1],[148.9,144.6],[148.9,135.4],[155.4,128.9],[164.6,128.9],[171.1,135.4]],"m2":[[231.1,144.6],[224.6,151.1],[215.4,151.1],[208.9,144.6],[208.9,135.4],[215.4,128.9],[224.6,128.9],[231.1,135.4]],"eab":[[52,141.6],[88,141.6],[88,138.4],[52,138.4]],"ebm1":[[112,141.6],[148,141.6],[148,138.4],[112,138.4]],"em12":[[172,141.6],[208,141.6],[208,138.4],[172,138.4]],"main":[[192,190],[248,190],[248,170],[225,170],[220,164],[215,170],[192,170]],"f1":[[171.1,74.6],[164.6,81.1],[155.4,81.1],[148.9,74.6],[148.9,65.4],[155.4,58.9],[164.6,58.9],[171.1,65.4]],"f2":[[231.1,74.6],[224.6,81.1],[215.4,81.1],[208.9,74.6],[208.9,65.4],[215.4,58.9],[224.6,58.9],[231.1,65.4]],"ebf1":[[109,131.9],[153.4,80.2],[151,78.1],[106.6,129.8]],"ef12":[[172,71.6],[208,71.6],[208,68.4],[172,68.4]],"feat":[[182,20],[258,20],[258,40],[225,40],[220,46],[215,40],[182,40]]},"labels":[{"x":40,"y":140,"text":"A","tone":"text","size":"sm"},{"x":100,"y":140,"text":"B","tone":"text","size":"sm"},{"x":160,"y":140,"text":"M1","tone":"text","size":"sm"},{"x":220,"y":140,"text":"M2","tone":"text","size":"sm"},{"x":220,"y":180,"text":"main","tone":"text","size":"sm"},{"x":160,"y":70,"text":"F1","tone":"text","size":"sm"},{"x":220,"y":70,"text":"F2","tone":"text","size":"sm"},{"x":220,"y":30,"text":"feature","tone":"text","size":"sm"}]},{"title":"공통 조상 B 위의 커밋만 떼어 낸다","detail":"git rebase main은 main과 feature의 공통 조상 B를 찾고, B 다음부터 feature에만 있는 커밋(F1, F2)을 옮길 목록으로 만든다.","shapes":{"a":[[51.1,144.6],[44.6,151.1],[35.4,151.1],[28.9,144.6],[28.9,135.4],[35.4,128.9],[44.6,128.9],[51.1,135.4]],"b":[[111.1,144.6],[104.6,151.1],[95.4,151.1],[88.9,144.6],[88.9,135.4],[95.4,128.9],[104.6,128.9],[111.1,135.4]],"m1":[[171.1,144.6],[164.6,151.1],[155.4,151.1],[148.9,144.6],[148.9,135.4],[155.4,128.9],[164.6,128.9],[171.1,135.4]],"m2":[[231.1,144.6],[224.6,151.1],[215.4,151.1],[208.9,144.6],[208.9,135.4],[215.4,128.9],[224.6,128.9],[231.1,135.4]],"eab":[[52,141.6],[88,141.6],[88,138.4],[52,138.4]],"ebm1":[[112,141.6],[148,141.6],[148,138.4],[112,138.4]],"em12":[[172,141.6],[208,141.6],[208,138.4],[172,138.4]],"main":[[192,190],[248,190],[248,170],[225,170],[220,164],[215,170],[192,170]],"f1":[[171.1,74.6],[164.6,81.1],[155.4,81.1],[148.9,74.6],[148.9,65.4],[155.4,58.9],[164.6,58.9],[171.1,65.4]],"f2":[[231.1,74.6],[224.6,81.1],[215.4,81.1],[208.9,74.6],[208.9,65.4],[215.4,58.9],[224.6,58.9],[231.1,65.4]],"ebf1":[[109,131.9],[153.4,80.2],[151,78.1],[106.6,129.8]],"ef12":[[172,71.6],[208,71.6],[208,68.4],[172,68.4]],"feat":[[182,20],[258,20],[258,40],[225,40],[220,46],[215,40],[182,40]]},"labels":[{"x":40,"y":140,"text":"A","tone":"text","size":"sm"},{"x":100,"y":140,"text":"B","tone":"text","size":"sm"},{"x":160,"y":140,"text":"M1","tone":"text","size":"sm"},{"x":220,"y":140,"text":"M2","tone":"text","size":"sm"},{"x":220,"y":180,"text":"main","tone":"text","size":"sm"},{"x":160,"y":70,"text":"F1","tone":"text","size":"sm"},{"x":220,"y":70,"text":"F2","tone":"text","size":"sm"},{"x":220,"y":30,"text":"feature","tone":"text","size":"sm"}],"focus":["b","f1","f2"]},{"title":"F1을 M2 위에 다시 적용한다","detail":"F1이 바꾼 내용(diff)을 M2 위에 적용해 새 커밋 F1'을 만든다. 내용은 같아도 부모가 달라졌으니 해시도 새로 나온다. 원래 F1은 그 자리에 남는다.","shapes":{"a":[[51.1,144.6],[44.6,151.1],[35.4,151.1],[28.9,144.6],[28.9,135.4],[35.4,128.9],[44.6,128.9],[51.1,135.4]],"b":[[111.1,144.6],[104.6,151.1],[95.4,151.1],[88.9,144.6],[88.9,135.4],[95.4,128.9],[104.6,128.9],[111.1,135.4]],"m1":[[171.1,144.6],[164.6,151.1],[155.4,151.1],[148.9,144.6],[148.9,135.4],[155.4,128.9],[164.6,128.9],[171.1,135.4]],"m2":[[231.1,144.6],[224.6,151.1],[215.4,151.1],[208.9,144.6],[208.9,135.4],[215.4,128.9],[224.6,128.9],[231.1,135.4]],"eab":[[52,141.6],[88,141.6],[88,138.4],[52,138.4]],"ebm1":[[112,141.6],[148,141.6],[148,138.4],[112,138.4]],"em12":[[172,141.6],[208,141.6],[208,138.4],[172,138.4]],"main":[[192,190],[248,190],[248,170],[225,170],[220,164],[215,170],[192,170]],"f1":[[291.1,144.6],[284.6,151.1],[275.4,151.1],[268.9,144.6],[268.9,135.4],[275.4,128.9],[284.6,128.9],[291.1,135.4]],"f2":[[231.1,74.6],[224.6,81.1],[215.4,81.1],[208.9,74.6],[208.9,65.4],[215.4,58.9],[224.6,58.9],[231.1,65.4]],"ebf1":[[232,141.6],[268,141.6],[268,138.4],[232,138.4]],"ef12":[[172,71.6],[208,71.6],[208,68.4],[172,68.4]],"g1":[[171.1,74.6],[164.6,81.1],[155.4,81.1],[148.9,74.6],[148.9,65.4],[155.4,58.9],[164.6,58.9],[171.1,65.4]],"gbf1":[[109,131.9],[153.4,80.2],[151,78.1],[106.6,129.8]],"feat":[[182,20],[258,20],[258,40],[225,40],[220,46],[215,40],[182,40]]},"labels":[{"x":40,"y":140,"text":"A","tone":"text","size":"sm"},{"x":100,"y":140,"text":"B","tone":"text","size":"sm"},{"x":160,"y":140,"text":"M1","tone":"text","size":"sm"},{"x":220,"y":140,"text":"M2","tone":"text","size":"sm"},{"x":220,"y":180,"text":"main","tone":"text","size":"sm"},{"x":280,"y":140,"text":"F1'","tone":"series2","size":"sm"},{"x":220,"y":70,"text":"F2","tone":"text","size":"sm"},{"x":160,"y":70,"text":"F1","tone":"text","size":"sm"},{"x":220,"y":30,"text":"feature","tone":"text","size":"sm"}],"focus":["f1"]},{"title":"F2도 옮기고 브랜치 이름표를 끝으로","detail":"F2를 F1' 위에 적용해 F2'을 만든다. 목록을 다 돌면 feature 이름표를 F2'으로 옮긴다. 이제 feature는 main 바로 뒤에 일자로 붙어 있다.","shapes":{"a":[[51.1,144.6],[44.6,151.1],[35.4,151.1],[28.9,144.6],[28.9,135.4],[35.4,128.9],[44.6,128.9],[51.1,135.4]],"b":[[111.1,144.6],[104.6,151.1],[95.4,151.1],[88.9,144.6],[88.9,135.4],[95.4,128.9],[104.6,128.9],[111.1,135.4]],"m1":[[171.1,144.6],[164.6,151.1],[155.4,151.1],[148.9,144.6],[148.9,135.4],[155.4,128.9],[164.6,128.9],[171.1,135.4]],"m2":[[231.1,144.6],[224.6,151.1],[215.4,151.1],[208.9,144.6],[208.9,135.4],[215.4,128.9],[224.6,128.9],[231.1,135.4]],"eab":[[52,141.6],[88,141.6],[88,138.4],[52,138.4]],"ebm1":[[112,141.6],[148,141.6],[148,138.4],[112,138.4]],"em12":[[172,141.6],[208,141.6],[208,138.4],[172,138.4]],"main":[[192,190],[248,190],[248,170],[225,170],[220,164],[215,170],[192,170]],"f1":[[291.1,144.6],[284.6,151.1],[275.4,151.1],[268.9,144.6],[268.9,135.4],[275.4,128.9],[284.6,128.9],[291.1,135.4]],"f2":[[351.1,144.6],[344.6,151.1],[335.4,151.1],[328.9,144.6],[328.9,135.4],[335.4,128.9],[344.6,128.9],[351.1,135.4]],"ebf1":[[232,141.6],[268,141.6],[268,138.4],[232,138.4]],"ef12":[[292,141.6],[328,141.6],[328,138.4],[292,138.4]],"g1":[[171.1,74.6],[164.6,81.1],[155.4,81.1],[148.9,74.6],[148.9,65.4],[155.4,58.9],[164.6,58.9],[171.1,65.4]],"gbf1":[[109,131.9],[153.4,80.2],[151,78.1],[106.6,129.8]],"g2":[[231.1,74.6],[224.6,81.1],[215.4,81.1],[208.9,74.6],[208.9,65.4],[215.4,58.9],[224.6,58.9],[231.1,65.4]],"g12":[[172,71.6],[208,71.6],[208,68.4],[172,68.4]],"feat":[[302,90],[378,90],[378,110],[345,110],[340,116],[335,110],[302,110]]},"labels":[{"x":40,"y":140,"text":"A","tone":"text","size":"sm"},{"x":100,"y":140,"text":"B","tone":"text","size":"sm"},{"x":160,"y":140,"text":"M1","tone":"text","size":"sm"},{"x":220,"y":140,"text":"M2","tone":"text","size":"sm"},{"x":220,"y":180,"text":"main","tone":"text","size":"sm"},{"x":280,"y":140,"text":"F1'","tone":"series2","size":"sm"},{"x":340,"y":140,"text":"F2'","tone":"series2","size":"sm"},{"x":340,"y":100,"text":"feature","tone":"text","size":"sm"}],"focus":["f2","feat"]},{"title":"원래 커밋은 ORIG_HEAD가 기억한다","detail":"점선의 F1, F2는 어떤 브랜치도 가리키지 않지만 바로 지워지지 않는다. ORIG_HEAD와 reflog가 F2를 가리키고 있어서 잘못됐으면 그리로 돌아갈 수 있다.","shapes":{"a":[[51.1,144.6],[44.6,151.1],[35.4,151.1],[28.9,144.6],[28.9,135.4],[35.4,128.9],[44.6,128.9],[51.1,135.4]],"b":[[111.1,144.6],[104.6,151.1],[95.4,151.1],[88.9,144.6],[88.9,135.4],[95.4,128.9],[104.6,128.9],[111.1,135.4]],"m1":[[171.1,144.6],[164.6,151.1],[155.4,151.1],[148.9,144.6],[148.9,135.4],[155.4,128.9],[164.6,128.9],[171.1,135.4]],"m2":[[231.1,144.6],[224.6,151.1],[215.4,151.1],[208.9,144.6],[208.9,135.4],[215.4,128.9],[224.6,128.9],[231.1,135.4]],"eab":[[52,141.6],[88,141.6],[88,138.4],[52,138.4]],"ebm1":[[112,141.6],[148,141.6],[148,138.4],[112,138.4]],"em12":[[172,141.6],[208,141.6],[208,138.4],[172,138.4]],"main":[[192,190],[248,190],[248,170],[225,170],[220,164],[215,170],[192,170]],"f1":[[291.1,144.6],[284.6,151.1],[275.4,151.1],[268.9,144.6],[268.9,135.4],[275.4,128.9],[284.6,128.9],[291.1,135.4]],"f2":[[351.1,144.6],[344.6,151.1],[335.4,151.1],[328.9,144.6],[328.9,135.4],[335.4,128.9],[344.6,128.9],[351.1,135.4]],"ebf1":[[232,141.6],[268,141.6],[268,138.4],[232,138.4]],"ef12":[[292,141.6],[328,141.6],[328,138.4],[292,138.4]],"g1":[[171.1,74.6],[164.6,81.1],[155.4,81.1],[148.9,74.6],[148.9,65.4],[155.4,58.9],[164.6,58.9],[171.1,65.4]],"gbf1":[[109,131.9],[153.4,80.2],[151,78.1],[106.6,129.8]],"g2":[[231.1,74.6],[224.6,81.1],[215.4,81.1],[208.9,74.6],[208.9,65.4],[215.4,58.9],[224.6,58.9],[231.1,65.4]],"g12":[[172,71.6],[208,71.6],[208,68.4],[172,68.4]],"feat":[[302,90],[378,90],[378,110],[345,110],[340,116],[335,110],[302,110]]},"labels":[{"x":40,"y":140,"text":"A","tone":"text","size":"sm"},{"x":100,"y":140,"text":"B","tone":"text","size":"sm"},{"x":160,"y":140,"text":"M1","tone":"text","size":"sm"},{"x":220,"y":140,"text":"M2","tone":"text","size":"sm"},{"x":220,"y":180,"text":"main","tone":"text","size":"sm"},{"x":280,"y":140,"text":"F1'","tone":"series2","size":"sm"},{"x":340,"y":140,"text":"F2'","tone":"series2","size":"sm"},{"x":340,"y":100,"text":"feature","tone":"text","size":"sm"},{"x":160,"y":70,"text":"F1","tone":"muted","size":"sm"},{"x":220,"y":70,"text":"F2","tone":"muted","size":"sm"},{"x":220,"y":40,"text":"ORIG_HEAD","tone":"muted","size":"sm"}],"focus":["g1","g2"]}]}
+/>
+
+얽힌 브랜치에서 실제로 해 보면 이렇다.
+
+```bash
+# feature/search에만 있는 커밋 (main에 없는 것)
+git log --oneline main..feature/search
+
+# main 끝 위에 다시 적용한다
+git rebase main
+
+# 결과
+git log --oneline --graph --decorate --all
+```
+
+```text
+17a555e Merge branch 'main' into feature/search
+f883ba8 검색 UI
+a6d4f37 Merge branch 'main' into feature/search
+57d95ec 검색 함수
+
+Successfully rebased and updated refs/heads/feature/search.
+
+* bac707f (HEAD -> feature/search) 검색 UI
+* a590757 검색 함수
+* 382b36f (main) 글 스타일
+* fe45de8 페이지 크기 설정
+* c2af67d README
+* 5c97558 글 목록
+```
+
+네 가지를 확인할 수 있다. 첫째, 병합 커밋 두 개는 사라졌다. rebase는 기본으로 병합 커밋을 다시 만들지 않고 건너뛴다. main의 내용은 이미 새 받침에 다 들어 있으니 필요 없기 때문이다. 둘째, 내 커밋 두 개는 남았지만 해시가 `57d95ec → a590757`, `f883ba8 → bac707f`로 바뀌었다. 셋째, 히스토리가 일자가 됐다. 넷째, 작성자와 작성 시각(author date)은 원래 커밋의 것이 그대로 남고, committer date만 지금으로 바뀐다.
+
+내용이 정말 같은지는 `git range-diff`로 확인한다. rebase 전후의 커밋을 짝지어서 패치가 같으면 `=`, 달라졌으면 `!`와 차이를 보여 준다. `ORIG_HEAD`는 rebase처럼 HEAD를 크게 옮기는 명령이 직전 위치를 적어 두는 이름이다.
+
+```bash
+# rebase 전(ORIG_HEAD)과 후(HEAD)의 커밋을 짝지어 비교
+git range-diff ORIG_HEAD...HEAD
+```
+
+```text
+1:  57d95ec = 1:  a590757 검색 함수
+2:  f883ba8 = 2:  bac707f 검색 UI
+```
+
+## merge로 할지 rebase로 할지
+
+둘 다 "main의 새 커밋을 내 브랜치에 반영한다"는 같은 문제를 푼다. 다른 건 히스토리에 무엇을 남기느냐다.
+
+merge는 있었던 일을 그대로 남긴다. 언제 갈라졌고 언제 합쳤는지가 병합 커밋으로 기록되고, 기존 커밋은 하나도 바뀌지 않는다. 그래서 이미 공유한 브랜치에도 안전하다. 대신 main을 자주 받아 오면 위 그림처럼 의미 없는 병합 커밋이 쌓이고, `git log`가 읽기 어려워진다.
+
+rebase는 히스토리를 "처음부터 최신 main에서 시작한 것처럼" 다시 쓴다. 일자 히스토리는 읽기 쉽고, `git bisect`로 버그가 들어온 커밋을 찾을 때도 갈래가 없어서 편하다. 대신 커밋 해시가 바뀌므로 다른 사람이 이미 받아 간 커밋에 하면 문제가 된다. 충돌도 커밋마다 따로 풀어야 해서, 커밋이 열 개인데 같은 곳을 계속 고쳤다면 같은 충돌을 여러 번 만날 수 있다. 그리고 다시 적용한 중간 커밋들은 그 상태로 빌드해 본 적이 없는 스냅샷이다. 최종 결과는 테스트를 통과해도 중간 커밋 하나는 깨져 있을 수 있다.
+
+실무에서 많이 쓰는 조합은 이렇다. 혼자 쓰는 기능 브랜치에서는 main을 받아 올 때 rebase로 히스토리를 정리하고, 기능 브랜치를 main에 넣을 때는 PR의 merge(또는 squash)를 쓴다. 공유 브랜치(main, develop, 여러 명이 같이 쓰는 기능 브랜치)는 rebase하지 않는다. 팀마다 정책이 다르니 저장소의 PR 병합 설정과 맞춘다. 어떤 정책이 어떤 히스토리를 만드는지는 [브랜치 전략 글](/posts/git-branching-strategy)에서 비교한다.
+
+## 다시 적용하다 충돌이 나면
+
+rebase도 결국 커밋마다 병합을 하는 일이라 충돌이 날 수 있다. main에서 누군가 `posts.js`의 같은 줄에 제목순 정렬을 넣었고, 내 브랜치에는 날짜순 정렬 커밋이 있다.
+
+```bash
+# 갈라진 모양
+git log --oneline --graph --decorate --all -6
+
+# main 위로 다시 적용
+git rebase main
+```
+
+```text
+* a19ea4d (main) 제목순 정렬
+| * 74aa1d2 (HEAD -> feature/search) 대소문자 무시
+| * 339b3fd 날짜순 정렬
+| * bac707f 검색 UI
+| * a590757 검색 함수
+|/  
+* 382b36f 글 스타일
+
+Auto-merging posts.js
+CONFLICT (content): Merge conflict in posts.js
+error: could not apply 339b3fd... 날짜순 정렬
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply 339b3fd... 날짜순 정렬
+```
+
+네 커밋 중 두 개는 문제없이 적용됐고, 세 번째 `339b3fd`에서 멈췄다. 상태를 보면 어디까지 했고 무엇이 남았는지 알려 준다.
+
+```bash
+# rebase 진행 상황
+git status
+```
+
+```text
+interactive rebase in progress; onto a19ea4d
+Last commands done (3 commands done):
+   pick bac707f 검색 UI
+   pick 339b3fd 날짜순 정렬
+  (see more in file .git/rebase-merge/done)
+Next command to do (1 remaining command):
+   pick 74aa1d2 대소문자 무시
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'feature/search' on 'a19ea4d'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add <file>..." to mark resolution)
+	both modified:   posts.js
+```
+
+`-i`를 쓰지 않았는데 `interactive rebase in progress`라고 나오는 건 Git 내부에서 일반 rebase도 같은 장치(todo 목록을 하나씩 실행하는 방식)로 돌리기 때문이다. 충돌 파일을 열어 보면 merge 때와 방향이 반대다.
+
+```bash
+cat posts.js
+```
+
+```text
+export const posts = [];
+<<<<<<< HEAD
+export const byTitle = (a, b) => a.title.localeCompare(b.title);
+=======
+export const byDate = (a, b) => b.date - a.date;
+>>>>>>> 339b3fd (날짜순 정렬)
+```
+
+`HEAD` 쪽이 main의 제목순 정렬이고, 아래쪽이 내가 다시 적용하려는 커밋이다. rebase 중에 HEAD는 새 받침(main 끝)에서 시작해 하나씩 쌓아 가는 중인 커밋을 가리키기 때문이다. 그래서 rebase에서는 `--ours`가 main 쪽, `--theirs`가 내 커밋 쪽이다. merge와 정반대라서, 습관적으로 `git checkout --ours`를 치면 내 변경을 버리게 된다. 여기서는 둘 다 필요하니 두 줄을 모두 남긴다.
+
+```bash
+# 두 정렬 함수를 모두 남기도록 고친다
+printf 'export const posts = [];\nexport const byDate = (a, b) => b.date - a.date;\nexport const byTitle = (a, b) => a.title.localeCompare(b.title);\n' > posts.js
+
+# 해결 표시 후 다음 커밋으로 진행한다
+git add posts.js
+git rebase --continue
+
+git log --oneline --graph --decorate -5
+```
+
+```text
+[detached HEAD 6e7790d] 날짜순 정렬
+ 1 file changed, 1 insertion(+)
+Successfully rebased and updated refs/heads/feature/search.
+
+* 50f2d3f (HEAD -> feature/search) 대소문자 무시
+* 6e7790d 날짜순 정렬
+* f7267c7 검색 UI
+* 21a37f9 검색 함수
+* a19ea4d (main) 제목순 정렬
+```
+
+`--continue`는 커밋 메시지를 확인하라고 에디터를 연다. 그대로 저장하고 닫으면 된다. 멈춘 상태에서 쓸 수 있는 선택지는 셋이다.
+
+- `git rebase --continue`: 충돌을 풀고 add한 뒤 다음으로 간다.
+- `git rebase --skip`: 지금 커밋을 버리고 다음으로 간다. main에 이미 같은 변경이 들어가 있어서 내 커밋이 할 일이 없어졌을 때 쓴다. 그 외에는 내 변경이 사라지니 조심한다.
+- `git rebase --abort`: 전부 취소하고 rebase 전 상태로 돌아간다. 뭔가 이상하면 일단 이것부터 친다.
+
+rebase 도중에는 `git reset --hard`로 빠져나오지 않는다. `.git/rebase-merge` 폴더가 남아서 Git이 계속 rebase 중이라고 생각한다. 나가려면 `--abort`를 쓴다. 같은 충돌을 커밋마다 반복해서 풀어야 하는 상황이라면 [병합 글](/posts/git-branch-merge)에서 본 rerere를 켜 두면 도움이 된다.
+
+## 커밋을 고르고 합치고 고쳐 쓰기
+
+rebase에 `-i`(interactive)를 붙이면 다시 적용할 커밋 목록을 에디터로 먼저 보여 준다. 그 목록을 고치면 커밋을 합치거나, 빼거나, 순서를 바꾸거나, 메시지를 고칠 수 있다. PR을 올리기 전에 "wip", "오타 수정" 같은 커밋을 정리할 때 쓴다.
+
+지금 브랜치에 커밋이 여덟 개 있다. 마지막 네 개가 지저분하다.
+
+```bash
+# main 이후의 커밋
+git log --oneline main..HEAD
+```
+
+```text
+6f7d622 검색 UI placeholder 오타 수정
+3cd7731 console.log 지움
+8053ac8 wip
+1c7ad37 검색어 강조
+50f2d3f 대소문자 무시
+6e7790d 날짜순 정렬
+f7267c7 검색 UI
+21a37f9 검색 함수
+```
+
+`git rebase -i main`을 치면 에디터에 이런 todo 목록이 열린다. `git log`와 반대로 오래된 커밋이 위에 있고, 위에서부터 차례로 실행된다.
+
+```text
+pick 21a37f9 검색 함수
+pick f7267c7 검색 UI
+pick 6e7790d 날짜순 정렬
+pick 50f2d3f 대소문자 무시
+pick 1c7ad37 검색어 강조
+pick 8053ac8 wip
+pick 3cd7731 console.log 지움
+pick 6f7d622 검색 UI placeholder 오타 수정
+
+# Rebase a19ea4d..6f7d622 onto a19ea4d (8 commands)
+#
+# Commands:
+# p, pick <commit> = use commit
+# r, reword <commit> = use commit, but edit the commit message
+# e, edit <commit> = use commit, but stop for amending
+# s, squash <commit> = use commit, but meld into previous commit
+# f, fixup [-C | -c] <commit> = like "squash" but keep only the previous
+#                    commit's log message, unless -C is used, in which case
+#                    keep only this commit's message; -c is same as -C but
+#                    opens the editor
+# x, exec <command> = run command (the rest of the line) using shell
+# b, break = stop here (continue rebase later with 'git rebase --continue')
+# d, drop <commit> = remove commit
+# l, label <label> = label current HEAD with a name
+# t, reset <label> = reset HEAD to a label
+# m, merge [-C <commit> | -c <commit>] <label> [# <oneline>]
+#         create a merge commit using the original merge commit's
+#         message (or the oneline, if no original merge commit was
+#         specified); use -c <commit> to reword the commit message
+# u, update-ref <ref> = track a placeholder for the <ref> to be updated
+#                       to this position in the new commits. The <ref> is
+#                       updated at the end of the rebase
+#
+# These lines can be re-ordered; they are executed from top to bottom.
+#
+# If you remove a line here THAT COMMIT WILL BE LOST.
+#
+# However, if you remove everything, the rebase will be aborted.
+#
+```
+
+아무것도 고치지 않고 닫으면 커밋이 그대로 다시 적용된다. 받침(a19ea4d)이 같으니 해시도 그대로이고 사실상 아무 일도 없다. 자주 쓰는 명령은 이렇다.
+
+- `pick`: 그대로 적용한다.
+- `reword`: 적용하고 메시지를 고친다.
+- `edit`: 적용한 뒤 멈춘다. 파일을 고치고 `git commit --amend`, 커밋을 둘로 나누려면 `git reset HEAD~1` 뒤 나눠서 커밋한 다음 `--continue`.
+- `squash`: 바로 위 커밋에 합치고, 두 메시지를 합쳐 편집하게 한다.
+- `fixup`: 바로 위 커밋에 합치고, 이 커밋의 메시지는 버린다.
+- `drop`: 빼 버린다. 줄을 지워도 같다.
+- `exec`: 그 자리에서 셸 명령을 돌린다. 실패하면 멈춘다.
+
+범위를 마지막 네 개로 좁혀서(`HEAD~4`) 이렇게 고친다. console.log를 지운 커밋은 그 로그를 넣은 "검색어 강조"에 합치고, wip는 버리고, 오타 수정 커밋의 메시지는 고친다.
+
+```text
+pick 1c7ad37 검색어 강조
+fixup 3cd7731 console.log 지움
+drop 8053ac8 wip
+reword 6f7d622 검색 UI placeholder 오타 수정
+```
+
+아래 그림에서 다음을 누르면 Git이 이 목록을 위에서부터 하나씩 실행하면서 새 히스토리를 쌓는 모습이 보인다.
+
+<AlgoTrace
+  caption="todo 목록을 위에서부터 실행하며 쌓이는 새 커밋"
+  memoryLabel="새로 쌓이는 히스토리 (왼쪽이 오래된 것)"
+  cells={["pick 1c7ad37", "fixup 3cd7731", "drop 8053ac8", "reword 6f7d622"]}
+  steps={[
+    { memory: ["50f2d3f 대소문자"], caption: "HEAD~4는 50f2d3f다. HEAD를 여기로 옮기고 목록을 위에서부터 실행한다." },
+    { pointer: 0, memory: ["50f2d3f 대소문자", "검색어 강조"], caption: "pick: 1c7ad37을 그대로 적용한다. 받침이 같아서 아직은 내용도 해시도 같다." },
+    { pointer: 1, memory: ["50f2d3f 대소문자", "강조(로그 지움)"], caption: "fixup: console.log를 지운 변경을 바로 위 커밋에 합친다. 메시지는 '검색어 강조'만 남고, 합쳐졌으니 새 해시가 된다." },
+    { pointer: 2, memory: ["50f2d3f 대소문자", "강조(로그 지움)"], caption: "drop: wip 커밋은 건너뛴다. 이 커밋이 만든 notes.txt는 새 히스토리 어디에도 생기지 않는다." },
+    { pointer: 3, memory: ["50f2d3f 대소문자", "강조(로그 지움)", "placeholder"], caption: "reword: 변경을 적용한 뒤 에디터를 열어 메시지를 '검색 입력창에 placeholder 추가'로 고친다." },
+    { found: [0, 1, 3], memory: ["50f2d3f 대소문자", "231e47f 강조", "191f598 입력창"], caption: "끝. 네 커밋이 의미 있는 두 커밋이 되었고, 브랜치 이름표가 191f598로 옮겨 간다." },
+  ]}
+/>
+
+실제로 실행한 결과다. 에디터 대신 todo 파일을 직접 넣으려고 `GIT_SEQUENCE_EDITOR`(todo 목록용 에디터)와 `GIT_EDITOR`(메시지용 에디터)를 썼다. 평소에는 `git rebase -i HEAD~4`만 치고 에디터에서 고치면 된다.
+
+```bash
+# todo는 미리 써 둔 파일로, reword 메시지는 sed로 바꾼다
+GIT_SEQUENCE_EDITOR='cp /tmp/git-demo-3/todo.txt' \
+GIT_EDITOR="sed -i '1s/.*/검색 입력창에 placeholder 추가/'" \
+git rebase -i HEAD~4
+
+git log --oneline main..HEAD
+```
+
+```text
+[detached HEAD 191f598] 검색 입력창에 placeholder 추가
+ Date: Sat Oct 17 10:44:00 2026 +0900
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+Successfully rebased and updated refs/heads/feature/search.
+
+191f598 검색 입력창에 placeholder 추가
+231e47f 검색어 강조
+50f2d3f 대소문자 무시
+6e7790d 날짜순 정렬
+f7267c7 검색 UI
+21a37f9 검색 함수
+```
+
+`Date:` 줄은 reword한 커밋의 작성 시각이 원래 커밋의 시각이라 지금과 다르다는 표시다. 메시지를 고쳐도 작성 시각은 바뀌지 않는다.
+
+`edit`는 과거 커밋 하나를 고칠 때 쓴다. 지정한 커밋을 적용한 직후에 멈춘다.
+
+```bash
+# 첫 번째 커밋을 edit로 바꿔서 시작한다
+GIT_SEQUENCE_EDITOR="sed -i '1s/^pick/edit/'" git rebase -i main
+```
+
+```text
+Stopped at 1e04b82...  검색 함수
+You can amend the commit now, with
+
+  git commit --amend 
+
+Once you are satisfied with your changes, run
+
+  git rebase --continue
+```
+
+멈춘 상태에서 파일을 고치고 `git commit --amend`로 그 커밋에 넣은 다음 `git rebase --continue`를 치면 나머지 커밋이 그 위에 다시 쌓인다. 멈춘 동안 `git status`를 치면 `You are currently editing a commit while rebasing branch 'feature/search'`가 나온다.
+
+`exec`는 커밋마다 테스트를 돌려서 중간 커밋이 깨지지 않았는지 확인할 때 쓴다. `--exec`(`-x`) 옵션을 주면 모든 pick 뒤에 exec 줄이 자동으로 들어간다. 여기서는 "notes.txt가 없어야 한다"는 검사로 wip 커밋을 잡아 본다.
+
+```bash
+# 각 커밋을 적용할 때마다 검사 명령을 돌린다 (보통은 npm test 같은 명령)
+git rebase -i HEAD~4 --exec "test ! -f notes.txt"
+```
+
+```text
+Executing: test ! -f notes.txt
+Executing: test ! -f notes.txt
+warning: execution failed: test ! -f notes.txt
+You can fix the problem, and then run
+
+  git rebase --continue
+```
+
+두 번째 커밋(wip)을 적용한 뒤의 검사에서 실패하고 멈췄다. 고치고 `--continue`로 계속하거나, `--abort`로 취소한다. 평소에는 `git rebase -i main -x "npm test"`처럼 쓴다.
+
+## 고칠 커밋을 미리 표시해 두기
+
+리뷰를 받다 보면 "검색어 강조 커밋에서 빈 검색어 처리가 빠졌어요" 같은 지적이 온다. 고친 내용을 새 커밋으로 올리면 히스토리가 지저분해지고, 매번 `rebase -i`에서 그 커밋을 찾아 옮기는 것도 귀찮다. `--fixup`으로 커밋하면 나중에 Git이 알아서 자리를 찾아 준다.
+
+```bash
+# 빈 검색어 처리를 추가하고, "검색어 강조" 커밋(231e47f)을 고치는 커밋으로 표시한다
+git add highlight.js
+git commit --fixup=231e47f
+git log --oneline -3
+```
+
+```text
+[feature/search a9e9c62] fixup! 검색어 강조
+ 1 file changed, 1 insertion(+)
+
+a9e9c62 fixup! 검색어 강조
+191f598 검색 입력창에 placeholder 추가
+231e47f 검색어 강조
+```
+
+메시지가 `fixup! 검색어 강조`로 자동으로 붙었다. 이제 `--autosquash`로 rebase하면 todo 목록에서 이 커밋이 알아서 대상 커밋 바로 아래로 옮겨지고 `fixup`으로 바뀐다.
+
+```bash
+# fixup! 커밋을 대상 바로 아래로 옮긴 todo가 만들어진다
+git rebase -i --autosquash main
+```
+
+```text
+pick 21a37f9 검색 함수
+pick f7267c7 검색 UI
+pick 6e7790d 날짜순 정렬
+pick 50f2d3f 대소문자 무시
+pick 231e47f 검색어 강조
+fixup a9e9c62 fixup! 검색어 강조
+pick 191f598 검색 입력창에 placeholder 추가
+```
+
+에디터를 그냥 닫으면 끝난다. `git log`에서 `fixup!` 커밋이 사라지고 "검색어 강조"에 내용이 합쳐진다. `git config --global rebase.autoSquash true`로 켜 두면 `-i`를 쓸 때마다 `--autosquash`가 붙는다. 메시지까지 바꾸고 싶으면 `--fixup=reword:해시`(2.32부터), 두 메시지를 합치고 싶으면 `--squash=해시`를 쓴다. 리뷰 중에는 fixup 커밋을 그대로 푸시해서 리뷰어가 무엇이 바뀌었는지 보게 하고, 승인 뒤에 autosquash로 정리하는 방식이 깔끔하다.
+
+## 브랜치 일부만 다른 곳으로
+
+브랜치 위에 브랜치를 쌓는 경우가 있다. `feature/api`를 리뷰받는 동안 그 위에 `feature/ui`를 시작했다. 그런데 `feature/api`가 squash로 합쳐졌거나 방향이 바뀌어 버려졌다면, `feature/ui`의 커밋만 main으로 옮겨야 한다. 그냥 `git rebase main`을 하면 `feature/api`의 커밋까지 딸려 온다. 이때 `--onto`를 쓴다.
+
+<UrlAnatomy
+  caption="git rebase --onto의 세 인자"
+  base="git rebase"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "--onto",
+      value: "main",
+      display: "--onto main",
+      title: "새 받침",
+      description: "옮긴 커밋을 이 커밋 위에 쌓는다. 브랜치 이름, 해시, HEAD~3 같은 표현 무엇이든 된다.",
+      required: true,
+    },
+    {
+      key: "upstream",
+      display: "feature/api",
+      title: "여기까지는 옮기지 않는다",
+      description: "이 커밋에서 닿을 수 있는 커밋은 목록에서 뺀다. 즉 feature/api 다음부터의 커밋만 옮긴다. git log feature/api..feature/ui로 보이는 커밋이 옮겨질 목록이다.",
+      code: "git log --oneline feature/api..feature/ui",
+      required: true,
+    },
+    {
+      key: "branch",
+      display: "feature/ui",
+      title: "옮길 브랜치",
+      description: "이 브랜치로 먼저 이동한 뒤 rebase한다. 끝나면 이 브랜치의 이름표가 새 커밋 끝으로 옮겨 간다. 생략하면 현재 브랜치다.",
+    },
+  ]}
+/>
+
+```bash
+# 쌓아 둔 브랜치 모양
+git log --oneline --graph --decorate --all
+
+# feature/api 다음부터의 커밋(UI 1, UI 2)만 main 위로
+git rebase --onto main feature/api feature/ui
+git log --oneline --graph --decorate --all
+```
+
+```text
+* 5f23bd2 (HEAD -> main) M
+| * 81aa1dc (feature/ui) UI 2
+| * 5133ef9 UI 1
+| * 484dc61 (feature/api) API 2
+| * 30b6d26 API 1
+|/  
+* e771e82 A
+
+Successfully rebased and updated refs/heads/feature/ui.
+
+* 678e9b0 (HEAD -> feature/ui) UI 2
+* 9fee2b2 UI 1
+* 5f23bd2 (main) M
+| * 484dc61 (feature/api) API 2
+| * 30b6d26 API 1
+|/  
+* e771e82 A
+```
+
+`feature/ui`가 API 커밋 없이 main 위에 섰다. 같은 원리로 `git rebase --onto HEAD~3 HEAD~1`은 HEAD~2 커밋 하나를 빼고 나머지를 이어 붙이는 데도 쓸 수 있다. 잘못된 브랜치에서 갈라 나온 걸 뒤늦게 알았을 때도 `--onto`로 받침을 바꾼다.
+
+## 쌓아 올린 브랜치를 한꺼번에
+
+반대로 `feature/api`와 `feature/ui`를 둘 다 살려서 main 위로 옮기고 싶을 때도 있다. `feature/ui`에서 `git rebase main`을 하면 API 커밋까지 다 다시 만들어지는데, `feature/api` 이름표는 옛 커밋에 남는다.
+
+```bash
+# feature/ui에서 그냥 rebase하면
+git rebase main
+git log --oneline --graph --decorate --all
+```
+
+```text
+Successfully rebased and updated refs/heads/feature/ui.
+
+* a69e022 (HEAD -> feature/ui) UI 2
+* b004c5a UI 1
+* 5760578 API 2
+* f88a6ad API 1
+* 5f23bd2 (main) M
+| * 484dc61 (feature/api) API 2
+| * 30b6d26 API 1
+|/  
+* e771e82 A
+```
+
+API 커밋이 새것(`f88a6ad`, `5760578`)과 옛것(`30b6d26`, `484dc61`) 두 벌이 됐다. 예전에는 `feature/api`를 따로 rebase하거나 `git branch -f`로 이름표를 손으로 옮겨야 했다. Git 2.38부터는 `--update-refs`가 중간에 걸린 브랜치 이름표도 함께 옮겨 준다.
+
+```bash
+# 방금 rebase를 되돌리고 (feature/ui@{1}은 feature/ui의 직전 위치)
+git reset -q --hard 'feature/ui@{1}'
+
+# 중간 브랜치 이름표까지 함께 옮긴다 (2.38부터)
+git rebase --update-refs main
+git log --oneline --graph --decorate --all
+```
+
+```text
+Successfully rebased and updated refs/heads/feature/ui.
+Updated the following refs with --update-refs:
+	refs/heads/feature/api
+
+* a69e022 (HEAD -> feature/ui) UI 2
+* b004c5a UI 1
+* 5760578 (feature/api) API 2
+* f88a6ad API 1
+* 5f23bd2 (main) M
+* e771e82 A
+```
+
+`feature/api`가 새 `API 2`로 옮겨 갔다. PR을 여러 개로 쪼개 쌓아 올리는 방식(stacked PR)을 쓴다면 `git config --global rebase.updateRefs true`로 켜 두면 편하다. 옮긴 브랜치들은 각각 강제 푸시해야 한다는 건 같다.
+
+## pull할 때마다 생기는 병합 커밋
+
+혼자 main에서 작업하다 `git pull`을 했는데, 그사이 Jane이 먼저 푸시했다면 내 로컬 커밋과 원격 커밋이 갈라진 상태다. Git 2.33.1 무렵부터는 이때 방식을 정하지 않았으면 pull이 멈춘다.
+
+```bash
+# 내 커밋 하나, 원격에 Jane의 커밋 하나가 있는 상태에서
+git pull
+```
+
+```text
+From /tmp/git-demo-3b/origin
+   53597bb..8e43ac1  main       -> origin/main
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: You can do so by running one of the following commands sometime before
+hint: your next pull:
+hint: 
+hint:   git config pull.rebase false  # merge
+hint:   git config pull.rebase true   # rebase
+hint:   git config pull.ff only       # fast-forward only
+hint: 
+hint: You can replace "git config" with "git config --global" to set a default
+hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+hint: or --ff-only on the command line to override the configured default per
+hint: invocation.
+fatal: Need to specify how to reconcile divergent branches.
+```
+
+`pull`은 `fetch` 다음에 merge나 rebase를 하는 명령이다. merge로 하면 매번 `Merge branch 'main' of ...` 커밋이 생기고, 글 첫머리의 얽힌 히스토리가 바로 이렇게 만들어진다. 아직 푸시하지 않은 내 커밋은 나만 갖고 있으니 rebase해도 아무도 피해를 보지 않는다. 그래서 pull은 rebase로 해 두는 편이 깔끔하다.
+
+```bash
+# 이 저장소에서 pull을 rebase로 (모든 저장소는 --global)
+git config pull.rebase true
+git pull
+git log --oneline --graph --decorate --all
+```
+
+```text
+Successfully rebased and updated refs/heads/main.
+
+* 8040046 (HEAD -> main) 내 커밋
+* 8e43ac1 (origin/main) Jane의 커밋
+* 53597bb A
+```
+
+내 커밋이 Jane의 커밋 뒤에 일자로 붙었다. 커밋하지 않은 변경이 있으면 rebase가 시작하지 않으니, `git config --global rebase.autoStash true`를 함께 켜 두면 Git이 잠깐 stash했다가 끝나고 되돌려 준다. `pull.ff only`는 갈라졌으면 아예 멈추게 해서 매번 직접 고르게 하는 보수적인 선택이다.
+
+## 공유한 커밋은 다시 쓰지 않는다
+
+rebase의 규칙은 하나다. 다른 사람이 이미 받아 간 커밋은 rebase하지 않는다. 내 저장소에서만 해시가 바뀌고, 다른 사람의 저장소에는 옛 해시가 그대로 남기 때문이다. 실제로 무슨 일이 생기는지 따라가 보자. 다음을 누르면 한 단계씩 진행한다.
+
+<SequenceDiagram
+  caption="함께 쓰는 브랜치를 rebase하고 강제 푸시하면"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "origin", label: "origin" },
+    { id: "jane", label: "Jane" },
+  ]}
+  steps={[
+    {
+      from: "me",
+      to: "origin",
+      label: "push feature/share",
+      title: "브랜치를 올린다",
+      detail: "공유 기능 1, 2 커밋(cbce97c, 1d82ba1)을 feature/share로 푸시했다.",
+    },
+    {
+      from: "origin",
+      to: "jane",
+      label: "fetch",
+      title: "Jane이 받아서 그 위에 작업한다",
+      detail: "Jane은 feature/share를 받아 그 위에 테스트 커밋 c0aed1d를 쌓았다. Jane의 커밋은 옛 해시 1d82ba1을 부모로 가리킨다.",
+    },
+    {
+      from: "me",
+      to: "me",
+      label: "rebase main",
+      title: "나는 main 위로 rebase한다",
+      detail: "공유 기능 1, 2가 8a3590c, f765ae3이라는 새 커밋이 된다. 내용은 같지만 Git에게는 다른 커밋이다.",
+    },
+    {
+      from: "me",
+      to: "origin",
+      label: "push (거부)",
+      title: "그냥 푸시하면 거부된다",
+      detail: "원격의 1d82ba1이 내 브랜치의 조상이 아니니 fast-forward가 아니다. 원격이 옛 커밋을 잃지 않게 막는 장치다.",
+      payload: " ! [rejected]        feature/share -> feature/share (non-fast-forward)",
+    },
+    {
+      from: "me",
+      to: "origin",
+      label: "--force-with-lease",
+      title: "강제로 덮어쓴다",
+      detail: "원격 브랜치가 새 커밋을 가리키게 바뀐다. 옛 커밋 두 개는 원격에서 아무도 가리키지 않게 됐다.",
+      payload: " + 1d82ba1...f765ae3 feature/share -> feature/share (forced update)",
+    },
+    {
+      from: "origin",
+      to: "jane",
+      label: "pull (merge)",
+      title: "Jane이 평소처럼 pull한다",
+      detail: "Jane의 브랜치에는 옛 커밋과 그 위의 테스트 커밋이, 원격에는 새 커밋이 있다. merge로 합치면 같은 내용의 커밋이 두 벌씩 히스토리에 남는다.",
+    },
+  ]}
+/>
+
+Jane 쪽 히스토리를 실제로 보면 이렇다.
+
+```bash
+# Jane의 저장소: 강제 푸시된 브랜치를 merge로 pull한 결과
+git pull --no-rebase --no-edit
+git log --oneline --graph
+```
+
+```text
+From /tmp/git-demo-3b/origin
+ + 1d82ba1...f765ae3 feature/share -> origin/feature/share  (forced update)
+   8040046..e6d495a  main          -> origin/main
+Merge made by the 'ort' strategy.
+ m2.txt | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 m2.txt
+
+*   bb83ab3 Merge branch 'feature/share' of /tmp/git-demo-3b/origin into feature/share
+|\  
+| * f765ae3 공유 기능 2
+| * 8a3590c 공유 기능 1
+| * e6d495a main에 새 커밋
+* | c0aed1d Jane: 공유 기능에 테스트
+* | 1d82ba1 공유 기능 2
+* | cbce97c 공유 기능 1
+|/  
+* 8040046 내 커밋
+* 8e43ac1 Jane의 커밋
+* 53597bb A
+```
+
+"공유 기능 1", "공유 기능 2"가 해시만 다른 채로 두 번씩 들어갔다. Jane이 이걸 다시 푸시하면 옛 커밋이 원격에 되살아나고, 그 사이에 충돌이라도 났다면 같은 충돌을 또 풀어야 한다. 커밋 수가 많고 사람이 여럿이면 정리하기 꽤 고통스럽다.
+
+Jane이 할 수 있는 정리법은 병합을 버리고 rebase로 받는 것이다.
+
+```bash
+# Jane: 방금 병합 커밋을 버리고
+git reset -q --hard HEAD~1
+
+# rebase로 다시 받는다
+git pull --rebase
+git log --oneline --graph -6
+```
+
+```text
+Successfully rebased and updated refs/heads/feature/share.
+
+* f66daf1 Jane: 공유 기능에 테스트
+* f765ae3 공유 기능 2
+* 8a3590c 공유 기능 1
+* e6d495a main에 새 커밋
+* 8040046 내 커밋
+* 8e43ac1 Jane의 커밋
+```
+
+`git pull --rebase`는 원격 추적 브랜치(`origin/feature/share`)의 reflog를 보고 "원격이 예전에 1d82ba1이었다"는 걸 안다. 그래서 그 옛 커밋들은 이미 원격에서 다시 써졌다고 보고 빼고, Jane의 커밋만 새 커밋 위로 옮긴다. 이 기능을 fork-point라고 한다. Jane이 옛 커밋 위에 쌓은 게 많거나 reflog가 없는 새 클론이라면 `git rebase --onto origin/feature/share 1d82ba1`처럼 옛 끝을 직접 지정한다.
+
+어쩔 수 없이 공유 브랜치를 다시 써야 할 때는 이렇게 한다. 먼저 팀에 알린다. 강제 푸시는 `--force`가 아니라 `--force-with-lease`로 한다. 이 옵션은 원격 브랜치가 내가 마지막으로 fetch한 위치 그대로일 때만 덮어써서, 그사이 누군가 푸시한 커밋을 모르고 지우는 사고를 막는다. 그리고 받는 쪽은 `git pull --rebase`로 받는다. main처럼 모두가 쓰는 브랜치는 호스팅 서비스의 브랜치 보호 규칙으로 강제 푸시 자체를 막아 둔다. 강제 푸시와 원격 설정은 [원격 협업 글](/posts/git-remote-collaboration)에서 더 다룬다.
+
+## rebase를 잘못했을 때
+
+rebase에서 커밋을 실수로 drop했거나 충돌을 엉뚱하게 풀었다면, 끝난 뒤에도 되돌릴 수 있다. 원래 커밋은 지워지지 않고 남아 있기 때문이다.
+
+```bash
+# "검색어 강조"를 실수로 지운 rebase
+git log --oneline main..HEAD
+GIT_SEQUENCE_EDITOR="sed -i '/검색어 강조/d'" git rebase -i main
+git log --oneline main..HEAD
+```
+
+```text
+9539a2e 검색 UI
+44f9986 검색어 강조
+1e04b82 검색 함수
+
+Successfully rebased and updated refs/heads/feature/search.
+
+166f427 검색 UI
+632a6fa 검색 함수
+```
+
+커밋 하나가 사라졌다. 방금 끝난 rebase라면 `ORIG_HEAD`가 rebase 직전 위치를 갖고 있다. 시간이 좀 지났거나 그사이 다른 명령을 쳤다면 reflog에서 찾는다.
+
+```bash
+# HEAD가 지나온 자리
+git reflog -6
+
+# 브랜치 이름표가 지나온 자리. rebase 전후가 한 줄씩이라 더 보기 쉽다
+git reflog -3 feature/search
+```
+
+```text
+166f427 HEAD@{0}: rebase (finish): returning to refs/heads/feature/search
+166f427 HEAD@{1}: rebase (pick): 검색 UI
+632a6fa HEAD@{2}: rebase (pick): 검색 함수
+0afb372 HEAD@{3}: rebase (start): checkout main
+9539a2e HEAD@{4}: checkout: moving from main to feature/search
+0afb372 HEAD@{5}: commit: M
+
+166f427 feature/search@{0}: rebase (finish): refs/heads/feature/search onto 0afb372621afc7384f55b43d2fafb12c55f30f4f
+9539a2e feature/search@{1}: commit: 검색 UI
+44f9986 feature/search@{2}: commit: 검색어 강조
+```
+
+HEAD의 reflog에는 rebase가 커밋 하나를 적용할 때마다 한 줄씩 남아서 길다. `rebase (start)` 바로 아래 줄(`HEAD@{4}`, 9539a2e)이 rebase 직전 위치다. 브랜치의 reflog는 이름표가 움직인 때만 남아서, `feature/search@{1}`이 바로 rebase 직전이다.
+
+```bash
+# rebase 직전으로 되돌린다. ORIG_HEAD, HEAD@{4}, feature/search@{1} 모두 같은 커밋이다
+git reset --hard ORIG_HEAD
+git log --oneline --graph --decorate --all
+```
+
+```text
+HEAD is now at 9539a2e 검색 UI
+
+* 0afb372 (main) M
+| * 9539a2e (HEAD -> feature/search) 검색 UI
+| * 44f9986 검색어 강조
+| * 1e04b82 검색 함수
+|/  
+* d3ff5a4 B
+* 4198bca A
+```
+
+rebase 전으로 완전히 돌아왔다. `reset --hard`는 커밋하지 않은 변경을 지우니, 작업 트리가 깨끗한지 먼저 확인한다. 큰 rebase를 하기 전에 `git branch backup/search`처럼 이름표를 하나 붙여 두면 reflog를 뒤질 필요도 없다. reflog와 되돌리기 전반은 [되돌리기 글](/posts/git-undo)에서 자세히 다룬다.
+
+## 병합 커밋까지 옮겨야 할 때
+
+기본 rebase는 병합 커밋을 버리고 일자로 편다. 대부분은 그게 원하는 결과지만, 브랜치 안에 일부러 남긴 병합(하위 기능 브랜치를 합친 구조)이 있다면 그 모양까지 살리고 싶을 수 있다. `--rebase-merges`(`-r`)를 쓰면 todo 목록에 `label`, `reset`, `merge` 명령이 들어가서 갈래와 병합 커밋을 새 받침 위에 그대로 다시 만든다. 앞의 todo 목록 도움말에 있던 `l`, `t`, `m`이 이 옵션용이다. 병합 커밋을 다시 만들 때 원래 병합에서 풀었던 충돌은 기억하지 않아서 다시 풀어야 할 수 있다. 쓸 일이 드물지만, 병합이 사라져서 당황했다면 이 옵션을 떠올리면 된다.
+
+## 다시 정리하면
+
+rebase는 내 브랜치의 커밋이 바꾼 내용을 새 받침 위에 하나씩 다시 적용해 새 커밋을 만드는 일이다. 그래서 히스토리가 일자로 정리되는 대신 해시가 바뀌고, 이미 다른 사람이 받아 간 커밋에 하면 그쪽에 같은 커밋이 두 벌 생긴다. 처음 상황의 얽힌 브랜치는 혼자 쓰는 브랜치이니 `git rebase main`으로 펴고 `--force-with-lease`로 푸시하면 된다. 정리가 필요하면 interactive rebase와 `--fixup`·`--autosquash`를 쓰고, 잘못됐으면 `ORIG_HEAD`나 reflog로 돌아간다.
+
+## 면접에서 나올 만한 질문
+
+### rebase는 무엇을 하나요? merge와 무엇이 다른가요?
+
+rebase는 공통 조상 이후 내 브랜치에만 있는 커밋의 변경을 새 받침 위에 하나씩 다시 적용해 새 커밋을 만들고, 브랜치를 그 끝으로 옮긴다. merge는 기존 커밋을 그대로 두고 두 갈래를 잇는 병합 커밋을 하나 만든다. rebase는 히스토리가 일자로 깔끔해지지만 해시가 바뀌고, merge는 실제 있었던 갈래를 보존하지만 병합 커밋이 쌓인다. 그래서 혼자 쓰는 브랜치 정리에는 rebase, 공유 브랜치 통합에는 merge를 주로 쓴다.
+
+### rebase 후 커밋 해시는 왜 바뀌나요?
+
+커밋 해시는 tree, 부모 해시, 작성자와 커미터 정보, 메시지를 모두 넣어 계산한다. rebase하면 부모가 새 받침으로 바뀌고 커미터 시각도 바뀌니, 변경 내용이 같아도 다른 커밋이 된다. 원래 커밋은 그대로 남아 있어서 ORIG_HEAD나 reflog로 돌아갈 수 있다. `git range-diff`로 전후 커밋의 패치가 같은지 확인할 수 있다.
+
+### 이미 푸시한 브랜치를 rebase하면 어떤 문제가 생기나요?
+
+원격과 다른 사람의 저장소에는 옛 커밋이 남아 있어서, 그냥 푸시하면 non-fast-forward로 거부되고 강제로 덮어쓰면 그 위에 작업한 사람의 히스토리가 옛 커밋에 매달린다. 그 사람이 merge로 pull하면 같은 내용의 커밋이 두 벌 생기고, 다시 푸시하면 옛 커밋이 되살아난다. 꼭 해야 한다면 팀에 알리고 `--force-with-lease`로 푸시하고, 받는 쪽은 `git pull --rebase`로 받는다. main 같은 공유 브랜치는 보호 규칙으로 강제 푸시를 막는다.
+
+### rebase 중 충돌이 나면 어떻게 하나요? ours와 theirs는 무엇인가요?
+
+충돌 파일을 고쳐 `git add`하고 `git rebase --continue`로 다음 커밋으로 간다. 그 커밋이 필요 없어졌으면 `--skip`, 전체를 취소하려면 `--abort`를 쓴다. rebase 중 HEAD는 새 받침 위에 쌓아 가는 쪽이라, ours는 받침(예: main)이고 theirs는 다시 적용 중인 내 커밋이다. merge와 반대라서 `--ours`로 고르면 내 변경을 버리게 된다.
+
+### interactive rebase에서 squash와 fixup은 어떻게 다른가요?
+
+둘 다 그 커밋을 바로 위 커밋에 합친다. squash는 두 메시지를 합쳐서 에디터로 편집하게 하고, fixup은 합쳐지는 커밋의 메시지를 버리고 위 커밋의 메시지만 남긴다. `git commit --fixup=해시`로 커밋해 두면 `--autosquash`가 그 커밋을 대상 아래로 옮기고 fixup으로 바꿔 준다. 리뷰 반영 커밋을 정리할 때 많이 쓴다.
+
+### git pull --rebase는 왜 쓰나요?
+
+pull은 fetch 뒤 merge가 기본이라, 원격에 새 커밋이 있을 때마다 의미 없는 병합 커밋이 생긴다. 아직 푸시하지 않은 내 커밋은 나만 갖고 있으니 rebase로 원격 커밋 뒤에 붙이면 히스토리가 일자로 유지된다. `pull.rebase true`로 기본값을 바꿀 수 있고, 최신 Git은 방식을 정하지 않은 채 갈라지면 pull을 멈춘다. 원격이 강제 푸시된 경우에도 fork-point로 옛 커밋을 빼고 내 커밋만 옮겨 준다.
+
+### rebase를 잘못해서 커밋이 사라졌습니다. 되돌릴 수 있나요?
+
+대부분 되돌릴 수 있다. rebase는 원래 커밋을 지우지 않고 브랜치만 옮기므로, 직후라면 `git reset --hard ORIG_HEAD`, 시간이 지났다면 `git reflog`에서 `rebase (start)` 직전 줄이나 `브랜치@{1}`을 찾아 reset한다. 원래 커밋은 reflog가 만료되고 gc가 돌 때까지 남아 있다. rebase 도중이라면 reset이 아니라 `git rebase --abort`로 빠져나온다.
+
+### --onto는 언제 쓰나요?
+
+브랜치의 일부 커밋만 다른 받침으로 옮길 때 쓴다. `git rebase --onto main feature/api feature/ui`는 feature/api 다음부터 feature/ui까지의 커밋만 main 위로 옮긴다. 위에 쌓은 브랜치의 아래 브랜치가 squash로 합쳐졌거나 버려졌을 때, 잘못된 브랜치에서 갈라 나왔을 때, 중간 커밋 몇 개를 빼고 싶을 때 유용하다. 아래 브랜치까지 함께 옮기려면 2.38부터 있는 `--update-refs`를 쓴다.
