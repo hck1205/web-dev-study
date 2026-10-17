@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sqld-subquery-set-operators",
+    title: "SQLD 서브쿼리와 집합 연산자",
+    summary: "'자기 부서 평균보다 많이 받는 사람'을 쿼리 하나로 구하면서 서브쿼리의 세 자리와 단일행·다중행 연산자, 상관 서브쿼리, NOT IN에 NULL이 섞이면 0행이 되는 함정을 SCOTT 데이터로 따라간다. UNION과 UNION ALL의 비용 차이, MINUS와 EXCEPT, 집합 연산자의 규칙과 DB별 우선순위도 정리한다.",
+    topic: "programming/database/sqld",
+    tags: ["Database", "SQL", "SQLD"],
+    date: "2026-10-17",
+    keywords: ["상관 서브쿼리", "스칼라 서브쿼리", "인라인 뷰", "UNION ALL", "집합 연산자"],
+  },
+  {
+    slug: "sqld-window-functions",
+    title: "SQLD 윈도우 함수: 순위, 누적합, 앞뒤 행",
+    summary: "부서별 급여 순위와 누적 급여를 셀프 조인 없이 구하면서 RANK, DENSE_RANK, ROW_NUMBER가 동점에서 갈리는 모습과 ROWS와 RANGE 프레임의 차이를 실제 숫자로 본다. LAST_VALUE의 기본 프레임 함정, LAG와 LEAD, 비율과 분위 함수, WHERE에 못 쓰는 이유까지 다룬다.",
+    topic: "programming/database/sqld",
+    tags: ["Database", "SQL", "SQLD"],
+    date: "2026-10-17",
+    keywords: ["윈도우 함수", "DENSE_RANK", "윈도우 프레임", "ROW_NUMBER"],
+  },
+  {
+    slug: "sqld-rollup-cube-grouping-sets",
+    title: "SQLD ROLLUP, CUBE, GROUPING SETS",
+    summary: "부서 소계와 전체 합계가 있는 인건비 보고서를 쿼리 하나로 만들면서 ROLLUP, CUBE, GROUPING SETS가 만드는 묶음과 결과 행 수를 EMP 데이터로 센다. GROUPING 함수로 소계 줄에 이름표를 붙이고 부분 ROLLUP까지 정리한다.",
+    topic: "programming/database/sqld",
+    tags: ["Database", "SQL", "SQLD"],
+    date: "2026-10-17",
+    keywords: ["ROLLUP", "GROUPING SETS", "GROUPING_ID"],
+  },
+  {
+    slug: "sqld-top-n-hierarchical-pivot",
+    title: "SQLD Top-N, 계층형 쿼리, PIVOT",
+    summary: "급여 상위 3명과 조직도 화면을 만들면서 ROWNUM이 정렬보다 먼저 붙는 함정, WITH TIES, CONNECT BY와 PostgreSQL의 재귀 CTE, WHERE와 CONNECT BY 조건의 차이를 SCOTT 데이터로 확인한다. PIVOT과 UNPIVOT, 정규 표현식 함수도 함께 본다.",
+    topic: "programming/database/sqld",
+    tags: ["Database", "SQL", "SQLD"],
+    date: "2026-10-17",
+    keywords: ["ROWNUM", "계층형 쿼리", "CONNECT BY", "재귀 CTE", "PIVOT"],
+  },
+  {
     slug: "sql-basics",
     title: "SQL 기본 명령어: 테이블을 만들고 읽고 고치기",
     summary: "빈 DB에서 테이블 세 개를 만들고 행을 넣고 읽고 고치고 지워 본다. DDL·DML·DCL·TCL, 제약 조건, NULL과 3값 논리, DELETE·TRUNCATE·DROP의 차이, Oracle·SQL Server와 다른 점까지 실제 출력으로 확인한다.",

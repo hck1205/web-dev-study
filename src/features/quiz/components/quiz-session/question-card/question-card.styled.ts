@@ -29,6 +29,8 @@ export const Question = styled.h2`
   font-weight: ${font.weight.bold};
   line-height: ${font.leading.snug};
   letter-spacing: -0.01em;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 `;
 
 export const ChoiceList = styled.ol`

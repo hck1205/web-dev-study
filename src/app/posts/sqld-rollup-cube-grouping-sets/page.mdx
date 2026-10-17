@@ -1,0 +1,570 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-rollup-cube-grouping-sets");
+
+월말에 부서별, 직무별 인건비 보고서를 만든다. 엑셀로 받던 사람이 원하는 모양은 정해져 있다. 부서 안에 직무별 합계가 있고, 부서가 끝날 때마다 "부서 소계" 줄이 있고, 맨 아래에 "전체 합계" 줄이 있다. `GROUP BY deptno, job`으로는 직무별 줄만 나온다. 소계는 `GROUP BY deptno`, 총계는 `GROUP BY` 없이 따로 구해서 `UNION ALL`로 붙이면 되는데, 그러면 같은 테이블을 세 번 읽는 쿼리가 된다.
+
+`ROLLUP`은 이 세 번의 GROUP BY를 한 번에 해 준다. 이 글은 SQLD의 그룹 함수 셋, `ROLLUP`, `CUBE`, `GROUPING SETS`가 각각 어떤 묶음을 만드는지와 결과가 몇 행이 나오는지를 실제 숫자로 따라간다. 결과 행 수를 묻는 문제가 시험에 자주 나오니 숫자를 세는 방법에 집중한다. 소계 줄에 이름표를 붙이는 `GROUPING` 함수도 본다.
+
+예제는 SCOTT의 `EMP` 14명이다. 데이터는 [SQLD 서브쿼리와 집합 연산자](/posts/sqld-subquery-set-operators) 글 앞부분에 정리해 두었다. `GROUP BY`와 `HAVING`의 기본은 [SQLD GROUP BY와 HAVING](/posts/sqld-group-by-having) 글에 있다. SQL은 Oracle 문법을 기준으로 쓰고, 결과는 PostgreSQL 16.15에서 돌린 출력이다. 세 함수는 Oracle, PostgreSQL, SQL Server가 같은 문법으로 지원한다.
+
+## 출발점은 9개의 묶음
+
+먼저 평범한 `GROUP BY`로 부서와 직무 조합을 본다.
+
+```sql
+SELECT deptno, job, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY deptno, job
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | cnt | sum_sal
+--------+-----------+-----+---------
+     10 | CLERK     |   1 |    1300
+     10 | MANAGER   |   1 |    2450
+     10 | PRESIDENT |   1 |    5000
+     20 | ANALYST   |   2 |    6000
+     20 | CLERK     |   2 |    1900
+     20 | MANAGER   |   1 |    2975
+     30 | CLERK     |   1 |     950
+     30 | MANAGER   |   1 |    2850
+     30 | SALESMAN  |   4 |    5600
+(9 rows)
+```
+
+9행이다. 뒤에서 계속 쓸 숫자를 적어 둔다. 부서는 3종류(10, 20, 30), 직무는 5종류(ANALYST, CLERK, MANAGER, PRESIDENT, SALESMAN), 부서와 직무 조합은 9종류다. 각 함수의 결과 행 수는 이 숫자를 더해서 나온다.
+
+## ROLLUP은 오른쪽부터 하나씩 지운다
+
+`ROLLUP(deptno, job)`은 묶음 기준을 오른쪽부터 하나씩 지우면서 세 번 집계한다. `(deptno, job)`, `(deptno)`, `()`이다. 빈 괄호 `()`는 아무것으로도 묶지 않는다는 뜻, 즉 전체 합계다.
+
+```sql
+SELECT deptno, job, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY ROLLUP (deptno, job)
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | cnt | sum_sal
+--------+-----------+-----+---------
+     10 | CLERK     |   1 |    1300
+     10 | MANAGER   |   1 |    2450
+     10 | PRESIDENT |   1 |    5000
+     10 |           |   3 |    8750
+     20 | ANALYST   |   2 |    6000
+     20 | CLERK     |   2 |    1900
+     20 | MANAGER   |   1 |    2975
+     20 |           |   5 |   10875
+     30 | CLERK     |   1 |     950
+     30 | MANAGER   |   1 |    2850
+     30 | SALESMAN  |   4 |    5600
+     30 |           |   6 |    9400
+        |           |  14 |   29025
+(13 rows)
+```
+
+job 칸이 빈 줄이 부서 소계, 두 칸이 다 빈 마지막 줄이 전체 합계다. 소계 줄에서는 묶음 기준에서 빠진 컬럼이 NULL로 채워진다. 아래 그림에서 다음을 누르면 세 단계의 집계가 결과에 어떻게 섞여 들어가는지 나온다.
+
+<AlgoTrace
+  caption="ROLLUP(deptno, job)의 13행이 만들어지는 순서"
+  memoryLabel="지금 단계의 묶음 기준"
+  cells={["10 CLERK", "10 MGR", "10 PRES", "10 소계", "20 ANAL", "20 CLERK", "20 MGR", "20 소계", "30 CLERK", "30 MGR", "30 SALES", "30 소계", "총계"]}
+  steps={[
+    { memory: [], caption: "결과 13칸이다. 아직 아무것도 계산하지 않았다. MGR은 MANAGER, PRES는 PRESIDENT, ANAL은 ANALYST를 줄인 것이다." },
+    { pointer: 10, found: [0, 1, 2, 4, 5, 6, 8, 9, 10], memory: ["(deptno, job)", "9행"], caption: "1단계. 부서와 직무로 묶는다. 평범한 GROUP BY deptno, job과 같은 9행이다." },
+    { pointer: 11, found: [3, 7, 11], memory: ["(deptno)", "3행"], caption: "2단계. 오른쪽의 job을 지우고 부서로만 묶는다. 부서 소계 3행이 생기고 job 칸은 NULL이다." },
+    { pointer: 12, found: [12], memory: ["()", "1행"], caption: "3단계. deptno까지 지우면 전체 합계 1행이다. 14명, 29025." },
+    { pointer: 12, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], memory: ["9 + 3 + 1", "13행"], caption: "합치면 9 + 3 + 1 = 13행이다. 컬럼이 n개인 ROLLUP은 n + 1단계로 집계한다." },
+  ]}
+/>
+
+결과를 정렬하지 않아도 Oracle은 보통 이 모양(그룹 뒤에 소계)으로 내 주지만, 보장된 순서는 아니다. 보고서라면 `ORDER BY`를 직접 붙인다. 정렬할 때 NULL 위치도 DB마다 다르다. Oracle과 PostgreSQL은 오름차순에서 NULL을 맨 뒤에 두어 소계가 그룹 아래에 오고, SQL Server는 NULL을 맨 앞에 두어 소계가 그룹 위로 올라간다. 뒤에 나오는 `GROUPING`으로 정렬하면 어디서든 같은 모양이 된다.
+
+컬럼 순서를 바꾸면 다른 보고서가 된다. `ROLLUP(job, deptno)`는 `(job, deptno)`, `(job)`, `()`을 집계한다. 소계가 부서가 아니라 직무별로 나온다.
+
+```sql
+SELECT job, deptno, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY ROLLUP (job, deptno)
+ORDER BY job, deptno;
+```
+
+```text
+    job    | deptno | cnt | sum_sal
+-----------+--------+-----+---------
+ ANALYST   |     20 |   2 |    6000
+ ANALYST   |        |   2 |    6000
+ CLERK     |     10 |   1 |    1300
+ CLERK     |     20 |   2 |    1900
+ CLERK     |     30 |   1 |     950
+ CLERK     |        |   4 |    4150
+ MANAGER   |     10 |   1 |    2450
+ MANAGER   |     20 |   1 |    2975
+ MANAGER   |     30 |   1 |    2850
+ MANAGER   |        |   3 |    8275
+ PRESIDENT |     10 |   1 |    5000
+ PRESIDENT |        |   1 |    5000
+ SALESMAN  |     30 |   4 |    5600
+ SALESMAN  |        |   4 |    5600
+           |        |  14 |   29025
+(15 rows)
+```
+
+9 + 5 + 1 = 15행이다. 직무가 5종류라서 소계가 5행이다. `ROLLUP`은 인자 순서가 계층(큰 분류 → 작은 분류)이라 순서가 바뀌면 결과가 달라진다. 시험에서 "`ROLLUP(A, B)`와 `ROLLUP(B, A)`의 결과는 같다"는 틀린 보기다.
+
+## CUBE는 가능한 조합을 전부 만든다
+
+`CUBE(deptno, job)`은 컬럼으로 만들 수 있는 모든 조합을 집계한다. 컬럼 2개면 2의 2제곱, 4가지다. `(deptno, job)`, `(deptno)`, `(job)`, `()`이다. 아래 그림은 두 컬럼으로 만들 수 있는 네 묶음과, `ROLLUP`과 `CUBE`가 그중 어디를 쓰는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="ROLLUP은 한 줄기, CUBE는 네 묶음 전부"
+  nodes={[
+    { id: "dj", label: "(deptno, job)", sub: "9행", x: 200, y: 40, w: 150 },
+    { id: "d", label: "(deptno)", sub: "부서 소계 3행", x: 95, y: 150, w: 140 },
+    { id: "j", label: "(job)", sub: "직무 소계 5행", x: 305, y: 150, w: 140 },
+    { id: "all", label: "()", sub: "총계 1행", x: 200, y: 260, w: 120 },
+  ]}
+  edges={[
+    { from: "dj", to: "d", label: "ROLLUP" },
+    { from: "d", to: "all", label: "ROLLUP" },
+    { from: "dj", to: "j", label: "CUBE만", dashed: true },
+    { from: "j", to: "all", label: "CUBE만", dashed: true },
+  ]}
+/>
+
+```sql
+SELECT deptno, job, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY CUBE (deptno, job)
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | cnt | sum_sal
+--------+-----------+-----+---------
+     10 | CLERK     |   1 |    1300
+     10 | MANAGER   |   1 |    2450
+     10 | PRESIDENT |   1 |    5000
+     10 |           |   3 |    8750
+     20 | ANALYST   |   2 |    6000
+     20 | CLERK     |   2 |    1900
+     20 | MANAGER   |   1 |    2975
+     20 |           |   5 |   10875
+     30 | CLERK     |   1 |     950
+     30 | MANAGER   |   1 |    2850
+     30 | SALESMAN  |   4 |    5600
+     30 |           |   6 |    9400
+        | ANALYST   |   2 |    6000
+        | CLERK     |   4 |    4150
+        | MANAGER   |   3 |    8275
+        | PRESIDENT |   1 |    5000
+        | SALESMAN  |   4 |    5600
+        |           |  14 |   29025
+(18 rows)
+```
+
+9 + 3 + 5 + 1 = 18행이다. `ROLLUP(deptno, job)`의 13행에 직무 소계 5행이 더해졌다. `CUBE`는 모든 조합을 만드니 인자 순서를 바꿔도 같은 행들이 나온다(출력 순서와 컬럼 배치만 다르다).
+
+컬럼이 늘면 `CUBE`는 빠르게 커진다. 컬럼 3개면 8가지 조합이다. 실제로 세어 보면 차이가 크다.
+
+```sql
+SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY deptno, job, mgr) t;          -- 10
+SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY ROLLUP (deptno, job, mgr)) t; -- 23
+SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY CUBE (deptno, job, mgr)) t;   -- 52
+```
+
+```text
+ count
+-------
+    10
+(1 row)
+
+ count
+-------
+    23
+(1 row)
+
+ count
+-------
+    52
+(1 row)
+```
+
+`ROLLUP`은 4단계(10 + 9 + 3 + 1 = 23), `CUBE`는 8가지 조합을 모두 집계해서 52행이다. 필요한 소계가 정해져 있으면 `CUBE`보다 다음에 나올 `GROUPING SETS`로 필요한 것만 고르는 편이 계산도 결과도 작다.
+
+## GROUPING SETS는 원하는 묶음만 적는다
+
+`GROUPING SETS`는 집계할 묶음을 직접 나열한다. 부서별 합계와 직무별 합계만 필요하면 이렇게 쓴다.
+
+```sql
+SELECT deptno, job, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY GROUPING SETS (deptno, job)
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | cnt | sum_sal
+--------+-----------+-----+---------
+     10 |           |   3 |    8750
+     20 |           |   5 |   10875
+     30 |           |   6 |    9400
+        | ANALYST   |   2 |    6000
+        | CLERK     |   4 |    4150
+        | MANAGER   |   3 |    8275
+        | PRESIDENT |   1 |    5000
+        | SALESMAN  |   4 |    5600
+(8 rows)
+```
+
+3 + 5 = 8행이다. `(deptno, job)` 조합도, 전체 합계도 없다. 적은 것만 나온다. 이건 두 `GROUP BY`를 `UNION ALL`로 붙인 것과 결과가 같다.
+
+```sql
+SELECT deptno, NULL AS job, COUNT(*), SUM(sal) FROM emp GROUP BY deptno   -- PostgreSQL은 NULL::varchar
+UNION ALL
+SELECT NULL, job, COUNT(*), SUM(sal) FROM emp GROUP BY job
+ORDER BY 1, 2;
+```
+
+PostgreSQL에서는 `NULL::varchar AS job`처럼 타입을 적어 줘야 두 번째 쿼리의 문자열과 맞는다. 그렇게 돌린 결과는 위와 같은 8행이고, 숫자도 한 줄씩 같다. `UNION ALL` 방식은 테이블을 묶음 개수만큼 읽지만, `GROUPING SETS`는 DB가 한 번 읽어서 여러 묶음을 동시에 만들 수 있다.
+
+`ROLLUP`과 `CUBE`는 모두 `GROUPING SETS`로 풀어 쓸 수 있다. 시험에서 "같은 결과를 내는 것은?"을 물으면 이 변환을 한다.
+
+```sql
+-- ROLLUP(deptno, job) 과 같다: 13행
+GROUP BY GROUPING SETS ((deptno, job), (deptno), ())
+
+-- CUBE(deptno, job) 과 같다: 18행
+GROUP BY GROUPING SETS ((deptno, job), (deptno), (job), ())
+```
+
+괄호에 주의한다. `GROUPING SETS (deptno, job)`은 묶음 두 개(부서, 직무)이고, `GROUPING SETS ((deptno, job))`은 묶음 하나(부서와 직무 조합)라서 평범한 `GROUP BY deptno, job`과 같다.
+
+## 소계 줄에 이름표를 붙이는 GROUPING
+
+`ROLLUP` 결과의 빈칸은 "소계라서 비어 있다"는 뜻이다. 그런데 데이터 자체가 NULL인 경우도 있다. KING의 `mgr`이 그렇다. 상사별로 `ROLLUP`하면 NULL 행이 두 개 나온다.
+
+```sql
+SELECT mgr, COUNT(*), GROUPING(mgr) AS g
+FROM emp
+GROUP BY ROLLUP (mgr)
+ORDER BY mgr NULLS FIRST, g;
+```
+
+```text
+ mgr  | count | g
+------+-------+---
+      |     1 | 0
+      |    14 | 1
+ 7566 |     2 | 0
+ 7698 |     5 | 0
+ 7782 |     1 | 0
+ 7788 |     1 | 0
+ 7839 |     3 | 0
+ 7902 |     1 | 0
+(8 rows)
+```
+
+첫 줄은 "상사가 NULL인 사람"(KING) 1명이고, 둘째 줄은 전체 합계 14명이다. 겉으로는 둘 다 빈칸이라 구분이 안 된다. `GROUPING(컬럼)`이 이걸 구분한다. 그 컬럼이 집계 때문에 빠져서 NULL이면 1, 실제 값(NULL 포함)이면 0이다. 정렬 옵션 `NULLS FIRST`는 Oracle과 PostgreSQL 문법이고 SQL Server에는 없다.
+
+부서와 직무 `ROLLUP`에 붙여 보면 소계 줄과 총계 줄의 표시가 이렇다.
+
+```sql
+SELECT deptno, job, GROUPING(deptno) AS gd, GROUPING(job) AS gj, SUM(sal)
+FROM emp
+GROUP BY ROLLUP (deptno, job)
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | gd | gj |  sum
+--------+-----------+----+----+-------
+     10 | CLERK     |  0 |  0 |  1300
+     10 | MANAGER   |  0 |  0 |  2450
+     10 | PRESIDENT |  0 |  0 |  5000
+     10 |           |  0 |  1 |  8750
+     20 | ANALYST   |  0 |  0 |  6000
+     20 | CLERK     |  0 |  0 |  1900
+     20 | MANAGER   |  0 |  0 |  2975
+     20 |           |  0 |  1 | 10875
+     30 | CLERK     |  0 |  0 |   950
+     30 | MANAGER   |  0 |  0 |  2850
+     30 | SALESMAN  |  0 |  0 |  5600
+     30 |           |  0 |  1 |  9400
+        |           |  1 |  1 | 29025
+(13 rows)
+```
+
+이 값을 `CASE`나 Oracle의 `DECODE`에 넣으면 보고서의 이름표가 된다. 아래 쿼리의 조각을 눌러 보면 각각이 무슨 일을 하는지 나온다.
+
+<UrlAnatomy
+  caption="소계 이름표를 붙이는 SELECT 읽기"
+  base="SELECT"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "dept",
+      display: "DECODE(GROUPING(deptno), 1, '전체 합계', deptno)",
+      title: "부서 칸",
+      description: "deptno가 집계로 빠진 줄(총계)이면 '전체 합계'를, 아니면 부서 번호를 보여 준다. DECODE(값, 비교, 결과, 기본값)은 Oracle 전용이고, 표준 SQL에서는 CASE WHEN으로 쓴다.",
+      code: "CASE WHEN GROUPING(deptno) = 1 THEN '전체 합계'\n     ELSE CAST(deptno AS VARCHAR(10)) END",
+    },
+    {
+      key: "job",
+      display: "DECODE(GROUPING(job), 1, '부서 소계', job)",
+      title: "직무 칸",
+      description: "job이 집계로 빠졌으면 '부서 소계'라고 쓴다. 이대로면 총계 줄의 job 칸에도 '부서 소계'가 찍힌다. 총계 줄을 빼려면 GROUPING(deptno)도 같이 본다.",
+      code: "CASE WHEN GROUPING(job) = 1 AND GROUPING(deptno) = 0 THEN '부서 소계'\n     WHEN GROUPING(job) = 1 THEN ' '\n     ELSE job END",
+    },
+    {
+      key: "agg",
+      display: "COUNT(*), SUM(sal)",
+      title: "집계 값",
+      description: "모든 줄에서 그 줄이 대표하는 묶음의 집계다. 소계 줄은 부서 전체, 총계 줄은 14명 전체를 센다.",
+    },
+    {
+      key: "group",
+      display: "GROUP BY ROLLUP (deptno, job)",
+      title: "묶음 단계",
+      description: "(deptno, job) 9행, (deptno) 3행, () 1행. GROUPING 함수에 넣는 컬럼은 반드시 여기 있는 컬럼이어야 한다.",
+    },
+  ]}
+/>
+
+PostgreSQL에는 `DECODE`가 없으니 `CASE`로 돌린 결과다. 정렬도 `GROUPING`으로 해서 DB의 NULL 정렬 규칙에 기대지 않는다.
+
+```sql
+SELECT CASE WHEN GROUPING(deptno) = 1 THEN '전체 합계'
+            ELSE deptno::text END                                  AS dept,
+       CASE WHEN GROUPING(job) = 1 AND GROUPING(deptno) = 0 THEN '부서 소계'
+            WHEN GROUPING(job) = 1 THEN ' '
+            ELSE job END                                           AS job,
+       COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY ROLLUP (deptno, job)
+ORDER BY GROUPING(deptno), deptno, GROUPING(job), job;   -- 총계는 맨 끝, 소계는 부서 끝
+```
+
+```text
+   dept    |    job    | cnt | sum_sal
+-----------+-----------+-----+---------
+ 10        | CLERK     |   1 |    1300
+ 10        | MANAGER   |   1 |    2450
+ 10        | PRESIDENT |   1 |    5000
+ 10        | 부서 소계 |   3 |    8750
+ 20        | ANALYST   |   2 |    6000
+ 20        | CLERK     |   2 |    1900
+ 20        | MANAGER   |   1 |    2975
+ 20        | 부서 소계 |   5 |   10875
+ 30        | CLERK     |   1 |     950
+ 30        | MANAGER   |   1 |    2850
+ 30        | SALESMAN  |   4 |    5600
+ 30        | 부서 소계 |   6 |    9400
+ 전체 합계 |           |  14 |   29025
+(13 rows)
+```
+
+처음에 원하던 보고서다. 쿼리 하나에 테이블을 한 번 읽는다.
+
+`GROUPING`은 `HAVING`에도 쓸 수 있다. 소계와 총계 줄만 남긴다.
+
+```sql
+SELECT deptno, job, SUM(sal)
+FROM emp
+GROUP BY ROLLUP (deptno, job)
+HAVING GROUPING(job) = 1          -- job이 집계로 빠진 줄만
+ORDER BY deptno;
+```
+
+```text
+ deptno | job |  sum
+--------+-----+-------
+     10 |     |  8750
+     20 |     | 10875
+     30 |     |  9400
+        |     | 29025
+(4 rows)
+```
+
+컬럼이 여러 개면 `GROUPING`을 하나씩 부르기 번거롭다. Oracle의 `GROUPING_ID(deptno, job)`은 각 컬럼의 `GROUPING` 값을 이어 붙여 2진수로 읽은 숫자를 준다. `(deptno, job)` 줄은 `00`이라 0, 부서 소계는 `01`이라 1, 직무 소계는 `10`이라 2, 총계는 `11`이라 3이다. PostgreSQL에서는 `GROUPING(deptno, job)`처럼 인자를 여러 개 주면 같은 값이 나온다.
+
+```sql
+-- Oracle: GROUPING_ID(deptno, job)
+SELECT deptno, job, GROUPING(deptno, job) AS gid, SUM(sal)
+FROM emp
+GROUP BY CUBE (deptno, job)
+ORDER BY gid, deptno, job;
+```
+
+```text
+ deptno |    job    | gid |  sum
+--------+-----------+-----+-------
+     10 | CLERK     |   0 |  1300
+     10 | MANAGER   |   0 |  2450
+     10 | PRESIDENT |   0 |  5000
+     20 | ANALYST   |   0 |  6000
+     20 | CLERK     |   0 |  1900
+     20 | MANAGER   |   0 |  2975
+     30 | CLERK     |   0 |   950
+     30 | MANAGER   |   0 |  2850
+     30 | SALESMAN  |   0 |  5600
+     10 |           |   1 |  8750
+     20 |           |   1 | 10875
+     30 |           |   1 |  9400
+        | ANALYST   |   2 |  6000
+        | CLERK     |   2 |  4150
+        | MANAGER   |   2 |  8275
+        | PRESIDENT |   2 |  5000
+        | SALESMAN  |   2 |  5600
+        |           |   3 | 29025
+(18 rows)
+```
+
+`HAVING GROUPING_ID(deptno, job) IN (1, 3)`처럼 원하는 단계만 고를 때 편하다. SQL Server도 `GROUPING_ID`가 있다.
+
+## 일부만 굴리는 부분 ROLLUP
+
+`GROUP BY deptno, ROLLUP(job)`처럼 일반 컬럼과 `ROLLUP`을 섞으면, `deptno`는 항상 묶음에 남고 `job`만 굴린다. 묶음은 `(deptno, job)`과 `(deptno)` 두 단계다. 전체 합계가 빠진다.
+
+```sql
+SELECT deptno, job, COUNT(*) AS cnt, SUM(sal) AS sum_sal
+FROM emp
+GROUP BY deptno, ROLLUP (job)
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | cnt | sum_sal
+--------+-----------+-----+---------
+     10 | CLERK     |   1 |    1300
+     10 | MANAGER   |   1 |    2450
+     10 | PRESIDENT |   1 |    5000
+     10 |           |   3 |    8750
+     20 | ANALYST   |   2 |    6000
+     20 | CLERK     |   2 |    1900
+     20 | MANAGER   |   1 |    2975
+     20 |           |   5 |   10875
+     30 | CLERK     |   1 |     950
+     30 | MANAGER   |   1 |    2850
+     30 | SALESMAN  |   4 |    5600
+     30 |           |   6 |    9400
+(12 rows)
+```
+
+9 + 3 = 12행이다. `ROLLUP(deptno, job)`의 13행에서 총계 1행만 빠졌다. 일반 컬럼 부분은 곱하기처럼 붙는다고 보면 된다. `GROUP BY a, ROLLUP(b, c)`는 `(a, b, c)`, `(a, b)`, `(a)` 세 단계다. `CUBE`도 같은 방식으로 섞을 수 있다.
+
+괄호로 컬럼을 묶으면 하나의 단위로 굴린다. `ROLLUP(deptno, (job, mgr))`는 `(job, mgr)`을 한 덩어리로 보고 `(deptno, job, mgr)`, `(deptno)`, `()` 세 단계를 만든다. 10번 부서로만 보면 이렇다.
+
+```sql
+SELECT deptno, job, mgr, SUM(sal)
+FROM emp
+WHERE deptno = 10
+GROUP BY ROLLUP (deptno, (job, mgr))
+ORDER BY deptno, job;
+```
+
+```text
+ deptno |    job    | mgr  | sum
+--------+-----------+------+------
+     10 | CLERK     | 7782 | 1300
+     10 | MANAGER   | 7839 | 2450
+     10 | PRESIDENT |      | 5000
+     10 |           |      | 8750
+        |           |      | 8750
+(5 rows)
+```
+
+`(deptno, job)` 단계가 없다. job만 남기고 mgr만 지우는 중간 소계가 생기지 않는다. PRESIDENT 줄의 빈 `mgr`은 소계가 아니라 KING의 실제 NULL이다. 이럴 때 `GROUPING(mgr)`이 0으로 나와서 구분된다.
+
+## 결과 행 수 세기
+
+시험은 결과 표 전체보다 "몇 행이 나오나"를 자주 묻는다. 방법은 하나다. 함수를 `GROUPING SETS`로 풀고, 묶음마다 서로 다른 값 조합의 개수를 세서 더한다. 예제 숫자를 다시 모으면 이렇다.
+
+```sql
+SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY ROLLUP (deptno, job)) t)        AS rollup_dj, -- 9+3+1
+       (SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY ROLLUP (job, deptno)) t)        AS rollup_jd, -- 9+5+1
+       (SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY CUBE (deptno, job)) t)          AS cube_dj,   -- 9+3+5+1
+       (SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY GROUPING SETS (deptno, job)) t) AS sets_dj,   -- 3+5
+       (SELECT COUNT(*) FROM (SELECT 1 FROM emp GROUP BY deptno, ROLLUP (job)) t)        AS partial;   -- 9+3
+```
+
+```text
+ rollup_dj | rollup_jd | cube_dj | sets_dj | partial
+-----------+-----------+---------+---------+---------
+        13 |        15 |      18 |       8 |      12
+(1 row)
+```
+
+주의할 점이 하나 있다. `CUBE(deptno, job)`의 직무 소계는 직무 종류 수(5)만큼, 부서 소계는 부서 종류 수(3)만큼 나온다. 부서와 직무 조합 수(9)는 "3 × 5 = 15"가 아니다. 실제로 존재하는 조합만 행이 된다. 데이터에 없는 조합(예: 10번 부서 SALESMAN)은 결과에 행으로 나타나지 않는다.
+
+아래 함수로 직접 세어 보자. 행 목록과 `ROLLUP`에 넣을 컬럼 이름 배열을 받아서, 단계마다(왼쪽부터 n개, n-1개, …, 0개 컬럼으로 묶었을 때) 그룹 수를 배열로 돌려준다. 테스트 데이터는 EMP 14명의 deptno, job, mgr이다.
+
+<CodePlayground
+  caption="ROLLUP 단계별 행 수"
+  functionName="rollup"
+  initialCode={`function rollup(rows, keys) {
+  // keys = ["deptno", "job"] 이면
+  // [ (deptno, job) 그룹 수, (deptno) 그룹 수, () 그룹 수 ] 를 돌려준다
+  return [];
+}`}
+  solution={`function rollup(rows, keys) {
+  const counts = [];
+  for (let n = keys.length; n >= 0; n--) {
+    const part = keys.slice(0, n);   // 오른쪽부터 하나씩 지운다
+    const groups = new Set(rows.map((r) => JSON.stringify(part.map((k) => r[k]))));
+    counts.push(groups.size);        // 실제로 있는 조합만 센다 (NULL도 하나의 값)
+  }
+  return counts;
+}`}
+  tests={[
+    { label: "ROLLUP(deptno, job)", args: [[{"deptno":20,"job":"CLERK","mgr":7902},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"MANAGER","mgr":7839},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"MANAGER","mgr":7839},{"deptno":10,"job":"MANAGER","mgr":7839},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"PRESIDENT","mgr":null},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"CLERK","mgr":7788},{"deptno":30,"job":"CLERK","mgr":7698},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"CLERK","mgr":7782}], ["deptno", "job"]], expected: [9, 3, 1] },
+    { label: "ROLLUP(job, deptno)", args: [[{"deptno":20,"job":"CLERK","mgr":7902},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"MANAGER","mgr":7839},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"MANAGER","mgr":7839},{"deptno":10,"job":"MANAGER","mgr":7839},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"PRESIDENT","mgr":null},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"CLERK","mgr":7788},{"deptno":30,"job":"CLERK","mgr":7698},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"CLERK","mgr":7782}], ["job", "deptno"]], expected: [9, 5, 1] },
+    { label: "ROLLUP(deptno, job, mgr)", args: [[{"deptno":20,"job":"CLERK","mgr":7902},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"MANAGER","mgr":7839},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":30,"job":"MANAGER","mgr":7839},{"deptno":10,"job":"MANAGER","mgr":7839},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"PRESIDENT","mgr":null},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":20,"job":"CLERK","mgr":7788},{"deptno":30,"job":"CLERK","mgr":7698},{"deptno":20,"job":"ANALYST","mgr":7566},{"deptno":10,"job":"CLERK","mgr":7782}], ["deptno", "job", "mgr"]], expected: [10, 9, 3, 1] },
+    { label: "ROLLUP(deptno)", args: [[{"deptno":20,"job":"CLERK","mgr":7902},{"deptno":30,"job":"SALESMAN","mgr":7698},{"deptno":10,"job":"CLERK","mgr":7782}], ["deptno"]], expected: [3, 1] },
+  ]}
+/>
+
+세 번째 테스트의 10 + 9 + 3 + 1 = 23은 앞에서 PostgreSQL이 센 `ROLLUP(deptno, job, mgr)`의 23행과 같다. 함수를 고쳐 `CUBE`(모든 부분집합)를 세게 만들면 52가 나와야 한다.
+
+## SQLD 시험 포인트
+
+- `ROLLUP(A, B)` = `GROUPING SETS((A, B), (A), ())`. 컬럼 n개면 n + 1단계. 인자 순서가 바뀌면 결과가 달라진다.
+- `CUBE(A, B)` = `GROUPING SETS((A, B), (A), (B), ())`. 2의 n제곱 조합. 인자 순서와 상관없이 같은 행이 나온다. 계산량이 가장 많다.
+- `GROUPING SETS(A, B)`는 A별, B별 집계만 나오고 총계와 (A, B) 조합은 없다. 각 GROUP BY를 `UNION ALL`한 것과 같다.
+- 결과 행 수 = 각 묶음의 실제 값 조합 수의 합. EMP 기준 `ROLLUP(deptno, job)` 13, `ROLLUP(job, deptno)` 15, `CUBE` 18, `GROUPING SETS(deptno, job)` 8.
+- `GROUPING(컬럼)`은 집계로 빠진 줄에서 1, 아니면 0. 데이터 NULL과 소계 NULL을 구분한다. `CASE`나 `DECODE`와 함께 소계 이름표를 만든다.
+- Oracle `GROUPING_ID(A, B)`는 GROUPING 값을 이어 붙인 2진수(0~3).
+- `GROUP BY A, ROLLUP(B)`는 `(A, B)`, `(A)`만 만든다(총계 없음). `ROLLUP(A, (B, C))`는 B, C를 한 단위로 굴린다.
+- 정렬은 보장되지 않으니 `ORDER BY`를 붙인다. 소계 위치를 고정하려면 `ORDER BY GROUPING(...)`.
+
+## 면접에서 나올 만한 질문
+
+### ROLLUP, CUBE, GROUPING SETS는 어떻게 다른가요?
+
+셋 다 여러 수준의 GROUP BY를 한 쿼리로 만든다. `ROLLUP`은 컬럼을 오른쪽부터 하나씩 지우며 계층형 소계와 총계를 만들고, `CUBE`는 가능한 모든 조합을 만들며, `GROUPING SETS`는 원하는 묶음만 직접 나열한다. `ROLLUP`과 `CUBE`는 결국 특정한 `GROUPING SETS`의 줄임말이다. 보고서처럼 큰 분류 → 작은 분류의 소계가 필요하면 `ROLLUP`, 교차 분석이면 `CUBE`, 필요한 소계가 정해져 있으면 `GROUPING SETS`를 쓴다.
+
+### ROLLUP의 컬럼 순서를 바꾸면 결과가 바뀌나요?
+
+바뀐다. `ROLLUP(deptno, job)`은 부서 소계를, `ROLLUP(job, deptno)`는 직무 소계를 만든다. EMP에서는 각각 13행과 15행이 나왔다. 앞 컬럼이 큰 분류, 뒤 컬럼이 작은 분류인 계층으로 해석되기 때문이다. `CUBE`는 모든 조합을 만드니 순서가 바뀌어도 같은 행이 나온다.
+
+### 소계 줄과 데이터가 원래 NULL인 줄은 어떻게 구분하나요?
+
+`GROUPING(컬럼)`을 쓴다. 그 컬럼이 집계 단계에서 빠져서 NULL이 된 줄이면 1, 실제 값이면 NULL이라도 0이다. EMP에서 `ROLLUP(mgr)`을 하면 KING의 상사 NULL 줄과 전체 합계 줄이 둘 다 빈칸인데, `GROUPING(mgr)`이 0과 1로 갈린다. 이 값을 `CASE`에 넣어 "소계", "합계" 같은 이름표를 달고, `ORDER BY GROUPING(...)`으로 소계 위치를 고정한다.
+
+### UNION ALL로 소계를 붙이는 것과 비교하면 무엇이 좋나요?
+
+결과는 같게 만들 수 있지만, `UNION ALL` 방식은 묶음마다 테이블을 다시 읽고 쿼리도 묶음 수만큼 길어진다. `ROLLUP`이나 `GROUPING SETS`는 DB가 한 번 읽어서 여러 수준을 함께 계산할 수 있고, 컬럼 수와 타입을 맞추는 수고도 없다. 그리고 `GROUPING` 함수로 소계 줄을 정확히 구분할 수 있다. `UNION ALL`에서는 NULL을 직접 넣어야 해서 데이터 NULL과 섞이기 쉽다.
+
+### CUBE를 쓸 때 주의할 점은요?
+
+조합 수가 2의 n제곱으로 늘어난다. 컬럼 3개면 8개 묶음이고, EMP처럼 작은 테이블에서도 52행이 나왔다. 컬럼이 많거나 값 종류가 많으면 결과와 계산량이 크게 불어나니, 실제로 필요한 소계만 `GROUPING SETS`로 고른다. 대시보드처럼 반복 조회한다면 결과를 미리 계산해 두는 집계 테이블이나 머티리얼라이즈드 뷰도 고려한다.
+
+### 부분 ROLLUP은 언제 쓰나요?
+
+일부 컬럼은 항상 묶어 두고 나머지만 소계를 내고 싶을 때 쓴다. `GROUP BY deptno, ROLLUP(job)`은 부서별 직무 합계와 부서 소계만 내고 전체 합계는 만들지 않는다. 회사 전체 합계가 의미 없는 보고서(예: 지점별로만 보는 보고서)에 맞다. EMP에서는 `ROLLUP(deptno, job)`의 13행에서 총계 1행이 빠진 12행이 나왔다.

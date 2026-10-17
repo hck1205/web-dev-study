@@ -1,0 +1,623 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-window-functions");
+
+부서별 급여 순위를 뽑아 달라는 요청을 받는다. 같은 표에 부서 안에서 급여가 높은 순으로 누적 합계도 넣어 달란다. `GROUP BY deptno`를 쓰면 부서마다 한 줄로 접혀 버려서 사원 이름이 사라진다. 사원은 그대로 두고 옆에 순위를 붙여야 한다.
+
+윈도우 함수가 없던 시절에는 자기 자신과 조인했다. "같은 부서에서 나보다 급여가 높은 사람 수 + 1"을 행마다 세는 식이다.
+
+```sql
+SELECT a.deptno, a.ename, a.sal,
+       (SELECT COUNT(*) + 1
+        FROM emp b
+        WHERE b.deptno = a.deptno AND b.sal > a.sal) AS rk   -- 나보다 많이 받는 사람 수 + 1
+FROM emp a
+ORDER BY a.deptno, a.sal DESC;
+```
+
+답은 나온다(뒤에 나올 `RANK`와 같은 값이다). 하지만 행마다 같은 부서를 다시 훑는다. 누적 합계까지 붙이려면 서브쿼리가 하나 더 필요하다. 윈도우 함수는 행을 접지 않은 채로 "이 행이 속한 묶음"을 한 번에 계산해 옆에 붙인다. 이 글은 SQLD 범위의 윈도우 함수를 순위, 집계, 행 순서, 비율 순으로 보고, 가장 많이 틀리는 윈도우 프레임(어디부터 어디까지 계산하나)을 실제 숫자로 따라간다.
+
+예제는 [SQLD 서브쿼리와 집합 연산자](/posts/sqld-subquery-set-operators) 글과 같은 SCOTT의 `EMP` 14명이다. 데이터와 테이블 정의는 [SQLD 단일행 함수](/posts/sqld-single-row-functions) 글에 있다. SQLD는 Oracle 문법으로 나오지만 윈도우 함수는 표준이라 PostgreSQL 16과 문법이 거의 같다. 결과는 PostgreSQL 16.15에서 돌린 출력이고, Oracle에만 있는 함수는 같은 계산을 PostgreSQL로 해서 확인했다.
+
+## OVER 괄호 안의 세 조각
+
+윈도우 함수는 함수 뒤에 `OVER (...)`가 붙는다. Oracle에서는 분석 함수(analytic function)라고도 부른다. 괄호 안에는 세 가지를 쓸 수 있고, 셋 다 생략할 수 있다. 아래 조각을 눌러 보면 각각이 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="윈도우 함수 한 줄을 조각으로 읽기"
+  base="SUM(sal) OVER ("
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "partition",
+      display: "PARTITION BY deptno",
+      title: "묶음을 나눈다",
+      description: "같은 deptno끼리 따로 계산한다. GROUP BY처럼 묶지만 행을 접지 않는다. 생략하면 결과 전체가 하나의 묶음이다.",
+      code: "10번: KING, CLARK, MILLER\n20번: SCOTT, FORD, JONES, ADAMS, SMITH\n30번: BLAKE, ALLEN, TURNER, WARD, MARTIN, JAMES",
+    },
+    {
+      key: "order",
+      display: "ORDER BY sal DESC",
+      title: "묶음 안의 순서",
+      description: "순위 함수와 LAG/LEAD는 이 순서로 계산한다. 집계 함수에 ORDER BY를 쓰면 누적 계산이 된다. 쿼리 맨 끝의 ORDER BY와는 별개라서, 결과 출력 순서는 따로 정해야 한다.",
+    },
+    {
+      key: "frame1",
+      display: "ROWS BETWEEN",
+      title: "프레임 단위",
+      description: "ROWS는 물리적인 행 개수로, RANGE는 ORDER BY 값의 범위로 프레임을 잡는다. 값이 같은 행(동점)에서 둘이 갈린다.",
+    },
+    {
+      key: "frame2",
+      display: "UNBOUNDED PRECEDING",
+      title: "프레임 시작",
+      description: "묶음의 첫 행부터. 'n PRECEDING'이면 n행 앞부터, 'CURRENT ROW'면 지금 행부터다.",
+    },
+    {
+      key: "frame3",
+      display: "AND CURRENT ROW",
+      title: "프레임 끝",
+      description: "지금 행까지. 'n FOLLOWING'이면 n행 뒤까지, 'UNBOUNDED FOLLOWING'이면 묶음의 끝까지다. 시작부터 지금까지 더하니 누적 합계가 된다.",
+      code: "생략했을 때 기본값\n- ORDER BY 없음: 묶음 전체\n- ORDER BY 있음: RANGE BETWEEN UNBOUNDED PRECEDING\n                AND CURRENT ROW",
+    },
+  ]}
+/>
+
+처음의 요청은 윈도우 함수로 이렇게 쓴다.
+
+```sql
+SELECT deptno, ename, sal,
+       RANK() OVER (PARTITION BY deptno ORDER BY sal DESC) AS rk,     -- 부서 안 순위
+       SUM(sal) OVER (PARTITION BY deptno
+                      ORDER BY sal DESC, empno
+                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_sal   -- 누적
+FROM emp
+ORDER BY deptno, sal DESC, empno;
+```
+
+```text
+ deptno | ename  | sal  | rk | cum_sal
+--------+--------+------+----+---------
+     10 | KING   | 5000 |  1 |    5000
+     10 | CLARK  | 2450 |  2 |    7450
+     10 | MILLER | 1300 |  3 |    8750
+     20 | SCOTT  | 3000 |  1 |    3000
+     20 | FORD   | 3000 |  1 |    6000
+     20 | JONES  | 2975 |  3 |    8975
+     20 | ADAMS  | 1100 |  4 |   10075
+     20 | SMITH  |  800 |  5 |   10875
+     30 | BLAKE  | 2850 |  1 |    2850
+     30 | ALLEN  | 1600 |  2 |    4450
+     30 | TURNER | 1500 |  3 |    5950
+     30 | WARD   | 1250 |  4 |    7200
+     30 | MARTIN | 1250 |  4 |    8450
+     30 | JAMES  |  950 |  6 |    9400
+(14 rows)
+```
+
+14행이 그대로 있고, 부서가 바뀌면 순위와 누적이 1과 처음부터 다시 시작한다. 누적 합계의 `ORDER BY`에 `empno`를 더하고 프레임을 `ROWS`로 적은 이유는 뒤의 프레임 절에서 설명한다.
+
+## 동점자가 있을 때 세 순위 함수
+
+순위 함수는 셋이다. 동점이 없으면 셋의 결과가 같고, 동점에서만 갈린다. SCOTT 데이터에는 동점이 두 쌍 있다. SCOTT과 FORD가 3000, WARD와 MARTIN이 1250이다.
+
+```sql
+SELECT ename, sal,
+       RANK()       OVER (ORDER BY sal DESC)        AS rk,
+       DENSE_RANK() OVER (ORDER BY sal DESC)        AS drk,
+       ROW_NUMBER() OVER (ORDER BY sal DESC, empno) AS rn
+FROM emp
+ORDER BY sal DESC, empno;
+```
+
+```text
+ ename  | sal  | rk | drk | rn
+--------+------+----+-----+----
+ KING   | 5000 |  1 |   1 |  1
+ SCOTT  | 3000 |  2 |   2 |  2
+ FORD   | 3000 |  2 |   2 |  3
+ JONES  | 2975 |  4 |   3 |  4
+ BLAKE  | 2850 |  5 |   4 |  5
+ CLARK  | 2450 |  6 |   5 |  6
+ ALLEN  | 1600 |  7 |   6 |  7
+ TURNER | 1500 |  8 |   7 |  8
+ MILLER | 1300 |  9 |   8 |  9
+ WARD   | 1250 | 10 |   9 | 10
+ MARTIN | 1250 | 10 |   9 | 11
+ ADAMS  | 1100 | 12 |  10 | 12
+ JAMES  |  950 | 13 |  11 | 13
+ SMITH  |  800 | 14 |  12 | 14
+(14 rows)
+```
+
+아래 그림에서 다음을 누르면 세 함수가 동점자를 만났을 때 번호를 어떻게 매기는지 나온다.
+
+<AlgoTrace
+  caption="급여 내림차순으로 훑으며 번호 매기기"
+  memoryLabel="RANK / DENSE / ROW_NUMBER"
+  cells={["5000", "3000", "3000", "2975", "2850", "…", "1250", "1250", "1100"]}
+  steps={[
+    { pointer: 0, memory: ["KING 1 / 1 / 1"], caption: "첫 행은 셋 다 1이다." },
+    { pointer: 1, memory: ["KING 1 / 1 / 1", "SCOTT 2 / 2 / 2"], caption: "3000은 새 값이다. 셋 다 2." },
+    { pointer: 2, found: [1, 2], memory: ["KING 1 / 1 / 1", "SCOTT 2 / 2 / 2", "FORD 2 / 2 / 3"], caption: "또 3000이다. RANK와 DENSE_RANK는 같은 번호 2를 준다. ROW_NUMBER는 동점이어도 무조건 다음 번호 3을 준다." },
+    { pointer: 3, memory: ["SCOTT 2 / 2 / 2", "FORD 2 / 2 / 3", "JONES 4 / 3 / 4"], caption: "2975. RANK는 앞에 두 명이 2위를 나눠 가졌으니 3위를 건너뛰고 4위다. DENSE_RANK는 건너뛰지 않고 3이다." },
+    { pointer: 7, found: [6, 7], memory: ["WARD 10 / 9 / 10", "MARTIN 10 / 9 / 11"], caption: "1250 동점에서도 같다. RANK 10, 10, DENSE_RANK 9, 9. ROW_NUMBER만 10, 11로 갈린다." },
+    { pointer: 8, memory: ["WARD 10 / 9 / 10", "MARTIN 10 / 9 / 11", "ADAMS 12 / 10 / 12"], caption: "ADAMS는 RANK 12(11을 건너뜀), DENSE_RANK 10. 마지막 SMITH까지 가면 RANK는 14, DENSE_RANK는 12에서 끝난다." },
+  ]}
+/>
+
+정리하면 `RANK`는 동점에 같은 순위를 주고 그 수만큼 다음 순위를 건너뛴다(1, 2, 2, 4). `DENSE_RANK`는 같은 순위를 주되 건너뛰지 않는다(1, 2, 2, 3). `ROW_NUMBER`는 동점이어도 고유한 번호를 준다(1, 2, 3, 4).
+
+`ROW_NUMBER`에 `empno`를 더한 데는 이유가 있다. `ORDER BY sal DESC`만 쓰면 SCOTT과 FORD 중 누가 2번이 될지 정해져 있지 않다. 실행할 때마다, 혹은 실행 계획이 바뀔 때마다 달라질 수 있다. "부서별 1명만 뽑기"를 `ROW_NUMBER() = 1`로 할 때 동점자 중 아무나 뽑히는 버그가 여기서 생긴다. 고유한 컬럼을 뒤에 붙여 순서를 확정한다.
+
+아래 함수는 급여 목록을 받아서 각 위치의 `[RANK, DENSE_RANK, ROW_NUMBER]`를 돌려준다. 내림차순이고, `ROW_NUMBER`는 값이 같으면 입력 순서가 앞인 쪽이 먼저다. 첫 테스트는 20번 부서를 사번 순으로 넣은 것(SMITH, JONES, SCOTT, ADAMS, FORD)이다.
+
+<CodePlayground
+  caption="세 순위 함수 직접 만들기"
+  functionName="rankAll"
+  initialCode={`function rankAll(values) {
+  // values[i]의 [RANK, DENSE_RANK, ROW_NUMBER]를 같은 위치에 담아 돌려준다
+  // 큰 값이 1위. 값이 같으면 ROW_NUMBER는 입력 순서가 앞인 쪽이 먼저
+  return values.map(() => [0, 0, 0]);
+}`}
+  solution={`function rankAll(values) {
+  // 위치 번호를 값 내림차순(같으면 입력 순서)으로 정렬한다
+  const order = values.map((v, i) => i).sort((a, b) => values[b] - values[a] || a - b);
+  const result = new Array(values.length);
+  let rank = 0, dense = 0, prev;
+  order.forEach((idx, pos) => {
+    const v = values[idx];
+    if (pos === 0 || v !== prev) {
+      rank = pos + 1;   // RANK: 지금까지 지나온 행 수 + 1
+      dense += 1;       // DENSE_RANK: 새 값을 만날 때만 1 증가
+      prev = v;
+    }
+    result[idx] = [rank, dense, pos + 1];   // ROW_NUMBER는 항상 위치
+  });
+  return result;
+}`}
+  tests={[
+    { label: "20번 부서", args: [[800, 2975, 3000, 1100, 3000]], expected: [[5, 4, 5], [3, 2, 3], [1, 1, 1], [4, 3, 4], [1, 1, 2]] },
+    { label: "30번 부서", args: [[1600, 1250, 1250, 2850, 1500, 950]], expected: [[2, 2, 2], [4, 4, 4], [4, 4, 5], [1, 1, 1], [3, 3, 3], [6, 5, 6]] },
+    { label: "한 명", args: [[5000]], expected: [[1, 1, 1]] },
+  ]}
+/>
+
+## 행을 접지 않는 집계
+
+`SUM`, `AVG`, `COUNT`, `MAX`, `MIN`도 `OVER`를 붙이면 윈도우 함수가 된다. `ORDER BY` 없이 `PARTITION BY`만 쓰면 묶음 전체의 집계 값이 모든 행에 똑같이 붙는다.
+
+```sql
+SELECT ename, deptno, sal,
+       SUM(sal)        OVER (PARTITION BY deptno) AS dept_sum,
+       ROUND(AVG(sal)  OVER (PARTITION BY deptno)) AS dept_avg,
+       COUNT(*)        OVER (PARTITION BY deptno) AS cnt,
+       MAX(sal)        OVER (PARTITION BY deptno) AS mx,
+       MIN(sal)        OVER (PARTITION BY deptno) AS mn
+FROM emp
+WHERE deptno IN (10, 30)
+ORDER BY deptno, sal DESC;
+```
+
+```text
+ ename  | deptno | sal  | dept_sum | dept_avg | cnt |  mx  |  mn
+--------+--------+------+----------+----------+-----+------+------
+ KING   |     10 | 5000 |     8750 |     2917 |   3 | 5000 | 1300
+ CLARK  |     10 | 2450 |     8750 |     2917 |   3 | 5000 | 1300
+ MILLER |     10 | 1300 |     8750 |     2917 |   3 | 5000 | 1300
+ BLAKE  |     30 | 2850 |     9400 |     1567 |   6 | 2850 |  950
+ ALLEN  |     30 | 1600 |     9400 |     1567 |   6 | 2850 |  950
+ TURNER |     30 | 1500 |     9400 |     1567 |   6 | 2850 |  950
+ MARTIN |     30 | 1250 |     9400 |     1567 |   6 | 2850 |  950
+ WARD   |     30 | 1250 |     9400 |     1567 |   6 | 2850 |  950
+ JAMES  |     30 |  950 |     9400 |     1567 |   6 | 2850 |  950
+(9 rows)
+```
+
+`GROUP BY deptno`였다면 2행으로 접혔을 것이다. 사원 행과 부서 평균이 한 줄에 같이 있으니 "자기 부서 평균보다 많이 받는 사람"도 서브쿼리 없이 바깥에서 `sal > dept_avg`로 거르면 된다(거르는 방법은 맨 뒤에 나온다). `OVER ()`처럼 괄호를 비우면 결과 전체가 하나의 묶음이라 전체 합계가 붙는다.
+
+집계 윈도우 함수도 NULL은 집계 함수와 똑같이 다룬다. 30번 부서의 `comm`은 BLAKE와 JAMES만 비어 있어서 `COUNT(comm) OVER ()`는 4, `COUNT(*) OVER ()`는 6이 나온다. TURNER의 0은 값이라 센다.
+
+## 기본 프레임은 동점을 한꺼번에 더한다
+
+이제 이 글에서 가장 중요한 부분이다. 집계 함수에 `ORDER BY`를 쓰면 누적이 되는데, 프레임을 적지 않으면 기본값은 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`다. Oracle, PostgreSQL, SQL Server 모두 같다. `RANGE`는 "지금 행의 ORDER BY 값과 같거나 앞선 값을 가진 모든 행"이라서, 동점자가 있으면 그 동점자들을 한꺼번에 더한다.
+
+20번 부서에서 기본 프레임으로 누적 합계를 내면 이렇다.
+
+```sql
+SELECT deptno, ename, sal,
+       SUM(sal) OVER (PARTITION BY deptno ORDER BY sal DESC) AS cum_sal   -- 프레임 생략
+FROM emp
+WHERE deptno = 20
+ORDER BY sal DESC, empno;
+```
+
+```text
+ deptno | ename | sal  | cum_sal
+--------+-------+------+---------
+     20 | SCOTT | 3000 |    6000
+     20 | FORD  | 3000 |    6000
+     20 | JONES | 2975 |    8975
+     20 | ADAMS | 1100 |   10075
+     20 | SMITH |  800 |   10875
+(5 rows)
+```
+
+SCOTT의 누적이 3000이 아니라 6000이다. SCOTT 시점에서 "3000 이상"인 행은 SCOTT과 FORD 둘이라 둘을 다 더했다. 처음 쿼리에서 `ROWS`를 적고 `empno`를 더한 이유가 이것이다. 행 단위로 하나씩 쌓아야 3000, 6000이 된다.
+
+30번 부서를 급여 오름차순으로 놓고 두 프레임을 나란히 보자.
+
+```sql
+SELECT ename, sal,
+       SUM(sal) OVER (ORDER BY sal)                             AS range_sum,  -- 기본값 RANGE
+       SUM(sal) OVER (ORDER BY sal, empno ROWS UNBOUNDED PRECEDING) AS rows_sum
+FROM emp
+WHERE deptno = 30
+ORDER BY sal, empno;
+```
+
+```text
+ ename  | sal  | range_sum | rows_sum
+--------+------+-----------+----------
+ JAMES  |  950 |       950 |      950
+ WARD   | 1250 |      3450 |     2200
+ MARTIN | 1250 |      3450 |     3450
+ TURNER | 1500 |      4950 |     4950
+ ALLEN  | 1600 |      6550 |     6550
+ BLAKE  | 2850 |      9400 |     9400
+(6 rows)
+```
+
+`ROWS UNBOUNDED PRECEDING`은 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`의 줄임말이다. 동점인 WARD 행에서만 값이 갈린다. 아래 그림에서 다음을 누르면 프레임이 어떤 칸을 감싸는지 보인다. 초록으로 켜진 칸이 프레임 안이다.
+
+<AlgoTrace
+  caption="30번 부서, 급여 오름차순에서 프레임 움직이기"
+  memoryLabel="프레임 안의 값과 합"
+  cells={["950", "1250", "1250", "1500", "1600", "2850"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["950", "합 950"], caption: "JAMES(950). ROWS든 RANGE든 프레임은 첫 행 하나다." },
+    { pointer: 1, found: [0, 1], memory: ["950", "1250", "합 2200"], caption: "WARD, ROWS UNBOUNDED PRECEDING. 처음부터 지금 행까지 두 칸이다. 2200." },
+    { pointer: 1, found: [0, 1, 2], memory: ["950", "1250", "1250", "합 3450"], caption: "WARD, 기본 RANGE. 'ORDER BY 값이 1250 이하'인 행이라 아직 안 온 MARTIN까지 프레임에 들어온다. 3450." },
+    { pointer: 2, found: [0, 1, 2], memory: ["950", "1250", "1250", "합 3450"], caption: "MARTIN은 ROWS와 RANGE 모두 세 칸이라 3450으로 같다. 동점 묶음의 마지막 행에서 다시 만난다." },
+    { pointer: 2, found: [1, 2, 3], memory: ["1250", "1250", "1500", "합 4000"], caption: "프레임을 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING으로 바꾸면 앞뒤 한 칸씩, 세 칸만 본다. MARTIN 기준 4000." },
+    { pointer: 3, found: [2, 3, 4], memory: ["1250", "1500", "1600", "합 4350"], caption: "한 칸 내려가면 창문도 같이 미끄러진다. 이동 합계(이동 평균)를 낼 때 쓰는 모양이다." },
+    { pointer: 5, found: [4, 5], memory: ["1600", "2850", "합 4450"], caption: "마지막 행에는 뒤 칸이 없어서 두 칸만 더한다. 없는 칸을 0으로 채우지 않는다." },
+  ]}
+/>
+
+앞뒤 한 칸 프레임과, 지금부터 끝까지(`CURRENT ROW AND UNBOUNDED FOLLOWING`) 프레임은 이렇게 나온다.
+
+```sql
+SELECT ename, sal,
+       SUM(sal) OVER (ORDER BY sal, empno
+                      ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)          AS s3,
+       SUM(sal) OVER (ORDER BY sal, empno
+                      ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)  AS rest
+FROM emp
+WHERE deptno = 30
+ORDER BY sal, empno;
+```
+
+```text
+ ename  | sal  |  s3  | rest
+--------+------+------+------
+ JAMES  |  950 | 2200 | 9400
+ WARD   | 1250 | 3450 | 8450
+ MARTIN | 1250 | 4000 | 7200
+ TURNER | 1500 | 4350 | 5950
+ ALLEN  | 1600 | 5950 | 4450
+ BLAKE  | 2850 | 4450 | 2850
+(6 rows)
+```
+
+`RANGE`에 숫자를 쓰면 행 수가 아니라 값의 거리가 된다. `RANGE BETWEEN 300 PRECEDING AND 300 FOLLOWING`은 "내 급여 ±300 안에 드는 사람"이다.
+
+```sql
+SELECT ename, sal,
+       COUNT(*) OVER (ORDER BY sal
+                      RANGE BETWEEN 300 PRECEDING AND 300 FOLLOWING) AS near_cnt
+FROM emp
+WHERE deptno = 30
+ORDER BY sal, empno;
+```
+
+```text
+ ename  | sal  | near_cnt
+--------+------+----------
+ JAMES  |  950 |        3
+ WARD   | 1250 |        4
+ MARTIN | 1250 |        4
+ TURNER | 1500 |        4
+ ALLEN  | 1600 |        2
+ BLAKE  | 2850 |        1
+(6 rows)
+```
+
+JAMES(950)는 650~1250 안에 자기와 WARD, MARTIN이 있어 3이다. `RANGE`에 숫자를 쓰려면 `ORDER BY` 컬럼이 하나여야 하고 숫자나 날짜여야 한다. Oracle과 PostgreSQL(11부터)은 되지만, SQL Server는 `RANGE`에 `UNBOUNDED`와 `CURRENT ROW`만 쓸 수 있다.
+
+프레임 규칙을 정리하면 이렇다. `ORDER BY`가 없으면 프레임은 묶음 전체다. `ORDER BY`가 있고 프레임을 생략하면 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`다. 그리고 순위 함수(`RANK` 등)와 `LAG`/`LEAD`는 프레임을 무시한다. 프레임이 의미 있는 건 집계 함수와 `FIRST_VALUE`, `LAST_VALUE` 같은 값 함수다.
+
+아래 함수로 두 프레임의 누적 합을 직접 계산해 보자. 값을 오름차순으로 정렬한 뒤, ROWS는 지금 칸까지, RANGE는 지금 값 이하인 모든 칸을 더한다.
+
+<CodePlayground
+  caption="ROWS 누적과 RANGE 누적"
+  functionName="runningSums"
+  initialCode={`function runningSums(values) {
+  // 오름차순으로 정렬한 순서대로
+  // [ROWS UNBOUNDED PRECEDING 누적 배열, 기본 RANGE 누적 배열]을 돌려준다
+  return [[], []];
+}`}
+  solution={`function runningSums(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const rows = [];
+  let acc = 0;
+  for (const v of sorted) {
+    acc += v;           // 지금 칸까지 하나씩 쌓는다
+    rows.push(acc);
+  }
+  // RANGE: 지금 값 이하인 행(동점 포함)을 모두 더한다
+  const range = sorted.map((v) => sorted.filter((x) => x <= v).reduce((s, x) => s + x, 0));
+  return [rows, range];
+}`}
+  tests={[
+    { label: "30번 부서", args: [[1600, 1250, 1250, 2850, 1500, 950]], expected: [[950, 2200, 3450, 4950, 6550, 9400], [950, 3450, 3450, 4950, 6550, 9400]] },
+    { label: "20번 부서", args: [[800, 2975, 3000, 1100, 3000]], expected: [[800, 1900, 4875, 7875, 10875], [800, 1900, 4875, 10875, 10875]] },
+    { label: "동점 없는 10번", args: [[2450, 5000, 1300]], expected: [[1300, 3750, 8750], [1300, 3750, 8750]] },
+  ]}
+/>
+
+## FIRST_VALUE는 되는데 LAST_VALUE는 이상하다
+
+`FIRST_VALUE`는 프레임의 첫 행 값, `LAST_VALUE`는 프레임의 마지막 행 값이다. 부서에서 가장 많이 받는 사람과 가장 적게 받는 사람을 각 행에 붙이려고 한다.
+
+```sql
+SELECT deptno, ename, sal,
+       FIRST_VALUE(ename) OVER (PARTITION BY deptno ORDER BY sal DESC, empno) AS top_name,
+       LAST_VALUE(ename)  OVER (PARTITION BY deptno ORDER BY sal DESC, empno) AS last_default,
+       LAST_VALUE(ename)  OVER (PARTITION BY deptno ORDER BY sal DESC, empno
+                                ROWS BETWEEN UNBOUNDED PRECEDING
+                                     AND UNBOUNDED FOLLOWING)               AS last_full
+FROM emp
+WHERE deptno = 20
+ORDER BY sal DESC, empno;
+```
+
+```text
+ deptno | ename | sal  | top_name | last_default | last_full
+--------+-------+------+----------+--------------+-----------
+     20 | SCOTT | 3000 | SCOTT    | SCOTT        | SMITH
+     20 | FORD  | 3000 | SCOTT    | FORD         | SMITH
+     20 | JONES | 2975 | SCOTT    | JONES        | SMITH
+     20 | ADAMS | 1100 | SCOTT    | ADAMS        | SMITH
+     20 | SMITH |  800 | SCOTT    | SMITH        | SMITH
+(5 rows)
+```
+
+`FIRST_VALUE`는 기대대로 모든 행이 SCOTT이다. `LAST_VALUE`는 프레임을 적지 않으면 행마다 자기 이름이 나온다. 기본 프레임이 "처음부터 지금 행까지"라서 프레임의 마지막이 항상 지금 행이기 때문이다. 묶음 전체의 마지막을 원하면 `UNBOUNDED FOLLOWING`까지 프레임을 늘려야 한다. 아니면 정렬을 뒤집어 `FIRST_VALUE(ename) OVER (... ORDER BY sal ASC)`로 써도 된다.
+
+동점이 끼면 더 헷갈린다. `ORDER BY sal DESC`만 쓰고 프레임을 생략하면 SCOTT 행의 `LAST_VALUE`는 FORD가 나온다. RANGE 프레임이라 동점인 FORD까지 프레임에 들어오기 때문이다.
+
+## 앞 행과 뒤 행을 가져오는 LAG와 LEAD
+
+`LAG`는 앞 행, `LEAD`는 뒤 행의 값을 가져온다. 두 번째 인자는 몇 행 떨어진 값인지(기본 1), 세 번째 인자는 그런 행이 없을 때 쓸 기본값(기본 NULL)이다. 30번 부서를 입사일 순으로 놓고 앞뒤 사람의 급여를 붙인다.
+
+```sql
+SELECT ename, hiredate, sal,
+       LAG(sal)        OVER (ORDER BY hiredate, empno) AS prev_sal,  -- 바로 앞
+       LEAD(sal)       OVER (ORDER BY hiredate, empno) AS next_sal,  -- 바로 뒤
+       LAG(sal, 2, 0)  OVER (ORDER BY hiredate, empno) AS prev2      -- 두 칸 앞, 없으면 0
+FROM emp
+WHERE deptno = 30
+ORDER BY hiredate, empno;
+```
+
+```text
+ ename  |  hiredate  | sal  | prev_sal | next_sal | prev2
+--------+------------+------+----------+----------+-------
+ ALLEN  | 1981-02-20 | 1600 |          |     1250 |     0
+ WARD   | 1981-02-22 | 1250 |     1600 |     2850 |     0
+ BLAKE  | 1981-05-01 | 2850 |     1250 |     1500 |  1600
+ TURNER | 1981-09-08 | 1500 |     2850 |     1250 |  1250
+ MARTIN | 1981-09-28 | 1250 |     1500 |      950 |  2850
+ JAMES  | 1981-12-03 |  950 |     1250 |          |  1500
+(6 rows)
+```
+
+첫 행 ALLEN은 앞 행이 없어서 `prev_sal`이 NULL이고, 기본값을 준 `prev2`는 0이다. 전월 대비 매출, 이전 로그인과의 간격처럼 "직전 값과의 차이"를 구할 때 셀프 조인 대신 쓴다. 20번 부서에서 입사 순으로 급여 차이를 내면 이렇다.
+
+```sql
+SELECT ename, hiredate, sal,
+       sal - LAG(sal) OVER (ORDER BY hiredate, empno) AS diff
+FROM emp
+WHERE deptno = 20
+ORDER BY hiredate, empno;
+```
+
+```text
+ ename |  hiredate  | sal  | diff
+-------+------------+------+-------
+ SMITH | 1980-12-17 |  800 |
+ JONES | 1981-04-02 | 2975 |  2175
+ FORD  | 1981-12-03 | 3000 |    25
+ SCOTT | 1987-04-19 | 3000 |     0
+ ADAMS | 1987-05-23 | 1100 | -1900
+(5 rows)
+```
+
+Oracle의 `LAG`에는 `IGNORE NULLS`를 붙여 NULL을 건너뛰고 앞의 값을 찾는 옵션이 있다. PostgreSQL 16의 `LAG`에는 이 옵션이 없다.
+
+## 비율과 분위를 내는 함수
+
+`RATIO_TO_REPORT`는 Oracle 전용 함수로, 묶음 합계에서 이 행이 차지하는 비율을 준다. `RATIO_TO_REPORT(sal) OVER ()`는 `sal / SUM(sal) OVER ()`와 같다. PostgreSQL과 SQL Server에는 이 함수가 없어서 나눗셈으로 쓴다.
+
+```sql
+-- Oracle: SELECT ename, sal, ROUND(RATIO_TO_REPORT(sal) OVER (), 2) AS ratio ...
+SELECT ename, sal,
+       ROUND(sal::numeric / SUM(sal) OVER (), 2) AS ratio   -- 30번 부서 합계 9400 대비
+FROM emp
+WHERE deptno = 30
+ORDER BY sal DESC, empno;
+```
+
+```text
+ ename  | sal  | ratio
+--------+------+-------
+ BLAKE  | 2850 |  0.30
+ ALLEN  | 1600 |  0.17
+ TURNER | 1500 |  0.16
+ WARD   | 1250 |  0.13
+ MARTIN | 1250 |  0.13
+ JAMES  |  950 |  0.10
+(6 rows)
+```
+
+PostgreSQL에서 `::numeric`을 붙인 이유는 `sal`이 정수라서다. 정수끼리 나누면 소수점 아래가 버려져 모두 0이 된다. Oracle의 `NUMBER`는 이런 일이 없다.
+
+`PERCENT_RANK`, `CUME_DIST`, `NTILE`은 분위를 다룬다. 30번 부서 6명으로 보자.
+
+```sql
+SELECT ename, sal,
+       RANK()         OVER (ORDER BY sal DESC)        AS rk,
+       PERCENT_RANK() OVER (ORDER BY sal DESC)        AS pr,
+       CUME_DIST()    OVER (ORDER BY sal DESC)        AS cd,
+       NTILE(4)       OVER (ORDER BY sal DESC, empno) AS nt
+FROM emp
+WHERE deptno = 30
+ORDER BY sal DESC, empno;
+```
+
+```text
+ ename  | sal  | rk | pr  |         cd          | nt
+--------+------+----+-----+---------------------+----
+ BLAKE  | 2850 |  1 |   0 | 0.16666666666666666 |  1
+ ALLEN  | 1600 |  2 | 0.2 |  0.3333333333333333 |  1
+ TURNER | 1500 |  3 | 0.4 |                 0.5 |  2
+ WARD   | 1250 |  4 | 0.6 |  0.8333333333333334 |  2
+ MARTIN | 1250 |  4 | 0.6 |  0.8333333333333334 |  3
+ JAMES  |  950 |  6 |   1 |                   1 |  4
+(6 rows)
+```
+
+`PERCENT_RANK`는 `(RANK - 1) / (행 수 - 1)`이다. 첫 행이 0, 마지막이 1이고, WARD와 MARTIN은 RANK가 4로 같으니 `3 / 5 = 0.6`으로 같다. `CUME_DIST`는 "나보다 앞서거나 같은 행의 수 / 전체 행 수"다. WARD 시점에 앞서거나 같은 행은 동점 MARTIN까지 5명이라 `5 / 6 = 0.83`이다. 그래서 `CUME_DIST`는 0으로 시작하지 않는다.
+
+`NTILE(4)`는 행을 4개 묶음으로 최대한 고르게 나눈다. 6행을 4로 나누면 몫 1, 나머지 2라서 앞의 두 묶음이 한 행씩 더 가져간다. 2, 2, 1, 1행이다. 14명 전체에 `NTILE(4)`를 쓰면 4, 4, 3, 3행으로 나뉜다. `NTILE`은 동점을 신경 쓰지 않아서 같은 1250인 WARD와 MARTIN이 다른 묶음(2, 3)에 들어갔다.
+
+## 윈도우 함수는 WHERE에 못 쓴다
+
+부서마다 급여 상위 2명만 뽑으려고 이렇게 쓰면 오류가 난다.
+
+```sql
+SELECT ename, sal
+FROM emp
+WHERE RANK() OVER (ORDER BY sal DESC) <= 3;
+```
+
+```text
+ERROR:  window functions are not allowed in WHERE
+```
+
+Oracle에서도 `ORA-30483` 오류가 난다. 이유는 SQL이 절을 처리하는 순서에 있다. 아래 그림에서 다음을 누르면 순서대로 행이 어떻게 줄어드는지 나온다.
+
+<AlgoTrace
+  caption="SELECT 문의 논리적인 처리 순서"
+  memoryLabel="이 단계가 다루는 것"
+  cells={["FROM", "WHERE", "GROUP BY", "HAVING", "윈도우 함수", "SELECT", "ORDER BY"]}
+  steps={[
+    { pointer: 0, memory: ["EMP 14행"], caption: "FROM에서 테이블 행을 가져온다." },
+    { pointer: 1, found: [0], memory: ["조건에 맞는 행만"], caption: "WHERE가 행을 거른다. 이때는 아직 순위가 계산되기 전이라 RANK를 쓸 수 없다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["GROUP BY로 접은 행", "HAVING으로 거른 그룹"], caption: "GROUP BY와 HAVING이 끝나야 윈도우 함수가 볼 행이 확정된다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["남은 행 위에서 계산", "PARTITION / ORDER / 프레임"], caption: "윈도우 함수는 이 시점에 계산된다. 그래서 GROUP BY 결과 위에서 SUM(SUM(sal)) OVER ()처럼 집계를 한 번 더 감쌀 수 있다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5], memory: ["별칭 사용 가능", "윈도우 결과로 정렬 가능"], caption: "마지막 ORDER BY에서는 윈도우 함수 결과와 별칭을 쓸 수 있다. 윈도우 함수가 들어갈 수 있는 곳은 SELECT 목록과 ORDER BY뿐이다." },
+  ]}
+/>
+
+그래서 윈도우 함수 결과로 거르려면 인라인 뷰로 한 번 감싸고 바깥 WHERE에서 거른다.
+
+```sql
+SELECT deptno, ename, sal, rk
+FROM (SELECT deptno, ename, sal,
+             RANK() OVER (PARTITION BY deptno ORDER BY sal DESC) AS rk
+      FROM emp) t                  -- 순위를 먼저 계산해 둔다
+WHERE rk <= 2                      -- 바깥에서 거른다
+ORDER BY deptno, rk, ename;
+```
+
+```text
+ deptno | ename | sal  | rk
+--------+-------+------+----
+     10 | KING  | 5000 |  1
+     10 | CLARK | 2450 |  2
+     20 | FORD  | 3000 |  1
+     20 | SCOTT | 3000 |  1
+     30 | BLAKE | 2850 |  1
+     30 | ALLEN | 1600 |  2
+(6 rows)
+```
+
+20번 부서는 공동 1위가 둘이라 2위가 없고, 두 명만 나왔다. "부서별 정확히 1명"이 필요하면 `ROW_NUMBER`와 고유한 정렬 컬럼을 쓴다. "동점자도 다 보여 달라"면 `RANK`나 `DENSE_RANK`를 쓴다. 이 선택은 요구 사항이다.
+
+GROUP BY 뒤에 계산된다는 점을 이용하면 이런 쿼리도 된다. 부서별 합계에 순위를 매기고 전체 합계를 붙인다.
+
+```sql
+SELECT deptno,
+       SUM(sal)                              AS dept_sal,
+       RANK() OVER (ORDER BY SUM(sal) DESC) AS rk,       -- 집계 결과로 순위
+       SUM(SUM(sal)) OVER ()                 AS total     -- 집계의 합
+FROM emp
+GROUP BY deptno
+ORDER BY rk;
+```
+
+```text
+ deptno | dept_sal | rk | total
+--------+----------+----+-------
+     20 |    10875 |  1 | 29025
+     30 |     9400 |  2 | 29025
+     10 |     8750 |  3 | 29025
+(3 rows)
+```
+
+같은 이유로 Oracle에서 `WHERE ROWNUM <= 3`과 섞으면 순서가 꼬인다. 이건 [SQLD Top-N, 계층형 쿼리, PIVOT](/posts/sqld-top-n-hierarchical-pivot) 글에서 다룬다. 부서별 소계와 총계를 행으로 덧붙이는 일은 윈도우 함수가 아니라 `ROLLUP`의 몫이다. [SQLD ROLLUP, CUBE, GROUPING SETS](/posts/sqld-rollup-cube-grouping-sets) 글에서 이어진다.
+
+## SQLD 시험 포인트
+
+- 윈도우 함수 문법은 `함수 OVER ([PARTITION BY] [ORDER BY] [프레임])`. `PARTITION BY`는 행을 접지 않는 GROUP BY다.
+- 동점 처리: `RANK` 1, 2, 2, 4 / `DENSE_RANK` 1, 2, 2, 3 / `ROW_NUMBER` 1, 2, 3, 4. 결과 표를 보고 어느 함수인지 고르는 문제가 자주 나온다.
+- 프레임 기본값: `ORDER BY`가 없으면 묶음 전체, 있으면 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`. 그래서 동점 행의 누적 합계가 같게 나온다.
+- `ROWS`는 행 개수, `RANGE`는 값 범위. `UNBOUNDED PRECEDING`(처음), `CURRENT ROW`(지금), `n PRECEDING`/`n FOLLOWING`, `UNBOUNDED FOLLOWING`(끝).
+- `LAST_VALUE`를 프레임 없이 쓰면 지금 행(또는 동점의 마지막)이 나온다.
+- `LAG(expr, n, default)`, `LEAD(expr, n, default)`. 없는 행은 default, default가 없으면 NULL.
+- `RATIO_TO_REPORT`는 Oracle 전용(합계 대비 비율). `PERCENT_RANK = (RANK-1)/(n-1)`, `CUME_DIST = 앞서거나 같은 행 수 / n`, `NTILE(n)`은 나머지를 앞 묶음부터 하나씩 나눠 준다.
+- 윈도우 함수는 WHERE, GROUP BY, HAVING에 못 쓴다. 인라인 뷰로 감싸서 거른다.
+- 윈도우 함수를 써도 결과 행 수는 줄지 않는다. 출력 순서는 쿼리 끝의 `ORDER BY`가 정한다.
+
+## 면접에서 나올 만한 질문
+
+### 윈도우 함수와 GROUP BY는 무엇이 다른가요?
+
+`GROUP BY`는 묶음마다 한 행으로 접어서 원래 행의 상세 컬럼이 사라진다. 윈도우 함수는 행을 그대로 두고, 각 행이 속한 묶음의 계산 결과를 옆에 붙인다. 그래서 사원 이름과 부서 평균을 한 줄에 같이 보거나, 순위와 누적 합계를 붙일 때 쓴다. 예전에는 셀프 조인이나 상관 서브쿼리로 하던 일을 한 번의 정렬로 처리해서 보통 더 빠르다.
+
+### RANK, DENSE_RANK, ROW_NUMBER는 언제 각각 쓰나요?
+
+동점자를 같은 순위로 보고 다음 순위를 건너뛰어야 하면 `RANK`(1, 2, 2, 4), 건너뛰지 않으려면 `DENSE_RANK`(1, 2, 2, 3), 동점이어도 한 명씩 고유 번호가 필요하면 `ROW_NUMBER`다. 페이지 나누기나 "그룹당 한 행만 남기기"(중복 제거)에는 `ROW_NUMBER`를 쓴다. 이때 `ORDER BY`에 고유한 컬럼을 넣지 않으면 동점자 중 누가 1번이 될지 실행마다 달라질 수 있어서, 기본 키를 뒤에 붙인다.
+
+### 누적 합계가 동점 행에서 같은 값으로 나오는데 왜 그런가요?
+
+`ORDER BY`만 쓰고 프레임을 생략하면 기본 프레임이 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`라서다. `RANGE`는 값 기준이라 지금 행과 정렬 값이 같은 행을 모두 프레임에 넣는다. 그래서 SCOTT과 FORD가 둘 다 3000이면 두 행 모두 6000이 된다. 행 단위로 쌓으려면 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`를 적고, 정렬에 고유한 컬럼을 더해 순서를 확정한다.
+
+### LAST_VALUE가 기대한 값을 안 주는 이유는요?
+
+기본 프레임이 묶음의 처음부터 지금 행까지라서, 프레임의 마지막 행이 항상 지금 행(이나 그 동점)이기 때문이다. 묶음 전체의 마지막 값을 원하면 `ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`으로 프레임을 늘린다. 아니면 정렬 방향을 뒤집어 `FIRST_VALUE`를 쓰는 편이 읽기 쉽다.
+
+### 윈도우 함수 결과로 WHERE 조건을 걸 수 있나요?
+
+못 건다. 논리적 처리 순서가 FROM, WHERE, GROUP BY, HAVING 다음에 윈도우 함수, 그 뒤에 SELECT와 ORDER BY라서, WHERE 시점에는 순위가 아직 없다. 그래서 인라인 뷰나 CTE에서 순위를 계산하고 바깥 쿼리에서 `WHERE rk <= 3`처럼 거른다. 반대로 GROUP BY 뒤에 계산되니 `RANK() OVER (ORDER BY SUM(sal) DESC)`처럼 집계 결과에 순위를 매길 수는 있다.
+
+### LAG와 LEAD는 어디에 쓰나요?
+
+앞 행이나 뒤 행의 값을 같은 행으로 가져와서 차이를 계산할 때 쓴다. 전월 대비 매출 증감, 이전 접속과의 간격, 연속된 이벤트의 시간 차이 같은 것이다. 셀프 조인으로 "바로 앞 행"을 찾는 것보다 쿼리가 짧고 정렬 한 번으로 끝난다. 두 번째 인자로 몇 칸 떨어진 값인지, 세 번째 인자로 없을 때의 기본값을 준다.
+
+### 큰 테이블에서 윈도우 함수가 느릴 때는 무엇을 보나요?
+
+윈도우 함수는 `PARTITION BY`와 `ORDER BY` 순서로 행을 정렬해야 해서, 실행 계획에 `WindowAgg` 아래 `Sort`가 붙는다. 정렬이 메모리를 넘으면 디스크를 쓰니, `(partition 컬럼, order 컬럼)` 순서의 인덱스로 정렬을 없애거나 WHERE로 대상 행을 먼저 줄인다. 같은 `OVER` 절을 쓰는 함수끼리는 정렬을 한 번만 하도록 `WINDOW w AS (...)`로 묶을 수 있다. 서로 다른 정렬 기준이 여러 개면 그만큼 정렬이 반복된다.

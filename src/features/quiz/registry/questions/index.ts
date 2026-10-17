@@ -60,7 +60,11 @@ import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
 import { SQLD_GROUP_BY_HAVING } from "./sqld-group-by-having";
 import { SQLD_JOINS } from "./sqld-joins";
+import { SQLD_ROLLUP_CUBE_GROUPING_SETS } from "./sqld-rollup-cube-grouping-sets";
 import { SQLD_SINGLE_ROW_FUNCTIONS } from "./sqld-single-row-functions";
+import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
+import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
+import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { TOKEN_LOGIN } from "./token-login";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -129,7 +133,11 @@ export const QUESTION_SETS = [
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,
   SQLD_GROUP_BY_HAVING,
   SQLD_JOINS,
+  SQLD_ROLLUP_CUBE_GROUPING_SETS,
   SQLD_SINGLE_ROW_FUNCTIONS,
+  SQLD_SUBQUERY_SET_OPERATORS,
+  SQLD_TOP_N_HIERARCHICAL_PIVOT,
+  SQLD_WINDOW_FUNCTIONS,
   TOKEN_LOGIN,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,
