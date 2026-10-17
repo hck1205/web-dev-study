@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "db-index",
+    title: "인덱스: 책 뒤의 찾아보기",
+    summary: "주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾고, 복합·커버링·부분·식 인덱스를 언제 쓰며, 인덱스가 왜 안 타고 무엇을 대가로 내는지 정리한다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Index", "Performance"],
+    date: "2026-10-17",
+    keywords: ["복합 인덱스", "커버링 인덱스", "부분 인덱스", "Index Only Scan"],
+  },
+  {
+    slug: "sql-query-tuning",
+    title: "느린 쿼리 고치기: EXPLAIN부터 N+1까지",
+    summary: "pg_stat_statements로 느린 쿼리를 찾고 EXPLAIN ANALYZE를 안쪽부터 읽은 뒤, sargable 조건, 키셋 페이지네이션, N+1 제거, 배치 쓰기, 트랜잭션과 타임아웃 관리로 고친 전후를 실행 계획으로 비교한다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Performance"],
+    date: "2026-10-17",
+    keywords: ["EXPLAIN ANALYZE", "N+1", "키셋 페이지네이션", "pg_stat_statements"],
+  },
+  {
     slug: "nginx-basics",
     title: "Nginx 기본: 설정 파일을 읽는 법",
     summary: "설치했는데 기본 페이지나 403만 보이는 상황에서 출발해 master·worker 구조, Ubuntu의 sites-enabled 배치, server와 location이 골라지는 순서, root와 alias, try_files를 따라간다. nginx -t와 reload로 안전하게 바꾸고 로그로 원인을 찾는 법까지 정리한다.",

@@ -8,6 +8,7 @@ import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
+import { DB_INDEX } from "./db-index";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -49,6 +50,7 @@ import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
+import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { TOKEN_LOGIN } from "./token-login";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -65,6 +67,7 @@ export const QUESTION_SETS = [
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
+  DB_INDEX,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
@@ -106,6 +109,7 @@ export const QUESTION_SETS = [
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
+  SQL_QUERY_TUNING,
   TOKEN_LOGIN,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,
