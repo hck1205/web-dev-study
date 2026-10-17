@@ -28,6 +28,7 @@ export const TOPICS: Topic[] = [
         label: "Database",
         description: "RDB, NoSQL, 쿼리와 인덱스",
         children: [
+          { id: "postgresql", label: "PostgreSQL", description: "설치부터 내부 구조, 운영, 튜닝, 백업까지" },
           { id: "redis", label: "Redis", description: "인메모리 자료구조 저장소, 캐시, 메모리 관리" },
           { id: "sql", label: "SQL", description: "SQL 문법, 인덱스, 쿼리 튜닝, 테이블 설계, 트랜잭션" },
           { id: "sqld", label: "SQLD", description: "SQLD(SQL 개발자) 시험 범위를 주제별로" },
