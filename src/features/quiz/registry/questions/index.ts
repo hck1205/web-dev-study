@@ -52,6 +52,9 @@ import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { POSTGRES_DATA_TYPES } from "./postgres-data-types";
+import { POSTGRES_GETTING_STARTED } from "./postgres-getting-started";
+import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
@@ -133,6 +136,9 @@ export const QUESTION_SETS = [
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  POSTGRES_DATA_TYPES,
+  POSTGRES_GETTING_STARTED,
+  POSTGRES_ROLES_SECURITY,
   PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,

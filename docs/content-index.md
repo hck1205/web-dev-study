@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 78편 · 토픽 39개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 81편 · 토픽 39개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -232,6 +232,39 @@
 - 키워드 백링크 →: pythagorean-theorem, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, elasticsearch-inverted-index, pythagorean-theorem
 
+### Programming › Database › PostgreSQL (`programming/database/postgresql`)
+
+#### `postgres-data-types` — 타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range
+
+- 요약: 돈을 float로 저장해 생긴 오차와 9시간 밀린 주문 시각에서 시작해, PostgreSQL 타입을 언제 무엇으로 고르는지 정리한다. identity와 serial, timestamptz, UUID v7, enum, 범위 타입과 배제 제약까지 다룬다.
+- 태그: Database, PostgreSQL, SQL, Performance
+- 키워드: timestamptz, UUID v7, 배제 제약, identity 컬럼, tstzrange
+- 길이: 780줄
+- 소제목: 0.1을 열 번 더하면 1이 아니다 / 정수는 범위를 넘으면 에러가 난다 / varchar(n)이 text보다 빠르지 않다 / 오전 9시 주문이 오후 6시로 보인다 / UUID 키는 순서가 있어야 인덱스가 편하다 / 배열은 편하지만 관계를 대신하지 않는다 / 주문 상태를 담는 세 가지 방법 / 같은 방을 두 번 예약하지 못하게 / 도메인, NULL, 기본값, 형 변환 / 타입마다 몇 바이트를 쓰나 / 컬럼을 만들 때 묻는 것들 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-getting-started, db-index, sql-basics
+- 이 글로 오는 글 ←: postgres-getting-started, postgres-roles-security, sqld-data-modeling
+
+#### `postgres-getting-started` — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
+
+- 요약: Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, psql 사용법, 접속 URI, pg_hba.conf를 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.
+- 태그: Database, PostgreSQL, SQL, Linux
+- 키워드: psql, pg_hba.conf, search_path, peer 인증
+- 길이: 933줄 (긴 글)
+- 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
+- 이 글로 오는 글 ←: db-transaction-isolation, postgres-data-types, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
+
+#### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
+
+- 요약: 앱 계정이 운영 테이블을 DROP할 수 있는 상태에서 시작해 역할, GRANT와 기본 권한, 최소 권한 구성, SCRAM과 TLS, 행 단위 보안으로 서점마다 자기 주문만 보게 하는 방법을 정리한다.
+- 태그: Database, PostgreSQL, Security, SQL
+- 키워드: 행 단위 보안, Row Level Security, ALTER DEFAULT PRIVILEGES, scram-sha-256, SET ROLE
+- 길이: 809줄
+- 소제목: 역할 하나가 사용자이자 그룹이다 / 쿼리 하나가 지나는 검사들 / 주인, 마이그레이션, 앱, 분석 역할로 나누기 / 비밀번호는 SCRAM으로 저장한다 / pg_hba.conf와 TLS로 들어오는 길 좁히기 / 서점마다 자기 주문만 보게 하기 / 누가 언제 들어왔는지 남기기 / SQL 인젝션은 권한보다 앞에서 막는다 / pg_hba 줄 고르기를 직접 구현해 보기 / 앱 계정이 할 수 있는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-getting-started
+- 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-basics, db-index, dns
+- 이 글로 오는 글 ←: postgres-getting-started
+
 ### Programming › Database › Redis (`programming/database/redis`)
 
 #### `redis-basics` — Redis는 왜 빠른가: 메모리, 단일 스레드, 자료구조
@@ -278,7 +311,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / B-tree가 아닌 인덱스들 / MySQL 8은 표 자체가 인덱스다 / 찾아보기를 만들기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning
 - 키워드 백링크 →: db-replication-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, mongodb-document-model, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, mongodb-document-model, postgres-data-types, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
 
 #### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
 
@@ -299,7 +332,7 @@
 - 길이: 1081줄 (긴 글)
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD 시험 포인트 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices
-- 키워드 백링크 →: sql-basics
+- 키워드 백링크 →: postgres-getting-started, sql-basics
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-modeling-normalization, redis-basics, sql-basics, sql-query-tuning
 
 #### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
@@ -310,8 +343,8 @@
 - 길이: 1354줄 (긴 글)
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / Oracle과 SQL Server에서는 이렇게 다르다 / 다음은 빈 칸을 채울 차례 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, sql-query-tuning, db-transaction-isolation, sqld-data-modeling
-- 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
+- 키워드 백링크 →: sqld-group-by-having, postgres-getting-started
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, postgres-data-types, postgres-getting-started, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
 
 #### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
 
@@ -321,7 +354,7 @@
 - 길이: 1109줄 (긴 글)
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 느린 쿼리를 고치는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index
-- 키워드 백링크 →: db-architecture-by-scale, rest-api-design, db-transaction-isolation
+- 키워드 백링크 →: db-architecture-by-scale, rest-api-design, postgres-getting-started, db-transaction-isolation
 - 이 글로 오는 글 ←: db-index, db-replication-sharding, rest-api-design, sql-basics, sqld-joins
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
@@ -334,7 +367,7 @@
 - 길이: 519줄
 - 소제목: 현실을 줄여서 그리는 일 / 무엇을 보고 그리나: 데이터, 프로세스, 그리고 둘의 관계 / 개념에서 논리로, 논리에서 물리로 / ERD는 이 순서로 그린다 / 까마귀 발과 바커 표기 읽기 / 보는 사람마다 다른 화면, 하나의 DB / 좋은 모델인지 가늠하는 여섯 가지 / SQLD 시험 포인트 / 문서에서 테이블까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-entity-attribute-relationship, db-modeling-normalization, db-index
-- 키워드 백링크 →: sql-basics
+- 키워드 백링크 →: postgres-data-types, sql-basics
 - 이 글로 오는 글 ←: sql-basics, sqld-entity-attribute-relationship
 
 #### `sqld-entity-attribute-relationship` — SQLD 엔터티·속성·관계·식별자
@@ -388,6 +421,7 @@
 - 길이: 1103줄 (긴 글)
 - 소제목: 이 글에서 쓸 사원 테이블 / 지급액이 빈칸이 된 이유 / 한 행에 하나씩 돌려주는 함수 / 문자를 다듬는 함수 / 숫자를 자르고 올리는 함수 / 날짜는 숫자처럼 더하고 뺀다 / TO_CHAR 형식 문자열 읽기 / 형 변환은 직접 적는다 / NULL은 값이 아니라 빈칸이다 / NULL을 다른 값으로 바꾸는 함수 / 조건에 따라 값을 고르는 CASE와 DECODE / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-group-by-having, db-index
+- 키워드 백링크 →: postgres-getting-started
 - 이 글로 오는 글 ←: sqld-group-by-having, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-subquery-set-operators, sqld-window-functions
 
 #### `sqld-subquery-set-operators` — SQLD 서브쿼리와 집합 연산자
@@ -571,7 +605,7 @@
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
 - 키워드 백링크 →: http-versions
-- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, local-custom-domain, nginx-https-performance, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, local-custom-domain, nginx-https-performance, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, what-happens-google-com
 
 #### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
 
@@ -859,7 +893,7 @@
 - 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
 - 키워드 백링크 →: http-caching-cdn, sql-basics
-- 이 글로 오는 글 ←: db-replication-sharding, microservices, sql-query-tuning
+- 이 글로 오는 글 ←: db-replication-sharding, microservices, postgres-roles-security, sql-query-tuning
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -946,6 +980,7 @@
 - 모놀리스 → `microservices`
 - 반정규화 → `db-modeling-normalization`
 - 배럴 파일 → `code-splitting`
+- 배제 제약 → `postgres-data-types`
 - 벌크헤드 → `resilience-patterns`
 - 벡터 DB → `vector-db`
 - 병합 충돌 → `git-branch-merge`
@@ -1037,6 +1072,7 @@
 - 함수 종속 → `db-modeling-normalization`
 - 핫 키 → `caching-strategies`
 - 해시 슬롯 → `redis-persistence-ha`
+- 행 단위 보안 → `postgres-roles-security`
 - 형태소 분석기 → `elasticsearch-inverted-index`
 - 힙 스냅샷 → `js-memory-leak`
 - A/B 테스트 → `ab-testing`
@@ -1046,6 +1082,7 @@
 - Access-Control-Allow-Origin → `cors`
 - allkeys-lru → `redis-memory-eviction`
 - allowedDevOrigins → `local-custom-domain`
+- ALTER DEFAULT PRIVILEGES → `postgres-roles-security`
 - AOF → `redis-persistence-ha`
 - API 게이트웨이 → `gateway`
 - API 버전 관리 → `rest-api-design`
@@ -1138,6 +1175,7 @@
 - HTTPRoute → `gateway`
 - HTTPS → `what-happens-google-com`
 - I/O 다중화 → `redis-basics`
+- identity 컬럼 → `postgres-data-types`
 - Index Only Scan → `db-index`
 - index.lock → `git-troubleshooting`
 - Ingress → `kubernetes-ingress`
@@ -1184,6 +1222,8 @@
 - NVL → `sqld-single-row-functions`
 - OAuth → `oauth`
 - OUTER JOIN → `sqld-joins`
+- peer 인증 → `postgres-getting-started`
+- pg_hba.conf → `postgres-getting-started`
 - pg_stat_statements → `sql-query-tuning`
 - PgBouncer → `db-architecture-by-scale`
 - PIVOT → `sqld-top-n-hierarchical-pivot`
@@ -1196,6 +1236,7 @@
 - proxy_cache → `nginx-https-performance`
 - proxy_pass → `nginx-reverse-proxy`
 - proxy_set_header → `nginx-reverse-proxy`
+- psql → `postgres-getting-started`
 - pull.rebase → `git-rebase`
 - PUT과 PATCH → `http-methods`
 - QUIC → `http-versions`
@@ -1210,15 +1251,19 @@
 - REST API → `rest-api-design`
 - reviver → `json-crud-http`
 - ROLLUP → `sqld-rollup-cube-grouping-sets`
+- Row Level Security → `postgres-roles-security`
 - ROW_NUMBER → `sqld-window-functions`
 - ROWNUM → `sqld-top-n-hierarchical-pivot`
 - Same-Origin Policy → `cors`
+- scram-sha-256 → `postgres-roles-security`
 - search_after → `elasticsearch-inverted-index`
+- search_path → `postgres-getting-started`
 - SELF JOIN → `sqld-joins`
 - sendBeacon → `browser-fetch`
 - server_name → `nginx-basics`
 - Server-Sent Events → `realtime-communication`
 - Service Worker → `frontend-browser-cache`
+- SET ROLE → `postgres-roles-security`
 - Set-Cookie → `cookie-session-login`
 - setImmediate → `event-loop`
 - sites-enabled → `nginx-basics`
@@ -1230,11 +1275,13 @@
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
 - TanStack Query → `client-data-cache`
+- timestamptz → `postgres-data-types`
 - TLS 1.3 → `https-tls`
 - TLS 핸드셰이크 → `https-tls`
 - Transfer-Encoding → `http-message`
 - TRUNCATE → `sql-basics`
 - try_files → `nginx-basics`
+- tstzrange → `postgres-data-types`
 - TTL → `dns`
 - UNION ALL → `sqld-subquery-set-operators`
 - unrelated histories → `git-troubleshooting`
@@ -1242,6 +1289,7 @@
 - upstream 블록 → `nginx-reverse-proxy`
 - URLSearchParams → `html-form-http`
 - useDeferredValue → `react-rerender`
+- UUID v7 → `postgres-data-types`
 - WeakMap → `js-memory-leak`
 - WebSocket → `realtime-communication`
 - worktree → `git-tips-advanced`
@@ -1260,6 +1308,9 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `postgres-getting-started` ↔ `postgres-data-types`
+- `postgres-getting-started` ↔ `postgres-roles-security`
+- `postgres-getting-started` ↔ `sql-basics`
 - `git-internals-basics` ↔ `git-branch-merge`
 - `git-internals-basics` ↔ `git-undo`
 - `git-internals-basics` ↔ `git-remote-collaboration`
@@ -1367,6 +1418,7 @@
 - `git-undo` 992줄 — 되돌리기 총정리: restore, reset, revert, reflog
 - `sqld-subquery-set-operators` 984줄 — SQLD 서브쿼리와 집합 연산자
 - `git-branch-merge` 948줄 — 브랜치와 병합: 포인터 하나가 움직일 뿐
+- `postgres-getting-started` 933줄 — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
 - `redis-persistence-ha` 910줄 — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
 
 ## 다른 글과 연결이 없는 글

@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "postgres-getting-started",
+    title: "PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마",
+    summary: "Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, psql 사용법, 접속 URI, pg_hba.conf를 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Linux"],
+    date: "2026-10-17",
+    keywords: ["psql", "pg_hba.conf", "search_path", "peer 인증"],
+  },
+  {
+    slug: "postgres-data-types",
+    title: "타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range",
+    summary: "돈을 float로 저장해 생긴 오차와 9시간 밀린 주문 시각에서 시작해, PostgreSQL 타입을 언제 무엇으로 고르는지 정리한다. identity와 serial, timestamptz, UUID v7, enum, 범위 타입과 배제 제약까지 다룬다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Performance"],
+    date: "2026-10-17",
+    keywords: ["timestamptz", "UUID v7", "배제 제약", "identity 컬럼", "tstzrange"],
+  },
+  {
+    slug: "postgres-roles-security",
+    title: "역할과 권한: 로그인부터 행 단위 보안(RLS)까지",
+    summary: "앱 계정이 운영 테이블을 DROP할 수 있는 상태에서 시작해 역할, GRANT와 기본 권한, 최소 권한 구성, SCRAM과 TLS, 행 단위 보안으로 서점마다 자기 주문만 보게 하는 방법을 정리한다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "Security", "SQL"],
+    date: "2026-10-17",
+    keywords: ["행 단위 보안", "Row Level Security", "ALTER DEFAULT PRIVILEGES", "scram-sha-256", "SET ROLE"],
+  },
+  {
     slug: "git-internals-basics",
     title: "Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역",
     summary: "blob·tree·commit 객체를 직접 열어 보고, 파일이 작업 트리·인덱스·저장소를 어떻게 오가는지 따라간다. add 뒤에 고친 내용이 왜 커밋에 안 들어가는지부터 log, .gitignore, 설정까지 정리한다.",

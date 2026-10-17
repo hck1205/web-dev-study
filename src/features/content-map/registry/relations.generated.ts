@@ -2,6 +2,34 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "postgres-getting-started": {
+    "links": [
+      "sql-basics",
+      "postgres-data-types",
+      "postgres-roles-security"
+    ],
+    "mentions": []
+  },
+  "postgres-data-types": {
+    "links": [
+      "postgres-getting-started",
+      "db-index",
+      "sql-basics"
+    ],
+    "mentions": []
+  },
+  "postgres-roles-security": {
+    "links": [
+      "postgres-getting-started"
+    ],
+    "mentions": [
+      "postgres-data-types",
+      "db-architecture-by-scale",
+      "sql-basics",
+      "db-index",
+      "dns"
+    ]
+  },
   "git-internals-basics": {
     "links": [
       "git-branch-merge",
@@ -141,7 +169,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-data-modeling"
     ],
     "mentions": [
-      "sqld-group-by-having"
+      "sqld-group-by-having",
+      "postgres-getting-started"
     ]
   },
   "sqld-data-modeling": {
@@ -151,6 +180,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
+      "postgres-data-types",
       "sql-basics"
     ]
   },
@@ -170,7 +200,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-group-by-having",
       "db-index"
     ],
-    "mentions": []
+    "mentions": [
+      "postgres-getting-started"
+    ]
   },
   "sqld-group-by-having": {
     "links": [
@@ -205,6 +237,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices"
     ],
     "mentions": [
+      "postgres-getting-started",
       "sql-basics"
     ]
   },
@@ -258,6 +291,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "rest-api-design",
+      "postgres-getting-started",
       "db-transaction-isolation"
     ]
   },
