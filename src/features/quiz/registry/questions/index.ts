@@ -36,6 +36,7 @@ import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { OAUTH } from "./oauth";
+import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
@@ -87,6 +88,7 @@ export const QUESTION_SETS = [
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
   OAUTH,
+  PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,
   REALTIME_COMMUNICATION,

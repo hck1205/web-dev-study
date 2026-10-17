@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "proxy-reverse-proxy",
+    title: "프록시와 리버스 프록시: 누구를 대신하나",
+    summary: "사내망에서 curl이 막히는 이유와 앱 로그에 로드 밸런서 IP만 찍히는 이유를 프록시가 누구 편에 서 있는지로 푼다. CONNECT 터널과 TLS 가로채기, Ubuntu 프록시 설정, X-Forwarded-For를 오른쪽부터 읽는 법과 PROXY protocol까지 다룬다.",
+    topic: "programming/network",
+    tags: ["Network", "HTTP", "Security", "Proxy", "TLS", "Linux"],
+    date: "2026-10-16",
+    keywords: ["포워드 프록시", "리버스 프록시", "X-Forwarded-For", "CONNECT 터널", "PROXY protocol"],
+  },
+  {
     slug: "redis-basics",
     title: "Redis는 왜 빠른가: 메모리, 단일 스레드, 자료구조",
     summary: "Redis가 빠른 이유와 느린 명령 하나가 서버 전체를 멈추는 이유는 같은 곳에 있다. 메모리와 단일 스레드 이벤트 루프 구조를 보고, Ubuntu에 설치해 자료구조별 명령을 직접 실행해 본다.",
