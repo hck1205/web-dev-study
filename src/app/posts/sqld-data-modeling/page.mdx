@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-data-modeling");
+
+동네 학원에서 겨울 특강 수강신청을 온라인으로 받고 싶다며 요구사항 문서 한 장을 보냈다고 하자. 지금까지는 엑셀 시트 하나에 학생 이름, 전화번호, 신청한 강좌, 강사, 수강료를 한 줄씩 적어 왔다고 한다.
+
+```text
+[겨울 특강 수강신청 시스템 요구사항]
+1. 학생은 이름, 연락처, 생년월일을 등록하고 가입한다. 연락처는 학생마다 다르다.
+2. 학원은 과목(수학 I, 영어 독해 …)을 학기마다 강좌로 연다.
+   강좌에는 담당 강사 한 명, 정원, 수강료가 있다.
+3. 강사 한 명은 여러 강좌를 맡을 수 있다. 아직 맡은 강좌가 없는 강사도 있다.
+4. 학생은 여러 강좌를 신청할 수 있고, 한 강좌에는 여러 학생이 신청한다.
+5. 신청하면 '신청', 결제하면 '결제 완료', 취소하면 '취소' 상태가 된다.
+6. 강사는 자기 강좌의 수강생 명단을 본다. 학생 연락처는 보면 안 된다.
+7. 원무팀은 강좌별 신청 인원과 결제 현황을 본다.
+```
+
+바로 `CREATE TABLE`부터 치고 싶어진다. 그런데 테이블을 몇 개 만들지, 강사 이름은 어디에 둘지, "신청"은 테이블인지 컬럼인지부터 막힌다. 이 문서에서 테이블까지 가는 길을 단계로 나눈 게 데이터 모델링이다. 이 글은 이 요구사항 하나로 SQLD 1과목의 모델링 단원을 따라간다. 마지막에는 PostgreSQL 16에 실제 테이블을 만들어서, 모델링 이론에서 말하는 "독립성"이 무엇인지 실행 결과로 확인한다.
+
+## 현실을 줄여서 그리는 일
+
+데이터 모델링은 현실의 업무를 DB에 담을 수 있는 모양으로 줄여 그리는 일이다. 지도를 생각하면 쉽다. 지도는 실제 땅을 그대로 옮기지 않는다. 길과 건물만 남기고(추상화), 나무 한 그루 한 그루는 빼고(단순화), 기호와 범례를 정해 누가 봐도 같은 뜻으로 읽히게 한다(명확화). SQLD에서 묻는 모델링의 세 가지 특징이 이 셋이다.
+
+추상화는 현실의 여러 대상에서 공통된 성질만 뽑아 하나의 틀로 만드는 것이다. 김민준, 이서연, 박지호는 다 다른 사람이지만 모델에서는 "학생"이라는 틀 하나가 된다. 단순화는 복잡한 현실을 약속된 표기법이나 언어로 쉽게 표현하는 것이다. 명확화는 누가 읽어도 한 가지로만 해석되게 애매함을 없애는 것이다. "강좌에는 강사가 있다"는 문장은 강사가 한 명인지 여럿인지 애매하지만, 모델에 "강좌 하나에 강사 정확히 한 명"이라고 그리면 해석이 하나로 정해진다.
+
+지도에 그리는 것은 크게 세 가지다. 업무가 관리하려는 대상(엔터티, 예: 학생, 강좌), 그 대상의 성질(속성, 예: 학생의 이름과 연락처), 대상끼리의 연결(관계, 예: 학생이 강좌를 신청한다)이다. 영어로는 Things, Attributes, Relationships라고 부른다. 세 개념 각각은 [엔터티·속성·관계·식별자 글](/posts/sqld-entity-attribute-relationship)에서 자세히 다루고, 여기서는 이 셋을 언제 어떤 순서로 정하는지에 집중한다.
+
+모델링을 왜 따로 하느냐도 시험에 나온다. 첫째는 파급효과(Leverage)다. 시스템을 다 만든 뒤 데이터 구조를 바꾸면 그 테이블을 쓰는 화면, API, 배치, 리포트를 모두 고쳐야 한다. 설계 단계에서 고치는 비용과는 비교가 안 된다. 둘째는 간결한 표현(Conciseness)이다. 수십 쪽짜리 요구사항이 그림 한 장으로 줄어서, 개발자와 현업이 같은 그림을 보고 이야기한다. 셋째는 데이터 품질(Data Quality)이다. 같은 데이터가 여러 곳에 흩어져 서로 다른 값을 갖는 문제는 대부분 구조에서 생기고, 이건 나중에 데이터를 아무리 정리해도 다시 생긴다.
+
+반대로 모델링을 잘못하면 생기는 문제도 세 가지로 묻는다. 같은 정보를 여러 곳에 두는 중복(Duplication), 업무가 조금만 바뀌어도 구조를 뜯어고쳐야 하는 비유연성(Inflexibility), 데이터끼리 서로 맞지 않는 비일관성(Inconsistency)이다. 학원의 엑셀 시트가 이 셋을 다 보여 준다. 강사 전화번호가 그 강사의 강좌를 신청한 학생 수만큼 반복되고(중복), 강좌에 강사가 두 명 붙는 순간 열을 하나 더 만들어야 하고(비유연성), 강사 전화번호를 한 줄만 고치면 같은 강사인데 번호가 둘이 된다(비일관성).
+
+## 무엇을 보고 그리나: 데이터, 프로세스, 그리고 둘의 관계
+
+같은 업무를 보더라도 무엇에 초점을 맞추느냐에 따라 세 관점이 있다. 데이터 관점은 업무에 어떤 데이터가 있고 서로 어떻게 연결되는지(What)를 본다. 이 글에서 그리는 ERD가 이 관점의 결과물이다. 프로세스 관점은 업무가 실제로 하는 일(How)을 본다. "학생이 신청한다, 원무팀이 결제를 확인한다" 같은 흐름이다. 상관 관점은 업무가 진행될 때 데이터가 어떤 영향을 받는지(Interaction)를 본다. "신청" 프로세스는 수강신청을 만들고(C), 강좌 정원을 읽는다(R). 이런 관계를 표로 그린 것이 CRUD 매트릭스다.
+
+```text
+               학생   강좌   수강신청
+수강신청하기     R      R       C
+결제 확인        -      -       U
+신청 취소        -      -       U
+명단 조회        R      R       R
+```
+
+CRUD 매트릭스를 그려 보면 모델이 빠뜨린 게 보인다. 아무 프로세스도 만들지(C) 않는 엔터티가 있으면 그 데이터는 어디서 오는지 모르는 것이고, 아무도 읽지(R) 않는 엔터티는 필요 없는 엔터티일 수 있다.
+
+## 개념에서 논리로, 논리에서 물리로
+
+모델링은 세 단계를 거친다. 처음에는 넓고 흐릿하게, 갈수록 좁고 구체적으로 그린다. 같은 땅을 세계 지도, 도시 지도, 건물 설계도로 차례로 확대해 그리는 것과 같다. 아래 그림에서 다음을 누르면 요구사항이 단계마다 어떤 결과물로 바뀌는지 나온다.
+
+<SequenceDiagram
+  caption="요구사항이 세 단계를 거쳐 테이블이 되기까지"
+  actors={[
+    { id: "biz", label: "현업(학원)" },
+    { id: "modeler", label: "모델러" },
+    { id: "dev", label: "DBA·개발자" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "biz", to: "modeler", label: "요구사항", title: "업무를 듣는다", detail: "학원이 관리하려는 것과 규칙을 듣는다. 이 단계의 재료는 문서와 인터뷰다." },
+    { from: "modeler", to: "biz", label: "개념 모델", title: "개념적 모델링", detail: "핵심 엔터티(학생, 강좌, 강사, 과목)와 그 사이의 관계만 그린다. 현업이 보고 '맞다, 틀리다'를 말할 수 있는 수준이다.", payload: "학생 >──신청──< 강좌\n강사 ──담당──< 강좌\n과목 ──개설──< 강좌" },
+    { from: "modeler", to: "modeler", label: "키·속성·정규화", title: "논리적 모델링", detail: "엔터티마다 식별자와 속성을 모두 정하고, 다대다 관계를 수강신청이라는 엔터티로 풀고, 정규화로 중복을 없앤다. 아직 특정 DB와는 상관없다." },
+    { from: "modeler", to: "dev", label: "논리 모델", title: "논리 모델을 넘긴다", detail: "엔터티, 속성, 식별자, 관계가 모두 정해진 ERD다. 이 모델은 Oracle로 만들든 PostgreSQL로 만들든 같다." },
+    { from: "dev", to: "dev", label: "타입·인덱스", title: "물리적 모델링", detail: "쓸 DB를 정하고, 컬럼 타입, 인덱스, 제약 조건, 테이블 이름 규칙을 정한다. 성능을 위해 일부러 중복을 두는 반정규화도 이때 검토한다." },
+    { from: "dev", to: "db", label: "CREATE TABLE", title: "DDL로 만든다", detail: "물리 모델이 그대로 DDL이 된다. 여기서부터는 SQL로 확인할 수 있다.", payload: "CREATE TABLE enrollments (\n  student_id bigint REFERENCES students,\n  class_id   bigint REFERENCES classes,\n  PRIMARY KEY (student_id, class_id)\n);" },
+  ]}
+/>
+
+### 개념적 모델링: 무엇이 있는지만 그린다
+
+요구사항 문서에서 명사를 찾으면 엔터티 후보가 나온다. 학생, 연락처, 과목, 강좌, 강사, 정원, 수강료, 원무팀, 명단. 이 중 "업무가 따로 관리해야 하고, 여러 건이 있고, 각각을 구분할 수 있는 것"만 엔터티로 남긴다. 연락처, 정원, 수강료는 다른 것의 성질이니 속성이다. 원무팀과 강사 화면의 명단은 데이터를 보는 사람이고 보는 방식이라 엔터티가 아니다. 남는 것은 학생, 강사, 과목, 강좌 넷이다.
+
+과목과 강좌를 나눈 게 중요하다. "수학 I"이라는 과목은 하나지만, 그 과목을 2026년 겨울에 정하늘 강사가 여는 강좌와 2027년 봄에 다른 강사가 여는 강좌는 다르다. 정원과 수강료는 과목이 아니라 강좌에 붙는다. 요구사항 2번의 "과목을 학기마다 강좌로 연다"가 이 구분을 알려 준다.
+
+다음으로 동사를 찾아 관계를 긋는다. 강사가 강좌를 맡는다, 과목이 강좌로 열린다, 학생이 강좌를 신청한다. 개념 모델은 여기까지다. 속성은 핵심적인 것만 쓰거나 아예 쓰지 않는다. 현업이 보고 "우리 학원에는 강좌 하나에 강사가 둘인 경우도 있어요" 같은 말을 할 수 있으면 개념 모델은 제 할 일을 한 것이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="개념 모델: 핵심 엔터티 넷과 관계만 그린다"
+  nodes={[
+    { id: "student", label: "학생", x: 80, y: 70, w: 100 },
+    { id: "class", label: "강좌", sub: "학기마다 연다", x: 280, y: 70, w: 130 },
+    { id: "teacher", label: "강사", x: 80, y: 230, w: 100 },
+    { id: "subject", label: "과목", x: 320, y: 230, w: 100 },
+  ]}
+  edges={[
+    { from: "student", to: "class", label: "신청 M:N", arrow: "both" },
+    { from: "teacher", to: "class", label: "담당 1:N" },
+    { from: "subject", to: "class", label: "개설 1:N" },
+  ]}
+/>
+
+개념 모델은 추상화 수준이 가장 높고, 업무 중심적이며, 포괄적이다. 회사 전체의 데이터를 큰 그림으로 그리는 전사적 데이터 모델링(EA, Enterprise Architecture)도 이 단계에서 한다. 시험에서 "추상화 수준이 높고 업무 중심적이며 포괄적인 수준의 모델링"이라고 나오면 개념적 모델링이다.
+
+### 논리적 모델링: 키와 속성과 규칙을 모두 정한다
+
+논리 모델은 "이 그림대로 만들면 데이터가 빠짐없이, 겹치지 않게 들어가는가"를 따진다. 할 일은 네 가지다.
+
+먼저 엔터티마다 식별자를 정한다. 학생은 학생번호, 강사는 강사번호, 과목은 과목코드(`MATH1` 같은), 강좌는 강좌번호다. 연락처는 학생마다 다르니 학생을 구분할 수 있지만, 학생이 번호를 바꿀 수 있어서 식별자로는 쓰지 않고 중복만 막는다.
+
+다음으로 속성을 모두 적는다. 학생은 이름, 연락처, 생년월일, 가입일시. 강좌는 학기, 정원, 수강료. 강사는 이름, 입사일. 과목은 과목명.
+
+그리고 다대다 관계를 푼다. 학생과 강좌는 M:N이다. 관계형 DB의 테이블은 행과 행을 외래 키 하나로만 잇기 때문에 M:N을 바로 담을 수 없다. 학생 행에 강좌 번호를 넣으면 학생 하나가 강좌를 하나밖에 못 듣고, 강좌 행에 학생 번호를 넣으면 반대가 된다. 그래서 "학생 한 명이 강좌 하나를 신청한 사건" 하나하나를 행으로 갖는 엔터티를 사이에 넣는다. 이게 수강신청이고, 요구사항 5번의 상태(신청, 결제 완료, 취소)와 신청일시가 바로 이 엔터티의 속성이 된다. 상태는 학생의 성질도 강좌의 성질도 아니고 "그 학생이 그 강좌를 신청한 일"의 성질이기 때문이다.
+
+마지막으로 정규화로 중복을 없앤다. 엑셀 시트에서 강사 전화번호가 반복되던 문제가 여기서 사라진다. 강사 정보는 강사 엔터티에만 있고, 강좌는 강사번호만 갖는다. 정규화 단계별 규칙은 [정규화 글](/posts/db-modeling-normalization)에 있다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="논리 모델: M:N이 수강신청으로 풀리고 식별자가 정해진다"
+  nodes={[
+    { id: "student", label: "학생", sub: "PK 학생번호", x: 80, y: 60, w: 120 },
+    { id: "enroll", label: "수강신청", sub: "PK 학생+강좌", x: 200, y: 160, w: 130 },
+    { id: "class", label: "강좌", sub: "PK 강좌번호", x: 320, y: 60, w: 120 },
+    { id: "teacher", label: "강사", sub: "PK 강사번호", x: 320, y: 270, w: 120 },
+    { id: "subject", label: "과목", sub: "PK 과목코드", x: 80, y: 270, w: 120 },
+  ]}
+  edges={[
+    { from: "enroll", to: "student", label: "N:1" },
+    { from: "enroll", to: "class", label: "N:1" },
+    { from: "class", to: "teacher", label: "N:1" },
+    { from: "class", to: "subject", label: "N:1", dashed: true },
+  ]}
+/>
+
+화살표는 외래 키가 가리키는 방향이다. 수강신청은 학생과 강좌를 하나씩 가리키고, 강좌는 강사와 과목을 하나씩 가리킨다. 논리 모델은 특정 DB와 상관없이 그리므로 재사용성이 높다. 같은 논리 모델로 Oracle에도, PostgreSQL에도 테이블을 만들 수 있다. 시험에서는 "정규화를 수행하는 단계", "Key, 속성, 관계를 정확하게 표현하는 단계", "재사용성이 높은 단계"로 나온다.
+
+### 물리적 모델링: 실제 DB에 맞춰 짓는다
+
+물리 모델은 정해진 DB 위에서 어떻게 저장하고 얼마나 빨리 읽을지를 정한다. 엔터티는 테이블이, 속성은 컬럼이, 식별자는 기본 키가, 관계는 외래 키가 된다. 여기에 논리 모델에는 없던 것들이 더해진다. 컬럼 타입과 길이, 인덱스, 테이블과 컬럼의 영문 이름 규칙, 저장 공간(테이블스페이스), 그리고 성능 때문에 일부러 중복을 두는 반정규화다. PostgreSQL 16으로 만들면 이렇다.
+
+```sql
+CREATE TABLE students (
+  student_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- 학생번호
+  name       varchar(50) NOT NULL,                              -- 이름
+  phone      varchar(13) NOT NULL UNIQUE,                       -- 연락처: 식별자는 아니지만 겹치면 안 된다
+  birth_date date,                                              -- 생년월일: 선택
+  created_at timestamptz NOT NULL DEFAULT now()                 -- 가입일시
+);
+
+CREATE TABLE teachers (
+  teacher_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name       varchar(50) NOT NULL,
+  hired_on   date NOT NULL
+);
+
+CREATE TABLE subjects (
+  subject_code varchar(10) PRIMARY KEY,                         -- 과목코드는 업무에 원래 있는 값을 쓴다
+  name         varchar(100) NOT NULL
+);
+
+CREATE TABLE classes (                                          -- 강좌
+  class_id     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  subject_code varchar(10) NOT NULL REFERENCES subjects (subject_code),
+  teacher_id   bigint NOT NULL REFERENCES teachers (teacher_id), -- 강사 정확히 한 명
+  term         varchar(10) NOT NULL,
+  capacity     integer NOT NULL CHECK (capacity > 0),
+  fee          numeric(10, 0) NOT NULL CHECK (fee >= 0)
+);
+
+CREATE TABLE enrollments (                                      -- 수강신청
+  student_id  bigint NOT NULL REFERENCES students (student_id),
+  class_id    bigint NOT NULL REFERENCES classes (class_id),
+  status      varchar(10) NOT NULL DEFAULT 'applied'
+              CHECK (status IN ('applied', 'paid', 'cancelled')),
+  enrolled_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (student_id, class_id)
+);
+
+-- 강좌별 명단을 자주 보니 class_id로 찾는 인덱스를 둔다 (물리 모델에서만 생기는 결정)
+CREATE INDEX enrollments_class_id_idx ON enrollments (class_id);
+```
+
+수강신청 테이블 한 줄 한 줄이 논리 모델의 어디에서 왔는지 조각으로 나눠 보자. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="수강신청 테이블의 각 줄은 논리 모델의 무엇인가"
+  base="CREATE TABLE enrollments"
+  separator=" ( "
+  joiner=", "
+  params={[
+    {
+      key: "student",
+      display: "student_id … REFERENCES students",
+      title: "관계 → 외래 키",
+      description: "논리 모델의 '학생이 신청한다' 관계가 외래 키가 됐다. 학생 테이블에 없는 번호는 넣을 수 없다. 타입은 학생 테이블의 기본 키와 같은 bigint로 맞춘다.",
+      required: true,
+    },
+    {
+      key: "class",
+      display: "class_id … REFERENCES classes",
+      title: "관계 → 외래 키",
+      description: "'강좌에 신청된다' 관계다. NOT NULL이 붙어서 강좌 없는 수강신청은 있을 수 없다. 모델의 '필수 참여'가 NOT NULL로 바뀐 것이다.",
+      required: true,
+    },
+    {
+      key: "status",
+      display: "status … CHECK (…)",
+      title: "속성과 업무 규칙",
+      description: "요구사항 5번의 세 상태다. 상태가 셋뿐이라는 업무 규칙을 CHECK 제약으로 DB가 직접 지키게 했다. 응용 코드만 믿으면 언젠가 다른 값이 들어간다.",
+      code: "CHECK (status IN ('applied', 'paid', 'cancelled'))",
+    },
+    {
+      key: "at",
+      display: "enrolled_at timestamptz",
+      title: "속성 → 컬럼과 타입",
+      description: "논리 모델의 '신청일시'가 물리 모델에서 타입을 얻었다. 시간대까지 정확히 남기려고 timestamptz를 골랐다. Oracle이면 TIMESTAMP WITH TIME ZONE이나 DATE를 썼을 것이다. 타입 선택은 DB에 따라 달라지는 물리 모델의 일이다.",
+    },
+    {
+      key: "pk",
+      display: "PRIMARY KEY (student_id, class_id)",
+      title: "식별자 → 기본 키",
+      description: "수강신청은 '어느 학생이 어느 강좌를'로 구분된다. 부모 둘의 식별자를 물려받아 자기 식별자로 삼았으니 식별 관계다. 같은 학생이 같은 강좌를 두 번 신청할 수 없다는 규칙도 이 키가 지킨다.",
+    },
+  ]}
+/>
+
+데이터를 몇 줄 넣고 확인한다.
+
+```sql
+INSERT INTO students (name, phone, birth_date) VALUES
+  ('김민준', '010-1234-5678', '2009-03-14'),
+  ('이서연', '010-2345-6789', '2010-07-02'),
+  ('박지호', '010-3456-7890', NULL);
+INSERT INTO teachers (name, hired_on) VALUES ('정하늘', '2021-03-02'), ('한도윤', '2024-09-01');
+INSERT INTO subjects VALUES ('MATH1', '수학 I'), ('ENG2', '영어 독해'), ('PHYS1', '물리학 I');
+INSERT INTO classes (subject_code, teacher_id, term, capacity, fee) VALUES
+  ('MATH1', 1, '2026-겨울', 20, 300000),
+  ('ENG2',  2, '2026-겨울', 15, 250000),
+  ('PHYS1', 1, '2026-겨울', 10, 280000);
+INSERT INTO enrollments (student_id, class_id, status, enrolled_at) VALUES
+  (1, 1, 'paid',      '2026-10-10 10:00+09'),
+  (1, 2, 'applied',   '2026-10-11 19:30+09'),
+  (2, 1, 'paid',      '2026-10-12 09:15+09'),
+  (2, 3, 'applied',   '2026-10-13 21:40+09'),
+  (3, 3, 'cancelled', '2026-10-14 14:05+09');
+
+-- 같은 학생이 같은 강좌를 또 신청한다
+INSERT INTO enrollments (student_id, class_id) VALUES (1, 1);
+-- 없는 강좌를 신청한다
+INSERT INTO enrollments (student_id, class_id) VALUES (1, 9);
+```
+
+```text
+ERROR:  duplicate key value violates unique constraint "enrollments_pkey"
+DETAIL:  Key (student_id, class_id)=(1, 1) already exists.
+ERROR:  insert or update on table "enrollments" violates foreign key constraint "enrollments_class_id_fkey"
+DETAIL:  Key (class_id)=(9) is not present in table "classes".
+```
+
+요구사항 4번의 규칙("한 학생이 한 강좌를 두 번 신청할 수는 없다"는 숨은 규칙까지)이 키와 외래 키로 지켜진다. 엑셀 시트로 보던 한 줄짜리 정보는 조인으로 다시 만든다.
+
+```sql
+SELECT s.name AS student, sub.name AS subject, t.name AS teacher, e.status
+FROM enrollments e
+JOIN students s   ON s.student_id = e.student_id
+JOIN classes c    ON c.class_id = e.class_id
+JOIN subjects sub ON sub.subject_code = c.subject_code
+JOIN teachers t   ON t.teacher_id = c.teacher_id
+ORDER BY s.student_id, c.class_id;
+```
+
+```text
+ student |  subject  | teacher |  status
+---------+-----------+---------+-----------
+ 김민준  | 수학 I    | 정하늘  | paid
+ 김민준  | 영어 독해 | 한도윤  | applied
+ 이서연  | 수학 I    | 정하늘  | paid
+ 이서연  | 물리학 I  | 정하늘  | applied
+ 박지호  | 물리학 I  | 정하늘  | cancelled
+(5 rows)
+```
+
+정하늘 강사의 이름이 결과에 네 번 나오지만 저장된 곳은 `teachers`의 한 행뿐이다. 이름을 고치면 네 줄이 한 번에 바뀐다.
+
+## ERD는 이 순서로 그린다
+
+엔터티와 관계를 그린 그림을 ERD(Entity Relationship Diagram)라고 한다. SQLD는 ERD를 그리는 순서를 묻는다. 순서가 곧 생각하는 순서라서 외워 둘 만하다. 아래 그림에서 다음을 누르면 학원 ERD가 한 단계씩 채워진다.
+
+<AlgoTrace
+  caption="ERD 작성 순서 여섯 단계"
+  memoryLabel="그림에 더해진 것"
+  cells={["엔터티", "배치", "관계 설정", "관계명", "관계 차수", "필수 여부"]}
+  steps={[
+    { memory: [], caption: "빈 종이에서 시작한다. 요구사항에서 엔터티 넷을 찾아 두었다." },
+    { pointer: 0, found: [0], memory: ["학생·강사·과목·강좌"], caption: "1. 엔터티를 네모로 그린다. 아직 선은 없다." },
+    { pointer: 1, found: [0, 1], memory: ["학생·강사·과목·강좌", "중심을 왼쪽 위에"], caption: "2. 배치한다. 가장 중요한 엔터티를 왼쪽 위에, 업무 흐름의 중심은 가운데에 둔다. 선이 서로 엇갈리지 않게 놓는다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["학생·강사·과목·강좌", "중심을 왼쪽 위에", "선 3개"], caption: "3. 관계가 있는 엔터티끼리 선을 긋는다. 학생-강좌, 강사-강좌, 과목-강좌." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["학생·강사·과목·강좌", "중심을 왼쪽 위에", "선 3개", "신청·담당·개설"], caption: "4. 선 위에 관계 이름을 적는다. 현재형 동사로 쓴다. '신청했다'처럼 과거형이나 '관계 있음'처럼 애매한 말은 피한다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["학생·강사·과목·강좌", "중심을 왼쪽 위에", "선 3개", "신청·담당·개설", "M:N, 1:N, 1:N"], caption: "5. 관계 차수를 적는다. 양쪽에서 '하나인가 여럿인가'를 따진다. 강사 하나는 강좌 여럿, 강좌 하나는 강사 하나다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["학생·강사·과목·강좌", "중심을 왼쪽 위에", "선 3개", "신청·담당·개설", "M:N, 1:N, 1:N", "강사 쪽 강좌는 선택"], caption: "6. 필수인지 선택인지 적는다. 요구사항 3번 '맡은 강좌가 없는 강사도 있다'에서 강사 쪽에서 본 강좌는 선택, 강좌 쪽에서 본 강사는 필수가 된다." },
+  ]}
+/>
+
+5번과 6번은 비슷해 보이지만 묻는 게 다르다. 차수(Cardinality)는 "최대 몇 개"를, 필수 여부(Optionality)는 "최소 0개도 되나"를 묻는다. 강사 입장에서 강좌는 최대 여럿(N), 최소 0개(선택)다. 강좌 입장에서 강사는 최대 하나, 최소 하나(필수)다. 물리 모델로 가면 필수는 `NOT NULL`이 되고, 선택은 NULL 허용이나 "자식 행이 없어도 된다"가 된다.
+
+## 까마귀 발과 바커 표기 읽기
+
+같은 ERD도 표기법에 따라 모양이 다르다. 처음 나온 것은 1976년 피터 첸(Peter Chen)의 표기법이다. 엔터티는 네모, 관계는 마름모, 속성은 타원으로 그리고 선 옆에 1, N을 적는다. 개념을 설명하기에는 좋지만 속성이 많아지면 타원이 종이를 덮어서 실무에서는 잘 쓰지 않는다. SQLD 교재가 쓰는 것은 IE 표기법과 바커(Barker) 표기법이다.
+
+IE(Information Engineering) 표기법은 관계선 끝 모양으로 차수와 필수 여부를 나타낸다. 선 끝이 세 갈래로 갈라지면 "여럿"이고, 생김새 때문에 까마귀 발(Crow's Foot)이라고 부른다. 짧은 수직선은 "하나", 작은 동그라미는 "0(선택)"이다. 선 끝에는 기호가 두 개 붙는데, 엔터티에 가까운 쪽이 최대(차수), 먼 쪽이 최소(필수 여부)다. 강사와 강좌를 IE로 그리면 이렇다.
+
+```text
+  ┌──────┐                 ┌──────┐
+  │ 강사 │┼─────── 담당 ──○<│ 강좌 │
+  └──────┘                 └──────┘
+          ┼ : 최소 1, 최대 1 (강좌에는 강사가 반드시 한 명)
+          ○< : 최소 0, 최대 여럿 (강사는 강좌가 없어도 되고, 여럿일 수도 있다)
+```
+
+바커 표기법은 Oracle의 CASE 도구에서 퍼졌다. 까마귀 발은 같지만 필수 여부를 선의 모양으로 그린다. 그 엔터티 쪽 절반이 실선이면 필수, 점선이면 선택이다. 위의 관계라면 강좌 쪽 절반은 실선(강좌는 강사가 꼭 있어야 한다), 강사 쪽 절반은 점선(강사는 강좌가 없어도 된다)이 된다. 엔터티 박스 안의 속성 앞에는 기호가 붙는다. `#`은 식별자, `*`는 필수 속성, `o`는 선택 속성이다. 자식이 부모의 식별자를 물려받는 식별 관계는 자식 쪽 선 끝에 짧은 가로 막대를 그린다.
+
+```text
+  학생                       수강신청
+  # 학생번호                  * 상태
+  * 이름        ─────────<   * 신청일시
+  * 연락처
+  o 생년월일
+  (# 식별자, * 필수 속성, o 선택 속성)
+```
+
+시험에서는 그림을 보여 주고 "강사는 강좌를 반드시 담당해야 한다" 같은 보기를 판정하게 한다. 동그라미나 점선이 어느 쪽에 붙어 있는지만 정확히 읽으면 된다. 헷갈릴 때는 "기호는 맞은편 엔터티에 대한 이야기"라는 것을 기억한다. 강좌 쪽 선 끝의 `○<`는 "강사 한 명이 가진 강좌의 수"를 말한다.
+
+## 보는 사람마다 다른 화면, 하나의 DB
+
+요구사항 6번과 7번을 다시 보자. 강사는 수강생 명단을 보되 연락처는 보면 안 되고, 원무팀은 강좌별 인원과 결제 현황을 본다. 같은 데이터를 보는 사람마다 필요한 모양이 다르다. 그렇다고 사람마다 테이블을 따로 만들면 다시 중복이다.
+
+이 문제를 정리한 것이 1970년대 미국 표준 협회의 ANSI/SPARC 위원회가 제안한 3단계 스키마 구조다. 스키마는 DB의 구조를 적은 설계도다. 같은 DB를 세 층으로 나눠 본다.
+
+<ConceptDiagram
+  width={400}
+  height={340}
+  caption="3단계 스키마: 외부는 여럿, 개념과 내부는 하나"
+  nodes={[
+    { id: "ext1", label: "강사 화면", sub: "외부 스키마", x: 70, y: 45, w: 110 },
+    { id: "ext2", label: "원무팀 화면", sub: "외부 스키마", x: 200, y: 45, w: 115 },
+    { id: "ext3", label: "학생 앱", sub: "외부 스키마", x: 330, y: 45, w: 110 },
+    { id: "concept", label: "개념 스키마", sub: "전체 테이블·관계", x: 200, y: 170, w: 160 },
+    { id: "internal", label: "내부 스키마", sub: "파일·인덱스", x: 200, y: 295, w: 150 },
+  ]}
+  edges={[
+    { from: "ext1", to: "concept" },
+    { from: "ext2", to: "concept", label: "논리적 사상" },
+    { from: "ext3", to: "concept" },
+    { from: "concept", to: "internal", label: "물리적 사상" },
+  ]}
+/>
+
+외부 스키마는 사용자나 응용 프로그램 하나가 보는 DB의 모습이다. 강사 화면, 원무팀 화면, 학생 앱이 각자 하나씩 가지므로 여러 개다. SQL에서는 뷰(VIEW)가 대표적인 외부 스키마다. 개념 스키마는 모든 사용자의 관점을 합친 DB 전체의 논리 구조다. 어떤 테이블과 컬럼과 관계와 제약이 있는지를 적으며, DB 하나에 하나다. 앞에서 만든 `CREATE TABLE` 다섯 개가 개념 스키마다. 내부 스키마는 그 데이터가 디스크에 실제로 어떻게 저장되는지다. 파일 구조, 인덱스, 레코드 배치, 저장 위치가 여기 들어가고, 이것도 하나다.
+
+층과 층 사이를 잇는 대응 규칙을 사상(mapping)이라고 한다. 외부 스키마와 개념 스키마를 잇는 것이 외부/개념 사상(논리적 사상)이고, 뷰의 정의(`AS SELECT ...`)가 바로 이것이다. 개념 스키마와 내부 스키마를 잇는 것이 개념/내부 사상(물리적 사상)이고, 테이블이 어느 파일의 어느 페이지에 있는지를 DB가 관리한다.
+
+이렇게 층을 나누는 목적은 데이터 독립성이다. 한 층을 바꿔도 위층이 모르게 하는 것이다. 두 가지가 있다.
+
+### 논리적 독립성: 테이블을 바꿔도 화면은 그대로
+
+개념 스키마를 바꿔도 외부 스키마와 응용 프로그램이 바뀌지 않는 성질이다. 직접 해 본다. 강사 화면이 쓸 뷰를 하나 만든다. 연락처는 뺐다.
+
+```sql
+-- 강사 화면의 외부 스키마: 강좌별 명단, 취소한 신청은 빼고, 연락처는 없다
+CREATE VIEW class_roster AS
+SELECT c.class_id, sub.name AS subject, s.name AS student, e.status
+FROM enrollments e
+JOIN classes c    ON c.class_id = e.class_id
+JOIN subjects sub ON sub.subject_code = c.subject_code
+JOIN students s   ON s.student_id = e.student_id
+WHERE e.status <> 'cancelled';
+
+-- 강사 화면이 보내는 쿼리
+SELECT * FROM class_roster WHERE class_id = 1;
+```
+
+```text
+ class_id | subject | student | status
+----------+---------+---------+--------
+        1 | 수학 I  | 김민준  | paid
+        1 | 수학 I  | 이서연  | paid
+(2 rows)
+```
+
+이제 학원이 성과 이름을 따로 관리하겠다고 한다. 개념 스키마가 바뀐다. `name` 컬럼을 `family_name`과 `given_name`으로 나눈다.
+
+```sql
+ALTER TABLE students ADD COLUMN family_name varchar(20), ADD COLUMN given_name varchar(30);
+UPDATE students SET family_name = left(name, 1), given_name = substr(name, 2);
+ALTER TABLE students DROP COLUMN name;
+```
+
+```text
+ALTER TABLE
+UPDATE 3
+ERROR:  cannot drop column name of table students because other objects depend on it
+DETAIL:  view class_roster depends on column name of table students
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+```
+
+DB가 막는다. 뷰가 `name`에 기대고 있어서다. `CASCADE`로 밀어 버리면 뷰가 사라지고 강사 화면이 깨진다. 대신 사상(뷰 정의)을 고쳐서 새 구조에서 예전과 같은 모양을 만들어 준다. 뷰의 컬럼 타입이 바뀌면 `CREATE OR REPLACE VIEW`가 거절하니 원래 타입(`varchar(50)`)으로 맞춘다.
+
+```sql
+BEGIN;
+CREATE OR REPLACE VIEW class_roster AS
+SELECT c.class_id, sub.name AS subject,
+       (s.family_name || s.given_name)::varchar(50) AS student,   -- 새 구조로 예전 컬럼을 만든다
+       e.status
+FROM enrollments e
+JOIN classes c    ON c.class_id = e.class_id
+JOIN subjects sub ON sub.subject_code = c.subject_code
+JOIN students s   ON s.student_id = e.student_id
+WHERE e.status <> 'cancelled';
+ALTER TABLE students DROP COLUMN name;
+COMMIT;
+
+-- 강사 화면의 쿼리는 한 글자도 바뀌지 않았다
+SELECT * FROM class_roster WHERE class_id = 1;
+```
+
+```text
+ class_id | subject | student | status
+----------+---------+---------+--------
+        1 | 수학 I  | 김민준  | paid
+        1 | 수학 I  | 이서연  | paid
+(2 rows)
+```
+
+테이블 구조는 바뀌었는데 강사 화면이 보는 결과는 그대로다. 바뀐 건 외부/개념 사상 하나뿐이다. 이게 논리적 독립성이다. 응용 프로그램이 테이블을 직접 읽었다면 `name`을 쓰는 모든 코드를 찾아 고쳐야 했다.
+
+### 물리적 독립성: 저장 방식을 바꿔도 테이블은 그대로
+
+내부 스키마를 바꿔도 개념 스키마와 응용 프로그램이 바뀌지 않는 성질이다. 인덱스를 만들거나 지우는 것이 가장 흔한 내부 스키마 변경이다. 차이가 보이게 학생을 2만 명, 강좌를 300개, 수강신청을 약 6만 건으로 늘린 다음, 강사 화면의 같은 쿼리를 인덱스가 있을 때와 없을 때 실행 계획으로 비교했다. 아래는 `enrollments`를 읽는 부분만 잘라 온 출력이다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM class_roster WHERE class_id = 120;
+```
+
+```text
+-- enrollments_class_id_idx 인덱스가 있을 때
+               ->  Bitmap Heap Scan on enrollments e  (cost=6.03..384.02 rows=225 width=21) (actual time=0.042..0.242 rows=218 loops=1)
+                     Recheck Cond: (class_id = 120)
+                     Filter: ((status)::text <> 'cancelled'::text)
+                     Heap Blocks: exact=174
+                     Buffers: shared hit=179
+                     ->  Bitmap Index Scan on enrollments_class_id_idx  (cost=0.00..5.98 rows=225 width=0) (actual time=0.021..0.021 rows=218 loops=1)
+                           Index Cond: (class_id = 120)
+                           Buffers: shared hit=5
+ Execution Time: 3.796 ms
+
+-- DROP INDEX enrollments_class_id_idx; 후
+               ->  Seq Scan on enrollments e  (cost=0.00..1337.01 rows=225 width=21) (actual time=0.013..4.232 rows=218 loops=1)
+                     Filter: (((status)::text <> 'cancelled'::text) AND (class_id = 120))
+                     Rows Removed by Filter: 59583
+                     Buffers: shared hit=440
+ Execution Time: 8.414 ms
+```
+
+인덱스가 있을 때는 `Bitmap Index Scan`으로 218건의 위치만 찾아 179페이지를 읽었고, 없을 때는 `Seq Scan`으로 테이블 전체 440페이지를 읽으며 59,583건을 버렸다(`Rows Removed by Filter`). 쿼리 전체 시간은 3.8ms와 8.4ms로 갈렸다. 결과는 218행으로 같고, 쿼리 문장도, 뷰도, 테이블 정의도 그대로다. 저장 구조가 바뀌어도 위층은 모른다. 이게 물리적 독립성이다. 실행 계획 읽는 법은 [인덱스 글](/posts/db-index)에 있다.
+
+두 독립성을 헷갈리지 않는 방법은 "무엇을 바꿨나"를 보는 것이다. 테이블과 컬럼, 즉 논리 구조를 바꿨는데 화면이 무사하면 논리적 독립성이다. 인덱스, 파일, 저장 장치를 바꿨는데 테이블과 화면이 무사하면 물리적 독립성이다.
+
+## 좋은 모델인지 가늠하는 여섯 가지
+
+SQLD는 좋은 데이터 모델의 요소로 여섯 가지를 든다. 학원 모델에 하나씩 대어 보면 외우기 쉽다.
+
+완전성은 업무에 필요한 데이터가 모두 들어 있는가다. 요구사항 7번의 "결제 현황"을 보려면 결제 금액과 결제일이 있어야 하는데, 지금 모델에는 상태(`paid`)만 있다. 결제 엔터티가 빠져 있다는 걸 이 질문으로 찾는다. 중복 배제는 같은 사실이 한 곳에만 있는가다. 강사 이름이 강사 테이블에만 있는 것이 그 예다.
+
+업무 규칙은 업무의 규칙이 모델에 드러나 있는가다. "강좌에는 강사가 정확히 한 명"이 `teacher_id NOT NULL`로, "상태는 셋 중 하나"가 `CHECK`로 들어갔다. 규칙이 응용 코드에만 있으면 다른 응용이 그 규칙을 모른다. 데이터 재사용은 특정 화면이나 프로그램에 묶이지 않고 여러 곳에서 다시 쓸 수 있는가다. 수강신청을 "강사 명단용 테이블"로 만들지 않고 독립된 엔터티로 둔 덕분에 원무팀 화면도 같은 데이터를 쓴다.
+
+의사소통은 모델이 현업과 개발자 사이의 공용어 역할을 하는가다. 개념 모델 그림을 학원에 보여 주고 "강좌에 강사가 둘인 경우는 없나요?"라고 물을 수 있어야 한다. 통합성은 회사 전체에서 같은 데이터를 한 번만 정의하고 공유하는가다. 학원에 수강신청 시스템과 별개로 상담 시스템이 생겨도 학생 엔터티는 하나여야 한다.
+
+## SQLD 시험 포인트
+
+1과목 "데이터 모델링의 이해"에서 이 단원은 정의를 비틀어 묻는 문제가 많다. 자주 엇갈리는 짝을 묶으면 이렇다.
+
+모델링의 특징은 추상화, 단순화, 명확화 셋이다. "구체화"나 "상세화"가 보기에 섞여 나오면 틀린 보기다. 모델링의 유의점은 중복, 비유연성, 비일관성이고, 모델링이 중요한 이유는 파급효과, 간결한 표현, 데이터 품질이다. 모델링의 세 요소는 대상(엔터티), 속성, 관계다.
+
+세 단계는 결과물로 구분한다. 핵심 엔터티와 관계만 그리고 추상화 수준이 가장 높으면 개념적, 키와 속성과 관계를 모두 정하고 정규화를 하면 논리적, 특정 DB에 맞춰 타입과 인덱스와 저장 구조를 정하면 물리적이다. 재사용성은 논리 모델이 가장 높다고 본다. 전사적 데이터 모델링(EA)은 개념 단계의 일이다.
+
+모델링 관점은 데이터 관점(What), 프로세스 관점(How), 상관 관점(Interaction)이고, 상관 관점의 도구가 CRUD 매트릭스다.
+
+3단계 스키마는 외부, 개념, 내부다. 외부 스키마는 사용자 관점이고 여러 개, 개념 스키마는 통합 관점이고 하나, 내부 스키마는 물리 저장 관점이고 하나다. 개념 스키마를 "개별 사용자 관점"이라고 하거나 내부 스키마를 "사용자 관점"이라고 하는 보기는 틀린 것이다. 논리적 독립성은 개념 스키마가 바뀌어도 외부 스키마가 영향받지 않는 것이고, 물리적 독립성은 내부 스키마가 바뀌어도 개념·외부 스키마가 영향받지 않는 것이다. 외부/개념 사상을 논리적 사상(응용 인터페이스), 개념/내부 사상을 물리적 사상(저장 인터페이스)이라고 부른다.
+
+ERD 작성 순서는 엔터티 그리기, 배치, 관계 설정, 관계명 기술, 관계 차수 기술, 관계 필수 여부 기술이다. 배치는 중요한 엔터티를 왼쪽 위에 둔다. 관계명은 현재형으로 쓰고, 표기법은 IE와 바커가 나온다. IE에서 동그라미는 선택, 바커에서 점선은 선택이다.
+
+좋은 데이터 모델의 요소는 완전성, 중복 배제, 업무 규칙, 데이터 재사용, 의사소통, 통합성 여섯이다. 출제 기준은 개정될 수 있으니 응시 회차의 공식 출제 기준을 한 번 확인한다.
+
+## 문서에서 테이블까지
+
+요구사항 문서의 명사에서 엔터티를, 동사에서 관계를 찾고(개념), 식별자와 속성을 정하고 다대다를 풀고 중복을 없애고(논리), 쓸 DB에 맞춰 타입과 인덱스를 정했다(물리). 그리고 보는 사람마다 다른 화면은 뷰라는 외부 스키마로 주고, 테이블과 저장 구조가 바뀌어도 화면이 무사하도록 층을 나눴다. 엔터티를 어떻게 고르고 나누는지, 식별자를 무엇으로 정하는지는 [엔터티·속성·관계·식별자 글](/posts/sqld-entity-attribute-relationship)에서 같은 학원 예제로 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 개념적, 논리적, 물리적 모델링의 차이는 무엇인가요?
+
+결과물의 구체성이 다르다. 개념적 모델링은 핵심 엔터티와 관계만 그려서 현업과 업무 범위를 맞추는 단계이고, 논리적 모델링은 식별자와 속성, 관계, 정규화까지 모두 정하지만 특정 DB와는 무관하다. 물리적 모델링은 쓸 DB에 맞춰 타입, 인덱스, 제약 조건, 반정규화를 정해 DDL로 만드는 단계다. 같은 논리 모델에서 Oracle용과 PostgreSQL용 물리 모델이 따로 나올 수 있다.
+
+### 다대다 관계는 왜 테이블로 바로 만들 수 없나요?
+
+관계형 테이블은 행과 행을 외래 키 컬럼 하나로 잇기 때문에 한쪽 행에 상대 행을 하나밖에 담지 못한다. 학생 행에 강좌 번호를 넣으면 학생이 강좌를 하나만 들을 수 있게 된다. 그래서 학생과 강좌 사이에 수강신청 같은 교차 엔터티를 두고, 양쪽과 1:N 관계 두 개로 푼다. 이렇게 하면 신청 상태나 신청일처럼 관계 자체의 속성을 둘 곳도 생긴다.
+
+### 3단계 스키마와 데이터 독립성을 설명해 주세요
+
+DB를 사용자마다 보는 외부 스키마, 전체 논리 구조인 개념 스키마, 물리 저장 구조인 내부 스키마로 나눈 구조다. 개념 스키마를 바꿔도 외부 스키마를 그대로 두는 것이 논리적 독립성이고, 내부 스키마를 바꿔도 위층을 그대로 두는 것이 물리적 독립성이다. 실무로 옮기면 뷰 정의만 고쳐서 테이블 변경을 화면에서 숨기는 것이 논리적 독립성, 인덱스를 추가해도 쿼리를 고치지 않는 것이 물리적 독립성이다.
+
+### 뷰를 쓰면 무엇이 좋고, 무엇을 조심해야 하나요?
+
+보여 줄 컬럼과 행만 골라 권한을 줄 수 있고(강사에게 연락처를 숨기는 것처럼), 복잡한 조인을 이름 하나로 감추며, 테이블 구조가 바뀌어도 뷰 정의만 고치면 응용이 그대로 돈다. 대신 뷰는 저장된 쿼리일 뿐이라 매번 원래 쿼리가 실행되니 성능이 좋아지지 않는다. 뷰 위에 뷰를 쌓으면 실행 계획을 읽기 어려워지고, PostgreSQL에서는 뷰가 의존하는 컬럼을 그냥 지울 수 없어서 마이그레이션 순서를 신경 써야 한다.
+
+### ERD에서 차수와 선택성은 어떻게 다른가요?
+
+차수는 상대 엔터티와 최대 몇 개까지 관계를 맺는지(1 또는 N)이고, 선택성은 최소 0개여도 되는지(선택 또는 필수)다. 강사는 강좌를 최대 여럿, 최소 0개 가질 수 있고, 강좌는 강사를 정확히 하나 가져야 한다. IE 표기법에서는 까마귀 발과 동그라미, 바커 표기법에서는 까마귀 발과 점선으로 그린다. 물리 모델에서 필수는 외래 키의 `NOT NULL`로 바뀐다.
+
+### 업무 규칙은 DB 제약으로 두나요, 응용 코드로 두나요?
+
+데이터 자체의 규칙(필수 값, 중복 금지, 허용 값 목록, 참조 관계)은 DB 제약으로 둔다. 응용이 여러 개가 되거나 누군가 SQL로 직접 고치는 순간 코드에만 있는 규칙은 지켜지지 않기 때문이다. 화면 흐름이나 여러 테이블에 걸친 복잡한 계산 규칙은 응용 코드가 맡고, 그래도 깨지면 안 되는 핵심 불변식은 제약이나 트랜잭션으로 한 번 더 막는다.
+
+### 모델이 잘 만들어졌는지 어떻게 검토하나요?
+
+요구사항의 화면과 리포트를 하나씩 대어 보며 필요한 데이터가 다 있는지(완전성), 같은 사실이 두 곳에 있지 않은지(중복 배제), 규칙이 키와 제약으로 드러나는지(업무 규칙)를 본다. CRUD 매트릭스를 그려서 아무도 만들지 않거나 아무도 읽지 않는 엔터티가 있는지도 찾는다. 마지막으로 개념 모델을 현업에게 보여 주고 예외 상황을 물어서 규칙을 확인한다.

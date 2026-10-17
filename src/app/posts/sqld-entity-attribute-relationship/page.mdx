@@ -1,0 +1,563 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-entity-attribute-relationship");
+
+[앞 글](/posts/sqld-data-modeling)에서 학원 수강신청 시스템의 큰 그림을 그렸다. 학생, 강사, 과목, 강좌, 그리고 학생과 강좌 사이의 수강신청까지. 이제 학원이 요구사항을 하나 더 보냈다고 하자. "강사가 수업마다 출석을 체크하게 해 주세요."
+
+출석은 어디에 붙여야 할까. 학생에 붙이면 어느 강좌의 출석인지 모른다. 강좌에 붙이면 누구의 출석인지 모른다. 출석이 엔터티인지, 아니면 수강신청의 속성 몇 개인지, 출석 테이블의 기본 키는 무엇인지도 정해야 한다. 이런 질문에 답하는 기준이 엔터티, 속성, 관계, 식별자다. SQLD 1과목에서 가장 많은 문제가 나오는 곳이기도 하다.
+
+이 글은 앞 글과 같은 학원 예제를 쓴다. 테이블은 PostgreSQL 16(16.15)으로 실제로 만들어 돌렸고, 출력은 모두 실행 결과다.
+
+## 엔터티가 되려면 갖춰야 할 것
+
+엔터티는 업무가 관리하려는 대상의 집합이다. 학생이라는 엔터티 안에 김민준, 이서연, 박지호가 하나씩 들어 있다. 이 하나하나를 인스턴스라고 하고, 테이블로 가면 행이 된다. 엔터티는 틀이고 인스턴스는 그 틀로 찍어 낸 것이다.
+
+요구사항에 나온 명사가 다 엔터티가 되는 것은 아니다. SQLD는 엔터티의 특징을 여섯 가지로 든다. 하나라도 빠지면 엔터티가 아닐 가능성이 크다.
+
+첫째, 업무에서 필요하고 관리하려는 정보여야 한다. 학원 건물의 엘리베이터는 학원에 있지만 수강신청 업무가 관리할 대상이 아니다. 둘째, 인스턴스 하나하나를 유일하게 구분할 식별자가 있어야 한다. 동명이인 학생이 있어도 학생번호로 구분된다. 셋째, 인스턴스가 두 개 이상이어야 한다. "우리 학원"은 하나뿐이라 엔터티로 두지 않는다. 학원 이름이나 주소는 설정값으로 충분하다. 넷째, 업무 프로세스가 그 엔터티를 이용해야 한다. 만들기만 하고 아무 프로세스도 읽거나 고치지 않으면 필요 없는 엔터티다. 다섯째, 속성이 있어야 한다. 이름만 있고 아무 성질도 없으면 다른 엔터티의 속성일 가능성이 크다. 여섯째, 다른 엔터티와 관계가 하나 이상 있어야 한다. 다만 통계용 엔터티, 코드 목록, 시스템 내부용 엔터티(로그 같은)는 관계를 생략할 수 있다는 예외가 있고, 시험에서도 이 예외를 묻는다.
+
+출석을 대어 보자. 학원이 관리하고 싶어 하고(업무 필요), 수업마다 학생마다 생겨서 여러 건이고(인스턴스 여럿), 출석 여부와 날짜라는 속성이 있고, 강사가 체크하고 원무팀이 확인하며(프로세스), 수강신청과 관계가 있다. 식별자만 아직 모른다. 이건 뒤에서 정한다. 출석은 엔터티다.
+
+## 엔터티를 나누는 두 가지 기준
+
+엔터티는 두 기준으로 분류한다. 하나는 눈에 보이는 실체가 있는지(유형과 무형), 다른 하나는 언제 생기는지(발생 시점)다.
+
+유무형으로는 셋으로 나눈다. 유형 엔터티는 물리적인 형태가 있고 안정적으로 오래 존재한다. 학생, 강사, 강의실이다. 개념 엔터티는 형태는 없지만 관리할 개념적 정보다. 과목이 그렇다. "수학 I"은 만질 수 없지만 학원이 관리하는 대상이다. 사건 엔터티는 업무를 하는 중에 생긴다. 수강신청, 결제, 출석이다. 사건 엔터티는 데이터가 많이 쌓이고, 통계 자료의 재료가 된다.
+
+발생 시점으로도 셋으로 나눈다. 기본 엔터티(키 엔터티)는 업무에 원래 존재하는 것이라 다른 엔터티 없이 독립적으로 생긴다. 다른 엔터티에서 식별자를 물려받지 않고 자기 식별자를 갖고, 주로 부모 역할을 한다. 학생, 강사, 과목, 강의실이다. 중심 엔터티는 기본 엔터티에서 생기고 업무의 중심 역할을 한다. 데이터가 많이 쌓이고, 다른 엔터티와 관계를 맺으며 행위 엔터티를 낳는다. 과목과 강사로 여는 강좌, 학생이 강좌에 하는 수강신청이 여기 들어간다. 행위 엔터티는 두 개 이상의 부모 엔터티에서 생기고, 내용이 자주 바뀌거나 계속 늘어난다. 분석 초기에는 잘 안 보이다가 상세 설계 단계에서 나온다. 출석, 수강 변경 이력이 그렇다. 출석이 처음 요구사항에 없다가 나중에 튀어나온 것과 같다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="기본 엔터티에서 중심 엔터티가, 중심에서 행위 엔터티가 생긴다"
+  nodes={[
+    { id: "student", label: "학생", sub: "기본·유형", x: 70, y: 50, w: 110 },
+    { id: "teacher", label: "강사", sub: "기본·유형", x: 200, y: 50, w: 110 },
+    { id: "subject", label: "과목", sub: "기본·개념", x: 330, y: 50, w: 110 },
+    { id: "class", label: "강좌", sub: "중심", x: 265, y: 160, w: 110 },
+    { id: "enroll", label: "수강신청", sub: "중심·사건", x: 120, y: 160, w: 120 },
+    { id: "attend", label: "출석", sub: "행위·사건", x: 120, y: 275, w: 110 },
+    { id: "history", label: "변경 이력", sub: "행위·사건", x: 280, y: 275, w: 120 },
+  ]}
+  edges={[
+    { from: "teacher", to: "class" },
+    { from: "subject", to: "class" },
+    { from: "student", to: "enroll" },
+    { from: "class", to: "enroll" },
+    { from: "enroll", to: "attend" },
+    { from: "enroll", to: "history" },
+  ]}
+/>
+
+화살표를 따라가면 위에서 아래로 데이터가 생기는 순서가 보인다. 학생과 강좌가 있어야 수강신청이 생기고, 수강신청이 있어야 출석이 생긴다. 분류의 경계가 늘 칼같이 나뉘지는 않는다. 강좌를 기본 엔터티로 볼 수도 있다. 시험은 정의와 대표 예(기본: 사원, 부서, 고객, 상품 / 중심: 계약, 주문, 매출 / 행위: 주문 목록, 사원 변경 이력)를 짝지어 묻는다.
+
+엔터티 이름도 규칙이 있다. 현업이 쓰는 업무 용어로 짓고, 약어를 쓰지 않고, 단수 명사로 쓰며, 모델 전체에서 이름이 겹치지 않게 하고, 엔터티가 생기는 의미대로 짓는다. 마지막 규칙이 중요하다. 학생과 강좌 사이의 엔터티를 "학생강좌"라고 지으면 무엇이 생기는지 알 수 없다. "수강신청"이라고 지어야 학생이 강좌를 신청할 때 한 건 생긴다는 뜻이 이름에 담긴다.
+
+## 속성은 더 쪼갤 수 없는 값 하나
+
+속성은 엔터티가 관리하려는, 의미상 더 이상 나눌 수 없는 가장 작은 데이터 단위다. 학생의 이름, 연락처, 생년월일이다. 엔터티, 인스턴스, 속성, 속성값의 관계가 시험에 나온다. 엔터티 하나는 인스턴스를 두 개 이상 갖고, 인스턴스 하나는 속성을 두 개 이상 갖고, 인스턴스 하나의 속성 하나는 값을 하나만 갖는다. 김민준 학생(인스턴스)의 연락처(속성)는 `010-1234-5678`(속성값) 하나다.
+
+### 특성에 따라: 기본, 설계, 파생
+
+기본 속성은 업무에서 바로 나온 속성이다. 학생 이름, 강좌 정원, 수강료가 그렇다. 설계 속성은 업무에는 원래 없지만 설계하면서 만든 것이다. 학생번호 같은 일련번호, `applied`·`paid`·`cancelled` 같은 상태 코드가 그렇다. 학원은 "결제 완료"라고 말하지 시스템 코드를 정해 달라고 하지 않았다. 파생 속성은 다른 속성에서 계산되는 값이다. 강좌의 현재 신청 인원은 수강신청 행을 세면 나온다.
+
+파생 속성은 가능한 한 적게 둔다. 원본이 바뀔 때 함께 바꿔 주지 않으면 값이 어긋나기 때문이다. 강좌에 신청 인원 컬럼을 두고, 그걸 깜빡하고 신청을 하나 더 넣으면 어떻게 되는지 직접 본다. 수강신청 테이블은 뒤의 "비식별 관계로 끊으면"에서 만드는 구조(신청마다 `enrollment_id`가 있다)이고, 지금 이렇게 들어 있다.
+
+```text
+ enrollment_id | student_id | class_id |  status
+---------------+------------+----------+-----------
+             1 |          1 |        1 | paid
+             2 |          1 |        2 | paid
+             3 |          2 |        1 | paid
+             4 |          3 |        3 | cancelled
+             5 |          3 |        3 | applied
+(5 rows)
+```
+
+```sql
+-- 파생 속성: 강좌별 신청 인원 (취소 제외)
+ALTER TABLE classes ADD COLUMN enrolled_count integer NOT NULL DEFAULT 0;
+UPDATE classes c SET enrolled_count = (
+  SELECT count(*) FROM enrollments e WHERE e.class_id = c.class_id AND e.status <> 'cancelled');
+
+-- 다른 화면이 신청을 넣으면서 enrolled_count는 안 고쳤다
+INSERT INTO enrollments (student_id, class_id) VALUES (2, 2);
+
+SELECT c.class_id, c.enrolled_count,
+       (SELECT count(*) FROM enrollments e
+        WHERE e.class_id = c.class_id AND e.status <> 'cancelled') AS actual
+FROM classes c ORDER BY c.class_id;
+```
+
+```text
+ class_id | enrolled_count | actual
+----------+----------------+--------
+        1 |              2 |      2
+        2 |              1 |      2
+        3 |              1 |      1
+(3 rows)
+```
+
+2번 강좌가 저장된 값으로는 1명, 실제로는 2명이다. 정원 마감을 이 컬럼으로 판단하면 정원을 넘겨 받게 된다. 파생 속성을 두려면 원본을 바꾸는 같은 트랜잭션에서 함께 고치거나 트리거로 맞추고, 어긋남을 찾는 위 쿼리를 주기적으로 돌린다. 조회가 정말 느릴 때만 두는 게 원칙이고, 이건 반정규화의 한 종류다.
+
+### 구성 방식에 따라: 기본 키, 외래 키, 일반 속성
+
+엔터티 안에서 맡은 역할로도 나눈다. 인스턴스를 구분하는 기본 키(PK) 속성, 다른 엔터티와의 관계에서 온 외래 키(FK) 속성, 나머지 일반 속성이다. 수강신청의 `enrollment_id`는 PK 속성, `student_id`와 `class_id`는 FK 속성, `status`와 `enrolled_at`은 일반 속성이다.
+
+### 단일과 복합, 단일값과 다중값
+
+주소는 시·구·상세 주소로 나눌 수 있다. 이렇게 여러 의미로 쪼갤 수 있는 속성을 복합 속성, 더 쪼갤 수 없는 이름 같은 속성을 단일 속성이라 한다. 쪼갤지는 업무가 정한다. 시별 학생 수를 낼 일이 있으면 시를 따로 둔다.
+
+학생 연락처가 본인, 엄마, 아빠 번호로 여러 개라면 다중값 속성이다. 속성 하나에 값 하나라는 규칙에 어긋나니, 이런 속성은 별도 엔터티(학생 연락처)로 떼어 낸다. `phone1`, `phone2`, `phone3` 컬럼을 만드는 건 다중값을 숨긴 것뿐이다. 네 번째 번호가 생기면 테이블을 바꿔야 하고, "이 번호의 주인이 누구냐"를 찾으려면 컬럼 세 개를 다 뒤져야 한다. 이게 제1정규형의 내용이다.
+
+### 도메인: 속성이 가질 수 있는 값의 범위
+
+도메인은 속성이 가질 수 있는 값의 범위다. 타입과 길이, 허용하는 값, 형식까지 포함한다. 학생 연락처와 강사 연락처는 같은 도메인이다. PostgreSQL은 도메인을 이름 붙여 만들 수 있다. 한 번 정의해 두면 여러 테이블이 같은 규칙을 쓴다.
+
+```sql
+-- 휴대폰 번호 도메인: 010-1234-5678 형식만 허용
+CREATE DOMAIN phone_kr AS varchar(13)
+  CHECK (VALUE ~ '^01[016789]-[0-9]{3,4}-[0-9]{4}$');
+
+CREATE TABLE students (
+  student_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name       varchar(50) NOT NULL,
+  phone      phone_kr NOT NULL UNIQUE
+);
+CREATE TABLE teachers (
+  teacher_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name       varchar(50) NOT NULL,
+  phone      phone_kr NOT NULL            -- 강사도 같은 규칙
+);
+
+INSERT INTO students (name, phone) VALUES
+  ('김민준', '010-1234-5678'), ('이서연', '010-2345-6789'), ('박지호', '010-3456-7890');
+INSERT INTO students (name, phone) VALUES ('최유나', '01012345678');   -- 하이픈이 없다
+```
+
+```text
+INSERT 0 3
+ERROR:  value for domain phone_kr violates check constraint "phone_kr_check"
+```
+
+형식이 다른 번호는 어느 테이블에 넣든 같은 에러로 막힌다. 나중에 국제 번호를 허용하려면 도메인 하나만 고치면 된다. Oracle과 SQL Server에는 PostgreSQL처럼 `CHECK`까지 담는 도메인 객체가 없어서 같은 `CHECK`를 테이블마다 적는다. 모델링 도구에서 도메인을 정의해 두고 DDL을 만들 때 펼치는 방식이 흔하다.
+
+속성 이름은 업무에서 쓰는 이름으로 짓고, "학생이 처음 가입한 날짜"처럼 서술식으로 짓지 않고("가입일"), 약어를 줄이고, 모델 전체에서 겹치지 않게 짓는다. 학생 테이블에도 강사 테이블에도 그냥 "이름"만 있으면 두 엔터티를 합친 화면에서 헷갈린다.
+
+## 관계: 엔터티끼리 맺는 연결
+
+관계는 두 엔터티의 인스턴스 사이에 맺는 논리적인 연결이다. 생기는 이유에 따라 둘로 나눈다. 존재에 의한 관계는 한쪽이 존재하는 것만으로 맺어진다. 강좌는 어떤 과목의 강좌로 존재하고, 강사는 어떤 강좌를 담당하는 상태로 있다. 행위에 의한 관계는 어떤 행동이 있어야 맺어진다. 학생이 강좌를 "신청해야" 학생과 수강신청 사이에 관계가 생긴다. UML 클래스 다이어그램에도 비슷한 구분이 있어서 시험에 같이 나온다. 연관 관계(실선)는 항상 이용하는 관계이고, 의존 관계(점선)는 상대의 행위로 생기는 관계다. ERD에서는 둘을 구분하지 않고 같은 선으로 그린다.
+
+관계를 표현할 때는 세 가지를 적는다. 관계명(무엇을 하는 관계인가), 관계 차수(1:1, 1:M, M:N), 관계 선택 사양(필수인가 선택인가)이다.
+
+차수는 한쪽 인스턴스 하나에 상대 인스턴스가 최대 몇 개 붙는지다. 강사 하나에 강좌 여럿(1:M), 학생 여럿과 강좌 여럿(M:N), 수강신청 하나에 결제 하나(1:1). 선택 사양은 상대가 없어도 되는지다. 강좌는 강사가 꼭 있어야 하고(필수), 강사는 강좌가 없어도 된다(선택). 수강신청은 결제 전일 수 있으니 결제 쪽에서 보면 선택이다.
+
+### 관계를 문장으로 읽기
+
+ERD의 관계는 정해진 순서로 읽으면 업무 규칙 문장이 된다. 기준 엔터티를 "각각의"로 읽고, 대상 엔터티의 개수(하나, 여러)를 읽고, 선택 사양(필수면 "항상", 선택이면 "때때로")과 관계명을 읽는다. 관계 하나는 양쪽에서 한 번씩, 두 문장으로 읽는다. 아래 문장의 조각을 눌러 보면 각 조각이 ERD의 어디에서 왔는지 나온다.
+
+<UrlAnatomy
+  caption="강사와 강좌의 관계를 강사 쪽에서 읽기"
+  base="각각의 강사는"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "count",
+      display: "여러",
+      title: "관계 차수 (대상 쪽)",
+      description: "강좌 쪽 선 끝에 까마귀 발이 있어서 '여러'다. 선 끝이 짧은 수직선 하나였다면 '하나의'로 읽는다. 기호는 늘 맞은편 엔터티의 개수를 말한다.",
+      required: true,
+    },
+    {
+      key: "target",
+      display: "강좌를",
+      title: "대상 엔터티",
+      description: "읽는 방향의 반대편에 있는 엔터티다. 반대 방향으로 읽으면 '각각의 강좌는 한 명의 강사가 항상 담당한다'가 된다.",
+      required: true,
+    },
+    {
+      key: "option",
+      display: "때때로",
+      title: "관계 선택 사양",
+      description: "강좌 쪽 선 끝에 동그라미(IE)나 강사 쪽 점선(바커)이 있으면 선택이라 '때때로'로 읽는다. 맡은 강좌가 없는 강사도 있다는 요구사항이 여기 들어 있다. 필수라면 '항상'이다.",
+    },
+    {
+      key: "name",
+      display: "담당한다",
+      title: "관계명",
+      description: "선 위에 적힌 동사다. 현재형으로 쓴다. 관계명이 떠오르지 않으면 그 관계가 정말 필요한지 다시 본다.",
+    },
+  ]}
+/>
+
+관계를 그어도 되는지 확인하는 기준도 시험에 나온다. 두 엔터티 사이에 관심 있는 연관 규칙이 있는가, 두 엔터티의 정보를 조합해서 쓰는 일이 있는가, 업무 기술서나 장표에 관계를 맺는 규칙이 적혀 있는가, 그리고 관계를 맺게 하는 동사가 있는가다. 출석은 "강사가 수업마다 출석을 체크한다"는 동사가 있고, 출석 정보는 수강신청 정보와 조합해서 본다. 관계를 그을 근거가 충분하다.
+
+### 다대다는 교차 엔터티로 푼다
+
+학생과 강좌는 M:N이다. 앞 글에서 본 대로 관계형 테이블은 M:N을 직접 담지 못해서 수강신청이라는 교차 엔터티를 사이에 넣고 1:M 두 개로 푼다. 이렇게 풀면 관계에 붙어 있던 정보(신청 상태, 신청일시)를 둘 곳이 생긴다. 실제로 "신청 상태"는 학생에게도 강좌에도 붙일 수 없는 속성이었다. M:N 관계가 보이면 그 사이에 숨은 사건 엔터티가 있는지부터 찾는다. 대부분 있다.
+
+### 자기 자신과 맺는 관계
+
+관계가 꼭 다른 엔터티와 맺어지는 건 아니다. "수학 II를 들으려면 수학 I을 먼저 들어야 한다"는 규칙은 과목과 과목 사이의 관계다. 이걸 순환 관계(재귀 관계)라고 하고, 테이블로는 자기 테이블을 가리키는 외래 키가 된다.
+
+```sql
+CREATE TABLE subjects (
+  subject_code      varchar(10) PRIMARY KEY,
+  name              varchar(100) NOT NULL,
+  prerequisite_code varchar(10) REFERENCES subjects (subject_code)   -- 같은 테이블을 가리킨다
+);
+INSERT INTO subjects VALUES ('MATH1', '수학 I', NULL), ('MATH2', '수학 II', 'MATH1'), ('ENG2', '영어 독해', NULL);
+
+-- 자기 자신과 조인해서 선수 과목 이름을 가져온다
+SELECT s.name AS subject, p.name AS prerequisite
+FROM subjects s LEFT JOIN subjects p ON p.subject_code = s.prerequisite_code
+ORDER BY s.subject_code;
+```
+
+```text
+  subject  | prerequisite
+-----------+--------------
+ 영어 독해 | (null)
+ 수학 I    | (null)
+ 수학 II   | 수학 I
+(3 rows)
+```
+
+선수 과목이 여러 개일 수 있다면 이것도 M:N이라 "선수 과목" 교차 엔터티로 푼다. 조직도(부서의 상위 부서), 댓글의 대댓글도 같은 모양이다.
+
+## 식별자: 인스턴스 하나를 집어내는 열쇠
+
+식별자는 인스턴스 하나를 다른 것과 구분하는 속성(또는 속성 묶음)이다. 엔터티의 특징에서 "유일한 식별자가 있어야 한다"고 한 그것이다. 테이블로 가면 기본 키가 된다. 식별자는 네 가지 기준으로 분류한다.
+
+대표성으로 보면 주식별자와 보조식별자가 있다. 주식별자는 엔터티를 대표하는 식별자로, 다른 엔터티가 참조할 때 쓴다. 보조식별자는 인스턴스를 구분할 수는 있지만 대표성이 없어서 참조 관계를 맺는 데 쓰지 않는다. 학생번호가 주식별자이고, 연락처는 학생마다 다르니 보조식별자다. 물리 모델에서 주식별자는 `PRIMARY KEY`, 보조식별자는 `UNIQUE`가 된다.
+
+생성 방식으로 보면 내부식별자와 외부식별자가 있다. 내부식별자는 엔터티 안에서 스스로 만들어진다(학생번호). 외부식별자는 다른 엔터티와의 관계로 들어온다. 수강신청의 `student_id`가 외부식별자이고, 물리 모델의 외래 키다.
+
+속성 수로 보면 속성 하나로 된 단일식별자, 둘 이상으로 된 복합식별자가 있다. 수강신청을 `(student_id, class_id)`로 구분하면 복합식별자다.
+
+대체 여부로 보면 본질식별자와 인조식별자가 있다. 본질식별자는 업무에 원래 있는 값이다. 과목코드 `MATH1`은 학원이 이미 쓰던 코드다. 인조식별자는 본질식별자가 너무 복잡하거나 바뀔 수 있을 때 일부러 만든 일련번호다. 학생번호, `enrollment_id`가 그렇다. 인조식별자를 쓰면 본질식별자에 `UNIQUE`를 따로 걸지 않는 한 같은 데이터가 두 번 들어갈 수 있고, 인덱스가 하나 더 생긴다. 이 단점이 짝으로 시험에 나온다. 자연 키와 대리 키의 실무 트레이드오프는 [정규화 글](/posts/db-modeling-normalization)에서 따로 다뤘다.
+
+### 주식별자가 갖춰야 할 네 가지
+
+주식별자는 네 조건을 만족해야 한다. 유일성은 주식별자로 모든 인스턴스를 하나씩 구분할 수 있어야 한다는 것이다. 최소성은 주식별자를 이루는 속성 수가 유일성을 지키는 최소여야 한다는 것이다. 불변성은 한 번 정한 값이 바뀌지 않아야 한다는 것이다. 존재성은 값이 반드시 있어야(NULL이 아니어야) 한다는 것이다.
+
+불변성이 연락처를 주식별자에서 떨어뜨린다. 연락처는 유일하지만 학생이 번호를 바꾸면 그 학생을 가리키던 수강신청, 출석, 결제의 외래 키를 모두 고쳐야 한다. 이름이나 명칭처럼 바뀔 수 있는 값을 주식별자로 쓰지 말라는 기준이 여기서 나온다. 복합식별자를 쓸 때 속성을 너무 많이 넣지 말라는 기준도 함께 나온다.
+
+유일성과 최소성을 한 번에 따져 보자. 수강신청을 학생, 강좌, 연락처, 신청일을 펼친 한 장짜리 표로 놓고, 어떤 속성 묶음이 식별자가 될 수 있는지 하나씩 본다. 유일하고 최소인 묶음을 후보키라고 하고, 후보키 중 하나를 골라 주식별자로 쓴다. 아래 그림에서 다음을 누르면 묶음을 하나씩 검사한다.
+
+<AlgoTrace
+  caption="어떤 속성 묶음이 후보키가 되나"
+  memoryLabel="후보키"
+  cells={["학생", "강좌", "신청일", "학생+강좌", "연락처+강좌", "학생+강좌+신청일"]}
+  steps={[
+    { memory: [], caption: "수강신청 4건: (S1, C1, 10-10), (S1, C2, 10-11), (S2, C1, 10-12), (S3, C3, 10-14). 연락처는 학생마다 하나다." },
+    { pointer: 0, memory: [], caption: "학생 하나로는 S1이 두 번 나온다. 유일성이 깨진다. 탈락." },
+    { pointer: 1, memory: [], caption: "강좌 하나로는 C1이 두 번 나온다. 탈락." },
+    { pointer: 2, memory: [], caption: "신청일은 지금 데이터에서는 겹치지 않는다. 하지만 같은 날 두 학생이 신청하는 건 얼마든지 있다. 데이터가 우연히 유일한 것이지 업무 규칙이 아니다. 탈락." },
+    { pointer: 3, found: [3], memory: ["학생+강좌"], caption: "학생+강좌는 겹치지 않고, 한 학생이 한 강좌를 두 번 신청할 수 없다는 규칙도 있다. 어느 하나를 빼면 유일성이 깨지니 최소다. 후보키." },
+    { pointer: 4, found: [3, 4], memory: ["학생+강좌", "연락처+강좌"], caption: "연락처+강좌도 유일하고 최소다. 후보키다. 하지만 연락처는 바뀔 수 있어서 불변성이 약하다. 주식별자로는 학생+강좌를 고르고, 이건 보조식별자로 둔다." },
+    { pointer: 5, found: [3, 4], memory: ["학생+강좌", "연락처+강좌"], caption: "학생+강좌+신청일은 유일하지만 신청일을 빼도 유일하다. 최소성이 깨진다. 유일하기만 한 이런 묶음은 슈퍼키라고 부른다. 탈락." },
+  ]}
+/>
+
+이 판단을 함수로 짜 보자. 행 목록과 컬럼 이름 목록을 받아, 그 묶음이 지금 데이터에서 후보키 조건(값이 모두 있고, 유일하고, 최소)을 만족하는지 돌려준다. 최소성은 컬럼을 하나씩 빼 봐서, 빼고도 유일하면 최소가 아니라고 판단하면 된다. 세 번째 테스트처럼 함수는 데이터만 보고 판단한다는 것을 기억하자. 업무 규칙까지는 함수가 알 수 없다.
+
+<CodePlayground
+  caption="이 컬럼 묶음은 후보키인가"
+  functionName="isCandidateKey"
+  initialCode={`function isCandidateKey(rows, cols) {
+  // rows: [{ student: "S1", phone: "010-...", class: "C1", enrolled: "10-10" }, ...]
+  // cols: ["student", "class"] 처럼 검사할 컬럼 이름들
+  // 1. 존재성: 어느 행이든 그 컬럼 값이 null이면 false
+  // 2. 유일성: 컬럼 값 조합이 겹치면 false
+  // 3. 최소성: 컬럼을 하나 빼도 여전히 유일하면 false
+  return false;
+}`}
+  solution={`function isCandidateKey(rows, cols) {
+  if (cols.length === 0) return false;
+  const unique = (cs) => {
+    const seen = new Set();
+    for (const row of rows) {
+      const vals = cs.map((c) => row[c]);
+      if (vals.some((v) => v === null || v === undefined)) return false; // 존재성
+      const key = JSON.stringify(vals);
+      if (seen.has(key)) return false;                                   // 유일성
+      seen.add(key);
+    }
+    return true;
+  };
+  if (!unique(cols)) return false;
+  if (cols.length === 1) return true;
+  // 하나를 빼도 유일하면 그 컬럼은 군더더기다 (최소성)
+  for (let i = 0; i < cols.length; i++) {
+    const rest = cols.filter((_, j) => j !== i);
+    if (unique(rest)) return false;
+  }
+  return true;
+}`}
+  tests={[
+    {
+      label: "학생 하나",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }], ["student"]],
+      expected: false,
+    },
+    {
+      label: "학생+강좌",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }], ["student", "class"]],
+      expected: true,
+    },
+    {
+      label: "신청일 (데이터로는 유일)",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }], ["enrolled"]],
+      expected: true,
+    },
+    {
+      label: "연락처+강좌",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }], ["phone", "class"]],
+      expected: true,
+    },
+    {
+      label: "학생+강좌+신청일 (최소 아님)",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }], ["student", "class", "enrolled"]],
+      expected: false,
+    },
+    {
+      label: "연락처가 빈 학생이 있으면",
+      args: [[{ student: "S1", phone: "010-1234-5678", class: "C1", enrolled: "10-10" }, { student: "S1", phone: "010-1234-5678", class: "C2", enrolled: "10-11" }, { student: "S2", phone: "010-2345-6789", class: "C1", enrolled: "10-12" }, { student: "S3", phone: "010-3456-7890", class: "C3", enrolled: "10-14" }, { student: "S4", phone: null, class: "C1", enrolled: "10-15" }], ["phone", "class"]],
+      expected: false,
+    },
+  ]}
+/>
+
+## 식별 관계와 비식별 관계
+
+이제 출석의 식별자를 정할 차례다. 여기서 모델링의 큰 갈림길이 나온다. 부모의 주식별자를 자식이 물려받을 때, 그걸 자식의 주식별자 일부로 쓰면 식별 관계, 자식의 일반 속성(외래 키)으로만 두면 비식별 관계다. IE 표기법에서는 식별 관계를 실선, 비식별 관계를 점선으로 그리고, 바커 표기법에서는 식별 관계의 자식 쪽 선 끝에 가로 막대를 긋는다.
+
+식별 관계로만 이어 가면 주식별자가 아래로 내려갈수록 길어진다. 아래 그림에서 다음을 누르면 학생과 강좌의 식별자가 출석까지 흘러 내려가는 모습과, 비식별 관계로 끊었을 때의 모습이 차례로 나온다.
+
+<SequenceDiagram
+  caption="식별 관계는 주식별자를 아래로 물려준다"
+  actors={[
+    { id: "student", label: "학생" },
+    { id: "class", label: "강좌" },
+    { id: "enroll", label: "수강신청" },
+    { id: "attend", label: "출석" },
+  ]}
+  steps={[
+    { from: "student", to: "enroll", label: "student_id", title: "학생의 식별자가 내려간다", detail: "식별 관계라서 student_id가 수강신청 주식별자의 일부가 된다." },
+    { from: "class", to: "enroll", label: "class_id", title: "강좌의 식별자도 내려간다", detail: "수강신청의 주식별자는 (student_id, class_id) 두 개짜리 복합식별자가 된다.", payload: "PRIMARY KEY (student_id, class_id)" },
+    { from: "enroll", to: "attend", label: "학생+강좌", title: "두 개가 통째로 내려간다", detail: "출석도 수강신청과 식별 관계면 부모의 주식별자 두 개를 모두 받는다." },
+    { from: "attend", to: "attend", label: "+ 수업일", title: "출석의 주식별자는 세 개", detail: "같은 수강신청 안에서 수업일로 구분하니 주식별자는 세 속성이 된다. 출석 아래에 '지각 사유' 같은 엔터티가 또 생기면 네 개가 된다.", payload: "PRIMARY KEY (student_id, class_id, lesson_date)" },
+    { from: "enroll", to: "enroll", label: "enrollment_id", title: "비식별로 끊으면", detail: "수강신청이 인조식별자 enrollment_id를 따로 갖고, student_id와 class_id는 일반 외래 키 속성으로 내린다. 학생과는 비식별 관계가 된다." },
+    { from: "enroll", to: "attend", label: "enrollment_id", title: "자식은 번호 하나만 받는다", detail: "출석의 주식별자는 (enrollment_id, lesson_date) 두 개로 끝난다. 그 아래로도 더 길어지지 않는다.", payload: "PRIMARY KEY (enrollment_id, lesson_date)" },
+  ]}
+/>
+
+### 식별 관계로 만들면
+
+그림 앞쪽 절반을 그대로 테이블로 만든다. 강좌(`classes`)는 앞 글과 같은 구조로 1번 수학 I, 2번 영어 독해, 3번 수학 II 강좌가 들어 있다.
+
+```sql
+CREATE TABLE enrollments (
+  student_id  bigint NOT NULL REFERENCES students (student_id),
+  class_id    bigint NOT NULL REFERENCES classes (class_id),
+  status      varchar(10) NOT NULL DEFAULT 'applied',
+  enrolled_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (student_id, class_id)                       -- 부모 둘의 식별자가 곧 내 식별자
+);
+
+CREATE TABLE attendances (
+  student_id  bigint NOT NULL,
+  class_id    bigint NOT NULL,
+  lesson_date date   NOT NULL,
+  present     boolean NOT NULL,
+  PRIMARY KEY (student_id, class_id, lesson_date),          -- 세 개짜리 주식별자
+  FOREIGN KEY (student_id, class_id) REFERENCES enrollments (student_id, class_id)
+);
+
+INSERT INTO enrollments (student_id, class_id, status, enrolled_at) VALUES
+  (1, 1, 'paid', '2026-10-10 10:00+09'),
+  (1, 2, 'paid', '2026-10-11 19:30+09'),
+  (2, 1, 'paid', '2026-10-12 09:15+09'),
+  (3, 3, 'cancelled', '2026-10-14 14:05+09');
+INSERT INTO attendances VALUES
+  (1, 1, '2026-12-01', true), (1, 1, '2026-12-03', false),
+  (2, 1, '2026-12-01', true), (2, 1, '2026-12-03', true),
+  (1, 2, '2026-12-02', true);
+
+-- 신청하지 않은 강좌의 출석은 넣을 수 없다
+INSERT INTO attendances VALUES (3, 1, '2026-12-01', true);
+```
+
+```text
+ERROR:  insert or update on table "attendances" violates foreign key constraint "attendances_student_id_class_id_fkey"
+DETAIL:  Key (student_id, class_id)=(3, 1) is not present in table "enrollments".
+```
+
+좋은 점이 바로 보인다. 출석 테이블에 `student_id`와 `class_id`가 그대로 있어서, 1번 강좌의 학생별 출석 수를 조인 없이 출석 테이블만 읽어서 낸다.
+
+```sql
+SELECT student_id, count(*) FILTER (WHERE present) AS present_days, count(*) AS lessons
+FROM attendances WHERE class_id = 1
+GROUP BY student_id ORDER BY student_id;
+```
+
+```text
+ student_id | present_days | lessons
+------------+--------------+---------
+          1 |            1 |       2
+          2 |            2 |       2
+(2 rows)
+```
+
+문제는 업무 규칙이 바뀔 때 드러난다. 박지호(3번)가 3번 강좌를 취소했다가 다시 신청하려고 한다.
+
+```sql
+INSERT INTO enrollments (student_id, class_id) VALUES (3, 3);
+```
+
+```text
+ERROR:  duplicate key value violates unique constraint "enrollments_pkey"
+DETAIL:  Key (student_id, class_id)=(3, 3) already exists.
+```
+
+주식별자가 `(학생, 강좌)`라서 취소한 신청과 새 신청을 구분할 방법이 없다. 취소한 행을 다시 `applied`로 되돌리면 첫 신청의 취소 기록이 사라진다. 식별자에 신청 차수를 넣으면 출석, 결제, 그 아래 모든 자식 테이블의 주식별자와 외래 키를 함께 바꿔야 한다. 식별 관계가 깊을수록 이 변경은 아래로 번진다.
+
+### 비식별 관계로 끊으면
+
+수강신청에 인조식별자를 주고, 부모의 식별자는 일반 외래 키로 내린다. "같은 학생이 같은 강좌에 진행 중인 신청은 하나만"이라는 원래 규칙은 취소되지 않은 행에만 거는 부분 유니크 인덱스로 지킨다.
+
+```sql
+CREATE TABLE enrollments (
+  enrollment_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,   -- 인조식별자
+  student_id    bigint NOT NULL REFERENCES students (student_id),  -- 비식별: 일반 FK 속성
+  class_id      bigint NOT NULL REFERENCES classes (class_id),
+  status        varchar(10) NOT NULL DEFAULT 'applied',
+  enrolled_at   timestamptz NOT NULL DEFAULT now()
+);
+-- 취소되지 않은 신청은 학생+강좌마다 하나만
+CREATE UNIQUE INDEX enrollments_one_active
+  ON enrollments (student_id, class_id) WHERE status <> 'cancelled';
+
+CREATE TABLE attendances (
+  enrollment_id bigint NOT NULL REFERENCES enrollments (enrollment_id),
+  lesson_date   date   NOT NULL,
+  present       boolean NOT NULL,
+  PRIMARY KEY (enrollment_id, lesson_date)
+);
+```
+
+같은 데이터를 넣고 박지호의 재신청을 다시 해 본다.
+
+```sql
+INSERT INTO enrollments (student_id, class_id, enrolled_at) VALUES (3, 3, '2026-10-16 18:20+09')
+RETURNING enrollment_id, student_id, class_id, status;
+-- 진행 중인 신청이 있는데 또 신청한다
+INSERT INTO enrollments (student_id, class_id) VALUES (3, 3);
+```
+
+```text
+ enrollment_id | student_id | class_id | status
+---------------+------------+----------+---------
+             5 |          3 |        3 | applied
+(1 row)
+
+INSERT 0 1
+ERROR:  duplicate key value violates unique constraint "enrollments_one_active"
+DETAIL:  Key (student_id, class_id)=(3, 3) already exists.
+```
+
+취소한 4번 신청은 기록으로 남고 새 신청이 5번으로 들어갔다. 진행 중인 신청을 두 번 넣는 것은 여전히 막힌다. 대신 출석을 강좌 기준으로 보려면 수강신청과 조인해야 한다. 출석 테이블에는 이제 `class_id`가 없다.
+
+```sql
+SELECT e.student_id, count(*) FILTER (WHERE a.present) AS present_days, count(*) AS lessons
+FROM attendances a
+JOIN enrollments e ON e.enrollment_id = a.enrollment_id
+WHERE e.class_id = 1
+GROUP BY e.student_id ORDER BY e.student_id;
+```
+
+```text
+ student_id | present_days | lessons
+------------+--------------+---------
+          1 |            1 |       2
+          2 |            2 |       2
+(2 rows)
+```
+
+결과는 같고 조인이 하나 늘었다. 두 방식의 트레이드오프가 이 두 쿼리에 담겨 있다.
+
+### 어느 쪽을 고르나
+
+식별 관계는 자식이 부모 없이는 존재할 수 없고 부모와 함께 생기고 사라지는 강한 연결일 때 쓴다. 부모의 식별자로 자식을 바로 찾을 수 있어서 조인이 줄고, 상위 식별자 순으로 데이터가 정렬되는 인덱스가 자연스럽게 생긴다. 대신 단계가 깊어질수록 주식별자 속성이 늘어나 조인 조건과 SQL이 길어지고, 상위 식별자의 정의가 바뀌면 모든 자식이 영향을 받는다.
+
+비식별 관계는 이럴 때 고른다. 자식이 부모 없이도 생길 수 있을 때(관계가 선택일 때, 외래 키에 NULL을 허용한다), 부모가 지워져도 자식은 남아야 할 때, 자식이 자기만의 식별자를 따로 가져야 할 때(재신청처럼 같은 부모 조합이 여러 번 생길 때), 그리고 주식별자가 너무 길어질 때다. 대신 부모의 부모 정보를 보려면 조인을 거쳐야 하고, 원래 업무 규칙(학생+강좌의 유일성)을 유니크 제약으로 따로 지켜 줘야 한다. 이걸 빠뜨리면 인조식별자만 다른 중복 행이 쌓인다.
+
+실무에서는 대개 섞어 쓴다. 결제처럼 수강신청과 1:1이고 수강신청 없이는 존재할 수 없는 엔터티는 식별 관계로 두면 깔끔하다. 결제의 주식별자가 곧 수강신청의 식별자다.
+
+```sql
+CREATE TABLE payments (
+  enrollment_id bigint PRIMARY KEY REFERENCES enrollments (enrollment_id),  -- PK이자 FK: 1:1 식별 관계
+  amount        numeric(10, 0) NOT NULL CHECK (amount > 0),
+  paid_at       timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO payments (enrollment_id, amount) VALUES (1, 300000);
+INSERT INTO payments (enrollment_id, amount) VALUES (1, 300000);   -- 같은 신청을 두 번 결제
+```
+
+```text
+INSERT 0 1
+ERROR:  duplicate key value violates unique constraint "payments_pkey"
+DETAIL:  Key (enrollment_id)=(1) already exists.
+```
+
+한 신청에 결제가 최대 하나라는 1:1 규칙이 주식별자로 지켜진다. 결제 전인 신청은 결제 행이 없으니, 수강신청 쪽에서 본 결제는 선택이다. 부분 환불이나 분할 결제가 생기면 1:M이 되고, 그때는 결제에 자기 식별자를 주고 비식별로 바꾼다. 관계의 차수가 바뀌면 식별자 설계가 바뀐다.
+
+## SQLD 시험 포인트
+
+엔터티의 특징 여섯 가지(업무에서 필요, 식별자, 인스턴스 둘 이상, 업무 프로세스가 이용, 속성 있음, 관계 하나 이상)는 그대로 나온다. "인스턴스가 하나만 있어도 엔터티가 될 수 있다"는 틀린 보기이고, 관계는 통계성·코드성·내부용 엔터티에서 생략할 수 있다는 예외를 기억한다.
+
+엔터티 분류는 두 축이다. 유무형으로 유형(사원, 물품), 개념(조직, 보험상품), 사건(주문, 청구). 발생 시점으로 기본(사원, 부서, 고객, 상품 — 독립적으로 생기고 자기 식별자를 가진다), 중심(계약, 주문, 매출 — 기본에서 생기고 데이터가 많다), 행위(주문 목록, 사원 변경 이력 — 부모가 둘 이상이고 상세 설계에서 나온다). 엔터티 이름은 업무 용어, 약어 금지, 단수 명사, 유일, 생성 의미대로다.
+
+속성은 특성에 따라 기본, 설계, 파생으로 나눈다. 코드와 일련번호는 설계 속성이고, 계산값은 파생 속성이며 가급적 적게 둔다. 구성 방식으로는 PK, FK, 일반 속성이다. 엔터티 하나에 인스턴스 둘 이상, 인스턴스 하나에 속성 둘 이상, 속성 하나에 값 하나라는 관계도 나온다. 도메인은 속성이 가질 수 있는 값의 범위(타입, 크기, 제약)다.
+
+관계는 존재에 의한 관계와 행위에 의한 관계로 나뉘고, UML의 연관 관계와 의존 관계에 대응한다. 표기할 것은 관계명, 관계 차수, 관계 선택 사양 셋이다. 읽을 때는 "각각의 기준 엔터티는 (하나/여러) 대상 엔터티를 (항상/때때로) 관계명한다" 순서다.
+
+식별자 분류는 대표성(주/보조), 생성(내부/외부), 속성 수(단일/복합), 대체 여부(본질/인조) 네 축이다. 보조식별자는 참조 관계에 쓰지 않는다는 것, 외부식별자가 곧 외래 키라는 것이 자주 나온다. 주식별자의 특징은 유일성, 최소성, 불변성, 존재성이고, 이름처럼 바뀔 수 있는 값이나 속성이 너무 많은 복합식별자는 피한다.
+
+식별 관계는 부모의 주식별자가 자식의 주식별자에 포함되는 관계(IE 실선)이고, 비식별 관계는 일반 속성으로만 들어가는 관계(IE 점선)다. 식별 관계만 쓰면 주식별자 속성이 계속 늘어 조인과 SQL이 복잡해지고, 비식별 관계만 쓰면 상위 엔터티 정보를 얻으려는 조인이 늘어난다. 자식이 부모 없이 생길 수 있거나, 부모가 지워져도 자식이 남거나, 자식의 주식별자를 독립적으로 구성해야 하면 비식별 관계를 고른다.
+
+## 출석은 어디에 붙나
+
+처음 질문으로 돌아가면, 출석은 업무가 관리하고 여러 건이 생기며 속성과 관계가 있는 행위 엔터티이고, 학생도 강좌도 아닌 수강신청에 붙는다. 출석의 주식별자는 부모의 식별자를 어떻게 물려받느냐에 달렸다. 식별 관계로 이으면 조인이 줄지만 식별자가 아래로 길어지고, 비식별 관계로 끊으면 식별자는 짧아지지만 조인과 유니크 제약을 따로 챙겨야 한다. 엔터티를 고르고, 속성을 쪼개고, 관계를 읽고, 식별자를 정하는 일은 결국 업무 규칙을 구조에 옮기는 일이다. 그렇게 나눈 테이블에서 중복을 더 걸러 내는 기준은 [정규화 글](/posts/db-modeling-normalization)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 엔터티와 속성은 어떻게 구분하나요?
+
+업무가 따로 관리하고, 여러 건이 있고, 각각을 식별자로 구분할 수 있고, 자기 속성과 다른 엔터티와의 관계를 가지면 엔터티다. 다른 것의 성질을 하나의 값으로 설명하면 속성이다. 학생의 연락처가 하나면 속성이지만, 한 학생에 연락처가 여러 개이고 각각 주인과 용도를 관리해야 하면 학생 연락처라는 엔터티로 떼어 낸다. 같은 대상도 업무가 무엇을 관리하느냐에 따라 엔터티가 되기도, 속성이 되기도 한다.
+
+### 다대다 관계는 어떻게 처리하나요?
+
+두 엔터티 사이에 교차 엔터티를 두고 1:M 관계 두 개로 푼다. 학생과 강좌 사이에 수강신청을 두면, 수강신청 하나가 학생 하나와 강좌 하나를 가리킨다. 이렇게 하면 신청 상태나 신청일처럼 관계 자체에 붙는 속성을 둘 곳이 생긴다. 교차 엔터티의 식별자는 부모 둘의 식별자를 묶어 쓰거나, 인조식별자를 두고 부모 조합에 유니크 제약을 건다.
+
+### 주식별자가 갖춰야 할 조건은 무엇인가요?
+
+유일성, 최소성, 불변성, 존재성 네 가지다. 모든 인스턴스를 구분해야 하고, 그 구분에 필요한 최소한의 속성만 써야 하며, 값이 바뀌지 않아야 하고, NULL이 없어야 한다. 실무에서 가장 자주 깨지는 건 불변성이다. 이메일이나 전화번호처럼 유일하지만 바뀔 수 있는 값을 기본 키로 쓰면, 바뀔 때마다 그 값을 외래 키로 가진 모든 테이블을 고쳐야 한다. 그런 값은 보조식별자(UNIQUE)로 두고 바뀌지 않는 번호를 기본 키로 쓴다.
+
+### 식별 관계와 비식별 관계는 언제 각각 쓰나요?
+
+자식이 부모 없이는 존재할 수 없고 부모와 생명 주기를 같이하면 식별 관계를 쓴다. 부모 식별자로 자식을 바로 찾을 수 있어 조인이 준다. 자식이 부모 없이 생길 수 있거나, 같은 부모 조합으로 자식이 여러 번 생기거나, 식별자가 단계마다 길어지면 비식별 관계로 끊고 자식에게 자기 식별자를 준다. 이때 원래 업무의 유일성 규칙은 유니크 제약으로 따로 지켜야 한다.
+
+### 인조식별자를 쓰면 무엇을 조심해야 하나요?
+
+인조식별자는 행마다 새 번호를 주기 때문에 같은 업무 데이터가 두 번 들어가도 막지 못한다. 본질식별자 쪽(학생+강좌, 이메일)에 유니크 제약이나 부분 유니크 인덱스를 함께 걸어야 한다. 그러면 인덱스가 하나 더 생기니 쓰기 비용과 공간이 늘어나는 것도 감수해야 한다. 그리고 인조식별자는 업무 의미가 없어서, 화면이나 로그에서 사람이 데이터를 알아보려면 본질 속성을 함께 보여 줘야 한다.
+
+### 파생 속성은 왜 조심해야 하나요?
+
+다른 데이터에서 계산되는 값을 따로 저장하면, 원본이 바뀔 때 함께 고치지 않는 순간 두 값이 어긋난다. 강좌의 신청 인원을 컬럼으로 두고 신청을 넣으면서 갱신을 빠뜨리면 정원 마감 판단이 틀린다. 그래서 기본은 조회할 때 계산하고, 성능 때문에 저장해야 하면 같은 트랜잭션이나 트리거로 함께 갱신하며, 어긋남을 찾는 검증 쿼리를 주기적으로 돌린다.
+
+### 1:1 관계는 테이블 하나로 합치면 되지 않나요?
+
+합칠 수도 있지만 나누는 이유가 있을 때는 나눈다. 수강신청과 결제처럼 한쪽이 선택이면, 합치면 결제 전인 신청마다 결제 컬럼이 NULL로 비어 있다. 접근 권한이나 수정 빈도가 다르거나, 나중에 1:M으로 바뀔 가능성이 있으면 나누는 편이 낫다. 나눌 때는 자식의 기본 키를 부모를 가리키는 외래 키로 두면 1:1이 구조로 보장된다.

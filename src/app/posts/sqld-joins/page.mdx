@@ -1,0 +1,770 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-joins");
+
+부서별 인원과 급여 합계를 뽑는 보고서를 만들었다. 부서 이름이 필요해서 `EMP`와 `DEPT`를 붙였다.
+
+```sql
+SELECT d.deptno, d.dname, COUNT(e.empno) AS cnt
+FROM emp e, dept d
+WHERE e.deptno = d.deptno
+GROUP BY d.deptno, d.dname
+ORDER BY d.deptno;
+```
+
+```text
+ deptno |   dname    | cnt
+--------+------------+-----
+     10 | ACCOUNTING |   3
+     20 | RESEARCH   |   5
+     30 | SALES      |   6
+(3 rows)
+```
+
+부서는 넷인데 결과는 세 줄이다. 40번 OPERATIONS가 없다. 이 부서에는 사원이 한 명도 없어서, `e.deptno = d.deptno`를 만족하는 짝이 없다. 짝이 없는 행은 조인 결과에서 빠진다. 보고서를 받은 사람은 회사에 부서가 셋뿐이라고 읽는다.
+
+이 글은 이 장면에서 출발해서 SQLD에 나오는 조인을 차례로 본다. 짝을 맞추는 방법(EQUI, Non-EQUI), 표준 문법(INNER, NATURAL, USING, ON), 짝이 없는 행을 살리는 OUTER JOIN과 Oracle의 `(+)`, 모든 조합을 만드는 CROSS JOIN, 자기 자신과 붙이는 SELF JOIN, 그리고 2과목에 나오는 조인 수행 원리(Nested Loop, Sort Merge, Hash)까지다.
+
+예제는 [단일행 함수 글](/posts/sqld-single-row-functions)에서 만든 SCOTT의 `EMP`(14명)와 `DEPT`(4개 부서)를 그대로 쓰고, 급여 등급표 `SALGRADE`를 하나 더한다. SQL은 시험에 맞춰 Oracle 문법을 먼저 쓰고, PostgreSQL 16과 SQL Server에서 다른 부분을 적었다. 결과는 PostgreSQL 16.15에서 실제로 돌린 출력이다. Oracle 전용인 `(+)` 문법은 같은 뜻의 ANSI 조인으로 돌렸고, 결과 행은 같다. NULL은 `(null)`로 표시했다.
+
+## 조인은 짝을 찾는 일이다
+
+두 테이블을 조인하면 DB는 한쪽 테이블의 행마다 다른 쪽에서 조건에 맞는 행을 찾아 옆에 붙인다. 짝이 여럿이면 여러 행이 되고, 없으면 사라진다(INNER JOIN 기준). 조건이 `=`이면 EQUI JOIN(등가 조인)이다. 외래 키와 기본 키를 잇는 대부분의 조인이 여기에 속한다.
+
+```sql
+-- Oracle 전통 문법: FROM에 테이블을 나열하고 WHERE에 조인 조건
+SELECT e.ename, e.deptno, d.dname, d.loc
+FROM emp e, dept d
+WHERE e.deptno = d.deptno      -- 조인 조건
+  AND e.job = 'MANAGER'        -- 일반 조건
+ORDER BY e.empno;
+```
+
+```text
+ ename | deptno |   dname    |   loc
+-------+--------+------------+----------
+ JONES |     20 | RESEARCH   | DALLAS
+ BLAKE |     30 | SALES      | CHICAGO
+ CLARK |     10 | ACCOUNTING | NEW YORK
+(3 rows)
+```
+
+`e`, `d`는 테이블 별칭이다. 두 테이블에 같은 이름의 컬럼(`deptno`)이 있으면 어느 테이블의 것인지 `e.deptno`처럼 밝혀야 한다. 안 그러면 Oracle은 `ORA-00918: column ambiguously defined`를 낸다. 한쪽에만 있는 컬럼(`ename`, `dname`)은 생략해도 되지만, 읽기 쉽게 붙이는 편이 낫다. Oracle은 별칭을 정한 뒤에는 원래 테이블 이름(`emp.ename`)으로 부를 수 없다. 테이블 별칭 앞에는 `AS`를 쓰지 않는다. Oracle은 `FROM emp AS e`를 에러로 낸다(PostgreSQL과 SQL Server는 허용한다).
+
+테이블이 N개면 조인 조건은 최소 N-1개가 필요하다. 두 테이블은 하나, 세 테이블은 둘이다. 조건이 모자라면 짝을 고르지 못해 모든 조합이 나온다. 이건 CROSS JOIN 절에서 숫자로 본다.
+
+## 범위로 짝을 찾는 Non-EQUI JOIN
+
+조인 조건이 `=`가 아니어도 된다. 급여가 어느 등급에 속하는지 찾는 `SALGRADE` 테이블이 대표적이다.
+
+```sql
+CREATE TABLE salgrade (grade integer, losal integer, hisal integer);
+INSERT INTO salgrade VALUES (1, 700, 1200), (2, 1201, 1400), (3, 1401, 2000), (4, 2001, 3000), (5, 3001, 9999);
+SELECT * FROM salgrade;
+```
+
+```text
+ grade | losal | hisal
+-------+-------+-------
+     1 |   700 |  1200
+     2 |  1201 |  1400
+     3 |  1401 |  2000
+     4 |  2001 |  3000
+     5 |  3001 |  9999
+(5 rows)
+```
+
+`EMP`와 `SALGRADE`에는 같은 값을 가진 컬럼이 없다. 대신 급여가 `losal`과 `hisal` 사이에 있는 등급을 찾는다. `BETWEEN`, `>`, `<` 같은 조건으로 붙이는 조인을 Non-EQUI JOIN(비등가 조인)이라고 한다. 아래 그림에서 다음을 누르면 사원 몇 명의 급여가 등급 칸을 찾아가는 과정이 나온다.
+
+<AlgoTrace
+  caption="급여가 들어갈 등급 찾기 (sal BETWEEN losal AND hisal)"
+  memoryLabel="조인 결과"
+  cells={["1: 700~1200", "2: 1201~1400", "3: 1401~2000", "4: 2001~3000", "5: 3001~9999"]}
+  steps={[
+    { memory: [], caption: "등급표 다섯 행이다. 범위가 겹치지 않아서 사원 한 명은 정확히 한 등급과 짝이 된다." },
+    { pointer: 0, found: [0], memory: ["SMITH 800 → 1"], caption: "SMITH 800은 700 이상 1200 이하라 1등급이다." },
+    { pointer: 1, found: [1], memory: ["SMITH 800 → 1", "WARD 1250 → 2"], caption: "WARD 1250은 1201~1400이라 2등급이다." },
+    { pointer: 3, found: [3], memory: ["SMITH 800 → 1", "WARD 1250 → 2", "SCOTT 3000 → 4"], caption: "SCOTT 3000. 3000은 4등급의 hisal과 같다. BETWEEN은 양 끝을 포함하니 4등급이다." },
+    { pointer: 4, found: [4], memory: ["SMITH 800 → 1", "WARD 1250 → 2", "SCOTT 3000 → 4", "KING 5000 → 5"], caption: "KING 5000은 5등급이다. 14명 모두 이렇게 짝을 찾는다." },
+  ]}
+/>
+
+```sql
+SELECT e.ename, e.sal, s.grade
+FROM emp e, salgrade s
+WHERE e.sal BETWEEN s.losal AND s.hisal
+ORDER BY e.empno;
+```
+
+```text
+ ename  | sal  | grade
+--------+------+-------
+ SMITH  |  800 |     1
+ ALLEN  | 1600 |     3
+ WARD   | 1250 |     2
+ JONES  | 2975 |     4
+ MARTIN | 1250 |     2
+ BLAKE  | 2850 |     4
+ CLARK  | 2450 |     4
+ SCOTT  | 3000 |     4
+ KING   | 5000 |     5
+ TURNER | 1500 |     3
+ ADAMS  | 1100 |     1
+ JAMES  |  950 |     1
+ FORD   | 3000 |     4
+ MILLER | 1300 |     2
+(14 rows)
+```
+
+등급별로 세면 1등급 3명, 2등급 3명, 3등급 2명, 4등급 5명, 5등급 1명이다. 범위가 겹치게 잘못 만들어 두면 한 사원이 두 등급과 짝이 되어 행이 늘어난다. 범위 밖이면(급여 600) 사라진다. Non-EQUI JOIN의 결과 행 수는 데이터에 따라 달라진다는 점을 기억해 둔다.
+
+## ANSI 문법으로 쓰는 INNER JOIN
+
+지금까지는 `FROM`에 테이블을 쉼표로 나열하고 `WHERE`에 조인 조건을 섞어 썼다. SQL 표준(ANSI) 문법은 조인을 `FROM` 절에서 따로 적는다.
+
+```sql
+SELECT e.ename, d.dname
+FROM emp e
+INNER JOIN dept d ON e.deptno = d.deptno   -- INNER는 생략해도 된다
+WHERE e.job = 'MANAGER';
+```
+
+결과는 앞의 쿼리와 같다. `ON`에는 조인 조건을, `WHERE`에는 결과를 거르는 조건을 둔다. 두 조건이 분리돼서 읽기 쉽고, 조인 조건을 빼먹는 실수가 줄어든다. `ON`에는 `=`뿐 아니라 `BETWEEN` 같은 어떤 조건도 쓸 수 있다(`JOIN salgrade s ON e.sal BETWEEN s.losal AND s.hisal`). INNER JOIN에서는 같은 조건을 `ON`에 두든 `WHERE`에 두든 결과가 같다. OUTER JOIN에서는 달라진다. 뒤에서 본다.
+
+### NATURAL JOIN과 USING
+
+`NATURAL JOIN`은 두 테이블에서 이름이 같은 컬럼을 모두 찾아 `=`로 자동 조인한다. `EMP`와 `DEPT`는 `deptno`만 이름이 같으니 `e.deptno = d.deptno`로 조인된다. `USING (컬럼)`은 이름이 같은 컬럼 중 조인에 쓸 것을 직접 고른다.
+
+```sql
+SELECT deptno, ename, dname FROM emp NATURAL JOIN dept WHERE job = 'MANAGER' ORDER BY ename;
+
+SELECT deptno, ename, dname FROM emp e JOIN dept d USING (deptno) WHERE job = 'MANAGER' ORDER BY ename;
+```
+
+```text
+ deptno | ename |   dname
+--------+-------+------------
+     30 | BLAKE | SALES
+     10 | CLARK | ACCOUNTING
+     20 | JONES | RESEARCH
+(3 rows)
+```
+
+두 쿼리의 결과는 같다. 여기에 시험 단골 함정이 있다. NATURAL JOIN과 USING에 쓰인 공통 컬럼은 두 테이블에서 하나로 합쳐진 컬럼이 되어, Oracle에서는 앞에 테이블 이름이나 별칭을 붙일 수 없다. `SELECT e.deptno ... USING (deptno)`는 `ORA-25154: column part of USING clause cannot have qualifier`, NATURAL JOIN에서는 `ORA-25155`가 난다. 공통 컬럼이 아닌 `e.ename`에는 붙여도 된다.
+
+PostgreSQL은 여기서 Oracle과 다르다. `e.deptno`처럼 별칭을 붙여도 에러 없이 돈다. 그래서 PostgreSQL에서 연습한 SQL을 시험 문제에 대입하면 틀린다.
+
+`SELECT *`로 보면 합쳐진 컬럼의 위치가 보인다.
+
+```sql
+SELECT * FROM emp NATURAL JOIN dept WHERE empno = 7782;      -- USING (deptno)도 같은 모양
+SELECT * FROM emp e JOIN dept d ON e.deptno = d.deptno WHERE empno = 7782;
+```
+
+```text
+ deptno | empno | ename |   job   | mgr  |  hiredate  | sal  |  comm  |   dname    |   loc
+--------+-------+-------+---------+------+------------+------+--------+------------+----------
+     10 |  7782 | CLARK | MANAGER | 7839 | 1981-06-09 | 2450 | (null) | ACCOUNTING | NEW YORK
+(1 row)
+
+ empno | ename |   job   | mgr  |  hiredate  | sal  |  comm  | deptno | deptno |   dname    |   loc
+-------+-------+---------+------+------------+------+--------+--------+--------+------------+----------
+  7782 | CLARK | MANAGER | 7839 | 1981-06-09 | 2450 | (null) |     10 |     10 | ACCOUNTING | NEW YORK
+(1 row)
+```
+
+NATURAL JOIN과 USING은 공통 컬럼 `deptno`를 맨 앞에 한 번만 보여 준다. ON은 두 테이블의 컬럼을 그대로 다 보여 줘서 `deptno`가 두 번 나온다. 열 수도 10개와 11개로 다르다.
+
+NATURAL JOIN은 편해 보이지만 실무에서는 피한다. 나중에 누가 두 테이블에 `created_at`이나 `name` 같은 같은 이름의 컬럼을 추가하면 조인 조건이 말없이 늘어나 결과가 바뀐다. NATURAL JOIN에는 `ON`이나 `USING`을 함께 쓸 수 없고, 공통 컬럼의 데이터 타입이 맞아야 한다. SQL Server는 NATURAL JOIN과 USING을 아예 지원하지 않아서 늘 `ON`을 쓴다.
+
+## 짝이 없는 행을 살리는 OUTER JOIN
+
+처음 장면으로 돌아간다. 40번 부서를 살리려면 "짝이 없어도 이쪽 행은 남겨라"라고 해야 한다. 이게 OUTER JOIN이다. 기준이 되는 쪽에 따라 셋으로 나뉜다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="조인 종류마다 결과에 남는 행"
+  nodes={[
+    { id: "emp", label: "EMP 14행", sub: "모두 10~30번", x: 90, y: 50, w: 130 },
+    { id: "dept", label: "DEPT 4행", sub: "40번은 사원 없음", x: 310, y: 50, w: 140 },
+    { id: "inner", label: "INNER 14행", sub: "짝 있는 것만", x: 200, y: 140, w: 130 },
+    { id: "left", label: "DEPT 기준 15행", sub: "40번 + NULL", x: 90, y: 240, w: 140 },
+    { id: "cross", label: "CROSS 56행", sub: "14 × 4", x: 310, y: 240, w: 120 },
+  ]}
+  edges={[
+    { from: "emp", to: "inner" },
+    { from: "dept", to: "inner" },
+    { from: "inner", to: "left", label: "짝 없는 부서 추가" },
+    { from: "emp", to: "cross", dashed: true },
+    { from: "dept", to: "cross", dashed: true },
+  ]}
+/>
+
+LEFT OUTER JOIN은 왼쪽(`FROM`에 먼저 쓴) 테이블의 행을 모두 남긴다. 오른쪽에서 짝을 못 찾으면 오른쪽 컬럼을 NULL로 채운다. RIGHT OUTER JOIN은 반대로 오른쪽을 모두 남긴다. FULL OUTER JOIN은 양쪽을 모두 남긴다. `OUTER`는 생략할 수 있다(`LEFT JOIN`). 아래 그림에서 다음을 누르면 부서마다 사원 짝을 찾는 과정이 나온다.
+
+<AlgoTrace
+  caption="DEPT LEFT JOIN EMP: 짝이 없어도 부서는 남는다"
+  memoryLabel="결과 행 수"
+  cells={["10 ACCOUNTING", "20 RESEARCH", "30 SALES", "40 OPERATIONS"]}
+  steps={[
+    { memory: [], caption: "왼쪽은 DEPT다. 부서 하나마다 EMP에서 deptno가 같은 사원을 찾는다." },
+    { pointer: 0, found: [0], memory: ["10: 3행"], caption: "10번: CLARK, KING, MILLER. 짝이 셋이라 부서 한 행이 세 행이 된다." },
+    { pointer: 1, found: [0, 1], memory: ["10: 3행", "20: 5행"], caption: "20번: SMITH, JONES, SCOTT, ADAMS, FORD. 다섯 행." },
+    { pointer: 2, found: [0, 1, 2], memory: ["10: 3행", "20: 5행", "30: 6행"], caption: "30번: 여섯 행. 여기까지 14행이고 INNER JOIN과 같다." },
+    { pointer: 3, memory: ["10: 3행", "20: 5행", "30: 6행", "40: NULL 1행"], caption: "40번은 짝이 없다. INNER JOIN이면 여기서 버린다. LEFT JOIN은 EMP 쪽을 NULL로 채워 한 행을 남긴다." },
+    { found: [0, 1, 2, 3], memory: ["15행"], caption: "결과는 15행이다. 네 부서가 모두 나온다." },
+  ]}
+/>
+
+```sql
+SELECT d.deptno, d.dname, e.ename
+FROM dept d
+LEFT OUTER JOIN emp e ON e.deptno = d.deptno
+ORDER BY d.deptno, e.empno;
+```
+
+```text
+ deptno |   dname    | ename
+--------+------------+--------
+     10 | ACCOUNTING | CLARK
+     10 | ACCOUNTING | KING
+     10 | ACCOUNTING | MILLER
+     20 | RESEARCH   | SMITH
+     20 | RESEARCH   | JONES
+     20 | RESEARCH   | SCOTT
+     20 | RESEARCH   | ADAMS
+     20 | RESEARCH   | FORD
+     30 | SALES      | ALLEN
+     30 | SALES      | WARD
+     30 | SALES      | MARTIN
+     30 | SALES      | BLAKE
+     30 | SALES      | TURNER
+     30 | SALES      | JAMES
+     40 | OPERATIONS | (null)
+(15 rows)
+```
+
+`FROM emp e RIGHT JOIN dept d ON ...`라고 써도 같은 15행이다. 테이블 순서를 바꾸고 LEFT를 RIGHT로 바꾸면 같은 조인이다. 실무에서는 헷갈리지 않게 LEFT로 통일하는 경우가 많다.
+
+### 보고서를 고친다
+
+처음 보고서를 LEFT JOIN으로 고친다. 여기서 한 번 더 걸리는 함정이 있다.
+
+```sql
+SELECT d.deptno, d.dname, COUNT(e.empno) AS cnt, COUNT(*) AS cnt_star,
+       NVL(SUM(e.sal), 0) AS total               -- PostgreSQL은 COALESCE
+FROM dept d
+LEFT JOIN emp e ON e.deptno = d.deptno
+GROUP BY d.deptno, d.dname
+ORDER BY d.deptno;
+```
+
+```text
+ deptno |   dname    | cnt | cnt_star | total
+--------+------------+-----+----------+-------
+     10 | ACCOUNTING |   3 |        3 |  8750
+     20 | RESEARCH   |   5 |        5 | 10875
+     30 | SALES      |   6 |        6 |  9400
+     40 | OPERATIONS |   0 |        1 |     0
+(4 rows)
+```
+
+40번의 `COUNT(*)`가 1이다. NULL로 채운 행도 행이라서 센다. 사원 수를 세려면 EMP 쪽의 NULL이 될 수 없는 컬럼(`e.empno`)을 `COUNT`에 넣어야 0이 나온다. 급여 합계도 더할 값이 없어서 NULL이니, 0으로 보이려면 `SUM` 바깥을 `NVL`로 감싼다. 집계와 NULL 규칙은 [집계 글](/posts/sqld-group-by-having)에서 다뤘다.
+
+### 조건을 ON에 두느냐 WHERE에 두느냐
+
+부서마다 사무직(CLERK) 사원을 붙이되, 사무직이 없는 부서도 보이고 싶다. 같은 조건을 어디에 두느냐에 따라 결과가 달라진다. 아래 그림에서 다음을 누르면 두 쿼리가 어디서 갈리는지 나온다.
+
+<SequenceDiagram
+  caption="OUTER JOIN에서 조건 위치가 결과를 바꾼다"
+  actors={[
+    { id: "dept", label: "DEPT" },
+    { id: "emp", label: "EMP" },
+    { id: "out", label: "결과" },
+  ]}
+  steps={[
+    {
+      from: "dept",
+      to: "emp",
+      label: "ON: 부서 + CLERK",
+      title: "ON에 job = 'CLERK'을 둔다",
+      detail: "부서마다 '같은 부서이면서 CLERK인 사원'을 짝으로 찾는다. 짝을 고르는 조건이 둘이다.",
+    },
+    {
+      from: "emp",
+      to: "out",
+      label: "5행",
+      title: "짝 없는 부서는 NULL로 남는다",
+      detail: "10번 MILLER, 20번 SMITH·ADAMS, 30번 JAMES. 40번은 CLERK이 없어 NULL 한 행. LEFT JOIN이 왼쪽을 지켰다.",
+      payload: "10 MILLER\n20 SMITH\n20 ADAMS\n30 JAMES\n40 (null)",
+    },
+    {
+      from: "dept",
+      to: "emp",
+      label: "ON: 부서만",
+      title: "이번엔 job 조건을 WHERE로 옮긴다",
+      detail: "조인은 deptno로만 한다. 15행(40번 NULL 행 포함)이 만들어진다.",
+    },
+    {
+      from: "emp",
+      to: "out",
+      label: "WHERE: 4행",
+      title: "WHERE가 NULL 행을 지운다",
+      detail: "조인이 끝난 뒤 WHERE e.job = 'CLERK'을 검사한다. 40번 행의 job은 NULL이라 비교가 UNKNOWN이 되고 버려진다. 결과적으로 INNER JOIN과 같아졌다.",
+      payload: "10 MILLER\n20 SMITH\n20 ADAMS\n30 JAMES",
+    },
+  ]}
+/>
+
+```sql
+-- 1) 조건을 ON에: 40번이 남는다
+SELECT d.deptno, d.dname, e.ename
+FROM dept d LEFT JOIN emp e ON e.deptno = d.deptno AND e.job = 'CLERK'
+ORDER BY d.deptno, e.empno;
+
+-- 2) 조건을 WHERE에: 40번이 사라진다
+SELECT d.deptno, d.dname, e.ename
+FROM dept d LEFT JOIN emp e ON e.deptno = d.deptno
+WHERE e.job = 'CLERK'
+ORDER BY d.deptno, e.empno;
+```
+
+```text
+ deptno |   dname    | ename
+--------+------------+--------
+     10 | ACCOUNTING | MILLER
+     20 | RESEARCH   | SMITH
+     20 | RESEARCH   | ADAMS
+     30 | SALES      | JAMES
+     40 | OPERATIONS | (null)
+(5 rows)
+
+ deptno |   dname    | ename
+--------+------------+--------
+     10 | ACCOUNTING | MILLER
+     20 | RESEARCH   | SMITH
+     20 | RESEARCH   | ADAMS
+     30 | SALES      | JAMES
+(4 rows)
+```
+
+OUTER JOIN에서 NULL로 채워지는 쪽(여기서는 EMP)의 조건은 `ON`에 둬야 살아남는다. `WHERE`에 두면 NULL 행을 지워서 OUTER JOIN을 한 의미가 없어진다. 남기는 쪽(DEPT)의 조건, 예를 들어 `d.loc = 'BOSTON'`은 `WHERE`에 둬야 결과를 거른다. `ON`에 두면 거르지 않고 "짝을 찾지 말라"는 뜻이 되어 모든 부서가 그대로 나온다.
+
+이 성질을 거꾸로 쓰면 "짝이 없는 행만" 찾을 수 있다. 사원이 없는 부서는 이렇게 찾는다.
+
+```sql
+SELECT d.deptno, d.dname
+FROM dept d LEFT JOIN emp e ON e.deptno = d.deptno
+WHERE e.empno IS NULL;
+```
+
+```text
+ deptno |   dname
+--------+------------
+     40 | OPERATIONS
+(1 row)
+```
+
+### FULL OUTER JOIN은 양쪽을 다 남긴다
+
+SCOTT 데이터는 모든 사원에게 부서가 있어서 FULL OUTER JOIN을 해도 LEFT JOIN과 같은 15행이 나온다. 차이를 보려고 부서 배치 전인 신입 HONG을 잠깐 넣고, 끝나면 되돌린다.
+
+```sql
+BEGIN;
+INSERT INTO emp VALUES (8000, 'HONG', 'CLERK', 7782, DATE '2026-10-12', 1000, NULL, NULL);
+
+SELECT e.ename, e.deptno, d.deptno AS d_deptno, d.dname
+FROM emp e FULL OUTER JOIN dept d ON e.deptno = d.deptno
+WHERE e.job = 'CLERK' OR e.empno IS NULL     -- 보기 좋게 사무직과 빈 부서만
+ORDER BY e.empno;                            -- Oracle은 NULL이 맨 뒤
+
+ROLLBACK;   -- HONG을 지운다
+```
+
+```text
+ ename  | deptno | d_deptno |   dname
+--------+--------+----------+------------
+ SMITH  |     20 |       20 | RESEARCH
+ ADAMS  |     20 |       20 | RESEARCH
+ JAMES  |     30 |       30 | SALES
+ MILLER |     10 |       10 | ACCOUNTING
+ HONG   | (null) |   (null) | (null)
+ (null) | (null) |       40 | OPERATIONS
+(6 rows)
+```
+
+부서 없는 HONG은 DEPT 쪽이 NULL로, 사원 없는 40번은 EMP 쪽이 NULL로 채워졌다. HONG이 있는 동안 전체 행 수를 세면 INNER JOIN 14, LEFT(EMP 기준) 15, RIGHT(DEPT 기준) 15, FULL 16이다. FULL OUTER JOIN 결과는 LEFT 결과와 RIGHT 결과를 `UNION`(중복 제거 합집합)한 것과 같다. `UNION ALL`로 합치면 양쪽에 다 있는 14행이 두 번 들어간다.
+
+## Oracle 전통 문법의 OUTER JOIN 표기
+
+Oracle은 ANSI 조인이 들어온 9i 전부터 `WHERE` 절에 `(+)`를 붙여 OUTER JOIN을 썼다. 지금도 시험에 많이 나온다. 규칙은 하나다. `(+)`는 데이터가 모자라서 NULL로 채워질 쪽 컬럼에 붙인다. 남기고 싶은 쪽의 반대편이다. 아래 조각을 눌러 보면 각 부분이 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="(+) 표기를 조각으로 읽기"
+  base="FROM dept d, emp e"
+  separator=" WHERE "
+  joiner=" AND "
+  params={[
+    {
+      key: "d.deptno = e.deptno(+)",
+      title: "조인 조건: (+)는 EMP 쪽에",
+      description: "(+)는 '이쪽에 짝이 없으면 NULL 행을 덧붙여라'는 표시다. EMP 쪽에 붙였으니 EMP가 NULL로 채워지고 DEPT는 모두 남는다. dept LEFT OUTER JOIN emp와 같다.",
+      code: "-- ANSI로 쓰면\nFROM dept d LEFT JOIN emp e\n  ON e.deptno = d.deptno",
+      required: true,
+    },
+    {
+      key: "e.job(+) = 'CLERK'",
+      title: "상수 조건에도 (+)를 붙인다",
+      description: "NULL로 채워질 쪽(EMP)의 조건에는 상수 비교라도 (+)를 붙여야 ON 절에 둔 것과 같아진다. 빼면 WHERE 절 조건이 되어 40번 행이 지워지고 INNER JOIN처럼 동작한다.",
+      code: "-- ANSI로 쓰면\nON e.deptno = d.deptno\nAND e.job = 'CLERK'",
+    },
+  ]}
+/>
+
+```sql
+-- Oracle: DEPT를 모두 남긴다 (DEPT LEFT JOIN EMP와 같다)
+SELECT d.deptno, d.dname, e.ename
+FROM dept d, emp e
+WHERE d.deptno = e.deptno(+)
+ORDER BY d.deptno, e.empno;
+
+-- Oracle: 사무직만 붙이고 부서는 모두 남긴다 (ON에 job 조건을 둔 것과 같다)
+SELECT d.deptno, d.dname, e.ename
+FROM dept d, emp e
+WHERE d.deptno = e.deptno(+)
+  AND e.job(+) = 'CLERK'
+ORDER BY d.deptno, e.empno;
+```
+
+첫 번째 쿼리는 앞의 LEFT JOIN과 같은 15행, 두 번째는 40번이 남는 5행이다. 두 번째 쿼리에서 `e.job(+)`의 `(+)`를 빼면 `WHERE`에 둔 경우와 같은 4행이 된다. `(+)`의 위치는 조건의 왼쪽이든 오른쪽이든 상관없다. `e.deptno(+) = d.deptno`도 같은 뜻이다. 테이블을 `FROM`에 쓴 순서도 상관없다. 어느 쪽에 `(+)`가 붙었는지만 본다.
+
+`(+)`에는 ANSI 조인에 없는 제약이 있다.
+
+- 조건 양쪽에 다 붙일 수 없다. `d.deptno(+) = e.deptno(+)`는 `ORA-01468` 에러다. 그래서 `(+)`로는 FULL OUTER JOIN을 쓸 수 없다. 왼쪽 기준 결과와 오른쪽 기준 결과를 `UNION`으로 합치거나 ANSI `FULL OUTER JOIN`을 쓴다.
+- `(+)`를 붙인 조건을 `OR`로 다른 조건과 묶거나 `IN`과 함께 쓸 수 없다(`ORA-01719`).
+- 여러 조인 조건이 있으면 NULL로 채울 쪽의 컬럼마다 빠짐없이 `(+)`를 붙여야 한다. 하나라도 빠지면 INNER JOIN처럼 동작한다.
+
+SQL Server도 예전에 `*=`, `=*`라는 비슷한 표기가 있었지만 지금은 지원하지 않는다. PostgreSQL에는 이런 표기가 없다. 새로 짜는 쿼리는 Oracle에서도 ANSI 문법을 쓰는 편이 안전하다.
+
+## 모든 조합을 만드는 CROSS JOIN
+
+조인 조건 없이 두 테이블을 붙이면 왼쪽의 모든 행이 오른쪽의 모든 행과 짝이 된다. 이걸 카티션 곱(Cartesian product)이라고 하고, 일부러 쓸 때는 `CROSS JOIN`이라고 적는다.
+
+```sql
+SELECT COUNT(*) FROM emp CROSS JOIN dept;     -- ANSI
+SELECT COUNT(*) FROM emp, dept;               -- 조인 조건을 빼먹은 경우
+SELECT COUNT(*) FROM emp, dept, salgrade;
+```
+
+```text
+ count
+-------
+    56
+(1 row)
+
+ count
+-------
+    56
+(1 row)
+
+ count
+-------
+   280
+(1 row)
+```
+
+14 × 4 = 56, 세 테이블이면 14 × 4 × 5 = 280이다. SMITH 한 명만 보면 네 부서와 모두 짝이 되어, 실제 소속(RESEARCH)이 아닌 ACCOUNTING, SALES, OPERATIONS와도 붙는다.
+
+```sql
+SELECT e.ename, e.job, d.dname FROM emp e CROSS JOIN dept d WHERE e.empno = 7369 ORDER BY d.deptno;
+```
+
+```text
+ ename |  job  |   dname
+-------+-------+------------
+ SMITH | CLERK | ACCOUNTING
+ SMITH | CLERK | RESEARCH
+ SMITH | CLERK | SALES
+ SMITH | CLERK | OPERATIONS
+(4 rows)
+```
+
+전통 문법에서 조인 조건을 빼먹으면 에러 없이 이 결과가 나온다. 세 테이블을 붙이면서 조건을 하나만 쓰면, 조건이 없는 테이블 쪽으로 곱해진다. 결과 행 수가 이상하게 많으면 조인 조건 개수가 N-1개인지부터 센다. 일부러 쓰는 경우도 있다. 날짜 목록과 상품 목록을 곱해서 "매일 × 모든 상품" 틀을 만들고, 실제 판매 데이터를 OUTER JOIN으로 붙이면 판매가 없는 날도 0으로 보인다.
+
+`CROSS JOIN`에는 `ON`을 쓸 수 없다. NATURAL JOIN에서 이름이 같은 컬럼이 하나도 없으면 CROSS JOIN과 같은 결과가 된다는 것도 시험에 나온다.
+
+## 자기 자신과 붙이는 SELF JOIN
+
+사원의 상사 이름을 보고 싶다. 상사도 `EMP`에 있는 사원이라, `EMP`를 두 번 쓰고 별칭으로 구분한다. 하나는 사원(e), 하나는 상사(m)로 본다.
+
+```sql
+SELECT e.empno, e.ename, e.mgr, m.ename AS mgr_name
+FROM emp e
+JOIN emp m ON e.mgr = m.empno     -- 사원의 mgr = 상사의 empno
+ORDER BY e.empno;
+```
+
+```text
+ empno | ename  | mgr  | mgr_name
+-------+--------+------+----------
+  7369 | SMITH  | 7902 | FORD
+  7499 | ALLEN  | 7698 | BLAKE
+  7521 | WARD   | 7698 | BLAKE
+  7566 | JONES  | 7839 | KING
+  7654 | MARTIN | 7698 | BLAKE
+  7698 | BLAKE  | 7839 | KING
+  7782 | CLARK  | 7839 | KING
+  7788 | SCOTT  | 7566 | JONES
+  7844 | TURNER | 7698 | BLAKE
+  7876 | ADAMS  | 7788 | SCOTT
+  7900 | JAMES  | 7698 | BLAKE
+  7902 | FORD   | 7566 | JONES
+  7934 | MILLER | 7782 | CLARK
+(13 rows)
+```
+
+13행이다. KING은 `mgr`이 NULL이라 짝이 없어서 빠졌다. 처음 장면과 같은 이유다. 사장까지 보이려면 `LEFT JOIN emp m`으로 바꾸고, 그러면 KING의 `mgr_name`이 NULL인 14행이 나온다. Oracle 전통 문법으로는 `WHERE e.mgr = m.empno(+)`다.
+
+조인 조건의 방향을 거꾸로 쓰면(`e.empno = m.mgr`) 뜻이 "e의 부하 직원 m"으로 바뀐다. 결과도 상사마다 부하 수만큼 행이 나오는 완전히 다른 표가 된다. SELF JOIN은 어느 별칭이 어느 역할인지를 먼저 정하고 조건을 쓴다. 같은 방식으로 두 번 더 붙이면 상사의 상사도 볼 수 있다. 20번 부서로 해 보면 SMITH → FORD → JONES, SCOTT → JONES → KING 같은 줄이 나온다. 단계가 정해지지 않은 계층 전체를 따라가는 건 계층형 질의(`CONNECT BY`)의 일이다.
+
+자기보다 급여가 많은 부하를 찾을 수도 있다.
+
+```sql
+SELECT e.ename, e.sal, m.ename AS mgr, m.sal AS mgr_sal
+FROM emp e JOIN emp m ON e.mgr = m.empno
+WHERE e.sal > m.sal
+ORDER BY e.empno;
+```
+
+```text
+ ename | sal  |  mgr  | mgr_sal
+-------+------+-------+---------
+ SCOTT | 3000 | JONES |    2975
+ FORD  | 3000 | JONES |    2975
+(2 rows)
+```
+
+## 세 테이블을 붙이기
+
+사원 이름, 부서 이름, 급여 등급을 한 번에 본다. 테이블이 셋이니 조인 조건은 둘이다.
+
+```sql
+-- Oracle 전통 문법
+SELECT e.ename, d.dname, s.grade
+FROM emp e, dept d, salgrade s
+WHERE e.deptno = d.deptno                      -- 조건 1: EMP-DEPT
+  AND e.sal BETWEEN s.losal AND s.hisal        -- 조건 2: EMP-SALGRADE
+  AND d.deptno = 30
+ORDER BY e.empno;
+
+-- ANSI 문법: JOIN을 하나씩 이어 쓴다
+SELECT e.ename, d.dname, s.grade
+FROM emp e
+JOIN dept d     ON e.deptno = d.deptno
+JOIN salgrade s ON e.sal BETWEEN s.losal AND s.hisal
+WHERE d.deptno = 30
+ORDER BY e.empno;
+```
+
+```text
+ ename  | dname | grade
+--------+-------+-------
+ ALLEN  | SALES |     3
+ WARD   | SALES |     2
+ MARTIN | SALES |     2
+ BLAKE  | SALES |     4
+ TURNER | SALES |     3
+ JAMES  | SALES |     1
+(6 rows)
+```
+
+ANSI 문법에서 조인은 왼쪽부터 차례로 처리한다고 읽는다. 먼저 EMP와 DEPT를 붙인 결과에 SALGRADE를 붙인다. 그래서 두 번째 `ON`에서는 앞에 나온 `e`, `d`를 쓸 수 있지만, 첫 번째 `ON`에서 아직 나오지 않은 `s`는 못 쓴다. INNER JOIN만 있으면 순서를 바꿔도 결과가 같지만, OUTER JOIN이 섞이면 순서가 결과를 바꾼다. 예를 들어 `dept d LEFT JOIN emp e ... JOIN salgrade s ...`는 두 번째가 INNER JOIN이라 40번의 NULL 행이 등급과 짝을 못 찾아 다시 사라진다. 남기고 싶으면 두 번째도 `LEFT JOIN`이어야 한다.
+
+## DB가 짝을 찾는 세 가지 방법
+
+지금까지는 어떤 결과가 나오는지(논리)를 봤다. SQLD 2과목은 DB가 실제로 짝을 찾는 방법(물리적 조인 방식)도 묻는다. Oracle 기준으로 셋이 있고, 옵티마이저가 테이블 크기와 인덱스, 조건 모양을 보고 고른다. 힌트로 강제할 수도 있다(`/*+ USE_NL(e) */`, `USE_MERGE`, `USE_HASH`). PostgreSQL에도 같은 이름의 세 방식(Nested Loop, Merge Join, Hash Join)이 있다.
+
+Nested Loop(NL)는 바깥 테이블(선행 테이블, driving table)에서 한 행을 읽을 때마다 안쪽 테이블에서 짝을 찾는다. 이중 for문과 같다. 바깥이 작고 안쪽의 조인 컬럼에 인덱스가 있으면 가장 빠르고, 첫 행을 빨리 돌려줘서 화면에 몇 건만 보여 주는 온라인 조회에 맞다. 바깥이 크면 안쪽을 그만큼 반복해서 랜덤 액세스가 폭발한다. 조건 모양을 가리지 않아서 Non-EQUI JOIN에도 쓴다.
+
+Sort Merge는 양쪽을 조인 키로 정렬한 다음, 정렬된 두 목록을 나란히 훑으며 짝을 맞춘다. 인덱스가 없어도 되고, 이미 정렬돼 있으면 정렬 비용이 없다. Oracle은 범위 조건(`<`, `>`)에도 쓸 수 있다. 정렬할 데이터가 크면 정렬에 쓰는 메모리와 임시 공간이 부담이다.
+
+Hash Join은 작은 쪽(build input)을 읽어 메모리에 조인 키로 해시 테이블을 만들고, 큰 쪽(probe input)을 한 행씩 읽으며 해시 테이블에서 짝을 찾는다. 양쪽이 크고 인덱스가 마땅치 않은 대량 조인에 강하다. 해시 값이 같은지로 찾으니 `=` 조건(EQUI JOIN)에만 쓸 수 있다. 해시 테이블이 메모리에 다 안 들어가면 디스크로 넘쳐 느려지므로, 작은 쪽을 build로 고르는 게 중요하다.
+
+작은 예제에서도 PostgreSQL 옵티마이저가 상황마다 다른 방식을 고르는 걸 볼 수 있다.
+
+```sql
+-- 1) EQUI JOIN, 양쪽 전체
+EXPLAIN SELECT e.ename, d.dname FROM emp e JOIN dept d ON e.deptno = d.deptno;
+```
+
+```text
+                            QUERY PLAN
+-------------------------------------------------------------------
+ Hash Join  (cost=1.09..2.31 rows=14 width=15)
+   Hash Cond: (e.deptno = d.deptno)
+   ->  Seq Scan on emp e  (cost=0.00..1.14 rows=14 width=10)
+   ->  Hash  (cost=1.04..1.04 rows=4 width=13)
+         ->  Seq Scan on dept d  (cost=0.00..1.04 rows=4 width=13)
+(5 rows)
+```
+
+`Hash` 노드 아래에 4행짜리 `dept`가 있다. 작은 DEPT로 해시 테이블을 만들고(build), EMP 14행으로 찾았다(probe).
+
+```sql
+-- 2) Non-EQUI JOIN
+EXPLAIN SELECT e.ename, s.grade FROM emp e JOIN salgrade s ON e.sal BETWEEN s.losal AND s.hisal;
+```
+
+```text
+                                    QUERY PLAN
+----------------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..3.78 rows=8 width=10)
+   Join Filter: ((e.sal >= (s.losal)::numeric) AND (e.sal <= (s.hisal)::numeric))
+   ->  Seq Scan on emp e  (cost=0.00..1.14 rows=14 width=11)
+   ->  Materialize  (cost=0.00..1.07 rows=5 width=12)
+         ->  Seq Scan on salgrade s  (cost=0.00..1.05 rows=5 width=12)
+(5 rows)
+```
+
+`BETWEEN` 조건은 해시로 찾을 수 없어서 Nested Loop가 나왔다. `Join Filter`에 범위 조건이 붙어 있고, 사원 14명마다 등급 5행(`Materialize`로 메모리에 올려 둔 것)을 훑는다. PostgreSQL의 Merge Join은 Oracle과 달리 `=` 조건에만 쓰여서, 범위 조인에서는 이것만 남는다.
+
+```sql
+-- 3) Hash Join과 Nested Loop를 끄고 비교해 본다 (이 세션에서만)
+SET enable_hashjoin = off;
+SET enable_nestloop = off;
+EXPLAIN SELECT e.ename, d.dname FROM emp e JOIN dept d ON e.deptno = d.deptno;
+```
+
+```text
+                            QUERY PLAN
+-------------------------------------------------------------------
+ Merge Join  (cost=2.49..2.71 rows=14 width=15)
+   Merge Cond: (e.deptno = d.deptno)
+   ->  Sort  (cost=1.41..1.44 rows=14 width=10)
+         Sort Key: e.deptno
+         ->  Seq Scan on emp e  (cost=0.00..1.14 rows=14 width=10)
+   ->  Sort  (cost=1.08..1.09 rows=4 width=13)
+         Sort Key: d.deptno
+         ->  Seq Scan on dept d  (cost=0.00..1.04 rows=4 width=13)
+(8 rows)
+```
+
+양쪽에 `Sort`가 붙은 뒤 `Merge Join`으로 합친다. 비용(`cost=2.49..2.71`)이 Hash Join(`1.09..2.31`)보다 커서 평소에는 고르지 않았다. 앞 숫자는 첫 행을 내기까지의 비용인데, 정렬을 다 끝내야 첫 행이 나오니 앞 숫자가 크다. 이 비교는 확인용이고, 끝나면 `RESET enable_hashjoin; RESET enable_nestloop;`로 바로 되돌린다. 100만 행 규모에서 세 방식이 읽는 페이지 수가 어떻게 갈리는지는 [느린 쿼리 고치기 글](/posts/sql-query-tuning#조인을-처리하는-세-가지-방법)에 실제 실행 계획으로 정리했다.
+
+아래 칸에서 LEFT OUTER JOIN을 Nested Loop 방식으로 직접 만들어 볼 수 있다. 짝이 없는 왼쪽 행에 `null`을 채워 넣는 부분을 빠뜨리면 INNER JOIN이 된다.
+
+<CodePlayground
+  caption="leftJoin 만들기"
+  functionName="leftJoin"
+  initialCode={`function leftJoin(left, right, leftKey, rightKey) {
+  // left의 모든 행을 남기고, right에서 key가 같은 행을 붙인다
+  // 반환: [[왼쪽 행, 오른쪽 행 또는 null], ...] (왼쪽 순서대로, 짝은 right 순서대로)
+  // 키가 null이면 어떤 행과도 같지 않다
+  return [];
+}`}
+  solution={`function leftJoin(left, right, leftKey, rightKey) {
+  const result = [];
+  for (const l of left) {            // 바깥 루프: 왼쪽 행 하나마다
+    let matched = false;
+    for (const r of right) {         // 안쪽 루프: 오른쪽 전체를 훑는다
+      if (l[leftKey] !== null && l[leftKey] === r[rightKey]) {
+        result.push([l, r]);
+        matched = true;
+      }
+    }
+    if (!matched) result.push([l, null]);   // 짝이 없으면 NULL로 채워 남긴다
+  }
+  return result;
+}`}
+  tests={[
+    {
+      label: "DEPT LEFT JOIN EMP (일부)",
+      args: [
+        [{ deptno: 10 }, { deptno: 40 }],
+        [{ ename: "CLARK", deptno: 10 }, { ename: "SMITH", deptno: 20 }, { ename: "KING", deptno: 10 }],
+        "deptno",
+        "deptno",
+      ],
+      expected: [
+        [{ deptno: 10 }, { ename: "CLARK", deptno: 10 }],
+        [{ deptno: 10 }, { ename: "KING", deptno: 10 }],
+        [{ deptno: 40 }, null],
+      ],
+    },
+    {
+      label: "SELF JOIN: KING은 상사가 없다",
+      args: [
+        [{ ename: "SCOTT", mgr: 7566 }, { ename: "KING", mgr: null }],
+        [{ empno: 7566, ename: "JONES" }, { empno: 7839, ename: "KING" }],
+        "mgr",
+        "empno",
+      ],
+      expected: [
+        [{ ename: "SCOTT", mgr: 7566 }, { empno: 7566, ename: "JONES" }],
+        [{ ename: "KING", mgr: null }, null],
+      ],
+    },
+    {
+      label: "NULL 키끼리는 짝이 아니다",
+      args: [[{ k: null }], [{ k: null }], "k", "k"],
+      expected: [[{ k: null }, null]],
+    },
+    {
+      label: "오른쪽이 비면 왼쪽만 남는다",
+      args: [[{ deptno: 30 }], [], "deptno", "deptno"],
+      expected: [[{ deptno: 30 }, null]],
+    },
+  ]}
+/>
+
+세 번째 테스트가 SQL의 규칙과 맞닿아 있다. `NULL = NULL`은 참이 아니라서, 키가 NULL인 행은 OUTER JOIN에서 늘 짝 없이 NULL로 채워진다. 이 코드는 오른쪽을 왼쪽 행마다 다시 훑으니 Nested Loop다. 오른쪽을 먼저 `Map`에 담아 두고 찾으면 Hash Join이 된다.
+
+## SQLD 시험 포인트
+
+조인 문제는 결과 행 수를 묻거나, 같은 결과를 내는 SQL을 고르게 하거나, 에러가 나는 SQL을 찾게 한다.
+
+- INNER JOIN은 짝이 있는 행만 남는다. 사원 없는 부서, 상사 없는 KING처럼 조인 키에 짝이 없거나 NULL인 행은 빠진다.
+- N개 테이블을 조인하려면 조인 조건이 최소 N-1개다. 조건을 빼먹으면 카티션 곱이다(EMP × DEPT = 56행).
+- NATURAL JOIN과 USING의 공통 컬럼에는 테이블 별칭을 붙일 수 없다(Oracle). `SELECT *` 하면 공통 컬럼이 맨 앞에 한 번만 나온다. ON은 양쪽 컬럼이 다 나온다.
+- NATURAL JOIN은 이름이 같은 모든 컬럼으로 조인하고 `ON`, `USING`과 함께 쓸 수 없다. SQL Server에는 NATURAL JOIN과 USING이 없다.
+- `(+)`는 NULL로 채워질 쪽에 붙인다. `WHERE d.deptno = e.deptno(+)`는 DEPT의 모든 행을 남긴다. 양쪽에 붙일 수 없으니 FULL OUTER JOIN은 안 된다.
+- OUTER JOIN에서 NULL로 채워질 쪽의 조건을 `WHERE`에 두면(또는 `(+)`를 빼면) INNER JOIN처럼 된다.
+- FULL OUTER JOIN = LEFT 결과 `UNION` RIGHT 결과.
+- OUTER JOIN 뒤의 `COUNT(*)`는 NULL로 채운 행도 센다. 짝 수를 세려면 `COUNT(오른쪽 컬럼)`.
+- Non-EQUI JOIN은 `BETWEEN`, `>=` 같은 조건으로 조인한다. SALGRADE가 단골이다.
+- 조인 방식: NL은 작은 선행 테이블과 안쪽 인덱스, 랜덤 액세스, 부분 범위 처리에 유리하다. Sort Merge는 양쪽 정렬 후 병합, 인덱스 없이도 되고 범위 조인 가능. Hash Join은 `=` 조건에서만, 작은 쪽으로 해시 테이블을 만들고 대량 조인에 유리하다.
+
+## 면접에서 나올 만한 질문
+
+### INNER JOIN과 OUTER JOIN의 차이는 무엇인가요?
+
+INNER JOIN은 조인 조건을 만족하는 짝이 있는 행만 결과에 남긴다. OUTER JOIN은 기준 테이블의 행을 짝이 없어도 남기고, 반대쪽 컬럼을 NULL로 채운다. 예제에서 부서와 사원을 INNER JOIN하면 사원이 없는 40번 부서가 사라졌고, 부서 기준 LEFT JOIN으로 바꾸자 NULL 행 하나와 함께 다시 나왔다. 기준 쪽 전체가 필요한 보고서나 "짝이 없는 행 찾기"에 OUTER JOIN을 쓴다.
+
+### LEFT JOIN에서 조건을 ON에 두는 것과 WHERE에 두는 것은 어떻게 다른가요?
+
+`ON`의 조건은 짝을 고르는 기준이라, 맞는 짝이 없으면 기준 행은 NULL과 함께 남는다. `WHERE`의 조건은 조인이 끝난 결과를 거르기 때문에, NULL로 채운 행이 조건 비교에서 UNKNOWN이 되어 지워진다. 그래서 오른쪽 테이블 조건을 `WHERE`에 두면 사실상 INNER JOIN이 된다. 오른쪽 조건은 `ON`에, 왼쪽(기준) 테이블을 거르는 조건은 `WHERE`에 둔다.
+
+### Oracle의 (+)는 어느 쪽에 붙이고, 한계는 무엇인가요?
+
+데이터가 모자라 NULL로 채워질 쪽 컬럼에 붙인다. `d.deptno = e.deptno(+)`는 부서를 모두 남기는 LEFT JOIN과 같다. NULL로 채울 쪽의 상수 조건에도 `(+)`를 붙여야 하고, 빠뜨리면 INNER JOIN처럼 동작한다. 양쪽에 동시에 붙일 수 없어서 FULL OUTER JOIN은 표현하지 못하고, `OR`나 `IN`과 함께 쓸 수 없다. 그래서 새 코드는 ANSI 문법을 쓴다.
+
+### NATURAL JOIN을 실무에서 잘 쓰지 않는 이유는요?
+
+이름이 같은 모든 컬럼으로 자동 조인하기 때문에, 나중에 두 테이블에 같은 이름의 컬럼이 추가되면 조인 조건이 말없이 바뀌어 결과가 달라진다. 쿼리만 봐서는 어떤 컬럼으로 조인했는지도 보이지 않는다. 같은 결과가 필요하면 `USING`이나 `ON`으로 조인 컬럼을 드러내 쓴다. SQL Server는 아예 지원하지 않아 이식성도 떨어진다.
+
+### 카티션 곱은 언제 생기고, 언제 일부러 쓰나요?
+
+조인 조건 없이 테이블을 붙이면 모든 행 조합이 만들어진다. 전통 문법에서 N개 테이블에 조인 조건을 N-1개보다 적게 쓴 실수가 대표적인 원인이고, 예제의 EMP와 DEPT는 56행, SALGRADE까지 붙이면 280행이 됐다. 결과 행 수가 예상보다 크게 늘면 조건 개수부터 본다. 일부러 쓸 때는 `CROSS JOIN`으로 적어 "날짜 × 상품" 같은 빈 틀을 만들고 실제 데이터를 OUTER JOIN으로 채운다.
+
+### Nested Loop, Sort Merge, Hash Join은 각각 언제 유리한가요?
+
+Nested Loop는 선행 테이블이 작고 안쪽 조인 컬럼에 인덱스가 있을 때 유리하고, 첫 결과를 빨리 돌려줘서 온라인 화면 조회에 맞는다. 대신 선행 쪽이 크면 안쪽 탐색이 그만큼 반복돼 랜덤 액세스가 늘어난다. Sort Merge는 양쪽을 정렬해 나란히 훑는 방식이라 인덱스가 없거나 이미 정렬돼 있을 때 쓰고, Oracle에서는 범위 조건 조인에도 된다. Hash Join은 `=` 조건에서만 쓰이며, 작은 쪽으로 해시 테이블을 만들고 큰 쪽으로 찾아서 대량 데이터 조인에 강하다. 해시 테이블이 메모리를 넘으면 디스크를 쓰게 되어 느려진다.
+
+### Hash Join은 왜 등가 조건에만 쓸 수 있나요?
+
+해시 함수는 같은 값을 같은 버킷에 모을 뿐이고 값의 크기 순서는 보존하지 않는다. 그래서 "같은 키"는 버킷 하나만 보면 찾을 수 있지만, "범위 안의 키"는 어느 버킷에 있는지 알 수 없다. 예제에서 `sal BETWEEN losal AND hisal` 조인은 PostgreSQL이 Hash Join 대신 Nested Loop로 처리했다. 범위 조인이 크면 Oracle에서는 Sort Merge가 대안이 된다.
+
+### SELF JOIN은 어디에 쓰나요?
+
+한 테이블 안의 행끼리 관계가 있을 때 쓴다. EMP의 `mgr`이 같은 테이블의 `empno`를 가리키니, EMP를 사원과 상사 두 별칭으로 놓고 `e.mgr = m.empno`로 붙이면 상사 이름이 나온다. 이때 INNER JOIN이면 상사가 없는 KING이 빠지니 LEFT JOIN을 쓴다. 단계가 정해진 관계는 SELF JOIN을 반복해서 풀고, 깊이가 정해지지 않은 계층은 `CONNECT BY`나 재귀 CTE로 푼다.
