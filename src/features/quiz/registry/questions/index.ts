@@ -8,7 +8,9 @@ import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
+import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_INDEX } from "./db-index";
+import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -67,7 +69,9 @@ export const QUESTION_SETS = [
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
+  DB_ARCHITECTURE_BY_SCALE,
   DB_INDEX,
+  DB_REPLICATION_SHARDING,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,

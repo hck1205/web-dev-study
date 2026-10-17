@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "db-replication-sharding",
+    title: "DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩",
+    summary: "읽기가 몰리면 복제본으로, 테이블이 너무 커지면 파티션으로, 쓰기와 데이터가 한 대를 넘으면 샤드로 나눈다. PostgreSQL 16에서 복제 지연, 파티션 가지치기, 일관된 해싱을 직접 돌려 보며 각 단계가 푸는 문제와 새로 생기는 문제를 정리한다.",
+    topic: "programming/database",
+    tags: ["Database", "PostgreSQL", "Distributed Systems", "Scalability", "System Design"],
+    date: "2026-10-17",
+    keywords: ["읽기 복제본", "스트리밍 복제", "파티셔닝", "일관된 해싱", "복제 지연"],
+  },
+  {
+    slug: "db-architecture-by-scale",
+    title: "서비스 규모별 DB 설계: 한 대에서 여러 저장소까지",
+    summary: "새 서비스는 PostgreSQL 한 대에서 시작해, 연결 수, CPU, p99, 복제 지연 같은 숫자가 보일 때 캐시와 복제본, 분석과 검색 저장소, 서비스별 DB로 넘어간다. 아웃박스, 무중단 스키마 변경, 권한 분리처럼 각 단계에서 필요한 실무 장치도 SQL로 함께 본다.",
+    topic: "programming/system-design",
+    tags: ["Database", "PostgreSQL", "System Design", "Architecture", "Scalability"],
+    date: "2026-10-17",
+    keywords: ["폴리글랏 퍼시스턴스", "database per service", "expand/contract", "SKIP LOCKED", "PgBouncer"],
+  },
+  {
     slug: "db-index",
     title: "인덱스: 책 뒤의 찾아보기",
     summary: "주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾고, 복합·커버링·부분·식 인덱스를 언제 쓰며, 인덱스가 왜 안 타고 무엇을 대가로 내는지 정리한다.",
