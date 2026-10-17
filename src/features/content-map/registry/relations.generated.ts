@@ -2,6 +2,46 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "postgres-architecture": {
+    "links": [
+      "postgres-getting-started",
+      "postgres-jsonb-search",
+      "sql-query-tuning",
+      "postgres-operations",
+      "postgres-mvcc-vacuum",
+      "db-index",
+      "db-transaction-isolation",
+      "db-replication-sharding"
+    ],
+    "mentions": [
+      "db-architecture-by-scale"
+    ]
+  },
+  "postgres-mvcc-vacuum": {
+    "links": [
+      "db-transaction-isolation",
+      "postgres-architecture",
+      "db-replication-sharding",
+      "db-index",
+      "sql-query-tuning",
+      "postgres-operations"
+    ],
+    "mentions": []
+  },
+  "postgres-operations": {
+    "links": [
+      "postgres-architecture",
+      "postgres-mvcc-vacuum",
+      "sql-query-tuning",
+      "db-transaction-isolation",
+      "db-replication-sharding"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "postgres-getting-started",
+      "sql-basics"
+    ]
+  },
   "postgres-advanced-sql": {
     "links": [
       "sql-basics",
@@ -39,7 +79,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "postgres-functions-triggers",
       "db-index",
-      "elasticsearch-inverted-index"
+      "elasticsearch-inverted-index",
+      "postgres-architecture"
     ],
     "mentions": []
   },
@@ -49,7 +90,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-data-types",
       "postgres-roles-security"
     ],
-    "mentions": []
+    "mentions": [
+      "postgres-operations"
+    ]
   },
   "postgres-data-types": {
     "links": [
@@ -58,7 +101,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-jsonb-search",
       "sql-basics"
     ],
-    "mentions": []
+    "mentions": [
+      "postgres-architecture"
+    ]
   },
   "postgres-roles-security": {
     "links": [
@@ -214,6 +259,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-group-by-having",
+      "postgres-operations",
       "postgres-getting-started"
     ]
   },
@@ -270,6 +316,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
+      "postgres-architecture",
       "json-crud-http",
       "postgres-advanced-sql",
       "sqld-entity-attribute-relationship",
@@ -282,6 +329,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices"
     ],
     "mentions": [
+      "postgres-mvcc-vacuum",
       "postgres-getting-started",
       "sql-basics"
     ]
@@ -298,6 +346,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "redis-persistence-ha",
       "redis-basics",
+      "postgres-architecture",
       "dns"
     ]
   },
@@ -316,7 +365,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-advanced-sql",
+      "postgres-mvcc-vacuum",
       "http-caching-cdn",
+      "postgres-operations",
       "postgres-jsonb-search",
       "sql-basics"
     ]
@@ -326,6 +377,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-tuning"
     ],
     "mentions": [
+      "postgres-mvcc-vacuum",
       "db-replication-sharding",
       "db-transaction-isolation",
       "sql-basics"
@@ -336,8 +388,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
+      "postgres-mvcc-vacuum",
       "db-architecture-by-scale",
       "rest-api-design",
+      "postgres-architecture",
       "postgres-getting-started",
       "db-transaction-isolation"
     ]
@@ -505,6 +559,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "nginx-basics",
       "iptables-basics",
+      "postgres-operations",
       "proxy-reverse-proxy",
       "redis-basics",
       "dns"

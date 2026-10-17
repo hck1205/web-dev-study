@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "postgres-architecture",
+    title: "PostgreSQL 내부 구조: 프로세스, 공유 메모리, 페이지, WAL, 체크포인트",
+    summary: "연결마다 생기는 backend 프로세스, shared_buffers와 OS 페이지 캐시, 8KB 페이지와 튜플 머리말, WAL과 체크포인트, 크래시 복구를 실제로 돌려 보며 따라간다. 램 64GB 서버에 shared_buffers 128MB가 왜 생각만큼 느리지 않은지도 숫자로 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "Performance", "Linux"],
+    date: "2026-10-17",
+    keywords: ["shared_buffers", "full_page_writes", "체크포인트", "TOAST", "LSN"],
+  },
+  {
+    slug: "postgres-mvcc-vacuum",
+    title: "VACUUM과 autovacuum: 죽은 튜플, 부풀림, XID 랩어라운드",
+    summary: "100만 건 UPDATE 뒤 테이블이 두 배가 되는 이유부터 VACUUM과 VACUUM FULL의 잠금 차이, HOT 업데이트, autovacuum 기준식, VACUUM을 막는 트랜잭션과 슬롯, XID 랩어라운드와 얼리기까지 실제 출력으로 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "Performance", "SQL"],
+    date: "2026-10-17",
+    keywords: ["autovacuum", "VACUUM FULL", "HOT 업데이트", "XID 랩어라운드", "visibility map"],
+  },
+  {
+    slug: "postgres-operations",
+    title: "PostgreSQL 운영: 설정 튜닝, 연결 풀, 모니터링, 백업과 PITR, 버전 업그레이드",
+    summary: "처음 운영에 올리기 전에 정할 설정과 적용 시점, work_mem 예산 계산, 연결 풀, 매일 볼 지표, pg_dump와 pg_basebackup, WAL 보관으로 실수 직전 시점까지 되돌리는 PITR, 메이저 버전 업그레이드 방법을 직접 해 보며 정리한다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "Performance", "Linux"],
+    date: "2026-10-17",
+    keywords: ["pg_basebackup", "시점 복구", "PITR", "pg_upgrade", "pg_dump"],
+  },
+  {
     slug: "postgres-advanced-sql",
     title: "PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL",
     summary: "넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, LATERAL, DISTINCT ON, FILTER, generate_series, generated column, 머티리얼라이즈드 뷰, COPY를 50만 건 주문 데이터의 실행 계획과 함께 본다.",

@@ -1,0 +1,851 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-mvcc-vacuum");
+
+주문 상태값을 정리하느라 `orders` 100만 건 전체에 `UPDATE`를 한 번 돌렸다. 행 수는 그대로 100만인데 테이블이 65MB에서 130MB로, 인덱스는 29MB에서 59MB로 두 배가 됐다. 같은 조회가 77ms에서 100ms 넘게 걸린다. 지운 것도 없는데 왜 커졌을까.
+
+[트랜잭션 격리 글](/posts/db-transaction-isolation)에서 본 MVCC가 원인이다. PostgreSQL은 행을 고칠 때 덮어쓰지 않고 새 버전을 하나 더 쓴다. 옛 버전은 누군가 아직 볼 수 있으니 바로 못 지운다. 아무도 안 보게 된 옛 버전(죽은 튜플, dead tuple)을 치우는 일이 VACUUM이고, 그걸 알아서 돌려 주는 게 autovacuum이다. 이 글은 그 기본 위에서 한 걸음 더 들어간다. 죽은 튜플이 페이지에 어떻게 남는지, VACUUM이 무엇은 하고 무엇은 못 하는지, autovacuum이 언제 도는지, 무엇이 VACUUM을 막는지, 그리고 VACUUM을 오래 안 하면 DB가 쓰기를 멈추는 XID 랩어라운드까지 본다.
+
+기준은 Ubuntu 24.04의 PostgreSQL 16.15다. [내부 구조 글](/posts/postgres-architecture)에서 본 8KB 페이지, 줄 포인터, `xmin`/`xmax`를 그대로 쓴다. 예제는 서점 DB의 `orders`와 `books`다. 죽은 튜플이 쌓이는 모습을 보려고 처음에는 `orders`의 autovacuum을 꺼 두었다.
+
+```sql
+CREATE TABLE orders (
+  order_id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users,
+  status     text NOT NULL DEFAULT 'paid',
+  total      integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+) WITH (autovacuum_enabled = false);          -- 실험용. 운영에서는 끄지 않는다
+CREATE INDEX orders_user_id_idx ON orders (user_id);
+
+-- 주문 100만 건 (사용자 1,000명, 20초 간격)
+INSERT INTO orders (user_id, status, total, created_at)
+SELECT 1 + i % 1000, 'paid', 10000 + (i * 37) % 90000,
+       timestamptz '2026-01-01' + i * interval '20 seconds'
+FROM generate_series(1, 1000000) i;
+VACUUM ANALYZE orders;
+
+SELECT pg_size_pretty(pg_table_size('orders')) AS table,
+       pg_size_pretty(pg_indexes_size('orders')) AS indexes,
+       pg_relation_size('orders') / 8192 AS pages;
+```
+
+```text
+ table | indexes | pages
+-------+---------+-------
+ 65 MB | 29 MB   |  8334
+(1 row)
+```
+
+## UPDATE 한 번이 남기는 것
+
+전체 `UPDATE`를 하고 크기와 통계를 다시 봤다.
+
+```sql
+UPDATE orders SET status = 'shipped';          -- 100만 행 전부
+
+SELECT pg_size_pretty(pg_table_size('orders')) AS table,
+       pg_size_pretty(pg_indexes_size('orders')) AS indexes;
+
+-- 테이블별 누적 통계: 살아 있는 행, 죽은 행, 수정 횟수
+SELECT n_live_tup, n_dead_tup, n_tup_upd, n_tup_hot_upd
+FROM pg_stat_user_tables WHERE relname = 'orders';
+```
+
+```text
+ table  | indexes
+--------+---------
+ 130 MB | 59 MB
+(1 row)
+
+ n_live_tup | n_dead_tup | n_tup_upd | n_tup_hot_upd
+------------+------------+-----------+---------------
+    1000000 |    1000000 |   1000000 |             0
+(1 row)
+```
+
+`n_dead_tup`이 100만이다. 새 버전 100만 개가 생기고 옛 버전 100만 개가 죽은 채로 남았다. 페이지가 꽉 차 있었으니 새 버전은 전부 테이블 뒤쪽 새 페이지(8334번부터)에 들어갔다. 인덱스도 두 배가 된 건 새 버전의 위치가 바뀌어서 인덱스 두 개 모두에 새 항목을 넣었기 때문이다. `n_tup_hot_upd`가 0인 이유는 뒤에서 본다.
+
+0번 페이지를 열어 보면 옛 버전이 어떻게 남았는지 보인다.
+
+```sql
+SELECT lp, lp_flags, t_xmin, t_xmax, t_ctid
+FROM heap_page_items(get_raw_page('orders', 0)) WHERE lp <= 3;
+SELECT ctid, xmin, order_id, status FROM orders WHERE order_id <= 3;
+```
+
+```text
+ lp | lp_flags | t_xmin | t_xmax |  t_ctid
+----+----------+--------+--------+-----------
+  1 |        1 | 128969 | 128974 | (8333,41)
+  2 |        1 | 128969 | 128974 | (8333,42)
+  3 |        1 | 128969 | 128974 | (8333,43)
+(3 rows)
+
+   ctid    |  xmin  | order_id | status
+-----------+--------+----------+---------
+ (8333,41) | 128974 |        1 | shipped
+ (8333,42) | 128974 |        2 | shipped
+ (8333,43) | 128974 |        3 | shipped
+(3 rows)
+```
+
+0번 페이지의 행들은 `t_xmax`에 `UPDATE`한 트랜잭션 128974가 적혀 있고, `t_ctid`가 새 버전이 있는 8333번 페이지를 가리킨다. 실제 조회 결과는 8333번 페이지의 새 버전이다. 0번 페이지는 이제 아무도 안 보는 행으로만 차 있다. 그런데도 순차 스캔은 이 페이지를 읽어야 한다. 페이지 수가 두 배가 됐으니 읽을 양도 두 배다.
+
+```sql
+SET max_parallel_workers_per_gather = 0;
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders WHERE created_at >= '2026-06-01';
+```
+
+```text
+-- UPDATE 전
+   ->  Seq Scan on orders  (cost=0.00..20834.00 rows=349952 width=0) (actual time=32.023..60.180 rows=347681 loops=1)
+         Buffers: shared hit=8334
+ Execution Time: 76.974 ms
+
+-- UPDATE 직후 첫 번째 조회
+   ->  Seq Scan on orders  (cost=0.00..41665.50 rows=686810 width=0) (actual time=161.333..192.709 rows=347681 loops=1)
+         Buffers: shared hit=6035 read=10632 dirtied=7891 written=7778
+ Execution Time: 209.840 ms
+
+-- 같은 조회 한 번 더
+   ->  Seq Scan on orders  (cost=0.00..41665.50 rows=686810 width=0) (actual time=55.214..85.782 rows=347681 loops=1)
+         Buffers: shared hit=11649 read=5018 written=32
+ Execution Time: 102.420 ms
+```
+
+결과 행 수(`rows=347681`)는 같은데 읽은 페이지가 8,334개에서 16,667개로 늘었다. `cost`도 두 배다. 그리고 UPDATE 직후 첫 조회는 210ms로 유난히 느리고, 읽기만 했는데 `dirtied=7891`, `written=7778`이 찍혔다. 읽기 쿼리가 페이지를 고쳐 쓴 것이다. 다음 절이 그 이야기다.
+
+## 읽기만 했는데 페이지를 고친다
+
+조회가 페이지를 고친 이유는 두 가지다. 하나는 힌트 비트(hint bit)다. 행을 처음 읽은 트랜잭션은 그 행의 `xmin`, `xmax` 트랜잭션이 커밋됐는지를 `pg_xact`에서 찾아보고, 그 결과를 행 머리말에 비트로 적어 둔다. 다음 사람은 다시 찾아볼 필요가 없다. 대량 `UPDATE`나 적재 직후 첫 조회가 느리고 쓰기가 생기는 건 이 때문이다.
+
+다른 하나는 페이지 정리(page pruning)다. 페이지를 읽다가 빈자리가 거의 없고 죽은 행이 보이면, 그 자리에서 죽은 행의 데이터를 지우고 페이지 안을 정리한다. VACUUM을 기다리지 않는 작은 청소다. 그 조회 뒤에 다시 0번 페이지를 봤다.
+
+```sql
+-- pgstattuple: 테이블을 실제로 다 읽어서 행, 죽은 행, 빈자리를 센다
+CREATE EXTENSION pgstattuple;
+SELECT tuple_count, dead_tuple_count, dead_tuple_percent, free_percent FROM pgstattuple('orders');
+SELECT lp, lp_flags, lp_off, lp_len FROM heap_page_items(get_raw_page('orders', 0)) WHERE lp <= 3;
+```
+
+```text
+-- UPDATE 직후 (조회 전)
+ tuple_count | dead_tuple_count | dead_tuple_percent | free_percent
+-------------+------------------+--------------------+--------------
+     1000000 |          1000000 |              46.87 |         0.05
+
+-- 조회 한 번 뒤
+ tuple_count | dead_tuple_count | dead_tuple_percent | free_percent
+-------------+------------------+--------------------+--------------
+     1000000 |                0 |                  0 |        46.92
+
+ lp | lp_flags | lp_off | lp_len
+----+----------+--------+--------
+  1 |        3 |      0 |      0
+  2 |        3 |      0 |      0
+  3 |        3 |      0 |      0
+(3 rows)
+```
+
+죽은 행이 차지하던 46.87%가 빈자리 46.92%로 바뀌었다. 하지만 줄 포인터는 남아 있다. `lp_flags = 3`(LP_DEAD)은 "이 칸의 행은 죽었다"는 표시만 남은 상태다. 줄 포인터를 바로 없애지 못하는 이유는 인덱스다. 인덱스 항목이 아직 `(0,1)`을 가리키고 있으니, 인덱스를 정리하기 전에 이 칸을 재사용하면 인덱스가 엉뚱한 행을 가리키게 된다. 인덱스까지 정리하는 건 VACUUM만 할 수 있다. 아래 그림에서 다음을 누르면 한 페이지 안에서 일어난 일을 차례로 볼 수 있다.
+
+<AlgoTrace
+  caption="orders 0번 페이지의 줄 포인터 3칸"
+  memoryLabel="이 페이지 상태"
+  cells={["lp1", "lp2", "lp3", "빈자리"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2], memory: ["살아 있음 3", "빈자리 0%"], caption: "처음에는 세 칸 모두 살아 있는 행을 가리킨다. 페이지는 꽉 찼다." },
+    { pointer: 0, memory: ["죽음 3", "새 버전은 8333쪽"], caption: "UPDATE가 xmax를 적고 새 버전을 다른 페이지에 썼다. 행 데이터는 그대로 자리를 차지한다." },
+    { pointer: 3, memory: ["LP_DEAD 3", "빈자리 47%"], caption: "조회가 지나가며 페이지를 정리했다. 행 데이터는 지워졌지만, 인덱스가 아직 가리키니 줄 포인터는 죽음 표시로 남는다." },
+    { pointer: 3, memory: ["인덱스 항목 제거"], caption: "VACUUM이 인덱스를 훑어 이 칸들을 가리키던 항목을 지운다. 인덱스 두 개에서 100만 개씩이다." },
+    { pointer: 3, found: [3], memory: ["LP_UNUSED", "재사용 가능"], caption: "이제 줄 포인터도 비운다. 다음 INSERT나 UPDATE가 이 페이지의 빈자리를 쓴다. 파일 크기는 그대로다." },
+  ]}
+/>
+
+## VACUUM은 자리를 비울 뿐 파일을 줄이지 않는다
+
+이제 VACUUM을 돌린다.
+
+```sql
+VACUUM (VERBOSE) orders;
+SELECT pg_size_pretty(pg_table_size('orders')) AS table,
+       pg_size_pretty(pg_indexes_size('orders')) AS indexes;
+```
+
+```text
+INFO:  vacuuming "pg3_mvcc.public.orders"
+INFO:  finished vacuuming "pg3_mvcc.public.orders": index scans: 1
+pages: 0 removed, 16667 remain, 16667 scanned (100.00% of total)
+tuples: 0 removed, 1000000 remain, 0 are dead but not yet removable
+removable cutoff: 128981, which was 0 XIDs old when operation ended
+new relfrozenxid: 128980, which is 2 XIDs ahead of previous value
+frozen: 0 pages from table (0.00% of total) had 0 tuples frozen
+index scan needed: 8334 pages from table (50.00% of total) had 1000000 dead item identifiers removed
+index "orders_pkey": pages: 5486 in total, 0 newly deleted, 0 currently deleted, 0 reusable
+index "orders_user_id_idx": pages: 2011 in total, 0 newly deleted, 0 currently deleted, 0 reusable
+...
+ table  | indexes
+--------+---------
+ 130 MB | 59 MB
+(1 row)
+```
+
+`tuples: 0 removed`인 건 앞의 조회가 행 데이터를 이미 치웠기 때문이다. 대신 `index scan needed:` 줄에서 페이지 8,334개의 죽은 줄 포인터 100만 개를 인덱스에서 지웠다. 그런데 크기는 130MB 그대로다. VACUUM은 빈자리를 "다시 써도 된다"고 표시할 뿐, 파일을 줄이지 않는다. 예외는 테이블 맨 끝 페이지들이 통째로 비었을 때인데, 그때만 파일 끝을 잘라 낸다(`pages: N removed`). 여기서는 빈 페이지가 앞쪽 절반이라 자를 수 없다.
+
+빈자리는 다음 쓰기가 쓴다. 같은 100만 건을 한 번 더 고쳤다.
+
+```sql
+UPDATE orders SET status = 'delivered';
+SELECT pg_size_pretty(pg_table_size('orders')) AS table,
+       pg_size_pretty(pg_indexes_size('orders')) AS indexes;
+```
+
+```text
+ table  | indexes
+--------+---------
+ 130 MB | 66 MB
+(1 row)
+```
+
+이번엔 테이블이 더 커지지 않았다. 새 버전이 VACUUM이 비운 앞쪽 페이지들에 들어갔다. 이것이 평소의 정상 상태다. `UPDATE`가 꾸준한 테이블은 죽은 행과 빈자리가 어느 정도 섞인 채로 크기가 안정된다. 문제는 한 번에 큰 변경이 생기거나 VACUUM이 오래 못 돌아서 빈자리가 지나치게 많아진 경우다. 이 테이블은 앞으로 계속 130MB를 읽어야 한다.
+
+## VACUUM FULL은 테이블을 잠근다
+
+파일을 실제로 줄이려면 테이블을 새 파일로 다시 써야 한다. `VACUUM FULL`이 그 일을 한다. 살아 있는 행만 새 파일에 차곡차곡 복사하고, 인덱스도 새로 만들고, 옛 파일을 지운다. 문제는 그동안 `ACCESS EXCLUSIVE` 잠금을 잡는다는 것이다. 읽기까지 전부 막힌다.
+
+더 무서운 건 잠금 대기열이다. 실험해 봤다. 세션 A가 `orders`를 읽는 트랜잭션을 연 채 몇 초 머물고, 그 사이 B가 `VACUUM FULL`을, 이어서 C가 기본 키로 주문 하나를 조회했다.
+
+```sql
+-- 네 번째 세션에서: orders에 걸린 잠금과 기다리는 관계
+SELECT a.pid, l.mode, l.granted, a.wait_event_type, left(a.query, 45) AS query
+FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE l.relation = 'orders'::regclass ORDER BY a.backend_start;
+
+SELECT pid, pg_blocking_pids(pid) AS blocked_by, left(query, 40) AS query
+FROM pg_stat_activity
+WHERE datname = 'pg3_mvcc' AND pid <> pg_backend_pid() ORDER BY backend_start;
+```
+
+```text
+  pid  |        mode         | granted | wait_event_type |                     query
+-------+---------------------+---------+-----------------+-----------------------------------------------
+ 10982 | AccessShareLock     | t       | Timeout         | SELECT pg_sleep(6)
+ 10988 | AccessExclusiveLock | f       | Lock            | VACUUM FULL orders
+ 10993 | AccessShareLock     | f       | Lock            | SELECT count(*) FROM orders WHERE order_id =
+(3 rows)
+
+  pid  | blocked_by |                  query
+-------+------------+------------------------------------------
+ 10982 | {}         | SELECT pg_sleep(6)
+ 10988 | {10982}    | VACUUM FULL orders
+ 10993 | {10988}    | SELECT count(*) FROM orders WHERE order_
+(3 rows)
+```
+
+C의 조회(`AccessShareLock`)는 A의 잠금과 충돌하지 않는다. 그런데도 `granted = f`로 기다린다. 막는 쪽(`blocked_by`)이 A가 아니라 아직 잠금을 얻지도 못한 `VACUUM FULL`이다. PostgreSQL 잠금은 줄을 선 순서대로 준다. 배타 잠금이 줄에 서는 순간, 그 뒤에 오는 모든 요청은 배타 잠금이 끝날 때까지 기다린다. 결과는 이랬다.
+
+```text
+VACUUM
+Time: 8174.846 ms (00:08.175)
+ count
+-------
+     1
+(1 row)
+
+Time: 7161.869 ms (00:07.162)
+```
+
+기본 키로 행 하나 찾는 데 7초가 걸렸다. 운영에서 이 사이에 들어온 요청은 전부 이렇게 쌓이고, 연결 풀이 바닥나 장애가 된다. 아래 그림에서 다음을 누르면 대기열이 생기는 순서를 볼 수 있다.
+
+<SequenceDiagram
+  caption="VACUUM FULL 한 줄이 모든 조회를 세운다"
+  actors={[
+    { id: "a", label: "세션 A" },
+    { id: "t", label: "orders 잠금" },
+    { id: "b", label: "VACUUM FULL" },
+    { id: "c", label: "세션 C" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "t",
+      label: "AccessShare",
+      title: "A가 읽는 트랜잭션을 열었다",
+      detail: "SELECT는 AccessShareLock을 잡고, 트랜잭션이 끝날 때까지 놓지 않는다. 느린 리포트 쿼리나 열어 둔 트랜잭션이 이렇다.",
+    },
+    {
+      from: "b",
+      to: "t",
+      label: "AccessExclusive?",
+      title: "VACUUM FULL이 줄을 선다",
+      detail: "배타 잠금은 A와 충돌하니 기다린다. 아직 아무것도 시작하지 않았다.",
+    },
+    {
+      from: "c",
+      to: "t",
+      label: "AccessShare?",
+      title: "평범한 조회도 뒤에 선다",
+      detail: "C는 A와는 충돌하지 않지만, 앞에 줄 선 배타 잠금 요청과 충돌하니 그 뒤에서 기다린다.",
+    },
+    {
+      from: "a",
+      to: "t",
+      label: "COMMIT",
+      title: "A가 끝나야 줄이 움직인다",
+      detail: "이제 VACUUM FULL이 잠금을 얻고 테이블을 새로 쓴다. C는 계속 기다린다.",
+    },
+    {
+      from: "b",
+      to: "c",
+      label: "잠금 해제",
+      title: "다 끝나야 C가 실행된다",
+      detail: "C는 7초를 기다렸다. 테이블은 130MB에서 65MB로 줄었고, 파일 번호(relfilenode)도 바뀌었다.",
+      payload: " table | indexes\n-------+---------\n 65 MB | 28 MB",
+    },
+  ]}
+/>
+
+<Callout kind="warning" title="운영 중인 테이블에 VACUUM FULL을 바로 치지 않는다">
+`VACUUM FULL`(그리고 `CLUSTER`)은 끝날 때까지 그 테이블의 읽기와 쓰기를 모두 막고, 잠금을 얻으려고 기다리는 동안에도 뒤에 오는 요청을 전부 세운다. 테이블 크기만큼 디스크도 더 필요하다. 꼭 써야 하면 점검 시간에 하고, 그 세션에 `SET lock_timeout = '3s'`를 먼저 걸어 잠금을 바로 못 얻으면 포기하게 한다. 이미 줄이 생겼다면 `pg_cancel_backend`로 그 VACUUM FULL을 취소한다. 대기열이 바로 풀린다. 운영 중에는 아래의 pg_repack을 먼저 검토한다.
+</Callout>
+
+## 잠그지 않고 줄이는 방법
+
+pg_repack은 테이블을 잠그지 않고 다시 쓰는 확장이다(PostgreSQL 기본 기능이 아니라 따로 설치한다. Ubuntu에서는 PGDG 저장소의 `postgresql-16-repack` 패키지). 새 테이블을 만들어 행을 복사하는 동안, 원본에 트리거를 걸어 그 사이의 변경을 로그 테이블에 모은다. 복사가 끝나면 로그를 반영하고, 마지막에 아주 잠깐 배타 잠금을 잡아 두 테이블을 바꿔치기한다. 대가도 있다. 기본 키나 NOT NULL 유니크 인덱스가 있어야 하고, 테이블 크기만큼 디스크가 더 필요하며, 마지막 잠깐의 잠금도 앞의 대기열 문제를 똑같이 겪을 수 있다. 같은 일을 하는 pg_squeeze도 있다.
+
+```bash
+# 예시: shop DB의 orders를 온라인으로 다시 쓴다 (pg_repack 설치 후)
+sudo -u postgres pg_repack -d shop --table public.orders
+```
+
+인덱스만 부풀었다면 더 간단하다. `REINDEX ... CONCURRENTLY`(12부터)는 새 인덱스를 옆에 만들고 바꿔 넣어서, 쓰기를 막지 않는다.
+
+```sql
+-- 인덱스 잎 페이지가 얼마나 차 있는지
+SELECT index_size, avg_leaf_density, leaf_fragmentation FROM pgstatindex('orders_user_id_idx');
+REINDEX INDEX CONCURRENTLY orders_user_id_idx;
+SELECT index_size, avg_leaf_density, leaf_fragmentation FROM pgstatindex('orders_user_id_idx');
+```
+
+```text
+ index_size | avg_leaf_density | leaf_fragmentation
+------------+------------------+--------------------
+   12828672 |            55.99 |              42.83
+(1 row)
+
+REINDEX
+ index_size | avg_leaf_density | leaf_fragmentation
+------------+------------------+--------------------
+    7340032 |            85.38 |                  0
+(1 row)
+```
+
+잎 페이지가 평균 56%만 차 있던 인덱스가 85%로 다시 채워지며 12.8MB에서 7.3MB가 됐다. B-tree 기본 fillfactor가 90이라 다시 만들어도 100%는 되지 않는다.
+
+가장 좋은 방법은 애초에 이렇게 부풀지 않게 하는 것이다. 수백만 행을 한 번에 고치지 말고 1만~10만 행씩 나눠 고치면서 사이사이 VACUUM이 돌 틈을 주면, 빈자리를 재사용하며 크기가 거의 늘지 않는다. 대량 삭제가 정기적으로 있는 테이블(오래된 로그 지우기)은 [파티셔닝](/posts/db-replication-sharding)으로 나눠 두고 파티션을 통째로 `DROP`하는 편이 VACUUM보다 훨씬 싸다.
+
+## visibility map이 하는 일
+
+VACUUM이 하는 일이 하나 더 있다. 페이지의 모든 행이 모든 트랜잭션에게 보이는 상태(all-visible)면 visibility map(`_vm` 파일)에 비트를 켠다. 이 비트는 두 곳에서 쓰인다. 다음 VACUUM이 그 페이지를 건너뛰고, Index Only Scan이 힙 확인을 생략한다.
+
+`VACUUM FULL` 직후의 `orders`로 확인했다. `VACUUM FULL`은 테이블을 새로 쓰지만 visibility map은 채우지 않는다.
+
+```sql
+CREATE EXTENSION pg_visibility;
+SELECT * FROM pg_visibility_map_summary('orders');       -- all-visible 페이지 수
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM orders WHERE user_id = 42;
+
+VACUUM orders;
+SELECT * FROM pg_visibility_map_summary('orders');
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM orders WHERE user_id = 42;
+```
+
+```text
+ all_visible | all_frozen
+-------------+------------
+           0 |          0
+(1 row)
+
+ Aggregate  (cost=2842.52..2842.53 rows=1 width=8) (actual time=8.016..8.018 rows=1 loops=1)
+   Buffers: shared hit=18 read=989
+   ->  Bitmap Heap Scan on orders  (cost=12.15..2840.02 rows=997 width=0) (actual time=0.340..7.924 rows=1000 loops=1)
+         Recheck Cond: (user_id = 42)
+         Heap Blocks: exact=1000
+ Execution Time: 8.074 ms
+
+ all_visible | all_frozen
+-------------+------------
+        8334 |       8334
+(1 row)
+
+ Aggregate  (cost=24.36..24.38 rows=1 width=8) (actual time=0.149..0.150 rows=1 loops=1)
+   Buffers: shared hit=5
+   ->  Index Only Scan using orders_user_id_idx on orders  (cost=0.42..21.87 rows=997 width=0) (actual time=0.019..0.089 rows=1000 loops=1)
+         Index Cond: (user_id = 42)
+         Heap Fetches: 0
+ Execution Time: 0.175 ms
+```
+
+인덱스에는 `user_id`가 다 있으니 원래 힙을 안 봐도 된다. 하지만 인덱스는 행 버전의 생사를 모른다. visibility map이 비어 있으면 플래너는 행마다 힙을 확인해야 하니 Bitmap Heap Scan으로 1,007페이지를 읽었다. VACUUM 뒤에는 Index Only Scan으로 바뀌고 `Heap Fetches: 0`, 5페이지로 끝났다. 8ms에서 0.18ms다. 커버링 인덱스를 만들었는데 Index Only Scan이 안 나오거나 `Heap Fetches`가 크다면, 인덱스보다 VACUUM을 먼저 의심한다. 자세한 인덱스 이야기는 [인덱스 글](/posts/db-index)에 있다.
+
+## 인덱스를 건드리지 않는 HOT 업데이트
+
+처음 `UPDATE`에서 인덱스가 두 배가 된 건, 새 버전이 다른 페이지에 들어가 인덱스마다 새 항목이 필요했기 때문이다. 인덱스가 다섯 개면 행 하나 고칠 때 인덱스 다섯 곳을 고친다. 이걸 피하는 장치가 HOT(Heap-Only Tuple) 업데이트다. 두 조건을 만족하면 인덱스를 전혀 건드리지 않는다.
+
+1. 인덱스에 들어 있는 열을 하나도 바꾸지 않는다.
+2. 새 버전이 옛 버전과 같은 페이지에 들어간다.
+
+이때 인덱스는 계속 옛 버전의 줄 포인터를 가리키고, 옛 버전에서 새 버전으로 이어지는 고리(HOT chain)를 페이지 안에서 따라간다. 페이지 정리 때 옛 버전을 지우면 그 줄 포인터는 새 버전을 가리키는 이정표(redirect)로 바뀐다. 아래 그림에서 다음을 누르면 이 고리가 생기고 정리되는 과정을 볼 수 있다.
+
+<AlgoTrace
+  caption="재고(stock)만 바꾼 UPDATE: 같은 페이지 안에서 끝난다"
+  memoryLabel="인덱스가 가리키는 곳"
+  cells={["lp1 v1", "lp2", "lp3", "lp4 v2", "빈자리"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["(0,1)"], caption: "books_pkey 인덱스는 1번 책의 위치 (0,1)을 안다. 페이지에 빈자리가 남아 있다(fillfactor 90)." },
+    { pointer: 3, found: [3], memory: ["(0,1)"], caption: "stock만 바꾸니 인덱스 열은 그대로다. 새 버전 v2를 같은 페이지의 lp4에 쓴다. 인덱스는 손대지 않는다." },
+    { pointer: 0, found: [3], memory: ["(0,1) → lp4"], caption: "인덱스로 찾아오면 lp1의 v1에 도착하고, v1의 t_ctid를 따라 v2로 간다. 이것이 HOT 고리다." },
+    { pointer: 0, found: [3], memory: ["(0,1) 이정표"], caption: "페이지 정리가 v1을 지운다. lp1은 데이터 없이 lp4를 가리키는 redirect로 남는다. 인덱스는 여전히 고칠 필요가 없다." },
+  ]}
+/>
+
+fillfactor가 여기서 쓰인다. 같은 `books` 10만 행을 fillfactor 100과 90으로 만들고, 인덱스가 없는 `stock`만 1만 행 바꿨다.
+
+```sql
+-- price에도 인덱스가 있다
+CREATE INDEX books_price_idx ON books (price);
+CREATE TABLE books_ff90 (LIKE books INCLUDING ALL) WITH (fillfactor = 90);
+-- (두 테이블에 같은 10만 행을 넣고 VACUUM ANALYZE)
+
+UPDATE books      SET stock = stock - 1 WHERE book_id % 10 = 0;
+UPDATE books_ff90 SET stock = stock - 1 WHERE book_id % 10 = 0;
+
+SELECT relname, n_tup_upd, n_tup_hot_upd,
+       round(100.0 * n_tup_hot_upd / n_tup_upd, 1) AS hot_pct
+FROM pg_stat_user_tables WHERE relname IN ('books', 'books_ff90') ORDER BY relname;
+```
+
+```text
+  relname   | n_tup_upd | n_tup_hot_upd | hot_pct
+------------+-----------+---------------+---------
+ books      |     10000 |             0 |     0.0
+ books_ff90 |     10000 |         10000 |   100.0
+(2 rows)
+```
+
+꽉 찬 페이지에서는 하나도 HOT이 안 됐고, 10% 빈자리를 남긴 쪽은 전부 HOT이었다. 같은 `books_ff90`에서 인덱스가 걸린 `price`를 바꾸면 빈자리가 있어도 HOT이 안 된다.
+
+```sql
+UPDATE books_ff90 SET price = price + 100 WHERE book_id % 10 = 1;
+SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'books_ff90';
+```
+
+```text
+ n_tup_upd | n_tup_hot_upd
+-----------+---------------
+     20000 |         10000
+(1 row)
+```
+
+새로 고친 1만 건은 HOT 수가 늘지 않았다. 그래서 "자주 바뀌는 열에는 인덱스를 함부로 걸지 않는다"가 실무 규칙이 된다. `updated_at`에 인덱스를 걸면 그 테이블의 모든 `UPDATE`가 HOT을 잃는다. 16부터는 BRIN처럼 요약만 하는 인덱스의 열은 바꿔도 HOT이 된다. 처음 실험의 두 번째 `UPDATE`(VACUUM 뒤)가 HOT 80건에 그친 것도 같은 원리다. 빈자리는 앞쪽 페이지에, 바꿀 행은 뒤쪽 꽉 찬 페이지에 있었다. 빈자리가 같은 페이지에 있어야 한다.
+
+## autovacuum은 언제 도는가
+
+autovacuum launcher는 `autovacuum_naptime`(기본 1분)마다 DB를 돌며 테이블별로 이 식을 계산한다.
+
+```text
+VACUUM 기준  = autovacuum_vacuum_threshold  + autovacuum_vacuum_scale_factor  × reltuples
+ANALYZE 기준 = autovacuum_analyze_threshold + autovacuum_analyze_scale_factor × reltuples
+```
+
+죽은 행 수(`n_dead_tup`)가 VACUUM 기준을 넘으면 VACUUM, 마지막 ANALYZE 이후 바뀐 행 수가 ANALYZE 기준을 넘으면 ANALYZE를 한다. `reltuples`는 `pg_class`에 저장된 행 수 추정치다. 기본값은 이렇다.
+
+```sql
+SELECT name, setting FROM pg_settings
+WHERE name ~ '^autovacuum_(vacuum|analyze)_(threshold|scale_factor)$|^autovacuum_naptime$|^autovacuum_max_workers$'
+ORDER BY name;
+```
+
+```text
+              name               | setting
+---------------------------------+---------
+ autovacuum_analyze_scale_factor | 0.1
+ autovacuum_analyze_threshold    | 50
+ autovacuum_max_workers          | 3
+ autovacuum_naptime              | 60
+ autovacuum_vacuum_scale_factor  | 0.2
+ autovacuum_vacuum_threshold     | 50
+(6 rows)
+```
+
+100만 행이면 VACUUM 기준은 50 + 0.2 × 1,000,000 = 200,050, ANALYZE 기준은 100,050이다. 실제로 맞는지 봤다. `orders`의 autovacuum을 켜고 15만 건을 고친 뒤 1분 넘게 기다렸다.
+
+```sql
+ALTER TABLE orders SET (autovacuum_enabled = true);
+UPDATE orders SET status = 'paid' WHERE order_id <= 150000;
+-- 75초 뒤
+SELECT n_live_tup, n_dead_tup, last_autovacuum, autovacuum_count
+FROM pg_stat_user_tables WHERE relname = 'orders';
+```
+
+```text
+ n_live_tup | n_dead_tup | last_autovacuum | autovacuum_count
+------------+------------+-----------------+------------------
+    1000000 |     150000 |                 |                0
+(1 row)
+```
+
+```text
+2026-10-17 16:25:48.865 UTC [11143] LOG:  automatic analyze of table "pg3_mvcc.public.orders"
+```
+
+15만은 ANALYZE 기준(100,050)은 넘고 VACUUM 기준(200,050)은 못 넘는다. 그래서 로그에는 ANALYZE만 찍혔고 VACUUM은 돌지 않았다. 6만 건을 더 고쳐 21만이 되자 1분 안에 VACUUM이 돌았고, `log_autovacuum_min_duration = 0`으로 해 둔 로그에 이렇게 남았다.
+
+```text
+2026-10-17 16:27:48.929 UTC [11632] LOG:  automatic vacuum of table "pg3_mvcc.public.orders": index scans: 1
+	pages: 0 removed, 10083 remain, 3501 scanned (34.72% of total)
+	tuples: 209920 removed, 896930 remain, 0 are dead but not yet removable
+	removable cutoff: 129001, which was 0 XIDs old when operation ended
+	new relfrozenxid: 128998, which is 1 XIDs ahead of previous value
+	frozen: 0 pages from table (0.00% of total) had 0 tuples frozen
+	index scan needed: 1751 pages from table (17.37% of total) had 209960 dead item identifiers removed
+	system usage: CPU: user: 0.16 s, system: 0.02 s, elapsed: 0.36 s
+```
+
+`pages:` 줄을 보면 테이블의 35%만 읽었다. visibility map에서 all-visible인 페이지는 건너뛴 것이다. `tuples:` 줄의 `dead but not yet removable`은 죽었지만 아직 누군가 볼 수 있어 못 치운 행이고, 0이 아니면 뒤에서 볼 무언가가 VACUUM을 막고 있다. `removable cutoff`는 이 XID보다 먼저 죽은 행만 치울 수 있다는 경계, `new relfrozenxid`는 얼리기 경계다. 둘 다 뒤에서 다시 나온다.
+
+INSERT만 있는 테이블은 죽은 행이 안 생기니 예전에는 VACUUM이 거의 안 돌았고, 그래서 visibility map이 비어 Index Only Scan을 못 쓰고, 나중에 얼리기를 한꺼번에 몰아 했다. 13부터 생긴 `autovacuum_vacuum_insert_threshold`(1000)와 `autovacuum_vacuum_insert_scale_factor`(0.2)가 이걸 고쳤다. 마지막 VACUUM 이후 들어온 행 수로도 VACUUM을 건다.
+
+autovacuum은 일부러 천천히 돈다. 일정량(`autovacuum_vacuum_cost_limit`, -1이면 `vacuum_cost_limit` 200)의 I/O 비용을 쓰면 `autovacuum_vacuum_cost_delay`(2ms)만큼 쉰다. 기본값은 작은 서버 기준이라, SSD를 쓰는 큰 DB에서는 autovacuum이 쓰기 속도를 못 따라가는 일이 생긴다. 그럴 때 `autovacuum_vacuum_cost_limit`을 1000~2000으로, `autovacuum_max_workers`(재시작 필요)를 늘린다. 비용 한도는 worker 전체가 나눠 쓴다는 점도 기억한다.
+
+기준이 맞는지 직접 계산해 보자. `reltuples`가 -1이면 한 번도 VACUUM이나 ANALYZE를 안 한 테이블인데(14부터), autovacuum은 이걸 0으로 본다.
+
+<CodePlayground
+  caption="autovacuum이 이 테이블을 VACUUM할까"
+  functionName="autovacuumCheck"
+  initialCode={`function autovacuumCheck(reltuples, deadTuples, threshold = 50, scaleFactor = 0.2) {
+  // 반환: [VACUUM 기준, 지금 VACUUM 대상인지]
+  // 죽은 행이 기준보다 "많아야" 대상이다
+  // reltuples가 음수(-1)면 0으로 본다
+  return [0, false];
+}`}
+  solution={`function autovacuumCheck(reltuples, deadTuples, threshold = 50, scaleFactor = 0.2) {
+  const tuples = reltuples < 0 ? 0 : reltuples;   // 한 번도 분석 안 한 테이블
+  const limit = threshold + scaleFactor * tuples;
+  return [limit, deadTuples > limit];
+}`}
+  tests={[
+    { label: "100만 행, 15만 건 수정", args: [1000000, 150000], expected: [200050, false] },
+    { label: "100만 행, 21만 건 수정", args: [1000000, 210000], expected: [200050, true] },
+    { label: "scale 0.01, threshold 1000", args: [1000000, 15000, 1000, 0.01], expected: [11000, true] },
+    { label: "작은 테이블 100행", args: [100, 60], expected: [70, false] },
+    { label: "reltuples = -1", args: [-1, 60], expected: [50, true] },
+    { label: "5천만 행, 500만 건 죽음", args: [50000000, 5000000], expected: [10000050, false] },
+  ]}
+/>
+
+마지막 테스트가 기본값의 약점이다. 5천만 행 테이블은 죽은 행이 1천만 개가 넘을 때까지 VACUUM이 안 돈다. 그 사이 테이블은 20% 넘게 부푼다.
+
+## 테이블마다 기준을 다르게
+
+큰 테이블은 비율 대신 고정 개수에 가깝게 기준을 낮춘다. 테이블 단위 저장 옵션으로 덮어쓴다.
+
+```sql
+-- 죽은 행이 1,000 + 1%를 넘으면 VACUUM
+ALTER TABLE orders SET (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_threshold = 1000);
+SELECT relname, reloptions FROM pg_class WHERE relname = 'orders';
+```
+
+```text
+ relname |                               reloptions
+---------+------------------------------------------------------------------------
+ orders  | {autovacuum_vacuum_scale_factor=0.01,autovacuum_vacuum_threshold=1000}
+(1 row)
+```
+
+되돌릴 때는 `ALTER TABLE orders RESET (autovacuum_vacuum_scale_factor, autovacuum_vacuum_threshold)`다. 재고처럼 행은 적은데 끊임없이 바뀌는 테이블은 반대로 VACUUM이 아주 자주 돌아도 싸니 그대로 두거나 비율을 더 낮춘다. 대량 적재나 대량 수정 직후에는 autovacuum을 기다리지 말고 직접 `VACUUM ANALYZE`를 한 번 치는 게 좋다. `pg_stat_user_tables`에서 `n_dead_tup`이 계속 크고 `last_autovacuum`이 오래전인 테이블이 있으면 기준이 너무 높거나, autovacuum이 따라가지 못하거나, 다음 절의 무언가가 막고 있는 것이다.
+
+## VACUUM을 막는 것들
+
+VACUUM은 "이 XID보다 먼저 죽은 행은 아무도 못 본다"는 경계(removable cutoff)까지만 치운다. 경계는 지금 살아 있는 스냅샷 중 가장 오래된 것이 정한다. 그러니 오래된 스냅샷 하나가 DB 전체의 청소를 멈춘다. 경계를 붙잡는 것은 네 종류다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="무엇이든 가장 오래된 하나가 경계를 정한다"
+  nodes={[
+    { id: "long", label: "긴 트랜잭션", sub: "리포트, 배치", x: 90, y: 40, w: 130 },
+    { id: "idle", label: "idle in tx", sub: "열고 안 닫음", x: 310, y: 40, w: 130 },
+    { id: "prep", label: "준비된 트랜잭션", sub: "PREPARE", x: 90, y: 140, w: 140 },
+    { id: "slot", label: "복제 슬롯", sub: "standby 피드백", x: 310, y: 140, w: 130 },
+    { id: "cut", label: "removable cutoff", sub: "가장 오래된 xmin", x: 200, y: 215, w: 170 },
+    { id: "vac", label: "VACUUM", sub: "경계 전만 치움", x: 200, y: 280, w: 150, h: 34 },
+  ]}
+  edges={[
+    { from: "long", to: "cut" },
+    { from: "idle", to: "cut" },
+    { from: "prep", to: "cut" },
+    { from: "slot", to: "cut" },
+    { from: "cut", to: "vac", label: "멈춤" },
+  ]}
+/>
+
+직접 만들어 봤다. 세션 하나는 `REPEATABLE READ` 트랜잭션을 열고 조회 한 번 한 뒤 그대로 두었고(idle in transaction), 다른 세션은 2단계 커밋의 `PREPARE TRANSACTION`만 해 두었다(`max_prepared_transactions`를 5로 켜고 재시작한 실험용 클러스터). 복제 슬롯도 하나 만들었다. 그 상태에서 5만 건을 고치고 VACUUM을 돌렸다.
+
+```sql
+-- 세션 A: 트랜잭션을 열어 둔 채로 둔다
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT count(*) FROM users;
+
+-- 세션 B: 준비만 하고 커밋도 롤백도 안 한 트랜잭션
+BEGIN;
+UPDATE books SET stock = stock + 1 WHERE book_id = 1;
+PREPARE TRANSACTION 'pay-1001';
+
+-- 세션 C
+SELECT pg_create_physical_replication_slot('standby1', true);
+UPDATE orders SET status = 'shipped' WHERE order_id <= 50000;
+VACUUM (VERBOSE) orders;
+```
+
+```text
+tuples: 0 removed, 922813 remain, 50000 are dead but not yet removable
+removable cutoff: 129001, which was 2 XIDs old when operation ended
+```
+
+`50000 are dead but not yet removable`이 막힌 상태다. 이제 누가 막는지 찾는 쿼리 세 개다.
+
+```sql
+-- 1. 스냅샷을 쥐고 있는 연결 (가장 오래된 것부터)
+SELECT pid, state, backend_xmin, age(backend_xmin) AS xmin_age,
+       now() - xact_start AS xact_age, left(query, 30) AS query
+FROM pg_stat_activity
+WHERE backend_xmin IS NOT NULL AND pid <> pg_backend_pid()
+ORDER BY age(backend_xmin) DESC;
+
+-- 2. 준비된 채 남은 트랜잭션
+SELECT gid, transaction, age(transaction) AS xid_age, prepared FROM pg_prepared_xacts;
+
+-- 3. 복제 슬롯 (xmin은 행 정리를, restart_lsn은 WAL 삭제를 막는다)
+SELECT slot_name, slot_type, active, xmin, catalog_xmin, restart_lsn,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained_wal
+FROM pg_replication_slots;
+```
+
+```text
+  pid  |        state        | backend_xmin | xmin_age |    xact_age     |            query
+-------+---------------------+--------------+----------+-----------------+-----------------------------
+ 11698 | idle in transaction |       129001 |        2 | 00:00:01.526102 | SELECT count(*) FROM users;
+(1 row)
+
+   gid    | transaction | xid_age |           prepared
+----------+-------------+---------+-------------------------------
+ pay-1001 |      129001 |       2 | 2026-10-17 16:28:10.408815+00
+(1 row)
+
+ slot_name | slot_type | active | xmin | catalog_xmin | restart_lsn | retained_wal
+-----------+-----------+--------+------+--------------+-------------+--------------
+ standby1  | physical  | f      |      |              | 0/6D282160  | 539 MB
+(1 row)
+```
+
+실험이라 `xmin_age`가 2지만, 운영에서 이 값이 수백만이고 `xact_age`가 몇 시간이면 범인이다. 세션 A를 `COMMIT`해도 VACUUM은 여전히 `50000 are dead but not yet removable`이었다. 준비된 트랜잭션이 남아 있어서다. 이건 연결이 끊겨도, 서버를 재시작해도 남는다. `ROLLBACK PREPARED 'pay-1001'`을 하자 비로소 치워졌다.
+
+```text
+tuples: 50000 removed, 830405 remain, 0 are dead but not yet removable
+removable cutoff: 129004, which was 0 XIDs old when operation ended
+```
+
+복제 슬롯은 이 실험에서 행 정리를 막지는 않았다(`xmin`이 비어 있다). 대신 아무도 안 받아 가는 슬롯이라 WAL 539MB를 지우지 못하게 붙잡고 있다. 연결된 복제본이 `hot_standby_feedback = on`이면 슬롯의 `xmin`에 복제본에서 실행 중인 쿼리의 스냅샷이 올라와, 복제본의 긴 쿼리가 프라이머리의 VACUUM을 막는다. 논리 복제 슬롯은 `catalog_xmin`으로 시스템 카탈로그 정리를 막는다. 안 쓰는 슬롯은 `SELECT pg_drop_replication_slot('standby1')`로 지운다.
+
+예방 설정은 [트랜잭션 격리 글](/posts/db-transaction-isolation)에서 본 `idle_in_transaction_session_timeout`, `statement_timeout`이다. 슬롯이 WAL을 무한정 쌓지 않게 하는 `max_slot_wal_keep_size`(13부터)도 있다. 2단계 커밋을 안 쓰면 `max_prepared_transactions = 0`(기본값)으로 두는 게 가장 안전하다.
+
+## 얼마나 부풀었는지 재기
+
+부풀림(bloat)은 결국 "필요한 것보다 얼마나 큰가"다. 정확히 재려면 `pgstattuple`로 테이블을 다 읽는다. 큰 테이블에서는 visibility map을 이용해 all-visible 페이지는 건너뛰는 `pgstattuple_approx`가 훨씬 싸다.
+
+```sql
+SELECT table_len, tuple_percent, dead_tuple_percent, free_space, free_percent
+FROM pgstattuple('orders');
+```
+
+```text
+ table_len | tuple_percent | dead_tuple_percent | free_space | free_percent
+-----------+---------------+--------------------+------------+--------------
+  82599936 |         77.48 |                  0 |   14309824 |        17.32
+(1 row)
+```
+
+`dead_tuple_percent`는 아직 안 치운 죽은 행, `free_percent`는 치웠지만 재사용을 기다리는 빈자리다. 둘을 더한 게 부풀림이다. `pgstattuple_approx`도 빈자리를 17.28%로 거의 같게 냈다. 여기서는 17%로 걱정할 수준이 아니다. `UPDATE`가 꾸준한 테이블에서 20~30%는 정상 범위이고, 그 빈자리가 다음 쓰기를 받아 준다. 50%를 넘고 줄지 않으면 원인(막힌 VACUUM, 한 번의 대량 변경)부터 찾고, 그다음 pg_repack을 검토한다. 운영에서 이 확장을 못 쓰면 통계(`pg_class.reltuples`, 평균 행 길이)로 크기를 추정하는 쿼리들이 있는데, 어디까지나 추정치다.
+
+## 32비트 트랜잭션 번호가 한 바퀴 돌면
+
+여기부터는 부풀림보다 훨씬 무서운 이야기다. `xmin`, `xmax`에 적히는 트랜잭션 번호(XID)는 32비트다. 약 42억 개를 쓰면 다시 처음으로 돌아온다. PostgreSQL은 XID를 원형으로 비교한다. 지금 XID 기준으로 뒤쪽 약 21억(2^31)개는 과거, 앞쪽 21억 개는 미래로 본다. 그래서 어떤 행의 `xmin`이 21억 트랜잭션 넘게 묵으면, 그 행이 갑자기 "미래에 만들어진 행"이 되어 보이지 않게 된다. 데이터가 지워진 게 아니라 안 보이는 것인데, 사용자 입장에서는 데이터가 사라진 것과 같다. 아래 그림은 XID 원을 8칸(한 칸 약 5억)으로 나눈 것이다.
+
+<AlgoTrace
+  caption="XID 원 (한 칸 ≈ 5억 트랜잭션)"
+  memoryLabel="현재 XID 기준"
+  cells={["0", "5억", "10억", "15억", "20억", "25억", "30억", "35억"]}
+  steps={[
+    { pointer: 1, found: [1], memory: ["행 xmin: 5억", "과거: 보인다"], caption: "XID 5억 즈음에 주문 행 하나가 들어갔다. 지금 XID는 그 근처라, 이 행은 과거의 것이고 보인다." },
+    { pointer: 4, found: [1], memory: ["나이 15억", "아직 과거"], caption: "15억 트랜잭션이 지났다. 행의 나이(age)가 15억이다. 뒤쪽 21억 안이니 아직 과거로 보인다." },
+    { pointer: 6, memory: ["나이 25억", "미래로 보임"], caption: "얼리지 않은 채 25억이 지나면, 뒤쪽 21억 밖으로 밀려나 이 행의 xmin은 미래가 된다. 행이 보이지 않는다." },
+    { pointer: 2, found: [1], memory: ["xmin: frozen", "언제나 과거"], caption: "그래서 오래된 행은 미리 얼린다(freeze). 얼린 행은 XID 비교 없이 언제나 과거로 본다. 원을 몇 바퀴 돌아도 안전하다." },
+  ]}
+/>
+
+PostgreSQL은 이 일이 일어나게 두지 않는다. 남은 여유가 4천만 트랜잭션 아래로 내려가면 경고를 내기 시작하고, 300만 아래가 되면 새 XID를 받는 명령(쓰기)을 아예 거부한다(16 기준). 이 상태가 되면 DB가 읽기 전용이 되고, VACUUM으로 얼리기를 끝낼 때까지 서비스가 멈춘다. 큰 DB에서는 몇 시간이 걸린다. 쓰기가 많은 서비스라면 초당 수천 트랜잭션이 21억을 소진하는 데 몇 주면 충분하다.
+
+## 얼리기와 랩어라운드 방지 VACUUM
+
+얼리기(freeze)는 행 머리말에 "이 행을 만든 트랜잭션은 아주 오래전에 커밋됐다"는 비트를 켜는 것이다. 9.4부터는 `xmin` 값은 그대로 두고 비트만 켠다. `books`의 행을 얼려 보면 이렇다.
+
+```sql
+SELECT lp, t_xmin, t_infomask, raw_flags
+FROM heap_page_items(get_raw_page('books', 0)) h,
+     LATERAL heap_tuple_infomask_flags(h.t_infomask, h.t_infomask2)
+WHERE lp = 2;
+
+VACUUM (FREEZE) books;      -- 지금 얼릴 수 있는 행은 전부 얼린다
+
+SELECT lp, t_xmin, raw_flags, combined_flags
+FROM heap_page_items(get_raw_page('books', 0)) h,
+     LATERAL heap_tuple_infomask_flags(h.t_infomask, h.t_infomask2)
+WHERE lp = 2;
+```
+
+```text
+ lp | t_xmin | t_infomask |                        raw_flags
+----+--------+------------+----------------------------------------------------------
+  2 | 128984 |       2306 | {HEAP_HASVARWIDTH,HEAP_XMIN_COMMITTED,HEAP_XMAX_INVALID}
+(1 row)
+
+ lp | t_xmin |                                 raw_flags                                  |   combined_flags
+----+--------+----------------------------------------------------------------------------+--------------------
+  2 | 128984 | {HEAP_HASVARWIDTH,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID,HEAP_XMAX_INVALID} | {HEAP_XMIN_FROZEN}
+(1 row)
+```
+
+`t_xmin`은 128984 그대로인데, `XMIN_COMMITTED`와 `XMIN_INVALID`를 함께 켠 조합이 `HEAP_XMIN_FROZEN`이다. 이제 이 행은 XID 비교 없이 늘 보인다.
+
+테이블마다 "이보다 오래된 XID는 다 얼렸다"는 경계가 `pg_class.relfrozenxid`이고, DB 안 모든 테이블의 최솟값이 `pg_database.datfrozenxid`다. `age()`가 그 경계가 몇 트랜잭션 전인지 알려 준다. 운영에서 늘 보는 두 쿼리다.
+
+```sql
+-- DB별 나이: 이 값이 21억에 다가가면 위험하다
+SELECT datname, datfrozenxid, age(datfrozenxid) FROM pg_database ORDER BY 3 DESC;
+
+-- 테이블별 나이: 큰 테이블부터 확인
+SELECT relname, age(relfrozenxid) AS xid_age, pg_size_pretty(pg_table_size(oid)) AS size
+FROM pg_class WHERE relkind IN ('r', 'm', 't')
+ORDER BY age(relfrozenxid) DESC LIMIT 10;
+```
+
+```text
+  datname  | datfrozenxid |  age
+-----------+--------------+--------
+ postgres  |          722 | 128287
+ pg3_shop  |          722 | 128287
+ pg3_bench |          722 | 128287
+ pg3_mvcc  |          722 | 128287
+ ...
+```
+
+평소 VACUUM은 나이가 `vacuum_freeze_min_age`(5천만)를 넘은 행을 지나가는 김에 얼린다. 하지만 visibility map 덕에 건너뛴 페이지의 행은 못 얼린다. 그래서 테이블 나이가 `vacuum_freeze_table_age`(1억 5천만)를 넘으면 건너뛰지 않고 모든 페이지를 보는 공격적(aggressive) VACUUM을 한다. 그래도 나이가 `autovacuum_freeze_max_age`(2억)를 넘으면, autovacuum은 그 테이블을 꺼 두었더라도, 아무도 안 고친 테이블이라도 강제로 VACUUM한다. 이게 랩어라운드 방지 VACUUM이다.
+
+실험용 클러스터에서 `autovacuum_freeze_max_age`를 최솟값 10만으로 낮추고 재시작했다. 모든 DB의 나이가 12만이 넘은 상태였다.
+
+```text
+2026-10-17 16:29:00.581 UTC [11883] LOG:  automatic aggressive vacuum to prevent wraparound of table "postgres.pg_catalog.pg_statistic": index scans: 0
+...
+2026-10-17 16:29:53.527 UTC [11944] LOG:  automatic aggressive vacuum to prevent wraparound of table "pg3_bench.public.pgbench_accounts": index scans: 0
+	pages: 0 removed, 16669 remain, 16669 scanned (100.00% of total)
+	tuples: 0 removed, 1000000 remain, 0 are dead but not yet removable
+	new relfrozenxid: 79041, which is 78260 XIDs ahead of previous value
+	frozen: 15752 pages from table (94.50% of total) had 117746 tuples frozen
+	WAL usage: 31505 records, 15754 full page images, 127462074 bytes
+	system usage: CPU: user: 0.19 s, system: 0.28 s, elapsed: 4.90 s
+```
+
+1분 사이에 이런 로그가 655줄 찍혔다. 시스템 카탈로그까지 전부 대상이다. `pgbench_accounts`는 그동안 아무도 안 건드린 테이블인데도 100% 스캔했고, 페이지 94.5%를 고치며 WAL 127MB(대부분 전체 페이지 기록)를 만들었다. 운영에서 수백 GB짜리 이력 테이블에 이게 걸리면 몇 시간 동안 I/O를 쓰고 WAL을 쏟아낸다. 그리고 이 VACUUM은 사용자가 취소해도 곧 다시 시작한다. 14부터는 나이가 `vacuum_failsafe_age`(16억)를 넘으면 VACUUM이 비용 지연을 무시하고 인덱스 정리도 건너뛰며 얼리기만 서두르는 비상 모드로 들어간다.
+
+그래서 할 일은 둘이다. 나이를 감시해 `autovacuum_freeze_max_age`의 절반쯤에서 알림을 받고, 쓰기가 적은 시간에 큰 테이블을 미리 `VACUUM (FREEZE)`해 둔다. 그리고 앞 절의 VACUUM을 막는 것들을 없앤다. 오래된 트랜잭션이 있으면 얼리기도 그 경계를 넘지 못한다. MySQL InnoDB는 트랜잭션 번호가 48비트라 이런 랩어라운드 관리가 없다. 대신 undo 로그를 치우는 purge가 오래 열린 트랜잭션 때문에 밀리면 비슷하게 부푼다.
+
+## 통계가 낡으면 계획이 틀린다
+
+autovacuum은 ANALYZE도 맡는다. ANALYZE는 테이블에서 표본(기본 `default_statistics_target` 100 × 300 = 3만 행)을 뽑아 열마다 자주 나오는 값과 비율, 값의 분포를 `pg_statistic`에 저장한다. 플래너는 이걸 보고 몇 행이 나올지 추정한다. 주문 30%를 취소로 바꾼 직후, ANALYZE 전에 실행 계획을 봤다.
+
+```sql
+SELECT n_distinct, most_common_vals, most_common_freqs
+FROM pg_stats WHERE tablename = 'orders' AND attname = 'status';
+
+UPDATE orders SET status = 'cancelled' WHERE order_id % 10 < 3;   -- 30만 건
+EXPLAIN ANALYZE SELECT * FROM orders WHERE status = 'cancelled';
+```
+
+```text
+ n_distinct | most_common_vals | most_common_freqs
+------------+------------------+-------------------
+          1 | {paid}           | {1}
+(1 row)
+
+   ->  Parallel Seq Scan on orders  (cost=0.00..25155.26 rows=1 width=33) (actual time=19.379..75.902 rows=100000 loops=3)
+         Filter: (status = 'cancelled'::text)
+```
+
+통계에는 `paid`만 있으니 플래너는 `cancelled`를 1행으로 추정했다(`rows=1`). 실제는 30만 행(`rows=100000 loops=3`)이다. ANALYZE 후에는 맞는다.
+
+```sql
+ANALYZE orders;
+EXPLAIN ANALYZE SELECT * FROM orders WHERE status = 'cancelled';
+```
+
+```text
+ n_distinct | most_common_vals |   most_common_freqs
+------------+------------------+------------------------
+          2 | {paid,cancelled} | {0.7040667,0.29593334}
+(1 row)
+
+ Seq Scan on orders  (cost=0.00..31666.00 rows=295933 width=34) (actual time=1.583..107.425 rows=300000 loops=1)
+```
+
+이 단순한 쿼리는 어차피 순차 스캔이라 시간 차이가 없었다. 하지만 이 결과를 다른 테이블과 조인한다면, 1행으로 믿은 플래너는 바깥 1행에 안쪽을 인덱스로 찾는 Nested Loop를 고르고, 실제로는 30만 번 반복한다. 대량 적재나 변경 직후 `ANALYZE`를 직접 치는 이유다. 분포가 치우친 열은 `ALTER TABLE orders ALTER status SET STATISTICS 500`으로 표본을 늘리고, 서로 연관된 열(도시와 우편번호)은 `CREATE STATISTICS`로 함께 본다. 실행 계획 읽는 법은 [쿼리 튜닝 글](/posts/sql-query-tuning)에 있다.
+
+## 다시 처음 장면으로
+
+100만 건 `UPDATE` 뒤 테이블이 두 배가 된 건 정상이다. 옛 버전 100만 개가 남았고, VACUUM이 그 자리를 비워도 파일은 줄지 않는다. 다음 쓰기가 그 자리를 채울 테니 놔두거나, 정말 줄여야 하면 pg_repack으로 잠그지 않고 다시 쓴다. 다음에는 1만~10만 건씩 나눠 고치고, 끝나면 `VACUUM ANALYZE`를 친다. 그리고 평소에는 세 가지를 지켜본다. 죽은 행이 줄지 않는 테이블(`n_dead_tup`), 오래 열린 트랜잭션과 남은 준비된 트랜잭션·슬롯(`backend_xmin`), DB의 나이(`age(datfrozenxid)`). 이 감시를 대시보드와 알림으로 만드는 이야기는 [운영 글](/posts/postgres-operations)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### PostgreSQL에서 UPDATE를 하면 테이블이 왜 커지나
+
+`UPDATE`는 행을 덮어쓰지 않고 새 버전을 쓰며, 옛 버전은 다른 트랜잭션이 볼 수 있으니 죽은 행으로 남기 때문이다. 같은 페이지에 자리가 없으면 새 버전은 다른 페이지로 가고, 인덱스마다 새 항목도 생긴다. 100만 행 전체를 고치면 테이블과 인덱스가 거의 두 배가 된다. 죽은 행의 자리는 VACUUM이 비워 다음 쓰기가 재사용한다.
+
+### VACUUM과 VACUUM FULL의 차이는
+
+VACUUM은 죽은 행과 그것을 가리키는 인덱스 항목을 지워 빈자리를 재사용 가능하게 만들고, visibility map과 얼리기를 처리한다. 일반 쓰기와 같이 돌 수 있지만 파일은 끝부분이 통째로 빈 경우 말고는 줄지 않는다. VACUUM FULL은 테이블을 새 파일로 다시 써서 크기를 실제로 줄이지만 `ACCESS EXCLUSIVE` 잠금으로 읽기까지 막고, 대기 중에도 뒤의 요청을 모두 세운다. 운영 중에는 pg_repack이나 `REINDEX CONCURRENTLY`를 먼저 고려한다.
+
+### HOT 업데이트는 언제 일어나고, 어떻게 늘리나
+
+인덱스에 포함된 열을 바꾸지 않고, 새 버전이 같은 페이지에 들어갈 때 일어난다. 그러면 인덱스를 전혀 고치지 않고 페이지 안의 고리로 새 버전을 찾는다. 자주 바뀌는 테이블의 fillfactor를 90 안팎으로 낮춰 빈자리를 남기고, 자주 바뀌는 열에는 인덱스를 걸지 않는다. `pg_stat_user_tables`의 `n_tup_hot_upd / n_tup_upd`로 확인한다.
+
+### autovacuum은 언제 테이블을 VACUUM하나
+
+죽은 행 수가 `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples`(기본 50 + 0.2 × 행 수)를 넘을 때다. 13부터는 마지막 VACUUM 이후 INSERT된 행 수로도 건다. 큰 테이블은 20%가 너무 크니 테이블별로 scale_factor를 0.01 정도로 낮추고, 쓰기가 많은 DB는 cost_limit과 worker 수도 올린다.
+
+### 죽은 행이 계속 안 치워지면 무엇을 확인하나
+
+VACUUM VERBOSE나 autovacuum 로그의 `dead but not yet removable`이 0이 아닌지 보고, 경계를 붙잡는 것을 찾는다. `pg_stat_activity`의 `backend_xmin`이 오래된 연결(긴 트랜잭션, idle in transaction), `pg_prepared_xacts`에 남은 준비된 트랜잭션, `pg_replication_slots`의 `xmin`(hot_standby_feedback)과 `catalog_xmin`이다. 준비된 트랜잭션은 재시작해도 남으니 `ROLLBACK PREPARED`로 직접 정리해야 한다.
+
+### visibility map은 무엇이고 왜 중요한가
+
+페이지마다 "모든 행이 모두에게 보인다"와 "모두 얼려졌다"를 비트로 적은 지도다. VACUUM은 이 비트가 켜진 페이지를 건너뛰고, Index Only Scan은 힙을 확인하지 않는다. 비트는 VACUUM이 켜고 그 페이지가 고쳐지면 꺼지므로, VACUUM이 잘 돌아야 Index Only Scan이 제 성능을 낸다. 실험에서 VACUUM 전후로 같은 조회가 1,007페이지에서 5페이지로 줄었다.
+
+### XID 랩어라운드는 무엇이고, 어떻게 막나
+
+XID가 32비트라 약 21억 트랜잭션이 지나면 오래된 행의 `xmin`이 미래로 보여 행이 사라진 것처럼 된다. PostgreSQL은 오래된 행을 얼려(freeze) 비교 대상에서 빼고, 테이블 나이가 `autovacuum_freeze_max_age`(2억)를 넘으면 강제로 랩어라운드 방지 VACUUM을 돌린다. 여유가 300만 아래로 떨어지면 쓰기를 거부한다. `age(datfrozenxid)`를 감시하고, 큰 테이블은 한가한 시간에 미리 `VACUUM (FREEZE)`하고, VACUUM을 막는 오래된 트랜잭션을 없앤다.
+
+### 랩어라운드 방지 VACUUM이 갑자기 I/O를 많이 쓰는 이유는
+
+평소 VACUUM은 visibility map으로 페이지를 건너뛰지만, 이 VACUUM은 얼리기 위해 모든 페이지를 본다. 아무도 안 고친 큰 이력 테이블도 대상이 되고, 얼린 페이지마다 쓰기와 전체 페이지 기록이 생긴다. 실험에서 100만 행짜리 테이블 하나에 WAL 127MB가 나왔다. 그래서 2억에 닿기 전에 미리 얼려 두는 편이 낫다.

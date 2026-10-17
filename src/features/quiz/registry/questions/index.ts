@@ -53,10 +53,13 @@ import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
+import { POSTGRES_ARCHITECTURE } from "./postgres-architecture";
 import { POSTGRES_DATA_TYPES } from "./postgres-data-types";
 import { POSTGRES_FUNCTIONS_TRIGGERS } from "./postgres-functions-triggers";
 import { POSTGRES_GETTING_STARTED } from "./postgres-getting-started";
 import { POSTGRES_JSONB_SEARCH } from "./postgres-jsonb-search";
+import { POSTGRES_MVCC_VACUUM } from "./postgres-mvcc-vacuum";
+import { POSTGRES_OPERATIONS } from "./postgres-operations";
 import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
@@ -140,10 +143,13 @@ export const QUESTION_SETS = [
   NGINX_REVERSE_PROXY,
   OAUTH,
   POSTGRES_ADVANCED_SQL,
+  POSTGRES_ARCHITECTURE,
   POSTGRES_DATA_TYPES,
   POSTGRES_FUNCTIONS_TRIGGERS,
   POSTGRES_GETTING_STARTED,
   POSTGRES_JSONB_SEARCH,
+  POSTGRES_MVCC_VACUUM,
+  POSTGRES_OPERATIONS,
   POSTGRES_ROLES_SECURITY,
   PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,
