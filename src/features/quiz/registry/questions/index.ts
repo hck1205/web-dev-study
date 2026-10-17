@@ -41,6 +41,8 @@ import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { REDIS_BASICS } from "./redis-basics";
+import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
+import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
@@ -93,6 +95,8 @@ export const QUESTION_SETS = [
   REACT_RERENDER,
   REALTIME_COMMUNICATION,
   REDIS_BASICS,
+  REDIS_MEMORY_EVICTION,
+  REDIS_PERSISTENCE_HA,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,

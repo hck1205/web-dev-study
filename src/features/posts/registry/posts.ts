@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "redis-memory-eviction",
+    title: "Redis 메모리가 가득 차면: maxmemory와 축출 정책",
+    summary: "maxmemory를 정하지 않으면 OOM 킬러에게 죽고, 기본 noeviction이면 가득 찬 순간 쓰기가 실패한다. INFO memory를 읽는 법부터 축출 정책 고르기, 근사 LRU와 LFU의 동작, 만료와 단편화, 리눅스 설정과 여유 메모리 계산까지 정리한다.",
+    topic: "programming/database/redis",
+    tags: ["Redis", "Database", "Cache", "Performance", "Linux"],
+    date: "2026-10-16",
+    keywords: ["maxmemory", "축출 정책", "allkeys-lru", "메모리 단편화"],
+  },
+  {
+    slug: "redis-persistence-ha",
+    title: "Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster",
+    summary: "재부팅 한 번에 세션이 사라지지 않게 RDB와 AOF가 각각 무엇을 지키고 무엇을 잃는지 보고, 비동기 복제와 Sentinel 장애 조치, Cluster의 해시 슬롯과 MOVED·ASK까지 직접 돌려 보며 정리한다.",
+    topic: "programming/database/redis",
+    tags: ["Redis", "Database", "Distributed Systems", "Linux"],
+    date: "2026-10-16",
+    keywords: ["RDB 스냅샷", "AOF", "Redis Sentinel", "Redis Cluster", "해시 슬롯"],
+  },
+  {
     slug: "proxy-reverse-proxy",
     title: "프록시와 리버스 프록시: 누구를 대신하나",
     summary: "사내망에서 curl이 막히는 이유와 앱 로그에 로드 밸런서 IP만 찍히는 이유를 프록시가 누구 편에 서 있는지로 푼다. CONNECT 터널과 TLS 가로채기, Ubuntu 프록시 설정, X-Forwarded-For를 오른쪽부터 읽는 법과 PROXY protocol까지 다룬다.",
