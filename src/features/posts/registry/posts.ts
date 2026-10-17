@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "postgres-advanced-sql",
+    title: "PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL",
+    summary: "넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, LATERAL, DISTINCT ON, FILTER, generate_series, generated column, 머티리얼라이즈드 뷰, COPY를 50만 건 주문 데이터의 실행 계획과 함께 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Performance"],
+    date: "2026-10-17",
+    keywords: ["ON CONFLICT", "LATERAL", "DISTINCT ON", "머티리얼라이즈드 뷰", "쓰기 CTE"],
+  },
+  {
+    slug: "postgres-functions-triggers",
+    title: "함수, 프로시저, 트리거: PL/pgSQL로 DB 안에 로직 두기",
+    summary: "서비스 하나가 updated_at을 빠뜨린 일에서 출발해 SQL 함수와 PL/pgSQL, 변동성이 실행 계획에 주는 영향, 예외 처리, 커밋하는 프로시저, 트리거 순서와 감사 로그, 전이 테이블, SECURITY DEFINER의 search_path 함정, LISTEN/NOTIFY까지 실제로 돌려 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Security", "Performance"],
+    date: "2026-10-17",
+    keywords: ["PL/pgSQL", "SECURITY DEFINER", "LISTEN/NOTIFY", "전이 테이블"],
+  },
+  {
+    slug: "postgres-jsonb-search",
+    title: "JSONB와 전문 검색: GIN, tsvector, pg_trgm",
+    summary: "카테고리마다 다른 상품 속성을 jsonb에 담고 GIN과 식 인덱스로 찾은 뒤, LIKE 검색을 tsvector 전문 검색과 pg_trgm으로 바꾼다. 한국어에서 막히는 지점과 검색 엔진으로 넘어갈 신호도 짚는다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Search", "Performance"],
+    date: "2026-10-17",
+    keywords: ["JSONB", "pg_trgm", "tsvector", "jsonb_path_ops"],
+  },
+  {
     slug: "postgres-getting-started",
     title: "PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마",
     summary: "Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, psql 사용법, 접속 URI, pg_hba.conf를 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.",

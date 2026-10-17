@@ -2,6 +2,47 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "postgres-advanced-sql": {
+    "links": [
+      "sql-basics",
+      "postgres-roles-security",
+      "db-transaction-isolation",
+      "sqld-top-n-hierarchical-pivot",
+      "caching-strategies",
+      "sqld-window-functions",
+      "db-index",
+      "postgres-functions-triggers"
+    ],
+    "mentions": [
+      "postgres-data-types",
+      "sqld-group-by-having",
+      "postgres-getting-started",
+      "sql-query-tuning"
+    ]
+  },
+  "postgres-functions-triggers": {
+    "links": [
+      "postgres-advanced-sql",
+      "db-transaction-isolation",
+      "postgres-roles-security",
+      "db-architecture-by-scale",
+      "postgres-jsonb-search"
+    ],
+    "mentions": [
+      "db-index",
+      "json-crud-http",
+      "postgres-getting-started",
+      "postgres-data-types"
+    ]
+  },
+  "postgres-jsonb-search": {
+    "links": [
+      "postgres-functions-triggers",
+      "db-index",
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": []
+  },
   "postgres-getting-started": {
     "links": [
       "sql-basics",
@@ -14,13 +55,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "postgres-getting-started",
       "db-index",
+      "postgres-jsonb-search",
       "sql-basics"
     ],
     "mentions": []
   },
   "postgres-roles-security": {
     "links": [
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "postgres-functions-triggers"
     ],
     "mentions": [
       "postgres-data-types",
@@ -149,6 +192,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "postgres-advanced-sql",
       "sqld-single-row-functions"
     ]
   },
@@ -227,6 +271,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "postgres-advanced-sql",
       "sqld-entity-attribute-relationship",
       "db-transaction-isolation",
       "db-replication-sharding"
@@ -270,7 +315,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "postgres-advanced-sql",
       "http-caching-cdn",
+      "postgres-jsonb-search",
       "sql-basics"
     ]
   },

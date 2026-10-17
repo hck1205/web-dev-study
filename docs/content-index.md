@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 81편 · 토픽 39개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 84편 · 토픽 39개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -210,7 +210,7 @@
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db
 - 키워드 백링크 →: mongodb-document-model, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, http-methods
+- 이 글로 오는 글 ←: db-architecture-by-scale, http-methods, postgres-jsonb-search
 
 #### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
 
@@ -234,6 +234,17 @@
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
+#### `postgres-advanced-sql` — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL
+
+- 요약: 넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, LATERAL, DISTINCT ON, FILTER, generate_series, generated column, 머티리얼라이즈드 뷰, COPY를 50만 건 주문 데이터의 실행 계획과 함께 본다.
+- 태그: Database, PostgreSQL, SQL, Performance
+- 키워드: ON CONFLICT, LATERAL, DISTINCT ON, 머티리얼라이즈드 뷰, 쓰기 CTE
+- 길이: 942줄 (긴 글)
+- 소제목: 예제로 쓸 작은 서점 / 넣은 행을 바로 돌려받는 RETURNING / 있으면 더하고 없으면 넣기 / 조회하고 넣으면 생기는 틈 / 원본 데이터와 맞춰 놓는 MERGE / WITH로 긴 쿼리를 문단처럼 나누기 / 한 문장으로 행을 옮기는 쓰기 CTE / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / CTE가 최적화를 막던 시절 / 문장 하나로 끝내는 습관 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-basics, postgres-roles-security, db-transaction-isolation, sqld-top-n-hierarchical-pivot, caching-strategies, sqld-window-functions, db-index, postgres-functions-triggers
+- 키워드 백링크 →: postgres-data-types, sqld-group-by-having, postgres-getting-started, sql-query-tuning
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, postgres-functions-triggers, sqld-rollup-cube-grouping-sets
+
 #### `postgres-data-types` — 타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range
 
 - 요약: 돈을 float로 저장해 생긴 오차와 9시간 밀린 주문 시각에서 시작해, PostgreSQL 타입을 언제 무엇으로 고르는지 정리한다. identity와 serial, timestamptz, UUID v7, enum, 범위 타입과 배제 제약까지 다룬다.
@@ -241,8 +252,19 @@
 - 키워드: timestamptz, UUID v7, 배제 제약, identity 컬럼, tstzrange
 - 길이: 780줄
 - 소제목: 0.1을 열 번 더하면 1이 아니다 / 정수는 범위를 넘으면 에러가 난다 / varchar(n)이 text보다 빠르지 않다 / 오전 9시 주문이 오후 6시로 보인다 / UUID 키는 순서가 있어야 인덱스가 편하다 / 배열은 편하지만 관계를 대신하지 않는다 / 주문 상태를 담는 세 가지 방법 / 같은 방을 두 번 예약하지 못하게 / 도메인, NULL, 기본값, 형 변환 / 타입마다 몇 바이트를 쓰나 / 컬럼을 만들 때 묻는 것들 / 면접에서 나올 만한 질문
-- 직접 링크 →: postgres-getting-started, db-index, sql-basics
-- 이 글로 오는 글 ←: postgres-getting-started, postgres-roles-security, sqld-data-modeling
+- 직접 링크 →: postgres-getting-started, db-index, postgres-jsonb-search, sql-basics
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started, postgres-roles-security, sqld-data-modeling
+
+#### `postgres-functions-triggers` — 함수, 프로시저, 트리거: PL/pgSQL로 DB 안에 로직 두기
+
+- 요약: 서비스 하나가 updated_at을 빠뜨린 일에서 출발해 SQL 함수와 PL/pgSQL, 변동성이 실행 계획에 주는 영향, 예외 처리, 커밋하는 프로시저, 트리거 순서와 감사 로그, 전이 테이블, SECURITY DEFINER의 search_path 함정, LISTEN/NOTIFY까지 실제로 돌려 본다.
+- 태그: Database, PostgreSQL, SQL, Security, Performance
+- 키워드: PL/pgSQL, SECURITY DEFINER, LISTEN/NOTIFY, 전이 테이블
+- 길이: 852줄
+- 소제목: updated_at이 멈춰 있는 책 / SQL로 쓰는 함수와 plpgsql로 쓰는 함수 / 함수에 붙이는 약속, 변동성 / 실패를 붙잡는 EXCEPTION 블록 / 트랜잭션을 나눠 커밋하는 프로시저 / 테이블이 바뀔 때 끼어드는 트리거 / 누가 무엇을 바꿨는지 남기는 감사 로그 / 트리거가 실행되는 순서 / 행 20만 개를 고칠 때 트리거가 치르는 값 / 커밋할 때 검사하는 제약 트리거 / 트리거가 만드는 함정 / 만든 사람 권한으로 도는 SECURITY DEFINER / 바뀌었다고 알려 주는 LISTEN과 NOTIFY / 로직을 DB에 둘까 애플리케이션에 둘까 / DB 안에 둔 코드도 코드다 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-advanced-sql, db-transaction-isolation, postgres-roles-security, db-architecture-by-scale, postgres-jsonb-search
+- 키워드 백링크 →: db-index, json-crud-http, postgres-getting-started, postgres-data-types
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-jsonb-search, postgres-roles-security
 
 #### `postgres-getting-started` — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
 
@@ -252,7 +274,17 @@
 - 길이: 933줄 (긴 글)
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
-- 이 글로 오는 글 ←: db-transaction-isolation, postgres-data-types, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
+- 이 글로 오는 글 ←: db-transaction-isolation, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
+
+#### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
+
+- 요약: 카테고리마다 다른 상품 속성을 jsonb에 담고 GIN과 식 인덱스로 찾은 뒤, LIKE 검색을 tsvector 전문 검색과 pg_trgm으로 바꾼다. 한국어에서 막히는 지점과 검색 엔진으로 넘어갈 신호도 짚는다.
+- 태그: Database, PostgreSQL, SQL, Search, Performance
+- 키워드: JSONB, pg_trgm, tsvector, jsonb_path_ops
+- 길이: 818줄
+- 소제목: 카테고리마다 속성이 다른 상품 / json과 jsonb는 저장 방식이 다르다 / 화살표로 꺼내고 포함 연산자로 찾기 / 일부만 고치는 jsonb_set과 JSON 경로 / 10만 개에서 포함 검색을 빠르게 하는 GIN / jsonb_ops와 jsonb_path_ops / 자주 찾는 키는 식 인덱스로 / jsonb에 넣을 것과 컬럼으로 뺄 것 / LIKE 대신 전문 검색 / 한국어는 어디서 막히나 / 세 글자씩 잘라 비교하는 pg_trgm / 오타도 찾는 similarity / 무엇으로 찾을지 고르기 / 조각을 쪼개 두는 방식이 결국 같다 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-functions-triggers, db-index, elasticsearch-inverted-index
+- 이 글로 오는 글 ←: db-architecture-by-scale, postgres-data-types, postgres-functions-triggers
 
 #### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
 
@@ -261,9 +293,9 @@
 - 키워드: 행 단위 보안, Row Level Security, ALTER DEFAULT PRIVILEGES, scram-sha-256, SET ROLE
 - 길이: 809줄
 - 소제목: 역할 하나가 사용자이자 그룹이다 / 쿼리 하나가 지나는 검사들 / 주인, 마이그레이션, 앱, 분석 역할로 나누기 / 비밀번호는 SCRAM으로 저장한다 / pg_hba.conf와 TLS로 들어오는 길 좁히기 / 서점마다 자기 주문만 보게 하기 / 누가 언제 들어왔는지 남기기 / SQL 인젝션은 권한보다 앞에서 막는다 / pg_hba 줄 고르기를 직접 구현해 보기 / 앱 계정이 할 수 있는 일 / 면접에서 나올 만한 질문
-- 직접 링크 →: postgres-getting-started
+- 직접 링크 →: postgres-getting-started, postgres-functions-triggers
 - 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-basics, db-index, dns
-- 이 글로 오는 글 ←: postgres-getting-started
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started
 
 ### Programming › Database › Redis (`programming/database/redis`)
 
@@ -311,7 +343,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / B-tree가 아닌 인덱스들 / MySQL 8은 표 자체가 인덱스다 / 찾아보기를 만들기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning
 - 키워드 백링크 →: db-replication-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, mongodb-document-model, postgres-data-types, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, mongodb-document-model, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
 
 #### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
 
@@ -321,7 +353,7 @@
 - 길이: 1034줄 (긴 글)
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 자연 키와 대리 키, 그리고 UUID / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / 주문 당시 가격은 중복이 아니다 / 일부러 다시 합칠 때 (반정규화) / JSONB 열은 어디까지 괜찮나 / 자주 보는 설계 실수 / SQLD 시험 포인트 / 중복을 어디에 둘지 고르는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index
-- 키워드 백링크 →: json-crud-http, sqld-entity-attribute-relationship, db-transaction-isolation, db-replication-sharding
+- 키워드 백링크 →: json-crud-http, postgres-advanced-sql, sqld-entity-attribute-relationship, db-transaction-isolation, db-replication-sharding
 - 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, elasticsearch-inverted-index, git-troubleshooting, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
@@ -333,7 +365,7 @@
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD 시험 포인트 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices
 - 키워드 백링크 →: postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-modeling-normalization, redis-basics, sql-basics, sql-query-tuning
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-modeling-normalization, postgres-advanced-sql, postgres-functions-triggers, redis-basics, sql-basics, sql-query-tuning
 
 #### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
 
@@ -344,7 +376,7 @@
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / Oracle과 SQL Server에서는 이렇게 다르다 / 다음은 빈 칸을 채울 차례 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, sql-query-tuning, db-transaction-isolation, sqld-data-modeling
 - 키워드 백링크 →: sqld-group-by-having, postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, postgres-data-types, postgres-getting-started, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, postgres-advanced-sql, postgres-data-types, postgres-getting-started, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
 
 #### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
 
@@ -355,7 +387,7 @@
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 느린 쿼리를 고치는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index
 - 키워드 백링크 →: db-architecture-by-scale, rest-api-design, postgres-getting-started, db-transaction-isolation
-- 이 글로 오는 글 ←: db-index, db-replication-sharding, rest-api-design, sql-basics, sqld-joins
+- 이 글로 오는 글 ←: db-index, db-replication-sharding, postgres-advanced-sql, rest-api-design, sql-basics, sqld-joins
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
 
@@ -389,7 +421,7 @@
 - 길이: 746줄
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
-- 이 글로 오는 글 ←: sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: postgres-advanced-sql, sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -410,7 +442,7 @@
 - 길이: 571줄
 - 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
-- 키워드 백링크 →: json-crud-http, sqld-single-row-functions
+- 키워드 백링크 →: json-crud-http, postgres-advanced-sql, sqld-single-row-functions
 - 이 글로 오는 글 ←: sqld-window-functions
 
 #### `sqld-single-row-functions` — SQLD 단일행 함수와 NULL 다루기
@@ -444,7 +476,7 @@
 - 소제목: ROWNUM은 정렬보다 먼저 붙는다 / 동점자까지 보여 주는 WITH TIES / 상사를 따라 내려가는 계층형 쿼리 / 계층형 쿼리가 주는 가상 컬럼 / WHERE에 거는 조건과 CONNECT BY에 거는 조건 / PostgreSQL과 SQL Server는 재귀 CTE로 쓴다 / 행을 열로 돌리는 PIVOT / 열을 행으로 되돌리는 UNPIVOT / 패턴으로 찾는 정규 표현식 함수 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-window-functions
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: sqld-joins, sqld-window-functions
+- 이 글로 오는 글 ←: postgres-advanced-sql, sqld-joins, sqld-window-functions
 
 #### `sqld-window-functions` — SQLD 윈도우 함수: 순위, 누적합, 앞뒤 행
 
@@ -455,7 +487,7 @@
 - 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: postgres-advanced-sql, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -716,7 +748,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets
 
 ### Programming › OS › Linux (`programming/os/linux`)
 
@@ -882,7 +914,7 @@
 - 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction
 - 키워드 백링크 →: db-replication-sharding, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, frontend-browser-cache, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, frontend-browser-cache, postgres-advanced-sql, redis-basics, redis-memory-eviction
 
 #### `db-architecture-by-scale` — 서비스 규모별 DB 설계: 한 대에서 여러 저장소까지
 
@@ -892,8 +924,8 @@
 - 길이: 727줄
 - 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
-- 키워드 백링크 →: http-caching-cdn, sql-basics
-- 이 글로 오는 글 ←: db-replication-sharding, microservices, postgres-roles-security, sql-query-tuning
+- 키워드 백링크 →: postgres-advanced-sql, http-caching-cdn, postgres-jsonb-search, sql-basics
+- 이 글로 오는 글 ←: db-replication-sharding, microservices, postgres-functions-triggers, postgres-roles-security, sql-query-tuning
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -970,6 +1002,7 @@
 - 마이크로 프론트엔드 → `micro-frontends`
 - 마이크로서비스 → `microservices`
 - 마이크로태스크 → `event-loop`
+- 머티리얼라이즈드 뷰 → `postgres-advanced-sql`
 - 멀티 스테이지 빌드 → `dockerfile-image-layers`
 - 멀티 존 → `micro-frontends`
 - 멀티플렉싱 → `http-versions`
@@ -1011,6 +1044,7 @@
 - 스트리밍 SSR → `rendering-strategies`
 - 시간 복잡도 → `big-o-notation`
 - 쓰기 왜곡 → `db-transaction-isolation`
+- 쓰기 CTE → `postgres-advanced-sql`
 - 안전한 메서드 → `http-methods`
 - 암시적 형 변환 → `sqld-single-row-functions`
 - 액세스 토큰 → `token-login`
@@ -1035,6 +1069,7 @@
 - 재귀 CTE → `sqld-top-n-hierarchical-pivot`
 - 재조정 → `react-rerender`
 - 전방향 안전성 → `https-tls`
+- 전이 테이블 → `postgres-functions-triggers`
 - 정규화 → `db-modeling-normalization`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
@@ -1125,6 +1160,7 @@
 - depends_on → `docker-compose`
 - detached DOM → `js-memory-leak`
 - detached HEAD → `git-branch-merge`
+- DISTINCT ON → `postgres-advanced-sql`
 - distroless → `dockerfile-image-layers`
 - DNAT → `iptables-nat`
 - DNS → `dns`
@@ -1192,12 +1228,16 @@
 - JSON Patch → `http-methods`
 - JSON.parse → `json-crud-http`
 - JSON.stringify → `json-crud-http`
+- JSONB → `postgres-jsonb-search`
+- jsonb_path_ops → `postgres-jsonb-search`
 - JWT → `token-login`
 - keepalive → `browser-fetch`
 - kube-proxy → `iptables-nat`
+- LATERAL → `postgres-advanced-sql`
 - LCP → `core-web-vitals`
 - least_conn → `nginx-reverse-proxy`
 - limit_req → `nginx-https-performance`
+- LISTEN/NOTIFY → `postgres-functions-triggers`
 - location 블록 → `nginx-basics`
 - MASQUERADE → `iptables-nat`
 - maxmemory → `redis-memory-eviction`
@@ -1221,13 +1261,16 @@
 - nsswitch.conf → `hosts-file`
 - NVL → `sqld-single-row-functions`
 - OAuth → `oauth`
+- ON CONFLICT → `postgres-advanced-sql`
 - OUTER JOIN → `sqld-joins`
 - peer 인증 → `postgres-getting-started`
 - pg_hba.conf → `postgres-getting-started`
 - pg_stat_statements → `sql-query-tuning`
+- pg_trgm → `postgres-jsonb-search`
 - PgBouncer → `db-architecture-by-scale`
 - PIVOT → `sqld-top-n-hierarchical-pivot`
 - PKCE → `oauth`
+- PL/pgSQL → `postgres-functions-triggers`
 - preflight → `cors`
 - PRG 패턴 → `http-status-codes`
 - Problem Details → `http-status-codes`
@@ -1258,6 +1301,7 @@
 - scram-sha-256 → `postgres-roles-security`
 - search_after → `elasticsearch-inverted-index`
 - search_path → `postgres-getting-started`
+- SECURITY DEFINER → `postgres-functions-triggers`
 - SELF JOIN → `sqld-joins`
 - sendBeacon → `browser-fetch`
 - server_name → `nginx-basics`
@@ -1282,6 +1326,7 @@
 - TRUNCATE → `sql-basics`
 - try_files → `nginx-basics`
 - tstzrange → `postgres-data-types`
+- tsvector → `postgres-jsonb-search`
 - TTL → `dns`
 - UNION ALL → `sqld-subquery-set-operators`
 - unrelated histories → `git-troubleshooting`
@@ -1308,6 +1353,9 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `postgres-advanced-sql` ↔ `postgres-functions-triggers`
+- `postgres-functions-triggers` ↔ `postgres-jsonb-search`
+- `postgres-functions-triggers` ↔ `postgres-roles-security`
 - `postgres-getting-started` ↔ `postgres-data-types`
 - `postgres-getting-started` ↔ `postgres-roles-security`
 - `postgres-getting-started` ↔ `sql-basics`
@@ -1418,6 +1466,7 @@
 - `git-undo` 992줄 — 되돌리기 총정리: restore, reset, revert, reflog
 - `sqld-subquery-set-operators` 984줄 — SQLD 서브쿼리와 집합 연산자
 - `git-branch-merge` 948줄 — 브랜치와 병합: 포인터 하나가 움직일 뿐
+- `postgres-advanced-sql` 942줄 — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL
 - `postgres-getting-started` 933줄 — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
 - `redis-persistence-ha` 910줄 — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
 

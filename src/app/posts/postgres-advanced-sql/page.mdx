@@ -1,0 +1,941 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-advanced-sql");
+
+주문 API를 만들고 있다. 주문을 `INSERT`하고 나면 응답에 주문 번호를 넣어야 한다. 그래서 바로 다음 줄에 `SELECT id FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 1`을 하나 더 쓴다. 쿼리가 두 번 나가고, 그사이 같은 회원이 주문을 하나 더 넣으면 엉뚱한 번호를 돌려준다.
+
+장바구니도 비슷하다. "이 책이 장바구니에 있으면 수량을 늘리고, 없으면 새로 넣는다." 먼저 `SELECT`로 있는지 보고 없으면 `INSERT`하도록 짰는데, 버튼을 빠르게 두 번 누르면 가끔 중복 키 오류가 난다.
+
+두 문제 모두 PostgreSQL에서는 문장 하나로 끝난다. 이 글은 표준 SQL 위에 PostgreSQL이 얹어 둔 기능 중 실무에서 자주 꺼내 쓰는 것들을 모았다. 기본 문법(DDL, DML, 제약 조건)은 [SQL 기초](/posts/sql-basics)에서, 권한은 앞 글 [역할과 권한](/posts/postgres-roles-security)에서 다뤘다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고, 아래 출력은 모두 이 환경에서 실제로 돌린 결과다.
+
+## 예제로 쓸 작은 서점
+
+시리즈 내내 쓰는 온라인 서점 `shop`의 테이블 네 개를 다시 만든다. 회원(`users`), 책(`books`), 주문(`orders`), 주문에 담긴 책(`order_items`)이다.
+
+```sql
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email      text NOT NULL UNIQUE,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE books (
+  id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  isbn  text NOT NULL UNIQUE,
+  title text NOT NULL,
+  price integer NOT NULL,
+  stock integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id),
+  status     text NOT NULL DEFAULT 'pending',   -- pending, paid, cancelled
+  total      integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  order_id bigint NOT NULL REFERENCES orders (id),
+  book_id  bigint NOT NULL REFERENCES books (id),
+  qty      integer NOT NULL,
+  price    integer NOT NULL,                    -- 주문 당시 가격
+  PRIMARY KEY (order_id, book_id)
+);
+
+INSERT INTO users (email, name, created_at) VALUES
+  ('kim@example.com',  'kim',  '2026-09-01 09:00+09'),
+  ('lee@example.com',  'lee',  '2026-09-02 10:00+09'),
+  ('park@example.com', 'park', '2026-09-03 11:00+09');
+
+INSERT INTO books (isbn, title, price, stock) VALUES
+  ('978-89-0001', '데이터베이스 첫걸음', 18000, 10),
+  ('978-89-0002', 'SQL 레시피',          25000,  5),
+  ('978-89-0003', 'PostgreSQL 인사이드', 32000,  3);
+
+INSERT INTO orders (user_id, status, total, created_at) VALUES
+  (1, 'paid',      18000, '2026-10-01 10:00+09'),
+  (1, 'paid',      57000, '2026-10-03 12:00+09'),
+  (2, 'pending',   25000, '2026-10-03 15:00+09'),
+  (1, 'cancelled', 32000, '2026-10-05 09:30+09'),
+  (2, 'paid',      32000, '2026-10-06 20:00+09'),
+  (1, 'paid',      25000, '2026-10-07 08:10+09');
+
+INSERT INTO order_items VALUES
+  (1, 1, 1, 18000), (2, 2, 1, 25000), (2, 3, 1, 32000), (3, 2, 1, 25000),
+  (4, 3, 1, 32000), (5, 3, 1, 32000), (6, 2, 1, 25000);
+
+SET timezone = 'Asia/Seoul';   -- 시간을 한국 시간으로 보여 준다
+SELECT id, user_id, status, total, created_at FROM orders ORDER BY id;
+```
+
+```text
+ id | user_id |  status   | total |       created_at
+----+---------+-----------+-------+------------------------
+  1 |       1 | paid      | 18000 | 2026-10-01 10:00:00+09
+  2 |       1 | paid      | 57000 | 2026-10-03 12:00:00+09
+  3 |       2 | pending   | 25000 | 2026-10-03 15:00:00+09
+  4 |       1 | cancelled | 32000 | 2026-10-05 09:30:00+09
+  5 |       2 | paid      | 32000 | 2026-10-06 20:00:00+09
+  6 |       1 | paid      | 25000 | 2026-10-07 08:10:00+09
+(6 rows)
+```
+
+처음에는 이 몇 줄로 문법을 보고, 성능을 볼 때 주문을 50만 건으로 늘린다.
+
+## 넣은 행을 바로 돌려받는 RETURNING
+
+`INSERT`, `UPDATE`, `DELETE` 뒤에 `RETURNING`을 붙이면 방금 바뀐 행을 `SELECT`처럼 돌려받는다. DB가 채운 기본값(id, 상태, 시간)도 함께 온다.
+
+```sql
+-- 주문을 넣고, DB가 정한 id와 기본 status를 바로 받는다
+INSERT INTO orders (user_id, total, created_at)
+VALUES (3, 18000, '2026-10-07 21:00+09')
+RETURNING id, status, created_at;
+```
+
+```text
+ id | status  |       created_at
+----+---------+------------------------
+  7 | pending | 2026-10-07 21:00:00+09
+(1 row)
+
+INSERT 0 1
+```
+
+`UPDATE`에서는 바뀐 뒤의 값이 온다. 재고 차감처럼 "줄이고 남은 수량을 알려 줘"가 한 번에 된다. 조건에 `stock >= 1`을 넣으면 재고가 없을 때는 0행이 와서, 애플리케이션은 결과가 비었는지만 보면 된다.
+
+```sql
+-- 재고가 있을 때만 하나 줄이고, 남은 재고를 돌려받는다
+UPDATE books SET stock = stock - 1
+WHERE id = 3 AND stock >= 1
+RETURNING id, title, stock;
+
+-- 결제 대기 주문을 한꺼번에 결제 완료로 바꾸고, 바뀐 주문 목록을 받는다
+UPDATE orders SET status = 'paid'
+WHERE status = 'pending'
+RETURNING id, user_id, status;
+```
+
+```text
+ id |        title        | stock
+----+---------------------+-------
+  3 | PostgreSQL 인사이드 |     2
+(1 row)
+
+UPDATE 1
+ id | user_id | status
+----+---------+--------
+  3 |       2 | paid
+  7 |       3 | paid
+(2 rows)
+
+UPDATE 2
+```
+
+처음의 "넣고 다시 조회" 방식과 비교하면 이렇다. 아래 그림에서 단계를 넘겨 보면 앞의 네 단계가 예전 방식, 뒤의 두 단계가 `RETURNING`이다.
+
+<SequenceDiagram
+  caption="같은 일을 왕복 두 번에서 한 번으로"
+  actors={[
+    { id: "app", label: "API 서버" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "db", label: "INSERT orders", title: "주문을 넣는다", detail: "응답으로는 INSERT 0 1, 즉 몇 행이 들어갔는지만 온다." },
+    { from: "db", to: "app", label: "INSERT 0 1", title: "id를 모른다", detail: "DB가 정한 id가 응답에 없다. 한 번 더 물어봐야 한다." },
+    { from: "app", to: "db", label: "SELECT id …", title: "다시 조회한다", detail: "user_id로 가장 최근 주문을 찾는다. 그사이 같은 회원의 다른 요청이 주문을 넣었다면 그 주문의 id가 온다." },
+    { from: "db", to: "app", label: "id = 8 ?", title: "틀릴 수 있는 답", detail: "왕복이 두 번이고, 두 요청 사이의 틈에서 답이 바뀔 수 있다." },
+    { from: "app", to: "db", label: "INSERT … RETURNING", title: "넣으면서 돌려 달라고 한다", detail: "같은 문장 안에서 방금 넣은 행을 돌려받는다. 다른 요청이 끼어들 틈이 없다." },
+    { from: "db", to: "app", label: "id, status", title: "왕복 한 번", detail: "기본값과 트리거가 바꾼 값까지 포함된 최종 행이 온다.", payload: " id | status\n----+---------\n  7 | pending" },
+  ]}
+/>
+
+MySQL 8에는 `RETURNING`이 없다. 자동 증가 값은 `LAST_INSERT_ID()`로 따로 가져오고, `UPDATE` 결과는 다시 조회해야 한다(MariaDB는 10.5부터 `INSERT ... RETURNING`을 지원한다). JPA 같은 ORM이 PostgreSQL에서 저장 직후 id를 바로 아는 것도 이 기능 덕분이다.
+
+## 있으면 더하고 없으면 넣기
+
+장바구니 테이블을 만든다. 한 회원이 같은 책을 두 줄로 담으면 안 되니 `(user_id, book_id)`가 기본 키다.
+
+```sql
+CREATE TABLE cart_items (
+  user_id bigint NOT NULL REFERENCES users (id),
+  book_id bigint NOT NULL REFERENCES books (id),
+  qty     integer NOT NULL CHECK (qty > 0),
+  PRIMARY KEY (user_id, book_id)
+);
+
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (1, 2, 1);
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (1, 2, 1);  -- 같은 책을 한 번 더
+```
+
+```text
+INSERT 0 1
+ERROR:  duplicate key value violates unique constraint "cart_items_pkey"
+DETAIL:  Key (user_id, book_id)=(1, 2) already exists.
+```
+
+`INSERT ... ON CONFLICT`(9.5부터)는 "넣다가 유니크 제약에 걸리면 이렇게 해라"를 같은 문장에 적는다. 할 수 있는 일은 두 가지다. 무시하거나(`DO NOTHING`), 이미 있는 행을 고치거나(`DO UPDATE`).
+
+```sql
+-- 이미 있으면 아무것도 하지 않는다. 그래서 RETURNING도 빈 결과다
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (1, 2, 1)
+ON CONFLICT DO NOTHING
+RETURNING *;
+
+-- 이미 있으면 기존 수량에 새로 담은 수량을 더한다
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (1, 2, 2)
+ON CONFLICT (user_id, book_id)
+DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty
+RETURNING user_id, book_id, qty;
+```
+
+```text
+ user_id | book_id | qty
+---------+---------+-----
+(0 rows)
+
+INSERT 0 0
+ user_id | book_id | qty
+---------+---------+-----
+       1 |       2 |   3
+(1 row)
+
+INSERT 0 1
+```
+
+문장이 길어서 조각으로 나눠 읽는 편이 낫다. 아래 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="ON CONFLICT 문장을 조각으로 읽기"
+  base="INSERT INTO cart_items VALUES (1, 2, 2)"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "ON CONFLICT", display: "ON CONFLICT (user_id, book_id)", title: "충돌 대상", description: "어느 유니크 제약에 걸렸을 때 처리할지 고른다. 이 컬럼 조합과 정확히 맞는 유니크 인덱스(또는 기본 키, 배제 제약)가 있어야 한다. 없으면 문장이 실행되지 않는다.", required: true },
+    { key: "DO UPDATE", display: "DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty", title: "충돌하면 기존 행을 고친다", description: "cart_items.qty는 테이블에 이미 있던 값, EXCLUDED.qty는 이번에 넣으려다 막힌 값이다. 그래서 1 + 2 = 3이 된다. DO NOTHING을 쓰면 충돌 대상을 생략할 수 있다.", code: "cart_items.qty  → 기존 행의 값 (1)\nEXCLUDED.qty    → 막힌 새 값 (2)" },
+    { key: "WHERE", display: "WHERE …", title: "고칠지 말지 한 번 더 거른다", description: "선택이다. 예를 들어 WHERE cart_items.qty < EXCLUDED.qty라고 쓰면 더 큰 값일 때만 고친다. 조건이 거짓이면 그 행은 그대로 두고 RETURNING에도 나오지 않는다." },
+    { key: "RETURNING", display: "RETURNING qty", title: "결과 행 돌려받기", description: "새로 넣은 행이든 고친 행이든 최종 모습이 온다. DO NOTHING으로 건너뛴 행은 오지 않는다." },
+  ]}
+/>
+
+충돌 대상에 맞는 유니크 인덱스가 없으면 PostgreSQL은 문장을 아예 거부한다. `book_id` 하나에는 유니크 제약이 없으니 이렇게 된다.
+
+```sql
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (1, 2, 1)
+ON CONFLICT (book_id) DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty;
+```
+
+```text
+ERROR:  there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
+
+한 문장에 같은 키가 두 번 들어 있어도 거부한다. 한 행을 한 문장 안에서 두 번 고치면 결과가 순서에 따라 달라지기 때문이다. 배치로 upsert할 때는 애플리케이션이나 `GROUP BY`로 먼저 합쳐서 보낸다.
+
+```sql
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (2, 1, 1), (2, 1, 3)
+ON CONFLICT (user_id, book_id) DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty;
+```
+
+```text
+ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
+HINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+```
+
+여러 행을 넣을 때 어느 행이 새로 들어갔고 어느 행이 고쳐졌는지 알고 싶으면 `RETURNING ..., (xmax = 0) AS inserted`를 흔히 쓴다. 새로 넣은 행은 `xmax`가 0이라 `t`가 나온다. 다만 `xmax`는 MVCC 내부 컬럼([트랜잭션과 격리 수준](/posts/db-transaction-isolation) 참고)이라 공식으로 보장되는 동작은 아니다.
+
+id 구멍도 생긴다. `DEFAULT`인 id는 충돌을 확인하기 전에 시퀀스에서 먼저 꺼내기 때문에, `DO NOTHING`으로 아무것도 안 들어가도 번호 하나는 이미 쓰인 뒤다. id는 원래 연속을 보장하지 않으니 문제는 아니지만, 충돌이 아주 잦은 upsert를 대량으로 돌리면 시퀀스가 생각보다 빨리 커진다.
+
+## 조회하고 넣으면 생기는 틈
+
+처음의 "있는지 보고 없으면 넣기"가 왜 가끔 실패하는지 실제로 재현했다. 두 psql 세션을 동시에 띄우고, A가 조회와 삽입 사이에 2초를 쉬게 했다.
+
+```sql
+-- 세션 A
+BEGIN;
+SELECT qty FROM cart_items WHERE user_id = 2 AND book_id = 2;   -- 0행: 없다
+SELECT pg_sleep(2);                                              -- 그사이 B가 넣는다
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (2, 2, 1);
+COMMIT;
+
+-- 세션 B (A가 쉬는 동안)
+SELECT qty FROM cart_items WHERE user_id = 2 AND book_id = 2;   -- 0행: 없다
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (2, 2, 1); -- 성공
+```
+
+```text
+-- 세션 A의 INSERT
+ERROR:  duplicate key value violates unique constraint "cart_items_pkey"
+DETAIL:  Key (user_id, book_id)=(2, 2) already exists.
+ROLLBACK
+```
+
+둘 다 "없다"를 봤고, 늦게 넣은 쪽이 오류를 받았다. 격리 수준을 올려도 이 틈은 없어지지 않는다. `SELECT`는 행을 잠그지 않고, 없는 행은 잠글 수도 없기 때문이다. 같은 실험을 `ON CONFLICT`로 바꾸면 결과가 다르다. A가 upsert를 하고 커밋 전에 3초를 쉬는 동안 B도 같은 upsert를 보냈다.
+
+```sql
+-- 두 세션이 똑같이 보낸 문장
+INSERT INTO cart_items (user_id, book_id, qty) VALUES (2, 3, 1)
+ON CONFLICT (user_id, book_id) DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty
+RETURNING qty, (xmax = 0) AS inserted;
+```
+
+```text
+-- 세션 A (먼저 실행, 3초 뒤 COMMIT)
+ qty | inserted
+-----+----------
+   1 | t
+
+-- 세션 B
+ qty | inserted
+-----+----------
+   2 | f
+(1 row)
+
+INSERT 0 1
+Time: 2311.476 ms (00:02.311)
+```
+
+B는 오류 없이 2.3초를 기다렸다가 A가 넣은 행의 수량을 2로 올렸다. 아래 그림이 두 실험을 차례로 보여 준다.
+
+<SequenceDiagram
+  caption="SELECT 후 INSERT는 틈이 있고, ON CONFLICT는 기다린다"
+  actors={[
+    { id: "a", label: "세션 A" },
+    { id: "db", label: "PostgreSQL" },
+    { id: "b", label: "세션 B" },
+  ]}
+  steps={[
+    { from: "a", to: "db", label: "SELECT → 0행", title: "A가 없다고 본다", detail: "SELECT는 아무것도 잠그지 않는다. 없는 행은 잠글 대상도 없다." },
+    { from: "b", to: "db", label: "SELECT → 0행", title: "B도 없다고 본다", detail: "같은 순간 B도 같은 결론을 낸다." },
+    { from: "b", to: "db", label: "INSERT 성공", title: "B가 먼저 넣는다", detail: "기본 키 인덱스에 (2, 2)가 들어간다." },
+    { from: "db", to: "a", label: "duplicate key", title: "A는 오류를 받는다", detail: "A의 INSERT가 유니크 인덱스에서 막힌다. 트랜잭션 전체가 롤백된다." },
+    { from: "a", to: "db", label: "INSERT … ON CONFLICT", title: "이번엔 upsert로", detail: "A가 (2, 3)을 넣는다. 아직 커밋 전이다." },
+    { from: "b", to: "db", label: "같은 upsert", title: "B는 기다린다", detail: "인덱스에 커밋 안 된 같은 키가 있다. B는 A가 끝날 때까지 기다린다." },
+    { from: "db", to: "b", label: "qty = 2", title: "A 커밋 뒤 B가 고친다", detail: "A가 커밋하자 B는 충돌로 판단하고 DO UPDATE를 실행한다. 오류도 중복도 없다." },
+  ]}
+/>
+
+`ON CONFLICT`가 안전한 이유는 판단을 유니크 인덱스에 맡기기 때문이다. 넣을 자리를 인덱스에서 확인하고, 다른 트랜잭션이 같은 키를 넣는 중이면 끝날 때까지 기다린 뒤 다시 판단한다. 그래서 유니크 인덱스가 반드시 필요하다. MySQL 8에서는 `INSERT ... ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)`로 같은 일을 한다(8.0.19부터는 `INSERT ... AS new ON DUPLICATE KEY UPDATE qty = qty + new.qty` 같은 별칭 문법이 생겼고, `VALUES()`는 8.0.20부터 폐기 예정이다). MySQL은 충돌 대상을 고를 수 없어서 유니크 키가 여러 개면 아무 키에나 걸려도 UPDATE가 실행된다.
+
+## 원본 데이터와 맞춰 놓는 MERGE
+
+출판사에서 매일 재고 파일이 온다. 우리 `books`에 있는 책은 가격과 재고를 맞추고, 없는 책은 새로 넣고, 재고가 0으로 온 책은 재고만 0으로 만든다. 경우가 셋으로 갈리는 일에는 PostgreSQL 15부터 들어온 표준 `MERGE`가 읽기 좋다.
+
+```sql
+-- 출판사 파일을 올려 둔 임시 테이블
+CREATE TABLE supplier_feed (
+  isbn text PRIMARY KEY, title text NOT NULL, price integer NOT NULL, stock integer NOT NULL
+);
+INSERT INTO supplier_feed VALUES
+  ('978-89-0001', '데이터베이스 첫걸음', 19000, 12),   -- 가격과 재고가 바뀌었다
+  ('978-89-0002', 'SQL 레시피',          25000,  0),   -- 품절
+  ('978-89-0004', '인덱스 설계',         28000,  7);   -- 새 책
+
+MERGE INTO books AS b
+USING supplier_feed AS f
+ON b.isbn = f.isbn                                       -- 무엇으로 짝을 짓나
+WHEN MATCHED AND f.stock = 0 THEN                        -- 짝이 있고 품절이면
+  UPDATE SET stock = 0
+WHEN MATCHED THEN                                        -- 짝이 있으면 (위에서 안 걸린 것)
+  UPDATE SET price = f.price, stock = f.stock
+WHEN NOT MATCHED THEN                                    -- 짝이 없으면
+  INSERT (isbn, title, price, stock) VALUES (f.isbn, f.title, f.price, f.stock);
+
+SELECT id, isbn, title, price, stock FROM books ORDER BY id;
+```
+
+```text
+MERGE 3
+ id |    isbn     |        title        | price | stock
+----+-------------+---------------------+-------+-------
+  1 | 978-89-0001 | 데이터베이스 첫걸음 | 19000 |    12
+  2 | 978-89-0002 | SQL 레시피          | 25000 |     0
+  3 | 978-89-0003 | PostgreSQL 인사이드 | 32000 |     2
+  4 | 978-89-0004 | 인덱스 설계         | 28000 |     7
+(4 rows)
+```
+
+`WHEN` 절은 위에서부터 차례로 보고 처음 맞는 것 하나만 실행한다. 그래서 좁은 조건(`AND f.stock = 0`)을 위에 둔다. 3번 책은 파일에 없어서 그대로다. 16에서는 "원본에 없는 행"을 다룰 방법이 없고, 17부터 `WHEN NOT MATCHED BY SOURCE THEN DELETE` 같은 절과 `MERGE ... RETURNING`(어느 동작이었는지는 `merge_action()`)이 추가됐다.
+
+`MERGE`와 `ON CONFLICT`는 비슷해 보여도 쓰임이 다르다. `MERGE`는 조인 조건으로 짝을 짓고 유니크 인덱스를 요구하지 않는다. 그 대신 다른 세션이 같은 키를 동시에 넣으면 `ON CONFLICT`처럼 기다렸다가 UPDATE로 바꿔 주지 않고 중복 키 오류가 날 수 있다. 공식 문서도 동시성이 걸린 upsert에는 `ON CONFLICT`를 권한다. 정리하면 요청마다 들어오는 한두 행의 upsert는 `ON CONFLICT`, 배치로 테이블 두 개를 맞추는 일은 `MERGE`다.
+
+## WITH로 긴 쿼리를 문단처럼 나누기
+
+`WITH`(CTE, 공통 테이블 식)는 쿼리 안에서 쓸 임시 결과에 이름을 붙인다. 서브쿼리를 안쪽으로 겹겹이 넣는 대신 위에서 아래로 읽히게 쓸 수 있다.
+
+```sql
+WITH paid AS (                       -- 1단계: 결제 완료 주문만
+  SELECT user_id, total FROM orders WHERE status = 'paid'
+), per_user AS (                     -- 2단계: 회원별로 합친다
+  SELECT user_id, sum(total) AS spent, count(*) AS cnt
+  FROM paid GROUP BY user_id
+)
+SELECT u.name, p.spent, p.cnt        -- 3단계: 이름을 붙여 보여 준다
+FROM per_user p JOIN users u ON u.id = p.user_id
+ORDER BY p.spent DESC;
+```
+
+```text
+ name | spent  | cnt
+------+--------+-----
+ kim  | 100000 |   3
+ lee  |  57000 |   2
+ park |  18000 |   1
+(3 rows)
+```
+
+자기 자신을 참조하는 `WITH RECURSIVE`(카테고리 트리, 조직도)는 [계층형 쿼리](/posts/sqld-top-n-hierarchical-pivot) 글에서 다뤘으니 여기서는 PostgreSQL에만 있는 쓰임 하나를 본다.
+
+## 한 문장으로 행을 옮기는 쓰기 CTE
+
+PostgreSQL은 `WITH` 안에 `INSERT`, `UPDATE`, `DELETE`를 넣을 수 있다. 취소된 주문을 보관 테이블로 옮기는 일을 예로 든다. 주문 항목이 주문을 참조하고 있어서 항목부터 지워야 하고, 지운 것은 보관 테이블에 넣어야 한다. 보통은 문장 네 개를 트랜잭션으로 묶는다. 쓰기 CTE로는 한 문장이다.
+
+```sql
+CREATE TABLE orders_archive (LIKE orders);           -- 컬럼 구조만 복사
+CREATE TABLE order_items_archive (LIKE order_items);
+
+WITH gone_items AS (                                 -- 1. 취소 주문의 항목을 지우고
+  DELETE FROM order_items
+  WHERE order_id IN (SELECT id FROM orders WHERE status = 'cancelled')
+  RETURNING *
+), saved_items AS (                                  -- 2. 지운 항목을 보관함에 넣는다
+  INSERT INTO order_items_archive SELECT * FROM gone_items
+), gone_orders AS (                                  -- 3. 취소 주문을 지우고
+  DELETE FROM orders WHERE status = 'cancelled'
+  RETURNING *
+)
+INSERT INTO orders_archive                           -- 4. 보관함에 넣는다
+SELECT * FROM gone_orders
+RETURNING id, user_id, status;
+```
+
+```text
+ id | user_id |  status
+----+---------+-----------
+  4 |       1 | cancelled
+(1 row)
+
+INSERT 0 1
+```
+
+`DELETE ... RETURNING`이 지운 행을 다음 단계로 넘기는 통로다. 문장 하나라서 중간에 실패하면 전부 취소되고, 외래 키 검사도 문장이 끝날 때 한꺼번에 해서 순서 문제로 막히지 않았다.
+
+조심할 점이 하나 있다. 한 문장 안의 모든 하위 문장은 같은 스냅숏을 본다. 한 CTE가 바꾼 결과를 다른 부분이 테이블에서 다시 읽으면 바뀌기 전 값이 보인다. 바뀐 값은 `RETURNING`으로만 전달된다.
+
+```sql
+WITH upd AS (
+  UPDATE books SET price = price + 1000 WHERE id = 1 RETURNING price
+)
+SELECT (SELECT price FROM books WHERE id = 1) AS seen_in_table,  -- 테이블에서 다시 읽기
+       (SELECT price FROM upd)                AS returned;       -- RETURNING으로 받기
+```
+
+```text
+ seen_in_table | returned
+---------------+----------
+         19000 |    20000
+(1 row)
+```
+
+같은 행을 한 문장 안에서 두 번 고치는 것도 피한다. 어느 쪽이 이길지 정해져 있지 않다.
+
+## 그룹마다 한 줄만 남기는 DISTINCT ON
+
+회원별 마지막 주문 하나만 필요할 때는 PostgreSQL 전용 문법 `DISTINCT ON`이 가장 짧다. "괄호 안 값이 같은 행 중에서 ORDER BY로 첫 번째인 행 하나만 남긴다"는 뜻이다.
+
+```sql
+SELECT DISTINCT ON (user_id) user_id, id, total, created_at
+FROM orders
+ORDER BY user_id, created_at DESC;   -- 첫 키는 DISTINCT ON과 같아야 한다
+```
+
+```text
+ user_id | id | total |       created_at
+---------+----+-------+------------------------
+       1 |  6 | 25000 | 2026-10-07 08:10:00+09
+       2 |  5 | 32000 | 2026-10-06 20:00:00+09
+       3 |  7 | 18000 | 2026-10-07 21:00:00+09
+(3 rows)
+```
+
+`ORDER BY`가 `DISTINCT ON`의 컬럼으로 시작하지 않으면 오류가 난다. 그리고 같은 회원 안에서 `created_at`이 같은 주문이 둘이면 어느 쪽이 나올지 정해지지 않는다. 결과가 매번 같아야 하면 `ORDER BY user_id, created_at DESC, id DESC`처럼 끝에 유일한 컬럼을 붙인다. MySQL에는 이 문법이 없어서 윈도우 함수로 쓴다.
+
+아래 플레이그라운드에서 `DISTINCT ON`과 top-N을 직접 흉내 내 보자. 정렬하고, 회원이 바뀔 때 개수를 다시 세는 것이 전부다. 시간이 같으면 id가 큰 쪽을 먼저 둔다.
+
+<CodePlayground
+  caption="회원별 최근 주문 n건의 id"
+  functionName="topNPerGroup"
+  initialCode={`function topNPerGroup(rows, n) {
+  // rows: [{ id, user_id, created_at: "2026-10-01 10:00" }, ...]
+  // user_id 오름차순, 같은 회원 안에서는 created_at 내림차순(같으면 id 내림차순)으로
+  // 회원마다 앞의 n건만 남겨 id 배열로 돌려준다
+  return [];
+}`}
+  solution={`function topNPerGroup(rows, n) {
+  const sorted = [...rows].sort((a, b) =>
+    a.user_id - b.user_id ||
+    (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0) ||
+    b.id - a.id
+  );
+  const out = [];
+  let current = null;
+  let count = 0;
+  for (const row of sorted) {
+    if (row.user_id !== current) { current = row.user_id; count = 0; } // 회원이 바뀌면 다시 센다
+    if (count < n) { out.push(row.id); count++; }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "DISTINCT ON (n = 1)", args: [[{ id: 1, user_id: 1, created_at: "2026-10-01 10:00" }, { id: 2, user_id: 1, created_at: "2026-10-03 12:00" }, { id: 3, user_id: 2, created_at: "2026-10-03 15:00" }, { id: 4, user_id: 1, created_at: "2026-10-05 09:30" }, { id: 5, user_id: 2, created_at: "2026-10-06 20:00" }, { id: 6, user_id: 1, created_at: "2026-10-07 08:10" }, { id: 7, user_id: 3, created_at: "2026-10-07 21:00" }], 1], expected: [6, 5, 7] },
+    { label: "회원별 3건", args: [[{ id: 1, user_id: 1, created_at: "2026-10-01 10:00" }, { id: 2, user_id: 1, created_at: "2026-10-03 12:00" }, { id: 3, user_id: 2, created_at: "2026-10-03 15:00" }, { id: 4, user_id: 1, created_at: "2026-10-05 09:30" }, { id: 5, user_id: 2, created_at: "2026-10-06 20:00" }, { id: 6, user_id: 1, created_at: "2026-10-07 08:10" }, { id: 7, user_id: 3, created_at: "2026-10-07 21:00" }], 3], expected: [6, 4, 2, 5, 3, 7] },
+    { label: "시간이 같으면 id 큰 쪽", args: [[{ id: 10, user_id: 5, created_at: "2026-10-01 09:00" }, { id: 11, user_id: 5, created_at: "2026-10-01 09:00" }, { id: 12, user_id: 4, created_at: "2026-09-30 23:00" }], 1], expected: [12, 11] },
+    { label: "빈 테이블", args: [[], 3], expected: [] },
+  ]}
+/>
+
+## 조건별 집계와 묶어 붙이기
+
+회원별로 전체 주문 수와 결제 완료 주문 수, 결제 금액을 한 줄에 보고 싶다. `FILTER`(9.4부터)는 집계 함수마다 따로 조건을 건다. `CASE WHEN`을 집계 안에 넣던 것보다 읽기 쉽다.
+
+```sql
+SELECT user_id,
+       count(*)                                  AS all_orders,
+       count(*)   FILTER (WHERE status = 'paid') AS paid,
+       sum(total) FILTER (WHERE status = 'paid') AS paid_total
+FROM orders
+GROUP BY user_id ORDER BY user_id;
+```
+
+```text
+ user_id | all_orders | paid | paid_total
+---------+------------+------+------------
+       1 |          3 |    3 |     100000
+       2 |          2 |    2 |      57000
+       3 |          1 |    1 |      18000
+(3 rows)
+```
+
+(취소 주문을 보관함으로 옮긴 뒤라 남은 주문이 모두 `paid`다.) MySQL 8에는 `FILTER`가 없어서 `SUM(CASE WHEN status = 'paid' THEN total END)`로 쓴다.
+
+주문 하나에 담긴 책을 한 칸에 모아야 할 때도 있다. `string_agg`는 문자열로, `array_agg`는 배열로, `json_agg`는 JSON 배열로 묶는다. 셋 다 괄호 안에 `ORDER BY`를 쓸 수 있다.
+
+```sql
+SELECT o.id,
+       string_agg(b.title, ', ' ORDER BY b.title) AS titles,
+       array_agg(b.id ORDER BY b.id)              AS book_ids,
+       json_agg(json_build_object('title', b.title, 'qty', i.qty) ORDER BY b.title) AS items
+FROM orders o
+JOIN order_items i ON i.order_id = o.id
+JOIN books b       ON b.id = i.book_id
+WHERE o.id IN (1, 2)
+GROUP BY o.id ORDER BY o.id;
+```
+
+```text
+ id |             titles              | book_ids |                                        items
+----+---------------------------------+----------+-------------------------------------------------------------------------------------
+  1 | 데이터베이스 첫걸음             | {1}      | [{"title" : "데이터베이스 첫걸음", "qty" : 1}]
+  2 | PostgreSQL 인사이드, SQL 레시피 | {2,3}    | [{"title" : "PostgreSQL 인사이드", "qty" : 1}, {"title" : "SQL 레시피", "qty" : 1}]
+(2 rows)
+```
+
+`json_agg`로 주문과 항목을 한 번에 JSON으로 만들면 API가 N+1 쿼리 없이 응답을 만들 수 있다. 다만 행이 많으면 DB가 JSON을 만드는 CPU를 쓰게 되니, 페이지네이션된 소량에만 쓴다. MySQL 8은 `GROUP_CONCAT`, `JSON_ARRAYAGG`가 비슷한 역할을 한다.
+
+## 주문이 없는 날도 0으로 채우는 리포트
+
+일별 매출을 그래프로 그리려고 날짜별로 묶었다.
+
+```sql
+SELECT created_at::date AS day, count(*) AS orders, sum(total) AS sales
+FROM orders
+WHERE created_at >= '2026-10-01' AND created_at < '2026-10-08'
+GROUP BY 1 ORDER BY 1;
+```
+
+```text
+    day     | orders | sales
+------------+--------+-------
+ 2026-10-01 |      1 | 18000
+ 2026-10-03 |      2 | 82000
+ 2026-10-06 |      1 | 32000
+ 2026-10-07 |      2 | 43000
+(4 rows)
+```
+
+주문이 없던 2일, 4일, 5일이 아예 빠졌다. 그래프 라이브러리는 4일 치 점을 받아 선으로 이어 버린다. 행이 없는 날은 `GROUP BY`가 만들어 낼 수 없으니, 날짜 목록을 먼저 만들고 주문을 거기에 `LEFT JOIN`한다. 날짜 목록은 `generate_series`가 만든다.
+
+```sql
+SELECT d::date AS day,
+       count(o.id)              AS orders,    -- count(*)가 아니라 count(o.id): 빈 날은 0
+       coalesce(sum(o.total), 0) AS sales     -- sum은 빈 날 NULL이라 0으로 바꾼다
+FROM generate_series(timestamptz '2026-10-01', '2026-10-07', interval '1 day') AS d
+LEFT JOIN orders o
+  ON o.created_at >= d AND o.created_at < d + interval '1 day'
+GROUP BY d ORDER BY d;
+```
+
+```text
+    day     | orders | sales
+------------+--------+-------
+ 2026-10-01 |      1 | 18000
+ 2026-10-02 |      0 |     0
+ 2026-10-03 |      2 | 82000
+ 2026-10-04 |      0 |     0
+ 2026-10-05 |      0 |     0
+ 2026-10-06 |      1 | 32000
+ 2026-10-07 |      2 | 43000
+(7 rows)
+```
+
+흔한 실수가 두 가지 있다. `count(*)`를 쓰면 `LEFT JOIN`으로 생긴 빈 행도 1로 센다. 그리고 `timestamptz`의 하루 경계는 세션 시간대(`timezone`)를 따른다. 서버가 UTC인데 한국 날짜로 묶고 싶다면 `SET timezone = 'Asia/Seoul'`을 하거나 `created_at AT TIME ZONE 'Asia/Seoul'`로 바꿔서 묶는다. 조인 조건을 `o.created_at::date = d::date`처럼 컬럼에 함수를 씌워 쓰면 인덱스를 못 타니 범위 조건으로 쓴다.
+
+## 계산해서 저장하는 generated column
+
+주문 항목의 금액(`qty * price`)을 매번 계산하기 귀찮고, 애플리케이션이 저장하게 하면 언젠가 값이 어긋난다. generated column은 다른 컬럼으로 계산되는 컬럼을 DB가 직접 관리한다. 12부터 생겼다.
+
+```sql
+ALTER TABLE order_items
+  ADD COLUMN line_total integer GENERATED ALWAYS AS (qty * price) STORED;
+
+UPDATE order_items SET qty = 2
+WHERE order_id = 2 AND book_id = 2
+RETURNING qty, price, line_total;            -- qty를 바꾸면 line_total이 따라 바뀐다
+
+UPDATE order_items SET line_total = 0 WHERE order_id = 1;   -- 직접 쓰기는 막힌다
+```
+
+```text
+ qty | price | line_total
+-----+-------+------------
+   2 | 25000 |      50000
+(1 row)
+
+UPDATE 1
+ERROR:  column "line_total" can only be updated to DEFAULT
+DETAIL:  Column "line_total" is a generated column.
+```
+
+`STORED`는 쓸 때 계산해서 실제로 저장한다는 뜻이다. 디스크를 쓰는 대신 읽을 때 공짜이고 인덱스도 만들 수 있다. 계산식은 같은 행의 컬럼만 쓸 수 있고, 같은 입력에 늘 같은 결과를 내는(IMMUTABLE) 함수만 허용된다. 그래서 "주문 후 며칠 지났나"처럼 `now()`가 들어간 식을 넣으면 `ERROR:  generation expression is not immutable`으로 거부된다.
+
+PostgreSQL 18부터는 읽을 때 계산하는 `VIRTUAL`이 생겼고, 종류를 적지 않으면 `VIRTUAL`이 기본값이다. 16에서는 `STORED`만 있다. 기존 테이블에 `STORED` 컬럼을 추가하면 모든 행을 다시 써야 해서 큰 테이블에서는 오래 잠긴다는 것도 기억해 둔다. MySQL은 5.7부터 `VIRTUAL`(기본)과 `STORED`를 모두 지원한다.
+
+## 이름 붙인 쿼리와 저장해 둔 결과
+
+회원별 매출을 여러 화면에서 쓴다. 같은 조인을 여기저기 복사하는 대신 뷰로 이름을 붙인다.
+
+```sql
+CREATE VIEW user_sales AS
+SELECT u.id AS user_id, u.name, count(o.id) AS orders, coalesce(sum(o.total), 0) AS spent
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id AND o.status = 'paid'
+GROUP BY u.id, u.name;
+
+SELECT * FROM user_sales ORDER BY user_id;
+```
+
+```text
+ user_id | name | orders | spent
+---------+------+--------+--------
+       1 | kim  |      3 | 100000
+       2 | lee  |      2 |  57000
+       3 | park |      1 |  18000
+(3 rows)
+```
+
+뷰는 저장된 쿼리일 뿐이다. 조회할 때마다 안의 쿼리가 다시 돈다. 그래서 항상 최신이지만 무거운 집계라면 매번 무겁다. 머티리얼라이즈드 뷰는 결과를 테이블처럼 저장해 두고, `REFRESH`할 때만 다시 계산한다.
+
+```sql
+CREATE MATERIALIZED VIEW user_sales_mv AS SELECT * FROM user_sales;
+
+-- park이 주문을 하나 더 한다
+INSERT INTO orders (user_id, status, total, created_at) VALUES (3, 'paid', 25000, '2026-10-08 10:00+09');
+
+SELECT v.user_id, v.spent AS view_spent, m.spent AS mv_spent
+FROM user_sales v JOIN user_sales_mv m USING (user_id) ORDER BY 1;
+```
+
+```text
+ user_id | view_spent | mv_spent
+---------+------------+----------
+       1 |     100000 |   100000
+       2 |      57000 |    57000
+       3 |      43000 |    18000
+(3 rows)
+```
+
+뷰는 바로 43000이 됐고, 머티리얼라이즈드 뷰는 아직 18000이다. 아래 그림처럼 둘은 데이터가 흐르는 시점이 다르다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="뷰는 조회할 때, 머티리얼라이즈드 뷰는 REFRESH할 때 계산한다"
+  nodes={[
+    { id: "t", label: "orders, users", sub: "원본 테이블", x: 200, y: 40, w: 150 },
+    { id: "v", label: "user_sales", sub: "VIEW: 쿼리만", x: 90, y: 140, w: 130 },
+    { id: "mv", label: "user_sales_mv", sub: "결과를 저장", x: 310, y: 140, w: 140 },
+    { id: "q1", label: "조회", sub: "항상 최신", x: 90, y: 240, w: 110 },
+    { id: "q2", label: "조회", sub: "빠르지만 지난 값", x: 310, y: 240, w: 140 },
+  ]}
+  edges={[
+    { from: "t", to: "v", label: "매번 계산" },
+    { from: "t", to: "mv", label: "REFRESH 때만", dashed: true },
+    { from: "v", to: "q1" },
+    { from: "mv", to: "q2" },
+  ]}
+/>
+
+일반 `REFRESH MATERIALIZED VIEW`는 다시 계산하는 동안 강한 잠금을 잡아서 그동안 그 뷰를 읽는 쿼리가 모두 기다린다. 읽기를 막지 않으려면 `CONCURRENTLY`를 쓰는데, 이건 새 결과와 옛 결과를 비교해 바뀐 행만 고치는 방식이라 행을 구별할 유니크 인덱스가 필요하다.
+
+```sql
+REFRESH MATERIALIZED VIEW CONCURRENTLY user_sales_mv;     -- 유니크 인덱스가 없으면
+CREATE UNIQUE INDEX ON user_sales_mv (user_id);
+REFRESH MATERIALIZED VIEW CONCURRENTLY user_sales_mv;     -- 이제 된다
+SELECT user_id, spent FROM user_sales_mv ORDER BY 1;
+```
+
+```text
+ERROR:  cannot refresh materialized view "public.user_sales_mv" concurrently
+HINT:  Create a unique index with no WHERE clause on one or more columns of the materialized view.
+CREATE INDEX
+REFRESH MATERIALIZED VIEW
+ user_id | spent
+---------+--------
+       1 | 100000
+       2 |  57000
+       3 |  43000
+(3 rows)
+```
+
+`CONCURRENTLY`도 같은 뷰의 REFRESH끼리는 동시에 돌 수 없고, 바뀐 행이 많으면 일반 REFRESH보다 일이 많다. PostgreSQL에는 원본이 바뀔 때 자동으로 갱신하는 기능이 없어서 cron이나 pg_cron으로 주기적으로 돌린다. 몇 분 늦어도 되는 대시보드 집계에 맞고, 실시간이 필요하면 다음 글의 트리거로 요약 테이블을 직접 관리하거나 [캐시](/posts/caching-strategies)를 쓴다. MySQL에는 머티리얼라이즈드 뷰가 없다.
+
+## 50만 건을 한 번에 넣는 COPY
+
+성능을 보려면 데이터가 커야 한다. 회원을 2만 명으로 늘리고, 주문 50만 건을 CSV로 만들어 넣는다. 대량 적재에는 `INSERT`가 아니라 `COPY`를 쓴다. 행마다 문장을 해석하고 왕복하는 대신, 파일 하나를 스트림으로 흘려 넣는다.
+
+```sql
+-- 회원 4 ~ 20000번
+INSERT INTO users (email, name, created_at)
+SELECT 'user' || i || '@example.com', 'user' || i,
+       timestamptz '2025-10-01 00:00+09' + i * interval '20 minutes'
+FROM generate_series(4, 20000) AS i;
+
+-- 주문 50만 건을 CSV로 내보낸다 (psql 명령, 파일은 클라이언트 쪽에 생긴다)
+SELECT setseed(0.42);
+\copy (SELECT 1 + floor(random() * 20000)::bigint, CASE WHEN random() < 0.85 THEN 'paid' WHEN random() < 0.5 THEN 'pending' ELSE 'cancelled' END, (1 + floor(random() * 50)::int) * 1000, timestamptz '2025-10-17 00:00+09' + random() * interval '365 days' FROM generate_series(1, 500000)) TO '/tmp/orders.csv' WITH (FORMAT csv, HEADER)
+
+-- CSV를 orders에 넣는다
+\copy orders (user_id, status, total, created_at) FROM '/tmp/orders.csv' WITH (FORMAT csv, HEADER)
+VACUUM ANALYZE;
+```
+
+```text
+COPY 500000
+```
+
+`COPY ... FROM '/파일'`은 서버가 자기 디스크의 파일을 읽어서 슈퍼유저나 `pg_read_server_files` 역할이 필요하다. psql의 `\copy`는 클라이언트가 파일을 읽어 `COPY FROM STDIN`으로 보내 주니 일반 계정으로도 된다. 애플리케이션에서는 드라이버의 COPY API(JDBC `CopyManager`, psycopg `cursor.copy()` 등)를 쓴다.
+
+얼마나 차이 나는지 주문 2만 건을 세 가지로 넣어 봤다. 같은 장비에서 유닉스 소켓으로 접속했고, 시간은 `time`으로 쟀다.
+
+```bash
+# 1) INSERT 2만 개, 문장마다 자동 커밋
+time sudo -u postgres psql -d shop -q -f /tmp/insert_20k.sql
+# 2) 같은 파일을 트랜잭션 하나로 (-1)
+time sudo -u postgres psql -d shop -q -1 -f /tmp/insert_20k.sql
+# 3) \copy
+time sudo -u postgres psql -d shop -c "\copy orders_ins (user_id, status, total, created_at) FROM '/tmp/orders_20k.csv' WITH (FORMAT csv, HEADER)"
+```
+
+```text
+real	0m7.988s
+real	0m1.618s
+real	0m0.086s
+```
+
+자동 커밋 INSERT는 커밋마다 WAL을 디스크에 내려 쓰느라 8초, 트랜잭션 하나로 묶으면 1.6초, `COPY`는 0.09초였다. 네트워크 너머의 DB라면 왕복 지연이 행마다 붙어서 차이가 더 벌어진다. 수만 건 이상을 넣을 때는 `COPY`, 그게 어려우면 여러 행 `INSERT ... VALUES (...), (...)`를 트랜잭션 하나로 묶는다. 처음 적재할 때는 인덱스를 나중에 만드는 편이 빠르다.
+
+## 사용자마다 최근 주문 세 건
+
+마이페이지 목록에 회원 20명을 보여 주면서 회원마다 최근 주문 세 건을 붙여야 한다. 그룹별 상위 N개(top-N per group) 문제다. 회원별 1건이라면 앞에서 본 `DISTINCT ON`으로 되지만, 3건은 안 된다. 흔히 떠올리는 답은 [윈도우 함수](/posts/sqld-window-functions)다.
+
+```sql
+-- 회원 1~20번의 주문에 회원별 순번을 매기고 3번까지만 남긴다
+SELECT user_id, id, created_at
+FROM (
+  SELECT user_id, id, created_at,
+         row_number() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+  FROM orders
+  WHERE user_id BETWEEN 1 AND 20
+) t
+WHERE rn <= 3;
+```
+
+PostgreSQL에는 다른 답이 하나 더 있다. `LATERAL`은 FROM 절의 서브쿼리가 왼쪽 테이블의 현재 행을 참조하게 해 준다. "회원 한 명마다 이 서브쿼리를 돌려라"라는 뜻이고, 프로그래밍으로 치면 바깥 for문 안의 쿼리다.
+
+```sql
+SELECT u.id AS user_id, o.id, o.created_at
+FROM users u
+CROSS JOIN LATERAL (            -- 회원 u마다 아래를 실행한다
+  SELECT id, created_at FROM orders
+  WHERE orders.user_id = u.id   -- 바깥의 u를 안에서 참조한다
+  ORDER BY created_at DESC
+  LIMIT 3
+) o
+WHERE u.id BETWEEN 1 AND 20;
+```
+
+```text
+-- 회원 1, 2번만 잘라 본 결과
+ user_id |   id   |          created_at
+---------+--------+-------------------------------
+       1 |      6 | 2026-10-07 08:10:00+09
+       1 |      2 | 2026-10-03 12:00:00+09
+       1 |      1 | 2026-10-01 10:00:00+09
+       2 | 195670 | 2026-10-10 21:37:40.73611+09
+       2 | 428658 | 2026-10-07 22:36:06.709188+09
+       2 |      5 | 2026-10-06 20:00:00+09
+(6 rows)
+```
+
+인덱스가 없을 때 두 쿼리의 실행 계획을 본다. 중요한 줄만 옮겼다.
+
+```text
+-- 윈도우 함수, 인덱스 없음
+   ->  Parallel Seq Scan on orders  (cost=0.00..7350.04 rows=174 width=24) (actual time=0.082..9.172 rows=167 loops=3)
+         Filter: ((user_id >= 1) AND (user_id <= 20))
+         Rows Removed by Filter: 166502
+ Execution Time: 22.883 ms
+
+-- LATERAL, 인덱스 없음
+               ->  Seq Scan on orders  (cost=0.00..10475.09 rows=25 width=16) (actual time=0.897..23.939 rows=25 loops=20)
+                     Filter: (user_id = u.id)
+                     Rows Removed by Filter: 499982
+                     Buffers: shared hit=84500
+ Execution Time: 480.306 ms
+```
+
+인덱스 없이는 LATERAL이 훨씬 느리다. `loops=20`이 보이는가. 회원 20명마다 50만 건을 통째로 읽었다. LATERAL은 "회원마다 한 번씩"이라서 한 번이 비싸면 그대로 곱해진다. 이제 `(user_id, created_at DESC)` 인덱스를 만든다. 회원별로 최신순 정렬된 찾아보기다. 인덱스 자체는 [인덱스 글](/posts/db-index)에서 자세히 다뤘다.
+
+```sql
+CREATE INDEX orders_user_created_idx ON orders (user_id, created_at DESC);
+```
+
+```text
+-- 윈도우 함수, 인덱스 있음
+         ->  Sort  (cost=1494.13..1495.42 rows=515 width=24) (actual time=1.434..1.498 rows=502 loops=1)
+               Sort Key: orders.user_id, orders.created_at DESC
+               ->  Bitmap Heap Scan on orders  (cost=13.70..1470.93 rows=515 width=24) (actual time=0.143..1.213 rows=502 loops=1)
+                     Heap Blocks: exact=467
+                     Buffers: shared hit=470 read=1
+ Execution Time: 1.618 ms
+
+-- LATERAL, 인덱스 있음
+ Nested Loop  (cost=0.71..264.38 rows=60 width=24) (actual time=0.024..0.269 rows=60 loops=1)
+   Buffers: shared hit=121
+   ->  Limit  (cost=0.42..12.95 rows=3 width=16) (actual time=0.008..0.012 rows=3 loops=20)
+         ->  Index Scan using orders_user_created_idx on orders  (cost=0.42..104.86 rows=25 width=16) (actual time=0.008..0.012 rows=3 loops=20)
+               Index Cond: (user_id = u.id)
+ Execution Time: 0.292 ms
+```
+
+윈도우 함수는 인덱스로 후보를 줄였지만 20명의 주문 502건을 전부 읽고 정렬한 뒤 60건만 남겼다(470페이지). LATERAL은 회원마다 인덱스에서 최신 세 건만 읽고 `Limit`에서 멈췄다(121페이지). 아래 그림이 그 움직임이다.
+
+<AlgoTrace
+  caption="LATERAL + LIMIT 3은 회원마다 인덱스 앞부분만 읽는다"
+  memoryLabel="결과"
+  cells={["u1 10-07", "u1 10-03", "u1 10-01", "u1 09-28", "u1 09-20", "u2 10-10", "u2 10-07", "u2 10-06", "u2 09-29", "u2 …"]}
+  steps={[
+    { memory: [], caption: "인덱스는 user_id 순, 같은 회원 안에서는 최신순으로 정렬돼 있다." },
+    { pointer: 0, found: [0], memory: ["u1 #6"], caption: "회원 1번. 인덱스에서 (1, 가장 최근)으로 바로 내려간다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["u1 #6", "u1 #2", "u1 #1"], caption: "옆 칸으로 두 번 더 읽으면 세 건이다. LIMIT 3이 차서 1번 회원은 여기서 끝낸다." },
+    { pointer: 5, found: [0, 1, 2, 5], memory: ["u1 #6", "u1 #2", "u1 #1", "u2 #195670"], caption: "1번의 나머지 주문은 건너뛰고 회원 2번의 시작점으로 다시 내려간다." },
+    { pointer: 7, found: [0, 1, 2, 5, 6, 7], memory: ["u1 #6", "u1 #2", "u1 #1", "u2 #195670", "u2 #428658", "u2 #5"], caption: "2번도 세 건만 읽는다. 회원이 주문을 수천 건 가져도 읽는 양은 세 건이다." },
+  ]}
+/>
+
+그렇다고 LATERAL이 늘 이기지는 않는다. 회원 2만 명 전체로 돌리면 LATERAL은 98.8ms, 윈도우 함수는 인덱스 순서대로 50만 건을 다 읽어 468.6ms가 걸렸다. 여기서도 LATERAL이 빨랐지만, 회원 한 명당 주문이 몇 건 안 되면 회원마다 인덱스를 새로 내려가는 비용이 더 커져서 윈도우 함수가 유리해진다. 인덱스가 없으면 앞에서 본 대로 LATERAL이 크게 진다. 고르는 기준은 두 가지다. 바깥 행(회원)이 적고 그룹이 크면 LATERAL, 전체를 한 번 훑어야 하고 그룹이 작으면 윈도우 함수다.
+
+주문이 없는 회원도 목록에 남기려면 `CROSS JOIN LATERAL` 대신 `LEFT JOIN LATERAL (...) o ON true`를 쓴다. 서브쿼리가 0행이면 주문 컬럼이 NULL로 채워진다.
+
+## CTE가 최적화를 막던 시절
+
+앞에서 넣은 50만 건으로 하나 더 본다. PostgreSQL 11까지 `WITH`는 늘 따로 먼저 계산해서 임시 결과로 만들었다(최적화 울타리라고 불렀다). 12부터는 재귀가 아니고, 부작용이 없고, 한 번만 참조되는 CTE를 바깥 쿼리에 녹여 넣는다. 차이는 실행 계획에서 바로 보인다.
+
+```sql
+-- 12 이상 기본 동작: 바깥의 user_id = 42가 안으로 들어간다
+EXPLAIN (ANALYZE, BUFFERS)
+WITH paid AS (
+  SELECT * FROM orders WHERE status = 'paid'
+)
+SELECT id, total FROM paid WHERE user_id = 42;
+
+-- MATERIALIZED: 11 이전처럼 결제 주문 전체를 먼저 만든다
+EXPLAIN (ANALYZE, BUFFERS)
+WITH paid AS MATERIALIZED (
+  SELECT * FROM orders WHERE status = 'paid'
+)
+SELECT id, total FROM paid WHERE user_id = 42;
+```
+
+```text
+-- 기본 (인라인)
+ Bitmap Heap Scan on orders  (cost=4.62..99.22 rows=21 width=12) (actual time=0.022..0.055 rows=25 loops=1)
+   Recheck Cond: (user_id = 42)
+   Filter: (status = 'paid'::text)
+   Buffers: shared hit=29
+   ->  Bitmap Index Scan on orders_user_created_idx  (cost=0.00..4.61 rows=25 width=0) (actual time=0.011..0.011 rows=26 loops=1)
+         Index Cond: (user_id = 42)
+ Execution Time: 0.075 ms
+
+-- MATERIALIZED
+ CTE Scan on paid  (cost=10475.09..20026.86 rows=2123 width=12) (actual time=4.042..168.418 rows=25 loops=1)
+   Filter: (user_id = 42)
+   Rows Removed by Filter: 424232
+   Buffers: shared hit=4225, temp written=2589
+   CTE paid
+     ->  Seq Scan on orders  (cost=0.00..10475.09 rows=424523 width=33) (actual time=0.009..46.137 rows=424257 loops=1)
+ Execution Time: 170.061 ms
+```
+
+인라인된 쪽은 인덱스로 회원 42번의 주문 26건만 읽었다. `MATERIALIZED`는 결제 주문 42만 건을 먼저 만들어 임시 파일까지 쓴 다음(`temp written`) 25건을 걸러 냈다. 0.075ms와 170ms다.
+
+그럼 `MATERIALIZED`는 언제 쓰나. 같은 CTE를 여러 번 참조하는데 계산이 비싸면 12 이상에서도 한 번만 계산하도록 자동으로 구체화한다. 반대로 여러 번 참조해도 녹여 넣는 편이 나으면 `NOT MATERIALIZED`로 지시한다. 플래너가 잘못된 조인 순서를 고를 때 일부러 울타리를 쳐서 계산 순서를 고정하는 데 `MATERIALIZED`를 쓰기도 한다. 11 이하에서 옮겨 온 쿼리가 12 이상에서 갑자기 빨라지거나 느려졌다면 이 변화부터 의심한다.
+
+## 문장 하나로 끝내는 습관
+
+이 글의 기능은 대부분 "애플리케이션이 두세 번 왕복하며 하던 일을 문장 하나로 DB에 맡기기"다. `RETURNING`은 다시 조회하는 왕복을, `ON CONFLICT`는 조회와 삽입 사이의 틈을, 쓰기 CTE는 여러 문장을 묶는 트랜잭션을 없앤다. `LATERAL`과 `DISTINCT ON`은 그룹별 상위 N개를 짧게 쓰게 해 주지만, 빠른지는 인덱스와 데이터 모양에 달려 있으니 실행 계획으로 확인한다. 다음 글 [함수, 프로시저, 트리거](/posts/postgres-functions-triggers)에서는 한 걸음 더 나가서 로직 자체를 DB 안에 둔다.
+
+## 면접에서 나올 만한 질문
+
+### INSERT 직후 생성된 id를 어떻게 받나요?
+
+PostgreSQL에서는 `INSERT ... RETURNING id`로 같은 문장에서 받는다. 다시 조회하면 왕복이 한 번 늘고, 그사이 다른 요청이 행을 넣으면 틀린 id를 받을 수 있다. `RETURNING`은 `UPDATE`, `DELETE`에도 쓸 수 있어서 재고 차감 후 남은 수량, 지운 행 목록도 바로 받는다. MySQL 8에는 없어서 `LAST_INSERT_ID()`를 쓴다.
+
+### SELECT로 확인한 뒤 INSERT하는 upsert는 왜 위험한가요?
+
+두 요청이 동시에 "없다"를 보고 둘 다 넣을 수 있어서다. `SELECT`는 없는 행을 잠글 수 없어서 격리 수준을 올려도 이 틈은 남고, 결국 중복 키 오류가 나거나 유니크 제약이 없으면 중복 행이 생긴다. `INSERT ... ON CONFLICT`는 유니크 인덱스에서 판단하고, 같은 키를 넣는 중인 트랜잭션이 있으면 기다렸다가 UPDATE로 바꿔서 경쟁 없이 처리한다.
+
+### ON CONFLICT를 쓰려면 무엇이 필요하고, 흔한 오류는 무엇인가요?
+
+충돌 대상 컬럼과 정확히 맞는 유니크 인덱스나 기본 키가 있어야 한다. 없으면 "there is no unique or exclusion constraint matching" 오류로 실행되지 않는다. 한 문장에 같은 키가 두 번 들어 있으면 "cannot affect row a second time" 오류가 나니 먼저 합쳐서 보낸다. `EXCLUDED`는 넣으려다 막힌 값이고, 충돌해도 시퀀스 값은 소비돼 id에 구멍이 생긴다.
+
+### MERGE와 ON CONFLICT는 어떻게 다른가요?
+
+`MERGE`(15부터)는 조인 조건으로 원본과 대상을 짝지어 MATCHED와 NOT MATCHED에 따라 UPDATE, INSERT, DELETE를 고르는 표준 문법이다. 유니크 인덱스가 없어도 되지만, 동시에 같은 키가 들어오면 기다렸다 UPDATE로 바꿔 주지 않아 중복 키 오류가 날 수 있다. 그래서 요청 단위 upsert는 `ON CONFLICT`, 배치 동기화는 `MERGE`를 쓴다. `RETURNING`은 17부터 된다.
+
+### 그룹별 최신 N건은 어떻게 구하고, 어떤 방법이 빠른가요?
+
+윈도우 함수 `row_number()`로 순번을 매겨 거르는 방법과 `LATERAL` 서브쿼리에 `ORDER BY ... LIMIT N`을 거는 방법이 있다. `(user_id, created_at DESC)` 인덱스가 있고 바깥 그룹 수가 적으면 LATERAL이 그룹마다 N건만 읽어서 빠르다. 예제에서 회원 20명은 0.29ms 대 1.6ms였다. 인덱스가 없으면 LATERAL은 그룹마다 테이블을 다 읽어 크게 느려지니 계획을 꼭 확인한다. 1건이면 `DISTINCT ON`이 가장 짧다.
+
+### CTE는 성능에 어떤 영향을 주나요?
+
+12부터 재귀가 아니고 부작용이 없고 한 번만 참조되는 CTE는 바깥 쿼리에 인라인돼 서브쿼리와 같게 최적화된다. 11 이하에서는 늘 먼저 계산해서 바깥 조건이 안으로 들어가지 못했다. `MATERIALIZED`, `NOT MATERIALIZED`로 직접 정할 수 있고, 예제에서 강제로 구체화하니 인덱스를 못 써 0.075ms가 170ms가 됐다. 쓰기 CTE는 항상 한 번 실행되고 모든 부분이 같은 스냅숏을 본다.
+
+### 뷰와 머티리얼라이즈드 뷰는 언제 쓰나요?
+
+뷰는 이름 붙인 쿼리라 조회할 때마다 계산하고 늘 최신이다. 머티리얼라이즈드 뷰는 결과를 저장해 두고 `REFRESH` 때만 다시 계산해서 빠르지만 그사이 값이 늦다. 일반 REFRESH는 읽기를 막으니 운영에서는 `CONCURRENTLY`를 쓰고, 이를 위해 유니크 인덱스가 필요하다. 자동 갱신이 없어서 몇 분 늦어도 되는 집계에 맞다.
+
+### 대량 데이터를 빠르게 넣으려면 어떻게 하나요?
+
+`COPY`를 쓴다. 예제에서 2만 건이 자동 커밋 INSERT로 8초, 트랜잭션 하나로 묶은 INSERT로 1.6초, `\copy`로 0.09초였다. 서버 파일을 읽는 `COPY FROM '파일'`은 슈퍼유저나 `pg_read_server_files`가 필요하니 보통 클라이언트의 `\copy`나 드라이버 COPY API를 쓴다. 처음 적재라면 인덱스와 외래 키를 나중에 만들면 더 빠르다.
