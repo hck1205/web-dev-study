@@ -24,6 +24,11 @@ export const TOPICS: Topic[] = [
       },
       { id: "computer-science", label: "Computer Science", description: "컴퓨터 과학 기초 이론" },
       {
+        id: "in-practice",
+        label: "In Practice",
+        description: "이론이 실제 개발과 운영에서 쓰이는 순간: 장애 대응, 디버깅, 설계 판단",
+      },
+      {
         id: "database",
         label: "Database",
         description: "RDB, NoSQL, 쿼리와 인덱스",
@@ -50,7 +55,10 @@ export const TOPICS: Topic[] = [
         id: "network",
         label: "Network",
         description: "HTTP, TCP/IP, DNS, 캐시, 보안",
-        children: [{ id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" }],
+        children: [
+          { id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" },
+          { id: "layers", label: "OSI · TCP/IP", description: "OSI 7계층과 TCP/IP 4계층, 계층별 프로토콜과 장비" },
+        ],
       },
       {
         id: "os",

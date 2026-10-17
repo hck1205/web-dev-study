@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React}, Network › HTTP, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React}, Network › {HTTP, OSI · TCP/IP}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -152,6 +152,11 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 항목 수와 길이가 똑같은 불릿, 습관적인 3개짜리 나열, 섹션마다 끝에 붙는 요약
 - 습관적인 표. 비교가 정말 필요할 때만 쓴다
 - 근거 없는 일반론("많은 개발자들이 …")
+
+### 실무에서 쓰이는 순간 (practical)
+- 개념 글에는 "이걸 알면 현장에서 무엇이 달라지나"를 담는다. 장애를 어디서부터 보는지, 어떤 명령·로그·지표로 확인하는지, 설계·설정을 어떻게 고르는지, 모르면 어떤 실수를 하는지를 실제 증상과 함께 쓴다(예: "502인데 앱 로그엔 아무것도 없다 → L4/L7 어디서 끊겼는지 본다").
+- 별도 섹션 이름을 고정하지 않는다. 글 흐름에 맞는 소제목으로 쓰고(예: "현장에서 이 계층을 만나는 순간"), 명령은 실제로 돌려 본 출력과 함께 쓴다.
+- 여러 글에 걸친 실무 가이드(계층별 장애 좁히기, 패킷 캡처로 보기, 운영 체크리스트처럼 이론 여러 개를 엮어 현장 문제를 푸는 글)는 `Programming › In Practice` 토픽에 둔다. 이론 글과 서로 링크한다.
 
 ### 그림과 애니메이션
 - 설명의 중심은 그림이다. 글은 그림을 보기 전에 맥락을 주고, 본 뒤에 의미를 정리한다. 그림은 본문 흐름 안에서 자연스럽게 소개한다("아래 그림에서 다음을 누르면 …").
