@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "db-modeling-normalization",
+    title: "테이블을 어떻게 나누나: 정규화와 반정규화",
+    summary: "전화번호 하나 바꾸는 데 300줄을 고쳐야 하는 테이블에서 시작해, 함수 종속을 기준으로 1NF부터 BCNF까지 나눠 본다. 반정규화는 언제 들이고 원본과 어떻게 맞추는지도 실제 SQL로 따라간다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "SQLD"],
+    date: "2026-10-17",
+    keywords: ["정규화", "반정규화", "함수 종속", "대리 키", "부분 유니크 인덱스"],
+  },
+  {
+    slug: "db-transaction-isolation",
+    title: "트랜잭션과 격리 수준: 동시에 고치면 생기는 일",
+    summary: "마지막 재고 1개를 두 사람이 동시에 사서 재고가 -1이 되는 장면을 두 세션으로 재현하고, 격리 수준이 실제로 무엇을 막는지 PostgreSQL과 MySQL을 나란히 본다. 조건부 UPDATE, 비관적·낙관적 잠금, 교착 상태와 오래 열린 트랜잭션까지 다룬다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "SQLD", "Transaction", "Concurrency"],
+    date: "2026-10-17",
+    keywords: ["격리 수준", "MVCC", "갱신 손실", "쓰기 왜곡", "교착 상태"],
+  },
+  {
     slug: "db-replication-sharding",
     title: "DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩",
     summary: "읽기가 몰리면 복제본으로, 테이블이 너무 커지면 파티션으로, 쓰기와 데이터가 한 대를 넘으면 샤드로 나눈다. PostgreSQL 16에서 복제 지연, 파티션 가지치기, 일관된 해싱을 직접 돌려 보며 각 단계가 푸는 문제와 새로 생기는 문제를 정리한다.",

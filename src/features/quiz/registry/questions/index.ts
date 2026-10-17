@@ -10,7 +10,9 @@ import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_INDEX } from "./db-index";
+import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
+import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -71,7 +73,9 @@ export const QUESTION_SETS = [
   CORS,
   DB_ARCHITECTURE_BY_SCALE,
   DB_INDEX,
+  DB_MODELING_NORMALIZATION,
   DB_REPLICATION_SHARDING,
+  DB_TRANSACTION_ISOLATION,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
