@@ -2,6 +2,126 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "redis-cluster": {
+    "links": [
+      "redis-replication-sentinel",
+      "redis-basics"
+    ],
+    "mentions": []
+  },
+  "redis-replication-sentinel": {
+    "links": [
+      "redis-persistence-ha",
+      "redis-basics",
+      "redis-cluster",
+      "redis-memory-eviction"
+    ],
+    "mentions": []
+  },
+  "sqld-set-operators": {
+    "links": [
+      "sqld-subquery-set-operators",
+      "sqld-correlated-subquery",
+      "sqld-single-row-functions"
+    ],
+    "mentions": []
+  },
+  "sqld-correlated-subquery": {
+    "links": [
+      "sqld-subquery-set-operators",
+      "sqld-single-row-functions",
+      "db-index",
+      "sqld-window-functions"
+    ],
+    "mentions": [
+      "sqld-group-by-having"
+    ]
+  },
+  "sqld-null-functions": {
+    "links": [
+      "sqld-single-row-functions",
+      "sqld-type-conversion",
+      "sqld-subquery-set-operators",
+      "sqld-group-by-having",
+      "sql-select-where-null"
+    ],
+    "mentions": [
+      "postgres-getting-started"
+    ]
+  },
+  "sqld-type-conversion": {
+    "links": [
+      "sqld-single-row-functions",
+      "db-index"
+    ],
+    "mentions": []
+  },
+  "git-merge-conflict": {
+    "links": [
+      "git-branch-merge",
+      "git-rebase"
+    ],
+    "mentions": [
+      "git-staging-area"
+    ]
+  },
+  "git-stash-reflog": {
+    "links": [
+      "git-undo",
+      "git-troubleshooting"
+    ],
+    "mentions": [
+      "git-tips-advanced",
+      "git-staging-area"
+    ]
+  },
+  "git-repo-errors": {
+    "links": [
+      "git-internals-basics",
+      "git-troubleshooting",
+      "git-tips-advanced",
+      "git-ignore-config"
+    ],
+    "mentions": [
+      "git-branch-merge",
+      "git-remote-collaboration"
+    ]
+  },
+  "git-large-files-secrets": {
+    "links": [
+      "git-internals-basics",
+      "git-troubleshooting",
+      "git-undo",
+      "git-ignore-config"
+    ],
+    "mentions": [
+      "git-staging-area",
+      "db-modeling-normalization"
+    ]
+  },
+  "git-ignore-config": {
+    "links": [
+      "git-staging-area",
+      "git-undo",
+      "git-troubleshooting",
+      "git-branch-merge"
+    ],
+    "mentions": [
+      "db-modeling-normalization"
+    ]
+  },
+  "git-staging-area": {
+    "links": [
+      "git-internals-basics",
+      "git-remote-collaboration",
+      "git-ignore-config",
+      "git-tips-advanced"
+    ],
+    "mentions": [
+      "git-stash-reflog",
+      "git-merge-conflict"
+    ]
+  },
   "packet-capture-tcpdump": {
     "links": [
       "network-troubleshooting-by-layer",
@@ -133,7 +253,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
-      "redis-persistence-ha",
+      "redis-cluster",
       "db-type-newsql",
       "db-type-wide-column",
       "db-type-key-value",
@@ -434,7 +554,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql",
       "db-replication-sharding",
       "db-type-wide-column",
-      "redis-persistence-ha"
+      "redis-replication-sentinel"
     ],
     "mentions": [
       "db-type-key-value",
@@ -673,44 +793,52 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "git-internals-basics": {
     "links": [
+      "git-staging-area",
+      "git-ignore-config",
       "git-branch-merge",
-      "git-troubleshooting"
+      "git-troubleshooting",
+      "git-stash-reflog"
     ],
     "mentions": [
       "git-tips-advanced",
       "git-branching-strategy",
-      "git-undo"
+      "git-large-files-secrets"
     ]
   },
   "git-branch-merge": {
     "links": [
+      "git-merge-conflict",
       "git-internals-basics",
+      "git-staging-area",
+      "git-stash-reflog",
       "git-branching-strategy",
       "git-remote-collaboration"
     ],
-    "mentions": [
-      "git-undo"
-    ]
+    "mentions": []
   },
   "git-rebase": {
     "links": [
       "git-branch-merge",
       "git-branching-strategy",
+      "git-merge-conflict",
       "git-remote-collaboration",
+      "git-stash-reflog",
       "git-undo"
     ],
     "mentions": [
       "git-tips-advanced",
-      "git-internals-basics"
+      "git-staging-area"
     ]
   },
   "git-undo": {
     "links": [
+      "git-stash-reflog",
+      "git-staging-area",
       "git-troubleshooting"
     ],
     "mentions": [
-      "git-branch-merge",
-      "git-internals-basics"
+      "git-large-files-secrets",
+      "git-branch-merge"
     ]
   },
   "git-remote-collaboration": {
@@ -722,7 +850,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-troubleshooting"
     ],
     "mentions": [
-      "git-undo",
+      "git-stash-reflog",
       "token-login",
       "what-happens-google-com"
     ]
@@ -739,6 +867,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "git-troubleshooting": {
     "links": [
+      "git-large-files-secrets",
+      "git-repo-errors",
       "git-undo",
       "git-rebase",
       "git-remote-collaboration",
@@ -746,21 +876,26 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-branch-merge",
-      "git-internals-basics"
+      "git-ignore-config",
+      "git-staging-area",
+      "git-stash-reflog"
     ]
   },
   "git-tips-advanced": {
     "links": [
       "git-branching-strategy",
       "git-troubleshooting",
-      "git-branch-merge"
+      "git-merge-conflict"
     ],
     "mentions": [
+      "git-branch-merge",
       "dockerfile-image-layers"
     ]
   },
   "sqld-subquery-set-operators": {
     "links": [
+      "sqld-correlated-subquery",
+      "sqld-set-operators",
       "sqld-single-row-functions",
       "sqld-joins"
     ],
@@ -777,7 +912,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-rollup-cube-grouping-sets"
     ],
     "mentions": [
-      "sqld-group-by-having"
+      "sqld-group-by-having",
+      "sqld-correlated-subquery"
     ]
   },
   "sqld-rollup-cube-grouping-sets": {
@@ -788,7 +924,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "postgres-advanced-sql",
-      "sqld-single-row-functions"
+      "sqld-null-functions"
     ]
   },
   "sqld-top-n-hierarchical-pivot": {
@@ -840,6 +976,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "sqld-single-row-functions": {
     "links": [
+      "sqld-null-functions",
+      "sqld-type-conversion",
       "sqld-group-by-having"
     ],
     "mentions": [
@@ -851,7 +989,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-single-row-functions",
       "sqld-joins"
     ],
-    "mentions": []
+    "mentions": [
+      "sqld-null-functions"
+    ]
   },
   "sqld-joins": {
     "links": [
@@ -1017,6 +1157,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "redis-persistence-ha": {
     "links": [
+      "redis-replication-sentinel",
+      "redis-cluster",
       "redis-basics",
       "redis-memory-eviction"
     ],
@@ -1052,6 +1194,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "caching-strategies"
     ],
     "mentions": [
+      "redis-cluster",
       "db-type-relational",
       "event-loop",
       "db-transaction-isolation",
@@ -1067,6 +1210,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "redis-cluster",
       "db-type-columnar-olap",
       "db-replication-sharding",
       "dns"
@@ -1314,7 +1458,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-methods",
       "resilience-patterns",
       "rest-api-design",
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "network-troubleshooting-by-layer"
     ],
     "mentions": [
       "html-form-http",

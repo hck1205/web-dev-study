@@ -1,0 +1,376 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-correlated-subquery");
+
+"자기 부서 평균보다 급여를 많이 받는 사람"을 뽑는 쿼리가 개발 DB에서는 눈 깜짝할 사이에 끝났다. 운영 DB에 올렸더니 몇 초씩 걸린다. 쿼리는 한 줄도 다르지 않고, 다른 건 사원 수뿐이다. 서브쿼리 안에서 바깥 행의 부서 번호를 쓰는 바람에, 바깥 행 하나마다 부서 평균을 다시 구하고 있었다.
+
+이렇게 바깥 쿼리와 엮인 서브쿼리를 상관 서브쿼리라고 한다. 결과는 인라인 뷰나 조인으로 쓴 것과 같지만 실행되는 방식이 다르다. SELECT 목록에 넣는 스칼라 서브쿼리도 대개 상관 서브쿼리라 같은 성질을 갖고, 자주 쓰는 서브쿼리에 이름을 붙여 저장하는 것이 뷰다.
+
+서브쿼리를 넣는 세 자리와 단일행·다중행 연산자, `EXISTS`, `NOT IN`의 NULL 함정은 [서브쿼리 글](/posts/sqld-subquery-set-operators)에서 봤다. 이 글은 그다음으로 상관 서브쿼리가 도는 순서, 스칼라 서브쿼리의 한 행 규칙, 뷰의 쓰임과 한계를 보고, 끝에서 상관 서브쿼리가 큰 테이블에서 얼마나 느려지는지 실행 계획으로 확인한다. SQL은 Oracle 문법을 먼저 쓰고 PostgreSQL과 SQL Server가 다른 곳을 짚었다. 결과는 PostgreSQL 16.15에서 실제로 돌린 출력이다.
+
+## 예제 데이터
+
+SCOTT 스키마의 사원(`EMP`) 14명과 부서(`DEPT`) 4개다. 테이블 만드는 SQL과 컬럼 설명은 [SQLD 단일행 함수](/posts/sqld-single-row-functions) 글에 있다. 사장 KING은 `mgr`이 NULL이고, 40번 부서 OPERATIONS에는 사원이 없다.
+
+```text
+ empno | ename  |    job    | mgr  | sal  | comm | deptno
+-------+--------+-----------+------+------+------+--------
+  7369 | SMITH  | CLERK     | 7902 |  800 |      |     20
+  7499 | ALLEN  | SALESMAN  | 7698 | 1600 |  300 |     30
+  7521 | WARD   | SALESMAN  | 7698 | 1250 |  500 |     30
+  7566 | JONES  | MANAGER   | 7839 | 2975 |      |     20
+  7654 | MARTIN | SALESMAN  | 7698 | 1250 | 1400 |     30
+  7698 | BLAKE  | MANAGER   | 7839 | 2850 |      |     30
+  7782 | CLARK  | MANAGER   | 7839 | 2450 |      |     10
+  7788 | SCOTT  | ANALYST   | 7566 | 3000 |      |     20
+  7839 | KING   | PRESIDENT |      | 5000 |      |     10
+  7844 | TURNER | SALESMAN  | 7698 | 1500 |    0 |     30
+  7876 | ADAMS  | CLERK     | 7788 | 1100 |      |     20
+  7900 | JAMES  | CLERK     | 7698 |  950 |      |     30
+  7902 | FORD   | ANALYST   | 7566 | 3000 |      |     20
+  7934 | MILLER | CLERK     | 7782 | 1300 |      |     10
+(14 rows)
+
+ deptno |   dname    |   loc
+--------+------------+----------
+     10 | ACCOUNTING | NEW YORK
+     20 | RESEARCH   | DALLAS
+     30 | SALES      | CHICAGO
+     40 | OPERATIONS | BOSTON
+(4 rows)
+```
+
+부서별 평균 급여는 이렇다.
+
+```sql
+SELECT deptno, ROUND(AVG(sal), 2) AS avg_sal
+FROM emp
+GROUP BY deptno
+ORDER BY deptno;
+```
+
+```text
+ deptno | avg_sal
+--------+---------
+     10 | 2916.67
+     20 | 2175.00
+     30 | 1566.67
+(3 rows)
+```
+
+## 바깥 행마다 다시 도는 상관 서브쿼리
+
+부서별 평균을 인라인 뷰로 미리 만들어 조인하는 대신, 서브쿼리 안에서 바깥 쿼리의 컬럼을 참조할 수도 있다.
+
+```sql
+SELECT e.ename, e.deptno, e.sal
+FROM emp e
+WHERE e.sal > (SELECT AVG(i.sal)
+               FROM emp i
+               WHERE i.deptno = e.deptno)   -- 바깥 행의 deptno를 쓴다
+ORDER BY e.deptno, e.sal DESC, e.empno;
+```
+
+```text
+ ename | deptno | sal
+-------+--------+------
+ KING  |     10 | 5000
+ SCOTT |     20 | 3000
+ FORD  |     20 | 3000
+ JONES |     20 | 2975
+ BLAKE |     30 | 2850
+ ALLEN |     30 | 1600
+(6 rows)
+```
+
+처음 장면의 쿼리가 이것이다. 인라인 뷰와 같은 여섯 명이다. 안쪽의 `e.deptno`가 바깥 쿼리의 별칭 `e`를 가리킨다. 이렇게 바깥과 엮인 서브쿼리를 상관 서브쿼리(correlated subquery)라고 한다. `(SELECT AVG(sal) FROM emp)`처럼 바깥과 상관없이 혼자 실행되는 것은 비상관 서브쿼리다. 인라인 뷰로 푼 모양은 [서브쿼리 글](/posts/sqld-subquery-set-operators)에 있다.
+
+둘은 실행되는 방식이 다르다. 비상관 서브쿼리는 한 번 돌아서 값을 만들어 두면 끝이다. 상관 서브쿼리는 바깥 행이 바뀔 때마다 안쪽 값이 달라지니, 개념상 바깥 행마다 다시 실행된다. 아래 그림에서 다음을 누르면 처음 두 행이 처리되는 순서가 나온다.
+
+<SequenceDiagram
+  caption="상관 서브쿼리는 바깥 행의 값을 받아 다시 돈다"
+  actors={[
+    { id: "outer", label: "바깥 쿼리" },
+    { id: "inner", label: "서브쿼리" },
+    { id: "emp", label: "EMP" },
+  ]}
+  steps={[
+    {
+      from: "outer",
+      to: "outer",
+      label: "SMITH 읽기",
+      title: "바깥에서 한 행을 꺼낸다",
+      detail: "첫 행은 SMITH다. 급여 800, 부서 20이다. 조건을 판정하려면 20번 부서 평균이 필요하다.",
+    },
+    {
+      from: "outer",
+      to: "inner",
+      label: "e.deptno = 20",
+      title: "바깥 값을 넘긴다",
+      detail: "서브쿼리 안의 e.deptno 자리에 20이 들어간다. 서브쿼리는 이 값 없이는 실행할 수 없다.",
+    },
+    {
+      from: "inner",
+      to: "emp",
+      label: "deptno = 20",
+      title: "20번 부서를 읽는다",
+      detail: "20번 부서 다섯 명의 급여를 모은다.",
+      payload: "800, 2975, 3000, 1100, 3000",
+    },
+    {
+      from: "inner",
+      to: "outer",
+      label: "AVG = 2175",
+      title: "평균 하나를 돌려준다",
+      detail: "800 > 2175는 거짓이라 SMITH는 빠진다.",
+    },
+    {
+      from: "outer",
+      to: "inner",
+      label: "e.deptno = 30",
+      title: "다음 행 ALLEN",
+      detail: "ALLEN은 30번 부서다. 값이 바뀌었으니 서브쿼리를 다시 실행한다.",
+    },
+    {
+      from: "inner",
+      to: "outer",
+      label: "AVG = 1566.67",
+      title: "다시 판정한다",
+      detail: "1600 > 1566.67이라 ALLEN은 남는다. 이렇게 바깥 14행마다 반복한다.",
+    },
+  ]}
+/>
+
+14행이면 괜찮지만 바깥이 100만 행이면 서브쿼리를 100만 번 도는 셈이다. 실제로는 옵티마이저가 이 쿼리를 조인으로 바꿔(서브쿼리 unnesting) 한 번에 처리하거나, 같은 입력값의 결과를 기억해 두기도 한다. Oracle은 스칼라 서브쿼리의 입력값별 결과를 캐시하고, PostgreSQL 14부터는 조인 안쪽 결과를 기억하는 Memoize 노드가 있다. 그래도 항상 그렇게 된다는 보장은 없으니, 느리면 실행 계획을 보고 인라인 뷰나 조인으로 직접 바꾼다. 실행 계획 읽는 법은 [인덱스 글](/posts/db-index)에 있다.
+
+같은 결과를 내는 세 번째 방법은 윈도우 함수다. 부서 평균을 행마다 붙여 놓고 바깥에서 거른다. [SQLD 윈도우 함수](/posts/sqld-window-functions) 글에서 이어서 본다.
+
+상관 서브쿼리는 `EXISTS`와 짝이 많다. [서브쿼리 글](/posts/sqld-subquery-set-operators)에서 본 `EXISTS (SELECT 1 FROM emp e WHERE e.deptno = d.deptno)`도 상관 서브쿼리다. UPDATE와 DELETE에도 쓴다. 예를 들어 `UPDATE emp e SET sal = (SELECT ... WHERE x.deptno = e.deptno)`처럼 행마다 다른 값으로 고칠 때다.
+
+## SELECT 절에는 값 하나만 들어간다
+
+스칼라 서브쿼리는 반드시 한 행, 한 컬럼이어야 한다. 0행이면 NULL이 되지만, 2행 이상이면 오류다. 부서마다 사원 이름을 붙이려고 이렇게 쓰면 터진다.
+
+```sql
+SELECT d.dname,
+       (SELECT e.ename FROM emp e WHERE e.deptno = d.deptno) AS ename   -- 부서당 여러 명
+FROM dept d;
+```
+
+```text
+ERROR:  more than one row returned by a subquery used as an expression
+```
+
+Oracle에서도 `ORA-01427`이다. 컬럼이 두 개여도 안 된다. 스칼라 서브쿼리로 이름과 급여를 같이 가져오려면 서브쿼리를 두 번 쓰거나 조인으로 바꾼다. 집계 함수(`COUNT`, `MAX`)를 쓰면 항상 한 행이 나오니 안전하다.
+
+```sql
+SELECT d.dname,
+       (SELECT COUNT(*) FROM emp e WHERE e.deptno = d.deptno) AS cnt
+FROM dept d
+ORDER BY d.deptno;
+```
+
+```text
+   dname    | cnt
+------------+-----
+ ACCOUNTING |   3
+ RESEARCH   |   5
+ SALES      |   6
+ OPERATIONS |   0
+(4 rows)
+```
+
+`COUNT`는 대상이 없으면 NULL이 아니라 0을 돌려준다. `MAX`였다면 OPERATIONS 칸이 NULL이었을 것이다. 시험에서 0과 NULL을 구분하는 보기가 자주 나온다.
+
+한 행 규칙을 부서 네 개에 차례로 대어 보면 이렇다. 다음을 누르면 같은 부서 행에 서브쿼리 세 가지가 무엇을 돌려주는지 나온다.
+
+<AlgoTrace
+  caption="부서마다 스칼라 서브쿼리 세 가지의 결과"
+  memoryLabel="MAX(sal) / COUNT(*) / ename"
+  cells={["ACCOUNTING", "RESEARCH", "SALES", "OPERATIONS"]}
+  steps={[
+    { pointer: 0, memory: ["MAX 5000", "COUNT 3", "ename 3행 → 오류"], caption: "10번 부서에는 세 명이 있다. 집계 함수는 세 행을 값 하나로 줄이지만, ename을 그대로 가져오면 세 행이라 오류가 난다." },
+    { pointer: 1, memory: ["MAX 3000", "COUNT 5", "ename 5행 → 오류"], caption: "20번 부서는 다섯 명이다. MAX와 COUNT는 여전히 값 하나다." },
+    { pointer: 2, memory: ["MAX 2850", "COUNT 6", "ename 6행 → 오류"], caption: "30번 부서는 여섯 명이다. ename 서브쿼리는 첫 부서에서 이미 멈췄으니 여기까지 오지도 못한다." },
+    { pointer: 3, memory: ["MAX NULL", "COUNT 0", "ename 0행 → NULL"], caption: "사원이 없는 40번 부서. 0행이면 스칼라 서브쿼리는 NULL을 돌려준다. COUNT만은 대상이 없어도 0이다." },
+    { found: [3], memory: ["0행 → NULL", "2행 이상 → 오류"], caption: "규칙은 둘이다. 0행이면 NULL이라 행이 사라지지 않고, 2행 이상이면 실행 중에 오류가 난다. 집계 함수로 감싸면 늘 한 행이다." },
+  ]}
+/>
+
+## 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다
+
+부서 평균을 구하는 인라인 뷰를 여러 화면에서 쓴다면, 이름을 붙여 저장해 둘 수 있다. 그게 뷰(view)다. 뷰는 데이터를 따로 저장하지 않고 쿼리만 저장한다. 조회할 때마다 그 쿼리가 실행된다. 인라인 뷰는 이름 없이 한 번 쓰는 뷰라고 보면 된다.
+
+```sql
+CREATE VIEW v_dept_avg AS
+SELECT deptno, ROUND(AVG(sal)) AS avg_sal, COUNT(*) AS cnt
+FROM emp
+GROUP BY deptno;
+
+SELECT * FROM v_dept_avg ORDER BY deptno;
+```
+
+```text
+ deptno | avg_sal | cnt
+--------+---------+-----
+     10 |    2917 |   3
+     20 |    2175 |   5
+     30 |    1567 |   6
+(3 rows)
+```
+
+뷰를 쓰는 이유는 세 가지 정도다. 복잡한 쿼리를 테이블처럼 짧게 부를 수 있다(편리성). 테이블 구조가 바뀌어도 뷰 정의만 고치면 뷰를 쓰는 쿼리는 그대로다(독립성). 그리고 급여 같은 민감한 컬럼을 뺀 뷰에만 권한을 주면 원본 테이블을 감출 수 있다(보안성). 단점도 있다. 뷰 자체에는 인덱스를 만들 수 없고(Oracle의 materialized view나 SQL Server의 indexed view는 결과를 실제로 저장하는 다른 물건이다), 정의를 바꾸려면 `CREATE OR REPLACE VIEW`나 다시 만들어야 한다. `ALTER VIEW`로 정의 자체를 바꾸지는 못한다.
+
+뷰를 조회하면 무슨 일이 일어나는지 그림으로 보면 이렇다. 점이 흐르는 방향이 조회가 내려가는 길이다. 뷰에는 데이터가 없어서 결국 원본 테이블을 읽는다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="뷰는 쿼리만 저장한다. 조회하면 정의된 쿼리가 원본 테이블에서 실행된다"
+  nodes={[
+    { id: "q1", label: "SELECT * FROM", sub: "v_dept_avg", x: 95, y: 45, w: 150, h: 46 },
+    { id: "q2", label: "INSERT INTO", sub: "v_emp20 (30번)", x: 305, y: 45, w: 150, h: 46 },
+    { id: "v1", label: "v_dept_avg", sub: "GROUP BY 쿼리", x: 95, y: 150, w: 150, h: 46 },
+    { id: "v2", label: "v_emp20", sub: "WITH CHECK OPTION", x: 305, y: 150, w: 150, h: 46 },
+    { id: "emp", label: "emp 테이블", sub: "실제 데이터", x: 200, y: 255, w: 150, h: 46 },
+  ]}
+  edges={[
+    { from: "q1", to: "v1" },
+    { from: "v1", to: "emp", label: "조회마다 실행" },
+    { from: "q2", to: "v2" },
+    { from: "v2", to: "emp", label: "조건 밖이면 거절", dashed: true },
+  ]}
+/>
+
+뷰로 데이터를 넣거나 고칠 수도 있다. 단, 한 테이블에서 행을 그대로 가져오는 단순한 뷰만 된다. `GROUP BY`가 들어간 뷰에 넣으려고 하면 PostgreSQL은 이렇게 거절한다.
+
+```sql
+INSERT INTO v_dept_avg VALUES (50, 1000, 1);
+```
+
+```text
+ERROR:  cannot insert into view "v_dept_avg"
+DETAIL:  Views containing GROUP BY are not automatically updatable.
+HINT:  To enable inserting into the view, provide an INSTEAD OF INSERT trigger or an unconditional ON INSERT DO INSTEAD rule.
+```
+
+단순한 뷰에는 `WITH CHECK OPTION`을 붙일 수 있다. 뷰의 WHERE 조건을 벗어나는 행은 뷰로 넣거나 고치지 못하게 막는다. 20번 부서 전용 뷰로 30번 부서 사원을 넣거나, 기존 사원을 10번으로 옮기려고 하면 거절된다.
+
+```sql
+CREATE VIEW v_emp20 AS
+SELECT empno, ename, sal, deptno FROM emp
+WHERE deptno = 20
+WITH CHECK OPTION;
+
+INSERT INTO v_emp20 VALUES (9001, 'KIM', 1000, 30);        -- 뷰 조건 밖
+UPDATE v_emp20 SET deptno = 10 WHERE ename = 'SMITH';      -- 고친 뒤 뷰 조건 밖
+```
+
+```text
+ERROR:  new row violates check option for view "v_emp20"
+DETAIL:  Failing row contains (9001, KIM, null, null, null, 1000, null, 30).
+ERROR:  new row violates check option for view "v_emp20"
+DETAIL:  Failing row contains (7369, SMITH, CLERK, 7902, 1980-12-17, 800, null, 10).
+```
+
+`UPDATE v_emp20 SET sal = 900 WHERE ename = 'SMITH'`처럼 조건 안에 머무는 변경은 통과한다. Oracle은 뷰를 아예 읽기 전용으로 만드는 `WITH READ ONLY`도 있다.
+
+## 현장에서 상관 서브쿼리가 느려지는 순간
+
+14행에서는 어느 쪽으로 써도 차이가 없다. 처음 장면처럼 사원이 2만 명이고 부서가 20개라면 어떻게 될까. `deptno`에 인덱스를 만들고 상관 서브쿼리와 인라인 뷰를 나란히 돌렸다.
+
+```sql
+-- 사원 2만 명, 부서 20개(부서마다 1,000명)
+CREATE TABLE emp_corr AS
+SELECT i AS empno, i % 20 AS deptno, 1000 + (i * 37) % 4000 AS sal
+FROM generate_series(1, 20000) AS i;
+CREATE INDEX emp_corr_dept_idx ON emp_corr (deptno);
+VACUUM ANALYZE emp_corr;
+
+-- 상관 서브쿼리
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM emp_corr e
+WHERE e.sal > (SELECT AVG(i.sal) FROM emp_corr i WHERE i.deptno = e.deptno);
+```
+
+```text
+                                                    QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------
+ Aggregate (actual time=4626.552..4626.554 rows=1 loops=1)
+   ->  Seq Scan on emp_corr e (actual time=156.282..4625.189 rows=10000 loops=1)
+         Filter: ((sal)::numeric > (SubPlan 1))
+         Rows Removed by Filter: 10000
+         SubPlan 1
+           ->  Aggregate (actual time=0.223..0.223 rows=1 loops=20000)
+                 ->  Bitmap Heap Scan on emp_corr i (actual time=0.024..0.166 rows=1000 loops=20000)
+                       Recheck Cond: (deptno = e.deptno)
+                       Heap Blocks: exact=2180000
+                       ->  Bitmap Index Scan on emp_corr_dept_idx (actual time=0.016..0.016 rows=1000 loops=20000)
+                             Index Cond: (deptno = e.deptno)
+ Planning Time: 0.312 ms
+ Execution Time: 4650.950 ms
+(13 rows)
+```
+
+볼 곳은 `SubPlan 1` 아래의 `loops=20000`이다. 바깥 2만 행마다 서브쿼리가 한 번씩, 매번 1,000행을 읽어 평균을 냈다. 부서는 20개뿐이라 같은 평균을 1,000번씩 다시 구한 셈이다. 인덱스가 있어도 읽은 블록이 218만 개(`Heap Blocks: exact=2180000`)다. PostgreSQL 16은 이 모양을 조인으로 풀지 않았다.
+
+```sql
+-- 인라인 뷰로 부서 평균을 한 번만 구한다
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM emp_corr e
+JOIN (SELECT deptno, AVG(sal) AS avg_sal FROM emp_corr GROUP BY deptno) d ON d.deptno = e.deptno
+WHERE e.sal > d.avg_sal;
+```
+
+```text
+                                         QUERY PLAN
+--------------------------------------------------------------------------------------------
+ Aggregate (actual time=10.679..10.681 rows=1 loops=1)
+   ->  Hash Join (actual time=4.131..10.177 rows=10000 loops=1)
+         Hash Cond: (e.deptno = emp_corr.deptno)
+         Join Filter: ((e.sal)::numeric > (avg(emp_corr.sal)))
+         Rows Removed by Join Filter: 10000
+         ->  Seq Scan on emp_corr e (actual time=0.003..1.251 rows=20000 loops=1)
+         ->  Hash (actual time=4.097..4.098 rows=20 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 9kB
+               ->  HashAggregate (actual time=4.078..4.088 rows=20 loops=1)
+                     Group Key: emp_corr.deptno
+                     Batches: 1  Memory Usage: 24kB
+                     ->  Seq Scan on emp_corr (actual time=0.001..1.261 rows=20000 loops=1)
+ Planning Time: 0.268 ms
+ Execution Time: 10.719 ms
+(14 rows)
+```
+
+같은 1만 명이 4.6초에서 11ms가 됐다. `HashAggregate`가 부서 평균 20개를 한 번에 만들고(`rows=20`), 사원 2만 명을 그 표에 한 번씩 대어 봤다. 바깥 행이 많고 서브쿼리의 입력값(여기서는 부서) 종류가 적을수록 차이가 커진다.
+
+현장에서는 느린 쿼리 로그에서 잡힌 쿼리의 실행 계획을 열어 `SubPlan`과 큰 `loops` 값을 찾는다. 보이면 인라인 뷰나 조인, 윈도우 함수(`AVG(sal) OVER (PARTITION BY deptno)`)로 바꿔 서브쿼리를 한 번만 돌게 한다. 스칼라 서브쿼리를 SELECT 목록에 여러 개 붙인 목록 화면도 같은 이유로 느려지니, 행 수가 많은 화면이면 조인으로 바꿀 후보다. Oracle은 같은 입력값의 스칼라 서브쿼리 결과를 캐시하고 상관 서브쿼리를 조인으로 바꾸는 경우도 많지만, 언제나 그렇다는 보장은 없어서 결국 실행 계획으로 확인한다.
+
+## SQLD 시험 포인트
+
+- 상관 서브쿼리는 바깥 컬럼을 참조하고, 바깥 행마다 실행되는 것으로 본다. 서브쿼리 안에서는 바깥 컬럼을 쓸 수 있지만, 바깥에서 서브쿼리의 컬럼을 직접 쓸 수는 없다(인라인 뷰는 예외).
+- 스칼라 서브쿼리는 한 행 한 컬럼만 된다. 0행이면 NULL, 2행 이상이면 오류다. `COUNT`는 대상이 없으면 0, `MAX`는 NULL이다.
+- 뷰의 장점은 독립성, 편리성, 보안성. 뷰는 쿼리만 저장한다. `ALTER VIEW`로 정의를 못 바꾼다.
+- `WITH CHECK OPTION`은 뷰의 WHERE 조건을 벗어나는 INSERT·UPDATE를 막는다. `GROUP BY`나 조인이 들어간 뷰는 보통 직접 고칠 수 없다.
+
+## 면접에서 나올 만한 질문
+
+### 상관 서브쿼리와 비상관 서브쿼리는 어떻게 다른가요?
+
+상관 서브쿼리는 바깥 쿼리의 컬럼을 참조해서, 바깥 행마다 값이 달라지고 개념상 행마다 다시 실행된다. 비상관 서브쿼리는 혼자 실행할 수 있어서 한 번 계산한 값을 계속 쓴다. "자기 부서 평균보다 많이 받는 사람"은 부서가 행마다 다르니 상관 서브쿼리가 된다. 실제로는 옵티마이저가 조인으로 풀어 한 번에 처리하는 경우가 많지만 보장되지 않으니, 큰 테이블에서는 실행 계획을 확인한다.
+
+### 스칼라 서브쿼리를 쓸 때 주의할 점은요?
+
+반드시 한 행 한 컬럼을 돌려줘야 한다. 두 행 이상이면 실행 중에 오류가 나는데, 데이터가 적을 때는 멀쩡하다가 나중에 터지기 쉽다. 0행이면 NULL이라 조인처럼 행이 사라지지 않는 대신 빈칸이 생긴다. 그리고 바깥 행마다 실행되니 행이 많으면 느릴 수 있다. Oracle은 입력값별로 결과를 캐시하지만, 입력값 종류가 많으면 효과가 없어서 조인으로 바꾸는 게 낫다.
+
+### 뷰는 왜 쓰고, 한계는 무엇인가요?
+
+복잡한 쿼리에 이름을 붙여 재사용하고(편리성), 테이블 구조가 바뀌어도 뷰만 고치면 되며(독립성), 필요한 컬럼만 보여 주는 뷰에 권한을 줘서 원본을 감출 수 있다(보안성). 뷰는 데이터를 저장하지 않고 조회할 때마다 정의된 쿼리를 실행한다. 그래서 뷰 자체에 인덱스를 만들 수 없고, 집계나 조인이 들어간 뷰는 보통 INSERT나 UPDATE가 안 된다. 뷰로 쓰기를 허용할 때는 `WITH CHECK OPTION`으로 뷰 조건을 벗어나는 변경을 막는다.
+
+### 상관 서브쿼리가 느릴 때 어떻게 고치나요?
+
+실행 계획에서 `SubPlan`과 바깥 행 수만큼의 `loops`를 확인한 뒤, 서브쿼리가 한 번만 돌게 바꾼다. 부서 평균처럼 그룹별 값이면 인라인 뷰로 미리 집계해 조인하거나 `AVG() OVER (PARTITION BY ...)` 윈도우 함수를 쓴다. 예제에서 2만 행 기준 4.6초가 인라인 뷰로 11ms가 됐다. 옵티마이저가 자동으로 조인으로 풀어 주기도 하지만 DB와 쿼리 모양에 따라 다르다.
+
+### 뷰로 INSERT나 UPDATE를 할 수 있나요?
+
+한 테이블의 행을 그대로 보여 주는 단순한 뷰는 된다. `GROUP BY`, 집계, `DISTINCT`, 조인이 들어간 뷰는 어느 원본 행을 고쳐야 할지 정할 수 없어서 PostgreSQL이 "not automatically updatable"로 거절하고, 필요하면 INSTEAD OF 트리거를 따로 만든다. 단순한 뷰라도 `WITH CHECK OPTION`을 붙이면 뷰의 WHERE 조건을 벗어나는 행을 넣거나 그렇게 고치는 것을 막는다. Oracle은 아예 막는 `WITH READ ONLY`도 있다.

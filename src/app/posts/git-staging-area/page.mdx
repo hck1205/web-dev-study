@@ -1,0 +1,547 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-staging-area");
+
+`app.js`에 함수 하나를 추가하고 `git add app.js`를 쳤다. 커밋하기 전에 한 줄이 더 생각나서 `module.exports`를 붙이고 저장했다. 이제 커밋만 하면 된다고 생각하고 확인 삼아 `git diff`를 쳤는데, 방금 추가한 함수는 안 보이고 마지막에 쓴 한 줄만 나온다. `git status`에는 같은 파일이 "커밋할 변경"과 "커밋하지 않은 변경" 양쪽에 두 번 나온다. 이 상태에서 `git commit`을 치면 마지막 한 줄은 커밋에 들어가지 않는다.
+
+이상해 보이지만 Git은 정확히 시킨 대로 했다. `git add`는 "이 파일을 커밋 대상으로 표시해"가 아니라 "지금 이 순간의 파일 내용을 따로 떠 둬"라는 명령이다. 그 뒤에 파일을 고치면 떠 둔 것과 디스크의 파일이 따로 논다. 이걸 이해하려면 Git이 파일을 어디에, 어떤 모양으로 저장하는지부터 봐야 한다.
+
+Git이 파일 내용을 blob으로, 폴더를 tree로, 스냅샷을 commit으로 저장한다는 건 [앞 글](/posts/git-internals-basics)에서 객체를 직접 열어 보며 확인했다. 이 글은 그 객체들이 만들어지는 길을 따라간다. 작업 트리·인덱스·저장소라는 세 구역 사이에서 파일이 어떻게 옮겨 다니는지 보고, `git status`의 두 글자를 읽는 법, 변경 일부만 커밋하는 `git add -p`, 커밋한 뒤 히스토리를 읽는 명령까지 정리한다. 끝에서는 커밋 직전에 인덱스를 확인하는 습관이 현장에서 어떤 실수를 막는지 본다.
+
+명령과 출력은 Ubuntu 24.04 LTS의 기본 패키지인 Git 2.43.0에서 실행한 것이다. 예제는 앞 글과 같은 `todo-app` 저장소이고, 첫 커밋까지는 이렇게 만든다.
+
+```bash
+# todo-app이라는 새 저장소를 만든다
+git init todo-app
+cd todo-app
+
+# 파일 두 개를 만든다
+printf "# todo-app\n" > README.md
+printf "function add(a, b) {\n  return a + b;\n}\n" > app.js
+
+# 두 파일을 인덱스에 올리고 커밋한다
+git add README.md app.js
+git commit -m "첫 커밋: README와 app.js"
+```
+
+```text
+Initialized empty Git repository in /tmp/git-demo-1/todo-app/.git/
+[main (root-commit) 2a8cce0] 첫 커밋: README와 app.js
+ 2 files changed, 4 insertions(+)
+ create mode 100644 README.md
+ create mode 100644 app.js
+```
+
+이 커밋에서 app.js의 blob은 `86eb6d1`, README.md의 blob은 `3a928f9`다. 앞 글에서 `git cat-file`로 열어 본 그 객체들이고, 아래 그림과 출력에 계속 나온다.
+
+## 파일은 세 구역을 오간다
+
+이제 처음 상황으로 돌아간다. Git에는 파일이 머무는 구역이 세 개 있다.
+
+- 작업 트리(working tree): 에디터로 열어 고치는 실제 파일들.
+- 인덱스(index): 다음 커밋에 들어갈 스냅샷의 초안. 스테이징 영역(staging area)이라고도 부른다. `.git/index` 파일 하나다.
+- 저장소(repository): 커밋된 스냅샷들. HEAD가 가리키는 커밋이 마지막으로 찍은 사진이다.
+
+`git add`는 작업 트리의 파일 내용을 blob으로 저장하고, 인덱스의 그 파일 항목이 새 blob을 가리키게 바꾼다. `git commit`은 인덱스를 그대로 tree로 만들어 커밋을 찍는다. 작업 트리는 쳐다보지도 않는다. 아래 그림에서 다음을 누르면 명령마다 세 구역의 app.js가 어느 blob을 가리키는지 바뀌는 게 보인다.
+
+<AlgoTrace
+  caption="app.js 하나가 작업 트리, 인덱스, HEAD에서 각각 어느 내용인지"
+  memoryLabel="각 구역의 app.js"
+  cells={["작업 트리", "인덱스", "HEAD"]}
+  steps={[
+    { memory: ["트리 86eb6d1", "인덱스 86eb6d1", "HEAD 86eb6d1"], caption: "첫 커밋 직후. 세 구역의 app.js가 모두 같은 blob 86eb6d1이다. git status는 깨끗하다." },
+    { pointer: 0, memory: ["트리 80cae42", "인덱스 86eb6d1", "HEAD 86eb6d1"], caption: "sub 함수를 추가하고 저장했다. 바뀐 건 작업 트리뿐이다. git status -s는 ' M'을 보여 준다." },
+    { pointer: 1, memory: ["트리 80cae42", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git add app.js. 지금 내용이 blob 80cae42로 저장되고 인덱스가 그걸 가리킨다. 상태는 'M '." },
+    { pointer: 0, memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "module.exports 한 줄을 더 쓰고 저장했다. 세 구역이 모두 다르다. 상태는 'MM'." },
+    { found: [0, 1], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff는 작업 트리와 인덱스를 비교한다. 차이는 module.exports 한 줄뿐이다." },
+    { found: [1, 2], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff --staged는 인덱스와 HEAD를 비교한다. 지금 커밋하면 들어갈 sub 함수가 보인다." },
+    { found: [0, 2], memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 86eb6d1"], caption: "git diff HEAD는 작업 트리와 HEAD를 바로 비교한다. 두 변경이 다 나온다." },
+    { pointer: 2, memory: ["트리 4b52f4f", "인덱스 80cae42", "HEAD 80cae42"], caption: "git commit. 인덱스가 그대로 찍혀 HEAD가 80cae42가 된다. module.exports는 작업 트리에만 남는다." },
+  ]}
+/>
+
+같은 상황을 명령으로 재현하면 이렇다.
+
+```bash
+# sub 함수를 추가하고 인덱스에 올린다
+printf "function add(a, b) {\n  return a + b;\n}\n\nfunction sub(a, b) {\n  return a - b;\n}\n" > app.js
+git add app.js
+
+# 인덱스에 올린 뒤에 한 줄을 더 쓴다
+printf "function add(a, b) {\n  return a + b;\n}\n\nfunction sub(a, b) {\n  return a - b;\n}\n\nmodule.exports = { add, sub };\n" > app.js
+
+# 상태를 본다
+git status
+```
+
+```text
+On branch main
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	modified:   app.js
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   app.js
+```
+
+`Changes to be committed`는 인덱스와 HEAD가 다르다는 뜻이고, `Changes not staged for commit`은 작업 트리와 인덱스가 다르다는 뜻이다. 한 파일이 양쪽에 다 나올 수 있다. 세 가지 diff로 각각을 확인한다.
+
+```bash
+# 작업 트리 ↔ 인덱스: 아직 add하지 않은 변경
+git diff
+
+# 인덱스 ↔ HEAD: 지금 커밋하면 들어갈 변경 (--cached와 같다)
+git diff --staged
+```
+
+```text
+diff --git a/app.js b/app.js
+index 80cae42..4b52f4f 100644
+--- a/app.js
++++ b/app.js
+@@ -5,3 +5,5 @@ function add(a, b) {
+ function sub(a, b) {
+   return a - b;
+ }
++
++module.exports = { add, sub };
+
+diff --git a/app.js b/app.js
+index 86eb6d1..80cae42 100644
+--- a/app.js
++++ b/app.js
+@@ -1,3 +1,7 @@
+ function add(a, b) {
+   return a + b;
+ }
++
++function sub(a, b) {
++  return a - b;
++}
+```
+
+두 출력의 `index` 줄을 보면 그림과 똑같다. 첫 번째는 `80cae42..4b52f4f`(인덱스 → 작업 트리), 두 번째는 `86eb6d1..80cae42`(HEAD → 인덱스)다. `@@ -5,3 +5,5 @@`는 원래 파일의 5번째 줄부터 3줄이 새 파일에서 5번째 줄부터 5줄이 됐다는 뜻이다.
+
+인덱스 안을 직접 보는 명령도 있다. `git ls-files -s`는 인덱스에 들어 있는 파일마다 모드, blob 해시, 스테이지 번호, 경로를 보여 준다. 스테이지 번호는 평소엔 0이고, 병합 충돌 중에만 1·2·3이 나온다.
+
+```bash
+# 인덱스의 내용
+git ls-files -s
+
+# 인덱스에 올라간 버전의 파일 내용 (콜론 앞이 비면 인덱스)
+git show :app.js
+```
+
+```text
+100644 3a928f95c6e7c505c37c1e3fbf0db664a1ddbe7b 0	README.md
+100644 80cae42e4faff29c6ff21dcea21369e0fbe6cdb1 0	app.js
+
+function add(a, b) {
+  return a + b;
+}
+
+function sub(a, b) {
+  return a - b;
+}
+```
+
+인덱스는 "바뀐 파일 목록"이 아니라 다음 커밋의 전체 파일 목록이다. 바뀌지 않은 README.md도 들어 있다. 그래서 `git commit`은 작업 트리를 다시 훑을 필요 없이 인덱스만 보고 tree를 만든다.
+
+처음 상황의 해결법은 둘 중 하나다. 마지막 한 줄까지 커밋에 넣고 싶으면 `git add app.js`를 한 번 더 하고 커밋한다. 수정한 파일 전체를 넣을 거라면 `git commit -a`(추적 중인 파일을 모두 add하고 커밋)를 쓴다. `-a`는 새로 만든 파일(untracked)은 넣지 않는다.
+
+```bash
+# 마지막 변경까지 인덱스에 올리고 커밋
+git add app.js
+git commit -m "모듈로 내보내기"
+```
+
+이 흐름을 객체 수준에서 정리하면 아래 그림과 같다. 다음을 누르면 `git add`부터 `git commit`까지 어떤 객체가 언제 생기는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="git add와 git commit이 .git 안에서 하는 일"
+  actors={[
+    { id: "wt", label: "작업 트리" },
+    { id: "idx", label: "인덱스" },
+    { id: "odb", label: "objects" },
+    { id: "ref", label: "refs/heads" },
+  ]}
+  steps={[
+    {
+      from: "wt",
+      to: "odb",
+      label: "blob 80cae42",
+      title: "git add가 파일 내용을 blob으로 쓴다",
+      detail: "add하는 순간 파일 내용이 압축되어 objects에 저장된다. 커밋을 하지 않아도 객체는 이미 있다. 그래서 add만 해 두고 날린 파일도 나중에 git fsck로 찾아낼 수 있다.",
+      payload: ".git/objects/80/cae42e4faff29c6ff21dcea21369e0fbe6cdb1",
+    },
+    {
+      from: "odb",
+      to: "idx",
+      label: "app.js → 80cae42",
+      title: "인덱스의 항목을 바꾼다",
+      detail: "인덱스에서 app.js 줄이 새 blob을 가리키게 된다. 파일 크기와 수정 시각도 함께 적어 두어서, 다음 git status가 파일을 다시 해시하지 않고 바뀌었는지 빨리 판단한다.",
+      payload: "100644 80cae42e4faff29c6ff21dcea21369e0fbe6cdb1 0\tapp.js",
+    },
+    {
+      from: "idx",
+      to: "odb",
+      label: "tree fa9a1c6",
+      title: "git commit이 인덱스로 tree를 만든다",
+      detail: "인덱스의 목록을 폴더 단위 tree 객체로 바꿔 저장한다. 작업 트리는 보지 않는다. add하지 않은 변경이 커밋에 안 들어가는 이유가 이 단계에 있다.",
+    },
+    {
+      from: "odb",
+      to: "odb",
+      label: "commit 06e8251",
+      title: "커밋 객체를 쓴다",
+      detail: "tree 해시, 부모 커밋(지금 HEAD), 작성자, 시각, 메시지를 담은 커밋 객체를 만든다. 부모 해시가 들어가므로 히스토리가 한 줄로 이어진다.",
+      payload: "tree fa9a1c6a28eb0336981cddc734ae59598750dbb6\nparent 2a8cce00ee30d50dea8d6c5219751694fe7827af\nauthor Matt <matt@example.com> 1792198920 +0900\n...\n\nsub 함수 추가",
+    },
+    {
+      from: "odb",
+      to: "ref",
+      label: "main → 06e8251",
+      title: "브랜치 파일을 새 해시로 바꾼다",
+      detail: "HEAD가 가리키는 브랜치(main)의 파일 내용을 새 커밋 해시로 덮어쓴다. 이 이동은 .git/logs의 reflog에도 한 줄 남는다. 커밋은 이걸로 끝이다.",
+      payload: "$ cat .git/refs/heads/main\n06e8251...",
+    },
+  ]}
+/>
+
+## 파일의 상태는 두 글자로 읽는다
+
+`git status`의 긴 출력은 안내 문구가 많아서 매일 보기엔 길다. `-s`(short)를 붙이면 파일마다 두 글자로 줄여 준다. 첫 글자는 인덱스와 HEAD의 차이, 둘째 글자는 작업 트리와 인덱스의 차이다.
+
+```bash
+# 짧은 형식
+git status -s
+
+# 브랜치 정보까지 한 줄 더 (원격보다 앞섰는지, 뒤처졌는지)
+git status -sb
+```
+
+```text
+MM app.js
+
+## main
+ M app.js
+```
+
+자주 보는 조합은 이렇다.
+
+- `??`: 추적하지 않는(untracked) 새 파일. Git이 아직 모른다.
+- `A `: 새 파일을 인덱스에 올렸다.
+- ` M`: 고쳤지만 아직 add하지 않았다.
+- `M `: 고친 것을 add했다. 이대로 커밋하면 들어간다.
+- `MM`: add한 뒤에 또 고쳤다. 처음 상황이 이것이다.
+- `D ` / ` D`: 삭제를 인덱스에 반영했다 / 파일만 지웠다.
+- `UU`: 병합 충돌 중인 파일.
+
+파일 하나의 일생으로 보면 untracked → staged → committed(깨끗함) → modified → staged → committed를 오간다. `.gitignore`에 걸린 파일은 이 목록에 아예 나오지 않는다(ignored).
+
+아래 그림에서 다음을 누르면 새 파일 하나가 만들어져서 커밋되고, 다시 고쳐지고, 지워질 때까지 `git status -s`의 두 글자가 어떻게 바뀌는지 볼 수 있다. 칸마다 실제로 친 명령이고, 아래 글자는 그 직후의 출력이다.
+
+<AlgoTrace
+  caption="todo.js 하나의 일생과 git status -s 출력"
+  memoryLabel="git status -s"
+  cells={["새 파일", "add", "commit", "수정", "add", "또 수정", "rm", "git rm"]}
+  steps={[
+    { pointer: 0, memory: ["'?? todo.js'"], caption: "파일을 만들기만 했다. Git은 아직 이 파일을 모른다. untracked다." },
+    { pointer: 1, memory: ["'A  todo.js'"], caption: "git add todo.js. 첫 글자 A는 인덱스에 새 파일이 생겼다는 뜻이다." },
+    { pointer: 2, memory: ["(출력 없음)"], caption: "git commit. 세 구역이 모두 같아져서 아무것도 나오지 않는다." },
+    { pointer: 3, memory: ["' M todo.js'"], caption: "한 줄을 고쳤다. 둘째 글자 M은 작업 트리가 인덱스와 다르다는 뜻이다." },
+    { pointer: 4, memory: ["'M  todo.js'"], caption: "git add. M이 첫 글자로 옮겨 갔다. 이대로 커밋하면 들어간다." },
+    { pointer: 5, memory: ["'MM todo.js'"], caption: "add한 뒤 또 고쳤다. 두 글자가 다 M이다. 처음 상황이 이것이다." },
+    { pointer: 6, memory: ["' D README.md'"], caption: "커밋 뒤 README.md를 rm으로 지웠다. 작업 트리에서만 사라진 상태다." },
+    { found: [7], memory: ["'D  README.md'"], caption: "git rm으로 지우면 삭제가 인덱스에 반영된다. D가 첫 글자로 옮겨 간다." },
+  ]}
+/>
+
+변경 중 일부만 커밋하고 싶을 때는 `git add -p`(patch)를 쓴다. 바뀐 덩어리(hunk)마다 넣을지 물어본다.
+
+```bash
+# 바뀐 덩어리마다 y(넣기) / n(건너뛰기) / s(더 잘게 쪼개기) / q(그만)를 고른다
+git add -p app.js
+```
+
+```text
+diff --git a/app.js b/app.js
+index 4b52f4f..8696ea8 100644
+--- a/app.js
++++ b/app.js
+@@ -6,4 +6,8 @@ function sub(a, b) {
+   return a - b;
+ }
+ 
+-module.exports = { add, sub };
++function mul(a, b) {
++  return a * b;
++}
++
++module.exports = { add, sub, mul };
+(1/1) Stage this hunk [y,n,q,a,d,e,?]? 
+```
+
+`y`로 이 덩어리를 넣으면 app.js만 인덱스에 올라가고, 같이 고친 README.md는 작업 트리에 남는다. `git status -s`가 `M  app.js`와 ` M README.md`로 갈린다. 디버깅용 `console.log`는 빼고 기능만 커밋하거나, 한 파일에 섞인 두 가지 변경을 두 커밋으로 나눌 때 쓴다. 덩어리가 붙어 있어 `s`로 안 쪼개지면 `e`로 직접 고칠 수 있다.
+
+## 커밋하고 히스토리를 읽는 명령
+
+새 프로젝트는 `git init`, 이미 있는 저장소는 `git clone`으로 시작한다. 클론하면 원격 저장소가 `origin`이라는 이름으로 등록되고, 원격의 기본 브랜치가 로컬 브랜치로 체크아웃된다.
+
+```bash
+# 원격 저장소 복제 (보통은 https나 ssh 주소. 여기서는 로컬 경로)
+git clone todo-app todo-clone
+cd todo-clone
+
+# 원격과 비교한 상태
+git status -sb
+
+# 로컬과 원격 추적 브랜치 목록
+git branch -a
+
+# 다시 원래 저장소로
+cd ../todo-app
+```
+
+```text
+Cloning into 'todo-clone'...
+done.
+
+## main...origin/main
+
+* main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/feature/div
+  remotes/origin/main
+```
+
+`remotes/origin/...`는 원격 브랜치가 마지막으로 어디 있었는지 기억해 둔 사본이다. 원격과 주고받는 이야기는 [원격 협업 글](/posts/git-remote-collaboration)에서 다룬다.
+
+커밋 메시지는 `-m`으로 바로 쓰거나, 빼면 에디터가 열린다. `-v`를 붙이면 에디터 아래에 이번 커밋의 diff가 함께 나와서 무엇을 커밋하는지 보면서 메시지를 쓸 수 있다. 방금 한 커밋을 고치는 `--amend`는 [.gitignore 글](/posts/git-ignore-config)에서 직접 써 본다.
+
+히스토리를 볼 때는 `git log`에 옵션을 붙여 필요한 것만 본다.
+
+```bash
+# 한 줄씩, 브랜치 갈래와 이름표까지, 모든 브랜치
+git log --oneline --graph --decorate --all
+
+# 마지막 커밋에서 바뀐 파일과 줄 수
+git log --stat -1
+```
+
+```text
+* d953796 (HEAD -> main) 라이선스 추가
+| * deb48d4 (feature/div) div 함수
+|/  
+* b490154 mul 함수와 README 설명 추가
+* 0cb225b 모듈로 내보내기
+* 06e8251 sub 함수 추가
+* 2a8cce0 첫 커밋: README와 app.js
+
+commit d9537965efb063fab0b30321fc2052806082379a
+Author: Matt <matt@example.com>
+Date:   Sat Oct 17 10:06:00 2026 +0900
+
+    라이선스 추가
+
+ LICENSE | 1 +
+ 1 file changed, 1 insertion(+)
+```
+
+`--graph`는 위가 최신이다. `*`는 커밋, `|`는 이어지는 갈래, `|/`는 옆 갈래가 그 아래 커밋에서 갈라져 나왔다는 표시다. `(HEAD -> main)`은 HEAD가 main을 가리키고 main이 이 커밋에 있다는 뜻이다. 매번 치기 길어서 별칭으로 등록해 두는 경우가 많다. 별칭은 [설정 글](/posts/git-ignore-config)에서 다룬다.
+
+경로를 붙이면 그 파일을 바꾼 커밋만 보고, `-p`를 더하면 변경 내용까지 나온다. `--` 뒤에 경로를 쓰는 건 브랜치 이름과 파일 이름이 겹칠 때 헷갈리지 않게 하려는 것이다.
+
+```bash
+# README.md를 바꾼 마지막 커밋과 그 diff
+git log -p -1 -- README.md
+```
+
+```text
+commit b49015474bb12ab040966fedc9247733d8c19663
+Author: Jane <jane@example.com>
+Date:   Sat Oct 17 10:04:00 2026 +0900
+
+    mul 함수와 README 설명 추가
+
+diff --git a/README.md b/README.md
+index 3a928f9..fcb755c 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,3 @@
+ # todo-app
++
++계산 함수 모음
+```
+
+무언가를 찾을 때 쓰는 옵션도 알아 두면 좋다.
+
+```bash
+# 코드에 "mul("이 처음 생기거나 없어진 커밋 (pickaxe)
+git log --oneline -S"mul("
+
+# 작성자로 거르기 (부분 일치)
+git log --oneline --author=Jane
+
+# 날짜로 거르기. "2 weeks ago" 같은 표현도 된다
+git log --oneline --since="2026-10-17 10:03"
+
+# 원하는 형식으로 출력
+git log --format="%h %an %ad %s" --date=short
+```
+
+```text
+b490154 mul 함수와 README 설명 추가
+
+b490154 mul 함수와 README 설명 추가
+
+d953796 라이선스 추가
+b490154 mul 함수와 README 설명 추가
+0cb225b 모듈로 내보내기
+
+d953796 Matt 2026-10-17 라이선스 추가
+b490154 Jane 2026-10-17 mul 함수와 README 설명 추가
+0cb225b Matt 2026-10-17 모듈로 내보내기
+06e8251 Matt 2026-10-17 sub 함수 추가
+2a8cce0 Matt 2026-10-17 첫 커밋: README와 app.js
+```
+
+`-S`는 그 문자열이 나오는 횟수가 바뀐 커밋만 찾는다. "이 함수는 언제 생겼지", "이 설정값은 누가 지웠지"를 찾을 때 가장 빠르다. 줄 안에서 값만 바뀐 경우까지 찾으려면 정규식으로 diff를 훑는 `-G`를 쓴다. 특정 줄을 누가 마지막으로 바꿨는지는 `git blame -L 5,8 app.js`로 본다.
+
+`git show`는 커밋 하나를 자세히 보거나, 특정 시점의 파일을 꺼낼 때 쓴다. `HEAD~1`은 HEAD의 부모, `HEAD~3`은 부모를 세 번 거슬러 간 커밋이다.
+
+```bash
+# 한 커밋의 메타데이터와 바뀐 파일
+git show --stat HEAD~1
+
+# 세 커밋 전의 app.js 내용 (파일을 바꾸지 않고 화면에만)
+git show HEAD~3:app.js
+```
+
+```text
+commit b49015474bb12ab040966fedc9247733d8c19663
+Author: Jane <jane@example.com>
+Date:   Sat Oct 17 10:04:00 2026 +0900
+
+    mul 함수와 README 설명 추가
+
+ README.md | 2 ++
+ app.js    | 6 +++++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+function add(a, b) {
+  return a + b;
+}
+
+function sub(a, b) {
+  return a - b;
+}
+```
+
+## 커밋 직전에 인덱스를 보는 습관
+
+세 구역을 알면 현장에서 자주 나는 실수 하나가 설명된다. "분명 지웠는데 PR에 올라갔다"는 종류다. 디버깅하려고 `console.log`를 넣고 add해 둔 뒤, 에디터에서 그 줄을 지우고 저장했다. 다시 add하지 않으면 인덱스에는 여전히 `console.log`가 있고, 커밋은 그 인덱스를 찍는다. 에디터 화면만 보고는 절대 알 수 없다.
+
+그래서 커밋 직전에는 작업 트리가 아니라 인덱스를 본다. 두 명령이면 충분하다. 아래는 새 파일 new.js를 add하고, todo.js를 add한 뒤 한 줄을 더 고친 상태에서 본 것이다.
+
+```bash
+# 브랜치 상태와 파일별 두 글자
+git status -sb
+
+# 지금 커밋하면 들어갈 파일과 줄 수
+git diff --staged --stat
+```
+
+```text
+## main
+A  new.js
+MM todo.js
+
+ new.js  | 1 +
+ todo.js | 1 +
+ 2 files changed, 2 insertions(+)
+```
+
+`MM`이 보이면 멈춘다. add한 뒤에 또 고쳤다는 뜻이라, 커밋에 들어갈 내용과 지금 에디터의 내용이 다르다. `git diff --staged`로 들어갈 내용을 직접 읽고, 맞으면 커밋하고 아니면 다시 add한다.
+
+팀에서는 이 확인을 pre-commit 훅으로 자동화한다. 이때 훅이 무엇을 검사하는지가 중요하다. 아래 훅은 작업 트리 파일이 아니라 인덱스에 올라간 변경(`--cached`)에서 새로 추가된 줄을 본다.
+
+```bash
+# .git/hooks/pre-commit (실행 권한 필요: chmod +x)
+#!/bin/sh
+# 인덱스에 올라간 변경 중 새로 추가한 줄에 console.log가 있으면 커밋을 막는다
+if git diff --cached -U0 | grep -q '^+.*console\.log'; then
+  echo "pre-commit: 스테이징된 변경에 console.log가 있다"
+  exit 1
+fi
+```
+
+`console.log`가 든 app.js를 add한 다음 에디터에서 그 줄을 지우고 커밋하면 이렇게 된다.
+
+```bash
+# 작업 트리의 app.js에는 console.log가 없다
+grep -c console.log app.js
+git status -s
+
+# 커밋을 시도한다
+git commit -m "add 정리"
+
+# 인덱스에 올라간 버전
+git show :app.js
+```
+
+```text
+0
+MM app.js
+pre-commit: 스테이징된 변경에 console.log가 있다
+function add(a, b) {
+  console.log(a, b);
+  return a + b;
+}
+```
+
+디스크의 파일만 검사하는 린트였다면 통과했을 커밋이다. 실제로 커밋될 내용은 `git show :app.js`의 것이다. lint-staged 같은 도구가 훅을 돌리기 전에 add하지 않은 변경을 잠시 치워 두고 인덱스 내용만 남기는 이유가 이것이다. 훅을 직접 짤 때 검사할 파일 목록은 인덱스에서 가져온다.
+
+```bash
+# 스테이징된 파일 중 추가(A)·복사(C)·수정(M)된 것만. 지운 파일은 검사할 필요가 없다
+git diff --cached --name-only --diff-filter=ACM
+```
+
+```text
+new.js
+todo.js
+```
+
+훅을 저장소에 공유하고 관리하는 법은 [Git 기능 글](/posts/git-tips-advanced)에서 다룬다. 훅은 `--no-verify`로 건너뛸 수 있으니 같은 검사를 CI에서도 한 번 더 돌린다.
+
+## 다시 정리하면
+
+작업 트리에서 고친 내용은 `git add`로 인덱스에 떠 두어야 커밋에 들어가고, 커밋은 작업 트리가 아니라 인덱스를 찍는다. 처음의 `git diff`가 마지막 한 줄만 보여 준 이유는 그 명령이 작업 트리와 인덱스를 비교했기 때문이다. `git status -s`의 첫 글자는 인덱스와 HEAD, 둘째 글자는 작업 트리와 인덱스의 차이라서 `MM`을 보면 커밋될 내용과 화면의 내용이 다르다는 걸 바로 안다. 다음 글에서는 무엇을 아예 커밋하지 않을지 정하는 `.gitignore`와 설정을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 스테이징 영역(인덱스)은 왜 있나요?
+
+다음 커밋의 스냅샷을 미리 조립하는 곳이다. 작업 트리에 여러 변경이 섞여 있어도 `git add -p`로 일부만 골라 의미 있는 단위로 커밋을 나눌 수 있다. 내부적으로는 다음 커밋의 전체 파일 목록과 blob 해시, 파일 시각을 담은 `.git/index` 파일이라, 커밋할 때 작업 트리를 다시 해시하지 않고 바로 tree를 만들고 status도 빠르게 판단한다. 병합 충돌 중에는 파일마다 base·ours·theirs 세 버전을 스테이지 1·2·3으로 담는 역할도 한다.
+
+### git add 후에 파일을 또 수정하면 커밋에는 어떤 내용이 들어가나요?
+
+add한 시점의 내용만 들어간다. add는 그 순간의 내용을 blob으로 저장하고 인덱스가 그걸 가리키게 할 뿐이고, 커밋은 인덱스를 찍는다. 이후 수정은 작업 트리에만 있어서 `git status`에 같은 파일이 staged와 unstaged 양쪽에 나오고, `git diff`는 그 나중 수정만, `git diff --staged`는 커밋될 내용을 보여 준다. 다 넣으려면 다시 add하거나 `commit -a`를 쓴다.
+
+### git diff, git diff --staged, git diff HEAD는 각각 무엇을 비교하나요?
+
+`git diff`는 작업 트리와 인덱스, 즉 아직 add하지 않은 변경을 보여 준다. `git diff --staged`(`--cached`)는 인덱스와 HEAD, 즉 지금 커밋하면 들어갈 변경이다. `git diff HEAD`는 작업 트리와 HEAD를 바로 비교해서 add 여부와 상관없이 마지막 커밋 이후의 모든 변경을 보여 준다. 커밋 직전에는 `--staged`로 들어갈 내용을 확인하는 습관이 실수를 줄인다.
+
+### git status -s에서 MM은 무슨 뜻인가요?
+
+첫 글자는 인덱스와 HEAD의 차이, 둘째 글자는 작업 트리와 인덱스의 차이다. MM은 고친 것을 add한 뒤에 또 고쳤다는 뜻이라, 지금 커밋하면 add한 시점의 내용만 들어가고 나중 수정은 빠진다. `git diff --staged`로 들어갈 내용을, `git diff`로 빠질 내용을 확인한다.
+
+### pre-commit 훅은 작업 트리를 검사해야 하나요, 인덱스를 검사해야 하나요?
+
+인덱스다. 커밋은 인덱스를 찍으니 작업 트리 파일만 검사하면 add한 뒤 지운 디버그 코드가 그대로 커밋될 수 있다. 훅에서는 `git diff --cached`나 `git diff --cached --name-only --diff-filter=ACM`으로 스테이징된 변경을 보고, lint-staged처럼 add하지 않은 변경을 잠시 치워 두는 도구를 쓰기도 한다. 훅은 `--no-verify`로 건너뛸 수 있어서 CI에서 한 번 더 검사한다.
+
+### git log -S와 -G는 어떻게 다른가요?
+
+`-S문자열`은 그 문자열이 나오는 횟수가 바뀐 커밋, 즉 처음 생기거나 사라진 커밋만 찾는다. 함수가 언제 생겼는지, 설정값을 누가 지웠는지 찾을 때 빠르다. `-G정규식`은 diff에서 바뀐 줄이 정규식에 맞으면 다 찾아서, 줄 안에서 값만 바뀐 경우까지 잡는다.

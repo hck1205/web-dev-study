@@ -4,36 +4,6 @@ export const GIT_INTERNALS_BASICS: QuizQuestion[] = [
   {
     id: "git-internals-basics-1",
     post: "git-internals-basics",
-    question: "app.js를 git add한 뒤 한 줄을 더 고치고 바로 git commit하면 커밋에는 무엇이 들어가나?",
-    choices: [
-      "마지막으로 저장한 파일 내용 전체",
-      "아무것도 들어가지 않고 커밋이 실패한다",
-      "git add를 했던 시점의 내용만",
-      "add한 내용과 나중 수정이 충돌 표시와 함께",
-    ],
-    answer: 2,
-    explanation:
-      "git add는 그 순간의 내용을 blob으로 저장하고 인덱스가 그걸 가리키게 할 뿐이고, 커밋은 작업 트리가 아니라 인덱스를 찍는다. 나중에 고친 한 줄은 작업 트리에만 남아서 git status에 같은 파일이 staged와 unstaged 양쪽에 나온다.",
-    anchor: "파일은-세-구역을-오간다",
-  },
-  {
-    id: "git-internals-basics-2",
-    post: "git-internals-basics",
-    question: "옵션 없이 git diff를 치면 무엇과 무엇을 비교하나?",
-    choices: [
-      "작업 트리와 인덱스",
-      "인덱스와 HEAD 커밋",
-      "작업 트리와 HEAD 커밋",
-      "HEAD 커밋과 그 부모 커밋",
-    ],
-    answer: 0,
-    explanation:
-      "git diff는 아직 add하지 않은 변경, 즉 작업 트리와 인덱스의 차이를 보여 준다. 지금 커밋하면 들어갈 변경은 git diff --staged(인덱스와 HEAD)로, 둘을 합친 차이는 git diff HEAD로 본다.",
-    anchor: "파일은-세-구역을-오간다",
-  },
-  {
-    id: "git-internals-basics-3",
-    post: "git-internals-basics",
     question: "두 커밋 사이에 README.md 내용이 바뀌지 않았다면 저장소에는 README.md가 어떻게 저장되나?",
     choices: [
       "커밋마다 파일 전체가 새로 복사된다",
@@ -47,52 +17,22 @@ export const GIT_INTERNALS_BASICS: QuizQuestion[] = [
     anchor: "객체-네-가지를-직접-열어-본다",
   },
   {
-    id: "git-internals-basics-4",
+    id: "git-internals-basics-2",
     post: "git-internals-basics",
-    question: "git commit --amend로 커밋 메시지만 고쳤는데 커밋 해시가 바뀌었다. 왜 그럴까?",
+    question: "내용은 그대로 두고 파일 이름만 바꿔 커밋했다. 이 커밋으로 새로 생기는 객체는?",
     choices: [
-      "amend는 항상 작업 트리의 모든 변경을 함께 넣기 때문에",
-      "메시지도 커밋 객체의 내용이라 해시 계산에 들어가기 때문에",
-      "amend가 부모 커밋까지 새로 만들기 때문에",
-      "해시는 커밋한 시각만으로 정해지기 때문에",
+      "새 blob과 새 commit",
+      "새 tree와 새 commit",
+      "새 blob, 새 tree, 새 commit",
+      "새 commit 하나만",
     ],
     answer: 1,
     explanation:
-      "커밋 해시는 tree, 부모, 작성자와 커미터, 메시지를 모두 담은 커밋 객체의 해시다. 메시지가 바뀌면 다른 객체가 되니 amend는 같은 부모 위에 새 커밋을 만들고 브랜치를 옮긴다. 그래서 이미 푸시한 커밋을 amend하면 원격과 어긋난다.",
-    anchor: "올리지-않을-파일은-gitignore로",
+      "파일 이름은 blob이 아니라 tree에 들어 있다. 내용이 같으니 blob은 기존 것을 그대로 가리키고, 이름이 바뀐 목록인 tree와 그 tree를 가리키는 commit만 새로 생긴다.",
+    anchor: "객체-네-가지를-직접-열어-본다",
   },
   {
-    id: "git-internals-basics-5",
-    post: "git-internals-basics",
-    question: "이미 커밋해 둔 config.local을 .gitignore에 추가했는데도 계속 변경으로 잡힌다. 맞는 해결은?",
-    choices: [
-      ".gitignore 맨 위로 그 줄을 옮긴다",
-      "git clean -fd로 파일을 지운다",
-      "git rm --cached config.local 후 커밋한다",
-      "git check-ignore로 무시 상태를 켠다",
-    ],
-    answer: 2,
-    explanation:
-      ".gitignore는 추적하지 않는 파일에만 적용되고, 이미 추적 중인 파일은 계속 변경이 잡힌다. git rm --cached로 인덱스에서만 빼고 커밋하면 디스크의 파일은 남기고 추적을 멈춘다. 지난 커밋에는 여전히 남아 있다는 것도 기억해야 한다.",
-    anchor: "올리지-않을-파일은-gitignore로",
-  },
-  {
-    id: "git-internals-basics-6",
-    post: "git-internals-basics",
-    question: ".gitignore에 `logs/`와 `!logs/keep.log`를 차례로 적었는데 keep.log가 계속 무시된다. 이유는?",
-    choices: [
-      "폴더 자체를 무시하면 Git이 그 안으로 들어가지 않아 !로 되살릴 수 없다",
-      "!는 전역 무시 파일에서만 동작한다",
-      "!는 반드시 무시 패턴보다 위에 적어야 한다",
-      ".log 확장자는 Git이 항상 무시한다",
-    ],
-    answer: 0,
-    explanation:
-      "부모 폴더가 무시되면 Git은 그 폴더를 아예 훑지 않아서 안의 파일을 !로 다시 포함할 수 없다. `logs/*`처럼 폴더가 아니라 폴더 안의 내용을 무시하면 `!logs/keep.log`가 동작한다. 왜 무시되는지는 git check-ignore -v로 확인한다.",
-    anchor: "올리지-않을-파일은-gitignore로",
-  },
-  {
-    id: "git-internals-basics-7",
+    id: "git-internals-basics-3",
     post: "git-internals-basics",
     question: "Git이 blob 해시를 계산할 때 SHA-1에 넣는 값은?",
     choices: [
@@ -105,5 +45,35 @@ export const GIT_INTERNALS_BASICS: QuizQuestion[] = [
     explanation:
       "blob 해시는 `blob <바이트 수>\\0` 헤더 뒤에 내용을 이어 붙인 바이트의 SHA-1이다. 파일 이름은 tree에 들어가고 시각은 어디에도 들어가지 않아서, 같은 내용이면 누구의 컴퓨터에서든 같은 해시가 나온다. 바이트 수는 글자 수가 아니라 UTF-8 길이다.",
     anchor: "해시는-내용에서-나온다",
+  },
+  {
+    id: "git-internals-basics-4",
+    post: "git-internals-basics",
+    question: "수십만 개 커밋이 있는 저장소에서도 git branch로 브랜치를 만드는 일이 순식간에 끝나는 이유는?",
+    choices: [
+      "브랜치를 만들 때 파일을 복사하지 않고 압축만 하기 때문에",
+      "브랜치 생성은 서버에서 처리되기 때문에",
+      "브랜치가 커밋 해시 하나를 적은 refs/heads 아래의 파일이기 때문에",
+      "packfile이 브랜치마다 따로 있어서 미리 만들어 두기 때문에",
+    ],
+    answer: 2,
+    explanation:
+      "브랜치는 .git/refs/heads 아래에 커밋 해시 하나를 적은 41바이트짜리 파일이다. 브랜치를 만드는 건 이 파일 하나를 쓰는 일이라 저장소 크기와 상관없다. 파일 내용 복사는 일어나지 않는다.",
+    anchor: "git-폴더가-저장소의-전부다",
+  },
+  {
+    id: "git-internals-basics-5",
+    post: "git-internals-basics",
+    question: "PR을 squash 머지한 뒤 git branch -d feature/mul이 not fully merged로 거절됐다. 내용이 main과 같은지 확인하는 방법으로 맞는 것은?",
+    choices: [
+      "두 브랜치 끝 커밋의 해시가 같은지 비교한다",
+      "git branch --merged main에 나오는지 본다",
+      "두 브랜치의 커밋 메시지가 같은지 본다",
+      "두 브랜치의 ^{tree} 해시가 같은지 비교한다",
+    ],
+    answer: 3,
+    explanation:
+      "squash 머지는 커밋 여러 개를 합친 새 커밋을 만들어서 커밋 해시도 다르고 --merged에도 나오지 않는다. tree 해시는 파일 내용만으로 정해지니 git rev-parse로 두 브랜치의 ^{tree}를 비교해 같으면 내용이 완전히 같다.",
+    anchor: "현장에서-해시로-같은가를-확인하는-순간",
   },
 ];

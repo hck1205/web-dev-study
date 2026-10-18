@@ -40,9 +40,15 @@ import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
+import { GIT_IGNORE_CONFIG } from "./git-ignore-config";
 import { GIT_INTERNALS_BASICS } from "./git-internals-basics";
+import { GIT_LARGE_FILES_SECRETS } from "./git-large-files-secrets";
+import { GIT_MERGE_CONFLICT } from "./git-merge-conflict";
 import { GIT_REBASE } from "./git-rebase";
 import { GIT_REMOTE_COLLABORATION } from "./git-remote-collaboration";
+import { GIT_REPO_ERRORS } from "./git-repo-errors";
+import { GIT_STAGING_AREA } from "./git-staging-area";
+import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
@@ -91,8 +97,10 @@ import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { REDIS_BASICS } from "./redis-basics";
+import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
+import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
@@ -102,14 +110,18 @@ import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
 import { SQLD_GROUP_BY_HAVING } from "./sqld-group-by-having";
 import { SQLD_JOINS } from "./sqld-joins";
+import { SQLD_NULL_FUNCTIONS } from "./sqld-null-functions";
 import { SQLD_ROLLUP_CUBE_GROUPING_SETS } from "./sqld-rollup-cube-grouping-sets";
+import { SQLD_SET_OPERATORS } from "./sqld-set-operators";
 import { SQLD_SINGLE_ROW_FUNCTIONS } from "./sqld-single-row-functions";
 import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
+import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
@@ -163,9 +175,15 @@ export const QUESTION_SETS = [
   GATEWAY,
   GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
+  GIT_IGNORE_CONFIG,
   GIT_INTERNALS_BASICS,
+  GIT_LARGE_FILES_SECRETS,
+  GIT_MERGE_CONFLICT,
   GIT_REBASE,
   GIT_REMOTE_COLLABORATION,
+  GIT_REPO_ERRORS,
+  GIT_STAGING_AREA,
+  GIT_STASH_REFLOG,
   GIT_TIPS_ADVANCED,
   GIT_TROUBLESHOOTING,
   GIT_UNDO,
@@ -214,8 +232,10 @@ export const QUESTION_SETS = [
   REACT_RERENDER,
   REALTIME_COMMUNICATION,
   REDIS_BASICS,
+  REDIS_CLUSTER,
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
+  REDIS_REPLICATION_SENTINEL,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
@@ -225,14 +245,18 @@ export const QUESTION_SETS = [
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
+  SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,
   SQLD_GROUP_BY_HAVING,
   SQLD_JOINS,
+  SQLD_NULL_FUNCTIONS,
   SQLD_ROLLUP_CUBE_GROUPING_SETS,
+  SQLD_SET_OPERATORS,
   SQLD_SINGLE_ROW_FUNCTIONS,
   SQLD_SUBQUERY_SET_OPERATORS,
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
+  SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,

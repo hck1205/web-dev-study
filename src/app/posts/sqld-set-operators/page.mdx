@@ -1,0 +1,438 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sqld-set-operators");
+
+작년 결제 테이블과 올해 결제 테이블을 합쳐 고객별 결제 금액 목록을 뽑았다. 60만 건이어야 할 결과가 3,500건밖에 안 나온다. 쿼리는 두 `SELECT` 사이에 `UNION` 한 단어를 넣은 것뿐이다. `UNION`이 같은 고객의 같은 금액 결제를 "중복"으로 보고 지워 버렸다. 쿼리는 더 느려지기까지 했다.
+
+두 쿼리의 결과를 위아래로 붙이는 것이 집합 연산자다. 합집합 `UNION`과 `UNION ALL`, 교집합 `INTERSECT`, 차집합 `MINUS`(`EXCEPT`)가 있다. 문법은 단순하지만 중복을 지우느냐, 컬럼 이름은 어디서 오느냐, 여러 개를 섞으면 무엇부터 계산하느냐에서 시험 문제와 실수가 나온다.
+
+서브쿼리는 [서브쿼리 글](/posts/sqld-subquery-set-operators)과 [상관 서브쿼리 글](/posts/sqld-correlated-subquery)에서 봤다. 이 글은 집합 연산자 네 가지가 결과를 어떻게 만드는지, 지켜야 할 규칙과 DB마다 다른 우선순위를 보고, 끝에서 처음 장면의 `UNION`이 왜 행을 지우고 느려졌는지 실행 계획으로 확인한다. SQL은 Oracle 문법을 먼저 쓰고 PostgreSQL과 SQL Server가 다른 곳을 짚었다. 결과는 PostgreSQL 16.15에서 실제로 돌린 출력이다.
+
+## 예제 데이터
+
+SCOTT 스키마의 사원(`EMP`) 14명과 부서(`DEPT`) 4개다. 테이블 만드는 SQL과 컬럼 설명은 [SQLD 단일행 함수](/posts/sqld-single-row-functions) 글에 있다.
+
+```text
+ empno | ename  |    job    | mgr  | sal  | comm | deptno
+-------+--------+-----------+------+------+------+--------
+  7369 | SMITH  | CLERK     | 7902 |  800 |      |     20
+  7499 | ALLEN  | SALESMAN  | 7698 | 1600 |  300 |     30
+  7521 | WARD   | SALESMAN  | 7698 | 1250 |  500 |     30
+  7566 | JONES  | MANAGER   | 7839 | 2975 |      |     20
+  7654 | MARTIN | SALESMAN  | 7698 | 1250 | 1400 |     30
+  7698 | BLAKE  | MANAGER   | 7839 | 2850 |      |     30
+  7782 | CLARK  | MANAGER   | 7839 | 2450 |      |     10
+  7788 | SCOTT  | ANALYST   | 7566 | 3000 |      |     20
+  7839 | KING   | PRESIDENT |      | 5000 |      |     10
+  7844 | TURNER | SALESMAN  | 7698 | 1500 |    0 |     30
+  7876 | ADAMS  | CLERK     | 7788 | 1100 |      |     20
+  7900 | JAMES  | CLERK     | 7698 |  950 |      |     30
+  7902 | FORD   | ANALYST   | 7566 | 3000 |      |     20
+  7934 | MILLER | CLERK     | 7782 | 1300 |      |     10
+(14 rows)
+
+ deptno |   dname    |   loc
+--------+------------+----------
+     10 | ACCOUNTING | NEW YORK
+     20 | RESEARCH   | DALLAS
+     30 | SALES      | CHICAGO
+     40 | OPERATIONS | BOSTON
+(4 rows)
+```
+
+## 결과를 위아래로 붙이는 집합 연산자
+
+조인이 테이블을 옆으로 붙인다면, 집합 연산자는 두 쿼리의 결과를 위아래로 붙인다. 10번 부서와 20번 부서의 직무를 합쳐 본다. 10번은 CLERK, MANAGER, PRESIDENT이고, 20번은 ANALYST 2명, CLERK 2명, MANAGER 1명이다.
+
+```sql
+SELECT job FROM emp WHERE deptno = 10
+UNION ALL
+SELECT job FROM emp WHERE deptno = 20;
+```
+
+```text
+    job
+-----------
+ MANAGER
+ PRESIDENT
+ CLERK
+ CLERK
+ MANAGER
+ ANALYST
+ CLERK
+ ANALYST
+(8 rows)
+```
+
+`UNION ALL`은 3행과 5행을 그대로 이어 8행을 만든다. 중복도, 순서도 손대지 않는다. `UNION`은 이어 붙인 다음 중복을 지운다.
+
+```sql
+SELECT job FROM emp WHERE deptno = 10
+UNION
+SELECT job FROM emp WHERE deptno = 20;
+```
+
+```text
+    job
+-----------
+ ANALYST
+ CLERK
+ MANAGER
+ PRESIDENT
+(4 rows)
+```
+
+중복을 지우려면 같은 값을 찾아야 한다. 아래 그림은 `UNION`이 8행을 훑으며 처음 보는 값만 남기는 과정이다.
+
+<AlgoTrace
+  caption="UNION은 이어 붙인 뒤 중복을 지운다"
+  memoryLabel="남긴 값"
+  cells={["MANAGER", "PRESIDENT", "CLERK", "CLERK", "MANAGER", "ANALYST", "CLERK", "ANALYST"]}
+  steps={[
+    { memory: [], caption: "앞의 3행(10번 부서)과 뒤의 5행(20번 부서)을 먼저 이어 붙인다. 여기까지가 UNION ALL이다." },
+    { pointer: 0, memory: ["MANAGER"], caption: "MANAGER는 처음 본다. 남긴다." },
+    { pointer: 2, memory: ["MANAGER", "PRESIDENT", "CLERK"], caption: "PRESIDENT, CLERK도 처음이라 남긴다." },
+    { pointer: 4, found: [3, 4], memory: ["MANAGER", "PRESIDENT", "CLERK"], caption: "CLERK과 MANAGER는 이미 있다. 버린다. 이 '이미 있나' 검사를 위해 정렬하거나 해시 표를 만든다." },
+    { pointer: 7, found: [3, 4, 6, 7], memory: ["MANAGER", "PRESIDENT", "CLERK", "ANALYST"], caption: "ANALYST를 하나 남기고 나머지 중복을 버리면 4행이 된다. UNION ALL은 이 검사 단계가 통째로 없다." },
+  ]}
+/>
+
+이 검사 단계가 비용이다. 실행 계획을 보면 차이가 그대로 보인다.
+
+```sql
+EXPLAIN SELECT job FROM emp WHERE deptno = 10
+UNION SELECT job FROM emp WHERE deptno = 20;
+```
+
+```text
+                                 QUERY PLAN
+----------------------------------------------------------------------------
+ Unique  (cost=2.37..2.38 rows=2 width=36)
+   ->  Sort  (cost=2.37..2.37 rows=2 width=36)
+         Sort Key: emp.job
+         ->  Append  (cost=0.00..2.36 rows=2 width=36)
+               ->  Seq Scan on emp  (cost=0.00..1.18 rows=1 width=36)
+                     Filter: (deptno = 10)
+               ->  Seq Scan on emp emp_1  (cost=0.00..1.18 rows=1 width=36)
+                     Filter: (deptno = 20)
+(8 rows)
+```
+
+```sql
+EXPLAIN SELECT job FROM emp WHERE deptno = 10
+UNION ALL SELECT job FROM emp WHERE deptno = 20;
+```
+
+```text
+                           QUERY PLAN
+----------------------------------------------------------------
+ Append  (cost=0.00..2.36 rows=2 width=36)
+   ->  Seq Scan on emp  (cost=0.00..1.18 rows=1 width=36)
+         Filter: (deptno = 10)
+   ->  Seq Scan on emp emp_1  (cost=0.00..1.18 rows=1 width=36)
+         Filter: (deptno = 20)
+(5 rows)
+```
+
+두 계획 모두 `Append`로 이어 붙이는 데까지는 같다. `UNION`은 그 위에 `Sort`(job으로 정렬)와 `Unique`(붙어 있는 같은 값 제거)가 더 얹혀 있다. 14행에선 차이가 없지만 수백만 행이면 정렬에 메모리와 시간이 든다. 행이 많으면 PostgreSQL은 정렬 대신 해시(`HashAggregate`)로 중복을 지우기도 한다. 그래서 `UNION` 결과가 정렬돼 나온 것은 정렬을 거쳤기 때문일 뿐이고, 순서가 필요하면 `ORDER BY`를 직접 붙여야 한다.
+
+실무 규칙은 단순하다. 두 결과가 겹칠 수 없다는 것을 알면(예: 서로 다른 기간의 주문 테이블) `UNION ALL`을 쓴다. 중복이 있을 수 있는데 지워야 할 때만 `UNION`을 쓴다. 습관처럼 `UNION`을 쓰면 정렬 비용만 낸다.
+
+`UNION`은 행 전체가 같아야 중복이다. 10번 부서 사람과 MANAGER를 합치면 CLARK이 양쪽에 다 있다.
+
+```sql
+SELECT ename, sal FROM emp WHERE deptno = 10
+UNION ALL
+SELECT ename, sal FROM emp WHERE job = 'MANAGER'
+ORDER BY sal DESC;
+```
+
+```text
+ ename  | sal
+--------+------
+ KING   | 5000
+ JONES  | 2975
+ BLAKE  | 2850
+ CLARK  | 2450
+ CLARK  | 2450
+ MILLER | 1300
+(6 rows)
+```
+
+`UNION`으로 바꾸면 CLARK이 하나로 줄어 5행이 된다.
+
+교집합은 `INTERSECT`, 차집합은 Oracle의 `MINUS`다. PostgreSQL과 SQL Server는 차집합을 `EXCEPT`라고 쓴다. Oracle도 21c부터 `EXCEPT`를 받지만, SQLD 문제는 `MINUS`로 나온다. 셋 다 결과에서 중복을 지운다.
+
+```sql
+-- 10번과 20번 부서에 모두 있는 직무
+SELECT job FROM emp WHERE deptno = 10
+INTERSECT
+SELECT job FROM emp WHERE deptno = 20
+ORDER BY job;
+
+-- 20번 부서에만 있는 직무 (Oracle은 EXCEPT 자리에 MINUS)
+SELECT job FROM emp WHERE deptno = 20
+EXCEPT
+SELECT job FROM emp WHERE deptno = 10
+ORDER BY job;
+```
+
+```text
+   job
+---------
+ CLERK
+ MANAGER
+(2 rows)
+
+   job
+---------
+ ANALYST
+(1 row)
+```
+
+차집합은 순서를 바꾸면 결과가 다르다. `10번 MINUS 20번`은 PRESIDENT 한 행이다.
+
+`INTERSECT`는 `EXISTS`로, `MINUS`는 `NOT EXISTS`로 바꿔 쓸 수 있다. 차이는 NULL을 다루는 방식이다. 집합 연산자는 중복을 판단할 때 NULL끼리 같다고 보지만, `NOT EXISTS`의 `=` 비교는 NULL끼리 같다고 보지 않는다. 그리고 `MINUS` 대신 `NOT IN`을 쓰면 앞의 NULL 함정에 그대로 빠진다.
+
+## 집합 연산자의 규칙
+
+집합 연산자로 묶이는 쿼리들은 컬럼 수가 같아야 하고, 같은 위치의 컬럼끼리 데이터 타입이 호환돼야 한다. 어기면 바로 오류다.
+
+```sql
+SELECT ename, sal FROM emp UNION SELECT dname FROM dept;   -- 2개 vs 1개
+SELECT ename FROM emp UNION SELECT deptno FROM dept;       -- 문자 vs 숫자
+```
+
+```text
+ERROR:  each UNION query must have the same number of columns
+ERROR:  UNION types character varying and integer cannot be matched
+```
+
+Oracle에서는 각각 `ORA-01789`, `ORA-01790` 오류다. 컬럼 이름은 같을 필요가 없다. 결과의 컬럼 이름은 첫 번째 쿼리를 따른다.
+
+```sql
+SELECT ename AS name, sal FROM emp WHERE deptno = 10
+UNION ALL
+SELECT dname, deptno FROM dept
+ORDER BY name;          -- 첫 쿼리의 별칭으로 정렬한다
+```
+
+```text
+    name    | sal
+------------+------
+ ACCOUNTING |   10
+ CLARK      | 2450
+ KING       | 5000
+ MILLER     | 1300
+ OPERATIONS |   40
+ RESEARCH   |   20
+ SALES      |   30
+(7 rows)
+```
+
+부서 번호가 `sal`이라는 이름으로 나왔다. 결과 컬럼 이름은 첫 쿼리 것을 쓰기 때문이다. 이름이 맞지 않는다는 오류를 기대하면 틀린다.
+
+`ORDER BY`는 맨 마지막에 한 번만 쓴다. 전체 결과를 정렬하는 것이라서다. 중간 쿼리에 쓰면 문법 오류가 난다.
+
+```sql
+SELECT job FROM emp WHERE deptno = 10 ORDER BY job
+UNION
+SELECT job FROM emp WHERE deptno = 20;
+```
+
+```text
+ERROR:  syntax error at or near "UNION"
+```
+
+마지막 `ORDER BY`에는 첫 번째 쿼리의 컬럼 이름이나 별칭, 또는 위치 번호(`ORDER BY 1`)를 쓴다. 두 번째 쿼리에만 있는 컬럼 이름은 쓸 수 없다.
+
+쿼리 하나를 조각으로 나눠 규칙을 다시 보면 이렇다. 조각을 누르면 그 자리에 걸린 규칙이 나온다.
+
+<UrlAnatomy
+  caption="집합 연산자 쿼리의 조각마다 걸린 규칙"
+  joiner=" "
+  params={[
+    {
+      key: "first",
+      display: "SELECT ename AS name, sal ...",
+      title: "첫 번째 쿼리",
+      description: "결과의 컬럼 이름은 여기서 정해진다. 그래서 결과 열 이름이 name, sal이고, ORDER BY에도 이 이름이나 별칭을 쓴다. 이 쿼리 안에는 ORDER BY를 쓸 수 없다.",
+      code: "SELECT ename AS name, sal FROM emp WHERE deptno = 10",
+      required: true,
+    },
+    {
+      key: "op",
+      display: "UNION ALL",
+      title: "집합 연산자",
+      description: "UNION ALL만 중복을 그대로 둔다. UNION, INTERSECT, MINUS(EXCEPT)는 결과에서 중복을 지우고, 그때 NULL끼리는 같다고 본다.",
+      required: true,
+    },
+    {
+      key: "second",
+      display: "SELECT dname, deptno ...",
+      title: "두 번째 쿼리",
+      description: "컬럼 수가 첫 쿼리와 같고(2개), 같은 위치끼리 타입이 맞아야 한다(문자-문자, 숫자-숫자). 이름은 달라도 된다. deptno가 sal 열에 들어가는 이유다.",
+      code: "SELECT dname, deptno FROM dept",
+      required: true,
+    },
+    {
+      key: "order",
+      display: "ORDER BY name",
+      title: "정렬은 맨 끝에 한 번",
+      description: "합친 결과 전체를 정렬한다. 첫 쿼리의 컬럼 이름이나 별칭, 위치 번호(ORDER BY 1)를 쓴다. 두 번째 쿼리에만 있는 이름(dname)은 쓸 수 없다.",
+    },
+  ]}
+/>
+
+연산자를 여러 개 섞으면 우선순위가 DB마다 다르다. Oracle은 모든 집합 연산자의 우선순위가 같아서 위에서부터 차례로 계산한다. PostgreSQL과 SQL Server는 표준대로 `INTERSECT`를 먼저 계산한다. 같은 쿼리를 보자.
+
+```sql
+SELECT job FROM emp WHERE deptno = 10        -- CLERK, MANAGER, PRESIDENT
+UNION
+SELECT job FROM emp WHERE deptno = 20        -- ANALYST, CLERK, MANAGER
+INTERSECT
+SELECT job FROM emp WHERE deptno = 30        -- CLERK, MANAGER, SALESMAN
+ORDER BY 1;
+```
+
+PostgreSQL은 `20번 INTERSECT 30번`(CLERK, MANAGER)을 먼저 구하고 10번과 합친다.
+
+```text
+    job
+-----------
+ CLERK
+ MANAGER
+ PRESIDENT
+(3 rows)
+```
+
+Oracle은 `10번 UNION 20번`(4개)을 먼저 구하고 30번과 교집합을 낸다. PostgreSQL에서 괄호로 그 순서를 강제하면 Oracle이 내는 결과와 같은 2행이 나온다.
+
+```sql
+(SELECT job FROM emp WHERE deptno = 10
+ UNION
+ SELECT job FROM emp WHERE deptno = 20)
+INTERSECT
+SELECT job FROM emp WHERE deptno = 30
+ORDER BY 1;
+```
+
+```text
+   job
+---------
+ CLERK
+ MANAGER
+(2 rows)
+```
+
+같은 SQL이 DB에 따라 PRESIDENT를 포함하기도 하고 빼기도 한다. 세 개 이상 섞을 때는 항상 괄호로 순서를 적는다.
+
+두 DB가 같은 세 줄을 어떤 순서로 계산하는지 나란히 따라가 보면 이렇다. 다음을 누르면 단계마다 남은 직무가 바뀐다.
+
+<AlgoTrace
+  caption="10번 UNION 20번 INTERSECT 30번을 계산하는 순서"
+  memoryLabel="지금까지 남은 직무"
+  cells={["10번 부서", "20번 부서", "30번 부서"]}
+  steps={[
+    { memory: [], caption: "10번은 CLERK·MANAGER·PRESIDENT, 20번은 ANALYST·CLERK·MANAGER, 30번은 CLERK·MANAGER·SALESMAN이다." },
+    { pointer: 1, found: [1, 2], memory: ["CLERK", "MANAGER"], caption: "PostgreSQL과 SQL Server는 INTERSECT를 먼저 계산한다. 20번과 30번에 모두 있는 직무는 CLERK, MANAGER다." },
+    { pointer: 0, found: [0, 1, 2], memory: ["CLERK", "MANAGER", "PRESIDENT"], caption: "그다음 10번과 합친다. PRESIDENT가 더해져 3행이다." },
+    { pointer: 0, found: [0, 1], memory: ["ANALYST", "CLERK", "MANAGER", "PRESIDENT"], caption: "Oracle은 위에서부터 차례로 간다. 먼저 10번 UNION 20번으로 직무 네 개가 된다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["CLERK", "MANAGER"], caption: "그 넷과 30번의 교집합을 낸다. PRESIDENT와 ANALYST가 빠져 2행이다. 같은 SQL이 DB마다 다른 답을 낸다." },
+  ]}
+/>
+
+## 현장에서 UNION이 행을 지우고 느려지는 순간
+
+처음 장면을 재현한다. 결제 30만 건씩인 두 해의 테이블을 만들고, 고객 번호와 금액만 뽑아 합쳤다. 같은 고객이 같은 금액을 여러 번 결제하는 건 흔한 일이다.
+
+```sql
+CREATE TABLE sales_2025 AS
+SELECT i AS id, (i % 500) AS customer_id, (i % 7) * 1000 AS amount FROM generate_series(1, 300000) i;
+CREATE TABLE sales_2026 AS
+SELECT i + 300000 AS id, (i % 500) AS customer_id, (i % 7) * 1000 AS amount FROM generate_series(1, 300000) i;
+
+-- 고객별 결제 금액 목록을 합친다 (결제 id는 빼고)
+SELECT count(*) FROM (SELECT customer_id, amount FROM sales_2025 UNION ALL SELECT customer_id, amount FROM sales_2026) t;
+SELECT count(*) FROM (SELECT customer_id, amount FROM sales_2025 UNION SELECT customer_id, amount FROM sales_2026) t;
+```
+
+```text
+ count
+--------
+ 600000
+(1 row)
+
+ count
+-------
+  3500
+(1 row)
+```
+
+`UNION`은 행 전체가 같으면 중복으로 본다. 결제 id를 빼고 고객과 금액만 남겼으니 "고객 500명 × 금액 7가지" 조합인 3,500행만 남았다. 데이터가 틀린 게 아니라 질문이 틀렸다. 결제 건을 모두 원하면 `UNION ALL`이다. 정말 서로 다른 조합만 원했다면 그때 `UNION`이다.
+
+중복이 없을 때도 `UNION`은 비용을 낸다. 결제 id처럼 겹칠 수 없는 컬럼을 넣고 두 방식의 실행 계획을 비교했다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT customer_id, amount FROM sales_2025 UNION ALL SELECT customer_id, amount FROM sales_2026;
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT id, amount FROM sales_2025 UNION SELECT id, amount FROM sales_2026;
+```
+
+```text
+                                  QUERY PLAN
+------------------------------------------------------------------------------
+ Append (actual time=0.008..97.664 rows=600000 loops=1)
+   ->  Seq Scan on sales_2025 (actual time=0.008..25.763 rows=300000 loops=1)
+   ->  Seq Scan on sales_2026 (actual time=0.013..25.133 rows=300000 loops=1)
+ Planning Time: 0.071 ms
+ Execution Time: 120.518 ms
+(5 rows)
+
+                                        QUERY PLAN
+------------------------------------------------------------------------------------------
+ Unique (actual time=215.151..334.729 rows=600000 loops=1)
+   ->  Sort (actual time=215.149..264.444 rows=600000 loops=1)
+         Sort Key: sales_2025.id, sales_2025.amount
+         Sort Method: external merge  Disk: 10600kB
+         ->  Append (actual time=0.006..108.233 rows=600000 loops=1)
+               ->  Seq Scan on sales_2025 (actual time=0.006..31.129 rows=300000 loops=1)
+               ->  Seq Scan on sales_2026 (actual time=0.009..29.064 rows=300000 loops=1)
+ Planning Time: 0.118 ms
+ Execution Time: 358.139 ms
+(9 rows)
+```
+
+`UNION` 쪽은 지울 중복이 하나도 없는데(`Unique`의 rows도 600000) 60만 행을 정렬했다. `Sort Method: external merge  Disk: 10600kB`는 정렬이 작업 메모리(`work_mem`, 기본 4MB)에 다 안 들어가 디스크에 임시 파일을 썼다는 뜻이다. 실행 시간은 3배가 됐다. 이 줄이 자주 보이면 `work_mem`을 늘리는 것보다 정렬 자체가 필요한지부터 묻는다.
+
+리포트 숫자가 기대보다 적으면 쿼리에 `UNION`이 있는지, 그리고 SELECT 목록에서 행을 구분하는 컬럼(id 같은)이 빠졌는지 본다. 느리면 실행 계획에서 `Append` 위에 `Sort`와 `Unique`(또는 `HashAggregate`)가 얹혔는지 본다. 둘 다 `UNION ALL`로 고치는 경우가 대부분이다.
+
+## SQLD 시험 포인트
+
+- `UNION`은 중복 제거(정렬 비용), `UNION ALL`은 그대로 이어 붙인다. 차집합은 Oracle `MINUS`, SQL Server `EXCEPT`.
+- 집합 연산자: 컬럼 수와 타입이 맞아야 하고, 컬럼 이름은 첫 쿼리를 따르며, `ORDER BY`는 맨 끝에 한 번. Oracle은 집합 연산자 우선순위가 모두 같다.
+- `INTERSECT`는 `EXISTS`로, `MINUS`는 `NOT EXISTS`로 바꿔 쓸 수 있다. 집합 연산자는 NULL끼리 같다고 보고, `NOT EXISTS`의 `=` 비교는 그렇지 않다.
+
+## 면접에서 나올 만한 질문
+
+### UNION과 UNION ALL의 차이와, 어느 것을 기본으로 쓰나요?
+
+`UNION`은 결과를 이어 붙인 뒤 중복을 지우고, `UNION ALL`은 그대로 이어 붙인다. 중복을 지우려면 정렬하거나 해시 표를 만들어야 해서, 실행 계획에 `Sort`와 `Unique`(또는 `HashAggregate`)가 더해진다. 두 결과가 겹칠 수 없거나 중복이 있어도 되면 `UNION ALL`을 기본으로 쓴다. `UNION` 결과가 정렬돼 보이는 건 부수 효과일 뿐이라 순서가 필요하면 `ORDER BY`를 붙인다.
+
+### 집합 연산자를 쓸 때 지켜야 할 규칙은요?
+
+각 쿼리의 컬럼 수가 같고, 같은 위치끼리 타입이 호환돼야 한다. 결과 컬럼 이름은 첫 쿼리를 따르고, `ORDER BY`는 맨 끝에 한 번만 쓰며 첫 쿼리의 이름이나 위치 번호로 정렬한다. 여러 연산자를 섞으면 Oracle은 왼쪽부터 같은 우선순위로, PostgreSQL과 SQL Server는 `INTERSECT`를 먼저 계산해서 결과가 달라질 수 있다. 그래서 괄호로 순서를 적는다.
+
+### MINUS(EXCEPT)와 NOT EXISTS는 결과가 항상 같나요?
+
+아니다. 둘 다 "앞에는 있고 뒤에는 없는 것"을 구하지만, 집합 연산자는 중복을 판단할 때 NULL끼리 같다고 보고 `NOT EXISTS`의 `=` 비교는 NULL끼리 같다고 보지 않는다. 그래서 NULL이 든 행은 `MINUS`에서는 지워지고 `NOT EXISTS`에서는 남을 수 있다. `MINUS`는 결과의 중복도 지운다. 차집합은 순서를 바꾸면 결과가 달라진다.
+
+### UNION을 썼더니 결과 행 수가 줄었습니다. 왜 그런가요?
+
+`UNION`은 이어 붙인 뒤 행 전체가 같은 것을 하나로 줄이기 때문이다. SELECT 목록에서 결제 id처럼 행을 구분하는 컬럼을 빼면, 진짜로 다른 결제인데도 같은 행이 되어 사라진다. 예제에서 60만 건이 고객과 금액 조합 3,500행으로 줄었다. 건수를 다 원하면 `UNION ALL`을 쓰고, 중복 제거가 정말 필요할 때만 `UNION`을 쓴다.
+
+### Oracle과 PostgreSQL에서 집합 연산자 우선순위는 어떻게 다른가요?
+
+Oracle은 모든 집합 연산자의 우선순위가 같아서 위에서부터 차례로 계산하고, PostgreSQL과 SQL Server는 표준대로 `INTERSECT`를 먼저 계산한다. 예제의 `10번 UNION 20번 INTERSECT 30번`은 PostgreSQL에서 3행, Oracle에서 2행이었다. 세 개 이상 섞을 때는 괄호로 순서를 적어서 DB에 상관없이 같은 결과가 나오게 한다.

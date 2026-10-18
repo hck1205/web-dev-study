@@ -27,48 +27,6 @@ export const SQLD_SUBQUERY_SET_OPERATORS: QuizQuestion[] = [
     id: "sqld-subquery-set-operators-3",
     post: "sqld-subquery-set-operators",
     question:
-      "다음 SQL을 실행한 결과로 옳은 것은? (10번 부서에는 3명, 40번 부서에는 0명이 있다)\nSELECT d.dname, (SELECT e.ename FROM emp e WHERE e.deptno = d.deptno) AS ename FROM dept d;",
-    choices: [
-      "부서마다 첫 번째 사원 이름이 나온다",
-      "부서당 사원 수만큼 행이 늘어난다",
-      "스칼라 서브쿼리가 여러 행을 돌려줘서 오류가 난다",
-      "OPERATIONS 부서만 NULL로 나오고 나머지는 정상이다",
-    ],
-    answer: 2,
-    explanation:
-      "SELECT 절의 스칼라 서브쿼리는 한 행 한 컬럼만 돌려줘야 한다. 10번 부서처럼 사원이 여러 명이면 Oracle은 ORA-01427 오류를 낸다. 0행인 경우에만 NULL로 처리된다.",
-    anchor: "select-절에는-값-하나만-들어간다",
-  },
-  {
-    id: "sqld-subquery-set-operators-4",
-    post: "sqld-subquery-set-operators",
-    question:
-      "10번 부서의 JOB은 CLERK, MANAGER, PRESIDENT이고 20번 부서의 JOB은 ANALYST, ANALYST, CLERK, CLERK, MANAGER이다. 다음 SQL의 결과 행 수는?\nSELECT job FROM emp WHERE deptno = 10\nUNION\nSELECT job FROM emp WHERE deptno = 20;",
-    choices: ["8", "5", "4", "2"],
-    answer: 2,
-    explanation:
-      "UNION은 두 결과를 이어 붙인 뒤 중복을 지운다. 남는 값은 ANALYST, CLERK, MANAGER, PRESIDENT 네 개다. 8은 중복을 지우지 않는 UNION ALL의 결과이고, 2는 INTERSECT의 결과다.",
-    anchor: "결과를-위아래로-붙이는-집합-연산자",
-  },
-  {
-    id: "sqld-subquery-set-operators-5",
-    post: "sqld-subquery-set-operators",
-    question: "Oracle에서 다음 SQL을 실행할 때 집합 연산의 계산 순서로 옳은 것은?\nA UNION B INTERSECT C",
-    choices: [
-      "B INTERSECT C를 먼저 계산한 뒤 A와 합친다",
-      "A UNION B를 먼저 계산한 뒤 C와 교집합을 낸다",
-      "집합 연산자를 세 개 이상 섞으면 오류가 난다",
-      "옵티마이저가 비용에 따라 순서를 정한다",
-    ],
-    answer: 1,
-    explanation:
-      "Oracle은 모든 집합 연산자의 우선순위가 같아서 왼쪽부터 차례로 계산한다. PostgreSQL과 SQL Server는 표준대로 INTERSECT를 먼저 계산하므로 결과가 다를 수 있다. 예제 데이터에서는 PRESIDENT가 포함되느냐로 갈렸다.",
-    anchor: "집합-연산자의-규칙",
-  },
-  {
-    id: "sqld-subquery-set-operators-6",
-    post: "sqld-subquery-set-operators",
-    question:
       "DEPT에는 10, 20, 30, 40번 부서가 있고, EMP에는 10, 20, 30번 부서 사원만 있다. 다음 SQL의 결과는?\nSELECT COUNT(*) FROM dept d\nWHERE NOT EXISTS (SELECT 1 FROM emp e WHERE e.deptno = d.deptno);",
     choices: ["0", "3", "4", "1"],
     answer: 3,
@@ -77,18 +35,33 @@ export const SQLD_SUBQUERY_SET_OPERATORS: QuizQuestion[] = [
     anchor: "exists는-있는지만-본다",
   },
   {
-    id: "sqld-subquery-set-operators-7",
+    id: "sqld-subquery-set-operators-4",
     post: "sqld-subquery-set-operators",
-    question: "집합 연산자에 대한 설명으로 옳지 않은 것은?",
+    question: "WHERE deptno = (SELECT deptno FROM dept WHERE loc IN ('DALLAS', 'CHICAGO'))를 실행하면?",
     choices: [
-      "각 SELECT의 컬럼 수가 같아야 한다",
-      "결과의 컬럼 이름은 첫 번째 SELECT를 따른다",
-      "ORDER BY는 각 SELECT마다 따로 쓸 수 있다",
-      "UNION ALL은 중복을 제거하지 않아 UNION보다 비용이 적다",
+      "두 부서의 사원이 모두 나온다",
+      "첫 번째 부서의 사원만 나온다",
+      "서브쿼리가 두 행을 돌려줘서 오류가 난다",
+      "0행이 나온다",
     ],
     answer: 2,
     explanation:
-      "ORDER BY는 전체 결과를 정렬하는 것이라 맨 마지막에 한 번만 쓴다. 중간 SELECT에 쓰면 문법 오류가 난다. 마지막 ORDER BY에는 첫 번째 SELECT의 컬럼 이름이나 별칭, 위치 번호를 쓴다.",
-    anchor: "집합-연산자의-규칙",
+      "=는 값 하나와 비교하는 단일행 연산자라 서브쿼리가 두 행(20, 30)을 돌려주면 실행 중에 오류가 난다. 여러 행일 수 있으면 IN이나 = ANY 같은 다중행 연산자를 쓴다.",
+    anchor: "몇-줄이-돌아오느냐로-연산자가-바뀐다",
+  },
+  {
+    id: "sqld-subquery-set-operators-5",
+    post: "sqld-subquery-set-operators",
+    question: "PostgreSQL에서 NOT IN (SELECT ...) 쿼리의 실행 계획에 Filter: (NOT (SubPlan 1))과 loops=20000이 보이고 1분 가까이 걸린다. 가장 알맞은 처리는?",
+    choices: [
+      "서브쿼리에 ORDER BY를 붙인다",
+      "NOT EXISTS로 바꿔 Hash Anti Join이 되게 한다",
+      "IN으로 바꾸고 결과에서 빼 준다",
+      "바깥 테이블에 DISTINCT를 붙인다",
+    ],
+    answer: 1,
+    explanation:
+      "PostgreSQL은 NULL 규칙 때문에 NOT IN을 안티 조인으로 바꾸지 못하고, 해시가 메모리에 안 들어가면 바깥 행마다 서브쿼리 결과를 다시 훑는다. NOT EXISTS는 Hash Anti Join으로 한 번에 처리되고 NULL 함정도 없다. 예제에서 약 60초가 12ms가 됐다.",
+    anchor: "현장에서-not-in이-느려지는-순간",
   },
 ];

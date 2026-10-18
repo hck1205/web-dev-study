@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 120편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 132편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -91,14 +91,13 @@
 
 #### `git-branch-merge` — 브랜치와 병합: 포인터 하나가 움직일 뿐
 
-- 요약: 브랜치가 커밋을 가리키는 이름표라는 데서 시작해 fast-forward와 3-way 병합이 어떻게 갈리는지 보고, 두 사람이 같은 줄을 고쳐 생긴 충돌을 마커 읽기부터 rerere까지 단계별로 푼다.
+- 요약: 같은 git merge가 어떤 때는 Fast-forward로, 어떤 때는 병합 커밋으로 끝나는 이유에서 시작해 브랜치와 HEAD, switch와 detached HEAD, fast-forward와 3-way 병합, 브랜치 정리와 upstream을 보고, --first-parent와 --ancestry-path로 커밋이 어느 PR로 들어왔는지 찾는다.
 - 태그: Git, DevOps
-- 키워드: fast-forward, 3-way 병합, 병합 충돌, detached HEAD, merge base
+- 키워드: fast-forward, 3-way 병합, detached HEAD, merge base, first-parent
 - 길이: 578줄
 - 소제목: 브랜치는 커밋에 붙은 이름표다 / switch와 checkout은 무엇이 다른가 / HEAD가 브랜치를 떠나면 / fast-forward를 막거나 강제하기 / 곧게 이어지지 않으면 세 스냅샷을 비교한다 / 다 쓴 브랜치는 지운다 / 원격 브랜치와 얼마나 차이 나는지 / 현장에서 병합 히스토리를 읽는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-internals-basics, git-branching-strategy, git-remote-collaboration
-- 키워드 백링크 →: git-undo
-- 이 글로 오는 글 ←: git-branching-strategy, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced, git-troubleshooting, git-undo
+- 직접 링크 →: git-merge-conflict, git-internals-basics, git-staging-area, git-stash-reflog, git-branching-strategy, git-remote-collaboration
+- 이 글로 오는 글 ←: git-branching-strategy, git-ignore-config, git-internals-basics, git-merge-conflict, git-rebase, git-remote-collaboration, git-repo-errors, git-tips-advanced, git-troubleshooting, git-undo
 
 #### `git-branching-strategy` — 브랜치 전략: Git Flow, GitHub Flow, 트렁크 기반 개발
 
@@ -111,16 +110,49 @@
 - 키워드 백링크 →: ab-testing
 - 이 글로 오는 글 ←: git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced
 
-#### `git-internals-basics` — Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역
+#### `git-ignore-config` — .gitignore와 git config: 무시 규칙, 세 겹 설정, 줄바꿈
 
-- 요약: blob·tree·commit 객체를 직접 열어 보고, 파일이 작업 트리·인덱스·저장소를 어떻게 오가는지 따라간다. add 뒤에 고친 내용이 왜 커밋에 안 들어가는지부터 log, .gitignore, 설정까지 정리한다.
+- 요약: .gitignore가 이미 추적 중인 파일에 듣지 않는 이유와 패턴 규칙, system·global·local로 쌓이는 설정과 includeIf, core.autocrlf와 .gitattributes로 줄바꿈을 고정하는 법을 실제 출력으로 정리한다.
 - 태그: Git, DevOps
-- 키워드: 스테이징 영역, 작업 트리, .gitignore, git add -p
+- 키워드: .gitignore, includeIf, core.autocrlf
+- 길이: 424줄
+- 소제목: 올리지 않을 파일은 .gitignore로 / 설정은 세 겹으로 쌓인다 / 줄바꿈 문자가 diff 전체를 바꿀 때 / 현장에서 이 규칙들이 문제가 되는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-staging-area, git-undo, git-troubleshooting, git-branch-merge
+- 키워드 백링크 →: db-modeling-normalization
+- 이 글로 오는 글 ←: git-internals-basics, git-large-files-secrets, git-repo-errors, git-staging-area, git-troubleshooting
+
+#### `git-internals-basics` — Git은 무엇을 저장하나: 스냅샷과 객체
+
+- 요약: squash 머지한 브랜치가 왜 안 합쳐졌다고 나오는지에서 시작해 blob·tree·commit·tag 객체를 직접 열어 보고, 해시가 내용에서 나오는 방식과 .git 폴더의 구성을 본다. tree 해시 비교, CI 캐시 키, git describe처럼 해시로 같은지 확인하는 실무 방법도 정리한다.
+- 태그: Git, DevOps
+- 키워드: blob 객체, 내용 주소 지정, packfile, annotated tag
 - 길이: 575줄
 - 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-branch-merge, git-troubleshooting
-- 키워드 백링크 →: git-tips-advanced, git-branching-strategy, git-undo
-- 이 글로 오는 글 ←: git-branch-merge, git-rebase, git-remote-collaboration, git-troubleshooting, git-undo
+- 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, git-troubleshooting, git-stash-reflog
+- 키워드 백링크 →: git-tips-advanced, git-branching-strategy, git-large-files-secrets
+- 이 글로 오는 글 ←: git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area
+
+#### `git-large-files-secrets` — 커밋에 들어가면 안 되는 것: 큰 파일, 비밀 값, 줄바꿈, 권한
+
+- 요약: 지운 덤프 파일 때문에 푸시가 계속 거절되는 이유에서 시작해 git-filter-repo로 히스토리에서 빼는 법, 비밀 값이 올라갔을 때의 대응 순서, 계속 추적되는 파일, CRLF, 실행 권한, 대소문자만 바꾼 파일 이름을 증상별로 고친다.
+- 태그: Git, DevOps
+- 키워드: git-filter-repo, Git LFS, push protection
+- 길이: 459줄
+- 소제목: 큰 파일을 커밋해서 푸시가 안 된다 / 비밀 값이 든 .env를 커밋했다 / .gitignore에 적었는데 계속 추적된다 / 줄바꿈 때문에 파일 전체가 바뀌었다고 나온다 / 권한만 바뀐 파일이 diff에 나온다 / 대소문자만 바꾼 파일 이름이 반영되지 않는다 / 들어간 뒤보다 들어가기 전에 막는 편이 싸다 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-troubleshooting, git-undo, git-ignore-config
+- 키워드 백링크 →: git-staging-area, db-modeling-normalization
+- 이 글로 오는 글 ←: git-internals-basics, git-troubleshooting, git-undo
+
+#### `git-merge-conflict` — 병합 충돌 풀기: 마커 읽기부터 rerere까지
+
+- 요약: 두 사람이 같은 줄을 고쳐 멈춘 병합에서 시작해 충돌 마커와 zdiff3, 충돌 중 인덱스의 세 스테이지, 푸는 순서와 mergetool, 같은 충돌을 다시 풀지 않게 하는 rerere, 충돌을 덜 만드는 습관을 실제 출력으로 따라간다.
+- 태그: Git, DevOps
+- 키워드: 병합 충돌, rerere, zdiff3
+- 길이: 524줄
+- 소제목: 같은 줄을 둘이 고쳤을 때 / 충돌 중에 Git이 들고 있는 것 / 충돌을 푸는 순서 / 같은 충돌을 두 번 풀지 않게 / 충돌을 덜 만드는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-branch-merge, git-rebase
+- 키워드 백링크 →: git-staging-area
+- 이 글로 오는 글 ←: git-branch-merge, git-rebase, git-staging-area, git-tips-advanced
 
 #### `git-rebase` — rebase: 커밋을 다시 쓰는 일
 
@@ -129,9 +161,9 @@
 - 키워드: interactive rebase, git rebase, autosquash, pull.rebase
 - 길이: 791줄
 - 소제목: rebase는 커밋을 새로 만든다 / merge로 할지 rebase로 할지 / 다시 적용하다 충돌이 나면 / 커밋을 고르고 합치고 고쳐 쓰기 / 고칠 커밋을 미리 표시해 두기 / 브랜치 일부만 다른 곳으로 / 쌓아 올린 브랜치를 한꺼번에 / pull할 때마다 생기는 병합 커밋 / 공유한 커밋은 다시 쓰지 않는다 / rebase를 잘못했을 때 / 병합 커밋까지 옮겨야 할 때 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-branch-merge, git-branching-strategy, git-remote-collaboration, git-undo
-- 키워드 백링크 →: git-tips-advanced, git-internals-basics
-- 이 글로 오는 글 ←: git-remote-collaboration, git-troubleshooting
+- 직접 링크 →: git-branch-merge, git-branching-strategy, git-merge-conflict, git-remote-collaboration, git-stash-reflog, git-undo
+- 키워드 백링크 →: git-tips-advanced, git-staging-area
+- 이 글로 오는 글 ←: git-merge-conflict, git-remote-collaboration, git-troubleshooting
 
 #### `git-remote-collaboration` — 원격 저장소와 협업: fetch, pull, push
 
@@ -141,8 +173,41 @@
 - 길이: 860줄
 - 소제목: 원격은 주소록에 적힌 다른 저장소다 / SSH 키로 GitHub에 붙기 / 원격 추적 브랜치는 마지막으로 본 원격의 사진이다 / fetch는 가져오기만, pull은 가져와서 합친다 / 갈라진 브랜치를 합치는 세 가지 방법 / upstream과 ahead, behind / 강제 푸시는 남의 커밋을 지운다 / 끝난 브랜치 지우고 정리하기 / 태그는 따로 밀어야 올라간다 / PR 한 건이 머지되기까지 / 포크에서 기여하기 / 리뷰를 주고받을 때 / 비밀번호 대신 토큰과 자격 증명 도우미 / 큰 저장소를 빨리 받기 / 다시 처음의 거절로 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-internals-basics, git-branch-merge, git-rebase, git-branching-strategy, git-troubleshooting
-- 키워드 백링크 →: git-undo, token-login, what-happens-google-com
-- 이 글로 오는 글 ←: git-branch-merge, git-branching-strategy, git-rebase, git-troubleshooting
+- 키워드 백링크 →: git-stash-reflog, token-login, what-happens-google-com
+- 이 글로 오는 글 ←: git-branch-merge, git-branching-strategy, git-rebase, git-repo-errors, git-staging-area, git-troubleshooting
+
+#### `git-repo-errors` — Git 저장소가 명령을 거부할 때: lock, ref, index, 소유권
+
+- 요약: index.lock, cannot lock ref, index file corrupt, dubious ownership, 비어 있는 서브모듈, Author identity unknown처럼 .git 안의 파일 때문에 생기는 오류를 재현하고, 무엇을 지워도 되고 무엇은 지우면 안 되는지 정리한다.
+- 태그: Git, DevOps
+- 키워드: cannot lock ref, index.lock, dubious ownership
+- 길이: 294줄
+- 소제목: cannot lock ref 오류가 난다 / index.lock 파일이 있다며 아무것도 안 된다 / index file corrupt / not a git repository / 서브모듈 폴더가 비어 있다 / Author identity unknown / 지워도 되는 파일과 지우면 안 되는 파일 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-troubleshooting, git-tips-advanced, git-ignore-config
+- 키워드 백링크 →: git-branch-merge, git-remote-collaboration
+- 이 글로 오는 글 ←: git-troubleshooting
+
+#### `git-staging-area` — 작업 트리, 인덱스, HEAD: add와 commit 사이
+
+- 요약: add한 뒤에 고친 한 줄이 왜 커밋에 안 들어가는지에서 시작해 세 구역과 git status의 두 글자, add -p, 히스토리를 읽는 log 옵션을 실제 출력으로 따라간다. pre-commit 훅이 작업 트리가 아니라 인덱스를 검사해야 하는 이유도 본다.
+- 태그: Git, DevOps
+- 키워드: 스테이징 영역, 작업 트리, git add -p
+- 길이: 548줄
+- 소제목: 파일은 세 구역을 오간다 / 파일의 상태는 두 글자로 읽는다 / 커밋하고 히스토리를 읽는 명령 / 커밋 직전에 인덱스를 보는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-remote-collaboration, git-ignore-config, git-tips-advanced
+- 키워드 백링크 →: git-stash-reflog, git-merge-conflict
+- 이 글로 오는 글 ←: git-branch-merge, git-ignore-config, git-internals-basics, git-large-files-secrets, git-merge-conflict, git-rebase, git-stash-reflog, git-troubleshooting, git-undo
+
+#### `git-stash-reflog` — 치워 두고 되찾기: stash, reflog, 잘못 둔 커밋
+
+- 요약: reset --hard로 사라진 커밋을 reflog로 되찾는 데서 시작해 stash로 변경을 치워 두는 법, add만 한 파일을 fsck로 찾는 법, 엉뚱한 브랜치에 한 커밋을 옮기는 순서, 히스토리에서 지운 파일을 꺼내는 법을 정리한다.
+- 태그: Git, DevOps
+- 키워드: reflog, git stash, git fsck
+- 길이: 451줄
+- 소제목: 잠깐 치워 두기 / reset --hard 뒤에 사라진 커밋 찾기 / 엉뚱한 브랜치에 커밋했을 때 / 지운 파일을 히스토리에서 꺼내기 / 서랍과 생명줄의 한계 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-undo, git-troubleshooting
+- 키워드 백링크 →: git-tips-advanced, git-staging-area
+- 이 글로 오는 글 ←: git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-staging-area, git-troubleshooting, git-undo
 
 #### `git-tips-advanced` — 알아 두면 편한 Git 기능: bisect, cherry-pick, worktree, hooks
 
@@ -151,31 +216,31 @@
 - 키워드: git bisect, cherry-pick, worktree, git blame, commit-msg 훅
 - 길이: 895줄
 - 소제목: 200개 커밋을 여덟 번 만에 좁힌다 / 테스트 스크립트로 bisect를 자동으로 돌린다 / 커밋 하나만 가져오는 cherry-pick / 브랜치를 바꾸지 않고 다른 폴더에서 일한다 / 이 줄은 누가 왜 바꿨나 / 코드가 생기고 사라진 커밋을 찾는다 / 저장소 안을 찾고 기여를 센다 / 커밋 전에 규칙을 검사하는 훅 / 파일마다 다른 규칙을 주는 .gitattributes / 서브모듈과 subtree / 저장소를 가볍게 유지하는 gc와 maintenance / 커밋에 서명하기 / 켜 두면 편한 설정과 별칭 / 도구를 꺼낼 때를 아는 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-branching-strategy, git-troubleshooting, git-branch-merge
-- 키워드 백링크 →: dockerfile-image-layers
-- 이 글로 오는 글 ←: git-branching-strategy, git-internals-basics, git-rebase, git-troubleshooting
+- 직접 링크 →: git-branching-strategy, git-troubleshooting, git-merge-conflict
+- 키워드 백링크 →: git-branch-merge, dockerfile-image-layers
+- 이 글로 오는 글 ←: git-branching-strategy, git-internals-basics, git-rebase, git-repo-errors, git-staging-area, git-stash-reflog, git-troubleshooting
 
-#### `git-troubleshooting` — Git 문제 해결 시나리오 모음
+#### `git-troubleshooting` — Git 문제 해결: 푸시 거절부터 잃어버린 커밋까지
 
-- 요약: push 거절, unrelated histories, detached HEAD, 지운 브랜치, 락파일 충돌, 큰 파일과 비밀 값 커밋, CRLF, cannot lock ref, index 손상까지 자주 만나는 Git 오류를 실제 메시지로 재현하고 원인과 해결 명령, 예방법을 정리한다.
+- 요약: push 거절, divergent branches, unrelated histories, 브랜치를 못 바꿀 때, stash pop 충돌, detached HEAD에서 잃은 커밋, 지운 브랜치, 끝나지 않은 rebase, 락파일 충돌까지 협업과 히스토리에서 만나는 Git 오류를 실제 메시지로 재현하고 원인과 해결, 예방법을 정리한다.
 - 태그: Git, DevOps
-- 키워드: unrelated histories, git-filter-repo, cannot lock ref, index.lock
+- 키워드: unrelated histories, fetch first, divergent branches
 - 길이: 521줄
 - 소제목: 문제가 어디서 났는지부터 가른다 / 푸시가 fetch first로 거절된다 / pull이 divergent branches라며 멈춘다 / refusing to merge unrelated histories / 바꾼 파일이 덮어써진다며 브랜치를 못 바꾼다 / stash pop에서 충돌이 났다 / detached HEAD에서 만든 커밋이 사라졌다 / 브랜치를 실수로 지웠다 / 이미 푸시한 커밋 메시지가 틀렸다 / rebase가 끝나지 않은 채로 남아 있다 / pnpm-lock.yaml에서 충돌이 났다 / 오류를 만났을 때의 순서 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-undo, git-rebase, git-remote-collaboration, git-tips-advanced
-- 키워드 백링크 →: git-branch-merge, git-internals-basics
-- 이 글로 오는 글 ←: git-internals-basics, git-remote-collaboration, git-tips-advanced, git-undo
+- 직접 링크 →: git-large-files-secrets, git-repo-errors, git-undo, git-rebase, git-remote-collaboration, git-tips-advanced
+- 키워드 백링크 →: git-branch-merge, git-ignore-config, git-staging-area, git-stash-reflog
+- 이 글로 오는 글 ←: git-ignore-config, git-internals-basics, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-stash-reflog, git-tips-advanced, git-undo
 
-#### `git-undo` — 되돌리기 총정리: restore, reset, revert, reflog
+#### `git-undo` — 되돌리기: restore, reset, revert와 히스토리 속 비밀 값
 
-- 요약: 실수가 작업 트리, 인덱스, 로컬 커밋, 푸시한 커밋 중 어디에 있는지로 명령을 고르고, stash와 reflog로 사라진 것을 찾는다. 잘못된 브랜치에 한 커밋, 지운 파일, 히스토리에 들어간 비밀 키까지 처리한다.
+- 요약: 실수가 작업 트리, 인덱스, 로컬 커밋, 푸시한 커밋 중 어디에 있는지로 restore, reset, revert를 고르고, 병합 revert의 함정과 revert로도 지워지지 않는 비밀 값을 filter-repo로 히스토리에서 빼는 과정까지 실제 출력으로 따라간다.
 - 태그: Git, DevOps
-- 키워드: reflog, git reset, git revert, git stash, git restore
+- 키워드: git reset, git revert, git restore, git clean
 - 길이: 587줄
 - 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 비밀 값을 커밋했을 때 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-troubleshooting
-- 키워드 백링크 →: git-branch-merge, git-internals-basics
-- 이 글로 오는 글 ←: git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-troubleshooting
+- 직접 링크 →: git-stash-reflog, git-staging-area, git-troubleshooting
+- 키워드 백링크 →: git-large-files-secrets, git-branch-merge
+- 이 글로 오는 글 ←: git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting
 
 ### Programming › Computer Science (`programming/computer-science`)
 
@@ -221,7 +286,7 @@
 - 길이: 312줄
 - 소제목: 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 샤드 키를 정하기 전에 지금 데이터로 재 본다 / 샤딩은 마지막 카드다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-partitioning, microservices, mongodb-document-model, db-architecture-by-scale, db-index
-- 키워드 백링크 →: redis-persistence-ha, db-type-newsql, db-type-wide-column, db-type-key-value, redis-basics
+- 키워드 백링크 →: redis-cluster, db-type-newsql, db-type-wide-column, db-type-key-value, redis-basics
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-keys-denormalization, db-partitioning, db-replication-sharding, db-type-columnar-olap, db-type-wide-column
 
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
@@ -264,7 +329,7 @@
 - 키워드: CAP 정리, PACELC, 선형화 가능성, 최종 일관성, read-your-writes
 - 길이: 310줄
 - 소제목: 끊긴 회선 앞에서 고르는 두 가지 / CAP이 말하지 않는 것 / 회선이 멀쩡해도 고르는 것 / 일관성은 켜고 끄는 게 아니라 사다리다 / 쿼럼으로 일관성을 고르는 DB / AP를 고르면 충돌을 누가 푸나 / DB 종류마다 서 있는 자리 / 데이터마다 얼마나 틀려도 되는지 정한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-types-overview, db-transaction-isolation, db-type-newsql, db-replication-sharding, db-type-wide-column, redis-persistence-ha
+- 직접 링크 →: db-types-overview, db-transaction-isolation, db-type-newsql, db-replication-sharding, db-type-wide-column, redis-replication-sentinel
 - 키워드 백링크 →: db-type-key-value, mongodb-document-model, redis-basics
 - 이 글로 오는 글 ←: db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview
 
@@ -422,7 +487,7 @@
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
 - 키워드 백링크 →: postgres-operations, db-type-relational, sql-batch-timeout-pool, layer-ip-addressing
-- 이 글로 오는 글 ←: db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-select-where-null, sqld-single-row-functions
+- 이 글로 오는 글 ←: db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-select-where-null, sqld-null-functions, sqld-single-row-functions
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -478,8 +543,18 @@
 - 길이: 818줄
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
-- 키워드 백링크 →: db-type-relational, event-loop, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design, tcp-reliability-congestion
+- 키워드 백링크 →: redis-cluster, db-type-relational, event-loop, db-transaction-isolation, dns
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rest-api-design, tcp-reliability-congestion
+
+#### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
+
+- 요약: 데이터가 한 서버 메모리를 넘어서는 순간에서 시작해 키가 16384개 슬롯으로 나뉘는 규칙과 해시 태그, MOVED와 ASK, 구성 고르는 기준을 보고, 레플리카 없는 클러스터의 노드 하나를 죽여 CLUSTERDOWN이 나는 과정을 확인한다.
+- 태그: Redis, Database, Distributed Systems
+- 키워드: Redis Cluster, 해시 슬롯, MOVED
+- 길이: 358줄
+- 소제목: Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 현장에서 노드 하나가 죽었을 때 / 데이터를 나누는 대가 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-replication-sentinel, redis-basics
+- 이 글로 오는 글 ←: caching-strategies, db-sharding, redis-basics, redis-persistence-ha, redis-replication-sentinel
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -490,18 +565,28 @@
 - 소제목: 키 하나가 실제로 차지하는 크기 / 작은 컬렉션은 압축된 모양으로 산다 / INFO memory를 한 줄씩 읽기 / 어떤 키가 메모리를 먹고 있나 / maxmemory를 정하지 않으면 생기는 일 / 가득 찼을 때 지울 키를 고르는 정책 / LRU를 정확하게 하지 않는 이유 / LFU 카운터는 로그로 오르고 시간이 지나면 내려간다 / 만료된 키가 바로 사라지지 않는 이유 / 단편화와 activedefrag / 리눅스 쪽에서 챙길 설정 / 서버 메모리의 몇 퍼센트를 maxmemory로 줄까 / 가득 차기 전에 정해 둘 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, caching-strategies, redis-persistence-ha
 - 키워드 백링크 →: layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: caching-strategies, db-type-key-value, js-memory-leak, redis-basics, redis-persistence-ha
+- 이 글로 오는 글 ←: caching-strategies, db-type-key-value, js-memory-leak, redis-basics, redis-persistence-ha, redis-replication-sentinel
 
-#### `redis-persistence-ha` — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
+#### `redis-persistence-ha` — Redis 영속성: RDB, AOF, 백업과 복원
 
-- 요약: 재부팅 한 번에 세션이 사라지지 않게 RDB와 AOF가 각각 무엇을 지키고 무엇을 잃는지 보고, 비동기 복제와 Sentinel 장애 조치, Cluster의 해시 슬롯과 MOVED·ASK까지 직접 돌려 보며 정리한다.
-- 태그: Redis, Database, Distributed Systems, Linux
-- 키워드: RDB 스냅샷, AOF, Redis Sentinel, Redis Cluster, 해시 슬롯
-- 길이: 910줄 (긴 글)
-- 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: redis-basics, redis-memory-eviction
+- 요약: 재부팅 한 번에 세션이 사라진 서버에서 시작해 RDB와 AOF가 각각 무엇을 지키고 무엇을 잃는지, fork와 copy-on-write, AOF 재작성, 둘을 함께 켤 때를 직접 돌려 보고, 백업 파일로 정말 복원되는지 확인하는 법까지 정리한다.
+- 태그: Redis, Database, Linux
+- 키워드: RDB 스냅샷, AOF, appendfsync
+- 길이: 415줄
+- 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-replication-sentinel, redis-cluster, redis-basics, redis-memory-eviction
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-sharding, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: caching-strategies, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction, redis-replication-sentinel
+
+#### `redis-replication-sentinel` — Redis 복제와 Sentinel: 비동기 복제와 자동 장애 조치
+
+- 요약: 디스크는 살아 있는데 서버가 꺼져 40분 동안 로그인이 안 된 장면에서 시작해 전체·부분 동기화, 레플리카 읽기와 WAIT, Sentinel의 쿼럼과 리더 선출을 따라가고, backlog가 작아 전체 동기화가 반복되는 상황을 직접 재현한다.
+- 태그: Redis, Database, Distributed Systems
+- 키워드: Redis Sentinel, 부분 동기화, repl-backlog-size
+- 길이: 345줄
+- 소제목: 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / 현장에서 레플리카가 전체 동기화를 반복하는 순간 / 얼마나 멈춰도 되는지부터 정한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-persistence-ha, redis-basics, redis-cluster, redis-memory-eviction
+- 이 글로 오는 글 ←: db-consistency-cap, redis-cluster, redis-persistence-ha
 
 ### Programming › Database › SQL (`programming/database/sql`)
 
@@ -514,7 +599,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index-pitfalls, sql-query-tuning, db-index-design
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, elasticsearch-inverted-index, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-data-modeling, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, elasticsearch-inverted-index, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-correlated-subquery, sqld-data-modeling, sqld-top-n-hierarchical-pivot, sqld-type-conversion
 
 #### `db-index-design` — 인덱스 고르기: 복합, 커버링, 부분, 식 인덱스와 GIN·BRIN
 
@@ -568,7 +653,7 @@
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
 - 키워드 백링크 →: json-crud-http, db-index-design, sqld-entity-attribute-relationship
-- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
+- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-ignore-config, git-large-files-secrets, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
@@ -644,9 +729,20 @@
 - 소제목: 회원 넷, 상품 셋, 주문 다섯 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 리포트 숫자가 안 맞을 때 먼저 보는 것 / 모름을 모름으로 다루기 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, sql-query-tuning, sql-insert-update-delete
 - 키워드 백링크 →: db-index, sqld-group-by-having, postgres-getting-started
-- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-insert-update-delete, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-insert-update-delete, sqld-null-functions, sqld-subquery-set-operators
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
+
+#### `sqld-correlated-subquery` — SQLD 상관 서브쿼리, 스칼라 서브쿼리, 뷰
+
+- 요약: 개발 DB에서 빠르던 '자기 부서 평균' 쿼리가 운영에서 느려지는 장면에서 시작해 상관 서브쿼리가 바깥 행마다 도는 순서, 스칼라 서브쿼리의 한 행 규칙, 뷰의 쓰임과 WITH CHECK OPTION을 보고, 실행 계획의 SubPlan loops로 느린 이유를 찾아 인라인 뷰로 고친다.
+- 태그: Database, SQL, SQLD
+- 키워드: 상관 서브쿼리, 스칼라 서브쿼리, WITH CHECK OPTION
+- 길이: 377줄
+- 소제목: 예제 데이터 / 바깥 행마다 다시 도는 상관 서브쿼리 / SELECT 절에는 값 하나만 들어간다 / 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다 / 현장에서 상관 서브쿼리가 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, db-index, sqld-window-functions
+- 키워드 백링크 →: sqld-group-by-having
+- 이 글로 오는 글 ←: sqld-set-operators, sqld-subquery-set-operators, sqld-window-functions
 
 #### `sqld-data-modeling` — SQLD 데이터 모델링: 개념·논리·물리와 3단계 스키마
 
@@ -678,7 +774,8 @@
 - 길이: 746줄
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
-- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-select-where-null, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 키워드 백링크 →: sqld-null-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-select-where-null, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -691,6 +788,17 @@
 - 키워드 백링크 →: sqld-top-n-hierarchical-pivot
 - 이 글로 오는 글 ←: sqld-group-by-having, sqld-subquery-set-operators
 
+#### `sqld-null-functions` — SQLD NULL 다루기: NVL, COALESCE, CASE와 DECODE
+
+- 요약: 커미션이 NULL인 사원의 지급액이 보고서에서 사라지는 장면에서 시작해 NULL의 산술과 비교 규칙, NOT IN에 NULL이 섞이면 0행이 되는 이유, NVL·NVL2·NULLIF·COALESCE, CASE와 DECODE의 NULL 처리 차이를 Oracle과 PostgreSQL로 본다. NULL 때문에 바뀐 행을 놓치는 동기화 배치와 IS DISTINCT FROM도 다룬다.
+- 태그: Database, SQL, SQLD, Oracle
+- 키워드: NVL, COALESCE, DECODE, NULLIF
+- 길이: 479줄
+- 소제목: 이 글에서 쓸 사원 테이블 / 지급액이 빈칸이 된 이유 / NULL은 값이 아니라 빈칸이다 / NULL을 다른 값으로 바꾸는 함수 / 조건에 따라 값을 고르는 CASE와 DECODE / 현장에서 NULL이 바뀐 행을 숨기는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-single-row-functions, sqld-type-conversion, sqld-subquery-set-operators, sqld-group-by-having, sql-select-where-null
+- 키워드 백링크 →: postgres-getting-started
+- 이 글로 오는 글 ←: sqld-group-by-having, sqld-rollup-cube-grouping-sets, sqld-single-row-functions
+
 #### `sqld-rollup-cube-grouping-sets` — SQLD ROLLUP, CUBE, GROUPING SETS
 
 - 요약: 부서 소계와 전체 합계가 있는 인건비 보고서를 쿼리 하나로 만들면서 ROLLUP, CUBE, GROUPING SETS가 만드는 묶음과 결과 행 수를 EMP 데이터로 센다. GROUPING 함수로 소계 줄에 이름표를 붙이고 부분 ROLLUP까지 정리한다.
@@ -699,30 +807,40 @@
 - 길이: 571줄
 - 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
-- 키워드 백링크 →: json-crud-http, postgres-advanced-sql, sqld-single-row-functions
+- 키워드 백링크 →: json-crud-http, postgres-advanced-sql, sqld-null-functions
 - 이 글로 오는 글 ←: sqld-window-functions
 
-#### `sqld-single-row-functions` — SQLD 단일행 함수와 NULL 다루기
+#### `sqld-set-operators` — SQLD 집합 연산자: UNION, INTERSECT, MINUS
 
-- 요약: 커미션이 NULL인 사원의 지급액이 보고서에서 사라지는 장면에서 시작해 문자, 숫자, 날짜, 변환 함수를 EMP 데이터로 하나씩 돌려 본다. NVL, NVL2, NULLIF, COALESCE와 CASE, DECODE의 NULL 처리 차이, 암시적 형 변환이 인덱스를 막는 이유까지 Oracle과 PostgreSQL, SQL Server를 나란히 본다.
+- 요약: 두 해의 결제를 UNION으로 합쳤더니 60만 건이 3,500건이 된 장면에서 시작해 UNION과 UNION ALL의 차이와 비용, INTERSECT와 MINUS(EXCEPT), 컬럼 수·타입·ORDER BY 규칙, Oracle과 PostgreSQL의 우선순위 차이를 실행 계획과 함께 정리한다.
+- 태그: Database, SQL, SQLD
+- 키워드: UNION ALL, 집합 연산자, MINUS
+- 길이: 439줄
+- 소제목: 예제 데이터 / 결과를 위아래로 붙이는 집합 연산자 / 집합 연산자의 규칙 / 현장에서 UNION이 행을 지우고 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-correlated-subquery, sqld-single-row-functions
+- 이 글로 오는 글 ←: sqld-subquery-set-operators
+
+#### `sqld-single-row-functions` — SQLD 단일행 함수: 문자, 숫자, 날짜
+
+- 요약: Oracle에서 옮긴 쿼리가 에러 없이 다른 값을 내는 장면에서 시작해 단일행 함수와 다중행 함수의 차이, 문자·숫자·날짜 함수를 EMP 데이터로 하나씩 돌려 본다. float 반올림, SUBSTR 음수 위치, ADD_MONTHS 말일 규칙처럼 DB마다 조용히 달라지는 곳도 PostgreSQL로 확인한다.
 - 태그: Database, SQL, SQLD, Oracle
-- 키워드: NVL, COALESCE, DECODE, 단일행 함수, 암시적 형 변환
+- 키워드: 단일행 함수, ADD_MONTHS, SUBSTR
 - 길이: 614줄
 - 소제목: 이 글에서 쓸 사원 테이블 / 한 행에 하나씩 돌려주는 함수 / 문자를 다듬는 함수 / 숫자를 자르고 올리는 함수 / 날짜는 숫자처럼 더하고 뺀다 / 현장에서 함수 결과가 조용히 달라지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
-- 직접 링크 →: sqld-group-by-having
+- 직접 링크 →: sqld-null-functions, sqld-type-conversion, sqld-group-by-having
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: sqld-group-by-having, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-subquery-set-operators, sqld-window-functions
+- 이 글로 오는 글 ←: sqld-correlated-subquery, sqld-group-by-having, sqld-joins, sqld-null-functions, sqld-set-operators, sqld-subquery-set-operators, sqld-type-conversion, sqld-window-functions
 
-#### `sqld-subquery-set-operators` — SQLD 서브쿼리와 집합 연산자
+#### `sqld-subquery-set-operators` — SQLD 서브쿼리: 세 자리와 연산자, NOT IN의 함정
 
-- 요약: '자기 부서 평균보다 많이 받는 사람'을 쿼리 하나로 구하면서 서브쿼리의 세 자리와 단일행·다중행 연산자, 상관 서브쿼리, NOT IN에 NULL이 섞이면 0행이 되는 함정을 SCOTT 데이터로 따라간다. UNION과 UNION ALL의 비용 차이, MINUS와 EXCEPT, 집합 연산자의 규칙과 DB별 우선순위도 정리한다.
+- 요약: '자기 부서 평균보다 많이 받는 사람'을 쿼리 하나로 구하면서 서브쿼리를 넣는 세 자리와 단일행·다중행 연산자, ANY와 ALL, EXISTS, NOT IN에 NULL이 섞이면 0행이 되는 함정을 SCOTT 데이터로 따라간다. NOT IN이 PostgreSQL에서 안티 조인이 되지 못해 느려지는 경우도 실행 계획으로 본다.
 - 태그: Database, SQL, SQLD
-- 키워드: 상관 서브쿼리, 스칼라 서브쿼리, 인라인 뷰, UNION ALL, 집합 연산자
+- 키워드: 인라인 뷰, 중첩 서브쿼리, NOT EXISTS
 - 길이: 596줄
 - 소제목: 예제로 쓸 EMP와 DEPT / 쿼리를 넣을 수 있는 세 자리 / 몇 줄이 돌아오느냐로 연산자가 바뀐다 / ANY와 ALL은 최솟값과 최댓값으로 바꿔 읽는다 / EXISTS는 있는지만 본다 / NOT IN에 NULL이 하나 섞이면 / 현장에서 NOT IN이 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
-- 직접 링크 →: sqld-single-row-functions, sqld-joins
+- 직접 링크 →: sqld-correlated-subquery, sqld-set-operators, sqld-single-row-functions, sqld-joins
 - 키워드 백링크 →: sqld-group-by-having, sql-select-where-null
-- 이 글로 오는 글 ←: sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: sqld-correlated-subquery, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-top-n-hierarchical-pivot` — SQLD Top-N, 계층형 쿼리, PIVOT
 
@@ -735,6 +853,16 @@
 - 키워드 백링크 →: db-index, sqld-group-by-having
 - 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sqld-joins, sqld-window-functions
 
+#### `sqld-type-conversion` — SQLD 형 변환: TO_CHAR 형식과 암시적 형 변환
+
+- 요약: 문자 사번 컬럼을 숫자와 비교한 쿼리가 전체 스캔으로 바뀌는 장면에서 시작해 TO_CHAR·TO_DATE·TO_NUMBER 형식 문자열을 조각으로 읽고, 암시적 형 변환이 인덱스를 막는 과정을 PostgreSQL 실행 계획으로 확인한다. 애플리케이션이 넘긴 numeric 파라미터가 인덱스를 막는 경우도 본다.
+- 태그: Database, SQL, SQLD, Oracle
+- 키워드: 암시적 형 변환, TO_CHAR, 함수 기반 인덱스
+- 길이: 414줄
+- 소제목: 예제 테이블 / TO_CHAR 형식 문자열 읽기 / 형 변환은 직접 적는다 / 현장에서 파라미터 타입이 인덱스를 막는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-single-row-functions, db-index
+- 이 글로 오는 글 ←: sqld-null-functions, sqld-single-row-functions
+
 #### `sqld-window-functions` — SQLD 윈도우 함수: 순위, 누적합, 앞뒤 행
 
 - 요약: 부서별 급여 순위와 누적 급여를 셀프 조인 없이 구하면서 RANK, DENSE_RANK, ROW_NUMBER가 동점에서 갈리는 모습과 ROWS와 RANGE 프레임의 차이를 실제 숫자로 본다. LAST_VALUE의 기본 프레임 함정, LAG와 LEAD, 비율과 분위 함수, WHERE에 못 쓰는 이유까지 다룬다.
@@ -743,8 +871,8 @@
 - 길이: 624줄
 - 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
-- 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: db-type-embedded, postgres-advanced-sql, sqld-top-n-hierarchical-pivot
+- 키워드 백링크 →: sqld-group-by-having, sqld-correlated-subquery
+- 이 글로 오는 글 ←: db-type-embedded, postgres-advanced-sql, sqld-correlated-subquery, sqld-top-n-hierarchical-pivot
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -787,9 +915,9 @@
 - 요약: fetch가 500에서도 성공하는 이유와 res.ok 확인, 한 번만 읽히는 본문, credentials·keepalive 같은 옵션을 짚는다. AbortController로 늦게 온 응답과 타임아웃을 다루고, XHR·axios와 무엇이 다른지 비교한다.
 - 태그: HTTP, JavaScript, Browser, Frontend
 - 키워드: AbortController, AbortSignal, sendBeacon, keepalive
-- 길이: 488줄
-- 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 다시 처음 코드로 / 면접에서 나올 만한 질문
-- 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn
+- 길이: 553줄
+- 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 에러 수집기에 Failed to fetch만 쌓일 때 / 다시 처음 코드로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn, network-troubleshooting-by-layer
 - 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, dns
 - 이 글로 오는 글 ←: client-data-cache, html-form-http, http-versions, json-crud-http, nginx-reverse-proxy, tcp-connection-lifecycle
 
@@ -894,7 +1022,7 @@
 - 소제목: 명령을 어디서 치는지부터 정한다 / 먼저 curl 한 번으로 어디서 멈췄는지 본다 / 링크가 살아 있는지 / 내 주소와 나갈 길 / 다음 칸의 MAC을 얻었는지 / 목적지까지 닿는지 / 이름이 맞는 주소로 풀리는지 / 포트가 열려 있는지 / TLS가 맺어지는지 / HTTP가 기대한 답을 주는지 / 갈림길을 한 장으로 / 확인하다가 흔히 하는 실수 / 처음 실패한 칸이 답이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: osi-in-practice, docker-network-volume, layer-link-ethernet-arp, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, hosts-file, ports-and-sockets, packet-capture-tcpdump, iptables-basics, https-tls, proxy-reverse-proxy
 - 키워드 백링크 →: what-happens-google-com, docker-container-basics, http-status-codes, dns
-- 이 글로 오는 글 ←: http-message, http-status-codes, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, http-message, http-status-codes, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `osi-in-practice` — OSI 7계층을 알면 현장에서 무엇이 달라지나
 
@@ -1318,7 +1446,7 @@
 - 길이: 590줄
 - 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction
-- 키워드 백링크 →: db-type-columnar-olap, db-replication-sharding, dns
+- 키워드 백링크 →: redis-cluster, db-type-columnar-olap, db-replication-sharding, dns
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-key-value, db-type-relational, frontend-browser-cache, postgres-advanced-sql, redis-basics, redis-memory-eviction
 
 #### `db-architecture-by-scale` — 서비스 규모별 DB 설계: 한 대에서 여러 저장소까지
@@ -1370,7 +1498,7 @@
 
 같은 키워드를 두 글이 가지면 긴 키워드·먼저 찾은 글로만 링크된다. 새 글의 키워드는 여기 없는 말로 고른다.
 
-- .gitignore → `git-internals-basics`
+- .gitignore → `git-ignore-config`
 - /etc/hosts → `hosts-file`
 - 3-way 병합 → `git-branch-merge`
 - 3-way handshake → `what-happens-google-com`
@@ -1393,6 +1521,7 @@
 - 그래프 DB → `db-type-graph`
 - 낙관적 업데이트 → `client-data-cache`
 - 낙관적 잠금 → `db-locking-deadlock`
+- 내용 주소 지정 → `git-internals-basics`
 - 논리적 실행 순서 → `sqld-group-by-having`
 - 다운샘플링 → `db-type-time-series`
 - 단방향 데이터 흐름 → `mvc-pattern`
@@ -1434,10 +1563,11 @@
 - 벌크헤드 → `resilience-patterns`
 - 벡터 DB → `vector-db`
 - 변경 데이터 캡처 → `db-type-columnar-olap`
-- 병합 충돌 → `git-branch-merge`
+- 병합 충돌 → `git-merge-conflict`
 - 복제 슬롯 → `db-replication-sharding`
 - 복제 지연 → `db-replication-sharding`
 - 복합 인덱스 → `db-index-design`
+- 부분 동기화 → `redis-replication-sentinel`
 - 부분 유니크 인덱스 → `db-keys-denormalization`
 - 부분 인덱스 → `db-index-design`
 - 부분 clone → `git-remote-collaboration`
@@ -1451,7 +1581,7 @@
 - 사가 패턴 → `microservices`
 - 사설 대역 → `layer-ip-addressing`
 - 사용자 정의 브리지 → `docker-network-volume`
-- 상관 서브쿼리 → `sqld-subquery-set-operators`
+- 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상태 코드 → `http-status-codes`
 - 샤드 키 → `mongodb-document-model`
 - 서버 상태 → `client-data-cache`
@@ -1462,8 +1592,8 @@
 - 세션 계층 → `upper-layers-session-presentation-app`
 - 세션 쿠키 → `cookie-session-login`
 - 세션 ID → `cookie-session-login`
-- 스칼라 서브쿼리 → `sqld-subquery-set-operators`
-- 스테이징 영역 → `git-internals-basics`
+- 스칼라 서브쿼리 → `sqld-correlated-subquery`
+- 스테이징 영역 → `git-staging-area`
 - 스트랭글러 피그 → `microservices`
 - 스트리밍 복제 → `db-replication-sharding`
 - 스트리밍 SSR → `rendering-strategies`
@@ -1475,7 +1605,7 @@
 - 쓰기 증폭 → `db-index-pitfalls`
 - 쓰기 CTE → `postgres-advanced-sql`
 - 안전한 메서드 → `http-methods`
-- 암시적 형 변환 → `sqld-single-row-functions`
+- 암시적 형 변환 → `sqld-type-conversion`
 - 액세스 토큰 → `token-login`
 - 얕은 clone → `git-remote-collaboration`
 - 역색인 → `elasticsearch-inverted-index`
@@ -1499,7 +1629,7 @@
 - 임시 포트 → `ports-and-sockets`
 - 자동 배칭 → `react-rerender`
 - 자연 키 → `db-keys-denormalization`
-- 작업 트리 → `git-internals-basics`
+- 작업 트리 → `git-staging-area`
 - 장애 좁히기 → `network-troubleshooting-by-layer`
 - 재귀 리졸버 → `dns`
 - 재귀 CTE → `sqld-top-n-hierarchical-pivot`
@@ -1509,11 +1639,12 @@
 - 정규화 → `db-modeling-normalization`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
+- 중첩 서브쿼리 → `sqld-subquery-set-operators`
 - 증폭 공격 → `udp-and-quic`
 - 지수 백오프 → `resilience-patterns`
 - 집계 파이프라인 → `mongodb-document-model`
 - 집계 함수 → `sqld-group-by-having`
-- 집합 연산자 → `sqld-subquery-set-operators`
+- 집합 연산자 → `sqld-set-operators`
 - 참조 무결성 → `sql-basics`
 - 체크포인트 → `postgres-architecture`
 - 최장 접두사 일치 → `layer-ip-routing-icmp`
@@ -1554,10 +1685,11 @@
 - 피타고라스 수 → `pythagorean-theorem`
 - 피타고라스 정리 → `pythagorean-theorem`
 - 하이드레이션 → `rendering-strategies`
+- 함수 기반 인덱스 → `sqld-type-conversion`
 - 함수 종속 → `db-modeling-normalization`
 - 핫 키 → `caching-strategies`
 - 핫 파티션 → `db-type-key-value`
-- 해시 슬롯 → `redis-persistence-ha`
+- 해시 슬롯 → `redis-cluster`
 - 해시 조인 → `db-type-relational`
 - 행 단위 보안 → `postgres-roles-security`
 - 헬스 체크 → `osi-in-practice`
@@ -1571,13 +1703,16 @@
 - accept 큐 → `tcp-connection-lifecycle`
 - Accept-Encoding → `http-message`
 - Access-Control-Allow-Origin → `cors`
+- ADD_MONTHS → `sqld-single-row-functions`
 - Address already in use → `ports-and-sockets`
 - allkeys-lru → `redis-memory-eviction`
 - allowedDevOrigins → `local-custom-domain`
 - ALTER DEFAULT PRIVILEGES → `postgres-roles-security`
+- annotated tag → `git-internals-basics`
 - AOF → `redis-persistence-ha`
 - API 게이트웨이 → `gateway`
 - API 버전 관리 → `rest-api-design`
+- appendfsync → `redis-persistence-ha`
 - application/x-www-form-urlencoded → `html-form-http`
 - ARP → `layer-link-ethernet-arp`
 - autosquash → `git-rebase`
@@ -1593,13 +1728,14 @@
 - Big O → `big-o-notation`
 - bind mount → `docker-network-volume`
 - Bitmap Heap Scan → `db-index`
+- blob 객체 → `git-internals-basics`
 - BM25 → `elasticsearch-inverted-index`
 - BRIN → `db-index-design`
 - BuildKit → `dockerfile-image-layers`
 - Cache Storage → `frontend-browser-cache`
 - cache-aside → `caching-strategies`
 - Cache-Control → `http-caching-cdn`
-- cannot lock ref → `git-troubleshooting`
+- cannot lock ref → `git-repo-errors`
 - CAP 정리 → `db-consistency-cap`
 - Cassandra → `db-type-wide-column`
 - cert-manager → `kubernetes-ingress`
@@ -1611,7 +1747,7 @@
 - CLOSE_WAIT → `tcp-connection-lifecycle`
 - CLS → `core-web-vitals`
 - CNAME → `dns`
-- COALESCE → `sqld-single-row-functions`
+- COALESCE → `sqld-null-functions`
 - CockroachDB → `db-type-newsql`
 - commit-msg 훅 → `git-tips-advanced`
 - compose.yaml → `docker-compose`
@@ -1620,6 +1756,7 @@
 - conntrack → `iptables-basics`
 - Conventional Commits → `git-branching-strategy`
 - Core Web Vitals → `core-web-vitals`
+- core.autocrlf → `git-ignore-config`
 - CORS → `cors`
 - CREATE INDEX CONCURRENTLY → `db-index-pitfalls`
 - CSRF → `cookie-session-login`
@@ -1628,7 +1765,7 @@
 - database per service → `db-architecture-by-scale`
 - DB 종류 → `db-types-overview`
 - DDL → `sql-basics`
-- DECODE → `sqld-single-row-functions`
+- DECODE → `sqld-null-functions`
 - default 파티션 → `db-partitioning`
 - DENSE_RANK → `sqld-window-functions`
 - depends_on → `docker-compose`
@@ -1636,6 +1773,7 @@
 - detached HEAD → `git-branch-merge`
 - DISTINCT ON → `postgres-advanced-sql`
 - distroless → `dockerfile-image-layers`
+- divergent branches → `git-troubleshooting`
 - DNAT → `iptables-nat`
 - DNS → `dns`
 - dnsmasq → `local-custom-domain`
@@ -1645,6 +1783,7 @@
 - DOCKER-USER → `iptables-nat`
 - Dockerfile → `dockerfile-image-layers`
 - DoH → `dns`
+- dubious ownership → `git-repo-errors`
 - DuckDB → `db-type-columnar-olap`
 - DynamoDB → `db-type-key-value`
 - Elasticsearch → `elasticsearch-inverted-index`
@@ -1656,21 +1795,26 @@
 - expand/contract → `db-architecture-by-scale`
 - EXPLAIN ANALYZE → `sql-query-tuning`
 - fast-forward → `git-branch-merge`
+- fetch first → `git-troubleshooting`
+- first-parent → `git-branch-merge`
 - force-with-lease → `git-remote-collaboration`
 - FormData → `html-form-http`
 - full_page_writes → `postgres-architecture`
 - Gateway API → `gateway`
 - gcTime → `client-data-cache`
-- git add -p → `git-internals-basics`
+- git add -p → `git-staging-area`
 - git bisect → `git-tips-advanced`
 - git blame → `git-tips-advanced`
+- git clean → `git-undo`
 - Git Flow → `git-branching-strategy`
+- git fsck → `git-stash-reflog`
+- Git LFS → `git-large-files-secrets`
 - git rebase → `git-rebase`
 - git reset → `git-undo`
 - git restore → `git-undo`
 - git revert → `git-undo`
-- git stash → `git-undo`
-- git-filter-repo → `git-troubleshooting`
+- git stash → `git-stash-reflog`
+- git-filter-repo → `git-large-files-secrets`
 - GitHub Flow → `git-branching-strategy`
 - Gratuitous ARP → `layer-link-ethernet-arp`
 - GROUP BY → `sqld-group-by-having`
@@ -1694,9 +1838,10 @@
 - I/O 다중화 → `redis-basics`
 - ICMP → `layer-ip-routing-icmp`
 - identity 컬럼 → `postgres-data-types`
+- includeIf → `git-ignore-config`
 - Index Only Scan → `db-index`
 - index-free adjacency → `db-type-graph`
-- index.lock → `git-troubleshooting`
+- index.lock → `git-repo-errors`
 - Ingress → `kubernetes-ingress`
 - Ingress Controller → `kubernetes-ingress`
 - ingress-nginx → `kubernetes-ingress`
@@ -1733,9 +1878,11 @@
 - maxmemory → `redis-memory-eviction`
 - Memcached → `redis-basics`
 - merge base → `git-branch-merge`
+- MINUS → `sqld-set-operators`
 - mkcert → `local-custom-domain`
 - Module Federation → `micro-frontends`
 - MongoDB → `mongodb-document-model`
+- MOVED → `redis-cluster`
 - MSS 클램핑 → `layer-mtu-fragmentation`
 - mTLS → `https-tls`
 - mtr → `network-troubleshooting-by-layer`
@@ -1755,9 +1902,11 @@
 - NewSQL → `db-type-newsql`
 - nginx.conf → `nginx-basics`
 - Non-EQUI JOIN → `sqld-joins`
+- NOT EXISTS → `sqld-subquery-set-operators`
 - nsswitch.conf → `hosts-file`
+- NULLIF → `sqld-null-functions`
 - NULLS FIRST → `sql-select-where-null`
-- NVL → `sqld-single-row-functions`
+- NVL → `sqld-null-functions`
 - OAuth → `oauth`
 - OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
@@ -1766,6 +1915,7 @@
 - OSI 모델 → `network-layers-overview`
 - OUTER JOIN → `sqld-joins`
 - PACELC → `db-consistency-cap`
+- packfile → `git-internals-basics`
 - pcap → `packet-capture-tcpdump`
 - peer 인증 → `postgres-getting-started`
 - pg_basebackup → `postgres-operations`
@@ -1790,6 +1940,7 @@
 - proxy_set_header → `nginx-reverse-proxy`
 - psql → `postgres-getting-started`
 - pull.rebase → `git-rebase`
+- push protection → `git-large-files-secrets`
 - PUT과 PATCH → `http-methods`
 - QUIC → `http-versions`
 - RAG → `vector-db`
@@ -1798,10 +1949,12 @@
 - React.memo → `react-rerender`
 - read-your-writes → `db-consistency-cap`
 - Redis → `redis-basics`
-- Redis Cluster → `redis-persistence-ha`
-- Redis Sentinel → `redis-persistence-ha`
+- Redis Cluster → `redis-cluster`
+- Redis Sentinel → `redis-replication-sentinel`
 - ReferenceGrant → `gateway`
-- reflog → `git-undo`
+- reflog → `git-stash-reflog`
+- repl-backlog-size → `redis-replication-sentinel`
+- rerere → `git-merge-conflict`
 - REST API → `rest-api-design`
 - reviver → `json-crud-http`
 - RFC 1918 → `layer-ip-addressing`
@@ -1841,6 +1994,7 @@
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
 - statement_timeout → `sql-batch-timeout-pool`
+- SUBSTR → `sqld-single-row-functions`
 - SYN flood → `tcp-connection-lifecycle`
 - TanStack Query → `client-data-cache`
 - TCP/IP 4계층 → `network-layers-overview`
@@ -1851,6 +2005,7 @@
 - timestamptz → `postgres-data-types`
 - TLS 1.3 → `https-tls`
 - TLS 핸드셰이크 → `https-tls`
+- TO_CHAR → `sqld-type-conversion`
 - TOAST → `postgres-architecture`
 - tracepath → `network-troubleshooting-by-layer`
 - traceroute → `layer-ip-routing-icmp`
@@ -1863,7 +2018,7 @@
 - TTL → `dns`
 - UDP → `udp-and-quic`
 - UdpRcvbufErrors → `udp-and-quic`
-- UNION ALL → `sqld-subquery-set-operators`
+- UNION ALL → `sqld-set-operators`
 - unrelated histories → `git-troubleshooting`
 - UPSERT → `sql-insert-update-delete`
 - upstream 블록 → `nginx-reverse-proxy`
@@ -1877,6 +2032,7 @@
 - WeakMap → `js-memory-leak`
 - WebSocket → `realtime-communication`
 - Wireshark → `packet-capture-tcpdump`
+- WITH CHECK OPTION → `sqld-correlated-subquery`
 - worktree → `git-tips-advanced`
 - write concern → `mongodb-document-model`
 - write-behind → `caching-strategies`
@@ -1884,23 +2040,30 @@
 - wrong version number → `upper-layers-session-presentation-app`
 - X-Forwarded-For → `proxy-reverse-proxy`
 - XID 랩어라운드 → `postgres-mvcc-vacuum`
+- zdiff3 → `git-merge-conflict`
 
 ## 겹칠 수 있는 글 (자동 추정)
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `db-index-pitfalls` ↔ `db-index-design` (20%: 100만, 인덱스는, 인덱스를, index)
-- `db-index-pitfalls` ↔ `db-index` (20%: 100만, 인덱스가, 인덱스를, index)
+- `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `db-partitioning` ↔ `db-type-time-series` (18%: 오래된, 통째로, 키가)
 - `db-partitioning` ↔ `db-modeling-normalization` (18%: 테이블을, 떼어, 키가)
+- `redis-cluster` ↔ `db-sharding` (17%: 키를, 나누는, 해시)
+- `redis-cluster` ↔ `redis-basics` (17%: 나눈다, 단일, 해시)
+- `db-index-pitfalls` ↔ `db-index-design` (16%: 100만, 인덱스는, index)
+- `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
+- `db-index-pitfalls` ↔ `db-index` (16%: 100만, 인덱스가, index)
 - `db-locking-deadlock` ↔ `db-transaction-isolation` (16%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
-- `db-index-pitfalls` ↔ `db-type-wide-column` (15%: 쓰기를, 것도, 대가)
+- `sqld-single-row-functions` ↔ `json-crud-http` (15%: 날짜는, 조용히, 숫자)
 - `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
+- `sqld-null-functions` ↔ `sql-select-where-null` (14%: null은, null, 다루기)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 - `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
 - `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (13%: 막는, 남기는, 트랜잭션, update)
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
 - `sql-insert-update-delete` ↔ `db-transaction-isolation` (12%: commit, rollback, 트랜잭션이, transaction)
+- `packet-capture-tcpdump` ↔ `db-index` (12%: 처음부터, 끝까지, 줄을)
 - `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
 - `client-data-cache` ↔ `what-happens-google-com` (12%: 받기, 페이지가, 캐시가)
 
@@ -1908,6 +2071,28 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `redis-cluster` ↔ `redis-replication-sentinel`
+- `redis-cluster` ↔ `redis-basics`
+- `redis-replication-sentinel` ↔ `redis-persistence-ha`
+- `sqld-set-operators` ↔ `sqld-subquery-set-operators`
+- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators`
+- `sqld-correlated-subquery` ↔ `sqld-window-functions`
+- `sqld-null-functions` ↔ `sqld-single-row-functions`
+- `sqld-null-functions` ↔ `sqld-group-by-having`
+- `sqld-type-conversion` ↔ `sqld-single-row-functions`
+- `git-merge-conflict` ↔ `git-staging-area`
+- `git-merge-conflict` ↔ `git-branch-merge`
+- `git-merge-conflict` ↔ `git-rebase`
+- `git-stash-reflog` ↔ `git-staging-area`
+- `git-stash-reflog` ↔ `git-undo`
+- `git-stash-reflog` ↔ `git-troubleshooting`
+- `git-repo-errors` ↔ `git-troubleshooting`
+- `git-large-files-secrets` ↔ `git-internals-basics`
+- `git-large-files-secrets` ↔ `git-undo`
+- `git-large-files-secrets` ↔ `git-troubleshooting`
+- `git-ignore-config` ↔ `git-staging-area`
+- `git-ignore-config` ↔ `git-troubleshooting`
+- `git-staging-area` ↔ `git-internals-basics`
 - `packet-capture-tcpdump` ↔ `network-troubleshooting-by-layer`
 - `packet-capture-tcpdump` ↔ `osi-in-practice`
 - `packet-capture-tcpdump` ↔ `tcp-connection-lifecycle`
@@ -2025,9 +2210,6 @@
 - `postgres-getting-started` ↔ `postgres-roles-security`
 - `postgres-getting-started` ↔ `sql-basics`
 - `git-internals-basics` ↔ `git-branch-merge`
-- `git-internals-basics` ↔ `git-undo`
-- `git-internals-basics` ↔ `git-troubleshooting`
-- `git-branch-merge` ↔ `git-undo`
 - `git-branch-merge` ↔ `git-remote-collaboration`
 - `git-branch-merge` ↔ `git-branching-strategy`
 - `git-rebase` ↔ `git-remote-collaboration`
@@ -2121,7 +2303,6 @@
 
 - `postgres-advanced-sql` 942줄 — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL
 - `postgres-getting-started` 933줄 — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
-- `redis-persistence-ha` 910줄 — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
 
 ## 다른 글과 연결이 없는 글
 
