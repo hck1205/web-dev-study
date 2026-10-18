@@ -465,6 +465,68 @@ nextTick 큐도 마이크로태스크처럼 끝까지 비우기 때문에, 재�
 
 서버에서 이벤트 루프가 막히면 결과가 브라우저보다 크다. 요청 하나를 처리하면서 200ms짜리 동기 작업(큰 JSON 파싱, 동기 암호화, 복잡한 정규식)을 하면 그동안 다른 모든 요청이 멈춘다. `perf_hooks.monitorEventLoopDelay()`로 이벤트 루프 지연을 재서 지표로 두고, CPU를 오래 쓰는 일은 `worker_threads`로 보낸다.
 
+## 누가 메인 스레드를 붙잡았는지 운영에서 찾기
+
+내 노트북의 Performance 패널에서는 멀쩡한데, RUM 지표에서 INP가 나쁘다는 경보가 온다. 사용자 기기에서 무슨 일이 있었는지 알려면 브라우저가 긴 작업을 기록해 둔 것을 직접 모아야 한다. 오래된 방법은 `longtask` 항목이고, 크롬 123부터는 `long-animation-frame`(LoAF) 항목이 있다.
+
+처음 장면의 정렬 버튼을 그대로 만들어 크롬 141에서 눌러 보고, 두 관찰자가 받은 내용을 찍었다. 핸들러는 `app.js`의 `sortRows` 함수이고 300ms 동안 돈다.
+
+```js
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) report("longtask", e.toJSON());
+}).observe({ type: "longtask", buffered: true });
+
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) report("loaf", e.toJSON());
+}).observe({ type: "long-animation-frame", buffered: true });
+```
+
+```text
+longtask: { name: "self", duration: 304,
+            attribution: [{ name: "unknown", containerType: "window" }] }
+
+loaf:     { duration: 306, blockingDuration: 255,
+            scripts: [{ invoker: "BUTTON#sort.onclick",
+                        invokerType: "event-listener",
+                        sourceURL: "http://localhost:8011/app.js",
+                        sourceFunctionName: "sortRows",
+                        duration: 300 }] }
+```
+
+`longtask`는 "이 창에서 304ms짜리 작업이 있었다"까지만 알려 준다. 어떤 코드인지는 `unknown`이다. LoAF는 그 프레임 안에서 돈 스크립트마다 무엇이 불렀는지(`BUTTON#sort.onclick`), 어느 파일의 어느 함수인지(`app.js`의 `sortRows`), 얼마나 걸렸는지를 준다. `blockingDuration` 255ms는 306ms 중 50ms를 넘긴 몫으로, 입력을 막은 시간에 가깝다. 운영에서 모을 때는 `sourceURL`을 출처별로 묶어 보는 게 가장 먼저 쓸모 있다. 내 번들이 아니라 태그 매니저나 광고 스크립트가 상위에 올라오는 경우가 꽤 있고, 그러면 고칠 곳이 코드가 아니라 스크립트 로딩 정책이 된다. LoAF는 크롬 계열에만 있으니 다른 브라우저 사용자의 INP 원인은 이 방법으로 볼 수 없다는 점도 알고 쓴다. INP를 세 구간으로 나눠 모으는 방법은 [Core Web Vitals](/posts/core-web-vitals)에 정리했다.
+
+서버 쪽 증상은 모양이 다르다. 특정 API 하나가 느린 게 아니라 모든 엔드포인트의 p99가 같이 튄다. 헬스 체크까지 늦어져 로드밸런서나 쿠버네티스가 멀쩡한 프로세스를 죽였다 살리기도 한다. Node.js 22에서 40만 건짜리 JSON을 동기로 파싱하는 `/report`와 아무 일도 안 하는 `/health`를 같은 프로세스에 두고 재 봤다.
+
+```js
+const { monitorEventLoopDelay } = require("node:perf_hooks");
+const h = monitorEventLoopDelay({ resolution: 10 });
+h.enable();
+setInterval(() => {
+  const ms = (n) => (n / 1e6).toFixed(1);
+  console.log(`eventloop p50=${ms(h.percentile(50))}ms p99=${ms(h.percentile(99))}ms max=${ms(h.max)}ms`);
+  h.reset();
+}, 5000).unref();
+```
+
+```bash
+# 평소의 헬스 체크
+curl -s -o /dev/null -w 'health(alone)  %{time_total}s\n' localhost:8012/health
+# /report를 보내 놓고 50ms 뒤에 헬스 체크
+curl -s localhost:8012/report & sleep 0.05; curl -s -o /dev/null -w 'health(during) %{time_total}s\n' localhost:8012/health
+```
+
+```text
+health(alone)  0.005239s
+parsed 400000 rows in 222ms
+health(during) 0.173533s
+eventloop p50=10.2ms p99=10.3ms max=13.8ms
+eventloop p50=10.1ms p99=10.3ms max=230.7ms
+```
+
+`/health`는 한 줄짜리인데 5ms에서 174ms로 늘었다. 파싱이 끝날 때까지 이벤트 루프가 다음 콜백을 꺼내지 못했기 때문이다. 지연 히스토그램은 `resolution`(10ms) 간격으로 타이머를 걸어 늦어진 정도를 재므로 평소 값이 10ms 근처로 나온다. 그 바닥보다 얼마나 튀었는지를 본다. 두 번째 줄의 max 230.7ms가 파싱 시간과 거의 같다. p99는 그대로인데 max만 튄 것도 눈여겨볼 만하다. 5초 동안 한 번 막혔을 뿐이라 백분위수에는 묻힌다. 그래서 이 지표는 p99와 max를 같이 그래프로 둔다.
+
+원인을 찾았으면 동기 작업을 `worker_threads`로 보내거나, 스트리밍 파서로 바꿔 조금씩 처리하거나, 애초에 그렇게 큰 응답을 한 번에 만들지 않도록 API를 페이지 단위로 나눈다. 흔한 실수는 `async` 함수로 감싸면 나아질 거라고 기대하는 것이다. `JSON.parse`는 `await`를 붙여도 그 자리에서 끝까지 돈다. 앞에서 본 것처럼 마이크로태스크는 양보가 아니다. 그리고 헬스 체크가 이벤트 루프 지연 때문에 실패하는 걸 보고 타임아웃만 늘리면 증상만 가려진다. 헬스 체크가 늦다는 건 그 순간 다른 사용자 요청도 똑같이 늦었다는 뜻이다.
+
 ## 다시 멈춘 스피너로
 
 스피너가 안 보였던 건 렌더링이 태스크 사이에서만 일어나기 때문이다. 클릭 핸들러라는 태스크가 300ms 동안 메인 스레드를 쥐고 있었고, 그동안 DOM이 바뀌어도 그릴 틈이 없었다. 이벤트 루프는 태스크 하나를 끝까지 실행하고, 마이크로태스크를 전부 비우고, 필요하면 그린다. 이 순서만 머릿속에 있으면 출력 순서 문제도, INP가 나쁜 이유도, 왜 `await`가 양보가 아닌지도 같은 그림으로 설명된다.

@@ -427,6 +427,78 @@ Suspense 경계를 어디에 둘지도 설계다. 경계가 너무 잘면 스켈
 CDN이나 ISR 캐시는 모든 사용자가 같은 응답을 받는다. 쿠키를 읽어 이름이나 장바구니를 HTML에 넣은 페이지가 여기 들어가면 다른 사람의 정보가 노출된다. 개인화 페이지는 `Cache-Control: private, no-store`로 응답하거나, 개인화 부분을 HTML 밖으로 뺀다.
 </Callout>
 
+## 고른 전략대로 나가는지 밖에서 확인하기
+
+전략을 골라 배포했다고 그대로 동작한다는 보장은 없다. 프레임워크 설정 한 줄, 중간 프록시 설정 한 줄로 SSR이 CSR처럼, 스트리밍이 한 덩어리처럼 나간다. 그래서 브라우저가 아니라 밖에서, 봇과 같은 눈으로 응답을 본다. 아래는 React 19.2의 `renderToPipeableStream`으로 상품 페이지를 띄우고(리뷰는 1.5초 걸리는 Suspense 경계), 앞에 nginx를 세워 확인한 결과다.
+
+처음 장면처럼 링크 미리보기가 비어 있다면 HTML에 무엇이 들어 있는지부터 본다. 미리보기 봇은 JS를 실행하지 않으니 `curl`이 보는 것이 곧 봇이 보는 것이다.
+
+```bash
+# 받은 HTML에서 제목, og 태그, h1만 뽑아 본다
+curl -s https://shop.example.com/p/42 | grep -o -E '<title>[^<]*</title>|<meta property="og:title"[^>]*>|<h1>[^<]*</h1>'
+```
+
+```text
+# SSR로 나간 페이지
+<title>무선 이어폰</title>
+<meta property="og:title" content="무선 이어폰"/>
+<h1>무선 이어폰</h1>
+
+# CSR로 나간 페이지
+<title>Shop</title>
+<div id="root"></div>
+```
+
+아래쪽처럼 나오면 그 경로는 서버에서 내용을 만들지 않고 있다. Next.js라면 페이지가 통째로 클라이언트에서만 데이터를 받게 짜였거나, `ssr: false`로 감싼 컴포넌트 안에 제목이 들어간 경우가 많다.
+
+스트리밍은 조각이 언제 도착하는지를 재야 한다. 응답 본문을 읽으면서 조각마다 시각을 찍는 짧은 스크립트를 썼다.
+
+```js
+// chunks.mjs: 응답 조각이 도착한 시각을 찍는다
+const t0 = performance.now();
+const res = await fetch(process.argv[2]);
+const reader = res.body.getReader();
+let i = 0;
+for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  console.log(`chunk ${++i}  ${Math.round(performance.now() - t0)}ms  ${value.length} bytes`);
+}
+```
+
+```text
+== Node 서버에 직접
+chunk 1    240ms  309 bytes
+chunk 2   1708ms  929 bytes
+== nginx 뒤 (기본 설정)
+chunk 1   1629ms  1238 bytes
+== nginx 뒤 (proxy_buffering off)
+chunk 1    159ms  309 bytes
+chunk 2   1652ms  929 bytes
+```
+
+직접 받으면 셸과 스켈레톤(309바이트)이 먼저 오고 리뷰 조각이 1.5초 뒤에 온다. nginx 기본 설정을 거치면 같은 응답이 1.6초에 한 덩어리로 온다. nginx가 upstream 응답을 버퍼에 모았다가 보내서다. 사용자 입장에서는 스트리밍을 안 쓴 SSR과 똑같다. `curl`로 보면 더 간단하다. `curl -sN -o /dev/null -w 'starttransfer=%{time_starttransfer}s total=%{time_total}s\n'`의 두 값이 거의 같다면(이번 측정에서 버퍼링을 거친 응답은 1.5045s와 1.5046s) 첫 바이트가 끝까지 기다린 것이다. 직접 받았을 때는 0.0027s와 1.5038s였다.
+
+해결은 그 location에 `proxy_buffering off;`를 주거나, 애플리케이션이 응답 헤더에 `X-Accel-Buffering: no`를 붙여 nginx가 그 응답만 버퍼링하지 않게 하는 것이다. 압축을 하는 프록시나 CDN, 서버리스 플랫폼의 응답 방식도 같은 문제를 만들 수 있으니, 운영 경로 그대로 한 번은 재 본다. 프록시가 요청과 응답을 어떻게 받아 넘기는지는 [프록시와 리버스 프록시](/posts/proxy-reverse-proxy)에서 다뤘다.
+
+하이드레이션 불일치는 개발 빌드 콘솔에서 바로 보인다. 앞 절의 재고 시각 예를 서버는 UTC, 브라우저는 서울 시간대로 렌더링하게 해서 띄웠다.
+
+```text
+Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:
+...
+- Date formatting in a user's locale which doesn't match the server.
+...
+  <Stock>
+    <main>
+      <h1>
+      <p>
+        <time>
++         오전 2:58:43
+-         오후 5:58:43
+```
+
+`+`가 브라우저, `-`가 서버의 결과다. 어느 요소의 어떤 텍스트가 갈렸는지까지 트리로 보여 주니 이 메시지를 보면 원인을 거의 바로 찾는다. 문제는 운영이다. 같은 코드를 프로덕션 빌드로 띄우면 남는 건 `Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= ...` 한 줄이다. 어느 요소인지는 빠지고, 화면은 브라우저 렌더링으로 갈아치워진 채 멀쩡해 보인다. 그래서 "가끔 첫 화면이 깜빡인다", "LCP가 이유 없이 나쁘다" 같은 증상으로 돌아온다. 컨테이너의 `TZ`와 서버 로케일을 사용자 쪽과 맞추거나, 시각·숫자 포맷을 서버에서 정해 데이터로 내려보내는 게 확실하다. 개발 환경에서는 서버와 브라우저의 시간대가 같아서 이 문제가 안 보이는 경우가 많다. 스테이징 서버를 UTC로 두고 한 번은 확인해 본다.
+
 ## 다시 미리보기 카드로
 
 처음의 빈 미리보기 카드는 HTML을 브라우저에서 만들었기 때문에 생겼다. 다섯 가지 전략은 그 HTML을 빌드 때, 요청 때, 브라우저에서, 혹은 그 사이 어딘가에서 만드는 선택이고, 각자 TTFB와 LCP, 서버 비용, 데이터 신선도를 다르게 맞바꾼다. 서버에서 HTML을 만들면 첫 화면은 빨라지지만 하이드레이션이라는 비용이 따라오고, 스트리밍과 서버 컴포넌트는 그 비용을 조각내고 줄이는 방법이다. 페이지마다 "누구에게 같은가, 얼마나 자주 바뀌나, 검색에 나와야 하나"를 물으면 고를 전략이 거의 정해진다. 하이드레이션 뒤 브라우저에서 일어나는 렌더링은 [React는 언제 다시 그리나](/posts/react-rerender)에서 이어서 다뤘다.

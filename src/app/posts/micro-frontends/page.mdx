@@ -286,6 +286,65 @@ window.addEventListener("cart:updated", (e) => {
 
 마지막 항목은 장애 격리 측면에서 마이크로 프런트엔드의 장점이 되기도 한다. 추천 영역 리모트가 죽어도 상품 상세와 결제는 계속 동작하게 만들 수 있다. 셸이 그렇게 설계됐을 때만 그렇다.
 
+## 배포 다음 날 결제 영역만 비어 있을 때
+
+리모트를 따로 배포하기 시작하면 장애도 리모트 단위로 온다. 셸은 멀쩡한데 한 영역만 옛 버전이거나 비어 있다. 자주 만나는 세 장면을 로컬에서 재현해 봤다. 리모트 파일은 nginx로, 셸과 리모트 페이지는 Node 서버로 띄우고 크롬 141에서 열었다.
+
+결제팀이 배포했는데 일부 사용자에게 옛 결제 화면이 보인다면 진입 파일의 캐시 헤더부터 본다. 브라우저가 무엇을 받는지는 `curl`로 헤더만 받아 보면 안다.
+
+```bash
+# 진입 파일과 해시 청크의 캐시 헤더를 비교한다
+curl -sI https://checkout.cdn.example.com/v142/remoteEntry.js | grep -i -E '^HTTP|cache-control|etag'
+curl -sI https://checkout.cdn.example.com/v142/cart.8f3a.js | grep -i -E '^HTTP|cache-control'
+```
+
+로컬 nginx에 진입 파일은 `no-cache`, 나머지는 1년 `immutable`로 설정하고 같은 명령을 돌린 결과다. 재검증이 실제로 되는지도 `If-None-Match`로 확인했다.
+
+```text
+HTTP/1.1 200 OK
+ETag: "6ad4ab36-11"
+Cache-Control: no-cache
+---
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=31536000, immutable
+---
+# If-None-Match: "6ad4ab36-11" 를 붙여 다시 요청
+HTTP/1.1 304 Not Modified
+ETag: "6ad4ab36-11"
+```
+
+진입 파일에 `max-age=31536000`이 보이면 그게 원인이다. CDN이나 버킷의 기본 규칙이 `.js`를 모두 길게 캐시하게 되어 있는 경우가 많아서, 진입 파일만 따로 규칙을 빼 줘야 한다. 이미 1년짜리로 나간 사용자는 헤더를 고쳐도 브라우저 캐시가 만료될 때까지 옛 파일을 쓴다. 그래서 셸이 진입 파일 주소에 `?v=142`처럼 배포 번호를 붙이거나, 앞에서 본 것처럼 버전 경로를 설정 서버에서 받아 오게 해 두면 이런 사고에서 빠져나올 길이 생긴다.
+
+두 번째 장면은 리모트를 다른 도메인의 CDN으로 옮긴 뒤 그 영역이 비어 버리는 경우다. 콘솔에는 이렇게 남는다. 셸(`localhost:8022`)이 다른 출처(`127.0.0.1:8023`)의 ES 모듈 리모트를 `import()`로 불렀고, 리모트 서버는 CORS 헤더를 주지 않았다.
+
+```text
+[console.error] Access to script at 'http://127.0.0.1:8023/remoteEntry.js' from origin 'http://localhost:8022' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[console.error] Failed to load resource: net::ERR_FAILED
+[catch] TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:8023/remoteEntry.js
+```
+
+ES 모듈 스크립트와 `fetch`로 읽는 `mf-manifest.json`은 다른 출처라면 CORS 검사를 받는다. webpack의 기본 방식처럼 진입 파일을 평범한 `<script>` 태그로 넣으면 검사를 받지 않지만, `output.crossOriginLoading`을 켜거나 Vite 계열 플러그인처럼 ES 모듈로 리모트를 내보내면 똑같이 막힌다. 리모트 CDN이 셸의 출처를 `Access-Control-Allow-Origin`으로 돌려주게 설정한다. 스테이징은 셸과 리모트가 같은 도메인 아래에 있고 운영만 도메인이 갈리는 구성이라면, 이 에러는 운영에서 처음 보게 된다.
+
+세 번째는 리모트 영역만 대체 화면으로 바뀌고 콘솔에 이런 줄이 찍히는 경우다. 셸과 리모트를 각자 React를 넣어 번들하고, 리모트 컴포넌트를 셸의 `react-dom`으로 그렸다.
+
+```text
+# 프로덕션 빌드
+TypeError: Cannot read properties of null (reading 'useState')
+    at exports.useState (http://localhost:8022/remote-production.js:453:39)
+    at Cart (http://localhost:8022/remote-production.js:527:43)
+    at renderWithHooks (http://localhost:8022/host-production.js:4165:27)
+
+# 개발 빌드
+Invalid hook call. Hooks can only be called inside of the body of a function component. This could happen for one of the following reasons:
+1. You might have mismatching versions of React and the renderer (such as React DOM)
+2. You might be breaking the Rules of Hooks
+3. You might have more than one copy of React in the same app
+```
+
+앞에서 말한 "React가 두 개 뜨면 생기는 일"이 실제로는 이렇게 보인다. 프로덕션 메시지에는 "React가 두 개"라는 말이 없어서 처음 보면 리모트 코드의 버그로 착각하기 쉽다. 스택을 보면 `useState`는 `remote-production.js` 안의 React에서, 렌더링은 `host-production.js`의 `renderWithHooks`에서 불렸다. 파일이 갈린다는 게 사본이 둘이라는 증거다. 확인은 번들 분석기로 리모트 번들 안에 `react`가 들어 있는지, Network 탭에서 react가 든 청크가 두 번 내려왔는지 보는 것이다. 리모트의 `shared` 설정에서 `react`가 빠졌거나 `singleton`이 아닌 경우가 대부분이다.
+
+이번 재현에서 페이지 전체가 하얘지지 않고 "결제 영역을 불러오지 못했다"만 보인 건 셸이 리모트를 Error Boundary로 감싸 두었기 때문이다. 앞 절에서 리모트마다 경계를 두라고 한 이유가 이 장면이다. 경계에서 잡은 에러를 리모트 이름과 버전을 붙여 수집하면, 어느 팀의 몇 번 배포에서 시작됐는지가 바로 나온다.
+
 ## 쪼갠 만큼 무거워진다
 
 사용자 입장에서 마이크로 프런트엔드는 공짜가 아니다. 대표적인 비용이 셋 있다.

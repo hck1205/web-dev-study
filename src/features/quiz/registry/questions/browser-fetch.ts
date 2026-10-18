@@ -106,4 +106,19 @@ export const BROWSER_FETCH: QuizQuestion[] = [
       "fetch는 받는 쪽 진행률은 응답 스트림으로 만들 수 있지만 보내는 쪽 진행률을 알려 주는 API가 없다. xhr.upload.onprogress나 axios의 onUploadProgress를 쓴다.",
     anchor: "xhr-fetch-axios",
   },
+  {
+    id: "browser-fetch-8",
+    post: "browser-fetch",
+    question: "에러 수집기에 TypeError: Failed to fetch가 많이 쌓였다. 페이지 코드에서 이 에러만 보고 알 수 있는 것은?",
+    choices: [
+      "CORS 정책에 막혔다는 것",
+      "서버가 500을 돌려줬다는 것",
+      "응답을 받지 못했다는 것뿐이고, CORS인지 연결 실패인지는 구분할 수 없다",
+      "사용자가 요청을 취소했다는 것",
+    ],
+    answer: 2,
+    explanation:
+      "CORS 차단, 연결 거부, 확장 프로그램 차단 모두 같은 TypeError: Failed to fetch로 reject되고, 이유는 콘솔과 Network 탭에만 남는다. 그래서 실패할 때 URL, 걸린 시간, navigator.onLine을 함께 기록해야 원인을 나눌 수 있다. 500은 reject되지 않고, 취소는 AbortError다.",
+    anchor: "에러-수집기에-failed-to-fetch만-쌓일-때",
+  },
 ];

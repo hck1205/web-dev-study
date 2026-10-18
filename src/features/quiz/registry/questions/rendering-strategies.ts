@@ -106,4 +106,19 @@ export const RENDERING_STRATEGIES: QuizQuestion[] = [
       "public과 s-maxage는 CDN 같은 공유 캐시가 응답을 저장해 모든 요청자에게 내줘도 된다는 뜻이다. 개인화된 HTML이 여기 들어가면 남의 이름과 장바구니가 보인다. 이런 페이지는 private, no-store로 응답하거나 개인화 부분을 HTML 밖으로 뺀다.",
     anchor: "큰-쇼핑몰에서-페이지마다-고르기",
   },
+  {
+    id: "rendering-strategies-8",
+    post: "rendering-strategies",
+    question: "스트리밍 SSR이 서버에 직접 붙으면 셸이 먼저 오는데, nginx 뒤에서는 1.6초 뒤 한 덩어리로 온다. 가장 먼저 볼 설정은?",
+    choices: [
+      "React의 Suspense 경계 위치",
+      "nginx의 proxy_buffering (또는 응답의 X-Accel-Buffering 헤더)",
+      "브라우저의 HTTP 캐시 설정",
+      "CDN의 s-maxage 값",
+    ],
+    answer: 1,
+    explanation:
+      "nginx는 기본으로 upstream 응답을 버퍼에 모았다가 보내서, 서버가 조각으로 흘려보내도 사용자에게는 한 번에 간다. 실제로 재 보면 첫 바이트 시각과 끝 시각이 거의 같아진다. 그 location에 proxy_buffering off를 주거나 응답에 X-Accel-Buffering: no를 붙인다.",
+    anchor: "고른-전략대로-나가는지-밖에서-확인하기",
+  },
 ];

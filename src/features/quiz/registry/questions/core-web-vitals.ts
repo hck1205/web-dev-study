@@ -101,4 +101,19 @@ export const CORE_WEB_VITALS: QuizQuestion[] = [
       "앞 밀림과 1초 넘게 떨어지면 새 세션 창을 연다. 창은 0.10, 0.12, 0.01 세 개로 묶이고, CLS는 가장 큰 창의 합인 0.12다. 0.23은 전부 더한 값으로, 2021년 이전의 계산 방식이다.",
     anchor: "밀림을-세션-창으로-묶어-센다",
   },
+  {
+    id: "core-web-vitals-8",
+    post: "core-web-vitals",
+    question: "CSS가 500ms 걸리는 페이지에서 화면 안의 히어로 이미지에 loading=\"lazy\"를 붙였더니 LCP가 크게 늦어졌다. Resource Timing에서 가장 먼저 달라진 값은?",
+    choices: [
+      "이미지 응답 크기(transferSize)가 커졌다",
+      "이미지 요청 시작(fetchStart)이 CSS가 도착한 뒤로 밀렸다",
+      "TTFB가 늘어났다",
+      "이미지 디코딩 시간이 늘어났다",
+    ],
+    answer: 1,
+    explanation:
+      "lazy 이미지는 화면 근처인지 레이아웃으로 확인한 뒤에 요청하므로, 렌더링을 막는 CSS가 다 올 때까지 요청 자체가 시작되지 않는다. 실제로 재 보면 요청 시작이 15ms에서 526ms로 밀리고 LCP도 그만큼 늦어진다. 파일 크기나 TTFB는 그대로다.",
+    anchor: "나빠진-지표를-브라우저에서-직접-재-보기",
+  },
 ];

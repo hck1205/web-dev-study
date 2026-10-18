@@ -87,4 +87,19 @@ export const EVENT_LOOP: QuizQuestion[] = [
       "CommonJS에서는 콜백이 끝날 때 nextTick 큐를 Promise 큐보다 먼저 비운다. ES 모듈은 최상위 평가 자체가 Promise 처리 중에 일어나서 그 시점에는 Promise 콜백이 먼저 나온다. nextTick이 항상 먼저라고 외우면 여기서 틀린다.",
     anchor: "nexttick은-promise보다-먼저다",
   },
+  {
+    id: "event-loop-7",
+    post: "event-loop",
+    question: "Node.js 서버에서 /report 하나가 200ms 동안 JSON을 동기로 파싱하는 동안 /health 요청을 보냈다. 어떻게 되나?",
+    choices: [
+      "/health는 다른 스레드에서 처리되어 평소처럼 빠르다",
+      "/health도 파싱이 끝날 때까지 기다렸다가 응답한다",
+      "/health 요청이 거절되고 503이 돌아간다",
+      "/report를 async 함수로 감싸 두었다면 /health가 먼저 처리된다",
+    ],
+    answer: 1,
+    explanation:
+      "자바스크립트 실행은 이벤트 루프 하나에서 돌아서, 동기 파싱이 끝나기 전에는 다음 콜백을 꺼내지 못한다. 실제로 재 보면 5ms이던 헬스 체크가 170ms 넘게 걸린다. async로 감싸도 JSON.parse는 그 자리에서 끝까지 돌기 때문에 달라지지 않는다.",
+    anchor: "누가-메인-스레드를-붙잡았는지-운영에서-찾기",
+  },
 ];
