@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
   compiler: {
     emotion: true,
   },
+  env: {
+    // 서비스 워커 캐시 버전. Vercel에서는 배포한 커밋, 그 밖에서는 빌드 시각을 쓴다.
+    NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? Date.now().toString(36),
+  },
 };
 
 // 백링크 플러그인에 넘길 글 목록 (직렬화 가능한 값만)

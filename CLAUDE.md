@@ -299,7 +299,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 ## 앱 설치 (PWA)
 
 - `src/app/manifest.ts`(웹 앱 매니페스트), `public/icons/*`(192·512, maskable 겸용), `src/app/icon.svg`·`apple-icon.png`가 설치 아이콘이다. 아이콘을 바꾸면 세 곳을 함께 바꾼다.
-- `public/sw.js` 서비스 워커는 프로덕션에서만 등록된다(`common/hooks/use-service-worker`). 빌드 산출물·아이콘은 캐시 우선, 페이지는 네트워크 우선이고 오프라인이면 마지막으로 본 페이지를 보여 준다. 캐시 방식을 바꾸면 `VERSION`을 올린다.
+- `public/sw.js` 서비스 워커는 프로덕션에서만 등록된다(`common/hooks/use-service-worker`). 빌드 산출물·아이콘은 캐시 우선, 페이지는 네트워크 우선이고 오프라인이면 마지막으로 본 페이지를 보여 준다. 캐시 버전은 등록 주소의 `?v=<빌드 ID>`(`next.config.ts`의 `NEXT_PUBLIC_BUILD_ID`, Vercel은 커밋 SHA)라서 배포마다 새 워커가 설치되고 이전 배포의 캐시는 `activate`에서 지워진다. 손으로 올릴 버전은 없다.
 - 설치 버튼(`common/components/install-app`)은 푸터에 있고, 브라우저가 설치를 허락할 때(`beforeinstallprompt`)만 보인다. iOS 사파리에는 "홈 화면에 추가" 안내 문구를 보여 준다.
 
 ## 블로그 톤
