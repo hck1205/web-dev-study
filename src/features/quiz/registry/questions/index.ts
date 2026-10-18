@@ -69,10 +69,13 @@ import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
+import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { OSI_IN_PRACTICE } from "./osi-in-practice";
+import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
 import { POSTGRES_ARCHITECTURE } from "./postgres-architecture";
@@ -189,10 +192,13 @@ export const QUESTION_SETS = [
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
   NETWORK_LAYERS_OVERVIEW,
+  NETWORK_TROUBLESHOOTING_BY_LAYER,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  OSI_IN_PRACTICE,
+  PACKET_CAPTURE_TCPDUMP,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,
   POSTGRES_ARCHITECTURE,

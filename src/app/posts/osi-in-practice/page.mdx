@@ -1,0 +1,498 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("osi-in-practice");
+
+결제 API가 가끔 실패한다는 문의가 들어왔다. 프론트엔드 쪽에서는 "서버가 죽었다 살아나는 것 같다"고 하고, 백엔드 쪽에서는 "앱 로그에 아무것도 없으니 네트워크 문제"라고 하고, 인프라 쪽에서는 "네트워크 지표는 정상"이라고 한다. 세 사람 모두 틀린 말은 하지 않았다. 다만 누구도 어디서 무엇이 실패했는지는 말하지 않았다. 그래서 대화가 돌기만 한다.
+
+OSI 7계층을 현장에서 쓰는 이유가 여기 있다. 계층 번호는 시험 문제가 아니라 "어디까지는 됐고 어디부터 안 된다"를 짧게 말하는 단위다. "L4까지는 붙는데 L7에서 502가 난다", "DNS가 아니라 TLS에서 끊긴다"처럼 말하면 다음에 볼 곳이 하나로 줄고, 그 말이 맞는지 명령 하나로 확인할 수 있다. 층마다 무엇이 있는지는 [계층 개요 글](/posts/network-layers-overview)에서 봤으니, 이 글은 그 지식이 실제로 쓰이는 순간을 모은다. 에러 메시지를 층에 대응시키는 법, 같은 메시지가 다른 층에서 나오는 함정, 그리고 로드 밸런서·방화벽·헬스 체크·TLS 위치·타임아웃을 층으로 나눠 고르는 법이다.
+
+출력은 Ubuntu 24.04에서 network namespace로 만든 작은 망에서 찍었다. 노트북 역할(`10.11.1.10`) — 라우터 — 서버(`10.11.2.20`)로 이어지고, 서버에는 nginx가 80·443번에서 받아 `127.0.0.1:8000`의 앱으로 넘기며, 같은 서버에 `shop.lab.test`를 알려 주는 작은 DNS 서버가 있다. 인증서는 실습용 사설 CA로 만들었다.
+
+## 에러 메시지는 어느 층이 말했는지 알려 준다
+
+에러 메시지는 아무 데서나 생기지 않는다. 각 메시지는 특정 층에서 일하는 특정 프로그램이 만든다. `Could not resolve host`는 이름 풀이 단계에서, `Connection refused`는 상대 커널의 TCP가, `certificate has expired`는 TLS 라이브러리가, `502 Bad Gateway`는 중간 프록시가 만든다. 메시지를 보고 "이 말은 어느 층이 하는 말인가"를 떠올리면 그 아래층은 대개 정상이라는 것까지 함께 알게 된다. TLS 오류가 났다면 DNS와 TCP 연결은 이미 성공했다는 뜻이다.
+
+실습 망에서 층마다 일부러 고장을 내고 받은 메시지를 모았다.
+
+```bash
+# 클라이언트 namespace에서 차례로 실행했다. 서버 쪽 고장은 각 줄 주석대로 미리 만들어 뒀다
+curl -sS http://shopp.lab.test/                      # 오타 난 이름
+nc -zv -w 6 10.11.2.77 80                            # 서버 망에 없는 주소
+curl -sS --connect-timeout 5 http://shop.lab.test:8443/   # 서버가 8443을 DROP
+nc -zv -w 3 10.11.2.20 8080                          # 아무도 듣지 않는 포트
+curl -sS http://shop.lab.test:9000/reset             # 앱이 응답 대신 RST를 보낸다
+curl -sS --cacert ca.crt https://old.lab.test/       # 만료된 인증서
+curl -sS https://shop.lab.test:80/                   # HTTP 포트에 TLS로 말을 건다
+```
+
+```text
+curl: (6) Could not resolve host: shopp.lab.test
+nc: connect to 10.11.2.77 port 80 (tcp) failed: No route to host
+curl: (28) Failed to connect to shop.lab.test port 8443 after 5002 ms: Timeout was reached
+nc: connect to 10.11.2.20 port 8080 (tcp) failed: Connection refused
+curl: (56) Recv failure: Connection reset by peer
+curl: (60) SSL certificate problem: certificate has expired
+curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number
+```
+
+이 메시지들을 층과 첫 확인 명령으로 묶으면 아래처럼 된다. 비교할 칸이 많아서 이 글에서 표는 이것 하나만 쓴다.
+
+| 메시지 | 만든 곳 | 의심할 층 | 먼저 칠 명령 |
+|---|---|---|---|
+| `Could not resolve host`, `NXDOMAIN` | 내 리졸버 | DNS (L7 서비스) | `dig 이름` |
+| `Network is unreachable` | 내 커널 | L3 경로 | `ip route get 주소` |
+| `No route to host` | 내 커널 또는 라우터 | L2 이웃, L3 | `ip neigh`, `tracepath` |
+| `Timeout was reached` (connect 단계) | 내 curl | L3·L4 필터 | `nc -zv`, `tcpdump` |
+| `Connection refused` | 상대 커널 | L4 포트 | `ss -ltnp` (서버에서) |
+| `Connection reset by peer` | 상대 커널이나 중간 장비 | L4 연결 | 누가 RST를 보냈는지 캡처 |
+| `certificate`, `SSL routines` | 내 TLS 라이브러리 | TLS | `openssl s_client` |
+| `502`, `504` | 중간 프록시 | 프록시 뒤쪽 | 프록시 error 로그 |
+
+아래 그림은 같은 표를 증상 하나씩 넘기며 본다. 오른쪽에 쌓이는 건 "이 메시지가 나왔으면 이미 정상인 층"이다. 메시지가 높은 층에서 나올수록 정상으로 확인된 층이 늘어난다.
+
+<AlgoTrace
+  caption="메시지가 나온 층보다 아래는 이미 통과했다"
+  memoryLabel="이미 정상인 층"
+  cells={["NXDOMAIN", "No route", "timeout", "refused", "reset", "TLS 오류", "502"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: [],
+      caption: "이름을 못 풀었다. 패킷은 서버 쪽으로 아직 한 개도 가지 않았다. 확인된 층이 없다.",
+    },
+    {
+      pointer: 1,
+      memory: ["L1 내 링크"],
+      caption: "길이 없다. 내 인터페이스는 살아 있지만 다음 칸(게이트웨이나 상대)의 MAC을 못 얻었거나 경로가 없다.",
+    },
+    {
+      pointer: 2,
+      memory: ["L1 내 링크", "L3 첫 칸"],
+      caption: "SYN은 나갔는데 답이 없다. 중간에서 버려졌거나 상대가 꺼져 있다. 어디서 사라졌는지는 아직 모른다.",
+    },
+    {
+      pointer: 3,
+      memory: ["L1·L2", "L3 왕복"],
+      found: [3],
+      caption: "상대 커널이 바로 거절했다. 패킷이 갔다가 돌아왔으니 경로는 멀쩡하다. 그 포트에 듣는 프로그램이 없다.",
+    },
+    {
+      pointer: 4,
+      memory: ["L1·L2", "L3 왕복", "L4 연결"],
+      caption: "연결은 맺어졌고 데이터도 갔다. 그 뒤에 누군가 RST로 끊었다. 상대 앱이나 중간 장비를 본다.",
+    },
+    {
+      pointer: 5,
+      memory: ["L1·L2", "L3 왕복", "L4 연결"],
+      found: [5],
+      caption: "TCP 위에서 TLS가 인증서나 버전을 거절했다. 아래 세 층은 정상이다. 인증서와 포트를 본다.",
+    },
+    {
+      pointer: 6,
+      memory: ["L1·L2", "L3 왕복", "L4 연결", "TLS·L7 앞단"],
+      found: [6],
+      caption: "앞단 프록시까지는 모든 층이 정상이다. 문제는 프록시와 그 뒤쪽 서버 사이에 있다. 거기서 다시 아래층부터 본다.",
+    },
+  ]}
+/>
+
+마지막 단계가 실무에서 특히 중요하다. 502를 받았다는 건 "프록시와 내 사이의 L1부터 L7까지는 다 정상"이라는 말이다. 문제는 프록시 뒤쪽의 두 번째 연결에 있고, 그 연결은 클라이언트에서 보이지 않는다. 그래서 502·504는 클라이언트에서 아무리 `ping`을 쳐도 답이 안 나온다. 프록시가 있는 곳으로 가서 거기서 다시 아래층부터 확인해야 한다. 502와 504의 뜻 자체는 [HTTP 상태 코드 글](/posts/http-status-codes)과 [Nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)에서 다뤘다.
+
+## 같은 메시지가 다른 층에서 나오기도 한다
+
+표는 출발점일 뿐이다. 실제로는 같은 메시지가 다른 원인에서 나오는 경우가 꽤 있고, 그걸 모르면 엉뚱한 사람에게 장애를 넘긴다.
+
+첫째, `Connection refused`가 늘 "앱이 안 떠 있다"는 뜻은 아니다. 서버에 앱이 멀쩡히 떠 있어도 방화벽 규칙이 `REJECT`면 같은 메시지가 나온다.
+
+```bash
+# 서버: 9000번은 앱이 듣고 있다. 그 앞에 REJECT 규칙을 넣었다
+sudo iptables -A INPUT -p tcp --dport 9000 -j REJECT
+sudo ss -ltn 'sport = :9000'
+
+# 클라이언트
+nc -zv -w 3 shop.lab.test 9000
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5            0.0.0.0:9000      0.0.0.0:*
+```
+
+```text
+nc: connect to shop.lab.test (10.11.2.20) port 9000 (tcp) failed: Connection refused
+```
+
+`REJECT`의 기본 동작은 ICMP port unreachable을 돌려주는 것이고, 리눅스는 TCP 연결 중에 이걸 받으면 RST를 받은 것과 같은 `ECONNREFUSED`로 앱에 알린다. 그래서 서버에서 `ss -ltnp`로 LISTEN이 보이는데 클라이언트는 refused라면, 방화벽 규칙을 의심한다. 반대로 `DROP`은 아무 답도 하지 않아서 timeout이 된다. iptables의 두 동작 차이는 [iptables 글](/posts/iptables-basics)에 있다.
+
+둘째, `curl: (6) Could not resolve host`는 이름이 없을 때와 DNS 서버가 고장 났을 때 똑같이 나온다. curl만 보면 구별이 안 된다. `dig`로 물으면 상태 칸이 다르다.
+
+```bash
+# 오타 난 이름과, 위쪽 서버가 고장 난 영역의 이름을 각각 묻는다
+dig shopp.lab.test +noall +comments | grep status
+dig x.broken.test +noall +comments | grep status
+```
+
+```text
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 28746
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 32575
+```
+
+`NXDOMAIN`은 "그런 이름은 없다"는 확실한 답이다. 레코드를 안 만들었거나 이름을 잘못 쳤다. `SERVFAIL`은 "답을 못 구했다"는 뜻이라 이름은 있을 수도 있다. 권한 있는 네임서버가 응답하지 않거나 DNSSEC 검증에 실패한 경우다. 앞은 레코드를 고치는 사람에게, 뒤는 DNS 운영 쪽에 넘길 일이다. 아예 답이 없으면 `;; no servers could be reached`가 나온다. DNS가 어떻게 답을 찾는지는 [DNS 글](/posts/dns)에서 봤다.
+
+셋째, 기다리다 끝나는 실패는 원인이 여러 층에 걸쳐 있다. 위에서 `No route to host`가 정확히 3초 만에 나온 건 라우터가 서버 망에서 `10.11.2.77`의 MAC을 ARP로 세 번 물었는데 아무도 답하지 않아서다. 라우터의 이웃 표에 그 흔적이 남는다.
+
+```bash
+# 라우터에서 서버 쪽 인터페이스의 이웃 표를 본다
+ip neigh show dev r1
+```
+
+```text
+10.11.2.20 lladdr be:50:5b:56:d6:ff REACHABLE
+10.11.2.77 INCOMPLETE
+```
+
+메시지는 L3(경로 없음)처럼 보이지만 실제 원인은 L2다. 그 주소를 가진 기기가 망에 없거나 꺼졌다. 서버를 교체하면서 IP를 옮겼는데 새 서버에 주소를 안 붙였을 때 이렇게 된다. ARP가 어떻게 이웃을 찾는지는 [데이터 링크 계층 글](/posts/layer-link-ethernet-arp)에 있다. 반면 `DROP` 규칙에 걸린 8443번은 `--connect-timeout`으로 정한 5초를 다 채우고 끝났다. 이 차이로 "주소에 주인이 없다"와 "누군가 일부러 버린다"를 가른다.
+
+넷째, 프록시 뒤에서 일어난 RST는 클라이언트에게 RST로 오지 않는다. 앱에 직접 붙으면 `Connection reset by peer`를 받지만, nginx를 거치면 같은 고장이 502로 바뀐다. 실제 원인은 nginx의 error 로그에만 남는다.
+
+```bash
+# 서버: nginx error 로그에서 업스트림 쪽 실패를 찾는다 (Ubuntu 기본 경로. 실습 서버는 설정에서 경로를 따로 줬다)
+sudo tail -n 3 /var/log/nginx/error.log
+```
+
+```text
+2026/10/18 05:26:40 [error] 1951#1951: *3 connect() failed (111: Connection refused) while connecting to upstream, client: 10.11.1.10, server: shop.lab.test, request: "GET /down/ HTTP/1.1", upstream: "http://127.0.0.1:8001/", host: "shop.lab.test"
+2026/10/18 05:26:43 [error] 1951#1951: *5 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 10.11.1.10, server: shop.lab.test, request: "GET /slow HTTP/1.1", upstream: "http://127.0.0.1:8000/slow", host: "shop.lab.test"
+2026/10/18 05:26:43 [error] 1951#1951: *7 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 10.11.1.10, server: shop.lab.test, request: "GET /reset HTTP/1.1", upstream: "http://127.0.0.1:8000/reset", host: "shop.lab.test"
+```
+
+세 줄 모두 클라이언트 입장에서는 그냥 502나 504다. 그런데 로그를 보면 첫 줄은 뒤쪽 포트에 아무도 없는 L4 거절, 둘째 줄은 연결은 됐는데 응답 헤더가 3초 안에 안 온 응용 쪽 지연, 셋째 줄은 응답 도중 뒤쪽이 연결을 끊은 경우다. 아래에서 줄 하나를 조각내 읽어 본다.
+
+<UrlAnatomy
+  caption="nginx error 로그 한 줄에서 층을 읽는다"
+  base="[error] *7"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "syscall",
+      display: "recv() failed",
+      title: "어느 시스템 콜이 실패했나",
+      description: "connect()면 연결을 맺다가, recv()면 연결된 뒤 읽다가 실패했다. 연결 단계인지 대화 단계인지가 여기서 갈린다.",
+      required: true,
+    },
+    {
+      key: "errno",
+      display: "(104: Connection reset by peer)",
+      title: "커널이 돌려준 오류 번호",
+      description: "111은 ECONNREFUSED(포트에 아무도 없다), 110은 ETIMEDOUT(기다리다 끝났다), 104는 ECONNRESET(상대가 RST로 끊었다)다. 층을 알려 주는 건 이 숫자다.",
+      required: true,
+    },
+    {
+      key: "stage",
+      display: "while reading response header",
+      title: "nginx가 무엇을 하던 중이었나",
+      description: "요청은 이미 넘겼고 응답 헤더를 기다리던 중이다. 앱이 요청을 받았다는 뜻이라 앱 쪽에서 처리하다 죽었거나 일부러 끊었을 가능성이 크다.",
+    },
+    {
+      key: "client",
+      display: "client: 10.11.1.10",
+      title: "앞쪽 연결의 상대",
+      description: "nginx에 접속한 쪽이다. 로드 밸런서 뒤라면 여기에는 로드 밸런서 주소가 찍힌다.",
+    },
+    {
+      key: "upstream",
+      display: "upstream: \"http://127.0.0.1:8000/reset\"",
+      title: "뒤쪽 연결의 상대",
+      description: "실제로 실패한 곳이다. 다음 확인은 이 주소와 포트가 있는 곳에서 한다. 여러 대라면 어느 한 대만 문제인지 이 칸으로 센다.",
+      required: true,
+    },
+  ]}
+/>
+
+응답을 누가 만들었는지 볼 때 `Server` 헤더를 믿으면 안 된다는 것도 같은 맥락이다. 실습 앱이 직접 만든 503 응답도 nginx를 거치면 헤더가 `Server: nginx/1.24.0 (Ubuntu)`로 바뀌어 나왔다. 대신 본문 모양이 다르다. 앱의 503은 `{"db":"down"}`이라는 JSON이었고, nginx가 만든 502는 `<center>nginx/1.24.0 (Ubuntu)</center>`가 박힌 HTML이었다. 클라우드 로드 밸런서나 CDN이 만든 오류 페이지도 저마다 고유한 본문을 가진다. 본문이 우리 앱의 모양이 아니면 앞단이 만든 응답이다.
+
+## 로드 밸런서는 어느 층에서 나누느냐로 고른다
+
+설계에서 계층 번호가 가장 자주 나오는 곳은 로드 밸런서다. L4와 L7 로드 밸런서는 이름만 비슷하지 하는 일이 다르다.
+
+L4 로드 밸런서는 TCP 연결(또는 UDP 흐름) 단위로 나눈다. 새 연결이 오면 5-tuple을 보고 뒤쪽 서버 하나를 고른 뒤, 그 연결의 바이트는 끝까지 그 서버로 보낸다. 안을 읽지 않으니 빠르고 HTTP가 아닌 프로토콜(DB, MQTT, 게임 서버)도 받는다. 대신 경로나 헤더로 나눌 수 없고, HTTP 응답 코드를 만들지도 못한다. 뒤쪽이 죽으면 클라이언트는 502가 아니라 연결 실패나 RST를 받는다.
+
+L7 로드 밸런서는 연결을 직접 받아 끝내고(종단하고), 요청을 하나씩 읽은 뒤 뒤쪽과 새 연결을 맺어 넘긴다. 연결이 두 개로 나뉜다는 게 모든 차이의 원인이다. 경로·Host·쿠키로 나눌 수 있고, 재시도와 502·503·504 응답을 직접 만들고, `X-Forwarded-For`로 원래 클라이언트 IP를 넘긴다. 반면 앱이 보는 출발지 IP는 로드 밸런서 것이 된다. 원래 IP를 받는 방법은 [프록시 글](/posts/proxy-reverse-proxy)에서 다뤘다.
+
+고를 때 실제로 자주 걸리는 지점이 몇 개 있다.
+
+- gRPC나 HTTP/2처럼 연결 하나로 요청을 계속 보내는 클라이언트를 L4 로드 밸런서 뒤에 두면, 연결이 처음 붙은 서버 한 대로 모든 요청이 몰린다. L4는 연결 단위로만 나누기 때문이다. 쿠버네티스의 기본 Service(L4)로 gRPC를 받다가 Pod 하나만 CPU가 치솟는 장면이 이 경우다. 요청 단위로 나누는 L7(Envoy, gRPC를 아는 Ingress)이나 클라이언트 쪽 분산이 필요하다.
+- WebSocket은 L7 로드 밸런서에서 업그레이드 요청을 알아봐야 하고, 오래 열려 있는 연결이 idle timeout에 걸리지 않게 해야 한다.
+- TCP 포트 하나로 여러 도메인을 받으면서 TLS를 풀고 싶지 않다면 L4에서 TLS ClientHello의 SNI만 읽고 나누는 방식(nginx `stream`의 `ssl_preread`, TLS passthrough)이 있다. L4와 L7 사이 어딘가에 걸친 방식이다.
+
+실무에서 가장 헷갈리는 502 중 하나는 두 연결의 keep-alive 시간이 어긋나서 생긴다. L7 로드 밸런서는 뒤쪽 연결을 재사용하려고 열어 두고, 앱 서버도 놀고 있는 연결을 일정 시간 뒤에 닫는다. 앱이 먼저 닫는 순간과 로드 밸런서가 그 연결에 새 요청을 싣는 순간이 겹치면 이렇게 된다.
+
+<SequenceDiagram
+  caption="앱이 먼저 닫은 연결에 로드 밸런서가 요청을 싣는다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "lb", label: "L7 LB" },
+    { id: "app", label: "앱 서버" },
+  ]}
+  steps={[
+    {
+      from: "lb",
+      to: "app",
+      label: "요청 1",
+      title: "요청 하나를 처리하고 연결을 남겨 둔다",
+      detail: "LB는 다음 요청에 쓰려고 이 TCP 연결을 열어 둔다. LB 쪽 idle timeout은 60초다.",
+    },
+    {
+      from: "app",
+      to: "lb",
+      label: "200",
+      title: "응답이 오고 연결은 쉰다",
+      detail: "앱 서버의 keep-alive 시간은 5초로 짧다. 5초 동안 아무 요청이 없으면 앱이 닫는다.",
+    },
+    {
+      from: "app",
+      to: "lb",
+      label: "FIN (5초 뒤)",
+      title: "앱이 먼저 연결을 닫는다",
+      detail: "앱 입장에서는 정상 종료다. 그런데 FIN이 LB에 닿기 직전, LB는 같은 연결을 쓰기로 이미 정했다.",
+    },
+    {
+      from: "user",
+      to: "lb",
+      label: "요청 2",
+      title: "새 요청이 들어온다",
+      detail: "LB는 아직 살아 있다고 믿는 그 연결을 고른다.",
+    },
+    {
+      from: "lb",
+      to: "app",
+      label: "요청 2",
+      title: "닫히는 연결에 요청을 싣는다",
+      detail: "앱 커널은 이미 닫은 소켓으로 데이터가 오자 RST로 답한다. 앱 로그에는 이 요청이 남지 않는다.",
+    },
+    {
+      from: "app",
+      to: "lb",
+      label: "RST",
+      title: "뒤쪽 연결이 리셋된다",
+      detail: "LB의 뒤쪽 연결에서 L4 오류가 났다.",
+    },
+    {
+      from: "lb",
+      to: "user",
+      label: "502",
+      title: "사용자는 502를 받는다",
+      detail: "트래픽이 적어 연결이 자주 쉬는 시간대에 드문드문 보인다. 앱 로그는 깨끗하다. 앱 keep-alive를 LB idle timeout보다 길게 잡으면 사라진다.",
+    },
+  ]}
+/>
+
+구체적인 숫자로 보면 이 조합이 흔하다. AWS ALB의 idle timeout 기본값은 60초이고, Node.js `http.Server`의 `keepAliveTimeout` 기본값은 5초다. 둘을 그대로 쓰면 앱이 늘 먼저 닫는다. 앱의 keep-alive를 65초처럼 로드 밸런서보다 조금 길게 두는 게 보통의 처방이다. "트래픽이 적을 때만 가끔 502가 나고 앱 로그는 깨끗하다"는 증상을 들으면 이 그림부터 떠올린다. 연결을 닫는 쪽에서 무슨 일이 일어나는지는 [TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)에 있다.
+
+## 방화벽도 층마다 따로 있다
+
+"방화벽에서 열었어요"라는 말은 어느 방화벽인지 붙지 않으면 반쪽짜리다. 클라우드에서 요청 하나는 층이 다른 필터를 여러 개 지난다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="요청 하나가 지나는 필터는 층이 다 다르다"
+  nodes={[
+    { id: "client", label: "사용자", x: 70, y: 40, w: 100, h: 44 },
+    { id: "waf", label: "WAF", sub: "L7: 요청 내용", x: 220, y: 40, w: 120, h: 44 },
+    { id: "lb", label: "로드 밸런서", sub: "L4 또는 L7", x: 330, y: 125, w: 120, h: 44 },
+    { id: "nacl", label: "NACL", sub: "L3·L4 무상태", x: 190, y: 125, w: 110, h: 44 },
+    { id: "sg", label: "보안 그룹", sub: "L4 상태 추적", x: 70, y: 210, w: 110, h: 44 },
+    { id: "host", label: "iptables", sub: "L3·L4 서버 안", x: 210, y: 210, w: 120, h: 44 },
+    { id: "app", label: "앱", sub: "L7 인가", x: 330, y: 285, w: 100, h: 44 },
+  ]}
+  edges={[
+    { from: "client", to: "waf", label: "HTTPS" },
+    { from: "waf", to: "lb" },
+    { from: "lb", to: "nacl" },
+    { from: "nacl", to: "sg" },
+    { from: "sg", to: "host" },
+    { from: "host", to: "app" },
+  ]}
+/>
+
+층이 다르면 막는 모양도 다르고, 그래서 증상도 다르다.
+
+보안 그룹은 L4에서 출발지·포트를 보고 허용만 적는다. 상태를 추적해서(stateful) 들어온 요청의 응답은 따로 열지 않아도 나간다. 허용이 없으면 SYN을 조용히 버리니 증상은 timeout이다.
+
+NACL 같은 서브넷 단위 필터는 상태를 기억하지 않는다(stateless). 들어오는 443만 열고 나가는 쪽 임시 포트(리눅스 기본 32768~60999, 다른 OS까지 생각하면 1024~65535)를 안 열면, 요청은 들어가는데 응답이 못 나와서 역시 timeout이 난다. 보안 그룹은 다 맞는데 안 된다면 이쪽이다. 임시 포트는 [포트와 소켓 글](/posts/ports-and-sockets)에서 다룬다.
+
+서버 안의 iptables나 ufw는 클라우드 콘솔에 보이지 않는다. 콘솔에서 다 열었는데 timeout이면 서버 안을 본다.
+
+WAF는 L7에서 요청 내용(경로, 쿼리, 본문, 헤더)을 읽고 SQL 인젝션 패턴이나 과한 요청 수를 막는다. TCP 연결은 정상으로 맺어지고 TLS도 성공한 뒤, HTTP 응답으로 403이나 자체 차단 페이지가 온다. 그래서 "어떤 요청만 403이고 앱 로그에는 없다"면 WAF 로그를 본다. WAF가 내용을 읽으려면 TLS가 WAF 앞이나 WAF에서 풀려야 한다는 것도 층에서 나오는 제약이다.
+
+쿠버네티스의 NetworkPolicy는 Pod 사이의 L3·L4 필터다. 막히면 역시 timeout이고, 기본은 막지 않는다. 정책을 하나라도 걸면 그 Pod로 들어오는 트래픽은 허용한 것만 통과한다.
+
+## 헬스 체크는 어느 층까지 물어보나
+
+로드 밸런서의 헬스 체크도 층으로 고른다. 묻는 층이 낮을수록 가볍지만 놓치는 게 많다.
+
+L4 헬스 체크는 TCP 연결만 맺어 본다. 포트가 열려 있으면 통과다. 앱 프로세스가 살아 있으면 커널이 대신 SYN-ACK을 보내 주기 때문에, 앱의 스레드가 전부 멈춰 있어도 통과한다. 실습 서버에서 DB가 끊긴 상황을 흉내 냈다.
+
+```bash
+# L4로 물으면
+nc -zv -w 2 10.11.2.20 80
+
+# L7로 물으면
+curl -s -i http://shop.lab.test/health/db
+```
+
+```text
+Connection to 10.11.2.20 80 port [tcp/http] succeeded!
+```
+
+```text
+HTTP/1.1 503 Service Unavailable
+Server: nginx/1.24.0 (Ubuntu)
+Date: Sun, 18 Oct 2026 05:38:09 GMT
+Content-Type: application/json
+Content-Length: 14
+Connection: keep-alive
+
+{"db":"down"}
+```
+
+L4로 보면 건강하고, L7로 보면 아프다. 로드 밸런서가 L4로만 확인하면 이 서버로 계속 요청을 보낸다.
+
+그렇다고 헬스 체크에서 의존하는 모든 것(DB, 캐시, 외부 API)을 확인하면 다른 함정이 생긴다. DB가 잠깐 느려지면 모든 서버가 한꺼번에 비정상이 되고, 로드 밸런서는 보낼 곳을 잃는다. AWS ALB는 대상이 전부 비정상이면 모두에게 그냥 보내는 fail-open으로 동작하지만, 모든 로드 밸런서가 그렇지는 않다. 쿠버네티스 ingress-nginx는 Service에 준비된 엔드포인트가 하나도 없으면 503을 준다. 그래서 보통은 이렇게 나눈다.
+
+- 트래픽을 받을지(readiness)는 "이 프로세스가 요청을 처리할 준비가 됐나"를 L7로 묻되, 공유하는 의존성 때문에 전부가 동시에 떨어지지 않게 한다.
+- 재시작할지(liveness)는 "프로세스가 멈췄나"만 묻는다. 여기에 DB 확인을 넣으면 DB 장애 때 모든 Pod가 재시작을 반복한다.
+
+쿠버네티스 probe의 `tcpSocket`은 L4, `httpGet`과 `grpc`는 L7이다. 이름만 봐도 층이 보인다. 장애 대응에서 서버를 빼고 넣는 이야기는 [장애 대응 패턴 글](/posts/resilience-patterns)과 이어진다.
+
+## TLS를 어디서 풀지 정한다
+
+HTTPS 요청의 TLS를 어디서 끝낼지도 층의 문제다. TLS를 푼 곳부터는 HTTP를 읽을 수 있고, 그 앞은 암호문만 본다.
+
+가장 흔한 건 맨 앞의 L7 로드 밸런서나 CDN에서 풀고 뒤쪽은 평문 HTTP로 보내는 방식이다. 인증서를 한곳에서 관리하고, 그 자리에서 WAF와 경로 라우팅을 할 수 있다. 대신 로드 밸런서와 앱 사이는 평문이라, 같은 망 안이라도 암호화가 필요한 규정이 있으면 뒤쪽에서 다시 TLS로 감싼다(재암호화). 앱은 원래 요청이 HTTPS였는지 모르니 `X-Forwarded-Proto`를 보고 판단해야 한다. 이걸 놓치면 HTTPS로 들어온 요청을 앱이 HTTP라고 생각해서 HTTPS로 리다이렉트하고, 다시 들어온 요청에 또 리다이렉트하는 무한 루프가 생긴다.
+
+TLS를 앱까지 그대로 통과시키는(passthrough) 방식은 앞단이 L4로만 일한다. 인증서와 개인 키가 앱 쪽에만 있고, 서버끼리 클라이언트 인증서로 서로 확인하는 mTLS를 앱이 직접 할 수 있다. 대신 앞단에서는 경로로 나누거나 WAF를 걸 수 없다.
+
+어디서 풀었는지에 따라 인증서 오류를 보는 곳도 달라진다. 브라우저가 받는 인증서는 TLS를 푼 맨 앞 장비의 인증서다. 앱 서버의 인증서를 갱신했는데 브라우저 경고가 그대로라면 엉뚱한 곳을 갱신한 것이다. 어느 장비가 어떤 인증서를 내미는지는 `openssl s_client`로 확인한다.
+
+```bash
+# 이 주소에서 TLS를 받는 쪽이 내미는 인증서의 이름, 발급자, 만료일을 본다
+openssl s_client -connect shop.lab.test:443 -servername shop.lab.test </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+```
+
+```text
+subject=CN = shop.lab.test
+issuer=CN = Lab Root CA
+notBefore=Oct 18 05:26:24 2026 GMT
+notAfter=Jan 16 05:26:24 2027 GMT
+X509v3 Subject Alternative Name: 
+    DNS:shop.lab.test
+```
+
+TLS 자체의 동작과 인증서 오류 종류는 [HTTPS 글](/posts/https-tls)에, TLS가 계층 모델에서 어디쯤인지는 [세션·표현·응용 계층 글](/posts/upper-layers-session-presentation-app)에 있다.
+
+## 타임아웃은 안쪽으로 갈수록 짧게
+
+요청 하나가 클라이언트 → 로드 밸런서 → 프록시 → 앱 → DB를 지나면, 층과 구간마다 타임아웃이 하나씩 있다. 이 값들의 순서가 어긋나면 이상한 장애가 난다.
+
+원칙은 안쪽이 더 짧아야 한다는 것이다. 앱의 DB 쿼리 타임아웃이 프록시의 `proxy_read_timeout`(nginx 기본 60초)보다 길면, 프록시는 504를 돌려주고 포기했는데 앱은 계속 쿼리를 돌린다. 사용자는 다시 누르고, 같은 일이 DB에 하나 더 쌓인다. 안쪽이 먼저 포기해야 앱이 깔끔한 오류 응답을 만들고, 바깥은 그 응답을 그대로 전달한다.
+
+keep-alive는 반대다. 앞에서 본 것처럼 앱의 keep-alive가 로드 밸런서의 idle timeout보다 길어야 한다. 연결을 끊는 일은 재사용하는 쪽(바깥)이 먼저 해야 안전하다.
+
+connect 타임아웃은 따로 짧게 잡는다. 같은 데이터센터 안이라면 연결은 밀리초 단위로 맺어지니 1~3초면 충분하다. 이 값을 따로 두지 않으면 죽은 주소 하나에 커널 기본 재전송(리눅스에서 2분이 넘는다)만큼 묶인다. 이 숫자가 어디서 나오는지는 [TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)에서 직접 쟀다.
+
+## 클라우드 제품 이름을 층으로 읽는다
+
+클라우드 제품 설명서는 대개 첫 문단에 층을 밝힌다. 그 한 단어로 그 제품이 무엇을 볼 수 있고 무엇을 못 하는지가 거의 정해진다. AWS를 예로 들면 이렇다.
+
+- Route 53은 DNS다. 장애 조치(failover)를 DNS 응답을 바꾸는 방식으로 하니 TTL만큼 늦게 반영된다.
+- CloudFront와 AWS WAF는 L7이다. 경로별 캐시, 헤더 검사, 지역 차단을 한다.
+- ALB는 L7 로드 밸런서다. 경로·Host 라우팅, 502·503·504를 직접 만든다.
+- NLB는 L4 로드 밸런서다. TCP·UDP를 받고, TLS 리스너를 두면 TLS까지만 푼다. 고정 IP를 줄 수 있어서 상대가 IP로 방화벽을 열어야 할 때 쓴다.
+- Gateway Load Balancer는 L3다. 패킷을 통째로 방화벽 장비에 넘긴다.
+- 보안 그룹은 상태를 추적하는 L4 필터, NACL은 상태가 없는 L3·L4 필터, 라우트 테이블은 L3다.
+
+다른 곳도 이름만 다르다. GCP는 Application Load Balancer(L7)와 Network Load Balancer(L4)로, Azure는 Application Gateway(L7)와 Load Balancer(L4)로 나눈다. 쿠버네티스에서는 Service가 L4(kube-proxy가 만드는 NAT 규칙, [iptables NAT 글](/posts/iptables-nat) 참고), Ingress와 Gateway API가 L7이다([Ingress 글](/posts/kubernetes-ingress), [게이트웨이 글](/posts/gateway)). 서비스 메시의 사이드카 프록시는 L7이라 재시도와 mTLS를 앱 대신 한다.
+
+새 제품을 처음 볼 때 "이건 몇 층 제품인가"부터 물으면 질문이 빨라진다. L4 제품에 "경로별로 나눠 주세요"를 요구하거나, L7 제품에 "원래 클라이언트 IP를 출발지 주소로 그대로 받고 싶다"고 요구하는 실수를 피할 수 있다.
+
+## 네트워크 탓이라고 말하기 전에 모을 것
+
+처음 장면으로 돌아가자. "네트워크 문제 같다"는 말을 증거가 있는 문장으로 바꾸려면 다음을 모은다.
+
+- 언제, 어디서 실행했나: 시각(초 단위), 명령을 친 호스트(내 노트북인지, 서버인지, 컨테이너 안인지). 같은 명령도 어디서 치느냐에 따라 지나는 층이 다르다.
+- 무엇에서 무엇으로: 출발지 IP와 목적지 IP·포트, 가능하면 출발지 포트까지(5-tuple). 로드 밸런서 뒤라면 앞쪽 연결인지 뒤쪽 연결인지.
+- 메시지 원문: `curl: (28)`인지 `(7)`인지, errno 숫자까지 그대로. "안 돼요"로 요약하지 않는다.
+- 몇 층까지 됐나: `curl -w`로 DNS·연결·TLS·첫 바이트 시간을 나눠 보면 어느 단계가 실패했거나 느린지 숫자로 나온다.
+- 패킷 증거: 내 쪽에서 SYN이 나갔는지, 상대 쪽에 SYN이 도착했는지. 양쪽에서 `tcpdump`를 찍으면 "보냈는데 안 왔다"를 증명할 수 있다.
+
+이 순서를 명령과 출력으로 풀어 쓴 건 [계층별 장애 좁히기 글](/posts/network-troubleshooting-by-layer)이고, 패킷 증거를 찍고 읽는 법은 [tcpdump 글](/posts/packet-capture-tcpdump)이다.
+
+연습 삼아 메시지 한 줄을 받아 의심할 층을 돌려주는 함수를 짜 보자. 위에서 모은 실제 메시지들이 테스트다. 검사 순서가 중요하다. TLS 메시지 안에도 다른 단어가 섞일 수 있어서, 더 높은 층의 신호부터 확인하는 게 안전하다.
+
+<CodePlayground
+  caption="에러 메시지 한 줄로 의심할 층 고르기"
+  functionName="guessLayer"
+  initialCode={`// message: curl, nc, 응답 첫 줄에서 나온 메시지
+// 반환: "DNS", "TLS", "L2·L3", "L4", "L7" 중 하나 (모르면 "모름")
+function guessLayer(message) {
+  return "모름";
+}`}
+  solution={`function guessLayer(message) {
+  if (/Could not resolve host|NXDOMAIN|SERVFAIL|Name or service not known/i.test(message)) return "DNS";
+  if (/SSL|certificate|TLS|wrong version number/i.test(message)) return "TLS";
+  if (/Network is unreachable|No route to host/i.test(message)) return "L2·L3";
+  if (/Connection refused|Connection reset|timed out|Timeout was reached/i.test(message)) return "L4";
+  if (/HTTP\\/[\\d.]+ \\d{3}/.test(message)) return "L7";
+  return "모름";
+}`}
+  tests={[
+    { args: ["curl: (6) Could not resolve host: shopp.lab.test"], expected: "DNS", label: "이름 오타" },
+    { args: ["nc: connect to 10.11.2.20 port 8080 (tcp) failed: Connection refused"], expected: "L4", label: "듣는 프로그램 없음" },
+    { args: ["nc: connect to 10.11.2.77 port 80 (tcp) failed: No route to host"], expected: "L2·L3", label: "주인 없는 주소" },
+    { args: ["curl: (60) SSL certificate problem: certificate has expired"], expected: "TLS", label: "만료된 인증서" },
+    { args: ["curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number"], expected: "TLS", label: "HTTP 포트에 TLS" },
+    { args: ["HTTP/1.1 502 Bad Gateway"], expected: "L7", label: "프록시가 만든 502" },
+    { args: ["curl: (56) Recv failure: Connection reset by peer"], expected: "L4", label: "도중 RST" },
+    { args: ["curl: (28) Failed to connect to shop.lab.test port 8443 after 5002 ms: Timeout was reached"], expected: "L4", label: "DROP" },
+  ]}
+/>
+
+함수가 "L4"라고 답한 timeout도 실제로는 L3 경로 문제일 수 있다. 메시지 한 줄로는 후보를 좁힐 뿐이고, 정하는 건 다음 명령이다.
+
+## 층 번호는 질문을 좁히는 말이다
+
+계층 모델을 현장에서 안다는 건 일곱 층의 이름을 외우는 게 아니다. 메시지를 보고 어느 층이 그 말을 했는지 알아보고, 그 아래는 이미 정상이라는 걸 이용해 확인할 범위를 줄이는 일이다. 설계에서는 로드 밸런서, 방화벽, 헬스 체크, TLS 종단, 타임아웃이 각각 몇 층에서 일하는지 알면 그 장비가 할 수 있는 것과 없는 것이 바로 보인다. 다음 글에서는 이 감각을 실제 순서로 옮겨, 아래층부터 하나씩 확인하는 장애 대응 순서를 명령과 출력으로 따라간다.
+
+## 면접에서 나올 만한 질문
+
+### Connection refused와 Connection timed out은 어떻게 다른가요?
+
+refused는 상대 쪽에서 바로 거절 답이 온 것이고, timed out은 아무 답도 오지 않아 기다리다 끝난 것이다. refused는 패킷이 상대 커널까지 갔다 왔으니 경로는 정상이고, 그 포트에 듣는 프로그램이 없거나 방화벽이 REJECT로 답한 경우다. timed out은 중간 방화벽의 DROP, 보안 그룹, 경로 문제, 꺼진 호스트를 의심한다. 그래서 refused면 서버의 `ss -ltnp`를, timeout이면 경로와 필터를 먼저 본다.
+
+### L4 로드 밸런서와 L7 로드 밸런서는 언제 각각 쓰나요?
+
+L4는 TCP·UDP 연결 단위로 나누고 내용을 읽지 않아 빠르고 프로토콜을 가리지 않는다. DB나 게임 서버, 고정 IP가 필요할 때, TLS를 앱까지 그대로 넘기고 싶을 때 쓴다. L7은 연결을 종단하고 요청 단위로 읽어서 경로·헤더 라우팅, 재시도, WAF, 요청 단위 분산이 필요할 때 쓴다. gRPC처럼 연결 하나에 요청을 몰아 보내는 트래픽은 L4에서는 한 서버로 쏠리니 L7이 맞다.
+
+### 앱 로그는 깨끗한데 사용자는 502를 받습니다. 어디부터 보나요?
+
+502는 앞단 프록시나 로드 밸런서가 뒤쪽에서 쓸 만한 응답을 못 받았을 때 직접 만드는 응답이라, 앱 로그가 아니라 프록시 로그를 본다. error 로그의 errno로 연결 거부(111), 응답 도중 리셋(104), 타임아웃(110)을 가른다. 트래픽이 적을 때 드문드문 난다면 앱의 keep-alive가 로드 밸런서 idle timeout보다 짧아서 생기는 경쟁을 의심한다. 배포 시점과 겹치면 옛 프로세스가 내려가고 새 프로세스가 뜨기 전의 틈을 의심한다.
+
+### 보안 그룹과 NACL, WAF는 무엇이 다른가요?
+
+보안 그룹은 인스턴스나 네트워크 인터페이스에 붙는 L4 필터로 상태를 추적해서 응답 트래픽을 따로 열 필요가 없다. NACL은 서브넷 단위의 무상태 필터라 응답이 나가는 임시 포트까지 열어야 하고, 거부 규칙도 쓸 수 있다. WAF는 L7에서 요청 내용을 읽고 공격 패턴이나 과한 요청을 막는다. 앞의 둘에 막히면 timeout, WAF에 막히면 403 같은 HTTP 응답으로 나타난다.
+
+### 헬스 체크를 TCP로만 하면 무엇이 문제인가요?
+
+TCP 헬스 체크는 포트가 열려 있는지만 보는데, 연결은 앱이 아니라 커널이 맺어 주기 때문에 앱이 멈춰 있어도 통과할 수 있다. HTTP 헬스 체크로 앱이 실제로 요청을 처리하는지 확인하는 게 낫다. 다만 DB 같은 공유 의존성까지 넣으면 그 의존성이 잠깐 흔들릴 때 모든 서버가 한꺼번에 빠진다. 그래서 트래픽을 받을지와 재시작할지를 나눠서 묻고, 재시작 기준은 프로세스 자체의 상태로만 잡는다.
+
+### TLS를 로드 밸런서에서 끝내면 무엇이 달라지나요?
+
+로드 밸런서가 HTTP를 읽을 수 있게 되어 경로 라우팅, WAF, 헤더 추가가 가능해지고 인증서를 한곳에서 관리한다. 대신 앱은 원래 요청이 HTTPS였는지와 클라이언트 IP를 `X-Forwarded-Proto`, `X-Forwarded-For`로만 알 수 있고, 이걸 안 보면 리다이렉트 루프나 잘못된 IP 기록이 생긴다. 뒤쪽 구간도 암호화가 필요하면 다시 TLS로 감싸고, 앱이 직접 클라이언트 인증서를 확인해야 하면 passthrough로 L4에서 넘긴다.
+
+### 프록시와 앱, DB의 타임아웃은 어떤 순서로 잡나요?
+
+안쪽일수록 짧게 잡는다. DB 쿼리 타임아웃이 앱의 요청 타임아웃보다, 앱의 처리 시간이 프록시의 읽기 타임아웃보다 짧아야 안쪽이 먼저 포기하고 정상적인 오류 응답을 만든다. 순서가 뒤집히면 바깥은 504로 포기했는데 안쪽은 계속 일을 하고, 재시도가 겹치며 부하가 늘어난다. keep-alive는 반대로 앱이 로드 밸런서보다 길게 유지해야 재사용 중인 연결을 앱이 먼저 끊지 않는다.

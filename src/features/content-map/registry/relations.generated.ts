@@ -2,6 +2,76 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "packet-capture-tcpdump": {
+    "links": [
+      "network-troubleshooting-by-layer",
+      "layer-link-ethernet-arp",
+      "tcp-connection-lifecycle",
+      "network-layers-overview",
+      "iptables-nat",
+      "https-tls",
+      "osi-in-practice"
+    ],
+    "mentions": [
+      "nginx-reverse-proxy",
+      "docker-container-basics",
+      "ports-and-sockets",
+      "what-happens-google-com",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "network-troubleshooting-by-layer": {
+    "links": [
+      "osi-in-practice",
+      "docker-network-volume",
+      "layer-link-ethernet-arp",
+      "layer-ip-addressing",
+      "layer-ip-routing-icmp",
+      "layer-mtu-fragmentation",
+      "hosts-file",
+      "ports-and-sockets",
+      "packet-capture-tcpdump",
+      "iptables-basics",
+      "https-tls",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "docker-container-basics",
+      "http-status-codes",
+      "dns"
+    ]
+  },
+  "osi-in-practice": {
+    "links": [
+      "network-layers-overview",
+      "http-status-codes",
+      "nginx-reverse-proxy",
+      "iptables-basics",
+      "dns",
+      "layer-link-ethernet-arp",
+      "proxy-reverse-proxy",
+      "tcp-connection-lifecycle",
+      "ports-and-sockets",
+      "resilience-patterns",
+      "https-tls",
+      "upper-layers-session-presentation-app",
+      "iptables-nat",
+      "kubernetes-ingress",
+      "gateway",
+      "network-troubleshooting-by-layer",
+      "packet-capture-tcpdump"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "realtime-communication",
+      "http-versions",
+      "what-happens-google-com",
+      "layer-ip-routing-icmp",
+      "udp-and-quic"
+    ]
+  },
   "db-keys-denormalization": {
     "links": [
       "db-modeling-normalization",
@@ -125,7 +195,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-layers-overview",
       "ports-and-sockets",
       "layer-mtu-fragmentation",
-      "tcp-reliability-congestion"
+      "tcp-reliability-congestion",
+      "packet-capture-tcpdump"
     ],
     "mentions": [
       "what-happens-google-com",
@@ -138,11 +209,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "tcp-connection-lifecycle",
       "http-versions",
+      "network-troubleshooting-by-layer",
       "layer-mtu-fragmentation",
       "udp-and-quic"
     ],
     "mentions": [
       "iptables-basics",
+      "packet-capture-tcpdump",
       "redis-basics",
       "layer-ip-routing-icmp"
     ]
@@ -159,6 +232,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "iptables-basics",
+      "packet-capture-tcpdump",
       "https-tls",
       "layer-ip-routing-icmp"
     ]
@@ -169,6 +243,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume",
       "iptables-nat",
       "udp-and-quic",
+      "network-troubleshooting-by-layer",
       "upper-layers-session-presentation-app"
     ],
     "mentions": [
@@ -189,10 +264,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "json-crud-http",
       "base64",
+      "osi-in-practice",
       "http-message",
-      "dns"
+      "dns",
+      "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "packet-capture-tcpdump",
       "http-versions",
       "what-happens-google-com",
       "http-caching-cdn",
@@ -207,8 +285,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ports-and-sockets",
       "upper-layers-session-presentation-app",
       "iptables-nat",
+      "osi-in-practice",
       "http-status-codes",
       "nginx-reverse-proxy",
+      "network-troubleshooting-by-layer",
+      "packet-capture-tcpdump",
       "layer-mtu-fragmentation",
       "tcp-connection-lifecycle",
       "tcp-reliability-congestion",
@@ -272,6 +353,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-routing-icmp",
       "network-layers-overview",
       "iptables-basics",
+      "packet-capture-tcpdump",
+      "network-troubleshooting-by-layer",
       "tcp-connection-lifecycle"
     ],
     "mentions": [
@@ -591,22 +674,23 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "git-internals-basics": {
     "links": [
       "git-branch-merge",
-      "git-remote-collaboration",
-      "git-undo"
+      "git-troubleshooting"
     ],
     "mentions": [
-      "git-tips-advanced"
+      "git-tips-advanced",
+      "git-branching-strategy",
+      "git-undo"
     ]
   },
   "git-branch-merge": {
     "links": [
       "git-internals-basics",
-      "git-undo",
       "git-branching-strategy",
-      "git-remote-collaboration",
-      "git-rebase"
+      "git-remote-collaboration"
     ],
-    "mentions": []
+    "mentions": [
+      "git-undo"
+    ]
   },
   "git-rebase": {
     "links": [
@@ -622,12 +706,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "git-undo": {
     "links": [
-      "git-internals-basics",
       "git-troubleshooting"
     ],
     "mentions": [
       "git-branch-merge",
-      "git-tips-advanced"
+      "git-internals-basics"
     ]
   },
   "git-remote-collaboration": {
@@ -659,12 +742,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-undo",
       "git-rebase",
       "git-remote-collaboration",
-      "git-tips-advanced",
-      "git-internals-basics"
+      "git-tips-advanced"
     ],
     "mentions": [
       "git-branch-merge",
-      "db-modeling-normalization"
+      "git-internals-basics"
     ]
   },
   "git-tips-advanced": {
@@ -901,6 +983,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "tcp-connection-lifecycle",
       "browser-fetch",
+      "osi-in-practice",
       "redis-basics",
       "resilience-patterns",
       "what-happens-google-com",
@@ -952,6 +1035,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "docker-container-basics",
+      "osi-in-practice",
       "iptables-basics",
       "http-versions",
       "ports-and-sockets",
@@ -1141,6 +1225,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "osi-in-practice",
+      "packet-capture-tcpdump",
       "proxy-reverse-proxy",
       "http-versions",
       "sql-batch-timeout-pool",
@@ -1420,6 +1506,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "osi-in-practice",
       "sql-batch-timeout-pool",
       "http-methods"
     ]
@@ -1453,6 +1540,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "iptables-nat",
+      "osi-in-practice",
       "docker-container-basics",
       "https-tls",
       "http-status-codes",
@@ -1466,6 +1554,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",
       "token-login",

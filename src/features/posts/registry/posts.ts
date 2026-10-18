@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "packet-capture-tcpdump",
+    title: "tcpdump로 계층을 눈으로 보기",
+    summary: "curl 한 번을 찍어 ARP, DNS, TCP, HTTP가 층별로 지나가는 것을 보고, 필터와 -A·-X·-w 옵션, Wireshark, 컨테이너 안 캡처까지 다룬다. refused, timeout, reset, 502를 패킷 모양으로 가르는 법과 캡처할 때의 개인정보 주의점도 짚는다.",
+    topic: "programming/in-practice",
+    tags: ["Network", "Linux", "Troubleshooting", "TCP/IP"],
+    date: "2026-10-18",
+    keywords: ["tcpdump", "패킷 캡처", "Wireshark", "pcap"],
+  },
+  {
+    slug: "network-troubleshooting-by-layer",
+    title: "계층별로 장애 좁히기: 아래에서 위로",
+    summary: "접속이 안 된다는 한 줄을 curl -v로 좁힌 뒤 링크, 경로, 이웃, 경로 끝, 이름, 포트, TLS, HTTP 순서로 확인한다. 칸마다 칠 명령과 출력에서 볼 곳, 흔한 오해를 실제 출력으로 정리한다.",
+    topic: "programming/in-practice",
+    tags: ["Network", "Linux", "Troubleshooting", "TCP/IP"],
+    date: "2026-10-18",
+    keywords: ["장애 좁히기", "mtr", "tracepath", "openssl s_client"],
+  },
+  {
+    slug: "osi-in-practice",
+    title: "OSI 7계층을 알면 현장에서 무엇이 달라지나",
+    summary: "에러 메시지가 어느 층에서 나왔는지 읽는 법과, 같은 메시지가 다른 층에서 나오는 함정을 실습 망의 실제 출력으로 본다. 로드 밸런서, 방화벽, 헬스 체크, TLS 종단, 타임아웃을 층으로 나눠 고르는 법도 다룬다.",
+    topic: "programming/in-practice",
+    tags: ["Network", "TCP/IP", "Troubleshooting", "DevOps"],
+    date: "2026-10-18",
+    keywords: ["L4 로드 밸런서", "L7 로드 밸런서", "헬스 체크"],
+  },
+  {
     slug: "db-keys-denormalization",
     title: "키와 반정규화: 대리 키, UUID, 일부러 다시 합치기",
     summary: "정규화한 테이블에서 자연 키와 대리 키, UUIDv4와 v7을 인덱스 크기로 비교하고, 주문 당시 가격이 중복이 아닌 이유를 본다. 트리거와 머티리얼라이즈드 뷰로 하는 반정규화, jsonb 열의 경계, EAV·쉼표 목록·소프트 삭제 같은 흔한 설계 실수도 정리한다.",
