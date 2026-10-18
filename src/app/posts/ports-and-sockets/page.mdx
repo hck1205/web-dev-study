@@ -1,0 +1,493 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ports-and-sockets");
+
+노트북에서 `flask run`으로 띄운 API가 브라우저에서 잘 열린다. 같은 코드를 서버에 올리고 다른 컴퓨터에서 접속하니 `Connection refused`가 난다. 방화벽도 열었고 프로세스도 떠 있다. Docker 컨테이너에 넣고 `-p 5000:5000`으로 띄우면 이번엔 `Connection reset by peer`가 나온다. 코드는 한 줄도 안 바꿨다. 원인은 앱이 어느 주소의 어느 포트에서 듣고 있느냐, 딱 한 가지다.
+
+패킷은 IP 주소로 컴퓨터까지 찾아온다. 그런데 컴퓨터 안에는 웹 서버, DB, SSH 데몬이 함께 돌고 있다. 그중 누구에게 넘길지 정하는 마지막 주소가 포트이고, 포트를 붙잡고 있는 커널의 메모가 소켓이다. 이 글은 연결 하나를 가르는 다섯 값, 듣는 소켓과 연결된 소켓의 차이, 커널이 패킷을 소켓에 넘기는 순서, `0.0.0.0`과 `127.0.0.1`의 차이, `Address already in use`와 `SO_REUSEADDR`, 임시 포트가 바닥나는 순간, 그리고 소켓이 파일이라는 사실까지 본다. TCP 연결의 상태 이야기는 [TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)에 있다.
+
+기준은 Ubuntu 24.04다. 출력은 Ubuntu 24.04 컨테이너(eth0 주소 `192.0.2.2`)에서 Python으로 서버를 띄워 직접 찍었다.
+
+## IP가 건물 주소라면 포트는 호수다
+
+이 글에서는 비유를 하나만 쓴다. IP 주소가 건물 주소라면 포트는 그 건물의 호수다. 택배(패킷)는 건물 주소로 건물 앞까지 오고, 관리실(커널)이 호수를 보고 해당 집(프로세스)에 넣어 준다. 같은 건물에 사는 집들은 호수가 달라야 하고, 비어 있는 호수로 온 택배는 돌려보낸다.
+
+포트는 16비트 숫자라 0부터 65535까지다. IANA는 이 범위를 셋으로 나눠 둔다. 0~1023은 시스템 포트(22 SSH, 53 DNS, 80 HTTP, 443 HTTPS), 1024~49151은 등록 포트(5432 PostgreSQL, 6379 Redis 같은 것), 49152~65535는 동적 포트다. 리눅스는 이 구분과 조금 다르게, 접속할 때 자동으로 고르는 임시 포트 범위를 따로 둔다.
+
+```bash
+# 커널이 접속용으로 골라 쓰는 임시 포트 범위
+sysctl net.ipv4.ip_local_port_range
+
+# 이 번호보다 작은 포트에서 들으려면 root 권한(CAP_NET_BIND_SERVICE)이 필요하다
+sysctl net.ipv4.ip_unprivileged_port_start
+```
+
+```text
+net.ipv4.ip_local_port_range = 32768	60999
+net.ipv4.ip_unprivileged_port_start = 1024
+```
+
+임시 포트는 32768~60999, 28232개다. 1024보다 작은 포트는 일반 사용자 프로세스가 들을 수 없어서, Node 앱을 80번에서 바로 띄우면 `EACCES: permission denied`가 난다. 보통은 앱을 3000번 같은 높은 포트에 두고 앞에 nginx를 세우거나, systemd 서비스에 `AmbientCapabilities=CAP_NET_BIND_SERVICE`를 준다. Docker 20.10부터는 컨테이너 안의 이 값을 0으로 설정해서, 컨테이너 안에서는 root가 아니어도 80번에서 들을 수 있다.
+
+TCP와 UDP의 포트는 서로 다른 번호표다. TCP 53과 UDP 53은 다른 호수라서, DNS 서버는 둘 다 따로 열어야 하고 방화벽도 따로 열어야 한다.
+
+## 연결 하나를 가르는 다섯 값
+
+관리실이 택배를 어느 집에 넣을지 정할 때 보는 값은 다섯 개다. 프로토콜(TCP인지 UDP인지), 출발지 IP, 출발지 포트, 목적지 IP, 목적지 포트. 이걸 5-tuple이라고 부른다. 다섯 값 중 하나라도 다르면 다른 연결이다.
+
+그래서 서버가 443번 하나로 수만 명을 받을 수 있다. 모든 연결의 목적지 IP와 포트는 같지만, 클라이언트마다 출발지 IP나 출발지 포트가 다르다. 같은 노트북에서 브라우저 탭 열 개가 같은 서버에 붙어도 탭마다 임시 포트가 달라서 열 개의 연결이 된다.
+
+로컬 HTTP 서버에 `nc`로 연결을 하나 붙여 두고 `ss`로 봤다.
+
+```bash
+# 8000번 포트와 관련된 TCP 소켓 전부, 프로세스까지(-p)
+sudo ss -tanp '( sport = :8000 or dport = :8000 )'
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+LISTEN 0      5          127.0.0.1:8000       0.0.0.0:*     users:(("python3",pid=3323,fd=3))
+ESTAB  0      0          127.0.0.1:37114    127.0.0.1:8000  users:(("nc",pid=5217,fd=3))
+ESTAB  0      0          127.0.0.1:8000     127.0.0.1:37114 users:(("python3",pid=3323,fd=4))
+```
+
+같은 연결이 두 줄로 보인다. 둘째 줄은 클라이언트(`nc`) 쪽 소켓이고 셋째 줄은 서버(`python3`) 쪽 소켓이다. 한 컴퓨터 안에서 양쪽을 다 띄워서 그렇다. 셋째 줄을 조각으로 나눠 보자.
+
+<UrlAnatomy
+  caption="ss -tanp 한 줄 뜯어보기"
+  base="ss -tanp"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "state",
+      display: "ESTAB",
+      title: "TCP 상태",
+      description: "연결이 맺어져 데이터를 주고받을 수 있는 상태다. 듣는 소켓은 LISTEN, UDP는 UNCONN으로 보인다.",
+      required: true,
+    },
+    {
+      key: "q",
+      display: "0 0",
+      title: "Recv-Q, Send-Q",
+      description: "앱이 아직 안 읽은 바이트와, 보냈지만 확인받지 못한 바이트다. LISTEN 줄에서는 accept 큐의 현재 길이와 최대 길이를 뜻한다.",
+    },
+    {
+      key: "local",
+      display: "127.0.0.1:8000",
+      title: "내 쪽 주소와 포트",
+      description: "서버 소켓이라 듣는 포트 8000이 그대로 찍힌다. accept()로 생긴 연결 소켓도 듣는 소켓과 같은 로컬 포트를 쓴다.",
+      required: true,
+    },
+    {
+      key: "peer",
+      display: "127.0.0.1:37114",
+      title: "상대 주소와 포트",
+      description: "클라이언트의 IP와, 클라이언트 커널이 임시 포트 범위에서 고른 37114다. 이 값이 다르면 다른 연결이다.",
+      required: true,
+    },
+    {
+      key: "proc",
+      display: "users:((\"python3\",pid=3323,fd=4))",
+      title: "소켓을 쥔 프로세스",
+      description: "프로세스 이름, pid, 그리고 그 프로세스 안에서의 파일 디스크립터 번호다. 남의 프로세스는 sudo로 봐야 보인다.",
+      code: "fd=3  듣는 소켓\nfd=4  accept()로 받은 연결 소켓",
+    },
+  ]}
+/>
+
+같은 `python3`(pid 3323)가 fd 3과 fd 4 두 개를 쥐고 있다. fd 3은 LISTEN 소켓, fd 4는 이 연결 하나만을 위한 소켓이다. 둘 다 로컬 포트가 8000이다. 포트 하나에 소켓이 여러 개 붙을 수 있다는 게 여기서 보인다.
+
+## 듣는 소켓과 연결된 소켓
+
+서버와 클라이언트가 소켓을 만드는 순서를 시스템 호출로 따라가 보자.
+
+<SequenceDiagram
+  caption="소켓 API 호출과 그때 커널이 하는 일"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "k", label: "서버 커널" },
+    { id: "s", label: "서버 앱" },
+  ]}
+  steps={[
+    {
+      from: "s",
+      to: "k",
+      label: "socket() bind()",
+      title: "번호표를 받는다",
+      detail: "socket()으로 소켓을 만들고 bind()로 어느 주소의 몇 번 포트를 쓸지 정한다. 이미 누가 쓰는 조합이면 여기서 Address already in use가 난다.",
+      payload: "bind(fd=3, 0.0.0.0:8000)",
+    },
+    {
+      from: "s",
+      to: "k",
+      label: "listen(511)",
+      title: "듣기 시작한다",
+      detail: "이 소켓이 LISTEN 상태가 된다. 이제 커널이 이 포트로 오는 SYN에 대신 답하고, 완성된 연결을 accept 큐에 세운다.",
+    },
+    {
+      from: "c",
+      to: "k",
+      label: "connect()",
+      title: "클라이언트는 bind 없이 접속한다",
+      detail: "클라이언트는 보통 bind()를 부르지 않는다. connect()를 부르면 클라이언트 커널이 임시 포트 범위에서 비어 있는 번호를 골라 출발지 포트로 쓴다.",
+      payload: "src 192.0.2.50:41234 → dst 192.0.2.2:8000",
+    },
+    {
+      from: "k",
+      to: "k",
+      label: "새 소켓 생성",
+      title: "연결마다 소켓이 하나 생긴다",
+      detail: "핸드셰이크가 끝나면 커널은 듣는 소켓과 별개로 이 연결만을 위한 소켓을 만든다. 다섯 값이 모두 채워진 소켓이다.",
+    },
+    {
+      from: "k",
+      to: "s",
+      label: "accept() → fd 4",
+      title: "앱이 연결을 꺼내 간다",
+      detail: "accept()는 새 소켓의 fd를 돌려준다. 앱은 이 fd로 읽고 쓰고, 듣는 소켓 fd 3은 계속 다음 연결을 받는다. 연결이 만 개면 fd도 만 개다.",
+      payload: "accept(fd=3) = 4",
+    },
+  ]}
+/>
+
+이 구조를 알면 흔한 질문 하나가 풀린다. "포트가 65535개뿐이니 서버는 동시 접속을 65535개까지만 받는가?" 아니다. 서버 쪽 연결 소켓은 모두 같은 로컬 포트를 쓰고, 연결을 가르는 건 상대 쪽 주소와 포트다. 서버의 동시 접속 한도를 정하는 건 포트 수가 아니라 메모리와 fd 한도다. 포트 수가 한도가 되는 건 반대쪽, 한 목적지로 접속을 많이 여는 클라이언트다. 뒤에서 본다.
+
+## 커널이 패킷을 소켓에 넘기는 순서
+
+TCP 패킷이 도착하면 커널은 두 단계로 소켓을 찾는다. 먼저 다섯 값이 모두 맞는 연결된 소켓을 찾는다. 이미 맺어진 연결의 패킷이면 여기서 끝난다. 없으면 듣는 소켓을 찾는다. 목적지 포트가 같고, 목적지 IP가 소켓의 주소와 정확히 같거나 소켓이 `0.0.0.0`(모든 주소)에서 듣고 있으면 맞는다. 정확한 주소가 와일드카드보다 먼저다. 그래도 없으면 TCP는 RST, UDP는 ICMP port unreachable로 돌려보낸다.
+
+아래 함수는 소켓 표와 들어온 패킷을 받아, 패킷을 받을 소켓의 인덱스를 돌려준다. 맞는 소켓이 없으면 `-1`이다. 주소는 `"IP:포트"` 문자열이다. 테스트에 쓰는 표는 이렇다.
+
+```text
+0  LISTEN  0.0.0.0:80
+1  LISTEN  127.0.0.1:5432
+2  ESTAB   10.0.0.5:80  ↔ 203.0.113.7:51514
+3  LISTEN  10.0.0.5:8080
+```
+
+<CodePlayground
+  caption="패킷을 받을 소켓 찾기"
+  functionName="findSocket"
+  initialCode={`function findSocket(sockets, packet) {
+  // sockets: [{ state: "LISTEN" | "ESTAB", local: "IP:포트", remote?: "IP:포트" }]
+  // packet: { src: "IP:포트", dst: "IP:포트" }
+  // 1) ESTAB 중 local === dst, remote === src 인 것
+  // 2) LISTEN 중 포트가 같고 IP가 같은 것, 없으면 0.0.0.0인 것
+  return -1;
+}`}
+  solution={`function findSocket(sockets, packet) {
+  for (let i = 0; i < sockets.length; i++) {
+    const s = sockets[i];
+    if (s.state === "ESTAB" && s.local === packet.dst && s.remote === packet.src) return i;
+  }
+  const [dstIp, dstPort] = packet.dst.split(":");
+  let wildcard = -1;
+  for (let i = 0; i < sockets.length; i++) {
+    const s = sockets[i];
+    if (s.state !== "LISTEN") continue;
+    const [ip, port] = s.local.split(":");
+    if (port !== dstPort) continue;
+    if (ip === dstIp) return i;
+    if (ip === "0.0.0.0" && wildcard === -1) wildcard = i;
+  }
+  return wildcard;
+}`}
+  tests={[
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "203.0.113.7:51514", dst: "10.0.0.5:80" }], expected: 2, label: "맺어진 연결의 패킷" },
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "203.0.113.7:51515", dst: "10.0.0.5:80" }], expected: 0, label: "같은 손님, 다른 포트 → 새 연결" },
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "10.0.0.9:40000", dst: "10.0.0.5:5432" }], expected: -1, label: "127.0.0.1에서만 듣는 DB에 밖에서 접속" },
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "127.0.0.1:40000", dst: "127.0.0.1:5432" }], expected: 1, label: "같은 서버 안에서 DB 접속" },
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "127.0.0.1:40001", dst: "127.0.0.1:8080" }], expected: -1, label: "10.0.0.5에서만 듣는 포트에 localhost로" },
+    { args: [[{ state: "LISTEN", local: "0.0.0.0:80" }, { state: "LISTEN", local: "127.0.0.1:5432" }, { state: "ESTAB", local: "10.0.0.5:80", remote: "203.0.113.7:51514" }, { state: "LISTEN", local: "10.0.0.5:8080" }], { src: "10.0.0.9:40000", dst: "10.0.0.5:8080" }], expected: 3 },
+  ]}
+/>
+
+세 번째 테스트가 이 글 처음의 증상이다. DB가 `127.0.0.1`에서만 들으면 같은 서버 안에서는 붙지만, 밖에서 `10.0.0.5:5432`로 온 SYN에는 맞는 소켓이 없어 RST가 돌아간다.
+
+## 어느 주소에서 들을 것인가
+
+`bind()`에 주는 주소는 "어느 문으로 들어온 손님을 받을지"다. `127.0.0.1`은 루프백, 즉 같은 컴퓨터 안에서 오는 연결만 받는다. `0.0.0.0`은 이 컴퓨터의 모든 IPv4 주소로 오는 연결을 받는다. `192.0.2.2`처럼 특정 주소를 주면 그 주소로 온 것만 받는다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="127.0.0.1에서 듣는 소켓은 바깥 인터페이스로 온 연결을 받지 못한다"
+  nodes={[
+    { id: "ext", label: "다른 컴퓨터", sub: "→ 192.0.2.2", x: 80, y: 45, w: 120, h: 46 },
+    { id: "local", label: "같은 서버", sub: "→ 127.0.0.1", x: 320, y: 45, w: 120, h: 46 },
+    { id: "eth", label: "eth0", sub: "192.0.2.2", x: 80, y: 135, w: 110, h: 46 },
+    { id: "lo", label: "lo", sub: "127.0.0.1", x: 320, y: 135, w: 110, h: 46 },
+    { id: "any", label: "0.0.0.0:8081", sub: "모두 받음", x: 80, y: 220, w: 120, h: 46 },
+    { id: "loop", label: "127.0.0.1:8080", sub: "lo만 받음", x: 320, y: 220, w: 130, h: 46 },
+  ]}
+  edges={[
+    { from: "ext", to: "eth" },
+    { from: "local", to: "lo" },
+    { from: "eth", to: "any" },
+    { from: "lo", to: "loop" },
+    { from: "lo", to: "any", dashed: true },
+    { from: "eth", to: "loop", dashed: true, label: "RST" },
+  ]}
+/>
+
+실제로 확인했다. `127.0.0.1`에서 듣는 서버에 같은 컴퓨터의 다른 주소(`192.0.2.2`)로 접속했다.
+
+```bash
+# 루프백에서만 듣는 서버
+python3 -m http.server 8080 --bind 127.0.0.1
+
+# 듣는 주소 확인
+ss -tlnp 'sport = :8080'
+
+# 루프백으로 접속하면 된다
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/
+
+# eth0 주소로 접속하면 안 된다
+curl -sS http://192.0.2.2:8080/
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5          127.0.0.1:8080      0.0.0.0:*    users:(("python3",pid=4514,fd=3))
+200
+curl: (7) Failed to connect to 192.0.2.2 port 8080 after 0 ms: Couldn't connect to server
+```
+
+같은 컴퓨터인데도 안 된다. 패킷의 목적지가 `192.0.2.2`라 `127.0.0.1:8080` 소켓과 맞지 않기 때문이다. `--bind 0.0.0.0`으로 띄우면 `Local Address`가 `0.0.0.0:8081`로 바뀌고, 같은 `curl`이 `200`을 받았다.
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5            0.0.0.0:8081      0.0.0.0:*    users:(("python3",pid=4642,fd=3))
+200
+```
+
+개발 서버들은 안전하게 루프백을 기본값으로 잡는 경우가 많다. Flask의 `flask run`과 Django의 `runserver`는 `127.0.0.1`, Vite는 `localhost`에서 듣고, 밖에서 접속하게 하려면 각각 `--host=0.0.0.0`, `runserver 0.0.0.0:8000`, `vite --host`를 준다. 휴대폰으로 노트북의 개발 서버를 열어 보려다 안 되는 이유가 대개 이거다.
+
+### 컨테이너 안의 127.0.0.1
+
+Docker에서는 이 문제가 한 겹 더 숨는다. 컨테이너는 자기만의 네트워크 공간이 있어서, 컨테이너 안의 `127.0.0.1`은 컨테이너 자신이다. `-p 5000:5000`은 호스트로 온 연결을 컨테이너의 eth0 주소(예: `172.17.0.2:5000`)로 넘긴다. 앱이 컨테이너 안에서 `127.0.0.1:5000`에서만 듣고 있으면 그 주소로 온 연결을 받을 소켓이 없다. 호스트에서 `curl localhost:5000`을 치면 Docker의 프록시가 연결을 받았다가 뒤쪽 연결에 실패해서, 보통 `Connection reset by peer`나 `Empty reply from server`로 보인다. 컨테이너 안의 앱은 `0.0.0.0`에서 들어야 한다. 이 이야기와 컨테이너 사이의 통신은 [Docker 네트워크 글](/posts/docker-network-volume)에 자세히 있다.
+
+### 반대로, 너무 넓게 들을 때
+
+`0.0.0.0`은 편하지만 그만큼 위험하다. 이 환경의 PostgreSQL도 `ss -tlnp`에 `127.0.0.1:5432`로 떠 있었다. Ubuntu 패키지의 기본값이 `listen_addresses = 'localhost'`이기 때문이다. Redis나 Elasticsearch, 개발용 DB를 `0.0.0.0`에 열고 클라우드 보안 그룹까지 넓게 열어 두면 몇 시간 안에 인터넷 스캐너가 찾아낸다.
+
+Docker의 `-p 5432:5432`도 호스트의 `0.0.0.0`에 연다. 게다가 Docker가 만드는 iptables 규칙은 ufw 규칙보다 앞에 걸려서 ufw로 막았다고 생각한 포트가 열려 있기도 하다. 이 규칙의 흐름은 [iptables NAT 글](/posts/iptables-nat)에 있다. 호스트 안에서만 쓸 컨테이너라면 `-p 127.0.0.1:5432:5432`처럼 주소까지 적는다.
+
+### localhost는 IPv6일 수도 있다
+
+`localhost`라는 이름은 `127.0.0.1`뿐 아니라 IPv6 루프백 `::1`로도 풀린다. 앱이 `127.0.0.1`에서만 듣는데 클라이언트가 `localhost`를 `::1`로 먼저 풀면 `connect ECONNREFUSED ::1:3000` 같은 에러가 난다. Node.js 17부터 OS가 준 주소 순서를 그대로 쓰게 바뀌면서 이 에러를 만나는 사람이 많아졌다. 듣는 쪽은 `::`(IPv6 와일드카드, 리눅스 기본 설정에서는 IPv4 연결도 함께 받는다)에서 듣게 하거나, 접속하는 쪽이 `127.0.0.1`을 직접 적는다.
+
+## 이미 쓰는 중인 포트
+
+같은 주소와 포트에 두 번째 서버를 띄우면 `bind()`에서 실패한다.
+
+```bash
+# 이미 8080을 쓰는 서버가 있는 상태에서 하나 더 띄운다
+python3 -m http.server 8080 --bind 127.0.0.1
+```
+
+```text
+OSError: [Errno 98] Address already in use
+```
+
+`EADDRINUSE`다. 누가 쓰고 있는지는 `ss`나 `lsof`로 찾는다.
+
+```bash
+# 8082번에서 듣는 프로세스 찾기 (둘 중 편한 것)
+sudo ss -ltnp 'sport = :8082'
+sudo lsof -nP -iTCP:8082 -sTCP:LISTEN
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5          127.0.0.1:8082      0.0.0.0:*    users:(("python3",pid=261,fd=3))
+COMMAND PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+python3 261 root    3u  IPv4   4145      0t0  TCP 127.0.0.1:8082 (LISTEN)
+```
+
+대개는 전에 띄운 개발 서버가 백그라운드에 남아 있거나, systemd가 이미 같은 서비스를 띄워 둔 경우다.
+
+### 방금 끈 서버가 다시 안 뜰 때
+
+헷갈리는 건 아무도 듣고 있지 않은데 `Address already in use`가 날 때다. 서버를 재시작했는데 방금 전 연결들이 TIME-WAIT로 남아 있으면 생긴다. 서버가 먼저 끊은 연결은 서버 포트에 TIME-WAIT를 남기고, 리눅스는 기본적으로 그 포트에 대한 `bind()`를 막는다. 재현했다.
+
+```text
+State     Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+TIME-WAIT 0      0          127.0.0.1:7080    127.0.0.1:57418
+
+SO_REUSEADDR=0: [Errno 98] Address already in use
+SO_REUSEADDR=1: bind 성공
+```
+
+듣는 소켓은 없고 TIME-WAIT 하나만 남은 상태다. `SO_REUSEADDR`를 켜지 않은 `bind()`는 실패했고, 켠 것은 성공했다. 리눅스에서 `SO_REUSEADDR`는 "TIME-WAIT가 남아 있어도 이 포트에서 다시 듣게 해 달라"는 뜻이고, 이미 LISTEN 중인 소켓이 있는 포트를 빼앗지는 못한다. nginx, Node.js, Python의 `http.server` 같은 대부분의 서버는 이 옵션을 기본으로 켠다. 직접 소켓 서버를 짠다면 `bind()` 전에 켠다.
+
+### 한 포트를 여러 프로세스가 나눠 듣기
+
+진짜로 여러 소켓이 같은 포트에서 듣게 하는 옵션은 `SO_REUSEPORT`다. 같은 사용자의 소켓들이 모두 이 옵션을 켜면, 커널이 들어오는 연결을 소켓들에 해시로 나눠 준다. 두 소켓에 연결 100개를 보냈다.
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      128          0.0.0.0:7090      0.0.0.0:*
+LISTEN 0      128          0.0.0.0:7090      0.0.0.0:*
+
+연결 100개 분배: [48, 52]
+```
+
+LISTEN 줄이 두 개이고, 연결은 48대 52로 나뉘었다. 워커 프로세스가 하나의 accept 큐를 두고 다투지 않아서 코어가 많은 서버에서 효과가 있다. nginx의 `listen 443 reuseport;`와 [UDP 글](/posts/udp-and-quic)에서 본 UDP 수신 분산이 이 기능이다. 무중단 배포에서 새 프로세스를 같은 포트에 먼저 띄운 뒤 옛 프로세스를 끄는 데도 쓴다.
+
+## 임시 포트가 바닥나는 순간
+
+이번엔 접속하는 쪽이다. 클라이언트가 같은 목적지(같은 IP, 같은 포트)로 연결을 열 때마다 출발지 포트가 하나씩 필요하다. 다섯 값 중 바꿀 수 있는 게 그것뿐이기 때문이다. 기본 범위로 28232개다.
+
+일부러 범위를 10개로 줄이고 같은 목적지에 연결을 계속 열어 봤다.
+
+```bash
+# 실험용으로 임시 포트를 10개로 줄인다 (끝나면 반드시 원래대로)
+sudo sysctl -w net.ipv4.ip_local_port_range="40000 40009"
+
+# ... 7070번에 연결을 계속 열고, 마지막에 7071번에도 하나 연다 ...
+
+# 원래대로
+sudo sysctl -w net.ipv4.ip_local_port_range="32768 60999"
+```
+
+```text
+11번째 연결: [Errno 99] Cannot assign requested address
+7070 연결 수: 10
+7071로는 성공, 로컬 포트 40000
+```
+
+11번째에서 `EADDRNOTAVAIL`, `Cannot assign requested address`가 났다. 그런데 목적지 포트만 바꾼 7071로는 이미 쓰고 있던 40000번을 다시 써서 성공했다. 목적지가 다르면 다섯 값이 달라지니 같은 출발지 포트를 써도 된다. 포트가 모자란 건 "목적지 하나당"이다.
+
+<AlgoTrace
+  caption="같은 목적지로 연결을 열 때마다 임시 포트가 하나씩 묶인다"
+  memoryLabel="이 목적지로 쓰는 중인 포트"
+  cells={["40000", "40001", "40002", "...", "40009", "11번째"]}
+  steps={[
+    { pointer: 0, memory: ["40000"], caption: "첫 연결이 40000번을 출발지로 쓴다." },
+    { pointer: 1, memory: ["40000", "40001"], caption: "두 번째는 40001번. 목적지가 같으니 이미 쓴 번호는 못 쓴다." },
+    { pointer: 2, memory: ["40000", "40001", "40002"], caption: "연결이 끝나도 먼저 끊은 쪽이면 TIME-WAIT 60초 동안 이 번호는 묶여 있다." },
+    { pointer: 4, memory: ["40000 ~ 40009", "10개 모두 사용 중"], caption: "열 번째 연결로 범위가 모두 찼다." },
+    { pointer: 5, memory: ["40000 ~ 40009", "남은 번호 없음"], caption: "11번째 connect()는 고를 번호가 없어 Cannot assign requested address로 실패한다." },
+    { pointer: 0, found: [0], memory: ["→ 7071: 40000"], caption: "목적지 포트가 다른 연결은 40000번을 다시 쓸 수 있다. 다섯 값이 다르기 때문이다." },
+  ]}
+/>
+
+실제 서버에서 이 일이 벌어지는 곳은 앞단 프록시다. nginx가 뒤쪽 앱 서버 하나(같은 IP와 포트)로 요청마다 새 연결을 열고 먼저 끊으면, 끊은 연결이 60초씩 TIME-WAIT로 포트를 쥔다. 28232 ÷ 60 ≈ 470이니, 한 목적지로 초당 470개가 넘는 새 연결을 꾸준히 열면 포트가 모자란다. nginx 에러 로그에는 `(99: Cannot assign requested address) while connecting to upstream`이 찍히고 사용자는 502를 받는다.
+
+해결은 연결을 덜 만드는 쪽이 먼저다.
+
+```nginx
+upstream app {
+    server 10.0.0.11:3000;
+    keepalive 32;                      # 뒤쪽 연결을 32개까지 열어 두고 재사용
+}
+
+server {
+    location / {
+        proxy_pass http://app;
+        proxy_http_version 1.1;        # 1.0은 연결을 재사용하지 못한다
+        proxy_set_header Connection "";  # 클라이언트의 Connection: close를 넘기지 않는다
+    }
+}
+```
+
+앱 코드의 HTTP 클라이언트와 DB 드라이버도 커넥션 풀을 쓰게 한다. 그다음이 임시 포트 범위 넓히기(`ip_local_port_range = 1024 65535`처럼, 서버가 듣는 포트와 겹치지 않게 주의), 뒤쪽 서버의 IP나 포트를 늘려 목적지를 나누기, 나가는 연결에 TIME-WAIT 포트 재사용을 허락하는 `net.ipv4.tcp_tw_reuse=1`이다. `tcp_tw_reuse`는 TCP 타임스탬프로 옛 패킷을 걸러 낼 수 있을 때만 재사용한다.
+
+같은 계산은 NAT에도 적용된다. 사설망의 서버 수백 대가 NAT 게이트웨이의 공인 IP 하나로 같은 외부 API에 나가면, 그 공인 IP의 포트를 나눠 쓴다. AWS NAT 게이트웨이는 목적지 하나당 동시 연결 55,000개까지라서, 넘으면 `ErrorPortAllocation` 지표가 오른다.
+
+## 소켓도 파일이다
+
+리눅스에서 소켓은 파일 디스크립터 하나를 쓴다. 앞의 `ss` 출력에서 본 `fd=3`, `fd=4`가 그것이다. 그래서 프로세스가 열 수 있는 파일 수 한도가 곧 동시 연결 수의 한도다.
+
+```bash
+# 이 셸의 파일 수 한도 (soft, hard)
+ulimit -n
+ulimit -Hn
+```
+
+```text
+20000
+20000
+```
+
+```bash
+# 실행 중인 서비스(예: nginx)의 한도와 지금 연 fd 수
+grep "open files" /proc/$(pgrep -o nginx)/limits
+sudo ls /proc/$(pgrep -o nginx)/fd | wc -l
+```
+
+이 환경은 20000으로 잡혀 있었지만, 일반 셸의 soft 한도는 1024인 경우가 흔하다. 한도에 닿으면 `accept()`가 `EMFILE`로 실패하고 로그에 `Too many open files`가 찍힌다. systemd 서비스라면 유닛 파일의 `LimitNOFILE=`로 올린다. 다만 한도를 올리기 전에 정말 연결이 많은 건지, [CLOSE-WAIT로 새는](/posts/tcp-connection-lifecycle) 건지부터 본다.
+
+### 포트 없는 소켓
+
+같은 컴퓨터 안의 프로세스끼리는 포트 대신 파일 경로를 주소로 쓰는 유닉스 도메인 소켓을 쓰기도 한다. IP와 TCP를 거치지 않아 조금 빠르고, 파일 권한으로 접근을 막을 수 있다.
+
+```bash
+# 듣고 있는 유닉스 도메인 소켓 목록
+sudo ss -xlp
+```
+
+```text
+Netid State  Recv-Q Send-Q                     Local Address:Port Peer Address:PortProcess
+u_str LISTEN 0      200    /var/run/postgresql/.s.PGSQL.5432 3179            * 0    users:(("postgres",pid=203,fd=7))
+```
+
+PostgreSQL은 TCP 5432와 함께 `/var/run/postgresql/.s.PGSQL.5432`에서도 듣는다. `psql`을 호스트 없이 치면 이 소켓으로 붙고, 그래서 TCP 설정과 다른 인증 규칙(peer 인증)이 적용된다. Docker의 `/var/run/docker.sock`도 이런 소켓이라, 이 파일을 컨테이너에 마운트하면 그 컨테이너는 사실상 호스트의 root 권한을 얻는다.
+
+## 현장에서 포트를 확인하는 순서
+
+"접속이 안 된다"를 들으면 서버와 클라이언트에서 차례로 확인한다.
+
+```bash
+# 서버: 누가, 어느 주소의 몇 번에서 듣는가 (127.0.0.1인지 0.0.0.0인지 본다)
+sudo ss -ltnp
+
+# 서버: 듣는 소켓이 있으면, 그 포트로 연결이 들어오고는 있는가
+sudo ss -tanp 'sport = :8080'
+
+# 클라이언트: TCP 연결까지 되는가 (refused인지 timed out인지 본다)
+nc -zv -w 3 192.0.2.2 8080
+
+# 클라이언트: 나가는 연결이 임시 포트를 얼마나 쓰고 있는가
+ss -tan state time-wait | wc -l
+```
+
+결과에 따라 갈린다. LISTEN 줄이 없으면 앱이 안 떴거나 다른 포트에 떠 있다. LISTEN이 `127.0.0.1`이면 바인드 주소를 고친다. LISTEN은 `0.0.0.0`인데 클라이언트에서 refused면 다른 호스트나 다른 포트로 가고 있는지(로드 밸런서의 대상 포트, 컨테이너 포트 매핑) 보고, timed out이면 방화벽과 보안 그룹을 본다. 이 순서를 계층 전체로 넓힌 건 [계층별 장애 좁히기 글](/posts/network-troubleshooting-by-layer)에 있다.
+
+흔한 실수 몇 가지를 모아 두면 이렇다. 컨테이너 안에서 `127.0.0.1`에 바인드하는 것, `-p`로 DB 포트를 호스트 전체에 열어 두는 것, `localhost`가 `::1`로 풀리는 걸 모르는 것, TCP만 열고 같은 번호의 UDP를 안 여는 것, 그리고 프록시 뒤쪽 연결을 재사용하지 않아 임시 포트를 바닥내는 것이다.
+
+## 마지막 주소까지 찾아가는 길
+
+포트는 컴퓨터 안의 프로세스를 고르는 마지막 주소이고, 소켓은 그 포트를 쥔 커널의 메모다. 연결은 프로토콜과 양쪽 IP·포트 다섯 값으로 갈리고, 서버의 연결 소켓들은 모두 듣는 포트 하나를 함께 쓴다. 커널은 맺어진 연결을 먼저, 그다음 듣는 소켓을 정확한 주소부터 찾고, 없으면 돌려보낸다. 그래서 `127.0.0.1`에서 듣는 앱은 밖에서 안 보이고, 같은 목적지로 너무 많은 연결을 여는 클라이언트는 임시 포트를 바닥낸다. 다음 글에서는 전송 계층 위, [세션·표현·응용 계층](/posts/upper-layers-session-presentation-app)이 TCP/IP에서 어디로 갔는지 본다.
+
+## 면접에서 나올 만한 질문
+
+### 포트는 왜 필요하고, 소켓과는 어떻게 다른가요?
+
+IP는 컴퓨터까지만 데려다주니, 그 안의 어느 프로세스에 넘길지 정하는 번호가 포트다. 소켓은 그 포트와 상대 주소, 연결 상태를 담은 커널의 객체이고 프로세스에는 파일 디스크립터로 보인다. 하나의 포트에 듣는 소켓 하나와 연결마다 생긴 소켓 여러 개가 함께 붙을 수 있다.
+
+### 서버는 포트 하나로 어떻게 수만 개의 연결을 받나요?
+
+연결은 프로토콜, 출발지 IP·포트, 목적지 IP·포트 다섯 값으로 구분되고, 클라이언트마다 출발지 값이 달라서다. accept()가 연결마다 새 소켓을 만들어 주는데 모두 같은 로컬 포트를 쓴다. 그래서 서버의 동시 연결 한도는 포트 수가 아니라 메모리와 fd 한도가 정한다.
+
+### 0.0.0.0과 127.0.0.1에 바인드하는 것은 어떻게 다른가요?
+
+127.0.0.1은 루프백 인터페이스로 들어온 연결, 즉 같은 컴퓨터 안의 연결만 받고, 0.0.0.0은 모든 IPv4 주소로 온 연결을 받는다. 컨테이너 안의 앱이 127.0.0.1에서 들으면 포트 매핑으로 넘어온 연결을 받지 못해 reset이나 refused가 난다. 반대로 DB를 0.0.0.0에 열면 외부에 노출되니 필요한 주소에만 바인드한다.
+
+### Address already in use는 왜 나고, SO_REUSEADDR는 무엇을 해 주나요?
+
+같은 주소와 포트에 이미 듣는 소켓이 있거나, 리눅스에서는 그 포트에 TIME-WAIT 연결이 남아 있을 때 bind()가 실패한다. SO_REUSEADDR는 TIME-WAIT가 남아 있어도 다시 듣게 해 줘서, 서버를 바로 재시작할 수 있게 한다. 이미 LISTEN 중인 포트를 함께 쓰게 하는 건 SO_REUSEPORT이고, 커널이 연결을 소켓들에 나눠 준다.
+
+### Cannot assign requested address는 언제 나나요?
+
+클라이언트가 connect()할 때 쓸 임시 포트가 없을 때 난다. 같은 목적지 IP·포트로 가는 연결은 출발지 포트가 모두 달라야 하는데, 기본 범위가 28232개이고 먼저 끊은 연결은 TIME-WAIT로 60초씩 포트를 쥐어서, 한 목적지로 초당 수백 개 이상의 새 연결을 열면 바닥난다. 커넥션 풀이나 keep-alive로 연결을 재사용하는 게 먼저고, 포트 범위 확대, 목적지 분산, tcp_tw_reuse가 그다음이다.
+
+### Too many open files는 왜 나나요?
+
+리눅스에서 소켓 하나가 파일 디스크립터 하나를 쓰기 때문에, 연결이 프로세스의 파일 수 한도(ulimit -n, systemd의 LimitNOFILE)에 닿으면 accept()와 open()이 실패한다. 실제로 연결이 많다면 한도를 올리지만, 시간이 지나며 계속 늘어난다면 CLOSE-WAIT처럼 닫지 않는 소켓이 새는 경우가 많아서 ss로 상태별 개수를 먼저 본다.
+
+### localhost로 접속했는데 ECONNREFUSED ::1이 납니다. 왜죠?
+
+localhost가 IPv6 루프백 ::1로 먼저 풀렸는데 서버는 IPv4 127.0.0.1에서만 듣고 있어서다. Node.js 17부터 OS가 준 주소 순서를 그대로 쓰면서 자주 보이게 됐다. 서버를 ::나 ::1에서도 듣게 하거나, 클라이언트가 127.0.0.1을 직접 쓰면 된다.

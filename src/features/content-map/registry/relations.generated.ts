@@ -2,15 +2,97 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "tcp-connection-lifecycle": {
+    "links": [
+      "network-layers-overview",
+      "ports-and-sockets",
+      "layer-mtu-fragmentation",
+      "tcp-reliability-congestion"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "browser-fetch",
+      "iptables-basics"
+    ]
+  },
+  "tcp-reliability-congestion": {
+    "links": [
+      "tcp-connection-lifecycle",
+      "http-versions",
+      "layer-mtu-fragmentation",
+      "udp-and-quic"
+    ],
+    "mentions": [
+      "iptables-basics",
+      "redis-basics",
+      "layer-ip-routing-icmp"
+    ]
+  },
+  "udp-and-quic": {
+    "links": [
+      "tcp-reliability-congestion",
+      "http-versions",
+      "tcp-connection-lifecycle",
+      "dns",
+      "layer-mtu-fragmentation",
+      "iptables-nat",
+      "ports-and-sockets"
+    ],
+    "mentions": [
+      "iptables-basics",
+      "https-tls",
+      "layer-ip-routing-icmp"
+    ]
+  },
+  "ports-and-sockets": {
+    "links": [
+      "tcp-connection-lifecycle",
+      "docker-network-volume",
+      "iptables-nat",
+      "udp-and-quic",
+      "upper-layers-session-presentation-app"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "iptables-basics",
+      "postgres-getting-started",
+      "redis-basics",
+      "what-happens-google-com",
+      "layer-ip-routing-icmp",
+      "dns"
+    ]
+  },
+  "upper-layers-session-presentation-app": {
+    "links": [
+      "network-layers-overview",
+      "https-tls",
+      "cookie-session-login",
+      "json-crud-http",
+      "base64",
+      "http-message",
+      "dns"
+    ],
+    "mentions": [
+      "http-versions",
+      "what-happens-google-com",
+      "http-caching-cdn",
+      "udp-and-quic"
+    ]
+  },
   "network-layers-overview": {
     "links": [
       "layer-ip-routing-icmp",
       "layer-link-ethernet-arp",
       "layer-ip-addressing",
+      "ports-and-sockets",
+      "upper-layers-session-presentation-app",
       "iptables-nat",
       "http-status-codes",
       "nginx-reverse-proxy",
       "layer-mtu-fragmentation",
+      "tcp-connection-lifecycle",
+      "tcp-reliability-congestion",
+      "udp-and-quic",
       "what-happens-google-com"
     ],
     "mentions": [
@@ -42,6 +124,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-link-ethernet-arp",
       "layer-ip-routing-icmp",
       "iptables-nat",
+      "ports-and-sockets",
       "proxy-reverse-proxy"
     ],
     "mentions": [
@@ -60,20 +143,23 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "docker-container-basics",
       "layer-link-ethernet-arp",
-      "iptables-nat"
+      "iptables-nat",
+      "udp-and-quic"
     ]
   },
   "layer-mtu-fragmentation": {
     "links": [
       "layer-ip-routing-icmp",
       "network-layers-overview",
-      "iptables-basics"
+      "iptables-basics",
+      "tcp-connection-lifecycle"
     ],
     "mentions": [
       "https-tls",
       "layer-link-ethernet-arp",
       "http-versions",
       "http-status-codes",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -560,9 +646,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "db-transaction-isolation": {
-    "links": [
-      "microservices"
-    ],
+    "links": [],
     "mentions": [
       "postgres-mvcc-vacuum",
       "postgres-getting-started",
@@ -625,14 +709,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "db-index"
     ],
-    "mentions": [
-      "postgres-mvcc-vacuum",
-      "db-architecture-by-scale",
-      "rest-api-design",
-      "postgres-architecture",
-      "postgres-getting-started",
-      "db-transaction-isolation"
-    ]
+    "mentions": []
   },
   "nginx-basics": {
     "links": [
@@ -658,6 +735,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway"
     ],
     "mentions": [
+      "tcp-connection-lifecycle",
       "browser-fetch",
       "redis-basics",
       "resilience-patterns",
@@ -676,6 +754,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cookie-session-login",
       "what-happens-google-com",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -711,9 +790,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "iptables-basics",
       "http-versions",
+      "ports-and-sockets",
       "layer-ip-addressing",
       "http-status-codes",
       "what-happens-google-com",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -782,6 +863,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "upper-layers-session-presentation-app",
       "client-data-cache",
       "resilience-patterns",
       "http-caching-cdn"
@@ -805,6 +887,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "layer-link-ethernet-arp",
       "redis-basics",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -831,7 +914,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "iptables-basics",
-      "rest-api-design"
+      "rest-api-design",
+      "udp-and-quic"
     ]
   },
   "dockerfile-image-layers": {
@@ -849,6 +933,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls"
     ],
     "mentions": [
+      "upper-layers-session-presentation-app",
       "http-versions",
       "what-happens-google-com"
     ]
@@ -877,9 +962,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat"
     ],
     "mentions": [
+      "tcp-connection-lifecycle",
       "layer-mtu-fragmentation",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
+      "udp-and-quic",
       "layer-link-ethernet-arp",
       "dns"
     ]
@@ -893,6 +980,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "http-versions",
       "what-happens-google-com",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -944,6 +1032,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "nginx-https-performance",
       "http-versions",
+      "udp-and-quic",
       "http-methods"
     ]
   },
@@ -1028,6 +1117,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "https-tls",
       "http-methods",
+      "tcp-reliability-congestion",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -1170,7 +1261,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file"
     ],
     "mentions": [
-      "http-versions"
+      "http-versions",
+      "udp-and-quic"
     ]
   },
   "hosts-file": {
@@ -1210,6 +1302,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics",
       "what-happens-google-com",
       "https-tls",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -1252,7 +1345,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dns",
       "https-tls",
       "hosts-file",
-      "http-versions"
+      "http-versions",
+      "udp-and-quic"
     ]
   },
   "cookie-session-login": {

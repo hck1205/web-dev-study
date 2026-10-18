@@ -67,6 +67,7 @@ import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
 import { POSTGRES_ARCHITECTURE } from "./postgres-architecture";
 import { POSTGRES_DATA_TYPES } from "./postgres-data-types";
@@ -97,7 +98,11 @@ import { SQLD_SINGLE_ROW_FUNCTIONS } from "./sqld-single-row-functions";
 import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
+import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TOKEN_LOGIN } from "./token-login";
+import { UDP_AND_QUIC } from "./udp-and-quic";
+import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 
@@ -172,6 +177,7 @@ export const QUESTION_SETS = [
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,
   POSTGRES_ARCHITECTURE,
   POSTGRES_DATA_TYPES,
@@ -202,7 +208,11 @@ export const QUESTION_SETS = [
   SQLD_SUBQUERY_SET_OPERATORS,
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_WINDOW_FUNCTIONS,
+  TCP_CONNECTION_LIFECYCLE,
+  TCP_RELIABILITY_CONGESTION,
   TOKEN_LOGIN,
+  UDP_AND_QUIC,
+  UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,
 ];
