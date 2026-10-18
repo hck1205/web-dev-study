@@ -308,6 +308,62 @@ HTML은 DOM이라는 트리가 되고, CSS는 CSSOM이라는 트리가 된다. �
 
 두 번째 방문부터는 이 과정의 상당 부분이 생략된다. DNS 답은 TTL 동안 브라우저와 OS, 리졸버에 남아 있다. 서버와의 연결도 잠깐 유지되어 다시 쓸 수 있다. TLS는 세션 재개로 핸드셰이크를 줄이고, HTTP/3의 0-RTT는 첫 패킷부터 요청을 실어 보낸다(재전송 공격 위험 때문에 안전한 요청에만 쓴다). 정적 파일은 HTTP 캐시에서 바로 꺼내 쓴다. 우리가 "두 번째는 빠르다"고 느끼는 건 이 캐시들이 겹겹이 작동한 결과다.
 
+## 페이지가 안 뜰 때 몇 번째 단계인지 고르기
+
+이 흐름을 외워 두면 장애 신고를 받았을 때 바로 쓸모가 있다. "사이트가 안 열린다"는 말은 DNS, TCP, TLS, HTTP, 렌더링 중 어디서든 나올 수 있는데, 에러 문구가 이미 단계를 알려 주는 경우가 많다. 크롬의 에러 화면 코드와 curl의 종료 코드를 단계에 맞춰 보면 이렇다.
+
+| 단계 | 크롬 에러 화면 | curl |
+|---|---|---|
+| DNS | `ERR_NAME_NOT_RESOLVED` | `(6) Could not resolve host` |
+| TCP | `ERR_CONNECTION_REFUSED`, `ERR_CONNECTION_TIMED_OUT` | `(7) Failed to connect`, `(28) ... timed out` |
+| TLS | `NET::ERR_CERT_AUTHORITY_INVALID` 같은 `ERR_CERT_*` | `(60) SSL certificate problem` |
+| HTTP | 에러 화면 없이 서버가 준 404·502 페이지 | 종료 코드 0, 상태 코드만 다르다 |
+
+curl 쪽은 Ubuntu 24.04의 curl 8.5에서 단계마다 일부러 실패를 만들어 확인했다. 실습용 nginx를 `localhost:18613`에 자체 서명 인증서로 띄웠고, 18603번에는 아무것도 띄우지 않았다.
+
+```bash
+# DNS: 존재할 수 없는 이름 (.invalid 는 예약된 최상위 도메인이다)
+curl -sS -o /dev/null https://no-such-host.invalid/
+
+# TCP: 아무도 듣지 않는 포트
+curl -sS -o /dev/null https://127.0.0.1:18603/
+
+# TLS: 내 컴퓨터가 믿지 않는 인증서
+curl -sS -o /dev/null https://localhost:18613/
+
+# HTTP: 연결은 다 됐고 서버가 404를 준다 (인증서를 --cacert로 믿게 했다)
+curl -sS -o /dev/null --cacert cert.pem -w '%{http_code}\n' https://localhost:18613/nope
+```
+
+```text
+curl: (6) Could not resolve host: no-such-host.invalid
+curl: (7) Failed to connect to 127.0.0.1 port 18603 after 0 ms: Couldn't connect to server
+curl: (60) SSL certificate problem: self-signed certificate
+404
+```
+
+(60) 뒤에 붙는 안내 문단은 줄였다. 마지막 줄이 중요하다. 404나 502는 앞의 네 단계가 모두 성공했다는 뜻이다. 네트워크나 인증서를 볼 필요가 없고, 서버의 라우팅과 그 뒤를 보면 된다. 반대로 `(6)`이 나왔는데 서버 로그를 뒤지면 시간만 쓴다. 요청은 서버에 닿지도 않았다.
+
+"안 열린다"가 아니라 "느리다"면 단계별 시간을 잰다. curl `-w`의 시간 값은 각 단계가 끝난 시각을 요청 시작부터 누적해서 적는다.
+
+```bash
+curl -s -o /dev/null --cacert cert.pem \
+  -w 'dns:   %{time_namelookup}\ntcp:   %{time_connect}\ntls:   %{time_appconnect}\nttfb:  %{time_starttransfer}\ntotal: %{time_total}\n' \
+  https://localhost:18613/
+```
+
+```text
+dns:   0.000021
+tcp:   0.000121
+tls:   0.003846
+ttfb:  0.004262
+total: 0.004303
+```
+
+로컬이라 전부 몇 밀리초지만 읽는 법은 같다. 앞 값과의 차이가 그 단계에 든 시간이다. 여기서는 TLS가 3.7ms로 가장 컸다. 실제 사이트에서 `dns`만 수백 밀리초라면 리졸버를, `tcp`와 `tls`의 차이가 크면 서버까지의 거리(RTT)나 TLS 설정을, `ttfb`에서 크게 뛰면 서버가 응답을 만드는 데 오래 걸린 것이다. 브라우저에서는 Network 탭에서 요청을 고르고 Timing 탭을 열면 같은 구간이 DNS Lookup, Initial connection, SSL, Waiting for server response, Content Download로 나뉘어 나온다. 연결을 재사용한 요청에는 앞의 세 구간이 없다. 캐시 이야기에서 본 "두 번째는 빠르다"가 이 탭에서 눈에 보인다.
+
+여기서 단계를 골랐으면 그 단계부터 더 아래로 내려가 확인한다. 층마다 무슨 명령으로 보는지는 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer)에, 이 단계들을 OSI 계층에 맞춰 현장에서 쓰는 법은 [OSI 7계층을 알면 현장에서 무엇이 달라지나](/posts/osi-in-practice)에 정리했다.
+
 ## 정리
 
 엔터 한 번에 브라우저는 입력을 HTTPS 주소로 만들고, DNS로 여러 단계를 거쳐 IP를 찾고, TCP와 TLS 핸드셰이크로 안전한 연결을 맺는다. 그다음 HTTP로 리다이렉트를 따라가 HTML을 받고, DOM과 CSSOM을 만들어 레이아웃·페인트·합성 순서로 화면을 그린다. 단계마다 캐시가 있어 다시 방문할 때는 대부분을 건너뛴다. 면접에서는 전체 흐름을 먼저 한 문단으로 말하고, 면접관이 파고드는 단계에서 깊게 들어가면 된다.

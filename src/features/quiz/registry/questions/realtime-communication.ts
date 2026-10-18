@@ -106,4 +106,19 @@ export const REALTIME_COMMUNICATION: QuizQuestion[] = [
       "서버 A는 서버 B에 붙은 연결을 모르니 서버 사이에 메시지를 건네줄 통로가 필요하다. 서버 A가 채널에 publish하면 구독 중인 모든 서버가 받아 자기 연결로 내려보낸다. 나머지 보기는 연결 유지나 재연결 문제에 대한 대책이다.",
     anchor: "서버가-여러-대가-되면",
   },
+  {
+    id: "realtime-communication-8",
+    post: "realtime-communication",
+    question: "nginx 뒤에 둔 SSE에서 이벤트가 몇 초 동안 안 오다가 한꺼번에 도착한다. 먼저 고칠 곳은?",
+    choices: [
+      "EventSource의 retry 값",
+      "Last-Event-ID 헤더",
+      "그 경로의 proxy_buffering을 끄거나 X-Accel-Buffering: no를 보낸다",
+      "WebSocket으로 바꾼다",
+    ],
+    answer: 2,
+    explanation:
+      "nginx는 기본으로 업스트림 응답을 버퍼에 모았다가 보내서, 조금씩 흘려보내는 이벤트가 버퍼가 차거나 응답이 끝날 때 몰려 나간다. 그 경로만 proxy_buffering off로 끄거나 앱이 X-Accel-Buffering: no를 보내면 된다. retry나 Last-Event-ID는 재연결 동작이라 상관이 없다.",
+    anchor: "로컬에선-되는데-서버에-올리면-멈출-때",
+  },
 ];

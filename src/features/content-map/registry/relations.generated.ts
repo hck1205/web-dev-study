@@ -762,9 +762,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "sqld-subquery-set-operators": {
     "links": [
       "sqld-single-row-functions",
-      "sqld-joins",
-      "db-index",
-      "sqld-window-functions"
+      "sqld-joins"
     ],
     "mentions": [
       "sqld-group-by-having",
@@ -842,8 +840,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "sqld-single-row-functions": {
     "links": [
-      "sqld-group-by-having",
-      "db-index"
+      "sqld-group-by-having"
     ],
     "mentions": [
       "postgres-getting-started"
@@ -996,7 +993,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "http-caching-cdn",
       "nginx-basics",
-      "http-versions"
+      "http-versions",
+      "iptables-basics",
+      "network-troubleshooting-by-layer"
     ],
     "mentions": [
       "cookie-session-login",
@@ -1168,7 +1167,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "dockerfile-image-layers": {
     "links": [
-      "docker-container-basics"
+      "docker-container-basics",
+      "docker-network-volume"
     ],
     "mentions": [
       "docker-compose",
@@ -1193,7 +1193,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "http-status-codes",
       "cors",
-      "cookie-session-login"
+      "cookie-session-login",
+      "nginx-reverse-proxy"
     ],
     "mentions": [
       "rest-api-design",
@@ -1243,7 +1244,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-caching-cdn",
       "cookie-session-login",
       "token-login",
-      "http-versions"
+      "http-versions",
+      "packet-capture-tcpdump",
+      "network-troubleshooting-by-layer"
     ],
     "mentions": [
       "https-tls",
@@ -1260,7 +1263,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "cors",
       "cookie-session-login",
-      "http-status-codes"
+      "http-status-codes",
+      "nginx-reverse-proxy"
     ],
     "mentions": [
       "json-crud-http",
@@ -1291,10 +1295,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "http-versions",
       "cors",
-      "resilience-patterns"
+      "resilience-patterns",
+      "nginx-reverse-proxy"
     ],
     "mentions": [
-      "nginx-reverse-proxy",
       "json-crud-http",
       "proxy-reverse-proxy",
       "base64",
@@ -1327,7 +1331,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-caching-cdn",
       "resilience-patterns",
       "gateway",
-      "microservices"
+      "microservices",
+      "nginx-reverse-proxy",
+      "network-troubleshooting-by-layer"
     ],
     "mentions": [
       "base64",
@@ -1345,6 +1351,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-methods",
       "http-caching-cdn",
       "gateway",
+      "nginx-reverse-proxy",
+      "network-troubleshooting-by-layer",
       "resilience-patterns"
     ],
     "mentions": [
@@ -1356,6 +1364,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "token-login",
       "db-locking-deadlock",
       "http-versions",
+      "osi-in-practice",
       "what-happens-google-com",
       "dns"
     ]
@@ -1365,12 +1374,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "http-message",
       "http-status-codes",
+      "tcp-connection-lifecycle",
+      "nginx-reverse-proxy",
       "code-splitting"
     ],
     "mentions": [
       "https-tls",
+      "browser-fetch",
       "http-methods",
       "tcp-reliability-congestion",
+      "ports-and-sockets",
       "udp-and-quic",
       "dns"
     ]
@@ -1427,7 +1440,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "mvc-pattern": {
-    "links": [],
+    "links": [
+      "db-locking-deadlock"
+    ],
     "mentions": [
       "client-data-cache",
       "http-status-codes",
@@ -1495,6 +1510,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "db-type-columnar-olap",
       "client-data-cache",
+      "db-index-design",
       "http-versions",
       "js-memory-leak",
       "http-methods"
@@ -1551,7 +1567,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "gateway": {
     "links": [
-      "kubernetes-ingress"
+      "kubernetes-ingress",
+      "resilience-patterns"
     ],
     "mentions": [
       "osi-in-practice",
@@ -1562,17 +1579,19 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "https-tls",
       "udp-and-quic",
+      "http-methods",
       "dns"
     ]
   },
   "cors": {
     "links": [
       "local-custom-domain",
-      "cookie-session-login"
+      "cookie-session-login",
+      "http-caching-cdn"
     ],
     "mentions": [
       "json-crud-http",
-      "http-caching-cdn"
+      "http-status-codes"
     ]
   },
   "local-custom-domain": {
@@ -1597,7 +1616,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "what-happens-google-com": {
-    "links": [],
+    "links": [
+      "network-troubleshooting-by-layer",
+      "osi-in-practice"
+    ],
     "mentions": [
       "http-caching-cdn",
       "nginx-basics",
@@ -1605,6 +1627,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "hosts-file",
       "http-versions",
+      "http-status-codes",
       "udp-and-quic"
     ]
   },

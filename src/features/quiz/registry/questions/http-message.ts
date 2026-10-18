@@ -106,4 +106,19 @@ export const HTTP_MESSAGE: QuizQuestion[] = [
       "HTTP/2는 메시지를 바이너리 프레임으로 보내고, 요청 줄과 Host를 의사 헤더로 표현한다. 헤더 이름은 소문자로만 쓰지만 대소문자를 가리지 않는다는 의미는 그대로다. 프레임에 길이가 있어서 chunked는 쓰지 않고, Connection 같은 연결 관련 헤더는 보내면 오류다.",
     anchor: "http2에서는-모양이-바뀐다",
   },
+  {
+    id: "http-message-8",
+    post: "http-message",
+    question: "트래픽이 적은 새벽에만 Node.js 앱 앞의 로드 밸런서에서 간헐적인 502가 난다. 가장 먼저 의심할 설정은?",
+    choices: [
+      "로드 밸런서의 헤더 크기 한도",
+      "앱의 Content-Type 기본값",
+      "nginx error_log 레벨",
+      "앱의 keepAliveTimeout이 앞단 유휴 시간보다 짧은 것",
+    ],
+    answer: 3,
+    explanation:
+      "Node.js는 기본 5초 동안 조용한 연결을 먼저 닫는다. 앞단이 그 연결을 더 오래 재사용하려 하면 이미 닫힌 연결에 요청을 실어 502가 난다. 연결이 쉴 틈이 많은 한산한 시간에 잘 보이고, 앱 쪽 유지 시간을 앞단보다 길게 잡아 고친다.",
+    anchor: "헤더-한-줄이-장애가-되는-순간",
+  },
 ];

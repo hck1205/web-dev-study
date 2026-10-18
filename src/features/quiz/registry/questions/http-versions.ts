@@ -106,4 +106,19 @@ export const HTTP_VERSIONS: QuizQuestion[] = [
       "HTTP/3는 UDP로 연결하니 TCP만 열려 있으면 QUIC 연결이 실패한다. 브라우저는 조용히 TCP의 HTTP/2로 진행하고 한동안 QUIC을 시도하지 않아서 겉으로는 문제가 없어 보인다. HTTP/3는 항상 HTTP/2와 함께 열어 둔다.",
     anchor: "개발자가-바꿀-것",
   },
+  {
+    id: "http-versions-8",
+    post: "http-versions",
+    question: "nginx로 프록시하는 서버에서 요청마다 앱 포트의 TIME-WAIT 소켓이 하나씩 늘어난다. 가장 그럴듯한 원인은?",
+    choices: [
+      "브라우저와 nginx 사이가 HTTP/2라서",
+      "ALPN에서 h2가 합의되지 않아서",
+      "UDP 443이 막혀 HTTP/3로 가지 못해서",
+      "proxy_pass가 기본으로 HTTP/1.0과 Connection: close로 업스트림에 보내서",
+    ],
+    answer: 3,
+    explanation:
+      "nginx는 proxy_http_version 기본값이 1.0이고 Connection: close를 붙여서 요청마다 업스트림 연결을 새로 맺고 끊는다. proxy_http_version 1.1, Connection 헤더 비우기, upstream keepalive를 함께 설정하면 연결을 재사용한다. 브라우저 쪽 버전은 뒤쪽 구간과 상관이 없다.",
+    anchor: "설정한-버전과-실제로-쓰는-버전이-다를-때",
+  },
 ];
