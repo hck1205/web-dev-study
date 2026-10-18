@@ -383,6 +383,68 @@ spec:
 
 모든 Ingress를 당장 바꿔야 하는 건 아니다. 도메인 하나에 경로 몇 개짜리라면 Ingress로도 충분하다. 다만 커뮤니티 ingress-nginx가 은퇴하면서 어차피 컨트롤러를 바꿔야 하는 팀이 많고, 그 김에 Gateway API로 넘어가는 경우가 늘었다. 여러 팀이 입구를 공유하거나 카나리 배포를 표준 방식으로 하고 싶다면 그 시점이 기회다.
 
+## 게이트웨이를 사이에 두고 로그가 엇갈릴 때
+
+게이트웨이가 생기면 장애 때 보는 로그가 두 벌이 된다. 그리고 두 로그가 서로 다른 이야기를 하는 순간이 온다. 자주 만나는 두 장면이다.
+
+### 504가 났는데 주문은 들어가 있다
+
+사용자는 주문 버튼을 눌렀다가 "일시적인 오류" 화면을 봤다. 게이트웨이 접근 로그에는 `POST /orders 504`가 찍혔다. 그런데 주문 서비스 로그에는 201이 있고, 사용자가 다시 누른 탓에 주문이 두 건이다. 두 로그를 추적 ID로 이어 보면 순서가 보인다. 아래는 게이트웨이(3초 타임아웃)와 응답에 5초 걸리는 주문 서비스를 Node 22로 띄워 직접 재현한 로그다.
+
+```bash
+# 게이트웨이가 붙인 traceparent의 trace-id로 두 서비스의 로그를 모아 시간순으로 본다
+grep -h e854b58c6c77b5782682b18a9635c729 gateway.log orders.log | sort
+```
+
+```text
+11:05:48.910 gateway ->     POST /orders trace=e854b58c6c77b5782682b18a9635c729
+11:05:48.922 orders  start  POST /orders trace=e854b58c6c77b5782682b18a9635c729
+11:05:51.918 gateway 504    TimeoutError: The operation was aborted due to timeout trace=e854b58c6c77b5782682b18a9635c729
+11:05:53.926 orders  201    order o-1042 saved trace=e854b58c6c77b5782682b18a9635c729
+```
+
+게이트웨이는 3초에서 기다리기를 그만두고 504를 줬다. 주문 서비스는 그걸 모른 채 2초 더 일하고 주문을 저장했다. 게이트웨이 타임아웃은 "응답을 그만 기다린다"일 뿐 뒤쪽 작업을 취소하지 않는다. 그래서 504는 실패가 아니라 "결과를 모른다"로 읽어야 한다.
+
+고칠 곳은 세 군데다. 하나, 타임아웃을 바깥이 안쪽보다 길게 맞춘다. 클라이언트 > 게이트웨이 > 서비스 > DB 순이고, 서비스는 남은 시간을 넘겨받아(gRPC의 deadline, 헤더로 넘기는 마감 시각) 시간이 지난 요청은 스스로 접는다. 둘, 다시 눌러도 주문이 하나만 생기게 `Idempotency-Key`를 받는다. 셋, 이 경로의 실제 처리 시간 p99를 보고 타임아웃을 정한다. 5초 걸리는 게 정상이면 3초 타임아웃이 틀린 것이다. 재시도와 멱등성 키는 [장애가 번지지 않게 막는 패턴](/posts/resilience-patterns)에 자세히 적었다.
+
+이 대조가 가능했던 건 게이트웨이가 요청마다 `traceparent`를 붙이고 서비스가 그 값을 로그에 남겼기 때문이다. 둘 중 하나라도 빠지면 시각과 경로만으로 짐작해야 한다. 게이트웨이를 처음 세울 때 접근 로그 형식에 trace-id와 업스트림 응답 시간을 꼭 넣는다.
+
+### 게이트웨이를 건너뛰고 서비스가 불린다
+
+보안 점검에서 "다른 사용자의 주문이 조회된다"는 지적이 온다. 게이트웨이 로그에는 그런 요청이 없다. 서비스가 `X-User-Id` 헤더를 그대로 믿고 있고, 그 서비스에 게이트웨이 말고 다른 길로도 닿을 수 있는 경우다. 클러스터 안의 아무 Pod에서 서비스를 직접 불러 보면 확인된다.
+
+```bash
+# 임시 Pod를 띄워 게이트웨이를 거치지 않고 주문 서비스를 직접 부른다
+kubectl run probe --rm -it --restart=Never -n default --image=curlimages/curl -- \
+  curl -s -m 5 -o /dev/null -w '%{http_code}\n' -H 'X-User-Id: 1' http://orders.shop.svc:8080/orders
+```
+
+```text
+200
+```
+
+예시 출력이다. 200이면 아무 네임스페이스에서나 헤더 하나로 남의 사용자가 될 수 있다. 서비스 쪽 입구를 게이트웨이 네임스페이스로 좁힌다.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orders-from-gateway-only
+  namespace: shop
+spec:
+  podSelector:
+    matchLabels:
+      app: orders
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+```
+
+적용한 뒤 같은 명령은 `-m 5`의 5초를 채우고 `000`(응답 없음)을 찍어야 정상이다. 정책은 패킷을 버리기 때문에 거절 응답 대신 타임아웃으로 보인다. NetworkPolicy는 Calico, Cilium처럼 정책을 집행하는 CNI가 있어야 동작한다. 지원하지 않는 CNI에서는 리소스가 만들어지기만 하고 아무것도 막지 않으니, 적용 후 이렇게 직접 두드려 보는 확인을 빼먹지 않는다. 게이트웨이도 할 일이 있다. 클라이언트가 보낸 `X-User-Id`는 버리고 검증한 값으로 다시 쓴다. 더 단단하게 하려면 서비스가 헤더 대신 게이트웨이가 넘긴 서명된 토큰(내부용 JWT)을 직접 검증하거나 mTLS로 호출자를 확인한다.
+
 ## 입구 하나, 규칙은 여러 사람이
 
 게이트웨이는 흩어진 서비스 앞에 입구를 하나 세우고, 라우팅·인증·요청 수 제한·관측 같은 공통 일을 그곳에 모은다. 대신 모든 트래픽이 지나는 곳이라 가볍게 유지해야 하고, 비즈니스 로직과 세밀한 인가는 서비스에 남긴다. 쿠버네티스의 Gateway API는 이 입구를 GatewayClass, Gateway, HTTPRoute로 쪼개 각자 맡은 사람이 관리하게 했고, Ingress에서 어노테이션으로 하던 헤더 매칭과 가중치 분배를 표준 필드로 올렸다.

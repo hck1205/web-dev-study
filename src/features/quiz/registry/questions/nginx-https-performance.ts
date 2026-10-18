@@ -106,4 +106,19 @@ export const NGINX_HTTPS_PERFORMANCE: QuizQuestion[] = [
       "add_header는 안쪽 블록에 한 줄이라도 있으면 바깥 것을 모두 버린다. 그래서 보안 헤더를 snippet으로 묶어 필요한 location마다 include한다. always는 에러 응답에도 붙이라는 뜻이라 200 응답과는 상관없다.",
     anchor: "보안-헤더와-숨길-것",
   },
+  {
+    id: "nginx-https-performance-8",
+    post: "nginx-https-performance",
+    question: "TLS를 클라우드 로드 밸런서에서 끝내고 nginx의 80으로 넘기게 바꾼 뒤 ERR_TOO_MANY_REDIRECTS가 난다. 왜일까?",
+    choices: [
+      "HSTS max-age가 너무 길어서 브라우저가 계속 리다이렉트한다",
+      "nginx가 받는 요청은 늘 평문이라 80 블록의 https 리다이렉트가 매번 다시 걸린다",
+      "로드 밸런서가 SNI를 보내지 않아 다른 server 블록이 응답한다",
+      "certbot이 80 블록에 넣은 검증 경로가 리다이렉트를 막는다",
+    ],
+    answer: 1,
+    explanation:
+      "사용자는 https로 들어왔지만 nginx가 보는 건 로드 밸런서가 보낸 평문 요청이라 return 301 https://가 같은 주소로 계속 돌려보낸다. 원래 스킴은 X-Forwarded-Proto에만 남아 있으니 그 값을 보고 리다이렉트할지 정한다. HSTS는 리다이렉트를 만들지 않는다.",
+    anchor: "https를-붙인-뒤에-걸려-오는-전화",
+  },
 ];

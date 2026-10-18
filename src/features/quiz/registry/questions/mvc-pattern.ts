@@ -106,4 +106,19 @@ export const MVC_PATTERN: QuizQuestion[] = [
       "모듈 경계를 지키려면 다른 모듈은 그 모듈의 서비스로만 부른다. 테이블을 직접 조회하면 경계가 무너져 나중에 모듈을 떼어 내기 어렵다.",
     anchor: "서비스가-커지면-계층보다-기능으로-나눈다",
   },
+  {
+    id: "mvc-pattern-8",
+    post: "mvc-pattern",
+    question: "pg_stat_activity에서 주문 API 세션이 재고 행을 잠근 채 `idle in transaction`으로 몇 초씩 머문다. 코드에서 가장 먼저 의심할 것은?",
+    choices: [
+      "서비스 메서드가 트랜잭션 안에서 메일이나 결제사 같은 외부 API를 부른다",
+      "컨트롤러가 요청 본문을 검증하지 않는다",
+      "인덱스가 없어서 UPDATE가 Seq Scan을 한다",
+      "뷰 템플릿이 캐시되지 않는다",
+    ],
+    answer: 0,
+    explanation:
+      "idle in transaction은 트랜잭션을 연 채 DB에 아무것도 안 보내고 있다는 뜻이다. 그 사이 앱은 다른 일, 흔히 외부 호출을 기다리고 있고 잠근 행 때문에 다른 주문이 Lock에서 기다린다. DB 일만 트랜잭션에 두고 메일은 커밋 뒤 이벤트로 보낸다.",
+    anchor: "경계가-무너진-코드는-장애-문의로-돌아온다",
+  },
 ];

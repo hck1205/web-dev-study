@@ -106,4 +106,19 @@ export const DOCKERFILE_IMAGE_LAYERS: QuizQuestion[] = [
       "kubelet은 이미지의 사용자가 root가 아닌지 확인해야 하는데, 이름만 있으면 UID를 알 수 없어서 컨테이너를 띄우지 않는다. 숫자 UID로 적으면 검사를 통과한다. 쿠버네티스는 HEALTHCHECK를 무시하고, EXPOSE는 문서 역할뿐이다.",
     anchor: "root가-아닌-사용자로-상태는-healthcheck로",
   },
+  {
+    id: "dockerfile-image-layers-8",
+    post: "dockerfile-image-layers",
+    question: "노트북에서 빌드해 올린 이미지가 서버에서 `exec /usr/local/bin/docker-entrypoint.sh: exec format error`만 남기고 죽는다. 먼저 확인할 것은?",
+    choices: [
+      "이미지의 OS/아키텍처와 서버의 아키텍처가 같은지",
+      "엔트리포인트 스크립트에 실행 권한이 있는지",
+      "CMD가 exec 형식인지",
+      "HEALTHCHECK가 실패하고 있는지",
+    ],
+    answer: 0,
+    explanation:
+      "exec format error는 커널이 그 실행 파일의 형식을 모른다는 뜻이고, Apple Silicon에서 만든 arm64 이미지를 amd64 서버가 받은 경우가 대부분이다. docker image inspect나 buildx imagetools inspect로 플랫폼을 보고, --platform을 명시해 다시 빌드한다. 실행 권한이 없으면 permission denied가 난다.",
+    anchor: "빌드는-됐는데-서버에서-안-뜰-때",
+  },
 ];
