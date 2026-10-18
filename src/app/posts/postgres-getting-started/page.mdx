@@ -8,7 +8,7 @@ Ubuntu 서버에 PostgreSQL을 깔았다. 설치는 1분 만에 끝났고, 이�
 psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  role "matt" does not exist
 ```
 
-비밀번호를 물어보지도 않고 거절당했다. 나도 처음엔 이게 설치가 잘못된 건 줄 알았다. 설치는 멀쩡하다. 이 한 줄에는 PostgreSQL이 접속을 받는 방식이 거의 다 들어 있다. psql은 내 리눅스 계정 이름(`matt`)을 DB 사용자 이름으로 그대로 들고 갔고, 서버는 그런 사용자를 모른다고 답했다. 이 글은 이 에러를 출발점으로 설치, 접속, psql 사용법, 데이터베이스와 스키마의 관계, 접속 규칙(`pg_hba.conf`)까지 첫날 필요한 것을 정리한다. 마지막에는 시리즈 내내 쓸 작은 온라인 서점 `shop` DB를 만든다.
+비밀번호를 물어보지도 않고 거절당했다. 나도 처음엔 이게 설치가 잘못된 건 줄 알았다. 설치는 멀쩡하다. 이 한 줄에는 PostgreSQL이 접속을 받는 방식이 거의 다 들어 있다. psql은 내 리눅스 계정 이름(`matt`)을 DB 사용자 이름으로 그대로 들고 갔고, 서버는 그런 사용자를 모른다고 답했다. 이 글은 이 에러를 출발점으로 설치, 같은 머신에서의 접속, psql 사용법, 데이터베이스와 스키마의 관계까지 첫날 필요한 것을 정리하고, 시리즈 내내 쓸 작은 온라인 서점 `shop` DB를 만든다. 다른 서버에서 붙는 이야기(접속 URI, 비밀번호 파일, `pg_hba.conf`, 원격 접속 열기)는 [접속 URI와 pg_hba.conf](/posts/postgres-connections-pg-hba)로 나눴다.
 
 기준은 Ubuntu 24.04 LTS와 그 기본 패키지인 PostgreSQL 16(16.15)이다. 아래 출력은 모두 이 환경에서 실제로 돌린 것이다. 쓰던 서버를 건드리지 않으려고 같은 머신에 클러스터를 하나 더 만들어(포트 5491) 실습한 부분이 있어서, 몇몇 출력에는 5432 대신 5491이 보인다. 클러스터가 무엇인지는 아래에서 다룬다. SQL 기본 문법(`CREATE TABLE`, `SELECT`, 제약 조건)은 [SQL 기초 글](/posts/sql-basics)에 있다.
 
@@ -101,7 +101,7 @@ psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5491" 
 
 다시 처음 에러로 돌아간다. psql은 접속 정보를 하나도 주지 않으면 기본값을 채운다. 호스트는 비워 두면 TCP가 아니라 유닉스 도메인 소켓(같은 머신 안에서만 쓰는 파일 모양의 통로, `/var/run/postgresql/.s.PGSQL.5432`)으로 붙는다. 사용자 이름은 지금 리눅스 계정 이름, 데이터베이스 이름은 사용자 이름과 같게 잡는다. 그래서 `matt` 계정에서 그냥 `psql`을 치면 "사용자 matt로 데이터베이스 matt에 접속"하겠다는 뜻이 된다.
 
-서버 쪽에는 들어오는 접속을 처음 받는 프로세스가 있다. postmaster(로그와 프로세스 목록에서는 `postgres`)다. 이 프로세스는 접속 하나마다 전담 프로세스(backend)를 하나씩 띄워 준다. 접속을 허락할지는 `pg_hba.conf`라는 출입 명부를 위에서부터 읽어 정한다. Ubuntu의 기본 명부는 같은 머신에서 소켓으로 들어오는 접속(`local`)에 `peer` 인증을 쓴다. peer는 비밀번호 대신 운영체제에 "이 소켓 반대편 프로세스가 어느 리눅스 사용자냐"를 물어서, 그 이름이 접속하려는 DB 사용자 이름과 같으면 통과시키는 방식이다. 아래 그림에서 다음을 누르면 처음 에러가 나기까지의 과정이 나온다.
+서버 쪽에는 들어오는 접속을 처음 받는 프로세스가 있다. postmaster(로그와 프로세스 목록에서는 `postgres`)다. 이 프로세스는 접속 하나마다 전담 프로세스(backend)를 하나씩 띄워 준다. 접속을 허락할지는 `pg_hba.conf`라는 출입 명부를 위에서부터 읽어 정한다(명부를 읽고 고치는 법은 [접속 글](/posts/postgres-connections-pg-hba)에서 자세히 본다). Ubuntu의 기본 명부는 같은 머신에서 소켓으로 들어오는 접속(`local`)에 `peer` 인증을 쓴다. peer는 비밀번호 대신 운영체제에 "이 소켓 반대편 프로세스가 어느 리눅스 사용자냐"를 물어서, 그 이름이 접속하려는 DB 사용자 이름과 같으면 통과시키는 방식이다. 아래 그림에서 다음을 누르면 처음 에러가 나기까지의 과정이 나온다.
 
 <SequenceDiagram
   caption="psql을 쳤을 때 서버 안에서 일어나는 일"
@@ -298,6 +298,21 @@ LINE 1: select * from daily_sales
 ```sql
 SET search_path = report, public;   -- 이 세션에서만. 이제 daily_sales로 찾힌다
 ```
+
+아래 그림에서 다음을 누르면 `daily_sales`를 찾는 순서가 나온다. 경로에 없는 스키마는 테이블이 있어도 보지 않는다.
+
+<AlgoTrace
+  caption="search_path에 적힌 스키마만 차례로 본다"
+  memoryLabel="찾은 곳"
+  cells={["\"$user\" → matt", "public", "report"]}
+  steps={[
+    { memory: [], caption: "daily_sales를 찾는다. 경로는 \"$user\", public이다." },
+    { pointer: 0, memory: [], caption: "\"$user\"는 matt로 바뀐다. matt 스키마가 없으니 건너뛴다." },
+    { pointer: 1, memory: [], caption: "public에는 daily_sales가 없다. 경로가 여기서 끝난다." },
+    { memory: ["없음"], caption: "report는 경로에 없어서 보지 않는다. 그래서 relation does not exist가 난다." },
+    { pointer: 2, found: [2], memory: ["report.daily_sales"], caption: "SET search_path = report, public 뒤에는 report를 먼저 보고 바로 찾는다." },
+  ]}
+/>
 
 `relation "..." does not exist`가 나오면 스키마 경로 말고도 대소문자를 의심한다. PostgreSQL은 따옴표 없는 이름을 소문자로 바꿔 저장한다. `CREATE TABLE Users`는 `users`가 된다. 반대로 ORM이나 GUI 도구가 `"Users"`처럼 큰따옴표로 만들면 대문자가 그대로 남고, 그때부터는 쓸 때마다 큰따옴표를 붙여야 한다. 이름은 처음부터 소문자와 밑줄(`order_items`)로 짓는 게 편하다.
 
@@ -528,378 +543,58 @@ exit=3
 
 `\pset null`은 NULL을 빈칸 대신 글자로 보여 줘서 빈 문자열(`''`)과 구분하게 해 준다. 다만 스크립트는 남의 `.psqlrc` 설정에 기대지 말고, `psql -X -v ON_ERROR_STOP=1 -f ...`처럼 `-X`(시작 파일 무시)와 필요한 옵션을 명령에 직접 적는 편이 안전하다.
 
-## 접속 정보는 문자열 하나로 줄 수 있다
 
-애플리케이션은 psql처럼 리눅스 이름을 빌려 쓸 수 없으니 접속 정보를 모두 적어 줘야 한다. 흔히 URI 한 줄로 준다. 아래 조각을 눌러 보면 각 부분이 무슨 뜻인지 나온다.
+## 현장에서 relation does not exist를 만나는 순간
 
-<UrlAnatomy
-  caption="PostgreSQL 접속 URI를 조각으로 읽기"
-  base="postgresql://"
-  separator=""
-  joiner=""
-  params={[
-    {
-      key: "user",
-      display: "matt",
-      title: "역할 이름",
-      description: "접속할 DB 역할이다. 빼면 libpq는 지금 운영체제 사용자 이름을 쓴다. 처음 본 에러가 이 기본값 때문에 났다.",
-    },
-    {
-      key: "password",
-      display: ":p%40ss",
-      title: "비밀번호 (퍼센트 인코딩)",
-      description: "비밀번호에 @, /, : 같은 글자가 있으면 %40, %2F, %3A로 바꿔 써야 한다. 그대로 쓰면 @ 뒤를 호스트로 읽어 엉뚱한 곳에 접속하려 한다. URI에 비밀번호를 넣는 것 자체를 피하고 ~/.pgpass나 환경 변수를 쓰는 편이 낫다.",
-    },
-    {
-      key: "host",
-      display: "@db.internal",
-      title: "호스트",
-      description: "이름이나 IP를 쓰면 TCP로 붙는다. 비워 두면(postgresql:///shop) 유닉스 소켓을 쓴다. 소켓 디렉터리를 직접 줄 때는 ?host=/var/run/postgresql처럼 파라미터로 넘긴다.",
-      required: true,
-    },
-    {
-      key: "port",
-      display: ":5432",
-      title: "포트",
-      description: "빼면 5432다. 한 서버에 클러스터가 여러 개면 포트로 구분한다.",
-    },
-    {
-      key: "database",
-      display: "/shop",
-      title: "데이터베이스",
-      description: "접속 하나는 DB 하나만 본다. 빼면 역할 이름과 같은 DB로 간다.",
-      required: true,
-    },
-    {
-      key: "sslmode",
-      display: "?sslmode=verify-full",
-      title: "TLS 사용 방식",
-      description: "기본값 prefer는 TLS를 먼저 시도하고 안 되면 평문으로 붙는다. 서버 인증서를 검증하지 않아서 중간자 공격을 못 막는다. 네트워크를 건너는 접속이면 verify-full로 인증서와 호스트 이름까지 확인한다.",
-    },
-    {
-      key: "application_name",
-      display: "&application_name=api",
-      title: "접속한 프로그램 이름",
-      description: "pg_stat_activity와 로그에 이 이름이 찍힌다. 접속이 수백 개일 때 어느 서비스가 붙은 건지 가려낼 수 있다.",
-    },
-  ]}
-/>
+배포한 API가 `relation "daily_sales" does not exist`를 낸다. 그런데 내 노트북의 psql에서는 같은 쿼리가 잘 돈다. 이럴 때 테이블이 없다고 결론 내기 전에, 앱과 같은 접속 정보로 붙어서 "지금 어디에 누구로 붙어 있고 어느 스키마를 보는가"부터 확인한다.
 
-비밀번호에 `@`가 들어 있는데 인코딩을 안 하면 이런 에러가 난다. 비밀번호 `p@ss/word`의 `@` 뒤를 호스트로 읽은 것이다.
+```sql
+-- 지금 접속한 DB, 역할, 스키마 검색 경로
+SELECT current_database(), current_user, current_setting('search_path') AS search_path;
 
-```bash
-# 인코딩 안 함 → 'ss'를 호스트 이름으로 읽는다
-psql "postgresql://matt:p@ss/word@localhost:5491/shop"
-
-# @ → %40, / → %2F
-psql "postgresql://matt:p%40ss%2Fword@localhost:5491/shop"
+-- 스키마와 대소문자를 가리지 않고 테이블이 어디 있는지 찾는다
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE lower(table_name) IN ('daily_sales', 'users')
+ORDER BY 1, 2;
 ```
 
 ```text
-psql: error: could not translate host name "ss" to address: Name or service not known
+ current_database | current_user |   search_path
+------------------+--------------+-----------------
+ shop             | matt         | "$user", public
+(1 row)
+
+ table_schema | table_name
+--------------+-------------
+ public       | Users
+ report       | daily_sales
+(2 rows)
 ```
 
-두 번째 명령은 정상으로 접속한다. 같은 정보를 `host=localhost port=5491 dbname=shop user=matt` 같은 키워드 형식으로 줄 수도 있다. 앱 프레임워크는 보통 URI를, `psql`과 셸 스크립트는 둘 다 받는다.
+두 테이블이 다 있는데 둘 다 못 찾는 경우다. `daily_sales`는 경로에 없는 `report` 스키마에 있고, `Users`는 ORM이 큰따옴표로 만들어서 대문자가 남았다. 그래서 `SELECT * FROM users`도 `relation "users" does not exist`로 실패한다. 첫 번째 결과에서 DB 이름이 예상과 다르면(스테이징 DB에 붙어 있다든지) 접속 문자열 문제이고, 그건 [접속 글](/posts/postgres-connections-pg-hba)에서 다룬다.
 
-### 환경 변수와 비밀번호 파일
+고치는 방법은 쿼리에 스키마를 붙이는 것(`report.daily_sales`)이 가장 확실하다. 앱이 늘 같은 경로를 써야 한다면 역할과 DB 조합에 기본값을 박아 둔다. 다음 접속부터 적용된다.
 
-libpq(PostgreSQL의 C 클라이언트 라이브러리)를 쓰는 도구는 psql, pg_dump, 그리고 많은 언어 드라이버가 같은 환경 변수를 읽는다. `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`다. 다만 Node의 `pg`처럼 libpq를 쓰지 않는 드라이버는 이 중 일부만 따라 하니 드라이버 문서를 확인한다.
-
-`PGPASSWORD`는 편하지만 다른 사용자가 프로세스 환경 변수를 볼 수 있는 운영체제가 있어 공식 문서도 권하지 않는다. 비밀번호는 `~/.pgpass` 파일에 `호스트:포트:DB:사용자:비밀번호` 형식으로 둔다. 권한이 `600`이 아니면 `has group or world access` 경고를 내고 파일을 무시한다.
-
-```bash
-# 한 줄에 접속 하나. 필드에 * 를 쓰면 무엇이든 맞는다
-echo "localhost:5491:shop:matt:bookstore-2026" > ~/.pgpass
-chmod 600 ~/.pgpass                         # 나만 읽고 쓰게. 644면 경고 후 무시한다
-PGHOST=localhost PGPORT=5491 PGDATABASE=shop psql -c "select current_user, inet_server_addr()"
+```sql
+-- 이 역할이 이 DB에 붙을 때만 쓰는 기본 경로
+ALTER ROLE matt IN DATABASE shop SET search_path = report, public;
+\drds                                -- 역할·DB별 설정 확인
 ```
 
 ```text
- current_user | inet_server_addr
---------------+------------------
- matt         | 127.0.0.1
+               List of settings
+ Role | Database |          Settings
+------+----------+----------------------------
+ matt | shop     | search_path=report, public
 (1 row)
 ```
 
-이번에는 `localhost`를 줬으니 TCP로 붙었고(`inet_server_addr`가 `127.0.0.1`), 비밀번호는 `.pgpass`에서 읽었다. 소켓 접속(peer)과 TCP 접속은 `pg_hba.conf`에서 다른 줄에 걸린다. 다음 절의 주제다.
-
-## pg_hba.conf는 위에서부터 첫 줄만 본다
-
-`pg_hba.conf`(host-based authentication)가 앞에서 말한 출입 명부다. 한 줄이 규칙 하나이고, 접속이 들어오면 위에서부터 읽다가 처음 맞는 줄 하나로 결정한다. 그 줄의 인증이 실패해도 다음 줄로 넘어가지 않는다. Ubuntu의 기본 내용(주석 제외)은 이렇다.
-
-```text
-local   all             postgres                                peer
-local   all             all                                     peer
-host    all             all             127.0.0.1/32            scram-sha-256
-host    all             all             ::1/128                 scram-sha-256
-local   replication     all                                     peer
-host    replication     all             127.0.0.1/32            scram-sha-256
-host    replication     all             ::1/128                 scram-sha-256
-```
-
-한 줄을 조각으로 나눠 보면 다섯 칸이다.
-
-<UrlAnatomy
-  caption="pg_hba.conf 한 줄은 다섯 칸이다"
-  separator=""
-  joiner="  "
-  params={[
-    {
-      key: "type",
-      display: "hostssl",
-      title: "연결 종류",
-      description: "local은 유닉스 소켓, host는 TCP(TLS든 아니든), hostssl은 TLS로 암호화된 TCP만, hostnossl은 암호화 안 된 TCP만이다. 외부 접속은 hostssl로 받으면 평문 접속이 이 줄에 걸리지 않는다.",
-      required: true,
-    },
-    {
-      key: "database",
-      display: "shop",
-      title: "어느 DB로",
-      description: "all, DB 이름, 쉼표로 여러 개, sameuser(역할 이름과 같은 DB), replication(복제 접속)을 쓸 수 있다.",
-      required: true,
-    },
-    {
-      key: "user",
-      display: "matt",
-      title: "어느 역할이",
-      description: "all이나 역할 이름. +app_users처럼 앞에 +를 붙이면 그 그룹 역할의 멤버 전체가 된다.",
-      required: true,
-    },
-    {
-      key: "address",
-      display: "192.0.2.0/24",
-      title: "어디서 (CIDR)",
-      description: "local 줄에는 없다. /32는 IP 하나, /24는 끝자리 256개, 0.0.0.0/0은 IPv4 전체다. 넓게 열수록 위험하다.",
-    },
-    {
-      key: "method",
-      display: "scram-sha-256",
-      title: "어떻게 확인하나",
-      description: "scram-sha-256은 비밀번호를 평문으로 보내지 않는 챌린지 방식이다. peer는 운영체제 사용자 이름 확인(local 전용), reject는 무조건 거절, trust는 확인 없이 통과다. md5는 오래된 방식이라 새로 쓰지 않는다.",
-      required: true,
-    },
-  ]}
-/>
-
-로컬 TCP 줄(`127.0.0.1/32 scram-sha-256`)이 있어서 `localhost`로 붙으면 비밀번호를 묻는다. 비밀번호가 틀리면 이렇게 나온다. 같은 줄이 두 번 찍히는 이유는 기본 `sslmode=prefer`가 TLS로 한 번, 평문으로 한 번 시도하기 때문이다.
-
-```text
-psql: error: connection to server at "localhost" (127.0.0.1), port 5491 failed: FATAL:  password authentication failed for user "matt"
-connection to server at "localhost" (127.0.0.1), port 5491 failed: FATAL:  password authentication failed for user "matt"
-```
-
-### 다른 서버에서 접속 받기
-
-앱 서버(192.0.2.0/24 대역)에서 DB로 붙게 해 보자. 확인 → 변경 → 동작 확인 → 되돌리기 순서로 간다. 먼저 지금 상태다.
-
-```sql
-SHOW listen_addresses;       -- 서버가 어느 네트워크 주소에서 접속을 기다리나
-SHOW hba_file;               -- 실제로 읽는 pg_hba.conf 경로
-```
-
-```text
- listen_addresses
-------------------
- localhost
-(1 row)
-
-              hba_file
-------------------------------------
- /etc/postgresql/16/pg1/pg_hba.conf
-(1 row)
-```
-
-기본값 `localhost`는 같은 머신 안의 접속만 받는다. 이 상태에서 다른 주소로 붙으면 서버가 아예 듣고 있지 않으니 `pg_hba.conf`까지 가지도 않는다.
-
-```text
-psql: error: connection to server at "192.0.2.2", port 5491 failed: Connection refused
-	Is the server running on that host and accepting TCP/IP connections?
-```
-
-`listen_addresses`는 재시작해야 바뀐다. Ubuntu에서는 `/etc/postgresql/16/main/postgresql.conf`를 고치거나 `conf.d/` 아래에 파일을 하나 두면 된다. 여기서는 SQL의 `ALTER SYSTEM`을 쓴다. 이 명령은 데이터 디렉터리의 `postgresql.auto.conf`에 값을 적고, 이 파일은 `postgresql.conf`보다 나중에 읽혀서 이긴다. 나중에 설정 파일만 보고 "왜 값이 다르지" 하지 않으려면 둘 중 한 방식으로 통일한다.
-
-```sql
-ALTER SYSTEM SET listen_addresses = '*';   -- 모든 네트워크 주소에서 대기 (재시작 필요)
-```
-
-```bash
-# 재시작 후 다른 주소로 접속 시도
-sudo pg_ctlcluster 16 main restart
-psql "postgresql://matt@192.0.2.2:5491/shop"
-```
-
-```text
-psql: error: connection to server at "192.0.2.2", port 5491 failed: FATAL:  no pg_hba.conf entry for host "192.0.2.2", user "matt", database "shop", SSL encryption
-connection to server at "192.0.2.2", port 5491 failed: FATAL:  no pg_hba.conf entry for host "192.0.2.2", user "matt", database "shop", no encryption
-```
-
-에러가 `Connection refused`에서 `no pg_hba.conf entry`로 바뀌었다. 이제 서버는 듣고 있는데, 명부에 이 주소가 없다는 뜻이다. 에러 메시지에 호스트, 역할, DB, 암호화 여부가 다 나오니 이걸 보고 줄을 만들면 된다. 파일 끝에 TLS 접속만 받는 줄을 하나 넣고 설정을 다시 읽는다. `pg_hba.conf`는 재시작 없이 reload로 바뀐다.
-
-```bash
-# 앱 서버 대역에서 shop DB로 오는 matt의 TLS 접속만 비밀번호로 허용
-echo "hostssl shop matt 192.0.2.0/24 scram-sha-256" | sudo tee -a /etc/postgresql/16/main/pg_hba.conf
-sudo pg_ctlcluster 16 main reload
-```
-
-reload한 다음에는 서버가 읽은 규칙을 `pg_hba_file_rules` 뷰로 확인한다. 줄 번호와 함께 보여 주고, 문법이 틀린 줄은 `error` 칸에 이유가 적힌다.
-
-```sql
-SELECT line_number, type, database, user_name, address, auth_method, error
-FROM pg_hba_file_rules WHERE line_number > 128;
-```
-
-```text
- line_number |  type   |   database    | user_name |  address  |  auth_method  | error
--------------+---------+---------------+-----------+-----------+---------------+-------
-         130 | local   | {replication} | {all}     |           | peer          |
-         131 | host    | {replication} | {all}     | 127.0.0.1 | scram-sha-256 |
-         132 | host    | {replication} | {all}     | ::1       | scram-sha-256 |
-         133 | hostssl | {shop}        | {matt}    | 192.0.2.0 | scram-sha-256 |
-(4 rows)
-```
-
-```text
-You are connected to database "shop" as user "matt" on host "192.0.2.2" at port "5491".
-SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off)
-```
-
-이제 TLS로 접속된다. Ubuntu 패키지는 설치할 때 자체 서명 인증서(snakeoil)로 `ssl = on`을 켜 두어서 바로 TLS가 된다. 같은 접속을 `sslmode=disable`로 시도하면 `hostssl` 줄에 맞지 않아 `no pg_hba.conf entry ... no encryption`으로 거절된다. 자체 서명 인증서는 암호화만 해 줄 뿐 상대가 진짜 내 DB인지는 보장하지 않는다. 진짜 인증서와 `verify-full`은 [권한 글](/posts/postgres-roles-security)에서 다룬다.
-
-방화벽도 함께 본다. Ubuntu에서 ufw를 켜 두었다면 5432 포트를 앱 서버 대역에만 연다(`sudo ufw allow from 192.0.2.0/24 to any port 5432 proto tcp`). RHEL 계열은 firewalld의 `firewall-cmd`로 같은 일을 한다.
-
-<Callout kind="warning" title="host all all 0.0.0.0/0 은 인터넷 전체에 문을 연다">
-`listen_addresses = '*'`에 `host all all 0.0.0.0/0 scram-sha-256` 같은 줄을 더하면 인터넷의 누구나 비밀번호를 대입해 볼 수 있다. 공개 IP에 5432가 열린 DB는 실제로 자동화된 대입 공격을 받는다. 주소는 앱 서버 대역으로 좁히고, 방화벽이나 클라우드 보안 그룹에서도 같이 막는다. 잘못 열었다면 그 줄을 지우고 `reload`, `listen_addresses`를 `localhost`로 되돌리려면 `ALTER SYSTEM RESET listen_addresses` 후 재시작한다.
-</Callout>
-
-### 줄 순서가 결과를 바꾼다
-
-첫 줄만 본다는 규칙 때문에 넓은 줄이 위에 있으면 아래의 좁은 줄은 영영 쓰이지 않는다. 위 설정에서 `hostssl` 줄 바로 위에 이런 줄이 있었다고 하자.
-
-```text
-host    all             all             192.0.2.0/24            reject
-hostssl shop            matt            192.0.2.0/24            scram-sha-256
-```
-
-같은 접속이 `reject` 줄에 먼저 걸려서 거절된다. 에러 문구가 `no pg_hba.conf entry`가 아니라 `pg_hba.conf rejects connection for host "192.0.2.2" ...`으로 바뀌니, 메시지만 보고도 어느 경우인지 구분된다.
-
-아래 그림에서 다음을 누르면 `192.0.2.2`에서 `matt`가 TLS로 `shop`에 붙을 때 서버가 명부를 읽어 내려가는 과정이 나온다.
-
-<AlgoTrace
-  caption="pg_hba.conf는 처음 맞는 줄 하나로 끝난다"
-  memoryLabel="판정"
-  cells={["local postgres", "local all", "host 127.0.0.1", "host ::1", "host 192.0.2 rej", "hostssl shop"]}
-  steps={[
-    { memory: [], caption: "접속: TCP + TLS, 주소 192.0.2.2, 역할 matt, DB shop. 1번 줄부터 읽는다." },
-    { pointer: 0, memory: [], caption: "local 줄이다. 소켓 접속만 해당하니 TCP 접속은 지나간다." },
-    { pointer: 1, memory: [], caption: "역시 local. 지나간다." },
-    { pointer: 2, memory: [], caption: "host지만 주소가 127.0.0.1/32다. 192.0.2.2는 범위 밖이라 지나간다." },
-    { pointer: 3, memory: [], caption: "IPv6 루프백 줄이다. 지나간다." },
-    { pointer: 4, found: [4], memory: ["reject"], caption: "종류, DB, 역할, 주소가 모두 맞는다. 방법이 reject라 여기서 거절로 끝난다." },
-    { pointer: 4, found: [4], memory: ["reject"], caption: "6번 줄은 읽지도 않는다. 좁은 허용 줄은 넓은 거절 줄보다 위에 둬야 한다." },
-  ]}
-/>
-
-그래서 명부는 위에서 아래로 "좁고 구체적인 줄 → 넓은 줄" 순서로 쓴다. 맨 끝에 `host all all 0.0.0.0/0 reject`를 두면 위에서 허락하지 않은 모든 TCP 접속이 명시적으로 거절된다.
-
-명부에 오타가 있으면 어떻게 될까. `scram-sha-256`을 `scram-sha256`으로 잘못 쓰고 reload하면, 서버는 파일 전체를 버리고 예전 규칙을 계속 쓴다. 로그에 이유가 남고, `pg_hba_file_rules`의 `error` 칸에도 나온다. 바꿨는데 반영이 안 된 것 같으면 이 두 곳을 본다.
-
-```text
-LOG:  invalid authentication method "scram-sha256"
-CONTEXT:  line 134 of configuration file "/etc/postgresql/16/pg1/pg_hba.conf"
-LOG:  /etc/postgresql/16/pg1/pg_hba.conf was not reloaded
-```
-
-## 첫날 자주 보는 에러 모음
-
-지금까지 나온 에러를 다시 모으면, 메시지만 보고 어디가 문제인지 거의 정해진다.
-
-- `No such file or directory ... Is the server running locally`: 서버가 꺼져 있거나 소켓 경로·포트가 다르다. `pg_lsclusters`로 상태와 포트를 본다.
-- `Connection refused ... accepting TCP/IP connections`: 서버가 그 주소에서 듣고 있지 않다. `listen_addresses`, 포트, 방화벽을 본다.
-- `no pg_hba.conf entry for host ...`: 서버까지 왔지만 맞는 줄이 없다. 메시지의 호스트·역할·DB·암호화 여부대로 줄을 만든다.
-- `pg_hba.conf rejects connection`: 위쪽의 `reject` 줄에 먼저 걸렸다. 줄 순서를 본다.
-- `Peer authentication failed for user "matt"`: 소켓 접속에서 리눅스 사용자와 `-U` 역할 이름이 다르다. root로 `psql -U matt`를 치면 이렇게 된다. 해당 리눅스 사용자로 바꾸거나 `-h localhost`로 TCP 비밀번호 인증을 쓴다.
-- `role "..." does not exist`, `database "..." does not exist`: 인증 전에 이름이 없다. 대부분 기본값(리눅스 이름)이 들어간 경우다.
-- `password authentication failed`: 비밀번호가 틀렸거나 그 역할에 비밀번호가 아예 없다. `ALTER ROLE matt PASSWORD '...'`로 정한다.
-- `permission denied for schema public`: 15 이상에서 남의 DB의 `public`에 만들려고 했다.
-- `relation "..." does not exist`: `search_path`, 스키마 이름, 대소문자(따옴표)를 본다.
-
-에러가 클라이언트에서 애매하게 보일 때는 서버 로그(`/var/log/postgresql/postgresql-16-main.log`)에 더 자세한 이유가 남는다. 예를 들어 비밀번호가 틀렸을 때 클라이언트에는 자세한 이유를 숨기지만, 로그에는 어느 `pg_hba.conf` 줄에 걸렸는지까지 적힌다.
-
-```text
-2026-10-17 16:08:34.642 UTC [1130] matt@shop FATAL:  password authentication failed for user "matt"
-2026-10-17 16:08:34.642 UTC [1130] matt@shop DETAIL:  Connection matched file "/etc/postgresql/16/pg1/pg_hba.conf" line 125: "host    all             all             127.0.0.1/32            scram-sha-256"
-```
-
-## 접속 URI를 직접 나눠 보기
-
-드라이버나 커넥션 풀 설정에서 URI를 잘못 써서 생기는 문제가 많아서, URI를 조각으로 나누는 함수를 직접 만들어 본다. `user`, `password`, `host`, `port`, `database`, `params`를 돌려준다. 빠진 값은 `null`로, 포트는 기본 5432로 채우고, 퍼센트 인코딩은 풀어 준다. `postgres://`와 `postgresql://` 둘 다 받고, 다른 스킴이면 `null`이다.
-
-<CodePlayground
-  caption="PostgreSQL 접속 URI 나누기"
-  functionName="parsePgUri"
-  initialCode={`function parsePgUri(uri) {
-  // 1. postgres:// 또는 postgresql:// 로 시작하지 않으면 null
-  // 2. user:password@host:port/database?key=value&... 로 나눈다
-  //    (user, password, port, database, 쿼리는 모두 생략될 수 있다)
-  // 3. 퍼센트 인코딩(%40 → @)은 decodeURIComponent로 푼다
-  // 4. 빠진 값은 null, port는 숫자이고 없으면 5432
-  // 5. { user, password, host, port, database, params } 순서로 돌려준다
-  return null;
-}`}
-  solution={`function parsePgUri(uri) {
-  const m = uri.match(/^postgres(?:ql)?:\\/\\/(?:([^:@\\/]*)(?::([^@\\/]*))?@)?([^\\/?:]*)(?::(\\d+))?(?:\\/([^?]*))?(?:\\?(.*))?$/);
-  if (!m) return null;
-  const [, user, password, host, port, database, query] = m;
-  const params = {};
-  if (query) {
-    for (const pair of query.split("&")) {
-      const [k, v = ""] = pair.split("=");
-      params[decodeURIComponent(k)] = decodeURIComponent(v);
-    }
-  }
-  return {
-    user: user ? decodeURIComponent(user) : null,
-    password: password !== undefined ? decodeURIComponent(password) : null,
-    host: host || null,
-    port: port ? Number(port) : 5432,
-    database: database ? decodeURIComponent(database) : null,
-    params,
-  };
-}`}
-  tests={[
-    {
-      label: "기본 형태",
-      args: ["postgresql://matt:bookstore-2026@localhost:5491/shop"],
-      expected: { user: "matt", password: "bookstore-2026", host: "localhost", port: 5491, database: "shop", params: {} },
-    },
-    {
-      label: "포트 생략, 쿼리 파라미터",
-      args: ["postgres://app@db.internal/shop?sslmode=verify-full&application_name=api"],
-      expected: { user: "app", password: null, host: "db.internal", port: 5432, database: "shop", params: { sslmode: "verify-full", application_name: "api" } },
-    },
-    {
-      label: "인코딩된 비밀번호",
-      args: ["postgresql://matt:p%40ss%2Fword@10.0.0.5/shop"],
-      expected: { user: "matt", password: "p@ss/word", host: "10.0.0.5", port: 5432, database: "shop", params: {} },
-    },
-    {
-      label: "호스트 없음 (유닉스 소켓)",
-      args: ["postgresql:///shop?host=/var/run/postgresql"],
-      expected: { user: null, password: null, host: null, port: 5432, database: "shop", params: { host: "/var/run/postgresql" } },
-    },
-    {
-      label: "다른 DB의 URI",
-      args: ["mysql://root@localhost/shop"],
-      expected: null,
-    },
-  ]}
-/>
-
-세 번째 테스트가 앞에서 본 `could not translate host name "ss"` 에러의 반대편이다. 인코딩한 비밀번호를 풀면 원래 비밀번호가 나온다. 실제 libpq는 이것 말고도 쉼표로 여러 호스트를 적어 장애 시 다음 호스트로 넘어가는 형식(`host1:5432,host2:5432`)과 IPv6 대괄호 주소까지 받는다.
+흔한 실수는 psql에서 `SET search_path`로 고쳐 놓고 "이제 된다"고 끝내는 것이다. `SET`은 그 세션에만 남아서 앱의 접속에는 아무 영향이 없다. 마이그레이션 도구가 접속마다 `search_path`를 바꾸는지도 같이 본다. 테이블 이름에 대문자가 섞였다면 따옴표를 붙이고 다닐지, `ALTER TABLE "Users" RENAME TO users`로 한 번에 정리할지 팀에서 정한다.
 
 ## 처음 에러를 다시 읽으면
 
-`role "matt" does not exist`는 이제 이렇게 읽힌다. psql이 기본값으로 리눅스 이름을 역할 이름으로 썼고, 소켓 접속이라 `pg_hba.conf`의 `local ... peer` 줄에 걸렸고, peer는 통과했지만 클러스터에 그 역할이 없었다. 역할은 클러스터에, 테이블은 DB 안의 스키마에 있고, 접속을 받을지는 명부의 첫 번째로 맞는 줄이 정한다. 다음 글에서는 이 서점 테이블의 컬럼 타입을 하나씩 고른다. 가격을 `float`로 두면 무슨 일이 생기는지, 시간이 왜 9시간 밀려 보였는지가 거기서 풀린다.
+`role "matt" does not exist`는 이제 이렇게 읽힌다. psql이 기본값으로 리눅스 이름을 역할 이름으로 썼고, 소켓 접속이라 `pg_hba.conf`의 `local ... peer` 줄에 걸렸고, peer는 통과했지만 클러스터에 그 역할이 없었다. 역할은 클러스터에, 테이블은 DB 안의 스키마에 있고, 이름 없이 쓴 테이블은 `search_path`가 찾는다. 다른 서버에서 TCP로 붙을 때 무엇이 달라지는지는 [접속 URI와 pg_hba.conf](/posts/postgres-connections-pg-hba)에서 이어서 본다. 그다음 글에서는 이 서점 테이블의 컬럼 타입을 하나씩 고른다. 가격을 `float`로 두면 무슨 일이 생기는지, 시간이 왜 9시간 밀려 보였는지가 [타입 글](/posts/postgres-data-types)에서 풀린다.
 
 ## 면접에서 나올 만한 질문
 
@@ -911,22 +606,18 @@ LOG:  /etc/postgresql/16/pg1/pg_hba.conf was not reloaded
 
 psql은 사용자 이름을 안 주면 운영체제 계정 이름을 역할 이름으로 쓰는데, 설치 직후에는 `postgres` 역할만 있어서다. `sudo -u postgres psql`로 들어가 `CREATE ROLE ... LOGIN`과 같은 이름의 DB를 만들면 된다. Ubuntu 기본 설정에서 로컬 소켓 접속은 peer 인증이라 리눅스 사용자와 역할 이름이 같아야 통과한다.
 
-### pg_hba.conf는 어떻게 평가되나요?
+### 테이블이 분명히 있는데 relation does not exist가 나면 무엇을 보나요?
 
-위에서부터 읽어서 연결 종류, DB, 역할, 주소가 모두 맞는 첫 줄 하나만 쓴다. 그 줄의 인증이 실패해도 다음 줄로 넘어가지 않는다. 그래서 좁은 허용 규칙을 위에, 넓은 규칙과 `reject`를 아래에 둔다. 고친 뒤에는 reload하고 `pg_hba_file_rules` 뷰로 서버가 읽은 내용과 에러를 확인한다. 문법 오류가 있으면 파일 전체가 무시되고 예전 규칙이 남는다.
-
-### 외부에서 접속이 안 될 때 무엇부터 보나요?
-
-에러 메시지로 단계를 가린다. `Connection refused`면 `listen_addresses`, 포트, 방화벽처럼 서버가 그 주소에서 듣지 않는 문제다. `no pg_hba.conf entry`면 서버까지는 왔지만 명부에 맞는 줄이 없는 것이고, `password authentication failed`는 비밀번호나 인증 방식 문제다. 클라이언트 메시지가 모호하면 서버 로그에 어느 줄에 걸렸는지 나온다.
+먼저 `current_database()`, `current_user`, `search_path`로 지금 어디에 붙어 무엇을 보고 있는지 확인한다. 테이블이 경로에 없는 스키마에 있으면 스키마를 붙여 쓰거나 `ALTER ROLE ... IN DATABASE ... SET search_path`로 기본 경로를 정한다. 다음은 대소문자다. 따옴표 없는 이름은 소문자로 바뀌어서, `"Users"`처럼 만든 테이블은 따옴표 없이 찾을 수 없다.
 
 ### PostgreSQL 15에서 public 스키마 권한이 어떻게 바뀌었나요?
 
 14까지는 모든 역할이 `public` 스키마에 객체를 만들 수 있었는데, 15부터는 `public`의 주인이 DB 주인(`pg_database_owner`)이 되고 PUBLIC의 CREATE 권한이 빠졌다. 다른 역할이 같은 이름의 함수나 테이블을 심어 `search_path`를 악용하는 걸 막으려는 변경이다. 그래서 옛 튜토리얼대로 하면 `permission denied for schema public`이 나고, DB 주인을 앱 역할로 하거나 명시적으로 GRANT해야 한다. 14 이하에서 업그레이드한 DB는 예전 권한이 남아 있어 직접 REVOKE하는 게 좋다.
 
+### COPY와 psql의 `\copy`는 무엇이 다른가요?
+
+`COPY ... FROM '파일'`은 DB 서버 프로세스가 서버 디스크의 파일을 읽어서, 슈퍼유저나 `pg_read_server_files` 권한이 있어야 한다. 아무나 쓰면 서버의 아무 파일이나 읽을 수 있기 때문이다. `\copy`는 psql이 내 쪽에서 파일을 읽어 연결로 흘려보내므로 일반 역할로도 되고, 내 컴퓨터에 있는 파일을 넣을 때는 이쪽을 쓴다. 문법은 같고 한 줄로 써야 한다.
+
 ### 마이그레이션 SQL을 psql -f로 돌릴 때 주의할 점은요?
 
 psql은 기본적으로 에러가 나도 다음 문장을 계속 실행하고 종료 코드 0으로 끝나서, CI가 실패를 놓친다. `-v ON_ERROR_STOP=1`로 첫 에러에서 멈추게 하고, 필요하면 `--single-transaction`으로 전체를 묶어 실패하면 모두 되돌린다. PostgreSQL은 DDL도 트랜잭션으로 되돌릴 수 있어서 이 방식이 잘 맞는다. 남의 `.psqlrc`에 기대지 않도록 `-X`도 함께 준다.
-
-### 접속 비밀번호는 어디에 두나요?
-
-URI에 넣으면 로그나 셸 기록에 남기 쉬워서 피한다. libpq 도구는 권한이 600인 `~/.pgpass`에서 호스트·포트·DB·역할별로 읽게 하고, 앱은 비밀 관리 도구가 주입한 설정으로 받는다. `PGPASSWORD` 환경 변수는 다른 사용자가 프로세스 환경을 볼 수 있는 운영체제가 있어 공식 문서도 권하지 않는다. URI에 쓸 때 비밀번호에 `@`나 `/`가 있으면 퍼센트 인코딩해야 한다.

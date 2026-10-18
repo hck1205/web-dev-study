@@ -237,6 +237,65 @@ export const metadata = getPostMetadata("cookie-session-login");
 
 다른 방법으로 같은 사용자를 계속 같은 서버로 보내는 고정 세션(sticky session)도 있다. 다만 그 서버가 죽으면 거기 있던 세션이 전부 사라진다. 저장소를 따로 두는 쪽이 더 흔하다.
 
+## 배포하고 나니 로그인이 자꾸 풀릴 때
+
+로컬에서는 잘 되던 로그인이 서버에 올리자 풀린다. 로그인 요청은 200인데 바로 다음 요청이 401이다. 이럴 때는 쿠키가 세 군데 중 어디서 끊겼는지 본다. 브라우저가 쿠키를 저장했는지, 저장한 쿠키를 요청에 실었는지, 서버가 그 세션을 찾았는지다. 작은 Node.js 서버를 띄우고 curl로 하나씩 재현해 봤다. 이 서버는 로그인하면 앞에서 본 옵션을 그대로 붙여 준다.
+
+```bash
+# -i: 응답 헤더까지 본다
+curl -si -X POST http://127.0.0.1:3101/login
+```
+
+```text
+HTTP/1.1 200 OK
+Set-Cookie: sid=ba0ec583871a08c41e230d208ed627f4; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400
+...
+login ok (A)
+```
+
+첫 번째 함정은 `Secure`다. 같은 서버를 HTTPS 없이 사설 IP로 열어 둔 스테이징이라고 치고, curl의 쿠키 저장소(`-c`로 쓰고 `-b`로 읽는다)로 브라우저 흉내를 냈다.
+
+```bash
+curl -s -c jar.txt -X POST http://192.0.2.2:3101/login   # 로그인
+tail -n +4 jar.txt                                        # 저장된 쿠키 (머리말 3줄은 건너뛴다)
+curl -si -b jar.txt http://192.0.2.2:3101/me | head -1    # 다음 요청
+```
+
+```text
+login ok (A)
+
+HTTP/1.1 401 Unauthorized
+```
+
+응답에는 `Set-Cookie`가 분명히 왔는데 저장소가 비어 있다. HTTPS가 아닌 곳에서 받은 `Secure` 쿠키는 저장하지 않기 때문이다. 요즘 브라우저도 똑같이 버린다. 크롬, 파이어폭스와 curl은 `localhost`와 `127.0.0.1`을 HTTPS처럼 안전한 곳으로 쳐 주기 때문에 로컬에서는 이 문제가 안 보인다. 크롬이라면 개발자 도구 Network 패널에서 로그인 요청을 열고 Cookies 탭을 보면, 막힌 쿠키 옆에 노란 경고 표시와 막힌 이유가 나온다.
+
+HTTPS인데도 같은 일이 생기면 TLS를 앞의 로드 밸런서나 Ingress에서 풀고 있는지 본다. 앱은 평문 HTTP로 요청을 받으니 자기가 HTTPS 뒤에 있는 줄 모른다. Express의 `express-session`은 `cookie.secure`가 켜져 있는데 요청이 HTTPS가 아니라고 판단하면 `Set-Cookie`를 아예 보내지 않는다. 프록시가 붙여 주는 `X-Forwarded-Proto`를 믿도록 `app.set("trust proxy", 1)`을 설정해야 한다. 프록시가 어디서 TLS를 푸는지는 [리버스 프록시 글](/posts/proxy-reverse-proxy)에서 다뤘다.
+
+두 번째는 서버를 두 대로 늘린 날부터 새로고침할 때마다 로그인이 됐다 풀렸다 하는 경우다. 세션을 서버 메모리에 둔 채 로드 밸런서가 번갈아 보내면 이렇게 된다. 서버 A와 B를 띄우고 앞에 번갈아 보내는 프록시를 둔 뒤 같은 쿠키로 네 번 불렀다.
+
+```bash
+curl -s -c jar.txt -X POST http://127.0.0.1:3100/login
+for i in 1 2 3 4; do curl -s -w '  -> %{http_code}\n' -b jar.txt http://127.0.0.1:3100/me; done
+```
+
+```text
+login ok (A)
+no session (B)
+  -> 401
+user 42 (A)
+  -> 200
+no session (B)
+  -> 401
+user 42 (A)
+  -> 200
+```
+
+로그인한 A로 가면 200, 세션을 모르는 B로 가면 401이다. 증상이 "가끔" 풀리는 것처럼 보여서 처음엔 만료 시간을 의심하기 쉬운데, 응답마다 어느 서버가 답했는지(응답 헤더에 서버 이름을 넣거나 접근 로그로) 찍어 보면 바로 갈린다. 앞에서 본 공용 세션 저장소로 옮기는 게 답이다. 배포할 때마다 모두 로그아웃된다면 같은 이유로 세션이 프로세스 메모리에 있다는 신호다.
+
+세 번째는 프런트엔드와 API의 주소가 다를 때다. `app.example.com`에서 `api.example.com`을 부르는 건 출처(origin)는 다르지만 같은 사이트(site)라서, `SameSite=Lax` 쿠키도 함께 간다. 다만 `fetch`에 `credentials: "include"`를 줘야 하고, API는 `Access-Control-Allow-Origin`에 정확한 출처를 적고 `Access-Control-Allow-Credentials: true`를 보내야 한다. 이 부분은 [CORS 글](/posts/cors)에 있다. 프런트가 `shop-web.vercel.app`처럼 아예 다른 사이트에 있다면 `Lax` 쿠키는 `fetch`에 실리지 않는다. `SameSite=None; Secure`로 바꿀 수는 있지만 그만큼 CSRF 방어를 직접 챙겨야 하고, 서드파티 쿠키를 막는 브라우저도 있다. 그래서 보통은 API를 같은 사이트의 하위 도메인으로 옮기거나, 프런트 서버가 API를 대신 불러 주게 한다.
+
+어느 경우든 고친다고 `Domain=.example.com`부터 붙이는 실수가 잦다. 하위 도메인 전체로 세션이 퍼질 뿐 위 문제들은 그대로다.
+
 ## 정리
 
 쿠키 세션 방식에서 서버는 로그인 정보를 직접 보관하고, 브라우저는 그걸 찾을 번호표만 쿠키로 들고 다닌다. 세션을 지우면 바로 로그아웃되고, HttpOnly·Secure·SameSite만 잘 붙이면 웹에서 꽤 안전하게 쓸 수 있다. 대신 요청마다 저장소를 찾아봐야 하고, 쿠키가 자동으로 붙는 만큼 CSRF를 신경 써야 한다. 서버가 아무것도 기억하지 않는 반대쪽 방식은 [토큰 기반 로그인](/posts/token-login)에서 이어서 정리한다.

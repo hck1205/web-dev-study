@@ -52,38 +52,6 @@ export const POSTGRES_GETTING_STARTED: QuizQuestion[] = [
     id: "postgres-getting-started-4",
     post: "postgres-getting-started",
     question:
-      "pg_hba.conf에 위에서부터 host all all 192.0.2.0/24 reject, 그 아래 hostssl shop matt 192.0.2.0/24 scram-sha-256 이 있다. 192.0.2.2에서 matt가 TLS로 shop에 붙으면?",
-    choices: [
-      "더 구체적인 hostssl 줄이 우선해서 비밀번호를 묻는다",
-      "두 줄을 모두 검사해 하나라도 허용하면 통과한다",
-      "reject 줄에서 실패하면 다음 줄로 넘어가 비밀번호를 묻는다",
-      "처음 맞는 reject 줄에서 거절로 끝난다",
-    ],
-    answer: 3,
-    explanation:
-      "pg_hba.conf는 위에서부터 읽어 종류·DB·역할·주소가 맞는 첫 줄 하나로 결정하고, 그 뒤 줄은 보지 않는다. 구체적인 줄이 우선하는 규칙은 없다. 그래서 좁은 허용 줄을 넓은 거절 줄보다 위에 둬야 한다.",
-    anchor: "pg_hbaconf는-위에서부터-첫-줄만-본다",
-  },
-  {
-    id: "postgres-getting-started-5",
-    post: "postgres-getting-started",
-    question:
-      "다른 서버에서 접속하니 Connection refused가 난다. 서버는 켜져 있다. 가장 먼저 의심할 설정은?",
-    choices: [
-      "pg_hba.conf의 인증 방식",
-      "listen_addresses가 localhost로 되어 있는지",
-      "역할의 비밀번호",
-      "search_path",
-    ],
-    answer: 1,
-    explanation:
-      "Connection refused는 서버가 그 주소와 포트에서 아예 듣고 있지 않다는 뜻이라 pg_hba.conf까지 가지도 않는다. 기본값 listen_addresses = localhost면 외부 접속을 받지 않는다. 이걸 바꾸면 에러가 no pg_hba.conf entry로 바뀌고, 그때 명부를 고친다.",
-    anchor: "pg_hbaconf는-위에서부터-첫-줄만-본다",
-  },
-  {
-    id: "postgres-getting-started-6",
-    post: "postgres-getting-started",
-    question:
       "마이그레이션 파일을 psql -f로 돌렸는데 첫 문장에서 에러가 났다. 기본 설정이라면 어떻게 되나?",
     choices: [
       "다음 문장도 계속 실행되고 종료 코드는 0이다",
@@ -97,19 +65,33 @@ export const POSTGRES_GETTING_STARTED: QuizQuestion[] = [
     anchor: "psql에서-매일-쓰는-명령",
   },
   {
-    id: "postgres-getting-started-7",
+    id: "postgres-getting-started-5",
     post: "postgres-getting-started",
-    question:
-      "비밀번호가 p@ss/word인데 postgresql://matt:p@ss/word@localhost/shop 으로 접속하면 could not translate host name \"ss\" 에러가 난다. 고치는 방법은?",
+    question: "앱은 relation \"users\" does not exist를 내는데 information_schema.tables에는 public.Users가 있다. 원인으로 가장 알맞은 것은?",
     choices: [
-      "비밀번호를 작은따옴표로 감싼다",
-      "sslmode=disable을 붙인다",
-      "@와 /를 %40, %2F로 퍼센트 인코딩한다",
-      "포트 번호를 명시한다",
+      "users 테이블이 다른 DB에 있다",
+      "테이블이 큰따옴표로 대문자 이름 \"Users\"로 만들어져서, 따옴표 없는 users로는 찾을 수 없다",
+      "public 스키마에 USAGE 권한이 없다",
+      "search_path에 public이 빠져 있다",
+    ],
+    answer: 1,
+    explanation:
+      "PostgreSQL은 따옴표 없는 이름을 소문자로 바꿔 찾는다. ORM이 \"Users\"처럼 따옴표로 만들면 대문자가 그대로 남아서 users로는 찾을 수 없다. 권한 문제였다면 permission denied가 나지, does not exist가 나지 않는다.",
+    anchor: "현장에서-relation-does-not-exist를-만나는-순간",
+  },
+  {
+    id: "postgres-getting-started-6",
+    post: "postgres-getting-started",
+    question: "psql에서 SET search_path = report, public 을 했더니 쿼리가 된다. 그런데 앱은 여전히 report의 테이블을 못 찾는다. 왜 그럴까?",
+    choices: [
+      "SET은 슈퍼유저만 쓸 수 있어서 적용되지 않았다",
+      "search_path는 재시작해야 바뀐다",
+      "SET은 그 psql 세션에만 적용되고 앱의 접속에는 영향이 없다",
+      "report 스키마는 앱 역할에게 보이지 않는다",
     ],
     answer: 2,
     explanation:
-      "URI에서 @는 사용자 정보와 호스트를 나누는 기호라서, 비밀번호 안의 @ 뒤를 호스트로 읽는다. 특수문자는 퍼센트 인코딩해야 한다. 애초에 URI에 비밀번호를 넣지 않고 ~/.pgpass를 쓰는 방법도 있다.",
-    anchor: "접속-정보는-문자열-하나로-줄-수-있다",
+      "SET은 현재 세션에만 남는다. 앱 접속에도 적용하려면 ALTER ROLE ... IN DATABASE ... SET search_path로 역할과 DB에 기본값을 두거나, 쿼리에 스키마를 붙인다. 이 설정은 다음 접속부터 적용된다.",
+    anchor: "현장에서-relation-does-not-exist를-만나는-순간",
   },
 ];

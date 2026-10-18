@@ -91,4 +91,19 @@ export const COOKIE_SESSION_LOGIN: QuizQuestion[] = [
       "CSRF는 세션 ID를 훔치는 공격이 아니라, 브라우저가 쿠키를 자동으로 붙이는 점을 이용한다. 세션 ID가 아무리 길어도 쿠키는 그대로 붙어 가므로 방어가 되지 않는다.",
     anchor: "자동으로-붙는다는-것의-함정-csrf",
   },
+  {
+    id: "cookie-session-login-7",
+    post: "cookie-session-login",
+    question: "HTTPS 없이 사설 IP로 연 스테이징에서 로그인은 200인데 다음 요청이 401이다. 응답에 Set-Cookie: sid=...; HttpOnly; Secure가 분명히 있다. 원인은?",
+    choices: [
+      "HttpOnly 때문에 브라우저가 쿠키를 보내지 않는다",
+      "SameSite=Lax라서 같은 사이트 요청에도 쿠키가 빠진다",
+      "HTTPS가 아닌 곳에서 받은 Secure 쿠키는 브라우저가 저장하지 않는다",
+      "Max-Age가 너무 짧다",
+    ],
+    answer: 2,
+    explanation:
+      "Secure 쿠키는 HTTPS에서만 저장되고 전송된다. localhost는 안전한 곳으로 쳐 주기 때문에 로컬에서는 안 보이다가 HTTP 스테이징에서 드러난다. HttpOnly는 자바스크립트 접근만 막을 뿐 요청에는 그대로 실린다.",
+    anchor: "배포하고-나니-로그인이-자꾸-풀릴-때",
+  },
 ];

@@ -106,4 +106,19 @@ export const ELASTICSEARCH_INVERTED_INDEX: QuizQuestion[] = [
       "search_after는 앞 페이지 마지막 문서의 정렬 값 뒤부터 가져온다. 같은 가격의 상품이 여러 개면 어디서 끊었는지 모호해져 빠지거나 중복된다. 유일한 tiebreaker가 있으면 경계가 정확히 하나로 정해진다.",
     anchor: "깊은-페이지는-from으로-가지-않는다",
   },
+  {
+    id: "elasticsearch-inverted-index-8",
+    post: "elasticsearch-inverted-index",
+    question: "노드 하나짜리 개발 클러스터가 늘 yellow이고, allocation explain에서 same_shard 결정자가 NO라고 한다. 왜 그런가?",
+    choices: [
+      "디스크가 flood stage 수위를 넘었다",
+      "프라이머리 샤드가 사라져 검색 결과가 빠지고 있다",
+      "매핑 필드 수가 1000개를 넘었다",
+      "레플리카는 프라이머리와 같은 노드에 둘 수 없는데 노드가 하나뿐이라 레플리카가 갈 곳이 없다",
+    ],
+    answer: 3,
+    explanation:
+      "same_shard는 같은 샤드의 원본과 복사본을 한 노드에 두지 않는 규칙이다. 노드가 하나면 레플리카를 배정할 수 없어 yellow가 된다. 프라이머리가 없는 red와 달리 검색과 색인은 정상이다.",
+    anchor: "클러스터가-yellow나-red로-바뀌면",
+  },
 ];

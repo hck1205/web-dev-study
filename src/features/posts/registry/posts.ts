@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "postgres-reporting-sql",
+    title: "PostgreSQL 리포트 쿼리: DISTINCT ON, FILTER, generate_series, 머티리얼라이즈드 뷰, COPY, LATERAL",
+    summary: "회원별 마지막 주문, 빈 날을 0으로 채운 일별 매출, 미리 계산해 둔 집계, 50만 건 적재, 회원별 최근 3건을 PostgreSQL 문법과 실행 계획으로 만든다. REFRESH가 대시보드를 막는 장애와 COPY가 한 줄 때문에 실패하는 경우도 재현해 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "SQL", "Performance"],
+    date: "2026-10-17",
+    keywords: ["LATERAL", "DISTINCT ON", "머티리얼라이즈드 뷰", "generate_series"],
+  },
+  {
+    slug: "postgres-connections-pg-hba",
+    title: "PostgreSQL 접속 설정: 접속 URI, .pgpass, pg_hba.conf, 원격 접속",
+    summary: "앱 서버에서 붙자 Connection refused, no pg_hba.conf entry, password authentication failed로 바뀌는 에러를 따라가며 접속 URI와 환경 변수, .pgpass, pg_hba.conf의 첫 줄 규칙, 원격 접속을 여는 순서를 정리한다. 접속 자리가 다 찼을 때 pg_stat_activity로 원인을 찾는 법도 본다.",
+    topic: "programming/database/postgresql",
+    tags: ["Database", "PostgreSQL", "Linux", "Network", "Security"],
+    date: "2026-10-17",
+    keywords: ["pg_hba.conf", "listen_addresses", "접속 URI"],
+  },
+  {
     slug: "redis-cluster",
     title: "Redis Cluster: 해시 슬롯, MOVED와 ASK",
     summary: "데이터가 한 서버 메모리를 넘어서는 순간에서 시작해 키가 16384개 슬롯으로 나뉘는 규칙과 해시 태그, MOVED와 ASK, 구성 고르는 기준을 보고, 레플리카 없는 클러스터의 노드 하나를 죽여 CLUSTERDOWN이 나는 과정을 확인한다.",
@@ -438,12 +456,12 @@ const ENTRIES: Post[] = [
   },
   {
     slug: "postgres-advanced-sql",
-    title: "PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL",
-    summary: "넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, LATERAL, DISTINCT ON, FILTER, generate_series, generated column, 머티리얼라이즈드 뷰, COPY를 50만 건 주문 데이터의 실행 계획과 함께 본다.",
+    title: "PostgreSQL다운 SQL: RETURNING, ON CONFLICT, MERGE, CTE",
+    summary: "넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, CTE 인라인과 MATERIALIZED의 실행 계획 차이를 본다. 중복이 쌓인 테이블에 유니크 인덱스를 붙여 upsert로 바꾸는 과정도 따라간다.",
     topic: "programming/database/postgresql",
     tags: ["Database", "PostgreSQL", "SQL", "Performance"],
     date: "2026-10-17",
-    keywords: ["ON CONFLICT", "LATERAL", "DISTINCT ON", "머티리얼라이즈드 뷰", "쓰기 CTE"],
+    keywords: ["ON CONFLICT", "쓰기 CTE", "RETURNING"],
   },
   {
     slug: "postgres-functions-triggers",
@@ -466,11 +484,11 @@ const ENTRIES: Post[] = [
   {
     slug: "postgres-getting-started",
     title: "PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마",
-    summary: "Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, psql 사용법, 접속 URI, pg_hba.conf를 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.",
+    summary: "Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, search_path, psql 사용법을 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.",
     topic: "programming/database/postgresql",
     tags: ["Database", "PostgreSQL", "SQL", "Linux"],
     date: "2026-10-17",
-    keywords: ["psql", "pg_hba.conf", "search_path", "peer 인증"],
+    keywords: ["psql", "search_path", "peer 인증"],
   },
   {
     slug: "postgres-data-types",

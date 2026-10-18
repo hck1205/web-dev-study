@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 132편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 134편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -14,8 +14,10 @@
 - 요약: 100건에서는 빠르던 코드가 10만 건에서 시간 초과가 나는 이유를 Big O로 따라간다. 자주 만나는 복잡도와 실제 숫자, 최악과 분할 상환, 공간 복잡도, 해시맵과 이진 탐색으로 줄이는 법, 자바스크립트에 숨은 반복문까지 다룬다.
 - 태그: Algorithm, JavaScript, Performance
 - 키워드: Big O, 시간 복잡도, 공간 복잡도, 분할 상환
-- 길이: 363줄
-- 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
+- 길이: 419줄
+- 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 운영에서 n²은 이런 모양으로 드러난다 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-query-rewrite
+- 키워드 백링크 →: event-loop
 
 ### Programming › Backend (`programming/backend`)
 
@@ -47,10 +49,10 @@
 - 요약: HTTP는 방금 누가 왔는지 기억하지 못한다. 서버가 세션을 보관하고 쿠키로 번호표를 돌려주는 흐름과 쿠키 옵션, CSRF까지 정리했다.
 - 태그: Authentication, Cookie, Session, Security
 - 키워드: 쿠키 세션, 세션 쿠키, 세션 ID, Set-Cookie, CSRF
-- 길이: 274줄
-- 소제목: 외투 보관소 번호표 / 로그인부터 로그아웃까지 / 쿠키에 붙는 옵션들 / 자동으로 붙는다는 것의 함정, CSRF / 세션을 노리는 공격들 / 서버가 여러 대가 되면 / 정리 / 면접에서 나올 만한 질문
-- 직접 링크 →: token-login
-- 키워드 백링크 →: html-form-http, redis-basics, what-happens-google-com
+- 길이: 333줄
+- 소제목: 외투 보관소 번호표 / 로그인부터 로그아웃까지 / 쿠키에 붙는 옵션들 / 자동으로 붙는다는 것의 함정, CSRF / 세션을 노리는 공격들 / 서버가 여러 대가 되면 / 배포하고 나니 로그인이 자꾸 풀릴 때 / 정리 / 면접에서 나올 만한 질문
+- 직접 링크 →: proxy-reverse-proxy, cors, token-login
+- 키워드 백링크 →: html-form-http, kubernetes-ingress, redis-basics, what-happens-google-com
 - 이 글로 오는 글 ←: browser-fetch, cors, html-form-http, http-caching-cdn, http-message, http-methods, local-custom-domain, nginx-https-performance, oauth, token-login, upper-layers-session-presentation-app
 
 #### `oauth` — OAuth 2.0, 비밀번호 대신 열쇠를 빌려주는 규칙
@@ -58,8 +60,8 @@
 - 요약: '구글로 계속하기' 버튼 뒤에서 오가는 요청을 한 단계씩 따라가 봤다. 인가 코드 흐름과 PKCE까지.
 - 태그: OAuth, Security, HTTP, Authorization
 - 키워드: OAuth, PKCE, 인가 코드
-- 길이: 316줄
-- 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 정리 / 면접에서 나올 만한 질문
+- 길이: 359줄
+- 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 콜백에서 막히는 세 가지 / 정리 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: token-login, cookie-session-login
 - 이 글로 오는 글 ←: local-custom-domain, token-login
 
@@ -68,8 +70,8 @@
 - 요약: 서버가 아무것도 기억하지 않고 서명된 토큰만 확인하는 방식. JWT를 뜯어보고, 변조가 막히는 이유와 리프레시 토큰, 쿠키 세션과의 차이를 따라가 봤다.
 - 태그: Authentication, JWT, Token, Security
 - 키워드: JWT, 리프레시 토큰, 액세스 토큰
-- 길이: 292줄
-- 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 정리 / 면접에서 나올 만한 질문
+- 길이: 360줄
+- 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 401이 쏟아지면 토큰부터 뜯어 본다 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: cookie-session-login, oauth
 - 키워드 백링크 →: base64
 - 이 글로 오는 글 ←: base64, cookie-session-login, gateway, git-remote-collaboration, http-message, http-status-codes, oauth
@@ -294,8 +296,8 @@
 - 요약: LIKE 검색이 느린 이유에서 출발해 분석기, 역색인, BM25 점수, refresh와 세그먼트, 샤드 구성을 따라간다. 쇼핑몰 검색에서 부딪히는 동의어·오타·패싯·깊은 페이지와 DB 동기화도 다룬다.
 - 태그: coupang, Elasticsearch, Search, Database · 회사: coupang
 - 키워드: Elasticsearch, 역색인, BM25, 형태소 분석기, search_after
-- 길이: 427줄
-- 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 다시 찾아보기로 / 면접에서 나올 만한 질문
+- 길이: 485줄
+- 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 클러스터가 yellow나 red로 바뀌면 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db
 - 키워드 백링크 →: db-index, mongodb-document-model, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-types-overview, http-methods, ports-and-sockets, postgres-jsonb-search
@@ -305,8 +307,8 @@
 - 요약: 주문 하나를 문서 하나로 저장하는 문서 모델에서 내장과 참조를 고르는 기준을 정리했다. 스키마 검증, ESR 인덱스, 트랜잭션, write concern, 샤드 키, 집계 파이프라인까지 다룬다.
 - 태그: coupang, MongoDB, NoSQL, Database · 회사: coupang
 - 키워드: MongoDB, ESR 규칙, 샤드 키, write concern, 집계 파이프라인
-- 길이: 409줄
-- 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
+- 길이: 471줄
+- 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 느린 쿼리 로그에 COLLSCAN이 보이면 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: db-index-design, db-type-relational, db-replication-sharding, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index
 
@@ -315,9 +317,9 @@
 - 요약: 글자가 아니라 뜻으로 검색한다는 게 무슨 뜻일까. 임베딩, 코사인 유사도, HNSW 그래프 탐색, RAG까지 그림으로 따라가 봤다.
 - 태그: VectorDB, Embedding, AI, Search
 - 키워드: 벡터 DB, 임베딩, HNSW, RAG
-- 길이: 285줄
-- 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / 정리 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: pythagorean-theorem, db-modeling-normalization
+- 길이: 369줄
+- 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / pgvector를 붙였는데 결과가 이상할 때 / 정리 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: pythagorean-theorem, db-index-design, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-types-overview, elasticsearch-inverted-index, pythagorean-theorem
 
 ### Programming › Database › DB Types (`programming/database/db-types`)
@@ -341,7 +343,7 @@
 - 길이: 485줄
 - 소제목: 주문을 받는 질문과 매출을 보는 질문 / 실험에 쓸 주문 500만 건 / 행으로 저장하면 안 쓰는 컬럼도 읽는다 / 같은 컬럼끼리 모이면 잘 눌린다 / 한 번에 값 하나가 아니라 묶음으로 계산한다 / 건너뛸 수 있는 덩어리는 아예 열지 않는다 / ClickHouse 테이블은 정렬 키부터 정한다 / 분석 DB가 잘 못 하는 것 / 클라우드 데이터 웨어하우스와 DuckDB / 운영 DB에서 분석 DB로 옮기는 길 / 컬럼형을 고르기 전에 / 읽는 방향에 맞춰 놓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-type-relational, db-type-time-series, db-type-embedded, db-architecture-by-scale, db-type-newsql
-- 키워드 백링크 →: postgres-advanced-sql, db-sharding, db-replication-sharding, db-index-design
+- 키워드 백링크 →: postgres-reporting-sql, db-sharding, db-replication-sharding, db-index-design
 - 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-type-embedded, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, db-types-overview, microservices
 
 #### `db-type-embedded` — 임베디드 DB: SQLite, RocksDB처럼 앱 안에 들어가는 DB
@@ -434,16 +436,16 @@
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
-#### `postgres-advanced-sql` — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL
+#### `postgres-advanced-sql` — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, MERGE, CTE
 
-- 요약: 넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, LATERAL, DISTINCT ON, FILTER, generate_series, generated column, 머티리얼라이즈드 뷰, COPY를 50만 건 주문 데이터의 실행 계획과 함께 본다.
+- 요약: 넣고 다시 조회하던 왕복과 조회 후 삽입의 경쟁을 RETURNING과 ON CONFLICT로 없애고, MERGE, 쓰기 CTE, CTE 인라인과 MATERIALIZED의 실행 계획 차이를 본다. 중복이 쌓인 테이블에 유니크 인덱스를 붙여 upsert로 바꾸는 과정도 따라간다.
 - 태그: Database, PostgreSQL, SQL, Performance
-- 키워드: ON CONFLICT, LATERAL, DISTINCT ON, 머티리얼라이즈드 뷰, 쓰기 CTE
-- 길이: 942줄 (긴 글)
-- 소제목: 예제로 쓸 작은 서점 / 넣은 행을 바로 돌려받는 RETURNING / 있으면 더하고 없으면 넣기 / 조회하고 넣으면 생기는 틈 / 원본 데이터와 맞춰 놓는 MERGE / WITH로 긴 쿼리를 문단처럼 나누기 / 한 문장으로 행을 옮기는 쓰기 CTE / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / CTE가 최적화를 막던 시절 / 문장 하나로 끝내는 습관 / 면접에서 나올 만한 질문
-- 직접 링크 →: sql-basics, postgres-roles-security, db-transaction-isolation, sqld-top-n-hierarchical-pivot, caching-strategies, sqld-window-functions, db-index, postgres-functions-triggers
-- 키워드 백링크 →: postgres-data-types, sqld-group-by-having, postgres-getting-started, sql-query-rewrite
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-keys-denormalization, db-type-columnar-olap, postgres-functions-triggers, sql-insert-update-delete, sqld-rollup-cube-grouping-sets
+- 키워드: ON CONFLICT, 쓰기 CTE, RETURNING
+- 길이: 613줄
+- 소제목: 예제로 쓸 작은 서점 / 넣은 행을 바로 돌려받는 RETURNING / 있으면 더하고 없으면 넣기 / 조회하고 넣으면 생기는 틈 / 원본 데이터와 맞춰 놓는 MERGE / WITH로 긴 쿼리를 문단처럼 나누기 / 한 문장으로 행을 옮기는 쓰기 CTE / CTE가 최적화를 막던 시절 / 유니크 인덱스 없이 쌓인 중복을 정리할 때 / 문장 하나로 끝내는 습관 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-reporting-sql, sql-basics, postgres-roles-security, db-transaction-isolation, sqld-top-n-hierarchical-pivot, postgres-functions-triggers
+- 키워드 백링크 →: postgres-data-types, postgres-getting-started
+- 이 글로 오는 글 ←: db-architecture-by-scale, postgres-functions-triggers, postgres-reporting-sql, sql-insert-update-delete
 
 #### `postgres-architecture` — PostgreSQL 내부 구조: 프로세스, 공유 메모리, 페이지, WAL, 체크포인트
 
@@ -453,8 +455,19 @@
 - 길이: 816줄
 - 소제목: 연결 하나에 프로세스 하나 / 백그라운드에서 도는 프로세스들 / 함께 쓰는 메모리와 혼자 쓰는 메모리 / 같은 페이지가 두 번 캐시된다 / 데이터 디렉터리 들여다보기 / 8KB 페이지 한 장의 구조 / 페이지에 빈자리를 남기는 fillfactor / 큰 값은 TOAST로 따로 둔다 / 먼저 로그에 쓰고 나중에 파일에 쓴다 / LSN은 WAL 안의 바이트 주소다 / 체크포인트 직후의 첫 수정은 페이지 통째로 / 체크포인트가 하는 일 / 서버가 죽었다 다시 뜰 때 / fsync와 synchronous_commit / 다시 64GB 서버로 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, postgres-jsonb-search, sql-query-tuning, postgres-operations, postgres-mvcc-vacuum, db-index, db-transaction-isolation, db-replication-sharding
-- 키워드 백링크 →: db-architecture-by-scale, db-type-relational
+- 키워드 백링크 →: postgres-connections-pg-hba, db-architecture-by-scale, db-type-relational
 - 이 글로 오는 글 ←: db-keys-denormalization, db-replication-sharding, db-type-embedded, db-type-relational, postgres-data-types, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-query-rewrite
+
+#### `postgres-connections-pg-hba` — PostgreSQL 접속 설정: 접속 URI, .pgpass, pg_hba.conf, 원격 접속
+
+- 요약: 앱 서버에서 붙자 Connection refused, no pg_hba.conf entry, password authentication failed로 바뀌는 에러를 따라가며 접속 URI와 환경 변수, .pgpass, pg_hba.conf의 첫 줄 규칙, 원격 접속을 여는 순서를 정리한다. 접속 자리가 다 찼을 때 pg_stat_activity로 원인을 찾는 법도 본다.
+- 태그: Database, PostgreSQL, Linux, Network, Security
+- 키워드: pg_hba.conf, listen_addresses, 접속 URI
+- 길이: 445줄
+- 소제목: 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 에러 문구가 끊긴 단계를 알려 준다 / 들어오는 길은 맞는데 자리가 없을 때 / 접속 URI를 직접 나눠 보기 / 접속 하나가 지나는 문 세 개 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-getting-started, postgres-roles-security
+- 키워드 백링크 →: db-architecture-by-scale, postgres-operations, sql-batch-timeout-pool, layer-ip-addressing
+- 이 글로 오는 글 ←: postgres-architecture, postgres-getting-started, postgres-roles-security
 
 #### `postgres-data-types` — 타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range
 
@@ -476,18 +489,18 @@
 - 소제목: updated_at이 멈춰 있는 책 / SQL로 쓰는 함수와 plpgsql로 쓰는 함수 / 함수에 붙이는 약속, 변동성 / 실패를 붙잡는 EXCEPTION 블록 / 트랜잭션을 나눠 커밋하는 프로시저 / 테이블이 바뀔 때 끼어드는 트리거 / 누가 무엇을 바꿨는지 남기는 감사 로그 / 트리거가 실행되는 순서 / 행 20만 개를 고칠 때 트리거가 치르는 값 / 커밋할 때 검사하는 제약 트리거 / 트리거가 만드는 함정 / 만든 사람 권한으로 도는 SECURITY DEFINER / 바뀌었다고 알려 주는 LISTEN과 NOTIFY / 로직을 DB에 둘까 애플리케이션에 둘까 / DB 안에 둔 코드도 코드다 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-advanced-sql, db-transaction-isolation, postgres-roles-security, db-architecture-by-scale, postgres-jsonb-search
 - 키워드 백링크 →: sql-select-where-null, db-index, json-crud-http, postgres-getting-started, sql-basics, db-locking-deadlock, db-index-design, postgres-data-types
-- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-jsonb-search, postgres-roles-security
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-jsonb-search, postgres-reporting-sql, postgres-roles-security
 
 #### `postgres-getting-started` — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
 
-- 요약: Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, psql 사용법, 접속 URI, pg_hba.conf를 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.
+- 요약: Ubuntu에 설치한 직후 만나는 role does not exist 에러에서 시작해 peer 인증, 클러스터·데이터베이스·스키마 구조, search_path, psql 사용법을 정리한다. 시리즈 내내 쓸 서점 DB도 이 글에서 만든다.
 - 태그: Database, PostgreSQL, SQL, Linux
-- 키워드: psql, pg_hba.conf, search_path, peer 인증
-- 길이: 933줄 (긴 글)
-- 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
-- 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
-- 키워드 백링크 →: postgres-operations, db-type-relational, sql-batch-timeout-pool, layer-ip-addressing
-- 이 글로 오는 글 ←: db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-select-where-null, sqld-null-functions, sqld-single-row-functions
+- 키워드: psql, search_path, peer 인증
+- 길이: 624줄
+- 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 현장에서 relation does not exist를 만나는 순간 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-connections-pg-hba, sql-basics, postgres-data-types, postgres-roles-security
+- 키워드 백링크 →: db-type-relational
+- 이 글로 오는 글 ←: db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-connections-pg-hba, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-reporting-sql, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-select-where-null, sqld-null-functions, sqld-single-row-functions
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -520,7 +533,18 @@
 - 소제목: 설정은 어디에 쓰고 언제 적용되나 / 메모리 설정 정하기 / work_mem은 곱하기로 계산한다 / SSD라면 random_page_cost를 낮춘다 / max_connections를 올리는 대신 연결 풀 / 매일 보는 숫자들 / 느린 쿼리를 로그로 잡기 / 논리 백업과 복원 / 물리 백업과 WAL 보관 / WHERE 없는 DELETE 3초 전으로 / 백업은 복원해 봐야 백업이다 / 백업 도구와 PostgreSQL 17의 증분 백업 / 메이저 버전 올리기 / 마이너 업데이트 / 관리형 서비스를 쓴다면 / 운영에 올리기 전 점검 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-architecture, postgres-mvcc-vacuum, sql-query-tuning, db-transaction-isolation, db-replication-sharding
 - 키워드 백링크 →: db-index, db-architecture-by-scale, db-type-relational, postgres-getting-started, sql-query-rewrite, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-getting-started, postgres-mvcc-vacuum, sql-insert-update-delete
+- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-connections-pg-hba, postgres-mvcc-vacuum, sql-insert-update-delete
+
+#### `postgres-reporting-sql` — PostgreSQL 리포트 쿼리: DISTINCT ON, FILTER, generate_series, 머티리얼라이즈드 뷰, COPY, LATERAL
+
+- 요약: 회원별 마지막 주문, 빈 날을 0으로 채운 일별 매출, 미리 계산해 둔 집계, 50만 건 적재, 회원별 최근 3건을 PostgreSQL 문법과 실행 계획으로 만든다. REFRESH가 대시보드를 막는 장애와 COPY가 한 줄 때문에 실패하는 경우도 재현해 본다.
+- 태그: Database, PostgreSQL, SQL, Performance
+- 키워드: LATERAL, DISTINCT ON, 머티리얼라이즈드 뷰, generate_series
+- 길이: 579줄
+- 소제목: 앞 글에서 이어지는 서점 데이터 / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / 대시보드가 멈췄는데 DB는 한가할 때 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: postgres-advanced-sql, postgres-functions-triggers, caching-strategies, sqld-window-functions, db-index
+- 키워드 백링크 →: sqld-group-by-having, postgres-getting-started, sql-query-rewrite
+- 이 글로 오는 글 ←: db-keys-denormalization, db-type-columnar-olap, postgres-advanced-sql, sqld-rollup-cube-grouping-sets
 
 #### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
 
@@ -529,9 +553,9 @@
 - 키워드: 행 단위 보안, Row Level Security, ALTER DEFAULT PRIVILEGES, scram-sha-256, SET ROLE
 - 길이: 809줄
 - 소제목: 역할 하나가 사용자이자 그룹이다 / 쿼리 하나가 지나는 검사들 / 주인, 마이그레이션, 앱, 분석 역할로 나누기 / 비밀번호는 SCRAM으로 저장한다 / pg_hba.conf와 TLS로 들어오는 길 좁히기 / 서점마다 자기 주문만 보게 하기 / 누가 언제 들어왔는지 남기기 / SQL 인젝션은 권한보다 앞에서 막는다 / pg_hba 줄 고르기를 직접 구현해 보기 / 앱 계정이 할 수 있는 일 / 면접에서 나올 만한 질문
-- 직접 링크 →: postgres-getting-started, postgres-functions-triggers
+- 직접 링크 →: postgres-getting-started, postgres-functions-triggers, postgres-connections-pg-hba
 - 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-insert-update-delete, db-index-design, sql-batch-timeout-pool, layer-ip-addressing, dns
-- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-connections-pg-hba, postgres-functions-triggers, postgres-getting-started
 
 ### Programming › Database › Redis (`programming/database/redis`)
 
@@ -540,10 +564,10 @@
 - 요약: Redis가 빠른 이유와 느린 명령 하나가 서버 전체를 멈추는 이유는 같은 곳에 있다. 메모리와 단일 스레드 이벤트 루프 구조를 보고, Ubuntu에 설치해 자료구조별 명령을 직접 실행해 본다.
 - 태그: Redis, Database, NoSQL, Cache, Performance
 - 키워드: Redis, Memcached, I/O 다중화, 분산 락
-- 길이: 818줄
-- 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
-- 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
-- 키워드 백링크 →: redis-cluster, db-type-relational, event-loop, db-transaction-isolation, dns
+- 길이: 881줄
+- 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
+- 키워드 백링크 →: redis-cluster, db-type-relational, db-transaction-isolation, dns
 - 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rest-api-design, tcp-reliability-congestion
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
@@ -599,7 +623,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index-pitfalls, sql-query-tuning, db-index-design
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, elasticsearch-inverted-index, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-correlated-subquery, sqld-data-modeling, sqld-top-n-hierarchical-pivot, sqld-type-conversion
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, elasticsearch-inverted-index, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, postgres-reporting-sql, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-correlated-subquery, sqld-data-modeling, sqld-top-n-hierarchical-pivot, sqld-type-conversion
 
 #### `db-index-design` — 인덱스 고르기: 복합, 커버링, 부분, 식 인덱스와 GIN·BRIN
 
@@ -609,7 +633,7 @@
 - 길이: 593줄
 - 소제목: 앞 글의 주문 100만 건 그대로 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / B-tree가 아닌 인덱스들 / 인덱스를 하나 더 만들자는 리뷰를 받았을 때 / 쿼리 모양에 맞춰 고른다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, db-index-pitfalls
-- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-type-columnar-olap, db-type-time-series, microservices, mongodb-document-model, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-query-rewrite
+- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-type-columnar-olap, db-type-time-series, microservices, mongodb-document-model, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-query-rewrite, vector-db
 
 #### `db-index-pitfalls` — 인덱스가 안 타는 이유와 인덱스의 대가
 
@@ -630,7 +654,7 @@
 - 길이: 476줄
 - 소제목: 정규화를 마친 네 테이블 / 자연 키와 대리 키, 그리고 UUID / 주문 당시 가격은 중복이 아니다 / 일부러 다시 합칠 때 (반정규화) / JSONB 열은 어디까지 괜찮나 / 자주 보는 설계 실수 / SQLD에서 묻는 식별자와 반정규화 / 중복을 어디에 둘지 고르는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-modeling-normalization, db-transaction-isolation
-- 키워드 백링크 →: postgres-architecture, postgres-advanced-sql, db-index, db-sharding, db-index-design, db-types-overview, db-partitioning
+- 키워드 백링크 →: postgres-architecture, postgres-reporting-sql, db-index, db-sharding, db-index-design, db-types-overview, db-partitioning
 - 이 글로 오는 글 ←: db-modeling-normalization, sqld-data-modeling, sqld-entity-attribute-relationship
 
 #### `db-locking-deadlock` — 재고 -1 막기: 조건부 UPDATE, 잠금, 교착 상태
@@ -686,7 +710,7 @@
 - 소제목: 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 쿼리 바깥에서 새는 시간 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, sql-query-rewrite, db-index, sql-insert-update-delete
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-architecture-by-scale, postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, dns, iptables-nat, ports-and-sockets, postgres-getting-started, postgres-roles-security, resilience-patterns, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, dns, iptables-nat, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, resilience-patterns, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle
 
 #### `sql-insert-update-delete` — 행 넣고 고치고 지우기: UPSERT, 트랜잭션, TRUNCATE
 
@@ -708,7 +732,7 @@
 - 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index, sql-batch-timeout-pool
 - 키워드 백링크 →: rest-api-design, db-index-design, postgres-architecture, db-transaction-isolation
-- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-operations, rest-api-design, sql-batch-timeout-pool, sql-query-tuning
+- 이 글로 오는 글 ←: big-o-notation, postgres-operations, postgres-reporting-sql, rest-api-design, sql-batch-timeout-pool, sql-query-tuning
 
 #### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
 
@@ -775,7 +799,7 @@
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
 - 키워드 백링크 →: sqld-null-functions
-- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-select-where-null, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-reporting-sql, sql-select-where-null, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -807,7 +831,7 @@
 - 길이: 571줄
 - 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
-- 키워드 백링크 →: json-crud-http, postgres-advanced-sql, sqld-null-functions
+- 키워드 백링크 →: json-crud-http, postgres-reporting-sql, sqld-null-functions
 - 이 글로 오는 글 ←: sqld-window-functions
 
 #### `sqld-set-operators` — SQLD 집합 연산자: UNION, INTERSECT, MINUS
@@ -872,7 +896,7 @@
 - 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
 - 키워드 백링크 →: sqld-group-by-having, sqld-correlated-subquery
-- 이 글로 오는 글 ←: db-type-embedded, postgres-advanced-sql, sqld-correlated-subquery, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: db-type-embedded, postgres-reporting-sql, sqld-correlated-subquery, sqld-top-n-hierarchical-pivot
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -894,8 +918,9 @@
 - 요약: 사용자를 해시로 일관되게 나누고, 화면을 본 사람만 세고, 정해 둔 표본을 모은 뒤 판정해야 숫자 차이를 변경의 효과라고 말할 수 있다. 플래그 종류, 깜빡임, 노출 로깅, 표본 크기와 엿보기, SRM, 실험이 싸지는 화면 설계까지 정리했다.
 - 태그: coupang, Experimentation, Feature Flag, Frontend, Architecture · 회사: coupang
 - 키워드: A/B 테스트, 피처 플래그, 킬 스위치, 표본 비율 불일치
-- 길이: 393줄
-- 소제목: 지난주와 비교하면 안 되는 이유 / 배포와 공개를 떼어 놓는 스위치 / 같은 사람에게는 항상 같은 쪽을 / 직접 버킷을 계산해 보기 / 어디서 나누느냐에 따라 화면이 깜빡인다 / 보여 준 사람만 센다 / 무엇이 나아져야 이긴 건가 / 몇 명이 필요한가 / 중간에 들여다보면 거짓 승리가 늘어난다 / 처음에만 반짝하는 효과 / 반반으로 나눴는데 반반이 아니다 / 실험이 싸지려면 화면이 설정을 받아야 한다 / 끝난 플래그는 빚이 된다 / 다시 4.8%와 5.3%로 / 면접에서 나올 만한 질문
+- 길이: 468줄
+- 소제목: 지난주와 비교하면 안 되는 이유 / 배포와 공개를 떼어 놓는 스위치 / 같은 사람에게는 항상 같은 쪽을 / 직접 버킷을 계산해 보기 / 어디서 나누느냐에 따라 화면이 깜빡인다 / 보여 준 사람만 센다 / 무엇이 나아져야 이긴 건가 / 몇 명이 필요한가 / 중간에 들여다보면 거짓 승리가 늘어난다 / 처음에만 반짝하는 효과 / 반반으로 나눴는데 반반이 아니다 / 실험이 싸지려면 화면이 설정을 받아야 한다 / 끝난 플래그는 빚이 된다 / 실험 숫자가 이상할 때 먼저 보는 곳 / 다시 4.8%와 5.3%로 / 면접에서 나올 만한 질문
+- 직접 링크 →: http-caching-cdn
 - 키워드 백링크 →: rendering-strategies, db-modeling-normalization, core-web-vitals
 - 이 글로 오는 글 ←: core-web-vitals, git-branching-strategy
 
@@ -904,9 +929,9 @@
 - 요약: 여러 팀이 하나의 웹 앱에 묶여 서로의 배포를 기다리는 문제를 셸과 리모트 구조로 푸는 방법을 정리했다. 합치는 방식, React 싱글턴과 버전 스큐, 독립 배포와 롤백, 그리고 모노레포로 충분한 경우까지 다룬다.
 - 태그: coupang, Architecture, Frontend, React, Micro Frontends · 회사: coupang
 - 키워드: 마이크로 프런트엔드, 마이크로 프론트엔드, Module Federation, 멀티 존
-- 길이: 344줄
-- 소제목: 같은 배포 열차에 모두 타고 있다 / 껍데기 앱과 조각 앱 / 언제 합치느냐가 갈림길이다 / 런타임에 리모트를 불러오는 과정 / 설정 한 덩어리 뜯어보기 / React가 두 개 뜨면 생기는 일 / 주소창은 셸이 쥔다 / 버튼이 팀마다 달라 보이지 않게 / 앱끼리 말을 거는 방법 / 따로 배포하면 따로 되돌린다 / 쪼갠 만큼 무거워진다 / 대부분은 모노레포로 충분하다 / 다시 목요일 배포로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: microservices
+- 길이: 403줄
+- 소제목: 같은 배포 열차에 모두 타고 있다 / 껍데기 앱과 조각 앱 / 언제 합치느냐가 갈림길이다 / 런타임에 리모트를 불러오는 과정 / 설정 한 덩어리 뜯어보기 / React가 두 개 뜨면 생기는 일 / 주소창은 셸이 쥔다 / 버튼이 팀마다 달라 보이지 않게 / 앱끼리 말을 거는 방법 / 따로 배포하면 따로 되돌린다 / 배포 다음 날 결제 영역만 비어 있을 때 / 쪼갠 만큼 무거워진다 / 대부분은 모노레포로 충분하다 / 다시 목요일 배포로 / 면접에서 나올 만한 질문
+- 키워드 백링크 →: microservices, cors
 
 ### Programming › Frontend › JavaScript (`programming/frontend/javascript`)
 
@@ -926,10 +951,11 @@
 - 요약: 콜 스택, 태스크 큐, 마이크로태스크 큐가 어떤 순서로 돌고 렌더링이 어디에 끼어드는지 출력 순서 퍼즐로 따라간다. 긴 작업이 INP를 망치는 이유와 작업을 쪼개는 방법, Node.js의 단계와 process.nextTick까지 다룬다.
 - 태그: coupang, JavaScript, Browser, Performance, Node.js · 회사: coupang
 - 키워드: 이벤트 루프, 마이크로태스크, 태스크 큐, process.nextTick, setImmediate
-- 길이: 505줄
-- 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: core-web-vitals
-- 이 글로 오는 글 ←: core-web-vitals, js-memory-leak, nginx-basics, redis-basics
+- 길이: 567줄
+- 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
+- 직접 링크 →: core-web-vitals
+- 키워드 백링크 →: osi-in-practice
+- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, nginx-basics, redis-basics
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -959,8 +985,8 @@
 - 요약: 큰 번들이 모바일에서 왜 다운로드보다 실행에서 더 비싼지 보고, 동적 import로 청크를 나누는 법과 트리 셰이킹이 안 쓰는 코드를 빼는 원리를 따라간다. sideEffects, CommonJS, 배럴 파일의 함정과 prefetch, 내용 해시 캐시, 과도한 분할로 생기는 워터폴까지 다룬다.
 - 태그: coupang, Performance, JavaScript, Webpack, Bundler · 회사: coupang
 - 키워드: 코드 스플리팅, 트리 셰이킹, 배럴 파일, 동적 import
-- 길이: 434줄
-- 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
+- 길이: 491줄
+- 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: http-versions, rendering-strategies
 - 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions
@@ -970,10 +996,10 @@
 - 요약: LCP, INP, CLS가 각각 무엇을 재는지, Lighthouse 점수와 실제 사용자 수치가 왜 다르게 나오는지 따라간다. LCP 네 조각과 INP 세 구간, CLS 세션 창으로 원인을 쪼개 찾고 고치는 방법까지 다룬다.
 - 태그: coupang, Performance, Browser, JavaScript, Core Web Vitals · 회사: coupang
 - 키워드: Core Web Vitals, LCP, INP, CLS, 레이아웃 스래싱
-- 길이: 452줄
-- 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
-- 직접 링크 →: what-happens-google-com, code-splitting
-- 키워드 백링크 →: ab-testing, event-loop, cors, dns
+- 길이: 514줄
+- 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
+- 직접 링크 →: what-happens-google-com, code-splitting, event-loop
+- 키워드 백링크 →: ab-testing, cors, dns
 - 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, react-rerender, rendering-strategies
 
 #### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
@@ -981,8 +1007,8 @@
 - 요약: 요청 하나가 메모리 캐시, Service Worker, HTTP 캐시를 차례로 거치는 과정과 bfcache, Cache Storage 전략, 새 Service Worker가 기다리는 이유를 이 블로그의 sw.js로 따라간다. 데이터 저장소의 용량과 지워지는 규칙, 미리 받기 힌트까지 정리한다.
 - 태그: Cache, Browser, Performance, Frontend
 - 키워드: Service Worker, bfcache, Cache Storage, skipWaiting, Speculation Rules
-- 길이: 605줄
-- 소제목: 요청 하나가 거치는 캐시들 / HTTP 캐시는 서버가 정한 기한을 따른다 / 뒤로 가기가 즉시 뜨는 bfcache / 페이지 앞에 선 프록시, Service Worker / 설치, 활성화, 가로채기 / 캐시를 먼저 볼까 네트워크를 먼저 볼까 / 미리 담기와 쓰면서 담기 / 이 블로그의 sw.js 읽기 / 버전을 올리고 옛 캐시를 지운다 / 새 Service Worker는 기다린다 / Workbox를 쓰면 / 데이터는 어디에 저장하나 / 용량과 지워지는 순서 / 다음에 필요한 것을 미리 받기 / 개발자 도구에서 확인하기 / 처음 장면으로 돌아가서 / 면접에서 나올 만한 질문
+- 길이: 645줄
+- 소제목: 요청 하나가 거치는 캐시들 / HTTP 캐시는 서버가 정한 기한을 따른다 / 뒤로 가기가 즉시 뜨는 bfcache / 페이지 앞에 선 프록시, Service Worker / 설치, 활성화, 가로채기 / 캐시를 먼저 볼까 네트워크를 먼저 볼까 / 미리 담기와 쓰면서 담기 / 이 블로그의 sw.js 읽기 / 버전을 올리고 옛 캐시를 지운다 / 새 Service Worker는 기다린다 / Workbox를 쓰면 / 데이터는 어디에 저장하나 / 용량과 지워지는 순서 / 다음에 필요한 것을 미리 받기 / 개발자 도구에서 확인하기 / 사용자 브라우저의 캐시 상태를 숫자로 받기 / 처음 장면으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-caching-cdn, caching-strategies, client-data-cache, core-web-vitals, code-splitting
 - 키워드 백링크 →: realtime-communication, what-happens-google-com, cors
 - 이 글로 오는 글 ←: browser-fetch, client-data-cache, http-caching-cdn
@@ -994,10 +1020,10 @@
 - 요약: 검색창 글자 하나에 목록 전체가 다시 렌더링되는 장면에서 출발해 렌더와 커밋, 리렌더링이 일어나는 이유, key와 재조정, memo·useCallback이 듣는 경우와 안 듣는 경우를 따라간다. context 분리, 상태 위치 옮기기, 자동 배칭, transition, Profiler로 원인 찾기까지 다룬다.
 - 태그: coupang, React, Performance, Rendering · 회사: coupang
 - 키워드: 리렌더링, 재조정, React.memo, 자동 배칭, useDeferredValue
-- 길이: 591줄
-- 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
-- 직접 링크 →: rendering-strategies
-- 키워드 백링크 →: core-web-vitals, client-data-cache
+- 길이: 642줄
+- 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: client-data-cache, rendering-strategies
+- 키워드 백링크 →: core-web-vitals
 - 이 글로 오는 글 ←: client-data-cache, rendering-strategies
 
 #### `rendering-strategies` — CSR, SSR, SSG, ISR, 스트리밍: HTML은 어디서 만들어지나
@@ -1005,9 +1031,9 @@
 - 요약: 같은 상품 페이지의 HTML을 브라우저, 요청 시 서버, 빌드, 뒤늦은 재생성, 조각 전송 중 어디서 만드느냐에 따라 TTFB·LCP·서버 비용·신선도가 어떻게 달라지는지 비교한다. 하이드레이션과 불일치, ISR 갱신 방식, 스트리밍의 제약, 서버 컴포넌트, 쇼핑몰 페이지별 선택까지 다룬다.
 - 태그: coupang, React, SSR, Next.js, Performance, Rendering · 회사: coupang
 - 키워드: 하이드레이션, ISR, 스트리밍 SSR, 서버 컴포넌트, SSG
-- 길이: 467줄
-- 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
-- 직접 링크 →: react-rerender
+- 길이: 539줄
+- 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
+- 직접 링크 →: proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, http-status-codes, core-web-vitals
 - 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, react-rerender
 
@@ -1022,7 +1048,7 @@
 - 소제목: 명령을 어디서 치는지부터 정한다 / 먼저 curl 한 번으로 어디서 멈췄는지 본다 / 링크가 살아 있는지 / 내 주소와 나갈 길 / 다음 칸의 MAC을 얻었는지 / 목적지까지 닿는지 / 이름이 맞는 주소로 풀리는지 / 포트가 열려 있는지 / TLS가 맺어지는지 / HTTP가 기대한 답을 주는지 / 갈림길을 한 장으로 / 확인하다가 흔히 하는 실수 / 처음 실패한 칸이 답이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: osi-in-practice, docker-network-volume, layer-link-ethernet-arp, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, hosts-file, ports-and-sockets, packet-capture-tcpdump, iptables-basics, https-tls, proxy-reverse-proxy
 - 키워드 백링크 →: what-happens-google-com, docker-container-basics, http-status-codes, dns
-- 이 글로 오는 글 ←: browser-fetch, http-message, http-status-codes, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, http-message, http-status-codes, kubernetes-ingress, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, redis-basics, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `osi-in-practice` — OSI 7계층을 알면 현장에서 무엇이 달라지나
 
@@ -1033,7 +1059,7 @@
 - 소제목: 에러 메시지는 어느 층이 말했는지 알려 준다 / 같은 메시지가 다른 층에서 나오기도 한다 / 로드 밸런서는 어느 층에서 나누느냐로 고른다 / 방화벽도 층마다 따로 있다 / 헬스 체크는 어느 층까지 물어보나 / TLS를 어디서 풀지 정한다 / 타임아웃은 안쪽으로 갈수록 짧게 / 클라우드 제품 이름을 층으로 읽는다 / 네트워크 탓이라고 말하기 전에 모을 것 / 층 번호는 질문을 좁히는 말이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, http-status-codes, nginx-reverse-proxy, iptables-basics, dns, layer-link-ethernet-arp, proxy-reverse-proxy, tcp-connection-lifecycle, ports-and-sockets, resilience-patterns, https-tls, upper-layers-session-presentation-app, iptables-nat, kubernetes-ingress, gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: docker-container-basics, realtime-communication, http-versions, what-happens-google-com, layer-ip-routing-icmp, udp-and-quic
-- 이 글로 오는 글 ←: gateway, http-status-codes, iptables-nat, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: caching-strategies, event-loop, gateway, http-status-codes, iptables-nat, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `packet-capture-tcpdump` — tcpdump로 계층을 눈으로 보기
 
@@ -1044,7 +1070,7 @@
 - 소제목: 어디서 찍을지부터 정한다 / curl 한 번을 처음부터 끝까지 / 한 줄을 읽는 법 / 필요한 패킷만 거른다 / 내용까지 본다 / 파일로 남기고 Wireshark로 연다 / 장애 장면을 패킷으로 가른다 / 컨테이너와 Pod 안에서 찍는다 / TLS 안은 보이지 않는다, 이름만 빼고 / 찍기 전에 정해 둘 것 / 패킷은 각자의 로그보다 정직하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-troubleshooting-by-layer, layer-link-ethernet-arp, tcp-connection-lifecycle, network-layers-overview, iptables-nat, https-tls, osi-in-practice
 - 키워드 백링크 →: nginx-reverse-proxy, docker-container-basics, ports-and-sockets, what-happens-google-com, udp-and-quic, dns
-- 이 글로 오는 글 ←: http-message, iptables-nat, layer-mtu-fragmentation, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, tcp-connection-lifecycle, tcp-reliability-congestion, udp-and-quic, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: http-message, iptables-nat, kubernetes-ingress, layer-mtu-fragmentation, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, tcp-connection-lifecycle, tcp-reliability-congestion, udp-and-quic, upper-layers-session-presentation-app
 
 ### Programming › Network (`programming/network`)
 
@@ -1079,7 +1105,7 @@
 - 소제목: 응답은 여러 곳에 복사된다 / 신선한 동안은 묻지도 않는다 / Cache-Control 한 줄 뜯어 보기 / 상한 사본이 아직 맞는지 묻기 / 무엇을 같은 요청으로 보나 / 이름에 해시를 넣으면 영원히 캐시할 수 있다 / 엣지에서 기한을 정하는 쪽은 누구인가 / 한꺼번에 만료되면 오리진이 몰린다 / 지우는 데도 시간이 걸린다 / 사람마다 다른 페이지를 공유 캐시에 두면 / 응답 헤더로 확인한다 / 처음 장면을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com
 - 키워드 백링크 →: http-message, frontend-browser-cache, http-versions, redis-basics, cookie-session-login, cors, dns
-- 이 글로 오는 글 ←: browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nginx-https-performance, proxy-reverse-proxy, rendering-strategies, rest-api-design, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: ab-testing, browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nginx-https-performance, proxy-reverse-proxy, rendering-strategies, rest-api-design, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `proxy-reverse-proxy` — 프록시와 리버스 프록시: 누구를 대신하나
 
@@ -1090,7 +1116,7 @@
 - 소제목: 프록시는 누구를 대신하나 / 프록시에게 보내는 HTTP 요청은 모양이 다르다 / HTTPS는 CONNECT로 터널을 판다 / 회사 프록시가 TLS를 열어 볼 때 / 설정 없이 지나가는 프록시와 PAC 파일 / HTTP를 모르는 프록시, SOCKS5 / Ubuntu에서 프록시 쓰게 하기 / 서버 앞을 지키는 리버스 프록시 / 앱에는 로드 밸런서 주소만 보인다 / X-Forwarded-For 한 줄 뜯어보기 / 진짜 클라이언트 IP 고르기 / 표준 헤더 Forwarded / 헤더를 못 붙이는 L4 로드 밸런서와 PROXY protocol / CDN에서 앱까지, 헤더가 붙는 자리 / 리버스 프록시, 로드 밸런서, API 게이트웨이 / 다시 두 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: https-tls, nginx-reverse-proxy, http-caching-cdn, local-custom-domain, gateway
 - 키워드 백링크 →: docker-container-basics, osi-in-practice, iptables-basics, http-versions, ports-and-sockets, layer-ip-addressing, http-status-codes, what-happens-google-com, udp-and-quic, dns
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, layer-ip-addressing, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, realtime-communication
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, layer-ip-addressing, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, realtime-communication, rendering-strategies
 
 #### `realtime-communication` — 서버가 먼저 말하게 하기: 폴링, 롱 폴링, SSE, WebSocket
 
@@ -1182,7 +1208,7 @@
 - 소제목: 주소 하나에 망 번호와 기기 번호가 들어 있다 / 서브넷 마스크를 비트로 보기 / 망 하나에 몇 대를 붙일 수 있나 / 같은 망이면 직접, 아니면 게이트웨이로 / 사설 대역과 특수한 주소들 / 큰 대역을 작게 나누기 / 대역이 겹치면 길이 사라진다 / IPv6 주소 읽기 / 현장에서 주소와 마주치는 순간 / 동네와 번지 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, layer-link-ethernet-arp, layer-ip-routing-icmp, iptables-nat, ports-and-sockets, proxy-reverse-proxy
 - 키워드 백링크 →: docker-container-basics, dns
-- 이 글로 오는 글 ←: layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, postgres-getting-started, postgres-roles-security, proxy-reverse-proxy
+- 이 글로 오는 글 ←: layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, postgres-connections-pg-hba, postgres-roles-security, proxy-reverse-proxy
 
 #### `layer-ip-routing-icmp` — 라우팅과 ICMP: 패킷이 길을 찾는 법
 
@@ -1318,7 +1344,7 @@
 - 소제목: 서버는 응답했는데 콘솔은 빨갛다 / 출처를 가르는 세 가지 / 남의 응답을 읽지 못하게 하는 이유 / 응답 헤더로 허락을 받는다 / 먼저 물어보는 요청 (preflight) / 허락 헤더 하나씩 / 쿠키까지 보내려면 / 열어 두다가 뚫리는 경우 / CORS는 브라우저가 지킨다 / CORS는 CSRF를 막지 못한다 / 개발할 때는 프록시로 돌아간다 / 평소엔 되다가 가끔만 나는 CORS 에러 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: local-custom-domain, cookie-session-login, http-caching-cdn
 - 키워드 백링크 →: json-crud-http, http-status-codes
-- 이 글로 오는 글 ←: browser-fetch, core-web-vitals, frontend-browser-cache, html-form-http, http-caching-cdn, http-methods, json-crud-http, kubernetes-ingress, local-custom-domain, realtime-communication
+- 이 글로 오는 글 ←: browser-fetch, cookie-session-login, core-web-vitals, frontend-browser-cache, html-form-http, http-caching-cdn, http-methods, json-crud-http, kubernetes-ingress, local-custom-domain, micro-frontends, realtime-communication
 
 #### `https-tls` — HTTPS는 무엇을 지켜 주나: TLS 1.3
 
@@ -1395,11 +1421,11 @@
 - 요약: 서비스마다 로드 밸런서를 다는 대신 Ingress 규칙과 컨트롤러로 입구를 하나로 합친다. host·path 라우팅, TLS 종료와 cert-manager, 요청이 Pod에 닿는 경로와 흔한 에러까지 따라가 본다.
 - 태그: Kubernetes, Ingress, HTTP, TLS
 - 키워드: Ingress, Ingress Controller, ingress-nginx, IngressClass, cert-manager
-- 길이: 396줄
+- 길이: 433줄
 - 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
-- 직접 링크 →: gateway
+- 직접 링크 →: gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, http-status-codes, what-happens-google-com, cors, dns
-- 이 글로 오는 글 ←: docker-compose, gateway, http-message, https-tls, iptables-nat, osi-in-practice
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, http-message, https-tls, iptables-nat, osi-in-practice
 
 ### Programming › Server/Infra › Nginx (`programming/server-infra/nginx`)
 
@@ -1443,11 +1469,11 @@
 - 요약: cache-aside부터 write-behind까지 캐시를 채우고 지우는 패턴을 비교하고, DB와 캐시 사이의 경쟁, 스탬피드, 관통, 눈사태, 핫 키를 막는 방법을 정리한다.
 - 태그: Cache, Redis, System Design, Performance
 - 키워드: cache-aside, write-through, write-behind, 캐시 관통, 핫 키
-- 길이: 590줄
-- 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
-- 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction
+- 길이: 657줄
+- 소제목: 캐시를 먼저 보고 없으면 DB에서: cache-aside / 캐시가 대신 읽어 오는 read-through / 쓰기는 어디로 먼저 보내나 / TTL은 얼마나 낡아도 되는지로 정한다 / 고칠 때 캐시를 지울까, 같이 고칠까 / 지웠는데 옛 값이 다시 들어가는 경우 / 만료 순간 같은 키로 몰리는 요청 / 키 하나에만 몰리는 트래픽 / 없는 데이터를 계속 물어볼 때 / 여러 키가 한꺼번에 만료될 때 / 로컬 캐시와 Redis를 겹쳐 쓰기 / LRU 캐시를 직접 짜 보기 / 캐시가 일하는지 숫자로 본다 / 고친 값이 안 바뀐다는 문의가 오면 / 캐시는 지우는 일까지가 설계다 / 면접에서 나올 만한 질문
+- 직접 링크 →: redis-basics, resilience-patterns, http-caching-cdn, redis-persistence-ha, redis-memory-eviction, osi-in-practice
 - 키워드 백링크 →: redis-cluster, db-type-columnar-olap, db-replication-sharding, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-key-value, db-type-relational, frontend-browser-cache, postgres-advanced-sql, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-type-key-value, db-type-relational, frontend-browser-cache, postgres-reporting-sql, redis-basics, redis-memory-eviction
 
 #### `db-architecture-by-scale` — 서비스 규모별 DB 설계: 한 대에서 여러 저장소까지
 
@@ -1458,7 +1484,7 @@
 - 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
 - 키워드 백링크 →: db-type-time-series, postgres-advanced-sql, db-type-columnar-olap, postgres-mvcc-vacuum, db-sharding, db-type-wide-column, db-type-key-value, db-type-relational, db-type-graph, http-caching-cdn, sql-batch-timeout-pool, postgres-operations, postgres-jsonb-search, db-partitioning, sql-basics
-- 이 글로 오는 글 ←: db-replication-sharding, db-sharding, db-type-columnar-olap, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-batch-timeout-pool
+- 이 글로 오는 글 ←: db-replication-sharding, db-sharding, db-type-columnar-olap, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-connections-pg-hba, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-batch-timeout-pool
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -1546,7 +1572,7 @@
 - 마이크로 프론트엔드 → `micro-frontends`
 - 마이크로서비스 → `microservices`
 - 마이크로태스크 → `event-loop`
-- 머티리얼라이즈드 뷰 → `postgres-advanced-sql`
+- 머티리얼라이즈드 뷰 → `postgres-reporting-sql`
 - 멀티 스테이지 빌드 → `dockerfile-image-layers`
 - 멀티 존 → `micro-frontends`
 - 멀티플렉싱 → `http-versions`
@@ -1636,6 +1662,7 @@
 - 재조정 → `react-rerender`
 - 전방향 안전성 → `https-tls`
 - 전이 테이블 → `postgres-functions-triggers`
+- 접속 URI → `postgres-connections-pg-hba`
 - 정규화 → `db-modeling-normalization`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
@@ -1771,7 +1798,7 @@
 - depends_on → `docker-compose`
 - detached DOM → `js-memory-leak`
 - detached HEAD → `git-branch-merge`
-- DISTINCT ON → `postgres-advanced-sql`
+- DISTINCT ON → `postgres-reporting-sql`
 - distroless → `dockerfile-image-layers`
 - divergent branches → `git-troubleshooting`
 - DNAT → `iptables-nat`
@@ -1802,6 +1829,7 @@
 - full_page_writes → `postgres-architecture`
 - Gateway API → `gateway`
 - gcTime → `client-data-cache`
+- generate_series → `postgres-reporting-sql`
 - git add -p → `git-staging-area`
 - git bisect → `git-tips-advanced`
 - git blame → `git-tips-advanced`
@@ -1865,10 +1893,11 @@
 - kube-proxy → `iptables-nat`
 - L4 로드 밸런서 → `osi-in-practice`
 - L7 로드 밸런서 → `osi-in-practice`
-- LATERAL → `postgres-advanced-sql`
+- LATERAL → `postgres-reporting-sql`
 - LCP → `core-web-vitals`
 - least_conn → `nginx-reverse-proxy`
 - limit_req → `nginx-https-performance`
+- listen_addresses → `postgres-connections-pg-hba`
 - LISTEN/NOTIFY → `postgres-functions-triggers`
 - location 블록 → `nginx-basics`
 - LSM 트리 → `db-type-wide-column`
@@ -1920,7 +1949,7 @@
 - peer 인증 → `postgres-getting-started`
 - pg_basebackup → `postgres-operations`
 - pg_dump → `postgres-operations`
-- pg_hba.conf → `postgres-getting-started`
+- pg_hba.conf → `postgres-connections-pg-hba`
 - pg_stat_statements → `sql-query-tuning`
 - pg_trgm → `postgres-jsonb-search`
 - pg_upgrade → `postgres-operations`
@@ -1956,6 +1985,7 @@
 - repl-backlog-size → `redis-replication-sentinel`
 - rerere → `git-merge-conflict`
 - REST API → `rest-api-design`
+- RETURNING → `postgres-advanced-sql`
 - reviver → `json-crud-http`
 - RFC 1918 → `layer-ip-addressing`
 - RocksDB → `db-type-embedded`
@@ -2060,17 +2090,21 @@
 - `sqld-null-functions` ↔ `sql-select-where-null` (14%: null은, null, 다루기)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 - `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
+- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (14%: pg, 들어오는, 지나는)
 - `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (13%: 막는, 남기는, 트랜잭션, update)
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
+- `client-data-cache` ↔ `what-happens-google-com` (13%: 받기, 페이지가, 캐시가)
+- `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
 - `sql-insert-update-delete` ↔ `db-transaction-isolation` (12%: commit, rollback, 트랜잭션이, transaction)
 - `packet-capture-tcpdump` ↔ `db-index` (12%: 처음부터, 끝까지, 줄을)
-- `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
-- `client-data-cache` ↔ `what-happens-google-com` (12%: 받기, 페이지가, 캐시가)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `postgres-reporting-sql` ↔ `postgres-advanced-sql`
+- `postgres-connections-pg-hba` ↔ `postgres-getting-started`
+- `postgres-connections-pg-hba` ↔ `postgres-roles-security`
 - `redis-cluster` ↔ `redis-replication-sentinel`
 - `redis-cluster` ↔ `redis-basics`
 - `redis-replication-sentinel` ↔ `redis-persistence-ha`
@@ -2117,7 +2151,6 @@
 - `db-keys-denormalization` ↔ `db-modeling-normalization`
 - `db-locking-deadlock` ↔ `db-transaction-isolation`
 - `sql-batch-timeout-pool` ↔ `sql-query-rewrite`
-- `sql-batch-timeout-pool` ↔ `postgres-getting-started`
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale`
 - `sql-batch-timeout-pool` ↔ `sql-query-tuning`
 - `sql-query-rewrite` ↔ `sql-query-tuning`
@@ -2201,7 +2234,6 @@
 - `postgres-mvcc-vacuum` ↔ `postgres-operations`
 - `postgres-mvcc-vacuum` ↔ `db-transaction-isolation`
 - `postgres-mvcc-vacuum` ↔ `db-index`
-- `postgres-operations` ↔ `postgres-getting-started`
 - `postgres-operations` ↔ `db-architecture-by-scale`
 - `postgres-advanced-sql` ↔ `postgres-functions-triggers`
 - `postgres-functions-triggers` ↔ `postgres-jsonb-search`
@@ -2295,15 +2327,10 @@
 - `hosts-file` ↔ `what-happens-google-com`
 - `kubernetes-ingress` ↔ `gateway`
 - `cors` ↔ `local-custom-domain`
+- `cors` ↔ `cookie-session-login`
 - `pythagorean-theorem` ↔ `vector-db`
 - `cookie-session-login` ↔ `token-login`
 - `token-login` ↔ `oauth`
 
 ## 긴 글 (900줄 초과, 쪼갤 후보)
 
-- `postgres-advanced-sql` 942줄 — PostgreSQL다운 SQL: RETURNING, ON CONFLICT, CTE, LATERAL
-- `postgres-getting-started` 933줄 — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
-
-## 다른 글과 연결이 없는 글
-
-- `big-o-notation` — Big O 표기법: 입력이 커질 때 얼마나 느려지나

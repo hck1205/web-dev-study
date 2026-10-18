@@ -2,6 +2,32 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "postgres-reporting-sql": {
+    "links": [
+      "postgres-advanced-sql",
+      "postgres-functions-triggers",
+      "caching-strategies",
+      "sqld-window-functions",
+      "db-index"
+    ],
+    "mentions": [
+      "sqld-group-by-having",
+      "postgres-getting-started",
+      "sql-query-rewrite"
+    ]
+  },
+  "postgres-connections-pg-hba": {
+    "links": [
+      "postgres-getting-started",
+      "postgres-roles-security"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "postgres-operations",
+      "sql-batch-timeout-pool",
+      "layer-ip-addressing"
+    ]
+  },
   "redis-cluster": {
     "links": [
       "redis-replication-sentinel",
@@ -199,7 +225,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-architecture",
-      "postgres-advanced-sql",
+      "postgres-reporting-sql",
       "db-index",
       "db-sharding",
       "db-index-design",
@@ -511,7 +537,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql"
     ],
     "mentions": [
-      "postgres-advanced-sql",
+      "postgres-reporting-sql",
       "db-sharding",
       "db-replication-sharding",
       "db-index-design"
@@ -669,6 +695,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding"
     ],
     "mentions": [
+      "postgres-connections-pg-hba",
       "db-architecture-by-scale",
       "db-type-relational"
     ]
@@ -705,20 +732,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "postgres-advanced-sql": {
     "links": [
+      "postgres-reporting-sql",
       "sql-basics",
       "postgres-roles-security",
       "db-transaction-isolation",
       "sqld-top-n-hierarchical-pivot",
-      "caching-strategies",
-      "sqld-window-functions",
-      "db-index",
       "postgres-functions-triggers"
     ],
     "mentions": [
       "postgres-data-types",
-      "sqld-group-by-having",
-      "postgres-getting-started",
-      "sql-query-rewrite"
+      "postgres-getting-started"
     ]
   },
   "postgres-functions-triggers": {
@@ -753,15 +776,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "postgres-getting-started": {
     "links": [
+      "postgres-connections-pg-hba",
       "sql-basics",
       "postgres-data-types",
       "postgres-roles-security"
     ],
     "mentions": [
-      "postgres-operations",
-      "db-type-relational",
-      "sql-batch-timeout-pool",
-      "layer-ip-addressing"
+      "db-type-relational"
     ]
   },
   "postgres-data-types": {
@@ -779,7 +800,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "postgres-roles-security": {
     "links": [
       "postgres-getting-started",
-      "postgres-functions-triggers"
+      "postgres-functions-triggers",
+      "postgres-connections-pg-hba"
     ],
     "mentions": [
       "postgres-data-types",
@@ -923,7 +945,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
-      "postgres-advanced-sql",
+      "postgres-reporting-sql",
       "sqld-null-functions"
     ]
   },
@@ -1190,13 +1212,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "redis-basics": {
     "links": [
       "redis-memory-eviction",
+      "network-troubleshooting-by-layer",
+      "event-loop",
       "redis-persistence-ha",
       "caching-strategies"
     ],
     "mentions": [
       "redis-cluster",
       "db-type-relational",
-      "event-loop",
       "db-transaction-isolation",
       "dns"
     ]
@@ -1207,7 +1230,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "http-caching-cdn",
       "redis-persistence-ha",
-      "redis-memory-eviction"
+      "redis-memory-eviction",
+      "osi-in-practice"
     ],
     "mentions": [
       "redis-cluster",
@@ -1261,8 +1285,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "big-o-notation": {
-    "links": [],
-    "mentions": []
+    "links": [
+      "sql-query-rewrite"
+    ],
+    "mentions": [
+      "event-loop"
+    ]
   },
   "docker-network-volume": {
     "links": [
@@ -1534,9 +1562,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "event-loop": {
-    "links": [],
-    "mentions": [
+    "links": [
       "core-web-vitals"
+    ],
+    "mentions": [
+      "osi-in-practice"
     ]
   },
   "js-memory-leak": {
@@ -1552,11 +1582,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "micro-frontends": {
     "links": [],
     "mentions": [
-      "microservices"
+      "microservices",
+      "cors"
     ]
   },
   "ab-testing": {
-    "links": [],
+    "links": [
+      "http-caching-cdn"
+    ],
     "mentions": [
       "rendering-strategies",
       "db-modeling-normalization",
@@ -1566,11 +1599,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "core-web-vitals": {
     "links": [
       "what-happens-google-com",
-      "code-splitting"
+      "code-splitting",
+      "event-loop"
     ],
     "mentions": [
       "ab-testing",
-      "event-loop",
       "cors",
       "dns"
     ]
@@ -1629,15 +1662,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "react-rerender": {
     "links": [
+      "client-data-cache",
       "rendering-strategies"
     ],
     "mentions": [
-      "core-web-vitals",
-      "client-data-cache"
+      "core-web-vitals"
     ]
   },
   "rendering-strategies": {
     "links": [
+      "proxy-reverse-proxy",
       "react-rerender"
     ],
     "mentions": [
@@ -1696,7 +1730,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "kubernetes-ingress": {
     "links": [
-      "gateway"
+      "gateway",
+      "network-troubleshooting-by-layer",
+      "packet-capture-tcpdump"
     ],
     "mentions": [
       "proxy-reverse-proxy",
@@ -1778,10 +1814,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "cookie-session-login": {
     "links": [
+      "proxy-reverse-proxy",
+      "cors",
       "token-login"
     ],
     "mentions": [
       "html-form-http",
+      "kubernetes-ingress",
       "redis-basics",
       "what-happens-google-com"
     ]
@@ -1806,6 +1845,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "pythagorean-theorem",
+      "db-index-design",
       "db-modeling-normalization"
     ]
   }

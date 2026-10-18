@@ -346,15 +346,52 @@ Ingress의 또 다른 한계는 권한이다. 로드 밸런서 설정(어느 IP,
 
 ## 502, 503, 413을 만났을 때
 
-Ingress를 붙이면 에러가 나도 어디서 난 건지 헷갈린다. 응답 페이지 하단에 nginx라고 찍혀 있으면 앱이 아니라 컨트롤러가 준 응답이다. 상태 코드로 대략 범위를 좁힐 수 있다.
+Ingress를 붙이면 에러가 나도 어디서 난 건지 헷갈린다. 응답 페이지 하단에 nginx라고 찍혀 있으면 앱이 아니라 컨트롤러가 준 응답이다. 그래서 앱 로그보다 컨트롤러 로그를 먼저 본다. ingress-nginx는 안에서 nginx가 돌기 때문에 에러 로그 문구가 nginx와 같다. 이 환경에는 쿠버네티스가 없어서, Ubuntu 24.04의 nginx 1.24를 컨트롤러처럼 앞에 두고 뒤의 앱을 일부러 망가뜨려 재현했다. 접근 로그는 ingress-nginx 기본 형식에서 업스트림 부분을 따 와 설정했다.
+
+```bash
+# 쿠버네티스에서는 컨트롤러 Pod의 로그에 접근 로그와 에러 로그가 함께 나온다
+kubectl logs -n ingress-nginx deploy/ingress-nginx-controller --since=10m | grep -E ' (413|50[234]) |\[error\]'
+```
+
+```text
+127.0.0.1 - [18/Oct/2026:11:20:59 +0000] "GET /api/orders HTTP/1.1" 502 166 88 0.000 [shop-api-80] 127.0.0.1:18081 0 0.000 502
+127.0.0.1 - [18/Oct/2026:11:21:01 +0000] "GET /slow/report HTTP/1.1" 504 176 89 2.003 [shop-api-80] 127.0.0.1:18082 0 2.004 504
+127.0.0.1 - [18/Oct/2026:11:21:01 +0000] "GET /drop/x HTTP/1.1" 502 166 84 0.001 [shop-api-80] 127.0.0.1:18083 0 0.001 502
+127.0.0.1 - [18/Oct/2026:11:21:01 +0000] "POST /ok/upload HTTP/1.1" 413 192 184 0.000 [shop-api-80] - - - -
+```
+
+상태 코드 뒤로 응답 크기, 요청 크기, 전체 시간, `[네임스페이스-서비스-포트]`, 업스트림 주소, 업스트림 응답 크기, 업스트림 응답 시간, 업스트림 상태 순이다. 업스트림 주소가 `-`면 요청이 Pod까지 가지도 않았다는 뜻이다. 주소가 찍혀 있으면 그 Pod IP로 무엇이 갔는지 알 수 있다. 같은 시각의 에러 로그가 이유를 말해 준다.
+
+```text
+[error] 6970#6970: *1 connect() failed (111: Connection refused) while connecting to upstream, client: 127.0.0.1, server: , request: "GET /api/orders HTTP/1.1", upstream: "http://127.0.0.1:18081/api/orders", host: "127.0.0.1:18080"
+[error] 6970#6970: *3 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 127.0.0.1, server: , request: "GET /slow/report HTTP/1.1", upstream: "http://127.0.0.1:18082/slow/report", host: "127.0.0.1:18080"
+[error] 6970#6970: *5 upstream prematurely closed connection while reading response header from upstream, client: 127.0.0.1, server: , request: "GET /drop/x HTTP/1.1", upstream: "http://127.0.0.1:18083/drop/x", host: "127.0.0.1:18080"
+[error] 6970#6970: *9 client intended to send too large body: 2000000 bytes, client: 127.0.0.1, server: , request: "POST /ok/upload HTTP/1.1", host: "127.0.0.1:18080"
+```
 
 404는 규칙에 맞는 게 없다는 뜻이다. host 오타, 경로 pathType 착각(`/api`를 Exact로 적고 `/api/orders`를 기대하는 식)이 흔하다. 아예 Ingress가 반영되지 않은 경우도 있는데, ingressClassName이 틀렸거나 기본 클래스가 없을 때다. `kubectl describe ingress`의 Address가 비어 있으면 어떤 컨트롤러도 이 Ingress를 맡지 않은 것이다.
 
-503은 규칙은 맞았는데 보낼 Pod가 없다는 뜻이다. Service selector가 Pod 라벨과 다르거나, 포트 이름이 다르거나, Pod가 readiness probe를 통과하지 못해 EndpointSlice에서 빠진 상태다. `kubectl get endpointslice -l kubernetes.io/service-name=api`로 Pod IP가 있는지부터 본다.
+503은 규칙은 맞았는데 보낼 Pod가 없다는 뜻이다. Service selector가 Pod 라벨과 다르거나, 포트 이름이 다르거나, Pod가 readiness probe를 통과하지 못해 EndpointSlice에서 빠진 상태다. Pod IP가 목록에 있는지부터 본다(아래 출력은 형식을 보여 주는 예시다).
 
-502는 Pod까지 갔는데 응답이 이상했다는 뜻이다. 앱이 그 포트에서 듣고 있지 않거나, HTTPS로 듣는 앱에 평문으로 보냈거나, 배포 중 종료되는 Pod로 요청이 갔을 때 난다. 마지막 경우는 Pod 종료 시 preStop에서 몇 초 기다려 컨트롤러가 목록을 갱신할 시간을 주면 줄어든다.
+```bash
+kubectl get endpointslice -n shop -l kubernetes.io/service-name=api
+kubectl get pods -n shop -l app=api   # READY가 0/1이면 readiness probe 실패
+```
 
-413은 요청 본문이 너무 크다는 뜻이다. ingress-nginx의 기본 `proxy-body-size`는 1m라서, 파일 업로드 기능을 붙이면 처음 한 번은 꼭 만난다. 웹소켓이나 긴 작업이 60초 근처에서 끊긴다면 `proxy-read-timeout` 기본값(60초)을 의심한다.
+```text
+NAME        ADDRESSTYPE   PORTS     ENDPOINTS   AGE
+api-7xk2p   IPv4          <unset>   <unset>     3d
+```
+
+ENDPOINTS가 비어 있고 PORTS가 `<unset>`이면 selector에 맞는 Ready Pod가 하나도 없다. Pod는 떠 있는데 여기만 비었다면 Service의 `selector`와 Pod의 `labels`를 나란히 놓고 글자를 비교한다.
+
+502는 Pod까지 갔는데 응답이 이상했다는 뜻이다. 에러 로그 문구로 갈린다. `connect() failed (111: Connection refused)`는 Pod IP에는 닿았는데 그 포트에서 아무도 듣고 있지 않다는 뜻이다. Service의 `targetPort`가 앱이 실제로 듣는 포트와 다르거나, 앱이 `127.0.0.1`에만 바인딩해서 Pod IP로 오는 연결을 안 받을 때 흔하다. `upstream prematurely closed connection`은 연결은 됐는데 앱이 응답 헤더를 보내기 전에 끊었다는 뜻이다. HTTPS로 듣는 앱에 평문을 보냈거나, 앱이 요청 처리 중 죽었거나, 배포 중 종료되는 Pod로 요청이 갔을 때다. 마지막 경우는 Pod 종료 시 preStop에서 몇 초 기다려 컨트롤러가 목록을 갱신할 시간을 주면 줄어든다. 앱의 keep-alive 타임아웃이 컨트롤러보다 짧아서, 컨트롤러가 다시 쓰려던 연결을 앱이 먼저 닫아 버리는 경우에도 같은 문구가 드문드문 찍힌다. 앱의 keep-alive를 컨트롤러 쪽보다 길게 둔다.
+
+504는 앱이 제시간에 답하지 않았다는 뜻이다. `upstream timed out ... while reading response header`이고 접근 로그의 업스트림 응답 시간이 타임아웃 값과 거의 같다. 위 출력에서 2.004초가 설정한 2초와 맞아떨어진다. ingress-nginx의 `proxy-read-timeout` 기본값은 60초라서, 웹소켓이나 긴 보고서 생성이 60초 근처에서 끊긴다면 이걸 의심한다. 다만 타임아웃만 늘리면 느린 요청이 컨트롤러 연결을 오래 붙잡으니, 오래 걸리는 작업은 비동기 작업으로 돌리는 쪽을 먼저 생각한다.
+
+413은 요청 본문이 너무 크다는 뜻이다. 접근 로그의 업스트림 칸이 전부 `-`인 것처럼 컨트롤러가 앱에 넘기기 전에 거절한다. ingress-nginx의 기본 `proxy-body-size`는 1m라서 파일 업로드 기능을 붙이면 처음 한 번은 꼭 만난다. 앱의 업로드 한도를 늘려도 소용없고, Ingress에 `nginx.ingress.kubernetes.io/proxy-body-size` 어노테이션을 붙여야 한다. 앞단에 클라우드 로드 밸런서나 CDN이 하나 더 있다면 그쪽 한도도 같이 확인한다.
+
+이렇게 갈라 놓고 보면 "502가 났다"는 말만으로는 아무것도 정해지지 않는다는 걸 알 수 있다. 상태 코드, 업스트림 주소가 찍혔는지, 에러 로그 문구 세 가지를 함께 봐야 어느 칸에서 끊겼는지 나온다. 컨트롤러 로그로도 안 갈리면 [계층별 장애 좁히기](/posts/network-troubleshooting-by-layer)의 순서로 Pod 안에서 직접 `curl`을 쳐 보고, 그래도 애매하면 [tcpdump로 패킷을 찍어](/posts/packet-capture-tcpdump) 누가 연결을 끊었는지 본다.
 
 ## Ingress가 하는 일, 다시
 

@@ -101,4 +101,19 @@ export const OAUTH: QuizQuestion[] = [
       "서버가 자기 client_id와 client_secret으로 바로 토큰을 받는 방식이다. Implicit은 보안 문제로 더 이상 쓰지 않고, Device Code는 TV처럼 입력이 불편한 기기에서 사람이 승인할 때 쓴다.",
     anchor: "인가-코드-말고-다른-방식들",
   },
+  {
+    id: "oauth-8",
+    post: "oauth",
+    question: "인가 서버에서 앱 콜백으로 돌아왔는데 앱이 state를 찾지 못해 실패한다. state는 세션에 저장해 두었다. 가장 먼저 의심할 설정은?",
+    choices: [
+      "세션 쿠키가 SameSite=Strict라서 인가 서버에서 돌아오는 이동에 쿠키가 실리지 않았다",
+      "redirect_uri 끝에 슬래시가 붙었다",
+      "client_secret이 틀렸다",
+      "인가 코드가 이미 한 번 쓰였다",
+    ],
+    answer: 0,
+    explanation:
+      "인가 서버에서 돌아오는 이동은 다른 사이트에서 시작된 요청이라 Strict 쿠키는 붙지 않는다. 세션을 못 찾으니 state도 없다. Lax는 최상위 GET 이동에 쿠키를 붙여 준다. redirect_uri가 다르면 애초에 인가 서버가 돌려보내지 않고, 코드 재사용은 토큰 교환에서 invalid_grant로 나온다.",
+    anchor: "콜백에서-막히는-세-가지",
+  },
 ];

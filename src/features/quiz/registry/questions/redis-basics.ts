@@ -106,4 +106,19 @@ export const REDIS_BASICS: QuizQuestion[] = [
       "Redis의 명령 하나는 한 스레드에서 끝까지 실행되므로 원자적이다. 주 저장소로 어려운 이유는 메모리 비용, RDB·AOF 설정과 비동기 복제에 따른 유실 가능성, 키 조회 외의 질의가 약하다는 데 있다.",
     anchor: "주-저장소로-쓰기-전에-따져-볼-것",
   },
+  {
+    id: "redis-basics-8",
+    post: "redis-basics",
+    question: "응용 로그에 Redis 타임아웃이 늘었다. INFO commandstats에서 HGETALL의 usec_per_call이 124358, GET은 0.28로 나온다. 무엇을 뜻하나?",
+    choices: [
+      "응용 서버와 Redis 사이 네트워크가 124ms 느려졌다",
+      "큰 해시를 통째로 읽는 HGETALL이 서버 안에서 한 번에 124ms씩 걸려 그동안 다른 명령이 줄을 선다",
+      "연결이 maxclients에 닿아 새 연결이 거절되고 있다",
+      "GET이 너무 많이 불려서 HGETALL이 느려졌다",
+    ],
+    answer: 1,
+    explanation:
+      "commandstats의 usec_per_call은 Redis 서버 안에서 명령 하나가 쓴 시간이라 네트워크와 상관없다. 124ms면 큰 키를 통째로 읽는 명령이 반복되는 것이니 HSCAN으로 나눠 읽거나 키를 쪼갠다. 연결 거절은 ERR max number of clients reached로 따로 드러난다.",
+    anchor: "응용-로그에-redis-타임아웃이-찍히면",
+  },
 ];

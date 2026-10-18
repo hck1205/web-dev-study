@@ -101,4 +101,19 @@ export const KUBERNETES_INGRESS: QuizQuestion[] = [
       "Ingress 스펙이 작아서 타임아웃, 경로 재작성, 카나리 같은 기능은 컨트롤러마다 자기 어노테이션으로 채웠다. 그래서 컨트롤러를 바꾸면 다시 써야 하고, 쿠버네티스는 Ingress를 동결한 채 새 기능을 Gateway API에 넣고 있다.",
     anchor: "어노테이션이-자꾸-늘어난다",
   },
+  {
+    id: "kubernetes-ingress-8",
+    post: "kubernetes-ingress",
+    question: "ingress-nginx 로그에 502와 함께 'connect() failed (111: Connection refused) while connecting to upstream'이 찍혔다. 무엇을 확인하나?",
+    choices: [
+      "Service selector와 Pod 라벨이 맞는지. EndpointSlice가 비어 있을 것이다",
+      "Pod IP에는 닿았지만 그 포트에서 듣는 게 없으니 targetPort와 앱이 듣는 포트, 바인딩 주소(127.0.0.1)를 본다",
+      "proxy-body-size가 1m보다 작은지",
+      "proxy-read-timeout이 60초보다 짧은지",
+    ],
+    answer: 1,
+    explanation:
+      "Connection refused는 업스트림 주소까지는 정해졌는데 그 포트에 연결을 받는 프로세스가 없다는 뜻이다. targetPort가 틀렸거나 앱이 127.0.0.1에만 바인딩한 경우가 흔하다. 보낼 Pod가 없으면 503, 본문 크기는 413, 응답이 늦으면 504로 나온다.",
+    anchor: "502-503-413을-만났을-때",
+  },
 ];
