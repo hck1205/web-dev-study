@@ -1,0 +1,386 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("islands-resumability");
+
+이 블로그의 글 페이지 하나를 Chromium으로 열고 내려받은 스크립트를 셌다. [OAuth](/posts/oauth) 글이다. 본문은 글과 그림이고, 사용자가 누를 수 있는 건 즐겨찾기 별, 그림의 단계 버튼, 목차 정도다.
+
+```text
+scripts 17  bytes 1009109  ScriptDuration 116ms  TaskDuration 740ms
+scripts 17  bytes  998997  ScriptDuration 120ms  TaskDuration 748ms
+```
+
+압축을 푼 기준으로 약 1MB의 자바스크립트가 오고, 이 컨테이너의 CPU에서 스크립트 실행에만 120ms 안팎을 썼다. 휴대폰이라면 몇 배가 된다. 이 비용의 상당 부분은 상호작용이 전혀 없는 문단과 제목을 위한 것이다. React는 페이지를 하나의 앱으로 보고 루트부터 전부 하이드레이션하기 때문이다.
+
+이 글은 그 비용을 줄이는 두 방향을 본다. 상호작용이 필요한 조각만 골라 살리는 아일랜드(islands), 그리고 아예 하이드레이션을 하지 않고 서버가 멈춘 지점에서 이어 가는 재개 가능성(resumability)이다. Astro 7.4와 Qwik 1.20으로 직접 빌드해 HTML과 네트워크 요청을 봤다. 하이드레이션 자체가 무엇을 하는지는 [하이드레이션](/posts/hydration) 글에, 서버 컴포넌트로 번들을 줄이는 React 쪽 방법은 [React 서버 컴포넌트](/posts/react-server-components)에 정리했다.
+
+## 정적인 문단도 하이드레이션 비용을 치른다
+
+React의 하이드레이션은 서버가 만든 DOM을 앞에서부터 짚으며 컴포넌트 트리와 짝을 맞춘다. 문단 하나에 이벤트 핸들러가 없어도 그 문단을 그리는 컴포넌트 코드는 번들에 들어와야 하고, 브라우저에서 한 번 실행되어야 한다. 그래야 React가 "여기는 아무것도 붙일 게 없다"는 걸 안다. 트리 전체가 하나로 묶여 있어서 일부만 건너뛸 수 없다.
+
+React 18의 선택적 하이드레이션은 이 일을 `Suspense` 경계 단위로 나눠 순서를 바꿔 준다. 사용자가 누른 영역을 먼저 처리하고, 긴 작업을 쪼개 메인 스레드를 덜 막는다. 하지만 결국 전부 한다. 서버 컴포넌트는 서버 쪽 컴포넌트를 아예 번들에서 빼서 그만큼을 줄인다. 그래도 클라이언트 컴포넌트들은 하나의 React 루트 아래에서 하이드레이션된다.
+
+아일랜드와 재개 가능성은 질문을 바꾼다. "어떻게 하면 하이드레이션을 빨리 할까"가 아니라 "애초에 무엇을 살려야 하나", "살리지 않고 이어 갈 수는 없나"를 묻는다.
+
+## 바다 위에 섬 몇 개
+
+아일랜드 아키텍처라는 말은 Etsy의 Katie Sylor-Miller가 처음 쓰고, Preact를 만든 Jason Miller가 2020년 글로 널리 알렸다. 페이지를 정적인 HTML의 바다로 보고, 상호작용이 필요한 부분만 섬처럼 띄운다. 섬마다 따로 JS를 받고 따로 하이드레이션한다. 바다는 HTML로 끝이다.
+
+Astro가 이 구조를 기본으로 쓴다. 컴포넌트를 그냥 쓰면 서버에서 HTML로만 렌더링하고 JS는 하나도 보내지 않는다. 살려야 하는 컴포넌트에만 `client:*` 지시어를 붙인다.
+
+```html
+---
+import LikeButton from "../components/LikeButton.jsx";
+import Comments from "../components/Comments.jsx";
+---
+<html lang="ko"><body>
+<article><h1>렌더링 이야기</h1><p>본문 문단이 길게 이어진다.</p><p>두 번째 문단.</p></article>
+<LikeButton client:load initial={3} />
+<div style="height:3000px"></div>
+<Comments client:visible postId="rendering" />
+</body></html>
+```
+
+`LikeButton`과 `Comments`는 평범한 React 컴포넌트다. 빌드해서 나온 HTML에서 좋아요 버튼 자리는 이렇게 생겼다.
+
+```html
+<astro-island uid="Z290ckn" prefix="r2" component-url="/_astro/LikeButton.M4B5PDcd.js" component-export="default" renderer-url="/_astro/client.C7WjD2Pw.js" props="{&quot;initial&quot;:[0,3]}" ssr client="load" opts="{&quot;name&quot;:&quot;LikeButton&quot;,&quot;value&quot;:true}" await-children>
+```
+
+섬 하나가 사용자 정의 요소 하나다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="Astro가 만든 섬 하나의 속성"
+  base="<astro-island"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "component-url",
+      display: "component-url=\"/_astro/LikeButton…js\"",
+      title: "이 섬의 컴포넌트 코드",
+      description: "섬마다 자기 컴포넌트 청크를 따로 가진다. LikeButton은 243바이트다. 섬을 살릴 때만 이 파일을 받는다.",
+      required: true,
+    },
+    {
+      key: "renderer-url",
+      display: "renderer-url=\"/_astro/client…js\"",
+      title: "프레임워크 런타임",
+      description: "React 섬을 살리는 데 필요한 react-dom 클라이언트다. 이 빌드에서 212,848바이트(gzip 65,721바이트)로 섬들이 함께 쓴다. React 섬이 하나라도 살아나면 한 번은 받아야 한다.",
+      required: true,
+    },
+    {
+      key: "props",
+      display: "props=\"{&quot;initial&quot;:[0,3]}\"",
+      title: "서버에서 넘긴 props",
+      description: "속성 값에 JSON으로 들어간다. [0,3]의 0은 '그냥 값'이라는 타입 표시다. Date는 3, Map은 4, Set은 5처럼 번호가 따로 있다. 함수는 넘길 수 없다. 서버 컴포넌트의 경계와 같은 제약이다.",
+      code: "{\"initial\":[0,3]}\n{\"postId\":[0,\"rendering\"]}",
+      required: true,
+    },
+    {
+      key: "ssr",
+      display: "ssr",
+      title: "서버에서 미리 그렸다는 표시",
+      description: "안에 서버가 그린 버튼 HTML이 들어 있다. 하이드레이션이 끝나면 이 속성이 지워진다. 실험에서는 이 속성이 남아 있는지로 섬이 살아났는지 셌다.",
+    },
+    {
+      key: "client",
+      display: "client=\"load\"",
+      title: "언제 살릴지",
+      description: "load는 페이지가 뜨자마자, visible은 화면에 보일 때, idle은 브라우저가 한가할 때 살린다. 지시어가 없는 컴포넌트는 astro-island로 감싸지지 않고 HTML만 남는다.",
+      required: true,
+    },
+  ]}
+/>
+
+페이지 전체에 섬을 관리하는 작은 인라인 스크립트가 한 번 들어간다. 이 스크립트가 `astro-island` 요소를 정의하고, 각 섬의 `client` 값에 맞춰 때가 되면 `component-url`과 `renderer-url`을 불러와 그 요소 하나를 루트로 삼아 하이드레이션한다. 섬끼리는 서로 다른 React 루트다.
+
+## 언제 살릴지를 섬마다 고른다
+
+Astro의 지시어는 다섯 가지다. `client:load`는 바로, `client:idle`은 `requestIdleCallback`으로 한가할 때, `client:visible`은 `IntersectionObserver`로 화면에 들어올 때, `client:media="(max-width: 50em)"`은 미디어 쿼리가 맞을 때 살린다. `client:only="react"`는 서버 렌더링을 건너뛰고 브라우저에서만 그린다. 서버에서 그릴 수 없는 컴포넌트(브라우저 API를 바로 쓰는 차트 같은 것)에 쓴다.
+
+앞의 페이지를 390px 폭으로 열고, 처음 받은 JS와 스크롤 뒤에 받은 JS를 기록했다. 댓글 섬은 3,000px 아래에 있다.
+
+```text
+로드 직후: LikeButton.M4B5PDcd.js, client.C7WjD2Pw.js, react.CvnImTBr.js, jsx-runtime.DpEvumze.js
+load:hydrated visible:ssr(아직)
+스크롤 후: Comments.D4v3yFbm.js
+load:hydrated visible:hydrated
+```
+
+아래 그림이 이 흐름이다. 다음을 눌러 보자.
+
+<SequenceDiagram
+  caption="client:visible 섬은 화면에 들어올 때 코드를 받아 살아난다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "island", label: "섬 스크립트" },
+    { id: "cdn", label: "정적 파일" },
+  ]}
+  steps={[
+    {
+      from: "cdn",
+      to: "browser",
+      label: "HTML",
+      title: "완성된 HTML이 온다",
+      detail: "본문, 좋아요 버튼, 댓글 영역까지 서버에서 그린 HTML이다. JS가 없어도 다 보인다.",
+    },
+    {
+      from: "island",
+      to: "cdn",
+      label: "load 섬 코드",
+      title: "client:load 섬만 바로 받는다",
+      detail: "LikeButton 청크와 React 런타임을 받는다. 본문 문단을 위한 JS는 없다.",
+      payload: "LikeButton.M4B5PDcd.js  243B\nclient.C7WjD2Pw.js      212,848B",
+    },
+    {
+      from: "island",
+      to: "island",
+      label: "hydrateRoot",
+      title: "섬 하나를 루트로 살린다",
+      detail: "astro-island 요소 하나가 React 루트가 된다. 좋아요 버튼이 이제 눌린다. 루트가 작아서 짝 맞출 DOM도 적다.",
+    },
+    {
+      from: "browser",
+      to: "island",
+      label: "보임",
+      title: "스크롤해서 댓글이 화면에 들어온다",
+      detail: "IntersectionObserver가 댓글 섬이 보인다고 알린다. 그 전까지 댓글 영역은 서버 HTML 그대로였다.",
+    },
+    {
+      from: "island",
+      to: "cdn",
+      label: "Comments.js",
+      title: "그때 코드를 받는다",
+      detail: "343바이트짜리 댓글 청크만 받는다. React 런타임은 이미 있다.",
+    },
+    {
+      from: "island",
+      to: "island",
+      label: "hydrateRoot",
+      title: "두 번째 섬이 살아난다",
+      detail: "댓글 열기 버튼이 동작한다. 사용자가 끝까지 내리지 않으면 이 코드는 끝내 받지 않는다.",
+    },
+  ]}
+/>
+
+섬이 많아지면 차이가 커진다. 댓글 200개에 좋아요 버튼이 하나씩 붙은 페이지를 `client:load`와 `client:visible` 두 벌로 빌드해 Chromium의 성능 지표를 받았다. 두 번 쟀다.
+
+```text
+many-load     hydrated 200 /200  ScriptDuration 176ms  TaskDuration 331ms
+many-visible  hydrated  10 /200  ScriptDuration  41ms  TaskDuration  85ms
+many-load     hydrated 200 /200  ScriptDuration 138ms  TaskDuration 255ms
+many-visible  hydrated  10 /200  ScriptDuration  55ms  TaskDuration 104ms
+```
+
+`client:visible`은 처음 화면에 걸친 10개만 살렸고, 스크립트 실행 시간이 3분의 1 이하로 줄었다. 나머지 190개는 스크롤할 때 조금씩 살아난다. 측정한 기계가 빠른 편이라 절대값보다 비율을 보는 게 맞다.
+
+## 섬끼리는 말을 걸기 어렵다
+
+섬이 서로 다른 루트라는 건 장점이자 제약이다. 장바구니 버튼 섬에서 담은 수량을 헤더의 장바구니 아이콘 섬이 보여 줘야 한다고 하자. React 앱이라면 상위 컴포넌트에 상태를 두거나 context로 내려 주면 끝이다. 섬끼리는 공통 조상이 없다. 상태를 React 바깥에 둬야 한다. Astro 문서는 nanostores 같은 작은 저장소 라이브러리를 권하고, 브라우저의 `CustomEvent`로 신호를 주고받아도 된다.
+
+```js
+// cart-store.js: 두 섬이 같이 import하는 작은 저장소
+import { atom } from "nanostores";
+export const cartCount = atom(0);
+
+// AddToCart 섬:  cartCount.set(cartCount.get() + 1)
+// CartIcon 섬:   const n = useStore(cartCount)  (@nanostores/react)
+```
+
+화면 이동도 다르다. 아일랜드 사이트는 기본적으로 페이지를 이동할 때마다 새 HTML을 받는 전통적인 방식(MPA)이다. 섬의 상태는 이동하면 사라진다. 이동 중에도 살아 있어야 하는 것(재생 중인 오디오, 열린 채팅창)이 있으면 Astro의 화면 전환 기능에서 요소를 유지하는 설정을 따로 해야 한다. 상호작용이 화면 전체에 퍼져 있고 상태가 여기저기 얽힌 앱(대시보드, 편집기)이라면 섬으로 쪼개는 게 오히려 일이 많다. 그런 화면은 하나의 SPA가 낫다. CSR 쪽 이야기는 [CSR과 SPA 깊게](/posts/rendering-csr-spa)에 있다.
+
+## 하이드레이션을 아예 하지 않는다
+
+Qwik은 다른 길을 간다. 하이드레이션이 비싼 이유는 서버가 이미 한 일(컴포넌트 실행, 어떤 버튼에 어떤 핸들러가 붙는지 알아내기)을 브라우저가 처음부터 다시 하기 때문이다. Qwik은 서버가 알아낸 것을 HTML에 적어 두고, 브라우저는 그 기록에서 이어 간다. 이걸 재개 가능성(resumability)이라고 부른다. 서버가 멈춘 자리에서 브라우저가 다시 시작한다는 뜻이다.
+
+같은 좋아요 버튼을 Qwik으로 만들었다.
+
+```tsx
+import { component$, useSignal } from "@builder.io/qwik";
+export default component$(() => {
+  const count = useSignal(3);
+  return (
+    <>
+      <article><h1>렌더링 이야기</h1><p>본문 문단이 길게 이어진다.</p></article>
+      <button onClick$={() => count.value++}>좋아요 {count.value}</button>
+    </>
+  );
+});
+```
+
+빌드해서 받은 HTML(2,514바이트)의 버튼과 상태 부분이다.
+
+```html
+<button on:click="q-DI2chAGS.js#s_ZjHcClEBDXo[0]" q:id="6">좋아요 3</button>
+<script type="qwik/json">{"refs":{"6":"0"},"ctx":{},"objs":["\u00121",3,"\u00110 @1","#7"],"subs":[["3 #7 2 #7"]]}</script>
+```
+
+버튼의 `on:click` 속성에 "클릭하면 `q-DI2chAGS.js` 파일의 `s_ZjHcClEBDXo` 함수를 부르라"고 적혀 있다. `$`가 붙은 함수(`onClick$`)마다 빌드 도구가 따로 청크를 떼어 냈기 때문에 가능한 주소다. 상태(`count` 값 3)와 그 상태를 구독하는 곳은 `qwik/json` 스크립트에 직렬화되어 있다. 페이지 로드 때 도는 건 qwikloader라는 작은 로더(이 빌드에서 3,100바이트짜리 모듈)뿐이고, 이 로더는 문서에 이벤트 리스너를 걸어 둔다. 컴포넌트 함수는 하나도 실행하지 않는다.
+
+아래 그림은 버튼을 눌렀을 때 일어나는 일이다.
+
+<AlgoTrace
+  caption="Qwik에서 클릭 한 번이 처리되는 순서"
+  memoryLabel="브라우저가 한 일"
+  cells={["click 이벤트", "on:click 찾기", "청크 가져오기", "qwik/json 읽기", "함수 실행", "DOM 갱신"]}
+  steps={[
+    {
+      pointer: 0,
+      found: [0],
+      memory: ["리스너 1개"],
+      caption: "페이지가 뜰 때 qwikloader가 document에 리스너만 걸어 두었다. 버튼마다 핸들러를 붙이는 하이드레이션은 없었다.",
+    },
+    {
+      pointer: 1,
+      found: [0, 1],
+      memory: ["리스너 1개", "on:click 속성"],
+      caption: "클릭이 document까지 올라오면 qwikloader가 대상 요소에서 위로 올라가며 on:click 속성을 찾는다.",
+    },
+    {
+      pointer: 2,
+      found: [0, 1, 2],
+      memory: ["리스너 1개", "on:click 속성", "q-DI2chAGS.js"],
+      caption: "속성에 적힌 청크를 import한다. 이 빌드에서는 646바이트다. 미리 받아 둔 게 있으면 캐시에서 바로 나온다.",
+    },
+    {
+      pointer: 3,
+      found: [0, 1, 2, 3],
+      memory: ["리스너 1개", "on:click 속성", "q-DI2chAGS.js", "count=3"],
+      caption: "핸들러가 count를 읽으려 하면 그때 qwik/json에서 상태를 되살린다. 서버가 만든 값 3이 그대로 이어진다.",
+    },
+    {
+      pointer: 5,
+      found: [0, 1, 2, 3, 4, 5],
+      memory: ["리스너 1개", "on:click 속성", "q-DI2chAGS.js", "count=4", "텍스트 1곳"],
+      caption: "count가 4가 되면 구독 기록에 있는 텍스트 노드 한 곳만 고친다. 컴포넌트 전체를 다시 렌더링하지 않는다.",
+    },
+  ]}
+/>
+
+여기에 실제로 재 보니 덧붙일 점이 있다. Chromium으로 열고 클릭 전후에 받은 JS를 기록했다.
+
+```text
+로드 직후: q-naDMFAHy.js 3100B, q-BKZ00VYc.js 3729B, Bkc78lej-bundle-graph.json 997B, q-Bv6ONiy9.js 49918B, q-BihhsMc7.js 2237B, q-DI2chAGS.js 646B
+클릭 후:
+좋아요 4
+```
+
+클릭 핸들러 청크(`q-DI2chAGS.js`)와 Qwik 코어로 보이는 50KB짜리 청크가 클릭 전에 이미 와 있다. HTML의 `<link rel="modulepreload">`와 번들 그래프를 보고 미리 받은 것이다. "누르기 전엔 JS를 하나도 받지 않는다"는 설명은 이 버전의 기본 동작과 맞지 않는다. 받아 두되 실행하지 않는 것이다. 미리 받지 않으면 첫 클릭이 네트워크 왕복만큼 늦어지니, 받는 것과 실행하는 것을 떼어 놓은 셈이다. 재개 가능성이 아끼는 건 다운로드보다 실행이다.
+
+## 무엇을 아끼고 무엇을 내주나
+
+네 방법을 나란히 놓으면 아끼는 지점이 다르다.
+
+| 방식 | 처음에 실행하는 JS | 섬·경계 사이 상태 공유 | 첫 상호작용 지연 | 대표 |
+|---|---|---|---|---|
+| 전체 하이드레이션 | 페이지 전체 컴포넌트 | 자유롭다 | 하이드레이션이 끝나야 | React SSR, Pages Router |
+| 선택적 하이드레이션 | 전체, 단 경계별로 나누고 누른 곳 먼저 | 자유롭다 | 누른 경계부터 | React 18 이상 Suspense |
+| 서버 컴포넌트 | 클라이언트 컴포넌트만 | 클라이언트 컴포넌트끼리 자유롭다 | 클라이언트 쪽 하이드레이션 뒤 | Next.js App Router |
+| 아일랜드 | 지시어를 붙인 섬만, 때가 되면 | 바깥 저장소가 필요하다 | 섬이 살아난 뒤 | Astro, Fresh |
+| 재개 가능성 | 로더 하나, 나머지는 이벤트 때 | 프레임워크가 직렬화한다 | 핸들러 청크를 실행할 때 | Qwik |
+
+내주는 것도 다르다. 아일랜드는 섬 사이 상태와 화면 전환이 불편하고, 섬이 많으면 루트마다 드는 고정 비용이 쌓인다. 재개 가능성은 상태와 구독 관계를 전부 HTML에 직렬화해야 해서 직렬화할 수 없는 값(클로저 안의 일반 변수, 클래스 인스턴스)을 쓸 때 제약이 생기고, 생태계가 React보다 작다. 디버깅할 때도 "이 코드가 언제 받아지고 언제 도는지"가 덜 눈에 보인다. 서버 컴포넌트는 React 생태계를 그대로 쓰는 대신 클라이언트 컴포넌트 부분은 여전히 하나의 트리로 하이드레이션하고, payload가 HTML에 한 번 더 실린다.
+
+`client:visible`의 함정도 하나 있다. 화면에 들어온 순간 코드를 받기 시작하니, 들어오자마자 누르면 잠깐 반응이 없다. 첫 화면에 걸친 중요한 버튼은 `client:load`로 두고, 접혀 있는 아래쪽만 `visible`로 미룬다.
+
+## 내 페이지에 섬이 맞는지 재 보기
+
+판단은 "페이지에서 상호작용이 차지하는 비율"로 한다. 글, 문서, 상품 소개, 랜딩처럼 대부분이 읽는 내용이고 누르는 곳이 몇 군데면 아일랜드가 크게 이긴다. 로그인 뒤 오래 머무는 앱 화면이면 이득이 작다.
+
+재는 방법은 간단하다. Playwright로 페이지를 열고 Chrome DevTools Protocol의 성능 지표를 받는다. 이 글 처음의 숫자도 이렇게 받았다.
+
+```js
+// measure.cjs: 스크립트 수, 크기, 실행 시간 재기
+const { chromium } = require("playwright");
+(async () => {
+  const b = await chromium.launch();
+  const p = await b.newPage({ viewport: { width: 390, height: 800 } });
+  const cdp = await p.context().newCDPSession(p);
+  await cdp.send("Performance.enable");
+  let n = 0, bytes = 0;
+  p.on("response", async (r) => {
+    if (r.request().resourceType() !== "script") return;
+    n++;
+    try { bytes += (await r.body()).length; } catch {}
+  });
+  await p.goto(process.argv[2], { waitUntil: "networkidle" });
+  const m = Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map((x) => [x.name, x.value]));
+  console.log("scripts", n, "bytes", bytes, "ScriptDuration", Math.round(m.ScriptDuration * 1000) + "ms");
+  await b.close();
+})();
+```
+
+```bash
+# Playwright가 전역에 설치되어 있다면
+NODE_PATH=$(npm root -g) node measure.cjs http://127.0.0.1:3300/posts/oauth
+```
+
+숫자가 크면 무엇이 그 바이트를 차지하는지 본다. 이 블로그의 글 페이지에서 가장 큰 청크(657KB)를 열어 보니 퀴즈 문제 870개의 본문이 들어 있었다. 글 끝의 퀴즈 링크가 문제 수를 세려고 레지스트리 전체를 클라이언트 쪽으로 끌고 온 것이다. 이건 아일랜드로 바꾸지 않아도 고칠 수 있다. 개수를 서버에서 세어 숫자만 넘기면 된다. 렌더링 방식을 바꾸기 전에 지금 구조에서 새는 곳부터 막는 편이 싸다. 번들 안을 들여다보는 방법은 [코드 스플리팅](/posts/code-splitting)에 있다.
+
+계산으로도 감을 잡아 보자. 섬 목록과 화면 높이, 공유 런타임 크기를 받아 "처음에 실행할 JS"와 "나중에 실행할 수 있는 JS"를 나눈다. 지시어가 없는 섬(`none`)은 HTML뿐이라 세지 않는다. 런타임은 섬이 하나라도 그 시점에 살아나면 한 번 더한다.
+
+<CodePlayground
+  caption="섬 지시어에 따라 처음 실행하는 JS 계산"
+  functionName="loadJs"
+  initialCode={`function loadJs(islands, viewport, runtime) {\n  // islands: [{ bytes, directive: \"load\" | \"idle\" | \"visible\" | \"none\", top }]\n  // viewport: 첫 화면 높이(px). top이 이보다 작으면 처음부터 보인다\n  // runtime: 섬들이 함께 쓰는 프레임워크 런타임 크기\n  // 반환: { now, later }\n  return { now: 0, later: 0 };\n}`}
+  solution={`function loadJs(islands, viewport, runtime) {\n  let now = 0, later = 0;\n  for (const i of islands) {\n    if (i.directive === \"load\" || (i.directive === \"visible\" && i.top < viewport)) now += i.bytes;\n    else if (i.directive === \"idle\" || i.directive === \"visible\") later += i.bytes;\n  }\n  if (now > 0) now += runtime;\n  else if (later > 0) later += runtime;\n  return { now, later };\n}`}
+  tests={[
+    {
+      label: "좋아요 load, 댓글 visible",
+      args: [[{ bytes: 300, directive: "load", top: 400 }, { bytes: 2000, directive: "visible", top: 3000 }, { bytes: 500, directive: "none", top: 100 }], 800, 70000],
+      expected: { now: 70300, later: 2000 },
+    },
+    {
+      label: "아래쪽 섬 하나뿐",
+      args: [[{ bytes: 2000, directive: "visible", top: 3000 }], 800, 70000],
+      expected: { now: 0, later: 72000 },
+    },
+    { label: "섬 없음", args: [[], 800, 70000], expected: { now: 0, later: 0 } },
+    {
+      label: "idle과 보이는 visible",
+      args: [[{ bytes: 900, directive: "idle", top: 0 }, { bytes: 400, directive: "visible", top: 500 }], 800, 70000],
+      expected: { now: 70400, later: 900 },
+    },
+    {
+      label: "전부 load",
+      args: [[{ bytes: 300, directive: "load", top: 400 }, { bytes: 2000, directive: "load", top: 3000 }, { bytes: 500, directive: "load", top: 100 }], 800, 70000],
+      expected: { now: 72800, later: 0 },
+    },
+  ]}
+/>
+
+두 번째 테스트처럼 섬이 모두 아래쪽에 있으면 첫 화면은 JS 없이 끝난다. 섬의 코드는 작아도 런타임이 크다는 것도 보인다. 섬 하나를 살리는 순간 70KB가 따라온다. 그래서 아일랜드 사이트에서는 섬에 Preact나 Solid처럼 런타임이 작은 프레임워크를 쓰기도 한다.
+
+## 다시 1MB로
+
+처음의 1MB는 글 페이지 전체를 하나의 앱으로 살리는 구조에서 나왔다. 아일랜드는 상호작용이 필요한 조각만 섬으로 띄워 섬마다 따로, 필요한 때에 살린다. 재개 가능성은 서버가 알아낸 상태와 핸들러 위치를 HTML에 적어 두고 하이드레이션 없이 이벤트가 올 때 그 함수만 실행한다. 둘 다 상호작용이 적은 페이지에서 크게 이기고, 상태가 얽힌 앱에서는 이득이 줄어든다. 방식을 바꾸기 전에 지금 페이지가 무엇에 바이트를 쓰는지부터 잰다.
+
+## 면접에서 나올 만한 질문
+
+### 아일랜드 아키텍처가 무엇인가요?
+
+페이지를 정적인 HTML로 두고 상호작용이 필요한 부분만 독립된 섬으로 하이드레이션하는 구조다. 섬마다 자기 코드와 props를 갖고 따로 살아나서, 정적인 문단을 위한 JS는 보내지 않는다. Astro가 대표적이고 `client:load`, `client:visible` 같은 지시어로 섬마다 살리는 시점을 고른다.
+
+### React의 선택적 하이드레이션과 아일랜드는 무엇이 다른가요?
+
+선택적 하이드레이션은 Suspense 경계로 나눠 순서와 우선순위를 바꿔 줄 뿐 결국 페이지 전체를 하이드레이션한다. 아일랜드는 섬이 아닌 부분은 아예 하이드레이션하지 않고, 섬마다 별도 루트라서 필요 없으면 코드를 받지도 않는다. 대신 섬 사이 상태 공유가 어렵다.
+
+### 재개 가능성(resumability)은 하이드레이션과 어떻게 다른가요?
+
+하이드레이션은 서버가 한 일을 브라우저가 컴포넌트를 다시 실행해 재구성한다. 재개 가능성은 서버가 상태와 이벤트 핸들러의 위치를 HTML에 직렬화해 두고, 브라우저는 컴포넌트를 실행하지 않은 채 이벤트가 오면 해당 핸들러 청크만 불러 실행한다. Qwik에서는 로드 때 문서에 리스너를 거는 작은 로더만 돈다.
+
+### Qwik은 클릭하기 전에는 JS를 전혀 받지 않나요?
+
+실행은 하지 않지만 다운로드는 할 수 있다. Qwik 1.20 기본 빌드를 재 보니 modulepreload로 코어와 클릭 핸들러 청크를 미리 받아 두었다. 받지 않으면 첫 클릭이 네트워크 왕복만큼 늦어지니, 받는 것과 실행하는 것을 떼어 놓은 것이다.
+
+### 아일랜드 구조에서 섬끼리 상태를 공유하려면요?
+
+섬은 공통 React 조상이 없는 별개의 루트라 context로는 안 된다. nanostores 같은 프레임워크 바깥의 작은 저장소를 두 섬이 함께 import하거나, CustomEvent로 신호를 주고받는다. 이런 공유가 많아지면 그 화면은 섬보다 하나의 앱으로 만드는 게 낫다는 신호다.
+
+### 어떤 서비스에 아일랜드나 재개 가능성이 맞나요?
+
+블로그, 문서, 상품 소개, 랜딩처럼 대부분이 읽는 내용이고 상호작용이 몇 군데인 페이지에서 효과가 크다. 대시보드나 편집기처럼 상호작용이 화면 전체에 퍼져 있고 상태가 얽힌 앱은 이득이 작고 섬 사이 조율 비용이 커진다. 고르기 전에 지금 페이지의 스크립트 크기와 실행 시간을 재서 어디에 쓰이는지 본다.
+
+### client:visible을 쓸 때 주의할 점은요?
+
+화면에 들어온 순간에야 코드를 받기 시작해서, 들어오자마자 누르면 잠깐 반응이 없다. 첫 화면에 걸친 중요한 버튼은 `client:load`로 두고 접혀 있는 아래쪽만 미룬다. 섬 하나가 살아날 때 공유 런타임도 함께 받으니 런타임 크기도 같이 본다.

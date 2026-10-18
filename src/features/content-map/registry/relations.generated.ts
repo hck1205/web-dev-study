@@ -2,6 +2,118 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "nextjs-static-dynamic-rendering": {
+    "links": [
+      "rendering-ssg-isr",
+      "rendering-strategies",
+      "http-caching-cdn",
+      "streaming-ssr-suspense",
+      "react-server-components"
+    ],
+    "mentions": []
+  },
+  "islands-resumability": {
+    "links": [
+      "oauth",
+      "hydration",
+      "react-server-components",
+      "rendering-csr-spa",
+      "code-splitting"
+    ],
+    "mentions": [
+      "streaming-ssr-suspense",
+      "rendering-strategies"
+    ]
+  },
+  "react-server-components": {
+    "links": [
+      "rendering-strategies",
+      "hydration",
+      "rendering-ssr",
+      "oauth",
+      "streaming-ssr-suspense",
+      "nextjs-static-dynamic-rendering"
+    ],
+    "mentions": []
+  },
+  "streaming-ssr-suspense": {
+    "links": [
+      "rendering-strategies",
+      "rendering-ssr",
+      "hydration",
+      "nginx-reverse-proxy",
+      "react-server-components",
+      "core-web-vitals"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "http-versions",
+      "http-status-codes"
+    ]
+  },
+  "hydration": {
+    "links": [
+      "rendering-strategies",
+      "rendering-ssr",
+      "core-web-vitals",
+      "streaming-ssr-suspense",
+      "islands-resumability",
+      "react-server-components"
+    ],
+    "mentions": []
+  },
+  "rendering-ssg-isr": {
+    "links": [
+      "rendering-strategies",
+      "rendering-ssr",
+      "nextjs-static-dynamic-rendering",
+      "http-caching-cdn",
+      "hydration"
+    ],
+    "mentions": [
+      "react-server-components",
+      "redis-basics"
+    ]
+  },
+  "rendering-ssr": {
+    "links": [
+      "rendering-strategies",
+      "rendering-csr-spa",
+      "hydration",
+      "streaming-ssr-suspense",
+      "event-loop",
+      "js-memory-leak",
+      "http-caching-cdn",
+      "nginx-reverse-proxy",
+      "rendering-ssg-isr"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "docker-container-basics",
+      "proxy-reverse-proxy",
+      "osi-in-practice",
+      "http-status-codes",
+      "db-modeling-normalization",
+      "core-web-vitals"
+    ]
+  },
+  "rendering-csr-spa": {
+    "links": [
+      "rendering-strategies",
+      "code-splitting",
+      "rendering-ssr",
+      "client-data-cache",
+      "rendering-ssg-isr",
+      "frontend-browser-cache",
+      "core-web-vitals"
+    ],
+    "mentions": [
+      "hydration",
+      "nginx-basics",
+      "nextjs-static-dynamic-rendering",
+      "http-status-codes"
+    ]
+  },
   "postgres-reporting-sql": {
     "links": [
       "postgres-advanced-sql",
@@ -1373,6 +1485,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "http-versions",
       "rendering-strategies",
+      "react-server-components",
       "client-data-cache",
       "resilience-patterns",
       "what-happens-google-com"
@@ -1494,6 +1607,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "json-crud-http",
       "frontend-browser-cache",
+      "rendering-csr-spa",
       "dns"
     ]
   },
@@ -1582,6 +1696,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "micro-frontends": {
     "links": [],
     "mentions": [
+      "rendering-csr-spa",
       "microservices",
       "cors"
     ]
@@ -1671,6 +1786,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "rendering-strategies": {
     "links": [
+      "rendering-csr-spa",
+      "rendering-ssr",
+      "islands-resumability",
+      "hydration",
+      "rendering-ssg-isr",
+      "streaming-ssr-suspense",
+      "react-server-components",
+      "nextjs-static-dynamic-rendering",
       "proxy-reverse-proxy",
       "react-rerender"
     ],

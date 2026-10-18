@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 134편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 142편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -63,7 +63,7 @@
 - 길이: 359줄
 - 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 콜백에서 막히는 세 가지 / 정리 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: token-login, cookie-session-login
-- 이 글로 오는 글 ←: local-custom-domain, token-login
+- 이 글로 오는 글 ←: islands-resumability, local-custom-domain, react-server-components, token-login
 
 #### `token-login` — 토큰으로 로그인하기: JWT와 리프레시 토큰
 
@@ -568,7 +568,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: redis-cluster, db-type-relational, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rest-api-design, tcp-reliability-congestion
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, tcp-reliability-congestion
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -677,7 +677,7 @@
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
 - 키워드 백링크 →: json-crud-http, db-index-design, sqld-entity-attribute-relationship
-- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-ignore-config, git-large-files-secrets, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
+- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-ignore-config, git-large-files-secrets, http-message, mongodb-document-model, nginx-basics, rendering-ssr, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
@@ -908,7 +908,7 @@
 - 길이: 548줄
 - 소제목: form 태그의 속성 세 개가 요청을 정한다 / 입력값이 쿼리 문자열이 되기까지 / 공백은 더하기, 나머지는 퍼센트로 / 주소에 실리면 남는다 / POST 본문의 세 가지 모양 / 파일을 올릴 때 챙길 것 / fetch로 보낼 때는 FormData를 쓴다 / 폼은 GET과 POST만 보낸다 / 새로고침하면 두 번 주문된다 / 다른 사이트도 내 서버로 폼을 보낼 수 있다 / 브라우저 검증은 친절일 뿐이다 / 자바스크립트가 없어도 폼은 동작한다 / 보낸 값과 받은 값이 다를 때 / 다시 검색창과 로그인 폼으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, http-status-codes, cors, cookie-session-login, nginx-reverse-proxy
-- 키워드 백링크 →: rest-api-design, base64, http-versions, rendering-strategies, client-data-cache, resilience-patterns, what-happens-google-com
+- 키워드 백링크 →: rest-api-design, base64, http-versions, rendering-strategies, react-server-components, client-data-cache, resilience-patterns, what-happens-google-com
 - 이 글로 오는 글 ←: browser-fetch, cookie-session-login, http-message, http-status-codes, json-crud-http
 
 ### Programming › Frontend › Architecture (`programming/frontend/architecture`)
@@ -931,7 +931,7 @@
 - 키워드: 마이크로 프런트엔드, 마이크로 프론트엔드, Module Federation, 멀티 존
 - 길이: 403줄
 - 소제목: 같은 배포 열차에 모두 타고 있다 / 껍데기 앱과 조각 앱 / 언제 합치느냐가 갈림길이다 / 런타임에 리모트를 불러오는 과정 / 설정 한 덩어리 뜯어보기 / React가 두 개 뜨면 생기는 일 / 주소창은 셸이 쥔다 / 버튼이 팀마다 달라 보이지 않게 / 앱끼리 말을 거는 방법 / 따로 배포하면 따로 되돌린다 / 배포 다음 날 결제 영역만 비어 있을 때 / 쪼갠 만큼 무거워진다 / 대부분은 모노레포로 충분하다 / 다시 목요일 배포로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: microservices, cors
+- 키워드 백링크 →: rendering-csr-spa, microservices, cors
 
 ### Programming › Frontend › JavaScript (`programming/frontend/javascript`)
 
@@ -943,7 +943,7 @@
 - 길이: 553줄
 - 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 에러 수집기에 Failed to fetch만 쌓일 때 / 다시 처음 코드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn, network-troubleshooting-by-layer
-- 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, dns
+- 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, rendering-csr-spa, dns
 - 이 글로 오는 글 ←: client-data-cache, html-form-http, http-versions, json-crud-http, nginx-reverse-proxy, tcp-connection-lifecycle
 
 #### `event-loop` — 자바스크립트 이벤트 루프: 브라우저와 Node.js
@@ -955,7 +955,7 @@
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, nginx-basics, redis-basics
+- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, nginx-basics, redis-basics, rendering-ssr
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -965,7 +965,7 @@
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: client-data-cache, microservices
+- 이 글로 오는 글 ←: client-data-cache, microservices, rendering-ssr
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -978,7 +978,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, microservices, mvc-pattern, react-rerender, resilience-patterns
+- 이 글로 오는 글 ←: browser-fetch, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, microservices, mvc-pattern, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -989,7 +989,7 @@
 - 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: http-versions, rendering-strategies
-- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions
+- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions, islands-resumability, rendering-csr-spa
 
 #### `core-web-vitals` — Core Web Vitals: LCP, INP, CLS
 
@@ -1000,7 +1000,7 @@
 - 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, code-splitting, event-loop
 - 키워드 백링크 →: ab-testing, cors, dns
-- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, react-rerender, rendering-strategies
+- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, hydration, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
 
 #### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
 
@@ -1011,7 +1011,7 @@
 - 소제목: 요청 하나가 거치는 캐시들 / HTTP 캐시는 서버가 정한 기한을 따른다 / 뒤로 가기가 즉시 뜨는 bfcache / 페이지 앞에 선 프록시, Service Worker / 설치, 활성화, 가로채기 / 캐시를 먼저 볼까 네트워크를 먼저 볼까 / 미리 담기와 쓰면서 담기 / 이 블로그의 sw.js 읽기 / 버전을 올리고 옛 캐시를 지운다 / 새 Service Worker는 기다린다 / Workbox를 쓰면 / 데이터는 어디에 저장하나 / 용량과 지워지는 순서 / 다음에 필요한 것을 미리 받기 / 개발자 도구에서 확인하기 / 사용자 브라우저의 캐시 상태를 숫자로 받기 / 처음 장면으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-caching-cdn, caching-strategies, client-data-cache, core-web-vitals, code-splitting
 - 키워드 백링크 →: realtime-communication, what-happens-google-com, cors
-- 이 글로 오는 글 ←: browser-fetch, client-data-cache, http-caching-cdn
+- 이 글로 오는 글 ←: browser-fetch, client-data-cache, http-caching-cdn, rendering-csr-spa
 
 ### Programming › Frontend › React (`programming/frontend/react`)
 
@@ -1028,6 +1028,80 @@
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
+#### `hydration` — 하이드레이션: 서버 HTML에 생명을 붙이는 일
+
+- 요약: hydrateRoot가 서버 DOM과 짝을 맞추고 이벤트를 붙이는 과정과 그 비용을 재고, 불일치 원인별로 React 19가 실제로 내는 메시지와 대응을 재현한다. 확장 프로그램, 운영의 #418, useSyncExternalStore와 suppressHydrationWarning, 선택적 하이드레이션까지 다룬다.
+- 태그: React, SSR, Rendering, Performance
+- 키워드: 하이드레이션 불일치, 선택적 하이드레이션, suppressHydrationWarning
+- 길이: 466줄
+- 소제목: hydrateRoot가 하는 일 / 보이는데 안 눌리는 시간 / 어긋나면 React가 하는 일 / 불일치를 만드는 코드들 / 확장 프로그램은 언제 끼어드느냐가 문제다 / 개발 모드와 운영 모드의 메시지는 다르다 / 고치는 방법들 / 한꺼번에 하지 않기: 선택적 하이드레이션 / 하이드레이션을 덜 하는 방법 / 운영에서 불일치를 찾는 순서 / 다시 사라진 두 번의 클릭으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, rendering-ssr, core-web-vitals, streaming-ssr-suspense, islands-resumability, react-server-components
+- 이 글로 오는 글 ←: islands-resumability, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, rendering-strategies, streaming-ssr-suspense
+
+#### `islands-resumability` — 아일랜드와 재개 가능성: 하이드레이션을 덜 하는 방법
+
+- 요약: 상호작용이 필요한 조각만 섬으로 살리는 Astro의 아일랜드와, 하이드레이션 없이 서버가 멈춘 자리에서 이어 가는 Qwik의 재개 가능성을 직접 빌드해 비교한다. 섬 지시어별 JS 실행량, 섬 사이 상태 공유, React의 선택적 하이드레이션·서버 컴포넌트와의 차이를 다룬다.
+- 태그: Rendering, Performance, JavaScript, Frontend, Astro, Qwik
+- 키워드: 아일랜드 아키텍처, 재개 가능성, Astro, Qwik
+- 길이: 387줄
+- 소제목: 정적인 문단도 하이드레이션 비용을 치른다 / 바다 위에 섬 몇 개 / 언제 살릴지를 섬마다 고른다 / 섬끼리는 말을 걸기 어렵다 / 하이드레이션을 아예 하지 않는다 / 무엇을 아끼고 무엇을 내주나 / 내 페이지에 섬이 맞는지 재 보기 / 다시 1MB로 / 면접에서 나올 만한 질문
+- 직접 링크 →: oauth, hydration, react-server-components, rendering-csr-spa, code-splitting
+- 키워드 백링크 →: streaming-ssr-suspense, rendering-strategies
+- 이 글로 오는 글 ←: hydration, rendering-strategies
+
+#### `nextjs-static-dynamic-rendering` — Next.js App Router는 언제 정적이고 언제 동적인가
+
+- 요약: 빌드 출력의 ○ ● ƒ가 무엇을 보고 정해지는지 경우마다 빌드해서 확인한다. 요청 시점 API, 빌드 때 굳는 fetch, 세그먼트 설정의 함정, 응답 헤더로 확인하는 법, 이 블로그의 MdxWrapper가 글 134개를 동적으로 바꾼 재현, Cache Components까지 다룬다.
+- 태그: Next.js, Rendering, SSR, Performance, Cache
+- 키워드: 정적 렌더링, 동적 렌더링, force-static, Cache Components
+- 길이: 456줄
+- 소제목: 빌드 출력의 기호 세 개 / Next는 빌드 때 일단 렌더링해 본다 / 요청이 있어야 알 수 있는 값들 / fetch는 캐시하지 않는데 빌드 때 한 번은 부른다 / 직접 정해 버리는 설정 / 응답 헤더로 밖에서 확인하기 / 클라이언트 컴포넌트의 useSearchParams / 이 블로그의 MdxWrapper가 동적이 된 이유 / Cache Components를 켜면 판단 기준이 바뀐다 / 이 라우트는 어떤 기호가 될까 / 정적인 줄 알았던 페이지가 요청마다 렌더링될 때 / 다시 MdxWrapper로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-ssg-isr, rendering-strategies, http-caching-cdn, streaming-ssr-suspense, react-server-components
+- 이 글로 오는 글 ←: react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-strategies
+
+#### `react-server-components` — React 서버 컴포넌트: SSR과 무엇이 다른가
+
+- 요약: 서버 컴포넌트가 보내는 RSC payload를 직접 받아 뜯어보고, use client 경계가 파일 단위로 무엇을 끌고 가는지, 경계를 넘을 수 있는 값이 무엇인지 빌드 에러와 함께 본다. 서버 액션의 보안, server-only, 무거운 props가 HTML을 키우는 문제까지 다룬다.
+- 태그: React, Next.js, Rendering, Performance, Security
+- 키워드: RSC payload, use client, 서버 액션, server-only
+- 길이: 457줄
+- 소제목: SSR은 시점의 이야기, RSC는 코드의 이야기 / 서버가 보내는 것은 HTML이 아니다 / 첫 요청과 그다음 이동은 다르게 흐른다 / 경계는 파일 단위로 그어진다 / 경계를 넘을 수 있는 값 / 컴포넌트가 직접 데이터를 가져온다 / 서버 전용 코드가 브라우저로 새지 않게 / 서버 액션은 경계를 넘는 함수다 / props가 무거우면 payload도 무겁다 / 현장에서 서버 컴포넌트를 들여다보는 법 / 다시 315바이트로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, hydration, rendering-ssr, oauth, streaming-ssr-suspense, nextjs-static-dynamic-rendering
+- 이 글로 오는 글 ←: html-form-http, hydration, islands-resumability, nextjs-static-dynamic-rendering, rendering-ssg-isr, rendering-strategies, streaming-ssr-suspense
+
+#### `rendering-csr-spa` — CSR과 SPA: 빈 HTML이 화면이 되기까지
+
+- 요약: 빈 index.html이 상품 화면이 되기까지 요청이 어떻게 줄지어 기다리는지 실제 크롬으로 재고, 주소를 읽자마자 데이터를 출발시켜 폭포를 줄인다. History API 라우팅, 새로고침 404와 SPA 폴백이 삼키는 MIME 오류, 미리보기 봇, CSR이 맞는 자리까지 다룬다.
+- 태그: React, Rendering, Performance, SEO, Browser
+- 키워드: SPA 폴백, 클라이언트 라우팅, History API, pushState
+- 길이: 478줄
+- 소제목: 빈 HTML 한 장에서 화면이 되기까지 / 받는 시간보다 실행하는 시간 / 코드를 기다린 뒤에야 데이터를 부른다 / 주소는 바뀌는데 문서는 다시 받지 않는다 / 새로고침 404는 서버가 주소를 몰라서 난다 / 폴백이 삼켜 버리는 오류들 / 미리보기 봇은 빈 div를 본다 / CSR이 맞는 자리 / 실제 크롬으로 첫 화면을 재는 법 / 다시 새로고침 404로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, code-splitting, rendering-ssr, client-data-cache, rendering-ssg-isr, frontend-browser-cache, core-web-vitals
+- 키워드 백링크 →: hydration, nginx-basics, nextjs-static-dynamic-rendering, http-status-codes
+- 이 글로 오는 글 ←: browser-fetch, islands-resumability, micro-frontends, rendering-ssr, rendering-strategies
+
+#### `rendering-ssg-isr` — SSG와 ISR: 미리 만들어 두고 언제 다시 만드나
+
+- 요약: 빌드 때 구운 페이지가 언제 다시 만들어지는지 Next.js 16으로 재 본다. 페이지 수에 따른 빌드 시간, 만료 뒤 첫 요청이 옛 페이지를 받는 이유, revalidatePath와 revalidateTag, 여러 인스턴스와 재생성 실패, 초안 모드, ISR이 맞지 않는 경우까지 다룬다.
+- 태그: Next.js, Rendering, Cache, Performance
+- 키워드: revalidatePath, revalidateTag, generateStaticParams, Draft Mode
+- 길이: 420줄
+- 소제목: 빌드가 HTML 파일을 남긴다 / 페이지가 늘면 빌드가 늘어난다 / 시간이 지나면 다시 만든다 / 응답 헤더에 적힌 약속 / 저장하는 순간 바로 갱신하기 / 서버가 두 대면 한 대만 갱신된다 / 다시 만들다 실패하면 / 편집자는 저장 전 모습을 봐야 한다 / 내용이 1분마다 바뀐다면 / 운영에서 지금 어떤 페이지가 나가는지 보기 / 다시 가격 89,000원으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, rendering-ssr, nextjs-static-dynamic-rendering, http-caching-cdn, hydration
+- 키워드 백링크 →: react-server-components, redis-basics
+- 이 글로 오는 글 ←: nextjs-static-dynamic-rendering, rendering-csr-spa, rendering-ssr, rendering-strategies
+
+#### `rendering-ssr` — SSR: 요청마다 HTML을 만드는 서버
+
+- 요약: 요청마다 서버가 HTML을 만들 때 생기는 문제를 직접 재현한다. renderToString과 renderToPipeableStream의 차이, 이벤트 루프를 막는 렌더링, 서버 안의 await 폭포, 사용자끼리 섞이는 모듈 변수와 공유 캐시, 메모리 누수, 상태 코드까지 정리했다.
+- 태그: React, SSR, Rendering, Performance, Node.js, Cache
+- 키워드: renderToString, AsyncLocalStorage, Server-Timing
+- 길이: 504줄
+- 소제목: 요청 하나가 HTML이 되는 순서 / renderToString과 renderToPipeableStream / 렌더링은 CPU를 쓰고, Node.js는 한 줄로 일한다 / 서버 안에도 폭포가 있다 / 모듈 변수는 모든 사용자가 같이 쓴다 / 요청이 쌓일수록 무거워지는 서버 / SSR 결과를 캐시에 올리기 / 상태 코드는 렌더링하기 전에 정한다 / 운영 중인 SSR 서버가 느려졌을 때 / 다시 다른 사람 이름으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, rendering-csr-spa, hydration, streaming-ssr-suspense, event-loop, js-memory-leak, http-caching-cdn, nginx-reverse-proxy, rendering-ssg-isr
+- 키워드 백링크 →: client-data-cache, docker-container-basics, proxy-reverse-proxy, osi-in-practice, http-status-codes, db-modeling-normalization, core-web-vitals
+- 이 글로 오는 글 ←: hydration, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-strategies, streaming-ssr-suspense
+
 #### `rendering-strategies` — CSR, SSR, SSG, ISR, 스트리밍: HTML은 어디서 만들어지나
 
 - 요약: 같은 상품 페이지의 HTML을 브라우저, 요청 시 서버, 빌드, 뒤늦은 재생성, 조각 전송 중 어디서 만드느냐에 따라 TTFB·LCP·서버 비용·신선도가 어떻게 달라지는지 비교한다. 하이드레이션과 불일치, ISR 갱신 방식, 스트리밍의 제약, 서버 컴포넌트, 쇼핑몰 페이지별 선택까지 다룬다.
@@ -1035,9 +1109,20 @@
 - 키워드: 하이드레이션, ISR, 스트리밍 SSR, 서버 컴포넌트, SSG
 - 길이: 539줄
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
-- 직접 링크 →: proxy-reverse-proxy, react-rerender
+- 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, react-rerender
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, nextjs-static-dynamic-rendering, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
+
+#### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
+
+- 요약: 응답을 열어 둔 채 셸을 먼저 보내고 Suspense 경계 안쪽을 숨긴 HTML과 교체 스크립트로 이어 붙이는 과정을 실제 조각으로 따라간다. 상태 코드가 먼저 떠나는 문제, React 19의 교체 묶음, 프록시와 압축이 흐름을 막는 경우, 봇과 loading.tsx까지 다룬다.
+- 태그: React, SSR, Next.js, Rendering, Performance, Nginx
+- 키워드: Suspense 경계, onShellReady, proxy_buffering, Transfer-Encoding: chunked
+- 길이: 623줄
+- 소제목: 응답을 끝내지 않고 열어 둔다 / 셸이 먼저 나가고 경계 안쪽이 뒤따른다 / 늦게 온 조각이 제자리를 찾는 방법 / React 19는 교체를 모아서 한다 / 셸만 기다릴까, 전부 기다릴까 / 상태 코드는 첫 조각과 함께 떠난다 / 중간에서 모아 버리는 것들 / 봇과 링크 미리보기가 보는 HTML / Next.js에서는 loading.tsx가 경계다 / 경계를 어디에 두나 / 운영에서 스트리밍이 안 될 때 보는 순서 / 다시 운영 주소로 / 면접에서 나올 만한 질문
+- 직접 링크 →: rendering-strategies, rendering-ssr, hydration, nginx-reverse-proxy, react-server-components, core-web-vitals
+- 키워드 백링크 →: proxy-reverse-proxy, http-versions, http-status-codes
+- 이 글로 오는 글 ←: hydration, islands-resumability, nextjs-static-dynamic-rendering, react-server-components, rendering-ssr, rendering-strategies
 
 ### Programming › In Practice (`programming/in-practice`)
 
@@ -1061,7 +1146,7 @@
 - 소제목: 에러 메시지는 어느 층이 말했는지 알려 준다 / 같은 메시지가 다른 층에서 나오기도 한다 / 로드 밸런서는 어느 층에서 나누느냐로 고른다 / 방화벽도 층마다 따로 있다 / 헬스 체크는 어느 층까지 물어보나 / TLS를 어디서 풀지 정한다 / 타임아웃은 안쪽으로 갈수록 짧게 / 클라우드 제품 이름을 층으로 읽는다 / 네트워크 탓이라고 말하기 전에 모을 것 / 층 번호는 질문을 좁히는 말이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, http-status-codes, nginx-reverse-proxy, iptables-basics, dns, layer-link-ethernet-arp, proxy-reverse-proxy, tcp-connection-lifecycle, ports-and-sockets, resilience-patterns, https-tls, upper-layers-session-presentation-app, iptables-nat, kubernetes-ingress, gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: docker-container-basics, realtime-communication, http-versions, what-happens-google-com, layer-ip-routing-icmp, udp-and-quic
-- 이 글로 오는 글 ←: caching-strategies, event-loop, gateway, http-status-codes, iptables-nat, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: caching-strategies, event-loop, gateway, http-status-codes, iptables-nat, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `packet-capture-tcpdump` — tcpdump로 계층을 눈으로 보기
 
@@ -1107,7 +1192,7 @@
 - 소제목: 응답은 여러 곳에 복사된다 / 신선한 동안은 묻지도 않는다 / Cache-Control 한 줄 뜯어 보기 / 상한 사본이 아직 맞는지 묻기 / 무엇을 같은 요청으로 보나 / 이름에 해시를 넣으면 영원히 캐시할 수 있다 / 엣지에서 기한을 정하는 쪽은 누구인가 / 한꺼번에 만료되면 오리진이 몰린다 / 지우는 데도 시간이 걸린다 / 사람마다 다른 페이지를 공유 캐시에 두면 / 응답 헤더로 확인한다 / 처음 장면을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com
 - 키워드 백링크 →: http-message, frontend-browser-cache, http-versions, redis-basics, cookie-session-login, cors, dns
-- 이 글로 오는 글 ←: ab-testing, browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nginx-https-performance, proxy-reverse-proxy, rendering-strategies, rest-api-design, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: ab-testing, browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nextjs-static-dynamic-rendering, nginx-https-performance, proxy-reverse-proxy, rendering-ssg-isr, rendering-ssr, rendering-strategies, rest-api-design, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `proxy-reverse-proxy` — 프록시와 리버스 프록시: 누구를 대신하나
 
@@ -1118,7 +1203,7 @@
 - 소제목: 프록시는 누구를 대신하나 / 프록시에게 보내는 HTTP 요청은 모양이 다르다 / HTTPS는 CONNECT로 터널을 판다 / 회사 프록시가 TLS를 열어 볼 때 / 설정 없이 지나가는 프록시와 PAC 파일 / HTTP를 모르는 프록시, SOCKS5 / Ubuntu에서 프록시 쓰게 하기 / 서버 앞을 지키는 리버스 프록시 / 앱에는 로드 밸런서 주소만 보인다 / X-Forwarded-For 한 줄 뜯어보기 / 진짜 클라이언트 IP 고르기 / 표준 헤더 Forwarded / 헤더를 못 붙이는 L4 로드 밸런서와 PROXY protocol / CDN에서 앱까지, 헤더가 붙는 자리 / 리버스 프록시, 로드 밸런서, API 게이트웨이 / 다시 두 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: https-tls, nginx-reverse-proxy, http-caching-cdn, local-custom-domain, gateway
 - 키워드 백링크 →: docker-container-basics, osi-in-practice, iptables-basics, http-versions, ports-and-sockets, layer-ip-addressing, http-status-codes, what-happens-google-com, udp-and-quic, dns
-- 이 글로 오는 글 ←: cookie-session-login, docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, layer-ip-addressing, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, realtime-communication, rendering-strategies
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, layer-ip-addressing, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, realtime-communication, rendering-ssr, rendering-strategies, streaming-ssr-suspense
 
 #### `realtime-communication` — 서버가 먼저 말하게 하기: 폴링, 롱 폴링, SSE, WebSocket
 
@@ -1175,7 +1260,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / access.log에서 5xx를 갈라 보기 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, nginx-reverse-proxy, network-troubleshooting-by-layer, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, db-locking-deadlock, http-versions, osi-in-practice, what-happens-google-com, dns
-- 이 글로 오는 글 ←: browser-fetch, cors, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, cors, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, osi-in-practice, proxy-reverse-proxy, realtime-communication, rendering-csr-spa, rendering-ssr, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship, streaming-ssr-suspense, what-happens-google-com
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -1186,7 +1271,7 @@
 - 소제목: 요청마다 연결을 새로 맺던 HTTP/1.0 / 연결을 재사용하는 HTTP/1.1 / 텍스트를 프레임으로 쪼갠 HTTP/2 / TCP 아래에서 다시 막히는 줄 / UDP 위에 새로 만든 QUIC / 브라우저는 HTTP/3를 어떻게 알아내나 / 설정한 버전과 실제로 쓰는 버전이 다를 때 / 개발자가 바꿀 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, http-message, http-status-codes, tcp-connection-lifecycle, nginx-reverse-proxy, code-splitting
 - 키워드 백링크 →: https-tls, browser-fetch, http-methods, tcp-reliability-congestion, ports-and-sockets, udp-and-quic, dns
-- 이 글로 오는 글 ←: base64, code-splitting, dns, hosts-file, html-form-http, http-caching-cdn, http-message, http-status-codes, https-tls, iptables-nat, layer-mtu-fragmentation, local-custom-domain, microservices, network-layers-overview, nginx-https-performance, osi-in-practice, proxy-reverse-proxy, realtime-communication, rest-api-design, tcp-reliability-congestion, udp-and-quic, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: base64, code-splitting, dns, hosts-file, html-form-http, http-caching-cdn, http-message, http-status-codes, https-tls, iptables-nat, layer-mtu-fragmentation, local-custom-domain, microservices, network-layers-overview, nginx-https-performance, osi-in-practice, proxy-reverse-proxy, realtime-communication, rest-api-design, streaming-ssr-suspense, tcp-reliability-congestion, udp-and-quic, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `json-crud-http` — JSON으로 데이터 주고받기: 조회·생성·수정·삭제 끝까지
 
@@ -1381,7 +1466,7 @@
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat
 - 키워드 백링크 →: iptables-basics, rest-api-design, udp-and-quic
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr
 
 #### `docker-network-volume` — Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기
 
@@ -1440,7 +1525,7 @@
 - 소제목: 설치하고 떠 있는지 확인하기 / master 하나와 worker 몇 개 / Ubuntu의 설정 파일 배치 / 블록은 안쪽으로 상속된다 / 요청 하나를 받을 server 고르기 / location은 이 순서로 고른다 / root와 alias는 경로를 다르게 만든다 / index와 try_files / 403이 나는 이유 / 바꾸기 전에 -t, 적용은 reload / 로그를 읽는 법 / 설정은 nginx가 읽는 순서대로 읽는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: nginx-reverse-proxy, nginx-https-performance
 - 키워드 백링크 →: realtime-communication, proxy-reverse-proxy, event-loop, http-status-codes, what-happens-google-com, db-modeling-normalization
-- 이 글로 오는 글 ←: docker-network-volume, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, what-happens-google-com
+- 이 글로 오는 글 ←: docker-network-volume, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, rendering-csr-spa, what-happens-google-com
 
 #### `nginx-https-performance` — Nginx HTTPS·성능·보안 설정
 
@@ -1462,7 +1547,7 @@
 - 소제목: proxy_pass 한 줄로 넘기기 / 끝 슬래시 하나가 경로를 바꾼다 / 앱에게 진짜 손님 정보를 넘긴다 / upstream으로 서버 여럿에 나누기 / 502와 504가 나는 자리 / WebSocket은 연결을 바꿔 달라고 요청한다 / 버퍼링은 켜 두고, 흘려보낼 때만 끈다 / 업로드는 1MB에서 막힌다 / 앞에 서서 대신 받아 주는 자리 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, nginx-basics, http-status-codes, realtime-communication, nginx-https-performance, gateway
 - 키워드 백링크 →: tcp-connection-lifecycle, browser-fetch, osi-in-practice, redis-basics, resilience-patterns, what-happens-google-com, http-methods
-- 이 글로 오는 글 ←: html-form-http, http-methods, http-status-codes, http-versions, network-layers-overview, nginx-basics, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, realtime-communication, rest-api-design
+- 이 글로 오는 글 ←: html-form-http, http-methods, http-status-codes, http-versions, network-layers-overview, nginx-basics, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, realtime-communication, rendering-ssr, rest-api-design, streaming-ssr-suspense
 
 ### Programming › System Design (`programming/system-design`)
 
@@ -1561,6 +1646,7 @@
 - 데이터 독립성 → `sqld-data-modeling`
 - 데이터 모델 비교 → `db-types-overview`
 - 도메인 샤딩 → `http-versions`
+- 동적 렌더링 → `nextjs-static-dynamic-rendering`
 - 동적 import → `code-splitting`
 - 라우팅 테이블 → `layer-ip-routing-icmp`
 - 레이아웃 스래싱 → `core-web-vitals`
@@ -1613,9 +1699,11 @@
 - 상태 코드 → `http-status-codes`
 - 샤드 키 → `mongodb-document-model`
 - 서버 상태 → `client-data-cache`
+- 서버 액션 → `react-server-components`
 - 서버 컴포넌트 → `rendering-strategies`
 - 서브넷 마스크 → `layer-ip-addressing`
 - 서킷 브레이커 → `resilience-patterns`
+- 선택적 하이드레이션 → `hydration`
 - 선형화 가능성 → `db-consistency-cap`
 - 세션 계층 → `upper-layers-session-presentation-app`
 - 세션 쿠키 → `cookie-session-login`
@@ -1632,6 +1720,7 @@
 - 쓰기 왜곡 → `db-transaction-isolation`
 - 쓰기 증폭 → `db-index-pitfalls`
 - 쓰기 CTE → `postgres-advanced-sql`
+- 아일랜드 아키텍처 → `islands-resumability`
 - 안전한 메서드 → `http-methods`
 - 암시적 형 변환 → `sqld-type-conversion`
 - 액세스 토큰 → `token-login`
@@ -1659,6 +1748,7 @@
 - 자연 키 → `db-keys-denormalization`
 - 작업 트리 → `git-staging-area`
 - 장애 좁히기 → `network-troubleshooting-by-layer`
+- 재개 가능성 → `islands-resumability`
 - 재귀 리졸버 → `dns`
 - 재귀 CTE → `sqld-top-n-hierarchical-pivot`
 - 재조정 → `react-rerender`
@@ -1666,6 +1756,7 @@
 - 전이 테이블 → `postgres-functions-triggers`
 - 접속 URI → `postgres-connections-pg-hba`
 - 정규화 → `db-modeling-normalization`
+- 정적 렌더링 → `nextjs-static-dynamic-rendering`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
 - 중첩 서브쿼리 → `sqld-subquery-set-operators`
@@ -1692,6 +1783,7 @@
 - 코드 스플리팅 → `code-splitting`
 - 콘텐츠 협상 → `http-message`
 - 쿠키 세션 → `cookie-session-login`
+- 클라이언트 라우팅 → `rendering-csr-spa`
 - 클러스터드 인덱스 → `db-index`
 - 키-값 저장소 → `db-type-key-value`
 - 키셋 페이지네이션 → `sql-query-rewrite`
@@ -1714,6 +1806,7 @@
 - 피타고라스 수 → `pythagorean-theorem`
 - 피타고라스 정리 → `pythagorean-theorem`
 - 하이드레이션 → `rendering-strategies`
+- 하이드레이션 불일치 → `hydration`
 - 함수 기반 인덱스 → `sqld-type-conversion`
 - 함수 종속 → `db-modeling-normalization`
 - 핫 키 → `caching-strategies`
@@ -1744,6 +1837,8 @@
 - appendfsync → `redis-persistence-ha`
 - application/x-www-form-urlencoded → `html-form-http`
 - ARP → `layer-link-ethernet-arp`
+- Astro → `islands-resumability`
+- AsyncLocalStorage → `rendering-ssr`
 - autosquash → `git-rebase`
 - autovacuum → `postgres-mvcc-vacuum`
 - B-tree 인덱스 → `db-index`
@@ -1761,6 +1856,7 @@
 - BM25 → `elasticsearch-inverted-index`
 - BRIN → `db-index-design`
 - BuildKit → `dockerfile-image-layers`
+- Cache Components → `nextjs-static-dynamic-rendering`
 - Cache Storage → `frontend-browser-cache`
 - cache-aside → `caching-strategies`
 - Cache-Control → `http-caching-cdn`
@@ -1812,6 +1908,7 @@
 - DOCKER-USER → `iptables-nat`
 - Dockerfile → `dockerfile-image-layers`
 - DoH → `dns`
+- Draft Mode → `rendering-ssg-isr`
 - dubious ownership → `git-repo-errors`
 - DuckDB → `db-type-columnar-olap`
 - DynamoDB → `db-type-key-value`
@@ -1826,12 +1923,14 @@
 - fast-forward → `git-branch-merge`
 - fetch first → `git-troubleshooting`
 - first-parent → `git-branch-merge`
+- force-static → `nextjs-static-dynamic-rendering`
 - force-with-lease → `git-remote-collaboration`
 - FormData → `html-form-http`
 - full_page_writes → `postgres-architecture`
 - Gateway API → `gateway`
 - gcTime → `client-data-cache`
 - generate_series → `postgres-reporting-sql`
+- generateStaticParams → `rendering-ssg-isr`
 - git add -p → `git-staging-area`
 - git bisect → `git-tips-advanced`
 - git blame → `git-tips-advanced`
@@ -1854,6 +1953,7 @@
 - Hash Join → `sql-query-tuning`
 - HATEOAS → `rest-api-design`
 - HAVING → `sqld-group-by-having`
+- History API → `rendering-csr-spa`
 - HNSW → `vector-db`
 - host.docker.internal → `docker-network-volume`
 - hosts 파일 → `hosts-file`
@@ -1941,6 +2041,7 @@
 - OAuth → `oauth`
 - OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
+- onShellReady → `streaming-ssr-suspense`
 - openssl s_client → `network-troubleshooting-by-layer`
 - OSI 7계층 → `network-layers-overview`
 - OSI 모델 → `network-layers-overview`
@@ -1966,14 +2067,17 @@
 - Problem Details → `http-status-codes`
 - process.nextTick → `event-loop`
 - PROXY protocol → `proxy-reverse-proxy`
+- proxy_buffering → `streaming-ssr-suspense`
 - proxy_cache → `nginx-https-performance`
 - proxy_pass → `nginx-reverse-proxy`
 - proxy_set_header → `nginx-reverse-proxy`
 - psql → `postgres-getting-started`
 - pull.rebase → `git-rebase`
 - push protection → `git-large-files-secrets`
+- pushState → `rendering-csr-spa`
 - PUT과 PATCH → `http-methods`
 - QUIC → `http-versions`
+- Qwik → `islands-resumability`
 - RAG → `vector-db`
 - RDB 스냅샷 → `redis-persistence-ha`
 - RDBMS → `db-type-relational`
@@ -1984,10 +2088,13 @@
 - Redis Sentinel → `redis-replication-sentinel`
 - ReferenceGrant → `gateway`
 - reflog → `git-stash-reflog`
+- renderToString → `rendering-ssr`
 - repl-backlog-size → `redis-replication-sentinel`
 - rerere → `git-merge-conflict`
 - REST API → `rest-api-design`
 - RETURNING → `postgres-advanced-sql`
+- revalidatePath → `rendering-ssg-isr`
+- revalidateTag → `rendering-ssg-isr`
 - reviver → `json-crud-http`
 - RFC 1918 → `layer-ip-addressing`
 - RocksDB → `db-type-embedded`
@@ -1995,6 +2102,7 @@
 - Row Level Security → `postgres-roles-security`
 - ROW_NUMBER → `sqld-window-functions`
 - ROWNUM → `sqld-top-n-hierarchical-pivot`
+- RSC payload → `react-server-components`
 - Same-Origin Policy → `cors`
 - sargable → `sql-query-rewrite`
 - SAVEPOINT → `sql-insert-update-delete`
@@ -2005,7 +2113,9 @@
 - SELF JOIN → `sqld-joins`
 - sendBeacon → `browser-fetch`
 - server_name → `nginx-basics`
+- server-only → `react-server-components`
 - Server-Sent Events → `realtime-communication`
+- Server-Timing → `rendering-ssr`
 - Service Worker → `frontend-browser-cache`
 - SET ROLE → `postgres-roles-security`
 - Set-Cookie → `cookie-session-login`
@@ -2017,6 +2127,7 @@
 - Snowflake → `db-sharding`
 - SO_REUSEADDR → `ports-and-sockets`
 - SO_REUSEPORT → `ports-and-sockets`
+- SPA 폴백 → `rendering-csr-spa`
 - Speculation Rules → `frontend-browser-cache`
 - SQLite → `db-type-embedded`
 - SQLSTATE → `sql-basics`
@@ -2027,6 +2138,8 @@
 - staleTime → `client-data-cache`
 - statement_timeout → `sql-batch-timeout-pool`
 - SUBSTR → `sqld-single-row-functions`
+- suppressHydrationWarning → `hydration`
+- Suspense 경계 → `streaming-ssr-suspense`
 - SYN flood → `tcp-connection-lifecycle`
 - TanStack Query → `client-data-cache`
 - TCP/IP 4계층 → `network-layers-overview`
@@ -2042,6 +2155,7 @@
 - tracepath → `network-troubleshooting-by-layer`
 - traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
+- Transfer-Encoding: chunked → `streaming-ssr-suspense`
 - TrueTime → `db-type-newsql`
 - TRUNCATE → `sql-insert-update-delete`
 - try_files → `nginx-basics`
@@ -2055,6 +2169,7 @@
 - UPSERT → `sql-insert-update-delete`
 - upstream 블록 → `nginx-reverse-proxy`
 - URLSearchParams → `html-form-http`
+- use client → `react-server-components`
 - useDeferredValue → `react-rerender`
 - UUID v7 → `postgres-data-types`
 - UUIDv7 → `db-sharding`
@@ -2078,32 +2193,52 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
+- `sqld-null-functions` ↔ `sql-select-where-null` (24%: null은, 값이, 아니라, 고르는, null, 다루기)
+- `db-index-pitfalls` ↔ `db-index-design` (21%: 100만, 인덱스는, 인덱스를, index)
+- `db-index-pitfalls` ↔ `db-index` (21%: 100만, 인덱스가, 인덱스를, index)
+- `streaming-ssr-suspense` ↔ `rendering-strategies` (19%: ssr, next.js, 스트리밍, ssr과, 준비된, 부분부터)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `db-partitioning` ↔ `db-type-time-series` (18%: 오래된, 통째로, 키가)
 - `db-partitioning` ↔ `db-modeling-normalization` (18%: 테이블을, 떼어, 키가)
 - `redis-cluster` ↔ `db-sharding` (17%: 키를, 나누는, 해시)
 - `redis-cluster` ↔ `redis-basics` (17%: 나눈다, 단일, 해시)
-- `db-index-pitfalls` ↔ `db-index-design` (16%: 100만, 인덱스는, index)
 - `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
-- `db-index-pitfalls` ↔ `db-index` (16%: 100만, 인덱스가, index)
-- `db-locking-deadlock` ↔ `db-transaction-isolation` (16%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
-- `sqld-single-row-functions` ↔ `json-crud-http` (15%: 날짜는, 조용히, 숫자)
+- `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
 - `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
-- `sqld-null-functions` ↔ `sql-select-where-null` (14%: null은, null, 다루기)
+- `packet-capture-tcpdump` ↔ `db-index` (15%: 처음부터, 끝까지, 줄을, 필요한)
+- `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
+- `git-branch-merge` ↔ `git-remote-collaboration` (14%: 브랜치는, 브랜치를, 지운다, 원격)
+- `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
-- `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
-- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (14%: pg, 들어오는, 지나는)
-- `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (13%: 막는, 남기는, 트랜잭션, update)
+- `kubernetes-ingress` ↔ `gateway` (13%: 로드, kubernetes, ingress, 밸런서)
+- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (13%: pg, 들어오는, 지나는)
+- `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (13%: 밖에서, 요청마다, next.js, ssr)
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
-- `client-data-cache` ↔ `what-happens-google-com` (13%: 받기, 페이지가, 캐시가)
-- `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
+- `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (12%: 막는, 남기는, 트랜잭션, update)
 - `sql-insert-update-delete` ↔ `db-transaction-isolation` (12%: commit, rollback, 트랜잭션이, transaction)
-- `packet-capture-tcpdump` ↔ `db-index` (12%: 처음부터, 끝까지, 줄을)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `nextjs-static-dynamic-rendering` ↔ `react-server-components`
+- `nextjs-static-dynamic-rendering` ↔ `rendering-ssg-isr`
+- `nextjs-static-dynamic-rendering` ↔ `rendering-strategies`
+- `islands-resumability` ↔ `hydration`
+- `islands-resumability` ↔ `rendering-strategies`
+- `react-server-components` ↔ `streaming-ssr-suspense`
+- `react-server-components` ↔ `hydration`
+- `react-server-components` ↔ `rendering-strategies`
+- `streaming-ssr-suspense` ↔ `hydration`
+- `streaming-ssr-suspense` ↔ `rendering-ssr`
+- `streaming-ssr-suspense` ↔ `rendering-strategies`
+- `hydration` ↔ `rendering-ssr`
+- `hydration` ↔ `rendering-strategies`
+- `rendering-ssg-isr` ↔ `rendering-ssr`
+- `rendering-ssg-isr` ↔ `rendering-strategies`
+- `rendering-ssr` ↔ `rendering-csr-spa`
+- `rendering-ssr` ↔ `rendering-strategies`
+- `rendering-csr-spa` ↔ `rendering-strategies`
 - `postgres-reporting-sql` ↔ `postgres-advanced-sql`
 - `postgres-connections-pg-hba` ↔ `postgres-getting-started`
 - `postgres-connections-pg-hba` ↔ `postgres-roles-security`

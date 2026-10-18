@@ -1,0 +1,419 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rendering-ssg-isr");
+
+관리자 화면에서 무선 이어폰 가격을 89,000원에서 79,000원으로 내렸다. 상품 페이지를 열어 보니 아직 89,000원이다. 새로고침을 한 번 더 누르니 그제야 79,000원이 나온다. 동료는 "몇 분 지나도 안 바뀌던데요" 한다. 같은 페이지인데 누구는 바로, 누구는 한참 뒤에 바뀐 값을 본다.
+
+이 페이지는 ISR(Incremental Static Regeneration)로 만든 페이지다. 미리 만들어 둔 HTML을 주다가 정해진 조건이 되면 서버가 뒤에서 다시 만든다. "언제 다시 만드는지"를 정확히 모르면 위와 같은 일이 매일 생긴다. 이 글은 빌드 때 HTML을 굽는 SSG(Static Site Generation)에서 시작해, ISR이 페이지를 다시 만드는 조건을 Next.js 16.4로 직접 재 보며 따라간다. 렌더링 방식 전체 비교는 [CSR, SSR, SSG, ISR, 스트리밍](/posts/rendering-strategies)에, 요청마다 만드는 방식은 [SSR](/posts/rendering-ssr)에 있다.
+
+예제는 App Router에 상품 페이지 하나를 두고 `next build`, `next start`로 띄웠다. 상품 데이터는 JSON 파일에서 읽고, 느린 DB를 흉내 내려고 렌더링마다 500ms를 기다리게 했다. 페이지에는 렌더링한 시각을 찍었다.
+
+## 빌드가 HTML 파일을 남긴다
+
+SSG는 렌더링을 요청 시점에서 빌드 시점으로 옮긴 것이다. 렌더링 코드는 SSR과 같다. 다만 배포 전에 한 번 돌려 결과를 파일로 남기고, 요청이 오면 그 파일을 준다. 동적 경로라면 어떤 주소를 미리 만들지 알려 줘야 한다. App Router에서는 `generateStaticParams`가 그 목록이다.
+
+```jsx
+// app/products/[id]/page.jsx
+export const revalidate = 10; // 10초가 지나면 다시 만들 수 있다 (ISR)
+
+export async function generateStaticParams() {
+  return [{ id: "1" }, { id: "2" }]; // 빌드할 때 만들 주소
+}
+
+export default async function Product({ params }) {
+  const { id } = await params;
+  const p = await getProduct(id);
+  if (!p) notFound();
+  return <main><h1>{p.name}</h1><p id="price">{p.price.toLocaleString("ko-KR")}원</p></main>;
+}
+```
+
+```bash
+# 프로덕션 빌드
+npx next build
+```
+
+```text
+Route (app)
+┌ ○ /_not-found
+├ ○ /about
+├ ƒ /api/revalidate
+└   /products/[id]
+  ├ ● /products/1
+  └ ● /products/2
+
+○  (Static)   prerendered as static content
+●  (SSG)      prerendered as static HTML (uses generateStaticParams)
+ƒ  (Dynamic)  server-rendered on demand
+```
+
+`●`가 붙은 두 주소가 빌드 때 만들어졌다. 실제로 `.next/server/app/products/` 아래에 `1.html`, `1.rsc`, `1.meta` 같은 파일이 생긴다. HTML은 첫 요청에, `.rsc`는 다른 페이지에서 링크로 넘어올 때 쓰는 컴포넌트 데이터다. 기호가 어떤 조건에서 `○`, `●`, `ƒ`로 갈리는지는 [Next.js App Router는 언제 정적이고 언제 동적인가](/posts/nextjs-static-dynamic-rendering)에서 따로 다룬다.
+
+## 페이지가 늘면 빌드가 늘어난다
+
+SSG의 첫 번째 약점은 빌드 시간이다. 글 하나를 가져오는 데 20ms가 걸린다고 치고, `generateStaticParams`가 돌려주는 개수만 바꿔 빌드했다(4코어, 워커 3개).
+
+```text
+N=10    전체 5.6s   정적 페이지 생성 387ms   결과물 640K
+N=1000  전체 17.5s  정적 페이지 생성 9.7s    결과물 55M
+N=5000  전체 48.8s  정적 페이지 생성 40s     결과물 275M
+```
+
+페이지 생성 시간이 개수에 거의 비례해 늘었다. 이 예제는 페이지마다 20ms짜리 가짜 조회 하나라 빠른 편이다. 실제로는 DB나 CMS API를 페이지마다 부르니, 상품 10만 개를 모두 빌드에 넣으면 빌드 한 번에 수십 분이 걸리고, 그동안 CMS API에 요청이 쏟아진다. 빌드 중에 API가 제한(rate limit)에 걸려 빌드가 실패하는 일도 흔하다.
+
+그래서 보통 인기 있는 일부만 빌드에 넣고 나머지는 첫 요청에 만든다. `generateStaticParams`가 상위 1,000개만 돌려주면, 목록 밖 주소는 처음 요청이 왔을 때 렌더링해서 캐시에 넣는다. 빌드에 없던 3번 상품과 존재하지 않는 9번 상품을 요청해 봤다.
+
+```text
+시각      상태  x-nextjs-cache  응답 시간  가격
+19:20:09  200   MISS            564ms      12,000   ← 3번 첫 요청: 이때 만든다
+19:20:09  200   HIT               6ms      12,000   ← 3번 두 번째: 만들어 둔 것
+19:20:09  404   MISS             48ms               ← 9번: notFound()
+```
+
+첫 요청을 받은 사람은 렌더링을 기다린다. 그 뒤로는 빌드한 페이지와 똑같다. 목록 밖 주소를 아예 막고 싶다면 `export const dynamicParams = false`를 둔다. 그러면 목록에 없는 주소는 렌더링하지 않고 404다. 목록 전체를 첫 요청에 맡기고 싶으면 `generateStaticParams`가 빈 배열을 돌려주게 한다. 빌드는 빨라지고 첫 방문자들이 비용을 나눠 낸다.
+
+## 시간이 지나면 다시 만든다
+
+두 번째 약점은 내용이 바뀌지 않는다는 것이다. `revalidate = 10`을 둔 페이지는 만들어진 지 10초가 지나면 다시 만들 자격이 생긴다. "10초마다 다시 만든다"가 아니다. 10초가 지난 뒤 요청이 와야 다시 만든다. 그리고 그 요청은 새 페이지가 아니라 옛 페이지를 받는다.
+
+가격을 바꾸기 전후로 요청을 보내 응답 헤더 `x-nextjs-cache`와 가격, 페이지를 렌더링한 시각을 찍었다.
+
+```bash
+# 응답 상태, 캐시 상태, 걸린 시간, 가격, 렌더링 시각을 한 줄로 찍는다
+curl -s -D headers.txt -w '\n%{time_total}' localhost:4301/products/1
+```
+
+```text
+시각      상태  x-nextjs-cache  응답 시간  가격      렌더링 시각
+19:20:17  200   HIT               7ms      89,000    19:20:09
+19:20:18  200   HIT               4ms      89,000    19:20:09
+-- 가격을 79,000원으로 바꿨다
+19:20:18  200   HIT               3ms      89,000    19:20:09
+19:20:29  200   STALE             8ms      89,000    19:20:09
+19:20:29  200   STALE             4ms      89,000    19:20:09
+19:20:31  200   HIT              10ms      79,000    19:20:30
+```
+
+가격을 바꾼 직후 요청은 당연히 옛 가격이다. 10초가 지난 19:20:29의 첫 요청은 `STALE`, 즉 "옛 페이지를 주고 뒤에서 다시 만드는 중"이다. 그 직후 요청도 `STALE`인데 렌더링은 한 번만 일어났다. 다시 만드는 일은 한 페이지에 하나씩만 돈다. 19:20:30에 새 페이지가 완성되고, 그다음 요청부터 79,000원이다. 응답 시간은 내내 10ms 아래다. 아무도 500ms 렌더링을 기다리지 않았다. 대신 누군가는 낡은 값을 봤다.
+
+<SequenceDiagram
+  caption="revalidate 10초: 만료 뒤 첫 요청은 옛 페이지를 받고 재생성을 깨운다"
+  actors={[
+    { id: "a", label: "사용자 A" },
+    { id: "cache", label: "Next 캐시" },
+    { id: "render", label: "렌더링" },
+    { id: "b", label: "사용자 B" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "cache",
+      label: "19:20:18 HIT",
+      title: "아직 신선하다",
+      detail: "19:20:09에 만든 페이지다. 9초밖에 안 됐으니 그대로 준다. 가격은 방금 바뀌었지만 캐시는 모른다.",
+    },
+    {
+      from: "b",
+      to: "cache",
+      label: "19:20:29 요청",
+      title: "10초가 지난 뒤 첫 요청",
+      detail: "만료됐지만 버리지 않았다. 이 요청이 재생성의 방아쇠가 된다. 아무도 오지 않았다면 페이지는 몇 시간이 지나도 그대로다.",
+    },
+    {
+      from: "cache",
+      to: "b",
+      label: "STALE 89,000",
+      title: "일단 옛 페이지를 준다",
+      detail: "B는 8ms 만에 89,000원 페이지를 받는다. 기다리지 않는 대신 낡은 값을 본다.",
+    },
+    {
+      from: "cache",
+      to: "render",
+      label: "뒤에서 렌더링",
+      title: "다시 만든다",
+      detail: "데이터를 다시 읽고 500ms 동안 렌더링한다. 그 사이 온 요청도 STALE을 받고, 렌더링을 또 시작하지는 않는다.",
+    },
+    {
+      from: "render",
+      to: "cache",
+      label: "19:20:30 새 HTML",
+      title: "캐시를 바꿔 끼운다",
+      detail: "렌더링이 성공하면 새 페이지로 교체한다. 실패하면 옛 페이지를 그대로 둔다.",
+    },
+    {
+      from: "a",
+      to: "cache",
+      label: "19:20:31 HIT",
+      title: "이제 79,000원이다",
+      detail: "다음 10초 동안은 이 페이지가 신선하다. 처음 장면에서 '새로고침 한 번 더 하니 바뀌었다'가 이 단계다.",
+    },
+  ]}
+/>
+
+처음 장면의 동료가 몇 분 동안 옛 가격을 본 이유도 이걸로 설명된다. 페이지 캐시만 있는 게 아니다. 앞단에 CDN이 있고 그 CDN이 응답 헤더대로 사본을 들고 있으면, CDN의 사본과 Next.js의 캐시가 각자 한 번씩 낡을 수 있다. 다음 절의 헤더가 그 약속이다.
+
+아래 함수로 요청 시각 목록을 넣어 각 요청이 `HIT`과 `STALE` 중 무엇을 받는지 계산해 보자. 페이지는 0초에 만들어졌고, 재생성에는 `regenSec`초가 걸린다.
+
+<CodePlayground
+  caption="ISR: 이 요청은 HIT일까 STALE일까"
+  functionName="isrResponses"
+  initialCode={`function isrResponses(revalidate, regenSec, times) {
+  // revalidate: 신선한 시간(초), regenSec: 다시 만드는 데 걸리는 시간(초)
+  // times: 요청 시각(초) 오름차순. 페이지는 0초에 만들어졌다
+  // 반환: 요청마다 "HIT" 또는 "STALE"
+  return times.map(() => "HIT");
+}`}
+  solution={`function isrResponses(revalidate, regenSec, times) {
+  let generatedAt = 0;
+  let regenDoneAt = null; // 재생성 중이면 끝나는 시각
+  const out = [];
+  for (const t of times) {
+    if (regenDoneAt !== null && regenDoneAt <= t) {
+      generatedAt = regenDoneAt; // 새 페이지로 교체
+      regenDoneAt = null;
+    }
+    if (t - generatedAt < revalidate) out.push("HIT");
+    else {
+      out.push("STALE");
+      if (regenDoneAt === null) regenDoneAt = t + regenSec; // 한 번만 시작
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "위 측정과 같은 흐름", args: [10, 0.5, [5, 11, 11.2, 12, 30]], expected: ["HIT", "STALE", "STALE", "HIT", "STALE"] },
+    { label: "60초, 한참 뒤 다시", args: [60, 1, [1, 59, 61, 61.5, 62.1, 200, 200.5, 202]], expected: ["HIT", "HIT", "STALE", "STALE", "HIT", "STALE", "STALE", "HIT"] },
+    { label: "100초 동안 아무도 안 옴", args: [10, 2, [3, 100]], expected: ["HIT", "STALE"] },
+  ]}
+/>
+
+세 번째 테스트가 놓치기 쉬운 경우다. 97초 동안 페이지는 낡아 있었고, 100초에 온 사람이 그 낡은 페이지를 받는다.
+
+## 응답 헤더에 적힌 약속
+
+ISR 페이지의 응답 헤더를 보면 Next.js가 앞단 캐시에게 무엇을 부탁하는지 보인다.
+
+```bash
+curl -sI localhost:4301/products/1 | grep -iE 'cache|x-next'
+```
+
+```text
+x-nextjs-cache: STALE
+x-nextjs-prerender: 1
+x-nextjs-stale-time: 300
+Cache-Control: s-maxage=10, stale-while-revalidate=31535990
+```
+
+<UrlAnatomy
+  caption="revalidate = 10인 페이지의 Cache-Control"
+  base="Cache-Control:"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "s-maxage",
+      value: "10",
+      title: "공유 캐시에서 10초 동안 신선",
+      description: "revalidate 값이 그대로 들어간다. CDN 같은 공유 캐시만 이 값을 쓰고 브라우저는 무시한다. 브라우저는 매번 서버(또는 CDN)에 묻는다.",
+    },
+    {
+      key: "stale-while-revalidate",
+      value: "31535990",
+      title: "그 뒤로 거의 1년 동안 옛 사본 허용",
+      description: "1년(31,536,000초)에서 s-maxage를 뺀 값이다. 만료된 뒤에도 옛 사본을 주면서 뒤에서 새로 받아 오라는 뜻이다. Next.js 자체 캐시의 STALE 동작을 CDN에도 똑같이 요구하는 셈이다.",
+      code: "revalidate = 3600 → s-maxage=3600, stale-while-revalidate=31532400",
+    },
+  ]}
+/>
+
+CDN이 이 헤더를 지원하면 CDN도 만료 뒤 첫 요청에 옛 사본을 주고 원본(Next.js)에 다시 묻는다. 그런데 원본도 그 순간 `STALE`을 줄 수 있다. 그러면 CDN은 낡은 사본을 새로 받아 와서 또 10초 동안 들고 있다. 가격을 바꾼 뒤 실제로 사용자에게 새 가격이 닿기까지 두 단계의 만료가 겹치는 것이다. 이런 이유로 페이지 캐시와 CDN 캐시 중 한 곳에서 기한을 정하고, 갱신할 때는 두 곳을 다 비우는 절차를 둔다. CDN이 헤더를 해석하는 방식과 무효화에 걸리는 시간은 [HTTP 캐시와 CDN](/posts/http-caching-cdn)에 정리했다.
+
+## 저장하는 순간 바로 갱신하기
+
+시간 기반 갱신은 "언젠가는 맞아진다"는 약속이다. 가격처럼 틀리면 곤란한 값은 바뀌는 순간 알려 주는 편이 낫다. 관리자 화면이 가격을 저장한 뒤 갱신 API를 부르게 만든다.
+
+```js
+// app/api/revalidate/route.js
+import { revalidatePath } from "next/cache";
+
+export async function POST(req) {
+  // 아무나 부르지 못하게 비밀 값을 확인한다
+  if (req.headers.get("x-secret") !== process.env.REVALIDATE_SECRET) {
+    return new Response("no", { status: 401 });
+  }
+  const { path } = await req.json();
+  revalidatePath(path); // 이 주소의 캐시를 무효로 표시한다
+  return Response.json({ revalidated: path });
+}
+```
+
+```bash
+# 가격을 69,000원으로 바꾼 뒤 갱신을 요청한다
+curl -s -X POST localhost:4301/api/revalidate \
+  -H 'x-secret: s3cret' -H 'content-type: application/json' \
+  -d '{"path":"/products/1"}'
+```
+
+```text
+{"revalidated":"/products/1","at":"19:20:38"}
+19:20:39  200  MISS   546ms  69,000   19:20:39
+19:20:39  200  HIT      4ms  69,000   19:20:39
+```
+
+시간 기반과 다르게 다음 요청이 `MISS`다. 옛 페이지를 주지 않고 그 자리에서 렌더링을 기다려(546ms) 새 가격을 받았다. `revalidatePath`는 캐시를 지우기만 하고, 다시 만드는 건 다음 요청 때 한다. 비밀 값 없이 부르면 401이다. 이 엔드포인트가 열려 있으면 누구나 캐시를 계속 지워 원본에 부하를 걸 수 있으니 꼭 막는다.
+
+여러 페이지가 같은 데이터를 쓴다면 주소 대신 태그로 지운다. `fetch`에 태그를 붙이고 `revalidateTag`로 그 태그를 쓰는 모든 캐시를 무효화한다. Next.js 16에서는 두 번째 인자로 옛 사본을 얼마나 더 줄지 정해야 한다. 인자 하나짜리 형태는 deprecated다. 두 방식을 차례로 불렀다.
+
+```js
+// 페이지: 상품 API 응답에 태그를 붙여 1시간 캐시한다
+const p = await fetch(`https://api.example.com/p/${id}`, {
+  next: { tags: [`product-${id}`], revalidate: 3600 },
+}).then((r) => r.json());
+
+// 갱신 API
+revalidateTag("product-1", "max");         // 옛 사본을 주면서 뒤에서 갱신
+revalidateTag("product-1", { expire: 0 }); // 옛 사본을 버리고 다음 요청이 기다린다
+```
+
+```text
+-- 79,000원, revalidateTag(product-1, max)
+19:21:08  200  STALE    6ms  89,000  19:20:55
+19:21:09  200  HIT     13ms  79,000  19:21:08
+-- 69,000원, revalidateTag(product-1, {expire:0})
+19:21:09  200  MISS   528ms  69,000  19:21:09
+19:21:09  200  HIT      6ms  69,000  19:21:09
+```
+
+`"max"`는 시간 기반 만료처럼 동작한다. 첫 요청은 옛 가격을 빨리 받고 다음 요청부터 새 가격이다. `{ expire: 0 }`은 첫 요청이 기다리는 대신 새 가격을 받는다. 블로그 글이나 상품 설명처럼 몇 초 늦어도 되는 내용은 `"max"`, 가격이나 품절처럼 늦으면 안 되는 내용은 `{ expire: 0 }`을 고른다. 서버 액션 안에서 "저장하고 바로 내 화면에 반영"이 필요하면 `updateTag`가 따로 있다. 참고로 빌드 결과의 `.meta` 파일을 열어 보면 `x-next-cache-tags`에 `_N_T_/products/1` 같은 값이 들어 있다. 주소도 내부적으로는 태그 하나로 다뤄진다.
+
+## 서버가 두 대면 한 대만 갱신된다
+
+`next start`를 두 개 띄우고 앞에 로드 밸런서를 두는 구성은 흔하다. 쿠버네티스 파드를 여러 개 두는 것도 같다. 이때 기본 캐시는 각 인스턴스의 파일 시스템과 메모리에 있다. 같은 빌드를 두 인스턴스(A, B)로 띄우고 갱신 요청을 A로만 보냈다.
+
+```text
+A  19:21:32  200  HIT    3ms  69,000  19:21:09
+B  19:21:32  200  HIT    9ms  69,000  19:21:09
+-- 59,000원, A에만 revalidateTag
+A  19:21:33  200  MISS 543ms  59,000  19:21:33
+B  19:21:33  200  HIT    4ms  69,000  19:21:09
+A  19:21:33  200  HIT    2ms  59,000  19:21:33
+B  19:21:33  200  HIT    6ms  69,000  19:21:09
+```
+
+B는 아무 일도 없었다는 듯 옛 가격을 준다. 로드 밸런서가 요청을 번갈아 보내면 사용자는 새로고침할 때마다 59,000원과 69,000원을 오간다. 처음 장면에서 "누구는 바로, 누구는 한참 뒤"가 이렇게도 생긴다. Next.js 문서도 여러 인스턴스에서는 공유 캐시 핸들러(`cacheHandler`, Redis 같은 공용 저장소)를 쓰라고 안내한다. 공유 캐시가 없다면 갱신 요청을 모든 인스턴스에 보내야 하는데, 오토스케일링으로 인스턴스가 바뀌면 그것도 어렵다.
+
+## 다시 만들다 실패하면
+
+재생성 중에 DB가 죽으면 어떻게 될까. 상품 데이터 파일을 일부러 깨뜨려 렌더링이 예외를 던지게 했다.
+
+```text
+19:29:48  200  HIT     9ms  32,000  19:29:47
+-- data.json을 깨뜨렸다
+19:30:18  200  STALE   6ms  32,000  19:29:47   ← 재생성 시작, 실패
+19:30:21  200  HIT     4ms  32,000  19:29:47
+19:30:25  200  HIT     3ms  32,000  19:29:47
+19:30:28  200  HIT     3ms  32,000  19:29:47
+19:30:31  200  STALE   4ms  32,000  19:29:47   ← 다시 시도, 또 실패
+```
+
+서버 로그에는 `SyntaxError: Expected property name or '}' in JSON`이 찍혔지만 사용자는 마지막으로 성공한 페이지를 계속 받았다. 실패한 뒤에는 그 페이지가 다시 한 번 신선한 것으로 취급되어(`HIT`) 유효 시간이 한 번 더 지난 다음에 재시도했다. 원본이 죽어도 페이지는 살아 있다는 점이 ISR의 큰 장점이다.
+
+이 장점은 예외를 던질 때만 얻는다. 데이터 조회가 실패했을 때 `try/catch`로 잡아서 "가격 정보를 불러오지 못했습니다"를 그리면, 그 화면이 정상 결과로 캐시되어 다음 갱신 때까지 모두에게 나간다. ISR 페이지에서 조회가 실패하면 잡지 말고 던진다. 응답 코드가 5xx인 경우도 `res.ok`를 확인해 직접 던져야 한다.
+
+## 편집자는 저장 전 모습을 봐야 한다
+
+CMS에서 글을 쓰는 편집자는 발행 전 초안을 실제 페이지 모양으로 보고 싶어 한다. 정적 페이지는 이미 구워져 있으니 초안을 보여 줄 수 없다. Next.js의 Draft Mode는 특정 쿠키가 있는 요청만 캐시를 건너뛰고 요청 시점에 렌더링한다.
+
+```js
+// app/api/draft/route.js: 편집자만 아는 비밀 값으로 들어와 쿠키를 받는다
+import { draftMode } from "next/headers";
+import { redirect } from "next/navigation";
+
+export async function GET(req) {
+  const url = new URL(req.url);
+  if (url.searchParams.get("secret") !== process.env.REVALIDATE_SECRET) {
+    return new Response("no", { status: 401 });
+  }
+  (await draftMode()).enable();
+  redirect(url.searchParams.get("path") || "/");
+}
+
+// 페이지: 초안 모드면 초안 데이터를 읽는다
+const { isEnabled } = await draftMode();
+```
+
+```text
+HTTP/1.1 307 Temporary Redirect
+location: /products/1
+set-cookie: __prerender_bypass=123ae5b0ace8ff63a73141726ebe9c47; Path=/; Secure; HttpOnly; SameSite=none
+```
+
+이 쿠키를 들고 페이지를 요청하면 응답이 달라진다.
+
+```text
+# 쿠키 있음: 매번 렌더링 (0.63s, 0.53s), 캐시 금지
+Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate
+h1: 무선 이어폰 (초안)
+
+# 쿠키 없음: 정적 페이지 그대로
+Cache-Control: s-maxage=10, stale-while-revalidate=31535990
+h1: 무선 이어폰
+```
+
+초안 응답은 `private, no-store`라서 CDN에 남지 않는다. 쿠키 값은 빌드할 때마다 새로 정해진다. 쿠키에 `Secure`와 `SameSite=none`이 붙어 있어서, 로컬에서 HTTP로 시험할 때 브라우저가 쿠키를 안 보내 초안이 안 보이는 경우가 있다. 이럴 때는 `curl -b`로 쿠키를 직접 넣어 확인한다.
+
+## 내용이 1분마다 바뀐다면
+
+ISR은 "대부분의 요청은 같은 HTML을 받아도 된다"는 전제 위에 있다. 내용이 바뀌는 속도가 이 전제를 흔들기 시작하면 다른 방식이 낫다. 판단은 대략 이렇게 한다.
+
+하루에 몇 번 바뀌고, 바뀔 때 신호를 줄 수 있다면(CMS 발행, 관리자 저장) 긴 `revalidate`에 요청 기반 갱신을 건다. 가장 흔하고 가장 싸다. 신호를 줄 수 없는 외부 데이터라면 받아들일 수 있는 지연만큼 `revalidate`를 정한다. Next.js 문서도 1초보다는 1시간처럼 길게 두고 정확도가 필요하면 요청 기반 갱신을 쓰라고 권한다.
+
+1분마다 바뀌는 데이터(실시간 순위, 남은 재고)를 `revalidate = 1`로 두면 사실상 SSR인데, 첫 요청마다 낡은 값을 주는 단점까지 붙는다. 이럴 때는 페이지 본문은 ISR로 두고 바뀌는 조각만 HTML 밖에서 채운다. 브라우저가 하이드레이션 뒤 API로 부르거나, 그 부분만 요청 시점에 렌더링하는 방식이다. 사용자마다 다른 내용이라면 처음부터 ISR 대상이 아니다. 공유 캐시에 넣으면 남의 내용이 보인다는 점은 [SSR](/posts/rendering-ssr)에서 재현해 봤다.
+
+## 운영에서 지금 어떤 페이지가 나가는지 보기
+
+"배포했는데 안 바뀐다"는 말을 들으면 먼저 헤더를 본다. `x-nextjs-cache`는 Next.js 자체 캐시의 판단(`HIT`, `STALE`, `MISS`, `REVALIDATED`)이고, CDN 쪽 헤더(`age`, `x-cache`, `cf-cache-status` 등)는 그 앞의 판단이다.
+
+```bash
+# 같은 주소를 몇 번 연달아 요청해 캐시 상태와 사본 나이를 본다
+for i in 1 2 3; do
+  curl -s -o /dev/null -D - https://shop.example.com/products/1 | grep -iE '^(age|x-cache|x-nextjs-cache|cache-control):'
+  sleep 2
+done
+```
+
+`age`가 계속 커지는데 `x-nextjs-cache`는 안 보인다면 응답이 CDN에서 끝나고 있다. CDN 무효화가 필요하다. `x-nextjs-cache: STALE`이 반복되는데 내용이 안 바뀐다면 재생성이 실패하고 있을 가능성이 크니 서버 로그에서 렌더링 예외를 찾는다. 로컬에서 재현할 때는 `next dev`가 아니라 `next build`와 `next start`로 띄워야 한다. 개발 서버는 요청마다 다시 렌더링해서 ISR이 동작하지 않는다. `NEXT_PRIVATE_DEBUG_CACHE=1`을 주고 띄우면 서버 콘솔에 캐시 적중과 실패가 찍힌다.
+
+## 다시 가격 89,000원으로
+
+처음 장면에서 가격이 늦게 바뀐 건 시간 기반 ISR의 성질 그대로다. 만료 시간이 지나도 다음 요청이 와야 재생성이 시작되고, 그 요청은 옛 페이지를 받는다. 앞단 CDN이 한 번 더 낡을 수 있고, 인스턴스가 여러 대면 각자 따로 낡는다. SSG는 빌드 때 HTML을 구워 가장 빠르고 싸지만 페이지 수만큼 빌드가 길어지고, ISR은 그 HTML을 요청을 계기로 다시 만든다. 틀리면 곤란한 값은 저장하는 순간 `revalidatePath`나 `revalidateTag`로 알리고, 매 순간 바뀌는 값은 페이지 밖에서 채운다. 이 정적 페이지가 브라우저에서 살아나는 과정은 [하이드레이션](/posts/hydration)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### SSG와 SSR의 차이는요?
+
+렌더링 코드는 같고 시점이 다르다. SSG는 빌드할 때 HTML을 만들어 파일로 두고 요청에는 그 파일을 주니 TTFB가 가장 짧고 서버 부하가 거의 없다. SSR은 요청마다 렌더링하니 항상 최신이고 사용자별 내용도 넣을 수 있지만 요청마다 조회와 렌더링 비용이 든다. SSG는 페이지 수만큼 빌드 시간이 늘고 다시 빌드하기 전까지 내용이 고정된다.
+
+### ISR의 revalidate = 60은 정확히 언제 페이지를 다시 만드나요?
+
+60초마다가 아니라, 만든 지 60초가 지난 뒤 첫 요청이 올 때 다시 만든다. 그 요청은 옛 페이지를 즉시 받고 재생성은 뒤에서 돈다. 그래서 만료 뒤 첫 사용자는 늘 낡은 페이지를 보고, 요청이 없으면 몇 시간이 지나도 갱신되지 않는다. 재생성 중에 온 요청도 옛 페이지를 받고 렌더링은 한 번만 일어난다.
+
+### 가격을 바꾸면 바로 반영되게 하려면 어떻게 하나요?
+
+저장하는 코드에서 요청 기반 갱신을 부른다. Next.js라면 `revalidatePath("/products/1")`이나 `revalidateTag("product-1", ...)`이다. `revalidatePath`나 `{ expire: 0 }`을 준 `revalidateTag`는 다음 요청이 기다리는 대신 새 페이지를 받고, `"max"`는 한 번 옛 페이지를 준 뒤 바뀐다. 앞단 CDN이 사본을 들고 있다면 CDN 무효화도 함께 해야 하고, 갱신 엔드포인트는 비밀 값으로 막는다.
+
+### ISR 재생성이 실패하면 사용자는 무엇을 보나요?
+
+예외가 던져지면 마지막으로 성공한 페이지가 그대로 나가고, 유효 시간이 다시 지난 뒤 재시도한다. 원본 장애에도 페이지가 살아 있는 게 ISR의 장점이다. 다만 조회 실패를 잡아서 오류 문구를 그리면 그게 정상 결과로 캐시되니, ISR 페이지에서는 조회 실패를 잡지 말고 던진다.
+
+### 서버를 여러 대 띄우면 ISR에 어떤 문제가 생기나요?
+
+기본 캐시가 인스턴스마다 따로라서 요청 기반 갱신이 그 요청을 받은 인스턴스에만 적용된다. 다른 인스턴스는 옛 페이지를 계속 주니 새로고침할 때마다 값이 바뀌어 보인다. Redis 같은 공유 저장소에 캐시 핸들러를 두거나, 갱신 요청을 모든 인스턴스에 보내야 한다.
+
+### 상품이 10만 개면 전부 빌드할 건가요?
+
+아니다. 빌드 시간이 개수에 비례해 늘고 빌드 중 데이터 API에도 부하가 몰린다. 인기 상품만 `generateStaticParams`로 빌드하고 나머지는 첫 요청에 만들어 캐시한다. 목록 밖 주소를 막아야 하면 `dynamicParams = false`로 404를 내고, 전부 첫 요청에 맡기려면 빈 배열을 돌려준다.
+
+### ISR이 맞지 않는 페이지는 어떤 건가요?
+
+사용자마다 내용이 다른 페이지는 공유 캐시에 넣으면 안 되니 처음부터 대상이 아니다. 몇 초 단위로 바뀌는 데이터를 `revalidate`를 아주 짧게 두어 맞추려 하면 사실상 SSR이면서 첫 요청마다 낡은 값을 주게 된다. 이런 부분은 본문만 ISR로 두고 바뀌는 조각을 브라우저 조회나 요청 시점 렌더링으로 채운다.

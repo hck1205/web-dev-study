@@ -60,8 +60,10 @@ import { HTTP_METHODS } from "./http-methods";
 import { HTTP_STATUS_CODES } from "./http-status-codes";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
+import { HYDRATION } from "./hydration";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
+import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
@@ -76,6 +78,7 @@ import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
 import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
+import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
@@ -97,12 +100,16 @@ import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
+import { REACT_SERVER_COMPONENTS } from "./react-server-components";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { REDIS_BASICS } from "./redis-basics";
 import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
+import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
+import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
+import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
@@ -125,6 +132,7 @@ import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TOKEN_LOGIN } from "./token-login";
@@ -197,8 +205,10 @@ export const QUESTION_SETS = [
   HTTP_STATUS_CODES,
   HTTP_VERSIONS,
   HTTPS_TLS,
+  HYDRATION,
   IPTABLES_BASICS,
   IPTABLES_NAT,
+  ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
   KUBERNETES_INGRESS,
@@ -213,6 +223,7 @@ export const QUESTION_SETS = [
   MVC_PATTERN,
   NETWORK_LAYERS_OVERVIEW,
   NETWORK_TROUBLESHOOTING_BY_LAYER,
+  NEXTJS_STATIC_DYNAMIC_RENDERING,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
@@ -234,12 +245,16 @@ export const QUESTION_SETS = [
   PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,
+  REACT_SERVER_COMPONENTS,
   REALTIME_COMMUNICATION,
   REDIS_BASICS,
   REDIS_CLUSTER,
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
   REDIS_REPLICATION_SENTINEL,
+  RENDERING_CSR_SPA,
+  RENDERING_SSG_ISR,
+  RENDERING_SSR,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
@@ -262,6 +277,7 @@ export const QUESTION_SETS = [
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  STREAMING_SSR_SUSPENSE,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
   TOKEN_LOGIN,
