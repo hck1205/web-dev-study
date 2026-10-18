@@ -1,0 +1,398 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-resources");
+
+API의 p99 응답 시간이 가끔 튄다. CPU 사용량 그래프를 보면 평균 200m, limits 1000m의 20%라 여유가 넘친다. 그런데 응답이 느린 순간마다 따로 보는 지표 하나가 같이 솟는다. `container_cpu_cfs_throttled_periods_total`. CPU를 다 쓰지도 않았는데 커널이 이 컨테이너를 멈춰 세우고 있었다. 같은 주에 다른 팀의 워커는 RESTARTS가 계속 오르는데 로그에는 아무 에러도 없다. describe를 보니 `Reason: OOMKilled`, `Exit Code: 137`.
+
+둘 다 Pod의 `resources`에 적은 두 숫자, requests와 limits에서 나온다. requests는 스케줄러가 쓰고 limits는 커널이 쓴다. 같은 칸에 나란히 적는 값인데 읽는 쪽이 다르다. 이 글은 두 숫자가 각각 어디서 무슨 일을 하는지, QoS 클래스가 어떻게 정해지고 무엇을 바꾸는지, CPU 스로틀링과 OOMKilled가 실제로 어떻게 일어나는지를 직접 재현해 가며 본다. `kubectl` 출력은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았고, 스로틀링과 OOM은 리눅스 cgroup에 직접 한도를 걸어 실제 프로세스로 재현했다.
+
+## 두 숫자를 읽는 쪽이 다르다
+
+먼저 그림으로 보자. 같은 `resources` 블록에서 requests는 스케줄러 쪽으로, limits는 노드의 cgroup 쪽으로 간다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="requests는 자리 예약, limits는 상한선이다. 둘을 읽는 주체가 다르다."
+  nodes={[
+    { id: "spec", label: "resources", sub: "Pod 스펙", x: 220, y: 40, w: 120 },
+    { id: "req", label: "requests", sub: "예약", x: 110, y: 135, w: 110 },
+    { id: "lim", label: "limits", sub: "상한", x: 330, y: 135, w: 110 },
+    { id: "sched", label: "스케줄러", sub: "노드 고르기", x: 60, y: 250, w: 110 },
+    { id: "weight", label: "cpu.weight", sub: "경합 시 비율", x: 190, y: 250, w: 110 },
+    { id: "cg", label: "cgroup 한도", sub: "cpu.max·memory.max", x: 350, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "spec", to: "req" },
+    { from: "spec", to: "lim" },
+    { from: "req", to: "sched", label: "합산" },
+    { from: "req", to: "weight", label: "CPU만" },
+    { from: "lim", to: "cg", label: "kubelet" },
+  ]}
+/>
+
+requests는 "이만큼은 내 자리로 잡아 달라"는 예약이다. 스케줄러는 노드의 allocatable에서 이미 놓인 Pod들의 requests 합을 빼고, 남은 자리에 새 Pod의 requests가 들어가는 노드만 고른다. 실제로 얼마를 쓰는지는 보지 않는다. CPU requests는 노드에서 경합이 생겼을 때 CPU를 나눠 갖는 비율(cgroup v2의 `cpu.weight`, v1의 `cpu.shares`)로도 쓰인다. 노드가 한가하면 requests보다 훨씬 많이 써도 아무도 막지 않는다.
+
+limits는 "이 이상은 못 쓴다"는 상한이다. kubelet이 컨테이너를 만들 때 cgroup에 그대로 적고, 커널이 지킨다. 그런데 CPU와 메모리는 상한을 넘었을 때 벌어지는 일이 다르다. CPU는 나눠 쓸 수 있는 자원이라 넘으면 기다리게 하고(스로틀링), 메모리는 돌려받을 방법이 없어서 넘으면 프로세스를 죽인다(OOM kill).
+
+실제로 노드에 얼마가 예약됐는지는 `describe node`로 본다.
+
+```bash
+# 노드에 놓인 Pod와 requests·limits 합
+kubectl describe node node-3 | sed -n '/Non-terminated Pods/,/Events/p'
+```
+
+```text
+Non-terminated Pods:          (2 in total)
+  Namespace                   Name                       CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----                       ------------  ----------  ---------------  -------------  ---
+  default                     catalog-68b469958-6nx2r    0 (0%)        0 (0%)      0 (0%)           0 (0%)         3h46m
+  default                     qos-burstable              250m (12%)    0 (0%)      256Mi (6%)       512Mi (12%)    10s
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests    Limits
+  --------           --------    ------
+  cpu                250m (12%)  0 (0%)
+  memory             256Mi (6%)  512Mi (12%)
+  ephemeral-storage  0 (0%)      0 (0%)
+```
+
+node-3은 CPU 2코어, 메모리 4Gi짜리 노드다. 퍼센트는 allocatable 대비다. 둘째 줄의 괄호가 중요하다. limits 합은 100%를 넘을 수 있다. 각 Pod가 상한까지 동시에 쓰지는 않을 거라고 보고 겹쳐 파는 것, 오버커밋이다. requests 합은 스케줄러가 100%를 넘기지 않는다. 첫 줄의 catalog Pod처럼 requests가 0인 Pod는 스케줄러 눈에 공짜라서 어느 노드에든 끝없이 들어간다.
+
+## 자리가 없으면 Pending이다
+
+requests가 노드에 안 맞으면 Pod는 어디에도 놓이지 못한다. 노드 세 개(4코어, 4코어, 2코어)에 이미 몇 개가 놓인 상태에서 CPU 3800m를 요청해 봤다.
+
+```bash
+kubectl apply -f big.yaml          # requests: cpu 3800m, memory 2Gi
+kubectl get pod report-batch -o wide
+kubectl describe pod report-batch | sed -n '/^Events/,$p'
+```
+
+```text
+NAME           READY   STATUS    RESTARTS   AGE   IP       NODE     NOMINATED NODE   READINESS GATES
+report-batch   0/1     Pending   0          4s    <none>   <none>   <none>           <none>
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  4s    default-scheduler  0/4 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 3 Insufficient cpu. preemption: 0/4 nodes are available: 1 Preemption is not helpful for scheduling, 3 No preemption victims found for incoming pod.
+```
+
+`3 Insufficient cpu`는 노드 셋이 CPU 자리 때문에 떨어졌다는 뜻이다. 4코어 노드의 실제 CPU 사용률이 5%여도 결과는 같다. 스케줄러는 사용량이 아니라 requests 합을 본다. 이 메시지를 읽는 법은 [스케줄링 글](/posts/k8s-pod-scheduling)에서 자세히 다룬다. 고치는 방법은 requests를 실제 사용량에 맞게 줄이거나, 노드를 늘리거나(클러스터 오토스케일러가 있다면 이 Pending을 보고 노드를 추가한다), 더 큰 노드를 두는 것이다.
+
+반대로 requests를 너무 낮게 잡으면 Pending은 안 나지만 한 노드에 Pod가 과하게 몰린다. 다들 실제로는 requests보다 많이 쓰니 노드가 실제로 꽉 차고, 그다음에 나올 이야기인 노드 압박과 eviction이 시작된다. requests는 평소 사용량(p50~p90 근처)에, limits는 버틸 수 있는 최대치에 맞추는 게 출발점이다.
+
+## QoS 클래스는 두 숫자의 관계로 정해진다
+
+requests와 limits를 어떻게 적었는지에 따라 Pod에 QoS 클래스가 붙는다. 노드에 문제가 생겼을 때 누구를 먼저 희생할지 정하는 등급이다. 네 가지로 만들어 봤다.
+
+```bash
+kubectl apply -f qos.yaml
+kubectl get pods -o custom-columns=NAME:.metadata.name,QOS:.status.qosClass,CPU_REQ:.spec.containers[0].resources.requests.cpu,MEM_REQ:.spec.containers[0].resources.requests.memory,MEM_LIM:.spec.containers[0].resources.limits.memory
+```
+
+```text
+NAME                      QOS          CPU_REQ   MEM_REQ   MEM_LIM
+qos-besteffort            BestEffort   <none>    <none>    <none>
+qos-burstable             Burstable    250m      256Mi     512Mi
+qos-guaranteed            Guaranteed   500m      512Mi     512Mi
+qos-limits-only           Guaranteed   500m      512Mi     512Mi
+```
+
+규칙은 이렇다. 모든 컨테이너가 CPU와 메모리 둘 다 limits를 갖고 requests가 limits와 같으면 Guaranteed다. 아무 컨테이너도 아무것도 적지 않았으면 BestEffort다. 나머지는 전부 Burstable이다. 마지막 줄이 흔히 헷갈리는 경우다. limits만 적고 requests를 비우면 API 서버가 requests를 limits와 같은 값으로 채운다. 그래서 limits만 적은 Pod는 Guaranteed가 된다.
+
+컨테이너가 여럿이면 하나만 어긋나도 Burstable이다. 앱 컨테이너는 requests와 limits를 맞췄는데 사이드카에 아무것도 안 적으면 Pod 전체가 Burstable이 된다. 실습 클러스터에서 그렇게 만든 `qos-mixed`도 Burstable로 나왔다. 아래에서 규칙을 직접 짜 볼 수 있다. 테스트 값은 모두 위 클러스터가 실제로 붙인 클래스다.
+
+<CodePlayground
+  caption="컨테이너 목록으로 QoS 클래스 정하기"
+  functionName="qosClass"
+  initialCode={`function qosClass(containers) {
+  // containers: [{ requests: { cpu, memory }, limits: { cpu, memory } }]
+  // requests가 비어 있으면 limits 값을 requests로 쓴다
+  // "Guaranteed" | "Burstable" | "BestEffort"
+  return "BestEffort";
+}`}
+  solution={`function qosClass(containers) {
+  let any = false;
+  let guaranteed = true;
+  for (const c of containers) {
+    const req = { ...(c.limits || {}), ...(c.requests || {}) };
+    const lim = c.limits || {};
+    if (Object.keys(req).length || Object.keys(lim).length) any = true;
+    for (const r of ["cpu", "memory"]) {
+      if (!lim[r] || req[r] !== lim[r]) guaranteed = false;
+    }
+  }
+  if (!any) return "BestEffort";
+  return guaranteed ? "Guaranteed" : "Burstable";
+}`}
+  tests={[
+    { args: [[{ requests: { cpu: "500m", memory: "512Mi" }, limits: { cpu: "500m", memory: "512Mi" } }]], expected: "Guaranteed", label: "requests = limits" },
+    { args: [[{ limits: { cpu: "500m", memory: "512Mi" } }]], expected: "Guaranteed", label: "limits만" },
+    { args: [[{ requests: { cpu: "250m", memory: "256Mi" }, limits: { memory: "512Mi" } }]], expected: "Burstable", label: "requests < limits" },
+    { args: [[{}]], expected: "BestEffort", label: "아무것도 없음" },
+    { args: [[{ limits: { cpu: "1", memory: "1Gi" } }, {}]], expected: "Burstable", label: "사이드카만 비었다" },
+    { args: [[{ requests: { memory: "1Gi" }, limits: { memory: "1Gi" } }]], expected: "Burstable", label: "메모리만 맞췄다" },
+  ]}
+/>
+
+클래스는 두 곳에서 쓰인다. 하나는 커널의 OOM killer다. kubelet은 컨테이너마다 `oom_score_adj`를 정해 두는데, Guaranteed는 -997로 거의 마지막에, BestEffort는 1000으로 가장 먼저 죽고, Burstable은 메모리 requests가 클수록 늦게 죽도록 그 사이 값을 받는다. 다른 하나는 kubelet의 eviction 순서다. 이건 아래에서 본다.
+
+## CPU limits를 넘으면 멈춰 세운다
+
+CPU limits는 CFS(리눅스 기본 스케줄러)의 대역폭 제어로 구현된다. 100ms 주기마다 쓸 수 있는 CPU 시간(quota)을 정해 두고, 그만큼 쓰면 다음 주기가 올 때까지 그 cgroup의 스레드를 전부 세워 둔다. limits 500m은 100ms마다 50ms다. cgroup v2라면 이 값이 `cpu.max` 파일에 `50000 100000`으로 적힌다.
+
+함정이 있다. 이 50ms는 모든 스레드를 합친 시간이다. 스레드 네 개가 동시에 돌면 50ms를 12.5ms 만에 다 써 버리고, 남은 87.5ms 동안 아무것도 못 한다. 평균 사용량 그래프에는 500m로 찍히는데, 요청 하나하나는 매 주기마다 87.5ms씩 멈춘다. 아래 그림은 스레드 넷이 각각 약 180ms 분량의 계산을 하는 동안 주기마다 일어나는 일이다.
+
+<AlgoTrace
+  caption="limits 500m, 스레드 4개: 주기마다 12.5ms 돌고 87.5ms 멈춘다"
+  memoryLabel="이 주기의 CPU 시간"
+  cells={["0-100ms", "100-200", "200-300", "...", "1400-1500"]}
+  steps={[
+    { pointer: 0, memory: ["quota 50ms"], caption: "주기가 시작됐다. 50ms를 쓸 수 있다." },
+    { pointer: 0, memory: ["quota 50ms", "4 x 12.5ms"], caption: "스레드 넷이 동시에 돌아 12.5ms 만에 50ms를 다 썼다." },
+    { pointer: 0, memory: ["throttled 87.5ms"], caption: "남은 87.5ms 동안 네 스레드가 모두 멈춘다. nr_throttled가 1 오른다." },
+    { pointer: 1, memory: ["quota 50ms", "throttled 87.5ms"], caption: "다음 주기도 똑같다. 이 사이에 들어온 요청은 멈춘 시간만큼 늦게 끝난다." },
+    { pointer: 4, found: [4], memory: ["15 periods", "wall 1.46s"], caption: "720ms 분량을 다 하는 데 15주기, 약 1.46초가 걸렸다. 제한이 없으면 0.19초다." },
+  ]}
+/>
+
+그림의 숫자는 실제로 잰 값이다. Docker 없이 cgroup에 직접 한도를 걸고, Node의 worker 스레드로 계산을 돌렸다. 이 실습 머신은 cgroup v1이라 파일 이름이 `cpu.cfs_quota_us`지만, Ubuntu 24.04는 cgroup v2라 같은 값이 `cpu.max`에 있다.
+
+```bash
+# cgroup을 하나 만들고 100ms마다 50ms(=500m)로 제한한다 (v1, root 필요)
+sudo mkdir /sys/fs/cgroup/cpu/lab4
+echo 50000 | sudo tee /sys/fs/cgroup/cpu/lab4/cpu.cfs_quota_us
+
+# 그 cgroup 안에서 스레드 4개로 계산을 돌린다
+sudo bash -c 'echo $$ > /sys/fs/cgroup/cpu/lab4/cgroup.procs; exec node burn.js 4'
+
+# 몇 주기 중 몇 번 멈췄는지
+cat /sys/fs/cgroup/cpu/lab4/cpu.stat
+
+# 같은 일을 제한 없이
+node burn.js 4
+```
+
+```text
+threads=4 wall=1459ms
+nr_periods 15
+nr_throttled 15
+throttled_time 4567372947
+threads=4 wall=192ms
+```
+
+15주기 내내 멈췄다(`nr_throttled 15`). 제한이 없을 때 192ms면 끝날 일이 1459ms 걸렸다. 같은 계산을 스레드 하나로 하면 1주기에 50ms씩 쓰니 약 380ms였다. 스레드가 많을수록, 즉 멀티스레드 런타임(JVM, Go, 워커 스레드를 쓰는 Node)일수록 같은 limits에서 더 크게 멈춘다.
+
+쿠버네티스에서는 컨테이너 안이나 노드에서 같은 파일을 본다. 메트릭이 있다면 `container_cpu_cfs_throttled_periods_total`을 `container_cpu_cfs_periods_total`로 나눈 비율을 본다.
+
+```bash
+# 컨테이너 안에서 (cgroup v2)
+kubectl exec api-xxx -- cat /sys/fs/cgroup/cpu.max      # 예: 50000 100000
+kubectl exec api-xxx -- cat /sys/fs/cgroup/cpu.stat     # nr_periods, nr_throttled, throttled_usec
+```
+
+스로틀링 비율이 높은데 평균 사용률은 낮다면 limits가 순간 버스트를 못 받아 주는 것이다. 선택지는 limits를 올리는 것, CPU limits를 아예 빼고 requests만 두는 것이다. 후자는 실제로 많이 쓰는 방식이다. 경합이 생겨도 requests 비율(cpu.weight)만큼은 보장되니, 노드가 한가할 때 남는 CPU를 쓰게 두는 편이 응답 시간에 낫다는 판단이다. 대신 이웃 Pod가 버스트할 때 내 지연도 흔들리고, Guaranteed 클래스는 포기해야 한다. 정답 하나가 있다기보다, 지연에 민감한 서비스인지와 노드를 함께 쓰는 팀을 얼마나 믿는지로 고른다.
+
+## 메모리 limits를 넘으면 죽인다
+
+메모리는 기다리게 할 방법이 없다. 한 번 내준 메모리는 프로세스가 돌려주기 전에는 회수할 수 없으니, 컨테이너가 limits를 넘으려는 순간 커널은 페이지 캐시를 비워 보고, 그래도 모자라면 그 cgroup 안의 프로세스를 죽인다. 이게 OOMKilled다. 128MiB 한도를 건 cgroup에서 10MB씩 계속 붙잡는 프로그램을 돌렸다.
+
+```bash
+# 메모리 128MiB 한도 cgroup (v1, root 필요). v2라면 memory.max에 쓴다
+sudo mkdir /sys/fs/cgroup/memory/lab-oom
+echo $((128*1024*1024)) | sudo tee /sys/fs/cgroup/memory/lab-oom/memory.limit_in_bytes
+
+# 10MB씩 계속 할당하는 Node 프로그램을 그 안에서 실행
+sudo bash -c 'echo $$ > /sys/fs/cgroup/memory/lab-oom/cgroup.procs; exec node hog.js' | tail -3; echo "exit=${PIPESTATUS[0]}"
+
+# 커널이 몇 번 죽였는지
+grep oom_kill /sys/fs/cgroup/memory/lab-oom/memory.oom_control
+```
+
+```text
+holding 90MB
+holding 100MB
+holding 110MB
+exit=137
+oom_kill_disable 0
+oom_kill 1
+```
+
+110MB를 찍고 다음 할당에서 죽었다. Node 런타임 자체가 쓰는 메모리가 있어서 128MiB를 다 채우기 전에 걸렸다. 종료 코드 137은 SIGKILL(128 + 9)이다. 프로세스는 아무 로그도 남기지 못한다. 마지막 로그가 평범한 줄인데 컨테이너가 재시작했다면 OOM을 먼저 의심하는 이유다. 쿠버네티스에서는 kubelet이 이걸 lastState에 OOMKilled로 적는다. 아래는 상태 값을 넣어 재현한 Pod다.
+
+```bash
+kubectl describe pod worker-7c9d8f6b5-m4kzq | sed -n '/State:/,/memory:     512Mi/p'
+```
+
+```text
+    State:          Waiting
+      Reason:       CrashLoopBackOff
+    Last State:     Terminated
+      Reason:       OOMKilled
+      Exit Code:    137
+      Started:      Sun, 18 Oct 2026 23:26:33 +0000
+      Finished:     Sun, 18 Oct 2026 23:26:38 +0000
+    Ready:          False
+    Restart Count:  3
+    Limits:
+      memory:  512Mi
+    Requests:
+      cpu:        250m
+      memory:     512Mi
+```
+
+눈여겨볼 줄은 `Reason: OOMKilled`와 `Exit Code: 137`이다. 137만 있고 Reason이 Error라면 OOM이 아니라 유예 시간 초과 같은 다른 SIGKILL이다. 이건 [Pod의 일생](/posts/k8s-pod-lifecycle)의 종료 코드 부분에서 다뤘다.
+
+OOMKilled를 보면 바로 limits를 올리고 싶어진다. 그 전에 두 가지를 구분한다. 메모리 그래프가 계단처럼 올라 한도에서 잘리기를 반복하면 누수다. 한도를 올려도 죽는 시점만 늦어진다. 반대로 특정 요청(큰 파일 처리, 큰 쿼리 결과)에서 순간적으로 치솟는다면 한도가 실제 최대치보다 낮은 것이다. 그리고 메모리 limits는 requests와 같게 두는 쪽이 안전하다. limits만 크게 두면 스케줄러는 requests만큼만 자리를 잡아 주는데 실제로는 limits까지 쓰니, 노드 전체가 모자라는 상황이 쉽게 온다.
+
+## 런타임은 limits를 모를 수 있다
+
+OOMKilled의 흔한 원인 하나는 앱 런타임이 컨테이너의 메모리 한도를 모르고 자기 기준으로 힙 크기를 정하는 경우다.
+
+JVM은 JDK 10(8u191 백포트)부터 컨테이너 한도를 인식하고, 기본 최대 힙을 한도의 25%로 잡는다(`-XX:MaxRAMPercentage` 기본값 25). 한도가 2Gi면 힙은 512MiB다. 메모리가 남는데도 `OutOfMemoryError`가 나는 쪽으로 틀어진다. 보통 `-XX:MaxRAMPercentage=75`쯤으로 올리는데, 100으로 두면 안 된다. 힙 밖에도 메타스페이스, 스레드 스택, 다이렉트 버퍼, GC 자체가 메모리를 쓰고, 그 합이 limits를 넘으면 JVM의 OOM이 아니라 커널의 OOMKilled가 된다.
+
+Node.js는 V8 힙 상한을 `--max-old-space-size`(MB)로 정한다. 기본값이 컨테이너 한도를 반영하는지는 Node 버전마다 달라서, 컨테이너에서는 명시적으로 준다. limits 1Gi라면 `NODE_OPTIONS=--max-old-space-size=768` 정도로 힙 밖의 버퍼 몫을 남긴다. 그러면 한도를 넘기 전에 V8이 GC를 더 세게 돌리고, 그래도 안 되면 힙 부족 에러와 스택을 남기고 죽는다. 로그 없이 137로 죽는 것보다 원인 찾기가 훨씬 쉽다.
+
+CPU도 비슷하다. Go는 1.25부터 GOMAXPROCS를 cgroup CPU 한도에 맞춘다. 그 전 버전은 노드 코어 수만큼 스레드를 돌려서, 64코어 노드에서 limits 1코어인 Go 앱이 64개 스레드로 quota를 순식간에 태우고 스로틀링에 걸렸다. 그래서 `automaxprocs` 같은 라이브러리를 썼다. 런타임 버전을 확인하고, 모르면 명시적으로 설정한다.
+
+## 노드가 모자라면 kubelet이 쫓아낸다
+
+limits는 컨테이너 하나의 상한이고, 노드 전체가 모자라는 건 다른 문제다. requests보다 많이 쓰는 Pod가 모여 노드 메모리가 바닥나면, kubelet은 커널 OOM killer가 아무나 죽이기 전에 스스로 Pod를 골라 쫓아낸다. 이걸 eviction이라고 한다. 리눅스 노드의 기본 hard eviction 기준은 `memory.available<100Mi`, `nodefs.available<10%`, `imagefs.available<15%`, `nodefs.inodesFree<5%`다. 기준을 넘으면 노드에 MemoryPressure나 DiskPressure 조건이 켜지고 taint가 붙어 새 Pod도 받지 않는다.
+
+누구를 먼저 쫓아낼지는 아래 순서로 정한다. 다음을 누르면 메모리가 모자란 노드에서 kubelet이 Pod를 고르는 과정이 보인다.
+
+<AlgoTrace
+  caption="메모리 압박 때 kubelet이 쫓아낼 Pod를 고르는 순서"
+  memoryLabel="쫓겨난 Pod"
+  cells={["batch BE", "web Bu 초과", "cache Bu 이내", "db Gu"]}
+  steps={[
+    { caption: "노드 memory.available이 100Mi 아래로 내려갔다. MemoryPressure가 켜진다." },
+    { pointer: 0, memory: ["batch"], caption: "requests보다 많이 쓰는 Pod가 먼저다. requests가 0인 BestEffort는 무엇을 쓰든 초과라서 가장 먼저 나간다." },
+    { pointer: 1, memory: ["batch", "web"], caption: "그래도 모자라면 requests를 넘어 쓴 Burstable이 다음이다. 같은 무리 안에서는 Priority가 낮고 초과량이 큰 Pod부터다." },
+    { pointer: 2, memory: ["batch", "web"], caption: "requests 안에서 쓰는 Pod는 웬만하면 건드리지 않는다. requests를 정직하게 적은 보상이다." },
+    { pointer: 3, found: [2, 3], memory: ["batch", "web"], caption: "Guaranteed는 마지막이다. 메모리가 회복되면 멈춘다. 쫓겨난 Pod는 컨트롤러가 다른 노드에 다시 만든다." },
+  ]}
+/>
+
+쫓겨난 Pod는 재시작이 아니라 종료다. phase는 Failed, reason은 Evicted로 남고, 메시지에 이유가 적힌다.
+
+```bash
+# 쫓겨난 Pod 찾기
+kubectl get pods -A --field-selector=status.phase=Failed
+
+# 이유 보기
+kubectl get pod web-7d4b9c-xk2lp -o jsonpath='{.status.reason}: {.status.message}{"\n"}'
+```
+
+```text
+Evicted: The node was low on resource: memory. Threshold quantity: 100Mi, available: 71284Ki. Container web was using 912Mi, request is 256Mi, has larger consumption of memory.
+```
+
+위 출력은 kubelet이 남기는 메시지 형식의 예시다. 마지막 문장이 왜 이 Pod가 뽑혔는지 말해 준다. requests 256Mi인데 912Mi를 쓰고 있었다. Deployment라면 새 Pod가 이미 다른 노드에 떴을 테고, 쫓겨난 Pod 객체는 기록으로 남아 쌓인다. 근본 처방은 requests를 실제 사용량에 맞추는 것이다. 디스크 압박이라면 emptyDir이나 컨테이너 로그가 노드 디스크를 채우는 경우가 많으니, `resources`에 `ephemeral-storage`도 requests와 limits를 적을 수 있다.
+
+## 네임스페이스 단위로 기본값과 한도 걸기
+
+사람마다 requests를 빼먹거나 터무니없는 값을 적는다. 그래서 네임스페이스에 규칙을 건다. LimitRange는 컨테이너 하나의 기본값과 최대·최소를 정하고, ResourceQuota는 네임스페이스 전체의 합을 제한한다.
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: defaults
+  namespace: team-a
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 100m, memory: 128Mi } # requests를 안 적으면 이 값
+      default: { memory: 256Mi }                   # limits를 안 적으면 이 값
+      max: { memory: 2Gi }                         # 이보다 큰 limits는 거절
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-a
+  namespace: team-a
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.memory: 8Gi
+    pods: "20"
+```
+
+```bash
+# 아무것도 안 적은 Pod에 기본값이 들어가는지
+kubectl run plain -n team-a --image=nginx:1.27
+kubectl get pod plain -n team-a -o jsonpath='{.spec.containers[0].resources}{"\n"}{.status.qosClass}{"\n"}'
+
+# 최대치를 넘는 Pod
+kubectl run huge -n team-a --image=nginx:1.27 \
+  --overrides='{"spec":{"containers":[{"name":"huge","image":"nginx:1.27","resources":{"limits":{"memory":"3Gi"}}}]}}'
+```
+
+```text
+pod/plain created
+{"limits":{"memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}
+Burstable
+Error from server (Forbidden): pods "huge" is forbidden: maximum memory usage per Container is 2Gi, but limit is 3Gi
+```
+
+아무것도 안 적은 Pod가 LimitRange 덕분에 BestEffort가 아니라 Burstable이 됐다. 어드미션 단계에서 값이 채워지기 때문이다.
+
+ResourceQuota는 함정이 하나 있다. 이 네임스페이스에 CPU requests 800m짜리 Pod 3개를 Deployment로 띄워 봤다. 합이 2400m이라 한도 2를 넘는다.
+
+```bash
+kubectl get rs,pods -n team-a
+kubectl describe quota team-a -n team-a
+kubectl get events -n team-a --sort-by=.metadata.creationTimestamp | grep FailedCreate
+```
+
+```text
+NAME                             DESIRED   CURRENT   READY   AGE
+replicaset.apps/web-7ffc996bb7   3         2         2       37s
+
+Resource         Used    Hard
+--------         ----    ----
+limits.memory    1280Mi  8Gi
+pods             5       20
+requests.cpu     1900m   2
+requests.memory  640Mi   4Gi
+18s         Warning   FailedCreate        replicaset/web-7ffc996bb7   Error creating: pods "web-7ffc996bb7-q5dk5" is forbidden: exceeded quota: team-a, requested: requests.cpu=800m, used: requests.cpu=2, limited: requests.cpu=2
+```
+
+DESIRED 3에 CURRENT 2다. 세 번째 Pod는 Pending조차 아니다. 아예 만들어지지 않았다. 그래서 `kubectl get pods`만 보면 아무 에러도 안 보이고, 에러는 ReplicaSet의 이벤트에만 남는다. Pod 수가 모자란데 Pending Pod가 없다면 ReplicaSet의 FailedCreate부터 본다. 위 출력의 ReplicaSet 목록과 Used 값은 롤링 업데이트 중이라 옛 ReplicaSet 줄을 뺐다.
+
+## requests와 limits를 다시 정리하면
+
+requests는 스케줄러가 자리를 잡는 기준이자 CPU 경합 때의 비율이고, limits는 커널이 지키는 상한이다. CPU는 limits를 넘으면 100ms 주기마다 멈춰 서고(멀티스레드일수록 심하다), 메모리는 넘으면 SIGKILL로 죽는다(OOMKilled, 137). 둘의 관계가 QoS 클래스를 정하고, 클래스와 requests 초과 여부가 노드 압박 때 누가 먼저 쫓겨날지를 정한다. 출발점은 requests를 실제 사용량에 맞추고, 메모리 limits는 requests와 같게, 런타임의 힙 설정을 limits 안에 들어가게 맞추는 것이다. Pending이 나는 이유가 자원만은 아니라서, 다음 글인 [스케줄링](/posts/k8s-pod-scheduling)에서 노드를 고르는 나머지 조건을 본다.
+
+## 면접에서 나올 만한 질문
+
+### requests와 limits의 차이는 무엇인가요?
+
+requests는 스케줄러가 노드를 고를 때 쓰는 예약량이고, 노드에서는 CPU 경합 시 나눠 갖는 비율로도 쓰인다. limits는 kubelet이 cgroup에 적어 커널이 지키는 상한이다. 스케줄러는 실제 사용량이 아니라 requests 합으로 판단하기 때문에, 사용률이 낮은 노드에도 Insufficient cpu로 Pending이 날 수 있다.
+
+### CPU limits를 넘으면 어떻게 되고, 메모리 limits를 넘으면 어떻게 되나요?
+
+CPU는 CFS 대역폭 제어로 100ms 주기마다 quota를 다 쓰면 다음 주기까지 멈춰 선다. 프로세스는 살아 있지만 응답이 늦어진다. 메모리는 회수할 수 없어서 넘으면 커널 OOM killer가 프로세스를 SIGKILL로 죽이고, 쿠버네티스에는 OOMKilled와 종료 코드 137로 남는다.
+
+### 평균 CPU 사용률이 낮은데 스로틀링이 걸리는 이유는요?
+
+quota는 주기 안의 모든 스레드 CPU 시간 합이라, 스레드가 여럿이면 주기 초반에 quota를 다 쓰고 나머지 시간 동안 멈춘다. 평균으로 보면 낮지만 순간 버스트가 잘리는 것이다. throttled_periods 비율로 확인하고, limits를 올리거나 CPU limits를 빼고 requests만 두는 방법을 검토한다.
+
+### QoS 클래스는 어떻게 정해지고 어디에 쓰이나요?
+
+모든 컨테이너가 CPU와 메모리 limits를 갖고 requests가 limits와 같으면 Guaranteed, 아무것도 없으면 BestEffort, 나머지는 Burstable이다. limits만 적으면 requests가 같은 값으로 채워져 Guaranteed가 된다. 클래스는 커널 OOM 점수(oom_score_adj)와 kubelet의 eviction 순서에 반영되어, 노드가 모자랄 때 BestEffort가 먼저, Guaranteed가 마지막에 희생된다.
+
+### OOMKilled가 반복될 때 limits만 올리면 되나요?
+
+먼저 누수인지 순간 최대치 부족인지 구분한다. 메모리가 계단처럼 계속 올라 한도에서 잘리면 누수라서 한도를 올려도 죽는 시점만 늦어진다. JVM이나 Node 같은 런타임은 힙 상한을 limits 안에 들어가도록 명시하고(MaxRAMPercentage, max-old-space-size), 힙 밖 메모리 몫을 남긴다.
+
+### Evicted와 OOMKilled는 어떻게 다른가요?
+
+OOMKilled는 컨테이너가 자기 메모리 limits를 넘어 커널이 죽인 것이고, 같은 Pod 안에서 재시작된다. Evicted는 노드 전체의 메모리나 디스크가 kubelet의 eviction 기준 아래로 내려가 kubelet이 Pod를 골라 쫓아낸 것이라 Pod가 Failed로 끝나고 컨트롤러가 다른 노드에 새로 만든다. eviction은 requests를 넘어 쓰는 Pod부터 고르기 때문에 requests를 정직하게 적는 것이 방어가 된다.
+
+### Deployment의 Pod 수가 모자란데 Pending Pod도 없습니다. 무엇을 보나요?
+
+ResourceQuota에 막혀 Pod 자체가 만들어지지 않았을 가능성이 크다. 이 경우 에러는 Pod가 아니라 ReplicaSet의 FailedCreate 이벤트에 exceeded quota로 남는다. `kubectl describe quota`로 Used와 Hard를 비교하고, 필요하면 쿼터를 늘리거나 requests를 줄인다.

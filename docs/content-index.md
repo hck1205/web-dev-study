@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 142편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 149편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -377,7 +377,7 @@
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, k8s-pod-basics
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -955,7 +955,7 @@
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, nginx-basics, redis-basics, rendering-ssr
+- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, k8s-pod-probes, nginx-basics, redis-basics, rendering-ssr
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -1126,6 +1126,17 @@
 
 ### Programming › In Practice (`programming/in-practice`)
 
+#### `k8s-pod-troubleshooting` — Pod가 안 뜰 때 상태별로 보는 순서
+
+- 요약: Pending, ContainerCreating, ImagePullBackOff, CreateContainerConfigError, CrashLoopBackOff, OOMKilled, Running인데 준비 안 됨, 멈춘 Terminating까지 STATUS마다 먼저 볼 곳과 명령을 정리하고, 이벤트 정렬의 함정과 kubectl debug로 셸 없는 컨테이너를 여는 법을 다룬다.
+- 태그: Kubernetes, Troubleshooting, DevOps
+- 키워드: ImagePullBackOff, CreateContainerConfigError, kubectl debug, 임시 컨테이너
+- 길이: 403줄
+- 소제목: 상태 이름이 멈춘 곳을 알려 준다 / 이벤트는 정렬부터 틀린다 / Pending: 노드를 찾지 못했다 / ContainerCreating에서 멈췄다 / ImagePullBackOff: 이미지를 받지 못했다 / CreateContainerConfigError: 설정이 비어 있다 / CrashLoopBackOff: 뜨자마자 죽는다 / OOMKilled: 메모리 한도에 걸렸다 / Running인데 트래픽을 못 받는다 / Terminating에서 안 넘어간다 / 셸이 없는 컨테이너는 kubectl debug로 연다 / 상태별로 다시 보면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-scheduling, dockerfile-image-layers, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-resources, kubernetes-ingress, network-troubleshooting-by-layer
+- 키워드 백링크 →: docker-container-basics, dns
+- 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-scheduling, packet-capture-tcpdump
+
 #### `network-troubleshooting-by-layer` — 계층별로 장애 좁히기: 아래에서 위로
 
 - 요약: 접속이 안 된다는 한 줄을 curl -v로 좁힌 뒤 링크, 경로, 이웃, 경로 끝, 이름, 포트, TLS, HTTP 순서로 확인한다. 칸마다 칠 명령과 출력에서 볼 곳, 흔한 오해를 실제 출력으로 정리한다.
@@ -1135,7 +1146,7 @@
 - 소제목: 명령을 어디서 치는지부터 정한다 / 먼저 curl 한 번으로 어디서 멈췄는지 본다 / 링크가 살아 있는지 / 내 주소와 나갈 길 / 다음 칸의 MAC을 얻었는지 / 목적지까지 닿는지 / 이름이 맞는 주소로 풀리는지 / 포트가 열려 있는지 / TLS가 맺어지는지 / HTTP가 기대한 답을 주는지 / 갈림길을 한 장으로 / 확인하다가 흔히 하는 실수 / 처음 실패한 칸이 답이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: osi-in-practice, docker-network-volume, layer-link-ethernet-arp, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, hosts-file, ports-and-sockets, packet-capture-tcpdump, iptables-basics, https-tls, proxy-reverse-proxy
 - 키워드 백링크 →: what-happens-google-com, docker-container-basics, http-status-codes, dns
-- 이 글로 오는 글 ←: browser-fetch, http-message, http-status-codes, kubernetes-ingress, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, redis-basics, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, http-message, http-status-codes, k8s-pod-troubleshooting, kubernetes-ingress, layer-mtu-fragmentation, network-layers-overview, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, redis-basics, rest-api-design, tcp-reliability-congestion, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `osi-in-practice` — OSI 7계층을 알면 현장에서 무엇이 달라지나
 
@@ -1146,7 +1157,7 @@
 - 소제목: 에러 메시지는 어느 층이 말했는지 알려 준다 / 같은 메시지가 다른 층에서 나오기도 한다 / 로드 밸런서는 어느 층에서 나누느냐로 고른다 / 방화벽도 층마다 따로 있다 / 헬스 체크는 어느 층까지 물어보나 / TLS를 어디서 풀지 정한다 / 타임아웃은 안쪽으로 갈수록 짧게 / 클라우드 제품 이름을 층으로 읽는다 / 네트워크 탓이라고 말하기 전에 모을 것 / 층 번호는 질문을 좁히는 말이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, http-status-codes, nginx-reverse-proxy, iptables-basics, dns, layer-link-ethernet-arp, proxy-reverse-proxy, tcp-connection-lifecycle, ports-and-sockets, resilience-patterns, https-tls, upper-layers-session-presentation-app, iptables-nat, kubernetes-ingress, gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: docker-container-basics, realtime-communication, http-versions, what-happens-google-com, layer-ip-routing-icmp, udp-and-quic
-- 이 글로 오는 글 ←: caching-strategies, event-loop, gateway, http-status-codes, iptables-nat, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: caching-strategies, event-loop, gateway, http-status-codes, iptables-nat, k8s-pod-multicontainer, kubernetes-ingress, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr, resilience-patterns, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `packet-capture-tcpdump` — tcpdump로 계층을 눈으로 보기
 
@@ -1156,7 +1167,7 @@
 - 길이: 556줄
 - 소제목: 어디서 찍을지부터 정한다 / curl 한 번을 처음부터 끝까지 / 한 줄을 읽는 법 / 필요한 패킷만 거른다 / 내용까지 본다 / 파일로 남기고 Wireshark로 연다 / 장애 장면을 패킷으로 가른다 / 컨테이너와 Pod 안에서 찍는다 / TLS 안은 보이지 않는다, 이름만 빼고 / 찍기 전에 정해 둘 것 / 패킷은 각자의 로그보다 정직하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-troubleshooting-by-layer, layer-link-ethernet-arp, tcp-connection-lifecycle, network-layers-overview, iptables-nat, https-tls, osi-in-practice
-- 키워드 백링크 →: nginx-reverse-proxy, docker-container-basics, ports-and-sockets, what-happens-google-com, udp-and-quic, dns
+- 키워드 백링크 →: nginx-reverse-proxy, docker-container-basics, k8s-pod-troubleshooting, ports-and-sockets, what-happens-google-com, udp-and-quic, dns
 - 이 글로 오는 글 ←: http-message, iptables-nat, kubernetes-ingress, layer-mtu-fragmentation, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, tcp-connection-lifecycle, tcp-reliability-congestion, udp-and-quic, upper-layers-session-presentation-app
 
 ### Programming › Network (`programming/network`)
@@ -1170,7 +1181,7 @@
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
 - 키워드 백링크 →: http-versions, sql-batch-timeout-pool, udp-and-quic
-- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, udp-and-quic, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, k8s-pod-scheduling, k8s-pod-troubleshooting, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, udp-and-quic, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
 
@@ -1225,7 +1236,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, http-versions, http-status-codes, udp-and-quic
-- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, kubernetes-ingress, layer-link-ethernet-arp, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, k8s-pod-probes, kubernetes-ingress, layer-link-ethernet-arp, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, upper-layers-session-presentation-app
 
 ### Programming › Network › HTTP (`programming/network/http`)
 
@@ -1361,7 +1372,7 @@
 - 소제목: 연결은 양쪽 커널의 메모에만 있다 / 번호를 맞추는 세 번의 인사 / 커널 안의 두 대기열 / 대답이 없을 때와 거절당할 때 / 상태 열한 개를 따라가기 / 끊을 때는 네 번 인사한다 / TIME_WAIT가 60초나 남는 이유 / CLOSE_WAIT가 쌓이면 내 코드를 본다 / RST는 대화를 끊는 비상 버튼 / 조용히 죽은 연결을 찾는 keepalive / 현장에서 상태 열을 읽는 법 / 상태 전이를 직접 따라가 보기 / 연결의 일생을 한 번에 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, ports-and-sockets, layer-mtu-fragmentation, tcp-reliability-congestion, packet-capture-tcpdump
 - 키워드 백링크 →: what-happens-google-com, browser-fetch, iptables-basics, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: http-versions, iptables-basics, layer-mtu-fragmentation, network-layers-overview, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, tcp-reliability-congestion, udp-and-quic
+- 이 글로 오는 글 ←: http-versions, iptables-basics, k8s-pod-lifecycle, layer-mtu-fragmentation, network-layers-overview, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, tcp-reliability-congestion, udp-and-quic
 
 #### `tcp-reliability-congestion` — TCP는 어떻게 믿을 만한가: 재전송, 흐름 제어, 혼잡 제어
 
@@ -1418,7 +1429,7 @@
 - 소제목: 주소를 바꿔 쓰는 세 가지 방법 / 바꾼 주소는 conntrack이 기억한다 / 먼저 포워딩을 켠다 / 내부망을 인터넷에 내보내는 게이트웨이 / 바깥 포트를 내부 서버로 넘기는 포트 포워딩 / 같은 서버 안에서 포트만 바꾸는 REDIRECT / Docker가 만드는 규칙 / 쿠버네티스 Service는 nat 규칙 묶음이다 / NAT가 안 될 때 따라가는 순서 / 주소를 바꾸고 기억하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-basics, kubernetes-ingress
 - 키워드 백링크 →: osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, http-versions, sql-batch-timeout-pool, what-happens-google-com, udp-and-quic, dns
-- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, network-layers-overview, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, udp-and-quic
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, k8s-pod-basics, k8s-pod-lifecycle, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, network-layers-overview, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, udp-and-quic
 
 ### Programming › Security (`programming/security`)
 
@@ -1454,7 +1465,7 @@
 - 길이: 607줄
 - 소제목: docker-compose와 docker compose / 서비스 넷을 파일 하나에 / 서비스 블록 하나 뜯어보기 / .env는 컨테이너에 들어가지 않는다 / up 한 번에 일어나는 순서 / 요청 하나가 서비스를 건너가는 길 / 매일 쓰는 명령 / down과 down -v는 한 글자 차이다 / 개발과 운영을 파일로 나누기 / 비밀 값은 어디에 두나 / Compose로 버티는 데까지 / 파일 하나가 구성 전체를 말한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-network-volume, docker-container-basics, dockerfile-image-layers, kubernetes-ingress
-- 키워드 백링크 →: iptables-basics, proxy-reverse-proxy, redis-basics, iptables-nat, redis-persistence-ha, dns
+- 키워드 백링크 →: k8s-pod-probes, iptables-basics, proxy-reverse-proxy, redis-basics, iptables-nat, redis-persistence-ha, dns
 - 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers
 
 #### `docker-container-basics` — 컨테이너는 무엇인가: Docker로 처음 띄워 보기
@@ -1465,8 +1476,8 @@
 - 길이: 850줄
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat
-- 키워드 백링크 →: iptables-basics, rest-api-design, udp-and-quic
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr
+- 키워드 백링크 →: k8s-pod-resources, iptables-basics, rest-api-design, udp-and-quic
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-troubleshooting, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr
 
 #### `docker-network-volume` — Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기
 
@@ -1476,7 +1487,7 @@
 - 길이: 715줄
 - 소제목: 컨테이너 안의 localhost는 컨테이너 자신이다 / 네트워크 드라이버 다섯 가지 / 이름으로 찾아가는 사용자 정의 브리지 / -p 한 줄이 만드는 것 / 컨테이너에서 호스트로 가는 길 / docker rm 하면 데이터가 왜 사라지나 / 데이터를 바깥에 두는 네 가지 방법 / -v와 --mount 읽기 / 볼륨을 만들고 들여다보기 / 볼륨을 tar로 백업하고 되살리기 / 바인드 마운트와 UID / Postgres와 앱을 처음부터 다시 띄우기 / 격리를 얼마나 풀어 줄지 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, dockerfile-image-layers, iptables-nat, docker-compose
-- 키워드 백링크 →: nginx-basics, iptables-basics, postgres-operations, proxy-reverse-proxy, layer-link-ethernet-arp, redis-basics, udp-and-quic, dns
+- 키워드 백링크 →: nginx-basics, iptables-basics, k8s-pod-troubleshooting, postgres-operations, proxy-reverse-proxy, layer-link-ethernet-arp, redis-basics, udp-and-quic, dns
 - 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, layer-link-ethernet-arp, network-troubleshooting-by-layer, ports-and-sockets
 
 #### `dockerfile-image-layers` — Dockerfile과 이미지 레이어: 빠르고 작은 이미지 만들기
@@ -1487,8 +1498,8 @@
 - 길이: 727줄
 - 소제목: 문제가 된 Dockerfile / 명령어 한 줄씩 읽기 / ENTRYPOINT와 CMD, exec 형식과 셸 형식 / 명령 하나가 레이어 한 장 / 캐시는 처음 바뀐 줄에서 끊긴다 / 잘 안 바뀌는 것을 위에 둔다 / .dockerignore로 보내는 것부터 줄인다 / 빌드 도구는 두고 결과만 옮기는 멀티 스테이지 빌드 / 베이스 이미지: slim, alpine, distroless / root가 아닌 사용자로, 상태는 HEALTHCHECK로 / BuildKit 캐시 마운트와 여러 아키텍처 빌드 / 태그 붙여 올리고, 올리기 전에 검사하기 / 빌드는 됐는데 서버에서 안 뜰 때 / 처음 문제로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, docker-network-volume
-- 키워드 백링크 →: docker-compose, dns
-- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, git-tips-advanced
+- 키워드 백링크 →: k8s-pod-probes, docker-compose, k8s-pod-troubleshooting, dns
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, git-tips-advanced, k8s-pod-lifecycle, k8s-pod-troubleshooting
 
 ### Programming › Server/Infra › Kubernetes (`programming/server-infra/kubernetes`)
 
@@ -1511,8 +1522,76 @@
 - 길이: 433줄
 - 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
-- 키워드 백링크 →: proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, http-status-codes, what-happens-google-com, cors, dns
-- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, http-message, https-tls, iptables-nat, osi-in-practice
+- 키워드 백링크 →: k8s-pod-probes, proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, k8s-pod-lifecycle, http-status-codes, what-happens-google-com, cors, dns
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, http-message, https-tls, iptables-nat, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, osi-in-practice
+
+### Programming › Server/Infra › Kubernetes › Pod (`programming/server-infra/kubernetes/pod`)
+
+#### `k8s-pod-basics` — Pod는 왜 컨테이너가 아니라 Pod인가
+
+- 요약: 함께 떠야 하는 컨테이너 묶음인 Pod가 IP와 볼륨을 어떻게 나눠 갖는지, pause 컨테이너가 무엇을 붙잡고 있는지 보고, kubectl로 만들고 들여다보고 지운 뒤 Pod를 직접 만들지 않고 Deployment에 맡기는 이유까지 따라간다.
+- 태그: Kubernetes, Container, DevOps
+- 키워드: pause 컨테이너, ReplicaSet, 멀티 컨테이너 Pod
+- 길이: 491줄
+- 소제목: 컨테이너 대신 Pod를 만드는 이유 / 한 Pod 안에서 나눠 갖는 것 / pause 컨테이너가 붙잡고 있는 것 / kubectl run 한 줄이 지나가는 길 / 매니페스트 한 줄씩 읽기 / 띄우고, 들여다보고, 지우기 / 직접 만든 Pod는 아무도 다시 살려 주지 않는다 / 한 Pod에 무엇을 같이 넣나 / Pod를 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting, k8s-pod-lifecycle, iptables-nat, k8s-pod-multicontainer, docker-container-basics
+- 키워드 백링크 →: k8s-pod-scheduling, kubernetes-ingress, db-type-key-value
+- 이 글로 오는 글 ←: k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling
+
+#### `k8s-pod-lifecycle` — Pod의 일생: Pending부터 종료까지
+
+- 요약: STATUS 칸의 말이 phase가 아니라는 데서 출발해 컨테이너 상태와 조건, restartPolicy, 10초에서 5분까지 늘어나는 CrashLoopBackOff, preStop과 SIGTERM·SIGKILL로 이어지는 종료 순서, PID 1과 종료 코드 137·143을 실제로 재현하며 정리한다.
+- 태그: Kubernetes, Linux, DevOps, Troubleshooting
+- 키워드: CrashLoopBackOff, preStop, terminationGracePeriodSeconds, Pod phase
+- 길이: 539줄
+- 소제목: STATUS 칸은 phase가 아니다 / 컨테이너 상태와 조건 / init 컨테이너가 먼저 끝나야 한다 / 컨테이너가 죽으면 kubelet이 다시 띄운다 / CrashLoopBackOff는 기다리는 중이라는 뜻 / Pod가 끝나는 순서 / preStop에 sleep을 두는 이유 / PID 1은 SIGTERM을 그냥 넘긴다 / 종료 코드로 읽는 마지막 순간 / Pod의 일생을 다시 보면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-probes, k8s-pod-multicontainer, k8s-pod-resources, tcp-connection-lifecycle, dockerfile-image-layers
+- 키워드 백링크 →: k8s-pod-troubleshooting, k8s-pod-basics, iptables-nat, docker-container-basics, kubernetes-ingress
+- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-troubleshooting, kubernetes-ingress
+
+#### `k8s-pod-multicontainer` — 한 Pod에 컨테이너 여럿: init, 사이드카, 어댑터
+
+- 요약: 사이드카·어댑터·앰배서더 패턴과 일반 컨테이너의 순서 문제를 보고, init 자리의 restartPolicy: Always로 만드는 네이티브 사이드카가 시작·종료 순서와 끝나지 않는 Job 문제를 어떻게 푸는지, 사이드카가 Pod의 자원 요구량을 어떻게 바꾸는지 따라간다.
+- 태그: Kubernetes, Container, DevOps
+- 키워드: 네이티브 사이드카, init 컨테이너, 사이드카 컨테이너
+- 길이: 361줄
+- 소제목: 한 Pod에 함께 두는 세 가지 모양 / 로그 사이드카를 붙일 때 챙길 것 / 일반 컨테이너끼리는 순서가 없다 / init 컨테이너는 끝나야 다음으로 간다 / 네이티브 사이드카는 init 자리에서 계속 돈다 / Job이 끝나지 않는 이유 / 사이드카도 자리를 차지한다 / 컨테이너를 골라서 들여다본다 / 언제 컨테이너를 더 붙이나 / 여러 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-basics, k8s-pod-resources, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting
+- 키워드 백링크 →: osi-in-practice
+- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-lifecycle
+
+#### `k8s-pod-probes` — liveness·readiness·startup 프로브: 잘못 걸면 장애가 된다
+
+- 요약: 세 프로브가 각각 무엇을 묻고 실패하면 무엇을 하는지, 숫자 다섯 개가 판정 시간을 어떻게 정하는지 보고, DB를 확인하는 liveness가 전체 재시작을 부르는 이유와 배포 중 readiness가 새 버전을 막는 모습을 따라간다.
+- 태그: Kubernetes, DevOps, Troubleshooting
+- 키워드: liveness probe, readiness probe, startupProbe
+- 길이: 395줄
+- 소제목: 세 프로브는 묻는 것이 다르다 / 확인하는 방법 네 가지 / 숫자 다섯 개가 판정 시간을 정한다 / liveness가 DB를 보면 생기는 일 / 엔드포인트를 둘로 나눈다 / 배포 중에 readiness가 하는 일 / 느리게 뜨는 앱에는 startupProbe / 프로브를 걸 때 흔한 실수 / 프로브를 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: resilience-patterns, k8s-pod-resources, k8s-pod-lifecycle
+- 키워드 백링크 →: k8s-pod-basics, kubernetes-ingress, event-loop, what-happens-google-com
+- 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-troubleshooting, kubernetes-ingress
+
+#### `k8s-pod-resources` — requests와 limits: OOMKilled와 CPU 스로틀링
+
+- 요약: requests는 스케줄러가, limits는 커널이 읽는다는 데서 출발해 QoS 클래스, CFS 스로틀링과 OOM kill을 cgroup으로 직접 재현하고, 런타임 힙 설정, 노드 압박 때의 eviction, LimitRange와 ResourceQuota까지 정리한다.
+- 태그: Kubernetes, Linux, Performance, DevOps
+- 키워드: QoS 클래스, OOMKilled, CPU 스로틀링, ResourceQuota, LimitRange
+- 길이: 399줄
+- 소제목: 두 숫자를 읽는 쪽이 다르다 / 자리가 없으면 Pending이다 / QoS 클래스는 두 숫자의 관계로 정해진다 / CPU limits를 넘으면 멈춰 세운다 / 메모리 limits를 넘으면 죽인다 / 런타임은 limits를 모를 수 있다 / 노드가 모자라면 kubelet이 쫓아낸다 / 네임스페이스 단위로 기본값과 한도 걸기 / requests와 limits를 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-scheduling, k8s-pod-lifecycle
+- 키워드 백링크 →: k8s-pod-basics
+- 이 글로 오는 글 ←: docker-container-basics, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-scheduling, k8s-pod-troubleshooting
+
+#### `k8s-pod-scheduling` — Pod는 어느 노드로 가나: 스케줄러와 Pending
+
+- 요약: 스케줄러가 노드를 거르고 점수를 매기는 과정을 보고, nodeSelector와 node affinity, taint와 toleration, pod anti-affinity, topologySpreadConstraints, PriorityClass와 preemption을 실제로 걸어 보며 FailedScheduling 메시지를 읽는 법을 정리한다.
+- 태그: Kubernetes, DevOps, Troubleshooting
+- 키워드: taint, toleration, node affinity, topologySpreadConstraints, PriorityClass
+- 길이: 406줄
+- 소제목: 스케줄러는 거르고 나서 고른다 / FailedScheduling 한 줄 읽기 / 라벨로 노드를 고른다 / taint는 노드가 Pod를 가려 받는 표시다 / Pod끼리 붙이고 떼어 놓기 / 존마다 고르게 나눈다 / 자리가 없으면 덜 중요한 Pod를 밀어낸다 / 스케줄링을 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting
+- 키워드 백링크 →: k8s-pod-basics, dns
+- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-resources, k8s-pod-troubleshooting
 
 ### Programming › Server/Infra › Nginx (`programming/server-infra/nginx`)
 
@@ -1593,7 +1672,7 @@
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway
 - 키워드 백링크 →: client-data-cache, osi-in-practice, sql-batch-timeout-pool, http-methods
-- 이 글로 오는 글 ←: browser-fetch, caching-strategies, gateway, html-form-http, http-methods, http-status-codes, https-tls, json-crud-http, microservices, nginx-reverse-proxy, osi-in-practice, realtime-communication, rest-api-design
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, gateway, html-form-http, http-methods, http-status-codes, https-tls, json-crud-http, k8s-pod-probes, microservices, nginx-reverse-proxy, osi-in-practice, realtime-communication, rest-api-design
 
 ### 자기개발 › 수학 (`self-development/math`)
 
@@ -1635,6 +1714,7 @@
 - 낙관적 업데이트 → `client-data-cache`
 - 낙관적 잠금 → `db-locking-deadlock`
 - 내용 주소 지정 → `git-internals-basics`
+- 네이티브 사이드카 → `k8s-pod-multicontainer`
 - 논리적 실행 순서 → `sqld-group-by-having`
 - 다운샘플링 → `db-type-time-series`
 - 단방향 데이터 흐름 → `mvc-pattern`
@@ -1663,6 +1743,7 @@
 - 머티리얼라이즈드 뷰 → `postgres-reporting-sql`
 - 멀티 스테이지 빌드 → `dockerfile-image-layers`
 - 멀티 존 → `micro-frontends`
+- 멀티 컨테이너 Pod → `k8s-pod-basics`
 - 멀티플렉싱 → `http-versions`
 - 메모리 누수 → `js-memory-leak`
 - 메모리 단편화 → `redis-memory-eviction`
@@ -1695,6 +1776,7 @@
 - 사가 패턴 → `microservices`
 - 사설 대역 → `layer-ip-addressing`
 - 사용자 정의 브리지 → `docker-network-volume`
+- 사이드카 컨테이너 → `k8s-pod-multicontainer`
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상태 코드 → `http-status-codes`
 - 샤드 키 → `mongodb-document-model`
@@ -1743,6 +1825,7 @@
 - 읽기 복제본 → `db-replication-sharding`
 - 임베디드 DB → `db-type-embedded`
 - 임베딩 → `vector-db`
+- 임시 컨테이너 → `k8s-pod-troubleshooting`
 - 임시 포트 → `ports-and-sockets`
 - 자동 배칭 → `react-rerender`
 - 자연 키 → `db-keys-denormalization`
@@ -1883,7 +1966,10 @@
 - Core Web Vitals → `core-web-vitals`
 - core.autocrlf → `git-ignore-config`
 - CORS → `cors`
+- CPU 스로틀링 → `k8s-pod-resources`
+- CrashLoopBackOff → `k8s-pod-lifecycle`
 - CREATE INDEX CONCURRENTLY → `db-index-pitfalls`
+- CreateContainerConfigError → `k8s-pod-troubleshooting`
 - CSRF → `cookie-session-login`
 - Cypher → `db-type-graph`
 - data URL → `base64`
@@ -1968,6 +2054,7 @@
 - I/O 다중화 → `redis-basics`
 - ICMP → `layer-ip-routing-icmp`
 - identity 컬럼 → `postgres-data-types`
+- ImagePullBackOff → `k8s-pod-troubleshooting`
 - includeIf → `git-ignore-config`
 - Index Only Scan → `db-index`
 - index-free adjacency → `db-type-graph`
@@ -1976,6 +2063,7 @@
 - Ingress Controller → `kubernetes-ingress`
 - ingress-nginx → `kubernetes-ingress`
 - IngressClass → `kubernetes-ingress`
+- init 컨테이너 → `k8s-pod-multicontainer`
 - INP → `core-web-vitals`
 - interactive rebase → `git-rebase`
 - INVALID 인덱스 → `db-index-pitfalls`
@@ -1993,14 +2081,17 @@
 - JWT → `token-login`
 - keepalive → `browser-fetch`
 - kube-proxy → `iptables-nat`
+- kubectl debug → `k8s-pod-troubleshooting`
 - L4 로드 밸런서 → `osi-in-practice`
 - L7 로드 밸런서 → `osi-in-practice`
 - LATERAL → `postgres-reporting-sql`
 - LCP → `core-web-vitals`
 - least_conn → `nginx-reverse-proxy`
 - limit_req → `nginx-https-performance`
+- LimitRange → `k8s-pod-resources`
 - listen_addresses → `postgres-connections-pg-hba`
 - LISTEN/NOTIFY → `postgres-functions-triggers`
+- liveness probe → `k8s-pod-probes`
 - location 블록 → `nginx-basics`
 - LSM 트리 → `db-type-wide-column`
 - LSN → `postgres-architecture`
@@ -2032,6 +2123,7 @@
 - netfilter → `iptables-basics`
 - NewSQL → `db-type-newsql`
 - nginx.conf → `nginx-basics`
+- node affinity → `k8s-pod-scheduling`
 - Non-EQUI JOIN → `sqld-joins`
 - NOT EXISTS → `sqld-subquery-set-operators`
 - nsswitch.conf → `hosts-file`
@@ -2042,12 +2134,14 @@
 - OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
 - onShellReady → `streaming-ssr-suspense`
+- OOMKilled → `k8s-pod-resources`
 - openssl s_client → `network-troubleshooting-by-layer`
 - OSI 7계층 → `network-layers-overview`
 - OSI 모델 → `network-layers-overview`
 - OUTER JOIN → `sqld-joins`
 - PACELC → `db-consistency-cap`
 - packfile → `git-internals-basics`
+- pause 컨테이너 → `k8s-pod-basics`
 - pcap → `packet-capture-tcpdump`
 - peer 인증 → `postgres-getting-started`
 - pg_basebackup → `postgres-operations`
@@ -2062,8 +2156,11 @@
 - PKCE → `oauth`
 - PL/pgSQL → `postgres-functions-triggers`
 - PMTUD → `layer-mtu-fragmentation`
+- Pod phase → `k8s-pod-lifecycle`
 - preflight → `cors`
+- preStop → `k8s-pod-lifecycle`
 - PRG 패턴 → `http-status-codes`
+- PriorityClass → `k8s-pod-scheduling`
 - Problem Details → `http-status-codes`
 - process.nextTick → `event-loop`
 - PROXY protocol → `proxy-reverse-proxy`
@@ -2076,6 +2173,7 @@
 - push protection → `git-large-files-secrets`
 - pushState → `rendering-csr-spa`
 - PUT과 PATCH → `http-methods`
+- QoS 클래스 → `k8s-pod-resources`
 - QUIC → `http-versions`
 - Qwik → `islands-resumability`
 - RAG → `vector-db`
@@ -2083,6 +2181,7 @@
 - RDBMS → `db-type-relational`
 - React.memo → `react-rerender`
 - read-your-writes → `db-consistency-cap`
+- readiness probe → `k8s-pod-probes`
 - Redis → `redis-basics`
 - Redis Cluster → `redis-cluster`
 - Redis Sentinel → `redis-replication-sentinel`
@@ -2090,7 +2189,9 @@
 - reflog → `git-stash-reflog`
 - renderToString → `rendering-ssr`
 - repl-backlog-size → `redis-replication-sentinel`
+- ReplicaSet → `k8s-pod-basics`
 - rerere → `git-merge-conflict`
+- ResourceQuota → `k8s-pod-resources`
 - REST API → `rest-api-design`
 - RETURNING → `postgres-advanced-sql`
 - revalidatePath → `rendering-ssg-isr`
@@ -2136,14 +2237,17 @@
 - SSTable → `db-type-wide-column`
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
+- startupProbe → `k8s-pod-probes`
 - statement_timeout → `sql-batch-timeout-pool`
 - SUBSTR → `sqld-single-row-functions`
 - suppressHydrationWarning → `hydration`
 - Suspense 경계 → `streaming-ssr-suspense`
 - SYN flood → `tcp-connection-lifecycle`
+- taint → `k8s-pod-scheduling`
 - TanStack Query → `client-data-cache`
 - TCP/IP 4계층 → `network-layers-overview`
 - tcpdump → `packet-capture-tcpdump`
+- terminationGracePeriodSeconds → `k8s-pod-lifecycle`
 - TiDB → `db-type-newsql`
 - TIME_WAIT → `tcp-connection-lifecycle`
 - TimescaleDB → `db-type-time-series`
@@ -2152,6 +2256,8 @@
 - TLS 핸드셰이크 → `https-tls`
 - TO_CHAR → `sqld-type-conversion`
 - TOAST → `postgres-architecture`
+- toleration → `k8s-pod-scheduling`
+- topologySpreadConstraints → `k8s-pod-scheduling`
 - tracepath → `network-troubleshooting-by-layer`
 - traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
@@ -2193,34 +2299,46 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `sqld-null-functions` ↔ `sql-select-where-null` (24%: null은, 값이, 아니라, 고르는, null, 다루기)
+- `k8s-pod-basics` ↔ `docker-container-basics` (26%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
 - `db-index-pitfalls` ↔ `db-index-design` (21%: 100만, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (21%: 100만, 인덱스가, 인덱스를, index)
+- `sqld-null-functions` ↔ `sql-select-where-null` (21%: null은, 값이, 고르는, null, 다루기)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (19%: ssr, next.js, 스트리밍, ssr과, 준비된, 부분부터)
+- `db-partitioning` ↔ `db-type-time-series` (19%: 오래된, 통째로, 키가)
+- `db-partitioning` ↔ `db-modeling-normalization` (19%: 테이블을, 떼어, 키가)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
-- `db-partitioning` ↔ `db-type-time-series` (18%: 오래된, 통째로, 키가)
-- `db-partitioning` ↔ `db-modeling-normalization` (18%: 테이블을, 떼어, 키가)
-- `redis-cluster` ↔ `db-sharding` (17%: 키를, 나누는, 해시)
-- `redis-cluster` ↔ `redis-basics` (17%: 나눈다, 단일, 해시)
+- `redis-cluster` ↔ `db-sharding` (18%: 키를, 나누는, 해시)
 - `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
-- `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
 - `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
+- `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
 - `packet-capture-tcpdump` ↔ `db-index` (15%: 처음부터, 끝까지, 줄을, 필요한)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
 - `git-branch-merge` ↔ `git-remote-collaboration` (14%: 브랜치는, 브랜치를, 지운다, 원격)
 - `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
-- `kubernetes-ingress` ↔ `gateway` (13%: 로드, kubernetes, ingress, 밸런서)
-- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (13%: pg, 들어오는, 지나는)
+- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (14%: pg, 들어오는, 지나는)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (13%: 밖에서, 요청마다, next.js, ssr)
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
+- `sql-insert-update-delete` ↔ `db-transaction-isolation` (13%: commit, rollback, 트랜잭션이, transaction)
 - `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (12%: 막는, 남기는, 트랜잭션, update)
-- `sql-insert-update-delete` ↔ `db-transaction-isolation` (12%: commit, rollback, 트랜잭션이, transaction)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `k8s-pod-troubleshooting` ↔ `k8s-pod-scheduling`
+- `k8s-pod-troubleshooting` ↔ `k8s-pod-lifecycle`
+- `k8s-pod-troubleshooting` ↔ `dockerfile-image-layers`
+- `k8s-pod-multicontainer` ↔ `k8s-pod-lifecycle`
+- `k8s-pod-multicontainer` ↔ `k8s-pod-basics`
+- `k8s-pod-scheduling` ↔ `k8s-pod-resources`
+- `k8s-pod-scheduling` ↔ `k8s-pod-basics`
+- `k8s-pod-resources` ↔ `k8s-pod-lifecycle`
+- `k8s-pod-resources` ↔ `k8s-pod-basics`
+- `k8s-pod-probes` ↔ `k8s-pod-lifecycle`
+- `k8s-pod-probes` ↔ `kubernetes-ingress`
+- `k8s-pod-lifecycle` ↔ `k8s-pod-basics`
+- `k8s-pod-lifecycle` ↔ `kubernetes-ingress`
 - `nextjs-static-dynamic-rendering` ↔ `react-server-components`
 - `nextjs-static-dynamic-rendering` ↔ `rendering-ssg-isr`
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies`

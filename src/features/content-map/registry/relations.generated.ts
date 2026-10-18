@@ -2,6 +2,96 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-pod-troubleshooting": {
+    "links": [
+      "k8s-pod-scheduling",
+      "dockerfile-image-layers",
+      "k8s-pod-lifecycle",
+      "k8s-pod-probes",
+      "k8s-pod-resources",
+      "kubernetes-ingress",
+      "network-troubleshooting-by-layer"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "dns"
+    ]
+  },
+  "k8s-pod-multicontainer": {
+    "links": [
+      "k8s-pod-basics",
+      "k8s-pod-resources",
+      "k8s-pod-lifecycle",
+      "k8s-pod-probes",
+      "k8s-pod-troubleshooting"
+    ],
+    "mentions": [
+      "osi-in-practice"
+    ]
+  },
+  "k8s-pod-scheduling": {
+    "links": [
+      "k8s-pod-resources",
+      "k8s-pod-troubleshooting"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "dns"
+    ]
+  },
+  "k8s-pod-resources": {
+    "links": [
+      "k8s-pod-scheduling",
+      "k8s-pod-lifecycle"
+    ],
+    "mentions": [
+      "k8s-pod-basics"
+    ]
+  },
+  "k8s-pod-probes": {
+    "links": [
+      "resilience-patterns",
+      "k8s-pod-resources",
+      "k8s-pod-lifecycle"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "kubernetes-ingress",
+      "event-loop",
+      "what-happens-google-com"
+    ]
+  },
+  "k8s-pod-lifecycle": {
+    "links": [
+      "k8s-pod-probes",
+      "k8s-pod-multicontainer",
+      "k8s-pod-resources",
+      "tcp-connection-lifecycle",
+      "dockerfile-image-layers"
+    ],
+    "mentions": [
+      "k8s-pod-troubleshooting",
+      "k8s-pod-basics",
+      "iptables-nat",
+      "docker-container-basics",
+      "kubernetes-ingress"
+    ]
+  },
+  "k8s-pod-basics": {
+    "links": [
+      "k8s-pod-resources",
+      "k8s-pod-troubleshooting",
+      "k8s-pod-lifecycle",
+      "iptables-nat",
+      "k8s-pod-multicontainer",
+      "docker-container-basics"
+    ],
+    "mentions": [
+      "k8s-pod-scheduling",
+      "kubernetes-ingress",
+      "db-type-key-value"
+    ]
+  },
   "nextjs-static-dynamic-rendering": {
     "links": [
       "rendering-ssg-isr",
@@ -273,6 +363,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "nginx-reverse-proxy",
       "docker-container-basics",
+      "k8s-pod-troubleshooting",
       "ports-and-sockets",
       "what-happens-google-com",
       "udp-and-quic",
@@ -1414,6 +1505,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "nginx-basics",
       "iptables-basics",
+      "k8s-pod-troubleshooting",
       "postgres-operations",
       "proxy-reverse-proxy",
       "layer-link-ethernet-arp",
@@ -1430,6 +1522,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "k8s-pod-probes",
       "iptables-basics",
       "proxy-reverse-proxy",
       "redis-basics",
@@ -1444,6 +1537,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat"
     ],
     "mentions": [
+      "k8s-pod-resources",
       "iptables-basics",
       "rest-api-design",
       "udp-and-quic"
@@ -1455,7 +1549,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume"
     ],
     "mentions": [
+      "k8s-pod-probes",
       "docker-compose",
+      "k8s-pod-troubleshooting",
       "dns"
     ]
   },
@@ -1858,11 +1954,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump"
     ],
     "mentions": [
+      "k8s-pod-probes",
       "proxy-reverse-proxy",
       "iptables-nat",
       "osi-in-practice",
       "docker-container-basics",
       "https-tls",
+      "k8s-pod-lifecycle",
       "http-status-codes",
       "what-happens-google-com",
       "cors",

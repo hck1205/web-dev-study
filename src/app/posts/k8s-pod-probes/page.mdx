@@ -1,0 +1,394 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-probes");
+
+DB가 30초쯤 느려졌다. 그 정도면 API 응답이 잠깐 늦어지고 끝나야 하는데, 대시보드에는 API Pod 전체의 RESTARTS가 한꺼번에 올라가는 그래프가 찍혀 있다. 재시작한 Pod들은 뜨자마자 DB 연결 풀을 새로 채우느라 DB를 더 두드리고, DB는 더 느려진다. 원인은 liveness probe였다. `/healthz`가 DB에 `SELECT 1`을 보내고, 그게 1초 안에 안 오면 실패를 돌려주고 있었다.
+
+프로브는 쿠버네티스가 컨테이너에게 "괜찮냐"고 주기적으로 묻는 장치다. 잘 걸면 죽은 프로세스를 살려 내고 준비 안 된 Pod로 트래픽이 가는 걸 막아 준다. 잘못 걸면 위처럼 멀쩡한 Pod를 스스로 죽인다. 이 글은 세 가지 프로브가 각각 무엇을 묻는지, 숫자 다섯 개가 판정 시간을 어떻게 정하는지, 그리고 어떤 실수가 장애로 이어지는지를 본다. `kubectl` 출력은 앞 글들과 같은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았다. 이 클러스터의 kubelet은 진짜 프로브를 돌리지 않아서, 프로브 실패 이벤트는 실제 kubelet 메시지 형식의 예시로 적었다.
+
+## 세 프로브는 묻는 것이 다르다
+
+프로브는 kubelet이 실행한다. 각 노드의 kubelet이 자기 노드에 있는 컨테이너마다 정해진 주기로 확인하고, 결과에 따라 다른 일을 한다. 아래 그림의 점이 각 프로브의 결과가 어디로 이어지는지 보여 준다.
+
+<ConceptDiagram
+  width={440}
+  height={310}
+  caption="liveness 실패는 재시작으로, readiness 실패는 엔드포인트 제외로 이어진다. startup은 성공할 때까지 둘을 막아 둔다."
+  nodes={[
+    { id: "kubelet", label: "kubelet", sub: "노드에서 확인", x: 220, y: 40, w: 120 },
+    { id: "startup", label: "startup", sub: "다 떴나", x: 80, y: 140, w: 110 },
+    { id: "live", label: "liveness", sub: "살아 있나", x: 220, y: 140, w: 110 },
+    { id: "ready", label: "readiness", sub: "받을 수 있나", x: 360, y: 140, w: 110 },
+    { id: "restart", label: "재시작", sub: "컨테이너 kill", x: 160, y: 260, w: 110 },
+    { id: "eps", label: "EndpointSlice", sub: "ready=false", x: 340, y: 260, w: 130 },
+  ]}
+  edges={[
+    { from: "kubelet", to: "startup" },
+    { from: "kubelet", to: "live" },
+    { from: "kubelet", to: "ready" },
+    { from: "startup", to: "live", label: "성공 후 시작", dashed: true },
+    { from: "startup", to: "restart", label: "실패" },
+    { from: "live", to: "restart", label: "실패" },
+    { from: "ready", to: "eps", label: "실패" },
+  ]}
+/>
+
+liveness는 "이 프로세스가 아직 쓸모 있게 살아 있나"를 묻는다. 정해진 횟수만큼 연속으로 실패하면 kubelet이 컨테이너를 죽이고 restartPolicy대로 다시 띄운다. 프로세스는 떠 있는데 데드락에 걸려 아무 요청도 처리하지 못하는 경우처럼, 스스로는 빠져나올 수 없는 상태를 재시작으로 푸는 장치다.
+
+readiness는 "지금 요청을 받아도 되나"를 묻는다. 실패하면 컨테이너는 그대로 두고 Pod의 Ready 조건을 False로 바꾼다. 그러면 EndpointSlice에서 이 Pod가 ready=false가 되고 Service와 Ingress가 트래픽을 보내지 않는다. 다시 성공하면 돌아온다. 캐시를 데우는 중이거나 순간적으로 과부하가 걸린 Pod를 잠깐 빼 두는 데 쓴다. 재시작은 하지 않는다.
+
+startup은 "다 떴나"를 묻는다. startup probe가 있으면 그게 한 번 성공할 때까지 liveness와 readiness는 시작하지 않는다. 정해진 횟수 안에 성공하지 못하면 liveness 실패처럼 컨테이너를 죽인다. 뜨는 데 몇 분 걸리는 앱이 뜨는 도중에 liveness에 맞아 죽는 문제를 막으려고 생겼다. 1.16에 처음 들어와 1.20에 GA가 됐다.
+
+프로브를 아예 적지 않으면 어떻게 될까. liveness가 없으면 kubelet은 프로세스가 끝났을 때만 재시작한다. 걸려서 멈춘 프로세스는 영원히 살아 있는 것으로 친다. readiness가 없으면 컨테이너가 시작하자마자 Ready가 된다. 포트를 열기도 전에 트래픽이 들어오니 배포할 때마다 연결 거부가 튄다. 셋 중 가장 먼저 챙길 것은 readiness다.
+
+## 확인하는 방법 네 가지
+
+무엇으로 확인할지는 네 가지 중에 고른다.
+
+```yaml
+# HTTP GET. 응답 코드가 200 이상 400 미만이면 성공
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http          # 포트 이름이나 번호
+    scheme: HTTP        # 앱이 TLS로 듣는다면 HTTPS. 인증서는 검증하지 않는다
+    httpHeaders:
+      - name: X-Probe
+        value: kubelet
+
+# TCP 연결이 맺어지기만 하면 성공. 앱이 응답할 수 있는지는 모른다
+startupProbe:
+  tcpSocket:
+    port: 9090
+
+# 컨테이너 안에서 명령을 실행해 종료 코드가 0이면 성공
+readinessProbe:
+  exec:
+    command: ["cat", "/tmp/ready"]
+
+# gRPC Health Checking Protocol. 1.27부터 GA
+livenessProbe:
+  grpc:
+    port: 9090
+    service: search    # 비우면 서버 전체 상태
+```
+
+httpGet이 가장 흔하다. kubelet이 Pod IP로 직접 요청하므로 Service나 Ingress를 거치지 않는다. 응답 코드만 보고 본문은 읽지 않는다. 그래서 헬스 엔드포인트에 인증을 걸어 두면 401이 돌아와 실패로 판정된다. 흔한 실수다.
+
+tcpSocket은 포트가 열렸는지만 본다. 앱 서버가 소켓은 열었는데 요청 처리가 멈춘 상태를 잡지 못하니, HTTP를 말하지 않는 서비스(DB, 메시지 브로커)나 startup 확인 정도에 쓴다.
+
+exec는 유연하지만 비싸다. 확인할 때마다 컨테이너 안에 프로세스를 하나 띄운다. 주기가 짧거나 JVM 기반 CLI를 부르면 그 자체가 CPU를 먹는다. 1.20부터는 exec도 `timeoutSeconds`를 지킨다. 그 전에는 exec 프로브가 타임아웃을 무시했으니, 오래된 클러스터에서 옮겨 온 설정이라면 갑자기 실패하기 시작할 수 있다.
+
+## 숫자 다섯 개가 판정 시간을 정한다
+
+방법만큼 중요한 게 숫자다. 앞의 매니페스트를 적용하고 describe로 보면 kubelet이 실제로 쓸 값이 한 줄로 나온다.
+
+```yaml
+# probes.yaml 중 일부
+startupProbe:
+  httpGet: { path: /healthz, port: http }
+  periodSeconds: 5
+  failureThreshold: 24
+livenessProbe:
+  httpGet: { path: /healthz, port: http }
+readinessProbe:
+  httpGet: { path: /ready, port: http }
+  periodSeconds: 5
+  failureThreshold: 2
+```
+
+```bash
+# 프로브 설정만 골라 본다
+kubectl describe pod catalog | grep -E "Liveness|Readiness|Startup"
+```
+
+```text
+    Liveness:     http-get http://:http/healthz delay=0s timeout=1s period=10s #success=1 #failure=3
+    Readiness:    http-get http://:http/ready delay=0s timeout=1s period=5s #success=1 #failure=2
+    Startup:      http-get http://:http/healthz delay=0s timeout=1s period=5s #success=1 #failure=24
+```
+
+liveness에는 숫자를 하나도 안 적었는데 값이 다 채워져 있다. API 서버가 기본값을 넣었기 때문이다. 이 줄을 조각으로 나눠 보자.
+
+<UrlAnatomy
+  caption="describe의 Liveness 한 줄"
+  base="Liveness: http-get http://:http/healthz"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "delay",
+      display: "delay=0s",
+      title: "initialDelaySeconds (기본 0)",
+      description: "컨테이너가 시작하고 첫 확인까지 기다리는 시간이다. 느리게 뜨는 앱을 이걸 크게 잡아 버티는 건 옛날 방식이다. 늘린 만큼 뜬 뒤에 걸린 문제도 늦게 잡는다. 지금은 startupProbe를 쓴다.",
+    },
+    {
+      key: "timeout",
+      display: "timeout=1s",
+      title: "timeoutSeconds (기본 1)",
+      description: "한 번 확인할 때 기다리는 시간이다. 이걸 넘기면 실패다. 1초는 GC 멈춤이나 순간 과부하에 쉽게 넘는다. 응답이 늦는 것과 죽은 것을 구분하려면 2~5초로 둔다.",
+    },
+    {
+      key: "period",
+      display: "period=10s",
+      title: "periodSeconds (기본 10)",
+      description: "확인 간격이다. 짧을수록 빨리 알지만 그만큼 자주 요청한다. 노드에 Pod가 100개면 kubelet은 그만큼 프로브를 돌린다.",
+    },
+    {
+      key: "success",
+      display: "#success=1",
+      title: "successThreshold (기본 1)",
+      description: "실패 상태에서 성공으로 돌아오려면 연속 몇 번 성공해야 하나. readiness만 1보다 크게 줄 수 있다. liveness와 startup은 반드시 1이다.",
+      code: "spec.containers[0].livenessProbe.successThreshold: Invalid value: 2: must be 1",
+    },
+    {
+      key: "failure",
+      display: "#failure=3",
+      title: "failureThreshold (기본 3)",
+      description: "연속 몇 번 실패하면 실패로 판정하나. liveness면 재시작, readiness면 엔드포인트 제외다. 기본값이면 period 10초 × 3, 대략 30초 동안 계속 실패해야 재시작한다.",
+    },
+  ]}
+/>
+
+successThreshold 칸의 코드는 liveness에 2를 넣었을 때 API 서버가 실제로 돌려준 거절 메시지다. 판정 시간은 대략 `period × failureThreshold`로 읽는다. 위 readiness는 5초 × 2라서 문제가 생기고 10초쯤이면 트래픽에서 빠진다. startup은 5초 × 24 = 120초, 이 앱에게 뜨는 데 2분까지 준다는 뜻이다. 여기에 타임아웃이 겹치면 조금 더 늘어난다.
+
+연속이라는 말이 중요하다. 실패와 성공이 번갈아 나오면 failureThreshold 3은 영원히 채워지지 않는다. 아래에서 readiness 판정을 직접 따라가 볼 수 있다. 처음에는 Ready가 아닌 상태에서 시작하고, 결과 배열의 true는 성공, false는 실패다.
+
+<CodePlayground
+  caption="연속 성공·실패 횟수로 Ready가 바뀌는 시점"
+  functionName="readyTimeline"
+  initialCode={`function readyTimeline(results, failureThreshold = 3, successThreshold = 1) {
+  // 처음엔 Ready가 아니다
+  // 연속 성공이 successThreshold에 닿으면 Ready, 연속 실패가 failureThreshold에 닿으면 Ready 해제
+  // 각 확인 뒤의 Ready 여부를 배열로 돌려준다
+  return [];
+}`}
+  solution={`function readyTimeline(results, failureThreshold = 3, successThreshold = 1) {
+  const out = [];
+  let ready = false, ok = 0, fail = 0;
+  for (const r of results) {
+    if (r) { ok++; fail = 0; } else { fail++; ok = 0; }
+    if (!ready && ok >= successThreshold) ready = true;
+    if (ready && fail >= failureThreshold) ready = false;
+    out.push(ready);
+  }
+  return out;
+}`}
+  tests={[
+    { args: [[true, true, false, false, true]], expected: [true, true, true, true, true], label: "두 번 실패는 버틴다" },
+    { args: [[true, false, false, false, true]], expected: [true, true, true, false, true], label: "세 번째 실패에서 빠진다" },
+    { args: [[true, false, false, false, true, true], 3, 2], expected: [false, false, false, false, false, true], label: "두 번 연속 성공해야 Ready" },
+    { args: [[false, false, true], 1, 1], expected: [false, false, true], label: "처음엔 Ready가 아니다" },
+    { args: [[true, false, true, false, true, false], 2, 1], expected: [true, true, true, true, true, true], label: "번갈아 실패하면 안 걸린다" },
+  ]}
+/>
+
+마지막 경우는 실무에서 헷갈리게 만든다. 요청의 절반이 실패하는 Pod인데 readiness는 멀쩡하다. 프로브는 가끔 찌르는 표본일 뿐이라 에러율을 대신하지 못한다. 에러율은 메트릭과 알람으로 따로 본다.
+
+## liveness가 DB를 보면 생기는 일
+
+처음 이야기로 돌아가 보자. liveness가 DB를 확인하면 DB의 문제가 모든 Pod의 문제가 된다. 아래 그림에서 다음을 누르면 Pod 네 개가 같은 순간에 무너지는 과정이 보인다.
+
+<AlgoTrace
+  caption="공유 의존성을 확인하는 liveness는 모든 Pod를 동시에 재시작시킨다"
+  memoryLabel="DB에 걸린 부하"
+  cells={["api-1", "api-2", "api-3", "api-4"]}
+  steps={[
+    { found: [0, 1, 2, 3], memory: ["평소"], caption: "평소에는 넷 다 /healthz에서 DB SELECT 1에 성공한다." },
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["평소", "DB 지연 1.5s"], caption: "DB가 느려졌다. 프로브 타임아웃 1초를 넘기니 넷 다 실패를 센다. 앱 자체는 멀쩡하다." },
+    { pointer: 1, memory: ["DB 지연 1.5s", "재시작 x4"], caption: "30초 뒤 넷 다 failureThreshold를 채웠다. kubelet이 같은 시기에 모두 죽인다. 지금 이 순간 받을 Pod가 없다." },
+    { pointer: 2, memory: ["재시작 x4", "새 커넥션 폭주"], caption: "다시 뜬 Pod들이 연결 풀을 한꺼번에 채운다. 느린 DB에 연결이 몰린다." },
+    { pointer: 3, memory: ["새 커넥션 폭주", "DB 더 느려짐"], caption: "DB는 더 느려지고 프로브는 또 실패한다. 재시작이 장애를 키우는 고리가 됐다." },
+  ]}
+/>
+
+liveness는 재시작으로 고칠 수 있는 문제만 물어야 한다. DB가 느린 건 API Pod를 재시작해서 고쳐지지 않는다. 그래서 liveness 엔드포인트는 프로세스 자기 자신만 본다. 이벤트 루프가 돌고 있는지, 요청을 받아 응답할 수 있는지 정도다. 가장 단순하게는 아무것도 확인하지 않고 200만 돌려주는 핸들러도 쓸 만하다. 핸들러가 응답한다는 것 자체가 프로세스가 멈추지 않았다는 증거다.
+
+그럼 의존성 확인은 readiness로 옮기면 될까. 반만 맞다. 모든 Pod가 같은 DB를 보니, DB가 느려지면 모든 Pod가 동시에 NotReady가 되고 Service 뒤에 Pod가 하나도 없게 된다. Ingress는 503을 준다. 느리게라도 응답하던 서비스가 아예 응답을 안 하게 되는 셈이다. 그래서 readiness도 보통 자기 Pod만의 사정(캐시 준비, 과부하, 종료 중)을 보게 하고, 공유 의존성 장애는 앱 안의 타임아웃과 서킷 브레이커로 다룬다. 이 패턴은 [장애 대응 패턴](/posts/resilience-patterns)에서 자세히 다룬다. 의존성마다 다른 정답이 있을 수 있지만, 기준은 하나다. 이 프로브가 실패했을 때 쿠버네티스가 하는 행동(재시작, 트래픽 제외)이 실제로 문제를 줄이는가.
+
+## 엔드포인트를 둘로 나눈다
+
+말로 정한 기준을 코드로 옮기면 이렇게 단순해진다. `/healthz`는 무조건 200을 돌려주고, `/ready`는 기동 작업이 끝났는지와 종료 중인지만 본다. DB는 어느 쪽에서도 부르지 않는다.
+
+```js
+// health.js
+const http = require("node:http");
+
+let warmedUp = false;   // 캐시를 다 채웠는지
+let shuttingDown = false;
+setTimeout(() => { warmedUp = true; }, 2000); // 기동 작업 2초라고 치자
+
+const server = http.createServer((req, res) => {
+  if (req.url === "/healthz") {
+    // liveness: 이 핸들러가 응답한다는 것 자체가 프로세스가 멈추지 않았다는 증거
+    res.writeHead(200).end("ok\n");
+  } else if (req.url === "/ready") {
+    // readiness: 이 Pod만의 사정만 본다
+    const ok = warmedUp && !shuttingDown;
+    res.writeHead(ok ? 200 : 503).end(ok ? "ready\n" : "warming up\n");
+  } else {
+    res.writeHead(404).end();
+  }
+});
+server.listen(8080);
+process.on("SIGTERM", () => { shuttingDown = true; server.close(() => process.exit(0)); });
+```
+
+kubelet이 하듯 응답 코드만 찍어 본다.
+
+```bash
+node health.js & sleep 0.5
+curl -s -o /dev/null -w "healthz %{http_code}\n" localhost:8080/healthz   # liveness가 보는 값
+curl -s -o /dev/null -w "ready   %{http_code}\n" localhost:8080/ready     # 기동 직후 readiness
+sleep 2
+curl -s -o /dev/null -w "ready   %{http_code}\n" localhost:8080/ready     # 기동 작업이 끝난 뒤
+```
+
+```text
+healthz 200
+ready   503
+ready   200
+```
+
+뜬 직후에는 살아 있지만(200) 아직 받을 준비는 안 됐다(503). 2초 뒤에는 둘 다 200이다. Node처럼 이벤트 루프 하나로 도는 런타임은 루프가 긴 동기 작업에 막히면 `/healthz`도 응답하지 못하니, 이 단순한 핸들러로도 "멈춤"을 잡을 수 있다. 정말 멈췄을 때 kubelet이 하는 일은 아래 그림과 같다.
+
+<SequenceDiagram
+  caption="liveness가 세 번 연속 실패하면 (period 10s, failure 3)"
+  actors={[
+    { id: "kubelet", label: "kubelet" },
+    { id: "app", label: "앱 컨테이너" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    { from: "kubelet", to: "app", label: "GET /healthz", title: "평소처럼 묻는다", detail: "10초마다 Pod IP의 8080으로 직접 요청한다. 200이 오면 실패 횟수는 0이다." },
+    { from: "kubelet", to: "app", label: "timeout 1s", title: "첫 실패", detail: "1초 안에 응답이 없다. 실패 1번을 센다. 아직 아무 일도 하지 않는다." },
+    { from: "kubelet", to: "api", label: "Unhealthy", title: "이벤트를 남긴다", detail: "실패할 때마다 Warning 이벤트가 쌓인다. describe의 Events에서 x2, x3처럼 횟수가 붙는다.", payload: "Liveness probe failed: Get \"http://10.0.0.21:8080/healthz\": context deadline exceeded" },
+    { from: "kubelet", to: "app", label: "timeout 1s", title: "세 번째 실패", detail: "20초 뒤 세 번째도 실패했다. failureThreshold를 채웠다." },
+    { from: "kubelet", to: "app", label: "SIGTERM", title: "컨테이너를 끝낸다", detail: "보통 종료처럼 SIGTERM을 보내고 유예 시간을 준다. Killing 이벤트에 failed liveness probe, will be restarted가 찍힌다." },
+    { from: "kubelet", to: "app", label: "재시작", title: "restartPolicy대로 다시 띄운다", detail: "같은 Pod 안에서 새 컨테이너를 띄우고 RESTARTS가 1 오른다. 자주 반복되면 CrashLoopBackOff 대기가 붙는다." },
+  ]}
+/>
+
+## 배포 중에 readiness가 하는 일
+
+readiness가 가장 큰 일을 하는 순간은 배포다. Deployment의 롤링 업데이트는 새 Pod가 Ready가 되어야 옛 Pod를 줄인다. readiness가 정직하면 새 버전이 망가졌을 때 배포가 멈추고 옛 버전이 트래픽을 계속 받는다.
+
+실습 클러스터에서 새 버전 Pod가 Ready가 되지 못하는 상황을 만들었다. `maxSurge: 1`, `maxUnavailable: 0`이라 하나를 더 띄워 보고, Ready가 되면 옛것을 하나 줄이는 설정이다.
+
+```bash
+# 이미지를 바꾼 뒤 상태
+kubectl get pods -l app=catalog-web
+kubectl get deploy catalog
+
+# 배포가 끝나기를 기다린다. CI에서 배포 성공 여부를 판단할 때 쓴다
+kubectl rollout status deploy/catalog --timeout=10s
+```
+
+```text
+NAME                      READY   STATUS    RESTARTS   AGE
+catalog-68b469958-6nx2r   1/1     Running   0          3h40m
+catalog-68b469958-7trdj   1/1     Running   0          3h40m
+catalog-68b469958-dtf9g   1/1     Running   0          3h40m
+catalog-68b469958-xd7zg   1/1     Running   0          3h40m
+catalog-8476cbf57-6sjhm   0/1     Running   0          10s
+NAME      READY   UP-TO-DATE   AVAILABLE   AGE
+catalog   4/4     1            4           3h40m
+Waiting for deployment "catalog" rollout to finish: 1 out of 4 new replicas have been updated...
+error: timed out waiting for the condition
+```
+
+새 ReplicaSet(`8476cbf57`)의 Pod 하나가 Running인데 READY는 0/1이다. Deployment는 거기서 멈췄고 옛 Pod 넷은 그대로 트래픽을 받는다. READY 4/4는 옛 Pod 넷이다. `progressDeadlineSeconds`(이 예제는 90초, 기본 600초)가 지나면 Deployment가 포기했다고 표시한다.
+
+```bash
+# 시간이 지난 뒤 다시 확인하고, Deployment 조건을 본다
+kubectl rollout status deploy/catalog --timeout=5s
+kubectl get deploy catalog -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+error: deployment "catalog" exceeded its progress deadline
+Available=True MinimumReplicasAvailable: Deployment has minimum availability.
+Progressing=False ProgressDeadlineExceeded: ReplicaSet "catalog-8476cbf57" has timed out progressing.
+```
+
+`rollout status`가 0이 아닌 종료 코드로 끝나니 CI 파이프라인이 실패로 처리할 수 있다. 다만 쿠버네티스가 자동으로 롤백하지는 않는다. `kubectl rollout undo deploy/catalog`로 되돌리거나, Helm의 `--atomic`이나 ArgoCD 같은 도구에 맡긴다. 이 Pod가 왜 Ready가 아닌지는 describe의 이벤트에 나온다. 실제 kubelet이라면 이런 줄이 찍힌다(예시).
+
+```text
+Events:
+  Type     Reason     Age                From     Message
+  ----     ------     ----               ----     -------
+  Warning  Unhealthy  4s (x12 over 59s)  kubelet  Readiness probe failed: Get "http://10.0.0.21:8080/ready": dial tcp 10.0.0.21:8080: connect: connection refused
+```
+
+`connection refused`면 앱이 그 포트에서 듣지 않는다. 포트 번호가 바뀌었거나 앱이 `127.0.0.1`에만 바인딩했다. `context deadline exceeded (Client.Timeout exceeded while awaiting headers)`면 연결은 됐는데 timeoutSeconds 안에 응답이 없었다. `HTTP probe failed with statuscode: 503`이면 앱이 스스로 준비 안 됐다고 답한 것이다. 문구만 보고도 어디를 봐야 할지가 갈린다.
+
+반대로 readiness가 너무 너그러우면 이 안전장치가 없다. 포트만 열리면 성공하는 readiness는 DB 마이그레이션이 덜 끝난 새 버전을 Ready로 올려 버린다. `minReadySeconds`를 주면 Ready가 된 뒤 그 시간만큼 버텨야 Available로 친다. 뜨자마자 몇 초 뒤에 죽는 버전을 거르는 데 쓴다.
+
+## 느리게 뜨는 앱에는 startupProbe
+
+스프링 부트 앱이 캐시를 미리 채우느라 뜨는 데 90초가 걸린다고 하자. liveness 기본값(10초 간격, 3번)이면 30초 만에 재시작되고, 다시 뜨다가 또 죽는다. 영원히 뜨지 못하는 CrashLoopBackOff다.
+
+옛날에는 liveness의 `initialDelaySeconds`를 120으로 잡아 해결했다. 문제는 이 값이 매번 적용된다는 것이다. 뜬 뒤에도 재시작할 때마다 2분 동안 아무 확인을 안 한다. 노드가 빠른 날 30초 만에 떴어도 90초를 그냥 보낸다. startupProbe는 이걸 둘로 나눈다.
+
+```yaml
+startupProbe:
+  httpGet: { path: /healthz, port: http }
+  periodSeconds: 5
+  failureThreshold: 36   # 5초 × 36 = 최대 3분까지 기다린다
+livenessProbe:
+  httpGet: { path: /healthz, port: http }
+  periodSeconds: 10
+  failureThreshold: 3    # 뜬 뒤에는 30초 안에 잡는다
+```
+
+startup이 성공하는 순간 liveness와 readiness가 시작한다. 30초에 뜨면 30초부터 감시하고, 3분 안에 못 뜨면 그때 죽인다. failureThreshold는 실제 측정한 최대 기동 시간에 여유를 더해 정한다. 노드가 바쁘면 기동이 두 배 느려지기도 하니, 개발 PC에서 잰 시간을 그대로 쓰지 않는다. 기동이 왜 느린지(CPU limits가 낮아 JIT가 굶는 경우가 흔하다)는 [requests와 limits](/posts/k8s-pod-resources) 글과 이어진다.
+
+## 프로브를 걸 때 흔한 실수
+
+지금까지 나온 것까지 모아 보면, 장애로 이어지는 실수는 대부분 이 중 하나다.
+
+liveness와 readiness에 같은 엔드포인트를 쓰고 그 안에서 의존성을 확인한다. 앞에서 본 연쇄 재시작이 된다. 엔드포인트를 나누고, liveness는 가볍게 둔다.
+
+timeoutSeconds를 기본값 1초로 둔다. 평소 5ms로 응답하던 엔드포인트도 GC가 1초 멈추면 실패한다. JVM이나 큰 Node 프로세스라면 2~5초로 늘린다.
+
+헬스 엔드포인트가 무거운 일을 한다. 매번 DB 쿼리 여러 개, 외부 API 호출을 하면 Pod 수 × 주기만큼 부하가 생긴다. 프로브는 10초마다 영원히 온다.
+
+liveness의 failureThreshold × period를 너무 짧게 잡는다. 5초 × 1이면 순간적인 과부하 한 번에 재시작한다. 재시작은 공짜가 아니다. 처리 중이던 요청이 끊기고, 캐시가 날아가고, 기동 비용을 다시 낸다. liveness는 느리게, readiness는 빠르게 반응하게 잡는 게 보통이다.
+
+헬스 엔드포인트에 인증이나 리다이렉트를 건다. 401, 403은 실패다. HTTPS로만 듣는 앱에 `scheme: HTTP`로 물으면 연결은 되는데 응답이 깨져 실패한다.
+
+종료 중에 readiness를 신경 쓰지 않는다. SIGTERM을 받은 앱이 readiness를 바로 실패로 돌리면 좋을 것 같지만, 엔드포인트에서 빠지는 건 이미 삭제 시점에 시작돼 있다. 종료 순서에서 실제로 효과가 있는 건 preStop의 짧은 sleep이다. 이 이야기는 [Pod의 일생](/posts/k8s-pod-lifecycle)에 있다.
+
+## 프로브를 다시 정리하면
+
+liveness는 재시작으로 고칠 수 있는 멈춤만 잡고, readiness는 트래픽을 받아도 되는지를, startup은 다 떴는지를 묻는다. 판정은 period × failureThreshold로 대략 읽고, 연속 실패만 센다. 공유 의존성을 liveness에 넣으면 의존성 장애가 전체 재시작으로 번지고, readiness에 넣어도 모든 Pod가 함께 빠질 수 있다. 배포에서는 readiness가 새 버전을 막아 주는 마지막 관문이라 정직하게 만든다. Pod가 뜨긴 하는데 CPU와 메모리가 모자라 프로브가 흔들린다면 다음 글인 [requests와 limits](/posts/k8s-pod-resources)로 넘어간다.
+
+## 면접에서 나올 만한 질문
+
+### liveness, readiness, startup probe는 각각 무엇을 하나요?
+
+liveness는 프로세스가 쓸모 있게 살아 있는지를 보고, 연속으로 실패하면 kubelet이 컨테이너를 재시작한다. readiness는 요청을 받아도 되는지를 보고, 실패하면 재시작 없이 Ready를 False로 바꿔 EndpointSlice에서 뺀다. startup은 기동이 끝났는지를 보고, 성공할 때까지 나머지 두 프로브를 멈춰 둔다. 정해진 시간 안에 성공하지 못하면 컨테이너를 죽인다.
+
+### readiness probe가 없으면 어떤 문제가 생기나요?
+
+컨테이너가 시작하는 순간 Ready로 간주되어, 앱이 포트를 열거나 초기화를 마치기 전에 트래픽이 들어온다. 배포나 스케일 아웃 때마다 연결 거부나 502가 튄다. 롤링 업데이트도 새 Pod가 실제로 준비됐는지 모른 채 옛 Pod를 줄이기 때문에, 망가진 버전이 그대로 퍼질 수 있다.
+
+### liveness probe에서 DB 연결을 확인하면 왜 안 되나요?
+
+DB가 느려지거나 죽으면 모든 Pod의 liveness가 동시에 실패해서 전부 재시작되기 때문이다. 재시작은 DB 문제를 고치지 못하고, 다시 뜬 Pod들이 연결을 한꺼번에 맺어 DB 부하를 키운다. liveness는 재시작으로 해결되는 프로세스 자체의 멈춤만 확인하게 하고, 의존성 장애는 앱의 타임아웃과 서킷 브레이커로 다룬다.
+
+### 그럼 readiness에서 DB를 확인하는 건 괜찮나요?
+
+재시작은 일어나지 않지만, 공유 DB가 문제면 모든 Pod가 동시에 NotReady가 되어 Service 뒤가 비고 503이 난다. 느리게라도 응답하던 서비스가 아예 응답을 못 하게 될 수 있다. 그래서 readiness도 캐시 준비나 과부하처럼 그 Pod만의 사정을 보게 하는 경우가 많다. 기준은 프로브 실패 시 쿠버네티스가 하는 행동이 실제로 문제를 줄이느냐다.
+
+### 프로브가 실패를 판정하기까지 얼마나 걸리나요?
+
+대략 periodSeconds × failureThreshold이고, 기본값이면 10초 × 3으로 30초 정도다. 첫 확인은 initialDelaySeconds 뒤에 시작하고, 각 확인은 timeoutSeconds(기본 1초)를 넘기면 실패다. 실패는 연속으로 세기 때문에 성공과 실패가 번갈아 나오면 판정이 나지 않는다.
+
+### 기동에 2분 걸리는 앱이 계속 재시작됩니다. 어떻게 하나요?
+
+뜨는 도중에 liveness 기본값(30초쯤)에 걸려 죽는 것이다. startupProbe를 두고 periodSeconds × failureThreshold가 최대 기동 시간보다 넉넉하게 잡는다. initialDelaySeconds를 크게 잡는 방법도 있지만, 재시작할 때마다 그만큼 감시를 쉬기 때문에 startupProbe가 낫다.
+
+### 배포 중 새 버전이 readiness를 통과하지 못하면 어떻게 되나요?
+
+롤링 업데이트는 새 Pod가 Ready가 되어야 옛 Pod를 줄이므로, maxUnavailable 설정에 따라 배포가 그 자리에서 멈추고 옛 Pod가 트래픽을 계속 받는다. progressDeadlineSeconds가 지나면 Deployment의 Progressing 조건이 False, ProgressDeadlineExceeded가 되고 `kubectl rollout status`가 실패로 끝난다. 쿠버네티스가 자동으로 롤백하지는 않아서 rollout undo나 배포 도구로 되돌린다.

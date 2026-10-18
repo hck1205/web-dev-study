@@ -66,6 +66,13 @@ import { IPTABLES_NAT } from "./iptables-nat";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
+import { K8S_POD_BASICS } from "./k8s-pod-basics";
+import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
+import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
+import { K8S_POD_PROBES } from "./k8s-pod-probes";
+import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
+import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
+import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
@@ -211,6 +218,13 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
+  K8S_POD_BASICS,
+  K8S_POD_LIFECYCLE,
+  K8S_POD_MULTICONTAINER,
+  K8S_POD_PROBES,
+  K8S_POD_RESOURCES,
+  K8S_POD_SCHEDULING,
+  K8S_POD_TROUBLESHOOTING,
   KUBERNETES_INGRESS,
   LAYER_IP_ADDRESSING,
   LAYER_IP_ROUTING_ICMP,

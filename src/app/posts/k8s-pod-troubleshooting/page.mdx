@@ -1,0 +1,402 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-troubleshooting");
+
+배포 알람이 울려서 `kubectl get pods`를 쳤더니 이런 화면이 나온다.
+
+```text
+NAME                      READY   STATUS                       RESTARTS      AGE
+api-6f7d9c8b4-p2xlw       0/1     ImagePullBackOff             0             19m
+catalog-8476cbf57-6sjhm   0/1     Terminating                  0             27m
+orders-5d5f9c9577-x2k8p   0/1     CrashLoopBackOff             7 (47s ago)   4h13m
+orders-6b8f7d5c9-q7wzt    0/1     CreateContainerConfigError   0             19m
+report-batch              0/1     Pending                      0             6s
+search-5c6d7e8f9-h3jkl    0/1     Running                      0             19m
+worker-7c9d8f6b5-m4kzq    0/1     CrashLoopBackOff             4 (47s ago)   19m
+```
+
+일곱 개가 모두 안 뜨는데 이유는 다 다르다. STATUS 칸의 말마다 멈춘 곳이 다르고, 그래서 먼저 볼 곳도 다르다. 이 글은 Pod가 안 뜰 때 상태별로 무엇을 어떤 순서로 보는지 정리한 실무 가이드다. 각 상태의 원리는 Pod 시리즈의 다른 글에 있고, 여기서는 증상에서 원인까지 가는 길만 따라간다.
+
+출력은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았다. Pending, Terminating, 이벤트, `kubectl debug`는 실제 API 서버와 스케줄러, 컨트롤러가 만든 출력이다. 이 클러스터의 kubelet은 컨테이너를 돌리지 않아서, ImagePullBackOff·CreateContainerConfigError·CrashLoopBackOff·OOMKilled·NotReady는 kubelet이 쓰는 것과 같은 상태 값을 Pod status에 직접 넣어 재현했다. `get`과 `describe`의 모양은 kubectl이 그 값으로 그린 그대로다. kubelet만 남기는 이벤트 줄은 형식을 맞춘 예시로 따로 표시했다.
+
+## 상태 이름이 멈춘 곳을 알려 준다
+
+Pod 하나가 뜨는 길은 정해져 있다. API 서버에 저장되고, 스케줄러가 노드를 정하고, kubelet이 볼륨과 네트워크를 준비하고, 이미지를 받고, 설정을 넣어 컨테이너를 만들고, 컨테이너가 돌고, 프로브를 통과해 Ready가 된다. STATUS 칸의 말은 이 길의 어디에서 멈췄는지를 가리킨다. 아래 그림에서 다음을 누르면 단계마다 멈췄을 때 보이는 이름과 먼저 볼 곳이 나온다.
+
+<AlgoTrace
+  caption="Pod가 뜨는 길과, 단계마다 멈추면 보이는 STATUS"
+  memoryLabel="먼저 볼 곳"
+  cells={["스케줄", "볼륨·네트워크", "이미지", "설정 주입", "실행", "프로브", "종료"]}
+  steps={[
+    { pointer: 0, memory: ["Pending", "Events: FailedScheduling"], caption: "노드를 못 찾으면 Pending이고 NODE 칸이 비어 있다. 스케줄러의 이벤트가 이유를 말한다." },
+    { pointer: 1, found: [0], memory: ["ContainerCreating", "Events: FailedMount"], caption: "노드는 정해졌는데 볼륨이 안 붙거나 Pod 네트워크가 안 만들어지면 ContainerCreating에 머문다." },
+    { pointer: 2, found: [0, 1], memory: ["ErrImagePull", "ImagePullBackOff"], caption: "이미지를 못 받으면 ErrImagePull, 재시도 사이에는 ImagePullBackOff다. 이미지 이름과 인증부터 본다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["CreateContainerConfigError"], caption: "참조한 Secret이나 ConfigMap, 그 안의 키가 없으면 컨테이너를 만들 수 없다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["CrashLoopBackOff", "logs --previous"], caption: "컨테이너가 뜨자마자 죽는다. 직전 로그와 Last State의 종료 코드를 본다. OOMKilled도 여기다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: ["Running 0/1", "readiness"], caption: "돌고는 있는데 READY가 0/1이면 readiness가 실패하는 중이다. 트래픽을 받지 못한다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5], memory: ["Terminating", "finalizers·노드"], caption: "지웠는데 안 사라지면 finalizer가 남았거나 노드가 응답하지 않는 것이다." },
+  ]}
+/>
+
+어느 상태든 시작은 같은 세 명령이다.
+
+```bash
+# 1. 어느 노드에 있는지, 몇 번 재시작했는지
+kubectl get pod <이름> -o wide
+
+# 2. 상태와 이벤트. 거의 모든 답은 맨 아래 Events에 있다
+kubectl describe pod <이름>
+
+# 3. 재시작했다면 죽기 직전 컨테이너의 로그
+kubectl logs <이름> -c <컨테이너> --previous
+```
+
+로그부터 보는 습관은 고치는 게 좋다. Pending, ContainerCreating, ImagePullBackOff, CreateContainerConfigError에서는 컨테이너가 한 번도 돌지 않았으니 로그가 없다. `kubectl logs`는 에러만 내고, 사람은 앱 문제라고 착각한다. describe의 Events를 먼저 읽고, 컨테이너가 실제로 돈 흔적(RESTARTS, Last State)이 있을 때 로그로 넘어간다.
+
+## 이벤트는 정렬부터 틀린다
+
+describe는 그 Pod의 이벤트만 보여 준다. 여러 Pod나 노드에 걸친 일을 보려면 네임스페이스 전체 이벤트를 시간 순으로 본다. 그런데 흔히 쓰는 정렬 방법에 함정이 있다.
+
+```bash
+# 많이 쓰는 정렬
+kubectl get events --sort-by=.lastTimestamp | head -5
+
+# 만들어진 시각으로 정렬
+kubectl get events --sort-by=.metadata.creationTimestamp | tail -5
+```
+
+```text
+LAST SEEN   TYPE     REASON              OBJECT                     MESSAGE
+54s         Normal   Scheduled           pod/hello                  Successfully assigned default/hello to node-1
+116s        Normal   Scheduled           pod/web                    Successfully assigned default/web to node-2
+34s         Normal   Scheduled           pod/api-59cfb66bb-dccb4    Successfully assigned default/api-59cfb66bb-dccb4 to node-1
+25s         Normal   Scheduled           pod/api-59cfb66bb-tvv6c    Successfully assigned default/api-59cfb66bb-tvv6c to node-3
+
+25s         Normal   Scheduled           pod/api-59cfb66bb-tvv6c    Successfully assigned default/api-59cfb66bb-tvv6c to node-3
+26s         Normal   SuccessfulCreate    replicaset/api-59cfb66bb   Created pod: api-59cfb66bb-tvv6c
+21s         Normal   Created             pod/api-59cfb66bb-tvv6c    Created container
+21s         Normal   Killing             pod/api-59cfb66bb-4225m    Stopping container
+```
+
+첫 결과는 시간이 뒤죽박죽이다. 116초 전 이벤트와 25초 전 이벤트가 섞여 맨 위에 몰려 있다. 스케줄러가 남기는 Scheduled, FailedScheduling 같은 이벤트는 새 이벤트 API로 기록돼 `lastTimestamp`가 비어 있고, 빈 값은 정렬에서 맨 앞으로 간다. 그래서 `--sort-by=.lastTimestamp`로 보면 스케줄 관련 이벤트가 엉뚱한 자리에 끼어 있다. 시간 순서를 믿고 싶으면 `.metadata.creationTimestamp`로 정렬한다.
+
+```bash
+# 경고만 골라 본다
+kubectl get events --field-selector type=Warning --sort-by=.metadata.creationTimestamp
+
+# 특정 객체의 이벤트만
+kubectl get events --field-selector involvedObject.name=report-batch
+```
+
+이벤트는 영원하지 않다. API 서버의 기본 보관 시간(`--event-ttl`)은 1시간이다. 새벽에 난 장애를 아침에 보면 이벤트가 이미 없다. 이벤트를 로그 시스템으로 내보내는 도구를 두지 않았다면, 장애가 났을 때 바로 describe 결과를 떠 두는 게 좋다.
+
+## Pending: 노드를 찾지 못했다
+
+NODE 칸이 비어 있는 Pending은 스케줄러 단계에서 멈춘 것이다.
+
+```bash
+kubectl get events --field-selector involvedObject.name=report-batch -o custom-columns=MESSAGE:.message --no-headers
+```
+
+```text
+0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 Insufficient cpu. preemption: 0/5 nodes are available: 1 Preemption is not helpful for scheduling, 4 No preemption victims found for incoming pod.
+```
+
+메시지는 노드별로 처음 걸린 필터 이유를 센 것이다. 여기서는 CPU 6코어를 요청했는데 그만큼 남은 노드가 없다. Insufficient면 requests를 실제 사용량에 맞추거나 노드를 늘리고, taint나 affinity, anti-affinity 문구면 해당 규칙을 본다. 문구별 읽는 법은 [스케줄링 글](/posts/k8s-pod-scheduling)에 정리했다.
+
+이벤트가 아예 없는 Pending도 있다. 스케줄러가 죽어 있거나, `schedulerName`에 없는 스케줄러 이름을 적은 경우다. 반대로 PVC를 쓰는 Pod라면 `pod has unbound immediate PersistentVolumeClaims`가 찍히기도 한다. 그때는 Pod가 아니라 `kubectl describe pvc`의 이벤트로 넘어가 StorageClass와 프로비저너를 본다. Pending이 오래가는데 클러스터 오토스케일러가 있다면 오토스케일러의 이벤트(`TriggeredScaleUp`, `NotTriggerScaleUp`)도 함께 본다. 노드 그룹의 최대 크기에 닿았거나, Pod의 조건을 만족하는 노드 그룹이 없으면 늘려 주지 않는다.
+
+## ContainerCreating에서 멈췄다
+
+노드는 정해졌는데 STATUS가 몇 분째 ContainerCreating이라면, kubelet이 컨테이너를 만들기 전 준비에서 막힌 것이다. 이미지를 받는 중일 수도 있지만, 오래 걸린다면 보통 볼륨이나 네트워크다. describe의 Events에서 kubelet이 남긴 Warning을 찾는다. 아래는 kubelet 메시지 형식의 예시다.
+
+```text
+Events:
+  Type     Reason                  Age                 From     Message
+  ----     ------                  ----                ----     -------
+  Warning  FailedMount             12s (x8 over 76s)   kubelet  MountVolume.SetUp failed for volume "config" : configmap "orders-config" not found
+  Warning  FailedAttachVolume      2m                  attachdetach-controller  Multi-Attach error for volume "pvc-3f2a..." Volume is already exclusively attached to one node and can't be attached to another
+  Warning  FailedCreatePodSandBox  30s                 kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox "...": plugin type="calico" failed (add): ...
+```
+
+FailedMount에 `not found`면 볼륨으로 쓰려는 ConfigMap이나 Secret이 그 네임스페이스에 없다. 환경변수로 참조한 것과 달리 볼륨은 ContainerCreating에서 멈춘다. Multi-Attach 에러는 ReadWriteOnce 디스크가 아직 옛 노드에 붙어 있는 것이다. 노드가 죽은 뒤 StatefulSet Pod가 다른 노드에 뜰 때 자주 본다. 옛 노드가 정말 죽었다면 볼륨이 떨어질 때까지(클라우드에 따라 몇 분) 기다리거나, 옛 노드를 정리해야 한다. FailedCreatePodSandBox는 Pod 네트워크를 만드는 CNI 플러그인 문제다. 그 노드의 CNI Pod(calico-node, cilium 등) 상태와 노드의 IP 풀이 바닥났는지 본다. 같은 노드의 다른 새 Pod도 다 같이 멈춰 있다면 거의 이쪽이다.
+
+## ImagePullBackOff: 이미지를 받지 못했다
+
+ErrImagePull은 이미지 받기에 방금 실패했다는 뜻이고, ImagePullBackOff는 다음 재시도를 기다리는 중이라는 뜻이다. 둘은 같은 문제의 다른 순간이다. 재시도 간격은 CrashLoopBackOff처럼 늘어나 최대 5분까지 간다.
+
+```bash
+# 컨테이너의 대기 이유와 메시지
+kubectl get pod api-6f7d9c8b4-p2xlw -o jsonpath='{.status.containerStatuses[0].state}{"\n"}'
+```
+
+```text
+{"waiting":{"message":"Back-off pulling image \"ghcr.io/example/api:2.0.0-rc1\"","reason":"ImagePullBackOff"}}
+```
+
+BackOff 메시지는 이유를 말하지 않는다. 실제 이유는 직전의 ErrImagePull 이벤트에 있다. containerd를 쓰는 노드라면 이런 식으로 찍힌다(형식 예시). 긴 메시지를 조각으로 나눠 보자.
+
+<UrlAnatomy
+  caption="ErrImagePull 이벤트 메시지 읽기"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "prefix",
+      display: "Failed to pull image \"ghcr.io/example/api:2.0.0-rc1\":",
+      title: "kubelet이 받으려던 이미지",
+      description: "레지스트리, 저장소, 태그가 정확히 이 문자열이다. 태그 오타, 아직 푸시되지 않은 태그, 빌드 파이프라인이 다른 이름으로 올린 경우를 먼저 의심한다.",
+    },
+    {
+      key: "code",
+      display: "rpc error: code = NotFound",
+      title: "런타임이 돌려준 이유의 종류",
+      description: "NotFound는 그런 이미지나 태그가 없다는 뜻이다. Unknown과 함께 401 Unauthorized나 403이 나오면 인증 문제, 429 Too Many Requests면 레지스트리의 요청 수 제한이다.",
+    },
+    {
+      key: "resolve",
+      display: "failed to resolve reference",
+      title: "태그를 다이제스트로 바꾸는 단계에서 실패",
+      description: "레지스트리에 이 태그가 무엇을 가리키는지 물었는데 답을 못 받았다. 이미지 층을 받기 전 단계라, 크기나 디스크와는 상관없다.",
+    },
+    {
+      key: "fix",
+      display: "not found",
+      title: "확인할 명령",
+      description: "같은 노드에서 직접 받아 보면 쿠버네티스 밖의 문제인지 바로 갈린다. 노드에서 되는데 Pod에서 안 되면 imagePullSecrets를 본다.",
+      code: "sudo crictl pull ghcr.io/example/api:2.0.0-rc1\nkubectl get pod api-6f7d9c8b4-p2xlw -o jsonpath='{.spec.imagePullSecrets}'",
+    },
+  ]}
+/>
+
+이유별로 고치는 곳이 다르다. NotFound면 이미지 이름과 태그를 고친다. 인증이면 비공개 레지스트리용 Secret(`kubernetes.io/dockerconfigjson` 타입)이 Pod와 같은 네임스페이스에 있는지, Pod나 ServiceAccount의 `imagePullSecrets`에 연결됐는지 본다. Secret은 네임스페이스를 넘지 못해서, 새 네임스페이스에 배포할 때 이걸 빠뜨리는 일이 흔하다. 429면 Docker Hub의 익명 요청 제한일 가능성이 크다. 인증된 계정으로 받거나 사내 미러 레지스트리를 둔다.
+
+이미지는 받았는데 아키텍처가 다른 경우는 여기서 걸리지 않는다. arm64 노드에 amd64 전용 이미지를 띄우면 이미지 받기는 성공하고, 실행하는 순간 `exec format error`로 죽어 CrashLoopBackOff가 된다. 멀티 아키텍처 이미지 빌드는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에서 다뤘다.
+
+## CreateContainerConfigError: 설정이 비어 있다
+
+이미지는 받았는데 컨테이너를 만들 수 없는 상태다. 환경변수로 참조한 Secret이나 ConfigMap, 또는 그 안의 키가 없을 때 가장 흔하다.
+
+```bash
+kubectl get pod orders-6b8f7d5c9-q7wzt -o jsonpath='{.status.containerStatuses[0].state}{"\n"}'
+```
+
+```text
+{"waiting":{"message":"secret \"orders-db\" not found","reason":"CreateContainerConfigError"}}
+```
+
+메시지가 친절하다. `orders-db` Secret을 만들면 kubelet이 다음 시도에서 알아서 컨테이너를 만든다. Pod를 다시 만들 필요도 없다. 키가 없을 때는 `couldn't find key password in Secret default/orders-db`처럼 키 이름까지 나온다. 정말 없어도 되는 설정이라면 `secretKeyRef`에 `optional: true`를 준다.
+
+이 상태는 배포 순서 문제로도 자주 생긴다. 앱 매니페스트와 Secret을 함께 배포하는데 Secret을 만드는 쪽(External Secrets 같은 컨트롤러)이 늦으면 잠깐 이 상태가 보였다가 사라진다. 몇 분이 지나도 남아 있다면 그 컨트롤러의 상태를 본다. 비밀 값을 어떻게 넣는지는 Helm 시리즈([Helm 기초](/posts/helm-basics)부터)에서 이어진다.
+
+## CrashLoopBackOff: 뜨자마자 죽는다
+
+이제야 컨테이너가 실제로 돌았다. 로그가 쓸모 있는 첫 상태다. 순서는 직전 종료의 이유와 종료 코드, 그다음 직전 로그다.
+
+```bash
+kubectl describe pod orders-5d5f9c9577-x2k8p | sed -n '/Last State/,/Restart Count/p'
+kubectl logs orders-5d5f9c9577-x2k8p --previous --tail=30
+```
+
+```text
+    Last State:     Terminated
+      Reason:       Error
+      Exit Code:    1
+      Started:      Sun, 18 Oct 2026 23:43:23 +0000
+      Finished:     Sun, 18 Oct 2026 23:43:28 +0000
+    Ready:          False
+    Restart Count:  7
+```
+
+종료 코드가 갈래를 나눈다. 1처럼 작은 숫자면 앱이 스스로 에러를 내고 끝났으니 `--previous` 로그 마지막 줄이 답이다. DB 접속 실패, 필수 환경변수 누락, 마이그레이션 실패가 흔하다. 127은 실행하려는 명령을 찾지 못한 것(`command` 오타, 셸이 없는 이미지에서 `sh -c`), 126은 실행 권한이 없는 것이다. 137이면 SIGKILL이니 Reason을 본다. OOMKilled면 아래 절로, Error면 liveness 실패로 kubelet이 죽였거나 유예 시간 초과다. 0으로 끝났는데 CrashLoopBackOff라면, 할 일을 마치고 끝나는 프로그램을 Deployment로 띄운 것이다. 종료 코드 읽는 법과 대기 시간이 10초에서 5분까지 늘어나는 원리는 [Pod의 일생](/posts/k8s-pod-lifecycle)에 있다.
+
+Started와 Finished의 간격도 본다. 위처럼 5초 만에 죽는다면 시작 단계의 문제다. 몇 분씩 돌다 죽는다면 liveness probe에 맞았거나 메모리가 서서히 차는 경우다. liveness 실패라면 이벤트에 `Liveness probe failed`와 `Container app failed liveness probe, will be restarted`가 남는다. 이 경우 앱 로그에는 에러가 없을 수 있다. 잘못 건 프로브가 멀쩡한 앱을 죽이는 경우는 [프로브 글](/posts/k8s-pod-probes)에서 다뤘다.
+
+`--previous`도 비어 있다면 앱이 로그를 남기기도 전에 죽은 것이다. 이럴 때는 아래에서 볼 `kubectl debug --copy-to`로 command를 `sleep`으로 바꾼 복사본을 띄우고, 안에 들어가 같은 명령을 손으로 실행해 본다.
+
+## OOMKilled: 메모리 한도에 걸렸다
+
+CrashLoopBackOff의 한 갈래지만 처방이 달라서 따로 본다.
+
+```bash
+kubectl describe pod worker-7c9d8f6b5-m4kzq | sed -n '/Last State/,/Exit Code/p;/Limits/,/memory/p'
+```
+
+```text
+    Last State:     Terminated
+      Reason:       OOMKilled
+      Exit Code:    137
+    Limits:
+      memory:  512Mi
+```
+
+컨테이너가 limits(512Mi)를 넘어 커널이 죽였다. 로그는 대개 평범한 줄에서 끊겨 있다. 확인할 것은 메모리 그래프 모양이다. 계단처럼 오르다 잘리기를 반복하면 누수라 limits를 올려도 소용없다. 특정 작업에서 치솟는다면 limits가 실제 최대치보다 낮은 것이다. JVM이나 Node라면 힙 상한이 limits 안에 들어가게 설정됐는지도 본다. 원리와 실제 재현은 [requests와 limits](/posts/k8s-pod-resources)에 있다.
+
+Pod 상태가 OOMKilled가 아니라 `Evicted`라면 다른 이야기다. 컨테이너 한도가 아니라 노드 전체가 모자라 kubelet이 쫓아낸 것이고, 같은 노드의 다른 Pod들도 함께 쫓겨났을 가능성이 크다. `kubectl describe node`의 Conditions에서 MemoryPressure, DiskPressure를 본다.
+
+## Running인데 트래픽을 못 받는다
+
+STATUS는 Running이라 겉보기엔 멀쩡한데 트래픽을 못 받는 상태다. 사용자 쪽에서는 503으로 보인다.
+
+```bash
+kubectl describe pod search-5c6d7e8f9-h3jkl | sed -n '/^Conditions:/,/^Volumes:/p'
+```
+
+```text
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True 
+  Initialized                 True 
+  Ready                       False 
+  ContainersReady             False 
+  PodScheduled                True 
+```
+
+ContainersReady가 False면 readiness probe가 실패하는 중이다. 실제 노드라면 Events에 `Readiness probe failed:` 뒤로 이유가 붙는다. `connection refused`면 포트나 바인딩 주소, `context deadline exceeded`면 응답이 timeoutSeconds보다 느린 것, `statuscode: 503`이면 앱이 스스로 준비 안 됐다고 답한 것이다. 앱이 의존하는 DB가 죽어서 readiness가 실패하는 구조라면, 모든 Pod가 함께 빠져 Service 뒤가 빈다. Service 쪽에서 확인한다.
+
+```bash
+# Service 뒤에 Ready인 Pod가 있는지. terminating·ready 조건을 함께 본다
+kubectl get endpointslice -l kubernetes.io/service-name=search \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}ready={.conditions.ready}{"\n"}{end}'
+```
+
+Ready 조건이 True인데도 트래픽이 안 온다면 이제 Pod 문제가 아니다. Service의 selector와 Pod 라벨, targetPort를 비교하고, Ingress 쪽은 [Ingress 글의 502·503 절](/posts/kubernetes-ingress)과 [계층별 장애 좁히기](/posts/network-troubleshooting-by-layer)로 넘어간다.
+
+## Terminating에서 안 넘어간다
+
+지운 Pod가 몇 분째 Terminating이다. 원인은 크게 두 가지다. 하나는 finalizer다. finalizer는 "이 객체를 지우기 전에 내가 할 일이 있다"는 표시로, 그걸 붙인 컨트롤러가 일을 마치고 지워 줘야 객체가 사라진다. 컨트롤러가 죽었거나 지워졌으면 영원히 남는다.
+
+```bash
+kubectl get pod export-job
+kubectl get pod export-job -o jsonpath='{.metadata.finalizers}{"\n"}'
+```
+
+```text
+NAME         READY   STATUS        RESTARTS   AGE
+export-job   1/1     Terminating   0          65s
+["example.com/upload-report"]
+```
+
+유예 시간 30초가 한참 지났는데 그대로다. kubelet은 컨테이너를 멈추지만 객체를 지우는 건 finalizer 목록이 비어야 가능하다. 다른 하나는 노드다. 노드가 응답하지 않으면 컨테이너를 멈췄다고 확인해 줄 kubelet이 없어서, 그 노드의 Pod는 지워도 Terminating에 머문다.
+
+```bash
+kubectl get pod catalog-8476cbf57-6sjhm -o wide
+kubectl describe node node-4 | sed -n '/^Conditions:/,/^Addresses:/p'
+```
+
+```text
+NAME                      READY   STATUS        RESTARTS   AGE   IP          NODE     NOMINATED NODE   READINESS GATES
+catalog-8476cbf57-6sjhm   0/1     Terminating   0          26m   10.0.0.21   node-4   <none>           <none>
+Conditions:
+  Type                 Status    LastHeartbeatTime                 LastTransitionTime                Reason              Message
+  ----                 ------    -----------------                 ------------------                ------              -------
+  Ready                Unknown   Sun, 18 Oct 2026 19:29:56 +0000   Sun, 18 Oct 2026 19:35:14 +0000   NodeStatusUnknown   Kubelet stopped posting node status.
+  MemoryPressure       Unknown   Sun, 18 Oct 2026 19:29:56 +0000   Sun, 18 Oct 2026 19:35:14 +0000   NodeStatusUnknown   Kubelet stopped posting node status.
+  DiskPressure         Unknown   Sun, 18 Oct 2026 19:29:56 +0000   Sun, 18 Oct 2026 19:35:14 +0000   NodeStatusUnknown   Kubelet stopped posting node status.
+  PIDPressure          Unknown   Sun, 18 Oct 2026 19:29:56 +0000   Sun, 18 Oct 2026 19:35:14 +0000   NodeStatusUnknown   Kubelet stopped posting node status.
+  NetworkUnavailable   False     Sun, 18 Oct 2026 19:29:56 +0000   Sun, 18 Oct 2026 19:29:56 +0000   RouteCreated        RouteController created a route
+```
+
+`Kubelet stopped posting node status.` 마지막 하트비트가 19:29다. 이 노드의 Pod는 kubelet이 돌아오거나 노드 객체가 지워질 때까지 Terminating이다. Deployment라면 새 Pod는 이미 다른 노드에 떴으니 서비스에는 지장이 없다. StatefulSet은 다르다. 같은 이름의 Pod가 하나만 있어야 하니, 옛 Pod가 Terminating으로 남아 있는 동안 새 Pod를 만들지 않는다.
+
+<Callout kind="warning" title="finalizer 제거와 강제 삭제는 확인부터">
+  finalizer를 직접 지우는 `kubectl patch pod export-job --type=json -p '[{"op":"remove","path":"/metadata/finalizers/0"}]'`와 `kubectl delete pod --grace-period=0 --force`는 둘 다 기다림을 끝내는 대신 뒷정리를 건너뛴다. finalizer를 붙인 컨트롤러가 하려던 일(외부 리소스 정리, 업로드)은 하지 않은 채로 남는다. 강제 삭제는 API 객체만 지우고, 노드가 사실 살아 있다면 컨테이너는 계속 돈다. StatefulSet에서는 같은 디스크에 두 프로세스가 붙는 일이 생긴다. 둘 다 되돌릴 수 없으니, 먼저 그 finalizer의 주인 컨트롤러가 살아 있는지, 노드가 정말 죽었는지(클라우드 콘솔에서 인스턴스 상태)를 확인한다. 노드가 죽은 게 확실하면 Pod 대신 `kubectl delete node`로 노드 객체를 지우는 쪽이 그 노드의 Pod를 함께 정리해 더 안전하다.
+</Callout>
+
+실습에서 finalizer를 지우자 Pod는 바로 사라졌다.
+
+```text
+pod/export-job patched
+Error from server (NotFound): pods "export-job" not found
+```
+
+## 셸이 없는 컨테이너는 kubectl debug로 연다
+
+distroless 이미지나 scratch 이미지에는 셸이 없다. `kubectl exec -it ... -- sh`가 `executable file not found`로 실패한다. 그렇다고 디버깅 도구를 넣어 이미지를 다시 만들 수는 없다. `kubectl debug`는 떠 있는 Pod에 임시 컨테이너(ephemeral container)를 붙인다. 임시 컨테이너는 1.25부터 GA다.
+
+<SequenceDiagram
+  caption="kubectl debug가 떠 있는 Pod에 도구 컨테이너를 붙이는 과정"
+  actors={[
+    { id: "cli", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "pod", label: "Pod" },
+  ]}
+  steps={[
+    { from: "cli", to: "api", label: "ephemeralcontainers", title: "임시 컨테이너를 추가한다", detail: "Pod 스펙은 대부분 바꿀 수 없지만 ephemeralcontainers 서브리소스만은 추가가 된다. busybox 같은 도구 이미지를 적는다." },
+    { from: "api", to: "kubelet", label: "watch", title: "kubelet이 변경을 본다", detail: "같은 Pod에 컨테이너가 하나 늘었다. Pod를 다시 만들지 않고 기존 sandbox에 넣는다." },
+    { from: "kubelet", to: "pod", label: "컨테이너 시작", title: "같은 namespace에 합류한다", detail: "네트워크 namespace는 Pod와 같아서 localhost로 앱 포트에 닿는다. --target을 주면 그 컨테이너의 PID namespace에도 합류해 프로세스가 보인다." },
+    { from: "cli", to: "pod", label: "attach", title: "셸이 열린다", detail: "-it를 주면 바로 붙는다. 임시 컨테이너는 지울 수 없고, 프로세스가 끝나면 그대로 Terminated로 남는다." },
+  ]}
+/>
+
+```bash
+# 셸 없는 distroless Pod에 busybox를 붙인다. --target으로 앱의 프로세스를 함께 본다
+# 바로 셸로 들어가려면 -it를 붙인다. 여기서는 붙지 않고 sleep만 띄웠다
+kubectl debug probe-me --image=busybox:1.36 --target=probe-me -- sleep 3600
+
+# 붙은 임시 컨테이너 확인
+kubectl get pod probe-me -o jsonpath='{range .spec.ephemeralContainers[*]}{.name}{"\t"}{.image}{"\t"}target={.targetContainerName}{"\n"}{end}'
+```
+
+```text
+Targeting container "probe-me". If you don't see processes from this container it may be because the container runtime doesn't support this feature.
+Defaulting debug container name to debugger-vvknl.
+debugger-vvknl	busybox:1.36	target=probe-me
+```
+
+안에서는 `ps`로 앱 프로세스를 보고, `wget -qO- localhost:8080/healthz`로 프로브가 보는 응답을 직접 받아 보고, `nslookup orders-db`로 DNS를 확인한다. 앱의 파일 시스템은 `/proc/<앱 PID>/root/` 아래에서 볼 수 있다.
+
+CrashLoopBackOff처럼 Pod가 계속 죽어 붙을 틈이 없을 때는 복사본을 만든다.
+
+```bash
+# 원래 Pod를 복사하고, 디버그 컨테이너를 더하고, 프로세스 namespace를 공유한다
+kubectl debug probe-me --image=busybox:1.36 --copy-to=probe-me-copy --share-processes -- sleep 3600
+kubectl get pod probe-me-copy -o jsonpath='{.spec.shareProcessNamespace} {range .spec.containers[*]}{.name},{end}{"\n"}'
+
+# 노드 자체를 볼 때. 노드의 루트 파일 시스템이 /host에 붙는다
+kubectl debug node/node-1 -it --image=busybox:1.36
+```
+
+```text
+Defaulting debug container name to debugger-vmcv8.
+true probe-me,debugger-vmcv8,
+Creating debugging pod node-debugger-node-1-kk4vj with container debugger on node node-1.
+If you don't see a command prompt, try pressing enter.
+```
+
+`--copy-to`에 `--set-image=*=busybox:1.36`이나 원래 컨테이너의 command를 바꾸는 옵션을 함께 주면 앱이 죽지 않는 상태로 띄워 안을 살필 수 있다. 복사본은 원래 Pod와 라벨이 같지 않게 만들어지니 Service 트래픽을 받지 않는다. 다 쓰면 복사본과 노드 디버그 Pod를 지운다. 노드 디버그 Pod는 호스트 namespace를 쓰는 강한 권한이라 오래 남겨 두지 않는다.
+
+## 상태별로 다시 보면
+
+STATUS 칸의 말은 Pod가 뜨는 길에서 멈춘 자리다. Pending은 스케줄러의 이벤트, ContainerCreating은 kubelet의 볼륨·네트워크 이벤트, ImagePullBackOff는 이미지 이름과 인증, CreateContainerConfigError는 빠진 Secret과 ConfigMap, CrashLoopBackOff는 Last State의 종료 코드와 `--previous` 로그, OOMKilled는 메모리 limits, Running 0/1은 readiness, Terminating은 finalizer와 노드다. 앞의 네 상태에서는 컨테이너가 돈 적이 없으니 로그가 아니라 이벤트를 보고, 이벤트는 creationTimestamp로 정렬한다. 셸이 없거나 계속 죽는 컨테이너는 `kubectl debug`로 열어 본다.
+
+## 면접에서 나올 만한 질문
+
+### Pod가 안 뜰 때 가장 먼저 무엇을 보나요?
+
+`kubectl get pod -o wide`로 상태와 노드, 재시작 횟수를 보고, `kubectl describe pod`의 Events를 읽는다. STATUS가 Pending, ContainerCreating, ImagePullBackOff, CreateContainerConfigError라면 컨테이너가 한 번도 돌지 않았으니 로그가 없고 이벤트에 답이 있다. 재시작 흔적이 있을 때 `kubectl logs --previous`로 넘어간다.
+
+### ImagePullBackOff와 ErrImagePull은 어떻게 다르고, 원인은 어떻게 찾나요?
+
+ErrImagePull은 방금 받기에 실패한 순간이고, ImagePullBackOff는 다음 재시도를 기다리는 상태라 같은 문제의 다른 순간이다. 이유는 ErrImagePull 이벤트의 메시지에 있어서, NotFound면 이미지 이름과 태그, 401·403이면 imagePullSecrets와 네임스페이스, 429면 레지스트리 요청 제한을 본다. 노드에서 crictl pull로 직접 받아 보면 쿠버네티스 밖 문제인지 갈린다.
+
+### CrashLoopBackOff는 어떻게 디버깅하나요?
+
+describe의 Last State에서 Reason과 Exit Code를 먼저 보고, `kubectl logs --previous`로 죽기 직전 로그를 본다. 1 같은 작은 코드면 앱 에러, 127은 명령을 못 찾은 것, 137에 OOMKilled면 메모리 한도, 137에 Error면 liveness나 유예 시간 초과다. 로그도 남기지 못하고 죽으면 `kubectl debug --copy-to`로 명령을 바꾼 복사본을 띄워 안에서 직접 실행해 본다.
+
+### Pod는 Running인데 서비스가 503을 줍니다. 무엇을 보나요?
+
+READY가 0/1이면 readiness probe가 실패해 EndpointSlice에서 빠진 것이라 describe의 Conditions와 Readiness 이벤트를 본다. Pod가 Ready인데도 그렇다면 Service selector와 Pod 라벨, targetPort가 맞는지, EndpointSlice에 ready 주소가 있는지 확인한다. 모든 Pod가 함께 NotReady라면 공유 의존성을 readiness에 넣었는지 의심한다.
+
+### Pod가 Terminating에서 멈춰 있으면 어떻게 하나요?
+
+`metadata.finalizers`가 남아 있는지와 Pod가 있는 노드가 Ready인지 본다. finalizer라면 그걸 붙인 컨트롤러가 살아 있는지부터 확인하고, 노드가 응답하지 않는다면 kubelet이 돌아오거나 노드 객체가 지워질 때까지 객체가 남는다. finalizer 직접 제거나 `--force --grace-period=0`은 뒷정리를 건너뛰고 되돌릴 수 없어서, 노드가 정말 죽었는지 확인한 뒤에 쓴다.
+
+### kubectl get events를 볼 때 주의할 점은 무엇인가요?
+
+스케줄러 이벤트는 lastTimestamp가 비어 있어서 `--sort-by=.lastTimestamp`로 정렬하면 순서가 섞이므로 `.metadata.creationTimestamp`로 정렬한다. 이벤트는 기본 1시간만 보관되니 지난 장애는 이벤트가 없을 수 있다. 경고만 보려면 `--field-selector type=Warning`, 특정 객체는 `involvedObject.name`으로 거른다.
+
+### 셸이 없는 distroless 컨테이너는 어떻게 디버깅하나요?
+
+`kubectl debug -it <pod> --image=busybox --target=<container>`로 임시 컨테이너를 붙인다. 임시 컨테이너는 Pod의 네트워크 namespace를 공유하고, --target을 주면 대상 컨테이너의 프로세스도 보인다. 계속 죽는 Pod라면 `--copy-to`로 복사본을, 노드 문제라면 `kubectl debug node/<이름>`으로 노드 디버그 Pod를 띄운다.

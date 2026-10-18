@@ -1,0 +1,538 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-lifecycle");
+
+배포 중에 `kubectl get pods`를 반복해서 치다 보면 STATUS 칸에 온갖 말이 지나간다. Pending, ContainerCreating, Init:0/2, Running, CrashLoopBackOff, Terminating, Completed. 그런데 쿠버네티스 문서를 보면 Pod의 phase는 다섯 개뿐이다. ContainerCreating이나 CrashLoopBackOff는 phase가 아니다. 그럼 STATUS 칸에 찍히는 저 말은 다 어디서 오는 걸까.
+
+이 글은 Pod가 만들어져서 사라지기까지의 상태를 세 층(phase, 컨테이너 상태, 조건)으로 나눠 읽고, 컨테이너가 죽으면 kubelet이 어떻게 다시 띄우는지, Pod를 지우면 어떤 순서로 끝나는지를 따라간다. 배포할 때마다 502가 몇 개씩 튀는 문제의 원인도 이 종료 순서 안에 있다. `kubectl` 출력은 앞 글과 같은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았고, 컨테이너가 실제로 죽어야 나오는 상태는 그 상태 값을 직접 넣어 재현했다. 신호와 종료 코드는 Ubuntu 24.04에서 실제 프로세스로 확인했다.
+
+## STATUS 칸은 phase가 아니다
+
+Pod의 `status.phase`는 Pod가 대략 어디쯤 있는지를 아주 거칠게 말해 준다.
+
+- Pending: API 서버가 Pod를 받았지만 컨테이너가 아직 하나도 돌지 않는다. 스케줄을 기다리거나 이미지를 받는 중이다.
+- Running: 노드에 묶였고 컨테이너가 모두 만들어졌으며, 적어도 하나가 돌고 있거나 시작·재시작 중이다.
+- Succeeded: 모든 컨테이너가 종료 코드 0으로 끝났고 다시 시작하지 않는다.
+- Failed: 모든 컨테이너가 끝났고 하나 이상이 실패로 끝났다.
+- Unknown: 노드와 연락이 끊겨 상태를 알 수 없다.
+
+`kubectl get`의 STATUS 칸은 이 phase를 그대로 찍지 않는다. kubectl이 phase, 컨테이너 상태의 reason, 삭제 표시를 함께 보고 가장 구체적인 말을 골라 보여 준다. 이미지를 받는 중인 Pod로 확인해 보자.
+
+```bash
+# 사람이 보는 STATUS 칸
+kubectl get pod slow
+
+# 실제 phase와 컨테이너 상태의 reason
+kubectl get pod slow -o jsonpath='phase={.status.phase}{"\n"}waiting={.status.containerStatuses[0].state.waiting.reason}{"\n"}'
+```
+
+```text
+NAME   READY   STATUS              RESTARTS   AGE
+slow   0/1     ContainerCreating   0          8s
+phase=Pending
+waiting=ContainerCreating
+```
+
+STATUS는 ContainerCreating인데 phase는 Pending이다. ContainerCreating은 컨테이너의 waiting reason이다. CrashLoopBackOff, ImagePullBackOff도 같은 자리에서 나온다. Terminating은 아예 status에 없는 말이고, `metadata.deletionTimestamp`가 찍혀 있으면 kubectl이 붙여 준다. 그래서 스크립트나 모니터링에서 "Pod가 정상인가"를 판단할 때 STATUS 문자열을 grep하면 안 되고 phase와 조건을 읽어야 한다.
+
+한 줄을 조각으로 나눠 보면 각 칸이 어디서 오는지 보인다.
+
+<UrlAnatomy
+  caption="kubectl get pods 한 줄"
+  separator="  "
+  joiner="  "
+  params={[
+    {
+      key: "name",
+      display: "orders-5d5f9c9577-x2k8p",
+      title: "Pod 이름",
+      description: "Deployment 이름, ReplicaSet의 템플릿 해시, 임의의 다섯 글자다. 다섯 글자가 바뀌었다면 재시작이 아니라 새 Pod다.",
+    },
+    {
+      key: "ready",
+      display: "0/1",
+      title: "준비된 컨테이너 수 / 전체",
+      description: "readiness probe를 통과한 컨테이너 수다. 0/1이면 Service가 이 Pod로 트래픽을 보내지 않는다. Running이어도 0/1일 수 있다.",
+    },
+    {
+      key: "status",
+      display: "CrashLoopBackOff",
+      title: "kubectl이 고른 한 단어",
+      description: "phase가 아니라 컨테이너 waiting reason이다. 이 Pod의 phase는 Running이다. 컨테이너가 죽어서 다음 재시작을 기다리는 중이라는 뜻이다.",
+      code: "status:\n  phase: Running\n  containerStatuses:\n  - state:\n      waiting:\n        reason: CrashLoopBackOff",
+    },
+    {
+      key: "restarts",
+      display: "5 (47s ago)",
+      title: "재시작 횟수와 마지막 재시작",
+      description: "컨테이너 restartCount의 합이다. 괄호 안은 마지막으로 죽은 지 얼마나 됐는지다. 같은 Pod 안에서 컨테이너만 다시 띄운 횟수라 Pod 이름은 그대로다.",
+    },
+    {
+      key: "age",
+      display: "4m30s",
+      title: "Pod가 만들어진 뒤 지난 시간",
+      description: "컨테이너가 아니라 Pod 객체의 나이다. 컨테이너가 수십 번 재시작해도 AGE는 계속 올라간다.",
+    },
+  ]}
+/>
+
+## 컨테이너 상태와 조건
+
+phase 아래에는 두 층이 더 있다. 하나는 컨테이너마다 붙는 상태다. Waiting, Running, Terminated 셋 중 하나이고, Waiting과 Terminated에는 reason이 붙는다. Waiting이면 ContainerCreating, ImagePullBackOff, CrashLoopBackOff 같은 이유가, Terminated면 Completed, Error, OOMKilled 같은 이유와 종료 코드가 붙는다. 바로 전 상태는 `lastState`에 남는다. 재시작한 컨테이너가 왜 죽었는지는 지금 상태가 아니라 lastState를 봐야 안다.
+
+다른 하나는 Pod 전체의 조건(conditions)이다. Pod가 준비되기까지 통과해야 하는 관문을 순서대로 적은 체크 목록이라고 보면 된다. 아래 그림에서 다음을 누르면 관문이 하나씩 True로 바뀐다.
+
+<AlgoTrace
+  caption="Pod 조건은 앞의 것이 True가 돼야 다음이 열린다"
+  memoryLabel="지금 막혀 있다면"
+  cells={["PodScheduled", "ReadyToStart", "Initialized", "Containers", "Ready"]}
+  steps={[
+    { pointer: 0, memory: ["노드 없음", "FailedScheduling"], caption: "PodScheduled가 False면 스케줄러가 노드를 못 찾았다. 이벤트에 FailedScheduling이 남는다." },
+    { pointer: 1, found: [0], memory: ["sandbox·네트워크"], caption: "노드는 정해졌다. PodReadyToStartContainers는 sandbox와 Pod 네트워크가 준비됐다는 뜻이다(1.29부터 기본으로 켜진 베타)." },
+    { pointer: 2, found: [0, 1], memory: ["init 컨테이너", "Init:0/2"], caption: "Initialized는 init 컨테이너가 모두 성공해야 True가 된다. 하나라도 남아 있으면 STATUS에 Init:0/2처럼 보인다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["readiness 실패", "READY 0/1"], caption: "ContainersReady는 모든 컨테이너가 readiness probe를 통과해야 True다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["Endpoint 등록"], caption: "Ready가 True가 되면 EndpointSlice에 ready로 올라가고 Service가 트래픽을 보낸다." },
+  ]}
+/>
+
+조건은 이렇게 한 줄씩 볼 수 있다. 앞에서 본 이미지를 받는 중인 Pod다.
+
+```bash
+# 조건을 이름=값으로 한 줄씩
+kubectl get pod slow -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}'
+```
+
+```text
+Initialized=True
+Ready=False
+ContainersReady=False
+PodScheduled=True
+```
+
+이 클러스터는 kubelet이 가짜라 PodReadyToStartContainers가 없지만, 실제 1.29 이상의 노드에서는 이 조건도 함께 나온다. 이 중 Service와 바로 이어지는 건 마지막 Ready다. Ready는 readiness probe가 정하는데, 프로브는 [프로브 글](/posts/k8s-pod-probes)에서 따로 다룬다.
+
+## init 컨테이너가 먼저 끝나야 한다
+
+앱이 뜨기 전에 꼭 끝나 있어야 하는 일이 있다. DB가 열릴 때까지 기다리기, 마이그레이션 돌리기, 설정 파일 받아 오기. 이런 일은 init 컨테이너에 맡긴다.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: billing
+spec:
+  initContainers:
+    - name: wait-db
+      image: busybox:1.36
+      command: ["sh", "-c", "until nc -z postgres 5432; do sleep 2; done"]
+    - name: migrate
+      image: ghcr.io/example/billing:3.0.1
+      command: ["./migrate", "up"]
+  containers:
+    - name: app
+      image: ghcr.io/example/billing:3.0.1
+```
+
+init 컨테이너는 적힌 순서대로 하나씩 돌고, 앞의 것이 종료 코드 0으로 끝나야 다음 것이 시작한다. 모두 끝나야 Initialized가 True가 되고 앱 컨테이너가 뜬다. 그동안 STATUS는 `Init:완료한 수/전체`로 보인다.
+
+```bash
+# 몇 초 간격으로 STATUS를 본다
+kubectl get pod billing --watch
+```
+
+```text
+NAME      READY   STATUS     RESTARTS   AGE
+billing   0/1     Pending    0          0s
+billing   0/1     Init:0/2   0          4s
+```
+
+init 컨테이너가 실패하면 Pod의 restartPolicy를 따른다. Deployment의 Pod처럼 Always라면 kubelet은 실패한 init 컨테이너를 계속 다시 돌리고 STATUS는 `Init:CrashLoopBackOff`가 된다. 이때 앱 컨테이너는 한 번도 뜨지 않았으니 앱 로그를 아무리 봐도 없다. `kubectl logs billing -c migrate`처럼 init 컨테이너 이름을 골라 봐야 한다.
+
+init 컨테이너는 Pod가 다시 만들어질 때마다 다시 돈다. 마이그레이션을 여기서 돌리면 replicas가 3인 Deployment는 세 Pod가 동시에 마이그레이션을 시작한다. 마이그레이션 도구가 잠금을 잡아 주지 않는다면 배포 파이프라인의 별도 Job으로 빼는 편이 안전하다. 로그 전달기 같은 사이드카를 init 컨테이너 자리에 두는 방법도 있는데, 이건 [한 Pod에 컨테이너 여럿](/posts/k8s-pod-multicontainer)에서 본다.
+
+## 컨테이너가 죽으면 kubelet이 다시 띄운다
+
+컨테이너 프로세스가 끝나면 kubelet은 Pod의 `spec.restartPolicy`를 본다.
+
+- Always(기본값): 어떻게 끝났든 다시 띄운다. Deployment, StatefulSet, DaemonSet은 이 값만 허용한다.
+- OnFailure: 종료 코드가 0이 아닐 때만 다시 띄운다. Job에서 쓴다.
+- Never: 다시 띄우지 않는다. 끝난 상태 그대로 남는다.
+
+재시작은 같은 노드, 같은 Pod 안에서 컨테이너만 새로 만드는 일이다. Pod 이름과 IP, emptyDir 볼륨은 그대로이고 RESTARTS 숫자만 오른다. 컨테이너의 쓰기 가능 레이어는 새로 시작하니, 컨테이너 안의 `/tmp`에 쓴 파일은 사라진다. 반대로 Pod가 새로 만들어진 것(이름 끝이 바뀐 것)은 kubelet이 아니라 ReplicaSet이 한 일이다. 이 둘을 구분해야 "재시작이 몇 번 났다"는 말을 정확하게 할 수 있다.
+
+## CrashLoopBackOff는 기다리는 중이라는 뜻
+
+컨테이너가 뜨자마자 죽는다고 kubelet이 쉬지 않고 다시 띄우면 노드가 재시작만 하다 끝난다. 그래서 kubelet은 재시작 사이에 기다리는 시간을 둔다. 첫 재시작 전에 10초, 그다음부터 두 배씩 늘려 20초, 40초, 80초, 160초, 그리고 300초(5분)에서 멈춘다. 컨테이너가 10분 동안 죽지 않고 돌면 이 대기 시간은 다시 10초로 돌아간다.
+
+CrashLoopBackOff는 이 기다리는 동안의 이름이다. 컨테이너가 지금 죽고 있다는 뜻이 아니라, 이미 죽었고 다음 재시작 시각을 기다리고 있다는 뜻이다. 아래 그림에서 다음을 누르면 대기 시간이 쌓이는 모습이 보인다.
+
+<AlgoTrace
+  caption="죽을 때마다 기다리는 시간이 두 배가 되고, 5분에서 멈춘다"
+  memoryLabel="다음 재시작까지 기다린 시간"
+  cells={["1회", "2회", "3회", "4회", "5회", "6회", "7회"]}
+  steps={[
+    { pointer: 0, memory: ["10s"], caption: "처음 죽었다. 10초 기다렸다가 다시 띄운다. RESTARTS가 1이 된다." },
+    { pointer: 1, memory: ["10s", "20s"], caption: "또 죽었다. 이번엔 20초를 기다린다." },
+    { pointer: 2, memory: ["10s", "20s", "40s"], caption: "40초. 이 사이에 kubectl get을 치면 대부분 CrashLoopBackOff로 보인다." },
+    { pointer: 3, memory: ["20s", "40s", "80s"], caption: "80초. 대기 시간이 길어지니 고친 뒤에도 바로 안 뜨는 것처럼 느껴진다." },
+    { pointer: 4, memory: ["40s", "80s", "160s"], caption: "160초, 그러니까 2분 40초다. 상태 메시지에 back-off 2m40s로 찍힌다." },
+    { pointer: 5, memory: ["80s", "160s", "300s"], caption: "두 배면 320초지만 300초에서 멈춘다." },
+    { pointer: 6, found: [6], memory: ["160s", "300s", "300s"], caption: "이제부터는 5분마다 한 번 시도한다. 10분을 버티고 돌면 다시 10초부터 센다." },
+  ]}
+/>
+
+상태 값을 직접 넣어 재현한 CrashLoopBackOff Pod는 이렇게 보인다. `waiting.message`에 다음까지 기다리는 시간이 그대로 적혀 있다.
+
+```bash
+# 목록에서 상태와 재시작 횟수
+kubectl get pod orders-5d5f9c9577-x2k8p
+
+# kubelet이 남긴 대기 메시지
+kubectl get pod orders-5d5f9c9577-x2k8p -o jsonpath='{.status.containerStatuses[0].state.waiting.message}{"\n"}'
+```
+
+```text
+NAME                      READY   STATUS             RESTARTS      AGE
+orders-5d5f9c9577-x2k8p   0/1     CrashLoopBackOff   5 (47s ago)   4m30s
+back-off 2m40s restarting failed container=app pod=orders-5d5f9c9577-x2k8p_default(8b1345db-e6a3-4290-bdeb-134639e2ac2a)
+```
+
+다섯 번 죽었으니 다음 대기는 10, 20, 40, 80 다음의 160초, 즉 2분 40초다. 아래에서 몇 번째 재시작에 얼마를 기다리는지 직접 계산해 볼 수 있다.
+
+<CodePlayground
+  caption="CrashLoopBackOff 대기 시간 계산"
+  functionName="backoffSchedule"
+  initialCode={`function backoffSchedule(crashes, initial = 10, max = 300) {
+  // crashes번 죽었을 때, 각 재시작 전에 기다린 초를 배열로 돌려준다
+  // 처음은 initial초, 그다음부터 두 배씩, max초를 넘지 않는다
+  return [];
+}`}
+  solution={`function backoffSchedule(crashes, initial = 10, max = 300) {
+  const delays = [];
+  let delay = initial;
+  for (let i = 0; i < crashes; i++) {
+    delays.push(delay);
+    delay = Math.min(delay * 2, max);
+  }
+  return delays;
+}`}
+  tests={[
+    { args: [1], expected: [10], label: "한 번 죽음" },
+    { args: [6], expected: [10, 20, 40, 80, 160, 300], label: "여섯 번째에서 상한" },
+    { args: [8], expected: [10, 20, 40, 80, 160, 300, 300, 300], label: "상한 뒤로는 5분씩" },
+    { args: [0], expected: [], label: "죽지 않음" },
+    { args: [5, 1, 60], expected: [1, 2, 4, 8, 16], label: "1초 시작, 60초 상한" },
+  ]}
+/>
+
+마지막 테스트는 이 값을 바꾸려는 움직임을 반영한 것이다. 1.32와 1.33에서 대기 시간을 노드별로 줄이거나 기본값을 1초 시작, 60초 상한으로 낮추는 기능이 알파로 들어왔다. 기본으로 꺼져 있어서, 지금 대부분의 클러스터는 10초에서 5분이다.
+
+실무에서 이 숫자가 중요한 순간은 고친 뒤다. 설정을 고치고 Secret을 넣었는데 Pod가 5분 가까이 안 뜰 수 있다. 이미 대기 시간이 300초로 늘어나 있어서다. 기다리기 싫으면 `kubectl delete pod`로 Pod를 지워 새로 만들게 하거나 `kubectl rollout restart deployment/orders`로 새 Pod를 받는다. 새 Pod는 대기 시간도 처음부터 센다.
+
+왜 죽었는지는 지금 상태가 아니라 직전 상태에 있다.
+
+```bash
+# 죽기 직전 컨테이너의 로그
+kubectl logs orders-5d5f9c9577-x2k8p --previous
+
+# 직전 종료의 이유와 종료 코드
+kubectl describe pod orders-5d5f9c9577-x2k8p
+```
+
+```text
+Containers:
+  app:
+    Container ID:   containerd://9b1e5f0a7c2d4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f
+    Image:          ghcr.io/example/orders:2.3.1
+    Image ID:       ghcr.io/example/orders@sha256:4f9d0c7b2e8a91c35d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4
+    Port:           <none>
+    Host Port:      <none>
+    State:          Waiting
+      Reason:       CrashLoopBackOff
+    Last State:     Terminated
+      Reason:       Error
+      Exit Code:    1
+      Started:      Sun, 18 Oct 2026 19:34:22 +0000
+      Finished:     Sun, 18 Oct 2026 19:34:27 +0000
+    Ready:          False
+    Restart Count:  5
+```
+
+실제 노드라면 describe 맨 아래 Events에 kubelet이 남긴 줄이 붙는다. 형식은 이렇다(예시).
+
+```text
+Events:
+  Type     Reason   Age                  From     Message
+  ----     ------   ----                 ----     -------
+  Normal   Pulled   3m2s (x5 over 4m28s) kubelet  Container image "ghcr.io/example/orders:2.3.1" already present on machine
+  Warning  BackOff  12s (x19 over 4m1s)  kubelet  Back-off restarting failed container app in pod orders-5d5f9c9577-x2k8p_default(8b1345db-e6a3-4290-bdeb-134639e2ac2a)
+```
+
+`Last State`의 Reason과 Exit Code가 답의 절반이다. Error에 1이면 앱이 스스로 에러로 끝났으니 `--previous` 로그를 본다. OOMKilled에 137이면 메모리 한도에 걸렸으니 [requests와 limits](/posts/k8s-pod-resources)를 본다. 종료 코드 읽는 법은 아래에서 다시 정리한다.
+
+## Pod가 끝나는 순서
+
+이제 반대쪽 끝이다. 배포를 하면 옛 Pod는 지워진다. `kubectl delete pod`를 쳐도, 노드를 비워도, 스케일을 줄여도 Pod가 끝나는 순서는 같다. 그 순서를 알아야 배포할 때 502가 튀는 이유를 설명할 수 있다.
+
+<SequenceDiagram
+  caption="Pod 삭제부터 프로세스가 끝나기까지 (기본 유예 30초)"
+  actors={[
+    { id: "api", label: "API 서버" },
+    { id: "eps", label: "엔드포인트" },
+    { id: "proxy", label: "kube-proxy" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "app", label: "앱" },
+  ]}
+  steps={[
+    {
+      from: "api",
+      to: "api",
+      label: "deletionTimestamp",
+      title: "삭제 표시를 찍는다",
+      detail: "Pod는 바로 사라지지 않는다. API 서버가 deletionTimestamp와 유예 시간을 적어 두고, kubectl은 이걸 보고 Terminating이라고 보여 준다.",
+      payload: "metadata:\n  deletionTimestamp: \"2026-10-18T19:28:13Z\"\n  deletionGracePeriodSeconds: 45",
+    },
+    {
+      from: "api",
+      to: "eps",
+      label: "watch",
+      title: "엔드포인트에서 빼기 시작한다",
+      detail: "EndpointSlice 컨트롤러가 이 Pod를 terminating으로, ready를 false로 바꾼다. 아래 kubelet 쪽 일과 동시에 일어난다.",
+    },
+    {
+      from: "eps",
+      to: "proxy",
+      label: "규칙 갱신",
+      title: "트래픽 규칙이 따라 바뀐다",
+      detail: "각 노드의 kube-proxy와 Ingress 컨트롤러가 바뀐 EndpointSlice를 받아 이 Pod를 목록에서 뺀다. 노드가 많으면 수백 ms에서 몇 초가 걸린다.",
+    },
+    {
+      from: "api",
+      to: "kubelet",
+      label: "watch",
+      title: "kubelet도 같은 시각에 안다",
+      detail: "kubelet은 엔드포인트가 다 빠졌는지 기다려 주지 않는다. 자기 일을 바로 시작한다.",
+    },
+    {
+      from: "kubelet",
+      to: "app",
+      label: "preStop",
+      title: "preStop 훅을 먼저 실행한다",
+      detail: "훅이 있으면 끝날 때까지 기다린다. 이 시간도 유예 시간 안에서 쓴다. sleep 5를 두면 그동안 엔드포인트가 빠질 시간을 번다.",
+    },
+    {
+      from: "kubelet",
+      to: "app",
+      label: "SIGTERM",
+      title: "PID 1에 SIGTERM을 보낸다",
+      detail: "훅이 끝나면 컨테이너의 PID 1에 SIGTERM이 간다. 앱은 새 연결을 그만 받고 처리 중인 요청을 마무리해야 한다.",
+    },
+    {
+      from: "app",
+      to: "app",
+      label: "정리 후 exit",
+      title: "앱이 스스로 끝난다",
+      detail: "연결을 닫고, 큐를 비우고, 종료 코드 0으로 끝나면 가장 좋은 경우다.",
+    },
+    {
+      from: "kubelet",
+      to: "app",
+      label: "SIGKILL",
+      title: "유예 시간이 지나면 강제로 끝낸다",
+      detail: "삭제 시각부터 유예 시간이 다 가도 살아 있으면 SIGKILL을 보낸다. preStop이 아직 안 끝났다면 2초를 한 번 더 주고 끊는다. 이때 종료 코드는 137이다.",
+    },
+    {
+      from: "kubelet",
+      to: "api",
+      label: "삭제 확정",
+      title: "Pod 객체가 사라진다",
+      detail: "컨테이너가 모두 멈추면 kubelet이 API 서버에 알리고, 그제야 Pod 객체가 지워진다. kubectl delete가 돌아오는 것도 이때다.",
+    },
+  ]}
+/>
+
+실습 클러스터에서 `terminationGracePeriodSeconds: 45`인 Pod를 지우고, 끝나기 전에 상태를 들여다봤다.
+
+```bash
+# 지우라고만 하고 기다리지 않는다
+kubectl delete pod orders-5d5f9c9577-gnwz5 --wait=false
+
+# 삭제 표시와 유예 시간
+kubectl get pod orders-5d5f9c9577-gnwz5 -o jsonpath='{.metadata.deletionTimestamp}  {.metadata.deletionGracePeriodSeconds}{"\n"}'
+
+# Service의 엔드포인트 목록에서 이 Pod가 어떻게 보이는지
+kubectl get endpointslice -l kubernetes.io/service-name=orders \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}ready={.conditions.ready}{"\t"}terminating={.conditions.terminating}{"\n"}{end}'
+```
+
+```text
+pod "orders-5d5f9c9577-gnwz5" deleted
+2026-10-18T19:28:13Z  45
+10.0.0.6	ready=false	terminating=true
+10.0.0.7	ready=true	terminating=false
+10.0.0.8	ready=true	terminating=false
+```
+
+`deleted`가 찍혔는데 Pod는 아직 있다. 삭제를 요청한 시각은 19:27:28쯤이었고, deletionTimestamp는 거기에 45초를 더한 시각이다. "이때까지는 끝나야 한다"는 마감 시각인 셈이다. EndpointSlice에서는 지우는 Pod(`10.0.0.6`)가 `ready=false`, `terminating=true`로 바뀌었다. kube-proxy는 ready인 주소로만 새 연결을 보낸다.
+
+하나 함정이 있다. 같은 시점에 `kubectl get endpointslice`를 그냥 치면 ENDPOINTS 칸에 `10.0.0.6,10.0.0.7,10.0.0.8`이 다 보인다. 이 칸은 ready 여부를 구분하지 않고 주소를 모두 찍는다. "엔드포인트에서 안 빠졌다"고 판단하기 전에 conditions를 봐야 한다.
+
+## preStop에 sleep을 두는 이유
+
+위 그림의 두 갈래는 동시에 출발한다. 엔드포인트 쪽은 컨트롤러가 EndpointSlice를 고치고, 그걸 모든 노드의 kube-proxy와 Ingress 컨트롤러가 받아 규칙을 바꾸는 데 시간이 걸린다. kubelet 쪽은 preStop이 없으면 바로 SIGTERM을 보낸다. 앱이 SIGTERM을 받고 성실하게 리스닝 소켓을 닫으면, 아직 이 Pod를 목록에 들고 있는 노드에서 오는 새 연결은 갈 곳이 없다.
+
+앱 하나로 이 상황을 재현했다. SIGTERM을 받으면 새 연결을 그만 받고, 처리 중인 3초짜리 요청은 끝까지 마치는 Node 서버다.
+
+```js
+// app.js
+const http = require("node:http");
+
+const t0 = Date.now();
+const log = (msg) => console.log(`[+${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
+
+const server = http.createServer((req, res) => {
+  log(`요청 시작 ${req.url}`);
+  setTimeout(() => {
+    res.end("ok\n");
+    log(`요청 끝 ${req.url}`);
+  }, 3000);
+});
+server.listen(8080, () => log(`listening pid=${process.pid}`));
+
+process.on("SIGTERM", () => {
+  log("SIGTERM 받음, 새 연결은 그만 받는다");
+  server.close(() => {
+    log("처리 중이던 요청까지 끝났다, exit 0");
+    process.exit(0);
+  });
+});
+```
+
+```bash
+node app.js & APP=$!                      # 앱을 띄운다
+sleep 0.5; curl -s localhost:8080/orders & # 3초 걸리는 요청을 하나 보낸다
+sleep 0.5; kill -TERM $APP                 # 처리 중에 SIGTERM
+sleep 0.3; curl -s -m 2 localhost:8080/new; echo "new request curl exit=$?"
+wait $APP; echo "app exit=$?"
+```
+
+```text
+[+0.0s] listening pid=13914
+[+0.5s] 요청 시작 /orders
+[+1.0s] SIGTERM 받음, 새 연결은 그만 받는다
+new request curl exit=7
+[+3.5s] 요청 끝 /orders
+ok
+[+3.5s] 처리 중이던 요청까지 끝났다, exit 0
+app exit=0
+```
+
+앱은 모범적으로 끝났다. 처리 중이던 `/orders`는 `ok`를 받았고 종료 코드도 0이다. 그런데 SIGTERM 직후에 온 `/new`는 curl 종료 코드 7, 연결 거부로 실패했다. 쿠버네티스에서 이 새 요청은 아직 규칙을 못 바꾼 노드를 거쳐 들어온 요청이다. Ingress 뒤라면 사용자는 502를 본다.
+
+그래서 preStop에서 몇 초 기다린다. 기다리는 동안 앱은 여전히 새 연결을 받고, 그 사이 엔드포인트가 모든 곳에서 빠진다. 그다음 SIGTERM이 오면 더 이상 새 요청이 오지 않는다.
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 45 # preStop 5초 + 앱 정리 시간이 들어가야 한다
+  containers:
+    - name: app
+      image: ghcr.io/example/orders:2.3.0
+      lifecycle:
+        preStop:
+          sleep:
+            seconds: 5 # 1.30부터 기본으로 켜진 베타. 그 전에는 exec로 sleep을 부른다
+```
+
+예전 버전이나 sleep 액션을 못 쓰는 환경에서는 `exec: { command: ["sleep", "5"] }`로 쓴다. 이 방식은 이미지 안에 `sleep` 바이너리가 있어야 해서 distroless 이미지에서는 실패한다. 값을 정할 때 흔한 실수는 유예 시간을 그대로 30초에 두고 preStop을 길게 잡는 것이다. 유예 시간은 preStop과 SIGTERM 뒤 정리 시간을 합친 전체 마감이라, preStop에 25초를 쓰면 앱이 정리할 시간은 5초밖에 남지 않는다. 앱이 오래 걸리는 작업(긴 업로드, 배치 처리)을 끝내야 한다면 앱의 최대 처리 시간 + preStop보다 넉넉하게 `terminationGracePeriodSeconds`를 늘린다. TCP 수준에서 연결이 어떻게 정리되는지는 [TCP 연결의 일생](/posts/tcp-connection-lifecycle)에 있다.
+
+<Callout kind="warning" title="--force --grace-period=0은 기다림을 건너뛰는 게 아니다">
+  Terminating에서 안 넘어가는 Pod를 `kubectl delete pod 이름 --grace-period=0 --force`로 지우면 API 서버의 객체만 바로 사라진다. 출력에도 `Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. The resource may continue to run on the cluster indefinitely.`라고 나온다. 노드가 살아 있다면 컨테이너는 계속 돌 수 있고, StatefulSet이라면 같은 이름의 새 Pod가 떠서 한 디스크에 두 프로세스가 쓰는 일이 생긴다. 되돌릴 방법이 없으니 먼저 `kubectl describe`로 노드 상태와 finalizer를 확인하고, 노드가 정말 죽었을 때만 쓴다. 정말 죽은 노드라면 노드 객체를 지우는 쪽이 더 정확하다.
+</Callout>
+
+## PID 1은 SIGTERM을 그냥 넘긴다
+
+SIGTERM 처리를 넣었는데도 Pod가 항상 30초를 꽉 채우고 SIGKILL로 끝난다면 신호가 앱에 닿지 않는 것이다. 컨테이너 안에서 앱은 PID 1인데, 리눅스 커널은 PID 1을 특별하게 다룬다. 다른 프로세스는 SIGTERM에 핸들러가 없으면 기본 동작으로 죽지만, PID namespace의 PID 1은 핸들러를 직접 등록하지 않은 신호를 무시한다. SIGKILL만은 예외다.
+
+Docker 없이 `unshare`로 새 PID namespace를 만들어 확인했다. 아무 신호 처리도 하지 않는 Node 프로그램을 PID 1로 띄운다.
+
+```bash
+# 1초마다 아무것도 안 하는 프로그램
+echo 'setInterval(() => {}, 1000);' > idle.js
+
+# 새 PID namespace에서 PID 1로 띄운다 (root 필요)
+sudo unshare --pid --fork --mount-proc node idle.js &
+sleep 1
+NP=$(pgrep -P $!)               # 호스트에서 본 node의 PID
+sudo kill -TERM $NP; sleep 2     # SIGTERM을 보내고 2초 기다린다
+ps -o pid=,stat=,cmd= -p $NP && echo "SIGTERM 2초 뒤에도 살아 있다"
+sudo kill -KILL $NP              # SIGKILL은 막을 수 없다
+
+# 같은 프로그램을 namespace 밖에서 띄우고 SIGTERM
+node idle.js & P=$!; sleep 1; kill -TERM $P; wait $P; echo "exit=$?"
+```
+
+```text
+10762 Sl   node idle.js
+SIGTERM 2초 뒤에도 살아 있다
+exit=143
+```
+
+같은 프로그램이 PID 1일 때는 SIGTERM을 무시했고, 보통 프로세스일 때는 바로 죽었다(143). 쿠버네티스에서 앞의 경우는 유예 시간을 다 기다린 뒤 SIGKILL로 끝난다. 배포가 느려지고, 앱은 정리할 기회를 못 얻는다.
+
+고치는 방법은 세 가지다. 앱이 SIGTERM 핸들러를 직접 등록하면 PID 1이어도 신호를 받는다. 위의 app.js가 그랬다. 셸 스크립트로 앱을 띄운다면 마지막 줄을 `exec node app.js`로 써서 셸이 앱으로 바뀌게 한다. 그렇지 않으면 셸이 PID 1로 남아 신호를 받고, 자식인 앱에게 전달하지 않는다. Dockerfile에서 `CMD node app.js`처럼 셸 형식으로 쓰면 `/bin/sh -c`가 앞에 붙어 같은 문제가 생길 수 있다(셸에 따라 명령이 하나뿐이면 exec로 바꿔 주기도 해서, 믿지 말고 exec 형식으로 쓴다). 마지막으로 tini나 dumb-init 같은 작은 init을 PID 1로 두면 신호를 자식에게 전달하고 좀비 프로세스도 거둔다. Dockerfile 쪽 이야기는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)의 ENTRYPOINT 부분에 있다.
+
+## 종료 코드로 읽는 마지막 순간
+
+컨테이너가 끝나면 종료 코드가 lastState에 남는다. 128보다 크면 신호로 죽었다는 뜻이고, 128을 뺀 값이 신호 번호다.
+
+```bash
+sleep 100 & P=$!; kill -TERM $P; wait $P; echo "TERM exit=$?"   # SIGTERM은 15번
+sleep 100 & P=$!; kill -KILL $P; wait $P; echo "KILL exit=$?"   # SIGKILL은 9번
+```
+
+```text
+TERM exit=143
+KILL exit=137
+```
+
+- 0: 정상 종료. restartPolicy가 Always라면 정상 종료도 재시작 대상이라, 할 일을 마치고 끝나는 프로그램을 Deployment로 띄우면 Completed와 CrashLoopBackOff를 오간다. 이런 건 Job으로 띄운다.
+- 1이나 2 같은 작은 숫자: 앱이 스스로 에러로 끝났다. 설정 누락, 연결 실패, 처리 안 된 예외다. `--previous` 로그에 답이 있다.
+- 137 (128 + 9): SIGKILL로 죽었다. reason이 OOMKilled면 메모리 한도를 넘어 커널이 죽였고, Error면 유예 시간 안에 안 끝나 kubelet이 죽였거나 누군가 강제로 죽였다.
+- 143 (128 + 15): SIGTERM을 받고 기본 동작으로 죽었다. 종료 과정에서 나오면 정상에 가깝지만, 정리 없이 바로 죽었다는 뜻이기도 하다.
+- 139 (128 + 11): SIGSEGV, 잘못된 메모리 접근이다. 네이티브 모듈이나 이미지의 라이브러리 버전 불일치를 의심한다.
+
+같은 137이라도 reason에 따라 처방이 정반대다. OOMKilled에 메모리 한도를 늘리는 대신 유예 시간을 늘리면 아무것도 나아지지 않는다. 그래서 종료 코드는 항상 reason과 함께 읽는다.
+
+## Pod의 일생을 다시 보면
+
+Pod의 phase는 다섯 개뿐이고, STATUS 칸의 다양한 말은 대부분 컨테이너 상태의 reason이다. Pod는 조건을 하나씩 통과해 Ready가 되어야 트래픽을 받는다. 컨테이너가 죽으면 kubelet이 같은 Pod 안에서 다시 띄우는데, 10초에서 5분까지 두 배씩 늘어나는 대기가 CrashLoopBackOff다. 지울 때는 엔드포인트 정리와 preStop·SIGTERM이 동시에 출발하니, preStop의 짧은 sleep과 PID 1의 신호 처리로 새 요청이 끊기지 않게 한다. 다음 글은 Ready를 정하는 [프로브](/posts/k8s-pod-probes)다.
+
+## 면접에서 나올 만한 질문
+
+### Pod의 phase에는 어떤 것이 있고, CrashLoopBackOff는 그중 무엇인가요?
+
+phase는 Pending, Running, Succeeded, Failed, Unknown 다섯 가지다. CrashLoopBackOff는 phase가 아니라 컨테이너의 waiting reason이고, 이때 Pod의 phase는 보통 Running이다. kubectl get의 STATUS 칸은 phase와 컨테이너 reason, 삭제 표시를 섞어 가장 구체적인 말을 보여 준다.
+
+### CrashLoopBackOff 상태에서 재시작 간격은 어떻게 되나요?
+
+kubelet은 첫 재시작 전에 10초를 기다리고 그 뒤로 두 배씩 늘려 5분에서 멈춘다. 컨테이너가 10분 동안 문제없이 돌면 다시 10초로 돌아간다. 그래서 원인을 고친 뒤에도 몇 분 동안 안 뜰 수 있고, 급하면 Pod를 지우거나 rollout restart로 새 Pod를 받는다.
+
+### 컨테이너 재시작과 Pod 재생성은 어떻게 다른가요?
+
+재시작은 kubelet이 restartPolicy에 따라 같은 노드, 같은 Pod 안에서 컨테이너만 새로 띄우는 것이라 Pod 이름, IP, emptyDir이 유지되고 RESTARTS가 오른다. 재생성은 ReplicaSet 같은 컨트롤러가 새 Pod 객체를 만드는 것이라 이름과 IP가 바뀌고 다른 노드에 갈 수 있다. 컨테이너의 쓰기 가능 레이어는 재시작 때도 새로 시작한다.
+
+### Pod를 삭제하면 어떤 순서로 종료되나요?
+
+API 서버가 deletionTimestamp와 유예 시간을 적으면, EndpointSlice 컨트롤러가 Pod를 엔드포인트에서 빼는 일과 kubelet이 preStop을 실행하는 일이 동시에 시작된다. preStop이 끝나면 PID 1에 SIGTERM을 보내고, 유예 시간(기본 30초)이 다 지나도 살아 있으면 SIGKILL을 보낸다. 컨테이너가 모두 멈춰야 Pod 객체가 지워진다.
+
+### 배포할 때마다 502가 몇 개씩 납니다. 왜 그렇고 어떻게 막나요?
+
+엔드포인트 제거가 모든 노드와 Ingress에 퍼지기 전에 앱이 SIGTERM을 받고 리스닝을 멈추면, 그 사이 들어온 새 연결이 거부되기 때문이다. preStop에 5초 정도 sleep을 두어 엔드포인트가 빠질 시간을 벌고, 앱은 SIGTERM을 받으면 새 연결을 그만 받고 처리 중인 요청을 마치게 한다. terminationGracePeriodSeconds는 preStop과 정리 시간을 합친 것보다 넉넉하게 둔다.
+
+### 앱에 SIGTERM 핸들러를 넣었는데도 항상 30초 뒤에 강제 종료됩니다. 무엇을 의심하나요?
+
+신호가 앱에 닿지 않는 경우다. 셸 형식의 CMD나 exec 없는 엔트리포인트 스크립트를 쓰면 셸이 PID 1이 되어 SIGTERM을 받고 자식에게 전달하지 않는다. PID 1은 핸들러를 등록하지 않은 신호를 무시하기 때문에 셸도 죽지 않는다. exec 형식으로 바꾸거나 스크립트 끝에 exec를 쓰거나, tini 같은 init을 PID 1로 둔다.
+
+### 종료 코드 137과 143은 무엇을 뜻하나요?
+
+128에 신호 번호를 더한 값이라 137은 SIGKILL(9), 143은 SIGTERM(15)으로 죽었다는 뜻이다. 137은 reason을 함께 봐야 하는데, OOMKilled면 메모리 한도 초과이고 Error면 유예 시간 초과나 강제 종료다. 143은 SIGTERM을 받고 따로 정리하지 않은 채 기본 동작으로 끝난 경우다.
