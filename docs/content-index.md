@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 97편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 102편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -195,11 +195,11 @@
 - 요약: 읽기가 몰리면 복제본으로, 테이블이 너무 커지면 파티션으로, 쓰기와 데이터가 한 대를 넘으면 샤드로 나눈다. PostgreSQL 16에서 복제 지연, 파티션 가지치기, 일관된 해싱을 직접 돌려 보며 각 단계가 푸는 문제와 새로 생기는 문제를 정리한다.
 - 태그: Database, PostgreSQL, Distributed Systems, Scalability, System Design
 - 키워드: 읽기 복제본, 스트리밍 복제, 파티셔닝, 일관된 해싱, 복제 지연
-- 길이: 1161줄 (긴 글)
-- 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 주문 테이블을 달마다 나눈다 / 조건에 맞는 파티션만 읽는다 / 오래된 달은 통째로 떼어 낸다 / 목록과 해시로도 나눈다 / 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 언제 다음 단계로 넘어가나 / 나누는 순서 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index, sql-query-tuning, caching-strategies, microservices, mongodb-document-model, db-architecture-by-scale
-- 키워드 백링크 →: db-consistency-cap, redis-persistence-ha, db-type-newsql, db-type-wide-column, db-type-key-value, redis-basics, postgres-architecture, dns
-- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
+- 길이: 554줄
+- 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 언제 다음 단계로 넘어가나 / 복제는 읽기를 나누고, 늦을 수 있다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, sql-query-tuning, caching-strategies
+- 키워드 백링크 →: db-consistency-cap, db-architecture-by-scale, db-type-key-value, postgres-architecture, dns
+- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-consistency-cap, db-modeling-normalization, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
 
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
 
@@ -220,7 +220,7 @@
 - 길이: 409줄
 - 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: db-type-relational, db-index, db-replication-sharding, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-types-overview, elasticsearch-inverted-index
 
 #### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
 
@@ -298,7 +298,7 @@
 - 소제목: SQL은 그대로, 저장은 여러 대에 / 행 하나가 키 하나가 된다 / 구간이 커지면 둘로 쪼갠다 / 구간마다 Raft로 과반에 적는다 / 구간 두 개에 걸친 트랜잭션 / 시계가 다르면 순서도 다르다 / 충돌하면 다시 하라고 돌려보낸다 / 멀리 있는 사용자의 데이터는 가까이 둔다 / 호환된다는 말의 범위 / 분산 SQL을 고르기 전에 / 샤딩을 DB 안으로 옮긴 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-types-overview, db-transaction-isolation, db-consistency-cap, db-type-columnar-olap, db-type-key-value, db-type-wide-column
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: db-consistency-cap, db-replication-sharding, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview
+- 이 글로 오는 글 ←: db-consistency-cap, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview
 
 #### `db-type-relational` — 관계형 DB: 왜 여전히 기본값인가
 
@@ -331,7 +331,7 @@
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: db-type-relational, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -397,7 +397,7 @@
 - 길이: 933줄 (긴 글)
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
-- 키워드 백링크 →: postgres-operations, db-type-relational
+- 키워드 백링크 →: postgres-operations, db-type-relational, layer-ip-addressing
 - 이 글로 오는 글 ←: db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-query-tuning, sqld-single-row-functions
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
@@ -429,7 +429,7 @@
 - 소제목: 설정은 어디에 쓰고 언제 적용되나 / 메모리 설정 정하기 / work_mem은 곱하기로 계산한다 / SSD라면 random_page_cost를 낮춘다 / max_connections를 올리는 대신 연결 풀 / 매일 보는 숫자들 / 느린 쿼리를 로그로 잡기 / 논리 백업과 복원 / 물리 백업과 WAL 보관 / WHERE 없는 DELETE 3초 전으로 / 백업은 복원해 봐야 백업이다 / 백업 도구와 PostgreSQL 17의 증분 백업 / 메이저 버전 올리기 / 마이너 업데이트 / 관리형 서비스를 쓴다면 / 운영에 올리기 전 점검 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-architecture, postgres-mvcc-vacuum, sql-query-tuning, db-transaction-isolation, db-replication-sharding
 - 키워드 백링크 →: db-architecture-by-scale, db-type-relational, postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-getting-started, postgres-mvcc-vacuum, sql-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-getting-started, postgres-mvcc-vacuum
 
 #### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
 
@@ -439,7 +439,7 @@
 - 길이: 809줄
 - 소제목: 역할 하나가 사용자이자 그룹이다 / 쿼리 하나가 지나는 검사들 / 주인, 마이그레이션, 앱, 분석 역할로 나누기 / 비밀번호는 SCRAM으로 저장한다 / pg_hba.conf와 TLS로 들어오는 길 좁히기 / 서점마다 자기 주문만 보게 하기 / 누가 언제 들어왔는지 남기기 / SQL 인젝션은 권한보다 앞에서 막는다 / pg_hba 줄 고르기를 직접 구현해 보기 / 앱 계정이 할 수 있는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, postgres-functions-triggers
-- 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-basics, db-index, dns
+- 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-basics, db-index, layer-ip-addressing, dns
 - 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started
 
 ### Programming › Database › Redis (`programming/database/redis`)
@@ -453,7 +453,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: db-type-relational, event-loop, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -463,7 +463,7 @@
 - 길이: 752줄
 - 소제목: 키 하나가 실제로 차지하는 크기 / 작은 컬렉션은 압축된 모양으로 산다 / INFO memory를 한 줄씩 읽기 / 어떤 키가 메모리를 먹고 있나 / maxmemory를 정하지 않으면 생기는 일 / 가득 찼을 때 지울 키를 고르는 정책 / LRU를 정확하게 하지 않는 이유 / LFU 카운터는 로그로 오르고 시간이 지나면 내려간다 / 만료된 키가 바로 사라지지 않는 이유 / 단편화와 activedefrag / 리눅스 쪽에서 챙길 설정 / 서버 메모리의 몇 퍼센트를 maxmemory로 줄까 / 가득 차기 전에 정해 둘 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, caching-strategies, redis-persistence-ha
-- 키워드 백링크 →: dns
+- 키워드 백링크 →: layer-mtu-fragmentation, dns
 - 이 글로 오는 글 ←: caching-strategies, db-type-key-value, js-memory-leak, redis-basics, redis-persistence-ha
 
 #### `redis-persistence-ha` — Redis 영속성과 고가용성: RDB, AOF, 복제, Sentinel, Cluster
@@ -475,7 +475,7 @@
 - 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, redis-memory-eviction
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-replication-sharding, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
 
 ### Programming › Database › SQL (`programming/database/sql`)
 
@@ -484,10 +484,10 @@
 - 요약: 주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾고, 복합·커버링·부분·식 인덱스를 언제 쓰며, 인덱스가 왜 안 타고 무엇을 대가로 내는지 정리한다.
 - 태그: Database, SQL, PostgreSQL, Index, Performance
 - 키워드: 복합 인덱스, 커버링 인덱스, 부분 인덱스, Index Only Scan
-- 길이: 1246줄 (긴 글)
-- 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / B-tree가 아닌 인덱스들 / MySQL 8은 표 자체가 인덱스다 / 찾아보기를 만들기 전에 / 면접에서 나올 만한 질문
+- 길이: 615줄
+- 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning
-- 키워드 백링크 →: postgres-mvcc-vacuum, db-replication-sharding, db-transaction-isolation, sql-basics
+- 키워드 백링크 →: postgres-mvcc-vacuum, db-transaction-isolation, sql-basics
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, db-type-relational, db-type-time-series, mongodb-document-model, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
 
 #### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
@@ -510,17 +510,17 @@
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD 시험 포인트 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices
 - 키워드 백링크 →: postgres-mvcc-vacuum, postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics, sql-basics, sql-query-tuning
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics, sql-query-tuning
 
 #### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
 
 - 요약: 빈 DB에서 테이블 세 개를 만들고 행을 넣고 읽고 고치고 지워 본다. DDL·DML·DCL·TCL, 제약 조건, NULL과 3값 논리, DELETE·TRUNCATE·DROP의 차이, Oracle·SQL Server와 다른 점까지 실제 출력으로 확인한다.
 - 태그: Database, SQL, PostgreSQL
 - 키워드: DDL, TRUNCATE, 3값 논리, UPSERT
-- 길이: 1354줄 (긴 글)
-- 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / Oracle과 SQL Server에서는 이렇게 다르다 / 다음은 빈 칸을 채울 차례 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index, sql-query-tuning, db-transaction-isolation, sqld-data-modeling
-- 키워드 백링크 →: sqld-group-by-having, postgres-operations, postgres-getting-started
+- 길이: 665줄
+- 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / 현장에서 테이블 정의를 다시 꺼내 보는 순간 / 테이블 모양이 곧 규칙이다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, sqld-data-modeling
+- 키워드 백링크 →: postgres-getting-started
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, db-type-embedded, db-type-relational, postgres-advanced-sql, postgres-data-types, postgres-getting-started, postgres-operations, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
 
 #### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
@@ -532,7 +532,7 @@
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 느린 쿼리를 고치는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-architecture-by-scale, rest-api-design, postgres-architecture, postgres-getting-started, db-transaction-isolation
-- 이 글로 오는 글 ←: db-index, db-replication-sharding, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, rest-api-design, sql-basics, sqld-joins
+- 이 글로 오는 글 ←: db-index, db-replication-sharding, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, rest-api-design, sqld-joins
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
 
@@ -566,7 +566,7 @@
 - 길이: 746줄
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
-- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-basics, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -698,7 +698,7 @@
 - 키워드: 메모리 누수, 힙 스냅샷, 가비지 컬렉션, WeakMap, detached DOM
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, dns
+- 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, layer-mtu-fragmentation, dns
 - 이 글로 오는 글 ←: client-data-cache, microservices
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
@@ -782,7 +782,7 @@
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
 - 키워드 백링크 →: http-versions
-- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, local-custom-domain, nginx-https-performance, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, local-custom-domain, network-layers-overview, nginx-https-performance, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, what-happens-google-com
 
 #### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
 
@@ -814,8 +814,8 @@
 - 길이: 649줄
 - 소제목: 프록시는 누구를 대신하나 / 프록시에게 보내는 HTTP 요청은 모양이 다르다 / HTTPS는 CONNECT로 터널을 판다 / 회사 프록시가 TLS를 열어 볼 때 / 설정 없이 지나가는 프록시와 PAC 파일 / HTTP를 모르는 프록시, SOCKS5 / Ubuntu에서 프록시 쓰게 하기 / 서버 앞을 지키는 리버스 프록시 / 앱에는 로드 밸런서 주소만 보인다 / X-Forwarded-For 한 줄 뜯어보기 / 진짜 클라이언트 IP 고르기 / 표준 헤더 Forwarded / 헤더를 못 붙이는 L4 로드 밸런서와 PROXY protocol / CDN에서 앱까지, 헤더가 붙는 자리 / 리버스 프록시, 로드 밸런서, API 게이트웨이 / 다시 두 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: https-tls, nginx-reverse-proxy, http-caching-cdn, local-custom-domain, gateway
-- 키워드 백링크 →: docker-container-basics, iptables-basics, http-versions, http-status-codes, what-happens-google-com, dns
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, local-custom-domain, nginx-basics, nginx-reverse-proxy, realtime-communication
+- 키워드 백링크 →: docker-container-basics, iptables-basics, http-versions, layer-ip-addressing, http-status-codes, what-happens-google-com, dns
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, gateway, hosts-file, http-status-codes, iptables-nat, kubernetes-ingress, layer-ip-addressing, local-custom-domain, network-layers-overview, nginx-basics, nginx-reverse-proxy, realtime-communication
 
 #### `realtime-communication` — 서버가 먼저 말하게 하기: 폴링, 롱 폴링, SSE, WebSocket
 
@@ -836,7 +836,7 @@
 - 길이: 348줄
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 정리 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, http-versions
-- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, kubernetes-ingress, local-custom-domain, nginx-basics, nginx-https-performance, nginx-reverse-proxy, proxy-reverse-proxy
+- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, kubernetes-ingress, layer-link-ethernet-arp, local-custom-domain, network-layers-overview, nginx-basics, nginx-https-performance, nginx-reverse-proxy, proxy-reverse-proxy
 
 ### Programming › Network › HTTP (`programming/network/http`)
 
@@ -871,7 +871,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, http-versions, what-happens-google-com, dns
-- 이 글로 오는 글 ←: browser-fetch, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, mvc-pattern, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
+- 이 글로 오는 글 ←: browser-fetch, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -882,7 +882,7 @@
 - 소제목: 요청마다 연결을 새로 맺던 HTTP/1.0 / 연결을 재사용하는 HTTP/1.1 / 텍스트를 프레임으로 쪼갠 HTTP/2 / TCP 아래에서 다시 막히는 줄 / UDP 위에 새로 만든 QUIC / 브라우저는 HTTP/3를 어떻게 알아내나 / 개발자가 바꿀 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, http-message, http-status-codes, code-splitting
 - 키워드 백링크 →: https-tls, http-methods, dns
-- 이 글로 오는 글 ←: base64, code-splitting, dns, hosts-file, html-form-http, http-caching-cdn, http-message, http-status-codes, https-tls, iptables-nat, local-custom-domain, microservices, nginx-https-performance, proxy-reverse-proxy, realtime-communication, rest-api-design, what-happens-google-com
+- 이 글로 오는 글 ←: base64, code-splitting, dns, hosts-file, html-form-http, http-caching-cdn, http-message, http-status-codes, https-tls, iptables-nat, layer-mtu-fragmentation, local-custom-domain, microservices, network-layers-overview, nginx-https-performance, proxy-reverse-proxy, realtime-communication, rest-api-design, what-happens-google-com
 
 #### `json-crud-http` — JSON으로 데이터 주고받기: 조회·생성·수정·삭제 끝까지
 
@@ -895,6 +895,63 @@
 - 키워드 백링크 →: cors, client-data-cache, resilience-patterns, http-caching-cdn
 - 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets
 
+### Programming › Network › OSI · TCP/IP (`programming/network/layers`)
+
+#### `layer-ip-addressing` — IP 주소와 서브넷: CIDR, 사설 대역, 게이트웨이
+
+- 요약: IP 주소를 비트로 쪼개 서브넷 마스크와 CIDR을 읽고, 같은 망인지 게이트웨이로 보낼지 정하는 계산을 해 본다. 사설·특수 대역, 서브네팅, Docker·쿠버네티스·VPC 대역이 겹칠 때 생기는 일과 IPv6 주소까지 다룬다.
+- 태그: Network, TCP/IP, Docker, Kubernetes
+- 키워드: CIDR, 서브넷 마스크, 사설 대역, RFC 1918
+- 길이: 387줄
+- 소제목: 주소 하나에 망 번호와 기기 번호가 들어 있다 / 서브넷 마스크를 비트로 보기 / 망 하나에 몇 대를 붙일 수 있나 / 같은 망이면 직접, 아니면 게이트웨이로 / 사설 대역과 특수한 주소들 / 큰 대역을 작게 나누기 / 대역이 겹치면 길이 사라진다 / IPv6 주소 읽기 / 현장에서 주소와 마주치는 순간 / 동네와 번지 / 면접에서 나올 만한 질문
+- 직접 링크 →: network-layers-overview, layer-link-ethernet-arp, layer-ip-routing-icmp, iptables-nat, proxy-reverse-proxy
+- 키워드 백링크 →: docker-container-basics, dns
+- 이 글로 오는 글 ←: layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, postgres-getting-started, postgres-roles-security, proxy-reverse-proxy
+
+#### `layer-ip-routing-icmp` — 라우팅과 ICMP: 패킷이 길을 찾는 법
+
+- 요약: 라우팅 테이블을 읽고 가장 긴 프리픽스가 이기는 규칙을 직접 계산해 본다. TTL과 ICMP, traceroute와 ping이 실제로 재는 것, 별표를 읽는 법, 비대칭 경로와 ip_forward 같은 현장의 함정까지 다룬다.
+- 태그: Network, TCP/IP, Linux, Troubleshooting
+- 키워드: 라우팅 테이블, 최장 접두사 일치, traceroute, ICMP
+- 길이: 623줄
+- 소제목: 실습 망 만들기 / 라우터는 다음 한 칸만 안다 / 가장 길게 맞는 경로가 이긴다 / 패킷 하나가 두 라우터를 건너는 길 / 라우터를 켜는 스위치, ip_forward / TTL은 길을 잃은 패킷을 끝낸다 / ICMP: IP가 보내는 오류 보고서 / traceroute는 TTL을 하나씩 늘린다 / 별표를 읽는 법 / ping이 말해 주는 것과 말해 주지 않는 것 / 현장에서 경로를 의심하는 순간 / 한 칸씩 넘기는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: layer-ip-addressing, network-layers-overview, layer-mtu-fragmentation, iptables-basics, dns
+- 키워드 백링크 →: docker-container-basics, layer-link-ethernet-arp, iptables-nat
+- 이 글로 오는 글 ←: iptables-basics, layer-ip-addressing, layer-link-ethernet-arp, layer-mtu-fragmentation, network-layers-overview
+
+#### `layer-link-ethernet-arp` — 데이터 링크 계층: 이더넷 프레임, MAC 주소, 스위치, ARP
+
+- 요약: 같은 망 안에서 프레임을 건네는 L2를 캡처로 따라간다. 이더넷 프레임과 MAC 주소 읽기, 스위치가 포트를 배우는 법, ARP와 이웃 캐시 상태, Gratuitous ARP, VLAN과 물리 계층까지 다룬다.
+- 태그: Network, TCP/IP, Linux
+- 키워드: ARP, MAC 주소, 이더넷 프레임, Gratuitous ARP
+- 길이: 491줄
+- 소제목: 선과 전파 위의 일: 물리 계층 / 이더넷 프레임 한 장 / MAC 주소 읽기 / 스위치는 보낸 주소로 길을 배운다 / IP는 아는데 MAC을 모를 때: ARP / 다른 망으로 갈 때는 게이트웨이의 MAC을 묻는다 / ARP 캐시와 이웃의 상태 / 주인이 바뀌었다고 알리는 Gratuitous ARP / VLAN: 스위치 하나를 여러 망으로 / IPv6에는 ARP가 없다 / 현장에서 L2를 만나는 순간 / 한 구간을 맡는 층 / 면접에서 나올 만한 질문
+- 직접 링크 →: network-layers-overview, layer-mtu-fragmentation, docker-network-volume, layer-ip-routing-icmp, layer-ip-addressing, iptables-basics
+- 키워드 백링크 →: docker-container-basics, what-happens-google-com
+- 이 글로 오는 글 ←: docker-network-volume, iptables-basics, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, network-layers-overview
+
+#### `layer-mtu-fragmentation` — MTU와 단편화: 큰 패킷이 사라질 때
+
+- 요약: 작은 요청은 되고 큰 응답만 멈추는 장애를 MTU로 푼다. MTU와 MSS, IP 단편화, DF와 PMTUD, ICMP가 막힐 때 생기는 블랙홀을 재현하고 MSS 클램핑과 터널·컨테이너의 MTU 설정으로 고친다.
+- 태그: Network, TCP/IP, Linux, Docker, Troubleshooting
+- 키워드: MTU, MSS 클램핑, PMTUD, 단편화
+- 길이: 495줄
+- 소제목: 한 번에 실을 수 있는 크기, MTU / MSS는 MTU에서 헤더를 뺀 값 / 큰 패킷을 쪼개는 단편화 / DF 비트와 Path MTU Discovery / ICMP가 막히면 블랙홀이 된다 / MSS 클램핑으로 돌아가기 / 터널과 컨테이너가 MTU를 깎는다 / 현장에서 MTU를 의심하는 순간 / 작은 건 되고 큰 것만 안 될 때 / 면접에서 나올 만한 질문
+- 직접 링크 →: layer-ip-routing-icmp, network-layers-overview, iptables-basics
+- 키워드 백링크 →: https-tls, layer-link-ethernet-arp, http-versions, http-status-codes, dns
+- 이 글로 오는 글 ←: iptables-basics, js-memory-leak, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, redis-memory-eviction
+
+#### `network-layers-overview` — OSI 7계층과 TCP/IP 4계층: 왜 나눠서 보나
+
+- 요약: 통신을 층으로 나누는 이유와 데이터가 헤더를 입고 벗는 과정을 실제 프레임 한 장으로 확인한다. OSI와 TCP/IP의 대응, 장비가 읽는 깊이, 실무에서 말하는 L4와 L7의 뜻까지 정리한다.
+- 태그: Network, TCP/IP
+- 키워드: OSI 7계층, TCP/IP 4계층, OSI 모델
+- 길이: 425줄
+- 소제목: 한 덩어리로 만들면 아무것도 못 바꾼다 / 봉투 안에 봉투 / 실제 프레임 한 장을 벗겨 보면 / 층마다 데이터를 부르는 이름 / 일곱 층과 네 층 / 장비는 자기 층까지만 뜯어 본다 / L4, L7이라고 부를 때 / 현장에서 계층 번호가 쓰이는 순간 / 층이 깔끔하게 나뉘지 않는 곳 / 이 시리즈에서 이어서 볼 것 / 층을 나눠 보는 이유 / 면접에서 나올 만한 질문
+- 직접 링크 →: layer-ip-routing-icmp, layer-link-ethernet-arp, layer-ip-addressing, iptables-nat, http-status-codes, nginx-reverse-proxy, layer-mtu-fragmentation, what-happens-google-com
+- 키워드 백링크 →: proxy-reverse-proxy, docker-container-basics, gateway, iptables-basics, http-versions, dns
+- 이 글로 오는 글 ←: layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, layer-mtu-fragmentation
+
 ### Programming › OS › Linux (`programming/os/linux`)
 
 #### `iptables-basics` — iptables로 리눅스 방화벽 이해하기
@@ -905,8 +962,8 @@
 - 길이: 810줄
 - 소제목: 방화벽 상태부터 확인한다 / 커널 안의 다섯 검문소 / 테이블은 검문소에서 하는 일의 종류 / 위에서부터, 처음 맞는 규칙에서 끝난다 / 명령어 한 줄 뜯어보기 / 연결을 기억하는 conntrack / SSH와 웹만 여는 규칙 세트 / 재부팅하면 사라진다 / IPv6는 따로 막아야 한다 / ufw, nftables, iptables는 같은 걸 만진다 / 막힌 패킷을 찾는 법 / SSH 무차별 대입 늦추기 / 결국 위에서부터 읽히는 목록 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-nat
-- 키워드 백링크 →: what-happens-google-com, dns
-- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-nat, proxy-reverse-proxy
+- 키워드 백링크 →: layer-mtu-fragmentation, what-happens-google-com, layer-ip-routing-icmp, layer-link-ethernet-arp, dns
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-nat, layer-ip-routing-icmp, layer-link-ethernet-arp, layer-mtu-fragmentation, network-layers-overview, proxy-reverse-proxy
 
 #### `iptables-nat` — iptables NAT와 포트 포워딩: 사설망, Docker, Kubernetes까지
 
@@ -917,7 +974,7 @@
 - 소제목: 주소를 바꿔 쓰는 세 가지 방법 / 바꾼 주소는 conntrack이 기억한다 / 먼저 포워딩을 켠다 / 내부망을 인터넷에 내보내는 게이트웨이 / 바깥 포트를 내부 서버로 넘기는 포트 포워딩 / 같은 서버 안에서 포트만 바꾸는 REDIRECT / Docker가 만드는 규칙 / 쿠버네티스 Service는 nat 규칙 묶음이다 / NAT가 안 될 때 따라가는 순서 / 주소를 바꾸고 기억하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-basics, kubernetes-ingress
 - 키워드 백링크 →: proxy-reverse-proxy, http-versions, what-happens-google-com, dns
-- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, kubernetes-ingress
+- 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, network-layers-overview
 
 ### Programming › Security (`programming/security`)
 
@@ -941,7 +998,7 @@
 - 소제목: 자물쇠가 약속하는 세 가지 / 암호화해도 보이는 것 / 인증서 한 장 뜯어보기 / 믿음은 루트에서 내려온다 / 브라우저가 인증서를 검사하는 순서 / 인증서를 자동으로 받는 방법: ACME / TLS 1.3 핸드셰이크 한 단계씩 / 키를 보내지 않고 같은 키를 만든다 / 본문은 대칭키로 빠르게 / 다시 올 때는 0-RTT, 대신 재전송을 조심 / TLS를 어디서 끝낼까 / 서버끼리도 서로 확인한다: mTLS / 자주 마주치는 인증서 오류 / 자물쇠 하나에 들어 있는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: dns, local-custom-domain, what-happens-google-com, resilience-patterns, gateway
 - 키워드 백링크 →: kubernetes-ingress, nginx-basics, nginx-https-performance, http-versions, http-methods
-- 이 글로 오는 글 ←: base64, gateway, http-message, http-status-codes, http-versions, kubernetes-ingress, nginx-https-performance, proxy-reverse-proxy, what-happens-google-com
+- 이 글로 오는 글 ←: base64, gateway, http-message, http-status-codes, http-versions, kubernetes-ingress, layer-mtu-fragmentation, nginx-https-performance, proxy-reverse-proxy, what-happens-google-com
 
 ### Programming › Server/Infra › Docker (`programming/server-infra/docker`)
 
@@ -965,7 +1022,7 @@
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat
 - 키워드 백링크 →: iptables-basics, rest-api-design
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, proxy-reverse-proxy
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, proxy-reverse-proxy
 
 #### `docker-network-volume` — Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기
 
@@ -975,8 +1032,8 @@
 - 길이: 715줄
 - 소제목: 컨테이너 안의 localhost는 컨테이너 자신이다 / 네트워크 드라이버 다섯 가지 / 이름으로 찾아가는 사용자 정의 브리지 / -p 한 줄이 만드는 것 / 컨테이너에서 호스트로 가는 길 / docker rm 하면 데이터가 왜 사라지나 / 데이터를 바깥에 두는 네 가지 방법 / -v와 --mount 읽기 / 볼륨을 만들고 들여다보기 / 볼륨을 tar로 백업하고 되살리기 / 바인드 마운트와 UID / Postgres와 앱을 처음부터 다시 띄우기 / 격리를 얼마나 풀어 줄지 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, dockerfile-image-layers, iptables-nat, docker-compose
-- 키워드 백링크 →: nginx-basics, iptables-basics, postgres-operations, proxy-reverse-proxy, redis-basics, dns
-- 이 글로 오는 글 ←: docker-compose
+- 키워드 백링크 →: nginx-basics, iptables-basics, postgres-operations, proxy-reverse-proxy, layer-link-ethernet-arp, redis-basics, dns
+- 이 글로 오는 글 ←: docker-compose, layer-link-ethernet-arp
 
 #### `dockerfile-image-layers` — Dockerfile과 이미지 레이어: 빠르고 작은 이미지 만들기
 
@@ -1000,7 +1057,7 @@
 - 소제목: 입구를 하나로 모으기 / 로드 밸런서, 리버스 프록시와 무엇이 다른가 / 게이트웨이가 너무 똑똑해지면 / 쿠버네티스의 입구, Ingress로는 부족했던 것 / 리소스를 역할별로 나눈 Gateway API / HTTPRoute 뜯어보기 / 헤더로 고르고 비율로 나누기 / 네임스페이스를 넘어 참조하기 / Ingress에서 옮겨 갈 때 / 입구 하나, 규칙은 여러 사람이 / 면접에서 나올 만한 질문
 - 직접 링크 →: kubernetes-ingress
 - 키워드 백링크 →: docker-container-basics, proxy-reverse-proxy, token-login, redis-basics, what-happens-google-com, https-tls, dns
-- 이 글로 오는 글 ←: http-methods, http-status-codes, https-tls, kubernetes-ingress, microservices, mvc-pattern, nginx-reverse-proxy, proxy-reverse-proxy, resilience-patterns, rest-api-design
+- 이 글로 오는 글 ←: http-methods, http-status-codes, https-tls, kubernetes-ingress, microservices, mvc-pattern, network-layers-overview, nginx-reverse-proxy, proxy-reverse-proxy, resilience-patterns, rest-api-design
 
 #### `kubernetes-ingress` — Kubernetes Ingress: 로드 밸런서 하나로 여러 서비스 열기
 
@@ -1046,7 +1103,7 @@
 - 소제목: proxy_pass 한 줄로 넘기기 / 끝 슬래시 하나가 경로를 바꾼다 / 앱에게 진짜 손님 정보를 넘긴다 / upstream으로 서버 여럿에 나누기 / 502와 504가 나는 자리 / WebSocket은 연결을 바꿔 달라고 요청한다 / 버퍼링은 켜 두고, 흘려보낼 때만 끈다 / 업로드는 1MB에서 막힌다 / 앞에 서서 대신 받아 주는 자리 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, nginx-basics, http-status-codes, realtime-communication, nginx-https-performance, gateway
 - 키워드 백링크 →: browser-fetch, redis-basics, resilience-patterns, what-happens-google-com, http-methods
-- 이 글로 오는 글 ←: nginx-basics, nginx-https-performance, proxy-reverse-proxy, realtime-communication
+- 이 글로 오는 글 ←: network-layers-overview, nginx-basics, nginx-https-performance, proxy-reverse-proxy, realtime-communication
 
 ### Programming › System Design (`programming/system-design`)
 
@@ -1081,7 +1138,7 @@
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, gateway
 - 키워드 백링크 →: db-architecture-by-scale, db-type-columnar-olap, client-data-cache, http-versions, js-memory-leak, http-methods
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, db-transaction-isolation, micro-frontends, rest-api-design
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-transaction-isolation, micro-frontends, rest-api-design
 
 #### `resilience-patterns` — 장애가 번지지 않게: 타임아웃, 재시도, 서킷 브레이커
 
@@ -1136,11 +1193,13 @@
 - 단방향 데이터 흐름 → `mvc-pattern`
 - 단일 테이블 설계 → `db-type-key-value`
 - 단일행 함수 → `sqld-single-row-functions`
+- 단편화 → `layer-mtu-fragmentation`
 - 대리 키 → `db-modeling-normalization`
 - 데이터 독립성 → `sqld-data-modeling`
 - 데이터 모델 비교 → `db-types-overview`
 - 도메인 샤딩 → `http-versions`
 - 동적 import → `code-splitting`
+- 라우팅 테이블 → `layer-ip-routing-icmp`
 - 레이아웃 스래싱 → `core-web-vitals`
 - 렌더링 파이프라인 → `what-happens-google-com`
 - 로컬 도메인 → `local-custom-domain`
@@ -1180,12 +1239,14 @@
 - 빈약한 도메인 모델 → `mvc-pattern`
 - 빌드 캐시 → `dockerfile-image-layers`
 - 사가 패턴 → `microservices`
+- 사설 대역 → `layer-ip-addressing`
 - 사용자 정의 브리지 → `docker-network-volume`
 - 상관 서브쿼리 → `sqld-subquery-set-operators`
 - 상태 코드 → `http-status-codes`
 - 샤드 키 → `mongodb-document-model`
 - 서버 상태 → `client-data-cache`
 - 서버 컴포넌트 → `rendering-strategies`
+- 서브넷 마스크 → `layer-ip-addressing`
 - 서킷 브레이커 → `resilience-patterns`
 - 선형화 가능성 → `db-consistency-cap`
 - 세션 쿠키 → `cookie-session-login`
@@ -1213,6 +1274,7 @@
 - 윈도우 프레임 → `sqld-window-functions`
 - 윈도우 함수 → `sqld-window-functions`
 - 유클리드 거리 → `pythagorean-theorem`
+- 이더넷 프레임 → `layer-link-ethernet-arp`
 - 이벤트 루프 → `event-loop`
 - 인가 코드 → `oauth`
 - 인라인 뷰 → `sqld-subquery-set-operators`
@@ -1236,6 +1298,7 @@
 - 집계 함수 → `sqld-group-by-having`
 - 집합 연산자 → `sqld-subquery-set-operators`
 - 체크포인트 → `postgres-architecture`
+- 최장 접두사 일치 → `layer-ip-routing-icmp`
 - 최종 일관성 → `db-consistency-cap`
 - 축출 정책 → `redis-memory-eviction`
 - 카디널리티 폭발 → `db-type-time-series`
@@ -1288,6 +1351,7 @@
 - API 게이트웨이 → `gateway`
 - API 버전 관리 → `rest-api-design`
 - application/x-www-form-urlencoded → `html-form-http`
+- ARP → `layer-link-ethernet-arp`
 - autosquash → `git-rebase`
 - autovacuum → `postgres-mvcc-vacuum`
 - Base64 → `base64`
@@ -1309,6 +1373,7 @@
 - certbot → `nginx-https-performance`
 - cgroups → `docker-container-basics`
 - cherry-pick → `git-tips-advanced`
+- CIDR → `layer-ip-addressing`
 - ClickHouse → `db-type-columnar-olap`
 - CLS → `core-web-vitals`
 - CNAME → `dns`
@@ -1371,6 +1436,7 @@
 - git stash → `git-undo`
 - git-filter-repo → `git-troubleshooting`
 - GitHub Flow → `git-branching-strategy`
+- Gratuitous ARP → `layer-link-ethernet-arp`
 - GROUP BY → `sqld-group-by-having`
 - GROUPING SETS → `sqld-rollup-cube-grouping-sets`
 - GROUPING_ID → `sqld-rollup-cube-grouping-sets`
@@ -1389,6 +1455,7 @@
 - HTTPRoute → `gateway`
 - HTTPS → `what-happens-google-com`
 - I/O 다중화 → `redis-basics`
+- ICMP → `layer-ip-routing-icmp`
 - identity 컬럼 → `postgres-data-types`
 - Index Only Scan → `db-index`
 - index-free adjacency → `db-type-graph`
@@ -1420,6 +1487,7 @@
 - location 블록 → `nginx-basics`
 - LSM 트리 → `db-type-wide-column`
 - LSN → `postgres-architecture`
+- MAC 주소 → `layer-link-ethernet-arp`
 - MASQUERADE → `iptables-nat`
 - maxmemory → `redis-memory-eviction`
 - Memcached → `redis-basics`
@@ -1427,7 +1495,9 @@
 - mkcert → `local-custom-domain`
 - Module Federation → `micro-frontends`
 - MongoDB → `mongodb-document-model`
+- MSS 클램핑 → `layer-mtu-fragmentation`
 - mTLS → `https-tls`
+- MTU → `layer-mtu-fragmentation`
 - multipart/form-data → `http-message`
 - MVC 패턴 → `mvc-pattern`
 - MVCC → `db-transaction-isolation`
@@ -1446,6 +1516,8 @@
 - OAuth → `oauth`
 - OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
+- OSI 7계층 → `network-layers-overview`
+- OSI 모델 → `network-layers-overview`
 - OUTER JOIN → `sqld-joins`
 - PACELC → `db-consistency-cap`
 - peer 인증 → `postgres-getting-started`
@@ -1460,6 +1532,7 @@
 - PIVOT → `sqld-top-n-hierarchical-pivot`
 - PKCE → `oauth`
 - PL/pgSQL → `postgres-functions-triggers`
+- PMTUD → `layer-mtu-fragmentation`
 - preflight → `cors`
 - PRG 패턴 → `http-status-codes`
 - Problem Details → `http-status-codes`
@@ -1484,6 +1557,7 @@
 - reflog → `git-undo`
 - REST API → `rest-api-design`
 - reviver → `json-crud-http`
+- RFC 1918 → `layer-ip-addressing`
 - RocksDB → `db-type-embedded`
 - ROLLUP → `sqld-rollup-cube-grouping-sets`
 - Row Level Security → `postgres-roles-security`
@@ -1514,12 +1588,14 @@
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
 - TanStack Query → `client-data-cache`
+- TCP/IP 4계층 → `network-layers-overview`
 - TiDB → `db-type-newsql`
 - TimescaleDB → `db-type-time-series`
 - timestamptz → `postgres-data-types`
 - TLS 1.3 → `https-tls`
 - TLS 핸드셰이크 → `https-tls`
 - TOAST → `postgres-architecture`
+- traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
 - TrueTime → `db-type-newsql`
 - TRUNCATE → `sql-basics`
@@ -1553,12 +1629,27 @@
 - `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, 게이트웨이)
 - `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
+- `layer-ip-routing-icmp` ↔ `layer-mtu-fragmentation` (13%: 패킷을, 의심하는, troubleshooting, 패킷이)
 - `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `network-layers-overview` ↔ `layer-link-ethernet-arp`
+- `network-layers-overview` ↔ `layer-ip-addressing`
+- `network-layers-overview` ↔ `layer-ip-routing-icmp`
+- `network-layers-overview` ↔ `layer-mtu-fragmentation`
+- `layer-link-ethernet-arp` ↔ `layer-ip-addressing`
+- `layer-link-ethernet-arp` ↔ `layer-ip-routing-icmp`
+- `layer-link-ethernet-arp` ↔ `layer-mtu-fragmentation`
+- `layer-link-ethernet-arp` ↔ `docker-network-volume`
+- `layer-link-ethernet-arp` ↔ `iptables-basics`
+- `layer-ip-addressing` ↔ `layer-ip-routing-icmp`
+- `layer-ip-addressing` ↔ `proxy-reverse-proxy`
+- `layer-ip-routing-icmp` ↔ `layer-mtu-fragmentation`
+- `layer-ip-routing-icmp` ↔ `iptables-basics`
+- `layer-mtu-fragmentation` ↔ `iptables-basics`
 - `db-type-time-series` ↔ `db-type-columnar-olap`
 - `db-type-time-series` ↔ `db-types-overview`
 - `db-type-time-series` ↔ `db-type-relational`
@@ -1570,7 +1661,6 @@
 - `db-type-newsql` ↔ `db-consistency-cap`
 - `db-type-newsql` ↔ `db-types-overview`
 - `db-type-newsql` ↔ `db-type-key-value`
-- `db-type-newsql` ↔ `db-replication-sharding`
 - `db-type-embedded` ↔ `db-types-overview`
 - `db-consistency-cap` ↔ `db-types-overview`
 - `db-consistency-cap` ↔ `db-type-key-value`
@@ -1587,7 +1677,6 @@
 - `db-type-relational` ↔ `mongodb-document-model`
 - `db-type-key-value` ↔ `db-type-wide-column`
 - `db-type-wide-column` ↔ `db-type-graph`
-- `db-type-wide-column` ↔ `db-replication-sharding`
 - `postgres-architecture` ↔ `postgres-mvcc-vacuum`
 - `postgres-architecture` ↔ `postgres-operations`
 - `postgres-architecture` ↔ `postgres-jsonb-search`
@@ -1598,7 +1687,6 @@
 - `postgres-mvcc-vacuum` ↔ `db-index`
 - `postgres-mvcc-vacuum` ↔ `sql-query-tuning`
 - `postgres-operations` ↔ `postgres-getting-started`
-- `postgres-operations` ↔ `sql-basics`
 - `postgres-operations` ↔ `db-architecture-by-scale`
 - `postgres-advanced-sql` ↔ `postgres-functions-triggers`
 - `postgres-functions-triggers` ↔ `postgres-jsonb-search`
@@ -1622,16 +1710,13 @@
 - `sqld-subquery-set-operators` ↔ `sqld-window-functions`
 - `sqld-window-functions` ↔ `sqld-top-n-hierarchical-pivot`
 - `sql-basics` ↔ `sqld-data-modeling`
-- `sql-basics` ↔ `db-transaction-isolation`
 - `sql-basics` ↔ `db-index`
 - `sqld-data-modeling` ↔ `sqld-entity-attribute-relationship`
 - `sqld-entity-attribute-relationship` ↔ `db-modeling-normalization`
 - `sqld-single-row-functions` ↔ `sqld-group-by-having`
 - `sqld-group-by-having` ↔ `sqld-joins`
 - `db-replication-sharding` ↔ `db-architecture-by-scale`
-- `db-replication-sharding` ↔ `db-index`
 - `db-replication-sharding` ↔ `caching-strategies`
-- `db-replication-sharding` ↔ `mongodb-document-model`
 - `db-architecture-by-scale` ↔ `microservices`
 - `db-index` ↔ `sql-query-tuning`
 - `sql-query-tuning` ↔ `rest-api-design`
@@ -1701,9 +1786,6 @@
 
 ## 긴 글 (900줄 초과, 쪼갤 후보)
 
-- `sql-basics` 1354줄 — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
-- `db-index` 1246줄 — 인덱스: 책 뒤의 찾아보기
-- `db-replication-sharding` 1161줄 — DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩
 - `git-internals-basics` 1153줄 — Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역
 - `sql-query-tuning` 1109줄 — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
 - `sqld-single-row-functions` 1103줄 — SQLD 단일행 함수와 NULL 다루기

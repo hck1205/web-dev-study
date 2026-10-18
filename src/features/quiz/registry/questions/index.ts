@@ -53,11 +53,16 @@ import { IPTABLES_NAT } from "./iptables-nat";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
+import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
+import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
+import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
+import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
@@ -153,11 +158,16 @@ export const QUESTION_SETS = [
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
   KUBERNETES_INGRESS,
+  LAYER_IP_ADDRESSING,
+  LAYER_IP_ROUTING_ICMP,
+  LAYER_LINK_ETHERNET_ARP,
+  LAYER_MTU_FRAGMENTATION,
   LOCAL_CUSTOM_DOMAIN,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  NETWORK_LAYERS_OVERVIEW,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,

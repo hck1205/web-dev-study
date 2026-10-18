@@ -2,6 +2,81 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "network-layers-overview": {
+    "links": [
+      "layer-ip-routing-icmp",
+      "layer-link-ethernet-arp",
+      "layer-ip-addressing",
+      "iptables-nat",
+      "http-status-codes",
+      "nginx-reverse-proxy",
+      "layer-mtu-fragmentation",
+      "what-happens-google-com"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "docker-container-basics",
+      "gateway",
+      "iptables-basics",
+      "http-versions",
+      "dns"
+    ]
+  },
+  "layer-link-ethernet-arp": {
+    "links": [
+      "network-layers-overview",
+      "layer-mtu-fragmentation",
+      "docker-network-volume",
+      "layer-ip-routing-icmp",
+      "layer-ip-addressing",
+      "iptables-basics"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "what-happens-google-com"
+    ]
+  },
+  "layer-ip-addressing": {
+    "links": [
+      "network-layers-overview",
+      "layer-link-ethernet-arp",
+      "layer-ip-routing-icmp",
+      "iptables-nat",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "dns"
+    ]
+  },
+  "layer-ip-routing-icmp": {
+    "links": [
+      "layer-ip-addressing",
+      "network-layers-overview",
+      "layer-mtu-fragmentation",
+      "iptables-basics",
+      "dns"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "layer-link-ethernet-arp",
+      "iptables-nat"
+    ]
+  },
+  "layer-mtu-fragmentation": {
+    "links": [
+      "layer-ip-routing-icmp",
+      "network-layers-overview",
+      "iptables-basics"
+    ],
+    "mentions": [
+      "https-tls",
+      "layer-link-ethernet-arp",
+      "http-versions",
+      "http-status-codes",
+      "dns"
+    ]
+  },
   "db-type-time-series": {
     "links": [
       "db-types-overview",
@@ -251,7 +326,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-operations",
-      "db-type-relational"
+      "db-type-relational",
+      "layer-ip-addressing"
     ]
   },
   "postgres-data-types": {
@@ -275,6 +351,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "sql-basics",
       "db-index",
+      "layer-ip-addressing",
       "dns"
     ]
   },
@@ -413,13 +490,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "sql-basics": {
     "links": [
       "db-index",
-      "sql-query-tuning",
-      "db-transaction-isolation",
       "sqld-data-modeling"
     ],
     "mentions": [
-      "sqld-group-by-having",
-      "postgres-operations",
       "postgres-getting-started"
     ]
   },
@@ -500,18 +573,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "db-index",
       "sql-query-tuning",
-      "caching-strategies",
-      "microservices",
-      "mongodb-document-model",
-      "db-architecture-by-scale"
+      "caching-strategies"
     ],
     "mentions": [
       "db-consistency-cap",
-      "redis-persistence-ha",
-      "db-type-newsql",
-      "db-type-wide-column",
+      "db-architecture-by-scale",
       "db-type-key-value",
-      "redis-basics",
       "postgres-architecture",
       "dns"
     ]
@@ -550,7 +617,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
-      "db-replication-sharding",
       "db-transaction-isolation",
       "sql-basics"
     ]
@@ -620,6 +686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "layer-mtu-fragmentation",
       "dns"
     ]
   },
@@ -644,6 +711,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "iptables-basics",
       "http-versions",
+      "layer-ip-addressing",
       "http-status-codes",
       "what-happens-google-com",
       "dns"
@@ -735,6 +803,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "postgres-operations",
       "proxy-reverse-proxy",
+      "layer-link-ethernet-arp",
       "redis-basics",
       "dns"
     ]
@@ -808,7 +877,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat"
     ],
     "mentions": [
+      "layer-mtu-fragmentation",
       "what-happens-google-com",
+      "layer-ip-routing-icmp",
+      "layer-link-ethernet-arp",
       "dns"
     ]
   },
@@ -971,6 +1043,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "redis-memory-eviction",
       "event-loop",
+      "layer-mtu-fragmentation",
       "dns"
     ]
   },
