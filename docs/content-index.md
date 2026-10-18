@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 134편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 134편 · 토픽 43개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -1025,6 +1025,8 @@
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals
 - 이 글로 오는 글 ←: client-data-cache, rendering-strategies
+
+### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
 #### `rendering-strategies` — CSR, SSR, SSG, ISR, 스트리밍: HTML은 어디서 만들어지나
 

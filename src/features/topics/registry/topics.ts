@@ -49,6 +49,7 @@ export const TOPICS: Topic[] = [
           { id: "javascript", label: "JavaScript", description: "언어와 런타임, 이벤트 루프, 메모리" },
           { id: "performance", label: "Performance", description: "웹 성능 지표, 로딩·렌더링 최적화" },
           { id: "react", label: "React", description: "렌더링 모델, 상태, 렌더링 전략" },
+          { id: "rendering", label: "Rendering", description: "CSR, SSR, SSG·ISR, 하이드레이션, 스트리밍, 서버 컴포넌트" },
         ],
       },
       {

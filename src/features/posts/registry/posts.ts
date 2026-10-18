@@ -1090,7 +1090,7 @@ const ENTRIES: Post[] = [
     slug: "rendering-strategies",
     title: "CSR, SSR, SSG, ISR, 스트리밍: HTML은 어디서 만들어지나",
     summary: "같은 상품 페이지의 HTML을 브라우저, 요청 시 서버, 빌드, 뒤늦은 재생성, 조각 전송 중 어디서 만드느냐에 따라 TTFB·LCP·서버 비용·신선도가 어떻게 달라지는지 비교한다. 하이드레이션과 불일치, ISR 갱신 방식, 스트리밍의 제약, 서버 컴포넌트, 쇼핑몰 페이지별 선택까지 다룬다.",
-    topic: "programming/frontend/react",
+    topic: "programming/frontend/rendering",
     tags: ["React", "SSR", "Next.js", "Performance", "Rendering"],
     date: "2026-10-16",
     keywords: ["하이드레이션", "ISR", "스트리밍 SSR", "서버 컴포넌트", "SSG"],
