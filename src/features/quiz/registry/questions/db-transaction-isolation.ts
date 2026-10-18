@@ -51,21 +51,6 @@ export const DB_TRANSACTION_ISOLATION: QuizQuestion[] = [
   {
     id: "db-transaction-isolation-4",
     post: "db-transaction-isolation",
-    question: "재고 차감에서 격리 수준을 올리지 않고도 음수 재고를 막는 가장 간단한 방법은?",
-    choices: [
-      "SELECT로 재고를 읽고 앱에서 0보다 큰지 확인한 뒤 UPDATE한다",
-      "UPDATE ... SET stock = stock - 1 WHERE product_id = ? AND stock > 0을 실행하고 영향받은 행 수를 본다",
-      "재고를 읽을 때 NOWAIT를 붙인다",
-      "트랜잭션을 READ UNCOMMITTED로 연다",
-    ],
-    answer: 1,
-    explanation:
-      "조건과 계산을 한 문장에 넣으면 읽기와 쓰기 사이에 틈이 없다. 뒤에 온 UPDATE는 잠금을 기다렸다가 최신 값에 WHERE를 다시 검사하니 재고가 0이면 UPDATE 0이 된다. 앱에서 따로 읽고 확인하는 방식은 바로 그 틈 때문에 -1이 생긴다.",
-    anchor: "재고가-음수가-되지-않게-막는-방법들",
-  },
-  {
-    id: "db-transaction-isolation-5",
-    post: "db-transaction-isolation",
     question: "VACUUM VERBOSE에 '1 are dead but not yet removable'이 나왔다. 가장 그럴듯한 원인은?",
     choices: [
       "autovacuum이 꺼져 있다",
@@ -79,33 +64,18 @@ export const DB_TRANSACTION_ISOLATION: QuizQuestion[] = [
     anchor: "버전을-남겨서-읽기와-쓰기를-떼어-놓기-mvcc",
   },
   {
-    id: "db-transaction-isolation-6",
+    id: "db-transaction-isolation-5",
     post: "db-transaction-isolation",
-    question: "kim→lee, lee→kim 송금이 동시에 일어나 교착 상태가 생겼다. 송금 코드를 어떻게 바꾸면 원이 생기지 않나?",
+    question: "PostgreSQL 16에서 BEGIN ISOLATION LEVEL READ UNCOMMITTED로 연 트랜잭션은 다른 세션이 커밋하지 않은 변경을 볼 수 있나?",
     choices: [
-      "보내는 사람 계좌를 항상 먼저 잠근다",
-      "deadlock_timeout을 늘린다",
-      "두 계좌를 계좌 번호가 작은 쪽부터 잠근다",
-      "격리 수준을 SERIALIZABLE로 올린다",
+      "볼 수 있다. 표준대로 dirty read가 생긴다",
+      "볼 수 있지만 SELECT ... FOR UPDATE로 읽을 때만이다",
+      "볼 수 없다. PostgreSQL은 READ UNCOMMITTED를 READ COMMITTED와 똑같이 처리한다",
+      "READ UNCOMMITTED를 지원하지 않아 에러가 난다",
     ],
     answer: 2,
     explanation:
-      "교착 상태는 대기가 원을 이룰 때 생기니, 모두가 같은 순서로 잠그면 늦은 쪽은 첫 잠금에서 기다릴 뿐 다른 걸 쥐고 있지 않다. 보내는 사람을 먼저 잠그는 게 바로 원래 코드라서 두 송금의 순서가 엇갈린다. 격리 수준을 올려도 행 잠금 순서는 그대로다.",
-    anchor: "서로-기다리다-멈추는-교착-상태",
-  },
-  {
-    id: "db-transaction-isolation-7",
-    post: "db-transaction-isolation",
-    question: "주문을 커밋하면서 '주문 생성' 이벤트를 빠짐없이 보내려고 할 때 트랜잭셔널 아웃박스가 하는 일은?",
-    choices: [
-      "주문 DB와 브로커를 2단계 커밋으로 묶는다",
-      "이벤트를 같은 DB의 outbox 테이블에 주문과 같은 트랜잭션으로 적고, 릴레이가 나중에 보낸다",
-      "커밋한 직후 앱이 브로커로 이벤트를 바로 보낸다",
-      "브로커가 주문 테이블을 주기적으로 읽어 간다",
-    ],
-    answer: 1,
-    explanation:
-      "주문과 이벤트 기록이 한 트랜잭션이라 주문이 커밋되면 이벤트도 반드시 남고 롤백되면 같이 사라진다. 커밋 직후 앱이 바로 보내면 그 사이에 죽었을 때 이벤트가 유실된다. 릴레이가 재전송하면서 같은 이벤트가 두 번 갈 수 있으니 받는 쪽은 멱등하게 처리한다.",
-    anchor: "서비스-여러-개에-걸친-트랜잭션",
+      "PostgreSQL은 READ UNCOMMITTED를 받아들이지만 동작은 READ COMMITTED와 같아서 커밋 안 된 값은 어떤 수준에서도 보이지 않는다. MySQL InnoDB의 READ UNCOMMITTED에서는 dirty read가 실제로 생긴다. 같은 이름이라도 DB마다 동작이 다르다.",
+    anchor: "격리-수준-네-단계와-실제-동작",
   },
 ];

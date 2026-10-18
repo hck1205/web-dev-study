@@ -11,8 +11,14 @@ import { CORS } from "./cors";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
+import { DB_INDEX_DESIGN } from "./db-index-design";
+import { DB_INDEX_PITFALLS } from "./db-index-pitfalls";
+import { DB_KEYS_DENORMALIZATION } from "./db-keys-denormalization";
+import { DB_LOCKING_DEADLOCK } from "./db-locking-deadlock";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
+import { DB_PARTITIONING } from "./db-partitioning";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
+import { DB_SHARDING } from "./db-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
 import { DB_TYPE_COLUMNAR_OLAP } from "./db-type-columnar-olap";
 import { DB_TYPE_EMBEDDED } from "./db-type-embedded";
@@ -88,7 +94,11 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { SQL_BASICS } from "./sql-basics";
+import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
+import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
 import { SQLD_GROUP_BY_HAVING } from "./sqld-group-by-having";
@@ -121,8 +131,14 @@ export const QUESTION_SETS = [
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
+  DB_INDEX_DESIGN,
+  DB_INDEX_PITFALLS,
+  DB_KEYS_DENORMALIZATION,
+  DB_LOCKING_DEADLOCK,
   DB_MODELING_NORMALIZATION,
+  DB_PARTITIONING,
   DB_REPLICATION_SHARDING,
+  DB_SHARDING,
   DB_TRANSACTION_ISOLATION,
   DB_TYPE_COLUMNAR_OLAP,
   DB_TYPE_EMBEDDED,
@@ -198,7 +214,11 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   SQL_BASICS,
+  SQL_BATCH_TIMEOUT_POOL,
+  SQL_INSERT_UPDATE_DELETE,
+  SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
+  SQL_SELECT_WHERE_NULL,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,
   SQLD_GROUP_BY_HAVING,

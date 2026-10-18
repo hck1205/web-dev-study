@@ -4,7 +4,7 @@ export const metadata = getPostMetadata("db-replication-sharding");
 
 쇼핑몰에 할인 이벤트가 걸린 날, DB 서버의 CPU가 90%에 붙어서 내려오지 않는다. 느린 쿼리를 열어 보면 대부분 `SELECT`다. 상품 목록, 주문 내역, 마이페이지. 쓰기는 많지 않은데 읽기가 서버 한 대를 다 먹고 있다. 몇 달 뒤에는 다른 문제가 온다. `orders` 테이블이 수억 건이 되자 1년 지난 주문을 지우는 새벽 배치가 몇 시간씩 돌고, 그동안 복제본이 뒤처진다.
 
-둘 다 "DB 한 대로는 모자라다"는 말로 들리지만 처방이 다르다. 읽기가 많으면 같은 데이터를 여러 대에 복사해 읽기를 나눈다(복제). 테이블 하나가 너무 크면 한 DB 안에서 테이블을 조각으로 나눈다(파티셔닝). 쓰기와 데이터 자체가 한 대를 넘으면 데이터를 여러 DB 서버에 나눠 담는다(샤딩). 뒤로 갈수록 강력하지만 되돌리기 어렵고 앱이 알아야 할 것이 늘어난다. 이 글은 이 순서대로 직접 돌려 보며 각 단계가 무엇을 풀고 무엇을 새로 만드는지 정리한다.
+둘 다 "DB 한 대로는 모자라다"는 말로 들리지만 처방이 다르다. 읽기가 많으면 같은 데이터를 여러 대에 복사해 읽기를 나눈다(복제). 테이블 하나가 너무 크면 한 DB 안에서 테이블을 조각으로 나눈다(파티셔닝). 쓰기와 데이터 자체가 한 대를 넘으면 데이터를 여러 DB 서버에 나눠 담는다(샤딩). 뒤로 갈수록 강력하지만 되돌리기 어렵고 앱이 알아야 할 것이 늘어난다. 이 글은 그 첫 단계인 복제를 직접 돌려 보며 무엇을 풀고 무엇을 새로 만드는지 정리한다. 파티셔닝은 [파티셔닝 글](/posts/db-partitioning)에서, 샤딩은 [샤딩 글](/posts/db-sharding)에서 이어 간다.
 
 기준은 Ubuntu 24.04 LTS의 PostgreSQL 16(16.15)이다. 복제 실험은 한 장비에 프라이머리(5441 포트)와 스탠바이(5442 포트)를 따로 띄워서 했고, 아래 출력은 모두 그 환경에서 실제로 나온 것이다. 그래서 주소가 `127.0.0.1`로 찍혀 있다. 시간(ms)은 장비마다 다르니 자릿수만 보면 된다. 인덱스와 쿼리 자체를 고치는 이야기는 [인덱스 글](/posts/db-index)과 [쿼리 튜닝 글](/posts/sql-query-tuning)에 있다.
 
@@ -74,6 +74,29 @@ ERROR:  cannot execute INSERT in a read-only transaction
 ```
 
 SQL 문장을 다시 실행하는 게 아니라 "몇 번 페이지의 몇 바이트를 이렇게 바꿔라" 수준의 물리적인 변경을 재생한다. 그래서 스탠바이는 프라이머리와 바이트 단위로 같은 복사본이 되고, 메이저 버전과 아키텍처가 같아야 하며, 일부 테이블만 골라 복제할 수는 없다. 테이블을 골라 복제하거나 다른 버전으로 보내야 할 때는 논리 복제(`CREATE PUBLICATION` / `CREATE SUBSCRIPTION`)를 쓴다.
+
+WAL이 지나가는 길을 그려 보면 이렇다. 점이 흐르는 방향이 WAL이 움직이는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="프라이머리의 WAL이 스탠바이에서 재생되기까지"
+  nodes={[
+    { id: "app", label: "앱의 쓰기", sub: "INSERT·UPDATE", x: 90, y: 40, w: 130 },
+    { id: "wal", label: "프라이머리 WAL", sub: "pg_wal", x: 90, y: 140, w: 140 },
+    { id: "sender", label: "walsender", sub: "프라이머리", x: 90, y: 245, w: 120 },
+    { id: "receiver", label: "walreceiver", sub: "스탠바이 디스크에", x: 310, y: 245, w: 140 },
+    { id: "startup", label: "startup", sub: "재생", x: 310, y: 140, w: 110 },
+    { id: "read", label: "읽기 쿼리", sub: "hot standby", x: 310, y: 40, w: 120 },
+  ]}
+  edges={[
+    { from: "app", to: "wal", label: "먼저 기록" },
+    { from: "wal", to: "sender" },
+    { from: "sender", to: "receiver", label: "스트리밍" },
+    { from: "receiver", to: "startup" },
+    { from: "startup", to: "read", label: "재생 후 보임", dashed: true },
+  ]}
+/>
 
 ## 스탠바이를 하나 붙여 보기
 
@@ -438,7 +461,7 @@ DETAIL:  The transaction has already committed locally, but might not have been 
 INSERT 0 1
 ```
 
-경고 문구 그대로다. 프라이머리에는 이미 커밋됐다. 그래서 이 주문은 `SELECT`로 조회된다. 앱 입장에서는 실패처럼 보였던 쓰기가 사실은 들어가 있는 셈이라, 재시도하면 중복 주문이 생길 수 있다. 주문 id를 앱에서 미리 정해 두면(뒤에서 볼 ID 생성) 재시도해도 같은 id라 중복을 막을 수 있다.
+경고 문구 그대로다. 프라이머리에는 이미 커밋됐다. 그래서 이 주문은 `SELECT`로 조회된다. 앱 입장에서는 실패처럼 보였던 쓰기가 사실은 들어가 있는 셈이라, 재시도하면 중복 주문이 생길 수 있다. 주문 id를 앱에서 미리 정해 두면 재시도해도 같은 id라 중복을 막을 수 있다. 여러 서버에서 겹치지 않는 id를 만드는 방법은 [샤딩 글](/posts/db-sharding)에 있다.
 
 <Callout kind="warning" title="동기 스탠바이를 한 대만 두면 그 한 대가 쓰기를 멈춘다">
 `FIRST 1 (standby1)`처럼 스탠바이 한 대만 동기로 지정하면 그 서버가 죽거나 네트워크가 끊기는 순간 프라이머리의 모든 커밋이 멈춘다. 프라이머리를 지키려고 붙인 서버가 프라이머리를 세우는 것이다. 동기 복제를 쓸 거면 스탠바이를 두 대 이상 두고 `ANY 1 (standby1, standby2)`처럼 "둘 중 아무나 하나"를 기다리게 한다. 이미 멈췄다면 `ALTER SYSTEM SET synchronous_standby_names = ''`와 `SELECT pg_reload_conf()`로 비동기로 되돌리면 기다리던 커밋들이 풀린다. 또 `synchronous_commit`은 트랜잭션마다 바꿀 수 있으니, 결제처럼 중요한 쓰기만 `SET LOCAL synchronous_commit = on`으로 기다리고 나머지는 `local`로 두는 방법도 있다.
@@ -488,642 +511,19 @@ psql "postgresql://app@10.0.0.11:5432,10.0.0.12:5432/shop?target_session_attrs=r
 
 비동기 복제에서 장애 조치를 하면 프라이머리가 스탠바이에 보내지 못한 마지막 커밋은 사라진다. 얼마나 잃어도 되는지(RPO)와 얼마나 멈춰도 되는지(RTO)를 먼저 정하고, 그 답에 맞춰 동기 여부와 스탠바이 대수를 정한다.
 
-## 주문 테이블을 달마다 나눈다
-
-읽기는 복제본으로 나눴는데, `orders`가 수억 건이 되자 다른 문제가 생긴다. 1년 지난 주문을 지우는 배치는 `DELETE`로 수천만 건을 지운다. 지운 행은 바로 사라지지 않고 죽은 행으로 남아 `VACUUM`이 치울 때까지 자리를 차지한다. 그 와중에 WAL이 쏟아져서 복제본이 뒤처진다. 인덱스도 수억 건짜리 하나라 다시 만들려면 몇 시간이다.
-
-파티셔닝은 한 DB 안에서 큰 테이블을 여러 개의 작은 테이블(파티션)로 나누는 것이다. 앱은 여전히 `orders` 하나에 쿼리를 보내고, PostgreSQL이 조건을 보고 해당하는 파티션으로 보낸다. PostgreSQL 10부터 들어간 선언적 파티셔닝(`PARTITION BY`)을 쓴다. 주문은 날짜 범위로 조회하고 날짜 기준으로 지우니 `created_at`의 범위(RANGE)로 나눈다.
-
-처음 만들 때 대부분 한 번은 이 에러를 본다.
-
-```sql
-CREATE TABLE orders (
-  id         bigint PRIMARY KEY,          -- id만으로 기본 키
-  created_at timestamptz NOT NULL
-) PARTITION BY RANGE (created_at);
-```
-
-```text
-ERROR:  unique constraint on partitioned table must include all partitioning columns
-DETAIL:  PRIMARY KEY constraint on table "orders" lacks column "created_at" which is part of the partition key.
-```
-
-PostgreSQL의 고유 인덱스는 파티션마다 따로 있다. 9월 파티션의 인덱스는 10월 파티션에 같은 id가 있는지 모른다. 그래서 기본 키와 UNIQUE에는 파티션 키가 들어가야 "같은 파티션 안에서만 확인하면 전체에서 고유하다"가 성립한다. 기본 키를 `(id, created_at)`으로 바꾼다.
-
-```sql
--- 부모 테이블. 데이터는 직접 담지 않고 파티션으로 보낸다
-CREATE TABLE orders (
-  id         bigint      NOT NULL,
-  user_id    bigint      NOT NULL,
-  amount     integer     NOT NULL,
-  status     text        NOT NULL,
-  created_at timestamptz NOT NULL,
-  PRIMARY KEY (id, created_at)          -- 파티션 키를 포함해야 한다
-) PARTITION BY RANGE (created_at);
-
--- 달마다 하나씩. FROM은 포함, TO는 포함하지 않는다
-CREATE TABLE orders_2026_01 PARTITION OF orders FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
-CREATE TABLE orders_2026_02 PARTITION OF orders FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
--- ... 3월부터 9월까지 같은 식으로 ...
-CREATE TABLE orders_2026_10 PARTITION OF orders FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-
--- 어느 범위에도 안 맞는 행이 갈 곳 (없으면 INSERT가 에러가 난다)
-CREATE TABLE orders_default PARTITION OF orders DEFAULT;
-
--- 부모에 만든 인덱스는 모든 파티션에 자동으로 생긴다
-CREATE INDEX ON orders (user_id, created_at);
-```
-
-파티션 한 줄을 조각으로 나눠 보면 이렇다.
-
-<UrlAnatomy
-  caption="파티션 하나를 만드는 문장"
-  base="CREATE TABLE orders_2026_10"
-  separator=" "
-  joiner=" "
-  params={[
-    {
-      key: "PARTITION OF orders",
-      title: "부모 테이블에 붙는다",
-      description: "열 정의는 부모에서 그대로 가져온다. 이 파티션도 보통 테이블이라 직접 SELECT할 수 있고, VACUUM과 인덱스 재생성도 파티션 하나씩 할 수 있다.",
-      required: true,
-    },
-    {
-      key: "FOR VALUES FROM ('2026-10-01')",
-      title: "여기부터 (포함)",
-      description: "2026-10-01 00:00:00 정각인 주문은 이 파티션에 들어간다. 시간대 없이 쓴 날짜는 지금 세션의 timezone으로 해석되니, 경계를 '2026-10-01 00:00+09'처럼 명확히 쓰거나 DB의 시간대를 고정해 둔다.",
-      required: true,
-    },
-    {
-      key: "TO ('2026-11-01')",
-      title: "여기 전까지 (미포함)",
-      description: "11월 1일 0시 정각은 다음 파티션 몫이다. 위쪽 경계를 포함하지 않으니 '2026-10-31 23:59:59.999'처럼 끝을 억지로 맞출 필요가 없고, 이웃 파티션과 겹치거나 빈틈이 생기지 않는다. 겹치는 범위로 만들면 에러가 난다.",
-      code: "-- 쿼리도 같은 방식으로 쓴다\nWHERE created_at >= '2026-10-01'\n  AND created_at <  '2026-11-01'",
-      required: true,
-    },
-  ]}
-/>
-
-주문 300만 건을 넣어 봤다. 1월 1일부터 8.4초에 한 건씩 들어온 것으로 만들었다. 수억 건은 아니지만 계획이 어떻게 바뀌는지 보기에는 충분하다.
-
-```sql
-INSERT INTO orders (id, user_id, amount, status, created_at)
-SELECT g,
-       (g::bigint * 7919) % 100000 + 1,                  -- 회원 10만 명에게 고르게
-       1000 + (g::bigint * 37) % 99000,                  -- 1,000 ~ 99,999원
-       (ARRAY['paid', 'shipped', 'canceled'])[g % 3 + 1],
-       timestamptz '2026-01-01 00:00+09' + (g - 1) * interval '8.4 seconds'
-FROM generate_series(1, 3000000) g;
-
--- 각 행이 실제로 어느 파티션에 들어갔나 (tableoid는 행이 사는 테이블)
-SELECT tableoid::regclass AS part, count(*) FROM orders GROUP BY 1 ORDER BY 1;
-```
-
-```text
-      part      | count
-----------------+--------
- orders_2026_01 | 318858
- orders_2026_02 | 288000
- orders_2026_03 | 318857
- orders_2026_04 | 308571
- orders_2026_05 | 318857
- orders_2026_06 | 308572
- orders_2026_07 | 318857
- orders_2026_08 | 318857
- orders_2026_09 | 308571
- orders_2026_10 | 192000
-(10 rows)
-```
-
-앱은 `orders`에 넣었을 뿐인데 행이 날짜에 맞는 파티션으로 들어갔다. 2월이 적은 건 28일이라서고, 10월은 아직 19일까지라서다.
-
-## 조건에 맞는 파티션만 읽는다
-
-파티션을 나눈 보람은 쿼리가 필요한 파티션만 읽을 때 나온다. 이걸 파티션 가지치기(partition pruning)라고 한다. 아래 그림은 9월 매출을 구하는 쿼리와, 주문 번호만으로 주문 하나를 찾는 쿼리가 파티션을 어떻게 읽는지 보여 준다.
-
-<AlgoTrace
-  caption="9월 매출 쿼리와 id로 찾는 쿼리가 읽는 파티션"
-  memoryLabel="읽은 파티션"
-  cells={["01월", "02월", "03월", "04월", "05월", "06월", "07월", "08월", "09월", "10월", "default"]}
-  steps={[
-    { caption: "orders는 달마다 파티션 10개와 default 하나로 나뉘어 있다." },
-    { pointer: 8, found: [8], memory: ["09월"], caption: "created_at이 9월 범위인 쿼리. 계획을 세우는 단계에서 9월 파티션만 남기고 나머지는 아예 계획에서 뺀다." },
-    { pointer: 0, memory: ["01월"], caption: "이번엔 WHERE id = 2500000. id만으로는 어느 달인지 알 수 없어서 1월부터 열어 본다." },
-    { pointer: 4, memory: ["01월", "02월", "03월", "04월", "05월"], caption: "파티션마다 기본 키 인덱스를 한 번씩 탄다. 없으면 다음 파티션으로 간다." },
-    { pointer: 8, found: [8], memory: ["01월", "…", "08월", "09월"], caption: "9월에서 찾았다. 그래도 10월에 같은 id가 없다는 보장이 없으니 멈추지 않는다." },
-    { pointer: 10, found: [8], memory: ["11개 전부"], caption: "default까지 11개를 모두 열었다. 파티션 키가 없는 쿼리는 파티션 수만큼 일을 한다." },
-  ]}
-/>
-
-실제 실행 계획으로 확인한다. 출력을 짧게 보려고 병렬 실행은 껐다(`SET max_parallel_workers_per_gather = 0`). 먼저 가지치기를 일부러 끈 경우다.
-
-```sql
-SET enable_partition_pruning = off;   -- 비교용. 운영에서는 끄지 않는다
-
-EXPLAIN ANALYZE
-SELECT count(*), sum(amount) FROM orders
-WHERE created_at >= '2026-09-01' AND created_at < '2026-10-01';
-```
-
-```text
-                                                                            QUERY PLAN
-------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Aggregate  (cost=73091.19..73091.20 rows=1 width=16) (actual time=315.424..315.429 rows=1 loops=1)
-   ->  Append  (cost=0.00..71548.60 rows=308519 width=4) (actual time=219.996..298.736 rows=308571 loops=1)
-         ->  Seq Scan on orders_2026_01 orders_1  (cost=0.00..7440.87 rows=1 width=4) (actual time=35.461..35.461 rows=0 loops=1)
-               Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
-               Rows Removed by Filter: 318858
-         ->  Seq Scan on orders_2026_02 orders_2  (cost=0.00..6720.00 rows=1 width=4) (actual time=26.020..26.020 rows=0 loops=1)
-               Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
-               Rows Removed by Filter: 288000
-   (3월부터 8월까지 같은 모양이 반복된다)
-         ->  Seq Scan on orders_2026_09 orders_9  (cost=0.00..7200.56 rows=308509 width=4) (actual time=0.035..40.241 rows=308571 loops=1)
-               Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
-         ->  Seq Scan on orders_2026_10 orders_10  (cost=0.00..4480.00 rows=1 width=4) (actual time=15.824..15.824 rows=0 loops=1)
-               Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
-               Rows Removed by Filter: 192000
-         ->  Seq Scan on orders_default orders_11  (cost=0.00..0.00 rows=1 width=4) (actual time=0.068..0.068 rows=0 loops=1)
-               Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
- Planning Time: 4.193 ms
- Execution Time: 315.952 ms
-(35 rows)
-```
-
-`Append` 아래에 `Seq Scan`이 11개 달렸다. 9월 파티션을 뺀 나머지는 `rows=0`인데 `Rows Removed by Filter: 318858`처럼 전부 읽고 버렸다. 316ms다. 이제 가지치기를 켠(기본값) 같은 쿼리다.
-
-```sql
-RESET enable_partition_pruning;
-
-EXPLAIN ANALYZE
-SELECT count(*), sum(amount) FROM orders
-WHERE created_at >= '2026-09-01' AND created_at < '2026-10-01';
-```
-
-```text
-                                                                         QUERY PLAN
-------------------------------------------------------------------------------------------------------------------------------------------------------------
- Aggregate  (cost=8743.11..8743.12 rows=1 width=16) (actual time=48.103..48.104 rows=1 loops=1)
-   ->  Seq Scan on orders_2026_09 orders  (cost=0.00..7200.56 rows=308509 width=4) (actual time=0.006..31.867 rows=308571 loops=1)
-         Filter: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
- Planning Time: 0.126 ms
- Execution Time: 48.143 ms
-(5 rows)
-```
-
-`Append`가 사라지고 `orders_2026_09` 하나만 남았다. 316ms가 48ms로 줄었다. 9월 파티션은 통째로 9월이라 인덱스 없이 `Seq Scan`으로 다 읽는 게 맞는 선택이다.
-
-공정하게 비교하려면 나누지 않은 테이블에 `created_at` 인덱스가 있을 때와도 견줘야 한다. 같은 300만 건을 넣은 `orders_flat`에 인덱스를 걸고 돌리면 이렇다.
-
-```text
- Aggregate  (cost=13933.56..13933.57 rows=1 width=16) (actual time=56.290..56.292 rows=1 loops=1)
-   ->  Index Scan using orders_flat_created_at_idx on orders_flat  (cost=0.43..12361.93 rows=314325 width=4) (actual time=0.018..36.822 rows=308571 loops=1)
-         Index Cond: ((created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
- Planning Time: 0.096 ms
- Execution Time: 56.332 ms
-(5 rows)
-```
-
-56ms다. 파티션 쪽 48ms와 크게 다르지 않다. 인덱스만 잘 걸려 있으면 범위 조회 속도 자체는 파티셔닝으로 극적으로 빨라지지 않는다. 파티셔닝이 진짜로 이기는 곳은 뒤에서 볼 오래된 데이터 지우기, 그리고 파티션 단위의 `VACUUM`과 인덱스 관리다. 테이블이 메모리보다 훨씬 커져서 최근 파티션만 메모리에 올려 두고 싶을 때도 효과가 크다.
-
-조건이 실행할 때 정해지는 값이어도 가지치기는 된다. `now()`는 계획을 세울 때는 모르지만 실행을 시작할 때 정해진다.
-
-```sql
-EXPLAIN ANALYZE SELECT count(*) FROM orders WHERE created_at >= now() - interval '7 days';
-```
-
-```text
- Aggregate  (cost=70806.59..70806.60 rows=1 width=8) (actual time=43.569..43.570 rows=1 loops=1)
-   ->  Append  (cost=0.00..70568.44 rows=95262 width=0) (actual time=13.815..38.735 rows=94445 loops=1)
-         Subplans Removed: 9
-         ->  Seq Scan on orders_2026_10 orders_1  (cost=0.00..4960.00 rows=94948 width=0) (actual time=13.814..31.745 rows=94444 loops=1)
-               Filter: (created_at >= (now() - '7 days'::interval))
-               Rows Removed by Filter: 97556
-   (이 출력은 뒤에서 만드는 11월 파티션이 있을 때 찍었다. 11월과 default도 남았다)
-```
-
-`Subplans Removed: 9`가 실행을 시작하면서 지난 7일과 겹치지 않는 파티션 9개를 뺐다는 뜻이다. 계획 비용(`cost=..70568`)은 전체 기준으로 잡혀 있어도 실제로는 남은 파티션만 읽는다.
-
-반대로 파티션 키가 없는 쿼리는 파티션이 늘수록 손해다.
-
-```sql
-EXPLAIN ANALYZE SELECT * FROM orders WHERE id = 2500000;
-```
-
-```text
- Append  (cost=0.42..84.45 rows=11 width=37) (actual time=0.423..0.473 rows=1 loops=1)
-   ->  Index Scan using orders_2026_01_pkey on orders_2026_01 orders_1  (cost=0.42..8.44 rows=1 width=35) (actual time=0.103..0.103 rows=0 loops=1)
-         Index Cond: (id = 2500000)
-   ->  Index Scan using orders_2026_02_pkey on orders_2026_02 orders_2  (cost=0.42..8.44 rows=1 width=35) (actual time=0.015..0.015 rows=0 loops=1)
-         Index Cond: (id = 2500000)
-   (3월부터 10월까지, 그리고 default도 같은 모양)
- Planning Time: 0.391 ms
- Execution Time: 0.512 ms
-(25 rows)
-```
-
-인덱스 스캔이 11번이다. 지금은 0.5ms라 괜찮아 보이지만 파티션이 5년 치 60개가 되면 60번이다. 회원별 최근 주문(`WHERE user_id = 42 ORDER BY created_at DESC LIMIT 20`)도 같은 이유로 11개 파티션의 인덱스를 모두 열어 합치는 `Merge Append`가 됐고, 나누지 않은 테이블의 0.109ms보다 느린 0.263ms가 나왔다. 주문 상세 페이지 URL에 주문 날짜를 같이 넣거나(`/orders/2026-09/2500000`), id에 시간이 들어 있게 만들면(뒤의 Snowflake, UUIDv7) 조건에 `created_at`을 붙일 수 있다.
-
-```sql
--- 날짜를 같이 주면 파티션 하나의 인덱스만 탄다
-EXPLAIN ANALYZE SELECT * FROM orders
-WHERE id = 2500000 AND created_at >= '2026-09-01' AND created_at < '2026-10-01';
-```
-
-```text
- Index Scan using orders_2026_09_pkey on orders_2026_09 orders  (cost=0.42..8.44 rows=1 width=35) (actual time=0.022..0.022 rows=1 loops=1)
-   Index Cond: ((id = 2500000) AND (created_at >= '2026-09-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-01 00:00:00+09'::timestamp with time zone))
- Planning Time: 0.750 ms
- Execution Time: 0.047 ms
-(4 rows)
-```
-
-## 오래된 달은 통째로 떼어 낸다
-
-이제 처음의 새벽 배치를 다시 본다. 나누지 않은 테이블에서 1월 주문을 지우면 이렇다.
-
-```sql
--- 나누지 않은 테이블: 행을 하나씩 지운다
-\timing on
-SELECT pg_current_wal_lsn() AS before \gset
-DELETE FROM orders_flat WHERE created_at < '2026-02-01';
-SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), :'before')) AS wal_written;
-
--- 지운 행은 죽은 행으로 남는다
-SELECT n_live_tup, n_dead_tup FROM pg_stat_user_tables WHERE relname = 'orders_flat';
-```
-
-```text
-DELETE 318858
-Time: 196.882 ms
- wal_written
--------------
- 38 MB
-(1 row)
-
- n_live_tup | n_dead_tup
-------------+------------
-    2681142 |     318858
-(1 row)
-```
-
-31만 건에 WAL이 38MB 나왔고, 31만 개의 죽은 행이 남아 `VACUUM`을 기다린다. 이 38MB는 모든 복제본으로 그대로 흘러간다. 수억 건 테이블에서 수천만 건을 지우면 WAL이 수 GB가 되고, 복제본이 그만큼 뒤처진다. 파티션은 테이블째 떼어 낸다.
-
-```sql
--- 파티션 테이블: 1월 파티션을 부모에서 떼어 내고 지운다
-\timing on
-SELECT pg_current_wal_lsn() AS before \gset
-ALTER TABLE orders DETACH PARTITION orders_2026_01;
-DROP TABLE orders_2026_01;
-SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), :'before')) AS wal_written;
-```
-
-```text
-ALTER TABLE
-Time: 1.201 ms
-DROP TABLE
-Time: 32.832 ms
- wal_written
--------------
- 72 kB
-(1 row)
-```
-
-WAL 72kB, 죽은 행 0개다. 파일을 지우는 일이라 행 수와 상관이 없다. 지우기 전에 보관해야 한다면 `DETACH`만 하고 그 테이블을 `pg_dump`로 떠서 저렴한 저장소로 옮긴 뒤 `DROP`한다.
-
-`DETACH`는 잠깐이지만 부모 테이블에 강한 잠금(ACCESS EXCLUSIVE)을 건다. 그 순간 `orders`를 쓰는 긴 쿼리가 있으면 그걸 기다리고, 기다리는 동안 뒤에 오는 쿼리도 줄줄이 막힌다. PostgreSQL 14부터 있는 `DETACH PARTITION ... CONCURRENTLY`는 약한 잠금으로 떼어 내지만, 이번 구성에서는 바로 거절됐다.
-
-```text
-ALTER TABLE orders DETACH PARTITION orders_2026_01 CONCURRENTLY;
-ERROR:  cannot detach partitions concurrently when a default partition exists
-```
-
-default 파티션이 있으면 `CONCURRENTLY`를 쓸 수 없다. 그래서 일반 `DETACH`를 쓰되 `SET lock_timeout = '3s'`을 걸어 잠금을 오래 기다리지 않게 하고, 실패하면 잠시 뒤 다시 시도한다.
-
-default 파티션에는 함정이 하나 더 있다. 11월 파티션을 미리 안 만들어 두었는데 11월 주문이 들어오면 default로 간다. 그 상태로 11월 파티션을 만들면 에러가 난다.
-
-```sql
-INSERT INTO orders VALUES (3000001, 7, 25000, 'paid', '2026-11-05 12:00+09');
-SELECT tableoid::regclass, id, created_at FROM orders WHERE id = 3000001;
-
-CREATE TABLE orders_2026_11 PARTITION OF orders FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-```
-
-```text
-    tableoid    |   id    |       created_at
-----------------+---------+------------------------
- orders_default | 3000001 | 2026-11-05 12:00:00+09
-(1 row)
-
-ERROR:  updated partition constraint for default partition "orders_default" would be violated by some row
-```
-
-default에 이미 11월 행이 있어서다. 한 트랜잭션 안에서 그 행들을 새 테이블로 옮기고 붙인다.
-
-```sql
-BEGIN;
--- 1. 같은 모양의 빈 테이블
-CREATE TABLE orders_2026_11 (LIKE orders INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
--- 2. default에 잘못 들어간 11월 행을 옮긴다
-INSERT INTO orders_2026_11
-  SELECT * FROM orders_default
-  WHERE created_at >= '2026-11-01' AND created_at < '2026-12-01';
-DELETE FROM orders_default
-  WHERE created_at >= '2026-11-01' AND created_at < '2026-12-01';
--- 3. 파티션으로 붙인다 (부모의 인덱스가 자동으로 만들어진다)
-ALTER TABLE orders ATTACH PARTITION orders_2026_11
-  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
-COMMIT;
-```
-
-```text
-    tableoid    |   id
-----------------+---------
- orders_2026_11 | 3000001
-(1 row)
-```
-
-애초에 이런 일이 없게 파티션은 몇 달 앞서 미리 만들어 둔다. 손으로 하면 언젠가 잊으니 `pg_partman` 확장이나 매일 도는 작업으로 "다음 3개월 파티션 만들기, 13개월 지난 파티션 떼기"를 자동화한다. default 파티션을 아예 안 두는 선택도 있다. 그러면 범위 밖의 행은 INSERT 에러가 나서 바로 드러나고, `DETACH CONCURRENTLY`도 쓸 수 있다.
-
-이미 운영 중인 큰 테이블을 파티션 테이블로 바꿀 때는 새 파티션 부모를 만든 뒤, 옛 테이블을 "과거 전체"를 담는 파티션 하나로 `ATTACH`하는 방법이 있다. 이때 `ATTACH`는 모든 행이 범위 안에 있는지 확인하느라 테이블 전체를 읽는데, 옛 테이블에 같은 범위의 `CHECK` 제약을 먼저 걸어 두면 그 확인을 건너뛴다.
-
-## 목록과 해시로도 나눈다
-
-범위 말고도 두 가지가 더 있다. 국가처럼 값이 몇 개로 정해진 열은 LIST로 나눈다.
-
-```sql
--- 국가별 회원. 한국과 일본만 따로, 나머지는 default
-CREATE TABLE users_by_region (
-  id     bigint NOT NULL,
-  region text   NOT NULL,
-  email  text   NOT NULL,
-  PRIMARY KEY (id, region)
-) PARTITION BY LIST (region);
-
-CREATE TABLE users_kr  PARTITION OF users_by_region FOR VALUES IN ('KR');
-CREATE TABLE users_jp  PARTITION OF users_by_region FOR VALUES IN ('JP');
-CREATE TABLE users_etc PARTITION OF users_by_region DEFAULT;
-```
-
-자연스러운 범위가 없고 그냥 고르게 나누고 싶으면 HASH로 나눈다. 값의 해시를 파티션 수로 나눈 나머지로 고른다.
-
-```sql
--- 장바구니를 회원 id의 해시로 4개에 나눈다
-CREATE TABLE carts (
-  user_id    bigint NOT NULL,
-  product_id bigint NOT NULL,
-  qty        int    NOT NULL,
-  PRIMARY KEY (user_id, product_id)
-) PARTITION BY HASH (user_id);
-
-CREATE TABLE carts_p0 PARTITION OF carts FOR VALUES WITH (MODULUS 4, REMAINDER 0);
-CREATE TABLE carts_p1 PARTITION OF carts FOR VALUES WITH (MODULUS 4, REMAINDER 1);
-CREATE TABLE carts_p2 PARTITION OF carts FOR VALUES WITH (MODULUS 4, REMAINDER 2);
-CREATE TABLE carts_p3 PARTITION OF carts FOR VALUES WITH (MODULUS 4, REMAINDER 3);
-
--- 회원 1~8이 어디로 갔나
-INSERT INTO carts SELECT u, 1001, 1 FROM generate_series(1, 8) u;
-SELECT tableoid::regclass AS part, array_agg(user_id ORDER BY user_id) FROM carts GROUP BY 1 ORDER BY 1;
-```
-
-```text
-   part   | array_agg
-----------+-----------
- carts_p0 | {1}
- carts_p1 | {3,5,8}
- carts_p2 | {2}
- carts_p3 | {4,6,7}
-(4 rows)
-```
-
-8명이라 고르지 않아 보이지만 수만 명이 되면 거의 같아진다. 해시 파티션은 `WHERE user_id = 42` 같은 같음 조건에서만 가지치기가 되고, 범위 조건으로는 안 된다. 오래된 것을 떼어 내는 용도로도 못 쓴다. 쓰기와 `VACUUM`을 잘게 나누는 게 목적일 때 쓴다.
-
-파티셔닝에서 자주 막히는 것도 정리해 둔다. 파티션 키가 빠진 UNIQUE는 만들 수 없다. `CREATE UNIQUE INDEX ON orders (id)`도 앞의 기본 키와 같은 에러가 난다. 회원 테이블을 지역으로 나누면 이메일 중복을 전체에서 막을 수 없게 되는 식이라, 전역으로 고유해야 하는 값은 따로 작은 테이블(`email → user_id`)을 두고 거기에 UNIQUE를 건다. 파티션 수는 수천 개 단위로 늘리면 계획 시간과 메모리가 눈에 띄게 늘어난다. 날짜로 나눈다면 하루 단위보다 달 단위가 보통 적당하다. MySQL 8에도 `PARTITION BY RANGE`가 있고 "모든 고유 키에 파티션 열이 들어가야 한다"는 규칙도 같다. 다만 MySQL은 파티션된 InnoDB 테이블에 외래 키를 걸 수 없다. PostgreSQL은 12부터 파티션 테이블을 가리키는 외래 키도 된다.
-
-## 서버 여러 대에 나눠 담는다
-
-복제는 읽기를 나눠 줄 뿐 쓰기는 여전히 프라이머리 한 대가 다 받는다. 파티셔닝도 한 서버 안의 일이다. 쓰기가 프라이머리 한 대의 디스크와 CPU로 감당이 안 되거나, 데이터가 한 서버에 담기 버거워지면 데이터를 여러 DB 서버에 나눠 담는다. 이게 샤딩이고, 나눠 담긴 각 DB를 샤드라고 한다.
-
-<ConceptDiagram
-  width={400}
-  height={290}
-  caption="앱 앞의 라우터가 샤드 키를 보고 갈 샤드를 고른다. 각 샤드는 자기 복제본을 따로 둔다."
-  nodes={[
-    { id: "app", label: "앱 서버", sub: "user_id = 42", x: 200, y: 40, w: 140 },
-    { id: "router", label: "샤드 라우터", sub: "라이브러리나 프록시", x: 200, y: 125, w: 160 },
-    { id: "s1", label: "샤드 1", sub: "회원 일부", x: 70, y: 220, w: 104 },
-    { id: "s2", label: "샤드 2", sub: "회원 일부", x: 200, y: 220, w: 104 },
-    { id: "s3", label: "샤드 3", sub: "회원 일부", x: 330, y: 220, w: 104 },
-  ]}
-  edges={[
-    { from: "app", to: "router", label: "쿼리" },
-    { from: "router", to: "s1", dashed: true },
-    { from: "router", to: "s2", label: "hash(42)" },
-    { from: "router", to: "s3", dashed: true },
-  ]}
-/>
-
-샤딩에서 가장 중요한 결정은 무엇을 기준으로 나눌지, 샤드 키다. 한번 정하면 바꾸기가 거의 이사 수준이라 처음에 신중해야 한다. 좋은 샤드 키는 두 가지를 만족한다. 데이터와 트래픽이 샤드들에 고르게 퍼지고, 자주 하는 쿼리가 샤드 하나 안에서 끝난다.
-
-주문을 `created_at`의 범위로 나눴다고 해 보자. 1~6월은 샤드 1, 7~12월은 샤드 2. 파티셔닝에서는 좋았던 키지만 샤딩에서는 나쁘다. 새 주문은 전부 "지금"이라서 모든 쓰기가 가장 최근 샤드 한 대로 몰린다. 나머지 샤드는 놀고, 바쁜 샤드는 샤딩 전과 똑같이 바쁘다. 이런 쏠림을 핫스팟이라고 한다. 쓰기를 나누려고 샤딩했는데 쓰기가 안 나뉜다.
-
-`user_id`로 나누면 쓰기가 회원 수만큼 퍼진다. 마이페이지의 "내 주문"처럼 회원 한 명의 데이터를 보는 쿼리는 샤드 하나에서 끝난다. 대신 "어제 들어온 전체 주문"은 모든 샤드에 물어서 합쳐야 한다. 어떤 키도 모든 쿼리를 샤드 하나로 끝내 주지는 않는다. 가장 자주, 가장 빨라야 하는 쿼리에 맞춘다.
-
-나누는 방식은 세 가지가 있다. 범위(range)는 키의 구간마다 샤드를 정한다(회원 1~100만은 샤드 1). 범위 조회가 쉽지만 앞의 날짜처럼 쏠리기 쉽다. 해시(hash)는 키를 해시해서 샤드를 고른다. 고르게 퍼지지만 범위 조회는 모든 샤드에 가야 한다. 디렉터리(directory)는 "회원 42는 샤드 3"을 적어 둔 조회 테이블을 따로 둔다. 큰 고객 하나만 전용 샤드로 옮기는 것처럼 자유롭지만, 그 테이블이 모든 요청 경로에 끼어서 그것 자체가 캐시와 고가용성이 필요한 핵심 부품이 된다.
-
-## 샤드를 늘려도 조금만 옮기는 해시
-
-해시로 나눌 때 가장 쉬운 방법은 `hash(user_id) % 샤드 수`다. 문제는 샤드를 늘릴 때 온다. 회원 1만 명을 3개 샤드에 나눠 두었다가 4개로 늘리면, 나머지 연산의 결과가 바뀐 회원이 7,525명이었다(아래 플레이그라운드와 같은 해시 함수로 계산한 값). 4분의 3이 다른 서버로 이사해야 한다. 이사하는 동안 그 데이터를 어디서 읽어야 할지도 정해야 한다.
-
-일관된 해싱(consistent hashing)은 샤드와 키를 둘 다 같은 원 위에 올린다. 원은 해시 값의 범위(0부터 2³²−1까지)를 둥글게 이어 붙인 것이다. 키는 자기 자리에서 시계 방향으로 가다가 처음 만나는 샤드로 간다. 아래 그림에서 다음을 누르면 키가 샤드를 찾아가는 과정과, 샤드를 하나 더했을 때 무엇이 움직이는지가 보인다.
-
-<VectorSpace
-  caption="해시 링에서 키는 시계 방향으로 첫 노드에 간다"
-  groups={[
-    { id: "node", label: "기존 샤드" },
-    { id: "new", label: "추가할 샤드" },
-    { id: "key", label: "키" },
-  ]}
-  points={[
-    { id: "db1", label: "db1", x: 218, y: 27, group: "node" },
-    { id: "u7", label: "user:7", x: 280, y: 63, group: "key" },
-    { id: "db2", label: "db2", x: 305, y: 139, group: "node" },
-    { id: "u42", label: "user:42", x: 274, y: 204, group: "key" },
-    { id: "db4", label: "db4", x: 236, y: 229, group: "new" },
-    { id: "db3", label: "db3", x: 164, y: 229, group: "node", labelAt: "left" },
-    { id: "u3", label: "user:3", x: 105, y: 174, group: "key", labelAt: "left" },
-    { id: "u500", label: "user:500", x: 101, y: 94, group: "key", labelAt: "left" },
-  ]}
-  edges={[
-    ["db1", "u7"],
-    ["u7", "db2"],
-    ["db2", "u42"],
-    ["u42", "db4"],
-    ["db4", "db3"],
-    ["db3", "u3"],
-    ["u3", "u500"],
-    ["u500", "db1"],
-  ]}
-  steps={[
-    { showEdges: true, caption: "샤드 이름과 키를 같은 해시 함수에 넣어 원 위의 자리를 정한다. db4는 나중에 추가할 샤드라 아직은 없다고 본다." },
-    { showEdges: true, path: ["u7", "db2"], caption: "user:7은 시계 방향으로 가다 처음 만나는 db2에 저장된다." },
-    { showEdges: true, path: ["u3", "u500", "db1"], caption: "user:3과 user:500은 원을 따라 올라가 db1에 간다. db3에서 db1 사이의 긴 구간이 모두 db1 몫이다." },
-    { showEdges: true, path: ["u42", "db3"], caption: "db4가 없을 때 user:42는 db4 자리를 지나 db3까지 간다." },
-    { showEdges: true, path: ["u42", "db4"], caption: "db4를 db2와 db3 사이에 넣었다. 그 사이에 있던 user:42만 db4로 옮긴다. 나머지 키는 그대로다." },
-  ]}
-/>
-
-샤드를 더하면 새 샤드 바로 앞 구간의 키만 옮긴다. 샤드를 빼면 그 샤드의 키만 다음 샤드로 간다. 나머지 연산처럼 전체가 흔들리지 않는다.
-
-그림의 세 번째 단계에서 본 것처럼 샤드가 원 위에 몇 개 없으면 구간 길이가 제각각이라 한 샤드가 큰 몫을 맡는다. 실제로 샤드마다 점을 하나씩만 찍고 1만 명을 나눠 보니 8,246명, 1,507명, 247명으로 갈렸다. 그래서 샤드 하나를 원 위의 여러 자리에 찍는다. 이걸 가상 노드(vnode)라고 한다. 샤드마다 200개씩 찍으니 3,577명, 3,085명, 3,338명으로 고르게 갈렸고, db4를 더했을 때 옮긴 회원은 2,448명(약 4분의 1)이었다. 옮긴 회원은 모두 db4로 갔다. 이론상 최소치(새 샤드가 맡을 몫만큼)에 가깝다.
-
-아래 함수는 키 목록을 샤드에 배정한다. 샤드마다 `이름#번호` 형태로 `vnodes`개의 자리를 원 위에 찍고, 키마다 시계 방향으로 처음 만나는 자리의 샤드를 돌려주면 된다. 해시 함수는 미리 넣어 두었다. 테스트에서 샤드를 하나 더하거나 빼도 다른 키가 그대로인지 확인해 보자.
-
-<CodePlayground
-  caption="일관된 해싱으로 샤드 고르기"
-  functionName="assign"
-  initialCode={`// 문자열을 0 ~ 2^32-1 정수로 (FNV-1a + 섞기)
-function hash32(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  return h >>> 0;
-}
-
-function assign(keys, nodes, vnodes) {
-  // 1) 샤드마다 hash32(node + "#" + i) 자리를 vnodes개 찍고 정렬한다
-  // 2) 키마다 hash32(key) 이상인 첫 자리의 샤드. 없으면 맨 앞(원이니까)
-  return keys.map(() => nodes[0]);
-}`}
-  solution={`function hash32(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  return h >>> 0;
-}
-
-function assign(keys, nodes, vnodes) {
-  const ring = [];
-  for (const node of nodes) {
-    for (let i = 0; i < vnodes; i++) ring.push([hash32(node + "#" + i), node]);
-  }
-  ring.sort((a, b) => a[0] - b[0]);
-
-  return keys.map((key) => {
-    const h = hash32(key);
-    // 이진 탐색: h 이상인 첫 자리
-    let lo = 0, hi = ring.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (ring[mid][0] < h) lo = mid + 1;
-      else hi = mid;
-    }
-    return ring[lo === ring.length ? 0 : lo][1];
-  });
-}`}
-  tests={[
-    {
-      label: "샤드 3개, vnode 100",
-      args: [["user:42", "user:7", "user:1001", "user:2026", "user:3", "user:500"], ["db1", "db2", "db3"], 100],
-      expected: ["db2", "db3", "db1", "db1", "db2", "db2"],
-    },
-    {
-      label: "db4 추가: 옮긴 키는 모두 db4로",
-      args: [["user:42", "user:7", "user:1001", "user:2026", "user:3", "user:500"], ["db1", "db2", "db3", "db4"], 100],
-      expected: ["db2", "db3", "db1", "db4", "db4", "db2"],
-    },
-    {
-      label: "db2 제거: db2의 키만 이사",
-      args: [["user:42", "user:7", "user:1001", "user:2026", "user:3", "user:500"], ["db1", "db3"], 100],
-      expected: ["db3", "db3", "db1", "db1", "db3", "db1"],
-    },
-    {
-      label: "vnode 1개면 쏠린다",
-      args: [["user:42", "user:7", "user:1001", "user:2026", "user:3", "user:500"], ["db1", "db2", "db3"], 1],
-      expected: ["db3", "db3", "db3", "db3", "db1", "db3"],
-    },
-    {
-      label: "샤드가 하나뿐",
-      args: [["user:42", "user:7"], ["db1"], 3],
-      expected: ["db1", "db1"],
-    },
-    {
-      label: "키가 없으면 빈 배열",
-      args: [[], ["db1", "db2"], 10],
-      expected: [],
-    },
-  ]}
-/>
-
-일관된 해싱 말고 자주 쓰는 방법이 하나 더 있다. 처음부터 논리 샤드(버킷)를 넉넉히 만들어 두는 것이다. 키는 `hash(key) % 1024`로 1024개 버킷 중 하나에 고정되고, 버킷이 어느 서버에 있는지는 작은 지도로 관리한다. 서버를 늘리면 키의 버킷은 그대로 두고 버킷 몇 개를 새 서버로 옮긴 뒤 지도만 고친다. Redis Cluster의 16384 슬롯이 이 방식이다. 버킷 수를 나중에 바꾸기는 어려우니 처음에 서버 수보다 훨씬 크게 잡는다.
-
-## 샤드를 넘나드는 쿼리는 비싸다
-
-샤딩하면 한 DB에서 당연하던 것들이 비싸진다. `user_id`로 나눈 주문에서 "오늘 매출 합계"를 구하려면 모든 샤드에 같은 쿼리를 보내고 결과를 앱이나 라우터에서 합친다(scatter-gather). 샤드가 10개면 10번 묻고, 가장 느린 샤드가 전체 응답 시간을 정한다. `ORDER BY created_at DESC LIMIT 20`이면 샤드마다 20개씩 받아서 다시 정렬해 20개를 고른다. `OFFSET 10000`처럼 깊은 페이지는 샤드마다 10,020개를 받아야 해서 훨씬 나빠진다.
-
-조인은 같은 샤드 안에서만 싸다. 주문(`orders`)과 주문 상품(`order_items`)을 둘 다 `user_id`로 나누면 한 회원의 주문과 상품은 같은 샤드에 모여서 조인이 그 안에서 끝난다. 이렇게 함께 쓰는 테이블을 같은 키로 나눠 같은 곳에 두는 걸 코로케이션(colocation)이라고 한다. 주문 상품 테이블에 `user_id`가 없었다면 샤딩하면서 넣어야 한다. 상품(`products`)처럼 작고 모두가 참조하는 테이블은 나누지 않고 모든 샤드에 통째로 복사해 둔다. 그래야 어느 샤드에서든 상품과 조인할 수 있다.
-
-샤드 키가 아닌 값으로 찾는 것도 문제다. 로그인할 때는 `user_id`가 아니라 이메일로 회원을 찾는다. 이메일만으로는 어느 샤드인지 모르니 전부 물어봐야 한다. 그래서 `email → user_id`를 담은 조회 테이블을 따로 두거나(이 테이블도 이메일로 샤딩한다), 검색 엔진 같은 별도 색인을 둔다. 이메일 중복 검사도 이 조회 테이블의 UNIQUE가 맡는다.
-
-샤드 두 곳을 함께 바꾸는 트랜잭션이 가장 어렵다. 회원 42(샤드 1)가 회원 7(샤드 3)에게 포인트를 선물하면 두 샤드에서 동시에 성공하거나 동시에 실패해야 한다. 2단계 커밋(2PC)은 조정자가 모든 샤드에 먼저 "준비됐나"를 묻고(PostgreSQL의 `PREPARE TRANSACTION`), 모두 준비되면 커밋을 지시한다. 준비 단계에서 조정자가 죽으면 샤드들은 잠금을 쥔 채 결정을 기다린다. PostgreSQL은 `max_prepared_transactions`가 기본 0이라 켜야 쓸 수 있고, 남겨진 준비 트랜잭션을 정리하는 운영 도구까지 갖춰야 한다. 그래서 실무에서는 샤드 키를 잘 골라 이런 트랜잭션이 드물게 만들고, 남는 경우는 각 샤드의 로컬 트랜잭션을 이어 붙이고 실패하면 보상 작업을 실행하는 사가로 푼다. 사가와 아웃박스는 [마이크로서비스 글](/posts/microservices)에 자세히 있다.
-
-## 주문 번호는 누가 만드나
-
-한 DB에서는 `bigserial`이나 `GENERATED AS IDENTITY`가 1, 2, 3을 만들어 줬다. 샤드마다 따로 만들면 샤드 1의 주문 101과 샤드 2의 주문 101이 겹친다. 방법은 몇 가지다.
-
-샤드마다 시작값과 간격을 달리하는 방법이 있다. 샤드 1은 1, 4, 7, 샤드 2는 2, 5, 8 식이다. MySQL의 `auto_increment_increment`와 `auto_increment_offset`이 이걸 해 준다. 단순하지만 샤드 수를 바꾸면 규칙이 깨진다.
-
-UUID는 어디서 만들어도 겹치지 않는다. 다만 완전히 무작위인 UUIDv4를 기본 키로 쓰면 새 행이 B-tree 인덱스의 아무 곳에나 끼어들어서, 최근 행이 인덱스의 끝에 모이지 않는다. 테이블이 커지면 인덱스 페이지가 메모리에서 계속 밀려나 쓰기가 느려진다. 2024년에 표준(RFC 9562)이 된 UUIDv7은 앞 48비트에 밀리초 단위 유닉스 시간을 넣어서 시간 순서대로 정렬된다.
-
-```text
-01a1475f-7280-7c3a-9e41-5b2d8f6a10c4
-└──────────┘     7: 버전
-  0x01a1475f7280 = 1792198800000 ms = 2026-10-17 10:00:00 KST
-```
-
-뒤쪽은 무작위라 겹치지 않고, 앞쪽이 시간이라 새 행이 인덱스 끝에 붙는다. PostgreSQL은 18에서 `uuidv7()` 함수가 생겼고, 16에서는 앱에서 만들어 `uuid` 열에 넣는다.
-
-128비트가 부담스러우면 Twitter가 공개한 Snowflake 방식으로 64비트 정수를 만든다. 앞에서부터 41비트는 기준 시점부터 지난 밀리초, 10비트는 기계 번호, 12비트는 그 밀리초 안의 순번이다. 기계 하나가 1ms에 4,096개, 41비트로 약 69년을 쓴다. Twitter의 기준 시점(1288834974657)으로 2026-10-17 10:00:00 KST에 기계 5번이 만든 일곱 번째(순번 7) id는 이렇다.
-
-```text
-(1792198800000 - 1288834974657) << 22 | 5 << 12 | 7
-= 2111260906091466759
-```
-
-정수라 인덱스에 작게 들어가고 시간순으로 정렬된다. 대신 기계 번호를 겹치지 않게 나눠 주는 장치가 필요하고, 서버 시계가 뒤로 가면 이미 쓴 id를 다시 만들 수 있어서 시계가 되돌아가면 그동안 발급을 멈추도록 구현한다. 두 방식 모두 id에 시간이 들어 있어서, 앞에서 본 파티션 테이블에서 id만으로 어느 달 파티션인지 계산해 조건에 붙일 수 있다.
-
-## 샤드를 다시 나누는 일
-
-샤드 4개가 다시 모자라서 8개로 늘린다고 하자. 데이터를 옮기는 동안에도 서비스는 돌아가야 한다. 순서는 대체로 이렇다. 새 샤드를 준비하고, 옮길 데이터를 복사하기 시작한다(덤프로 한 번 복사하고 논리 복제나 CDC로 그 뒤의 변경을 따라 붙인다). 둘이 거의 같아지면 잠깐 그 범위의 쓰기를 멈추거나 이중 쓰기를 켜고, 라우팅 지도를 새 샤드로 바꾼다. 행 수와 체크섬으로 맞는지 확인한 뒤 옛 샤드의 데이터를 지운다. 하나하나가 실패할 수 있는 단계라 되돌리는 경로도 같이 준비한다.
-
-이 일을 직접 짜는 대신 샤딩을 대신 해 주는 도구가 있다. Citus는 PostgreSQL 확장이다. 조정자 노드 하나와 작업자 노드 여럿을 두고, `SELECT create_distributed_table('orders', 'user_id')` 한 줄로 테이블을 `user_id` 기준으로 나눈다. 상품 같은 작은 테이블은 `create_reference_table`로 모든 노드에 복사한다. 앱은 조정자에 평범한 SQL을 보내고, 같은 키로 나눈 테이블끼리의 조인은 작업자 안에서 처리된다. Vitess는 MySQL용으로, VTGate라는 프록시가 쿼리를 받아 샤드로 보내고, 샤드를 나누거나 합치는 작업(Reshard)을 워크플로로 제공한다. YouTube에서 시작했다. 처음부터 나눠 저장하도록 만든 DB(Cassandra, DynamoDB, MongoDB 샤딩, CockroachDB 같은 분산 SQL)를 고르는 방법도 있다. MongoDB의 샤드 키 이야기는 [MongoDB 글](/posts/mongodb-document-model)에 있다.
-
-## 읽기 모양을 따로 만들어 두기
-
-샤딩하고 나면 "전체 주문을 날짜별로" 같은 쿼리가 비싸다. 이런 읽기는 원본 DB에서 해결하려 하지 않고, 읽기 전용 모델을 따로 만드는 방법이 있다. 쓰기는 회원별로 샤딩한 주문 DB가 받고, 변경이 생길 때마다 이벤트나 CDC로 그 내용을 받아 "일별 매출 테이블", "관리자 화면용 검색 색인"처럼 읽기에 맞춘 모양으로 다시 쌓는다. 쓰기 모델과 읽기 모델을 나누는 이 방식을 CQRS(Command Query Responsibility Segregation)라고 한다. 읽기 모델은 원본보다 조금 늦게 따라오니, 앞의 복제 지연과 같은 고민(쓴 사람에게는 쓴 것을 보여 주기)이 그대로 따라온다. 서비스 규모에 따라 저장소를 나누는 이야기는 [서비스 규모별 DB 설계 글](/posts/db-architecture-by-scale)에서 이어 간다.
-
 ## 언제 다음 단계로 넘어가나
 
 숫자는 하드웨어와 쿼리 모양에 따라 크게 달라서 출발점으로만 본다.
 
 쿼리와 인덱스를 고쳤는데도 프라이머리 CPU가 바쁜 시간대에 70%를 넘게 머물고, 그 대부분이 읽기라면 복제본을 붙인다. `pg_stat_statements`에서 SELECT가 총 실행 시간의 대부분을 차지하는지 먼저 본다. 장애 대비용 스탠바이는 규모와 상관없이 처음부터 두는 편이 낫다.
 
-테이블 하나가 수십 GB를 넘어 서버 메모리보다 커지고, 날짜 범위로 조회하거나 오래된 데이터를 정기적으로 지워야 한다면 파티셔닝을 본다. 1년치를 남기고 지우는 `DELETE` 배치가 복제 지연을 몇 분씩 만들거나, `VACUUM`이 그 테이블 하나에서 몇 시간씩 돈다면 늦은 편이다. 지울 일이 없고 쿼리에 파티션 키가 안 들어간다면 파티셔닝은 오히려 느려질 수 있다.
+테이블 하나가 수십 GB를 넘어 서버 메모리보다 커지고, 날짜 범위로 조회하거나 오래된 데이터를 정기적으로 지워야 한다면 [파티셔닝](/posts/db-partitioning)을 본다. 1년치를 남기고 지우는 `DELETE` 배치가 복제 지연을 몇 분씩 만들거나, `VACUUM`이 그 테이블 하나에서 몇 시간씩 돈다면 늦은 편이다. 지울 일이 없고 쿼리에 파티션 키가 안 들어간다면 파티셔닝은 오히려 느려질 수 있다.
 
-샤딩은 쓰기 자체가 한계일 때 간다. 가장 큰 인스턴스로 올렸는데도 쓰기 때문에 WAL 쓰기나 디스크가 포화되거나, 데이터가 수 TB로 커져 백업 복원과 복제본 하나 새로 만드는 데 하루가 걸리는 상황이다. 읽기만 많다면 샤딩보다 복제본과 캐시가 훨씬 싸다. 샤딩은 앱 코드, 운영, 장애 대응 방식이 다 바뀌기 때문에 다른 방법이 바닥났을 때 꺼내는 마지막 카드에 가깝다.
+[샤딩](/posts/db-sharding)은 쓰기 자체가 한계일 때 간다. 가장 큰 인스턴스로 올렸는데도 쓰기 때문에 WAL 쓰기나 디스크가 포화되거나, 데이터가 수 TB로 커져 백업 복원과 복제본 하나 새로 만드는 데 하루가 걸리는 상황이다. 읽기만 많다면 샤딩보다 복제본과 캐시가 훨씬 싸다. 샤딩은 앱 코드, 운영, 장애 대응 방식이 다 바뀌기 때문에 다른 방법이 바닥났을 때 꺼내는 마지막 카드에 가깝다.
 
-## 나누는 순서
+## 복제는 읽기를 나누고, 늦을 수 있다
 
-DB 한 대가 버거울 때는 먼저 쿼리와 인덱스를 고치고 서버를 키운다. 읽기가 문제면 WAL을 받아 재생하는 복제본으로 읽기를 나누되, 복제는 늦을 수 있으니 방금 쓴 것을 읽는 경로는 프라이머리나 LSN 확인으로 막는다. 테이블 하나가 너무 커지면 같은 DB 안에서 파티션으로 나눠 오래된 것을 통째로 떼어 내고, 쿼리에 파티션 키가 들어가게 만든다. 쓰기와 데이터가 서버 한 대를 넘을 때 비로소 샤딩으로 가는데, 샤드 키가 쿼리의 모양과 데이터 분포를 결정하고 나중에 바꾸기 어렵다는 걸 알고 고른다.
+DB 한 대가 버거울 때는 먼저 쿼리와 인덱스를 고치고 서버를 키운다. 그래도 읽기가 문제면 WAL을 받아 재생하는 복제본으로 읽기를 나눈다. 복제본은 프라이머리와 바이트 단위로 같은 사본이지만 늦을 수 있다. 그래서 방금 쓴 것을 읽는 경로는 프라이머리로 보내거나 LSN으로 확인하고, 지연은 시간과 바이트 차이를 함께 감시한다. 동기 복제는 그 틈을 줄이는 대신 커밋마다 기다림을 얹고, 동기 스탠바이 한 대가 쓰기 전체를 세울 수 있다. 복제는 쓰기를 나눠 주지 않는다. 테이블이 너무 커지면 [파티셔닝](/posts/db-partitioning)으로, 쓰기가 한 대를 넘으면 [샤딩](/posts/db-sharding)으로 간다.
 
 ## 면접에서 나올 만한 질문
 
@@ -1139,22 +539,14 @@ DB 한 대가 버거울 때는 먼저 쿼리와 인덱스를 고치고 서버를
 
 동기 스탠바이가 지정돼 있을 때 on은 스탠바이가 WAL을 디스크에 flush할 때까지 기다리고, remote_apply는 재생까지 끝나 쿼리에 보일 때까지 기다린다. on이면 프라이머리가 사라져도 커밋은 남지만 스탠바이에서 바로 읽으면 안 보일 수 있다. 동기 스탠바이가 한 대뿐이면 그 서버 장애가 프라이머리 쓰기를 멈추게 하니 `ANY 1 (s1, s2)`처럼 두 대 이상을 둔다.
 
-### 파티셔닝을 하면 쿼리가 항상 빨라지나요?
+### 복제 슬롯을 쓸 때 주의할 점은요?
 
-아니다. 쿼리 조건에 파티션 키가 있어야 필요한 파티션만 읽는 가지치기가 되고, 없으면 모든 파티션을 열어 보느라 오히려 느려진다. 범위 조회도 인덱스가 잘 걸린 단일 테이블과 비교하면 차이가 크지 않을 수 있다. 큰 이득은 오래된 데이터를 `DELETE` 대신 `DETACH`와 `DROP`으로 지우는 것, 파티션 단위의 VACUUM과 인덱스 관리에서 나온다.
+복제 슬롯은 스탠바이가 아직 받아 가지 않은 WAL을 프라이머리가 지우지 않게 붙잡아 둔다. 덕분에 스탠바이가 잠깐 끊겨도 이어 받을 수 있지만, 스탠바이가 오래 죽어 있으면 프라이머리에 WAL이 끝없이 쌓인다. 16의 `max_slot_wal_keep_size` 기본값은 제한 없음이라 그대로 두면 프라이머리 디스크가 차서 프라이머리까지 멈춘다. 디스크 여유에 맞춰 상한을 정하고 `pg_replication_slots`에서 `active = f`인 슬롯을 감시한다.
 
-### PostgreSQL 파티션 테이블에서 id만으로 기본 키를 만들 수 없는 이유는?
+### 복제본에서 긴 쿼리가 "conflict with recovery"로 끊기는 이유는요?
 
-고유 인덱스가 파티션마다 따로 있어서 다른 파티션의 값을 확인할 수 없기 때문이다. 기본 키와 UNIQUE에 파티션 키가 들어가야 각 파티션 안의 고유성만으로 전체 고유성이 보장된다. 그래서 `(id, created_at)`처럼 만들고, 이메일처럼 전역으로 고유해야 하는 값은 별도의 작은 테이블에 UNIQUE를 건다.
+프라이머리의 VACUUM이 옛 행 버전을 지운 기록이 스탠바이로 오는데, 스탠바이에서 돌던 쿼리가 그 버전을 봐야 할 수 있어서다. 스탠바이는 재생을 미루고 기다리다가 `max_standby_streaming_delay`(기본 30초)를 넘으면 쿼리를 취소한다. `hot_standby_feedback = on`을 켜면 덜 끊기지만 프라이머리 테이블이 부풀고, 분석용 복제본을 따로 두어 그쪽만 지연 한도를 크게 잡는 방법도 있다.
 
-### 샤드 키는 어떻게 고르나요?
+### 프라이머리 장애 조치에서 split-brain은 어떻게 막나요?
 
-데이터와 쓰기가 고르게 퍼지고, 가장 자주 하는 쿼리가 샤드 하나에서 끝나는 키를 고른다. 생성 시각처럼 계속 증가하는 값으로 범위 샤딩을 하면 새 쓰기가 최신 샤드 한 대에 몰리는 핫스팟이 생긴다. 회원 id처럼 카디널리티가 높고 요청이 그 단위로 묶이는 값이 흔한 선택이고, 함께 조인하는 테이블은 같은 키로 나눠 같은 샤드에 둔다.
-
-### 일관된 해싱은 왜 쓰나요?
-
-`hash % N` 방식은 샤드 수가 바뀌면 대부분의 키가 다른 샤드로 옮겨진다. 실제로 1만 개 키를 3개에서 4개로 늘리면 약 75%가 이동했다. 일관된 해싱은 샤드와 키를 같은 해시 링에 놓고 시계 방향으로 첫 샤드에 배정해서, 샤드를 더하거나 빼도 이웃 구간의 키만 옮긴다. 샤드마다 가상 노드를 여러 개 찍어 구간 길이를 고르게 만든다.
-
-### 샤딩 환경에서 ID는 어떻게 만드나요?
-
-샤드마다 자동 증가를 쓰면 겹치니 전역에서 유일한 id가 필요하다. UUIDv7은 앞부분이 밀리초 시간이라 정렬되면서도 어디서나 충돌 없이 만들 수 있고, Snowflake는 시간 41비트, 기계 번호 10비트, 순번 12비트로 64비트 정수를 만든다. 무작위 UUIDv4는 B-tree 인덱스에 흩어져 들어가 쓰기 성능이 떨어진다. Snowflake는 기계 번호 관리와 시계가 뒤로 가는 경우를 처리해야 한다.
+네트워크만 끊긴 옛 프라이머리가 계속 쓰기를 받으면 두 서버에 서로 다른 데이터가 쌓이고 합칠 방법이 없다. Patroni 같은 도구는 etcd 같은 합의 저장소의 리더 키를 갱신하지 못한 프라이머리를 스스로 읽기 전용으로 내리고, 필요하면 watchdog으로 재부팅해 확실히 끊는다(펜싱). 살아난 옛 프라이머리는 `pg_rewind`로 되감아 스탠바이로 다시 붙인다. 비동기 복제라면 보내지 못한 마지막 커밋은 잃으니 RPO와 RTO를 먼저 정한다.

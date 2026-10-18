@@ -2,6 +2,124 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "db-keys-denormalization": {
+    "links": [
+      "db-modeling-normalization",
+      "db-transaction-isolation"
+    ],
+    "mentions": [
+      "postgres-architecture",
+      "postgres-advanced-sql",
+      "db-index",
+      "db-sharding",
+      "db-index-design",
+      "db-types-overview",
+      "db-partitioning"
+    ]
+  },
+  "db-locking-deadlock": {
+    "links": [
+      "db-transaction-isolation",
+      "microservices"
+    ],
+    "mentions": [
+      "sql-basics",
+      "postgres-getting-started"
+    ]
+  },
+  "sql-batch-timeout-pool": {
+    "links": [
+      "sql-query-tuning",
+      "sql-query-rewrite",
+      "db-index",
+      "sql-insert-update-delete"
+    ],
+    "mentions": [
+      "postgres-mvcc-vacuum",
+      "db-architecture-by-scale",
+      "postgres-getting-started"
+    ]
+  },
+  "sql-query-rewrite": {
+    "links": [
+      "sql-query-tuning",
+      "db-index",
+      "sql-batch-timeout-pool"
+    ],
+    "mentions": [
+      "rest-api-design",
+      "db-index-design",
+      "postgres-architecture",
+      "db-transaction-isolation"
+    ]
+  },
+  "db-sharding": {
+    "links": [
+      "db-replication-sharding",
+      "db-partitioning",
+      "microservices",
+      "mongodb-document-model",
+      "db-architecture-by-scale",
+      "db-index"
+    ],
+    "mentions": [
+      "redis-persistence-ha",
+      "db-type-newsql",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "redis-basics"
+    ]
+  },
+  "db-partitioning": {
+    "links": [
+      "db-replication-sharding",
+      "db-sharding"
+    ],
+    "mentions": []
+  },
+  "db-index-pitfalls": {
+    "links": [
+      "db-index",
+      "db-index-design",
+      "sql-query-tuning"
+    ],
+    "mentions": [
+      "postgres-mvcc-vacuum",
+      "db-replication-sharding",
+      "sql-basics"
+    ]
+  },
+  "db-index-design": {
+    "links": [
+      "db-index",
+      "db-index-pitfalls"
+    ],
+    "mentions": []
+  },
+  "sql-insert-update-delete": {
+    "links": [
+      "sql-basics",
+      "sql-select-where-null",
+      "db-transaction-isolation"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "postgres-operations",
+      "postgres-getting-started"
+    ]
+  },
+  "sql-select-where-null": {
+    "links": [
+      "sql-basics",
+      "sql-query-tuning",
+      "sql-insert-update-delete"
+    ],
+    "mentions": [
+      "db-index",
+      "sqld-group-by-having",
+      "postgres-getting-started"
+    ]
+  },
   "tcp-connection-lifecycle": {
     "links": [
       "network-layers-overview",
@@ -12,7 +130,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "what-happens-google-com",
       "browser-fetch",
-      "iptables-basics"
+      "iptables-basics",
+      "sql-batch-timeout-pool"
     ]
   },
   "tcp-reliability-congestion": {
@@ -56,6 +175,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-inverted-index",
       "iptables-basics",
       "postgres-getting-started",
+      "sql-batch-timeout-pool",
       "redis-basics",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
@@ -171,9 +291,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational"
     ],
     "mentions": [
+      "db-partitioning",
       "sqld-group-by-having",
       "db-replication-sharding",
-      "http-status-codes"
+      "http-status-codes",
+      "db-index-design"
     ]
   },
   "db-type-columnar-olap": {
@@ -186,7 +308,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql"
     ],
     "mentions": [
-      "postgres-advanced-sql"
+      "postgres-advanced-sql",
+      "db-sharding",
+      "db-replication-sharding",
+      "db-index-design"
     ]
   },
   "db-type-newsql": {
@@ -200,6 +325,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column"
     ],
     "mentions": [
+      "sql-basics",
       "postgres-getting-started"
     ]
   },
@@ -212,8 +338,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-consistency-cap"
     ],
     "mentions": [
-      "sql-basics",
+      "sql-insert-update-delete",
       "sqld-window-functions",
+      "db-index-pitfalls",
       "postgres-architecture"
     ]
   },
@@ -250,7 +377,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics",
       "postgres-getting-started"
     ],
-    "mentions": []
+    "mentions": [
+      "db-index"
+    ]
   },
   "db-type-relational": {
     "links": [
@@ -275,6 +404,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-top-n-hierarchical-pivot",
       "postgres-architecture",
       "postgres-jsonb-search",
+      "db-partitioning",
       "postgres-getting-started"
     ]
   },
@@ -306,7 +436,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-graph"
     ],
     "mentions": [
+      "db-sharding",
       "db-type-relational",
+      "db-index-pitfalls",
+      "db-partitioning",
       "dns"
     ]
   },
@@ -317,6 +450,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series"
     ],
     "mentions": [
+      "db-index",
       "db-type-relational"
     ]
   },
@@ -345,7 +479,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-tuning",
       "postgres-operations"
     ],
-    "mentions": []
+    "mentions": [
+      "db-index-design"
+    ]
   },
   "postgres-operations": {
     "links": [
@@ -356,9 +492,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding"
     ],
     "mentions": [
+      "db-index",
       "db-architecture-by-scale",
       "db-type-relational",
       "postgres-getting-started",
+      "sql-query-rewrite",
       "sql-basics"
     ]
   },
@@ -377,7 +515,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-data-types",
       "sqld-group-by-having",
       "postgres-getting-started",
-      "sql-query-tuning"
+      "sql-query-rewrite"
     ]
   },
   "postgres-functions-triggers": {
@@ -389,9 +527,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-jsonb-search"
     ],
     "mentions": [
+      "sql-select-where-null",
       "db-index",
       "json-crud-http",
       "postgres-getting-started",
+      "sql-basics",
+      "db-locking-deadlock",
+      "db-index-design",
       "postgres-data-types"
     ]
   },
@@ -402,7 +544,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-inverted-index",
       "postgres-architecture"
     ],
-    "mentions": []
+    "mentions": [
+      "db-index-design"
+    ]
   },
   "postgres-getting-started": {
     "links": [
@@ -413,6 +557,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-operations",
       "db-type-relational",
+      "sql-batch-timeout-pool",
       "layer-ip-addressing"
     ]
   },
@@ -424,6 +569,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics"
     ],
     "mentions": [
+      "sql-select-where-null",
       "postgres-architecture"
     ]
   },
@@ -435,8 +581,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-data-types",
       "db-architecture-by-scale",
-      "sql-basics",
-      "db-index",
+      "sql-insert-update-delete",
+      "db-index-design",
+      "sql-batch-timeout-pool",
       "layer-ip-addressing",
       "dns"
     ]
@@ -539,7 +686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-group-by-having",
-      "sql-basics"
+      "sql-select-where-null"
     ]
   },
   "sqld-window-functions": {
@@ -570,12 +717,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-window-functions"
     ],
     "mentions": [
+      "db-index",
       "sqld-group-by-having"
     ]
   },
   "sql-basics": {
     "links": [
+      "sql-select-where-null",
+      "sql-insert-update-delete",
       "db-index",
+      "db-index-pitfalls",
       "sqld-data-modeling"
     ],
     "mentions": [
@@ -591,6 +742,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-data-types",
       "db-type-relational",
+      "db-keys-denormalization",
       "sql-basics"
     ]
   },
@@ -601,6 +753,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "db-keys-denormalization",
       "http-status-codes",
       "sql-basics"
     ]
@@ -633,28 +786,30 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "db-modeling-normalization": {
     "links": [
-      "db-index"
+      "db-keys-denormalization",
+      "db-index",
+      "db-transaction-isolation"
     ],
     "mentions": [
-      "postgres-architecture",
       "json-crud-http",
-      "postgres-advanced-sql",
-      "db-types-overview",
-      "sqld-entity-attribute-relationship",
-      "db-transaction-isolation",
-      "db-replication-sharding"
+      "db-index-design",
+      "sqld-entity-attribute-relationship"
     ]
   },
   "db-transaction-isolation": {
-    "links": [],
+    "links": [
+      "db-locking-deadlock"
+    ],
     "mentions": [
       "postgres-mvcc-vacuum",
-      "postgres-getting-started",
-      "sql-basics"
+      "sql-basics",
+      "postgres-getting-started"
     ]
   },
   "db-replication-sharding": {
     "links": [
+      "db-partitioning",
+      "db-sharding",
       "db-index",
       "sql-query-tuning",
       "caching-strategies"
@@ -662,6 +817,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-consistency-cap",
       "db-architecture-by-scale",
+      "sql-batch-timeout-pool",
       "db-type-key-value",
       "postgres-architecture",
       "dns"
@@ -685,28 +841,36 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-advanced-sql",
       "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
+      "db-sharding",
       "db-type-wide-column",
       "db-type-key-value",
       "db-type-relational",
       "db-type-graph",
       "http-caching-cdn",
+      "sql-batch-timeout-pool",
       "postgres-operations",
       "postgres-jsonb-search",
+      "db-partitioning",
       "sql-basics"
     ]
   },
   "db-index": {
     "links": [
-      "sql-query-tuning"
+      "db-index-pitfalls",
+      "sql-query-tuning",
+      "db-index-design"
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "db-sharding",
       "db-transaction-isolation",
       "sql-basics"
     ]
   },
   "sql-query-tuning": {
     "links": [
+      "sql-query-rewrite",
+      "sql-batch-timeout-pool",
       "db-index"
     ],
     "mentions": []
@@ -979,6 +1143,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "http-versions",
+      "sql-batch-timeout-pool",
       "what-happens-google-com",
       "udp-and-quic",
       "dns"
@@ -1080,11 +1245,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "base64",
-      "db-index",
+      "db-locking-deadlock",
+      "db-index-design",
       "http-message",
       "http-versions",
       "redis-basics",
-      "sql-query-tuning"
+      "sql-query-rewrite"
     ]
   },
   "http-status-codes": {
@@ -1102,6 +1268,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rest-api-design",
       "proxy-reverse-proxy",
       "token-login",
+      "db-locking-deadlock",
       "http-versions",
       "what-happens-google-com",
       "dns"
@@ -1200,6 +1367,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "db-index",
       "mongodb-document-model",
       "db-modeling-normalization"
     ]
@@ -1207,8 +1375,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "mongodb-document-model": {
     "links": [],
     "mentions": [
+      "db-index-design",
       "db-type-relational",
-      "db-index",
       "db-replication-sharding",
       "db-modeling-normalization"
     ]
@@ -1252,6 +1420,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "sql-batch-timeout-pool",
       "http-methods"
     ]
   },
@@ -1262,6 +1431,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-versions",
+      "sql-batch-timeout-pool",
       "udp-and-quic"
     ]
   },

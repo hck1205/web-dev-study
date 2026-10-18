@@ -59,46 +59,16 @@ export const DB_MODELING_NORMALIZATION: QuizQuestion[] = [
   {
     id: "db-modeling-normalization-5",
     post: "db-modeling-normalization",
-    question: "order_items에 주문 당시 가격(unit_price)을 저장하는 것에 대한 설명으로 맞는 것은?",
+    question: "orders_flat에서 '이메일 → 전화번호' 종속이 데이터에서 깨졌는지 확인하는 방법으로 가장 알맞은 것은?",
     choices: [
-      "products.price와 중복이니 지우고 조인으로 가져와야 한다",
-      "조회 성능을 위한 대표적인 반정규화 기법이다",
-      "주문과 상품 둘 다에 종속인 별개의 사실이라 올바른 모델링이다",
-      "트리거로 products.price와 항상 같게 맞춰야 한다",
+      "이메일로 GROUP BY하고 전화번호의 서로 다른 값 수가 2 이상인 묶음을 찾는다",
+      "전화번호로 ORDER BY해서 같은 번호가 연속인지 본다",
+      "이메일 열에 UNIQUE 제약을 걸어 본다",
+      "count(*)와 count(phone)을 비교한다",
     ],
-    answer: 2,
+    answer: 0,
     explanation:
-      "주문 당시 가격은 '이 주문에서 얼마에 팔았나'라는 사실이라 지금 판매가와 다르다. 가격을 올렸을 때 과거 주문 금액이 바뀌면 안 되니 스냅숏으로 저장하는 게 맞다. 원본을 따라 바뀌어야 하는 값을 복사했을 때만 중복이다.",
-    anchor: "주문-당시-가격은-중복이-아니다",
-  },
-  {
-    id: "db-modeling-normalization-6",
-    post: "db-modeling-normalization",
-    question: "무작위 UUID(v4)를 기본키로 쓸 때 bigint identity보다 인덱스가 커지는 주된 이유는?",
-    choices: [
-      "UUID는 NULL을 허용해서",
-      "UUID는 B-tree 인덱스를 쓸 수 없어서",
-      "UUID 열에는 UNIQUE를 따로 걸어야 해서",
-      "키가 16바이트로 두 배인 데다, 무작위 위치에 끼어들어 페이지 분할로 페이지가 덜 차서",
-    ],
-    answer: 3,
-    explanation:
-      "1씩 늘어나는 키는 늘 오른쪽 끝 페이지에 붙지만 v4는 인덱스 아무 곳에나 들어가 꽉 찬 페이지를 쪼갠다. 100만 줄 실험에서 리프 채움률이 90%에서 70%로 떨어지고 인덱스가 21MB에서 39MB가 됐다. 시간 순으로 정렬되는 UUIDv7을 쓰면 이 문제가 크게 줄어든다.",
-    anchor: "자연-키와-대리-키-그리고-uuid",
-  },
-  {
-    id: "db-modeling-normalization-7",
-    post: "db-modeling-normalization",
-    question: "deleted_at으로 소프트 삭제하는 users에서 탈퇴한 회원의 이메일로 재가입이 막힌다. PostgreSQL에서 알맞은 해결은?",
-    choices: [
-      "email의 UNIQUE를 지우고 앱에서 중복을 검사한다",
-      "탈퇴할 때 이메일 뒤에 임의 문자열을 붙인다",
-      "WHERE deleted_at IS NULL 조건을 단 부분 유니크 인덱스를 만든다",
-      "email을 기본키로 바꾼다",
-    ],
-    answer: 2,
-    explanation:
-      "부분 유니크 인덱스는 살아 있는 회원끼리만 이메일이 유일하도록 DB가 지켜 준다. 앱 검사만 두면 동시에 들어온 두 가입 요청이나 다른 경로의 INSERT를 막지 못한다. 부분 인덱스가 없는 MySQL은 생성 열에 UNIQUE를 거는 방식으로 대신한다.",
-    anchor: "자주-보는-설계-실수",
+      "결정자가 같은 줄끼리 묶었을 때 종속자 값이 두 종류 이상이면 종속이 깨진 것이다. orders_flat은 같은 이메일이 여러 주문에 나오니 UNIQUE는 처음부터 걸 수 없다. 데이터에서 안 깨졌다고 규칙이 있다는 뜻은 아니니 업무 규칙으로도 확인한다.",
+    anchor: "무엇이-무엇을-정하나-함수-종속",
   },
 ];

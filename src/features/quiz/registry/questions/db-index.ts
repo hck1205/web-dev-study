@@ -34,21 +34,6 @@ export const DB_INDEX: QuizQuestion[] = [
   {
     id: "db-index-3",
     post: "db-index",
-    question: "WHERE status = 'pending' AND created_at >= '2026-09-13' 조건에 가장 적은 페이지를 읽는 인덱스는?",
-    choices: [
-      "(created_at, status)",
-      "(status)",
-      "(created_at)",
-      "(status, created_at)",
-    ],
-    answer: 3,
-    explanation:
-      "같다로 비교하는 status를 앞에 두면 pending이면서 날짜 조건에 맞는 항목이 인덱스 안에서 한 덩어리로 붙는다. (created_at, status)는 한 달 치 항목을 다 훑으며 status를 확인해야 해서 예제에서 418페이지를 읽었고, (status, created_at)은 8페이지를 읽었다.",
-    anchor: "여러-컬럼-인덱스는-순서가-결과를-바꾼다",
-  },
-  {
-    id: "db-index-4",
-    post: "db-index",
     question: "Index Only Scan인데도 Heap Fetches가 크게 나오는 이유로 가장 알맞은 것은?",
     choices: [
       "VACUUM이 밀려서 가시성 맵에 '모두에게 보임' 표시가 꺼진 페이지가 많기 때문에",
@@ -62,37 +47,7 @@ export const DB_INDEX: QuizQuestion[] = [
     anchor: "같은-인덱스를-읽는-네-가지-방법",
   },
   {
-    id: "db-index-5",
-    post: "db-index",
-    question: "bigint 컬럼 user_id에 인덱스가 있을 때, 인덱스를 쓰지 못하는 조건은?",
-    choices: [
-      "WHERE user_id = 42",
-      "WHERE user_id = '42'",
-      "WHERE user_id = 42.0",
-      "WHERE user_id IN (42, 43)",
-    ],
-    answer: 2,
-    explanation:
-      "42.0은 numeric이라 비교하려고 컬럼 쪽을 numeric으로 바꾸고, 그 결과는 인덱스에 없어서 Seq Scan이 된다. 따옴표로 쓴 '42'는 타입이 정해지지 않은 리터럴이라 컬럼 타입인 bigint로 바뀌어 인덱스를 탄다.",
-    anchor: "인덱스가-있는데-안-타는-경우",
-  },
-  {
-    id: "db-index-6",
-    post: "db-index",
-    question: "status 컬럼이 인덱스에 들어 있을 때 UPDATE orders SET status = 'paid' 가 HOT 업데이트가 되지 않는 이유는?",
-    choices: [
-      "status가 text 타입이라서",
-      "인덱스에 들어간 컬럼을 바꾸면 새 버전을 가리키는 인덱스 항목을 새로 넣어야 해서",
-      "HOT 업데이트는 DELETE에만 적용되는 기능이라서",
-      "fillfactor가 기본값보다 낮아서",
-    ],
-    answer: 1,
-    explanation:
-      "HOT은 인덱스에 걸린 컬럼이 바뀌지 않고 같은 페이지에 빈자리가 있을 때만 인덱스를 건드리지 않는다. 예제에서도 amount를 바꾼 행은 HOT이었고 status를 바꾼 행은 아니었다. fillfactor를 낮추면 오히려 빈자리가 생겨 HOT이 쉬워진다.",
-    anchor: "인덱스는-쓰기를-느리게-한다",
-  },
-  {
-    id: "db-index-7",
+    id: "db-index-4",
     post: "db-index",
     question: "MySQL InnoDB에서 기본 키를 무작위 UUID 문자열로 잡으면 생기는 문제가 아닌 것은?",
     choices: [
@@ -105,5 +60,20 @@ export const DB_INDEX: QuizQuestion[] = [
     explanation:
       "InnoDB 보조 인덱스의 잎에는 기본 키가 들어 있어서, 보조 인덱스로 찾으면 그 키로 클러스터드 인덱스를 한 번 더 내려간다. 이건 키 종류와 상관없이 늘 그렇다. 나머지 셋은 무작위 키와 긴 키 때문에 실제로 생기는 문제다.",
     anchor: "mysql-8은-표-자체가-인덱스다",
+  },
+  {
+    id: "db-index-5",
+    post: "db-index",
+    question: "회원 탈퇴 쿼리의 계획을 보려고 운영 DB에서 EXPLAIN ANALYZE DELETE FROM orders WHERE user_id = 42를 그대로 실행했다. 어떤 일이 생기나?",
+    choices: [
+      "계획만 보여 주고 아무 행도 지우지 않는다",
+      "예상 비용만 계산하고 실제 시간은 0으로 나온다",
+      "쿼리가 실제로 실행되어 8행이 지워진다",
+      "쓰기 쿼리에는 EXPLAIN을 쓸 수 없어 에러가 난다",
+    ],
+    answer: 2,
+    explanation:
+      "ANALYZE를 붙이면 실제 시간과 행 수를 재려고 쿼리를 정말로 실행한다. 그래서 DELETE나 UPDATE의 계획은 BEGIN 안에서 보고 ROLLBACK으로 되돌린다. 실행 없이 계획만 보려면 ANALYZE 없이 EXPLAIN만 쓴다.",
+    anchor: "현장에서-인덱스가-필요한-곳을-찾는-순서",
   },
 ];

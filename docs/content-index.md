@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 107편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 117편 · 토픽 42개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -36,8 +36,8 @@
 - 길이: 490줄
 - 소제목: 주소는 자원의 이름이다 / CRUD로 안 떨어지는 동작 / 메서드와 상태 코드를 제대로 쓴다 / 목록을 거르고 줄 세우기 / 같은 글이 두 번 나온 이유 / 다음 페이지 주소를 알려 주는 방법 / 에러 응답도 모양을 정한다 / 필요한 만큼만 받기 / 버전을 올리지 않고 바꾸는 법 / 그래도 버전을 나눠야 할 때 / POST를 두 번 받아도 괜찮게 / 너무 많이 부르는 클라이언트 / 이름과 값의 모양을 통일한다 / 링크를 따라가는 API / REST가 맞지 않는 곳 / 다시 무한 스크롤로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-status-codes, http-caching-cdn, resilience-patterns, gateway, microservices
-- 키워드 백링크 →: base64, db-index, http-message, http-versions, redis-basics, sql-query-tuning
-- 이 글로 오는 글 ←: browser-fetch, client-data-cache, docker-container-basics, html-form-http, http-status-codes, json-crud-http
+- 키워드 백링크 →: base64, db-locking-deadlock, db-index-design, http-message, http-versions, redis-basics, sql-query-rewrite
+- 이 글로 오는 글 ←: browser-fetch, client-data-cache, docker-container-basics, html-form-http, http-status-codes, json-crud-http, sql-query-rewrite
 
 ### Programming › Backend › Auth (`programming/backend/auth`)
 
@@ -190,16 +190,37 @@
 
 ### Programming › Database (`programming/database`)
 
-#### `db-replication-sharding` — DB 한 대로 버티지 못할 때: 복제, 파티셔닝, 샤딩
+#### `db-partitioning` — 파티셔닝: 큰 테이블을 달마다 나누기
 
-- 요약: 읽기가 몰리면 복제본으로, 테이블이 너무 커지면 파티션으로, 쓰기와 데이터가 한 대를 넘으면 샤드로 나눈다. PostgreSQL 16에서 복제 지연, 파티션 가지치기, 일관된 해싱을 직접 돌려 보며 각 단계가 푸는 문제와 새로 생기는 문제를 정리한다.
+- 요약: 주문 테이블을 created_at 범위로 나누고 파티션 가지치기가 어떤 쿼리에서 되고 안 되는지 실행 계획으로 확인한다. 오래된 달을 DELETE 대신 DETACH와 DROP으로 버리고, default 파티션 함정과 LIST·HASH 파티션, 고유 제약 규칙까지 다룬다.
+- 태그: Database, PostgreSQL, Scalability, Performance
+- 키워드: 파티셔닝, 파티션 가지치기, default 파티션
+- 길이: 462줄
+- 소제목: 주문 테이블을 달마다 나눈다 / 조건에 맞는 파티션만 읽는다 / 오래된 달은 통째로 떼어 낸다 / 목록과 해시로도 나눈다 / 파티션 키가 쿼리에 들어가야 한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-replication-sharding, db-sharding
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-keys-denormalization, db-replication-sharding, db-sharding, db-type-relational, db-type-time-series, db-type-wide-column
+
+#### `db-replication-sharding` — DB 한 대로 버티지 못할 때: 복제와 복제 지연
+
+- 요약: 읽기가 몰리면 WAL을 받아 재생하는 복제본으로 나눈다. PostgreSQL 16에서 스탠바이를 붙이고, 방금 쓴 주문이 안 보이는 복제 지연을 재현해 LSN으로 막고, 동기 복제와 복제본 쿼리 취소, 장애 조치와 split-brain까지 정리한다. 파티셔닝과 샤딩으로 넘어갈 신호도 함께 본다.
 - 태그: Database, PostgreSQL, Distributed Systems, Scalability, System Design
-- 키워드: 읽기 복제본, 스트리밍 복제, 파티셔닝, 일관된 해싱, 복제 지연
+- 키워드: 읽기 복제본, 스트리밍 복제, 복제 지연, 복제 슬롯
 - 길이: 553줄
 - 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 언제 다음 단계로 넘어가나 / 복제는 읽기를 나누고, 늦을 수 있다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index, sql-query-tuning, caching-strategies
-- 키워드 백링크 →: db-consistency-cap, db-architecture-by-scale, db-type-key-value, postgres-architecture, dns
-- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-consistency-cap, db-modeling-normalization, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
+- 직접 링크 →: db-partitioning, db-sharding, db-index, sql-query-tuning, caching-strategies
+- 키워드 백링크 →: db-consistency-cap, db-architecture-by-scale, sql-batch-timeout-pool, db-type-key-value, postgres-architecture, dns
+- 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, mongodb-document-model, postgres-architecture, postgres-mvcc-vacuum, postgres-operations
+
+#### `db-sharding` — 샤딩: 데이터를 서버 여러 대에 나눠 담기
+
+- 요약: 쓰기와 데이터가 서버 한 대를 넘을 때 샤드 키를 고르고, 일관된 해싱과 가상 노드로 샤드를 늘려도 조금만 옮기는 법을 직접 계산해 본다. 샤드를 넘는 쿼리와 트랜잭션, 전역 ID(UUIDv7, Snowflake), 재분배, 지금 데이터로 샤드 키 분포를 미리 재 보는 방법도 정리한다.
+- 태그: Database, Distributed Systems, Scalability, System Design
+- 키워드: 일관된 해싱, Snowflake, UUIDv7
+- 길이: 312줄
+- 소제목: 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 샤드 키를 정하기 전에 지금 데이터로 재 본다 / 샤딩은 마지막 카드다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-replication-sharding, db-partitioning, microservices, mongodb-document-model, db-architecture-by-scale, db-index
+- 키워드 백링크 →: redis-persistence-ha, db-type-newsql, db-type-wide-column, db-type-key-value, redis-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-keys-denormalization, db-partitioning, db-replication-sharding, db-type-columnar-olap, db-type-wide-column
 
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
 
@@ -209,7 +230,7 @@
 - 길이: 427줄
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db
-- 키워드 백링크 →: mongodb-document-model, db-modeling-normalization
+- 키워드 백링크 →: db-index, mongodb-document-model, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-types-overview, http-methods, ports-and-sockets, postgres-jsonb-search
 
 #### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
@@ -219,8 +240,8 @@
 - 키워드: MongoDB, ESR 규칙, 샤드 키, write concern, 집계 파이프라인
 - 길이: 409줄
 - 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: db-type-relational, db-index, db-replication-sharding, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-types-overview, elasticsearch-inverted-index
+- 키워드 백링크 →: db-index-design, db-type-relational, db-replication-sharding, db-modeling-normalization
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index
 
 #### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
 
@@ -253,7 +274,7 @@
 - 길이: 485줄
 - 소제목: 주문을 받는 질문과 매출을 보는 질문 / 실험에 쓸 주문 500만 건 / 행으로 저장하면 안 쓰는 컬럼도 읽는다 / 같은 컬럼끼리 모이면 잘 눌린다 / 한 번에 값 하나가 아니라 묶음으로 계산한다 / 건너뛸 수 있는 덩어리는 아예 열지 않는다 / ClickHouse 테이블은 정렬 키부터 정한다 / 분석 DB가 잘 못 하는 것 / 클라우드 데이터 웨어하우스와 DuckDB / 운영 DB에서 분석 DB로 옮기는 길 / 컬럼형을 고르기 전에 / 읽는 방향에 맞춰 놓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-type-relational, db-type-time-series, db-type-embedded, db-architecture-by-scale, db-type-newsql
-- 키워드 백링크 →: postgres-advanced-sql
+- 키워드 백링크 →: postgres-advanced-sql, db-sharding, db-replication-sharding, db-index-design
 - 이 글로 오는 글 ←: caching-strategies, db-architecture-by-scale, db-type-embedded, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, db-types-overview, microservices
 
 #### `db-type-embedded` — 임베디드 DB: SQLite, RocksDB처럼 앱 안에 들어가는 DB
@@ -264,7 +285,7 @@
 - 길이: 424줄
 - 소제목: 서버 없이 라이브러리로 돈다 / 장바구니를 SQLite에 담아 보기 / 타입을 적어도 검사하지 않는다 / 쓰는 사람은 한 번에 하나 / WAL 모드에서는 변경을 옆 파일에 쌓는다 / 커밋은 모아서 한다 / 연결을 열 때마다 거는 설정 / SQLite가 들어가 있는 곳 / RocksDB는 다른 DB 밑에 들어간다 / 서버 DB와 나눠 맡기 / 서버를 빼고 남는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-type-wide-column, db-type-newsql, db-type-columnar-olap, db-consistency-cap
-- 키워드 백링크 →: sql-basics, sqld-window-functions, postgres-architecture
+- 키워드 백링크 →: sql-insert-update-delete, sqld-window-functions, db-index-pitfalls, postgres-architecture
 - 이 글로 오는 글 ←: db-type-columnar-olap, db-type-key-value, db-types-overview
 
 #### `db-type-graph` — 그래프 DB: 관계를 따라가는 질의
@@ -275,7 +296,7 @@
 - 길이: 429줄
 - 소제목: 친구의 친구가 산 책 / 점과 선으로 저장하기 / Cypher로 그림 그리듯 묻기 / 관계형에서 같은 질문을 하면 / 단계가 늘면 닿는 사람이 폭발한다 / 이웃을 바로 찾아가는 구조 / 너비 우선으로 따라가 보기 / 그래프 DB가 맞는 곳과 아닌 곳 / 관계형 DB와 함께 쓰기 / 관계를 저장하면 질문이 짧아진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-wide-column, sqld-top-n-hierarchical-pivot, db-type-time-series
-- 키워드 백링크 →: db-type-relational
+- 키워드 백링크 →: db-index, db-type-relational
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-type-relational, db-type-wide-column, db-types-overview
 
 #### `db-type-key-value` — 키-값 저장소: Redis, DynamoDB, etcd
@@ -287,7 +308,7 @@
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -297,8 +318,8 @@
 - 길이: 404줄
 - 소제목: SQL은 그대로, 저장은 여러 대에 / 행 하나가 키 하나가 된다 / 구간이 커지면 둘로 쪼갠다 / 구간마다 Raft로 과반에 적는다 / 구간 두 개에 걸친 트랜잭션 / 시계가 다르면 순서도 다르다 / 충돌하면 다시 하라고 돌려보낸다 / 멀리 있는 사용자의 데이터는 가까이 둔다 / 호환된다는 말의 범위 / 분산 SQL을 고르기 전에 / 샤딩을 DB 안으로 옮긴 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-types-overview, db-transaction-isolation, db-consistency-cap, db-type-columnar-olap, db-type-key-value, db-type-wide-column
-- 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: db-consistency-cap, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview
+- 키워드 백링크 →: sql-basics, postgres-getting-started
+- 이 글로 오는 글 ←: db-consistency-cap, db-sharding, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview
 
 #### `db-type-relational` — 관계형 DB: 왜 여전히 기본값인가
 
@@ -308,7 +329,7 @@
 - 길이: 481줄
 - 소제목: 미리 몰랐던 질문에 답하기 / 표와 키로 나눠 담는 이유 / 잘못된 데이터를 DB가 막는다 / 무엇을 원하는지만 쓰면 방법은 DB가 고른다 / 해시 조인을 손으로 따라가기 / 커밋이 끝났다는 건 로그가 디스크에 닿았다는 뜻 / 표 여러 개를 한 번에 바꾸는 트랜잭션 / PostgreSQL, MySQL, Oracle, SQL Server / 한 대를 넘어서면 어려워지는 것 / 다른 DB를 붙여도 원본은 여기에 둔다 / 기본값인 이유와 그 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-modeling-normalization, sql-query-tuning, db-index, db-replication-sharding, db-transaction-isolation, sql-basics, db-type-newsql, db-type-columnar-olap, db-type-graph, db-type-wide-column, mongodb-document-model, caching-strategies, db-architecture-by-scale
-- 키워드 백링크 →: db-type-time-series, db-type-key-value, sqld-top-n-hierarchical-pivot, postgres-architecture, postgres-jsonb-search, postgres-getting-started
+- 키워드 백링크 →: db-type-time-series, db-type-key-value, sqld-top-n-hierarchical-pivot, postgres-architecture, postgres-jsonb-search, db-partitioning, postgres-getting-started
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, mongodb-document-model, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, sqld-data-modeling
 
 #### `db-type-time-series` — 시계열 DB: 시간 순서로 쌓이는 데이터
@@ -319,7 +340,7 @@
 - 길이: 598줄
 - 소제목: 시간이 키가 되는 데이터 / 측정값 하나를 이루는 조각 / PostgreSQL에 그대로 쌓아 보기 / 시간 순서로 쌓이면 범위만 적어 둬도 된다 / 구간으로 묶어 읽기 / 오래된 데이터는 요약으로 바꾼다 / 기간 통째로 버리기 / 같은 시계열끼리 붙이면 잘 눌린다 / TimescaleDB는 PostgreSQL 안에서 같은 일을 한다 / Prometheus는 최근 몇 시간을 메모리에 둔다 / 레이블 하나가 시계열을 수백만 개로 만든다 / 어떤 시계열 저장소를 고를까 / 시계열 DB를 고르지 않아도 되는 경우 / 끝에 붙이고, 덩어리로 버린다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-index, db-type-columnar-olap, db-type-relational
-- 키워드 백링크 →: sqld-group-by-having, db-replication-sharding, http-status-codes
+- 키워드 백링크 →: db-partitioning, sqld-group-by-having, db-replication-sharding, http-status-codes, db-index-design
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-relational, db-type-wide-column, db-types-overview
 
 #### `db-type-wide-column` — 와이드 컬럼 DB: Cassandra와 쿼리 먼저 설계하기
@@ -330,8 +351,8 @@
 - 길이: 410줄
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
-- 키워드 백링크 →: db-type-relational, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview
+- 키워드 백링크 →: db-sharding, db-type-relational, db-index-pitfalls, db-partitioning, dns
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -341,7 +362,8 @@
 - 길이: 262줄
 - 소제목: 같은 주문을 여러 모양으로 저장하기 / 무엇으로 찾는지가 먼저다 / 빠른 이유는 저마다 하나씩 / 질문 여섯 개로 서점의 저장소 고르기 / 원본에서 사본으로 흘러가는 길 / 시리즈 지도 / 모양과 질문을 먼저 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, db-type-time-series, db-type-columnar-olap, db-type-newsql, db-type-embedded, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
-- 이 글로 오는 글 ←: db-consistency-cap, db-modeling-normalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series
+- 키워드 백링크 →: db-index
+- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
@@ -353,8 +375,8 @@
 - 길이: 942줄 (긴 글)
 - 소제목: 예제로 쓸 작은 서점 / 넣은 행을 바로 돌려받는 RETURNING / 있으면 더하고 없으면 넣기 / 조회하고 넣으면 생기는 틈 / 원본 데이터와 맞춰 놓는 MERGE / WITH로 긴 쿼리를 문단처럼 나누기 / 한 문장으로 행을 옮기는 쓰기 CTE / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / CTE가 최적화를 막던 시절 / 문장 하나로 끝내는 습관 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-roles-security, db-transaction-isolation, sqld-top-n-hierarchical-pivot, caching-strategies, sqld-window-functions, db-index, postgres-functions-triggers
-- 키워드 백링크 →: postgres-data-types, sqld-group-by-having, postgres-getting-started, sql-query-tuning
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-type-columnar-olap, postgres-functions-triggers, sqld-rollup-cube-grouping-sets
+- 키워드 백링크 →: postgres-data-types, sqld-group-by-having, postgres-getting-started, sql-query-rewrite
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-keys-denormalization, db-type-columnar-olap, postgres-functions-triggers, sql-insert-update-delete, sqld-rollup-cube-grouping-sets
 
 #### `postgres-architecture` — PostgreSQL 내부 구조: 프로세스, 공유 메모리, 페이지, WAL, 체크포인트
 
@@ -365,7 +387,7 @@
 - 소제목: 연결 하나에 프로세스 하나 / 백그라운드에서 도는 프로세스들 / 함께 쓰는 메모리와 혼자 쓰는 메모리 / 같은 페이지가 두 번 캐시된다 / 데이터 디렉터리 들여다보기 / 8KB 페이지 한 장의 구조 / 페이지에 빈자리를 남기는 fillfactor / 큰 값은 TOAST로 따로 둔다 / 먼저 로그에 쓰고 나중에 파일에 쓴다 / LSN은 WAL 안의 바이트 주소다 / 체크포인트 직후의 첫 수정은 페이지 통째로 / 체크포인트가 하는 일 / 서버가 죽었다 다시 뜰 때 / fsync와 synchronous_commit / 다시 64GB 서버로 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, postgres-jsonb-search, sql-query-tuning, postgres-operations, postgres-mvcc-vacuum, db-index, db-transaction-isolation, db-replication-sharding
 - 키워드 백링크 →: db-architecture-by-scale, db-type-relational
-- 이 글로 오는 글 ←: db-modeling-normalization, db-replication-sharding, db-type-embedded, db-type-relational, postgres-data-types, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations
+- 이 글로 오는 글 ←: db-keys-denormalization, db-replication-sharding, db-type-embedded, db-type-relational, postgres-data-types, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-query-rewrite
 
 #### `postgres-data-types` — 타입을 잘 고르면 절반은 끝난다: 숫자, 문자열, 시간, UUID, 배열, enum, range
 
@@ -375,7 +397,7 @@
 - 길이: 780줄
 - 소제목: 0.1을 열 번 더하면 1이 아니다 / 정수는 범위를 넘으면 에러가 난다 / varchar(n)이 text보다 빠르지 않다 / 오전 9시 주문이 오후 6시로 보인다 / UUID 키는 순서가 있어야 인덱스가 편하다 / 배열은 편하지만 관계를 대신하지 않는다 / 주문 상태를 담는 세 가지 방법 / 같은 방을 두 번 예약하지 못하게 / 도메인, NULL, 기본값, 형 변환 / 타입마다 몇 바이트를 쓰나 / 컬럼을 만들 때 묻는 것들 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, db-index, postgres-jsonb-search, sql-basics
-- 키워드 백링크 →: postgres-architecture
+- 키워드 백링크 →: sql-select-where-null, postgres-architecture
 - 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started, postgres-roles-security, sqld-data-modeling
 
 #### `postgres-functions-triggers` — 함수, 프로시저, 트리거: PL/pgSQL로 DB 안에 로직 두기
@@ -386,7 +408,7 @@
 - 길이: 852줄
 - 소제목: updated_at이 멈춰 있는 책 / SQL로 쓰는 함수와 plpgsql로 쓰는 함수 / 함수에 붙이는 약속, 변동성 / 실패를 붙잡는 EXCEPTION 블록 / 트랜잭션을 나눠 커밋하는 프로시저 / 테이블이 바뀔 때 끼어드는 트리거 / 누가 무엇을 바꿨는지 남기는 감사 로그 / 트리거가 실행되는 순서 / 행 20만 개를 고칠 때 트리거가 치르는 값 / 커밋할 때 검사하는 제약 트리거 / 트리거가 만드는 함정 / 만든 사람 권한으로 도는 SECURITY DEFINER / 바뀌었다고 알려 주는 LISTEN과 NOTIFY / 로직을 DB에 둘까 애플리케이션에 둘까 / DB 안에 둔 코드도 코드다 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-advanced-sql, db-transaction-isolation, postgres-roles-security, db-architecture-by-scale, postgres-jsonb-search
-- 키워드 백링크 →: db-index, json-crud-http, postgres-getting-started, postgres-data-types
+- 키워드 백링크 →: sql-select-where-null, db-index, json-crud-http, postgres-getting-started, sql-basics, db-locking-deadlock, db-index-design, postgres-data-types
 - 이 글로 오는 글 ←: postgres-advanced-sql, postgres-jsonb-search, postgres-roles-security
 
 #### `postgres-getting-started` — PostgreSQL 설치하고 접속하기: psql, 데이터베이스, 스키마
@@ -397,8 +419,8 @@
 - 길이: 933줄 (긴 글)
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 접속 정보는 문자열 하나로 줄 수 있다 / pg_hba.conf는 위에서부터 첫 줄만 본다 / 첫날 자주 보는 에러 모음 / 접속 URI를 직접 나눠 보기 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, postgres-data-types, postgres-roles-security
-- 키워드 백링크 →: postgres-operations, db-type-relational, layer-ip-addressing
-- 이 글로 오는 글 ←: db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sqld-single-row-functions
+- 키워드 백링크 →: postgres-operations, db-type-relational, sql-batch-timeout-pool, layer-ip-addressing
+- 이 글로 오는 글 ←: db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-select-where-null, sqld-single-row-functions
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -408,6 +430,7 @@
 - 길이: 818줄
 - 소제목: 카테고리마다 속성이 다른 상품 / json과 jsonb는 저장 방식이 다르다 / 화살표로 꺼내고 포함 연산자로 찾기 / 일부만 고치는 jsonb_set과 JSON 경로 / 10만 개에서 포함 검색을 빠르게 하는 GIN / jsonb_ops와 jsonb_path_ops / 자주 찾는 키는 식 인덱스로 / jsonb에 넣을 것과 컬럼으로 뺄 것 / LIKE 대신 전문 검색 / 한국어는 어디서 막히나 / 세 글자씩 잘라 비교하는 pg_trgm / 오타도 찾는 similarity / 무엇으로 찾을지 고르기 / 조각을 쪼개 두는 방식이 결국 같다 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-functions-triggers, db-index, elasticsearch-inverted-index, postgres-architecture
+- 키워드 백링크 →: db-index-design
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-type-key-value, db-type-relational, postgres-architecture, postgres-data-types, postgres-functions-triggers
 
 #### `postgres-mvcc-vacuum` — VACUUM과 autovacuum: 죽은 튜플, 부풀림, XID 랩어라운드
@@ -418,7 +441,8 @@
 - 길이: 852줄
 - 소제목: UPDATE 한 번이 남기는 것 / 읽기만 했는데 페이지를 고친다 / VACUUM은 자리를 비울 뿐 파일을 줄이지 않는다 / VACUUM FULL은 테이블을 잠근다 / 잠그지 않고 줄이는 방법 / visibility map이 하는 일 / 인덱스를 건드리지 않는 HOT 업데이트 / autovacuum은 언제 도는가 / 테이블마다 기준을 다르게 / VACUUM을 막는 것들 / 얼마나 부풀었는지 재기 / 32비트 트랜잭션 번호가 한 바퀴 돌면 / 얼리기와 랩어라운드 방지 VACUUM / 통계가 낡으면 계획이 틀린다 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-transaction-isolation, postgres-architecture, db-replication-sharding, db-index, sql-query-tuning, postgres-operations
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, postgres-architecture, postgres-operations
+- 키워드 백링크 →: db-index-design
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-index-pitfalls, db-transaction-isolation, postgres-architecture, postgres-operations, sql-batch-timeout-pool
 
 #### `postgres-operations` — PostgreSQL 운영: 설정 튜닝, 연결 풀, 모니터링, 백업과 PITR, 버전 업그레이드
 
@@ -428,8 +452,8 @@
 - 길이: 799줄
 - 소제목: 설정은 어디에 쓰고 언제 적용되나 / 메모리 설정 정하기 / work_mem은 곱하기로 계산한다 / SSD라면 random_page_cost를 낮춘다 / max_connections를 올리는 대신 연결 풀 / 매일 보는 숫자들 / 느린 쿼리를 로그로 잡기 / 논리 백업과 복원 / 물리 백업과 WAL 보관 / WHERE 없는 DELETE 3초 전으로 / 백업은 복원해 봐야 백업이다 / 백업 도구와 PostgreSQL 17의 증분 백업 / 메이저 버전 올리기 / 마이너 업데이트 / 관리형 서비스를 쓴다면 / 운영에 올리기 전 점검 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-architecture, postgres-mvcc-vacuum, sql-query-tuning, db-transaction-isolation, db-replication-sharding
-- 키워드 백링크 →: db-architecture-by-scale, db-type-relational, postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-getting-started, postgres-mvcc-vacuum
+- 키워드 백링크 →: db-index, db-architecture-by-scale, db-type-relational, postgres-getting-started, sql-query-rewrite, sql-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, docker-network-volume, postgres-architecture, postgres-getting-started, postgres-mvcc-vacuum, sql-insert-update-delete
 
 #### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
 
@@ -439,7 +463,7 @@
 - 길이: 809줄
 - 소제목: 역할 하나가 사용자이자 그룹이다 / 쿼리 하나가 지나는 검사들 / 주인, 마이그레이션, 앱, 분석 역할로 나누기 / 비밀번호는 SCRAM으로 저장한다 / pg_hba.conf와 TLS로 들어오는 길 좁히기 / 서점마다 자기 주문만 보게 하기 / 누가 언제 들어왔는지 남기기 / SQL 인젝션은 권한보다 앞에서 막는다 / pg_hba 줄 고르기를 직접 구현해 보기 / 앱 계정이 할 수 있는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, postgres-functions-triggers
-- 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-basics, db-index, layer-ip-addressing, dns
+- 키워드 백링크 →: postgres-data-types, db-architecture-by-scale, sql-insert-update-delete, db-index-design, sql-batch-timeout-pool, layer-ip-addressing, dns
 - 이 글로 오는 글 ←: postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started
 
 ### Programming › Database › Redis (`programming/database/redis`)
@@ -453,7 +477,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: db-type-relational, event-loop, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design, tcp-reliability-congestion
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-memory-eviction, redis-persistence-ha, rest-api-design, tcp-reliability-congestion
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -475,62 +499,150 @@
 - 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 복제는 비동기다 / 레플리카에서 읽으면 생기는 일 / Sentinel이 장애를 판단하고 넘기는 과정 / Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, redis-memory-eviction
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
+- 이 글로 오는 글 ←: caching-strategies, db-consistency-cap, db-sharding, db-type-key-value, docker-compose, redis-basics, redis-memory-eviction
 
 ### Programming › Database › SQL (`programming/database/sql`)
 
 #### `db-index` — 인덱스: 책 뒤의 찾아보기
 
-- 요약: 주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾고, 복합·커버링·부분·식 인덱스를 언제 쓰며, 인덱스가 왜 안 타고 무엇을 대가로 내는지 정리한다.
+- 요약: 주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾는지, Index Scan·Bitmap Heap Scan·Index Only Scan이 언제 갈리는지, MySQL InnoDB의 클러스터드 인덱스는 무엇이 다른지 본다. 현장에서 인덱스가 필요한 테이블을 찾는 순서도 정리한다.
 - 태그: Database, SQL, PostgreSQL, Index, Performance
-- 키워드: 복합 인덱스, 커버링 인덱스, 부분 인덱스, Index Only Scan
+- 키워드: Index Only Scan, B-tree 인덱스, Bitmap Heap Scan, 클러스터드 인덱스
 - 길이: 615줄
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: sql-query-tuning
-- 키워드 백링크 →: postgres-mvcc-vacuum, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-modeling-normalization, db-replication-sharding, db-type-relational, db-type-time-series, mongodb-document-model, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-basics, sql-query-tuning, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators
+- 직접 링크 →: db-index-pitfalls, sql-query-tuning, db-index-design
+- 키워드 백링크 →: postgres-mvcc-vacuum, db-sharding, db-transaction-isolation, sql-basics
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, elasticsearch-inverted-index, postgres-advanced-sql, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-data-modeling, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot
 
-#### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화와 반정규화
+#### `db-index-design` — 인덱스 고르기: 복합, 커버링, 부분, 식 인덱스와 GIN·BRIN
 
-- 요약: 전화번호 하나 바꾸는 데 300줄을 고쳐야 하는 테이블에서 시작해, 함수 종속을 기준으로 1NF부터 BCNF까지 나눠 본다. 반정규화는 언제 들이고 원본과 어떻게 맞추는지도 실제 SQL로 따라간다.
+- 요약: 쿼리 모양에 맞는 인덱스를 고른다. 복합 인덱스의 컬럼 순서, INCLUDE로 힙을 건너뛰는 커버링 인덱스, 일부 행만 담는 부분 인덱스, lower(email) 식 인덱스, GIN과 BRIN을 실행 계획 전후로 비교하고, 겹치는 인덱스와 값 분포를 확인하는 리뷰 순서도 정리한다.
+- 태그: Database, SQL, PostgreSQL, Index, Performance
+- 키워드: 복합 인덱스, 커버링 인덱스, 부분 인덱스, 식 인덱스, BRIN
+- 길이: 593줄
+- 소제목: 앞 글의 주문 100만 건 그대로 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / B-tree가 아닌 인덱스들 / 인덱스를 하나 더 만들자는 리뷰를 받았을 때 / 쿼리 모양에 맞춰 고른다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, db-index-pitfalls
+- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-type-columnar-olap, db-type-time-series, mongodb-document-model, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-query-rewrite
+
+#### `db-index-pitfalls` — 인덱스가 안 타는 이유와 인덱스의 대가
+
+- 요약: 인덱스가 있는데도 Seq Scan이 나오는 여섯 가지 경우(함수, 형 변환, 앞이 열린 LIKE, 너무 많은 결과, OR, 낡은 통계)를 실행 계획으로 확인한다. 쓰기 증폭과 HOT 업데이트, 안 쓰는 인덱스 찾기, 운영 중 CREATE INDEX CONCURRENTLY와 INVALID 인덱스 처리도 다룬다.
+- 태그: Database, SQL, PostgreSQL, Index, Performance
+- 키워드: CREATE INDEX CONCURRENTLY, 쓰기 증폭, INVALID 인덱스
+- 길이: 467줄
+- 소제목: 주문 100만 건과 인덱스 셋 / 인덱스가 있는데 안 타는 경우 / 인덱스는 쓰기를 느리게 한다 / 운영 중인 테이블에 인덱스 추가하기 / 인덱스를 지우고 만드는 것도 배포다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-index, db-index-design, sql-query-tuning
+- 키워드 백링크 →: postgres-mvcc-vacuum, db-replication-sharding, sql-basics
+- 이 글로 오는 글 ←: db-index, db-index-design, db-type-embedded, db-type-wide-column, sql-basics
+
+#### `db-keys-denormalization` — 키와 반정규화: 대리 키, UUID, 일부러 다시 합치기
+
+- 요약: 정규화한 테이블에서 자연 키와 대리 키, UUIDv4와 v7을 인덱스 크기로 비교하고, 주문 당시 가격이 중복이 아닌 이유를 본다. 트리거와 머티리얼라이즈드 뷰로 하는 반정규화, jsonb 열의 경계, EAV·쉼표 목록·소프트 삭제 같은 흔한 설계 실수도 정리한다.
 - 태그: Database, SQL, PostgreSQL, SQLD
-- 키워드: 정규화, 반정규화, 함수 종속, 대리 키, 부분 유니크 인덱스
-- 길이: 1034줄 (긴 글)
-- 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 자연 키와 대리 키, 그리고 UUID / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / 주문 당시 가격은 중복이 아니다 / 일부러 다시 합칠 때 (반정규화) / JSONB 열은 어디까지 괜찮나 / 자주 보는 설계 실수 / SQLD 시험 포인트 / 중복을 어디에 둘지 고르는 일 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index
-- 키워드 백링크 →: postgres-architecture, json-crud-http, postgres-advanced-sql, db-types-overview, sqld-entity-attribute-relationship, db-transaction-isolation, db-replication-sharding
-- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-type-relational, elasticsearch-inverted-index, git-troubleshooting, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
+- 키워드: 반정규화, 대리 키, 부분 유니크 인덱스, 자연 키
+- 길이: 476줄
+- 소제목: 정규화를 마친 네 테이블 / 자연 키와 대리 키, 그리고 UUID / 주문 당시 가격은 중복이 아니다 / 일부러 다시 합칠 때 (반정규화) / JSONB 열은 어디까지 괜찮나 / 자주 보는 설계 실수 / SQLD에서 묻는 식별자와 반정규화 / 중복을 어디에 둘지 고르는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-modeling-normalization, db-transaction-isolation
+- 키워드 백링크 →: postgres-architecture, postgres-advanced-sql, db-index, db-sharding, db-index-design, db-types-overview, db-partitioning
+- 이 글로 오는 글 ←: db-modeling-normalization, sqld-data-modeling, sqld-entity-attribute-relationship
+
+#### `db-locking-deadlock` — 재고 -1 막기: 조건부 UPDATE, 잠금, 교착 상태
+
+- 요약: 읽고 판단하고 쓰는 사이의 틈을 조건부 UPDATE, SELECT FOR UPDATE, 버전 열 낙관적 잠금, SERIALIZABLE과 재시도로 막는 방법을 같은 장면에서 비교한다. 잠금이 만드는 교착 상태, 오래 열린 트랜잭션 찾기, 서비스 여러 개에 걸친 작업과 SQLD 잠금 개념도 정리한다.
+- 태그: Database, SQL, PostgreSQL, SQLD, Transaction, Concurrency
+- 키워드: 교착 상태, 낙관적 잠금, 비관적 잠금
+- 길이: 461줄
+- 소제목: 계좌, 상품, 주문 세 테이블 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD에서 묻는 잠금과 교착 상태 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-transaction-isolation, microservices
+- 키워드 백링크 →: sql-basics, postgres-getting-started
+- 이 글로 오는 글 ←: db-transaction-isolation, http-status-codes, postgres-functions-triggers, rest-api-design
+
+#### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화
+
+- 요약: 전화번호 하나 바꾸는 데 300줄을 고쳐야 하는 테이블에서 시작해, 함수 종속을 기준으로 1NF부터 BCNF까지 나눠 보고, 나눈 테이블을 제약 조건으로 지키는 법을 실제 SQL로 따라간다.
+- 태그: Database, SQL, PostgreSQL, SQLD
+- 키워드: 정규화, 함수 종속, BCNF
+- 길이: 683줄
+- 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
+- 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
+- 키워드 백링크 →: json-crud-http, db-index-design, sqld-entity-attribute-relationship
+- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-troubleshooting, http-message, mongodb-document-model, nginx-basics, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
-- 요약: 마지막 재고 1개를 두 사람이 동시에 사서 재고가 -1이 되는 장면을 두 세션으로 재현하고, 격리 수준이 실제로 무엇을 막는지 PostgreSQL과 MySQL을 나란히 본다. 조건부 UPDATE, 비관적·낙관적 잠금, 교착 상태와 오래 열린 트랜잭션까지 다룬다.
+- 요약: 마지막 재고 1개를 두 사람이 동시에 사서 재고가 -1이 되는 장면을 두 세션으로 재현하고, ACID와 다섯 가지 동시성 현상, 격리 수준이 실제로 무엇을 막는지, MVCC가 버전을 어떻게 고르는지를 PostgreSQL과 MySQL을 나란히 놓고 본다.
 - 태그: Database, SQL, PostgreSQL, SQLD, Transaction, Concurrency
-- 키워드: 격리 수준, MVCC, 갱신 손실, 쓰기 왜곡, 교착 상태
+- 키워드: 격리 수준, MVCC, 갱신 손실, 쓰기 왜곡
 - 길이: 679줄
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / SQLD에서 묻는 트랜잭션과 격리 수준 / 격리 수준은 무엇을 허용하느냐의 문제다 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: postgres-mvcc-vacuum, postgres-getting-started, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-index, db-modeling-normalization, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics
+- 직접 링크 →: db-locking-deadlock
+- 키워드 백링크 →: postgres-mvcc-vacuum, sql-basics, postgres-getting-started
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-index, db-keys-denormalization, db-locking-deadlock, db-modeling-normalization, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-functions-triggers, postgres-mvcc-vacuum, postgres-operations, redis-basics, sql-insert-update-delete, sql-query-rewrite
 
-#### `sql-basics` — SQL 기본 명령어: 테이블을 만들고 읽고 고치기
+#### `sql-basics` — SQL 기본 명령어: 테이블과 제약 조건 만들기
 
-- 요약: 빈 DB에서 테이블 세 개를 만들고 행을 넣고 읽고 고치고 지워 본다. DDL·DML·DCL·TCL, 제약 조건, NULL과 3값 논리, DELETE·TRUNCATE·DROP의 차이, Oracle·SQL Server와 다른 점까지 실제 출력으로 확인한다.
+- 요약: 빈 DB에서 테이블 세 개를 만들고 타입과 제약 조건으로 들어올 값을 정한 뒤, ALTER로 고치고 GRANT로 권한을 나눈다. 운영에서 SQLSTATE로 에러를 구분하고, 외래 키 인덱스를 점검하고, NOT VALID로 제약을 거는 법까지 실제 출력으로 본다.
 - 태그: Database, SQL, PostgreSQL
-- 키워드: DDL, TRUNCATE, 3값 논리, UPSERT
+- 키워드: DDL, 참조 무결성, SQLSTATE
 - 길이: 665줄
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / 현장에서 테이블 정의를 다시 꺼내 보는 순간 / 테이블 모양이 곧 규칙이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index, sqld-data-modeling
+- 직접 링크 →: sql-select-where-null, sql-insert-update-delete, db-index, db-index-pitfalls, sqld-data-modeling
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-transaction-isolation, db-type-embedded, db-type-relational, postgres-advanced-sql, postgres-data-types, postgres-getting-started, postgres-operations, postgres-roles-security, sqld-data-modeling, sqld-entity-attribute-relationship, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-index-pitfalls, db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-getting-started, postgres-operations, sql-insert-update-delete, sql-select-where-null, sqld-data-modeling, sqld-entity-attribute-relationship
 
-#### `sql-query-tuning` — 느린 쿼리 고치기: EXPLAIN부터 N+1까지
+#### `sql-batch-timeout-pool` — 쿼리 밖의 비용: 쓰기 묶기, 시간 한도, 커넥션 풀
 
-- 요약: pg_stat_statements로 느린 쿼리를 찾고 EXPLAIN ANALYZE를 안쪽부터 읽은 뒤, sargable 조건, 키셋 페이지네이션, N+1 제거, 배치 쓰기, 트랜잭션과 타임아웃 관리로 고친 전후를 실행 계획으로 비교한다.
+- 요약: 쿼리 하나는 빨라도 커밋 수, 문장 수, 트랜잭션 길이, 연결 수에서 시간이 샌다. 배치 INSERT와 COPY, 큰 DELETE 나누기, VACUUM을 막는 열린 트랜잭션, statement_timeout과 lock_timeout, PgBouncer transaction 모드의 주의점을 실제 출력으로 본다.
 - 태그: Database, SQL, PostgreSQL, Performance
-- 키워드: EXPLAIN ANALYZE, N+1, 키셋 페이지네이션, pg_stat_statements
+- 키워드: statement_timeout, 배치 INSERT, 커넥션 풀
+- 길이: 265줄
+- 소제목: 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 쿼리 바깥에서 새는 시간 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-query-tuning, sql-query-rewrite, db-index, sql-insert-update-delete
+- 키워드 백링크 →: postgres-mvcc-vacuum, db-architecture-by-scale, postgres-getting-started
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-replication-sharding, dns, iptables-nat, ports-and-sockets, postgres-getting-started, postgres-roles-security, resilience-patterns, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle
+
+#### `sql-insert-update-delete` — 행 넣고 고치고 지우기: UPSERT, 트랜잭션, TRUNCATE
+
+- 요약: INSERT와 ON CONFLICT, MERGE, WHERE 없는 UPDATE를 막는 습관, COMMIT·ROLLBACK·SAVEPOINT, DELETE·TRUNCATE·DROP의 차이를 실제로 돌려 본다. 열어 둔 트랜잭션이 다른 요청을 붙잡을 때 pg_stat_activity로 찾고 타임아웃으로 막는 법, Oracle·SQL Server와 다른 점도 모았다.
+- 태그: Database, SQL, PostgreSQL, Transaction
+- 키워드: UPSERT, TRUNCATE, SAVEPOINT
+- 길이: 562줄
+- 소제목: 이어서 쓰는 작은 쇼핑몰 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 열어 둔 트랜잭션이 다른 요청을 붙잡을 때 / Oracle과 SQL Server에서는 이렇게 다르다 / 바꾸기 전에 되돌릴 길부터 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-basics, sql-select-where-null, db-transaction-isolation
+- 키워드 백링크 →: postgres-advanced-sql, postgres-operations, postgres-getting-started
+- 이 글로 오는 글 ←: db-type-embedded, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-select-where-null
+
+#### `sql-query-rewrite` — 쿼리 고쳐 쓰기: sargable 조건, 키셋 페이지네이션, N+1
+
+- 요약: 찾은 느린 쿼리를 원인별로 고쳐 쓰고 전후 실행 계획을 비교한다. 필요한 컬럼만 고르기, 컬럼에 함수를 씌우지 않는 조건, OFFSET 대신 키셋, N+1 제거, 비싼 count(*), EXISTS·IN·JOIN과 NOT IN 함정, 코드 리뷰에서 먼저 걸러 낼 모양까지 다룬다.
+- 태그: Database, SQL, PostgreSQL, Performance
+- 키워드: N+1, 키셋 페이지네이션, sargable
+- 길이: 634줄
+- 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-query-tuning, db-index, sql-batch-timeout-pool
+- 키워드 백링크 →: rest-api-design, db-index-design, postgres-architecture, db-transaction-isolation
+- 이 글로 오는 글 ←: postgres-advanced-sql, postgres-operations, rest-api-design, sql-batch-timeout-pool, sql-query-tuning
+
+#### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
+
+- 요약: pg_stat_statements와 느린 쿼리 로그로 범인을 찾고, EXPLAIN (ANALYZE, BUFFERS)를 안쪽부터 읽으며 틀린 예상 행 수가 조인 방법을 어떻게 틀어지게 하는지 본다. Nested Loop, Hash Join, Merge Join이 언제 나오는지도 실제 계획으로 비교한다.
+- 태그: Database, SQL, PostgreSQL, Performance
+- 키워드: EXPLAIN ANALYZE, pg_stat_statements, Hash Join, Nested Loop
 - 길이: 364줄
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 찾았으면 고칠 차례 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-index
-- 이 글로 오는 글 ←: db-index, db-replication-sharding, db-type-relational, postgres-advanced-sql, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, rest-api-design, sqld-joins
+- 직접 링크 →: sql-query-rewrite, sql-batch-timeout-pool, db-index
+- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-replication-sharding, db-type-relational, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, sql-batch-timeout-pool, sql-query-rewrite, sql-select-where-null, sqld-joins
+
+#### `sql-select-where-null` — SELECT와 NULL: 원하는 행만 골라 읽기
+
+- 요약: SELECT의 처리 순서, WHERE와 AND·OR 우선순위, NULL과 3값 논리, NOT IN 함정, 정렬과 DISTINCT와 LIMIT를 실제 출력으로 따라간다. 리포트 숫자가 안 맞을 때 NULL부터 보는 방법도 정리한다.
+- 태그: Database, SQL, PostgreSQL
+- 키워드: 3값 논리, IS DISTINCT FROM, NULLS FIRST
+- 길이: 624줄
+- 소제목: 회원 넷, 상품 셋, 주문 다섯 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 리포트 숫자가 안 맞을 때 먼저 보는 것 / 모름을 모름으로 다루기 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-basics, sql-query-tuning, sql-insert-update-delete
+- 키워드 백링크 →: db-index, sqld-group-by-having, postgres-getting-started
+- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-insert-update-delete, sqld-subquery-set-operators
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
 
@@ -542,7 +654,7 @@
 - 길이: 519줄
 - 소제목: 현실을 줄여서 그리는 일 / 무엇을 보고 그리나: 데이터, 프로세스, 그리고 둘의 관계 / 개념에서 논리로, 논리에서 물리로 / ERD는 이 순서로 그린다 / 까마귀 발과 바커 표기 읽기 / 보는 사람마다 다른 화면, 하나의 DB / 좋은 모델인지 가늠하는 여섯 가지 / SQLD 시험 포인트 / 문서에서 테이블까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-entity-attribute-relationship, db-modeling-normalization, db-index
-- 키워드 백링크 →: postgres-data-types, db-type-relational, sql-basics
+- 키워드 백링크 →: postgres-data-types, db-type-relational, db-keys-denormalization, sql-basics
 - 이 글로 오는 글 ←: sql-basics, sqld-entity-attribute-relationship
 
 #### `sqld-entity-attribute-relationship` — SQLD 엔터티·속성·관계·식별자
@@ -553,7 +665,7 @@
 - 길이: 564줄
 - 소제목: 엔터티가 되려면 갖춰야 할 것 / 엔터티를 나누는 두 가지 기준 / 속성은 더 쪼갤 수 없는 값 하나 / 관계: 엔터티끼리 맺는 연결 / 식별자: 인스턴스 하나를 집어내는 열쇠 / 식별 관계와 비식별 관계 / SQLD 시험 포인트 / 출석은 어디에 붙나 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-data-modeling, db-modeling-normalization
-- 키워드 백링크 →: json-crud-http, http-status-codes, sql-basics
+- 키워드 백링크 →: json-crud-http, db-keys-denormalization, http-status-codes, sql-basics
 - 이 글로 오는 글 ←: db-modeling-normalization, sqld-data-modeling
 
 #### `sqld-group-by-having` — SQLD 집계와 GROUP BY, 그리고 실행 순서
@@ -564,7 +676,7 @@
 - 길이: 746줄
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
-- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-advanced-sql, sql-select-where-null, sqld-joins, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -607,7 +719,7 @@
 - 길이: 984줄 (긴 글)
 - 소제목: 예제로 쓸 EMP와 DEPT / 쿼리를 넣을 수 있는 세 자리 / 몇 줄이 돌아오느냐로 연산자가 바뀐다 / ANY와 ALL은 최솟값과 최댓값으로 바꿔 읽는다 / EXISTS는 있는지만 본다 / NOT IN에 NULL이 하나 섞이면 / 바깥 행마다 다시 도는 상관 서브쿼리 / SELECT 절에는 값 하나만 들어간다 / 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다 / 결과를 위아래로 붙이는 집합 연산자 / 집합 연산자의 규칙 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins, db-index, sqld-window-functions
-- 키워드 백링크 →: sqld-group-by-having, sql-basics
+- 키워드 백링크 →: sqld-group-by-having, sql-select-where-null
 - 이 글로 오는 글 ←: sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-top-n-hierarchical-pivot` — SQLD Top-N, 계층형 쿼리, PIVOT
@@ -618,7 +730,7 @@
 - 길이: 787줄
 - 소제목: ROWNUM은 정렬보다 먼저 붙는다 / 동점자까지 보여 주는 WITH TIES / 상사를 따라 내려가는 계층형 쿼리 / 계층형 쿼리가 주는 가상 컬럼 / WHERE에 거는 조건과 CONNECT BY에 거는 조건 / PostgreSQL과 SQL Server는 재귀 CTE로 쓴다 / 행을 열로 돌리는 PIVOT / 열을 행으로 되돌리는 UNPIVOT / 패턴으로 찾는 정규 표현식 함수 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-window-functions
-- 키워드 백링크 →: sqld-group-by-having
+- 키워드 백링크 →: db-index, sqld-group-by-having
 - 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sqld-joins, sqld-window-functions
 
 #### `sqld-window-functions` — SQLD 윈도우 함수: 순위, 누적합, 앞뒤 행
@@ -779,7 +891,7 @@
 - 길이: 451줄
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
-- 키워드 백링크 →: http-versions, udp-and-quic
+- 키워드 백링크 →: http-versions, sql-batch-timeout-pool, udp-and-quic
 - 이 글로 오는 글 ←: browser-fetch, caching-strategies, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, docker-compose, docker-network-volume, dockerfile-image-layers, gateway, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, js-memory-leak, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, local-custom-domain, network-layers-overview, nginx-https-performance, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, redis-basics, redis-memory-eviction, redis-persistence-ha, udp-and-quic, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
@@ -868,7 +980,7 @@
 - 길이: 367줄
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, resilience-patterns
-- 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, http-versions, what-happens-google-com, dns
+- 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, db-locking-deadlock, http-versions, what-happens-google-com, dns
 - 이 글로 오는 글 ←: browser-fetch, db-type-time-series, html-form-http, http-message, http-methods, http-versions, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, nginx-basics, nginx-reverse-proxy, proxy-reverse-proxy, realtime-communication, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
@@ -958,7 +1070,7 @@
 - 길이: 494줄
 - 소제목: IP가 건물 주소라면 포트는 호수다 / 연결 하나를 가르는 다섯 값 / 듣는 소켓과 연결된 소켓 / 커널이 패킷을 소켓에 넘기는 순서 / 어느 주소에서 들을 것인가 / 이미 쓰는 중인 포트 / 임시 포트가 바닥나는 순간 / 소켓도 파일이다 / 현장에서 포트를 확인하는 순서 / 마지막 주소까지 찾아가는 길 / 면접에서 나올 만한 질문
 - 직접 링크 →: tcp-connection-lifecycle, docker-network-volume, iptables-nat, udp-and-quic, upper-layers-session-presentation-app
-- 키워드 백링크 →: elasticsearch-inverted-index, iptables-basics, postgres-getting-started, redis-basics, what-happens-google-com, layer-ip-routing-icmp, dns
+- 키워드 백링크 →: elasticsearch-inverted-index, iptables-basics, postgres-getting-started, sql-batch-timeout-pool, redis-basics, what-happens-google-com, layer-ip-routing-icmp, dns
 - 이 글로 오는 글 ←: layer-ip-addressing, network-layers-overview, proxy-reverse-proxy, tcp-connection-lifecycle, udp-and-quic
 
 #### `tcp-connection-lifecycle` — TCP 연결의 일생: 3-way handshake부터 TIME_WAIT까지
@@ -969,7 +1081,7 @@
 - 길이: 589줄
 - 소제목: 연결은 양쪽 커널의 메모에만 있다 / 번호를 맞추는 세 번의 인사 / 커널 안의 두 대기열 / 대답이 없을 때와 거절당할 때 / 상태 열한 개를 따라가기 / 끊을 때는 네 번 인사한다 / TIME_WAIT가 60초나 남는 이유 / CLOSE_WAIT가 쌓이면 내 코드를 본다 / RST는 대화를 끊는 비상 버튼 / 조용히 죽은 연결을 찾는 keepalive / 현장에서 상태 열을 읽는 법 / 상태 전이를 직접 따라가 보기 / 연결의 일생을 한 번에 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, ports-and-sockets, layer-mtu-fragmentation, tcp-reliability-congestion
-- 키워드 백링크 →: what-happens-google-com, browser-fetch, iptables-basics
+- 키워드 백링크 →: what-happens-google-com, browser-fetch, iptables-basics, sql-batch-timeout-pool
 - 이 글로 오는 글 ←: iptables-basics, layer-mtu-fragmentation, network-layers-overview, nginx-reverse-proxy, ports-and-sockets, tcp-reliability-congestion, udp-and-quic
 
 #### `tcp-reliability-congestion` — TCP는 어떻게 믿을 만한가: 재전송, 흐름 제어, 혼잡 제어
@@ -1026,7 +1138,7 @@
 - 길이: 663줄
 - 소제목: 주소를 바꿔 쓰는 세 가지 방법 / 바꾼 주소는 conntrack이 기억한다 / 먼저 포워딩을 켠다 / 내부망을 인터넷에 내보내는 게이트웨이 / 바깥 포트를 내부 서버로 넘기는 포트 포워딩 / 같은 서버 안에서 포트만 바꾸는 REDIRECT / Docker가 만드는 규칙 / 쿠버네티스 Service는 nat 규칙 묶음이다 / NAT가 안 될 때 따라가는 순서 / 주소를 바꾸고 기억하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-basics, kubernetes-ingress
-- 키워드 백링크 →: proxy-reverse-proxy, http-versions, what-happens-google-com, udp-and-quic, dns
+- 키워드 백링크 →: proxy-reverse-proxy, http-versions, sql-batch-timeout-pool, what-happens-google-com, udp-and-quic, dns
 - 이 글로 오는 글 ←: docker-compose, docker-container-basics, docker-network-volume, iptables-basics, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, network-layers-overview, ports-and-sockets, udp-and-quic
 
 ### Programming › Security (`programming/security`)
@@ -1179,8 +1291,8 @@
 - 길이: 727줄
 - 소제목: 처음엔 PostgreSQL 한 대면 된다 / 연결은 풀로 묶어서 쓴다 / 백업은 복원해 봐야 안다 / 읽기가 몰리면 캐시와 복제본 / 분석 쿼리는 다른 곳에서 돌린다 / 검색과 작업 큐도 따로 떼어 낸다 / 서비스마다 DB를 따로 둔다 / DB에 쓰고 이벤트를 보내는 사이 / 저장소는 접근 패턴으로 고른다 / 열 이름 하나를 다섯 단계로 바꾼다 / 앱 계정에는 필요한 권한만 준다 / 매일 볼 숫자들 / 단계를 넘어가는 신호 / 자주 보는 실수 / 규모보다 읽는 방식이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-modeling-normalization, db-transaction-isolation, db-index, caching-strategies, redis-basics, elasticsearch-inverted-index, microservices, mongodb-document-model, vector-db
-- 키워드 백링크 →: db-type-time-series, postgres-advanced-sql, db-type-columnar-olap, postgres-mvcc-vacuum, db-type-wide-column, db-type-key-value, db-type-relational, db-type-graph, http-caching-cdn, postgres-operations, postgres-jsonb-search, sql-basics
-- 이 글로 오는 글 ←: db-replication-sharding, db-type-columnar-olap, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-functions-triggers, postgres-operations, postgres-roles-security
+- 키워드 백링크 →: db-type-time-series, postgres-advanced-sql, db-type-columnar-olap, postgres-mvcc-vacuum, db-sharding, db-type-wide-column, db-type-key-value, db-type-relational, db-type-graph, http-caching-cdn, sql-batch-timeout-pool, postgres-operations, postgres-jsonb-search, db-partitioning, sql-basics
+- 이 글로 오는 글 ←: db-replication-sharding, db-sharding, db-type-columnar-olap, db-type-relational, db-types-overview, microservices, postgres-architecture, postgres-functions-triggers, postgres-operations, postgres-roles-security, sql-batch-timeout-pool
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -1191,7 +1303,7 @@
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, gateway
 - 키워드 백링크 →: db-architecture-by-scale, db-type-columnar-olap, client-data-cache, http-versions, js-memory-leak, http-methods
-- 이 글로 오는 글 ←: db-architecture-by-scale, micro-frontends, rest-api-design
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-locking-deadlock, db-sharding, micro-frontends, rest-api-design
 
 #### `resilience-patterns` — 장애가 번지지 않게: 타임아웃, 재시도, 서킷 브레이커
 
@@ -1201,7 +1313,7 @@
 - 길이: 414줄
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway
-- 키워드 백링크 →: client-data-cache, http-methods
+- 키워드 백링크 →: client-data-cache, sql-batch-timeout-pool, http-methods
 - 이 글로 오는 글 ←: browser-fetch, caching-strategies, html-form-http, http-methods, http-status-codes, https-tls, json-crud-http, microservices, nginx-reverse-proxy, realtime-communication, rest-api-design
 
 ### 자기개발 › 수학 (`self-development/math`)
@@ -1225,7 +1337,7 @@
 - 3-way 병합 → `git-branch-merge`
 - 3-way handshake → `what-happens-google-com`
 - 308 Permanent Redirect → `http-status-codes`
-- 3값 논리 → `sql-basics`
+- 3값 논리 → `sql-select-where-null`
 - 3단계 스키마 → `sqld-data-modeling`
 - 415 Unsupported Media Type → `json-crud-http`
 - 5-tuple → `ports-and-sockets`
@@ -1238,17 +1350,18 @@
 - 공간 복잡도 → `big-o-notation`
 - 관계형 DB → `db-type-relational`
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
-- 교착 상태 → `db-transaction-isolation`
+- 교착 상태 → `db-locking-deadlock`
 - 권한 있는 네임서버 → `dns`
 - 그래프 DB → `db-type-graph`
 - 낙관적 업데이트 → `client-data-cache`
+- 낙관적 잠금 → `db-locking-deadlock`
 - 논리적 실행 순서 → `sqld-group-by-having`
 - 다운샘플링 → `db-type-time-series`
 - 단방향 데이터 흐름 → `mvc-pattern`
 - 단일 테이블 설계 → `db-type-key-value`
 - 단일행 함수 → `sqld-single-row-functions`
 - 단편화 → `layer-mtu-fragmentation`
-- 대리 키 → `db-modeling-normalization`
+- 대리 키 → `db-keys-denormalization`
 - 대역폭 지연 곱 → `tcp-reliability-congestion`
 - 데이터 독립성 → `sqld-data-modeling`
 - 데이터 모델 비교 → `db-types-overview`
@@ -1276,21 +1389,24 @@
 - 멱등성 키 → `resilience-patterns`
 - 모놀리스 → `microservices`
 - 문자 인코딩 → `upper-layers-session-presentation-app`
-- 반정규화 → `db-modeling-normalization`
+- 반정규화 → `db-keys-denormalization`
 - 배럴 파일 → `code-splitting`
 - 배제 제약 → `postgres-data-types`
+- 배치 INSERT → `sql-batch-timeout-pool`
 - 벌크헤드 → `resilience-patterns`
 - 벡터 DB → `vector-db`
 - 변경 데이터 캡처 → `db-type-columnar-olap`
 - 병합 충돌 → `git-branch-merge`
+- 복제 슬롯 → `db-replication-sharding`
 - 복제 지연 → `db-replication-sharding`
-- 복합 인덱스 → `db-index`
-- 부분 유니크 인덱스 → `db-modeling-normalization`
-- 부분 인덱스 → `db-index`
+- 복합 인덱스 → `db-index-design`
+- 부분 유니크 인덱스 → `db-keys-denormalization`
+- 부분 인덱스 → `db-index-design`
 - 부분 clone → `git-remote-collaboration`
 - 분산 락 → `redis-basics`
 - 분산 SQL → `db-type-newsql`
 - 분할 상환 → `big-o-notation`
+- 비관적 잠금 → `db-locking-deadlock`
 - 비식별 관계 → `sqld-entity-attribute-relationship`
 - 빈약한 도메인 모델 → `mvc-pattern`
 - 빌드 캐시 → `dockerfile-image-layers`
@@ -1316,7 +1432,9 @@
 - 시간 복잡도 → `big-o-notation`
 - 시계열 DB → `db-type-time-series`
 - 시점 복구 → `postgres-operations`
+- 식 인덱스 → `db-index-design`
 - 쓰기 왜곡 → `db-transaction-isolation`
+- 쓰기 증폭 → `db-index-pitfalls`
 - 쓰기 CTE → `postgres-advanced-sql`
 - 안전한 메서드 → `http-methods`
 - 암시적 형 변환 → `sqld-single-row-functions`
@@ -1336,12 +1454,13 @@
 - 인가 코드 → `oauth`
 - 인라인 뷰 → `sqld-subquery-set-operators`
 - 인증서 체인 → `https-tls`
-- 일관된 해싱 → `db-replication-sharding`
+- 일관된 해싱 → `db-sharding`
 - 읽기 복제본 → `db-replication-sharding`
 - 임베디드 DB → `db-type-embedded`
 - 임베딩 → `vector-db`
 - 임시 포트 → `ports-and-sockets`
 - 자동 배칭 → `react-rerender`
+- 자연 키 → `db-keys-denormalization`
 - 작업 트리 → `git-internals-basics`
 - 재귀 리졸버 → `dns`
 - 재귀 CTE → `sqld-top-n-hierarchical-pivot`
@@ -1356,6 +1475,7 @@
 - 집계 파이프라인 → `mongodb-document-model`
 - 집계 함수 → `sqld-group-by-having`
 - 집합 연산자 → `sqld-subquery-set-operators`
+- 참조 무결성 → `sql-basics`
 - 체크포인트 → `postgres-architecture`
 - 최장 접두사 일치 → `layer-ip-routing-icmp`
 - 최종 일관성 → `db-consistency-cap`
@@ -1365,22 +1485,25 @@
 - 캐시 관통 → `caching-strategies`
 - 캐시 무효화 → `http-caching-cdn`
 - 캐시 스탬피드 → `http-caching-cdn`
-- 커버링 인덱스 → `db-index`
+- 커넥션 풀 → `sql-batch-timeout-pool`
+- 커버링 인덱스 → `db-index-design`
 - 커서 페이지네이션 → `rest-api-design`
 - 컨테이너 이미지 → `docker-container-basics`
 - 컬럼형 저장 → `db-type-columnar-olap`
 - 코드 스플리팅 → `code-splitting`
 - 콘텐츠 협상 → `http-message`
 - 쿠키 세션 → `cookie-session-login`
+- 클러스터드 인덱스 → `db-index`
 - 키-값 저장소 → `db-type-key-value`
-- 키셋 페이지네이션 → `sql-query-tuning`
+- 키셋 페이지네이션 → `sql-query-rewrite`
 - 킬 스위치 → `ab-testing`
 - 태스크 큐 → `event-loop`
 - 툼스톤 → `db-type-wide-column`
 - 트랜잭셔널 아웃박스 → `microservices`
 - 트렁크 기반 개발 → `git-branching-strategy`
 - 트리 셰이킹 → `code-splitting`
-- 파티셔닝 → `db-replication-sharding`
+- 파티셔닝 → `db-partitioning`
+- 파티션 가지치기 → `db-partitioning`
 - 포워드 프록시 → `proxy-reverse-proxy`
 - 포트 포워딩 → `iptables-nat`
 - 폴리글랏 퍼시스턴스 → `db-architecture-by-scale`
@@ -1418,15 +1541,19 @@
 - ARP → `layer-link-ethernet-arp`
 - autosquash → `git-rebase`
 - autovacuum → `postgres-mvcc-vacuum`
+- B-tree 인덱스 → `db-index`
 - Base64 → `base64`
 - base64url → `base64`
 - Basic 인증 → `base64`
 - BBR → `tcp-reliability-congestion`
+- BCNF → `db-modeling-normalization`
 - bfcache → `frontend-browser-cache`
 - BFF → `gateway`
 - Big O → `big-o-notation`
 - bind mount → `docker-network-volume`
+- Bitmap Heap Scan → `db-index`
 - BM25 → `elasticsearch-inverted-index`
+- BRIN → `db-index-design`
 - BuildKit → `dockerfile-image-layers`
 - Cache Storage → `frontend-browser-cache`
 - cache-aside → `caching-strategies`
@@ -1453,6 +1580,7 @@
 - Conventional Commits → `git-branching-strategy`
 - Core Web Vitals → `core-web-vitals`
 - CORS → `cors`
+- CREATE INDEX CONCURRENTLY → `db-index-pitfalls`
 - CSRF → `cookie-session-login`
 - Cypher → `db-type-graph`
 - data URL → `base64`
@@ -1460,6 +1588,7 @@
 - DB 종류 → `db-types-overview`
 - DDL → `sql-basics`
 - DECODE → `sqld-single-row-functions`
+- default 파티션 → `db-partitioning`
 - DENSE_RANK → `sqld-window-functions`
 - depends_on → `docker-compose`
 - detached DOM → `js-memory-leak`
@@ -1507,6 +1636,7 @@
 - GROUPING SETS → `sqld-rollup-cube-grouping-sets`
 - GROUPING_ID → `sqld-rollup-cube-grouping-sets`
 - gzip_types → `nginx-https-performance`
+- Hash Join → `sql-query-tuning`
 - HATEOAS → `rest-api-design`
 - HAVING → `sqld-group-by-having`
 - HNSW → `vector-db`
@@ -1532,9 +1662,11 @@
 - IngressClass → `kubernetes-ingress`
 - INP → `core-web-vitals`
 - interactive rebase → `git-rebase`
+- INVALID 인덱스 → `db-index-pitfalls`
 - ip6tables → `iptables-basics`
 - iptables → `iptables-basics`
 - iptables-persistent → `iptables-basics`
+- IS DISTINCT FROM → `sql-select-where-null`
 - ISR → `rendering-strategies`
 - JSON Merge Patch → `http-methods`
 - JSON Patch → `http-methods`
@@ -1568,17 +1700,19 @@
 - MVC 패턴 → `mvc-pattern`
 - MVCC → `db-transaction-isolation`
 - MVVM → `mvc-pattern`
-- N+1 → `sql-query-tuning`
+- N+1 → `sql-query-rewrite`
 - Nagle 알고리즘 → `tcp-reliability-congestion`
 - named volume → `docker-network-volume`
 - namespace → `docker-container-basics`
 - NATURAL JOIN → `sqld-joins`
 - Neo4j → `db-type-graph`
+- Nested Loop → `sql-query-tuning`
 - netfilter → `iptables-basics`
 - NewSQL → `db-type-newsql`
 - nginx.conf → `nginx-basics`
 - Non-EQUI JOIN → `sqld-joins`
 - nsswitch.conf → `hosts-file`
+- NULLS FIRST → `sql-select-where-null`
 - NVL → `sqld-single-row-functions`
 - OAuth → `oauth`
 - OLAP → `db-type-columnar-olap`
@@ -1631,6 +1765,8 @@
 - ROW_NUMBER → `sqld-window-functions`
 - ROWNUM → `sqld-top-n-hierarchical-pivot`
 - Same-Origin Policy → `cors`
+- sargable → `sql-query-rewrite`
+- SAVEPOINT → `sql-insert-update-delete`
 - scram-sha-256 → `postgres-roles-security`
 - search_after → `elasticsearch-inverted-index`
 - search_path → `postgres-getting-started`
@@ -1647,15 +1783,18 @@
 - sites-enabled → `nginx-basics`
 - SKIP LOCKED → `db-architecture-by-scale`
 - skipWaiting → `frontend-browser-cache`
+- Snowflake → `db-sharding`
 - SO_REUSEADDR → `ports-and-sockets`
 - SO_REUSEPORT → `ports-and-sockets`
 - Speculation Rules → `frontend-browser-cache`
 - SQLite → `db-type-embedded`
+- SQLSTATE → `sql-basics`
 - squash 머지 → `git-branching-strategy`
 - SSG → `rendering-strategies`
 - SSTable → `db-type-wide-column`
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
+- statement_timeout → `sql-batch-timeout-pool`
 - SYN flood → `tcp-connection-lifecycle`
 - TanStack Query → `client-data-cache`
 - TCP/IP 4계층 → `network-layers-overview`
@@ -1669,7 +1808,7 @@
 - traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
 - TrueTime → `db-type-newsql`
-- TRUNCATE → `sql-basics`
+- TRUNCATE → `sql-insert-update-delete`
 - try_files → `nginx-basics`
 - tstzrange → `postgres-data-types`
 - tsvector → `postgres-jsonb-search`
@@ -1678,11 +1817,12 @@
 - UdpRcvbufErrors → `udp-and-quic`
 - UNION ALL → `sqld-subquery-set-operators`
 - unrelated histories → `git-troubleshooting`
-- UPSERT → `sql-basics`
+- UPSERT → `sql-insert-update-delete`
 - upstream 블록 → `nginx-reverse-proxy`
 - URLSearchParams → `html-form-http`
 - useDeferredValue → `react-rerender`
 - UUID v7 → `postgres-data-types`
+- UUIDv7 → `db-sharding`
 - VACUUM FULL → `postgres-mvcc-vacuum`
 - visibility map → `postgres-mvcc-vacuum`
 - WAL 모드 → `db-type-embedded`
@@ -1700,17 +1840,48 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, 게이트웨이)
+- `db-index-pitfalls` ↔ `db-index-design` (20%: 100만, 인덱스는, 인덱스를, index)
+- `db-index-pitfalls` ↔ `db-index` (20%: 100만, 인덱스가, 인덱스를, index)
+- `proxy-reverse-proxy` ↔ `gateway` (17%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
+- `db-partitioning` ↔ `db-type-time-series` (17%: 오래된, 통째로, 키가)
+- `db-partitioning` ↔ `db-modeling-normalization` (17%: 테이블을, 떼어, 키가)
+- `sql-select-where-null` ↔ `sqld-single-row-functions` (16%: null은, 값이, 다루기, null)
+- `db-locking-deadlock` ↔ `db-transaction-isolation` (16%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
+- `db-index-pitfalls` ↔ `db-type-wide-column` (15%: 쓰기를, 것도, 대가)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 - `kubernetes-ingress` ↔ `gateway` (14%: 로드, kubernetes, ingress, 밸런서)
 - `udp-and-quic` ↔ `http-versions` (14%: udp, 위에, quic)
 - `layer-ip-routing-icmp` ↔ `layer-mtu-fragmentation` (13%: 패킷을, 의심하는, troubleshooting, 패킷이)
-- `postgres-operations` ↔ `db-architecture-by-scale` (12%: 쓰고, 매일, 숫자들, 백업은, 복원해, 봐야)
+- `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (13%: 막는, 남기는, 트랜잭션, update)
+- `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
+- `sql-insert-update-delete` ↔ `db-transaction-isolation` (12%: commit, rollback, 트랜잭션이, transaction)
+- `git-rebase` ↔ `git-undo` (12%: 커밋을, 커밋, 커밋은, 정리하면)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `db-keys-denormalization` ↔ `db-modeling-normalization`
+- `db-locking-deadlock` ↔ `db-transaction-isolation`
+- `sql-batch-timeout-pool` ↔ `sql-query-rewrite`
+- `sql-batch-timeout-pool` ↔ `postgres-getting-started`
+- `sql-batch-timeout-pool` ↔ `db-architecture-by-scale`
+- `sql-batch-timeout-pool` ↔ `sql-query-tuning`
+- `sql-query-rewrite` ↔ `sql-query-tuning`
+- `sql-query-rewrite` ↔ `rest-api-design`
+- `db-sharding` ↔ `db-partitioning`
+- `db-sharding` ↔ `db-type-wide-column`
+- `db-sharding` ↔ `db-replication-sharding`
+- `db-sharding` ↔ `db-architecture-by-scale`
+- `db-sharding` ↔ `db-index`
+- `db-partitioning` ↔ `db-replication-sharding`
+- `db-index-pitfalls` ↔ `db-index-design`
+- `db-index-pitfalls` ↔ `sql-basics`
+- `db-index-pitfalls` ↔ `db-index`
+- `db-index-design` ↔ `db-index`
+- `sql-insert-update-delete` ↔ `sql-select-where-null`
+- `sql-insert-update-delete` ↔ `sql-basics`
+- `sql-select-where-null` ↔ `sql-basics`
 - `tcp-connection-lifecycle` ↔ `tcp-reliability-congestion`
 - `tcp-connection-lifecycle` ↔ `ports-and-sockets`
 - `tcp-connection-lifecycle` ↔ `network-layers-overview`
@@ -1878,7 +2049,6 @@
 
 - `git-internals-basics` 1153줄 — Git은 무엇을 저장하나: 스냅샷, 객체, 세 구역
 - `sqld-single-row-functions` 1103줄 — SQLD 단일행 함수와 NULL 다루기
-- `db-modeling-normalization` 1034줄 — 테이블을 어떻게 나누나: 정규화와 반정규화
 - `git-troubleshooting` 1030줄 — Git 문제 해결 시나리오 모음
 - `git-undo` 992줄 — 되돌리기 총정리: restore, reset, revert, reflog
 - `sqld-subquery-set-operators` 984줄 — SQLD 서브쿼리와 집합 연산자

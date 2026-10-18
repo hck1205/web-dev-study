@@ -1,0 +1,466 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-index-pitfalls");
+
+인덱스를 만들었는데 실행 계획에는 계속 `Seq Scan`이 찍힌다. 다른 쿼리는 인덱스를 잘 타는데 이 쿼리만 그렇다. 반대쪽 문제도 있다. 조회가 느리다고 인덱스를 몇 개 더 만들었더니, 이번에는 주문 넣는 API가 느려졌다는 알림이 온다.
+
+인덱스는 만든다고 끝이 아니다. 쿼리를 어떻게 쓰느냐에 따라 안 쓰이기도 하고, 쓰이든 말든 쓰기마다 값을 치른다. 인덱스가 어떻게 찾는지는 [인덱스 글](/posts/db-index)에서, 쿼리에 맞는 인덱스를 고르는 법은 [인덱스 고르기 글](/posts/db-index-design)에서 봤다. 이 글은 그 인덱스가 안 타는 경우와, 인덱스가 쓰기에 매기는 값, 운영 중인 테이블에 안전하게 추가하는 방법을 본다. 기준은 Ubuntu 24.04의 PostgreSQL 16(16.15)이고, 실행 계획은 모두 이 환경에서 실제로 돌린 출력이다.
+
+## 주문 100만 건과 인덱스 셋
+
+앞의 두 글과 같은 쇼핑몰이다. 처음부터 따라 하려면 아래로 테이블을 만들고 데이터를 채운 뒤, 앞 글들에서 만든 인덱스 셋을 만들어 둔다.
+
+```sql
+-- 회원
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- 1, 2, 3 ... 자동 증가
+  email      text NOT NULL,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 상품
+CREATE TABLE products (
+  id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name  text NOT NULL,
+  price integer NOT NULL
+);
+
+-- 주문: 누가(user_id) 무엇을(product_id) 얼마에(amount) 샀나
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id),
+  product_id bigint NOT NULL REFERENCES products (id),
+  status     text NOT NULL,          -- pending, paid, delivered, cancelled
+  amount     integer NOT NULL,
+  created_at timestamptz NOT NULL
+);
+
+INSERT INTO users (email, name, created_at) VALUES
+  ('kim@example.com',  'kim',  '2025-10-01 09:00+09'),
+  ('lee@example.com',  'lee',  '2025-10-02 10:30+09'),
+  ('park@example.com', 'park', '2025-10-03 14:10+09');
+
+INSERT INTO products (name, price) VALUES
+  ('무선 이어폰', 39000),
+  ('충전 케이스', 15000),
+  ('이어팁', 5000);
+
+INSERT INTO orders (user_id, product_id, status, amount, created_at) VALUES
+  (1, 1, 'delivered', 39000, '2025-10-27 11:00+09'),
+  (1, 3, 'delivered',  5000, '2025-10-27 11:00+09'),
+  (2, 2, 'paid',      15000, '2025-10-28 20:15+09'),
+  (3, 1, 'cancelled', 39000, '2025-10-29 08:40+09'),
+  (1, 2, 'pending',   15000, '2025-10-30 23:05+09');
+
+SELECT setseed(0.42);  -- random() 결과를 매번 같게 고정한다
+
+-- 회원 4번 ~ 100000번
+INSERT INTO users (email, name, created_at)
+SELECT 'user' || i || '@example.com',
+       'user' || i,
+       timestamptz '2025-10-04 00:00+09' + i * interval '1 minute'
+FROM generate_series(4, 100000) AS i;
+
+-- 상품 4번 ~ 1000번
+INSERT INTO products (name, price)
+SELECT '상품 ' || i, (1 + floor(random() * 100)::int) * 1000
+FROM generate_series(4, 1000) AS i;
+
+-- 주문 6번 ~ 1000000번: 30초마다 한 건, 회원과 상품은 무작위
+INSERT INTO orders (user_id, product_id, status, amount, created_at)
+SELECT 1 + floor(random() * 100000)::bigint,
+       1 + floor(random() * 1000)::bigint,
+       CASE WHEN r < 0.80 THEN 'delivered'   -- 80%
+            WHEN r < 0.94 THEN 'paid'        -- 14%
+            WHEN r < 0.99 THEN 'cancelled'   -- 5%
+            ELSE 'pending' END,              -- 1%
+       (1 + floor(random() * 100)::int) * 1000,
+       timestamptz '2025-10-31 00:00+09' + i * interval '30 seconds'
+FROM (SELECT i, random() AS r FROM generate_series(6, 1000000) AS i) AS s;
+
+VACUUM ANALYZE;  -- 통계를 모으고 정리한다
+
+-- 앞 글들에서 만든 인덱스
+CREATE INDEX orders_user_id_idx ON orders (user_id);
+CREATE INDEX orders_status_created_idx ON orders (status, created_at);
+CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
+```
+
+주문 상태는 배송 완료가 80%, 결제 완료 14%, 취소 5%, 결제 대기 1%다.
+
+## 인덱스가 있는데 안 타는 경우
+
+인덱스를 만들었는데 실행 계획에 계속 Seq Scan이 나오면 보통 아래 중 하나다.
+
+첫째, 컬럼에 함수나 연산을 씌웠다. [인덱스 고르기 글](/posts/db-index-design)에서 본 `lower(email)`이 그 예다. `email` 인덱스가 있어도 `WHERE lower(email) = ...`은 행마다 함수를 계산하는 Seq Scan이 된다. `WHERE created_at::date = '2026-10-12'`나 `WHERE amount * 1.1 > 50000`도 같다. 컬럼을 그대로 두고 반대편 값을 바꾸면 인덱스를 탄다(`created_at >= '2026-10-12' AND created_at < '2026-10-13'`).
+
+둘째, 타입이 달라서 컬럼 쪽이 변환됐다. 겉으로 안 보여서 더 찾기 어렵다.
+
+```sql
+EXPLAIN SELECT * FROM orders WHERE user_id = 42.0;   -- 42.0은 numeric
+EXPLAIN SELECT * FROM orders WHERE user_id = '42';   -- 따옴표 리터럴
+```
+
+```text
+                                 QUERY PLAN
+-----------------------------------------------------------------------------
+ Gather  (cost=1000.00..17096.00 rows=5000 width=45)
+   Workers Planned: 2
+   ->  Parallel Seq Scan on orders  (cost=0.00..15596.00 rows=2083 width=45)
+         Filter: ((user_id)::numeric = 42.0)
+(4 rows)
+
+                                    QUERY PLAN
+----------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=4.51..47.52 rows=11 width=45)
+   Recheck Cond: (user_id = '42'::bigint)
+   ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.51 rows=11 width=0)
+         Index Cond: (user_id = '42'::bigint)
+(4 rows)
+```
+
+`(user_id)::numeric`이 단서다. bigint 컬럼을 numeric 값과 비교하려고 컬럼 쪽을 numeric으로 바꿨고, 그 결과는 인덱스에 없다. 반면 따옴표로 쓴 `'42'`는 타입이 정해지지 않은 리터럴이라 컬럼 타입(bigint)에 맞춰 변환되고 인덱스를 탄다. 응용 코드에서 숫자를 소수 타입으로 바인딩하는 드라이버 설정이 이런 문제를 만든다. MySQL은 반대 방향이 함정이다. 문자열 컬럼(`VARCHAR`)을 숫자와 비교하면(`WHERE phone = 01012345678`) 행마다 문자열을 숫자로 바꿔 비교해서 인덱스를 못 쓴다.
+
+셋째, `LIKE`의 앞에 와일드카드가 있다. B-tree는 앞에서부터 정렬돼 있어서 `'kim%'`처럼 앞부분이 정해진 검색만 범위로 바꿀 수 있다. `'%kim%'`는 시작점을 모른다. 그리고 하나 더 있다. DB의 정렬 규칙(collation)이 `C`가 아니면 `'kim%'`조차 일반 B-tree를 못 쓴다. 이 실습 DB는 `C.UTF-8`인데도 그랬다. 이때는 `text_pattern_ops`로 만든 인덱스가 따로 필요하다.
+
+```sql
+-- 앞부분 일치 검색용: 글자 코드 순서로 비교하는 연산자 클래스
+CREATE INDEX users_email_pattern_idx ON users (lower(email) text_pattern_ops);
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id FROM users WHERE lower(email) LIKE 'kim%';
+```
+
+```text
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using users_email_pattern_idx on users  (cost=0.42..8.44 rows=10 width=8) (actual time=0.032..0.032 rows=1 loops=1)
+   Index Cond: ((lower(email) ~>=~ 'kim'::text) AND (lower(email) ~<~ 'kin'::text))
+   Filter: (lower(email) ~~ 'kim%'::text)
+   Buffers: shared hit=1 read=3
+ Planning:
+   Buffers: shared hit=100 read=1
+ Planning Time: 0.519 ms
+ Execution Time: 0.055 ms
+(8 rows)
+```
+
+`Index Cond`를 보면 `LIKE 'kim%'`가 "kim 이상, kin 미만"이라는 범위로 바뀌었다. 중간 일치(`'%kim%'`)가 꼭 필요하면 B-tree 대신 `pg_trgm` 확장의 GIN 인덱스를 쓴다. 방법은 [인덱스 고르기 글](/posts/db-index-design)에 있다.
+
+넷째, 조건에 맞는 행이 너무 많다. `delivered`는 전체의 80%다.
+
+```sql
+EXPLAIN SELECT count(*) FROM orders WHERE status = 'delivered';
+EXPLAIN SELECT count(*) FROM orders WHERE status = 'pending';
+```
+
+```text
+                                        QUERY PLAN
+------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=16389.69..16389.70 rows=1 width=8)
+   ->  Gather  (cost=16389.47..16389.68 rows=2 width=8)
+         Workers Planned: 2
+         ->  Partial Aggregate  (cost=15389.47..15389.48 rows=1 width=8)
+               ->  Parallel Seq Scan on orders  (cost=0.00..14554.33 rows=334055 width=0)
+                     Filter: (status = 'delivered'::text)
+(6 rows)
+
+                                               QUERY PLAN
+---------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=416.43..416.44 rows=1 width=8)
+   ->  Index Only Scan using orders_status_created_idx on orders  (cost=0.42..389.93 rows=10600 width=0)
+         Index Cond: (status = 'pending'::text)
+(3 rows)
+```
+
+같은 인덱스, 같은 모양의 쿼리인데 값에 따라 계획이 다르다. 80만 행을 인덱스로 하나씩 찾아가면 같은 페이지를 여러 번 들르며 띄엄띄엄 읽게 된다. 어차피 거의 모든 페이지를 읽을 거라면 처음부터 순서대로 읽는 게 싸다. 책의 80%를 봐야 한다면 찾아보기를 펴지 않고 그냥 넘기는 것과 같다. 몇 퍼센트에서 바뀌는지 정해진 숫자는 없다. 플래너가 비용으로 판단하고, 그 비용에는 `random_page_cost`(띄엄띄엄 읽는 비용, 기본 4.0) 같은 설정이 들어간다. SSD를 쓰는 서버에서는 이 값을 1.1 정도로 낮추는 경우가 많고, 그러면 인덱스를 더 적극적으로 쓴다. 이런 컬럼은 단독 인덱스보다 다른 컬럼과 묶은 복합 인덱스나 부분 인덱스로 쓰는 게 낫다.
+
+다섯째, `OR`로 다른 컬럼을 묶었다.
+
+```sql
+-- product_id에는 아직 인덱스가 없다
+EXPLAIN SELECT * FROM orders WHERE user_id = 42 OR product_id = 7;
+```
+
+```text
+                                 QUERY PLAN
+----------------------------------------------------------------------------
+ Gather  (cost=1000.00..16696.40 rows=1004 width=45)
+   Workers Planned: 2
+   ->  Parallel Seq Scan on orders  (cost=0.00..15596.00 rows=418 width=45)
+         Filter: ((user_id = 42) OR (product_id = 7))
+(4 rows)
+```
+
+`user_id` 인덱스로 회원 42번 주문은 찾을 수 있지만, `product_id = 7`인 행은 어디 있는지 모른다. 결국 전부 읽는다. 양쪽 컬럼에 인덱스가 다 있으면 PostgreSQL은 비트맵 두 개를 합친다(`BitmapOr`).
+
+```sql
+CREATE INDEX orders_product_id_idx ON orders (product_id);
+```
+
+```text
+ Bitmap Heap Scan on orders  (cost=16.88..2930.99 rows=1004 width=45) (actual time=0.260..1.503 rows=1023 loops=1)
+   Recheck Cond: ((user_id = 42) OR (product_id = 7))
+   Heap Blocks: exact=977
+   Buffers: shared hit=983 read=4
+   ->  BitmapOr  (cost=16.88..16.88 rows=1004 width=0) (actual time=0.140..0.141 rows=0 loops=1)
+         Buffers: shared hit=6 read=4
+         ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.025..0.025 rows=8 loops=1)
+               Index Cond: (user_id = 42)
+               Buffers: shared hit=6
+         ->  Bitmap Index Scan on orders_product_id_idx  (cost=0.00..11.87 rows=993 width=0) (actual time=0.114..0.114 rows=1015 loops=1)
+               Index Cond: (product_id = 7)
+               Buffers: shared read=4
+```
+
+MySQL에도 같은 역할의 index merge가 있다. 플래너가 합치기를 고르지 않을 때는 OR를 쿼리 두 개로 쪼개 `UNION`으로 붙이면 각각 인덱스를 탄다. 양쪽 조건에 다 맞는 행이 두 번 나오지 않게 `UNION ALL`이 아니라 `UNION`을 쓴다.
+
+여섯째, 통계가 낡았다. 플래너는 테이블을 직접 세지 않는다. `ANALYZE`가 표본을 뽑아 저장해 둔 통계(값 분포, 자주 나오는 값, 서로 다른 값의 수)를 보고 행 수를 추측한다. 데이터가 크게 바뀌었는데 통계가 그대로면 추측이 틀린다. 대량 마이그레이션 직후를 흉내 내서, 트랜잭션 안에서 배송 완료 주문 80만 건을 `pending`으로 바꿔 본다.
+
+```sql
+BEGIN;
+UPDATE orders SET status = 'pending' WHERE status = 'delivered';  -- 799279행
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT id, amount FROM orders WHERE status = 'pending';
+
+ANALYZE orders;  -- 통계를 새로 모은다
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT id, amount FROM orders WHERE status = 'pending';
+ROLLBACK;
+```
+
+```text
+-- ANALYZE 전
+ Bitmap Heap Scan on orders  (cost=493.91..18326.84 rows=18772 width=12) (actual time=43.202..203.452 rows=809301 loops=1)
+   Recheck Cond: (status = 'pending'::text)
+   Heap Blocks: exact=13693
+   Buffers: shared hit=4346 read=12843 written=5355
+   ->  Bitmap Index Scan on orders_status_created_idx  (cost=0.00..489.22 rows=18772 width=0) (actual time=40.964..40.965 rows=809301 loops=1)
+         Index Cond: (status = 'pending'::text)
+         Buffers: shared hit=1627 read=1869 written=991
+ Planning:
+   Buffers: shared hit=2 read=4 dirtied=2
+ Planning Time: 0.155 ms
+ Execution Time: 241.242 ms
+
+-- ANALYZE 후
+ Seq Scan on orders  (cost=0.00..29316.00 rows=806267 width=12) (actual time=0.014..140.750 rows=809301 loops=1)
+   Filter: (status = 'pending'::text)
+   Rows Removed by Filter: 190699
+   Buffers: shared hit=10085 read=6731
+ Planning:
+   Buffers: shared hit=34 read=7
+ Planning Time: 0.194 ms
+ Execution Time: 175.897 ms
+```
+
+`ANALYZE` 전의 첫 줄에 이 일이 다 들어 있다. 조각을 눌러 보면 어느 숫자가 틀렸는지 보인다.
+
+<UrlAnatomy
+  caption="통계가 낡았을 때의 실행 계획 한 줄"
+  base="Bitmap Heap Scan on orders"
+  separator="  "
+  joiner=" "
+  params={[
+    {
+      key: "cost",
+      value: "493.91..18326.84",
+      title: "예상 비용",
+      description: "예상 행 수 18772를 믿고 계산한 비용이다. 이 값이 Seq Scan의 예상 비용보다 작아서 플래너가 인덱스를 골랐다. 출발점이 된 행 수가 틀렸으니 비용도 틀렸다.",
+    },
+    {
+      key: "rows",
+      value: "18772",
+      title: "예상 행 수",
+      description: "옛 통계로는 대기 주문이 전체의 1% 남짓이었다. 그 비율로 추측한 값이다. 실제로 테이블을 세 본 숫자가 아니다.",
+      required: true,
+    },
+    {
+      key: "actual time",
+      value: "43.202..203.452",
+      title: "실제 시간 (ms)",
+      description: "80만 행을 인덱스로 하나씩 찾아가느라 Seq Scan보다 오래 걸렸다. 전체 실행은 241ms였다.",
+    },
+    {
+      key: "actual rows",
+      display: "rows=809301",
+      title: "실제 행 수",
+      description: "예상의 43배다. 예상과 실제가 열 배 넘게 차이 나면 통계부터 의심한다. ANALYZE 뒤에는 예상이 806267로 맞아졌다.",
+      required: true,
+    },
+  ]}
+/>
+
+`ANALYZE` 전에는 `rows=18772`로 예상했는데 실제로는 `rows=809301`이 나왔다. 43배 틀렸다. 대기 주문이 1%라는 옛 통계를 믿고 인덱스를 골랐다가 80만 행을 띄엄띄엄 찾아갔다. 통계를 새로 모으자 예상이 806267로 맞아졌고, 플래너는 Seq Scan으로 바꿨다. 이 예에서는 241ms가 176ms가 된 정도지만, 조인이 붙으면 틀린 행 수 예측 하나가 조인 방법 전체를 잘못 고르게 만든다.
+
+평소에는 autovacuum이 알아서 `ANALYZE`를 돌린다. 기준은 "50행 + 테이블의 10%"가 바뀌었을 때다(`autovacuum_analyze_threshold`, `autovacuum_analyze_scale_factor`). 100만 행이면 10만 행이 바뀌어야 돈다. 대량으로 넣거나 바꾼 직후에는 직접 `ANALYZE`를 돌리는 습관을 들인다. 실행 계획에서 `rows` 예상과 실제가 열 배 넘게 차이 나면 통계부터 의심한다.
+
+## 인덱스는 쓰기를 느리게 한다
+
+읽기가 빨라지는 대가는 쓰기에서 낸다. 행을 하나 넣으면 힙에 한 번, 인덱스마다 한 번씩 더 쓴다. 인덱스가 넷이면 다섯 군데를 고친다. 이걸 쓰기 증폭이라고 한다. 같은 주문 20만 건을 인덱스 없는 테이블과 인덱스 4개(기본 키 포함)가 있는 테이블에 넣어 봤다.
+
+```sql
+CREATE TABLE orders_noidx (LIKE orders);                    -- 인덱스 없음
+CREATE TABLE orders_idx   (LIKE orders INCLUDING INDEXES);  -- orders의 인덱스 4개를 복사
+
+\timing on
+INSERT INTO orders_noidx SELECT * FROM orders WHERE id <= 200000;
+INSERT INTO orders_idx   SELECT * FROM orders WHERE id <= 200000;
+```
+
+```text
+INSERT 0 200000
+Time: 227.384 ms
+INSERT 0 200000
+Time: 1758.580 ms (00:01.759)
+```
+
+이 장비에서 7배 넘게 차이가 났다. 크기도 15MB와 38MB로 갈렸다. `user_id`와 `product_id`는 무작위 값이라 인덱스의 여기저기에 끼워 넣어야 하고, 꽉 찬 페이지에 끼워 넣으려면 페이지를 둘로 쪼개야 해서 더 비싸다.
+
+행 하나를 넣을 때 실제로 고치는 곳을 그려 보면 이렇다. 점이 흐르는 방향이 쓰기가 번지는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="INSERT 한 번이 힙과 인덱스 네 곳을 고친다"
+  nodes={[
+    { id: "ins", label: "INSERT 1행", x: 200, y: 40, w: 120 },
+    { id: "heap", label: "힙", sub: "행 본체", x: 200, y: 140, w: 100 },
+    { id: "pk", label: "orders_pkey", sub: "id", x: 60, y: 250, w: 100 },
+    { id: "uid", label: "user_id", sub: "무작위 위치", x: 165, y: 250, w: 100 },
+    { id: "st", label: "status, created", sub: "끝에 붙음", x: 285, y: 250, w: 120 },
+    { id: "pid", label: "product_id", sub: "무작위 위치", x: 345, y: 160, w: 100 },
+  ]}
+  edges={[
+    { from: "ins", to: "heap" },
+    { from: "heap", to: "pk" },
+    { from: "heap", to: "uid" },
+    { from: "heap", to: "st" },
+    { from: "heap", to: "pid" },
+  ]}
+/>
+
+UPDATE는 조금 더 복잡하다. PostgreSQL의 UPDATE는 행을 고치지 않고 새 버전을 쓴다. 새 버전의 위치(ctid)가 바뀌니 원래는 모든 인덱스에 새 항목을 넣어야 한다. 이걸 피하는 장치가 HOT(Heap-Only Tuple) 업데이트다. 두 가지가 맞으면 인덱스를 건드리지 않는다. 바꾼 컬럼 중에 인덱스에 들어간 컬럼이 없을 것, 그리고 새 버전이 같은 페이지에 들어갈 빈자리가 있을 것.
+
+대량으로 채운 테이블은 페이지가 꽉 차 있어서 HOT이 잘 안 된다. 페이지에 빈자리를 남겨 두는 설정이 `fillfactor`다. 아래는 `orders`의 `fillfactor`를 90으로 낮추고 테이블을 다시 쓴 다음 잰 결과다.
+
+```sql
+ALTER TABLE orders SET (fillfactor = 90);  -- 페이지의 10%를 비워 둔다
+VACUUM FULL orders;                        -- 테이블을 새로 써서 설정을 적용한다 (잠금 주의)
+
+-- 이 테이블의 통계 카운터를 0으로 돌려 둔다
+SELECT pg_stat_reset_single_table_counters('orders'::regclass);
+
+UPDATE orders SET amount = amount + 1000 WHERE user_id = 46;  -- amount: 인덱스에 없음 (3행)
+UPDATE orders SET status = 'paid' WHERE user_id = 47;         -- status: 인덱스에 있음 (6행)
+
+-- 수정된 행 수와 그중 HOT으로 처리된 수 (통계는 1초쯤 늦게 반영된다)
+SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'orders';
+```
+
+```text
+ n_tup_upd | n_tup_hot_upd
+-----------+---------------
+         9 |             3
+(1 row)
+```
+
+9행 중 3행만 HOT이었다. `amount`를 바꾼 3행은 인덱스를 안 건드렸고, `status`를 바꾼 6행은 `(status, created_at)` 인덱스 때문에 HOT이 안 됐다. "혹시 쓸지도 모르니" 만든 인덱스가 수정이 잦은 컬럼에 걸려 있으면 이렇게 모든 UPDATE를 비싸게 만든다. `VACUUM FULL`은 테이블 전체에 배타적 잠금을 걸어 그동안 읽기도 막으니, 운영 중에는 쓰지 않는다. 운영 테이블이라면 `fillfactor`는 테이블을 만들 때 정해 둔다. 실험이 끝났으면 `ALTER TABLE orders RESET (fillfactor);` 후 다시 `VACUUM FULL orders;`로 되돌린다.
+
+그래서 안 쓰는 인덱스는 찾아서 지운다. PostgreSQL은 인덱스마다 사용 횟수를 센다. 아래는 실험용 인덱스를 정리하고 `user_id`, `(status, created_at)`, `product_id` 인덱스만 남긴 뒤, 통계를 리셋하고 쿼리 몇 개를 돌린 다음의 출력이다.
+
+```sql
+-- 사용 횟수가 적은 인덱스부터. 유니크 인덱스(제약 역할)는 뺀다
+SELECT s.relname AS table_name,
+       s.indexrelname AS index_name,
+       s.idx_scan,
+       pg_size_pretty(pg_relation_size(s.indexrelid)) AS size
+FROM pg_stat_user_indexes AS s
+JOIN pg_index AS i ON i.indexrelid = s.indexrelid
+WHERE NOT i.indisunique
+ORDER BY s.idx_scan, pg_relation_size(s.indexrelid) DESC;
+```
+
+```text
+ table_name |        index_name         | idx_scan |  size
+------------+---------------------------+----------+---------
+ orders     | orders_product_id_idx     |        0 | 7104 kB
+ orders     | orders_status_created_idx |        1 | 37 MB
+ orders     | orders_user_id_idx        |        2 | 9088 kB
+(3 rows)
+```
+
+`idx_scan`이 0이면 후보다. 지우기 전에 세 가지를 확인한다. 이 숫자는 통계를 리셋한 시점부터 센 것이라 기간이 충분한지(`pg_stat_database.stats_reset`), 읽기 복제본에서만 쓰는 인덱스는 아닌지(복제본의 통계는 따로 센다), 외래 키 컬럼은 아닌지. 위의 `orders_product_id_idx`는 조회에 안 쓰였어도 상품을 지울 때 그 상품의 주문이 남아 있는지 확인하는 데 쓰인다. 이 인덱스가 없으면 상품 하나를 지울 때마다 `orders` 전체를 훑는다.
+
+## 운영 중인 테이블에 인덱스 추가하기
+
+그냥 `CREATE INDEX`를 하면 인덱스를 다 만들 때까지 그 테이블의 INSERT, UPDATE, DELETE가 막힌다. 읽기는 된다. 100만 행이면 1초 안팎이지만, 1억 행이면 몇 분이 걸리고 그동안 주문이 안 들어간다. 운영 중에는 `CONCURRENTLY`를 붙인다.
+
+```sql
+-- 쓰기를 막지 않고 만든다. 트랜잭션 블록(BEGIN ... COMMIT) 안에서는 실행할 수 없다
+CREATE INDEX CONCURRENTLY orders_user_id_idx ON orders (user_id);
+```
+
+대신 테이블을 두 번 훑고, 진행 중인 트랜잭션이 끝나기를 기다리느라 더 오래 걸린다. 그 사이 실패하면 인덱스가 사라지지 않고 쓸 수 없는 상태(INVALID)로 남는다. 이 인덱스는 조회에는 안 쓰이면서 쓰기 비용은 계속 먹는다.
+
+```sql
+-- 만들다 실패한 인덱스 찾기
+SELECT indexrelid::regclass AS index_name
+FROM pg_index
+WHERE NOT indisvalid;
+
+-- 지우고 다시 만든다 (지울 때도 CONCURRENTLY)
+DROP INDEX CONCURRENTLY orders_user_id_idx;
+CREATE INDEX CONCURRENTLY orders_user_id_idx ON orders (user_id);
+```
+아래 그림에서 다음을 누르면 `CONCURRENTLY`가 쓰기를 막지 않는 대신 무엇을 기다리는지 순서대로 나온다.
+
+<SequenceDiagram
+  caption="CREATE INDEX CONCURRENTLY는 두 번 훑고 두 번 기다린다"
+  actors={[
+    { id: "mig", label: "마이그레이션" },
+    { id: "db", label: "PostgreSQL" },
+    { id: "tx", label: "다른 트랜잭션" },
+  ]}
+  steps={[
+    { from: "mig", to: "db", label: "CONCURRENTLY", title: "빈 인덱스를 먼저 등록한다", detail: "인덱스를 카탈로그에 쓸 수 없는 상태(INVALID)로 만든다. 이 순간부터 다른 세션도 이 인덱스가 있다는 걸 안다." },
+    { from: "db", to: "tx", label: "끝나기를 기다림", title: "진행 중인 쓰기를 기다린다", detail: "등록 전에 시작해서 이 테이블을 고치고 있던 트랜잭션이 끝나야 다음으로 간다. 오래 열린 트랜잭션이 있으면 여기서 멈춘다." },
+    { from: "db", to: "db", label: "첫 번째 훑기", title: "테이블을 훑어 인덱스를 채운다", detail: "그 시점의 스냅샷으로 테이블을 읽어 인덱스를 만든다. 그동안 들어오는 INSERT와 UPDATE는 막히지 않는다." },
+    { from: "db", to: "db", label: "두 번째 훑기", title: "그 사이 바뀐 행을 채운다", detail: "첫 번째 훑기 동안 들어온 행 중 인덱스에 빠진 것을 찾아 넣는다. 테이블을 두 번 읽어서 일반 CREATE INDEX보다 오래 걸린다." },
+    { from: "db", to: "tx", label: "끝나기를 기다림", title: "오래된 스냅샷을 기다린다", detail: "두 번째 훑기 전에 시작한 트랜잭션이 끝나야 이 인덱스를 믿고 쓸 수 있다." },
+    { from: "db", to: "mig", label: "VALID", title: "그제야 쓸 수 있다", detail: "플래너가 이 인덱스를 고르기 시작한다. 중간에 실패하거나 취소되면 INVALID인 채로 남아 쓰기 비용만 먹는다." },
+  ]}
+/>
+
+<Callout kind="warning" title="CONCURRENTLY도 잠깐은 기다린다">
+`CONCURRENTLY`도 시작할 때와 끝날 때 오래 열린 트랜잭션이 끝나기를 기다린다. 그 뒤에 일반 `ALTER TABLE` 같은 명령이 줄을 서면 그 명령 뒤의 모든 쿼리가 함께 막힌다. 마이그레이션 세션에서는 `SET lock_timeout = '5s';`를 먼저 걸어 오래 기다리지 않고 실패하게 하고, 실패하면 INVALID 인덱스를 지운 뒤 다시 시도한다. 부풀어 오른 인덱스를 다시 만들 때는 `REINDEX INDEX CONCURRENTLY`(PostgreSQL 12부터)를 쓴다.
+</Callout>
+
+ORM의 마이그레이션 도구는 기본적으로 마이그레이션 하나를 트랜잭션으로 감싼다. 그 안에서는 `CONCURRENTLY`가 실패하니, 그 마이그레이션만 트랜잭션을 끄는 옵션을 찾아 쓴다.
+
+## 인덱스를 지우고 만드는 것도 배포다
+
+인덱스는 쿼리를 쓰는 방식에 따라 안 쓰이기도 한다. 컬럼에 함수나 형 변환을 씌우면, 앞이 열린 `LIKE`를 쓰면, 결과가 테이블의 큰 부분이면, 인덱스 없는 컬럼과 `OR`로 묶으면, 통계가 낡아 예상이 틀리면 플래너는 다른 길을 고른다. 그래서 인덱스를 만들었다고 끝내지 말고 실행 계획으로 확인한다. 그리고 인덱스는 쓰기마다 값을 치른다. 안 쓰는 인덱스는 찾아서 지우고, 운영 중인 테이블에는 `CONCURRENTLY`와 `lock_timeout`으로 쓰기를 막지 않게 만든다. 이 테이블 그대로 느린 쿼리를 찾고 고치는 방법은 [느린 쿼리 고치기](/posts/sql-query-tuning)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 인덱스를 만들었는데 쿼리가 안 타요. 무엇을 확인하나요?
+
+먼저 `EXPLAIN ANALYZE`로 계획과 예상 행 수를 본다. 컬럼에 함수나 형 변환이 씌워졌는지(`lower(email)`, `(user_id)::numeric`), `LIKE '%..'`처럼 앞이 열려 있는지, 조건에 맞는 행이 너무 많아 Seq Scan이 더 싼 건 아닌지, OR로 인덱스 없는 컬럼이 묶였는지, 복합 인덱스의 첫 컬럼이 조건에 없는지 확인한다. 예상 행 수가 실제와 크게 다르면 통계가 낡은 것이니 `ANALYZE`를 돌린다.
+
+### 인덱스를 많이 만들면 왜 안 되나요?
+
+행을 쓸 때마다 모든 인덱스를 함께 고쳐야 해서 INSERT와 UPDATE가 느려지고 저장 공간과 WAL이 늘어난다. 예제에서는 인덱스 4개가 있는 테이블에 넣는 것이 7배 넘게 느렸다. PostgreSQL에서는 인덱스에 걸린 컬럼을 바꾸면 HOT 업데이트가 안 돼서 UPDATE가 더 비싸진다. `pg_stat_user_indexes.idx_scan`으로 안 쓰는 인덱스를 찾아 지우되, 외래 키나 복제본에서 쓰는지 먼저 확인한다.
+
+### 운영 DB에 큰 테이블의 인덱스를 추가할 때 주의할 점은요?
+
+일반 `CREATE INDEX`는 끝날 때까지 쓰기를 막으니 `CREATE INDEX CONCURRENTLY`를 쓴다. 트랜잭션 안에서는 못 돌리고, 시간이 더 걸리며, 실패하면 INVALID 인덱스가 남으니 `pg_index.indisvalid`로 확인해서 지우고 다시 만든다. 오래 열린 트랜잭션을 기다리는 동안 다른 잠금이 줄 서지 않게 `lock_timeout`을 걸어 둔다. MySQL은 InnoDB 온라인 DDL로 보조 인덱스를 추가한다.
+
+### 실행 계획의 예상 행 수가 실제와 크게 다르면 무엇을 의심하나요?
+
+통계가 낡았는지부터 본다. 플래너는 테이블을 직접 세지 않고 `ANALYZE`가 표본으로 모아 둔 통계로 행 수를 추측한다. 대량으로 데이터를 바꾼 직후에는 autovacuum의 기준(50행 + 테이블의 10%)에 닿기 전까지 통계가 옛것이라, 예제에서는 예상 18772행에 실제 80만 행이 나와 인덱스를 잘못 골랐다. 대량 작업 뒤에는 직접 `ANALYZE`를 돌린다.
+
+### HOT 업데이트는 무엇이고, 인덱스와 어떤 관계가 있나요?
+
+PostgreSQL의 UPDATE는 행의 새 버전을 쓰기 때문에 원래는 모든 인덱스에 새 항목을 넣어야 한다. 바꾼 컬럼 중 인덱스에 걸린 것이 없고 같은 페이지에 빈자리가 있으면 인덱스를 건드리지 않고 힙만 고치는데, 이게 HOT 업데이트다. 예제에서 인덱스에 없는 `amount`를 바꾼 3행은 HOT이었고, 인덱스에 걸린 `status`를 바꾼 6행은 아니었다. 그래서 수정이 잦은 컬럼에는 인덱스를 함부로 걸지 않고, `fillfactor`로 페이지에 빈자리를 남긴다.
