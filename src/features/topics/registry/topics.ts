@@ -74,7 +74,15 @@ export const TOPICS: Topic[] = [
         children: [
           { id: "docker", label: "Docker", description: "컨테이너 이미지와 실행" },
           { id: "nginx", label: "Nginx", description: "웹 서버, 리버스 프록시, 로드 밸런싱" },
-          { id: "kubernetes", label: "Kubernetes", description: "컨테이너 오케스트레이션" },
+          {
+            id: "kubernetes",
+            label: "Kubernetes",
+            description: "컨테이너 오케스트레이션",
+            children: [
+              { id: "pod", label: "Pod", description: "Pod의 구조, 생명주기, 프로브, 리소스, 스케줄링, 장애 대응" },
+              { id: "helm", label: "Helm", description: "차트, 템플릿, values, 릴리스 관리, 배포 흐름" },
+            ],
+          },
           {
             id: "ci-cd",
             label: "CI/CD",

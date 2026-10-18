@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React, Rendering}, Network › {HTTP, OSI · TCP/IP}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React, Rendering}, Network › {HTTP, OSI · TCP/IP}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes › {Helm, Pod}, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
