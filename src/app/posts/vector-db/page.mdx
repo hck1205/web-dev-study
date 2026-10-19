@@ -248,6 +248,90 @@ LIMIT 3;
 
 검색 품질을 한 번 더 끌어올리는 방법으로 리랭킹이 있다. 벡터 검색으로 후보를 넉넉하게(예: 50개) 뽑고, 질문과 문서를 함께 넣어 관련도를 직접 매기는 더 무거운 모델(cross-encoder)로 다시 순위를 매겨 상위 몇 개만 쓴다. 품질은 "정답 문서가 상위 k개 안에 들어왔는가"(recall@k) 같은 지표로 재고, 청크 크기나 모델을 바꿀 때마다 같은 질문 세트로 비교한다.
 
+## pgvector를 붙였는데 결과가 이상할 때
+
+pgvector로 시작하면 처음 몇 주 안에 부딪히는 일이 정해져 있다. Ubuntu 24.04의 PostgreSQL 16에 `postgresql-16-pgvector` 패키지(0.6.0)를 깔고, 64차원 벡터 2만 개를 넣은 `docs` 테이블에서 직접 재현해 봤다. 100개 중 1개는 `category`가 `'faq'`이고 나머지는 `'blog'`다.
+
+첫 번째는 인덱스를 만들었는데 검색이 여전히 느린 경우다. `EXPLAIN`부터 본다.
+
+```sql
+-- 인덱스는 코사인 거리용(vector_cosine_ops)으로 만들었다
+EXPLAIN SELECT id FROM docs
+ORDER BY embedding <-> (SELECT embedding FROM docs WHERE id = 42)  -- <->는 유클리드 거리
+LIMIT 5;
+```
+
+```text
+ Limit  (cost=1360.50..1360.51 rows=5 width=16)
+   InitPlan 1 (returns $0)
+     ->  Index Scan using docs_pkey on docs docs_1  (cost=0.29..8.30 rows=1 width=264)
+           Index Cond: (id = 42)
+   ->  Sort  (cost=1352.19..1402.19 rows=20000 width=16)
+         Sort Key: ((docs.embedding <-> $0))
+         ->  Seq Scan on docs  (cost=0.00..1020.00 rows=20000 width=16)
+```
+
+맨 아래 `Seq Scan`과 그 위의 `Sort`가 문제다. 2만 개를 전부 재고 정렬했다. 인덱스는 만들 때 고른 거리 연산자에만 쓰인다. 연산자를 `<=>`(코사인 거리)로 바꾸면 같은 쿼리가 이렇게 된다.
+
+```text
+ Limit  (cost=32.91..33.74 rows=5 width=16)
+   InitPlan 1 (returns $0)
+     ->  Index Scan using docs_pkey on docs docs_1  (cost=0.29..8.30 rows=1 width=264)
+           Index Cond: (id = 42)
+   ->  Index Scan using docs_embedding_idx on docs  (cost=24.60..3354.60 rows=20000 width=16)
+         Order By: (embedding <=> $0)
+```
+
+`Index Scan using docs_embedding_idx`와 `Order By`가 보이면 HNSW를 탄 것이다. ORM이나 라이브러리가 기본으로 어떤 연산자를 쓰는지 확인하고, 인덱스의 연산자 클래스(`vector_l2_ops`, `vector_ip_ops`, `vector_cosine_ops`)와 맞춘다.
+
+두 번째는 조건을 걸었더니 결과가 모자란 경우다. "FAQ 중에서 가까운 10개"를 물었는데 1개만 왔다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF)
+SELECT id FROM docs WHERE category = 'faq'
+ORDER BY embedding <=> (SELECT embedding FROM docs WHERE id = 42)
+LIMIT 10;
+```
+
+```text
+ Limit (actual rows=1 loops=1)
+   ...
+   ->  Index Scan using docs_embedding_idx on docs (actual rows=1 loops=1)
+         Order By: (embedding <=> $0)
+         Filter: (category = 'faq'::text)
+         Rows Removed by Filter: 39
+```
+
+`Rows Removed by Filter: 39`가 답이다. HNSW 인덱스는 후보를 `hnsw.ef_search`(기본 40)개만 꺼내고, 필터는 그 뒤에 걸린다. 40개 중 FAQ가 1개뿐이었다. 앞에서 말한 post-filtering이 실제로는 이렇게 보인다. `SET hnsw.ef_search = 1000`(최댓값)으로 올려도 6개였다. 조건이 늘 정해져 있다면 그 조건만 담은 부분 인덱스가 확실하다.
+
+```sql
+CREATE INDEX docs_faq_embedding_idx ON docs
+USING hnsw (embedding vector_cosine_ops) WHERE category = 'faq';
+```
+
+같은 쿼리가 `Index Scan using docs_faq_embedding_idx`로 바뀌고 `actual rows=10`이 나왔다. 조건 값이 많고 자주 바뀌면 부분 인덱스로는 못 버티니, pgvector 0.8.0부터 생긴 반복 탐색(`hnsw.iterative_scan`)을 쓰거나 필터를 잘 다루는 전용 벡터 DB를 검토한다.
+
+세 번째는 재현율이 얼마나 나오는지 모르는 채로 쓰는 경우다. 같은 질문에 대해 인덱스 결과와 전부 재 본 정답을 비교하면 된다. `ORDER BY (embedding <=> q) + 0`처럼 식을 살짝 바꾸면 인덱스를 못 타서 정확한 상위 10개가 나온다. 질문 100개로 재 보니 이랬다.
+
+```text
+ef_search=10  recall@10=0.945
+ef_search=40  recall@10=0.955
+ef_search=100 recall@10=0.978
+ef_search=200 recall@10=0.993
+```
+
+후보를 많이 들고 다닐수록 정답을 덜 놓친다. 실제 임베딩은 무작위 벡터보다 뭉쳐 있어서 숫자가 다르게 나오니, 내 데이터와 실제 질문으로 이렇게 한 번 재 보고 `ef_search`를 정한다.
+
+인덱스를 만들 때도 신호가 하나 있다. `maintenance_work_mem`을 1MB로 줄이고 만들면 이런 알림이 뜬다.
+
+```text
+NOTICE:  hnsw graph no longer fits into maintenance_work_mem after 1079 tuples
+DETAIL:  Building will take significantly more time.
+HINT:  Increase maintenance_work_mem to speed up builds.
+```
+
+이 상태로 29.0초 걸린 생성이 `SET maintenance_work_mem = '256MB'` 뒤에는 7.7초였다. 대량으로 넣을 때는 데이터를 먼저 넣고 인덱스를 나중에 만들고, 그 세션에서만 이 값을 올린다. 마지막으로 임베딩 모델을 바꾸면 차원이 달라져서 `ERROR:  expected 64 dimensions, not 3` 같은 에러로 바로 드러난다. 차원이 같은 모델로 바꿨다면 에러 없이 조용히 엉뚱한 결과가 나오니, 모델을 바꿀 때는 새 컬럼에 전부 다시 임베딩하고 한 번에 넘어간다.
+
 ## 정리
 
 벡터 DB는 뜻을 좌표로 바꿔 저장하고, 질문과 가까운 좌표를 빠르게 찾아 주는 데이터베이스다. 모두를 비교하는 대신 HNSW 같은 그래프 인덱스로 가까운 쪽을 따라가며 찾는다. 정확도는 조금 내주고 속도를 크게 얻는 방식이다. LLM에 필요한 문서를 찾아 붙여 주는 RAG가 지금 가장 흔한 쓰임새다.

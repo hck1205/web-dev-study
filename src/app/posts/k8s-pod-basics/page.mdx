@@ -1,0 +1,490 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-basics");
+
+Docker로 컨테이너를 띄우던 손으로 쿠버네티스를 처음 만지면 이상한 데서 막힌다. 컨테이너를 하나 띄우고 싶을 뿐인데 `kubectl get containers` 같은 명령은 없고, 목록에는 Pod라는 낯선 이름만 나온다. 매니페스트를 열어 보면 컨테이너는 `spec.containers`라는 배열 안에 들어 있다. 컨테이너를 하나만 넣어도 배열이다. 쿠버네티스는 왜 컨테이너를 직접 다루지 않고 Pod라는 껍데기를 한 겹 씌웠을까. 이 글은 그 질문에서 출발해 Pod가 무엇을 나눠 갖는지, 만들고 들여다보고 지우는 명령, 그리고 왜 Pod를 직접 만들지 말라고 하는지까지 따라간다.
+
+이 글의 `kubectl` 출력은 실습용 클러스터에서 받았다. kwok라는 도구로 띄운 클러스터라 API 서버, 스케줄러, 컨트롤러는 진짜(Kubernetes 1.30)이고 노드와 컨테이너는 흉내만 낸다. 그래서 Pod IP가 `10.0.0.x`처럼 단순하고, 컨테이너가 실제로 돌아야 나오는 출력(앱 로그, kubelet 이벤트)은 예시라고 따로 적었다.
+
+## 컨테이너 대신 Pod를 만드는 이유
+
+컨테이너 하나는 보통 프로세스 하나다. 그런데 실제 서비스는 프로세스 하나로 깔끔하게 끝나지 않을 때가 있다. 웹 앱이 파일로 로그를 쓰고, 옆에서 다른 프로세스가 그 파일을 읽어 로그 서버로 보낸다. 앱 앞에 작은 프록시를 두고 `localhost`로 넘겨받게 한다. 이런 둘은 항상 같은 기계에서 같이 떠야 하고, 같은 디스크와 같은 네트워크를 봐야 한다.
+
+Docker만으로 이걸 하려면 손이 많이 간다. 컨테이너는 기본으로 각자 네트워크 namespace를 받으니, 둘이 `localhost`를 함께 쓰게 하려면 `--network container:앱` 같은 옵션으로 하나를 다른 하나에 붙여야 한다. 볼륨도 따로 맞춰 줘야 하고, 둘을 같은 서버에 띄우는 것도 사람 몫이다. 컨테이너가 수백 개로 늘면 "이 둘은 꼭 붙어 다녀야 한다"는 약속을 사람이 지킬 수 없다.
+
+쿠버네티스는 이 약속을 하나의 단위로 만들었다. 함께 떠야 하는 컨테이너 묶음, 그게 Pod다. 이름은 고래 떼(pod of whales)에서 왔다. Docker 로고가 고래라서 붙은 말장난이다. 쿠버네티스가 스케줄하고, 띄우고, 지우는 가장 작은 단위가 Pod다. 컨테이너는 Pod 안에만 존재한다.
+
+Pod 안의 컨테이너들은 세 가지를 약속받는다. 반드시 같은 노드에 함께 놓인다. 같은 네트워크 namespace를 써서 IP 하나와 포트 공간 하나를 나눠 갖는다. 그리고 Pod에 선언한 볼륨을 함께 마운트할 수 있다. 대부분의 Pod에는 컨테이너가 하나뿐이지만, 그때도 이 껍데기는 그대로 있다. 그래서 하나만 넣어도 배열이다.
+
+## 한 Pod 안에서 나눠 갖는 것
+
+앞에서 말한 로그 예제를 Pod로 그려 보면 이렇다. 앱 컨테이너와 로그 전달 컨테이너가 한 Pod에 있고, 둘 다 `logs`라는 볼륨을 마운트한다. 화살표의 점이 데이터가 흐르는 방향이다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="Pod IP와 볼륨은 Pod가 갖고, 컨테이너는 그걸 빌려 쓴다. pause는 namespace를 붙잡고만 있다."
+  nodes={[
+    { id: "ip", label: "Pod IP", sub: "10.0.0.4", x: 220, y: 40, w: 120 },
+    { id: "pause", label: "pause", sub: "namespace 보유", x: 220, y: 135, w: 120 },
+    { id: "app", label: "app", sub: ":8080", x: 80, y: 135, w: 110 },
+    { id: "ship", label: "log-shipper", sub: "fluent-bit", x: 360, y: 135, w: 110 },
+    { id: "vol", label: "emptyDir", sub: "logs 볼륨", x: 220, y: 255, w: 120 },
+  ]}
+  edges={[
+    { from: "ip", to: "pause", label: "net ns" },
+    { from: "app", to: "pause", label: "합류", dashed: true },
+    { from: "ship", to: "pause", label: "합류", dashed: true },
+    { from: "app", to: "vol", label: "쓰기" },
+    { from: "vol", to: "ship", label: "읽기" },
+  ]}
+/>
+
+네트워크부터 보자. 두 컨테이너는 같은 IP를 쓴다. 앱이 8080을 열면 log-shipper 컨테이너에서 `localhost:8080`으로 닿는다. 반대로 말하면 포트 공간도 하나라서, 두 컨테이너가 같은 포트를 열면 늦게 연 쪽이 실패한다. nginx 이미지 두 개를 한 Pod에 넣으면 두 번째 nginx는 `bind() to 0.0.0.0:80 failed (98: Address already in use)`를 남기고 죽는다. 호스트 이름(UTS namespace)과 IPC namespace도 기본으로 함께 쓴다.
+
+파일 시스템은 나눠 갖지 않는다. 각 컨테이너는 자기 이미지에서 만든 루트 파일 시스템을 따로 본다. 앱 컨테이너가 `/tmp`에 쓴 파일은 log-shipper의 `/tmp`에 없다. 둘이 파일을 주고받으려면 위 그림처럼 Pod 수준의 볼륨을 선언하고 양쪽에서 마운트해야 한다. `emptyDir`은 Pod가 노드에 놓일 때 빈 디렉터리로 만들어지고 Pod가 지워질 때 함께 지워지는 볼륨이다. 컨테이너가 재시작해도 남는다.
+
+프로세스 목록(PID namespace)도 기본으로는 따로다. 앱 컨테이너에서 `ps`를 치면 앱 프로세스만 보인다. `spec.shareProcessNamespace: true`를 주면 한 Pod의 컨테이너가 서로의 프로세스를 보고 신호도 보낼 수 있는데, 디버깅이나 설정 리로드 같은 특별한 경우에만 쓴다. CPU와 메모리 한도는 컨테이너마다 따로 건다. 이건 [requests와 limits](/posts/k8s-pod-resources) 글에서 자세히 다룬다.
+
+## pause 컨테이너가 붙잡고 있는 것
+
+그림 가운데의 pause는 매니페스트에 적지 않았는데 노드에는 떠 있다. 이 컨테이너는 하는 일이 거의 없다. 시작하면 바로 잠들어서 신호가 올 때까지 기다린다. 그런데 이 컨테이너가 Pod의 네트워크 namespace를 만들고 붙잡고 있다. 앱 컨테이너들은 새 namespace를 만들지 않고 pause의 namespace에 합류한다.
+
+이렇게 나눈 이유는 재시작 때문이다. 앱 컨테이너가 죽었다 다시 뜨면 프로세스가 새로 만들어진다. namespace를 앱이 들고 있었다면 앱이 죽는 순간 namespace도 사라지고 IP도 다시 받아야 한다. pause가 들고 있으면 앱이 몇 번을 재시작해도 Pod IP는 그대로다. 이 "Pod의 껍데기"를 CRI에서는 sandbox라고 부른다.
+
+containerd를 쓰는 노드라면 `crictl`로 sandbox와 컨테이너를 따로 볼 수 있다. 노드에 SSH로 들어가서 친다.
+
+```bash
+# Pod sandbox 목록 (pause가 붙잡고 있는 껍데기). STATE가 Ready인지 본다
+sudo crictl pods --name shop
+
+# 컨테이너 목록. ATTEMPT가 재시작 횟수이고, POD ID가 위 sandbox와 같다
+sudo crictl ps --pod <POD ID>
+
+# pause 이미지 버전. containerd 설정의 sandbox_image(1.x)나 sandbox(2.x)에 적혀 있다
+sudo containerd config dump | grep -E 'sandbox_image|sandbox ='
+```
+
+컨테이너는 여러 번 다시 만들어져도(ATTEMPT가 올라가도) sandbox의 POD ID는 그대로라는 걸 확인할 수 있다. 반대로 sandbox가 다시 만들어지면 Pod IP가 바뀐다. 노드 재부팅이나 네트워크 플러그인 문제로 이벤트에 `SandboxChanged`가 찍혔다면 그 경우다.
+
+## kubectl run 한 줄이 지나가는 길
+
+가장 짧은 방법으로 Pod를 하나 만들어 보자.
+
+```bash
+# nginx 이미지로 hello라는 Pod를 만든다
+kubectl run hello --image=nginx:1.27 --port=80
+```
+
+```text
+pod/hello created
+```
+
+`created`가 찍히는 순간 컨테이너는 아직 어디에서도 돌고 있지 않다. 이 메시지는 API 서버가 Pod 객체를 저장했다는 뜻일 뿐이다. 그다음은 여러 구성 요소가 각자 API 서버를 지켜보다가 자기 차례에 움직인다. 아래 그림에서 다음을 누르면 한 단계씩 진행된다.
+
+<SequenceDiagram
+  caption="Pod 하나가 실제로 뜨기까지"
+  actors={[
+    { id: "cli", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "sched", label: "스케줄러" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "cri", label: "containerd" },
+  ]}
+  steps={[
+    {
+      from: "cli",
+      to: "api",
+      label: "POST pods",
+      title: "Pod 객체를 보낸다",
+      detail: "kubectl은 매니페스트를 JSON으로 바꿔 API 서버에 보낸다. 인증, 권한, 어드미션 검사를 지나면 etcd에 저장된다. 이때 nodeName은 비어 있다.",
+      payload: "POST /api/v1/namespaces/default/pods\n{\"kind\":\"Pod\",\"metadata\":{\"name\":\"hello\"},...}",
+    },
+    {
+      from: "api",
+      to: "sched",
+      label: "watch 알림",
+      title: "스케줄러가 새 Pod를 본다",
+      detail: "스케줄러는 nodeName이 빈 Pod를 계속 지켜본다. 새 Pod가 오면 대기열에 넣는다.",
+    },
+    {
+      from: "sched",
+      to: "api",
+      label: "binding",
+      title: "노드를 골라 묶는다",
+      detail: "자원과 조건을 따져 노드를 고르고 binding을 만든다. Pod의 nodeName이 node-1로 채워지고 Scheduled 이벤트가 남는다.",
+    },
+    {
+      from: "api",
+      to: "kubelet",
+      label: "watch 알림",
+      title: "그 노드의 kubelet이 받는다",
+      detail: "kubelet은 자기 노드로 배정된 Pod만 지켜본다. 이제야 실제 노드에서 무언가가 시작된다.",
+    },
+    {
+      from: "kubelet",
+      to: "cri",
+      label: "RunPodSandbox",
+      title: "sandbox부터 만든다",
+      detail: "pause 컨테이너를 띄워 namespace를 만들고, CNI 플러그인을 불러 Pod IP를 붙인다.",
+    },
+    {
+      from: "kubelet",
+      to: "cri",
+      label: "Pull·Create·Start",
+      title: "이미지를 받고 컨테이너를 띄운다",
+      detail: "이미지를 받고 컨테이너를 만들어 sandbox의 namespace에 합류시킨 뒤 시작한다. 이미지가 크면 여기서 오래 머문다.",
+    },
+    {
+      from: "kubelet",
+      to: "api",
+      label: "status 갱신",
+      title: "상태를 보고한다",
+      detail: "컨테이너 상태와 Pod IP를 status에 쓴다. kubectl get에 보이는 Running과 IP는 이 보고에서 나온다.",
+      payload: "status:\n  phase: Running\n  podIP: 10.0.0.2\n  hostIP: 10.0.1.11",
+    },
+  ]}
+/>
+
+이 그림에서 누구도 누구에게 명령하지 않는다. 스케줄러는 kubelet을 부르지 않고, API 서버의 Pod 객체에 노드 이름을 적을 뿐이다. kubelet은 그걸 보고 알아서 움직인다. 쿠버네티스의 구성 요소는 모두 API 서버를 가운데 두고 "원하는 상태"와 "지금 상태"를 맞춰 가는 방식으로 일한다. 그래서 어느 단계에서 멈췄는지는 Pod 객체의 상태를 보면 알 수 있다. nodeName이 비어 있으면 스케줄러 단계, 노드는 정해졌는데 컨테이너가 안 뜨면 kubelet 단계다.
+
+## 매니페스트 한 줄씩 읽기
+
+`kubectl run`은 연습용이다. 실무에서는 매니페스트 파일을 쓰고 `kubectl apply`로 적용한다. 앞에서 그림으로 본 로그 예제를 매니페스트로 쓰면 이렇다.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shop
+  labels:
+    app: shop
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/example/shop:1.4.2
+      ports:
+        - containerPort: 8080
+      env:
+        - name: LOG_DIR
+          value: /var/log/shop
+      volumeMounts:
+        - name: logs
+          mountPath: /var/log/shop
+    - name: log-shipper
+      image: fluent/fluent-bit:3.1
+      volumeMounts:
+        - name: logs
+          mountPath: /var/log/shop
+          readOnly: true
+  volumes:
+    - name: logs
+      emptyDir: {}
+```
+
+줄이 많아 보여도 뼈대는 네 덩어리다. 아래 조각을 눌러 보면 각 필드가 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="Pod 매니페스트의 뼈대"
+  base="kind: Pod"
+  separator=" · "
+  joiner=" · "
+  params={[
+    {
+      key: "apiVersion",
+      display: "apiVersion: v1",
+      title: "어느 API 그룹의 무슨 버전인지",
+      description: "Pod는 그룹 이름이 없는 core 그룹이라 v1이다. Deployment는 apps/v1, Ingress는 networking.k8s.io/v1처럼 그룹이 붙는다. kubectl api-resources로 어떤 kind가 어느 그룹인지 볼 수 있다.",
+      required: true,
+    },
+    {
+      key: "labels",
+      display: "labels: app=shop",
+      title: "다른 객체가 이 Pod를 찾는 이름표",
+      description: "Service와 Deployment는 이름이 아니라 라벨 셀렉터로 Pod를 고른다. 라벨이 하나만 틀려도 Service 뒤에 Pod가 안 붙는다.",
+    },
+    {
+      key: "containers",
+      display: "containers[0].image",
+      title: "무엇을 띄울지",
+      description: "컨테이너는 배열이다. 하나만 있어도 배열이다. image에는 태그나 다이제스트까지 적는다. latest를 쓰면 언제 어떤 이미지가 떴는지 알 수 없고, imagePullPolicy 기본값도 Always로 바뀐다.",
+      code: "containers:\n  - name: app\n    image: ghcr.io/example/shop:1.4.2",
+      required: true,
+    },
+    {
+      key: "ports",
+      display: "containerPort: 8080",
+      title: "어느 포트를 쓰는지 알리는 문서",
+      description: "적지 않아도 포트는 열린다. 0.0.0.0에서 듣고 있으면 Pod IP로 닿는다. 그래도 적어 두면 Service의 targetPort에서 이름으로 참조할 수 있고, 읽는 사람이 포트를 알 수 있다.",
+    },
+    {
+      key: "volumeMounts",
+      display: "volumeMounts",
+      title: "Pod 볼륨을 컨테이너 안 경로에 붙인다",
+      description: "볼륨은 spec.volumes에 Pod 단위로 선언하고, 컨테이너마다 어디에 붙일지 정한다. 같은 볼륨을 두 컨테이너가 마운트하면 그 경로의 파일을 함께 본다.",
+      code: "volumeMounts:\n  - name: logs\n    mountPath: /var/log/shop",
+    },
+    {
+      key: "volumes",
+      display: "volumes: emptyDir",
+      title: "Pod가 갖는 저장 공간",
+      description: "emptyDir은 Pod가 노드에 놓일 때 만들어지고 Pod가 지워지면 사라진다. 컨테이너 재시작에는 살아남는다. 노드 디스크를 쓰므로 많이 쓰면 노드 디스크 압박의 원인이 된다.",
+    },
+  ]}
+/>
+
+필드 설명은 클러스터에 직접 물어볼 수 있다. `kubectl explain`은 API 서버가 가진 스키마를 그대로 보여 준다.
+
+```bash
+# 필드 경로를 점으로 이어서 묻는다
+kubectl explain pod.spec.containers.ports
+```
+
+```text
+KIND:       Pod
+VERSION:    v1
+
+FIELD: ports <[]ContainerPort>
+
+
+DESCRIPTION:
+    List of ports to expose from the container. Not specifying a port here DOES
+    NOT prevent that port from being exposed. Any port which is listening on the
+    default "0.0.0.0" address inside a container will be accessible from the
+    network. Modifying this array with strategic merge patch may corrupt the
+    data. For more information See
+    https://github.com/kubernetes/kubernetes/issues/108255. Cannot be updated.
+```
+
+첫 문단이 위 `ports` 설명의 근거다. `containerPort`는 방화벽이 아니라 문서에 가깝다. 마지막 줄의 "Cannot be updated"도 중요하다. Pod는 만든 뒤에 대부분의 필드를 바꿀 수 없다.
+
+```bash
+# 이미 떠 있는 Pod의 포트를 바꿔 보면
+kubectl patch pod shop --type=json \
+  -p '[{"op":"replace","path":"/spec/containers/0/ports/0/containerPort","value":9090}]'
+```
+
+```text
+The Pod "shop" is invalid: spec: Forbidden: pod updates may not change fields other than `spec.containers[*].image`,`spec.initContainers[*].image`,`spec.activeDeadlineSeconds`,`spec.tolerations` (only additions to existing tolerations),`spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)
+```
+
+이미지, 일부 기한, toleration 추가 정도만 바꿀 수 있다. 나머지를 바꾸려면 Pod를 지우고 새로 만들어야 한다. 이 불편함이 뒤에서 볼 Deployment를 쓰는 이유 중 하나다.
+
+## 띄우고, 들여다보고, 지우기
+
+매니페스트를 적용하고 상태를 본다.
+
+```bash
+# 파일 내용대로 만들거나, 이미 있으면 바뀐 부분만 반영한다
+kubectl apply -f shop.yaml
+
+# 어느 노드에 어떤 IP로 떴는지까지 본다
+kubectl get pod shop -o wide
+```
+
+```text
+pod/shop created
+NAME   READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   READINESS GATES
+shop   2/2     Running   0          8s    10.0.0.4   node-1   <none>           <none>
+```
+
+READY의 `2/2`는 컨테이너 두 개 중 두 개가 준비됐다는 뜻이다. 컨테이너 수가 아니라 Pod 수를 세는 다른 리소스(Deployment의 `3/3`)와 헷갈리기 쉽다. RESTARTS는 Pod 안 컨테이너들의 재시작 횟수 합이다. 이 숫자가 계속 오르면 컨테이너가 죽고 있다는 신호다.
+
+자세한 상태는 `describe`로 본다. 앞의 `web` Pod를 예로 들면 출력이 길지만 볼 곳은 정해져 있다. 아래는 실제 출력에서 자주 안 보는 줄(Annotations, Mounts, Volumes 등)을 뺀 것이다.
+
+```bash
+# 객체의 스펙, 상태, 관련 이벤트를 사람이 읽기 좋게 모아 보여 준다
+kubectl describe pod web
+```
+
+```text
+Name:             web
+Namespace:        default
+Priority:         0
+Service Account:  default
+Node:             node-2/10.0.1.12
+Labels:           app=web
+Status:           Running
+IP:               10.0.0.1
+Containers:
+  nginx:
+    Image:          nginx:1.27
+    Port:           80/TCP
+    State:          Running
+      Started:      Sun, 18 Oct 2026 19:16:28 +0000
+    Ready:          True
+    Restart Count:  0
+Conditions:
+  Type              Status
+  Initialized       True 
+  Ready             True 
+  ContainersReady   True 
+  PodScheduled      True 
+QoS Class:                   BestEffort
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  8s    default-scheduler  Successfully assigned default/web to node-2
+```
+
+`Node`는 배정된 노드와 그 노드 IP다. `Containers` 아래의 `State`와 `Restart Count`가 컨테이너별 상태다. `Conditions`는 Pod가 어디까지 왔는지 보여 주는 체크 목록이고, 마지막의 `Events`가 무슨 일이 있었는지 시간 순으로 보여 준다. Pod가 안 뜰 때는 거의 항상 Events부터 읽는다. 상태별로 읽는 순서는 [Pod가 안 뜰 때 보는 순서](/posts/k8s-pod-troubleshooting)에 정리했다.
+
+쓰지 않은 toleration 두 줄도 보인다. 노드가 준비되지 않거나 연락이 끊겨도 300초는 기다렸다가 Pod를 쫓아낸다는 뜻인데, API 서버의 어드미션 단계가 자동으로 넣어 준다. QoS Class는 리소스를 하나도 적지 않아서 BestEffort가 됐다.
+
+실제 컨테이너에서 돌고 있는 앱을 볼 때는 아래 명령을 쓴다. 출력은 nginx 이미지를 기준으로 한 예시다.
+
+```bash
+# 컨테이너의 표준 출력 로그. 컨테이너가 여럿이면 -c로 고른다
+kubectl logs shop -c app --tail=20
+
+# 재시작했다면 죽기 직전 컨테이너의 로그를 본다
+kubectl logs shop -c app --previous
+
+# 컨테이너 안에서 명령을 실행한다. 셸이 없는 이미지(distroless)면 실패한다
+kubectl exec -it web -- sh
+
+# 내 PC의 8080을 Pod의 80으로 잇는다. Service 없이 잠깐 확인할 때 쓴다
+kubectl port-forward pod/web 8080:80
+```
+
+```text
+Forwarding from 127.0.0.1:8080 -> 80
+Forwarding from [::1]:8080 -> 80
+Handling connection for 8080
+```
+
+이 세 명령은 모두 API 서버를 거쳐 그 노드의 kubelet(기본 10250 포트)으로 이어진다. 실습 클러스터는 kubelet이 가짜라 `kubectl logs web`이 `Error from server: Get "https://node-2:.../containerLogs/default/web/nginx"`로 실패했는데, 이 에러 주소가 오히려 경로를 잘 보여 준다. 실제 클러스터에서도 API 서버에서 노드의 10250으로 가는 길이 방화벽에 막혀 있으면 `get pods`는 되는데 logs와 exec만 안 되는 일이 생긴다.
+
+다 썼으면 지운다.
+
+```bash
+# Pod를 지운다. 종료 유예 시간(기본 30초)만큼 기다렸다가 끝난다
+kubectl delete pod hello
+
+# 파일로 만든 것은 파일로 지운다
+kubectl delete -f shop.yaml
+```
+
+```text
+pod "hello" deleted
+```
+
+`delete`가 몇 초에서 30초까지 걸리는 이유는 컨테이너에게 정리할 시간을 주기 때문이다. 이 과정은 [Pod의 일생](/posts/k8s-pod-lifecycle) 글의 종료 순서에서 따로 본다.
+
+## 직접 만든 Pod는 아무도 다시 살려 주지 않는다
+
+여기까지 Pod를 직접 만들었지만, 운영에서 Pod를 직접 만드는 일은 거의 없다. Pod는 한 번 노드에 놓이면 그 노드에 묶인다. 노드가 죽으면 그 위의 Pod도 같이 사라지고, 직접 만든 Pod는 누구도 다른 노드에 다시 만들어 주지 않는다. 컨테이너 재시작은 kubelet이 해 주지만 그건 같은 노드 안에서의 일이다. 앞에서 봤듯 스펙도 거의 못 바꾼다.
+
+그래서 Pod는 아끼는 애완동물이 아니라 언제든 바꿔 낄 수 있는 소모품처럼 다룬다. 이름도 IP도 바뀌어도 되게 만들고, "몇 개가 떠 있어야 한다"는 약속은 컨트롤러에 맡긴다. 웹 서버처럼 상태가 없는 앱에는 Deployment를 쓴다.
+
+```bash
+# Pod 세 개를 유지하는 Deployment를 만든다
+kubectl create deployment api --image=nginx:1.27 --replicas=3
+
+# Deployment, ReplicaSet, Pod를 한 번에 본다
+kubectl get deploy,rs,pods -o wide
+```
+
+```text
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES       SELECTOR
+deployment.apps/api   3/3     3            3           8s    nginx        nginx:1.27   app=api
+
+NAME                            DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES       SELECTOR
+replicaset.apps/api-59cfb66bb   3         3         3       8s    nginx        nginx:1.27   app=api,pod-template-hash=59cfb66bb
+
+NAME                      READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   READINESS GATES
+pod/api-59cfb66bb-4225m   1/1     Running   0          8s    10.0.0.4   node-3   <none>           <none>
+pod/api-59cfb66bb-dccb4   1/1     Running   0          8s    10.0.0.2   node-1   <none>           <none>
+pod/api-59cfb66bb-z5b5g   1/1     Running   0          8s    10.0.0.3   node-2   <none>           <none>
+```
+
+이름에 구조가 있다. Deployment `api`가 ReplicaSet `api-59cfb66bb`를 만들고, ReplicaSet이 그 이름 뒤에 임의의 다섯 글자를 붙여 Pod를 만들었다. 가운데 `59cfb66bb`는 Pod 템플릿의 해시다. 이미지를 바꾸면 템플릿이 바뀌니 해시도 바뀌고, 새 ReplicaSet이 생긴다. Deployment는 새 ReplicaSet을 늘리고 옛 ReplicaSet을 줄이는 식으로 롤링 업데이트를 한다. 누가 누구를 만들었는지는 각 객체의 `ownerReferences`에 적혀 있다.
+
+```bash
+# Pod의 주인과 ReplicaSet의 주인을 차례로 본다
+kubectl get pod api-59cfb66bb-dccb4 -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}{"\n"}'
+kubectl get rs api-59cfb66bb -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}{"\n"}'
+```
+
+```text
+ReplicaSet/api-59cfb66bb
+Deployment/api
+```
+
+이제 Pod 하나를 일부러 지워 보자. ReplicaSet 컨트롤러는 "원하는 수"와 "지금 수"를 계속 비교한다. 아래 그림에서 다음을 누르면 그 비교가 한 번 도는 과정이 보인다.
+
+<AlgoTrace
+  caption="ReplicaSet은 셀렉터에 맞는 Pod 수를 세고, 모자라면 만든다"
+  memoryLabel="원하는 수 / 지금 수"
+  cells={["4225m", "dccb4", "z5b5g", "tvv6c"]}
+  steps={[
+    { found: [0, 1, 2], memory: ["want 3", "have 3"], caption: "app=api 라벨을 단 Pod가 셋이다. 원하는 수와 같으니 할 일이 없다." },
+    { pointer: 0, found: [1, 2], memory: ["want 3", "have 2"], caption: "4225m을 지웠다. 지우는 중인 Pod는 세지 않으니 지금 수가 2로 줄었다." },
+    { pointer: 3, found: [1, 2], memory: ["want 3", "have 2", "create 1"], caption: "모자란 하나를 같은 템플릿으로 만든다. 이름 끝 다섯 글자는 새로 뽑는다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["want 3", "have 3"], caption: "tvv6c가 스케줄되어 다른 노드에 떴다. 다시 같아졌다." },
+  ]}
+/>
+
+실제로 지운 결과도 같다.
+
+```bash
+# 첫 번째 Pod를 지우고 다시 목록을 본다
+kubectl delete pod api-59cfb66bb-4225m
+kubectl get pods -l app=api -o wide
+```
+
+```text
+pod "api-59cfb66bb-4225m" deleted
+NAME                  READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   READINESS GATES
+api-59cfb66bb-dccb4   1/1     Running   0          22s   10.0.0.2   node-1   <none>           <none>
+api-59cfb66bb-tvv6c   1/1     Running   0          14s   10.0.0.5   node-3   <none>           <none>
+api-59cfb66bb-z5b5g   1/1     Running   0          22s   10.0.0.3   node-2   <none>           <none>
+```
+
+새 Pod `tvv6c`는 이름도 IP(`10.0.0.5`)도 새것이다. 지운 Pod가 되살아난 게 아니라 같은 틀로 다른 Pod가 하나 더 만들어진 것이다. 그래서 다른 서비스가 Pod IP를 직접 들고 있으면 안 된다. 바뀌지 않는 주소는 Service가 맡고, Service가 라벨로 지금 살아 있는 Pod를 찾아 [kube-proxy의 NAT 규칙](/posts/iptables-nat)으로 이어 준다.
+
+컨트롤러는 Deployment만 있는 게 아니다. 순서와 이름, 디스크가 Pod마다 고정돼야 하는 DB 같은 것은 StatefulSet, 노드마다 하나씩 떠야 하는 로그 수집기나 모니터링 에이전트는 DaemonSet, 끝나면 그만인 배치 작업은 Job을 쓴다. 넷 다 Pod 템플릿을 들고 있다가 Pod를 만든다. 실무에서 이런 매니페스트 여러 장을 환경별로 묶어 배포할 때는 Helm 같은 도구를 쓰는데, 그 이야기는 [Helm 기초](/posts/helm-basics)에서 이어진다.
+
+## 한 Pod에 무엇을 같이 넣나
+
+Pod 하나에 컨테이너를 여럿 넣을 수 있다고 해서 관련 있는 걸 다 넣으면 곤란하다. 흔한 실수는 웹 앱과 DB를 한 Pod에 넣는 것이다. 같은 Pod의 컨테이너는 같이 스케줄되고 같이 늘어난다. 웹 앱을 세 개로 늘리면 DB도 세 개가 되는데, 서로 데이터를 모르는 DB 세 개가 생길 뿐이다. 웹 앱을 새 버전으로 배포하면 Pod를 새로 만드니 DB도 같이 내려간다.
+
+기준은 이렇다. 따로 늘리고 따로 배포할 수 있다면 다른 Pod로 나눈다. 반대로 하나가 없으면 다른 하나가 의미가 없고, 같은 파일이나 `localhost`를 꼭 함께 써야 한다면 같은 Pod에 넣는다. 위의 로그 전달 컨테이너, 앱 앞의 프록시, 설정 파일을 주기적으로 받아 오는 컨테이너가 그런 예다. 이런 보조 컨테이너를 사이드카라고 부르는데, 시작 순서와 종료 순서에 함정이 있어서 [한 Pod에 컨테이너 여럿](/posts/k8s-pod-multicontainer) 글에서 따로 다룬다.
+
+컨테이너 하나에 프로세스 여럿을 넣는 것도 피한다. supervisord로 앱과 cron을 한 컨테이너에 띄우면, 쿠버네티스는 PID 1 하나만 보고 판단한다. cron이 죽어도 컨테이너는 살아 있는 것처럼 보이고, 로그도 섞인다. PID 1이 신호를 어떻게 받는지는 [Docker 컨테이너 기초](/posts/docker-container-basics) 글의 재시작 정책과 PID 1 부분에 있다.
+
+## Pod를 다시 정리하면
+
+Pod는 같은 노드에서 함께 떠야 하는 컨테이너 묶음이다. pause가 붙잡은 네트워크 namespace 덕분에 컨테이너들은 IP 하나와 `localhost`를 나눠 갖고, Pod에 선언한 볼륨으로 파일을 나눈다. 파일 시스템과 프로세스 목록은 기본으로 따로다. Pod는 노드에 묶이고 스펙도 거의 바꿀 수 없어서 직접 만들지 않고, Deployment 같은 컨트롤러가 원하는 수를 맞춰 가며 만들고 지운다. 이 소모품이 태어나서 사라지기까지 거치는 단계는 [Pod의 일생](/posts/k8s-pod-lifecycle)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스는 왜 컨테이너가 아니라 Pod를 기본 단위로 쓰나요?
+
+함께 떠야 하는 컨테이너 묶음을 한 단위로 다루기 위해서다. 같은 Pod의 컨테이너는 같은 노드에 놓이고, 네트워크 namespace를 함께 써서 IP 하나와 `localhost`를 나누며, Pod 볼륨으로 파일을 함께 본다. 앱과 로그 전달기, 앱과 프록시처럼 붙어 다녀야 하는 관계를 사람이 아니라 스케줄러가 지키게 된다.
+
+### 같은 Pod 안의 컨테이너끼리 무엇을 공유하고 무엇을 공유하지 않나요?
+
+네트워크 namespace(IP, 포트 공간, localhost), 호스트 이름, IPC namespace를 공유하고, 볼륨은 양쪽에서 마운트했을 때만 공유한다. 루트 파일 시스템은 각자 이미지에서 만들어 따로 보고, PID namespace도 기본으로는 따로다. `shareProcessNamespace: true`를 주면 프로세스 목록도 함께 볼 수 있다. 포트 공간이 하나라 두 컨테이너가 같은 포트를 열면 늦은 쪽이 실패한다.
+
+### pause 컨테이너는 왜 있나요?
+
+Pod의 namespace를 만들고 붙잡아 두는 역할이다. 앱 컨테이너는 pause의 namespace에 합류하기 때문에, 앱이 죽었다 다시 떠도 namespace와 Pod IP가 유지된다. CRI에서는 이 껍데기를 sandbox라고 부르고, sandbox가 다시 만들어지면 Pod IP가 바뀐다.
+
+### kubectl apply로 Pod를 만들면 실제로 컨테이너가 뜨기까지 무슨 일이 일어나나요?
+
+API 서버가 인증과 어드미션을 거쳐 Pod를 etcd에 저장하고, 스케줄러가 nodeName이 빈 Pod를 보고 노드를 골라 binding한다. 그 노드의 kubelet이 자기에게 배정된 Pod를 보고 CRI로 sandbox를 만들고, CNI로 IP를 붙인 뒤 이미지를 받아 컨테이너를 띄운다. 마지막으로 kubelet이 status를 API 서버에 보고한다. 구성 요소끼리 직접 부르지 않고 모두 API 서버의 객체를 지켜보며 움직인다.
+
+### Pod를 직접 만들지 않고 Deployment를 쓰는 이유는 무엇인가요?
+
+직접 만든 Pod는 노드가 죽으면 다른 노드에 다시 만들어지지 않고, 스펙도 이미지 정도 말고는 바꿀 수 없다. Deployment는 ReplicaSet을 만들어 원하는 수를 계속 맞추고, 템플릿이 바뀌면 새 ReplicaSet으로 롤링 업데이트와 롤백을 해 준다. 그래서 Pod는 언제든 바뀌는 소모품으로 두고, 바뀌지 않는 주소는 Service가 맡는다.
+
+### Pod를 하나 지웠더니 바로 새 Pod가 생겼습니다. 같은 Pod가 되살아난 건가요?
+
+아니다. ReplicaSet 컨트롤러가 셀렉터에 맞는 Pod 수가 원하는 수보다 적은 것을 보고 같은 템플릿으로 새 Pod를 만든 것이다. 이름 끝 다섯 글자와 IP, 놓인 노드가 달라질 수 있고 emptyDir 같은 Pod 수준 데이터도 새로 시작한다. 정말 없애려면 Pod가 아니라 Deployment를 지우거나 replicas를 0으로 줄여야 한다.
+
+### 웹 앱과 DB를 한 Pod에 넣으면 왜 안 되나요?
+
+같은 Pod의 컨테이너는 함께 스케줄되고 함께 늘어나고 함께 재시작되기 때문이다. 웹 앱을 세 개로 늘리면 서로 데이터를 모르는 DB가 세 개 생기고, 웹 앱을 배포할 때마다 DB도 내려간다. 따로 늘리고 따로 배포할 수 있는 것은 다른 Pod로 나누고, 같은 Pod에는 로그 전달기나 프록시처럼 주 컨테이너 없이는 의미가 없는 보조 컨테이너만 넣는다.

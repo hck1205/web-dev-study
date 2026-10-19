@@ -6,7 +6,7 @@ Git을 쓰다 보면 등이 서늘해지는 순간이 온다. 결제 연동을 �
 
 이 셋은 대처법이 전부 다르다. 첫 번째는 Git으로 고치기 전에 키부터 교체해야 하고, 두 번째는 이름표 두 개를 옮기면 끝나고, 세 번째는 사라진 게 아니라 보이지 않을 뿐이라 reflog에서 찾아오면 된다. 되돌리는 명령이 restore, reset, revert, stash, reflog로 여러 개인 건 "실수가 어디에 있느냐"에 따라 고쳐야 할 곳이 다르기 때문이다.
 
-이 글은 먼저 실수의 위치로 명령을 고르는 법을 보고, 작업 트리부터 푸시한 커밋까지 단계별로 되돌린 뒤, stash와 reflog, 잘못된 브랜치에 한 커밋, 지운 파일, 히스토리에 들어간 비밀 값까지 다룬다. 세 구역(작업 트리, 인덱스, 저장소)은 [첫 글](/posts/git-internals-basics)에서 설명했다. 명령은 Ubuntu 24.04의 Git 2.43.0에서 실행했고, `restore`와 `switch`는 2.23부터 있다. 그보다 오래된 Git에서는 같은 일을 `checkout`과 `reset`으로 한다.
+이 글은 먼저 실수의 위치로 명령을 고르는 법을 보고, 작업 트리부터 푸시한 커밋까지 단계별로 되돌린 뒤, revert로도 지울 수 없는 히스토리 속 비밀 값까지 다룬다. 치워 두는 stash, reset으로 사라진 커밋을 찾는 reflog, 엉뚱한 브랜치에 한 커밋은 [다음 글](/posts/git-stash-reflog)에서 이어 간다. 세 구역(작업 트리, 인덱스, 저장소)은 [스테이징 영역 글](/posts/git-staging-area)에서 설명했다. 명령은 Ubuntu 24.04의 Git 2.43.0에서 실행했고, `restore`와 `switch`는 2.23부터 있다. 그보다 오래된 Git에서는 같은 일을 `checkout`과 `reset`으로 한다.
 
 ## 실수가 어디에 있는지부터 본다
 
@@ -143,7 +143,7 @@ M  server.js
 
 두 글자 상태가 `M `에서 ` M`으로, 왼쪽에서 오른쪽으로 옮겨 갔다. 인덱스 칸에서 작업 트리 칸으로 내려온 것이다. 이 명령은 안전하다. 내용을 지우지 않는다. 2.23 이전에는 `git reset HEAD server.js`가 같은 일을 했고, 지금도 `git status`의 안내 문구가 오래된 버전에서는 이 명령을 알려 준다.
 
-파일의 변경까지 한 번에 버리려면 `git restore --staged --worktree server.js`다. 이건 되살릴 수 없다는 점에서 앞의 restore와 같다. 다만 add했던 내용은 blob으로 이미 저장되어 있어서, 아래에서 볼 `git fsck`로 찾을 수 있다.
+파일의 변경까지 한 번에 버리려면 `git restore --staged --worktree server.js`다. 이건 되살릴 수 없다는 점에서 앞의 restore와 같다. 다만 add했던 내용은 blob으로 이미 저장되어 있어서, [다음 글](/posts/git-stash-reflog)에서 볼 `git fsck`로 찾을 수 있다.
 
 ## 방금 한 커밋을 고친다
 
@@ -258,7 +258,7 @@ HEAD is now at 3b10bfd README
 a75bb4a 서버 시작
 ```
 
-`--hard` 뒤의 `git status -s`는 아무것도 출력하지 않는다. 작업 트리까지 깨끗하게 README 커밋의 상태가 됐다. 처음 상황의 세 번째 실수가 바로 이것이다. 커밋 두 개가 히스토리에서 사라진 것처럼 보이지만, 이름표만 옮겨졌을 뿐 커밋 객체는 그대로 있다. 찾는 법은 아래 reflog 부분에서 본다.
+`--hard` 뒤의 `git status -s`는 아무것도 출력하지 않는다. 작업 트리까지 깨끗하게 README 커밋의 상태가 됐다. 처음 상황의 세 번째 실수가 바로 이것이다. 커밋 두 개가 히스토리에서 사라진 것처럼 보이지만, 이름표만 옮겨졌을 뿐 커밋 객체는 그대로 있다. reflog로 찾아오는 법은 [stash와 reflog 글](/posts/git-stash-reflog)에서 본다.
 
 <Callout kind="warning" title="reset --hard와 clean -fd는 커밋하지 않은 것을 지운다">
 커밋한 것은 reflog로 되찾을 수 있지만, 한 번도 커밋하거나 add하지 않은 변경과 untracked 파일은 Git 어디에도 없어서 되살릴 수 없다. 치기 전에 `git status`로 남은 변경을 확인하고, 아깝다 싶으면 `git stash -u`로 치워 두거나 `git branch backup`으로 이름표를 하나 붙여 둔다. 이미 쳤다면 커밋은 `git reflog`에서, add했던 파일은 `git fsck --lost-found`에서 찾는다. 커밋하지 않은 변경만 지키면서 되돌리고 싶으면 `--hard` 대신 `git reset --keep`을 쓴다. 지워질 변경이 있으면 멈춘다.
@@ -396,403 +396,6 @@ server.js
 ```
 
 revert 커밋을 revert하면 2.43부터는 메시지가 `Reapply "..."`로 붙는다. 그 전 버전에서는 `Revert "Revert ..."`로 나온다. 이제 `limit.js`와 `limit.config.js`가 다 있다. 이런 혼란이 싫어서, 병합된 기능을 끌 때는 revert 대신 기능 플래그로 끄는 팀도 많다.
-
-## 잠깐 치워 두기
-
-작업하다가 급한 버그 수정 요청이 왔는데 지금 변경은 커밋하기엔 어중간하다. `git stash`는 작업 트리와 인덱스의 변경을 따로 떼어 저장하고 깨끗한 상태로 만든다. 저장한 것은 스택처럼 쌓인다.
-
-```bash
-# 포트를 바꾸던 중이고, 새 메모 파일도 있다
-git status -s
-
-# 이름을 붙여서 치운다. 기본으로는 추적 중인 파일만 치운다
-git stash push -m "포트 바꾸던 중"
-git status -s
-
-# untracked 파일까지 치우려면 -u
-git stash push -u -m "메모 파일까지"
-git status -s
-
-# 쌓인 목록
-git stash list
-```
-
-```text
- M server.js
-?? notes.md
-
-Saved working directory and index state On main: 포트 바꾸던 중
-
-?? notes.md
-
-Saved working directory and index state On main: 메모 파일까지
-
-stash@{0}: On main: 메모 파일까지
-stash@{1}: On main: 포트 바꾸던 중
-```
-
-`-u` 없이 stash하면 새 파일(`notes.md`)은 그대로 남는다. 다른 브랜치로 옮겨 가도 그 파일이 따라와서 "치웠는데 왜 남아 있지" 하게 된다. `stash@{0}`이 가장 최근 것이다. 아래 그림에서 다음을 누르면 명령마다 stash 목록이 어떻게 쌓이고 빠지는지 보인다.
-
-<AlgoTrace
-  caption="stash 목록은 스택이다 (오른쪽이 stash@{0}, 가장 최근)"
-  memoryLabel="stash 목록"
-  cells={["push", "push -u", "pop", "apply", "drop"]}
-  steps={[
-    { memory: [], caption: "처음에는 비어 있다. 작업 트리에는 server.js 변경과 notes.md가 있다." },
-    { pointer: 0, memory: ["포트 바꾸던 중"], caption: "push -m: server.js 변경을 치운다. notes.md는 untracked라 남는다." },
-    { pointer: 1, memory: ["포트 바꾸던 중", "메모 파일까지"], caption: "push -u: notes.md까지 치운다. 새 항목이 stash@{0}이 되고 앞의 것은 stash@{1}로 밀린다." },
-    { pointer: 2, memory: ["포트 바꾸던 중"], caption: "pop: stash@{0}을 꺼내 적용하고 목록에서 지운다. notes.md가 돌아왔다." },
-    { pointer: 3, memory: ["포트 바꾸던 중"], caption: "apply stash@{0}: 적용만 하고 목록에는 남긴다. 다른 브랜치에도 같은 변경을 적용해 보고 싶을 때 쓴다." },
-    { pointer: 4, memory: [], caption: "drop: 다 쓴 항목을 지운다. apply를 쓰면 이렇게 직접 지워야 한다." },
-  ]}
-/>
-
-꺼내기 전에 무엇이 들었는지 본다.
-
-```bash
-# 저장된 변경을 diff로
-git stash show -p 'stash@{1}'
-
-# untracked 파일까지 들어 있는 stash의 요약
-git stash show --include-untracked 'stash@{0}'
-```
-
-```text
-diff --git a/server.js b/server.js
-index 84c111c..297540e 100644
---- a/server.js
-+++ b/server.js
-@@ -1,3 +1,3 @@
--const port = 3000;
-+const port = 4000;
- // 로그 1
- // 로그 2
-
- notes.md | 1 +
- 1 file changed, 1 insertion(+)
-```
-
-`stash@{1}`처럼 중괄호가 있는 이름은 셸에 따라 다르게 해석될 수 있어서 따옴표로 감싸는 습관을 들이면 좋다. `stash show`의 `--include-untracked` 옵션은 2.32부터 있다.
-
-```bash
-# 꺼내서 적용하고 목록에서 지운다
-git stash pop
-git stash list
-
-# 적용만 하고 목록에는 남긴다
-git stash apply 'stash@{0}'
-git stash list
-
-# 다 썼으면 지운다
-git stash drop
-```
-
-```text
-Already up to date.
-On branch main
-Untracked files:
-  (use "git add <file>..." to include in what will be committed)
-	notes.md
-
-nothing added to commit but untracked files present (use "git add" to track)
-Dropped refs/stash@{0} (3305077050dcc2ead63d0a2631f2899f6684f5c6)
-
-stash@{0}: On main: 포트 바꾸던 중
-
-On branch main
-Changes not staged for commit:
-  (use "git add <file>..." to update what will be committed)
-  (use "git restore <file>..." to discard changes in working directory)
-	modified:   server.js
-
-stash@{0}: On main: 포트 바꾸던 중
-
-Dropped refs/stash@{0} (536de927ecb041ff03b5d21f870555a87131211a)
-```
-
-pop은 적용이 성공했을 때만 목록에서 지운다. 꺼낼 때 충돌이 나면 목록에 남겨 둔다. 치워 둔 사이 main에서 같은 줄이 바뀌었다면 이렇게 된다.
-
-```bash
-# 포트 4000으로 바꾸던 걸 치워 두고, 그사이 main에서 5000으로 커밋됐다
-git stash pop
-git status -s
-git stash list
-```
-
-```text
-Auto-merging server.js
-CONFLICT (content): Merge conflict in server.js
-On branch main
-Unmerged paths:
-  (use "git restore --staged <file>..." to unstage)
-  (use "git add <file>..." to mark resolution)
-	both modified:   server.js
-
-no changes added to commit (use "git add" and/or "git commit -a")
-The stash entry is kept in case you need it again.
-
-UU server.js
-
-stash@{0}: On main: 4000
-```
-
-`The stash entry is kept`가 안심해도 된다는 말이다. 파일의 충돌을 풀고, stash는 커밋을 만드는 게 아니니 `git add` 대신 `git restore --staged server.js`로 충돌 표시만 지워 변경을 작업 트리에 남긴다. 다 됐으면 `git stash drop`으로 지운다. 충돌이 귀찮으면 치워 둔 시점의 커밋에서 새 브랜치를 만들어 적용하는 `git stash branch`가 깔끔하다. 그 커밋 위에서 적용하니 충돌이 날 수 없다.
-
-```bash
-# 충돌을 버리고 원래대로 돌린 뒤
-git restore server.js
-
-# stash를 만든 시점의 커밋에서 새 브랜치를 만들고 거기에 적용한다
-git stash branch fix/port-4000
-git status -sb
-```
-
-```text
-Switched to a new branch 'fix/port-4000'
-On branch fix/port-4000
-Changes not staged for commit:
-  (use "git add <file>..." to update what will be committed)
-  (use "git restore <file>..." to discard changes in working directory)
-	modified:   server.js
-
-no changes added to commit (use "git add" and/or "git commit -a")
-Dropped refs/stash@{0} (ab9de2d370f1797de0c42c12aadb1455418cee0f)
-
-## fix/port-4000
- M server.js
-```
-
-stash는 잠깐 쓰는 서랍이다. 며칠씩 쌓아 두면 무엇이 무엇인지 잊어버리고, `git stash clear`나 실수한 drop 한 번에 사라진다. 하루를 넘길 것 같으면 브랜치를 만들어 "wip" 커밋으로 두는 편이 안전하다. 실수로 drop한 stash도 커밋 객체로 남아 있어서, drop할 때 출력된 해시나 `git fsck --unreachable | grep commit`으로 찾아 `git stash apply 해시`로 살릴 수 있다.
-
-## reset --hard 뒤에 사라진 커밋 찾기
-
-처음 상황의 세 번째로 돌아간다. `git reset --hard HEAD~2`로 커밋 두 개가 사라졌다. 정확히는 main 이름표가 두 칸 뒤로 갔을 뿐, 커밋 객체는 `.git/objects`에 그대로 있다. 문제는 그 커밋의 해시를 모른다는 것이다. 그걸 알려 주는 게 reflog다. Git은 HEAD와 브랜치가 움직일 때마다 어디에서 어디로 갔는지 `.git/logs`에 적어 둔다. 다음을 누르면 찾아오는 과정을 따라간다.
-
-<SequenceDiagram
-  caption="reset --hard로 사라진 커밋을 reflog로 되찾기"
-  actors={[
-    { id: "me", label: "나" },
-    { id: "main", label: "main" },
-    { id: "log", label: "reflog" },
-    { id: "obj", label: "objects" },
-  ]}
-  steps={[
-    {
-      from: "me",
-      to: "main",
-      label: "reset --hard HEAD~2",
-      title: "이름표를 두 칸 뒤로 옮긴다",
-      detail: "main이 1c17a6f(로그 2)에서 3b10bfd(README)로 간다. 로그 1, 로그 2 커밋은 어떤 브랜치에서도 닿지 않게 됐다.",
-    },
-    {
-      from: "main",
-      to: "log",
-      label: "기록 한 줄",
-      title: "움직임이 reflog에 남는다",
-      detail: "HEAD와 main의 reflog에 '어디서 어디로, 무슨 명령으로'가 한 줄씩 쌓인다. 로컬에만 있고 push로 공유되지 않는다.",
-      payload: "3b10bfd HEAD@{0}: reset: moving to HEAD~2",
-    },
-    {
-      from: "me",
-      to: "log",
-      label: "git reflog",
-      title: "reset 직전 위치를 찾는다",
-      detail: "HEAD@{0}이 방금 위치, HEAD@{1}이 그 직전이다. 직전 줄의 해시 1c17a6f가 되찾을 커밋이다.",
-      payload: "1c17a6f HEAD@{1}: commit: 로그 2",
-    },
-    {
-      from: "log",
-      to: "obj",
-      label: "1c17a6f",
-      title: "커밋 객체는 그대로 있다",
-      detail: "닿을 수 없는 커밋도 바로 지워지지 않는다. reflog가 가리키는 동안은 gc가 지우지 않고, reflog 기록이 만료된 뒤에야 지울 수 있게 된다.",
-    },
-    {
-      from: "me",
-      to: "main",
-      label: "branch rescue HEAD@{1}",
-      title: "이름표를 붙여 붙잡는다",
-      detail: "먼저 이름표를 붙여 두면 그다음은 여유롭게 정리할 수 있다. reset --hard rescue로 main을 되돌리거나, 필요한 커밋만 cherry-pick한다.",
-    },
-  ]}
-/>
-
-```bash
-# 커밋 두 개를 날렸다
-git reset --hard HEAD~2
-git log --oneline
-
-# HEAD가 지나온 자리
-git reflog
-```
-
-```text
-HEAD is now at 3b10bfd README
-
-3b10bfd README
-a75bb4a 서버 시작
-
-3b10bfd HEAD@{0}: reset: moving to HEAD~2
-1c17a6f HEAD@{1}: commit: 로그 2
-0d8de3c HEAD@{2}: commit: 로그 1
-3b10bfd HEAD@{3}: commit: README
-a75bb4a HEAD@{4}: commit (initial): 서버 시작
-```
-
-맨 윗줄이 방금 한 reset이고, 그 바로 아래 `HEAD@{1}`이 reset 직전의 1c17a6f다. 이름표를 붙여 살린다.
-
-```bash
-# 이름표를 붙여 붙잡아 두고
-git branch rescue 'HEAD@{1}'
-git log --oneline -3 rescue
-
-# main을 그리로 되돌린 뒤 임시 이름표는 지운다
-git reset --hard rescue
-git branch -d rescue
-```
-
-```text
-1c17a6f 로그 2
-0d8de3c 로그 1
-3b10bfd README
-
-HEAD is now at 1c17a6f 로그 2
-Deleted branch rescue (was 1c17a6f).
-```
-
-reflog에서 바로 `git reset --hard 'HEAD@{1}'`을 해도 된다. 다만 reset을 하면 reflog에 줄이 하나 더 쌓이면서 번호가 밀린다. 헷갈리지 않게 해시를 직접 쓰거나 이름표부터 붙이는 습관이 안전하다. 시간으로 찾을 수도 있다. `git reflog --date=iso`로 시각을 보고, `main@{1.hour.ago}`나 `main@{yesterday}`처럼 "그 시점에 main이 있던 곳"을 가리킬 수 있다.
-
-reflog에는 몇 가지 한계가 있다.
-
-- 로컬에만 있다. 클론을 새로 받으면 reflog는 비어 있고, 다른 사람의 reflog는 볼 수 없다.
-- 영원하지 않다. 기본값으로 브랜치에서 닿는 커밋의 기록은 90일(`gc.reflogExpire`), 닿지 않는 커밋의 기록은 30일(`gc.reflogExpireUnreachable`)이 지나면 gc 때 지워진다. 기록이 지워지고 나면 그 커밋도 gc가 정리한다.
-- 커밋만 지킨다. 한 번도 커밋하지 않은 변경은 reflog에 없다.
-
-마지막 경우에도 add까지는 했다면 희망이 있다. add하는 순간 내용이 blob으로 저장되기 때문이다. `git fsck --lost-found`는 어디에서도 가리키지 않는 객체를 찾아 `.git/lost-found`에 모아 준다.
-
-```bash
-# 새 파일을 add만 하고 커밋하기 전에 reset --hard를 쳐 버렸다
-echo 'const secretFeature = true;' > feature.js
-git add feature.js
-git reset --hard
-git status -s
-
-# 어디서도 가리키지 않는 객체를 찾는다
-git fsck --lost-found
-
-# 찾은 blob의 내용
-git show a3ee690c8f8c8b43fae21040ef31a0181c3e93ea
-```
-
-```text
-HEAD is now at 1c17a6f 로그 2
-
-dangling blob a3ee690c8f8c8b43fae21040ef31a0181c3e93ea
-
-const secretFeature = true;
-```
-
-`dangling blob`이 add했던 파일 내용이다. 파일 이름은 tree에 있었는데 tree를 만들기 전에 날렸으니 이름은 없다. 찾은 blob이 여러 개라면 하나씩 열어 보고 `git show 해시 > feature.js`로 꺼낸다. `dangling commit`이 나오면 그건 날아간 커밋(실수로 drop한 stash도 여기 나온다)이다.
-
-## 엉뚱한 브랜치에 커밋했을 때
-
-로그인 기능 커밋 두 개를 `feature/login`이 아니라 main에 했다. 아직 푸시하지 않았다면 이름표 두 개만 옮기면 된다.
-
-```bash
-# main이 원격보다 두 커밋 앞서 있다
-git status -sb
-git log --oneline -3
-
-# 지금 위치에 새 브랜치 이름표를 붙인다 (커밋이 이 이름표로 살아남는다)
-git branch feature/login
-
-# main은 원격 위치로 되돌린다
-git reset --hard origin/main
-
-# 작업은 새 브랜치에서 이어 간다
-git switch feature/login
-git log --oneline --graph --decorate --all
-```
-
-```text
-## main...origin/main [ahead 2]
-
-8412066 로그인 검증
-8129a47 로그인 폼
-a75bb4a 서버 시작
-
-HEAD is now at a75bb4a 서버 시작
-
-Switched to branch 'feature/login'
-
-* 8412066 (HEAD -> feature/login) 로그인 검증
-* 8129a47 로그인 폼
-* a75bb4a (origin/main, main) 서버 시작
-```
-
-순서가 중요하다. 이름표를 먼저 붙이고 나서 main을 되돌린다. 거꾸로 하면 커밋이 이름표 없이 떠서 reflog로 찾아야 한다. `reset --hard`이니 커밋하지 않은 변경이 없는지도 먼저 확인한다. 원격 대신 `HEAD~2`처럼 칸 수로 되돌려도 된다.
-
-옮길 브랜치가 이미 있다면 `cherry-pick`으로 커밋을 복사하고 원래 브랜치에서 지운다. main에 한 핫픽스를 `hotfix/1`로 옮기는 예다.
-
-```bash
-# 원격 main에서 hotfix/1을 만들고 main의 마지막 커밋을 복사한다
-git switch -c hotfix/1 origin/main
-git cherry-pick main
-
-# main에서는 그 커밋을 지운다 (푸시 전일 때만)
-git switch main
-git reset --hard HEAD~1
-```
-
-```text
-Switched to a new branch 'hotfix/1'
-[hotfix/1 2461e34] 핫픽스
- 1 file changed, 1 insertion(+)
-
-Switched to branch 'main'
-HEAD is now at a75bb4a 서버 시작
-```
-
-cherry-pick한 커밋은 내용은 같아도 부모가 다른 새 커밋(`2461e34`)이다. 이미 main에 푸시했다면 main에서 reset하지 말고 revert로 되돌린다.
-
-## 지운 파일을 히스토리에서 꺼내기
-
-예전에 지운 파일이 다시 필요하다. 언제 지웠는지 찾고, 지우기 직전 커밋에서 꺼내 온다.
-
-```bash
-# legacy.js를 지운 커밋 (D = deleted)
-git log --oneline --diff-filter=D -- legacy.js
-
-# 그 파일이 나온 커밋 전체
-git log --oneline --all -- legacy.js
-```
-
-```text
-f7bd962 레거시 정리
-
-f7bd962 레거시 정리
-1e6059b 레거시 유틸
-```
-
-지운 커밋(`f7bd962`)에는 파일이 없으니, 그 부모(`f7bd962~1`)에서 꺼낸다.
-
-```bash
-# 지우기 직전 커밋의 legacy.js를 작업 트리로 꺼낸다
-git restore --source=f7bd962~1 -- legacy.js
-git status -s
-
-# 인덱스에도 같이 올리려면 --staged --worktree
-git restore --source=f7bd962~1 --staged --worktree -- legacy.js
-git status -s
-```
-
-```text
-?? legacy.js
-
-A  legacy.js
-```
-
-`--source`를 주면 restore는 인덱스 대신 그 커밋에서 파일을 가져온다. 기본은 작업 트리만 바꾸니, 인덱스에도 올리려면 `--staged`를 함께 쓴다. 2.23 이전이라면 `git checkout f7bd962~1 -- legacy.js`가 같은 일을 한다(이건 인덱스에도 바로 올린다). 파일을 디스크에 쓰지 않고 내용만 보고 싶으면 `git show f7bd962~1:legacy.js`다.
 
 ## 비밀 값을 커밋했을 때
 
@@ -954,7 +557,7 @@ BFG Repo-Cleaner도 같은 일을 하는 도구로 많이 쓰인다. Java로 돌
 
 ## 다시 정리하면
 
-되돌리기는 실수가 있는 자리로 명령을 고르는 일이다. 작업 트리의 변경은 `restore`, 인덱스는 `restore --staged`, 푸시하지 않은 커밋은 `reset`(soft는 이름표만, mixed는 인덱스까지, hard는 작업 트리까지), 푸시한 커밋은 반대 커밋을 쌓는 `revert`다. 커밋한 것은 reset으로 날려도 reflog에 해시가 남아 있으니 이름표만 다시 붙이면 되고, add만 한 파일은 `fsck --lost-found`로 찾는다. 커밋도 add도 안 한 변경과, 이미 밖으로 새어 나간 비밀 값만은 Git이 되살려 주지 못한다. 그래서 위험한 명령 앞에서는 `git status`를 먼저 보고, 키가 새면 교체부터 한다. 이런 상황별 대처는 [문제 해결 글](/posts/git-troubleshooting)에 더 모아 두었다.
+되돌리기는 실수가 있는 자리로 명령을 고르는 일이다. 작업 트리의 변경은 `restore`, 인덱스는 `restore --staged`, 푸시하지 않은 커밋은 `reset`(soft는 이름표만, mixed는 인덱스까지, hard는 작업 트리까지), 푸시한 커밋은 반대 커밋을 쌓는 `revert`다. 병합을 revert했다면 다시 합치기 전에 그 revert를 되돌려야 하고, 비밀 값은 revert로는 지워지지 않아 키를 교체한 뒤 filter-repo로 히스토리를 다시 쓴다. 커밋도 add도 안 한 변경과 이미 새어 나간 키만은 Git이 되살려 주지 못한다. reset으로 날린 커밋을 찾는 법은 [다음 글](/posts/git-stash-reflog)에, 상황별 대처는 [문제 해결 글](/posts/git-troubleshooting)에 더 모아 두었다.
 
 ## 면접에서 나올 만한 질문
 
@@ -970,22 +573,14 @@ reset은 브랜치를 과거로 옮겨 커밋을 히스토리에서 빼는 것�
 
 병합 커밋은 부모가 둘이라 `git revert -m 1 병합커밋`처럼 기준이 될 부모를 지정한다. 1은 병합 전의 main, 즉 브랜치에서 들어온 변경을 빼겠다는 뜻이다. 주의할 점은 revert가 히스토리가 아니라 내용만 되돌린다는 것이다. 같은 브랜치를 나중에 다시 병합하면 이미 조상이 된 원래 커밋은 다시 들어오지 않으니, 재병합 전에 그 revert 커밋을 다시 revert해야 한다.
 
-### reset --hard로 날린 커밋을 되살릴 수 있나요?
-
-커밋했던 것이라면 대부분 된다. reset은 이름표만 옮기고 커밋 객체는 남겨 두므로, `git reflog`에서 reset 직전 줄의 해시를 찾아 `git branch rescue 해시`로 이름표를 붙이거나 `git reset --hard 해시`로 돌아간다. reflog는 로컬에만 있고 기본으로 닿지 않는 커밋 기록은 30일, 닿는 커밋 기록은 90일 뒤 만료된다. 커밋하지 않은 변경은 reflog에 없지만, add했다면 `git fsck --lost-found`로 blob을 찾을 수 있다.
-
 ### git restore와 git restore --staged는 무엇이 다른가요?
 
 `git restore 파일`은 작업 트리의 파일을 인덱스 내용으로 덮어써서 add하지 않은 변경을 버린다. 되살릴 수 없다. `git restore --staged 파일`은 인덱스만 HEAD 내용으로 되돌려 add를 취소하고, 파일의 변경은 작업 트리에 남긴다. `--source=커밋`을 주면 그 커밋에서 파일을 가져올 수 있어 지운 파일을 되살릴 때도 쓴다. 둘 다 2.23에서 checkout과 reset의 파일 관련 기능을 나눠 만든 명령이다.
-
-### stash pop과 apply의 차이는 무엇인가요?
-
-둘 다 저장한 변경을 작업 트리에 적용한다. pop은 적용에 성공하면 목록에서 지우고, apply는 목록에 남긴다. pop하다 충돌이 나면 목록에서 지우지 않으니 충돌을 풀고 직접 drop한다. 기본 stash는 untracked 파일을 넣지 않아서 새 파일까지 치우려면 `-u`를 붙이고, 충돌을 피하려면 stash를 만든 커밋에서 새 브랜치로 적용하는 `git stash branch`를 쓴다.
 
 ### 비밀 키를 커밋하고 푸시했습니다. 어떻게 하나요?
 
 먼저 그 키를 폐기하고 새로 발급한다. 이미 클론, 포크, CI 로그, 수집 봇에 복사됐을 수 있어서 히스토리 정리만으로는 회수가 안 된다. 그다음 revert나 rm은 옛 커밋에 키를 남기므로 git filter-repo(또는 BFG)로 mirror 클론에서 모든 커밋을 다시 쓰고 강제 푸시한다. 팀원은 새로 클론하거나 원격에 reset으로 맞추고, 호스팅의 PR 참조나 캐시는 지원 요청으로 지우고, 재발 방지로 비밀 탐지 훅과 push protection을 건다.
 
-### 커밋 두 개를 엉뚱한 브랜치(main)에 했습니다. 어떻게 옮기나요?
+### amend와 reset --soft HEAD~1은 어떻게 다른가요?
 
-푸시 전이라면 지금 위치에 `git branch feature/x`로 이름표를 먼저 붙이고, main은 `git reset --hard origin/main`(또는 `HEAD~2`)으로 되돌린 뒤 새 브랜치로 옮겨 간다. 이름표를 먼저 붙여야 커밋이 떠 버리지 않는다. 옮길 브랜치가 이미 있으면 그쪽에서 `git cherry-pick`으로 복사하고 main에서 reset한다. 이미 main에 푸시했다면 main은 revert로 되돌린다.
+amend는 마지막 커밋을 같은 부모 위에 새로 만들어 바꿔 끼운다. 빠뜨린 파일을 add한 뒤 `--amend --no-edit`으로 보태거나 메시지를 고칠 때 쓴다. `reset --soft HEAD~1`은 커밋만 없애고 그 변경을 인덱스에 남겨 두어서, 커밋을 완전히 다시 짜거나 여러 커밋을 하나로 합칠 때 쓴다. 둘 다 해시가 바뀌니 푸시 전에만 쓴다.

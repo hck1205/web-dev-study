@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "prebuild": "node scripts/content-index.cjs",
+    "content:index": "node scripts/content-index.cjs",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },

@@ -1,0 +1,444 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-connections-pg-hba");
+
+DB 서버에서는 `psql`로 잘 들어가지는데, 같은 대역의 앱 서버에서 붙이자 바로 끊긴다.
+
+```text
+psql: error: connection to server at "192.0.2.2", port 5491 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+```
+
+설정을 하나 고치면 에러가 `no pg_hba.conf entry`로 바뀌고, 또 하나 고치면 `password authentication failed`가 된다. 같은 "접속 실패"인데 문구가 단계마다 다르다. 이 글은 그 단계를 따라간다. 앱이 접속 정보를 넘기는 URI와 환경 변수, 비밀번호 파일, 서버가 접속을 받을지 정하는 `pg_hba.conf`, 그리고 다른 서버에서 접속을 받도록 여는 순서까지 본다.
+
+설치, `psql` 기본 사용법, 역할과 데이터베이스 만들기는 앞 글 [PostgreSQL 설치하고 접속하기](/posts/postgres-getting-started)에서 다뤘다. 여기서는 그 글에서 만든 역할 `matt`와 서점 DB `shop`을 그대로 쓴다. 기준은 Ubuntu 24.04 LTS의 PostgreSQL 16(16.15)이고, 출력은 모두 실제로 돌린 결과다. 쓰던 서버를 건드리지 않으려고 같은 머신에 실습용 클러스터를 따로 띄워서, 출력에는 5432 대신 5491이나 5493 포트가 보인다.
+
+## 접속 정보는 문자열 하나로 줄 수 있다
+
+`psql`은 아무것도 안 주면 리눅스 계정 이름을 역할 이름으로 빌려 쓴다([앞 글](/posts/postgres-getting-started)의 첫 에러가 이것 때문이었다). 애플리케이션은 그럴 수 없으니 접속 정보를 모두 적어 줘야 한다. 흔히 URI 한 줄로 준다. 아래 조각을 눌러 보면 각 부분이 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="PostgreSQL 접속 URI를 조각으로 읽기"
+  base="postgresql://"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "user",
+      display: "matt",
+      title: "역할 이름",
+      description: "접속할 DB 역할이다. 빼면 libpq는 지금 운영체제 사용자 이름을 쓴다. 설치 글의 첫 에러가 이 기본값 때문에 났다.",
+    },
+    {
+      key: "password",
+      display: ":p%40ss",
+      title: "비밀번호 (퍼센트 인코딩)",
+      description: "비밀번호에 @, /, : 같은 글자가 있으면 %40, %2F, %3A로 바꿔 써야 한다. 그대로 쓰면 @ 뒤를 호스트로 읽어 엉뚱한 곳에 접속하려 한다. URI에 비밀번호를 넣는 것 자체를 피하고 ~/.pgpass나 환경 변수를 쓰는 편이 낫다.",
+    },
+    {
+      key: "host",
+      display: "@db.internal",
+      title: "호스트",
+      description: "이름이나 IP를 쓰면 TCP로 붙는다. 비워 두면(postgresql:///shop) 유닉스 소켓을 쓴다. 소켓 디렉터리를 직접 줄 때는 ?host=/var/run/postgresql처럼 파라미터로 넘긴다.",
+      required: true,
+    },
+    {
+      key: "port",
+      display: ":5432",
+      title: "포트",
+      description: "빼면 5432다. 한 서버에 클러스터가 여러 개면 포트로 구분한다.",
+    },
+    {
+      key: "database",
+      display: "/shop",
+      title: "데이터베이스",
+      description: "접속 하나는 DB 하나만 본다. 빼면 역할 이름과 같은 DB로 간다.",
+      required: true,
+    },
+    {
+      key: "sslmode",
+      display: "?sslmode=verify-full",
+      title: "TLS 사용 방식",
+      description: "기본값 prefer는 TLS를 먼저 시도하고 안 되면 평문으로 붙는다. 서버 인증서를 검증하지 않아서 중간자 공격을 못 막는다. 네트워크를 건너는 접속이면 verify-full로 인증서와 호스트 이름까지 확인한다.",
+    },
+    {
+      key: "application_name",
+      display: "&application_name=api",
+      title: "접속한 프로그램 이름",
+      description: "pg_stat_activity와 로그에 이 이름이 찍힌다. 접속이 수백 개일 때 어느 서비스가 붙은 건지 가려낼 수 있다.",
+    },
+  ]}
+/>
+
+비밀번호에 `@`가 들어 있는데 인코딩을 안 하면 이런 에러가 난다. 비밀번호 `p@ss/word`의 `@` 뒤를 호스트로 읽은 것이다.
+
+```bash
+# 인코딩 안 함 → 'ss'를 호스트 이름으로 읽는다
+psql "postgresql://matt:p@ss/word@localhost:5491/shop"
+
+# @ → %40, / → %2F
+psql "postgresql://matt:p%40ss%2Fword@localhost:5491/shop"
+```
+
+```text
+psql: error: could not translate host name "ss" to address: Name or service not known
+```
+
+두 번째 명령은 정상으로 접속한다. 같은 정보를 `host=localhost port=5491 dbname=shop user=matt` 같은 키워드 형식으로 줄 수도 있다. 앱 프레임워크는 보통 URI를, `psql`과 셸 스크립트는 둘 다 받는다.
+
+### 환경 변수와 비밀번호 파일
+
+libpq(PostgreSQL의 C 클라이언트 라이브러리)를 쓰는 도구는 psql, pg_dump, 그리고 많은 언어 드라이버가 같은 환경 변수를 읽는다. `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`다. 다만 Node의 `pg`처럼 libpq를 쓰지 않는 드라이버는 이 중 일부만 따라 하니 드라이버 문서를 확인한다.
+
+`PGPASSWORD`는 편하지만 다른 사용자가 프로세스 환경 변수를 볼 수 있는 운영체제가 있어 공식 문서도 권하지 않는다. 비밀번호는 `~/.pgpass` 파일에 `호스트:포트:DB:사용자:비밀번호` 형식으로 둔다. 권한이 `600`이 아니면 `has group or world access` 경고를 내고 파일을 무시한다.
+
+```bash
+# 한 줄에 접속 하나. 필드에 * 를 쓰면 무엇이든 맞는다
+echo "localhost:5491:shop:matt:bookstore-2026" > ~/.pgpass
+chmod 600 ~/.pgpass                         # 나만 읽고 쓰게. 644면 경고 후 무시한다
+PGHOST=localhost PGPORT=5491 PGDATABASE=shop psql -c "select current_user, inet_server_addr()"
+```
+
+```text
+ current_user | inet_server_addr
+--------------+------------------
+ matt         | 127.0.0.1
+(1 row)
+```
+
+이번에는 `localhost`를 줬으니 TCP로 붙었고(`inet_server_addr`가 `127.0.0.1`), 비밀번호는 `.pgpass`에서 읽었다. 소켓 접속(peer)과 TCP 접속은 `pg_hba.conf`에서 다른 줄에 걸린다. 다음 절의 주제다.
+
+## pg_hba.conf는 위에서부터 첫 줄만 본다
+
+`pg_hba.conf`(host-based authentication)는 서버가 접속을 받을지 정하는 출입 명부다. 같은 머신의 소켓 접속을 peer 인증으로 통과시킨 것도 이 파일이다. 한 줄이 규칙 하나이고, 접속이 들어오면 위에서부터 읽다가 처음 맞는 줄 하나로 결정한다. 그 줄의 인증이 실패해도 다음 줄로 넘어가지 않는다. Ubuntu의 기본 내용(주석 제외)은 이렇다.
+
+```text
+local   all             postgres                                peer
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+local   replication     all                                     peer
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+```
+
+한 줄을 조각으로 나눠 보면 다섯 칸이다.
+
+<UrlAnatomy
+  caption="pg_hba.conf 한 줄은 다섯 칸이다"
+  separator=""
+  joiner="  "
+  params={[
+    {
+      key: "type",
+      display: "hostssl",
+      title: "연결 종류",
+      description: "local은 유닉스 소켓, host는 TCP(TLS든 아니든), hostssl은 TLS로 암호화된 TCP만, hostnossl은 암호화 안 된 TCP만이다. 외부 접속은 hostssl로 받으면 평문 접속이 이 줄에 걸리지 않는다.",
+      required: true,
+    },
+    {
+      key: "database",
+      display: "shop",
+      title: "어느 DB로",
+      description: "all, DB 이름, 쉼표로 여러 개, sameuser(역할 이름과 같은 DB), replication(복제 접속)을 쓸 수 있다.",
+      required: true,
+    },
+    {
+      key: "user",
+      display: "matt",
+      title: "어느 역할이",
+      description: "all이나 역할 이름. +app_users처럼 앞에 +를 붙이면 그 그룹 역할의 멤버 전체가 된다.",
+      required: true,
+    },
+    {
+      key: "address",
+      display: "192.0.2.0/24",
+      title: "어디서 (CIDR)",
+      description: "local 줄에는 없다. /32는 IP 하나, /24는 끝자리 256개, 0.0.0.0/0은 IPv4 전체다. 넓게 열수록 위험하다.",
+    },
+    {
+      key: "method",
+      display: "scram-sha-256",
+      title: "어떻게 확인하나",
+      description: "scram-sha-256은 비밀번호를 평문으로 보내지 않는 챌린지 방식이다. peer는 운영체제 사용자 이름 확인(local 전용), reject는 무조건 거절, trust는 확인 없이 통과다. md5는 오래된 방식이라 새로 쓰지 않는다.",
+      required: true,
+    },
+  ]}
+/>
+
+로컬 TCP 줄(`127.0.0.1/32 scram-sha-256`)이 있어서 `localhost`로 붙으면 비밀번호를 묻는다. 비밀번호가 틀리면 이렇게 나온다. 같은 줄이 두 번 찍히는 이유는 기본 `sslmode=prefer`가 TLS로 한 번, 평문으로 한 번 시도하기 때문이다.
+
+```text
+psql: error: connection to server at "localhost" (127.0.0.1), port 5491 failed: FATAL:  password authentication failed for user "matt"
+connection to server at "localhost" (127.0.0.1), port 5491 failed: FATAL:  password authentication failed for user "matt"
+```
+
+### 다른 서버에서 접속 받기
+
+앱 서버(192.0.2.0/24 대역)에서 DB로 붙게 해 보자. 확인 → 변경 → 동작 확인 → 되돌리기 순서로 간다. 먼저 지금 상태다.
+
+```sql
+SHOW listen_addresses;       -- 서버가 어느 네트워크 주소에서 접속을 기다리나
+SHOW hba_file;               -- 실제로 읽는 pg_hba.conf 경로
+```
+
+```text
+ listen_addresses
+------------------
+ localhost
+(1 row)
+
+              hba_file
+------------------------------------
+ /etc/postgresql/16/pg1/pg_hba.conf
+(1 row)
+```
+
+기본값 `localhost`는 같은 머신 안의 접속만 받는다. 이 상태에서 다른 주소로 붙으면 서버가 아예 듣고 있지 않으니 `pg_hba.conf`까지 가지도 않는다.
+
+```text
+psql: error: connection to server at "192.0.2.2", port 5491 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+```
+
+`listen_addresses`는 재시작해야 바뀐다. Ubuntu에서는 `/etc/postgresql/16/main/postgresql.conf`를 고치거나 `conf.d/` 아래에 파일을 하나 두면 된다. 여기서는 SQL의 `ALTER SYSTEM`을 쓴다. 이 명령은 데이터 디렉터리의 `postgresql.auto.conf`에 값을 적고, 이 파일은 `postgresql.conf`보다 나중에 읽혀서 이긴다. 나중에 설정 파일만 보고 "왜 값이 다르지" 하지 않으려면 둘 중 한 방식으로 통일한다.
+
+```sql
+ALTER SYSTEM SET listen_addresses = '*';   -- 모든 네트워크 주소에서 대기 (재시작 필요)
+```
+
+```bash
+# 재시작 후 다른 주소로 접속 시도
+sudo pg_ctlcluster 16 main restart
+psql "postgresql://matt@192.0.2.2:5491/shop"
+```
+
+```text
+psql: error: connection to server at "192.0.2.2", port 5491 failed: FATAL:  no pg_hba.conf entry for host "192.0.2.2", user "matt", database "shop", SSL encryption
+connection to server at "192.0.2.2", port 5491 failed: FATAL:  no pg_hba.conf entry for host "192.0.2.2", user "matt", database "shop", no encryption
+```
+
+에러가 `Connection refused`에서 `no pg_hba.conf entry`로 바뀌었다. 이제 서버는 듣고 있는데, 명부에 이 주소가 없다는 뜻이다. 에러 메시지에 호스트, 역할, DB, 암호화 여부가 다 나오니 이걸 보고 줄을 만들면 된다. 파일 끝에 TLS 접속만 받는 줄을 하나 넣고 설정을 다시 읽는다. `pg_hba.conf`는 재시작 없이 reload로 바뀐다.
+
+```bash
+# 앱 서버 대역에서 shop DB로 오는 matt의 TLS 접속만 비밀번호로 허용
+echo "hostssl shop matt 192.0.2.0/24 scram-sha-256" | sudo tee -a /etc/postgresql/16/main/pg_hba.conf
+sudo pg_ctlcluster 16 main reload
+```
+
+reload한 다음에는 서버가 읽은 규칙을 `pg_hba_file_rules` 뷰로 확인한다. 줄 번호와 함께 보여 주고, 문법이 틀린 줄은 `error` 칸에 이유가 적힌다.
+
+```sql
+SELECT line_number, type, database, user_name, address, auth_method, error
+FROM pg_hba_file_rules WHERE line_number > 128;
+```
+
+```text
+ line_number |  type   |   database    | user_name |  address  |  auth_method  | error
+-------------+---------+---------------+-----------+-----------+---------------+-------
+         130 | local   | {replication} | {all}     |           | peer          |
+         131 | host    | {replication} | {all}     | 127.0.0.1 | scram-sha-256 |
+         132 | host    | {replication} | {all}     | ::1       | scram-sha-256 |
+         133 | hostssl | {shop}        | {matt}    | 192.0.2.0 | scram-sha-256 |
+(4 rows)
+```
+
+```text
+You are connected to database "shop" as user "matt" on host "192.0.2.2" at port "5491".
+SSL connection (protocol: TLSv1.3, cipher: TLS_AES_256_GCM_SHA384, compression: off)
+```
+
+이제 TLS로 접속된다. Ubuntu 패키지는 설치할 때 자체 서명 인증서(snakeoil)로 `ssl = on`을 켜 두어서 바로 TLS가 된다. 같은 접속을 `sslmode=disable`로 시도하면 `hostssl` 줄에 맞지 않아 `no pg_hba.conf entry ... no encryption`으로 거절된다. 자체 서명 인증서는 암호화만 해 줄 뿐 상대가 진짜 내 DB인지는 보장하지 않는다. 진짜 인증서와 `verify-full`은 [권한 글](/posts/postgres-roles-security)에서 다룬다.
+
+방화벽도 함께 본다. Ubuntu에서 ufw를 켜 두었다면 5432 포트를 앱 서버 대역에만 연다(`sudo ufw allow from 192.0.2.0/24 to any port 5432 proto tcp`). RHEL 계열은 firewalld의 `firewall-cmd`로 같은 일을 한다.
+
+<Callout kind="warning" title="host all all 0.0.0.0/0 은 인터넷 전체에 문을 연다">
+`listen_addresses = '*'`에 `host all all 0.0.0.0/0 scram-sha-256` 같은 줄을 더하면 인터넷의 누구나 비밀번호를 대입해 볼 수 있다. 공개 IP에 5432가 열린 DB는 실제로 자동화된 대입 공격을 받는다. 주소는 앱 서버 대역으로 좁히고, 방화벽이나 클라우드 보안 그룹에서도 같이 막는다. 잘못 열었다면 그 줄을 지우고 `reload`, `listen_addresses`를 `localhost`로 되돌리려면 `ALTER SYSTEM RESET listen_addresses` 후 재시작한다.
+</Callout>
+
+### 줄 순서가 결과를 바꾼다
+
+첫 줄만 본다는 규칙 때문에 넓은 줄이 위에 있으면 아래의 좁은 줄은 영영 쓰이지 않는다. 위 설정에서 `hostssl` 줄 바로 위에 이런 줄이 있었다고 하자.
+
+```text
+host    all             all             192.0.2.0/24            reject
+hostssl shop            matt            192.0.2.0/24            scram-sha-256
+```
+
+같은 접속이 `reject` 줄에 먼저 걸려서 거절된다. 에러 문구가 `no pg_hba.conf entry`가 아니라 `pg_hba.conf rejects connection for host "192.0.2.2" ...`으로 바뀌니, 메시지만 보고도 어느 경우인지 구분된다.
+
+아래 그림에서 다음을 누르면 `192.0.2.2`에서 `matt`가 TLS로 `shop`에 붙을 때 서버가 명부를 읽어 내려가는 과정이 나온다.
+
+<AlgoTrace
+  caption="pg_hba.conf는 처음 맞는 줄 하나로 끝난다"
+  memoryLabel="판정"
+  cells={["local postgres", "local all", "host 127.0.0.1", "host ::1", "host 192.0.2 rej", "hostssl shop"]}
+  steps={[
+    { memory: [], caption: "접속: TCP + TLS, 주소 192.0.2.2, 역할 matt, DB shop. 1번 줄부터 읽는다." },
+    { pointer: 0, memory: [], caption: "local 줄이다. 소켓 접속만 해당하니 TCP 접속은 지나간다." },
+    { pointer: 1, memory: [], caption: "역시 local. 지나간다." },
+    { pointer: 2, memory: [], caption: "host지만 주소가 127.0.0.1/32다. 192.0.2.2는 범위 밖이라 지나간다." },
+    { pointer: 3, memory: [], caption: "IPv6 루프백 줄이다. 지나간다." },
+    { pointer: 4, found: [4], memory: ["reject"], caption: "종류, DB, 역할, 주소가 모두 맞는다. 방법이 reject라 여기서 거절로 끝난다." },
+    { pointer: 4, found: [4], memory: ["reject"], caption: "6번 줄은 읽지도 않는다. 좁은 허용 줄은 넓은 거절 줄보다 위에 둬야 한다." },
+  ]}
+/>
+
+그래서 명부는 위에서 아래로 "좁고 구체적인 줄 → 넓은 줄" 순서로 쓴다. 맨 끝에 `host all all 0.0.0.0/0 reject`를 두면 위에서 허락하지 않은 모든 TCP 접속이 명시적으로 거절된다.
+
+명부에 오타가 있으면 어떻게 될까. `scram-sha-256`을 `scram-sha256`으로 잘못 쓰고 reload하면, 서버는 파일 전체를 버리고 예전 규칙을 계속 쓴다. 로그에 이유가 남고, `pg_hba_file_rules`의 `error` 칸에도 나온다. 바꿨는데 반영이 안 된 것 같으면 이 두 곳을 본다.
+
+```text
+LOG:  invalid authentication method "scram-sha256"
+CONTEXT:  line 134 of configuration file "/etc/postgresql/16/pg1/pg_hba.conf"
+LOG:  /etc/postgresql/16/pg1/pg_hba.conf was not reloaded
+```
+
+## 에러 문구가 끊긴 단계를 알려 준다
+
+지금까지 나온 에러를 다시 모으면, 메시지만 보고 어디서 끊겼는지 거의 정해진다.
+
+- `No such file or directory ... Is the server running locally`: 서버가 꺼져 있거나 소켓 경로·포트가 다르다. `pg_lsclusters`로 상태와 포트를 본다.
+- `Connection refused ... accepting TCP/IP connections`: 서버가 그 주소에서 듣고 있지 않다. `listen_addresses`, 포트, 방화벽을 본다.
+- `no pg_hba.conf entry for host ...`: 서버까지 왔지만 맞는 줄이 없다. 메시지의 호스트·역할·DB·암호화 여부대로 줄을 만든다.
+- `pg_hba.conf rejects connection`: 위쪽의 `reject` 줄에 먼저 걸렸다. 줄 순서를 본다.
+- `Peer authentication failed for user "matt"`: 소켓 접속에서 리눅스 사용자와 `-U` 역할 이름이 다르다. root로 `psql -U matt`를 치면 이렇게 된다. 해당 리눅스 사용자로 바꾸거나 `-h localhost`로 TCP 비밀번호 인증을 쓴다.
+- `role "..." does not exist`, `database "..." does not exist`: 인증 전에 이름이 없다. 대부분 기본값(리눅스 이름)이 들어간 경우다.
+- `password authentication failed`: 비밀번호가 틀렸거나 그 역할에 비밀번호가 아예 없다. `ALTER ROLE matt PASSWORD '...'`로 정한다.
+- `remaining connection slots are reserved ...`: 들어오는 길은 맞는데 자리가 없다. 아래 절에서 본다.
+
+에러가 클라이언트에서 애매하게 보일 때는 서버 로그(`/var/log/postgresql/postgresql-16-main.log`)에 더 자세한 이유가 남는다. 예를 들어 비밀번호가 틀렸을 때 클라이언트에는 자세한 이유를 숨기지만, 로그에는 어느 `pg_hba.conf` 줄에 걸렸는지까지 적힌다.
+
+```text
+2026-10-17 16:08:34.642 UTC [1130] matt@shop FATAL:  password authentication failed for user "matt"
+2026-10-17 16:08:34.642 UTC [1130] matt@shop DETAIL:  Connection matched file "/etc/postgresql/16/pg1/pg_hba.conf" line 125: "host    all             all             127.0.0.1/32            scram-sha-256"
+```
+
+## 들어오는 길은 맞는데 자리가 없을 때
+
+설정이 다 맞아도 접속이 거절되는 경우가 하나 더 있다. 배포 직후나 트래픽이 몰린 순간 앱 로그에 이런 줄이 쏟아진다.
+
+```text
+psql: error: connection to server at "127.0.0.1", port 5493 failed: FATAL:  remaining connection slots are reserved for roles with the SUPERUSER attribute
+```
+
+`pg_hba.conf`도 비밀번호도 문제가 아니다. 서버가 받을 수 있는 접속 수(`max_connections`, 기본 100)가 찼고, 남은 몇 자리(`superuser_reserved_connections`, 기본 3)는 슈퍼유저 몫으로 남겨 둔 것이다. 이 자리 덕분에 접속이 꽉 차도 관리자는 들어가서 상황을 볼 수 있다. 실습 클러스터는 `max_connections`를 8로 낮춰 두고, 앱 이름 `api`로 접속 5개를 잡아 둔 상태에서 6번째를 시도했다. 8 - 3 = 5라서 6번째부터 거절된다.
+
+슈퍼유저로 들어가서 누가 자리를 차지하고 있는지 본다. 접속 URI에 `application_name`을 넣어 두는 이유가 여기서 나온다.
+
+```sql
+-- 역할, 프로그램 이름, 접속한 주소, 상태별로 접속 수를 센다
+SELECT usename, application_name, client_addr, state, count(*)
+FROM pg_stat_activity
+WHERE backend_type = 'client backend'      -- 백그라운드 프로세스는 뺀다
+GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC;
+```
+
+```text
+ usename  | application_name | client_addr | state  | count
+----------+------------------+-------------+--------+-------
+ matt     | api              | 127.0.0.1   | active |     5
+ postgres | psql             |             | active |     1
+(2 rows)
+```
+
+`client_addr`가 비어 있는 줄은 유닉스 소켓 접속이다. 실제 서버라면 여기서 앱 서버 IP별로, `state`별로 갈린다. `idle`이 수십 개면 커넥션 풀이 접속을 넉넉히 잡아 두고 쉬는 것이고, `idle in transaction`이 많으면 트랜잭션을 열어 놓고 커밋을 안 하는 코드가 있다는 뜻이다.
+
+여기서 흔한 실수는 `max_connections`부터 올리는 것이다. PostgreSQL은 접속마다 프로세스를 하나씩 띄워서, 접속 수를 늘리면 메모리와 문맥 전환 비용도 같이 는다. 그리고 재시작해야 바뀐다. 보통 순서는 이렇다. 앱 인스턴스 수 × 풀 크기가 `max_connections - superuser_reserved_connections`를 넘지 않는지 계산하고, 넘으면 풀 크기를 줄이거나 PgBouncer 같은 커넥션 풀러를 앞에 둔다. 급하면 쉬고 있는 접속을 `pg_terminate_backend(pid)`로 끊어 자리를 만든다.
+
+## 접속 URI를 직접 나눠 보기
+
+드라이버나 커넥션 풀 설정에서 URI를 잘못 써서 생기는 문제가 많아서, URI를 조각으로 나누는 함수를 직접 만들어 본다. `user`, `password`, `host`, `port`, `database`, `params`를 돌려준다. 빠진 값은 `null`로, 포트는 기본 5432로 채우고, 퍼센트 인코딩은 풀어 준다. `postgres://`와 `postgresql://` 둘 다 받고, 다른 스킴이면 `null`이다.
+
+<CodePlayground
+  caption="PostgreSQL 접속 URI 나누기"
+  functionName="parsePgUri"
+  initialCode={`function parsePgUri(uri) {
+  // 1. postgres:// 또는 postgresql:// 로 시작하지 않으면 null
+  // 2. user:password@host:port/database?key=value&... 로 나눈다
+  //    (user, password, port, database, 쿼리는 모두 생략될 수 있다)
+  // 3. 퍼센트 인코딩(%40 → @)은 decodeURIComponent로 푼다
+  // 4. 빠진 값은 null, port는 숫자이고 없으면 5432
+  // 5. { user, password, host, port, database, params } 순서로 돌려준다
+  return null;
+}`}
+  solution={`function parsePgUri(uri) {
+  const m = uri.match(/^postgres(?:ql)?:\\/\\/(?:([^:@\\/]*)(?::([^@\\/]*))?@)?([^\\/?:]*)(?::(\\d+))?(?:\\/([^?]*))?(?:\\?(.*))?$/);
+  if (!m) return null;
+  const [, user, password, host, port, database, query] = m;
+  const params = {};
+  if (query) {
+    for (const pair of query.split("&")) {
+      const [k, v = ""] = pair.split("=");
+      params[decodeURIComponent(k)] = decodeURIComponent(v);
+    }
+  }
+  return {
+    user: user ? decodeURIComponent(user) : null,
+    password: password !== undefined ? decodeURIComponent(password) : null,
+    host: host || null,
+    port: port ? Number(port) : 5432,
+    database: database ? decodeURIComponent(database) : null,
+    params,
+  };
+}`}
+  tests={[
+    {
+      label: "기본 형태",
+      args: ["postgresql://matt:bookstore-2026@localhost:5491/shop"],
+      expected: { user: "matt", password: "bookstore-2026", host: "localhost", port: 5491, database: "shop", params: {} },
+    },
+    {
+      label: "포트 생략, 쿼리 파라미터",
+      args: ["postgres://app@db.internal/shop?sslmode=verify-full&application_name=api"],
+      expected: { user: "app", password: null, host: "db.internal", port: 5432, database: "shop", params: { sslmode: "verify-full", application_name: "api" } },
+    },
+    {
+      label: "인코딩된 비밀번호",
+      args: ["postgresql://matt:p%40ss%2Fword@10.0.0.5/shop"],
+      expected: { user: "matt", password: "p@ss/word", host: "10.0.0.5", port: 5432, database: "shop", params: {} },
+    },
+    {
+      label: "호스트 없음 (유닉스 소켓)",
+      args: ["postgresql:///shop?host=/var/run/postgresql"],
+      expected: { user: null, password: null, host: null, port: 5432, database: "shop", params: { host: "/var/run/postgresql" } },
+    },
+    {
+      label: "다른 DB의 URI",
+      args: ["mysql://root@localhost/shop"],
+      expected: null,
+    },
+  ]}
+/>
+
+세 번째 테스트가 앞에서 본 `could not translate host name "ss"` 에러의 반대편이다. 인코딩한 비밀번호를 풀면 원래 비밀번호가 나온다. 실제 libpq는 이것 말고도 쉼표로 여러 호스트를 적어 장애 시 다음 호스트로 넘어가는 형식(`host1:5432,host2:5432`)과 IPv6 대괄호 주소까지 받는다.
+
+## 접속 하나가 지나는 문 세 개
+
+다른 서버에서 붙는 접속은 문 세 개를 차례로 지난다. 서버가 그 주소에서 듣고 있는가(`listen_addresses`, 포트, 방화벽), 명부에 맞는 줄이 있는가(`pg_hba.conf`의 첫 번째로 맞는 줄), 그 줄의 방법으로 인증되는가(비밀번호, 인증서). 에러 문구가 어느 문에서 막혔는지 알려 주니, 문구를 먼저 읽고 그 문의 설정만 본다. `listen_addresses`는 재시작, `pg_hba.conf`는 reload로 바뀐다는 것도 함께 기억해 둔다. 들어온 다음에 무엇을 할 수 있는지는 [역할과 권한 글](/posts/postgres-roles-security)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### pg_hba.conf는 어떻게 평가되나요?
+
+위에서부터 읽어서 연결 종류, DB, 역할, 주소가 모두 맞는 첫 줄 하나만 쓴다. 그 줄의 인증이 실패해도 다음 줄로 넘어가지 않는다. 그래서 좁은 허용 규칙을 위에, 넓은 규칙과 `reject`를 아래에 둔다. 고친 뒤에는 reload하고 `pg_hba_file_rules` 뷰로 서버가 읽은 내용과 에러를 확인한다. 문법 오류가 있으면 파일 전체가 무시되고 예전 규칙이 남는다.
+
+### 외부에서 접속이 안 될 때 무엇부터 보나요?
+
+에러 메시지로 단계를 가린다. `Connection refused`면 `listen_addresses`, 포트, 방화벽처럼 서버가 그 주소에서 듣지 않는 문제다. `no pg_hba.conf entry`면 서버까지는 왔지만 명부에 맞는 줄이 없는 것이고, `password authentication failed`는 비밀번호나 인증 방식 문제다. 클라이언트 메시지가 모호하면 서버 로그에 어느 줄에 걸렸는지 나온다.
+
+### listen_addresses와 pg_hba.conf는 각각 무엇을 정하나요?
+
+`listen_addresses`는 서버가 어느 네트워크 주소에서 접속을 기다릴지 정하고, 바꾸려면 재시작해야 한다. 기본값 `localhost`면 외부 접속은 `pg_hba.conf`까지 오지도 못하고 `Connection refused`가 난다. `pg_hba.conf`는 들어온 접속을 받을지, 어떤 방법으로 인증할지 정하고 reload로 바뀐다. 둘 다 열어야 외부 접속이 되고, 방화벽도 같은 대역으로 좁혀 연다.
+
+### sslmode 기본값 prefer는 왜 충분하지 않나요?
+
+prefer는 TLS를 먼저 시도하고 안 되면 평문으로 붙는다. 그리고 서버 인증서를 검증하지 않아서, 중간에서 가짜 서버가 끼어들어도 알아채지 못한다. 네트워크를 건너는 접속이면 클라이언트는 `verify-full`로 인증서와 호스트 이름을 확인하고, 서버는 `hostssl` 줄로 평문 접속을 아예 받지 않게 한다.
+
+### 접속 비밀번호는 어디에 두나요?
+
+URI에 넣으면 로그나 셸 기록에 남기 쉬워서 피한다. libpq 도구는 권한이 600인 `~/.pgpass`에서 호스트·포트·DB·역할별로 읽게 하고, 앱은 비밀 관리 도구가 주입한 설정으로 받는다. `PGPASSWORD` 환경 변수는 다른 사용자가 프로세스 환경을 볼 수 있는 운영체제가 있어 공식 문서도 권하지 않는다. URI에 쓸 때 비밀번호에 `@`나 `/`가 있으면 퍼센트 인코딩해야 한다.
+
+### remaining connection slots are reserved 에러가 나면 어떻게 하나요?
+
+`max_connections`에서 슈퍼유저 몫(`superuser_reserved_connections`)을 뺀 자리가 다 찬 것이다. 슈퍼유저로 들어가 `pg_stat_activity`를 `application_name`, `client_addr`, `state`별로 세서 누가 자리를 차지했는지 본다. `max_connections`를 바로 올리기보다 앱 인스턴스 수 × 풀 크기를 줄이거나 PgBouncer 같은 풀러를 둔다. 접속마다 프로세스가 하나씩 생겨서 접속 수를 늘리면 메모리 비용도 같이 늘기 때문이다.

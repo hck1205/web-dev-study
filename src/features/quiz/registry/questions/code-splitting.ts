@@ -106,4 +106,19 @@ export const CODE_SPLITTING: QuizQuestion[] = [
       "청크를 깊게 중첩해 나누면 요청 워터폴이 생긴다. 셋이 함께 필요하다면 같은 청크로 합치거나 Promise.all로 나란히 부르고, modulepreload로 미리 알려 준다.",
     anchor: "너무-잘게-쪼개면-생기는-일",
   },
+  {
+    id: "code-splitting-8",
+    post: "code-splitting",
+    question: "배포 직후부터 TypeError: Failed to fetch dynamically imported module 에러가 몰렸다가 시간이 지나며 줄어든다. 가장 그럴듯한 원인과 대응은?",
+    choices: [
+      "CDN이 새 청크를 아직 못 받았다. 배포를 되돌린다",
+      "번들이 너무 커서 다운로드가 끊겼다. 청크를 더 잘게 쪼갠다",
+      "배포 전에 연 탭이 지워진 옛 청크를 요청했다. 옛 해시 파일을 한동안 남기고, 이 에러를 잡으면 한 번만 새로 고친다",
+      "브라우저가 동적 import를 지원하지 않는다. 폴리필을 넣는다",
+    ],
+    answer: 2,
+    explanation:
+      "옛 HTML을 들고 있던 탭이 새 배포에서 지워진 해시 파일을 찾으니 배포 시각부터 늘고, 사용자가 새로 고치면서 줄어든다. 해시가 다른 옛 파일은 남겨 둬도 섞이지 않고, 화면에서는 sessionStorage 같은 표시로 새로고침을 한 번만 하게 막는다.",
+    anchor: "배포-직후-쏟아지는-청크-에러-한-줄에-불어난-번들",
+  },
 ];

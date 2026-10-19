@@ -387,6 +387,64 @@ Elasticsearch를 주 저장소로 쓰지 않는 이유가 있다. 여러 문서�
 
 그래도 어긋남은 언젠가 생긴다. 주기적으로 원본과 개수나 체크섬을 비교하고, 크게 어긋나면 새 인덱스로 전체 재색인한 뒤 별칭을 바꿔 끼우는 길을 열어 둔다.
 
+## 클러스터가 yellow나 red로 바뀌면
+
+검색을 운영하다 보면 모니터링의 초록 불이 노랗게 바뀌는 날이 온다. 이 상태 색은 앞에서 본 샤드 배치를 그대로 요약한 것이다. 아래 출력들은 이 글을 쓴 환경에서 Elasticsearch를 띄울 수 없어서 응답 형식에 맞춰 적은 예시다.
+
+```bash
+# 클러스터 상태와 배정되지 못한 샤드 수
+curl -s 'localhost:9200/_cluster/health?filter_path=status,number_of_nodes,unassigned_shards'
+
+# 샤드별 상태와 배정되지 못한 이유
+curl -s 'localhost:9200/_cat/shards/products?v&h=index,shard,prirep,state,unassigned.reason,node'
+```
+
+```text
+{"status":"yellow","number_of_nodes":1,"unassigned_shards":1}
+index    shard prirep state      unassigned.reason node
+products 0     p      STARTED                      es-1
+products 0     r      UNASSIGNED INDEX_CREATED
+```
+
+yellow는 프라이머리는 모두 자리를 잡았는데 레플리카 일부가 갈 곳이 없다는 뜻이다. 검색과 색인은 되지만, 지금 노드가 하나 더 죽으면 데이터를 잃는다. red는 프라이머리부터 없는 샤드가 있다는 뜻이다. 그 샤드에 든 문서는 검색 결과에서 빠지고, 그 샤드로 가는 색인은 실패한다. 어느 쪽이든 왜 배정이 안 되는지는 클러스터가 직접 설명해 준다.
+
+```bash
+curl -s 'localhost:9200/_cluster/allocation/explain?pretty' \
+  -H 'Content-Type: application/json' \
+  -d '{"index": "products", "shard": 0, "primary": false}'
+```
+
+```text
+  "can_allocate" : "no",
+  ...
+      "deciders" : [
+        {
+          "decider" : "same_shard",
+          "decision" : "NO",
+          "explanation" : "a copy of this shard is already allocated to this node [[products][0], ...]"
+        }
+      ]
+```
+
+`same_shard`는 원본과 복사본을 같은 노드에 두지 않는다는 규칙이다. 노드가 하나뿐인 개발 클러스터에서 레플리카를 1로 두면 늘 이렇게 yellow다. 노드 하나로 쓸 거라면 `number_of_replicas`를 0으로 내리고, 운영이라면 노드를 늘린다. 운영에서 갑자기 yellow가 됐다면 `NODE_LEFT`(노드가 빠졌다)나 디스크 쪽 거절(`disk_threshold`)이 더 흔하다.
+
+디스크는 따로 볼 만하다. Elasticsearch는 노드 디스크 사용률에 수위 세 개를 둔다. 기본 85%(low)를 넘으면 그 노드에 새 샤드를 놓지 않고, 90%(high)를 넘으면 샤드를 다른 노드로 옮기기 시작하고, 95%(flood stage)를 넘으면 그 노드에 샤드가 있는 인덱스에 쓰기 금지를 건다. 그러면 색인 요청이 이렇게 실패한다.
+
+```text
+{"error":{"root_cause":[...],"type":"cluster_block_exception","reason":"index [products] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block];"},"status":429}
+```
+
+```bash
+# 노드별 디스크 사용률과 샤드 수
+curl -s 'localhost:9200/_cat/allocation?v&h=node,shards,disk.percent,disk.used,disk.avail'
+```
+
+이 에러를 없애겠다고 수위를 99%로 올리면 디스크가 정말 가득 차서 노드가 멈춘다. 오래된 인덱스를 지우거나(시계열 로그라면 ILM으로 자동 삭제), 노드나 디스크를 늘리는 게 답이다. 7.4부터는 사용률이 high 아래로 내려가면 쓰기 금지가 저절로 풀리고, 그 전 버전은 인덱스 설정에서 `index.blocks.read_only_allow_delete`를 `null`로 직접 되돌려야 했다.
+
+쓰기가 몰릴 때 나는 429도 있다. 대량 색인을 너무 빨리 넣으면 노드의 쓰기 스레드 풀 대기열이 차서 `es_rejected_execution_exception`이 돌아온다. 이건 노드가 "잠깐 천천히"라고 말하는 것이라, 클라이언트가 간격을 늘려 재시도하고 bulk 요청 하나를 수 MB~십수 MB 정도로 줄인다. 거절이 얼마나 쌓였는지는 `_cat/thread_pool/write?v&h=node_name,active,queue,rejected`로 본다.
+
+마지막으로 매핑이 터지는 경우다. 상품 속성을 `{"attrs": {"색상": "검정", "사이즈": "M"}}`처럼 판매자가 정한 이름을 그대로 키로 넣으면, 새 속성 이름마다 필드가 하나씩 생긴다. 필드 수가 기본 한도에 닿으면 `Limit of total fields [1000] has been exceeded`로 색인이 실패하고, 그 전에도 클러스터 상태가 커져서 마스터 노드가 힘들어진다. 이름이 정해지지 않은 키는 `flattened` 타입 필드에 넣거나 `[{"name": "색상", "value": "검정"}]` 같은 nested 배열로 바꾸고, 중요한 인덱스는 `"dynamic": "strict"`로 모르는 필드를 거절하게 해 둔다.
+
 ## 다시 찾아보기로
 
 검색 엔진이 빠른 건 문서를 읽지 않아서다. 색인할 때 분석기로 문장을 텀으로 자르고, 텀마다 문서 번호를 적은 찾아보기를 만들어 둔다. 검색은 그 찾아보기에서 몇 줄을 꺼내 겹치는 번호를 찾고, BM25로 순서를 매긴다. 그 대가로 방금 쓴 것이 1초쯤 늦게 보이고, 한 번 정한 매핑과 샤드 수는 쉽게 못 바꾼다. 그래서 원본은 DB에 두고 검색용 사본을 따로 운영한다.

@@ -1,0 +1,622 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("streaming-ssr-suspense");
+
+상품 페이지의 리뷰 API가 1.5초씩 걸려서 페이지 전체의 첫 바이트가 1.5초 늦어졌다. 리뷰 영역을 `Suspense`로 감싸고 스트리밍 SSR로 바꿨다. 로컬에서는 상품 이름이 바로 뜨고 리뷰 자리에 "불러오는 중"이 보이다가 1.5초 뒤에 채워진다. 그런데 운영 주소로 열면 여전히 1.5초 동안 흰 화면이다가 한꺼번에 뜬다. 코드는 같은데 결과가 다르다.
+
+이 글은 스트리밍 SSR이 응답 하나를 어떻게 여러 조각으로 나눠 보내는지, 늦게 온 조각이 어떻게 제자리를 찾아 들어가는지, 그리고 운영 환경에서 무엇이 그 흐름을 막는지를 따라간다. 렌더링 방식 전체를 놓고 비교한 이야기는 [CSR, SSR, SSG, ISR, 스트리밍](/posts/rendering-strategies)에 있고, 스트리밍 이전의 SSR이 어떻게 동작하는지는 [SSR 깊게](/posts/rendering-ssr)에서 다뤘다. 여기서는 스트리밍 하나만 깊게 본다.
+
+예제는 React 19.3의 `renderToPipeableStream`과 Next.js 16.4로 직접 띄워서 잰 결과다. 리뷰 컴포넌트는 데이터를 1.5초 뒤에 받는다.
+
+## 응답을 끝내지 않고 열어 둔다
+
+보통의 SSR은 HTML 문자열을 다 만든 다음 `Content-Length`를 붙여 한 번에 보낸다. 길이를 알려면 끝까지 만들어 봐야 하니, 가장 느린 데이터가 응답 전체를 붙잡는다.
+
+스트리밍은 길이를 미리 말하지 않는다. HTTP/1.1에서는 `Transfer-Encoding: chunked`로 "조각마다 길이를 앞에 붙여 보내고, 길이 0인 조각이 오면 끝"이라고 약속한다. HTTP/2와 HTTP/3는 원래 프레임 단위로 보내니 이런 헤더 없이 DATA 프레임을 이어 보내고, 마지막 프레임에 끝 표시를 단다. 어느 쪽이든 서버는 응답을 열어 둔 채로 준비된 만큼씩 흘려보낼 수 있다.
+
+```bash
+# 응답 헤더만 본다. Content-Length 대신 Transfer-Encoding이 있으면 조각으로 오는 응답이다
+curl -s -D - -o /dev/null http://localhost:3101/p/42
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Date: Sun, 18 Oct 2026 19:35:56 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+```
+
+헤더가 이렇게 왔다고 정말 나눠서 오는 건 아니다. 서버가 마지막에 한 번만 쓰면 chunked라도 조각은 하나다. 그래서 언제 무엇이 도착했는지를 따로 재야 한다. 그 이야기는 뒤에서 한다.
+
+## 셸이 먼저 나가고 경계 안쪽이 뒤따른다
+
+React는 트리를 렌더링하다가 `Suspense` 경계 안에서 아직 준비되지 않은 컴포넌트를 만나면 그 자리를 fallback으로 채우고 지나간다. 이렇게 경계 바깥과 fallback만으로 이루어진 첫 HTML을 셸(shell)이라고 부른다. 셸이 다 만들어지면 그걸 먼저 보내고, 경계 안쪽은 준비되는 대로 같은 응답에 이어 보낸다.
+
+```tsx
+function App() {
+  return (
+    <html>
+      <body>
+        <main>
+          <h1>무선 이어폰</h1>
+          <Suspense fallback={<p>리뷰 불러오는 중</p>}>
+            <Reviews />
+          </Suspense>
+        </main>
+      </body>
+    </html>
+  );
+}
+```
+
+셸에도 기다림이 있다. 경계 밖에 있는 컴포넌트가 데이터를 기다리면 셸 전체가 기다린다. 위 예에서 `<h1>`에 들어갈 상품 이름을 경계 밖에서 받아 온다면 그 시간만큼은 첫 바이트가 늦다. 스트리밍은 "아무것도 기다리지 않는다"가 아니라 "경계 안쪽을 기다리지 않는다"다.
+
+아래 그림은 이 응답이 시간 순서로 어떻게 흘러가는지 보여 준다. 다음을 눌러 단계를 넘겨 보자.
+
+<SequenceDiagram
+  caption="셸을 먼저 보내고, 경계 안쪽은 같은 응답에 이어 보낸다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "server", label: "Node 서버" },
+    { id: "api", label: "리뷰 API" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "server",
+      label: "GET /p/42",
+      title: "페이지를 요청한다",
+      detail: "서버는 렌더링을 시작하자마자 리뷰 데이터를 요청한다. 리뷰 컴포넌트는 데이터를 기다리며 멈춘다.",
+    },
+    {
+      from: "server",
+      to: "server",
+      label: "셸 완성",
+      title: "경계 안쪽은 fallback으로 채운다",
+      detail: "Reviews가 멈추자 React는 가장 가까운 Suspense 경계의 fallback을 그 자리에 넣고 나머지를 마저 렌더링한다. 셸이 완성되면 onShellReady가 불린다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "조각 1 (12ms)",
+      title: "셸이 먼저 도착한다",
+      detail: "상태 코드 200과 헤더, h1, 리뷰 자리의 fallback이 함께 나간다. 응답은 아직 끝나지 않았다. 브라우저는 받은 만큼 바로 그린다.",
+      payload: "<h1>무선 이어폰</h1><!--$?--><template id=\"B:0\"></template>\n<p>리뷰 불러오는 중</p><!--/$-->",
+    },
+    {
+      from: "api",
+      to: "server",
+      label: "리뷰 1.5s",
+      title: "느린 데이터가 도착한다",
+      detail: "멈춰 있던 Reviews를 React가 다시 렌더링한다. 이번에는 끝까지 그려진다.",
+    },
+    {
+      from: "server",
+      to: "browser",
+      label: "조각 2 (1.5s)",
+      title: "숨긴 HTML과 교체 스크립트가 온다",
+      detail: "리뷰 HTML은 보이지 않는 div에 담겨 오고, 바로 뒤의 인라인 스크립트가 그걸 fallback 자리로 옮긴다. 그다음 응답이 끝난다.",
+      payload: "<div hidden id=\"S:0\"><ul><li>좋아요</li>...</ul></div>\n<script>...$RC(\"B:0\",\"S:0\")</script></body></html>",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "자리 교체",
+      title: "fallback이 리뷰로 바뀐다",
+      detail: "자바스크립트 번들이 아직 오지 않았어도 이 교체는 일어난다. 인라인 스크립트만으로 DOM을 옮기기 때문이다. 하이드레이션은 그 뒤에 따로 한다.",
+    },
+  ]}
+/>
+
+셸에 들어 있는 `$RT` 같은 짧은 스크립트와 조각 2의 `$RC`는 React가 응답에 직접 끼워 넣는 작은 런타임이다. 페이지의 JS 번들과 상관없이 HTML 안에서 돈다. 그래서 스트리밍된 내용은 하이드레이션 전에도 화면에 나타난다. 하이드레이션 자체가 경계 단위로 어떻게 나뉘는지는 [하이드레이션](/posts/hydration) 글에서 이어서 다룬다.
+
+## 늦게 온 조각이 제자리를 찾는 방법
+
+실제로 받은 조각을 그대로 옮기면 이렇다(프로덕션 빌드, 스크립트 본문은 줄였다). `curl`이 아니라 조각마다 시각을 찍는 스크립트로 받았다.
+
+```text
+--- chunk 1 12ms 353B
+<!DOCTYPE html><html><head><link rel="preload" as="script" fetchPriority="low" href="/client.js"/></head><body><main><h1>무선 이어폰</h1><!--$?--><template id="B:0"></template><p>리뷰 불러오는 중</p><!--/$--></main><script>requestAnimationFrame(function(){$RT=performance.now()});</script><script src="/client.js" id="_R_" async=""></script>
+--- chunk 2 1516ms 938B
+<div hidden id="S:0"><ul><li>좋아요</li><li>배송 빠름</li></ul></div><script>$RB=[];$RV=function(a){...};
+$RC=function(a,b){...};$RC("B:0","S:0")</script>
+--- chunk 3 1516ms 14B
+</body></html>
+```
+
+첫 조각이 `</body>` 없이 끝나고, 닫는 태그는 맨 마지막 14바이트 조각으로 따로 온다. 브라우저 HTML 파서는 닫는 태그를 기다리지 않고 받은 데까지 DOM을 만들고 그린다. 그래서 반쯤 온 문서도 화면에 나온다.
+
+조각마다 들어 있는 표시를 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="스트리밍된 HTML 속 Suspense 표시"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "open",
+      display: "<!--$?-->",
+      title: "아직 기다리는 경계의 시작",
+      description: "주석으로 경계의 시작을 표시한다. 물음표는 '아직 내용이 안 왔다'는 뜻이다. 내용이 들어오면 React가 이 주석을 $로 바꾼다. 처음부터 내용이 있었던 경계는 <!--$-->, 서버에서 실패해 브라우저가 다시 그려야 하는 경계는 <!--$!-->로 남는다.",
+      required: true,
+    },
+    {
+      key: "template",
+      display: "<template id=\"B:0\">",
+      title: "자리 표시 (B는 boundary)",
+      description: "나중에 내용을 끼울 위치를 찾기 위한 빈 template이다. 화면에는 아무것도 그리지 않는다. 번호는 응답 안에서 경계마다 0, 1, 2로 붙는다.",
+      required: true,
+    },
+    {
+      key: "fallback",
+      display: "<p>리뷰 불러오는 중</p>",
+      title: "fallback",
+      description: "Suspense에 준 fallback이 그대로 HTML로 들어간다. 사용자가 셸과 함께 보는 부분이다. 실제 내용과 같은 높이로 만들어야 교체될 때 아래가 밀리지 않는다.",
+    },
+    {
+      key: "close",
+      display: "<!--/$-->",
+      title: "경계의 끝",
+      description: "교체 스크립트는 시작 주석부터 이 주석까지를 걷어 내고 그 사이에 새 내용을 넣는다.",
+      required: true,
+    },
+    {
+      key: "segment",
+      display: "<div hidden id=\"S:0\">",
+      title: "늦게 온 내용 (S는 segment)",
+      description: "준비된 경계의 HTML이 hidden div에 담겨 문서 끝에 붙는다. 이 상태로는 보이지 않는다. JS를 실행하지 않는 봇도 이 텍스트는 읽을 수 있다. 다만 원래 자리가 아니라 문서 끝에 있다.",
+      required: true,
+    },
+    {
+      key: "rc",
+      display: "$RC(\"B:0\",\"S:0\")",
+      title: "자리 바꾸기",
+      description: "B:0 자리를 찾아 fallback을 지우고 S:0의 자식들을 옮겨 넣는다. React 19에서는 바로 옮기지 않고 교체 목록에 넣은 뒤 묶어서 처리한다. 아래 절에서 잰 결과를 본다.",
+      code: "$RC=function(a,b){ /* a: B:0, b: S:0 */\n  ...$RB.push(a,b) ... setTimeout($RV, $RT+300-now)\n}",
+      required: true,
+    },
+  ]}
+/>
+
+경계가 여러 개면 조각도 여러 개다. 아래 그림은 경계 세 개가 서로 다른 시각에 준비되는 페이지에서 브라우저 DOM이 어떻게 바뀌는지를 따라간다. 위쪽 칸은 응답에 실려 오는 순서, 아래 기억 칸은 지금 화면에 보이는 것이다.
+
+<AlgoTrace
+  caption="조각이 도착할 때마다 화면이 바뀌는 순서"
+  memoryLabel="화면에 보이는 것"
+  cells={["셸", "B:0 자리", "B:1 자리", "B:2 자리", "S:0 도착", "S:1 도착", "S:2 도착"]}
+  steps={[
+    {
+      pointer: 0,
+      found: [0],
+      memory: ["h1"],
+      caption: "첫 조각에 셸이 실려 온다. 경계 밖의 h1이 바로 그려진다.",
+    },
+    {
+      pointer: 3,
+      found: [0, 1, 2, 3],
+      memory: ["h1", "로딩0", "로딩1", "로딩2"],
+      caption: "같은 조각 안에 경계 세 개의 fallback이 들어 있다. 세 자리 모두 로딩 표시가 보인다.",
+    },
+    {
+      pointer: 4,
+      found: [0, 1, 2, 3, 4],
+      memory: ["h1", "a 도착", "로딩1", "로딩2"],
+      caption: "200ms에 첫 경계가 준비된다. 숨긴 div와 $RC가 도착하고, 첫 자리가 내용으로 바뀐다.",
+    },
+    {
+      pointer: 5,
+      found: [0, 1, 2, 3, 4, 5],
+      memory: ["h1", "a 도착", "b 도착", "로딩2"],
+      caption: "350ms에 두 번째가 온다. React 19는 앞 교체와 300ms 간격을 두려고 이 교체를 잠깐 미룬다.",
+    },
+    {
+      pointer: 6,
+      found: [0, 1, 2, 3, 4, 5, 6],
+      memory: ["h1", "a 도착", "b 도착", "c 도착"],
+      caption: "1.2초에 마지막 경계가 오면 응답이 끝난다. 경계마다 따로 기다렸을 뿐 요청은 처음부터 끝까지 하나다.",
+    },
+  ]}
+/>
+
+## React 19는 교체를 모아서 한다
+
+React 18까지는 `$RC`가 오자마자 자리를 바꿨다. React 19의 `$RC`는 바로 바꾸지 않는다. 바꿀 쌍을 `$RB` 목록에 넣고, 직전 화면 갱신(`$RT`) 뒤 300ms가 되는 시점까지 기다렸다가 목록을 한꺼번에 처리한다. 첫 `$RT`는 셸이 처음 그려진 프레임에서 찍힌다. 경계 여러 개가 짧은 간격으로 준비되면 화면이 여러 번 들썩이는 대신 한 번에 바뀐다.
+
+위 그림의 페이지(경계 세 개가 서버에서 200ms, 350ms, 1.2초에 준비)를 Chromium으로 열고, 각 내용이 숨김에서 풀려 화면에 들어온 시각을 `MutationObserver`로 찍었다.
+
+```text
+경계   서버에서 보낸 시각   화면에 나타난 시각
+a      211ms               345ms
+b      361ms               644ms
+c      1212ms              1227ms
+```
+
+a는 211ms에 도착했지만 첫 페인트 뒤 300ms가 되는 345ms까지 기다렸다. b는 361ms에 왔지만 a가 바뀐 345ms에서 다시 300ms 뒤인 644ms에 바뀌었다. c는 앞 교체에서 300ms가 한참 지난 뒤라 바로 바뀌었다. 조각이 빨리 와도 화면은 이 간격을 지킨다. "스트리밍했는데 왜 내용이 300ms 늦게 보이지?"라는 의문은 대개 이 동작 때문이다. 버그가 아니고, 교체가 연달아 일어나 레이아웃이 계속 흔들리는 걸 막으려는 설계다.
+
+규칙을 함수로 옮겨 보자. 직전 교체 시각에서 300ms가 지나야 다음 교체를 하고, 교체를 기다리는 동안 도착한 조각은 같은 묶음에 탄다. 위에서 잰 값(첫 페인트 45ms)을 넣으면 345, 645, 1212가 나온다. 실측과 몇 ms 차이는 프레임 타이밍 때문이다.
+
+<CodePlayground
+  caption="스트리밍 조각이 화면에 나타나는 시각"
+  functionName="revealTimes"
+  initialCode={`function revealTimes(firstPaint, arrivals) {\n  // firstPaint: 셸이 처음 그려진 시각(ms)\n  // arrivals: 조각이 도착한 시각들 (오름차순)\n  // 직전 교체 뒤 300ms가 지나야 다음 교체를 한다.\n  // 교체를 기다리는 동안 도착한 조각은 같은 시각에 함께 바뀐다.\n  return [];\n}`}
+  solution={`function revealTimes(firstPaint, arrivals) {\n  const out = [];\n  let last = firstPaint;\n  let pending = null;\n  for (const a of arrivals) {\n    if (pending !== null && a <= pending) {\n      out.push(pending);\n      continue;\n    }\n    pending = Math.max(a, last + 300);\n    last = pending;\n    out.push(pending);\n  }\n  return out;\n}`}
+  tests={[
+    { label: "실측한 페이지", args: [45, [211, 361, 1212]], expected: [345, 645, 1212] },
+    { label: "몰려서 도착", args: [50, [100, 200, 300]], expected: [350, 350, 350] },
+    { label: "한참 뒤 하나", args: [0, [1000]], expected: [1000] },
+    { label: "경계 없음", args: [100, []], expected: [] },
+    { label: "200ms 간격", args: [40, [500, 700, 900, 1300]], expected: [500, 800, 1100, 1400] },
+  ]}
+/>
+
+실제 React 코드에는 예외가 하나 더 있다. 페이지 시작 후 2.0초에서 2.3초 사이에 교체할 차례가 오면 2.3초까지 미룬다. 이 구간을 왜 비우는지는 코드에 설명이 없어서 여기서는 그런 분기가 있다는 것만 적어 둔다.
+
+## 셸만 기다릴까, 전부 기다릴까
+
+`renderToPipeableStream`은 언제 보내기 시작할지를 콜백으로 고르게 한다.
+
+```js
+import { renderToPipeableStream } from "react-dom/server";
+
+app.get("/p/:id", (req, res) => {
+  let didError = false;
+  const stream = renderToPipeableStream(<App />, {
+    bootstrapScripts: ["/client.js"],
+    // 셸이 준비되면 보내기 시작한다. 사람에게 주는 기본값
+    onShellReady() {
+      res.statusCode = didError ? 500 : 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      stream.pipe(res);
+    },
+    // 셸조차 못 만들었을 때. 아직 아무것도 안 보냈으니 상태 코드를 고를 수 있다
+    onShellError() {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/html");
+      res.end("<h1>잠시 후 다시 시도해 주세요</h1>");
+    },
+    // 경계 안쪽을 포함해 어디서든 에러가 나면 불린다. 로그는 여기서 남긴다
+    onError(err) {
+      didError = true;
+      console.error(err);
+    },
+  });
+  setTimeout(() => stream.abort(), 10_000); // 끝까지 안 오는 데이터는 끊는다
+});
+```
+
+`onShellReady` 대신 `onAllReady`에서 `pipe`를 하면 모든 경계가 준비될 때까지 기다렸다가 한 번에 보낸다. 같은 페이지를 두 방식으로 받으면 차이가 숫자로 보인다.
+
+```bash
+# time_starttransfer: 첫 바이트, time_total: 응답 끝
+curl -sN -o /dev/null -w 'starttransfer=%{time_starttransfer}s total=%{time_total}s\n' http://localhost:3101/p/1
+curl -sN -o /dev/null -w 'starttransfer=%{time_starttransfer}s total=%{time_total}s\n' 'http://localhost:3101/p/1?wait=all'
+```
+
+```text
+starttransfer=0.003195s total=1.504513s
+starttransfer=1.504546s total=1.504668s
+```
+
+`onAllReady`로 받은 HTML에는 `<!--$?-->`, 숨긴 div, `$RC`가 없다. 경계가 처음부터 채워진 `<!--$--><ul>...</ul><!--/$-->`로 온다. 끝까지 기다릴 테니 순서를 맞출 필요가 없어서다.
+
+그럼 언제 `onAllReady`를 쓰나. JS를 실행하지 않는 크롤러나 링크 미리보기 봇에게는 내용이 원래 자리에 있는 완성된 HTML이 낫다. React 문서도 크롤러 요청에는 `onAllReady`를 쓰라고 권한다. 정적 파일로 미리 뽑아 둘 때(SSG)도 사람이 기다리지 않으니 전부 기다린다. 사람에게 보내는 응답만 `onShellReady`로 흘린다.
+
+## 상태 코드는 첫 조각과 함께 떠난다
+
+HTTP 응답은 상태 줄과 헤더가 본문보다 먼저 간다. 셸을 보내는 순간 `200 OK`가 이미 떠났다. 경계 안에서 상품이 없다는 걸 알아도 그때는 404로 바꿀 수 없고, 리다이렉트 헤더도 보낼 수 없다.
+
+에러가 어디서 났느냐에 따라 결과가 갈린다. 세 경우를 직접 띄워 봤다.
+
+<SequenceDiagram
+  caption="에러가 셸에서 났는지, 경계 안에서 났는지에 따라 응답이 다르다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "react", label: "React 서버" },
+    { id: "log", label: "로그" },
+  ]}
+  steps={[
+    {
+      from: "react",
+      to: "log",
+      label: "onError",
+      title: "셸 렌더링 중 에러",
+      detail: "경계 밖 컴포넌트가 던졌다. 아직 아무것도 보내지 않았다. onError로 로그가 남고, 이어서 onShellError가 불린다.",
+      payload: "onError: product not found",
+    },
+    {
+      from: "react",
+      to: "browser",
+      label: "500 (12B)",
+      title: "상태 코드를 고를 수 있다",
+      detail: "onShellError에서 500과 대체 HTML을 보낸다. 상품이 없는 경우라면 셸 밖에서 미리 확인해 404를 보낼 수도 있다.",
+      payload: "status 500\n<h1>500</h1>",
+    },
+    {
+      from: "react",
+      to: "browser",
+      label: "200 + 셸",
+      title: "이번엔 경계 안에서 에러",
+      detail: "셸은 멀쩡하게 200으로 나갔다. 리뷰 API가 1.5초 뒤에 실패한다.",
+    },
+    {
+      from: "react",
+      to: "browser",
+      label: "$RX(\"B:0\")",
+      title: "그 경계만 브라우저에 넘긴다",
+      detail: "숨긴 HTML 대신 $RX가 온다. 경계를 <!--$!-->로 바꿔 '서버가 못 그렸으니 브라우저가 그려라'라고 표시한다. 프로덕션 빌드에서는 에러 메시지와 스택을 HTML에 싣지 않는다.",
+      payload: "<script>$RX=function(b,c,d,e,f){...};$RX(\"B:0\")</script>",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "클라이언트 렌더",
+      title: "하이드레이션 때 다시 시도한다",
+      detail: "JS가 오면 React가 그 경계를 브라우저에서 처음부터 렌더링한다. 브라우저에서도 실패하면 가장 가까운 에러 경계가 받는다. 상태 코드는 끝까지 200이다.",
+    },
+  ]}
+/>
+
+개발 빌드에서는 `$RX`에 "Switched to client rendering because the server rendering errored: reviews down" 같은 메시지와 서버 파일 경로가 담긴 스택까지 실린다. 프로덕션 빌드(`NODE_ENV=production`)로 같은 요청을 보내면 `$RX("B:0")`만 온다. 운영 서버를 개발 모드로 띄우면 내부 경로가 HTML로 새어 나간다는 뜻이기도 하다.
+
+여기서 얻는 설계 원칙은 하나다. 404, 401, 리다이렉트처럼 응답 자체를 바꾸는 판단에 쓰는 데이터는 경계 밖에서 기다린다. 상품이 있는지 없는지는 셸 단계에서 확인하고, 리뷰나 추천처럼 없어도 페이지가 성립하는 것만 경계 안에 넣는다.
+
+Next.js에서도 같은 일이 생긴다. 상품이 없으면 `notFound()`를 부르는 페이지를 세 가지로 만들어 없는 번호로 요청했다.
+
+```text
+경계 없이 페이지에서 notFound()         → 404  <meta name="robots" content="noindex"/>
+loading.tsx가 있는 페이지에서 notFound() → 200  <meta name="robots" content="noindex"/>
+Suspense 안쪽 컴포넌트에서 notFound()    → 200  <meta name="robots" content="noindex"/>
+```
+
+경계가 없으면 Next는 셸을 만들 때 페이지까지 기다리니 404를 보낼 수 있다. `loading.tsx`가 있거나 `Suspense` 안에서 부르면 셸이 이미 200으로 나간 뒤다. Next는 그 대신 `noindex` 메타 태그를 넣어 검색 엔진이 이 페이지를 색인하지 않게 한다. 사람에게는 404 화면이 보이고 검색 결과에도 안 남지만, 상태 코드로 404를 세는 모니터링이나 CDN 캐시 규칙은 이걸 200으로 본다.
+
+## 중간에서 모아 버리는 것들
+
+처음 장면으로 돌아가자. 로컬에서는 되고 운영에서는 안 됐다. 코드가 아니라 서버와 브라우저 사이에 있는 무언가가 조각을 모았다가 한 번에 보낸 것이다. 후보는 리버스 프록시, 압축, 그리고 애플리케이션 안에 끼운 스트림 가공 코드다.
+
+<SequenceDiagram
+  caption="프록시가 응답을 버퍼에 모으면 조각이 하나로 합쳐진다"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "nginx", label: "nginx" },
+    { id: "node", label: "Node 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "nginx",
+      label: "GET /p/1",
+      title: "프록시가 요청을 받는다",
+      detail: "운영에서는 보통 nginx나 로드 밸런서가 앞에 선다. 요청을 Node 서버로 넘긴다.",
+    },
+    {
+      from: "node",
+      to: "nginx",
+      label: "셸 3ms",
+      title: "Node는 셸을 바로 보낸다",
+      detail: "애플리케이션은 제대로 스트리밍하고 있다.",
+    },
+    {
+      from: "nginx",
+      to: "nginx",
+      label: "버퍼에 쌓기",
+      title: "nginx가 기본 설정대로 모은다",
+      detail: "proxy_buffering on(기본값)이면 nginx는 upstream 응답을 버퍼에 받아 두고, 버퍼가 차거나 응답이 끝날 때 내보낸다. 셸 353바이트는 버퍼를 채우지 못한다.",
+    },
+    {
+      from: "node",
+      to: "nginx",
+      label: "리뷰 1.5s",
+      title: "마지막 조각이 오고 응답이 끝난다",
+      detail: "이제야 버퍼를 비울 이유가 생긴다.",
+    },
+    {
+      from: "nginx",
+      to: "browser",
+      label: "한 덩어리 1.5s",
+      title: "브라우저는 한 번에 받는다",
+      detail: "셸과 리뷰가 1.5초에 함께 온다. 사용자에게는 스트리밍을 안 쓴 SSR과 같다.",
+    },
+  ]}
+/>
+
+nginx 설정 세 가지를 앞에 두고 같은 페이지를 받았다.
+
+```nginx
+server { listen 8181; location / { proxy_pass http://127.0.0.1:3101; } }
+server { listen 8182; location / { proxy_pass http://127.0.0.1:3101; proxy_buffering off; } }
+server { listen 8183; gzip on;
+         location / { proxy_pass http://127.0.0.1:3101; proxy_buffering off; } }
+```
+
+```text
+== 8181 기본 설정       starttransfer=1.505918s total=1.506055s
+== 8182 버퍼링 끔       starttransfer=0.002411s total=1.505021s
+== 8183 버퍼링 끔+gzip  starttransfer=0.002737s total=1.504612s
+```
+
+기본 설정은 첫 바이트가 끝까지 기다렸다. 버퍼링을 끄면 바로 온다. nginx의 gzip은 이번 측정에서 흐름을 막지 않았다. 조각 단위로 받아 보면 압축된 셸 295바이트가 11ms에, 나머지가 1.5초에 왔다. nginx는 upstream이 보낸 조각마다 압축 스트림을 비워(flush) 내보내기 때문이다. 전체를 끄기 부담스러우면 애플리케이션이 응답 헤더에 `X-Accel-Buffering: no`를 붙여 그 응답만 버퍼링을 끄게 할 수 있다. nginx의 버퍼와 타임아웃은 [nginx 리버스 프록시](/posts/nginx-reverse-proxy) 글에서 더 다뤘다.
+
+Node 안쪽도 의심해야 한다. Express에 `compression` 미들웨어를 붙이고 두 가지로 보냈다. 하나는 React 스트림을 `res`에 바로 `pipe`하고, 다른 하나는 중간에 `PassThrough` 스트림을 하나 끼웠다. HTML에 무언가를 끼워 넣으려고 변환 스트림을 두는 코드가 흔하다.
+
+```js
+// 그대로 연결
+stream.pipe(res);
+// 중간에 변환 스트림을 끼움
+const t = new PassThrough();
+t.pipe(res);
+stream.pipe(t);
+```
+
+```text
+== 바로 pipe (gzip)
+   11ms 10B
+   12ms 156B
+ 1510ms 541B
+== PassThrough를 거침 (gzip)
+   12ms 10B
+ 1512ms 624B
+```
+
+바로 연결하면 압축해도 셸이 먼저 온다. React가 조각을 쓸 때마다 대상에 `flush()` 메서드가 있으면 불러 주기 때문이다(`compression`이 그 메서드를 `res`에 붙여 둔다). 중간에 `PassThrough`가 끼면 React는 `PassThrough`의 `flush`를 찾는데 그런 메서드가 없다. 압축기는 내용을 계속 모으다 끝에서 한 번에 내보낸다.
+
+이 측정에는 함정이 하나 더 있다. 두 경우 모두 12ms에 10바이트가 왔다. gzip 헤더다. 그래서 `curl`의 `time_starttransfer`는 두 경우 모두 0.01초 안팎으로 나와 스트리밍이 되는 것처럼 보인다. 압축이 끼면 첫 바이트 시간만 보지 말고 조각 크기와 도착 시각을 같이 본다.
+
+```js
+// chunk-times.cjs: 압축된 응답의 조각 도착 시각을 찍는다
+const http = require("http");
+const u = new URL(process.argv[2]);
+const t0 = Date.now();
+http.get({ host: u.hostname, port: u.port, path: u.pathname + u.search,
+           headers: { "accept-encoding": "gzip" } }, (r) => {
+  console.log("status", r.statusCode, "encoding", r.headers["content-encoding"] || "-");
+  r.on("data", (d) => console.log(String(Date.now() - t0).padStart(5) + "ms", d.length + "B"));
+});
+```
+
+CDN이나 서버리스 플랫폼도 응답 방식을 따로 정한다. 응답 전체를 모아서 함수 결과로 돌려주는 실행 환경이라면 아무리 코드를 고쳐도 스트리밍이 되지 않는다. 쓰는 플랫폼이 "스트리밍 응답"을 지원하는지, 켜는 설정이 있는지 문서를 확인하고 운영 주소로 한 번은 재 본다.
+
+## 봇과 링크 미리보기가 보는 HTML
+
+JS를 실행하지 않는 봇도 스트리밍된 응답을 끝까지 받는다. 리뷰 텍스트는 문서 끝의 hidden div 안에 있다. 텍스트는 있지만 원래 자리가 아니고 숨겨져 있다. 구글 검색처럼 렌더링까지 하는 봇은 `$RC`가 돌고 난 DOM을 보니 문제가 없다. 단순한 수집기는 숨긴 텍스트를 어떻게 다룰지 알 수 없다. 검색에 꼭 나와야 하는 내용이면 경계 밖에 두거나, 봇에게는 `onAllReady`로 완성된 HTML을 준다.
+
+Next.js App Router는 이걸 메타데이터에서 따로 다룬다. `generateMetadata`가 오래 걸리면 사람에게는 `<title>`과 og 태그를 본문 뒤에 스트리밍으로 보내고, 정해 둔 봇에게만 `<head>`에 넣어 기다렸다 보낸다. 0.8초 걸리는 `generateMetadata`를 둔 페이지를 User-Agent만 바꿔 받아 `<title>`의 위치를 봤다.
+
+```bash
+# 메타데이터가 head에 있는지(title_pos < body_pos) 본다
+curl -s -A "Twitterbot/1.0" -o m.html -w "ttfb=%{time_starttransfer}\n" http://127.0.0.1:3200/meta/42
+grep -bo '<title>' m.html; grep -bo '<body' m.html
+```
+
+```text
+UA                          ttfb    <title> 위치  <body> 위치
+Mozilla/5.0 Chrome/140      0.11s   5824          597
+Twitterbot/1.0              0.82s   517           761
+Slackbot-LinkExpanding 1.0  0.81s   517           761
+Googlebot/2.1               0.01s   5824          597
+kakaotalk-scrap/1.0         0.01s   5824          597
+```
+
+트위터와 슬랙 봇은 0.8초를 기다려 `<head>` 안에서 제목을 받았다. 브라우저와 구글봇은 바로 받고 제목은 본문 뒤에 온다. 구글봇은 JS를 실행하는 봇이라 기다리지 않게 둔 것이다. 이 판단은 Next 안의 정규식(`html-bots`)이 정하는데, 16.4.1의 목록에는 Twitterbot, Slackbot, facebookexternalhit, Discordbot, WhatsApp, Yeti(네이버) 등이 있고 카카오톡의 `kakaotalk-scrap`은 없다. 카카오톡 공유 미리보기가 중요한 서비스라면 `next.config`의 `htmlLimitedBots`에 정규식을 직접 준다. 이 설정은 기본 목록을 덮어쓰므로 기본 목록에 필요한 봇을 더해서 적어야 한다.
+
+## Next.js에서는 loading.tsx가 경계다
+
+App Router에서 라우트 폴더에 `loading.tsx`를 두면 Next가 그 페이지를 `Suspense`로 감싸고 `loading.tsx`를 fallback으로 쓴다. 레이아웃은 셸에 들어가고 페이지가 경계 안으로 들어간다. 페이지 안에서 직접 `Suspense`를 써도 된다. 두 방식으로 1.5초 걸리는 페이지를 만들어 조각을 받았다.
+
+```text
+== /stream  (loading.tsx, 페이지 전체가 1.5초)
+status 200 encoding gzip
+  104ms 10B
+  104ms 554B
+  104ms 1368B
+ 1570ms 105B
+ 1571ms 604B
+ 1571ms 24B
+== /stream2  (페이지 안 Suspense, 리뷰만 1.5초)
+status 200 encoding gzip
+   29ms 10B
+   29ms 571B
+   29ms 1371B
+ 1519ms 105B
+ 1519ms 546B
+ 1519ms 24B
+```
+
+Next는 압축을 기본으로 켠 채로도 조각을 제대로 흘려보낸다. HTML을 열어 보면 React와 같은 `<!--$?--><template id="B:0">` 표시가 있고, 그 사이사이에 `self.__next_f.push([1,"..."])` 스크립트가 끼어 있다. 서버 컴포넌트 결과(RSC payload)를 HTML 안에 실어 보내는 부분이다. 이 형식은 [React 서버 컴포넌트](/posts/react-server-components) 글에서 뜯어본다.
+
+둘의 차이는 무엇을 먼저 보여 주느냐다. `loading.tsx`는 페이지 전체를 하나의 로딩 화면으로 바꾼다. 상품 이름까지 경계 안에 들어가니 처음 화면에는 "불러오는 중"만 있다. 페이지 안 `Suspense`는 상품 이름을 셸에 두고 리뷰만 기다린다. 대신 페이지 상단이 셸에 들어가므로 상단 데이터가 느리면 셸이 늦어진다. `loading.tsx`의 쓸모는 다른 곳에 있다. 화면 이동(클라이언트 내비게이션) 때 Next는 `loading.tsx`를 미리 받아 두었다가 누르는 즉시 보여 준다. 누른 뒤 아무 반응이 없는 구간이 사라진다.
+
+## 경계를 어디에 두나
+
+경계 하나하나가 "여기는 늦게 와도 된다"는 선언이다. 몇 가지 기준이 있다.
+
+경계 밖에 둘 것은 응답을 결정하는 데이터(존재 여부, 권한, 리다이렉트), 화면에서 가장 큰 요소(LCP 후보), 메타데이터다. 상품 이름과 대표 사진이 경계 안에 있으면 LCP가 리뷰만큼 늦어진다. LCP를 쪼개 보는 방법은 [Core Web Vitals](/posts/core-web-vitals)에 있다.
+
+경계 안에 둘 것은 느리고, 없어도 페이지가 성립하고, 화면 아래쪽에 있는 것들이다. 리뷰, 추천 상품, "이 상품을 본 사람들", 개인화 배너가 여기에 맞는다.
+
+fallback은 실제 내용과 같은 크기로 만든다. 한 줄짜리 "불러오는 중"이 400px 리뷰 목록으로 바뀌면 그 아래가 통째로 밀리고 CLS가 오른다. React 19의 교체 묶음이 흔들림 횟수는 줄여 주지만 크기 차이까지 메워 주지는 않는다.
+
+경계 안에서도 워터폴이 생긴다. 리뷰 컴포넌트가 리뷰를 받은 뒤에야 작성자 정보를 요청하면 두 요청이 줄줄이 이어진다. 경계로 나눠도 그 경계 안의 시간은 그대로다.
+
+```tsx
+// 두 요청이 이어진다: 리뷰 800ms → 작성자 600ms = 1.4초
+async function Reviews({ id }) {
+  const reviews = await getReviews(id);
+  const authors = await getAuthors(reviews.map((r) => r.authorId));
+  return <ReviewList reviews={reviews} authors={authors} />;
+}
+
+// 서로 기다릴 필요가 없는 요청은 같이 시작한다
+async function Page({ id }) {
+  const reviewsPromise = getReviews(id); // await 하지 않고 시작만 한다
+  const product = await getProduct(id);
+  return (
+    <>
+      <ProductInfo product={product} />
+      <Suspense fallback={<ReviewsSkeleton />}>
+        <Reviews promise={reviewsPromise} />
+      </Suspense>
+    </>
+  );
+}
+```
+
+경계를 잘게 나눌수록 각자 따로 도착하고 따로 바뀐다. 사용자가 한 덩어리로 보는 단위(리뷰 영역 전체, 추천 영역 전체)로 묶는 편이 낫다. 경계를 중첩하면 바깥 경계가 먼저 채워지고 안쪽은 그다음이다. 안쪽이 먼저 준비돼도 바깥이 아직이면 기다린다.
+
+## 운영에서 스트리밍이 안 될 때 보는 순서
+
+증상은 대개 둘 중 하나다. "로컬에선 스켈레톤이 보이는데 운영에선 흰 화면 뒤에 한 번에 뜬다", 또는 "TTFB가 가장 느린 API 시간과 거의 같다". 바깥에서 안쪽으로 좁혀 간다.
+
+```bash
+# 1. 운영 주소에서 첫 바이트와 끝 시간을 본다. 둘이 거의 같으면 어딘가에서 모으고 있다
+curl -sN -o /dev/null -w 'starttransfer=%{time_starttransfer}s total=%{time_total}s\n' https://shop.example.com/p/42
+
+# 2. 압축이 끼면 첫 바이트가 gzip 헤더일 수 있다. 압축 없이 다시 재 본다
+curl -sN -H 'Accept-Encoding: identity' -o /dev/null -w 'starttransfer=%{time_starttransfer}s\n' https://shop.example.com/p/42
+
+# 3. 응답 헤더를 본다. Content-Length가 붙어 있으면 누군가 전체를 모아서 길이를 쟀다는 뜻이다
+curl -s -D - -o /dev/null https://shop.example.com/p/42 | grep -i -E 'content-length|transfer-encoding|x-accel|content-encoding'
+
+# 4. 프록시를 건너뛰고 애플리케이션 서버에 바로 붙어 같은 측정을 한다 (서버 안에서)
+curl -sN -o /dev/null -w 'starttransfer=%{time_starttransfer}s total=%{time_total}s\n' http://127.0.0.1:3000/p/42
+```
+
+4번은 빠른데 1번이 느리면 프록시나 CDN 쪽이다. nginx라면 `proxy_buffering`, 앞단의 로드 밸런서나 CDN이라면 응답 버퍼링과 압축 설정을 본다. 4번부터 느리면 애플리케이션 안쪽이다. React 스트림을 `res`에 바로 연결했는지, 중간에 변환 스트림이 있다면 `flush`를 넘겨주는지, `onAllReady`에서 `pipe`하고 있지 않은지 본다. 셸 자체가 늦다면 경계 밖에서 느린 데이터를 기다리고 있는 것이다.
+
+브라우저에서는 개발자 도구 네트워크 탭에서 문서 요청을 고르고 Timing 탭을 연다. "Waiting for server response"가 짧고 "Content Download"가 길면 스트리밍되고 있다. 반대로 Waiting이 길고 Download가 순간이면 모아서 온 것이다.
+
+## 다시 운영 주소로
+
+처음의 흰 화면은 코드가 아니라 경로 위의 버퍼에서 생겼다. 스트리밍 SSR은 응답을 열어 둔 채 셸을 먼저 보내고, `Suspense` 경계 안쪽을 숨긴 HTML과 교체 스크립트로 이어 붙이는 방식이다. 이 구조에서 상태 코드와 헤더는 셸과 함께 떠나므로 응답을 바꾸는 판단은 경계 밖에서 끝내야 하고, 경로 위의 누구라도 조각을 모으면 효과가 사라진다. 경계를 어디에 두는지는 "무엇이 늦게 와도 되는가"를 정하는 일이다. 서버 컴포넌트가 이 응답 안에 어떤 데이터를 함께 싣는지는 [React 서버 컴포넌트](/posts/react-server-components)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 스트리밍 SSR은 일반 SSR과 무엇이 다른가요?
+
+일반 SSR은 HTML을 다 만든 뒤 한 번에 보내서 가장 느린 데이터가 첫 바이트를 붙잡는다. 스트리밍 SSR은 Suspense 경계 바깥과 fallback으로 셸을 먼저 보내고, 경계 안쪽은 준비되는 대로 같은 응답에 이어 보낸다. HTTP/1.1에서는 chunked 전송을 쓰고, 늦게 온 HTML은 숨긴 div와 인라인 스크립트로 제자리에 끼워진다.
+
+### 늦게 도착한 HTML은 어떻게 원래 위치에 들어가나요?
+
+셸에는 경계마다 `<!--$?-->` 주석과 `template id="B:0"` 같은 자리 표시, fallback이 들어 있다. 경계가 준비되면 내용이 `div hidden id="S:0"`로 문서 끝에 붙고, `$RC("B:0","S:0")` 스크립트가 fallback을 지우고 내용을 옮긴다. React 19는 교체를 모아서 직전 교체 뒤 300ms 간격으로 처리해서 화면이 연달아 흔들리지 않게 한다.
+
+### 스트리밍 중에 404나 리다이렉트를 하려면 어떻게 하나요?
+
+셸을 보내면서 상태 줄과 헤더가 이미 나가므로 그 뒤에는 바꿀 수 없다. 그래서 존재 여부나 권한처럼 응답을 결정하는 데이터는 Suspense 경계 밖에서 기다리게 둔다. Next.js에서 경계 안쪽이나 `loading.tsx` 아래에서 `notFound()`를 부르면 상태는 200이고 대신 `noindex` 메타 태그가 들어간다.
+
+### onShellReady와 onAllReady는 언제 각각 쓰나요?
+
+사람에게 보내는 응답은 onShellReady에서 보내기 시작해 첫 화면을 앞당긴다. 크롤러나 링크 미리보기 봇, 빌드 시 정적 HTML 생성처럼 기다려도 되고 완성된 HTML이 필요한 경우는 onAllReady를 쓴다. onAllReady로 보내면 경계가 처음부터 채워진 상태로 와서 교체 스크립트가 없다.
+
+### 경계 안에서 에러가 나면 사용자는 무엇을 보나요?
+
+셸은 이미 200으로 나갔으니 서버는 그 경계에 `$RX`를 보내 클라이언트 렌더링으로 넘긴다. 하이드레이션 때 React가 그 경계를 브라우저에서 다시 렌더링하고, 거기서도 실패하면 가장 가까운 에러 경계가 처리한다. 프로덕션 빌드에서는 에러 메시지가 HTML에 실리지 않으니 서버의 onError에서 로그를 남겨야 원인을 안다.
+
+### 로컬에서는 스트리밍이 되는데 운영에서 안 되면 어디를 보나요?
+
+경로 위에서 응답을 모으는 곳을 찾는다. 운영 주소와 애플리케이션 서버에 직접 붙은 주소에서 첫 바이트와 끝 시간을 비교하고, 프록시 쪽이면 nginx의 `proxy_buffering`이나 `X-Accel-Buffering`, CDN 설정을 본다. 애플리케이션 안쪽이면 중간에 끼운 변환 스트림이 flush를 막는지 확인한다. 압축이 끼면 첫 바이트가 gzip 헤더일 수 있으니 조각 크기와 시각을 함께 본다.
+
+### Suspense 경계는 어떤 기준으로 나누나요?
+
+응답을 결정하는 데이터와 LCP 요소, 메타데이터는 경계 밖에 둔다. 느리고 없어도 페이지가 성립하는 리뷰나 추천 같은 영역을 경계 안에 넣고, fallback은 실제 내용과 같은 크기로 만들어 CLS를 막는다. 너무 잘게 나누면 따로따로 깜빡이니 사용자가 한 덩어리로 보는 단위로 묶고, 경계 안의 순차 요청은 미리 시작해 워터폴을 줄인다.

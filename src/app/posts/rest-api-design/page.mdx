@@ -450,6 +450,96 @@ GraphQL은 화면마다 필요한 데이터 모양이 크게 다를 때 맞는�
 
 gRPC는 서비스끼리의 내부 통신에 맞는다. Protocol Buffers로 스키마를 정의하고 양쪽 코드를 생성하니 타입이 맞지 않는 실수가 컴파일 단계에서 걸린다. HTTP/2 위에서 바이너리로 주고받아 빠르고, 양방향 스트리밍도 된다. 브라우저에서 바로 부르기는 어려워서 gRPC-Web 같은 중간 계층이 필요하다. 그래서 바깥은 REST나 GraphQL, 안쪽 [마이크로서비스](/posts/microservices) 사이는 gRPC로 나누는 구성이 흔하다.
 
+## 운영 로그에서 설계 실수가 드러날 때
+
+설계에서 고른 것들은 출시하고 몇 달 지나 로그와 에러 리포트에서 다시 만난다. 자주 보는 장면 세 가지를 실제로 돌려 본 출력과 함께 적는다. DB 쪽 예시는 PostgreSQL 16, 프록시는 Ubuntu 24.04의 nginx 1.24다.
+
+### 뒤 페이지만 느리다
+
+APM에서 `GET /posts?page=5001&size=20`만 p99가 튄다. 앞 페이지는 빠르다. 크롤러나 "끝까지 내려 보는" 사용자가 이런 요청을 만든다. 글 20만 개짜리 `posts`에 `(created_at DESC, id DESC)` 인덱스를 걸고 offset 방식부터 실행 계획을 본다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, title, created_at FROM posts
+ORDER BY created_at DESC, id DESC
+OFFSET 100000 LIMIT 20;
+```
+
+```text
+ Limit  (cost=4744.95..4745.90 rows=20 width=26) (actual time=25.733..25.740 rows=20 loops=1)
+   ->  Index Scan using posts_created_id_idx on posts  (cost=0.42..9489.48 rows=200000 width=26) (actual time=0.040..20.832 rows=100020 loops=1)
+ Planning Time: 0.471 ms
+ Execution Time: 25.767 ms
+```
+
+인덱스를 탔으니 괜찮아 보이지만 `Index Scan` 줄의 `actual ... rows=100020`이 답이다. 20개를 주려고 10만 20개를 읽고 버렸다. 같은 쿼리를 `OFFSET 0`으로 돌리면 0.034ms이니 페이지 번호에 비례해 느려진다. 같은 위치를 커서로 가져오면 이렇다.
+
+```sql
+-- 앞 페이지 마지막 행(created_at, id)보다 뒤에 오는 것만
+EXPLAIN ANALYZE
+SELECT id, title, created_at FROM posts
+WHERE (created_at, id) < ('2026-03-11 10:41:00+00', 100001)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+```text
+ Limit  (cost=0.42..1.67 rows=20 width=26) (actual time=0.082..0.088 rows=20 loops=1)
+   ->  Index Scan using posts_created_id_idx on posts  (cost=0.42..6316.88 rows=100851 width=26) (actual time=0.081..0.084 rows=20 loops=1)
+         Index Cond: (ROW(created_at, id) < ROW('2026-03-11 10:41:00+00'::timestamp with time zone, 100001))
+ Planning Time: 0.439 ms
+ Execution Time: 0.131 ms
+```
+
+`Index Cond`가 생겼고 실제로 읽은 행이 20개다. 25.8ms가 0.13ms가 됐고, 이 숫자는 몇 번째 페이지든 거의 같다. 돌려받은 id도 offset 쪽과 같은 100000, 99999, 99998부터다. 앞에서 본 OR 조건과 결과가 같은 행 비교 문법인데, PostgreSQL은 이걸 인덱스 조건으로 바로 쓴다. 바꾸기 전에 꼭 이렇게 전후 계획을 나란히 떠 둔다. 흔한 실수는 `ORDER BY`와 인덱스의 정렬 방향이 다른 경우다. 한쪽만 `ASC`면 인덱스를 거꾸로도 못 읽어서 `Sort` 노드가 끼고 다시 느려진다.
+
+### 앱 에러 리포트에 `Unexpected token '<'`
+
+앱 크래시 리포트에 이런 줄이 쌓인다. 서버 로그에는 해당 요청이 아예 없다.
+
+```text
+SyntaxError: Unexpected token '<', "<html>
+<h"... is not valid JSON
+```
+
+응답이 JSON이 아니라 HTML이었다는 뜻이다. API 서버가 만든 응답이 아니라, 앞단 nginx가 업스트림에 못 붙었거나(502) 본문이 너무 커서(413) 직접 만든 기본 에러 페이지다. curl로 보면 바로 드러난다.
+
+```bash
+# 서버 안에서 nginx로 직접 보내 응답 헤더와 Content-Type을 확인한다
+curl -s -i -H "Host: api.example.com" http://127.0.0.1/v1/orders
+```
+
+```text
+HTTP/1.1 502 Bad Gateway
+Server: nginx/1.24.0 (Ubuntu)
+Date: Sun, 18 Oct 2026 11:01:29 GMT
+Content-Type: text/html
+Content-Length: 166
+Connection: keep-alive
+
+<html>
+<head><title>502 Bad Gateway</title></head>
+```
+
+앱이 상태 코드를 보기도 전에 `res.json()`부터 부르면 진짜 원인인 502가 JSON 파싱 에러에 묻힌다. 고칠 곳은 두 군데다. 클라이언트는 `Content-Type`이 `application/json`이나 `application/problem+json`일 때만 본문을 JSON으로 읽고, 아니면 상태 코드로 처리한다. 프록시는 자기가 만드는 에러도 API와 같은 모양으로 내보낸다.
+
+```nginx
+location /v1/ {
+    proxy_pass http://app;
+    error_page 502 504 = @problem_502;   # 413도 같은 방식으로 하나 더 둔다
+}
+location @problem_502 {
+    default_type application/problem+json;
+    return 502 '{"type":"about:blank","title":"Bad Gateway","status":502}';
+}
+```
+
+다시 요청하면 상태 코드는 그대로 502이고 `Content-Type: application/problem+json`에 위 JSON 한 줄이 본문으로 온다. 이 설정은 nginx가 직접 만든 에러만 바꾼다. 앱이 보낸 4xx·5xx는 `proxy_intercept_errors`가 기본으로 꺼져 있어서 그대로 지나간다. 502가 왜 났는지는 [nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)의 error.log 읽는 법으로, 어느 계층에서 끊겼는지는 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer)로 이어서 본다.
+
+### 403을 받으면 로그아웃되는 앱
+
+"권한 없는 메뉴를 누르면 로그아웃된다"는 제보도 흔하다. 앱의 HTTP 클라이언트가 401과 403을 묶어서 "토큰이 만료됐다 → 갱신 → 실패하면 로그아웃"으로 처리한 경우다. 403은 토큰을 새로 받아도 결과가 같으니, 갱신을 시도하고 실패하고 세션을 지운다. 서버는 401(누군지 모름)과 403(권한 없음)을 지켜서 주고, 클라이언트는 401에만 토큰 갱신을 건다. Bearer 토큰을 쓴다면 401 응답의 `WWW-Authenticate` 헤더에 RFC 6750의 `error="invalid_token"`을 실어 주면 갱신해야 하는 경우와 다시 로그인해야 하는 경우를 앱이 구분할 수 있다.
+
 ## 다시 무한 스크롤로
 
 같은 글이 두 번 나온 건 계속 바뀌는 목록에 "앞에서 몇 개 건너뛰기"라는 페이지 방식을 썼기 때문이었다. 마지막으로 본 위치를 기억하는 커서로 바꾸면 사라진다. REST API 설계는 이런 결정의 묶음이다. 자원을 명사로 짓고, 메서드와 상태 코드를 의미대로 쓰고, 에러와 페이지의 모양을 한 가지로 정하고, 바꿀 때는 추가만 하는 규칙을 지킨다. 한 번 공개한 모양은 오래 남으니, 처음 정할 때 클라이언트 입장에서 한 번 더 써 보는 게 가장 싼 테스트다.

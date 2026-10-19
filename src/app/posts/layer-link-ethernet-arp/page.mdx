@@ -1,0 +1,490 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("layer-link-ethernet-arp");
+
+같은 사무실 망에 있는 서버 두 대가 가상 IP 하나를 나눠 쓴다. 평소에는 1번 서버가 그 IP를 들고 있다가, 1번이 죽으면 2번이 IP를 넘겨받는다. 그런데 넘겨받은 뒤에도 몇몇 클라이언트는 한동안 계속 죽은 1번 서버 쪽으로 요청을 보낸다. IP는 분명히 2번 서버에 붙어 있는데 패킷은 엉뚱한 곳으로 간다.
+
+이 문제는 IP 계층에서는 보이지 않는다. 한 단계 아래, 같은 망 안에서 프레임을 실제로 누구에게 건넬지 정하는 데이터 링크 계층(L2)의 일이다. 클라이언트는 "이 IP는 이 MAC 주소"라는 메모를 들고 있고, 그 메모가 옛날 값이면 IP가 옮겨 가도 프레임은 옛 기기로 간다. 이 글은 L2가 무엇을 하는지, 이더넷 프레임과 MAC 주소가 어떻게 생겼는지, 스위치가 어떻게 길을 배우는지, IP 주소로 MAC 주소를 찾는 ARP가 어떻게 동작하고 언제 말썽을 부리는지를 실제 캡처로 따라간다. 맨 아래 물리 계층(L1)도 짧게 함께 본다.
+
+기준 환경은 Ubuntu 24.04다. 출력은 컨테이너 안에 network namespace 세 개(호스트 `h1`, `h2`와 스위치 역할의 `sw`)를 만들고 리눅스 브리지로 이어서 직접 찍었다. 이 시리즈 전체 지도는 [OSI 7계층 개요 글](/posts/network-layers-overview)에 있다.
+
+```bash
+# 실습 망: h1 —— [br0 스위치] —— h2 (같은 192.168.10.0/24)
+sudo ip netns add h1; sudo ip netns add h2; sudo ip netns add sw
+sudo ip -n sw link add br0 type bridge && sudo ip -n sw link set br0 up   # 스위치 역할의 브리지
+for h in h1 h2; do
+  sudo ip link add v$h type veth peer name p$h        # 랜선 한 가닥 (양쪽 끝이 있는 가상 케이블)
+  sudo ip link set v$h netns $h; sudo ip link set p$h netns sw
+  sudo ip -n sw link set p$h master br0 && sudo ip -n sw link set p$h up   # 스위치 포트에 꽂기
+  sudo ip -n $h link set v$h up
+done
+sudo ip -n h1 addr add 192.168.10.11/24 dev vh1
+sudo ip -n h2 addr add 192.168.10.12/24 dev vh2
+```
+
+## 선과 전파 위의 일: 물리 계층
+
+가장 아래 L1은 비트를 신호로 바꾸는 층이다. 구리선(UTP)이면 전압, 광케이블이면 빛, Wi-Fi면 전파로 0과 1을 나른다. `1000BASE-T`는 구리선 네 쌍으로 1Gbps를 보내는 규격이고, Cat5e 이상 케이블에서 최대 100m까지 쓴다. 이 층에서 개발자가 신경 쓸 일은 많지 않지만, 링크가 붙어 있는지와 속도·듀플렉스가 무엇으로 정해졌는지는 장애 때 꼭 확인한다.
+
+```bash
+# 링크 상태 한눈에 보기 (LOWER_UP이 있으면 상대편 신호가 잡힌 것)
+ip -br link
+
+# 속도, 듀플렉스, 링크 감지 여부 (ethtool 패키지)
+sudo ethtool eth0
+
+# 인터페이스별 송수신 카운터와 오류·드롭 수
+ip -s link show eth0
+```
+
+실습 망의 가상 랜선(veth)에 `ethtool`을 쳐 보면 이렇게 나온다. 실제 랜 카드라면 지원하는 속도 목록과 자동 협상 결과가 더 길게 나온다.
+
+```text
+Settings for va:
+	Supported ports: [  ]
+	Supported link modes:   Not reported
+	...
+	Speed: 10000Mb/s
+	Duplex: Full
+	Auto-negotiation: off
+	Port: Twisted Pair
+	PHYAD: 0
+	Transceiver: internal
+	MDI-X: Unknown
+	Link detected: yes
+```
+
+`Duplex: Full`은 보내기와 받기를 동시에 한다는 뜻이다. 예전 허브 시절에는 선 하나를 여럿이 나눠 쓰는 반이중(half duplex)이라 두 기기가 동시에 보내면 신호가 부딪쳤고(충돌), 그걸 감지해 기다렸다 다시 보내는 규칙(CSMA/CD)이 있었다. 지금의 스위치 포트는 전이중이라 충돌이 없다. 다만 한쪽은 자동 협상, 다른 쪽은 고정 설정이면 서로 다른 듀플렉스로 붙는 일이 있고, 그러면 링크는 살아 있는데 속도가 이상하게 느리고 오류 카운터가 올라간다.
+
+`ip -s link`의 카운터는 L1·L2 문제를 가장 먼저 보여 준다. 이 글을 쓴 컨테이너의 실제 `eth0`이다.
+
+```text
+4: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 02:fc:00:00:00:01 brd ff:ff:ff:ff:ff:ff
+    RX:  bytes packets errors dropped  missed   mcast
+       6977949   22302      0       6       0       0
+    TX:  bytes packets errors dropped carrier collsns
+       6614456   21694      0       0       0       0
+```
+
+`errors`가 꾸준히 오르면 케이블, 커넥터, 듀플렉스 불일치 같은 물리적인 문제를 의심한다. `dropped`는 커널이 받은 뒤 처리하지 못하고 버린 수라서 버퍼 부족이나 모르는 프로토콜 같은 다른 이유일 때가 많다. 두 값을 몇 초 간격으로 다시 찍어 늘어나는지 보는 게 요령이다. 반대로 상대편이 사라지면 플래그가 바뀐다. 스위치 쪽 포트를 내렸더니 `h1`의 인터페이스가 이렇게 바뀌었다.
+
+```text
+vh1@if9          DOWN           9a:e2:a1:3d:20:1b <NO-CARRIER,BROADCAST,MULTICAST,UP>
+```
+
+`UP`은 내가 인터페이스를 켜 둔 상태이고, `NO-CARRIER`는 선 건너편에서 신호가 안 온다는 뜻이다. 이때는 위층에서 무엇을 해도 소용없다.
+
+Wi-Fi도 L1과 L2를 함께 맡는 규격(IEEE 802.11)이다. 전파는 모두가 같은 공기를 나눠 쓰기 때문에 충돌을 감지할 수 없어서, 보내기 전에 잠깐 비었는지 듣고 기다리는 방식(CSMA/CA)을 쓴다. 그래서 같은 공간에 기기가 많으면 신호 세기가 좋아도 느려진다. Wi-Fi 프레임은 이더넷과 헤더 모양이 다르지만, 운영체제는 받은 프레임을 이더넷 모양으로 바꿔 위층에 넘기므로 IP 이상에서는 차이를 느끼지 못한다.
+
+## 이더넷 프레임 한 장
+
+L2의 단위는 프레임이다. 이더넷 프레임의 헤더는 14바이트로 단출하다. 받는 쪽 MAC 6바이트, 보내는 쪽 MAC 6바이트, 안에 든 것의 종류(EtherType) 2바이트다. 그 뒤에 46~1500바이트의 내용물이 오고, 끝에 프레임이 깨졌는지 검사하는 FCS 4바이트가 붙는다. 그래서 일반 이더넷 프레임은 64~1518바이트다. 내용물 최대 1500바이트가 [MTU 글](/posts/layer-mtu-fragmentation)에서 다룰 MTU의 출처다.
+
+`h1`이 `h2`에게 처음 말을 걸 때 나간 프레임을 16진수로 찍었다.
+
+```bash
+# h2 쪽에서 ARP 프레임 하나를 이더넷 헤더 포함 hex로 잡는다
+sudo ip netns exec h2 tcpdump -i vh2 -e -nn -XX -c 1 arp
+```
+
+```text
+22:51:48.700374 9a:e2:a1:3d:20:1b > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.10.12 tell 192.168.10.11, length 28
+	0x0000:  ffff ffff ffff 9ae2 a13d 201b 0806 0001  .........=......
+	0x0010:  0800 0604 0001 9ae2 a13d 201b c0a8 0a0b  .........=......
+	0x0020:  0000 0000 0000 c0a8 0a0c                 ..........
+```
+
+조각을 눌러 보면 바이트가 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="ARP 요청을 담은 이더넷 프레임 42바이트"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "dst",
+      display: "ffff ffff ffff",
+      title: "받는 쪽 MAC: 브로드캐스트",
+      description: "모든 비트가 1인 주소는 같은 망의 모든 기기에게 보내라는 뜻이다. h1은 h2의 MAC을 아직 모르니 모두에게 묻는다.",
+      required: true,
+    },
+    {
+      key: "src",
+      display: "9ae2 a13d 201b",
+      title: "보내는 쪽 MAC",
+      description: "h1의 MAC 9a:e2:a1:3d:20:1b. 스위치는 이 값을 보고 h1이 어느 포트에 있는지 배운다.",
+      required: true,
+    },
+    {
+      key: "type",
+      display: "0806",
+      title: "EtherType: ARP",
+      description: "0x0806은 ARP, 0x0800은 IPv4, 0x86dd는 IPv6, 0x8100은 VLAN 태그가 붙었다는 표시다.",
+      required: true,
+    },
+    {
+      key: "hw",
+      display: "0001 0800 06 04",
+      title: "ARP 머리: 무엇으로 무엇을 찾나",
+      description: "하드웨어 종류 1(이더넷), 찾는 주소 종류 0x0800(IPv4), MAC 길이 6, IP 길이 4. ARP는 이더넷과 IPv4에 묶인 프로토콜이 아니라 이 칸으로 종류를 적는 범용 형식이다.",
+    },
+    {
+      key: "op",
+      display: "0001",
+      title: "동작: 요청",
+      description: "1은 요청(who-has), 2는 응답(is-at)이다.",
+    },
+    {
+      key: "sender",
+      display: "9ae2… c0a8 0a0b",
+      title: "묻는 쪽의 MAC과 IP",
+      description: "c0a8 0a0b는 192.168.10.11이다. 이 칸 덕분에 요청을 받은 쪽은 답하기 전에 묻는 쪽의 MAC을 이미 알게 된다.",
+    },
+    {
+      key: "target",
+      display: "0000… c0a8 0a0c",
+      title: "찾는 대상: MAC은 모름, IP는 192.168.10.12",
+      description: "모르는 MAC 자리는 0으로 채운다. 192.168.10.12를 가진 기기만 답한다.",
+    },
+  ]}
+/>
+
+캡처에는 42바이트로 찍혔지만 실제 선으로는 64바이트가 나간다. 이더넷 프레임은 최소 64바이트(FCS 포함)여야 해서, 랜 카드가 내용물 뒤를 0으로 채우고 FCS를 붙인다. 보내는 쪽 캡처에서는 그 전에 잡히기 때문에 짧게 보인다. 맨 앞의 프리앰블 8바이트도 랜 카드가 붙이고 떼는 신호라 캡처에 나오지 않는다.
+
+## MAC 주소 읽기
+
+MAC 주소는 48비트, 보통 16진수 여섯 묶음으로 쓴다. 앞 24비트는 제조사 번호(OUI), 뒤 24비트는 그 제조사가 붙인 일련번호다. 그런데 첫 바이트의 맨 아래 두 비트는 따로 의미가 있다.
+
+- 가장 아래 비트(I/G)가 1이면 여러 기기가 받는 멀티캐스트 주소다. `ff:ff:ff:ff:ff:ff`(브로드캐스트)도, IPv6가 쓰는 `33:33:…`도 이 비트가 켜져 있다.
+- 그다음 비트(U/L)가 1이면 제조사가 박은 주소가 아니라 소프트웨어가 정한 "로컬 관리" 주소다.
+
+실습 망의 MAC들을 보면 `9a:…`, `8e:…`, `da:…`이고, 이 글을 쓴 컨테이너의 `eth0`은 `02:fc:…`였다. 모두 두 번째 비트가 1이다. 가상 랜 카드, 컨테이너, 가상 머신은 커널이나 하이퍼바이저가 MAC을 지어 붙이기 때문이다. 스마트폰이 Wi-Fi마다 MAC을 무작위로 바꾸는 기능도 이 로컬 관리 비트를 켠 주소를 쓴다. 그래서 MAC 주소로 기기를 영구히 식별하거나 MAC 필터를 보안 수단으로 믿는 설계는 요즘 잘 맞지 않는다.
+
+아래 함수가 MAC 주소 문자열을 받아 브로드캐스트, 멀티캐스트, 로컬 관리 유니캐스트, 제조사 유니캐스트 중 무엇인지 돌려주게 만들어 보자.
+
+<CodePlayground
+  caption="MAC 주소의 첫 바이트 읽기"
+  functionName="macKind"
+  initialCode={`// "broadcast" | "multicast" | "local" | "global" 중 하나를 돌려준다
+function macKind(mac) {
+  const first = parseInt(mac.split(":")[0], 16);
+  return "global";
+}`}
+  solution={`function macKind(mac) {
+  if (mac.toLowerCase() === "ff:ff:ff:ff:ff:ff") return "broadcast";
+  const first = parseInt(mac.split(":")[0], 16);
+  if (first & 0b01) return "multicast"; // I/G 비트
+  if (first & 0b10) return "local";     // U/L 비트
+  return "global";
+}`}
+  tests={[
+    { args: ["ff:ff:ff:ff:ff:ff"], expected: "broadcast", label: "ff:ff:ff:ff:ff:ff" },
+    { args: ["01:00:5e:00:00:fb"], expected: "multicast", label: "01:00:5e:00:00:fb (IPv4 멀티캐스트)" },
+    { args: ["33:33:00:00:00:01"], expected: "multicast", label: "33:33:00:00:00:01 (IPv6 멀티캐스트)" },
+    { args: ["8e:e8:85:8b:d1:aa"], expected: "local", label: "8e:e8:85:8b:d1:aa (veth)" },
+    { args: ["02:fc:00:00:00:01"], expected: "local", label: "02:fc:00:00:00:01 (컨테이너 eth0)" },
+    { args: ["00:1a:2b:3c:4d:5e"], expected: "global", label: "00:1a:2b:3c:4d:5e" },
+  ]}
+/>
+
+## 스위치는 보낸 주소로 길을 배운다
+
+같은 망의 기기들은 스위치로 이어진다. 스위치가 하는 일은 단순하다. 프레임이 들어오면 받는 쪽 MAC을 보고 그 기기가 있는 포트로만 내보낸다. 어느 MAC이 어느 포트에 있는지는 MAC 주소 테이블에 적어 두는데, 이 표를 사람이 채우지 않는다. 스위치가 들어오는 프레임의 보내는 쪽 MAC을 보고 스스로 배운다.
+
+표에 없는 MAC으로 가는 프레임과 브로드캐스트는 들어온 포트를 뺀 모든 포트로 내보낸다(flooding). 그래서 브로드캐스트가 닿는 범위, 곧 스위치로 이어진 한 덩어리를 브로드캐스트 도메인이라고 부르고, 이 범위가 대개 IP 서브넷 하나와 같다. 아래 그림에서 다음을 누르면 비어 있던 표가 프레임 몇 개로 채워지는 과정을 볼 수 있다. 칸은 스위치 포트다.
+
+<AlgoTrace
+  caption="스위치는 보내는 쪽 MAC을 보고 표를 채운다"
+  memoryLabel="MAC 주소 테이블"
+  cells={["포트1 h1", "포트2 h2", "포트3 h3"]}
+  steps={[
+    {
+      memory: [],
+      caption: "막 켜진 스위치의 표는 비어 있다. 실습 브리지에서 bridge fdb를 쳤을 때 permanent 항목 말고는 아무것도 없었다.",
+    },
+    {
+      pointer: 0,
+      memory: ["9a:e2… → 포트1"],
+      caption: "h1이 ARP 요청(받는 쪽 ff:ff…)을 보낸다. 스위치는 보내는 쪽 MAC을 보고 h1이 포트1에 있다고 적는다.",
+    },
+    {
+      found: [1, 2],
+      memory: ["9a:e2… → 포트1"],
+      caption: "받는 쪽이 브로드캐스트라 포트2와 포트3 모두로 내보낸다. h3도 이 요청을 받고, 자기 IP가 아니니 버린다.",
+    },
+    {
+      pointer: 1,
+      memory: ["9a:e2… → 포트1", "ee:bc… → 포트2"],
+      caption: "h2가 h1에게 응답한다. 이번에는 h2의 위치를 배운다.",
+    },
+    {
+      found: [0],
+      memory: ["9a:e2… → 포트1", "ee:bc… → 포트2"],
+      caption: "받는 쪽 9a:e2…가 표에 있으니 포트1로만 보낸다. h3에게는 가지 않는다.",
+    },
+    {
+      found: [1],
+      memory: ["9a:e2… → 포트1", "ee:bc… → 포트2"],
+      caption: "이후 h1과 h2의 대화는 두 포트 사이에서만 오간다. 항목은 한동안(리눅스 브리지 기본 300초) 쓰이지 않으면 지워진다.",
+    },
+  ]}
+/>
+
+실습 브리지에서 ping 한 번을 보낸 뒤 표를 봤다.
+
+```bash
+# 브리지(스위치)가 배운 MAC 주소 테이블. permanent는 브리지 자신의 주소라 뺀다
+sudo ip netns exec sw bridge fdb show br br0 | grep -v permanent
+```
+
+```text
+9a:e2:a1:3d:20:1b dev ph1 master br0
+ee:bc:da:f7:d4:5e dev ph2 master br0
+```
+
+`h1`의 MAC은 `ph1` 포트에, `h2`의 MAC은 `ph2` 포트에 있다고 배웠다. 실제 스위치에서는 `show mac address-table` 같은 명령이 같은 표를 보여 준다. Docker의 기본 네트워크 `docker0`과 사용자 정의 브리지도 이 리눅스 브리지다. 컨테이너마다 veth 한 쌍이 생기고 한쪽 끝이 브리지 포트에 꽂히는 구조라, 컨테이너끼리 통신이 안 될 때 `bridge fdb`와 `bridge link`로 포트에 제대로 붙어 있는지 볼 수 있다. Docker 네트워크 자체는 [Docker 네트워크 글](/posts/docker-network-volume)에서 다룬다.
+
+허브는 이 표가 없는 장비였다. 들어온 신호를 모든 포트로 그대로 복사했기 때문에 같은 허브의 모든 기기가 모든 프레임을 봤고, 동시에 보내면 충돌했다. 스위치는 포트마다 충돌을 나누고, 프레임을 필요한 포트로만 보내서 남의 대화가 내 포트로 오지 않는다. 다만 브로드캐스트는 여전히 모두에게 간다. 같은 망의 기기가 수천 대가 되면 ARP 같은 브로드캐스트만으로도 모든 기기가 바빠지는데, 망을 잘게 나누는 이유 중 하나가 이것이다.
+
+## IP는 아는데 MAC을 모를 때: ARP
+
+앞의 프레임에서 봤듯이 이더넷 프레임을 보내려면 받는 쪽의 MAC이 필요하다. 그런데 응용 프로그램이 아는 건 IP 주소뿐이다. 이 둘을 잇는 게 ARP(Address Resolution Protocol)다. 같은 망 전체에 "192.168.10.12 가진 사람 MAC 좀 알려 줘"라고 브로드캐스트로 묻고, 그 IP를 가진 기기만 자기 MAC을 담아 직접 답한다.
+
+`h1`의 ARP 캐시를 비운 뒤 `h2`로 ping을 한 번 보내면서 `h2` 쪽에서 캡처했다.
+
+```bash
+# h1의 이웃 캐시(ARP 캐시)를 비운다
+sudo ip netns exec h1 ip neigh flush all
+# h2에서 이더넷 헤더 포함으로 캡처하면서 h1에서 ping
+sudo ip netns exec h2 tcpdump -i vh2 -e -nn -c 4
+sudo ip netns exec h1 ping -c 1 192.168.10.12
+```
+
+```text
+22:51:25.294650 9a:e2:a1:3d:20:1b > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.10.12 tell 192.168.10.11, length 28
+22:51:25.294660 ee:bc:da:f7:d4:5e > 9a:e2:a1:3d:20:1b, ethertype ARP (0x0806), length 42: Reply 192.168.10.12 is-at ee:bc:da:f7:d4:5e, length 28
+22:51:25.294675 9a:e2:a1:3d:20:1b > ee:bc:da:f7:d4:5e, ethertype IPv4 (0x0800), length 98: 192.168.10.11 > 192.168.10.12: ICMP echo request, id 1844, seq 1, length 64
+22:51:25.294903 ee:bc:da:f7:d4:5e > 9a:e2:a1:3d:20:1b, ethertype IPv4 (0x0800), length 98: 192.168.10.12 > 192.168.10.11: ICMP echo reply, id 1844, seq 1, length 64
+```
+
+첫 줄의 받는 쪽은 `ff:ff:ff:ff:ff:ff`, 둘째 줄의 응답은 `h1`의 MAC으로 바로 간다. 셋째 줄부터는 알아낸 MAC으로 진짜 IP 패킷이 나간다. 아래 그림이 이 네 줄을 순서대로 펼친 것이다.
+
+<SequenceDiagram
+  caption="ARP로 MAC을 알아낸 뒤에야 첫 IP 패킷이 나간다"
+  actors={[
+    { id: "h1", label: "h1 .11" },
+    { id: "sw", label: "스위치" },
+    { id: "h2", label: "h2 .12" },
+    { id: "h3", label: "h3 (구경꾼)" },
+  ]}
+  steps={[
+    {
+      from: "h1",
+      to: "h1",
+      label: "캐시에 없음",
+      title: "보낼 곳의 MAC을 모른다",
+      detail: "192.168.10.12는 내 서브넷 안이라 직접 보내면 된다. 그런데 이웃 캐시에 이 IP의 MAC이 없다. ping 패킷은 잠시 대기열에 넣어 두고 ARP부터 보낸다.",
+    },
+    {
+      from: "h1",
+      to: "sw",
+      label: "who-has .12",
+      title: "브로드캐스트로 묻는다",
+      detail: "받는 쪽 MAC을 ff:ff:ff:ff:ff:ff로 적은 ARP 요청이다. 요청 안에 내 MAC과 IP를 함께 넣는다.",
+      payload: "9a:e2:a1:3d:20:1b > ff:ff:ff:ff:ff:ff\nRequest who-has 192.168.10.12 tell 192.168.10.11",
+    },
+    {
+      from: "sw",
+      to: "h3",
+      label: "flood",
+      title: "스위치는 모든 포트로 퍼뜨린다",
+      detail: "브로드캐스트라 h2와 h3 모두 받는다. h3는 자기 IP가 아니니 버린다. 같은 망의 기기가 많을수록 이런 프레임을 모두가 받아야 한다.",
+    },
+    {
+      from: "sw",
+      to: "h2",
+      label: "flood",
+      title: "h2가 자기 IP임을 알아본다",
+      detail: "h2는 요청 안의 h1 MAC과 IP를 자기 캐시에 먼저 적는다. 곧 답장을 보내야 하니 h2는 따로 물을 필요가 없다.",
+    },
+    {
+      from: "h2",
+      to: "h1",
+      label: "is-at ee:bc:…",
+      title: "답은 묻는 사람에게만",
+      detail: "응답은 유니캐스트다. 스위치는 앞에서 h1의 포트를 배웠으니 그 포트로만 보낸다.",
+      payload: "ee:bc:da:f7:d4:5e > 9a:e2:a1:3d:20:1b\nReply 192.168.10.12 is-at ee:bc:da:f7:d4:5e",
+    },
+    {
+      from: "h1",
+      to: "h2",
+      label: "ICMP echo",
+      title: "이제야 진짜 패킷이 나간다",
+      detail: "h1은 캐시에 MAC을 적고, 기다리던 ping을 그 MAC으로 보낸다. 그래서 같은 망에 보내는 첫 ping은 ARP만큼 조금 늦다.",
+    },
+  ]}
+/>
+
+## 다른 망으로 갈 때는 게이트웨이의 MAC을 묻는다
+
+ARP는 같은 망 안에서만 동작한다. 브로드캐스트가 라우터를 넘어가지 않기 때문이다. 그럼 인터넷 건너편 서버로 보낼 때는 누구의 MAC을 물을까. 목적지의 MAC이 아니라 기본 게이트웨이(라우터)의 MAC이다. 라우터가 둘 있는 실습 망([라우팅 글](/posts/layer-ip-routing-icmp)에서 만든 망)에서 `10.0.1.10`이 다른 망의 `10.0.2.20`으로 ping을 보낼 때 잡힌 것이다.
+
+```text
+22:51:12.695187 8e:e8:85:8b:d1:aa > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 10.0.1.1 tell 10.0.1.10, length 28
+22:51:12.695270 da:5b:f4:82:3b:98 > 8e:e8:85:8b:d1:aa, ethertype ARP (0x0806), length 42: Reply 10.0.1.1 is-at da:5b:f4:82:3b:98, length 28
+22:51:12.695274 8e:e8:85:8b:d1:aa > da:5b:f4:82:3b:98, ethertype IPv4 (0x0800), length 98: 10.0.1.10 > 10.0.2.20: ICMP echo request, id 1774, seq 1, length 64
+```
+
+ARP는 `10.0.2.20`이 아니라 게이트웨이 `10.0.1.1`을 묻는다. 셋째 줄을 보면 IP 목적지는 `10.0.2.20`인데 이더넷 받는 쪽은 라우터의 MAC `da:5b:f4:82:3b:98`이다. 목적지가 같은 망인지 다른 망인지는 내 IP와 서브넷 마스크로 판단하는데, 이 계산은 [IP 주소 글](/posts/layer-ip-addressing)에서 자세히 한다. 서브넷 마스크를 잘못 넣으면 같은 망인 줄 알고 다른 망의 IP를 ARP로 찾다가 실패하거나, 반대로 바로 옆 기기를 게이트웨이로 돌려보내는 일이 생긴다.
+
+## ARP 캐시와 이웃의 상태
+
+매번 브로드캐스트로 묻는 건 낭비라서 답을 캐시에 둔다. 리눅스에서는 이 캐시를 이웃 테이블(neighbour table)이라 부르고 `ip neigh`로 본다. 옛 명령 `arp -n`은 net-tools 패키지라 Ubuntu 최신 서버 이미지에는 없을 때가 많다.
+
+```bash
+# 이웃(ARP) 캐시 보기
+ip neigh
+
+# 특정 IP 하나만, 통계(사용 시각, 확인 횟수) 포함
+ip -s neigh show 192.168.10.12
+
+# 캐시 항목 하나 지우기 / 인터페이스 전체 비우기
+sudo ip neigh del 192.168.10.12 dev eth0
+sudo ip neigh flush dev eth0
+```
+
+항목마다 상태가 붙는다. 실습 망에서 시간을 두고 찍어 보면 상태가 바뀌는 게 보인다.
+
+```text
+192.168.10.12 dev vh1 lladdr ee:bc:da:f7:d4:5e REACHABLE
+```
+
+```text
+192.168.10.12 dev vh1 lladdr ee:bc:da:f7:d4:5e STALE
+```
+
+```text
+192.168.10.12 dev vh1 lladdr ee:bc:da:f7:d4:5e DELAY
+```
+
+```text
+192.168.10.96 dev vh1 INCOMPLETE
+```
+
+```text
+192.168.10.96 dev vh1 FAILED
+```
+
+`REACHABLE`은 최근에 상대가 살아 있음이 확인된 상태다. 기본값은 `base_reachable_time_ms = 30000`을 기준으로 15~45초 사이에서 무작위로 정해지는 시간이 지나면 `STALE`이 된다. STALE은 "MAC은 알지만 최근 확인은 못 했다"는 뜻이고, 그래도 이 MAC으로 계속 보낸다. 다시 패킷을 보내면 `DELAY`를 거쳐 상대의 응답(TCP ACK 같은 위층 신호)이나 유니캐스트 ARP 확인(`PROBE`)으로 다시 REACHABLE이 된다. 위 출력은 STALE 상태에서 ping을 보낸 직후 DELAY, 몇 초 뒤 REACHABLE로 찍혔다.
+
+`INCOMPLETE`는 ARP 요청을 보냈는데 아직 답이 없는 상태, `FAILED`는 끝내 답이 없어 포기한 상태다. 같은 망에 없는 IP `192.168.10.96`으로 ping을 보냈을 때 이렇게 됐다. 같은 서브넷의 서버가 응답하지 않는데 `ip neigh`에 FAILED가 보이면, 문제는 방화벽이나 앱이 아니라 L2다. 상대가 꺼졌거나, 다른 VLAN에 있거나, 케이블이 빠졌다. 이 상태에서 ping은 아래처럼 메시지 없이 손실로 끝났다. 환경에 따라서는 `From 192.168.10.11 icmp_seq=1 Destination Host Unreachable`이 찍히기도 하는데, 이건 원격 라우터가 아니라 내 커널이 ARP 실패를 알리는 것이다.
+
+```text
+PING 192.168.10.97 (192.168.10.97) 56(84) bytes of data.
+
+--- 192.168.10.97 ping statistics ---
+5 packets transmitted, 0 received, 100% packet loss, time 4104ms
+```
+
+이웃 테이블에도 크기 한도가 있다. 기본값은 `gc_thresh1/2/3 = 128/512/1024`이다. 쿠버네티스 노드처럼 한 호스트가 같은 망의 수천 개 IP와 직접 이야기하면 한도를 넘어 커널 로그에 `neighbour: arp_cache: neighbor table overflow!`가 찍히고, 새 IP로의 연결이 드문드문 실패한다. 이때는 `net.ipv4.neigh.default.gc_thresh3` 같은 값을 올린다.
+
+## 주인이 바뀌었다고 알리는 Gratuitous ARP
+
+처음 장면으로 돌아가자. 가상 IP가 1번 서버에서 2번 서버로 옮겨 갔는데 클라이언트들은 캐시에 1번 서버의 MAC을 들고 있다. STALE이 된 뒤에도 그 MAC으로 계속 보내니, 확인 절차가 끝나 FAILED로 떨어지기 전까지 패킷은 죽은 서버로 간다. 그래서 IP를 넘겨받은 쪽은 묻지도 않았는데 "이 IP는 이제 내 MAC"이라고 망 전체에 알린다. 이걸 Gratuitous ARP라고 한다. keepalived 같은 VRRP 구현, 쿠버네티스 MetalLB의 L2 모드가 장애 조치 때 이걸 보낸다.
+
+실습 망에서 재현해 봤다. `h3`를 같은 브리지에 붙이고, `h2`의 IP `192.168.10.12`를 지운 뒤 `h3`에 붙였다.
+
+```bash
+# IP를 쓰기 전에 이미 쓰는 기기가 있는지 확인 (중복 주소 검사, 응답이 오면 종료 코드 1)
+sudo ip netns exec h3 arping -D -c 2 -I vh3 192.168.10.12
+
+# IP를 넘겨받은 뒤 망 전체에 알린다 (Gratuitous ARP)
+sudo ip netns exec h3 arping -U -c 1 -I vh3 192.168.10.12
+
+# 클라이언트(h1)의 캐시가 바뀌었는지 확인
+sudo ip netns exec h1 ip neigh show 192.168.10.12
+```
+
+옮기기 전 중복 검사에서는 `h2`가 아직 그 IP를 쓰고 있어서 응답이 왔다. IP 충돌을 미리 찾는 방법이다.
+
+```text
+ARPING 192.168.10.12 from 0.0.0.0 vh3
+Unicast reply from 192.168.10.12 [EE:BC:DA:F7:D4:5E]  0.604ms
+Sent 1 probes (1 broadcast(s))
+Received 1 response(s)
+```
+
+IP를 옮긴 뒤 보낸 Gratuitous ARP는 `h1`에서 이렇게 잡혔다. 묻는 IP와 알리는 IP가 같은 요청이다.
+
+```text
+23:03:13.260220 ae:b4:83:ef:2b:11 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.10.12 (ff:ff:ff:ff:ff:ff) tell 192.168.10.12, length 28
+```
+
+`h1`의 캐시는 `ee:bc:da:f7:d4:5e REACHABLE`에서 바로 `ae:b4:83:ef:2b:11 STALE`로 바뀌었다. 다음 패킷부터는 새 주인에게 간다.
+
+```text
+192.168.10.12 dev vh1 lladdr ae:b4:83:ef:2b:11 STALE
+```
+
+같은 성질이 공격에도 쓰인다. ARP에는 인증이 없어서, 같은 망의 누구든 "게이트웨이 IP는 내 MAC"이라는 응답을 계속 뿌리면 남의 트래픽을 자기에게 끌어올 수 있다. 이걸 ARP 스푸핑이라고 한다. 카페 Wi-Fi 같은 공용 망에서 중간자 공격의 출발점이 되는 방식이고, HTTPS가 필요한 이유 중 하나다. 회사 망에서는 스위치의 Dynamic ARP Inspection 같은 기능으로 막는다.
+
+## VLAN: 스위치 하나를 여러 망으로
+
+스위치 한 대에 꽂힌 기기를 부서별로 다른 망에 두고 싶을 때 VLAN을 쓴다. 이더넷 헤더의 보내는 쪽 MAC 뒤에 4바이트 802.1Q 태그를 끼우고, 그 안의 12비트 VLAN ID로 망을 가른다. ID는 1~4094를 쓸 수 있다(0과 4095는 예약). 태그 4바이트 때문에 VLAN 프레임의 최대 크기는 1522바이트다.
+
+스위치 포트는 보통 두 종류로 설정한다. 액세스 포트는 한 VLAN에만 속하고 태그 없는 프레임을 주고받는다. PC나 서버가 꽂히는 포트다. 트렁크 포트는 여러 VLAN의 프레임을 태그를 붙인 채 나른다. 스위치끼리, 또는 가상화 호스트와 스위치를 잇는 포트다. VLAN이 다른 기기끼리는 같은 스위치에 꽂혀 있어도 브로드캐스트가 닿지 않으니 ARP도 안 되고, 통신하려면 라우터(또는 L3 스위치)를 거쳐야 한다.
+
+Ubuntu에서는 `ip link add link eth0 name eth0.10 type vlan id 10`처럼 태그를 붙이는 하위 인터페이스를 만든다. 이 글의 실습 컨테이너는 커널의 VLAN 모듈이 없어서 이 명령이 `Error: Unknown device type.`으로 실패했다. 태그가 붙은 프레임을 `tcpdump -e`로 보면 아래와 같은 모양으로 찍힌다(직접 캡처하지 못한 예시다).
+
+```text
+12:00:00.000000 aa:bb:cc:00:00:01 > aa:bb:cc:00:00:02, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), 172.20.10.11 > 172.20.10.12: ICMP echo request, id 1, seq 1, length 64
+```
+
+## IPv6에는 ARP가 없다
+
+IPv6는 ARP 대신 NDP(Neighbor Discovery Protocol)를 쓴다. 같은 일을 ICMPv6 메시지로 한다. "이 IP 가진 사람"이라는 질문(Neighbor Solicitation)을 브로드캐스트가 아니라 대상 IP에서 계산한 멀티캐스트 주소로 보내서, 망의 모든 기기가 아니라 관련 있는 기기만 받는다. 응답은 Neighbor Advertisement다. 리눅스에서는 같은 이웃 테이블에 들어가므로 `ip -6 neigh`로 본다.
+
+실무에서 기억할 차이가 하나 있다. NDP는 ICMPv6 위에서 돌기 때문에 IPv6 방화벽에서 ICMPv6를 통째로 막으면 이웃 찾기부터 깨져 같은 망 통신이 안 된다. [iptables 글](/posts/iptables-basics)에서 ip6tables 규칙을 따로 만들 때 ICMPv6를 열어 두는 이유다.
+
+## 현장에서 L2를 만나는 순간
+
+L2 문제는 대부분 "같은 망 안인데 안 된다"는 모양으로 온다. 확인 순서는 짧다. `ip -br link`로 `LOWER_UP`인지, `ip -s link`의 오류 카운터가 늘어나는지, `ip neigh`에 상대가 `FAILED`나 `INCOMPLETE`로 남아 있는지를 본다. 같은 IP로 `arping`을 쳤을 때 서로 다른 MAC 두 개가 번갈아 답하면 IP 충돌이다. 접속이 됐다 안 됐다를 반복하는 증상이라 앱 버그처럼 보이기 쉽다.
+
+클라우드에서는 L2가 거의 보이지 않는다. AWS VPC는 문서상 브로드캐스트를 지원하지 않고(멀티캐스트는 Transit Gateway를 거칠 때만 된다), ARP 요청에는 인스턴스가 아니라 VPC 쪽이 답한다. 그래서 온프레미스에서 쓰던 keepalived의 Gratuitous ARP로 가상 IP를 옮기는 방식이 그대로는 동작하지 않고, 장애 조치 때 API로 보조 사설 IP나 Elastic IP를 다른 인스턴스로 다시 붙이는 식으로 바꿔야 한다. 다른 클라우드도 비슷한 제약이 있으니, 가상 IP 기반 이중화를 옮겨 갈 때는 그 클라우드 문서부터 확인한다.
+
+컨테이너와 쿠버네티스에서는 L2가 소프트웨어로 들어온다. Docker 브리지와 veth, 쿠버네티스 CNI가 만드는 브리지(`cni0` 등)가 전부 리눅스 브리지와 이웃 테이블 위에서 돈다. 베어메탈 쿠버네티스에서 MetalLB L2 모드로 LoadBalancer IP를 쓰면, 그 IP를 맡은 노드가 바뀔 때 Gratuitous ARP가 나간다. 장애 조치 직후 일부 클라이언트만 잠시 끊긴다면 그 클라이언트나 중간 장비가 Gratuitous ARP를 무시하는지 의심한다. 리눅스는 이미 있는 항목은 Gratuitous ARP로 갱신하지만, 캐시에 없던 IP의 항목을 새로 만들지는 기본값(`arp_accept=0`)에서 하지 않는다.
+
+## 한 구간을 맡는 층
+
+데이터 링크 계층은 같은 망 안에서 프레임을 옆 기기까지 건네는 일을 맡는다. 주소는 MAC이고, 스위치는 보내는 쪽 MAC으로 포트를 배워 받는 쪽 MAC으로 프레임을 보낸다. IP 주소밖에 모르는 위층과 이 층을 잇는 게 ARP다. 같은 망이면 상대의 MAC을, 다른 망이면 게이트웨이의 MAC을 브로드캐스트로 묻고, 답은 캐시에 둔다. 그 캐시가 낡으면 IP를 옮겨도 패킷이 옛 기기로 가고, Gratuitous ARP가 이걸 고친다. 다음 글에서는 한 층 올라가 [IP 주소와 서브넷](/posts/layer-ip-addressing)을 본다.
+
+## 면접에서 나올 만한 질문
+
+### ARP는 어떻게 동작하나요?
+
+IP 주소로 같은 망 안 기기의 MAC 주소를 찾는 프로토콜이다. 받는 쪽 MAC을 브로드캐스트로 적은 요청에 찾는 IP와 내 MAC·IP를 넣어 보내면, 그 IP를 가진 기기만 자기 MAC을 담아 유니캐스트로 답한다. 답은 이웃 캐시에 저장해서 한동안 다시 묻지 않고, 요청을 받은 쪽도 묻는 쪽의 정보를 캐시에 적는다.
+
+### 다른 망의 서버로 패킷을 보낼 때 ARP로 누구의 MAC을 묻나요?
+
+목적지 서버가 아니라 기본 게이트웨이의 MAC을 묻는다. 브로드캐스트는 라우터를 넘지 못하고, MAC 주소는 한 구간에서만 의미가 있기 때문이다. 그래서 프레임의 받는 쪽 MAC은 게이트웨이, IP의 목적지는 최종 서버가 되고, 라우터마다 이더넷 헤더를 새로 단다.
+
+### 스위치는 MAC 주소 테이블을 어떻게 채우나요?
+
+들어오는 프레임의 보내는 쪽 MAC과 들어온 포트를 짝지어 적는다. 받는 쪽 MAC이 표에 있으면 그 포트로만 보내고, 없거나 브로드캐스트면 들어온 포트를 뺀 모든 포트로 퍼뜨린다. 항목은 일정 시간(리눅스 브리지 기본 300초) 안 쓰이면 지워진다.
+
+### 허브와 스위치, 충돌 도메인과 브로드캐스트 도메인의 차이는요?
+
+허브는 신호를 모든 포트로 복사해서 연결된 기기 전체가 하나의 충돌 도메인이었다. 스위치는 포트마다 충돌 도메인을 나누고 프레임을 필요한 포트로만 보낸다. 하지만 브로드캐스트는 스위치 전체로 퍼지므로 브로드캐스트 도메인은 그대로 하나이고, 이걸 나누려면 VLAN이나 라우터가 필요하다.
+
+### Gratuitous ARP는 무엇이고 언제 쓰나요?
+
+묻는 사람이 없는데 "이 IP는 내 MAC"이라고 망 전체에 알리는 ARP다. 가상 IP가 다른 서버로 옮겨 갔을 때 다른 기기들의 낡은 캐시를 즉시 고치려고 keepalived, MetalLB L2 모드 같은 도구가 보낸다. 인증이 없어서 ARP 스푸핑에도 같은 방식이 악용되고, AWS VPC처럼 ARP를 클라우드가 대신 처리하는 곳에서는 효과가 없다.
+
+### ip neigh에서 STALE과 FAILED는 무엇이 다른가요?
+
+STALE은 MAC은 알지만 최근 확인을 못 한 상태로, 그대로 그 MAC으로 보내면서 DELAY와 PROBE를 거쳐 다시 확인한다. FAILED는 ARP 요청에 끝내 답이 없어서 MAC을 모르는 상태다. 같은 서브넷의 서버와 통신이 안 되는데 FAILED가 보이면 방화벽이나 앱보다 상대 기기의 전원, 케이블, VLAN 같은 L2부터 본다.
+
+### MAC 주소만으로 기기를 식별하거나 인증해도 되나요?
+
+권하지 않는다. MAC은 소프트웨어로 쉽게 바꿀 수 있고, 첫 바이트의 로컬 관리 비트를 켠 주소를 가상 머신, 컨테이너, 스마트폰의 무작위 MAC 기능이 흔히 쓴다. 게다가 MAC은 라우터를 넘으면 사라지는 한 구간짜리 주소라 다른 망에서는 보이지 않는다.

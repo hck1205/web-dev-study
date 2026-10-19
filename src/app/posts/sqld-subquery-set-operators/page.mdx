@@ -4,7 +4,7 @@ export const metadata = getPostMetadata("sqld-subquery-set-operators");
 
 인사팀에서 "자기 부서 평균보다 급여를 많이 받는 사람" 명단을 달라고 한다. 처음 떠오르는 방법은 두 번에 나눠 하는 것이다. 부서별 평균을 먼저 구해서 숫자를 적어 두고, 그 숫자를 넣은 쿼리를 부서마다 하나씩 다시 돌린다. 부서가 셋이면 쿼리가 넷이다. 다음 달 급여가 바뀌면 처음부터 다시 해야 한다.
 
-SQL은 쿼리 안에 쿼리를 넣을 수 있다. 평균을 구하는 쿼리를 바깥 쿼리의 조건 자리에 그대로 끼워 넣으면 한 번에 끝난다. 이 안쪽 쿼리를 서브쿼리라고 부른다. 이 글은 서브쿼리를 어디에 넣을 수 있는지, 몇 줄을 돌려주느냐에 따라 연산자가 어떻게 달라지는지, 그리고 결과 두 개를 위아래로 붙이는 집합 연산자(`UNION`, `INTERSECT`, `MINUS`)까지 SQLD 시험 범위를 따라간다.
+SQL은 쿼리 안에 쿼리를 넣을 수 있다. 평균을 구하는 쿼리를 바깥 쿼리의 조건 자리에 그대로 끼워 넣으면 한 번에 끝난다. 이 안쪽 쿼리를 서브쿼리라고 부른다. 이 글은 서브쿼리를 어디에 넣을 수 있는지, 몇 줄을 돌려주느냐에 따라 연산자가 어떻게 달라지는지, `NOT IN`에 NULL이 하나 섞였을 때 결과가 통째로 사라지는 함정까지 SQLD 시험 범위를 따라간다. 바깥 행마다 다시 도는 상관 서브쿼리와 스칼라 서브쿼리, 뷰는 [상관 서브쿼리 글](/posts/sqld-correlated-subquery)에서, 결과 두 개를 위아래로 붙이는 집합 연산자는 [집합 연산자 글](/posts/sqld-set-operators)에서 이어 간다.
 
 SQLD는 Oracle 문법으로 문제를 낸다. 이 블로그의 기준은 PostgreSQL 16이라, 쿼리는 Oracle 문법을 먼저 쓰고 PostgreSQL과 SQL Server가 다른 곳을 짚는다. 결과는 PostgreSQL 16.15에 아래 데이터를 넣고 실제로 돌린 출력이다. Oracle에서만 되는 문법은 같은 뜻의 PostgreSQL 쿼리로 돌려서 결과가 같다는 것을 확인했다.
 
@@ -509,435 +509,55 @@ ORDER BY e.empno;
 
 마지막 두 테스트는 PostgreSQL에서 `NULL::int NOT IN (1)`이 NULL, `NULL::int NOT IN (SELECT 1 WHERE false)`가 참으로 나오는 것을 확인한 값이다.
 
-## 바깥 행마다 다시 도는 상관 서브쿼리
+## 현장에서 NOT IN이 느려지는 순간
 
-처음 요청으로 돌아간다. 인라인 뷰 말고, 서브쿼리 안에서 바깥 쿼리의 컬럼을 참조하는 방법도 있다.
+`NOT IN`의 문제는 결과가 틀리는 것만이 아니다. PostgreSQL은 `NOT IN (SELECT ...)`을 NULL 규칙 때문에 안티 조인으로 바꾸지 못하고, 서브쿼리 결과를 해시 표 하나에 담아 행마다 찾아보는 방식(`hashed SubPlan`)으로 처리한다. 해시 표가 작업 메모리(`work_mem`)에 들어가지 않으면 그마저 못 하고, 바깥 행마다 서브쿼리 결과를 처음부터 훑는다. 2만 행짜리 사원 테이블에서 "부하 없는 사람"을 두 방식으로 찾아봤다. 실험이 짧게 끝나도록 `work_mem`을 일부러 64kB로 줄였다.
 
 ```sql
-SELECT e.ename, e.deptno, e.sal
-FROM emp e
-WHERE e.sal > (SELECT AVG(i.sal)
-               FROM emp i
-               WHERE i.deptno = e.deptno)   -- 바깥 행의 deptno를 쓴다
-ORDER BY e.deptno, e.sal DESC, e.empno;
+-- 사원 2만 명, 열 명마다 상사 한 명 (mgr에 NULL은 없다)
+CREATE TABLE emp_mid AS
+SELECT i AS empno, (i + 9) / 10 AS mgr FROM generate_series(1, 20000) AS i;
+VACUUM ANALYZE emp_mid;
+SET work_mem = '64kB';
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM emp_mid e WHERE e.empno NOT IN (SELECT mgr FROM emp_mid);
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM emp_mid e WHERE NOT EXISTS (SELECT 1 FROM emp_mid s WHERE s.mgr = e.empno);
 ```
 
 ```text
- ename | deptno | sal
--------+--------+------
- KING  |     10 | 5000
- SCOTT |     20 | 3000
- FORD  |     20 | 3000
- JONES |     20 | 2975
- BLAKE |     30 | 2850
- ALLEN |     30 | 1600
-(6 rows)
+                                      QUERY PLAN
+---------------------------------------------------------------------------------------
+ Aggregate (actual time=50354.839..50354.842 rows=1 loops=1)
+   ->  Seq Scan on emp_mid e (actual time=3936.580..50347.173 rows=18000 loops=1)
+         Filter: (NOT (SubPlan 1))
+         Rows Removed by Filter: 2000
+         SubPlan 1
+           ->  Materialize (actual time=0.001..1.396 rows=19000 loops=20000)
+                 ->  Seq Scan on emp_mid (actual time=0.026..3.342 rows=20000 loops=1)
+ Planning Time: 0.091 ms
+ Execution Time: 59813.708 ms
+(9 rows)
+
+                                      QUERY PLAN
+---------------------------------------------------------------------------------------
+ Aggregate (actual time=11.722..11.725 rows=1 loops=1)
+   ->  Hash Anti Join (actual time=4.184..10.729 rows=18000 loops=1)
+         Hash Cond: (e.empno = s.mgr)
+         ->  Seq Scan on emp_mid e (actual time=0.006..1.386 rows=20000 loops=1)
+         ->  Hash (actual time=3.532..3.533 rows=20000 loops=1)
+               Buckets: 4096  Batches: 16  Memory Usage: 74kB
+               ->  Seq Scan on emp_mid s (actual time=0.001..1.498 rows=20000 loops=1)
+ Planning Time: 0.278 ms
+ Execution Time: 11.753 ms
+(9 rows)
 ```
 
-인라인 뷰와 같은 여섯 명이다. 안쪽의 `e.deptno`가 바깥 쿼리의 별칭 `e`를 가리킨다. 이렇게 바깥과 엮인 서브쿼리를 상관 서브쿼리(correlated subquery)라고 한다. 앞에서 본 `(SELECT AVG(sal) FROM emp)`처럼 바깥과 상관없이 혼자 실행되는 것은 비상관 서브쿼리다.
+결과는 둘 다 18,000명으로 같다. 그런데 `NOT IN`은 1분 가까이 걸렸고 `NOT EXISTS`는 12ms다. 첫 계획에서 볼 곳은 `Filter: (NOT (SubPlan 1))`과 그 아래 `loops=20000`이다. 바깥 2만 행마다 서브쿼리 결과를 다시 훑었다는 뜻이다. 두 번째는 `Hash Anti Join` 한 번으로 끝났다. 메모리가 모자라도 해시를 여러 조각(`Batches: 16`)으로 나눠 처리할 수 있어서 이렇게 무너지지 않는다.
 
-둘은 실행되는 방식이 다르다. 비상관 서브쿼리는 한 번 돌아서 값을 만들어 두면 끝이다. 상관 서브쿼리는 바깥 행이 바뀔 때마다 안쪽 값이 달라지니, 개념상 바깥 행마다 다시 실행된다. 아래 그림에서 다음을 누르면 처음 두 행이 처리되는 순서가 나온다.
-
-<SequenceDiagram
-  caption="상관 서브쿼리는 바깥 행의 값을 받아 다시 돈다"
-  actors={[
-    { id: "outer", label: "바깥 쿼리" },
-    { id: "inner", label: "서브쿼리" },
-    { id: "emp", label: "EMP" },
-  ]}
-  steps={[
-    {
-      from: "outer",
-      to: "outer",
-      label: "SMITH 읽기",
-      title: "바깥에서 한 행을 꺼낸다",
-      detail: "첫 행은 SMITH다. 급여 800, 부서 20이다. 조건을 판정하려면 20번 부서 평균이 필요하다.",
-    },
-    {
-      from: "outer",
-      to: "inner",
-      label: "e.deptno = 20",
-      title: "바깥 값을 넘긴다",
-      detail: "서브쿼리 안의 e.deptno 자리에 20이 들어간다. 서브쿼리는 이 값 없이는 실행할 수 없다.",
-    },
-    {
-      from: "inner",
-      to: "emp",
-      label: "deptno = 20",
-      title: "20번 부서를 읽는다",
-      detail: "20번 부서 다섯 명의 급여를 모은다.",
-      payload: "800, 2975, 3000, 1100, 3000",
-    },
-    {
-      from: "inner",
-      to: "outer",
-      label: "AVG = 2175",
-      title: "평균 하나를 돌려준다",
-      detail: "800 > 2175는 거짓이라 SMITH는 빠진다.",
-    },
-    {
-      from: "outer",
-      to: "inner",
-      label: "e.deptno = 30",
-      title: "다음 행 ALLEN",
-      detail: "ALLEN은 30번 부서다. 값이 바뀌었으니 서브쿼리를 다시 실행한다.",
-    },
-    {
-      from: "inner",
-      to: "outer",
-      label: "AVG = 1566.67",
-      title: "다시 판정한다",
-      detail: "1600 > 1566.67이라 ALLEN은 남는다. 이렇게 바깥 14행마다 반복한다.",
-    },
-  ]}
-/>
-
-14행이면 괜찮지만 바깥이 100만 행이면 서브쿼리를 100만 번 도는 셈이다. 실제로는 옵티마이저가 이 쿼리를 조인으로 바꿔(서브쿼리 unnesting) 한 번에 처리하거나, 같은 입력값의 결과를 기억해 두기도 한다. Oracle은 스칼라 서브쿼리의 입력값별 결과를 캐시하고, PostgreSQL 14부터는 조인 안쪽 결과를 기억하는 Memoize 노드가 있다. 그래도 항상 그렇게 된다는 보장은 없으니, 느리면 실행 계획을 보고 인라인 뷰나 조인으로 직접 바꾼다. 실행 계획 읽는 법은 [인덱스 글](/posts/db-index)에 있다.
-
-같은 결과를 내는 세 번째 방법은 윈도우 함수다. 부서 평균을 행마다 붙여 놓고 바깥에서 거른다. [SQLD 윈도우 함수](/posts/sqld-window-functions) 글에서 이어서 본다.
-
-상관 서브쿼리는 `EXISTS`와 짝이 많다. 앞의 `EXISTS (SELECT 1 FROM emp e WHERE e.deptno = d.deptno)`도 상관 서브쿼리다. UPDATE와 DELETE에도 쓴다. 예를 들어 `UPDATE emp e SET sal = (SELECT ... WHERE x.deptno = e.deptno)`처럼 행마다 다른 값으로 고칠 때다.
-
-## SELECT 절에는 값 하나만 들어간다
-
-스칼라 서브쿼리는 반드시 한 행, 한 컬럼이어야 한다. 0행이면 NULL이 되지만, 2행 이상이면 오류다. 부서마다 사원 이름을 붙이려고 이렇게 쓰면 터진다.
-
-```sql
-SELECT d.dname,
-       (SELECT e.ename FROM emp e WHERE e.deptno = d.deptno) AS ename   -- 부서당 여러 명
-FROM dept d;
-```
-
-```text
-ERROR:  more than one row returned by a subquery used as an expression
-```
-
-Oracle에서도 `ORA-01427`이다. 컬럼이 두 개여도 안 된다. 스칼라 서브쿼리로 이름과 급여를 같이 가져오려면 서브쿼리를 두 번 쓰거나 조인으로 바꾼다. 집계 함수(`COUNT`, `MAX`)를 쓰면 항상 한 행이 나오니 안전하다.
-
-```sql
-SELECT d.dname,
-       (SELECT COUNT(*) FROM emp e WHERE e.deptno = d.deptno) AS cnt
-FROM dept d
-ORDER BY d.deptno;
-```
-
-```text
-   dname    | cnt
-------------+-----
- ACCOUNTING |   3
- RESEARCH   |   5
- SALES      |   6
- OPERATIONS |   0
-(4 rows)
-```
-
-`COUNT`는 대상이 없으면 NULL이 아니라 0을 돌려준다. `MAX`였다면 OPERATIONS 칸이 NULL이었을 것이다. 시험에서 0과 NULL을 구분하는 보기가 자주 나온다.
-
-## 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다
-
-부서 평균을 구하는 인라인 뷰를 여러 화면에서 쓴다면, 이름을 붙여 저장해 둘 수 있다. 그게 뷰(view)다. 뷰는 데이터를 따로 저장하지 않고 쿼리만 저장한다. 조회할 때마다 그 쿼리가 실행된다. 인라인 뷰는 이름 없이 한 번 쓰는 뷰라고 보면 된다.
-
-```sql
-CREATE VIEW v_dept_avg AS
-SELECT deptno, ROUND(AVG(sal)) AS avg_sal, COUNT(*) AS cnt
-FROM emp
-GROUP BY deptno;
-
-SELECT * FROM v_dept_avg ORDER BY deptno;
-```
-
-```text
- deptno | avg_sal | cnt
---------+---------+-----
-     10 |    2917 |   3
-     20 |    2175 |   5
-     30 |    1567 |   6
-(3 rows)
-```
-
-뷰를 쓰는 이유는 세 가지 정도다. 복잡한 쿼리를 테이블처럼 짧게 부를 수 있다(편리성). 테이블 구조가 바뀌어도 뷰 정의만 고치면 뷰를 쓰는 쿼리는 그대로다(독립성). 그리고 급여 같은 민감한 컬럼을 뺀 뷰에만 권한을 주면 원본 테이블을 감출 수 있다(보안성). 단점도 있다. 뷰 자체에는 인덱스를 만들 수 없고(Oracle의 materialized view나 SQL Server의 indexed view는 결과를 실제로 저장하는 다른 물건이다), 정의를 바꾸려면 `CREATE OR REPLACE VIEW`나 다시 만들어야 한다. `ALTER VIEW`로 정의 자체를 바꾸지는 못한다.
-
-뷰로 데이터를 넣거나 고칠 수도 있다. 단, 한 테이블에서 행을 그대로 가져오는 단순한 뷰만 된다. `GROUP BY`가 들어간 뷰에 넣으려고 하면 PostgreSQL은 이렇게 거절한다.
-
-```sql
-INSERT INTO v_dept_avg VALUES (50, 1000, 1);
-```
-
-```text
-ERROR:  cannot insert into view "v_dept_avg"
-DETAIL:  Views containing GROUP BY are not automatically updatable.
-HINT:  To enable inserting into the view, provide an INSTEAD OF INSERT trigger or an unconditional ON INSERT DO INSTEAD rule.
-```
-
-단순한 뷰에는 `WITH CHECK OPTION`을 붙일 수 있다. 뷰의 WHERE 조건을 벗어나는 행은 뷰로 넣거나 고치지 못하게 막는다. 20번 부서 전용 뷰로 30번 부서 사원을 넣거나, 기존 사원을 10번으로 옮기려고 하면 거절된다.
-
-```sql
-CREATE VIEW v_emp20 AS
-SELECT empno, ename, sal, deptno FROM emp
-WHERE deptno = 20
-WITH CHECK OPTION;
-
-INSERT INTO v_emp20 VALUES (9001, 'KIM', 1000, 30);        -- 뷰 조건 밖
-UPDATE v_emp20 SET deptno = 10 WHERE ename = 'SMITH';      -- 고친 뒤 뷰 조건 밖
-```
-
-```text
-ERROR:  new row violates check option for view "v_emp20"
-DETAIL:  Failing row contains (9001, KIM, null, null, null, 1000, null, 30).
-ERROR:  new row violates check option for view "v_emp20"
-DETAIL:  Failing row contains (7369, SMITH, CLERK, 7902, 1980-12-17, 800, null, 10).
-```
-
-`UPDATE v_emp20 SET sal = 900 WHERE ename = 'SMITH'`처럼 조건 안에 머무는 변경은 통과한다. Oracle은 뷰를 아예 읽기 전용으로 만드는 `WITH READ ONLY`도 있다.
-
-## 결과를 위아래로 붙이는 집합 연산자
-
-조인이 테이블을 옆으로 붙인다면, 집합 연산자는 두 쿼리의 결과를 위아래로 붙인다. 10번 부서와 20번 부서의 직무를 합쳐 본다. 10번은 CLERK, MANAGER, PRESIDENT이고, 20번은 ANALYST 2명, CLERK 2명, MANAGER 1명이다.
-
-```sql
-SELECT job FROM emp WHERE deptno = 10
-UNION ALL
-SELECT job FROM emp WHERE deptno = 20;
-```
-
-```text
-    job
------------
- MANAGER
- PRESIDENT
- CLERK
- CLERK
- MANAGER
- ANALYST
- CLERK
- ANALYST
-(8 rows)
-```
-
-`UNION ALL`은 3행과 5행을 그대로 이어 8행을 만든다. 중복도, 순서도 손대지 않는다. `UNION`은 이어 붙인 다음 중복을 지운다.
-
-```sql
-SELECT job FROM emp WHERE deptno = 10
-UNION
-SELECT job FROM emp WHERE deptno = 20;
-```
-
-```text
-    job
------------
- ANALYST
- CLERK
- MANAGER
- PRESIDENT
-(4 rows)
-```
-
-중복을 지우려면 같은 값을 찾아야 한다. 아래 그림은 `UNION`이 8행을 훑으며 처음 보는 값만 남기는 과정이다.
-
-<AlgoTrace
-  caption="UNION은 이어 붙인 뒤 중복을 지운다"
-  memoryLabel="남긴 값"
-  cells={["MANAGER", "PRESIDENT", "CLERK", "CLERK", "MANAGER", "ANALYST", "CLERK", "ANALYST"]}
-  steps={[
-    { memory: [], caption: "앞의 3행(10번 부서)과 뒤의 5행(20번 부서)을 먼저 이어 붙인다. 여기까지가 UNION ALL이다." },
-    { pointer: 0, memory: ["MANAGER"], caption: "MANAGER는 처음 본다. 남긴다." },
-    { pointer: 2, memory: ["MANAGER", "PRESIDENT", "CLERK"], caption: "PRESIDENT, CLERK도 처음이라 남긴다." },
-    { pointer: 4, found: [3, 4], memory: ["MANAGER", "PRESIDENT", "CLERK"], caption: "CLERK과 MANAGER는 이미 있다. 버린다. 이 '이미 있나' 검사를 위해 정렬하거나 해시 표를 만든다." },
-    { pointer: 7, found: [3, 4, 6, 7], memory: ["MANAGER", "PRESIDENT", "CLERK", "ANALYST"], caption: "ANALYST를 하나 남기고 나머지 중복을 버리면 4행이 된다. UNION ALL은 이 검사 단계가 통째로 없다." },
-  ]}
-/>
-
-이 검사 단계가 비용이다. 실행 계획을 보면 차이가 그대로 보인다.
-
-```sql
-EXPLAIN SELECT job FROM emp WHERE deptno = 10
-UNION SELECT job FROM emp WHERE deptno = 20;
-```
-
-```text
-                                 QUERY PLAN
-----------------------------------------------------------------------------
- Unique  (cost=2.37..2.38 rows=2 width=36)
-   ->  Sort  (cost=2.37..2.37 rows=2 width=36)
-         Sort Key: emp.job
-         ->  Append  (cost=0.00..2.36 rows=2 width=36)
-               ->  Seq Scan on emp  (cost=0.00..1.18 rows=1 width=36)
-                     Filter: (deptno = 10)
-               ->  Seq Scan on emp emp_1  (cost=0.00..1.18 rows=1 width=36)
-                     Filter: (deptno = 20)
-(8 rows)
-```
-
-```sql
-EXPLAIN SELECT job FROM emp WHERE deptno = 10
-UNION ALL SELECT job FROM emp WHERE deptno = 20;
-```
-
-```text
-                           QUERY PLAN
-----------------------------------------------------------------
- Append  (cost=0.00..2.36 rows=2 width=36)
-   ->  Seq Scan on emp  (cost=0.00..1.18 rows=1 width=36)
-         Filter: (deptno = 10)
-   ->  Seq Scan on emp emp_1  (cost=0.00..1.18 rows=1 width=36)
-         Filter: (deptno = 20)
-(5 rows)
-```
-
-두 계획 모두 `Append`로 이어 붙이는 데까지는 같다. `UNION`은 그 위에 `Sort`(job으로 정렬)와 `Unique`(붙어 있는 같은 값 제거)가 더 얹혀 있다. 14행에선 차이가 없지만 수백만 행이면 정렬에 메모리와 시간이 든다. 행이 많으면 PostgreSQL은 정렬 대신 해시(`HashAggregate`)로 중복을 지우기도 한다. 그래서 `UNION` 결과가 정렬돼 나온 것은 정렬을 거쳤기 때문일 뿐이고, 순서가 필요하면 `ORDER BY`를 직접 붙여야 한다.
-
-실무 규칙은 단순하다. 두 결과가 겹칠 수 없다는 것을 알면(예: 서로 다른 기간의 주문 테이블) `UNION ALL`을 쓴다. 중복이 있을 수 있는데 지워야 할 때만 `UNION`을 쓴다. 습관처럼 `UNION`을 쓰면 정렬 비용만 낸다.
-
-`UNION`은 행 전체가 같아야 중복이다. 10번 부서 사람과 MANAGER를 합치면 CLARK이 양쪽에 다 있다.
-
-```sql
-SELECT ename, sal FROM emp WHERE deptno = 10
-UNION ALL
-SELECT ename, sal FROM emp WHERE job = 'MANAGER'
-ORDER BY sal DESC;
-```
-
-```text
- ename  | sal
---------+------
- KING   | 5000
- JONES  | 2975
- BLAKE  | 2850
- CLARK  | 2450
- CLARK  | 2450
- MILLER | 1300
-(6 rows)
-```
-
-`UNION`으로 바꾸면 CLARK이 하나로 줄어 5행이 된다.
-
-교집합은 `INTERSECT`, 차집합은 Oracle의 `MINUS`다. PostgreSQL과 SQL Server는 차집합을 `EXCEPT`라고 쓴다. Oracle도 21c부터 `EXCEPT`를 받지만, SQLD 문제는 `MINUS`로 나온다. 셋 다 결과에서 중복을 지운다.
-
-```sql
--- 10번과 20번 부서에 모두 있는 직무
-SELECT job FROM emp WHERE deptno = 10
-INTERSECT
-SELECT job FROM emp WHERE deptno = 20
-ORDER BY job;
-
--- 20번 부서에만 있는 직무 (Oracle은 EXCEPT 자리에 MINUS)
-SELECT job FROM emp WHERE deptno = 20
-EXCEPT
-SELECT job FROM emp WHERE deptno = 10
-ORDER BY job;
-```
-
-```text
-   job
----------
- CLERK
- MANAGER
-(2 rows)
-
-   job
----------
- ANALYST
-(1 row)
-```
-
-차집합은 순서를 바꾸면 결과가 다르다. `10번 MINUS 20번`은 PRESIDENT 한 행이다.
-
-`INTERSECT`는 `EXISTS`로, `MINUS`는 `NOT EXISTS`로 바꿔 쓸 수 있다. 차이는 NULL을 다루는 방식이다. 집합 연산자는 중복을 판단할 때 NULL끼리 같다고 보지만, `NOT EXISTS`의 `=` 비교는 NULL끼리 같다고 보지 않는다. 그리고 `MINUS` 대신 `NOT IN`을 쓰면 앞의 NULL 함정에 그대로 빠진다.
-
-## 집합 연산자의 규칙
-
-집합 연산자로 묶이는 쿼리들은 컬럼 수가 같아야 하고, 같은 위치의 컬럼끼리 데이터 타입이 호환돼야 한다. 어기면 바로 오류다.
-
-```sql
-SELECT ename, sal FROM emp UNION SELECT dname FROM dept;   -- 2개 vs 1개
-SELECT ename FROM emp UNION SELECT deptno FROM dept;       -- 문자 vs 숫자
-```
-
-```text
-ERROR:  each UNION query must have the same number of columns
-ERROR:  UNION types character varying and integer cannot be matched
-```
-
-Oracle에서는 각각 `ORA-01789`, `ORA-01790` 오류다. 컬럼 이름은 같을 필요가 없다. 결과의 컬럼 이름은 첫 번째 쿼리를 따른다.
-
-```sql
-SELECT ename AS name, sal FROM emp WHERE deptno = 10
-UNION ALL
-SELECT dname, deptno FROM dept
-ORDER BY name;          -- 첫 쿼리의 별칭으로 정렬한다
-```
-
-```text
-    name    | sal
-------------+------
- ACCOUNTING |   10
- CLARK      | 2450
- KING       | 5000
- MILLER     | 1300
- OPERATIONS |   40
- RESEARCH   |   20
- SALES      |   30
-(7 rows)
-```
-
-부서 번호가 `sal`이라는 이름으로 나왔다. 결과 컬럼 이름은 첫 쿼리 것을 쓰기 때문이다. 이름이 맞지 않는다는 오류를 기대하면 틀린다.
-
-`ORDER BY`는 맨 마지막에 한 번만 쓴다. 전체 결과를 정렬하는 것이라서다. 중간 쿼리에 쓰면 문법 오류가 난다.
-
-```sql
-SELECT job FROM emp WHERE deptno = 10 ORDER BY job
-UNION
-SELECT job FROM emp WHERE deptno = 20;
-```
-
-```text
-ERROR:  syntax error at or near "UNION"
-```
-
-마지막 `ORDER BY`에는 첫 번째 쿼리의 컬럼 이름이나 별칭, 또는 위치 번호(`ORDER BY 1`)를 쓴다. 두 번째 쿼리에만 있는 컬럼 이름은 쓸 수 없다.
-
-연산자를 여러 개 섞으면 우선순위가 DB마다 다르다. Oracle은 모든 집합 연산자의 우선순위가 같아서 위에서부터 차례로 계산한다. PostgreSQL과 SQL Server는 표준대로 `INTERSECT`를 먼저 계산한다. 같은 쿼리를 보자.
-
-```sql
-SELECT job FROM emp WHERE deptno = 10        -- CLERK, MANAGER, PRESIDENT
-UNION
-SELECT job FROM emp WHERE deptno = 20        -- ANALYST, CLERK, MANAGER
-INTERSECT
-SELECT job FROM emp WHERE deptno = 30        -- CLERK, MANAGER, SALESMAN
-ORDER BY 1;
-```
-
-PostgreSQL은 `20번 INTERSECT 30번`(CLERK, MANAGER)을 먼저 구하고 10번과 합친다.
-
-```text
-    job
------------
- CLERK
- MANAGER
- PRESIDENT
-(3 rows)
-```
-
-Oracle은 `10번 UNION 20번`(4개)을 먼저 구하고 30번과 교집합을 낸다. PostgreSQL에서 괄호로 그 순서를 강제하면 Oracle이 내는 결과와 같은 2행이 나온다.
-
-```sql
-(SELECT job FROM emp WHERE deptno = 10
- UNION
- SELECT job FROM emp WHERE deptno = 20)
-INTERSECT
-SELECT job FROM emp WHERE deptno = 30
-ORDER BY 1;
-```
-
-```text
-   job
----------
- CLERK
- MANAGER
-(2 rows)
-```
-
-같은 SQL이 DB에 따라 PRESIDENT를 포함하기도 하고 빼기도 한다. 세 개 이상 섞을 때는 항상 괄호로 순서를 적는다.
+기본 `work_mem`(4MB)이면 이 크기에서는 `hashed SubPlan`으로 버티지만, 데이터가 커지면 같은 벽을 만난다. 배치가 어느 날부터 끝나지 않는다는 연락을 받고 실행 계획을 열었더니 `NOT (SubPlan`이 보인다면 `NOT EXISTS`로 바꾸는 것이 먼저다. 결과의 정확성(NULL)과 성능 두 가지 이유가 같은 쪽을 가리킨다. Oracle은 `NOT IN`도 NULL을 고려한 안티 조인(null-aware anti join)으로 풀 수 있어서 이만큼 차이가 나지 않을 수 있다. DB마다 다르니 실행 계획으로 확인한다.
 
 ## SQLD 시험 포인트
 
@@ -946,17 +566,21 @@ ORDER BY 1;
 - `> ANY`는 최솟값보다 크다, `> ALL`은 최댓값보다 크다. `= ANY`는 `IN`, `<> ALL`은 `NOT IN`과 같다. 빈 목록에서 `ALL`은 모두 참, `ANY`는 모두 거짓.
 - `NOT IN` 서브쿼리 결과에 NULL이 하나라도 있으면 결과는 0행이다. `NOT EXISTS`는 영향을 받지 않는다.
 - 다중 컬럼 서브쿼리 `(a, b) IN (SELECT ...)`는 Oracle에서 되고 SQL Server에서 안 된다.
-- 상관 서브쿼리는 바깥 컬럼을 참조하고, 바깥 행마다 실행되는 것으로 본다. 서브쿼리 안에서는 바깥 컬럼을 쓸 수 있지만, 바깥에서 서브쿼리의 컬럼을 직접 쓸 수는 없다(인라인 뷰는 예외).
 - Oracle 인라인 뷰 별칭에는 `AS`를 쓰지 않는다. WHERE 절 서브쿼리에는 `ORDER BY`를 쓰지 않는다.
-- 뷰의 장점은 독립성, 편리성, 보안성. 뷰는 쿼리만 저장한다. `ALTER VIEW`로 정의를 못 바꾼다.
-- `UNION`은 중복 제거(정렬 비용), `UNION ALL`은 그대로 이어 붙인다. 차집합은 Oracle `MINUS`, SQL Server `EXCEPT`.
-- 집합 연산자: 컬럼 수와 타입이 맞아야 하고, 컬럼 이름은 첫 쿼리를 따르며, `ORDER BY`는 맨 끝에 한 번. Oracle은 집합 연산자 우선순위가 모두 같다.
 
 ## 면접에서 나올 만한 질문
 
-### 상관 서브쿼리와 비상관 서브쿼리는 어떻게 다른가요?
+### 서브쿼리는 어디에 넣을 수 있고, 각각 무엇이라고 부르나요?
 
-상관 서브쿼리는 바깥 쿼리의 컬럼을 참조해서, 바깥 행마다 값이 달라지고 개념상 행마다 다시 실행된다. 비상관 서브쿼리는 혼자 실행할 수 있어서 한 번 계산한 값을 계속 쓴다. "자기 부서 평균보다 많이 받는 사람"은 부서가 행마다 다르니 상관 서브쿼리가 된다. 실제로는 옵티마이저가 조인으로 풀어 한 번에 처리하는 경우가 많지만 보장되지 않으니, 큰 테이블에서는 실행 계획을 확인한다.
+WHERE와 HAVING의 조건에 넣으면 중첩 서브쿼리, FROM에 넣으면 인라인 뷰, SELECT 목록에 넣으면 스칼라 서브쿼리다. 중첩 서브쿼리는 비교할 값이나 목록을 만들고, 인라인 뷰는 결과를 임시 테이블처럼 다른 테이블과 조인할 수 있으며, 스칼라 서브쿼리는 행마다 값 하나를 컬럼처럼 붙인다. "자기 부서 평균보다 많이 받는 사람"은 부서별 평균을 인라인 뷰로 만들어 조인하면 한 쿼리로 끝난다.
+
+### 단일행 연산자를 쓴 서브쿼리가 여러 행을 돌려주면 어떻게 되나요?
+
+`=`, `>` 같은 단일행 연산자는 값 하나와 비교하니, 서브쿼리가 두 행 이상을 돌려주는 순간 실행 중에 오류가 난다. 데이터가 적을 때는 한 행이라 멀쩡하다가 나중에 터지기 쉽다. 여러 행일 수 있으면 `IN`, `ANY`, `ALL`, `EXISTS` 같은 다중행 연산자를 쓴다.
+
+### > ANY와 > ALL은 어떻게 다른가요?
+
+`> ANY`는 목록 중 하나보다만 크면 참이라 최솟값보다 크다는 뜻이고, `> ALL`은 모든 값보다 커야 하니 최댓값보다 크다는 뜻이다. `= ANY`는 `IN`, `<> ALL`은 `NOT IN`과 같다. 빈 목록이면 `ALL`은 참, `ANY`는 거짓이 된다.
 
 ### NOT IN과 NOT EXISTS 중 무엇을 쓰나요?
 
@@ -966,18 +590,6 @@ ORDER BY 1;
 
 예전에는 "바깥이 크면 EXISTS, 안쪽이 작으면 IN" 같은 규칙이 있었지만, 지금의 Oracle과 PostgreSQL은 둘 다 세미 조인으로 바꿔서 같은 계획이 나오는 경우가 많다. 그래서 규칙보다 실행 계획을 본다. 의미 차이는 분명하다. `EXISTS`는 조건에 맞는 행을 하나 찾으면 멈추고 참/거짓만 내며, 바깥 행을 늘리지 않는다. 조인으로 바꾸면 행이 복제될 수 있어 `DISTINCT`가 필요해진다.
 
-### 스칼라 서브쿼리를 쓸 때 주의할 점은요?
+### NOT IN을 NOT EXISTS로 바꾸면 성능도 달라지나요?
 
-반드시 한 행 한 컬럼을 돌려줘야 한다. 두 행 이상이면 실행 중에 오류가 나는데, 데이터가 적을 때는 멀쩡하다가 나중에 터지기 쉽다. 0행이면 NULL이라 조인처럼 행이 사라지지 않는 대신 빈칸이 생긴다. 그리고 바깥 행마다 실행되니 행이 많으면 느릴 수 있다. Oracle은 입력값별로 결과를 캐시하지만, 입력값 종류가 많으면 효과가 없어서 조인으로 바꾸는 게 낫다.
-
-### UNION과 UNION ALL의 차이와, 어느 것을 기본으로 쓰나요?
-
-`UNION`은 결과를 이어 붙인 뒤 중복을 지우고, `UNION ALL`은 그대로 이어 붙인다. 중복을 지우려면 정렬하거나 해시 표를 만들어야 해서, 실행 계획에 `Sort`와 `Unique`(또는 `HashAggregate`)가 더해진다. 두 결과가 겹칠 수 없거나 중복이 있어도 되면 `UNION ALL`을 기본으로 쓴다. `UNION` 결과가 정렬돼 보이는 건 부수 효과일 뿐이라 순서가 필요하면 `ORDER BY`를 붙인다.
-
-### 집합 연산자를 쓸 때 지켜야 할 규칙은요?
-
-각 쿼리의 컬럼 수가 같고, 같은 위치끼리 타입이 호환돼야 한다. 결과 컬럼 이름은 첫 쿼리를 따르고, `ORDER BY`는 맨 끝에 한 번만 쓰며 첫 쿼리의 이름이나 위치 번호로 정렬한다. 여러 연산자를 섞으면 Oracle은 왼쪽부터 같은 우선순위로, PostgreSQL과 SQL Server는 `INTERSECT`를 먼저 계산해서 결과가 달라질 수 있다. 그래서 괄호로 순서를 적는다.
-
-### 뷰는 왜 쓰고, 한계는 무엇인가요?
-
-복잡한 쿼리에 이름을 붙여 재사용하고(편리성), 테이블 구조가 바뀌어도 뷰만 고치면 되며(독립성), 필요한 컬럼만 보여 주는 뷰에 권한을 줘서 원본을 감출 수 있다(보안성). 뷰는 데이터를 저장하지 않고 조회할 때마다 정의된 쿼리를 실행한다. 그래서 뷰 자체에 인덱스를 만들 수 없고, 집계나 조인이 들어간 뷰는 보통 INSERT나 UPDATE가 안 된다. 뷰로 쓰기를 허용할 때는 `WITH CHECK OPTION`으로 뷰 조건을 벗어나는 변경을 막는다.
+달라질 수 있다. PostgreSQL은 NULL 규칙 때문에 `NOT IN (서브쿼리)`를 안티 조인으로 바꾸지 못하고 해시로 찾아보는데, 해시가 작업 메모리에 안 들어가면 바깥 행마다 서브쿼리 결과를 다시 훑는다. 예제에서 2만 행에 `NOT IN`은 약 60초, `NOT EXISTS`는 Hash Anti Join으로 12ms였다. 실행 계획에 `NOT (SubPlan`이 보이면 바꾼다.

@@ -1,0 +1,405 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-scheduling");
+
+새 노드 그룹을 붙이고 배포했는데 Pod 하나가 몇 분째 Pending이다. NODE 칸은 비어 있고, describe의 Events에는 한 줄만 있다. `0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 node(s) didn't match Pod's node affinity/selector.` 노드는 다섯 개나 있는데 하나도 안 된다고 한다. 이 문장은 스케줄러가 노드를 하나씩 걸러 낸 결과 보고서다. 어떤 체를 거쳤는지 알면 무엇을 고칠지가 바로 보인다.
+
+이 글은 스케줄러가 노드를 고르는 두 단계(거르기와 점수 매기기)를 먼저 보고, 그 체를 사람이 조절하는 방법을 하나씩 실제로 걸어 본다. nodeSelector와 node affinity, taint와 toleration, Pod끼리의 affinity와 anti-affinity, topologySpreadConstraints, 그리고 자리가 없을 때 다른 Pod를 밀어내는 priority와 preemption이다. 모든 출력은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았다. 이 클러스터의 노드는 가짜지만 스케줄러는 진짜라, FailedScheduling 메시지와 배치 결과는 실제 클러스터와 같다. 노드는 다섯 개이고 zone-a에 node-1·node-3, zone-b에 node-2·node-4·node-5가 있다. node-4는 실습용 taint가 걸린 고장 난 노드다.
+
+## 스케줄러는 거르고 나서 고른다
+
+스케줄러가 하는 일은 하나다. nodeName이 빈 Pod를 대기열에서 꺼내, 가장 알맞은 노드 이름을 적어 넣는다(binding). 그 사이에 두 단계가 있다. 먼저 이 Pod를 놓을 수 없는 노드를 거른다(Filter). 남은 노드에 점수를 매겨 가장 높은 곳을 고른다(Score). 아래 그림에서 다음을 누르면 노드 다섯 개가 체를 하나씩 지나간다.
+
+<AlgoTrace
+  caption="Filter는 탈락시키고, Score는 남은 노드에 순위를 매긴다"
+  memoryLabel="떨어진 이유"
+  cells={["node-1", "node-2", "node-3", "node-4", "node-5"]}
+  steps={[
+    { found: [0, 1, 2, 3, 4], memory: ["후보 5"], caption: "requests cpu 200m, toleration 없음인 Pod가 대기열에서 나왔다. 처음엔 모두 후보다." },
+    { pointer: 3, found: [0, 1, 2, 4], memory: ["node-4: taint"], caption: "TaintToleration 필터. node-4의 taint를 견디지 못하니 탈락이다." },
+    { pointer: 2, found: [0, 1, 2, 4], memory: ["node-4: taint"], caption: "NodeResourcesFit 필터. 남은 자리에 200m가 들어가는지 본다. 넷 다 통과다." },
+    { pointer: 1, found: [0, 1, 2, 4], memory: ["node-4: taint", "zone 균형 OK"], caption: "PodTopologySpread, NodeAffinity 같은 필터도 차례로 지난다. 하나라도 걸리면 그 노드는 끝이다." },
+    { pointer: 4, found: [4], memory: ["n1 61", "n2 58", "n3 40", "n5 74"], caption: "점수 단계. 자원이 많이 남은 노드, 이미지가 있는 노드, 분산에 유리한 노드가 점수를 받는다. node-5가 가장 높다." },
+    { pointer: 4, found: [4], memory: ["bind node-5"], caption: "node-5로 binding을 만든다. 점수는 설명을 위한 숫자이고 실제 값은 플러그인마다 0~100을 가중합한다." },
+  ]}
+/>
+
+필터는 노드마다 통과와 탈락 둘 중 하나만 말한다. 자원이 남는지(NodeResourcesFit), taint를 견디는지(TaintToleration), nodeSelector와 affinity에 맞는지(NodeAffinity), 쓰려는 hostPort가 비었는지(NodePorts), 볼륨이 그 노드에 붙을 수 있는지(VolumeBinding, VolumeZone), 분산 규칙을 어기지 않는지(PodTopologySpread, InterPodAffinity). 하나라도 탈락이면 그 노드는 후보에서 빠진다.
+
+점수 단계는 남은 노드끼리의 순위다. 기본 설정에서는 자원이 많이 남은 노드를 선호하고(NodeResourcesFit의 LeastAllocated), CPU와 메모리를 고르게 쓰게 하고(BalancedAllocation), 이미지가 이미 있는 노드에 가산점을 준다(ImageLocality). preferred로 적은 affinity와 PreferNoSchedule taint도 여기서 점수로만 반영된다. 노드가 수백 개가 넘는 클러스터에서는 속도 때문에 모든 노드를 다 보지 않고, 통과한 노드를 일정 비율 찾으면 그 안에서만 점수를 매긴다. 그래서 "가장 좋은 노드"가 아니라 "충분히 좋은 노드"에 갈 때도 있다.
+
+필터를 통과한 노드가 하나도 없으면 Pod는 Pending으로 남고 FailedScheduling 이벤트가 찍힌다. 스케줄러는 이 Pod를 잊지 않는다. 노드가 추가되거나 다른 Pod가 지워지는 등 상황이 바뀌면 다시 시도한다. 그리고 한 번 놓인 Pod는 옮기지 않는다. 노드 사이 균형이 나중에 틀어져도 스케줄러는 손대지 않는다. 다시 나누려면 Pod를 지워 새로 스케줄되게 하거나 descheduler 같은 별도 도구를 쓴다.
+
+## FailedScheduling 한 줄 읽기
+
+처음의 메시지를 만든 Pod는 `disktype: nvme` 라벨이 있는 노드를 요구했다. 그런 노드는 없다.
+
+```bash
+# 이벤트에서 이 Pod의 스케줄 실패 이유만 본다
+kubectl get events --field-selector involvedObject.name=needs-nvme -o custom-columns=REASON:.reason,MESSAGE:.message
+```
+
+```text
+REASON             MESSAGE
+FailedScheduling   0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 node(s) didn't match Pod's node affinity/selector. preemption: 0/5 nodes are available: 5 Preemption is not helpful for scheduling.
+```
+
+메시지를 조각으로 나눠 보자.
+
+<UrlAnatomy
+  caption="FailedScheduling 메시지의 구조"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "total",
+      display: "0/5 nodes are available:",
+      title: "통과한 노드 / 전체 노드",
+      description: "필터를 모두 통과한 노드가 0개라는 뜻이다. 뒤에 노드별로 처음 걸린 이유를 묶어서 센다. 숫자를 더하면 전체 노드 수가 된다.",
+    },
+    {
+      key: "taint",
+      display: "1 node(s) had untolerated taint {lab/sim: }",
+      title: "taint를 견디지 못한 노드",
+      description: "중괄호 안이 taint의 key: value다. Pod에 이 taint에 맞는 toleration을 주거나, 그 노드가 원래 이 Pod용이 아니라면 그냥 두면 된다.",
+    },
+    {
+      key: "affinity",
+      display: "4 node(s) didn't match Pod's node affinity/selector",
+      title: "nodeSelector나 node affinity에 안 맞는 노드",
+      description: "Pod가 요구한 라벨이 노드에 없다. kubectl get nodes -L 라벨이름으로 노드 라벨을 나란히 보고 오타부터 찾는다.",
+      code: "kubectl get nodes -L disktype,topology.kubernetes.io/zone",
+    },
+    {
+      key: "preemption",
+      display: "preemption: 0/5 nodes are available: 5 Preemption is not helpful",
+      title: "다른 Pod를 밀어내도 안 되는지",
+      description: "필터 실패가 자원 때문이 아니라면 낮은 우선순위 Pod를 밀어내도 소용없다는 뜻이다. Insufficient cpu였다면 여기서 밀어낼 대상을 찾았을 것이다.",
+    },
+  ]}
+/>
+
+스케줄러는 노드마다 "처음 걸린 이유" 하나만 센다. 위 메시지에서 node-4는 taint로 세어졌지만 nvme 라벨도 없다. taint를 풀어 줘도 이 Pod는 여전히 못 간다. 메시지가 바뀌면 다음 체가 드러나는 것이니, 고친 뒤에는 이벤트를 다시 읽는다.
+
+자주 보는 이유 문구는 정해져 있다. `Insufficient cpu`·`Insufficient memory`는 requests가 남은 자리보다 크다는 뜻이고 [requests와 limits](/posts/k8s-pod-resources)에서 다뤘다. `didn't match pod anti-affinity rules`와 `didn't match pod topology spread constraints`는 아래에서 직접 만들어 본다. `didn't have free ports for the requested pod ports`는 hostPort가 겹친 경우, `had volume node affinity conflict`는 PV가 다른 존에 있어서 그 존의 노드로만 갈 수 있는 경우다. `node(s) were unschedulable`은 `kubectl cordon`이 걸린 노드다.
+
+## 라벨로 노드를 고른다
+
+가장 단순한 방법은 nodeSelector다. 노드 라벨과 정확히 같은 key=value를 적으면 그 라벨이 있는 노드만 통과한다. 라벨을 붙이고 확인해 보자.
+
+```bash
+# 노드에 라벨을 붙인다
+kubectl label node node-2 node-5 disktype=ssd
+
+# 라벨을 칸으로 나란히 본다
+kubectl get nodes -L topology.kubernetes.io/zone,disktype
+```
+
+```text
+node/node-2 labeled
+node/node-5 labeled
+NAME     STATUS     ROLES    AGE     VERSION       ZONE     DISKTYPE
+node-1   Ready      <none>   4h13m   v1.30.4       zone-a   
+node-2   Ready      <none>   4h13m   v1.30.4       zone-b   ssd
+node-3   Ready      <none>   4h13m   v1.30.4       zone-a   
+node-4   NotReady   <none>   3h59m   kwok-v0.6.1   zone-b   
+node-5   Ready      <none>   32s     v1.30.4       zone-b   ssd
+```
+
+`nodeSelector: { disktype: ssd }`인 Pod는 node-2나 node-5로 간다. 실습에서는 node-5로 갔다. 이것만으로 부족한 경우가 많다. "zone-a나 zone-b 중 하나", "gpu 라벨이 없는 노드", "되도록이면 ssd" 같은 조건은 nodeSelector로 못 쓴다. 그래서 node affinity가 있다.
+
+```yaml
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:   # 반드시. 필터로 동작한다
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In                             # In, NotIn, Exists, DoesNotExist, Gt, Lt
+              values: [zone-a, zone-b]
+            - key: node.kubernetes.io/instance-type
+              operator: NotIn
+              values: [t3.small]
+    preferredDuringSchedulingIgnoredDuringExecution:  # 되도록. 점수로만 반영된다
+      - weight: 80
+        preference:
+          matchExpressions:
+            - key: disktype
+              operator: In
+              values: [ssd]
+```
+
+긴 이름을 끊어 읽으면 뜻이 보인다. requiredDuringScheduling은 스케줄할 때 반드시 지킨다는 뜻이고, IgnoredDuringExecution은 이미 돌고 있는 Pod에는 적용하지 않는다는 뜻이다. Pod가 뜬 뒤에 누가 노드 라벨을 지워도 Pod는 쫓겨나지 않는다. `nodeSelectorTerms` 여러 개는 OR, 한 term 안의 `matchExpressions` 여러 개는 AND다. 이 구분을 거꾸로 알면 의도와 반대로 너무 넓거나 좁은 조건이 된다.
+
+preferred는 맞는 노드가 없어도 Pod를 띄운다. "ssd에 가면 좋지만 없으면 아무 데나"라는 뜻이다. 반드시 지켜야 하는 걸 preferred로 적어 두면, 평소엔 잘 가다가 ssd 노드가 꽉 찬 날 조용히 HDD 노드로 간다.
+
+## taint는 노드가 Pod를 가려 받는 표시다
+
+affinity는 Pod가 노드를 고르는 쪽이다. taint는 반대로 노드가 Pod를 거부하는 쪽이다. 노드에 taint를 걸면 그 taint를 견디는(toleration을 가진) Pod만 들어올 수 있다. 배치 작업 전용 노드를 만들어 보자.
+
+```bash
+# node-3을 배치 전용으로 표시한다
+kubectl taint nodes node-3 dedicated=batch:NoSchedule
+kubectl describe node node-3 | grep -A1 Taints
+```
+
+```text
+node/node-3 tainted
+Taints:             dedicated=batch:NoSchedule
+Unschedulable:      false
+```
+
+toleration이 있는 배치 Pod와 없는 웹 Pod를 둘 다 node-3으로 보내 봤다.
+
+```yaml
+# nightly-report: 이 taint를 견딘다
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: batch
+    effect: NoSchedule
+```
+
+```text
+NAME             READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   READINESS GATES
+nightly-report   1/1     Running   0          4s    10.0.0.8   node-3   <none>           <none>
+web-on-node3     0/1     Pending   0          4s    <none>     <none>   <none>           <none>
+```
+
+```text
+0/5 nodes are available: 1 node(s) had untolerated taint {dedicated: batch}, 1 node(s) had untolerated taint {lab/sim: }, 3 node(s) didn't match Pod's node affinity/selector. preemption: 0/5 nodes are available: 5 Preemption is not helpful for scheduling.
+```
+
+여기서 흔한 오해가 하나 있다. toleration은 "그 노드에 가도 된다"는 허가일 뿐, "그 노드로 가라"는 지시가 아니다. toleration만 준 배치 Pod는 node-3 말고 다른 노드에도 얼마든지 간다. 전용 노드를 만들려면 taint(다른 Pod는 오지 마)와 node affinity(나는 거기로만 가)를 함께 써야 한다. 위 실습에서도 nodeSelector로 node-3을 지정했다.
+
+effect는 세 가지다. NoSchedule은 새 Pod를 받지 않는다. 이미 있는 Pod는 그대로 둔다. PreferNoSchedule은 되도록 받지 않는 것이라 점수에만 반영된다. NoExecute는 새 Pod를 받지 않을 뿐 아니라 이미 돌고 있는 Pod도 쫓아낸다. toleration에 `tolerationSeconds`를 주면 그 시간만큼만 버티다 나간다. node-1에서 확인했다.
+
+```bash
+# stays-20s는 maintenance taint를 20초만 견딘다. no-toleration은 toleration이 없다
+kubectl taint nodes node-1 maintenance=true:NoExecute
+kubectl get pods stays-20s no-toleration
+```
+
+```text
+node/node-1 tainted
+NAME            READY   STATUS        RESTARTS   AGE
+stays-20s       1/1     Running       0          12s
+no-toleration   1/1     Terminating   0          12s
+```
+
+```text
+2026-10-18T23:30:57Z   TaintManagerEviction   stays-20s                 Marking for deletion Pod default/stays-20s
+2026-10-18T23:31:00Z   Killing                stays-20s                 Stopping container
+```
+
+toleration이 없는 Pod는 taint가 걸리자마자 Terminating이 됐고, `stays-20s`는 taint를 건 23:30:37에서 20초 뒤에 지워졌다. 이 동작이 노드 장애 처리의 원리이기도 하다. 노드가 응답을 멈추면 컨트롤 플레인이 `node.kubernetes.io/unreachable:NoExecute` taint를 자동으로 붙인다. 모든 Pod에는 어드미션 단계에서 이 taint를 300초 견디는 toleration이 기본으로 들어간다. 그래서 노드가 죽고 5분이 지나야 Pod가 다른 노드에 다시 만들어진다. 이 5분이 길다면 Deployment의 Pod 템플릿에 tolerationSeconds를 더 짧게 적는다. 너무 짧으면 잠깐의 네트워크 끊김에도 Pod가 우르르 옮겨 다닌다.
+
+taint와 toleration의 짝 맞추기 규칙은 직접 짜 보면 금방 익는다. key가 같고, Equal이면 value도 같고, Exists면 value는 상관없다. effect를 비우면 모든 effect에 맞고, key까지 비운 Exists는 모든 taint에 맞는다. PreferNoSchedule은 막지 않는다.
+
+<CodePlayground
+  caption="toleration으로 갈 수 있는 노드 고르기"
+  functionName="schedulableNodes"
+  initialCode={`function schedulableNodes(nodes, tolerations) {
+  // nodes: [{ name, taints: [{ key, value, effect }] }]
+  // tolerations: [{ key, operator: "Equal" | "Exists", value, effect }]
+  // NoSchedule·NoExecute taint를 모두 견딜 수 있는 노드 이름을 돌려준다
+  return [];
+}`}
+  solution={`function schedulableNodes(nodes, tolerations) {
+  const tolerates = (t, taint) =>
+    (!t.effect || t.effect === taint.effect) &&
+    (t.operator === "Exists"
+      ? !t.key || t.key === taint.key
+      : t.key === taint.key && (t.value || "") === (taint.value || ""));
+  return nodes
+    .filter((n) =>
+      n.taints
+        .filter((taint) => taint.effect !== "PreferNoSchedule")
+        .every((taint) => tolerations.some((t) => tolerates(t, taint)))
+    )
+    .map((n) => n.name);
+}`}
+  tests={[
+    { label: "toleration 없음", args: [[{ name: "node-1", taints: [] }, { name: "node-2", taints: [{ key: "dedicated", value: "batch", effect: "NoSchedule" }] }, { name: "node-3", taints: [{ key: "gpu", value: "true", effect: "NoSchedule" }, { key: "dedicated", value: "batch", effect: "NoSchedule" }] }, { name: "node-4", taints: [{ key: "spot", value: "true", effect: "PreferNoSchedule" }] }], []], expected: ["node-1", "node-4"] },
+    { label: "batch만 견딘다", args: [[{ name: "node-1", taints: [] }, { name: "node-2", taints: [{ key: "dedicated", value: "batch", effect: "NoSchedule" }] }, { name: "node-3", taints: [{ key: "gpu", value: "true", effect: "NoSchedule" }, { key: "dedicated", value: "batch", effect: "NoSchedule" }] }, { name: "node-4", taints: [{ key: "spot", value: "true", effect: "PreferNoSchedule" }] }], [{ key: "dedicated", operator: "Equal", value: "batch", effect: "NoSchedule" }]], expected: ["node-1", "node-2", "node-4"] },
+    { label: "value가 다르면 안 맞는다", args: [[{ name: "node-1", taints: [] }, { name: "node-2", taints: [{ key: "dedicated", value: "batch", effect: "NoSchedule" }] }], [{ key: "dedicated", operator: "Equal", value: "web", effect: "NoSchedule" }]], expected: ["node-1"] },
+    { label: "Exists 두 개", args: [[{ name: "node-1", taints: [] }, { name: "node-3", taints: [{ key: "gpu", value: "true", effect: "NoSchedule" }, { key: "dedicated", value: "batch", effect: "NoSchedule" }] }], [{ key: "dedicated", operator: "Exists" }, { key: "gpu", operator: "Exists" }]], expected: ["node-1", "node-3"] },
+    { label: "key 없는 Exists는 전부", args: [[{ name: "node-2", taints: [{ key: "dedicated", value: "batch", effect: "NoSchedule" }] }, { name: "node-3", taints: [{ key: "gpu", value: "true", effect: "NoExecute" }] }], [{ operator: "Exists" }]], expected: ["node-2", "node-3"] },
+  ]}
+/>
+
+마지막 테스트의 `operator: Exists`만 있는 toleration은 모든 taint를 견딘다. DaemonSet 로그 수집기처럼 어느 노드에든 떠야 하는 것에는 맞지만, 일반 앱에 복사해 넣으면 고장 난 노드나 전용 노드에까지 들어간다. 이 실습 클러스터의 고장 난 node-4에 붙은 시뮬레이션 Pod들이 정확히 그 toleration을 갖고 있다.
+
+## Pod끼리 붙이고 떼어 놓기
+
+노드 라벨이 아니라 "이미 떠 있는 다른 Pod"를 기준으로 고를 수도 있다. pod affinity는 특정 Pod가 있는 곳 근처로, pod anti-affinity는 그런 Pod가 없는 곳으로 간다. "근처"의 범위는 `topologyKey`로 정한다. `kubernetes.io/hostname`이면 같은 노드, `topology.kubernetes.io/zone`이면 같은 존이다.
+
+가장 흔한 용도는 복제본을 서로 다른 노드에 흩어 놓는 것이다. 노드 하나가 죽어도 복제본이 다 같이 죽지 않게 한다. 캐시 Pod 4개를 노드마다 하나씩만 놓도록 required anti-affinity를 걸었다. 그런데 이때 쓸 수 있는 노드는 셋이었다(node-3은 배치 전용 taint, node-4는 고장).
+
+```yaml
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels: { app: cache }
+        topologyKey: kubernetes.io/hostname
+```
+
+```text
+NAME                     READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   READINESS GATES
+cache-5b4944f9dc-2p54c   1/1     Running   0          8s    10.0.0.6   node-1   <none>           <none>
+cache-5b4944f9dc-6bwcp   1/1     Running   0          8s    10.0.0.1   node-2   <none>           <none>
+cache-5b4944f9dc-96q4c   1/1     Running   0          8s    10.0.0.2   node-5   <none>           <none>
+cache-5b4944f9dc-zvg7d   0/1     Pending   0          8s    <none>     <none>   <none>           <none>
+```
+
+```text
+0/5 nodes are available: 1 node(s) had untolerated taint {dedicated: batch}, 1 node(s) had untolerated taint {lab/sim: }, 3 node(s) didn't match pod anti-affinity rules. preemption: 0/5 nodes are available: 2 Preemption is not helpful for scheduling, 3 No preemption victims found for incoming pod.
+```
+
+네 번째는 갈 곳이 없어 Pending이다. required anti-affinity는 replicas가 노드 수를 넘는 순간 이렇게 된다. 롤링 업데이트에서도 같은 일이 생긴다. maxSurge로 새 Pod를 하나 더 띄우려 해도 모든 노드에 이미 옛 Pod가 있으니 새 Pod가 못 뜨고 배포가 멈춘다. 그래서 흩어 놓기는 보통 preferred anti-affinity나 다음에 볼 topologySpreadConstraints로 하고, required는 "절대 같은 노드에 둘이 있으면 안 되는" 경우에만 쓴다.
+
+pod affinity는 반대로 붙여 놓는다. 앱 Pod를 캐시 Pod가 있는 노드에 두면 네트워크 왕복이 짧아진다. 다만 affinity 계산은 클러스터의 Pod를 훑어야 해서 비싸다. 공식 문서도 노드가 수백 개를 넘는 클러스터에서는 스케줄링이 눈에 띄게 느려질 수 있다고 경고한다.
+
+## 존마다 고르게 나눈다
+
+anti-affinity는 "같은 곳에 두지 마"까지만 말한다. 복제본 6개를 존 두 개에 3개씩 나누고 싶다면 topologySpreadConstraints가 더 정확하다.
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1                                   # 가장 많은 곳과 가장 적은 곳의 차이 허용치
+    topologyKey: topology.kubernetes.io/zone    # 무엇을 기준으로 나눌지
+    whenUnsatisfiable: DoNotSchedule            # 못 지키면 Pending (ScheduleAnyway면 점수로만)
+    labelSelector:
+      matchLabels: { app: checkout }
+```
+
+```bash
+# 어느 노드에 몇 개씩 갔는지 센다
+kubectl get pods -l app=checkout -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort | uniq -c
+```
+
+```text
+      2 node-1
+      2 node-2
+      1 node-3
+      1 node-5
+```
+
+zone-a(node-1, node-3)에 3개, zone-b(node-2, node-5)에 3개다. 스케줄러는 Pod 하나를 놓을 때마다 "여기 놓으면 존 사이 차이가 maxSkew를 넘나"를 필터로 확인한다. 존 하나가 통째로 죽으면 남은 존에 3개가 살아 있다.
+
+몇 가지 함정이 있다. 분산은 스케줄할 때만 계산한다. 나중에 Pod가 지워지고 다시 만들어지면서 균형이 깨져도 저절로 고쳐지지 않는다. 그리고 labelSelector가 Pod 템플릿의 라벨과 맞아야 자기 자신을 센다. 다른 앱의 라벨을 적으면 엉뚱한 Pod 수를 기준으로 나눈다. 롤링 업데이트 중에는 옛 버전과 새 버전 Pod가 같은 라벨로 함께 세어지는데, 이게 문제라면 1.27부터 쓸 수 있는 `matchLabelKeys: [pod-template-hash]`로 버전별로 나눠 센다. DoNotSchedule은 존 하나의 노드가 모두 꽉 차면 다른 존에 자리가 있어도 Pending을 만든다. 가용성보다 균형을 우선한다는 뜻이니, 무엇이 더 중요한지에 따라 ScheduleAnyway를 고른다.
+
+## 자리가 없으면 덜 중요한 Pod를 밀어낸다
+
+모든 노드가 requests로 꽉 찼는데 결제 서비스 Pod가 떠야 한다면. PriorityClass로 Pod에 우선순위를 주면, 스케줄러가 높은 Pod를 위해 낮은 Pod를 쫓아낸다. 이걸 preemption이라고 한다.
+
+```yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: batch-low
+value: 1000
+preemptionPolicy: Never   # 이 클래스의 Pod는 남을 밀어내지 않는다. 밀려날 수는 있다
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: service-high
+value: 100000
+```
+
+```bash
+kubectl get priorityclass
+```
+
+```text
+NAME                      VALUE        GLOBAL-DEFAULT   AGE
+batch-low                 1000         false            8s
+service-high              100000       false            8s
+system-cluster-critical   2000000000   false            4h15m
+system-node-critical      2000001000   false            4h15m
+```
+
+아래 두 개는 쿠버네티스가 기본으로 만든다. DNS, 네트워크 플러그인처럼 없으면 클러스터가 멈추는 것들이 쓴다. 이제 CPU 3코어짜리 batch-low Pod로 4코어 노드 셋(node-1, node-2, node-5)을 채우고, `service-high`로 CPU 2코어를 요청하는 payment Pod를 띄웠다. 2코어 노드인 node-3에는 이때 checkout Pod 하나(200m)가 있었다. 아래 그림에서 다음을 누르면 그 뒤에 벌어진 일이 순서대로 나온다.
+
+<SequenceDiagram
+  caption="payment(우선순위 100000)가 자리를 얻기까지"
+  actors={[
+    { id: "sched", label: "스케줄러" },
+    { id: "api", label: "API 서버" },
+    { id: "victim", label: "checkout" },
+    { id: "pay", label: "payment" },
+  ]}
+  steps={[
+    { from: "sched", to: "sched", label: "Filter 실패", title: "어디에도 안 들어간다", detail: "남은 CPU가 2코어인 노드가 없다. 4 Insufficient cpu로 필터가 끝난다." },
+    { from: "sched", to: "sched", label: "PostFilter", title: "밀어낼 대상을 찾는다", detail: "노드마다 우선순위가 낮은 Pod를 빼 보면 들어가는지 계산한다. 가장 적게, 가장 낮은 우선순위를 밀어내는 노드를 고른다." },
+    { from: "sched", to: "api", label: "nominatedNode", title: "자리를 찜해 둔다", detail: "payment의 status.nominatedNodeName에 node-3을 적는다. kubectl get -o wide의 NOMINATED NODE 칸에 보인다." },
+    { from: "api", to: "victim", label: "Preempted", title: "희생자를 지운다", detail: "checkout Pod에 삭제를 요청한다. 보통 종료처럼 유예 시간을 준다. 이벤트에 Preempted by pod ...가 남는다." },
+    { from: "victim", to: "api", label: "종료 완료", title: "자리가 빈다", detail: "희생자가 끝날 때까지 payment는 Pending이다. 그 사이 스케줄러는 terminating pod가 있다며 다시 밀어내지 않는다." },
+    { from: "sched", to: "pay", label: "bind node-3", title: "다시 시도해서 놓는다", detail: "자리가 났으니 필터를 통과한다. checkout은 ReplicaSet이 다른 노드에 새로 만든다." },
+  ]}
+/>
+
+실제 출력은 이렇다.
+
+```bash
+kubectl get pod payment -o wide
+kubectl get events --sort-by=.metadata.creationTimestamp -o custom-columns=REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message | grep -E "payment|Preempt"
+```
+
+```text
+NAME      READY   STATUS    RESTARTS   AGE   IP       NODE     NOMINATED NODE   READINESS GATES
+payment   0/1     Pending   0          1s    <none>   <none>   node-3           <none>
+Preempted              checkout-74964bb47f-mpztc       Preempted by pod 0532e9cf-8440-43b5-ba65-60b34cec0735 on node node-3
+FailedScheduling       payment                         0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 Insufficient cpu.
+FailedScheduling       payment                         0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 Insufficient cpu. preemption: not eligible due to a terminating pod on the nominated node.
+```
+
+예상과 다른 Pod가 밀려났다. 나는 batch-low가 밀려날 줄 알았는데, 스케줄러는 node-3의 checkout을 골랐다. checkout에는 PriorityClass를 안 줬기 때문이다. 클래스가 없는 Pod의 우선순위는 0이다(globalDefault로 지정한 클래스가 있으면 그 값). 0은 batch-low의 1000보다 낮다. "낮음"이라는 이름을 붙인 배치 작업이 이름도 없는 서비스 Pod보다 귀하게 대접받은 것이다.
+
+```bash
+kubectl get pod payment -o jsonpath='{.spec.priority}{"\n"}'
+kubectl get pods -l app=checkout -o jsonpath='{.items[0].spec.priority}{"\n"}'
+```
+
+```text
+100000
+0
+```
+
+그래서 PriorityClass를 도입할 때는 일부만 주면 안 된다. 기본으로 쓸 클래스를 하나 만들어 `globalDefault: true`를 주거나, 모든 워크로드에 클래스를 적는다. 그리고 preemption은 PodDisruptionBudget을 되도록 지키려 하지만 보장하지는 않는다. 밀어낼 대상이 PDB로 보호받는 Pod뿐이면 결국 그걸 밀어낸다. 우선순위 값은 신중하게 몇 단계만 둔다. 팀마다 마음대로 높은 값을 만들면 서로 밀어내는 싸움이 된다.
+
+## 스케줄링을 다시 정리하면
+
+스케줄러는 필터로 놓을 수 없는 노드를 걸러 내고, 남은 노드에 점수를 매겨 하나를 고른다. nodeSelector와 required node affinity, taint, required pod anti-affinity, DoNotSchedule 분산은 필터이고, preferred가 붙은 것들과 PreferNoSchedule은 점수다. 필터를 하나도 못 통과하면 FailedScheduling에 노드별 첫 탈락 이유가 묶여 나오니, 그 문장을 읽고 해당 체를 고친다. toleration은 허가일 뿐 지시가 아니고, 우선순위가 없는 Pod는 0이라 가장 먼저 밀려난다. Pod가 노드는 받았는데도 안 뜬다면 그다음 이야기는 [Pod가 안 뜰 때 보는 순서](/posts/k8s-pod-troubleshooting)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 스케줄러는 어떤 과정으로 노드를 고르나요?
+
+대기열에서 Pod를 꺼내 Filter 단계에서 자원, taint, affinity, 포트, 볼륨, 분산 규칙을 하나라도 어기는 노드를 걸러 낸다. 남은 노드에 Score 단계에서 자원 여유, 균형, 이미지 유무, preferred 조건으로 점수를 매겨 가장 높은 노드에 binding한다. 통과한 노드가 없으면 Pending으로 두고 FailedScheduling 이벤트를 남긴 뒤 상황이 바뀌면 다시 시도한다.
+
+### nodeSelector와 node affinity는 어떻게 다른가요?
+
+nodeSelector는 라벨이 정확히 같은 노드만 고르는 단순한 필터다. node affinity는 In, NotIn, Exists, Gt 같은 연산자와 OR·AND 조합을 쓸 수 있고, required(필터)와 preferred(가중치 점수)를 나눌 수 있다. 이름의 IgnoredDuringExecution은 이미 떠 있는 Pod에는 조건을 다시 적용하지 않는다는 뜻이다.
+
+### taint와 toleration은 무엇이고, 전용 노드는 어떻게 만드나요?
+
+taint는 노드가 맞는 toleration이 없는 Pod를 거부하는 표시이고, toleration은 그 taint를 견딜 수 있다는 Pod 쪽 표시다. toleration은 들어갈 수 있다는 허가일 뿐 그 노드로 가라는 지시가 아니어서, 전용 노드는 taint와 node affinity(또는 nodeSelector)를 함께 써서 만든다. NoExecute는 이미 돌고 있는 Pod도 쫓아내고, tolerationSeconds만큼 버티게 할 수 있다.
+
+### 노드가 죽으면 Pod는 언제 다른 노드로 옮겨지나요?
+
+노드가 응답을 멈추면 컨트롤 플레인이 unreachable 또는 not-ready NoExecute taint를 붙인다. 모든 Pod에는 이 taint를 300초 견디는 toleration이 기본으로 들어가 있어서, 대략 5분 뒤에 Pod가 지워지고 컨트롤러가 다른 노드에 새로 만든다. 이 시간은 Pod 템플릿의 tolerationSeconds로 조절한다.
+
+### 복제본을 여러 노드나 존에 흩어 놓으려면 어떻게 하나요?
+
+pod anti-affinity로 같은 라벨의 Pod가 있는 노드를 피하게 하거나, topologySpreadConstraints로 존·노드 사이의 개수 차이(maxSkew)를 제한한다. required anti-affinity는 replicas가 노드 수를 넘거나 롤링 업데이트에서 surge Pod가 필요할 때 Pending을 만들기 쉬워서, 보통은 topologySpreadConstraints나 preferred를 쓴다. 분산은 스케줄할 때만 계산되므로 나중에 깨진 균형은 저절로 돌아오지 않는다.
+
+### Preemption은 어떻게 동작하고, 무엇을 조심해야 하나요?
+
+높은 우선순위 Pod가 필터를 통과하지 못하면 스케줄러가 낮은 우선순위 Pod를 빼면 들어갈 노드를 찾고, nominatedNodeName을 적은 뒤 희생자를 유예 시간을 주며 지운다. 자리가 나면 그 노드에 놓는다. PriorityClass가 없는 Pod는 우선순위가 0이라 "낮음" 클래스보다도 먼저 밀려나므로, globalDefault 클래스를 두거나 모든 워크로드에 클래스를 적어야 한다. PDB는 최대한 지키려 할 뿐 보장하지 않는다.
+
+### FailedScheduling 메시지에서 원인을 어떻게 읽나요?
+
+`0/N nodes are available` 뒤에 노드별로 처음 걸린 필터 이유가 묶여서 나온다. Insufficient cpu면 requests, untolerated taint면 toleration, didn't match node affinity/selector면 노드 라벨, anti-affinity나 topology spread면 분산 규칙을 본다. 노드마다 첫 이유만 세기 때문에 하나를 고치면 다음 이유가 드러날 수 있어서, 고친 뒤 이벤트를 다시 읽는다.

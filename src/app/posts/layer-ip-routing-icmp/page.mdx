@@ -1,0 +1,622 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("layer-ip-routing-icmp");
+
+서버까지 가는 길을 traceroute로 찍었더니 중간 두 줄이 `* * *`로 나온다. "2번 홉 라우터가 죽었다"고 적으려다 같은 명령을 한 번 더 치면 이번엔 모든 줄에 주소와 시간이 제대로 찍힌다. 서버까지는 처음부터 문제없이 닿고 있었다.
+
+이 글의 실습 망에서 실제로 나온 결과다. 앞서 다른 traceroute를 연달아 돌린 탓에 라우터가 ICMP 오류 메시지를 보내는 속도 제한에 걸렸던 것이다. 별표는 "라우터가 죽었다"가 아니라 "그 라우터가 나에게 답장을 보내지 않았다"는 뜻일 뿐이다. 이 차이를 알려면 패킷이 라우터를 건너는 규칙과, 그 과정에서 오류를 알리는 ICMP가 어떻게 동작하는지 알아야 한다. 이 글은 라우팅 테이블을 읽고, 여러 경로 중 하나를 고르는 규칙(최장 접두사 일치)을 계산해 보고, TTL과 ICMP, traceroute와 ping이 실제로 무엇을 측정하는지 캡처로 확인한다.
+
+기준은 Ubuntu 24.04다. 바로 앞 글인 [IP 주소와 서브넷](/posts/layer-ip-addressing)의 프리픽스 계산을 알고 있다고 보고 진행한다. 시리즈 전체 지도는 [OSI 7계층 개요 글](/posts/network-layers-overview)에 있다.
+
+## 실습 망 만들기
+
+리눅스 한 대 안에서 network namespace 다섯 개로 라우터 두 대짜리 망을 만든다. namespace는 프로세스마다 다른 네트워크 스택(인터페이스, 라우팅 테이블, 방화벽)을 보여 주는 커널 기능이라, 각각이 독립된 컴퓨터처럼 동작한다. 이 시리즈의 [개요 글](/posts/network-layers-overview)과 [MTU 글](/posts/layer-mtu-fragmentation)도 이 망에서 출력을 찍었다.
+
+```text
+a 10.0.1.10 ── 10.0.1.1 [r] 10.0.3.1 ── 10.0.3.2 [r2] 10.0.4.1 ── 10.0.4.20 c
+                         [r] 10.0.2.1 ── 10.0.2.20 b
+```
+
+```bash
+# namespace 만들기: a(노트북), r·r2(라우터), b·c(서버)
+for n in a r r2 b c; do sudo ip netns add $n; done
+
+# 가상 랜선(veth) 네 가닥을 만들어 양 끝을 각 namespace에 꽂는다
+sudo ip link add va type veth peer name ra;   sudo ip link set va netns a;   sudo ip link set ra netns r
+sudo ip link add vb type veth peer name rb;   sudo ip link set vb netns b;   sudo ip link set rb netns r
+sudo ip link add rc type veth peer name r2r;  sudo ip link set rc netns r;   sudo ip link set r2r netns r2
+sudo ip link add r2c type veth peer name vc;  sudo ip link set r2c netns r2; sudo ip link set vc netns c
+
+# 주소 붙이기
+sudo ip -n a  addr add 10.0.1.10/24 dev va
+sudo ip -n r  addr add 10.0.1.1/24 dev ra;  sudo ip -n r addr add 10.0.2.1/24 dev rb;  sudo ip -n r addr add 10.0.3.1/30 dev rc
+sudo ip -n b  addr add 10.0.2.20/24 dev vb
+sudo ip -n r2 addr add 10.0.3.2/30 dev r2r; sudo ip -n r2 addr add 10.0.4.1/24 dev r2c
+sudo ip -n c  addr add 10.0.4.20/24 dev vc
+
+# 모든 인터페이스 켜기
+for pair in a:va r:ra r:rb r:rc b:vb r2:r2r r2:r2c c:vc; do sudo ip -n ${pair%%:*} link set ${pair##*:} up; done
+for n in a r r2 b c; do sudo ip -n $n link set lo up; done
+
+# 경로: 끝 호스트는 기본 게이트웨이, 라우터는 모르는 망으로 가는 길을 적는다
+sudo ip -n a  route add default via 10.0.1.1
+sudo ip -n b  route add default via 10.0.2.1
+sudo ip -n c  route add default via 10.0.4.1
+sudo ip -n r  route add 10.0.4.0/24 via 10.0.3.2
+sudo ip -n r2 route add default via 10.0.3.1
+
+# 라우터 두 대에서 패킷 전달 켜기
+sudo ip netns exec r  sysctl -w net.ipv4.ip_forward=1
+sudo ip netns exec r2 sysctl -w net.ipv4.ip_forward=1
+```
+
+## 라우터는 다음 한 칸만 안다
+
+라우팅은 패킷이 어느 문으로 나갈지 고르는 일이다. 출발지에서 목적지까지 전체 경로를 미리 정하지 않는다. 라우터마다 "이 목적지면 다음은 저 기기"라는 표 하나만 들고 있고, 패킷이 도착할 때마다 그 표를 보고 한 칸씩 넘긴다. 이 표가 라우팅 테이블이다. 라우터만 갖는 게 아니라 노트북과 서버도 갖고 있다.
+
+```bash
+# 라우터 r의 라우팅 테이블
+sudo ip netns exec r ip route
+```
+
+```text
+10.0.1.0/24 dev ra proto kernel scope link src 10.0.1.1
+10.0.2.0/24 dev rb proto kernel scope link src 10.0.2.1
+10.0.3.0/30 dev rc proto kernel scope link src 10.0.3.1
+10.0.4.0/24 via 10.0.3.2 dev rc
+```
+
+앞의 세 줄은 주소를 붙일 때 커널이 만든 직접 연결 경로이고, 마지막 줄이 손으로 넣은 경로다. 한 줄씩 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="라우팅 테이블 한 줄"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "dst",
+      display: "10.0.4.0/24",
+      title: "목적지 프리픽스",
+      description: "이 경로가 맡는 목적지 범위다. default는 0.0.0.0/0, 곧 모든 주소에 맞는 가장 짧은 프리픽스다.",
+      required: true,
+    },
+    {
+      key: "via",
+      display: "via 10.0.3.2",
+      title: "다음 홉(next hop)",
+      description: "패킷을 넘길 다음 라우터의 IP다. 이 IP는 직접 연결된 망 안에 있어야 한다. 커널은 이 IP의 MAC을 ARP로 찾아 프레임을 보낸다. via가 없으면 목적지가 같은 링크에 바로 붙어 있다는 뜻이다.",
+    },
+    {
+      key: "dev",
+      display: "dev rc",
+      title: "나갈 인터페이스",
+      description: "어느 랜 카드로 내보낼지. 다음 홉 10.0.3.2가 rc에 붙은 10.0.3.0/30 안에 있으니 rc로 나간다.",
+      required: true,
+    },
+    {
+      key: "proto",
+      display: "proto kernel",
+      title: "누가 넣은 경로인가 (직접 연결 줄)",
+      description: "kernel은 주소를 붙일 때 자동으로 생긴 것, static은 사람이, dhcp는 DHCP가, bgp나 ospf는 라우팅 데몬이 넣은 것이다. Ubuntu 서버의 기본 경로는 보통 proto dhcp나 static으로 보인다.",
+    },
+    {
+      key: "src",
+      display: "src 10.0.1.1",
+      title: "이 경로로 나갈 때 쓸 출발지 IP",
+      description: "주소가 여러 개인 호스트에서 출발지 IP를 정하는 힌트다. 응답이 엉뚱한 출발지로 나가서 상대가 버리는 문제를 여기서 고친다.",
+    },
+  ]}
+/>
+
+라우팅 테이블에 맞는 경로가 하나도 없으면 패킷은 그 자리에서 실패한다. 라우터 `r`에는 기본 경로가 없어서 인터넷 주소를 물으면 이렇게 나온다.
+
+```bash
+# r이 8.8.8.8로 보낼 때 고를 경로
+sudo ip netns exec r ip route get 8.8.8.8
+```
+
+```text
+RTNETLINK answers: Network is unreachable
+```
+
+## 가장 길게 맞는 경로가 이긴다
+
+목적지 하나에 여러 경로가 맞을 수 있다. 기본 경로 `0.0.0.0/0`은 모든 주소에 맞고, `10.0.0.0/8`과 `10.0.4.0/24`도 `10.0.4.20`에 함께 맞는다. 이때 규칙은 하나다. 프리픽스가 가장 긴, 곧 가장 구체적인 경로를 고른다. 이걸 최장 접두사 일치(longest prefix match)라고 한다. 경로 순서나 넣은 시각은 상관없다.
+
+실험하려고 `r`에 경로 두 줄을 더 넣었다. `10.0.0.0/8`을 `a` 쪽으로, `10.0.4.128/25`(10.0.4.0/24의 뒤쪽 절반)를 `b` 쪽으로 보내는 경로다. 실제 망에서라면 엉뚱한 설정이지만 규칙을 보기에는 좋다.
+
+```bash
+# 실험용 경로 두 줄 추가
+sudo ip -n r route add 10.0.0.0/8 via 10.0.1.10
+sudo ip -n r route add 10.0.4.128/25 via 10.0.2.20
+
+# 목적지마다 커널이 고르는 경로
+for d in 10.0.4.20 10.0.4.200 10.0.4.127 10.0.4.128 10.7.7.7; do sudo ip netns exec r ip route get $d | head -1; done
+```
+
+```text
+10.0.4.20 via 10.0.3.2 dev rc src 10.0.3.1 uid 0
+10.0.4.200 via 10.0.2.20 dev rb src 10.0.2.1 uid 0
+10.0.4.127 via 10.0.3.2 dev rc src 10.0.3.1 uid 0
+10.0.4.128 via 10.0.2.20 dev rb src 10.0.2.1 uid 0
+10.7.7.7 via 10.0.1.10 dev ra src 10.0.1.1 uid 0
+```
+
+`10.0.4.127`과 `10.0.4.128`은 1 차이인데 길이 갈린다. 128부터 /25 경로에 맞기 때문이다. 아래 그림은 커널이 `10.0.4.200`에 맞는 경로를 찾는 과정이다. 칸이 라우팅 테이블의 경로이고, 오른쪽에 지금까지 맞은 경로 중 가장 긴 것을 기억한다.
+
+<AlgoTrace
+  caption="10.0.4.200에 맞는 경로 중 가장 긴 것을 찾는다"
+  memoryLabel="지금까지 가장 긴 후보"
+  cells={["10.0.0.0/8", "10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/30", "10.0.4.0/24", "10.0.4.128/25"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["/8 via 10.0.1.10"],
+      caption: "앞 8비트 10이 같다. 맞는다. 첫 후보로 기억한다.",
+    },
+    {
+      pointer: 1,
+      memory: ["/8 via 10.0.1.10"],
+      caption: "앞 24비트가 10.0.1과 10.0.4로 다르다. 맞지 않는다.",
+    },
+    {
+      pointer: 3,
+      memory: ["/8 via 10.0.1.10"],
+      caption: "10.0.2.0/24와 10.0.3.0/30도 맞지 않는다.",
+    },
+    {
+      pointer: 4,
+      memory: ["/24 via 10.0.3.2"],
+      caption: "앞 24비트 10.0.4가 같다. /24가 /8보다 기니 후보를 바꾼다.",
+    },
+    {
+      pointer: 5,
+      memory: ["/25 via 10.0.2.20"],
+      caption: "200은 비트로 11001000이고 첫 비트가 1이라 10.0.4.128/25에도 맞는다. /25가 더 기니 또 바꾼다.",
+    },
+    {
+      found: [5],
+      memory: ["/25 via 10.0.2.20"],
+      caption: "끝까지 봤다. 가장 긴 /25가 이긴다. ip route get이 보여 준 via 10.0.2.20 dev rb와 같다.",
+    },
+  ]}
+/>
+
+실제 커널은 이렇게 하나씩 훑지 않고 트라이(trie) 구조로 빠르게 찾는다. 인터넷 백본 라우터는 경로를 수십만 개 들고 있어서 전용 하드웨어(TCAM)로 이 검색을 한다. 하지만 고르는 규칙은 똑같다. 아래 함수에 같은 표를 주고 `ip route get`과 같은 답이 나오게 만들어 보자. 기대값은 위의 `ip route get` 출력에서 가져왔다.
+
+<CodePlayground
+  caption="최장 접두사 일치"
+  functionName="lookup"
+  initialCode={`// routes: [["10.0.4.0/24", "via 10.0.3.2"], ...]
+// 맞는 경로 중 프리픽스가 가장 긴 것의 두 번째 값을, 없으면 null을 돌려준다
+function lookup(routes, ip) {
+  return null;
+}`}
+  solution={`function toInt(ip) {
+  return ip.split(".").reduce((acc, o) => ((acc << 8) | Number(o)) >>> 0, 0);
+}
+
+function lookup(routes, ip) {
+  const target = toInt(ip);
+  let best = null;
+  let bestLen = -1;
+  for (const [cidr, next] of routes) {
+    const [net, p] = cidr.split("/");
+    const len = Number(p);
+    const mask = len === 0 ? 0 : (~0 << (32 - len)) >>> 0;
+    const matches = ((target & mask) >>> 0) === ((toInt(net) & mask) >>> 0);
+    if (matches && len > bestLen) {
+      best = next;
+      bestLen = len;
+    }
+  }
+  return best;
+}`}
+  tests={[
+    { args: [[["10.0.0.0/8", "via 10.0.1.10"], ["10.0.1.0/24", "dev ra"], ["10.0.2.0/24", "dev rb"], ["10.0.3.0/30", "dev rc"], ["10.0.4.0/24", "via 10.0.3.2"], ["10.0.4.128/25", "via 10.0.2.20"]], "10.0.4.20"], expected: "via 10.0.3.2", label: "r의 표, 10.0.4.20" },
+    { args: [[["10.0.0.0/8", "via 10.0.1.10"], ["10.0.1.0/24", "dev ra"], ["10.0.2.0/24", "dev rb"], ["10.0.3.0/30", "dev rc"], ["10.0.4.0/24", "via 10.0.3.2"], ["10.0.4.128/25", "via 10.0.2.20"]], "10.0.4.200"], expected: "via 10.0.2.20", label: "r의 표, 10.0.4.200" },
+    { args: [[["10.0.0.0/8", "via 10.0.1.10"], ["10.0.1.0/24", "dev ra"], ["10.0.2.0/24", "dev rb"], ["10.0.3.0/30", "dev rc"], ["10.0.4.0/24", "via 10.0.3.2"], ["10.0.4.128/25", "via 10.0.2.20"]], "10.7.7.7"], expected: "via 10.0.1.10", label: "r의 표, 10.7.7.7" },
+    { args: [[["10.0.0.0/8", "via 10.0.1.10"], ["10.0.1.0/24", "dev ra"], ["10.0.2.0/24", "dev rb"], ["10.0.3.0/30", "dev rc"], ["10.0.4.0/24", "via 10.0.3.2"], ["10.0.4.128/25", "via 10.0.2.20"]], "10.0.2.20"], expected: "dev rb", label: "r의 표, 10.0.2.20" },
+    { args: [[["10.0.0.0/8", "via 10.0.1.10"], ["10.0.1.0/24", "dev ra"], ["10.0.2.0/24", "dev rb"], ["10.0.3.0/30", "dev rc"], ["10.0.4.0/24", "via 10.0.3.2"], ["10.0.4.128/25", "via 10.0.2.20"]], "8.8.8.8"], expected: null, label: "r의 표, 8.8.8.8 (경로 없음)" },
+    { args: [[["0.0.0.0/0", "via 192.0.2.1"], ["192.0.2.0/24", "dev eth0"]], "1.1.1.1"], expected: "via 192.0.2.1", label: "기본 경로만 맞을 때" },
+  ]}
+/>
+
+이 규칙을 알면 [IP 주소 글](/posts/layer-ip-addressing)에서 본 Docker·VPN 대역 겹침이 왜 그렇게 동작하는지, 또 왜 VPN이 "전체 트래픽"을 가져가려고 `0.0.0.0/0` 대신 `0.0.0.0/1`과 `128.0.0.0/1` 두 줄을 넣는지도 설명된다. 두 /1 경로는 원래 있던 기본 경로(/0)를 지우지 않고도 그보다 길게 맞아서 이긴다. 프리픽스 길이가 같으면 `metric`이 작은 경로를 고른다.
+
+## 패킷 하나가 두 라우터를 건너는 길
+
+`a`에서 `c`로 ping 하나가 갈 때 각 라우터가 무엇을 하는지 따라가 보자. 다음을 누르면 한 칸씩 넘어간다.
+
+<SequenceDiagram
+  caption="10.0.1.10에서 10.0.4.20까지, 라우터마다 표를 보고 한 칸씩"
+  actors={[
+    { id: "a", label: "a .1.10" },
+    { id: "r", label: "r" },
+    { id: "r2", label: "r2" },
+    { id: "c", label: "c .4.20" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "a",
+      label: "default",
+      title: "a의 표: 맞는 건 기본 경로뿐",
+      detail: "10.0.4.20은 내 망 10.0.1.0/24 밖이다. 기본 경로 via 10.0.1.1을 고르고, 10.0.1.1의 MAC을 ARP로 찾아 이더넷 프레임을 만든다.",
+      payload: "IP 10.0.1.10 → 10.0.4.20 ttl 64",
+    },
+    {
+      from: "a",
+      to: "r",
+      label: "ttl 64",
+      title: "r이 받는다",
+      detail: "프레임의 받는 쪽 MAC은 r이지만 IP 목적지는 r이 아니다. ip_forward가 켜져 있으니 버리지 않고 넘길 곳을 찾는다.",
+    },
+    {
+      from: "r",
+      to: "r",
+      label: "/24 via .3.2",
+      title: "r의 표: 10.0.4.0/24 via 10.0.3.2",
+      detail: "가장 길게 맞는 경로를 고르고, TTL을 64에서 63으로 줄이고, IP 헤더 체크섬을 다시 계산한다. 이더넷 헤더는 rc 구간용으로 새로 단다.",
+      payload: "IP 10.0.1.10 → 10.0.4.20 ttl 63",
+    },
+    {
+      from: "r",
+      to: "r2",
+      label: "ttl 63",
+      title: "r2가 받는다",
+      detail: "r2의 표에서 10.0.4.0/24는 직접 연결된 망(dev r2c)이다. TTL을 62로 줄이고, 이번에는 다음 라우터가 아니라 c 자신의 MAC을 ARP로 찾는다.",
+    },
+    {
+      from: "r2",
+      to: "c",
+      label: "ttl 62",
+      title: "c에 도착",
+      detail: "목적지 IP가 자기 것이니 받는다. 실습에서 c가 받은 패킷의 TTL은 62였다. 64에서 2가 줄었으니 라우터 두 대를 지났다는 걸 알 수 있다.",
+    },
+    {
+      from: "c",
+      to: "a",
+      label: "echo reply",
+      title: "돌아오는 길은 따로 정해진다",
+      detail: "응답은 c의 표(기본 경로 via 10.0.4.1)에서 출발해 r2의 기본 경로, r의 직접 연결 경로를 거친다. 가는 길과 오는 길은 각자의 표로 따로 정해지기 때문에 서로 다를 수 있다.",
+    },
+  ]}
+/>
+
+마지막 단계가 실무에서 자주 놓치는 부분이다. 가는 길이 맞아도 돌아오는 길이 없으면 통신은 안 된다. 라우터 `r`에 `10.0.4.0/24` 경로를 넣는 것만으로는 부족하고, `c` 쪽 라우터 `r2`도 `10.0.1.0/24`로 돌아갈 길(여기서는 기본 경로)을 알아야 한다. 새 망을 연결했는데 한쪽에서만 패킷이 보이면, 거의 항상 반대쪽 경로가 빠져 있다.
+
+가는 길과 오는 길이 다른 경로를 비대칭 라우팅이라고 한다. 인터넷에서는 흔하고 그 자체로 문제는 아니다. 하지만 상태를 기억하는 방화벽(conntrack)이 한쪽 방향만 보게 되면 연결을 이상하게 보고 버린다. 리눅스에도 들어온 인터페이스로 출발지에 돌아갈 수 있는지 검사하는 역경로 필터(`rp_filter`)가 있다. Ubuntu는 `/etc/sysctl.d/10-network-security.conf`에서 `rp_filter=2`(느슨한 모드)로 켜 둔다. 랜 카드가 둘인 서버에서 한쪽으로 들어온 요청의 응답이 다른 쪽으로 나가게 되면, 이 검사나 중간 방화벽에 걸려 연결이 안 된다. 이럴 때는 출발지 주소별로 다른 표를 쓰게 하는 정책 라우팅(`ip rule`)을 쓴다.
+
+```bash
+# 어떤 조건에서 어떤 표를 볼지 정한 규칙 목록
+ip rule
+```
+
+```text
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+```
+
+기본으로는 세 줄뿐이다. 내 주소로 오는 패킷을 고르는 `local` 표를 먼저 보고, 우리가 `ip route`로 보는 `main` 표를 그다음에 본다. 여기에 `from 10.0.2.0/24 lookup 100` 같은 규칙을 끼워 넣으면 출발지에 따라 다른 기본 경로를 쓰게 할 수 있다.
+
+## 라우터를 켜는 스위치, ip_forward
+
+리눅스는 기본으로 라우터가 아니다. 자기 주소가 아닌 패킷이 들어오면 그냥 버린다. `net.ipv4.ip_forward`를 1로 켜야 남의 패킷을 넘겨준다. 실습 망에서 `r`의 이 값을 0으로 돌리자 `a`에서 `c`로 가는 ping이 아무 오류 메시지 없이 사라졌다.
+
+```bash
+# 현재 값 확인 (0이면 남의 패킷을 버린다)
+sysctl net.ipv4.ip_forward
+
+# 지금 바로 켜기 (재부팅하면 원래대로)
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# 영구 설정: 파일로 남기고 다시 읽기
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/60-ip-forward.conf
+sudo sysctl --system
+```
+
+```text
+2 packets transmitted, 0 received, 100% packet loss, time 1026ms
+```
+
+Docker와 쿠버네티스 노드는 이 값을 스스로 켠다. 컨테이너로 가는 패킷이 호스트를 "거쳐 가는" 패킷이기 때문이다. 누군가 보안 강화 스크립트로 `ip_forward=0`을 다시 박아 두면, 호스트 자체는 멀쩡한데 컨테이너로 가는 포트 포워딩만 조용히 죽는다. 이때 iptables의 FORWARD 체인과 함께 이 값을 본다. 패킷이 FORWARD를 지나는 이야기는 [iptables 글](/posts/iptables-basics)에 있다.
+
+## TTL은 길을 잃은 패킷을 끝낸다
+
+라우터가 패킷을 넘길 때마다 IP 헤더의 TTL(Time To Live)을 1씩 줄이고, 0이 되면 버린다. 이름은 시간이지만 실제로는 "남은 홉 수"다. IPv6에서는 이름부터 Hop Limit이다. 도메인 이름 캐시의 수명을 뜻하는 [DNS](/posts/dns)의 TTL과는 이름만 같고 다른 값이다.
+
+TTL이 없으면 경로 설정 실수 하나로 패킷이 라우터 사이를 영원히 돈다. 실습 망에서 일부러 고리를 만들었다. `r`은 `10.9.0.0/16`을 `r2`로 보내고, `r2`는 모르는 주소를 기본 경로로 다시 `r`에 보내게 했다.
+
+```bash
+# r에만 10.9.0.0/16 경로를 r2 쪽으로 넣는다. r2는 기본 경로로 r에 되돌려 보낸다
+sudo ip -n r route add 10.9.0.0/16 via 10.0.3.2
+ping -c 2 10.9.0.1
+traceroute -n -m 6 10.9.0.1
+```
+
+```text
+PING 10.9.0.1 (10.9.0.1) 56(84) bytes of data.
+From 10.0.3.2 icmp_seq=1 Time to live exceeded
+From 10.0.3.2 icmp_seq=2 Time to live exceeded
+
+--- 10.9.0.1 ping statistics ---
+2 packets transmitted, 0 received, +2 errors, 100% packet loss, time 1009ms
+```
+
+```text
+traceroute to 10.9.0.1 (10.9.0.1), 6 hops max, 60 byte packets
+ 1  10.0.1.1  0.062 ms  0.009 ms  0.003 ms
+ 2  10.0.3.2  0.014 ms  0.005 ms  0.004 ms
+ 3  10.0.1.1  0.005 ms  0.004 ms  0.004 ms
+ 4  10.0.3.2  0.005 ms  0.005 ms *
+ 5  * * *
+ 6  * * *
+```
+
+ping 패킷은 TTL 64로 출발해 `r`과 `r2`를 오가며 하나씩 줄다가, 64번째로 줄인 라우터에서 0이 됐다. 그 라우터가 `r2`(10.0.3.2)여서 `Time to live exceeded`가 거기서 왔다. traceroute에서는 같은 두 주소가 번갈아 나오는 게 고리의 전형적인 모양이다. 뒤쪽의 별표는 짧은 시간에 오류를 너무 많이 보내 라우터의 ICMP 속도 제한에 걸린 것이다. 이 이야기는 뒤에서 다시 한다.
+
+TTL 값은 정보도 준다. 리눅스는 64, 윈도는 128로 시작하고, 네트워크 장비는 255를 쓰는 경우가 많다(`sysctl net.ipv4.ip_default_ttl`로 확인한다. 이 컨테이너는 64였다). 그래서 ping 응답의 `ttl=62`는 "리눅스 서버이고 라우터 두 대를 지났다"고 추측하게 해 준다. 응답의 TTL이 평소보다 갑자기 줄었다면 경로가 바뀌어 홉이 늘었다는 신호다.
+
+## ICMP: IP가 보내는 오류 보고서
+
+IP는 패킷을 최선을 다해 보낼 뿐 전달을 보장하지 않는다. 대신 문제가 생기면 그 자리의 라우터나 호스트가 출발지에 ICMP(Internet Control Message Protocol) 메시지로 알린다. ICMP는 IP 패킷에 실려 가지만 IP의 일부로 보는 L3 프로토콜이고, 포트 번호가 없고 타입과 코드로 종류를 나눈다. 오류 메시지에는 문제가 된 원래 패킷의 IP 헤더와 그 뒤 몇 바이트가 들어 있어서, 받은 쪽 커널이 어느 연결의 오류인지 찾아낼 수 있다.
+
+| 타입 / 코드 | 이름 | 언제 보나 |
+|---|---|---|
+| 8 / 0, 0 / 0 | Echo Request, Echo Reply | ping |
+| 3 / 0 | Destination Net Unreachable | 라우터가 그 망으로 가는 길을 모를 때 |
+| 3 / 1 | Destination Host Unreachable | 마지막 구간에서 ARP가 실패했을 때 |
+| 3 / 3 | Port Unreachable | UDP 포트에 받는 프로그램이 없을 때 (traceroute 끝), iptables REJECT의 기본값 |
+| 3 / 4 | Fragmentation Needed | DF가 켜진 패킷이 다음 링크 MTU보다 클 때 |
+| 3 / 13 | Communication Administratively Prohibited | 방화벽이 `icmp-admin-prohibited`로 거절할 때 |
+| 11 / 0 | Time Exceeded (in transit) | TTL이 0이 됐을 때 (traceroute 중간 홉, 라우팅 고리) |
+| 5 | Redirect | 같은 망에 더 나은 게이트웨이가 있다고 알릴 때 |
+
+IPv6는 ICMPv6를 쓰고 번호가 다르다(Echo는 128·129, Destination Unreachable은 1, Packet Too Big은 2, Time Exceeded는 3). 이웃 찾기도 ICMPv6가 맡는다.
+
+실습 망에서 `r`이 모르는 주소 `10.9.9.9`로 ping을 보내면 `r`이 Net Unreachable로 답한다.
+
+```text
+PING 10.9.9.9 (10.9.9.9) 56(84) bytes of data.
+From 10.0.1.1 icmp_seq=1 Destination Net Unreachable
+From 10.0.1.1 icmp_seq=2 Destination Net Unreachable
+```
+
+`From` 뒤의 주소가 오류를 보낸 장비다. 목적지가 아니라 중간 라우터 `10.0.1.1`이 "나는 그리로 가는 길을 모른다"고 알린 것이다. 같은 실패라도 내 컴퓨터 안에서 경로가 없을 때는 패킷을 내보내지도 않고 `ping: connect: Network is unreachable`로 끝난다. 둘을 구분하면 문제가 내 쪽인지 중간 라우터인지 바로 갈린다.
+
+방화벽에서 ICMP를 통째로 막으면 이런 오류가 출발지에 닿지 않는다. 특히 Fragmentation Needed를 막으면 큰 패킷만 사라지는 장애가 난다. 이 이야기는 [MTU 글](/posts/layer-mtu-fragmentation)에서 직접 재현한다. 막더라도 Echo Request 정도만 막고 Destination Unreachable과 Time Exceeded는 열어 두는 게 보통이다.
+
+## traceroute는 TTL을 하나씩 늘린다
+
+traceroute는 TTL이 0이 되면 라우터가 Time Exceeded를 보낸다는 성질을 이용한다. TTL 1인 패킷을 보내면 첫 라우터가, TTL 2면 두 번째 라우터가 오류로 답하니, 답장의 출발지 주소를 차례로 모으면 경로가 된다. 리눅스 traceroute는 기본으로 33434번부터 하나씩 올라가는 UDP 포트로 보내고, 목적지에 닿으면 그 포트에 아무도 없어서 Port Unreachable이 온다. 그게 끝 신호다.
+
+```bash
+# 이름 변환 없이(-n), 홉마다 1번만(-q 1) 보내면서 a의 랜 카드에서 캡처
+sudo tcpdump -i va -nn icmp or udp
+traceroute -n -q 1 -m 3 10.0.4.20
+```
+
+```text
+22:52:38.440218 IP 10.0.1.10.47979 > 10.0.4.20.33434: UDP, length 32
+22:52:38.440253 IP 10.0.1.1 > 10.0.1.10: ICMP time exceeded in-transit, length 68
+22:52:38.440360 IP 10.0.1.10.39260 > 10.0.4.20.33435: UDP, length 32
+22:52:38.440383 IP 10.0.3.2 > 10.0.1.10: ICMP time exceeded in-transit, length 68
+22:52:38.440396 IP 10.0.1.10.40485 > 10.0.4.20.33436: UDP, length 32
+22:52:38.440412 IP 10.0.4.20 > 10.0.1.10: ICMP 10.0.4.20 udp port 33436 unreachable, length 68
+```
+
+여섯 줄이 traceroute의 전부다. 아래 그림으로 펼쳐 보자.
+
+<SequenceDiagram
+  caption="traceroute: TTL을 1, 2, 3으로 늘려 가며 답장을 모은다"
+  actors={[
+    { id: "a", label: "a" },
+    { id: "r", label: "r .1.1" },
+    { id: "r2", label: "r2 .3.2" },
+    { id: "c", label: "c .4.20" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "r",
+      label: "UDP ttl 1",
+      title: "TTL 1로 보낸다",
+      detail: "목적지는 c의 33434번 UDP 포트다. 첫 라우터 r이 TTL을 1에서 0으로 줄이는 순간 패킷을 버린다.",
+      payload: "10.0.1.10.47979 > 10.0.4.20.33434: UDP, length 32",
+    },
+    {
+      from: "r",
+      to: "a",
+      label: "time exceeded",
+      title: "r이 오류로 답한다: 1번 홉",
+      detail: "Time Exceeded의 출발지 10.0.1.1이 1번 홉으로 찍힌다. 보낸 시각과 받은 시각의 차이가 그 홉의 왕복 시간이다.",
+    },
+    {
+      from: "a",
+      to: "r2",
+      label: "UDP ttl 2",
+      title: "TTL 2, 포트는 33435",
+      detail: "r을 지나며 1이 되고, r2에서 0이 된다. 포트를 매번 바꾸는 건 돌아온 오류가 어느 탐침의 것인지 구분하려는 것이다.",
+    },
+    {
+      from: "r2",
+      to: "a",
+      label: "time exceeded",
+      title: "r2가 답한다: 2번 홉",
+      detail: "10.0.3.2가 2번 홉이다. 라우터는 보통 패킷이 들어온 쪽 인터페이스의 주소로 답하므로, 같은 라우터라도 방향에 따라 다른 주소로 보일 수 있다.",
+    },
+    {
+      from: "a",
+      to: "c",
+      label: "UDP ttl 3",
+      title: "TTL 3이면 목적지까지 닿는다",
+      detail: "c에 도착할 때 TTL이 1 남아 있으니 c가 받는다. 그런데 33436번 UDP 포트에는 아무 프로그램도 없다.",
+    },
+    {
+      from: "c",
+      to: "a",
+      label: "port unreachable",
+      title: "Port Unreachable이 끝 신호다",
+      detail: "c가 그 포트에 받는 사람이 없다고 알린다. traceroute는 이 답을 받으면 목적지에 닿았다고 보고 멈춘다.",
+    },
+  ]}
+/>
+
+traceroute의 탐침은 실제 서비스와 프로토콜이 다를 수 있다. UDP 탐침을 막는 방화벽이 많아서, 리눅스 traceroute에는 ICMP Echo로 재는 `-I`와 TCP SYN으로 재는 `-T`(root 필요)가 있다. 웹 서비스 경로를 볼 때는 `-T -p 443`처럼 실제 포트로 보내야 서비스 트래픽이 가는 길과 같은 규칙을 탄다. `tracepath`는 root 없이 쓸 수 있고 경로의 MTU까지 알려 준다. `mtr`은 traceroute와 ping을 합쳐 홉마다 손실률과 지연을 계속 갱신한다.
+
+```bash
+# 기본 UDP / ICMP Echo / TCP SYN 443번으로 재기
+traceroute -n 10.0.4.20
+traceroute -n -I 10.0.4.20
+sudo traceroute -n -T -p 443 10.0.4.20
+
+# 홉마다 5번씩 재고 표로 요약
+mtr -n -r -c 5 10.0.4.20
+```
+
+```text
+HOST: vm                          Loss%   Snt   Last   Avg  Best  Wrst StDev
+  1.|-- 10.0.1.1                   0.0%     5    0.1   0.1   0.1   0.1   0.0
+  2.|-- 10.0.3.2                   0.0%     5    0.1   0.1   0.1   0.1   0.0
+  3.|-- 10.0.4.20                  0.0%     5    0.1   0.1   0.1   0.1   0.0
+```
+
+## 별표를 읽는 법
+
+처음 장면의 별표로 돌아가자. 별표 하나는 "정해진 시간(기본 5초) 안에 그 탐침의 답장이 안 왔다"는 뜻이다. 원인은 여러 가지이고, 대부분은 장애가 아니다.
+
+리눅스 라우터는 ICMP 오류를 보내는 속도를 제한한다. `net.ipv4.icmp_ratelimit = 1000`(밀리초 단위 토큰 간격)과 `icmp_ratemask = 6168`이 기본인데, 6168은 비트로 Destination Unreachable(3), Source Quench(4), Time Exceeded(11), Parameter Problem(12)을 가리킨다. 실습에서 traceroute를 연달아 세 번 돌렸더니 세 번째 TCP traceroute의 1·2번 홉이 `* * *`로 나왔고, 잠시 뒤 다시 돌리자 정상으로 찍혔다. 인터넷의 라우터들은 이보다 훨씬 엄격하게 ICMP를 제한하거나, 제어 기능(CPU)을 보호하려고 Time Exceeded를 아예 보내지 않는다.
+
+그래서 읽는 규칙은 이렇다. 중간 홉에 별표나 손실이 있어도 그 뒤 홉과 목적지가 정상이면 그 라우터는 패킷을 잘 넘기고 있다. 그저 나에게 답장만 안 보낼 뿐이다. 실습 망에서 `r2`가 Time Exceeded를 보내지 못하게 막아 두고 다시 쟀다.
+
+```bash
+# r2가 Time Exceeded를 내보내지 않게 막는다 (답장만 안 보내는 라우터 흉내)
+sudo ip netns exec r2 iptables -A OUTPUT -p icmp --icmp-type time-exceeded -j DROP
+mtr -n -r -c 5 10.0.4.20
+```
+
+```text
+HOST: vm                          Loss%   Snt   Last   Avg  Best  Wrst StDev
+  1.|-- 10.0.1.1                   0.0%     5    0.1   0.1   0.1   0.1   0.0
+  2.|-- ???                       100.0     5    0.0   0.0   0.0   0.0   0.0
+  3.|-- 10.0.4.20                  0.0%     5    0.1   0.1   0.1   0.1   0.0
+```
+
+2번 홉은 100% 손실인데 목적지는 0%다. 패킷이 2번 홉을 지나지 못했다면 3번 홉에 닿을 수 없으니, 이 100%는 가짜 손실이다. 진짜 문제는 손실이 어느 홉부터 시작해 목적지까지 계속 이어질 때다. 그 시작 지점 근처가 의심 구간이 된다. 지연도 같은 방식으로 읽는다. 중간 홉 하나만 지연이 튀고 뒤가 정상이면 그 라우터가 ICMP를 느리게 만들어 보내는 것일 뿐이다.
+
+목적지 직전부터 끝까지 별표만 이어진다면 목적지가 탐침을 막고 있을 수 있다. 클라우드 보안 그룹은 기본으로 ICMP와 traceroute용 UDP를 허용하지 않는다. 이때 `-T -p 443`으로 다시 재서 목적지가 찍히면 경로는 멀쩡하다.
+
+## ping이 말해 주는 것과 말해 주지 않는 것
+
+ping은 ICMP Echo Request를 보내고 Echo Reply를 기다리는 도구다. 응답이 오면 "그 IP까지 L3 경로가 양방향으로 살아 있고, 상대 커널이 Echo에 답하도록 설정돼 있다"는 것까지 알 수 있다. 그 이상은 모른다. 실습 망에서 서버 `c`가 Echo Request만 버리게 해 봤다.
+
+```bash
+# c가 ping에만 답하지 않게 한다
+sudo ip netns exec c iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+
+# ping은 실패, TCP 80번과 HTTP는 성공
+ping -c 2 -W 1 10.0.4.20
+nc -zv -w 2 10.0.4.20 80
+curl -sI http://10.0.4.20/ | head -1
+```
+
+```text
+2 packets transmitted, 0 received, 100% packet loss, time 1030ms
+```
+
+```text
+Connection to 10.0.4.20 80 port [tcp/http] succeeded!
+HTTP/1.0 200 OK
+```
+
+ping이 안 돼도 서비스는 정상이다. 반대로 ping이 돼도 서비스 포트는 닫혀 있을 수 있다. 그래서 서비스 상태는 ping이 아니라 그 서비스의 포트로 확인한다. ping이 쓸모 있는 건 다른 데 있다. 같은 망과 게이트웨이까지 닿는지, 왕복 시간(`time=`)이 평소와 같은지, 손실이 있는지를 빠르게 볼 수 있다.
+
+```bash
+# 0.2초 간격으로 50번, 요약만 (손실률과 지연 분포를 본다)
+ping -c 50 -i 0.2 -q 10.0.4.20
+
+# 응답 대기 시간 1초, 패킷 크기를 바꿔 보내기 (MTU 확인용, MTU 글에서 다시)
+ping -c 3 -W 1 -s 1400 10.0.4.20
+```
+
+마지막 줄의 `rtt min/avg/max/mdev`에서 `mdev`가 크면 지연이 들쭉날쭉하다는 뜻이다. 네트워크 혼잡이나 Wi-Fi 같은 무선 구간을 의심한다.
+
+## 현장에서 경로를 의심하는 순간
+
+경로 문제는 "어떤 곳은 되고 어떤 곳은 안 된다"는 모양으로 온다. 첫 질문은 늘 같다. 내 컴퓨터가 그 목적지로 어느 문, 어느 출발지 주소를 쓰는가. `ip route get` 한 줄이 그걸 알려 준다.
+
+```bash
+# 목적지별로 고르는 다음 홉, 인터페이스, 출발지 IP
+ip route get 10.0.4.20
+# 출발지를 정해서 물어볼 수도 있다 (주소가 여러 개인 서버)
+ip route get 10.0.4.20 from 10.0.1.10
+```
+
+```text
+10.0.4.20 via 10.0.1.1 dev va src 10.0.1.10 uid 0
+    cache
+```
+
+이 출력이 예상과 다르면 원인은 대개 이렇다. VPN이 사내 대역이나 `0.0.0.0/1` 경로를 넣어 트래픽을 가져갔다. Docker·쿠버네티스 브리지 대역이 목적지와 겹친다. 랜 카드가 둘인 서버에서 응답이 다른 랜 카드와 출발지로 나간다. 클라우드라면 서브넷의 라우트 테이블에 대상이 사라진(blackhole) 경로가 남아 있거나, 프라이빗 서브넷에 NAT 게이트웨이 경로가 빠져 있다.
+
+`ip route`로 넣은 경로는 재부팅하면 사라진다. Ubuntu 서버에서는 netplan 설정에 남긴다.
+
+```yaml
+# /etc/netplan/50-cloud-init.yaml 같은 파일의 해당 인터페이스 아래
+network:
+  version: 2
+  ethernets:
+    eth0:
+      routes:
+        - to: 10.20.0.0/16
+          via: 10.0.0.1
+```
+
+```bash
+# 문법과 결과를 미리 보고, 확인하지 않으면 120초 뒤 자동으로 되돌린다
+sudo netplan try
+# 확인이 끝났으면 적용
+sudo netplan apply
+# 경로가 들어갔는지 확인
+ip route show 10.20.0.0/16
+```
+
+<Callout kind="warning" title="원격 서버에서 기본 경로를 바꾸기 전에">
+SSH로 붙은 서버에서 `ip route del default`나 `ip route replace default via ...`를 잘못 치면 내 SSH 세션의 응답이 돌아올 길이 사라져 바로 끊긴다. netplan으로 바꿀 때는 `netplan apply` 대신 `netplan try`를 먼저 써서, 연결이 끊겨 확인을 못 누르면 자동으로 원래 설정으로 돌아가게 한다. 클라우드라면 시리얼 콘솔 접속 방법을 미리 확인해 둔다.
+</Callout>
+
+## 한 칸씩 넘기는 일
+
+라우팅은 라우터마다 들고 있는 표를 보고 패킷을 다음 한 칸으로 넘기는 일이고, 표에서 여러 경로가 맞으면 가장 긴 프리픽스가 이긴다. 넘길 때마다 TTL이 하나씩 줄어 길을 잃은 패킷을 끝내고, 문제가 생기면 그 자리의 장비가 ICMP로 출발지에 알린다. traceroute는 이 두 성질로 경로를 재고, ping은 L3 왕복만 잰다. 그래서 별표나 ping 실패만으로 장애를 단정하지 않고, 목적지까지 이어지는지와 실제 서비스 포트로 다시 확인한다. 다음 글에서는 경로 위에서 패킷 크기가 맞지 않을 때 생기는 일, [MTU와 단편화](/posts/layer-mtu-fragmentation)를 본다.
+
+## 면접에서 나올 만한 질문
+
+### 라우터는 패킷을 받으면 무엇을 하나요?
+
+목적지 IP를 라우팅 테이블에서 찾아 가장 길게 맞는 경로의 다음 홉과 인터페이스를 고른다. TTL을 1 줄이고 0이 되면 버리면서 Time Exceeded를 보내고, 아니면 IP 헤더 체크섬을 다시 계산한 뒤 다음 홉의 MAC으로 이더넷 헤더를 새로 달아 내보낸다. 맞는 경로가 없으면 Destination Unreachable을 보낸다.
+
+### 최장 접두사 일치(longest prefix match)란 무엇인가요?
+
+목적지에 맞는 경로가 여러 개면 프리픽스가 가장 긴, 곧 가장 구체적인 경로를 고르는 규칙이다. `10.0.4.200`에 `/8`, `/24`, `/25` 경로가 모두 맞으면 `/25`가 이긴다. 기본 경로 `/0`은 모든 주소에 맞지만 가장 짧아서 다른 경로가 없을 때만 쓰인다. 길이가 같으면 metric이 작은 쪽을 고른다.
+
+### TTL은 왜 있고, 값으로 무엇을 알 수 있나요?
+
+라우팅 고리에 빠진 패킷이 영원히 돌지 않게 홉마다 1씩 줄여 0이 되면 버리려고 있다. 운영체제마다 시작값이 달라서(리눅스 64, 윈도 128) 받은 패킷의 TTL로 상대 OS와 지나온 홉 수를 짐작할 수 있다. traceroute도 이 값을 일부러 작게 줘서 중간 라우터의 Time Exceeded를 받아 내는 방식이다.
+
+### traceroute는 어떻게 동작하나요?
+
+TTL을 1부터 하나씩 늘린 탐침을 보내고, 각 TTL에서 0이 된 라우터가 보내는 ICMP Time Exceeded의 출발지를 홉으로 기록한다. 리눅스 기본은 33434번부터 올라가는 UDP 포트로 보내고, 목적지에 닿으면 Port Unreachable을 받아 멈춘다. 방화벽 때문에 ICMP(`-I`)나 TCP SYN(`-T`)으로 보내는 방식도 쓴다.
+
+### traceroute 중간에 `* * *`가 나오면 그 라우터가 죽은 건가요?
+
+아니다. 그 라우터가 ICMP를 제한하거나 보내지 않도록 설정됐을 수 있고, 리눅스도 기본으로 ICMP 오류 속도를 제한한다. 뒤 홉과 목적지가 정상으로 찍히면 그 라우터는 패킷을 잘 넘기고 있다. 손실이 어느 홉부터 목적지까지 계속 이어질 때 그 지점을 의심한다.
+
+### ping이 안 되는데 웹은 됩니다. 어떻게 된 건가요?
+
+서버나 중간 방화벽, 클라우드 보안 그룹이 ICMP Echo만 막아 둔 경우다. ping은 ICMP로 L3 왕복만 확인하고 TCP 서비스 포트와는 별개다. 서비스 상태는 `nc -zv`나 `curl`처럼 실제 포트로 확인하고, 경로는 `traceroute -T -p 443`처럼 서비스와 같은 프로토콜로 재야 정확하다.
+
+### 가는 경로는 맞는데 통신이 안 되는 경우는 어떤 때인가요?
+
+돌아오는 경로가 없거나 다를 때다. 라우팅은 방향마다 각자의 표로 정해지니 상대 쪽에서 내 망으로 오는 길이 빠져 있으면 응답이 사라진다. 경로가 비대칭이면 상태 기반 방화벽이나 리눅스 `rp_filter`가 패킷을 버릴 수 있어서, 랜 카드가 여럿인 서버는 `ip rule`로 출발지별 표를 나눈다. 리눅스를 라우터로 쓸 때 `ip_forward`가 꺼져 있는 것도 흔한 원인이다.

@@ -101,4 +101,19 @@ export const CACHING_STRATEGIES: QuizQuestion[] = [
       "DB로 가는 것은 미스 비율이라 5%에서 1%가 되면 500개에서 100개가 된다. 히트율 몇 %p 차이가 DB 부하로는 몇 배 차이가 된다. 히트율 95%면 p99 응답 시간도 미스 경로가 정한다.",
     anchor: "캐시가-일하는지-숫자로-본다",
   },
+  {
+    id: "caching-strategies-8",
+    post: "caching-strategies",
+    question: "가격을 고쳤는데 옛 가격이 계속 보인다. 캐시 키의 TTL을 확인했더니 -1이 나왔다. 가장 그럴듯한 원인은?",
+    choices: [
+      "키가 이미 만료되어 사라졌다",
+      "쓰기 경로의 DEL이 몇 초 늦었다",
+      "누군가 EX 없이 SET을 써서 남아 있던 TTL이 지워져 만료 없는 키가 됐다",
+      "Redis가 메모리가 부족해 키를 축출했다",
+    ],
+    answer: 2,
+    explanation:
+      "TTL -1은 만료가 없는 키라는 뜻이다. SET은 값을 바꾸면서 기존 TTL도 지우기 때문에 EX를 빠뜨리면 키가 영구가 된다. 키가 없으면 -2가 나오고, 수명을 유지하려면 KEEPTTL을 쓴다.",
+    anchor: "고친-값이-안-바뀐다는-문의가-오면",
+  },
 ];

@@ -1,0 +1,597 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-type-time-series");
+
+서점의 책 상세 페이지가 열릴 때마다 한 줄씩 기록을 남긴다고 하자. 언제, 어떤 책을, 어떤 기기에서 봤고, 페이지를 그리는 데 몇 ms가 걸렸는지. 하루에 8만 6천 줄, 한 달이면 260만 줄이다. 서버 지표까지 더하면 줄 수는 금방 수억이 된다.
+
+이 데이터를 주문 테이블과 똑같이 PostgreSQL에 넣으면 처음엔 잘 돈다. 몇 달이 지나면 세 가지가 동시에 터진다. 인덱스가 원본만큼 커지고, "지난 1시간 평균"을 그리는 대시보드가 점점 느려지고, 석 달 지난 기록을 지우는 DELETE가 몇 시간씩 돈다. 시계열 DB는 이 세 문제를 정면으로 풀려고 만든 저장소다. 이 글은 [DB 종류 시리즈](/posts/db-types-overview)의 여섯 번째 글이고, 시간 순서로 쌓이는 데이터를 어떻게 저장하고 읽고 버리는지 PostgreSQL 16으로 직접 돌려 보며 따라간다.
+
+## 시간이 키가 되는 데이터
+
+시계열(time series) 데이터는 "어떤 대상의 값을 시간에 따라 계속 잰 기록"이다. 페이지 조회, API 응답 시간, CPU 사용률, 센서 온도, 주가가 모두 그렇다. 주문이나 회원 데이터와 비교하면 다루는 방식이 꽤 다르다.
+
+- 쓰기는 거의 다 끝에 붙이기다. 이미 지난 시각의 값을 고치는 일은 드물다.
+- 읽기는 대부분 최근 구간이고, 한 줄씩 보지 않고 구간으로 묶어 본다. "5분마다 평균", "1시간 최댓값" 같은 식이다.
+- 오래된 데이터는 덜 중요하다. 어제 1초 단위 기록은 필요해도, 1년 전 기록은 1시간 단위 요약이면 충분하다.
+- 지울 때는 한 줄씩이 아니라 기간 통째로 지운다.
+
+이 성질이 시계열 DB의 설계를 거의 다 정한다. 시간으로 잘라 저장하고(구간 읽기와 기간 삭제가 쉬워진다), 같은 시계열의 값을 붙여서 압축하고(끝에 붙이기만 하니 가능하다), 미리 요약을 만들어 둔다(구간으로 묶어 보니까).
+
+## 측정값 하나를 이루는 조각
+
+시계열 DB마다 용어는 조금씩 다르지만 모델은 비슷하다. 무엇을 쟀는지(측정 이름), 어떤 대상인지 구분하는 이름표(태그 또는 레이블), 잰 값(필드), 그리고 시각. InfluxDB의 line protocol로 페이지 조회 한 건을 쓰면 이렇게 된다. 조각을 눌러 보면 각각의 역할이 나온다.
+
+<UrlAnatomy
+  caption="InfluxDB line protocol 한 줄"
+  base="page_view"
+  separator=","
+  joiner=" "
+  params={[
+    {
+      key: "tags",
+      display: "device=mobile,genre=IT",
+      title: "태그: 시계열을 가르는 이름표",
+      description: "태그 값의 조합 하나가 시계열 하나가 된다. device 3가지 × genre 8가지면 시계열이 24개다. 태그에는 색인이 걸려서 WHERE와 GROUP BY에 쓰기 좋다. 대신 값의 종류가 많은 것(user_id, 요청 id)을 태그로 두면 시계열 수가 폭발한다.",
+      code: "device=mobile,genre=IT",
+      required: true,
+    },
+    {
+      key: "fields",
+      display: "latency_ms=87i,book_id=42i",
+      title: "필드: 실제로 잰 값",
+      description: "숫자, 문자열, 불리언을 넣는다. 정수는 끝에 i를 붙인다. 필드에는 색인이 없어서 필드 값으로 거르면 느리다. 책 id처럼 종류가 수만 개인 값은 태그보다 필드에 두는 편이 안전하다.",
+      code: "latency_ms=87i,book_id=42i",
+      required: true,
+    },
+    {
+      key: "time",
+      display: "1792195200000000000",
+      title: "시각: 나노초 단위 유닉스 시간",
+      description: "2026-10-17T00:00:00Z를 1970년부터 센 나노초로 적은 값이다(1792195200초 × 10억). 생략하면 서버가 받은 시각을 쓴다. 쓰기 쪽에서 정밀도를 초나 밀리초로 낮춰 보내면 저장 공간이 준다.",
+      code: "1792195200 s\n= 1792195200000000000 ns",
+    },
+  ]}
+/>
+
+Prometheus도 같은 모양이다. 지표 이름과 레이블 집합이 시계열 하나를 정하고, 그 시계열에 (시각, 숫자) 쌍이 계속 붙는다. Prometheus는 값으로 숫자 하나만 받는다는 점이 다르다.
+
+```text
+http_request_duration_seconds_count{method="GET",route="/books/:id",status="200"}  91234
+```
+
+중괄호 안 레이블 하나라도 다르면 다른 시계열이다. `status="200"`과 `status="404"`는 서로 다른 두 줄의 기록으로 따로 저장된다.
+
+## PostgreSQL에 그대로 쌓아 보기
+
+시계열 DB가 무엇을 다르게 하는지 보려면, 먼저 일반 테이블에 쌓았을 때 무엇이 아픈지 봐야 한다. 30일 동안 1초에 한 건씩, 259만 2천 건의 페이지 조회를 넣는다. 테이블 이름은 `page_views`다.
+
+```sql
+-- 페이지 조회 기록: 시각, 책, 기기, 그리는 데 걸린 시간
+CREATE TABLE page_views (
+  ts         timestamptz NOT NULL,
+  book_id    int         NOT NULL,
+  device     text        NOT NULL,
+  latency_ms int         NOT NULL
+);
+
+SELECT setseed(0.42);  -- 결과를 다시 만들 수 있게 난수 씨앗을 고정
+INSERT INTO page_views
+SELECT t,
+       1 + floor(random() * 500)::int,  -- 책 1~500번
+       (ARRAY['mobile','mobile','mobile','desktop','desktop','tablet'])[1 + floor(random() * 6)::int],
+       30 + floor(random() * random() * 400)::int  -- 대부분 빠르고 가끔 느린 분포
+FROM generate_series(timestamptz '2026-09-17 00:00:00+00',
+                     timestamptz '2026-10-16 23:59:59+00',
+                     interval '1 second') AS t;
+
+-- 시각으로 찾을 테니 평소처럼 B-tree 인덱스를 건다
+CREATE INDEX page_views_ts_btree ON page_views (ts);
+```
+
+테이블과 인덱스 크기를 보면 첫 번째 문제가 보인다.
+
+```sql
+SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size
+FROM pg_class WHERE relname LIKE 'page_views%' ORDER BY relname;
+```
+
+```text
+       relname       |  size
+---------------------+--------
+ page_views          | 129 MB
+ page_views_ts_btree | 56 MB
+```
+
+시각 컬럼 하나짜리 인덱스가 원본의 43%다. B-tree는 행마다 항목을 하나씩 두니 행 수에 비례해서 자란다. 이 테이블은 매일 8만 6천 줄씩 늘고, 인덱스도 같이 는다. [인덱스 글](/posts/db-index)에서 본 대로 인덱스는 쓰기마다 갱신해야 하니 쓰기도 그만큼 무거워진다.
+
+## 시간 순서로 쌓이면 범위만 적어 둬도 된다
+
+이 테이블에는 B-tree가 놓치는 성질이 있다. 행이 시각 순서대로 들어온다. 디스크의 앞쪽 페이지에는 9월 데이터가, 뒤쪽에는 10월 데이터가 있다. 그러면 행마다 위치를 적지 않고 "페이지 128개 묶음마다 최솟값과 최댓값"만 적어 둬도 찾을 곳을 거의 정확히 고를 수 있다. PostgreSQL의 BRIN(Block Range INdex)이 이 방식이다.
+
+```sql
+-- 블록 묶음(기본 128페이지)마다 ts의 최솟값·최댓값만 기록한다
+CREATE INDEX page_views_ts_brin ON page_views USING brin (ts);
+```
+
+```text
+       relname       | size
+---------------------+-------
+ page_views_ts_brin  | 24 kB
+ page_views_ts_btree | 56 MB
+```
+
+24kB다. 같은 컬럼의 B-tree보다 2천 배 넘게 작다. B-tree를 지우고 1시간 구간을 세어 보면 BRIN이 실제로 일을 한다.
+
+```sql
+DROP INDEX page_views_ts_btree;
+SET max_parallel_workers_per_gather = 0;  -- 비교를 쉽게 하려고 병렬 처리를 끈다
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM page_views
+WHERE ts >= '2026-10-16 09:00+00' AND ts < '2026-10-16 10:00+00';
+```
+
+```text
+ Aggregate (actual time=1.574..1.575 rows=1 loops=1)
+   ->  Bitmap Heap Scan on page_views (actual time=0.390..1.417 rows=3600 loops=1)
+         Recheck Cond: ((ts >= '2026-10-16 09:00:00+00'::timestamp with time zone) AND (ts < '2026-10-16 10:00:00+00'::timestamp with time zone))
+         Rows Removed by Index Recheck: 16496
+         Heap Blocks: lossy=128
+         ->  Bitmap Index Scan on page_views_ts_brin (actual time=0.041..0.041 rows=1280 loops=1)
+               Index Cond: ((ts >= '2026-10-16 09:00:00+00'::timestamp with time zone) AND (ts < '2026-10-16 10:00:00+00'::timestamp with time zone))
+ Planning Time: 0.183 ms
+ Execution Time: 1.625 ms
+```
+
+볼 줄은 `Heap Blocks: lossy=128`과 `Rows Removed by Index Recheck: 16496`이다. BRIN은 "이 범위가 있을 수도 있는 블록 묶음"만 알려 주기 때문에 블록 128개를 통째로 읽고 그 안에서 다시 걸렀다. 3,600줄을 찾으려고 2만 줄쯤 읽었으니 정확하지는 않다. 그래도 같은 쿼리를 인덱스 없이(`enable_bitmapscan = off`) 돌리면 차이가 분명하다.
+
+```text
+ Aggregate (actual time=110.318..110.320 rows=1 loops=1)
+   ->  Seq Scan on page_views (actual time=107.507..110.148 rows=3600 loops=1)
+         Filter: ((ts >= '2026-10-16 09:00:00+00'::timestamp with time zone) AND (ts < '2026-10-16 10:00:00+00'::timestamp with time zone))
+         Rows Removed by Filter: 2588400
+ Execution Time: 110.347 ms
+```
+
+259만 줄을 다 읽고 258만 8천 줄을 버렸다. 1.6ms와 110ms. 시간 순서로 들어온다는 성질 하나로 작은 색인이 충분해진다. 반대로 늦게 도착한 데이터가 섞이거나 행을 자주 고쳐서 물리적 순서가 흐트러지면 BRIN의 범위가 넓어지고 쓸모가 줄어든다. 시계열 DB들이 "시간 순서대로 들어온다"를 전제로 깔고, 많이 늦게 온 데이터는 따로 처리하는 이유다.
+
+## 구간으로 묶어 읽기
+
+대시보드는 한 줄씩 보지 않는다. 5분마다 조회 수와 평균, 최댓값을 그린다. PostgreSQL 14부터 있는 `date_bin`이 시각을 일정한 간격의 구간 시작점으로 내려 준다. TimescaleDB의 `time_bucket`, InfluxQL의 `GROUP BY time(5m)`, PromQL의 `[5m]` 범위가 같은 일을 한다.
+
+```sql
+SELECT date_bin('5 minutes', ts, timestamptz '2026-01-01') AS bucket,  -- 5분 구간의 시작 시각
+       count(*) AS views,
+       round(avg(latency_ms)) AS avg_ms,
+       max(latency_ms) AS max_ms
+FROM page_views
+WHERE ts >= '2026-10-16 09:00+00' AND ts < '2026-10-16 09:20+00'
+GROUP BY bucket ORDER BY bucket;
+```
+
+```text
+         bucket         | views | avg_ms | max_ms
+------------------------+-------+--------+--------
+ 2026-10-16 09:00:00+00 |   300 |    125 |    403
+ 2026-10-16 09:05:00+00 |   300 |    142 |    387
+ 2026-10-16 09:10:00+00 |   300 |    133 |    394
+ 2026-10-16 09:15:00+00 |   300 |    141 |    383
+```
+
+문제는 이 쿼리를 대시보드가 30초마다, 지난 7일 범위로 돌린다는 데 있다. 매번 60만 줄을 다시 읽는다. 결과는 지난 구간이면 바뀌지도 않는다. 그래서 시계열 DB는 요약을 미리 만들어 둔다.
+
+## 오래된 데이터는 요약으로 바꾼다
+
+원본을 5분 단위로 묶어 별도 테이블에 저장해 두는 것을 다운샘플링(downsampling) 또는 롤업(rollup)이라고 한다. 여기서 흔한 실수가 하나 있다. 평균을 저장하면 안 된다. 나중에 5분 평균 12개로 1시간 평균을 내면, 구간마다 건수가 다를 때 틀린 값이 나온다. 합계와 건수를 저장하고, 읽을 때 나눈다.
+
+```sql
+CREATE TABLE page_views_5m (
+  bucket   timestamptz NOT NULL,
+  device   text        NOT NULL,
+  views    bigint      NOT NULL,  -- 건수
+  sum_ms   bigint      NOT NULL,  -- 합계 (평균은 읽을 때 sum/views)
+  max_ms   int         NOT NULL,  -- 최댓값은 최댓값끼리 다시 max가 된다
+  PRIMARY KEY (bucket, device)
+);
+
+INSERT INTO page_views_5m
+SELECT date_bin('5 minutes', ts, timestamptz '2026-01-01'), device,
+       count(*), sum(latency_ms), max(latency_ms)
+FROM page_views
+GROUP BY 1, 2;
+```
+
+```text
+ raw_rows | rollup_rows | rollup_size
+----------+-------------+-------------
+  2592000 |       25920 | 2864 kB
+```
+
+259만 줄이 2만 6천 줄로 줄었다. 정확히 100분의 1이다(5분 = 300초, 기기 3종이라 300 ÷ 3). 1시간 평균을 두 가지 방법으로 내 보면 평균을 저장하면 안 되는 이유가 숫자로 보인다.
+
+```sql
+-- 맞는 방법: 합계의 합 ÷ 건수의 합
+SELECT device, round(sum(sum_ms)::numeric / sum(views), 1) AS avg_ms
+FROM page_views_5m
+WHERE bucket >= '2026-10-16 09:00+00' AND bucket < '2026-10-16 10:00+00'
+GROUP BY 1 ORDER BY 1;
+
+-- 틀린 방법: 5분 평균들의 평균
+SELECT device, round(avg(sum_ms::numeric / views), 1) AS avg_of_avgs
+FROM page_views_5m
+WHERE bucket >= '2026-10-16 09:00+00' AND bucket < '2026-10-16 10:00+00'
+GROUP BY 1 ORDER BY 1;
+```
+
+```text
+ device  | avg_ms          device  | avg_of_avgs
+---------+--------         ---------+-------------
+ desktop |  128.8          desktop |       128.8
+ mobile  |  133.1          mobile  |       133.2
+ tablet  |  136.7          tablet  |       136.3
+```
+
+원본에서 바로 구한 평균도 133.1, 136.7이었다. 합계로 구한 쪽은 원본과 같고, 평균의 평균은 조금씩 어긋난다. 이 데이터는 구간마다 건수가 비슷해서 차이가 작지만, 새벽엔 10건이고 저녁엔 1만 건인 실제 트래픽에서는 크게 벌어진다. p99 같은 백분위수는 합계로도 다시 합칠 수 없어서, 히스토그램 버킷을 저장하거나 t-digest 같은 근사 구조를 쓴다.
+
+직접 묶어 보면 감이 온다. 아래 함수는 `[시각(초), 값]` 목록을 `bucketSec` 간격으로 묶어 구간마다 건수, 합계, 최댓값을 돌려준다.
+
+<CodePlayground
+  caption="다운샘플링: 구간마다 건수·합계·최댓값"
+  functionName="downsample"
+  initialCode={`function downsample(points, bucketSec) {
+  // points: [[ts, value], ...] (ts는 초, 순서는 섞여 있을 수 있다)
+  // 결과: [{ bucket, count, sum, max }] bucket 오름차순
+  //       키 순서도 bucket, count, sum, max로 맞춘다
+  return [];
+}`}
+  solution={`function downsample(points, bucketSec) {
+  const buckets = new Map();
+  for (const [ts, value] of points) {
+    const start = ts - (ts % bucketSec);          // date_bin과 같은 계산
+    const b = buckets.get(start) ?? { bucket: start, count: 0, sum: 0, max: -Infinity };
+    b.count += 1;
+    b.sum += value;                               // 평균이 아니라 합계를 모은다
+    b.max = Math.max(b.max, value);
+    buckets.set(start, b);
+  }
+  return [...buckets.values()].sort((a, b) => a.bucket - b.bucket);
+}`}
+  tests={[
+    {
+      label: "1분 구간 세 개",
+      args: [[[0, 120], [10, 80], [65, 200], [70, 100], [130, 90]], 60],
+      expected: [
+        { bucket: 0, count: 2, sum: 200, max: 120 },
+        { bucket: 60, count: 2, sum: 300, max: 200 },
+        { bucket: 120, count: 1, sum: 90, max: 90 },
+      ],
+    },
+    {
+      label: "늦게 도착한 값, 빈 구간",
+      args: [[[125, 50], [5, 10]], 60],
+      expected: [
+        { bucket: 0, count: 1, sum: 10, max: 10 },
+        { bucket: 120, count: 1, sum: 50, max: 50 },
+      ],
+    },
+    { label: "빈 입력", args: [[], 60], expected: [] },
+    {
+      label: "경계 값 299와 300",
+      args: [[[0, 1], [299, 3], [300, 5]], 300],
+      expected: [
+        { bucket: 0, count: 2, sum: 4, max: 3 },
+        { bucket: 300, count: 1, sum: 5, max: 5 },
+      ],
+    },
+  ]}
+/>
+
+두 번째 테스트처럼 값이 없는 구간(60~119초)은 결과에 아예 없다. 그래프에서 이 구간을 0으로 그릴지, 끊어서 그릴지, 앞 값으로 채울지는 따로 정해야 한다. TimescaleDB의 `time_bucket_gapfill`과 `locf`(마지막 값으로 채우기)가 이 일을 한다.
+
+## 기간 통째로 버리기
+
+보존 기간(retention)이 지난 원본은 지운다. 일반 테이블에서 `DELETE`를 하면 지운 행이 그 자리에 죽은 행으로 남고, VACUUM이 나중에 치워야 하고, 지운 행 수만큼 WAL(변경 기록)이 쌓인다. 테이블을 날짜별 파티션으로 나눠 두면 하루치를 파일째 떼어 버릴 수 있다. 같은 데이터를 하루 단위 파티션 테이블 `page_views_p`에 넣고 둘을 비교했다.
+
+```sql
+CREATE TABLE page_views_p (LIKE page_views) PARTITION BY RANGE (ts);
+-- 하루마다 파티션 하나 (9/17 ~ 10/17)
+CREATE TABLE page_views_p_20260917 PARTITION OF page_views_p
+  FOR VALUES FROM ('2026-09-17 00:00+00') TO ('2026-09-18 00:00+00');
+-- ... 나머지 날짜도 같은 모양으로 만든다
+```
+
+```sql
+-- 일반 테이블: 하루치 행을 지운다
+SELECT pg_current_wal_lsn() AS before_lsn \gset
+DELETE FROM page_views WHERE ts < '2026-09-18 00:00+00';
+SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), :'before_lsn')) AS wal_delete;
+
+-- 파티션 테이블: 하루치 파티션을 떼어 버린다
+SELECT pg_current_wal_lsn() AS before_lsn \gset
+DROP TABLE page_views_p_20260917;
+SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), :'before_lsn')) AS wal_drop;
+```
+
+```text
+DELETE 86400
+ wal_delete
+------------
+ 4740 kB
+
+ n_live_tup | n_dead_tup
+------------+------------
+    2505600 |      86400
+
+DROP TABLE
+ wal_drop
+----------
+ 12 kB
+```
+
+8만 6천 줄을 지우는 데 WAL이 4.7MB 생겼고 죽은 행 8만 6천 개가 VACUUM을 기다린다. 파티션을 떼어 내는 쪽은 12kB로 끝났다. 하루치라서 이 정도지, 수억 줄을 매일 지우는 서비스라면 DELETE는 복제본까지 WAL을 실어 나르며 몇 시간씩 돈다. 파티션은 조회에도 도움이 된다. 위의 1시간 조회를 파티션 테이블에 돌리면 실행 계획에 10월 16일 파티션 하나만 나온다(파티션 가지치기).
+
+```text
+ Aggregate
+   ->  Bitmap Heap Scan on page_views_p_20261016 page_views_p
+         ->  Bitmap Index Scan on page_views_p_20261016_ts_idx
+```
+
+아래 그림은 보존 기간을 5일로 정했을 때 매일 하루치 덩어리가 들어오고 가장 오래된 덩어리가 빠지는 모습이다.
+
+<AlgoTrace
+  caption="하루 단위 덩어리와 5일 보존"
+  memoryLabel="보관 중인 덩어리"
+  cells={["09-17", "09-18", "09-19", "09-20", "09-21", "09-22", "09-23"]}
+  steps={[
+    { caption: "덩어리 하나가 하루치 데이터다. 보존 기간은 5일로 정했다." },
+    { pointer: 4, memory: ["09-17", "09-18", "09-19", "09-20", "09-21"], caption: "5일이 찼다. 쓰기는 항상 맨 오른쪽 덩어리(오늘)에만 들어간다." },
+    { pointer: 5, memory: ["09-18", "09-19", "09-20", "09-21", "09-22"], caption: "9월 22일 덩어리가 새로 생기고, 가장 오래된 9월 17일이 통째로 빠진다. 행을 하나씩 지우지 않는다." },
+    { pointer: 6, memory: ["09-19", "09-20", "09-21", "09-22", "09-23"], caption: "다음 날도 똑같다. 지우는 비용이 데이터 양과 상관없이 거의 일정하다." },
+    { found: [2, 3, 4, 5, 6], memory: ["09-19", "09-20", "09-21", "09-22", "09-23"], caption: "'최근 3일' 조회는 오른쪽 덩어리 세 개만 연다. 나머지는 보지도 않는다." },
+  ]}
+/>
+
+이 "시간으로 잘린 덩어리"가 거의 모든 시계열 DB의 기본 단위다. TimescaleDB는 청크(chunk), Prometheus는 블록(block), InfluxDB는 샤드 그룹(shard group, 3.x에서는 시간으로 나뉜 Parquet 파일)이라고 부른다.
+
+## 같은 시계열끼리 붙이면 잘 눌린다
+
+시계열 DB가 일반 테이블보다 훨씬 작게 저장하는 비결은 압축이다. 같은 시계열의 값을 시간 순으로 붙여 놓으면 이웃한 값이 서로 비슷하다. 시각은 거의 일정한 간격으로 늘고, 값은 조금씩만 변한다. 페이스북이 2015년 논문으로 공개한 Gorilla 방식은 이걸 이용한다. 시각은 앞 시각과의 차이(delta), 그 차이의 차이(delta-of-delta)만 적는다. 15초마다 긁어 오는 지표라면 차이의 차이는 대부분 0이고, 0은 비트 하나로 적는다.
+
+아래 그림에서 다음을 누르면 15초 간격 시각 여섯 개가 어떻게 줄어드는지 보인다. 네 번째 값은 1초 늦게 들어왔다.
+
+<AlgoTrace
+  caption="시각을 차이의 차이로 적기"
+  memoryLabel="저장하는 값"
+  cells={["00:00:00", "00:00:15", "00:00:30", "00:00:46", "00:01:00", "00:01:15"]}
+  steps={[
+    { caption: "그대로 저장하면 시각 하나에 64비트, 여섯 개면 384비트다." },
+    { pointer: 0, memory: ["처음 1792195200"], caption: "첫 시각만 통째로 적는다." },
+    { pointer: 1, memory: ["처음 1792195200", "차이 15"], caption: "두 번째는 앞 시각과의 차이 15만 적는다." },
+    { pointer: 2, memory: ["처음 1792195200", "차이 15", "0"], caption: "차이가 또 15다. 차이의 차이는 0이고, 비트 1개('0')로 끝난다." },
+    { pointer: 3, memory: ["처음 1792195200", "차이 15", "0", "+1"], caption: "1초 늦었다. 차이 16, 차이의 차이 +1. 작은 수라 9비트('10' + 7비트)면 된다." },
+    { pointer: 4, memory: ["처음 1792195200", "차이 15", "0", "+1", "-2"], caption: "다음 차이는 14다. 차이의 차이 -2, 역시 9비트." },
+    { pointer: 5, memory: ["처음 1792195200", "차이 15", "0", "+1", "-2", "+1"], caption: "다시 15로 돌아왔다. 16 - 14가 아니라 15 - 14라서 +1이다." },
+    { found: [0, 1, 2, 3, 4, 5], memory: ["64 + 14 + 1 + 9 × 3", "= 106비트"], caption: "384비트가 106비트가 됐다. 간격이 정확히 일정하면 여섯 개 중 넷이 1비트씩이다." },
+  ]}
+/>
+
+비트 수는 Gorilla 논문의 규칙(첫 차이 14비트, 차이의 차이가 -63~64면 '10' + 7비트)으로 계산한 값이다. 값 쪽은 앞 값과 XOR해서 바뀐 비트만 적는다. 값이 그대로면 비트 하나다. 논문은 이렇게 해서 점 하나(시각 + 값, 원래 16바이트)를 평균 1.37바이트로 줄였다고 보고했다. Prometheus도 이 방식을 조금 바꿔 쓰고, 문서에서 샘플 하나에 평균 1~2바이트를 쓴다고 설명한다.
+
+TimescaleDB는 다른 길로 같은 효과를 낸다. 오래된 청크를 행 저장에서 컬럼 저장으로 바꾸면서, 컬럼마다 맞는 압축(정수는 delta-of-delta, 실수는 Gorilla 방식, 문자열은 사전 압축)을 고른다. 컬럼 저장이 왜 잘 눌리는지는 [컬럼형 분석 DB 글](/posts/db-type-columnar-olap)에서 자세히 본다.
+
+## TimescaleDB는 PostgreSQL 안에서 같은 일을 한다
+
+지금까지 손으로 한 일, 즉 날짜별 파티션, 요약 테이블, 오래된 덩어리 삭제를 TimescaleDB는 확장(extension) 하나로 자동화한다. PostgreSQL 위에서 돌기 때문에 SQL, 조인, 트랜잭션, 기존 도구를 그대로 쓴다. 이 컨테이너에는 TimescaleDB가 설치돼 있지 않아서 아래는 실행하지 않은 문법이다(2.13 이후 기준).
+
+```sql
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- 일반 테이블을 하이퍼테이블로 바꾼다. 청크 간격 기본값은 7일
+SELECT create_hypertable('page_views', by_range('ts', INTERVAL '1 day'));
+
+-- 5분 요약을 자동으로 갱신되는 머티리얼라이즈드 뷰로 만든다 (continuous aggregate)
+CREATE MATERIALIZED VIEW page_views_5m
+WITH (timescaledb.continuous) AS
+SELECT time_bucket('5 minutes', ts) AS bucket, device,
+       count(*) AS views, sum(latency_ms) AS sum_ms, max(latency_ms) AS max_ms
+FROM page_views
+GROUP BY bucket, device;
+
+-- 1시간마다, 3시간 전부터 1시간 전까지 구간을 새로 계산한다
+SELECT add_continuous_aggregate_policy('page_views_5m',
+  start_offset => INTERVAL '3 hours',
+  end_offset   => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '1 hour');
+
+-- 7일 지난 청크는 컬럼 형식으로 압축, 30일 지난 원본 청크는 버린다
+ALTER TABLE page_views SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'device',  -- 같은 기기 값끼리 묶어 압축
+  timescaledb.compress_orderby   = 'ts DESC'
+);
+SELECT add_compression_policy('page_views', INTERVAL '7 days');
+SELECT add_retention_policy('page_views', INTERVAL '30 days');
+```
+
+`end_offset`을 1시간으로 둔 이유는 아직 값이 들어오고 있는 최근 구간을 요약으로 굳히지 않기 위해서다. 늦게 도착한 데이터가 많은 서비스라면 이 값을 늘린다. 압축 옵션 이름은 2.18 무렵부터 columnstore라는 이름(`timescaledb.enable_columnstore`, `add_columnstore_policy`)으로 바뀌는 중이라, 쓰는 버전의 문서를 확인한다. 압축된 청크를 고치거나 지우는 것은 버전에 따라 지원 범위가 다르고, 지원하더라도 비싸다.
+
+TimescaleDB의 강점은 시계열이 업무 데이터와 같은 DB에 있다는 데 있다. 조회 기록과 책 테이블을 바로 조인할 수 있다. 아래는 일반 PostgreSQL에서 실제로 돌린 쿼리다.
+
+```sql
+SELECT b.title, b.genre, count(*) AS views
+FROM page_views v
+JOIN books b USING (book_id)
+WHERE v.ts >= '2026-10-16 09:00+00' AND v.ts < '2026-10-16 10:00+00'
+GROUP BY b.title, b.genre
+ORDER BY views DESC, b.title
+LIMIT 3;
+```
+
+```text
+ title  | genre | views
+--------+-------+-------
+ 책 211 | IT    |    18
+ 책 57  | 경제  |    16
+ 책 264 | 역사  |    14
+```
+
+## Prometheus는 최근 몇 시간을 메모리에 둔다
+
+서버와 애플리케이션 지표에는 Prometheus가 사실상 표준처럼 쓰인다. 앱이 `/metrics` 주소에 현재 값을 텍스트로 내놓으면, Prometheus가 정해진 간격(흔히 15초나 30초)마다 와서 긁어 간다(pull 방식). 저장은 내장 TSDB가 한다. 아래 그림에서 다음을 누르면 긁어 온 샘플이 디스크 블록이 되기까지의 길이 보인다.
+
+<SequenceDiagram
+  caption="Prometheus TSDB의 쓰기 경로"
+  actors={[
+    { id: "app", label: "주문 API" },
+    { id: "prom", label: "Prometheus" },
+    { id: "head", label: "Head(메모리)" },
+    { id: "wal", label: "WAL" },
+    { id: "block", label: "디스크 블록" },
+  ]}
+  steps={[
+    {
+      from: "prom",
+      to: "app",
+      label: "GET /metrics",
+      title: "15초마다 긁어 간다",
+      detail: "앱은 카운터와 히스토그램의 현재 값을 텍스트로 내놓기만 한다. 언제 가져갈지는 Prometheus가 정한다.",
+      payload: "http_requests_total{route=\"/orders\",status=\"200\"} 91234",
+    },
+    {
+      from: "prom",
+      to: "wal",
+      label: "샘플 기록",
+      title: "먼저 WAL에 적는다",
+      detail: "프로세스가 죽어도 메모리에 있던 최근 샘플을 되살릴 수 있게 변경 기록을 먼저 디스크에 남긴다.",
+    },
+    {
+      from: "prom",
+      to: "head",
+      label: "청크에 추가",
+      title: "Head 블록의 청크에 붙인다",
+      detail: "시계열마다 열려 있는 청크에 (시각, 값)을 압축해 붙인다. 최근 2~3시간은 전부 메모리에 있어서, 대시보드가 가장 자주 보는 구간이 가장 빠르다.",
+    },
+    {
+      from: "head",
+      to: "block",
+      label: "2시간치 저장",
+      title: "2시간마다 블록으로 굳힌다",
+      detail: "오래된 2시간 구간을 디스크 블록 하나로 쓴다. 블록 안에는 청크 파일, 레이블 색인, 메타 정보가 있고 한번 쓰면 바꾸지 않는다.",
+    },
+    {
+      from: "block",
+      to: "block",
+      label: "합치기",
+      title: "작은 블록을 큰 블록으로 합친다",
+      detail: "백그라운드에서 블록을 더 긴 구간으로 합친다(compaction). 보존 기간이 지난 블록은 디렉터리째 지운다. 기본 보존 기간은 15일이다.",
+    },
+  ]}
+/>
+
+Prometheus는 서버 한 대에 로컬 디스크로 저장하는 구조라 복제나 장기 보관을 스스로 하지 않는다. 몇 달, 몇 년치를 보관하거나 여러 Prometheus를 모아 보려면 `remote_write`로 Thanos, Cortex, Grafana Mimir, VictoriaMetrics 같은 장기 저장소에 보낸다.
+
+다운샘플링에 해당하는 것은 recording rule이다. 자주 쓰는 무거운 쿼리를 미리 계산해 새 시계열로 저장한다.
+
+```yaml
+# rules.yml: 1분마다 라우트별 p99 응답 시간을 계산해 새 시계열로 저장한다
+groups:
+  - name: bookstore
+    interval: 1m
+    rules:
+      - record: route:http_request_duration_seconds:p99_5m
+        expr: |
+          histogram_quantile(0.99,
+            sum by (route, le) (rate(http_request_duration_seconds_bucket[5m])))
+```
+
+## 레이블 하나가 시계열을 수백만 개로 만든다
+
+시계열 DB에서 가장 흔하고 가장 비싼 실수는 카디널리티(cardinality) 폭발이다. 시계열 수는 레이블 값 종류의 곱이다. 라우트 50개 × 상태 코드 10개 × 메서드 4개 × 파드 30개면 시계열이 6만 개다. 여기에 `user_id` 레이블을 붙이면, 회원 100만 명일 때 최악의 경우 600억 개가 된다.
+
+시계열마다 메모리에 열린 청크와 색인 항목이 생기니, 시계열 수가 곧 메모리 사용량이다. Prometheus는 시계열이 너무 많아지면 메모리 부족으로 죽거나, 쿼리 하나가 수백만 시계열을 훑느라 멈춘다. 파드가 재시작될 때마다 `pod` 레이블 값이 바뀌어 새 시계열이 생기는 것(series churn)도 같은 문제를 만든다.
+
+막는 방법은 정해져 있다.
+
+- 값의 종류가 끝없이 늘어나는 것(회원 id, 주문 id, 전체 URL, 에러 메시지 원문)은 레이블에 넣지 않는다. URL은 `/books/42`가 아니라 `/books/:id`처럼 패턴으로 넣는다.
+- 회원별 조회 수처럼 정말 필요한 고카디널리티 데이터는 지표가 아니라 로그나 이벤트로 남기고, 컬럼형 분석 DB에서 집계한다.
+- 지금 상태를 본다. Prometheus는 `/api/v1/status/tsdb`에서 시계열을 가장 많이 만드는 지표와 레이블을 보여 준다.
+
+```bash
+# 시계열을 가장 많이 만드는 지표 이름 상위 목록 (jq로 필요한 부분만 꺼낸다)
+curl -s http://localhost:9090/api/v1/status/tsdb | jq '.data.seriesCountByMetricName[:5]'
+```
+
+InfluxDB 1.x·2.x도 태그 조합마다 색인(TSI)을 유지해서 같은 문제를 겪는다. InfluxDB 3은 Apache Arrow와 Parquet 기반의 컬럼 저장으로 다시 만들면서 고카디널리티를 더 잘 견디도록 설계했고, 쿼리 언어도 SQL을 기본으로 지원한다. 1·2·3 버전은 저장 구조와 쿼리 언어가 꽤 달라서, 문서를 볼 때 버전부터 확인한다.
+
+## 어떤 시계열 저장소를 고를까
+
+세 가지가 자주 비교된다. 한 문장씩 줄이면 이렇다.
+
+TimescaleDB는 PostgreSQL 확장이다. SQL과 조인이 필요하고, 업무 데이터와 함께 두고 싶고, 이미 PostgreSQL을 운영하고 있으면 고른다. 페이지 조회 이벤트, IoT 센서, 결제 지표처럼 다른 테이블과 엮어서 볼 데이터에 맞다.
+
+Prometheus는 인프라와 애플리케이션 모니터링 전용이다. 긁어 오는 방식, 알림(Alertmanager), Kubernetes 서비스 발견, Grafana 연동이 한 묶음으로 따라온다. 숫자 지표만 다루고, 이벤트 한 건 한 건을 저장하는 용도가 아니다. 정확한 과금 집계처럼 샘플 하나도 잃으면 안 되는 데이터에도 맞지 않는다. 긁는 사이에 생긴 일은 카운터의 증가량으로만 보인다.
+
+InfluxDB는 시계열 전용 DB다. 앱이 직접 밀어 넣는(push) 방식이고, 센서나 장비처럼 긁어 갈 주소가 없는 곳에서 많이 쓴다.
+
+그 밖에 VictoriaMetrics나 Mimir는 Prometheus 호환 장기 저장소로, ClickHouse는 로그·이벤트를 시계열처럼 집계하는 용도로 자주 같이 언급된다.
+
+## 시계열 DB를 고르지 않아도 되는 경우
+
+데이터가 몇 천만 줄 이하이고 보존 기간이 짧다면 일반 PostgreSQL에 BRIN 인덱스와 날짜별 파티션만으로 충분하다. 위 실험이 그 범위였다. 새 저장소를 하나 더 운영하는 비용(백업, 모니터링, 권한, 장애 대응)이 생각보다 크다.
+
+값을 자주 고치는 데이터도 맞지 않는다. 주문 상태처럼 같은 행이 계속 바뀌는 데이터는 시계열이 아니라 상태다. 시계열 DB는 고치기와 지우기를 비싸게 만드는 대신 끝에 붙이기를 싸게 만든 저장소다. 행 하나를 정확히 찾아 바꾸고 트랜잭션으로 묶어야 하는 데이터는 [관계형 DB](/posts/db-type-relational)에 둔다.
+
+반대로 이런 신호가 보이면 시계열 저장소를 검토한다. 하루 수천만 줄 이상 쌓인다, 원본을 몇 주 이상 보존하면서 오래된 것은 요약으로 바꿔야 한다, 대시보드 쿼리가 원본을 매번 다시 훑는다, DELETE로 지우는 작업이 복제 지연을 만든다.
+
+실무에서 흔한 모양은 이렇다. 주문·회원·책은 PostgreSQL, 서버와 API 지표는 Prometheus, 페이지 조회 같은 대량 이벤트는 TimescaleDB나 컬럼형 분석 DB. 세 저장소가 각자 잘하는 읽기만 맡는다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="같은 서점에서 데이터 성격에 따라 나눠 담는다"
+  nodes={[
+    { id: "app", label: "서점 앱", x: 200, y: 40, w: 110 },
+    { id: "pg", label: "PostgreSQL", sub: "주문·회원·책", x: 70, y: 150, w: 120 },
+    { id: "ts", label: "TimescaleDB", sub: "조회 이벤트", x: 200, y: 220, w: 120 },
+    { id: "prom", label: "Prometheus", sub: "서버·API 지표", x: 330, y: 150, w: 120 },
+  ]}
+  edges={[
+    { from: "app", to: "pg", label: "트랜잭션" },
+    { from: "app", to: "ts", label: "INSERT" },
+    { from: "prom", to: "app", label: "긁기", dashed: true },
+  ]}
+/>
+
+## 끝에 붙이고, 덩어리로 버린다
+
+시계열 DB가 빠른 이유는 데이터가 시간 순서로 들어오고, 지난 값은 바뀌지 않는다는 가정에 있다. 그 가정 덕분에 시간으로 자른 덩어리 단위로 저장하고, 같은 시계열의 이웃한 값을 차이로 압축하고, 지난 구간은 요약으로 굳히고, 보존 기간이 지나면 덩어리째 버린다. 이 가정이 깨지는 데이터(자주 고치는 상태, 끝없이 늘어나는 레이블)를 넣을 때 시계열 DB가 아프다. 다음 글인 [컬럼형 분석 DB](/posts/db-type-columnar-olap)는 같은 압축 아이디어를 시간이 아닌 모든 컬럼으로 넓힌다.
+
+## 면접에서 나올 만한 질문
+
+### 시계열 데이터를 일반 관계형 테이블에 넣으면 무엇이 문제인가요?
+
+행 수에 비례하는 B-tree 인덱스가 원본만큼 커져서 쓰기와 저장 공간이 무거워진다. 대시보드가 같은 구간을 매번 원본에서 다시 집계하고, 보존 기간이 지난 데이터를 DELETE로 지우면 죽은 행과 WAL이 대량으로 생긴다. 일정 규모까지는 BRIN 인덱스, 날짜별 파티션, 요약 테이블로 버틸 수 있고, 시계열 DB는 이걸 자동화하고 압축을 더한 것이다.
+
+### BRIN 인덱스는 왜 시계열에 잘 맞나요?
+
+BRIN은 블록 묶음마다 최솟값과 최댓값만 저장해서 크기가 아주 작다. 시계열은 시간 순서대로 쌓이니 블록 묶음의 범위가 서로 겹치지 않아 필요한 블록만 고를 수 있다. 실험에서 B-tree 56MB가 BRIN 24kB였고, 1시간 조회는 1.6ms였다. 대신 블록 단위라 정확하지 않아 다시 거르는 비용이 있고, 데이터가 시간 순서와 다르게 섞이면 효과가 줄어든다.
+
+### 다운샘플링할 때 평균을 저장하면 안 되는 이유는요?
+
+구간마다 건수가 다르면 평균의 평균은 전체 평균과 다르기 때문이다. 합계와 건수를 저장하고 읽을 때 나누면 어떤 구간으로 다시 묶어도 정확하다. 최댓값과 최솟값은 다시 max, min으로 합칠 수 있지만, p99 같은 백분위수는 합계로도 합칠 수 없어 히스토그램 버킷이나 t-digest 같은 구조를 저장한다.
+
+### 오래된 데이터를 지울 때 DELETE 대신 무엇을 쓰나요?
+
+시간 단위 파티션이나 청크로 나눠 두고 기간이 지난 덩어리를 통째로 DROP하거나 DETACH한다. DELETE는 행마다 WAL을 남기고 죽은 행을 VACUUM이 치워야 해서, 실험에서 하루치 삭제에 WAL이 4.7MB였고 DROP은 12kB였다. TimescaleDB의 retention policy와 Prometheus의 블록 삭제도 같은 원리다.
+
+### 카디널리티 폭발이 무엇이고 어떻게 막나요?
+
+시계열 수는 레이블 값 종류의 곱이라, 회원 id나 요청 id처럼 값이 끝없이 늘어나는 레이블을 붙이면 시계열이 수백만 개로 늘어난다. 시계열마다 메모리에 청크와 색인이 생기니 메모리가 터지고 쿼리가 느려진다. URL은 패턴으로 바꾸고, 고유 id는 레이블에 넣지 않고, 정말 필요한 사용자별 분석은 로그나 이벤트로 남겨 분석 DB에서 집계한다.
+
+### 시계열 데이터는 어떻게 압축되나요?
+
+같은 시계열 값을 시간 순으로 붙여 두면 이웃끼리 비슷하다는 점을 이용한다. 시각은 앞과의 차이의 차이를 적어서 일정 간격이면 대부분 비트 하나로 끝나고, 값은 앞 값과 XOR해서 바뀐 비트만 적는다. Gorilla 논문은 점 하나를 평균 1.37바이트로 줄였고 Prometheus도 비슷한 방식을 쓴다. TimescaleDB는 오래된 청크를 컬럼 저장으로 바꿔 컬럼별로 맞는 압축을 고른다.
+
+### Prometheus와 TimescaleDB는 언제 각각 고르나요?
+
+Prometheus는 서버와 애플리케이션 모니터링 전용으로, 긁어 오는 방식과 알림, 서비스 발견이 한 묶음이고 숫자 지표만 다룬다. 로컬 저장이라 장기 보관은 Thanos나 Mimir 같은 저장소에 맡긴다. TimescaleDB는 PostgreSQL 확장이라 SQL과 조인, 트랜잭션이 필요한 이벤트·센서 데이터를 업무 데이터 옆에 둘 때 고른다.

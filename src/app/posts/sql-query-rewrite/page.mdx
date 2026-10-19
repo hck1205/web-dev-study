@@ -1,0 +1,633 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-query-rewrite");
+
+관리자 화면의 주문 목록이 느리다. 첫 페이지는 괜찮은데 뒤로 넘길수록 느려지고, 목록 하나를 여는 동안 DB에 쿼리가 41개 날아간다. 하루 치 결제를 보는 화면은 인덱스가 있는데도 50ms씩 걸린다. 범인 쿼리는 이미 찾았고 실행 계획도 읽었다. 이제 고쳐 쓸 차례다.
+
+느린 쿼리를 찾고 실행 계획을 읽는 방법은 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에서 다뤘다. 이 글은 그 계획에서 드러난 원인별로 쿼리를 고쳐 쓰고, 고친 전후의 계획을 나란히 본다. 필요한 컬럼만 고르기, 인덱스를 쓸 수 있는 조건으로 바꾸기, OFFSET 대신 키셋, N+1 없애기, 전체 개수 세기, EXISTS와 IN과 JOIN 고르기 순서다. 기준은 Ubuntu 24.04의 PostgreSQL 16이고, 실행 계획은 모두 이 환경에서 실제로 돌린 출력이다. 시간은 장비마다 다르니 자릿수와 `Buffers`를 보면 된다.
+
+## 주문 100만 건과 인덱스 넷
+
+예제는 [인덱스 글](/posts/db-index)과 같은 쇼핑몰 테이블이다. 회원 `users` 10만 명, 상품 `products` 1,000개, 주문 `orders` 100만 건이고, 테이블과 데이터는 그 글의 첫 절에 있는 SQL로 만든다. 그 위에 아래 인덱스를 만든 상태에서 출발한다.
+
+```sql
+-- 기본 키 셋(users, products, orders)은 테이블을 만들 때 생긴다
+CREATE INDEX orders_user_id_idx ON orders (user_id);
+CREATE INDEX orders_status_created_idx ON orders (status, created_at);
+CREATE INDEX orders_product_id_idx ON orders (product_id);
+CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
+```
+
+## 필요한 컬럼만 가져온다
+
+가장 쉬운 것부터. 10월 이후 결제 완료 주문의 날짜만 필요한데 `SELECT *`로 가져오면 이렇다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE status = 'paid' AND created_at >= '2026-10-01';
+```
+
+```text
+                                                                QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=146.27..8217.22 rows=4863 width=45) (actual time=0.341..1.343 rows=4958 loops=1)
+   Recheck Cond: ((status = 'paid'::text) AND (created_at >= '2026-10-01 00:00:00+09'::timestamp with time zone))
+   Heap Blocks: exact=330
+   Buffers: shared hit=352
+   ->  Bitmap Index Scan on orders_status_created_idx  (cost=0.00..145.06 rows=4863 width=0) (actual time=0.303..0.303 rows=4958 loops=1)
+         Index Cond: ((status = 'paid'::text) AND (created_at >= '2026-10-01 00:00:00+09'::timestamp with time zone))
+         Buffers: shared hit=22
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.095 ms
+ Execution Time: 1.563 ms
+(11 rows)
+```
+
+```sql
+-- 쓰는 컬럼만 적는다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT created_at FROM orders WHERE status = 'paid' AND created_at >= '2026-10-01';
+```
+
+```text
+                                                                  QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Index Only Scan using orders_status_created_idx on orders  (cost=0.42..193.69 rows=4863 width=8) (actual time=0.026..0.614 rows=4958 loops=1)
+   Index Cond: ((status = 'paid'::text) AND (created_at >= '2026-10-01 00:00:00+09'::timestamp with time zone))
+   Heap Fetches: 0
+   Buffers: shared hit=23
+ Planning Time: 0.047 ms
+ Execution Time: 0.856 ms
+(6 rows)
+```
+
+352페이지가 23페이지가 됐다. 필요한 컬럼이 다 인덱스에 있으니 Index Only Scan으로 바뀌었다. `width`도 45바이트에서 8바이트로 줄었는데, 이건 응용 서버로 보내는 데이터 양이다. 컬럼이 몇 개 안 되는 이 테이블에서는 작은 차이지만, 긴 본문(`text`)이나 `jsonb` 컬럼이 있는 테이블이라면 `SELECT *` 한 번에 수십 KB씩 실어 나른다. PostgreSQL은 큰 값을 TOAST라는 별도 저장소에 따로 두는데, 그 컬럼을 고르지 않으면 TOAST를 아예 읽지 않는다.
+
+ORM은 기본으로 모든 컬럼을 가져오는 경우가 많다. 목록 화면처럼 자주 도는 곳은 필요한 컬럼만 고르는 기능(select, projection, only 같은 이름)을 쓴다.
+
+## 컬럼은 그대로 두고 값을 바꾼다
+
+10월 1일 하루 동안 결제된 주문을 찾는다. 날짜로 비교하려고 `created_at`을 `date`로 바꿨다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, amount FROM orders
+WHERE status = 'paid' AND created_at::date = '2026-10-01';
+```
+
+```text
+                                                                      QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=4710.60..15139.15 rows=695 width=12) (actual time=42.103..50.145 rows=389 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=9413 read=474
+   ->  Parallel Bitmap Heap Scan on orders  (cost=3710.60..14069.65 rows=290 width=12) (actual time=39.652..40.284 rows=130 loops=3)
+         Recheck Cond: (status = 'paid'::text)
+         Filter: ((created_at)::date = '2026-10-01'::date)
+         Rows Removed by Filter: 46713
+         Heap Blocks: exact=3430
+         Buffers: shared hit=9413 read=474
+         ->  Bitmap Index Scan on orders_status_created_idx  (cost=0.00..3710.42 rows=138933 width=0) (actual time=14.627..14.627 rows=140528 loops=1)
+               Index Cond: (status = 'paid'::text)
+               Buffers: shared hit=67 read=474
+ Planning:
+   Buffers: shared hit=125
+ Planning Time: 0.564 ms
+ Execution Time: 50.250 ms
+(17 rows)
+```
+
+`Index Cond`에는 `status`만 있고, 날짜는 `Filter`로 밀려났다. 인덱스에는 `created_at` 원래 값이 정렬돼 있지 `created_at::date`의 결과는 없기 때문이다. 결제 완료 14만 건을 다 꺼내서 하나씩 날짜로 바꿔 보고 14만 건을 버렸다. 조건을 컬럼 쪽은 건드리지 않고 범위로 바꾼다.
+
+```sql
+-- 같은 뜻: 10월 1일 0시 이상, 10월 2일 0시 미만
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, amount FROM orders
+WHERE status = 'paid'
+  AND created_at >= '2026-10-01' AND created_at < '2026-10-02';
+```
+
+```text
+                                                                                      QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using orders_status_created_idx on orders  (cost=0.42..1119.76 rows=375 width=12) (actual time=0.015..0.129 rows=389 loops=1)
+   Index Cond: ((status = 'paid'::text) AND (created_at >= '2026-10-01 00:00:00+09'::timestamp with time zone) AND (created_at < '2026-10-02 00:00:00+09'::timestamp with time zone))
+   Buffers: shared hit=33
+ Planning:
+   Buffers: shared hit=125
+ Planning Time: 0.125 ms
+ Execution Time: 0.157 ms
+(7 rows)
+```
+
+9,887페이지가 33페이지, 50ms가 0.16ms가 됐다. 결과는 같은 389건이다. 이렇게 인덱스를 그대로 쓸 수 있는 조건을 sargable(Search ARGument ABLE)하다고 부른다. 규칙은 하나다. 인덱스 컬럼은 비교 연산자 한쪽에 맨몸으로 두고, 계산은 반대쪽 값에 한다.
+
+자주 보는 고칠 거리를 모으면 이렇다. `WHERE amount / 1000 > 50`은 `WHERE amount > 50000`으로, `WHERE extract(year FROM created_at) = 2026`은 `created_at >= '2026-01-01' AND created_at < '2027-01-01'`로, `WHERE coalesce(deleted_at, 'infinity') > now()`는 `WHERE deleted_at IS NULL OR deleted_at > now()`로 바꾼다. 범위의 끝은 `<= '2026-10-01 23:59:59'`가 아니라 `< '2026-10-02'`로 쓴다. 앞의 방식은 23:59:59.5 같은 소수점 초를 놓친다. 함수를 꼭 써야 하는 조건(대소문자 무시 검색 같은)은 그 식으로 식 인덱스를 만든다.
+
+`created_at::date`에는 함정이 하나 더 있다. `timestamptz`를 `date`로 바꾸는 결과는 세션의 시간대 설정에 따라 달라진다. 같은 쿼리가 서울 시간대 세션과 UTC 세션에서 다른 행을 고른다. 범위로 쓸 때도 시간대를 붙여 쓰면(`'2026-10-01 00:00+09'`) 이 문제가 없다.
+
+## 뒤 페이지로 갈수록 느려지는 OFFSET
+
+관리자 주문 목록은 최신 주문부터 20건씩 보여 준다. 흔히 이렇게 짠다.
+
+```sql
+-- 1페이지
+SELECT id, user_id, amount, created_at FROM orders ORDER BY id DESC LIMIT 20 OFFSET 0;
+-- 45001페이지
+SELECT id, user_id, amount, created_at FROM orders ORDER BY id DESC LIMIT 20 OFFSET 900000;
+```
+
+```text
+-- OFFSET 0
+ Limit  (cost=0.42..1.13 rows=20 width=28) (actual time=0.087..0.092 rows=20 loops=1)
+   Buffers: shared read=4
+   ->  Index Scan Backward using orders_pkey on orders  (cost=0.42..35329.43 rows=1000000 width=28) (actual time=0.086..0.089 rows=20 loops=1)
+         Buffers: shared read=4
+
+-- OFFSET 900000
+ Limit  (cost=31796.52..31797.23 rows=20 width=28) (actual time=159.677..159.683 rows=20 loops=1)
+   Buffers: shared hit=13333
+   ->  Index Scan Backward using orders_pkey on orders  (cost=0.42..35329.43 rows=1000000 width=28) (actual time=0.018..122.962 rows=900020 loops=1)
+         Buffers: shared hit=13333
+```
+
+두 번째 계획의 `Index Scan Backward`가 `rows=900020`을 내놓았다. `OFFSET 900000`은 "90만 건을 건너뛰라"는 뜻이지만, DB는 90만 건이 어디서 끝나는지 모른다. 인덱스를 처음부터 90만 20건 읽고, 앞의 90만 건을 버리고, 20건을 준다. 4페이지가 13,333페이지가 됐다.
+
+해결은 "몇 번째부터"가 아니라 "어디부터"로 묻는 것이다. 앞 페이지의 마지막 행 id를 기억했다가 그보다 작은 것부터 20건을 달라고 한다. 이걸 키셋 페이지네이션(keyset pagination) 또는 커서 페이지네이션이라고 부른다. 위의 `OFFSET 900000` 결과의 마지막 행은 id 99981이었다. 그 앞 페이지의 마지막이 100001이었으니 이렇게 쓴다.
+
+```sql
+-- 지난 페이지의 마지막 id가 100001이었다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, user_id, amount, created_at FROM orders
+WHERE id < 100001
+ORDER BY id DESC
+LIMIT 20;
+```
+
+```text
+                                                                 QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..1.18 rows=20 width=28) (actual time=0.033..0.038 rows=20 loops=1)
+   Buffers: shared hit=6 read=1
+   ->  Index Scan Backward using orders_pkey on orders  (cost=0.42..3842.12 rows=101411 width=28) (actual time=0.033..0.036 rows=20 loops=1)
+         Index Cond: (id < 100001)
+         Buffers: shared hit=6 read=1
+ Planning:
+   Buffers: shared hit=8
+ Planning Time: 0.136 ms
+ Execution Time: 0.051 ms
+(9 rows)
+```
+
+같은 20건(100000 ~ 99981)을 7페이지만 읽고 가져왔다. `Index Cond: (id < 100001)`로 인덱스에서 그 자리로 바로 내려간 다음 20건만 읽는다. 몇 번째 페이지든 읽는 양이 같다. 아래 그림에서 두 방식이 읽는 칸을 비교할 수 있다. 칸은 id 내림차순으로 정렬된 인덱스이고, 한 페이지는 3건이다.
+
+<AlgoTrace
+  caption="3페이지 가져오기: OFFSET 6과 WHERE id < 95"
+  memoryLabel="읽고 버린 행"
+  cells={["100", "99", "98", "97", "96", "95", "94", "93", "92", "91"]}
+  steps={[
+    { memory: [], caption: "OFFSET 방식: LIMIT 3 OFFSET 6. DB는 6건이 어디서 끝나는지 모르니 맨 앞부터 센다." },
+    { pointer: 2, memory: ["100", "99", "98"], caption: "1, 2, 3번째. 읽기는 다 읽고 결과에서는 버린다." },
+    { pointer: 5, memory: ["100", "99", "98", "97", "96", "95"], caption: "6건을 다 읽고 버렸다. 페이지가 뒤로 갈수록 이 줄이 길어진다. 90만 건 뒤라면 90만 건이다." },
+    { pointer: 8, found: [6, 7, 8], memory: ["100", "99", "98", "97", "96", "95"], caption: "그제야 94, 93, 92를 돌려준다. 9칸을 읽고 3칸을 썼다." },
+    { pointer: 6, found: [6], memory: [], caption: "키셋 방식: 지난 페이지의 마지막 id가 95였다. WHERE id < 95로 인덱스에서 94 자리로 바로 내려간다." },
+    { pointer: 8, found: [6, 7, 8], memory: [], caption: "3칸만 읽고 끝. 버린 행이 없다. 몇 페이지 뒤든 읽는 양이 같다." },
+  ]}
+/>
+
+OFFSET에는 속도 말고 문제가 하나 더 있다. 사용자가 1페이지를 보는 사이에 새 주문이 3건 들어오면, 2페이지를 `OFFSET 20`으로 가져올 때 1페이지 끝의 3건이 다시 나온다. 반대로 지워지면 건너뛰는 행이 생긴다. 키셋은 "이 id보다 작은 것"이라 새로 들어온 행에 영향을 받지 않는다.
+
+정렬 기준이 유일하지 않은 컬럼이면 동점을 끊는 컬럼을 하나 더 붙인다. 같은 시각에 들어온 주문이 여러 건일 수 있으니 `created_at`만으로는 경계가 모호하다. `(created_at, id)`로 정렬하고, 같은 순서의 복합 인덱스를 만들고, 행 비교로 묻는다.
+
+```sql
+CREATE INDEX orders_created_id_idx ON orders (created_at, id);
+
+-- 지난 페이지 마지막 행: created_at = 2025-12-04 17:10:30+09, id = 99981
+SELECT id, user_id, amount, created_at FROM orders
+WHERE (created_at, id) < ('2025-12-04 17:10:30+09', 99981)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+실행 계획을 보면 `Index Cond: (ROW(created_at, id) < ROW(...))`로 인덱스 안에서 바로 시작점을 찾고 6페이지만 읽었다. 행 비교를 지원하지 않는 DB나 쿼리 빌더라면 같은 뜻을 `created_at < $1 OR (created_at = $1 AND id < $2)`로 풀어 쓴다.
+
+키셋의 대가는 "45001페이지로 바로 가기"를 못 한다는 점이다. 다음, 이전, 더 보기(무한 스크롤)만 된다. 대부분의 목록 화면은 그걸로 충분하다. 페이지 번호가 꼭 필요하면 OFFSET을 쓰되 갈 수 있는 페이지 수에 상한을 둔다. API에서는 마지막 행의 값을 그대로 노출하지 않고 base64 같은 불투명한 커서 문자열로 감싸 주는 경우가 많다.
+
+## 목록 하나에 쿼리 41개
+
+[느린 쿼리 찾기 글](/posts/sql-query-tuning)의 `pg_stat_statements` 결과에서 회원과 상품을 id 하나로 찾는 쿼리가 각각 1,000번씩 돌았다. 주문 목록 화면을 ORM으로 짜면 흔히 이런 코드가 된다.
+
+```js
+// 주문 20건을 가져온 뒤, 화면에 이메일과 상품명을 찍는다
+const orders = await Order.findAll({ order: [["id", "DESC"]], limit: 20 });
+for (const order of orders) {
+  const user = await order.getUser();       // 여기서 쿼리 1번
+  const product = await order.getProduct(); // 여기서 또 1번
+  rows.push({ id: order.id, email: user.email, product: product.name });
+}
+```
+
+코드에는 쿼리가 안 보이지만 `order.getUser()`가 부를 때마다 SQL을 하나씩 보낸다. 목록 쿼리 1번에 주문마다 2번씩, 화면 하나에 41번이다. 목록 1번(1)에 행 수(N)만큼 더 나간다고 해서 N+1 문제라고 부른다. 아래 그림에서 다음을 누르면 응용 서버와 DB가 주고받는 순서가 나온다.
+
+<SequenceDiagram
+  caption="N+1: 행마다 한 번씩 왕복한다"
+  actors={[
+    { id: "app", label: "응용 서버" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "db",
+      label: "주문 20건",
+      title: "목록을 가져온다 (1)",
+      detail: "여기까지는 쿼리 하나다. 결과에는 user_id와 product_id만 있다.",
+      payload: "SELECT id, user_id, product_id, amount\nFROM orders ORDER BY id DESC LIMIT 20",
+    },
+    {
+      from: "db",
+      to: "app",
+      label: "20행",
+      title: "user_id 20개를 받는다",
+      detail: "이메일과 상품명은 다른 테이블에 있다. ORM은 필요할 때 따로 가져온다(지연 로딩).",
+    },
+    {
+      from: "app",
+      to: "db",
+      label: "users id=69349",
+      title: "첫 번째 주문의 회원",
+      detail: "DB 안에서는 0.01ms면 끝나는 쿼리다. 하지만 요청이 가고 응답이 올 때까지 응용 서버는 기다린다.",
+      payload: "SELECT id, email FROM users WHERE id = 69349",
+    },
+    {
+      from: "db",
+      to: "app",
+      label: "1행",
+      title: "한 번 왕복이 끝났다",
+      detail: "같은 데이터센터 안이라도 왕복에 0.1~1ms가 든다. 쿼리 자체보다 왕복이 훨씬 길다.",
+    },
+    {
+      from: "app",
+      to: "db",
+      label: "… 39번 더",
+      title: "나머지도 한 건씩 (N)",
+      detail: "회원 19번, 상품 20번이 더 나간다. 왕복을 0.5ms로 잡으면 40번에 20ms다. 목록이 100건이면 100ms가 된다.",
+    },
+    {
+      from: "app",
+      to: "db",
+      label: "JOIN 1번",
+      title: "고친 뒤: 한 번에 묻는다",
+      detail: "회원과 상품을 조인해서 같은 결과를 쿼리 하나로 받는다. 왕복은 한 번이다.",
+      payload: "SELECT o.id, o.amount, u.email, p.name\nFROM orders o\nJOIN users u ON u.id = o.user_id\nJOIN products p ON p.id = o.product_id\nORDER BY o.id DESC LIMIT 20",
+    },
+    {
+      from: "db",
+      to: "app",
+      label: "20행",
+      title: "필요한 값이 다 들어 있다",
+      detail: "쿼리 41개가 1개가 됐다. DB가 처리할 연결 요청과 파싱도 그만큼 줄었다.",
+    },
+  ]}
+/>
+
+DB 쪽에서 보면 개별 쿼리는 빨라서 슬로 쿼리 로그에 하나도 안 남는다. 그래서 N+1은 `pg_stat_statements`의 `calls`나, 응용 쪽 쿼리 로그에서 같은 모양의 쿼리가 반복되는 걸로 찾는다. 고치는 방법은 두 가지다. 하나는 조인으로 한 번에 가져오는 것이다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT o.id, o.amount, o.created_at, u.email, p.name AS product
+FROM orders AS o
+JOIN users    AS u ON u.id = o.user_id
+JOIN products AS p ON p.id = o.product_id
+ORDER BY o.id DESC
+LIMIT 20;
+```
+
+```text
+                                                                         QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1.01..5.02 rows=20 width=51) (actual time=0.067..0.317 rows=20 loops=1)
+   Buffers: shared hit=124
+   ->  Nested Loop  (cost=1.01..200244.63 rows=1000000 width=51) (actual time=0.066..0.313 rows=20 loops=1)
+         Buffers: shared hit=124
+         ->  Nested Loop  (cost=0.73..174966.78 rows=1000000 width=49) (actual time=0.051..0.187 rows=20 loops=1)
+               Buffers: shared hit=64
+               ->  Index Scan Backward using orders_pkey on orders o  (cost=0.42..35329.43 rows=1000000 width=36) (actual time=0.022..0.025 rows=20 loops=1)
+                     Buffers: shared hit=4
+               ->  Memoize  (cost=0.30..0.32 rows=1 width=29) (actual time=0.008..0.008 rows=1 loops=20)
+                     Cache Key: o.user_id
+                     Cache Mode: logical
+                     Hits: 0  Misses: 20  Evictions: 0  Overflows: 0  Memory Usage: 3kB
+                     Buffers: shared hit=60
+                     ->  Index Scan using users_pkey on users u  (cost=0.29..0.31 rows=1 width=29) (actual time=0.006..0.006 rows=1 loops=20)
+                           Index Cond: (id = o.user_id)
+                           Buffers: shared hit=60
+         ->  Memoize  (cost=0.29..0.30 rows=1 width=18) (actual time=0.006..0.006 rows=1 loops=20)
+               Cache Key: o.product_id
+               Cache Mode: logical
+               Hits: 0  Misses: 20  Evictions: 0  Overflows: 0  Memory Usage: 3kB
+               Buffers: shared hit=60
+               ->  Index Scan using products_pkey on products p  (cost=0.28..0.29 rows=1 width=18) (actual time=0.005..0.005 rows=1 loops=20)
+                     Index Cond: (id = o.product_id)
+                     Buffers: shared hit=60
+ Planning:
+   Buffers: shared hit=28
+ Planning Time: 0.383 ms
+ Execution Time: 4.057 ms
+(28 rows)
+```
+
+DB 안에서 하는 일은 N+1과 거의 같다. 주문 20건마다 회원과 상품을 기본 키로 찾는다(`loops=20`). 다른 점은 이 반복이 DB 안에서 일어나서 왕복이 한 번뿐이라는 것이다. `Memoize`는 PostgreSQL 14부터 생긴 노드로, 같은 키로 안쪽을 다시 찾을 때 결과를 재사용한다. 이번엔 회원이 다 달라서 `Hits: 0`이지만, 같은 회원의 주문이 여러 건이면 재사용된다.
+
+다른 하나는 id를 모아서 한 번에 가져오는 것이다. ORM의 eager loading(`include`, `prefetch_related`, `fetch join`, `@EntityGraph` 같은 이름)이 이 방식이나 조인을 대신 만들어 준다.
+
+```sql
+-- 목록에서 얻은 user_id 20개를 한 번에
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, email FROM users
+WHERE id IN (69349, 73450, 94542, 13214, 22327, 75744, 87645, 19462, 26505, 47252,
+             58462, 99098, 20202, 98479, 58086, 74518, 21374, 62075, 14318, 18615);
+```
+
+```text
+                                                                            QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using users_pkey on users  (cost=0.29..90.20 rows=20 width=29) (actual time=0.063..0.143 rows=20 loops=1)
+   Index Cond: (id = ANY ('{69349,73450,94542,13214,22327,75744,87645,19462,26505,47252,58462,99098,20202,98479,58086,74518,21374,62075,14318,18615}'::bigint[]))
+   Buffers: shared hit=63
+ Planning:
+   Buffers: shared hit=2 read=1
+ Planning Time: 0.144 ms
+ Execution Time: 0.155 ms
+(7 rows)
+```
+
+PostgreSQL은 `IN (...)` 목록을 `= ANY(배열)`로 바꿔 인덱스에서 한 번에 찾는다. 쿼리는 목록, 회원, 상품 세 번이다. 조인은 쿼리가 하나지만 한쪽에 여러 행이 붙는 일대다 관계(주문 하나에 상품 여러 개)면 결과 행이 곱해져 중복 데이터가 많아진다. 그럴 때는 IN 방식이 낫다. IN 목록이 수천 개로 길어지면 SQL 자체가 커지니, 응용에서 배열 하나를 파라미터로 넘기는 `WHERE id = ANY($1)`을 쓰면 쿼리 모양도 하나로 고정된다.
+
+응용 서버의 쿼리 로그에서 N+1을 찾는 함수를 직접 만들어 보자. 쿼리 문자열 목록과 기준 횟수를 받아서, 값만 다르고 모양이 같은 쿼리가 기준 이상 반복되면 그 모양과 횟수를 돌려준다. 문자열과 숫자 값은 `?`로 바꾸고, `IN (?, ?, ?)`처럼 개수만 다른 목록은 `IN (?)` 하나로 본다. `pg_stat_statements`가 쿼리를 묶는 방식을 흉내 낸 것이다.
+
+<CodePlayground
+  caption="쿼리 로그에서 N+1 찾기"
+  functionName="findNPlusOne"
+  initialCode={`function findNPlusOne(queries, threshold) {
+  // 1. 쿼리마다 값을 ?로 바꿔 '모양'을 만든다
+  //    문자열 '...' → ?, 숫자 → ?, (?, ?, ?) → (?), 공백 정리, 끝의 ; 제거
+  // 2. 모양별로 횟수를 센다
+  // 3. threshold 이상인 것만 { query, count }로, 많은 순서대로 돌려준다
+  return [];
+}`}
+  solution={`function findNPlusOne(queries, threshold) {
+  const groups = new Map(); // 모양 → 횟수 (처음 나온 순서가 유지된다)
+  for (const sql of queries) {
+    const shape = sql
+      .replace(/'(?:[^']|'')*'/g, "?")              // 문자열 값
+      .replace(/\\b\\d+(?:\\.\\d+)?\\b/g, "?")          // 숫자 값 (t1, items_2026 같은 이름은 그대로)
+      .replace(/\\(\\s*\\?(?:\\s*,\\s*\\?)*\\s*\\)/g, "(?)") // IN 목록의 개수 차이 없애기
+      .replace(/\\s+/g, " ")                         // 줄바꿈과 연속 공백
+      .replace(/;\\s*$/, "")
+      .trim();
+    groups.set(shape, (groups.get(shape) || 0) + 1);
+  }
+  return [...groups]
+    .filter(([, count]) => count >= threshold)
+    .map(([query, count]) => ({ query, count }))
+    .sort((a, b) => b.count - a.count);
+}`}
+  tests={[
+    {
+      label: "회원을 한 명씩 찾는 N+1",
+      args: [[
+        "SELECT id, user_id, product_id FROM orders ORDER BY id DESC LIMIT 20",
+        "SELECT id, email FROM users WHERE id = 69349",
+        "SELECT id, email FROM users WHERE id = 73450",
+        "SELECT id, email FROM users WHERE id = 94542",
+      ], 3],
+      expected: [{ query: "SELECT id, email FROM users WHERE id = ?", count: 3 }],
+    },
+    {
+      label: "문자열 값도 ?로 묶는다",
+      args: [[
+        "SELECT id FROM users WHERE lower(email) = 'kim@example.com'",
+        "SELECT id FROM users WHERE lower(email) = 'lee@example.com'",
+      ], 2],
+      expected: [{ query: "SELECT id FROM users WHERE lower(email) = ?", count: 2 }],
+    },
+    {
+      label: "테이블이 다르면 다른 쿼리다",
+      args: [[
+        "SELECT * FROM orders WHERE id = 1",
+        "SELECT * FROM users WHERE id = 1",
+        "SELECT * FROM products WHERE id = 1",
+      ], 2],
+      expected: [],
+    },
+    {
+      label: "IN 목록은 개수가 달라도 같은 모양",
+      args: [[
+        "SELECT id, email FROM users WHERE id IN (1, 2, 3)",
+        "SELECT id, email FROM users WHERE id IN (4,5)",
+      ], 2],
+      expected: [{ query: "SELECT id, email FROM users WHERE id IN (?)", count: 2 }],
+    },
+    {
+      label: "줄바꿈과 세미콜론, 두 종류의 N+1",
+      args: [[
+        "SELECT  id, name\n  FROM products\n  WHERE id = 723;",
+        "SELECT id, name FROM products WHERE id = 573",
+        "SELECT id, email FROM users WHERE id = 69349",
+        "SELECT id, name FROM products WHERE id = 26",
+        "SELECT id, email FROM users WHERE id = 73450",
+        "SELECT id, name FROM products WHERE id = 507",
+      ], 2],
+      expected: [
+        { query: "SELECT id, name FROM products WHERE id = ?", count: 4 },
+        { query: "SELECT id, email FROM users WHERE id = ?", count: 2 },
+      ],
+    },
+    {
+      label: "이름 안의 숫자는 지우지 않는다",
+      args: [[
+        "SELECT * FROM order_items_2026 WHERE order_id = 5",
+        "SELECT * FROM order_items_2026 WHERE order_id = 6",
+      ], 2],
+      expected: [{ query: "SELECT * FROM order_items_2026 WHERE order_id = ?", count: 2 }],
+    },
+  ]}
+/>
+
+실제로는 요청 하나 안에서 같은 모양이 몇 번 나왔는지를 봐야 정확하다. 많은 ORM과 APM 도구가 요청 단위로 이렇게 세서 N+1을 경고해 준다.
+
+## 전체 개수 세기는 비싸다
+
+목록 아래에 "전체 1,000,000건"을 찍으려고 `count(*)`를 돌린다. `pg_stat_statements`에서 한 번에 22ms씩 쓰던 쿼리다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM orders;
+```
+
+```text
+                                                                                 QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=14760.97..14760.98 rows=1 width=8) (actual time=56.235..59.618 rows=1 loops=1)
+   Buffers: shared hit=7 read=879
+   ->  Gather  (cost=14760.76..14760.97 rows=2 width=8) (actual time=56.120..59.608 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=7 read=879
+         ->  Partial Aggregate  (cost=13760.76..13760.77 rows=1 width=8) (actual time=53.174..53.175 rows=1 loops=3)
+               Buffers: shared hit=7 read=879
+               ->  Parallel Index Only Scan using orders_product_id_idx on orders  (cost=0.42..12719.09 rows=416667 width=0) (actual time=0.084..31.760 rows=333333 loops=3)
+                     Heap Fetches: 0
+                     Buffers: shared hit=7 read=879
+ Planning:
+   Buffers: shared hit=122
+ Planning Time: 0.385 ms
+ Execution Time: 59.714 ms
+(15 rows)
+```
+
+플래너가 가장 작은 인덱스(`product_id`, 7MB)를 골라 병렬로 끝까지 훑었다. 그래도 100만 개 항목을 다 센다. PostgreSQL은 MVCC 때문에 "지금 이 트랜잭션에서 보이는 행"의 수가 트랜잭션마다 다를 수 있어서, 테이블에 행 수를 하나 적어 두고 꺼내 주지 못한다. MySQL InnoDB도 같은 이유로 `count(*)`가 전체를 센다.
+
+정확한 숫자가 꼭 필요한지부터 묻는다. 대개는 필요 없다.
+
+```sql
+-- 통계에 적힌 추정치 (ANALYZE, VACUUM 때 갱신된다)
+SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = 'orders';
+```
+
+```text
+ estimate
+----------
+  1000000
+(1 row)
+```
+
+조건이 붙은 개수의 대략값은 `EXPLAIN`의 예상 행 수를 쓰는 방법도 있다. `EXPLAIN SELECT * FROM orders WHERE status = 'paid'`의 첫 줄에 `rows=138933`이 나오고, 실제 값은 140528이다. "약 14만 건"으로 보여 주기에는 충분하다. 다음 페이지가 있는지만 알면 되는 화면이라면 `LIMIT 21`로 21건을 가져와서 21번째가 있는지로 판단한다. 정확한 숫자가 자주 필요하면 주문이 들어올 때 함께 올리는 집계 테이블을 따로 두되, 모든 주문이 한 행을 갱신하면 그 행이 잠금 경합 지점이 된다는 점을 감안한다.
+
+## EXISTS, IN, JOIN 중 무엇을 쓰나
+
+"상품 7번을 한 번이라도 산 회원"을 찾는다. 세 가지로 쓸 수 있다.
+
+```sql
+-- 1. EXISTS: 주문이 하나라도 있으면 참
+SELECT u.id, u.email FROM users AS u
+WHERE EXISTS (SELECT 1 FROM orders AS o WHERE o.user_id = u.id AND o.product_id = 7);
+
+-- 2. IN: 상품 7번 주문의 user_id 목록에 들어 있으면 참
+SELECT u.id, u.email FROM users AS u
+WHERE u.id IN (SELECT o.user_id FROM orders AS o WHERE o.product_id = 7);
+
+-- 3. JOIN: 주문과 짝지은 뒤 중복을 없앤다
+SELECT DISTINCT u.id, u.email FROM users AS u
+JOIN orders AS o ON o.user_id = u.id
+WHERE o.product_id = 7;
+```
+
+PostgreSQL에서 1과 2는 똑같은 계획이 나온다. 둘 다 세미 조인(semi join: 짝이 하나라도 있으면 왼쪽 행을 한 번만 내보내는 조인)으로 바뀌기 때문이다.
+
+```text
+-- EXISTS와 IN의 계획 (같다)
+ Hash Join  (cost=2927.86..5136.43 rows=995 width=29) (actual time=1.998..18.770 rows=1011 loops=1)
+   Hash Cond: (u.id = o.user_id)
+   Buffers: shared hit=1908
+   ->  Seq Scan on users u  (cost=0.00..1935.00 rows=100000 width=29) (actual time=0.002..6.896 rows=100000 loops=1)
+         Buffers: shared hit=935
+   ->  Hash  (cost=2915.48..2915.48 rows=990 width=8) (actual time=1.991..1.994 rows=1011 loops=1)
+         Buckets: 1024  Batches: 1  Memory Usage: 48kB
+         Buffers: shared hit=973
+         ->  HashAggregate  (cost=2905.58..2915.48 rows=990 width=8) (actual time=1.752..1.855 rows=1011 loops=1)
+               Group Key: o.user_id
+               Batches: 1  Memory Usage: 129kB
+               Buffers: shared hit=973
+               ->  Bitmap Heap Scan on orders o  (cost=12.14..2903.09 rows=995 width=8) (actual time=0.252..1.577 rows=1015 loops=1)
+                     Recheck Cond: (product_id = 7)
+```
+
+`HashAggregate`가 user_id의 중복을 먼저 없애서(1015 → 1011), 회원 한 명이 한 번만 나온다. JOIN으로 쓰면 상품 7번을 두 번 산 회원이 두 행으로 나오니(1015행) `DISTINCT`가 필요하고, 계획 맨 위에 `Sort`와 `Unique`가 붙는다. 이 데이터에서는 32ms로 세미 조인보다 느렸다. "있는지"만 묻는 거라면 EXISTS나 IN으로 쓰는 게 뜻도 분명하고 계획도 낫다. 오른쪽 테이블의 컬럼이 결과에 필요할 때 JOIN을 쓴다.
+
+부정형에서는 차이가 커진다. "한 번도 주문하지 않은 회원"을 `NOT IN`으로 쓰면 NULL 때문에 함정이 생긴다.
+
+```sql
+SELECT 'found' AS result WHERE 3 NOT IN (1, 2, NULL);
+```
+
+```text
+ result
+--------
+(0 rows)
+```
+
+3은 1도 2도 아닌데 결과가 없다. `3 <> NULL`은 참도 거짓도 아닌 "알 수 없음"이라, 목록에 NULL이 하나라도 있으면 `NOT IN` 전체가 참이 될 수 없다. 서브쿼리 결과에 NULL이 섞이면 결과가 통째로 사라진다. 그리고 이 의미를 지키느라 PostgreSQL은 `NOT IN`을 안티 조인으로 바꾸지 못한다.
+
+```sql
+EXPLAIN SELECT count(*) FROM users AS u
+WHERE u.id NOT IN (SELECT o.user_id FROM orders AS o);
+
+EXPLAIN SELECT count(*) FROM users AS u
+WHERE NOT EXISTS (SELECT 1 FROM orders AS o WHERE o.user_id = u.id);
+```
+
+```text
+-- NOT IN
+ Finalize Aggregate  (cost=640690677.42..640690677.43 rows=1 width=8)
+   ->  Gather  (cost=640690677.21..640690677.42 rows=2 width=8)
+         Workers Planned: 2
+         ->  Partial Aggregate  (cost=640689677.21..640689677.22 rows=1 width=8)
+               ->  Parallel Index Only Scan using users_pkey on users u  (cost=0.29..640689625.13 rows=20833 width=0)
+                     Filter: (NOT (SubPlan 1))
+                     SubPlan 1
+                       ->  Materialize  (cost=0.00..28253.00 rows=1000000 width=8)
+                             ->  Seq Scan on orders o  (cost=0.00..19346.00 rows=1000000 width=8)
+
+-- NOT EXISTS
+ Finalize Aggregate  (cost=22430.18..22430.19 rows=1 width=8)
+   ->  Gather  (cost=22429.97..22430.18 rows=2 width=8)
+         Workers Planned: 2
+         ->  Partial Aggregate  (cost=21429.97..21429.98 rows=1 width=8)
+               ->  Parallel Hash Right Anti Join  (cost=2541.80..21421.84 rows=3252 width=0)
+                     Hash Cond: (o.user_id = u.id)
+                     ->  Parallel Seq Scan on orders o  (cost=0.00..13512.67 rows=416667 width=8)
+                     ->  Parallel Hash  (cost=2020.96..2020.96 rows=41667 width=8)
+                           ->  Parallel Index Only Scan using users_pkey on users u  (cost=0.29..2020.96 rows=41667 width=8)
+```
+
+`NOT IN`의 예상 비용은 6억 4천만이다. 서브쿼리 결과 100만 행이 메모리 한도(`work_mem`) 안의 해시 표가 되지 못해서, 회원 한 명마다 주문 목록을 앞에서부터 훑어 짝을 찾는 계획이 됐다. 최악이면 회원 10만 명 × 주문 100만 행, 비교가 1천억 번이다. `NOT EXISTS`는 안티 조인(짝이 없는 행만 내보내는 조인)으로 바뀌어 비용이 2만 2천이다. 부정형은 습관적으로 `NOT EXISTS`로 쓴다. 결과는 3명이다.
+
+## 코드 리뷰에서 먼저 걸러 내는 모양
+
+현장에서 이 내용이 가장 많이 쓰이는 곳은 실행 계획을 보기도 전, 쿼리가 들어오는 코드 리뷰다. 위에서 고친 것들은 모두 SQL이나 ORM 코드의 모양만 봐도 알아챌 수 있다.
+
+컬럼에 함수나 형 변환을 씌운 `WHERE`(`created_at::date = ...`, `extract(year FROM ...)`, `amount / 1000 > ...`)는 범위 조건으로 바꿔 달라고 한다. 목록 API의 `OFFSET`은 갈 수 있는 페이지에 상한이 있는지, 정렬 키가 유일한지 본다. 반복문 안에서 연관 객체를 꺼내는 ORM 코드(`order.getUser()` 같은)는 N+1 후보다. 목록마다 붙는 `count(*)`는 정말 정확한 숫자가 필요한지 묻는다. `NOT IN (SELECT ...)`은 `NOT EXISTS`로 바꾼다.
+
+리뷰로 못 잡는 건 실제 데이터에서만 보인다. 그래서 고친 쿼리를 올릴 때는 운영과 비슷한 크기의 데이터에서 돌린 고치기 전과 후의 `EXPLAIN (ANALYZE, BUFFERS)` 한 쌍을 함께 붙인다. 이 글에서 비교한 숫자처럼 `Buffers`가 9,887에서 33으로, 13,333에서 7로 줄었다는 식으로 적으면 리뷰하는 사람이 바로 판단할 수 있다. 테스트 데이터가 수백 건뿐이면 어느 쿼리든 Seq Scan으로 0.1ms에 끝나서 차이가 드러나지 않는다.
+
+배포한 뒤에는 `pg_stat_statements`에서 그 쿼리의 `mean_exec_time`과 `calls`가 실제로 바뀌었는지 다시 본다. N+1을 고쳤다면 같은 화면을 열었을 때 회원 조회 쿼리의 `calls`가 늘지 않아야 한다. 통계를 배포 직전에 `pg_stat_statements_reset()`으로 비워 두면 비교하기 쉽다.
+
+## 읽는 양을 줄이는 쪽으로
+
+쿼리를 고친다는 건 DB가 읽고 버리는 양을 줄이는 일이다. 필요한 컬럼만 고르면 힙을 덜 가고, 인덱스 컬럼을 맨몸으로 두면 인덱스에서 바로 범위를 좁히고, 키셋은 버리는 행을 없애고, 조인이나 `= ANY`는 왕복을 한 번으로 줄인다. 정확한 개수가 꼭 필요한지 묻고, 부정형은 `NOT EXISTS`로 쓴다. 어느 경우든 고친 뒤 `Buffers`로 확인한다. 쿼리 하나보다 커밋 수, 트랜잭션 길이, 연결 수 같은 바깥쪽 비용이 더 클 때도 있다. 그 이야기는 [쓰기 묶기와 커넥션 풀 글](/posts/sql-batch-timeout-pool)에서 한다.
+
+## 면접에서 나올 만한 질문
+
+### sargable한 조건이란 무엇인가요?
+
+인덱스를 그대로 써서 범위를 좁힐 수 있는 조건이다. 인덱스에는 컬럼의 원래 값이 정렬돼 있으니, 컬럼에 함수나 형 변환을 씌우면(`created_at::date = '2026-10-01'`) 인덱스로 찾지 못하고 행마다 계산해 거른다. 컬럼은 맨몸으로 두고 계산은 반대쪽 값에 해서 `created_at >= '2026-10-01' AND created_at < '2026-10-02'`처럼 쓴다. 예제에서는 9,887페이지가 33페이지가 됐다. 함수가 꼭 필요하면 그 식으로 식 인덱스를 만든다.
+
+### OFFSET 페이지네이션은 왜 느려지고, 어떻게 고치나요?
+
+`OFFSET n`은 앞의 n행을 실제로 읽고 버리기 때문에 페이지가 뒤로 갈수록 읽는 양이 늘어난다. 예제에서 `OFFSET 900000`은 90만 20행을 읽어 13,333페이지를 썼다. 앞 페이지 마지막 행의 키를 기억해 `WHERE id < 마지막 id ORDER BY id DESC LIMIT 20`처럼 묻는 키셋 페이지네이션으로 바꾸면 어느 페이지든 몇 페이지만 읽는다. 정렬 키가 유일하지 않으면 `(created_at, id)`처럼 동점을 끊는 컬럼을 붙이고 같은 순서의 인덱스를 만든다. 대신 임의 페이지로 바로 가는 기능은 포기한다.
+
+### N+1 문제가 무엇이고 어떻게 해결하나요?
+
+목록을 쿼리 하나로 가져온 뒤, 행마다 연관 데이터를 다시 쿼리해서 1 + N번 왕복하는 문제다. ORM의 지연 로딩에서 흔하고, 개별 쿼리는 빨라 슬로 로그에 안 잡히지만 왕복 시간이 행 수만큼 쌓인다. 조인으로 한 번에 가져오거나, id를 모아 `WHERE id = ANY($1)` 한 번으로 가져오는 eager loading으로 고친다. 일대다 관계를 조인하면 결과 행이 곱해지니 그때는 IN 방식이 낫다.
+
+### 큰 테이블에서 COUNT(*)가 느린 이유와 대안은요?
+
+PostgreSQL과 InnoDB는 MVCC 때문에 트랜잭션마다 보이는 행이 달라서, 행 수를 따로 저장해 두지 못하고 매번 센다. 인덱스만 훑어도 100만 행이면 수십 ms다. 정확한 값이 필요 없으면 `pg_class.reltuples`나 `EXPLAIN`의 예상 행 수를 쓰고, 다음 페이지 여부만 필요하면 `LIMIT n+1`로 판단한다. 정확한 값이 자주 필요하면 별도 집계 테이블을 두되 갱신 경합을 고려한다.
+
+### NOT IN 대신 NOT EXISTS를 쓰라는 이유는요?
+
+서브쿼리 결과에 NULL이 하나라도 있으면 `x NOT IN (...)`은 참이 될 수 없어 결과가 통째로 사라진다. 이 의미 때문에 PostgreSQL은 `NOT IN`을 안티 조인으로 바꾸지 못하고, 결과가 메모리에 안 들어가면 행마다 서브쿼리를 훑는 계획이 된다. 예제에서 예상 비용이 6억 4천만 대 2만 2천으로 갈렸다. `NOT EXISTS`는 NULL 문제가 없고 안티 조인으로 바뀐다.
+

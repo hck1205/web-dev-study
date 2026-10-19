@@ -101,4 +101,19 @@ export const VECTOR_DB: QuizQuestion[] = [
       "조건에 맞는 문서가 드물면 상위 10개 안에 거의 없어서 결과가 텅 빈다. 그래서 탐색 중에 조건을 함께 거는 필터링이나 후보를 넉넉히 뽑는 방법을 쓴다.",
     anchor: "직접-붙여-볼-때",
   },
+  {
+    id: "vector-db-8",
+    post: "vector-db",
+    question: "pgvector에서 category 조건을 걸고 LIMIT 10으로 가까운 문서를 찾았더니 1개만 왔고, 실행 계획에 Rows Removed by Filter: 39가 보였다. 이유는?",
+    choices: [
+      "코사인 인덱스에 유클리드 연산자를 써서 인덱스를 못 탔다",
+      "HNSW가 ef_search(기본 40)개 후보만 꺼낸 뒤에 필터를 걸어서 조건에 맞는 것이 거의 남지 않았다",
+      "벡터 차원이 테이블 정의와 달라서 일부 행이 무시됐다",
+      "maintenance_work_mem이 작아서 인덱스가 덜 만들어졌다",
+    ],
+    answer: 1,
+    explanation:
+      "HNSW 인덱스는 후보를 ef_search개만 꺼내고 WHERE 조건은 그 뒤에 적용된다(post-filtering). 40개 중 39개가 걸러져 1개만 남았다. 조건이 정해져 있으면 그 조건의 부분 인덱스를 만들고, 0.8.0 이상이면 반복 탐색도 쓸 수 있다.",
+    anchor: "pgvector를-붙였는데-결과가-이상할-때",
+  },
 ];

@@ -475,6 +475,73 @@ WebSocket 자체에는 SSE 같은 자동 재연결도, 놓친 메시지 이어�
 
 넷째는 재연결 폭주다. 서버를 배포하면 거기 붙어 있던 연결 수만 개가 동시에 끊기고, 모두 즉시 다시 붙으려 한다. 막 뜬 새 서버가 이걸 그대로 맞으면 다시 쓰러진다. 그래서 클라이언트는 다시 붙을 때 [지수 백오프와 지터](/posts/resilience-patterns)로 대기 시간을 흩는다. 서버 쪽에서는 배포할 때 연결을 한꺼번에 끊지 않고 조금씩 닫는다(drain).
 
+## 로컬에선 되는데 서버에 올리면 멈출 때
+
+실시간 기능은 개발 서버에 바로 붙는 로컬에서는 잘 되다가, 앞에 프록시가 생기는 순간 다르게 움직인다. 증상은 "이벤트가 몰려서 온다", "연결이 안 열린다", "1분쯤 지나면 끊긴다" 세 가지가 대부분이다. 아래는 Ubuntu 24.04에서 Node.js 22로 1초마다 이벤트를 하나씩, 모두 네 개 보내는 SSE 엔드포인트를 만들고 nginx 1.24 뒤에 둔 결과다. 각 줄 앞에 받은 시각을 붙였다.
+
+```bash
+# 받은 줄마다 시각을 붙여 찍는 함수
+ts() { while IFS= read -r l; do [ -n "$l" ] && printf '%s %s\n' "$(date +%T.%1N)" "$l"; done; }
+
+curl -sN http://localhost:18601/sse | ts        # 앱에 바로
+curl -sN http://localhost:18610/sse/ | ts       # nginx 기본 설정
+curl -sN http://localhost:18610/sse-nobuf/ | ts # proxy_buffering off
+```
+
+```text
+11:02:50.2 data: 1
+11:02:51.2 data: 2
+11:02:52.2 data: 3
+11:02:53.2 data: 4
+
+11:02:57.3 data: 1
+11:02:57.3 data: 2
+11:02:57.3 data: 3
+11:02:57.3 data: 4
+
+11:02:58.3 data: 1
+11:02:59.3 data: 2
+11:03:00.3 data: 3
+11:03:01.3 data: 4
+```
+
+가운데 묶음이 문제의 증상이다. 이벤트 네 개가 4초 동안 아무것도 안 오다가 응답이 끝나는 순간 한꺼번에 도착했다. 앞에서 말한 nginx 버퍼링이다. 개발자 도구 Network 탭에서 그 요청의 EventStream 탭을 열면 메시지가 같은 시각으로 한꺼번에 찍혀 있다. 버퍼링을 끄면 셋째 묶음처럼 1초 간격이 돌아온다. 경로 하나만 `proxy_buffering off;`로 끄거나, 앱이 응답 헤더에 `X-Accel-Buffering: no`를 실어 보낸다. 압축(gzip) 미들웨어나 CDN도 같은 증상을 만드니, 버퍼링을 껐는데도 몰려 온다면 그다음으로 의심한다.
+
+WebSocket은 아예 안 열리는 쪽으로 깨진다. 핸드셰이크를 curl로 흉내 내면 어디서 막혔는지 보인다.
+
+```bash
+# 브라우저가 보내는 업그레이드 요청 헤더를 그대로 붙인다
+curl -s -i --max-time 10 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  http://localhost:18610/ws-plain/ | head -1
+```
+
+```text
+HTTP/1.1 426 Upgrade Required
+```
+
+`/ws-plain/`은 `proxy_pass`만 적은 경로다. nginx는 `Upgrade`와 `Connection`이 한 구간에만 적용되는 hop-by-hop 헤더라서 업스트림으로 넘기지 않는다. 앱은 업그레이드 요청을 보지 못하고 평범한 GET으로 받아 426을 돌려줬다. 앱마다 400이나 404로 답하기도 한다. 브라우저 콘솔에는 `WebSocket connection to 'wss://...' failed`만 나오니, 이 curl 한 번이 앱 문제인지 프록시 문제인지를 가른다. 업그레이드 헤더를 넘기게 한 경로에서는 `HTTP/1.1 101 Switching Protocols`가 온다.
+
+```nginx
+location /ws/ {
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3s;   # 실습용으로 짧게. 기본값은 60초다
+    proxy_pass http://app/ws;
+}
+```
+
+연결은 열렸는데 일정 시간 뒤에 끊기는 건 유휴 타임아웃이다. 위 경로에 붙은 뒤 아무 메시지도 보내지 않았더니 정확히 3초 만에 연결이 닫혔고, access.log와 error.log에 이렇게 남았다.
+
+```text
+127.0.0.1 "GET /ws/ HTTP/1.1" 101 0 rt=3.004 ups=101 urt=3.004
+2026/10/18 11:03:11 [info] 899#899: *663 upstream timed out (110: Connection timed out) while proxying upgraded connection, client: 127.0.0.1, server: , request: "GET /ws/ HTTP/1.1", upstream: "http://127.0.0.1:18601/ws", host: "localhost:18610"
+```
+
+운영에서는 이 값이 기본 60초라서 "채팅방을 켜 두면 1분쯤 뒤에 끊긴다"로 나타난다. access.log에서 101 응답의 `rt`가 60.0 근처에 몰려 있으면 이 경우다. 끊긴 이유가 `[info]` 레벨로만 남아서 기본 로그 설정에서는 보이지 않는다는 것도 헷갈리는 지점이다. 고칠 때는 타임아웃만 늘리지 말고 앞에서 본 하트비트를 타임아웃보다 짧게 보낸다. nginx 뒤에 로드 밸런서가 하나 더 있다면 그쪽 유휴 시간도 따로 있으니, 가장 짧은 값보다 하트비트를 짧게 잡는다. 각 설정의 뜻은 [nginx 리버스 프록시](/posts/nginx-reverse-proxy)의 WebSocket과 버퍼링 부분에 정리했다.
+
 ## 무엇을 고를까
 
 정답은 데이터가 어느 방향으로, 얼마나 자주 흐르느냐에 달려 있다.

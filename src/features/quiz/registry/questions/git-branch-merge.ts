@@ -49,36 +49,6 @@ export const GIT_BRANCH_MERGE: QuizQuestion[] = [
   {
     id: "git-branch-merge-4",
     post: "git-branch-merge",
-    question: "merge.conflictStyle을 zdiff3으로 바꾸면 충돌 블록에서 무엇이 달라지나?",
-    choices: [
-      "충돌이 나도 우리 쪽 내용이 자동으로 선택된다",
-      "마커 대신 별도의 .orig 파일이 생긴다",
-      "||||||| 아래에 공통 조상의 원래 내용이 함께 나온다",
-      "충돌 난 파일을 인덱스에 자동으로 add한다",
-    ],
-    answer: 2,
-    explanation:
-      "diff3와 zdiff3는 ours와 theirs 사이에 공통 조상의 내용을 한 칸 더 보여 줘서 각자 무엇을 바꿨는지 읽을 수 있게 한다. zdiff3는 양쪽이 똑같이 바꾼 줄을 블록 밖으로 빼서 더 짧게 보여 주고, 2.35부터 쓸 수 있다. 어느 쪽도 해결을 대신해 주지는 않는다.",
-    anchor: "같은-줄을-둘이-고쳤을-때",
-  },
-  {
-    id: "git-branch-merge-5",
-    post: "git-branch-merge",
-    question: "충돌을 고친 파일에 git add를 하면 인덱스에서는 무슨 일이 일어나나?",
-    choices: [
-      "스테이지 2(ours)만 남고 나머지가 지워진다",
-      "스테이지 1·2·3이 사라지고 해결한 내용이 스테이지 0으로 들어간다",
-      "병합 커밋이 바로 만들어진다",
-      "MERGE_HEAD가 지워져 병합이 취소된다",
-    ],
-    answer: 1,
-    explanation:
-      "충돌 중에는 인덱스에 공통 조상, ours, theirs가 스테이지 1·2·3으로 들어 있고, add하면 이것들이 해결본 하나(스테이지 0)로 바뀐다. Git은 이걸 보고 해결됐다고 판단할 뿐 마커가 남았는지는 검사하지 않는다. 병합 커밋은 그 뒤에 git commit으로 만든다.",
-    anchor: "충돌-중에-git이-들고-있는-것",
-  },
-  {
-    id: "git-branch-merge-6",
-    post: "git-branch-merge",
     question: "PR을 squash merge로 합친 뒤 로컬에서 git branch -d로 그 브랜치를 지우려 하니 거부된다. 왜 그럴까?",
     choices: [
       "원격 브랜치가 아직 남아 있어서",
@@ -92,7 +62,7 @@ export const GIT_BRANCH_MERGE: QuizQuestion[] = [
     anchor: "다-쓴-브랜치는-지운다",
   },
   {
-    id: "git-branch-merge-7",
+    id: "git-branch-merge-5",
     post: "git-branch-merge",
     question: "detached HEAD 상태에서 커밋한 뒤 git switch main을 했다. 그 커밋은 어떻게 되나?",
     choices: [
@@ -105,5 +75,20 @@ export const GIT_BRANCH_MERGE: QuizQuestion[] = [
     explanation:
       "이름표가 없을 뿐 커밋은 저장소에 그대로 있고, Git이 떠날 때 경고와 함께 해시를 알려 준다. git branch 이름 해시로 이름표를 붙이면 살아나고, 해시를 놓쳤다면 reflog에서 찾는다. 오래 방치하면 reflog가 만료된 뒤 gc가 지운다.",
     anchor: "head가-브랜치를-떠나면",
+  },
+  {
+    id: "git-branch-merge-6",
+    post: "git-branch-merge",
+    question: "PR을 병합 커밋으로 합치는 저장소에서 main에 PR 단위로 무엇이 들어왔는지만 보고 싶다. 알맞은 명령은?",
+    choices: [
+      "git log --oneline --all",
+      "git log --first-parent --oneline",
+      "git branch -vv",
+      "git log --merge --oneline",
+    ],
+    answer: 1,
+    explanation:
+      "--first-parent는 병합 커밋의 첫 번째 부모, 즉 병합할 때 서 있던 main 쪽만 따라간다. 그래서 기능 브랜치 안의 자잘한 커밋은 빠지고 PR 병합 커밋과 main에 직접 한 커밋만 남는다. --merge는 충돌 중에 충돌 파일을 건드린 커밋을 보는 옵션이다.",
+    anchor: "현장에서-병합-히스토리를-읽는-순간",
   },
 ];

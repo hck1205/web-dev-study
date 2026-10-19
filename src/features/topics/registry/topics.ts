@@ -24,10 +24,17 @@ export const TOPICS: Topic[] = [
       },
       { id: "computer-science", label: "Computer Science", description: "컴퓨터 과학 기초 이론" },
       {
+        id: "in-practice",
+        label: "In Practice",
+        description: "이론이 실제 개발과 운영에서 쓰이는 순간: 장애 대응, 디버깅, 설계 판단",
+      },
+      {
         id: "database",
         label: "Database",
         description: "RDB, NoSQL, 쿼리와 인덱스",
         children: [
+          { id: "db-types", label: "DB Types", description: "관계형, 키-값, 문서, 컬럼, 그래프, 시계열 등 DB 종류별 장단점과 쓰임새" },
+          { id: "postgresql", label: "PostgreSQL", description: "설치부터 내부 구조, 운영, 튜닝, 백업까지" },
           { id: "redis", label: "Redis", description: "인메모리 자료구조 저장소, 캐시, 메모리 관리" },
           { id: "sql", label: "SQL", description: "SQL 문법, 인덱스, 쿼리 튜닝, 테이블 설계, 트랜잭션" },
           { id: "sqld", label: "SQLD", description: "SQLD(SQL 개발자) 시험 범위를 주제별로" },
@@ -42,13 +49,17 @@ export const TOPICS: Topic[] = [
           { id: "javascript", label: "JavaScript", description: "언어와 런타임, 이벤트 루프, 메모리" },
           { id: "performance", label: "Performance", description: "웹 성능 지표, 로딩·렌더링 최적화" },
           { id: "react", label: "React", description: "렌더링 모델, 상태, 렌더링 전략" },
+          { id: "rendering", label: "Rendering", description: "CSR, SSR, SSG·ISR, 하이드레이션, 스트리밍, 서버 컴포넌트" },
         ],
       },
       {
         id: "network",
         label: "Network",
         description: "HTTP, TCP/IP, DNS, 캐시, 보안",
-        children: [{ id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" }],
+        children: [
+          { id: "http", label: "HTTP", description: "메시지, 메서드, 상태 코드, 버전별 차이" },
+          { id: "layers", label: "OSI · TCP/IP", description: "OSI 7계층과 TCP/IP 4계층, 계층별 프로토콜과 장비" },
+        ],
       },
       {
         id: "os",
@@ -63,7 +74,15 @@ export const TOPICS: Topic[] = [
         children: [
           { id: "docker", label: "Docker", description: "컨테이너 이미지와 실행" },
           { id: "nginx", label: "Nginx", description: "웹 서버, 리버스 프록시, 로드 밸런싱" },
-          { id: "kubernetes", label: "Kubernetes", description: "컨테이너 오케스트레이션" },
+          {
+            id: "kubernetes",
+            label: "Kubernetes",
+            description: "컨테이너 오케스트레이션",
+            children: [
+              { id: "pod", label: "Pod", description: "Pod의 구조, 생명주기, 프로브, 리소스, 스케줄링, 장애 대응" },
+              { id: "helm", label: "Helm", description: "차트, 템플릿, values, 릴리스 관리, 배포 흐름" },
+            ],
+          },
           {
             id: "ci-cd",
             label: "CI/CD",

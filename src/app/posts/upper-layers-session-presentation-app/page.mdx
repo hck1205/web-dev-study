@@ -1,0 +1,364 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("upper-layers-session-presentation-app");
+
+로컬에서 API를 `curl`로 불렀더니 이런 에러가 났다.
+
+```text
+curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number
+```
+
+서버 앱 로그에는 요청이 들어온 흔적이 없다. TCP 연결은 맺어졌다. 원인은 주소창에 `https://`를 쓰고 평문 HTTP 서버의 포트로 접속한 것이었다. TLS로 말을 걸었는데 상대가 HTTP로 답해서, OpenSSL이 받은 첫 바이트를 TLS 버전으로 읽으려다 포기한 것이다. 이 에러는 몇 계층의 문제일까. TCP는 멀쩡하고, HTTP까지는 가지도 못했다. 그 사이 어딘가다.
+
+OSI 7계층에는 전송 계층(4) 위에 세션(5), 표현(6), 응용(7) 세 층이 있다. TCP/IP 4계층에서는 이 셋이 응용 계층 하나로 합쳐져 있다. 이 글은 세 층이 하던 일이 지금 어디서 누구에게 맡겨져 있는지 본다. 세션 계층의 일은 TLS와 HTTP와 앱이 나눠 가졌고, 표현 계층의 일은 문자 인코딩·직렬화·압축·암호화 라이브러리가 맡았다. 그리고 그 사이에 끼어 있는 TLS, 응용 계층 프로토콜들의 지도, 그리고 위쪽 층의 문제를 현장에서 가려내는 법까지 본다. 층 전체의 그림은 [OSI 7계층과 TCP/IP 4계층 글](/posts/network-layers-overview)에 있다.
+
+기준은 Ubuntu 24.04다. 출력은 Ubuntu 24.04 컨테이너의 루프백에 Python HTTP 서버와 `openssl s_server`를 띄워 직접 찍었다.
+
+## 위의 세 층이 한 층이 된 사연
+
+OSI 모델은 1980년대 ISO가 여러 나라와 회사의 의견을 모아 만든 표준이다. 망을 어떻게 나눌지를 먼저 정하고 프로토콜을 그 틀에 맞춰 만드는 순서였다. 그래서 층마다 맡을 일이 깔끔하게 적혀 있다. 대화를 시작하고 이어 가고 끝내는 일은 세션 계층, 데이터의 표현을 서로 맞추는 일은 표현 계층, 사용자에게 서비스를 주는 일은 응용 계층이다.
+
+TCP/IP는 반대로 갔다. 먼저 돌아가는 프로토콜을 만들고, 쓰이는 걸 표준으로 굳혔다. 인터넷 호스트의 요구사항을 정리한 RFC 1122·1123(1989년)은 전송 계층 위를 그냥 응용 계층 하나로 둔다. 세션을 어떻게 관리할지, 데이터를 어떤 모양으로 보낼지는 프로토콜마다 사정이 너무 달라서, 공통 층으로 빼기보다 각 응용이 필요한 만큼 직접 하는 게 낫다고 본 것이다. 망은 단순하게 두고 똑똑한 일은 양 끝에서 한다는 생각(end-to-end 원칙)과도 맞았다.
+
+결과는 우리가 아는 대로다. 인터넷에서 쓰이는 건 TCP/IP였고, OSI의 세션·표현 계층 프로토콜은 거의 남지 않았다. 그래도 OSI의 이름은 남았다. 하던 일 자체는 사라지지 않았기 때문이다. 지금도 누군가는 대화를 이어 주고, 누군가는 바이트의 모양을 맞춘다. 다만 커널이 아니라 라이브러리와 앱 안에서 한다.
+
+## 세션 계층이 하던 일은 흩어졌다
+
+OSI의 세션 계층은 대화 관리자다. 누가 말할 차례인지 정하고(대화 제어), 긴 전송 중간에 표시점을 찍어 두었다가 끊기면 거기서 다시 잇는다(동기화). 이 일들이 지금 어디 있는지 찾아보면 여러 곳에 흩어져 있다.
+
+연결을 다시 맺을 때 핸드셰이크를 줄이는 TLS 세션 재개가 하나다. 한 번 협상한 키 정보를 티켓으로 받아 두었다가 다음 연결에서 내밀면 왕복을 줄여 다시 이어 간다. 자세한 건 [HTTPS와 TLS 글](/posts/https-tls)에 있다. HTTP/2의 스트림은 연결 하나 안에서 여러 대화를 동시에 열고 닫는다. 대화 제어의 현대판이다. DB 연결의 세션(트랜잭션 상태, `SET`으로 바꾼 설정이 그 연결에만 유지되는 것)도 세션 계층이 하려던 일과 닮았다.
+
+로그인 세션은 이름만 같고 층이 다르다. 쿠키에 세션 ID를 담아 "이 요청은 아까 로그인한 그 사람"을 알아보는 건 HTTP 위의 응용 로직이다. TCP 연결이 끊기고 새로 맺어져도 로그인은 유지된다. 그 이야기는 [쿠키 세션 로그인 글](/posts/cookie-session-login)에 있다. 면접에서 "세션 계층"과 "세션"을 섞어 쓰면 꼬리 질문이 들어오기 좋은 지점이다.
+
+동기화, 즉 끊긴 곳에서 다시 잇는 일은 HTTP의 Range 요청이 가장 알아보기 쉽다. 큰 파일을 받다가 연결이 끊기면 처음부터 다시 받지 않고 받은 곳 다음부터 달라고 한다.
+
+<SequenceDiagram
+  caption="끊긴 다운로드를 받은 곳부터 다시 잇는 Range 요청"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "s", label: "파일 서버" },
+  ]}
+  steps={[
+    {
+      from: "c",
+      to: "s",
+      label: "GET /backup.tar",
+      title: "큰 파일을 받기 시작한다",
+      detail: "응답 헤더에 Accept-Ranges: bytes가 있으면 이 서버는 중간부터 보내 줄 수 있다는 뜻이다. ETag도 함께 기억해 둔다.",
+      payload: "HTTP/1.1 200 OK\nContent-Length: 1000000000\nAccept-Ranges: bytes\nETag: \"v3\"",
+    },
+    {
+      from: "c",
+      to: "c",
+      label: "400MB에서 끊김",
+      title: "연결이 끊겼다",
+      detail: "TCP 연결이 RST나 타임아웃으로 끝났다. TCP에게 이 연결은 끝난 것이고, 다시 이어 줄 방법은 없다. 이어 붙이는 건 위층의 일이다.",
+    },
+    {
+      from: "c",
+      to: "s",
+      label: "Range: bytes=400000000-",
+      title: "받은 곳 다음부터 달라고 한다",
+      detail: "새 TCP 연결에서 받은 바이트 다음부터를 요청한다. If-Range에 아까의 ETag를 실어서, 그 사이 파일이 바뀌었으면 처음부터 받겠다고 알린다.",
+      payload: "GET /backup.tar\nRange: bytes=400000000-\nIf-Range: \"v3\"",
+    },
+    {
+      from: "s",
+      to: "c",
+      label: "206 Partial Content",
+      title: "나머지만 보낸다",
+      detail: "파일이 그대로면 206과 함께 요청한 구간만 보낸다. 파일이 바뀌었다면 200으로 전체를 다시 보낸다. curl -C - 와 wget -c 가 이 방식으로 이어 받는다.",
+      payload: "HTTP/1.1 206 Partial Content\nContent-Range: bytes 400000000-999999999/1000000000",
+    },
+  ]}
+/>
+
+OSI라면 세션 계층이 표시점을 찍고 이어 줬겠지만, 지금은 HTTP라는 응용 프로토콜이 헤더 몇 개로 그 일을 한다. 큰 파일 업로드도 마찬가지로 tus 같은 응용 수준의 규칙이나 S3의 멀티파트 업로드가 맡는다. 현장에서 "업로드가 90%에서 끊기면 처음부터 다시 한다"는 문제를 고칠 곳은 TCP 설정이 아니라 이런 응용 프로토콜이다.
+
+## 표현 계층이 하던 일은 라이브러리가 한다
+
+표현 계층은 번역가다. 보내는 쪽 컴퓨터가 데이터를 들고 있는 방식과 받는 쪽이 들고 있는 방식이 다를 수 있으니, 선 위에서는 서로 합의한 모양으로 바꿔 보낸다. 지금 이 일을 하는 건 네 종류의 도구다.
+
+문자 인코딩이 첫째다. 글자를 바이트로 바꾸는 규칙이다. 같은 '한'이 규칙마다 다른 바이트가 된다.
+
+```bash
+# '한' 한 글자를 인코딩별로 바이트로 찍어 본다
+printf '한' | od -An -tx1
+printf '한' | iconv -f utf-8 -t euc-kr | od -An -tx1
+printf '한' | iconv -f utf-8 -t utf-16be | od -An -tx1
+```
+
+```text
+ ed 95 9c
+ c7 d1
+ d5 5c
+```
+
+UTF-8로는 3바이트, EUC-KR로는 2바이트, UTF-16으로도 2바이트인데 값이 모두 다르다. 보내는 쪽과 받는 쪽이 같은 규칙을 쓰지 않으면 글자가 깨진다. UTF-8로 보낸 "한글 깨짐"을 다른 규칙으로 읽으면 이렇게 된다.
+
+```text
+UTF-8 바이트를 Latin-1로 읽으면:  'í\x95\x9cê¸\x80 ê¹¨ì§\x90'
+UTF-8 바이트를 CP949로 읽으면:     �븳湲� 源⑥쭚
+```
+
+현장에서 보는 한글 깨짐은 거의 이 두 모양이다. `í`, `ê` 같은 라틴 글자가 섞여 나오면 UTF-8을 Latin-1로 읽은 것이고, 엉뚱한 한자가 섞이면 UTF-8을 CP949(EUC-KR 계열)로 읽은 것이다. 응답의 `Content-Type: text/html; charset=utf-8`, DB 연결의 문자셋, 파일을 읽는 코드의 인코딩 인자 중 어딘가가 어긋났다는 신호다. MySQL에서 `utf8`이 사실은 3바이트까지만 담는 `utf8mb3`라 이모지가 깨지고, `utf8mb4`를 써야 하는 것도 같은 층의 함정이다.
+
+직렬화가 둘째다. 메모리 안의 객체를 바이트 줄로 펴는 일이다. JSON은 사람이 읽을 수 있는 텍스트이고, Protocol Buffers나 MessagePack은 더 작고 빠른 이진 형식이다. JSON은 필드 이름이 그대로 실려 다니니 어느 쪽이 무엇을 보냈는지 바로 보이지만, Protobuf는 필드 번호만 실려서 스키마 없이는 읽을 수 없다. 대신 필드 번호를 바꾸지 않는 한 양쪽 스키마 버전이 달라도 깨지지 않는다. 반대로 번호를 재사용하면 에러 없이 엉뚱한 필드에 값이 들어가는 무서운 버그가 된다. JSON의 함정(날짜, 큰 숫자)은 [JSON 글](/posts/json-crud-http)에 있다.
+
+압축이 셋째다. 사용자 200명의 JSON 목록을 gzip으로 줄여 봤다.
+
+```bash
+# JSON 원본과 gzip 결과의 크기 (바이트)
+python3 -c 'import json; print(json.dumps([{"id":i,"name":f"user{i}","email":f"user{i}@example.com","active":True} for i in range(200)]))' > users.json
+wc -c < users.json
+gzip -c users.json | wc -c
+```
+
+```text
+15671
+1605
+```
+
+15671바이트(끝의 줄바꿈 포함)가 1605바이트, 약 10분의 1이 됐다. 같은 필드 이름이 반복되는 JSON은 잘 줄어든다. HTTP에서는 클라이언트가 `Accept-Encoding`으로 풀 수 있는 형식을 알리고 서버가 `Content-Encoding: gzip`으로 답한다. 이미 압축된 이미지나 영상은 다시 압축해도 거의 줄지 않고 CPU만 쓴다. 바이너리를 텍스트 자리에 실으려고 쓰는 [Base64](/posts/base64)는 반대로 크기를 약 33% 늘린다.
+
+암호화가 넷째다. OSI 교과서는 암호화를 표현 계층의 일로 적는다. 지금 그 일을 하는 건 TLS인데, TLS가 몇 계층이냐는 질문은 따로 볼 만하다.
+
+보내는 쪽에서 이 일들이 차례로 일어나는 모습을 따라가 보자. 앱의 객체 하나가 TCP에 넘어가기 전까지 모양이 네 번 바뀐다.
+
+<AlgoTrace
+  caption="객체 하나가 TCP에 넘어가기 전까지 거치는 변환"
+  memoryLabel="지금의 모양"
+  cells={["객체", "JSON 텍스트", "UTF-8 바이트", "gzip", "TLS 레코드", "TCP"]}
+  steps={[
+    { pointer: 0, memory: ["user 객체 (메모리)"], caption: "앱 메모리 안의 객체다. 포인터와 언어별 내부 표현이라 그대로는 보낼 수 없다." },
+    { pointer: 1, memory: ["user 객체", "{\"name\":\"한\"}"], caption: "직렬화: 서로 합의한 모양(JSON)의 텍스트로 편다." },
+    { pointer: 2, memory: ["{\"name\":\"한\"}", "7b 22 6e ... ed 95 9c ..."], caption: "인코딩: 글자를 UTF-8 규칙으로 바이트로 바꾼다. '한'은 ed 95 9c 세 바이트가 된다." },
+    { pointer: 3, memory: ["UTF-8 바이트", "gzip 바이트 (약 1/10)"], caption: "압축: Content-Encoding: gzip. 받는 쪽이 Accept-Encoding으로 허락한 경우에만." },
+    { pointer: 4, memory: ["gzip 바이트", "17 03 03 ... (암호문)"], caption: "암호화: TLS가 레코드로 잘라 암호화하고 5바이트 머리를 붙인다. 이제 중간에서는 아무것도 읽을 수 없다." },
+    { pointer: 5, found: [1, 2, 3, 4], memory: ["TCP 세그먼트들"], caption: "TCP에 바이트 흐름으로 넘긴다. 받는 쪽은 이 순서를 거꾸로 밟아 객체로 되돌린다. 한 단계라도 규칙이 어긋나면 깨진다." },
+  ]}
+/>
+
+이 순서가 곧 디버깅 순서다. 응답이 깨졌다면 받는 쪽이 어느 단계에서 거꾸로 되돌리지 못했는지 찾는다. TLS를 못 풀었는지, gzip을 안 풀고 그대로 읽었는지, 인코딩을 다르게 읽었는지, JSON 모양이 기대와 다른지다.
+
+## TLS는 몇 계층인가
+
+TLS는 TCP 위에서 동작하고, HTTP 같은 응용 프로토콜이 그 위에 올라간다. 그래서 흔히 "L4와 L7 사이"라고 한다. OSI로 따지면 암호화는 표현 계층의 일이고, 연결마다 키를 협상하고 세션을 재개하는 건 세션 계층의 일이라 둘 다에 걸쳐 있다. TCP/IP 모델에서는 응용 계층의 일부로 친다. 면접에서는 한 숫자를 고집하기보다 "TCP 위, 응용 프로토콜 아래에서 암호화와 인증을 맡는다. OSI로 보면 5~6계층의 일이다"라고 설명하는 게 정확하다.
+
+TLS가 TCP 위에 실려 가는 모습을 바이트로 확인해 봤다. 로컬에 `openssl s_server`를 띄우고 `s_client`로 접속하면서 첫 데이터 패킷을 찍었다.
+
+```bash
+# 테스트용 자체 서명 인증서로 TLS 서버를 띄운다
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout k.pem -out c.pem -days 1 -subj "/CN=localhost"
+openssl s_server -accept 8443 -cert c.pem -key k.pem -www -quiet
+
+# 데이터가 든 첫 패킷(PSH)을 바이트로 찍는다 (다른 터미널)
+sudo tcpdump -i lo -nn -X 'tcp port 8443 and tcp[tcpflags] & tcp-push != 0' -c 1
+
+# 접속 (또 다른 터미널)
+echo | openssl s_client -connect 127.0.0.1:8443 -servername localhost
+```
+
+```text
+IP 127.0.0.1.47682 > 127.0.0.1.8443: Flags [P.], seq 3230741258:3230741569, ack 918454772, win 64, options [nop,nop,TS val 1304664890 ecr 2952985632], length 311
+	0x0000:  4500 016b fea4 4000 4006 3ce6 7f00 0001  E..k..@.@.<.....
+	0x0010:  7f00 0001 ba42 20fb c091 330a 36be 81f4  .....B....3.6...
+	0x0020:  8018 0040 ff5f 0000 0101 080a 4dc3 9b3a  ...@._......M..:
+	0x0030:  b002 fc20 1603 0101 3201 0001 2e03 03fe  ........2.......
+```
+
+`4500`으로 시작하는 20바이트가 IP 헤더, `ba42 20fb`(47682 → 8443)부터 32바이트가 옵션을 포함한 TCP 헤더다. 그 뒤 `0x0034` 자리부터 TLS가 시작된다. `s_client`는 `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384`로 연결을 마쳤다. TCP 데이터의 첫 여섯 바이트를 눌러 보자.
+
+<UrlAnatomy
+  caption="TCP 데이터의 첫 여섯 바이트: TLS 레코드 머리와 ClientHello"
+  base="TLS"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "type",
+      display: "16",
+      title: "레코드 종류: 0x16 = 핸드셰이크",
+      description: "TLS는 데이터를 레코드로 잘라 보낸다. 0x16은 핸드셰이크, 0x17은 암호화된 응용 데이터, 0x15는 경고(alert)다. 연결 첫 바이트가 0x16이면 거의 확실히 TLS다.",
+      required: true,
+    },
+    {
+      key: "ver",
+      display: "03 01",
+      title: "레코드 버전: 0x0301",
+      description: "TLS 1.0을 뜻하는 값이다. TLS 1.3 연결인데도 이렇게 적는다. 옛 중간 장비가 모르는 버전 번호를 보고 연결을 끊지 않게 하려는 호환용 값이고, 실제 버전은 ClientHello 안의 확장으로 협상한다.",
+      required: true,
+    },
+    {
+      key: "len",
+      display: "01 32",
+      title: "레코드 길이: 0x0132 = 306",
+      description: "이 레코드에 담긴 바이트 수다. 5바이트 머리와 합치면 311바이트로, tcpdump의 length 311과 맞는다.",
+      required: true,
+    },
+    {
+      key: "hs",
+      display: "01",
+      title: "핸드셰이크 종류: 0x01 = ClientHello",
+      description: "클라이언트의 첫 인사다. 이 안에 SNI(접속할 도메인), ALPN(h2, http/1.1), 지원하는 암호, 키 교환 값이 들어 있다. SNI와 ALPN은 아직 암호화되지 않아서 L4 장비도 읽을 수 있다.",
+    },
+  ]}
+/>
+
+마지막 조각이 실무에서 중요하다. ClientHello의 SNI는 평문이라, TLS를 풀지 않는 L4 로드 밸런서도 SNI를 보고 어느 뒤쪽 서버로 보낼지 정할 수 있다(TLS passthrough). TLS를 L7 로드 밸런서나 nginx에서 풀면(TLS termination) 경로와 헤더로 나눌 수 있지만 인증서와 개인 키를 그 장비에 둬야 한다. 어디서 TLS를 끝낼지는 [OSI 실무 글](/posts/osi-in-practice)에서 장비 선택과 함께 다룬다.
+
+### 같은 포트에서 다른 말을 할 때
+
+처음의 에러로 돌아가자. TLS와 평문 HTTP를 섞으면 두 방향 모두 독특한 에러가 난다.
+
+```bash
+# 평문 HTTP 서버(8090)에 TLS로 말을 건다
+curl -sS https://127.0.0.1:8090/
+
+# TLS 서버(8444)에 평문 HTTP로 말을 건다
+curl -sS http://127.0.0.1:8444/ -o /dev/null -w "%{http_code}\n"
+```
+
+```text
+curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number
+curl: (52) Empty reply from server
+000
+```
+
+첫째는 HTTP 서버가 ClientHello를 이상한 요청으로 보고 텍스트로 답했는데(같은 바이트를 `nc`로 직접 보내 보면 Python 서버는 `HTTP/1.0 400 Bad request syntax`로 답한다), OpenSSL이 그 첫 바이트 `H`(0x48)를 레코드 종류로, 다음 바이트를 버전으로 읽으려다 실패한 것이다. 둘째는 TLS 서버가 `GET /`을 TLS 레코드로 읽지 못해 연결을 그냥 닫은 것이다. nginx라면 이 경우 `400 The plain HTTP request was sent to HTTPS port`라는 친절한 페이지를 돌려준다. 둘 다 TCP는 멀쩡하고 응용 프로토콜도 아직 시작하지 못한, TLS 층의 불일치다. 로드 밸런서의 대상 그룹을 HTTPS로 잡았는데 앱은 HTTP를 받는 경우처럼 앞단과 뒷단의 프로토콜이 어긋날 때 자주 본다.
+
+## 응용 계층의 지도
+
+전송 계층 위에는 이제 모든 응용 프로토콜이 한 층에 모여 있다. 자주 만나는 것들을 아래 전송 계층과 함께 놓아 보면 이렇다. 점이 흐르는 방향이 위에서 아래로 실려 가는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="응용 계층 프로토콜과 그 아래의 전송 계층"
+  nodes={[
+    { id: "http", label: "HTTP/1.1·2", sub: "80, 443", x: 70, y: 40, w: 112, h: 46 },
+    { id: "ssh", label: "SSH", sub: "22", x: 200, y: 40, w: 100, h: 46 },
+    { id: "smtp", label: "SMTP", sub: "25, 587", x: 330, y: 40, w: 100, h: 46 },
+    { id: "pg", label: "PostgreSQL", sub: "5432", x: 70, y: 130, w: 112, h: 46 },
+    { id: "tls", label: "TLS", sub: "암호화·인증", x: 200, y: 130, w: 100, h: 46 },
+    { id: "dns", label: "DNS", sub: "53", x: 330, y: 130, w: 100, h: 46 },
+    { id: "tcp", label: "TCP", x: 135, y: 230, w: 110, h: 46 },
+    { id: "h3", label: "HTTP/3", sub: "QUIC", x: 330, y: 230, w: 100, h: 46 },
+    { id: "udp", label: "UDP", x: 330, y: 290, w: 100, h: 30 },
+  ]}
+  edges={[
+    { from: "http", to: "tls" },
+    { from: "smtp", to: "tls", dashed: true, label: "STARTTLS" },
+    { from: "tls", to: "tcp" },
+    { from: "ssh", to: "tcp" },
+    { from: "pg", to: "tcp" },
+    { from: "dns", to: "udp" },
+    { from: "dns", to: "tcp", dashed: true },
+    { from: "h3", to: "udp" },
+  ]}
+/>
+
+그림에서 몇 가지가 보인다. SSH는 TLS를 쓰지 않고 자기만의 암호화를 가진다. SMTP와 PostgreSQL은 평문으로 시작했다가 `STARTTLS`나 `SSLRequest`로 그 자리에서 TLS로 갈아탄다. DNS는 UDP가 기본이고 큰 답은 TCP로 다시 묻는다. HTTP/3는 TLS가 QUIC 안에 들어가 있어 TLS 상자를 따로 지나지 않는다. 같은 응용 계층이라도 아래를 쓰는 방식이 이렇게 다르다.
+
+모양도 다르다. HTTP/1.1과 SMTP는 사람이 읽을 수 있는 텍스트 줄로 대화한다. `nc`로 직접 HTTP 요청을 써 보낼 수 있다.
+
+```bash
+# 텍스트 몇 줄을 직접 써서 HTTP 요청을 보낸다
+printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | nc -q1 127.0.0.1 8090 | head -5
+```
+
+```text
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.13.16
+Date: Sat, 17 Oct 2026 23:04:26 GMT
+Content-type: text/html
+Content-Length: 6
+```
+
+반면 HTTP/2, DNS, PostgreSQL의 통신은 이진 형식이라 이렇게 손으로 쓸 수 없고 전용 도구(`curl --http2`, `dig`, `psql`)가 필요하다. SSH는 연결하자마자 서버가 `SSH-2.0-`으로 시작하는 한 줄짜리 텍스트 배너를 보내고, 그 뒤는 모두 이진이다. 메시지 모양 자체는 [HTTP 메시지 글](/posts/http-message), 이름 조회는 [DNS 글](/posts/dns)에 있다.
+
+## 첫 바이트로 프로토콜 알아보기
+
+같은 포트로 여러 프로토콜을 받는 장비는 첫 몇 바이트를 보고 무엇인지 알아낸다. 443 포트 하나로 HTTPS와 SSH를 함께 받는 sslh 같은 도구가 이 방식이다. 앞에서 본 규칙을 그대로 쓰면 된다. TLS는 첫 바이트가 `0x16`이고 둘째가 `0x03`이다. SSH는 `SSH-`로 시작한다. HTTP/1.x는 `GET `, `POST ` 같은 메서드 이름과 공백으로 시작하고, 평문 HTTP/2는 `PRI * HT`로 시작하는 고정 서문을 보낸다.
+
+아래 `sniff`는 연결의 첫 바이트 배열(최대 8개)을 받아 `"tls"`, `"ssh"`, `"http"`, `"http2"`, `"unknown"` 중 하나를 돌려준다. HTTP 메서드는 GET, POST, PUT, HEAD, DELETE, PATCH, OPTIONS만 본다. 테스트의 바이트는 실제 캡처와 각 프로토콜의 첫 글자를 ASCII 코드로 바꾼 것이다.
+
+<CodePlayground
+  caption="연결의 첫 바이트로 프로토콜 알아보기"
+  functionName="sniff"
+  initialCode={`function sniff(bytes) {
+  // bytes: [0x16, 0x03, 0x01, ...] 처럼 숫자 배열
+  // 글자로 보려면 String.fromCharCode(...bytes)
+  return "unknown";
+}`}
+  solution={`function sniff(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 0x16 && bytes[1] === 0x03 && bytes[2] <= 0x04) return "tls";
+  const text = String.fromCharCode(...bytes.slice(0, 8));
+  if (text.startsWith("SSH-")) return "ssh";
+  if (/^(GET|POST|PUT|HEAD|DELETE|PATCH|OPTIONS) /.test(text)) return "http";
+  if (text.startsWith("PRI * HT")) return "http2";
+  return "unknown";
+}`}
+  tests={[
+    { args: [[22, 3, 1, 1, 50, 1]], expected: "tls", label: "캡처한 ClientHello" },
+    { args: [[71, 69, 84, 32, 47, 32, 72, 84]], expected: "http", label: "GET / HT" },
+    { args: [[83, 83, 72, 45, 50, 46, 48, 45]], expected: "ssh", label: "SSH-2.0-" },
+    { args: [[80, 82, 73, 32, 42, 32, 72, 84]], expected: "http2", label: "PRI * HT" },
+    { args: [[80, 79, 83, 84, 32, 47, 97, 112]], expected: "http", label: "POST /ap" },
+    { args: [[23, 3, 3, 0, 32]], expected: "unknown", label: "연결 중간의 TLS 데이터 레코드" },
+    { args: [[72, 69, 76, 79, 32, 109, 97, 105]], expected: "unknown", label: "HELO mai (SMTP)" },
+  ]}
+/>
+
+TLS 안에서 어떤 응용 프로토콜을 쓸지는 이렇게 추측하지 않고 ClientHello의 ALPN으로 미리 정한다. 브라우저가 `h2, http/1.1`을 내밀고 서버가 하나를 고르는 식이다. 첫 바이트로 알아보기는 평문 구간이나 TLS 바깥에서만 통하는 방법이다.
+
+## 현장에서 위쪽 층을 가르는 법
+
+위의 세 층이 하나로 합쳐져 있다 보니 에러도 한데 섞여 보인다. 그래도 증상마다 어느 일에서 어긋났는지 가를 수 있다.
+
+```bash
+# TCP 연결, TLS 핸드셰이크, HTTP 요청·응답을 한 번에 본다
+curl -v https://example.com/ -o /dev/null
+
+# TLS만 따로: 인증서 체인, 협상한 버전, ALPN
+openssl s_client -connect example.com:443 -servername example.com -alpn h2,http/1.1 </dev/null
+
+# 압축을 풀지 않은 응답이 정말 gzip인지 (첫 두 바이트가 1f 8b면 gzip)
+curl -s -H 'Accept-Encoding: gzip' https://example.com/ | head -c 2 | od -An -tx1
+```
+
+`curl -v`의 출력은 층 순서대로 나온다. `Connected to`까지 나오면 TCP는 됐고, `SSL connection using TLSv1.3`이 나오면 TLS도 됐고, `< HTTP/2 200`이 나오면 응용 계층 응답까지 받았다. 어디서 멈췄는지가 곧 어느 층의 문제인지다.
+
+증상별로 보면 이렇다. `wrong version number`, `Empty reply from server`, `plain HTTP request was sent to HTTPS port`는 TLS와 평문이 어긋난 것이다. `certificate verify failed`, `unable to get local issuer certificate`는 TLS의 인증 단계 문제로, 중간 인증서 누락이 가장 흔하다. 한글이 `í`나 엉뚱한 한자로 깨지면 인코딩, 응답 본문이 `\x1f\x8b`로 시작하는 쓰레기처럼 보이면 `Content-Encoding`을 무시하고 gzip을 그대로 읽은 것이다. 프록시가 이미 압축된 응답을 한 번 더 압축하거나, 압축을 풀면서 `Content-Length`를 고치지 않아 응답이 잘리는 것도 같은 층의 사고다. 415나 JSON 파싱 에러는 직렬화 형식(`Content-Type`)이 어긋난 것이다.
+
+이렇게 나누면 "API가 안 돼요"가 "TLS까지는 되는데 응답 인코딩이 어긋났다"처럼 구체적인 문장이 된다. 아래층부터 하나씩 확인하는 전체 순서는 [계층별 장애 좁히기 글](/posts/network-troubleshooting-by-layer)에 있다.
+
+## 층은 합쳐졌고 일은 남았다
+
+OSI의 세션·표현 계층은 TCP/IP에서 응용 계층으로 합쳐졌다. 프로토콜마다 사정이 달라 공통 층으로 두기보다 각 응용과 라이브러리가 필요한 만큼 직접 하는 쪽이 이겼기 때문이다. 대화를 잇는 일은 TLS 세션 재개, HTTP/2 스트림, Range 요청 같은 곳으로, 표현을 맞추는 일은 문자 인코딩, 직렬화, 압축, 암호화 라이브러리로 흩어졌다. TLS는 TCP 위, 응용 프로토콜 아래에서 암호화와 인증을 맡는다. 그래서 위쪽의 문제는 TCP가 멀쩡한데도 생기고, 어느 변환이 어긋났는지로 가려낸다. 이 시리즈의 이론 편은 여기까지이고, 다음은 이 지식을 현장에서 쓰는 [OSI 7계층 실무 글](/posts/osi-in-practice)이다.
+
+## 면접에서 나올 만한 질문
+
+### OSI의 세션·표현 계층은 TCP/IP에서 어디로 갔나요?
+
+TCP/IP는 전송 계층 위를 응용 계층 하나로 두고, 세션 관리와 데이터 표현은 각 응용 프로토콜과 라이브러리가 직접 하게 했다. 세션 계층의 일은 TLS 세션 재개, HTTP/2 스트림, HTTP Range 요청 같은 곳에 흩어져 있고, 표현 계층의 일은 UTF-8 같은 문자 인코딩, JSON·Protobuf 직렬화, gzip 압축, TLS 암호화가 맡는다.
+
+### TLS는 몇 계층인가요?
+
+TCP 위, HTTP 같은 응용 프로토콜 아래에서 동작한다. OSI로 보면 암호화는 표현 계층, 키 협상과 세션 재개는 세션 계층의 일이라 5~6계층에 걸쳐 있고, TCP/IP 모델에서는 응용 계층의 일부로 친다. 실무에서는 TLS를 어디서 끝내느냐(L7 종료냐 L4 패스스루냐)가 더 중요한 질문이다.
+
+### 로그인 세션과 OSI의 세션 계층은 같은 건가요?
+
+다르다. 로그인 세션은 쿠키에 담긴 세션 ID로 요청이 같은 사용자임을 알아보는 HTTP 위의 응용 로직이라, TCP 연결이 끊기고 새로 맺어져도 유지된다. OSI의 세션 계층은 통신 대화 자체를 시작·유지·동기화하는 층이다.
+
+### 한글이 깨져서 보입니다. 어디부터 확인하나요?
+
+보내는 쪽과 받는 쪽의 문자 인코딩이 어긋난 표현 계층 문제다. `í`, `ê` 같은 라틴 글자가 섞이면 UTF-8을 Latin-1로, 엉뚱한 한자가 섞이면 UTF-8을 CP949로 읽은 경우가 많다. 응답의 `Content-Type` charset, DB와 연결의 문자셋(MySQL이면 utf8mb4), 파일을 읽는 코드의 인코딩 인자를 차례로 본다.
+
+### curl에서 wrong version number가 나는 이유는요?
+
+TLS로 말을 걸었는데 상대가 평문으로 답해서, 받은 첫 바이트를 TLS 레코드 머리로 읽지 못한 것이다. https를 평문 HTTP 포트에 붙였거나, 로드 밸런서와 앱 사이의 프로토콜이 어긋난 경우가 대부분이다. 반대로 TLS 포트에 평문 HTTP를 보내면 Empty reply나 nginx의 plain HTTP request 400을 받는다.
+
+### 같은 포트에서 여러 프로토콜을 받을 수 있나요?
+
+연결의 첫 바이트를 보고 가르면 된다. TLS는 0x16 0x03으로, SSH는 `SSH-`로, HTTP/1.x는 메서드 이름으로 시작해서 sslh 같은 도구가 443 하나로 HTTPS와 SSH를 함께 받는다. TLS 안의 프로토콜은 추측하지 않고 ClientHello의 ALPN으로 미리 협상하고, SNI로 어느 서비스로 보낼지도 TLS를 풀지 않고 정할 수 있다.

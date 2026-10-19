@@ -4,27 +4,20 @@ export const SQLD_SINGLE_ROW_FUNCTIONS: QuizQuestion[] = [
   {
     id: "sqld-single-row-functions-1",
     post: "sqld-single-row-functions",
-    question:
-      "EMP의 COMM은 14행 중 4행만 값이 있다(300, 500, 1400, 0). SELECT COUNT(*) FROM emp WHERE comm <> 0 의 결과는?",
-    choices: ["14", "13", "3", "10"],
+    question: "10번 부서 사원 3명에 대해 SELECT ename, UPPER(ename) FROM emp WHERE deptno = 10과 SELECT SUM(sal) FROM emp WHERE deptno = 10은 각각 몇 행을 돌려주나?",
+    choices: [
+      "3행, 3행",
+      "1행, 1행",
+      "3행, 1행",
+      "1행, 3행",
+    ],
     answer: 2,
     explanation:
-      "NULL과 비교하면 결과가 UNKNOWN이 되고 WHERE는 참인 행만 남긴다. 그래서 커미션이 NULL인 10명은 조건에서 빠지고, 값이 있는 4명 중 0인 TURNER를 뺀 3명만 남는다.",
-    anchor: "null은-값이-아니라-빈칸이다",
+      "UPPER는 행마다 한 번씩 실행되어 행마다 값 하나를 돌려주는 단일행 함수라 3행이 그대로 나온다. SUM은 여러 행을 하나로 줄이는 다중행(집계) 함수라 1행이다.",
+    anchor: "한-행에-하나씩-돌려주는-함수",
   },
   {
     id: "sqld-single-row-functions-2",
-    post: "sqld-single-row-functions",
-    question:
-      "BLAKE는 SAL이 2850, COMM이 NULL이다. Oracle에서 SELECT NVL2(comm, sal + comm, sal) FROM emp WHERE ename = 'BLAKE' 의 결과는?",
-    choices: ["NULL", "2850", "0", "에러가 난다"],
-    answer: 1,
-    explanation:
-      "NVL2(a, b, c)는 a가 NULL이 아니면 b, NULL이면 c를 돌려준다. comm이 NULL이니 세 번째 인자인 sal, 2850이 나온다. NULL이 아닐 때의 값이 먼저 온다는 순서가 함정이다.",
-    anchor: "null을-다른-값으로-바꾸는-함수",
-  },
-  {
-    id: "sqld-single-row-functions-3",
     post: "sqld-single-row-functions",
     question: "Oracle에서 SELECT ROUND(1250, -2), TRUNC(1234.5678, -2), FLOOR(-3.1) FROM DUAL 의 결과는?",
     choices: ["1200, 1200, -3", "1300, 1234.56, -4", "1200, 1300, -3", "1300, 1200, -4"],
@@ -34,44 +27,7 @@ export const SQLD_SINGLE_ROW_FUNCTIONS: QuizQuestion[] = [
     anchor: "숫자를-자르고-올리는-함수",
   },
   {
-    id: "sqld-single-row-functions-4",
-    post: "sqld-single-row-functions",
-    question:
-      "JAMES의 COMM은 NULL이다. Oracle에서 SELECT DECODE(comm, NULL, 'none', 'has'), CASE comm WHEN NULL THEN 'none' ELSE 'has' END FROM emp WHERE ename = 'JAMES' 의 결과는?",
-    choices: ["none, none", "has, has", "has, none", "none, has"],
-    answer: 3,
-    explanation:
-      "DECODE는 NULL과 NULL을 같다고 보아 'none'을 돌려준다. 단순 CASE의 WHEN NULL은 내부적으로 comm = NULL 비교라 절대 참이 되지 않아 ELSE의 'has'가 나온다. CASE에서 NULL을 잡으려면 WHEN comm IS NULL로 쓴다.",
-    anchor: "조건에-따라-값을-고르는-case와-decode",
-  },
-  {
-    id: "sqld-single-row-functions-5",
-    post: "sqld-single-row-functions",
-    question:
-      "VARCHAR2 컬럼 emp_code('007369' 같은 값)에 인덱스가 있다. Oracle에서 WHERE emp_code = 7369 로 조회하면 어떻게 되나?",
-    choices: [
-      "컬럼이 TO_NUMBER(emp_code)로 변환되어 인덱스를 쓰지 못한다",
-      "상수 7369가 '7369'로 변환되어 인덱스로 바로 찾는다",
-      "타입이 달라 항상 에러가 난다",
-      "'007369'와 7369는 다른 값이라 0행이 나온다",
-    ],
-    answer: 0,
-    explanation:
-      "Oracle은 문자와 숫자를 비교하면 문자 쪽을 숫자로 바꾼다. 문자가 컬럼이면 컬럼 전체에 TO_NUMBER가 씌워져 인덱스 탐색을 못 하고 전체 스캔이 된다. 숫자로 바꿀 수 없는 값이 섞여 있으면 그때 ORA-01722 에러가 난다.",
-    anchor: "형-변환은-직접-적는다",
-  },
-  {
-    id: "sqld-single-row-functions-6",
-    post: "sqld-single-row-functions",
-    question: "SELECT TO_CHAR(TIMESTAMP '2026-10-17 14:05:09', 'HH:MM:SS') FROM DUAL 의 결과는?",
-    choices: ["14:05:09", "02:05:09", "02:10:09", "형식 오류로 에러가 난다"],
-    answer: 2,
-    explanation:
-      "MM은 분이 아니라 월이고, 분은 MI다. HH는 12시간제라 14시가 02로 나온다. 그래서 분 자리에 10월의 10이 들어간 02:10:09가 에러 없이 나온다.",
-    anchor: "to_char-형식-문자열-읽기",
-  },
-  {
-    id: "sqld-single-row-functions-7",
+    id: "sqld-single-row-functions-3",
     post: "sqld-single-row-functions",
     question: "Oracle에서 SELECT SUBSTR('CORPORATE FLOOR', -5, 3), INSTR('CORPORATE FLOOR', 'OR', 3, 2) FROM DUAL 의 결과는?",
     choices: ["OOR, 5", "FLO, 14", "FLO, 5", "COR, 14"],
@@ -79,5 +35,50 @@ export const SQLD_SINGLE_ROW_FUNCTIONS: QuizQuestion[] = [
     explanation:
       "SUBSTR의 시작 위치가 음수면 뒤에서 센다. 15글자 중 뒤에서 다섯 번째인 11번 F부터 세 글자라 FLO다. INSTR은 3번 위치부터 찾아 두 번째 OR을 고르니, 5번 다음인 14번이다.",
     anchor: "문자를-다듬는-함수",
+  },
+  {
+    id: "sqld-single-row-functions-4",
+    post: "sqld-single-row-functions",
+    question: "Oracle에서 SELECT LPAD('MILLER', 3) FROM DUAL의 결과는?",
+    choices: [
+      "'MIL'",
+      "'   MILLER'",
+      "'MILLER'",
+      "'LER'",
+    ],
+    answer: 0,
+    explanation:
+      "LPAD는 왼쪽을 채워 전체 길이를 맞추는데, 전체 길이가 원래 문자열보다 짧으면 앞에서부터 그 길이만큼 잘라 낸다. 그래서 MILLER가 앞 세 글자 MIL이 된다.",
+    anchor: "문자를-다듬는-함수",
+  },
+  {
+    id: "sqld-single-row-functions-5",
+    post: "sqld-single-row-functions",
+    question: "Oracle의 ADD_MONTHS(DATE '2024-02-29', 1)과 PostgreSQL의 date '2024-02-29' + interval '1 month'의 결과로 맞는 것은?",
+    choices: [
+      "둘 다 2024-03-29",
+      "둘 다 2024-03-31",
+      "Oracle은 2024-03-29, PostgreSQL은 2024-03-31",
+      "Oracle은 2024-03-31, PostgreSQL은 2024-03-29",
+    ],
+    answer: 3,
+    explanation:
+      "Oracle의 ADD_MONTHS는 입력이 그달의 말일이면 결과도 말일로 맞춘다. 2월 29일은 2024년 2월의 말일이라 3월 31일이 된다. PostgreSQL의 interval에는 이 규칙이 없어서 3월 29일이다.",
+    anchor: "날짜는-숫자처럼-더하고-뺀다",
+  },
+  {
+    id: "sqld-single-row-functions-6",
+    post: "sqld-single-row-functions",
+    question: "PostgreSQL 16에서 round(2.5::numeric)과 round(2.5::float8)의 결과는?",
+    choices: [
+      "3과 2",
+      "3과 3",
+      "2와 2",
+      "2와 3",
+    ],
+    answer: 0,
+    explanation:
+      "numeric의 round는 0에서 먼 쪽으로 반올림해 3이지만, double precision의 round는 가장 가까운 짝수로 반올림해 2다. 금액을 float에 담으면 정산이 1원씩 어긋나는 이유 중 하나라 돈은 numeric에 담는다.",
+    anchor: "현장에서-함수-결과가-조용히-달라지는-순간",
   },
 ];

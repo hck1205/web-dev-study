@@ -1,0 +1,459 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-type-key-value");
+
+서점 상품 페이지에서 "장바구니 담기"를 누르면 서버가 하는 일은 단순하다. 42번 회원의 장바구니를 꺼내서, 책 한 권을 더하고, 다시 넣는다. 다른 회원의 장바구니와 엮을 일도, "장바구니에 103번 책이 든 회원 전부" 같은 질문을 할 일도 없다. 열쇠 하나로 상자 하나를 열고 닫을 뿐이다.
+
+이런 일만 한다면 DB가 SQL을 파싱하고 실행 계획을 세울 이유가 없다. 키를 주면 값을 돌려주는 것만 아주 빠르게, 아주 많이 하면 된다. 이게 키-값 저장소다. 모델이 가장 단순한 대신, 단순함을 어디에 쓰느냐에 따라 제품의 성격이 크게 갈린다. 메모리에 두고 마이크로초 단위로 답하는 Redis, 디스크에 두고 서버 수천 대로 나눠 담는 DynamoDB, 작은 값을 틀림없이 지키는 etcd가 모두 키-값 저장소다. 이 글은 셋을 같은 서점 예제로 나란히 본다. [DB 종류 한눈에](/posts/db-types-overview)에서 이어지는 세 번째 글이다.
+
+## 열쇠 하나로 상자 하나
+
+키-값 저장소가 약속하는 연산은 세 개가 거의 전부다.
+
+```text
+PUT(key, value)   키에 값을 넣는다 (있으면 덮어쓴다)
+GET(key)          키의 값을 꺼낸다
+DELETE(key)       키를 지운다
+```
+
+DB는 값의 안을 들여다보지 않는다. 장바구니가 JSON이든, 이미지 바이트든, 숫자 하나든 똑같이 바이트 덩어리다. 그래서 "값 안의 bookId가 103인 것"으로 찾을 방법이 없다. 찾으려면 키를 알아야 한다.
+
+이 제약이 곧 속도의 이유다. 키 하나로 위치가 정해지니, 내부는 해시 테이블 하나로 충분하다. 해시 함수에 키를 넣으면 칸 번호가 나오고, 그 칸을 보면 끝이다. 데이터가 천 개든 십억 개든 찾는 시간이 거의 같다(O(1)). 서버 여러 대로 나눌 때도 같다. 키를 해시해서 서버를 고르면, 요청 하나가 서버 하나만 건드린다. 조인도 없고 여러 서버를 오가는 트랜잭션도 없으니 서버를 늘리는 만큼 처리량이 는다.
+
+PostgreSQL로도 같은 일을 흉내 낼 수 있다. 키를 기본 키로 둔 표 하나면 된다.
+
+```sql
+-- WAL을 쓰지 않아 빠르지만, 서버가 비정상 종료하면 내용이 비워지는 테이블
+CREATE UNLOGGED TABLE kv (
+  key        text PRIMARY KEY,
+  value      jsonb NOT NULL,
+  expires_at timestamptz
+);
+
+-- 장바구니 20만 개를 넣어 둔다
+INSERT INTO kv
+SELECT 'cart:' || g,
+       jsonb_build_object('items', jsonb_build_array(jsonb_build_object('bookId', 101, 'qty', 1))),
+       now() + interval '7 days'
+FROM generate_series(1, 200000) g;
+
+-- PUT: 있으면 덮어쓰고 없으면 넣는다
+INSERT INTO kv VALUES ('cart:42', '{"items":[{"bookId":101,"qty":1},{"bookId":103,"qty":2}]}', now() + interval '7 days')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at;
+
+-- GET
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT value FROM kv WHERE key = 'cart:42' AND (expires_at IS NULL OR expires_at > now());
+```
+
+```text
+ Index Scan using kv_pkey on kv (actual time=0.022..0.023 rows=1 loops=1)
+   Index Cond: (key = 'cart:42'::text)
+   Filter: ((expires_at IS NULL) OR (expires_at > now()))
+ Planning Time: 0.182 ms
+ Execution Time: 0.036 ms
+```
+
+기본 키 인덱스 한 번(`Index Scan using kv_pkey`)으로 0.04ms에 끝났다. 그런데 값 안을 조건으로 찾으면 이야기가 달라진다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM kv WHERE value @> '{"items":[{"bookId":103}]}';
+```
+
+```text
+ Aggregate (actual time=40.152..45.121 rows=1 loops=1)
+   ->  Gather (actual time=40.000..45.109 rows=1 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Parallel Seq Scan on kv (actual time=37.104..37.105 rows=0 loops=3)
+               Filter: (value @> '{"items": [{"bookId": 103}]}'::jsonb)
+               Rows Removed by Filter: 66666
+ Planning Time: 0.084 ms
+ Execution Time: 45.150 ms
+```
+
+`Parallel Seq Scan`과 `Rows Removed by Filter`가 보인다. 20만 개를 다 열어 봤다. PostgreSQL은 그래도 GIN 인덱스를 걸면 이 질문에 답할 수 있다([JSONB 글](/posts/postgres-jsonb-search)). 전용 키-값 저장소는 대부분 그런 길이 아예 없거나, 따로 인덱스 테이블을 만들어야 한다. 키를 아는 질문만 하겠다고 약속하고 속도와 확장을 얻는 구조다.
+
+## 메모리에 두느냐, 디스크에 두느냐
+
+키-값 저장소는 데이터를 어디에 두느냐로 크게 갈린다. 아래 그림은 이 글에서 다루는 세 제품의 자리다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="같은 키-값 모델이라도 데이터를 어디에 두는지와 무엇을 지키는지가 다르다."
+  nodes={[
+    { id: "app", label: "서점 앱", x: 200, y: 40, w: 110 },
+    { id: "redis", label: "Redis", sub: "메모리, µs", x: 70, y: 150, w: 110 },
+    { id: "ddb", label: "DynamoDB", sub: "SSD, 여러 대", x: 200, y: 150, w: 110 },
+    { id: "etcd", label: "etcd", sub: "Raft, 작은 값", x: 330, y: 150, w: 110 },
+    { id: "cache", label: "캐시·세션", x: 70, y: 250, w: 110 },
+    { id: "main", label: "주 저장소", x: 200, y: 250, w: 110 },
+    { id: "conf", label: "설정·락", x: 330, y: 250, w: 110 },
+  ]}
+  edges={[
+    { from: "app", to: "redis", label: "GET" },
+    { from: "app", to: "ddb", label: "Query" },
+    { from: "app", to: "etcd", label: "watch" },
+    { from: "redis", to: "cache" },
+    { from: "ddb", to: "main" },
+    { from: "etcd", to: "conf" },
+  ]}
+/>
+
+메모리 쪽의 대표는 Redis와 Memcached다. 모든 데이터가 RAM에 있어서 명령 하나가 수 µs에 끝나고, 응답 시간은 대부분 네트워크 왕복이다. 대신 데이터 크기가 메모리에 묶이고, 재시작하면 디스크에 남겨 둔 만큼만 돌아온다. Redis가 왜 빠르고 언제 멈추는지는 [Redis 기본 글](/posts/redis-basics)에, 메모리가 차면 무엇을 지우는지는 [축출 정책 글](/posts/redis-memory-eviction)에, 재시작과 장애 때 무엇을 잃는지는 [영속성 글](/posts/redis-persistence-ha)에 있다. 여기서는 키-값 모델로서의 자리만 짚는다. 장바구니라면 이렇게 쓴다.
+
+```bash
+# 장바구니를 해시 하나로: 필드는 책 id, 값은 수량
+redis-cli HSET cart:42 101 1 103 2
+# 7일 뒤 자동으로 사라지게 한다
+redis-cli EXPIRE cart:42 604800
+# 장바구니 전체를 꺼낸다
+redis-cli HGETALL cart:42
+```
+
+```text
+(integer) 2
+(integer) 1
+1) "101"
+2) "1"
+3) "103"
+4) "2"
+```
+
+Redis는 값에 자료구조(해시, 리스트, 정렬된 셋)를 둘 수 있어서 순수한 키-값보다 한 걸음 더 나갔다. 그래도 찾는 기준은 여전히 키다.
+
+디스크 쪽은 다시 둘로 나뉜다. 하나는 서버 여러 대에 나눠 담는 분산 저장소다. DynamoDB가 대표이고, 데이터를 SSD에 두고 키를 해시해서 파티션에 나눈다. 다른 하나는 앱 안에 라이브러리로 들어가는 저장 엔진이다. RocksDB, LevelDB가 여기 속하고, 다른 DB의 밑바닥 엔진으로 자주 쓰인다. 이쪽은 [임베디드 DB 글](/posts/db-type-embedded)에서 다룬다.
+
+etcd는 조금 다른 자리에 있다. 데이터는 작고(기본 저장 한도 2GB), 처리량도 높지 않다. 대신 여러 대가 Raft 합의로 같은 값을 갖고, 읽으면 늘 마지막으로 커밋된 값을 돌려준다. 빠름이 아니라 틀리지 않음에 쓰는 키-값 저장소다.
+
+## 키를 해시해서 파티션을 고른다
+
+DynamoDB 테이블은 사용자 눈에는 하나지만, 안에서는 여러 물리 파티션으로 나뉜다. 항목을 넣으면 파티션 키를 해시해서 어느 파티션에 둘지 정한다. 파티션마다 처리량 한도가 있다. AWS 문서 기준으로 파티션 하나가 초당 읽기 3,000 RCU, 쓰기 1,000 WCU까지 받는다. 테이블 전체 한도가 넉넉해도, 요청이 한 파티션 키에 몰리면 그 파티션 하나의 한도에 먼저 걸린다. 이걸 핫 파티션이라고 한다.
+
+아래 그림은 요청 일곱 개를 파티션 네 개에 나누는 과정이다. 파티션 번호는 아래 플레이그라운드와 같은 해시 함수(FNV-1a)로 실제 계산한 값이다. DynamoDB 내부 해시는 공개돼 있지 않아서 다른 함수를 쓴다는 것만 다르다.
+
+<AlgoTrace
+  caption="회원 키는 고르게 퍼지고, 베스트셀러 키는 한곳에 몰린다"
+  memoryLabel="파티션별 요청 수"
+  cells={["USER#42", "USER#43", "USER#44", "USER#45", "BOOK#101", "BOOK#101", "BOOK#101"]}
+  steps={[
+    { memory: ["P0 0", "P1 0", "P2 0", "P3 0"], caption: "파티션 네 개가 비어 있다. 요청이 오면 파티션 키를 해시해 4로 나눈 나머지로 파티션을 고른다." },
+    { pointer: 0, memory: ["P0 0", "P1 1", "P2 0", "P3 0"], caption: "USER#42는 P1로 간다." },
+    { pointer: 1, memory: ["P0 0", "P1 1", "P2 1", "P3 0"], caption: "USER#43은 P2다. 키가 조금만 달라도 해시는 크게 달라진다." },
+    { pointer: 3, memory: ["P0 1", "P1 1", "P2 1", "P3 1"], caption: "USER#44는 P3, USER#45는 P0. 회원 수가 많으면 요청이 고르게 퍼진다." },
+    { pointer: 4, found: [4], memory: ["P0 1", "P1 1", "P2 1", "P3 2"], caption: "오늘 베스트셀러 101번의 재고를 모두가 읽는다. BOOK#101은 P3이다." },
+    { pointer: 6, found: [4, 5, 6], memory: ["P0 1", "P1 1", "P2 1", "P3 4"], caption: "같은 키는 늘 같은 파티션이다. 파티션을 아무리 늘려도 P3 하나가 다 받는다." },
+  ]}
+/>
+
+해법은 키를 쪼개는 것이다. 쓰기가 몰리는 키라면 `BOOK#101#0`부터 `BOOK#101#3`까지 접미사를 붙여 흩어 쓰고, 읽을 때 네 개를 모아 합친다(write sharding). 읽기가 몰리는 키라면 앞에 캐시를 두는 편이 낫다. DynamoDB에는 자주 읽히는 파티션을 나눠 주는 적응형 용량(adaptive capacity) 기능이 있지만, 키 하나에 몰리는 요청은 나눌 수 없다. 키 하나는 결국 한 파티션에 산다.
+
+아래 함수는 요청 키 목록을 받아 파티션별 요청 수를 센다. 해시 함수는 넣어 두었다. 세 번째 테스트에서 접미사를 붙인 키가 실제로 고르게 퍼지는지 확인해 보자.
+
+<CodePlayground
+  caption="파티션별 요청 수 세기"
+  functionName="partitionLoad"
+  initialCode={`// 문자열을 32비트 정수로 (FNV-1a)
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+function partitionLoad(keys, partitions) {
+  // 파티션 번호 = fnv1a(key) % partitions
+  // 결과: 길이가 partitions인 배열, 칸마다 요청 수
+  return [];
+}`}
+  solution={`function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+function partitionLoad(keys, partitions) {
+  const counts = new Array(partitions).fill(0);
+  for (const key of keys) counts[fnv1a(key) % partitions]++;
+  return counts;
+}`}
+  tests={[
+    {
+      label: "회원 8명",
+      args: [["USER#42", "USER#43", "USER#44", "USER#45", "USER#46", "USER#47", "USER#48", "USER#49"], 4],
+      expected: [2, 2, 2, 2],
+    },
+    { label: "베스트셀러 한 권에 8번", args: [Array(8).fill("BOOK#101"), 4], expected: [0, 0, 0, 8] },
+    {
+      label: "접미사로 쪼갠 키",
+      args: [["BOOK#101#0", "BOOK#101#1", "BOOK#101#2", "BOOK#101#3", "BOOK#101#0", "BOOK#101#1", "BOOK#101#2", "BOOK#101#3"], 4],
+      expected: [2, 2, 2, 2],
+    },
+  ]}
+/>
+
+## 파티션 키와 정렬 키
+
+DynamoDB의 키는 둘로 이뤄질 수 있다. 파티션 키(partition key)는 어느 파티션에 둘지 정하고, 정렬 키(sort key)는 같은 파티션 키 안에서 항목을 정렬한다. 같은 파티션 키를 가진 항목들은 정렬 키 순서로 붙어 있어서, "이 회원의 2026년 10월 주문" 같은 범위를 한 번에 읽을 수 있다. 순수한 키-값에서 한 걸음 나간 부분이다.
+
+서점 데이터를 테이블 하나에 담는다면 키를 이렇게 짓는다. 조각을 눌러 보면 각 부분이 어떤 질문을 위한 것인지 나온다.
+
+<UrlAnatomy
+  caption="Bookstore 테이블의 주문 항목 하나"
+  base="Bookstore"
+  separator=" { "
+  joiner=", "
+  params={[
+    {
+      key: "PK",
+      value: "USER#42",
+      title: "파티션 키: 누구의 것인가",
+      description: "회원 42번의 프로필, 주문, 리뷰가 모두 같은 파티션 키를 갖는다. 그래서 '42번 회원의 것'은 한 파티션에서 끝난다. 타입 접두사(USER#)를 붙여 두면 한 테이블에 여러 종류의 항목을 섞어도 키가 겹치지 않는다.",
+      required: true,
+    },
+    {
+      key: "SK",
+      value: "ORDER#2026-10-05#9006",
+      title: "정렬 키: 무엇을, 어떤 순서로",
+      description: "ORDER#로 시작하게 지어서 begins_with로 주문만 골라낼 수 있다. 날짜를 ISO 형식(연-월-일)으로 넣었기 때문에 문자열 정렬이 곧 시간 순서다. 같은 날 주문이 겹치지 않게 주문 번호를 끝에 붙였다.",
+      code: "SK = \"PROFILE\"               회원 정보\nSK = \"ORDER#2026-09-03#9001\"  주문\nSK = \"REVIEW#101\"            리뷰",
+      required: true,
+    },
+    {
+      key: "status",
+      value: "paid",
+      title: "일반 속성",
+      description: "키가 아닌 속성은 항목마다 달라도 된다. 다만 이 값으로는 바로 찾을 수 없다. status로 찾으려면 그 속성을 키로 하는 보조 인덱스(GSI)를 만든다.",
+    },
+    {
+      key: "total",
+      value: "28000",
+      title: "주문 금액",
+      description: "주문 목록 화면에 필요한 값은 항목에 같이 넣어 둔다. 조인이 없으니 화면 하나를 Query 한 번으로 그리려면 필요한 걸 미리 모아 둬야 한다.",
+    },
+    {
+      key: "GSI1PK",
+      value: "BOOK#101",
+      title: "보조 인덱스 키",
+      description: "리뷰 항목에만 넣는 속성이다. 이걸 파티션 키로 하는 GSI를 만들면 '101번 책의 리뷰 목록'을 회원과 상관없이 모아 읽을 수 있다. GSI는 비동기로 갱신돼서 방금 쓴 리뷰가 잠깐 안 보일 수 있다.",
+      code: "PK = USER#43, SK = REVIEW#101, GSI1PK = BOOK#101",
+    },
+  ]}
+/>
+
+이 설계로 "42번 회원의 최근 주문 10건"은 이렇게 읽는다.
+
+```bash
+# 파티션 키는 같음(=)만, 정렬 키는 범위·접두사 조건을 쓸 수 있다
+aws dynamodb query \
+  --table-name Bookstore \
+  --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
+  --expression-attribute-values '{":pk":{"S":"USER#42"},":sk":{"S":"ORDER#"}}' \
+  --no-scan-index-forward \
+  --limit 10
+```
+
+```text
+{
+    "Items": [
+        { "PK": {"S": "USER#42"}, "SK": {"S": "ORDER#2026-10-05#9006"},
+          "status": {"S": "paid"}, "total": {"N": "28000"} },
+        { "PK": {"S": "USER#42"}, "SK": {"S": "ORDER#2026-09-28#9004"},
+          "status": {"S": "cancelled"}, "total": {"N": "28000"} },
+        ...
+    ],
+    "Count": 4,
+    "ScannedCount": 4
+}
+```
+
+출력은 예시다(이 컨테이너에는 DynamoDB가 없다). 봐야 할 건 `Count`와 `ScannedCount`다. 둘이 같으면 읽은 만큼 다 쓴 것이다. `--filter-expression`으로 `status = paid`를 걸면 `Count`는 3으로 줄지만 `ScannedCount`는 4 그대로다. 필터는 읽은 뒤에 거르는 것이라 비용(RCU)도 4건만큼 나간다. 자주 거르는 조건이라면 키에 넣어야 한다.
+
+정렬 키에 쓸 수 있는 조건은 `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `begins_with`뿐이다. 파티션 키 없이 찾는 방법은 `Scan`(테이블 전체 읽기)밖에 없다. 운영 테이블에서 Scan이 보이면 대부분 키 설계가 질문을 못 따라가고 있다는 신호다.
+
+이렇게 한 테이블에 여러 종류의 항목을 섞고 키 이름을 질문에 맞춰 짓는 방식을 단일 테이블 설계(single-table design)라고 부른다. 관계형 DB에서 조인으로 하던 일을, 같은 파티션에 미리 모아 두는 것으로 대신한다. 이게 가능하려면 질문을 먼저 적어야 한다.
+
+```text
+1. 회원 정보 보기            PK = USER#42, SK = PROFILE
+2. 회원의 최근 주문 목록     PK = USER#42, SK begins_with ORDER#  (역순)
+3. 회원의 9월 주문           PK = USER#42, SK BETWEEN ORDER#2026-09 AND ORDER#2026-09~
+4. 책의 리뷰 목록            GSI1: GSI1PK = BOOK#101
+5. 주문 번호로 바로 찾기     ?  ← 아직 키가 없다. GSI를 하나 더 만들거나 항목을 하나 더 쓴다
+```
+
+5번처럼 목록에 없던 질문이 오면 SQL 한 줄로 끝나지 않는다. 인덱스를 추가하고, 기존 항목에 속성을 채워 넣는 작업이 필요하다. [관계형 DB 글](/posts/db-type-relational)에서 본 "미리 몰랐던 질문"에 약한 것이 키-값 저장소의 가장 큰 대가다.
+
+## DynamoDB에서 알아 둘 숫자와 설정
+
+실무에서 자주 부딪히는 것만 추렸다. 숫자는 AWS 공식 문서 기준이고 바뀔 수 있다.
+
+항목 하나는 최대 400KB다. 이미지나 긴 본문은 S3에 두고 경로만 넣는다.
+
+읽기는 기본이 최종 일관성 읽기(eventually consistent)다. 방금 쓴 값이 잠깐 안 보일 수 있고, 비용은 강한 일관성 읽기의 절반이다. `--consistent-read`를 주면 마지막으로 성공한 쓰기를 반영한 값을 읽는다. GSI에서는 강한 일관성 읽기를 쓸 수 없다.
+
+조건부 쓰기로 경쟁을 막는다. "없을 때만 넣기", "재고가 1 이상일 때만 빼기"를 DB가 원자적으로 판단한다.
+
+```bash
+# 재고가 남아 있을 때만 1 뺀다. 조건이 틀리면 ConditionalCheckFailedException
+aws dynamodb update-item \
+  --table-name Bookstore \
+  --key '{"PK":{"S":"BOOK#103"},"SK":{"S":"STOCK"}}' \
+  --update-expression "SET stock = stock - :one" \
+  --condition-expression "stock >= :one" \
+  --expression-attribute-values '{":one":{"N":"1"}}'
+```
+
+여러 항목을 묶는 트랜잭션(`TransactWriteItems`)도 있다. 한 번에 최대 100개 항목까지 묶을 수 있고, 일반 쓰기보다 용량을 두 배로 쓴다. 재고 차감과 주문 생성처럼 꼭 함께 바뀌어야 하는 곳에만 쓴다.
+
+용량 방식은 둘이다. 온디맨드는 요청한 만큼 내고, 프로비저닝은 초당 용량을 미리 정한다(자동 조정 가능). 트래픽을 예측하기 어려운 초기에는 온디맨드가 편하고, 꾸준한 트래픽에서는 프로비저닝이 싼 경우가 많다.
+
+TTL 속성에 만료 시각을 넣으면 지나간 항목을 백그라운드로 지운다. 바로 지워지지 않고 며칠 안에 지워진다고 문서에 적혀 있으니, 읽을 때도 만료 시각을 확인한다.
+
+## etcd: 작지만 틀리면 안 되는 값
+
+Kubernetes 클러스터의 모든 상태(어떤 파드가 어느 노드에 있는지, 설정, 시크릿)는 etcd에 들어 있다. 값의 양은 크지 않지만, 두 컨트롤러가 서로 다른 값을 보고 움직이면 클러스터가 엉킨다. 그래서 etcd는 속도보다 "모두가 같은 순서로 같은 값을 본다"를 지킨다.
+
+방법은 Raft 합의다. 보통 3대나 5대로 띄우고, 한 대가 리더가 된다. 쓰기는 리더가 받아서 로그에 적고, 과반이 그 로그를 받았다고 답하면 커밋한다. 아래 그림은 3대짜리 etcd에 설정 하나를 쓰는 과정이다.
+
+<SequenceDiagram
+  caption="etcd 3대에서 쓰기 하나가 커밋되는 과정"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "leader", label: "리더" },
+    { id: "f1", label: "팔로워 1" },
+    { id: "f2", label: "팔로워 2" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "leader",
+      label: "put",
+      title: "쓰기는 리더가 받는다",
+      detail: "팔로워에 보내도 리더에게 넘긴다. 키와 값을 보낸다.",
+      payload: "etcdctl put /bookstore/flags/new-checkout on",
+    },
+    {
+      from: "leader",
+      to: "leader",
+      label: "로그 append",
+      title: "리더가 로그에 적는다",
+      detail: "아직 적용하지 않는다. 로그에 순번(index)을 매겨 붙여 두기만 한다.",
+    },
+    {
+      from: "leader",
+      to: "f1",
+      label: "AppendEntries",
+      title: "팔로워에게 로그를 보낸다",
+      detail: "리더는 모든 팔로워에게 같은 로그 항목을 보낸다. 팔로워는 받은 순서대로 자기 로그에 붙인다.",
+    },
+    {
+      from: "f1",
+      to: "leader",
+      label: "받았음",
+      title: "과반이 모였다",
+      detail: "리더와 팔로워 1, 3대 중 2대가 이 항목을 가졌다. 과반이니 이제 이 쓰기는 리더가 바뀌어도 사라지지 않는다.",
+    },
+    {
+      from: "leader",
+      to: "client",
+      label: "OK rev=8",
+      title: "커밋하고 응답한다",
+      detail: "리더가 항목을 커밋해 키-값 저장소에 적용하고, 새 리비전 번호를 돌려준다. 리비전은 클러스터 전체에서 하나씩 늘어나는 번호다.",
+    },
+    {
+      from: "leader",
+      to: "f2",
+      label: "AppendEntries",
+      title: "늦은 팔로워도 따라온다",
+      detail: "팔로워 2는 네트워크가 느려 조금 늦게 받는다. 그래도 같은 순서로 같은 로그를 적용하니 결국 같은 상태가 된다.",
+    },
+  ]}
+/>
+
+과반이 필요하니 3대면 1대, 5대면 2대까지 죽어도 동작한다. 4대는 3대보다 견디는 수가 늘지 않으면서 과반만 커지니 홀수로 둔다. 리더가 커밋을 확인한 값만 읽게 하므로, 읽기도 기본으로 선형화 가능(linearizable)하다. 방금 끝난 쓰기를 다음 읽기가 반드시 본다는 뜻이다. Raft가 리더를 뽑고 로그를 맞추는 과정은 [분산 SQL 글](/posts/db-type-newsql)에서, 이런 일관성이 무엇을 대가로 하는지는 [CAP 글](/posts/db-consistency-cap)에서 이어서 본다.
+
+etcd가 설정 저장소로 쓰이는 이유는 이 일관성 위에 얹은 기능들이다.
+
+```bash
+# 접두사로 묶어 읽기
+etcdctl get /bookstore/flags --prefix
+
+# 바뀌면 바로 알려 달라 (설정을 다시 읽는 대신 기다린다)
+etcdctl watch /bookstore/flags --prefix
+
+# 30초짜리 임대(lease)를 만들고, 그 lease에 키를 묶는다
+etcdctl lease grant 30
+etcdctl put --lease=694d8a3c2e1b7f05 /bookstore/workers/w1 alive
+```
+
+```text
+/bookstore/flags/new-checkout
+on
+```
+
+lease에 묶인 키는 클라이언트가 `keep-alive`로 연장하지 않으면 시간이 지나 사라진다. 작업자가 죽으면 키도 사라지니, 살아 있는 작업자 목록이나 리더 선출용 락에 쓴다(lease ID는 `lease grant`가 돌려준 값을 쓴다. 위 값은 예시다). 키마다 리비전이 붙어 있어서 "리비전이 7일 때만 바꿔라" 같은 비교 후 교체(`etcdctl txn`)도 된다.
+
+그 대신 etcd는 큰 데이터를 담는 곳이 아니다. 요청 하나는 기본 1.5MiB까지, 전체 저장 공간은 기본 2GB이고 문서는 8GB 이상을 권하지 않는다. 쓰기마다 과반의 디스크 fsync를 기다리니 처리량도 초당 수만 건 수준에서 멈춘다. 서비스 데이터를 etcd에 넣으면 Kubernetes가 같이 느려진다. ZooKeeper와 Consul도 비슷한 자리에 있는 도구다.
+
+## 키-값 저장소가 맞는 곳과 아닌 곳
+
+맞는 곳은 질문이 "이 키의 값"으로 끝나는 데이터다.
+
+- 세션, 장바구니, 로그인 토큰 저장소. 회원 id나 세션 id 하나로 읽고 쓴다.
+- 캐시. 계산이 끝난 결과를 키로 저장한다. 언제 채우고 언제 지울지는 [캐시 전략 글](/posts/caching-strategies)에 있다.
+- 요청 수 제한, 카운터, 중복 방지 키. 원자적인 증가와 만료가 필요하다.
+- 접근 패턴이 고정되고 규모가 아주 큰 서비스의 주 저장소. 회원별 장바구니, 기기별 상태처럼 파티션 키가 자연스러운 데이터다. DynamoDB가 이 자리에 많이 쓰인다.
+- 기능 플래그, 서비스 설정, 리더 선출. etcd나 Consul 같은 합의 기반 저장소가 맡는다.
+
+맞지 않는 곳도 분명하다. 값 안의 필드로 찾거나 정렬해야 하는 화면, 여러 엔티티를 엮는 리포트, 조건이 자주 바뀌는 관리자 검색이 그렇다. "전체 회원 중 지난달 주문이 없는 사람" 같은 질문은 키-값 저장소에서 전체를 읽는 것 말고는 방법이 없다. 이런 질문이 서비스의 중심이라면 관계형 DB가 맞다.
+
+흔한 실수도 몇 가지 있다. 파티션 키로 날짜나 상태처럼 값 종류가 적은 속성을 고르는 것(요청이 한두 파티션에 몰린다). Scan과 필터로 검색 화면을 만드는 것(데이터가 늘수록 비용과 시간이 같이 는다). 키 이름 규칙 없이 시작해서 나중에 접두사 검색을 못 하는 것. Redis를 영속성 설정 없이 주 저장소로 쓰는 것.
+
+## 관계형 DB 옆에 두는 법
+
+가장 흔한 조합은 PostgreSQL을 원본으로 두고 Redis를 앞에 두는 것이다. 주문과 재고는 PostgreSQL에 트랜잭션으로 쓰고, 상품 상세나 인기 목록은 Redis에 캐시한다. 세션과 장바구니처럼 잠깐 쓰고 버리는 데이터는 처음부터 Redis에만 둔다. 장바구니가 결제로 넘어가는 순간에 PostgreSQL로 옮겨 적는다.
+
+DynamoDB를 주 저장소로 쓰는 서비스도 리포트와 분석은 따로 뺀다. DynamoDB Streams로 변경을 흘려보내 분석 저장소나 검색 엔진에 적재하는 구성이 흔하다. 키로 찾는 일은 DynamoDB가, 조건을 조합하는 질문은 다른 저장소가 맡는 식이다.
+
+etcd는 서비스 데이터와 섞지 않는다. Kubernetes를 쓰면 이미 있지만, 그 etcd는 Kubernetes 전용으로 둔다.
+
+## 단순한 모델, 서로 다른 약속
+
+키-값 저장소는 "키를 아는 질문만 하겠다"는 약속으로 속도와 확장을 얻는다. 키를 해시해 자리를 정하니 요청 하나가 한 곳만 건드리고, 그래서 서버를 늘리는 만큼 버틴다. 같은 모델 위에서 Redis는 메모리로 지연 시간을, DynamoDB는 파티션으로 규모를, etcd는 합의로 정확함을 골랐다. 어느 쪽이든 설계는 질문 목록을 적고 그 질문이 키 하나로 끝나게 이름을 짓는 데서 시작한다. 다음 글은 이 생각을 한 단계 더 밀고 나간 [와이드 컬럼 DB](/posts/db-type-wide-column)다.
+
+## 면접에서 나올 만한 질문
+
+### 키-값 저장소가 빠르고 확장하기 쉬운 이유는 무엇인가요?
+
+키 하나로 위치가 정해지기 때문이다. 내부는 해시 테이블이라 데이터 양과 상관없이 찾는 시간이 거의 일정하고, 분산할 때도 키를 해시해 서버를 고르니 요청 하나가 서버 하나만 건드린다. 조인이나 여러 서버에 걸친 트랜잭션이 없어서 서버를 늘린 만큼 처리량이 는다. 그 대가로 값 안의 필드로는 찾을 수 없다.
+
+### DynamoDB에서 핫 파티션은 왜 생기고 어떻게 피하나요?
+
+같은 파티션 키는 늘 같은 물리 파티션에 가고, 파티션마다 초당 처리량 한도가 있다. 베스트셀러처럼 키 하나에 요청이 몰리면 테이블 전체 용량이 남아도 그 파티션에서 스로틀이 걸린다. 쓰기가 몰리면 키에 접미사를 붙여 여러 파티션에 흩어 쓰고 읽을 때 합치며, 읽기가 몰리면 앞에 캐시를 둔다. 처음부터 값 종류가 많고 고르게 분포하는 속성을 파티션 키로 고른다.
+
+### 파티션 키와 정렬 키는 각각 무슨 역할을 하나요?
+
+파티션 키는 해시돼서 항목이 저장될 파티션을 정하고, 조회할 때는 같음 조건만 쓸 수 있다. 정렬 키는 같은 파티션 키 안에서 항목을 정렬해 범위와 접두사 조회를 가능하게 한다. 그래서 회원 id를 파티션 키로, `ORDER#날짜#번호`를 정렬 키로 두면 회원의 최근 주문을 한 번에 순서대로 읽는다.
+
+### Query와 Scan, 그리고 필터의 차이는요?
+
+Query는 파티션 키 하나를 정해 그 안을 정렬 키 조건으로 읽는다. Scan은 테이블 전체를 읽는다. 필터 표현식은 읽은 뒤에 거르는 것이라 결과 수는 줄어도 읽은 만큼 비용이 나간다. 그래서 자주 거르는 조건은 필터가 아니라 키나 GSI로 만든다.
+
+### Redis와 DynamoDB 중 무엇을 고르나요?
+
+지연 시간이 가장 중요하고 데이터가 메모리에 들어가며 잃어도 다시 만들 수 있으면 Redis가 맞다. 캐시, 세션, 카운터가 대표적이다. 데이터가 메모리보다 크고, 장애에도 남아야 하며, 접근 패턴이 키로 정해지는 주 저장소라면 DynamoDB 같은 디스크 기반 분산 저장소가 맞다. 둘을 함께 써서 DynamoDB 앞에 캐시를 두기도 한다.
+
+### etcd는 왜 서비스 데이터를 담는 용도로 쓰지 않나요?
+
+etcd는 Raft로 과반이 로그를 받아야 커밋하므로 쓰기마다 여러 대의 디스크 fsync를 기다린다. 처리량이 높지 않고, 요청 크기와 전체 저장 공간도 작게 제한돼 있다. 대신 선형화 가능한 읽기, watch, lease, 비교 후 교체를 주니 설정, 서비스 목록, 리더 선출처럼 작지만 틀리면 안 되는 값에 쓴다. Kubernetes의 etcd에 서비스 데이터를 넣으면 클러스터 전체가 느려질 수 있다.
+
+### 키-값 저장소를 쓰면서 리포트나 검색이 필요해지면 어떻게 하나요?
+
+키-값 저장소에서 Scan으로 해결하지 않고 다른 저장소로 데이터를 흘려보낸다. DynamoDB라면 Streams로 변경을 받아 분석 DB나 검색 엔진에 적재한다. 처음부터 관계형 DB를 원본으로 두고 키-값 저장소를 캐시나 세션처럼 일부 용도에만 쓰는 구성도 흔하다.

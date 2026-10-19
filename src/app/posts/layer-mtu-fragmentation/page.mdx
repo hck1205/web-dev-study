@@ -1,0 +1,494 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("layer-mtu-fragmentation");
+
+`curl`로 작은 API를 부르면 바로 응답이 온다. 같은 서버에서 300KB짜리 파일을 받으면 `200` 상태 코드까지는 오는데 본문이 한 바이트도 안 오고 멈춘다. 서버 로그에는 요청이 정상 처리됐다고 찍혀 있다. SSH로 붙으면 로그인은 되는데 `cat`으로 긴 파일을 열면 화면이 멈춘다. 작은 건 되고 큰 것만 안 된다.
+
+이런 증상은 대개 MTU 문제다. 경로 중간 어딘가에 한 번에 실을 수 있는 크기가 더 작은 구간이 있는데, 보내는 쪽이 그 사실을 모르고 큰 패킷을 보내고, 그걸 알려 줄 ICMP 메시지가 막혀 있다. 작은 패킷은 통과하니 연결 맺기와 짧은 응답은 멀쩡하고, 큰 패킷만 소리 없이 사라진다. 이 글은 MTU와 MSS가 무엇인지, IP가 큰 패킷을 쪼개는 단편화가 어떻게 동작하고 왜 피하려 하는지, 보내는 쪽이 경로의 MTU를 알아내는 PMTUD가 어떻게 돌고 어떻게 깨지는지를 실습 망에서 직접 재현하고, MSS 클램핑으로 고치는 데까지 간다.
+
+기준은 Ubuntu 24.04다. 실습 망은 [라우팅 글](/posts/layer-ip-routing-icmp)에서 만든 것(노트북 `a` 10.0.1.10 — 라우터 `r` — 라우터 `r2` — 서버 `c` 10.0.4.20)을 그대로 쓰고, 서버 `c`에서 `python3 -m http.server 80`으로 300,000바이트짜리 `big.bin`을 내준다. 시리즈 전체 지도는 [OSI 7계층 개요 글](/posts/network-layers-overview)에 있다.
+
+## 한 번에 실을 수 있는 크기, MTU
+
+MTU(Maximum Transmission Unit)는 링크 하나가 한 번에 나를 수 있는 IP 패킷의 최대 크기다. 이더넷 프레임의 내용물이 최대 1500바이트라서 이더넷의 MTU는 1500이다. 이더넷 헤더 14바이트와 FCS 4바이트는 MTU에 들어가지 않는다. MTU는 L3 패킷 크기를 재는 값이다.
+
+```bash
+# 인터페이스별 MTU 확인
+ip link show
+
+# 한 인터페이스의 MTU를 지금 바꾸기 (재부팅하면 원래대로, netplan에는 mtu: 로 남긴다)
+sudo ip link set dev eth0 mtu 1400
+```
+
+이 글을 쓴 컨테이너에서 실제로 확인한 값이다.
+
+```text
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+4: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+```
+
+루프백은 실제 선이 없어서 65536이고, `eth0`은 1500이 아니라 1400이다. 클라우드나 가상화 환경은 바깥 망 위에 터널을 씌워 가상 망을 만드는 경우가 많고, 그 터널 헤더만큼 안쪽 MTU가 줄어든다. 환경마다 값이 다르다. AWS는 같은 VPC 안에서 점보 프레임 9001을 쓰지만 인터넷 게이트웨이나 리전 간 피어링으로 나가면 1500이 되고, GCP VPC의 기본 MTU는 1460이다. 그래서 "MTU는 1500"이라고 가정한 설정이 클라우드에서 어긋나는 일이 생긴다.
+
+규격이 보장하는 최솟값도 있다. IPv4는 모든 링크가 68바이트 이상을 실어야 하고, 모든 호스트는 576바이트까지의 패킷을 재조립할 수 있어야 한다. IPv6는 최소 MTU가 1280이다.
+
+## MSS는 MTU에서 헤더를 뺀 값
+
+TCP는 바이트 흐름을 잘라 세그먼트로 보내는데, 세그먼트 하나에 담을 내용물의 최대 크기를 MSS(Maximum Segment Size)라고 한다. IP 패킷 하나에 TCP 세그먼트 하나가 들어가니, MSS는 MTU에서 IP 헤더 20바이트와 TCP 헤더 20바이트를 뺀 값이다. 이더넷이면 1500 − 40 = 1460이다. IPv6는 헤더가 40바이트라 1440이다.
+
+MSS는 연결을 맺을 때 SYN에 실어 서로 알린다. "나는 이만큼까지 받을 수 있다"는 뜻이고, 각자 상대가 알린 값을 넘지 않게 보낸다. 실습 망의 캡처에서 SYN과 SYN-ACK 양쪽 모두 `mss 1460`을 알렸다.
+
+```text
+10.0.1.10.41066 > 10.0.4.20.80: Flags [S], seq 2338746211, win 64240, options [mss 1460,sackOK,TS val 2066444389 ecr 0,nop,wscale 10], length 0
+```
+
+실제로 세그먼트에 실리는 내용물은 이보다 조금 작다. 리눅스는 기본으로 TCP 타임스탬프 옵션(12바이트)을 쓰기 때문에, MTU 1500이면 세그먼트당 내용물은 1448바이트다. 연결의 실제 값은 `ss -ti`로 본다. 긴 출력에서 필요한 부분만 남겼다.
+
+```bash
+# 맺어진 TCP 연결의 내부 상태 (mss, pmtu 등)
+ss -tin dst 10.0.4.20
+```
+
+```text
+ESTAB 92016  0          10.0.1.10:50698    10.0.4.20:80
+	 bbr wscale:10,10 rto:204 rtt:0.077/0.044 ato:80 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:11 ...
+```
+
+`pmtu:1500`은 이 연결이 아는 경로의 MTU이고, `mss:1448`은 그 경로에서 실제로 보내는 세그먼트 내용물 크기다. `advmss`는 내가 SYN에 알린 값에서 옵션 크기를 뺀 값이다. 경로 MTU가 줄어들면 이 숫자들이 함께 줄어든다. 뒤에서 그 장면을 본다.
+
+## 큰 패킷을 쪼개는 단편화
+
+MTU보다 큰 IP 패킷을 보내야 하면 IPv4는 패킷을 여러 조각으로 쪼갤 수 있다. 이걸 단편화(fragmentation)라고 한다. 조각마다 IP 헤더가 새로 붙고, 헤더의 세 칸이 재조립 정보를 담는다. 같은 패킷의 조각은 같은 Identification(ID) 값을 갖고, Fragment Offset은 이 조각이 원래 내용물의 몇 번째 바이트부터인지를 8바이트 단위로 적고, More Fragments(MF) 플래그는 뒤에 조각이 더 있는지 알린다. 재조립은 목적지 호스트만 한다. 중간 라우터는 조각을 조각인 채로 넘긴다.
+
+실습 망에서 DF(뒤에서 설명한다)를 끄고 2,000바이트짜리 ping을 보내 서버 쪽에서 캡처했다. ICMP 헤더 8바이트가 더해져 IP 내용물은 2,008바이트, IP 패킷 전체는 2,028바이트다. 라우터 `r`과 `r2` 사이 구간의 MTU는 미리 1400으로 줄여 두었다.
+
+```bash
+# 라우터 사이 구간 MTU를 1400으로 줄이기 (양쪽 끝 모두)
+sudo ip -n r link set rc mtu 1400; sudo ip -n r2 link set r2r mtu 1400
+
+# DF를 끄고(-M dont) 2000바이트 ping
+ping -c 1 -M dont -s 2000 10.0.4.20
+
+# 서버 c에서 IP 헤더를 자세히 보며 캡처
+sudo ip netns exec c tcpdump -i vc -nn -v icmp
+```
+
+```text
+22:54:54.234377 IP (tos 0x0, ttl 62, id 43040, offset 0, flags [+], proto ICMP (1), length 1396)
+    10.0.1.10 > 10.0.4.20: ICMP echo request, id 2972, seq 1, length 1376
+22:54:54.234378 IP (tos 0x0, ttl 62, id 43040, offset 1376, flags [+], proto ICMP (1), length 124)
+    10.0.1.10 > 10.0.4.20: ip-proto-1
+22:54:54.234391 IP (tos 0x0, ttl 62, id 43040, offset 1480, flags [none], proto ICMP (1), length 548)
+    10.0.1.10 > 10.0.4.20: ip-proto-1
+```
+
+보낸 건 패킷 하나인데 서버에는 조각 세 개가 도착했다. 둘째 줄의 IP 헤더를 조각으로 나눠 보면 이렇다.
+
+<UrlAnatomy
+  caption="조각 하나의 IP 헤더"
+  base="IP"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "ttl",
+      display: "ttl 62",
+      title: "남은 홉 수",
+      description: "64에서 라우터 두 대를 지나 62다. 조각도 각각 독립된 IP 패킷이라 라우터마다 TTL이 줄어든다.",
+    },
+    {
+      key: "id",
+      display: "id 43040",
+      title: "Identification: 같은 패킷의 조각 표시",
+      description: "세 조각 모두 43040이다. 목적지는 출발지·목적지 IP, 프로토콜, 이 ID가 같은 조각을 한 패킷으로 모은다.",
+      required: true,
+    },
+    {
+      key: "off",
+      display: "offset 1376",
+      title: "Fragment Offset",
+      description: "원래 내용물의 1376번째 바이트부터라는 뜻이다. 헤더에는 8로 나눈 값(172)이 들어 있고 tcpdump가 바이트로 바꿔 보여 준다. 그래서 마지막 조각이 아닌 조각의 크기는 항상 8의 배수다.",
+      required: true,
+    },
+    {
+      key: "flags",
+      display: "flags [+]",
+      title: "More Fragments",
+      description: "+는 MF 플래그다. 뒤에 조각이 더 있다. 마지막 조각은 [none]이다. DF가 켜진 패킷은 [DF]로 보인다.",
+    },
+    {
+      key: "proto",
+      display: "proto ICMP (1)",
+      title: "안에 든 프로토콜",
+      description: "모든 조각에 같은 값이 붙지만 ICMP·TCP·UDP 헤더는 첫 조각에만 있다. 그래서 tcpdump도 둘째 조각부터는 ip-proto-1이라고만 적는다.",
+    },
+    {
+      key: "len",
+      display: "length 124",
+      title: "이 조각의 IP 패킷 길이",
+      description: "IP 헤더 20바이트 + 내용물 104바이트. 1376 + 104 = 1480이라 다음 조각이 offset 1480에서 시작한다.",
+    },
+  ]}
+/>
+
+왜 세 조각일까. `a`의 링크 MTU가 1500이라서 `a`가 먼저 둘로 쪼갰고(내용물 1480 + 528), 그중 큰 조각이 1400짜리 구간을 만나자 `r`이 다시 둘로 쪼갰다(1376 + 104). 1400 − 20 = 1380인데 1376인 이유는 오프셋이 8바이트 단위라 1380을 8의 배수로 내렸기 때문이다. 아래 그림에서 다음을 누르면 패킷이 쪼개지고 서버에서 다시 모이는 순서를 볼 수 있다. 칸은 원래 내용물 2,008바이트의 구간이다.
+
+<AlgoTrace
+  caption="2,008바이트 내용물이 두 번 쪼개지고 서버에서 다시 모인다"
+  memoryLabel="서버의 재조립 버퍼 (id 43040)"
+  cells={["0–1375", "1376–1479", "1480–2007"]}
+  steps={[
+    {
+      memory: [],
+      caption: "a가 IP 내용물 2,008바이트(ICMP 헤더 8 + 데이터 2,000)를 보내려 한다. 링크 MTU 1500보다 크고 DF가 꺼져 있으니 쪼갠다.",
+    },
+    {
+      pointer: 2,
+      memory: [],
+      caption: "a의 1차 분할: 0–1479(1,480바이트, MF)와 1480–2007(528바이트, 마지막). 1,480은 8의 배수라 그대로 자른다.",
+    },
+    {
+      pointer: 1,
+      memory: [],
+      caption: "첫 조각(IP 1,500바이트)이 r에 닿는다. 다음 구간 MTU가 1400이라 r이 다시 쪼갠다. 1,380을 8의 배수로 내린 1,376에서 자른다.",
+    },
+    {
+      found: [0],
+      memory: ["off 0 · 1376B · MF"],
+      caption: "서버에 첫 조각이 온다. ICMP 헤더가 든 유일한 조각이다. 아직 넘기지 못하고 버퍼에 둔다.",
+    },
+    {
+      found: [0, 1],
+      memory: ["off 0 · 1376B · MF", "off 1376 · 104B · MF"],
+      caption: "둘째 조각. 1376 + 104 = 1480까지 채워졌다. MF가 켜져 있으니 더 기다린다.",
+    },
+    {
+      found: [0, 1, 2],
+      memory: ["off 0 · 1376B · MF", "off 1376 · 104B · MF", "off 1480 · 528B · 끝"],
+      caption: "마지막 조각(MF 없음)까지 오면 2,008바이트가 빈틈없이 채워진다. 이제야 ICMP 처리로 넘긴다.",
+    },
+    {
+      found: [0, 2],
+      memory: ["off 0 · 1376B · MF", "off 1480 · 528B · 끝"],
+      caption: "만약 조각 하나가 사라지면 나머지는 쓸모가 없다. 서버는 일정 시간(리눅스 기본 30초) 기다리다 버퍼를 버리고, 패킷 전체가 사라진 것과 같아진다.",
+    },
+  ]}
+/>
+
+단편화는 동작은 하지만 피하고 싶은 기능이다. 조각 하나만 잃어도 패킷 전체를 잃으니 손실률이 조각 수만큼 불어난다. 목적지는 조각을 모을 메모리를 잡아 둬야 하고, 이걸 노려 가짜 조각을 쏟아붓는 공격도 있다. 포트 번호가 첫 조각에만 있어서 포트로 판단하는 방화벽, NAT, 로드 밸런서는 나머지 조각을 어디로 보낼지 모른다. 리눅스의 conntrack은 이 때문에 조각을 먼저 모아서 검사한다. 그래서 TCP는 처음부터 조각나지 않을 크기로 보내려 한다.
+
+IPv6는 아예 중간 라우터가 쪼개지 못하게 했다. 너무 큰 패킷을 받은 라우터는 버리고 출발지에 ICMPv6 Packet Too Big을 보낸다. 쪼개야 한다면 출발지만 확장 헤더로 쪼갤 수 있다.
+
+## DF 비트와 Path MTU Discovery
+
+TCP가 조각나지 않을 크기를 정하려면 경로 전체에서 가장 작은 MTU, 곧 경로 MTU(Path MTU)를 알아야 한다. 하지만 경로는 미리 알 수 없고 도중에 바뀌기도 한다. 그래서 일단 보내 보고 알아낸다. 이게 PMTUD(Path MTU Discovery)다.
+
+방법은 이렇다. 보내는 쪽이 IP 헤더에 DF(Don't Fragment) 비트를 켠다. DF가 켜진 패킷이 MTU보다 작은 링크를 만나면 라우터는 쪼개지 않고 버린 뒤, 출발지에 ICMP Destination Unreachable / Fragmentation Needed(타입 3, 코드 4)를 보낸다. 이 메시지에는 다음 구간의 MTU가 적혀 있다. 출발지는 그 값을 목적지별로 기억해 두고, 그보다 작게 다시 보낸다. 리눅스는 TCP 패킷에 기본으로 DF를 켠다. 앞의 SYN 캡처에도 `flags [DF]`가 있었다.
+
+ping으로 직접 해 볼 수 있다. `-M do`는 DF를 켜고, `-s`는 ICMP 데이터 크기다. IP 헤더 20과 ICMP 헤더 8을 더하면 `-s 1472`가 정확히 1500바이트 패킷이다.
+
+```bash
+# DF를 켜고 1500바이트 패킷(1472 + 8 + 20) 보내기
+ping -c 2 -M do -s 1472 10.0.4.20
+
+# 1400바이트 패킷(1372 + 8 + 20)은 통과하는지
+ping -c 1 -M do -s 1372 10.0.4.20
+```
+
+```text
+PING 10.0.4.20 (10.0.4.20) 1472(1500) bytes of data.
+From 10.0.1.1 icmp_seq=1 Frag needed and DF set (mtu = 1400)
+ping: local error: message too long, mtu=1400
+
+--- 10.0.4.20 ping statistics ---
+2 packets transmitted, 0 received, +2 errors, 100% packet loss, time 1001ms
+```
+
+```text
+1380 bytes from 10.0.4.20: icmp_seq=1 ttl=62 time=0.061 ms
+```
+
+첫 번째 ping은 라우터 `10.0.1.1`(`r`)이 "다음 구간 MTU는 1400"이라고 알려 왔다. 두 번째 ping은 아예 나가지도 않고 `local error`로 끝났다. 커널이 방금 배운 경로 MTU 1400을 기억하고 있어서다. 커널이 기억한 값은 경로 캐시에서 보인다.
+
+```bash
+# 목적지별 경로 캐시에 PMTU가 기억됐는지 확인
+ip route get 10.0.4.20
+```
+
+```text
+10.0.4.20 via 10.0.1.1 dev va src 10.0.1.10 uid 0
+    cache expires 566sec mtu 1400
+```
+
+`expires 566sec`이 남은 수명이다. 리눅스는 배운 PMTU를 기본 10분(`net.ipv4.route.mtu_expires = 600`) 동안 기억한다. 경로가 바뀌어 더 큰 MTU를 쓸 수 있게 될 수도 있어서다. `tracepath`는 이 과정을 홉마다 해 보며 경로 MTU를 찾는다.
+
+```bash
+# root 없이 경로와 경로 MTU 찾기
+tracepath -n 10.0.4.20
+```
+
+```text
+ 1?: [LOCALHOST]                      pmtu 1500
+ 1:  10.0.1.1                                              0.057ms
+ 1:  10.0.1.1                                              0.008ms
+ 2:  10.0.1.1                                              0.009ms pmtu 1400
+ 2:  10.0.3.2                                              0.020ms
+ 3:  10.0.4.20                                             0.021ms reached
+     Resume: pmtu 1400 hops 3 back 3
+```
+
+TCP에서는 같은 일이 연결 도중에 일어난다. 두 캐시를 비우고 `a`에서 `big.bin`을 받으면서 서버 `c` 쪽에서 캡처했다. 이번에는 큰 패킷을 보내는 쪽이 서버다.
+
+```text
+22:54:15.673594 IP (tos 0x0, ttl 62, id 52150, offset 0, flags [DF], proto TCP (6), length 60)
+    10.0.1.10.58812 > 10.0.4.20.80: Flags [S], cksum 0x194c (incorrect -> 0x8c3c), seq 2028797663, win 64240, options [mss 1460,sackOK,TS val 3236399345 ecr 0,nop,wscale 10], length 0
+22:54:15.676416 IP (tos 0xc0, ttl 64, id 15013, offset 0, flags [none], proto ICMP (1), length 576)
+    10.0.4.1 > 10.0.4.20: ICMP 10.0.1.10 unreachable - need to frag (mtu 1400), length 556
+	IP (tos 0x0, ttl 64, id 49533, offset 0, flags [DF], proto TCP (6), length 7292)
+    10.0.4.20.80 > 10.0.1.10.58812: Flags [P.], seq 206:7446, ack 80, win 64, options [nop,nop,TS val 1065592657 ecr 3236399347], length 7240: HTTP
+```
+
+양쪽이 MSS 1460을 알렸으니 서버는 1500바이트 패킷을 DF를 켜고 보냈다. `r2`가 그걸 1400 구간으로 넘길 수 없어서 `need to frag (mtu 1400)`을 서버에 보냈고, 메시지 안에 문제가 된 원래 패킷의 헤더가 들어 있다. 거기 찍힌 `length 7292`는 이상해 보이지만, 리눅스가 작은 세그먼트 여러 개를 하나로 묶어 처리하다가 랜 카드 직전에 나누는 기능(GSO) 때문에 캡처 지점에서는 묶음 크기로 보이는 것이다. 실제 선에는 1500바이트 패킷들이 나갔다. 이 메시지를 받은 서버는 PMTU를 1400으로 기억하고 다시 보냈고, 다운로드는 정상으로 끝났다. 전송이 끝난 뒤 서버의 경로 캐시(두 번째 출력)에는 `mtu 1400`이 남아 있었고, 같은 조건에서 천천히 받는 연결을 서버 쪽 `ss -tin`으로 보면 첫 번째 출력처럼 MSS가 줄어 있다.
+
+```text
+	 bbr wscale:10,10 rto:208 backoff:3 rtt:5.29/10.506 ato:40 mss:1348 pmtu:1400 rcvmss:536 advmss:1448 ...
+```
+
+```text
+10.0.1.10 via 10.0.4.1 dev vc src 10.0.4.20 uid 0
+    cache expires 598sec mtu 1400
+```
+
+`mss:1348`은 1400 − 20 − 20 − 12(타임스탬프)다. 아래 그림이 이 흐름을 단계별로 펼친 것이다.
+
+<SequenceDiagram
+  caption="PMTUD: 막힌 지점의 라우터가 크기를 알려 주면 보내는 쪽이 줄인다"
+  actors={[
+    { id: "a", label: "a (받는 쪽)" },
+    { id: "r", label: "r" },
+    { id: "r2", label: "r2" },
+    { id: "c", label: "c (보내는 쪽)" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "c",
+      label: "SYN mss 1460",
+      title: "양쪽이 자기 링크 기준 MSS를 알린다",
+      detail: "a와 c의 링크는 둘 다 MTU 1500이라 MSS 1460을 알린다. 중간에 1400짜리 구간이 있다는 건 아무도 모른다.",
+    },
+    {
+      from: "c",
+      to: "r2",
+      label: "1500B, DF",
+      title: "c가 큰 패킷을 DF를 켜고 보낸다",
+      detail: "HTTP 응답 본문을 1,448바이트씩 담은 1500바이트 패킷이다. DF가 켜져 있어 중간에서 쪼갤 수 없다.",
+    },
+    {
+      from: "r2",
+      to: "c",
+      label: "need to frag 1400",
+      title: "r2가 버리고 알린다",
+      detail: "다음 구간 r2r의 MTU가 1400이다. r2는 패킷을 버리고 ICMP 타입 3 코드 4에 다음 구간 MTU 1400과 원래 패킷의 헤더를 담아 c에 보낸다.",
+      payload: "10.0.4.1 > 10.0.4.20: ICMP 10.0.1.10 unreachable - need to frag (mtu 1400)",
+    },
+    {
+      from: "c",
+      to: "c",
+      label: "PMTU 1400 기억",
+      title: "c가 경로 MTU를 줄인다",
+      detail: "c의 커널이 10.0.1.10으로 가는 경로 캐시에 mtu 1400을 적고, 이 연결의 MSS를 1348로 낮춘다. 버려진 데이터는 작은 크기로 다시 보낸다.",
+    },
+    {
+      from: "c",
+      to: "a",
+      label: "1400B, DF",
+      title: "이번에는 끝까지 간다",
+      detail: "1400바이트 패킷은 모든 구간을 통과한다. 사용자는 아주 잠깐의 지연 말고는 아무것도 느끼지 못한다.",
+    },
+  ]}
+/>
+
+## ICMP가 막히면 블랙홀이 된다
+
+PMTUD는 ICMP 메시지 하나에 기대고 있다. 그 메시지가 출발지에 닿지 못하면 어떻게 될까. 보내는 쪽은 큰 패킷이 계속 사라지는 걸 패킷 손실로 보고 같은 크기로 재전송만 반복한다. 작게 줄여야 한다는 정보가 없으니 영원히 통과하지 못한다. 이렇게 큰 패킷만 빨려 들어가 사라지는 경로를 PMTU 블랙홀이라고 한다.
+
+실습 망에서 그대로 재현했다. `r2`가 Fragmentation Needed를 내보내지 못하게 막고, 양쪽의 PMTU 캐시를 비운 뒤 같은 파일을 받았다.
+
+```bash
+# r2가 ICMP Fragmentation Needed(타입 3 코드 4)를 내보내지 못하게 막는다
+sudo ip netns exec r2 iptables -A OUTPUT -p icmp --icmp-type fragmentation-needed -j DROP
+
+# 양쪽에 남은 PMTU 기억 지우기
+sudo ip netns exec a ip route flush cache; sudo ip netns exec c ip route flush cache
+
+# 큰 파일과 작은 페이지 받아 보기 (8초, 5초 제한)
+curl -s -o /dev/null --max-time 8 -w "%{http_code} %{size_download}B %{time_total}s\n" http://10.0.4.20/big.bin
+curl -s -o /dev/null --max-time 5 -w "%{http_code} %{size_download}B\n" http://10.0.4.20/
+```
+
+```text
+200 0B 8.002532s
+200 226B
+```
+
+첫 줄이 처음 장면 그대로다. 연결은 맺어지고(SYN, SYN-ACK, ACK는 작다), `200` 상태 코드까지 왔지만 본문은 0바이트에서 8초를 기다리다 끊겼다(curl 종료 코드 28). 같은 서버의 226바이트짜리 목록 페이지는 패킷 하나에 들어가니 멀쩡하다. 막은 규칙의 카운터를 보면 메시지가 실제로 버려지고 있었다.
+
+```text
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    9  5184 DROP       1    --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 3 code 4
+```
+
+현실에서는 누군가 "ICMP는 위험하니 다 막자"는 방화벽 규칙을 넣었거나, 중간 장비가 ICMP를 보내지 않게 설정돼 있거나, 로드 밸런서·NAT가 ICMP를 원래 연결로 되돌려 주지 못할 때 생긴다. 증상은 늘 같은 모양이다. TCP 연결과 짧은 요청은 되고, 큰 응답·파일 업로드·긴 출력만 멈춘다. TLS도 걸린다. 서버가 보내는 인증서 묶음이 몇 KB라서 핸드셰이크가 인증서 단계에서 멈추고, 클라이언트는 타임아웃만 본다.
+
+## MSS 클램핑으로 돌아가기
+
+블랙홀을 고치는 정석은 ICMP 타입 3(특히 코드 4)을 막지 않는 것이다. [iptables 글](/posts/iptables-basics)에서 RELATED 허용 규칙을 위에 두는 이유 중 하나가 이 메시지를 받기 위해서다. 하지만 막고 있는 장비가 내 관리 밖에 있으면 다른 방법이 필요하다.
+
+가장 많이 쓰는 우회가 MSS 클램핑이다. 경로 중간의 라우터나 방화벽이 지나가는 TCP SYN의 MSS 옵션을 고쳐 써서, 양쪽이 애초에 작은 MSS로 시작하게 만든다. 처음부터 1400에 맞는 크기로 보내니 PMTUD가 필요 없다. 실습 망의 라우터 `r`에 규칙 하나를 넣었다.
+
+```bash
+# r을 지나는 TCP SYN의 MSS를 나가는 경로의 MTU에 맞춰 줄인다
+sudo ip netns exec r iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+# 다시 받아 보기 (ICMP는 여전히 막혀 있다)
+curl -s -o /dev/null --max-time 8 -w "%{http_code} %{size_download}B %{time_total}s\n" http://10.0.4.20/big.bin
+
+# 규칙이 실제로 SYN을 고쳤는지 카운터 확인
+sudo ip netns exec r iptables -t mangle -L FORWARD -n -v
+```
+
+```text
+200 300000B 0.002169s
+```
+
+```text
+Chain FORWARD (policy ACCEPT 37 packets, 302K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    2   120 TCPMSS     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp flags:0x06/0x02 TCPMSS clamp to PMTU
+```
+
+ICMP는 여전히 막혀 있는데 300,000바이트를 다 받았다. 서버 쪽에서 SYN을 잡아 보면 `a`가 보낸 1460이 `r`을 지나며 1360으로 바뀌어 있다.
+
+```text
+22:54:46.242753 IP 10.0.1.10.54134 > 10.0.4.20.80: Flags [S], seq 3954291112, win 64240, options [mss 1360,sackOK,TS val 1491652599 ecr 0,nop,wscale 10], length 0
+```
+
+1360은 1400 − 40이다. 서버는 상대가 알린 1360을 넘지 않게 보내므로 큰 패킷이 생기지 않는다. `--clamp-mss-to-pmtu` 대신 `--set-mss 1360`처럼 값을 직접 줄 수도 있다. 규칙의 `--tcp-flags SYN,RST SYN`은 "SYN만 켜진 패킷", 곧 연결 맺기 패킷에만 적용하라는 뜻이다. nftables라면 `tcp flags syn tcp option maxseg size set rt mtu`가 같은 일을 한다. 가정용 공유기의 PPPoE 회선, 사무실 VPN 장비, 클라우드의 VPN 게이트웨이가 대부분 이 기능을 켜 둔다.
+
+클램핑은 TCP에만 통한다. UDP와 QUIC은 MSS 협상이 없어서 응용 계층이 직접 크기를 정한다. QUIC은 처음부터 1200바이트 이상 패킷이 지나간다는 가정 위에서 작게 시작하고, 스스로 큰 패킷을 시험해 보는 방식으로 경로 MTU를 찾는다.
+
+다른 방법도 있다. 리눅스의 `net.ipv4.tcp_mtu_probing`을 1로 켜면 블랙홀로 의심되는 연결에서 TCP가 스스로 세그먼트를 줄여 시험해 본다(기본값 0은 끔, 이 컨테이너도 0이었다). 인터페이스 MTU를 경로의 최솟값으로 낮춰 버리는 것도 확실한 방법이지만, 그 인터페이스의 모든 트래픽이 작은 패킷을 쓰게 된다.
+
+## 터널과 컨테이너가 MTU를 깎는다
+
+MTU 문제가 가장 자주 생기는 곳은 터널이다. VPN, 오버레이 네트워크, 클라우드 가상 망은 원래 패킷을 다른 패킷 안에 통째로 넣어 보낸다. 바깥 헤더만큼 안쪽에 실을 수 있는 크기가 줄어든다.
+
+- PPPoE(가정용 광랜·DSL): 8바이트. 안쪽 MTU 1492.
+- GRE: 바깥 IPv4 20 + GRE 4 = 24바이트. 1476.
+- VXLAN(쿠버네티스 Flannel, 여러 오버레이): 바깥 IPv4 20 + UDP 8 + VXLAN 8 + 안쪽 이더넷 14 = 50바이트. 1450.
+- WireGuard: 바깥 IPv4면 60바이트, IPv6면 80바이트. 기본 MTU 1420은 IPv6 바깥 기준으로 잡은 값이다.
+- IPsec: 암호화 방식과 패딩에 따라 50~70바이트 안팎으로 달라진다.
+
+아래 함수에 바깥 링크 MTU와 터널 헤더들의 크기를 주면 안쪽 MTU와 TCP MSS(IPv4, 옵션 제외)를 돌려주게 만들어 보자. 터널 안에 터널이 들어가면 헤더가 더해진다.
+
+<CodePlayground
+  caption="터널을 지나면 MSS는 얼마가 되나"
+  functionName="mssThroughTunnel"
+  initialCode={`// linkMtu: 바깥 링크 MTU, overheads: 겹겹이 씌운 터널 헤더 크기 목록
+// 반환: [안쪽 MTU, IPv4 TCP MSS]
+function mssThroughTunnel(linkMtu, overheads) {
+  return [linkMtu, linkMtu];
+}`}
+  solution={`function mssThroughTunnel(linkMtu, overheads) {
+  const innerMtu = linkMtu - overheads.reduce((sum, n) => sum + n, 0);
+  const mss = innerMtu - 20 - 20; // IPv4 헤더 20 + TCP 헤더 20
+  return [innerMtu, mss];
+}`}
+  tests={[
+    { args: [1500, []], expected: [1500, 1460], label: "그냥 이더넷" },
+    { args: [1500, [8]], expected: [1492, 1452], label: "PPPoE" },
+    { args: [1500, [50]], expected: [1450, 1410], label: "VXLAN" },
+    { args: [1500, [80]], expected: [1420, 1380], label: "WireGuard (바깥 IPv6)" },
+    { args: [1400, []], expected: [1400, 1360], label: "이 글의 컨테이너 eth0 (클램핑 결과와 같다)" },
+    { args: [1500, [24, 50]], expected: [1426, 1386], label: "GRE 안에 VXLAN" },
+  ]}
+/>
+
+컨테이너에서도 같은 일이 생긴다. Docker의 기본 브리지는 호스트 MTU와 상관없이 1500을 쓴다. 이 글을 쓴 컨테이너처럼 호스트의 `eth0`이 1400인 환경에서 Docker를 돌리면 컨테이너는 1500짜리 패킷을 만들고, 호스트 밖으로 나가는 순간 PMTUD에 기대게 된다. 경로 어딘가가 ICMP를 막으면 "컨테이너 안에서만 `apt-get`이나 `npm install`이 멈춘다"는 증상이 된다. 호스트에서는 1400으로 시작하니 멀쩡하다. Docker는 `/etc/docker/daemon.json`에 MTU를 맞춰 준다.
+
+```json
+{
+  "mtu": 1400
+}
+```
+
+```bash
+# 기본 브리지에 반영하고 확인
+sudo systemctl restart docker
+ip link show docker0
+# 사용자 정의 네트워크는 만들 때 따로 준다
+docker network create -o com.docker.network.driver.mtu=1400 app-net
+```
+
+쿠버네티스의 CNI도 오버레이 헤더만큼 Pod 인터페이스의 MTU를 줄여야 한다. Flannel의 VXLAN 모드는 노드 MTU에서 50을 빼서 잡고, Calico는 노드 MTU와 캡슐화 방식을 보고 자동으로 정한다. 노드 MTU가 클라우드에서 바뀌었는데 CNI 설정이 옛 값으로 고정돼 있으면, Pod 사이의 큰 요청만 실패한다.
+
+## 현장에서 MTU를 의심하는 순간
+
+이 증상이 보이면 MTU를 의심한다. 연결은 되는데 큰 응답만 멈춘다. 같은 요청이 VPN을 켜면 실패하고 끄면 된다. 컨테이너나 Pod 안에서만 다운로드가 멈추고 호스트에서는 된다. TLS 핸드셰이크가 인증서 단계에서 멈춘다. HTTP/2 연결은 맺어졌는데 큰 응답에서 스트림이 멈춘다. 공통점은 작은 패킷은 다 지나간다는 것이다.
+
+확인은 아래에서 위로 간다.
+
+```bash
+# 1. 내 인터페이스 MTU (터널·브리지·veth 포함)
+ip link show | grep mtu
+
+# 2. DF를 켜고 크기를 바꿔 가며 ping (1472 = 1500 - 28). 응답이 끊기는 크기를 찾는다
+ping -c 2 -M do -s 1472 <목적지>
+ping -c 2 -M do -s 1372 <목적지>
+
+# 3. 경로 MTU를 홉마다 찾기
+tracepath -n <목적지>
+
+# 4. 연결 중인 TCP의 mss와 pmtu
+ss -tin dst <목적지>
+
+# 5. Fragmentation Needed가 실제로 오가는지 캡처
+sudo tcpdump -ni any 'icmp[icmptype] == 3 and icmp[icmpcode] == 4'
+```
+
+2번에서 큰 ping이 `Frag needed`도 없이 그냥 사라지고 작은 ping만 응답이 오면 블랙홀이 거의 확실하다. 그 경계 크기에 28을 더한 값이 경로 MTU다. 다만 ICMP Echo 자체를 막는 목적지에는 이 방법이 안 통하니, 그때는 `tracepath`와 5번 캡처로 본다. 고칠 때는 ICMP 타입 3을 막는 규칙이 있는지 먼저 찾고, 내 쪽에서 손댈 수 있는 게 아니면 경계 장비에서 MSS 클램핑을 켜거나 인터페이스 MTU를 낮춘다. 패킷을 직접 보는 방법은 [tcpdump 글](/posts/packet-capture-tcpdump)에, 층별로 차례차례 좁히는 순서는 [계층별 장애 좁히기 글](/posts/network-troubleshooting-by-layer)에 있다.
+
+## 작은 건 되고 큰 것만 안 될 때
+
+MTU는 링크 하나가 한 번에 나르는 IP 패킷의 최대 크기이고, TCP는 거기서 헤더를 뺀 MSS만큼씩 보낸다. 경로 중간에 더 작은 구간이 있으면 IPv4는 쪼갤 수 있지만, 조각은 손실과 보안에 약해서 TCP는 DF를 켜고 PMTUD로 경로 MTU를 알아낸다. 그 과정은 라우터가 보내는 ICMP Fragmentation Needed 하나에 걸려 있어서, 이걸 막으면 큰 패킷만 사라지는 블랙홀이 된다. 증상이 보이면 DF ping과 tracepath로 경계 크기를 찾고, ICMP를 열거나 MSS 클램핑으로 처음부터 작게 보내게 만든다. 다음 글은 한 층 위, [TCP 연결의 일생](/posts/tcp-connection-lifecycle)이다.
+
+## 면접에서 나올 만한 질문
+
+### MTU와 MSS는 어떻게 다른가요?
+
+MTU는 링크가 한 번에 나를 수 있는 IP 패킷의 최대 크기(L3)이고, MSS는 TCP 세그먼트 하나에 담는 내용물의 최대 크기(L4)다. IPv4에서 MSS는 MTU에서 IP 헤더 20과 TCP 헤더 20을 뺀 값이라 이더넷 1500이면 1460이다. MSS는 SYN에 실어 서로 알리고, 타임스탬프 옵션을 쓰면 실제 내용물은 1448이 된다.
+
+### IP 단편화는 어떻게 동작하고 왜 피하려 하나요?
+
+MTU보다 큰 IPv4 패킷을 조각으로 나누고, 같은 ID와 8바이트 단위 오프셋, MF 플래그로 목적지가 다시 모은다. 조각 하나만 잃어도 패킷 전체를 잃고, 목적지는 재조립 메모리를 써야 하며, 포트가 첫 조각에만 있어서 방화벽·NAT·로드 밸런서가 처리하기 어렵다. 그래서 TCP는 DF를 켜고 쪼개지지 않을 크기로 보내고, IPv6는 중간 라우터의 단편화를 없앴다.
+
+### Path MTU Discovery는 어떻게 동작하나요?
+
+보내는 쪽이 DF를 켠 패킷을 보내고, 더 작은 MTU 링크를 만난 라우터가 패킷을 버리며 ICMP Fragmentation Needed(타입 3 코드 4)에 다음 구간 MTU를 담아 돌려준다. 보내는 쪽은 그 값을 목적지별로 기억하고(리눅스는 기본 10분) 더 작게 다시 보낸다. IPv6에서는 ICMPv6 Packet Too Big이 같은 역할을 한다.
+
+### 연결은 되는데 큰 응답만 멈춥니다. 무엇을 의심하고 어떻게 확인하나요?
+
+PMTU 블랙홀을 의심한다. 경로 중간에 작은 MTU 구간이 있는데 Fragmentation Needed가 막혀서 큰 패킷만 사라지는 상황이다. `ping -M do -s 1472`처럼 DF를 켜고 크기를 바꿔 가며 응답이 끊기는 경계를 찾고, `tracepath`로 경로 MTU를, tcpdump로 ICMP 타입 3 코드 4가 오가는지 본다.
+
+### MSS 클램핑은 무엇이고 언제 쓰나요?
+
+경로 중간 장비가 지나가는 TCP SYN의 MSS 옵션을 작게 고쳐 써서, 양쪽이 처음부터 작은 세그먼트로 보내게 하는 기법이다. ICMP가 막혀 PMTUD가 동작하지 않는 경로나, VPN·PPPoE처럼 MTU가 줄어드는 경계 장비에서 쓴다. 리눅스에서는 `iptables -t mangle ... -j TCPMSS --clamp-mss-to-pmtu`로 켜고, TCP에만 효과가 있다.
+
+### VXLAN 같은 오버레이를 쓰면 MTU를 왜 줄여야 하나요?
+
+원래 프레임을 UDP 패킷 안에 통째로 넣기 때문에 바깥 IP 20, UDP 8, VXLAN 8, 안쪽 이더넷 14로 50바이트가 더 붙는다. 바깥 MTU가 1500이면 안쪽은 1450을 넘을 수 없다. Pod나 컨테이너 인터페이스 MTU를 그만큼 낮추지 않으면 큰 패킷이 단편화되거나 PMTUD에 기대게 되고, ICMP가 막힌 경로에서는 큰 요청만 실패한다.
+
+### 클라우드에서 MTU 관련해 주의할 점은요?
+
+환경마다 MTU가 1500이 아닐 수 있다. AWS는 VPC 안에서 9001을 쓰지만 인터넷 게이트웨이나 리전 간 피어링으로 나가면 1500이고, GCP VPC 기본값은 1460이다. 그래서 VPC 안에서는 큰 패킷이 잘 가다가 밖으로 나가는 경로에서만 PMTUD가 필요해지고, 보안 그룹이나 NACL에서 ICMP 타입 3을 막으면 그 경로에서만 블랙홀이 생긴다.

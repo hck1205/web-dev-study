@@ -1,0 +1,815 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-architecture");
+
+서점 서비스 DB 서버를 넘겨받았다. 램은 64GB다. 그런데 설정을 열어 보니 `shared_buffers`가 128MB다. 설치하고 한 번도 안 건드린 기본값이다. `ps`를 쳐 보면 `postgres` 프로세스가 수십 개 떠 있다. 앱 서버는 요청마다 새로 연결을 맺고 있었다.
+
+나도 처음에는 "메모리를 128MB밖에 안 쓰니 느리겠다, 64GB의 80%쯤으로 올리면 되겠다"고 생각했다. 반은 맞고 반은 틀리다. PostgreSQL은 메모리를 두 겹으로 쓰고, 프로세스를 연결마다 하나씩 만들고, 데이터 파일보다 로그(WAL)를 먼저 쓴다. 이 구조를 알아야 숫자를 제대로 고를 수 있다. 시리즈의 앞 글들([설치와 접속](/posts/postgres-getting-started)부터 [JSONB와 전문 검색](/posts/postgres-jsonb-search)까지)이 SQL을 쓰는 쪽 이야기였다면, 이 글부터는 그 SQL을 받아 처리하는 서버 안쪽을 본다. 이 글은 프로세스, 메모리, 디스크 위의 파일과 8KB 페이지, WAL과 체크포인트, 장애 복구까지를 실제로 돌려 보며 따라간다.
+
+기준은 Ubuntu 24.04 LTS의 PostgreSQL 16.15다. 실험은 설정을 마음대로 바꾸고 재시작해도 되도록 따로 만든 클러스터(`16/pg3`, 포트 5453)에서 했다. 예제는 시리즈 내내 쓰는 서점 DB `shop`의 `users`, `books`, `orders`, `order_items`다. 이 글에서 주로 보는 건 `books` 세 줄과, 일부러 70만 건을 넣은 `orders`다.
+
+```sql
+SELECT * FROM books;
+```
+
+```text
+ book_id |      title       | price | stock | description
+---------+------------------+-------+-------+-------------
+       1 | PostgreSQL 입문  | 28000 |    12 |
+       2 | SQL 첫걸음       | 22000 |    30 |
+       3 | 데이터 중심 설계 | 36000 |     5 |
+(3 rows)
+```
+
+비유는 하나만 쓴다. 디스크는 창고, `shared_buffers`는 모두가 함께 쓰는 작업대다. 책(페이지)을 고치려면 창고에서 작업대로 꺼내 와야 하고, 고친 책을 창고에 돌려놓는 일은 나중에 따로 한다.
+
+## 연결 하나에 프로세스 하나
+
+PostgreSQL은 스레드가 아니라 프로세스로 일한다. 가장 먼저 뜨는 프로세스가 postmaster다. postmaster는 포트를 열고 기다리다가, 클라이언트가 접속하면 `fork()`로 자식 프로세스를 하나 만들어 그 연결을 통째로 맡긴다. 이 자식을 backend라고 부른다. 연결이 끊길 때까지 그 backend 하나가 쿼리 파싱, 실행 계획, 실행, 결과 전송을 전부 한다. 아래 그림에서 다음을 누르면 접속 한 번에 일어나는 일이 차례로 보인다.
+
+<SequenceDiagram
+  caption="psql 한 번 접속하면 생기는 일"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "pm", label: "postmaster" },
+    { id: "be", label: "backend" },
+    { id: "shm", label: "공유 메모리" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "pm",
+      label: "TCP 연결",
+      title: "포트 5432에 접속한다",
+      detail: "postmaster는 연결을 받기만 하고 쿼리는 처리하지 않는다. 그래서 postmaster가 바쁜 일은 거의 없다.",
+    },
+    {
+      from: "pm",
+      to: "be",
+      label: "fork()",
+      title: "연결마다 프로세스를 하나 만든다",
+      detail: "이 연결만 맡는 backend가 생긴다. 프로세스를 만들고 초기화하는 비용이 연결마다 든다.",
+    },
+    {
+      from: "app",
+      to: "be",
+      label: "인증",
+      title: "인증과 초기화",
+      detail: "pg_hba.conf 규칙대로 비밀번호(SCRAM)나 TLS를 확인하고, 카탈로그 캐시를 채운다. 이 단계가 연결 비용의 대부분이다.",
+    },
+    {
+      from: "app",
+      to: "be",
+      label: "SELECT ...",
+      title: "쿼리는 backend가 처리한다",
+      detail: "파싱, 실행 계획, 실행을 이 프로세스 혼자 한다. 정렬이나 해시에 쓰는 메모리(work_mem)도 이 프로세스 안에서 잡는다.",
+    },
+    {
+      from: "be",
+      to: "shm",
+      label: "페이지 읽기",
+      title: "데이터는 공유 메모리에서 찾는다",
+      detail: "필요한 페이지가 shared_buffers에 있으면 바로 쓰고, 없으면 파일에서 읽어 와 올려 둔다. 다른 backend도 같은 작업대를 쓴다.",
+    },
+    {
+      from: "be",
+      to: "app",
+      label: "결과",
+      title: "연결을 끊으면 프로세스도 끝난다",
+      detail: "프로세스가 끝나면 그 안에 쌓았던 캐시도 사라진다. 다음 연결은 처음부터 다시 시작한다.",
+    },
+  ]}
+/>
+
+실제로 두 연결을 열어 두고 프로세스 목록을 보면 이렇다.
+
+```bash
+# postgres 사용자로 떠 있는 프로세스 (PID, 부모 PID, 메모리, 이름)
+ps -o pid,ppid,rss,cmd -u postgres | grep "16/pg3"
+```
+
+```text
+  434     1 30612 /usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/pg3 -c config_file=/etc/postgresql/16/pg3/postgresql.conf
+  435   434  6456 postgres: 16/pg3: checkpointer
+  436   434  6904 postgres: 16/pg3: background writer
+  438   434 10572 postgres: 16/pg3: walwriter
+  439   434  9056 postgres: 16/pg3: autovacuum launcher
+  440   434  8320 postgres: 16/pg3: logical replication launcher
+  613   434 17012 postgres: 16/pg3: postgres pg3_shop [local] SELECT
+  614   434 17000 postgres: 16/pg3: postgres pg3_shop [local] SELECT
+```
+
+첫 줄(434)이 postmaster다. 나머지는 모두 PPID가 434인 자식이다. 마지막 두 줄이 연결 두 개에 하나씩 붙은 backend이고, 이름에 사용자(`postgres`), DB(`pg3_shop`), 접속 위치(`[local]`은 유닉스 소켓), 지금 하는 일(`SELECT`)이 보인다. 처음 장면의 "수십 개 떠 있는 프로세스"는 대부분 이 backend였다.
+
+연결이 왜 비싼지는 숫자로 보는 게 빠르다. `pgbench`로 같은 단순 조회를 돌리되, 한 번은 연결을 재사용하고 한 번은 트랜잭션마다 새로 연결했다(`-C`).
+
+```bash
+# 테스트용 DB 준비 (pgbench_accounts 100만 행)
+sudo -u postgres pgbench -p 5453 -i -s 10 -q pg3_bench
+
+# 연결 4개를 계속 재사용하며 10초 동안 조회
+sudo -u postgres pgbench -p 5453 -S -c 4 -j 4 -T 10 pg3_bench
+
+# 트랜잭션마다 새로 연결하며 10초 동안 조회
+sudo -u postgres pgbench -p 5453 -S -C -c 4 -j 4 -T 10 pg3_bench
+```
+
+```text
+latency average = 0.028 ms
+initial connection time = 4.174 ms
+tps = 142375.535977 (without initial connection time)
+
+latency average = 5.523 ms
+average connection time = 4.213 ms
+tps = 724.289087 (including reconnection times)
+```
+
+쿼리 자체는 0.028ms면 끝나는데 연결 한 번에 4.2ms가 든다. 같은 서버에서 TLS도 없는 유닉스 소켓인데도 그렇다. 처리량이 14만에서 724로, 200분의 1이 됐다. 네트워크를 건너고 TLS와 SCRAM 인증까지 붙으면 더 비싸다. 그래서 앱은 연결 풀을 쓰고, 앱 서버가 많으면 PgBouncer 같은 풀러를 앞에 둔다. 풀 크기를 정하는 법은 [쿼리 튜닝 글](/posts/sql-query-tuning)과 이 시리즈의 [운영 글](/posts/postgres-operations)에서 다룬다.
+
+연결 수를 무작정 늘리면 안 되는 이유도 같은 구조에서 나온다. backend는 각자 프로세스라 놀고 있어도 메모리를 먹고, 수천 개가 되면 스냅샷을 만들 때 모든 backend를 훑는 비용, 잠금 경합, 컨텍스트 전환이 커진다. `max_connections` 기본값이 100인 데는 이유가 있다. MySQL은 연결마다 스레드를 하나 둔다(thread-per-connection). 프로세스보다 가볍지만 연결이 많을 때 풀러를 두는 건 마찬가지다.
+
+## 백그라운드에서 도는 프로세스들
+
+`ps`에 보인 나머지는 연결과 상관없이 늘 떠 있는 일꾼들이다. `pg_stat_activity`의 `backend_type`으로도 볼 수 있다.
+
+```sql
+-- 지금 떠 있는 모든 프로세스와 종류
+SELECT pid, backend_type, state, left(query, 25) AS query
+FROM pg_stat_activity
+ORDER BY backend_type, pid;
+```
+
+```text
+ pid |         backend_type         | state  |           query
+-----+------------------------------+--------+---------------------------
+ 439 | autovacuum launcher          |        |
+ 436 | background writer            |        |
+ 435 | checkpointer                 |        |
+ 613 | client backend               | active | select pg_sleep(8)
+ 614 | client backend               | active | select pg_sleep(8)
+ 631 | client backend               | active | SELECT pid, backend_type,
+ 440 | logical replication launcher |        |
+ 438 | walwriter                    |        |
+(8 rows)
+```
+
+`client backend`가 연결마다 붙은 backend다(631은 이 쿼리를 실행한 나 자신). 나머지 일꾼이 하는 일은 이렇다.
+
+checkpointer는 작업대에서 고쳐진 페이지(dirty page)를 정해진 때에 몰아서 창고에 돌려놓는다. 뒤에서 자세히 본다. background writer는 그 사이사이에 고쳐진 페이지를 조금씩 미리 써 둔다. backend가 새 페이지를 작업대에 올릴 자리가 필요할 때, 직접 디스크에 쓰고 비우는 일을 덜 하게 하려는 것이다. walwriter는 WAL 버퍼에 쌓인 로그를 주기적으로(`wal_writer_delay`, 기본 200ms) 파일에 내린다. autovacuum launcher는 청소가 필요한 테이블을 찾아 autovacuum worker를 띄운다. 이 청소 이야기는 [다음 글](/posts/postgres-mvcc-vacuum)의 주제다. logical replication launcher는 논리 복제 구독이 있을 때 일꾼을 띄운다.
+
+예전 글에서 자주 보이는 stats collector 프로세스는 PostgreSQL 15에서 없어졌다. 통계를 공유 메모리에 직접 모으게 바뀌었다. 복제를 켜면 walsender, walreceiver가, WAL 보관(archive)을 켜면 archiver가 더 생긴다. 병렬 쿼리를 하면 잠깐씩 `parallel worker`도 보인다.
+
+## 함께 쓰는 메모리와 혼자 쓰는 메모리
+
+프로세스가 따로따로면 데이터는 어떻게 나눠 볼까. postmaster가 시작할 때 공유 메모리를 한 덩어리 잡고, fork한 자식들이 모두 그 덩어리를 같이 본다. 그 안의 가장 큰 칸이 작업대 `shared_buffers`다. 시작할 때 크기가 정해지므로 바꾸려면 재시작해야 한다.
+
+`pg_shmem_allocations` 뷰로 칸별 크기를 보면 기본 설정에서 `Buffer Blocks`(`shared_buffers`)가 134,221,824바이트로 압도적이고, 그다음이 4MB 남짓한 `XLOG Ctl`(WAL 버퍼, `wal_buffers`)이다. `wal_buffers`는 기본값 -1이면 `shared_buffers`의 1/32로 정해지고 16MB를 넘지 않는다. 나머지는 잠금 테이블, 트랜잭션 상태 같은 작은 칸들이다.
+
+혼자 쓰는 메모리는 backend 안에 있다. 대표가 `work_mem`(기본 4MB)과 `maintenance_work_mem`(기본 64MB)이다. `work_mem`은 정렬, 해시 조인, 해시 집계 같은 작업 하나가 쓸 수 있는 한도다. 쿼리 하나가 아니라 작업(실행 계획의 노드) 하나의 한도라는 데 주의한다. 병렬 쿼리면 worker마다 따로 잡는다. 아래는 `orders` 70만 건을 날짜로 정렬하는 같은 쿼리를 `work_mem`만 바꿔 돌린 결과다.
+
+```sql
+SET work_mem = '64kB';     -- 일부러 아주 작게
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT * FROM orders ORDER BY created_at LIMIT 100000 OFFSET 1;
+
+SET work_mem = '64MB';
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT * FROM orders ORDER BY created_at LIMIT 100000 OFFSET 1;
+```
+
+```text
+         ->  Sort (actual time=91.750..95.121 rows=34070 loops=3)
+               Sort Key: created_at
+               Sort Method: external merge  Disk: 9664kB
+               Worker 0:  Sort Method: external merge  Disk: 9776kB
+               Worker 1:  Sort Method: external merge  Disk: 9472kB
+ Execution Time: 135.743 ms
+
+         ->  Sort (actual time=68.910..70.673 rows=33995 loops=3)
+               Sort Key: created_at
+               Sort Method: top-N heapsort  Memory: 13176kB
+               Worker 0:  Sort Method: top-N heapsort  Memory: 13176kB
+               Worker 1:  Sort Method: top-N heapsort  Memory: 13176kB
+ Execution Time: 103.799 ms
+```
+
+`Sort Method` 줄을 보면 된다. 한도가 작으면 `external merge  Disk:`로 임시 파일에 나눠 쓰며 정렬하고, 넉넉하면 메모리 안에서 끝낸다. 그리고 `Worker 0`, `Worker 1`까지 세 프로세스가 각자 13MB씩 썼다. 쿼리 하나가 `work_mem`의 세 배를 쓴 것이다. 연결 100개가 이런 쿼리를 동시에 돌리면 어떻게 될지 계산하는 법은 [운영 글](/posts/postgres-operations)에서 다룬다. `maintenance_work_mem`은 `CREATE INDEX`, `VACUUM` 같은 유지 작업용 한도다.
+
+아래 그림이 지금까지의 그림을 한 장으로 모은 것이다. 화살표를 따라 흐르는 점이 데이터와 로그가 움직이는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={380}
+  caption="프로세스와 메모리, 파일의 관계"
+  nodes={[
+    { id: "be", label: "backend", sub: "work_mem", x: 80, y: 40, w: 120 },
+    { id: "be2", label: "backend", sub: "연결마다 하나", x: 300, y: 40, w: 130 },
+    { id: "sb", label: "shared_buffers", sub: "공유 작업대", x: 110, y: 145, w: 150 },
+    { id: "wb", label: "WAL 버퍼", sub: "wal_buffers", x: 310, y: 145, w: 120 },
+    { id: "ckpt", label: "checkpointer", sub: "bgwriter도", x: 90, y: 245, w: 130 },
+    { id: "ww", label: "walwriter", sub: "커밋 때 fsync", x: 310, y: 245, w: 120 },
+    { id: "cache", label: "OS 페이지 캐시", x: 200, y: 310, w: 150 },
+    { id: "disk", label: "디스크", sub: "base/  pg_wal/", x: 200, y: 350, w: 150, h: 30 },
+  ]}
+  edges={[
+    { from: "be", to: "sb", label: "읽기·쓰기" },
+    { from: "be2", to: "sb" },
+    { from: "be2", to: "wb", label: "변경 기록" },
+    { from: "sb", to: "ckpt" },
+    { from: "wb", to: "ww" },
+    { from: "ckpt", to: "cache" },
+    { from: "ww", to: "cache" },
+    { from: "cache", to: "disk" },
+  ]}
+/>
+
+## 같은 페이지가 두 번 캐시된다
+
+그림 아래쪽에 OS 페이지 캐시가 있다. PostgreSQL은 데이터 파일을 읽고 쓸 때 운영체제의 일반 `read()`/`write()`를 쓴다. 그러면 리눅스는 읽은 내용을 남는 메모리(페이지 캐시)에 붙잡아 둔다. 같은 페이지가 `shared_buffers`에 한 번, OS 페이지 캐시에 또 한 번 있게 된다. 이걸 이중 버퍼링(double buffering)이라고 부른다.
+
+128MB짜리 서버도 생각보다 덜 느렸던 건 이 덕분이다. 64GB 중 PostgreSQL이 안 쓰는 메모리 대부분이 페이지 캐시로 쓰이고 있었다. 직접 확인해 봤다. 클러스터를 재시작해 작업대를 비운 뒤 40MB짜리 `orders`를 두 번 훑었다.
+
+```sql
+SET max_parallel_workers_per_gather = 0;   -- 숫자를 보기 쉽게 병렬을 끈다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM orders WHERE status = 'shipped';
+-- 같은 쿼리를 한 번 더
+```
+
+```text
+-- shared_buffers = 128MB, 첫 번째
+   ->  Seq Scan on orders  (cost=0.00..13901.00 rows=1 width=0) (actual time=60.069..60.070 rows=0 loops=1)
+         Buffers: shared read=5151
+ Execution Time: 60.150 ms
+
+-- shared_buffers = 128MB, 두 번째
+   ->  Seq Scan on orders  (cost=0.00..13901.00 rows=1 width=0) (actual time=60.263..60.263 rows=0 loops=1)
+         Buffers: shared hit=32 read=5119
+ Execution Time: 60.302 ms
+```
+
+`Buffers:` 줄의 `hit`는 작업대에서 찾은 페이지, `read`는 작업대에 없어서 파일에서 읽어 온 페이지 수다. 두 번째에도 거의 다 `read`다. 테이블 크기가 `shared_buffers`의 1/4을 넘으면 순차 스캔은 작업대 전체를 쓰지 않고 256KB짜리 작은 고리(ring buffer)만 돌려 쓴다. 큰 테이블 한 번 훑는다고 다른 테이블이 작업대에서 밀려나지 않게 하려는 장치다. 그런데 `read`인데도 40MB를 60ms에 읽었다. 디스크가 아니라 OS 페이지 캐시에서 온 것이다. `read`가 곧 디스크 I/O는 아니라는 점을 기억해 두면 실행 계획을 읽을 때 덜 속는다.
+
+`shared_buffers`를 1GB로 올리고(`ALTER SYSTEM SET shared_buffers = '1GB'` 뒤 재시작) 같은 실험을 했다.
+
+```text
+-- shared_buffers = 1GB, 첫 번째
+         Buffers: shared read=5151
+ Execution Time: 65.371 ms
+
+-- shared_buffers = 1GB, 두 번째
+         Buffers: shared hit=5151
+ Execution Time: 30.779 ms
+```
+
+이번엔 두 번째가 전부 `hit`이고 시간이 절반이 됐다. OS 캐시에서 복사해 오는 단계가 빠진 만큼이다.
+
+그럼 `shared_buffers`를 램의 80%로 올리면 될까. 그러면 OS 페이지 캐시와 `work_mem`, 연결 프로세스가 쓸 자리가 줄어든다. 같은 페이지를 두 곳에 두는 낭비는 줄지만, 작업대에서 밀려난 페이지를 다시 읽을 때 받아 줄 OS 캐시가 없어진다. 체크포인트 때 한 번에 내보낼 dirty page도 많아진다. 그래서 흔한 출발점은 램의 25% 안팎(64GB면 16GB)이고, 그다음은 캐시 적중률과 I/O를 보며 조정한다. 플래너에게 "OS 캐시까지 합쳐 이 정도는 메모리에 있다"고 알려 주는 `effective_cache_size`(메모리를 실제로 잡지는 않는다)는 램의 50~75%로 둔다. `shared_buffers`가 수 GB를 넘으면 리눅스 huge pages를 켜는 것도 고려한다. 페이지 테이블 크기가 줄어든다.
+
+MySQL InnoDB는 반대 쪽을 택했다. 보통 `innodb_flush_method = O_DIRECT`로 OS 캐시를 건너뛰고, 버퍼 풀(`innodb_buffer_pool_size`)을 램의 70~80%로 크게 잡는다. 두 방식 모두 말이 된다. PostgreSQL은 캐시를 OS와 나눠 맡는 설계라 25%가 출발점인 것이다(PostgreSQL 16에도 `debug_io_direct`가 있지만 이름대로 개발용이다).
+
+## 데이터 디렉터리 들여다보기
+
+창고 쪽으로 가 보자. 데이터는 전부 데이터 디렉터리 아래 파일로 있다. Ubuntu 패키지는 `/var/lib/postgresql/16/main`, 이 실험용 클러스터는 `/var/lib/postgresql/16/pg3`이다.
+
+```bash
+# 데이터 디렉터리의 최상위
+sudo ls -C /var/lib/postgresql/16/pg3
+```
+
+```text
+PG_VERSION    pg_logical    pg_snapshots  pg_twophase           postmaster.pid
+base          pg_multixact  pg_stat       pg_wal
+global        pg_notify     pg_stat_tmp   pg_xact
+pg_commit_ts  pg_replslot   pg_subtrans   postgresql.auto.conf
+pg_dynshmem   pg_serial     pg_tblspc     postmaster.opts
+```
+
+외워 둘 건 몇 개뿐이다. `base`에는 DB마다 디렉터리가 하나씩 있고 그 안에 테이블과 인덱스 파일이 있다. `global`은 클러스터 전체가 공유하는 카탈로그(역할, DB 목록)다. `pg_wal`이 WAL 파일, `pg_xact`가 트랜잭션별 커밋 여부를 2비트씩 적어 둔 곳이다. `postgresql.auto.conf`는 `ALTER SYSTEM`이 쓰는 설정 파일이다. Ubuntu는 `postgresql.conf`를 데이터 디렉터리가 아니라 `/etc/postgresql/16/<클러스터>/`에 둔다. RHEL 계열 패키지는 보통 데이터 디렉터리 안에 둔다.
+
+어떤 테이블이 어느 파일인지는 직접 물어보면 된다.
+
+```sql
+-- DB의 OID
+SELECT oid, datname FROM pg_database WHERE datname = 'pg3_shop';
+
+-- 테이블과 인덱스의 파일 경로 (데이터 디렉터리 기준)
+SELECT relname, relfilenode, pg_relation_filepath(oid)
+FROM pg_class WHERE relname IN ('books', 'books_pkey', 'orders', 'orders_pkey')
+ORDER BY relname;
+```
+
+```text
+  oid  | datname
+-------+----------
+ 16384 | pg3_shop
+(1 row)
+
+   relname   | relfilenode | pg_relation_filepath
+-------------+-------------+----------------------
+ books       |       16396 | base/16384/16396
+ books_pkey  |       16401 | base/16384/16401
+ orders      |       16404 | base/16384/16404
+ orders_pkey |       16411 | base/16384/16411
+(4 rows)
+```
+
+경로는 `base/<DB OID>/<relfilenode>`다. 파일 이름은 `relfilenode`이고, 처음에는 테이블 OID와 같지만 `TRUNCATE`, `VACUUM FULL`, `CLUSTER`처럼 테이블을 새 파일로 다시 쓰는 명령을 하면 바뀐다. 그래서 파일 이름을 OID로 짐작하지 말고 `pg_relation_filepath`로 확인한다.
+
+```bash
+# orders(16404)와 그 기본 키 인덱스(16411)의 파일들
+sudo ls -l /var/lib/postgresql/16/pg3/base/16384/ | grep -E " 16404| 16411"
+```
+
+```text
+-rw------- 1 postgres postgres 42196992 Oct 17 16:13 16404
+-rw------- 1 postgres postgres    32768 Oct 17 16:13 16404_fsm
+-rw------- 1 postgres postgres     8192 Oct 17 16:13 16404_vm
+-rw------- 1 postgres postgres 15745024 Oct 17 16:13 16411
+```
+
+`16404`가 테이블 본체(heap)다. 옆의 `_fsm`(free space map)은 페이지마다 빈자리가 얼마나 있는지 적은 지도로, `INSERT`가 넣을 페이지를 고를 때 본다. `_vm`(visibility map)은 "이 페이지의 행은 모두가 볼 수 있다"는 표시를 페이지당 비트로 적은 지도로, VACUUM이 건너뛸 페이지를 고르고 Index Only Scan이 힙 방문을 생략할 때 쓴다. 다음 글에서 다시 나온다. 테이블이 1GB를 넘으면 `16404.1`, `16404.2`처럼 1GB 단위 조각 파일로 나뉜다.
+
+인덱스는 테이블과 완전히 다른 파일(`16411`)이다. 인덱스 안에는 정렬된 키와 그 행의 위치(`ctid`)만 있고, 행 자체는 힙에 있다. 그래서 인덱스로 찾은 다음에도 힙을 한 번 더 간다. 이 이야기는 [인덱스 글](/posts/db-index)에 자세히 있다. MySQL InnoDB는 테이블이 곧 기본 키 B-tree라는 점이 다르다.
+
+## 8KB 페이지 한 장의 구조
+
+테이블 파일은 8KB 페이지를 이어 붙인 것이다. 작업대에 올라오는 단위도, 창고에 돌아가는 단위도 이 페이지다. `pageinspect` 확장으로 `books`의 0번 페이지를 열어 보자.
+
+```sql
+CREATE EXTENSION pageinspect;    -- 슈퍼유저만 쓸 수 있다
+
+-- 페이지 머리말
+SELECT lsn, lower, upper, special, pagesize
+FROM page_header(get_raw_page('books', 0));
+```
+
+```text
+    lsn    | lower | upper | special | pagesize
+-----------+-------+-------+---------+----------
+ 0/1B73DB8 |    36 |  8008 |    8192 |     8192
+(1 row)
+```
+
+페이지 앞에는 24바이트짜리 머리말(page header)이 있다. 그 뒤로 4바이트짜리 줄 포인터(line pointer)가 앞에서부터 쌓이고, 실제 행(tuple)은 페이지 끝에서부터 거꾸로 쌓인다. `lower`는 줄 포인터가 끝난 위치, `upper`는 행이 시작하는 위치다. 24 + 4 × 3 = 36이니 `lower`가 36이다. 둘 사이(36~8008, 7,972바이트)가 빈자리다. 두 끝이 가운데로 다가오다 만나면 페이지가 꽉 찬 것이다. `lsn`은 이 페이지를 마지막으로 고친 WAL 기록의 위치인데, 뒤에서 이 값이 왜 중요한지 나온다.
+
+줄 포인터와 행 머리말을 보자.
+
+```sql
+SELECT lp, lp_off, lp_len, t_xmin, t_xmax, t_ctid, t_hoff
+FROM heap_page_items(get_raw_page('books', 0));
+```
+
+```text
+ lp | lp_off | lp_len | t_xmin | t_xmax | t_ctid | t_hoff
+----+--------+--------+--------+--------+--------+--------
+  1 |   8128 |     60 |    736 |      0 | (0,1)  |     24
+  2 |   8072 |     56 |    736 |      0 | (0,2)  |     24
+  3 |   8008 |     64 |    736 |      0 | (0,3)  |     24
+(3 rows)
+```
+
+`lp`가 줄 포인터 번호, `lp_off`와 `lp_len`이 그 행이 페이지의 몇 번째 바이트에서 몇 바이트인지다. 1번 행이 8128에서 시작해 60바이트이니 8188까지다. 행마다 23바이트짜리 머리말(정렬 때문에 24바이트, `t_hoff`)이 붙는다. 머리말의 `t_xmin`은 이 행을 만든 트랜잭션 번호, `t_xmax`는 지운 트랜잭션 번호(0이면 아직 안 지움), `t_ctid`는 이 행의 최신 버전 위치다. 테이블에서 `ctid`라고 부르는 `(페이지, 줄 포인터 번호)`가 바로 이 줄 포인터 주소다. 인덱스가 가리키는 것도 이것이다. 행을 가리킬 때 바이트 위치가 아니라 줄 포인터를 거치므로, 페이지 안에서 행을 옮겨 정리해도 바깥의 주소는 그대로다.
+
+이제 1번 책의 재고를 하나 줄이고 다시 본다.
+
+```sql
+UPDATE books SET stock = stock - 1 WHERE book_id = 1;
+SELECT lp, lp_off, lp_len, t_xmin, t_xmax, t_ctid
+FROM heap_page_items(get_raw_page('books', 0));
+SELECT lower, upper FROM page_header(get_raw_page('books', 0));
+```
+
+```text
+ lp | lp_off | lp_len | t_xmin | t_xmax | t_ctid
+----+--------+--------+--------+--------+--------
+  1 |   8128 |     60 |    736 |    739 | (0,4)
+  2 |   8072 |     56 |    736 |      0 | (0,2)
+  3 |   8008 |     64 |    736 |      0 | (0,3)
+  4 |   7944 |     60 |    739 |      0 | (0,4)
+(4 rows)
+
+ lower | upper
+-------+-------
+    40 |  7944
+(1 row)
+```
+
+정수 하나를 바꿨는데 행이 하나 더 생겼다. 옛 행(1번)은 그대로 남고 `t_xmax`에 739, `t_ctid`에 새 버전 위치 `(0,4)`가 적혔다. 새 행(4번)의 `t_xmin`은 739다. `lower`는 4바이트, `upper`는 64바이트 움직였다. 이것이 [트랜잭션 격리 글](/posts/db-transaction-isolation)에서 본 행 버전 관리의 실제 모습이다. 아래 그림에서 다음을 누르면 페이지 안에서 일어난 일을 칸 단위로 따라갈 수 있다.
+
+<AlgoTrace
+  caption="books 0번 페이지 (왼쪽이 페이지 앞)"
+  memoryLabel="lower / upper"
+  cells={["header", "lp1", "lp2", "lp3", "lp4", "빈자리", "행4", "행3", "행2", "행1"]}
+  steps={[
+    { pointer: 0, memory: ["lower 24", "upper 8192"], caption: "빈 페이지는 머리말 24바이트만 있다. 빈자리가 8,168바이트다." },
+    { pointer: 9, found: [1, 9], memory: ["lower 28", "upper 8128"], caption: "첫 행을 넣는다. 행은 페이지 끝(8128~8188)에, 그 위치를 가리키는 줄 포인터 lp1은 앞에 쌓인다." },
+    { pointer: 7, found: [1, 2, 3, 7, 8, 9], memory: ["lower 36", "upper 8008"], caption: "세 권을 다 넣었다. 줄 포인터는 앞에서 뒤로, 행은 뒤에서 앞으로 자란다. ctid (0,1)은 lp1을 거쳐 행1을 가리킨다." },
+    { pointer: 6, found: [1, 2, 3, 4, 6, 7, 8, 9], memory: ["lower 40", "upper 7944"], caption: "UPDATE는 행1을 고치지 않고 행4를 새로 쓴다. lp4가 생기고, 행1의 xmax와 t_ctid가 새 버전을 가리키게 바뀐다." },
+    { pointer: 5, found: [1, 2, 3, 4, 6, 7, 8], memory: ["lower 40", "upper 7944"], caption: "행1은 이제 아무도 안 보는 죽은 행이 될 차례다. 자리를 돌려받는 건 VACUUM의 일이다." },
+  ]}
+/>
+
+죽은 행이 쌓이고 치워지는 과정, 인덱스를 건드리지 않는 HOT 업데이트는 [다음 글](/posts/postgres-mvcc-vacuum)에서 이어서 본다.
+
+## 페이지에 빈자리를 남기는 fillfactor
+
+`UPDATE`가 새 버전을 같은 페이지에 쓸 수 있으면 좋다. 다른 페이지로 넘어가면 그 페이지도 고쳐야 하고, 인덱스에도 새 위치를 넣어야 한다. 그래서 자주 고치는 테이블은 페이지를 처음부터 꽉 채우지 않고 빈자리를 남겨 둘 수 있다. 그 비율이 `fillfactor`다. 테이블 기본값은 100(꽉 채움), B-tree 인덱스 기본값은 90이다.
+
+```sql
+-- 같은 1만 행을 fillfactor 70인 테이블에 넣으면 (기본 100과 비교)
+CREATE TABLE books_ff70 (LIKE books INCLUDING ALL) WITH (fillfactor = 70);
+```
+
+같은 1만 행을 넣어 보니 fillfactor 100은 74페이지, 70은 106페이지였다. 첫 페이지의 빈자리(`upper - lower`)는 20바이트와 2,480바이트였다. 빈자리를 남긴 대가로 페이지가 43% 늘었고, 순차 스캔은 그만큼 더 읽는다. 그래서 `UPDATE`가 잦은 테이블(재고, 상태값)에만 낮추고, 쓰고 거의 안 고치는 테이블(주문 이력, 로그)은 100으로 둔다. `ALTER TABLE ... SET (fillfactor = 70)`은 이후에 쓰는 페이지부터 적용된다. 이 빈자리가 실제로 어떻게 쓰이는지(HOT 업데이트)는 [다음 글](/posts/postgres-mvcc-vacuum)에서 숫자로 본다.
+
+## 큰 값은 TOAST로 따로 둔다
+
+행은 한 페이지 안에 들어가야 하고, 여러 페이지에 걸칠 수 없다. 그럼 책 소개처럼 긴 `text`는 어떻게 들어갈까. 행이 약 2KB(`TOAST_TUPLE_THRESHOLD`, 2,032바이트)를 넘으면 PostgreSQL은 긴 값부터 압축하고, 그래도 크면 별도의 TOAST 테이블에 2KB 남짓한 조각으로 잘라 넣는다. 본 행에는 조각을 가리키는 18바이트짜리 포인터만 남는다.
+
+```sql
+-- 2번 책: 같은 문장 반복(압축이 잘 됨), 3번 책: 무작위 문자열(압축이 안 됨)
+UPDATE books SET description = repeat('PostgreSQL 내부 구조를 다루는 책. ', 300) WHERE book_id = 2;
+UPDATE books SET description = (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 200)) WHERE book_id = 3;
+
+-- 원래 크기, 저장된 크기, 압축 방식
+SELECT book_id, octet_length(description) AS raw_bytes,
+       pg_column_size(description) AS stored_bytes,
+       pg_column_compression(description) AS method
+FROM books WHERE description IS NOT NULL ORDER BY book_id;
+
+-- books의 TOAST 테이블과 조각 수
+SELECT t.relname, pg_relation_filepath(t.oid)
+FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.relname = 'books';
+SELECT chunk_id, count(*) AS chunks, sum(length(chunk_data)) AS bytes
+FROM pg_toast.pg_toast_16396 GROUP BY chunk_id;
+```
+
+```text
+ book_id | raw_bytes | stored_bytes | method
+---------+-----------+--------------+--------
+       2 |     12900 |          207 | pglz
+       3 |      6400 |         6400 |
+(2 rows)
+
+    relname     | pg_relation_filepath
+----------------+----------------------
+ pg_toast_16396 | base/16384/16399
+(1 row)
+
+ chunk_id | chunks | bytes
+----------+--------+-------
+    16478 |      4 |  6400
+(1 row)
+```
+
+12,900바이트짜리 반복 문장은 207바이트로 압축되어 본 행 안에 그대로 들어갔다. 무작위 문자열 6,400바이트는 압축이 안 되니 TOAST 테이블로 나가 4조각이 됐다. TOAST 테이블도 자기 파일(`16399`)이 있는 평범한 테이블이다.
+
+이게 실무에서 의미하는 바가 있다. `SELECT *`로 긴 열까지 가져오면 행마다 TOAST 조각을 따로 읽고 압축을 푼다. 목록 화면에 `description`이 필요 없으면 열을 골라 가져오는 편이 훨씬 싸다. 큰 JSONB 열의 일부만 고쳐도 값 전체를 새로 써서 TOAST 조각이 통째로 새로 생긴다. PostgreSQL 14부터는 `lz4` 압축도 고를 수 있다(`ALTER TABLE books ALTER description SET COMPRESSION lz4`, 서버가 lz4를 넣어 빌드된 경우). 기본값 `default_toast_compression`은 여전히 `pglz`다.
+
+## 먼저 로그에 쓰고 나중에 파일에 쓴다
+
+이제 쓰기 쪽이다. 앞에서 `UPDATE`는 작업대 위의 페이지만 고쳤다. 고친 페이지는 언젠가 창고에 돌아가야 하는데, 커밋할 때마다 고친 페이지를 전부 데이터 파일에 써서 `fsync`한다면 어떨까. 주문 하나에 `orders`, `order_items`, `books`, 인덱스 서너 개의 페이지가 디스크 여기저기에 흩어져 있다. 커밋마다 무작위 쓰기 여러 번을 기다려야 한다. 쓰는 도중 서버가 죽으면 어떤 페이지는 새 내용, 어떤 페이지는 옛 내용인 상태로 남는다.
+
+WAL(Write-Ahead Log)은 이 두 문제를 같이 푼다. 페이지를 고칠 때 "어느 파일 몇 번 페이지의 몇 번째 행을 이렇게 바꿨다"는 기록을 먼저 WAL에 덧붙인다. 커밋할 때는 이 WAL만 디스크에 `fsync`하면 된다. WAL은 파일 끝에 계속 이어 쓰니 순차 쓰기 한 번이다. 데이터 파일은 나중에 checkpointer가 여유 있게 쓴다. 서버가 죽어도 WAL이 남아 있으니, 다시 뜰 때 WAL을 처음부터 다시 적용(redo)하면 커밋된 변경을 모두 되살릴 수 있다. 규칙은 하나다. 데이터 페이지가 디스크에 쓰이기 전에, 그 페이지를 바꾼 WAL 기록이 먼저 디스크에 있어야 한다. 이름의 write-ahead가 이 뜻이다. 아래 그림에서 다음을 누르면 커밋 한 번의 순서를 볼 수 있다.
+
+<SequenceDiagram
+  caption="UPDATE와 COMMIT, 그리고 나중의 체크포인트"
+  actors={[
+    { id: "be", label: "backend" },
+    { id: "sb", label: "shared_buffers" },
+    { id: "wal", label: "WAL" },
+    { id: "data", label: "데이터 파일" },
+  ]}
+  steps={[
+    {
+      from: "be",
+      to: "sb",
+      label: "페이지 고침",
+      title: "작업대 위의 페이지를 고친다",
+      detail: "books 0번 페이지에 새 행 버전을 쓴다. 이 페이지는 이제 dirty, 창고와 내용이 다르다.",
+    },
+    {
+      from: "be",
+      to: "wal",
+      label: "WAL 기록",
+      title: "무엇을 바꿨는지 WAL 버퍼에 적는다",
+      detail: "기록이 들어간 위치(LSN)를 페이지 머리말의 lsn에도 적어 둔다. 아직은 메모리 안이다.",
+      payload: "rmgr: Heap  desc: HOT_UPDATE old_off: 6, new_off: 9\n  blkref #0: rel 1663/16384/16396 blk 0",
+    },
+    {
+      from: "be",
+      to: "wal",
+      label: "COMMIT, fsync",
+      title: "커밋하면 WAL만 디스크에 내린다",
+      detail: "커밋 기록까지의 WAL을 fsync하고 나서야 클라이언트에 COMMIT 응답을 보낸다. 데이터 파일은 아직 안 건드렸다.",
+      payload: "rmgr: Transaction  desc: COMMIT 2026-10-17 16:13:19.774301 UTC",
+    },
+    {
+      from: "wal",
+      to: "be",
+      label: "COMMIT OK",
+      title: "응답은 여기서 나간다",
+      detail: "이 순간 서버가 죽어도 이 커밋은 WAL에 있으니 되살릴 수 있다. 이것이 지속성(Durability)의 실체다.",
+    },
+    {
+      from: "sb",
+      to: "data",
+      label: "checkpoint",
+      title: "데이터 파일은 나중에 몰아서 쓴다",
+      detail: "checkpointer가 dirty page를 모아 쓴다. 쓰기 전에 그 페이지의 lsn까지 WAL이 디스크에 있는지 확인한다. 같은 페이지를 열 번 고쳤어도 한 번만 쓰면 된다.",
+    },
+  ]}
+/>
+
+같은 원리를 MySQL InnoDB는 redo log로 구현한다. 이름만 다르고 하는 일은 같다.
+
+## LSN은 WAL 안의 바이트 주소다
+
+WAL은 끝없이 이어지는 하나의 긴 바이트 줄이라고 보면 된다. 그 줄의 몇 번째 바이트인지가 LSN(Log Sequence Number)이다. 64비트 정수인데, 사람이 읽기 좋게 위 32비트와 아래 32비트를 16진수로 `/` 사이에 두고 쓴다. 디스크에서는 16MB짜리 세그먼트 파일로 잘려 `pg_wal`에 있다.
+
+```sql
+-- 지금 WAL 위치와 그 위치가 들어 있는 파일 이름
+SELECT pg_current_wal_lsn() AS before_lsn, pg_walfile_name(pg_current_wal_lsn());
+-- 주문 10만 건을 넣는다
+INSERT INTO orders (user_id, status, created_at)
+SELECT 1 + i % 3, 'paid', now() - i * interval '1 minute' FROM generate_series(1, 100000) i;
+SELECT pg_current_wal_lsn() AS after_lsn, pg_walfile_name(pg_current_wal_lsn()) AS walfile;
+-- 두 위치의 차이 = 이 INSERT가 만든 WAL 바이트 수
+SELECT pg_wal_lsn_diff('0/2AE5E30', '0/1BDA200') AS bytes;
+```
+
+```text
+ before_lsn |     pg_walfile_name
+------------+--------------------------
+ 0/1BDA200  | 000000010000000000000001
+
+ after_lsn |         walfile
+-----------+--------------------------
+ 0/2AE5E30 | 000000010000000000000002
+
+  bytes
+----------
+ 15776816
+(1 row)
+```
+
+10만 건에 WAL 15MB가 나왔다. 테이블 증가분이 약 6MB, 인덱스가 2MB인데 WAL은 그 두 배다. 행마다 힙 기록과 인덱스 기록이 따로 있고, 바로 다음 절의 전체 페이지 기록까지 붙어서다. WAL 파일 이름은 타임라인(8자리) + LSN 위 32비트(8자리) + 16MB 세그먼트 번호(8자리)다. `0/2AE5E30`은 0x2AE5E30 ÷ 16MB = 2.68…이니 2번 세그먼트, 파일 이름 끝이 `02`다.
+
+LSN 차이는 복제 지연(프라이머리의 `pg_current_wal_lsn()`과 복제본의 재생 위치 차이), 체크포인트 사이에 쌓인 WAL 양, 쿼리 하나가 만든 WAL 양을 잴 때 늘 쓴다. 문자열로 받은 두 LSN의 바이트 차이를 직접 계산해 보자. 테스트 값은 위 실험과 뒤의 복구 로그에서 나온 실제 LSN이고, 기댓값은 `pg_wal_lsn_diff`로 확인한 값이다.
+
+<CodePlayground
+  caption="LSN 두 개의 바이트 차이 (pg_wal_lsn_diff)"
+  functionName="lsnDiff"
+  initialCode={`function lsnDiff(a, b) {
+  // a, b는 "위32비트/아래32비트" 16진수 문자열 (예: "0/2AE5E30")
+  // a - b를 바이트 수로 돌려준다
+  return 0;
+}`}
+  solution={`function lsnDiff(a, b) {
+  const toBytes = (lsn) => {
+    const [hi, lo] = lsn.split("/");
+    // 위 32비트에 2^32를 곱해 아래 32비트와 더한다
+    // (비트 연산 <<는 32비트에서 넘치므로 쓰지 않는다)
+    return parseInt(hi, 16) * 2 ** 32 + parseInt(lo, 16);
+  };
+  return toBytes(a) - toBytes(b);
+}`}
+  tests={[
+    { label: "10만 건 INSERT", args: ["0/2AE5E30", "0/1BDA200"], expected: 15776816 },
+    { label: "복구 때 재생한 양", args: ["0/BA89608", "0/BA86B38"], expected: 10960 },
+    { label: "위 32비트가 넘어갈 때", args: ["1/0", "0/FFFFFFFF"], expected: 1 },
+    { label: "순서를 바꾸면 음수", args: ["0/1BDA200", "0/2AE5E30"], expected: -15776816 },
+    { label: "큰 LSN", args: ["2A/1C3B5D0", "29/FF000000"], expected: 46380496 },
+  ]}
+/>
+
+## 체크포인트 직후의 첫 수정은 페이지 통째로
+
+WAL 기록은 보통 "몇 번째 행을 이렇게 바꿨다"는 작은 차이만 담는다. 그런데 PostgreSQL 페이지는 8KB이고, 리눅스와 디스크는 4KB나 512바이트 단위로 쓴다. 페이지를 쓰는 도중 전원이 나가면 앞 4KB는 새 내용, 뒤 4KB는 옛 내용인 찢어진 페이지(torn page)가 남을 수 있다. 이런 페이지 위에 작은 차이를 다시 적용해 봐야 올바른 페이지가 되지 않는다.
+
+그래서 `full_page_writes = on`(기본값)이면, 체크포인트 이후 어떤 페이지를 처음 고칠 때 그 페이지 8KB 전체를 WAL에 같이 남긴다(full page image, FPI). 복구할 때는 이 전체 이미지로 페이지를 덮어쓰고 시작하니 찢어진 페이지도 고쳐진다. 같은 페이지를 다음 체크포인트 전에 또 고치면 그때부터는 작은 기록만 남긴다. 직접 재 봤다. 체크포인트 직후 주문 500건의 상태를 바꾸고, 바로 같은 500건을 한 번 더 바꿨다.
+
+```sql
+CHECKPOINT;
+SELECT pg_stat_reset_shared('wal');        -- WAL 통계 초기화
+UPDATE orders SET status = 'shipped' WHERE order_id % 200 = 0;
+-- (통계는 세션이 끝나야 반영되어 다른 세션에서 조회했다)
+SELECT wal_records, wal_fpi, wal_bytes FROM pg_stat_wal;
+
+SELECT pg_stat_reset_shared('wal');
+UPDATE orders SET status = 'paid' WHERE order_id % 200 = 0;   -- 같은 행을 한 번 더
+SELECT wal_records, wal_fpi, wal_bytes FROM pg_stat_wal;
+```
+
+```text
+ wal_records | wal_fpi | wal_bytes
+-------------+---------+-----------
+        1773 |     279 |   2202791
+(1 row)
+
+ wal_records | wal_fpi | wal_bytes
+-------------+---------+-----------
+        1397 |       0 |    105360
+(1 row)
+```
+
+`wal_fpi`가 전체 페이지 기록 수다. 같은 500건인데 체크포인트 직후에는 WAL이 2.2MB, 두 번째는 105KB로 20분의 1이다. 체크포인트를 자주 하면 WAL이 불어나는 이유가 이것이다. `pg_waldump`로 WAL을 직접 보면 기록 끝의 `FPW` 표시와 큰 크기(4698바이트)가 보인다.
+
+```bash
+# 복구 때 재생된 구간의 WAL 기록 (일부)
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_waldump \
+  -p /var/lib/postgresql/16/pg3/pg_wal -s 0/BA86B38 -e 0/BA89608
+```
+
+```text
+rmgr: XLOG        len (rec/tot):    114/   114, tx:          0, lsn: 0/0BA86B70, prev 0/0BA86B38, desc: CHECKPOINT_ONLINE redo 0/BA86B38; tli 1; prev tli 1; fpw true; xid 0:763; oid 24576; multi 1; offset 0; oldest xid 722 in DB 1; oldest multi 1 in DB 1; oldest/newest commit timestamp xid: 0/0; oldest running xid 763; online
+rmgr: Heap        len (rec/tot):     54/  4698, tx:        763, lsn: 0/0BA86C50, prev 0/0BA86BE8, desc: INSERT off: 77, flags: 0x01, blkref #0: rel 1663/16384/16404 blk 5150 FPW
+rmgr: Btree       len (rec/tot):     53/  4273, tx:        763, lsn: 0/0BA87EB0, prev 0/0BA86C50, desc: INSERT_LEAF off: 209, blkref #0: rel 1663/16384/16411 blk 1921 FPW
+rmgr: Transaction len (rec/tot):     34/    34, tx:        763, lsn: 0/0BA890B8, prev 0/0BA89080, desc: COMMIT 2026-10-17 16:13:19.774301 UTC
+```
+
+`rel 1663/16384/16404 blk 5150`은 테이블스페이스/DB/파일 번호와 페이지 번호다. `orders`(16404)의 5150번 페이지에 행 하나를 넣었는데, 체크포인트 직후라 기록 크기가 54바이트가 아니라 4,698바이트(빈 공간을 뺀 페이지 이미지 포함)다. 인덱스(16411)도 마찬가지다.
+
+`full_page_writes`를 끄면 WAL이 줄지만, 디스크와 파일시스템이 8KB를 원자적으로 쓴다고 보장할 때(ZFS 같은 copy-on-write 파일시스템)만 끈다. 그 대신 `wal_compression`(15부터 `pglz`, `lz4`, `zstd` 선택)으로 전체 페이지 기록을 압축하는 방법이 안전하다. MySQL InnoDB는 같은 문제를 doublewrite buffer로 푼다. 페이지를 데이터 파일에 쓰기 전에 별도 영역에 한 번 더 써 두는 방식이다.
+
+## 체크포인트가 하는 일
+
+WAL은 계속 쌓인다. 영원히 남겨 둘 수는 없고, 복구할 때 처음부터 다 재생할 수도 없다. 체크포인트는 "이 시점까지의 변경은 전부 데이터 파일에 들어갔다"는 표시를 남기는 일이다. checkpointer가 작업대의 dirty page를 모두 창고에 쓰고 `fsync`한 다음, 체크포인트 기록을 WAL에 남긴다. 그러면 그 체크포인트의 시작점(redo 지점) 이전 WAL은 복구에 더는 필요 없으니 지우거나 재활용한다.
+
+체크포인트는 두 조건 중 먼저 오는 쪽에서 시작한다. 마지막 체크포인트 후 `checkpoint_timeout`(기본 5분)이 지났거나, WAL이 `max_wal_size`(기본 1GB)에 다가갈 만큼 쌓였을 때다. 그리고 한꺼번에 쓰면 I/O가 몰리니, 다음 체크포인트까지 시간의 `checkpoint_completion_target`(기본 0.9, 즉 90%)에 걸쳐 나눠 쓴다. 15부터는 `log_checkpoints`가 기본으로 켜져 있어서 로그에 이렇게 남는다.
+
+실험용 클러스터에서 `max_wal_size`를 64MB, `checkpoint_timeout`을 30초로 줄이고 주문 60만 건을 넣었다.
+
+```bash
+# 일부러 작게 줄인다 (실험용 클러스터에서만)
+sudo -u postgres psql -p 5453 -c "ALTER SYSTEM SET max_wal_size = '64MB'" \
+  -c "ALTER SYSTEM SET checkpoint_timeout = '30s'" -c "SELECT pg_reload_conf()"
+
+# 체크포인트 로그만 골라 본다
+grep -E "checkpoint|too frequently" /var/log/postgresql/postgresql-16-pg3.log | tail
+```
+
+```text
+2026-10-17 16:09:12.898 UTC [814] LOG:  checkpoints are occurring too frequently (18 seconds apart)
+2026-10-17 16:09:12.898 UTC [814] HINT:  Consider increasing the configuration parameter "max_wal_size".
+2026-10-17 16:09:12.898 UTC [814] LOG:  checkpoint starting: wal
+2026-10-17 16:09:13.753 UTC [814] LOG:  checkpoint complete: wrote 2628 buffers (16.0%); 0 WAL file(s) added, 1 removed, 1 recycled; write=0.697 s, sync=0.030 s, total=0.855 s; sync files=10, longest=0.017 s, average=0.003 s; distance=32488 kB, estimate=32488 kB; lsn=0/717F628, redo lsn=0/529C230
+2026-10-17 16:09:13.753 UTC [814] LOG:  checkpoints are occurring too frequently (1 second apart)
+2026-10-17 16:09:13.753 UTC [814] HINT:  Consider increasing the configuration parameter "max_wal_size".
+2026-10-17 16:12:43.742 UTC [814] LOG:  checkpoint starting: time
+2026-10-17 16:13:10.086 UTC [814] LOG:  checkpoint complete: wrote 1211 buffers (7.4%); 0 WAL file(s) added, 0 removed, 0 recycled; write=26.332 s, sync=0.009 s, total=26.344 s; sync files=11, longest=0.008 s, average=0.001 s; distance=10555 kB, estimate=31920 kB; lsn=0/BA86A88, redo lsn=0/BA86A50
+```
+
+`checkpoint starting:` 뒤의 말이 원인이다. `wal`은 WAL이 많이 쌓여서, `time`은 시간이 돼서다. 수동으로 `CHECKPOINT`를 치면 `immediate force wait`이 찍힌다. 운영에서 `wal`이 대부분이고 `too frequently` 경고가 보이면 `max_wal_size`가 작은 것이다. 마지막 `time` 체크포인트는 `write=26.332 s`다. 30초의 90%에 걸쳐 천천히 썼다. 완료 줄은 조각이 많으니 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="checkpoint complete 로그 한 줄"
+  base="checkpoint complete:"
+  separator=" "
+  joiner="; "
+  params={[
+    {
+      key: "wrote",
+      display: "wrote 1211 buffers (7.4%)",
+      title: "내보낸 dirty page 수",
+      description: "shared_buffers 중 몇 개(몇 %)를 데이터 파일에 썼는지다. 체크포인트마다 이 값이 크면 그만큼 I/O가 몰린다.",
+      required: true,
+    },
+    {
+      key: "write",
+      display: "write=26.332 s",
+      title: "쓰기에 걸린 시간",
+      description: "checkpoint_completion_target 때문에 일부러 천천히 쓴다. timeout 30초 × 0.9 ≈ 27초. 바로 뒤의 sync가 수 초씩 나오면 디스크가 밀리고 있다는 뜻이다.",
+    },
+    {
+      key: "distance",
+      display: "distance=10555 kB",
+      title: "지난 체크포인트 후 쌓인 WAL",
+      description: "두 체크포인트 사이의 WAL 양이다. 크래시가 나면 최대 이만큼을 재생해야 하니 복구 시간과 바로 이어진다.",
+    },
+    {
+      key: "redo",
+      display: "redo lsn=0/BA86A50",
+      title: "복구를 시작할 위치",
+      description: "체크포인트를 시작한 순간의 WAL 위치다. 지금 죽으면 여기서부터 재생한다. 이 위치 이전의 WAL은 복구에 필요 없다.",
+      code: "lsn=0/BA86A88   -- 체크포인트 기록 자체의 위치\nredo lsn=0/BA86A50   -- 재생 시작점",
+    },
+  ]}
+/>
+
+체크포인트 간격은 줄다리기다. 자주 하면 복구가 빠르지만, 같은 페이지를 여러 번 쓰고 전체 페이지 기록도 늘어 평소 I/O가 커진다. 드물게 하면 평소에는 싸지만 크래시 후 재생할 WAL이 많아 복구가 길어지고, `pg_wal`이 차지하는 디스크도 커진다. 흔한 운영값은 `checkpoint_timeout`을 10~30분, `max_wal_size`를 그 시간 동안 쌓이는 WAL보다 넉넉하게(수 GB~수십 GB) 두어 대부분 `time`으로 일어나게 하는 것이다. `pg_stat_bgwriter`(17부터는 `pg_stat_checkpointer`로 분리)의 `checkpoints_timed`와 `checkpoints_req` 비율로 확인한다.
+
+## 서버가 죽었다 다시 뜰 때
+
+정말로 되살아나는지 보자. 체크포인트 직후 주문 하나를 넣고 3번 책 재고를 99로 바꾼 다음, 정리 없이 즉시 종료(`-m immediate`, 전원이 꺼진 것과 비슷하다)했다.
+
+```bash
+# 커밋 두 개를 하고 바로 강제 종료
+sudo -u postgres psql -p 5453 -d pg3_shop -c "CHECKPOINT" \
+  -c "INSERT INTO orders (user_id) VALUES (2) RETURNING order_id" \
+  -c "UPDATE books SET stock = 99 WHERE book_id = 3"
+sudo pg_ctlcluster 16 pg3 stop -m immediate
+
+# 다시 띄우고 로그 확인
+sudo pg_ctlcluster 16 pg3 start
+tail -n 8 /var/log/postgresql/postgresql-16-pg3.log
+```
+
+```text
+2026-10-17 16:13:19.818 UTC [813] LOG:  received immediate shutdown request
+2026-10-17 16:13:19.835 UTC [813] LOG:  database system is shut down
+2026-10-17 16:13:19.999 UTC [2346] LOG:  database system was interrupted; last known up at 2026-10-17 16:13:19 UTC
+2026-10-17 16:13:20.074 UTC [2346] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-17 16:13:20.078 UTC [2346] LOG:  redo starts at 0/BA86B38
+2026-10-17 16:13:20.078 UTC [2346] LOG:  invalid record length at 0/BA89630: expected at least 24, got 0
+2026-10-17 16:13:20.078 UTC [2346] LOG:  redo done at 0/BA89608 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-10-17 16:13:20.081 UTC [2344] LOG:  checkpoint starting: end-of-recovery immediate wait
+```
+
+```sql
+SELECT book_id, stock FROM books WHERE book_id = 3;
+SELECT order_id, user_id FROM orders ORDER BY order_id DESC LIMIT 1;
+```
+
+```text
+ book_id | stock
+---------+-------
+       3 |    99
+(1 row)
+
+ order_id | user_id
+----------+---------
+   700001 |       2
+(1 row)
+```
+
+로그가 복구 순서 그대로다. 정상 종료 표시가 없으니 복구 모드로 들어가고(`not properly shut down`), 마지막 체크포인트의 redo 지점 `0/BA86B38`부터 WAL을 읽어 다시 적용한다. 읽다가 기록이 더는 없는 곳(`invalid record length ... got 0`)을 만나면 거기가 WAL의 끝이다. 이 메시지는 에러가 아니라 정상적인 끝 표시다. 재생한 양은 10,960바이트(앞의 플레이그라운드 두 번째 테스트)였다. 그다음 복구 종료 체크포인트를 하고 접속을 받는다. 두 커밋은 데이터 파일에 쓰이기 전에 죽었지만 WAL에 있었으니 살아났다.
+
+재생할 때 각 기록을 무조건 다시 적용하지는 않는다. 페이지 머리말의 `lsn`이 그 기록의 LSN보다 크거나 같으면 이미 반영된 페이지이니 건너뛴다. 앞에서 페이지 머리말의 `lsn`이 중요하다고 한 이유가 이것이다. 커밋 기록이 없는 트랜잭션의 변경도 재생은 되지만, `pg_xact`에 커밋으로 표시되지 않으니 아무에게도 보이지 않는다. 롤백을 위한 undo 단계가 따로 없는 것이 PostgreSQL 복구의 특징이다. 이렇게 남은 행은 나중에 VACUUM이 치운다.
+
+## fsync와 synchronous_commit
+
+지속성은 결국 `COMMIT` 응답 전에 WAL을 `fsync`하느냐에 달려 있다. 이걸 조절하는 설정이 두 개 있는데 무게가 전혀 다르다.
+
+`synchronous_commit = off`는 커밋할 때 WAL `fsync`를 기다리지 않고 바로 응답한다. walwriter가 곧(최대 `wal_writer_delay`의 세 배, 기본 600ms 안에) 내려 준다. 그 사이에 서버가 죽으면 최근 커밋 몇 개가 사라지지만, DB가 깨지지는 않는다. 사라진 트랜잭션은 처음부터 없던 것처럼 된다. 이 설정은 세션이나 트랜잭션 단위(`SET LOCAL synchronous_commit = off`)로 바꿀 수 있어서, 잃어도 되는 쓰기(조회수, 로그)에만 골라 쓸 수 있다.
+
+```bash
+# 같은 쓰기 벤치마크를 synchronous_commit on / off로
+sudo -u postgres env PGOPTIONS=-csynchronous_commit=on  pgbench -p 5453 -c 4 -j 4 -T 10 pg3_bench
+sudo -u postgres env PGOPTIONS=-csynchronous_commit=off pgbench -p 5453 -c 4 -j 4 -T 10 pg3_bench
+```
+
+```text
+latency average = 1.399 ms
+tps = 2859.056985 (without initial connection time)
+
+latency average = 0.402 ms
+tps = 9957.474557 (without initial connection time)
+```
+
+이 디스크에서는 3.5배 빨라졌다. 커밋 지연의 대부분이 `fsync` 대기였다는 뜻이다. 디스크가 빠를수록(배터리 백업 캐시가 있는 RAID, 좋은 NVMe) 차이는 줄어든다.
+
+`fsync = off`는 완전히 다른 이야기다. WAL도 데이터 파일도 `fsync`하지 않으니, OS가 죽거나 전원이 나가면 WAL과 데이터 파일의 순서 약속이 깨진다. 최근 커밋을 잃는 정도가 아니라 DB 전체가 깨질 수 있고, 백업에서 복원하는 것 말고는 방법이 없다. 테스트용으로 다시 만들 수 있는 DB를 적재할 때가 아니면 켜지 않는다.
+
+복제 환경에서는 `synchronous_commit`에 `remote_write`, `on`, `remote_apply` 같은 값이 더 있어서, 복제본이 어디까지 받았을 때 응답할지를 고른다. 이 부분은 [복제 글](/posts/db-replication-sharding)에 있다. 디스크가 조용히 비트를 망가뜨리는 경우를 잡으려면 클러스터를 만들 때 `initdb --data-checksums`로 데이터 체크섬을 켠다. Ubuntu의 `pg_createcluster`는 기본으로 켜지 않으니 `-- --data-checksums`를 붙여야 한다. 18부터는 `initdb`가 기본으로 켠다고 하니 쓰는 버전의 노트에서 확인한다.
+
+## 다시 64GB 서버로
+
+처음 장면으로 돌아가면 할 일이 정리된다. 연결이 요청마다 새로 맺히고 있었으니 앱에 연결 풀을 두는 것이 먼저다. 연결 한 번에 수 ms와 프로세스 하나가 드는 구조라서다. `shared_buffers`는 램의 25%인 16GB 정도에서 시작한다(재시작 필요). 나머지 메모리는 OS 페이지 캐시가 이미 잘 쓰고 있으니 `effective_cache_size`를 40~48GB로 알려 준다. 로그의 체크포인트 원인이 `wal`이 대부분이면 `max_wal_size`를 늘린다. 각 설정을 어떻게 바꾸고, 무엇이 재시작을 요구하는지는 [운영 글](/posts/postgres-operations)에서 이어 간다.
+
+PostgreSQL 내부를 한 문장으로 줄이면 이렇다. 연결마다 프로세스가 생기고, 모두가 같은 작업대(`shared_buffers`)에서 8KB 페이지를 고치며, 고친 내용은 먼저 WAL에 순서대로 적어 커밋을 보장하고, 데이터 파일은 체크포인트 때 나중에 몰아서 쓴다. 다음 글은 이 구조가 남기는 부산물, 페이지에 쌓이는 죽은 행과 그걸 치우는 VACUUM이다.
+
+## 면접에서 나올 만한 질문
+
+### PostgreSQL은 왜 연결이 비싸고, 어떻게 대응하나
+
+연결마다 postmaster가 backend 프로세스를 fork하고, 인증과 카탈로그 캐시 초기화를 거치기 때문이다. 로컬 유닉스 소켓에서도 연결 한 번에 4ms쯤 들어서, 트랜잭션마다 연결하면 처리량이 200분의 1로 떨어졌다. 그래서 앱에서 연결 풀을 쓰고, 앱 인스턴스가 많으면 PgBouncer 같은 외부 풀러로 실제 DB 연결 수를 묶는다. `max_connections`를 크게 올리는 건 메모리와 스냅샷 비용 때문에 답이 아니다.
+
+### shared_buffers를 램의 80%로 잡으면 안 되나
+
+PostgreSQL은 OS 페이지 캐시를 같이 쓰는 설계라, `shared_buffers`를 너무 키우면 OS 캐시와 `work_mem`, 프로세스가 쓸 메모리가 줄고 같은 페이지를 두 번 들고 있는 낭비는 그대로다. 그래서 25% 안팎에서 시작하고, `effective_cache_size`로 OS 캐시 몫을 플래너에게 알려 준다. InnoDB가 버퍼 풀을 70~80%로 잡는 건 `O_DIRECT`로 OS 캐시를 건너뛰기 때문이라 사정이 다르다.
+
+### EXPLAIN의 shared read는 디스크를 읽었다는 뜻인가
+
+아니다. `shared_buffers`에 없어서 운영체제에 읽기를 요청했다는 뜻이고, 그 페이지가 OS 페이지 캐시에 있으면 디스크까지 안 간다. 실험에서 40MB를 `read`로 읽는 데 60ms밖에 안 걸린 것이 OS 캐시에서 온 경우다. 큰 테이블 순차 스캔은 링 버퍼를 써서 `shared_buffers`를 채우지 않는다는 것도 함께 알아 둔다.
+
+### WAL은 왜 필요하고, 커밋 시점에 무엇이 디스크에 있나
+
+데이터 파일의 무작위 쓰기를 커밋마다 기다리지 않으면서, 크래시가 나도 커밋된 변경을 되살리기 위해서다. 커밋 시점에 디스크에 확실히 있는 건 그 커밋 기록까지의 WAL이고, 데이터 파일은 아직 옛 내용일 수 있다. 데이터 페이지는 자기를 바꾼 WAL이 먼저 디스크에 내려간 뒤에만 쓰인다는 규칙이 write-ahead다.
+
+### 체크포인트는 무엇이고, 너무 자주 일어나면 어떤 문제가 있나
+
+dirty page를 모두 데이터 파일에 쓰고 "여기까지는 반영됐다"는 redo 지점을 남겨, 그 이전 WAL을 복구에 필요 없게 만드는 일이다. `checkpoint_timeout`이나 `max_wal_size` 중 먼저 오는 조건에서 시작하고, `checkpoint_completion_target` 비율에 걸쳐 나눠 쓴다. 너무 잦으면 같은 페이지를 여러 번 쓰고, 체크포인트 직후 첫 수정마다 전체 페이지 이미지가 WAL에 들어가 WAL과 I/O가 크게 는다. 로그의 `checkpoint starting: wal`과 `too frequently` 경고가 신호다.
+
+### full_page_writes는 왜 있나
+
+PostgreSQL 페이지는 8KB인데 디스크는 그보다 작은 단위로 쓰니, 쓰는 도중 죽으면 찢어진 페이지가 남을 수 있다. 체크포인트 후 첫 수정 때 페이지 전체를 WAL에 남겨 두면 복구할 때 그 이미지로 덮어쓰고 시작하니 안전하다. 대가는 WAL 증가라서, 끄기보다는 `wal_compression`으로 줄이고 체크포인트 간격을 늘리는 편을 택한다. InnoDB는 doublewrite buffer로 같은 문제를 푼다.
+
+### 크래시 후 재시작하면 내부에서 무슨 일이 일어나나
+
+마지막 체크포인트 기록에서 redo 지점을 읽고, 거기서부터 WAL 끝까지 기록을 차례로 재생한다. 페이지 머리말의 LSN이 기록보다 같거나 크면 이미 반영된 것으로 보고 건너뛴다. 커밋되지 않은 트랜잭션의 변경은 따로 되돌리지 않고, `pg_xact`에 커밋 표시가 없어 보이지 않게 될 뿐이며 나중에 VACUUM이 치운다. 끝나면 복구 종료 체크포인트를 하고 접속을 받는다.
+
+### synchronous_commit = off와 fsync = off의 차이는
+
+`synchronous_commit = off`는 커밋 응답을 WAL `fsync` 전에 보내는 것이라, 크래시 때 최근 1초 미만의 커밋을 잃을 수 있지만 DB는 일관된 상태로 복구된다. 트랜잭션 단위로 켤 수 있어 잃어도 되는 쓰기에 쓴다. `fsync = off`는 아예 디스크 동기화를 안 하니 크래시 때 DB가 깨질 수 있고, 운영에서는 쓰지 않는다.

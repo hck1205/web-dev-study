@@ -1,0 +1,623 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-getting-started");
+
+Ubuntu 서버에 PostgreSQL을 깔았다. 설치는 1분 만에 끝났고, 이제 접속만 하면 된다. 터미널에 `psql`을 친다.
+
+```text
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  role "matt" does not exist
+```
+
+비밀번호를 물어보지도 않고 거절당했다. 나도 처음엔 이게 설치가 잘못된 건 줄 알았다. 설치는 멀쩡하다. 이 한 줄에는 PostgreSQL이 접속을 받는 방식이 거의 다 들어 있다. psql은 내 리눅스 계정 이름(`matt`)을 DB 사용자 이름으로 그대로 들고 갔고, 서버는 그런 사용자를 모른다고 답했다. 이 글은 이 에러를 출발점으로 설치, 같은 머신에서의 접속, psql 사용법, 데이터베이스와 스키마의 관계까지 첫날 필요한 것을 정리하고, 시리즈 내내 쓸 작은 온라인 서점 `shop` DB를 만든다. 다른 서버에서 붙는 이야기(접속 URI, 비밀번호 파일, `pg_hba.conf`, 원격 접속 열기)는 [접속 URI와 pg_hba.conf](/posts/postgres-connections-pg-hba)로 나눴다.
+
+기준은 Ubuntu 24.04 LTS와 그 기본 패키지인 PostgreSQL 16(16.15)이다. 아래 출력은 모두 이 환경에서 실제로 돌린 것이다. 쓰던 서버를 건드리지 않으려고 같은 머신에 클러스터를 하나 더 만들어(포트 5491) 실습한 부분이 있어서, 몇몇 출력에는 5432 대신 5491이 보인다. 클러스터가 무엇인지는 아래에서 다룬다. SQL 기본 문법(`CREATE TABLE`, `SELECT`, 제약 조건)은 [SQL 기초 글](/posts/sql-basics)에 있다.
+
+## PostgreSQL을 고르는 이유
+
+PostgreSQL은 1980년대 버클리의 POSTGRES 프로젝트에서 시작한 오픈 소스 관계형 DB다. 라이선스는 BSD 계열의 PostgreSQL License라서 상용 제품에 넣어도 소스 공개 의무가 없다. 특정 회사가 아니라 커뮤니티가 개발하고, 1년에 한 번 메이저 버전(16, 17, 18 …)이 나온다. 메이저 버전마다 지원 기간은 5년이다.
+
+같은 자리에 자주 비교되는 게 MySQL이다. 둘 다 웹 서비스에 충분히 쓰이고, 어느 쪽이 무조건 낫다고 말하기는 어렵다. PostgreSQL 쪽으로 기우는 이유는 대개 이렇다.
+
+- 타입이 풍부하다. `jsonb`, 배열, 범위 타입(`tstzrange`), `uuid`, 네트워크 주소 타입이 기본으로 있고, 각각에 맞는 인덱스(GIN, GiST)도 있다. [다음 글](/posts/postgres-data-types)에서 자세히 본다.
+- 확장(extension)으로 기능을 붙인다. 지도 데이터는 PostGIS, 벡터 검색은 pgvector처럼 DB를 바꾸지 않고 기능을 더한다.
+- DDL도 트랜잭션 안에서 되돌릴 수 있다. MySQL 8은 `CREATE TABLE`, `ALTER TABLE`이 암묵적으로 커밋되지만, PostgreSQL은 `ROLLBACK`하면 테이블 생성까지 없던 일이 된다. 마이그레이션이 중간에 실패해도 반쯤 바뀐 스키마가 남지 않는다.
+
+```sql
+BEGIN;
+CREATE TABLE coupons (code text PRIMARY KEY);  -- 테이블을 만들고
+ROLLBACK;                                      -- 되돌리면
+\dt coupons                                    -- 테이블도 사라진다
+```
+
+마지막 줄의 결과는 `Did not find any relation named "coupons".`다.
+
+MySQL(InnoDB)도 큰 웹 서비스에서 오래 검증된 DB다. 팀이 이미 MySQL 운영과 장애 대응에 익숙하다면 그쪽을 고르는 것도 정당한 이유다. 이 글부터는 PostgreSQL만 본다.
+
+## apt로 설치하고 서버가 떴는지 확인하기
+
+Ubuntu 기본 저장소에 들어 있는 버전은 배포판마다 정해져 있다. 24.04는 16, 22.04는 14다. 기본 패키지로 충분하면 이렇게 끝난다.
+
+```bash
+# 패키지 목록 갱신 후 서버와 psql 클라이언트를 함께 설치
+sudo apt update
+sudo apt install -y postgresql
+
+# 설치된 클러스터 목록과 상태 확인
+pg_lsclusters
+```
+
+```text
+Ver Cluster Port Status Owner    Data directory              Log file
+16  main    5432 online postgres /var/lib/postgresql/16/main /var/log/postgresql/postgresql-16-main.log
+```
+
+`Status`가 `online`이면 서버가 떠 있다. 이 한 줄에 첫날 알아야 할 위치가 다 있다. 데이터는 `/var/lib/postgresql/16/main`, 로그는 `/var/log/postgresql/postgresql-16-main.log`이고, Ubuntu(Debian 계열)는 설정 파일을 데이터 디렉터리가 아니라 `/etc/postgresql/16/main/`에 따로 둔다. 접속이 안 되면 제일 먼저 이 로그 파일을 본다.
+
+더 새 버전(17, 18)이 필요하면 PostgreSQL 커뮤니티가 운영하는 PGDG apt 저장소를 붙인다. `postgresql-common` 패키지에 저장소를 등록해 주는 스크립트가 들어 있다.
+
+```bash
+# 저장소 등록 스크립트가 든 패키지 설치
+sudo apt install -y postgresql-common
+
+# PGDG(apt.postgresql.org) 저장소와 서명 키 등록
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+
+# 원하는 메이저 버전을 이름으로 설치 (여러 버전을 나란히 설치할 수 있다)
+sudo apt install -y postgresql-18
+```
+
+PGDG 저장소를 쓰면 마이너 업데이트(16.14 → 16.15 같은 보안 패치)도 더 빨리 받는다. RHEL·Rocky 계열은 `dnf`로 같은 저장소의 RPM판을 쓰고, 설치 뒤 `/usr/pgsql-16/bin/postgresql-16-setup initdb`로 데이터 디렉터리를 직접 초기화해야 한다. Ubuntu처럼 설치하자마자 클러스터가 만들어지지 않는다.
+
+서버를 켜고 끄는 방법은 두 가지다. systemd를 쓰는 보통 서버라면 `systemctl`을 쓴다. `postgresql.service`는 모든 클러스터를 한꺼번에 묶는 껍데기이고, 실제 서버 하나는 `postgresql@16-main.service`다.
+
+```bash
+# 클러스터 하나의 상태와 최근 로그
+sudo systemctl status postgresql@16-main
+
+# 설정 다시 읽기 (pg_hba.conf, 대부분의 postgresql.conf 값)
+sudo systemctl reload postgresql@16-main
+
+# 재시작 (listen_addresses, shared_buffers처럼 재시작이 필요한 값)
+sudo systemctl restart postgresql@16-main
+```
+
+Ubuntu는 같은 일을 하는 래퍼 `pg_ctlcluster`도 준다. 버전과 클러스터 이름을 인자로 받는다. systemd가 없는 컨테이너에서도 동작한다.
+
+```bash
+# 시작 / 정지 / 설정 다시 읽기
+sudo pg_ctlcluster 16 main start
+sudo pg_ctlcluster 16 main stop
+sudo pg_ctlcluster 16 main reload
+```
+
+서버가 꺼져 있을 때 psql이 내는 에러는 이렇게 생겼다. 처음 본 `role does not exist`와 구분해야 한다. 이쪽은 서버까지 가지도 못한 것이다.
+
+```text
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5491" failed: No such file or directory
+	Is the server running locally and accepting connections on that socket?
+```
+
+## psql이 내 리눅스 이름을 들고 가는 이유
+
+다시 처음 에러로 돌아간다. psql은 접속 정보를 하나도 주지 않으면 기본값을 채운다. 호스트는 비워 두면 TCP가 아니라 유닉스 도메인 소켓(같은 머신 안에서만 쓰는 파일 모양의 통로, `/var/run/postgresql/.s.PGSQL.5432`)으로 붙는다. 사용자 이름은 지금 리눅스 계정 이름, 데이터베이스 이름은 사용자 이름과 같게 잡는다. 그래서 `matt` 계정에서 그냥 `psql`을 치면 "사용자 matt로 데이터베이스 matt에 접속"하겠다는 뜻이 된다.
+
+서버 쪽에는 들어오는 접속을 처음 받는 프로세스가 있다. postmaster(로그와 프로세스 목록에서는 `postgres`)다. 이 프로세스는 접속 하나마다 전담 프로세스(backend)를 하나씩 띄워 준다. 접속을 허락할지는 `pg_hba.conf`라는 출입 명부를 위에서부터 읽어 정한다(명부를 읽고 고치는 법은 [접속 글](/posts/postgres-connections-pg-hba)에서 자세히 본다). Ubuntu의 기본 명부는 같은 머신에서 소켓으로 들어오는 접속(`local`)에 `peer` 인증을 쓴다. peer는 비밀번호 대신 운영체제에 "이 소켓 반대편 프로세스가 어느 리눅스 사용자냐"를 물어서, 그 이름이 접속하려는 DB 사용자 이름과 같으면 통과시키는 방식이다. 아래 그림에서 다음을 누르면 처음 에러가 나기까지의 과정이 나온다.
+
+<SequenceDiagram
+  caption="psql을 쳤을 때 서버 안에서 일어나는 일"
+  actors={[
+    { id: "psql", label: "psql (matt)" },
+    { id: "pm", label: "postmaster" },
+    { id: "be", label: "backend" },
+  ]}
+  steps={[
+    {
+      from: "psql",
+      to: "pm",
+      label: "소켓 연결",
+      title: "유닉스 소켓으로 문을 두드린다",
+      detail: "호스트를 안 줬으니 /var/run/postgresql/.s.PGSQL.5432로 붙는다. 포트 번호는 소켓 파일 이름에 들어 있다.",
+    },
+    {
+      from: "pm",
+      to: "be",
+      label: "프로세스 생성",
+      title: "접속마다 전담 프로세스를 띄운다",
+      detail: "postmaster는 연결을 받자마자 backend 프로세스를 하나 fork해서 넘긴다. 인증부터는 backend가 맡는다.",
+    },
+    {
+      from: "psql",
+      to: "be",
+      label: "user=matt",
+      title: "시작 메시지를 보낸다",
+      detail: "사용자 이름과 데이터베이스 이름을 보낸다. 둘 다 지정하지 않았으니 리눅스 계정 이름 matt가 들어갔다.",
+      payload: "user=matt database=matt\napplication_name=psql",
+    },
+    {
+      from: "be",
+      to: "be",
+      label: "pg_hba 확인",
+      title: "출입 명부를 위에서부터 읽는다",
+      detail: "local all all peer 줄에 걸린다. 운영체제에 소켓 반대편 사용자를 묻고, matt라는 답을 받는다. 리눅스 이름과 DB 이름이 같으니 peer는 통과다.",
+    },
+    {
+      from: "be",
+      to: "be",
+      label: "역할 조회",
+      title: "matt라는 역할이 있는지 찾는다",
+      detail: "DB 안의 역할 목록(pg_authid)에 matt가 없다. 리눅스 사용자와 DB 역할은 이름만 맞춰 쓰는 별개의 목록이다.",
+    },
+    {
+      from: "be",
+      to: "psql",
+      label: "FATAL",
+      title: "거절하고 연결을 끊는다",
+      detail: "비밀번호를 묻기 전에 끝났다. 서버 로그에도 같은 줄이 남는다.",
+      payload: "FATAL:  role \"matt\" does not exist",
+    },
+  ]}
+/>
+
+설치할 때 만들어지는 역할은 슈퍼유저 `postgres` 하나뿐이다. 같은 이름의 리눅스 계정 `postgres`도 함께 만들어진다. 그래서 첫 접속은 리눅스에서 `postgres` 사용자로 바꿔서 한다. peer 인증이 이름을 맞춰 보니 비밀번호가 필요 없다.
+
+```bash
+# 리눅스 사용자 postgres로 psql 실행 → DB 역할 postgres로 접속
+sudo -u postgres psql
+```
+
+```text
+psql (16.15 (Ubuntu 16.15-0ubuntu0.24.04.1))
+Type "help" for help.
+
+postgres=#
+```
+
+프롬프트 끝의 `#`은 슈퍼유저라는 표시다. 일반 역할이면 `>`가 나온다. 슈퍼유저로 매일 작업하면 실수 한 번에 모든 DB가 날아가니, 내 이름의 역할을 따로 만든다.
+
+## 내 이름으로 역할과 데이터베이스 만들기
+
+PostgreSQL은 사용자와 그룹을 구분하지 않고 둘 다 역할(role)이라고 부른다. 로그인할 수 있는 역할이 곧 사용자다. 리눅스 셸에서 `createuser`, `createdb` 명령으로 만들 수 있다. 둘 다 내부적으로 SQL(`CREATE ROLE`, `CREATE DATABASE`)을 보내는 얇은 도구다.
+
+```bash
+# DB를 만들 수 있는 로그인 역할 matt 생성 (슈퍼유저는 아니다)
+sudo -u postgres createuser --createdb matt
+
+# 아직 matt라는 데이터베이스가 없으니 이번엔 다른 에러가 난다
+psql
+```
+
+```text
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5491" failed: FATAL:  database "matt" does not exist
+```
+
+역할은 생겼고, 이번엔 데이터베이스가 없다고 한다. psql이 DB 이름도 사용자 이름으로 채웠기 때문이다. 같은 이름의 DB를 하나 만들어 두면 `psql`만 쳐도 바로 들어간다.
+
+```bash
+# 주인이 matt인 데이터베이스 matt 생성
+sudo -u postgres createdb -O matt matt
+
+# 이제 그냥 psql로 접속된다
+psql -c '\conninfo'
+```
+
+```text
+You are connected to database "matt" as user "matt" via socket in "/var/run/postgresql" at port "5491".
+```
+
+같은 일을 SQL로 하면 `CREATE ROLE matt LOGIN CREATEDB`와 `CREATE DATABASE matt OWNER matt`다. 역할 목록은 psql의 `\du`로 본다.
+
+```text
+                             List of roles
+ Role name |                         Attributes
+-----------+------------------------------------------------------------
+ matt      | Create DB
+ postgres  | Superuser, Create role, Create DB, Replication, Bypass RLS
+```
+
+`CREATEDB`, `SUPERUSER` 같은 속성과 권한을 어떻게 나눠 줘야 안전한지는 [역할과 권한 글](/posts/postgres-roles-security)에서 따로 다룬다. 여기서는 "리눅스 계정과 DB 역할은 별개이고, 로컬 소켓 접속은 이름이 같아야 통과한다"만 기억하면 된다.
+
+## 클러스터, 데이터베이스, 스키마, 테이블
+
+PostgreSQL에서 "데이터베이스"라는 말은 생각보다 작은 단위다. 계층은 네 단계다.
+
+- 클러스터: 서버 프로세스 하나가 관리하는 데이터 디렉터리 하나. 포트 하나를 쓴다. 위에서 본 `16/main`이 클러스터다. "DB 서버 인스턴스"와 같은 말이다(여러 서버를 묶은 분산 클러스터가 아니다).
+- 데이터베이스: 클러스터 안에 여러 개. 접속할 때 하나를 골라야 하고, 접속 하나는 DB 하나만 본다.
+- 스키마: 데이터베이스 안의 이름 공간(폴더). 기본으로 `public`이 있다.
+- 테이블, 뷰, 함수 같은 객체: 스키마 안에 있다.
+
+역할은 데이터베이스가 아니라 클러스터에 속한다. 그래서 `matt`라는 역할 하나로 같은 클러스터의 모든 DB에 접속을 시도할 수 있다(실제로 허락할지는 권한과 `pg_hba.conf`가 정한다). 아래 그림에서 이 관계를 볼 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="클러스터 안에 DB, DB 안에 스키마, 역할은 클러스터 전체에 걸친다"
+  nodes={[
+    { id: "cluster", label: "클러스터 16/main", sub: "포트 5432, 디렉터리 하나", x: 200, y: 40, w: 190 },
+    { id: "roles", label: "역할", sub: "postgres, matt", x: 340, y: 130, w: 110 },
+    { id: "dbshop", label: "DB shop", x: 110, y: 130, w: 110 },
+    { id: "dbmatt", label: "DB matt", x: 230, y: 130, w: 100 },
+    { id: "public", label: "스키마 public", x: 70, y: 220, w: 120 },
+    { id: "report", label: "스키마 report", x: 210, y: 220, w: 120 },
+    { id: "books", label: "books", sub: "테이블", x: 70, y: 300, w: 100 },
+    { id: "daily", label: "daily_sales", sub: "테이블", x: 210, y: 300, w: 110 },
+  ]}
+  edges={[
+    { from: "cluster", to: "dbshop" },
+    { from: "cluster", to: "dbmatt" },
+    { from: "cluster", to: "roles", dashed: true },
+    { from: "dbshop", to: "public" },
+    { from: "dbshop", to: "report" },
+    { from: "public", to: "books" },
+    { from: "report", to: "daily" },
+  ]}
+/>
+
+MySQL을 쓰다 왔다면 여기서 헷갈린다. MySQL의 `database`는 PostgreSQL의 스키마에 가깝다. MySQL은 접속한 채로 `SELECT * FROM other_db.users`처럼 다른 DB를 바로 읽지만, PostgreSQL은 DB를 넘나드는 쿼리를 막는다.
+
+```sql
+-- shop DB에 접속한 상태에서 다른 DB의 테이블을 읽으려 하면
+SELECT * FROM postgres.public.books;
+```
+
+```text
+ERROR:  cross-database references are not implemented: "postgres.public.books"
+LINE 1: select * from postgres.public.books
+                      ^
+```
+
+그래서 서로 자주 조인해야 하는 데이터는 DB를 나누지 말고 한 DB 안에서 스키마로 나눈다. 정말 다른 DB를 읽어야 하면 `postgres_fdw` 확장으로 외부 테이블처럼 붙이는 방법이 있다. DB를 나누는 건 서비스끼리 완전히 분리하고 싶을 때다.
+
+### search_path가 스키마를 고른다
+
+테이블 이름 앞에 스키마를 안 쓰면 PostgreSQL은 `search_path`에 적힌 스키마를 순서대로 찾는다. 기본값은 `"$user", public`이다. 내 역할 이름과 같은 스키마가 있으면 거기부터 보고, 없으면 `public`을 본다.
+
+```sql
+SHOW search_path;
+
+CREATE SCHEMA report;                                  -- 보고서용 스키마
+CREATE TABLE report.daily_sales (day date PRIMARY KEY, total integer NOT NULL);
+
+SELECT * FROM daily_sales;                             -- 스키마를 안 쓰면 못 찾는다
+```
+
+```text
+   search_path
+-----------------
+ "$user", public
+(1 row)
+
+CREATE SCHEMA
+CREATE TABLE
+ERROR:  relation "daily_sales" does not exist
+LINE 1: select * from daily_sales
+                      ^
+```
+
+테이블은 분명히 있는데 "없다"고 한다. `report`가 `search_path`에 없어서다. 스키마를 붙여 `report.daily_sales`로 쓰거나, 세션의 경로를 바꾼다. 세션이 아니라 역할에 고정하려면 `ALTER ROLE matt SET search_path = report, public`을 쓴다.
+
+```sql
+SET search_path = report, public;   -- 이 세션에서만. 이제 daily_sales로 찾힌다
+```
+
+아래 그림에서 다음을 누르면 `daily_sales`를 찾는 순서가 나온다. 경로에 없는 스키마는 테이블이 있어도 보지 않는다.
+
+<AlgoTrace
+  caption="search_path에 적힌 스키마만 차례로 본다"
+  memoryLabel="찾은 곳"
+  cells={["\"$user\" → matt", "public", "report"]}
+  steps={[
+    { memory: [], caption: "daily_sales를 찾는다. 경로는 \"$user\", public이다." },
+    { pointer: 0, memory: [], caption: "\"$user\"는 matt로 바뀐다. matt 스키마가 없으니 건너뛴다." },
+    { pointer: 1, memory: [], caption: "public에는 daily_sales가 없다. 경로가 여기서 끝난다." },
+    { memory: ["없음"], caption: "report는 경로에 없어서 보지 않는다. 그래서 relation does not exist가 난다." },
+    { pointer: 2, found: [2], memory: ["report.daily_sales"], caption: "SET search_path = report, public 뒤에는 report를 먼저 보고 바로 찾는다." },
+  ]}
+/>
+
+`relation "..." does not exist`가 나오면 스키마 경로 말고도 대소문자를 의심한다. PostgreSQL은 따옴표 없는 이름을 소문자로 바꿔 저장한다. `CREATE TABLE Users`는 `users`가 된다. 반대로 ORM이나 GUI 도구가 `"Users"`처럼 큰따옴표로 만들면 대문자가 그대로 남고, 그때부터는 쓸 때마다 큰따옴표를 붙여야 한다. 이름은 처음부터 소문자와 밑줄(`order_items`)로 짓는 게 편하다.
+
+### PostgreSQL 15부터 public에 아무나 만들 수 없다
+
+PostgreSQL 14까지는 모든 역할(`PUBLIC`)이 `public` 스키마에 테이블을 만들 수 있었다. 아무 계정이나 남의 DB에 테이블이나 함수를 심을 수 있었고, `search_path`와 엮이면 보안 문제가 됐다. 15부터는 `public` 스키마의 주인이 DB 주인(`pg_database_owner`)으로 바뀌고, 다른 역할의 `CREATE` 권한이 빠졌다. `\dn+`로 보면 이렇다.
+
+```text
+                                       List of schemas
+  Name  |       Owner       |           Access privileges            |      Description
+--------+-------------------+----------------------------------------+------------------------
+ public | pg_database_owner | pg_database_owner=UC/pg_database_owner+| standard public schema
+        |                   | =U/pg_database_owner                   |
+(1 row)
+```
+
+`=U/...` 줄이 `PUBLIC`(모든 역할)의 권한이다. `U`(USAGE, 스키마 안을 볼 수 있음)만 있고 `C`(CREATE)가 없다. 그래서 `postgres`가 주인인 DB에 `matt`가 테이블을 만들려고 하면 막힌다.
+
+```sql
+-- 주인이 postgres인 DB pg1_other에 matt로 접속해서
+CREATE TABLE t (id int);
+```
+
+```text
+ERROR:  permission denied for schema public
+LINE 1: create table t(id int);
+                     ^
+```
+
+옛날 튜토리얼대로 따라 하다가 15 이상에서 이 에러를 만나는 경우가 많다. 고치는 방법은 둘이다. DB 주인을 앱 역할로 하거나(`CREATE DATABASE shop OWNER matt`), 스키마 권한을 명시적으로 준다(`GRANT CREATE ON SCHEMA public TO matt`). 앞의 방법이 단순하고, 역할을 여러 개 나누는 방법은 [권한 글](/posts/postgres-roles-security)에서 본다. 14 이하에서 업그레이드한 DB는 예전 권한이 그대로 남아 있으니 직접 `REVOKE CREATE ON SCHEMA public FROM PUBLIC`을 해 주는 게 좋다.
+
+## 시리즈에서 계속 쓸 서점 DB
+
+이제 `matt`로 작은 온라인 서점 DB를 만든다. 회원(`users`), 책(`books`), 주문(`orders`), 주문에 담긴 책(`order_items`) 네 테이블이다. 이 시리즈의 다른 글도 같은 테이블로 이어진다.
+
+```bash
+# 주인이 matt인 DB shop (createdb 권한이 있어서 matt가 직접 만든다)
+createdb shop
+psql -d shop
+```
+
+```sql
+-- 회원
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- 1, 2, 3 … 자동 증가
+  email      text NOT NULL UNIQUE,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 책: 가격은 원 단위 정수
+CREATE TABLE books (
+  id     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  title  text NOT NULL,
+  author text NOT NULL,
+  price  integer NOT NULL CHECK (price >= 0),
+  stock  integer NOT NULL DEFAULT 0
+);
+
+-- 주문: 누가(user_id) 언제(ordered_at) 어떤 상태로
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id),
+  status     text NOT NULL DEFAULT 'pending',
+  ordered_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 주문 한 건에 담긴 책들. 산 시점의 가격(unit_price)을 따로 남긴다
+CREATE TABLE order_items (
+  order_id   bigint  NOT NULL REFERENCES orders (id),
+  book_id    bigint  NOT NULL REFERENCES books (id),
+  quantity   integer NOT NULL CHECK (quantity > 0),
+  unit_price integer NOT NULL,
+  PRIMARY KEY (order_id, book_id)
+);
+```
+
+이 SQL을 `shop.sql` 파일로 저장했다면 psql 안에서 `\i shop.sql`로 한 번에 실행한다. 만든 테이블은 `\d books`로 확인한다. 컬럼과 타입, 기본 키를 선언하면 저절로 생기는 `books_pkey` 인덱스, `CHECK` 제약, 그리고 이 테이블을 가리키는 외래 키(`Referenced by`)까지 한 화면에 나온다.
+
+### CSV 파일은 psql이 읽어서 넘긴다
+
+책 목록은 엑셀에서 뽑은 CSV가 있다고 하자. 쉼표가 들어간 제목은 큰따옴표로 감싸져 있다.
+
+```text
+title,author,price,stock
+데이터 중심 애플리케이션 설계,마틴 클레프만,36000,12
+PostgreSQL 실무 입문,김하늘,28000,5
+SQL 첫걸음,아사이 아츠시,18000,0
+"Clean Code, 2nd",Robert C. Martin,33000,7
+```
+
+SQL의 `COPY`로 읽으려고 하면 일반 역할은 막힌다.
+
+```sql
+COPY books (title, author, price, stock)
+FROM '/home/matt/books.csv' WITH (FORMAT csv, HEADER true);
+```
+
+```text
+ERROR:  permission denied to COPY from a file
+DETAIL:  Only roles with privileges of the "pg_read_server_files" role may COPY from a file.
+HINT:  Anyone can COPY to stdout or from stdin. psql's \copy command also works for anyone.
+```
+
+`COPY ... FROM '파일'`은 DB 서버 프로세스가 서버의 디스크에서 파일을 읽는다. 아무나 쓰게 하면 서버의 아무 파일이나 읽을 수 있으니 막아 둔 것이다. 내 노트북에 있는 파일이라면 애초에 서버가 볼 수도 없다. psql의 `\copy`는 psql이 내 쪽에서 파일을 읽어 연결로 흘려보낸다. 문법은 같고 앞에 역슬래시만 붙는다. 한 줄로 써야 한다.
+
+```sql
+\copy books (title, author, price, stock) FROM 'books.csv' WITH (FORMAT csv, HEADER true)
+```
+
+```text
+COPY 4
+```
+
+나머지 테이블은 `INSERT`로 몇 줄 넣는다.
+
+```sql
+INSERT INTO users (email, name, created_at) VALUES
+  ('kim@example.com',  '김민지', '2026-10-01 09:00+09'),
+  ('lee@example.com',  '이준호', '2026-10-02 13:20+09'),
+  ('park@example.com', '박서연', '2026-10-03 18:45+09');
+
+INSERT INTO orders (user_id, status, ordered_at) VALUES
+  (1, 'paid',    '2026-10-10 10:00+09'),
+  (2, 'pending', '2026-10-11 21:30+09'),
+  (1, 'shipped', '2026-10-12 08:15+09');
+
+INSERT INTO order_items (order_id, book_id, quantity, unit_price) VALUES
+  (1, 1, 1, 36000),   -- 1번 주문: 데이터 중심 … 1권
+  (1, 3, 2, 18000),   --           SQL 첫걸음 2권
+  (2, 2, 1, 28000),
+  (3, 4, 1, 33000);
+
+-- 주문별 합계
+SELECT o.id, u.name, o.status, sum(i.quantity * i.unit_price) AS total
+FROM orders o
+JOIN users u       ON u.id = o.user_id
+JOIN order_items i ON i.order_id = o.id
+GROUP BY o.id, u.name, o.status
+ORDER BY o.id;
+```
+
+```text
+ id |  name  | status  | total
+----+--------+---------+-------
+  1 | 김민지 | paid    | 72000
+  2 | 이준호 | pending | 28000
+  3 | 김민지 | shipped | 33000
+(3 rows)
+```
+
+## psql에서 매일 쓰는 명령
+
+psql에서 역슬래시로 시작하는 명령(메타 명령)은 SQL이 아니라 psql 자신이 처리한다. 세미콜론도 필요 없다. 자주 쓰는 것만 추리면 이렇다.
+
+```text
+\l              데이터베이스 목록
+\c shop         다른 DB로 접속을 바꾼다 (\c shop postgres 처럼 역할도 바꿀 수 있다)
+\dn             스키마 목록
+\dt             테이블 목록 (\dt report.* 처럼 스키마를 지정할 수 있다)
+\d books        테이블 구조, 인덱스, 제약 조건 (\d+ 는 크기와 저장 방식까지)
+\du             역할 목록
+\x              결과를 세로로 펼쳐 보기 (\x auto 는 화면이 좁을 때만)
+\timing         쿼리마다 걸린 시간 표시
+\e              마지막 쿼리를 편집기($EDITOR)로 열어 고친 뒤 실행
+\i file.sql     파일의 SQL을 실행
+\copy           내 컴퓨터의 파일과 테이블 사이에서 데이터 복사
+\?              메타 명령 전체 목록, \h CREATE TABLE 은 SQL 문법 도움말
+\q              종료
+```
+
+컬럼이 많은 행은 `\x`로 세로로 펼치면 읽기 쉽다.
+
+```text
+Expanded display is on.
+-[ RECORD 1 ]----------------------
+id         | 1
+email      | kim@example.com
+name       | 김민지
+created_at | 2026-10-01 00:00:00+00
+```
+
+`'2026-10-01 09:00+09'`로 넣은 시간이 `00:00:00+00`으로 보인다. 저장이 틀린 게 아니라 이 서버의 표시 시간대가 UTC라서 같은 순간을 UTC로 보여 준 것이다. 이 9시간 차이는 [다음 글](/posts/postgres-data-types)의 첫 장면이다.
+
+### 스크립트는 에러가 나도 끝까지 간다
+
+마이그레이션 파일을 `psql -f`로 돌릴 때 꼭 알아야 할 동작이 있다. psql은 기본적으로 에러가 나도 다음 문장을 계속 실행하고, 끝나면 성공(종료 코드 0)으로 끝난다. 아래 파일은 첫 줄에 컬럼 이름 오타가 있다.
+
+```sql
+-- fix.sql
+UPDATE books SET price = 30000 WHERE titel = 'SQL 첫걸음';      -- 오타: titel
+UPDATE books SET stock = stock + 20 WHERE title = 'SQL 첫걸음';
+```
+
+```bash
+# 그냥 실행하고 종료 코드 확인
+psql -d shop -f fix.sql; echo "exit=$?"
+
+# 에러가 나면 바로 멈추게 실행
+psql -d shop -v ON_ERROR_STOP=1 -f fix.sql; echo "exit=$?"
+```
+
+```text
+psql:fix.sql:1: ERROR:  column "titel" does not exist
+LINE 1: UPDATE books SET price = 30000 WHERE titel = 'SQL 첫걸음';
+                                             ^
+HINT:  Perhaps you meant to reference the column "books.title".
+UPDATE 1
+exit=0
+psql:fix.sql:1: ERROR:  column "titel" does not exist
+LINE 1: UPDATE books SET price = 30000 WHERE titel = 'SQL 첫걸음';
+                                             ^
+HINT:  Perhaps you meant to reference the column "books.title".
+exit=3
+```
+
+첫 번째 실행은 가격 변경이 실패했는데 재고는 20권 늘었고, 종료 코드는 0이다. CI나 배포 스크립트는 이걸 성공으로 본다. `ON_ERROR_STOP=1`을 주면 첫 에러에서 멈추고 종료 코드 3을 돌려준다. 파일 전체를 하나의 트랜잭션으로 묶고 싶으면 `--single-transaction`(`-1`)을 함께 준다. 그러면 중간에 실패했을 때 앞에서 바뀐 것도 모두 되돌아간다.
+
+자주 쓰는 설정은 `~/.psqlrc`에 넣어 두면 psql을 켤 때마다 적용된다.
+
+```text
+\set ON_ERROR_STOP on
+\set HISTFILE ~/.psql_history- :DBNAME
+\pset null '(null)'
+\timing on
+\x auto
+```
+
+`\pset null`은 NULL을 빈칸 대신 글자로 보여 줘서 빈 문자열(`''`)과 구분하게 해 준다. 다만 스크립트는 남의 `.psqlrc` 설정에 기대지 말고, `psql -X -v ON_ERROR_STOP=1 -f ...`처럼 `-X`(시작 파일 무시)와 필요한 옵션을 명령에 직접 적는 편이 안전하다.
+
+
+## 현장에서 relation does not exist를 만나는 순간
+
+배포한 API가 `relation "daily_sales" does not exist`를 낸다. 그런데 내 노트북의 psql에서는 같은 쿼리가 잘 돈다. 이럴 때 테이블이 없다고 결론 내기 전에, 앱과 같은 접속 정보로 붙어서 "지금 어디에 누구로 붙어 있고 어느 스키마를 보는가"부터 확인한다.
+
+```sql
+-- 지금 접속한 DB, 역할, 스키마 검색 경로
+SELECT current_database(), current_user, current_setting('search_path') AS search_path;
+
+-- 스키마와 대소문자를 가리지 않고 테이블이 어디 있는지 찾는다
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE lower(table_name) IN ('daily_sales', 'users')
+ORDER BY 1, 2;
+```
+
+```text
+ current_database | current_user |   search_path
+------------------+--------------+-----------------
+ shop             | matt         | "$user", public
+(1 row)
+
+ table_schema | table_name
+--------------+-------------
+ public       | Users
+ report       | daily_sales
+(2 rows)
+```
+
+두 테이블이 다 있는데 둘 다 못 찾는 경우다. `daily_sales`는 경로에 없는 `report` 스키마에 있고, `Users`는 ORM이 큰따옴표로 만들어서 대문자가 남았다. 그래서 `SELECT * FROM users`도 `relation "users" does not exist`로 실패한다. 첫 번째 결과에서 DB 이름이 예상과 다르면(스테이징 DB에 붙어 있다든지) 접속 문자열 문제이고, 그건 [접속 글](/posts/postgres-connections-pg-hba)에서 다룬다.
+
+고치는 방법은 쿼리에 스키마를 붙이는 것(`report.daily_sales`)이 가장 확실하다. 앱이 늘 같은 경로를 써야 한다면 역할과 DB 조합에 기본값을 박아 둔다. 다음 접속부터 적용된다.
+
+```sql
+-- 이 역할이 이 DB에 붙을 때만 쓰는 기본 경로
+ALTER ROLE matt IN DATABASE shop SET search_path = report, public;
+\drds                                -- 역할·DB별 설정 확인
+```
+
+```text
+               List of settings
+ Role | Database |          Settings
+------+----------+----------------------------
+ matt | shop     | search_path=report, public
+(1 row)
+```
+
+흔한 실수는 psql에서 `SET search_path`로 고쳐 놓고 "이제 된다"고 끝내는 것이다. `SET`은 그 세션에만 남아서 앱의 접속에는 아무 영향이 없다. 마이그레이션 도구가 접속마다 `search_path`를 바꾸는지도 같이 본다. 테이블 이름에 대문자가 섞였다면 따옴표를 붙이고 다닐지, `ALTER TABLE "Users" RENAME TO users`로 한 번에 정리할지 팀에서 정한다.
+
+## 처음 에러를 다시 읽으면
+
+`role "matt" does not exist`는 이제 이렇게 읽힌다. psql이 기본값으로 리눅스 이름을 역할 이름으로 썼고, 소켓 접속이라 `pg_hba.conf`의 `local ... peer` 줄에 걸렸고, peer는 통과했지만 클러스터에 그 역할이 없었다. 역할은 클러스터에, 테이블은 DB 안의 스키마에 있고, 이름 없이 쓴 테이블은 `search_path`가 찾는다. 다른 서버에서 TCP로 붙을 때 무엇이 달라지는지는 [접속 URI와 pg_hba.conf](/posts/postgres-connections-pg-hba)에서 이어서 본다. 그다음 글에서는 이 서점 테이블의 컬럼 타입을 하나씩 고른다. 가격을 `float`로 두면 무슨 일이 생기는지, 시간이 왜 9시간 밀려 보였는지가 [타입 글](/posts/postgres-data-types)에서 풀린다.
+
+## 면접에서 나올 만한 질문
+
+### PostgreSQL에서 클러스터, 데이터베이스, 스키마는 어떻게 다른가요?
+
+클러스터는 서버 프로세스 하나가 관리하는 데이터 디렉터리 하나이고, 그 안에 데이터베이스가 여러 개 있고, 데이터베이스 안에 스키마라는 이름 공간이 있다. 접속 하나는 데이터베이스 하나만 보기 때문에 DB를 넘나드는 조인은 안 된다. 그래서 같이 조회할 데이터는 한 DB 안에서 스키마로 나눈다. 역할은 클러스터 단위라서 모든 DB에 공통이다.
+
+### 설치 직후 psql을 쳤는데 role does not exist가 나오는 이유는요?
+
+psql은 사용자 이름을 안 주면 운영체제 계정 이름을 역할 이름으로 쓰는데, 설치 직후에는 `postgres` 역할만 있어서다. `sudo -u postgres psql`로 들어가 `CREATE ROLE ... LOGIN`과 같은 이름의 DB를 만들면 된다. Ubuntu 기본 설정에서 로컬 소켓 접속은 peer 인증이라 리눅스 사용자와 역할 이름이 같아야 통과한다.
+
+### 테이블이 분명히 있는데 relation does not exist가 나면 무엇을 보나요?
+
+먼저 `current_database()`, `current_user`, `search_path`로 지금 어디에 붙어 무엇을 보고 있는지 확인한다. 테이블이 경로에 없는 스키마에 있으면 스키마를 붙여 쓰거나 `ALTER ROLE ... IN DATABASE ... SET search_path`로 기본 경로를 정한다. 다음은 대소문자다. 따옴표 없는 이름은 소문자로 바뀌어서, `"Users"`처럼 만든 테이블은 따옴표 없이 찾을 수 없다.
+
+### PostgreSQL 15에서 public 스키마 권한이 어떻게 바뀌었나요?
+
+14까지는 모든 역할이 `public` 스키마에 객체를 만들 수 있었는데, 15부터는 `public`의 주인이 DB 주인(`pg_database_owner`)이 되고 PUBLIC의 CREATE 권한이 빠졌다. 다른 역할이 같은 이름의 함수나 테이블을 심어 `search_path`를 악용하는 걸 막으려는 변경이다. 그래서 옛 튜토리얼대로 하면 `permission denied for schema public`이 나고, DB 주인을 앱 역할로 하거나 명시적으로 GRANT해야 한다. 14 이하에서 업그레이드한 DB는 예전 권한이 남아 있어 직접 REVOKE하는 게 좋다.
+
+### COPY와 psql의 `\copy`는 무엇이 다른가요?
+
+`COPY ... FROM '파일'`은 DB 서버 프로세스가 서버 디스크의 파일을 읽어서, 슈퍼유저나 `pg_read_server_files` 권한이 있어야 한다. 아무나 쓰면 서버의 아무 파일이나 읽을 수 있기 때문이다. `\copy`는 psql이 내 쪽에서 파일을 읽어 연결로 흘려보내므로 일반 역할로도 되고, 내 컴퓨터에 있는 파일을 넣을 때는 이쪽을 쓴다. 문법은 같고 한 줄로 써야 한다.
+
+### 마이그레이션 SQL을 psql -f로 돌릴 때 주의할 점은요?
+
+psql은 기본적으로 에러가 나도 다음 문장을 계속 실행하고 종료 코드 0으로 끝나서, CI가 실패를 놓친다. `-v ON_ERROR_STOP=1`로 첫 에러에서 멈추게 하고, 필요하면 `--single-transaction`으로 전체를 묶어 실패하면 모두 되돌린다. PostgreSQL은 DDL도 트랜잭션으로 되돌릴 수 있어서 이 방식이 잘 맞는다. 남의 `.psqlrc`에 기대지 않도록 `-X`도 함께 준다.

@@ -106,4 +106,19 @@ export const BIG_O_NOTATION: QuizQuestion[] = [
       "reduce는 한 번 돌지만 k번째 단계의 전개 구문이 k개 속성을 복사해서 합이 n²에 비례한다. 같은 객체에 넣거나 Object.fromEntries를 쓰면 O(n)이다.",
     anchor: "자바스크립트에-숨은-반복문",
   },
+  {
+    id: "big-o-notation-8",
+    post: "big-o-notation",
+    question: "입력 크기를 두 배로 늘릴 때마다 처리 시간이 매번 약 네 배가 된다. 이 코드의 시간 복잡도로 가장 알맞은 것은?",
+    choices: [
+      "O(log n)",
+      "O(n)",
+      "O(n log n)",
+      "O(n²)",
+    ],
+    answer: 3,
+    explanation:
+      "n이 두 배일 때 n²은 네 배가 된다. O(n)이면 두 배, O(n log n)이면 두 배를 조금 넘는다. 실제 측정에서 includes를 반복문 안에서 부른 코드가 정확히 이 모양으로 늘었다.",
+    anchor: "운영에서-n은-이런-모양으로-드러난다",
+  },
 ];

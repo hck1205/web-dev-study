@@ -1,0 +1,428 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-type-graph");
+
+서점에 팔로우 기능을 붙였다. 다른 회원을 팔로우하면 그 사람이 산 책과 리뷰가 피드에 뜬다. 그러자 기획에서 다음 요청이 온다. "내가 팔로우하는 사람, 그리고 그 사람들이 팔로우하는 사람까지 많이 산 책을 추천해 주세요. 내가 이미 산 책은 빼고요."
+
+SQL로도 쓸 수 있다. 팔로우 테이블을 한 번 조인하면 한 단계, 두 번 조인하면 두 단계다. 단계 수를 정하지 않으려면 재귀 CTE를 쓴다. 그런데 질문이 "세 단계 안에서 가장 짧은 연결", "같은 카드와 같은 기기를 함께 쓰는 계정 무리"처럼 관계를 따라가는 모양으로 바뀔수록 SQL은 길어지고, 실행 계획은 점점 읽기 어려워진다.
+
+그래프 DB는 관계를 따라가는 질문을 위해 만들어졌다. 데이터를 점(노드)과 선(관계)으로 저장하고, 질문도 점과 선의 그림으로 쓴다. 이 글은 Neo4j와 Cypher로 그 모델을 보고, 같은 질문을 PostgreSQL 16의 재귀 CTE로 직접 돌려 비교한다. [와이드 컬럼 DB](/posts/db-type-wide-column)에서 이어지는 다섯 번째 글이다. 이 컨테이너에는 Neo4j가 없어서 Cypher 결과는 예시로 표시했고, PostgreSQL 쪽은 실제로 실행한 출력이다.
+
+## 친구의 친구가 산 책
+
+예제는 회원 여섯 명과 책 네 권이다. 화살표는 팔로우 방향이다.
+
+```text
+팔로우                         산 책
+kim  → lee, park               kim  101
+lee  → choi                    lee  101, 102
+park → choi, jung              park 103
+choi → kim                     choi 102, 104
+jung → han                     jung 103
+                               han  104
+```
+
+kim에게 추천할 책을 손으로 구해 보면 이렇다. kim이 팔로우하는 사람은 lee, park(1단계). 그 사람들이 팔로우하는 사람은 choi, jung(2단계). 이 네 명이 산 책 중 kim이 이미 산 101번을 빼면, 102번(lee, choi)과 103번(park, jung)이 두 명씩, 104번(choi)이 한 명이다.
+
+관계형으로 저장하면 표 세 개다.
+
+```sql
+CREATE TABLE people (id int PRIMARY KEY, name text NOT NULL);
+
+CREATE TABLE follows (
+  follower int REFERENCES people(id),   -- 팔로우하는 사람
+  followee int REFERENCES people(id),   -- 팔로우받는 사람
+  PRIMARY KEY (follower, followee)
+);
+
+CREATE TABLE bought (
+  person_id int REFERENCES people(id),
+  book_id   int,
+  PRIMARY KEY (person_id, book_id)
+);
+```
+
+관계 하나하나가 `follows` 테이블의 행이다. 한 단계를 따라가려면 `follows`를 한 번 조인하고, 조인할 때마다 `follower` 인덱스에서 키를 찾는다.
+
+## 점과 선으로 저장하기
+
+그래프 DB에서는 회원과 책이 노드이고, 팔로우와 구매가 관계(relationship)다. 노드에는 종류를 나타내는 라벨(`:User`, `:Book`)과 속성이, 관계에는 방향과 타입(`:FOLLOWS`, `:BOUGHT`)과 속성이 붙는다. 이런 모델을 속성 그래프(property graph)라고 부른다. 아래 그림이 서점 그래프의 모양이다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="속성 그래프: 노드에 라벨과 속성, 관계에 타입과 방향이 있다."
+  nodes={[
+    { id: "kim", label: "kim", sub: ":User", x: 70, y: 60, w: 90 },
+    { id: "lee", label: "lee", sub: ":User", x: 200, y: 60, w: 90 },
+    { id: "choi", label: "choi", sub: ":User", x: 330, y: 60, w: 90 },
+    { id: "b101", label: "101", sub: ":Book", x: 135, y: 200, w: 90 },
+    { id: "b102", label: "102", sub: ":Book", x: 265, y: 200, w: 90 },
+  ]}
+  edges={[
+    { from: "kim", to: "lee", label: "FOLLOWS" },
+    { from: "lee", to: "choi", label: "FOLLOWS" },
+    { from: "kim", to: "b101", label: "BOUGHT" },
+    { from: "lee", to: "b102", label: "BOUGHT" },
+    { from: "choi", to: "b102", label: "BOUGHT" },
+  ]}
+/>
+
+관계형과 가장 다른 점은 관계가 일급 데이터라는 것이다. 테이블에서는 관계가 외래 키 값이라서, 따라가려면 그 값으로 다른 테이블을 다시 찾아야 한다. 그래프 DB에서는 관계 자체가 저장된 대상이고, 노드에서 관계를 따라 이웃 노드로 바로 건너간다. 관계에 속성을 붙이기도 자연스럽다. `(kim)-[:FOLLOWS {since: date('2026-03-01')}]->(lee)`처럼 쓴다.
+
+## Cypher로 그림 그리듯 묻기
+
+Neo4j의 질의 언어 Cypher는 괄호로 노드를, 화살표로 관계를 그린다. `(a)-[:FOLLOWS]->(b)`는 "a가 b를 팔로우한다"는 모양이다. 데이터를 넣어 보자.
+
+```sql
+// 회원 id를 유일하게 (Neo4j 5 문법)
+CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE;
+
+// 노드와 관계를 그림 그리듯 만든다
+CREATE (kim:User {id: 42, name: 'kim'}),  (lee:User {id: 43, name: 'lee'}),
+       (park:User {id: 44, name: 'park'}), (choi:User {id: 45, name: 'choi'}),
+       (jung:User {id: 46, name: 'jung'}), (han:User {id: 47, name: 'han'}),
+       (b101:Book {id: 101}), (b102:Book {id: 102}), (b103:Book {id: 103}), (b104:Book {id: 104}),
+       (kim)-[:FOLLOWS]->(lee), (kim)-[:FOLLOWS]->(park), (lee)-[:FOLLOWS]->(choi),
+       (park)-[:FOLLOWS]->(choi), (park)-[:FOLLOWS]->(jung), (choi)-[:FOLLOWS]->(kim),
+       (jung)-[:FOLLOWS]->(han),
+       (kim)-[:BOUGHT]->(b101), (lee)-[:BOUGHT]->(b101), (lee)-[:BOUGHT]->(b102),
+       (park)-[:BOUGHT]->(b103), (choi)-[:BOUGHT]->(b102), (choi)-[:BOUGHT]->(b104),
+       (jung)-[:BOUGHT]->(b103), (han)-[:BOUGHT]->(b104);
+```
+
+(Cypher는 SQL 하이라이트로 보이지만 주석이 `//`다.) 추천 질문은 이렇게 쓴다.
+
+```sql
+MATCH (me:User {name: 'kim'})-[:FOLLOWS*1..2]->(other:User)-[:BOUGHT]->(b:Book)
+WHERE other <> me
+  AND NOT EXISTS { (me)-[:BOUGHT]->(b) }        // 내가 이미 산 책은 뺀다
+RETURN b.id AS book, count(DISTINCT other) AS buyers
+ORDER BY buyers DESC, book;
+```
+
+```text
++---------------+
+| book | buyers |
++---------------+
+| 102  | 2      |
+| 103  | 2      |
+| 104  | 1      |
++---------------+
+
+3 rows
+```
+
+(cypher-shell 형식의 예시 출력이다. 값은 아래 PostgreSQL 결과, 플레이그라운드 결과와 같다.)
+
+`[:FOLLOWS*1..2]`가 "팔로우를 1번에서 2번까지 따라간다"는 가변 길이 관계다. 단계를 바꾸려면 숫자만 바꾸면 된다. 가장 짧은 연결도 한 줄이다.
+
+```sql
+// kim에서 han까지 팔로우를 따라가는 가장 짧은 길 (최대 6단계)
+MATCH p = shortestPath((a:User {name: 'kim'})-[:FOLLOWS*..6]->(b:User {name: 'han'}))
+RETURN [n IN nodes(p) | n.name] AS path, length(p) AS hops;
+```
+
+```text
++---------------------------------------+
+| path                           | hops |
++---------------------------------------+
+| ["kim", "park", "jung", "han"] | 3    |
++---------------------------------------+
+```
+
+(예시 출력이다. kim → park → jung → han이 유일한 3단계 경로다.)
+
+Cypher 말고도 그래프 질의 언어가 몇 있다. Apache TinkerPop의 Gremlin은 `g.V().has('name','kim').out('FOLLOWS')...`처럼 단계를 이어 붙이는 방식이고, RDF 데이터에는 SPARQL을 쓴다. 2024년에는 ISO가 속성 그래프 질의 표준 GQL(ISO/IEC 39075)을 발표했는데, 문법이 Cypher와 많이 닮았다. Amazon Neptune은 Gremlin, openCypher, SPARQL을 함께 지원한다.
+
+## 관계형에서 같은 질문을 하면
+
+PostgreSQL에서는 재귀 CTE로 쓴다. 재귀 CTE의 문법 자체는 [계층형 쿼리 글](/posts/sqld-top-n-hierarchical-pivot)에서 다뤘으니 여기서는 결과와 비용을 본다. 먼저 kim에서 두 단계까지 닿는 사람이다.
+
+```sql
+WITH RECURSIVE reach(id, depth) AS (
+  SELECT followee, 1 FROM follows WHERE follower = 42      -- 1단계: kim이 팔로우하는 사람
+  UNION
+  SELECT f.followee, r.depth + 1                           -- 다음 단계: 그 사람들이 팔로우하는 사람
+  FROM reach r
+  JOIN follows f ON f.follower = r.id
+  WHERE r.depth < 2                                        -- 두 단계에서 멈춘다
+)
+SELECT p.name, min(r.depth) AS depth
+FROM reach r JOIN people p ON p.id = r.id
+WHERE r.id <> 42
+GROUP BY p.name
+ORDER BY depth, p.name;
+```
+
+```text
+ name | depth
+------+-------
+ lee  |     1
+ park |     1
+ choi |     2
+ jung |     2
+(4 rows)
+```
+
+choi는 lee를 거쳐도, park을 거쳐도 닿는다. `UNION`이 같은 `(id, depth)` 행을 한 번만 남겨서 choi가 두 번 나오지 않았다. 추천까지 이으면 이렇다.
+
+```sql
+WITH RECURSIVE reach(id, depth) AS (
+  SELECT followee, 1 FROM follows WHERE follower = 42
+  UNION
+  SELECT f.followee, r.depth + 1
+  FROM reach r JOIN follows f ON f.follower = r.id
+  WHERE r.depth < 2
+)
+SELECT b.book_id, count(DISTINCT b.person_id) AS buyers
+FROM (SELECT DISTINCT id FROM reach WHERE id <> 42) r
+JOIN bought b ON b.person_id = r.id
+WHERE b.book_id NOT IN (SELECT book_id FROM bought WHERE person_id = 42)  -- 이미 산 책 제외
+GROUP BY b.book_id
+ORDER BY buyers DESC, b.book_id;
+```
+
+```text
+ book_id | buyers
+---------+--------
+     102 |      2
+     103 |      2
+     104 |      1
+(3 rows)
+```
+
+결과는 같다. 다만 이 그래프에는 choi → kim이라는 순환이 있다. `WHERE r.depth < 2`를 빼면 깊이가 계속 늘어나는 새 행이 생겨 쿼리가 끝나지 않는다. PostgreSQL 14부터는 `CYCLE id SET is_cycle USING path`를 붙여 이미 지난 노드로 돌아가는 경로를 끊을 수 있다. Cypher의 가변 길이 관계는 한 경로 안에서 같은 관계를 두 번 쓰지 않아서 이 문제가 기본으로 막혀 있다.
+
+## 단계가 늘면 닿는 사람이 폭발한다
+
+작은 예제로는 차이가 안 보인다. 회원 10만 명이 각자 무작위로 20명씩 팔로우하는 그래프(관계 약 200만 개)를 만들고, 한 회원에서 단계를 늘려 가며 닿는 사람 수와 시간을 쟀다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+WITH RECURSIVE reach(id, depth) AS (
+  SELECT followee, 1 FROM follows WHERE follower = 1000
+  UNION
+  SELECT f.followee, r.depth + 1
+  FROM reach r JOIN follows f ON f.follower = r.id
+  WHERE r.depth < 3                 -- 1, 2, 3, 4로 바꿔 가며 실행했다
+)
+SELECT count(DISTINCT id) FROM reach;
+```
+
+```text
+ Aggregate (actual time=64.690..64.696 rows=1 loops=1)
+         ->  CTE Scan on reach (actual time=0.040..62.599 rows=8106 loops=1)
+ Execution Time: 65.332 ms
+```
+
+(3단계 실행 계획에서 볼 줄만 추렸다.) `CTE Scan`의 `rows`가 재귀가 만든 행 수이고, `Execution Time`이 전체 시간이다. 네 번 돌린 결과를 모으면 이렇다.
+
+```text
+단계 | 닿은 사람 (중복 제외) | 재귀가 만든 행 | 실행 시간
+-----+-----------------------+----------------+-----------
+  1  |                    20 |             20 |   0.7 ms
+  2  |                   420 |            420 |   3.8 ms
+  3  |                 8,082 |          8,106 |  65.3 ms
+  4  |                80,157 |         86,591 | 515.0 ms
+```
+
+단계마다 대략 20배씩 늘다가, 4단계에서 전체 10만 명 중 8만 명에 닿았다. 시간도 같은 비율로 늘었다. 이건 그래프 DB도 피할 수 없다. 8만 명에 닿는 질문은 어떤 DB로 하든 8만 명을 방문한다. 그래프 DB가 빠르다는 말을 "어떤 탐색이든 공짜"로 들으면 안 된다. 실무에서 그래프 질의를 짤 때 가장 먼저 하는 일이 깊이와 방향, 관계 타입을 제한하는 것이다.
+
+여기에 슈퍼노드(supernode) 문제가 겹친다. 팔로워가 백만 명인 유명인 한 명이 경로 중간에 있으면, 그 노드를 지나는 순간 탐색할 이웃이 백만 개로 늘어난다. 이런 노드는 탐색에서 건너뛰거나, 관계를 타입별로 나누거나, 결과를 미리 계산해 둔다.
+
+## 이웃을 바로 찾아가는 구조
+
+그러면 그래프 DB는 어디서 이득을 볼까. 관계형에서 한 단계를 건너갈 때마다 하는 일은 "이 회원 id로 `follows`의 B-tree 인덱스를 찾는" 것이다. 인덱스 탐색은 데이터가 커질수록 조금씩(로그 시간으로) 느려지고, 매번 루트에서부터 내려간다.
+
+Neo4j가 오래 써 온 저장 형식은 노드 레코드가 자기 첫 관계의 위치를 가리키고, 관계 레코드는 양 끝 노드의 다음 관계 위치를 가리키는 연결 목록이다. 이웃을 찾으려면 인덱스를 거치지 않고 포인터를 따라가면 된다. 이걸 index-free adjacency라고 부른다. 한 단계를 건너가는 비용이 전체 그래프 크기와 상관없이 그 노드의 관계 수에만 비례한다. 아래 그림에서 다음을 누르면 kim에서 출발해 관계를 따라 이웃으로 건너간다.
+
+<VectorSpace
+  caption="노드에서 관계를 따라 이웃으로 바로 건너간다"
+  groups={[
+    { id: "me", label: "출발" },
+    { id: "hop1", label: "1단계" },
+    { id: "hop2", label: "2단계" },
+  ]}
+  points={[
+    { id: "kim", label: "kim", x: 50, y: 130, group: "me", labelAt: "left" },
+    { id: "lee", label: "lee", x: 150, y: 60, group: "hop1" },
+    { id: "park", label: "park", x: 150, y: 200, group: "hop1" },
+    { id: "choi", label: "choi", x: 260, y: 80, group: "hop2" },
+    { id: "jung", label: "jung", x: 260, y: 210, group: "hop2" },
+    { id: "han", label: "han", x: 355, y: 210 },
+  ]}
+  edges={[
+    ["kim", "lee"],
+    ["kim", "park"],
+    ["lee", "choi"],
+    ["park", "choi"],
+    ["park", "jung"],
+    ["choi", "kim"],
+    ["jung", "han"],
+  ]}
+  steps={[
+    { showEdges: true, caption: "회원 여섯 명과 팔로우 관계 일곱 개다. 탐색은 kim 노드 하나를 찾는 데서 시작한다. 이것만 인덱스를 쓴다." },
+    { showEdges: true, path: ["kim", "lee"], caption: "kim 노드에 붙은 관계 목록을 따라 lee로 건너간다. follows 표 전체를 찾지 않는다." },
+    { showEdges: true, path: ["kim", "lee", "choi"], caption: "lee의 관계 목록에서 choi로 간다. 2단계다." },
+    { showEdges: true, path: ["kim", "park", "jung"], caption: "kim의 다른 관계로 park, 다시 jung까지. choi는 이미 들렀으니 다시 가지 않는다." },
+    { showEdges: true, path: ["kim", "park", "jung", "han"], caption: "한 단계 더 가면 han이다. 단계마다 일하는 양은 지금 노드의 관계 수만큼이다." },
+  ]}
+/>
+
+이 구조의 효과는 그래프가 클수록, 질의가 그래프의 작은 부분만 건드릴수록 커진다. 회원이 1억 명이어도 kim 주변 두 단계만 보는 질문은 그 주변만 읽는다. 반대로 앞의 실험처럼 그래프 대부분을 훑는 질문에서는 차이가 줄어든다. 공정하게 말하면, 얕은 탐색(한두 단계)은 관계형 DB도 인덱스로 충분히 빠르다. 그래프 DB가 확실히 앞서는 건 깊이가 정해지지 않은 탐색, 경로 찾기, 패턴 매칭(이런 모양으로 연결된 노드 무리 찾기)이고, 무엇보다 그런 질문을 짧고 읽기 쉽게 쓸 수 있다는 점이 크다.
+
+## 너비 우선으로 따라가 보기
+
+"두 단계 안에 닿는 사람"을 구하는 건 너비 우선 탐색(BFS)이다. 지금 단계의 노드들을 큐에 넣고, 하나씩 꺼내 이웃 중 처음 보는 노드를 다음 단계로 넣는다. 아래 그림에서 다음을 누르면 큐가 차고 비는 모습이 보인다.
+
+<AlgoTrace
+  caption="BFS: 처음 보는 이웃만 큐에 넣는다"
+  memoryLabel="큐 (다음에 볼 사람)"
+  cells={["kim", "lee", "park", "choi", "jung", "han"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["kim"], caption: "kim에서 시작한다. 방문한 사람에 kim을 표시한다." },
+    { pointer: 0, found: [0, 1, 2], memory: ["lee", "park"], caption: "kim을 꺼내 이웃 lee, park을 넣는다. 둘 다 1단계다." },
+    { pointer: 1, found: [0, 1, 2, 3], memory: ["park", "choi"], caption: "lee를 꺼낸다. 이웃 choi는 처음이라 2단계로 넣는다." },
+    { pointer: 2, found: [0, 1, 2, 3, 4], memory: ["choi", "jung"], caption: "park을 꺼낸다. choi는 이미 봤으니 건너뛰고 jung만 넣는다." },
+    { pointer: 3, found: [0, 1, 2, 3, 4], memory: ["jung"], caption: "choi를 꺼낸다. 이웃 kim은 출발점이라 이미 방문했다. 순환이 여기서 끊긴다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: [], caption: "jung은 2단계라 더 넣지 않는다. 깊이 2에서 멈췄으니 han은 닿지 않는다." },
+  ]}
+/>
+
+이제 추천까지 직접 짜 보자. 팔로우 목록, 구매 목록, 출발 회원, 최대 단계를 받아서, 닿은 사람들이 산 책 중 출발 회원이 사지 않은 책을 `[책 id, 산 사람 수]`로 돌려준다. 산 사람 수 내림차순, 같으면 책 id 오름차순이다.
+
+<CodePlayground
+  caption="BFS로 친구의 친구가 산 책 추천하기"
+  functionName="recommend"
+  initialCode={`function recommend(follows, bought, me, maxDepth) {
+  // follows: [[팔로우하는 사람, 팔로우받는 사람], ...]
+  // bought:  [[사람, 책 id], ...]
+  // 결과: [[책 id, 산 사람 수], ...]
+  return [];
+}`}
+  solution={`function recommend(follows, bought, me, maxDepth) {
+  const adj = new Map();                       // 인접 목록 = 노드마다 관계 목록
+  for (const [a, b] of follows) {
+    if (!adj.has(a)) adj.set(a, []);
+    adj.get(a).push(b);
+  }
+
+  const seen = new Set([me]);
+  const reached = new Set();
+  let frontier = [me];
+  for (let d = 1; d <= maxDepth; d++) {        // 단계별 BFS
+    const next = [];
+    for (const u of frontier) {
+      for (const v of adj.get(u) ?? []) {
+        if (seen.has(v)) continue;
+        seen.add(v);
+        reached.add(v);
+        next.push(v);
+      }
+    }
+    frontier = next;
+  }
+
+  const mine = new Set(bought.filter(([p]) => p === me).map(([, b]) => b));
+  const count = new Map();
+  for (const [p, b] of bought) {
+    if (reached.has(p) && !mine.has(b)) count.set(b, (count.get(b) ?? 0) + 1);
+  }
+  return [...count].sort((x, y) => y[1] - x[1] || x[0] - y[0]);
+}`}
+  tests={[
+    {
+      label: "kim, 2단계",
+      args: [
+        [["kim", "lee"], ["kim", "park"], ["lee", "choi"], ["park", "choi"], ["park", "jung"], ["choi", "kim"], ["jung", "han"]],
+        [["kim", 101], ["lee", 101], ["lee", 102], ["park", 103], ["choi", 102], ["choi", 104], ["jung", 103], ["han", 104]],
+        "kim",
+        2,
+      ],
+      expected: [[102, 2], [103, 2], [104, 1]],
+    },
+    {
+      label: "kim, 1단계",
+      args: [
+        [["kim", "lee"], ["kim", "park"], ["lee", "choi"], ["park", "choi"], ["park", "jung"], ["choi", "kim"], ["jung", "han"]],
+        [["kim", 101], ["lee", 101], ["lee", 102], ["park", 103], ["choi", 102], ["choi", 104], ["jung", 103], ["han", 104]],
+        "kim",
+        1,
+      ],
+      expected: [[102, 1], [103, 1]],
+    },
+    {
+      label: "kim, 3단계 (han까지 닿는다)",
+      args: [
+        [["kim", "lee"], ["kim", "park"], ["lee", "choi"], ["park", "choi"], ["park", "jung"], ["choi", "kim"], ["jung", "han"]],
+        [["kim", 101], ["lee", 101], ["lee", 102], ["park", 103], ["choi", 102], ["choi", 104], ["jung", 103], ["han", 104]],
+        "kim",
+        3,
+      ],
+      expected: [[102, 2], [103, 2], [104, 2]],
+    },
+    {
+      label: "아무도 팔로우하지 않는 han",
+      args: [
+        [["kim", "lee"], ["jung", "han"]],
+        [["han", 104], ["kim", 101]],
+        "han",
+        2,
+      ],
+      expected: [],
+    },
+  ]}
+/>
+
+`adj`가 인접 목록이다. 노드마다 자기 관계 목록을 들고 있어서 이웃을 찾을 때 전체 `follows`를 뒤지지 않는다. index-free adjacency를 메모리에서 흉내 낸 셈이다.
+
+## 그래프 DB가 맞는 곳과 아닌 곳
+
+맞는 곳은 질문의 중심에 "연결"이 있는 데이터다.
+
+- 추천. 함께 산 책, 친구의 친구, 비슷한 취향의 사람이 좋아한 것처럼 관계를 몇 단계 따라가는 질문이다.
+- 이상 거래 탐지. 서로 다른 계정이 같은 카드, 같은 기기, 같은 주소를 돌려 쓰는 고리를 찾는다. 테이블로는 조인 조건이 계속 바뀌는 질문인데, 그래프에서는 "이런 모양으로 연결된 무리"라는 패턴 하나로 쓴다.
+- 권한과 조직도. "이 사용자가 그룹의 그룹의 그룹을 거쳐 이 문서에 접근할 수 있나"처럼 깊이가 정해지지 않은 상속이다.
+- 지식 그래프와 메타데이터. 개체 사이의 관계 종류가 많고 계속 늘어나는 데이터다. 관계 타입을 추가해도 스키마 변경이 필요 없다.
+- 인프라 의존성. 서비스, 서버, 네트워크 장비 사이의 연결에서 "이 스위치가 죽으면 영향받는 서비스 전부"를 찾는다.
+
+맞지 않는 곳도 뚜렷하다. 전체 노드의 속성을 훑는 집계("이번 달 책별 매출")는 그래프 DB의 강점이 아니다. 관계가 거의 없고 회원 정보 CRUD가 전부인 데이터에 그래프 DB를 쓰면 얻는 것 없이 운영만 늘어난다. 초당 수십만 건의 단순 쓰기도 맞지 않는다.
+
+확장도 고려해야 한다. 그래프는 나누기 어렵다. 키-값 데이터는 키로 자르면 끝이지만, 그래프를 여러 서버로 자르면 서버 경계를 넘는 관계가 생기고, 탐색이 경계를 넘을 때마다 네트워크 왕복이 붙는다. 그래서 Neo4j는 기본적으로 그래프 전체를 각 서버에 복제하고, 쓰기는 합의로 묶인 주 서버들이, 읽기는 복제본들이 나눠 받는 식으로 확장한다. 데이터가 서버 한 대의 디스크와 메모리를 크게 넘으면 설계가 어려워진다.
+
+## 관계형 DB와 함께 쓰기
+
+서점이라면 회원, 주문, 구매 기록의 원본은 PostgreSQL에 둔다. 그래프 DB에는 추천이나 탐지에 필요한 노드와 관계만 옮겨 둔다. 원본에서 CDC나 이벤트로 팔로우와 구매를 흘려보내고, 그래프 쪽은 조금 늦어도 되는 파생 데이터로 다룬다. 망가지면 원본에서 다시 만든다.
+
+그래프 DB를 새로 들이기 전에 PostgreSQL 안에서 해 볼 수 있는 것도 많다. 깊이가 정해진 한두 단계 탐색은 인덱스와 조인으로 충분하고, 깊이가 정해지지 않은 계층은 재귀 CTE로 된다. PostgreSQL 확장 Apache AGE를 쓰면 같은 DB 안에서 openCypher로 질의할 수도 있다. 넘어갈 신호는 탐색 질의가 서비스의 중심 기능이 되고, 재귀 CTE가 길어져 아무도 고치지 못하거나, 깊이를 조금만 늘려도 응답 시간이 목표를 넘길 때다.
+
+## 관계를 저장하면 질문이 짧아진다
+
+그래프 DB는 관계를 외래 키 값이 아니라 저장된 대상으로 둔다. 노드가 자기 관계 목록을 들고 있으니 이웃으로 건너가는 비용이 전체 크기와 상관없고, 질문도 점과 선의 그림으로 짧게 쓴다. 그래도 닿는 노드가 기하급수로 늘어나는 건 어떤 DB도 막지 못하니, 깊이와 방향을 제한하는 게 설계의 시작이다. 다음 글은 시간 순서로 쌓이는 데이터를 다루는 [시계열 DB](/posts/db-type-time-series)다.
+
+## 면접에서 나올 만한 질문
+
+### 그래프 DB는 어떤 문제를 풀려고 나왔나요?
+
+관계를 여러 단계 따라가는 질문을 쉽고 빠르게 하려고 나왔다. 관계형에서는 단계마다 조인이 하나씩 늘고, 깊이가 정해지지 않으면 재귀 CTE가 필요해 쿼리가 복잡해진다. 그래프 DB는 노드와 관계를 그대로 저장하고 질의도 패턴으로 쓴다. 추천, 이상 거래 탐지, 권한 상속처럼 연결이 질문의 중심인 곳에 쓴다.
+
+### index-free adjacency가 무엇인가요?
+
+노드가 자기 관계 목록의 위치를 직접 가리키고 있어서, 이웃을 찾을 때 인덱스를 거치지 않고 포인터를 따라가는 저장 방식이다. 한 단계를 건너는 비용이 전체 그래프 크기가 아니라 그 노드의 관계 수에 비례한다. 관계형에서는 단계마다 B-tree 인덱스를 루트부터 다시 찾는다. 그래서 큰 그래프의 작은 부분만 탐색하는 질문에서 차이가 커진다.
+
+### 관계형 DB로도 친구의 친구를 구할 수 있는데 왜 그래프 DB를 쓰나요?
+
+한두 단계라면 관계형으로 충분하다. 차이는 깊이가 정해지지 않은 탐색, 최단 경로, 특정 모양으로 연결된 무리를 찾는 패턴 매칭에서 난다. 재귀 CTE는 순환 처리와 깊이 제한을 직접 챙겨야 하고 길어지면 읽기 어렵다. Cypher는 `[:FOLLOWS*1..3]`, `shortestPath`처럼 짧게 쓰고, 탐색도 인접 목록을 따라가서 효율적이다.
+
+### 탐색 깊이를 늘리면 어떤 문제가 생기나요?
+
+닿는 노드 수가 관계 수의 거듭제곱으로 늘어난다. 이 글의 실험에서는 회원마다 20명을 팔로우하는 10만 명 그래프에서 4단계 만에 8만 명에 닿았고 시간도 같은 비율로 늘었다. 이건 그래프 DB도 피할 수 없어서 깊이, 방향, 관계 타입을 제한한다. 팔로워가 아주 많은 슈퍼노드는 탐색에서 제외하거나 결과를 미리 계산한다.
+
+### 그래프 DB는 왜 수평 확장이 어렵나요?
+
+그래프를 서버 여러 대로 자르면 경계를 넘는 관계가 생기고, 탐색이 경계를 넘을 때마다 네트워크 왕복이 붙는다. 어떤 탐색이 어느 경계를 넘을지 미리 알기도 어렵다. 그래서 그래프 전체를 각 서버에 복제하고 읽기를 나누는 방식이 일반적이다. 데이터가 한 대를 크게 넘으면 도메인별로 그래프를 나누는 설계가 필요하다.
+
+### 그래프 DB를 도입한다면 관계형 DB와 어떻게 나누나요?
+
+원본은 관계형 DB에 두고, 그래프 DB에는 추천이나 탐지에 필요한 노드와 관계만 CDC나 이벤트로 옮긴다. 그래프 쪽은 늦어도 되는 파생 데이터라 망가지면 원본에서 다시 만든다. 그 전에 재귀 CTE나 Apache AGE로 PostgreSQL 안에서 해결되는지 먼저 본다.

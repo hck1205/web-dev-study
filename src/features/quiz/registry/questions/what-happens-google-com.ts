@@ -106,4 +106,19 @@ export const WHAT_HAPPENS_GOOGLE_COM: QuizQuestion[] = [
       "defer는 파싱을 막지 않고 병렬로 내려받은 뒤, 파싱이 끝나고 DOMContentLoaded 직전에 문서 순서대로 실행한다. 다운로드가 끝나는 대로 순서 없이 실행하는 건 async다.",
     anchor: "받은-html을-화면에-그리기",
   },
+  {
+    id: "what-happens-google-com-8",
+    post: "what-happens-google-com",
+    question: "curl로 사이트를 불렀더니 종료 코드 0과 함께 502가 찍혔다. 이 결과로 알 수 있는 것은?",
+    choices: [
+      "DNS, TCP, TLS는 성공했고 서버 쪽 HTTP 처리 단계를 보면 된다",
+      "DNS에서 이름을 찾지 못했다",
+      "인증서 체인이 루트까지 이어지지 않았다",
+      "서버 포트가 닫혀 있어 연결이 거부됐다",
+    ],
+    answer: 0,
+    explanation:
+      "상태 코드를 받았다는 건 이름 풀이, TCP 연결, TLS 핸드셰이크가 모두 끝나 HTTP 응답까지 왔다는 뜻이다. DNS 실패는 curl (6), 연결 거부는 (7), 인증서 문제는 (60)으로 HTTP 응답 없이 끝난다. 502라면 서버 쪽 프록시 뒤를 본다.",
+    anchor: "페이지가-안-뜰-때-몇-번째-단계인지-고르기",
+  },
 ];

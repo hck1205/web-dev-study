@@ -101,4 +101,19 @@ export const CORS: QuizQuestion[] = [
       "서버는 허락 헤더를 적어 줄 뿐이고 그 헤더를 읽고 지키는 건 브라우저다. 그래서 CORS는 API 접근 제어 수단이 아니고, 데이터 보호는 인증과 인가로 해야 한다.",
     anchor: "cors는-브라우저가-지킨다",
   },
+  {
+    id: "cors-8",
+    post: "cors",
+    question: "평소엔 되는데 큰 파일을 올릴 때만 콘솔에 CORS 에러가 난다. nginx가 add_header로 허락 헤더를 붙이는 구성이라면 가장 그럴듯한 원인은?",
+    choices: [
+      "업로드 요청은 항상 preflight를 건너뛰어서",
+      "Access-Control-Allow-Origin에 *를 써야 해서",
+      "브라우저가 큰 요청에는 Origin 헤더를 붙이지 않아서",
+      "413 같은 에러 응답에는 always 없이 add_header가 적용되지 않아서",
+    ],
+    answer: 3,
+    explanation:
+      "nginx의 add_header는 기본으로 200, 204, 301 같은 일부 응답에만 붙고 4xx·5xx에는 붙지 않는다. 413 응답에 허락 헤더가 없으니 브라우저는 CORS 에러로 보여 주고 진짜 원인을 가린다. always를 붙이면 모든 응답에 헤더가 붙는다.",
+    anchor: "평소엔-되다가-가끔만-나는-cors-에러",
+  },
 ];

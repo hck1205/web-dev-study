@@ -1,0 +1,623 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-select-where-null");
+
+부가세를 붙인 가격이 1만 원 넘는 상품만 보려고 `SELECT name, price * 1.1 AS with_tax FROM products WHERE with_tax > 10000`을 쳤다. `column "with_tax" does not exist`가 돌아온다. 바로 앞에서 `AS with_tax`로 이름을 붙였는데 없다고 한다. 전화번호 없는 회원을 찾으려고 친 `WHERE phone = NULL`은 에러도 없이 0행을 낸다. 둘 다 SQL이 문장을 읽는 순서와 NULL을 다루는 방식을 모르면 이상해 보인다.
+
+테이블을 만들고 행을 넣는 과정은 [SQL 기본 명령어 글](/posts/sql-basics)에서 했다. 이 글은 그 테이블에서 원하는 행만 골라 읽는다. 기준은 Ubuntu 24.04의 PostgreSQL 16(16.15)이고, SQLD가 Oracle과 SQL Server 기준으로 묻는 차이는 그때그때 짚는다. 두 DB의 동작은 직접 돌려 보지 못해 글로만 적었다.
+
+## 회원 넷, 상품 셋, 주문 다섯
+
+앞 글과 같은 작은 쇼핑몰을 쓴다. 처음부터 따라 하려면 아래를 먼저 돌린다.
+
+```sql
+-- 회원
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,  -- 1, 2, 3 ... 자동으로 매긴다
+  email      varchar(100) NOT NULL UNIQUE,                    -- 비어 있으면 안 되고, 겹치면 안 된다
+  name       varchar(50)  NOT NULL,
+  phone      varchar(20),                                     -- 없어도 된다 (NULL 허용)
+  created_at timestamptz  NOT NULL DEFAULT now()              -- 안 넣으면 지금 시각
+);
+
+-- 상품
+CREATE TABLE products (
+  id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name  varchar(100) NOT NULL,
+  price numeric(10, 0) NOT NULL CHECK (price >= 0),          -- 음수 가격은 막는다
+  stock integer NOT NULL DEFAULT 0 CHECK (stock >= 0)
+);
+
+-- 주문: 누가(user_id) 무엇을(product_id) 몇 개(quantity) 샀나
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  product_id bigint REFERENCES products (id) ON DELETE SET NULL,
+  quantity   integer NOT NULL CHECK (quantity > 0),
+  status     varchar(20) NOT NULL DEFAULT 'pending',          -- pending, paid, delivered, cancelled
+  ordered_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+```sql
+INSERT INTO users (email, name, phone, created_at) VALUES
+  ('kim@example.com',  'kim',  '010-1111-2222', '2026-10-01 09:00+09'),
+  ('lee@example.com',  'lee',  NULL,            '2026-10-02 10:30+09'),
+  ('park@example.com', 'park', '010-3333-4444', '2026-10-03 14:10+09'),
+  ('choi@example.com', 'choi', NULL,            '2026-10-05 20:45+09');
+
+INSERT INTO products (name, price, stock) VALUES
+  ('무선 이어폰', 39000, 10),
+  ('충전 케이스', 15000, 0),
+  ('이어팁',      5000, 120);
+
+INSERT INTO orders (user_id, product_id, quantity, status, ordered_at) VALUES
+  (1, 1, 1, 'delivered', '2026-10-06 11:00+09'),
+  (1, 3, 2, 'delivered', '2026-10-06 11:00+09'),
+  (2, 2, 1, 'paid',      '2026-10-08 20:15+09'),
+  (3, 1, 1, 'cancelled', '2026-10-09 08:40+09'),
+  (1, 2, 1, 'pending',   '2026-10-12 23:05+09');
+```
+
+세 테이블은 이렇게 채워져 있다.
+
+```text
+ id |      email       | name |     phone     |       created_at
+----+------------------+------+---------------+------------------------
+  1 | kim@example.com  | kim  | 010-1111-2222 | 2026-10-01 09:00:00+09
+  2 | lee@example.com  | lee  |               | 2026-10-02 10:30:00+09
+  3 | park@example.com | park | 010-3333-4444 | 2026-10-03 14:10:00+09
+  4 | choi@example.com | choi |               | 2026-10-05 20:45:00+09
+(4 rows)
+
+ id |    name     | price | stock
+----+-------------+-------+-------
+  1 | 무선 이어폰 | 39000 |    10
+  2 | 충전 케이스 | 15000 |     0
+  3 | 이어팁      |  5000 |   120
+(3 rows)
+
+ id | user_id | product_id | quantity |  status   |       ordered_at
+----+---------+------------+----------+-----------+------------------------
+  1 |       1 |          1 |        1 | delivered | 2026-10-06 11:00:00+09
+  2 |       1 |          3 |        2 | delivered | 2026-10-06 11:00:00+09
+  3 |       2 |          2 |        1 | paid      | 2026-10-08 20:15:00+09
+  4 |       3 |          1 |        1 | cancelled | 2026-10-09 08:40:00+09
+  5 |       1 |          2 |        1 | pending   | 2026-10-12 23:05:00+09
+(5 rows)
+```
+
+psql은 NULL을 빈칸으로 보여 준다. 빈 문자열과 구분이 안 되니 `\pset null '(null)'`을 쳐 두면 NULL이 `(null)`로 보인다. 아래부터는 이 설정을 켠 상태다.
+
+## SELECT 한 문장을 조각으로 읽기
+
+`SELECT`는 절(clause) 여러 개로 이루어진다. 적는 순서와 DB가 처리하는 순서가 다르다는 게 처음에 가장 헷갈린다. 아래 문장의 조각을 눌러 보면 각 절이 몇 번째로 처리되는지 나온다.
+
+<UrlAnatomy
+  caption="SELECT 문은 적는 순서와 처리 순서가 다르다"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "select",
+      display: "SELECT name, price",
+      title: "④ 어떤 컬럼을 보여 줄까",
+      description: "맨 앞에 적지만 처리는 나중이다. FROM과 WHERE로 행을 다 고른 뒤에 컬럼을 뽑고, 계산식과 별칭(AS)을 만든다. GROUP BY와 HAVING이 있으면 그보다도 뒤다.",
+      required: true,
+    },
+    {
+      key: "from",
+      display: "FROM products",
+      title: "① 어느 테이블에서",
+      description: "가장 먼저 처리한다. 읽을 테이블을 정하고, JOIN이 있으면 여기서 테이블을 붙인다. 테이블 별칭(FROM products AS p)도 여기서 생겨서, 뒤의 모든 절에서 쓸 수 있다.",
+      required: true,
+    },
+    {
+      key: "where",
+      display: "WHERE price >= 10000",
+      title: "② 어떤 행만",
+      description: "조건이 참(TRUE)인 행만 남긴다. 거짓이나 '모름'(UNKNOWN)인 행은 버린다. SELECT보다 먼저 처리되니 SELECT에서 만든 별칭을 쓸 수 없다.",
+      code: "-- 묶음이 있으면 WHERE 다음에 처리한다\nGROUP BY ...  -- ③ 묶기\nHAVING ...    -- ③ 묶은 결과 거르기",
+    },
+    {
+      key: "order",
+      display: "ORDER BY price DESC",
+      title: "⑤ 어떤 순서로",
+      description: "SELECT 다음에 처리해서 SELECT의 별칭을 쓸 수 있다. 컬럼 위치 번호(ORDER BY 2)로도 쓸 수 있지만, 컬럼 목록이 바뀌면 조용히 다른 기준으로 정렬되니 운영 코드에서는 피한다.",
+    },
+    {
+      key: "limit",
+      display: "LIMIT 2",
+      title: "⑥ 몇 행만",
+      description: "정렬이 끝난 결과에서 앞의 n행만 남긴다. ORDER BY 없이 LIMIT만 쓰면 어떤 행이 나올지 정해져 있지 않다. 지금은 우연히 넣은 순서로 나와도 데이터가 바뀌면 달라진다.",
+    },
+  ]}
+/>
+
+```sql
+SELECT name, price FROM products WHERE price >= 10000 ORDER BY price DESC LIMIT 2;
+```
+
+```text
+    name     | price
+-------------+-------
+ 무선 이어폰 | 39000
+ 충전 케이스 | 15000
+(2 rows)
+```
+
+처리 순서를 알면 이 에러가 이해된다. 부가세를 붙인 가격으로 거르려고 별칭을 `WHERE`에 썼다.
+
+```sql
+SELECT name, price * 1.1 AS with_tax FROM products WHERE with_tax > 10000;
+```
+
+```text
+ERROR:  column "with_tax" does not exist
+LINE 1: ...name, price * 1.1 AS with_tax FROM products WHERE with_tax >...
+                                                             ^
+```
+
+`WHERE`를 처리할 때는 `SELECT`가 아직 실행되지 않아서 `with_tax`가 없다. `WHERE price * 1.1 > 10000`으로 식을 다시 쓰거나, 서브쿼리로 한 번 감싼다. 정리하면 처리 순서는 FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT이다. SQLD에서 그대로 나온다.
+
+별칭은 `AS`로 붙인다. 컬럼 별칭에서 `AS`는 생략할 수 있다(`price * 1.1 with_tax`). 테이블 별칭은 조인할 때 이름을 짧게 쓰려고 붙인다. Oracle은 테이블 별칭에 `AS`를 쓰면 문법 에러가 난다(`FROM products p`만 된다). PostgreSQL과 SQL Server는 둘 다 받는다.
+
+```sql
+-- kim(1번)의 주문별 금액. o, p가 테이블 별칭, product와 total이 컬럼 별칭
+SELECT p.name AS product, p.price * o.quantity AS total
+FROM orders AS o
+JOIN products AS p ON p.id = o.product_id
+WHERE o.user_id = 1
+ORDER BY total DESC;   -- ORDER BY에서는 별칭을 쓸 수 있다
+```
+
+```text
+   product   | total
+-------------+-------
+ 무선 이어폰 | 39000
+ 충전 케이스 | 15000
+ 이어팁      | 10000
+(3 rows)
+```
+
+## 원하는 행만 고르는 WHERE
+
+`WHERE`에는 참과 거짓을 내는 조건을 쓴다. 비교 연산자(`=`, `<>`, `<`, `>`, `<=`, `>=`)가 기본이다. "같지 않다"는 `<>`가 표준이고 `!=`도 대부분 받아 준다.
+
+```sql
+SELECT name, email FROM users WHERE id >= 3;
+```
+
+```text
+ name |      email
+------+------------------
+ park | park@example.com
+ choi | choi@example.com
+(2 rows)
+```
+
+`BETWEEN a AND b`는 a 이상 b 이하다. 양쪽 끝을 포함한다는 게 시험에 나온다. `NOT BETWEEN`은 a보다 작거나 b보다 크다.
+
+```sql
+SELECT id, name, price FROM products WHERE price BETWEEN 5000 AND 15000;  -- 5000 <= price <= 15000
+```
+
+```text
+ id |    name     | price
+----+-------------+-------
+  2 | 충전 케이스 | 15000
+  3 | 이어팁      |  5000
+(2 rows)
+```
+
+`IN (...)`은 목록 중 하나와 같으면 참이다. `status = 'paid' OR status = 'pending'`과 같다.
+
+```sql
+SELECT id, status FROM orders WHERE status IN ('paid', 'pending');
+```
+
+```text
+ id | status
+----+---------
+  3 | paid
+  5 | pending
+(2 rows)
+```
+
+`LIKE`는 문자열 패턴이다. `%`는 "글자 아무거나 0개 이상", `_`는 "글자 아무거나 딱 1개"다.
+
+```sql
+SELECT name, email FROM users WHERE email LIKE 'k%';  -- k로 시작
+SELECT name FROM users WHERE name LIKE '_i%';         -- 두 번째 글자가 i
+```
+
+```text
+ name |      email
+------+-----------------
+ kim  | kim@example.com
+(1 row)
+
+ name
+------
+ kim
+(1 row)
+```
+
+`%`나 `_` 글자 자체를 찾으려면 앞에 이스케이프 문자를 붙인다. PostgreSQL은 기본이 역슬래시이고, `ESCAPE '!'`처럼 바꿀 수 있다. `'a\_b'`는 "a, 밑줄, b"만 찾는다. `LIKE '%이어%'`처럼 앞이 `%`로 열린 패턴은 B-tree 인덱스를 못 쓴다는 것도 알아 둔다. 찾아보기에서 가운데 글자만 알고 단어를 찾을 수 없는 것과 같다.
+
+조건 여러 개는 `AND`, `OR`, `NOT`으로 잇는다. 우선순위는 `NOT` → `AND` → `OR` 순이다. 괄호 없이 섞으면 의도와 다르게 묶인다. "품절이거나 3만 원 넘는 상품 중 재고가 있는 것"을 찾으려고 이렇게 썼다.
+
+```sql
+SELECT name, price, stock FROM products WHERE stock = 0 OR price > 30000 AND stock > 0;
+```
+
+```text
+    name     | price | stock
+-------------+-------+-------
+ 무선 이어폰 | 39000 |    10
+ 충전 케이스 | 15000 |     0
+(2 rows)
+```
+
+재고가 0인 충전 케이스가 나왔다. `AND`가 먼저 묶여서 `stock = 0 OR (price > 30000 AND stock > 0)`이 됐기 때문이다. 의도대로 하려면 `(stock = 0 OR price > 30000) AND stock > 0`으로 괄호를 친다. 그러면 무선 이어폰만 남는다. `AND`와 `OR`를 섞을 때는 우선순위를 외우기보다 늘 괄호를 친다.
+
+## NULL은 값이 아니라 모른다는 표시
+
+lee와 choi는 전화번호가 없다. "전화번호가 없는 회원"을 찾으려고 이렇게 쳤다.
+
+```sql
+SELECT name, phone FROM users WHERE phone = NULL;
+```
+
+```text
+ name | phone
+------+-------
+(0 rows)
+```
+
+에러도 없이 0행이다. NULL은 "값이 없음" 또는 "모름"이라는 표시라서, 무엇과 비교해도 결과가 참도 거짓도 아닌 UNKNOWN(모름)이 된다. NULL과 NULL을 비교해도 모름이다. "lee의 번호가 choi의 번호와 같나?" 둘 다 모르니 같은지도 모른다. 그래서 NULL은 `IS NULL`, `IS NOT NULL`로 따로 묻는다.
+
+```sql
+SELECT name, phone FROM users WHERE phone IS NULL;
+SELECT NULL = NULL AS eq, NULL IS NULL AS is_null;
+```
+
+```text
+ name | phone
+------+--------
+ lee  | (null)
+ choi | (null)
+(2 rows)
+
+   eq   | is_null
+--------+---------
+ (null) | t
+(1 row)
+```
+
+`NULL = NULL`의 결과가 `t`도 `f`도 아닌 `(null)`이다. SQL의 조건은 참, 거짓, 모름 세 값을 갖는다. 이걸 3값 논리라고 한다. `WHERE`는 참인 행만 남기니, 모름이 나온 행은 거짓과 똑같이 버려진다. 이게 조용한 버그를 만든다. "kim이 아닌 회원의 번호"를 찾으려고 이렇게 쓰면 어떻게 될까. 아래 그림에서 다음을 누르면 행마다 조건을 따져 본다.
+
+<AlgoTrace
+  caption="WHERE phone <> '010-1111-2222'는 NULL인 행을 버린다"
+  memoryLabel="결과로 남은 행"
+  cells={["kim 010-1111", "lee NULL", "park 010-3333", "choi NULL"]}
+  steps={[
+    { memory: [], caption: "조건은 phone <> '010-1111-2222'. 행마다 참, 거짓, 모름 중 하나가 나오고 참인 행만 남는다." },
+    { pointer: 0, memory: [], caption: "kim은 바로 그 번호다. 같지 않다는 조건은 거짓. 버린다." },
+    { pointer: 1, memory: [], caption: "lee는 번호가 NULL이다. 모르는 값과 비교했으니 결과도 모름(UNKNOWN). 거짓은 아니지만 참도 아니라서 버린다." },
+    { pointer: 2, found: [2], memory: ["park"], caption: "park은 다른 번호다. 참. 남긴다." },
+    { pointer: 3, found: [2], memory: ["park"], caption: "choi도 NULL이라 모름. 버린다. 번호가 다른 회원을 찾았는데 번호가 없는 두 명이 빠졌다." },
+  ]}
+/>
+
+```sql
+SELECT name, phone FROM users WHERE phone <> '010-1111-2222';
+```
+
+```text
+ name |     phone
+------+---------------
+ park | 010-3333-4444
+(1 row)
+```
+
+lee와 choi까지 넣으려면 `WHERE phone <> '010-1111-2222' OR phone IS NULL`로 NULL을 따로 챙긴다. PostgreSQL에는 NULL을 하나의 값처럼 비교하는 `IS DISTINCT FROM`도 있다.
+
+`AND`와 `OR`에 모름이 섞이면 이렇게 된다. `FALSE AND 모름`은 하나가 이미 거짓이니 무조건 거짓이다. `TRUE OR 모름`은 하나가 이미 참이니 무조건 참이다. 나머지는 모름이 그대로 남는다.
+
+```sql
+SELECT TRUE AND NULL AS t_and_n, FALSE AND NULL AS f_and_n,
+       TRUE OR NULL AS t_or_n,   FALSE OR NULL AS f_or_n,
+       NOT NULL::boolean AS not_n;
+```
+
+```text
+ t_and_n | f_and_n | t_or_n | f_or_n | not_n
+---------+---------+--------+--------+--------
+ (null)  | f       | t      | (null) | (null)
+(1 row)
+```
+
+규칙이 몇 줄 안 되니 직접 짜 보면 금방 몸에 붙는다. `null`을 모름으로 보고, 연산자 `op`와 값 두 개를 받아 결과를 돌려주는 함수를 완성해 보자. `=`는 둘 중 하나라도 `null`이면 모름이다.
+
+<CodePlayground
+  caption="3값 논리 계산기"
+  functionName="sql3"
+  initialCode={`function sql3(op, a, b) {
+  // op: "AND" | "OR" | "NOT" | "="
+  // a, b: true | false | null (null은 모름)
+  // "NOT"은 a 하나만 쓴다
+  return null;
+}`}
+  solution={`function sql3(op, a, b) {
+  if (op === "NOT") return a === null ? null : !a;
+  if (op === "AND") {
+    if (a === false || b === false) return false; // 하나라도 거짓이면 거짓
+    if (a === null || b === null) return null;
+    return true;
+  }
+  if (op === "OR") {
+    if (a === true || b === true) return true;    // 하나라도 참이면 참
+    if (a === null || b === null) return null;
+    return false;
+  }
+  if (op === "=") {
+    if (a === null || b === null) return null;    // 모르는 값과는 비교할 수 없다
+    return a === b;
+  }
+  throw new Error("모르는 연산자: " + op);
+}`}
+  tests={[
+    { label: "TRUE AND NULL", args: ["AND", true, null], expected: null },
+    { label: "FALSE AND NULL", args: ["AND", false, null], expected: false },
+    { label: "TRUE OR NULL", args: ["OR", true, null], expected: true },
+    { label: "FALSE OR NULL", args: ["OR", false, null], expected: null },
+    { label: "NOT NULL", args: ["NOT", null], expected: null },
+    { label: "NOT FALSE", args: ["NOT", false], expected: true },
+    { label: "NULL = NULL", args: ["=", null, null], expected: null },
+    { label: "3 = 3", args: ["=", 3, 3], expected: true },
+  ]}
+/>
+
+이 규칙이 실무에서 가장 크게 터지는 곳이 `NOT IN`이다. "주문을 한 번도 안 한 회원"을 찾는다.
+
+```sql
+SELECT name FROM users WHERE id NOT IN (SELECT user_id FROM orders);
+```
+
+```text
+ name
+------
+ choi
+(1 row)
+```
+
+잘 나온다. 그런데 서브쿼리 결과에 NULL이 하나라도 섞이면 결과가 통째로 사라진다.
+
+```sql
+SELECT name FROM users WHERE id NOT IN (1, 2, NULL);
+```
+
+```text
+ name
+------
+(0 rows)
+```
+
+`id NOT IN (1, 2, NULL)`은 `id <> 1 AND id <> 2 AND id <> NULL`이다. 마지막 `id <> NULL`이 늘 모름이라, 앞의 둘이 참이어도 전체가 모름이 된다. 거짓인 행도 모름인 행도 다 버려지니 0행이다. `orders.user_id`는 `NOT NULL`이라 안전했지만, `product_id`처럼 NULL이 들어갈 수 있는 컬럼으로 `NOT IN`을 쓰면 언젠가 결과가 비어 버린다. 이럴 때는 `NOT EXISTS`를 쓴다. `NOT EXISTS`는 "맞는 행이 있나 없나"만 묻기 때문에 NULL에 흔들리지 않는다.
+
+```sql
+SELECT u.name FROM users u
+WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id);
+```
+
+NULL은 계산에도 번진다. `price + NULL`은 NULL이다. 집계 함수는 반대로 NULL을 건너뛴다. `count(phone)`은 2(NULL 제외), `count(*)`는 4다. NULL을 다른 값으로 바꿀 때는 표준 함수 `COALESCE(phone, '없음')`을 쓴다. Oracle의 `NVL`, SQL Server의 `ISNULL`이 같은 일을 한다.
+
+Oracle에는 특이한 규칙이 하나 더 있다. 빈 문자열 `''`을 NULL로 취급한다. Oracle에서 `INSERT ... VALUES ('')`로 넣으면 NULL이 들어가고, `WHERE phone = ''`은 늘 0행이다. PostgreSQL, SQL Server, MySQL에서 빈 문자열은 길이 0인 평범한 문자열이다.
+
+```sql
+-- PostgreSQL: 빈 문자열은 NULL이 아니다
+SELECT ''::text IS NULL AS empty_is_null, length('') AS len;
+```
+
+```text
+ empty_is_null | len
+---------------+-----
+ f             |   0
+(1 row)
+```
+
+## 정렬하고, 겹친 것 빼고, 잘라서 보기
+
+`ORDER BY`는 기본이 오름차순(`ASC`)이고, `DESC`를 붙이면 내림차순이다. 여기서도 NULL이 문제다. NULL을 어디에 둘지 DB마다 다르다.
+
+```sql
+SELECT name, phone FROM users ORDER BY phone;        -- 오름차순
+SELECT name, phone FROM users ORDER BY phone DESC;   -- 내림차순
+```
+
+```text
+ name |     phone
+------+---------------
+ kim  | 010-1111-2222
+ park | 010-3333-4444
+ lee  | (null)
+ choi | (null)
+(4 rows)
+
+ name |     phone
+------+---------------
+ lee  | (null)
+ choi | (null)
+ park | 010-3333-4444
+ kim  | 010-1111-2222
+(4 rows)
+```
+
+PostgreSQL은 NULL을 가장 큰 값처럼 다룬다. 오름차순이면 맨 뒤, 내림차순이면 맨 앞이다. Oracle도 같다. SQL Server와 MySQL은 반대로 NULL을 가장 작은 값처럼 다뤄서 오름차순이면 맨 앞에 온다. SQLD에서 "Oracle은 NULL을 가장 큰 값, SQL Server는 가장 작은 값으로 본다"로 나온다. PostgreSQL과 Oracle은 `NULLS FIRST`, `NULLS LAST`로 직접 정할 수 있다.
+
+```sql
+SELECT name, phone FROM users ORDER BY phone NULLS FIRST;
+```
+
+```text
+ name |     phone
+------+---------------
+ lee  | (null)
+ choi | (null)
+ kim  | 010-1111-2222
+ park | 010-3333-4444
+(4 rows)
+```
+
+`DISTINCT`는 결과에서 완전히 같은 행을 하나만 남긴다. 컬럼이 여러 개면 그 조합이 같아야 겹친 것으로 본다.
+
+```sql
+SELECT DISTINCT user_id FROM orders ORDER BY user_id;
+SELECT DISTINCT user_id, status FROM orders ORDER BY user_id, status;
+```
+
+```text
+ user_id
+---------
+       1
+       2
+       3
+(3 rows)
+
+ user_id |  status
+---------+-----------
+       1 | delivered
+       1 | pending
+       2 | paid
+       3 | cancelled
+(4 rows)
+```
+
+두 번째 결과에서 1번 회원이 두 번 나온다. `(1, delivered)`는 주문 1, 2번이 같아서 하나로 합쳐졌지만 `(1, pending)`은 다른 조합이다. `DISTINCT`는 첫 컬럼에만 걸리는 게 아니라 행 전체에 걸린다.
+
+결과를 앞에서 몇 개만 자르는 문법은 DB마다 다르다. PostgreSQL과 MySQL은 `LIMIT n OFFSET m`을 쓴다. 표준 문법은 `OFFSET m ROWS FETCH FIRST n ROWS ONLY`이고, PostgreSQL, Oracle 12c 이상, SQL Server 2012 이상이 받는다. 둘은 결과가 같다.
+
+```sql
+-- 최근 주문 순으로, 첫 번째는 건너뛰고 2건
+SELECT id, ordered_at FROM orders ORDER BY ordered_at DESC, id DESC LIMIT 2 OFFSET 1;
+SELECT id, ordered_at FROM orders ORDER BY ordered_at DESC, id DESC
+OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY;
+```
+
+```text
+ id |       ordered_at
+----+------------------------
+  4 | 2026-10-09 08:40:00+09
+  3 | 2026-10-08 20:15:00+09
+(2 rows)
+```
+
+정렬 기준에 `id DESC`를 하나 더 붙인 이유가 있다. 1번과 2번 주문은 시각이 똑같다. 시각만으로 정렬하면 둘의 순서는 정해져 있지 않아서, 페이지를 넘길 때 같은 주문이 두 번 나오거나 아예 빠질 수 있다. 페이지를 자를 때는 정렬 기준이 행 하나를 딱 가리키도록 유일한 컬럼을 끝에 붙인다. `OFFSET`이 커질수록 앞의 행을 다 읽고 버리니 느려진다는 것도 알아 둔다. 이 문제는 [쿼리 튜닝 글](/posts/sql-query-tuning)에서 다룬다.
+
+SQLD에는 옛날 방식도 나온다. Oracle의 `ROWNUM`은 행을 꺼내는 순서대로 1, 2, 3을 붙이는 가상 컬럼이다. `WHERE ROWNUM <= 3`은 되지만 `WHERE ROWNUM = 2`는 0행이다. 첫 행이 1번을 받아야 2번이 생기는데, 첫 행이 조건(`= 2`)에서 탈락하면 다음 행이 다시 1번을 받고 또 탈락하기 때문이다. 그리고 `ROWNUM`은 `ORDER BY`보다 먼저 붙는다. "가격 높은 순 상위 3개"는 정렬한 서브쿼리를 먼저 만들고 바깥에서 `ROWNUM`을 건다. SQL Server는 `SELECT TOP (3) ...`을 쓰고, `TOP (3) WITH TIES`로 3등과 값이 같은 행까지 함께 가져올 수 있다.
+
+## 리포트 숫자가 안 맞을 때 먼저 보는 것
+
+현장에서 이 내용이 가장 자주 쓰이는 곳은 "숫자가 이상하다"는 문의다. 쿼리는 에러 없이 돌았는데 결과가 기대보다 적거나 0이다. 이럴 때 범인은 대개 NULL이거나, 괄호 없이 섞은 `AND`와 `OR`다.
+
+전화번호를 등록한 회원 수를 보고했는데 기획 쪽 숫자와 다르다면, 먼저 같은 쿼리 안에서 전체와 NULL을 나란히 센다.
+
+```sql
+SELECT count(*)                              AS all_users,   -- 행 수
+       count(phone)                          AS with_phone,  -- NULL이 아닌 값만 센다
+       count(*) FILTER (WHERE phone IS NULL) AS no_phone     -- NULL인 행만 센다
+FROM users;
+```
+
+```text
+ all_users | with_phone | no_phone
+-----------+------------+----------
+         4 |          2 |        2
+(1 row)
+```
+
+`count(*)`와 `count(컬럼)`이 다르면 그 차이가 NULL인 행 수다. 리포트 쿼리를 받으면 조건에 쓰인 컬럼마다 이렇게 NULL이 몇 개인지부터 본다.
+
+"이 번호가 아닌 회원"처럼 `<>`로 거르는 조건은 NULL인 행을 빼먹는다. 의도가 "NULL도 다른 값으로 친다"라면 매번 `OR phone IS NULL`을 붙이는 대신 `IS DISTINCT FROM`을 쓴다. NULL을 하나의 값처럼 비교해서, NULL과 NULL은 같고 NULL과 번호는 다르다고 본다.
+
+```sql
+SELECT name, phone FROM users WHERE phone IS DISTINCT FROM '010-1111-2222';
+```
+
+```text
+ name |     phone
+------+---------------
+ lee  | (null)
+ park | 010-3333-4444
+ choi | (null)
+(3 rows)
+```
+
+`NOT IN`은 데이터가 바뀌면서 조용히 깨진다. 한 번도 팔리지 않은 상품을 정리하는 배치가 어느 날부터 아무것도 찾지 못한다고 해 보자. 새 상품 '케이블'을 넣고, 이어팁을 지워서 이어팁을 샀던 주문의 `product_id`가 `ON DELETE SET NULL`로 NULL이 된 상황을 트랜잭션 안에서 만들어 본다.
+
+```sql
+BEGIN;
+INSERT INTO products (name, price, stock) VALUES ('케이블', 9000, 50);
+SELECT name FROM products WHERE id NOT IN (SELECT product_id FROM orders);  -- 케이블이 나온다
+DELETE FROM products WHERE id = 3;    -- 2번 주문의 product_id가 NULL이 된다
+SELECT name FROM products WHERE id NOT IN (SELECT product_id FROM orders);  -- 0행
+SELECT p.name FROM products p
+WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.id);       -- 케이블
+ROLLBACK;
+```
+
+```text
+  name
+--------
+ 케이블
+(1 row)
+
+DELETE 1
+ name
+------
+(0 rows)
+
+  name
+--------
+ 케이블
+(1 row)
+```
+
+쿼리는 한 글자도 바뀌지 않았는데, 다른 테이블에 NULL 하나가 생기자 결과가 비었다. 코드 리뷰에서 `NOT IN (SELECT ...)`을 보면 서브쿼리 컬럼이 `NOT NULL`인지부터 확인하고, 아니면 `NOT EXISTS`로 바꿔 달라고 한다.
+
+그 밖에 리뷰에서 걸러야 할 것은 셋이다. `AND`와 `OR`가 괄호 없이 섞인 `WHERE`, 정렬 기준이 유일하지 않은 페이지 쿼리(`ORDER BY ordered_at`만 있고 `id`가 없는), 그리고 `ORDER BY` 없는 `LIMIT`이다. 셋 다 지금 데이터에서는 맞게 나오다가 데이터가 늘거나 실행 계획이 바뀌면 다른 행을 돌려준다. 테스트 데이터가 작을 때는 드러나지 않아서 운영에서 처음 터진다.
+
+## 모름을 모름으로 다루기
+
+`SELECT`는 적는 순서가 아니라 FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT 순서로 처리되고, 그래서 `WHERE`에서는 `SELECT`의 별칭을 쓸 수 없다. NULL은 값이 아니라 모른다는 표시라서 무엇과 비교해도 모름이 되고, `WHERE`는 모름을 거짓처럼 버린다. 이 두 가지만 머리에 두면 처음의 두 쿼리가 왜 그렇게 동작했는지 설명할 수 있다. 읽은 행을 고치고 지우는 일은 [행 넣고 고치고 지우기 글](/posts/sql-insert-update-delete)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### SELECT 문의 절은 어떤 순서로 처리되나요?
+
+FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT 순서다. 적는 순서와 다르다. 그래서 `WHERE`에서는 `SELECT`에서 만든 별칭을 쓸 수 없고, `SELECT` 뒤에 처리되는 `ORDER BY`에서는 쓸 수 있다. 별칭으로 거르고 싶으면 식을 다시 쓰거나 서브쿼리로 감싼다.
+
+### WHERE에서 NULL을 등호로 비교하면 왜 아무 행도 나오지 않나요?
+
+NULL은 값이 아니라 "모름"이라서 무엇과 비교해도 결과가 참도 거짓도 아닌 UNKNOWN이 된다. `WHERE`는 참인 행만 남기니 UNKNOWN인 행은 모두 버려진다. 그래서 NULL은 `IS NULL`, `IS NOT NULL`로 확인한다. 같은 이유로 `col <> 'x'` 같은 조건도 NULL인 행을 조용히 빠뜨리니, NULL을 포함하려면 `OR col IS NULL`을 붙인다.
+
+### NOT IN 서브쿼리를 쓸 때 주의할 점은요?
+
+서브쿼리 결과에 NULL이 하나라도 있으면 결과가 0행이 된다. `x NOT IN (1, NULL)`은 `x <> 1 AND x <> NULL`이고, 뒤쪽이 늘 UNKNOWN이라 전체가 참이 될 수 없기 때문이다. NULL이 들어갈 수 있는 컬럼이면 `NOT EXISTS`를 쓴다. `NOT EXISTS`는 맞는 행이 있는지만 보기 때문에 NULL에 영향을 받지 않는다.
+
+### AND와 OR를 섞어 쓸 때 주의할 점은요?
+
+우선순위가 `NOT` → `AND` → `OR`라서 괄호가 없으면 `AND`가 먼저 묶인다. `stock = 0 OR price > 30000 AND stock > 0`은 `stock = 0 OR (price > 30000 AND stock > 0)`이 되어 재고 0인 상품이 섞여 나온다. 우선순위를 외워서 맞추기보다 둘을 섞을 때는 늘 괄호를 친다.
+
+### NULL은 정렬하면 어디에 오나요?
+
+DB마다 다르다. PostgreSQL과 Oracle은 NULL을 가장 큰 값처럼 다뤄서 오름차순이면 맨 뒤, 내림차순이면 맨 앞에 둔다. SQL Server와 MySQL은 가장 작은 값처럼 다뤄서 오름차순이면 맨 앞이다. PostgreSQL과 Oracle은 `NULLS FIRST`, `NULLS LAST`로 직접 정할 수 있다.
+
+### 페이지를 나눌 때 정렬 기준에 id를 붙이는 이유는요?
+
+정렬 기준 값이 같은 행끼리는 순서가 정해져 있지 않아서, 페이지를 넘길 때 같은 행이 두 번 나오거나 빠질 수 있다. 같은 시각에 들어온 주문 두 건이 그런 예다. 기본 키처럼 유일한 컬럼을 정렬 기준 끝에 붙이면 행 하나하나의 순서가 고정된다. `ORDER BY` 없는 `LIMIT`은 어떤 행이 나올지 아예 정해져 있지 않다.
+
+### count(*)와 count(컬럼)은 무엇이 다른가요?
+
+`count(*)`는 행 수를 세고, `count(컬럼)`은 그 컬럼이 NULL이 아닌 행만 센다. 회원 4명 중 전화번호가 없는 2명이 있으면 `count(*)`는 4, `count(phone)`은 2다. 둘의 차이가 곧 NULL인 행 수라서, 리포트 숫자가 안 맞을 때 가장 먼저 비교해 본다.

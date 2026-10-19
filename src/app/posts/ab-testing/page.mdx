@@ -353,6 +353,81 @@ function CheckoutPage() {
 
 그래서 플래그를 만들 때 지우는 일까지 같이 만든다. 플래그마다 주인과 만료일을 적어 두고, 만료일이 지나면 알림이나 린트 경고가 나게 한다. 플래그를 추가하는 PR에서 제거 작업 티켓을 같이 만든다. 이름은 재사용하지 않는다. 운영용 킬 스위치처럼 오래 남는 플래그는 실험 플래그와 구분되게 이름이나 태그를 다르게 붙여서, 정리할 때 헷갈리지 않게 한다.
 
+## 실험 숫자가 이상할 때 먼저 보는 곳
+
+실험을 켜고 이틀쯤 지나면 이상한 숫자가 보이기 시작한다. B 사용자 수가 모자라거나, 어떤 사람은 B를 받아야 하는데 A를 봤다고 하거나, 노출 수가 방문 수보다 많다. 이때 결과 해석부터 하면 안 되고, 실험 장치가 제대로 도는지부터 본다. 내가 자주 확인하는 순서대로 세 가지를 재현해 봤다.
+
+첫째, SRM이 나오면 세그먼트별로 쪼갠다. 앞 절의 A 50,000명, B 48,500명을 브라우저별로 나눴더니 아래처럼 나왔다고 하자(노출 수는 예시다). 카이제곱 계산은 Node.js로 실제로 돌렸다.
+
+```js
+// 50:50 실험의 노출 수로 SRM을 검사한다 (자유도 1 카이제곱, p = erfc(√(χ²/2)))
+function srm(a, b) {
+  const e = (a + b) / 2;
+  const chi2 = ((a - e) ** 2 + (b - e) ** 2) / e;
+  return { chi2: chi2.toFixed(2), p: erfc(Math.sqrt(chi2 / 2)).toExponential(1) };
+}
+```
+
+```text
+전체     A=50000 B=48500  chi2=22.84  p=1.8e-6
+Chrome  A=30000 B=29950  chi2=0.04  p=8.4e-1
+Safari  A=15000 B=13600  chi2=68.53  p=1.3e-16
+기타     A=5000 B=4950  chi2=0.25  p=6.2e-1
+```
+
+불일치가 사파리에 몰려 있다. 배정은 해시라서 브라우저를 가리지 않으니, 사파리에서 B의 노출 이벤트만 덜 찍힌다는 뜻이다. B 화면이 쓰는 API가 사파리에서 깨지는지, 노출 이벤트를 보내는 코드가 사파리의 추적 방지에 걸리는지, B만 리다이렉트를 한 번 더 거치는지를 본다. 이렇게 세그먼트(브라우저, 앱 버전, 국가, 신규·기존)로 쪼개 보면 원인 후보가 한두 개로 줄어든다.
+
+둘째, "B여야 하는데 A가 보인다"는 제보는 캐시부터 의심한다. 엣지에서 배정한 HTML이 공유 캐시에 들어가면 첫 사람의 변형이 모두에게 간다. nginx를 CDN 대신 앞에 세우고(`proxy_cache`, 캐시 상태를 `X-Cache-Status` 헤더로 노출), 원본이 쿠키의 `aid`로 배정하게 해서 쿠키만 바꿔 세 번 요청했다.
+
+```bash
+# 쿠키만 바꿔서 같은 주소를 요청하고, 캐시 상태와 변형을 본다
+for u in user-1 user-3 user-6; do
+  echo "# aid=$u"
+  curl -si -b "aid=$u" localhost:8030/checkout | grep -E 'X-Cache-Status|data-variant'
+done
+```
+
+```text
+=== 원본이 Cache-Control: public, max-age=60 을 줄 때
+# aid=user-1
+X-Cache-Status: MISS
+<main data-variant="B">aid=user-1</main>
+# aid=user-3
+X-Cache-Status: HIT
+<main data-variant="B">aid=user-1</main>
+# aid=user-6
+X-Cache-Status: HIT
+<main data-variant="B">aid=user-1</main>
+
+=== 원본이 Cache-Control: private 를 줄 때
+# aid=user-1
+X-Cache-Status: MISS
+<main data-variant="B">aid=user-1</main>
+# aid=user-3
+X-Cache-Status: MISS
+<main data-variant="A">aid=user-3</main>
+# aid=user-6
+X-Cache-Status: MISS
+<main data-variant="A">aid=user-6</main>
+```
+
+버킷 1인 `user-3`과 6인 `user-6`이 `user-1`의 B 화면을 받았다. 본문의 `aid=user-1`까지 남의 것이다. 실험 결과가 망가지는 것보다 남의 개인화 화면이 섞여 나가는 게 더 큰 사고다. 운영 CDN에서도 같은 방법으로 본다. 쿠키를 바꿔 두 번 요청하고, CDN이 붙이는 캐시 상태 헤더(이름은 CDN마다 다르다)와 변형 표시를 비교한다. 변형마다 따로 캐시하고 싶다면 변형 값을 쿠키가 아니라 경로나 캐시 키에 넣어야 한다. 캐시와 키 이야기는 [HTTP 캐시와 CDN](/posts/http-caching-cdn)에 있다.
+
+셋째, 노출 수가 이상하게 많다면 개발 환경 데이터가 섞였거나 노출을 effect에서 그냥 보내고 있는지 본다. React `StrictMode`에서 `useEffect`로 노출을 보내는 컴포넌트를 크롬에 띄우고 이벤트 서버가 받은 요청을 셌다.
+
+```tsx
+useEffect(() => {
+  navigator.sendBeacon("/events", JSON.stringify({ event: "exposure", exp: "new-checkout", variant }));
+}, [variant]);
+```
+
+```text
+development: exposure 2회
+production: exposure 1회
+```
+
+개발 모드는 effect를 일부러 두 번 돌리니 노출이 두 번 간다. 프로덕션은 한 번이지만, 같은 컴포넌트가 탭 전환이나 목록 재정렬로 다시 마운트되면 그때마다 또 간다. 노출은 사용자당 실험당 한 번이면 되니 `exp`와 `aid`로 클라이언트에서 한 번만 보내게 막고, 집계에서도 같은 쌍은 하나로 센다. 그리고 개발·스테이징 환경의 이벤트가 운영 실험 데이터에 들어가지 않게 환경 값을 이벤트에 붙여 둔다.
+
 ## 다시 4.8%와 5.3%로
 
 처음의 숫자로 돌아가면, 지난주와 이번 주를 비교한 0.5%p로는 아무것도 말할 수 없다. 같은 기간에 사용자를 해시로 일관되게 나누고, 실제로 화면을 본 사람만 세고, 미리 정한 표본만큼 모은 뒤 한 번 판정해야 그 숫자가 화면의 효과라고 말할 수 있다. 그 전에 SRM으로 나누기가 제대로 됐는지 확인하고, 가드레일로 다른 곳이 망가지지 않았는지 본다. 이 과정을 자주 반복하려면 변형을 데이터로 다루는 화면 구조와 끝난 플래그를 지우는 습관이 같이 있어야 한다.

@@ -1,0 +1,578 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-reporting-sql");
+
+관리자 화면에 "회원별 마지막 주문", "일별 매출 그래프", "회원별 결제 합계"를 넣어 달라는 요청이 왔다. 처음에는 쿼리를 하나씩 짜서 붙인다. 그래프는 주문이 없던 날이 빠져서 선이 이상하게 이어지고, 합계 화면은 열 때마다 몇 초씩 걸리고, 테스트용으로 주문 50만 건을 넣는 데만 한참이 걸린다.
+
+PostgreSQL에는 이런 읽기와 리포트 쪽 일을 짧고 빠르게 해 주는 문법이 있다. 그룹마다 한 줄만 남기는 `DISTINCT ON`, 조건별 집계 `FILTER`, 빈 날짜를 채우는 `generate_series`, 계산 컬럼, 결과를 저장해 두는 머티리얼라이즈드 뷰, 대량 적재 `COPY`, 그리고 그룹별 상위 N건을 구하는 `LATERAL`이다. 쓰기 쪽 기능(`RETURNING`, `ON CONFLICT`, `MERGE`, 쓰기 CTE)은 앞 글 [PostgreSQL다운 SQL](/posts/postgres-advanced-sql)에서 다뤘다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고, 아래 출력은 모두 이 환경에서 실제로 돌린 결과다.
+
+## 앞 글에서 이어지는 서점 데이터
+
+시리즈의 서점 `shop` 테이블 네 개를 쓴다. 새 DB에서 아래를 그대로 실행하면 앞 글의 `RETURNING`부터 쓰기 CTE까지 따라온 것과 같은 상태가 된다.
+
+```sql
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email      text NOT NULL UNIQUE,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE books (
+  id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  isbn  text NOT NULL UNIQUE,
+  title text NOT NULL,
+  price integer NOT NULL,
+  stock integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE orders (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users (id),
+  status     text NOT NULL DEFAULT 'pending',   -- pending, paid, cancelled
+  total      integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  order_id bigint NOT NULL REFERENCES orders (id),
+  book_id  bigint NOT NULL REFERENCES books (id),
+  qty      integer NOT NULL,
+  price    integer NOT NULL,                    -- 주문 당시 가격
+  PRIMARY KEY (order_id, book_id)
+);
+
+INSERT INTO users (email, name, created_at) VALUES
+  ('kim@example.com',  'kim',  '2026-09-01 09:00+09'),
+  ('lee@example.com',  'lee',  '2026-09-02 10:00+09'),
+  ('park@example.com', 'park', '2026-09-03 11:00+09');
+
+INSERT INTO books (isbn, title, price, stock) VALUES
+  ('978-89-0001', '데이터베이스 첫걸음', 18000, 10),
+  ('978-89-0002', 'SQL 레시피',          25000,  5),
+  ('978-89-0003', 'PostgreSQL 인사이드', 32000,  3);
+
+INSERT INTO orders (user_id, status, total, created_at) VALUES
+  (1, 'paid',      18000, '2026-10-01 10:00+09'),
+  (1, 'paid',      57000, '2026-10-03 12:00+09'),
+  (2, 'pending',   25000, '2026-10-03 15:00+09'),
+  (1, 'cancelled', 32000, '2026-10-05 09:30+09'),
+  (2, 'paid',      32000, '2026-10-06 20:00+09'),
+  (1, 'paid',      25000, '2026-10-07 08:10+09');
+
+INSERT INTO order_items VALUES
+  (1, 1, 1, 18000), (2, 2, 1, 25000), (2, 3, 1, 32000), (3, 2, 1, 25000),
+  (4, 3, 1, 32000), (5, 3, 1, 32000), (6, 2, 1, 25000);
+
+-- 앞 글에서 바뀐 상태를 맞춘다
+INSERT INTO orders (user_id, status, total, created_at)
+VALUES (3, 'paid', 18000, '2026-10-07 21:00+09');       -- 7번 주문
+UPDATE orders SET status = 'paid' WHERE id = 3;          -- 결제 대기였던 3번은 결제됐다
+DELETE FROM order_items WHERE order_id = 4;              -- 취소된 4번 주문은 보관함으로 옮겨 지웠다
+DELETE FROM orders WHERE id = 4;
+
+SET timezone = 'Asia/Seoul';   -- 시간을 한국 시간으로 보여 준다
+SELECT id, user_id, status, total, created_at FROM orders ORDER BY id;
+```
+
+```text
+ id | user_id | status | total |       created_at
+----+---------+--------+-------+------------------------
+  1 |       1 | paid   | 18000 | 2026-10-01 10:00:00+09
+  2 |       1 | paid   | 57000 | 2026-10-03 12:00:00+09
+  3 |       2 | paid   | 25000 | 2026-10-03 15:00:00+09
+  5 |       2 | paid   | 32000 | 2026-10-06 20:00:00+09
+  6 |       1 | paid   | 25000 | 2026-10-07 08:10:00+09
+  7 |       3 | paid   | 18000 | 2026-10-07 21:00:00+09
+(6 rows)
+```
+
+처음에는 이 몇 줄로 문법을 보고, 성능을 볼 때 주문을 50만 건으로 늘린다.
+
+## 그룹마다 한 줄만 남기는 DISTINCT ON
+
+회원별 마지막 주문 하나만 필요할 때는 PostgreSQL 전용 문법 `DISTINCT ON`이 가장 짧다. "괄호 안 값이 같은 행 중에서 ORDER BY로 첫 번째인 행 하나만 남긴다"는 뜻이다.
+
+```sql
+SELECT DISTINCT ON (user_id) user_id, id, total, created_at
+FROM orders
+ORDER BY user_id, created_at DESC;   -- 첫 키는 DISTINCT ON과 같아야 한다
+```
+
+```text
+ user_id | id | total |       created_at
+---------+----+-------+------------------------
+       1 |  6 | 25000 | 2026-10-07 08:10:00+09
+       2 |  5 | 32000 | 2026-10-06 20:00:00+09
+       3 |  7 | 18000 | 2026-10-07 21:00:00+09
+(3 rows)
+```
+
+`ORDER BY`가 `DISTINCT ON`의 컬럼으로 시작하지 않으면 오류가 난다. 그리고 같은 회원 안에서 `created_at`이 같은 주문이 둘이면 어느 쪽이 나올지 정해지지 않는다. 결과가 매번 같아야 하면 `ORDER BY user_id, created_at DESC, id DESC`처럼 끝에 유일한 컬럼을 붙인다. MySQL에는 이 문법이 없어서 윈도우 함수로 쓴다.
+
+아래 플레이그라운드에서 `DISTINCT ON`과 top-N을 직접 흉내 내 보자. 정렬하고, 회원이 바뀔 때 개수를 다시 세는 것이 전부다. 시간이 같으면 id가 큰 쪽을 먼저 둔다.
+
+<CodePlayground
+  caption="회원별 최근 주문 n건의 id"
+  functionName="topNPerGroup"
+  initialCode={`function topNPerGroup(rows, n) {
+  // rows: [{ id, user_id, created_at: "2026-10-01 10:00" }, ...]
+  // user_id 오름차순, 같은 회원 안에서는 created_at 내림차순(같으면 id 내림차순)으로
+  // 회원마다 앞의 n건만 남겨 id 배열로 돌려준다
+  return [];
+}`}
+  solution={`function topNPerGroup(rows, n) {
+  const sorted = [...rows].sort((a, b) =>
+    a.user_id - b.user_id ||
+    (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0) ||
+    b.id - a.id
+  );
+  const out = [];
+  let current = null;
+  let count = 0;
+  for (const row of sorted) {
+    if (row.user_id !== current) { current = row.user_id; count = 0; } // 회원이 바뀌면 다시 센다
+    if (count < n) { out.push(row.id); count++; }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "DISTINCT ON (n = 1)", args: [[{ id: 1, user_id: 1, created_at: "2026-10-01 10:00" }, { id: 2, user_id: 1, created_at: "2026-10-03 12:00" }, { id: 3, user_id: 2, created_at: "2026-10-03 15:00" }, { id: 4, user_id: 1, created_at: "2026-10-05 09:30" }, { id: 5, user_id: 2, created_at: "2026-10-06 20:00" }, { id: 6, user_id: 1, created_at: "2026-10-07 08:10" }, { id: 7, user_id: 3, created_at: "2026-10-07 21:00" }], 1], expected: [6, 5, 7] },
+    { label: "회원별 3건", args: [[{ id: 1, user_id: 1, created_at: "2026-10-01 10:00" }, { id: 2, user_id: 1, created_at: "2026-10-03 12:00" }, { id: 3, user_id: 2, created_at: "2026-10-03 15:00" }, { id: 4, user_id: 1, created_at: "2026-10-05 09:30" }, { id: 5, user_id: 2, created_at: "2026-10-06 20:00" }, { id: 6, user_id: 1, created_at: "2026-10-07 08:10" }, { id: 7, user_id: 3, created_at: "2026-10-07 21:00" }], 3], expected: [6, 4, 2, 5, 3, 7] },
+    { label: "시간이 같으면 id 큰 쪽", args: [[{ id: 10, user_id: 5, created_at: "2026-10-01 09:00" }, { id: 11, user_id: 5, created_at: "2026-10-01 09:00" }, { id: 12, user_id: 4, created_at: "2026-09-30 23:00" }], 1], expected: [12, 11] },
+    { label: "빈 테이블", args: [[], 3], expected: [] },
+  ]}
+/>
+
+## 조건별 집계와 묶어 붙이기
+
+회원별로 전체 주문 수와 결제 완료 주문 수, 결제 금액을 한 줄에 보고 싶다. `FILTER`(9.4부터)는 집계 함수마다 따로 조건을 건다. `CASE WHEN`을 집계 안에 넣던 것보다 읽기 쉽다.
+
+```sql
+SELECT user_id,
+       count(*)                                  AS all_orders,
+       count(*)   FILTER (WHERE status = 'paid') AS paid,
+       sum(total) FILTER (WHERE status = 'paid') AS paid_total
+FROM orders
+GROUP BY user_id ORDER BY user_id;
+```
+
+```text
+ user_id | all_orders | paid | paid_total
+---------+------------+------+------------
+       1 |          3 |    3 |     100000
+       2 |          2 |    2 |      57000
+       3 |          1 |    1 |      18000
+(3 rows)
+```
+
+(취소 주문은 지웠고 대기 주문도 결제됐으니 남은 주문이 모두 `paid`다.) MySQL 8에는 `FILTER`가 없어서 `SUM(CASE WHEN status = 'paid' THEN total END)`로 쓴다.
+
+주문 하나에 담긴 책을 한 칸에 모아야 할 때도 있다. `string_agg`는 문자열로, `array_agg`는 배열로, `json_agg`는 JSON 배열로 묶는다. 셋 다 괄호 안에 `ORDER BY`를 쓸 수 있다.
+
+```sql
+SELECT o.id,
+       string_agg(b.title, ', ' ORDER BY b.title) AS titles,
+       array_agg(b.id ORDER BY b.id)              AS book_ids,
+       json_agg(json_build_object('title', b.title, 'qty', i.qty) ORDER BY b.title) AS items
+FROM orders o
+JOIN order_items i ON i.order_id = o.id
+JOIN books b       ON b.id = i.book_id
+WHERE o.id IN (1, 2)
+GROUP BY o.id ORDER BY o.id;
+```
+
+```text
+ id |             titles              | book_ids |                                        items
+----+---------------------------------+----------+-------------------------------------------------------------------------------------
+  1 | 데이터베이스 첫걸음             | {1}      | [{"title" : "데이터베이스 첫걸음", "qty" : 1}]
+  2 | PostgreSQL 인사이드, SQL 레시피 | {2,3}    | [{"title" : "PostgreSQL 인사이드", "qty" : 1}, {"title" : "SQL 레시피", "qty" : 1}]
+(2 rows)
+```
+
+`json_agg`로 주문과 항목을 한 번에 JSON으로 만들면 API가 N+1 쿼리 없이 응답을 만들 수 있다. 다만 행이 많으면 DB가 JSON을 만드는 CPU를 쓰게 되니, 페이지네이션된 소량에만 쓴다. MySQL 8은 `GROUP_CONCAT`, `JSON_ARRAYAGG`가 비슷한 역할을 한다.
+
+## 주문이 없는 날도 0으로 채우는 리포트
+
+일별 매출을 그래프로 그리려고 날짜별로 묶었다.
+
+```sql
+SELECT created_at::date AS day, count(*) AS orders, sum(total) AS sales
+FROM orders
+WHERE created_at >= '2026-10-01' AND created_at < '2026-10-08'
+GROUP BY 1 ORDER BY 1;
+```
+
+```text
+    day     | orders | sales
+------------+--------+-------
+ 2026-10-01 |      1 | 18000
+ 2026-10-03 |      2 | 82000
+ 2026-10-06 |      1 | 32000
+ 2026-10-07 |      2 | 43000
+(4 rows)
+```
+
+주문이 없던 2일, 4일, 5일이 아예 빠졌다. 그래프 라이브러리는 4일 치 점을 받아 선으로 이어 버린다. 행이 없는 날은 `GROUP BY`가 만들어 낼 수 없으니, 날짜 목록을 먼저 만들고 주문을 거기에 `LEFT JOIN`한다. 날짜 목록은 `generate_series`가 만든다.
+
+```sql
+SELECT d::date AS day,
+       count(o.id)              AS orders,    -- count(*)가 아니라 count(o.id): 빈 날은 0
+       coalesce(sum(o.total), 0) AS sales     -- sum은 빈 날 NULL이라 0으로 바꾼다
+FROM generate_series(timestamptz '2026-10-01', '2026-10-07', interval '1 day') AS d
+LEFT JOIN orders o
+  ON o.created_at >= d AND o.created_at < d + interval '1 day'
+GROUP BY d ORDER BY d;
+```
+
+```text
+    day     | orders | sales
+------------+--------+-------
+ 2026-10-01 |      1 | 18000
+ 2026-10-02 |      0 |     0
+ 2026-10-03 |      2 | 82000
+ 2026-10-04 |      0 |     0
+ 2026-10-05 |      0 |     0
+ 2026-10-06 |      1 | 32000
+ 2026-10-07 |      2 | 43000
+(7 rows)
+```
+
+흔한 실수가 두 가지 있다. `count(*)`를 쓰면 `LEFT JOIN`으로 생긴 빈 행도 1로 센다. 그리고 `timestamptz`의 하루 경계는 세션 시간대(`timezone`)를 따른다. 서버가 UTC인데 한국 날짜로 묶고 싶다면 `SET timezone = 'Asia/Seoul'`을 하거나 `created_at AT TIME ZONE 'Asia/Seoul'`로 바꿔서 묶는다. 조인 조건을 `o.created_at::date = d::date`처럼 컬럼에 함수를 씌워 쓰면 인덱스를 못 타니 범위 조건으로 쓴다.
+
+## 계산해서 저장하는 generated column
+
+주문 항목의 금액(`qty * price`)을 매번 계산하기 귀찮고, 애플리케이션이 저장하게 하면 언젠가 값이 어긋난다. generated column은 다른 컬럼으로 계산되는 컬럼을 DB가 직접 관리한다. 12부터 생겼다.
+
+```sql
+ALTER TABLE order_items
+  ADD COLUMN line_total integer GENERATED ALWAYS AS (qty * price) STORED;
+
+UPDATE order_items SET qty = 2
+WHERE order_id = 2 AND book_id = 2
+RETURNING qty, price, line_total;            -- qty를 바꾸면 line_total이 따라 바뀐다
+
+UPDATE order_items SET line_total = 0 WHERE order_id = 1;   -- 직접 쓰기는 막힌다
+```
+
+```text
+ qty | price | line_total
+-----+-------+------------
+   2 | 25000 |      50000
+(1 row)
+
+UPDATE 1
+ERROR:  column "line_total" can only be updated to DEFAULT
+DETAIL:  Column "line_total" is a generated column.
+```
+
+`STORED`는 쓸 때 계산해서 실제로 저장한다는 뜻이다. 디스크를 쓰는 대신 읽을 때 공짜이고 인덱스도 만들 수 있다. 계산식은 같은 행의 컬럼만 쓸 수 있고, 같은 입력에 늘 같은 결과를 내는(IMMUTABLE) 함수만 허용된다. 그래서 "주문 후 며칠 지났나"처럼 `now()`가 들어간 식을 넣으면 `ERROR:  generation expression is not immutable`으로 거부된다.
+
+PostgreSQL 18부터는 읽을 때 계산하는 `VIRTUAL`이 생겼고, 종류를 적지 않으면 `VIRTUAL`이 기본값이다. 16에서는 `STORED`만 있다. 기존 테이블에 `STORED` 컬럼을 추가하면 모든 행을 다시 써야 해서 큰 테이블에서는 오래 잠긴다는 것도 기억해 둔다. MySQL은 5.7부터 `VIRTUAL`(기본)과 `STORED`를 모두 지원한다.
+
+## 이름 붙인 쿼리와 저장해 둔 결과
+
+회원별 매출을 여러 화면에서 쓴다. 같은 조인을 여기저기 복사하는 대신 뷰로 이름을 붙인다.
+
+```sql
+CREATE VIEW user_sales AS
+SELECT u.id AS user_id, u.name, count(o.id) AS orders, coalesce(sum(o.total), 0) AS spent
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id AND o.status = 'paid'
+GROUP BY u.id, u.name;
+
+SELECT * FROM user_sales ORDER BY user_id;
+```
+
+```text
+ user_id | name | orders | spent
+---------+------+--------+--------
+       1 | kim  |      3 | 100000
+       2 | lee  |      2 |  57000
+       3 | park |      1 |  18000
+(3 rows)
+```
+
+뷰는 저장된 쿼리일 뿐이다. 조회할 때마다 안의 쿼리가 다시 돈다. 그래서 항상 최신이지만 무거운 집계라면 매번 무겁다. 머티리얼라이즈드 뷰는 결과를 테이블처럼 저장해 두고, `REFRESH`할 때만 다시 계산한다.
+
+```sql
+CREATE MATERIALIZED VIEW user_sales_mv AS SELECT * FROM user_sales;
+
+-- park이 주문을 하나 더 한다
+INSERT INTO orders (user_id, status, total, created_at) VALUES (3, 'paid', 25000, '2026-10-08 10:00+09');
+
+SELECT v.user_id, v.spent AS view_spent, m.spent AS mv_spent
+FROM user_sales v JOIN user_sales_mv m USING (user_id) ORDER BY 1;
+```
+
+```text
+ user_id | view_spent | mv_spent
+---------+------------+----------
+       1 |     100000 |   100000
+       2 |      57000 |    57000
+       3 |      43000 |    18000
+(3 rows)
+```
+
+뷰는 바로 43000이 됐고, 머티리얼라이즈드 뷰는 아직 18000이다. 아래 그림처럼 둘은 데이터가 흐르는 시점이 다르다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="뷰는 조회할 때, 머티리얼라이즈드 뷰는 REFRESH할 때 계산한다"
+  nodes={[
+    { id: "t", label: "orders, users", sub: "원본 테이블", x: 200, y: 40, w: 150 },
+    { id: "v", label: "user_sales", sub: "VIEW: 쿼리만", x: 90, y: 140, w: 130 },
+    { id: "mv", label: "user_sales_mv", sub: "결과를 저장", x: 310, y: 140, w: 140 },
+    { id: "q1", label: "조회", sub: "항상 최신", x: 90, y: 240, w: 110 },
+    { id: "q2", label: "조회", sub: "빠르지만 지난 값", x: 310, y: 240, w: 140 },
+  ]}
+  edges={[
+    { from: "t", to: "v", label: "매번 계산" },
+    { from: "t", to: "mv", label: "REFRESH 때만", dashed: true },
+    { from: "v", to: "q1" },
+    { from: "mv", to: "q2" },
+  ]}
+/>
+
+일반 `REFRESH MATERIALIZED VIEW`는 다시 계산하는 동안 강한 잠금을 잡아서 그동안 그 뷰를 읽는 쿼리가 모두 기다린다. 읽기를 막지 않으려면 `CONCURRENTLY`를 쓰는데, 이건 새 결과와 옛 결과를 비교해 바뀐 행만 고치는 방식이라 행을 구별할 유니크 인덱스가 필요하다.
+
+```sql
+REFRESH MATERIALIZED VIEW CONCURRENTLY user_sales_mv;     -- 유니크 인덱스가 없으면
+CREATE UNIQUE INDEX ON user_sales_mv (user_id);
+REFRESH MATERIALIZED VIEW CONCURRENTLY user_sales_mv;     -- 이제 된다
+SELECT user_id, spent FROM user_sales_mv ORDER BY 1;
+```
+
+```text
+ERROR:  cannot refresh materialized view "public.user_sales_mv" concurrently
+HINT:  Create a unique index with no WHERE clause on one or more columns of the materialized view.
+CREATE INDEX
+REFRESH MATERIALIZED VIEW
+ user_id | spent
+---------+--------
+       1 | 100000
+       2 |  57000
+       3 |  43000
+(3 rows)
+```
+
+`CONCURRENTLY`도 같은 뷰의 REFRESH끼리는 동시에 돌 수 없고, 바뀐 행이 많으면 일반 REFRESH보다 일이 많다. PostgreSQL에는 원본이 바뀔 때 자동으로 갱신하는 기능이 없어서 cron이나 pg_cron으로 주기적으로 돌린다. 몇 분 늦어도 되는 대시보드 집계에 맞고, 실시간이 필요하면 [트리거](/posts/postgres-functions-triggers)로 요약 테이블을 직접 관리하거나 [캐시](/posts/caching-strategies)를 쓴다. MySQL에는 머티리얼라이즈드 뷰가 없다.
+
+## 50만 건을 한 번에 넣는 COPY
+
+성능을 보려면 데이터가 커야 한다. 회원을 2만 명으로 늘리고, 주문 50만 건을 CSV로 만들어 넣는다. 대량 적재에는 `INSERT`가 아니라 `COPY`를 쓴다. 행마다 문장을 해석하고 왕복하는 대신, 파일 하나를 스트림으로 흘려 넣는다.
+
+```sql
+-- 회원 4 ~ 20000번
+INSERT INTO users (email, name, created_at)
+SELECT 'user' || i || '@example.com', 'user' || i,
+       timestamptz '2025-10-01 00:00+09' + i * interval '20 minutes'
+FROM generate_series(4, 20000) AS i;
+
+-- 주문 50만 건을 CSV로 내보낸다 (psql 명령, 파일은 클라이언트 쪽에 생긴다)
+SELECT setseed(0.42);
+\copy (SELECT 1 + floor(random() * 20000)::bigint, CASE WHEN random() < 0.85 THEN 'paid' WHEN random() < 0.5 THEN 'pending' ELSE 'cancelled' END, (1 + floor(random() * 50)::int) * 1000, timestamptz '2025-10-17 00:00+09' + random() * interval '365 days' FROM generate_series(1, 500000)) TO '/tmp/orders.csv' WITH (FORMAT csv, HEADER)
+
+-- CSV를 orders에 넣는다
+\copy orders (user_id, status, total, created_at) FROM '/tmp/orders.csv' WITH (FORMAT csv, HEADER)
+VACUUM ANALYZE;
+```
+
+```text
+COPY 500000
+```
+
+`COPY ... FROM '/파일'`은 서버가 자기 디스크의 파일을 읽어서 슈퍼유저나 `pg_read_server_files` 역할이 필요하다. psql의 `\copy`는 클라이언트가 파일을 읽어 `COPY FROM STDIN`으로 보내 주니 일반 계정으로도 된다. 애플리케이션에서는 드라이버의 COPY API(JDBC `CopyManager`, psycopg `cursor.copy()` 등)를 쓴다.
+
+얼마나 차이 나는지 주문 2만 건을 세 가지로 넣어 봤다. 같은 장비에서 유닉스 소켓으로 접속했고, 시간은 `time`으로 쟀다.
+
+```bash
+# 1) INSERT 2만 개, 문장마다 자동 커밋
+time sudo -u postgres psql -d shop -q -f /tmp/insert_20k.sql
+# 2) 같은 파일을 트랜잭션 하나로 (-1)
+time sudo -u postgres psql -d shop -q -1 -f /tmp/insert_20k.sql
+# 3) \copy
+time sudo -u postgres psql -d shop -c "\copy orders_ins (user_id, status, total, created_at) FROM '/tmp/orders_20k.csv' WITH (FORMAT csv, HEADER)"
+```
+
+```text
+real	0m7.988s
+real	0m1.618s
+real	0m0.086s
+```
+
+자동 커밋 INSERT는 커밋마다 WAL을 디스크에 내려 쓰느라 8초, 트랜잭션 하나로 묶으면 1.6초, `COPY`는 0.09초였다. 네트워크 너머의 DB라면 왕복 지연이 행마다 붙어서 차이가 더 벌어진다. 수만 건 이상을 넣을 때는 `COPY`, 그게 어려우면 여러 행 `INSERT ... VALUES (...), (...)`를 트랜잭션 하나로 묶는다. 처음 적재할 때는 인덱스를 나중에 만드는 편이 빠르다.
+
+## 사용자마다 최근 주문 세 건
+
+마이페이지 목록에 회원 20명을 보여 주면서 회원마다 최근 주문 세 건을 붙여야 한다. 그룹별 상위 N개(top-N per group) 문제다. 회원별 1건이라면 앞에서 본 `DISTINCT ON`으로 되지만, 3건은 안 된다. 흔히 떠올리는 답은 [윈도우 함수](/posts/sqld-window-functions)다.
+
+```sql
+-- 회원 1~20번의 주문에 회원별 순번을 매기고 3번까지만 남긴다
+SELECT user_id, id, created_at
+FROM (
+  SELECT user_id, id, created_at,
+         row_number() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+  FROM orders
+  WHERE user_id BETWEEN 1 AND 20
+) t
+WHERE rn <= 3;
+```
+
+PostgreSQL에는 다른 답이 하나 더 있다. `LATERAL`은 FROM 절의 서브쿼리가 왼쪽 테이블의 현재 행을 참조하게 해 준다. "회원 한 명마다 이 서브쿼리를 돌려라"라는 뜻이고, 프로그래밍으로 치면 바깥 for문 안의 쿼리다.
+
+```sql
+SELECT u.id AS user_id, o.id, o.created_at
+FROM users u
+CROSS JOIN LATERAL (            -- 회원 u마다 아래를 실행한다
+  SELECT id, created_at FROM orders
+  WHERE orders.user_id = u.id   -- 바깥의 u를 안에서 참조한다
+  ORDER BY created_at DESC
+  LIMIT 3
+) o
+WHERE u.id BETWEEN 1 AND 20;
+```
+
+```text
+-- 회원 1, 2번만 잘라 본 결과
+ user_id |   id   |          created_at
+---------+--------+-------------------------------
+       1 |      6 | 2026-10-07 08:10:00+09
+       1 |      2 | 2026-10-03 12:00:00+09
+       1 |      1 | 2026-10-01 10:00:00+09
+       2 | 195670 | 2026-10-10 21:37:40.73611+09
+       2 | 428658 | 2026-10-07 22:36:06.709188+09
+       2 |      5 | 2026-10-06 20:00:00+09
+(6 rows)
+```
+
+인덱스가 없을 때 두 쿼리의 실행 계획을 본다. 중요한 줄만 옮겼다.
+
+```text
+-- 윈도우 함수, 인덱스 없음
+   ->  Parallel Seq Scan on orders  (cost=0.00..7350.04 rows=174 width=24) (actual time=0.082..9.172 rows=167 loops=3)
+         Filter: ((user_id >= 1) AND (user_id <= 20))
+         Rows Removed by Filter: 166502
+ Execution Time: 22.883 ms
+
+-- LATERAL, 인덱스 없음
+               ->  Seq Scan on orders  (cost=0.00..10475.09 rows=25 width=16) (actual time=0.897..23.939 rows=25 loops=20)
+                     Filter: (user_id = u.id)
+                     Rows Removed by Filter: 499982
+                     Buffers: shared hit=84500
+ Execution Time: 480.306 ms
+```
+
+인덱스 없이는 LATERAL이 훨씬 느리다. `loops=20`이 보이는가. 회원 20명마다 50만 건을 통째로 읽었다. LATERAL은 "회원마다 한 번씩"이라서 한 번이 비싸면 그대로 곱해진다. 이제 `(user_id, created_at DESC)` 인덱스를 만든다. 회원별로 최신순 정렬된 찾아보기다. 인덱스 자체는 [인덱스 글](/posts/db-index)에서 자세히 다뤘다.
+
+```sql
+CREATE INDEX orders_user_created_idx ON orders (user_id, created_at DESC);
+```
+
+```text
+-- 윈도우 함수, 인덱스 있음
+         ->  Sort  (cost=1494.13..1495.42 rows=515 width=24) (actual time=1.434..1.498 rows=502 loops=1)
+               Sort Key: orders.user_id, orders.created_at DESC
+               ->  Bitmap Heap Scan on orders  (cost=13.70..1470.93 rows=515 width=24) (actual time=0.143..1.213 rows=502 loops=1)
+                     Heap Blocks: exact=467
+                     Buffers: shared hit=470 read=1
+ Execution Time: 1.618 ms
+
+-- LATERAL, 인덱스 있음
+ Nested Loop  (cost=0.71..264.38 rows=60 width=24) (actual time=0.024..0.269 rows=60 loops=1)
+   Buffers: shared hit=121
+   ->  Limit  (cost=0.42..12.95 rows=3 width=16) (actual time=0.008..0.012 rows=3 loops=20)
+         ->  Index Scan using orders_user_created_idx on orders  (cost=0.42..104.86 rows=25 width=16) (actual time=0.008..0.012 rows=3 loops=20)
+               Index Cond: (user_id = u.id)
+ Execution Time: 0.292 ms
+```
+
+윈도우 함수는 인덱스로 후보를 줄였지만 20명의 주문 502건을 전부 읽고 정렬한 뒤 60건만 남겼다(470페이지). LATERAL은 회원마다 인덱스에서 최신 세 건만 읽고 `Limit`에서 멈췄다(121페이지). 아래 그림이 그 움직임이다.
+
+<AlgoTrace
+  caption="LATERAL + LIMIT 3은 회원마다 인덱스 앞부분만 읽는다"
+  memoryLabel="결과"
+  cells={["u1 10-07", "u1 10-03", "u1 10-01", "u1 09-28", "u1 09-20", "u2 10-10", "u2 10-07", "u2 10-06", "u2 09-29", "u2 …"]}
+  steps={[
+    { memory: [], caption: "인덱스는 user_id 순, 같은 회원 안에서는 최신순으로 정렬돼 있다." },
+    { pointer: 0, found: [0], memory: ["u1 #6"], caption: "회원 1번. 인덱스에서 (1, 가장 최근)으로 바로 내려간다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["u1 #6", "u1 #2", "u1 #1"], caption: "옆 칸으로 두 번 더 읽으면 세 건이다. LIMIT 3이 차서 1번 회원은 여기서 끝낸다." },
+    { pointer: 5, found: [0, 1, 2, 5], memory: ["u1 #6", "u1 #2", "u1 #1", "u2 #195670"], caption: "1번의 나머지 주문은 건너뛰고 회원 2번의 시작점으로 다시 내려간다." },
+    { pointer: 7, found: [0, 1, 2, 5, 6, 7], memory: ["u1 #6", "u1 #2", "u1 #1", "u2 #195670", "u2 #428658", "u2 #5"], caption: "2번도 세 건만 읽는다. 회원이 주문을 수천 건 가져도 읽는 양은 세 건이다." },
+  ]}
+/>
+
+그렇다고 LATERAL이 늘 이기지는 않는다. 회원 2만 명 전체로 돌리면 LATERAL은 98.8ms, 윈도우 함수는 인덱스 순서대로 50만 건을 다 읽어 468.6ms가 걸렸다. 여기서도 LATERAL이 빨랐지만, 회원 한 명당 주문이 몇 건 안 되면 회원마다 인덱스를 새로 내려가는 비용이 더 커져서 윈도우 함수가 유리해진다. 인덱스가 없으면 앞에서 본 대로 LATERAL이 크게 진다. 고르는 기준은 두 가지다. 바깥 행(회원)이 적고 그룹이 크면 LATERAL, 전체를 한 번 훑어야 하고 그룹이 작으면 윈도우 함수다.
+
+주문이 없는 회원도 목록에 남기려면 `CROSS JOIN LATERAL` 대신 `LEFT JOIN LATERAL (...) o ON true`를 쓴다. 서브쿼리가 0행이면 주문 컬럼이 NULL로 채워진다.
+
+## 대시보드가 멈췄는데 DB는 한가할 때
+
+머티리얼라이즈드 뷰를 운영에 올리고 나면 이런 장애를 한 번쯤 만난다. 매시 정각마다 관리자 대시보드가 몇십 초씩 멈춘다. DB CPU는 낮고, 느린 쿼리 로그에도 대시보드 쿼리는 "오래 걸렸다"로만 찍힌다. 일하는 게 아니라 기다리는 중이라는 뜻이다. 이럴 때는 `pg_stat_activity`에서 누가 무엇을 기다리는지 본다.
+
+재현은 이렇게 했다. 배치(`application_name=batch`)가 트랜잭션 안에서 일반 `REFRESH MATERIALIZED VIEW user_sales_mv`를 하고 몇 초 머무는 동안, 대시보드(`dashboard`)가 그 뷰를 읽는다.
+
+```sql
+-- 지금 접속들이 무엇을 기다리고, 누구 때문에 막혔나
+SELECT pid, application_name AS app, state, wait_event_type, wait_event,
+       pg_blocking_pids(pid) AS blocked_by
+FROM pg_stat_activity
+WHERE datname = current_database() AND pid <> pg_backend_pid();
+
+-- 그 뷰에 걸린 잠금
+SELECT pid, mode, granted FROM pg_locks
+WHERE relation = 'user_sales_mv'::regclass
+  AND mode IN ('AccessExclusiveLock', 'AccessShareLock');
+```
+
+```text
+ pid  |    app    | state  | wait_event_type | wait_event | blocked_by
+------+-----------+--------+-----------------+------------+------------
+ 8007 | batch     | active | Timeout         | PgSleep    | {}
+ 8017 | dashboard | active | Lock            | relation   | {8007}
+(2 rows)
+
+ pid  |        mode         | granted
+------+---------------------+---------
+ 8007 | AccessExclusiveLock | t
+ 8017 | AccessShareLock     | f
+(2 rows)
+```
+
+`wait_event_type`이 `Lock`이고 `blocked_by`에 배치의 pid가 있다. 일반 REFRESH가 잡는 `AccessExclusiveLock`은 읽기(`AccessShareLock`)까지 막는다. 같은 배치를 `REFRESH MATERIALIZED VIEW CONCURRENTLY`로 바꾸자 대시보드 조회는 기다리지 않고 2ms에 끝났다. 앞에서 본 유니크 인덱스가 여기서 값을 한다. 급할 때는 `pg_cancel_backend(8007)`로 갱신을 멈추면 대기가 풀린다.
+
+대량 적재 쪽에서 흔한 사고는 CSV 한 줄이다. 2행은 멀쩡하고 3행의 금액이 `abc`인 파일을 `\copy`로 넣었다.
+
+```text
+ERROR:  invalid input syntax for type integer: "abc"
+CONTEXT:  COPY orders, line 3, column total: "abc"
+```
+
+`COPY`는 한 문장이라 한 줄이 틀리면 앞의 정상 줄까지 전부 들어가지 않는다. 실제로 넣기 전후 `count(*)`가 50만 7건으로 같았다. `CONTEXT`에 파일의 줄 번호와 컬럼이 나오니 그 줄을 고치면 된다. 반쯤 들어가는 일이 없다는 건 장점이지만, 수백만 줄 파일이라면 먼저 모든 컬럼을 `text`로 둔 임시 테이블에 넣고 SQL로 검사한 뒤 옮기는 편이 덜 고생스럽다. PostgreSQL 17부터는 `COPY ... WITH (ON_ERROR ignore)`로 형식이 틀린 줄을 건너뛸 수 있다.
+
+## 읽는 양을 줄이는 쪽으로
+
+이 글의 문법은 대부분 리포트를 짧게 쓰게 해 주지만, 빠른지는 따로 확인해야 한다. `DISTINCT ON`과 `LATERAL`은 인덱스가 받쳐 줄 때 그룹마다 앞부분만 읽고, 인덱스가 없으면 오히려 더 많이 읽는다. 머티리얼라이즈드 뷰는 계산을 미리 해 두는 대신 값이 늦고, REFRESH 방식에 따라 읽기를 막는다. `COPY`는 왕복과 커밋을 줄여서 빠르다. 어느 쪽이든 실행 계획의 `loops`, `rows`, `Buffers`로 실제로 읽은 양을 보고 고른다. 같은 데이터에 함수와 트리거로 로직을 얹는 이야기는 [함수, 프로시저, 트리거](/posts/postgres-functions-triggers)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 그룹별 최신 N건은 어떻게 구하고, 어떤 방법이 빠른가요?
+
+윈도우 함수 `row_number()`로 순번을 매겨 거르는 방법과 `LATERAL` 서브쿼리에 `ORDER BY ... LIMIT N`을 거는 방법이 있다. `(user_id, created_at DESC)` 인덱스가 있고 바깥 그룹 수가 적으면 LATERAL이 그룹마다 N건만 읽어서 빠르다. 예제에서 회원 20명은 0.29ms 대 1.6ms였다. 인덱스가 없으면 LATERAL은 그룹마다 테이블을 다 읽어 크게 느려지니 계획을 꼭 확인한다. 1건이면 `DISTINCT ON`이 가장 짧다.
+
+### 뷰와 머티리얼라이즈드 뷰는 언제 쓰나요?
+
+뷰는 이름 붙인 쿼리라 조회할 때마다 계산하고 늘 최신이다. 머티리얼라이즈드 뷰는 결과를 저장해 두고 `REFRESH` 때만 다시 계산해서 빠르지만 그사이 값이 늦다. 일반 REFRESH는 읽기를 막으니 운영에서는 `CONCURRENTLY`를 쓰고, 이를 위해 유니크 인덱스가 필요하다. 자동 갱신이 없어서 몇 분 늦어도 되는 집계에 맞다.
+
+### 대량 데이터를 빠르게 넣으려면 어떻게 하나요?
+
+`COPY`를 쓴다. 예제에서 2만 건이 자동 커밋 INSERT로 8초, 트랜잭션 하나로 묶은 INSERT로 1.6초, `\copy`로 0.09초였다. 서버 파일을 읽는 `COPY FROM '파일'`은 슈퍼유저나 `pg_read_server_files`가 필요하니 보통 클라이언트의 `\copy`나 드라이버 COPY API를 쓴다. 처음 적재라면 인덱스와 외래 키를 나중에 만들면 더 빠르다.
+
+### DISTINCT ON은 어떻게 동작하고, 쓸 때 주의할 점은요?
+
+괄호 안 값이 같은 행 중에서 `ORDER BY`로 첫 번째인 행 하나만 남기는 PostgreSQL 전용 문법이다. 그래서 `ORDER BY`는 `DISTINCT ON`의 컬럼으로 시작해야 하고, 아니면 오류가 난다. 정렬 키가 같은 행이 둘이면 어느 쪽이 나올지 정해지지 않으니 끝에 id 같은 유일한 컬럼을 붙인다. MySQL에는 없어서 윈도우 함수로 쓴다.
+
+### 주문이 없는 날도 0으로 나오는 일별 리포트는 어떻게 만드나요?
+
+행이 없는 날은 `GROUP BY`가 만들어 낼 수 없으니 `generate_series`로 날짜 목록을 먼저 만들고 주문을 `LEFT JOIN`한다. 이때 `count(*)` 대신 `count(o.id)`를 써야 빈 날이 0이 되고, `sum`은 `coalesce`로 0을 채운다. 조인 조건은 컬럼에 함수를 씌우지 말고 범위 조건으로 써야 인덱스를 탄다. 하루 경계는 세션 시간대를 따르니 시간대도 함께 정한다.

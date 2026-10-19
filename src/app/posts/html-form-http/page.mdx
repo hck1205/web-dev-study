@@ -445,6 +445,69 @@ HTML 폼에는 검증 속성이 있다. `required`, `minlength`, `maxlength`, `p
 
 React 19는 이 방향으로 폼을 다시 다룬다. `<form action={fn}>`처럼 `action`에 함수를 넘기면 제출할 때 React가 `FormData`를 그 함수에 넘겨 준다. 처리 중 상태는 `useFormStatus`, 결과와 에러는 `useActionState`로 받는다. Next.js의 서버 액션을 `action`에 넘기면 하이드레이션 전에 제출해도 일반 POST로 동작한다. 결국 밑에서는 이 글에서 본 POST 요청이 오간다.
 
+## 보낸 값과 받은 값이 다를 때
+
+폼 버그는 대개 "브라우저에서는 분명히 보냈는데 서버에는 다르게 도착했다"로 신고된다. 어디서 바뀌었는지는 층을 하나씩 떼어 보면 나온다. 아래는 Ubuntu 24.04에서 nginx 1.24(`localhost:18610`) 뒤에 Node.js 22 앱을 두고 재현한 것이다.
+
+사진 업로드가 "가끔" 실패한다는 신고가 오면 크기부터 본다. 2MB 파일을 multipart로 올려 봤다.
+
+```bash
+# 2MB짜리 테스트 파일을 만들어 폼 필드 photo로 올린다
+head -c 2000000 /dev/urandom > photo.jpg
+curl -s -i -F "photo=@photo.jpg" http://localhost:18610/upload/ | head -1
+```
+
+```text
+HTTP/1.1 413 Request Entity Too Large
+```
+
+앱 로그에는 아무것도 없다. nginx가 `Content-Length`만 보고 본문을 받기도 전에 거절했기 때문이다. nginx error.log에 이유가 남는다.
+
+```text
+2026/10/18 11:02:31 [error] 899#899: *646 client intended to send too large body: 2000200 bytes, client: 127.0.0.1, server: , request: "POST /upload/ HTTP/1.1", host: "localhost:18610"
+```
+
+`2000200 bytes`는 파일 2,000,000바이트에 경계 문자열과 부분 헤더가 붙은 크기다. 사용자가 올린 파일보다 본문이 조금 크다는 걸 잊으면, 한도를 딱 파일 크기에 맞췄다가 또 걸린다. 브라우저 화면에는 nginx의 HTML 에러 페이지가 오니, fetch로 올리고 `res.json()`을 부르면 413 대신 JSON 파싱 에러만 보인다. 한도는 nginx의 `client_max_body_size`, 앱의 multipart 파서, 그 앞의 로드 밸런서가 각각 갖고 있으니 셋을 같이 맞춘다. 설정은 [nginx 리버스 프록시](/posts/nginx-reverse-proxy)의 업로드 부분에 있다.
+
+검색어 `C++`가 `C`로 검색된다는 신고도 있다. 손으로 쿼리 문자열을 만들었거나, 서버가 폼 규칙과 URL 규칙을 섞어 풀었을 때다. Node.js로 풀어 보면 차이가 바로 보인다.
+
+```bash
+node -e '
+console.log(decodeURIComponent("http+form"));            // URL 규칙: + 는 그대로
+console.log(new URLSearchParams("q=http+form").get("q")); // 폼 규칙: + 는 공백
+console.log(new URLSearchParams("q=C%2B%2B").get("q"));   // 브라우저가 보낸 C++
+console.log(new URLSearchParams("q=C++").get("q"));       // 손으로 붙인 C++
+'
+```
+
+```text
+http+form
+http form
+C++
+C  
+```
+
+마지막 줄은 `C` 뒤에 공백 두 칸이다. 브라우저 폼은 `+`를 `%2B`로 바꿔 보내니 문제가 없다. 깨지는 건 `"/search?q=" + keyword`처럼 문자열을 이어 붙인 코드다. 반대로 서버가 `decodeURIComponent`로 폼 값을 풀면 `http form`이 `http+form`으로 남는다. 보내는 쪽은 `URLSearchParams`나 `encodeURIComponent`로 만들고, 받는 쪽은 폼 파서(`URLSearchParams`, 프레임워크의 폼 파서)로 푼다. 어느 쪽이 틀렸는지는 개발자 도구 Network 탭의 Payload에서 "view source"로 실제로 나간 문자열을 보면 갈린다.
+
+마지막은 fetch로 파일을 올렸는데 서버가 "boundary를 찾을 수 없다"며 400을 주는 경우다. 앞에서 말한 `Content-Type` 직접 지정 실수다. Node.js 22의 fetch로 같은 `FormData`를 두 번 보내고 서버가 받은 헤더를 찍었다.
+
+```js
+const fd = new FormData();
+fd.append("title", "beach");
+
+// Content-Type을 직접 적었다
+await fetch(url, { method: "POST", body: fd, headers: { "Content-Type": "multipart/form-data" } });
+// 비워 두었다
+await fetch(url, { method: "POST", body: fd });
+```
+
+```text
+server got: multipart/form-data
+server got: multipart/form-data; boundary=----formdata-undici-080128956360
+```
+
+첫 요청은 경계 문자열이 빠져서 서버가 본문을 자를 수 없다. 경계 값의 숫자는 요청마다 무작위로 바뀐다. 사내 HTTP 래퍼가 모든 요청에 기본 `Content-Type`을 박아 두는 경우에도 같은 일이 생기니, 업로드 요청에서 그 기본값이 빠지는지 확인한다.
+
 ## 다시 검색창과 로그인 폼으로
 
 검색 폼은 GET이라 값이 `q=http+form`으로 주소에 붙고, 그래서 공유하고 북마크할 수 있다. 로그인 폼은 POST여야 값이 본문으로 가고 주소와 기록에 남지 않는다. 그 사이에서 브라우저는 이름 있는 컨트롤만 골라 쌍을 만들고, 공백은 `+`로, 나머지는 `%XX`로 바꾸고, 파일이 있으면 경계 문자열로 본문을 나눈다. 보낸 뒤에는 303으로 새로고침을 안전하게 만들고, CSRF 토큰과 SameSite로 다른 사이트의 제출을 막고, 서버에서 값을 다시 검증한다.

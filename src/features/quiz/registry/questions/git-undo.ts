@@ -49,51 +49,6 @@ export const GIT_UNDO: QuizQuestion[] = [
   {
     id: "git-undo-4",
     post: "git-undo",
-    question: "git reset --hard HEAD~2로 커밋 두 개가 사라졌다. 되찾으려면 무엇부터 보나?",
-    choices: [
-      "git log --all",
-      "git reflog",
-      "git stash list",
-      "git status",
-    ],
-    answer: 1,
-    explanation:
-      "reset은 이름표만 옮기고 커밋 객체는 남겨 둔다. 어느 브랜치에서도 닿지 않으니 git log에는 안 보이지만, reflog에는 reset 직전 위치(HEAD@{1})의 해시가 남아 있어 git branch rescue 해시로 살릴 수 있다. reflog는 로컬에만 있고 기본 설정에서 수십 일 뒤 만료된다.",
-    anchor: "reset---hard-뒤에-사라진-커밋-찾기",
-  },
-  {
-    id: "git-undo-5",
-    post: "git-undo",
-    question: "새 파일을 git add만 하고 커밋하기 전에 git reset --hard를 쳤다. 그 파일 내용을 찾을 수 있는 방법은?",
-    choices: [
-      "git reflog에서 그 파일의 줄을 찾는다",
-      "git restore --staged로 되돌린다",
-      "방법이 없다",
-      "git fsck --lost-found로 dangling blob을 찾는다",
-    ],
-    answer: 3,
-    explanation:
-      "add하는 순간 내용이 blob으로 저장되지만, 커밋을 하지 않았으니 reflog에는 아무 기록이 없다. git fsck --lost-found는 어디에서도 가리키지 않는 객체를 찾아 주고, 거기 나온 dangling blob을 git show로 열면 내용이 나온다. 파일 이름은 tree에 있었던 정보라 함께 복구되지 않는다.",
-    anchor: "reset---hard-뒤에-사라진-커밋-찾기",
-  },
-  {
-    id: "git-undo-6",
-    post: "git-undo",
-    question: "git stash pop을 했는데 충돌이 났다. 그 stash 항목은 어떻게 되나?",
-    choices: [
-      "목록에 그대로 남아 있다",
-      "pop이니까 목록에서 지워진다",
-      "자동으로 새 브랜치로 옮겨진다",
-      "충돌 난 파일만 빼고 나머지만 목록에 남는다",
-    ],
-    answer: 0,
-    explanation:
-      "pop은 적용이 성공했을 때만 항목을 지우고, 충돌이 나면 The stash entry is kept 메시지와 함께 남겨 둔다. 충돌을 풀고 나서 직접 git stash drop으로 지운다. 충돌을 피하려면 stash를 만든 커밋에서 새 브랜치로 적용하는 git stash branch를 쓴다.",
-    anchor: "잠깐-치워-두기",
-  },
-  {
-    id: "git-undo-7",
-    post: "git-undo",
     question: "Stripe 라이브 키가 든 .env를 커밋해서 푸시했다. 가장 먼저 할 일은?",
     choices: [
       "git revert로 그 커밋을 되돌린다",
@@ -105,5 +60,35 @@ export const GIT_UNDO: QuizQuestion[] = [
     explanation:
       "푸시된 키는 이미 클론, 포크, CI 로그, 수집 봇에 복사됐을 수 있어서 히스토리를 지워도 회수할 수 없다. 그래서 키 교체가 먼저다. revert나 rm은 옛 커밋에 키를 남기니, 교체한 뒤 filter-repo 같은 도구로 히스토리를 다시 쓰고 팀원 클론까지 정리한다.",
     anchor: "비밀-값을-커밋했을-때",
+  },
+  {
+    id: "git-undo-5",
+    post: "git-undo",
+    question: "server.js를 실수로 git add했다. 파일의 변경은 그대로 두고 커밋 대상에서만 빼려면?",
+    choices: [
+      "git restore server.js",
+      "git restore --staged server.js",
+      "git reset --hard",
+      "git clean -f server.js",
+    ],
+    answer: 1,
+    explanation:
+      "restore --staged는 인덱스만 HEAD 내용으로 되돌려 add를 취소하고 파일의 변경은 작업 트리에 남긴다. 옵션 없는 git restore는 작업 트리의 변경을 버리는 명령이라 되살릴 수 없다.",
+    anchor: "add한-것을-내린다",
+  },
+  {
+    id: "git-undo-6",
+    post: "git-undo",
+    question: "빌드 찌꺼기를 지우려고 git clean을 쓰려 한다. 먼저 해야 할 일은?",
+    choices: [
+      "git clean -x로 무시된 파일까지 한 번에 지운다",
+      "git stash로 untracked 파일을 치운다",
+      "git clean -n(-nd)으로 무엇이 지워질지 미리 본다",
+      "git restore .로 작업 트리를 되돌린다",
+    ],
+    answer: 2,
+    explanation:
+      "git clean이 지운 파일은 휴지통에 가지 않고 Git도 저장해 두지 않아 되살릴 수 없다. 그래서 -n으로 미리 보고 확인한 뒤 -fd로 지운다. -x는 .env와 node_modules까지 쓸어 가니 거의 쓸 일이 없다.",
+    anchor: "파일에서-고친-것을-버린다",
   },
 ];

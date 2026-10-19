@@ -106,4 +106,19 @@ export const HTTP_METHODS: QuizQuestion[] = [
       "표준은 GET 본문을 금지하지 않고, 정해진 의미가 없으며 일부 구현이 거절할 수 있다고만 한다. 그래서 Elasticsearch처럼 받아 주는 서버도 있다. 하지만 fetch 오류, 캐시 키, 중간 장비 문제가 있어 긴 조건은 POST로 보내는 게 현실적이다.",
     anchor: "get에-본문을-싣지-않는-이유",
   },
+  {
+    id: "http-methods-8",
+    post: "http-methods",
+    question: "nginx 뒤 업스트림 한 대가 요청을 받자마자 연결을 끊는다. GET은 200으로 성공하는데 POST만 502가 나는 이유는?",
+    choices: [
+      "멱등이 아닌 POST는 이미 보낸 뒤라면 nginx가 다음 서버로 재시도하지 않아서",
+      "nginx는 POST 본문을 버퍼링하지 못해서",
+      "POST는 업스트림 keepalive 연결을 쓰지 못해서",
+      "nginx가 POST에는 proxy_read_timeout을 짧게 적용해서",
+    ],
+    answer: 0,
+    explanation:
+      "nginx는 1.9.13부터 POST, PATCH 같은 멱등이 아닌 요청을 업스트림에 보낸 뒤에는 다른 서버로 넘기지 않는다. 첫 서버가 이미 처리했을 수 있기 때문이다. access.log의 upstream_status가 GET은 '502, 200', POST는 '502' 하나로 남는다.",
+    anchor: "프록시는-멱등성을-보고-재시도를-고른다",
+  },
 ];

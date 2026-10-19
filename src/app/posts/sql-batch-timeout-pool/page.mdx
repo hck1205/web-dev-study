@@ -1,0 +1,264 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-batch-timeout-pool");
+
+주문 1만 건을 옮기는 배치가 3초 걸린다. 쿼리 하나하나는 0.1ms도 안 되는데 그렇다. 오후에는 응용 서버를 늘렸더니 오히려 DB가 `too many clients`를 내며 연결을 거부한다. 밤사이에는 누군가 열어 둔 트랜잭션 하나 때문에 테이블이 부풀어 있다. 셋 다 느린 쿼리 목록에는 나오지 않는다. 쿼리 안이 아니라 쿼리 바깥에서 드는 비용이라서다.
+
+느린 쿼리를 찾고 계획을 읽는 방법은 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에서, 쿼리를 고쳐 쓰는 방법은 [쿼리 고쳐 쓰기 글](/posts/sql-query-rewrite)에서 봤다. 이 글은 커밋 수, 문장 수, 트랜잭션 길이, 연결 수처럼 쿼리 밖에서 쌓이는 비용을 줄이는 방법을 본다. 예제 테이블은 [인덱스 글](/posts/db-index)의 주문 100만 건이고, 기준은 Ubuntu 24.04의 PostgreSQL 16이다. 출력은 이 환경에서 실제로 돌린 결과다.
+
+## 한 줄씩 넣지 말고 묶어서 넣는다
+
+쓰기도 같은 원리다. 주문 1만 건을 넣는 방법 네 가지를 같은 서버 안에서 psql로 재 봤다. 인덱스 없는 연습용 테이블을 하나 만들어 쓴다.
+
+```sql
+-- orders와 같은 컬럼, 기본값, id 자동 증가만 복사한다 (인덱스는 없다)
+CREATE TABLE orders_staging (LIKE orders INCLUDING DEFAULTS INCLUDING IDENTITY);
+
+-- 1. 한 줄씩, 각각 자동 커밋 (1만 번 커밋)
+INSERT INTO orders_staging (user_id, product_id, status, amount, created_at) VALUES (1, 1, 'paid', 1000, now());
+INSERT INTO orders_staging (user_id, product_id, status, amount, created_at) VALUES (2, 2, 'paid', 2000, now());
+-- ... 1만 줄
+
+-- 2. 같은 1만 줄을 BEGIN ... COMMIT 하나로 감싼다 (커밋 1번)
+
+-- 3. 여러 행을 한 문장에 (문장 1개)
+INSERT INTO orders_staging (user_id, product_id, status, amount, created_at) VALUES
+  (1, 1, 'paid', 1000, now()),
+  (2, 2, 'paid', 2000, now()),
+  -- ... 1만 행
+  (10000, 1000, 'paid', 100000, now());
+
+-- 4. COPY로 CSV 파일을 흘려 넣는다 (psql의 \copy는 클라이언트 쪽 파일을 읽는다)
+\copy orders_staging (user_id, product_id, status, amount, created_at) FROM 'orders.csv' WITH (FORMAT csv)
+```
+
+```text
+1. 한 줄씩 자동 커밋   약 2.7~3.5초
+2. 트랜잭션 하나       약 0.75초
+3. 여러 행 INSERT      약 0.13초
+4. COPY               약 0.06초
+```
+
+네 방법이 시간을 어디에 쓰는지 그려 보면 이렇다. 아래 그림에서 다음을 누르면 한 줄씩 자동 커밋할 때와 묶어서 넣을 때 응용, DB, 디스크 사이에 오가는 것이 차례로 나온다.
+
+<SequenceDiagram
+  caption="커밋마다 디스크를 기다리고, 문장마다 왕복한다"
+  actors={[
+    { id: "app", label: "응용·psql" },
+    { id: "db", label: "PostgreSQL" },
+    { id: "disk", label: "WAL 디스크" },
+  ]}
+  steps={[
+    { from: "app", to: "db", label: "INSERT 1행", title: "한 줄을 보낸다", detail: "자동 커밋이라 문장 하나가 트랜잭션 하나다. 파싱과 계획도 문장마다 한 번씩 한다." },
+    { from: "db", to: "disk", label: "fsync", title: "커밋마다 디스크를 기다린다", detail: "커밋이 끝났다고 답하려면 WAL이 디스크에 확실히 내려가야 한다. 1만 번 커밋이면 1만 번 기다린다." },
+    { from: "db", to: "app", label: "INSERT 0 1", title: "응답이 와야 다음 줄", detail: "이 왕복을 1만 번 한다. 한 줄씩 자동 커밋은 약 2.7~3.5초가 걸렸다." },
+    { from: "app", to: "db", label: "BEGIN … COMMIT", title: "트랜잭션 하나로 묶으면", detail: "문장은 그대로 1만 개지만 fsync는 COMMIT 때 한 번이다. 약 0.75초로 줄었다." },
+    { from: "app", to: "db", label: "VALUES 1만 행", title: "문장 하나에 담으면", detail: "파싱, 계획, 왕복이 한 번으로 준다. 약 0.13초다." },
+    { from: "db", to: "disk", label: "fsync 1번", title: "COPY는 가장 짧은 길", detail: "행을 그대로 흘려 넣어 문장 처리 비용까지 줄인다. 약 0.06초였다." },
+  ]}
+/>
+
+1과 2의 차이는 커밋 횟수다. 커밋할 때마다 WAL(변경 기록)을 디스크에 확실히 써야(fsync) 해서, 1만 번 커밋은 1만 번 디스크를 기다린다. 2와 3의 차이는 문장 수다. 문장마다 파싱, 계획, 실행 준비를 반복한다. 여기에 응용 서버와 DB 사이의 왕복이 문장마다 붙는다. 위 숫자는 같은 서버 안이라 왕복이 거의 없는 경우이고, 네트워크를 건너면 1번은 왕복 1만 번이 더해진다.
+
+배치는 1,000건 안팎으로 끊어서 넣는다. 한 문장이 너무 크면 파라미터 개수 한도(PostgreSQL 프로토콜은 한 문장에 65,535개)에 걸리고, 실패했을 때 전부 다시 해야 한다. ORM에도 bulk insert 기능이 있는데, JPA의 IDENTITY 키 생성 방식처럼 행마다 id를 받아 와야 하는 설정에서는 배치가 조용히 꺼지기도 하니 실제로 나가는 SQL을 로그로 확인한다.
+
+반대로 큰 UPDATE와 DELETE는 잘게 나눈다. 오래된 주문 1,000만 건을 한 문장으로 지우면, 끝날 때까지 그 행들의 잠금을 쥐고, WAL이 한꺼번에 쏟아져 복제본이 뒤처지고, 실패하면 처음부터 되돌린다. PostgreSQL의 `DELETE`에는 `LIMIT`이 없어서 서브쿼리로 묶음을 고른다.
+
+```sql
+-- 5,000건씩 지운다. 0건이 나올 때까지 응용이나 스크립트에서 반복한다
+DELETE FROM orders_staging
+WHERE id IN (
+  SELECT id FROM orders_staging
+  WHERE status = 'paid'
+  ORDER BY id
+  LIMIT 5000
+);
+```
+
+```text
+DELETE 5000
+```
+
+묶음 사이에 잠깐 쉬어 주면 autovacuum과 복제가 따라올 시간이 생긴다. MySQL은 `DELETE ... LIMIT 5000`을 바로 쓸 수 있다. 행마다 다른 값으로 바꿔야 하는 UPDATE는 `VALUES` 목록과 조인해서 한 문장으로 만든다.
+
+```sql
+-- 주문 세 건의 상태를 한 번에 바꾼다
+UPDATE orders AS o
+SET status = v.status
+FROM (VALUES (6, 'delivered'), (7, 'delivered'), (8, 'cancelled')) AS v(id, status)
+WHERE o.id = v.id;
+```
+
+```text
+UPDATE 3
+```
+
+## 오래 열린 트랜잭션은 청소를 막는다
+
+느린 쿼리만 문제가 되는 건 아니다. 아무것도 안 하면서 열려 있는 트랜잭션도 문제다. 응용 코드가 `BEGIN`을 하고 외부 API를 부르거나 사용자 입력을 기다리는 동안 트랜잭션이 열려 있는 경우다.
+
+PostgreSQL의 UPDATE와 DELETE는 옛 버전의 행(dead tuple)을 남긴다. 이걸 치우는 게 VACUUM인데, 아직 옛 버전을 볼 수도 있는 트랜잭션이 하나라도 열려 있으면 못 치운다. 아래 그림은 다른 세션이 `BEGIN; SELECT txid_current();`만 해 두고 가만히 있는 동안 1만 행을 고치고 VACUUM을 돌린 순서다.
+
+<SequenceDiagram
+  caption="열어 둔 트랜잭션 하나가 VACUUM을 막는다"
+  actors={[
+    { id: "idle", label: "열어 둔 세션" },
+    { id: "db", label: "PostgreSQL" },
+    { id: "me", label: "작업 세션" },
+  ]}
+  steps={[
+    { from: "idle", to: "db", label: "BEGIN; txid", title: "트랜잭션을 열고 멈춘다", detail: "트랜잭션 번호 31379를 받았다. 이 세션은 이제 아무것도 안 하고 열려만 있다.", payload: "BEGIN; SELECT txid_current();" },
+    { from: "me", to: "db", label: "UPDATE 1만 행", title: "행을 고친다", detail: "UPDATE는 행을 고치지 않고 새 버전을 쓴다. 옛 버전 1만 개가 남는다." },
+    { from: "me", to: "db", label: "VACUUM", title: "청소를 시도한다", detail: "옛 버전을 지워도 되는지는 '아직 볼 수 있는 트랜잭션'이 있는지로 정한다. 31379번이 열려 있어서 그 뒤에 생긴 옛 버전은 지우지 못한다." },
+    { from: "db", to: "me", label: "0 removed", title: "하나도 못 치웠다", detail: "옛 버전 1만 개가 그대로 남는다. 이 상태가 길어질수록 테이블과 인덱스가 부푼다.", payload: "tuples: 0 removed, 24405 remain,\n10000 are dead but not yet removable" },
+    { from: "me", to: "db", label: "pg_stat_activity", title: "범인을 찾는다", detail: "xact_start가 오래된 순으로 보면 idle in transaction인 세션이 맨 위에 나온다. 끝내거나 끊어야 VACUUM이 치운다." },
+  ]}
+/>
+
+같은 순서를 실제로 돌린 출력이다.
+
+```sql
+UPDATE orders_staging SET amount = amount + 1;  -- 1만 행 수정 → 옛 버전 1만 개
+VACUUM (VERBOSE) orders_staging;
+```
+
+```text
+INFO:  vacuuming "shop.public.orders_staging"
+INFO:  finished vacuuming "shop.public.orders_staging": index scans: 0
+pages: 0 removed, 281 remain, 188 scanned (66.90% of total)
+tuples: 0 removed, 24405 remain, 10000 are dead but not yet removable
+removable cutoff: 31379, which was 2 XIDs old when operation ended
+```
+
+`10000 are dead but not yet removable`가 그 줄이다. 옛 버전 1만 개가 남았고, 하나도 못 치웠다(`0 removed`). 이 상태가 몇 시간 이어지면 테이블과 인덱스가 계속 부풀고, 쿼리가 읽어야 할 페이지가 늘어난다. 범인은 `pg_stat_activity`에서 찾는다.
+
+```sql
+-- 트랜잭션이 열린 지 오래된 순서
+SELECT pid, state, now() - xact_start AS xact_age, backend_xid, left(query, 30) AS query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND pid <> pg_backend_pid()
+ORDER BY xact_start;
+```
+
+```text
+ pid  |        state        |    xact_age    | backend_xid |         query
+------+---------------------+----------------+-------------+------------------------
+ 4718 | idle in transaction | 00:00:05.02598 |       31379 | SELECT txid_current();
+(1 row)
+```
+
+`idle in transaction`은 트랜잭션을 열어 둔 채 아무 쿼리도 안 하고 있다는 뜻이다. `query` 열은 지금 실행 중인 쿼리가 아니라 마지막으로 실행한 쿼리다. 급하면 `SELECT pg_terminate_backend(4718);`로 그 연결을 끊는다. 이런 트랜잭션은 잠금도 쥐고 있어서, 그 행을 고치려는 다른 요청이 줄줄이 기다리게 만든다. 누가 누구를 막고 있는지 `pg_blocking_pids()`로 찾는 방법은 [행 넣고 고치고 지우기 글](/posts/sql-insert-update-delete)에 있다.
+
+근본 해결은 트랜잭션 안에서 DB 일만 하는 것이다. 외부 API 호출, 파일 업로드, 메일 발송은 트랜잭션 밖으로 뺀다. 그리고 안전장치로 한도를 건다. 이건 바로 다음 이야기다.
+
+## 끝나지 않는 쿼리에 한도를 건다
+
+PostgreSQL은 기본으로 쿼리 시간에 제한이 없다. 실수로 만든 무거운 쿼리가 30분씩 돌며 연결과 CPU를 잡아도 아무도 끊지 않는다. 응용이 쓰는 계정에 한도를 걸어 둔다.
+
+```sql
+-- 이 계정의 쿼리는 3초 넘으면 취소한다
+ALTER ROLE app SET statement_timeout = '3s';
+-- 잠금을 5초 넘게 기다리면 포기한다
+ALTER ROLE app SET lock_timeout = '5s';
+-- 트랜잭션을 연 채 60초 넘게 놀면 연결을 끊는다
+ALTER ROLE app SET idle_in_transaction_session_timeout = '60s';
+```
+
+역할에 건 설정은 새로 연결할 때부터 적용된다. 실제로 걸리면 이렇게 나온다.
+
+```sql
+SET statement_timeout = '100ms';
+SELECT id, user_id, amount FROM orders ORDER BY id DESC LIMIT 20 OFFSET 900000;
+```
+
+```text
+ERROR:  canceling statement due to statement timeout
+```
+
+```text
+FATAL:  terminating connection due to idle-in-transaction timeout
+server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+```
+
+두 번째는 `idle_in_transaction_session_timeout`이 놀고 있던 연결을 끊은 뒤, 그 연결로 다음 쿼리를 보냈을 때 psql이 받은 메시지다. 응용 쪽 커넥션 풀은 끊긴 연결을 버리고 새로 맺으면 된다.
+
+배치 작업이나 마이그레이션처럼 오래 걸리는 게 정상인 일은 별도 계정을 쓰거나, 그 세션에서만 `SET statement_timeout = 0;`으로 푼다. 한도는 응용의 요청 타임아웃보다 짧게 잡는다. 응용이 5초 만에 포기한 요청의 쿼리가 DB에서 계속 돌면 아무도 받지 않을 결과를 계산하는 셈이다. MySQL에서는 `max_execution_time`(밀리초, SELECT에만 적용)과 `innodb_lock_wait_timeout`(초)이 비슷한 역할을 한다.
+
+## 연결은 풀로 나눠 쓴다
+
+PostgreSQL은 연결 하나마다 서버 프로세스 하나를 띄운다. 연결을 맺을 때 프로세스를 만들고 인증하는 비용이 들고, 프로세스마다 메모리를 따로 쓴다. 기본 `max_connections`는 100이다. 응용 서버 20대가 각자 풀을 20개씩 잡으면 400개가 되어 연결이 거부되거나, 허용치를 올려도 코어 수보다 훨씬 많은 프로세스가 CPU를 두고 다투느라 전체가 느려진다.
+
+그래서 응용과 DB 사이에 PgBouncer 같은 연결 풀러를 둔다. 응용은 PgBouncer에 수백 개를 연결하고, PgBouncer는 실제 DB 연결 수십 개를 돌려 가며 쓴다.
+
+```bash
+# Ubuntu에 설치한다
+sudo apt install -y pgbouncer
+
+# 설정 파일
+sudo nano /etc/pgbouncer/pgbouncer.ini
+```
+
+```text
+[databases]
+shop = host=127.0.0.1 port=5432 dbname=shop
+
+[pgbouncer]
+listen_addr = 127.0.0.1
+listen_port = 6432
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+pool_mode = transaction
+default_pool_size = 20
+max_client_conn = 1000
+```
+
+응용 서버 20대가 PgBouncer 하나를 거쳐 DB 연결 20개를 나눠 쓰는 모양을 그려 보면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="클라이언트 연결 수백 개가 DB 연결 20개를 돌려 쓴다"
+  nodes={[
+    { id: "a1", label: "응용 서버 1", sub: "풀 20", x: 70, y: 45, w: 110 },
+    { id: "a2", label: "응용 서버 2", sub: "풀 20", x: 200, y: 45, w: 110 },
+    { id: "an", label: "… 20대", sub: "합쳐 400", x: 330, y: 45, w: 100 },
+    { id: "pgb", label: "PgBouncer :6432", sub: "max_client_conn 1000", x: 200, y: 150, w: 190 },
+    { id: "pg", label: "PostgreSQL :5432", sub: "default_pool_size 20", x: 200, y: 255, w: 190 },
+  ]}
+  edges={[
+    { from: "a1", to: "pgb" },
+    { from: "a2", to: "pgb" },
+    { from: "an", to: "pgb" },
+    { from: "pgb", to: "pg", label: "트랜잭션마다 빌려 씀" },
+  ]}
+/>
+
+`pool_mode = transaction`은 트랜잭션이 끝나면 DB 연결을 풀에 돌려준다. 가장 효율이 좋지만, 같은 클라이언트의 다음 트랜잭션이 다른 DB 연결로 갈 수 있다. 그래서 세션에 남는 상태가 깨진다. 트랜잭션 밖에서 건 `SET`, 세션 단위 advisory lock, `LISTEN`, 임시 테이블 같은 것들이다. prepared statement는 PgBouncer 1.21부터 `max_prepared_statements` 설정으로 트랜잭션 모드에서도 쓸 수 있다. 응용은 `6432` 포트로 접속하게 바꾸고, 응용 쪽 풀 크기와 PgBouncer의 `default_pool_size`를 함께 맞춘다. 풀 크기는 크다고 좋은 게 아니라, DB 코어 수의 몇 배 정도 작은 값에서 시작해 대기 시간을 보며 조정한다.
+
+## 쿼리 바깥에서 새는 시간
+
+쿼리 하나가 빨라도 커밋을 1만 번 하면 디스크를 1만 번 기다리고, 문장을 1만 개 보내면 왕복을 1만 번 한다. 그래서 쓰기는 묶어서 보내고, 큰 수정과 삭제는 반대로 잘게 나눈다. 트랜잭션은 DB 일만 하고 바로 닫아야 VACUUM과 다른 요청을 막지 않는다. 응용 계정에는 쿼리 시간, 잠금 대기, 노는 트랜잭션에 한도를 걸고, 연결은 풀러로 DB가 감당할 만큼만 연다. 느린 쿼리 목록에 안 나오는 비용이라서, 증상이 보이면 커밋 수와 `pg_stat_activity`부터 본다.
+
+## 면접에서 나올 만한 질문
+
+### 운영 DB에서 오래 열린 트랜잭션이 왜 문제인가요?
+
+열린 트랜잭션이 볼 수 있는 옛 버전의 행은 VACUUM이 치우지 못해서 테이블과 인덱스가 계속 부푼다. 그 트랜잭션이 쥔 잠금 때문에 다른 쓰기가 줄줄이 기다리기도 한다. `pg_stat_activity`에서 `idle in transaction` 상태와 `xact_start`로 찾고, `idle_in_transaction_session_timeout`과 `statement_timeout`으로 한도를 건다. 근본적으로는 트랜잭션 안에서 외부 API 호출 같은 DB 밖의 일을 하지 않는다.
+
+### 대량 INSERT를 빠르게 하려면 어떻게 하나요?
+
+커밋 수와 문장 수를 줄인다. 한 줄씩 자동 커밋하면 커밋마다 WAL fsync를 기다리고 문장마다 왕복과 파싱을 하니, 트랜잭션 하나로 묶고, 여러 행을 한 문장에 담고, 가장 큰 작업은 `COPY`를 쓴다. 예제에서 1만 건이 약 3초에서 0.06초까지 줄었다. 한 문장이 너무 크면 파라미터 한도(65,535개)에 걸리고 실패 시 다시 할 양이 커지니 1,000건 안팎으로 끊는다.
+
+### 큰 DELETE는 왜 나눠서 하나요?
+
+수천만 건을 한 문장으로 지우면 끝날 때까지 그 행들의 잠금을 쥐고, WAL이 한꺼번에 쏟아져 복제본이 뒤처지며, 실패하면 처음부터 되돌린다. 서브쿼리로 5,000건씩 골라 지우는 문장을 0건이 될 때까지 반복하고, 묶음 사이에 쉬어 autovacuum과 복제가 따라오게 한다. PostgreSQL의 `DELETE`에는 `LIMIT`이 없어서 `WHERE id IN (SELECT ... LIMIT 5000)` 모양으로 쓴다.
+
+### 응용 계정에는 어떤 시간 한도를 거나요?
+
+`statement_timeout`으로 쿼리가 몇 초를 넘으면 취소하고, `lock_timeout`으로 잠금을 오래 기다리지 않게 하고, `idle_in_transaction_session_timeout`으로 트랜잭션을 연 채 노는 연결을 끊는다. 역할에 걸면(`ALTER ROLE app SET ...`) 새 연결부터 적용된다. 쿼리 한도는 응용의 요청 타임아웃보다 짧게 잡아, 응용이 포기한 요청의 쿼리가 DB에서 계속 돌지 않게 한다. 배치나 마이그레이션은 별도 계정이나 세션 설정으로 푼다.
+
+### PgBouncer의 transaction 모드에서 주의할 점은요?
+
+트랜잭션이 끝나면 DB 연결을 풀에 돌려주기 때문에, 같은 클라이언트의 다음 트랜잭션이 다른 DB 연결로 갈 수 있다. 그래서 트랜잭션 밖에서 건 `SET`, 세션 단위 advisory lock, `LISTEN`, 임시 테이블처럼 세션에 남는 상태가 깨진다. prepared statement는 PgBouncer 1.21부터 `max_prepared_statements`로 쓸 수 있다. 풀 크기는 크게 잡기보다 DB 코어 수의 몇 배 정도에서 시작해 대기 시간을 보며 조정한다.

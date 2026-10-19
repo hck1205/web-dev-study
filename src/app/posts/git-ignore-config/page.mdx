@@ -1,0 +1,423 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-ignore-config");
+
+새 프로젝트에서 `git add .`을 치고 `git status`를 봤더니 `node_modules` 아래 파일이 수천 줄 쏟아진다. 급하게 `.gitignore`에 `node_modules/`를 적고 다시 봐도 목록은 그대로다. 그사이 동료는 회사 저장소에 개인 메일 주소로 찍힌 커밋을 올려서 GitHub 프로필과 연결이 안 된다고 하고, 윈도우를 쓰는 다른 동료가 연 PR에는 한 글자도 안 고친 파일이 통째로 바뀐 것으로 나온다.
+
+셋 다 Git이 "무엇을 추적하고, 어떤 설정으로 기록하고, 파일을 어떤 바이트로 저장할지"를 정하는 규칙에서 생기는 일이다. 첫 번째는 이미 인덱스에 올라간 파일에는 `.gitignore`가 듣지 않아서, 두 번째는 설정이 여러 겹으로 쌓이는 걸 몰라서, 세 번째는 줄바꿈 변환 규칙이 사람마다 달라서 생긴다.
+
+작업 트리·인덱스·저장소가 무엇인지는 [앞 글](/posts/git-staging-area)에서 봤다. 이 글은 그 위에서 `.gitignore`의 패턴 규칙과 함정, 세 겹으로 쌓이는 `git config`, 줄바꿈을 다루는 `core.autocrlf`와 `.gitattributes`를 정리한다. 명령과 출력은 Ubuntu 24.04 LTS의 Git 2.43.0에서 실행한 것이고, 예제는 앞 글에 이어 `todo-app` 저장소에서 진행한다.
+
+## 올리지 않을 파일은 .gitignore로
+
+`node_modules`, 빌드 결과, 로그, 비밀 값이 든 `.env`는 저장소에 넣지 않는다. 무시할 패턴을 `.gitignore`에 적으면 `git status`에 나오지 않고, `git add .`로도 들어가지 않는다.
+
+```bash
+# 무시할 파일이 섞인 상태를 만든다
+mkdir -p node_modules/lodash logs build src/build
+touch node_modules/lodash/index.js logs/app.log logs/keep.log build/out.js src/build/x.js .env .env.example debug.log
+
+# -uall: 폴더로 뭉뚱그리지 않고 파일을 하나씩 보여 준다
+git status -s -uall
+```
+
+```text
+?? .env
+?? .env.example
+?? build/out.js
+?? debug.log
+?? logs/app.log
+?? logs/keep.log
+?? node_modules/lodash/index.js
+?? src/build/x.js
+```
+
+`.gitignore`를 이렇게 쓴다.
+
+```text
+# 의존성
+node_modules/
+
+# 로그는 무시하되 keep.log만 남긴다
+*.log
+!logs/keep.log
+
+# 루트의 build 폴더만
+/build/
+
+# 비밀 값. 예시 파일은 올린다
+.env
+!.env.example
+```
+
+```bash
+# 다시 상태를 본다
+git status -s -uall
+```
+
+```text
+?? .env.example
+?? .gitignore
+?? logs/keep.log
+?? src/build/x.js
+```
+
+패턴 규칙을 정리하면 이렇다.
+
+- 슬래시가 없는 패턴(`*.log`, `.env`)은 어느 깊이에서든 이름이 맞으면 걸린다.
+- 끝에 `/`를 붙이면(`node_modules/`) 폴더에만 걸린다. 같은 이름의 파일은 무시하지 않는다.
+- 앞에 `/`를 붙이면(`/build/`) 그 `.gitignore`가 있는 폴더 기준으로만 맞춘다. 그래서 `src/build/x.js`는 살아남았다.
+- `**/`는 아무 깊이의 폴더(`**/temp`), `/**`는 그 안의 모든 것(`docs/**`)이다.
+- `!`는 앞에서 무시한 것을 다시 살린다.
+
+`!`에는 함정이 하나 있다. 폴더 자체를 무시하면 그 안의 파일은 `!`로 되살릴 수 없다. Git이 무시한 폴더 안으로는 아예 들어가 보지 않기 때문이다.
+
+```bash
+# 폴더를 통째로 무시하고 그 안의 파일 하나를 살리려 하면
+printf 'logs/\n!logs/keep.log\n' > .gitignore
+git status -s -uall
+
+# 폴더가 아니라 폴더 안의 내용을 무시하면 살릴 수 있다
+printf 'logs/*\n!logs/keep.log\n' > .gitignore
+git status -s -uall
+```
+
+```text
+?? .gitignore
+
+?? .gitignore
+?? logs/keep.log
+```
+
+어떤 파일이 왜 무시되는지 모르겠으면 `git check-ignore -v`로 묻는다. 어느 파일의 몇 번째 줄 패턴에 걸렸는지 알려 준다. 출력에 안 나오는 파일은 무시되지 않는다는 뜻이다. `!`로 되살린 파일은 그 `!` 줄이 나온다.
+
+```bash
+# 파일마다 어떤 규칙에 걸리는지
+git check-ignore -v debug.log logs/keep.log node_modules/lodash/index.js src/build/x.js build/out.js
+```
+
+```text
+.gitignore:5:*.log	debug.log
+.gitignore:6:!logs/keep.log	logs/keep.log
+.gitignore:2:node_modules/	node_modules/lodash/index.js
+.gitignore:9:/build/	build/out.js
+```
+
+같은 파일에 맞는 줄이 여러 개면 위에서부터 차례로 맞춰 보고 마지막으로 맞은 줄이 결정한다. `!`가 무시 패턴보다 아래에 있어야 하는 이유다. 아래 그림에서 다음을 누르면 위의 `.gitignore`를 파일 세 개가 한 줄씩 훑는 과정이 보인다. 칸 앞의 숫자는 `check-ignore -v`가 알려 준 줄 번호다.
+
+<AlgoTrace
+  caption="파일 하나를 .gitignore 규칙에 위에서부터 맞춰 보기"
+  memoryLabel="파일과 지금까지의 판정"
+  cells={["2 node_modules/", "5 *.log", "6 !logs/keep.log", "9 /build/", "12 .env", "13 !.env.example"]}
+  steps={[
+    { pointer: 0, memory: ["logs/keep.log", "판정 없음"], caption: "logs/keep.log를 맞춰 본다. 2번 줄은 node_modules라는 폴더에만 걸리니 해당 없다." },
+    { pointer: 1, memory: ["logs/keep.log", "무시"], caption: "5번 줄 *.log는 슬래시가 없어서 어느 깊이든 이름만 맞으면 걸린다. 일단 무시로 판정한다." },
+    { pointer: 2, memory: ["logs/keep.log", "다시 포함"], caption: "6번 줄 !logs/keep.log가 맞는다. 앞의 판정을 뒤집어 다시 포함한다." },
+    { found: [2], memory: ["logs/keep.log", "추적 (6번 줄)"], caption: "나머지 줄은 맞지 않는다. 마지막으로 맞은 6번 줄이 결과를 정한다. check-ignore -v도 이 줄을 보여 준다." },
+    { pointer: 1, memory: ["debug.log", "무시"], caption: "debug.log는 5번 줄에 걸린다." },
+    { found: [1], memory: ["debug.log", "무시 (5번 줄)"], caption: "6번 줄은 경로가 logs/keep.log일 때만 맞으니 해당 없다. 5번 줄의 판정이 그대로 남는다." },
+    { pointer: 3, memory: ["src/build/x.js", "판정 없음"], caption: "src/build/x.js. /build/는 앞에 슬래시가 있어서 루트의 build 폴더에만 맞는다." },
+    { memory: ["src/build/x.js", "추적 (맞는 줄 없음)"], caption: "끝까지 맞는 줄이 없다. 그래서 git status에 남고, check-ignore -v에는 아예 나오지 않는다." },
+  ]}
+/>
+
+가장 흔한 실수는 이미 커밋한 파일을 나중에 `.gitignore`에 넣는 경우다. `.gitignore`는 추적하지 않는 파일에만 적용된다. 이미 추적 중인 파일은 계속 변경이 잡힌다.
+
+```bash
+# config.local을 먼저 커밋해 둔 상태에서
+echo "SECRET=abc" > config.local
+git add config.local
+git commit -m "로컬 설정"
+
+# 나중에 무시 목록에 넣고 내용을 바꾸면
+echo "config.local" >> .gitignore
+echo "SECRET=xyz" > config.local
+git status -s
+
+# 인덱스에서만 빼고 디스크의 파일은 남긴다
+git rm --cached config.local
+git status -s
+```
+
+```text
+ M config.local
+?? .gitignore
+
+rm 'config.local'
+D  config.local
+?? .gitignore
+```
+
+`git rm --cached`는 인덱스에서만 지운다. 이걸 커밋하면 다음 커밋부터 그 파일은 빠지고, 내 디스크의 파일은 남는다. 단, 지난 커밋에는 여전히 들어 있다. 비밀 값이었다면 히스토리에서 지우는 작업과 키 교체가 따로 필요하다. 그 방법은 [되돌리기 글](/posts/git-undo)에서 다룬다. 다른 사람이 이 커밋을 pull하면 그쪽 디스크에서는 파일이 지워진다는 것도 알아 둔다.
+
+이제 `.gitignore`와 함께 커밋한다. 커밋하고 나서 메시지가 마음에 안 들면 `--amend`로 마지막 커밋을 다시 만든다. 빠뜨린 파일이 있으면 add한 뒤 `--amend --no-edit`으로 메시지는 그대로 두고 내용만 보탠다.
+
+```bash
+# .gitignore, 예시 env, 남길 로그 파일, config.local 삭제를 함께 커밋
+git add .gitignore .env.example logs/keep.log
+git commit -m ".gitignore 추가"
+
+# 메시지를 고쳐서 마지막 커밋을 다시 만든다
+git commit --amend -m ".gitignore와 예시 env 추가"
+git log --oneline -2
+```
+
+```text
+[main c2ee5c2] .gitignore 추가
+ 4 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 .env.example
+ create mode 100644 .gitignore
+ delete mode 100644 config.local
+ create mode 100644 logs/keep.log
+
+[main b17978b] .gitignore와 예시 env 추가
+ 4 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 .env.example
+ create mode 100644 .gitignore
+ delete mode 100644 config.local
+ create mode 100644 logs/keep.log
+
+b17978b .gitignore와 예시 env 추가
+7260ee7 로컬 설정
+```
+
+해시가 `c2ee5c2`에서 `b17978b`로 바뀌었다. amend는 커밋을 고치는 게 아니라 같은 부모 위에 새 커밋을 만들고 브랜치를 옮기는 일이다. 메시지가 커밋 객체에 들어가 있으니 메시지만 바꿔도 해시가 달라진다. 그래서 이미 푸시한 커밋을 amend하면 원격과 어긋난다. 되돌리기 전반은 [되돌리기 글](/posts/git-undo)에서 정리한다.
+
+무시 규칙을 둘 곳은 세 군데다.
+
+- 저장소의 `.gitignore`: 팀 모두에게 적용된다. 커밋해서 공유한다.
+- `.git/info/exclude`: 나만 쓰는 이 저장소 전용 규칙. 커밋되지 않는다.
+- 전역 무시 파일: 모든 저장소에 적용되는 나만의 규칙. 기본 위치는 `~/.config/git/ignore`이고, `core.excludesFile`로 바꿀 수 있다. `.DS_Store`나 `.idea/`처럼 내 OS와 에디터가 만드는 파일은 프로젝트 `.gitignore`보다 여기에 두는 게 맞다.
+
+```bash
+# 전역 무시 파일을 만든다
+mkdir -p ~/.config/git
+printf '.DS_Store\n.idea/\n*.swp\n' >> ~/.config/git/ignore
+```
+
+빈 폴더는 Git이 추적하지 못한다. Git은 파일만 저장하고 폴더는 tree로만 존재하기 때문이다. 빈 폴더를 남겨야 하면 안에 `.gitkeep` 같은 빈 파일을 하나 두는 관례가 있다.
+
+## 설정은 세 겹으로 쌓인다
+
+`git config`는 세 단계에 저장된다. 아래로 갈수록 범위가 좁고 우선순위가 높다.
+
+- `--system`: 이 컴퓨터의 모든 사용자. `/etc/gitconfig`.
+- `--global`: 나의 모든 저장소. `~/.gitconfig` 또는 `~/.config/git/config`.
+- `--local`: 이 저장소만. `.git/config`. 옵션을 안 붙이면 기본이 이것이다.
+
+아래로 갈수록 나중에 읽힌다. Git은 system, global, local 순서로 파일을 읽고, 값이 하나뿐인 키는 나중에 읽은 값이 앞의 값을 덮어쓴다. `user.email`이 global에 있어도 local에 있으면 local 값이 커밋에 찍힌다. 그림에서 점이 흐르는 방향이 읽는 순서다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="세 단계 설정은 차례로 읽히고, 나중 값이 이긴다"
+  nodes={[
+    { id: "sys", label: "--system", sub: "/etc/gitconfig", x: 95, y: 50, w: 140, h: 46 },
+    { id: "glob", label: "--global", sub: "~/.gitconfig", x: 95, y: 150, w: 140, h: 46 },
+    { id: "loc", label: "--local", sub: ".git/config", x: 95, y: 250, w: 140, h: 46 },
+    { id: "res", label: "적용되는 값", sub: "마지막에 읽은 것", x: 300, y: 150, w: 140, h: 46 },
+  ]}
+  edges={[
+    { from: "sys", to: "glob", label: "덮어씀" },
+    { from: "glob", to: "loc", label: "덮어씀" },
+    { from: "loc", to: "res" },
+  ]}
+/>
+
+회사 저장소에서만 회사 이메일을 쓰고 싶을 때 이 구조가 쓸모 있다.
+
+```bash
+# 이 저장소에서만 다른 이메일을 쓴다
+git config --local user.email matt@company.example
+
+# 실제로 적용되는 값과 그 값이 어느 파일에서 왔는지
+git config --show-origin user.email
+
+# 같은 키가 여러 단계에 있으면 전부, 단계 이름과 함께
+git config --show-scope --get-all user.email
+
+# 설정 전체와 출처
+git config --list --show-origin
+```
+
+```text
+file:.git/config	matt@company.example
+
+global	matt@example.com
+local	matt@company.example
+
+file:/tmp/git-demo-home/.gitconfig	user.name=Matt
+file:/tmp/git-demo-home/.gitconfig	user.email=matt@example.com
+file:/tmp/git-demo-home/.gitconfig	init.defaultbranch=main
+file:.git/config	core.repositoryformatversion=0
+file:.git/config	core.filemode=true
+file:.git/config	core.bare=false
+file:.git/config	core.logallrefupdates=true
+file:.git/config	user.email=matt@company.example
+```
+
+"커밋 작성자가 왜 이 이메일로 찍히지?"를 물어볼 때 `--show-origin`이 바로 답을 준다. 이 예시는 `HOME`을 임시 폴더로 바꿔서 실행해 전역 파일 경로가 `/tmp/...`로 나왔다. 보통은 `~/.gitconfig`가 나온다. 폴더별로 설정을 나누고 싶으면 전역 설정에 `[includeIf "gitdir:~/work/"]`를 두고 회사용 설정 파일을 따로 불러오는 방법도 있다. 아래 현장 이야기에서 직접 설정해 본다.
+
+자주 치는 명령은 별칭으로 줄인다.
+
+```bash
+# git lg: 그래프 로그
+git config --global alias.lg "log --oneline --graph --decorate --all"
+
+# git st: 짧은 상태
+git config --global alias.st "status -sb"
+
+# 등록한 별칭 확인
+git config --get-regexp alias
+```
+
+```text
+alias.lg log --oneline --graph --decorate --all
+alias.st status -sb
+```
+
+여기에 함께 켜 두면 편한 설정이 몇 가지 있다. `git config --global diff.colorMoved zebra`는 위치만 옮긴 줄을 다른 색으로 보여 준다. `git config --global commit.verbose true`는 커밋할 때마다 `-v`를 붙인 것처럼 diff를 에디터에 띄운다. `git config --global core.editor "code --wait"`는 에디터를 VS Code로 바꾼다. `--wait`를 빼면 에디터가 열리자마자 Git이 빈 메시지로 보고 커밋을 취소한다.
+
+## 줄바꿈 문자가 diff 전체를 바꿀 때
+
+Windows는 줄 끝에 CRLF(`\r\n`), 리눅스와 macOS는 LF(`\n`)를 쓴다. 섞이면 내용은 그대로인데 모든 줄이 바뀐 것처럼 diff가 나온다. `core.autocrlf`가 이 변환을 맡는다.
+
+- `true`: 저장소에는 LF로 넣고, 꺼낼 때 CRLF로 바꾼다. Windows에서 쓴다.
+- `input`: 넣을 때만 CRLF를 LF로 바꾸고, 꺼낼 때는 그대로 둔다. 리눅스와 macOS에서 쓴다.
+- `false`: 아무것도 바꾸지 않는다.
+
+```bash
+# 넣을 때 CRLF → LF
+git config core.autocrlf input
+
+# CRLF 파일을 만들어 add한다
+printf 'line1\r\nline2\r\n' > win.txt
+git add win.txt
+
+# 인덱스(i/)와 작업 트리(w/)의 줄바꿈을 비교한다
+git ls-files --eol win.txt
+```
+
+```text
+warning: in the working copy of 'win.txt', CRLF will be replaced by LF the next time Git touches it
+i/lf    w/crlf  attr/                 	win.txt
+```
+
+출력 한 줄을 조각으로 나눠 보면 이렇다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="git ls-files --eol 출력 한 줄"
+  joiner="  "
+  params={[
+    {
+      key: "i",
+      display: "i/lf",
+      title: "인덱스에 들어간 줄바꿈",
+      description: "커밋하면 저장소에 들어갈 쪽이다. core.autocrlf가 input이라 add할 때 CRLF가 LF로 바뀌었다. 저장소에 crlf가 보이면 누군가 변환 없이 커밋한 것이다.",
+      required: true,
+    },
+    {
+      key: "w",
+      display: "w/crlf",
+      title: "작업 트리 파일의 줄바꿈",
+      description: "디스크에 있는 실제 파일이다. add는 인덱스 쪽만 바꾸니 파일은 아직 CRLF로 남아 있다. 다음에 Git이 이 파일을 꺼낼 때 설정대로 바뀐다.",
+      required: true,
+    },
+    {
+      key: "attr",
+      display: "attr/",
+      title: "적용된 .gitattributes 속성",
+      description: "비어 있으면 이 파일에 걸린 .gitattributes 규칙이 없다는 뜻이다. 저장소에 * text=auto eol=lf를 두면 여기에 attr/text=auto eol=lf가 나오고, 개인의 core.autocrlf보다 이 규칙이 먼저다.",
+    },
+    {
+      key: "path",
+      display: "win.txt",
+      title: "파일 경로",
+      description: "인자 없이 git ls-files --eol을 치면 추적 중인 모든 파일이 한 줄씩 나온다. 줄바꿈이 섞인 파일을 찾을 때 grep crlf로 거른다.",
+      required: true,
+    },
+  ]}
+/>
+
+`i/lf w/crlf`는 인덱스에는 LF로 들어갔고 작업 트리 파일은 아직 CRLF라는 뜻이다. 사람마다 `core.autocrlf`를 다르게 두면 또 어긋나므로, 팀에서는 저장소에 `.gitattributes`를 두고 `* text=auto eol=lf`처럼 규칙을 고정하는 편이 확실하다. 셸 스크립트가 CRLF로 체크아웃되면 리눅스 컨테이너에서 `/bin/bash^M: bad interpreter` 같은 오류가 나니, `*.sh text eol=lf`는 따로 적어 두기도 한다.
+
+## 현장에서 이 규칙들이 문제가 되는 순간
+
+처음의 두 장면은 실제로 자주 만난다. 하나씩 어디를 보고 어떻게 고치는지 정리한다.
+
+회사 저장소에 개인 메일로 커밋이 찍히는 문제는 저장소마다 `--local`로 이메일을 넣어 두면 막을 수 있지만, 새로 클론할 때마다 잊는다. 폴더 기준으로 자동으로 바꾸는 편이 낫다. 전역 설정에 `includeIf`를 넣어서 `~/work/` 아래의 저장소에서만 회사용 설정 파일을 추가로 읽게 한다.
+
+```bash
+# ~/.gitconfig 끝에 추가: ~/work/ 아래 저장소에서만 ~/.gitconfig-work를 더 읽는다
+git config --global includeIf."gitdir:~/work/".path "~/.gitconfig-work"
+
+# 회사용 설정 파일
+git config --file ~/.gitconfig-work user.email matt@company.example
+
+# 회사 폴더의 저장소와 개인 저장소에서 각각 확인
+cd ~/work/api && git config --show-origin user.email
+cd ~/side && git config --show-origin user.email
+```
+
+```text
+file:/tmp/git-demo-home/.gitconfig-work	matt@company.example
+file:/tmp/git-demo-home/.gitconfig	matt@example.com
+```
+
+이 예시도 위의 설정 예시처럼 `HOME`을 임시 폴더로 바꿔 실행해서 경로가 `/tmp/...`로 나왔다. `gitdir:` 경로 끝의 `/`를 빠뜨리면 그 폴더 아래 전체가 아니라 정확히 그 경로만 맞으니 꼭 붙인다. 이미 잘못된 이메일로 찍힌 커밋은 설정을 고쳐도 그대로라서, 푸시 전이면 `git commit --amend --reset-author`로 다시 만든다.
+
+`.gitignore`를 나중에 넣은 저장소에는 무시돼야 할 파일이 이미 추적되고 있는 경우가 많다. `git add .`을 먼저 하고 `.gitignore`를 적은 처음 상황도 같다. 하나씩 찾지 말고 Git에 물어본다. `ls-files -ci`는 추적 중인 파일 가운데 무시 규칙에 걸리는 것만 보여 준다.
+
+```bash
+# dist/와 .env를 커밋해 버린 뒤 .gitignore에 적은 상태
+git ls-files -ci --exclude-standard
+
+# 그 파일들을 인덱스에서만 뺀다 (디스크에는 남는다)
+git ls-files -ci --exclude-standard -z | xargs -0 git rm --cached
+git status -s
+```
+
+```text
+.env
+dist/app.js
+
+rm '.env'
+rm 'dist/app.js'
+D  .env
+D  dist/app.js
+?? .gitignore
+```
+
+`-c`는 추적 중인(cached) 파일, `-i`는 무시 규칙에 걸리는 것, `--exclude-standard`는 `.gitignore`와 `.git/info/exclude`, 전역 무시 파일을 모두 쓰라는 뜻이다. CI에서 이 명령의 출력이 비어 있지 않으면 실패하게 해 두면 빌드 결과나 비밀 값이 슬쩍 들어오는 걸 리뷰 전에 잡는다. `.env`가 이미 원격에 올라갔다면 추적을 빼는 것만으로는 부족하고 키부터 바꿔야 한다. 그 순서는 [문제 해결 글](/posts/git-troubleshooting)에 있다.
+
+줄바꿈 문제는 PR diff가 파일 전체를 바꾼 것으로 나올 때 의심한다. `git diff --ignore-cr-at-eol`로 봐서 차이가 사라지면 줄바꿈뿐이다. 저장소에 `.gitattributes`를 넣고 `git add --renormalize .`로 한 번에 정리하는 과정은 [문제 해결 글](/posts/git-troubleshooting)에서 실제 출력으로 따라간다. 정규화 커밋은 기능 변경과 섞지 않는다.
+
+## 다시 정리하면
+
+`.gitignore`는 아직 추적하지 않는 파일에만 듣고, 위에서부터 맞춰 보다 마지막으로 맞은 줄이 결정한다. 이미 인덱스에 들어간 파일은 `git rm --cached`로 빼야 하고, 무엇이 왜 무시되는지는 `check-ignore -v`, 무엇이 잘못 추적되는지는 `ls-files -ci`로 묻는다. 설정은 system, global, local 순서로 읽혀 나중 값이 이기고, 어느 파일에서 왔는지는 `--show-origin`이 알려 준다. 줄바꿈은 개인 설정보다 저장소의 `.gitattributes`로 고정한다. 다음은 이 커밋들 위에서 [브랜치가 어떻게 움직이고 합쳐지는지](/posts/git-branch-merge) 볼 차례다.
+
+## 면접에서 나올 만한 질문
+
+### .gitignore에 추가했는데 파일이 계속 변경으로 잡힙니다. 왜 그런가요?
+
+그 파일이 이미 추적 중이기 때문이다. .gitignore는 추적하지 않는 파일에만 적용된다. `git rm --cached 파일`로 인덱스에서 빼고 커밋하면 디스크의 파일은 남기고 추적만 멈춘다. 과거 커밋에는 여전히 남아 있으니 비밀 값이었다면 키를 교체하고 히스토리 정리 도구를 써야 하고, 무엇이 왜 무시되는지는 `git check-ignore -v`로 확인한다.
+
+### .gitignore에 폴더를 무시하고 그 안의 파일 하나만 살리려면 어떻게 쓰나요?
+
+`logs/`처럼 폴더 자체를 무시하면 Git이 그 안으로 들어가지 않아서 `!logs/keep.log`가 듣지 않는다. `logs/*`로 폴더 안의 내용을 무시하고 그 아래에 `!logs/keep.log`를 적는다. 같은 파일에 여러 줄이 맞으면 마지막으로 맞은 줄이 이기니 `!` 줄은 무시 패턴보다 아래에 둔다. 결과는 `git check-ignore -v`로 확인한다.
+
+### 저장소의 .gitignore, .git/info/exclude, 전역 무시 파일은 언제 각각 쓰나요?
+
+`.gitignore`는 커밋해서 팀 전체가 공유하는 규칙이라 빌드 결과, 의존성, `.env`처럼 프로젝트가 만드는 파일을 적는다. `.git/info/exclude`는 커밋되지 않는 이 저장소 전용 개인 규칙이다. 전역 무시 파일(`~/.config/git/ignore`, `core.excludesFile`)은 `.DS_Store`나 `.idea/`처럼 내 OS와 에디터가 만드는 파일을 모든 저장소에서 무시할 때 쓴다.
+
+### git config의 system, global, local은 어떤 순서로 적용되나요?
+
+system(`/etc/gitconfig`), global(`~/.gitconfig`), local(`.git/config`) 순서로 읽고, 값이 하나인 키는 나중에 읽은 값이 이긴다. 그래서 local이 가장 우선이다. 실제로 어떤 값이 어느 파일에서 왔는지는 `git config --show-origin`, 여러 단계에 같은 키가 있으면 `--show-scope --get-all`로 본다. 폴더별로 다른 설정을 쓰려면 global에 `includeIf "gitdir:~/work/"`를 둔다.
+
+### core.autocrlf와 .gitattributes 중 무엇으로 줄바꿈을 관리해야 하나요?
+
+팀에서는 `.gitattributes`다. `core.autocrlf`는 사람마다 따로 켜는 개인 설정이라 한 명만 빠뜨려도 CRLF가 저장소에 섞인다. 저장소에 `* text=auto eol=lf`를 커밋해 두면 모두에게 같은 규칙이 적용되고 개인 설정보다 우선한다. 셸 스크립트는 CRLF로 체크아웃되면 리눅스에서 `bad interpreter` 오류가 나니 `*.sh text eol=lf`를 따로 적기도 한다.
+
+### 무시해야 할 파일이 이미 추적되고 있는지 한 번에 찾으려면?
+
+`git ls-files -ci --exclude-standard`가 추적 중인 파일 가운데 무시 규칙에 걸리는 것만 보여 준다. 여기에 나온 파일을 `git rm --cached`로 인덱스에서 빼고 커밋하면 디스크의 파일은 남기고 추적만 멈춘다. CI에서 이 출력이 비어 있지 않으면 실패하게 하면 빌드 결과나 비밀 값이 들어오는 걸 일찍 잡는다.

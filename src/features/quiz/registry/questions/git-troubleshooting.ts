@@ -34,36 +34,6 @@ export const GIT_TROUBLESHOOTING: QuizQuestion[] = [
   {
     id: "git-troubleshooting-3",
     post: "git-troubleshooting",
-    question: ".env를 .gitignore에 추가했는데 고칠 때마다 git status에 M .env가 나온다. 원인과 해결로 옳은 것은?",
-    choices: [
-      ".gitignore 파일이 커밋되지 않아서다. .gitignore를 커밋하면 된다",
-      "패턴 앞에 /를 붙이지 않아서다",
-      "이미 추적 중인 파일이라서다. git rm --cached .env로 추적을 끊고 커밋한다",
-      "core.autocrlf 설정 때문이다",
-    ],
-    answer: 2,
-    explanation:
-      ".gitignore는 아직 추적하지 않는 파일에만 적용된다. 한 번 커밋된 파일은 규칙과 상관없이 계속 추적되므로 --cached로 인덱스에서만 빼고 커밋한다. 이 커밋을 받은 다른 사람의 디스크에서는 파일이 지워진다는 것도 알려 둔다.",
-    anchor: "gitignore에-적었는데-계속-추적된다",
-  },
-  {
-    id: "git-troubleshooting-4",
-    post: "git-troubleshooting",
-    question: "공개 저장소에 비밀 키가 든 커밋을 푸시했다. 가장 먼저 할 일은?",
-    choices: [
-      "git filter-repo로 히스토리에서 지우고 강제 푸시한다",
-      "저장소를 비공개로 바꾼다",
-      ".gitignore에 .env를 추가한다",
-      "키를 발급한 곳에서 폐기하고 새 키를 발급한다",
-    ],
-    answer: 3,
-    explanation:
-      "히스토리를 지워도 이미 clone한 사람, 포크, CI 캐시, PR 화면 등에 남아 있을 수 있어 키는 안전해지지 않는다. 그래서 키 폐기가 먼저이고 히스토리 정리는 그다음이다. .gitignore는 앞으로의 실수를 막을 뿐이다.",
-    anchor: "비밀-값이-든-env를-커밋했다",
-  },
-  {
-    id: "git-troubleshooting-5",
-    post: "git-troubleshooting",
     question: "merge 중 pnpm-lock.yaml에서 충돌이 났다. 권장하는 처리는?",
     choices: [
       "package.json 충돌을 먼저 풀고, 락파일은 한쪽 것을 가져온 뒤 pnpm install로 다시 만든다",
@@ -77,33 +47,33 @@ export const GIT_TROUBLESHOOTING: QuizQuestion[] = [
     anchor: "pnpm-lockyaml에서-충돌이-났다",
   },
   {
-    id: "git-troubleshooting-6",
+    id: "git-troubleshooting-4",
     post: "git-troubleshooting",
-    question: "fetch 중 cannot lock ref 'refs/remotes/origin/feature/login': 'refs/remotes/origin/feature' exists 오류가 났다. 가장 알맞은 해결은?",
+    question: "GitHub에서 README를 넣어 만든 저장소에 로컬에서 따로 git init한 프로젝트를 pull하자 refusing to merge unrelated histories가 났다. 원인은?",
     choices: [
-      ".git/refs/heads 폴더를 통째로 지운다",
-      "git fetch --prune으로 원격에서 사라진 origin/feature를 지운 뒤 받는다",
-      "로컬 feature 브랜치를 강제 푸시한다",
-      "git gc --aggressive로 압축한다",
+      "원격 브랜치 이름이 master라서",
+      "두 히스토리에 공통 조상 커밋이 없어서",
+      "로컬에 커밋하지 않은 변경이 있어서",
+      "pull.rebase 설정이 없어서",
     ],
     answer: 1,
     explanation:
-      "ref 이름은 파일 경로로 저장되므로 origin/feature 파일이 있으면 origin/feature/ 폴더를 만들 수 없다. 원격에서는 feature가 지워졌는데 내 저장소에 낡은 원격 추적 브랜치가 남아 생긴 일이라 prune으로 정리하면 된다. 로컬 브랜치 폴더를 지우면 내 작업을 잃는다.",
-    anchor: "cannot-lock-ref-오류가-난다",
+      "원격의 Initial commit과 로컬의 첫 커밋은 각자 따로 시작한 뿌리라 공통 조상이 없다. Git 2.9부터 이런 머지는 기본으로 막고, 정말 합칠 때만 --allow-unrelated-histories로 허락한다.",
+    anchor: "refusing-to-merge-unrelated-histories",
   },
   {
-    id: "git-troubleshooting-7",
+    id: "git-troubleshooting-5",
     post: "git-troubleshooting",
-    question: "git status가 fatal: index file corrupt를 낸다. 커밋과 작업 폴더 파일을 잃지 않고 고치는 방법은?",
+    question: "git stash pop 도중 충돌이 났다. 이때 그 stash는 어떻게 되나?",
     choices: [
-      "git reset --hard HEAD",
-      "저장소를 지우고 다시 clone한다",
-      "깨진 .git/index를 치우고 git reset으로 HEAD 기준 인덱스를 다시 만든다",
-      "git commit --amend로 인덱스를 덮어쓴다",
+      "충돌과 상관없이 바로 지워진다",
+      "충돌 난 파일만 빼고 지워진다",
+      "stash가 자동으로 새 브랜치가 된다",
+      "지워지지 않고 남아 있어서 다시 꺼낼 수 있다",
     ],
-    answer: 2,
+    answer: 3,
     explanation:
-      "인덱스는 다음 커밋에 들어갈 내용의 목록일 뿐이라 지우고 다시 만들 수 있다. 기본 --mixed인 git reset은 인덱스만 HEAD에 맞추고 작업 폴더는 건드리지 않는다. --hard는 커밋하지 않은 변경까지 지우니 이 상황에 맞지 않는다.",
-    anchor: "index-file-corrupt",
+      "pop은 충돌이 나면 stash를 지우지 않고 The stash entry is kept라고 알려 준다. 잘못 풀었으면 파일을 되돌리고 다시 pop하면 되고, 다 풀었으면 git stash drop으로 직접 지운다.",
+    anchor: "stash-pop에서-충돌이-났다",
   },
 ];

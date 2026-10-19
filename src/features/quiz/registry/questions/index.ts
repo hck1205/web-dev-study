@@ -9,10 +9,26 @@ import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
+import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
+import { DB_INDEX_DESIGN } from "./db-index-design";
+import { DB_INDEX_PITFALLS } from "./db-index-pitfalls";
+import { DB_KEYS_DENORMALIZATION } from "./db-keys-denormalization";
+import { DB_LOCKING_DEADLOCK } from "./db-locking-deadlock";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
+import { DB_PARTITIONING } from "./db-partitioning";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
+import { DB_SHARDING } from "./db-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
+import { DB_TYPE_COLUMNAR_OLAP } from "./db-type-columnar-olap";
+import { DB_TYPE_EMBEDDED } from "./db-type-embedded";
+import { DB_TYPE_GRAPH } from "./db-type-graph";
+import { DB_TYPE_KEY_VALUE } from "./db-type-key-value";
+import { DB_TYPE_NEWSQL } from "./db-type-newsql";
+import { DB_TYPE_RELATIONAL } from "./db-type-relational";
+import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
+import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
+import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -24,9 +40,15 @@ import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
+import { GIT_IGNORE_CONFIG } from "./git-ignore-config";
 import { GIT_INTERNALS_BASICS } from "./git-internals-basics";
+import { GIT_LARGE_FILES_SECRETS } from "./git-large-files-secrets";
+import { GIT_MERGE_CONFLICT } from "./git-merge-conflict";
 import { GIT_REBASE } from "./git-rebase";
 import { GIT_REMOTE_COLLABORATION } from "./git-remote-collaboration";
+import { GIT_REPO_ERRORS } from "./git-repo-errors";
+import { GIT_STAGING_AREA } from "./git-staging-area";
+import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
@@ -38,42 +60,91 @@ import { HTTP_METHODS } from "./http-methods";
 import { HTTP_STATUS_CODES } from "./http-status-codes";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
+import { HYDRATION } from "./hydration";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
+import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
+import { K8S_POD_BASICS } from "./k8s-pod-basics";
+import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
+import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
+import { K8S_POD_PROBES } from "./k8s-pod-probes";
+import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
+import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
+import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
+import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
+import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
+import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
+import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
+import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
+import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { OSI_IN_PRACTICE } from "./osi-in-practice";
+import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
+import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
+import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
+import { POSTGRES_ARCHITECTURE } from "./postgres-architecture";
+import { POSTGRES_CONNECTIONS_PG_HBA } from "./postgres-connections-pg-hba";
+import { POSTGRES_DATA_TYPES } from "./postgres-data-types";
+import { POSTGRES_FUNCTIONS_TRIGGERS } from "./postgres-functions-triggers";
+import { POSTGRES_GETTING_STARTED } from "./postgres-getting-started";
+import { POSTGRES_JSONB_SEARCH } from "./postgres-jsonb-search";
+import { POSTGRES_MVCC_VACUUM } from "./postgres-mvcc-vacuum";
+import { POSTGRES_OPERATIONS } from "./postgres-operations";
+import { POSTGRES_REPORTING_SQL } from "./postgres-reporting-sql";
+import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { REACT_RERENDER } from "./react-rerender";
+import { REACT_SERVER_COMPONENTS } from "./react-server-components";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { REDIS_BASICS } from "./redis-basics";
+import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
+import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
+import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
+import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
+import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { SQL_BASICS } from "./sql-basics";
+import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
+import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
 import { SQLD_GROUP_BY_HAVING } from "./sqld-group-by-having";
 import { SQLD_JOINS } from "./sqld-joins";
+import { SQLD_NULL_FUNCTIONS } from "./sqld-null-functions";
 import { SQLD_ROLLUP_CUBE_GROUPING_SETS } from "./sqld-rollup-cube-grouping-sets";
+import { SQLD_SET_OPERATORS } from "./sqld-set-operators";
 import { SQLD_SINGLE_ROW_FUNCTIONS } from "./sqld-single-row-functions";
 import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
+import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
+import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
+import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TOKEN_LOGIN } from "./token-login";
+import { UDP_AND_QUIC } from "./udp-and-quic";
+import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 
@@ -90,10 +161,26 @@ export const QUESTION_SETS = [
   CORE_WEB_VITALS,
   CORS,
   DB_ARCHITECTURE_BY_SCALE,
+  DB_CONSISTENCY_CAP,
   DB_INDEX,
+  DB_INDEX_DESIGN,
+  DB_INDEX_PITFALLS,
+  DB_KEYS_DENORMALIZATION,
+  DB_LOCKING_DEADLOCK,
   DB_MODELING_NORMALIZATION,
+  DB_PARTITIONING,
   DB_REPLICATION_SHARDING,
+  DB_SHARDING,
   DB_TRANSACTION_ISOLATION,
+  DB_TYPE_COLUMNAR_OLAP,
+  DB_TYPE_EMBEDDED,
+  DB_TYPE_GRAPH,
+  DB_TYPE_KEY_VALUE,
+  DB_TYPE_NEWSQL,
+  DB_TYPE_RELATIONAL,
+  DB_TYPE_TIME_SERIES,
+  DB_TYPE_WIDE_COLUMN,
+  DB_TYPES_OVERVIEW,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
@@ -105,9 +192,15 @@ export const QUESTION_SETS = [
   GATEWAY,
   GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
+  GIT_IGNORE_CONFIG,
   GIT_INTERNALS_BASICS,
+  GIT_LARGE_FILES_SECRETS,
+  GIT_MERGE_CONFLICT,
   GIT_REBASE,
   GIT_REMOTE_COLLABORATION,
+  GIT_REPO_ERRORS,
+  GIT_STAGING_AREA,
+  GIT_STASH_REFLOG,
   GIT_TIPS_ADVANCED,
   GIT_TROUBLESHOOTING,
   GIT_UNDO,
@@ -119,42 +212,91 @@ export const QUESTION_SETS = [
   HTTP_STATUS_CODES,
   HTTP_VERSIONS,
   HTTPS_TLS,
+  HYDRATION,
   IPTABLES_BASICS,
   IPTABLES_NAT,
+  ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
+  K8S_POD_BASICS,
+  K8S_POD_LIFECYCLE,
+  K8S_POD_MULTICONTAINER,
+  K8S_POD_PROBES,
+  K8S_POD_RESOURCES,
+  K8S_POD_SCHEDULING,
+  K8S_POD_TROUBLESHOOTING,
   KUBERNETES_INGRESS,
+  LAYER_IP_ADDRESSING,
+  LAYER_IP_ROUTING_ICMP,
+  LAYER_LINK_ETHERNET_ARP,
+  LAYER_MTU_FRAGMENTATION,
   LOCAL_CUSTOM_DOMAIN,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  NETWORK_LAYERS_OVERVIEW,
+  NETWORK_TROUBLESHOOTING_BY_LAYER,
+  NEXTJS_STATIC_DYNAMIC_RENDERING,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  OSI_IN_PRACTICE,
+  PACKET_CAPTURE_TCPDUMP,
+  PORTS_AND_SOCKETS,
+  POSTGRES_ADVANCED_SQL,
+  POSTGRES_ARCHITECTURE,
+  POSTGRES_CONNECTIONS_PG_HBA,
+  POSTGRES_DATA_TYPES,
+  POSTGRES_FUNCTIONS_TRIGGERS,
+  POSTGRES_GETTING_STARTED,
+  POSTGRES_JSONB_SEARCH,
+  POSTGRES_MVCC_VACUUM,
+  POSTGRES_OPERATIONS,
+  POSTGRES_REPORTING_SQL,
+  POSTGRES_ROLES_SECURITY,
   PROXY_REVERSE_PROXY,
   PYTHAGOREAN_THEOREM,
   REACT_RERENDER,
+  REACT_SERVER_COMPONENTS,
   REALTIME_COMMUNICATION,
   REDIS_BASICS,
+  REDIS_CLUSTER,
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
+  REDIS_REPLICATION_SENTINEL,
+  RENDERING_CSR_SPA,
+  RENDERING_SSG_ISR,
+  RENDERING_SSR,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   SQL_BASICS,
+  SQL_BATCH_TIMEOUT_POOL,
+  SQL_INSERT_UPDATE_DELETE,
+  SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
+  SQL_SELECT_WHERE_NULL,
+  SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,
   SQLD_GROUP_BY_HAVING,
   SQLD_JOINS,
+  SQLD_NULL_FUNCTIONS,
   SQLD_ROLLUP_CUBE_GROUPING_SETS,
+  SQLD_SET_OPERATORS,
   SQLD_SINGLE_ROW_FUNCTIONS,
   SQLD_SUBQUERY_SET_OPERATORS,
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
+  SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  STREAMING_SSR_SUSPENSE,
+  TCP_CONNECTION_LIFECYCLE,
+  TCP_RELIABILITY_CONGESTION,
   TOKEN_LOGIN,
+  UDP_AND_QUIC,
+  UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
   WHAT_HAPPENS_GOOGLE_COM,
 ];

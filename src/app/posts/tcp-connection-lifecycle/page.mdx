@@ -1,0 +1,588 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("tcp-connection-lifecycle");
+
+API 서버가 며칠 잘 돌다가 `Too many open files`를 내며 요청을 못 받는다. 재시작하면 멀쩡하고, 며칠 지나면 또 같은 일이 생긴다. 서버에서 `ss -tan`을 쳐 보면 `CLOSE-WAIT`라는 줄이 수천 개 쌓여 있다. 다른 서버에서는 `TIME-WAIT`가 수만 개라며 누군가 커널 설정을 바꾸자고 한다. 두 줄 다 TCP 연결이 끝나 가는 도중의 상태인데, 하나는 거의 항상 내 코드의 버그이고 하나는 대개 정상이다.
+
+이 차이를 알려면 TCP 연결이 태어나서 사라지기까지 어떤 상태를 거치는지 알아야 한다. 이 글은 연결을 맺는 세 번의 인사부터, 커널이 연결을 줄 세우는 두 개의 대기열, 끊을 때의 네 번의 인사, TIME_WAIT가 남는 이유, CLOSE_WAIT가 쌓이는 이유, 대화를 강제로 끊는 RST, 조용히 죽은 연결을 찾는 keepalive까지 차례로 본다. 계층 전체 그림은 [OSI 7계층과 TCP/IP 4계층 글](/posts/network-layers-overview)에 있고, 이 글은 그중 전송 계층(L4)의 TCP 연결만 다룬다.
+
+기준은 Ubuntu 24.04다. 아래 출력은 Ubuntu 24.04 컨테이너(커널 6.18) 안에서 `127.0.0.1`에 Python으로 작은 서버를 띄우고 직접 찍었다. 기본 설치 Ubuntu 24.04의 커널은 6.8이라 일부 기본값이 다를 수 있고, 그런 곳은 따로 적었다.
+
+## 연결은 양쪽 커널의 메모에만 있다
+
+TCP를 "연결형" 프로토콜이라고 부르지만, 선 하나를 끝에서 끝까지 깔아 두는 게 아니다. 중간의 라우터는 TCP 연결이 있는지조차 모른다. 연결이란 양쪽 커널이 각자 적어 둔 메모다. "저쪽 10.0.0.5의 443번과 이야기 중이고, 내가 보낸 바이트는 몇 번까지 확인받았고, 저쪽에서는 몇 번까지 받았다"는 기록이다.
+
+이 메모를 소켓이라고 부르고, 커널은 출발지 IP·출발지 포트·목적지 IP·목적지 포트 네 값으로 메모를 찾는다. 같은 서버의 443번에 연결이 만 개 붙어 있어도 상대 IP나 포트가 하나씩 다르니 모두 따로 구분된다. 포트와 소켓을 찾는 과정은 [포트와 소켓 글](/posts/ports-and-sockets)에서 자세히 본다.
+
+메모에는 상태가 하나 붙는다. 연결을 맺는 중인지, 데이터를 주고받는 중인지, 끊는 중인지다. `ss -tan`의 첫 열이 바로 이 상태다. 이 글의 목표는 그 열을 보고 무슨 일이 일어나는 중인지 읽을 수 있게 되는 것이다.
+
+## 번호를 맞추는 세 번의 인사
+
+TCP는 보내는 바이트마다 번호(시퀀스 번호)를 붙이고, 받는 쪽은 "여기까지 받았다"를 번호로 알려 준다(ACK). 그러려면 시작하기 전에 서로의 첫 번호를 알아야 한다. 연결을 맺는 3-way handshake는 이 번호를 교환하고 확인하는 절차다.
+
+로컬 서버에 접속하면서 `tcpdump`로 찍은 실제 패킷이다. `-S`를 붙여 상대 번호가 아닌 원래 번호를 보이게 했다.
+
+```bash
+# 7000번 포트로 오가는 TCP 패킷을 숫자 그대로(-nn) 찍는다
+sudo tcpdump -i lo -nn -S 'tcp port 7000'
+```
+
+```text
+22:57:40.122666 IP 127.0.0.1.35384 > 127.0.0.1.7000: Flags [S], seq 4228494911, win 65495, options [mss 65495,sackOK,TS val 3384514130 ecr 0,nop,wscale 10], length 0
+22:57:40.122792 IP 127.0.0.1.7000 > 127.0.0.1.35384: Flags [S.], seq 3831345371, ack 4228494912, win 65483, options [mss 65495,sackOK,TS val 4032304966 ecr 3384514130,nop,wscale 10], length 0
+22:57:40.122806 IP 127.0.0.1.35384 > 127.0.0.1.7000: Flags [.], ack 3831345372, win 64, options [nop,nop,TS val 3384514130 ecr 4032304966], length 0
+```
+
+`[S]`는 SYN, `[S.]`는 SYN과 ACK가 함께 켜진 것, `[.]`는 ACK만 있는 패킷이다. 번호를 따라가 보면 규칙이 보인다. 아래 그림에서 다음을 누르면 한 단계씩 넘어간다.
+
+<SequenceDiagram
+  caption="실제 캡처의 번호로 본 3-way handshake"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "s", label: "서버 :7000" },
+  ]}
+  steps={[
+    {
+      from: "c",
+      to: "c",
+      label: "connect()",
+      title: "앱이 연결을 부탁한다",
+      detail: "클라이언트 커널이 소켓을 SYN-SENT 상태로 만들고, 첫 시퀀스 번호를 무작위로 고른다. 이번에는 4228494911이 나왔다.",
+    },
+    {
+      from: "c",
+      to: "s",
+      label: "SYN seq=4228494911",
+      title: "내 번호는 여기서 시작한다",
+      detail: "SYN은 데이터가 없어도 번호 하나를 쓴다. 그래서 다음에 보낼 첫 바이트는 4228494912번이 된다. MSS, SACK, 윈도 배율 같은 옵션도 이때만 실어 보낸다.",
+      payload: "Flags [S], seq 4228494911\noptions [mss 65495,sackOK,TS,wscale 10]",
+    },
+    {
+      from: "s",
+      to: "c",
+      label: "SYN+ACK",
+      title: "네 번호를 받았고, 내 번호는 이거다",
+      detail: "서버도 자기 번호 3831345371을 고른다. ack 4228494912는 클라이언트의 SYN까지 받았으니 다음엔 4228494912번을 달라는 뜻이다. 서버 쪽 소켓은 SYN-RECV 상태다.",
+      payload: "Flags [S.], seq 3831345371, ack 4228494912",
+    },
+    {
+      from: "c",
+      to: "s",
+      label: "ACK",
+      title: "네 번호도 받았다",
+      detail: "ack 3831345372로 서버의 SYN을 확인한다. 클라이언트는 이 ACK를 보내면서, 서버는 이 ACK를 받으면서 ESTABLISHED가 된다. 왕복 한 번 반이 지났다.",
+      payload: "Flags [.], ack 3831345372",
+    },
+    {
+      from: "c",
+      to: "s",
+      label: "데이터 seq 1:4",
+      title: "이제 바이트를 보낸다",
+      detail: "tcpdump는 -S가 없으면 첫 번호를 0으로 보고 상대값으로 보여 준다. 그래서 보통은 seq 1:4처럼 작은 숫자로 보인다. 첫 데이터 바이트가 1번인 이유는 SYN이 0번을 썼기 때문이다.",
+      payload: "Flags [P.], seq 1:4, ack 1, length 3",
+    },
+  ]}
+/>
+
+왜 두 번이 아니라 세 번일까. 클라이언트는 SYN-ACK를 받는 순간 "내 번호를 서버가 알았고, 서버의 번호도 나는 안다"를 확인한다. 하지만 서버는 아직 "내 번호를 클라이언트가 받았는지"를 모른다. 세 번째 ACK가 이걸 확인해 준다. 또 하나의 이유는 네트워크 어딘가에서 늦게 도착한 옛날 SYN이다. 두 번 만에 연결이 맺어진다면 몇십 초 전에 길을 잃었던 SYN 하나가 도착하는 순간 서버는 아무도 원하지 않는 연결을 만든다. 세 번째 인사가 있으면 클라이언트가 "그런 연결은 요청한 적 없다"며 RST로 거절할 기회가 생긴다.
+
+첫 번호를 0이 아닌 무작위로 고르는 것도 같은 이유와 보안 때문이다. 번호가 예측 가능하면 남이 출발지 주소를 위조해 내 연결에 가짜 데이터를 끼워 넣을 수 있다. 리눅스는 RFC 6528의 방식대로 네 값과 비밀 키, 시간으로 첫 번호를 만든다.
+
+### SYN 한 줄에 실린 것
+
+SYN 패킷은 연결의 성격을 정하는 옵션을 싣는 유일한 기회다. 처음 캡처의 첫 줄을 조각으로 나눠 보자. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="tcpdump로 찍은 SYN 한 줄"
+  base="127.0.0.1.35384 > 127.0.0.1.7000:"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "flags",
+      display: "Flags [S]",
+      title: "SYN 플래그",
+      description: "연결을 열자는 패킷이다. tcpdump는 S(SYN), F(FIN), R(RST), P(PSH), .(ACK)를 이어 붙여 보여 준다. SYN-ACK는 [S.]로 찍힌다.",
+      required: true,
+    },
+    {
+      key: "seq",
+      display: "seq 4228494911",
+      title: "첫 시퀀스 번호",
+      description: "클라이언트가 무작위로 고른 시작 번호다. 이후 보내는 바이트는 이 번호 다음부터 센다.",
+      required: true,
+    },
+    {
+      key: "win",
+      display: "win 65495",
+      title: "수신 윈도",
+      description: "지금 받을 수 있는 바이트 수다. SYN에서는 배율이 아직 적용되지 않은 원래 값이다. 흐름 제어는 TCP 신뢰성 글에서 다룬다.",
+    },
+    {
+      key: "mss",
+      display: "mss 65495",
+      title: "최대 세그먼트 크기",
+      description: "한 세그먼트에 실을 수 있는 데이터의 최대 크기다. 루프백은 MTU가 65536이라 크게 나왔고, 보통 이더넷이면 1460이다. MTU 글에서 계산법을 본다.",
+      code: "이더넷: 1500(MTU) - 20(IP) - 20(TCP) = 1460",
+    },
+    {
+      key: "sackOK",
+      display: "sackOK",
+      title: "선택 확인 사용 가능",
+      description: "중간이 빠졌을 때 받은 구간을 따로 알려 주는 SACK를 쓸 수 있다는 표시다. 양쪽 SYN에 다 있어야 켜진다.",
+    },
+    {
+      key: "wscale",
+      display: "wscale 10",
+      title: "윈도 배율",
+      description: "이후 win 값에 2의 10제곱(1024)을 곱해서 읽으라는 뜻이다. 그래서 세 번째 패킷부터 win 64가 실제로는 65536바이트다.",
+    },
+  ]}
+/>
+
+이 옵션들은 SYN과 SYN-ACK에서만 협상하고, 연결 중간에 바꿀 수 없다. 그래서 중간 장비가 SYN의 옵션을 지우거나 고치면(MSS를 낮추는 MSS clamping이 대표적이다) 그 연결 내내 영향을 받는다. MSS와 MTU의 관계는 [MTU와 단편화 글](/posts/layer-mtu-fragmentation), SACK와 윈도가 실제로 하는 일은 [TCP 신뢰성 글](/posts/tcp-reliability-congestion)에서 이어서 본다.
+
+## 커널 안의 두 대기열
+
+서버 앱이 `listen()`을 부르면 커널은 그 포트로 오는 연결을 대신 받아 준다. 앱이 `accept()`를 부르기 전에도 핸드셰이크는 커널이 알아서 끝낸다. 이때 연결은 두 줄 중 하나에 선다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="SYN은 SYN 큐에, 핸드셰이크가 끝난 연결은 accept 큐에 선다"
+  nodes={[
+    { id: "cli", label: "클라이언트", sub: "SYN 보냄", x: 70, y: 45, w: 110, h: 46 },
+    { id: "synq", label: "SYN 큐", sub: "SYN-RECV", x: 200, y: 125, w: 110, h: 46 },
+    { id: "accq", label: "accept 큐", sub: "ESTABLISHED", x: 330, y: 125, w: 110, h: 46 },
+    { id: "app", label: "앱", sub: "accept() 호출", x: 330, y: 215, w: 110, h: 46 },
+    { id: "drop", label: "넘치면", sub: "SYN을 버림", x: 70, y: 215, w: 110, h: 46 },
+  ]}
+  edges={[
+    { from: "cli", to: "synq", label: "SYN" },
+    { from: "synq", to: "accq", label: "마지막 ACK" },
+    { from: "accq", to: "app", label: "꺼내 감" },
+    { from: "synq", to: "drop", dashed: true, label: "큐가 꽉 참" },
+  ]}
+/>
+
+SYN을 받으면 SYN-RECV 상태의 반쯤 열린 연결이 SYN 큐에 들어가고, 마지막 ACK가 오면 완성된 연결이 accept 큐로 옮겨 간다. 앱이 `accept()`로 하나씩 꺼내 가야 비로소 앱이 그 연결을 손에 쥔다. 앱이 바빠서 `accept()`를 늦게 부르면 accept 큐가 찬다.
+
+accept 큐의 길이는 `listen(backlog)`의 인자와 `net.core.somaxconn` 중 작은 값이다. `somaxconn`은 커널 5.4부터 기본 4096이고, 그 전에는 128이었다. 오래된 배포 문서에서 "somaxconn을 올려라"가 단골인 이유가 이거다. 반대로 앱이 backlog를 작게 주면 커널 값을 올려도 소용없다. Python의 `http.server`는 5, Node.js와 nginx는 리눅스에서 511을 쓴다.
+
+큐가 넘치면 어떻게 되는지 직접 넘쳐 보게 했다. backlog를 2로 주고 `accept()`를 한 번도 부르지 않는 서버에 연결 6개를 동시에 보냈다.
+
+```bash
+# 듣는 소켓의 큐 상태와 연결 상태를 함께 본다
+ss -tan '( sport = :7010 or dport = :7010 )'
+
+# 큐가 넘쳐서 버린 횟수 (커널 카운터)
+nstat -az TcpExtListenOverflows TcpExtListenDrops
+```
+
+```text
+State    Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+LISTEN   3      2          127.0.0.1:7010       0.0.0.0:*
+ESTAB    0      0          127.0.0.1:7010     127.0.0.1:43582
+ESTAB    0      0          127.0.0.1:43566    127.0.0.1:7010
+ESTAB    0      0          127.0.0.1:43570    127.0.0.1:7010
+ESTAB    0      0          127.0.0.1:43582    127.0.0.1:7010
+SYN-SENT 0      1          127.0.0.1:43590    127.0.0.1:7010
+SYN-SENT 0      1          127.0.0.1:43596    127.0.0.1:7010
+SYN-SENT 0      1          127.0.0.1:43600    127.0.0.1:7010
+ESTAB    0      0          127.0.0.1:7010     127.0.0.1:43570
+ESTAB    0      0          127.0.0.1:7010     127.0.0.1:43566
+
+#kernel
+TcpExtListenOverflows           6                  0.0
+TcpExtListenDrops               6                  0.0
+```
+
+LISTEN 줄의 `Recv-Q`와 `Send-Q`는 다른 줄과 뜻이 다르다. LISTEN에서는 `Send-Q`가 accept 큐의 최대 길이(2), `Recv-Q`가 지금 큐에 선 연결 수(3)다. 리눅스는 최대 길이보다 하나 더 받아 준다. 그 뒤에 온 세 연결은 클라이언트 쪽에서 `SYN-SENT`로 멈춰 있다. 커널이 RST로 거절한 게 아니라 SYN을 그냥 버렸기 때문이다. 클라이언트는 SYN을 다시 보내다가, 그 사이에 자리가 나면 연결되고 아니면 타임아웃이 난다.
+
+버리는 게 기본인 이유는 큐가 잠깐 찬 것일 수 있어서다. 거절하면 클라이언트는 바로 실패하지만, 버리면 잠시 후 재시도로 들어올 수 있다. `net.ipv4.tcp_abort_on_overflow=1`이면 RST로 거절하는데, 기본값은 0이다.
+
+현장에서는 이게 "서버 CPU도 여유 있는데 가끔 연결이 1초씩 늦게 붙는다"로 나타난다. 버려진 SYN이 1초 뒤 재전송으로 들어오기 때문이다. `nstat`나 `netstat -s | grep -i listen`의 overflow 숫자가 오르고 있으면 앱의 accept 속도나 backlog를 의심한다.
+
+### SYN만 잔뜩 보내는 공격
+
+SYN 큐는 반쯤 열린 연결로 차는 줄이다. 공격자가 출발지를 위조한 SYN을 대량으로 보내면 SYN-ACK에 대한 마지막 ACK는 영원히 오지 않고, SYN 큐는 쓰레기로 찬다. 이게 SYN flood다.
+
+리눅스는 SYN 큐가 차면 SYN 쿠키로 버틴다(`net.ipv4.tcp_syncookies=1`, Ubuntu 기본값). 큐에 아무것도 저장하지 않고, 연결 정보를 해시해서 SYN-ACK의 시퀀스 번호 자체에 담아 보낸다. 진짜 클라이언트가 ACK로 그 번호+1을 돌려주면 그때 계산해서 연결을 복원한다. 메모리를 쓰지 않는 대신 일부 TCP 옵션 정보가 줄어든다. 커널 로그에 `Possible SYN flooding on port 443. Sending cookies.`가 찍히면 이 장치가 작동한 것이다. 공격일 수도 있지만 accept 큐가 작아 정상 트래픽에도 찍히는 경우가 있어서, backlog부터 확인한다.
+
+## 대답이 없을 때와 거절당할 때
+
+연결이 실패하는 모양은 두 가지다. 아무도 듣지 않는 포트에 접속하면 상대 커널이 바로 RST를 보낸다.
+
+```bash
+# 아무도 듣지 않는 7001번에 접속해 본다
+curl -sS http://127.0.0.1:7001/
+```
+
+```text
+curl: (7) Failed to connect to 127.0.0.1 port 7001 after 0 ms: Couldn't connect to server
+```
+
+```text
+22:57:59.513389 IP 127.0.0.1.55360 > 127.0.0.1.7001: Flags [S], seq 1882290021, win 65495, options [mss 65495,sackOK,TS val 1858782728 ecr 0,nop,wscale 10], length 0
+22:57:59.513406 IP 127.0.0.1.7001 > 127.0.0.1.55360: Flags [R.], seq 0, ack 1882290022, win 0, length 0
+```
+
+SYN에 곧바로 `[R.]`이 돌아왔다. 앱에서는 `ECONNREFUSED`, 흔히 보는 `Connection refused`다. 반대로 방화벽이 SYN을 버리면 클라이언트는 응답을 기다리며 SYN을 다시 보낸다. iptables로 7002번을 DROP하게 하고 같은 일을 했다.
+
+```bash
+# 7002번으로 오는 패킷을 버리는 규칙을 넣고 (실험이 끝나면 -D로 지운다)
+sudo iptables -I INPUT -i lo -p tcp --dport 7002 -j DROP
+
+# 20초까지만 기다리며 접속 시도
+curl -sS --connect-timeout 20 http://127.0.0.1:7002/
+```
+
+```text
+curl: (28) Failed to connect to 127.0.0.1 port 7002 after 20002 ms: Timeout was reached
+```
+
+```text
+22:58:01.050156 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:02.069260 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:03.093208 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:04.121181 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:05.141207 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:06.165237 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:08.181196 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:12.309254 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+22:58:20.501304 IP 127.0.0.1.40084 > 127.0.0.1.7002: Flags [S], seq 2677432797, ...
+```
+
+같은 번호의 SYN이 반복된다. 이 커널에서는 처음 다섯 번은 약 1초 간격, 그 뒤로 2초, 4초, 8초로 간격이 두 배씩 늘었다. 앞부분이 일정한 건 이 커널에 `net.ipv4.tcp_syn_linear_timeouts`(기본 4)가 있어서다. 이 설정이 없는 커널에서는 처음부터 1, 2, 4, 8초로 늘어난다. 쓰는 커널에 있는지는 `sysctl net.ipv4.tcp_syn_linear_timeouts`로 확인한다. 언제 포기할지는 `net.ipv4.tcp_syn_retries`(기본 6)로 정한다. 앱 쪽 타임아웃 없이 Python 소켓으로 같은 포트에 `connect()`만 걸어 두자 133.6초 뒤에야 `TimeoutError [Errno 110] Connection timed out`이 났다.
+
+그래서 앱의 connect 타임아웃을 따로 걸어야 한다. 커널 기본값에 맡기면 죽은 DB 주소 하나 때문에 요청 스레드가 2분 넘게 묶인다. 같은 데이터센터 안이라면 connect 타임아웃은 1~3초 정도로 짧게, 읽기 타임아웃은 요청 성격에 맞게 따로 둔다. 실패를 바로 받느냐 기다리다 받느냐가 어느 층에서 막혔는지 알려 주는 단서라는 점은 [계층 개요 글](/posts/network-layers-overview)에서 봤다.
+
+## 상태 열한 개를 따라가기
+
+연결 하나가 거치는 상태는 RFC 9293(옛 RFC 793)에 열한 개로 정해져 있다. 한꺼번에 외우기보다 연결 하나를 따라가며 보면 쉽다. 아래 그림은 먼저 끊는 쪽(클라이언트)의 소켓이 어떤 상태를 지나는지 보여 준다. 칸 하나가 상태 하나이고, 오른쪽 기록이 그동안 주고받은 패킷이다.
+
+<AlgoTrace
+  caption="먼저 끊는 쪽 소켓의 일생"
+  memoryLabel="주고받은 것"
+  cells={["CLOSED", "SYN-SENT", "ESTAB", "FIN-WAIT-1", "FIN-WAIT-2", "TIME-WAIT"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "소켓을 만들었지만 아직 아무 일도 없다." },
+    { pointer: 1, memory: ["SYN 보냄"], caption: "connect()를 부르면 SYN을 보내고 SYN-SENT가 된다. 방화벽에 막히면 여기서 멈춰 있다." },
+    { pointer: 2, memory: ["SYN 보냄", "SYN+ACK 받음", "ACK 보냄"], caption: "SYN-ACK를 받고 ACK를 보내면 ESTABLISHED다. 데이터는 이 상태에서만 오간다." },
+    { pointer: 3, memory: ["SYN 보냄", "SYN+ACK 받음", "ACK 보냄", "FIN 보냄"], caption: "앱이 close()를 부르면 FIN을 보내고 FIN-WAIT-1이 된다. 이제 내 쪽은 더 보낼 게 없다." },
+    { pointer: 4, memory: ["FIN 보냄", "ACK 받음"], caption: "상대가 FIN을 받았다고 ACK하면 FIN-WAIT-2다. 상대는 아직 보낼 게 남았을 수 있다." },
+    { pointer: 5, memory: ["FIN 보냄", "ACK 받음", "FIN 받음", "ACK 보냄"], caption: "상대도 FIN을 보내오면 마지막 ACK를 보내고 TIME-WAIT로 들어간다." },
+    { pointer: 0, found: [5], memory: ["60초 대기 끝"], caption: "리눅스에서는 60초가 지나면 메모가 지워지고 CLOSED로 돌아간다." },
+  ]}
+/>
+
+받는 쪽, 즉 나중에 끊는 쪽은 길이 다르다. 서버는 LISTEN에서 SYN을 받아 SYN-RECV를 거쳐 ESTABLISHED가 되고, 상대의 FIN을 받으면 CLOSE-WAIT, 자기도 close()를 불러 FIN을 보내면 LAST-ACK, 마지막 ACK를 받으면 CLOSED다. 양쪽이 거의 동시에 FIN을 보내면 FIN-WAIT-1에서 상대의 FIN을 먼저 받는 경우가 생기는데, 이때 잠깐 거치는 게 CLOSING이다. 이 열한 개 중 `ss`에서 실제로 자주 보는 건 LISTEN, ESTAB, TIME-WAIT, CLOSE-WAIT, 그리고 문제가 있을 때의 SYN-SENT, SYN-RECV, FIN-WAIT-2 정도다.
+
+## 끊을 때는 네 번 인사한다
+
+TCP 연결은 양방향 통로 두 개가 붙어 있는 구조라서, 끊을 때도 방향마다 따로 닫는다. FIN은 "내 쪽은 더 보낼 게 없다"는 뜻일 뿐, "네 말도 그만 듣겠다"는 뜻이 아니다. 그래서 끊는 데 인사가 네 번 든다. 클라이언트가 먼저 끊도록 만든 실제 캡처다.
+
+```text
+22:57:40.122891 IP 127.0.0.1.35384 > 127.0.0.1.7000: Flags [F.], seq 4, ack 1, win 64, options [nop,nop,TS val 3384514130 ecr 4032304966], length 0
+22:57:40.165317 IP 127.0.0.1.7000 > 127.0.0.1.35384: Flags [.], ack 5, win 64, options [nop,nop,TS val 4032305009 ecr 3384514130], length 0
+22:57:40.323133 IP 127.0.0.1.7000 > 127.0.0.1.35384: Flags [F.], seq 1, ack 5, win 64, options [nop,nop,TS val 4032305167 ecr 3384514130], length 0
+22:57:40.323148 IP 127.0.0.1.35384 > 127.0.0.1.7000: Flags [.], ack 2, win 64, options [nop,nop,TS val 3384514331 ecr 4032305167], length 0
+```
+
+<SequenceDiagram
+  caption="클라이언트가 먼저 끊을 때의 네 번의 인사"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "s", label: "서버" },
+  ]}
+  steps={[
+    {
+      from: "c",
+      to: "s",
+      label: "FIN seq=4",
+      title: "더 보낼 게 없다",
+      detail: "클라이언트 앱이 close()를 불렀다. FIN도 SYN처럼 번호 하나를 쓴다. 클라이언트는 FIN-WAIT-1이 된다.",
+      payload: "Flags [F.], seq 4, ack 1",
+    },
+    {
+      from: "s",
+      to: "c",
+      label: "ACK 5",
+      title: "알았다",
+      detail: "서버 커널이 FIN을 확인한다. 이 ACK는 42ms 뒤에 나갔다. 바로 보내지 않고 함께 실어 보낼 데이터가 생기는지 잠깐 기다리는 지연 ACK 때문이다. 서버 소켓은 CLOSE-WAIT, 클라이언트는 FIN-WAIT-2가 된다.",
+      payload: "Flags [.], ack 5",
+    },
+    {
+      from: "s",
+      to: "s",
+      label: "앱이 close()",
+      title: "서버 앱이 정리할 시간",
+      detail: "서버 앱은 read()가 0을 돌려주는 것으로 상대가 끊었다는 걸 안다. 남은 응답을 마저 보낼 수도 있다. 이 실험에서는 200ms 뒤에 close()를 불렀다. 앱이 close()를 부르지 않으면 소켓은 CLOSE-WAIT에 영원히 남는다.",
+    },
+    {
+      from: "s",
+      to: "c",
+      label: "FIN seq=1",
+      title: "나도 더 보낼 게 없다",
+      detail: "서버가 자기 쪽 방향을 닫는다. 서버 소켓은 LAST-ACK가 된다.",
+      payload: "Flags [F.], seq 1, ack 5",
+    },
+    {
+      from: "c",
+      to: "s",
+      label: "ACK 2",
+      title: "알았다, 그리고 기다린다",
+      detail: "마지막 ACK를 받은 서버는 바로 CLOSED다. 클라이언트는 TIME-WAIT로 들어가 60초를 기다린다. 먼저 끊은 쪽이 TIME-WAIT를 진다.",
+      payload: "Flags [.], ack 2",
+    },
+  ]}
+/>
+
+두 번째와 세 번째 사이가 벌어질 수 있다는 게 중요하다. 이 사이를 이용하는 게 반쪽 닫기(half-close)다. 클라이언트가 `shutdown(SHUT_WR)`으로 보내는 방향만 닫으면, 서버는 "요청은 다 왔다"를 알고 응답을 끝까지 보낸 다음 닫는다. 업로드 끝을 FIN으로 알리는 오래된 프로토콜이나 `nc`의 일부 옵션이 이 방식을 쓴다.
+
+세 번째와 두 번째가 한 패킷으로 합쳐지면 세 번의 인사로 끝나기도 한다. 서버가 FIN을 받자마자 자기도 닫으면 ACK와 FIN을 `[F.]` 하나로 보낸다. 캡처에서 끊는 인사가 세 줄로 보여도 이상한 게 아니다.
+
+## TIME_WAIT가 60초나 남는 이유
+
+먼저 끊은 쪽은 마지막 ACK를 보내고도 바로 소켓을 지우지 않는다. 이유는 둘이다.
+
+첫째, 마지막 ACK가 사라질 수 있다. 그러면 상대는 LAST-ACK에서 FIN을 다시 보낸다. 내가 소켓을 이미 지웠다면 그 FIN에 RST로 답할 수밖에 없고, 상대 앱은 정상 종료를 오류로 받는다. TIME-WAIT 동안은 다시 온 FIN에 ACK를 다시 보내 줄 수 있다.
+
+둘째, 같은 네 값으로 바로 새 연결을 맺으면, 이전 연결에서 길을 잃고 늦게 도착한 패킷이 새 연결의 데이터로 섞일 수 있다. 패킷이 네트워크에서 살아 있을 수 있는 최대 시간을 MSL이라 하고, 그 두 배(2MSL)를 기다리면 옛 패킷은 모두 사라졌다고 본다. RFC는 MSL을 2분으로 잡았지만, 리눅스는 TIME-WAIT를 커널 상수로 60초에 고정해 두었다. `ss -tano`의 타이머가 이걸 보여 준다.
+
+```bash
+# TIME-WAIT 소켓과 남은 시간(-o)을 본다
+ss -tano state time-wait
+```
+
+```text
+Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+0      0          127.0.0.1:45784    127.0.0.1:7000 timer:(timewait,59sec,0)
+```
+
+여기서 자주 틀리는 게 `net.ipv4.tcp_fin_timeout`이다. 이름 때문에 TIME-WAIT 길이를 바꾸는 설정으로 오해하기 쉬운데, 리눅스에서 이 값은 상대가 FIN을 안 보내는 고아 소켓이 FIN-WAIT-2에 머무는 시간이다(기본 60초). 이걸 줄여도 TIME-WAIT는 그대로 60초다.
+
+TIME-WAIT 자체는 거의 공짜다. 소켓 하나에 수백 바이트 정도라 수만 개도 메모리로는 문제가 안 되고, `net.ipv4.tcp_max_tw_buckets`(이 환경에서 65536)를 넘으면 커널이 알아서 지운다. 진짜 문제는 클라이언트 쪽에서 같은 목적지로 짧은 연결을 많이 만들 때다. TIME-WAIT 동안 그 로컬 포트를 같은 목적지로 다시 못 쓰니 임시 포트가 바닥난다. 서버의 443번 포트에 TIME-WAIT가 많은 건 포트를 하나만 쓰니 문제가 아니다. 이 계산과 해결책(커넥션 풀, 포트 범위, `tcp_tw_reuse`)은 [포트와 소켓 글](/posts/ports-and-sockets)에서 본다.
+
+인터넷에 떠도는 `net.ipv4.tcp_tw_recycle=1`은 쓰지 않는다. NAT 뒤의 여러 클라이언트가 보낸 타임스탬프를 하나의 출처로 착각해 정상 연결을 버리는 문제가 있어서 리눅스 4.12에서 아예 지워졌다. `tcp_tw_reuse`는 남아 있는데, 최근 커널의 기본값 2는 루프백 연결에만 재사용을 허락한다는 뜻이다.
+
+서버가 먼저 끊는 구조라면 TIME-WAIT는 서버에 쌓인다. 요청마다 응답 후 연결을 닫는 HTTP/1.0 방식의 서버에 300번 요청을 보낸 직후의 상태다.
+
+```bash
+# 9001번 포트에 걸린 소켓을 상태별로 센다
+ss -tan '( sport = :9001 or dport = :9001 )' | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
+```
+
+```text
+    294 TIME-WAIT
+      6 FIN-WAIT-2
+      6 CLOSE-WAIT
+      1 LISTEN
+```
+
+TIME-WAIT 294개는 서버가 먼저 끊은 정상 종료의 흔적이다. 60초 뒤면 사라진다. 눈여겨볼 건 아래의 CLOSE-WAIT 6개와 FIN-WAIT-2 6개다. 이 서버는 일부러 50번에 한 번 close()를 잊게 만들었다.
+
+## CLOSE_WAIT가 쌓이면 내 코드를 본다
+
+CLOSE-WAIT는 "상대는 끊었는데 내 앱이 아직 close()를 안 불렀다"는 상태다. 커널은 상대의 FIN에 ACK까지 해 놓고 앱이 닫아 주기를 기다린다. 커널이 대신 닫을 수는 없다. 앱이 아직 남은 데이터를 보내려는 건지, 잊은 건지 모르기 때문이다. 그래서 CLOSE-WAIT에는 커널 타임아웃이 없다. 앱이 닫지 않으면 프로세스가 죽을 때까지 남는다.
+
+```bash
+# CLOSE-WAIT 소켓을 어느 프로세스가 쥐고 있는지(-p) 본다
+sudo ss -tanp state close-wait
+```
+
+```text
+Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+1      0          127.0.0.1:9001    127.0.0.1:58818 users:(("python3",pid=5552,fd=4))
+1      0          127.0.0.1:9001    127.0.0.1:32852 users:(("python3",pid=5552,fd=9))
+```
+
+`users:` 안의 pid와 fd가 범인이다. `Recv-Q`의 1은 앱이 아직 읽지 않은 FIN이 잡힌 것이다. 소켓 하나가 파일 디스크립터(fd) 하나를 쥐고 있으니, 이게 쌓이면 프로세스의 fd 한도(`ulimit -n`, 흔히 1024나 systemd 서비스의 `LimitNOFILE`)에 닿아 `Too many open files`가 난다. 글 처음의 증상이 이거다.
+
+```bash
+# 이 프로세스가 연 fd 수와 한도를 비교한다
+sudo ls /proc/5552/fd | wc -l
+grep "open files" /proc/5552/limits
+```
+
+원인은 거의 늘 코드에 있다. 예외가 났을 때 소켓이나 DB 연결을 닫지 않는 경로, 커넥션 풀에서 빌려 가고 돌려주지 않는 코드, HTTP 클라이언트에서 응답 본문을 끝까지 읽거나 닫지 않아 연결이 풀로 돌아가지 못하는 경우(Go의 `resp.Body.Close()`를 빠뜨리는 게 대표적이다)가 흔하다. 상대 쪽(위 예에서 9001에 접속한 클라이언트)은 FIN-WAIT-2에 머물다가 `tcp_fin_timeout` 뒤에 정리되니, CLOSE-WAIT를 쥔 쪽만 계속 쌓인다.
+
+fd 한도를 올리면 증상이 늦게 나타날 뿐 고쳐지지 않는다. `ss`로 상대 주소를 보면 어느 외부 호출에서 새는지 좁혀지고, 그 호출 코드를 `try/finally`나 `with`, `defer`로 닫게 고치는 게 해결이다.
+
+## RST는 대화를 끊는 비상 버튼
+
+FIN이 "할 말 다 했다"는 정중한 작별이라면, RST는 "이 연결은 없던 걸로 한다"는 비상 정지다. RST를 받은 쪽은 상태 정리 없이 즉시 연결을 버리고, 아직 보내지 못한 데이터도 함께 사라진다. 앱에는 `ECONNRESET`(`Connection reset by peer`)으로 전달된다. RST를 받은 소켓에 계속 쓰려고 하면 `EPIPE`(`Broken pipe`)가 난다.
+
+RST가 나오는 상황은 생각보다 많다.
+
+- 아무도 듣지 않는 포트로 SYN이 왔을 때. 앞에서 본 `Connection refused`다.
+- 앱이 받은 데이터를 다 읽지 않은 채 close()했을 때. 커널은 "읽지도 않은 데이터가 있는데 닫았다"를 비정상으로 보고 FIN 대신 RST를 보낸다.
+- `SO_LINGER`를 0초로 걸고 close()했을 때. TIME-WAIT를 피하려는 꼼수로 쓰이지만 상대에게는 오류로 보인다.
+- 방화벽이 `REJECT --reject-with tcp-reset`으로 거절할 때, 로드 밸런서나 NAT 장비가 오래 쉰 연결을 잊은 뒤 그 연결의 패킷을 받았을 때.
+
+두 번째 경우를 재현했다. 클라이언트가 보낸 데이터를 서버가 읽지 않고 닫았다.
+
+```text
+22:58:56.390109 IP 127.0.0.1.7020 > 127.0.0.1.46990: Flags [R.], seq 1, ack 12, win 64, options [nop,nop,TS val 596994595 ecr 3081026043], length 0
+```
+
+```text
+ConnectionResetError [Errno 104] Connection reset by peer
+```
+
+FIN이 아니라 `[R.]`이 나갔고, 클라이언트는 다음 읽기에서 `Connection reset by peer`를 받았다. 요청 본문이 크면 다 읽기 전에 에러 응답을 보내고 닫는 서버에서 이런 일이 생긴다. 413 응답을 보냈는데 클라이언트에는 응답 대신 reset만 보이는 경우가 이 패턴이다.
+
+현장에서 `Connection reset by peer`를 보면 누가 RST를 보냈는지부터 찾는다. 상대 서버의 앱이 죽었는지, 중간 로드 밸런서의 유휴 타임아웃인지, 방화벽인지에 따라 고칠 곳이 다르다. 양쪽에서 `tcpdump`를 떠서 RST가 어디서 처음 나타나는지 보는 게 가장 확실하다. 이 방법은 [tcpdump 글](/posts/packet-capture-tcpdump)에서 다룬다.
+
+## 조용히 죽은 연결을 찾는 keepalive
+
+TCP는 아무것도 보내지 않으면 아무 패킷도 오가지 않는다. 그래서 상대 서버의 전원이 나가거나, 중간 NAT 장비가 연결을 잊어버리면 내 쪽 소켓은 몇 시간이고 ESTABLISHED로 남는다. 다음에 무언가를 보낼 때가 돼서야 재전송을 거듭하다 실패한다. 커넥션 풀에 들어 있던 DB 연결이 이렇게 죽어 있으면, 그 연결을 받은 첫 쿼리가 한참 멈춘 뒤 에러를 낸다.
+
+TCP `keepalive`는 쉬는 연결에 빈 확인 패킷을 보내 상대가 살아 있는지 묻는 장치다. 소켓마다 `SO_KEEPALIVE`로 켜야 하고, 리눅스 기본값은 이렇다.
+
+```bash
+# 쉬기 시작해서 첫 확인까지, 확인 간격, 실패 허용 횟수
+sysctl net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_intvl net.ipv4.tcp_keepalive_probes
+```
+
+```text
+net.ipv4.tcp_keepalive_time = 7200
+net.ipv4.tcp_keepalive_intvl = 75
+net.ipv4.tcp_keepalive_probes = 9
+```
+
+두 시간 쉰 뒤에야 첫 확인을 보내고, 75초 간격으로 9번 실패해야 포기한다. 7200 + 75 × 9 = 7875초, 2시간 11분이 지나야 죽은 연결을 알아챈다. 대부분의 클라우드 NAT와 로드 밸런서는 그보다 훨씬 먼저 쉬는 연결을 잊는다(AWS NAT 게이트웨이는 350초). 그래서 기본값으로는 쓸모가 거의 없고, 소켓 옵션으로 짧게 건다. 첫 확인 60초, 간격 10초, 5번으로 건 소켓은 `ss -o`에 타이머가 보인다.
+
+```bash
+# 7020번 포트로 맺은 연결의 타이머를 본다
+ss -tno state established '( dport = :7020 )'
+```
+
+```text
+Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
+0      0          127.0.0.1:46990    127.0.0.1:7020 timer:(keepalive,59sec,0)
+```
+
+`timer:(keepalive,59sec,0)`는 59초 뒤 첫 확인을 보낸다는 뜻이고, 마지막 0은 지금까지 응답 없이 보낸 횟수다. 대부분의 DB 드라이버와 커넥션 풀에는 이 값을 정하는 옵션이 따로 있다(PostgreSQL의 `keepalives_idle` 같은 것).
+
+이름이 같은 HTTP의 keep-alive와는 다른 이야기다. HTTP keep-alive는 응답 뒤에 연결을 닫지 않고 다음 요청에 재사용하는 것이고, TCP `keepalive`는 쉬는 연결이 살아 있는지 확인하는 것이다. 둘이 만나는 곳에서 유명한 장애가 하나 있다. AWS ALB 같은 로드 밸런서는 뒤쪽 서버와의 연결을 재사용하는데, ALB의 유휴 타임아웃은 기본 60초이고 Node.js HTTP 서버의 `keepAliveTimeout`은 기본 5초다. Node가 5초 쉰 연결을 먼저 닫는 순간 ALB가 그 연결로 요청을 보내면 RST를 받고, 사용자에게는 간헐적인 502가 간다. 뒤쪽 서버의 유휴 타임아웃을 앞단보다 길게 잡는 게 규칙이다.
+
+## 현장에서 상태 열을 읽는 법
+
+장애가 났을 때 상태별 개수는 가장 빨리 볼 수 있는 단서다.
+
+```bash
+# 전체 요약: 상태별 개수
+ss -s
+
+# 상태별로 세기
+ss -tan | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
+
+# 특정 상태만, 프로세스까지
+sudo ss -tanp state syn-sent
+```
+
+```text
+Total: 45
+TCP:   136 (estab 25, closed 105, orphaned 0, timewait 104)
+```
+
+상태가 쌓인 모양으로 원인을 좁힌다.
+
+- `SYN-SENT`가 쌓인다: 내가 연결을 시도하는데 답이 없다. 상대 서버가 죽었거나, 방화벽·보안 그룹이 SYN을 버리거나, 상대 accept 큐가 넘쳤다.
+- `SYN-RECV`가 쌓인다: SYN은 받았는데 마지막 ACK가 안 온다. SYN flood이거나, 돌아가는 경로가 막혀 내 SYN-ACK가 상대에게 못 가는 비대칭 경로를 의심한다.
+- `CLOSE-WAIT`가 계속 늘어난다: 내 앱이 연결을 닫지 않는다. 시간이 지나도 줄지 않으면 거의 확실히 코드의 누수다.
+- `FIN-WAIT-2`가 오래 남는다: 내가 닫았는데 상대 앱이 닫지 않는다. 상대 쪽의 CLOSE-WAIT 문제다.
+- `TIME-WAIT`가 많다: 짧은 연결을 많이 만들고 먼저 끊는다는 뜻이다. 서버라면 대개 정상이고, 같은 목적지로 나가는 클라이언트라면 포트 부족을 확인한다.
+
+TCP 상태만 보고 결론을 낼 수 없는 경우도 있다. ESTAB가 정상인데도 데이터가 안 가는 건 재전송이나 윈도 문제일 수 있고, 이건 [TCP 신뢰성 글](/posts/tcp-reliability-congestion)에서 `ss -ti`로 보는 법을 다룬다.
+
+## 상태 전이를 직접 따라가 보기
+
+아래 함수는 시작 상태와 사건 목록을 받아 마지막 상태를 돌려준다. 사건은 `connect`, `close`, `recv SYN`, `recv SYN+ACK`, `recv ACK`, `recv FIN`, `recv RST`, `timeout`(TIME-WAIT의 60초가 끝남) 중 하나다. 어떤 상태에서든 RST를 받으면 CLOSED가 되고, 그 상태에서 일어날 수 없는 사건이면 `"INVALID"`를 돌려준다. 앞의 그림을 떠올리며 채워 보자.
+
+<CodePlayground
+  caption="TCP 상태 전이"
+  functionName="tcpState"
+  initialCode={`function tcpState(start, events) {
+  // 예: tcpState("ESTABLISHED", ["recv FIN"]) → "CLOSE-WAIT"
+  let state = start;
+  for (const ev of events) {
+    // 상태와 사건으로 다음 상태를 정한다
+  }
+  return state;
+}`}
+  solution={`function tcpState(start, events) {
+  const table = {
+    "CLOSED|connect": "SYN-SENT",
+    "LISTEN|recv SYN": "SYN-RECV",
+    "SYN-SENT|recv SYN+ACK": "ESTABLISHED",
+    "SYN-RECV|recv ACK": "ESTABLISHED",
+    "ESTABLISHED|close": "FIN-WAIT-1",
+    "ESTABLISHED|recv FIN": "CLOSE-WAIT",
+    "FIN-WAIT-1|recv ACK": "FIN-WAIT-2",
+    "FIN-WAIT-1|recv FIN": "CLOSING",
+    "FIN-WAIT-2|recv FIN": "TIME-WAIT",
+    "CLOSING|recv ACK": "TIME-WAIT",
+    "CLOSE-WAIT|close": "LAST-ACK",
+    "LAST-ACK|recv ACK": "CLOSED",
+    "TIME-WAIT|timeout": "CLOSED",
+  };
+  let state = start;
+  for (const ev of events) {
+    if (ev === "recv RST") { state = "CLOSED"; continue; }
+    const next = table[state + "|" + ev];
+    if (!next) return "INVALID";
+    state = next;
+  }
+  return state;
+}`}
+  tests={[
+    { args: ["CLOSED", ["connect", "recv SYN+ACK"]], expected: "ESTABLISHED", label: "클라이언트가 연결" },
+    { args: ["LISTEN", ["recv SYN", "recv ACK"]], expected: "ESTABLISHED", label: "서버가 연결 받음" },
+    { args: ["ESTABLISHED", ["close", "recv ACK", "recv FIN"]], expected: "TIME-WAIT", label: "먼저 끊는 쪽" },
+    { args: ["ESTABLISHED", ["recv FIN"]], expected: "CLOSE-WAIT", label: "앱이 close()를 잊음" },
+    { args: ["ESTABLISHED", ["recv FIN", "close", "recv ACK"]], expected: "CLOSED", label: "나중에 끊는 쪽" },
+    { args: ["ESTABLISHED", ["close", "recv FIN", "recv ACK"]], expected: "TIME-WAIT", label: "동시에 끊기 (CLOSING)" },
+    { args: ["ESTABLISHED", ["close", "recv ACK", "recv RST"]], expected: "CLOSED", label: "RST로 끝남" },
+    { args: ["LISTEN", ["recv ACK"]], expected: "INVALID", label: "있을 수 없는 사건" },
+  ]}
+/>
+
+## 연결의 일생을 한 번에
+
+TCP 연결은 양쪽 커널이 각자 적은 메모이고, 상태 열은 그 메모가 지금 어느 단계에 있는지를 말한다. 세 번의 인사로 서로의 첫 번호를 확인하고, 커널은 완성된 연결을 accept 큐에 세워 두며, 끊을 때는 방향마다 FIN을 주고받는다. 먼저 끊은 쪽은 늦게 올 패킷을 위해 60초 동안 TIME-WAIT로 남고, 상대가 끊었는데 내 앱이 닫지 않으면 CLOSE-WAIT로 남는다. TIME-WAIT가 많은 건 대개 정상이고, CLOSE-WAIT가 늘어나는 건 대개 버그다. 다음 글에서는 ESTABLISHED 안에서 TCP가 어떻게 빠짐없이, 넘치지 않게 보내는지를 본다.
+
+## 면접에서 나올 만한 질문
+
+### 3-way handshake는 왜 세 번인가요?
+
+양쪽이 서로의 첫 시퀀스 번호를 알고, 상대가 내 번호를 받았다는 것까지 확인하려면 세 번이 필요하다. SYN과 SYN-ACK만으로는 서버가 자기 번호가 전달됐는지 모른다. 또 늦게 도착한 옛 SYN 때문에 원치 않는 연결이 생기는 걸, 세 번째 단계에서 클라이언트가 RST로 거절해 막을 수 있다.
+
+### TIME_WAIT는 왜 있고, 어느 쪽에 생기나요?
+
+먼저 끊은 쪽에 생긴다. 마지막 ACK가 사라져 상대가 FIN을 다시 보내면 다시 ACK해 주기 위해, 그리고 같은 네 값의 새 연결에 옛 연결의 늦은 패킷이 섞이지 않게 하려고 기다린다. 리눅스는 60초로 고정이고, `tcp_fin_timeout`은 이 시간이 아니라 FIN-WAIT-2 시간이다.
+
+### TIME_WAIT가 너무 많으면 어떻게 하나요?
+
+서버의 수신 포트에 쌓인 건 메모리도 작고 포트도 하나라 대개 문제가 아니다. 문제는 같은 목적지로 짧은 연결을 많이 여는 클라이언트 쪽에서 임시 포트가 바닥날 때다. 연결을 재사용하는 커넥션 풀이나 keep-alive가 정답이고, 그다음이 임시 포트 범위 확대와 `tcp_tw_reuse`다. `tcp_tw_recycle`은 NAT 환경에서 연결을 버리는 문제로 커널에서 지워졌다.
+
+### CLOSE_WAIT가 계속 늘어납니다. 원인은요?
+
+상대는 FIN을 보냈는데 내 앱이 소켓을 close()하지 않은 것이다. 커널은 대신 닫지 않으니 타임아웃 없이 남고, 결국 fd 한도에 닿아 `Too many open files`가 난다. `ss -tanp state close-wait`로 프로세스와 상대 주소를 찾고, 예외 경로에서 연결을 닫지 않거나 풀에 반납하지 않는 코드를 고친다.
+
+### Connection refused와 connection timed out은 어떻게 다른가요?
+
+refused는 상대 호스트까지 SYN이 갔고 그 포트에 듣는 소켓이 없어서 커널이 RST로 바로 거절한 것이다. timed out은 SYN에 아무 답이 없어 재전송을 거듭하다 포기한 것으로, 방화벽의 DROP, 경로 문제, 상대 accept 큐 넘침을 의심한다. 그래서 앱에는 커널 기본값보다 짧은 connect 타임아웃을 따로 건다.
+
+### FIN과 RST는 어떻게 다른가요?
+
+FIN은 내 쪽 방향을 정상적으로 닫는 것이고, 상대는 남은 데이터를 다 받은 뒤 종료를 알 수 있다. RST는 연결을 즉시 버리는 것이라 전송 중인 데이터가 사라지고 상대 앱은 `Connection reset by peer`를 받는다. 닫힌 포트로 온 SYN, 읽지 않은 데이터가 남은 채 close(), `SO_LINGER` 0, 중간 장비가 잊은 연결 등에서 RST가 나온다.
+
+### listen backlog는 무엇이고, 넘치면 어떻게 되나요?
+
+핸드셰이크를 마치고 앱의 accept()를 기다리는 연결이 서는 accept 큐의 길이다. 실제 값은 `listen()` 인자와 `net.core.somaxconn` 중 작은 쪽이다. 넘치면 리눅스는 기본적으로 SYN이나 마지막 ACK를 버려서 클라이언트가 재전송하게 만들고, 그래서 연결이 1초씩 늦게 붙는 증상이 나온다. `nstat`의 `ListenOverflows`로 확인한다.
+
+### TCP keepalive와 HTTP keep-alive는 같은 건가요?
+
+다르다. HTTP keep-alive는 응답 뒤에도 연결을 열어 두고 다음 요청에 재사용하는 것이고, TCP `keepalive`는 쉬는 연결에 확인 패킷을 보내 상대가 살아 있는지 보는 것이다. 리눅스 TCP `keepalive`의 기본값은 2시간 뒤 첫 확인이라 NAT나 로드 밸런서의 유휴 타임아웃보다 길어서, 소켓이나 드라이버 옵션으로 짧게 건다.

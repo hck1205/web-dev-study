@@ -106,4 +106,19 @@ export const HTML_FORM_HTTP: QuizQuestion[] = [
       "브라우저 검증은 개발자 도구로 지우거나 요청을 직접 만들면 그대로 우회된다. 서버는 요청이 어디서 왔는지 모르니 모든 값을 다시 검증해야 한다. 참고로 pattern은 부분 일치가 아니라 값 전체와 맞아야 통과한다.",
     anchor: "브라우저-검증은-친절일-뿐이다",
   },
+  {
+    id: "html-form-http-8",
+    post: "html-form-http",
+    question: "손으로 '/search?q=' + keyword 처럼 주소를 이어 붙였더니 검색어 'C++'가 서버에서 'C'와 공백 두 칸으로 보인다. 이유는?",
+    choices: [
+      "서버가 UTF-8이 아닌 인코딩으로 풀어서",
+      "브라우저가 +를 %2B로 바꿔 보내서",
+      "폼 형식 규칙에서 +는 공백이라, 인코딩하지 않은 +가 공백으로 풀려서",
+      "쿼리 문자열은 특수문자를 담을 수 없어서",
+    ],
+    answer: 2,
+    explanation:
+      "폼 형식(URLSearchParams)은 +를 공백으로 푼다. 브라우저 폼은 +를 %2B로 바꿔 보내니 문제가 없지만, 문자열을 그냥 이어 붙이면 +가 그대로 나가 공백이 된다. 보내는 쪽은 URLSearchParams나 encodeURIComponent로 만든다.",
+    anchor: "보낸-값과-받은-값이-다를-때",
+  },
 ];

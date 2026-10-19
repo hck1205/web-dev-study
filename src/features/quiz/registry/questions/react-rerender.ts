@@ -101,4 +101,19 @@ export const REACT_RERENDER: QuizQuestion[] = [
       "급한 렌더링에서 부모가 렌더링될 때 목록이 memo가 아니면 같이 렌더링되어 미룬 의미가 없다. 미룬 값은 받는 쪽이 건너뛸 수 있어야 효과가 있다. 입력창 value에 미룬 값을 넣으면 오히려 입력이 늦게 따라온다.",
     anchor: "급한-업데이트와-미뤄도-되는-업데이트",
   },
+  {
+    id: "react-rerender-8",
+    post: "react-rerender",
+    question: "useEffect 안에서 fetch한 결과를 setItems로 넣는데, 의존성 배열에 렌더링마다 새로 만드는 filters 객체가 들어 있다. 무슨 일이 생기나?",
+    choices: [
+      "React가 Maximum update depth exceeded 에러를 던지고 멈춘다",
+      "filters 내용이 같으니 effect는 처음 한 번만 돈다",
+      "콘솔에 아무것도 안 찍힌 채 같은 요청이 끝없이 반복된다",
+      "StrictMode에서만 두 번 요청하고 끝난다",
+    ],
+    answer: 2,
+    explanation:
+      "의존성은 Object.is로 비교하니 새 객체는 매번 바뀐 것으로 보이고, 응답이 올 때마다 새 배열로 상태를 바꿔 다시 렌더링된다. 요청이 비동기라 React의 무한 루프 검사에도 걸리지 않아서, 실제로 재 보면 개발 빌드에서도 경고 없이 3초에 천 번 넘게 요청이 나간다. Network 탭이나 서버 요청 수로 알아챈다.",
+    anchor: "렌더링이-멈추지-않을-때-남는-흔적",
+  },
 ];

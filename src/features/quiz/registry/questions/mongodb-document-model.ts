@@ -106,4 +106,19 @@ export const MONGODB_DOCUMENT_MODEL: QuizQuestion[] = [
       "$match와 $sort는 파이프라인 맨 앞에 있을 때 인덱스를 쓸 수 있다. $group이나 $project 뒤로 가면 이미 메모리에 올린 문서들을 대상으로 돈다. 일찍 거를수록 뒤 단계의 메모리 제한(단계당 100MB)에 덜 닿는다.",
     anchor: "모아서-계산하기-집계-파이프라인",
   },
+  {
+    id: "mongodb-document-model-8",
+    post: "mongodb-document-model",
+    question: "슬로 쿼리 로그에 planSummary가 IXSCAN인데 nreturned는 20, docsExamined는 5만, hasSortStage가 true로 찍혔다. 무엇을 고쳐야 하나?",
+    choices: [
+      "인덱스 필드 순서가 ESR에 맞지 않아 조건을 덜 거르고 메모리에서 정렬하고 있으니 순서를 고친다",
+      "인덱스가 아예 없으니 새로 만든다",
+      "write concern을 majority로 바꾼다",
+      "세컨더리에서 읽도록 read preference를 바꾼다",
+    ],
+    answer: 0,
+    explanation:
+      "IXSCAN이면 인덱스는 탔지만 읽은 문서가 돌려준 문서보다 훨씬 많고 SORT 단계까지 있다. 인덱스가 조건 일부만 거르고 정렬도 못 받쳐 준다는 뜻이라 같음, 정렬, 범위 순으로 다시 만든다. 인덱스가 없다면 COLLSCAN이 찍힌다.",
+    anchor: "느린-쿼리-로그에-collscan이-보이면",
+  },
 ];

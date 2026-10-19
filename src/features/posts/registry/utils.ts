@@ -21,8 +21,8 @@ export function formatDate(date: string) {
 /** 태그 표기: 공백을 없앤 해시태그 형태. "Hash Table" → "HashTable" */
 export const tagLabel = (tag: string) => tag.replace(/\s+/g, "");
 
-/** URL 슬러그: 소문자 + 공백은 하이픈. "Hash Table" → "hash-table" */
-export const tagSlug = (tag: string) => tag.trim().toLowerCase().replace(/\s+/g, "-");
+/** URL 슬러그: 소문자 + 공백과 슬래시는 하이픈. "Hash Table" → "hash-table", "TCP/IP" → "tcp-ip" */
+export const tagSlug = (tag: string) => tag.trim().toLowerCase().replace(/[\s/]+/g, "-");
 
 export const tagHref = (tag: string) => `/tags/${tagSlug(tag)}`;
 

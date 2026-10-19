@@ -106,4 +106,19 @@ export const MICRO_FRONTENDS: QuizQuestion[] = [
       "마이크로 프런트엔드는 공유 의존성, 계약 테스트, 배포 포인터 같은 운영 비용이 크다. 모노레포 안에서 경계를 먼저 그어 두면 대부분의 문제가 풀리고, 나중에 필요할 때 한 영역씩 떼어 내기도 쉽다.",
     anchor: "대부분은-모노레포로-충분하다",
   },
+  {
+    id: "micro-frontends-8",
+    post: "micro-frontends",
+    question: "리모트 영역만 대체 화면으로 바뀌고 프로덕션 콘솔에 TypeError: Cannot read properties of null (reading 'useState')가 찍혔다. 스택에서 useState는 리모트 파일, renderWithHooks는 셸 파일에서 불렸다. 가장 먼저 의심할 것은?",
+    choices: [
+      "리모트 컴포넌트가 조건문 안에서 훅을 불렀다",
+      "리모트 진입 파일이 CORS에 막혔다",
+      "셸의 Error Boundary가 에러를 삼켰다",
+      "리모트가 자기 React 사본을 번들에 넣어 React가 두 개 떴다",
+    ],
+    answer: 3,
+    explanation:
+      "훅은 렌더링 중인 React의 내부 상태를 읽는데, 리모트가 자기 React 사본의 useState를 부르면 그 사본은 렌더링 중이 아니라서 null을 읽는다. 개발 빌드에서는 Invalid hook call로 보인다. 리모트의 shared 설정에 react를 singleton으로 넣었는지, 리모트 번들에 react가 들어 있는지 확인한다.",
+    anchor: "배포-다음-날-결제-영역만-비어-있을-때",
+  },
 ];

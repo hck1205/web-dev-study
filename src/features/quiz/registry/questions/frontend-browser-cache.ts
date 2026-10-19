@@ -101,4 +101,19 @@ export const FRONTEND_BROWSER_CACHE: QuizQuestion[] = [
       "prefetch는 다음 이동에서 쓸 리소스를 낮은 우선순위로 한가할 때 받아 둔다. preload는 지금 페이지가 곧 쓸 것을 높은 우선순위로 받으니 이 용도로 쓰면 현재 페이지와 대역폭을 다툰다. preconnect와 dns-prefetch는 연결만 미리 열 뿐 파일을 받지 않는다.",
     anchor: "다음에-필요한-것을-미리-받기",
   },
+  {
+    id: "frontend-browser-cache-8",
+    post: "frontend-browser-cache",
+    question: "옛 화면이 보인다는 사용자의 리포트에 registration.waiting.state가 \"installed\", controller가 있음으로 찍혀 있었다. 무엇을 뜻하나?",
+    choices: [
+      "새 Service Worker를 이미 받았지만 옛 버전이 탭을 맡고 있어 대기 중이다",
+      "Service Worker 설치가 실패해서 HTTP 캐시만 쓰고 있다",
+      "HTML이 CDN에 캐시되어 Service Worker와 상관없다",
+      "Service Worker가 등록되지 않았다",
+    ],
+    answer: 0,
+    explanation:
+      "waiting 자리에 installed 상태의 워커가 있으면 새 버전 설치는 끝났고, 옛 버전이 맡은 탭이 닫히거나 skipWaiting이 불릴 때까지 기다리는 중이다. 이때는 새 버전 알림으로 사용자가 바꾸게 한다. waiting이 비어 있는데 옛 화면이라면 HTML 캐시 헤더나 CDN을 본다.",
+    anchor: "사용자-브라우저의-캐시-상태를-숫자로-받기",
+  },
 ];

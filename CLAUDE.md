@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, Database › {Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React}, Network › HTTP, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React, Rendering}, Network › {HTTP, OSI · TCP/IP}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes › {Helm, Pod}, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -152,6 +152,11 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 항목 수와 길이가 똑같은 불릿, 습관적인 3개짜리 나열, 섹션마다 끝에 붙는 요약
 - 습관적인 표. 비교가 정말 필요할 때만 쓴다
 - 근거 없는 일반론("많은 개발자들이 …")
+
+### 실무에서 쓰이는 순간 (practical)
+- 개념 글에는 "이걸 알면 현장에서 무엇이 달라지나"를 담는다. 장애를 어디서부터 보는지, 어떤 명령·로그·지표로 확인하는지, 설계·설정을 어떻게 고르는지, 모르면 어떤 실수를 하는지를 실제 증상과 함께 쓴다(예: "502인데 앱 로그엔 아무것도 없다 → L4/L7 어디서 끊겼는지 본다").
+- 별도 섹션 이름을 고정하지 않는다. 글 흐름에 맞는 소제목으로 쓰고(예: "현장에서 이 계층을 만나는 순간"), 명령은 실제로 돌려 본 출력과 함께 쓴다.
+- 여러 글에 걸친 실무 가이드(계층별 장애 좁히기, 패킷 캡처로 보기, 운영 체크리스트처럼 이론 여러 개를 엮어 현장 문제를 푸는 글)는 `Programming › In Practice` 토픽에 둔다. 이론 글과 서로 링크한다.
 
 ### 그림과 애니메이션
 - 설명의 중심은 그림이다. 글은 그림을 보기 전에 맥락을 주고, 본 뒤에 의미를 정리한다. 그림은 본문 흐름 안에서 자연스럽게 소개한다("아래 그림에서 다음을 누르면 …").
@@ -224,7 +229,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, **tags**, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 토픽이 표시되지 않으니 `topics.ts`와 맞춘다.
 3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다. 요약(summary)도 본문과 같은 평서체로 쓴다.
 4. **퀴즈**: `src/features/quiz/registry/questions/{slug}.ts`에 글 내용으로 4지선다 문제를 5~7개 쓰고, `questions/index.ts`의 `QUESTION_SETS`에 추가한다(아래 "퀴즈" 참고).
-5. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다. 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
+5. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다(공백과 `/`는 하이픈, `TCP/IP` → `tcp-ip`). 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
 
 ## 채용 공고로 글 만들기 (회사 라벨)
 
@@ -245,6 +250,20 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 예문에는 표제어나 그 변화형이 꼭 들어간다(빈칸 퀴즈가 그 자리를 가린다). 어간이 바뀌는 변화형(viable → viability)은 `forms`에 적는다. 없으면 빌드가 멈춘다.
 - 화면: `/vocabulary`(검색·난이도·주제·학습 상태 필터, A~Z 이동), `/vocabulary/{word}`(상세: 발음·예문 듣기, 상황별 예문 필터, 번역 가리기), `/vocabulary/study`(학습).
 - 학습: 카드(뒤집기, 스스로 판정), 뜻 고르기, 빈칸 채우기, 듣고 고르기(Web Speech API, 지원하는 브라우저만). 라이트너 상자 방식으로 맞히면 다음 복습 간격이 1→2→4→7→15일로 늘고, 틀리면 다음 날 다시 나온다. 학습 기록은 `features/vocabulary/atoms/vocab-progress`(get/set/reset, localStorage `vocab-progress`)에 저장된다.
+
+## 글 지도 (콘텐츠 색인) — 새 글을 쓰기 전에 먼저 읽는다
+
+글이 많아져서 중복과 관계를 한곳에서 본다. `scripts/content-index.cjs`가 `posts.ts`와 모든 `page.mdx`를 읽어 두 가지를 만든다(`pnpm content:index`, `pnpm build` 전에도 자동 실행).
+
+- `docs/content-index.md`: 작업용 색인. 토픽별 글(요약·태그·키워드·줄 수·`##` 소제목), 직접 링크 →, 키워드 백링크 →, 이 글로 오는 글 ←, 키워드 소유 목록, 겹칠 수 있는 글, 서로 이어진 글, 긴 글(900줄 초과), 연결 없는 글.
+- `src/features/content-map/registry/relations.generated.ts`: `/map`(글 지도 페이지, 푸터 링크)이 쓰는 글 사이 관계. 직접 고치지 않는다.
+
+새 글을 쓰거나 글을 쪼갤 때 순서:
+1. `pnpm content:index` 후 `docs/content-index.md`를 읽는다. 같은 주제를 다룬 글이 있으면 새로 쓰지 않고 그 글을 보강하거나, 겹치는 부분은 링크로 넘긴다.
+2. 토픽은 색인의 토픽 목록에서 고르고, 키워드는 "키워드 소유"에 없는 말로 정한다.
+3. 본문에서 이어지는 글은 직접 링크한다. 앞뒤 글(시리즈)도 서로 링크한다.
+4. 글 하나는 한 주제만 다룬다. 900줄을 넘기면 주제별로 나눈다(나눈 글끼리 링크하고, 퀴즈 `anchor`·`post`도 옮긴 글에 맞춘다).
+5. 글을 등록한 뒤 다시 `pnpm content:index`를 돌려 생성 파일을 함께 커밋한다.
 
 ## 백링크 (글 사이 자동 링크)
 
@@ -280,7 +299,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 ## 앱 설치 (PWA)
 
 - `src/app/manifest.ts`(웹 앱 매니페스트), `public/icons/*`(192·512, maskable 겸용), `src/app/icon.svg`·`apple-icon.png`가 설치 아이콘이다. 아이콘을 바꾸면 세 곳을 함께 바꾼다.
-- `public/sw.js` 서비스 워커는 프로덕션에서만 등록된다(`common/hooks/use-service-worker`). 빌드 산출물·아이콘은 캐시 우선, 페이지는 네트워크 우선이고 오프라인이면 마지막으로 본 페이지를 보여 준다. 캐시 방식을 바꾸면 `VERSION`을 올린다.
+- `public/sw.js` 서비스 워커는 프로덕션에서만 등록된다(`common/hooks/use-service-worker`). 빌드 산출물·아이콘은 캐시 우선, 페이지는 네트워크 우선이고 오프라인이면 마지막으로 본 페이지를 보여 준다. 캐시 버전은 등록 주소의 `?v=<빌드 ID>`(`next.config.ts`의 `NEXT_PUBLIC_BUILD_ID`, Vercel은 커밋 SHA)라서 배포마다 새 워커가 설치되고 이전 배포의 캐시는 `activate`에서 지워진다. 손으로 올릴 버전은 없다.
 - 설치 버튼(`common/components/install-app`)은 푸터에 있고, 브라우저가 설치를 허락할 때(`beforeinstallprompt`)만 보인다. iOS 사파리에는 "홈 화면에 추가" 안내 문구를 보여 준다.
 
 ## 블로그 톤

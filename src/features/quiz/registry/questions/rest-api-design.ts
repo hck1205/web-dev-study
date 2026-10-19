@@ -106,4 +106,19 @@ export const REST_API_DESIGN: QuizQuestion[] = [
       "자바스크립트의 숫자는 9007199254740991까지만 정확하다. 그보다 큰 id를 숫자로 주면 JSON.parse 결과가 이웃한 다른 값으로 바뀐다. 트위터 API가 id_str을 따로 둔 이유다.",
     anchor: "이름과-값의-모양을-통일한다",
   },
+  {
+    id: "rest-api-design-8",
+    post: "rest-api-design",
+    question: "앱 크래시 리포트에 `SyntaxError: Unexpected token '<'`가 쌓이는데 API 서버 로그에는 그 요청이 없다. 가장 그럴듯한 원인은?",
+    choices: [
+      "API 서버가 JSON 대신 HTML 템플릿을 렌더링했다",
+      "응답 본문이 gzip으로 압축돼 앱이 풀지 못했다",
+      "앞단 프록시가 502나 413 같은 에러를 직접 만들어 HTML 기본 페이지로 응답했다",
+      "앱이 요청에 Accept 헤더를 빼먹었다",
+    ],
+    answer: 2,
+    explanation:
+      "서버 로그에 요청이 없다면 응답을 만든 건 앞단 nginx다. nginx가 직접 만드는 에러는 기본이 text/html 페이지라서 앱이 상태 코드를 보기 전에 JSON으로 파싱하면 이 에러가 난다. 클라이언트는 Content-Type을 확인하고, 프록시는 error_page로 problem+json을 내보내게 한다.",
+    anchor: "운영-로그에서-설계-실수가-드러날-때",
+  },
 ];

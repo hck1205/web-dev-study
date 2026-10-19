@@ -1,0 +1,477 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rendering-csr-spa");
+
+React로 만든 쇼핑몰을 nginx에 올렸다. 홈에서 상품을 눌러 들어가면 잘 열린다. 그 상품 페이지에서 새로고침을 누르면 `404 Not Found`가 뜬다. 주소를 복사해 메신저로 보낸 링크도 똑같이 404다. 개발 서버에서는 한 번도 본 적 없는 화면이다.
+
+이 404는 CSR(Client-Side Rendering) 앱이 어떻게 부팅하고 어떻게 주소를 바꾸는지 알면 바로 이해된다. 이 글은 빈 HTML 한 장이 상품 화면이 되기까지의 순서를 실제 크롬으로 재 보고, 주소만 바꾸는 클라이언트 라우팅이 서버와 어떤 약속을 맺어야 하는지 따라간다. CSR, SSR, SSG를 한눈에 비교한 글은 [CSR, SSR, SSG, ISR, 스트리밍](/posts/rendering-strategies)에 있다. 여기서는 CSR 하나만 깊게 판다.
+
+예제는 React 19 앱을 esbuild로 묶고, 상품 API는 300ms 걸리게 만든 작은 Node 서버로 띄웠다. 측정은 Playwright로 Chromium 141을 띄우고, Lighthouse 모바일 기준과 같은 조건(왕복 150ms, 내려받기 1.6Mbps, CPU 4배 느리게)을 걸어서 했다. 다섯 번 재서 가운데 값을 쓴다.
+
+## 빈 HTML 한 장에서 화면이 되기까지
+
+SPA(Single Page Application)는 HTML 문서를 한 장만 쓰는 앱이다. 어느 주소로 들어오든 서버는 같은 `index.html`을 준다. 이 파일에는 내용이 없다.
+
+```html
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>Shop</title>
+<script type="module" src="/assets/main-KTDYAIKJ.js"></script></head>
+<body><div id="root"></div></body>
+</html>
+```
+
+브라우저는 이 껍데기를 받은 다음 JS를 받고, 실행하고, 실행된 코드가 주소를 읽어 어떤 화면인지 알아낸 뒤 그 화면의 코드와 데이터를 다시 요청한다. 아래 그림의 각 단계에 붙은 숫자가 실제로 잰 시각이다. 다음을 누르며 따라가 보자.
+
+<SequenceDiagram
+  caption="CSR 상품 페이지 부팅 순서 (느린 모바일 조건에서 잰 값)"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "static", label: "정적 서버" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "browser",
+      to: "static",
+      label: "GET /products/42",
+      title: "0ms: 문서를 요청한다",
+      detail: "주소는 상품 페이지지만 서버에게 이 주소는 의미가 없다. 어느 주소든 index.html을 돌려준다.",
+    },
+    {
+      from: "static",
+      to: "browser",
+      label: "index.html",
+      title: "158ms: 껍데기가 도착한다",
+      detail: "몇백 바이트라 금방 온다. body에는 빈 div 하나뿐이라 그릴 것이 없다. 화면은 흰색이다.",
+      payload: "<div id=\"root\"></div>",
+    },
+    {
+      from: "browser",
+      to: "static",
+      label: "GET main.js",
+      title: "174~644ms: 앱 번들을 받는다",
+      detail: "React, 라우터, 공통 코드가 든 번들이다. 압축해서 67KB, 풀면 210KB다. 느린 망에서는 이것만으로 절반 가까운 시간이 간다.",
+    },
+    {
+      from: "browser",
+      to: "static",
+      label: "GET 공통 청크",
+      title: "661~830ms: 번들이 부르는 청크를 받는다",
+      detail: "main.js를 다 받고 읽어 봐야 이 파일이 필요하다는 걸 안다. 그래서 앞 요청이 끝난 뒤에야 시작한다.",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "실행·주소 읽기",
+      title: "1037ms: 코드를 실행하고 주소를 읽는다",
+      detail: "실행된 라우터가 주소를 읽고 상품 화면이라는 걸 안다. 그런데 상품 화면 코드는 lazy로 따로 쪼개 두었다. 그 import가 이제 출발한다.",
+    },
+    {
+      from: "browser",
+      to: "static",
+      label: "GET 상품 청크",
+      title: "1152ms: 처음으로 무언가 그려진다",
+      detail: "청크를 기다리는 동안 Suspense fallback인 '화면 코드 받는 중'이 그려진다. 이게 첫 페인트(FCP)다. 상품 청크는 1195ms에 온다.",
+    },
+    {
+      from: "browser",
+      to: "api",
+      label: "GET /api/products/42",
+      title: "1386~1695ms: 이제야 데이터를 부른다",
+      detail: "컴포넌트가 화면에 붙고 useEffect가 돌아서야 요청이 나간다. API 자체는 300ms인데, 여기까지 오는 데 1.4초가 걸렸다.",
+    },
+    {
+      from: "api",
+      to: "browser",
+      label: "JSON",
+      title: "1793ms: 상품 이름이 뜬다",
+      detail: "상품 이름과 가격이 그려진다. LCP는 1816ms였다. 버튼은 그려진 순간부터 눌린다. CSR에는 '보이는데 안 눌리는' 구간이 없다.",
+      payload: "{\"id\":42,\"name\":\"무선 이어폰\",\"price\":89000}",
+    },
+  ]}
+/>
+
+1.8초 중에 API가 쓴 건 300ms뿐이다. 나머지는 HTML, 번들, 청크, 화면 코드가 차례로 서로를 기다린 시간이다. CSR의 첫 화면이 느린 이유는 서버가 느려서가 아니라 요청이 일렬로 서 있어서다.
+
+## 받는 시간보다 실행하는 시간
+
+위 측정에서 main.js는 644ms에 다 왔는데 첫 페인트는 1152ms였다. 그 사이 대부분은 공통 청크를 기다리고, 코드를 파싱하고 실행한 시간이다. CPU를 4배 느리게 한 조건이라 데스크톱보다 훨씬 길게 나온다. 같은 앱을 제한 없이 열면 FCP가 92ms, 상품 이름이 702ms다. 개발자 노트북에서 "빠른데?" 싶은 앱이 중저가 휴대폰에서 느린 이유가 이 차이다.
+
+CSR은 앱을 띄우는 데 필요한 모든 코드를 브라우저가 실행해야 첫 화면이 나온다. 그래서 번들 크기가 곧 첫 화면 시간이다. 라이브러리 하나를 추가하면 그만큼 모든 사용자의 첫 화면이 늦어진다. 번들을 나누고 덜어 내는 방법은 [번들 쪼개기](/posts/code-splitting)에서 자세히 다뤘다. 이 글에서는 나누고 난 다음에 생기는 문제, 요청 순서를 본다.
+
+## 코드를 기다린 뒤에야 데이터를 부른다
+
+앞의 앱은 흔한 방식으로 짰다. 화면 컴포넌트가 마운트되면 `useEffect`에서 데이터를 부른다.
+
+```jsx
+// product-a.jsx: 화면이 그려진 다음에 데이터를 부른다
+export default function Product({ id }) {
+  const [p, setP] = useState(null);
+  useEffect(() => {
+    fetch(`/api/products/${id}`).then((r) => r.json()).then(setP);
+  }, [id]);
+  if (!p) return <p>불러오는 중…</p>;
+  return <main><h1>{p.name}</h1>...</main>;
+}
+```
+
+이 구조에서는 데이터 요청이 화면 코드 다운로드 뒤에 줄을 선다. 화면 코드가 와야 컴포넌트가 실행되고, 컴포넌트가 실행되어야 fetch가 불리기 때문이다. 이걸 렌더링하면서 부르기(fetch-on-render)라고 한다. 컴포넌트 안에서 또 자식 컴포넌트가 자기 데이터를 부르면 폭포가 한 단 더 생긴다.
+
+고치는 방법은 주소만 보고도 알 수 있는 요청을 코드보다 먼저, 혹은 함께 출발시키는 것이다. 라우터가 주소를 읽는 시점에 데이터 요청과 화면 코드 import를 동시에 시작하고, 컴포넌트는 이미 출발한 Promise를 `use`로 기다리기만 한다.
+
+```jsx
+// main-b.jsx: 주소를 읽자마자 데이터와 화면 코드를 함께 출발시킨다
+const cache = new Map();
+function load(id) {
+  if (!cache.has(id)) cache.set(id, fetch(`/api/products/${id}`).then((r) => r.json()));
+  return cache.get(id);
+}
+const importProduct = () => import("./product-b.jsx");
+const Product = lazy(importProduct);
+
+const m = location.pathname.match(/^\/products\/(\d+)$/);
+if (m) { load(m[1]); importProduct(); } // 둘 다 지금 출발
+
+// product-b.jsx: 이미 출발한 요청을 기다리기만 한다
+export default function Product({ promise }) {
+  const p = use(promise);
+  return <main><h1>{p.name}</h1>...</main>;
+}
+```
+
+React Router의 loader, TanStack Router의 `loader`처럼 라우트에 데이터 함수를 붙이는 방식이 같은 생각이다. 거기에 HTML에 `<link rel="modulepreload">`로 공통 청크와 상품 청크를 미리 알려 주면 main.js를 다 읽기 전에 청크도 같이 받는다. 세 가지를 같은 조건에서 쟀다.
+
+```text
+                         FCP     상품 이름
+A 화면 안에서 fetch      1152ms  1793ms
+B 주소 읽자마자 fetch    1152ms  1434ms
+C B + modulepreload       980ms  1236ms
+```
+
+C의 요청 시각을 풀어 보면 남은 폭포가 보인다.
+
+```text
+/assets/chunk-DZDTEASS.js   180 →  373ms   (modulepreload, main과 동시에)
+/assets/chunk-F25F6BMZ.js   182 →  346ms   (modulepreload)
+/assets/main-FPGMQWXT.js    182 →  681ms
+/api/products/42            851 → 1160ms   (main 실행 뒤)
+```
+
+코드끼리는 나란히 받게 됐지만 API 요청은 여전히 main.js가 실행된 뒤에 나간다. 정적 `index.html`은 모든 주소에 똑같이 나가니, "이 주소면 상품 42번 데이터가 필요하다"는 걸 HTML에 적어 둘 수가 없다. 데이터 요청을 HTML 단계로 끌어올리려면 결국 서버가 주소를 알고 응답을 만들어야 한다. 그게 [SSR](/posts/rendering-ssr)이 푸는 문제다.
+
+아래 함수는 요청 목록과 각 요청이 무엇을 기다리는지 받아서 모든 요청이 끝나는 시각을 계산한다. A처럼 데이터가 청크 뒤에 줄을 서는 경우와 B처럼 실행 직후 함께 출발하는 경우를 테스트로 넣어 두었다.
+
+<CodePlayground
+  caption="요청 폭포가 끝나는 시각"
+  functionName="pageReadyAt"
+  initialCode={`function pageReadyAt(requests) {
+  // requests: [{ id, ms, after: [먼저 끝나야 하는 id들] }]
+  // 각 요청은 after가 모두 끝난 뒤 시작해 ms만큼 걸린다
+  // 반환: 마지막 요청이 끝나는 시각(ms)
+  return 0;
+}`}
+  solution={`function pageReadyAt(requests) {
+  const done = {};
+  const finish = (id) => {
+    if (done[id] !== undefined) return done[id];
+    const r = requests.find((x) => x.id === id);
+    const start = Math.max(0, ...(r.after || []).map(finish));
+    done[id] = start + r.ms;
+    return done[id];
+  };
+  return Math.max(...requests.map((r) => finish(r.id)));
+}`}
+  tests={[
+    {
+      label: "A: 청크 → 데이터 일렬",
+      args: [[{ id: "html", ms: 160 }, { id: "main", ms: 480, after: ["html"] }, { id: "exec", ms: 170, after: ["main"] }, { id: "chunk", ms: 160, after: ["exec"] }, { id: "api", ms: 310, after: ["chunk"] }]],
+      expected: 1280,
+    },
+    {
+      label: "B: 청크와 데이터 동시에",
+      args: [[{ id: "html", ms: 160 }, { id: "main", ms: 480, after: ["html"] }, { id: "exec", ms: 170, after: ["main"] }, { id: "chunk", ms: 160, after: ["exec"] }, { id: "api", ms: 310, after: ["exec"] }]],
+      expected: 1120,
+    },
+    {
+      label: "둘을 기다리는 요청",
+      args: [[{ id: "a", ms: 100 }, { id: "b", ms: 50 }, { id: "c", ms: 10, after: ["a", "b"] }]],
+      expected: 110,
+    },
+  ]}
+/>
+
+## 주소는 바뀌는데 문서는 다시 받지 않는다
+
+SPA가 "한 페이지"인 이유는 링크를 눌러도 문서를 새로 받지 않아서다. 링크의 기본 동작을 막고, History API로 주소창만 바꾼 다음, 바뀐 주소에 맞는 화면을 React가 그린다. 라우터 라이브러리가 하는 일은 몇 줄로 줄일 수 있다.
+
+```jsx
+export function navigate(to) {
+  history.pushState(null, "", to); // 주소창과 방문 기록만 바꾼다. 요청은 없다
+  window.dispatchEvent(new PopStateEvent("popstate")); // 내 앱에게 알린다
+}
+
+export function Link({ to, children }) {
+  return (
+    <a href={to} onClick={(e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // 새 탭 열기는 브라우저에 맡긴다
+      e.preventDefault();
+      navigate(to);
+    }}>{children}</a>
+  );
+}
+
+// 뒤로 가기·앞으로 가기는 브라우저가 popstate로 알려 준다
+useEffect(() => {
+  const onPop = () => setPath(location.pathname);
+  window.addEventListener("popstate", onPop);
+  return () => window.removeEventListener("popstate", onPop);
+}, []);
+```
+
+`pushState`는 기록에 한 칸을 쌓고 주소창을 바꾸지만 `popstate`를 일으키지 않는다. `popstate`는 사용자가 뒤로·앞으로 가기를 했을 때만 온다. 그래서 위 코드는 `pushState` 뒤에 직접 이벤트를 쏴서 앱이 같은 길로 화면을 바꾸게 했다. `<a href>`를 그대로 두는 것도 중요하다. 그래야 Ctrl 클릭으로 새 탭을 열 수 있고, 검색 로봇이 링크를 따라갈 수 있다.
+
+아래 그림은 방문 기록이 어떻게 쌓이고 움직이는지 보여 준다. 현재 칸이 지금 주소창의 주소다.
+
+<AlgoTrace
+  caption="pushState와 뒤로 가기에서 방문 기록이 움직이는 모습"
+  memoryLabel="이번에 나간 요청"
+  cells={["/", "/products/42", "/products/7"]}
+  steps={[
+    {
+      pointer: 0,
+      found: [0],
+      memory: ["document /", "main.js", "공통 청크"],
+      caption: "처음 들어올 때만 문서를 받는다. 기록에는 한 칸이 있다.",
+    },
+    {
+      pointer: 1,
+      found: [0, 1],
+      memory: ["상품 청크", "/api/products/42"],
+      caption: "링크를 누르면 pushState로 칸이 하나 쌓인다. 문서 요청은 없고 화면 코드와 JSON만 받는다.",
+    },
+    {
+      pointer: 2,
+      found: [0, 1, 2],
+      memory: ["/api/products/7"],
+      caption: "다른 상품으로 가면 청크는 이미 있으니 JSON 하나만 받는다.",
+    },
+    {
+      pointer: 1,
+      found: [0, 1, 2],
+      memory: ["/api/products/42"],
+      caption: "뒤로 가기는 칸을 지우지 않고 현재 위치만 옮긴다. popstate가 오고, 데이터를 캐시하지 않았다면 다시 받는다.",
+    },
+    {
+      pointer: 1,
+      found: [1],
+      memory: ["document /products/42", "main.js", "공통 청크", "상품 청크", "/api/products/42"],
+      caption: "새로고침은 다르다. 브라우저가 이 주소로 문서를 서버에 직접 요청하고 앱을 처음부터 다시 띄운다.",
+    },
+  ]}
+/>
+
+그림의 요청 목록은 Playwright로 실제 클릭하면서 모은 것이다.
+
+```text
+첫 진입:     document /, script main-KTDYAIKJ.js, script chunk-DZDTEASS.js
+링크 클릭:   script chunk-BHL7BQOJ.js, fetch /api/products/42
+두 번째 클릭: fetch /api/products/7
+뒤로 가기:   fetch /api/products/42
+새로고침:    document /products/42, script main-KTDYAIKJ.js, script chunk-DZDTEASS.js,
+             script chunk-BHL7BQOJ.js, fetch /api/products/42
+```
+
+한 번 앱이 뜨고 나면 화면 전환에는 JSON만 오간다. 이게 CSR이 오래 머무는 앱에서 빠른 이유다. 대신 브라우저가 문서를 바꿀 때 공짜로 해 주던 일을 라우터가 대신해야 한다. 같은 측정에서 상품 페이지로 이동한 뒤에도 `document.title`은 처음 그대로 `Shop`이었다. 탭 제목, 스크롤 위치(새 화면은 맨 위로, 뒤로 가기는 원래 위치로), 키보드 포커스와 스크린 리더 안내(새 화면의 제목으로 포커스를 옮기거나 알림 영역에 알린다)를 라우터나 앱이 챙기지 않으면 없다. 뒤로 가기마다 데이터를 다시 받는 것도 [화면 데이터 캐시](/posts/client-data-cache)를 두면 사라진다.
+
+## 새로고침 404는 서버가 주소를 몰라서 난다
+
+처음 장면으로 돌아가자. 링크를 눌러 들어간 `/products/42`는 브라우저 안에서만 존재하는 주소다. 서버에 그런 파일은 없다. 새로고침이나 공유 링크는 이 주소를 서버에 그대로 묻고, 정적 서버는 정직하게 "그런 파일 없다"고 답한다.
+
+해결은 서버에게 "모르는 주소는 `index.html`을 줘라"라고 정해 두는 것이다. 이걸 SPA 폴백이라고 부른다. Ubuntu 24.04의 nginx 1.24로 설정 세 가지를 띄워 비교했다.
+
+```nginx
+# 4180: 정적 파일만 (기본 설정과 같다)
+location / { try_files $uri $uri/ =404; }
+
+# 4181: 모르는 주소는 전부 index.html
+location / { try_files $uri $uri/ /index.html; }
+
+# 4182: 정적 파일 경로는 폴백하지 않는다
+location /assets/ { try_files $uri =404; }
+location /        { try_files $uri $uri/ /index.html; }
+```
+
+```bash
+# 세 서버에 같은 주소 세 개를 물어 본다
+for p in 4180 4181 4182; do
+  echo "== $p"
+  for u in /products/42 /no-such-page /assets/main-OLD123.js; do
+    curl -s -o /dev/null -w "$u  %{http_code}  %{content_type}\n" localhost:$p$u
+  done
+done
+```
+
+```text
+== 4180
+/products/42  404  text/html
+/no-such-page  404  text/html
+/assets/main-OLD123.js  404  text/html
+== 4181
+/products/42  200  text/html
+/no-such-page  200  text/html
+/assets/main-OLD123.js  200  text/html
+== 4182
+/products/42  200  text/html
+/no-such-page  200  text/html
+/assets/main-OLD123.js  404  text/html
+```
+
+4180이 처음 장면의 서버다. 4181은 새로고침 404를 고쳤지만 마지막 줄을 보면 없는 JS 파일에도 HTML을 200으로 준다. 이게 다음 절의 문제를 만든다. 4182가 고를 만한 설정이다. 요청이 어디로 가는지 그림으로 보면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="폴백은 화면 주소에만 건다. 정적 파일 경로는 없으면 404여야 한다."
+  nodes={[
+    { id: "req", label: "요청 주소", sub: "/products/42", x: 200, y: 35, w: 140 },
+    { id: "file", label: "파일이 있나", sub: "try_files $uri", x: 200, y: 120, w: 140 },
+    { id: "asset", label: "/assets/*", sub: "없으면 404", x: 80, y: 210, w: 120 },
+    { id: "index", label: "index.html", sub: "200, 앱이 판단", x: 320, y: 210, w: 130 },
+  ]}
+  edges={[
+    { from: "req", to: "file" },
+    { from: "file", to: "asset", label: "정적 파일" },
+    { from: "file", to: "index", label: "화면 주소" },
+  ]}
+/>
+
+CDN이나 호스팅 서비스도 같은 설정이 있다. 정적 호스팅에 "404일 때 index.html" 같은 옵션을 켜는 방식이라면 상태 코드가 404로 나가면서 내용만 index.html인 경우도 있다. 사용자 화면은 멀쩡해 보여도 검색 로봇은 그 페이지를 없는 페이지로 본다. 배포한 뒤에 `curl -I`로 상태 코드를 꼭 한 번 본다.
+
+## 폴백이 삼켜 버리는 오류들
+
+모든 주소에 `index.html`을 주는 4181 설정은 겉으로는 잘 돈다. 문제는 JS 파일이 없을 때다. 배포하면서 옛 해시의 파일을 지웠는데 사용자 탭이나 캐시에 옛 HTML이 남아 있으면, 브라우저는 옛 이름으로 JS를 요청하고 서버는 그 자리에 HTML을 준다. 크롬 콘솔에는 이렇게 찍힌다.
+
+```text
+[resp] 200 text/html http://localhost:4181/assets/main-OLD123.js
+[error] Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html". Strict MIME type checking is enforced for module scripts per HTML spec.
+```
+
+`type="module"`이 아닌 일반 스크립트라면 HTML을 JS로 실행하려다 `Unexpected token '<'`이 난다. 둘 다 화면은 흰색이다. 이 메시지가 보이면 그 JS 주소를 `curl -I`로 찍어 본다. `content-type: text/html`에 200이면 폴백이 파일 자리를 차지한 것이다. 4182처럼 정적 파일 경로를 폴백에서 빼면 정직하게 404가 나고, 앱은 청크 로딩 실패를 잡아서 새로고침을 권할 수 있다. 배포 직후 청크 오류를 다루는 방법은 [번들 쪼개기](/posts/code-splitting)의 마지막 부분에 정리했다.
+
+같은 증상이 상대 경로에서도 난다. 빌드 설정의 공개 경로(Vite의 `base`, webpack의 `publicPath`)를 `./`로 두면 HTML에 `src="assets/main.js"`가 들어간다. 홈에서는 `/assets/main.js`로 풀리지만 `/products/42`에서 새로고침하면 `/products/assets/main.js`를 요청한다.
+
+```text
+[resp] 200 text/html http://localhost:4183/products/42
+[resp] 200 text/html http://localhost:4183/products/assets/main-KTDYAIKJ.js
+[error] Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html". ...
+```
+
+홈에서만 테스트하면 절대 안 보이는 버그다. 깊은 주소 하나를 골라 새로고침해 보는 것을 배포 확인 목록에 넣어 둔다.
+
+마지막은 없는 페이지다. 4182 설정에서도 `/no-such-page`는 200이다. 서버는 어떤 주소가 앱에 있는지 모르니 일단 앱을 띄우고, 앱이 "페이지가 없다"를 그린다. 사람에게는 404 화면이지만 HTTP로는 성공이다. 검색 엔진은 이런 페이지를 소프트 404로 분류한다. 검색에 걸릴 이유가 없는 앱이면 넘어가도 되고, 신경 써야 한다면 없는 페이지 화면에 `<meta name="robots" content="noindex">`를 넣거나, 서버에 존재하는 경로 목록을 두고 그 밖은 404 상태로 index.html을 주게 한다.
+
+## 미리보기 봇은 빈 div를 본다
+
+새로고침 404를 고치고 나면 그 링크를 메신저에 붙였을 때 미리보기가 비어 있다는 걸 알게 된다. 봇이 받는 HTML은 사람이 받는 것과 같다. `curl`로 보면 바로 보인다.
+
+```bash
+# 봇처럼 JS를 실행하지 않고 HTML만 본다
+curl -s localhost:4182/products/42 | grep -o -E '<title>[^<]*</title>|<div id="root">[^<]*</div>'
+```
+
+```text
+<title>Shop</title>
+<div id="root"></div>
+```
+
+구글은 JS를 실행해서 색인하지만 렌더링 대기열을 거치니 늦을 수 있고, 다른 검색 엔진과 메신저·SNS 미리보기 봇 상당수는 JS를 실행하지 않는다. CSR을 유지하면서 이걸 푸는 길은 몇 가지뿐이다. 서버가 주소별로 `index.html`의 `<title>`과 `og:` 메타 태그만 바꿔 끼워 주는 방법, 빌드할 때 주요 주소의 HTML을 미리 구워 두는 방법([SSG](/posts/rendering-ssg-isr)), 봇에게만 렌더링한 HTML을 주는 동적 렌더링이다. 마지막 방법은 구글도 장기 해법이 아닌 임시방편으로 안내한다. 공유와 검색이 중요한 페이지라면 렌더링 방식을 바꾸는 쪽이 낫다.
+
+## CSR이 맞는 자리
+
+여기까지 단점만 늘어놓았지만 CSR이 가장 나은 경우도 분명하다.
+
+로그인 뒤에서 쓰는 관리자 화면, 사내 도구, 대시보드가 그렇다. 검색에 나올 이유가 없고, 사용자는 한 번 들어와서 오래 머물며 많이 조작한다. 첫 화면 1초보다 이후 수백 번의 화면 전환이 빠른 게 중요하다. 서버는 정적 파일만 주면 되니 CDN에 올리면 끝이고, 렌더링 서버가 죽을 일도 없다. 하이드레이션 불일치 같은 서버·브라우저 이중 렌더링 문제도 없다.
+
+지도, 그림 편집기, 문서 편집기처럼 화면 자체가 브라우저 API에 묶인 앱도 서버에서 그릴 게 거의 없다. 오프라인에서도 돌아야 하는 앱이라면 Service Worker가 `index.html`과 번들을 캐시해 두고 네트워크 없이 띄우기도 쉽다([프런트엔드에서 쓰는 캐시](/posts/frontend-browser-cache)).
+
+반대로 처음 오는 사용자가 많고, 검색과 공유로 들어오며, 느린 휴대폰 비중이 큰 페이지(상품 상세, 글, 랜딩)는 CSR의 약점을 그대로 맞는다. 한 사이트에서도 페이지마다 다르게 고르는 게 보통이다.
+
+## 실제 크롬으로 첫 화면을 재는 법
+
+"우리 앱은 빠르다"를 확인하려면 개발자 노트북이 아니라 느린 조건에서 재야 한다. 이 글의 숫자는 아래 스크립트로 쟀다. Playwright가 띄운 Chromium에 CDP(크롬 개발자 도구 프로토콜)로 네트워크와 CPU 제한을 걸고, 페이지 안의 Performance API로 시각을 모은다.
+
+```bash
+# 전역 playwright와 미리 받아 둔 Chromium을 쓴다
+export NODE_PATH=$(npm root -g) PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+node measure.cjs http://localhost:4101/products/42
+```
+
+```js
+// measure.cjs: 느린 모바일 조건에서 FCP, 내용이 뜬 시각, LCP, 요청 시각을 잰다
+const { chromium } = require("playwright");
+(async () => {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: false, latency: 150, // 왕복 150ms
+    downloadThroughput: (1.6 * 1024 * 1024) / 8, uploadThroughput: (750 * 1024) / 8,
+  });
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 }); // CPU 4배 느리게
+  await page.addInitScript(() => {
+    new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lcp = e.startTime; })
+      .observe({ type: "largest-contentful-paint", buffered: true });
+    // 상품 제목이 DOM에 처음 생긴 시각
+    new MutationObserver(() => {
+      if (!window.__title && document.getElementById("title")) window.__title = performance.now();
+    }).observe(document, { childList: true, subtree: true });
+  });
+  await page.goto(process.argv[2]);
+  await page.waitForSelector("#title");
+  console.log(await page.evaluate(() => ({
+    fcp: performance.getEntriesByName("first-contentful-paint")[0].startTime,
+    title: window.__title, lcp: window.__lcp,
+    res: performance.getEntriesByType("resource").map((e) => [e.name, e.startTime, e.responseEnd]),
+  })));
+  await browser.close();
+})();
+```
+
+결과에서 볼 곳은 세 군데다. 하나, `res`의 시작 시각이 앞 요청의 끝 시각과 거의 같은 줄이 있으면 그 요청은 앞의 것을 기다렸다. 폭포의 한 단이다. 둘, 마지막 JS가 도착한 시각과 FCP 사이가 길면 실행 비용이 크다. 크롬 개발자 도구 Performance 탭에서 같은 조건(CPU 4x slowdown, Slow 4G)으로 녹화하면 그 구간의 긴 작업(Long Task)이 어느 함수인지 보인다. 셋, FCP와 LCP 사이가 길면 내용이 데이터를 기다린 것이다. 실제 사용자 수치를 모으는 방법은 [Core Web Vitals](/posts/core-web-vitals)에 정리했다.
+
+## 다시 새로고침 404로
+
+처음의 404는 브라우저 안에서만 만든 주소를 서버에 물었기 때문에 났다. CSR 앱은 빈 HTML을 받은 뒤 JS가 주소를 읽어 화면을 정하니, 서버는 모든 화면 주소에 `index.html`을 주고 정적 파일 경로에서는 정직하게 404를 내야 한다. 첫 화면이 느린 건 HTML, 번들, 화면 코드, 데이터가 일렬로 서로를 기다리기 때문이고, 주소를 읽자마자 데이터와 코드를 함께 출발시키면 줄어든다. 그래도 데이터 요청을 HTML보다 앞당길 수는 없다. 그 한계를 넘으려고 서버가 HTML을 만드는 것이 다음 글 [SSR](/posts/rendering-ssr)이다.
+
+## 면접에서 나올 만한 질문
+
+### CSR 앱의 첫 화면은 어떤 순서로 그려지나요?
+
+빈 `index.html`을 받고, 그 안의 JS 번들을 받아 파싱하고 실행한 뒤, 실행된 코드가 주소를 읽어 화면을 정하고 필요한 데이터를 API로 받아서 그린다. 느린 기기에서는 다운로드보다 파싱과 실행이 더 오래 걸리기도 한다. 코드를 쪼갠 경우 화면 코드를 받은 뒤에야 데이터를 부르게 되어 요청이 일렬로 늘어서기 쉽다.
+
+### SPA에서 링크를 눌러도 페이지가 새로 로드되지 않는 이유는요?
+
+라우터가 링크의 기본 동작을 막고 `history.pushState`로 주소창과 방문 기록만 바꾼 뒤, 바뀐 주소에 맞는 컴포넌트를 그리기 때문이다. 문서 요청은 없고 필요한 화면 코드와 데이터만 받는다. 뒤로 가기는 브라우저가 `popstate` 이벤트로 알려 주고, `pushState` 자체는 이 이벤트를 일으키지 않는다.
+
+### SPA를 배포했더니 새로고침하면 404가 납니다. 왜 그렇고 어떻게 고치나요?
+
+`/products/42` 같은 주소는 브라우저 안에서만 만든 것이라 서버에는 그 파일이 없다. 서버에서 모르는 화면 주소는 `index.html`을 돌려주도록 폴백을 설정한다. nginx라면 `try_files $uri $uri/ /index.html;`이다. 이때 `/assets/` 같은 정적 파일 경로는 폴백에서 빼야 한다. 안 그러면 없는 JS 파일 자리에 HTML이 200으로 나가서 MIME 타입 오류나 `Unexpected token '<'`으로 흰 화면이 된다.
+
+### 렌더링하면서 데이터를 부르는 방식은 왜 느리고, 어떻게 개선하나요?
+
+컴포넌트가 마운트된 뒤 `useEffect`에서 fetch를 부르면, 화면 코드를 받고 실행한 다음에야 요청이 나간다. 자식이 또 자기 데이터를 부르면 폭포가 한 단씩 늘어난다. 라우트 단위로 주소만 보고 알 수 있는 데이터 요청을 코드 로딩과 동시에 시작하고(라우터 loader, render-as-you-fetch), 청크는 `modulepreload`로 미리 알린다. 그래도 정적 HTML로는 데이터 요청을 JS 실행보다 앞당길 수 없어서 그게 필요하면 SSR을 쓴다.
+
+### CSR은 언제 고르는 게 맞나요?
+
+로그인 뒤의 관리자 화면, 대시보드, 편집기처럼 검색 노출이 필요 없고 오래 머물며 많이 조작하는 앱이다. 첫 화면보다 이후 화면 전환 속도가 중요하고, 서버는 정적 파일만 주면 되니 운영이 단순하며 하이드레이션 문제도 없다. 처음 방문자가 많고 검색과 공유로 들어오는 페이지는 SSR이나 SSG가 낫다.
+
+### 클라이언트 라우팅을 직접 구현하면 빠뜨리기 쉬운 것은요?
+
+브라우저가 문서를 바꿀 때 해 주던 일이다. 탭 제목을 바꾸고, 새 화면은 맨 위로 스크롤하되 뒤로 가기는 원래 위치를 되살리고, 키보드 포커스를 새 화면 제목으로 옮기거나 스크린 리더에 알려야 한다. 링크는 `<a href>`로 남겨서 새 탭 열기와 로봇의 링크 수집이 되게 하고, Ctrl·Cmd 클릭은 가로채지 않는다.
+
+### CSR 페이지가 검색이나 링크 미리보기에 안 나오는 이유는요?
+
+봇이 받는 HTML에는 빈 div와 기본 title뿐이다. 구글은 JS를 실행해 색인하지만 대기열 때문에 늦을 수 있고, 다른 검색 엔진과 메신저 미리보기 봇 상당수는 JS를 실행하지 않는다. 주소별로 title과 og 태그를 서버에서 끼워 넣거나, 주요 페이지를 미리 렌더링하거나, SSR·SSG로 바꾼다. 봇에게만 다른 HTML을 주는 동적 렌더링은 임시방편이다.

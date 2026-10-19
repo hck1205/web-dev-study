@@ -394,6 +394,63 @@ HTTP/2부터는 연결 하나로 요청 여러 개를 동시에 보낼 수 있�
 번들 분석에서 커다란 덩어리를 찾았다면, 잘라서 뒤로 미루기 전에 아예 빼거나 가벼운 것으로 바꿀 수 있는지 먼저 본다. 미뤄 둔 코드는 언젠가 누군가가 받고 실행한다. 빼 버린 코드만 비용이 0이다.
 </Callout>
 
+## 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들
+
+코드를 쪼개고 나면 운영에서 새로 생기는 장애가 하나 있다. 배포 직후 몇십 분 동안 에러 수집기에 청크 로드 실패가 몰린다. 앞에서 말한 "옛 HTML이 지워진 청크를 찾는" 상황을 로컬에서 그대로 만들었다. 페이지를 연 뒤 서버에서 `editor.f4989926.js`를 지우고(새 배포), 그다음 편집기 버튼을 눌렀다. 크롬 141의 콘솔이다.
+
+```text
+# 서버가 지운 파일에 404를 줄 때
+[console.error] Failed to load resource: the server responded with a status of 404 (Not Found)
+[catch] TypeError: Failed to fetch dynamically imported module: http://localhost:8051/assets/editor.f4989926.js
+
+# 서버가 없는 경로에 SPA 폴백으로 index.html을 200으로 줄 때
+[console.error] Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html". Strict MIME type checking is enforced for module scripts per HTML spec.
+[catch] TypeError: Failed to fetch dynamically imported module: http://localhost:8052/assets/editor.f4989926.js
+```
+
+네이티브 `import()`를 쓰는 Vite 계열 빌드에서는 이 문장으로 보이고, webpack은 자기 런타임이 청크를 받기 때문에 `ChunkLoadError: Loading chunk 123 failed.` 형태로 보인다. 이름은 달라도 원인은 같다. 두 번째 경우처럼 MIME 타입 에러가 같이 찍히면 정적 호스팅의 폴백 규칙이 `/assets/` 아래까지 덮고 있다는 뜻이다. 없는 JS 파일은 HTML이 아니라 404를 돌려주게 해야 원인이 바로 보인다.
+
+에러가 배포 시각부터 늘었다가 서서히 줄어든다면 이 경우다. 줄어드는 건 옛 탭을 들고 있던 사용자들이 새로 고치거나 탭을 닫기 때문이다. 확인은 세 가지로 한다. 에러 이벤트의 청크 파일명이 지금 배포에 있는지, 그 사용자가 페이지를 연 시각이 배포 전인지, 서버 로그에 그 파일명의 404가 있는지다.
+
+대응은 두 겹으로 둔다. 서버 쪽에서는 이전 한두 번 배포의 해시 파일을 지우지 않고 남긴다. 해시가 다르니 새 파일과 섞일 일이 없다. 화면 쪽에서는 이 에러를 잡았을 때 한 번만 새로 고친다.
+
+```js
+async function loadEditor() {
+  try {
+    const m = await import("./editor");
+    sessionStorage.removeItem("chunk-reload"); // 성공하면 표시를 지운다
+    return m;
+  } catch (e) {
+    // 새로 고쳤는데도 실패하면 진짜 장애다. 무한 새로고침을 막는다
+    if (!sessionStorage.getItem("chunk-reload")) {
+      sessionStorage.setItem("chunk-reload", "1");
+      location.reload();
+    }
+    throw e;
+  }
+}
+```
+
+Vite는 자기가 만든 preload 단계에서 실패하면 `window`에 `vite:preloadError` 이벤트를 보내 주니, 앱 진입점에서 이 이벤트를 받아 같은 처리를 해도 된다. 표시를 지우지 않는 실수가 흔하다. 그러면 한 번 새로 고친 사용자는 그 탭에서 다음 배포 때 자동 복구를 못 받는다. 반대로 횟수 제한 없이 새로 고치게 두면, 파일이 정말 없을 때 탭이 새로고침을 반복한다.
+
+두 번째로 자주 보는 건 "기능 하나 넣었을 뿐인데 번들 크기 검사가 깨졌다"는 PR이다. diff를 보면 대개 import 한 줄이다. esbuild 0.24로 같은 `debounce` 하나를 세 가지 방식으로 가져와 minify한 결과다.
+
+```bash
+# 같은 함수를 세 가지 방식으로 가져와 각각 번들하고 크기를 잰다
+for f in a b c; do
+  npx esbuild $f.js --bundle --minify --format=esm --outfile=out-$f.js
+  echo "$(wc -c < out-$f.js) bytes, gzip $(gzip -9c out-$f.js | wc -c) bytes"
+done
+```
+
+```text
+import { debounce } from "lodash"        73473 bytes  gzip 26327 bytes
+import { debounce } from "lodash-es"      2858 bytes  gzip 1419 bytes
+import debounce from "lodash/debounce"    3441 bytes  gzip 1618 bytes
+```
+
+CommonJS인 `lodash`는 함수 하나를 가져와도 라이브러리 전체가 들어와 25배가 된다. 앞에서 말한 "흔들어도 안 떨어진다"가 이 숫자다. PR에서 크기가 갑자기 늘면 새로 들어온 import가 CommonJS 패키지인지, 배럴 파일을 거치는지부터 본다. `size-limit` 같은 도구를 CI에 걸어 두면 이런 PR이 머지 전에 숫자로 걸린다. 다만 예산은 gzip 크기와 minify 크기를 둘 다 본다. 전송량은 gzip이 정하지만 파싱과 실행 비용은 풀린 크기를 따르기 때문이다.
+
 ## 덜 보내는 게 가장 빠르다
 
 처음 장면의 400KB짜리 `main.js`로 돌아가 보면 순서가 보인다. 먼저 분석 도구로 무엇이 들어 있는지 보고, CommonJS 라이브러리와 배럴 파일처럼 트리 셰이킹을 막는 것을 치워서 안 쓰는 코드를 뺀다. 그다음 관리자 화면과 편집기처럼 첫 화면에 필요 없는 것을 라우트와 컴포넌트 단위로 잘라 뒤로 미룬다. 잘라 낸 것 중 곧 쓸 것만 미리 받고, 내용 해시로 캐시를 오래 유지한다. 쪼갤 때마다 워터폴이 생기지 않았는지 확인하고, 마지막에는 번들 크기가 아니라 실제 사용자의 LCP와 INP로 효과를 잰다.
