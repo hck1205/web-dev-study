@@ -1,0 +1,482 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-template-method");
+
+관리자 화면에 "상품 CSV 올리기"가 있다. 몇 달 뒤 "쿠폰 JSON 올리기"가 생겼고, 누군가 상품 쪽 함수를 복사해서 만들었다. 이번 주에 "빈 줄이 있으면 실패하지 말고 건너뛰어 주세요"라는 요청을 받아 상품 쪽을 고쳤다. 다음 날 같은 문의가 쿠폰 쪽에서 들어왔다. 복사된 함수는 고쳐지지 않았다.
+
+두 함수는 순서가 똑같다. 읽고, 줄로 나누고, 한 줄씩 검사하고, 저장하고, 결과를 알린다. 다른 건 "어떻게 나누나"와 "무엇을 검사하나" 정도다. 템플릿 메서드(Template Method) 패턴은 이 순서를 상위 클래스의 메서드 하나에 고정하고, 달라지는 단계만 하위 클래스가 채우게 한다. GoF 23개 중 상속을 직접 쓰는 몇 안 되는 패턴이라, 같은 문제를 합성으로 푸는 [전략 패턴](/posts/pattern-strategy)과 함께 보면 언제 무엇을 고를지가 분명해진다.
+
+## 복사된 흐름에서 버그는 한쪽만 고쳐진다
+
+처음 모양은 이렇다. 두 함수가 같은 뼈대를 따로 들고 있다.
+
+```ts
+declare function readFile(path: string, enc: "utf8"): Promise<string>;
+declare const db: { products: { insert(p: object): Promise<void> }; coupons: { insert(c: object): Promise<void> } };
+
+async function importProducts(path: string) {
+  const raw = await readFile(path, "utf8");
+  const rows = raw.split("\n").slice(1).filter((l) => l.trim() !== ""); // 빈 줄 건너뛰기를 여기만 넣었다
+  let inserted = 0;
+  for (const line of rows) {
+    const [sku, price] = line.split(",");
+    if (!sku || Number(price) <= 0) continue;
+    await db.products.insert({ sku, price: Number(price) });
+    inserted++;
+  }
+  return inserted;
+}
+
+async function importCoupons(path: string) {
+  const raw = await readFile(path, "utf8");
+  const rows = JSON.parse(raw) as { code: string; rate: number }[];
+  let inserted = 0;
+  for (const row of rows) {
+    if (row.rate <= 0 || row.rate > 90) continue;
+    await db.coupons.insert(row);
+    inserted++;
+  }
+  return inserted; // 어느 줄이 왜 빠졌는지는 둘 다 알려 주지 않는다
+}
+```
+
+여기에 "건너뛴 줄과 이유를 결과에 담아 달라", "끝나면 슬랙으로 알려 달라"는 요구가 붙으면 같은 수정을 두 번(회원 엑셀이 생기면 세 번) 해야 한다. 하나를 빠뜨리는 순간 화면마다 동작이 달라진다. 흐름은 하나인데 코드가 흐름 수만큼 있다는 게 문제다.
+
+## 순서는 위에서, 단계는 아래에서
+
+템플릿 메서드는 흐름을 한 번만 쓴다. 상위 클래스의 `run()`이 단계를 차례로 부르고, 각 단계는 추상 메서드나 기본 구현이 있는 메서드로 둔다. 하위 클래스는 `run()`을 건드리지 않고 단계만 채운다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="run()이 순서를 쥐고, 하위 클래스는 비어 있는 단계만 채운다"
+  nodes={[
+    { id: "base", label: "ImportJob", sub: "run() 순서 고정", x: 200, y: 45, w: 150 },
+    { id: "abs", label: "parse · validate", sub: "abstract: 꼭 채운다", x: 95, y: 130, w: 150 },
+    { id: "hook", label: "hooks", sub: "read · afterImport", x: 305, y: 130, w: 150 },
+    { id: "csv", label: "ProductCsv", x: 110, y: 225, w: 110 },
+    { id: "json", label: "CouponJson", x: 290, y: 225, w: 110 },
+  ]}
+  edges={[
+    { from: "base", to: "abs", label: "부른다" },
+    { from: "base", to: "hook", label: "부른다" },
+    { from: "csv", to: "abs", label: "구현", dashed: true },
+    { from: "json", to: "abs", label: "구현", dashed: true },
+    { from: "json", to: "hook", label: "재정의", dashed: true },
+  ]}
+/>
+
+단계에는 두 종류가 있다. 추상 메서드(primitive operation)는 하위 클래스가 반드시 채워야 하는 단계다. 훅(hook)은 상위 클래스가 기본 구현(대개 아무것도 안 함)을 주고, 필요한 하위 클래스만 바꾸는 단계다. 훅은 확장 지점을 미리 열어 두는 장치다.
+
+```ts
+declare function readFile(path: string, enc: "utf8"): Promise<string>;
+
+interface ImportReport {
+  inserted: number;
+  skipped: number;
+  errors: string[];
+}
+
+abstract class ImportJob<Row> {
+  // 템플릿 메서드: 순서는 여기서만 정한다
+  async run(source: string): Promise<ImportReport> {
+    const raw = await this.read(source);
+    const rows = this.parse(raw);
+    const report: ImportReport = { inserted: 0, skipped: 0, errors: [] };
+    for (const [i, row] of rows.entries()) {
+      const error = this.validate(row);
+      if (error) {
+        report.skipped++;
+        report.errors.push(`${i + 1}번째: ${error}`);
+        continue;
+      }
+      await this.save(row);
+      report.inserted++;
+    }
+    await this.afterImport(report);
+    return report;
+  }
+
+  protected read(source: string): Promise<string> {
+    return readFile(source, "utf8"); // 기본 구현. 필요하면 바꾼다
+  }
+  protected abstract parse(raw: string): Row[];
+  protected abstract validate(row: Row): string | null;
+  protected abstract save(row: Row): Promise<void>;
+  protected async afterImport(_report: ImportReport): Promise<void> {} // 훅: 비어 있는 기본 구현
+}
+
+type Product = { sku: string; price: number };
+
+class ProductCsvImport extends ImportJob<Product> {
+  readonly saved: Product[] = [];
+  protected parse(raw: string) {
+    return raw
+      .split("\n")
+      .slice(1) // 머리글 줄
+      .filter((line) => line.trim() !== "")
+      .map((line) => {
+        const [sku = "", price = ""] = line.split(",");
+        return { sku: sku.trim(), price: Number(price) };
+      });
+  }
+  protected validate(p: Product) {
+    if (!p.sku) return "SKU가 비어 있다";
+    if (!Number.isInteger(p.price) || p.price <= 0) return `가격이 이상하다 (${p.price})`;
+    return null;
+  }
+  protected async save(p: Product) {
+    this.saved.push(p);
+  }
+}
+
+type CouponRow = { code: string; rate: number };
+
+class CouponJsonImport extends ImportJob<CouponRow> {
+  protected parse(raw: string) {
+    return JSON.parse(raw) as CouponRow[];
+  }
+  protected validate(c: CouponRow) {
+    return c.rate > 0 && c.rate <= 90 ? null : `할인율은 1~90이어야 한다 (${c.rate})`;
+  }
+  protected async save(_c: CouponRow) {}
+  protected override async afterImport(report: ImportReport) {
+    console.log(`[slack] 쿠폰 ${report.inserted}개 등록, ${report.skipped}개 건너뜀`);
+  }
+}
+```
+
+파일 대신 문자열을 돌려주게 `read` 훅만 바꾼 하위 클래스로 둘을 돌려 봤다. 상품 쪽에는 빈 줄, 음수 가격, 빈 SKU를 일부러 섞었다.
+
+```text
+{
+  inserted: 2,
+  skipped: 2,
+  errors: [ '2번째: 가격이 이상하다 (-500)', '3번째: SKU가 비어 있다' ]
+}
+[slack] 쿠폰 1개 등록, 1개 건너뜀
+{ inserted: 1, skipped: 1, errors: [ '2번째: 할인율은 1~90이어야 한다 (100)' ] }
+```
+
+건너뛴 이유를 모으는 일, 결과를 세는 일은 `run()`에 한 번만 있다. 다음에 "건너뛴 줄이 절반을 넘으면 저장하지 말고 멈춰 달라"는 요구가 와도 `run()` 한 곳만 고치면 상품, 쿠폰, 앞으로 생길 회원 가져오기가 함께 바뀐다. 테스트에서 `read`를 바꿔 끼운 것처럼, 훅은 운영 코드를 고치지 않고 동작 일부를 갈아 끼우는 자리로도 쓰인다.
+
+## 부르는 쪽은 상위 클래스다
+
+평범한 상속에서는 하위 클래스가 상위 클래스의 메서드를 불러 쓴다. 템플릿 메서드는 방향이 반대다. 상위 클래스가 하위 클래스의 메서드를 부른다. 이걸 할리우드 원칙("Don't call us, we'll call you", 연락하지 마라, 우리가 연락하겠다)이라고 부른다. 아래 그림에서 다음을 누르면 `run()` 한 번에 호출이 위아래를 어떻게 오가는지 보인다.
+
+<SequenceDiagram
+  caption="하위 클래스는 run()을 부르지 않는다. run()이 하위 클래스를 부른다"
+  actors={[
+    { id: "admin", label: "관리자 API" },
+    { id: "base", label: "ImportJob" },
+    { id: "sub", label: "CouponJson" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "admin", to: "base", label: "run(\"c.json\")", title: "바깥은 템플릿 메서드만 부른다", detail: "관리자 API는 쿠폰 가져오기가 어떤 단계로 되어 있는지 모른다. run 하나만 안다." },
+    { from: "base", to: "base", label: "read()", title: "기본 구현이 있는 단계", detail: "CouponJson이 read를 바꾸지 않았으니 상위 클래스의 파일 읽기가 그대로 쓰인다." },
+    { from: "base", to: "sub", label: "parse(raw)", title: "위에서 아래를 부른다", detail: "parse는 추상 메서드다. 상위 클래스는 어떻게 나눌지 모르고 하위 클래스에 묻는다.", payload: "[{ code: \"WELCOME\", rate: 10 }, { code: \"OOPS\", rate: 100 }]" },
+    { from: "base", to: "sub", label: "validate(row)", title: "줄마다 검사를 맡긴다", detail: "검사 규칙은 하위 클래스가, 실패한 줄을 세고 이유를 모으는 일은 상위 클래스가 한다." },
+    { from: "sub", to: "db", label: "save(WELCOME)", title: "통과한 줄만 저장한다", detail: "OOPS는 할인율 100이라 건너뛰고, 그 이유가 결과에 남는다." },
+    { from: "base", to: "sub", label: "afterImport()", title: "훅이 있으면 그걸 부른다", detail: "CouponJson은 afterImport를 재정의해 슬랙 알림을 보낸다. 상품 쪽은 비어 있는 기본 훅이 불린다." },
+  ]}
+/>
+
+이 방향이 중요한 이유가 있다. 하위 클래스가 상위 메서드를 불러야 하는 설계, 예를 들어 "재정의할 때 꼭 `super.setup()`을 먼저 불러 주세요"라는 규칙은 지키지 않아도 컴파일이 된다. 하나라도 빠뜨리면 조용히 깨진다. 템플릿 메서드에서는 상위 클래스가 순서를 쥐고 있으니 하위 클래스는 "불러 줄 것"만 구현하면 되고, 빠뜨릴 `super` 호출이 없다.
+
+여러 하위 클래스가 단계를 어떻게 나눠 갖는지 한 줄로 늘어놓으면 이렇다.
+
+<AlgoTrace
+  caption="같은 run() 안에서 단계마다 누가 일하는지"
+  memoryLabel="이 단계를 맡은 쪽"
+  cells={["read", "parse", "validate", "save", "afterImport"]}
+  steps={[
+    { pointer: 0, memory: ["Product: 기본", "Coupon: 기본", "테스트용: 재정의"], caption: "read는 기본 구현이 있다. 테스트용 하위 클래스만 파일 대신 문자열을 돌려준다." },
+    { pointer: 1, memory: ["Product: CSV 분리", "Coupon: JSON.parse"], caption: "parse는 추상 메서드라 모든 하위 클래스가 자기 방식으로 채운다." },
+    { pointer: 2, memory: ["Product: SKU·가격", "Coupon: 할인율 1~90"], caption: "검사 규칙도 하위 클래스마다 다르다. 실패한 줄을 세는 건 run()이 한다." },
+    { pointer: 3, memory: ["Product: products 표", "Coupon: coupons 표"], caption: "저장할 곳만 다르다. 몇 개 저장했는지는 run()이 센다." },
+    { pointer: 4, memory: ["Product: 기본(빈 훅)", "Coupon: 슬랙 알림"], caption: "훅은 필요한 쪽만 바꾼다. 상품 가져오기는 아무것도 하지 않는다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["순서: run() 한 곳", "빈 줄·결과 집계: run() 한 곳"], caption: "단계가 몇 개든 순서와 공통 규칙은 상위 클래스 한 곳에만 있다. 처음 버그가 다시 생길 자리가 없다." },
+  ]}
+/>
+
+## Node.js 스트림은 _transform만 채우게 한다
+
+템플릿 메서드는 프레임워크가 확장 지점을 여는 가장 오래된 방법이다. Node.js `stream` 모듈이 좋은 예다. 직접 변환 스트림을 만들 때는 `Transform`을 상속하고 `_transform`(필요하면 `_flush`)만 구현한다. 버퍼 관리, 배압(받는 쪽이 느리면 읽기를 늦추는 것), `pipe`와 에러 전파는 상위 클래스가 맡는다. Node.js 문서도 `_transform`은 하위 클래스가 구현하고 내부에서만 부르는 메서드이며, 애플리케이션 코드가 직접 부르면 안 된다고 적어 둔다.
+
+<UrlAnatomy
+  caption="Transform을 상속할 때 채우는 단계 하나"
+  base="class LineSplitter extends Transform { _transform("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "chunk", title: "들어온 조각", description: "앞 스트림이 보낸 데이터다. 바이트 스트림이면 Buffer이고, 줄 중간에서 잘려 올 수 있다. 어디서 잘릴지는 상위 클래스와 앞 스트림이 정한다.", required: true },
+    { key: "encoding", title: "문자열일 때의 인코딩", description: "chunk가 Buffer면 의미가 없다. 대개 _enc처럼 이름만 받아 둔다." },
+    { key: "callback", title: "다 처리했다는 신호", description: "이걸 불러야 상위 클래스가 다음 조각을 넘긴다. 에러가 나면 callback(err)로 알린다. 부르지 않으면 스트림이 멈춘다.", required: true, code: "this.push(line); // 내보낼 것은 push로\ncallback();       // 다음 조각을 달라" },
+    { key: "end", display: ") { … } }", title: "끝났을 때의 단계는 _flush", description: "입력이 끝나면 상위 클래스가 _flush를 부른다. 아직 내보내지 못한 마지막 조각을 여기서 밀어낸다." },
+  ]}
+/>
+
+줄 단위로 나누는 변환 스트림을 만들어 일부러 줄 중간에서 잘린 조각 셋을 흘려 봤다.
+
+```ts
+import { Transform, Readable, type TransformCallback } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
+class LineSplitter extends Transform {
+  private rest = "";
+  constructor() {
+    super({ readableObjectMode: true });
+  }
+  override _transform(chunk: Buffer, _enc: BufferEncoding, done: TransformCallback) {
+    const lines = (this.rest + chunk.toString("utf8")).split("\n");
+    this.rest = lines.pop() ?? ""; // 마지막 조각은 다음 청크와 이어 붙인다
+    for (const line of lines) this.push(line);
+    done();
+  }
+  override _flush(done: TransformCallback) {
+    if (this.rest) this.push(this.rest); // 끝에 줄바꿈이 없던 마지막 줄
+    done();
+  }
+}
+
+async function demo() {
+  const chunks = ["id,name\n1,ki", "m\n2,lee\n3,pa", "rk"];
+  const out: string[] = [];
+  await pipeline(
+    Readable.from(chunks.map((c) => Buffer.from(c))),
+    new LineSplitter(),
+    async function (source: AsyncIterable<string>) {
+      for await (const line of source) out.push(line);
+    },
+  );
+  console.log(out);
+}
+demo();
+```
+
+```text
+[ 'id,name', '1,kim', '2,lee', '3,park' ]
+```
+
+<NetworkTopology
+  caption="상위 클래스가 조각을 넘기고, 하위 클래스는 한 조각 처리만 안다"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "src", label: "Readable", sub: "파일 조각", x: 55, y: 110, icon: "db", w: 84 },
+    { id: "base", label: "Transform", sub: "버퍼·배압", x: 175, y: 110, icon: "switch", w: 90 },
+    { id: "sub", label: "_transform", sub: "LineSplitter", x: 175, y: 195, icon: "container", w: 100 },
+    { id: "dst", label: "consumer", sub: "한 줄씩", x: 330, y: 110, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "src", to: "base" },
+    { from: "base", to: "sub" },
+    { from: "base", to: "dst" },
+  ]}
+  steps={[
+    { path: ["src", "base", "sub"], packet: "…1,ki", title: "첫 조각이 줄 중간에서 잘려 온다", detail: "상위 클래스가 조각을 받아 _transform을 부른다. 완성된 줄 id,name만 push하고 1,ki는 rest에 남긴다.", payload: "chunk = \"id,name\\n1,ki\"" },
+    { path: ["base", "dst"], packet: "id,name", title: "push한 줄은 상위 클래스가 내보낸다", detail: "받는 쪽이 느리면 상위 클래스가 버퍼에 쌓고 앞 스트림을 늦춘다. LineSplitter는 그 사실을 몰라도 된다." },
+    { path: ["src", "base", "sub"], packet: "m…3,pa", title: "남겨 둔 조각과 이어 붙인다", detail: "1,ki + m이 1,kim이 된다. 1,kim과 2,lee를 push하고 3,pa를 다시 남긴다." },
+    { path: ["src", "base", "sub"], packet: "rk", title: "줄바꿈 없는 마지막 조각", detail: "3,park이 완성됐지만 뒤에 줄바꿈이 없어 아직 내보내지 않는다." },
+    { path: ["base", "sub", "base", "dst"], packet: "3,park", title: "입력이 끝나면 _flush가 불린다", detail: "끝났다는 걸 아는 쪽은 상위 클래스다. 그때 하위 클래스의 _flush를 불러 남은 줄을 밀어낸다." },
+  ]}
+/>
+
+같은 구조가 여러 곳에 있다. 자바 서블릿의 `HttpServlet.service()`는 요청 메서드를 보고 하위 클래스의 `doGet`, `doPost`를 부른다. 자바 `AbstractList`는 `get`과 `size`만 구현하면 반복, `indexOf`, `subList`를 상위 클래스가 그 두 메서드로 만들어 준다. React 클래스 컴포넌트의 `componentDidMount`, `render`도 React가 정한 순서에 맞춰 불리는 단계였다. 반대로 Spring의 `JdbcTemplate`은 이름과 달리 상속을 쓰지 않는다. 연결 열기, 예외 변환, 닫기 같은 뼈대는 템플릿이 쥐고, 바뀌는 단계(`RowMapper`)는 콜백 객체로 받는다. 템플릿 메서드의 생각을 합성으로 옮긴 모양이다.
+
+## 생성자에서 단계를 부르면 생기는 일
+
+템플릿 메서드를 처음 짤 때 흔히 하는 실수가 있다. "만들자마자 준비해야 하니까" 상위 클래스 생성자에서 재정의할 메서드를 부르는 것이다. 자바스크립트와 타입스크립트에서는 이 순간 하위 클래스의 필드가 아직 초기화되지 않았다.
+
+```ts
+abstract class Exporter {
+  constructor() {
+    this.setup(); // 상위 생성자에서 재정의 메서드를 부른다
+  }
+  protected abstract setup(): void;
+}
+
+class CsvExporter extends Exporter {
+  private delimiter = ",";
+  header = "";
+  protected setup() {
+    console.log("setup에서 본 delimiter:", JSON.stringify(this.delimiter));
+    this.header = ["id", "name"].join(this.delimiter);
+  }
+}
+
+const e = new CsvExporter();
+console.log("생성 후 header:", JSON.stringify(e.header));
+```
+
+```text
+setup에서 본 delimiter: undefined
+생성 후 header: ""
+```
+
+버그가 두 개 겹쳐 있다. `setup`이 불릴 때 `delimiter`는 아직 `undefined`다. 하위 클래스의 필드 초기화는 `super()`가 끝난 뒤에 실행되기 때문이다(`join(undefined)`가 우연히 쉼표를 써서 여기서는 티가 안 났다). 그리고 `setup`이 채운 `header`를, 뒤늦게 실행된 필드 초기화 `header = ""`가 덮어썼다. 타입 검사는 둘 다 잡지 못한다.
+
+자바도 생성자에서 재정의 가능한 메서드를 부르지 말라고 권하고(『이펙티브 자바』), 이유도 같다. 템플릿 메서드는 생성자가 아니라 객체가 다 만들어진 뒤 부르는 `run()`, `init()` 같은 메서드에 둔다. 앞의 `ImportJob`이 생성자에서 아무것도 하지 않는 이유다.
+
+## 상속이 무거워지는 순간
+
+템플릿 메서드의 약점은 상속의 약점 그대로다. 하위 클래스는 상위 클래스의 구현에 묶인다. 상위 클래스의 `run()`이 단계를 부르는 순서나 횟수를 바꾸면, 그 순서를 가정하고 짠 하위 클래스가 조용히 깨진다(취약한 기반 클래스 문제). 타입스크립트에는 자바의 `final` 같은 수식어가 없어서 하위 클래스가 `run()` 자체를 재정의하는 것도 막을 수 없다. 코드 리뷰에서 "템플릿 메서드를 재정의하지 않는다"를 규칙으로 두는 수밖에 없다.
+
+단계가 늘어날수록 또 다른 문제가 생긴다. 바뀌는 축이 둘이라고 하자. 읽는 형식(CSV, JSON, 엑셀)과 저장할 곳(상품, 쿠폰, 회원). 템플릿 메서드로는 조합마다 하위 클래스가 생긴다. 이럴 때는 단계를 객체로 받는 쪽이 낫다.
+
+```ts
+interface ImportReport { inserted: number; skipped: number; errors: string[] }
+interface Steps<Row> {
+  parse(raw: string): Row[];
+  validate(row: Row): string | null;
+  save(row: Row): Promise<void>;
+  afterImport?(report: ImportReport): Promise<void>;
+}
+
+// 뼈대는 함수 하나가 쥐고, 단계는 인자로 받는다
+function createImportJob<Row>(read: (src: string) => Promise<string>, steps: Steps<Row>) {
+  return async (source: string): Promise<ImportReport> => {
+    const rows = steps.parse(await read(source));
+    const report: ImportReport = { inserted: 0, skipped: 0, errors: [] };
+    for (const [i, row] of rows.entries()) {
+      const error = steps.validate(row);
+      if (error) {
+        report.skipped++;
+        report.errors.push(`${i + 1}번째: ${error}`);
+        continue;
+      }
+      await steps.save(row);
+      report.inserted++;
+    }
+    await steps.afterImport?.(report);
+    return report;
+  };
+}
+```
+
+순서를 한 곳에 고정하는 건 그대로이고, 단계를 상속 대신 인자로 받는다. 읽기 방식과 단계 묶음을 따로 골라 끼울 수 있고, 생성자 함정도 없다. 사실상 단계 묶음을 [전략](/posts/pattern-strategy)으로 받는 모양이다. 고르는 기준은 이렇다. 단계들이 서로의 상태(필드)를 공유하며 함께 움직이고 계층이 얕다면 클래스 상속이 읽기 쉽다. 단계를 따로따로 바꿔 끼워야 하거나 하위 클래스가 조합으로 늘어나기 시작하면 합성으로 옮긴다.
+
+[팩토리 메서드](/posts/pattern-factory-method)와의 관계도 짚어 두자. 팩토리 메서드는 템플릿 메서드의 단계 하나가 "객체를 만드는 일"인 경우다. 상위 클래스의 흐름 중간에 `createX()`가 있고 하위 클래스가 무엇을 만들지 정한다.
+
+## 직접 채우는 단계
+
+`importLines(kind, lines)`를 완성해 보자. 상위 클래스 `Importer`의 `run()`은 이미 있다. 빈 줄을 건너뛰고, 줄마다 `parse` → `normalize`(훅) → `validate`를 부르고, `[저장한 id 목록, 실패한 줄 번호 목록]`을 돌려준다. 하위 클래스 두 개의 단계만 채우면 된다.
+
+- 상품 줄은 `"A-1,12000"`. id가 비어 있지 않고 가격이 양의 정수여야 한다.
+- 쿠폰 줄은 `"welcome=10"`. id가 비어 있지 않고 할인율이 1~90이어야 한다. 쿠폰만 `normalize` 훅에서 id를 대문자로 바꾼다.
+
+<CodePlayground
+  caption="run()은 그대로 두고 단계만 채운다"
+  functionName="importLines"
+  initialCode={`function importLines(kind, lines) {
+  class Importer {
+    // 템플릿 메서드: 고치지 않는다
+    run(lines) {
+      const saved = [];
+      const badLines = [];
+      lines.forEach((line, i) => {
+        if (line.trim() === "") return;
+        const row = this.normalize(this.parse(line));
+        if (this.validate(row)) saved.push(row.id);
+        else badLines.push(i + 1);
+      });
+      return [saved, badLines];
+    }
+    normalize(row) {
+      return row; // 훅: 필요한 쪽만 바꾼다
+    }
+  }
+  class ProductImporter extends Importer {
+    parse(line) { return { id: "", price: 0 }; }
+    validate(row) { return false; }
+  }
+  class CouponImporter extends Importer {
+    parse(line) { return { id: "", rate: 0 }; }
+    validate(row) { return false; }
+  }
+  const importer = kind === "product" ? new ProductImporter() : new CouponImporter();
+  return importer.run(lines);
+}`}
+  solution={`function importLines(kind, lines) {
+  class Importer {
+    run(lines) {
+      const saved = [];
+      const badLines = [];
+      lines.forEach((line, i) => {
+        if (line.trim() === "") return;
+        const row = this.normalize(this.parse(line));
+        if (this.validate(row)) saved.push(row.id);
+        else badLines.push(i + 1);
+      });
+      return [saved, badLines];
+    }
+    normalize(row) {
+      return row;
+    }
+  }
+  class ProductImporter extends Importer {
+    parse(line) {
+      const [id = "", price = ""] = line.split(",");
+      return { id: id.trim(), price: Number(price) };
+    }
+    validate(row) {
+      return row.id !== "" && Number.isInteger(row.price) && row.price > 0;
+    }
+  }
+  class CouponImporter extends Importer {
+    parse(line) {
+      const [id = "", rate = ""] = line.split("=");
+      return { id: id.trim(), rate: Number(rate) };
+    }
+    normalize(row) {
+      return { ...row, id: row.id.toUpperCase() }; // 훅을 쓰는 쪽은 쿠폰뿐
+    }
+    validate(row) {
+      return row.id !== "" && row.rate >= 1 && row.rate <= 90;
+    }
+  }
+  const importer = kind === "product" ? new ProductImporter() : new CouponImporter();
+  return importer.run(lines);
+}`}
+  tests={[
+    { args: ["product", ["A-1,12000", "A-2,8900"]], expected: [["A-1", "A-2"], []], label: "상품 두 줄" },
+    { args: ["product", ["A-1,12000", "", "A-2,-500", ",3000", "A-3,8900"]], expected: [["A-1", "A-3"], [3, 4]], label: "빈 줄은 건너뛰고 잘못된 줄 번호를 모은다" },
+    { args: ["product", ["A-1,12.5"]], expected: [[], [1]], label: "소수 가격은 실패" },
+    { args: ["coupon", ["welcome=10", "vip=30"]], expected: [["WELCOME", "VIP"], []], label: "훅이 id를 대문자로" },
+    { args: ["coupon", ["oops=100", "", "  ", "spring=0", "fall=90"]], expected: [["FALL"], [1, 4]], label: "할인율 범위 검사" },
+    { args: ["coupon", []], expected: [[], []], label: "빈 입력" },
+  ]}
+/>
+
+템플릿 메서드는 흐름의 순서와 공통 규칙을 상위 클래스의 메서드 하나에 두고, 달라지는 단계만 하위 클래스가 채우게 하는 패턴이다. 꼭 채울 단계는 추상 메서드로, 바꿔도 되는 단계는 훅으로 연다. 부르는 쪽이 늘 상위 클래스라서 `super` 호출을 빠뜨릴 일이 없지만, 생성자에서 단계를 부르면 안 되고, 바뀌는 축이 둘 이상이 되면 단계를 객체로 받는 합성 쪽으로 옮긴다.
+
+## 면접에서 나올 만한 질문
+
+### 템플릿 메서드 패턴은 무엇인가요?
+
+알고리즘의 뼈대(단계의 순서)를 상위 클래스의 메서드 하나에 고정하고, 단계 중 달라지는 부분만 하위 클래스가 재정의하게 하는 패턴이다. 여러 곳에 같은 흐름이 복사되어 있고 몇 단계만 다를 때 쓴다. 공통 규칙이 한 곳에 모이니 수정도 한 곳에서 끝난다.
+
+### 추상 메서드와 훅은 어떻게 다른가요?
+
+추상 메서드는 하위 클래스가 반드시 구현해야 하는 단계이고, 훅은 상위 클래스가 기본 구현(보통 아무것도 하지 않음)을 주고 필요한 하위 클래스만 재정의하는 단계다. 훅은 지금은 쓰는 곳이 없어도 확장 지점을 열어 두는 역할을 한다. 끝난 뒤 알림을 보내는 `afterImport`나 Node.js 스트림의 `_flush`가 훅에 가깝다.
+
+### 할리우드 원칙이 무엇이고 템플릿 메서드와 어떤 관계인가요?
+
+"우리가 연락하겠다"는 뜻으로, 하위 클래스가 상위 클래스를 부르는 게 아니라 상위 클래스(프레임워크)가 하위 클래스의 단계를 부른다는 원칙이다. 템플릿 메서드가 정확히 그렇게 동작한다. 덕분에 "재정의할 때 `super`를 꼭 먼저 부르라" 같은, 지키지 않아도 컴파일되는 규칙이 필요 없어진다.
+
+### 템플릿 메서드와 전략 패턴은 어떻게 다른가요?
+
+둘 다 알고리즘의 일부를 바꾸지만 템플릿 메서드는 상속, 전략은 합성으로 바꾼다. 템플릿 메서드는 컴파일 시점에 하위 클래스로 정해지고 순서를 상위 클래스가 강하게 지킨다. 전략은 실행 중에 바꿔 끼울 수 있고 여러 축을 따로 조합하기 쉽다. 바뀌는 축이 둘 이상이면 하위 클래스가 곱으로 늘어나니 전략 쪽으로 옮긴다.
+
+### 상위 클래스 생성자에서 재정의 메서드를 부르면 왜 문제가 되나요?
+
+그 시점에는 하위 클래스의 필드 초기화가 아직 실행되지 않았기 때문이다. 자바스크립트와 타입스크립트에서는 필드 초기화가 `super()`가 끝난 뒤에 돌아서, 재정의 메서드가 본 필드는 `undefined`이고, 그 메서드가 채운 값도 뒤늦은 필드 초기화에 덮어써진다. 템플릿 메서드는 객체가 다 만들어진 뒤 부르는 `run()` 같은 메서드에 둔다.
+
+### 실제 라이브러리에서 템플릿 메서드를 본 적이 있나요?
+
+Node.js에서 변환 스트림을 만들 때 `Transform`을 상속해 `_transform`과 `_flush`만 구현하는 것이 대표적이다. 버퍼와 배압, 에러 전파는 상위 클래스가 맡는다. 자바의 `HttpServlet`이 `service()`에서 `doGet`, `doPost`를 부르는 구조와 `AbstractList`도 같다. Spring의 `JdbcTemplate`은 이름과 달리 바뀌는 단계를 콜백으로 받는 합성 버전이다.
+
+### 템플릿 메서드의 단점은 무엇인가요?
+
+상속의 단점을 그대로 가진다. 하위 클래스가 상위 클래스의 구현과 호출 순서에 묶여서, 상위 클래스를 고치면 하위 클래스가 조용히 깨질 수 있다. 타입스크립트에는 `final`이 없어 템플릿 메서드 자체의 재정의를 막을 수도 없다. 계층이 깊어지거나 축이 늘면 단계를 인자로 받는 합성 방식이 낫다.

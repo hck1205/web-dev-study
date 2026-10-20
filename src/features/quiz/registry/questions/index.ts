@@ -155,9 +155,18 @@ import { PATTERN_DECORATOR } from "./pattern-decorator";
 import { PATTERN_FACADE } from "./pattern-facade";
 import { PATTERN_FACTORY_METHOD } from "./pattern-factory-method";
 import { PATTERN_FLYWEIGHT } from "./pattern-flyweight";
+import { PATTERN_INTERPRETER } from "./pattern-interpreter";
+import { PATTERN_ITERATOR } from "./pattern-iterator";
+import { PATTERN_MEDIATOR } from "./pattern-mediator";
+import { PATTERN_MEMENTO } from "./pattern-memento";
+import { PATTERN_OBSERVER } from "./pattern-observer";
 import { PATTERN_PROTOTYPE } from "./pattern-prototype";
 import { PATTERN_PROXY } from "./pattern-proxy";
 import { PATTERN_SINGLETON } from "./pattern-singleton";
+import { PATTERN_STATE } from "./pattern-state";
+import { PATTERN_STRATEGY } from "./pattern-strategy";
+import { PATTERN_TEMPLATE_METHOD } from "./pattern-template-method";
+import { PATTERN_VISITOR } from "./pattern-visitor";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
@@ -394,9 +403,18 @@ export const QUESTION_SETS = [
   PATTERN_FACADE,
   PATTERN_FACTORY_METHOD,
   PATTERN_FLYWEIGHT,
+  PATTERN_INTERPRETER,
+  PATTERN_ITERATOR,
+  PATTERN_MEDIATOR,
+  PATTERN_MEMENTO,
+  PATTERN_OBSERVER,
   PATTERN_PROTOTYPE,
   PATTERN_PROXY,
   PATTERN_SINGLETON,
+  PATTERN_STATE,
+  PATTERN_STRATEGY,
+  PATTERN_TEMPLATE_METHOD,
+  PATTERN_VISITOR,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,

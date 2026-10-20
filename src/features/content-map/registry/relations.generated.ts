@@ -2,6 +2,107 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "pattern-observer": {
+    "links": [
+      "react-rerender",
+      "pub-sub",
+      "js-memory-leak",
+      "event-loop",
+      "pattern-mediator",
+      "pattern-iterator"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "design-patterns-overview"
+    ]
+  },
+  "pattern-memento": {
+    "links": [
+      "pattern-command",
+      "pattern-prototype",
+      "git-internals-basics"
+    ],
+    "mentions": []
+  },
+  "pattern-mediator": {
+    "links": [
+      "event-driven-architecture",
+      "saga-pattern",
+      "pattern-observer",
+      "pattern-facade",
+      "pattern-state"
+    ],
+    "mentions": [
+      "design-patterns-overview"
+    ]
+  },
+  "pattern-iterator": {
+    "links": [
+      "pattern-factory-method"
+    ],
+    "mentions": [
+      "kafka-basics"
+    ]
+  },
+  "pattern-interpreter": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-composite",
+      "pattern-visitor"
+    ],
+    "mentions": [
+      "mongodb-document-model"
+    ]
+  },
+  "pattern-visitor": {
+    "links": [
+      "pattern-composite",
+      "pattern-iterator",
+      "pattern-interpreter"
+    ],
+    "mentions": []
+  },
+  "pattern-template-method": {
+    "links": [
+      "pattern-strategy",
+      "pattern-factory-method"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "design-patterns-overview"
+    ]
+  },
+  "pattern-strategy": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-chain-of-responsibility",
+      "k8s-deployment",
+      "load-balancing-algorithms",
+      "pattern-state",
+      "pattern-template-method",
+      "pattern-bridge",
+      "pattern-command"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "ab-testing",
+      "redis-basics",
+      "token-login"
+    ]
+  },
+  "pattern-state": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-strategy",
+      "tcp-connection-lifecycle",
+      "circuit-breaker",
+      "optimistic-locking",
+      "db-locking-deadlock"
+    ],
+    "mentions": [
+      "client-data-cache"
+    ]
+  },
   "k8s-deploy-pipeline-eks": {
     "links": [
       "k8s-project-structure",
@@ -130,12 +231,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pattern-command": {
     "links": [
       "pattern-composite",
+      "pattern-memento",
       "saga-pattern",
       "idempotency-key",
       "dead-letter-queue",
       "message-queue-basics",
       "pattern-chain-of-responsibility",
-      "design-patterns-overview"
+      "pattern-observer",
+      "design-patterns-overview",
+      "pattern-strategy"
     ],
     "mentions": [
       "redis-basics",
@@ -147,6 +251,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "design-patterns-overview",
       "pattern-decorator",
       "pattern-command",
+      "pattern-observer",
       "pattern-composite"
     ],
     "mentions": [
@@ -656,7 +761,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key",
       "git-internals-basics",
       "gateway",
-      "pattern-adapter"
+      "pattern-adapter",
+      "pattern-mediator"
     ],
     "mentions": [
       "https-tls",
@@ -685,8 +791,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pattern-composite": {
     "links": [
       "design-patterns-overview",
+      "pattern-visitor",
       "pattern-decorator",
-      "pattern-chain-of-responsibility"
+      "pattern-chain-of-responsibility",
+      "pattern-iterator"
     ],
     "mentions": []
   },
@@ -797,6 +905,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "design-patterns-overview",
       "react-rerender",
+      "pattern-strategy",
       "pattern-adapter",
       "pattern-abstract-factory"
     ],
@@ -827,7 +936,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "pattern-builder",
       "pattern-factory-method",
-      "pattern-flyweight"
+      "pattern-flyweight",
+      "pattern-memento"
     ],
     "mentions": [
       "k8s-pod-basics",
@@ -1017,6 +1127,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pattern-factory-method": {
     "links": [
       "design-patterns-overview",
+      "pattern-template-method",
+      "pattern-iterator",
       "pattern-abstract-factory",
       "pattern-builder",
       "pattern-prototype"
@@ -1053,6 +1165,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-proxy",
       "pattern-chain-of-responsibility",
       "pattern-command",
+      "pattern-interpreter",
+      "pattern-iterator",
+      "pattern-mediator",
+      "pattern-memento",
+      "pattern-observer",
+      "pattern-state",
+      "pattern-strategy",
+      "pattern-template-method",
+      "pattern-visitor",
       "mvc-pattern",
       "resilience-patterns"
     ],
@@ -3423,6 +3544,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "pattern-observer",
       "pattern-proxy",
       "loading-patterns",
       "http-status-codes",

@@ -1,0 +1,421 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-memento");
+
+다이어그램 편집기에 "자동 정렬" 버튼이 있다. 누르면 도형 300개가 격자에 맞춰 한꺼번에 움직인다. 사용자들이 가장 많이 남기는 요청은 이것이다. "자동 정렬을 눌렀더니 다 망가졌어요. 되돌릴 수 있게 해 주세요."
+
+[커맨드 패턴](/posts/pattern-command)으로 되돌리기를 만들려면 명령마다 `undo()`를 짜야 한다. "글자 넣기"의 반대는 "글자 지우기"로 쉽게 나오지만, 자동 정렬의 반대는 없다. 정렬 알고리즘을 거꾸로 돌릴 방법이 없기 때문이다. 이럴 때는 계산으로 되돌리지 않고 기억으로 되돌린다. 누르기 직전의 모습을 통째로 떼어 두었다가 그대로 다시 붙이는 것이다. 이번 글은 객체의 내부를 바깥에 드러내지 않고 상태를 저장했다 복원하는 메멘토(Memento) 패턴이다.
+
+## 저장은 하되 안을 들여다보지 않는다
+
+"상태를 저장했다가 복원한다"만 놓고 보면 그냥 복사다. 메멘토가 패턴인 이유는 누가 무엇을 알아도 되는지를 나누기 때문이다. 역할이 셋이다.
+
+- 원조자(Originator): 상태를 가진 객체. 여기서는 캔버스다. 자기 상태로 메멘토를 만들고, 메멘토를 받아 복원할 줄 안다.
+- 메멘토(Memento): 어느 순간의 상태를 담은 꾸러미. 원조자만 열어 볼 수 있다.
+- 관리인(Caretaker): 메멘토를 쌓아 두고 필요할 때 돌려준다. 실행 기록이 이 역할이다. 꾸러미 안에 무엇이 있는지는 모른다.
+
+관리인이 안을 몰라야 하는 이유가 있다. 실행 기록이 캔버스의 도형 배열 구조를 알면, 도형 저장 방식을 바꿀 때 실행 기록도 고쳐야 한다. 더 나쁜 경우는 실행 기록이 "편의상" 저장된 상태를 직접 고치는 코드가 생기는 것이다. 그러면 복원한 상태가 저장한 적 없는 모습이 된다.
+
+<ConceptDiagram
+  width={400}
+  height={240}
+  caption="관리인은 메멘토를 들고만 있고, 열 수 있는 건 원조자뿐이다"
+  nodes={[
+    { id: "orig", label: "Canvas", sub: "Originator", x: 90, y: 50, w: 110 },
+    { id: "memento", label: "CanvasMemento", sub: "label만 보인다", x: 290, y: 50, w: 140 },
+    { id: "care", label: "History", sub: "Caretaker", x: 290, y: 185, w: 110 },
+    { id: "user", label: "Ctrl+Z", sub: "사용자", x: 90, y: 185, w: 100 },
+  ]}
+  edges={[
+    { from: "orig", to: "memento", label: "create · restore" },
+    { from: "care", to: "memento", label: "쌓아 둔다", dashed: true },
+    { from: "user", to: "care", label: "undo()" },
+    { from: "care", to: "orig", label: "restore(m)" },
+  ]}
+/>
+
+## 꾸러미를 열 수 있는 쪽은 하나
+
+타입스크립트로 옮기면 이렇다. 메멘토의 실제 내용은 모듈 안의 `WeakMap`에 두고 밖으로 내보내지 않는다. 바깥에서 받은 메멘토는 이름표(`label`)와 저장 시각만 보이는 열쇠 같은 것이다.
+
+```ts
+interface Shape { id: string; x: number; y: number }
+
+// 메멘토: 바깥에서는 이름표만 보인다
+export interface CanvasMemento {
+  readonly label: string;
+  readonly savedAt: number;
+}
+const contents = new WeakMap<CanvasMemento, readonly Shape[]>(); // 이 모듈 밖으로 내보내지 않는다
+
+// 원조자: 자기 상태로 메멘토를 만들고, 메멘토로 복원한다
+export class Canvas {
+  private shapes: Shape[] = [];
+
+  add(shape: Shape) {
+    this.shapes.push(shape);
+  }
+  autoLayout() {
+    // 되돌리는 공식이 없는 변경
+    this.shapes.forEach((s, i) => {
+      s.x = (i % 10) * 40;
+      s.y = Math.floor(i / 10) * 40;
+    });
+  }
+  createMemento(label: string): CanvasMemento {
+    const m: CanvasMemento = Object.freeze({ label, savedAt: Date.now() });
+    contents.set(m, this.shapes.map((s) => ({ ...s }))); // 지금 모습을 떼어 낸다
+    return m;
+  }
+  restore(m: CanvasMemento) {
+    const saved = contents.get(m);
+    if (!saved) throw new Error("이 캔버스가 만든 메멘토가 아니다");
+    this.shapes = saved.map((s) => ({ ...s })); // 복원한 뒤에 고쳐도 메멘토는 그대로
+  }
+  get count() {
+    return this.shapes.length;
+  }
+}
+
+// 관리인: 메멘토를 쌓고 꺼낼 뿐, 안을 열지 못한다
+export class History {
+  private past: CanvasMemento[] = [];
+  private future: CanvasMemento[] = [];
+  constructor(private readonly canvas: Canvas, private readonly limit = 50) {}
+
+  checkpoint(label: string) {
+    this.past.push(this.canvas.createMemento(label));
+    if (this.past.length > this.limit) this.past.shift(); // 오래된 것부터 버린다
+    this.future = [];
+  }
+  undo() {
+    const m = this.past.pop();
+    if (!m) return;
+    this.future.push(this.canvas.createMemento(m.label)); // 다시 실행할 수 있게 지금 모습도 남긴다
+    this.canvas.restore(m);
+  }
+  redo() {
+    const m = this.future.pop();
+    if (!m) return;
+    this.past.push(this.canvas.createMemento(m.label));
+    this.canvas.restore(m);
+  }
+  get labels() {
+    return this.past.map((m) => m.label); // 메뉴에 "실행 취소: 자동 정렬"을 띄우는 데 쓴다
+  }
+}
+```
+
+쓰는 쪽은 바꾸기 직전에 `checkpoint()`를 한 줄 부른다. 자동 정렬이 무엇을 바꿨는지 알 필요가 없다.
+
+```ts
+const canvas = new Canvas();
+const history = new History(canvas);
+
+history.checkpoint("자동 정렬"); // 바꾸기 직전의 모습을 떼어 둔다
+canvas.autoLayout();
+history.undo(); // 떼어 둔 모습을 그대로 붙인다
+```
+
+아래 그림에서 다음을 누르면 자동 정렬과 되돌리기 사이에 메멘토가 오가는 길이 보인다.
+
+<SequenceDiagram
+  caption="되돌리기 전에 지금 모습도 떼어 두어야 다시 실행할 수 있다"
+  actors={[
+    { id: "ui", label: "툴바" },
+    { id: "hist", label: "History" },
+    { id: "canvas", label: "Canvas" },
+  ]}
+  steps={[
+    { from: "ui", to: "hist", label: "checkpoint(자동 정렬)", title: "누르기 직전에 기록을 남긴다", detail: "툴바는 자동 정렬이 무엇을 바꾸는지 모른다. 바꾸기 전에 기록을 남기라고만 한다." },
+    { from: "hist", to: "canvas", label: "createMemento()", title: "캔버스가 자기 모습을 떼어 낸다", detail: "도형 배열을 복사해 메멘토에 넣는다. 관리인이 받는 것은 이름표가 붙은 꾸러미뿐이다.", payload: "{ label: \"자동 정렬\", savedAt: 1792540800000 }" },
+    { from: "ui", to: "canvas", label: "autoLayout()", title: "도형 300개가 움직인다", detail: "되돌리는 공식이 없는 변경이다. 그래도 직전 모습을 쥐고 있으니 상관없다." },
+    { from: "ui", to: "hist", label: "undo()", title: "사용자가 Ctrl+Z를 누른다", detail: "관리인은 가장 최근 꾸러미를 꺼낸다." },
+    { from: "hist", to: "canvas", label: "createMemento()", title: "되돌리기 전에 지금 모습도 남긴다", detail: "이걸 빼먹으면 되돌린 뒤에 다시 실행할 방법이 없다. 정렬된 모습은 future 쪽에 쌓인다." },
+    { from: "hist", to: "canvas", label: "restore(m)", title: "꾸러미를 캔버스에 돌려준다", detail: "캔버스만 꾸러미를 열 수 있다. 저장해 둔 도형 배열로 바꿔 끼운다." },
+  ]}
+/>
+
+같은 기록을 시간 순서로 펼치면 이렇다. 왼쪽 묶음이 되돌릴 수 있는 과거, 가운데가 지금, 오른쪽이 다시 실행할 수 있는 미래다.
+
+<AlgoTrace
+  caption="되돌린 상태에서 새로 고치면 미래가 사라진다"
+  memoryLabel="past · ● 지금 · future"
+  cells={["도형 300개", "자동 정렬", "도형 이동", "undo", "undo", "redo", "색 변경"]}
+  steps={[
+    { pointer: 0, memory: ["● 처음"], caption: "도형을 그린 상태다. 아직 저장된 꾸러미가 없다." },
+    { pointer: 1, memory: ["처음", "● 정렬됨"], caption: "자동 정렬 직전에 처음 모습을 꾸러미로 떼어 두었다." },
+    { pointer: 2, memory: ["처음", "정렬됨", "● 이동함"], caption: "도형 하나를 옮기기 전에도 한 번 더 떼어 둔다." },
+    { pointer: 3, memory: ["처음", "● 정렬됨", "이동함 →"], caption: "되돌리면 지금 모습(이동함)을 오른쪽에 남기고 정렬됨으로 돌아간다." },
+    { pointer: 4, memory: ["● 처음", "정렬됨 →", "이동함 →"], caption: "한 번 더 되돌리면 자동 정렬 전, 사용자가 원하던 모습이다." },
+    { pointer: 5, found: [5], memory: ["처음", "● 정렬됨", "이동함 →"], caption: "다시 실행하면 오른쪽 꾸러미를 꺼내 붙인다. 정렬 알고리즘을 다시 돌리지 않는다." },
+    { pointer: 6, found: [6], memory: ["처음", "정렬됨", "● 색 바꿈"], caption: "여기서 새로 고치면 오른쪽(이동함)은 버린다. 되돌렸던 미래는 이제 돌아갈 수 없다." },
+  ]}
+/>
+
+## 얕은 복사로 떼어 둔 꾸러미는 같이 바뀐다
+
+메멘토에서 가장 흔한 버그는 꾸러미가 원본과 무언가를 같이 쓰는 경우다. 처음 만든 버전은 이랬다.
+
+```js
+const canvas = { shapes: [{ id: "a", x: 0, y: 0 }, { id: "b", x: 10, y: 0 }] };
+const snapshot = { ...canvas }; // 얕은 복사
+
+canvas.shapes[0].x = 300; // 자동 정렬이 제자리에서 옮긴다
+canvas.shapes.push({ id: "c", x: 20, y: 0 });
+
+console.log(snapshot.shapes.length, snapshot.shapes[0].x);
+```
+
+```text
+3 300
+```
+
+스냅숏의 `shapes`는 원본과 같은 배열을 가리키니, 저장한 뒤의 변경이 꾸러미에도 보인다. 되돌려도 아무 일도 일어나지 않는 것처럼 보이는 버그가 이것이다. 위 `Canvas`가 저장할 때 한 번, 복원할 때 한 번 더 복사하는 이유도 같다. 복원할 때 복사하지 않으면, 복원한 뒤의 편집이 관리인이 아직 들고 있는 꾸러미를 고친다. 그 꾸러미를 다시 꺼내면 저장한 적 없는 모습이 나온다. 깊은 복사를 어떻게 하는지, `structuredClone`이 무엇을 복사하지 못하는지는 [프로토타입 글](/posts/pattern-prototype)에서 다뤘다.
+
+## 바뀐 곳만 새로 만들면 꾸러미가 싸진다
+
+전체를 복사하는 메멘토는 상태가 크면 비싸다. 1만 행짜리 표에서 한 행씩 500번 고치며 매번 꾸러미를 남기는 실험을 두 방식으로 했다. `node --expose-gc`로 GC를 돌린 뒤 늘어난 힙을 쟀다.
+
+```js
+// 1) 바꾸기 전에 전체를 복사하고, 제자리에서 고친다
+history.push(structuredClone(doc));
+doc.rows[i].qty += 1;
+
+// 2) 고칠 때 새 객체를 만들고, 이전 객체를 그대로 꾸러미로 쓴다
+history.push(doc);
+const rows = doc.rows.slice(); // 행 배열만 새로 (행 객체는 공유)
+rows[i] = { ...rows[i], qty: rows[i].qty + 1 };
+doc = { ...doc, rows };
+```
+
+```text
+clone   500 edits: +661,339 KB heap, 10982 ms
+share   500 edits: +40,252 KB heap, 110 ms
+```
+
+두 번째 방식은 상태를 절대 제자리에서 고치지 않는다. 고칠 때마다 바뀐 행 하나와 그 행을 담은 배열만 새로 만들고, 나머지 9,999행은 이전 상태와 같은 객체를 공유한다. 그러면 이전 상태 객체가 그 자체로 메멘토가 된다. 복사하지 않고 참조만 쌓으면 되니 메모리는 16분의 1, 시간은 100분의 1이 됐다.
+
+남은 40MB는 행 배열을 매번 통째로 복사한 비용이다. 1만 칸짜리 포인터 배열(약 80KB)을 500번 만들었다. 배열이 더 크거나 편집이 더 많으면 이것도 부담이 되는데, 이때는 배열을 트리로 쪼개 바뀐 경로만 새로 만드는 영속 자료 구조(Immutable.js의 `List` 같은)를 쓴다. 고칠 때마다 로그 단위의 노드만 새로 생긴다.
+
+Redux가 상태를 불변으로 다루라고 하는 이유 중 하나가 이것이다. 리듀서가 늘 새 상태를 돌려주니, 이전 상태들을 배열에 넣어 두기만 하면 되돌리기가 된다. redux-undo 라이브러리가 상태를 `{ past, present, future }` 모양으로 감싸는 것이 위 `History`와 같은 구조다. Immer는 제자리에서 고치는 것처럼 코드를 쓰게 해 주면서 실제로는 이렇게 바뀐 경로만 새로 만든다.
+
+## 저장한 꾸러미를 지난 버전 코드가 열 때
+
+메멘토를 메모리에만 두지 않고 `localStorage`나 서버에 저장하면 쓰임이 넓어진다. 긴 주문서를 쓰다 탭을 닫아도 다시 열면 초안이 돌아온다. 그런데 배포 다음 날 이런 오류가 쌓이기 시작했다.
+
+```text
+TypeError: Cannot read properties of undefined (reading 'map')
+```
+
+새 버전은 초안의 품목 목록을 `items`에서 `lines`로 바꿨다. 어제 저장된 초안은 여전히 `items`를 갖고 있고, 새 코드가 `draft.lines.map(...)`을 부르다 넘어진 것이다. 메모리 속 메멘토는 만든 코드와 여는 코드가 늘 같지만, 저장된 메멘토는 배포를 건너 산다. 그래서 저장하는 메멘토에는 꼭 버전을 붙인다.
+
+<UrlAnatomy
+  caption="저장해 두는 꾸러미에는 버전과 시각을 함께 넣는다"
+  base={'localStorage["draft:order"] = '}
+  separator=""
+  joiner=" "
+  params={[
+    { key: "v", display: "{ \"v\": 2,", title: "꾸러미 형식의 버전", description: "앱 버전이 아니라 이 꾸러미 모양의 버전이다. 모양을 바꿀 때만 올린다. 여는 쪽은 이 숫자를 보고 그대로 쓸지, 고쳐서 쓸지, 버릴지 정한다.", required: true },
+    { key: "savedAt", display: "\"savedAt\": 1792540800000,", title: "저장 시각", description: "2026-10-21 09:00(KST)이다. 너무 오래된 초안은 묻지 않고 버리거나 '3일 전 초안이 있습니다'처럼 물어보는 데 쓴다." },
+    { key: "data", display: "\"data\": { \"lines\": [...] } }", title: "원조자만 해석하는 내용", description: "주문서 컴포넌트만 이 모양을 안다. 저장과 복원을 맡는 코드는 이 안을 들여다보지 않는다.", code: "{ \"lines\": [{ \"sku\": \"PEN-01\", \"qty\": 2 }], \"memo\": \"문 앞에 놓아 주세요\" }" },
+    { key: "omit", display: "/* 카드 번호 없음 */", title: "넣지 말아야 할 것", description: "localStorage는 같은 출처의 스크립트라면 누구나 읽는다. 카드 번호, 비밀번호, 토큰은 메멘토를 만들 때 빼고, 복원한 뒤 다시 입력받는다." },
+  ]}
+/>
+
+복원하는 쪽은 버전을 보고 길을 고른다. 아래 그림에서 다음을 누르면 초안이 저장되고, 배포를 건너 다시 열리는 길이 보인다.
+
+<NetworkTopology
+  caption="저장된 꾸러미는 배포를 건너 산다. 여는 쪽이 버전을 확인한다"
+  width={400}
+  height={240}
+  zones={[
+    { id: "browser", label: "브라우저", x: 10, y: 20, w: 380, h: 205, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "v1", label: "주문서 v1", x: 70, y: 80, icon: "client", w: 84 },
+    { id: "store", label: "localStorage", x: 200, y: 80, icon: "db", w: 96 },
+    { id: "migrate", label: "restore()", x: 200, y: 175, icon: "firewall", w: 86 },
+    { id: "v2", label: "주문서 v2", x: 330, y: 175, icon: "client", w: 84 },
+  ]}
+  links={[
+    { from: "v1", to: "store" },
+    { from: "store", to: "migrate" },
+    { from: "migrate", to: "v2" },
+  ]}
+  steps={[
+    { path: ["v1", "store"], packet: "v1", title: "입력이 멈출 때마다 저장한다", detail: "키를 누를 때마다가 아니라 입력이 1초쯤 멈췄을 때 저장한다. JSON 직렬화도 공짜가 아니다.", payload: "{ \"v\": 1, \"savedAt\": 1792540800000, \"data\": { \"items\": [...] } }" },
+    { path: ["store", "migrate"], packet: "v1", highlight: ["v2"], title: "다음 날 새 버전이 배포됐다", detail: "탭을 다시 연 사용자의 브라우저에는 어제 저장한 v1 꾸러미가 그대로 있다." },
+    { path: ["store", "migrate", "v2"], packet: "v1→v2", title: "아는 버전이면 고쳐서 쓴다", detail: "v1이면 items를 lines로 옮기는 변환 함수를 거친다. 변환 함수는 버전마다 하나씩 쌓아 둔다." },
+    { path: ["store", "migrate"], packet: "v0?", blocked: true, title: "모르는 버전이면 버린다", detail: "변환할 수 없는 꾸러미는 복원하지 않는다. 화면이 깨지는 것보다 초안을 잃는 편이 낫다. 버렸다는 사실은 로그로 남긴다." },
+  ]}
+/>
+
+```ts
+interface DraftV1 { items: { name: string; qty: number }[] }
+interface DraftV2 { lines: { sku: string; qty: number }[]; memo: string }
+type Stored = { v: 1; savedAt: number; data: DraftV1 } | { v: 2; savedAt: number; data: DraftV2 };
+
+declare function skuOf(name: string): string;
+
+function restoreDraft(raw: string | null): DraftV2 | null {
+  if (!raw) return null;
+  try {
+    const stored = JSON.parse(raw) as Stored;
+    if (Date.now() - stored.savedAt > 7 * 24 * 3600 * 1000) return null; // 일주일 지난 초안은 버린다
+    switch (stored.v) {
+      case 2: return stored.data;
+      case 1: return { lines: stored.data.items.map((i) => ({ sku: skuOf(i.name), qty: i.qty })), memo: "" };
+      default: return null; // 모르는 버전
+    }
+  } catch {
+    return null; // 깨진 JSON도 화면을 멈추게 두지 않는다
+  }
+}
+```
+
+메멘토를 밖에 저장하는 순간 그것은 데이터베이스 스키마와 같은 대접을 받아야 한다. 버전, 변환, 만료, 민감 정보 제외가 모두 스키마 관리에서 하던 일이다.
+
+## 브라우저와 도구에 들어 있는 메멘토
+
+캔버스 2D API의 `ctx.save()`와 `ctx.restore()`가 교과서적인 메멘토 스택이다. `save()`는 지금의 그리기 상태(변환 행렬, 클리핑 영역, `fillStyle`, `lineWidth` 같은 설정)를 스택에 넣고, `restore()`는 꺼내서 되돌린다. 무엇이 저장되는지 호출하는 쪽은 알 필요가 없다. 다만 저장되는 것은 설정이지 그려진 픽셀이 아니다. 그림 자체를 되돌리려면 `getImageData()`로 픽셀을 따로 떼어 두어야 한다. 메멘토에 무엇이 들어가는지가 곧 무엇을 되돌릴 수 있는지다.
+
+`history.pushState(state, "", url)`의 `state`도 브라우저가 맡아 두는 메멘토다. 브라우저는 이 객체를 구조화 복제로 떼어 두었다가, 사용자가 뒤로 가기를 누르면 `popstate` 이벤트로 돌려준다. 스크롤 위치나 펼쳐 둔 필터처럼 주소에 담기 애매한 화면 상태를 여기에 둔다. 브라우저가 크기 제한을 두기도 하니(파이어폭스는 직렬화한 크기를 16MiB로 제한한다) 목록 데이터 전체가 아니라 다시 불러올 수 있는 최소한만 넣는다.
+
+데이터베이스의 `SAVEPOINT`도 같은 생각이다. 트랜잭션 중간에 이름을 붙여 지점을 남기고, `ROLLBACK TO SAVEPOINT`로 그 지점까지만 되돌린다. Git의 커밋은 저장소 전체의 스냅숏이고, 바뀌지 않은 파일은 이전 커밋과 같은 객체를 가리킨다. 위에서 본 공유 방식이 파일 단위로 일어나는 것이다([Git 내부 구조 글](/posts/git-internals-basics)).
+
+## TS의 private은 꾸러미를 잠그지 못한다
+
+메멘토의 내용을 숨기려고 타입스크립트의 `private`을 쓰는 경우가 많다. 컴파일할 때는 막아 주지만 실행할 때는 보통 속성이다. 자바스크립트의 `#` 필드는 실행 중에도 바깥에서 보이지 않는다.
+
+```ts
+interface Shape { id: string; x: number; y: number }
+
+class TsPrivateMemento {
+  constructor(private readonly shapes: readonly Shape[]) {}
+}
+class HashPrivateMemento {
+  readonly #shapes: readonly Shape[];
+  constructor(shapes: readonly Shape[], readonly label: string) {
+    this.#shapes = shapes;
+  }
+}
+
+const shapes = [{ id: "a", x: 0, y: 0 }];
+console.log(JSON.stringify(new TsPrivateMemento(shapes)));
+console.log(JSON.stringify(new HashPrivateMemento(shapes, "자동 정렬 전")));
+```
+
+```text
+{"shapes":[{"id":"a","x":0,"y":0}]}
+{"label":"자동 정렬 전"}
+```
+
+`private` 필드는 `JSON.stringify`에 그대로 나왔고, `#` 필드는 나오지 않았다. 다만 `#` 필드는 그 클래스 몸통 안에서만 읽을 수 있어서, 원조자가 메멘토를 열려면 원조자와 메멘토를 한 클래스로 묶거나 열어 주는 메서드를 열어야 한다. 그래서 위 `Canvas`는 모듈 밖으로 내보내지 않는 `WeakMap`을 썼다. 꾸러미를 여는 열쇠가 모듈 안에만 있고, 메멘토가 버려지면 내용도 함께 GC된다. Java라면 메멘토를 원조자의 중첩 클래스로 두고 생성자를 `private`으로 막는 방식이 흔하다.
+
+## 꾸러미를 남길까 명령을 남길까
+
+되돌리기를 만드는 두 길의 비교는 [커맨드 글](/posts/pattern-command#되돌리기-스택과-다시-실행하기-스택)에 측정과 함께 정리했다. 거기서 본 대로 바뀐 것만 기억하는 명령은 작고, 상태 전체를 남기는 메멘토는 되돌리는 코드를 짤 필요가 없다. 고르는 기준을 정리하면 이렇다.
+
+- 변경의 역연산이 없거나 짜기 어렵다(자동 정렬, 필터 적용, 외부 라이브러리가 고친 상태) → 메멘토.
+- 상태가 작거나 불변 데이터라 꾸러미가 싸다 → 메멘토. 코드가 가장 단순하다.
+- 상태가 크고 변경이 잘게 자주 일어난다(글자 입력) → 커맨드.
+- 둘 다 해당하면 섞는다. 평소엔 명령을 쌓고, 몇십 개마다 또는 큰 변경 직전에 꾸러미를 하나 남긴다.
+
+[프로토타입](/posts/pattern-prototype)과도 헷갈린다. 둘 다 객체를 복사하지만 목적이 다르다. 프로토타입은 복사본을 새 객체로 쓰려고 만들고, 메멘토는 원래 객체를 그 순간으로 돌려놓으려고 만든다. 메멘토의 복사본은 원조자 말고는 아무도 쓰지 않는다.
+
+## 되돌리기 직접 만들기
+
+`run(ops, limit)`의 `save`, `restore`, `apply`, 되돌리기와 다시 실행하기를 완성해 보자. 처음 코드의 `save`에는 이 글에서 본 버그가 하나 들어 있다. 결과는 `[글자, 태그 목록, 되돌리기 개수, 다시 실행하기 개수]`다.
+
+<CodePlayground
+  caption="꾸러미가 원본과 아무것도 같이 쓰지 않게 만든다"
+  functionName="run"
+  initialCode={`function run(ops, limit) {
+  const editor = {
+    text: "",
+    tags: [],
+    save() { return { text: this.text, tags: this.tags }; }, // 이대로면 무엇이 문제일까
+    restore(m) { this.text = m.text; this.tags = m.tags; },
+  };
+  const undoStack = [];
+  let redoStack = [];
+  // 바꾸기 전에 저장하고, limit을 넘으면 오래된 것을 버리고, redo를 비운다
+  const apply = (change) => { change(); };
+  for (const [op, value] of ops) {
+    if (op === "text") apply(() => { editor.text = value; });
+    else if (op === "tag") apply(() => { editor.tags.push(value); });
+    else if (op === "undo") { /* 지금 모습을 redo에 남기고 꺼낸 꾸러미로 복원 */ }
+    else if (op === "redo") { /* 반대로 */ }
+  }
+  return [editor.text, editor.tags.join(","), undoStack.length, redoStack.length];
+}`}
+  solution={`function run(ops, limit) {
+  const editor = {
+    text: "",
+    tags: [],
+    save() { return { text: this.text, tags: this.tags.slice() }; }, // 배열을 떼어 낸다
+    restore(m) { this.text = m.text; this.tags = m.tags.slice(); }, // 복원할 때도 떼어 낸다
+  };
+  const undoStack = [];
+  let redoStack = [];
+  const apply = (change) => {
+    undoStack.push(editor.save());
+    if (undoStack.length > limit) undoStack.shift();
+    redoStack = [];
+    change();
+  };
+  for (const [op, value] of ops) {
+    if (op === "text") apply(() => { editor.text = value; });
+    else if (op === "tag") apply(() => { editor.tags.push(value); });
+    else if (op === "undo") {
+      const m = undoStack.pop();
+      if (m) { redoStack.push(editor.save()); editor.restore(m); }
+    } else if (op === "redo") {
+      const m = redoStack.pop();
+      if (m) { undoStack.push(editor.save()); editor.restore(m); }
+    }
+  }
+  return [editor.text, editor.tags.join(","), undoStack.length, redoStack.length];
+}`}
+  tests={[
+    { args: [[["text", "a"], ["text", "ab"], ["undo"]], 10], expected: ["a", "", 1, 1], label: "글자를 되돌린다" },
+    { args: [[["tag", "x"], ["tag", "y"], ["undo"]], 10], expected: ["", "x", 1, 1], label: "배열을 바꾼 것도 되돌린다" },
+    { args: [[["tag", "x"], ["tag", "y"], ["undo"], ["undo"], ["redo"]], 10], expected: ["", "x", 1, 1], label: "되돌린 뒤 다시 실행한다" },
+    { args: [[["text", "a"], ["undo"], ["text", "b"]], 10], expected: ["b", "", 1, 0], label: "새로 고치면 redo가 비워진다" },
+    { args: [[["text", "1"], ["text", "2"], ["text", "3"], ["undo"], ["undo"], ["undo"]], 2], expected: ["1", "", 0, 2], label: "limit을 넘은 꾸러미는 버려진다" },
+    { args: [[["undo"], ["redo"]], 10], expected: ["", "", 0, 0], label: "빈 기록에서는 아무 일도 없다" },
+  ]}
+/>
+
+메멘토는 객체가 자기 상태를 꾸러미로 떼어 내고, 바깥은 그 꾸러미를 열지 않은 채 들고 있다가 돌려주게 하는 패턴이다. 되돌리는 공식이 없는 변경도 되돌릴 수 있다는 것이 가장 큰 쓸모다. 대신 꾸러미가 원본과 무언가를 같이 쓰면 조용히 망가지고, 상태가 크면 비싸고, 밖에 저장하면 버전을 챙겨야 한다. 불변 데이터로 바꾸면 앞의 두 문제가 한꺼번에 줄어든다.
+
+## 면접에서 나올 만한 질문
+
+### 메멘토 패턴은 무엇이고 언제 쓰나요?
+
+객체의 내부 상태를 캡슐화를 깨지 않고 꾸러미로 떼어 저장했다가 나중에 그 상태로 되돌리는 패턴이다. 상태를 가진 원조자가 메멘토를 만들고 복원하며, 관리인은 메멘토를 열지 않고 보관만 한다. 자동 정렬처럼 역연산을 짜기 어려운 변경의 되돌리기, 편집 취소, 초안 복원에 쓴다.
+
+### 관리인이 메멘토 안을 보면 안 되는 이유는 무엇인가요?
+
+관리인이 원조자의 내부 구조에 묶이기 때문이다. 실행 기록이 도형 배열 모양을 알면 저장 방식을 바꿀 때 함께 고쳐야 하고, 관리인이 저장된 상태를 직접 고치면 복원한 상태가 저장한 적 없는 모습이 된다. 자바스크립트에서는 내보내지 않는 `WeakMap`이나 `#` 필드로 실행 중에도 내용을 숨길 수 있다. 타입스크립트의 `private`은 컴파일할 때만 막아서 `JSON.stringify`에 그대로 드러난다.
+
+### 메멘토를 구현할 때 가장 흔한 버그는 무엇인가요?
+
+꾸러미가 원본과 객체를 공유하는 얕은 복사다. 스프레드로 상태를 복사하면 안쪽 배열은 같은 것을 가리켜서, 저장 후의 변경이 꾸러미에도 보이고 되돌려도 아무것도 바뀌지 않는다. 저장할 때뿐 아니라 복원할 때도 복사해야, 복원 뒤의 편집이 아직 보관 중인 꾸러미를 고치지 않는다.
+
+### 상태가 클 때 메멘토의 메모리 비용은 어떻게 줄이나요?
+
+상태를 불변으로 다뤄 바뀐 부분만 새로 만들고 나머지는 공유한다. 그러면 이전 상태 객체가 그대로 메멘토가 된다. 1만 행 표를 500번 고친 실험에서 매번 전체를 복사하면 힙이 약 660MB 늘었고, 바뀐 행과 배열만 새로 만들면 약 40MB였다. 배열 복사 비용도 크면 영속 자료 구조를 쓰고, 그래도 크면 평소엔 커맨드를 쌓고 가끔만 스냅숏을 남긴다.
+
+### 메멘토와 커맨드는 되돌리기에서 어떻게 고르나요?
+
+역연산을 짜기 어렵거나 상태가 작고 불변이면 메멘토, 상태가 크고 잘게 자주 바뀌면 커맨드가 맞다. 메멘토는 되돌리는 코드가 필요 없어 실수가 적고, 커맨드는 바뀐 것만 기억해 작다. 실무에서는 명령을 쌓다가 일정 간격이나 큰 변경 직전에 스냅숏을 남기는 식으로 섞는다.
+
+### 메멘토를 localStorage나 서버에 저장할 때 주의할 점은 무엇인가요?
+
+저장된 메멘토는 배포를 건너 살기 때문에 형식 버전을 붙이고, 버전별 변환 함수를 두고, 모르는 버전이나 깨진 데이터는 복원하지 않고 버린다. 오래된 초안은 저장 시각으로 걸러 낸다. 그리고 localStorage는 같은 출처의 스크립트가 모두 읽을 수 있으니 카드 번호, 비밀번호, 토큰은 메멘토에서 뺀다.
+
+### 브라우저 API에서 메멘토의 예를 들어 주세요.
+
+캔버스의 `ctx.save()`와 `ctx.restore()`가 그리기 상태를 스택에 쌓고 꺼내는 메멘토다. 단, 저장되는 것은 변환 행렬이나 스타일 같은 설정이고 그려진 픽셀은 아니다. `history.pushState`의 state도 브라우저가 복제해 맡아 두었다가 `popstate`로 돌려주는 메멘토라서, 스크롤 위치나 필터처럼 다시 만들기 어려운 화면 상태를 담는 데 쓴다.

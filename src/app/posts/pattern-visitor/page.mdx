@@ -1,0 +1,425 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-visitor");
+
+사내 문서 도구를 만들고 있다. 문서는 제목, 문단, 텍스트, 링크 같은 노드로 이루어진 트리다. 처음 요구는 "HTML로 그려 달라"였다. 그다음엔 "글자 수를 보여 달라", 그다음엔 "깨진 링크를 찾아 달라", "목차를 뽑아 달라". 요구가 올 때마다 노드 클래스 네 개를 모두 열어 메서드를 하나씩 더했다. 이제 `Link` 클래스 하나에 렌더링, 글자 세기, 링크 검사, 목차 코드가 섞여 있다.
+
+노드 종류는 거의 그대로인데 그 위에서 하는 일(연산)만 계속 는다. 비지터(Visitor, 방문자) 패턴은 연산을 노드 밖의 객체 하나로 모은다. "글자 세기"는 `WordCounter` 하나에, "링크 모으기"는 `LinkCollector` 하나에 있고, 노드 클래스는 새 연산이 생겨도 고치지 않는다. [컴포지트 패턴](/posts/pattern-composite)에서 트리 위 계산을 fold 함수로 줄이는 방법을 봤는데, 이 글은 그 반대편, 노드 종류마다 다른 처리를 바깥에서 늘리는 방법을 다룬다. ESLint 규칙과 Babel 플러그인이 모두 이 모양이다.
+
+## 연산이 하나 늘 때마다 모든 노드 클래스를 연다
+
+처음 코드는 이렇게 자란다. 연산마다 모든 노드에 메서드가 하나씩 생긴다.
+
+```ts
+interface DocNode {
+  toHtml(): string;
+  wordCount(): number;
+  collectLinks(out: string[]): void;
+  // 목차 뽑기를 넣으려면 여기에 하나 더, 그리고 모든 클래스에 하나 더
+}
+
+class Link implements DocNode {
+  constructor(readonly url: string, readonly children: DocNode[]) {}
+  toHtml() {
+    return `<a href="${this.url}">${this.children.map((c) => c.toHtml()).join("")}</a>`;
+  }
+  wordCount(): number {
+    return this.children.reduce((n, c) => n + c.wordCount(), 0);
+  }
+  collectLinks(out: string[]) {
+    out.push(this.url);
+    this.children.forEach((c) => c.collectLinks(out));
+  }
+}
+```
+
+나쁜 점이 둘이다. 연산 하나를 이해하려면 노드 클래스 네 개에 흩어진 조각을 모아 읽어야 한다. 그리고 연산을 더하는 사람이 노드 클래스를 고칠 수 있어야 한다. 노드 클래스가 라이브러리 안에 있다면(마크다운 파서의 노드, 자바스크립트 파서의 AST) 아예 메서드를 더할 수 없다.
+
+## 연산을 노드 밖으로 꺼낸다
+
+비지터는 계층을 둘로 나눈다. 노드(Element) 계층은 `accept(visitor)` 하나만 가진다. 방문자(Visitor) 계층은 노드 종류마다 `visitHeading`, `visitLink` 같은 메서드를 가진다. 연산 하나가 방문자 클래스 하나다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="노드는 accept만 알고, 연산은 방문자 하나에 모인다"
+  nodes={[
+    { id: "node", label: "DocNode", sub: "accept(v)", x: 95, y: 45, w: 120 },
+    { id: "heading", label: "Heading", x: 45, y: 140, w: 80 },
+    { id: "link", label: "Link", x: 140, y: 140, w: 70 },
+    { id: "visitor", label: "DocVisitor", sub: "visitX(node)", x: 300, y: 45, w: 150 },
+    { id: "words", label: "WordCounter", x: 255, y: 140, w: 110 },
+    { id: "links", label: "LinkCollector", x: 345, y: 225, w: 110 },
+  ]}
+  edges={[
+    { from: "heading", to: "node", dashed: true },
+    { from: "link", to: "node", dashed: true },
+    { from: "words", to: "visitor", dashed: true },
+    { from: "links", to: "visitor", dashed: true },
+    { from: "link", to: "visitor", label: "v.visitLink(this)" },
+    { from: "words", to: "heading", label: "읽는다", dashed: true },
+  ]}
+/>
+
+```ts
+interface DocVisitor<R> {
+  visitHeading(node: Heading): R;
+  visitParagraph(node: Paragraph): R;
+  visitText(node: TextNode): R;
+  visitLink(node: Link): R;
+}
+
+interface DocNode {
+  accept<R>(visitor: DocVisitor<R>): R;
+}
+
+class Heading implements DocNode {
+  constructor(readonly depth: number, readonly children: DocNode[]) {}
+  accept<R>(v: DocVisitor<R>) { return v.visitHeading(this); }
+}
+class Paragraph implements DocNode {
+  constructor(readonly children: DocNode[]) {}
+  accept<R>(v: DocVisitor<R>) { return v.visitParagraph(this); }
+}
+class TextNode implements DocNode {
+  constructor(readonly value: string) {}
+  accept<R>(v: DocVisitor<R>) { return v.visitText(this); }
+}
+class Link implements DocNode {
+  constructor(readonly url: string, readonly children: DocNode[]) {}
+  accept<R>(v: DocVisitor<R>) { return v.visitLink(this); }
+}
+
+// 연산 1: 글자 수 세기
+class WordCounter implements DocVisitor<number> {
+  private sum(children: DocNode[]): number {
+    return children.reduce((n, c) => n + c.accept(this), 0);
+  }
+  visitHeading(n: Heading) { return this.sum(n.children); }
+  visitParagraph(n: Paragraph) { return this.sum(n.children); }
+  visitLink(n: Link) { return this.sum(n.children); }
+  visitText(n: TextNode) { return n.value.split(/\s+/).filter(Boolean).length; }
+}
+
+// 연산 2: 링크 모으기. 노드 클래스는 하나도 고치지 않는다
+class LinkCollector implements DocVisitor<void> {
+  readonly urls: string[] = [];
+  visitHeading(n: Heading) { n.children.forEach((c) => c.accept(this)); }
+  visitParagraph(n: Paragraph) { n.children.forEach((c) => c.accept(this)); }
+  visitLink(n: Link) {
+    this.urls.push(n.url);
+    n.children.forEach((c) => c.accept(this));
+  }
+  visitText() {}
+}
+
+const doc: DocNode[] = [
+  new Heading(2, [new TextNode("캐시를 지우는 때")]),
+  new Paragraph([
+    new TextNode("자세한 건 "),
+    new Link("/posts/caching-strategies", [new TextNode("캐시 전략")]),
+    new TextNode(" 글에 있다."),
+  ]),
+];
+const counter = new WordCounter();
+const links = new LinkCollector();
+console.log(doc.reduce((n, node) => n + node.accept(counter), 0));
+doc.forEach((node) => node.accept(links));
+console.log(links.urls);
+```
+
+```text
+9
+[ '/posts/caching-strategies' ]
+```
+
+목차 뽑기를 더하려면 `TocBuilder` 클래스 하나를 만들면 된다. 노드 클래스 네 개는 열지 않는다. 연산 하나에 필요한 코드가 한 파일에 모이고, 연산마다 필요한 상태(`urls` 배열, 목차를 만드는 중의 제목 스택)도 그 방문자 안에 있다.
+
+## accept가 한 번 더 부르는 이유
+
+처음 보면 `accept`가 이상하다. 그냥 `counter.visit(node)`라고 부르면 될 것을, 왜 노드에게 "나를 방문해 달라"고 부탁하고 노드가 다시 `v.visitLink(this)`를 부를까?
+
+이유는 메서드를 고르는 방식에 있다. 자바나 C++의 오버로딩은 컴파일 시점에 변수의 선언 타입으로 메서드를 고른다. `DocNode node`를 `visitor.visit(node)`에 넘기면, 실제로는 `Link`여도 `visit(DocNode)`가 불린다. 실행 중의 실제 타입으로 고르는 건 `node.accept(...)`처럼 메서드를 가진 객체 쪽(가상 메서드 호출) 하나뿐이다. 그래서 두 번 고른다. 한 번은 노드의 실제 타입으로 `accept`를 고르고, 그 안에서 `this`의 타입이 정확히 `Link`인 상태로 방문자의 실제 타입에 맞는 `visitLink`를 고른다. 이걸 더블 디스패치(double dispatch)라고 부른다. 아래 그림에서 다음을 누르면 문단 하나를 셀 때 호출이 두 계층 사이를 오가는 모습이 보인다.
+
+<SequenceDiagram
+  caption="노드가 자기 타입을 알려 주고, 방문자가 그 타입에 맞는 일을 한다"
+  actors={[
+    { id: "client", label: "Client" },
+    { id: "para", label: "Paragraph" },
+    { id: "visitor", label: "WordCounter" },
+    { id: "link", label: "Link" },
+    { id: "text", label: "TextNode" },
+  ]}
+  steps={[
+    { from: "client", to: "para", label: "accept(counter)", title: "첫 번째 고르기: 노드의 실제 타입", detail: "Client는 DocNode라는 것만 안다. accept는 가상 메서드라 실제 타입인 Paragraph의 것이 불린다." },
+    { from: "para", to: "visitor", label: "visitParagraph(this)", title: "두 번째 고르기: 방문자의 실제 타입", detail: "Paragraph 안에서 this는 정확히 Paragraph다. 방문자가 WordCounter라서 그 클래스의 visitParagraph가 불린다." },
+    { from: "visitor", to: "link", label: "accept(this)", title: "자식에게 같은 부탁을 한다", detail: "WordCounter는 자식이 무엇인지 묻지 않는다. 자식마다 accept를 부르면 자식이 자기 타입을 알려 준다." },
+    { from: "link", to: "visitor", label: "visitLink(this)", title: "링크도 같은 길로 돌아온다", detail: "instanceof 검사가 한 줄도 없다. 타입별 분기는 두 번의 메서드 호출이 대신한다." },
+    { from: "visitor", to: "text", label: "accept(this)", title: "잎 노드까지 내려간다", detail: "링크 안의 텍스트 '캐시 전략'에 도착한다." },
+    { from: "text", to: "visitor", label: "visitText(this) → 2", title: "잎에서 값이 나오고 위로 더해진다", detail: "텍스트 노드에서만 실제로 센다. 나머지 방문 메서드는 자식의 합을 돌려준다.", payload: "\"캐시 전략\".split(/\\s+/).length === 2" },
+  ]}
+/>
+
+타입스크립트와 자바스크립트에는 오버로딩 자체가 실행 중에 없다. 타입 정보는 컴파일 뒤 사라지니 `visit(node: Link)`와 `visit(node: Heading)`를 따로 둘 방법이 없다. 그래서 자바스크립트 생태계의 방문자는 대부분 노드에 `type` 문자열을 두고 그 문자열로 처리 함수를 찾는다. 뒤에서 볼 ESLint와 Babel이 그렇다. `accept`는 없어지지만 "노드 종류에 따라 다른 처리를 바깥에서 고른다"는 생각은 같다.
+
+## 트리를 누가 걷나
+
+앞의 코드에서는 방문자가 자식에게 `accept`를 불러 직접 내려갔다. 걷는 책임을 어디에 둘지는 세 가지 선택이 있다. 노드가 `accept` 안에서 자식까지 돌거나, 방문자가 돌거나, 따로 걷는 함수(walker)가 돌면서 방문자에게 노드를 하나씩 넘기거나. 실무 도구는 대부분 세 번째다. 걷는 순서를 한 곳에서 정하고, 방문자는 "이 종류의 노드에 들어갈 때 무엇을 하나"만 적는다.
+
+walker는 노드에 들어갈 때(enter)와 자식을 다 돌고 나올 때(leave, exit) 두 번 알려 줄 수 있다. 목차를 만드는 방문자라면 들어갈 때 제목을 기록하고, 함수 안의 `return` 개수를 세는 규칙이라면 함수에 들어갈 때 카운터를 쌓고 나올 때 판정한다. 아래는 앞의 문서를 walker가 걷는 순서와, 링크를 모으는 방문자의 상태다.
+
+<AlgoTrace
+  caption="walker가 깊이 우선으로 걷고, 방문자는 자기가 아는 노드에서만 일한다"
+  memoryLabel="LinkCollector가 모은 것"
+  cells={["root", "heading", "text", "paragraph", "text", "link", "text", "text"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "root에 들어간다. LinkCollector에는 root용 처리가 없어 그냥 지나간다." },
+    { pointer: 1, memory: [], caption: "제목에 들어간다. 목차 방문자였다면 여기서 '캐시를 지우는 때'를 기록했을 것이다." },
+    { pointer: 2, memory: [], caption: "제목 안의 텍스트. 자식이 없으니 바로 나온다." },
+    { pointer: 3, memory: [], caption: "제목에서 나와 문단에 들어간다. 걷는 순서는 walker가 정한다." },
+    { pointer: 5, found: [5], memory: ["/posts/caching-strategies"], caption: "링크에 들어가는 순간 방문자의 link 처리가 불려 주소를 모은다." },
+    { pointer: 6, memory: ["/posts/caching-strategies"], caption: "링크 안의 텍스트까지 내려갔다가 링크에서 나온다(leave)." },
+    { pointer: 7, found: [5], memory: ["/posts/caching-strategies"], caption: "마지막 텍스트를 지나 root에서 나오면 끝. 방문자는 링크 하나만 신경 썼다." },
+  ]}
+/>
+
+## ESLint 규칙 하나가 방문자 하나다
+
+ESLint 규칙을 짜 본 적이 있다면 이미 방문자를 짠 것이다. 규칙의 `create(context)`는 노드 종류(정확히는 셀렉터)를 키로, 처리 함수를 값으로 하는 객체를 돌려준다. ESLint가 소스 코드를 파싱한 AST(ESTree 형식)를 한 번 걸으며, 노드마다 맞는 처리 함수를 부른다.
+
+```ts
+interface Node { type: string; loc: { start: { line: number } } }
+interface RuleContext { report(d: { node: Node; messageId: string }): void }
+
+const noRawFetch = {
+  meta: { type: "problem", messages: { raw: "fetch 대신 httpClient를 쓴다" } },
+  create(context: RuleContext) {
+    return {
+      // 방문자의 visit 메서드: 셀렉터마다 하나
+      "CallExpression[callee.name='fetch']"(node: Node) {
+        context.report({ node, messageId: "raw" });
+      },
+    };
+  },
+};
+```
+
+셀렉터는 CSS 선택자와 비슷한 문법으로 "어떤 노드에서 불러 달라"를 적는다. 한 줄을 나눠 보자.
+
+<UrlAnatomy
+  caption="ESLint 규칙의 방문 키 하나"
+  base={'"'}
+  separator=""
+  joiner=""
+  params={[
+    { key: "type", display: "CallExpression", title: "노드 종류", description: "ESTree 노드의 type 값이다. 이것만 쓰면 모든 함수 호출에서 불린다. 고전적인 방문자의 visitCallExpression과 같다.", required: true },
+    { key: "attr", display: "[callee.name='fetch']", title: "속성 조건", description: "노드의 속성 경로가 이 값일 때만 부른다. callee가 Identifier인 fetch(...)만 맞는다. window.fetch(...)는 callee가 MemberExpression이라 맞지 않는다.", code: "fetch(url)        → callee: Identifier { name: \"fetch\" }\nwindow.fetch(url) → callee: MemberExpression" },
+    { key: "exit", display: ":exit", title: "나올 때 부르기", description: "붙이면 노드의 자식을 다 돈 뒤 나올 때 불린다. 없으면 들어갈 때다. 함수 하나를 다 본 뒤 판정해야 하는 규칙이 쓴다." },
+    { key: "end", display: "\"", title: "키 전체가 문자열", description: "객체의 키라서 따옴표로 감싼다. 같은 규칙 안에 키를 여러 개 두면 방문 메서드가 여러 개인 방문자가 된다." },
+  ]}
+/>
+
+이 규칙과, 함수 호출 수를 세는 규칙을 함께 걸어 ESLint 9.39의 `Linter`로 실제 코드를 검사했다. 두 규칙의 처리 함수가 불린 순서도 함께 찍었다.
+
+```js
+async function load(id) {
+  const res = await fetch("/api/orders/" + id);
+  log(res.status);
+  return window.fetch("/api/raw");
+}
+```
+
+```text
+2:21  local/no-raw-fetch  fetch 대신 httpClient를 쓴다
+count | fetch-enter@2 | count | count | Program:exit calls=3
+```
+
+두 가지가 보인다. 첫째, `window.fetch`는 잡히지 않았다. 셀렉터가 AST 모양에 정확히 맞아야 해서다. 규칙을 짤 때는 [AST Explorer](https://astexplorer.net) 같은 도구로 실제 노드 모양을 먼저 확인한다. 둘째, 두 규칙의 처리 함수가 번갈아 불렸다. ESLint는 규칙마다 트리를 따로 걷지 않는다.
+
+## 한 번 걸으며 여럿이 본다
+
+ESLint는 켜진 모든 규칙의 처리 함수를 노드 종류별로 모아 두고, 트리를 한 번만 걸으며 노드마다 해당하는 규칙들을 차례로 부른다. Babel도 플러그인마다 받은 방문자를 하나로 합쳐(`traverse.visitors.merge`) 한 번 걷는다. 방문자가 각자 상태를 들고 서로를 모르기 때문에 이렇게 합칠 수 있다.
+
+<NetworkTopology
+  caption="walker는 트리를 한 번 걷고, 노드마다 관심 있는 규칙만 깨운다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "program", label: "Program", x: 55, y: 125, icon: "router", w: 80 },
+    { id: "call1", label: "fetch()", sub: "line 2", x: 175, y: 45, icon: "switch", w: 84 },
+    { id: "call2", label: "log()", sub: "line 3", x: 175, y: 125, icon: "switch", w: 84 },
+    { id: "call3", label: "window.fetch()", sub: "line 4", x: 175, y: 205, icon: "switch", w: 110 },
+    { id: "rule1", label: "no-raw-fetch", x: 330, y: 70, icon: "firewall", w: 100 },
+    { id: "rule2", label: "count-calls", x: 330, y: 180, icon: "server", w: 96 },
+  ]}
+  links={[
+    { from: "program", to: "call1" },
+    { from: "program", to: "call2" },
+    { from: "program", to: "call3" },
+    { from: "call1", to: "rule1", dashed: true },
+    { from: "call1", to: "rule2", dashed: true },
+    { from: "call2", to: "rule2", dashed: true },
+    { from: "call3", to: "rule1", dashed: true },
+    { from: "call3", to: "rule2", dashed: true },
+  ]}
+  steps={[
+    { path: ["program", "call1", "rule2"], packet: "enter", highlight: ["rule1"], title: "첫 호출에 들어가면 두 규칙이 깨어난다", detail: "CallExpression을 듣는 count-calls가 먼저, 셀렉터가 맞는 no-raw-fetch가 이어서 불린다." },
+    { path: ["call1", "rule1"], packet: "report", title: "no-raw-fetch가 문제를 보고한다", detail: "fetch(...)의 callee가 Identifier fetch라 셀렉터가 맞는다.", payload: "2:21  local/no-raw-fetch" },
+    { path: ["program", "call2", "rule2"], packet: "enter", title: "log()에는 한 규칙만 관심이 있다", detail: "셀렉터가 맞지 않는 no-raw-fetch는 아예 불리지 않는다. 걸을 때마다 모든 규칙을 깨우지 않는다." },
+    { path: ["program", "call3", "rule1"], packet: "enter", blocked: true, title: "window.fetch는 셀렉터를 비켜 간다", detail: "callee가 MemberExpression이라 [callee.name='fetch']에 맞지 않는다. 규칙 작성자의 의도와 다르게 통과한다." },
+    { path: ["call3", "rule2"], packet: "enter", title: "세는 규칙에는 들어온다", detail: "count-calls는 모든 CallExpression을 들으니 세 번째 호출도 센다." },
+    { path: ["program", "rule2"], packet: "exit", title: "Program에서 나올 때 마무리한다", detail: "Program:exit에서 count-calls가 모은 값으로 판정한다. 트리는 처음부터 끝까지 한 번만 걸었다.", payload: "Program:exit calls=3" },
+  ]}
+/>
+
+한 번 걷는 것과 여러 번 걷는 것의 차이를 재 봤다. 문단 20만 개(노드 약 120만 개)짜리 문서에서 글자 세기, 링크 세기, 문단 세기 방문자 셋을 각각 따로 걸을 때와, 하나로 합쳐 한 번 걸을 때다. 각각 아홉 번 돌린 중앙값이다.
+
+```text
+3 walks, 1 visitor each: 169 {"words":800000,"links":200000,"paras":200000}
+1 walk, 3 visitors merged: 86 {"words":800000,"links":200000,"paras":200000}
+```
+
+결과는 같고 시간은 절반쯤이다. 노드를 방문하는 비용 자체가 줄었기 때문이다. 규칙이 수백 개인 ESLint 설정에서 규칙마다 트리를 걸었다면 훨씬 느렸을 것이다. 대신 합쳐진 방문자는 서로 순서에 기대면 안 된다. 같은 노드에서 어느 규칙이 먼저 불릴지에 기대는 규칙은 설정 순서가 바뀌면 깨진다. 트리를 고치는 Babel은 문서에 플러그인 순서가 결과에 영향을 준다는 항목을 따로 두고 있다.
+
+이 블로그도 같은 일을 한다. 글 사이에 자동 링크를 거는 remark 플러그인은 마크다운 트리(mdast)를 걸으며 `text` 노드에서만 일하고, 제목·코드·링크 노드 아래로는 내려가지 않는다. 방문자가 "이 종류는 건너뛴다"를 정하는 것도 흔한 쓰임이다.
+
+## 타입스크립트라면 함수 표로
+
+`accept`와 클래스 계층 없이, 판별 유니온과 매핑 타입으로 같은 것을 만들 수 있다. 방문자는 "노드 종류마다 함수 하나"인 객체이고, 하나라도 빠지면 컴파일러가 알려 준다.
+
+```ts
+type DocNode =
+  | { type: "heading"; depth: number; children: DocNode[] }
+  | { type: "paragraph"; children: DocNode[] }
+  | { type: "text"; value: string }
+  | { type: "link"; url: string; children: DocNode[] };
+
+// 노드 종류마다 함수 하나. 하나라도 빠지면 컴파일 에러
+type Visitor<R> = { [K in DocNode["type"]]: (node: Extract<DocNode, { type: K }>) => R };
+
+function visit<R>(node: DocNode, v: Visitor<R>): R {
+  return (v[node.type] as (n: DocNode) => R)(node);
+}
+
+const words: Visitor<number> = {
+  heading: (n) => n.children.reduce((s, c) => s + visit(c, words), 0),
+  paragraph: (n) => n.children.reduce((s, c) => s + visit(c, words), 0),
+  link: (n) => n.children.reduce((s, c) => s + visit(c, words), 0),
+  text: (n) => n.value.split(/\s+/).filter(Boolean).length,
+};
+```
+
+각 함수의 `n`은 자기 노드 타입으로 좁혀져 있다. `link` 함수 안에서만 `n.url`을 쓸 수 있다. 클래스 버전에 비해 짧고, 노드가 직렬화 가능한 평범한 객체라 파서가 만든 JSON 트리에 바로 쓸 수 있다. 클래스 버전이 나은 경우는 방문자가 여러 메서드에 걸친 상태와 도우미 메서드를 많이 가질 때, 또는 자바처럼 언어가 그 형태를 기대할 때다.
+
+## 노드 종류가 늘면 모든 방문자가 아프다
+
+비지터의 대가가 여기 있다. 연산을 더하기는 쉬워졌지만, 노드 종류를 더하기는 어려워졌다. 문서에 `callout`(경고 상자) 노드를 넣으면 모든 방문자에 처리 함수를 하나씩 더해야 한다. 앞의 `DocNode`에 `callout` 갈래를 하나 추가하고 컴파일하면 이렇게 나온다.
+
+```text
+fn.ts(15,7): error TS2741: Property 'callout' is missing in type '{ heading: (n: { type: "heading"; depth: number; children: DocNode[]; }) => number; paragraph: (n: { type: "paragraph"; children: DocNode[]; }) => number; link: (n: { type: "link"; url: string; children: DocNode[]; }) => number; text: (n: { ...; }) => number; }' but required in type 'Visitor<number>'.
+```
+
+이 에러는 좋은 소식이다. 빠뜨린 방문자를 모두 찾아 주기 때문이다. 나쁜 소식은 이걸 피하려고 흔히 쓰는 방법이다. 모든 방문 메서드를 빈 함수로 미리 구현한 기본 방문자 클래스를 두고 필요한 것만 재정의하게 하면, 새 노드 종류가 생겨도 아무 에러가 나지 않는다. 글자 세기 방문자가 경고 상자 안의 글자를 조용히 빼먹는다. 편하게 만든 만큼 놓친 곳을 찾을 방법이 사라진다. 기본 동작이 "자식으로 내려간다"인 walker(앞의 ESLint, 아래 연습 문제)는 이 문제를 덜 겪는다. 모르는 노드는 건너뛰어도 그 안의 아는 노드에는 여전히 들르기 때문이다.
+
+이 긴장은 프로그래밍 언어 연구에서 표현 문제(expression problem)라고 부른다. 노드 종류마다 클래스와 메서드를 두는 객체지향 방식은 종류를 더하기 쉽고 연산을 더하기 어렵다. 방문자는 정확히 그 반대다. 그래서 고르는 기준은 무엇이 더 자주 늘어나느냐다. 프로그래밍 언어의 AST, 마크다운 노드, SQL 구문 트리처럼 노드 종류는 거의 고정이고 그 위의 검사와 변환이 계속 느는 곳에서 방문자가 빛난다. 노드 종류가 자주 느는 도메인 모델(상품 종류, 결제 수단)에서는 노드에 메서드를 두는 편이 낫다.
+
+## 이웃 패턴과의 경계
+
+[컴포지트](/posts/pattern-composite)는 트리 구조 자체를 만드는 패턴이고, 비지터는 그 트리 위에 연산을 얹는 방법이다. 둘은 경쟁하지 않고 함께 쓰인다. [이터레이터](/posts/pattern-iterator)는 원소를 하나씩 꺼내 주기만 하고, 꺼낸 원소가 어떤 종류인지에 따라 다른 일을 하는 건 쓰는 쪽 몫이다. 비지터는 그 "종류에 따라 다른 일"을 구조로 만든다. [인터프리터](/posts/pattern-interpreter)는 문법 규칙마다 노드 클래스를 두고 노드에 `interpret()`를 넣는데, 해석 말고도 출력, 최적화, 타입 검사 같은 연산이 늘어나면 그 연산들을 방문자로 빼는 것이 흔한 다음 단계다.
+
+## 직접 만드는 문서 통계
+
+`docStats(doc)`를 완성해 보자. 문서는 `{ type, children?, value?, url?, depth? }` 모양의 평범한 객체 트리다. walker는 모든 노드를 깊이 우선으로 돌고, 방문자 객체는 노드 종류(`text`, `link`, `heading`)마다 처리 함수를 가진다. 모르는 종류(`root`, `paragraph`, `callout` 등)는 처리 없이 자식으로만 내려간다.
+
+- `text`: 공백으로 나눈 단어 수를 더한다.
+- `link`: `url`을 모은다.
+- `heading`: `"#".repeat(depth) + " " + 제목 안의 모든 텍스트를 이은 것`을 모은다.
+
+`[단어 수, 링크 목록, 제목 목록]`을 돌려준다.
+
+<CodePlayground
+  caption="walker 하나와 노드 종류별 처리 함수"
+  functionName="docStats"
+  initialCode={`function docStats(doc) {
+  const stats = { words: 0, links: [], headings: [] };
+  const visitor = {
+    // text, link, heading 처리 함수를 채운다
+  };
+  const walk = (node) => {
+    // 이 노드의 처리 함수를 부르고, 자식으로 내려간다
+  };
+  walk(doc);
+  return [stats.words, stats.links, stats.headings];
+}`}
+  solution={`function docStats(doc) {
+  const stats = { words: 0, links: [], headings: [] };
+  const textOf = (node) =>
+    node.type === "text" ? node.value : (node.children ?? []).map(textOf).join("");
+  const visitor = {
+    text: (n) => { stats.words += n.value.split(/\\s+/).filter(Boolean).length; },
+    link: (n) => { stats.links.push(n.url); },
+    heading: (n) => { stats.headings.push("#".repeat(n.depth) + " " + textOf(n)); },
+  };
+  const walk = (node) => {
+    visitor[node.type]?.(node); // 모르는 종류는 처리 없이 지나간다
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(doc);
+  return [stats.words, stats.links, stats.headings];
+}`}
+  tests={[
+    {
+      args: [{ type: "root", children: [
+        { type: "heading", depth: 2, children: [{ type: "text", value: "캐시를 지우는 때" }] },
+        { type: "paragraph", children: [
+          { type: "text", value: "자세한 건 " },
+          { type: "link", url: "/posts/caching-strategies", children: [{ type: "text", value: "캐시 전략" }] },
+          { type: "text", value: " 글에 있다." },
+        ] },
+      ] }],
+      expected: [9, ["/posts/caching-strategies"], ["## 캐시를 지우는 때"]],
+      label: "제목 하나, 링크 하나",
+    },
+    { args: [{ type: "root", children: [] }], expected: [0, [], []], label: "빈 문서" },
+    {
+      args: [{ type: "root", children: [
+        { type: "heading", depth: 2, children: [{ type: "text", value: "읽기 " }, { type: "link", url: "/a", children: [{ type: "text", value: "A" }] }] },
+        { type: "callout", children: [{ type: "heading", depth: 3, children: [{ type: "text", value: "주의" }] }, { type: "link", url: "/b", children: [] }] },
+      ] }],
+      expected: [3, ["/a", "/b"], ["## 읽기 A", "### 주의"]],
+      label: "모르는 callout 안으로도 내려간다",
+    },
+  ]}
+/>
+
+비지터는 노드 종류는 고정이고 그 위의 연산이 계속 느는 트리에서, 연산을 노드 밖의 객체 하나로 모으는 패턴이다. 고전적인 형태는 `accept`와 `visitX`의 두 번 호출로 노드의 실제 타입을 찾고, 자바스크립트 도구들은 `type` 문자열과 처리 함수 표로 같은 일을 한다. 새 연산은 파일 하나로 끝나지만 새 노드 종류는 모든 방문자를 건드리게 되니, 무엇이 더 자주 늘어나는지를 먼저 본다.
+
+## 면접에서 나올 만한 질문
+
+### 비지터 패턴은 무엇이고 언제 쓰나요?
+
+객체 구조(대개 트리)의 노드 클래스를 고치지 않고 그 위에 새 연산을 더하기 위해, 연산을 노드 종류별 메서드를 가진 방문자 객체로 꺼내는 패턴이다. 노드 종류는 거의 고정이고 검사, 변환, 출력 같은 연산이 계속 느는 곳에 맞는다. 컴파일러와 린터의 AST 처리가 대표적이다.
+
+### 더블 디스패치가 무엇이고 왜 필요한가요?
+
+호출할 메서드를 두 객체의 실제 타입으로 고르는 것이다. 자바 같은 언어의 오버로딩은 컴파일 시점의 선언 타입으로 메서드를 고르기 때문에 `visitor.visit(node)`만으로는 노드의 실제 타입에 맞는 메서드를 찾지 못한다. 그래서 `node.accept(visitor)`로 노드의 실제 타입을 한 번 고르고, 그 안에서 `visitor.visitLink(this)`로 방문자의 실제 타입을 한 번 더 고른다.
+
+### 비지터 패턴의 단점은 무엇인가요?
+
+연산을 더하기 쉬운 대신 노드 종류를 더하기 어렵다. 새 노드가 생기면 모든 방문자에 처리 메서드를 더해야 한다. 이걸 피하려고 빈 기본 구현을 가진 기본 방문자를 두면 새 노드를 조용히 빼먹는 버그가 생긴다. 또 방문자가 노드의 내부 필드를 읽어야 하니 노드가 캡슐화를 일부 포기하게 된다.
+
+### 표현 문제(expression problem)와 비지터는 어떤 관계인가요?
+
+표현 문제는 노드 종류와 연산 두 축을 모두 기존 코드 수정 없이 늘리기 어렵다는 문제다. 노드에 메서드를 두는 객체지향 방식은 종류를 늘리기 쉽고 연산을 늘리기 어렵고, 비지터는 그 반대다. 그래서 어느 쪽이 더 자주 늘어나는지를 보고 고른다.
+
+### 자바스크립트 생태계에서 비지터를 본 적이 있나요?
+
+ESLint 규칙의 `create`가 돌려주는 객체가 방문자다. 노드 종류나 셀렉터를 키로 처리 함수를 두면 ESLint가 AST를 한 번 걸으며 맞는 함수를 부른다. Babel 플러그인의 `visitor` 객체도 같고, 플러그인마다 받은 방문자를 하나로 합쳐 한 번만 걷는다. 자바스크립트에는 실행 중 오버로딩이 없어서 `accept` 대신 노드의 `type` 문자열로 처리 함수를 찾는다.
+
+### 방문자 여러 개를 합쳐 한 번만 걷는 이유는 무엇인가요?
+
+트리를 걷는 비용을 한 번만 내기 위해서다. 노드 120만 개 문서에서 방문자 셋을 따로 걸으면 169ms, 합쳐서 한 번 걸으면 86ms였다. 방문자들이 서로 상태를 공유하지 않아야 합칠 수 있고, 같은 노드에서 어느 방문자가 먼저 불리는지에 기대면 안 된다.
+
+### 타입스크립트에서 비지터를 클래스 없이 만들 수 있나요?
+
+판별 유니온과 매핑 타입으로 "노드 종류마다 함수 하나"인 객체 타입을 만들면 된다. 각 함수의 인자는 자기 노드 타입으로 좁혀지고, 노드 종류를 하나 더하면 처리 함수를 빠뜨린 방문자가 모두 컴파일 에러로 드러난다. 방문자가 상태와 도우미 메서드를 많이 가진다면 클래스가 읽기 쉽다.

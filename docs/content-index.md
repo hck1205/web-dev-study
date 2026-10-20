@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 236편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 245편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -75,7 +75,7 @@
 - 길이: 384줄
 - 소제목: 요청 하나가 지나가는 길 / 원래 MVC는 웹을 위한 게 아니었다 / HTTP 위로 옮기면서 생긴 변화 / 컨트롤러가 뚱뚱해지는 이유 / 업무 규칙은 서비스와 모델에 둔다 / MVP와 MVVM은 무엇을 바꿨나 / 브라우저로 옮겨 온 MVC와 양방향 바인딩의 한계 / 서비스가 커지면 계층보다 기능으로 나눈다 / 경계가 무너진 코드는 장애 문의로 돌아온다 / 다시 쿠폰 입력칸으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-locking-deadlock
-- 키워드 백링크 →: client-data-cache, pattern-proxy, loading-patterns, http-status-codes, gateway
+- 키워드 백링크 →: client-data-cache, pattern-observer, pattern-proxy, loading-patterns, http-status-codes, gateway
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter
 
 #### `rest-api-design` — REST API를 설계할 때 정할 것들
@@ -167,7 +167,7 @@
 - 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 401이 쏟아지면 토큰부터 뜯어 본다 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: cookie-session-login, oauth
 - 키워드 백링크 →: base64
-- 이 글로 오는 글 ←: base64, cookie-session-login, gateway, git-remote-collaboration, github-actions-docker-ecr, http-message, http-status-codes, oauth, zero-trust-architecture
+- 이 글로 오는 글 ←: base64, cookie-session-login, gateway, git-remote-collaboration, github-actions-docker-ecr, http-message, http-status-codes, oauth, pattern-strategy, zero-trust-architecture
 
 ### Programming › Backend › Messaging (`programming/backend/messaging`)
 
@@ -191,7 +191,7 @@
 - 소제목: 토픽은 파티션 여러 개로 된 로그다 / 키가 파티션을 정하고, 순서는 파티션 안에서만 지킨다 / 오프셋은 컨슈머가 남기는 책갈피다 / 소비자 그룹과 리밸런싱 / 랙은 남은 일의 양이다 / 리더 하나에 팔로워 둘, 그리고 acks / 얼마나 오래 둘까: 보관 기간과 컴팩션 / 랙 알람이 울렸을 때 보는 순서 / Kafka가 맞지 않는 곳 / 파티션 수가 병렬성의 상한이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: pub-sub, message-queue-basics, event-driven-architecture, message-delivery-semantics, consistent-hashing, rabbitmq-basics
 - 키워드 백링크 →: db-type-wide-column
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-transactions-2pc, elasticsearch-inverted-index, event-driven-architecture, k8s-hpa, k8s-service-types, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, pub-sub, rabbitmq-basics, realtime-communication, redis-basics, saga-pattern
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-transactions-2pc, elasticsearch-inverted-index, event-driven-architecture, k8s-hpa, k8s-service-types, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, pattern-iterator, pub-sub, rabbitmq-basics, realtime-communication, redis-basics, saga-pattern
 
 #### `message-delivery-semantics` — 메시지 전달 보장: 최대 한 번, 최소 한 번, 정확히 한 번은 어디까지
 
@@ -224,7 +224,7 @@
 - 소제목: 한 명에게 주는 큐, 모두에게 주는 토픽 / Redis PUBLISH는 그 순간 듣던 사람에게만 간다 / 느린 구독자 하나는 끊긴다 / Redis Streams: 그룹마다 모두, 그룹 안에서는 나눠서 / 그룹이 얼마나 밀렸는지 보기 / 죽은 소비자의 몫 가져오기 / 스트림을 자르면 늦은 그룹은 모른 채 잃는다 / SNS 토픽 뒤에 SQS 큐를 하나씩 / 구독자가 고르게 하는 필터 / 이벤트 이름과 내용은 구독자를 위해 짓는다 / 구독자가 메시지를 못 받는다는 신고가 오면 / 복사하는 곳과 나누는 곳 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, dead-letter-queue, event-driven-architecture, redis-basics, redis-cluster, kafka-basics
 - 키워드 백링크 →: http-caching-cdn, dns
-- 이 글로 오는 글 ←: dead-letter-queue, event-driven-architecture, kafka-basics, message-queue-basics, microservices, rabbitmq-basics, redis-basics
+- 이 글로 오는 글 ←: dead-letter-queue, event-driven-architecture, kafka-basics, message-queue-basics, microservices, pattern-observer, rabbitmq-basics, redis-basics
 
 #### `rabbitmq-basics` — RabbitMQ 기초: 익스체인지와 바인딩, ack와 prefetch, 쿼럼 큐
 
@@ -293,7 +293,7 @@
 - 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, git-troubleshooting, git-stash-reflog
 - 키워드 백링크 →: github-actions-docker-ecr, git-tips-advanced, git-branching-strategy, git-large-files-secrets
-- 이 글로 오는 글 ←: git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, pattern-facade, pattern-flyweight
+- 이 글로 오는 글 ←: git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, pattern-facade, pattern-flyweight, pattern-memento
 
 #### `git-large-files-secrets` — 커밋에 들어가면 안 되는 것: 큰 파일, 비밀 값, 줄바꿈, 권한
 
@@ -471,7 +471,7 @@
 - 길이: 471줄
 - 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 느린 쿼리 로그에 COLLSCAN이 보이면 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: distributed-transactions-2pc, db-index-design, db-type-relational, db-replication-sharding, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index, optimistic-locking
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index, optimistic-locking, pattern-interpreter
 
 #### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
 
@@ -729,7 +729,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: redis-cluster, distributed-lock, pub-sub, db-type-relational, kafka-basics, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: batch-processing, bloom-filter, caching-strategies, circuit-breaker, consistent-hashing, cookie-session-login, count-min-sketch, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, exponential-backoff-jitter, gateway, helm-basics, helm-dependencies-oci-gitops, http-caching-cdn, hyperloglog, idempotency-key, k8s-service-types, load-balancer-basics, lossy-counting, message-queue-basics, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, ports-and-sockets, pub-sub, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, service-discovery, tcp-reliability-congestion, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: batch-processing, bloom-filter, caching-strategies, circuit-breaker, consistent-hashing, cookie-session-login, count-min-sketch, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, exponential-backoff-jitter, gateway, helm-basics, helm-dependencies-oci-gitops, http-caching-cdn, hyperloglog, idempotency-key, k8s-service-types, load-balancer-basics, lossy-counting, message-queue-basics, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, service-discovery, tcp-reliability-congestion, vpc-subnets-route-tables
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -840,7 +840,7 @@
 - 소제목: 계좌, 상품, 주문 세 테이블 / 재고가 음수가 되지 않게 막는 방법들 / 서로 기다리다 멈추는 교착 상태 / 오래 열린 트랜잭션이 남기는 것 / 서비스 여러 개에 걸친 트랜잭션 / SQLD에서 묻는 잠금과 교착 상태 / 틈을 없애거나, 틈을 알아채거나 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-transaction-isolation, microservices
 - 키워드 백링크 →: sql-basics, saga-pattern, event-driven-architecture, distributed-transactions-2pc, postgres-getting-started
-- 이 글로 오는 글 ←: batch-processing, db-transaction-isolation, distributed-lock, http-status-codes, message-queue-basics, mvc-pattern, optimistic-locking, pessimistic-locking, postgres-functions-triggers, rest-api-design, saga-pattern
+- 이 글로 오는 글 ←: batch-processing, db-transaction-isolation, distributed-lock, http-status-codes, message-queue-basics, mvc-pattern, optimistic-locking, pattern-state, pessimistic-locking, postgres-functions-triggers, rest-api-design, saga-pattern
 
 #### `db-modeling-normalization` — 테이블을 어떻게 나누나: 정규화
 
@@ -873,7 +873,7 @@
 - 소제목: 나중에 저장한 사람이 이긴다 / 버전 번호 하나로 덮어쓰기를 알아챈다 / UPDATE 0이 오면 무엇을 하나 / 잠그지 않는다더니 기다렸다 / 버전 숫자 대신 쓸 수 있는 것들 / 충돌이 잦으면 재시도가 일을 잡아먹는다 / 브라우저까지 버전을 들고 가기 / 다른 저장소에도 같은 모양이 있다 / 현장에서 덮어쓰기를 찾는 법 / 버전은 확인을 쓰기 안으로 넣는 장치다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-locking-deadlock, db-transaction-isolation, resilience-patterns, pessimistic-locking, http-caching-cdn, http-status-codes
 - 키워드 백링크 →: k8s-configmap, postgres-advanced-sql, db-type-key-value, sql-basics, mongodb-document-model, redis-basics, postgres-getting-started
-- 이 글로 오는 글 ←: distributed-lock, event-driven-architecture, json-crud-http, pessimistic-locking, rest-api-design, saga-pattern
+- 이 글로 오는 글 ←: distributed-lock, event-driven-architecture, json-crud-http, pattern-state, pessimistic-locking, rest-api-design, saga-pattern
 
 #### `pessimistic-locking` — 비관적 잠금: FOR UPDATE가 세우는 줄
 
@@ -1103,9 +1103,9 @@
 - 키워드: 디자인 패턴, GoF, 상속보다 합성
 - 길이: 305줄
 - 소제목: 반복되는 문제에 붙인 이름 / 스물세 개를 세 갈래로 나눈 기준 / 두 문장으로 줄이면 / 이미 매일 쓰고 있는 패턴 / 함수가 있으면 사라지는 패턴도 있다 / 패턴을 꺼내기 전에 / 면접에서 나올 만한 질문
-- 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-adapter, pattern-bridge, pattern-composite, pattern-decorator, pattern-facade, pattern-flyweight, pattern-proxy, pattern-chain-of-responsibility, pattern-command, mvc-pattern, resilience-patterns
+- 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-adapter, pattern-bridge, pattern-composite, pattern-decorator, pattern-facade, pattern-flyweight, pattern-proxy, pattern-chain-of-responsibility, pattern-command, pattern-interpreter, pattern-iterator, pattern-mediator, pattern-memento, pattern-observer, pattern-state, pattern-strategy, pattern-template-method, pattern-visitor, mvc-pattern, resilience-patterns
 - 키워드 백링크 →: loading-patterns, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-prototype, pattern-proxy, pattern-singleton
+- 이 글로 오는 글 ←: pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-interpreter, pattern-mediator, pattern-observer, pattern-prototype, pattern-proxy, pattern-singleton, pattern-state, pattern-strategy, pattern-template-method
 
 ### Programming › Design Patterns › Behavioral (`programming/design-patterns/behavioral`)
 
@@ -1116,9 +1116,9 @@
 - 키워드: 책임 연쇄 패턴, Chain of Responsibility, 미들웨어 체인
 - 길이: 497줄
 - 소제목: 내 일이 아니면 다음 처리기로 넘긴다 / 배열 하나와 반복문 하나로 충분하다 / 줄의 순서가 곧 규칙이다 / 모두 거쳐 가는 사슬, 미들웨어 / next를 잊거나 두 번 부르면 / 브라우저에서 위로 올라가는 사슬 / 등록 순서와 실행 순서가 다른 곳 / 데코레이터, 커맨드와 헷갈릴 때 / compose 직접 만들기 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, pattern-decorator, pattern-command, pattern-composite
+- 직접 링크 →: design-patterns-overview, pattern-decorator, pattern-command, pattern-observer, pattern-composite
 - 키워드 백링크 →: http-status-codes
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-composite, pattern-decorator
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-composite, pattern-decorator, pattern-strategy
 
 #### `pattern-command` — 커맨드 패턴: 요청을 값으로 만들면 되돌릴 수 있다
 
@@ -1127,9 +1127,106 @@
 - 키워드: 커맨드 패턴, Command 패턴, 되돌리기 스택
 - 길이: 378줄
 - 소제목: 요청을 객체로 만들면 생기는 자리 / 버튼, 단축키, 팔레트가 같은 명령을 부른다 / 되돌리기 스택과 다시 실행하기 스택 / 되돌리기가 어려운 명령 / 명령을 줄 세웠다가 나중에 실행한다 / Redux 액션은 커맨드인가 / 클래스 대신 클로저 한 쌍 / 직접 만드는 되돌리기 / 면접에서 나올 만한 질문
-- 직접 링크 →: pattern-composite, saga-pattern, idempotency-key, dead-letter-queue, message-queue-basics, pattern-chain-of-responsibility, design-patterns-overview
+- 직접 링크 →: pattern-composite, pattern-memento, saga-pattern, idempotency-key, dead-letter-queue, message-queue-basics, pattern-chain-of-responsibility, pattern-observer, design-patterns-overview, pattern-strategy
 - 키워드 백링크 →: redis-basics, microservices
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-chain-of-responsibility
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-chain-of-responsibility, pattern-memento, pattern-strategy
+
+#### `pattern-interpreter` — 인터프리터 패턴: 관리자가 쓴 규칙 문자열을 직접 해석하기
+
+- 요약: 쿠폰 대상 조건을 관리자 화면에서 글로 쓰게 하려고 문법 규칙마다 노드 클래스를 두고 재귀 하강 파서로 트리를 세운다. new Function이 환경 변수를 읽어 버리는 모습, 매번 파싱하면 100배 느려지는 비용, 괄호 5000겹에 넘치는 스택, SpEL·정규식·JSON Logic·CEL 같은 작은 언어와 비지터와의 관계를 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Security, Performance
+- 키워드: 인터프리터 패턴, Interpreter 패턴, 재귀 하강 파서
+- 길이: 527줄
+- 소제목: 문법 한 줄이 클래스 하나가 된다 / 문자열에서 트리까지는 패턴 밖의 일 / 트리가 스스로 답을 계산한다 / eval로 끝내면 안 되는 이유 / 매번 파싱하면 백 배 느리다 / 괄호 오천 개에 서버가 넘어진다 / 이미 쓰고 있는 작은 언어들 / 노드를 더하기 쉬운 쪽, 연산을 더하기 쉬운 쪽 / 언제 직접 만들고 언제 가져다 쓰나 / 규칙 트리 계산기 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, pattern-composite, pattern-visitor
+- 키워드 백링크 →: mongodb-document-model
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-visitor
+
+#### `pattern-iterator` — 이터레이터 패턴: 페이지를 넘기는 코드를 for await 하나로
+
+- 요약: 세 곳에 복사된 커서 페이지네이션 반복문을 async 제너레이터 하나로 모은다. break가 부르는 return()과 finally, 게으른 이터레이터 헬퍼로 map 호출이 100만 번에서 7번으로 주는 모습, 순회 중 수정과 한 번만 도는 제너레이터의 함정, 내부·외부 반복자를 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Node.js, Performance
+- 키워드: 이터레이터 패턴, Iterator 패턴, 이터레이터 헬퍼, 비동기 이터레이터
+- 길이: 410줄
+- 소제목: 돌 줄 아는 것과 도는 것을 나눈다 / for await가 실제로 부르는 것 / 제너레이터가 위치를 대신 들고 있다 / 필요한 만큼만 꺼내는 게으른 반복 / 도는 중에 컬렉션이 바뀌면 / 한 번 돌면 끝나는 반복자 / 안에서 도는 반복자, 밖에서 당기는 반복자 / 반복자를 꺼내지 않아도 될 때 / 게으른 take 직접 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: pattern-factory-method
+- 키워드 백링크 →: kafka-basics
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-composite, pattern-factory-method, pattern-observer, pattern-visitor
+
+#### `pattern-mediator` — 중재자 패턴: 서로 부르던 부품들 사이에 규칙 하나를 두기
+
+- 요약: 배송·주소·쿠폰·금액·결제 버튼이 서로를 직접 부르던 결제 화면을 중재자 하나로 모은다. 알림이 알림을 부르는 고리로 스택이 넘치는 사고와 막는 법, 규칙 없는 이벤트 버스의 함정, React 상태 끌어올리기·라디오 버튼·MediatR, 신 객체가 되는 신호를 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, React, Frontend, Architecture
+- 키워드: 중재자 패턴, Mediator 패턴
+- 길이: 421줄
+- 소제목: 서로 아는 선이 열 개에서 다섯 개로 / 부품은 알리기만 한다 / 규칙은 중재자 한 파일에 / 알림이 다시 알림을 부를 때 / 이미 쓰고 있는 중재자 / 이벤트 버스는 규칙 없는 중재자다 / 중재자가 신 객체가 되는 길 / 부품과 중재자를 따로 테스트한다 / 결제 화면 규칙 직접 맞추기 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-driven-architecture, saga-pattern, pattern-observer, pattern-facade, pattern-state
+- 키워드 백링크 →: design-patterns-overview
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-facade, pattern-observer
+
+#### `pattern-memento` — 메멘토 패턴: 되돌리는 공식이 없을 때 상태를 통째로 기억하기
+
+- 요약: 역연산이 없는 자동 정렬을 되돌리려고 원조자·메멘토·관리인을 나누고, 얕은 복사로 꾸러미가 함께 바뀌는 버그, 불변 업데이트로 스냅숏 메모리를 660MB에서 40MB로 줄이는 실험, 배포를 건너 사는 저장된 초안의 버전 관리, 캔버스 save·restore와 TS private의 한계를 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Browser, Performance
+- 키워드: 메멘토 패턴, Memento 패턴
+- 길이: 422줄
+- 소제목: 저장은 하되 안을 들여다보지 않는다 / 꾸러미를 열 수 있는 쪽은 하나 / 얕은 복사로 떼어 둔 꾸러미는 같이 바뀐다 / 바뀐 곳만 새로 만들면 꾸러미가 싸진다 / 저장한 꾸러미를 지난 버전 코드가 열 때 / 브라우저와 도구에 들어 있는 메멘토 / TS의 private은 꾸러미를 잠그지 못한다 / 꾸러미를 남길까 명령을 남길까 / 되돌리기 직접 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: pattern-command, pattern-prototype, git-internals-basics
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-prototype
+
+#### `pattern-observer` — 옵서버 패턴: 바뀌었다고 알리면 알아야 할 쪽이 듣는다
+
+- 요약: 화면 부품마다 갱신 호출이 붙던 장바구니를 구독 구조로 바꾸고, push와 pull, useSyncExternalStore, 알리는 도중 구독 해제로 리스너가 건너뛰어지는 버그, EventEmitter의 동기 예외 전파와 async 리스너 크래시, MaxListenersExceededWarning, 글리치와 배칭, 중재자·발행 구독과의 차이를 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Node.js, React
+- 키워드: 옵서버 패턴, Observer 패턴, MaxListenersExceededWarning
+- 길이: 469줄
+- 소제목: 바뀌었다고 알리는 쪽, 등록해 두는 쪽 / 값을 실어 보낼까, 꺼내 가게 할까 / 클래스 대신 구독 함수 하나 / 알리는 도중에 구독을 끊으면 / 동기 알림은 예외도 동기로 돌아온다 / 리스너 열한 개째의 경고 / 하나를 바꿨는데 두 번 알린다 / 옵서버, 중재자, 발행·구독을 나란히 놓으면 / 이벤트 이미터 직접 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: react-rerender, pub-sub, js-memory-leak, event-loop, pattern-mediator, pattern-iterator
+- 키워드 백링크 →: rendering-strategies, design-patterns-overview
+- 이 글로 오는 글 ←: design-patterns-overview, mvc-pattern, pattern-chain-of-responsibility, pattern-command, pattern-mediator
+
+#### `pattern-state` — 상태 패턴: 상태마다 바뀌는 동작을 객체로 꺼내기
+
+- 요약: 메서드마다 반복되는 상태 switch를 상태 객체와 전이표로 옮긴다. 판별 유니온으로 불가능한 화면 상태를 지우고, XState로 옮겨 보고, 서버 두 대가 같은 주문을 동시에 바꿀 때 조건부 UPDATE로 막는 법까지 본다.
+- 태그: Design Pattern, OOP, TypeScript, PostgreSQL, Concurrency
+- 키워드: 상태 패턴, State 패턴, 유한 상태 기계, XState
+- 길이: 432줄
+- 소제목: 메서드마다 같은 switch가 반복된다 / 상태를 객체로 꺼내면 / 전이는 누가 결정하나 / 갈 수 있는 길만 그려 둔다 / XState로 옮기면 / 이미 매일 쓰는 상태 기계 / 메모리 밖에서 상태가 바뀔 때 / 전략과 같은 모양, 다른 질문 / 상태 클래스가 필요 없는 때 / 직접 짜는 전이표 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, pattern-strategy, tcp-connection-lifecycle, circuit-breaker, optimistic-locking, db-locking-deadlock
+- 키워드 백링크 →: client-data-cache
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-mediator, pattern-strategy
+
+#### `pattern-strategy` — 전략 패턴: 조건문 대신 갈아 끼우는 알고리즘
+
+- 요약: 쿠폰 종류마다 늘어나는 if를 같은 모양의 할인 전략으로 나누고, 고르는 일은 가장자리 한 곳에 모은다. 정렬 비교 함수 하나로 속도가 몇 배 달라지는 측정과 Passport의 전략, 사용자 입력으로 전략 표를 찾을 때의 함정을 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Node.js, Performance
+- 키워드: 전략 패턴, Strategy 패턴, Intl.Collator
+- 길이: 364줄
+- 소제목: 쿠폰이 늘 때마다 커지는 함수 / 할인 계산을 갈아 끼울 수 있게 / 누가 전략을 고르나 / 함수 하나면 되는 전략 / 비교 함수 하나로 정렬이 몇 배 느려진다 / Passport는 로그인 방법을 이름으로 등록한다 / 전략마다 필요한 재료가 다를 때 / 이름이 헷갈리는 이웃들 / 직접 만드는 할인 전략 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, pattern-chain-of-responsibility, k8s-deployment, load-balancing-algorithms, pattern-state, pattern-template-method, pattern-bridge, pattern-command
+- 키워드 백링크 →: client-data-cache, ab-testing, redis-basics, token-login
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-bridge, pattern-command, pattern-state, pattern-template-method
+
+#### `pattern-template-method` — 템플릿 메서드 패턴: 순서는 위에서 정하고 단계만 바꾸기
+
+- 요약: 복사된 가져오기 흐름을 상위 클래스의 run() 하나로 모으고, 달라지는 단계는 추상 메서드와 훅으로 연다. Node.js Transform 스트림의 _transform, 생성자에서 재정의 메서드를 부를 때 생기는 버그, 합성으로 옮겨야 할 때를 본다.
+- 태그: Design Pattern, OOP, TypeScript, Node.js
+- 키워드: 템플릿 메서드, Template Method, 할리우드 원칙
+- 길이: 483줄
+- 소제목: 복사된 흐름에서 버그는 한쪽만 고쳐진다 / 순서는 위에서, 단계는 아래에서 / 부르는 쪽은 상위 클래스다 / Node.js 스트림은 _transform만 채우게 한다 / 생성자에서 단계를 부르면 생기는 일 / 상속이 무거워지는 순간 / 직접 채우는 단계 / 면접에서 나올 만한 질문
+- 직접 링크 →: pattern-strategy, pattern-factory-method
+- 키워드 백링크 →: json-crud-http, design-patterns-overview
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-factory-method, pattern-strategy
+
+#### `pattern-visitor` — 비지터 패턴: 트리는 그대로 두고 연산만 늘리기
+
+- 요약: 문서 트리의 노드 클래스를 고치지 않고 연산을 방문자 하나로 모은다. 더블 디스패치가 왜 필요한지, ESLint 규칙과 Babel 플러그인이 방문자를 합쳐 한 번만 걷는 이유, 노드 종류가 늘 때 치르는 값(표현 문제)을 실제 출력으로 본다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Performance
+- 키워드: 비지터 패턴, Visitor 패턴, 더블 디스패치, 표현 문제
+- 길이: 426줄
+- 소제목: 연산이 하나 늘 때마다 모든 노드 클래스를 연다 / 연산을 노드 밖으로 꺼낸다 / accept가 한 번 더 부르는 이유 / 트리를 누가 걷나 / ESLint 규칙 하나가 방문자 하나다 / 한 번 걸으며 여럿이 본다 / 타입스크립트라면 함수 표로 / 노드 종류가 늘면 모든 방문자가 아프다 / 이웃 패턴과의 경계 / 직접 만드는 문서 통계 / 면접에서 나올 만한 질문
+- 직접 링크 →: pattern-composite, pattern-iterator, pattern-interpreter
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-composite, pattern-interpreter
 
 ### Programming › Design Patterns › Creational (`programming/design-patterns/creational`)
 
@@ -1162,8 +1259,8 @@
 - 키워드: 팩토리 메서드, Factory Method, 정적 팩토리 메서드
 - 길이: 388줄
 - 소제목: new가 박힌 자리를 메서드로 바꾼다 / 이름이 비슷한 세 가지 / 매일 쓰는 팩토리 메서드 / 상속 대신 함수를 넘기면 / 채널 하나를 추가할 때 고치는 곳 / 모르는 채널은 시작할 때 막는다 / 테스트에서 가짜 채널 끼우기 / 팩토리 메서드가 과한 경우 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-prototype
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-singleton
+- 직접 링크 →: design-patterns-overview, pattern-template-method, pattern-iterator, pattern-abstract-factory, pattern-builder, pattern-prototype
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-iterator, pattern-prototype, pattern-singleton, pattern-template-method
 
 #### `pattern-prototype` — 프로토타입 패턴: 클래스를 몰라도 복제해서 만든다
 
@@ -1172,9 +1269,9 @@
 - 키워드: 프로토타입 패턴, structuredClone, 깊은 복사
 - 길이: 509줄
 - 소제목: 복사할 줄 아는 건 객체 자신이다 / 자바스크립트의 프로토타입과는 다른 이야기 / 얕은 복사가 기본값을 오염시킨다 / 깊은 복사 도구마다 잃어버리는 것 / 클래스 인스턴스는 스스로 복제해야 한다 / 원본을 등록해 두고 꺼내 쓰기 / 복제가 정말 빠른가 / 매일 쓰는 복제 / 직접 만드는 깊은 복사 / 복제가 맞지 않는 객체 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, pattern-abstract-factory, browser-fetch, json-crud-http, pattern-builder, pattern-factory-method, pattern-flyweight
+- 직접 링크 →: design-patterns-overview, pattern-abstract-factory, browser-fetch, json-crud-http, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
 - 키워드 백링크 →: k8s-pod-basics, db-types-overview
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-factory-method, pattern-flyweight
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
 
 #### `pattern-singleton` — 싱글턴 패턴: 하나만 만들기보다 어려운 하나 지키기
 
@@ -1207,9 +1304,9 @@
 - 키워드: 브리지 패턴, pimpl
 - 길이: 427줄
 - 소제목: 두 방향으로 갈라지는 상속 / 무엇을 그릴지와 어떻게 그릴지를 떼어 놓는다 / 여기서 말하는 구현은 implements가 아니다 / Go의 slog가 나눠 놓은 두 쪽 / 렌더러를 바꿔 끼우는 프레임워크들 / 가짜 렌더러로 차트 로직만 테스트하기 / 직접 늘려 보는 두 축 / 전략, 어댑터와 무엇이 다른가 / 미리 나눴다가 후회하는 경우 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, react-rerender, pattern-adapter, pattern-abstract-factory
+- 직접 링크 →: design-patterns-overview, react-rerender, pattern-strategy, pattern-adapter, pattern-abstract-factory
 - 키워드 백링크 →: sql-batch-timeout-pool
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter, pattern-strategy
 
 #### `pattern-composite` — 컴포지트 패턴: 세트 안의 세트를 상품 하나처럼 계산하기
 
@@ -1218,8 +1315,8 @@
 - 키워드: 컴포지트 패턴, Composite 패턴
 - 길이: 420줄
 - 소제목: 세트 안에 세트가 들어오던 날 / 하나와 묶음이 같은 질문에 답한다 / 계산은 잎에서 시작해 위로 올라온다 / add를 어디에 둘 것인가 / 클래스 없이 트리 하나와 fold 하나 / 매일 쓰는 트리들 / 트리가 그래프가 되는 순간 / 데코레이터와 같은 모양, 다른 목적 / 직접 만들어 보는 세트 계산 / 컴포지트가 과한 경우 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, pattern-decorator, pattern-chain-of-responsibility
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-decorator
+- 직접 링크 →: design-patterns-overview, pattern-visitor, pattern-decorator, pattern-chain-of-responsibility, pattern-iterator
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-decorator, pattern-interpreter, pattern-visitor
 
 #### `pattern-decorator` — 데코레이터 패턴: 같은 모양으로 감싸 기능을 겹쳐 붙이기
 
@@ -1239,9 +1336,9 @@
 - 키워드: 퍼사드 패턴, Facade 패턴, 배관 명령
 - 길이: 390줄
 - 소제목: 세 군데에 복사된 주문 절차 / 하위 시스템 앞에 입구 하나 / placeOrder 한 번이 안에서 하는 일 / git commit도 퍼사드다 / 퍼사드는 어디에나 있다 / 서비스 앞에 선 퍼사드 / 퍼사드가 신이 되는 과정 / 테스트는 두 층으로 나뉜다 / 어댑터, 중재자와 나란히 놓으면 / 직접 만들어 보는 주문 퍼사드 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, microservices, idempotency-key, git-internals-basics, gateway, pattern-adapter
+- 직접 링크 →: design-patterns-overview, microservices, idempotency-key, git-internals-basics, gateway, pattern-adapter, pattern-mediator
 - 키워드 백링크 →: https-tls, git-staging-area, dns
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter, pattern-proxy
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter, pattern-mediator, pattern-proxy
 
 #### `pattern-flyweight` — 플라이웨이트 패턴: 같은 상태는 한 벌만 두고 같이 쓰기
 
@@ -1288,7 +1385,7 @@
 - 소제목: 지난주와 비교하면 안 되는 이유 / 배포와 공개를 떼어 놓는 스위치 / 같은 사람에게는 항상 같은 쪽을 / 직접 버킷을 계산해 보기 / 어디서 나누느냐에 따라 화면이 깜빡인다 / 보여 준 사람만 센다 / 무엇이 나아져야 이긴 건가 / 몇 명이 필요한가 / 중간에 들여다보면 거짓 승리가 늘어난다 / 처음에만 반짝하는 효과 / 반반으로 나눴는데 반반이 아니다 / 실험이 싸지려면 화면이 설정을 받아야 한다 / 끝난 플래그는 빚이 된다 / 실험 숫자가 이상할 때 먼저 보는 곳 / 다시 4.8%와 5.3%로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-caching-cdn
 - 키워드 백링크 →: rendering-strategies, bloom-filter, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: core-web-vitals, git-branching-strategy
+- 이 글로 오는 글 ←: core-web-vitals, git-branching-strategy, pattern-strategy
 
 #### `micro-frontends` — 마이크로 프런트엔드: 큰 웹 앱을 팀별로 나눠 배포하기
 
@@ -1322,7 +1419,7 @@
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, k8s-pod-probes, nginx-basics, redis-basics, rendering-ssr
+- 이 글로 오는 글 ←: big-o-notation, core-web-vitals, js-memory-leak, k8s-pod-probes, nginx-basics, pattern-observer, redis-basics, rendering-ssr
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -1332,7 +1429,7 @@
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: client-data-cache, microservices, pattern-flyweight, rendering-ssr
+- 이 글로 오는 글 ←: client-data-cache, microservices, pattern-flyweight, pattern-observer, rendering-ssr
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -1345,7 +1442,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, loading-patterns
-- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
+- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -1391,7 +1488,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals
-- 이 글로 오는 글 ←: client-data-cache, pattern-bridge, pattern-decorator, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -1480,7 +1577,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, lossy-counting, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, pattern-observer, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -1741,7 +1838,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, pattern-prototype, pattern-proxy, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -1765,7 +1862,7 @@
 - 소제목: 실험 무대: 서버 셋, 요청 2만 개 / 차례대로 돌리면 느린 서버가 무너진다 / 지금 덜 바쁜 서버로 / 모두가 같은 서버를 고를 때 / 둘만 뽑아서 비교하기 / 같은 키는 같은 서버로 / 응답 시간을 보는 방법들 / 무엇을 고를까 / 분배가 이상할 때 확인하는 순서 / 같은 숫자, 다른 부하 / 면접에서 나올 만한 질문
 - 직접 링크 →: load-balancer-basics, nginx-reverse-proxy, consistent-hashing, osi-in-practice
 - 키워드 백링크 →: iptables-nat, realtime-communication, iptables-basics, service-mesh, http-versions, cookie-session-login, caching-strategies
-- 이 글로 오는 글 ←: cdn-edge-anycast, consistent-hashing, latency-bandwidth-throughput, load-balancer-basics, nginx-reverse-proxy
+- 이 글로 오는 글 ←: cdn-edge-anycast, consistent-hashing, latency-bandwidth-throughput, load-balancer-basics, nginx-reverse-proxy, pattern-strategy
 
 #### `sdn-vxlan-overlay` — SDN과 VXLAN 오버레이: 물리망 위에 논리망 얹기
 
@@ -1888,7 +1985,7 @@
 - 소제목: 연결은 양쪽 커널의 메모에만 있다 / 번호를 맞추는 세 번의 인사 / 커널 안의 두 대기열 / 대답이 없을 때와 거절당할 때 / 상태 열한 개를 따라가기 / 끊을 때는 네 번 인사한다 / TIME_WAIT가 60초나 남는 이유 / CLOSE_WAIT가 쌓이면 내 코드를 본다 / RST는 대화를 끊는 비상 버튼 / 조용히 죽은 연결을 찾는 keepalive / 현장에서 상태 열을 읽는 법 / 상태 전이를 직접 따라가 보기 / 연결의 일생을 한 번에 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, ports-and-sockets, layer-mtu-fragmentation, tcp-reliability-congestion, packet-capture-tcpdump
 - 키워드 백링크 →: what-happens-google-com, timeouts, vpc-subnets-route-tables, browser-fetch, iptables-basics, security-groups-nacl, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: http-versions, iptables-basics, k8s-pod-lifecycle, layer-mtu-fragmentation, load-balancer-basics, network-layers-overview, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, tcp-reliability-congestion, udp-and-quic
+- 이 글로 오는 글 ←: http-versions, iptables-basics, k8s-pod-lifecycle, layer-mtu-fragmentation, load-balancer-basics, network-layers-overview, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, pattern-state, ports-and-sockets, tcp-reliability-congestion, udp-and-quic
 
 #### `tcp-reliability-congestion` — TCP는 어떻게 믿을 만한가: 재전송, 흐름 제어, 혼잡 제어
 
@@ -2420,7 +2517,7 @@
 - 소제목: 이름 가운데가 다른 Pod 두 무리 / 템플릿이 바뀌어야 새 리비전이 생긴다 / maxSurge와 maxUnavailable이 정하는 두 줄 / 더 띄울 것인가, 잠깐 덜 쓸 것인가 / 한꺼번에 내리고 올리는 Recreate / Ready와 Available 사이, minReadySeconds / 끝나지 않는 배포와 progressDeadlineSeconds / 리비전 기록과 되돌리기 / 여러 군데를 고칠 때 pause와 resume / 배포 중에 replicas를 바꾸면 / 셀렉터는 바꿀 수 없다 / 배포가 이상할 때 보는 순서 / 숫자 두 개와 ReplicaSet 두 개 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-basics, k8s-configmap, helm-chart-templates, k8s-pod-resources, k8s-pod-probes, k8s-pod-lifecycle, k8s-pod-scheduling, k8s-pod-troubleshooting, helm-release-lifecycle, k8s-hpa, gateway
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, k8s-service-types, k8s-pv-pvc, kubernetes-ingress, service-mesh
-- 이 글로 오는 글 ←: k8s-deploy-pipeline-eks, k8s-hpa, k8s-namespace, k8s-pod-probes, k8s-pod-scheduling, k8s-project-structure, k8s-pv-pvc
+- 이 글로 오는 글 ←: k8s-deploy-pipeline-eks, k8s-hpa, k8s-namespace, k8s-pod-probes, k8s-pod-scheduling, k8s-project-structure, k8s-pv-pvc, pattern-strategy
 
 #### `k8s-hpa` — HPA: 공식 한 줄과 브레이크 셋
 
@@ -2501,7 +2598,7 @@
 - 소제목: 세 상태와 두 개의 질문 / 몇 건 중의 실패율인가: 건수 창과 시간 창 / 실패보다 느림을 먼저 센다 / 반열림에서는 몇 개를 보내 보나 / 일부러 망가지는 서버 앞에 세워 보기 / 브레이커는 의존성마다 따로 둔다 / 헬스 체크, 아웃라이어 감지와 무엇이 다른가 / 재시도와 타임아웃 사이 어디에 끼우나 / 폴백은 무엇을 돌려주나 / 열린 회로를 현장에서 알아채는 법 / 상태 기계를 직접 짜 보기 / 숫자를 고르기 전에 트래픽부터 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, load-balancer-basics, service-mesh, idempotency-key, connection-pool, rate-limiting-in-practice
 - 키워드 백링크 →: retries, osi-in-practice, sql-batch-timeout-pool, redis-basics, dns
-- 이 글로 오는 글 ←: connection-pool, pattern-proxy, resilience-patterns, service-mesh
+- 이 글로 오는 글 ←: connection-pool, pattern-proxy, pattern-state, resilience-patterns, service-mesh
 
 #### `consistent-hashing` — 일관된 해싱: 가상 노드, 점프 해시, 랑데부
 
@@ -2556,7 +2653,7 @@
 - 소제목: 주문 API가 알림 서버를 기다리는 이유 / 명령은 부탁하고 이벤트는 알린다 / 이벤트 하나에 무엇을 담을까 / 상태 대신 사건을 저장하는 이벤트 소싱 / 흐름을 누가 쥐나 / 아웃박스를 id 순서로 읽으면 이벤트가 빠진다 / WAL에서 바로 읽는 아웃박스 / 잠깐 어긋나는 데이터를 받아 내는 법 / 이벤트가 어디서 사라졌는지 따라가기 / 이벤트로 가지 않는 편이 나을 때 / 처음의 주문 API로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices, db-architecture-by-scale, message-queue-basics, pub-sub, saga-pattern, optimistic-locking, db-replication-sharding, message-delivery-semantics, kafka-basics, rabbitmq-basics, dead-letter-queue
 - 키워드 백링크 →: postgres-architecture
-- 이 글로 오는 글 ←: batch-processing, db-architecture-by-scale, db-locking-deadlock, kafka-basics, message-delivery-semantics, microservices, pub-sub, rabbitmq-basics, saga-pattern
+- 이 글로 오는 글 ←: batch-processing, db-architecture-by-scale, db-locking-deadlock, kafka-basics, message-delivery-semantics, microservices, pattern-mediator, pub-sub, rabbitmq-basics, saga-pattern
 
 #### `exponential-backoff-jitter` — 지수 백오프와 지터: 같은 순간 실패한 클라이언트를 흩어 보내기
 
@@ -2633,7 +2730,7 @@
 - 소제목: 되돌리지 않고 반대로 한다 / 단계는 세 종류로 나뉜다 / 지휘하는 쪽이 순서를 쥐는 오케스트레이션 / 보상 도중에 오케스트레이터가 죽으면 / 지휘자 없이 이벤트로 잇는 코레오그래피 / 중간 상태가 남에게 보인다 / 상태를 바꾸고 알리는 일을 한 번에: 아웃박스 / 워크플로 엔진에 맡길 때 / 사가가 꼬였을 때 현장에서 보는 것 / 사가가 약속하는 것과 하지 않는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices, distributed-transactions-2pc, event-driven-architecture, optimistic-locking, message-delivery-semantics, idempotency-key
 - 키워드 백링크 →: postgres-advanced-sql, db-architecture-by-scale, db-type-columnar-olap, db-locking-deadlock, kafka-basics, db-transaction-isolation, db-replication-sharding, dead-letter-queue
-- 이 글로 오는 글 ←: db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, microservices, pattern-command
+- 이 글로 오는 글 ←: db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, microservices, pattern-command, pattern-mediator
 
 #### `service-discovery` — 서비스 디스커버리: 목록은 누가 쓰고, 어디서 낡아지나
 
@@ -2742,6 +2839,7 @@
 - 단편화 → `layer-mtu-fragmentation`
 - 대리 키 → `db-keys-denormalization`
 - 대역폭 지연 곱 → `tcp-reliability-congestion`
+- 더블 디스패치 → `pattern-visitor`
 - 데드 레터 익스체인지 → `rabbitmq-basics`
 - 데드 레터 큐 → `dead-letter-queue`
 - 데드라인 전파 → `timeouts`
@@ -2781,6 +2879,7 @@
 - 멀티 존 → `micro-frontends`
 - 멀티 컨테이너 Pod → `k8s-pod-basics`
 - 멀티플렉싱 → `http-versions`
+- 메멘토 패턴 → `pattern-memento`
 - 메모리 누수 → `js-memory-leak`
 - 메모리 단편화 → `redis-memory-eviction`
 - 멱등 프로듀서 → `message-delivery-semantics`
@@ -2823,7 +2922,9 @@
 - 브리지 패턴 → `pattern-bridge`
 - 블룸 필터 → `bloom-filter`
 - 비관적 잠금 → `db-locking-deadlock`
+- 비동기 이터레이터 → `pattern-iterator`
 - 비식별 관계 → `sqld-entity-attribute-relationship`
+- 비지터 패턴 → `pattern-visitor`
 - 빈약한 도메인 모델 → `mvc-pattern`
 - 빌더 패턴 → `pattern-builder`
 - 빌드 캐시 → `dockerfile-image-layers`
@@ -2834,6 +2935,7 @@
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상속보다 합성 → `design-patterns-overview`
 - 상태 코드 → `http-status-codes`
+- 상태 패턴 → `pattern-state`
 - 샤드 키 → `mongodb-document-model`
 - 서버 상태 → `client-data-cache`
 - 서버 액션 → `react-server-components`
@@ -2881,6 +2983,7 @@
 - 역색인 → `elasticsearch-inverted-index`
 - 연쇄 장애 → `resilience-patterns`
 - 오리진 실드 → `cdn-edge-anycast`
+- 옵서버 패턴 → `pattern-observer`
 - 와이드 컬럼 → `db-type-wide-column`
 - 요청 스머글링 → `http-message`
 - 요청 헤징 → `retries`
@@ -2890,12 +2993,15 @@
 - 윈도우 함수 → `sqld-window-functions`
 - 유닛 파일 → `linux-systemd-systemctl`
 - 유클리드 거리 → `pythagorean-theorem`
+- 유한 상태 기계 → `pattern-state`
 - 의미상 잠금 → `saga-pattern`
 - 이더넷 프레임 → `layer-link-ethernet-arp`
 - 이벤트 기반 아키텍처 → `event-driven-architecture`
 - 이벤트 루프 → `event-loop`
 - 이벤트 소싱 → `event-driven-architecture`
 - 이전 페이지 커서 → `api-pagination-sorting`
+- 이터레이터 패턴 → `pattern-iterator`
+- 이터레이터 헬퍼 → `pattern-iterator`
 - 익스체인지 → `rabbitmq-basics`
 - 인가 코드 → `oauth`
 - 인기 검색어 → `lossy-counting`
@@ -2904,6 +3010,7 @@
 - 인증서 체인 → `https-tls`
 - 인터넷 게이트웨이 → `vpc-basics`
 - 인터페이스 엔드포인트 → `vpc-peering-transit-privatelink`
+- 인터프리터 패턴 → `pattern-interpreter`
 - 일관된 해싱 → `db-sharding`
 - 읽기 복제본 → `db-replication-sharding`
 - 임베디드 DB → `db-type-embedded`
@@ -2916,10 +3023,12 @@
 - 장애 좁히기 → `network-troubleshooting-by-layer`
 - 재개 가능성 → `islands-resumability`
 - 재귀 리졸버 → `dns`
+- 재귀 하강 파서 → `pattern-interpreter`
 - 재귀 CTE → `sqld-top-n-hierarchical-pivot`
 - 재시도 예산 → `retries`
 - 재시도 증폭 → `retries`
 - 재조정 → `react-rerender`
+- 전략 패턴 → `pattern-strategy`
 - 전방향 안전성 → `https-tls`
 - 전이 테이블 → `postgres-functions-triggers`
 - 전파 지연 → `latency-bandwidth-throughput`
@@ -2934,6 +3043,7 @@
 - 좀비 프로세스 → `linux-processes-signals`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
+- 중재자 패턴 → `pattern-mediator`
 - 중첩 서브쿼리 → `sqld-subquery-set-operators`
 - 증폭 공격 → `udp-and-quic`
 - 지수 백오프 → `resilience-patterns`
@@ -2988,6 +3098,7 @@
 - 킬 스위치 → `ab-testing`
 - 태스크 큐 → `event-loop`
 - 테스트 데이터 빌더 → `pattern-builder`
+- 템플릿 메서드 → `pattern-template-method`
 - 툼스톤 → `db-type-wide-column`
 - 트래픽 셰이핑 → `traffic-shaping-qos`
 - 트랜잭셔널 아웃박스 → `microservices`
@@ -3010,6 +3121,7 @@
 - 폴리싱 → `traffic-shaping-qos`
 - 표본 비율 불일치 → `ab-testing`
 - 표현 계층 → `upper-layers-session-presentation-app`
+- 표현 문제 → `pattern-visitor`
 - 풀 고갈 → `connection-pool`
 - 프라이빗 서브넷 → `vpc-subnets-route-tables`
 - 프로젝트 폴더 구조 → `k8s-project-structure`
@@ -3025,6 +3137,7 @@
 - 필터 정책 → `pub-sub`
 - 하이드레이션 → `rendering-strategies`
 - 하이드레이션 불일치 → `hydration`
+- 할리우드 원칙 → `pattern-template-method`
 - 함수 기반 인덱스 → `sqld-type-conversion`
 - 함수 종속 → `db-modeling-normalization`
 - 핫 키 → `caching-strategies`
@@ -3280,6 +3393,8 @@
 - init 컨테이너 → `k8s-pod-multicontainer`
 - INP → `core-web-vitals`
 - interactive rebase → `git-rebase`
+- Interpreter 패턴 → `pattern-interpreter`
+- Intl.Collator → `pattern-strategy`
 - INVALID 인덱스 → `db-index-pitfalls`
 - ip6tables → `iptables-basics`
 - IPsec → `vpn-ipsec-wireguard`
@@ -3290,6 +3405,7 @@
 - IRSA → `eks-cluster-basics`
 - IS DISTINCT FROM → `sql-select-where-null`
 - ISR → `rendering-strategies`
+- Iterator 패턴 → `pattern-iterator`
 - journalctl → `linux-systemd-systemctl`
 - JSON Merge Patch → `http-methods`
 - JSON Patch → `http-methods`
@@ -3328,11 +3444,14 @@
 - macvlan → `docker-network-drivers`
 - MASQUERADE → `iptables-nat`
 - max_prepared_statements → `connection-pool`
+- MaxListenersExceededWarning → `pattern-observer`
 - maxmemory → `redis-memory-eviction`
 - maxReceiveCount → `dead-letter-queue`
 - maxSurge → `k8s-deployment`
 - maxUnavailable → `k8s-deployment`
+- Mediator 패턴 → `pattern-mediator`
 - Memcached → `redis-basics`
+- Memento 패턴 → `pattern-memento`
 - merge base → `git-branch-merge`
 - metrics-server → `k8s-hpa`
 - min.insync.replicas → `kafka-basics`
@@ -3381,6 +3500,7 @@
 - NULLS LAST → `api-pagination-sorting`
 - NVL → `sqld-null-functions`
 - OAuth → `oauth`
+- Observer 패턴 → `pattern-observer`
 - OCI 레지스트리 → `helm-dependencies-oci-gitops`
 - OIDC 신뢰 정책 → `github-actions-docker-ecr`
 - OLAP → `db-type-columnar-olap`
@@ -3526,9 +3646,11 @@
 - staleTime → `client-data-cache`
 - startupProbe → `k8s-pod-probes`
 - state 파일 → `terraform-basics`
+- State 패턴 → `pattern-state`
 - statement_timeout → `sql-batch-timeout-pool`
 - sticky bit → `linux-files-permissions`
 - sticky session → `load-balancer-basics`
+- Strategy 패턴 → `pattern-strategy`
 - structuredClone → `pattern-prototype`
 - subPath → `k8s-configmap`
 - SUBSTR → `sqld-single-row-functions`
@@ -3542,6 +3664,7 @@
 - TanStack Query → `client-data-cache`
 - TCP/IP 4계층 → `network-layers-overview`
 - tcpdump → `packet-capture-tcpdump`
+- Template Method → `pattern-template-method`
 - Terminating 네임스페이스 → `k8s-namespace`
 - terminationGracePeriodSeconds → `k8s-pod-lifecycle`
 - Terraform → `terraform-basics`
@@ -3588,6 +3711,7 @@
 - VACUUM FULL → `postgres-mvcc-vacuum`
 - values.schema.json → `helm-values-secrets`
 - visibility map → `postgres-mvcc-vacuum`
+- Visitor 패턴 → `pattern-visitor`
 - VLAN → `vlan-basics`
 - VPC → `vpc-basics`
 - VPC 피어링 → `vpc-peering-transit-privatelink`
@@ -3611,6 +3735,7 @@
 - XAUTOCLAIM → `pub-sub`
 - xDS → `service-mesh`
 - XID 랩어라운드 → `postgres-mvcc-vacuum`
+- XState → `pattern-state`
 - zdiff3 → `git-merge-conflict`
 
 ## 겹칠 수 있는 글 (자동 추정)
@@ -3618,50 +3743,68 @@
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
 - `k8s-pod-basics` ↔ `docker-container-basics` (26%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
-- `db-index-pitfalls` ↔ `db-index-design` (20%: 100만, 인덱스는, 인덱스를, index)
-- `db-index-pitfalls` ↔ `db-index` (20%: 100만, 인덱스가, 인덱스를, index)
+- `db-index-pitfalls` ↔ `db-index-design` (24%: 100만, 인덱스, 인덱스는, 인덱스를, index)
+- `db-index-pitfalls` ↔ `db-index` (24%: 100만, 인덱스, 인덱스가, 인덱스를, index)
+- `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
 - `count-min-sketch` ↔ `lossy-counting` (19%: lossy, 데이터로, 세는, data, structure, probabilistic)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
-- `streaming-ssr-suspense` ↔ `rendering-strategies` (18%: ssr, next.js, 스트리밍, ssr과, 준비된, 부분부터)
-- `sqld-null-functions` ↔ `sqld-single-row-functions` (18%: 글에서, 사원, 함수, oracle)
 - `consistent-hashing` ↔ `redis-cluster` (18%: 키를, 노드, 해시)
 - `redis-cluster` ↔ `db-sharding` (18%: 키를, 나누는, 해시)
+- `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (17%: 밖에서, 확인하기, 요청마다, next.js, rendering, ssr)
+- `sqld-null-functions` ↔ `sql-select-where-null` (17%: null은, 값이, null, 다루기)
 - `exponential-backoff-jitter` ↔ `resilience-patterns` (16%: 재시도, resilience, 지수, 백오프와, 지터, 보내기)
 - `db-type-key-value` ↔ `db-type-graph` (16%: 맞는, 곳과, 아닌, 관계형, nosql)
-- `sqld-null-functions` ↔ `sql-select-where-null` (16%: null은, 값이, null, 다루기)
 - `db-partitioning` ↔ `db-type-time-series` (16%: 오래된, 통째로, 키가)
 - `db-partitioning` ↔ `db-type-key-value` (16%: 맞는, 파티션, scalability)
 - `db-partitioning` ↔ `db-modeling-normalization` (16%: 테이블을, 떼어, 키가)
 - `db-partitioning` ↔ `db-architecture-by-scale` (16%: 떼어, 낸다, scalability)
+- `proxy-reverse-proxy` ↔ `gateway` (16%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
 - `lossy-counting` ↔ `hyperloglog` (16%: 낸다, 세는, data, structure, probabilistic)
-- `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (15%: 밖에서, 확인하기, 요청마다, next.js, ssr)
-- `db-index-pitfalls` ↔ `db-type-wide-column` (15%: 쓰기를, 것도, 대가)
+- `db-locking-deadlock` ↔ `db-transaction-isolation` (16%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
+- `frontend-browser-cache` ↔ `client-data-cache` (16%: 미리, 쓰면, 받기, 캐시, 돌아가서, cache, frontend)
 - `security-groups-nacl` ↔ `iptables-basics` (15%: 연결을, firewall, 기억하는, 방화벽)
 - `db-types-overview` ↔ `redis-basics` (15%: 빠른, 이유는, 하나씩, nosql)
 - `git-branch-merge` ↔ `git-remote-collaboration` (15%: 브랜치는, 브랜치를, 지운다, 원격)
-- `load-balancing-algorithms` ↔ `load-balancer-basics` (15%: 서버로, 서버를, load, balancer, 로드)
-- `k8s-network-policy` ↔ `k8s-service-types` (14%: 정책은, 목록이다, 따져, 정책을)
-- `packet-capture-tcpdump` ↔ `db-index` (14%: 처음부터, 끝까지, 줄을, 필요한)
+- `nextjs-static-dynamic-rendering` ↔ `rendering-ssr` (15%: 요청이, cache, 요청마다, rendering, ssr)
+- `load-balancing-algorithms` ↔ `load-balancer-basics` (14%: 서버로, 서버를, load, balancer, 로드)
+- `rendering-ssg-isr` ↔ `rendering-strategies` (14%: 나가는지, next.js, rendering, isr, 미리)
+- `sql-query-rewrite` ↔ `db-index-pitfalls` (14%: 100만, 건과, 인덱스)
+- `db-index-pitfalls` ↔ `db-type-wide-column` (14%: 쓰기를, 것도, 대가)
 - `count-min-sketch` ↔ `hyperloglog` (14%: redis에서, 코드로, 세는, data, structure, probabilistic)
-- `k8s-secret` ↔ `helm-values-secrets` (14%: 값이, 평문으로, secret을, 클러스터, 비밀)
+- `k8s-network-policy` ↔ `k8s-service-types` (14%: 정책은, 목록이다, 따져, 정책을)
+- `vpc-peering-transit-privatelink` ↔ `vpc-basics` (14%: vpc, 없다, 장면으로, cloud)
+- `islands-resumability` ↔ `hydration` (14%: 하이드레이션, 하이드레이션을, 하지, rendering)
+- `packet-capture-tcpdump` ↔ `db-index` (14%: 처음부터, 끝까지, 줄을, 필요한)
+- `db-index-design` ↔ `db-index` (14%: 100만, 인덱스, 인덱스를, index)
+- `proxy-reverse-proxy` ↔ `kubernetes-ingress` (14%: https는, 로드, 밸런서, tls)
+- `nextjs-static-dynamic-rendering` ↔ `rendering-ssg-isr` (14%: 응답, cache, 어떤, 페이지가, next.js, rendering)
+- `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
+- `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `circuit-breaker` ↔ `resilience-patterns` (14%: 타임아웃, 회로를, resilience, 서킷, 브레이커)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
-- `proxy-reverse-proxy` ↔ `gateway` (14%: 프록시와, 리버스, 로드, 밸런서, 게이트웨이)
-- `pattern-flyweight` ↔ `dockerfile-image-layers` (13%: 바뀌는, 것을, 상태는, 두고)
-- `rabbitmq-basics` ↔ `kafka-basics` (13%: 컨슈머가, 정하고, 지킨다, messaging, 기초)
-- `k8s-configmap` ↔ `helm-chart-templates` (13%: 설정이, 바뀌면, pod를, 띄우게, 하기)
-- `vlan-basics` ↔ `ports-and-sockets` (13%: 포트와, 포트, 어느)
-- `vlan-basics` ↔ `layer-link-ethernet-arp` (13%: 스위치, vlan, 망으로)
-- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (13%: pg, 들어오는, 지나는)
-- `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (13%: 막는, 남기는, 트랜잭션, update)
-- `db-locking-deadlock` ↔ `db-transaction-isolation` (13%: 트랜잭션이, sqld에서, 묻는, concurrency)
-- `db-type-key-value` ↔ `db-type-wide-column` (13%: 파티션, 관계형, nosql, scalability)
-- `lossy-counting` ↔ `bloom-filter` (13%: 조금, data, structure, probabilistic)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `pattern-observer` ↔ `pattern-mediator`
+- `pattern-observer` ↔ `design-patterns-overview`
+- `pattern-memento` ↔ `pattern-command`
+- `pattern-memento` ↔ `pattern-prototype`
+- `pattern-mediator` ↔ `pattern-facade`
+- `pattern-mediator` ↔ `design-patterns-overview`
+- `pattern-iterator` ↔ `pattern-factory-method`
+- `pattern-interpreter` ↔ `pattern-visitor`
+- `pattern-interpreter` ↔ `design-patterns-overview`
+- `pattern-visitor` ↔ `pattern-composite`
+- `pattern-template-method` ↔ `pattern-strategy`
+- `pattern-template-method` ↔ `pattern-factory-method`
+- `pattern-template-method` ↔ `design-patterns-overview`
+- `pattern-strategy` ↔ `pattern-state`
+- `pattern-strategy` ↔ `pattern-command`
+- `pattern-strategy` ↔ `pattern-bridge`
+- `pattern-strategy` ↔ `design-patterns-overview`
+- `pattern-state` ↔ `design-patterns-overview`
 - `k8s-deploy-pipeline-eks` ↔ `k8s-project-structure`
 - `k8s-deploy-pipeline-eks` ↔ `github-actions-docker-ecr`
 - `k8s-deploy-pipeline-eks` ↔ `eks-cluster-basics`
