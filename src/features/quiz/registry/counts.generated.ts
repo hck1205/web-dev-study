@@ -3,6 +3,7 @@
 export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
   "api-pagination-sorting": 6,
+  "api-versioning": 6,
   "base64": 7,
   "batch-processing": 6,
   "big-o-notation": 8,
@@ -21,6 +22,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "cors": 8,
   "count-min-sketch": 7,
   "crdt": 7,
+  "cron-jobs": 6,
   "db-architecture-by-scale": 7,
   "db-consistency-cap": 6,
   "db-index": 5,
@@ -77,6 +79,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "git-troubleshooting": 5,
   "git-undo": 6,
   "github-actions-docker-ecr": 7,
+  "grpc": 6,
   "helm-basics": 6,
   "helm-chart-templates": 6,
   "helm-dependencies-oci-gitops": 6,
@@ -258,6 +261,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "vpc-peering-transit-privatelink": 6,
   "vpc-subnets-route-tables": 6,
   "vpn-ipsec-wireguard": 7,
+  "webhooks": 6,
   "what-happens-google-com": 8,
   "zero-trust-architecture": 7
 };

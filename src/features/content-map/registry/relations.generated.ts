@@ -2,6 +2,80 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-versioning": {
+    "links": [
+      "rest-api-design",
+      "grpc",
+      "http-caching-cdn"
+    ],
+    "mentions": [
+      "kafka-basics",
+      "http-status-codes",
+      "webhooks"
+    ]
+  },
+  "grpc": {
+    "links": [
+      "rest-api-design",
+      "http-versions",
+      "api-versioning",
+      "timeouts",
+      "retries",
+      "service-mesh",
+      "load-balancing-algorithms"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "iptables-nat",
+      "osi-in-practice",
+      "iptables-basics",
+      "kubernetes-ingress",
+      "http-status-codes",
+      "k8s-hpa",
+      "dns",
+      "gateway"
+    ]
+  },
+  "webhooks": {
+    "links": [
+      "retries",
+      "idempotency-key",
+      "realtime-communication",
+      "clock-skew",
+      "timeouts",
+      "message-queue-basics",
+      "dead-letter-queue",
+      "exponential-backoff-jitter"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "resilience-patterns",
+      "layer-ip-addressing",
+      "what-happens-google-com",
+      "ipv6-basics",
+      "vpc-basics",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "cron-jobs": {
+    "links": [
+      "batch-processing",
+      "distributed-lock",
+      "leader-election",
+      "linux-systemd-systemctl",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "postgres-advanced-sql",
+      "message-delivery-semantics",
+      "linux-files-permissions",
+      "postgres-architecture",
+      "redis-basics",
+      "webhooks"
+    ]
+  },
   "ray-casting": {
     "links": [
       "geohash",
@@ -348,7 +422,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-undo",
       "helm-basics",
       "security-groups-nacl",
-      "vpc-basics"
+      "vpc-basics",
+      "webhooks"
     ]
   },
   "k8s-project-structure": {
@@ -498,6 +573,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "http-versions",
       "loading-patterns",
+      "grpc",
       "design-patterns-overview",
       "dns"
     ]
@@ -526,7 +602,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-addressing",
       "db-type-key-value",
       "vpc-basics",
-      "dns"
+      "dns",
+      "webhooks"
     ]
   },
   "terraform-modules-tfvars": {
@@ -663,6 +740,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "grpc",
       "db-type-key-value",
       "redis-basics",
       "udp-and-quic"
@@ -688,6 +766,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "retries",
       "osi-in-practice",
       "http-status-codes",
+      "grpc",
       "http-methods"
     ]
   },
@@ -750,6 +829,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "api-versioning",
       "postgres-architecture"
     ]
   },
@@ -814,6 +894,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "cron-jobs",
       "helm-basics",
       "kafka-basics"
     ]
@@ -866,7 +947,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network",
       "helm-basics",
       "db-type-key-value",
-      "dns"
+      "dns",
+      "webhooks"
     ]
   },
   "k8s-coredns": {
@@ -947,6 +1029,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics",
       "dns",
       "what-happens-google-com",
+      "grpc",
       "layer-ip-routing-icmp",
       "udp-and-quic",
       "layer-link-ethernet-arp"
@@ -1112,6 +1195,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pv-pvc"
     ],
     "mentions": [
+      "grpc",
+      "cron-jobs",
       "kubernetes-ingress",
       "linux-files-permissions",
       "github-actions-docker-ecr",
@@ -1143,7 +1228,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-abstract-factory"
     ],
     "mentions": [
-      "sql-batch-timeout-pool"
+      "sql-batch-timeout-pool",
+      "grpc"
     ]
   },
   "pattern-adapter": {
@@ -1215,7 +1301,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key"
     ],
     "mentions": [
-      "service-mesh"
+      "service-mesh",
+      "grpc"
     ]
   },
   "timeouts": {
@@ -1230,6 +1317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "packet-capture-tcpdump",
       "what-happens-google-com",
+      "grpc",
       "postgres-getting-started",
       "dns"
     ]
@@ -1316,6 +1404,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "service-mesh",
       "http-versions",
       "cookie-session-login",
+      "grpc",
       "caching-strategies"
     ]
   },
@@ -1342,7 +1431,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "security-groups-nacl",
       "redis-basics",
-      "client-data-cache"
+      "client-data-cache",
+      "grpc"
     ]
   },
   "pattern-abstract-factory": {
@@ -1378,6 +1468,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-factory-method"
     ],
     "mentions": [
+      "cron-jobs",
       "leader-election",
       "sql-batch-timeout-pool"
     ]
@@ -1510,6 +1601,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "webhooks",
       "what-happens-google-com",
       "ipv6-basics",
       "pattern-abstract-factory",
@@ -1555,6 +1647,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-locking-deadlock"
     ],
     "mentions": [
+      "cron-jobs",
       "postgres-advanced-sql",
       "db-architecture-by-scale",
       "postgres-mvcc-vacuum",
@@ -1736,6 +1829,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-undo",
       "k8s-configmap",
       "docker-container-basics",
+      "api-versioning",
       "redis-basics",
       "what-happens-google-com",
       "github-actions-docker-ecr"
@@ -2249,6 +2343,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "security-groups-nacl",
       "what-happens-google-com",
+      "grpc",
       "layer-ip-routing-icmp",
       "udp-and-quic"
     ]
@@ -2413,6 +2508,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "packet-capture-tcpdump",
       "redis-basics",
+      "grpc",
       "layer-ip-routing-icmp"
     ]
   },
@@ -2476,6 +2572,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "grpc",
       "packet-capture-tcpdump",
       "http-versions",
       "what-happens-google-com",
@@ -2660,6 +2757,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-insert-update-delete",
       "sqld-window-functions",
+      "api-versioning",
       "kafka-basics",
       "db-index-pitfalls",
       "postgres-architecture"
@@ -2873,6 +2971,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture"
     ],
     "mentions": [
+      "webhooks",
       "db-index-design"
     ]
   },
@@ -2991,7 +3090,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
-      "ab-testing"
+      "ab-testing",
+      "api-versioning"
     ]
   },
   "git-troubleshooting": {
@@ -3415,6 +3515,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "optimistic-locking",
       "loading-patterns",
       "upper-layers-session-presentation-app",
+      "api-versioning",
       "client-data-cache",
       "resilience-patterns",
       "http-caching-cdn"
@@ -3478,6 +3579,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "iptables-basics",
       "rest-api-design",
+      "grpc",
       "linux-processes-signals",
       "udp-and-quic"
     ]
@@ -3557,6 +3659,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
+      "grpc",
       "ipv6-basics",
       "udp-and-quic",
       "dns"
@@ -3613,6 +3716,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "zero-trust-architecture",
       "nginx-https-performance",
+      "webhooks",
       "service-mesh",
       "http-versions",
       "udp-and-quic",
@@ -3671,6 +3775,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "grpc",
+      "api-versioning",
       "base64",
       "optimistic-locking",
       "loading-patterns",
@@ -3719,6 +3825,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "browser-fetch",
       "http-methods",
+      "webhooks",
       "tcp-reliability-congestion",
       "ports-and-sockets",
       "udp-and-quic",
@@ -3877,6 +3984,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "grpc",
       "db-type-columnar-olap",
       "rabbitmq-basics",
       "client-data-cache",
@@ -3904,6 +4012,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "latency-bandwidth-throughput",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "grpc",
       "http-methods"
     ]
   },
@@ -3952,7 +4061,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-status-codes",
       "what-happens-google-com",
       "cors",
-      "dns"
+      "dns",
+      "webhooks"
     ]
   },
   "gateway": {
@@ -3969,6 +4079,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "token-login",
       "redis-basics",
       "what-happens-google-com",
+      "grpc",
       "https-tls",
       "udp-and-quic",
       "http-methods",
@@ -4018,6 +4129,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dns",
       "https-tls",
       "hosts-file",
+      "webhooks",
       "http-versions",
       "cdn-edge-anycast",
       "http-status-codes",

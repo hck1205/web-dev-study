@@ -1,0 +1,390 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("webhooks");
+
+결제사 웹훅을 받아 포인트를 적립하는 엔드포인트를 만들었다. 며칠 뒤 고객센터에 문의가 들어온다. 한 번 결제했는데 포인트가 세 번 쌓였다는 것이다. 로그를 보니 같은 이벤트 id가 세 번 들어와 있었다. 우리 서버는 세 번 모두 처리를 끝까지 했는데, 결제사 대시보드에는 세 번 모두 "실패(타임아웃)"로 찍혀 있었다.
+
+웹훅(webhook)은 어떤 일이 일어났을 때 한 서비스가 다른 서비스의 URL로 HTTP 요청을 보내 알려 주는 방식이다. "결제가 끝났다", "PR이 열렸다", "배송이 출발했다" 같은 이벤트를 상대가 물어보기 전에 밀어 준다. 구현은 POST 한 번이라 쉬워 보이지만, 인터넷 너머의 남이 내 서버를 부른다는 점 때문에 생각할 것이 많다. 누가 보냈는지 어떻게 믿나, 같은 요청이 두 번 오면, 순서가 뒤바뀌면, 내 서버가 느리면 무슨 일이 생기나.
+
+이 글은 받는 쪽과 보내는 쪽을 모두 다룬다. 실제 node 서버를 띄우고 curl로 서명된 요청, 위조된 요청, 재전송 공격을 보내 보고, Stripe·GitHub 공식 SDK로 서명 형식을 맞춰 봤다. 재시도와 멱등성의 일반론은 [재시도](/posts/retries)와 [멱등성 키](/posts/idempotency-key)에 있으니 여기서는 웹훅에서 그것들이 어떻게 맞물리는지만 본다.
+
+## 묻지 않아도 알려 주는 HTTP 요청
+
+웹훅이 없으면 받는 쪽이 주기적으로 물어봐야 한다. "결제 끝났어?"를 5초마다 묻는 폴링이다. 결제 1건에 응답이 바뀌는 건 한 번인데 질문은 수십 번 나가고, 간격만큼 늦게 안다. 웹훅은 방향을 뒤집는다. 보내는 쪽이 일이 생긴 순간 받는 쪽의 URL을 부른다.
+
+<SequenceDiagram
+  caption="결제가 끝나면 결제사가 우리 서버를 부르고, 우리는 받았다는 것만 빨리 알린다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "psp", label: "결제사" },
+    { id: "api", label: "우리 웹훅 API" },
+    { id: "worker", label: "작업자" },
+  ]}
+  steps={[
+    { from: "user", to: "psp", label: "카드 결제", title: "사용자가 결제한다", detail: "결제는 결제사 화면에서 끝난다. 우리 서버는 이 순간을 직접 보지 못한다." },
+    { from: "psp", to: "psp", label: "이벤트 생성", title: "결제사가 이벤트를 만든다", detail: "id, 종류, 생성 시각, 데이터를 담은 JSON을 만들고 비밀 키로 서명한다.", payload: "{\"id\":\"evt_01JB7Q\",\"type\":\"order.paid\",...}" },
+    { from: "psp", to: "api", label: "POST /hooks/shop", title: "등록된 URL로 보낸다", detail: "서명은 헤더에, 이벤트는 본문에 담는다.", payload: "X-Shop-Signature: t=1792524467,v1=634a0f..." },
+    { from: "api", to: "api", label: "서명·시각·중복 확인", title: "믿을 수 있는 요청인지 본다", detail: "본문 바이트로 서명을 다시 계산하고, 시각이 허용 범위인지, 이미 받은 id인지 확인한다." },
+    { from: "api", to: "psp", label: "200 OK", title: "저장만 하고 바로 응답한다", detail: "포인트 적립 같은 실제 처리는 아직 하지 않는다. 받았다는 사실만 빨리 알린다." },
+    { from: "api", to: "worker", label: "큐", title: "처리는 작업자가 한다", detail: "느리거나 실패해도 결제사의 재시도와 엮이지 않는다." },
+  ]}
+/>
+
+폴링이 나은 경우도 있다. 받는 쪽이 공개 URL을 열 수 없을 때(사내망, 모바일 앱), 이벤트가 아주 잦아 "최신 상태"만 의미 있을 때, 보내는 쪽이 웹훅을 지원하지 않을 때다. 실무에서는 둘을 같이 쓴다. 웹훅으로 빨리 알고, 하루 한 번 폴링(대사, reconciliation)으로 놓친 것을 채운다. 웹훅은 언젠가 반드시 하나쯤 빠지기 때문이다. 브라우저까지 실시간으로 밀어 주는 방법은 [실시간 통신](/posts/realtime-communication)에서 다뤘다. 웹훅은 서버끼리의 이야기다.
+
+## 누가 보냈는지 서명으로 확인한다
+
+웹훅 URL은 인터넷에 열려 있다. 주소만 알면 누구나 `{"type":"order.paid"}`를 POST할 수 있다. 그래서 보내는 쪽과 받는 쪽이 비밀 키 하나를 나눠 갖고, 보내는 쪽이 본문으로 HMAC을 계산해 헤더에 붙인다. HMAC은 비밀 키와 메시지를 섞어 만든 해시다. 키를 모르면 맞는 값을 만들 수 없고, 본문이 한 글자만 바뀌어도 값이 완전히 달라진다.
+
+GitHub 방식이 가장 단순하다. 본문 전체로 HMAC-SHA256을 계산해 `X-Hub-Signature-256: sha256=<hex>`로 보낸다. openssl과 GitHub 공식 라이브러리(`@octokit/webhooks-methods` 6.0)로 같은 본문을 서명해 봤다.
+
+```bash
+# 본문과 비밀 키로 HMAC-SHA256 계산
+printf '%s' '{"id":"evt_01JB7Q","type":"order.paid"}' | openssl dgst -sha256 -hmac 'whsec_demo_5f2c9a'
+# GitHub 라이브러리의 sign()
+node sdk.mjs
+```
+
+```text
+SHA2-256(stdin)= 1495cc2f53be99e27cc106c6f28e7d2dd34f08c329607ff928526cb7035e94fd
+X-Hub-Signature-256: sha256=1495cc2f53be99e27cc106c6f28e7d2dd34f08c329607ff928526cb7035e94fd
+```
+
+두 값이 같다. 서명은 결국 이 한 줄 계산이다. 이 방식에는 빈틈이 하나 있다. 서명이 본문에만 걸려 있어서, 누군가 정상 요청 하나를 가로채 저장해 두면 한 달 뒤에 그대로 다시 보내도 서명이 맞는다. 재전송 공격(replay attack)이다. HTTPS가 전송 중 가로채기를 막아 주지만, 로그나 프록시에 남은 요청, 받는 쪽 내부에서 새어 나간 요청까지 막지는 못한다.
+
+Stripe는 서명할 내용에 시각을 넣는다. `t=<유닉스 초>`와 `t.본문`으로 계산한 서명을 함께 보낸다. 아래 헤더 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="Stripe 방식 서명 헤더. 시각이 서명 안에 들어 있어서 시각만 바꿔 재전송할 수 없다"
+  base="X-Shop-Signature:"
+  separator=" "
+  joiner=","
+  params={[
+    { key: "t", value: "1792524467", title: "서명한 시각 (유닉스 초)", description: "받는 쪽은 지금 시각과 비교해 5분(300초)보다 차이 나면 버린다. 이 값을 바꾸면 아래 서명이 안 맞으니 공격자가 고칠 수 없다.", code: "2026-10-20 19:27:47 UTC", required: true },
+    { key: "v1", value: "634a0fd0…6eb1778", title: "HMAC-SHA256(secret, t + \".\" + body)", description: "점 하나로 시각과 본문 원문을 이어 붙여 서명한다. 파싱한 JSON이 아니라 받은 바이트 그대로여야 한다.", code: "createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex')", required: true },
+    { key: "v1-next", display: "v1=9c1e…", title: "두 번째 v1 (키 교체 중)", description: "비밀 키를 바꾸는 동안에는 옛 키와 새 키로 만든 서명을 둘 다 보낸다. 받는 쪽은 둘 중 하나만 맞으면 통과시킨다. 키를 끊김 없이 교체하는 장치다." },
+  ]}
+/>
+
+내가 만든 서명이 Stripe 공식 SDK(`stripe` 23.0)와 같은지도 확인했다.
+
+```bash
+node sdk.mjs   # generateTestHeaderString과 직접 계산한 HMAC 비교
+```
+
+```text
+Stripe-Signature: t=1792540800,v1=22bc3b28328664d2270ef9b82e878b116052a1f4c15344130d5fa6fa89d65dd3
+직접 계산한 v1:    22bc3b28328664d2270ef9b82e878b116052a1f4c15344130d5fa6fa89d65dd3
+```
+
+SDK의 기본 허용 범위가 300초인 것도 실제로 돌려 봤다. 서명 시각을 0초, 299초, 301초, 600초 전으로 만들어 `constructEvent`에 넣었다.
+
+```text
+age 0s: ok
+age 299s: ok
+age 301s: Timestamp outside the tolerance zone
+age 600s: Timestamp outside the tolerance zone
+```
+
+SDK 코드를 보면 이 검사는 "얼마나 오래됐나"만 본다. 미래 시각은 통과한다. 보내는 쪽 시계가 앞서 있어도 거절하지 않으려는 선택으로 보인다. 직접 구현한다면 양쪽 모두 범위를 두는 편이 깔끔하고, 서버 시계는 NTP로 맞춰 둔다. 시계가 5분 넘게 틀어지면 정상 웹훅이 전부 거절된다. 시계 어긋남이 만드는 다른 문제는 [시계 차이](/posts/clock-skew)에서 다룬다.
+
+참고로 여러 회사가 형식을 맞추려고 만든 Standard Webhooks 명세는 `webhook-id`, `webhook-timestamp`, `webhook-signature` 세 헤더를 쓰고 id와 시각과 본문을 함께 서명한다. 이름만 다를 뿐 구조는 Stripe와 같다.
+
+## 받는 쪽 서버를 직접 띄워 공격해 본다
+
+아래가 받는 쪽 서버의 핵심이다. 순서가 중요하다. 서명을 먼저 보고, 시각을 보고, 중복을 보고, 마지막에 큐에 넣는다.
+
+```js
+function verify(header, raw, nowSec) {
+  const parts = Object.fromEntries(header.split(",").map((kv) => kv.split("=")));
+  const t = Number(parts.t);
+  if (!t || !parts.v1) return "malformed";
+  if (Math.abs(nowSec - t) > TOLERANCE_SEC) return `too old (${nowSec - t}s)`;
+  const expected = crypto.createHmac("sha256", SECRET).update(`${t}.${raw}`).digest("hex");
+  const a = Buffer.from(expected, "hex"), b = Buffer.from(parts.v1, "hex");
+  // 길이가 다르면 timingSafeEqual이 예외를 던지니 먼저 거른다
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return "bad signature";
+  return "ok";
+}
+```
+
+비교에 `===`가 아니라 `timingSafeEqual`을 쓴다. 문자열 비교는 첫 글자가 다르면 바로 끝나서, 응답 시간을 아주 많이 재면 맞는 앞부분을 한 글자씩 알아낼 수 있다(타이밍 공격). 상수 시간 비교는 어디서 달라지든 같은 시간이 걸린다.
+
+서버를 띄우고 curl로 다섯 가지 요청을 보냈다.
+
+```bash
+node receiver.js > recv.log &
+SIG=$(node sign.js body.json)          # 지금 시각으로 서명
+# 1. 정상 요청
+curl -s -X POST http://127.0.0.1:8098/hooks/shop -H "X-Shop-Signature: $SIG" --data-binary @body.json
+# 2. 같은 요청을 그대로 다시 (재시도이거나 재전송 공격)
+curl -s -X POST http://127.0.0.1:8098/hooks/shop -H "X-Shop-Signature: $SIG" --data-binary @body.json
+# 3. 금액을 42000에서 1로 바꾼 본문에 옛 서명
+sed 's/42000/1/' body.json > tampered.json
+curl -s -X POST http://127.0.0.1:8098/hooks/shop -H "X-Shop-Signature: $SIG" --data-binary @tampered.json
+# 4. 값은 같고 공백만 다른 JSON
+curl -s -X POST http://127.0.0.1:8098/hooks/shop -H "X-Shop-Signature: $SIG" --data-binary @pretty.json
+# 5. 10분 전에 서명된 요청을 재전송
+OLD=$(node sign.js body.json $(( $(date +%s) - 600 )))
+curl -s -X POST http://127.0.0.1:8098/hooks/shop -H "X-Shop-Signature: $OLD" --data-binary @body.json
+cat recv.log
+```
+
+```text
+listening :8098
+accepted: evt_01JB7Q order.paid -> queue size 1
+duplicate: evt_01JB7Q (already handled)
+reject: bad signature
+reject: bad signature
+reject: too old (600s)
+```
+
+세 번째는 예상대로다. 네 번째가 실무에서 자주 사고를 낸다. 값이 같은 JSON인데 서명이 안 맞는다. 서명은 바이트에 걸려 있기 때문이다. Express에서 `app.use(express.json())`을 먼저 걸면 본문이 객체로 파싱되고, 그걸 `JSON.stringify`로 되돌린 문자열은 원본과 공백·키 순서·유니코드 이스케이프가 다를 수 있다. Stripe SDK에 다시 직렬화한 본문을 넣으면 에러 메시지가 아예 이 실수를 짚는다.
+
+```text
+re-serialized body: No signatures found matching the expected signature for payload. Are you passing the raw request body you received from Stripe?
+```
+
+웹훅 경로만 `express.raw({ type: "application/json" })`로 받거나, 프레임워크의 raw body 옵션을 켠다. 운영에서 "로컬에선 되는데 배포하면 서명 실패"가 나면 대개 앞단 미들웨어나 프록시가 본문을 건드린 것이다.
+
+두 번째 요청은 서명도 시각도 맞아서 통과했다. 이걸 막은 건 이벤트 id 기록이다. 시각 검사는 5분이 지난 재전송을, id 기록은 5분 안의 재전송과 정상적인 재시도를 막는다. 둘은 역할이 다르니 둘 다 둔다. id 기록은 최소한 허용 범위(5분)보다 오래, 보통은 보내는 쪽의 재시도 기간(며칠)보다 오래 보관한다.
+
+직접 헤더를 해석해 보는 연습이다. 서명 헤더와 지금 시각을 받아, 형식이 틀렸으면 `"malformed"`, 시각이 범위를 벗어나면 `"out of window"`, 통과하면 확인해야 할 v1 서명 목록을 돌려준다. 키 교체 중에는 v1이 여러 개 올 수 있다.
+
+<CodePlayground
+  caption="서명 헤더 해석: 시각 범위와 키 교체"
+  functionName="signaturesToCheck"
+  initialCode={`function signaturesToCheck(header, nowSec, toleranceSec) {
+  // "t=...,v1=...,v1=..." 를 쪼갠다. 모르는 키(v0 등)는 무시한다
+  // t가 정확히 하나이고 숫자이며 v1이 하나 이상이어야 한다
+  return "malformed";
+}`}
+  solution={`function signaturesToCheck(header, nowSec, toleranceSec) {
+  const t = [];
+  const v1 = [];
+  for (const part of header.split(",")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (k === "t") t.push(v);
+    else if (k === "v1") v1.push(v);
+  }
+  if (t.length !== 1 || !/^\\d+$/.test(t[0]) || v1.length === 0) return "malformed";
+  if (Math.abs(nowSec - Number(t[0])) > toleranceSec) return "out of window";
+  return v1;
+}`}
+  tests={[
+    { label: "100초 전 서명", args: ["t=1792540800,v1=5f2c", 1792540900, 300], expected: ["5f2c"] },
+    { label: "301초 전 서명", args: ["t=1792540800,v1=5f2c", 1792541101, 300], expected: "out of window" },
+    { label: "400초 미래", args: ["t=1792541200,v1=5f2c", 1792540800, 300], expected: "out of window" },
+    { label: "t 없음", args: ["v1=5f2c", 1792540800, 300], expected: "malformed" },
+    { label: "키 교체 중", args: ["t=1792540800,v1=aaaa,v1=bbbb", 1792540800, 300], expected: ["aaaa", "bbbb"] },
+    { label: "v0는 무시", args: ["t=1792540800,v0=dead,v1=5f2c", 1792540810, 300], expected: ["5f2c"] },
+    { label: "t가 숫자가 아님", args: ["t=abc,v1=5f2c", 1792540810, 300], expected: "malformed" },
+  ]}
+/>
+
+## 처리를 끝내고 응답하면 세 번 처리된다
+
+맨 앞의 "포인트 세 번 적립"을 재현했다. 받는 쪽은 포인트 적립을 다 끝낸 뒤 응답하고 그게 3초 걸린다. 보내는 쪽은 2초 안에 2xx가 안 오면 실패로 보고 1초, 2초 뒤 다시 보낸다.
+
+```bash
+node slow.js > slow.log &    # 처리를 끝내고 응답하는 수신 서버
+node sender.js               # 2초 타임아웃, 최대 3번
+cat slow.log
+```
+
+```text
+19:34:27.167 send attempt 1: TimeoutError -> 1000ms 뒤 재시도
+19:34:30.171 send attempt 2: TimeoutError -> 2000ms 뒤 재시도
+19:34:34.174 send attempt 3: TimeoutError -> 포기
+--- receiver
+19:34:25.304 recv #1 evt_01JB7Q: 포인트 적립 시작
+19:34:28.172 recv #2 evt_01JB7Q: 포인트 적립 시작
+19:34:28.306 recv #1 evt_01JB7Q: 포인트 적립 완료
+19:34:31.173 recv #2 evt_01JB7Q: 포인트 적립 완료
+19:34:32.175 recv #3 evt_01JB7Q: 포인트 적립 시작
+19:34:35.176 recv #3 evt_01JB7Q: 포인트 적립 완료
+```
+
+받는 쪽은 세 번 모두 성공했고, 보내는 쪽은 세 번 모두 실패로 기록했다. 양쪽 기록이 정반대다. 보내는 쪽 타임아웃은 "응답을 못 받았다"일 뿐 "처리가 안 됐다"가 아니다. 이 간극은 네트워크 너머로 일을 시키는 모든 곳에 있고 [타임아웃](/posts/timeouts)에서 자세히 다뤘다. 웹훅에서 고치는 방법은 두 가지를 같이 하는 것이다. 응답을 빨리 주고, 같은 id는 한 번만 처리한다.
+
+<NetworkTopology
+  caption="받는 API는 저장만 하고 바로 200을 주고, 처리는 큐 뒤의 작업자가 한다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "ext", label: "결제사", x: 8, y: 20, w: 120, h: 220, tone: "edge" },
+    { id: "ours", label: "우리 서비스", x: 140, y: 20, w: 252, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "psp", label: "sender", sub: "timeout 10s", x: 68, y: 80, icon: "server" },
+    { id: "api", label: "hook API", sub: "verify", x: 210, y: 80, icon: "gateway", w: 100 },
+    { id: "inbox", label: "inbox", sub: "UNIQUE(id)", x: 210, y: 190, icon: "db", w: 100 },
+    { id: "q", label: "queue", sub: "event id", x: 330, y: 80, icon: "switch", w: 100 },
+    { id: "w", label: "worker", sub: "포인트 적립", x: 330, y: 190, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "psp", to: "api" },
+    { from: "api", to: "inbox" },
+    { from: "api", to: "q" },
+    { from: "q", to: "w" },
+    { from: "w", to: "inbox", dashed: true },
+  ]}
+  steps={[
+    { path: ["psp", "api"], packet: "POST", title: "웹훅이 도착한다", detail: "서명과 시각을 확인한다. 여기까지는 밀리초 단위다." },
+    { path: ["api", "inbox"], packet: "INSERT", title: "이벤트를 그대로 저장한다", detail: "id에 UNIQUE를 걸어 두면 같은 이벤트는 두 번 들어가지 않는다. 원문도 저장해 두면 나중에 다시 처리할 수 있다.", payload: "INSERT INTO webhook_inbox(id, type, body) ... ON CONFLICT (id) DO NOTHING" },
+    { path: ["api", "q"], packet: "id", title: "처리할 일을 큐에 넣는다", detail: "outbox처럼 inbox 테이블을 작업자가 직접 읽게 해도 된다." },
+    { path: ["api", "psp"], packet: "200", title: "바로 200을 준다", detail: "보내는 쪽은 이 응답을 '받았다'로 기록하고 재시도하지 않는다." },
+    { path: ["q", "w", "inbox"], packet: "done", title: "작업자가 처리하고 상태를 바꾼다", detail: "느려도, 실패해서 다시 해도 보내는 쪽과는 상관없다. 여러 번 실패하면 DLQ로 보낸다." },
+  ]}
+/>
+
+같은 실험을 이 구조로 바꿔서 돌렸다. 보내는 쪽을 두 번 실행해 "같은 이벤트가 재시도로 또 온" 상황도 넣었다.
+
+```text
+19:34:38.241 send attempt 1: 200
+19:34:38.375 send attempt 1: 200
+--- receiver
+19:34:38.232 recv evt_01JB7Q: 저장 후 200
+19:34:38.360 worker evt_01JB7Q: 포인트 적립 시작
+19:34:38.366 recv evt_01JB7Q: 이미 받은 이벤트, 200
+19:34:41.360 worker evt_01JB7Q: 포인트 적립 완료
+```
+
+첫 요청은 10ms 안에 200을 받았고, 두 번째 요청은 이미 받은 이벤트라 처리 없이 200을 받았다. 중복일 때 4xx를 주면 안 된다. 보내는 쪽은 4xx도 실패로 보고 계속 재시도하거나 엔드포인트를 비활성화할 수 있다. "이미 받았다"는 성공이다.
+
+응답 코드에는 의미가 있다. 서명이 틀린 요청은 400이나 401로 거절한다. 다시 보내도 결과가 같으니 보내는 쪽이 재시도하지 않아도 된다(대부분의 제공자는 그래도 재시도한다). 우리 쪽 DB가 잠깐 죽어 저장을 못 했을 때는 5xx를 줘서 재시도를 부른다. 저장하기 전에 200을 주면 그 이벤트는 영원히 잃는다. 큐 이후의 처리 실패와 재처리는 [메시지 큐](/posts/message-queue-basics)와 [DLQ](/posts/dead-letter-queue)의 영역이다.
+
+보내는 쪽의 재시도 정책은 제공자마다 다르다. 공식 문서 기준으로 GitHub는 10초 안에 2xx를 기대하고, 실패한 전달을 자동으로 다시 보내지 않으며 사용자가 화면이나 API로 재전송한다. Stripe는 운영 모드에서 최대 3일 동안 간격을 늘려 가며 재시도한다. 정책은 바뀔 수 있으니 붙일 제공자의 문서를 직접 확인하고, 재시도가 없는 제공자라면 폴링 대사가 더 중요해진다.
+
+## 순서는 보장되지 않는다
+
+결제 후 바로 환불한 주문에서 `order.paid` 전달이 한 번 실패했다. 재시도된 `paid`는 `order.refunded`보다 늦게 도착한다. 도착 순서대로 상태를 덮어쓰면 환불된 주문이 "결제 완료"로 남는다. Stripe 문서도 이벤트가 만든 순서대로 온다고 보장하지 않는다고 적는다. 재시도가 있는 한 순서는 깨진다.
+
+```bash
+node order.js   # created → refunded → paid(재시도) 순서로 도착
+```
+
+```text
+도착 순서대로 덮어쓰기: paid
+  skip evt_2 (order.paid): 1792540860 <= 1792540920
+이벤트 시각이 더 새로울 때만 반영: refunded
+```
+
+<AlgoTrace
+  caption="이벤트의 생성 시각을 행에 같이 저장하고, 더 오래된 이벤트는 버린다"
+  memoryLabel="orders.status (반영한 이벤트 시각)"
+  cells={["created @800", "refunded @920", "paid @860"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["pending (800)"], caption: "첫 이벤트. 행이 비어 있으니 반영한다." },
+    { pointer: 1, found: [0, 1], memory: ["refunded (920)"], caption: "920은 800보다 새롭다. 환불로 바꾼다." },
+    { pointer: 2, found: [0, 1], memory: ["refunded (920)"], caption: "재시도로 늦게 온 paid. 860은 920보다 오래됐으니 버린다. 순서대로 덮어썼다면 여기서 paid가 됐다." },
+  ]}
+/>
+
+방법은 세 가지 정도다. 위처럼 이벤트에 든 생성 시각이나 버전 번호를 행에 같이 저장하고 더 새로운 것만 반영한다. 같은 초에 두 이벤트가 생길 수 있으니 제공자가 버전이나 순번을 주면 그쪽이 낫다. 둘째, 웹훅을 "무언가 바뀌었다"는 알림으로만 쓰고 실제 상태는 제공자 API로 다시 조회한다. 항상 최신을 받으니 순서 문제가 사라지는 대신 API 호출이 늘고 요청 수 제한에 걸릴 수 있다. 셋째, 상태 전이 규칙을 둔다. `refunded`에서 `paid`로는 갈 수 없다고 정해 두면 늦게 온 이벤트가 걸러진다.
+
+## 보내는 쪽이 되면 SSRF를 막는다
+
+이번엔 우리 서비스가 웹훅을 보내는 쪽이다. 고객이 대시보드에 URL을 등록하면 주문 이벤트를 그 주소로 보낸다. 고객이 등록한 URL이 `http://169.254.169.254/latest/meta-data/`라면 어떻게 될까. 클라우드 인스턴스 안에서만 열리는 메타데이터 서버 주소다. 우리 서버가 친절하게 그곳에 요청을 보내고, 응답 본문을 "전송 기록" 화면에 보여 준다면 고객은 우리 서버의 임시 자격 증명을 읽는다. 서버가 남 대신 내부망에 요청을 보내게 만드는 공격을 SSRF(Server-Side Request Forgery)라고 한다.
+
+<NetworkTopology
+  caption="고객이 등록한 URL이 내부 주소면 웹훅 발송기가 내부망으로 가는 문이 된다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "vpc", label: "우리 VPC", x: 150, y: 20, w: 242, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cust", label: "고객", sub: "URL 등록", x: 70, y: 60, icon: "client" },
+    { id: "ext", label: "고객 서버", sub: "203.0.113.9", x: 70, y: 190, icon: "internet" },
+    { id: "sender", label: "hook sender", sub: "egress 검사", x: 230, y: 125, icon: "server", w: 112 },
+    { id: "meta", label: "metadata", sub: "169.254.169.254", x: 330, y: 60, icon: "lock", w: 112 },
+    { id: "redis", label: "redis", sub: "10.0.3.7:6379", x: 330, y: 190, icon: "db", w: 112 },
+  ]}
+  links={[
+    { from: "cust", to: "sender", dashed: true },
+    { from: "sender", to: "ext" },
+    { from: "sender", to: "meta", dashed: true },
+    { from: "sender", to: "redis", dashed: true },
+  ]}
+  steps={[
+    { path: ["sender", "ext"], packet: "POST", title: "정상: 바깥 주소로 보낸다", detail: "DNS로 풀린 주소가 공인 IP라 통과한다." },
+    { path: ["cust", "sender"], packet: "URL", title: "고객이 내부 주소를 등록한다", detail: "https://169.254.169.254/... 또는 10진수로 쓴 https://2130706433/ 같은 주소다." },
+    { path: ["sender", "meta"], packet: "GET", blocked: true, title: "메타데이터 서버로 가는 요청을 막는다", detail: "URL 문자열이 아니라 해석된 IP를 보고 링크 로컬 대역이라 거절한다." },
+    { path: ["sender", "redis"], packet: "POST", blocked: true, title: "사설 대역도 막는다", detail: "10/8, 172.16/12, 192.168/16, 127/8, IPv6 루프백과 ULA까지 거른다." },
+  ]}
+/>
+
+막는 쪽에서 흔한 실수는 URL 문자열을 검사하는 것이다. `127.0.0.1`과 `localhost`만 막으면 다른 표기로 쉽게 우회된다. node의 URL 파서와 `net.BlockList`로 등록된 URL을 검사해 봤다.
+
+```bash
+node ssrf.js   # URL을 파싱하고, 호스트를 IP로 풀어 사설·링크 로컬 대역이면 거절
+```
+
+```text
+http://169.254.169.254/latest/meta-data/     -> reject: http: (https만 허용)
+https://169.254.169.254/latest/meta-data/    host=169.254.169.254  -> reject: 169.254.169.254
+https://2130706433/admin                     host=127.0.0.1        -> reject: 127.0.0.1
+https://0x7f.1/admin                         host=127.0.0.1        -> reject: 127.0.0.1
+https://[::ffff:127.0.0.1]/                  host=[::ffff:7f00:1]  -> reject: ::ffff:7f00:1
+https://localhost:6379/                      host=localhost        -> reject: 127.0.0.1
+https://10.0.3.7:9200/_cat/indices           host=10.0.3.7         -> reject: 10.0.3.7
+```
+
+`2130706433`(127.0.0.1을 10진수 하나로 쓴 것)과 `0x7f.1`을 URL 파서가 `127.0.0.1`로 바꿔 준다. 문자열 검사였다면 셋째와 넷째 줄은 통과했다. 그래서 검사는 파싱과 DNS 해석이 끝난 IP에 한다. 그것만으로도 부족한 경우가 두 가지 있다.
+
+- DNS 리바인딩: 검사할 때는 공인 IP를 돌려주고, 실제로 연결할 때는 127.0.0.1을 돌려주는 도메인이다. 검사한 IP로 그대로 연결해야 한다(검사와 연결 사이에 다시 해석하지 않는다).
+- 리다이렉트: 정상 주소가 302로 내부 주소를 가리킬 수 있다. 웹훅 발송에서는 리다이렉트를 따라가지 않는다.
+
+가장 튼튼한 방법은 발송기를 네트워크로 격리하는 것이다. 웹훅 발송 전용 작업자를 내부망에 닿지 않는 서브넷에 두거나, 사설 대역을 막는 egress 프록시를 거치게 한다(Stripe가 공개한 Smokescreen이 이런 프록시다). 응답 본문을 고객 화면에 그대로 보여 주지 않는 것도 피해를 줄인다. SSRF 자체는 [SSRF](/posts/ssrf)에서 더 깊게 다룬다.
+
+보내는 쪽이 챙길 것이 하나 더 있다. 고객 서버가 죽어 있으면 발송 작업자가 타임아웃까지 매달려 다른 고객의 웹훅까지 밀린다. 타임아웃을 짧게(5~10초) 두고, 재시도는 지수 백오프와 지터로 흩뜨리고([지수 백오프와 지터](/posts/exponential-backoff-jitter)), 계속 실패하는 엔드포인트는 일정 기간 뒤 비활성화하고 고객에게 알린다. 고객별로 큐를 나누면 한 고객의 장애가 다른 고객의 지연이 되지 않는다.
+
+## 웹훅이 이상할 때 보는 순서
+
+받는 쪽에서 증상별로 먼저 볼 것을 정리한다.
+
+"서명 실패가 갑자기 늘었다." 최근 배포에서 미들웨어 순서가 바뀌었는지 본다. JSON 파서가 웹훅 경로보다 먼저 걸렸을 가능성이 가장 크다. 다음은 비밀 키다. 제공자 대시보드에서 키를 교체(roll)했는데 환경 변수를 안 바꿨거나, 테스트 키와 운영 키가 섞였다. 서명 실패가 일부만이면 서버 시계를 본다(`timedatectl`, `chronyc tracking`).
+
+"제공자 대시보드엔 실패인데 우리 로그엔 처리됨." 앞에서 재현한 타임아웃이다. 엔드포인트의 p99 응답 시간을 본다. 앞단 로드 밸런서나 게이트웨이의 타임아웃이 제공자보다 짧은지도 확인한다.
+
+"같은 처리가 두 번 일어났다." 이벤트 id로 로그를 검색해 몇 번 들어왔는지 센다. 두 번 들어왔다면 중복 제거가 없거나, 중복 검사와 처리 사이에 틈이 있다(검사 후 INSERT가 아니라 UNIQUE 제약으로 막아야 한다).
+
+"이벤트가 안 온다." 제공자 대시보드의 전달 기록부터 본다. 전송 시도가 없으면 구독한 이벤트 종류나 URL이 틀렸다. 시도가 있는데 우리 로그가 없으면 방화벽, WAF, 인증서 문제다. 로컬 개발이라면 `stripe listen`이나 ngrok 같은 터널 도구로 공개 URL을 만들어 받는다.
+
+## 받는 쪽은 의심하고, 보내는 쪽은 조심한다
+
+웹훅은 남이 내 서버를 부르는 HTTP 요청이다. 받는 쪽은 서명을 원문 바이트로 확인하고, 시각과 이벤트 id로 재전송과 중복을 막고, 저장만 하고 빨리 응답하고, 순서는 믿지 않는다. 보내는 쪽은 고객이 준 URL을 내부망으로 가는 문으로 보고, 해석된 IP로 막고, 실패하는 고객이 다른 고객을 붙잡지 않게 격리한다. 그리고 어느 쪽이든 웹훅은 언젠가 빠진다는 전제로 대사 작업을 하나 둔다.
+
+## 면접에서 나올 만한 질문
+
+### 웹훅 요청이 진짜 제공자가 보낸 것인지 어떻게 확인하나요?
+
+공유한 비밀 키로 계산한 HMAC 서명을 헤더로 받아, 받은 원문 바이트로 같은 계산을 해서 비교한다. 비교는 상수 시간 비교(timingSafeEqual)로 한다. 파싱한 JSON을 다시 직렬화하면 바이트가 달라져 서명이 안 맞으니 raw body를 써야 한다.
+
+### 서명에 타임스탬프를 넣는 이유는요?
+
+본문에만 서명하면 정상 요청을 가로채 저장해 두었다가 나중에 그대로 보내도 서명이 맞는다. 시각을 서명 대상에 넣고 허용 범위(보통 5분)를 벗어나면 거절하면 오래된 요청의 재전송을 막을 수 있다. 범위 안의 재전송은 이벤트 id 중복 검사로 막는다.
+
+### 웹훅 핸들러에서 처리를 다 끝내고 응답하면 왜 안 되나요?
+
+처리가 보내는 쪽 타임아웃보다 오래 걸리면 보내는 쪽은 실패로 보고 재시도하고, 우리는 같은 이벤트를 여러 번 처리한다. 받으면 서명 확인 후 저장만 하고 바로 2xx를 주고, 실제 처리는 큐 뒤의 작업자가 한다. 저장하기 전에 2xx를 주면 이벤트를 잃으니 저장이 끝난 뒤 응답한다.
+
+### 같은 웹훅이 두 번 오면 어떻게 하나요?
+
+이벤트 id에 UNIQUE 제약을 건 테이블에 먼저 넣고, 이미 있으면 처리 없이 2xx를 준다. 조회 후 넣는 방식은 동시에 두 요청이 오면 둘 다 통과하니 제약으로 막는다. 중복에 4xx를 주면 보내는 쪽이 실패로 보고 재시도를 계속할 수 있다.
+
+### 이벤트 순서가 바뀌어 도착하면 어떻게 하나요?
+
+재시도가 있는 한 순서는 보장되지 않는다. 이벤트의 생성 시각이나 버전을 행에 함께 저장해 더 새로운 것만 반영하거나, 웹훅을 알림으로만 쓰고 최신 상태를 제공자 API로 다시 조회하거나, 상태 전이 규칙으로 불가능한 전이를 거른다.
+
+### 우리 서비스가 고객 URL로 웹훅을 보낼 때 보안상 무엇을 조심하나요?
+
+SSRF다. 고객이 내부 주소나 클라우드 메타데이터 주소를 등록하면 발송기가 내부망에 요청을 보낸다. URL 문자열이 아니라 해석된 IP로 사설·루프백·링크 로컬 대역을 막고, 검사한 IP로 그대로 연결하고, 리다이렉트를 따라가지 않는다. 가능하면 발송기를 내부망에 닿지 않는 네트워크나 egress 프록시 뒤에 둔다.
+
+### 웹훅만 믿으면 안 되는 이유는요?
+
+제공자 장애, 우리 쪽 장기 장애, 재시도 기간 초과, 재시도를 안 하는 제공자 때문에 이벤트는 언젠가 빠진다. 그래서 주기적으로 제공자 API를 조회해 우리 상태와 맞춰 보는 대사 작업을 함께 둔다. 웹훅은 빠르게 알기 위한 것이고 정합성은 대사가 지킨다.

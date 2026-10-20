@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "api-versioning",
+    title: "API 버전 관리: 고칠 수 없는 클라이언트와의 약속 바꾸기",
+    summary: "추가했을 뿐인데 깨지는 변경을 재현하고, 스키마 비교와 소비자 계약 테스트로 배포 전에 잡고, 날짜 버전 변환 계층과 캐시 Vary, Deprecation·Sunset과 brownout으로 옛 버전을 끝내는 과정을 직접 돌려 본다. 이벤트 스키마와 GraphQL의 진화도 다룬다.",
+    topic: "programming/backend/api",
+    tags: ["Backend", "API", "REST", "HTTP", "Architecture"],
+    date: "2026-10-21",
+    keywords: ["하위 호환", "Sunset 헤더", "소비자 주도 계약", "깨는 변경"],
+  },
+  {
+    slug: "grpc",
+    title: "gRPC: Protocol Buffers와 HTTP/2 위의 RPC",
+    summary: "protobuf가 메시지를 바이트로 만드는 방식, HTTP/2 스트림과 trailers로 오는 상태 코드, 스트리밍과 기한 전파, 연결을 오래 쓰는 탓에 L4 로드 밸런서에서 한 Pod로 몰리는 문제와 해결책을 실제 서버로 확인한다.",
+    topic: "programming/backend/api",
+    tags: ["Backend", "API", "HTTP", "Network", "Performance", "Kubernetes"],
+    date: "2026-10-21",
+    keywords: ["gRPC", "Protocol Buffers", "protobuf"],
+  },
+  {
+    slug: "webhooks",
+    title: "웹훅: 남이 내 서버를 부를 때 지켜야 할 것",
+    summary: "HMAC 서명과 타임스탬프로 위조와 재전송을 막고, 저장 후 바로 응답해 중복 처리를 피하고, 순서가 뒤바뀐 이벤트를 다루는 법을 받는 쪽과 보내는 쪽(SSRF) 모두에서 실제 서버로 확인한다.",
+    topic: "programming/backend/api",
+    tags: ["Backend", "API", "HTTP", "Security", "Resilience"],
+    date: "2026-10-21",
+    keywords: ["웹훅", "웹훅 서명", "재전송 공격"],
+  },
+  {
+    slug: "cron-jobs",
+    title: "크론 잡: 정해진 시각에 한 번만 돌게 만들기",
+    summary: "cron 다섯 칸의 함정과 시간대·서머타임, 겹치는 실행을 막는 flock, 레플리카가 여러 대일 때 회차당 한 번만 돌리는 법, 쿠버네티스 CronJob 설정, 안 돈 작업을 알아채는 dead man's switch까지 직접 돌려 보며 정리한다.",
+    topic: "programming/backend/api",
+    tags: ["Backend", "Linux", "Kubernetes", "DevOps", "Distributed Systems", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["크론 표현식", "CronJob", "concurrencyPolicy", "dead man's switch"],
+  },
+  {
     slug: "ray-casting",
     title: "레이 캐스팅: 광선 하나로 안팎과 벽을 찾는다",
     summary: "배달 구역 다각형 안에 주소가 있는지 광선이 변을 넘는 횟수로 판정하고, 꼭짓점·가로 변·경계 위의 점, 짝홀 규칙과 감는 수의 차이를 실제로 돌려 본다. GPS 흔들림으로 생기는 지오펜스 알림 폭주, 구역 1만 개에서 빨리 찾기, 빠른 총알 충돌 판정과 울펜슈타인식 레이캐스터까지 다룬다.",
