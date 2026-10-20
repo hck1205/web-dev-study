@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "raft-consensus",
+    title: "Raft 합의: 로그 복제, 커밋, 안전한 리더 교체",
+    summary: "과반을 잃은 etcd 리더가 쓰기를 거절하는 장면에서 출발해 AppendEntries와 커밋 번호, 어긋난 로그 고치기와 스냅숏, 로그가 최신인 후보만 이기는 투표 규칙, 고립된 멤버가 임기를 부풀리는 현상과 Pre-Vote, learner로 멤버 바꾸기를 etcd 3.4 실제 로그로 따라간다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["System Design", "Distributed Systems", "Algorithm", "Kubernetes", "Resilience"],
+    date: "2026-10-22",
+    keywords: ["Raft 합의", "AppendEntries", "로그 복제", "Pre-Vote"],
+  },
+  {
+    slug: "rsync-algorithm",
+    title: "rsync 알고리즘: 바뀐 블록만 보내는 굴리는 체크섬",
+    summary: "46MB 로그 한 줄을 고쳐 보내며 받는 쪽이 블록 지문을 보내고 보내는 쪽이 창을 한 바이트씩 밀어 찾는 과정, 굴리는 체크섬과 강한 해시, Matched data와 Literal data 읽기, 블록 크기와 압축 파일, quick check가 파일을 놓치는 경우를 실제 출력으로 본다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["Algorithm", "Linux", "Performance", "Network", "DevOps"],
+    date: "2026-10-22",
+    keywords: ["rsync 알고리즘", "굴리는 체크섬", "rolling checksum", "델타 전송"],
+  },
+  {
+    slug: "merkle-tree",
+    title: "머클 트리: 해시 하나로 아래 전체를 대신한다",
+    summary: "키 1억 개짜리 복제본 두 대에서 놓친 쓰기를 찾는 문제에서 출발해 해시 트리를 쌓고, 루트부터 다른 가지만 내려가 log n번 만에 차이를 찾는 법, 형제 해시 몇 개로 하는 포함 증명을 실제 해시값으로 따라간다. Git tree 객체, Cassandra repair, 인증서 투명성 로그, 비트코인 블록과 직접 만들 때 생기는 구멍을 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["Algorithm", "Data Structure", "System Design", "Distributed Systems", "Git"],
+    date: "2026-10-22",
+    keywords: ["머클 트리", "Merkle tree", "포함 증명", "해시 트리"],
+  },
+  {
     slug: "crdt",
     title: "CRDT: 어떤 순서로 합쳐도 같아지는 자료형",
     summary: "합치기가 교환·결합·멱등이면 순서와 중복을 무시할 수 있다. G-Counter, PN-Counter, LWW-Register, OR-Set을 직접 만들어 확인하고, Yjs로 오프라인 두 기기를 합쳐 보며 시퀀스 CRDT의 id와 묘비 비용, OT와의 선택 기준을 다룬다.",

@@ -2,6 +2,36 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "raft-consensus": {
+    "links": [
+      "leader-election",
+      "db-type-newsql",
+      "db-consistency-cap"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "kafka-basics"
+    ]
+  },
+  "rsync-algorithm": {
+    "links": [
+      "merkle-tree",
+      "traffic-shaping-qos"
+    ],
+    "mentions": []
+  },
+  "merkle-tree": {
+    "links": [
+      "eventual-consistency",
+      "git-internals-basics",
+      "rsync-algorithm",
+      "bloom-filter"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-type-key-value"
+    ]
+  },
   "crdt": {
     "links": [
       "operational-transform",
@@ -52,6 +82,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-lock",
       "iptables-basics",
       "timeouts",
+      "raft-consensus",
       "db-replication-sharding"
     ],
     "mentions": [
@@ -74,6 +105,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "network-partitions",
       "clock-skew",
+      "merkle-tree",
       "crdt",
       "caching-strategies"
     ],
@@ -578,6 +610,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics"
     ],
     "mentions": [
+      "raft-consensus",
       "http-caching-cdn",
       "dns"
     ]
@@ -616,6 +649,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leader-election": {
     "links": [
       "distributed-lock",
+      "raft-consensus",
       "distributed-transactions-2pc"
     ],
     "mentions": [
@@ -651,6 +685,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices",
       "saga-pattern",
       "db-type-newsql",
+      "raft-consensus",
       "idempotency-key",
       "leader-election"
     ],
@@ -2494,6 +2529,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-basics",
+      "raft-consensus",
       "distributed-transactions-2pc",
       "postgres-getting-started"
     ]
@@ -2597,6 +2633,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column"
     ],
     "mentions": [
+      "raft-consensus",
       "leader-election",
       "dns"
     ]
@@ -2769,6 +2806,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-staging-area",
       "git-ignore-config",
       "git-branch-merge",
+      "merkle-tree",
       "git-troubleshooting",
       "git-stash-reflog"
     ],

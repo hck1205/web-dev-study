@@ -131,6 +131,7 @@ import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { LOSSY_COUNTING } from "./lossy-counting";
+import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { MICRO_FRONTENDS } from "./micro-frontends";
@@ -189,6 +190,7 @@ import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
+import { RAFT_CONSENSUS } from "./raft-consensus";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
 import { REACT_RERENDER } from "./react-rerender";
@@ -206,6 +208,7 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
+import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
@@ -384,6 +387,7 @@ export const QUESTION_SETS = [
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
   LOSSY_COUNTING,
+  MERKLE_TREE,
   MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
   MICRO_FRONTENDS,
@@ -442,6 +446,7 @@ export const QUESTION_SETS = [
   PUB_SUB,
   PYTHAGOREAN_THEOREM,
   RABBITMQ_BASICS,
+  RAFT_CONSENSUS,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
   REACT_RERENDER,
@@ -459,6 +464,7 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   RETRIES,
+  RSYNC_ALGORITHM,
   SAGA_PATTERN,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,

@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 250편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 253편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -30,7 +30,7 @@
 - 소제목: 비트 배열에 도장 세 개 찍기 / 거짓 양성 확률을 계산하고 재 보기 / 크기와 해시 개수를 고르는 법 / 계획보다 많이 넣으면 무너진다 / Redis에서 쓰기 (RedisBloom) / 지울 수 없는 이유와 대안 / 디스크를 읽기 전에 묻는다 / 한 번 보고 마는 것들을 거른다 / DB 안에도 있다: PostgreSQL bloom 인덱스 / 블룸 필터가 사고를 내는 방식 / 조금 틀려도 되는 질문에만 쓴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: caching-strategies, db-type-wide-column, hyperloglog, count-min-sketch, lossy-counting
 - 키워드 백링크 →: db-type-embedded, cdn-edge-anycast, redis-basics, dns
-- 이 글로 오는 글 ←: ab-testing, caching-strategies, count-min-sketch, db-transaction-isolation, db-type-wide-column, hyperloglog, lossy-counting
+- 이 글로 오는 글 ←: ab-testing, caching-strategies, count-min-sketch, db-transaction-isolation, db-type-wide-column, hyperloglog, lossy-counting, merkle-tree
 
 #### `count-min-sketch` — Count-Min Sketch: 더 세는 쪽으로만 틀리는 고정 크기 표
 
@@ -76,6 +76,17 @@
 - 키워드 백링크 →: bloom-filter, postgres-architecture, redis-basics, db-modeling-normalization, dns
 - 이 글로 오는 글 ←: bloom-filter, count-min-sketch, hyperloglog, rendering-strategies
 
+#### `merkle-tree` — 머클 트리: 해시 하나로 아래 전체를 대신한다
+
+- 요약: 키 1억 개짜리 복제본 두 대에서 놓친 쓰기를 찾는 문제에서 출발해 해시 트리를 쌓고, 루트부터 다른 가지만 내려가 log n번 만에 차이를 찾는 법, 형제 해시 몇 개로 하는 포함 증명을 실제 해시값으로 따라간다. Git tree 객체, Cassandra repair, 인증서 투명성 로그, 비트코인 블록과 직접 만들 때 생기는 구멍을 다룬다.
+- 태그: Algorithm, Data Structure, System Design, Distributed Systems, Git
+- 키워드: 머클 트리, Merkle tree, 포함 증명, 해시 트리
+- 길이: 382줄
+- 소제목: 해시를 쌓아 올린 나무 / 루트가 다르면 다른 가지만 따라 내려간다 / 블록 하나가 들어 있다는 짧은 증명 / Git의 tree 객체도 머클 트리다 / 복제본 수리: Cassandra repair / 인증서 투명성과 블록체인 / 직접 만들 때 생기는 구멍 / 대안과 고르는 기준 / 해시 하나가 아래 전체를 대신한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: eventual-consistency, git-internals-basics, rsync-algorithm, bloom-filter
+- 키워드 백링크 →: db-type-wide-column, db-type-key-value
+- 이 글로 오는 글 ←: eventual-consistency, git-internals-basics, rsync-algorithm
+
 #### `operational-transform` — Operational Transformation: 동시 편집을 위치 변환으로 맞추기
 
 - 요약: cats를 두 사람이 동시에 고치면 왜 갈라지는지에서 출발해 삽입·삭제 변환 함수, TP1과 TP2, 서버가 리비전을 매기는 Jupiter 방식을 ShareDB로 직접 돌려 본다. 메시지 순서가 섞일 때의 실패, 의도 보존의 경계 사례, 실무에서 갈라짐을 추적하는 법까지 다룬다.
@@ -85,6 +96,27 @@
 - 소제목: 위치로 말하는 편집은 동시에 오면 어긋난다 / 상대 연산을 내 문서에 맞게 고쳐 쓴다 / 네 가지 짝마다 규칙이 다르다 / 세 명이 되면 변환 순서가 결과를 바꾼다 / 서버가 순서를 정하면 TP1만 있으면 된다 / 메시지가 늦게, 뒤바뀌어 오면 / 수렴했다고 사용자가 원한 결과는 아니다 / 변환 함수를 직접 짜 보기 / 공동 편집이 이상할 때 보는 곳 / 언제 OT를 고르나 / 면접에서 나올 만한 질문
 - 직접 링크 →: crdt, realtime-communication, eventual-consistency
 - 이 글로 오는 글 ←: crdt, pattern-command, realtime-communication
+
+#### `raft-consensus` — Raft 합의: 로그 복제, 커밋, 안전한 리더 교체
+
+- 요약: 과반을 잃은 etcd 리더가 쓰기를 거절하는 장면에서 출발해 AppendEntries와 커밋 번호, 어긋난 로그 고치기와 스냅숏, 로그가 최신인 후보만 이기는 투표 규칙, 고립된 멤버가 임기를 부풀리는 현상과 Pre-Vote, learner로 멤버 바꾸기를 etcd 3.4 실제 로그로 따라간다.
+- 태그: System Design, Distributed Systems, Algorithm, Kubernetes, Resilience
+- 키워드: Raft 합의, AppendEntries, 로그 복제, Pre-Vote
+- 길이: 415줄
+- 소제목: 같은 순서의 기록을 여러 대에 남기는 일 / 쓰기 하나가 커밋되기까지 / 과반이면 왜 충분한가 / 어긋난 팔로워의 로그를 고친다 / 너무 뒤처지면 로그 대신 스냅숏을 보낸다 / 아무나 리더가 될 수는 없다 / 고립된 멤버가 임기를 부풀린다 / 멤버를 바꾸는 일 / 리더가 자꾸 바뀌거나 쓰기가 느릴 때 / 과반이 기억하는 것만 기록이 된다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leader-election, db-type-newsql, db-consistency-cap
+- 키워드 백링크 →: db-type-key-value, kafka-basics
+- 이 글로 오는 글 ←: db-type-key-value, db-type-newsql, distributed-transactions-2pc, leader-election, network-partitions, rabbitmq-basics
+
+#### `rsync-algorithm` — rsync 알고리즘: 바뀐 블록만 보내는 굴리는 체크섬
+
+- 요약: 46MB 로그 한 줄을 고쳐 보내며 받는 쪽이 블록 지문을 보내고 보내는 쪽이 창을 한 바이트씩 밀어 찾는 과정, 굴리는 체크섬과 강한 해시, Matched data와 Literal data 읽기, 블록 크기와 압축 파일, quick check가 파일을 놓치는 경우를 실제 출력으로 본다.
+- 태그: Algorithm, Linux, Performance, Network, DevOps
+- 키워드: rsync 알고리즘, 굴리는 체크섬, rolling checksum, 델타 전송
+- 길이: 452줄
+- 소제목: 두 쪽이 서로의 파일을 모른다 / 받는 쪽이 먼저 블록 지문을 보낸다 / 한 칸씩 미는 체크섬 / 약한 체크섬과 강한 해시를 같이 쓰는 이유 / 46MB 파일 한 줄을 고쳐 보내 보기 / 블록 크기가 정하는 것 / 델타 전송이 통하지 않는 파일 / 아예 보내지 않고 건너뛰는 판단 / 백업이 느리거나 이상할 때 보는 곳 / 다른 도구들이 고른 방법 / 굴려서 찾고 해시로 확인한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: merkle-tree, traffic-shaping-qos
+- 이 글로 오는 글 ←: merkle-tree
 
 ### Programming › Backend (`programming/backend`)
 
@@ -212,7 +244,7 @@
 - 소제목: 토픽은 파티션 여러 개로 된 로그다 / 키가 파티션을 정하고, 순서는 파티션 안에서만 지킨다 / 오프셋은 컨슈머가 남기는 책갈피다 / 소비자 그룹과 리밸런싱 / 랙은 남은 일의 양이다 / 리더 하나에 팔로워 둘, 그리고 acks / 얼마나 오래 둘까: 보관 기간과 컴팩션 / 랙 알람이 울렸을 때 보는 순서 / Kafka가 맞지 않는 곳 / 파티션 수가 병렬성의 상한이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: pub-sub, message-queue-basics, event-driven-architecture, message-delivery-semantics, consistent-hashing, rabbitmq-basics
 - 키워드 백링크 →: db-type-wide-column
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-transactions-2pc, elasticsearch-inverted-index, event-driven-architecture, k8s-hpa, k8s-service-types, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, pattern-iterator, pub-sub, rabbitmq-basics, realtime-communication, redis-basics, saga-pattern
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-transactions-2pc, elasticsearch-inverted-index, event-driven-architecture, k8s-hpa, k8s-service-types, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, pattern-iterator, pub-sub, rabbitmq-basics, raft-consensus, realtime-communication, redis-basics, saga-pattern
 
 #### `message-delivery-semantics` — 메시지 전달 보장: 최대 한 번, 최소 한 번, 정확히 한 번은 어디까지
 
@@ -255,7 +287,7 @@
 - 길이: 459줄
 - 소제목: 큐가 아니라 익스체인지로 보낸다 / 익스체인지 네 종류 / 갈 곳 없는 메시지를 잡는 법 / 브로커가 받았는지 확인하는 발행 확인 / ack와 prefetch: 컨슈머가 몇 개를 쥐고 있나 / 클래식 큐와 쿼럼 큐 / 실패한 메시지를 보내는 데드 레터 익스체인지 / 큐가 쌓이거나 비었을 때 보는 순서 / Kafka와 무엇이 다른가 / 익스체인지가 정하고, ack가 지우고, 쿼럼이 지킨다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, pub-sub, dead-letter-queue, message-delivery-semantics, event-driven-architecture, kafka-basics
-- 키워드 백링크 →: http-caching-cdn, dns
+- 키워드 백링크 →: raft-consensus, http-caching-cdn, dns
 - 이 글로 오는 글 ←: db-architecture-by-scale, dead-letter-queue, event-driven-architecture, kafka-basics, message-queue-basics, microservices
 
 ### Programming › Common (`programming/common`)
@@ -312,9 +344,9 @@
 - 키워드: blob 객체, 내용 주소 지정, packfile, annotated tag
 - 길이: 575줄
 - 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, git-troubleshooting, git-stash-reflog
+- 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, merkle-tree, git-troubleshooting, git-stash-reflog
 - 키워드 백링크 →: github-actions-docker-ecr, git-tips-advanced, git-branching-strategy, git-large-files-secrets
-- 이 글로 오는 글 ←: git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, pattern-facade, pattern-flyweight, pattern-memento
+- 이 글로 오는 글 ←: git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
 
 #### `git-large-files-secrets` — 커밋에 들어가면 안 되는 것: 큰 파일, 비밀 값, 줄바꿈, 권한
 
@@ -515,7 +547,7 @@
 - 소제목: 끊긴 회선 앞에서 고르는 두 가지 / CAP이 말하지 않는 것 / 회선이 멀쩡해도 고르는 것 / 일관성은 켜고 끄는 게 아니라 사다리다 / 쿼럼으로 일관성을 고르는 DB / AP를 고르면 충돌을 누가 푸나 / DB 종류마다 서 있는 자리 / 데이터마다 얼마나 틀려도 되는지 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-transaction-isolation, db-type-newsql, db-replication-sharding, eventual-consistency, db-type-wide-column, redis-replication-sentinel
 - 키워드 백링크 →: db-type-key-value, network-partitions, mongodb-document-model, leader-election, redis-basics, crdt
-- 이 글로 오는 글 ←: clock-skew, crdt, db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview, eventual-consistency, network-partitions
+- 이 글로 오는 글 ←: clock-skew, crdt, db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview, eventual-consistency, network-partitions, raft-consensus
 
 #### `db-type-columnar-olap` — 컬럼형 분석 DB: OLTP와 OLAP을 나누는 이유
 
@@ -558,8 +590,8 @@
 - 길이: 460줄
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
-- 키워드 백링크 →: leader-election, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, helm-values-secrets, k8s-configmap, k8s-namespace, k8s-pod-basics, k8s-project-structure, k8s-secret, leader-election, network-partitions, optimistic-locking, service-discovery, terraform-basics, vpc-subnets-route-tables
+- 키워드 백링크 →: raft-consensus, leader-election, dns
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, helm-values-secrets, k8s-configmap, k8s-namespace, k8s-pod-basics, k8s-project-structure, k8s-secret, leader-election, merkle-tree, network-partitions, optimistic-locking, raft-consensus, service-discovery, terraform-basics, vpc-subnets-route-tables
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -569,8 +601,8 @@
 - 길이: 404줄
 - 소제목: SQL은 그대로, 저장은 여러 대에 / 행 하나가 키 하나가 된다 / 구간이 커지면 둘로 쪼갠다 / 구간마다 Raft로 과반에 적는다 / 구간 두 개에 걸친 트랜잭션 / 시계가 다르면 순서도 다르다 / 충돌하면 다시 하라고 돌려보낸다 / 멀리 있는 사용자의 데이터는 가까이 둔다 / 호환된다는 말의 범위 / 분산 SQL을 고르기 전에 / 샤딩을 DB 안으로 옮긴 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-types-overview, db-transaction-isolation, db-consistency-cap, db-type-columnar-olap, db-type-key-value, db-type-wide-column
-- 키워드 백링크 →: sql-basics, distributed-transactions-2pc, postgres-getting-started
-- 이 글로 오는 글 ←: clock-skew, db-consistency-cap, db-sharding, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview, distributed-transactions-2pc
+- 키워드 백링크 →: sql-basics, raft-consensus, distributed-transactions-2pc, postgres-getting-started
+- 이 글로 오는 글 ←: clock-skew, db-consistency-cap, db-sharding, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-relational, db-types-overview, distributed-transactions-2pc, raft-consensus
 
 #### `db-type-relational` — 관계형 DB: 왜 여전히 기본값인가
 
@@ -603,7 +635,7 @@
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: db-sharding, db-type-relational, bloom-filter, db-index-pitfalls, db-partitioning, dns
-- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, k8s-service-types, kafka-basics, network-partitions
+- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, k8s-service-types, kafka-basics, merkle-tree, network-partitions
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -2063,7 +2095,7 @@
 - 소제목: 병목에서는 누군가 기다리거나 버려진다 / 셰이핑은 기다리게 하고, 폴리싱은 버린다 / tbf 한 줄 읽기 / 큐가 깊으면 지연이 된다 / 몫을 나누는 HTB / 패킷에 표시를 붙이는 DSCP / 들어오는 트래픽은 줄 세울 수 없다 / 현장에서 셰이핑을 꺼내는 순간 / 줄의 순서를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: latency-bandwidth-throughput, rate-limiting-algorithms
 - 키워드 백링크 →: docker-container-basics, iptables-basics, tcp-reliability-congestion, message-queue-basics, layer-ip-routing-icmp
-- 이 글로 오는 글 ←: latency-bandwidth-throughput, rate-limiting-algorithms, tcp-reliability-congestion
+- 이 글로 오는 글 ←: latency-bandwidth-throughput, rate-limiting-algorithms, rsync-algorithm, tcp-reliability-congestion
 
 ### Programming › OS › Linux (`programming/os/linux`)
 
@@ -2672,7 +2704,7 @@
 - 키워드: 2단계 커밋, PREPARE TRANSACTION, pg_prepared_xacts, 추정 롤백
 - 길이: 516줄
 - 소제목: 커밋 두 번 사이에 생기는 틈 / 먼저 묻고, 모두 된다고 하면 그때 커밋한다 / PostgreSQL 두 대로 직접 해 보기 / 한 곳이 아니라고 답하면 / 결정 직전에 코디네이터가 죽으면 / 결정을 먼저 적어 두는 코디네이터 / XA는 이 약속을 표준으로 만든 것 / 3PC가 블로킹을 풀지 못하는 이유 / 마이크로서비스가 2PC를 피하는 이유 / 준비된 채 버려진 트랜잭션을 만났을 때 / 2PC가 남기는 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: microservices, saga-pattern, db-type-newsql, idempotency-key, leader-election
+- 직접 링크 →: microservices, saga-pattern, db-type-newsql, raft-consensus, idempotency-key, leader-election
 - 키워드 백링크 →: network-partitions, kafka-basics, db-types-overview, postgres-getting-started
 - 이 글로 오는 글 ←: db-locking-deadlock, db-sharding, db-type-newsql, leader-election, microservices, mongodb-document-model, postgres-mvcc-vacuum, saga-pattern
 
@@ -2694,9 +2726,9 @@
 - 키워드: 세션 보장, writes-follow-reads, 읽기 복구, 힌트 핸드오프, 안티 엔트로피
 - 길이: 485줄
 - 소제목: 언젠가는 얼마나 걸리나 / 복제본 하나를 일부러 3초 늦춰 보기 / 사용자 한 명이 기대하는 네 가지 / 세션에 위치를 들고 다니게 한다 / 여러 대가 쓰기를 받는 저장소에서는 / 결국 같아지게 만드는 장치 / 화면이 먼저 덜 헷갈리게 / 가끔 옛 값이 보인다는 문의가 오면 / 결국이 오기 전까지를 설계한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-consistency-cap, db-replication-sharding, network-partitions, clock-skew, crdt, caching-strategies
+- 직접 링크 →: db-consistency-cap, db-replication-sharding, network-partitions, clock-skew, merkle-tree, crdt, caching-strategies
 - 키워드 백링크 →: cookie-session-login, db-type-wide-column, db-type-key-value, mongodb-document-model, sql-batch-timeout-pool, postgres-architecture, dns
-- 이 글로 오는 글 ←: clock-skew, crdt, db-consistency-cap, network-partitions, operational-transform
+- 이 글로 오는 글 ←: clock-skew, crdt, db-consistency-cap, merkle-tree, network-partitions, operational-transform
 
 #### `exponential-backoff-jitter` — 지수 백오프와 지터: 같은 순간 실패한 클라이언트를 흩어 보내기
 
@@ -2716,9 +2748,9 @@
 - 키워드: 리더 선출, 스플릿 브레인, Lease 객체, etcdctl elect
 - 길이: 476줄
 - 소제목: 리더가 하나여야 하는 일 / 임대를 쥔 쪽이 리더다 / 잠깐 멈춘 리더가 깨어나면 / 리더 자격을 쓰기와 함께 검사한다 / etcd 자신은 어떻게 리더를 뽑나 / 쿠버네티스에서는 Lease 객체로 / 세 숫자 사이의 관계 / 합의 저장소 없이 뽑는 고전적인 방법 / 리더가 자꾸 바뀌거나 아예 없을 때 / 리더는 시간을 빌린 사람이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: distributed-lock, distributed-transactions-2pc
+- 직접 링크 →: distributed-lock, raft-consensus, distributed-transactions-2pc
 - 키워드 백링크 →: browser-fetch, network-partitions, kafka-basics, db-type-key-value, dns
-- 이 글로 오는 글 ←: db-consistency-cap, db-type-key-value, distributed-lock, distributed-transactions-2pc, k8s-namespace, network-partitions, pattern-singleton, redis-replication-sentinel
+- 이 글로 오는 글 ←: db-consistency-cap, db-type-key-value, distributed-lock, distributed-transactions-2pc, k8s-namespace, network-partitions, pattern-singleton, raft-consensus, redis-replication-sentinel
 
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
@@ -2738,7 +2770,7 @@
 - 키워드: 네트워크 분할, 부분 분할, pg_rewind, 과반 쿼럼
 - 길이: 508줄
 - 소제목: 끊긴 회선은 어떻게 생겼나 / 응답이 없다는 것만 안다 / 세 번 실패하면 승격하는 스크립트 / 과반만 쓸 수 있게 한다 / 과반이 뽑아도 옛 리더는 계속 쓴다 / 분할 실험이 남긴 교훈 / 현장에서 분할을 의심하는 순간 / 끊겼다는 판단을 믿지 않는 설계 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-consistency-cap, eventual-consistency, leader-election, distributed-lock, iptables-basics, timeouts, db-replication-sharding
+- 직접 링크 →: db-consistency-cap, eventual-consistency, leader-election, distributed-lock, iptables-basics, timeouts, raft-consensus, db-replication-sharding
 - 키워드 백링크 →: sql-batch-timeout-pool, elasticsearch-inverted-index, db-type-wide-column, browser-fetch, mongodb-document-model, security-groups-nacl, postgres-architecture, redis-basics, db-type-key-value, postgres-getting-started, dns
 - 이 글로 오는 글 ←: clock-skew, crdt, db-consistency-cap, distributed-transactions-2pc, eventual-consistency, leader-election
 
@@ -2873,6 +2905,7 @@
 - 관계형 DB → `db-type-relational`
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
 - 교착 상태 → `db-locking-deadlock`
+- 굴리는 체크섬 → `rsync-algorithm`
 - 권한 있는 네임서버 → `dns`
 - 그래프 DB → `db-type-graph`
 - 기본 거부 정책 → `k8s-network-policy`
@@ -2903,6 +2936,7 @@
 - 데이터 독립성 → `sqld-data-modeling`
 - 데이터 모델 비교 → `db-types-overview`
 - 데코레이터 패턴 → `pattern-decorator`
+- 델타 전송 → `rsync-algorithm`
 - 도메인 샤딩 → `http-versions`
 - 독이 든 메시지 → `dead-letter-queue`
 - 동적 렌더링 → `nextjs-static-dynamic-rendering`
@@ -2916,6 +2950,7 @@
 - 램포트 시계 → `clock-skew`
 - 레이아웃 스래싱 → `core-web-vitals`
 - 렌더링 파이프라인 → `what-happens-google-com`
+- 로그 복제 → `raft-consensus`
 - 로그 컴팩션 → `kafka-basics`
 - 로컬 도메인 → `local-custom-domain`
 - 롱 폴링 → `realtime-communication`
@@ -2932,6 +2967,7 @@
 - 마이크로서비스 → `microservices`
 - 마이크로세그멘테이션 → `zero-trust-architecture`
 - 마이크로태스크 → `event-loop`
+- 머클 트리 → `merkle-tree`
 - 머티리얼라이즈드 뷰 → `postgres-reporting-sql`
 - 멀티 스테이지 빌드 → `dockerfile-image-layers`
 - 멀티 존 → `micro-frontends`
@@ -3182,6 +3218,7 @@
 - 펜싱 토큰 → `distributed-lock`
 - 포워드 프록시 → `proxy-reverse-proxy`
 - 포트 포워딩 → `iptables-nat`
+- 포함 증명 → `merkle-tree`
 - 폴리글랏 퍼시스턴스 → `db-architecture-by-scale`
 - 폴리싱 → `traffic-shaping-qos`
 - 표본 비율 불일치 → `ab-testing`
@@ -3209,6 +3246,7 @@
 - 핫 파티션 → `db-type-key-value`
 - 해시 슬롯 → `redis-cluster`
 - 해시 조인 → `db-type-relational`
+- 해시 트리 → `merkle-tree`
 - 행 단위 보안 → `postgres-roles-security`
 - 헬스 체크 → `osi-in-practice`
 - 형태소 분석기 → `elasticsearch-inverted-index`
@@ -3239,6 +3277,7 @@
 - AOF → `redis-persistence-ha`
 - API 게이트웨이 → `gateway`
 - API 버전 관리 → `rest-api-design`
+- AppendEntries → `raft-consensus`
 - appendfsync → `redis-persistence-ha`
 - application/x-www-form-urlencoded → `html-form-http`
 - ARP → `layer-link-ethernet-arp`
@@ -3521,6 +3560,7 @@
 - Memcached → `redis-basics`
 - Memento 패턴 → `pattern-memento`
 - merge base → `git-branch-merge`
+- Merkle tree → `merkle-tree`
 - metrics-server → `k8s-hpa`
 - min.insync.replicas → `kafka-basics`
 - minReadySeconds → `k8s-deployment`
@@ -3612,6 +3652,7 @@
 - podCIDR → `k8s-cni-pod-network`
 - poison record → `batch-processing`
 - Power of Two Choices → `load-balancing-algorithms`
+- Pre-Vote → `raft-consensus`
 - preflight → `cors`
 - PREPARE TRANSACTION → `distributed-transactions-2pc`
 - preStop → `k8s-pod-lifecycle`
@@ -3638,6 +3679,7 @@
 - QUIC → `http-versions`
 - Qwik → `islands-resumability`
 - RabbitMQ → `rabbitmq-basics`
+- Raft 합의 → `raft-consensus`
 - RAG → `vector-db`
 - RateLimit-Policy → `rate-limiting-in-practice`
 - RDB 스냅샷 → `redis-persistence-ha`
@@ -3666,12 +3708,14 @@
 - reviver → `json-crud-http`
 - RFC 1918 → `layer-ip-addressing`
 - RocksDB → `db-type-embedded`
+- rolling checksum → `rsync-algorithm`
 - rollout undo → `k8s-deployment`
 - ROLLUP → `sqld-rollup-cube-grouping-sets`
 - Row Level Security → `postgres-roles-security`
 - ROW_NUMBER → `sqld-window-functions`
 - ROWNUM → `sqld-top-n-hierarchical-pivot`
 - RSC payload → `react-server-components`
+- rsync 알고리즘 → `rsync-algorithm`
 - Same-Origin Policy → `cors`
 - sargable → `sql-query-rewrite`
 - SAVEPOINT → `sql-insert-update-delete`
@@ -3840,13 +3884,13 @@
 - `db-types-overview` ↔ `redis-basics` (15%: 빠른, 이유는, 하나씩, nosql)
 - `git-branch-merge` ↔ `git-remote-collaboration` (15%: 브랜치는, 브랜치를, 지운다, 원격)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-ssr` (15%: 요청이, cache, 요청마다, rendering, ssr)
+- `raft-consensus` ↔ `leader-election` (15%: 리더가, 자꾸, 바뀌거나, resilience, 합의, 리더)
 - `load-balancing-algorithms` ↔ `load-balancer-basics` (14%: 서버로, 서버를, load, balancer, 로드)
 - `rendering-ssg-isr` ↔ `rendering-strategies` (14%: 나가는지, next.js, rendering, isr, 미리)
 - `sql-query-rewrite` ↔ `db-index-pitfalls` (14%: 100만, 건과, 인덱스)
 - `db-index-pitfalls` ↔ `db-type-wide-column` (14%: 쓰기를, 것도, 대가)
 - `count-min-sketch` ↔ `hyperloglog` (14%: redis에서, 코드로, 세는, data, structure, probabilistic)
 - `k8s-network-policy` ↔ `k8s-service-types` (14%: 정책은, 목록이다, 따져, 정책을)
-- `vpc-peering-transit-privatelink` ↔ `vpc-basics` (14%: vpc, 없다, 장면으로, cloud)
 - `islands-resumability` ↔ `hydration` (14%: 하이드레이션, 하이드레이션을, 하지, rendering)
 - `packet-capture-tcpdump` ↔ `db-index` (14%: 처음부터, 끝까지, 줄을, 필요한)
 - `db-index-design` ↔ `db-index` (14%: 100만, 인덱스, 인덱스를, index)
@@ -3862,6 +3906,12 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `raft-consensus` ↔ `leader-election`
+- `raft-consensus` ↔ `db-type-newsql`
+- `raft-consensus` ↔ `db-type-key-value`
+- `rsync-algorithm` ↔ `merkle-tree`
+- `merkle-tree` ↔ `eventual-consistency`
+- `merkle-tree` ↔ `git-internals-basics`
 - `crdt` ↔ `operational-transform`
 - `crdt` ↔ `clock-skew`
 - `crdt` ↔ `eventual-consistency`
