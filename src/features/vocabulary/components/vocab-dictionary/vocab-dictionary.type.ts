@@ -7,3 +7,6 @@ export interface DictionaryFilters {
   theme: VocabTheme | "all";
   status: WordStatus | "all";
 }
+
+/** 목록 순서. 무작위는 누를 때마다 새로 섞는다 */
+export type DictionaryOrder = "alpha" | "random";

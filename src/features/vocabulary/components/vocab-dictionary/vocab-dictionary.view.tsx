@@ -80,6 +80,19 @@ export function VocabDictionary() {
             </ChoiceChip>
           ))}
         </ChipRow>
+        <ChipRow aria-label="순서">
+          <ChoiceChip selected={dict.order === "alpha"} onClick={() => dict.setOrder("alpha")}>
+            ABC 순
+          </ChoiceChip>
+          <ChoiceChip selected={dict.order === "random"} onClick={() => dict.setOrder("random")}>
+            무작위
+          </ChoiceChip>
+          {dict.order === "random" && (
+            <ChoiceChip selected={false} onClick={dict.reshuffle}>
+              다시 섞기
+            </ChoiceChip>
+          )}
+        </ChipRow>
         <ChipRow aria-label="학습 상태">
           <ChoiceChip selected={filters.status === "all"} onClick={() => update("status", "all")}>
             모든 상태
@@ -97,7 +110,7 @@ export function VocabDictionary() {
         </ChipRow>
       </Toolbar>
 
-      {dict.groups.length > 0 && (
+      {dict.order === "alpha" && dict.groups.length > 0 && (
         <Jump aria-label="첫 글자로 이동">
           {dict.groups.map(({ letter }) => (
             <a key={letter} href={`#letter-${letter}`}>
@@ -118,8 +131,8 @@ export function VocabDictionary() {
         </EmptyState>
       ) : (
         dict.groups.map(({ letter, items }) => (
-          <Group key={letter} id={`letter-${letter}`}>
-            <GroupTitle>{letter}</GroupTitle>
+          <Group key={letter ?? "random"} id={letter ? `letter-${letter}` : undefined}>
+            {letter && <GroupTitle>{letter}</GroupTitle>}
             <Rows>
               {items.map(({ entry, href, status }, index) => (
                 <Row key={entry.word} style={{ animationDelay: `${Math.min(index, 12) * 25}ms` }}>
