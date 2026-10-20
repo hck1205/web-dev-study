@@ -2,6 +2,66 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "clock-skew": {
+    "links": [
+      "db-consistency-cap",
+      "distributed-lock",
+      "eventual-consistency",
+      "network-partitions",
+      "event-driven-architecture",
+      "db-type-newsql"
+    ],
+    "mentions": [
+      "ipv6-basics",
+      "security-groups-nacl",
+      "redis-basics",
+      "udp-and-quic",
+      "dns",
+      "token-login"
+    ]
+  },
+  "network-partitions": {
+    "links": [
+      "db-consistency-cap",
+      "eventual-consistency",
+      "leader-election",
+      "distributed-lock",
+      "iptables-basics",
+      "timeouts",
+      "db-replication-sharding"
+    ],
+    "mentions": [
+      "sql-batch-timeout-pool",
+      "elasticsearch-inverted-index",
+      "db-type-wide-column",
+      "browser-fetch",
+      "mongodb-document-model",
+      "security-groups-nacl",
+      "postgres-architecture",
+      "redis-basics",
+      "db-type-key-value",
+      "postgres-getting-started",
+      "dns"
+    ]
+  },
+  "eventual-consistency": {
+    "links": [
+      "db-consistency-cap",
+      "db-replication-sharding",
+      "network-partitions",
+      "clock-skew",
+      "caching-strategies"
+    ],
+    "mentions": [
+      "cookie-session-login",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "mongodb-document-model",
+      "sql-batch-timeout-pool",
+      "postgres-architecture",
+      "dns"
+    ]
+  },
   "pattern-observer": {
     "links": [
       "react-rerender",
@@ -533,6 +593,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "network-partitions",
       "kafka-basics",
       "db-type-key-value",
       "dns"
@@ -567,6 +628,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leader-election"
     ],
     "mentions": [
+      "network-partitions",
       "kafka-basics",
       "db-types-overview",
       "postgres-getting-started"
@@ -2431,11 +2493,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-transaction-isolation",
       "db-type-newsql",
       "db-replication-sharding",
+      "eventual-consistency",
       "db-type-wide-column",
       "redis-replication-sentinel"
     ],
     "mentions": [
       "db-type-key-value",
+      "network-partitions",
       "mongodb-document-model",
       "leader-election",
       "redis-basics"

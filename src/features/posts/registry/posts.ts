@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "clock-skew",
+    title: "시계 어긋남: 벽시계, 단조 시계, 그리고 시계 없이 순서 정하기",
+    summary: "발급 서버 시계가 40초 빠르면 방금 받은 JWT가 거절되고, 벽시계가 2초 되돌아가면 Date.now()로 잰 시간이 음수가 된다. NTP와 chrony의 스텝·슬루, 윤초와 번지기, 램포트 시계와 벡터 시계, HLC까지 직접 재현하며 어떤 시계를 언제 쓰는지 정리한다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Linux", "Node.js", "Authentication", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["시계 어긋남", "단조 시계", "램포트 시계", "벡터 시계", "윤초"],
+  },
+  {
+    slug: "network-partitions",
+    title: "네트워크 분할: 끊긴 회선이 두 프라이머리를 만드는 과정",
+    summary: "네트워크 네임스페이스와 iptables DROP으로 분할을 직접 만들고, PostgreSQL 16 두 대 위에서 순진한 장애 조치 스크립트가 스플릿 브레인을 만들고 pg_rewind로 쓰기를 잃는 과정을 재현한다. 죽음과 끊김을 구별할 수 없는 이유, 과반 쿼럼, 홀수 노드, 임대와 펜싱, 동기 복제의 한계, Jepsen이 남긴 교훈을 다룬다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Network", "PostgreSQL", "Linux", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["네트워크 분할", "부분 분할", "pg_rewind", "과반 쿼럼"],
+  },
+  {
+    slug: "eventual-consistency",
+    title: "최종 일관성과 세션 보장: 방금 바꾼 닉네임이 왜 다시 옛 이름으로 보이나",
+    summary: "PostgreSQL 16 복제본 하나를 일부러 3초 늦춰 놓고, 내 쓰기 읽기와 단조 읽기가 깨지는 장면을 재현한 뒤 커밋 뒤 LSN을 세션 토큰으로 들고 다녀 막는다. 리더 없는 저장소의 R·W와 옛 값 확률, 힌트 핸드오프, 읽기 복구, 안티 엔트로피까지 결국 같아지게 만드는 장치를 따라간다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Database", "PostgreSQL", "Node.js"],
+    date: "2026-10-21",
+    keywords: ["세션 보장", "writes-follow-reads", "읽기 복구", "힌트 핸드오프", "안티 엔트로피"],
+  },
+  {
     slug: "pattern-observer",
     title: "옵서버 패턴: 바뀌었다고 알리면 알아야 할 쪽이 듣는다",
     summary: "화면 부품마다 갱신 호출이 붙던 장바구니를 구독 구조로 바꾸고, push와 pull, useSyncExternalStore, 알리는 도중 구독 해제로 리스너가 건너뛰어지는 버그, EventEmitter의 동기 예외 전파와 async 리스너 크래시, MaxListenersExceededWarning, 글리치와 배칭, 중재자·발행 구독과의 차이를 다룬다.",

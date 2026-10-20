@@ -1,0 +1,507 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("network-partitions");
+
+새벽 3시, DB 스탠바이의 장애 조치 스크립트가 "프라이머리에 연결할 수 없음"을 세 번 연속 받고 스스로 프라이머리가 됐다. 그런데 원래 프라이머리는 멀쩡히 살아 있었다. 두 DB 사이 회선 하나만 끊겼을 뿐이다. 앱 서버들은 두 DB 모두에 닿을 수 있었고, 어떤 요청은 이쪽에, 어떤 요청은 저쪽에 썼다. 아침에 회선이 돌아왔을 때, 두 DB에는 서로 다른 주문이 들어 있었다.
+
+이 장면이 네트워크 분할(network partition)이 실제로 만드는 사고다. CAP 정리는 "분할이 생기면 일관성과 가용성 중 하나를 고른다"고 한 줄로 말하지만, 그 한 줄 밑에는 분할을 어떻게 알아채는지, 알아챘다고 믿은 게 틀렸을 때 무슨 일이 생기는지가 있다. 이 글은 리눅스 네트워크 네임스페이스 셋과 iptables로 분할을 직접 만들고, PostgreSQL 16 두 대를 그 위에 올려 스플릿 브레인을 재현한 뒤, 과반 쿼럼과 펜싱으로 막는 법을 따라간다. 실험 환경은 Ubuntu 24.04, 커널 6.18이다.
+
+이 주제의 다른 글: CAP과 PACELC의 정의는 [CAP과 PACELC 글](/posts/db-consistency-cap), 분할이 없을 때도 생기는 낡은 읽기는 [최종 일관성 글](/posts/eventual-consistency), 옛 리더를 막는 펜싱 토큰은 [리더 선출 글](/posts/leader-election)과 [분산 락 글](/posts/distributed-lock)에 있다. 여기서는 끊긴 회선 그 자체와, 그걸 잘못 판단했을 때의 사고에 집중한다.
+
+## 끊긴 회선은 어떻게 생겼나
+
+네트워크 분할은 노드들이 살아 있는데 그 사이 메시지 일부가 전달되지 않는 상태다. 케이블이 뽑히는 극적인 장면보다 훨씬 흔하고 지저분한 모양으로 온다. 스위치 펌웨어 버그, 잘못 넣은 방화벽 규칙, 보안 그룹 변경, 링크 하나만 죽은 LACP 묶음, 꽉 찬 네트워크 버퍼가 모두 분할을 만든다. 2014년 베일리스와 킹즈버리(Kyle Kingsbury)는 "The Network is Reliable"이라는 글에서 실제 회사들의 분할 사고를 모아 정리했는데, 결론은 제목의 반대였다.
+
+직접 만들어 보자. 네트워크 네임스페이스 셋을 브리지 하나에 연결하면, 같은 스위치에 꽂힌 서버 세 대처럼 동작한다.
+
+```bash
+# 스위치 역할을 할 네임스페이스와 브리지
+sudo ip netns add v4br
+sudo ip -n v4br link add br0 type bridge && sudo ip -n v4br link set br0 up
+# 서버 세 대: v4a=10.44.0.1, v4b=10.44.0.2, v4c=10.44.0.3
+i=1; for n in a b c; do
+  sudo ip netns add v4$n                                                          # 서버 하나
+  sudo ip link add v4$n-eth netns v4$n type veth peer name p$n netns v4br         # 랜선 한 가닥
+  sudo ip -n v4br link set p$n master br0 && sudo ip -n v4br link set p$n up      # 스위치에 꽂는다
+  sudo ip -n v4$n link set v4$n-eth name eth0
+  sudo ip -n v4$n addr add 10.44.0.$i/24 dev eth0 && sudo ip -n v4$n link set eth0 up
+  i=$((i+1)); done
+```
+
+a에는 PostgreSQL 프라이머리, b에는 스트리밍 복제 스탠바이를 올렸다. c는 앱 서버 역할이다. 이제 a와 b 사이만 끊는다. a에서 b로 가는 것과 b에서 오는 것을 모두 버린다.
+
+```bash
+sudo ip netns exec v4a iptables -A INPUT  -s 10.44.0.2 -j DROP   # b에서 오는 패킷을 버린다
+sudo ip netns exec v4a iptables -A OUTPUT -d 10.44.0.2 -j DROP   # b로 가는 패킷을 버린다
+sudo ip netns exec v4a iptables -L -n -v --line-numbers          # 규칙 확인
+```
+
+```text
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination
+1        0     0 DROP       0    --  *      *       10.44.0.2            0.0.0.0/0
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination
+
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination
+1        0     0 DROP       0    --  *      *       0.0.0.0/0            10.44.0.2
+```
+
+규칙 한 줄을 뜯어보면 이렇다. iptables 자체는 [iptables 기초 글](/posts/iptables-basics)에서 다뤘다.
+
+<UrlAnatomy
+  caption="분할을 만드는 규칙 한 줄"
+  base="iptables"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "-A INPUT", display: "-A INPUT", title: "들어오는 패킷 체인 끝에 붙인다", description: "이 네임스페이스로 들어오는 패킷을 검사하는 규칙 목록의 맨 끝에 추가한다. 나가는 쪽은 OUTPUT 체인에 따로 건다." },
+    { key: "-s 10.44.0.2", display: "-s 10.44.0.2", title: "보낸 쪽이 b인 패킷만", description: "출발지 주소로 거른다. 한쪽 방향만 막으면 한쪽만 들리는 비대칭 분할이 된다." },
+    { key: "-j DROP", display: "-j DROP", title: "아무 대답 없이 버린다", description: "보낸 쪽은 패킷이 사라진 줄도 모르고 다시 보낸다. 실제 분할과 가장 비슷하다. REJECT로 바꾸면 거절 응답이 즉시 가서 '연결 거부'로 끝난다." },
+  ]}
+/>
+
+결과를 세 방향에서 확인했다.
+
+```bash
+# b에서 a로 접속 (3초 한도)
+sudo ip netns exec v4b bash -c 'time psql "host=10.44.0.1 user=postgres connect_timeout=3" -c "select 1"'
+sudo ip netns exec v4b ping -c 3 -W 1 10.44.0.1   # b → a
+sudo ip netns exec v4c ping -c 1 -W 1 10.44.0.1   # c → a
+sudo ip netns exec v4c ping -c 1 -W 1 10.44.0.2   # c → b
+```
+
+```text
+psql: error: connection to server at "10.44.0.1", port 5432 failed: timeout expired
+
+real	0m3.042s
+3 packets transmitted, 0 received, 100% packet loss, time 2028ms
+
+rtt min/avg/max/mdev = 0.064/0.064/0.064/0.000 ms
+rtt min/avg/max/mdev = 1.581/1.581/1.581/0.000 ms
+```
+
+b는 a에 닿지 못하는데 c는 a와 b 모두에 닿는다. 이게 부분 분할(partial partition)이다. 실제 장애에서 가장 위험한 모양이기도 하다. 모두가 같은 그림을 보지 않기 때문이다. 아래 그림에서 다음을 누르면 패킷이 어디서 막히는지 차례로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="a와 b 사이만 끊긴 부분 분할"
+  zones={[
+    { id: "lan", label: "bridge 10.44.0.0/24", x: 10, y: 20, w: 380, h: 270, tone: "private" },
+  ]}
+  nodes={[
+    { id: "sw", label: "br0", sub: "switch", x: 200, y: 160, icon: "switch", w: 90 },
+    { id: "a", label: "pg-a", sub: "10.44.0.1", x: 80, y: 70, icon: "db", w: 110 },
+    { id: "b", label: "pg-b", sub: "10.44.0.2", x: 320, y: 70, icon: "db", w: 110 },
+    { id: "c", label: "app-c", sub: "10.44.0.3", x: 200, y: 250, icon: "server", w: 110 },
+  ]}
+  links={[
+    { from: "a", to: "sw" },
+    { from: "b", to: "sw" },
+    { from: "c", to: "sw" },
+  ]}
+  steps={[
+    { path: ["b", "sw", "a"], packet: "WAL", title: "평소에는 b가 a에서 WAL을 받는다", detail: "스트리밍 복제 연결 하나가 계속 열려 있다." },
+    { path: ["b", "sw", "a"], packet: "SYN", blocked: true, highlight: ["a"], title: "a가 b의 패킷을 버린다", detail: "iptables DROP. 거절 응답도 없으니 b는 SYN을 계속 다시 보낸다.", payload: "psql: ... failed: timeout expired" },
+    { path: ["c", "sw", "a"], packet: "query", title: "c에서 a는 멀쩡하다", detail: "같은 스위치에 있지만 c와 a 사이에는 규칙이 없다." },
+    { path: ["c", "sw", "b"], packet: "query", title: "c에서 b도 멀쩡하다", detail: "c는 둘 다 살아 있다고 본다. b는 a가 죽었다고 본다. 같은 순간 두 노드의 판단이 다르다." },
+  ]}
+/>
+
+### DROP과 REJECT는 다르게 실패한다
+
+같은 차단이라도 DROP은 침묵하고 REJECT는 대답한다. b에서 오는 TCP를 REJECT로 막았을 때와 비교하면 차이가 분명하다.
+
+```bash
+sudo ip netns exec v4a iptables -A INPUT -s 10.44.0.2 -p tcp -j REJECT --reject-with tcp-reset   # 거절 응답(RST)을 보낸다
+sudo ip netns exec v4b bash -c 'time psql "host=10.44.0.1 user=postgres connect_timeout=3" -c "select 1"'
+```
+
+```text
+psql: error: connection to server at "10.44.0.1", port 5432 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+
+real	0m0.043s
+```
+
+REJECT는 43ms 만에 "연결 거부"로 끝났고, DROP은 한도 3초를 다 쓰고 "timeout expired"로 끝났다. 거부는 "거기 아무도 안 받는다"는 확실한 정보지만, 타임아웃은 아무 정보도 아니다. 분할 중에 b가 보내는 SYN을 잡아 보면 같은 패킷을 반복해서 보내고 있다.
+
+```bash
+sudo ip netns exec v4b tcpdump -i eth0 -nn -tttt 'tcp port 5432 and tcp[tcpflags] & tcp-syn != 0'   # SYN만 본다
+```
+
+```text
+2026-10-20 19:14:31.049449 IP 10.44.0.2.35660 > 10.44.0.1.5432: Flags [S], seq 2070181842, win 64240, options [mss 1460,sackOK,TS val 2777380655 ecr 0,nop,wscale 10], length 0
+2026-10-20 19:14:32.073315 IP 10.44.0.2.35660 > 10.44.0.1.5432: Flags [S], seq 2070181842, win 64240, options [mss 1460,sackOK,TS val 2777381679 ecr 0,nop,wscale 10], length 0
+2026-10-20 19:14:33.097282 IP 10.44.0.2.35660 > 10.44.0.1.5432: Flags [S], seq 2070181842, win 64240, options [mss 1460,sackOK,TS val 2777382703 ecr 0,nop,wscale 10], length 0
+2026-10-20 19:14:34.125415 IP 10.44.0.2.35660 > 10.44.0.1.5432: Flags [S], seq 2070181842, win 64240, options [mss 1460,sackOK,TS val 2777383731 ecr 0,nop,wscale 10], length 0
+```
+
+같은 `seq`의 SYN이 1초 간격으로 나간다. 이 커널은 처음 네 번을 1초 간격으로 보내고(`tcp_syn_linear_timeouts=4`) 그다음부터 간격을 두 배씩 늘린다. 앱이 한도를 걸지 않으면 2분 넘게 묶이는 과정은 [타임아웃 글](/posts/timeouts)에서 끝까지 재 봤다.
+
+이미 열려 있던 복제 연결은 어떻게 됐을까. 이 실험에서는 `wal_sender_timeout`과 `wal_receiver_timeout`을 기본값 60초에서 5초로 줄여 두었다.
+
+```text
+np-a.log: 2026-10-20 19:14:34.169 UTC [15327] LOG:  terminating walsender process due to replication timeout
+np-b.log: 2026-10-20 19:14:34.170 UTC [15326] FATAL:  terminating walreceiver due to timeout
+```
+
+분할을 건 시각이 19:14:29.4였으니 정확히 5초 뒤 양쪽이 각자 연결을 끊었다. 이 5초 동안 프라이머리는 복제 연결이 살아 있다고 믿고 있었다. 열린 TCP 연결은 상대가 사라져도 보낼 것이 없으면 알아채지 못한다. 애플리케이션 수준의 하트비트나 TCP keepalive가 없으면 리눅스 기본값(`tcp_keepalive_time` 7200초) 동안 죽은 연결을 붙들고 있을 수 있다.
+
+## 응답이 없다는 것만 안다
+
+b의 입장이 되어 보자. a에게 보낸 요청에 답이 없다. 가능한 원인은 여럿이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="원인은 다르지만 b가 보는 것은 하나다"
+  nodes={[
+    { id: "dead", label: "a가 죽었다", x: 80, y: 40, w: 130 },
+    { id: "pause", label: "a가 멈췄다", sub: "GC, VM 정지", x: 80, y: 120, w: 130 },
+    { id: "slow", label: "a가 느리다", sub: "디스크, 과부하", x: 80, y: 200, w: 130 },
+    { id: "net", label: "회선이 끊겼다", sub: "가는 길 또는 오는 길", x: 80, y: 272, w: 150 },
+    { id: "timeout", label: "타임아웃", sub: "b가 아는 전부", x: 310, y: 156, w: 130, h: 60 },
+  ]}
+  edges={[
+    { from: "dead", to: "timeout" },
+    { from: "pause", to: "timeout" },
+    { from: "slow", to: "timeout" },
+    { from: "net", to: "timeout" },
+  ]}
+/>
+
+진짜 그런지 확인하려고 이번에는 회선을 멀쩡히 두고 b의 PostgreSQL 프로세스를 `kill -STOP`으로 얼렸다.
+
+```bash
+sudo kill -STOP $(head -1 /var/tmp/v4pg/np-b/postmaster.pid)   # 프로세스를 멈춘다 (GC 정지 흉내)
+sudo ip netns exec v4c bash -c 'time psql "host=10.44.0.2 user=postgres connect_timeout=3" -c "select 1"'
+sudo kill -CONT $(head -1 /var/tmp/v4pg/np-b/postmaster.pid)   # 다시 깨운다
+```
+
+```text
+psql: error: connection to server at "10.44.0.2", port 5432 failed: timeout expired
+
+real	0m3.071s
+```
+
+분할 때와 한 글자도 다르지 않은 메시지다. TCP 연결 자체는 커널이 받아 줬지만 PostgreSQL이 응답하지 않으니 클라이언트는 기다리다 포기한다. 비동기 네트워크에서 "죽음"과 "느림"과 "끊김"을 메시지만으로 구별할 방법은 없다. 이게 1985년 FLP 불가능성 결과가 말하는 상황의 실무판이다. 그래서 모든 장애 감지기는 결국 "이만큼 기다렸는데 답이 없으면 죽은 걸로 친다"는 추측이고, 그 추측은 틀릴 수 있다.
+
+추측의 질을 조금 높이는 방법은 있다. Cassandra는 고정 타임아웃 대신 phi accrual 장애 감지기를 써서, 지금까지의 하트비트 간격 분포에 비춰 "이 정도 침묵이 우연일 확률"을 계산한다(`phi_convict_threshold` 기본 8). 그래도 추측은 추측이다. 설계는 "추측이 틀려도 데이터가 망가지지 않게"에 맞춰야 한다.
+
+## 세 번 실패하면 승격하는 스크립트
+
+이제 처음 장면을 그대로 만든다. b에서 도는 장애 조치 스크립트는 1초마다 a에 접속해 보고, 3번 연속 실패하면 자기를 승격한다. 실제로 이렇게 짠 스크립트가 운영에 꽤 있다.
+
+```bash
+#!/bin/bash
+# 스탠바이(b)에서 도는 순진한 장애 조치
+fails=0
+while true; do
+  if psql "host=10.44.0.1 user=postgres connect_timeout=2" -XAtc "select 1" >/dev/null 2>&1; then
+    fails=0                                          # 성공하면 처음부터 다시 센다
+  else
+    fails=$((fails+1)); echo "$(date +%T) primary unreachable ($fails/3)"
+  fi
+  if [ $fails -ge 3 ]; then
+    echo "$(date +%T) promoting myself"
+    sudo -u postgres pg_ctl -D /var/tmp/v4pg/np-b promote -w   # 스탠바이를 프라이머리로
+    exit
+  fi
+  sleep 1
+done
+```
+
+```text
+19:14:57 primary unreachable (1/3)
+19:15:00 primary unreachable (2/3)
+19:15:03 primary unreachable (3/3)
+19:15:03 promoting myself
+waiting for server to promote.... done
+server promoted
+```
+
+b의 로그에는 `selected new timeline ID: 2`가 찍혔다. 새 역사가 시작됐다는 표시다. 이제 앱 서버 c가 두 DB에 각각 쓴다. 아래 그림에서 다음을 누르면 사고가 쌓이는 순서대로 보인다.
+
+<SequenceDiagram
+  caption="장애 조치가 만든 두 프라이머리"
+  actors={[
+    { id: "a", label: "pg-a" },
+    { id: "b", label: "pg-b" },
+    { id: "c", label: "app-c" },
+  ]}
+  steps={[
+    { from: "b", to: "a", label: "select 1 ×3", title: "b가 a에 세 번 접속을 시도한다", detail: "a와 b 사이만 끊겼다. 2초 한도를 세 번 다 쓴다. a는 그동안 c의 쓰기를 정상적으로 받고 있다." },
+    { from: "b", to: "b", label: "promote", title: "b가 스스로 프라이머리가 된다", detail: "a가 죽었다고 추측했다. 타임라인 1에서 갈라져 타임라인 2를 연다.", payload: "LOG:  selected new timeline ID: 2" },
+    { from: "c", to: "a", label: "INSERT 2 pen", title: "c의 한 요청은 a에 쓴다", detail: "커넥션 풀에 a로 가는 연결이 남아 있다. a는 자기가 아직 프라이머리라고 믿는다.", payload: "INSERT INTO orders VALUES (2, 'pen', 3);" },
+    { from: "c", to: "b", label: "INSERT 2 mug", title: "다른 요청은 b에 쓴다", detail: "DNS나 VIP가 b로 바뀐 뒤에 연 연결이다. 같은 주문 번호 2가 양쪽에서 다른 내용으로 성공한다.", payload: "INSERT INTO orders VALUES (2, 'mug', 1);" },
+    { from: "c", to: "a", label: "UPDATE qty=0", title: "재고 차감도 a에만 들어간다", detail: "두 DB는 이제 서로 다른 사실을 진실로 믿는다. 이것이 스플릿 브레인이다." },
+  ]}
+/>
+
+실제로 두 DB를 조회한 결과다.
+
+```sql
+-- [c에서] 각 DB가 프라이머리인지, 어느 타임라인인지, 무엇이 들어 있는지
+SELECT inet_server_addr() AS server, pg_is_in_recovery() AS standby,
+       pg_walfile_name(pg_current_wal_lsn()) AS walfile;   -- WAL 파일 이름 앞 8자리가 타임라인
+SELECT * FROM orders ORDER BY id;
+```
+
+```text
+  server   | standby |         walfile
+-----------+---------+--------------------------
+ 10.44.0.1 | f       | 000000010000000000000003
+(1 row)
+
+ id | item | qty
+----+------+-----
+  1 | book |   0
+  2 | pen  |   3
+(2 rows)
+
+  server   | standby |         walfile
+-----------+---------+--------------------------
+ 10.44.0.2 | f       | 000000020000000000000003
+(1 row)
+
+ id | item | qty
+----+------+-----
+  1 | book |   1
+  2 | mug  |   1
+(2 rows)
+```
+
+둘 다 `standby = f`, 즉 둘 다 프라이머리다. WAL 파일 이름이 `00000001…`과 `00000002…`로 타임라인이 갈렸다. 주문 2번은 한쪽에선 펜, 한쪽에선 머그컵이고, 책 재고는 0과 1이다. 에러는 어디에도 없었다.
+
+### 회선이 돌아온 뒤
+
+분할을 풀어도 저절로 합쳐지지 않는다. PostgreSQL 복제는 한 방향으로 WAL을 흘려보내는 구조라 두 역사를 병합하는 기능이 없다. 둘 중 하나를 버려야 한다. 보통은 새 프라이머리 b를 남기고, 옛 프라이머리 a를 `pg_rewind`로 갈라진 지점까지 되감아 b의 스탠바이로 붙인다.
+
+```bash
+sudo ip netns exec v4a iptables -F                                     # 분할을 푼다
+sudo -u postgres pg_ctl -D /var/tmp/v4pg/np-a stop -m fast             # 옛 프라이머리를 내린다
+sudo -u postgres pg_rewind --target-pgdata=/var/tmp/v4pg/np-a \
+  --source-server='host=10.44.0.2 user=postgres' --write-recovery-conf --progress   # b 기준으로 되감는다
+```
+
+```text
+pg_rewind: connected to server
+pg_rewind: servers diverged at WAL location 0/302BFA0 on timeline 1
+pg_rewind: rewinding from last common checkpoint at 0/2000060 on timeline 1
+pg_rewind: reading source file list
+pg_rewind: reading target file list
+pg_rewind: reading WAL in target
+pg_rewind: need to copy 51 MB (total source directory size is 70 MB)
+pg_rewind: creating backup label and updating control file
+pg_rewind: syncing target data directory
+pg_rewind: Done!
+```
+
+다시 띄운 a는 스탠바이가 됐고, `orders`에는 b의 내용(`book 1`, `mug 1`)만 남았다. 분할 중에 a가 받은 펜 주문과 재고 차감은 사라졌다. 사용자는 그 두 요청에 성공 응답을 받았다. `pg_rewind`는 데이터 디렉터리에 `wal_log_hints = on`이나 데이터 체크섬이 있어야 돌고, 갈라진 지점 앞의 체크포인트 WAL이 남아 있어야 한다. 처음 실험에서는 WAL이 재활용돼 `could not find previous WAL record`로 실패해서 `wal_keep_size`를 늘려 다시 했다.
+
+<Callout kind="warning">
+`pg_rewind`는 대상 디렉터리에서 갈라진 뒤의 변경을 지운다. 돌리기 전에 대상 데이터 디렉터리를 통째로 복사해 두고, `pg_waldump`로 갈라진 위치(위의 `0/302BFA0`) 뒤 타임라인 1의 WAL을 읽어 잃게 될 쓰기를 먼저 뽑아 둔다. `--dry-run`으로 먼저 돌려 볼 수 있다. 되감은 뒤에는 되돌릴 방법이 복사본뿐이다.
+</Callout>
+
+2018년 10월 GitHub 장애가 이 모양이었다. 장비 교체 중 미국 동부 허브와 동부 데이터센터 사이가 43초 끊겼고, 그 사이 MySQL 장애 조치 도구(Orchestrator)가 서부 쪽 복제본을 프라이머리로 올렸다. 회선이 돌아왔을 때 양쪽에 상대가 모르는 쓰기가 있었고, 그걸 맞추느라 서비스가 24시간 넘게 성능 저하 상태였다. 43초의 분할이 하루를 먹었다.
+
+## 과반만 쓸 수 있게 한다
+
+문제의 뿌리는 b가 혼자서 "a는 죽었다"고 결정한 데 있다. 막는 원칙은 하나다. 노드 하나의 판단으로는 아무것도 바꾸지 못하게 하고, 전체의 과반이 동의해야만 쓰기와 승격을 허락한다. 클러스터 하나에서 과반은 동시에 두 개 존재할 수 없다. 분할로 몇 조각이 나든 과반을 가진 조각은 많아야 하나다.
+
+이걸 눈으로 보려고, 3대 중 2대가 확인해야 쓰기를 성공으로 돌려주는 작은 저장소를 Node로 짜서 a, b, c 네임스페이스에 하나씩 띄웠다.
+
+```js
+// PUT이 오면 동료 둘에게 복제를 보내고, 나를 포함해 2표가 모이면 성공
+const majority = Math.floor((peers.length + 1) / 2) + 1;   // 3대면 2
+const results = await Promise.allSettled(peers.map((p) =>
+  fetch(`http://${p}:7000/${key}?v=${val}`, { method: "POST", signal: AbortSignal.timeout(500) })));
+const acks = 1 + results.filter((r) => r.status === "fulfilled" && r.value.ok).length;
+if (acks >= majority) { store.set(key, val); /* 200 */ } else { /* 503 no quorum */ }
+```
+
+이번에는 c를 a, b 양쪽과 끊었다. 결과는 이렇다.
+
+```bash
+sudo ip netns exec v4a curl -s -X PUT "http://10.44.0.1:7000/stock?v=5"      # 분할 전
+# c에서 a, b 방향을 모두 DROP
+sudo ip netns exec v4c curl -s -i -X PUT "http://10.44.0.3:7000/stock?v=4"   # 소수 쪽에 쓰기
+sudo ip netns exec v4a curl -s -X PUT "http://10.44.0.1:7000/stock?v=3"      # 다수 쪽에 쓰기
+sudo ip netns exec v4c curl -s "http://10.44.0.3:7000/stock"                  # 소수 쪽에서 읽기
+sudo ip netns exec v4b curl -s "http://10.44.0.2:7000/stock"                  # 다수 쪽에서 읽기
+```
+
+```text
+200 ok acks=3/3 in 86ms
+HTTP/1.1 503 Service Unavailable
+503 no quorum acks=1/3 in 569ms
+200 ok acks=2/3 in 505ms
+10.44.0.3 stock=5
+10.44.0.2 stock=3
+```
+
+아래 그림이 같은 장면이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="과반을 가진 쪽만 쓰기를 받는다"
+  zones={[
+    { id: "major", label: "majority 2/3", x: 10, y: 20, w: 220, h: 270, tone: "public" },
+    { id: "minor", label: "minority 1/3", x: 250, y: 20, w: 140, h: 270, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "a", label: "node-a", sub: "10.44.0.1", x: 120, y: 80, icon: "server", w: 110 },
+    { id: "b", label: "node-b", sub: "10.44.0.2", x: 120, y: 230, icon: "server", w: 110 },
+    { id: "c", label: "node-c", sub: "10.44.0.3", x: 320, y: 155, icon: "server", w: 110 },
+  ]}
+  links={[
+    { from: "a", to: "b" },
+    { from: "a", to: "c", dashed: true },
+    { from: "b", to: "c", dashed: true },
+  ]}
+  steps={[
+    { path: ["c", "a"], packet: "repl", blocked: true, highlight: ["minor"], title: "c가 쓰기를 받아 복제를 보낸다", detail: "a, b 양쪽 모두 DROP. 500ms씩 기다리다 포기한다." },
+    { path: ["c"], highlight: ["c"], title: "1표뿐이라 거절한다", detail: "자기 한 표로는 과반이 안 된다. 클라이언트는 503을 받는다. 가용성을 포기하고 일관성을 지켰다.", payload: "503 no quorum acks=1/3 in 569ms" },
+    { path: ["a", "b"], packet: "repl", highlight: ["major"], title: "a의 쓰기는 b가 확인한다", detail: "2표로 과반이다. 성공을 돌려준다.", payload: "200 ok acks=2/3 in 505ms" },
+    { path: ["c"], highlight: ["c"], title: "그래도 c는 옛 값을 읽어 준다", detail: "읽기는 확인 없이 자기 값을 돌려주게 짰다. 소수 쪽에서 stock=5를 읽는다. 다수 쪽은 이미 3이다.", payload: "10.44.0.3 stock=5" },
+  ]}
+/>
+
+출력에서 세 가지를 더 읽을 수 있다.
+
+첫째, 다수 쪽 쓰기도 505ms가 걸렸다. 분할 전에는 86ms(첫 연결 비용 포함)였다. 이 코드는 동료 모두의 응답을 기다리기 때문에, 끊긴 c의 타임아웃 500ms를 고스란히 냈다. 과반이 모이는 즉시 답하도록 고치면 다수 쪽은 분할을 거의 느끼지 않는다. 분할은 소수 쪽만의 문제가 아니라 다수 쪽의 지연 문제이기도 하다.
+
+둘째, 소수 쪽 c는 쓰기는 거절했지만 읽기에는 옛 값을 돌려줬다. 쓰기만 과반으로 막고 읽기를 로컬에서 하면 분할 중에 낡은 값을 읽는다. etcd와 Consul이 기본 읽기도 리더를 거쳐 과반 확인(ReadIndex)을 하는 이유다. 낡아도 되는 읽기는 옵션으로 따로 연다(etcd의 `--consistency=s`, Consul의 `?stale`).
+
+셋째, 이 장난감은 실패한 쓰기를 깔끔히 지우지 못한다. 동료 하나가 복제를 받아 저장했는데 과반이 안 돼 실패로 끝나면, 그 동료에는 실패한 값이 남는다. Raft 같은 합의 알고리즘은 로그 항목을 먼저 적고 과반이 확인한 지점(commit index)까지만 적용하는 식으로 이 문제를 푼다. 그 구조는 [Raft 글](/posts/raft-consensus)에서 따로 본다.
+
+### 노드 수는 홀수로
+
+과반을 쓰려면 클러스터 크기가 중요하다. 4대를 2대 2로 쪼개면 어느 쪽도 과반(3)이 아니라 전체가 멈춘다. 4대는 3대보다 견디는 장애 수가 늘지 않으면서 과반을 모으는 비용만 커진다. 그래서 etcd, ZooKeeper, Consul 서버는 3, 5, 7처럼 홀수로 둔다. 데이터 노드가 2대뿐인 구성(PostgreSQL 프라이머리와 스탠바이 하나)은 그 자체로 과반을 만들 수 없으니, 제3의 위치에 투표만 하는 노드를 둔다. Patroni는 etcd·Consul 같은 외부 합의 저장소에 리더 키를 두고, MongoDB는 아비터, Pacemaker는 쿼럼 장치를 쓴다.
+
+직접 계산해 보자. 클러스터 크기와 분할 뒤 조각들의 크기가 주어지면, 각 조각이 계속 쓰기를 받을 수 있는지 돌려준다.
+
+<CodePlayground
+  caption="분할된 조각 중 쓰기를 받을 수 있는 쪽"
+  functionName="whoCanWrite"
+  initialCode={`function whoCanWrite(clusterSize, groups) {
+  // clusterSize: 원래 노드 수 (죽은 노드 포함)
+  // groups: 분할 뒤 서로 닿는 조각마다의 살아 있는 노드 수, 예) [3, 2]
+  // 반환: 조각마다 true/false
+  return groups.map(() => false);
+}`}
+  solution={`function whoCanWrite(clusterSize, groups) {
+  const majority = Math.floor(clusterSize / 2) + 1;
+  return groups.map((g) => g >= majority);
+}`}
+  tests={[
+    { label: "5대가 3대 2로", args: [5, [3, 2]], expected: [true, false] },
+    { label: "4대가 2대 2로", args: [4, [2, 2]], expected: [false, false] },
+    { label: "3대가 1대씩 셋으로", args: [3, [1, 1, 1]], expected: [false, false, false] },
+    { label: "5대 중 1대 죽고 2대 2로", args: [5, [2, 2]], expected: [false, false] },
+    { label: "7대가 4대 3으로", args: [7, [4, 3]], expected: [true, false] },
+    { label: "2대가 1대 1로", args: [2, [1, 1]], expected: [false, false] },
+  ]}
+/>
+
+네 번째 테스트가 놓치기 쉬운 경우다. 과반은 "지금 살아 있는 노드"가 아니라 "원래 클러스터 크기" 기준이다. 죽은 노드를 빼고 과반을 다시 세면 분할된 두 조각이 각자 "우리가 살아 있는 쪽의 과반"이라고 주장할 수 있다. 멤버를 줄이는 일은 그래서 합의를 거쳐 한 번에 하나씩 한다.
+
+## 과반이 뽑아도 옛 리더는 계속 쓴다
+
+과반이 새 리더를 뽑았다고 끝나지 않는다. 옛 리더가 분할 저편에서 자기가 아직 리더라고 믿고 외부 저장소에 계속 쓰면 같은 사고가 난다. 위 스플릿 브레인에서 a가 그랬다. 옛 리더가 스스로 물러나게 하는 장치와, 받는 쪽이 옛 리더를 거절하게 하는 장치가 함께 필요하다.
+
+스스로 물러나는 쪽은 임대(lease)다. Patroni는 리더 키를 TTL(기본 30초)로 잡고 `loop_wait`(기본 10초)마다 갱신한다. 프라이머리가 합의 저장소에 닿지 못해 갱신에 실패하면 스스로 읽기 전용으로 내려간다. 분할로 저장소와 끊긴 a는 TTL이 끝나기 전에 쓰기를 멈추고, 그 뒤에야 다른 노드가 리더 키를 잡는다. 그래도 GC 정지처럼 자기 시계가 멈춘 경우는 못 막으니, 받는 쪽이 리더 번호(펜싱 토큰, 임기)를 검사해 옛 리더의 쓰기를 거절하게 한다. 이 두 장치의 구현과 Kubernetes Lease 실험은 [리더 선출 글](/posts/leader-election)에, 저장소 쪽 토큰 검사는 [분산 락 글](/posts/distributed-lock)에 있다. 받는 쪽이 토큰을 검사할 수 없다면 옛 노드의 전원이나 네트워크를 강제로 끊는 STONITH가 남는다.
+
+### 동기 복제는 확인 응답한 쓰기를 지킨다
+
+PostgreSQL 쪽에서 쓸 수 있는 다른 장치는 동기 복제다. 프라이머리가 스탠바이의 확인을 받기 전에는 커밋 성공을 돌려주지 않게 하면, 분할된 옛 프라이머리는 쓰기를 확인 응답하지 못한다. 실험에서 b를 프라이머리로, a를 동기 스탠바이로 두고 다시 끊어 봤다.
+
+```sql
+ALTER SYSTEM SET synchronous_standby_names = '*';  -- 아무 스탠바이 하나의 확인을 기다린다
+SELECT pg_reload_conf();
+-- (분할을 건다)
+SET statement_timeout = '3s';
+INSERT INTO orders VALUES (4, 'pad', 1);           -- 끝나지 않는다
+```
+
+```text
+  pid  | state  | wait_event |       dur       |                   left
+-------+--------+------------+-----------------+------------------------------------------
+ 19124 | active | SyncRep    | 00:02:02.660787 | INSERT INTO orders VALUES (4, 'pad', 1);
+```
+
+`statement_timeout` 3초를 걸었는데도 2분 넘게 `SyncRep`에서 기다리고 있었다. 커밋 기록은 이미 로컬에 쓰였고 복제 확인만 기다리는 단계라 문장 타임아웃이 끊지 않는다. 이걸 `pg_cancel_backend()`로 취소하면 이런 메시지가 나온다.
+
+```text
+WARNING:  canceling wait for synchronous replication due to user request
+DETAIL:  The transaction has already committed locally, but might not have been replicated to the standby.
+INSERT 0 1
+```
+
+그리고 그 행은 프라이머리에서 조회된다. 클라이언트가 경고를 무시하고 성공으로 처리하면, 이 쓰기는 장애 조치 때 잃을 수 있는 쓰기다. 동기 복제는 "확인 응답한 쓰기는 스탠바이에도 있다"를 지켜 줄 뿐, 분할 중 쓰기를 안전하게 거절해 주지는 않는다. 동기 스탠바이가 하나뿐이면 그게 끊기는 순간 모든 쓰기가 멈추니 `ANY 1 (s1, s2)`처럼 후보를 둘 이상 둔다. 설정 자체는 [CAP 글](/posts/db-consistency-cap)과 [복제 글](/posts/db-replication-sharding)에 있다.
+
+## 분할 실험이 남긴 교훈
+
+킹즈버리의 Jepsen 프로젝트는 2013년부터 Redis, MongoDB, Elasticsearch, etcd 같은 시스템을 실제로 분할 상황에 넣고, 클라이언트가 확인 응답을 받은 쓰기가 나중에 남아 있는지 검사해 왔다. 여러 시스템에서 확인 응답한 쓰기가 사라지거나, 문서가 약속한 일관성이 지켜지지 않는 경우가 보고됐다. 개별 결과는 버전마다 다르고 많은 것이 고쳐졌지만, 반복되는 교훈은 비슷하다.
+
+- 문서의 일관성 약속은 분할 상황에서 검증해 보기 전까지 가설이다. 기본 설정이 가장 약한 경우가 많다.
+- 타임아웃을 장애 판정으로 쓰는 순간 오판이 생긴다. 오판이 났을 때 데이터가 망가지지 않는지가 진짜 질문이다.
+- 분할 중 거절된 요청보다 "성공이라고 했는데 사라진 요청"이 훨씬 비싸다. 클라이언트에게 무엇을 확인 응답했는지 기록하고 검사한다.
+- 부분 분할, 비대칭 분할, 짧게 끊겼다 붙기를 반복하는 분할처럼 깨끗하지 않은 모양에서 버그가 나온다.
+
+비대칭 분할은 위 실험에서 한쪽 방향 규칙만 걸면 만들 수 있다. a는 b의 하트비트를 받는데 b는 a의 것을 못 받는다면, b는 a가 죽었다고 보고 선거를 열고, a는 b가 멀쩡하다고 본다. Raft에서는 이런 노드가 임기 번호를 계속 올려 멀쩡한 리더를 끌어내리는 일이 있어서, 투표 전에 "이길 수 있는지" 먼저 묻는 PreVote라는 확장이 있다. etcd는 3.4에서 `--pre-vote` 옵션을 넣었고 3.5부터 기본으로 켠다.
+
+## 현장에서 분할을 의심하는 순간
+
+분할은 "네트워크 장애"라는 이름으로 오지 않는다. 증상은 이렇게 온다.
+
+- 일부 서버에서만 DB 타임아웃이 난다. 같은 DB를 보는 다른 서버는 멀쩡하다. 부분 분할이다. 문제 서버에서 `ping`, `nc -vz db 5432`, `mtr`로 경로를 보고, 보안 그룹이나 방화벽 변경 이력을 먼저 확인한다.
+- 장애 조치 로그가 남았는데 옛 프라이머리도 살아 있다. 두 노드 모두에서 `pg_is_in_recovery()`를 확인한다. 둘 다 `f`면 스플릿 브레인이다. 즉시 한쪽(보통 옛 프라이머리)의 쓰기를 막고, 막기 전까지 받은 쓰기를 `pg_waldump`로 뽑는다.
+- 복제 지연이 계속 오르는데 프라이머리 쪽 `pg_stat_replication`에는 아무 행이 없다. 복제 연결이 끊겼다. 스탠바이 로그에서 `terminating walreceiver due to timeout`을 찾는다.
+- 앱이 장애 조치 뒤에도 옛 프라이머리로 쓴다. 커넥션 풀이 옛 연결을 붙들고 있다. TCP keepalive와 풀의 연결 최대 수명을 짧게 두고, 연결 문자열에 `target_session_attrs=read-write`를 넣으면 libpq가 쓰기 가능한 서버에만 붙는다.
+- 컨테이너 환경에서 노드 하나가 `NotReady`가 됐는데 그 노드의 파드는 계속 돌고 있다. 컨트롤 플레인과의 분할이다. 그 파드가 단일 작성자 역할을 하고 있었다면 새로 뜬 파드와 동시에 쓸 수 있다. StatefulSet이 이런 노드의 파드를 자동으로 다시 만들지 않는 이유다.
+
+연습은 운영 전에 한다. 위에서 쓴 iptables DROP 한 줄이면 스테이징에서 분할을 만들 수 있다. 장애 조치 도구를 도입했다면, 프라이머리를 죽이는 실험만 하지 말고 프라이머리와 스탠바이 사이만 끊는 실험을 꼭 한다.
+
+<Callout kind="warning">
+원격 서버에서 iptables DROP 규칙을 시험할 때는 자기 SSH 세션의 출발지까지 막지 않도록 주소를 좁게 지정하고, `(sleep 300; sudo iptables -F) &`나 `echo 'iptables -F' | sudo at now + 5 minutes`처럼 5분 뒤 규칙을 지우는 예약을 먼저 걸어 둔다. 시험이 잘 끝나면 그 예약을 취소한다. 되돌리는 명령은 `iptables -D INPUT 1`(규칙 번호로 하나 삭제) 또는 `iptables -F`(체인 전체 비우기, 다른 규칙도 지워진다)다.
+</Callout>
+
+## 끊겼다는 판단을 믿지 않는 설계
+
+네트워크 분할은 드물지 않고, 분할된 노드는 상대가 죽었는지 느린지 끊겼는지 알 수 없다. 그래서 한 노드의 판단으로 역할을 바꾸면 스플릿 브레인이 생긴다. 과반이 동의해야만 쓰기와 승격을 허락하고, 소수 쪽은 쓰기와 강한 읽기를 거절하며, 옛 리더는 임대가 끝나면 물러나고 받는 쪽은 펜싱 토큰으로 옛 리더를 거절한다. 그리고 이 모든 것이 실제로 동작하는지는 분할을 직접 만들어 봐야 안다.
+
+## 면접에서 나올 만한 질문
+
+### 네트워크 분할이란 무엇이고, 왜 피할 수 없나요?
+
+노드들은 살아 있는데 그 사이 메시지 일부가 전달되지 않는 상태다. 케이블 단절뿐 아니라 스위치 버그, 방화벽·보안 그룹 변경, 버퍼 포화, 긴 GC 정지처럼 흔한 원인으로 생긴다. 여러 대로 이루어진 시스템에서 네트워크는 언젠가 반드시 실패하므로, 분할은 설계에서 빼는 옵션이 아니라 대비할 사고다.
+
+### 노드가 죽은 것과 네트워크가 끊긴 것을 구별할 수 있나요?
+
+메시지만으로는 구별할 수 없다. 실험에서 프로세스를 멈춘 경우와 iptables로 끊은 경우 클라이언트는 똑같이 "timeout expired"를 받았다. 그래서 장애 감지는 "이만큼 답이 없으면 죽은 걸로 친다"는 추측이고, phi accrual 감지기로 추측을 다듬을 수는 있어도 틀릴 수 있다는 전제는 그대로다. 설계는 오판이 나도 데이터가 망가지지 않게 해야 한다.
+
+### 스플릿 브레인은 어떻게 생기고 어떻게 막나요?
+
+분할된 양쪽이 각자 자기가 리더라고 믿고 쓰기를 받을 때 생긴다. 스탠바이가 혼자서 "프라이머리에 연결 안 됨"을 근거로 승격하는 스크립트가 흔한 원인이다. 과반 쿼럼으로만 리더를 정하고, 옛 리더는 임대가 끝나면 스스로 쓰기를 멈추며, 저장소는 펜싱 토큰으로 옛 리더의 쓰기를 거절하고, 그게 안 되면 STONITH로 옛 노드를 강제로 떼어 낸다.
+
+### 왜 합의 클러스터는 홀수 대로 구성하나요?
+
+과반 기준으로 동작하기 때문이다. 3대와 4대는 둘 다 1대 장애까지만 견디는데, 4대는 과반이 3이라 쓰기마다 더 많은 확인이 필요하고 2대 2로 쪼개지면 양쪽 모두 멈춘다. 그래서 같은 비용이면 홀수가 낫다. 데이터 노드가 2대뿐이면 투표만 하는 세 번째 노드나 외부 합의 저장소를 둔다.
+
+### 과반이 쓰기를 받으면 소수 쪽 읽기는 괜찮은가요?
+
+괜찮지 않다. 소수 쪽 노드가 로컬 값을 돌려주면 다수 쪽에서 이미 바뀐 값을 모른 채 옛 값을 준다. 실험에서도 소수 쪽 노드가 stock=5를 돌려줄 때 다수 쪽은 이미 3이었다. 선형화 읽기가 필요하면 etcd의 ReadIndex처럼 읽을 때도 리더가 과반에게 아직 리더인지 확인한다.
+
+### PostgreSQL 동기 복제를 켜면 분할 때 데이터가 안전한가요?
+
+확인 응답한 쓰기가 스탠바이에도 있다는 것만 보장한다. 분할되면 프라이머리의 커밋은 SyncRep 대기에서 멈추고, statement_timeout으로도 끊기지 않는다. 취소하면 "로컬에는 커밋됐지만 복제됐는지 모른다"는 경고와 함께 행이 프라이머리에 남으므로, 클라이언트가 이를 성공으로 처리하면 장애 조치 때 잃을 수 있다. 동기 스탠바이가 하나면 그게 끊길 때 쓰기 전체가 멈추니 후보를 여럿 둔다.
+
+### 분할에 대비한 시스템을 어떻게 검증하나요?
+
+스테이징에서 실제로 분할을 만든다. iptables DROP으로 전체, 부분, 한쪽 방향 분할을 만들고, 클라이언트가 확인 응답을 받은 쓰기를 모두 기록해 분할이 풀린 뒤 남아 있는지 검사한다. 이게 Jepsen의 방식이다. 장애 조치 도구라면 프라이머리를 죽이는 실험뿐 아니라 프라이머리와 스탠바이 사이만 끊는 실험을 해서 두 프라이머리가 생기지 않는지 본다.

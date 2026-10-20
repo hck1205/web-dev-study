@@ -9,6 +9,7 @@ import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
+import { CLOCK_SKEW } from "./clock-skew";
 import { CODE_SPLITTING } from "./code-splitting";
 import { CONNECTION_POOL } from "./connection-pool";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
@@ -51,6 +52,7 @@ import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
+import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
@@ -135,6 +137,7 @@ import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
+import { NETWORK_PARTITIONS } from "./network-partitions";
 import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
 import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
 import { NGINX_BASICS } from "./nginx-basics";
@@ -257,6 +260,7 @@ export const QUESTION_SETS = [
   CDN_EDGE_ANYCAST,
   CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
+  CLOCK_SKEW,
   CODE_SPLITTING,
   CONNECTION_POOL,
   CONSISTENT_HASHING,
@@ -299,6 +303,7 @@ export const QUESTION_SETS = [
   ELASTICSEARCH_INVERTED_INDEX,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
+  EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
   FRONTEND_BROWSER_CACHE,
   GATEWAY,
@@ -383,6 +388,7 @@ export const QUESTION_SETS = [
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
   NETWORK_LAYERS_OVERVIEW,
+  NETWORK_PARTITIONS,
   NETWORK_TROUBLESHOOTING_BY_LAYER,
   NEXTJS_STATIC_DYNAMIC_RENDERING,
   NGINX_BASICS,
