@@ -186,7 +186,7 @@ async function withRetry<T>(run: () => Promise<T>, maxAttempts = 3): Promise<T> 
 
 ## 서로 기다리다 멈추는 교착 상태
 
-kim이 lee에게 10,000원을, 동시에 lee가 kim에게 5,000원을 보낸다. 송금 코드는 "보내는 사람 출금 → 받는 사람 입금" 순서다.
+kim이 lee에게 10,000원을, 동시에 lee가 kim에게 5,000원을 보낸다. 송금 코드는 "보내는 사람 출금 → 받는 사람 입금" 순서다. 같은 일이 DB 밖, 애플리케이션의 뮤텍스나 커넥션 풀에서 생기는 경우는 [데드락 글](/posts/deadlocks)에서 다룬다.
 
 ```sql
 -- [1] A: kim → lee

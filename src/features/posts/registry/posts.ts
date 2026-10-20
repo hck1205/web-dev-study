@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "thread-safety",
+    title: "스레드 안전: 같이 써도 깨지지 않는 코드",
+    summary: "Go 맵의 concurrent map writes, 자바 HashMap의 사라지는 키, volatile 없이 멈추지 않는 스레드, x86에서 실제로 바뀌는 메모리 순서를 직접 보고 happens-before로 정리한다. 한정·불변·원자적 연산·락 네 가지 길, 언어별 스레드 안전 컬렉션, DB 연결 객체를 요청끼리 나누면 생기는 사고까지 다룬다.",
+    topic: "programming/computer-science",
+    tags: ["Concurrency", "JavaScript", "Node.js", "PostgreSQL", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["스레드 안전", "데이터 경합", "happens-before", "메모리 가시성"],
+  },
+  {
+    slug: "deadlocks",
+    title: "데드락: 서로 쥔 것을 기다리다 멈춘 프로그램",
+    summary: "CPU는 0%인데 요청이 끝나지 않는 데드락을 Go, Java, Python, Node로 직접 멈춰 보고, 고루틴 덤프와 jstack, py-spy로 서로 기다리는 지점을 읽는다. Coffman 네 조건, 락 순서와 tryLock 타임아웃, 라이브락과 기아, 락 하나로 멈추는 경우와 커넥션 풀 데드락까지 다룬다.",
+    topic: "programming/computer-science",
+    tags: ["Concurrency", "Troubleshooting", "PostgreSQL", "Node.js", "Linux"],
+    date: "2026-10-21",
+    keywords: ["Coffman 조건", "락 순서", "라이브락", "스레드 덤프"],
+  },
+  {
+    slug: "race-conditions",
+    title: "경쟁 상태: 확인과 행동 사이에 끼어드는 다른 요청",
+    summary: "쿠폰이 두 번 쓰이고 조회수가 덜 오르는 경쟁 상태를 읽고 고치고 쓰기, 확인하고 행동하기, 파일의 TOCTOU로 나눠 직접 재현한다. 싱글 스레드 자바스크립트의 await 틈, 워커 스레드와 Atomics, DB의 갱신 손실, Go 레이스 디텍터로 찾는 법과 고치는 방법을 고르는 기준까지 정리한다.",
+    topic: "programming/computer-science",
+    tags: ["Concurrency", "Node.js", "JavaScript", "PostgreSQL", "Linux", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["경쟁 상태", "TOCTOU", "check-then-act", "read-modify-write"],
+  },
+  {
     slug: "server-sent-events",
     title: "Server-Sent Events 깊게 보기: 재연결, 연결 수 제한, 프록시 버퍼링",
     summary: "EventSource가 Last-Event-ID를 들고 다시 붙는 과정과 영영 포기하는 응답을 Chromium으로 확인한다. HTTP/1.1의 연결 6개 제한, nginx와 압축이 이벤트를 붙잡는 곳, 하트비트, LLM 답변 스트리밍과 WebSocket 대신 SSE를 고를 때를 다룬다.",

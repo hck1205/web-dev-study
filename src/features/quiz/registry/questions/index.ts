@@ -43,6 +43,7 @@ import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
+import { DEADLOCKS } from "./deadlocks";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -201,6 +202,7 @@ import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
+import { RACE_CONDITIONS } from "./race-conditions";
 import { RAFT_CONSENSUS } from "./raft-consensus";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
@@ -252,6 +254,7 @@ import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
 import { TERRAFORM_MODULES_TFVARS } from "./terraform-modules-tfvars";
 import { TERRAFORM_NETWORK_IAC } from "./terraform-network-iac";
+import { THREAD_SAFETY } from "./thread-safety";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
@@ -315,6 +318,7 @@ export const QUESTION_SETS = [
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
   DEAD_LETTER_QUEUE,
+  DEADLOCKS,
   DESIGN_PATTERNS_OVERVIEW,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -473,6 +477,7 @@ export const QUESTION_SETS = [
   PYTHAGOREAN_THEOREM,
   QUADTREE,
   RABBITMQ_BASICS,
+  RACE_CONDITIONS,
   RAFT_CONSENSUS,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
@@ -524,6 +529,7 @@ export const QUESTION_SETS = [
   TERRAFORM_BASICS,
   TERRAFORM_MODULES_TFVARS,
   TERRAFORM_NETWORK_IAC,
+  THREAD_SAFETY,
   TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,

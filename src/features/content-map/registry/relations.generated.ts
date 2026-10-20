@@ -2,6 +2,54 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "thread-safety": {
+    "links": [
+      "race-conditions",
+      "deadlocks",
+      "event-loop",
+      "connection-pool"
+    ],
+    "mentions": []
+  },
+  "deadlocks": {
+    "links": [
+      "db-locking-deadlock",
+      "race-conditions",
+      "thread-safety",
+      "exponential-backoff-jitter",
+      "connection-pool",
+      "timeouts",
+      "pessimistic-locking"
+    ],
+    "mentions": [
+      "k8s-pod-probes",
+      "event-loop",
+      "osi-in-practice",
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "race-conditions": {
+    "links": [
+      "deadlocks",
+      "thread-safety",
+      "pessimistic-locking",
+      "distributed-lock",
+      "cron-jobs",
+      "event-loop",
+      "browser-fetch",
+      "idempotency-key",
+      "optimistic-locking",
+      "db-transaction-isolation"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "db-locking-deadlock",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
   "server-sent-events": {
     "links": [
       "realtime-communication",
@@ -1066,6 +1114,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "ipv6-basics",
       "packet-capture-tcpdump",
+      "race-conditions",
       "udp-and-quic"
     ]
   },
@@ -1419,6 +1468,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "packet-capture-tcpdump",
+      "deadlocks",
       "what-happens-google-com",
       "grpc",
       "postgres-getting-started",
@@ -1572,6 +1622,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cron-jobs",
+      "thread-safety",
       "leader-election",
       "sql-batch-timeout-pool"
     ]
@@ -2471,6 +2522,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "db-locking-deadlock": {
     "links": [
       "db-transaction-isolation",
+      "deadlocks",
       "microservices"
     ],
     "mentions": [
@@ -3100,6 +3152,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics"
     ],
     "mentions": [
+      "race-conditions",
       "sql-select-where-null",
       "postgres-architecture"
     ]
@@ -3470,6 +3523,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "load-balancer-basics",
       "consistent-hashing",
+      "race-conditions",
       "osi-in-practice",
       "redis-basics",
       "resilience-patterns",
@@ -3867,6 +3921,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "frontend-browser-cache",
       "rendering-csr-spa",
+      "race-conditions",
       "dns"
     ]
   },

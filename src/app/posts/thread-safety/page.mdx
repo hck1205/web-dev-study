@@ -1,0 +1,429 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("thread-safety");
+
+로그인 세션을 메모리 맵에 넣어 두는 Go 서버가 있다. 개발 환경에서는 몇 주째 멀쩡했다. 부하 테스트를 시작한 지 몇 초 만에 프로세스가 통째로 죽었다. 남은 건 한 줄이다. `fatal error: concurrent map writes`. 요청마다 고루틴이 하나씩 뜨는데, 그 고루틴들이 잠금 없이 같은 맵에 쓰고 있었다.
+
+여러 스레드가 동시에 불러도 올바르게 동작하는 코드를 스레드 안전(thread-safe)하다고 한다. 이 글은 무엇이 스레드 안전하지 않게 만드는지(같이 쓰는 값, 안 보이는 쓰기, 바뀌는 순서)를 Go, Java, C, Python, Node로 직접 보여 주고, 안전하게 만드는 네 가지 길과 언어별 스레드 안전 컬렉션, 그리고 실무에서 가장 자주 사고가 나는 DB 연결 객체 공유까지 다룬다. 환경은 Ubuntu 24.04(x86-64, 4코어), Go 1.24, OpenJDK 21, gcc 13, Python 3.13, Node 22, PostgreSQL 16이다.
+
+이 주제의 다른 글: 결과가 실행 순서에 달린 버그 자체는 [경쟁 상태 글](/posts/race-conditions), 락을 쓰다가 서로 기다리며 멈추는 문제는 [데드락 글](/posts/deadlocks)에서 다룬다. 이 글은 "공유하는 객체를 어떻게 설계하나"에 집중한다.
+
+## 혼자 돌릴 때는 멀쩡하던 세션 맵
+
+처음 장면을 줄여서 재현했다. 고루틴 4개가 같은 맵에 각자 10만 개씩 키를 넣는다.
+
+```go
+sessions := map[int]string{}
+for w := 0; w < 4; w++ {
+	go func(w int) {
+		for i := 0; i < 100000; i++ {
+			sessions[w*100000+i] = "user" // 잠금 없이 같은 map에 쓴다
+		}
+	}(w)
+}
+```
+
+```text
+fatal error: concurrent map writes
+
+goroutine 18 [running]:
+internal/runtime/maps.fatal({0x4b8167?, 0x0?})
+	/usr/local/go1.24.7/src/runtime/panic.go:1058 +0x18
+main.main.func1(0x0)
+	.../gomap/main.go:16 +0x94
+created by main.main in goroutine 1
+	.../gomap/main.go:13 +0x45
+```
+
+Go 런타임은 맵에 쓰는 중이라는 표시를 해 두고, 다른 고루틴이 그 사이에 쓰려 하면 프로세스를 죽인다. `panic`이 아니라 `fatal error`라서 `recover`로 잡을 수 없다. 맵 내부가 깨진 채로 계속 도는 것보다 바로 죽는 게 낫다는 설계다. 친절한 편이다.
+
+자바의 `HashMap`은 이런 검사가 없다. 같은 실험을 하면 아무 에러 없이 데이터가 사라진다.
+
+```bash
+java Maps   # 스레드 4개가 서로 다른 키를 10만 개씩 넣는다. 기대 크기 400,000
+```
+
+```text
+HashMap           expected 400000  size=358489
+ConcurrentHashMap expected 400000  size=400000
+```
+
+키가 겹치지도 않았는데 4만 개 넘게 사라졌다. 두 스레드가 같은 버킷의 연결 리스트를 동시에 고치거나, 한 스레드가 배열을 키우는(resize) 동안 다른 스레드가 옛 배열에 넣으면 그 항목은 새 배열에 옮겨지지 않는다. 자바 7까지는 resize 중 연결 리스트가 고리로 꼬여 `get`이 무한 루프를 돌며 CPU 100%를 태우는 사고가 유명했다. 자바 8에서 그 고리는 사라졌지만 데이터가 사라지는 건 그대로다.
+
+## 스레드 안전하다는 말의 범위
+
+스레드 안전하다는 건 여러 스레드가 어떤 순서로 섞여 부르든, 부르는 쪽이 따로 동기화하지 않아도 객체가 명세대로 동작한다는 뜻이다. 그런데 이 약속은 메서드 하나 단위다. 메서드 두 개를 이어 부르는 순간 약속 밖으로 나간다.
+
+`ConcurrentHashMap`으로 조회수를 세 보았다. 한 번은 `get`으로 읽고 `put`으로 쓰고, 한 번은 `merge`로 한 번에 했다.
+
+```java
+m.put("views", m.getOrDefault("views", 0) + 1);   // get 따로, put 따로
+m.merge("views", 1, Integer::sum);                // 읽고 더하고 쓰기를 맵이 한 번에
+```
+
+```text
+CHM get+put       expected 400000  views=195635
+CHM merge         expected 400000  views=400000
+```
+
+`get`도 `put`도 각자는 스레드 안전하다. 그런데 둘 사이에 다른 스레드가 끼어드니 40만 번 중 절반 넘게 잃었다. [경쟁 상태 글](/posts/race-conditions)에서 본 읽고 고치고 쓰기가 스레드 안전한 컬렉션 위에서 그대로 일어난 것이다. 그래서 스레드 안전 컬렉션은 복합 연산을 따로 준다. `putIfAbsent`, `computeIfAbsent`, `merge`, `compute`가 그것이고, Go의 `sync.Map`에는 `LoadOrStore`, `CompareAndSwap`이 있다.
+
+자바 쪽에서는 스레드 안전성을 몇 단계로 나눠 말한다. 불변(String, 레코드처럼 아예 바뀌지 않음), 무조건 안전(ConcurrentHashMap처럼 메서드 하나는 늘 안전), 조건부 안전(`Collections.synchronizedMap`처럼 순회할 때는 부르는 쪽이 맵 자체로 `synchronized` 블록을 감싸야 함), 안전하지 않음(HashMap, ArrayList). 라이브러리를 쓸 때 문서에서 이 단계를 찾는 습관이 사고를 많이 줄인다.
+
+## 데이터 경합과 경쟁 상태는 다르다
+
+비슷해 보이는 두 말이 가리키는 게 다르다. 데이터 경합(data race)은 두 스레드가 같은 메모리 위치에 동기화 없이 동시에 접근하고 그중 하나 이상이 쓰기인 것이다. 메모리 접근 수준의 정의라서 도구가 기계적으로 찾을 수 있다. 경쟁 상태는 결과가 실행 순서에 달려 틀릴 수 있는 논리의 문제다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="둘은 겹치지만 같지 않다"
+  nodes={[
+    { id: "dr", label: "데이터 경합만", sub: "결과는 우연히 맞아도 UB", x: 95, y: 60, w: 170 },
+    { id: "both", label: "둘 다", sub: "잠금 없는 count++", x: 200, y: 150, w: 150 },
+    { id: "rc", label: "경쟁 상태만", sub: "원자적 get, 원자적 put", x: 305, y: 60, w: 170 },
+    { id: "tool", label: "-race, TSan이 잡음", x: 95, y: 250, w: 170 },
+    { id: "test", label: "동시 요청 테스트로 잡음", x: 305, y: 250, w: 170 },
+  ]}
+  edges={[
+    { from: "dr", to: "both", arrow: "none", dashed: true },
+    { from: "rc", to: "both", arrow: "none", dashed: true },
+    { from: "both", to: "tool", label: "메모리 접근" },
+    { from: "both", to: "test", label: "논리" },
+    { from: "dr", to: "tool" },
+    { from: "rc", to: "test" },
+  ]}
+/>
+
+앞의 `CHM get+put`은 데이터 경합이 없다. 맵 안의 모든 접근은 동기화되어 있다. 그런데도 결과가 틀리니 경쟁 상태다. `-race` 같은 탐지기는 이걸 못 잡는다. 반대로 데이터 경합은 있는데 경쟁 상태는 아닌 경우도 있다. "처리 중" 플래그를 잠금 없이 `true`로만 바꾸고 다른 스레드가 언젠가 그걸 읽기만 하는 코드는, 결과 논리로는 순서와 상관없어 보인다. 하지만 바로 다음 장에서 보듯 그 값이 영영 안 보일 수 있다. C, C++, Go에서는 데이터 경합이 있는 프로그램의 동작을 언어가 보장하지 않는다. 그래서 둘 다 고쳐야 한다.
+
+## 쓴 값이 다른 스레드에 안 보인다
+
+이제 같이 쓰는 값이 아니라 보이는 값의 문제다. 자바에서 작업 스레드가 플래그를 보며 돌고, 메인 스레드가 1초 뒤 플래그를 끈다. 아주 흔한 종료 패턴이다.
+
+```java
+static boolean running = true;            // volatile이 없다
+
+Thread worker = new Thread(() -> { long n = 0; while (running) n++; ... });
+worker.start();
+Thread.sleep(1000);
+running = false;
+worker.join(3000);
+```
+
+```text
+--- plain
+main: flag = false
+worker alive after 3s: true
+--- volatile
+main: flag = false
+worker stopped after 1835013751 loops
+worker alive after 3s: false
+```
+
+`volatile`이 없으면 플래그를 끈 지 3초가 지나도 작업 스레드가 돌고 있다. 같은 코드를 인터프리터 모드(`java -Xint`)로 돌리면 `worker stopped after 94709655 loops`로 바로 멈췄다. JIT 컴파일러가 루프를 최적화하면서 "이 스레드 안에서 `running`을 바꾸는 코드는 없다"고 보고 읽기를 루프 밖으로 꺼냈기 때문이다. 단일 스레드 관점에서는 완전히 맞는 최적화다. 언어가 "다른 스레드가 바꿀 수 있다"는 사실을 컴파일러에게 알려 주는 표시가 `volatile`이다.
+
+<UrlAnatomy
+  caption="필드 선언 하나에 담긴 약속"
+  base="private"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "static", display: "static", title: "모든 스레드가 같은 칸을 본다", description: "인스턴스가 아니라 클래스에 하나만 있다. 공유된다는 뜻일 뿐, 동기화와는 관계없다." },
+    { key: "volatile", display: "volatile", title: "가시성과 순서", description: "이 필드에 쓰면 그 전의 쓰기까지 모두 다른 스레드의 다음 읽기에 보인다. 컴파일러와 CPU는 이 읽기를 캐시하거나 앞뒤 접근과 순서를 바꾸지 않는다. 하지만 running++ 같은 읽고 쓰기를 원자적으로 만들지는 않는다." },
+    { key: "type", display: "boolean running", title: "읽기 하나, 쓰기 하나로 끝나는 값", description: "플래그처럼 한 스레드가 쓰고 나머지가 읽기만 하면 volatile로 충분하다. 여럿이 고친다면 AtomicBoolean의 compareAndSet이나 락이 필요하다." },
+    { key: "init", display: "= true;", title: "초기값의 안전한 공개", description: "static 초기화는 클래스 로딩 과정에서 끝나서 다른 스레드에 안전하게 보인다. 생성자에서 채우는 일반 필드는 final이어야 같은 보장을 받는다." },
+  ]}
+/>
+
+컴파일러만의 문제도 아니다. CPU는 코어마다 캐시와 쓰기 버퍼(store buffer)를 두고, 쓴 값을 버퍼에 잠시 넣어 둔 채 다음 명령으로 넘어간다. 그 값은 조금 뒤에야 다른 코어에 보인다.
+
+## 순서도 바뀐다
+
+쓰기 버퍼 때문에 생기는 현상을 C로 직접 봤다. 고전적인 Store Buffering 리트머스 테스트다. 스레드 1은 `x = 1` 후 `y`를 읽고, 스레드 2는 `y = 1` 후 `x`를 읽는다. 둘 다 0에서 시작한다.
+
+<SequenceDiagram
+  caption="둘 다 썼는데 둘 다 0을 읽는다"
+  actors={[
+    { id: "c1", label: "코어 1" },
+    { id: "b1", label: "쓰기 버퍼 1" },
+    { id: "mem", label: "메모리" },
+    { id: "c2", label: "코어 2" },
+  ]}
+  steps={[
+    { from: "c1", to: "b1", label: "x = 1", title: "코어 1이 x에 쓴다", detail: "값은 코어 1의 쓰기 버퍼에 들어간다. 메모리에는 아직 x = 0이다." },
+    { from: "c2", to: "c2", label: "y = 1 (버퍼)", title: "코어 2도 y에 쓴다", detail: "역시 코어 2의 버퍼에만 있다. 서로의 버퍼는 보이지 않는다." },
+    { from: "c1", to: "mem", label: "r1 = y → 0", title: "코어 1이 y를 읽는다", detail: "메모리의 y는 아직 0이다. 자기 버퍼에 없는 값은 메모리에서 읽는다." },
+    { from: "c2", to: "mem", label: "r2 = x → 0", title: "코어 2가 x를 읽는다", detail: "메모리의 x도 아직 0이다. 둘 다 0을 읽었다." },
+    { from: "b1", to: "mem", label: "x = 1 반영", title: "이제서야 버퍼가 비워진다", detail: "쓰기는 일어났지만 읽기보다 늦게 보였다. 코드 순서로는 쓰기가 먼저였는데, 다른 코어가 보기에는 읽기가 먼저 일어난 셈이다." },
+  ]}
+/>
+
+코드만 보면 `r1`과 `r2`가 둘 다 0일 수는 없을 것 같다. 어떤 순서로 섞든 누군가의 쓰기가 먼저니까. 정말 그런지 먼저 계산해 보자. 아래 함수는 두 스레드의 명령을 프로그램 순서는 지키면서 모든 방법으로 섞어, 나올 수 있는 레지스터 값 조합을 모은다. 모든 코어가 하나의 메모리를 차례로 본다고 가정하는 이 모델을 순차 일관성(sequential consistency)이라고 한다.
+
+<CodePlayground
+  caption="순차 일관성에서 나올 수 있는 결과 모으기"
+  functionName="scOutcomes"
+  initialCode={`function scOutcomes(a, b) {
+  // a, b: 스레드의 명령 목록. "x=1"은 x에 1을 쓰기, "r1=y"는 y를 읽어 r1에 담기
+  // 메모리는 모두 0에서 시작한다
+  // 반환: "r1=0,r2=1"처럼 레지스터 이름순으로 이은 문자열들을 정렬한 배열
+  return [];
+}`}
+  solution={`function scOutcomes(a, b) {
+  const results = new Set();
+  function step(op, mem, regs) {
+    const [left, right] = op.split("=");
+    if (/^r\\d+$/.test(left)) regs = { ...regs, [left]: mem[right] || 0 };
+    else mem = { ...mem, [left]: Number(right) };
+    return [mem, regs];
+  }
+  function dfs(i, j, mem, regs) {
+    if (i === a.length && j === b.length) {
+      results.add(Object.keys(regs).sort().map((k) => k + "=" + regs[k]).join(","));
+      return;
+    }
+    if (i < a.length) { const [m, r] = step(a[i], mem, regs); dfs(i + 1, j, m, r); }
+    if (j < b.length) { const [m, r] = step(b[j], mem, regs); dfs(i, j + 1, m, r); }
+  }
+  dfs(0, 0, {}, {});
+  return [...results].sort();
+}`}
+  tests={[
+    { label: "Store Buffering", args: [["x=1", "r1=y"], ["y=1", "r2=x"]], expected: ["r1=0,r2=1", "r1=1,r2=0", "r1=1,r2=1"] },
+    { label: "Message Passing", args: [["d=1", "f=1"], ["r1=f", "r2=d"]], expected: ["r1=0,r2=0", "r1=0,r2=1", "r1=1,r2=1"] },
+    { label: "Load Buffering", args: [["r1=y", "x=1"], ["r2=x", "y=1"]], expected: ["r1=0,r2=0", "r1=0,r2=1", "r1=1,r2=0"] },
+  ]}
+/>
+
+첫 테스트의 답에 `r1=0,r2=0`이 없다. 순서를 어떻게 섞어도 나올 수 없다. 그런데 실제 x86 코어 두 개에서 100만 번 돌리면 이렇다. 변수는 `volatile`로 선언해 컴파일러가 순서를 바꾸지 못하게 했으니, 남은 건 CPU다.
+
+```bash
+gcc -O2 -pthread sb.c -o sb
+./sb          # 펜스 없이
+./sb fence    # 쓰기와 읽기 사이에 atomic_thread_fence(memory_order_seq_cst)
+```
+
+```text
+no fence  r1=0,r2=0: 2449  r1=0,r2=1: 402047  r1=1,r2=0: 593427  r1=1,r2=1: 2077  (of 1000000)
+fence     r1=0,r2=0: 0  r1=0,r2=1: 227741  r1=1,r2=0: 743526  r1=1,r2=1: 28733  (of 1000000)
+```
+
+펜스가 없으면 100만 번 중 2,449번 "불가능한" 결과가 나왔다(다시 돌리면 3,984번). 메모리 펜스를 넣으면 0번이다. 펜스는 "앞의 쓰기가 다른 코어에 보일 때까지 다음 읽기를 하지 마라"는 명령이다. x86은 그나마 순서를 잘 지키는 편이라 바뀌는 건 "쓰기 뒤의 읽기"뿐이다. ARM(그래비톤 서버, 애플 실리콘)은 더 많은 순서를 바꾼다. 두 번째 테스트(Message Passing)에서 순차 일관성은 `r1=1,r2=0`을 허용하지 않지만, ARM에서 동기화 없이 돌리면 그것도 나올 수 있다. x86에서 멀쩡하던 코드가 ARM으로 옮기자 깨지는 이유다.
+
+## happens-before가 약속하는 것
+
+매번 펜스를 고민하며 코드를 짤 수는 없다. 그래서 언어는 메모리 모델로 약속을 정한다. 핵심 개념이 happens-before 관계다. A가 B보다 happens-before라면, A까지의 모든 쓰기가 B에서 보인다. 이 관계는 몇 가지 동기화 동작으로만 생긴다.
+
+- 같은 락: 한 스레드의 unlock은 그다음 같은 락을 잡는 스레드의 lock보다 앞선다.
+- `volatile` 쓰기와 읽기(자바), 원자적 변수의 쓰기와 그 값을 본 읽기(Go의 `sync/atomic`, C의 seq_cst 원자 연산).
+- 스레드 시작과 끝: `start()` 전에 한 일은 새 스레드에서 보이고, 스레드의 모든 일은 `join()`이 돌아온 뒤에 보인다.
+- Go의 채널: 보내기는 그 값을 받는 쪽의 받기가 끝나기 전에 일어난다.
+
+이 관계가 이어지면(전이) 동기화 지점 앞에서 한 평범한 쓰기도 함께 공개된다. 데이터를 다 채운 다음 `volatile` 플래그나 채널로 "준비됐다"를 알리면, 플래그를 본 쪽은 데이터도 본다. 이게 안전한 공개(safe publication)다.
+
+자바(JSR-133, 자바 5부터)와 Go(1.19에서 크게 다시 쓴 메모리 모델) 모두 같은 큰 원칙을 따른다. 데이터 경합이 없는 프로그램은 순차 일관성처럼 동작한다(DRF-SC). 그러니 개발자가 할 일은 펜스를 넣는 게 아니라, 공유 변수에 대한 모든 접근을 동기화 동작으로 묶어 데이터 경합을 없애는 것이다. Go 메모리 모델 문서의 첫머리가 이렇게 말한다. 이 문서를 끝까지 읽어야 프로그램의 동작을 이해할 수 있다면 너무 영리하게 짠 것이다. 영리해지지 마라.
+
+## 안전하게 만드는 네 가지 길
+
+공유된 객체를 스레드 안전하게 만드는 방법은 크게 넷이다. 위에 있을수록 생각할 것이 적다.
+
+<ConceptDiagram
+  width={400}
+  height={360}
+  caption="공유 상태를 다루는 네 가지 길"
+  nodes={[
+    { id: "q", label: "여러 스레드가 만지나", x: 200, y: 35, w: 180 },
+    { id: "conf", label: "한정", sub: "한 스레드만 소유", x: 90, y: 115, w: 150 },
+    { id: "q2", label: "바뀌어야 하나", x: 300, y: 115, w: 150 },
+    { id: "imm", label: "불변", sub: "만들고 나면 고정", x: 90, y: 200, w: 150 },
+    { id: "q3", label: "값 하나인가", x: 300, y: 200, w: 150 },
+    { id: "atom", label: "원자적 연산", sub: "CAS, Atomics", x: 90, y: 290, w: 150 },
+    { id: "lock", label: "락", sub: "여러 값을 함께", x: 300, y: 290, w: 150 },
+  ]}
+  edges={[
+    { from: "q", to: "conf", label: "피할 수 있다" },
+    { from: "q", to: "q2", label: "피할 수 없다" },
+    { from: "q2", to: "imm", label: "아니오" },
+    { from: "q2", to: "q3", label: "예" },
+    { from: "q3", to: "atom", label: "예" },
+    { from: "q3", to: "lock", label: "아니오" },
+  ]}
+/>
+
+한정(confinement)은 공유하지 않는 것이다. 요청마다 새 객체를 만들고 그 요청을 처리하는 스레드만 쓰게 하거나(대부분의 웹 핸들러), `ThreadLocal`로 스레드마다 따로 두거나, 한 고루틴이 상태를 소유하고 나머지는 채널로 요청만 보내게 한다. Go의 격언 "메모리를 공유해서 통신하지 말고, 통신해서 메모리를 공유하라"가 이 길이다. 공유가 없으니 동기화도 필요 없다.
+
+불변(immutability)은 공유하되 바꾸지 않는 것이다. 모든 필드가 `final`인 객체는 생성자가 끝난 뒤 어느 스레드에서 읽어도 같다. 바꿔야 하면 새 객체를 만들고 참조만 원자적으로 바꾼다. 설정 객체를 통째로 갈아 끼우는 방식, `CopyOnWriteArrayList`가 이렇게 동작한다. 읽기는 잠금 없이 빠르고 쓰기는 복사 비용을 낸다.
+
+원자적 연산은 값 하나를 고칠 때 쓴다. 대부분 CAS(compare-and-swap) 위에 만들어져 있다. "지금 값이 내가 읽은 값과 같으면 새 값으로 바꾸고, 아니면 실패"를 CPU 명령 하나로 한다. 실패하면 다시 읽고 다시 계산한다.
+
+<AlgoTrace
+  caption="CAS 루프: 남이 먼저 바꿨으면 다시 읽는다"
+  memoryLabel="메모리 views | A가 읽은 값 | B가 읽은 값"
+  cells={["A 읽기", "B 읽기", "B CAS 5→6", "A CAS 5→6", "A 다시 읽기", "A CAS 6→7"]}
+  steps={[
+    { pointer: 0, memory: ["views 5", "A 5", "B -"], caption: "A가 5를 읽고 6을 만들 준비를 한다." },
+    { pointer: 1, memory: ["views 5", "A 5", "B 5"], caption: "B도 5를 읽는다. 여기까지는 count++와 같다." },
+    { pointer: 2, found: [2], memory: ["views 6", "A 5", "B 5"], caption: "B가 CAS(5, 6)을 한다. 메모리가 5가 맞으니 성공한다." },
+    { pointer: 3, found: [2], memory: ["views 6", "A 5", "B 5"], caption: "A가 CAS(5, 6)을 한다. 메모리는 이미 6이라 실패한다. 덮어쓰지 않는다." },
+    { pointer: 4, found: [2], memory: ["views 6", "A 6", "B 5"], caption: "A는 다시 읽는다. 6이다." },
+    { pointer: 5, found: [2, 5], memory: ["views 7", "A 6", "B 5"], caption: "A가 CAS(6, 7)에 성공한다. 두 증가가 모두 남았다." },
+  ]}
+/>
+
+락은 여러 값을 함께 바꿔야 할 때 쓴다. 잔액과 거래 내역처럼 둘이 항상 맞아야 하는 값(불변식)은 원자적 연산 두 번으로는 지킬 수 없다. 둘 사이에 다른 스레드가 맞지 않는 중간 상태를 본다. 락은 그 구간 전체를 한 번에 한 스레드만 지나게 한다. 대신 기다리는 비용과 [데드락](/posts/deadlocks)의 위험을 함께 가져온다. 락을 쥔 구간은 짧게, 락 안에서 I/O나 남의 코드를 부르지 않는다.
+
+원자적 연산이 락보다 늘 빠른 것도 아니다. 경합이 심하면 CAS는 실패와 재시도를 반복하고, 같은 캐시 줄을 두고 코어들이 줄을 선다. 자바의 `LongAdder`가 카운터를 여러 칸으로 나눠 따로 더하고 읽을 때 합치는 이유다. 이것도 결국 공유를 줄이는 쪽, 즉 첫 번째 길로 돌아가는 방법이다.
+
+## 스레드 안전한 컬렉션 고르기
+
+언어마다 기본 컬렉션은 대부분 스레드 안전하지 않다. 바꿔 쓸 것과 주의할 점을 정리하면 이렇다.
+
+- 자바: `HashMap` 대신 `ConcurrentHashMap`. 버킷 단위로 잠그고 읽기는 잠그지 않아서 `Collections.synchronizedMap`(맵 전체를 락 하나로 감쌈)보다 경합에 강하다. 복합 연산은 `merge`, `compute`로, 순회 중 다른 스레드가 고쳐도 `ConcurrentModificationException` 없이 일부만 반영된 결과를 본다. 읽기가 대부분인 목록은 `CopyOnWriteArrayList`, 생산자·소비자는 `BlockingQueue`.
+- Go: 보통은 맵과 `sync.Mutex`(또는 `RWMutex`)를 구조체에 함께 둔다. `sync.Map`은 문서가 밝히듯 키를 한 번 쓰고 여러 번 읽는 경우(자라기만 하는 캐시)나 고루틴들이 서로 다른 키를 다루는 경우에 맞춰져 있고, 그 밖에는 맵과 뮤텍스가 낫다.
+- Python: CPython은 GIL(전역 인터프리터 락) 덕분에 `list.append`나 `dict[key] = value` 같은 연산 하나가 중간에 끊기지 않는다. 그렇다고 코드가 안전한 건 아니다.
+
+GIL이 어디까지 지켜 주는지 직접 봤다. Python 3.13(기본 빌드)에서 스레드 4개가 `count += 1`을 100만 번씩 하면 세 번 다 정확히 400만이 나왔다. 바이트코드 몇 개 사이에서는 스레드 전환이 거의 일어나지 않아서다. 그런데 읽기와 쓰기 사이에 I/O가 끼면 이야기가 다르다.
+
+```python
+def hit(self):
+    v = self.views
+    time.sleep(0)        # 로그 쓰기, 캐시 조회 같은 I/O 자리. GIL을 놓는다
+    self.views = v + 1
+```
+
+```text
+hit        expected 40000 got 10003
+hit_locked expected 40000 got 40000
+```
+
+4만 번 중 1만 번만 남았다. 같은 코드를 `threading.Lock`으로 감싸면 정확하다. GIL은 인터프리터 내부를 지키는 것이지 내 코드의 불변식을 지키는 게 아니다. 게다가 GIL 없는 빌드(free-threaded, PEP 703)가 3.13에서 실험적으로 나왔고 3.14부터 공식 지원 대상이 되었다. 그 빌드에서는 지금까지 우연히 맞던 코드도 깨질 수 있으니, 공유 상태는 처음부터 락이나 `queue.Queue`로 다룬다.
+
+## 자바스크립트의 스레드는 복사하거나, 나누고 Atomics로
+
+Node와 브라우저의 자바스크립트는 메인 스레드 하나에서 돈다. 객체를 다른 스레드와 나누지 않으니 데이터 경합이 생길 수 없다. 이것도 첫 번째 길(한정)이다. 다만 [이벤트 루프](/posts/event-loop)가 `await` 사이에 다른 콜백을 끼워 넣으니 경쟁 상태는 여전히 생긴다.
+
+`worker_threads`나 웹 워커로 스레드를 늘려도 기본은 복사다. `postMessage`로 보낸 객체는 구조화된 복제(structured clone)로 복사되어 건너간다. 공유는 `SharedArrayBuffer`를 넘길 때만 생긴다. 둘을 같이 보내고 워커에서 고쳐 봤다.
+
+```js
+// 워커 안에서: 받은 cart와 shared를 고친다
+cart.items = 99;      // 받은 건 복사본
+shared[0] = 99;       // 같은 메모리
+```
+
+```text
+cart.items = 1  shared[0] = 99
+```
+
+복사된 객체는 메인 스레드의 원본에 아무 영향이 없다. `SharedArrayBuffer`만 바뀌었다. 공유를 택했다면 그 메모리에는 `Atomics`를 쓴다. `Atomics.add`, `Atomics.compareExchange`는 원자적이고 순차 일관성 순서를 보장하며, `Atomics.wait`와 `Atomics.notify`로 다른 워커를 재우고 깨운다. 일반 인덱스 접근(`view[0]++`)으로 4개 워커가 100만 번씩 올리면 매번 수십만 번을 잃는다는 실험은 [경쟁 상태 글](/posts/race-conditions)에 있다. 브라우저는 스펙터 공격 이후 `SharedArrayBuffer`를 교차 출처 격리(`Cross-Origin-Opener-Policy`와 `Cross-Origin-Embedder-Policy` 헤더)를 켠 페이지에서만 허용한다.
+
+## 연결 객체는 같이 쓰지 않는다
+
+실무에서 스레드 안전 문제가 가장 조용히 사고를 내는 곳은 DB 연결이다. 연결 하나는 서버 쪽 세션 하나라서, 트랜잭션 상태가 연결에 붙어 있다. Node의 `pg`에서 `Client` 하나를 모듈 변수로 만들어 모든 요청이 같이 쓰는 코드를 돌렸다. 요청 A는 주문을 넣다가 결제 실패로 롤백하고, 그사이 요청 B는 트랜잭션 없이 한 줄을 넣는다.
+
+```js
+async function placeOrder() {          // 요청 A
+  await db.query("BEGIN");
+  await db.query("INSERT INTO orders (who) VALUES ('A')");
+  await sleep(20);                     // 결제 API 호출
+  await db.query("ROLLBACK");
+}
+async function signup() {              // 요청 B
+  await sleep(5);
+  await db.query("INSERT INTO orders (who) VALUES ('B')");
+  return "B: INSERT 성공";
+}
+```
+
+```text
+B: INSERT 성공
+[]
+```
+
+B는 성공했다는 응답을 받았는데 테이블은 비어 있다. B의 `INSERT`가 같은 연결에서 열려 있던 A의 트랜잭션 안으로 들어갔고, A의 `ROLLBACK`이 함께 지웠다. 에러도 경고도 없다. 스레드가 하나인 Node에서도 연결 객체를 요청끼리 나누면 이렇게 된다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="연결 하나를 나누면 트랜잭션도 나눠 갖는다"
+  zones={[
+    { id: "app", label: "node process", x: 10, y: 20, w: 380, h: 180, tone: "private" },
+    { id: "pg", label: "postgres", x: 60, y: 220, w: 280, h: 100, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "ra", label: "req A", sub: "BEGIN..", x: 80, y: 70, icon: "client", w: 100 },
+    { id: "rb", label: "req B", sub: "INSERT", x: 320, y: 70, icon: "client", w: 100 },
+    { id: "cl", label: "shared Client", x: 200, y: 150, icon: "switch", w: 140 },
+    { id: "s1", label: "session 1", sub: "in txn", x: 130, y: 275, icon: "db", w: 110 },
+    { id: "s2", label: "session 2", sub: "idle", x: 270, y: 275, icon: "db", w: 110 },
+  ]}
+  links={[
+    { from: "ra", to: "cl" },
+    { from: "rb", to: "cl" },
+    { from: "cl", to: "s1" },
+    { from: "rb", to: "s2", dashed: true, label: "pool" },
+  ]}
+  steps={[
+    { path: ["ra", "cl", "s1"], packet: "BEGIN", title: "A가 트랜잭션을 연다", detail: "트랜잭션은 연결(서버 세션)에 붙는다. 이 연결은 이제 트랜잭션 안이다." },
+    { path: ["rb", "cl", "s1"], packet: "INSERT", highlight: ["s1"], title: "B의 INSERT도 같은 연결로 간다", detail: "B는 트랜잭션을 연 적이 없지만, 연결이 이미 A의 트랜잭션 안이라 거기에 섞인다." },
+    { path: ["ra", "cl", "s1"], packet: "ROLLBACK", blocked: true, title: "A의 롤백이 B까지 지운다", detail: "B는 성공 응답을 받았는데 행은 없다. 에러가 어디에도 남지 않는다." },
+    { path: ["rb", "s2"], packet: "INSERT", title: "요청마다 풀에서 빌리면", detail: "B는 다른 세션을 쓴다. 같은 실험을 Pool로 바꾸니 B의 행이 남았다.", payload: "[ { who: 'B' } ]" },
+  ]}
+/>
+
+요청마다 풀에서 연결을 빌려(`pool.connect()`) 트랜잭션 동안 혼자 쓰고 돌려주면 된다. 같은 실험을 풀로 바꾸자 결과는 `[ { who: 'B' } ]`였다. 트랜잭션이 없는 단일 쿼리는 `pool.query()`로 충분하다. 풀이 알아서 빌리고 돌려준다. 풀 크기와 대기 시간 설정은 [커넥션 풀 글](/posts/connection-pool)에 있다.
+
+다른 언어도 원칙은 같다. JDBC의 `Connection`은 여러 스레드가 동시에 쓰는 걸 전제로 하지 않으니 요청마다 풀에서 빌린다. Python의 `sqlite3`는 기본값으로 아예 막아 둔다.
+
+```text
+ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 140097229283456 and this is thread id 140097221129920.
+```
+
+반대로 동시에 써도 되도록 만들어진 클라이언트도 있다. Go의 `http.Client`와 `*sql.DB`(이건 연결이 아니라 풀이다), 자바 11의 `HttpClient`는 문서에 여러 고루틴이나 스레드가 같이 써도 된다고 적혀 있고, 오히려 요청마다 새로 만들면 연결 재사용이 안 돼서 느려진다. 자바의 `SimpleDateFormat`은 내부에 계산 중인 상태를 들고 있어서 공유하면 날짜가 섞여 나오고, 불변인 `DateTimeFormatter`는 공유해도 된다. 결국 라이브러리 문서에서 "thread-safe", "safe for concurrent use" 문구를 찾는 게 먼저다.
+
+## 현장에서 스레드 안전 문제를 만났을 때
+
+증상은 대개 이렇다.
+
+- 가끔 값이 틀린다. 카운터가 모자라고, 맵에서 넣은 키가 사라지고, 다른 사용자의 데이터가 섞여 나온다.
+- 가끔 이상한 예외가 난다. 자바의 `ConcurrentModificationException`, `ArrayIndexOutOfBoundsException`(ArrayList를 동시에 키울 때), Go의 `concurrent map writes`나 `concurrent map read and map write`.
+- 드물게 CPU 하나가 100%로 멈춘다. 깨진 자료구조 안에서 도는 무한 루프다.
+- 종료 플래그를 껐는데 스레드가 안 멈춘다. 가시성 문제다.
+
+확인은 도구와 리뷰로 한다. Go는 `go test -race ./...`를 CI에 넣고, C와 C++은 `-fsanitize=thread`로 빌드한 테스트를 돌린다. 자바는 동시성 단위 테스트 도구인 jcstress로 리트머스 테스트처럼 수백만 번 섞어 돌릴 수 있다. 리뷰에서는 세 가지를 묻는다. 이 상태는 누가 소유하나. 여러 스레드가 만진다면 모든 접근이 같은 락이나 원자적 연산을 거치나. 확인과 행동, 읽기와 쓰기가 한 번에 일어나나. 싱글턴 서비스 클래스(스프링 빈 같은)에 요청별 값을 필드로 두는 코드는 리뷰에서 바로 걸러야 한다. 빈 하나를 모든 요청 스레드가 같이 쓰기 때문이다.
+
+고칠 때는 위의 네 가지 길 중 가장 위쪽부터 본다. 공유를 없앨 수 있으면 없애고, 바꾸지 않아도 되면 불변으로, 값 하나면 원자적 연산, 여러 값이면 락이다. 스레드 안전은 동기화를 많이 하는 게 아니라, 공유하는 것을 줄이고 남은 공유 지점마다 정확한 약속을 거는 일이다.
+
+## 면접에서 나올 만한 질문
+
+### 스레드 안전하다는 건 무슨 뜻인가요?
+
+여러 스레드가 어떤 순서로 섞여 불러도, 부르는 쪽이 따로 동기화하지 않아도 명세대로 동작한다는 뜻이다. 보장은 보통 메서드 하나 단위라서, 스레드 안전한 맵의 `get`과 `put`을 이어 부르면 그 사이에 끼어들 수 있다. 실험에서 `ConcurrentHashMap`의 get+put 카운터는 40만 번 중 절반 넘게 잃었고, `merge`로 바꾸자 정확했다.
+
+### 데이터 경합과 경쟁 상태의 차이는 무엇인가요?
+
+데이터 경합은 같은 메모리에 동기화 없이 동시에 접근하고 하나 이상이 쓰기인 상황이고, 경쟁 상태는 실행 순서에 따라 결과가 틀릴 수 있는 논리 문제다. 원자적 연산 두 개를 이어 쓰면 데이터 경합 없이도 경쟁 상태가 생긴다. 데이터 경합은 `-race`나 ThreadSanitizer가 잡지만 경쟁 상태는 동시 요청 테스트와 리뷰로 찾아야 한다.
+
+### volatile은 무엇을 보장하고 무엇을 보장하지 않나요?
+
+가시성과 순서를 보장한다. volatile 변수에 쓰면 그 전의 쓰기까지 다른 스레드의 다음 읽기에 보이고, 컴파일러와 CPU가 그 접근을 캐시하거나 순서를 바꾸지 않는다. 원자성은 보장하지 않아서 `count++`는 여전히 깨진다. 플래그처럼 한 명이 쓰고 나머지가 읽는 값에 맞고, 여럿이 고치면 Atomic 클래스나 락을 쓴다.
+
+### 왜 volatile 없는 종료 플래그는 스레드를 멈추지 못하나요?
+
+JIT 컴파일러가 루프 안에서 플래그를 바꾸는 코드가 없다고 보고 읽기를 루프 밖으로 꺼내기 때문이다. 실험에서 volatile 없이는 플래그를 끈 지 3초 뒤에도 스레드가 돌았고, 인터프리터 모드나 volatile을 붙이면 바로 멈췄다. 단일 스레드 기준으로는 맞는 최적화라서, 다른 스레드가 바꾼다는 걸 언어의 동기화 장치로 알려야 한다.
+
+### happens-before 관계가 무엇인가요?
+
+A가 B보다 happens-before면 A까지의 모든 쓰기가 B에서 보인다는 메모리 모델의 약속이다. 같은 락의 unlock과 lock, volatile이나 원자 변수의 쓰기와 읽기, 스레드 start와 join, Go 채널의 보내기와 받기가 이 관계를 만든다. 데이터를 다 채운 뒤 이런 동기화로 공개하면 받는 쪽은 데이터까지 본다. 데이터 경합이 없는 프로그램은 순차 일관성처럼 동작한다는 것이 자바와 Go 메모리 모델의 공통 원칙이다.
+
+### 락 없이 스레드 안전하게 만드는 방법은 무엇이 있나요?
+
+공유하지 않는 한정(요청마다 객체, ThreadLocal, 상태를 한 고루틴이 소유하고 채널로 요청), 바꾸지 않는 불변 객체와 참조 교체, 값 하나를 CAS로 고치는 원자적 연산이 있다. 위에 있을수록 생각할 것이 적다. 원자적 연산도 경합이 심하면 재시도와 캐시 줄 경합으로 느려져서 `LongAdder`처럼 칸을 나누는 방법을 쓴다.
+
+### Node는 싱글 스레드인데 스레드 안전을 신경 써야 하나요?
+
+메인 스레드끼리는 객체를 공유하지 않아 데이터 경합이 없지만, `await` 사이의 경쟁 상태와 공유 객체의 상태 섞임은 생긴다. 모듈 변수 하나의 DB `Client`를 요청들이 같이 쓰면 한 요청의 ROLLBACK이 다른 요청의 INSERT를 지운다. 워커 스레드는 기본이 복사라 안전하고, `SharedArrayBuffer`를 공유할 때만 `Atomics`가 필요하다.
+
+### Python은 GIL이 있으니 스레드 안전한가요?
+
+아니다. GIL은 바이트코드 하나가 끊기지 않게 할 뿐, 읽기와 쓰기 사이에 I/O가 끼면 다른 스레드가 들어온다. 실험에서 사이에 `time.sleep(0)` 하나를 넣자 4만 번 중 1만 번만 남았다. GIL 없는 빌드가 3.13에서 실험적으로 나왔고 3.14부터 공식 지원 대상이 되어서, 공유 상태는 처음부터 `Lock`이나 `queue.Queue`로 다뤄야 한다.

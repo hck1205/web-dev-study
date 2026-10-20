@@ -1,0 +1,533 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("deadlocks");
+
+헬스 체크가 타임아웃으로 떨어지기 시작했다. 대시보드를 보면 요청 지연은 하늘로 솟았는데 CPU 사용률은 거의 0%다. 메모리도 멀쩡하다. 서버는 일을 너무 많이 해서 느린 게 아니라, 아무 일도 하지 않고 있었다. 재시작하면 한동안 괜찮다가 며칠 뒤 다시 같은 모양으로 멈춘다.
+
+이런 모양이면 데드락(deadlock)을 먼저 의심한다. 둘 이상의 실행 흐름이 서로 상대가 쥔 자원을 기다리느라 아무도 앞으로 가지 못하는 상태다. DB 안에서 생기는 교착 상태는 [재고 -1 막기 글](/posts/db-locking-deadlock)에서 PostgreSQL 출력과 함께 다뤘다. 이 글은 애플리케이션 코드 안의 데드락을 다룬다. Go, Java, Python으로 직접 멈춰 보고, 런타임마다 스레드 덤프를 떠서 어디서 서로 기다리는지 읽고, 락 순서와 타임아웃으로 고친다. 락 하나로도 멈추는 경우, 라이브락과 기아, 락이 아닌 커넥션 풀이 만드는 데드락까지 본다. 환경은 Ubuntu 24.04, Go 1.24, OpenJDK 21, Python 3.13, Node 22, PostgreSQL 16이다.
+
+이 주제의 다른 글: 락이 필요해지는 이유인 경쟁 상태는 [경쟁 상태 글](/posts/race-conditions), 락 없이 스레드 안전하게 만드는 방법은 [스레드 안전 글](/posts/thread-safety)에서 다룬다.
+
+## CPU는 0%인데 요청이 끝나지 않는다
+
+데드락은 느려지는 게 아니라 멈추는 것이다. 무한 루프와 구별하는 가장 쉬운 신호가 CPU다. 무한 루프는 코어 하나를 100% 태운다. 데드락에 걸린 스레드는 락을 기다리며 잠들어 있으니 CPU를 쓰지 않는다. 이 글에서 만든 Go 프로그램이 멈춘 상태를 `ps`로 보면 이렇다.
+
+```bash
+ps -o pid,stat,pcpu,etime,cmd -p <pid>   # 상태, CPU 사용률, 실행 시간
+```
+
+```text
+  PID STAT %CPU     ELAPSED CMD
+ 9257 Sl    0.0       00:03 ./godl2
+```
+
+`STAT`의 `S`는 잠든 상태(interruptible sleep), `l`은 스레드가 여럿이라는 뜻이다. `%CPU`는 0이다. 프로세스는 살아 있고, 포트도 열려 있고, 새 연결도 받는다. 다만 받은 요청을 처리할 스레드가 하나둘 같은 락 앞에서 잠들면서 결국 모두 멈춘다. 그래서 헬스 체크가 단순히 포트만 보면 이걸 못 잡고, 실제 처리 경로를 지나는 헬스 체크여야 잡힌다.
+
+## 네 가지 조건이 모두 맞아야 멈춘다
+
+1971년 Coffman 등이 정리한 데드락의 필요조건은 네 가지다. 넷이 동시에 성립해야 데드락이 생긴다. 반대로 말하면 하나만 깨도 데드락은 생길 수 없다.
+
+- 상호 배제: 자원을 한 번에 하나만 쓸 수 있다. 뮤텍스가 원래 그렇다.
+- 점유하며 대기(hold and wait): 자원 하나를 쥔 채 다른 자원을 기다린다.
+- 비선점: 남이 쥔 자원을 강제로 빼앗을 수 없다. 쥔 쪽이 스스로 놓아야 한다.
+- 순환 대기: 기다림을 화살표로 이으면 고리가 생긴다. A는 B를, B는 A를 기다린다.
+
+실무에서 깨기 쉬운 건 넷째와 셋째다. 순환 대기는 락을 잡는 순서를 하나로 정하면 사라지고, 비선점은 "일정 시간 못 잡으면 내가 쥔 것을 놓고 물러난다"로 흉내 낼 수 있다. 둘째는 필요한 자원을 한 번에 다 잡거나 하나도 안 잡는 방식으로 깰 수 있지만, 무엇이 필요한지 미리 알아야 한다.
+
+누가 누구를 기다리는지 그린 그림을 대기 그래프(wait-for graph)라고 한다. 계좌 이체 두 건이 서로를 기다리는 모양이다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="쥔 것과 기다리는 것을 이으면 고리가 생긴다"
+  nodes={[
+    { id: "t1", label: "이체 1→2", sub: "스레드 A", x: 90, y: 60, w: 130 },
+    { id: "t2", label: "이체 2→1", sub: "스레드 B", x: 310, y: 200, w: 130 },
+    { id: "l1", label: "계좌 1 락", sub: "A가 쥠", x: 90, y: 200, w: 130 },
+    { id: "l2", label: "계좌 2 락", sub: "B가 쥠", x: 310, y: 60, w: 130 },
+  ]}
+  edges={[
+    { from: "l1", to: "t1", label: "쥐고 있다" },
+    { from: "t1", to: "l2", label: "기다린다" },
+    { from: "l2", to: "t2", label: "쥐고 있다" },
+    { from: "t2", to: "l1", label: "기다린다" },
+  ]}
+/>
+
+화살표를 따라가면 처음 자리로 돌아온다. 고리 안의 누구도 먼저 놓지 않으니 영원히 돈다.
+
+## 계좌 이체로 직접 멈춰 보기
+
+가장 흔한 데드락은 "두 개를 잠그는 코드가 두 방향으로 불리는" 경우다. Go로 계좌 이체를 짰다. 보내는 계좌를 먼저 잠그고, 잔액 확인 같은 일을 하고, 받는 계좌를 잠근다.
+
+```go
+func transfer(from, to *Account, amount int) {
+	from.mu.Lock()
+	defer from.mu.Unlock()
+	time.Sleep(10 * time.Millisecond) // 잔액 확인 같은 작업
+	to.mu.Lock()
+	defer to.mu.Unlock()
+	from.Balance -= amount
+	to.Balance += amount
+}
+
+go func() { defer wg.Done(); transfer(a, b, 10) }() // 1 → 2
+go func() { defer wg.Done(); transfer(b, a, 20) }() // 2 → 1
+```
+
+<SequenceDiagram
+  caption="서로 반대 순서로 잠그면 둘 다 멈춘다"
+  actors={[
+    { id: "ga", label: "고루틴 A" },
+    { id: "l1", label: "계좌 1 락" },
+    { id: "l2", label: "계좌 2 락" },
+    { id: "gb", label: "고루틴 B" },
+  ]}
+  steps={[
+    { from: "ga", to: "l1", label: "Lock 성공", title: "A가 계좌 1을 잠근다", detail: "1에서 2로 10원을 보내는 이체다. 보내는 쪽부터 잠갔다." },
+    { from: "gb", to: "l2", label: "Lock 성공", title: "B가 계좌 2를 잠근다", detail: "2에서 1로 20원을 보내는 이체다. B도 보내는 쪽부터 잠갔다." },
+    { from: "ga", to: "ga", label: "10ms 작업", title: "둘 다 첫 락을 쥔 채 일한다", detail: "이 시간이 길수록 둘이 겹칠 확률이 커진다." },
+    { from: "ga", to: "l2", label: "Lock 대기", title: "A가 계좌 2를 기다린다", detail: "B가 쥐고 있다. A는 잠든다." },
+    { from: "gb", to: "l1", label: "Lock 대기", title: "B가 계좌 1을 기다린다", detail: "A가 쥐고 있다. B도 잠든다. 고리가 닫혔다." },
+  ]}
+/>
+
+실행하면 Go 런타임이 바로 알려 준다.
+
+```bash
+go build -o godl . && ./godl; echo "exit=$?"
+```
+
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0xc000034060?)
+	/usr/local/go1.24.7/src/runtime/sema.go:110 +0x25
+sync.(*WaitGroup).Wait(0xc000002380?)
+	/usr/local/go1.24.7/src/sync/waitgroup.go:118 +0x48
+main.main()
+	.../godl/main.go:31 +0x13c
+
+goroutine 6 [sync.Mutex.Lock]:
+...
+main.transfer(0xc00001c228, 0xc00001c240, 0xa)
+	.../godl/main.go:19 +0xa6
+...
+goroutine 7 [sync.Mutex.Lock]:
+...
+main.transfer(0xc00001c240, 0xc00001c228, 0x14)
+	.../godl/main.go:19 +0xa6
+exit=2
+```
+
+(경로는 줄였고 런타임 내부 줄은 `...`로 생략했다.) 두 고루틴 모두 `[sync.Mutex.Lock]` 상태로 19번 줄, 즉 `to.mu.Lock()`에서 멈췄다. `main.transfer`의 인자를 보면 첫 고루틴은 `(a, b)`, 둘째는 `(b, a)` 순서로 주소가 뒤집혀 있다. 반대 방향 이체라는 게 덤프에 그대로 보인다.
+
+## 서버는 멈춰도 런타임이 알려 주지 않는다
+
+방금 메시지는 이름 그대로 모든 고루틴이 잠들었을 때만 나온다. 실제 서버에는 HTTP 리스너, 타이머, 시그널 처리 같은 고루틴이 늘 깨어 있을 수 있어서 런타임은 이걸 데드락으로 보지 않는다. 같은 코드에 `http.ListenAndServe`를 하나 더 띄우면 메시지 없이 그냥 멈춰 있다. 처음 장면의 `ps` 출력이 이 상태다.
+
+이때는 고루틴 덤프를 직접 뜬다. 방법은 둘이다. `net/http/pprof`를 import해 두었다면 HTTP로 받고, 아니면 `SIGQUIT`를 보낸다. `SIGQUIT`는 모든 고루틴의 스택을 표준 에러에 찍고 프로세스를 종료하니, 원인 파악용으로 마지막에 쓴다.
+
+```bash
+# pprof 핸들러가 있으면 프로세스를 죽이지 않고 덤프를 받는다
+curl -s "127.0.0.1:18089/debug/pprof/goroutine?debug=2" > dump.txt
+grep -n "^goroutine" dump.txt        # 고루틴 목록과 상태만 먼저 본다
+# 없으면: kill -QUIT <pid>  (스택을 찍고 종료한다. 컨테이너면 kubectl logs --previous로 본다)
+```
+
+```text
+1:goroutine 5 [running]:
+23:goroutine 1 [sync.WaitGroup.Wait]:
+31:goroutine 20 [sync.Mutex.Lock]:
+47:goroutine 21 [sync.Mutex.Lock]:
+63:goroutine 22 [IO wait]:
+87:goroutine 6 [runnable]:
+```
+
+```text
+goroutine 20 [sync.Mutex.Lock]:
+internal/sync.runtime_SemacquireMutex(0x0?, 0x0?, 0x0?)
+	/usr/local/go1.24.7/src/runtime/sema.go:95 +0x25
+internal/sync.(*Mutex).lockSlow(0xc00014a1d0)
+	/usr/local/go1.24.7/src/internal/sync/mutex.go:149 +0x15d
+...
+main.transfer(0xc00014a1b0, 0xc00014a1c8, 0xa)
+	.../godl2/main.go:21 +0xa6
+
+goroutine 21 [sync.Mutex.Lock]:
+...
+internal/sync.(*Mutex).lockSlow(0xc00014a1b8)
+...
+main.transfer(0xc00014a1c8, 0xc00014a1b0, 0x14)
+	.../godl2/main.go:21 +0xa6
+```
+
+`lockSlow`의 인자가 기다리는 뮤텍스의 주소다. `Account`는 `ID` 다음에 `mu`가 있어서 뮤텍스 주소는 계좌 주소에 8을 더한 값이다. 고루틴 20은 계좌 `...1c8`의 뮤텍스(`...1d0`)를, 고루틴 21은 계좌 `...1b0`의 뮤텍스(`...1b8`)를 기다린다. 각자 상대 계좌를 기다리고 있다. 덤프가 수천 줄이면 `[sync.Mutex.Lock]`이나 `[sync.RWMutex.Lock]` 상태인 고루틴을 함수별로 세어 보는 게 먼저다. 수백 개가 같은 줄에서 기다린다면 그 락을 쥔 고루틴 하나를 찾으면 된다. 오래 기다린 고루틴은 상태 옆에 `[sync.Mutex.Lock, 5 minutes]`처럼 기다린 시간이 붙기도 한다(런타임이 대기 시작 시각을 기록해 둔 경우에만 보인다).
+
+## 스레드 덤프 읽기: 자바와 파이썬
+
+자바는 데드락을 덤프에서 직접 찾아 준다. 같은 이체 코드를 `synchronized` 블록으로 짜서 멈춘 뒤 `jstack`을 떴다.
+
+```bash
+jstack <pid> > jstack.txt                   # JDK의 스레드 덤프 도구 (jcmd <pid> Thread.print도 같다)
+awk '/Found one Java-level deadlock/,0' jstack.txt
+```
+
+```text
+Found one Java-level deadlock:
+=============================
+"transfer-1-to-2":
+  waiting to lock monitor 0x00007f276c001cf0 (object 0x0000000737819dd0, a Transfer$Account),
+  which is held by "transfer-2-to-1"
+
+"transfer-2-to-1":
+  waiting to lock monitor 0x00007f2760001200 (object 0x0000000737819db8, a Transfer$Account),
+  which is held by "transfer-1-to-2"
+
+Java stack information for the threads listed above:
+===================================================
+"transfer-1-to-2":
+	at Transfer.transfer(Transfer.java:11)
+	- waiting to lock <0x0000000737819dd0> (a Transfer$Account)
+	- locked <0x0000000737819db8> (a Transfer$Account)
+	at Transfer.lambda$main$0(Transfer.java:19)
+...
+Found 1 deadlock.
+```
+
+스레드 하나의 덤프 머리글은 이렇게 생겼다. 조각을 누르면 무엇을 보는지 나온다.
+
+<UrlAnatomy
+  caption="jstack 스레드 머리글과 상태"
+  base={`"transfer-1-to-2"`}
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "num", display: "#19 [10771]", title: "자바 스레드 번호와 OS 스레드 ID", description: "대괄호 안의 10771이 리눅스 스레드 ID다. top -H -p <pid>에서 CPU를 많이 쓰는 스레드를 찾았다면 이 번호로 덤프에서 찾는다. nid=10771도 같은 값이다." },
+    { key: "cpu", display: "cpu=1.09ms elapsed=2.27s", title: "지금까지 쓴 CPU와 살아 있던 시간", description: "2.27초 동안 살아 있으면서 CPU는 1ms만 썼다. 일하지 않고 기다리기만 했다는 뜻이다. 몇 초 간격으로 덤프를 두 번 떠서 cpu가 그대로면 같은 자리에 멈춰 있는 것이다." },
+    { key: "state", display: "waiting for monitor entry", title: "모니터(synchronized) 입구에서 기다린다", description: "다음 줄의 java.lang.Thread.State: BLOCKED (on object monitor)와 같은 뜻이다. ReentrantLock을 기다리면 WAITING (parking)으로 보인다." },
+    { key: "waiting", display: "- waiting to lock <0x...dd0>", title: "기다리는 객체", description: "이 주소의 객체 락을 기다린다. 같은 주소가 다른 스레드에 - locked <0x...dd0>로 나오면 그 스레드가 주인이다." },
+    { key: "locked", display: "- locked <0x...db8>", title: "이미 쥐고 있는 객체", description: "이 스레드가 쥔 락이다. 쥔 것과 기다리는 것을 스레드끼리 이어 보면 고리가 보인다." },
+  ]}
+/>
+
+`Found one Java-level deadlock`은 `synchronized`와 `java.util.concurrent`의 락에 대해서만 나온다. 락이 아니라 큐나 `Future.get()`을 서로 기다리는 경우는 덤프가 알려 주지 않으니, `WAITING` 상태 스레드들의 스택을 직접 읽어야 한다.
+
+파이썬에는 `py-spy`가 있다. 실행 중인 프로세스에 붙어서 모든 스레드의 스택을 찍고, 프로세스를 멈추거나 코드를 바꿀 필요가 없다. 주문 처리와 재입고가 두 락을 반대 순서로 잡는 코드를 멈춘 뒤 떴다.
+
+```bash
+pip install py-spy                   # 3.13까지 지원하는 0.4 버전을 썼다
+py-spy dump --pid <pid>              # 모든 스레드의 현재 스택. 컨테이너면 SYS_PTRACE 권한이 필요하다
+```
+
+```text
+Process 10455: python3 pydl.py
+Python v3.13.16 (/usr/bin/python3.13)
+
+Thread 10455 (idle): "MainThread"
+    join (threading.py:1095)
+    <module> (pydl.py:23)
+Thread 10457 (idle): "order-worker"
+    place_order (pydl.py:11)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+Thread 10458 (idle): "restock-worker"
+    restock (pydl.py:17)
+    run (threading.py:995)
+    _bootstrap_inner (threading.py:1044)
+    _bootstrap (threading.py:1015)
+```
+
+`(idle)`은 CPU를 쓰지 않고 있다는 뜻이다. `order-worker`는 11번 줄(`with stock_lock:`), `restock-worker`는 17번 줄(`with orders_lock:`)에서 멈췄다. 자바처럼 고리를 찾아 주지는 않으니 각 줄에서 무엇을 쥐고 무엇을 기다리는지 코드를 보고 맞춘다. 외부 도구를 깔 수 없는 환경이면 표준 라이브러리 `faulthandler`를 미리 심어 둔다. `faulthandler.register(signal.SIGUSR1, all_threads=True)`를 넣어 두면 `kill -USR1 <pid>`로 같은 정보를 표준 에러에 찍는다.
+
+## 대기 그래프에서 고리 찾기
+
+자바의 `Found one Java-level deadlock`이나 PostgreSQL의 `deadlock detected`는 결국 대기 그래프에서 고리를 찾는 일이다. "누가 누구를 기다린다"는 화살표 목록이 있으면, 각 스레드에서 출발해 화살표를 따라갔을 때 자기 자신으로 돌아오는지 보면 된다. T4는 T1을 기다리지만 고리 밖에 있다. T4는 고리가 풀리면 따라서 풀리는 피해자일 뿐이다.
+
+<AlgoTrace
+  caption="T1에서 출발해 화살표를 따라간다"
+  memoryLabel="방문한 스레드"
+  cells={["T1→T2", "T2→T3", "T3→T1", "T4→T1"]}
+  steps={[
+    { pointer: 0, memory: ["T1"], caption: "T1에서 출발한다. T1은 T2를 기다린다." },
+    { pointer: 1, memory: ["T1", "T2"], caption: "T2는 T3를 기다린다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["T1", "T2", "T3"], caption: "T3는 T1을 기다린다. 출발점으로 돌아왔다. T1, T2, T3가 고리다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["T4"], caption: "T4에서 출발하면 T1로 가서 고리를 돌지만 T4로는 돌아오지 않는다. T4는 기다리기만 하는 쪽이다." },
+  ]}
+/>
+
+직접 짜 보자. 화살표 목록을 받아 고리에 들어 있는 스레드를 이름 순서로 돌려준다.
+
+<CodePlayground
+  caption="대기 그래프에서 데드락에 걸린 스레드 찾기"
+  functionName="deadlocked"
+  initialCode={`function deadlocked(edges) {
+  // edges: [["T1", "T2"], ...] 는 "T1이 T2를 기다린다"
+  // 고리 위에 있는 스레드를 이름 순서로 정렬해 돌려준다
+  return [];
+}`}
+  solution={`function deadlocked(edges) {
+  const next = new Map();
+  for (const [a, b] of edges) {
+    if (!next.has(a)) next.set(a, []);
+    next.get(a).push(b);
+  }
+  const nodes = new Set(edges.flat());
+  const result = [];
+  for (const start of nodes) {
+    const seen = new Set();
+    const stack = [...(next.get(start) || [])];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n === start) { result.push(start); break; }
+      if (seen.has(n)) continue;
+      seen.add(n);
+      stack.push(...(next.get(n) || []));
+    }
+  }
+  return result.sort();
+}`}
+  tests={[
+    { label: "서로 기다리는 둘", args: [[["T1", "T2"], ["T2", "T1"]]], expected: ["T1", "T2"] },
+    { label: "줄만 선 경우", args: [[["T1", "T2"], ["T2", "T3"]]], expected: [] },
+    { label: "고리 셋과 피해자 하나", args: [[["T1", "T2"], ["T2", "T3"], ["T3", "T1"], ["T4", "T1"]]], expected: ["T1", "T2", "T3"] },
+    { label: "고리 두 개", args: [[["A", "B"], ["B", "A"], ["C", "D"], ["D", "C"], ["E", "A"]]], expected: ["A", "B", "C", "D"] },
+    { label: "자기 자신을 기다림", args: [[["T1", "T1"]]], expected: ["T1"] },
+  ]}
+/>
+
+마지막 테스트처럼 자기 자신을 기다리는 것도 고리다. 뒤에서 보는 "락 하나로 멈추는" 경우가 이것이다.
+
+## 언제나 같은 순서로 잠근다
+
+순환 대기를 깨는 가장 확실한 방법은 모든 코드가 락을 같은 순서로 잡게 하는 것이다. 계좌 이체라면 방향과 상관없이 ID가 작은 계좌부터 잠근다.
+
+```go
+first, second := from, to
+if to.ID < from.ID { // 언제나 ID가 작은 계좌부터 잠근다
+	first, second = to, from
+}
+first.mu.Lock()
+defer first.mu.Unlock()
+second.mu.Lock()
+defer second.mu.Unlock()
+```
+
+```bash
+go run -race .   # 같은 두 방향 이체, 데이터 경합 탐지기까지 켰다
+```
+
+```text
+110 90
+```
+
+계좌 1은 100 - 10 + 20 = 110, 계좌 2는 100 + 10 - 20 = 90으로 끝났다. 둘이 같은 순서로 잡으니, 먼저 계좌 1을 잡은 쪽이 끝날 때까지 다른 쪽은 계좌 1 앞에서 기다리고, 아무것도 쥐지 않은 채 기다리니 고리가 생기지 않는다.
+
+정렬할 기준은 무엇이든 전체 순서만 있으면 된다. 행이라면 기본 키, 파일이라면 경로, 객체라면 ID다. 자바에서 ID가 없는 객체는 `System.identityHashCode`로 순서를 정하고, 값이 같을 확률에 대비해 그때만 쓰는 전역 락을 하나 더 둔다. 락이 여러 계층에 있으면(캐시 락 → 세션 락 → 연결 락 같은) 계층 순서를 문서로 정하고, 아래 계층 락을 쥔 채 위 계층 락을 잡는 코드를 리뷰에서 막는다. 리눅스 커널은 이 검사를 `lockdep`이라는 도구로 자동으로 한다.
+
+이 방법은 잡을 락을 미리 알 때만 쓸 수 있다. 콜백이 어떤 락을 잡을지 모르는 상황, 이를테면 락을 쥔 채로 사용자 코드나 리스너를 부르는 경우는 순서를 정할 수 없다. 그래서 락을 쥔 채 남의 코드를 부르지 않는다는 규칙이 함께 간다. 필요한 값만 복사해 두고 락을 푼 다음에 부른다.
+
+## 기다리는 시간에 끝을 둔다
+
+순서를 정할 수 없다면 비선점 조건을 깬다. 락을 무한히 기다리지 않고, 일정 시간 안에 못 잡으면 내가 쥔 것을 놓고 실패를 돌려준다. 자바의 `ReentrantLock.tryLock(timeout)`, 파이썬의 `lock.acquire(timeout=...)`, Go라면 채널과 `context`의 데드라인으로 같은 일을 한다. 앞의 이체를 `tryLock(500ms)`로 바꿔 돌렸다.
+
+```java
+if (!to.lock.tryLock(500, TimeUnit.MILLISECONDS)) {
+    System.out.println(me + ": 500ms 안에 계좌 " + to.id + " 락을 못 잡아 포기하고 계좌 " + from.id + " 락을 놓는다");
+    return false;   // finally에서 from.lock.unlock()
+}
+```
+
+```text
+transfer-2-to-1: 500ms 안에 계좌 1 락을 못 잡아 포기하고 계좌 2 락을 놓는다
+transfer-1-to-2: 500ms 안에 계좌 2 락을 못 잡아 포기하고 계좌 1 락을 놓는다
+641 ms
+```
+
+멈추지는 않았다. 그런데 결과를 보면 둘 다 포기했다. 두 번 돌려 두 번 다 그랬다. 둘이 같은 순간에 시작해 같은 시간을 기다렸으니 같은 순간에 포기한 것이다. 이 상태에서 둘이 똑같이 바로 다시 시도하면, 또 같이 잡고 같이 기다리고 같이 포기하는 일이 반복될 수 있다. 이게 다음에 볼 라이브락이다. 재시도를 한다면 기다리는 시간에 무작위 값을 섞어 서로 어긋나게 한다. 재시도 간격을 정하는 방법은 [지수 백오프와 지터 글](/posts/exponential-backoff-jitter)의 계산을 그대로 쓴다.
+
+타임아웃의 값도 고민거리다. 너무 짧으면 그냥 바빴을 뿐인 락을 데드락으로 오해해 멀쩡한 작업을 실패시킨다. 너무 길면 멈춘 동안 요청이 쌓인다. 락을 쥐는 시간의 p99보다 넉넉히 길게, 요청 전체의 타임아웃보다는 짧게 잡는다. PostgreSQL도 같은 구조다. 락을 기다린 지 `deadlock_timeout`(기본 1초)이 지나야 대기 그래프를 검사하고, 고리가 있으면 한쪽을 `ERROR: deadlock detected`로 끊는다.
+
+## 라이브락과 기아
+
+라이브락(livelock)은 데드락의 반대처럼 보인다. 스레드들은 멈추지 않고 계속 움직이는데, 서로에게 양보하느라 아무도 일을 끝내지 못한다. 좁은 복도에서 마주친 두 사람이 동시에 같은 쪽으로 비켜서는 걸 반복하는 모양이다. CPU는 계속 쓰이고 로그도 계속 찍히니 데드락보다 알아채기 어렵다.
+
+<AlgoTrace
+  caption="둘이 똑같이 양보하면 아무도 끝내지 못한다"
+  memoryLabel="A가 쥔 것 | B가 쥔 것"
+  cells={["둘 다 첫 락", "둘째 실패", "둘 다 놓음", "같은 간격 대기", "둘 다 첫 락", "지터로 어긋남"]}
+  steps={[
+    { pointer: 0, memory: ["A: 계좌1", "B: 계좌2"], caption: "A는 계좌 1, B는 계좌 2를 잡는다." },
+    { pointer: 1, memory: ["A: 계좌1", "B: 계좌2"], caption: "둘 다 상대 계좌를 tryLock으로 시도하고 실패한다." },
+    { pointer: 2, memory: ["A: -", "B: -"], caption: "약속대로 쥔 것을 놓는다. 여기까지는 데드락이 아니다." },
+    { pointer: 3, memory: ["A: -", "B: -"], caption: "둘이 똑같이 10ms 쉬고 다시 시작한다." },
+    { pointer: 4, memory: ["A: 계좌1", "B: 계좌2"], caption: "처음과 같은 상태로 돌아왔다. 계속 움직이지만 한 건도 끝나지 않는 라이브락이다." },
+    { pointer: 5, found: [5], memory: ["A: 계좌1, 계좌2", "B: -"], caption: "쉬는 시간에 무작위 값을 섞으면 A가 먼저 깨어나 둘 다 잡고 끝낸다. B는 그다음에 들어간다." },
+  ]}
+/>
+
+실제 스케줄러는 타이밍이 조금씩 흔들려서 라이브락이 영원히 이어지는 경우는 드물다. 내 컨테이너에서 지터 없이 1ms씩 쉬게 한 실험도 재시도 한두 번 만에 풀렸다. 문제는 부하가 높을 때다. 재시도가 많아질수록 서로 부딪치는 빈도가 늘고, 처리량은 떨어지는데 CPU는 바쁜 상태가 된다. 낙관적 잠금에서 충돌이 잦을 때 재시도가 일을 잡아먹는 것도 같은 모양이다.
+
+기아(starvation)는 특정 스레드만 계속 순서를 못 받는 것이다. 시스템 전체는 일을 하고 있으니 데드락도 라이브락도 아니지만, 운 나쁜 요청 하나는 끝없이 기다린다. 읽기·쓰기 락에서 읽는 쪽이 끊임없이 들어오면 쓰는 쪽이 영영 못 들어가는 게 대표적이다. 그래서 락마다 공정성 정책이 있다.
+
+- Go의 `sync.Mutex`는 1.9부터 기다린 지 1ms가 넘은 고루틴이 생기면 기아 모드로 바뀌어 줄 선 순서대로 넘겨준다. `sync.RWMutex`는 쓰기 락이 줄을 서면 새 읽기 락을 막아서 쓰는 쪽이 굶지 않게 한다.
+- 자바의 `synchronized`는 순서를 보장하지 않는다. `new ReentrantLock(true)`로 공정 모드를 켤 수 있지만 처리량이 꽤 떨어져서, 기아가 실제로 문제일 때만 켠다.
+
+## 락 하나로도 멈춘다
+
+락이 하나뿐이어도 데드락이 생긴다. 자기가 쥔 락을 자기가 다시 기다리면 된다. 함수 A가 락을 잡고 함수 B를 불렀는데, B도 같은 락을 잡으려는 경우다. 같은 스레드가 같은 락을 여러 번 잡을 수 있는 락을 재진입 가능(reentrant) 락이라고 한다. 자바의 `synchronized`와 `ReentrantLock`, 파이썬의 `RLock`은 재진입이 되고, Go의 `sync.Mutex`와 파이썬의 `Lock`은 안 된다. Go는 일부러 재진입을 지원하지 않는다. 락을 쥔 상태에서 불변식이 잠시 깨져 있는데, 재진입을 허용하면 안쪽 함수가 깨진 상태를 볼 수 있기 때문이다.
+
+Go의 `RWMutex`에는 덜 알려진 함정이 있다. 읽기 락은 여럿이 같이 쥘 수 있으니 안에서 한 번 더 `RLock`을 해도 될 것 같다. 그런데 그 사이에 쓰기 락이 줄을 서면, 기아를 막는 규칙 때문에 새 `RLock`은 쓰기 락 뒤로 밀린다. 쓰기 락은 바깥 `RLock`이 풀리기를 기다리고, 바깥 `RLock`은 안쪽 `RLock`이 끝나기를 기다린다.
+
+```go
+func sum() int {
+	mu.RLock() // 읽기 락을 쥔 채
+	defer mu.RUnlock()
+	time.Sleep(50 * time.Millisecond)
+	return get("a") + 1 // get 안에서 다시 RLock. 그사이 다른 고루틴이 mu.Lock()으로 줄을 섰다
+}
+```
+
+```text
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [sync.RWMutex.RLock]:
+```
+
+`sync` 패키지 문서도 재귀적인 읽기 락을 금지한다고 적어 두었다. 평소에는 쓰기가 드물어서 멀쩡하다가 쓰기와 타이밍이 맞는 날 멈추니 찾기 어렵다.
+
+스레드가 하나인 Node에도 같은 모양이 있다. 비동기 작업의 순서를 지키려고 프로미스로 만든 뮤텍스를 쓸 때, 락을 쥔 함수가 같은 락을 쓰는 함수를 `await`하면 영원히 끝나지 않는 프로미스가 된다.
+
+```js
+async function addItem(item) {
+  const unlock = await cartLock.lock();
+  try {
+    console.log("add", item);
+    await recalcTotal();                  // 안에서 같은 cartLock.lock()을 기다린다
+  } finally { unlock(); }
+}
+await addItem("book");
+console.log("끝");
+```
+
+```text
+add book
+Warning: Detected unsettled top-level await at file:///.../selflock.mjs:26
+await addItem("book");
+^
+
+exit=13
+```
+
+Node는 이벤트 루프에 남은 일이 없는데 최상위 `await`가 끝나지 않으면 이 경고를 내고 종료 코드 13으로 끝낸다. 서버라면 리스너가 루프를 붙잡고 있으니 이런 경고 없이 그 요청만 영원히 응답하지 않는다. 그 장바구니에 대한 다음 요청들도 같은 락 뒤에 줄을 선다. 고치는 방법은 다른 언어와 같다. 락을 쥔 바깥 함수만 락을 잡고, 안쪽은 "락을 이미 쥐었다고 가정하는" 버전(`recalcTotalLocked`)을 따로 둔다.
+
+## 락이 아닌 자원도 고리를 만든다
+
+Coffman 조건은 뮤텍스만의 이야기가 아니다. 개수가 정해진 자원이면 무엇이든 된다. 현장에서 가장 자주 만나는 건 커넥션 풀이다. 요청 하나가 풀에서 커넥션을 빌려 트랜잭션을 연 채, 다른 헬퍼 함수가 풀에서 커넥션을 하나 더 빌리려 한다. 풀 크기가 2이고 이런 요청이 동시에 2개 오면 어떻게 될까.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="커넥션을 쥔 채 커넥션을 하나 더 기다린다"
+  zones={[
+    { id: "app", label: "node process", x: 10, y: 20, w: 380, h: 190, tone: "private" },
+    { id: "pg", label: "postgres", x: 100, y: 230, w: 200, h: 80, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "r1", label: "order 1", x: 80, y: 70, icon: "client", w: 100 },
+    { id: "r2", label: "order 2", x: 320, y: 70, icon: "client", w: 100 },
+    { id: "pool", label: "pg Pool", sub: "max 2", x: 200, y: 160, icon: "switch", w: 110 },
+    { id: "db", label: "db", sub: "2 conns", x: 200, y: 275, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "r1", to: "pool" },
+    { from: "r2", to: "pool" },
+    { from: "pool", to: "db" },
+  ]}
+  steps={[
+    { path: ["r1", "pool", "db"], packet: "BEGIN", title: "order 1이 커넥션 하나를 쥔다", detail: "pool.connect()로 빌려 트랜잭션을 연다. 풀에 하나 남았다." },
+    { path: ["r2", "pool", "db"], packet: "BEGIN", title: "order 2가 마지막 하나를 쥔다", detail: "풀이 비었다. 둘 다 아직 할 일이 남았다." },
+    { path: ["r1", "pool"], packet: "audit", blocked: true, title: "order 1의 헬퍼가 하나 더 빌리려 한다", detail: "pool.query()는 새 커넥션이 필요하다. 빈 게 없으니 줄을 선다. 쥔 커넥션은 놓지 않는다." },
+    { path: ["r2", "pool"], packet: "audit", blocked: true, title: "order 2도 똑같이 기다린다", detail: "서로가 쥔 커넥션이 풀리길 기다리는 고리다. DB 쪽에서는 두 세션이 idle in transaction으로 멈춰 있다." },
+  ]}
+/>
+
+`pg` 풀을 `max: 2`, `connectionTimeoutMillis: 3000`으로 두고 요청을 하나, 둘 보냈다.
+
+```text
+동시 요청 1개: [ 'order 1 ok' ] 117 ms total=2 idle=2 waiting=0
+동시 요청 2개: [
+  'order 1 timeout exceeded when trying to connect',
+  'order 2 timeout exceeded when trying to connect'
+] 3054 ms total=2 idle=2 waiting=0
+```
+
+요청이 하나면 117ms에 끝났다. 둘이면 둘 다 3초를 기다리다 실패했다. `connectionTimeoutMillis`를 안 줬다면(이 드라이버의 기본값은 무한 대기다) 영원히 멈췄을 것이다. 멈춘 동안 DB에서 본 모습이다.
+
+```sql
+SELECT pid, state, now() - xact_start AS xact_age, left(query, 40) AS last_query
+FROM pg_stat_activity
+WHERE datname = 'v8_race' AND pid <> pg_backend_pid();
+```
+
+```text
+  pid  |        state        |    xact_age    |      last_query       
+-------+---------------------+----------------+-----------------------
+ 11475 | idle in transaction | 00:00:01.31563 | SELECT pg_sleep(0.05)
+ 11480 | idle in transaction | 00:00:01.31493 | SELECT pg_sleep(0.05)
+(2 rows)
+```
+
+DB는 아무 락도 기다리지 않으니 `deadlock detected`가 나올 리 없다. 고리는 앱의 풀 안에 있다. 풀 크기만큼 동시 요청이 몰릴 때만 터지니, 개발 환경에서는 거의 안 보이고 트래픽이 몰리는 날 터진다. 고치는 방법은 트랜잭션 안에서는 쥔 커넥션(`client`)만 쓰도록 헬퍼에 커넥션을 넘기는 것이다. 풀 크기를 늘리면 터지는 문턱만 올라갈 뿐 고리는 남는다. 풀 설정과 크기 계산은 [커넥션 풀 글](/posts/connection-pool)에 있다.
+
+같은 모양이 스레드 풀에도 있다. 고정 크기 스레드 풀의 작업이 같은 풀에 하위 작업을 넣고 `future.get()`으로 기다리면, 모든 스레드가 하위 작업을 기다리고 하위 작업은 빈 스레드를 기다린다. 서비스 사이에서도 생긴다. 서비스 A가 요청을 처리하다 B를 동기로 부르고, B가 처리 중에 다시 A를 부르면, 양쪽 워커가 다 찼을 때 서로의 응답을 기다리며 멈춘다. 이때는 [타임아웃](/posts/timeouts)이 고리를 끊는 유일한 장치가 된다. 자바 21의 가상 스레드는 `synchronized` 블록 안에서 블로킹하면 캐리어 스레드에 묶이는(pinning) 문제가 있어서 비슷한 정지가 보고되었고, JDK 24에서 이 제약이 풀렸다.
+
+## 멈춘 프로세스를 들여다보는 순서
+
+처음 장면으로 돌아가자. 지연은 솟고 CPU는 0%다. 재시작하고 싶은 마음을 누르고, 증거부터 남긴다. 재시작하면 고리가 사라지고 다음에 터질 때까지 원인을 알 수 없다.
+
+1. CPU와 스레드 상태로 데드락인지 무한 루프인지 가른다. `top -H -p <pid>`로 스레드별 CPU를 보고, 모두 0%면 기다리는 쪽이다.
+2. 런타임에 맞는 도구로 스레드 덤프를 뜬다. Go는 pprof나 `kill -QUIT`, 자바는 `jstack`이나 `jcmd <pid> Thread.print`, 파이썬은 `py-spy dump`, 그 밖에는 `gdb -p <pid> -batch -ex "thread apply all bt"`다.
+3. 10~30초 간격으로 한 번 더 뜬다. 두 덤프에서 같은 스레드가 같은 줄에 있으면 멈춘 것이고, 바뀌었으면 느린 것이다.
+4. 같은 자리에서 기다리는 스레드 수를 센다. 많은 쪽이 피해자고, 그 락을 쥔 스레드가 범인이다. 범인이 다시 무언가를 기다리고 있으면 그걸 따라가 고리를 찾는다.
+5. DB와 풀을 본다. 앱 스레드가 커넥션을 기다리고 있으면 풀의 대기 수와 `pg_stat_activity`의 `idle in transaction`을 본다. DB 락을 기다리면 [비관적 잠금 글](/posts/pessimistic-locking)의 `pg_blocking_pids` 순서로 간다.
+
+쿠버네티스라면 재시작 전에 `kubectl exec`로 덤프를 뜨고, liveness probe가 먼저 컨테이너를 죽여 버리지 않게 장애 중에는 probe 실패 기준을 잠시 늘린다. Go처럼 `SIGQUIT`로 죽으면서 스택을 남기는 런타임은 `kubectl logs --previous`에서 볼 수 있다.
+
+데드락은 네 조건이 동시에 성립할 때만 생기니, 고칠 때도 하나만 확실히 깨면 된다. 락 순서를 하나로 정하는 게 첫째, 순서를 정할 수 없으면 타임아웃과 지터 섞인 재시도가 둘째다. 그리고 락을 쥔 채 다른 자원(남의 코드, 커넥션 풀, 다른 서비스)을 기다리지 않는 습관이 대부분의 고리를 처음부터 막는다. 락이 생긴 이유인 [경쟁 상태](/posts/race-conditions)와 락 없이 안전하게 만드는 [스레드 안전](/posts/thread-safety) 설계도 함께 보면 좋다.
+
+## 면접에서 나올 만한 질문
+
+### 데드락이 생기는 조건은 무엇인가요?
+
+상호 배제, 점유하며 대기, 비선점, 순환 대기 네 가지가 동시에 성립해야 한다. 하나라도 깨면 데드락은 생길 수 없다. 실무에서는 락 순서를 정해 순환 대기를 깨거나, 타임아웃으로 쥔 것을 놓게 해서 비선점을 깨는 방법을 가장 많이 쓴다.
+
+### 계좌 이체에서 생기는 데드락은 어떻게 막나요?
+
+두 계좌를 방향과 상관없이 ID가 작은 쪽부터 잠근다. 모든 코드가 같은 순서로 잡으면 쥔 채로 거꾸로 기다리는 경우가 없어 고리가 생기지 않는다. Go로 반대 방향 이체 두 건을 이렇게 고치니 `110 90`으로 정상 종료했다. 순서를 정할 수 없는 경우에만 tryLock 타임아웃을 쓴다.
+
+### 데드락과 라이브락, 기아는 어떻게 다른가요?
+
+데드락은 모두 잠들어 아무도 움직이지 않는 상태라 CPU가 0%다. 라이브락은 서로 양보하고 재시도하느라 계속 움직이지만 아무도 일을 끝내지 못하는 상태라 CPU는 바쁘다. 기아는 시스템은 일을 하는데 특정 스레드만 계속 순서를 못 받는 상태다. 라이브락은 재시도에 무작위 지연을 섞어, 기아는 공정한 락이나 기다린 순서대로 넘겨주는 정책으로 줄인다.
+
+### 운영 중인 서버가 멈췄을 때 데드락인지 어떻게 확인하나요?
+
+CPU가 0%인데 요청이 쌓이면 기다리는 쪽을 의심하고, 재시작 전에 스레드 덤프를 뜬다. 자바는 `jstack`이 `Found one Java-level deadlock`으로 고리를 직접 보여 주고, Go는 pprof 고루틴 덤프에서 `[sync.Mutex.Lock]` 상태를, 파이썬은 `py-spy dump`로 각 스레드가 멈춘 줄을 본다. 덤프를 간격을 두고 두 번 떠서 같은 자리면 멈춘 것이다.
+
+### Go 런타임은 데드락을 감지해 주지 않나요?
+
+모든 고루틴이 잠들었을 때만 `all goroutines are asleep - deadlock!`으로 알려 준다. HTTP 리스너처럼 깨어 있는 고루틴이 하나라도 있으면 감지하지 못하니, 실제 서버에서는 거의 기대할 수 없다. 그래서 `net/http/pprof`를 내부 포트에 열어 두거나 `SIGQUIT`로 스택을 남기는 방법을 준비해 둔다.
+
+### 락이 하나뿐인데도 데드락이 생길 수 있나요?
+
+생긴다. 재진입이 안 되는 락을 쥔 채 같은 락을 잡는 함수를 부르면 자기 자신을 기다린다. Go의 `sync.Mutex`가 그렇고, `RWMutex`의 읽기 락을 중첩해서 잡으면 그사이 줄을 선 쓰기 락 때문에 멈춘다. Node에서도 프로미스 기반 뮤텍스를 쥔 함수가 같은 락을 쓰는 함수를 `await`하면 영원히 끝나지 않는다.
+
+### 커넥션 풀 때문에 데드락이 생길 수 있나요?
+
+생긴다. 요청이 커넥션 하나를 쥔 채 같은 풀에서 하나 더 빌리려 하면, 풀 크기만큼 동시 요청이 몰렸을 때 모두가 서로의 커넥션을 기다린다. DB는 락을 기다리는 게 아니라서 데드락을 감지하지 못하고, `pg_stat_activity`에는 `idle in transaction`만 남는다. 트랜잭션 안에서는 쥔 커넥션만 쓰도록 넘겨주고, 풀 대기에는 반드시 타임아웃을 둔다.
+
+### DB는 데드락을 어떻게 처리하나요?
+
+PostgreSQL은 락을 `deadlock_timeout`(기본 1초) 동안 기다린 트랜잭션이 생기면 대기 그래프에서 고리를 찾고, 있으면 한 트랜잭션을 `deadlock detected` 에러로 롤백해 고리를 끊는다. 예방이 아니라 탐지 후 복구 방식이라, 앱은 이 에러를 받으면 트랜잭션 전체를 다시 시도해야 한다. 근본적으로는 여러 행을 갱신할 때 키 순서로 정렬해 같은 순서로 잠근다.
