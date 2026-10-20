@@ -1,0 +1,618 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("helm-release-lifecycle");
+
+CI 배포 단계가 네트워크 끊김으로 중간에 죽었다. 다시 돌렸더니 이번에는 이런 메시지와 함께 바로 실패한다.
+
+```text
+Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress
+```
+
+아무도 배포하고 있지 않은데 무슨 작업이 진행 중이라는 걸까. `helm list`를 쳐 보면 릴리스가 목록에서 아예 사라져 있다. 이 상황은 Helm이 릴리스 상태를 어떻게 기록하는지 알면 1분 안에 풀린다. 이 글은 업그레이드 한 번에 Helm이 무슨 순서로 일하는지, 클러스터에서 손으로 고친 값은 어떻게 되는지, 훅과 CRD가 왜 따로 노는지, 그리고 업그레이드가 꼬였을 때 상태별로 푸는 법을 따라간다.
+
+릴리스와 리비전이라는 말은 [Helm 기본 글](/posts/helm-basics)에서 정리했다. 출력은 Helm 3.16과 kwok 실습 클러스터(Kubernetes 1.30)에서 받았다. kwok는 노드와 컨테이너를 흉내만 내지만 스케줄러와 컨트롤러는 진짜라서, Pod가 `Pending`에 걸리는 상황이나 Job의 성공·실패는 실제와 같다.
+
+## 업그레이드 한 번에 일어나는 일
+
+CI에서 많이 쓰는 형태는 이렇다.
+
+```bash
+# 없으면 설치, 있으면 업그레이드. 준비될 때까지 기다리고 실패하면 되돌린다
+helm upgrade --install shop-api ./shop-api -n shop-prod \
+  -f values-prod.yaml --set-string image.tag="$GIT_SHA" \
+  --atomic --timeout 5m
+```
+
+`--install`은 릴리스가 없으면 설치로 바꿔 준다. `--wait`는 리소스를 적용한 뒤 Pod가 Ready가 될 때까지 기다린다. Deployment라면 원하는 레플리카에서 `maxUnavailable`을 뺀 만큼은 준비돼야 한다. Job까지 끝나길 기다리려면 `--wait-for-jobs`를 더한다. `--timeout`은 기다리는 시간(기본 5분)이고, `--atomic`은 실패하면 직전 성공 리비전으로 자동 롤백한다. `--atomic`을 주면 `--wait`는 저절로 켜진다. Helm 4에서는 `--atomic`의 이름이 `--rollback-on-failure`로 바뀌었으니 버전을 확인한다.
+
+이 명령 하나가 지나가는 길을 따라가 보자. 다음을 누르면 한 단계씩 진행된다.
+
+<SequenceDiagram
+  caption="helm upgrade --atomic이 실패해서 되돌아가는 길"
+  actors={[
+    { id: "helm", label: "helm CLI" },
+    { id: "api", label: "API 서버" },
+    { id: "hook", label: "훅 Job" },
+    { id: "pods", label: "새 Pod" },
+  ]}
+  steps={[
+    {
+      from: "helm",
+      to: "api",
+      label: "v3 pending-upgrade",
+      title: "새 리비전을 예약한다",
+      detail: "렌더링이 끝나면 리비전 3의 기록을 pending-upgrade 상태로 먼저 만든다. 이 기록이 있는 동안 다른 Helm 작업은 거절된다.",
+    },
+    {
+      from: "helm",
+      to: "hook",
+      label: "pre-upgrade",
+      title: "업그레이드 전 훅을 돌린다",
+      detail: "DB 마이그레이션 같은 pre-upgrade 훅 Job을 만들고 끝나기를 기다린다. 훅이 실패하면 본 리소스는 건드리지 않고 멈춘다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "3-way patch",
+      title: "바뀐 부분만 패치한다",
+      detail: "지난 매니페스트, 클러스터의 현재 상태, 새 매니페스트를 비교해 패치를 만들고 리소스 종류 순서대로 적용한다.",
+    },
+    {
+      from: "api",
+      to: "pods",
+      label: "롤아웃",
+      title: "Deployment가 새 Pod를 띄운다",
+      detail: "새 ReplicaSet이 생기고 Pod가 만들어진다. 노드 셀렉터가 맞는 노드가 없으면 Pod는 Pending에서 멈춘다.",
+    },
+    {
+      from: "helm",
+      to: "pods",
+      label: "--wait",
+      title: "Ready를 기다린다",
+      detail: "Pod가 Ready가 되는지 지켜본다. --timeout 안에 준비되지 않으면 context deadline exceeded로 실패한다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "v3 failed",
+      title: "실패를 기록한다",
+      detail: "리비전 3을 failed로 바꾼다. 이 시점의 클러스터는 새 Pod가 Pending인 반쯤 바뀐 상태다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "v4 = v2 내용",
+      title: "직전 성공 리비전으로 되돌린다",
+      detail: "--atomic이라 리비전 2의 매니페스트로 새 리비전 4를 만들어 적용한다. 설명에 Rollback to 2가 남는다.",
+    },
+  ]}
+/>
+
+실제로 해 보자. 맞는 노드가 없는 `nodeSelector`를 넣어 Pod가 뜰 수 없게 만들었다.
+
+```bash
+# 존재하지 않는 노드 라벨을 요구해서 Pod를 Pending에 묶어 둔다
+helm upgrade shop-api ./shop-api -n shop-prod --set replicaCount=2 \
+  --set nodeSelector.disk=nvme --set image.tag=1.27.2 --atomic --timeout 30s
+
+# 리비전 기록과 실제 이미지를 확인한다
+helm history shop-api -n shop-prod
+kubectl get deploy shop-api -n shop-prod -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+```
+
+```text
+Error: UPGRADE FAILED: release shop-api failed, and has been rolled back due to atomic being set: context deadline exceeded
+REVISION	UPDATED                 	STATUS    	CHART         	APP VERSION	DESCRIPTION                                         
+1       	Sun Oct 18 23:44:10 2026	superseded	shop-api-0.1.0	1.16.0     	Install complete                                    
+2       	Sun Oct 18 23:44:12 2026	superseded	shop-api-0.1.0	1.16.0     	Upgrade complete                                    
+3       	Sun Oct 18 23:44:19 2026	failed    	shop-api-0.1.0	1.16.0     	Upgrade "shop-api" failed: context deadline exceeded
+4       	Sun Oct 18 23:44:50 2026	deployed  	shop-api-0.1.0	1.16.0     	Rollback to 2                                       
+nginx:1.16.0
+```
+
+리비전 3이 실패하고, 4가 2의 내용(이미지 1.16.0)으로 되돌아갔다. `context deadline exceeded`는 Helm이 기다리다 지쳤다는 말일 뿐 원인은 알려 주지 않는다. 원인은 쿠버네티스 쪽에서 찾는다.
+
+```bash
+# 왜 Pod가 준비되지 않았는지 이벤트에서 찾는다
+kubectl get events -n shop-prod --field-selector reason=FailedScheduling
+```
+
+```text
+61s         Warning   FailedScheduling   pod/shop-api-5d969755f8-mdkrj   0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector. preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling.
+```
+
+`--atomic` 없이 `--wait`만 줬다면 리비전은 failed로 남고 클러스터는 반쯤 바뀐 채 그대로다. 옛 Pod 두 개는 계속 돌고, 새 Pod 하나는 Pending이다.
+
+```text
+NAME                        READY   STATUS    RESTARTS   AGE
+shop-api-5d969755f8-gbkbd   0/1     Pending   0          20s
+shop-api-76bb4b5456-68qb9   1/1     Running   0          62s
+shop-api-76bb4b5456-cwtqv   1/1     Running   0          62s
+```
+
+Deployment의 롤링 업데이트가 옛 Pod를 남겨 두니 당장 장애는 아니다. 하지만 다음 배포 전에 누군가 `helm rollback`으로 정리해야 한다. `--atomic`을 쓸지는 팀의 선택이다. 자동으로 되돌아가니 편하지만, 실패한 상태를 들여다볼 틈 없이 사라진다. 원인을 보려면 `helm history`의 설명과 이벤트를 롤백 전에 남겨 두도록 CI 로그에 찍어 두는 게 좋다. Pod가 왜 Ready가 안 되는지 보는 순서는 [프로브 글](/posts/k8s-pod-probes)과 [Pod의 일생 글](/posts/k8s-pod-lifecycle)에 있다.
+
+## 롤백도 새 리비전이다
+
+손으로 롤백할 때는 돌아갈 리비전 번호를 준다. 번호를 빼면 바로 전 리비전으로 간다.
+
+```bash
+# 리비전 4의 내용으로 되돌린다
+helm rollback shop-api 4 -n shop-prod
+
+# 최근 세 개만 본다
+helm history shop-api -n shop-prod --max 3
+```
+
+```text
+Rollback was a success! Happy Helming!
+REVISION	UPDATED                 	STATUS    	CHART         	APP VERSION	DESCRIPTION                                         
+4       	Sun Oct 18 23:44:50 2026	superseded	shop-api-0.1.0	1.16.0     	Rollback to 2                                       
+5       	Sun Oct 18 23:44:52 2026	failed    	shop-api-0.1.0	1.16.0     	Upgrade "shop-api" failed: context deadline exceeded
+6       	Sun Oct 18 23:45:21 2026	deployed  	shop-api-0.1.0	1.16.0     	Rollback to 4                                       
+```
+
+롤백은 그 리비전의 매니페스트를 다시 적용하는 업그레이드다. 몇 가지는 되돌아가지 않는다. 훅으로 돌린 DB 마이그레이션은 되돌아가지 않는다. 컬럼을 지운 마이그레이션 뒤에 옛 앱으로 롤백하면 옛 앱이 없는 컬럼을 찾는다. 그래서 마이그레이션은 옛 버전과 새 버전이 함께 돌 수 있게(컬럼 추가 먼저, 삭제는 다음 배포에) 나눠 쓴다. PVC 안의 데이터, 외부 시스템에 보낸 요청도 그대로다. 그리고 `--history-max`(기본 10)보다 오래된 리비전은 지워져서 돌아갈 수 없다.
+
+## 손으로 고친 값은 다음 배포에 어떻게 되나
+
+장애 중에 `kubectl scale`로 레플리카를 6으로 늘리고, 팀 표시용 어노테이션도 하나 달았다. 그 뒤 원래 values 그대로 업그레이드하면 어떻게 될까.
+
+```bash
+# 클러스터에서 직접 바꾼다
+kubectl scale deploy shop-api -n shop-prod --replicas=6
+kubectl annotate deploy shop-api -n shop-prod team=payments
+
+# 차트 값은 그대로 replicaCount=2로 업그레이드한다
+helm upgrade shop-api ./shop-api -n shop-prod --set replicaCount=2
+
+# 레플리카와 어노테이션을 본다
+kubectl get deploy shop-api -n shop-prod -o jsonpath='{.spec.replicas} {.metadata.annotations.team}{"\n"}'
+```
+
+```text
+2 payments
+```
+
+레플리카는 2로 돌아갔고 어노테이션은 남았다. Helm 3는 업그레이드할 때 세 가지를 비교한다. 지난 리비전의 매니페스트, 클러스터의 지금 상태, 새로 렌더링한 매니페스트. 이걸 three-way merge라고 부른다. 규칙은 이렇다. 새 매니페스트에 적힌 필드는 그 값으로 맞춘다. 지난 매니페스트에 있었는데 새 매니페스트에서 빠진 필드는 지운다. 어느 매니페스트에도 없고 클러스터에만 있는 필드는 건드리지 않는다. 아래에서 필드 하나씩 판단을 따라가 보자.
+
+<AlgoTrace
+  caption="지난 매니페스트, 현재 상태, 새 매니페스트로 필드마다 정한다"
+  memoryLabel="패치 결과"
+  cells={["replicas", "image", "team 어노", "debug env"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["replicas: 2"],
+      caption: "지난 2, 현재 6, 새 2. 새 매니페스트에 적힌 필드라 2로 맞춘다. 손으로 늘린 6은 사라진다.",
+    },
+    {
+      pointer: 1,
+      memory: ["replicas: 2", "image: 1.27.2"],
+      caption: "지난 1.27.1, 현재 1.27.1, 새 1.27.2. 차트가 바꾼 값이라 새 값으로 간다.",
+    },
+    {
+      pointer: 2,
+      memory: ["replicas: 2", "image: 1.27.2", "team: payments"],
+      caption: "지난에도 새에도 없고 현재에만 있다. Helm이 모르는 필드라 그대로 둔다.",
+    },
+    {
+      pointer: 3,
+      found: [2],
+      memory: ["replicas: 2", "image: 1.27.2", "team: payments", "debug env 삭제"],
+      caption: "지난 매니페스트에 있던 DEBUG 환경 변수가 새 매니페스트에서 빠졌다. 차트가 지운 것이라 클러스터에서도 지운다.",
+    },
+  ]}
+/>
+
+같은 규칙을 함수로 써 보자. 매니페스트를 평평한 맵 하나로 단순화했다.
+
+<CodePlayground
+  caption="three-way merge"
+  functionName="threeWayMerge"
+  initialCode={`function threeWayMerge(old, live, next) {
+  // old: 지난 매니페스트, live: 클러스터 현재 상태, next: 새 매니페스트
+  // 1) next에 있는 키는 next 값으로
+  // 2) old에 있었는데 next에 없는 키는 지운다
+  // 3) 나머지 live에만 있는 키는 그대로 둔다
+  return live;
+}`}
+  solution={`function threeWayMerge(old, live, next) {
+  const out = { ...live };
+  for (const k of Object.keys(old)) if (!(k in next)) delete out[k];
+  for (const [k, v] of Object.entries(next)) out[k] = v;
+  return out;
+}`}
+  tests={[
+    {
+      label: "손으로 늘린 레플리카",
+      args: [{ replicas: 2, image: "1.27.1" }, { replicas: 6, image: "1.27.1", team: "payments" }, { replicas: 2, image: "1.27.2" }],
+      expected: { replicas: 2, image: "1.27.2", team: "payments" },
+    },
+    {
+      label: "다른 도구가 넣은 사이드카",
+      args: [{ replicas: 2, image: "1.27.1" }, { replicas: 2, image: "1.27.1", sidecar: "envoy" }, { replicas: 2, image: "1.27.1" }],
+      expected: { replicas: 2, image: "1.27.1", sidecar: "envoy" },
+    },
+    {
+      label: "차트에서 지운 필드",
+      args: [{ a: 1, b: 2 }, { a: 1, b: 2, c: 3 }, { a: 1 }],
+      expected: { a: 1, c: 3 },
+    },
+    {
+      label: "0으로 줄인 것도 되돌린다",
+      args: [{ replicas: 1 }, { replicas: 0 }, { replicas: 1 }],
+      expected: { replicas: 1 },
+    },
+  ]}
+/>
+
+이 규칙에서 실무 교훈 두 개가 나온다. 하나, 급할 때 `kubectl`로 고친 값은 values에도 반영해야 다음 배포 뒤에 남는다. 아니면 새벽에 늘린 레플리카가 아침 배포에 조용히 2로 돌아간다. HPA를 쓰는 Deployment라면 차트가 `replicas`를 아예 렌더링하지 않게 해야 한다. `helm create`의 템플릿에 `{{- if not .Values.autoscaling.enabled }}`가 감싸고 있는 이유다. 둘, 서비스 메시가 넣는 사이드카나 다른 컨트롤러가 붙이는 어노테이션처럼 차트가 모르는 필드는 Helm이 지우지 않는다. Helm 2는 지난 매니페스트와 새 매니페스트만 비교해서, 클러스터에서 바뀐 값을 보지 못했다.
+
+## 바꾸기 전에 diff로 보기
+
+업그레이드가 무엇을 바꿀지 미리 보는 도구가 helm-diff 플러그인이다.
+
+```bash
+# 플러그인 설치
+helm plugin install https://github.com/databus23/helm-diff --version v3.9.14
+
+# 이번 업그레이드가 바꿀 내용을 본다 (앞뒤 두 줄씩만)
+helm diff upgrade shop-api ./shop-api -n shop-prod \
+  --set replicaCount=2 --set image.tag=1.27.3 -C 2
+```
+
+```text
+shop-prod, shop-api, Deployment (apps) has changed:
+...
+            securityContext:
+              {}
+-           image: "nginx:1.27.2"
++           image: "nginx:1.27.3"
+            imagePullPolicy: IfNotPresent
+            ports:
+...
+```
+
+여기에 함정이 있다. 기본 diff는 지난 리비전의 매니페스트와 새 매니페스트만 비교한다. 위 출력은 누군가 `kubectl scale`로 레플리카를 5로 바꿔 둔 상태에서 받은 것인데, 레플리카 이야기가 없다. 클러스터의 지금 상태와 비교하려면 `--three-way-merge`를 준다.
+
+```bash
+# 클러스터의 현재 상태까지 넣어 비교한다
+helm diff upgrade shop-api ./shop-api -n shop-prod \
+  --set replicaCount=2 --set image.tag=1.27.3 -C 2 --three-way-merge
+```
+
+```text
+shop-prod, shop-api, Deployment (apps) has changed:
+...
+  spec:
+    progressDeadlineSeconds: 600
+-   replicas: 5
++   replicas: 2
+    revisionHistoryLimit: 10
+    selector:
+...
+      spec:
+        containers:
+-       - image: nginx:1.27.2
++       - image: nginx:1.27.3
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+...
+```
+
+이제 업그레이드가 레플리카를 5에서 2로 줄인다는 게 보인다. 운영 배포 PR에 이 결과를 붙이면 리뷰어가 무엇이 바뀌는지 바로 안다.
+
+## 훅은 릴리스 밖에서 돈다
+
+훅은 설치나 업그레이드의 특정 시점에 따로 실행되는 리소스다. 템플릿에 어노테이션을 붙여 만든다. 가장 흔한 쓰임은 업그레이드 전 DB 마이그레이션 Job이다.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "shop-api.fullname" . }}-migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command: ["./migrate", "up"]
+```
+
+어노테이션 세 개가 하는 일을 조각내 보자.
+
+<UrlAnatomy
+  caption="훅 어노테이션"
+  base="metadata.annotations"
+  separator=" · "
+  joiner=" · "
+  params={[
+    {
+      key: "hook",
+      display: "hook: pre-install,pre-upgrade",
+      title: "언제 돌릴지",
+      description: "pre-install, post-install, pre-upgrade, post-upgrade, pre-rollback, post-rollback, pre-delete, post-delete, test 중에서 고른다. 쉼표로 여러 시점을 줄 수 있다. pre 훅이 끝나야 본 리소스를 적용한다.",
+      required: true,
+    },
+    {
+      key: "weight",
+      display: "hook-weight: \"0\"",
+      title: "같은 시점 안에서의 순서",
+      description: "숫자가 작은 것부터 실행한다. 음수도 된다. 값은 문자열로 써야 한다. 마이그레이션 전에 설정 Secret을 먼저 만들 때 가중치로 순서를 정한다.",
+    },
+    {
+      key: "delete",
+      display: "hook-delete-policy",
+      title: "끝난 훅을 언제 지울지",
+      description: "before-hook-creation은 다음에 같은 훅을 만들기 전에 이전 것을 지운다(정책이 없을 때의 기본값). hook-succeeded는 성공하면 바로, hook-failed는 실패하면 지운다. 실패한 Job은 남겨 둬야 로그를 볼 수 있으니 hook-failed는 잘 쓰지 않는다.",
+      code: "\"helm.sh/hook-delete-policy\": before-hook-creation,hook-succeeded",
+    },
+  ]}
+/>
+
+성공하면 Job이 정책대로 지워져 흔적이 없다. 실패하면 어떻게 되는지 보자. 마이그레이션 Pod가 뜰 수 없게 해서 `activeDeadlineSeconds`를 넘기게 했다.
+
+```bash
+# 마이그레이션 훅이 실패하는 업그레이드
+helm upgrade shop-api ./shop-api -n shop-prod --set replicaCount=2 --set image.tag=1.27.3 --timeout 60s
+
+# 기록, 남은 Job, 실제 이미지를 본다
+helm history shop-api -n shop-prod --max 2
+kubectl get job -n shop-prod
+kubectl get deploy shop-api -n shop-prod -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+```
+
+```text
+Error: UPGRADE FAILED: pre-upgrade hooks failed: 1 error occurred:
+	* job shop-api-migrate failed: DeadlineExceeded
+
+REVISION	UPDATED                 	STATUS  	CHART         	APP VERSION	DESCRIPTION                                                           
+12      	Sun Oct 18 23:46:20 2026	deployed	shop-api-0.1.0	1.16.0     	Upgrade complete                                                      
+13      	Sun Oct 18 23:46:30 2026	failed  	shop-api-0.1.0	1.16.0     	Upgrade "shop-api" failed: pre-upgrade hooks failed: 1 error occurr...
+NAME               STATUS   COMPLETIONS   DURATION   AGE
+shop-api-migrate   Failed   0/1           10s        11s
+nginx:1.16.0
+```
+
+pre 훅이 실패하면 본 리소스는 적용되지 않는다. 이미지는 그대로 옛 버전이다. 실패한 Job이 남아 있으니 `kubectl logs job/shop-api-migrate`로 원인을 본다. 다음 업그레이드 때는 `before-hook-creation`이 이 Job을 지우고 새로 만든다.
+
+훅에는 알아 둘 성질이 몇 가지 더 있다. 훅 리소스는 릴리스의 일부로 관리되지 않는다. `helm uninstall`이 지우지 않고, 롤백도 훅이 만든 결과를 되돌리지 않는다. 훅 Job은 `--wait`가 없어도 Helm이 끝날 때까지 기다리고, 그 시간도 `--timeout`에 묶인다. 마이그레이션이 5분 넘게 걸리면 `--timeout`을 늘려야 한다. 그리고 ArgoCD 같은 도구는 Helm 훅을 자기 방식(Sync 훅)으로 바꿔 실행해서 동작이 조금 다르다. 이건 [배포 흐름 글](/posts/helm-dependencies-oci-gitops)에서 본다.
+
+## another operation is in progress
+
+글 처음의 상황으로 돌아가자. Helm은 작업을 시작할 때 새 리비전을 `pending-install`, `pending-upgrade`, `pending-rollback` 중 하나로 먼저 기록하고, 끝나면 `deployed`나 `failed`로 바꾼다. 작업 도중에 프로세스가 죽으면(CI 러너가 취소되거나, 노트북 덮개를 닫거나, `kill -9`) 상태를 바꿀 사람이 없어서 pending이 그대로 남는다. 다음 Helm 작업은 이 pending을 보고 누가 작업 중이라고 판단해 거절한다.
+
+아래 그림은 릴리스 리비전이 거치는 상태들이다. 점선이 프로세스가 죽었을 때 멈추는 자리다.
+
+<ConceptDiagram
+  width={440}
+  height={330}
+  caption="pending 상태는 작업이 끝나야 deployed나 failed로 바뀐다. 중간에 죽으면 pending에 갇힌다."
+  nodes={[
+    { id: "pi", label: "pending-install", x: 90, y: 45, w: 140 },
+    { id: "pu", label: "pending-upgrade", x: 90, y: 160, w: 140 },
+    { id: "pr", label: "pending-rollback", x: 90, y: 275, w: 140 },
+    { id: "dep", label: "deployed", x: 330, y: 100, w: 120 },
+    { id: "fail", label: "failed", x: 330, y: 220, w: 120 },
+    { id: "sup", label: "superseded", x: 330, y: 305, w: 120 },
+  ]}
+  edges={[
+    { from: "pi", to: "dep", label: "성공" },
+    { from: "pu", to: "dep", label: "성공" },
+    { from: "pu", to: "fail", label: "실패" },
+    { from: "pr", to: "dep", label: "성공" },
+    { from: "pi", to: "fail", dashed: true },
+    { from: "dep", to: "sup", label: "다음 배포" },
+  ]}
+/>
+
+업그레이드 중에 프로세스를 죽여 재현해 봤다.
+
+```bash
+# --wait로 기다리는 업그레이드를 시작하고 4초 뒤 강제로 죽인다
+helm upgrade shop-api ./shop-api -n shop-prod --set replicaCount=2 \
+  --set nodeSelector.disk=nvme --wait --timeout 5m & sleep 4; kill -9 $!
+
+# 상태를 본다
+helm history shop-api -n shop-prod --max 2
+helm list -n shop-prod
+helm list -n shop-prod --pending
+```
+
+```text
+REVISION	UPDATED                 	STATUS         	CHART         	APP VERSION	DESCRIPTION      
+6       	Sun Oct 18 23:45:21 2026	deployed       	shop-api-0.1.0	1.16.0     	Rollback to 4    
+7       	Sun Oct 18 23:45:27 2026	pending-upgrade	shop-api-0.1.0	1.16.0     	Preparing upgrade
+NAME	NAMESPACE	REVISION	UPDATED	STATUS	CHART	APP VERSION
+NAME    	NAMESPACE 	REVISION	UPDATED                                	STATUS         	CHART         	APP VERSION
+shop-api	shop-prod 	7       	2026-10-18 23:45:27.633396878 +0000 UTC	pending-upgrade	shop-api-0.1.0	1.16.0     
+```
+
+`helm list`는 기본으로 deployed와 failed만 보여 줘서 릴리스가 목록에서 사라진 것처럼 보인다. `--pending`이나 `-a`를 붙여야 보인다. 리비전 7이 `pending-upgrade`로 남아 있고, 이 상태에서 업그레이드하면 글 처음의 오류가 난다.
+
+먼저 정말로 다른 작업이 돌고 있지 않은지 확인한다. CI 파이프라인 두 개가 동시에 돌고 있다면 기다리는 게 맞다. 아무도 없다면 상태에 따라 푼다.
+
+`pending-upgrade`나 `pending-rollback`이면 마지막 `deployed` 리비전으로 롤백한다. 롤백은 pending 상태를 무시하고 진행되며, 새 리비전으로 정상 상태를 만든다.
+
+```bash
+# 마지막으로 정상이던 리비전 6으로 되돌린다
+helm rollback shop-api 6 -n shop-prod
+helm history shop-api -n shop-prod --max 3
+```
+
+```text
+Rollback was a success! Happy Helming!
+REVISION	UPDATED                 	STATUS         	CHART         	APP VERSION	DESCRIPTION      
+6       	Sun Oct 18 23:45:21 2026	superseded     	shop-api-0.1.0	1.16.0     	Rollback to 4    
+7       	Sun Oct 18 23:45:27 2026	pending-upgrade	shop-api-0.1.0	1.16.0     	Preparing upgrade
+8       	Sun Oct 18 23:45:38 2026	deployed       	shop-api-0.1.0	1.16.0     	Rollback to 6    
+```
+
+7은 pending으로 기록에 남지만 이제 최신이 아니라서 다음 업그레이드를 막지 않는다. 첫 설치가 중간에 죽은 `pending-install`은 돌아갈 리비전이 없다.
+
+```bash
+# 첫 설치가 끊긴 릴리스는 롤백할 곳이 없다
+helm rollback shop-api -n shop-new
+```
+
+```text
+Error: release has no 0 version
+```
+
+이때는 `helm uninstall`로 반쯤 만들어진 릴리스를 지우고 다시 설치한다. 운영 데이터가 없는 첫 설치라서 가능한 방법이다.
+
+인터넷에서 자주 보이는 다른 방법은 pending 리비전의 Secret을 직접 지우는 것이다.
+
+<Callout kind="warning" title="릴리스 Secret을 지우기 전에">
+  `kubectl delete secret sh.helm.release.v1.shop-api.v7 -n shop-prod`처럼 pending 리비전의 Secret만 지워도 잠금은 풀린다. 하지만 이건 Helm의 기록을 손으로 고치는 일이라, 번호를 잘못 보고 deployed 리비전을 지우면 Helm은 릴리스가 없다고 판단하고 다음 install에서 모든 리소스가 이미 있다는 오류를 낸다. 지우기 전에 `kubectl get secret -n shop-prod -l owner=helm,name=shop-api --show-labels`로 status 라벨을 확인하고, `kubectl get secret 이름 -o yaml > backup.yaml`로 백업한다. 되돌릴 때는 백업을 `kubectl apply -f backup.yaml`로 다시 넣는다. 가능하면 `helm rollback`을 먼저 쓴다.
+</Callout>
+
+재발을 막으려면 원인을 없앤다. CI에서 같은 릴리스로 가는 배포가 겹치지 않게 동시 실행을 막고(파이프라인의 동시성 그룹), 러너가 취소될 때 Helm에 SIGTERM이 전달되게 한다. `--timeout`을 CI 작업 제한 시간보다 짧게 잡으면, CI가 Helm을 강제로 죽이기 전에 Helm이 스스로 실패를 기록하고 끝낸다.
+
+## 바꿀 수 없는 필드를 바꾸면
+
+차트를 고치다 셀렉터 라벨에 `app.kubernetes.io/component: api`를 추가했다. 업그레이드하면 이렇게 된다.
+
+```text
+Error: UPGRADE FAILED: cannot patch "shop-api" with kind Deployment: Deployment.apps "shop-api" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{"app.kubernetes.io/component":"api", "app.kubernetes.io/instance":"shop-api", "app.kubernetes.io/name":"shop-api"}, MatchExpressions:[]v1.LabelSelectorRequirement(nil)}: field is immutable
+```
+
+Deployment의 `spec.selector`, StatefulSet의 `volumeClaimTemplates`, Service의 `clusterIP`, Job의 `spec.template`처럼 만든 뒤 바꿀 수 없는 필드가 있다. 셀렉터가 바뀌면 지금 Pod들이 누구 소속인지가 흔들리니 쿠버네티스가 막는다.
+
+진짜 문제는 이 오류가 반쯤 적용된 상태를 남긴다는 것이다. Helm은 리소스를 종류 순서대로 적용하는데 Service가 Deployment보다 먼저다. Service의 셀렉터는 바꿀 수 있는 필드라서 새 라벨로 먼저 바뀌고, Deployment에서 실패했다.
+
+```bash
+# 실패한 업그레이드 뒤 Service가 가리키는 Pod를 본다
+kubectl get svc shop-api -n shop-prod -o jsonpath='{.spec.selector}{"\n"}'
+kubectl get endpoints shop-api -n shop-prod
+```
+
+```text
+{"app.kubernetes.io/component":"api","app.kubernetes.io/instance":"shop-api","app.kubernetes.io/name":"shop-api"}
+NAME       ENDPOINTS   AGE
+shop-api   <none>      116s
+```
+
+Service가 새 라벨을 찾는데 Pod에는 아직 그 라벨이 없으니 엔드포인트가 비었다. 이 Service로 오는 요청은 모두 실패한다. [Ingress](/posts/kubernetes-ingress) 앞에서는 503으로 보인다. `--atomic`이었다면 바로 되돌아갔을 것이고, 아니라면 즉시 롤백한다.
+
+```bash
+# 마지막 정상 리비전으로 되돌리고 엔드포인트가 돌아왔는지 본다
+helm rollback shop-api 9 -n shop-prod
+kubectl get endpoints shop-api -n shop-prod
+```
+
+```text
+Rollback was a success! Happy Helming!
+NAME       ENDPOINTS                 AGE
+shop-api   10.0.0.4:80,10.0.1.4:80   2m1s
+```
+
+`--force`로 밀어붙여도 소용없다. Helm 3의 `--force`는 패치 대신 객체를 통째로 교체(replace)하는데, 교체도 바꿀 수 없는 필드 검사를 똑같이 받는다.
+
+```text
+Error: UPGRADE FAILED: failed to replace object: Deployment.apps "shop-api" is invalid: spec.selector: Invalid value: ...
+```
+
+셀렉터를 꼭 바꿔야 한다면 Deployment를 지우고 다시 만들어야 한다. Pod까지 지우지 않으려면 `--cascade=orphan`으로 Deployment만 지운다.
+
+```bash
+# Deployment만 지우고 ReplicaSet과 Pod는 남긴다
+kubectl delete deploy shop-api -n shop-prod --cascade=orphan
+
+# 새 셀렉터로 Deployment를 다시 만든다
+helm upgrade shop-api ./shop-api -n shop-prod -f values-prod.yaml --wait --timeout 5m
+
+# 옛 ReplicaSet과 새 ReplicaSet을 본다
+kubectl get rs -n shop-prod
+```
+
+```text
+deployment.apps "shop-api" deleted
+Release "shop-api" has been upgraded. Happy Helming!
+NAME                  DESIRED   CURRENT   READY   AGE
+shop-api-848cdf4675   2         2         2       2s
+shop-api-99877487d    2         2         2       23s
+```
+
+새 ReplicaSet(`848cdf4675`)의 Pod가 Ready가 되고 Service가 새 라벨로 그쪽을 찾으면, 주인을 잃은 옛 ReplicaSet(`99877487d`)을 `kubectl delete rs`로 지운다. 여기까지가 번거로우니 처음부터 셀렉터 라벨에는 릴리스 이름과 앱 이름처럼 절대 안 바뀌는 값만 넣는다. 버전이나 차트 버전을 넣으면 매 배포가 이 오류다.
+
+## CRD는 처음 한 번만 설치된다
+
+오퍼레이터를 담은 차트는 CustomResourceDefinition(CRD)을 함께 배포한다. 차트의 `crds/` 디렉터리에 둔 CRD는 특별 취급을 받는다. 템플릿이 아니라서 값을 넣을 수 없고, 다른 리소스보다 먼저 설치되며, 업그레이드와 삭제 때는 건드리지 않는다.
+
+```bash
+# crds/backups.yaml에 retentionDays 필드를 추가한 차트로 업그레이드한다
+helm upgrade shop-api ./shop-api -n crd
+
+# CRD 스키마가 바뀌었는지 본다
+kubectl get crd backups.shop.example.com \
+  -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties}{"\n"}'
+
+# 릴리스를 지워도 CRD는 남는다
+helm uninstall shop-api -n crd
+kubectl get crd | grep backups
+```
+
+```text
+{"schedule":{"type":"string"}}
+release "shop-api" uninstalled
+backups.shop.example.com   2026-10-18T23:46:51Z
+```
+
+차트에는 `retentionDays`가 있는데 클러스터의 CRD에는 없다. 오퍼레이터 새 버전이 새 필드를 기대하다 이상하게 동작하는 원인이 된다. Helm이 이렇게 보수적인 이유는 CRD가 클러스터 전체에 하나뿐이기 때문이다. CRD를 지우면 그 종류의 커스텀 리소스가 모든 네임스페이스에서 함께 사라진다. 한 릴리스의 업그레이드나 삭제가 그런 일을 일으키지 않게 막아 둔 것이다.
+
+그래서 CRD는 차트 업그레이드와 별도로 올린다.
+
+```bash
+# CRD를 서버 사이드 적용으로 직접 올린다 (Helm이 소유한 필드라 충돌을 넘긴다)
+kubectl apply --server-side --force-conflicts -f ./shop-api/crds/
+```
+
+```text
+customresourcedefinition.apiextensions.k8s.io/backups.shop.example.com serverside-applied
+```
+
+`--force-conflicts` 없이 하면 `conflict with "helm" using apiextensions.k8s.io/v1: .spec.versions` 오류가 난다. Helm이 처음 만들 때 이 필드의 관리자로 기록됐기 때문이다. 큰 CRD는 일반 `kubectl apply`가 남기는 어노테이션이 크기 제한을 넘기 쉬워서 서버 사이드 적용을 쓴다. 차트에 따라서는 CRD를 `crds/`가 아니라 `templates/`에 넣고 업그레이드까지 관리하게 하거나, CRD만 담은 차트를 따로 두기도 한다. 어느 방식인지 차트 문서에서 먼저 확인한다.
+
+## 릴리스가 꼬였을 때 보는 순서
+
+정리하면 업그레이드는 리비전 예약, 훅, three-way 패치, 대기, 기록 확정 순으로 진행되고, 각 단계에서 멈추면 남는 흔적이 다르다. `another operation is in progress`는 pending 리비전이 남은 것이니 `helm history`로 상태를 보고 롤백하거나 지운다. 손으로 고친 값은 차트에 적힌 필드라면 다음 배포에 덮이고, 차트가 모르는 필드는 남는다. 바꿀 수 없는 필드 오류는 반쯤 적용된 상태를 남기니 엔드포인트부터 확인하고, CRD는 Helm이 업그레이드하지 않으니 따로 올린다. 다음 글에서는 차트를 여러 개 묶고, 저장소에 올리고, ArgoCD로 배포하는 흐름을 본다.
+
+## 면접에서 나올 만한 질문
+
+### helm upgrade --atomic과 --wait는 무엇이 다른가요?
+
+`--wait`는 리소스를 적용한 뒤 Pod가 Ready가 될 때까지 `--timeout`만큼 기다리고, 안 되면 리비전을 failed로 남긴다. `--atomic`은 거기에 더해 실패하면 직전 성공 리비전으로 자동 롤백하고, `--wait`를 저절로 켠다. 자동 복구는 편하지만 실패 상태를 볼 틈이 없어지니 CI 로그에 history와 이벤트를 남겨 둔다.
+
+### Helm 3의 three-way merge는 무엇인가요?
+
+지난 리비전의 매니페스트, 클러스터의 현재 상태, 새 매니페스트를 비교해 패치를 만드는 방식이다. 새 매니페스트에 적힌 필드는 그 값으로 맞추고, 차트에서 빠진 필드는 지우고, 차트가 모르는 필드는 그대로 둔다. 그래서 `kubectl scale`로 바꾼 레플리카는 다음 배포에 되돌아가지만 사이드카나 다른 도구가 붙인 어노테이션은 남는다.
+
+### `another operation (install/upgrade/rollback) is in progress`는 어떻게 해결하나요?
+
+이전 Helm 작업이 중간에 죽어 리비전이 pending 상태로 남은 것이다. `helm history`로 확인하고, 정말 다른 작업이 없다면 pending-upgrade는 마지막 deployed 리비전으로 `helm rollback`, 첫 설치가 끊긴 pending-install은 `helm uninstall` 후 재설치한다. 재발을 막으려면 같은 릴리스의 배포가 겹치지 않게 하고, `--timeout`을 CI 제한 시간보다 짧게 둔다.
+
+### Helm 훅은 어떤 경우에 쓰고, 주의할 점은 무엇인가요?
+
+DB 마이그레이션처럼 본 리소스 적용 전후에 한 번 돌릴 작업에 쓴다. pre 훅이 실패하면 본 리소스는 적용되지 않는다. 훅 리소스는 릴리스로 관리되지 않아 uninstall이나 롤백이 결과를 되돌리지 않으니, 마이그레이션은 옛 버전과 새 버전이 함께 동작하게 나눠 쓴다.
+
+### 셀렉터를 바꾸는 업그레이드가 실패했는데 서비스 장애가 났습니다. 왜인가요?
+
+Helm은 Service를 Deployment보다 먼저 적용한다. Service 셀렉터는 바꿀 수 있어서 새 라벨로 먼저 바뀌고, Deployment 셀렉터는 바꿀 수 없어 실패한다. 그러면 Service가 아직 새 라벨이 없는 Pod를 찾지 못해 엔드포인트가 비고 요청이 실패한다. 즉시 롤백하고, 셀렉터는 `--cascade=orphan`으로 Deployment를 지운 뒤 다시 만드는 식으로 바꾼다.
+
+### 차트의 crds/ 디렉터리에 둔 CRD는 왜 업그레이드되지 않나요?
+
+CRD는 클러스터에 하나뿐이고 지우면 모든 네임스페이스의 커스텀 리소스가 함께 사라진다. 한 릴리스의 업그레이드나 삭제가 그런 영향을 주지 않게 Helm은 `crds/`의 CRD를 처음 설치할 때만 만들고 이후로는 건드리지 않는다. 그래서 CRD 변경은 `kubectl apply --server-side`로 따로 올리거나, CRD 전용 차트로 관리한다.
+
+### helm diff는 무엇을 보여 주고, 무엇을 놓치나요?
+
+이번 업그레이드가 바꿀 매니페스트를 diff로 보여 준다. 기본 모드는 지난 리비전 매니페스트와 새 매니페스트만 비교해서, 누군가 클러스터에서 직접 바꾼 값을 보지 못한다. `--three-way-merge`를 주면 현재 상태까지 넣어 실제로 바뀔 내용을 보여 준다.

@@ -30,3 +30,8 @@ export function groupByLetter(entries: VocabEntry[]) {
   }
   return [...groups].map(([letter, items]) => ({ letter, items }));
 }
+
+/** 섞어 둔 순위(표제어 → 자리)대로 줄 세운다 */
+export function orderByRank(entries: VocabEntry[], rank: Map<string, number>) {
+  return [...entries].sort((a, b) => (rank.get(a.word) ?? 0) - (rank.get(b.word) ?? 0));
+}

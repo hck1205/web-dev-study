@@ -18,6 +18,19 @@ export function validateQuestions(questions: QuizQuestion[]) {
   return questions;
 }
 
+/** 링크에 보이는 문제 수(counts.generated.ts)가 실제 문제와 다르면 빌드를 멈춘다. */
+export function validateQuestionCounts(questions: QuizQuestion[], counts: Record<string, number>) {
+  const actual: Record<string, number> = {};
+  for (const q of questions) actual[q.post] = (actual[q.post] ?? 0) + 1;
+  const slugs = new Set([...Object.keys(actual), ...Object.keys(counts)]);
+  for (const slug of slugs) {
+    if (actual[slug] !== counts[slug]) {
+      throw new Error(`[quiz] ${slug}: 문제 수가 counts.generated.ts와 다르다. \`pnpm content:index\`를 실행한다`);
+    }
+  }
+  return questions;
+}
+
 export const questionHref = (q: QuizQuestion) => `/posts/${q.post}${q.anchor ? `#${q.anchor}` : ""}`;
 
 export const quizHref = (path: string[]) => `/quiz/${path.join("/")}`;

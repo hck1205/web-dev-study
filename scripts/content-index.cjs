@@ -2,6 +2,7 @@
  * 글 지도(콘텐츠 색인)를 만든다. `pnpm content:index` (빌드 전에도 자동으로 돈다)
  *
  * - src/features/content-map/registry/relations.generated.ts : /map 페이지가 쓰는 글 사이 관계
+ * - src/features/quiz/registry/counts.generated.ts : 글마다 퀴즈 문제 수 (글·토픽 페이지의 퀴즈 링크가 문제 본문 없이 개수만 읽는다)
  * - docs/content-index.md : 새 글을 쓰기 전에 읽는 색인 (토픽별 글, 소제목, 키워드 소유, 관계, 중복·긴 글 후보)
  *
  * 관계는 두 가지다.
@@ -16,6 +17,7 @@ const path = require("node:path");
 const ROOT = path.join(__dirname, "..");
 const POSTS_DIR = path.join(ROOT, "src/app/posts");
 const GENERATED = path.join(ROOT, "src/features/content-map/registry/relations.generated.ts");
+const QUIZ_COUNTS = path.join(ROOT, "src/features/quiz/registry/counts.generated.ts");
 const DOC = path.join(ROOT, "docs/content-index.md");
 
 /** 이 줄 수를 넘는 글은 쪼갤 후보로 표시한다. */
@@ -23,6 +25,7 @@ const LONG_POST_LINES = 900;
 
 const { POSTS } = require(path.join(ROOT, "src/features/posts/registry/posts.ts"));
 const { TOPICS } = require(path.join(ROOT, "src/features/topics/registry/topics.ts"));
+const { QUESTION_SETS } = require(path.join(ROOT, "src/features/quiz/registry/questions/index.ts"));
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const keywordPattern = (keyword) =>
@@ -81,6 +84,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = ${JSON.stringify(re
 `;
 fs.mkdirSync(path.dirname(GENERATED), { recursive: true });
 fs.writeFileSync(GENERATED, generated);
+
+// ---- counts.generated.ts ----
+const quizCounts = {};
+for (const question of QUESTION_SETS.flat()) quizCounts[question.post] = (quizCounts[question.post] ?? 0) + 1;
+fs.writeFileSync(
+  QUIZ_COUNTS,
+  `// 자동 생성 파일이다. 직접 고치지 말고 \`pnpm content:index\`를 실행한다 (scripts/content-index.cjs).
+// 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
+export const QUESTION_COUNTS: Record<string, number> = ${JSON.stringify(quizCounts, null, 2)};
+`,
+);
 
 // ---- docs/content-index.md ----
 const flatTopics = [];

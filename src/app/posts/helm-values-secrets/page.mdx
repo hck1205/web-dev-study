@@ -1,0 +1,633 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("helm-values-secrets");
+
+스테이징에 레플리카 3개로 올려 둔 앱이 있다. 이미지 태그만 바꾸려고 이렇게 업그레이드했다.
+
+```bash
+# 처음 설치할 때는 레플리카를 3으로 줬다
+helm install shop-api ./shop-api -n shop-stg --set replicaCount=3
+
+# 이미지 태그만 바꿔서 업그레이드한다
+helm upgrade shop-api ./shop-api -n shop-stg --set image.tag=1.27.1
+
+# 지금 들어간 값과 Deployment를 본다
+helm get values shop-api -n shop-stg
+kubectl get deploy shop-api -n shop-stg
+```
+
+```text
+USER-SUPPLIED VALUES:
+image:
+  tag: 1.27.1
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+shop-api   1/1     1            1           0s
+```
+
+레플리카가 1이 됐다. 업그레이드에 값을 하나라도 주면 Helm은 지난번에 준 값을 버리고 차트 기본값에서 다시 시작하기 때문이다. 차트 기본값이 `replicaCount: 1`이니 1이 됐다. 이 글은 values가 어떤 순서로 합쳐지는지, 업그레이드 때 지난 값은 어떻게 되는지, `--set`이 값을 어떤 타입으로 읽는지를 먼저 보고, 환경별로 values를 나누는 법과 비밀 값을 values 밖으로 빼는 방법으로 넘어간다.
+
+템플릿에서 값을 꺼내는 문법은 [차트 템플릿 글](/posts/helm-chart-templates)에 있다. 출력은 Helm 3.16과 kwok 실습 클러스터(Kubernetes 1.30)에서 받은 것이다.
+
+## 값이 들어오는 순서
+
+템플릿이 보는 `.Values`는 여러 곳에서 온 값을 하나로 합친 결과다. 나중에 오는 쪽이 이긴다.
+
+가장 아래에 차트의 `values.yaml`이 있다. 이 차트가 다른 차트의 하위 차트라면 그 위에 부모 차트의 `values.yaml`이 하위 차트 이름 아래로 덮인다. 그 위에 `-f`(또는 `--values`)로 준 파일이 왼쪽부터 차례로 덮인다. 마지막으로 `--set`, `--set-string`, `--set-json`, `--set-file`이 덮는다. `--set`은 명령줄에서 `-f`보다 앞에 적어도 `-f`보다 나중에 적용된다.
+
+```yaml
+# shop-api/values.yaml (차트 기본값)
+replicaCount: 1
+image:
+  repository: registry.example.com/shop-api
+  tag: "1.4.0"
+  pullPolicy: IfNotPresent
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+```
+
+```yaml
+# values-prod.yaml
+replicaCount: 6
+resources:
+  requests:
+    cpu: 500m
+```
+
+```yaml
+# values-prod-hotfix.yaml
+image:
+  tag: "1.4.1"
+```
+
+```bash
+# 파일 둘과 --set 하나를 함께 준다
+helm template shop-api ./shop-api -f values-prod.yaml -f values-prod-hotfix.yaml --set replicaCount=8
+```
+
+아래 그림에서 다음을 누르면 층이 하나씩 쌓이면서 최종 값이 바뀐다. 오른쪽 상자가 지금까지 합쳐진 결과다.
+
+<AlgoTrace
+  caption="values는 아래층부터 덮어 쓴다"
+  memoryLabel=".Values"
+  cells={["values.yaml", "-f prod", "-f hotfix", "--set"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["replicaCount: 1", "tag: 1.4.0", "cpu: 100m", "memory: 128Mi"],
+      caption: "차트 기본값에서 시작한다.",
+    },
+    {
+      pointer: 1,
+      memory: ["replicaCount: 6", "tag: 1.4.0", "cpu: 500m", "memory: 128Mi"],
+      caption: "values-prod.yaml이 replicaCount와 cpu를 덮는다. 같은 맵 안의 memory는 건드리지 않았으니 남는다.",
+    },
+    {
+      pointer: 2,
+      memory: ["replicaCount: 6", "tag: 1.4.1", "cpu: 500m", "memory: 128Mi"],
+      caption: "오른쪽에 적은 -f 파일이 나중에 덮는다. tag만 1.4.1로 바뀐다.",
+    },
+    {
+      pointer: 3,
+      found: [3],
+      memory: ["replicaCount: 8", "tag: 1.4.1", "cpu: 500m", "memory: 128Mi"],
+      caption: "--set이 마지막이다. 명령줄 어디에 적었든 -f보다 나중에 적용된다.",
+    },
+  ]}
+/>
+
+최종 결과를 JSON으로 찍어 보면 그림과 같다.
+
+```text
+{
+  "image": {
+    "pullPolicy": "IfNotPresent",
+    "repository": "registry.example.com/shop-api",
+    "tag": "1.4.1"
+  },
+  "replicaCount": 8,
+  "resources": {
+    "requests": {
+      "cpu": "500m",
+      "memory": "128Mi"
+    }
+  }
+}
+```
+
+이 출력은 템플릿에 `# {{ .Values | toJson }}` 한 줄을 넣고 렌더링해서 뽑았다. values가 이상하게 합쳐질 때 가장 빨리 확인하는 방법이다. 설치된 릴리스라면 `helm get values 릴리스 --all`이 같은 정보를 준다.
+
+## 맵은 합쳐지고 목록은 통째로 바뀐다
+
+위에서 `resources.requests.memory`가 살아남은 건 맵(키-값 묶음)이 깊이 합쳐지기 때문이다. 목록은 다르다. 목록은 합치지 않고 통째로 갈아 끼운다.
+
+```yaml
+# 차트 기본값
+ingress:
+  hosts:
+    - host: shop.local
+      paths: ["/"]
+```
+
+```yaml
+# values-prod.yaml
+ingress:
+  hosts:
+    - host: shop.example.com
+```
+
+```text
+"ingress": {
+  "hosts": [
+    {
+      "host": "shop.example.com"
+    }
+  ]
+}
+```
+
+host만 바꾸려 했는데 `paths`가 사라졌다. 목록 안의 원소끼리 맞춰서 합치는 규칙이 없으니 덮는 쪽 목록이 그대로 남는다. 그래서 목록을 덮을 때는 원소의 필드를 전부 다시 적어야 한다. `--set 'ingress.hosts[0].host=shop.example.com'`처럼 인덱스로 하나만 바꾸는 것도 같은 결과다. 목록 전체가 `[{"host":"shop.example.com"}]`로 바뀐다. 환경마다 하나씩만 바꾸고 싶은 항목이라면 차트를 만들 때 목록 대신 맵으로 받는 게 낫다.
+
+값을 지우고 싶을 때는 `null`을 준다. `--set resources=null`이나 values 파일의 `resources: null`은 차트 기본값의 `resources` 키를 아예 없앤다. 차트 기본값에 들어 있는 리소스 제한을 한 환경에서만 빼고 싶을 때 쓴다.
+
+이 규칙을 직접 구현해 보자. 맵은 재귀로 합치고, 목록과 단순 값은 덮고, `null`은 키를 지운다.
+
+<CodePlayground
+  caption="values 병합 규칙"
+  functionName="mergeValues"
+  initialCode={`function mergeValues(base, ...overrides) {
+  // overrides를 왼쪽부터 차례로 base 위에 덮는다
+  // 맵은 깊이 합치고, 목록과 단순 값은 덮고, null은 키를 지운다
+  return base;
+}`}
+  solution={`function mergeValues(base, ...overrides) {
+  const isMap = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const merge = (a, b) => {
+    const out = { ...a };
+    for (const [k, v] of Object.entries(b)) {
+      if (v === null) delete out[k];
+      else if (isMap(v) && isMap(out[k])) out[k] = merge(out[k], v);
+      else out[k] = v;
+    }
+    return out;
+  };
+  return overrides.reduce(merge, base);
+}`}
+  tests={[
+    {
+      label: "파일 둘을 차례로",
+      args: [{ replicaCount: 1, image: { repository: "shop-api", tag: "1.4.0" } }, { replicaCount: 6 }, { image: { tag: "1.4.1" } }],
+      expected: { replicaCount: 6, image: { repository: "shop-api", tag: "1.4.1" } },
+    },
+    {
+      label: "맵은 깊이 합친다",
+      args: [{ resources: { requests: { cpu: "100m", memory: "128Mi" } } }, { resources: { requests: { cpu: "500m" } } }],
+      expected: { resources: { requests: { cpu: "500m", memory: "128Mi" } } },
+    },
+    {
+      label: "목록은 통째로",
+      args: [{ hosts: [{ host: "shop.local", paths: ["/"] }] }, { hosts: [{ host: "shop.example.com" }] }],
+      expected: { hosts: [{ host: "shop.example.com" }] },
+    },
+    {
+      label: "null은 지운다",
+      args: [{ a: 1, resources: { limits: { cpu: "1" } } }, { resources: null }],
+      expected: { a: 1 },
+    },
+    {
+      label: "마지막이 이긴다",
+      args: [{ replicaCount: 1 }, { replicaCount: 6 }, { replicaCount: 8 }],
+      expected: { replicaCount: 8 },
+    },
+  ]}
+/>
+
+## --set 한 줄에 숨은 규칙
+
+`--set`은 편하지만 자기만의 문법이 있다. 쉼표, 점, 중괄호가 모두 특별한 뜻이다. 아래 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="--set 한 줄의 조각"
+  base="--set"
+  separator=" "
+  joiner=","
+  params={[
+    {
+      key: "path",
+      display: "image.tag=1.10",
+      title: "점은 깊이를 뜻한다",
+      description: "image 맵 안의 tag다. 값은 글자 그대로 읽어서 1.10은 문자열 \"1.10\"이 된다. 정수처럼 생긴 값만 정수로, true와 false는 불리언으로, null은 삭제로 바꾼다.",
+      code: "image:\n  tag: \"1.10\"",
+    },
+    {
+      key: "escape",
+      display: "podAnnotations.prometheus\\.io/scrape=true",
+      title: "키 안의 점은 역슬래시로",
+      description: "어노테이션 키처럼 점이 들어간 키는 \\.으로 막아야 한다. 값 true는 불리언이 되는데, 어노테이션 값은 문자열이어야 해서 템플릿에서 quote하지 않으면 API 서버가 거절한다. 이럴 땐 --set-string을 쓴다.",
+      code: "podAnnotations:\n  prometheus.io/scrape: true",
+    },
+    {
+      key: "list",
+      display: "allowed={10.0.0.0/8,192.168.0.0/16}",
+      title: "중괄호는 목록",
+      description: "중괄호 안의 쉼표는 원소 구분이다. 기존 목록에 더하는 게 아니라 목록 전체를 바꾼다.",
+      code: "allowed:\n  - 10.0.0.0/8\n  - 192.168.0.0/16",
+    },
+    {
+      key: "comma",
+      display: "note=a\\,b",
+      title: "값 안의 쉼표도 막는다",
+      description: "중괄호 밖의 쉼표는 다음 키의 시작이다. note=a,b라고 쓰면 b를 키로 읽어서 key \"b\" has no value 오류가 난다.",
+      code: "note: a,b",
+    },
+  ]}
+/>
+
+실제로 하나씩 넣어 보면 이렇게 읽힌다.
+
+```bash
+# 값이 어떤 타입으로 들어가는지 toJson으로 확인한다
+helm template shop-api ./shop-api --set image.tag=1.10    # "1.10"
+helm template shop-api ./shop-api --set image.tag=2       # 2 (정수)
+helm template shop-api ./shop-api --set image.tag=007     # "007"
+helm template shop-api ./shop-api --set featureX=true     # true (불리언)
+helm template shop-api ./shop-api --set-string featureX=true   # "true"
+helm template shop-api ./shop-api --set 'note=a,b'
+```
+
+```text
+Error: failed parsing --set data: key "b" has no value
+```
+
+`image.tag=2`가 정수가 되는 게 함정이다. 템플릿이 `"{{ .Values.image.repository }}:{{ .Values.image.tag }}"`처럼 따옴표 안에 넣는다면 상관없지만, 문자열을 기대하는 함수에 넘기거나 스키마로 검사하면 걸린다. 버전, 태그, 우편번호처럼 숫자로 보이는 문자열은 `--set-string`으로 준다.
+
+구조가 복잡한 값은 `--set-json`이 낫다. tolerations 같은 목록을 `--set`으로 쓰면 이스케이프 지옥이 된다. 파일 내용을 통째로 값에 넣을 때는 `--set-file`을 쓴다.
+
+```bash
+# 목록을 JSON으로 한 번에 넣는다
+helm template shop-api ./shop-api --set-json 'tolerations=[{"key":"dedicated","operator":"Equal","value":"batch","effect":"NoSchedule"}]'
+
+# 인증서 파일 내용을 값으로 넣는다
+helm template shop-api ./shop-api --set-file tls.crt=./certs/shop.crt
+```
+
+## values 파일 안의 숫자는 실수가 된다
+
+`--set`보다 덜 알려진 함정이 values 파일 쪽에 있다. YAML에서 따옴표 없는 `1.10`은 실수(float)다. Helm은 values 파일의 숫자를 모두 Go의 float64로 읽는다.
+
+```yaml
+# tag.yaml
+image:
+  tag: 1.10
+```
+
+```bash
+# 따옴표 없는 버전을 넣고 렌더링한다
+helm template shop-api ./shop-api -f tag.yaml | grep image:
+```
+
+```text
+image: 1.1
+```
+
+1.10이 1.1이 됐다. 존재하지 않는 이미지를 받으려다 `ImagePullBackOff`가 나는데, 이미지 태그를 아무리 봐도 오타가 없어서 한참 헤맨다. 큰 정수도 비슷하다. values 파일에 `big: 1234567`을 넣고 `{{ .Values.big }}`로 그대로 찍으면 `big: 1.234567e+06`이 나온다. 숫자처럼 생긴 문자열은 values 파일에서도 따옴표로 감싸고, 진짜 정수를 템플릿에 찍을 때는 `{{ .Values.big | int }}`처럼 변환한다.
+
+## 업그레이드 때 지난 값은 어디로 가나
+
+글 처음의 레플리카 문제로 돌아가자. `helm upgrade`가 지난 리비전의 값을 어떻게 다루는지는 플래그로 정해진다.
+
+아무 값도 주지 않으면(`-f`도 `--set`도 없으면) 지난 리비전에 준 값을 그대로 다시 쓴다. 값을 하나라도 주면 지난 값을 버리고 차트 기본값 위에 이번 값만 얹는다. 레플리카가 1이 된 건 이 때문이다.
+
+`--reuse-values`는 지난 값 위에 이번 값을 얹는다. 레플리카 문제는 이걸로 풀린다.
+
+```bash
+# 지난 값을 살리고 이번 값을 더한다
+helm upgrade shop-api ./shop-api -n shop-stg --reuse-values --set replicaCount=3
+helm get values shop-api -n shop-stg
+```
+
+```text
+USER-SUPPLIED VALUES:
+image:
+  tag: 1.27.1
+replicaCount: 3
+```
+
+그런데 `--reuse-values`에는 다른 함정이 있다. 차트 기본값까지 지난 리비전 것을 쓴다. 새 차트 버전에 `metrics.enabled` 같은 값이 추가됐다면, 그 기본값은 새 `values.yaml`에만 있는데 `--reuse-values`는 그걸 보지 않는다.
+
+```bash
+# metrics 기본값이 추가된 차트 0.2.0으로 업그레이드한다
+helm upgrade shop-api ./shop-api-0.2.0 -n shop-stg --reuse-values --set image.tag=1.27.2
+```
+
+```text
+Error: UPGRADE FAILED: template: shop-api/templates/metrics-svc.yaml:1:14: executing "shop-api/templates/metrics-svc.yaml" at <.Values.metrics.enabled>: nil pointer evaluating interface {}.enabled
+```
+
+Helm 3.14에 이 문제를 고친 `--reset-then-reuse-values`가 생겼다. 차트 기본값은 새 차트 것으로, 사용자 값은 지난 리비전 것으로, 그 위에 이번 값을 얹는다.
+
+```bash
+# 기본값은 새 차트에서, 사용자 값은 지난 리비전에서 가져온다
+helm upgrade shop-api ./shop-api-0.2.0 -n shop-stg --reset-then-reuse-values --set image.tag=1.27.2
+kubectl get svc -n shop-stg
+```
+
+```text
+Release "shop-api" has been upgraded. Happy Helming!
+NAME               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+shop-api           ClusterIP   10.0.0.109   <none>        80/TCP     1s
+shop-api-metrics   ClusterIP   10.0.0.123   <none>        9090/TCP   0s
+```
+
+셋 다 쓸 만하지만, 운영에서 가장 안전한 방법은 플래그에 기대지 않는 것이다. 환경마다 필요한 값을 전부 values 파일에 적어 git에 두고, 업그레이드할 때마다 그 파일을 `-f`로 넘긴다. 그러면 "지난번에 누가 `--set`으로 뭘 줬더라"를 기억할 필요가 없다. 값이 클러스터 기록이 아니라 git에 있으니 리뷰도 된다. `--set`은 CI가 이미지 태그를 넣는 정도로만 쓴다.
+
+## 환경별로 파일을 나누는 방법
+
+흔히 쓰는 배치는 이렇다. 차트 기본값에는 어느 환경에서도 무난한 값을, 환경 파일에는 그 환경에서 다른 것만 적는다.
+
+```text
+deploy/
+  shop-api/
+    values.yaml            # 모든 환경 공통 (도메인 뒤쪽, 프로브, 공통 env)
+    values-dev.yaml        # 레플리카 1, 작은 리소스, 디버그 로그
+    values-stg.yaml
+    values-prod.yaml       # 레플리카 6, PDB, 큰 리소스, 운영 도메인
+    secrets.prod.yaml      # SOPS로 암호화한 비밀 값 (아래에서)
+```
+
+```bash
+# 공통 위에 환경 파일, 마지막에 CI가 정한 이미지 태그
+helm upgrade --install shop-api ./charts/shop-api -n shop-prod \
+  -f deploy/shop-api/values.yaml \
+  -f deploy/shop-api/values-prod.yaml \
+  --set-string image.tag="$GIT_SHA"
+```
+
+파일 순서가 곧 우선순위라서, 공통 파일을 오른쪽에 두면 환경 값을 덮어 버린다. 공통은 왼쪽, 구체적인 것은 오른쪽이다. 환경 파일끼리 같은 값을 복사하기 시작하면 공통으로 올릴 때가 된 것이다.
+
+## 틀린 값을 미리 막는 values.schema.json
+
+values는 아무 값이나 받는다. `replicaCount: 0`도, `pullPolicy: always`(소문자)도 렌더링은 된다. 차트 루트에 `values.schema.json`을 두면 Helm이 렌더링 전에 JSON Schema로 최종 values를 검사한다. `install`, `upgrade`, `template`, `lint` 모두 검사한다.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "replicaCount"],
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    }
+  }
+}
+```
+
+```bash
+# 틀린 값 두 개를 넣어 본다
+helm template shop-api ./shop-api --set replicaCount=0 --set image.pullPolicy=always
+
+# --set이 정수로 읽은 태그도 걸린다
+helm template shop-api ./shop-api --set image.tag=2
+```
+
+```text
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+shop-api:
+- replicaCount: Must be greater than or equal to 1
+- image.pullPolicy: image.pullPolicy must be one of the following: "Always", "IfNotPresent", "Never"
+```
+
+```text
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+shop-api:
+- image.tag: Invalid type. Expected: string, given: integer
+```
+
+두 번째 결과가 특히 쓸모 있다. 앞에서 본 `--set image.tag=2` 함정을 사람이 아니라 스키마가 잡아 준다. 여러 팀이 같이 쓰는 차트라면 스키마는 거의 필수다. 스키마가 너무 엄격하면(`additionalProperties: false`를 곳곳에 두면) 하위 차트 값이나 새 필드를 넣을 때마다 막히니, 반드시 있어야 하는 값과 타입이 중요한 값부터 건다.
+
+## 비밀 값을 values에 평문으로 두면
+
+DB 비밀번호를 `values-prod.yaml`에 적어 git에 올리면 저장소를 읽을 수 있는 모든 사람과 모든 CI 로그가 비밀번호를 갖게 된다. 저장소가 한 번이라도 새면 비밀번호를 전부 바꿔야 한다. 커밋 기록에서 지우는 것도 쉽지 않다.
+
+그런데 git만 문제가 아니다. [Helm 기본 글](/posts/helm-basics)에서 본 대로 Helm은 사용자 값을 릴리스 기록 Secret에 그대로 넣는다. 아래처럼 어떤 방법으로 비밀 값을 넘기든 `helm get values`에는 평문으로 나온다.
+
+```bash
+# 비밀 값이 들어간 릴리스의 사용자 값을 본다
+helm get values shop-api -n shop-prod
+```
+
+```text
+USER-SUPPLIED VALUES:
+database:
+  password: s3cr3t-Pr0d-pw
+  user: shop
+```
+
+이 네임스페이스의 Secret을 `get`할 수 있는 사람은 앱의 Secret만이 아니라 Helm 기록을 통해서도 비밀번호를 본다. 그래서 비밀 값을 다루는 방법은 크게 둘로 나뉜다. 비밀 값을 Helm values로 넘기되 git에서만 암호화해 두는 방법, 아예 Helm을 거치지 않고 클러스터 안에서 Secret을 만드는 방법이다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="SOPS는 git만 지킨다. 값은 결국 Helm 기록에 남는다. External Secrets와 Sealed Secrets는 Helm을 거치지 않는다."
+  nodes={[
+    { id: "git", label: "git", sub: "암호화된 파일", x: 70, y: 45, w: 110 },
+    { id: "ci", label: "CI의 helm", sub: "sops -d", x: 220, y: 45, w: 110 },
+    { id: "rel", label: "Helm 기록", sub: "값이 평문", x: 370, y: 45, w: 110 },
+    { id: "vault", label: "외부 저장소", sub: "Vault·AWS SM", x: 70, y: 165, w: 110 },
+    { id: "eso", label: "컨트롤러", sub: "ESO·Sealed", x: 220, y: 165, w: 110 },
+    { id: "sec", label: "Secret", sub: "앱이 읽는 것", x: 370, y: 165, w: 110 },
+    { id: "pod", label: "Pod", sub: "env·볼륨", x: 370, y: 275, w: 110 },
+  ]}
+  edges={[
+    { from: "git", to: "ci", label: "pull" },
+    { from: "ci", to: "rel", label: "upgrade" },
+    { from: "ci", to: "sec", dashed: true },
+    { from: "vault", to: "eso", label: "sync" },
+    { from: "eso", to: "sec", label: "create" },
+    { from: "sec", to: "pod" },
+  ]}
+/>
+
+## SOPS로 암호화해서 git에 두기
+
+SOPS는 YAML 파일의 구조와 키는 그대로 두고 값만 암호화한다. 그래서 암호화된 파일도 diff와 리뷰가 된다. 키는 클라우드 KMS(AWS KMS, GCP KMS, Azure Key Vault)나 age, PGP를 쓴다. 아래는 age 키로 해 본 것이다.
+
+```bash
+# age 키를 만든다 (key.txt는 git에 올리지 않는다)
+age-keygen -o key.txt
+
+# 어떤 파일을 어떤 키로 암호화할지 정한다
+cat > .sops.yaml <<'EOF'
+creation_rules:
+  - path_regex: secrets\.prod\.yaml$
+    age: age1m4kcfhps66u5mcrk98m6hagxw9kledzu7tqytvrj9xw5vj46vcyqk2lm7y
+EOF
+
+# 평문 파일을 그 자리에서 암호화한다
+sops --encrypt --in-place secrets.prod.yaml
+head -3 secrets.prod.yaml
+```
+
+```text
+Public key: age1m4kcfhps66u5mcrk98m6hagxw9kledzu7tqytvrj9xw5vj46vcyqk2lm7y
+database:
+    password: ENC[AES256_GCM,data:zMTUFu4TXdSDdHYflHM=,iv:0GoIm/a8PTmTlU5paEzDwAA+izuSKGeFQM8rUv3xUjg=,tag:vws3aN7bPX8zKCL4xiKF5g==,type:str]
+    user: ENC[AES256_GCM,data:Ht9SoQ==,iv:udz04cInwCSH0vcAxqLalwplN8aO86vGwOJZqoSTkcU=,tag:rmSlUlLVAK1h+bynimlgOQ==,type:str]
+```
+
+`database.password`라는 키는 보이고 값만 `ENC[...]`로 바뀌었다. 파일 아래쪽에는 `sops:` 블록이 붙어 어떤 키로 풀 수 있는지와 변조 검사용 MAC이 들어간다. 배포할 때는 CI가 복호화해서 Helm에 넘긴다.
+
+```bash
+# 복호화한 내용을 파일로 남기지 않고 바로 -f에 넘긴다
+export SOPS_AGE_KEY_FILE=/path/to/key.txt
+helm upgrade --install shop-api ./shop-api -n shop-prod \
+  -f values-prod.yaml -f <(sops -d secrets.prod.yaml)
+```
+
+이걸 매번 쓰기 번거로우니 helm-secrets라는 플러그인이 같은 일을 감싸 준다. `helm secrets upgrade ... -f secrets.prod.yaml`처럼 쓰면 플러그인이 SOPS 파일을 알아보고 복호화해서 넘긴다. ArgoCD와 함께 쓰는 설정도 지원한다.
+
+SOPS의 장점은 단순함이다. 별도 서버 없이 git과 키만 있으면 된다. 대신 앞에서 본 대로 값은 결국 Helm 기록과 앱의 Secret에 평문으로 들어간다. 비밀번호를 바꾸려면 파일을 고쳐서 다시 배포해야 하고, 키 관리(누가 복호화 키를 갖나)가 새 숙제가 된다.
+
+## 클러스터 안에서 Secret을 만드는 방법
+
+두 번째 길은 차트가 비밀 값을 아예 모르게 하는 것이다. 차트는 "이 이름의 Secret을 읽어라"만 알고, Secret은 다른 무엇이 만든다. 공개 차트에서 자주 보는 `existingSecret` 값이 이 방식을 위한 자리다.
+
+External Secrets Operator(ESO)는 Vault, AWS Secrets Manager, GCP Secret Manager 같은 외부 저장소의 값을 주기적으로 읽어 쿠버네티스 Secret으로 만들어 준다. git에는 "어느 저장소의 어느 키를 어떤 Secret으로 만들라"는 `ExternalSecret` 리소스만 올라간다. 아래 그림은 그 흐름이다.
+
+<SequenceDiagram
+  caption="External Secrets Operator가 Secret을 만드는 흐름"
+  actors={[
+    { id: "helm", label: "helm" },
+    { id: "api", label: "API 서버" },
+    { id: "eso", label: "ESO" },
+    { id: "store", label: "외부 저장소" },
+  ]}
+  steps={[
+    {
+      from: "helm",
+      to: "api",
+      label: "ExternalSecret",
+      title: "참조만 배포한다",
+      detail: "차트는 비밀 값 대신 어느 저장소의 어느 키를 쓸지 적은 ExternalSecret을 만든다. Helm 기록에도 비밀 값은 없다.",
+      payload: "kind: ExternalSecret\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: aws-sm\n    kind: ClusterSecretStore\n  target:\n    name: shop-api-db\n  data:\n    - secretKey: DB_PASSWORD\n      remoteRef:\n        key: prod/shop-api/db\n        property: password",
+    },
+    {
+      from: "api",
+      to: "eso",
+      label: "감시",
+      title: "컨트롤러가 알아챈다",
+      detail: "ESO 컨트롤러는 ExternalSecret이 생기거나 바뀌는 것을 지켜본다.",
+    },
+    {
+      from: "eso",
+      to: "store",
+      label: "값 조회",
+      title: "외부 저장소에서 읽는다",
+      detail: "SecretStore에 적힌 인증(IRSA, Workload Identity 등)으로 prod/shop-api/db의 password를 읽는다. 저장소 접근 권한은 ESO만 가진다.",
+    },
+    {
+      from: "eso",
+      to: "api",
+      label: "Secret 생성",
+      title: "쿠버네티스 Secret으로 만든다",
+      detail: "target.name인 shop-api-db Secret을 만든다. 앱 Pod는 평소처럼 이 Secret을 env나 볼륨으로 읽는다.",
+    },
+    {
+      from: "eso",
+      to: "store",
+      label: "1h마다",
+      title: "주기적으로 다시 맞춘다",
+      detail: "refreshInterval마다 다시 읽어 바뀌었으면 Secret을 고친다. 비밀번호를 저장소에서 바꾸면 배포 없이 Secret이 따라온다. 다만 env로 읽은 Pod는 다시 떠야 새 값을 본다.",
+    },
+  ]}
+/>
+
+ESO의 `apiVersion`은 버전에 따라 `external-secrets.io/v1beta1`이나 `external-secrets.io/v1`이다. 설치된 버전의 CRD를 `kubectl api-resources | grep external`로 먼저 확인한다.
+
+Sealed Secrets는 외부 저장소 없이 git만으로 같은 효과를 낸다. 클러스터의 컨트롤러가 키 쌍을 갖고 있고, 개발자는 `kubeseal`로 공개 키를 써서 Secret을 `SealedSecret`으로 암호화한다. `SealedSecret`은 git에 올려도 되고, 클러스터 안의 컨트롤러만 풀어서 진짜 Secret을 만든다. 기본 설정에서는 암호문이 Secret 이름과 네임스페이스에 묶여 있어서, 다른 네임스페이스로 복사해도 풀리지 않는다. 컨트롤러의 키를 잃으면 모든 SealedSecret을 다시 만들어야 하니 키 백업이 중요하다.
+
+고르는 기준은 이렇다. 이미 Vault나 클라우드 시크릿 매니저를 쓰고 있다면 ESO가 자연스럽다. 비밀번호 교체가 배포와 분리되고, 누가 언제 읽었는지 저장소 쪽 감사 기록이 남는다. 외부 저장소가 없고 git만으로 끝내고 싶으면 SOPS나 Sealed Secrets다. SOPS는 Helm values 흐름에 그대로 얹히고, Sealed Secrets는 Helm 기록에 값이 남지 않는다는 차이가 있다.
+
+## lookup은 helm template에서 비어 있다
+
+차트가 비밀번호를 직접 만들어 주는 경우도 있다. 처음 설치할 때 무작위 비밀번호를 만들고, 업그레이드 때는 기존 값을 유지한다. 이때 쓰는 게 클러스터의 리소스를 읽어 오는 `lookup`이다.
+
+```yaml
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "shop-api-db" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: shop-api-db
+type: Opaque
+data:
+  {{- if $existing }}
+  password: {{ index $existing.data "password" }}
+  {{- else }}
+  password: {{ randAlphaNum 24 | b64enc }}
+  {{- end }}
+```
+
+```bash
+# 설치와 업그레이드 뒤 비밀번호를 비교한다
+helm install db ./db-chart -n lk
+kubectl get secret shop-api-db -n lk -o jsonpath='{.data.password}' | base64 -d; echo
+helm upgrade db ./db-chart -n lk
+kubectl get secret shop-api-db -n lk -o jsonpath='{.data.password}' | base64 -d; echo
+
+# 같은 차트를 helm template으로 두 번 렌더링한다
+helm template db ./db-chart -n lk | grep password
+helm template db ./db-chart -n lk | grep password
+```
+
+```text
+sM3sTV5OMvA4oLirJ7yvm62x
+sM3sTV5OMvA4oLirJ7yvm62x
+  password: aGtZb1pHOVZsdG9oOFpTUnUxM2xDWEhN
+  password: NnFicGRkV2FaaEI1N2EyMnhoZjc1c005
+```
+
+`install`과 `upgrade`에서는 의도대로 값이 유지된다. 그런데 `helm template`은 클러스터에 붙지 않으니 `lookup`이 언제나 빈 값을 돌려주고, 렌더링할 때마다 새 비밀번호가 나온다. `--dry-run`(기본값 client)도 마찬가지이고, `--dry-run=server`를 줘야 실제 값을 읽는다.
+
+이게 문제가 되는 곳이 ArgoCD다. ArgoCD는 차트를 `helm template`으로 렌더링해서 직접 적용하기 때문에, 이런 차트를 ArgoCD로 배포하면 동기화할 때마다 비밀번호가 바뀌거나 계속 OutOfSync로 보인다. DB가 쓰는 비밀번호가 바뀌면 앱은 접속을 못 한다. `lookup`에 기대는 차트는 GitOps 환경에서 쓰기 전에 꼭 확인하고, 가능하면 비밀번호는 위의 ESO나 `existingSecret`으로 넘긴다. ArgoCD가 Helm을 다루는 방식은 [차트 배포 흐름 글](/posts/helm-dependencies-oci-gitops)에서 본다.
+
+## 값은 git에, 비밀은 따로
+
+정리하면 values는 차트 기본값, `-f` 파일(왼쪽부터), `--set` 순으로 덮이고, 맵은 깊이 합쳐지지만 목록은 통째로 바뀐다. `--set`은 정수와 불리언을 알아서 바꾸고, values 파일의 숫자는 실수가 되니 문자열은 따옴표로 감싼다. 업그레이드에 값을 하나라도 주면 지난 값이 사라지므로, 환경 값은 전부 파일로 git에 두고 매번 넘기는 게 가장 안전하다. 비밀 값은 Helm 기록에도 남는다는 것을 기억하고, SOPS로 git을 지킬지, ESO나 Sealed Secrets로 Helm 밖에서 만들지 고른다. 다음 글에서는 업그레이드와 롤백이 꼬일 때를 본다.
+
+## 면접에서 나올 만한 질문
+
+### Helm values는 어떤 순서로 적용되나요?
+
+차트의 `values.yaml`이 가장 아래, 하위 차트라면 그 위에 부모 차트의 값, 그 위에 `-f` 파일이 왼쪽부터 차례로, 마지막에 `--set` 계열이 덮는다. `--set`은 명령줄 위치와 상관없이 `-f`보다 나중이다. 맵은 깊이 합쳐지고 목록은 통째로 바뀌며, `null`은 키를 지운다.
+
+### helm upgrade 후 이전에 --set으로 준 값이 사라졌습니다. 왜 그런가요?
+
+업그레이드에 값을 하나라도 주면 Helm은 지난 리비전의 사용자 값을 버리고 차트 기본값 위에 이번 값만 얹는다. `--reuse-values`는 지난 값을 살리지만 차트 기본값까지 예전 것을 써서, 새 차트에 추가된 기본값이 빠지는 문제가 있다. Helm 3.14부터 있는 `--reset-then-reuse-values`가 그 둘을 맞춰 주지만, 가장 확실한 방법은 환경 값을 파일로 관리해 매번 `-f`로 넘기는 것이다.
+
+### --set image.tag=1.10과 values 파일의 tag: 1.10은 결과가 같나요?
+
+다르다. `--set`은 정수와 불리언만 변환해서 `1.10`은 문자열로 남는다. values 파일은 YAML이라 따옴표 없는 `1.10`이 실수로 읽히고 `1.1`로 렌더링된다. 반대로 `--set image.tag=2`는 정수가 되니, 숫자처럼 생긴 문자열은 `--set-string`이나 따옴표로 준다.
+
+### values.schema.json은 무엇을 해 주나요?
+
+렌더링 전에 최종 values를 JSON Schema로 검사해서 타입, 필수 값, 허용 값 범위를 강제한다. install, upgrade, template, lint 모두에서 동작하고, 오류 메시지에 어느 키가 왜 틀렸는지 나온다. 여러 팀이 쓰는 차트에서 잘못된 값이 클러스터까지 가는 걸 막는다.
+
+### 비밀 값을 values로 넘기면 어떤 문제가 있나요?
+
+git에 평문으로 남는 문제와 함께, Helm이 사용자 값을 릴리스 기록 Secret에 그대로 저장한다는 문제가 있다. `helm get values`로 누구든 볼 수 있다. SOPS로 git을 암호화하거나, ESO나 Sealed Secrets로 Helm을 거치지 않고 Secret을 만들어 차트는 이름만 참조하게 한다.
+
+### External Secrets Operator와 Sealed Secrets는 어떻게 고르나요?
+
+ESO는 Vault나 클라우드 시크릿 매니저 같은 외부 저장소의 값을 주기적으로 읽어 Secret을 만든다. 비밀번호 교체가 배포와 분리되고 저장소 쪽 감사가 남는다. Sealed Secrets는 외부 저장소 없이 클러스터 공개 키로 암호화한 SealedSecret을 git에 두는 방식이라 구성이 단순하지만, 컨트롤러 키를 잃으면 전부 다시 만들어야 한다.
+
+### lookup을 쓰는 차트를 ArgoCD로 배포하면 어떻게 되나요?
+
+ArgoCD는 `helm template`으로 렌더링하는데, 이때는 클러스터에 붙지 않아 `lookup`이 항상 빈 값을 돌려준다. 그래서 "있으면 기존 값 유지" 로직이 동작하지 않고, 무작위 비밀번호가 동기화마다 새로 만들어지거나 계속 OutOfSync가 된다. 이런 값은 `existingSecret`이나 ESO로 차트 밖에서 넣는다.

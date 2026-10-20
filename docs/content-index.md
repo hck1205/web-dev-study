@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 149편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 154편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -242,7 +242,7 @@
 - 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 비밀 값을 커밋했을 때 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-stash-reflog, git-staging-area, git-troubleshooting
 - 키워드 백링크 →: git-large-files-secrets, git-branch-merge
-- 이 글로 오는 글 ←: git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting
+- 이 글로 오는 글 ←: git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting, helm-dependencies-oci-gitops
 
 ### Programming › Computer Science (`programming/computer-science`)
 
@@ -568,7 +568,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: redis-cluster, db-type-relational, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, tcp-reliability-congestion
+- 이 글로 오는 글 ←: caching-strategies, cookie-session-login, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, docker-compose, docker-network-volume, gateway, helm-basics, helm-dependencies-oci-gitops, http-caching-cdn, nginx-reverse-proxy, ports-and-sockets, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, tcp-reliability-congestion
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -1133,7 +1133,7 @@
 - 키워드: ImagePullBackOff, CreateContainerConfigError, kubectl debug, 임시 컨테이너
 - 길이: 403줄
 - 소제목: 상태 이름이 멈춘 곳을 알려 준다 / 이벤트는 정렬부터 틀린다 / Pending: 노드를 찾지 못했다 / ContainerCreating에서 멈췄다 / ImagePullBackOff: 이미지를 받지 못했다 / CreateContainerConfigError: 설정이 비어 있다 / CrashLoopBackOff: 뜨자마자 죽는다 / OOMKilled: 메모리 한도에 걸렸다 / Running인데 트래픽을 못 받는다 / Terminating에서 안 넘어간다 / 셸이 없는 컨테이너는 kubectl debug로 연다 / 상태별로 다시 보면 / 면접에서 나올 만한 질문
-- 직접 링크 →: k8s-pod-scheduling, dockerfile-image-layers, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-resources, kubernetes-ingress, network-troubleshooting-by-layer
+- 직접 링크 →: k8s-pod-scheduling, dockerfile-image-layers, helm-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-resources, kubernetes-ingress, network-troubleshooting-by-layer
 - 키워드 백링크 →: docker-container-basics, dns
 - 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-scheduling, packet-capture-tcpdump
 
@@ -1236,7 +1236,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, http-versions, http-status-codes, udp-and-quic
-- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, k8s-pod-probes, kubernetes-ingress, layer-link-ethernet-arp, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, dns, frontend-browser-cache, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, iptables-basics, iptables-nat, k8s-pod-probes, kubernetes-ingress, layer-link-ethernet-arp, local-custom-domain, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, upper-layers-session-presentation-app
 
 ### Programming › Network › HTTP (`programming/network/http`)
 
@@ -1477,7 +1477,7 @@
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat
 - 키워드 백링크 →: k8s-pod-resources, iptables-basics, rest-api-design, udp-and-quic
-- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-troubleshooting, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr
+- 이 글로 오는 글 ←: docker-compose, docker-network-volume, dockerfile-image-layers, gateway, helm-basics, helm-dependencies-oci-gitops, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-troubleshooting, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, rendering-ssr
 
 #### `docker-network-volume` — Docker 네트워크와 볼륨: 컨테이너끼리 대화하고 데이터 남기기
 
@@ -1523,7 +1523,63 @@
 - 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: k8s-pod-probes, proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, k8s-pod-lifecycle, http-status-codes, what-happens-google-com, cors, dns
-- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, http-message, https-tls, iptables-nat, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, osi-in-practice
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, helm-basics, helm-release-lifecycle, http-message, https-tls, iptables-nat, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, osi-in-practice
+
+### Programming › Server/Infra › Kubernetes › Helm (`programming/server-infra/kubernetes/helm`)
+
+#### `helm-basics` — Helm은 무엇을 풀어 주나: 차트, 릴리스, values
+
+- 요약: 환경마다 복사한 YAML이 어긋나는 문제에서 출발해 차트·릴리스·리비전이 무엇인지, helm install 한 번에 클러스터에 무엇이 생기고 그 기록이 어느 Secret에 남는지 실습 클러스터의 실제 출력으로 따라간다.
+- 태그: Kubernetes, Helm, DevOps
+- 키워드: Helm 차트, helm install, 릴리스 리비전
+- 길이: 567줄
+- 소제목: 복사한 YAML은 환경마다 조금씩 어긋난다 / 차트, 릴리스, 리비전 / helm create가 만들어 주는 것 / install 한 번에 일어나는 일 / 설치하고, 들여다보고, 지우기 / 릴리스 기록은 클러스터 안의 Secret에 있다 / 이미 있는 리소스와 이름이 겹칠 때 / 현장에서 릴리스를 만나는 순간 / Helm 2에는 서버가 있었다 / Helm이 묶어 주는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: helm-dependencies-oci-gitops, helm-chart-templates, helm-release-lifecycle, k8s-pod-lifecycle, helm-values-secrets
+- 키워드 백링크 →: k8s-pod-basics, docker-container-basics, kubernetes-ingress, redis-basics
+- 이 글로 오는 글 ←: helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, helm-values-secrets, k8s-pod-basics, k8s-pod-troubleshooting
+
+#### `helm-chart-templates` — 차트 템플릿 문법: values, _helpers.tpl, 들여쓰기
+
+- 요약: 렌더링 결과의 줄 번호를 가리키는 YAML 오류에서 출발해 Go 템플릿이 텍스트를 찍는 방식, 점의 의미, 공백을 지우는 하이픈, include와 toYaml·nindent, default·required, tpl, 설정이 바뀌면 Pod를 다시 띄우는 법까지 helm template과 lint로 확인한다.
+- 태그: Kubernetes, Helm, DevOps
+- 키워드: _helpers.tpl, nindent, helm template
+- 길이: 671줄
+- 소제목: 템플릿은 YAML이 아니라 텍스트를 찍는다 / 점 하나가 가리키는 것 / 한 줄을 조각내 읽기 / 공백을 지우는 하이픈 / 들여쓰기가 어긋날 때 나는 오류 / 조각을 만드는 define, 가져다 쓰는 include / 값이 없을 때, 값이 틀린 타입일 때 / 조건과 반복, 그리고 바뀌는 점 / 구조를 통째로 넘기는 toYaml / 값 안의 템플릿을 실행하는 tpl / 설정이 바뀌면 Pod를 다시 띄우게 하기 / 어느 단계에서 잡히나 / 템플릿을 읽는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: helm-basics, helm-release-lifecycle, k8s-pod-resources, helm-values-secrets
+- 키워드 백링크 →: k8s-pod-basics
+- 이 글로 오는 글 ←: helm-basics, helm-dependencies-oci-gitops, helm-values-secrets
+
+#### `helm-dependencies-oci-gitops` — 차트 배포 흐름: 의존성, OCI 저장소, helmfile, ArgoCD
+
+- 요약: ArgoCD로 배포한 앱이 helm history에 없는 이유에서 출발해 하위 차트와 values 전달, library 차트, 차트 버전과 앱 버전, OCI 레지스트리에 올리고 받기, helmfile, 렌더링만 하는 ArgoCD, Kustomize와의 차이를 정리한다.
+- 태그: Kubernetes, Helm, DevOps, GitOps
+- 키워드: helmfile, library 차트, OCI 레지스트리, Kustomize
+- 길이: 648줄
+- 소제목: 차트가 다른 차트를 품는 의존성 / 부모 values가 하위 차트로 흘러가는 길 / 템플릿만 빌려주는 library 차트 / 차트 버전과 앱 버전 / 차트를 OCI 레지스트리에 올리고 받기 / 릴리스 여러 개를 파일 하나로, helmfile / ArgoCD는 차트를 렌더링만 한다 / Kustomize와 무엇이 다른가 / 차트가 클러스터에 닿기까지 / 면접에서 나올 만한 질문
+- 직접 링크 →: helm-basics, helm-chart-templates, helm-values-secrets, helm-release-lifecycle, k8s-pod-basics
+- 키워드 백링크 →: git-undo, docker-container-basics, redis-basics, what-happens-google-com
+- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, helm-values-secrets
+
+#### `helm-release-lifecycle` — 업그레이드와 롤백: 릴리스가 꼬일 때
+
+- 요약: another operation is in progress 오류에서 출발해 업그레이드 한 번의 흐름, 새 리비전이 되는 롤백, 손으로 고친 값과 3-way 병합, helm diff, 훅, pending 상태 풀기, 바꿀 수 없는 필드, 처음 한 번만 설치되는 CRD를 실습 클러스터에서 재현한다.
+- 태그: Kubernetes, Helm, DevOps, Troubleshooting
+- 키워드: helm rollback, pending-upgrade, helm diff, Helm 훅
+- 길이: 619줄
+- 소제목: 업그레이드 한 번에 일어나는 일 / 롤백도 새 리비전이다 / 손으로 고친 값은 다음 배포에 어떻게 되나 / 바꾸기 전에 diff로 보기 / 훅은 릴리스 밖에서 돈다 / another operation is in progress / 바꿀 수 없는 필드를 바꾸면 / CRD는 처음 한 번만 설치된다 / 릴리스가 꼬였을 때 보는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: helm-basics, k8s-pod-probes, k8s-pod-lifecycle, helm-dependencies-oci-gitops, kubernetes-ingress
+- 키워드 백링크 →: k8s-pod-basics
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops
+
+#### `helm-values-secrets` — values를 환경별로 나누고 비밀 값 다루기
+
+- 요약: 이미지 태그만 바꿨는데 레플리카가 돌아간 사례에서 출발해 values가 합쳐지는 순서, 목록이 통째로 바뀌는 규칙, --set의 타입 함정, 업그레이드 때 지난 값의 행방, values.schema.json, SOPS와 클러스터 안에서 Secret을 만드는 방법, lookup의 함정을 다룬다.
+- 태그: Kubernetes, Helm, DevOps, Security
+- 키워드: values.schema.json, --reuse-values, SOPS
+- 길이: 634줄
+- 소제목: 값이 들어오는 순서 / 맵은 합쳐지고 목록은 통째로 바뀐다 / --set 한 줄에 숨은 규칙 / values 파일 안의 숫자는 실수가 된다 / 업그레이드 때 지난 값은 어디로 가나 / 환경별로 파일을 나누는 방법 / 틀린 값을 미리 막는 values.schema.json / 비밀 값을 values에 평문으로 두면 / SOPS로 암호화해서 git에 두기 / 클러스터 안에서 Secret을 만드는 방법 / lookup은 helm template에서 비어 있다 / 값은 git에, 비밀은 따로 / 면접에서 나올 만한 질문
+- 직접 링크 →: helm-chart-templates, helm-basics, helm-dependencies-oci-gitops
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops
 
 ### Programming › Server/Infra › Kubernetes › Pod (`programming/server-infra/kubernetes/pod`)
 
@@ -1534,9 +1590,9 @@
 - 키워드: pause 컨테이너, ReplicaSet, 멀티 컨테이너 Pod
 - 길이: 491줄
 - 소제목: 컨테이너 대신 Pod를 만드는 이유 / 한 Pod 안에서 나눠 갖는 것 / pause 컨테이너가 붙잡고 있는 것 / kubectl run 한 줄이 지나가는 길 / 매니페스트 한 줄씩 읽기 / 띄우고, 들여다보고, 지우기 / 직접 만든 Pod는 아무도 다시 살려 주지 않는다 / 한 Pod에 무엇을 같이 넣나 / Pod를 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting, k8s-pod-lifecycle, iptables-nat, k8s-pod-multicontainer, docker-container-basics
+- 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting, k8s-pod-lifecycle, iptables-nat, helm-basics, k8s-pod-multicontainer, docker-container-basics
 - 키워드 백링크 →: k8s-pod-scheduling, kubernetes-ingress, db-type-key-value
-- 이 글로 오는 글 ←: k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling
 
 #### `k8s-pod-lifecycle` — Pod의 일생: Pending부터 종료까지
 
@@ -1547,7 +1603,7 @@
 - 소제목: STATUS 칸은 phase가 아니다 / 컨테이너 상태와 조건 / init 컨테이너가 먼저 끝나야 한다 / 컨테이너가 죽으면 kubelet이 다시 띄운다 / CrashLoopBackOff는 기다리는 중이라는 뜻 / Pod가 끝나는 순서 / preStop에 sleep을 두는 이유 / PID 1은 SIGTERM을 그냥 넘긴다 / 종료 코드로 읽는 마지막 순간 / Pod의 일생을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-probes, k8s-pod-multicontainer, k8s-pod-resources, tcp-connection-lifecycle, dockerfile-image-layers
 - 키워드 백링크 →: k8s-pod-troubleshooting, k8s-pod-basics, iptables-nat, docker-container-basics, kubernetes-ingress
-- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-troubleshooting, kubernetes-ingress
+- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, k8s-pod-basics, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-troubleshooting, kubernetes-ingress
 
 #### `k8s-pod-multicontainer` — 한 Pod에 컨테이너 여럿: init, 사이드카, 어댑터
 
@@ -1569,7 +1625,7 @@
 - 소제목: 세 프로브는 묻는 것이 다르다 / 확인하는 방법 네 가지 / 숫자 다섯 개가 판정 시간을 정한다 / liveness가 DB를 보면 생기는 일 / 엔드포인트를 둘로 나눈다 / 배포 중에 readiness가 하는 일 / 느리게 뜨는 앱에는 startupProbe / 프로브를 걸 때 흔한 실수 / 프로브를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, k8s-pod-resources, k8s-pod-lifecycle
 - 키워드 백링크 →: k8s-pod-basics, kubernetes-ingress, event-loop, what-happens-google-com
-- 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-troubleshooting, kubernetes-ingress
+- 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, helm-release-lifecycle, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-troubleshooting, kubernetes-ingress
 
 #### `k8s-pod-resources` — requests와 limits: OOMKilled와 CPU 스로틀링
 
@@ -1580,7 +1636,7 @@
 - 소제목: 두 숫자를 읽는 쪽이 다르다 / 자리가 없으면 Pending이다 / QoS 클래스는 두 숫자의 관계로 정해진다 / CPU limits를 넘으면 멈춰 세운다 / 메모리 limits를 넘으면 죽인다 / 런타임은 limits를 모를 수 있다 / 노드가 모자라면 kubelet이 쫓아낸다 / 네임스페이스 단위로 기본값과 한도 걸기 / requests와 limits를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-scheduling, k8s-pod-lifecycle
 - 키워드 백링크 →: k8s-pod-basics
-- 이 글로 오는 글 ←: docker-container-basics, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-scheduling, k8s-pod-troubleshooting
+- 이 글로 오는 글 ←: docker-container-basics, helm-chart-templates, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-scheduling, k8s-pod-troubleshooting
 
 #### `k8s-pod-scheduling` — Pod는 어느 노드로 가나: 스케줄러와 Pending
 
@@ -1690,6 +1746,8 @@
 
 같은 키워드를 두 글이 가지면 긴 키워드·먼저 찾은 글로만 링크된다. 새 글의 키워드는 여기 없는 말로 고른다.
 
+- _helpers.tpl → `helm-chart-templates`
+- --reuse-values → `helm-values-secrets`
 - .gitignore → `git-ignore-config`
 - /etc/hosts → `hosts-file`
 - 3-way 병합 → `git-branch-merge`
@@ -1736,6 +1794,7 @@
 - 리렌더링 → `react-rerender`
 - 리버스 프록시 → `proxy-reverse-proxy`
 - 리프레시 토큰 → `token-login`
+- 릴리스 리비전 → `helm-basics`
 - 마이크로 프런트엔드 → `micro-frontends`
 - 마이크로 프론트엔드 → `micro-frontends`
 - 마이크로서비스 → `microservices`
@@ -2039,6 +2098,13 @@
 - Hash Join → `sql-query-tuning`
 - HATEOAS → `rest-api-design`
 - HAVING → `sqld-group-by-having`
+- Helm 차트 → `helm-basics`
+- Helm 훅 → `helm-release-lifecycle`
+- helm diff → `helm-release-lifecycle`
+- helm install → `helm-basics`
+- helm rollback → `helm-release-lifecycle`
+- helm template → `helm-chart-templates`
+- helmfile → `helm-dependencies-oci-gitops`
 - History API → `rendering-csr-spa`
 - HNSW → `vector-db`
 - host.docker.internal → `docker-network-volume`
@@ -2082,11 +2148,13 @@
 - keepalive → `browser-fetch`
 - kube-proxy → `iptables-nat`
 - kubectl debug → `k8s-pod-troubleshooting`
+- Kustomize → `helm-dependencies-oci-gitops`
 - L4 로드 밸런서 → `osi-in-practice`
 - L7 로드 밸런서 → `osi-in-practice`
 - LATERAL → `postgres-reporting-sql`
 - LCP → `core-web-vitals`
 - least_conn → `nginx-reverse-proxy`
+- library 차트 → `helm-dependencies-oci-gitops`
 - limit_req → `nginx-https-performance`
 - LimitRange → `k8s-pod-resources`
 - listen_addresses → `postgres-connections-pg-hba`
@@ -2123,6 +2191,7 @@
 - netfilter → `iptables-basics`
 - NewSQL → `db-type-newsql`
 - nginx.conf → `nginx-basics`
+- nindent → `helm-chart-templates`
 - node affinity → `k8s-pod-scheduling`
 - Non-EQUI JOIN → `sqld-joins`
 - NOT EXISTS → `sqld-subquery-set-operators`
@@ -2131,6 +2200,7 @@
 - NULLS FIRST → `sql-select-where-null`
 - NVL → `sqld-null-functions`
 - OAuth → `oauth`
+- OCI 레지스트리 → `helm-dependencies-oci-gitops`
 - OLAP → `db-type-columnar-olap`
 - ON CONFLICT → `postgres-advanced-sql`
 - onShellReady → `streaming-ssr-suspense`
@@ -2144,6 +2214,7 @@
 - pause 컨테이너 → `k8s-pod-basics`
 - pcap → `packet-capture-tcpdump`
 - peer 인증 → `postgres-getting-started`
+- pending-upgrade → `helm-release-lifecycle`
 - pg_basebackup → `postgres-operations`
 - pg_dump → `postgres-operations`
 - pg_hba.conf → `postgres-connections-pg-hba`
@@ -2228,6 +2299,7 @@
 - Snowflake → `db-sharding`
 - SO_REUSEADDR → `ports-and-sockets`
 - SO_REUSEPORT → `ports-and-sockets`
+- SOPS → `helm-values-secrets`
 - SPA 폴백 → `rendering-csr-spa`
 - Speculation Rules → `frontend-browser-cache`
 - SQLite → `db-type-embedded`
@@ -2280,6 +2352,7 @@
 - UUID v7 → `postgres-data-types`
 - UUIDv7 → `db-sharding`
 - VACUUM FULL → `postgres-mvcc-vacuum`
+- values.schema.json → `helm-values-secrets`
 - visibility map → `postgres-mvcc-vacuum`
 - WAL 모드 → `db-type-embedded`
 - WeakMap → `js-memory-leak`
@@ -2302,18 +2375,18 @@
 - `k8s-pod-basics` ↔ `docker-container-basics` (26%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
 - `db-index-pitfalls` ↔ `db-index-design` (21%: 100만, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (21%: 100만, 인덱스가, 인덱스를, index)
-- `sqld-null-functions` ↔ `sql-select-where-null` (21%: null은, 값이, 고르는, null, 다루기)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (19%: ssr, next.js, 스트리밍, ssr과, 준비된, 부분부터)
 - `db-partitioning` ↔ `db-type-time-series` (19%: 오래된, 통째로, 키가)
 - `db-partitioning` ↔ `db-modeling-normalization` (19%: 테이블을, 떼어, 키가)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `redis-cluster` ↔ `db-sharding` (18%: 키를, 나누는, 해시)
+- `sqld-null-functions` ↔ `sql-select-where-null` (17%: null은, 고르는, null, 다루기)
 - `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
-- `proxy-reverse-proxy` ↔ `gateway` (15%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
+- `proxy-reverse-proxy` ↔ `gateway` (16%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
 - `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
 - `packet-capture-tcpdump` ↔ `db-index` (15%: 처음부터, 끝까지, 줄을, 필요한)
+- `git-branch-merge` ↔ `git-remote-collaboration` (15%: 브랜치는, 브랜치를, 지운다, 원격)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
-- `git-branch-merge` ↔ `git-remote-collaboration` (14%: 브랜치는, 브랜치를, 지운다, 원격)
 - `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 - `postgres-connections-pg-hba` ↔ `postgres-roles-security` (14%: pg, 들어오는, 지나는)
@@ -2321,11 +2394,21 @@
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
 - `sql-insert-update-delete` ↔ `db-transaction-isolation` (13%: commit, rollback, 트랜잭션이, transaction)
 - `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (12%: 막는, 남기는, 트랜잭션, update)
+- `git-rebase` ↔ `git-troubleshooting` (12%: 충돌이, 브랜치를, 커밋, 커밋까지)
+- `rendering-ssg-isr` ↔ `db-sharding` (12%: 지금, 만들어, 만드나)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `helm-dependencies-oci-gitops` ↔ `helm-release-lifecycle`
+- `helm-dependencies-oci-gitops` ↔ `helm-values-secrets`
+- `helm-dependencies-oci-gitops` ↔ `helm-basics`
+- `helm-release-lifecycle` ↔ `helm-basics`
+- `helm-values-secrets` ↔ `helm-chart-templates`
+- `helm-values-secrets` ↔ `helm-basics`
+- `helm-chart-templates` ↔ `helm-basics`
+- `helm-basics` ↔ `k8s-pod-basics`
 - `k8s-pod-troubleshooting` ↔ `k8s-pod-scheduling`
 - `k8s-pod-troubleshooting` ↔ `k8s-pod-lifecycle`
 - `k8s-pod-troubleshooting` ↔ `dockerfile-image-layers`
