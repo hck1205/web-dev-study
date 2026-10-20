@@ -4,6 +4,7 @@ import { Callout } from "./callout";
 import { CodePlayground } from "./code-playground";
 import { ConceptDiagram } from "./concept-diagram";
 import { GeometryMorph } from "./geometry-morph";
+import { LoadingDemo } from "./loading-demo";
 import { MdxTable } from "./mdx-table";
 import { NetworkTopology } from "./network-topology";
 import { SequenceDiagram } from "./sequence-diagram";
@@ -24,4 +25,5 @@ export const mdxComponents: MDXComponents = {
   CodePlayground,
   GeometryMorph,
   NetworkTopology,
+  LoadingDemo,
 };
