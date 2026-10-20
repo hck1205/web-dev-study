@@ -1,0 +1,354 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("exponential-backoff-jitter");
+
+새벽에 Redis가 재시작됐다. 몇 초면 다시 뜨는 일이라 걱정하지 않았는데, 연결 수 그래프가 이상하다. Redis가 뜬 직후 연결 시도가 수천 개 한꺼번에 들어와 Redis가 다시 버벅이고, 정확히 1초 뒤에 또 한 번, 2초 뒤에 또 한 번, 4초 뒤에 또 한 번 뾰족하게 솟는다. 그래프가 빗살 모양이다. 앱 서버들은 모두 "실패하면 1초, 2초, 4초 기다렸다 다시 연결"하는 같은 코드를 쓰고 있었고, 같은 순간에 끊겼으니 같은 순간에 돌아왔다.
+
+다시 보내기 전에 기다리는 시간을 두 배씩 늘리는 지수 백오프는 널리 알려져 있다. 그런데 기다림을 늘리는 것만으로는 위 그래프를 못 막는다. 같은 순간 실패한 클라이언트들은 같은 공식을 따라 같은 순간에 돌아오기 때문이다. 이 글은 기다림에 무작위를 섞는 방법 세 가지(full, equal, decorrelated jitter)를 비교하고, 클라이언트 1000개를 시뮬레이션해서 몰림이 얼마나 줄어드는지 잰다. 서버가 직접 기다릴 시간을 알려 주는 `Retry-After`를 따르는 법과, 재시도 말고도 같은 시각에 몰리는 일들까지 다룬다.
+
+이 주제의 다른 글: 백오프 공식의 기본 계산과 재시도 전체 그림은 [장애가 번지지 않게](/posts/resilience-patterns)에 있고, 어떤 실패를 다시 보낼지와 재시도 예산은 [재시도](/posts/retries)에서, 기다리는 시간 전체의 한도는 [타임아웃](/posts/timeouts)에서 다룬다.
+
+## 두 배씩 늘리고 상한에서 멈춘다
+
+지수 백오프의 공식은 `min(cap, base × 2ⁿ)`이다. n은 몇 번째 재시도인지(0부터)이고, base는 첫 대기 시간, cap은 대기 시간의 상한이다. base 100ms, cap 10초라면 이렇게 늘어난다.
+
+<AlgoTrace
+  caption="base 100ms, cap 10s인 지수 백오프"
+  memoryLabel="지금까지 기다린 시간 합"
+  cells={["0.1s", "0.2s", "0.4s", "0.8s", "1.6s", "3.2s", "6.4s", "10s", "10s"]}
+  steps={[
+    { pointer: 0, memory: ["0.1s"], caption: "첫 실패 뒤 100ms 기다린다. 잠깐 끊긴 거라면 이 정도로 충분하다." },
+    { pointer: 2, memory: ["0.7s"], caption: "세 번째 재시도 전에는 400ms. 짧은 장애는 대개 여기서 끝난다." },
+    { pointer: 4, memory: ["3.1s"], caption: "1.6초. 이쯤이면 상대가 잠깐 아픈 게 아니라 꽤 망가졌다는 뜻이다. 보내는 빈도를 크게 낮춘다." },
+    { pointer: 6, memory: ["12.7s"], caption: "6.4초. 몇 번 안 보냈는데 기다린 시간 합이 12초를 넘었다." },
+    { pointer: 7, memory: ["22.7s"], caption: "두 배면 12.8초지만 cap에 걸려 10초에서 멈춘다. 상한이 없으면 금방 몇 분, 몇 시간이 된다." },
+    { pointer: 8, memory: ["32.7s"], caption: "이후로는 10초 간격으로 계속 보낸다. 시도 횟수 제한이나 데드라인이 언제 그만둘지를 정한다." },
+  ]}
+/>
+
+두 배씩 늘리는 이유는 상대가 망가진 정도를 모르기 때문이다. 0.1초 만에 돌아올 수도, 1분이 걸릴 수도 있다. 간격을 두 배씩 늘리면 짧은 장애에는 빨리 붙고, 긴 장애 동안에는 보내는 양이 빠르게 줄어든다. 이 생각은 오래됐다. 이더넷은 충돌이 나면 0부터 2ᵏ-1 사이에서 무작위로 고른 슬롯만큼 기다렸다 다시 보냈다(k는 충돌 횟수, 10에서 멈춘다). 처음부터 두 배씩 늘리면서 무작위를 섞었던 셈이다. 그 무작위가 빠지면 무슨 일이 생기는지가 이 글의 주제다.
+
+## 같은 순간 실패하면 같은 순간 돌아온다
+
+백오프 공식은 결정적이다. 같은 순간 실패한 클라이언트는 모두 정확히 100ms 뒤에, 다시 300ms 시점에, 700ms 시점에 돌아온다. 서버가 막 살아났을 때 그 서버를 다시 쓰러뜨리는 건 이 동기화된 파도다. 많은 수가 한꺼번에 깨어나 같은 자원으로 몰리는 이 현상을 thundering herd라고 부른다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="같은 순간 끊긴 클라이언트들이 같은 박자로 돌아온다"
+  zones={[
+    { id: "apps", label: "앱 서버 1000대", x: 8, y: 8, w: 384, h: 92, tone: "edge" },
+    { id: "data", label: "데이터 계층", x: 108, y: 160, w: 184, h: 82, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "×250", sub: "apps", x: 54, y: 62, icon: "server", w: 80 },
+    { id: "b", label: "×250", sub: "apps", x: 146, y: 62, icon: "server", w: 80 },
+    { id: "c", label: "×250", sub: "apps", x: 254, y: 62, icon: "server", w: 80 },
+    { id: "d", label: "×250", sub: "apps", x: 346, y: 62, icon: "server", w: 80 },
+    { id: "redis", label: "Redis", sub: "초당 2천 연결", x: 200, y: 206, icon: "db" },
+  ]}
+  links={[
+    { from: "a", to: "redis" },
+    { from: "b", to: "redis" },
+    { from: "c", to: "redis" },
+    { from: "d", to: "redis" },
+  ]}
+  steps={[
+    { path: ["redis"], packet: "restart", blocked: true, title: "Redis가 재시작된다", detail: "1000대의 연결이 같은 순간 끊긴다. 모두 같은 순간 첫 실패를 기록한다." },
+    { path: ["a", "redis"], packet: "+100ms", blocked: true, highlight: ["b", "c", "d"], title: "100ms 뒤 전부 돌아온다", detail: "네 묶음이 같은 박자로 연결을 시도한다. 막 뜬 Redis가 한 번에 받을 수 있는 양을 넘는다. 일부만 붙고 나머지는 또 실패한다." },
+    { path: ["b", "redis"], packet: "+300ms", blocked: true, highlight: ["a", "c", "d"], title: "300ms 시점에 또 한꺼번에", detail: "실패한 쪽은 다시 같은 공식대로 200ms를 기다렸다. 그래서 또 같은 순간이다. 그래프가 빗살처럼 솟는다." },
+    { path: ["c", "redis"], packet: "jitter", title: "기다림에 무작위를 섞으면", detail: "각자 0부터 공식값 사이에서 무작위로 기다린다. 돌아오는 시각이 흩어져 서버가 받을 수 있는 만큼씩 나눠 들어온다." },
+    { path: ["d", "redis"], packet: "jitter", title: "흩어진 채로 붙는다", detail: "서버 입장에서는 큰 파도 몇 번 대신 잔잔한 물결이 이어진다. 붙는 데 걸리는 시간도 오히려 짧아진다." },
+  ]}
+/>
+
+이 동기화는 생각보다 흔하다. 공유 자원이 재시작될 때, 네트워크가 잠깐 끊겼다 이어질 때, 배포로 서버가 연결을 한꺼번에 닫을 때 모두 "같은 순간의 첫 실패"를 만든다. 그 뒤로는 결정적인 백오프가 그 동기화를 계속 유지한다.
+
+## 무작위를 섞는 세 가지 방법
+
+기다림에 무작위를 섞는 것을 지터(jitter)라고 한다. AWS 아키텍처 블로그의 "Exponential Backoff And Jitter"(2015) 글이 정리한 세 가지가 사실상 표준처럼 쓰인다. `random(a, b)`는 a와 b 사이에서 고르게 뽑은 값이다.
+
+- full jitter: `random(0, min(cap, base × 2ⁿ))`. 공식값 전체 범위에서 뽑는다. 가장 넓게 흩어지지만, 운이 나쁘면 거의 0에 가깝게 기다린다.
+- equal jitter: 공식값의 절반은 반드시 기다리고 나머지 절반에서 무작위로 뽑는다. `t/2 + random(0, t/2)`. 최소 대기를 보장하는 대신 덜 흩어진다.
+- decorrelated jitter: 직전 대기 시간에서 다음 범위를 정한다. `min(cap, random(base, prev × 3))`. 시도 횟수 대신 직전 대기를 기억하고, 클라이언트마다 늘어나는 속도 자체가 달라진다.
+
+한 클라이언트가 세 방식에서 어떻게 기다리는지 같은 난수(0.5)를 넣어 따라가 보자.
+
+<AlgoTrace
+  caption="같은 난수 0.5를 넣었을 때 방식별 다음 대기 시간"
+  memoryLabel="다음 대기 (base 100ms)"
+  cells={["n=0", "n=1", "n=2", "n=3"]}
+  steps={[
+    { pointer: 0, memory: ["지터 없음 100", "full 50", "equal 75", "decorr 200"], caption: "첫 재시도. full은 0~100에서 50, equal은 50~100에서 75, decorrelated는 직전 값을 base(100)로 보고 100~300에서 200을 뽑았다." },
+    { pointer: 1, memory: ["지터 없음 200", "full 100", "equal 150", "decorr 350"], caption: "공식값이 200이 됐다. decorrelated는 직전 200에서 범위를 잡아 100~600 사이의 350이다." },
+    { pointer: 2, memory: ["지터 없음 400", "full 200", "equal 300", "decorr 575"], caption: "같은 난수를 넣어도 방식마다 늘어나는 모양이 다르다. 실제로는 시도마다 난수가 달라서 클라이언트마다 흩어진다." },
+    { pointer: 3, memory: ["지터 없음 800", "full 400", "equal 600", "decorr 912.5"], caption: "지터 없는 쪽만 모든 클라이언트가 같은 값을 갖는다. 나머지 셋은 클라이언트마다 다른 값이 나온다." },
+  ]}
+/>
+
+직접 짜 보자. 난수 `r`을 인자로 받게 해서 결과를 확인할 수 있게 했다.
+
+<CodePlayground
+  caption="방식별 다음 대기 시간"
+  functionName="nextDelay"
+  initialCode={`function nextDelay(kind, attempt, prev, base, cap, r) {
+  // kind: "none" | "full" | "equal" | "decorrelated"
+  // attempt: 몇 번째 재시도인지 (0부터), prev: 직전 대기 시간(decorrelated용)
+  // r: 0 이상 1 미만의 난수 (Math.random() 대신 받는다)
+  // none: min(cap, base * 2^attempt)
+  // full: r * (none 값), equal: (none 값)/2 + r * (none 값)/2
+  // decorrelated: min(cap, base + r * (prev * 3 - base))
+  return 0;
+}`}
+  solution={`function nextDelay(kind, attempt, prev, base, cap, r) {
+  const exp = Math.min(cap, base * 2 ** attempt);
+  if (kind === "none") return exp;
+  if (kind === "full") return r * exp;
+  if (kind === "equal") return exp / 2 + r * (exp / 2);
+  if (kind === "decorrelated") return Math.min(cap, base + r * (prev * 3 - base));
+  throw new Error("unknown kind");
+}`}
+  tests={[
+    { label: "지터 없음, 네 번째", args: ["none", 3, 0, 100, 10000, 0.5], expected: 800 },
+    { label: "full, 네 번째", args: ["full", 3, 0, 100, 10000, 0.5], expected: 400 },
+    { label: "equal, 네 번째", args: ["equal", 3, 0, 100, 10000, 0.5], expected: 600 },
+    { label: "decorrelated, 직전 400", args: ["decorrelated", 0, 400, 100, 10000, 0.5], expected: 650 },
+    { label: "full, cap에 걸린 뒤", args: ["full", 10, 0, 100, 10000, 0.25], expected: 2500 },
+    { label: "decorrelated도 cap을 넘지 않는다", args: ["decorrelated", 5, 8000, 100, 10000, 0.9], expected: 10000 },
+    { label: "equal의 최소 대기", args: ["equal", 0, 0, 100, 10000, 0], expected: 50 },
+  ]}
+/>
+
+마지막 테스트가 equal jitter의 성격을 보여 준다. 난수가 0이어도 공식값의 절반(50ms)은 기다린다. full jitter는 난수가 0이면 바로 다시 보낸다.
+
+## 클라이언트 천 개로 재 본다
+
+비교는 숫자로 해야 한다. 클라이언트 1000개가 같은 순간(t=0) 요청을 보내고, 서버는 10ms마다 20개(초당 2000개)까지만 받고 나머지는 503으로 거절하는 상황을 Node로 시뮬레이션했다. 실패한 클라이언트는 각 방식대로 기다렸다가 다시 보낸다. base 100ms, cap 10초, 난수 시드 세 개의 평균이다.
+
+```text
+strategy        calls   last success   peak/10ms after t=0
+fixed 100ms     25500       4900ms      980
+exponential     25500     432700ms      980
+full jitter      3377       1285ms      140
+equal jitter     3595       1388ms      210
+decorrelated     2609       1169ms       66
+```
+
+`calls`는 서버가 받은 요청 수, `last success`는 마지막 클라이언트가 성공한 시각, `peak`는 t=0 이후 10ms 칸 하나에 몰린 최대 요청 수다. 이론상 최선은 1000개를 칸마다 20개씩 나눠 받는 것이라 500ms, 요청 1000번이다.
+
+지터 없는 지수 백오프는 숫자가 처참하다. 980개가 항상 같은 칸에 함께 도착해서 그중 20개만 붙고, 나머지 960개는 또 함께 기다린다. 한 번에 20개씩 50번에 걸쳐 붙는데 기다림이 계속 두 배가 되다 10초에 묶이니, 마지막 클라이언트는 7분이 넘어서야 붙는다. 기다림을 늘린 게 몰림을 하나도 줄이지 못했고, 요청 수는 고정 100ms 간격과 똑같은 25500번이다. 기다림만 늘었다.
+
+지터를 섞으면 요청 수가 약 7분의 1에서 10분의 1로 줄고, 1.2~1.4초 안에 모두 붙는다. 몰림의 최댓값도 980에서 66~210으로 내려간다. 이 조건에서는 decorrelated가 요청 수와 완료 시간 모두 가장 좋았고, full이 그다음, equal이 가장 나빴다. equal은 최소 대기를 보장하느라 덜 흩어진다. 아래 그림은 처음 0.7초 동안 100ms 구간마다 서버에 도착한 요청 수를 지터 없음과 full jitter로 비교한다(시드 하나).
+
+```text
+exponential  arrivals per 100ms (0~1.2s): 1000 980 0 960 0 0 0 940 0 0 0 0
+full jitter  arrivals per 100ms (0~1.2s): 2188 500 316 137 116 60 27 15 10 8 3 0
+```
+
+<AlgoTrace
+  caption="100ms 구간마다 도착한 요청 수: 지터 없음 / full jitter"
+  memoryLabel="도착 수 (지터 없음 / full)"
+  cells={["0.0s", "0.1s", "0.2s", "0.3s", "0.4s", "0.5s", "0.7s"]}
+  steps={[
+    { pointer: 0, memory: ["1000 / 2188"], caption: "첫 구간. full jitter는 첫 재시도를 0~100ms에서 뽑으니 많은 클라이언트가 이 구간 안에서 한 번 더 보낸다. 지터 없는 쪽은 첫 1000개뿐이다." },
+    { pointer: 1, memory: ["1000 / 2188", "980 / 500"], caption: "0.1초. 지터 없는 쪽은 실패한 980개가 정확히 이 순간 함께 돌아온다. 서버는 그중 20개만 받는다." },
+    { pointer: 2, memory: ["1000 / 2188", "980 / 500", "0 / 316"], caption: "0.2초. 지터 없는 쪽은 서버가 놀고 있다. 다들 다음 박자를 기다리는 중이다. full은 계속 조금씩 들어온다." },
+    { pointer: 3, memory: ["1000 / 2188", "980 / 500", "0 / 316", "960 / 137"], caption: "0.3초. 지터 없는 쪽에 960개의 파도가 또 온다. full은 이미 대부분 붙어서 137개만 남았다." },
+    { pointer: 5, memory: ["…", "960 / 137", "0 / 116", "0 / 60"], caption: "0.5초. 서버가 받을 수 있는 양은 같은데, 지터 없는 쪽은 그 용량을 파도가 칠 때만 쓰고 나머지 시간엔 버린다." },
+    { pointer: 6, memory: ["…", "0 / 60", "940 / 15"], caption: "0.7초. 지터 없는 쪽에 940개가 또 몰린다. full은 15개뿐이고 곧 끝난다. 흩어 보내는 쪽이 서버 용량을 고르게 써서 먼저 끝난다." },
+  ]}
+/>
+
+이 시뮬레이션은 "같은 순간의 첫 실패"를 가장 극단적으로 만든 조건이다. 같은 코드를 실제 HTTP 서버(100ms마다 200개까지 받는 Node 서버)에 클라이언트 1000개로 두 번씩 돌려 보니 차이가 훨씬 작고 실행마다 흔들렸다. 503 수가 지터 없음 720·510, full 421·440, decorrelated 377·214였다. 한 프로세스 안에서 연결을 맺고 요청을 보내는 시간 자체가 요청을 조금씩 흩어 놓아서, 완벽하게 같은 순간이 만들어지지 않았다. 실제 서비스에서 동기화를 강하게 만드는 건 서로 다른 서버들이 같은 사건(재시작, 망 단절)을 같은 순간 겪는 경우다. 그럴 때 지터가 없으면 위 시뮬레이션에 가까운 빗살 그래프가 나온다.
+
+어느 방식을 고를지는 크게 고민할 일이 아니다. full이나 decorrelated 중 하나를 쓰면 되고, 방식보다 지터를 빼먹지 않는 쪽이 훨씬 큰 차이를 만든다. 최소 대기가 꼭 필요하다면(예를 들어 상대가 최소 몇백 ms는 쉬어야 회복된다는 걸 안다면) equal을 쓴다.
+
+## 서버가 기다릴 시간을 알려 줄 때: Retry-After
+
+클라이언트가 공식으로 짐작하는 것보다 서버가 직접 알려 주는 쪽이 정확하다. HTTP의 `Retry-After` 헤더가 그 역할을 한다(RFC 9110). 주로 503(잠시 서비스 불가)과 429(너무 많이 보냄)에 붙고, 301 같은 리다이렉트에 붙어 다음 요청까지 기다릴 시간을 알려 주기도 한다. 값은 두 가지 형식이다.
+
+<UrlAnatomy
+  caption="Retry-After의 두 가지 형식"
+  base="Retry-After:"
+  separator=" "
+  joiner="  또는  "
+  params={[
+    { key: "delay-seconds", display: "120", title: "몇 초 뒤", description: "음이 아닌 정수 초다. 소수점은 없다. 응답을 받은 시각부터 센다. 시계가 어긋나도 영향이 없어서 이쪽이 다루기 쉽다." },
+    { key: "HTTP-date", display: "Wed, 21 Oct 2026 07:28:00 GMT", title: "이 시각 이후", description: "절대 시각이다. 받는 쪽 시계가 서버보다 늦으면 너무 일찍, 빠르면 너무 늦게 돌아온다. 응답의 Date 헤더와의 차이로 계산하면 시계 차이를 줄일 수 있다." },
+  ]}
+/>
+
+curl은 `--retry`를 주면 일시적인 실패(타임아웃, 408, 429, 500, 502, 503, 504)에서 다시 보낸다. 헤더가 없을 때는 1초부터 두 배씩 기다리고, `Retry-After`가 있으면 그 값을 따른다. 처음 세 번은 503만 주는 경로(`/plain`)와 `Retry-After: 3`을 붙인 503을 두 번 주는 경로(`/ra`)를 만들어 확인했다.
+
+```bash
+# 헤더 없는 503: curl 자체 백오프 (curl 8.5.0)
+curl --no-progress-meter --retry 3 http://127.0.0.1:18791/plain
+# Retry-After: 3이 붙은 503
+curl --no-progress-meter --retry 3 http://127.0.0.1:18791/ra
+```
+
+```text
+Warning: Problem : HTTP error. Will retry in 1 seconds. 3 retries left.
+Warning: Problem : HTTP error. Will retry in 2 seconds. 2 retries left.
+Warning: Problem : HTTP error. Will retry in 4 seconds. 1 retries left.
+ok
+Warning: Problem : HTTP error. Will retry in 3 seconds. 3 retries left.
+Warning: Problem : HTTP error. Will retry in 3 seconds. 2 retries left.
+ok
+```
+
+서버 쪽 로그로 보면 실제 간격이 `/plain`은 1, 2, 4초, `/ra`는 3, 3초다.
+
+```text
++0.3s /plain attempt 1
++1.3s /plain attempt 2
++3.3s /plain attempt 3
++7.3s /plain attempt 4
++7.3s /ra attempt 1
++10.3s /ra attempt 2
++13.3s /ra attempt 3
+```
+
+curl의 기본 백오프에는 지터가 없다는 것도 이 로그에서 보인다. 스크립트 수백 개가 같은 cron 시각에 curl을 돌린다면 그대로 동기화된다.
+
+<SequenceDiagram
+  caption="Retry-After를 따르되 그대로 따르지는 않는다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    { from: "client", to: "api", label: "GET /report", title: "요청", detail: "서버가 과부하 상태다." },
+    { from: "api", to: "client", label: "503 Retry-After: 3", title: "기다릴 시간을 알려 준다", detail: "서버는 3초 뒤면 받을 수 있다고 판단했다. 같은 순간 거절당한 다른 클라이언트들도 모두 3이라는 값을 받았다.", payload: "HTTP/1.1 503 Service Unavailable\nRetry-After: 3" },
+    { from: "client", to: "client", label: "3s + random(0, 0.5s)", title: "최소 3초, 거기에 조금 더", detail: "Retry-After는 이보다 일찍 오지 말라는 뜻이다. 그대로 3초를 지키면 모두 같은 순간 돌아오니 작은 지터를 더한다. 값이 데드라인을 넘으면 기다리지 않고 바로 실패한다." },
+    { from: "client", to: "api", label: "GET /report", title: "다시 보낸다", detail: "흩어진 채로 돌아와서 서버가 나눠 받는다." },
+    { from: "api", to: "client", label: "200", title: "성공", detail: "다음 실패에서는 백오프를 처음부터 다시 시작한다." },
+  ]}
+/>
+
+`Retry-After`를 따를 때 지킬 것이 몇 가지 있다. 이 값보다 일찍 보내지 않는다. 서버가 같은 값을 여러 클라이언트에 줬을 수 있으니 작은 지터를 위에 더한다. 클라이언트도 상한을 둔다. 사용자가 보고 있는 화면 요청에 `Retry-After: 3600`이 왔다면 한 시간을 기다리지 말고 바로 실패를 보여 준다. 서버 쪽에서는 이 값을 고정하지 말고 상황에 맞게 정하는 게 좋다. 남은 한도가 풀리는 시각(요청 수 제한), 점검 종료 예정 시각처럼 근거 있는 값을 주고, 근거가 없으면 서버에서부터 무작위로 흩어서 준다. 429 응답에 남은 한도 정보를 담는 헤더는 [요청 수 제한을 API에 붙이기](/posts/rate-limiting-in-practice) 글에서 다룬다.
+
+## 재시도 말고도 같은 시각에 몰리는 것들
+
+동기화는 실패 뒤의 재시도에서만 생기지 않는다. 같은 시각을 기준으로 움직이는 것은 모두 같은 문제를 안고 있고, 해법도 같다. 무작위로 흩는다.
+
+<ConceptDiagram
+  caption="같은 시각에 몰리는 것들과 흩는 방법"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "sync", label: "같은 순간", sub: "시계·사건 하나에 맞춰짐", x: 200, y: 125, w: 150 },
+    { id: "retry", label: "재연결·재시도", sub: "백오프에 지터", x: 90, y: 34, w: 150 },
+    { id: "cron", label: "정각 배치·cron", sub: "실행 시각에 지터", x: 310, y: 34, w: 150 },
+    { id: "ttl", label: "캐시 만료", sub: "TTL에 지터", x: 90, y: 216, w: 150 },
+    { id: "restart", label: "컨테이너 재시작", sub: "CrashLoopBackOff", x: 310, y: 216, w: 150 },
+  ]}
+  edges={[
+    { from: "retry", to: "sync" },
+    { from: "cron", to: "sync" },
+    { from: "ttl", to: "sync" },
+    { from: "restart", to: "sync" },
+  ]}
+/>
+
+매시 정각에 도는 배치가 서버 수백 대에 똑같이 깔려 있으면 정각마다 API나 DB에 파도가 친다. systemd 타이머라면 `RandomizedDelaySec=`로 실행 시각을 서버마다 흩을 수 있고, cron이라면 작업 앞에 `sleep $((RANDOM % 300))` 같은 무작위 대기를 둔다. 캐시도 같다. 같은 시각에 넣은 키들이 같은 TTL을 가지면 같은 시각에 만료되어 DB로 몰린다. TTL에 몇 % 무작위를 더하는 방법은 [캐시 전략](/posts/caching-strategies) 글에 있다.
+
+쿠버네티스는 이미 백오프를 쓴다. 컨테이너가 계속 죽으면 kubelet은 재시작 간격을 10초, 20초, 40초로 두 배씩 늘리고 5분에서 멈춘다(CrashLoopBackOff). 컨테이너가 10분 동안 문제없이 돌면 간격을 처음으로 되돌린다. 이건 클러스터 기본 동작이라, 앱이 뜰 때마다 DB 연결을 수백 개 여는 구조라면 재시작 간격만으로는 막지 못한다. 앱의 연결 재시도에도 지터를 넣어야 한다.
+
+## 지터와 Retry-After를 함께 다루는 재시도 함수
+
+지금까지의 규칙을 한 함수에 모아 보면 이렇다. full jitter로 기다리고, 서버가 `Retry-After`를 주면 그 값에 작은 지터를 더해 따르고, 재시도 전체를 데드라인 하나로 묶는다. 기다리는 동안에도 데드라인이 끝나면 바로 빠져나온다.
+
+```js
+const sleep = (ms, signal) => new Promise((ok, fail) => {
+  const t = setTimeout(ok, ms);
+  signal.addEventListener("abort", () => { clearTimeout(t); fail(signal.reason); }, { once: true });
+});
+
+async function fetchWithBackoff(url, { base = 100, cap = 2000, maxAttempts = 8, deadlineMs = 5000 } = {}) {
+  const signal = AbortSignal.timeout(deadlineMs);           // 재시도 전체를 묶는 데드라인
+  const t0 = Date.now();
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let wait;
+    try {
+      const res = await fetch(url, { signal });
+      if (res.status !== 429 && res.status !== 503) return res;
+      const ra = Number(res.headers.get("retry-after"));      // 초 단위만 처리한 단순한 예
+      wait = Number.isFinite(ra) && ra > 0 ? ra * 1000 + Math.random() * 200 : null;
+    } catch (e) {
+      if (signal.aborted) throw e;                            // 데드라인이 끝났으면 그만둔다
+    }
+    wait ??= Math.random() * Math.min(cap, base * 2 ** attempt); // full jitter
+    console.log(`+${Date.now() - t0}ms attempt=${attempt + 1} failed, backoff_ms=${Math.round(wait)}`);
+    await sleep(wait, signal);
+  }
+  throw new Error("attempts exhausted");
+}
+```
+
+처음 1.5초 동안은 꺼져 있다가(연결 거절) 뜨고, 뜬 뒤 첫 요청에는 `503 Retry-After: 1`을 주는 서버에 붙여 봤다.
+
+```text
++9ms attempt=1 failed, backoff_ms=82
++95ms attempt=2 failed, backoff_ms=195
++291ms attempt=3 failed, backoff_ms=112
++405ms attempt=4 failed, backoff_ms=111
++516ms attempt=5 failed, backoff_ms=278
++796ms attempt=6 failed, backoff_ms=1126
++1936ms attempt=7 failed, backoff_ms=1112
+done: 200 ok
+```
+
+네 번째 시도의 공식값은 800ms인데 실제로는 111ms만 기다렸다. full jitter는 범위 전체에서 뽑으니 짧게 기다리는 경우가 자주 나온다. 클라이언트 하나만 보면 손해 같지만, 수천 개가 함께 있을 때는 이렇게 고르게 퍼지는 게 서버를 살린다. 일곱 번째 시도는 서버가 뜬 뒤라 503과 `Retry-After: 1`을 받았고, 공식 대신 1초에 지터 112ms를 더해 기다린 뒤 성공했다. 운영 코드라면 여기에 몇 가지를 더한다. 재시도할 실패를 고르는 조건([재시도](/posts/retries) 글의 `shouldRetry`), HTTP 날짜 형식의 `Retry-After`, 그리고 `Retry-After`가 데드라인보다 길면 기다리지 않고 바로 실패하는 처리다.
+
+## 값 고르기와 흔한 실수
+
+base는 상대가 회복하는 데 걸리는 짧은 시간에 맞춘다. 같은 데이터센터 안의 일시적 실패라면 수십~100ms, 외부 API라면 몇백 ms~1초가 흔하다. cap은 "이보다 오래 기다릴 바엔 포기한다"의 기준이라 데드라인과 함께 정한다. 사용자가 보고 있는 요청이라면 재시도 몇 번의 대기 합이 요청 데드라인 안에 들어가야 하고(계산 방법은 [타임아웃](/posts/timeouts) 글에 있다), 백그라운드 작업이라면 cap을 분 단위로 두고 대신 시도 횟수 제한이나 [재시도 예산](/posts/retries)으로 묶는다.
+
+실수는 대개 이런 모양이다.
+
+지터를 넣었는데 모두 같은 난수를 쓴다. Go는 1.20 이전까지 `math/rand`의 전역 생성기가 고정 시드로 시작했다. `rand.Seed`를 부르지 않은 프로그램은 모든 인스턴스에서 같은 순서의 "무작위" 값을 뽑았고, 같은 순간 실패하면 같은 지터로 돌아왔다. Go 1.20부터는 자동으로 무작위 시드를 쓴다. 다른 언어에서도 시드를 시각(초 단위)으로 정하면 같은 초에 뜬 컨테이너들은 같은 수열을 가진다.
+
+기다리는 동안 자원을 쥐고 있다. 스레드를 잡은 채 `sleep`하거나, DB 트랜잭션이나 잠금을 연 채 기다리면, 백오프가 길어질수록 그 자원이 묶인다. 기다리는 동안은 연결과 잠금을 놓는다.
+
+성공해도 백오프를 되돌리지 않는다. 재연결 루프에서 대기 시간을 전역 변수에 두고 성공 뒤에 초기화하지 않으면, 한 번 길어진 대기 시간이 다음 장애 때 그대로 이어진다. 반대로 연결은 됐지만 바로 다시 끊기는 상황에서 연결 성공만으로 초기화하면 지터 없이 빠르게 다시 몰린다. 쿠버네티스처럼 "일정 시간 정상으로 돌았을 때"를 초기화 기준으로 잡는 편이 안전하다.
+
+지터 없는 기본값을 그대로 쓴다. 위에서 본 curl `--retry`가 그렇고, TanStack Query의 기본 `retryDelay`도 `Math.min(1000 * 2 ** n, 30000)`이라 지터가 없다. 클라이언트가 수천 개 붙는 서비스라면 라이브러리 기본값을 확인하고 지터가 있는 함수로 바꾼다.
+
+## 빗살 모양 그래프를 만났을 때
+
+장애 뒤 그래프에서 이 문제를 알아보는 방법은 간단하다. 요청 수나 연결 시도 수를 1초보다 작은 단위(100ms~1초)로 보면, 지터가 없는 재시도는 장애 시점에서 1, 2, 4, 8초 간격으로 솟는 봉우리를 만든다. 봉우리 사이가 두 배씩 벌어진다면 거의 확실하다. 분 단위 그래프에서는 평평하게 보여서 놓치기 쉽다.
+
+확인은 로그에서 한다. 재시도 로그에 몇 번째 시도인지와 기다린 시간을 남겨 두면(`attempt=3 backoff_ms=400`), 같은 `backoff_ms` 값이 수백 줄 반복되는지 보면 된다. 지터가 있다면 값이 흩어져 있어야 한다. 고칠 때는 재시도 코드의 백오프 함수에 지터를 넣고, 재연결이 몰리는 연결 풀·메시지 소비자·웹소켓 클라이언트의 재연결 로직도 같이 본다. 급하면 서버 쪽에서 `Retry-After`를 무작위로 흩어서 주거나 앞단에서 연결 수를 제한해 파도를 깎는다.
+
+지수 백오프는 보내는 양을 줄이고, 지터는 보내는 시각을 흩는다. 둘 중 하나만으로는 막지 못한다. 같은 순간에 실패할 수 있는 것은 언젠가 같은 순간에 실패한다고 보고, 기다림에는 항상 무작위를 섞는다.
+
+## 면접에서 나올 만한 질문
+
+### 지수 백오프는 왜 쓰나
+
+상대가 얼마나 망가졌는지 모를 때 짧은 장애에는 빨리 붙고, 긴 장애 동안에는 보내는 양을 빠르게 줄이기 위해서다. 대기를 base × 2ⁿ으로 늘리고 cap에서 멈춘다. 고정 간격으로 계속 보내면 상대가 망가진 동안 일정한 부하를 계속 주고, 즉시 재시도하면 과부하인 상대에게 부하를 몇 배로 더한다.
+
+### 지수 백오프만으로는 왜 부족한가
+
+공식이 결정적이라 같은 순간 실패한 클라이언트들이 같은 순간 돌아오기 때문이다. 공유 자원이 재시작되거나 망이 잠깐 끊기면 수많은 클라이언트가 같은 순간 실패하고, 백오프가 그 동기화를 유지해서 회복하는 서버에 파도처럼 몰린다. 시뮬레이션에서 지터 없는 지수 백오프는 고정 간격과 요청 수가 같았고 완료는 훨씬 늦었다.
+
+### full, equal, decorrelated jitter는 어떻게 다른가
+
+full은 0부터 공식값까지에서 무작위로 뽑아 가장 넓게 흩는다. equal은 공식값의 절반은 반드시 기다리고 나머지 절반에서 뽑아서 최소 대기를 보장하는 대신 덜 흩어진다. decorrelated는 직전 대기의 세 배까지를 범위로 잡아 클라이언트마다 늘어나는 속도 자체가 달라진다. 1000개 클라이언트 시뮬레이션에서는 decorrelated와 full이 요청 수와 완료 시간 모두 좋았고 equal이 가장 나빴다.
+
+### thundering herd는 재시도 말고 어디서 생기나
+
+같은 시각이나 같은 사건에 맞춰 움직이는 모든 곳에서 생긴다. 정각에 도는 cron 배치, 같은 TTL로 한꺼번에 만료되는 캐시 키, 배포 뒤 한꺼번에 재연결하는 웹소켓 클라이언트, 동시에 재시작되는 컨테이너가 대표적이다. 해법은 같아서 실행 시각, TTL, 재연결 대기에 무작위를 섞는다.
+
+### Retry-After를 받으면 어떻게 처리하나
+
+그 시각보다 일찍 보내지 않는다. 값은 초 단위 정수이거나 HTTP 날짜인데, 날짜는 시계 차이 영향을 받으니 응답의 Date 헤더와의 차이로 계산하면 낫다. 같은 값을 받은 클라이언트들이 함께 돌아오지 않게 작은 지터를 더하고, 값이 요청의 데드라인을 넘으면 기다리지 않고 바로 실패한다.
+
+### 지터를 넣었는데도 몰림이 그대로다. 무엇을 의심하나
+
+인스턴스들이 같은 난수 수열을 쓰고 있는지 본다. Go 1.20 이전의 `math/rand`처럼 고정 시드로 시작하거나, 시드를 초 단위 시각으로 정하면 같은 순간 뜬 인스턴스들이 같은 지터를 뽑는다. 로그에 `backoff_ms`를 남겨 같은 값이 반복되는지 확인하고, 앱 코드 말고 다른 계층(라이브러리 기본값, 프록시, 재연결 루프)에 지터 없는 재시도가 있는지도 본다.
+
+### 백오프의 base와 cap은 어떻게 정하나
+
+base는 상대가 일시적 실패에서 회복하는 짧은 시간에 맞춰 같은 망 안이면 수십~100ms, 외부 API면 몇백 ms로 잡는다. cap은 그보다 오래 기다릴 바엔 포기하는 기준이라 데드라인과 함께 정한다. 사용자 요청이라면 재시도 대기 합이 요청 데드라인 안에 들어가야 하고, 백그라운드 작업이라면 cap을 길게 두는 대신 시도 횟수나 재시도 예산으로 전체 양을 묶는다.

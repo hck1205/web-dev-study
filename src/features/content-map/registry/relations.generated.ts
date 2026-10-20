@@ -2,6 +2,83 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "exponential-backoff-jitter": {
+    "links": [
+      "resilience-patterns",
+      "retries",
+      "timeouts",
+      "rate-limiting-in-practice",
+      "caching-strategies"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "client-data-cache",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "retries": {
+    "links": [
+      "resilience-patterns",
+      "timeouts",
+      "exponential-backoff-jitter",
+      "http-methods",
+      "idempotency-key"
+    ],
+    "mentions": []
+  },
+  "timeouts": {
+    "links": [
+      "resilience-patterns",
+      "retries",
+      "exponential-backoff-jitter",
+      "nginx-reverse-proxy",
+      "sql-batch-timeout-pool"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "packet-capture-tcpdump",
+      "what-happens-google-com",
+      "postgres-getting-started",
+      "dns"
+    ]
+  },
+  "connection-pool": {
+    "links": [
+      "sql-batch-timeout-pool",
+      "postgres-operations",
+      "circuit-breaker",
+      "distributed-lock",
+      "postgres-connections-pg-hba"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "postgres-roles-security",
+      "postgres-mvcc-vacuum",
+      "db-architecture-by-scale",
+      "https-tls",
+      "latency-bandwidth-throughput",
+      "db-replication-sharding",
+      "postgres-getting-started",
+      "vpc-basics"
+    ]
+  },
+  "circuit-breaker": {
+    "links": [
+      "resilience-patterns",
+      "load-balancer-basics",
+      "idempotency-key",
+      "connection-pool",
+      "rate-limiting-in-practice"
+    ],
+    "mentions": [
+      "retries",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "dns"
+    ]
+  },
   "traffic-shaping-qos": {
     "links": [
       "latency-bandwidth-throughput",
@@ -20,6 +97,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "traffic-shaping-qos",
       "cdn-edge-anycast",
       "http-versions",
+      "connection-pool",
       "load-balancing-algorithms"
     ],
     "mentions": [
@@ -153,6 +231,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "db-locking-deadlock",
       "optimistic-locking",
+      "connection-pool",
       "distributed-lock"
     ],
     "mentions": [
@@ -361,6 +440,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-routing-icmp",
       "security-groups-nacl",
       "iptables-nat",
+      "connection-pool",
       "vpc-peering-transit-privatelink"
     ],
     "mentions": [
@@ -886,6 +966,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump"
     ],
     "mentions": [
+      "timeouts",
       "docker-container-basics",
       "realtime-communication",
       "http-versions",
@@ -925,7 +1006,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-tuning",
       "sql-query-rewrite",
       "db-index",
-      "sql-insert-update-delete"
+      "sql-insert-update-delete",
+      "connection-pool"
     ],
     "mentions": [
       "pessimistic-locking",
@@ -1026,6 +1108,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "what-happens-google-com",
+      "timeouts",
       "vpc-subnets-route-tables",
       "browser-fetch",
       "iptables-basics",
@@ -1859,6 +1942,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway"
     ],
     "mentions": [
+      "retries",
       "tcp-connection-lifecycle",
       "browser-fetch",
       "load-balancer-basics",
@@ -1959,6 +2043,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice"
     ],
     "mentions": [
+      "exponential-backoff-jitter",
       "redis-cluster",
       "db-type-columnar-olap",
       "db-replication-sharding",
@@ -2457,7 +2542,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "resilience-patterns": {
     "links": [
+      "timeouts",
+      "retries",
+      "exponential-backoff-jitter",
       "idempotency-key",
+      "circuit-breaker",
       "gateway"
     ],
     "mentions": [

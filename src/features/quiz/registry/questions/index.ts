@@ -6,8 +6,10 @@ import { BIG_O_NOTATION } from "./big-o-notation";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
+import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CODE_SPLITTING } from "./code-splitting";
+import { CONNECTION_POOL } from "./connection-pool";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
@@ -42,6 +44,7 @@ import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { EVENT_LOOP } from "./event-loop";
+import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
@@ -144,6 +147,7 @@ import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
+import { RETRIES } from "./retries";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SQL_BASICS } from "./sql-basics";
@@ -168,6 +172,7 @@ import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
+import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
 import { UDP_AND_QUIC } from "./udp-and-quic";
@@ -190,8 +195,10 @@ export const QUESTION_SETS = [
   BROWSER_FETCH,
   CACHING_STRATEGIES,
   CDN_EDGE_ANYCAST,
+  CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
   CODE_SPLITTING,
+  CONNECTION_POOL,
   CONSISTENT_HASHING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
@@ -226,6 +233,7 @@ export const QUESTION_SETS = [
   DOCKERFILE_IMAGE_LAYERS,
   ELASTICSEARCH_INVERTED_INDEX,
   EVENT_LOOP,
+  EXPONENTIAL_BACKOFF_JITTER,
   FRONTEND_BROWSER_CACHE,
   GATEWAY,
   GIT_BRANCH_MERGE,
@@ -328,6 +336,7 @@ export const QUESTION_SETS = [
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
+  RETRIES,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,
   SQL_BASICS,
@@ -352,6 +361,7 @@ export const QUESTION_SETS = [
   STREAMING_SSR_SUSPENSE,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
+  TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
   UDP_AND_QUIC,
