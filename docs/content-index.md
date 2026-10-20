@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 248편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 250편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -43,6 +43,17 @@
 - 키워드 백링크 →: redis-basics
 - 이 글로 오는 글 ←: bloom-filter, hydration, hyperloglog, lossy-counting, rendering-ssg-isr
 
+#### `crdt` — CRDT: 어떤 순서로 합쳐도 같아지는 자료형
+
+- 요약: 합치기가 교환·결합·멱등이면 순서와 중복을 무시할 수 있다. G-Counter, PN-Counter, LWW-Register, OR-Set을 직접 만들어 확인하고, Yjs로 오프라인 두 기기를 합쳐 보며 시퀀스 CRDT의 id와 묘비 비용, OT와의 선택 기준을 다룬다.
+- 태그: System Design, Distributed Systems, Algorithm, Data Structure, Concurrency
+- 키워드: CRDT, G-Counter, OR-Set, Yjs
+- 길이: 416줄
+- 소제목: 마지막 저장이 이기면 한쪽이 사라진다 / 합치는 순서와 횟수를 무시해도 되는 조건 / 카운터: 기기마다 칸을 따로 쓴다 / 지웠다가 다시 넣는 원소: OR-Set / 글자마다 이름을 붙이는 시퀀스 CRDT / Yjs로 오프라인 두 기기를 합쳐 본다 / 지운 글자는 메모리에서 사라지지 않는다 / 카운터 합치기 직접 짜 보기 / 동기화가 이상할 때 보는 곳 / OT와 CRDT 사이에서 고르기 / 면접에서 나올 만한 질문
+- 직접 링크 →: operational-transform, eventual-consistency, clock-skew, db-type-wide-column, network-partitions
+- 키워드 백링크 →: message-delivery-semantics, js-memory-leak, db-consistency-cap, http-methods
+- 이 글로 오는 글 ←: clock-skew, db-consistency-cap, eventual-consistency, operational-transform, pattern-command, realtime-communication
+
 #### `hyperloglog` — HyperLogLog: 12KB로 서로 다른 개수 세기
 
 - 요약: 하루 방문자 100만 명을 Set 대신 키 하나로 세는 데서 출발해 연속 0의 길이, 레지스터 최댓값, 조화 평균, 1.04/√m 오차를 실측으로 확인한다. Redis PFADD·PFCOUNT·PFMERGE, 작은 값과 큰 값 보정, 교집합의 한계, 다른 방법과 고르는 기준까지 다룬다.
@@ -64,6 +75,16 @@
 - 직접 링크 →: count-min-sketch, hyperloglog
 - 키워드 백링크 →: bloom-filter, postgres-architecture, redis-basics, db-modeling-normalization, dns
 - 이 글로 오는 글 ←: bloom-filter, count-min-sketch, hyperloglog, rendering-strategies
+
+#### `operational-transform` — Operational Transformation: 동시 편집을 위치 변환으로 맞추기
+
+- 요약: cats를 두 사람이 동시에 고치면 왜 갈라지는지에서 출발해 삽입·삭제 변환 함수, TP1과 TP2, 서버가 리비전을 매기는 Jupiter 방식을 ShareDB로 직접 돌려 본다. 메시지 순서가 섞일 때의 실패, 의도 보존의 경계 사례, 실무에서 갈라짐을 추적하는 법까지 다룬다.
+- 태그: System Design, Distributed Systems, Algorithm, Concurrency, WebSocket
+- 키워드: Operational Transformation, TP2, ShareDB
+- 길이: 420줄
+- 소제목: 위치로 말하는 편집은 동시에 오면 어긋난다 / 상대 연산을 내 문서에 맞게 고쳐 쓴다 / 네 가지 짝마다 규칙이 다르다 / 세 명이 되면 변환 순서가 결과를 바꾼다 / 서버가 순서를 정하면 TP1만 있으면 된다 / 메시지가 늦게, 뒤바뀌어 오면 / 수렴했다고 사용자가 원한 결과는 아니다 / 변환 함수를 직접 짜 보기 / 공동 편집이 이상할 때 보는 곳 / 언제 OT를 고르나 / 면접에서 나올 만한 질문
+- 직접 링크 →: crdt, realtime-communication, eventual-consistency
+- 이 글로 오는 글 ←: crdt, pattern-command, realtime-communication
 
 ### Programming › Backend (`programming/backend`)
 
@@ -202,7 +223,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, kafka-basics, message-queue-basics, rabbitmq-basics, saga-pattern
+- 이 글로 오는 글 ←: crdt, db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, kafka-basics, message-queue-basics, rabbitmq-basics, saga-pattern
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -493,8 +514,8 @@
 - 길이: 310줄
 - 소제목: 끊긴 회선 앞에서 고르는 두 가지 / CAP이 말하지 않는 것 / 회선이 멀쩡해도 고르는 것 / 일관성은 켜고 끄는 게 아니라 사다리다 / 쿼럼으로 일관성을 고르는 DB / AP를 고르면 충돌을 누가 푸나 / DB 종류마다 서 있는 자리 / 데이터마다 얼마나 틀려도 되는지 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-transaction-isolation, db-type-newsql, db-replication-sharding, eventual-consistency, db-type-wide-column, redis-replication-sentinel
-- 키워드 백링크 →: db-type-key-value, network-partitions, mongodb-document-model, leader-election, redis-basics
-- 이 글로 오는 글 ←: clock-skew, db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview, eventual-consistency, network-partitions
+- 키워드 백링크 →: db-type-key-value, network-partitions, mongodb-document-model, leader-election, redis-basics, crdt
+- 이 글로 오는 글 ←: clock-skew, crdt, db-replication-sharding, db-type-embedded, db-type-key-value, db-type-newsql, db-type-wide-column, db-types-overview, eventual-consistency, network-partitions
 
 #### `db-type-columnar-olap` — 컬럼형 분석 DB: OLTP와 OLAP을 나누는 이유
 
@@ -582,7 +603,7 @@
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: db-sharding, db-type-relational, bloom-filter, db-index-pitfalls, db-partitioning, dns
-- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, k8s-service-types, kafka-basics, network-partitions
+- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, k8s-service-types, kafka-basics, network-partitions
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -1128,7 +1149,7 @@
 - 길이: 378줄
 - 소제목: 요청을 객체로 만들면 생기는 자리 / 버튼, 단축키, 팔레트가 같은 명령을 부른다 / 되돌리기 스택과 다시 실행하기 스택 / 되돌리기가 어려운 명령 / 명령을 줄 세웠다가 나중에 실행한다 / Redux 액션은 커맨드인가 / 클래스 대신 클로저 한 쌍 / 직접 만드는 되돌리기 / 면접에서 나올 만한 질문
 - 직접 링크 →: pattern-composite, pattern-memento, saga-pattern, idempotency-key, dead-letter-queue, message-queue-basics, pattern-chain-of-responsibility, pattern-observer, design-patterns-overview, pattern-strategy
-- 키워드 백링크 →: redis-basics, microservices
+- 키워드 백링크 →: operational-transform, redis-basics, microservices, crdt
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-chain-of-responsibility, pattern-memento, pattern-strategy
 
 #### `pattern-interpreter` — 인터프리터 패턴: 관리자가 쓴 규칙 문자열을 직접 해석하기
@@ -1429,7 +1450,7 @@
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: client-data-cache, redis-memory-eviction, event-loop, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: client-data-cache, microservices, pattern-flyweight, pattern-observer, rendering-ssr
+- 이 글로 오는 글 ←: client-data-cache, crdt, microservices, pattern-flyweight, pattern-observer, rendering-ssr
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -1711,9 +1732,9 @@
 - 키워드: WebSocket, Server-Sent Events, 롱 폴링, EventSource
 - 길이: 594줄
 - 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 로컬에선 되는데 서버에 올리면 멈출 때 / 무엇을 고를까 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
-- 직접 링크 →: http-versions, cors, resilience-patterns, nginx-reverse-proxy
+- 직접 링크 →: http-versions, cors, resilience-patterns, nginx-reverse-proxy, operational-transform, crdt
 - 키워드 백링크 →: json-crud-http, proxy-reverse-proxy, base64, kafka-basics, redis-basics, http-status-codes
-- 이 글로 오는 글 ←: cdn-edge-anycast, frontend-browser-cache, load-balancer-basics, load-balancing-algorithms, loading-patterns, message-queue-basics, nginx-basics, nginx-reverse-proxy, osi-in-practice, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: cdn-edge-anycast, frontend-browser-cache, load-balancer-basics, load-balancing-algorithms, loading-patterns, message-queue-basics, nginx-basics, nginx-reverse-proxy, operational-transform, osi-in-practice, vpc-subnets-route-tables
 
 #### `what-happens-google-com` — 주소창에 google.com을 치면 일어나는 일
 
@@ -1805,7 +1826,7 @@
 - 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 프록시는 멱등성을 보고 재시도를 고른다 / 다시 메일 링크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes, nginx-reverse-proxy
 - 키워드 백링크 →: json-crud-http, elasticsearch-inverted-index, gateway, client-data-cache, what-happens-google-com
-- 이 글로 오는 글 ←: batch-processing, browser-fetch, dead-letter-queue, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, idempotency-key, json-crud-http, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, pattern-builder, pattern-decorator, resilience-patterns, rest-api-design, retries, service-mesh
+- 이 글로 오는 글 ←: batch-processing, browser-fetch, crdt, dead-letter-queue, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, idempotency-key, json-crud-http, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, pattern-builder, pattern-decorator, resilience-patterns, rest-api-design, retries, service-mesh
 
 #### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
 
@@ -2607,9 +2628,9 @@
 - 키워드: 시계 어긋남, 단조 시계, 램포트 시계, 벡터 시계, 윤초
 - 길이: 393줄
 - 소제목: 서버마다 시계가 다르게 가는 이유 / chrony가 시계를 맞추는 두 가지 방법 / 시간을 잴 때는 단조 시계로 / 토큰이 일찍 죽고 늦게 산다 / 윤초와 번지기 / 시계 없이 순서를 정한다 / 시계가 의심될 때 보는 순서 / 시계는 순서를 증명하지 못한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-consistency-cap, distributed-lock, eventual-consistency, network-partitions, event-driven-architecture, db-type-newsql
+- 직접 링크 →: db-consistency-cap, distributed-lock, eventual-consistency, network-partitions, event-driven-architecture, crdt, db-type-newsql
 - 키워드 백링크 →: ipv6-basics, security-groups-nacl, redis-basics, udp-and-quic, dns, token-login
-- 이 글로 오는 글 ←: eventual-consistency
+- 이 글로 오는 글 ←: crdt, eventual-consistency
 
 #### `consistent-hashing` — 일관된 해싱: 가상 노드, 점프 해시, 랑데부
 
@@ -2673,9 +2694,9 @@
 - 키워드: 세션 보장, writes-follow-reads, 읽기 복구, 힌트 핸드오프, 안티 엔트로피
 - 길이: 485줄
 - 소제목: 언젠가는 얼마나 걸리나 / 복제본 하나를 일부러 3초 늦춰 보기 / 사용자 한 명이 기대하는 네 가지 / 세션에 위치를 들고 다니게 한다 / 여러 대가 쓰기를 받는 저장소에서는 / 결국 같아지게 만드는 장치 / 화면이 먼저 덜 헷갈리게 / 가끔 옛 값이 보인다는 문의가 오면 / 결국이 오기 전까지를 설계한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: db-consistency-cap, db-replication-sharding, network-partitions, clock-skew, caching-strategies
+- 직접 링크 →: db-consistency-cap, db-replication-sharding, network-partitions, clock-skew, crdt, caching-strategies
 - 키워드 백링크 →: cookie-session-login, db-type-wide-column, db-type-key-value, mongodb-document-model, sql-batch-timeout-pool, postgres-architecture, dns
-- 이 글로 오는 글 ←: clock-skew, db-consistency-cap, network-partitions
+- 이 글로 오는 글 ←: clock-skew, crdt, db-consistency-cap, network-partitions, operational-transform
 
 #### `exponential-backoff-jitter` — 지수 백오프와 지터: 같은 순간 실패한 클라이언트를 흩어 보내기
 
@@ -2719,7 +2740,7 @@
 - 소제목: 끊긴 회선은 어떻게 생겼나 / 응답이 없다는 것만 안다 / 세 번 실패하면 승격하는 스크립트 / 과반만 쓸 수 있게 한다 / 과반이 뽑아도 옛 리더는 계속 쓴다 / 분할 실험이 남긴 교훈 / 현장에서 분할을 의심하는 순간 / 끊겼다는 판단을 믿지 않는 설계 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-consistency-cap, eventual-consistency, leader-election, distributed-lock, iptables-basics, timeouts, db-replication-sharding
 - 키워드 백링크 →: sql-batch-timeout-pool, elasticsearch-inverted-index, db-type-wide-column, browser-fetch, mongodb-document-model, security-groups-nacl, postgres-architecture, redis-basics, db-type-key-value, postgres-getting-started, dns
-- 이 글로 오는 글 ←: clock-skew, db-consistency-cap, distributed-transactions-2pc, eventual-consistency, leader-election
+- 이 글로 오는 글 ←: clock-skew, crdt, db-consistency-cap, distributed-transactions-2pc, eventual-consistency, leader-election
 
 #### `rate-limiting-algorithms` — 요청 수 제한 알고리즘: 고정 윈도부터 토큰 버킷까지
 
@@ -3287,6 +3308,7 @@
 - Count-Min Sketch → `count-min-sketch`
 - CPU 스로틀링 → `k8s-pod-resources`
 - CrashLoopBackOff → `k8s-pod-lifecycle`
+- CRDT → `crdt`
 - CREATE INDEX CONCURRENTLY → `db-index-pitfalls`
 - CreateContainerConfigError → `k8s-pod-troubleshooting`
 - CSRF → `cookie-session-login`
@@ -3361,6 +3383,7 @@
 - FormData → `html-form-http`
 - full jitter → `exponential-backoff-jitter`
 - full_page_writes → `postgres-architecture`
+- G-Counter → `crdt`
 - Gateway API → `gateway`
 - GCRA → `rate-limiting-algorithms`
 - gcTime → `client-data-cache`
@@ -3553,7 +3576,9 @@
 - onShellReady → `streaming-ssr-suspense`
 - OOMKilled → `k8s-pod-resources`
 - openssl s_client → `network-troubleshooting-by-layer`
+- Operational Transformation → `operational-transform`
 - Optimistic UI → `loading-patterns`
+- OR-Set → `crdt`
 - OSI 7계층 → `network-layers-overview`
 - OSI 모델 → `network-layers-overview`
 - OUTER JOIN → `sqld-joins`
@@ -3669,6 +3694,7 @@
 - setImmediate → `event-loop`
 - setuid → `linux-files-permissions`
 - shared_buffers → `postgres-architecture`
+- ShareDB → `operational-transform`
 - SIGHUP → `linux-processes-signals`
 - Singleton 패턴 → `pattern-singleton`
 - sites-enabled → `nginx-basics`
@@ -3730,6 +3756,7 @@
 - TOAST → `postgres-architecture`
 - toleration → `k8s-pod-scheduling`
 - topologySpreadConstraints → `k8s-pod-scheduling`
+- TP2 → `operational-transform`
 - tracepath → `network-troubleshooting-by-layer`
 - traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
@@ -3783,6 +3810,7 @@
 - xDS → `service-mesh`
 - XID 랩어라운드 → `postgres-mvcc-vacuum`
 - XState → `pattern-state`
+- Yjs → `crdt`
 - zdiff3 → `git-merge-conflict`
 
 ## 겹칠 수 있는 글 (자동 추정)
@@ -3807,7 +3835,6 @@
 - `db-partitioning` ↔ `db-architecture-by-scale` (16%: 떼어, 낸다, scalability)
 - `proxy-reverse-proxy` ↔ `gateway` (16%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
 - `lossy-counting` ↔ `hyperloglog` (16%: 낸다, 세는, data, structure, probabilistic)
-- `db-locking-deadlock` ↔ `db-transaction-isolation` (16%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
 - `frontend-browser-cache` ↔ `client-data-cache` (16%: 미리, 쓰면, 받기, 캐시, 돌아가서, cache, frontend)
 - `security-groups-nacl` ↔ `iptables-basics` (15%: 연결을, firewall, 기억하는, 방화벽)
 - `db-types-overview` ↔ `redis-basics` (15%: 빠른, 이유는, 하나씩, nosql)
@@ -3829,11 +3856,17 @@
 - `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `circuit-breaker` ↔ `resilience-patterns` (14%: 타임아웃, 회로를, resilience, 서킷, 브레이커)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
+- `pattern-flyweight` ↔ `dockerfile-image-layers` (13%: 바뀌는, 것을, 상태는, 두고)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `crdt` ↔ `operational-transform`
+- `crdt` ↔ `clock-skew`
+- `crdt` ↔ `eventual-consistency`
+- `crdt` ↔ `db-consistency-cap`
+- `operational-transform` ↔ `realtime-communication`
 - `clock-skew` ↔ `eventual-consistency`
 - `network-partitions` ↔ `eventual-consistency`
 - `network-partitions` ↔ `leader-election`

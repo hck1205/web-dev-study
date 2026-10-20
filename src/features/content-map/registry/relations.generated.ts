@@ -2,6 +2,29 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "crdt": {
+    "links": [
+      "operational-transform",
+      "eventual-consistency",
+      "clock-skew",
+      "db-type-wide-column",
+      "network-partitions"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "js-memory-leak",
+      "db-consistency-cap",
+      "http-methods"
+    ]
+  },
+  "operational-transform": {
+    "links": [
+      "crdt",
+      "realtime-communication",
+      "eventual-consistency"
+    ],
+    "mentions": []
+  },
   "clock-skew": {
     "links": [
       "db-consistency-cap",
@@ -9,6 +32,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eventual-consistency",
       "network-partitions",
       "event-driven-architecture",
+      "crdt",
       "db-type-newsql"
     ],
     "mentions": [
@@ -50,6 +74,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "network-partitions",
       "clock-skew",
+      "crdt",
       "caching-strategies"
     ],
     "mentions": [
@@ -302,8 +327,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-strategy"
     ],
     "mentions": [
+      "operational-transform",
       "redis-basics",
-      "microservices"
+      "microservices",
+      "crdt"
     ]
   },
   "pattern-chain-of-responsibility": {
@@ -2502,7 +2529,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-partitions",
       "mongodb-document-model",
       "leader-election",
-      "redis-basics"
+      "redis-basics",
+      "crdt"
     ]
   },
   "db-types-overview": {
@@ -3442,7 +3470,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "cors",
       "resilience-patterns",
-      "nginx-reverse-proxy"
+      "nginx-reverse-proxy",
+      "operational-transform",
+      "crdt"
     ],
     "mentions": [
       "json-crud-http",

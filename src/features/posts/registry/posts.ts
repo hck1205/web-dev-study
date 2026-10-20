@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "crdt",
+    title: "CRDT: 어떤 순서로 합쳐도 같아지는 자료형",
+    summary: "합치기가 교환·결합·멱등이면 순서와 중복을 무시할 수 있다. G-Counter, PN-Counter, LWW-Register, OR-Set을 직접 만들어 확인하고, Yjs로 오프라인 두 기기를 합쳐 보며 시퀀스 CRDT의 id와 묘비 비용, OT와의 선택 기준을 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["System Design", "Distributed Systems", "Algorithm", "Data Structure", "Concurrency"],
+    date: "2026-10-22",
+    keywords: ["CRDT", "G-Counter", "OR-Set", "Yjs"],
+  },
+  {
+    slug: "operational-transform",
+    title: "Operational Transformation: 동시 편집을 위치 변환으로 맞추기",
+    summary: "cats를 두 사람이 동시에 고치면 왜 갈라지는지에서 출발해 삽입·삭제 변환 함수, TP1과 TP2, 서버가 리비전을 매기는 Jupiter 방식을 ShareDB로 직접 돌려 본다. 메시지 순서가 섞일 때의 실패, 의도 보존의 경계 사례, 실무에서 갈라짐을 추적하는 법까지 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["System Design", "Distributed Systems", "Algorithm", "Concurrency", "WebSocket"],
+    date: "2026-10-22",
+    keywords: ["Operational Transformation", "TP2", "ShareDB"],
+  },
+  {
     slug: "clock-skew",
     title: "시계 어긋남: 벽시계, 단조 시계, 그리고 시계 없이 순서 정하기",
     summary: "발급 서버 시계가 40초 빠르면 방금 받은 JWT가 거절되고, 벽시계가 2초 되돌아가면 Date.now()로 잰 시간이 음수가 된다. NTP와 chrony의 스텝·슬루, 윤초와 번지기, 램포트 시계와 벡터 시계, HLC까지 직접 재현하며 어떤 시계를 언제 쓰는지 정리한다.",
