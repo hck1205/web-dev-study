@@ -1,0 +1,652 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-deploy-pipeline-eks");
+
+main에 머지하고 GitHub Actions 탭을 보니 초록 체크가 떠 있다. 그런데 운영 주소를 열면 어제 버전이 그대로다. 반대로 빨간 X가 떴는데, 로그 마지막 줄이 `exit code 1` 하나뿐이라 어디서 막혔는지 모르는 날도 있다.
+
+배포 파이프라인은 여러 단계가 이어진 길이다. 코드를 푸시하면 Actions가 이미지를 굽고, ECR에 올리고, Terraform이 만들어 둔 EKS에 매니페스트를 적용하고, 노드가 이미지를 받아 Pod를 띄운다. 단계마다 다른 자격 증명을 쓰고, 실패가 원인이 생긴 단계보다 한참 뒤에서 드러난다. 이 글은 그 길을 처음부터 끝까지 따라가며 단계마다 무엇이 깨지는지, 어떤 메시지로 드러나는지, 어떻게 되돌리는지를 본다. 그리고 CI가 클러스터에 직접 밀어 넣는 방식과 ArgoCD가 끌어오는 방식을 비교한다.
+
+이 주제의 다른 글: 저장소의 폴더와 파일이 무슨 역할인지는 [EKS 배포 프로젝트 구조](/posts/k8s-project-structure)에서, 이미지를 굽고 ECR에 올리는 워크플로와 OIDC 설정은 [GitHub Actions로 이미지 빌드하고 ECR에 올리기](/posts/github-actions-docker-ecr)에서 다뤘다. 여기서는 그 둘을 이어 붙인 전체 흐름과 장애를 본다.
+
+실습 환경을 밝혀 둔다. 쿠버네티스 출력은 kwok로 띄운 실습 클러스터(API 서버 1.30.4, kubectl 1.31.4)에서 직접 받았다. kwok는 노드와 컨테이너를 흉내만 내는 도구라 kubelet이 없다. 그래서 이미지 받기 실패는 두 단계로 재현했다. containerd 2.3.6에 crictl로 ECR처럼 인증을 요구하는 가짜 레지스트리에서 이미지를 받게 해 실제 오류 문장을 얻고, 그 문장을 kwok의 상태 규칙(Stage)에 넣어 Pod 상태를 만들었다. Terraform은 1.16.6으로 돌렸다. AWS 계정과 GitHub 러너, ArgoCD는 없어서 그쪽 출력은 실제 형식을 따른 예시이고 그때마다 예시라고 적는다.
+
+## 길 하나에 자격 증명이 넷
+
+전체 흐름을 그림으로 먼저 본다. 다음을 누르면 커밋 하나가 운영 트래픽을 받기까지 지나는 길이 한 칸씩 그려진다.
+
+<NetworkTopology
+  width={400}
+  height={356}
+  caption="커밋 하나가 Pod가 되기까지, 단계마다 다른 주체가 일한다"
+  zones={[
+    { id: "gh", label: "GitHub", x: 8, y: 8, w: 384, h: 84, tone: "edge" },
+    { id: "aws", label: "AWS ap-northeast-2", x: 8, y: 102, w: 384, h: 246, tone: "neutral" },
+    { id: "vpc", label: "VPC · EKS", x: 16, y: 196, w: 368, h: 144, tone: "private" },
+  ]}
+  nodes={[
+    { id: "dev", label: "git push", sub: "main", x: 70, y: 54, icon: "client", w: 100 },
+    { id: "tf", label: "terraform", sub: "PR plan", x: 190, y: 54, icon: "gateway", w: 100 },
+    { id: "gha", label: "Actions", sub: "build · test", x: 310, y: 54, icon: "server", w: 100 },
+    { id: "ecr", label: "ECR", sub: "shop-api:sha", x: 90, y: 150, icon: "db" },
+    { id: "api", label: "EKS API", sub: "access entry", x: 300, y: 150, icon: "router" },
+    { id: "alb", label: "ALB", sub: "ingress", x: 90, y: 280, icon: "lb" },
+    { id: "node", label: "node", sub: "kubelet", x: 300, y: 280, icon: "container" },
+  ]}
+  links={[
+    { from: "dev", to: "gha" },
+    { from: "tf", to: "api", dashed: true },
+    { from: "gha", to: "ecr" },
+    { from: "gha", to: "api" },
+    { from: "api", to: "node" },
+    { from: "node", to: "ecr" },
+    { from: "alb", to: "node" },
+  ]}
+  steps={[
+    { path: ["tf", "api"], highlight: ["vpc"], packet: "apply", title: "땅은 따로 만든다", detail: "VPC와 EKS는 Terraform이 만든다. 앱을 배포할 때마다 돌지 않고, terraform/이 바뀔 때만 PR에서 plan, 머지 후 apply한다." },
+    { path: ["dev", "gha"], packet: "push", title: "푸시가 워크플로를 깨운다", detail: "러너는 OIDC로 빌린 빌드 역할로 일한다. 첫 번째 자격 증명이다." },
+    { path: ["gha", "ecr"], packet: "image", title: "커밋 SHA 태그로 올린다", detail: "빌드 역할에 ECR 쓰기 권한이 있어야 한다.", payload: "shop-api:3f9c2ab" },
+    { path: ["gha", "api"], packet: "PATCH", title: "배포 역할로 이미지를 바꾼다", detail: "두 번째 자격 증명이다. 이 역할이 EKS access entry에 등록돼 있어야 kubectl이 통한다." },
+    { path: ["api", "node"], packet: "PodSpec", title: "kubelet이 새 Pod를 받는다", detail: "Deployment 컨트롤러가 새 ReplicaSet을 만들고, 스케줄러가 고른 노드의 kubelet이 Pod를 띄우기 시작한다." },
+    { path: ["node", "ecr"], packet: "pull", title: "노드 역할로 이미지를 받는다", detail: "세 번째 자격 증명이다. 러너가 올린 권한과는 별개다." },
+    { path: ["alb", "node"], packet: "GET /", title: "Ready가 되면 트래픽이 온다", detail: "readinessProbe를 통과해야 ALB 대상 그룹에 들어간다. 네 번째 주체인 로드 밸런서 컨트롤러가 대상을 등록한다." },
+    { path: ["node", "ecr"], packet: "pull", blocked: true, title: "노드 권한이 없으면 여기서 멈춘다", detail: "CI는 이미 초록색으로 끝났을 수 있다. 실패는 클러스터 안에서만 보인다." },
+  ]}
+/>
+
+그림에서 주체가 바뀔 때마다 권한도 바뀐다. 빌드 역할이 ECR에 올릴 수 있어도 노드 역할은 못 받을 수 있다. 배포 역할이 IAM에서 모든 권한을 가져도 클러스터 안 권한은 access entry가 따로 준다. 그래서 "권한 문제"라는 말만으로는 아무것도 좁혀지지 않는다. 누가 누구에게 무엇을 하다 막혔는지를 먼저 정해야 한다. 이 셋의 구조는 [EKS 클러스터 기본](/posts/eks-cluster-basics)에서 자세히 다뤘다.
+
+## 실패는 원인보다 늦게 드러난다
+
+단계마다 남기는 결과물이 있다. 다음 단계는 앞 단계의 결과물만 보고, 그게 맞는지는 모른다. 아래 그림은 새 커밋이 길을 따라가며 결과물을 쌓는 모습이다.
+
+<AlgoTrace
+  caption="CI는 apply에서 끝나고, 진짜 실패는 그 뒤에서 난다"
+  memoryLabel="남은 결과물"
+  cells={["push", "build", "ECR push", "apply", "schedule", "pull", "rollout"]}
+  steps={[
+    { pointer: 0, memory: ["commit 3f9c2ab"], caption: "커밋이 생긴다. 이 SHA가 끝까지 이름표 노릇을 한다." },
+    { pointer: 2, found: [1, 2], memory: ["commit 3f9c2ab", "image :3f9c2ab"], caption: "이미지가 ECR에 올라간다. 여기까지 실패는 Actions 로그에 바로 보인다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["commit 3f9c2ab", "image :3f9c2ab", "Deployment rev 2"], caption: "API 서버가 새 템플릿을 저장하고 200을 돌려준다. kubectl은 성공으로 끝난다." },
+    { pointer: 5, found: [1, 2, 3, 4], memory: ["commit 3f9c2ab", "image :3f9c2ab", "Deployment rev 2", "Pod ImagePullBackOff"], caption: "노드가 이미지를 못 받는다. CI가 rollout을 기다리지 않았다면 이미 초록색으로 끝난 뒤다." },
+    { pointer: 6, found: [1, 2, 3, 4], memory: ["commit 3f9c2ab", "image :3f9c2ab", "Deployment rev 2", "ProgressDeadlineExceeded"], caption: "기한이 지나면 Deployment 상태에 실패가 적힌다. 이걸 보는 단계가 파이프라인에 있어야 한다." },
+  ]}
+/>
+
+이 그림이 처음 장면, 초록 체크인데 옛 버전이 떠 있는 상황의 답이다. `kubectl apply`나 `kubectl set image`는 원하는 상태를 API 서버에 적고 끝난다. 새 Pod가 실제로 떴는지는 묻지 않는다. 실습 클러스터에서 그대로 해 봤다. `shop-api`는 레플리카 3개, `maxUnavailable: 0`, `progressDeadlineSeconds: 60`으로 띄워 둔 상태다.
+
+```bash
+# CI가 하는 일을 흉내 낸다: 이미지 태그만 새 커밋으로 바꾼다
+kubectl -n shop set image deploy/shop-api app=localhost:5077/shop-api:3f9c2ab
+echo "exit=$?"
+```
+
+```text
+deployment.apps/shop-api image updated
+exit=0
+```
+
+종료 코드 0이다. 여기서 끝나는 워크플로는 초록색이 된다. 그 사이 클러스터에서는 이런 일이 있었다.
+
+```bash
+# 새 버전이 끝까지 올라가는지 기다린다. 실패하면 0이 아닌 값으로 끝난다
+kubectl -n shop rollout status deploy/shop-api --timeout=120s
+echo "exit=$?"
+kubectl -n shop get pods
+```
+
+```text
+Waiting for deployment "shop-api" rollout to finish: 1 out of 3 new replicas have been updated...
+error: deployment "shop-api" exceeded its progress deadline
+exit=1
+NAME                        READY   STATUS             RESTARTS   AGE
+shop-api-555c49966d-5rzp8   1/1     Running            0          72s
+shop-api-555c49966d-c9md5   1/1     Running            0          72s
+shop-api-555c49966d-xvp84   1/1     Running            0          72s
+shop-api-87c958448-jh74t    0/1     ImagePullBackOff   0          61s
+```
+
+새 Pod 하나가 ImagePullBackOff에 걸렸고, 옛 Pod 셋은 그대로 일하고 있다. `maxUnavailable: 0`이라 새 Pod가 Ready가 되기 전에는 옛 Pod를 하나도 내리지 않았기 때문이다. 사용자는 장애를 겪지 않았지만 배포도 되지 않았다. 처음 장면이 바로 이 상태다.
+
+`rollout status`는 Deployment의 `Progressing` 조건을 지켜본다. 이 조건이 `ProgressDeadlineExceeded`로 바뀌면 실패로 끝난다.
+
+```bash
+# Deployment 조건을 한 줄씩 본다
+kubectl -n shop get deploy shop-api -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\n"}{end}'
+```
+
+```text
+Available	True	MinimumReplicasAvailable
+Progressing	False	ProgressDeadlineExceeded
+```
+
+`progressDeadlineSeconds` 기본값은 600초다. 기본값 그대로 두고 CI에서 `--timeout` 없이 기다리면 실패를 알기까지 10분이 걸린다. 그래서 둘을 맞춘다. 기한을 앱이 뜨는 데 걸리는 시간보다 넉넉하게 잡고, CI의 `--timeout`은 그보다 조금 길게 둔다. `--timeout`이 먼저 끝나면 메시지가 `error: timed out waiting for the condition`으로 바뀌는데, 이건 실패가 아니라 "아직 모른다"는 뜻이라 구분해야 한다. 숫자를 고르는 법은 [Deployment와 롤링 업데이트](/posts/k8s-deployment)에 있다.
+
+## 노드가 이미지를 받지 못하는 세 가지 이유
+
+ImagePullBackOff는 "지금 재시도를 기다리는 중"이라는 뜻이고 이유는 말해 주지 않는다. 이유는 그 직전의 `Failed` 이벤트에 있다.
+
+```bash
+# 경고 이벤트만 골라 본다
+kubectl -n shop get events --field-selector type=Warning,involvedObject.kind=Pod
+```
+
+```text
+LAST SEEN   TYPE      REASON   OBJECT                         MESSAGE
+66s         Warning   Failed   pod/shop-api-87c958448-jh74t   Failed to pull image "localhost:5077/shop-api:3f9c2ab": failed to pull and unpack image "localhost:5077/shop-api:3f9c2ab": failed to resolve image: unexpected status from HEAD request to https://localhost:5077/v2/shop-api/manifests/3f9c2ab: 403 Forbidden
+```
+
+실습에서는 ECR 대신 ECR처럼 응답하는 가짜 레지스트리(`localhost:5077`)를 썼다. EKS라면 그 자리에 `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com`이 온다. 메시지를 조각으로 나눠 읽어 본다.
+
+<UrlAnatomy
+  caption="이미지 받기 실패 메시지를 앞에서부터 읽는다"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "image", display: "Failed to pull image \"…/shop-api:3f9c2ab\":", title: "kubelet이 받으려던 이미지", description: "레지스트리, 저장소, 태그가 정확히 이 문자열이다. 계정 번호와 리전이 맞는지, 태그가 CI가 올린 것과 같은지 먼저 본다." },
+    { key: "resolve", display: "failed to resolve image:", title: "태그를 다이제스트로 바꾸는 단계", description: "이미지 층을 받기 전, 이 태그가 무엇을 가리키는지 묻는 단계에서 실패했다. 디스크나 이미지 크기와는 상관없다. containerd 1.7 계열은 같은 자리에 failed to resolve reference라고 쓴다." },
+    { key: "head", display: "HEAD …/v2/shop-api/manifests/3f9c2ab:", title: "레지스트리에 보낸 요청", description: "Registry API의 매니페스트 주소다. 이 줄이 보이면 네트워크는 레지스트리까지 닿았다는 뜻이다. 닿지도 못했으면 dial tcp … i/o timeout이 찍힌다." },
+    { key: "status", display: "403 Forbidden", title: "레지스트리의 답", description: "자격 증명은 받았지만 권한이 없다는 뜻이다. ECR이라면 노드 역할에 ecr:BatchGetImage가 없거나, 다른 계정 저장소의 정책이 이 역할을 허락하지 않는다.", required: true },
+  ]}
+/>
+
+레지스트리의 답에 따라 고칠 곳이 갈린다. 같은 가짜 레지스트리를 상대로 containerd에 자격 증명 없이, 권한 없는 자격 증명으로, 올바른 자격 증명이지만 없는 태그로 받아 봤다. crictl은 kubelet이 쓰는 것과 같은 CRI 통로로 containerd에 이미지를 요청한다.
+
+```bash
+# kubelet과 같은 CRI 경로로 containerd에 이미지를 요청한다
+sudo crictl pull localhost:5077/shop-api:3f9c2ab
+sudo crictl pull --creds AWS:no-perm-token localhost:5077/shop-api:3f9c2ab
+sudo crictl pull --creds AWS:good-token localhost:5077/shop-api:3f9c2ab
+```
+
+```text
+FATA pulling image: failed to pull and unpack image "localhost:5077/shop-api:3f9c2ab": failed to resolve image: pull access denied, repository does not exist or may require authorization: authorization failed: no basic auth credentials
+FATA pulling image: failed to pull and unpack image "localhost:5077/shop-api:3f9c2ab": failed to resolve image: unexpected status from HEAD request to https://localhost:5077/v2/shop-api/manifests/3f9c2ab: 403 Forbidden
+denied: not authorized to perform: ecr:BatchGetImage
+FATA pulling image: rpc error: code = NotFound desc = failed to pull and unpack image "localhost:5077/shop-api:3f9c2ab": failed to resolve image: localhost:5077/shop-api:3f9c2ab: not found
+```
+
+(로그 접두어 `time=… level=fatal msg=`는 `FATA`로 줄이고, 메시지 안의 `\n`은 줄바꿈으로 풀었다.) 세 가지 답이 세 가지 원인이다.
+
+- `no basic auth credentials`: 노드가 자격 증명을 아예 보내지 않았다. ECR은 인증 없는 요청을 받지 않는다. EKS 최적화 AMI의 kubelet은 ECR용 자격 증명 플러그인으로 노드 역할을 써서 12시간짜리 토큰을 받는데, 직접 만든 AMI에서 이 설정이 빠졌거나 노드가 IMDS(인스턴스 메타데이터)에 닿지 못하면 이렇게 된다.
+- `403 Forbidden`: 토큰은 보냈지만 그 역할에 권한이 없다. 노드 역할에 `AmazonEC2ContainerRegistryReadOnly`(또는 받기 전용인 `AmazonEC2ContainerRegistryPullOnly`) 같은 정책이 붙었는지 본다. 이미지가 다른 AWS 계정의 ECR에 있으면 그 저장소의 리포지토리 정책이 이 계정의 노드 역할을 허락해야 한다.
+- `not found`: 권한은 맞는데 그런 태그가 없다. 빌드 잡이 실패해서 푸시가 안 됐는데 배포 잡이 돌았거나, 다른 리전이나 계정의 ECR 주소를 적은 경우다. 배포 잡은 빌드 잡의 `outputs`로 이미지 이름을 받아야 이런 일이 없다.
+
+ECR 이미지에는 `imagePullSecrets`가 필요 없다는 것도 기억해 둔다. 노드 역할이 대신한다. 남이 운영하는 비공개 레지스트리에서 받을 때만 Secret을 만든다. 그 경우는 [Secret](/posts/k8s-secret)에, 다른 상태값(CrashLoopBackOff, CreateContainerConfigError)까지 포함한 진단 순서는 [Pod가 안 뜰 때 상태별로 보는 순서](/posts/k8s-pod-troubleshooting)에 있다.
+
+## 클러스터가 CI를 모를 때: Unauthorized와 Forbidden
+
+배포 잡이 `kubectl`을 치려면 클러스터가 이 러너를 알아봐야 한다. 이 단계에서 나는 실패는 두 종류이고 메시지가 다르다. 실습 클러스터에 망가진 토큰과, 정상이지만 권한이 없는 ServiceAccount 토큰으로 각각 붙어 봤다.
+
+```bash
+# 서명이 틀린 토큰으로 요청한다
+kubectl --kubeconfig bad.kubeconfig -n shop get deploy
+# 진짜 토큰이지만 아무 Role도 묶이지 않은 ServiceAccount로 요청한다
+kubectl --kubeconfig sa.kubeconfig -n shop get deploy
+```
+
+```text
+error: You must be logged in to the server (Unauthorized)
+Error from server (Forbidden): deployments.apps is forbidden: User "system:serviceaccount:shop:deployer" cannot list resource "deployments" in API group "apps" in the namespace "shop"
+```
+
+첫 줄은 401이다. API 서버가 "너는 누구냐"에서 막았다. 둘째 줄은 403이다. 누군지는 알았는데 그 일을 할 권한이 없다. 403 메시지에는 API 서버가 알아본 사용자 이름이 그대로 찍혀서, 어느 신원으로 들어왔는지 바로 확인할 수 있다.
+
+EKS에서 401이 나면 배포 역할이 access entry에 없다는 뜻인 경우가 가장 많다. 클러스터를 만든 사람의 노트북에서는 잘 되는데 CI에서만 안 되는 게 전형적인 증상이다. 만든 사람은 자동으로 관리자가 되지만 CI 역할은 아무도 등록하지 않았다. 확인은 이렇게 한다(예시).
+
+```bash
+# 러너가 지금 어떤 IAM 신원으로 일하는지 본다
+aws sts get-caller-identity --query Arn --output text
+# 그 역할이 클러스터에 등록돼 있는지 본다
+aws eks list-access-entries --cluster-name shop-prod
+```
+
+```text
+arn:aws:sts::123456789012:assumed-role/gha-eks-deploy/GitHubActions
+{
+    "accessEntries": [
+        "arn:aws:iam::123456789012:role/shop-prod-node"
+    ]
+}
+```
+
+목록에 `gha-eks-deploy`가 없다. access entry에는 세션 ARN(`assumed-role/...`)이 아니라 역할 ARN(`role/gha-eks-deploy`)을 등록한다. kubectl 버전과 인증 방식에 따라 401 메시지가 `(the server has asked for the client to provide credentials)`로 찍히기도 한다. 같은 뜻이다.
+
+그 앞 단계, 러너가 AWS 역할을 빌리는 것부터 실패하면 kubectl까지 가지도 못한다. 로그에는 이렇게 남는다(예시).
+
+```text
+Error: Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity
+```
+
+이건 클러스터가 아니라 IAM 역할의 신뢰 정책 문제다. 잡에 `environment: production`을 붙이면 OIDC 토큰의 sub가 바뀌어서 이 오류가 나는 경우가 많다. 원인과 정책 고치는 법은 [GitHub Actions와 ECR](/posts/github-actions-docker-ecr) 글에 있다.
+
+권한은 필요한 만큼만 준다. 배포 잡이 하는 일은 이미지 태그를 바꾸고 rollout을 지켜보고 필요하면 되돌리는 것뿐이다. 실습 클러스터에서 이렇게 좁힌 Role을 묶고 확인했다.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: shop
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+```
+
+```bash
+# 배포 계정으로 할 수 있는 일과 없는 일을 확인한다
+kubectl --kubeconfig sa.kubeconfig -n shop auth can-i patch deployments
+kubectl --kubeconfig sa.kubeconfig -n shop auth can-i delete deployments
+kubectl --kubeconfig sa.kubeconfig -n shop auth can-i get secrets
+kubectl --kubeconfig sa.kubeconfig -n default auth can-i patch deployments
+```
+
+```text
+yes
+no
+no
+no
+```
+
+이 권한으로 `set image`, `rollout status`, `rollout undo`가 모두 돌았다. 지우기, Secret 읽기, 다른 네임스페이스 건드리기는 막힌다. EKS에서는 access entry에 쿠버네티스 그룹 이름을 붙이고 그 그룹에 이 Role을 묶거나, `AmazonEKSEditPolicy`를 `shop` 네임스페이스 범위로 붙인다. 뒤쪽은 간편하지만 Secret 읽기까지 열린다.
+
+## Terraform은 같은 파이프라인에 넣지 않는다
+
+흔히 도는 흐름 그림은 푸시 한 번에 이미지 빌드, Terraform, kubectl apply가 차례로 도는 것처럼 그린다. 실제로 그렇게 묶으면 앱 코드 한 줄을 고칠 때마다 VPC와 클러스터를 plan하게 된다. 시간도 오래 걸리고, 인프라에 생긴 엉뚱한 차이가 앱 배포를 막는다. 반대로 앱 배포 잡이 실수로 인프라를 바꿀 수도 있다.
+
+보통은 워크플로를 나눈다. 앱 배포 워크플로는 `paths`로 `app/`, `k8s/`, `scripts/`가 바뀔 때만 돌고, 인프라 워크플로는 `terraform/`이 바뀔 때만 돈다. 인프라 쪽은 PR에서 plan 결과를 사람이 보고, 머지한 뒤에 apply한다. 이때 쓰는 플래그가 둘 있다.
+
+```bash
+# 바뀔 게 있는지 종료 코드로 알려 준다 (0: 없음, 1: 오류, 2: 바뀔 것 있음)
+terraform plan -detailed-exitcode -input=false
+echo "exit=$?"
+# 노드 수를 바꾸는 plan을 파일로 저장한다
+terraform plan -detailed-exitcode -input=false -var node_desired_size=3 -out tfplan
+echo "exit=$?"
+```
+
+```text
+No changes. Your infrastructure matches the configuration.
+exit=0
+Plan: 0 to add, 1 to change, 0 to destroy.
+exit=2
+```
+
+(plan 본문은 요약 줄만 남겼다.) 종료 코드 2로 "바뀔 게 있다"를 CI가 알아듣는다. 매일 밤 plan만 돌려 2가 나오면 알림을 보내면, 누가 콘솔에서 손으로 고친 drift를 잡을 수 있다.
+
+저장한 plan 파일은 "리뷰한 그대로만 적용한다"는 약속이다. 그 사이 누가 다른 apply를 하면 약속이 깨진다. plan을 저장한 뒤 다른 값으로 한 번 apply하고, 저장해 둔 plan을 적용해 봤다.
+
+```bash
+# plan을 만든 뒤 state가 바뀌었다
+terraform apply -auto-approve -input=false -var node_desired_size=4
+# 리뷰했던 plan 파일을 적용한다
+terraform apply -input=false tfplan
+```
+
+```text
+╷
+│ Error: Saved plan is stale
+│ 
+│ The given plan file can no longer be applied because the state was changed
+│ by another operation after the plan was created.
+╵
+```
+
+Terraform이 거부했다. 리뷰한 것과 다른 변경이 들어가는 것을 막아 준 것이니, 다시 plan하고 다시 리뷰하면 된다. state와 잠금, drift는 [Terraform 기본](/posts/terraform-basics), 환경별로 tfvars를 나누는 법은 [Terraform 모듈과 tfvars](/posts/terraform-modules-tfvars)에 있다.
+
+둘을 나눠도 이어지는 곳이 하나 있다. 배포 잡이 쓰는 클러스터 이름과 배포 역할의 access entry를 Terraform이 만든다. 그래서 새 클러스터를 처음 만들 때는 순서가 정해진다. Terraform이 클러스터와 access entry를 만들고, 그 출력(클러스터 이름)을 앱 워크플로의 변수에 넣고, 그 다음에 첫 배포를 한다.
+
+## 배포 잡과 deploy.sh
+
+앱 배포 워크플로의 배포 잡은 짧다. 빌드 잡과 OIDC 설정은 앞 글에서 봤으니 배포 부분만 적는다. actionlint로 검사해 경고가 없는 것을 확인했다.
+
+```yaml
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/gha-eks-deploy
+          aws-region: ap-northeast-2
+      - name: kubeconfig
+        run: aws eks update-kubeconfig --name shop-prod --alias shop-prod
+      - name: deploy
+        run: ./scripts/deploy.sh shop-prod "${GITHUB_SHA::7}"
+```
+
+`--alias shop-prod`는 컨텍스트 이름을 긴 ARN 대신 짧은 이름으로 만든다. 스크립트가 이 이름을 받아 매 명령에 `--context`로 붙인다. 실제 일은 `deploy.sh`가 한다. 흔히 보는 모양부터 돌려 본다.
+
+```bash
+#!/usr/bin/env bash
+TAG=$1
+kubectl apply -f k8s/deployment-staging.yaml | tee deploy.log
+kubectl -n shop-staging set image deploy/shop-api app=localhost:5077/shop-api:$TAG
+echo "deployed shop-api:$TAG"
+```
+
+없는 네임스페이스에 배포하게 해 두고 실행했다.
+
+```bash
+# 첫 명령부터 실패하도록 만들어 두고 돌린다
+./scripts/deploy-naive.sh 5cf44af
+echo "exit=$?"
+```
+
+```text
+Error from server (NotFound): error when creating "k8s/deployment-staging.yaml": namespaces "shop-staging" not found
+Error from server (NotFound): namespaces "shop-staging" not found
+deployed shop-api:5cf44af
+exit=0
+```
+
+두 명령이 모두 실패했는데 "deployed"를 찍고 0으로 끝났다. bash는 기본적으로 실패한 명령이 있어도 다음 줄로 넘어가고, 스크립트의 종료 코드는 마지막 명령(`echo`)의 것이다. Actions는 이걸 성공으로 본다. 첫 줄에 `set -euo pipefail`을 넣으면 첫 실패에서 멈추고 1로 끝난다. 셋은 각자 다른 구멍을 막는다.
+
+- `-e`: 실패한 명령이 있으면 거기서 멈춘다.
+- `-u`: 정의되지 않은 변수를 쓰면 멈춘다. 인자 없이 실행하면 `line 3: $1: unbound variable`로 바로 끝난다. 이게 없으면 태그가 빈 문자열인 `shop-api:`로 배포하려 든다.
+- `-o pipefail`: 파이프 중간 명령의 실패도 실패로 친다. 이게 없으면 `kubectl apply ... | tee`의 결과는 `tee`의 성공이라서 `-e`가 있어도 apply 실패를 지나친다. 실습에서도 `-eu`만 둔 판은 apply 실패를 넘기고 다음 `set image`에서야 멈췄다.
+
+고친 판은 이렇다. shellcheck로 경고가 없는 것을 확인했다.
+
+```bash
+#!/usr/bin/env bash
+# 사용법: ./scripts/deploy.sh <kube-context> <commit-sha>
+set -euo pipefail
+
+CONTEXT="${1:?kube context required}"
+TAG="${2:?image tag required}"
+NS=shop
+REGISTRY="${REGISTRY:-123456789012.dkr.ecr.ap-northeast-2.amazonaws.com}"
+TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+
+[[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]] || { echo "tag must be a commit sha: $TAG" >&2; exit 1; }
+
+k() { kubectl --context "$CONTEXT" -n "$NS" "$@"; }
+
+prev=$(k get deploy/shop-api -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')
+echo "context=$CONTEXT current revision=$prev"
+
+k set image deploy/shop-api app="$REGISTRY/shop-api:$TAG"
+if ! k rollout status deploy/shop-api --timeout="$TIMEOUT"; then
+  echo "rollout failed, back to revision $prev" >&2
+  k rollout undo deploy/shop-api --to-revision="$prev"
+  k rollout status deploy/shop-api --timeout="$TIMEOUT"
+  exit 1
+fi
+```
+
+달라진 곳마다 이유가 있다. 컨텍스트를 인자로 받아 모든 명령에 `--context`로 붙인다. 노트북의 현재 컨텍스트가 무엇이든 스크립트는 지정한 클러스터만 건드린다. 태그는 커밋 SHA 모양만 받아서 `latest` 같은 움직이는 태그를 막는다. 배포 전에 지금 리비전 번호를 적어 두고, rollout이 실패하면 그 번호로 정확히 돌아간다. 실습 클러스터에서 실패하는 이미지로 돌린 결과다.
+
+```bash
+# 받을 수 없는 이미지로 배포한다 (실습이라 레지스트리와 대기 시간을 바꿨다)
+REGISTRY=localhost:5077 ROLLOUT_TIMEOUT=40s ./scripts/deploy.sh kwok-k4b-lab 3f9c2ab
+echo "exit=$?"
+# 없는 컨텍스트, SHA가 아닌 태그
+./scripts/deploy.sh shop-prod a1b2c3d
+./scripts/deploy.sh kwok-k4b-lab latest
+```
+
+```text
+context=kwok-k4b-lab current revision=6
+deployment.apps/shop-api image updated
+Waiting for deployment "shop-api" rollout to finish: 1 out of 3 new replicas have been updated...
+error: timed out waiting for the condition
+rollout failed, back to revision 6
+deployment.apps/shop-api rolled back
+deployment "shop-api" successfully rolled out
+exit=1
+error: context "shop-prod" does not exist
+tag must be a commit sha: latest
+```
+
+되돌린 뒤에도 1로 끝내는 게 중요하다. 되돌리기에 성공했다고 0으로 끝내면 파이프라인은 초록색이 되고 아무도 배포가 실패한 줄 모른다.
+
+## 되돌리기는 어디를 되돌리느냐의 문제
+
+위 스크립트가 `rollout undo`에 `--to-revision`을 붙인 데는 이유가 있다. `undo`는 "직전 리비전으로"라는 뜻이고, 되돌리기 자체도 새 리비전을 만든다. 그래서 두 번 치면 되돌린 것을 다시 되돌린다. 실습 클러스터에서 실제로 그렇게 됐다.
+
+<AlgoTrace
+  caption="rollout undo를 두 번 치면 나쁜 버전이 돌아온다"
+  memoryLabel="rollout history"
+  cells={["c40b9e1", "3f9c2ab", "c40b9e1", "3f9c2ab"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1"], caption: "좋은 버전 c40b9e1이 리비전 1로 떠 있다." },
+    { pointer: 1, memory: ["1", "2"], caption: "3f9c2ab를 배포했다. 이미지를 못 받아 리비전 2는 올라가지 못한다." },
+    { pointer: 2, found: [2], memory: ["2", "3"], caption: "undo. 리비전 1의 템플릿이 리비전 3으로 다시 태어난다. 기록에서 1은 사라진다." },
+    { pointer: 3, memory: ["3", "4"], caption: "누군가 한 번 더 undo. 직전은 리비전 2, 즉 나쁜 버전이다. 다시 ImagePullBackOff다." },
+    { pointer: 2, found: [2], memory: ["4", "5"], caption: "--to-revision=3으로 번호를 짚어 돌아가야 끝난다." },
+  ]}
+/>
+
+```bash
+# 두 번째 undo 뒤의 상태와, 번호를 짚어 되돌린 결과
+kubectl -n shop get deploy shop-api -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+kubectl -n shop rollout undo deploy/shop-api --to-revision=3
+kubectl -n shop rollout history deploy/shop-api
+```
+
+```text
+localhost:5077/shop-api:3f9c2ab
+deployment.apps/shop-api rolled back
+deployment.apps/shop-api 
+REVISION  CHANGE-CAUSE
+4         <none>
+5         <none>
+```
+
+장애 중에 두 사람이 각자 undo를 치면 이렇게 된다. 되돌릴 때는 `rollout history`로 번호를 보고 짚어서 간다. 이미지 태그를 아는 좋은 버전으로 다시 `set image`하는 것도 확실한 방법이다.
+
+되돌리기에는 문제가 하나 더 있다. `rollout undo`는 클러스터만 되돌리고 git은 그대로다. git의 매니페스트에는 여전히 나쁜 태그가 적혀 있다.
+
+```bash
+# git에 있는 매니페스트와 클러스터를 비교한다
+kubectl diff -f k8s/deployment.yaml
+```
+
+```text
+@@ -30,7 +30,7 @@
+         app: shop-api
+     spec:
+       containers:
+-      - image: localhost:5077/shop-api:c40b9e1
++      - image: localhost:5077/shop-api:3f9c2ab
+         imagePullPolicy: IfNotPresent
+         name: app
+         resources: {}
+```
+
+(앞쪽의 파일 이름 줄과 generation 줄은 뺐다.) `-`가 지금 클러스터, `+`가 git이다. 이 상태에서 누가 `kubectl apply -f k8s/`를 치면 나쁜 버전이 다시 나간다. `kubectl diff`는 차이가 있으면 1로 끝나서 CI에서 drift 검사로도 쓴다. 클러스터를 되돌렸으면 git도 되돌리는 커밋(`git revert`)을 바로 넣어 둘을 맞춘다.
+
+어디까지 되돌릴 수 있는지도 층마다 다르다.
+
+- 이미지: 태그를 SHA로 붙였고 ECR 수명 주기 정책이 옛 이미지를 지우지 않았다면 언제든 돌아간다. 수명 주기 규칙을 "최근 10개만 남김"처럼 너무 짧게 잡으면 되돌릴 이미지가 이미 없다.
+- 설정: ConfigMap과 Secret은 리비전 기록이 없다. `rollout undo`는 Pod 템플릿만 되돌리므로, 바뀐 ConfigMap 값은 그대로 남는다. 설정도 git에서 되돌려 다시 적용해야 한다.
+- DB 스키마: 새 버전이 컬럼을 지웠다면 옛 버전은 돌아와도 뜨지 못한다. 그래서 스키마 변경은 "옛 코드와 새 코드가 모두 견디는" 순서로 나눠 배포한다. 컬럼 추가 → 코드 배포 → 옛 컬럼 정리.
+- 인프라: Terraform에는 undo가 없다. 이전 커밋으로 코드를 되돌리고 다시 plan과 apply를 한다. 지운 리소스는 새로 만들어지고, 그 안의 데이터는 돌아오지 않는다.
+
+## 밀어 넣는 배포와 끌어오는 배포
+
+지금까지 본 방식은 CI가 클러스터 밖에서 `kubectl`로 밀어 넣는 방식(push)이다. 다른 방식은 클러스터 안에 ArgoCD 같은 GitOps 도구를 두고, 그 도구가 git을 주기적으로 읽어 클러스터를 git과 같게 맞추는 것(pull)이다. CI는 이미지를 올리고 배포 저장소의 태그 한 줄을 고칠 뿐 클러스터에 접속하지 않는다.
+
+차이가 가장 크게 드러나는 곳은 네트워크와 자격 증명이다. 아래 그림에서 다음을 누르면 두 방식이 클러스터에 닿는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="push는 밖에서 API 서버로 들어오고, pull은 안에서 git으로 나간다"
+  zones={[
+    { id: "net", label: "Internet", x: 8, y: 8, w: 384, h: 90, tone: "edge" },
+    { id: "vpc", label: "VPC · private endpoint", x: 8, y: 112, w: 384, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "gha", label: "Actions", sub: "runner", x: 90, y: 58, icon: "server" },
+    { id: "git", label: "deploy repo", sub: "newTag", x: 300, y: 58, icon: "server" },
+    { id: "api", label: "EKS API", sub: "private", x: 90, y: 180, icon: "router" },
+    { id: "nat", label: "NAT GW", x: 300, y: 180, icon: "gateway" },
+    { id: "argo", label: "ArgoCD", sub: "in cluster", x: 300, y: 268, icon: "container" },
+    { id: "pod", label: "shop-api", sub: "Deployment", x: 90, y: 268, icon: "container" },
+  ]}
+  links={[
+    { from: "gha", to: "api" },
+    { from: "gha", to: "git" },
+    { from: "argo", to: "nat" },
+    { from: "nat", to: "git" },
+    { from: "argo", to: "api" },
+    { from: "api", to: "pod" },
+  ]}
+  steps={[
+    { path: ["gha", "api"], packet: "kubectl", blocked: true, highlight: ["vpc"], title: "push: 밖에서 들어오려다 막힌다", detail: "엔드포인트가 프라이빗이면 GitHub 러너는 API 서버에 닿지 못한다. 퍼블릭으로 열거나 VPC 안에 자체 러너를 둬야 한다." },
+    { path: ["gha", "git"], packet: "commit", title: "pull: CI는 git에 태그만 쓴다", detail: "CI가 가진 권한은 배포 저장소 쓰기와 ECR 쓰기뿐이다. 클러스터 자격 증명이 CI에 없다.", payload: "newTag: 3f9c2ab" },
+    { path: ["argo", "nat", "git"], packet: "poll", title: "ArgoCD가 안에서 밖으로 읽으러 간다", detail: "기본 3분마다 저장소를 읽는다. 웹훅을 걸면 바로 반응한다. 나가는 연결이라 인바운드를 열 필요가 없다." },
+    { path: ["argo", "api", "pod"], packet: "sync", title: "클러스터 안에서 적용한다", detail: "git과 다른 곳을 git 쪽으로 맞춘다. 누가 손으로 고친 것도 selfHeal이 켜져 있으면 되돌린다." },
+  ]}
+/>
+
+두 방식을 고르는 기준을 표로 놓는다.
+
+| | push (CI가 kubectl) | pull (ArgoCD) |
+|---|---|---|
+| 클러스터 자격 증명 | CI 비밀·역할에 있다 | 클러스터 안에만 있다 |
+| API 서버 접근 | 러너가 닿아야 한다 | 클러스터에서 git으로 나가기만 하면 된다 |
+| 배포 성공 확인 | 스크립트가 `rollout status`로 직접 | ArgoCD의 Health 상태, 알림 연동 |
+| 손으로 고친 drift | 다음 배포 때까지 모른다 | 바로 OutOfSync로 보이고, 원하면 자동 복구 |
+| 되돌리기 | `rollout undo` 후 git도 맞춰야 한다 | git revert 하나 |
+| 처음 드는 비용 | 스크립트 하나 | ArgoCD 설치·운영, 배포 저장소 |
+
+pull 방식에서 실패를 보는 곳은 Actions가 아니라 ArgoCD다. CI는 태그를 커밋하고 초록색으로 끝나므로, 앞에서 본 "초록인데 옛 버전" 문제가 형태만 바꿔 돌아온다. 그래서 ArgoCD 알림을 슬랙 같은 곳에 연결하거나, CI가 커밋한 뒤 ArgoCD의 Health를 기다리는 단계를 둔다. ArgoCD는 Application이라는 리소스 하나로 "어느 저장소의 어느 경로를 어느 네임스페이스에"를 적는다.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shop-api-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/shop-deploy.git
+    targetRevision: main
+    path: overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shop
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
+
+새 태그에서 이미지를 못 받으면 상태는 이렇게 보인다(예시).
+
+```bash
+# Application의 동기화 상태와 건강 상태를 본다
+kubectl -n argocd get applications
+```
+
+```text
+NAME            SYNC STATUS   HEALTH STATUS
+shop-api-prod   Synced        Progressing
+```
+
+`Synced`는 git과 클러스터가 같다는 뜻일 뿐이다. 새 Pod가 뜨지 못해 `Progressing`에 머물다가 Deployment의 기한이 지나면 `Degraded`가 된다. `prune: true`는 git에서 지운 리소스를 클러스터에서도 지운다. 편하지만 경로를 잘못 바꾸는 커밋 하나로 리소스가 통째로 지워질 수 있어서 운영에서는 처음에 꺼 두고 시작하는 팀도 있다.
+
+pull 방식에서 장애 중에 `kubectl rollout undo`를 치면 selfHeal이 몇 분 안에 git의 나쁜 태그로 다시 맞춘다. 되돌리기는 git revert로 한다. 자동 동기화를 켠 Application은 ArgoCD 자체의 rollback 기능도 막혀 있다. Helm 차트를 ArgoCD로 배포할 때 릴리스 기록이 남지 않는 점은 [차트 배포 흐름](/posts/helm-dependencies-oci-gitops)에서, Helm만으로 올리고 되돌리는 방식은 [Helm 업그레이드와 롤백](/posts/helm-release-lifecycle)에서 다뤘다.
+
+정리하면 클러스터 하나, 서비스 몇 개, 퍼블릭 엔드포인트라면 push로 시작해도 충분하다. 클러스터가 여럿이거나, 엔드포인트를 닫아야 하거나, 손으로 고친 drift가 문제가 되기 시작하면 pull로 옮긴다.
+
+## cleanup.sh가 지우는 것과 남기는 것
+
+정리 스크립트는 배포 스크립트보다 위험하다. 실패하면 배포는 다시 하면 되지만, 지운 것은 돌아오지 않는다. 사고가 나는 길은 대체로 셋이다.
+
+첫째, 엉뚱한 클러스터를 지운다. `kubectl delete -f k8s/`는 현재 컨텍스트를 대상으로 한다. 스테이징을 정리하려던 노트북이 운영 컨텍스트를 보고 있으면 운영이 지워진다. deploy.sh처럼 컨텍스트를 인자로 받고, 지우기 전에 클러스터 이름을 다시 입력받는다.
+
+둘째, 데이터가 같이 지워진다. 네임스페이스를 지우면 그 안의 PVC가 지워지고, 동적으로 만든 볼륨은 StorageClass의 기본 `reclaimPolicy: Delete` 때문에 EBS 볼륨까지 지워진다. 남겨야 할 볼륨은 PV의 정책을 `Retain`으로 바꿔 두거나 스냅샷을 먼저 뜬다. 볼륨과 정책은 [PV와 PVC](/posts/k8s-pv-pvc)에 있다.
+
+셋째, Terraform이 모르는 리소스가 남는다. Ingress가 만든 ALB, `type: LoadBalancer` Service가 만든 NLB, 그것들의 보안 그룹은 클러스터 안의 컨트롤러가 만들었다. 이걸 먼저 지우지 않고 `terraform destroy`를 하면 VPC 삭제가 의존성 오류로 실패하거나, 클러스터가 먼저 사라져 아무도 지우지 않는 로드 밸런서가 요금만 낸다. 지우는 순서는 [EKS 배포 프로젝트 구조](/posts/k8s-project-structure)에서 봤다.
+
+<Callout kind="warning" title="destroy에는 되돌리기가 없다">
+`terraform destroy`와 네임스페이스 삭제는 되돌릴 수 없다. 운영 리소스에는 Terraform의 `lifecycle { prevent_destroy = true }`를 걸어 두면 destroy가 plan 단계에서 오류로 멈춘다. RDS는 `deletion_protection`, 볼륨은 스냅샷과 `Retain` 정책으로 데이터를 따로 지킨다. 지우기 전에는 `terraform plan -destroy`와 `kubectl delete --dry-run=server`로 무엇이 지워질지 먼저 본다.
+</Callout>
+
+## 로그 한 줄로 어느 단계인지 가르기
+
+빨간 X를 받으면 마지막 오류 한 줄로 단계를 먼저 가른다. 단계가 정해지면 볼 곳도 정해진다. 아래 함수를 완성해 본다. 이 글에서 본 메시지들이 테스트로 들어 있다. 순서에 함정이 하나 있다. 이미지 받기 실패 메시지에도 `403 Forbidden`이 들어 있어서, RBAC의 Forbidden을 먼저 찾으면 엉뚱한 답이 나온다.
+
+<CodePlayground
+  caption="오류 메시지로 실패한 단계 찾기"
+  functionName="whereItBroke"
+  initialCode={`// 반환값: "oidc" | "push" | "terraform" | "kubectl-auth" | "rbac"
+//         | "image-pull" | "rollout" | "unknown"
+function whereItBroke(log) {
+  return "unknown";
+}`}
+  solution={`function whereItBroke(log) {
+  // 구체적인 것부터 찾는다. 이미지 받기 실패에도 403 Forbidden이 들어 있다
+  const rules = [
+    ["image-pull", /Failed to pull image|ImagePullBackOff|ErrImagePull/],
+    ["rollout", /exceeded its progress deadline|timed out waiting for the condition/],
+    ["oidc", /AssumeRoleWithWebIdentity/],
+    ["push", /tag invalid|ecr:(InitiateLayerUpload|PutImage|BatchCheckLayerAvailability)/],
+    ["terraform", /Saved plan is stale|Error acquiring the state lock/],
+    ["kubectl-auth", /You must be logged in to the server/],
+    ["rbac", /\\(Forbidden\\)|is forbidden/],
+  ];
+  for (const [stage, re] of rules) if (re.test(log)) return stage;
+  return "unknown";
+}`}
+  tests={[
+    { label: "역할을 못 빌렸다", args: ["Error: Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity"], expected: "oidc" },
+    { label: "같은 태그를 다시 올렸다", args: ["tag invalid: The image tag '3f9c2ab' already exists in the 'shop-api' repository and cannot be overwritten because the repository is immutable."], expected: "push" },
+    { label: "리뷰한 plan이 낡았다", args: ["Error: Saved plan is stale"], expected: "terraform" },
+    { label: "클러스터가 모르는 신원", args: ["error: You must be logged in to the server (Unauthorized)"], expected: "kubectl-auth" },
+    { label: "권한 없는 신원", args: ["Error from server (Forbidden): deployments.apps \"shop-api\" is forbidden: User \"system:serviceaccount:shop:deployer\" cannot get resource \"deployments\""], expected: "rbac" },
+    { label: "노드가 이미지를 못 받았다", args: ["Failed to pull image \"localhost:5077/shop-api:3f9c2ab\": failed to resolve image: unexpected status from HEAD request to https://localhost:5077/v2/shop-api/manifests/3f9c2ab: 403 Forbidden"], expected: "image-pull" },
+    { label: "기한 안에 못 올라왔다", args: ["error: deployment \"shop-api\" exceeded its progress deadline"], expected: "rollout" },
+    { label: "빌드 단계 오류", args: ["npm ERR! code ELIFECYCLE"], expected: "unknown" },
+  ]}
+/>
+
+현장에서는 이렇게 이어진다. `oidc`와 `push`면 IAM 역할과 ECR 정책, `terraform`이면 state와 plan, `kubectl-auth`면 access entry, `rbac`이면 Role과 access policy 범위, `image-pull`이면 노드 역할과 태그, `rollout`이면 `kubectl describe pod`와 이벤트로 내려간다. rollout 실패의 원인이 이미지가 아니라 프로브나 메모리라면 [프로브](/posts/k8s-pod-probes)와 [Pod 진단 순서](/posts/k8s-pod-troubleshooting)를 본다. 새 Pod가 Ready가 된 뒤 HPA가 수를 어떻게 고치는지는 [HPA](/posts/k8s-hpa), Service와 Ingress가 트래픽을 어떻게 넘기는지는 [Service 타입](/posts/k8s-service-types)과 [Ingress](/posts/kubernetes-ingress), 설정 주입은 [ConfigMap](/posts/k8s-configmap)에 있다.
+
+파이프라인은 단계가 이어진 길이고, 단계마다 주체와 자격 증명이 바뀐다. CI가 초록색이어도 배포가 끝났다는 뜻은 아니니 rollout을 끝까지 기다리고, 실패하면 번호를 짚어 되돌리고, 되돌렸으면 git도 맞춘다. 같은 저장소의 구조는 [EKS 배포 프로젝트 구조](/posts/k8s-project-structure), 이미지 빌드 쪽은 [GitHub Actions와 ECR](/posts/github-actions-docker-ecr)에서 이어 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### CI가 성공했는데 운영에는 옛 버전이 떠 있다. 무엇부터 보나?
+
+배포 잡이 `kubectl apply`나 `set image`만 하고 rollout을 기다리지 않았는지부터 본다. 이 명령들은 원하는 상태를 API 서버에 적으면 성공으로 끝난다. `kubectl rollout status`와 Deployment의 `Progressing` 조건, 새 ReplicaSet의 Pod 상태를 보면 대개 ImagePullBackOff나 Ready가 안 된 Pod가 나온다. 파이프라인에는 `rollout status --timeout`을 넣고 `progressDeadlineSeconds`와 맞춘다.
+
+### EKS에서 새 Pod가 ImagePullBackOff다. ECR 이미지일 때 원인을 어떻게 좁히나?
+
+이벤트의 `Failed` 메시지 끝에서 레지스트리의 답을 본다. 자격 증명을 아예 안 보냈으면 `no basic auth credentials`이고 노드의 ECR 자격 증명 설정이나 IMDS 접근을 본다. 403이면 노드 역할의 ECR 읽기 권한이나 다른 계정 저장소의 정책을, not found면 태그가 실제로 푸시됐는지와 계정·리전 주소를 본다. 레지스트리까지 닿지도 못했다면 i/o timeout이 찍히니 NAT나 VPC 엔드포인트를 본다.
+
+### 배포 잡에서 kubectl이 Unauthorized와 Forbidden을 낼 때 각각 무엇이 다른가?
+
+Unauthorized는 401로 API 서버가 신원을 확인하지 못한 것이고, Forbidden은 403으로 신원은 알지만 그 동작 권한이 없는 것이다. EKS에서 401이면 배포 역할 ARN이 access entry에 등록됐는지, 403이면 붙은 access policy의 범위나 그룹의 RBAC를 본다. 403 메시지에는 API 서버가 알아본 사용자 이름이 찍혀서 어떤 신원으로 들어왔는지 확인할 수 있다.
+
+### kubectl rollout undo의 함정은?
+
+undo는 직전 리비전으로 가는 것이고 되돌린 결과도 새 리비전이 되므로, 두 번 치면 나쁜 버전으로 다시 간다. 그래서 `rollout history`로 번호를 보고 `--to-revision`으로 짚어서 간다. 또 Pod 템플릿만 되돌리니 ConfigMap 값이나 DB 스키마는 그대로이고, git의 매니페스트도 그대로라 다음 apply에서 나쁜 버전이 다시 나간다. 되돌렸으면 git revert로 git도 맞춘다.
+
+### push 방식 배포와 ArgoCD 같은 pull 방식 배포는 어떻게 고르나?
+
+push는 CI가 클러스터 자격 증명을 들고 API 서버에 직접 접속하는 방식이라 단순하지만, 러너가 엔드포인트에 닿아야 하고 손으로 고친 drift를 모른다. pull은 클러스터 안의 도구가 git을 읽어 맞추므로 클러스터 자격 증명이 CI 밖으로 나가지 않고 프라이빗 엔드포인트와 잘 맞으며, 되돌리기가 git revert 하나다. 대신 ArgoCD를 운영해야 하고, 실패를 Actions가 아니라 ArgoCD 상태에서 봐야 한다. 클러스터가 하나이고 작으면 push로 시작하고, 클러스터가 늘거나 엔드포인트를 닫아야 할 때 pull로 옮긴다.
+
+### Terraform을 앱 배포 파이프라인에 같이 넣지 않는 이유는?
+
+바뀌는 속도와 실패의 무게가 다르기 때문이다. 앱은 하루에도 여러 번 배포하지만 VPC와 클러스터는 드물게 바뀌고, 잘못 바꾸면 서비스 전체가 내려간다. 그래서 `paths`로 워크플로를 나누고, 인프라는 PR에서 plan을 사람이 본 뒤 저장한 plan 파일로 apply한다. 그 사이 state가 바뀌면 Terraform이 `Saved plan is stale`로 거부해 리뷰하지 않은 변경이 들어가는 것을 막는다.
+
+### deploy.sh를 CI에서 쓸 때 꼭 넣는 안전장치는?
+
+`set -euo pipefail`로 첫 실패에서 멈추고 빈 변수와 파이프 중간 실패를 잡는다. 이게 없으면 kubectl이 실패해도 마지막 echo의 종료 코드 0으로 끝나 파이프라인이 초록색이 된다. 대상 클러스터는 현재 컨텍스트에 맡기지 말고 인자로 받아 `--context`로 고정하고, 태그는 커밋 SHA 모양만 받는다. rollout이 실패하면 배포 전에 적어 둔 리비전으로 되돌리되 종료 코드는 1로 남긴다.

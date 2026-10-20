@@ -2,6 +2,80 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-deploy-pipeline-eks": {
+    "links": [
+      "k8s-project-structure",
+      "github-actions-docker-ecr",
+      "eks-cluster-basics",
+      "k8s-deployment",
+      "k8s-secret",
+      "k8s-pod-troubleshooting",
+      "terraform-basics",
+      "terraform-modules-tfvars",
+      "helm-dependencies-oci-gitops",
+      "helm-release-lifecycle",
+      "k8s-pv-pvc",
+      "k8s-pod-probes",
+      "k8s-hpa",
+      "k8s-service-types",
+      "kubernetes-ingress",
+      "k8s-configmap"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "k8s-pod-basics",
+      "git-undo",
+      "helm-basics",
+      "security-groups-nacl",
+      "vpc-basics"
+    ]
+  },
+  "k8s-project-structure": {
+    "links": [
+      "k8s-deploy-pipeline-eks",
+      "dockerfile-image-layers",
+      "k8s-namespace",
+      "k8s-deployment",
+      "k8s-configmap",
+      "k8s-hpa",
+      "k8s-pv-pvc",
+      "git-large-files-secrets",
+      "k8s-secret",
+      "helm-values-secrets",
+      "terraform-modules-tfvars",
+      "eks-cluster-basics",
+      "terraform-basics",
+      "git-ignore-config",
+      "helm-basics",
+      "helm-dependencies-oci-gitops"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "vpc-subnets-route-tables",
+      "docker-container-basics",
+      "db-type-key-value",
+      "layer-ip-routing-icmp",
+      "kubernetes-ingress",
+      "security-groups-nacl",
+      "what-happens-google-com",
+      "layer-ip-addressing",
+      "vpc-basics"
+    ]
+  },
+  "github-actions-docker-ecr": {
+    "links": [
+      "dockerfile-image-layers",
+      "k8s-deploy-pipeline-eks",
+      "git-branching-strategy",
+      "k8s-project-structure"
+    ],
+    "mentions": [
+      "k8s-pod-troubleshooting",
+      "eks-cluster-basics",
+      "terraform-basics",
+      "token-login"
+    ]
+  },
   "count-min-sketch": {
     "links": [
       "lossy-counting",
@@ -109,7 +183,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network",
       "vpc-subnets-route-tables",
       "k8s-coredns",
-      "k8s-pv-pvc"
+      "k8s-pv-pvc",
+      "k8s-deploy-pipeline-eks"
     ],
     "mentions": [
       "kubernetes-ingress",
@@ -130,7 +205,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "terraform-basics",
       "eks-cluster-basics",
-      "layer-ip-addressing"
+      "layer-ip-addressing",
+      "k8s-project-structure"
     ],
     "mentions": [
       "docker-container-basics",
@@ -143,7 +219,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "terraform-modules-tfvars",
       "git-large-files-secrets",
-      "distributed-lock"
+      "distributed-lock",
+      "k8s-deploy-pipeline-eks"
     ],
     "mentions": [
       "json-crud-http",
@@ -174,6 +251,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "dockerfile-image-layers",
+      "k8s-deploy-pipeline-eks",
       "client-data-cache"
     ]
   },
@@ -418,6 +496,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway"
     ],
     "mentions": [
+      "k8s-deploy-pipeline-eks",
       "k8s-service-types",
       "k8s-pv-pvc",
       "kubernetes-ingress",
@@ -428,6 +507,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "k8s-pod-basics",
       "k8s-secret",
+      "k8s-project-structure",
       "k8s-coredns",
       "k8s-network-policy",
       "k8s-pod-resources",
@@ -693,6 +773,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "kubernetes-ingress",
       "linux-files-permissions",
+      "github-actions-docker-ecr",
       "eks-cluster-basics"
     ]
   },
@@ -1226,6 +1307,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ports-and-sockets",
       "layer-ip-addressing",
       "iptables-nat",
+      "github-actions-docker-ecr",
       "dns"
     ]
   },
@@ -1247,6 +1329,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics",
       "layer-ip-addressing",
       "realtime-communication",
+      "github-actions-docker-ecr",
       "eks-cluster-basics"
     ]
   },
@@ -1297,7 +1380,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "redis-basics",
-      "what-happens-google-com"
+      "what-happens-google-com",
+      "github-actions-docker-ecr"
     ]
   },
   "helm-release-lifecycle": {
@@ -1335,6 +1419,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap"
     ],
     "mentions": [
+      "k8s-project-structure",
       "k8s-pod-basics"
     ]
   },
@@ -1417,6 +1502,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "k8s-deploy-pipeline-eks",
       "k8s-deployment",
       "k8s-service-types",
       "k8s-pod-basics",
@@ -1439,6 +1525,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics",
       "iptables-nat",
       "docker-container-basics",
+      "k8s-deploy-pipeline-eks",
       "linux-processes-signals",
       "kubernetes-ingress",
       "batch-processing"
@@ -2473,6 +2560,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-stash-reflog"
     ],
     "mentions": [
+      "github-actions-docker-ecr",
       "git-tips-advanced",
       "git-branching-strategy",
       "git-large-files-secrets"
@@ -2523,6 +2611,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-troubleshooting"
     ],
     "mentions": [
+      "github-actions-docker-ecr",
       "git-stash-reflog",
       "token-login",
       "what-happens-google-com"
@@ -2535,6 +2624,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-tips-advanced"
     ],
     "mentions": [
+      "k8s-deploy-pipeline-eks",
       "ab-testing"
     ]
   },
@@ -3032,6 +3122,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-probes",
+      "github-actions-docker-ecr",
       "docker-compose",
       "k8s-pod-troubleshooting",
       "dns"
@@ -3287,6 +3378,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "rendering-csr-spa",
+      "k8s-deploy-pipeline-eks",
       "microservices",
       "cors"
     ]

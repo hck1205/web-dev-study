@@ -68,6 +68,7 @@ import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
+import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { HELM_BASICS } from "./helm-basics";
 import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
 import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
@@ -94,6 +95,7 @@ import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_COREDNS } from "./k8s-coredns";
+import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
 import { K8S_HPA } from "./k8s-hpa";
 import { K8S_NAMESPACE } from "./k8s-namespace";
@@ -105,6 +107,7 @@ import { K8S_POD_PROBES } from "./k8s-pod-probes";
 import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
 import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
 import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
+import { K8S_PROJECT_STRUCTURE } from "./k8s-project-structure";
 import { K8S_PV_PVC } from "./k8s-pv-pvc";
 import { K8S_SECRET } from "./k8s-secret";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
@@ -304,6 +307,7 @@ export const QUESTION_SETS = [
   GIT_TIPS_ADVANCED,
   GIT_TROUBLESHOOTING,
   GIT_UNDO,
+  GITHUB_ACTIONS_DOCKER_ECR,
   HELM_BASICS,
   HELM_CHART_TEMPLATES,
   HELM_DEPENDENCIES_OCI_GITOPS,
@@ -330,6 +334,7 @@ export const QUESTION_SETS = [
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
   K8S_COREDNS,
+  K8S_DEPLOY_PIPELINE_EKS,
   K8S_DEPLOYMENT,
   K8S_HPA,
   K8S_NAMESPACE,
@@ -341,6 +346,7 @@ export const QUESTION_SETS = [
   K8S_POD_RESOURCES,
   K8S_POD_SCHEDULING,
   K8S_POD_TROUBLESHOOTING,
+  K8S_PROJECT_STRUCTURE,
   K8S_PV_PVC,
   K8S_SECRET,
   K8S_SERVICE_TYPES,

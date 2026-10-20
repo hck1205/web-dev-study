@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-deploy-pipeline-eks",
+    title: "push에서 EKS까지 배포 파이프라인",
+    summary: "푸시부터 이미지 빌드, ECR, Terraform, kubectl 적용, 노드의 이미지 받기까지 이어진 길을 따라가며 단계마다 어떤 메시지로 깨지는지 본다. rollout을 기다리지 않는 CI, ImagePullBackOff의 세 가지 원인, Unauthorized와 Forbidden, 되돌리기의 함정, push와 pull(ArgoCD) 배포, deploy.sh와 cleanup.sh의 위험을 다룬다.",
+    topic: "programming/in-practice",
+    tags: ["Kubernetes", "AWS", "CI/CD", "DevOps", "Troubleshooting", "GitOps"],
+    date: "2026-10-21",
+    keywords: ["배포 파이프라인", "ProgressDeadlineExceeded", "pull 방식 배포"],
+  },
+  {
+    slug: "k8s-project-structure",
+    title: "EKS 배포 프로젝트 구조: 폴더마다 누가 읽나",
+    summary: ".github, app, k8s, terraform, scripts로 나뉜 EKS 배포 저장소를 직접 만들어 파일마다 무엇이 들어가고 누가 읽는지 따라간다. 이름순 kubectl apply의 함정, 클라이언트 검사와 서버 검사의 차이, git에 둔 Secret, .gitignore, 환경이 늘 때 Kustomize와 Helm, 저장소를 나누는 시점까지 짚는다.",
+    topic: "programming/in-practice",
+    tags: ["Kubernetes", "Terraform", "DevOps", "AWS", "Git"],
+    date: "2026-10-21",
+    keywords: ["kubeconform", "dry-run=server", "프로젝트 폴더 구조"],
+  },
+  {
+    slug: "github-actions-docker-ecr",
+    title: "GitHub Actions로 이미지 빌드하고 ECR에 올리기",
+    summary: "워크플로 한 장을 위에서부터 읽으며 오래 사는 액세스 키 대신 OIDC로 AWS 역할을 잠깐 빌리는 법, 신뢰 정책의 sub 조건, 커밋 SHA 태그, buildx 캐시, 이미지 검사, concurrency와 environment로 운영 배포 앞에 문을 다는 법을 다룬다.",
+    topic: "programming/server-infra/ci-cd",
+    tags: ["CI/CD", "AWS", "Docker", "DevOps", "Security"],
+    date: "2026-10-21",
+    keywords: ["GitHub Actions", "OIDC 신뢰 정책", "actionlint", "ECR"],
+  },
+  {
     slug: "count-min-sketch",
     title: "Count-Min Sketch: 더 세는 쪽으로만 틀리는 고정 크기 표",
     summary: "IP별 요청 횟수를 서버 스무 대에서 고정 메모리로 세는 데서 출발해 행마다 다른 해시로 더하는 구조, ε·δ로 너비와 깊이 정하기, 보수적 갱신, 행 독립성, Redis CMS 명령, 힙을 붙인 상위 k개, 캐시 승인 정책과 차단 규칙의 오탐을 다룬다.",
