@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
 import { BASE64 } from "./base64";
@@ -143,6 +144,7 @@ import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
 import { NETWORK_FLOW_LOGS } from "./network-flow-logs";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
 import { NETWORK_MONITORING } from "./network-monitoring";
@@ -247,6 +249,7 @@ import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
 import { TERRAFORM_MODULES_TFVARS } from "./terraform-modules-tfvars";
+import { TERRAFORM_NETWORK_IAC } from "./terraform-network-iac";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
@@ -265,6 +268,7 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
   BASE64,
@@ -409,6 +413,7 @@ export const QUESTION_SETS = [
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  NETWORK_CONFIG_CICD,
   NETWORK_FLOW_LOGS,
   NETWORK_LAYERS_OVERVIEW,
   NETWORK_MONITORING,
@@ -513,6 +518,7 @@ export const QUESTION_SETS = [
   TCP_RELIABILITY_CONGESTION,
   TERRAFORM_BASICS,
   TERRAFORM_MODULES_TFVARS,
+  TERRAFORM_NETWORK_IAC,
   TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,

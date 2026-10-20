@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "network-config-cicd",
+    title: "네트워크 설정 CI/CD: PR에서 plan, 승인, apply, drift 감지까지",
+    summary: "콘솔에서 지운 경로가 사흘 뒤 엉뚱한 PR에서 되살아난 일에서 출발해 lint와 validate, 저장한 plan만 apply하는 흐름, plan과 apply의 권한 분리, 변경 창, state 분리와 단계적 배포로 폭발 반경 줄이기, refresh-only와 --check로 drift 찾기, git revert로 되돌리기를 다룬다.",
+    topic: "programming/server-infra/ci-cd",
+    tags: ["CI/CD", "GitOps", "Terraform", "IaC", "DevOps", "Network"],
+    date: "2026-10-20",
+    keywords: ["drift 감지", "변경 창", "폭발 반경"],
+  },
+  {
+    slug: "ansible-network-automation",
+    title: "Ansible로 네트워크 설정 자동화: 몇 번을 돌려도 같은 결과",
+    summary: "서버마다 다른 sysctl 값과 방화벽 규칙에서 출발해 인벤토리와 group_vars, 모듈의 멱등성, --check --diff, 템플릿과 핸들러, 규칙을 한 줄씩 맞출지 파일 전체로 맞출지, serial과 rescue로 한 대씩 바꾸고 되돌리는 법, cisco.ios 리소스 모듈까지 네임스페이스 실습으로 따라간다.",
+    topic: "programming/server-infra/iac",
+    tags: ["IaC", "DevOps", "Linux", "Network", "Firewall", "Automation"],
+    date: "2026-10-20",
+    keywords: ["Ansible", "플레이북", "group_vars"],
+  },
+  {
+    slug: "terraform-network-iac",
+    title: "네트워크를 Terraform으로: 주소 계획부터 끊기지 않는 변경까지",
+    summary: "보안 그룹 설명 한 줄을 고쳤다가 연결이 끊긴 일에서 출발해 cidrsubnet으로 주소를 고정하는 법, 인라인과 개별 규칙을 섞을 때 생기는 흔들림, 교체 순서와 두 단계 교체, 제자리 수정으로 숨는 위험, 손으로 만든 규칙 import, tfsec·checkov·conftest 정책 검사를 실제 출력으로 따라간다.",
+    topic: "programming/server-infra/iac",
+    tags: ["Terraform", "IaC", "AWS", "Network", "DevOps", "Security"],
+    date: "2026-10-20",
+    keywords: ["cidrsubnets", "create_before_destroy", "conftest"],
+  },
+  {
     slug: "api-versioning",
     title: "API 버전 관리: 고칠 수 없는 클라이언트와의 약속 바꾸기",
     summary: "추가했을 뿐인데 깨지는 변경을 재현하고, 스키마 비교와 소비자 계약 테스트로 배포 전에 잡고, 날짜 버전 변환 계층과 캐시 Vary, Deprecation·Sunset과 brownout으로 옛 버전을 끝내는 과정을 직접 돌려 본다. 이벤트 스키마와 GraphQL의 진화도 다룬다.",

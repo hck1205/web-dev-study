@@ -2,6 +2,7 @@
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
+  "ansible-network-automation": 7,
   "api-pagination-sorting": 6,
   "api-versioning": 6,
   "base64": 7,
@@ -146,6 +147,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "microservices": 8,
   "mongodb-document-model": 8,
   "mvc-pattern": 8,
+  "network-config-cicd": 7,
   "network-flow-logs": 7,
   "network-layers-overview": 6,
   "network-monitoring": 7,
@@ -250,6 +252,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "tcp-reliability-congestion": 6,
   "terraform-basics": 7,
   "terraform-modules-tfvars": 6,
+  "terraform-network-iac": 7,
   "timeouts": 7,
   "token-login": 7,
   "traffic-shaping-qos": 7,

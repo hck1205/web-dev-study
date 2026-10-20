@@ -2,6 +2,51 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "network-config-cicd": {
+    "links": [
+      "terraform-network-iac",
+      "ansible-network-automation",
+      "github-actions-docker-ecr",
+      "k8s-deploy-pipeline-eks",
+      "terraform-basics"
+    ],
+    "mentions": [
+      "vpc-subnets-route-tables",
+      "iptables-basics",
+      "security-groups-nacl",
+      "vpc-basics"
+    ]
+  },
+  "ansible-network-automation": {
+    "links": [
+      "terraform-network-iac",
+      "iptables-basics",
+      "iptables-nat",
+      "network-config-cicd"
+    ],
+    "mentions": [
+      "terraform-basics",
+      "security-groups-nacl",
+      "vlan-basics",
+      "vpc-basics",
+      "http-methods"
+    ]
+  },
+  "terraform-network-iac": {
+    "links": [
+      "terraform-basics",
+      "terraform-modules-tfvars",
+      "vpc-basics",
+      "vpc-subnets-route-tables",
+      "security-groups-nacl",
+      "vpc-peering-transit-privatelink",
+      "layer-ip-addressing",
+      "network-flow-logs",
+      "network-config-cicd",
+      "ansible-network-automation"
+    ],
+    "mentions": []
+  },
   "api-versioning": {
     "links": [
       "rest-api-design",
@@ -609,6 +654,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "terraform-modules-tfvars": {
     "links": [
       "terraform-basics",
+      "terraform-network-iac",
       "eks-cluster-basics",
       "layer-ip-addressing",
       "k8s-project-structure"
@@ -623,6 +669,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "terraform-basics": {
     "links": [
       "terraform-modules-tfvars",
+      "terraform-network-iac",
+      "ansible-network-automation",
       "git-large-files-secrets",
       "distributed-lock",
       "k8s-deploy-pipeline-eks"
@@ -1732,6 +1780,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-basics",
       "iptables-basics",
       "network-flow-logs",
+      "terraform-network-iac",
       "vpc-peering-transit-privatelink"
     ],
     "mentions": [
@@ -1790,6 +1839,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sdn-vxlan-overlay",
       "layer-ip-addressing",
       "iptables-nat",
+      "terraform-network-iac",
       "network-flow-logs"
     ],
     "mentions": [
