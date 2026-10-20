@@ -2,6 +2,74 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "distributed-tracing": {
+    "links": [
+      "db-index",
+      "event-driven-architecture",
+      "service-mesh",
+      "network-flow-logs",
+      "network-monitoring",
+      "timeouts"
+    ],
+    "mentions": [
+      "gateway",
+      "rabbitmq-basics",
+      "tcp-connection-lifecycle",
+      "event-loop",
+      "kafka-basics",
+      "http-status-codes"
+    ]
+  },
+  "network-flow-logs": {
+    "links": [
+      "security-groups-nacl",
+      "network-monitoring",
+      "iptables-basics",
+      "vpc-subnets-route-tables",
+      "k8s-cni-pod-network",
+      "ids-ips",
+      "zero-trust-architecture",
+      "packet-capture-tcpdump",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "vpc-basics",
+      "osi-in-practice",
+      "tcp-connection-lifecycle",
+      "k8s-service-types",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "ports-and-sockets",
+      "local-custom-domain",
+      "layer-ip-routing-icmp",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "network-monitoring": {
+    "links": [
+      "network-troubleshooting-by-layer",
+      "traffic-shaping-qos",
+      "tcp-reliability-congestion",
+      "tcp-connection-lifecycle",
+      "connection-pool",
+      "iptables-basics",
+      "k8s-coredns",
+      "packet-capture-tcpdump",
+      "network-flow-logs",
+      "db-type-time-series"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "local-custom-domain",
+      "event-loop",
+      "ports-and-sockets",
+      "http-status-codes",
+      "layer-ip-routing-icmp",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
   "raft-consensus": {
     "links": [
       "leader-election",
@@ -66,6 +134,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql"
     ],
     "mentions": [
+      "network-monitoring",
       "ipv6-basics",
       "security-groups-nacl",
       "redis-basics",
@@ -412,6 +481,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "kubernetes-ingress",
+      "network-flow-logs",
       "terraform-basics",
       "k8s-configmap",
       "base64",
@@ -512,6 +582,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "security-groups-nacl",
       "k8s-network-policy",
+      "network-flow-logs",
       "ids-ips"
     ],
     "mentions": [
@@ -525,6 +596,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "security-groups-nacl",
       "packet-capture-tcpdump",
+      "network-flow-logs",
       "service-mesh",
       "zero-trust-architecture"
     ],
@@ -640,7 +712,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "kafka-basics",
       "rabbitmq-basics",
-      "dead-letter-queue"
+      "dead-letter-queue",
+      "distributed-tracing"
     ],
     "mentions": [
       "postgres-architecture"
@@ -674,6 +747,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "db-type-columnar-olap",
       "db-locking-deadlock",
+      "distributed-tracing",
       "kafka-basics",
       "db-transaction-isolation",
       "db-replication-sharding",
@@ -813,6 +887,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
+      "network-flow-logs",
       "security-groups-nacl",
       "vpc-basics",
       "udp-and-quic"
@@ -1529,6 +1604,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "vpc-basics",
       "iptables-basics",
+      "network-flow-logs",
       "vpc-peering-transit-privatelink"
     ],
     "mentions": [
@@ -1545,7 +1621,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-basics",
       "vpc-subnets-route-tables",
       "service-mesh",
-      "security-groups-nacl"
+      "security-groups-nacl",
+      "network-flow-logs"
     ],
     "mentions": [
       "db-sharding",
@@ -1585,7 +1662,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "sdn-vxlan-overlay",
       "layer-ip-addressing",
-      "iptables-nat"
+      "iptables-nat",
+      "network-flow-logs"
     ],
     "mentions": [
       "layer-ip-routing-icmp",
@@ -2319,6 +2397,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "sdn-vxlan-overlay",
       "security-groups-nacl",
+      "network-monitoring",
       "ipv6-basics",
       "layer-ip-routing-icmp"
     ]
@@ -3085,6 +3164,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational",
       "db-type-graph",
       "http-caching-cdn",
+      "distributed-tracing",
       "kafka-basics",
       "sql-batch-timeout-pool",
       "postgres-operations",
@@ -3754,6 +3834,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "microservices": {
     "links": [
       "resilience-patterns",
+      "distributed-tracing",
       "distributed-transactions-2pc",
       "saga-pattern",
       "gateway"

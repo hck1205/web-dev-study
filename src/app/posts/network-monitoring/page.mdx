@@ -1,0 +1,659 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("network-monitoring");
+
+"API가 가끔 3초씩 멈춘다"는 문의가 들어왔다. 대시보드를 열어 보니 CPU, 메모리, 네트워크 그래프가 전부 평온하다. 네트워크 그래프라고 해 봐야 초당 몇 바이트가 오갔는지 그린 선 하나였고, 그 선은 회선 용량의 10%도 안 됐다. 원인은 나중에 찾았다. 앱이 연결을 받아 가는 속도보다 새 연결이 빨리 들어와서 커널의 대기열이 넘쳤고, 넘친 SYN은 아무 기록 없이 버려졌다. 클라이언트는 1초, 다시 2초를 기다렸다가 SYN을 재전송했다. 바이트 그래프에는 이런 일이 흔적을 남기지 않는다.
+
+네트워크 모니터링은 "얼마나 많이 흘렀나"보다 "어디서 잃어버렸고 어디서 기다렸나"를 보는 일에 가깝다. 이 글은 호스트와 링크에서 볼 숫자를 고르고, 각 숫자를 커널에서 직접 읽어 본 뒤, Prometheus의 node_exporter와 blackbox_exporter로 모아 알림까지 걸어 본다. 지표, 로그, 추적이 각각 무엇인지는 [관측 가능성 기본 글](/posts/observability-basics)에서, 카운터와 게이지 같은 지표 타입은 [지표 타입 글](/posts/metrics-types)에서 다룬다. 장애가 났을 때 계층별로 좁혀 가는 순서는 [계층별 장애 좁히기](/posts/network-troubleshooting-by-layer)에 있다. 이 글은 그 장애를 사람이 알아채기 전에 숫자로 먼저 보는 쪽이다.
+
+실습은 Ubuntu 24.04(커널 6.x)에서 했다. 22.04도 명령과 출력 형식은 같다. 네트워크 네임스페이스 두 개(`n7-cli` 10.77.0.1, `n7-web` 10.77.0.2)를 veth로 잇고, `n7-web`에서 Python HTTP 서버를 띄웠다. Prometheus 3.5.0, node_exporter 1.9.1, blackbox_exporter 0.27.0은 GitHub 릴리스 바이너리를 그대로 받아 돌렸다.
+
+```bash
+# 네임스페이스 두 개를 veth로 잇는다
+sudo ip netns add n7-cli; sudo ip netns add n7-web
+sudo ip link add n7c type veth peer name n7w
+sudo ip link set n7c netns n7-cli; sudo ip link set n7w netns n7-web
+# 안쪽 이름을 eth0으로 바꾸고 주소를 준다
+sudo ip -n n7-cli link set n7c name eth0; sudo ip -n n7-web link set n7w name eth0
+sudo ip -n n7-cli addr add 10.77.0.1/24 dev eth0; sudo ip -n n7-web addr add 10.77.0.2/24 dev eth0
+sudo ip -n n7-cli link set eth0 up; sudo ip -n n7-web link set eth0 up
+```
+
+## 바이트 그래프 뒤에 숨은 숫자들
+
+패킷 하나가 서버의 앱에 닿기까지 여러 군데에서 줄을 서고, 줄이 넘치면 버려진다. 랜카드의 수신 링, 보내기 전 큐(qdisc), 방화벽의 연결 추적 표(conntrack), TCP의 accept 큐, 앱이 쓰는 소켓 버퍼가 다 그런 자리다. 각 자리는 자기 카운터를 따로 갖고 있다. 하나만 보고 "네트워크는 멀쩡하다"고 하면 나머지에서 일어난 일을 놓친다.
+
+아래 그림에서 다음을 누르면 패킷이 들어오는 길에서 버려질 수 있는 자리마다 무엇이 기록되는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="패킷이 버려지는 자리와 그 자리의 카운터"
+  zones={[
+    { id: "host", label: "서버 10.77.0.2 (커널)", x: 8, y: 92, w: 384, h: 230, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "10.77.0.1", x: 80, y: 40, icon: "client" },
+    { id: "sw", label: "switch", sub: "ifInErrors", x: 300, y: 40, icon: "switch" },
+    { id: "nic", label: "NIC ring", sub: "rx_dropped", x: 80, y: 140, icon: "router" },
+    { id: "ct", label: "conntrack", sub: "count/max", x: 300, y: 140, icon: "firewall" },
+    { id: "q", label: "accept queue", sub: "ListenOverflow", x: 80, y: 220, icon: "lock", w: 118 },
+    { id: "qd", label: "qdisc", sub: "tc dropped", x: 300, y: 220, icon: "switch" },
+    { id: "app", label: "app", sub: ":80", x: 190, y: 290, icon: "server" },
+  ]}
+  links={[
+    { from: "cli", to: "sw" },
+    { from: "sw", to: "nic" },
+    { from: "nic", to: "ct" },
+    { from: "ct", to: "q" },
+    { from: "q", to: "app" },
+    { from: "app", to: "qd" },
+    { from: "qd", to: "sw", dashed: true },
+  ]}
+  steps={[
+    {
+      path: ["cli", "sw", "nic", "ct", "q", "app"],
+      packet: "SYN",
+      title: "막힘 없이 들어오는 길",
+      detail: "스위치 포트, 랜카드 수신 링, conntrack, accept 큐를 지나 앱이 accept()로 가져간다. 각 칸에는 통과한 수와 버린 수를 세는 카운터가 있다.",
+    },
+    {
+      path: ["cli", "sw", "nic"],
+      packet: "frame",
+      blocked: true,
+      title: "링이 넘치면 랜카드에서 버린다",
+      detail: "커널이 수신 링을 비우는 속도보다 빨리 들어오면 랜카드가 버린다. ip -s link의 RX dropped나 missed, ethtool -S의 드라이버 카운터에 남는다.",
+    },
+    {
+      path: ["cli", "sw", "nic", "ct"],
+      packet: "SYN",
+      blocked: true,
+      title: "연결 추적 표가 꽉 차면",
+      detail: "새 연결을 적을 자리가 없어 첫 패킷을 버린다. 커널 로그에 table full이 찍히고, 이미 맺은 연결은 멀쩡하다.",
+      payload: "nf_conntrack: table full, dropping packet",
+    },
+    {
+      path: ["cli", "sw", "nic", "ct", "q"],
+      packet: "SYN",
+      blocked: true,
+      title: "accept 큐가 넘치면",
+      detail: "앱이 연결을 가져가지 못해 큐가 차 있으면 SYN이나 마지막 ACK를 버린다. 클라이언트는 1초 뒤에 다시 보낸다.",
+      payload: "TcpExtListenOverflows +1",
+    },
+    {
+      path: ["app", "qd"],
+      packet: "data",
+      blocked: true,
+      title: "나갈 때는 큐에서 버린다",
+      detail: "보내는 쪽 큐(qdisc)가 넘치면 TCP는 그 조각을 다시 보낸다. 이 버림은 인터페이스 카운터가 아니라 tc -s qdisc에 남는다.",
+    },
+  ]}
+/>
+
+이 칸들 위로 숫자가 두 개 더 있다. 하나는 TCP가 잃어버린 조각을 다시 보낸 횟수(재전송)다. 어느 칸에서 버려졌든, 경로 중간의 남의 장비에서 버려졌든 결국 재전송으로 드러난다. 다른 하나는 바깥에서 본 결과다. 커널 카운터가 아무리 깨끗해도 DNS가 느리거나 방화벽이 막아 사용자가 못 들어오면 의미가 없다. 그래서 안에서 세는 숫자와 바깥에서 두드려 보는 숫자를 함께 둔다.
+
+## 인터페이스 카운터는 부팅 후 누적값이다
+
+가장 아래 숫자부터 본다. `ip -s link`는 인터페이스가 생긴 뒤 보내고 받은 바이트·패킷 수와 오류, 버린 수를 보여 준다.
+
+```bash
+# n7-web의 eth0 카운터 (stderr의 peer netns 경고는 버린다)
+sudo ip netns exec n7-web ip -s link show eth0 2>/dev/null
+```
+
+```text
+5: eth0@if6: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc tbf state UP mode DEFAULT group default qlen 1000
+    link/ether a6:cf:bd:e7:f9:8a brd ff:ff:ff:ff:ff:ff link-netns n7-cli
+    RX:  bytes packets errors dropped  missed   mcast           
+        708940   10251      0       0       0       0 
+    TX:  bytes packets errors dropped carrier collsns           
+     248358222   13174      0       0       0       0 
+```
+
+RX의 `errors`는 CRC가 틀린 프레임처럼 망가진 채 들어온 것, `dropped`는 멀쩡했지만 커널이 받아 줄 자리가 없었거나 모르는 프로토콜이라 버린 것, `missed`는 랜카드가 링이 넘쳐 버린 것이다. TX의 `carrier`는 링크가 끊겼다 붙었다 한 흔적이다. 물리 회선이라면 `errors`와 `carrier`는 케이블, 트랜시버, 상대 포트 설정(속도·듀플렉스 불일치)을 의심하는 신호다.
+
+이 숫자들은 모두 누적값이다. "dropped 1,200"이라는 숫자만으로는 지금 문제인지 석 달 전 문제인지 모른다. 반드시 두 시점의 차이를 시간으로 나눠서 본다. 손으로 볼 때는 `watch -d -n 2 "grep eth0 /proc/net/dev"`처럼 몇 초 간격으로 같은 값을 다시 읽어 바뀐 칸을 본다.
+
+랜카드 드라이버마다 더 자세한 카운터가 `ethtool -S`에 있다. 실제 NIC라면 `rx_missed_errors`, `rx_no_buffer_count`, 큐별 `rx_queue_N_drops` 같은 이름이 나온다. 이름은 드라이버마다 다르니 "drop", "miss", "err"가 들어간 줄을 찾는다.
+
+```bash
+# 드라이버 카운터 중 0이 아닌 오류·버림 계열만
+sudo ethtool -S eth0 | grep -iE 'drop|miss|err' | grep -v ': 0$'
+```
+
+## 인터페이스가 0이어도 큐에서 버려진다
+
+위 출력을 찍기 직전에 `n7-web`의 eth0에 20Mbit/s 셰이퍼(tbf)를 걸고, 큐 한도를 30KB로 작게 잡은 다음 2MB 파일을 여덟 개 동시에 받았다. 인터페이스의 TX `dropped`는 여전히 0이다. 그런데 큐 쪽을 보면 다르다.
+
+```bash
+# qdisc별 통계: 보낸 양, 버린 수, 한도 초과 횟수
+sudo ip netns exec n7-web tc -s qdisc show dev eth0
+```
+
+```text
+qdisc tbf 8001: root refcnt 5 rate 20Mbit burst 32Kb limit 30Kb 
+ Sent 25535278 bytes 16903 pkt (dropped 5251, overlimits 18165 requeues 0) 
+ backlog 0b 0p requeues 0
+```
+
+5,251개를 버렸다. qdisc는 인터페이스 드라이버에 넘기기 전 단계라서, 여기서 버린 패킷은 드라이버가 세는 `ip -s link`의 TX dropped에 잡히지 않는다. 실제 서버에서도 기본 qdisc(fq_codel이나 mq 아래의 pfifo_fast)가 패킷을 버리면 같은 일이 생긴다. 큐가 지연과 버림을 어떻게 맞바꾸는지는 [트래픽 셰이핑 글](/posts/traffic-shaping-qos)에서 자세히 봤다. 모니터링 쪽에서 기억할 것은 하나다. 인터페이스 카운터가 깨끗해도 `tc -s qdisc`를 따로 봐야 한다.
+
+## 재전송은 잃어버린 패킷의 영수증
+
+내 서버의 카운터는 내 서버에서 버린 것만 센다. 경로 중간의 스위치, 클라우드의 가상 라우터, 상대 서버에서 버린 것은 보이지 않는다. 그런데 TCP는 잃어버린 조각을 다시 보내야 하니, 재전송 횟수는 어디서 잃어버렸든 결과를 남긴다.
+
+이 실습 커널에는 지연·손실을 만드는 netem 모듈이 없어서, 클라이언트 쪽에서 iptables `statistic` 모듈로 서버가 보낸 패킷의 2%를 무작위로 버렸다. 보통의 Ubuntu라면 `tc qdisc add dev eth0 root netem loss 2%`로 같은 상황을 만든다.
+
+```bash
+# 클라이언트가 받는 80번 응답의 2%를 버린다 (링크 손실 흉내)
+sudo ip netns exec n7-cli iptables -t raw -A PREROUTING -i eth0 -p tcp --sport 80 \
+  -m statistic --mode random --probability 0.02 -j DROP
+# 서버의 커널 카운터 기준점을 잡는다 (-n: 출력 없이 기록만)
+sudo ip netns exec n7-web nstat -n
+# 2MB 파일을 스무 번 받는다
+for i in $(seq 1 20); do sudo ip netns exec n7-cli curl -s -o /dev/null http://10.77.0.2/big.bin; done
+# 기준점 이후 늘어난 만큼만 본다
+sudo ip netns exec n7-web nstat
+```
+
+```text
+#kernel
+IpInReceives                    1268               0.0
+IpInDelivers                    1268               0.0
+IpOutRequests                   1409               0.0
+IpOutTransmits                  1409               0.0
+TcpPassiveOpens                 20                 0.0
+TcpInSegs                       1268               0.0
+TcpOutSegs                      28113              0.0
+TcpRetransSegs                  714                0.0
+TcpExtTW                        9                  0.0
+TcpExtTCPSackRecovery           24                 0.0
+TcpExtTCPLostRetransmit         16                 0.0
+TcpExtTCPFastRetrans            714                0.0
+TcpExtTCPOrigDataSent           28064              0.0
+```
+
+(실제 출력에서 재전송과 관계없는 줄 몇 개를 뺐다.) `nstat`은 `/proc/net/snmp`와 `/proc/net/netstat`의 누적값을 읽고, 지난번 읽은 값과의 차이를 보여 준다. 그래서 `-n`으로 기준을 잡고 다시 부르면 그사이 늘어난 양만 나온다. 보낸 조각 28,113개 중 714개를 다시 보냈으니 약 2.5%다. 버리도록 한 2%보다 조금 많은 건, 다시 보낸 조각이 또 버려진 경우(`TCPLostRetransmit` 16)와 순서가 섞여 잘못 판단한 경우가 섞였기 때문이다. 714개 모두 `TCPFastRetrans`, 즉 같은 ACK가 겹쳐 와서 타이머를 기다리지 않고 빨리 다시 보낸 것이다. 타이머가 만료돼서 다시 보낸 `TCPTimeouts`가 늘기 시작하면 사용자 체감이 훨씬 나빠진다. 첫 RTO가 200ms 이상이고 실패할 때마다 두 배로 늘기 때문이다. 재전송이 어떻게 결정되는지는 [TCP 재전송과 혼잡 제어 글](/posts/tcp-reliability-congestion)에 있다.
+
+어느 연결이 재전송하고 있는지는 `ss -ti`로 연결마다 본다. 60MB 파일을 받는 도중에 찍었다.
+
+```bash
+# 80번 포트 연결의 TCP 내부 상태
+sudo ip netns exec n7-web ss -tin '( sport = :80 )'
+```
+
+```text
+State Recv-Q Send-Q  Local Address:Port Peer Address:Port Process
+ESTAB 0      4195792     10.77.0.2:80      10.77.0.1:52106
+	 bbr wscale:10,10 rto:208 backoff:2 rtt:4.005/6.222 ato:40 mss:1448 pmtu:1500 rcvmss:536 advmss:1448 cwnd:574 ssthresh:148 bytes_sent:18188703 bytes_retrans:341952 bytes_acked:17846751 bytes_received:80 segs_out:12601 segs_in:142 data_segs_out:12590 data_segs_in:1 bbr:(bw:11318137600bps,mrtt:0.002,pacing_gain:1,cwnd_gain:2) send 1660228714bps lastsnd:700 lastrcv:5004 lastack:488 pacing_rate 11204956224bps delivery_rate 11318137704bps delivered:12356 busy:5000ms rwnd_limited:4672ms(93.4%) retrans:0/238 dsack_dups:3 reordering:112 rcv_space:14480 rcv_ssthresh:64088 notsent:4195792 minrtt:0.002
+```
+
+모니터링 관점에서 볼 곳은 셋이다. `retrans:0/238`은 지금 미확인 상태인 재전송 0개, 이 연결에서 지금까지 재전송한 조각 238개다. `bytes_retrans`를 `bytes_sent`로 나누면 1.9%다. `backoff:2`는 RTO 타이머가 두 번 연속 만료돼서 대기 시간이 네 배로 늘어난 상태라는 뜻이다. 0이 아니면 그 연결은 지금 타이머를 기다리며 멈춰 있을 수 있다. 나머지 필드(cwnd, rwnd_limited 등)를 읽는 법은 위 TCP 글에서 조각별로 봤다. 이 실습 커널의 기본 혼잡 제어가 BBR이라 `bbr`로 찍혔다. Ubuntu 기본값은 CUBIC이다.
+
+재전송은 비율로 본다. 트래픽이 많은 서버는 재전송 횟수도 많다. 보낸 조각 대비 재전송이 평소 0.1% 아래에서 놀다가 1%를 넘기 시작하면 경로 어딘가가 아프다는 신호다. 단, 인터넷 쪽 고객을 받는 서버는 모바일 고객이 섞여 평소에도 1% 안팎이 나올 수 있다. 숫자 하나를 정답으로 외우기보다 그 서버의 평소 값에서 얼마나 벗어났는지를 본다.
+
+## accept 큐가 넘치면 SYN이 소리 없이 사라진다
+
+처음 장면의 범인이다. 커널은 3-way handshake를 끝낸 연결을 accept 큐에 넣어 두고, 앱이 `accept()`로 꺼내 간다. 앱이 바빠서 못 꺼내면 큐가 찬다. 큐가 꽉 찬 상태에서 새 연결이 들어오면 커널은 그 연결을 버리고 카운터만 하나 올린다. 큐 두 개의 구조는 [TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)에서 봤다.
+
+`listen(4)`만 하고 `accept()`를 부르지 않는 Python 서버를 8080번에 띄우고 30개 연결을 동시에 보냈다.
+
+```bash
+# LISTEN 소켓의 큐 상태
+sudo ip netns exec n7-web ss -ltn 'sport = :8080'
+# 큐가 넘친 횟수
+sudo ip netns exec n7-web nstat | grep -i listen
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 5      4            0.0.0.0:8080      0.0.0.0:*          
+TcpExtListenOverflows           75                 0.0
+TcpExtListenDrops               75                 0.0
+```
+
+아래 그림에서 다음을 누르면 큐가 찬 서버에 연결하는 클라이언트가 어떻게 몇 초를 잃는지 보인다.
+
+<SequenceDiagram
+  caption="accept 큐가 찬 서버에 연결할 때: 실패 기록은 카운터에만 남는다"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "k", label: "서버 커널" },
+    { id: "a", label: "앱" },
+  ]}
+  steps={[
+    { from: "c", to: "k", label: "SYN", title: "연결을 청한다", detail: "클라이언트가 SYN을 보낸다. 서버 커널은 accept 큐가 이미 한도만큼 찬 것을 본다." },
+    { from: "k", to: "k", label: "버림, 카운터 +1", title: "조용히 버린다", detail: "RST도 보내지 않고 버린다. ListenOverflows와 ListenDrops가 하나씩 오른다. 앱은 이 일을 모른다.", payload: "TcpExtListenOverflows +1" },
+    { from: "c", to: "k", label: "SYN (1초 뒤)", title: "1초 뒤 다시 보낸다", detail: "SYN에 대한 응답이 없으니 클라이언트 커널이 1초 뒤 재전송한다. 큐가 여전히 차 있으면 또 버려진다." },
+    { from: "c", to: "k", label: "SYN (2초 더)", title: "간격이 두 배로 늘어난다", detail: "다음 재전송은 2초 뒤다. 사용자는 이미 3초를 기다렸다." },
+    { from: "a", to: "k", label: "accept()", title: "앱이 하나 꺼내 간다", detail: "앱이 밀린 연결을 하나 가져가면 큐에 자리가 하나 생긴다." },
+    { from: "k", to: "c", label: "SYN-ACK", title: "이제야 연결된다", detail: "세 번째 SYN이 받아들여진다. 클라이언트 로그에는 느린 요청 하나로만 남고, 앱 로그에는 정상 요청 하나로 남는다." },
+  ]}
+/>
+
+LISTEN 줄에서 `Recv-Q`는 지금 큐에 쌓인 연결 수, `Send-Q`는 큐 한도다. 5가 4보다 크다는 건 꽉 찼다는 뜻이다(리눅스는 한도보다 하나 더 넣는다). 30개 연결이 75번 버려졌다. 클라이언트가 SYN을 재전송할 때마다 또 버려져서 연결 수보다 많이 센다. 클라이언트에서는 "3초 걸리다가 결국 연결됨"이나 "connect timeout"으로 보이고, 앱 로그에는 아무것도 없다. 앱은 그 연결을 받은 적이 없기 때문이다.
+
+`ListenOverflows`는 0이 아니면 무조건 들여다볼 숫자다. 한도는 앱의 `listen(backlog)` 값과 `net.core.somaxconn` 중 작은 쪽이다(Ubuntu 22.04 이상, 커널 5.4부터 somaxconn 기본값은 4096). 한도를 올리는 건 응급처치이고, 근본 원인은 대개 앱이 느려져서 accept를 늦게 하는 것이다. 이 숫자가 오르는 시각과 앱의 이벤트 루프 지연이나 스레드 풀 포화 시각을 겹쳐 본다.
+
+## TIME_WAIT와 conntrack은 개수를 한도와 같이 본다
+
+짧은 HTTP 요청을 300번 보내고 양쪽의 소켓 요약을 봤다.
+
+```bash
+# 소켓 상태별 개수 요약
+sudo ip netns exec n7-web ss -s
+# 연결 추적 표의 지금 개수와 한도
+sudo ip netns exec n7-web sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+```
+
+```text
+Total: 7
+TCP:   454 (estab 5, closed 447, orphaned 0, timewait 271)
+
+Transport Total     IP        IPv6
+RAW	  0         0         0        
+UDP	  0         0         0        
+TCP	  7         7         0        
+INET	  7         7         0        
+FRAG	  0         0         0        
+
+net.netfilter.nf_conntrack_count = 300
+net.netfilter.nf_conntrack_max = 262144
+```
+
+`timewait 271`이 서버 쪽에 있다. TIME_WAIT는 연결을 먼저 끊은 쪽에 남는데, Python의 `http.server`는 HTTP/1.0처럼 응답 후 서버가 먼저 끊어서 서버에 쌓였다. 같은 시각 클라이언트의 `ss -s`는 `timewait 82`였다. 어느 쪽에 쌓이는지 알면 "TIME_WAIT가 많다"는 경고가 어느 쪽 코드의 문제인지 바로 안다.
+
+TIME_WAIT 자체는 정상 상태다. 문제가 되는 건 클라이언트 쪽에서 같은 목적지로 나가는 임시 포트를 다 써 버릴 때다. 목적지 하나(IP·포트)에 대해 쓸 수 있는 포트는 `net.ipv4.ip_local_port_range` 기본값 32768~60999, 28,232개다. TIME_WAIT가 60초 머무니 같은 목적지로 초당 470개 넘게 새 연결을 열면 포트가 바닥난다. 이때 증상은 `connect()`의 `EADDRNOTAVAIL`(Cannot assign requested address)이다. 대책은 연결 재사용(keep-alive와 [커넥션 풀](/posts/connection-pool))이 먼저다.
+
+conntrack은 표 크기가 정해져 있다. 300 / 262,144로 0.1%라 여유가 있다. 표가 꽉 차면 새 연결의 첫 패킷이 버려지는데, 이것도 앱 로그에는 남지 않고 커널 로그(`dmesg`)에 `table full, dropping packet`만 찍힌다. 원리와 대처는 [iptables 기본 글](/posts/iptables-basics)에서 봤다. 모니터링에서 할 일은 비율을 그리는 것이다. 개수만 그리면 한도가 서버마다 달라 기준선을 잡기 어렵다. `conntrack -S`의 `drop`, `insert_failed`, `early_drop`이 0이 아니면 이미 버리기 시작한 것이다.
+
+## DNS 지연은 요청 시간 속에 숨는다
+
+API 응답 시간 그래프에는 이름 풀이 시간이 따로 보이지 않는다. 연결 풀이 없거나 DNS 캐시가 없는 클라이언트는 요청마다 이름을 풀고, 리졸버가 느려지면 그만큼 응답 전체가 늦어진다. `n7-web`에 dnsmasq를 띄우고, 그 앞에 질의마다 250ms를 기다렸다가 넘기는 작은 프록시를 5300번에 하나 더 뒀다.
+
+```bash
+# 빠른 리졸버(53)와 느린 리졸버(5300)에 같은 이름을 묻는다
+sudo ip netns exec n7-cli dig @10.77.0.2 api.lab.internal | grep 'Query time'
+sudo ip netns exec n7-cli dig @10.77.0.2 -p 5300 api.lab.internal | grep 'Query time'
+```
+
+```text
+;; Query time: 0 msec
+;; Query time: 251 msec
+```
+
+사람이 `dig`로 확인하는 건 장애가 난 뒤다. 평소에 이 숫자를 계속 재 두려면 바깥에서 주기적으로 묻는 장치가 필요하다. 그 일을 blackbox_exporter가 한다. 리졸버가 느려지는 흔한 원인(쿠버네티스의 ndots와 search 도메인, conntrack 경합으로 생기는 5초 지연)은 [CoreDNS 글](/posts/k8s-coredns)에서 다룬다.
+
+## node_exporter는 안을, blackbox_exporter는 밖을 본다
+
+지금까지 손으로 읽은 숫자를 Prometheus로 모은다. 두 exporter는 보는 방향이 반대다. node_exporter는 서버 안에서 `/proc`와 `/sys`를 읽어 카운터를 그대로 내놓는다. blackbox_exporter는 서버 밖에서 HTTP, TCP, DNS, ICMP로 대상을 두드려 보고 결과를 숫자로 만든다. Prometheus는 둘 다 주기적으로 긁어 간다(scrape).
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="Prometheus는 node_exporter를 직접 긁고, blackbox_exporter에게는 대신 두드려 달라고 한다"
+  zones={[
+    { id: "mon", label: "n7-cli (감시 쪽)", x: 8, y: 16, w: 384, h: 110, tone: "edge" },
+    { id: "web", label: "n7-web 10.77.0.2", x: 8, y: 150, w: 384, h: 130, tone: "private" },
+  ]}
+  nodes={[
+    { id: "prom", label: "Prometheus", sub: ":9090", x: 90, y: 76, icon: "server" },
+    { id: "bb", label: "blackbox", sub: ":9115", x: 300, y: 76, icon: "gateway" },
+    { id: "ne", label: "node_exporter", sub: ":9100", x: 90, y: 200, icon: "container", w: 120 },
+    { id: "http", label: "http.server", sub: ":80", x: 220, y: 240, icon: "server" },
+    { id: "dns", label: "dnsmasq", sub: ":53", x: 330, y: 200, icon: "dns" },
+  ]}
+  links={[
+    { from: "prom", to: "ne", label: "/metrics" },
+    { from: "prom", to: "bb", label: "/probe" },
+    { from: "bb", to: "http" },
+    { from: "bb", to: "dns" },
+  ]}
+  steps={[
+    {
+      path: ["prom", "ne"],
+      packet: "scrape",
+      title: "안쪽 숫자는 직접 긁는다",
+      detail: "5초마다 node_exporter의 /metrics를 가져온다. 인터페이스, TCP, conntrack, 소켓 카운터가 텍스트로 들어 있다.",
+      payload: "node_netstat_Tcp_RetransSegs 14754",
+    },
+    {
+      path: ["prom", "bb"],
+      packet: "/probe",
+      title: "바깥 확인은 대신 시킨다",
+      detail: "blackbox에게 module과 target을 넘긴다. 대상 목록은 Prometheus 설정에 있고, blackbox는 시키는 대로 한 번 두드릴 뿐이다.",
+      payload: "GET /probe?module=http_2xx&target=http://10.77.0.2/health",
+    },
+    {
+      path: ["bb", "http"],
+      packet: "GET",
+      highlight: ["web"],
+      title: "사용자처럼 요청한다",
+      detail: "이름 풀이, 연결, TLS, 첫 바이트, 본문까지 단계별 시간을 잰다. 상태 코드가 기대와 다르면 실패다.",
+    },
+    {
+      path: ["bb", "dns"],
+      packet: "A?",
+      title: "DNS도 같은 방식으로",
+      detail: "정해 둔 이름을 묻고 응답 코드와 답의 개수를 확인한다. 질의에 걸린 시간이 그대로 지표가 된다.",
+    },
+    {
+      path: ["bb", "prom"],
+      packet: "metrics",
+      title: "결과를 숫자로 돌려준다",
+      detail: "probe_success 1 또는 0과 단계별 시간이 이번 scrape의 응답이 된다. Prometheus 입장에서는 그냥 또 하나의 /metrics다.",
+    },
+  ]}
+/>
+
+node_exporter를 `n7-web` 안에서 띄우고 출력 일부를 봤다. 네임스페이스 안에서 띄우면 그 네임스페이스의 `/proc/net`을 읽으니, 컨테이너 호스트라면 호스트 네임스페이스에서 띄워야 호스트의 인터페이스가 보인다.
+
+```bash
+# 네트워크 관련 지표만 골라 본다
+sudo ip netns exec n7-web ./node_exporter --web.listen-address=10.77.0.2:9100 &
+curl -s 10.77.0.2:9100/metrics | grep -E '^node_(network_(receive|transmit)_(drop|errs)_total\{device="eth0"|netstat_Tcp_(RetransSegs|OutSegs)|netstat_TcpExt_Listen|nf_conntrack_entries|sockstat_TCP_tw)'
+```
+
+```text
+node_netstat_TcpExt_ListenDrops 75
+node_netstat_TcpExt_ListenOverflows 75
+node_netstat_Tcp_OutSegs 220297
+node_netstat_Tcp_RetransSegs 10870
+node_network_receive_drop_total{device="eth0"} 0
+node_network_receive_errs_total{device="eth0"} 0
+node_network_transmit_drop_total{device="eth0"} 0
+node_network_transmit_errs_total{device="eth0"} 0
+node_nf_conntrack_entries 334
+node_nf_conntrack_entries_limit 262144
+node_sockstat_TCP_tw 296
+```
+
+앞에서 손으로 본 숫자가 이름만 바뀌어 그대로 있다. `/proc/net/netstat`의 `TcpExt` 줄 `ListenOverflows` 칸은 `node_netstat_TcpExt_ListenOverflows`가 되는 식이다. netstat 계열은 기본으로 일부 필드만 내보낸다. `--collector.netstat.fields` 기본 정규식에 재전송, Listen 계열, `TCPTimeouts`, `TCPSynRetrans`가 들어 있고, 다른 칸이 필요하면 정규식을 넓힌다. 그리고 netstat 계열의 TYPE은 `untyped`로 나온다. 실제로는 카운터라서 `rate()`를 씌워 쓴다. qdisc 통계는 `--collector.qdisc` 플래그를 따로 켜야 나온다(기본 꺼짐).
+
+blackbox_exporter에 직접 한 번 시켜 보면 무엇을 재는지 보인다.
+
+```bash
+# blackbox에게 HTTP 확인을 한 번 시킨다
+curl -s '127.0.0.1:9115/probe?module=http_2xx&target=http://10.77.0.2/health' | grep -v '^#'
+```
+
+```text
+probe_dns_lookup_time_seconds 0.000354053
+probe_duration_seconds 0.005250521
+probe_failed_due_to_regex 0
+probe_http_content_length 3
+probe_http_duration_seconds{phase="connect"} 0.001803272
+probe_http_duration_seconds{phase="processing"} 0.00212915
+probe_http_duration_seconds{phase="resolve"} 0.000354053
+probe_http_duration_seconds{phase="tls"} 0
+probe_http_duration_seconds{phase="transfer"} 0.00022948
+probe_http_last_modified_timestamp_seconds 1.792523252e+09
+probe_http_redirects 0
+probe_http_ssl 0
+probe_http_status_code 200
+probe_http_uncompressed_body_length 3
+probe_http_version 1
+probe_ip_addr_hash 2.213314902e+09
+probe_ip_protocol 4
+probe_success 1
+```
+
+`probe_http_duration_seconds`의 다섯 단계가 요청 하나를 쪼갠 시간이다. resolve(이름 풀이), connect(TCP 연결), tls, processing(요청을 보내고 첫 바이트까지), transfer(본문)다. 응답이 느려졌을 때 어느 단계가 늘었는지 보면 DNS인지, 네트워크 왕복인지, 서버 처리인지가 갈린다. HTTPS 대상이면 `probe_ssl_earliest_cert_expiry`도 나와서 인증서 만료 알림을 여기에 건다.
+
+probe URL은 짧지만 조각마다 역할이 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="blackbox_exporter의 probe 요청 한 줄"
+  base="http://127.0.0.1:9115/probe"
+  params={[
+    {
+      key: "module",
+      value: "http_2xx",
+      title: "어떻게 두드릴지",
+      description: "blackbox.yml에 정의한 모듈 이름이다. 프로버 종류(http, tcp, dns, icmp, grpc)와 타임아웃, 기대하는 상태 코드나 정규식이 모듈에 들어 있다. 같은 대상도 모듈을 바꾸면 다른 검사가 된다.",
+      code: "http_2xx:\n  prober: http\n  timeout: 5s\n  http:\n    valid_status_codes: []  # 비우면 2xx\n    preferred_ip_protocol: ip4",
+      required: true,
+    },
+    {
+      key: "target",
+      value: "http://10.77.0.2/health",
+      title: "무엇을 두드릴지",
+      description: "검사할 대상이다. Prometheus 설정의 targets 목록이 relabel로 이 파라미터에 들어간다. blackbox는 대상 목록을 모르고, 요청마다 받은 것만 검사한다.",
+      required: true,
+    },
+    {
+      key: "debug",
+      value: "true",
+      title: "왜 실패했는지 보기",
+      description: "붙이면 지표와 함께 검사 과정의 로그를 텍스트로 돌려준다. 실패 원인을 찾을 때 Prometheus를 거치지 않고 이 URL을 직접 연다. 0.27에서는 --log.prober=info로 띄워야 로그 칸이 채워진다.",
+    },
+  ]}
+/>
+
+Prometheus 쪽 설정이 처음 보면 헷갈린다. 대상 목록에 적은 주소를 그대로 긁으러 가지 않고, `target` 파라미터로 옮긴 뒤 실제로는 blackbox의 주소로 간다. 이 세 줄짜리 relabel이 그 일을 한다.
+
+```yaml
+scrape_configs:
+  - job_name: blackbox
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://10.77.0.2/health", "http://10.77.0.2:8080/"]
+    relabel_configs:
+      - source_labels: [__address__]     # 적어 둔 대상 주소를
+        target_label: __param_target     # ?target= 으로 옮기고
+      - source_labels: [__param_target]
+        target_label: instance           # 그래프에 보일 이름도 대상으로
+      - target_label: __address__
+        replacement: 127.0.0.1:9115      # 실제 접속은 blackbox로
+```
+
+마지막 줄을 빠뜨리면 Prometheus가 `http://10.77.0.2/health/probe`를 긁으러 가서 엉뚱한 404가 난다. 두 번째 규칙을 빠뜨리면 모든 대상의 `instance`가 `127.0.0.1:9115` 하나로 찍혀 어느 대상이 실패했는지 구분이 안 된다.
+
+## 누적값을 속도로 바꾸는 rate
+
+Prometheus에 쌓이는 건 카운터의 원래 값이다. 그래프에 그릴 건 "초당 몇 개"다. `rate(x[1m])`는 최근 1분 안의 샘플로 초당 증가량을 계산한다. 카운터는 프로세스가 재시작하거나 서버가 재부팅하면 0으로 돌아가는데, `rate`는 값이 줄어든 지점을 리셋으로 보고 줄어든 뒤의 값을 그대로 증가분에 더한다.
+
+<AlgoTrace
+  caption="10초 간격 샘플 넷에서 초당 증가량 구하기 (세 번째에서 재시작)"
+  memoryLabel="누적한 증가분"
+  cells={["1000", "1300", "60", "360"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "첫 샘플은 비교할 앞 값이 없다. 기준점으로만 쓴다." },
+    { pointer: 1, memory: ["+300"], caption: "1000에서 1300으로 늘었다. 300을 더한다." },
+    { pointer: 2, memory: ["+300", "+60"], caption: "1300에서 60으로 줄었다. 카운터는 줄지 않으니 재시작으로 본다. 0에서 60까지 센 것으로 치고 60을 더한다." },
+    { pointer: 3, found: [3], memory: ["+300", "+60", "+300"], caption: "60에서 360. 합은 660이고, 구간은 30초다. 초당 22다. 재시작을 모르고 빼기만 했다면 -640이 나와 그래프가 바닥을 뚫는다." },
+  ]}
+/>
+
+직접 짜 보면 규칙이 손에 붙는다. 샘플 배열과 간격(초)을 받아 초당 증가량을 돌려주는 함수다. 샘플이 둘보다 적으면 `null`을 돌려준다. Prometheus의 `rate`는 구간 끝까지 늘려 잡는 보정(extrapolation)을 하지만 여기서는 뺐다.
+
+<CodePlayground
+  caption="카운터 샘플로 초당 증가량 구하기"
+  functionName="counterRate"
+  initialCode={`function counterRate(samples, stepSeconds) {
+  // 값이 줄어든 곳은 재시작으로 보고, 줄어든 뒤의 값을 증가분에 더한다
+  return null;
+}`}
+  solution={`function counterRate(samples, stepSeconds) {
+  if (samples.length < 2) return null;
+  let inc = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const d = samples[i] - samples[i - 1];
+    inc += d >= 0 ? d : samples[i];
+  }
+  return inc / ((samples.length - 1) * stepSeconds);
+}`}
+  tests={[
+    { args: [[100, 160, 220, 280], 15], expected: 4, label: "고르게 늘어남" },
+    { args: [[1000, 1300, 60, 360], 10], expected: 22, label: "중간에 재시작" },
+    { args: [[5, 5, 5], 5], expected: 0, label: "변화 없음" },
+    { args: [[42], 15], expected: null, label: "샘플 하나" },
+    { args: [[4294967000, 300, 900], 1], expected: 450, label: "32비트 카운터가 한 바퀴 돎" },
+  ]}
+/>
+
+마지막 테스트가 함정이다. 32비트 카운터가 최댓값 근처에서 한 바퀴 돌면 실제로는 296 + 300 + 600 = 1,196이 늘었는데, 리셋으로 보니 900으로 적게 센다. 그래서 장비 카운터는 64비트를 쓴다. 이 이야기는 SNMP에서 다시 나온다.
+
+실습 Prometheus(3.5.0, scrape 간격 5초)에서 실제로 돌린 쿼리다. `promtool query instant`로 뽑았다.
+
+```bash
+# 재전송 비율: 다시 보낸 조각 ÷ 보낸 조각
+promtool query instant http://127.0.0.1:9090 \
+  'rate(node_netstat_Tcp_RetransSegs[1m]) / rate(node_netstat_Tcp_OutSegs[1m])'
+# accept 큐가 넘친 초당 횟수
+promtool query instant http://127.0.0.1:9090 'rate(node_netstat_TcpExt_ListenOverflows[1m])'
+# conntrack 사용률
+promtool query instant http://127.0.0.1:9090 'node_nf_conntrack_entries / node_nf_conntrack_entries_limit'
+# 송신 대역폭(bit/s)
+promtool query instant http://127.0.0.1:9090 'rate(node_network_transmit_bytes_total{device="eth0"}[1m]) * 8'
+```
+
+```text
+{instance="10.77.0.2:9100", job="node"} => 0.009975834401148942 @[1792523557.766]
+{instance="10.77.0.2:9100", job="node"} => 1.8727272727272726 @[1792523558.072]
+{instance="10.77.0.2:9100", job="node"} => 0.00342559814453125 @[1792523558.158]
+{device="eth0", instance="10.77.0.2:9100", job="node"} => 23908344.145454545 @[1792523558.34]
+```
+
+이때는 손실을 1%로 낮춰 둔 상태라 재전송 비율이 약 1.0%로 나왔다. 대역폭은 약 23.9Mbit/s, conntrack은 0.3%다. ListenOverflows가 초당 1.87번씩 늘고 있는 건 blackbox가 5초마다 꽉 찬 8080번을 두드리고 있어서다.
+
+`rate`의 범위(`[1m]`)는 scrape 간격의 최소 네 배로 잡는다. 샘플이 둘 이상 들어가야 계산이 되는데, scrape 한 번이 빠지면 샘플이 하나만 남아 그래프에 구멍이 난다. 그리고 비율을 낼 때는 `rate`끼리 나눈다. 누적값끼리 나누면 부팅 후 평균이 되어 지금 일어나는 일이 묻힌다.
+
+## 알림은 손실과 실패에 건다
+
+모든 숫자에 알림을 걸면 아무도 알림을 안 보게 된다. 네트워크 쪽에서 알림까지 올릴 만한 것은 "이미 누군가 실패하고 있다"를 뜻하는 숫자다. 대역폭 80% 같은 숫자는 대시보드에 두고, 사람을 깨우는 알림은 실패와 손실에 건다. 알림 설계 전반은 [알림 글](/posts/alerting), 사용자 기준 목표를 세우는 법은 [SLI와 SLO 글](/posts/sli-slo)에서 다룬다.
+
+```yaml
+groups:
+  - name: network
+    rules:
+      - alert: TcpRetransmitHigh          # 경로 어딘가에서 잃어버리고 있다
+        expr: |
+          rate(node_netstat_Tcp_RetransSegs[1m])
+            / rate(node_netstat_Tcp_OutSegs[1m]) > 0.005
+        for: 30s
+      - alert: ListenQueueOverflow        # 연결을 받지 못하고 버리고 있다
+        expr: rate(node_netstat_TcpExt_ListenOverflows[1m]) > 0
+        for: 30s
+      - alert: ConntrackNearFull          # 곧 새 연결을 버린다
+        expr: node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.8
+        for: 5m
+      - alert: ProbeFailed                # 바깥에서 들어오지 못한다
+        expr: probe_success == 0
+        for: 30s
+      - alert: DnsSlow                    # (잘못 고른 지표)
+        expr: probe_dns_lookup_time_seconds > 0.2
+        for: 30s
+      - alert: DnsRequestSlow             # (맞는 지표)
+        expr: probe_dns_duration_seconds{phase="request"} > 0.2
+        for: 30s
+```
+
+실습에서 `for`를 짧게 잡았다. 실제로는 5분 안팎으로 둬서 순간적인 튐에 깨지 않게 한다. 몇 분 뒤 Prometheus의 `/api/v1/alerts`를 보면 이렇게 나온다(필요한 필드만 추렸다).
+
+```text
+TcpRetransmitHigh    10.77.0.2:9100           firing
+ListenQueueOverflow  10.77.0.2:9100           firing
+ProbeFailed          http://10.77.0.2:8080/   firing
+DnsRequestSlow       10.77.0.2:5300           firing
+```
+
+`DnsSlow`는 울리지 않았다. 느린 리졸버(5300번)는 매번 250ms씩 걸리는데도 그렇다. 지표 이름에 속은 것이다.
+
+```text
+probe_dns_duration_seconds{instance="10.77.0.2:5300", job="blackbox_dns", phase="request"} => 0.251268276
+probe_dns_lookup_time_seconds{instance="10.77.0.2:5300", job="blackbox_dns"} => 0.000007356
+```
+
+`probe_dns_lookup_time_seconds`는 모든 프로버에 붙는 지표로, blackbox가 target 주소 자체를 IP로 바꾸는 데 걸린 시간이다. target이 이미 IP라 거의 0이다. DNS 서버가 질의에 답한 시간은 `probe_dns_duration_seconds{phase="request"}`에 있다. 알림 규칙을 만들면 일부러 장애를 한 번 만들어 그 알림이 실제로 울리는지 확인해야 하는 이유가 이것이다.
+
+8080번의 `ProbeFailed`도 볼 만하다. `debug=true`로 열어 봤다. 0.27 기준으로 검사 로그는 debug 수준으로 남아서, 기본 설정이면 로그 칸이 비어 있다. blackbox를 `--log.prober=info`로 띄워야 보인다.
+
+```text
+Logs for the probe:
+... msg="Making HTTP request" module=http_2xx target=http://10.77.0.2:8080/ url=http://10.77.0.2:8080/ host=10.77.0.2:8080
+... msg="Error for HTTP request" module=http_2xx target=http://10.77.0.2:8080/ err="Get \"http://10.77.0.2:8080/\": context deadline exceeded"
+... msg="Response timings for roundtrip" ... connectDone=0001-01-01T00:00:00.000Z gotConn=0001-01-01T00:00:00.000Z ...
+... msg="Probe failed" module=http_2xx target=http://10.77.0.2:8080/ duration_seconds=5.000466893
+```
+
+(줄 앞의 시각과 소스 위치는 `...`로 줄였다.) `connectDone`이 0년 1월 1일, 즉 비어 있다. 연결이 끝내 맺어지지 않은 채 모듈 타임아웃 5초를 다 쓰고 끝났다. 서버 프로세스는 살아 있고 포트도 LISTEN인데, 바깥에서는 들어갈 수 없다. 프로세스 감시만 했다면 이 장애는 "정상"으로 보였을 것이다.
+
+## 스위치와 라우터는 SNMP로 묻는다
+
+서버에는 exporter를 깔 수 있지만, 스위치나 라우터, 방화벽 장비에는 대개 그럴 수 없다. 이런 장비는 SNMP로 카운터를 물어본다. 장비가 정해진 번호(OID) 아래에 값을 들고 있고, 감시 서버가 UDP 161번으로 그 번호를 묻는다. 인터페이스 카운터는 IF-MIB라는 표준 번호 체계에 있다.
+
+`n7-web`에 snmpd를 띄우고 물어봤다. Ubuntu는 라이선스 때문에 MIB 정의 파일을 기본으로 깔지 않아서 이름 대신 숫자로 물어야 한다(`snmp-mibs-downloader` 패키지를 깔면 `IF-MIB::ifDescr`처럼 이름으로 쓸 수 있다).
+
+```bash
+# 인터페이스 이름 목록 (ifDescr)
+snmpwalk -v2c -c labro 10.77.0.2 1.3.6.1.2.1.2.2.1.2
+# eth0(인덱스 5)의 64비트 송신 바이트, 수신 오류, 송신 버림, 링크 상태
+snmpget -v2c -c labro 10.77.0.2 1.3.6.1.2.1.31.1.1.1.10.5 1.3.6.1.2.1.2.2.1.14.5 \
+  1.3.6.1.2.1.2.2.1.19.5 1.3.6.1.2.1.2.2.1.8.5
+```
+
+```text
+iso.3.6.1.2.1.2.2.1.2.1 = STRING: "lo"
+iso.3.6.1.2.1.2.2.1.2.5 = STRING: "eth0"
+iso.3.6.1.2.1.31.1.1.1.10.5 = Counter64: 569755702
+iso.3.6.1.2.1.2.2.1.14.5 = Counter32: 0
+iso.3.6.1.2.1.2.2.1.19.5 = Counter32: 0
+iso.3.6.1.2.1.2.2.1.8.5 = INTEGER: 1
+```
+
+순서대로 `ifHCOutOctets`, `ifInErrors`, `ifOutDiscards`, `ifOperStatus`(1이 up)다. 인덱스가 2가 아니라 5인 데서 한 번 막혔다. 인덱스는 인터페이스가 생긴 순서로 붙고 재부팅이나 모듈 추가로 바뀔 수 있어서, 반드시 `ifDescr`이나 `ifName`으로 이름과 인덱스를 먼저 맞춘다. 약 10초 뒤 같은 OID를 다시 물으니 606469262였다. 차이 36,713,560바이트에 8을 곱해 10으로 나누면 약 29.4Mbit/s다. SNMP도 결국 누적 카운터를 두 번 읽어 빼는 일이다.
+
+`ifOutOctets`(32비트) 대신 `ifHCOutOctets`(64비트, HC는 High Capacity)를 쓰는 이유는 위 연습의 마지막 테스트와 같다. 2의 32제곱 바이트는 약 4.3GB라서, 10Gbit/s 회선을 꽉 채우면 3.4초, 1Gbit/s면 34초 만에 한 바퀴 돈다. 수집 간격이 그보다 길면 몇 바퀴 돌았는지 알 수가 없다.
+
+Prometheus에서는 snmp_exporter가 blackbox처럼 대신 물어보고 지표로 바꿔 준다. 보안 면에서 기억할 점이 있다. v2c의 커뮤니티 문자열(`labro`)은 평문으로 오가는 사실상의 비밀번호다. 틀린 커뮤니티로 물으면 오류 응답 없이 `Timeout: No Response`만 돌아와 방화벽 문제와 구분이 안 된다. 실습에서도 그랬다. 인증과 암호화가 필요하면 SNMPv3(authPriv)을 쓰고, 어느 쪽이든 161번은 감시 서버 대역에만 연다.
+
+## 현장에서 그래프를 펼치는 순서
+
+"가끔 느리다"는 문의가 오면 이 순서로 본다. 먼저 바깥에서 본 숫자다. blackbox의 `probe_success`와 단계별 시간에서 어느 단계가 늘었는지 본다. resolve가 늘었으면 DNS, connect가 늘었으면 네트워크나 accept 큐, processing이 늘었으면 서버 처리다. 그다음 같은 시각의 안쪽 숫자를 본다. connect가 늘었고 `ListenOverflows`가 올라 있으면 앱이 연결을 못 받는 것이다. 재전송 비율이 올라 있으면 경로 손실이고, 이때는 [tcpdump로 패킷을 직접 찍어](/posts/packet-capture-tcpdump) 어느 구간에서 사라지는지 본다. 어느 서버와의 통신에서 손실이 나는지 연결 단위로 좁혀야 하면 [흐름 로그](/posts/network-flow-logs)가 다음 도구다.
+
+자주 하는 실수도 몇 가지 있다.
+
+누적 카운터를 그대로 그래프에 그린다. 계속 올라가는 선만 보이고, 기울기가 바뀐 시점을 눈으로 찾아야 한다. 카운터에는 항상 `rate`나 `increase`를 씌운다.
+
+평균만 본다. 1분 평균 재전송 0.3%는 59초 동안 0%였고 1초 동안 18%였을 수도 있다. 장애를 좁힐 때는 `rate` 범위를 줄여 보거나 최댓값(`max_over_time`)을 함께 본다.
+
+라벨에 연결별 정보를 넣는다. 상대 IP나 포트를 라벨로 넣으면 시계열이 연결 수만큼 늘어 Prometheus가 버티지 못한다. 연결 단위 정보는 지표가 아니라 흐름 로그나 추적이 맡을 일이다. 카디널리티가 왜 비싼지는 [시계열 DB 글](/posts/db-type-time-series)에서 봤다.
+
+감시 장치 자신을 감시하지 않는다. blackbox가 죽으면 `probe_success`가 0이 아니라 아예 사라진다. `probe_success == 0` 알림은 울리지 않는다. `up{job="blackbox"} == 0`이나 `absent(probe_success{instance="..."})` 알림을 함께 건다.
+
+## 처음 장면을 다시 보면
+
+바이트 그래프가 평온했던 건 틀린 정보가 아니었다. 회선은 정말 한가했다. 사라진 건 accept 큐 앞에서 버려진 SYN이었고, 그 흔적은 `TcpExtListenOverflows`라는 카운터 하나에 남아 있었다. 네트워크를 본다는 건 줄이 서는 자리마다 버린 수를 세고, 그걸 비율로 바꿔 평소와 비교하고, 바깥에서 사용자처럼 한 번씩 두드려 보는 일이다. 다음은 그 패킷들이 누구와 누구 사이를 오갔는지 연결 단위로 보는 [흐름 로그](/posts/network-flow-logs)다.
+
+## 면접에서 나올 만한 질문
+
+### 네트워크 모니터링에서 대역폭 말고 꼭 보는 지표는 무엇인가요?
+
+손실과 대기를 보여 주는 지표다. 인터페이스의 errors·dropped와 qdisc의 dropped, TCP 재전송 비율, accept 큐 넘침(ListenOverflows), conntrack 사용률, TIME_WAIT 수, 그리고 바깥에서 잰 DNS·연결·응답 시간이다. 대역폭은 여유가 있어도 이 숫자들이 오르면 사용자는 느리다고 느낀다.
+
+### TCP 재전송이 늘었다면 무엇을 의심하나요?
+
+경로 어딘가에서 패킷이 사라지고 있다는 뜻이다. 먼저 재전송을 보낸 조각 대비 비율로 바꿔 평소와 비교하고, 특정 상대와의 연결에서만 늘었는지 `ss -ti`로 연결별 `retrans`와 `backoff`를 본다. 내 서버의 인터페이스·qdisc 버림이 함께 늘었으면 내 쪽이고, 아니면 경로 중간이나 상대 쪽이라 패킷 캡처나 흐름 로그로 좁힌다.
+
+### 앱 로그에는 아무것도 없는데 연결이 가끔 3초씩 걸립니다. 어디를 보나요?
+
+accept 큐 넘침을 먼저 본다. 큐가 차면 커널이 SYN을 버리고 클라이언트가 1초, 2초 뒤에 재전송해서 몇 초 지연이 생기는데, 앱은 그 연결을 받은 적이 없어 로그가 없다. `nstat`의 `TcpExtListenOverflows`와 `ss -ltn`의 Recv-Q·Send-Q를 보고, 늘어났으면 앱이 accept를 늦게 하는 원인(이벤트 루프 지연, 워커 부족)을 찾는다. backlog와 somaxconn을 올리는 건 응급처치다.
+
+### node_exporter와 blackbox_exporter는 어떻게 다르고 왜 둘 다 필요한가요?
+
+node_exporter는 서버 안에서 커널 카운터를 읽고, blackbox_exporter는 서버 밖에서 사용자처럼 HTTP·TCP·DNS·ICMP로 두드려 본다. 안쪽 숫자는 원인을, 바깥 숫자는 증상을 보여 준다. 프로세스와 카운터가 멀쩡해도 방화벽이나 큐 때문에 밖에서 못 들어오는 경우는 바깥 검사로만 잡힌다.
+
+### Prometheus에서 카운터를 그대로 그리지 않고 rate를 쓰는 이유는?
+
+카운터는 부팅이나 재시작 이후의 누적값이라 그대로 그리면 계속 올라가는 선만 보이기 때문이다. `rate`는 구간 안의 초당 증가량을 계산하고, 값이 줄어든 지점을 재시작으로 보고 보정한다. 비율을 낼 때도 누적값끼리가 아니라 `rate`끼리 나눠야 지금 일어나는 일이 보인다. 범위는 scrape 간격의 네 배 이상으로 잡는다.
+
+### SNMP에서 32비트 카운터 대신 64비트 카운터를 쓰는 이유는?
+
+32비트 바이트 카운터는 약 4.3GB에서 한 바퀴 돌기 때문이다. 10Gbit/s 회선이면 3.4초 만에 돌아서, 수집 간격 동안 몇 번 돌았는지 알 수 없고 리셋으로 오인해 증가량을 적게 센다. 그래서 `ifHCInOctets`·`ifHCOutOctets` 같은 64비트 카운터를 쓴다.
+
+### 네트워크 알림은 무엇에 걸고 무엇은 대시보드에만 두나요?
+
+사람을 깨우는 알림은 이미 실패가 일어나고 있다는 신호에 건다. 바깥 검사 실패, accept 큐 넘침, conntrack 한도 근접, 평소를 크게 넘는 재전송 비율이 그렇다. 대역폭 사용률이나 TIME_WAIT 수처럼 높아도 당장 실패를 뜻하지 않는 숫자는 대시보드와 용량 계획에 쓴다. 그리고 알림을 만들면 일부러 장애를 만들어 실제로 울리는지 확인한다. 이름만 보고 고른 지표가 엉뚱한 값을 재는 경우가 있다.

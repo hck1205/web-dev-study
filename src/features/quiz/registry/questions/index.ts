@@ -42,6 +42,7 @@ import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
+import { DISTRIBUTED_TRACING } from "./distributed-tracing";
 import { DISTRIBUTED_TRANSACTIONS_2PC } from "./distributed-transactions-2pc";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
@@ -138,7 +139,9 @@ import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { NETWORK_FLOW_LOGS } from "./network-flow-logs";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
+import { NETWORK_MONITORING } from "./network-monitoring";
 import { NETWORK_PARTITIONS } from "./network-partitions";
 import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
 import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
@@ -298,6 +301,7 @@ export const QUESTION_SETS = [
   DEAD_LETTER_QUEUE,
   DESIGN_PATTERNS_OVERVIEW,
   DISTRIBUTED_LOCK,
+  DISTRIBUTED_TRACING,
   DISTRIBUTED_TRANSACTIONS_2PC,
   DNS,
   DOCKER_COMPOSE,
@@ -394,7 +398,9 @@ export const QUESTION_SETS = [
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  NETWORK_FLOW_LOGS,
   NETWORK_LAYERS_OVERVIEW,
+  NETWORK_MONITORING,
   NETWORK_PARTITIONS,
   NETWORK_TROUBLESHOOTING_BY_LAYER,
   NEXTJS_STATIC_DYNAMIC_RENDERING,

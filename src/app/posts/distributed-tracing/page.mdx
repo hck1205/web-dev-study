@@ -1,0 +1,616 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("distributed-tracing");
+
+주문 버튼을 누르면 응답이 0.5초쯤 걸린다는 문의가 들어왔다. 요청은 게이트웨이, 주문 서비스, 재고 서비스를 거쳐 DB까지 간다. 세 팀에 물어보니 다 "우리 쪽 API 평균 응답은 빠르다"고 한다. 각자 자기 서버의 지표를 보고 있으니 틀린 말은 아니다. 그런데 사용자는 느리다. 문제는 그 0.5초가 세 서비스 중 어디에서, 몇 번에 걸쳐 쓰였는지 아무도 한 장으로 보지 못한다는 데 있다.
+
+분산 추적(distributed tracing)은 요청 하나가 여러 서비스를 지나는 동안 각 구간의 시작과 끝을 기록해, 한 장의 폭포 그림으로 이어 붙이는 기술이다. 이 글은 Node.js 서비스 셋에 OpenTelemetry를 붙여 Jaeger로 모은 실제 trace에서 느린 구간을 찾고, 그 trace를 이어 붙이는 `traceparent` 헤더, 이어 붙이기가 끊기는 흔한 경우, 다 저장할 수 없어서 고르는 샘플링, 로그와 trace를 잇는 법까지 따라간다. 지표·로그·추적이 각각 무엇을 맡는지는 [관측 가능성 기본 글](/posts/observability-basics)에, 로그를 JSON 한 줄로 남기는 법은 [구조화 로그 글](/posts/structured-logging)에 있다. 이 글은 그중 추적만 깊게 본다.
+
+실습 환경은 Ubuntu 24.04, Node.js 22, PostgreSQL 16이다. OpenTelemetry JS SDK는 `@opentelemetry/sdk-node` 0.223.0(SDK 2.x 계열), 수집과 화면은 Jaeger 2.10.0, 꼬리 샘플링은 OpenTelemetry Collector contrib 0.132.0을 썼다. 2026년 10월에 SDK 3.0 계열(0.300.0)이 막 나왔으니, 따라 할 때는 버전을 맞추길 권한다.
+
+## trace는 나무, span은 가지 하나
+
+용어부터 정리한다. span은 "어떤 일을 언제 시작해서 언제 끝냈다"는 기록 하나다. HTTP 요청을 받은 일, 다른 서비스를 부른 일, SQL 한 번을 보낸 일이 각각 span이다. span에는 이름, 시작 시각, 걸린 시간, 상태(성공·오류), 속성(URL, SQL, 상태 코드 등)이 들어 있다.
+
+trace는 요청 하나에서 생긴 span 전체다. span마다 자기 ID(span id)와 부모 span의 ID를 갖고 있어서, 이걸 따라가면 나무 모양이 된다. 그리고 같은 trace에 속한 모든 span은 같은 trace id를 갖는다.
+
+여기서 어려운 부분은 서비스 경계다. 주문 서비스가 재고 서비스를 부를 때, 재고 서비스는 "내가 받은 이 요청이 어느 trace의 어느 span에서 왔는지" 알아야 자기 span의 부모를 정할 수 있다. 그래서 부르는 쪽이 요청 헤더에 trace id와 자기 span id를 실어 보낸다. 이걸 문맥 전파(context propagation)라고 부른다. 아래 그림에서 다음을 누르면 요청 하나가 서비스를 건너면서 헤더가 어떻게 바뀌는지 보인다. 헤더 값은 실습에서 실제로 찍힌 것이다.
+
+<SequenceDiagram
+  caption="요청 하나가 서비스를 건널 때마다 traceparent의 부모 칸만 바뀐다"
+  actors={[
+    { id: "u", label: "사용자" },
+    { id: "g", label: "gateway" },
+    { id: "o", label: "orders" },
+    { id: "i", label: "inventory" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "u", to: "g", label: "GET /checkout", title: "헤더 없이 들어온다", detail: "첫 서비스에는 traceparent가 없다. gateway가 새 trace id를 만들고, 요청을 받은 일을 첫 span(루트)으로 연다." },
+    { from: "g", to: "g", label: "trace id 생성", title: "trace id는 한 번만 만든다", detail: "128비트 무작위 값이다. 이후 모든 서비스가 이 값을 그대로 물려받는다.", payload: "trace_id = eabd288396c9c0408b16a7eefee31dc6" },
+    { from: "g", to: "o", label: "POST /orders", title: "부르는 쪽이 헤더를 싣는다", detail: "gateway는 orders를 부르는 일을 span으로 열고, 그 span의 id를 부모 칸에 넣어 보낸다.", payload: "traceparent: 00-eabd288396c9c0408b16a7eefee31dc6-<gateway 클라이언트 span>-01" },
+    { from: "o", to: "i", label: "GET /stock/SKU-1", title: "trace id는 그대로, 부모만 바뀐다", detail: "orders도 같은 일을 한다. inventory가 받은 헤더의 부모 칸은 orders가 inventory를 부른 span의 id다.", payload: "traceparent: 00-eabd288396c9c0408b16a7eefee31dc6-e71d18edff0b3180-01" },
+    { from: "i", to: "db", label: "SELECT ...", title: "DB 호출도 span이 된다", detail: "pg 계측이 쿼리 한 번을 span으로 남긴다. DB에는 헤더가 가지 않지만, span의 부모는 inventory의 서버 span이다." },
+    { from: "i", to: "o", label: "200", title: "끝난 span은 각자 내보낸다", detail: "서비스마다 자기 span을 따로 수집기로 보낸다. 수집기는 trace id로 모아 나무를 다시 세운다. 서비스끼리 span을 주고받지는 않는다." },
+  ]}
+/>
+
+마지막 단계가 중요하다. trace 전체를 어느 한 서비스가 들고 있는 게 아니다. 각자 자기 조각을 보내고, 저장소가 trace id로 맞춘다. 그래서 한 서비스라도 헤더를 넘기지 않으면 나무가 둘로 쪼개진다. 뒤에서 이 장면을 직접 만든다.
+
+## traceparent 한 줄 뜯어보기
+
+헤더 형식은 W3C Trace Context 표준이다. 예전에는 Zipkin의 `X-B3-TraceId` 같은 벤더별 헤더가 따로 놀았는데, 표준이 생기면서 OpenTelemetry, 클라우드 로드 밸런서, 서비스 메시가 같은 헤더를 읽게 됐다. inventory가 실제로 받은 헤더를 조각내 보자.
+
+<UrlAnatomy
+  caption="inventory가 받은 traceparent (실습 값)"
+  base="traceparent: "
+  separator=""
+  joiner="-"
+  params={[
+    { key: "version", display: "00", title: "버전", description: "지금 정의된 버전은 00 하나다. ff는 쓰지 않는 값이라 받으면 무시한다. 모르는 버전이 오면 뒤의 세 칸을 읽을 수 있는 만큼만 읽는다.", required: true },
+    { key: "trace-id", display: "eabd288396c9c0408b16a7eefee31dc6", title: "trace id (16바이트, 소문자 hex 32자)", description: "요청 전체를 묶는 이름이다. 처음 만든 서비스 이후로 바뀌지 않는다. 모두 0이면 잘못된 값이라 버리고 새로 만든다. 로그에 이 값을 같이 찍으면 로그와 trace가 이어진다.", required: true },
+    { key: "parent-id", display: "e71d18edff0b3180", title: "parent id (8바이트, hex 16자)", description: "이 요청을 보낸 쪽 span의 id다. 받는 쪽은 자기 서버 span을 만들 때 이 값을 부모로 적는다. 서비스를 건널 때마다 이 칸만 바뀐다.", required: true },
+    { key: "flags", display: "01", title: "trace flags", description: "맨 아래 비트가 sampled다. 01이면 앞에서 이 trace를 저장하기로 정했다는 뜻이고, 00이면 저장하지 않기로 했다는 뜻이다. 뒤의 서비스는 보통 이 결정을 따른다(부모 기반 샘플링).", code: "00 → 기록 안 함\n01 → 기록함" },
+  ]}
+/>
+
+함께 쓰는 헤더가 둘 더 있다. `tracestate`는 벤더가 자기 정보를 덧붙이는 칸(`vendor1=값,vendor2=값`)이고, `baggage`는 사용자 ID나 테넌트처럼 하위 서비스로 물려줄 키-값을 싣는 별도 표준이다. baggage는 모든 하위 호출에 그대로 붙어 나가니 개인정보나 큰 값을 넣으면 안 된다. 외부 API를 부를 때도 따라 나간다.
+
+## 세 서비스에 OpenTelemetry 붙이기
+
+구성은 이렇다. gateway(17001)가 orders(17002)에 주문을 넘기고, orders가 상품마다 inventory(17003)에 재고를 묻고, inventory가 PostgreSQL에 SQL을 보낸다. 재고 테이블에는 200만 줄을 넣고 `sku` 열에 일부러 인덱스를 두지 않았다. 세 서비스는 각자 span을 Jaeger의 OTLP 수신 포트(4318)로 보낸다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="실습 구성: 요청은 왼쪽에서 오른쪽으로, span은 모두 아래의 수집기로"
+  zones={[
+    { id: "apps", label: "서비스 (Node.js 22)", x: 8, y: 16, w: 384, h: 140, tone: "private" },
+    { id: "obs", label: "추적 백엔드", x: 8, y: 186, w: 384, h: 96, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "g", label: "gateway", sub: ":17001", x: 70, y: 66, icon: "gateway" },
+    { id: "o", label: "orders", sub: ":17002", x: 200, y: 66, icon: "server" },
+    { id: "i", label: "inventory", sub: ":17003", x: 330, y: 66, icon: "server" },
+    { id: "db", label: "PostgreSQL", sub: "stock 200만 줄", x: 330, y: 126, icon: "db", w: 120 },
+    { id: "col", label: "Collector", sub: "tail sampling", x: 110, y: 240, icon: "router", w: 112 },
+    { id: "j", label: "Jaeger", sub: ":4318 :16686", x: 290, y: 240, icon: "lock", w: 112 },
+  ]}
+  links={[
+    { from: "g", to: "o" },
+    { from: "o", to: "i" },
+    { from: "i", to: "db" },
+    { from: "col", to: "j", label: "OTLP" },
+  ]}
+  steps={[
+    {
+      path: ["g", "o", "i", "db"],
+      packet: "traceparent",
+      title: "요청이 지나며 문맥을 넘긴다",
+      detail: "HTTP 계측이 나가는 요청에 traceparent를 넣고, 들어오는 요청에서 꺼낸다. 코드에서 헤더를 직접 다루지 않았다.",
+    },
+    {
+      path: ["i", "j"],
+      packet: "spans",
+      highlight: ["obs"],
+      title: "span은 따로, 묶음으로 보낸다",
+      detail: "BatchSpanProcessor가 끝난 span을 모았다가 OTLP/HTTP로 보낸다. 요청 처리와 별개라 수집기가 느려도 응답은 늦어지지 않는다. 대신 큐가 넘치면 span을 버린다.",
+      payload: "POST http://<jaeger>:4318/v1/traces",
+    },
+    {
+      path: ["g", "col", "j"],
+      packet: "spans",
+      title: "중간에 Collector를 두면",
+      detail: "서비스는 가까운 Collector에 보내고, Collector가 모아서 고르고(샘플링) 백엔드로 넘긴다. 백엔드를 바꿔도 서비스 설정은 그대로다.",
+    },
+  ]}
+/>
+
+계측 코드는 서비스 코드보다 먼저 불러오는 파일 하나다. HTTP와 pg 라이브러리를 감싸서 span을 만들고 헤더를 넣고 빼는 일을 대신 한다.
+
+```js
+// tracing.js: node -r ./tracing.js 처럼 다른 모듈보다 먼저 불러온다
+const { NodeSDK } = require("@opentelemetry/sdk-node");
+const { OTLPTraceExporter } = require("@opentelemetry/exporter-trace-otlp-http");
+const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
+const { PgInstrumentation } = require("@opentelemetry/instrumentation-pg");
+const { BatchSpanProcessor } = require("@opentelemetry/sdk-trace-base");
+
+const sdk = new NodeSDK({
+  serviceName: process.env.OTEL_SERVICE_NAME, // gateway, orders, inventory
+  spanProcessors: [
+    new BatchSpanProcessor(new OTLPTraceExporter({ url: "http://10.78.0.2:4318/v1/traces" })),
+  ],
+  instrumentations: [new HttpInstrumentation(), new PgInstrumentation()],
+});
+sdk.start();
+process.on("SIGTERM", () => sdk.shutdown().finally(() => process.exit(0)));
+```
+
+먼저 불러와야 하는 이유는 계측이 `require("http")`와 `require("pg")`를 가로채서 감싸기 때문이다. 앱이 먼저 `pg`를 불러 버리면 감싸지 않은 원본을 쓰게 되고, span이 하나도 안 나온다. 종료할 때 `shutdown()`을 부르는 것도 같은 이유로 빠뜨리면 안 된다. 배치에 남아 있던 마지막 span들이 버려진다.
+
+orders에는 "재고 확인" 단계를 직접 span으로 하나 열었다. 자동 계측은 라이브러리 경계(HTTP, SQL)만 보이니, 업무상 의미 있는 단계는 직접 감싼다.
+
+```js
+const { trace } = require("@opentelemetry/api");
+const tracer = trace.getTracer("orders");
+
+const stock = await tracer.startActiveSpan("check stock", async (span) => {
+  span.setAttribute("order.items", items.length);
+  const out = [];
+  for (const sku of items) out.push(await getStock(sku)); // 하나씩 차례로 묻는다
+  span.end();
+  return out;
+});
+```
+
+처음 한 번은 span이 Jaeger에 하나도 도착하지 않았다. 서비스 로그에는 아무 오류도 없었다. Jaeger 2.10은 OTLP 수신 포트를 기본으로 `localhost`에만 연다. 다른 네임스페이스(컨테이너라면 다른 컨테이너)에서 보낸 span은 연결이 거부됐고, SDK는 내보내기 실패를 기본으로 조용히 넘긴다.
+
+```bash
+# Jaeger가 어느 주소로 열었는지 본다
+sudo ip netns exec n7-trace ss -ltn | grep -E '4317|4318'
+```
+
+```text
+LISTEN 0      4096       127.0.0.1:4317       0.0.0.0:*          
+LISTEN 0      4096       127.0.0.1:4318       0.0.0.0:*          
+```
+
+`JAEGER_LISTEN_HOST=0.0.0.0`을 주고 다시 띄우자 `0.0.0.0:4318`로 열렸고 span이 들어오기 시작했다. "계측을 붙였는데 화면에 아무것도 없다"면 앱 코드보다 먼저 수집기가 어느 주소에서 듣고 있는지, 앱이 어디로 보내는지를 본다. SDK의 진단 로그를 켜면(`OTEL_LOG_LEVEL=debug`) 내보내기 실패가 보인다.
+
+## 폭포 그림에서 느린 칸 찾기
+
+`/checkout?items=SKU-1,SKU-2,SKU-3`을 한 번 부르고, Jaeger API(`/api/traces/<trace id>`)로 받은 span을 시작 시각 순으로 들여쓰기해 찍었다. Jaeger 화면의 폭포 그림을 글자로 옮긴 것이다.
+
+```text
+trace f117e39b2e4c162e45f9f735a753b999  spans=17
+   start      dur   service   span
+     0.0ms    465.1ms  gateway   GET (server)
+     0.0ms    462.8ms    gateway   POST (client)
+     5.0ms    457.7ms      orders    POST (server)
+     6.0ms    452.3ms        orders    check stock (internal)
+     7.0ms    181.9ms          orders    GET (client)
+    14.0ms    173.7ms            inventory GET (server)
+    15.0ms     19.4ms              inventory pg-pool.connect (client)
+    16.0ms     18.4ms                inventory pg.connect (client)
+    34.0ms    151.4ms              inventory pg.query:SELECT n7_trace (client)
+   191.0ms    118.6ms          orders    GET (client)
+   193.0ms    119.2ms            inventory GET (server)
+   193.0ms      0.3ms              inventory pg-pool.connect (client)
+   194.0ms    113.4ms              inventory pg.query:SELECT n7_trace (client)
+   313.0ms    145.1ms          orders    GET (client)
+   314.0ms    144.7ms            inventory GET (server)
+   318.0ms    137.7ms              inventory pg.query:SELECT n7_trace (client)
+   318.0ms      0.3ms              inventory pg-pool.connect (client)
+```
+
+읽는 순서가 있다. 먼저 맨 위 루트 span의 길이(465ms)가 사용자가 기다린 시간이다. 그다음 들여쓰기를 따라 내려가며 "자식들로 설명되지 않는 시간"을 찾는다.
+
+- `check stock` 452ms 아래에 `GET (client)`이 세 개 있고, 시작 시각이 7ms, 191ms, 313ms다. 앞의 것이 끝나야 다음 것이 시작한다. 차례로 불렀다는 게 그림 모양으로 보인다.
+- 각 GET 안에서는 `pg.query`가 거의 전부다. 151 + 113 + 138 = 402ms, 전체의 86%가 같은 SQL 세 번이다.
+- 첫 GET에만 `pg.connect` 18ms가 있다. 풀에 연결이 없어서 처음 한 번 새로 맺은 비용이다. 이후로는 `pg-pool.connect`가 0.3ms다.
+
+span의 kind도 볼 만하다. `client`는 부르는 쪽, `server`는 받는 쪽이다. orders의 `GET (client)` 시작과 inventory의 `GET (server)` 시작 사이의 틈(7ms → 14ms)이 네트워크와 상대 서버의 큐에서 기다린 시간이다. 이 틈이 크면 네트워크나 상대의 accept 큐, 이벤트 루프 지연을 의심한다. 이 실습은 한 호스트라 시계가 같지만, 서버가 다르면 시계 차이(clock skew)만큼 틈이 틀어진다. 자식이 부모보다 먼저 시작한 것처럼 보이면 대개 시계 문제다.
+
+span의 속성에는 실제 SQL이 들어 있다. 콘솔 내보내기를 켜서 찍은 pg span이다(일부만).
+
+```text
+  name: 'pg.query:SELECT n7_trace',
+  kind: 2,
+  duration: 94695.478,
+  attributes: {
+    'db.system.name': 'postgresql',
+    'db.namespace': 'n7_trace',
+    'server.address': '127.0.0.1',
+    'server.port': 5432,
+    'db.query.text': 'select coalesce(sum(qty),0)::int as qty from stock where sku = $1'
+  },
+```
+
+`duration` 단위는 마이크로초라 94.7ms다. SQL을 알았으니 이제부터는 DB의 일이다. 같은 쿼리를 `EXPLAIN ANALYZE`로 봤다.
+
+```sql
+-- sku 하나의 재고 합계: 인덱스가 없을 때
+EXPLAIN ANALYZE
+SELECT coalesce(sum(qty), 0)::int AS qty FROM stock WHERE sku = 'SKU-2';
+```
+
+```text
+ Finalize Aggregate  (cost=26083.92..26083.94 rows=1 width=4) (actual time=105.183..110.978 rows=1 loops=1)
+   ->  Gather  (cost=26083.71..26083.92 rows=2 width=8) (actual time=104.526..110.965 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Partial Aggregate  (cost=25083.71..25083.72 rows=1 width=8) (actual time=98.142..98.146 rows=1 loops=3)
+               ->  Parallel Seq Scan on stock  (cost=0.00..25083.67 rows=17 width=4) (actual time=5.215..98.104 rows=13 loops=3)
+                     Filter: (sku = 'SKU-2'::text)
+                     Rows Removed by Filter: 666653
+ Planning Time: 0.670 ms
+ Execution Time: 111.075 ms
+```
+
+`Parallel Seq Scan`과 `Rows Removed by Filter: 666653`(작업자 셋이 각자 버린 수)이 원인이다. 40줄을 찾으려고 200만 줄을 다 읽었다. 인덱스를 만들고 다시 봤다.
+
+```sql
+CREATE INDEX stock_sku_idx ON stock (sku);
+EXPLAIN ANALYZE
+SELECT coalesce(sum(qty), 0)::int AS qty FROM stock WHERE sku = 'SKU-2';
+```
+
+```text
+ Aggregate  (cost=162.86..162.87 rows=1 width=4) (actual time=0.520..0.521 rows=1 loops=1)
+   ->  Bitmap Heap Scan on stock  (cost=4.75..162.75 rows=41 width=4) (actual time=0.056..0.509 rows=40 loops=1)
+         Recheck Cond: (sku = 'SKU-2'::text)
+         Heap Blocks: exact=40
+         ->  Bitmap Index Scan on stock_sku_idx  (cost=0.00..4.74 rows=41 width=0) (actual time=0.047..0.047 rows=40 loops=1)
+               Index Cond: (sku = 'SKU-2'::text)
+ Planning Time: 0.592 ms
+ Execution Time: 0.609 ms
+```
+
+111ms가 0.6ms가 됐다. 인덱스를 고르는 법은 [인덱스 글](/posts/db-index)에 있다. 같은 주문을 다시 부른 trace다.
+
+```text
+trace 2e100c4d0b10da8846c980c7da309b2f  spans=16
+   start      dur   service   span
+     0.0ms     20.5ms  gateway   GET (server)
+     0.0ms     16.7ms    gateway   POST (client)
+     1.0ms     18.3ms      orders    POST (server)
+     2.0ms     13.8ms        orders    check stock (internal)
+     2.0ms      4.3ms          orders    GET (client)
+     3.0ms      4.3ms            inventory GET (server)
+     4.0ms      0.2ms              inventory pg-pool.connect (client)
+     4.0ms      1.3ms              inventory pg.query:SELECT n7_trace (client)
+     7.0ms      5.4ms          orders    GET (client)
+     8.0ms      3.3ms            inventory GET (server)
+     8.0ms      0.3ms              inventory pg-pool.connect (client)
+     9.0ms      2.2ms              inventory pg.query:SELECT n7_trace (client)
+    12.0ms      2.9ms          orders    GET (client)
+    13.0ms      6.2ms            inventory GET (server)
+    13.0ms      0.2ms              inventory pg-pool.connect (client)
+    14.0ms      0.9ms              inventory pg.query:SELECT n7_trace (client)
+```
+
+465ms가 20ms가 됐다. 세 팀이 "우리 쪽은 빠르다"고 했던 건 평균을 봤기 때문이다. inventory의 평균 응답에는 인덱스를 타는 다른 요청이 섞여 있었고, 이 쿼리가 한 주문에 세 번씩 차례로 불린다는 사실은 어느 서비스의 지표에도 없었다. 이 실습에서는 span 시작 시각이 밀리초 단위로 찍혀서 start 칸이 정수로 보인다. 길이(dur)는 더 정밀하다.
+
+## 병렬로 바꿔도 느린 칸은 그대로였다
+
+인덱스를 만들기 전에 다른 방법을 먼저 시도해 봤다. 세 번을 차례로 부르는 게 문제처럼 보였으니, orders가 `Promise.all`로 동시에 부르게 바꿨다. 인덱스가 없는 상태의 trace다.
+
+```text
+trace 7aa5773483c1194c16c6b7df7db173d1  spans=16
+   start      dur   service   span
+     0.0ms    243.2ms  gateway   GET (server)
+     1.0ms    242.0ms    gateway   POST (client)
+     3.0ms    239.1ms      orders    POST (server)
+     6.0ms    235.1ms        orders    check stock (internal)
+     6.0ms    234.6ms          orders    GET (client)
+    14.0ms    226.6ms            inventory GET (server)
+    15.0ms      0.2ms              inventory pg-pool.connect (client)
+    15.0ms    224.8ms              inventory pg.query:SELECT n7_trace (client)
+    10.0ms    164.3ms          orders    GET (client)
+    15.0ms    156.7ms            inventory GET (server)
+    16.0ms      0.1ms              inventory pg-pool.connect (client)
+    16.0ms    154.6ms              inventory pg.query:SELECT n7_trace (client)
+    11.0ms    224.7ms          orders    GET (client)
+    28.0ms    206.6ms            inventory GET (server)
+    28.0ms      0.2ms              inventory pg-pool.connect (client)
+    29.0ms    205.1ms              inventory pg.query:SELECT n7_trace (client)
+```
+
+전체는 465ms에서 243ms로 줄었다. 그런데 쿼리 하나하나는 113~151ms에서 155~225ms로 오히려 느려졌다. 같은 테이블을 전부 읽는 쿼리 세 개가 동시에 CPU와 디스크를 나눠 쓰기 때문이다. trace를 보지 않고 응답 시간만 봤다면 "병렬화로 절반을 줄였다"고 끝냈을 것이다. 폭포 그림은 진짜 원인(인덱스 없는 쿼리)이 그대로 남아 있고, 동시 요청이 늘면 DB가 먼저 무너질 거라는 걸 보여 준다.
+
+느린 칸을 찾는 일을 숫자로 하면 "자기 시간(self time)"을 구하는 일이다. span의 길이에서 자식 span들이 덮는 시간을 빼면, 그 span이 직접 쓴 시간이 남는다. 자식이 동시에 돌았다면 겹치는 구간을 한 번만 뺀다. 아래 함수는 span 목록을 받아 서비스·이름별 자기 시간 합계를 큰 순으로 `n`개 돌려준다. 첫 테스트는 위의 차례로 부른 trace 숫자 그대로다.
+
+<CodePlayground
+  caption="span 목록에서 자기 시간이 큰 구간 찾기"
+  functionName="slowHops"
+  initialCode={`function slowHops(spans, n) {
+  // span: { id, parent, service, name, start, dur } (ms)
+  // 자기 시간 = dur - 자식들이 덮는 구간의 합집합 길이
+  // 결과: "service name 자기시간" (소수 첫째 자리 반올림), 큰 순
+  return [];
+}`}
+  solution={`function slowHops(spans, n) {
+  const kids = new Map();
+  for (const s of spans) {
+    if (!kids.has(s.parent)) kids.set(s.parent, []);
+    kids.get(s.parent).push(s);
+  }
+  const total = new Map();
+  for (const s of spans) {
+    const end = s.start + s.dur;
+    const iv = (kids.get(s.id) || [])
+      .map((c) => [Math.max(c.start, s.start), Math.min(c.start + c.dur, end)])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
+    let covered = 0, curA = null, curB = null;
+    for (const [a, b] of iv) {
+      if (curB === null || a > curB) {
+        if (curB !== null) covered += curB - curA;
+        curA = a; curB = b;
+      } else curB = Math.max(curB, b);
+    }
+    if (curB !== null) covered += curB - curA;
+    const key = \`\${s.service} \${s.name}\`;
+    total.set(key, (total.get(key) || 0) + (s.dur - covered));
+  }
+  return [...total.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([k, v]) => \`\${k} \${Math.round(v * 10) / 10}\`);
+}`}
+  tests={[
+    {
+      label: "차례로 부른 trace",
+      args: [[
+        { id: "g1", parent: null, service: "gateway", name: "GET", start: 0, dur: 465.1 },
+        { id: "g2", parent: "g1", service: "gateway", name: "POST", start: 0, dur: 462.8 },
+        { id: "o1", parent: "g2", service: "orders", name: "POST", start: 5, dur: 457.7 },
+        { id: "o2", parent: "o1", service: "orders", name: "check stock", start: 6, dur: 452.3 },
+        { id: "c1", parent: "o2", service: "orders", name: "GET", start: 7, dur: 181.9 },
+        { id: "i1", parent: "c1", service: "inventory", name: "GET", start: 14, dur: 173.7 },
+        { id: "p1", parent: "i1", service: "inventory", name: "pg-pool.connect", start: 15, dur: 19.4 },
+        { id: "q1", parent: "i1", service: "inventory", name: "pg.query", start: 34, dur: 151.4 },
+        { id: "c2", parent: "o2", service: "orders", name: "GET", start: 191, dur: 118.6 },
+        { id: "i2", parent: "c2", service: "inventory", name: "GET", start: 193, dur: 119.2 },
+        { id: "q2", parent: "i2", service: "inventory", name: "pg.query", start: 194, dur: 113.4 },
+        { id: "c3", parent: "o2", service: "orders", name: "GET", start: 313, dur: 145.1 },
+        { id: "i3", parent: "c3", service: "inventory", name: "GET", start: 314, dur: 144.7 },
+        { id: "q3", parent: "i3", service: "inventory", name: "pg.query", start: 318, dur: 137.7 },
+      ], 3],
+      expected: ["inventory pg.query 402.5", "inventory pg-pool.connect 19.4", "inventory GET 16.1"],
+    },
+    {
+      label: "동시에 돈 자식은 겹친 만큼 한 번만",
+      args: [[
+        { id: "o2", parent: null, service: "orders", name: "check stock", start: 0, dur: 235 },
+        { id: "c1", parent: "o2", service: "orders", name: "GET", start: 0, dur: 235 },
+        { id: "c2", parent: "o2", service: "orders", name: "GET", start: 4, dur: 164 },
+        { id: "c3", parent: "o2", service: "orders", name: "GET", start: 5, dur: 225 },
+      ], 2],
+      expected: ["orders GET 624", "orders check stock 0"],
+    },
+    {
+      label: "span 하나",
+      args: [[{ id: "a", parent: null, service: "api", name: "GET", start: 0, dur: 50 }], 5],
+      expected: ["api GET 50"],
+    },
+  ]}
+/>
+
+## 헤더가 한 번 끊기면 추적도 끊긴다
+
+분산 추적에서 가장 흔한 고장은 문맥 전파가 끊기는 것이다. 한 구간이라도 헤더를 넘기지 않으면 그 뒤는 새 trace로 시작한다. 화면에는 짧은 trace 두 개가 따로 보이고, 둘을 잇는 방법이 없다.
+
+직접 만들어 봤다. orders가 inventory를 부를 때 `http.get` 대신 Node 내장 `fetch`를 쓰게 바꿨다. Node의 `fetch`는 undici라는 별도 HTTP 구현 위에 있어서, `http` 모듈을 감싸는 `HttpInstrumentation`이 잡지 못한다.
+
+```text
+{"service":"orders","msg":"order created","trace_id":"52a572b7ee108077262bab35f19bc873",...}
+{"service":"inventory","msg":"stock lookup","trace_id":"c20c3f64f1f58e5a12ba1442eaee6213","sku":"SKU-88"}
+{"service":"gateway","msg":"checkout done","trace_id":"52a572b7ee108077262bab35f19bc873",...}
+```
+
+(`ts`, `span_id` 필드는 줄였다.) inventory의 trace id가 다르고, 받은 `traceparent`가 없어서 로그에 그 필드가 아예 없다. 오류는 하나도 나지 않았다. 고치려면 `@opentelemetry/instrumentation-undici`를 추가한다. 자동 계측 묶음(`auto-instrumentations-node`)을 쓰면 들어 있다.
+
+<NetworkTopology
+  width={400}
+  height={200}
+  caption="한 구간이 헤더를 넘기지 않으면 trace가 둘로 쪼개진다"
+  nodes={[
+    { id: "g", label: "gateway", sub: "trace 52a5…", x: 64, y: 50, icon: "gateway" },
+    { id: "o", label: "orders", sub: "trace 52a5…", x: 200, y: 50, icon: "server" },
+    { id: "i", label: "inventory", sub: "trace c20c…", x: 336, y: 50, icon: "server" },
+    { id: "q", label: "Kafka", sub: "헤더에 싣기", x: 200, y: 150, icon: "switch" },
+    { id: "w", label: "worker", sub: "같은 trace", x: 336, y: 150, icon: "container" },
+  ]}
+  links={[
+    { from: "g", to: "o" },
+    { from: "o", to: "i", dashed: true, label: "fetch()" },
+    { from: "o", to: "q" },
+    { from: "q", to: "w" },
+  ]}
+  steps={[
+    {
+      path: ["g", "o"],
+      packet: "tp 52a5",
+      title: "계측된 http 모듈",
+      detail: "gateway에서 orders까지는 traceparent가 붙어 같은 trace로 이어진다.",
+    },
+    {
+      path: ["o", "i"],
+      packet: "헤더 없음",
+      blocked: true,
+      title: "계측되지 않은 클라이언트",
+      detail: "fetch는 http 계측 밖이라 헤더를 붙이지 않았다. inventory는 부모가 없으니 새 trace를 시작한다. 오류는 나지 않고 조용히 쪼개진다.",
+      payload: "inventory trace_id = c20c3f64f1f58e5a12ba1442eaee6213",
+    },
+    {
+      path: ["o", "q", "w"],
+      packet: "tp 52a5",
+      highlight: ["q"],
+      title: "비동기 구간은 메시지 헤더로",
+      detail: "큐를 거칠 때는 메시지 헤더에 traceparent를 넣고 꺼내야 한다. 소비자는 보통 부모-자식 대신 link로 잇는다. 처리 시점이 요청과 떨어져 있기 때문이다.",
+    },
+  ]}
+/>
+
+현장에서 전파가 끊기는 자리는 거의 정해져 있다.
+
+계측되지 않은 HTTP 클라이언트나 RPC 라이브러리가 하나 섞인 경우. 위의 fetch가 그렇다. 새 라이브러리를 들일 때 계측이 있는지 먼저 본다.
+
+비동기 경계. 메시지 큐, 배치 작업, 스레드 풀로 일을 넘기는 순간 메모리의 문맥이 따라가지 않는다. Kafka라면 레코드 헤더에, RabbitMQ라면 메시지 속성에 traceparent를 넣고 꺼낸다. 이벤트 흐름 전체를 이어 보는 관점은 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture)에 있다.
+
+서비스 메시. Envoy 같은 사이드카가 span을 만들어 주니 앱은 아무것도 안 해도 된다고 오해하기 쉽다. 사이드카는 들어온 요청과 나가는 요청이 같은 요청이라는 걸 모른다. 앱이 받은 헤더를 나가는 요청에 옮겨 주지 않으면 메시의 trace도 끊긴다. 메시 구조는 [서비스 메시 글](/posts/service-mesh)에서 봤다.
+
+헤더를 지우는 프록시. 일부 API 게이트웨이나 WAF는 허용 목록에 없는 헤더를 버린다. 반대로 바깥에서 들어온 `traceparent`를 그대로 믿는 것도 문제다. 실습에서 임의의 값을 넣어 보내자 그대로 이어받았다.
+
+```bash
+# 바깥에서 trace id를 지정해 보낸다
+curl -s -o /dev/null -H "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" \
+  "http://127.0.0.1:17001/checkout?items=SKU-77"
+```
+
+```text
+{"ts":"2026-10-20T19:40:22.820Z","service":"gateway","msg":"checkout done","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"95b91624460e5868","status":201}
+```
+
+누구나 sampled 플래그를 01로 보내 모든 요청을 저장하게 만들 수 있고, 남의 trace id에 span을 섞어 넣을 수 있다. 인터넷에 열린 첫 관문에서는 받은 trace를 이어받지 않고 새로 시작하거나(받은 값은 link로만 남긴다), 샘플링 결정을 다시 내리게 설정하는 경우가 많다.
+
+## 다 저장할 수 없어서 고른다
+
+span은 많다. 이 실습의 주문 하나가 span 16~17개였다. 초당 1,000건이면 초당 1만 6천 개, 하루 14억 개다. 저장소와 네트워크 비용 때문에 대부분은 버리고 일부만 남긴다. 무엇을 남길지 언제 정하느냐에 따라 두 방식으로 나뉜다.
+
+헤드 샘플링은 trace가 시작될 때, 즉 첫 서비스에서 정한다. 정한 결과를 traceparent의 sampled 플래그에 실어 뒤로 보내고, 뒤의 서비스는 그 결정을 따른다. gateway만 `OTEL_TRACES_SAMPLER=parentbased_traceidratio`, `OTEL_TRACES_SAMPLER_ARG=0.25`로 띄우고 200번 주문을 보낸 뒤, inventory가 받은 헤더의 플래그를 셌다.
+
+```bash
+# inventory 로그에 찍힌 traceparent의 마지막 칸(flags)을 센다
+grep -o '"traceparent":"[^"]*"' inventory.log | awk -F- '{print $NF}' | sort | uniq -c
+```
+
+```text
+    156 00"
+     44 01"
+```
+
+200건 중 44건(22%)만 01이었다. 비율 샘플러는 trace id 값으로 결정을 내려서, 같은 trace id라면 어느 서비스에서 계산해도 같은 결론이 나온다. 싸고 단순하다. 대신 시작할 때는 이 요청이 느릴지, 실패할지 모른다. 0.25로 잡으면 장애 난 요청의 75%도 같이 버린다.
+
+꼬리 샘플링은 trace가 끝난 뒤에 정한다. 서비스는 모든 span을 보내고, Collector가 trace id별로 span을 잠시 모아 두었다가 전체를 보고 남길지 정한다. 오류가 있는 trace, 느린 trace는 모두 남기고 나머지는 10%만 남기도록 설정했다.
+
+```yaml
+processors:
+  tail_sampling:
+    decision_wait: 5s          # 첫 span을 받은 뒤 5초 동안 trace를 모아 둔다
+    num_traces: 50000          # 메모리에 들고 있을 trace 수 상한
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+      - name: keep-slow
+        type: latency
+        latency: {threshold_ms: 200}
+      - name: sample-rest
+        type: probabilistic
+        probabilistic: {sampling_percentage: 10}
+```
+
+주문 100건 중 5건은 재고 조회에 300ms를 더하고(느림), 5건은 inventory가 500을 돌려주게(오류) 만들었다. 서비스는 모두 always-on으로 두고 Collector를 거쳐 Jaeger에 보냈다. Jaeger에 남은 trace를 종류별로 셌다.
+
+```text
+23 {'slow': 5, 'bad': 5, 'normal': 13}
+```
+
+느린 것 5건, 오류 5건이 하나도 빠지지 않고 남았고, 정상 90건 중에서는 13건이 남았다. Collector 자신의 지표에도 정책별 결정이 보인다(라벨 일부 생략).
+
+```text
+otelcol_processor_tail_sampling_count_traces_sampled{decision="sampled",policy="keep-errors",sampled="true"} 5
+otelcol_processor_tail_sampling_count_traces_sampled{decision="sampled",policy="keep-slow",sampled="true"} 5
+otelcol_processor_tail_sampling_count_traces_sampled{decision="sampled",policy="sample-rest",sampled="true"} 15
+otelcol_processor_tail_sampling_global_count_traces_sampled{decision="sampled",sampled="true"} 23
+```
+
+`sample-rest`가 15건을 골랐는데 최종이 23건인 건, 확률 정책이 느리거나 실패한 trace도 일부 골라서 겹쳤기 때문이다. 정책 중 하나라도 남기라고 하면 남는다.
+
+아래 그림은 같은 요청 다섯 개를 두 방식이 어떻게 고르는지 비교한다.
+
+<AlgoTrace
+  caption="같은 다섯 요청, 처음에 고를 때와 끝나고 고를 때"
+  memoryLabel="남긴 trace"
+  cells={["t1 12ms", "t2 310ms", "t3 15ms", "t4 500 오류", "t5 14ms"]}
+  steps={[
+    { memory: [], caption: "요청 다섯 개가 들어온다. t2는 느리고 t4는 실패할 예정이지만, 시작할 때는 아무도 모른다." },
+    { pointer: 0, found: [0], memory: ["head: t1"], caption: "헤드 샘플링(25%)은 시작하자마자 trace id로 정한다. t1이 뽑혔다." },
+    { pointer: 3, memory: ["head: t1"], caption: "t2, t3, t4, t5는 뽑히지 않았다. 느린 t2와 실패한 t4가 함께 버려졌다. 장애를 보려고 열면 정상 요청만 남아 있다." },
+    { pointer: 1, found: [1, 3], memory: ["tail: t2 느림", "tail: t4 오류"], caption: "꼬리 샘플링은 다섯 개를 다 받아 5초 기다린 뒤 본다. 200ms 넘는 t2, 오류가 있는 t4는 무조건 남긴다." },
+    { pointer: 4, found: [1, 3, 4], memory: ["tail: t2 느림", "tail: t4 오류", "tail: t5 (10%)"], caption: "나머지 셋 중에서는 10%를 무작위로 남긴다. 평소 모습도 조금은 남겨야 비교할 수 있다." },
+  ]}
+/>
+
+꼬리 샘플링의 대가도 분명하다. 모든 span이 일단 Collector까지 와야 하니 서비스와 Collector 사이 네트워크 비용은 줄지 않는다. Collector는 결정을 내릴 때까지 trace를 메모리에 들고 있어야 한다. 그리고 한 trace의 span이 모두 같은 Collector 인스턴스에 모여야 판단할 수 있어서, Collector를 여러 대로 늘리면 앞에 trace id 기준으로 나눠 주는 계층(loadbalancing exporter)을 하나 더 둔다. `decision_wait`보다 오래 걸리는 trace는 결정이 난 뒤에 도착한 span이 따로 처리된다. 그래서 실무에서는 서비스에서 헤드 샘플링으로 양을 한 번 줄이고(예: 정상 트래픽의 일부), Collector의 꼬리 샘플링으로 오류와 느린 요청을 건지는 식으로 섞는다.
+
+## 로그와 trace를 trace_id로 잇는다
+
+추적의 실무 가치는 절반이 로그와의 연결에서 나온다. 이 실습의 서비스는 로그 한 줄마다 현재 span의 trace id를 넣었다.
+
+```js
+const { trace } = require("@opentelemetry/api");
+// 한 줄 JSON 로그에 지금 span의 trace_id, span_id를 붙인다
+function log(msg, extra = {}) {
+  const ctx = trace.getActiveSpan()?.spanContext();
+  console.log(JSON.stringify({ ts: new Date().toISOString(), service: process.env.OTEL_SERVICE_NAME,
+    msg, trace_id: ctx?.traceId, span_id: ctx?.spanId, ...extra }));
+}
+```
+
+이러면 Jaeger에서 느린 trace를 찾은 뒤 그 trace id로 로그 저장소를 검색해, 세 서비스의 로그를 시간순으로 한 번에 본다. 반대로 오류 로그에서 trace id를 복사해 trace를 연다. 지표의 이상한 점에서 trace로 넘어가는 연결(exemplar)도 같은 trace id로 만든다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="trace id 하나가 지표, trace, 로그를 오가는 열쇠가 된다"
+  nodes={[
+    { id: "m", label: "지표", sub: "p99가 튀었다", x: 80, y: 50, w: 120 },
+    { id: "t", label: "trace", sub: "어느 구간이 느렸나", x: 320, y: 50, w: 140 },
+    { id: "l", label: "로그", sub: "그때 무슨 일이", x: 80, y: 200, w: 120 },
+    { id: "k", label: "trace_id", sub: "eabd2883…", x: 320, y: 200, w: 120 },
+  ]}
+  edges={[
+    { from: "m", to: "t", label: "exemplar" },
+    { from: "t", to: "k" },
+    { from: "k", to: "l", label: "검색" },
+    { from: "l", to: "t", dashed: true, label: "링크" },
+  ]}
+/>
+
+헤드 샘플링을 쓰면 재미있는 일이 생긴다. 저장하지 않기로 한 요청도 trace id는 만들어지고 헤더로 전파된다. 실습에서 플래그가 00인 요청 하나를 골라 봤다.
+
+```text
+{"ts":"2026-10-20T19:38:04.052Z","service":"inventory","msg":"stock lookup","trace_id":"a2bb98412f1d91c26cdf6dc262b0ce42","span_id":"73d331b53fbfc894","sku":"SKU-500","traceparent":"00-a2bb98412f1d91c26cdf6dc262b0ce42-b15267ab9c993080-00"}
+{"ts":"2026-10-20T19:38:04.055Z","service":"orders","msg":"order created","trace_id":"a2bb98412f1d91c26cdf6dc262b0ce42","span_id":"78068d0e9d8398c9","items":1}
+{"ts":"2026-10-20T19:38:04.056Z","service":"gateway","msg":"checkout done","trace_id":"a2bb98412f1d91c26cdf6dc262b0ce42","span_id":"ee94f1bb6cdb8c96","status":201}
+```
+
+Jaeger에서 이 trace id를 찾으면 `trace not found`다. 그래도 세 서비스의 로그는 같은 trace id로 묶인다. trace를 버려도 로그 상관관계는 남는다. 그래서 따로 요청 ID를 만들지 않고 trace id를 요청 ID로 쓰는 팀이 많다.
+
+## 추적을 들일 때 정할 것
+
+span에 무엇을 넣을지부터 정한다. `db.query.text`에는 실습처럼 파라미터 자리표시자(`$1`)가 들어간 SQL이 남는데, 문자열을 이어 붙여 만든 SQL이라면 고객 정보가 그대로 남는다. 헤더, 쿼리 문자열, 요청 본문을 속성으로 넣을 때도 같다. trace 저장소는 로그 저장소만큼 접근 통제가 엄격하지 않은 경우가 많다.
+
+span 이름은 낮은 카디널리티로 짓는다. `GET /stock/SKU-31`처럼 ID가 들어간 이름을 쓰면 span 이름마다 통계가 갈라져 집계가 무의미해진다. 이름은 `GET /stock/:sku`처럼 경로 템플릿으로 두고, 실제 값은 속성(`url.path`)에 넣는다. 이 실습의 HTTP span 이름이 그냥 `GET`인 것도 프레임워크 없이 http 모듈만 써서 경로 템플릿을 몰랐기 때문이다. Express 같은 프레임워크 계측을 붙이면 라우트 이름이 붙는다.
+
+오버헤드는 생각보다 작지만 0은 아니다. span을 만들고 속성을 붙이는 데 CPU가 들고, 배치 큐가 메모리를 쓴다. 큐(`maxQueueSize`, 기본 2048)가 넘치면 span을 버린다. 수집기가 죽어도 앱은 멀쩡해야 하니 이 설계가 맞지만, "trace가 가끔 중간이 비어 있다"면 큐 넘침을 의심한다.
+
+마지막으로 추적은 지표를 대신하지 않는다. 샘플링된 trace로는 정확한 요청 수나 오류율을 셀 수 없다. 숫자는 지표로 세고 알림을 걸고([알림 글](/posts/alerting)), 원인은 trace로 찾는다. 네트워크 계층에서 연결 단위로 누가 누구와 통신했는지는 [흐름 로그](/posts/network-flow-logs)가, 호스트의 재전송과 큐 넘침은 [네트워크 모니터링](/posts/network-monitoring)이 본다. 추적에서 서버 span이 시작되기 전의 긴 틈이 보일 때 넘어갈 곳이 이 둘이다. 계층마다 걸린 타임아웃이 trace에서 어떻게 보이는지는 [타임아웃 글](/posts/timeouts)과 함께 보면 좋다.
+
+## 다시 주문 버튼으로
+
+세 팀이 모두 맞는 말을 했는데도 사용자가 느렸던 건, 각자의 평균에는 "한 주문이 같은 느린 쿼리를 차례로 세 번 부른다"는 모양이 담기지 않았기 때문이다. 분산 추적은 trace id 하나를 헤더에 실어 서비스 경계를 넘기고, 각자 보낸 span을 다시 나무로 세워서 그 모양을 보여 준다. 나무가 끊기지 않게 모든 구간에서 헤더를 넘기고, 저장할 것은 끝난 뒤에 고르고, 로그에도 같은 trace id를 찍어 두면 "어디가 느린가"라는 질문에 폭포 그림 한 장으로 답할 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### trace와 span은 어떻게 다른가요?
+
+span은 한 가지 일을 언제 시작해서 얼마나 걸렸는지 적은 기록 하나이고, trace는 요청 하나에서 생긴 span 전체다. 같은 trace의 span은 같은 trace id를 갖고, 각자 부모 span id를 적어서 나무를 이룬다. HTTP 요청을 받은 일, 다른 서비스를 부른 일, SQL 한 번이 각각 span이 된다.
+
+### 서비스 A가 B를 부를 때 B는 어떻게 같은 trace에 이어 붙나요?
+
+A가 요청 헤더에 W3C `traceparent`를 실어 보낸다. 값은 버전, trace id, A의 클라이언트 span id, 샘플링 플래그 네 칸이다. B는 이 헤더를 읽어 같은 trace id로 자기 서버 span을 만들고 부모를 A의 span id로 적는다. 보통은 HTTP·RPC 계측 라이브러리가 넣고 빼는 일을 대신한다.
+
+### 계측을 붙였는데 trace가 중간에서 끊겨 두 개로 보입니다. 어디를 보나요?
+
+헤더 전파가 끊긴 구간을 찾는다. 계측되지 않은 HTTP 클라이언트(Node의 fetch처럼 다른 구현을 쓰는 것), 메시지 큐 같은 비동기 경계, 헤더를 지우는 프록시, 받은 헤더를 나가는 요청에 옮기지 않는 앱(서비스 메시에서 흔하다)이 대표적이다. 끊긴 지점 뒤 서비스의 로그에 받은 traceparent가 있는지부터 확인한다.
+
+### 헤드 샘플링과 꼬리 샘플링의 차이와 트레이드오프는?
+
+헤드 샘플링은 trace가 시작될 때 trace id로 남길지를 정하고 그 결정을 헤더로 전파한다. 싸고 단순하지만 시작할 때는 느릴지 실패할지 몰라서 중요한 trace도 같은 비율로 버린다. 꼬리 샘플링은 Collector가 trace 전체를 잠시 모아 두고 오류·지연을 보고 고른다. 중요한 trace를 놓치지 않는 대신 모든 span을 일단 보내야 하고, 메모리와 trace id 기준 분산이 필요하다.
+
+### 서비스 메시를 쓰면 앱에서 추적 코드를 안 넣어도 되나요?
+
+span 생성은 사이드카가 해 주지만 헤더 전달은 앱이 해야 한다. 사이드카는 들어온 요청과 그 요청을 처리하다 나가는 요청이 같은 일이라는 걸 알 수 없어서, 앱이 받은 traceparent를 나가는 요청에 옮겨 주지 않으면 trace가 끊긴다. 그리고 메시가 보는 건 네트워크 구간뿐이라 앱 안의 DB 쿼리나 업무 단계는 보이지 않는다.
+
+### 추적이 있는데도 지표와 로그가 따로 필요한 이유는?
+
+추적은 보통 샘플링하기 때문에 정확한 요청 수와 오류율을 셀 수 없다. 그래서 숫자와 알림은 지표가 맡고, 추적은 "어느 구간이 느렸나"라는 원인을 맡는다. 로그는 구간 안에서 무슨 일이 있었는지를 남기고, trace id를 로그에 함께 찍으면 trace를 저장하지 않은 요청도 서비스 사이의 로그를 하나로 묶을 수 있다.
+
+### 바깥에서 들어온 traceparent를 그대로 믿으면 어떤 문제가 있나요?
+
+누구나 sampled 플래그를 01로 보내 저장 비용을 올리거나, 임의의 trace id로 남의 trace에 span을 섞을 수 있다. 실습에서도 임의의 trace id를 넣어 보내자 세 서비스가 그대로 이어받았다. 인터넷에 열린 첫 관문에서는 새 trace를 시작하고 받은 값은 link로만 남기거나, 샘플링 결정을 다시 내리도록 설정한다.

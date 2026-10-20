@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "distributed-tracing",
+    title: "분산 추적: 요청 하나를 서비스 셋에 걸쳐 따라가기",
+    summary: "Node.js 서비스 셋에 OpenTelemetry를 붙이고 Jaeger에 모인 trace에서 느린 구간을 찾아 고친다. traceparent 헤더로 문맥을 잇는 법, 전파가 조용히 끊기는 자리, 헤드와 꼬리 샘플링의 차이, 로그와 trace를 trace_id로 잇는 법까지 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "Distributed Systems", "MSA", "Node.js", "PostgreSQL", "Performance"],
+    date: "2026-10-20",
+    keywords: ["분산 추적", "traceparent", "꼬리 샘플링", "W3C Trace Context"],
+  },
+  {
+    slug: "network-flow-logs",
+    title: "흐름 로그: 누가 누구와 이야기하는지 남기기",
+    summary: "5-튜플로 패킷을 묶어 대화마다 한 줄을 남기는 흐름 레코드를 softflowd와 conntrack으로 직접 만들고, VPC 흐름 로그 한 줄을 필드별로 읽는다. NAT 뒤의 원래 출발지 찾기, 많이 통신하는 쌍과 스캔 찾기, 샘플링이 무엇을 잃는지와 비용 조절까지 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "Network", "AWS", "Security", "Linux", "Troubleshooting"],
+    date: "2026-10-20",
+    keywords: ["VPC 흐름 로그", "흐름 로그", "NetFlow", "5-튜플"],
+  },
+  {
+    slug: "network-monitoring",
+    title: "네트워크 모니터링: 바이트 그래프 뒤에서 무엇을 볼까",
+    summary: "대역폭 그래프에 드러나지 않는 손실과 대기를 인터페이스·qdisc 카운터, 재전송 비율, accept 큐 넘침, conntrack, DNS 지연으로 직접 읽는다. node_exporter와 blackbox_exporter를 Prometheus로 모아 rate로 바꾸고 알림을 걸며, SNMP로 장비 카운터를 묻는 법까지 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "Network", "Linux", "DevOps", "Troubleshooting", "TCP/IP"],
+    date: "2026-10-20",
+    keywords: ["node_exporter", "blackbox_exporter", "ListenOverflows", "SNMP", "재전송 비율"],
+  },
+  {
     slug: "raft-consensus",
     title: "Raft 합의: 로그 복제, 커밋, 안전한 리더 교체",
     summary: "과반을 잃은 etcd 리더가 쓰기를 거절하는 장면에서 출발해 AppendEntries와 커밋 번호, 어긋난 로그 고치기와 스냅숏, 로그가 최신인 후보만 이기는 투표 규칙, 고립된 멤버가 임기를 부풀리는 현상과 Pre-Vote, learner로 멤버 바꾸기를 etcd 3.4 실제 로그로 따라간다.",
