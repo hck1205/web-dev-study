@@ -1,0 +1,434 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-coredns");
+
+결제 API(`api.example.com`)를 부르는 Pod 하나에서 응답이 가끔 5초씩 늦는다. 앱 쪽 타이머를 찍어 보니 HTTP 요청이 아니라 이름 풀이에서 시간이 사라진다. CoreDNS에 `log`를 켜 보니 이 Pod가 이름 하나를 물을 때마다 질의가 여덟 줄씩 찍히고, 그중 여섯 줄이 NXDOMAIN이다.
+
+여덟 개의 정체는 Pod의 `/etc/resolv.conf`에 있는 `search` 세 줄과 `ndots:5`이고, 5초의 정체는 리졸버의 재시도 시간이다. 이 글은 Pod가 이름을 물을 때 무엇이 일어나는지, CoreDNS가 Service와 Pod 이름을 어떻게 답하는지, 질의가 불어나고 느려지는 이유와 NodeLocal DNSCache가 그걸 어떻게 줄이는지를 실제 질의 캡처로 따라간다.
+
+DNS 자체(재귀 리졸버, 레코드 종류, TTL, UDP에서 TCP로 넘어가는 경우)는 [DNS 글](/posts/dns)에서 다뤘다. Service 타입마다 DNS 답이 어떻게 다른지(ClusterIP, headless, ExternalName)는 [Service 글](/posts/k8s-service-types#headless와-externalname-가상-ip-없이-이름만)에 있으니 여기서는 짧게 넘긴다. NetworkPolicy가 DNS를 막는 문제는 [NetworkPolicy 글](/posts/k8s-network-policy)에 있다.
+
+실습은 kwok로 띄운 실제 kube-apiserver(v1.30.4)에 CoreDNS 1.11.3을 붙여 돌렸다. Corefile은 kubeadm 기본 설정과 같고, kubernetes 플러그인이 실제 API 서버를 watch해서 답한다. 다만 클러스터 DNS 주소는 `10.96.0.10` 대신 루프백의 `127.0.10.10`에 띄웠고, 바깥 DNS는 `example.com`만 답하는 CoreDNS를 `127.0.10.53`에 하나 더 띄워 대신했다. 질의는 glibc 리졸버(Python의 `getaddrinfo`)로 보내고 tcpdump로 잡았다. 아래 캡처와 로그, 메트릭은 그 실습에서 나온 것이다.
+
+## Pod가 받는 resolv.conf
+
+Pod가 뜰 때 kubelet이 `/etc/resolv.conf`를 써 넣는다. `default` 네임스페이스의 Pod라면 이런 모양이다(예시).
+
+```text
+search default.svc.cluster.local svc.cluster.local cluster.local
+nameserver 10.96.0.10
+options ndots:5
+```
+
+세 줄이 각각 무엇을 정하는지 눌러 보자.
+
+<UrlAnatomy
+  caption="kubelet이 Pod에 넣는 resolv.conf"
+  base="/etc/resolv.conf"
+  separator=": "
+  joiner=" | "
+  params={[
+    { key: "nameserver", display: "nameserver 10.96.0.10", title: "물어볼 DNS 서버", description: "kube-dns Service의 ClusterIP다. kubelet의 clusterDNS 설정값이 들어간다. 이 주소도 가상 IP라서 질의는 kube-proxy 규칙을 타고 CoreDNS Pod 중 하나로 DNAT된다. NodeLocal DNSCache를 쓰면 169.254.20.10 같은 노드 로컬 주소가 들어간다.", required: true },
+    { key: "search", display: "search <ns>.svc.cluster.local svc.cluster.local cluster.local", title: "짧은 이름 뒤에 붙여 볼 도메인", description: "web이라고만 써도 web.default.svc.cluster.local로 풀리게 해 준다. 네임스페이스 이름이 첫 칸에 들어가서 같은 네임스페이스는 이름만, 다른 네임스페이스는 이름.네임스페이스로 부른다. 노드의 resolv.conf에 search가 있으면 뒤에 덧붙는다(클라우드면 ec2.internal 같은 것)." },
+    { key: "ndots", display: "options ndots:5", title: "점이 몇 개부터 완전한 이름으로 보나", description: "이름에 점이 5개 미만이면 search 도메인을 먼저 차례로 붙여 보고, 다 실패한 뒤에야 이름 그대로 묻는다. api.example.com은 점이 2개라 search부터 돈다. 이 값이 질의를 불리는 주범이다." },
+  ]}
+/>
+
+어떤 값을 넣을지는 Pod의 `dnsPolicy`가 정한다. 기본값 `ClusterFirst`가 위의 모양이다. 이름이 헷갈리는 `Default`는 클러스터 DNS가 아니라 노드의 resolv.conf를 그대로 물려받는다. `hostNetwork: true`인 Pod는 `ClusterFirst`를 줘도 노드 설정을 받아서, 클러스터 이름을 풀려면 `ClusterFirstWithHostNet`을 명시해야 한다. `None`은 아무것도 넣지 않고 `dnsConfig`로 전부 직접 적는다. 그래서 `dnsConfig`가 없으면 API 서버가 거절한다.
+
+```text
+The Pod "bad-dns" is invalid: spec.dnsConfig: Required value: must provide `dnsConfig` when `dnsPolicy` is None
+```
+
+## 이름 하나에 질의 여덟 개
+
+처음 장면을 그대로 재현했다. 위 resolv.conf로 `api.example.com`을 `getaddrinfo`로 풀면서 클러스터 DNS로 가는 질의를 모두 잡았다.
+
+```bash
+# 클러스터 DNS로 가는 질의만 캡처한다 (실습에서는 127.0.10.10이 클러스터 DNS)
+sudo tcpdump -ni lo -l 'udp and dst host 127.0.10.10 and dst port 53'
+
+# 다른 창에서: Pod와 같은 resolv.conf로 이름을 푼다
+python3 -c 'import socket; print(sorted({a[4][0] for a in socket.getaddrinfo("api.example.com", 443)}))'
+```
+
+```text
+14:28:27.044303 IP 127.0.0.1.53947 > 127.0.10.10.53: 11191+ A? api.example.com.default.svc.cluster.local. (59)
+14:28:27.044327 IP 127.0.0.1.53947 > 127.0.10.10.53: 3248+ AAAA? api.example.com.default.svc.cluster.local. (59)
+14:28:27.044941 IP 127.0.0.1.52502 > 127.0.10.10.53: 13721+ A? api.example.com.svc.cluster.local. (51)
+14:28:27.044946 IP 127.0.0.1.52502 > 127.0.10.10.53: 61590+ AAAA? api.example.com.svc.cluster.local. (51)
+14:28:27.045216 IP 127.0.0.1.35877 > 127.0.10.10.53: 28251+ A? api.example.com.cluster.local. (47)
+14:28:27.045231 IP 127.0.0.1.35877 > 127.0.10.10.53: 51804+ AAAA? api.example.com.cluster.local. (47)
+14:28:27.045481 IP 127.0.0.1.37787 > 127.0.10.10.53: 8763+ A? api.example.com. (33)
+14:28:27.045495 IP 127.0.0.1.37787 > 127.0.10.10.53: 42810+ AAAA? api.example.com. (33)
+```
+
+여덟 개다. search 도메인 셋을 하나씩 붙여 본 것이 여섯 개, 마지막으로 원래 이름이 두 개다. 이름마다 A(IPv4)와 AAAA(IPv6)를 함께 묻기 때문에 두 배가 된다. CoreDNS의 `log` 플러그인에는 각 질의의 결과가 남는다(A만 추렸다).
+
+```text
+[INFO] 127.0.0.1:45094 - 36830 "A IN api.example.com.default.svc.cluster.local. udp 59 false 512" NXDOMAIN qr,aa,rd 152 0.000234572s
+[INFO] 127.0.0.1:45544 - 16392 "A IN api.example.com.svc.cluster.local. udp 51 false 512" NXDOMAIN qr,aa,rd 144 0.000225012s
+[INFO] 127.0.0.1:33673 - 54879 "A IN api.example.com.cluster.local. udp 47 false 512" NXDOMAIN qr,aa,rd 140 0.000049093s
+[INFO] 127.0.0.1:45427 - 58369 "A IN api.example.com. udp 33 false 512" NOERROR qr,aa,rd 64 0.000670614s
+```
+
+앞의 셋은 `cluster.local` 영역이라 CoreDNS의 kubernetes 플러그인이 직접 "없다"(NXDOMAIN, `aa`는 권한 있는 답)를 돌려줬고, 마지막 하나만 바깥으로 넘어가 답을 받았다. 아래 그림에서 다음을 누르면 네 쌍의 질의가 각각 어디까지 갔다 오는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="search 확장 질의 셋은 CoreDNS에서 NXDOMAIN으로 끝나고, 마지막 하나만 바깥으로 나간다"
+  zones={[
+    { id: "node", label: "노드", x: 6, y: 6, w: 186, h: 306, tone: "private" },
+    { id: "ks", label: "kube-system", x: 208, y: 6, w: 186, h: 186, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "pod", label: "app Pod", sub: "ndots:5", x: 99, y: 70, icon: "container" },
+    { id: "kp", label: "kube-proxy", sub: "10.96.0.10 DNAT", x: 99, y: 250, icon: "firewall", w: 120 },
+    { id: "core", label: "CoreDNS", sub: "kubernetes 플러그인", x: 301, y: 110, icon: "dns", w: 120 },
+    { id: "up", label: "upstream", sub: "example.com", x: 301, y: 260, icon: "internet", w: 120 },
+  ]}
+  links={[
+    { from: "pod", to: "kp", label: "UDP 53" },
+    { from: "kp", to: "core" },
+    { from: "core", to: "up", label: "forward" },
+  ]}
+  steps={[
+    { path: ["pod", "kp", "core"], packet: "1/4", title: "…default.svc.cluster.local", detail: "첫 search 도메인을 붙인 이름. cluster.local 영역이라 kubernetes 플러그인이 바로 NXDOMAIN을 준다.", payload: "A IN api.example.com.default.svc.cluster.local. NXDOMAIN" },
+    { path: ["pod", "kp", "core"], packet: "2/4", title: "…svc.cluster.local", detail: "두 번째 search 도메인. 역시 NXDOMAIN. 질의마다 A와 AAAA 두 개씩이다." },
+    { path: ["pod", "kp", "core"], packet: "3/4", title: "…cluster.local", detail: "세 번째도 NXDOMAIN. 여기까지 질의 6개가 아무것도 얻지 못했다." },
+    { path: ["pod", "kp", "core", "up"], packet: "4/4", highlight: ["up"], title: "원래 이름은 바깥으로 넘어간다", detail: "cluster.local이 아니니 forward가 바깥 DNS에 묻는다. 처음 넷 중 실제로 답을 얻는 건 이 한 쌍뿐이다.", payload: "A IN api.example.com. NOERROR → 203.0.113.60" },
+  ]}
+/>
+
+ 쓸모 있는 질의는 네 쌍 중 한 쌍뿐이다. 실습 내내 쌓인 CoreDNS 메트릭도 같은 이야기를 한다.
+
+```bash
+# CoreDNS의 prometheus 플러그인 (클러스터에서는 각 CoreDNS Pod의 :9153/metrics)
+curl -s http://127.0.10.10:9153/metrics | grep -E '^coredns_dns_responses_total'
+```
+
+```text
+coredns_dns_responses_total{plugin="loadbalance",rcode="NOERROR",server="dns://127.0.10.10:53",view="",zone="."} 11
+coredns_dns_responses_total{plugin="loadbalance",rcode="NXDOMAIN",server="dns://127.0.10.10:53",view="",zone="."} 12
+```
+
+NXDOMAIN이 NOERROR보다 많다. 실제 클러스터에서도 외부 API를 많이 부르는 서비스가 있으면 이 비율이 쉽게 뒤집힌다. 대시보드에서 NXDOMAIN 비율이 높으면 장애가 아니라 search 확장 때문일 가능성부터 본다.
+
+리졸버가 이 순서를 정하는 규칙을 단계로 보자.
+
+<AlgoTrace
+  caption="ndots:5에서 api.example.com을 풀 때 리졸버가 묻는 순서"
+  memoryLabel="물어본 이름 → 결과"
+  cells={["점 개수", "+default.svc…", "+svc.cluster…", "+cluster.local", "그대로"]}
+  steps={[
+    { pointer: 0, caption: "끝에 점이 없으니 완전한 이름(FQDN)이 아니다. 점은 2개, ndots 5보다 적다. search 도메인부터 붙여 본다." },
+    { pointer: 1, memory: ["…default.svc.cluster.local NXDOMAIN"], caption: "첫 search 도메인. 같은 네임스페이스의 Service 이름일 거라고 가정한 질의다. A와 AAAA 두 개가 나간다." },
+    { pointer: 2, memory: ["…default.svc.cluster.local NXDOMAIN", "…svc.cluster.local NXDOMAIN"], caption: "두 번째. '이름.네임스페이스' 꼴의 다른 네임스페이스 Service를 위한 칸이다." },
+    { pointer: 3, memory: ["…default.svc.cluster.local NXDOMAIN", "…svc.cluster.local NXDOMAIN", "…cluster.local NXDOMAIN"], caption: "세 번째. 여기까지 모두 '없다'." },
+    { pointer: 4, found: [4], memory: ["…default.svc.cluster.local NXDOMAIN", "…svc.cluster.local NXDOMAIN", "…cluster.local NXDOMAIN", "api.example.com. 203.0.113.60"], caption: "search를 다 쓰고 나서야 원래 이름을 묻는다. 질의 8개 중 마지막 2개가 진짜다." },
+  ]}
+/>
+
+### 왜 5인가, 그리고 줄이는 법
+
+`ndots:5`는 클러스터 안 이름을 짧게 써도 search로 풀리게 하려고 넉넉하게 잡은 값이다. `web`, `web.shop`, `web.shop.svc`처럼 점이 몇 개든 클러스터 안의 이름이면 search가 먼저 맞힌다. 같은 네임스페이스의 `web`은 첫 질의에서 끝난다.
+
+```text
+A? web.default.svc.cluster.local.
+AAAA? web.default.svc.cluster.local.
+```
+
+반대로 바깥 이름은 거의 항상 search를 다 돌아야 한다. 줄이는 방법은 세 가지다.
+
+첫째, 바깥 이름 끝에 점을 붙여 완전한 이름으로 쓴다. `api.example.com.`은 search를 건너뛰어 질의가 두 개로 끝난다. 설정 파일 한 줄로 끝나지만, HTTP Host 헤더나 TLS 인증서 이름에 점이 붙은 채로 들어가 문제를 일으키는 라이브러리가 있어서 써 보고 확인한다.
+
+```text
+A? api.example.com.
+AAAA? api.example.com.
+```
+
+둘째, Pod의 `dnsConfig`로 ndots를 낮춘다. 2로 낮추면 점이 둘 이상인 `api.example.com`은 그대로 먼저 묻는다.
+
+```yaml
+spec:
+  dnsPolicy: ClusterFirst
+  dnsConfig:
+    options:
+      - name: ndots
+        value: "2"            # value 칸의 타입은 문자열이라 따옴표로 감싼다
+```
+
+```text
+A? api.example.com.
+AAAA? api.example.com.
+```
+
+대신 점이 하나인 이름(`redis.cache` 같은 다른 네임스페이스 Service)은 여전히 search를 먼저 돌고, 점이 둘인 클러스터 안 이름(`web.shop.svc`)은 바깥에 먼저 물었다가 NXDOMAIN을 받고 나서야 search로 돌아온다. 클러스터 안 이름은 짧게, 바깥 이름은 길게 쓰는 서비스에 맞는 값이다.
+
+셋째, CoreDNS의 `autopath` 플러그인이 서버에서 search 확장을 대신해 첫 질의에 바로 최종 답을 준다. 질의를 보낸 Pod의 네임스페이스를 알아야 해서 kubernetes 플러그인을 `pods verified`로 바꿔야 하는데, 그러면 CoreDNS가 모든 Pod를 watch해 메모리를 꽤 쓴다. 큰 클러스터에서는 부담을 따져 보고 켠다.
+
+이 규칙을 코드로 옮겨 보자. glibc 리졸버가 이름을 묻는 순서를 돌려주는 함수다.
+
+<CodePlayground
+  caption="이 이름은 어떤 순서로 질의되나"
+  functionName="searchOrder"
+  initialCode={`// name: 앱이 넘긴 이름, search: resolv.conf의 search 목록, ndots: options ndots 값
+// 반환: 리졸버가 묻는 완전한 이름(끝에 점)의 순서. A/AAAA는 따로 세지 않는다.
+// 규칙: 끝에 점이 있으면 그대로 하나만.
+//       점 개수가 ndots 이상이면 그대로 먼저, 그다음 search.
+//       적으면 search를 먼저, 마지막에 그대로.
+function searchOrder(name, search, ndots) {
+  return [];
+}`}
+  solution={`function searchOrder(name, search, ndots) {
+  if (name.endsWith(".")) return [name];
+  const dots = name.split(".").length - 1;
+  const expanded = search.map((d) => \`\${name}.\${d}.\`);
+  return dots >= ndots ? [\`\${name}.\`, ...expanded] : [...expanded, \`\${name}.\`];
+}`}
+  tests={[
+    { label: "ndots 5: 바깥 이름은 search부터", args: ["api.example.com", ["default.svc.cluster.local", "svc.cluster.local", "cluster.local"], 5], expected: ["api.example.com.default.svc.cluster.local.", "api.example.com.svc.cluster.local.", "api.example.com.cluster.local.", "api.example.com."] },
+    { label: "끝에 점: 하나만", args: ["api.example.com.", ["default.svc.cluster.local", "svc.cluster.local", "cluster.local"], 5], expected: ["api.example.com."] },
+    { label: "ndots 2: 그대로 먼저", args: ["api.example.com", ["default.svc.cluster.local", "svc.cluster.local", "cluster.local"], 2], expected: ["api.example.com.", "api.example.com.default.svc.cluster.local.", "api.example.com.svc.cluster.local.", "api.example.com.cluster.local."] },
+    { label: "짧은 Service 이름", args: ["web", ["default.svc.cluster.local", "svc.cluster.local", "cluster.local"], 5], expected: ["web.default.svc.cluster.local.", "web.svc.cluster.local.", "web.cluster.local.", "web."] },
+    { label: "ndots 2에서 점 하나짜리", args: ["redis.cache", ["default.svc.cluster.local", "svc.cluster.local", "cluster.local"], 2], expected: ["redis.cache.default.svc.cluster.local.", "redis.cache.svc.cluster.local.", "redis.cache.cluster.local.", "redis.cache."] },
+  ]}
+/>
+
+리졸버는 이 순서대로 묻다가 처음 답을 받은 곳에서 멈춘다. `web`은 첫 칸에서 끝나고, `redis.cache`는 둘째 칸 `redis.cache.svc.cluster.local`에서 끝난다. 처음 칸에서 NXDOMAIN이 아니라 시간 초과가 나면 다음 칸으로 가기 전에 timeout만큼 기다린다는 것도 기억해 두자. 그게 다음 절의 5초다.
+
+## CoreDNS가 답을 만드는 법
+
+CoreDNS는 플러그인을 이어 붙인 DNS 서버다. kubeadm이 만드는 기본 Corefile은 이렇고, 실습도 주소만 바꿔 같은 설정으로 돌렸다.
+
+```text
+.:53 {
+    errors
+    health {
+       lameduck 5s
+    }
+    ready
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+       pods insecure
+       fallthrough in-addr.arpa ip6.arpa
+       ttl 30
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf {
+       max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+    loadbalance
+}
+```
+
+질의 하나는 kubernetes 플러그인부터 본다. `cluster.local` 아래 이름이면 API 서버에서 watch해 메모리에 들고 있는 Service·EndpointSlice로 바로 답한다. API 서버에 매번 묻지 않는다. 역방향 조회(`in-addr.arpa`)는 클러스터 주소면 답하고, 아니면 `fallthrough`로 다음 플러그인에 넘긴다. 그 밖의 이름은 `forward`가 바깥 DNS로 넘긴다. `/etc/resolv.conf`는 CoreDNS Pod 자신의 것이고, CoreDNS는 `dnsPolicy: Default`로 떠서 노드의 DNS 설정을 물려받는다. `cache 30`은 답을 최대 30초 기억하고, `loadbalance`는 A 레코드 여러 개의 순서를 매번 섞는다.
+
+<SequenceDiagram
+  caption="Pod의 질의가 CoreDNS에서 갈라지는 길"
+  actors={[
+    { id: "pod", label: "Pod" },
+    { id: "core", label: "CoreDNS" },
+    { id: "api", label: "API 서버" },
+    { id: "up", label: "바깥 DNS" },
+  ]}
+  steps={[
+    { from: "core", to: "api", label: "watch", title: "미리 지켜본다", detail: "CoreDNS는 뜰 때부터 Service, EndpointSlice, Namespace를 watch해 메모리에 들고 있다. 질의마다 API 서버에 묻지 않는다." },
+    { from: "pod", to: "core", label: "A? web.default.svc…", title: "클러스터 이름을 묻는다", detail: "nameserver 10.96.0.10으로 간 UDP 질의가 kube-proxy 규칙에 따라 CoreDNS Pod 하나로 DNAT된다." },
+    { from: "core", to: "pod", label: "10.96.120.15", title: "메모리에서 바로 답한다", detail: "kubernetes 플러그인이 권한 있는 답(aa)을 준다. ClusterIP Service는 VIP 하나, headless는 ready인 Pod IP들이다.", payload: "web.default.svc.cluster.local. 30 IN A 10.96.120.15" },
+    { from: "pod", to: "core", label: "A? api.example.com", title: "바깥 이름을 묻는다", detail: "search 확장을 다 거친 뒤의 마지막 질의다. cluster.local이 아니니 kubernetes 플러그인을 지나친다." },
+    { from: "core", to: "up", label: "forward", title: "바깥 DNS로 넘긴다", detail: "forward가 노드의 resolv.conf에 적힌 서버로 묻는다. 답은 cache가 TTL과 30초 중 짧은 시간 동안 기억한다." },
+    { from: "up", to: "pod", label: "203.0.113.60", title: "답이 돌아온다", detail: "CoreDNS를 거쳐 Pod로 돌아간다. 같은 이름을 다른 Pod가 곧 다시 물으면 cache에서 바로 나간다." },
+  ]}
+/>
+
+실습 클러스터에서 레코드 종류별로 물어본 결과다. Service 쪽 레코드는 [Service 글](/posts/k8s-service-types)에서 봤으니 나머지만 본다.
+
+```bash
+# Pod 이름: IP의 점을 하이픈으로 바꾼 이름.<네임스페이스>.pod.cluster.local
+dig 10-244-1-5.default.pod.cluster.local +noall +answer
+# 역방향: ClusterIP와 Pod IP
+dig -x 10.96.120.15 +noall +answer
+dig -x 10.244.1.5 +noall +answer
+# 없는 Service
+dig nosuch.default.svc.cluster.local +noall +comments +authority
+```
+
+```text
+10-244-1-5.default.pod.cluster.local. 30 IN A	10.244.1.5
+15.120.96.10.in-addr.arpa. 30	IN	PTR	web.default.svc.cluster.local.
+5.1.244.10.in-addr.arpa. 30	IN	PTR	10-244-1-5.web-headless.default.svc.cluster.local.
+5.1.244.10.in-addr.arpa. 30	IN	PTR	10-244-1-5.web-lb.default.svc.cluster.local.
+5.1.244.10.in-addr.arpa. 30	IN	PTR	10-244-1-5.web-np.default.svc.cluster.local.
+5.1.244.10.in-addr.arpa. 30	IN	PTR	10-244-1-5.web.default.svc.cluster.local.
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 51002
+cluster.local.		30	IN	SOA	ns.dns.cluster.local. hostmaster.cluster.local. 1792506485 7200 1800 86400 30
+```
+
+Pod 이름 레코드는 `pods insecure` 모드라서 API 서버를 확인하지 않고 이름에서 IP를 그대로 만들어 답한다. 아무 IP 모양의 이름이든 답이 나온다는 뜻이다. Pod IP의 역방향 조회는 그 Pod를 엔드포인트로 가진 Service마다 PTR이 하나씩 나왔다. 로그에 역방향 이름을 찍는 앱이라면 어느 이름이 찍힐지 모른다. NXDOMAIN의 SOA 마지막 숫자 30은 "없다"는 답을 캐시해도 되는 시간이다. 방금 만든 Service가 몇 초간 안 풀리는 건 대개 직전에 받은 이 NXDOMAIN이 캐시에 남아서다.
+
+## 가끔 5초씩 늦는 이름 풀이
+
+처음 장면의 5초로 돌아가자. 캡처에서 A와 AAAA 질의가 같은 출발지 포트(`53947`)로 거의 동시에 나간 것을 봤다. glibc는 두 질의를 소켓 하나로 나란히 보낸다. 이 UDP 패킷들이 ClusterIP로 가면서 DNAT을 거칠 때, 두 패킷이 conntrack 항목을 동시에 만들려다 하나가 버려지는 경쟁 상태가 있었다. 버려진 쪽의 답이 안 오면 리졸버는 resolv.conf의 `timeout`(기본 5초)을 다 기다린 뒤 다시 묻는다. 그래서 정확히 5초, 그리고 가끔이다. 리눅스 커널 5.0 무렵에 conntrack 쪽 수정이 들어가 많이 줄었지만, 커널 버전과 kube-proxy 모드에 따라 여전히 보고된다.
+
+```bash
+# 노드에서 conntrack이 삽입에 실패한 횟수 (insert_failed가 늘면 의심)
+sudo conntrack -S | grep -o 'insert_failed=[0-9]*' | sort | uniq -c
+```
+
+대처는 몇 가지다. glibc 기반 이미지라면 `dnsConfig.options`에 `single-request-reopen`을 넣어 A와 AAAA를 다른 소켓으로 보낸다. 실습 클러스터에 그렇게 만든 Pod의 spec이다.
+
+```text
+ClusterFirst {"options":[{"name":"ndots","value":"2"},{"name":"single-request-reopen"}]}
+```
+
+Alpine 같은 musl 기반 이미지는 이 옵션을 무시한다. 그리고 근본적으로는 질의가 conntrack과 DNAT을 거치지 않게 하는 방법이 있다. 다음 절의 NodeLocal DNSCache다.
+
+## 노드마다 캐시를 둔다
+
+NodeLocal DNSCache는 노드마다 DNS 캐시를 하나씩 띄우는 DaemonSet(`node-local-dns`)이다. 캐시는 노드의 더미 인터페이스에 붙은 링크 로컬 주소 `169.254.20.10`에서 듣고, Pod는 이 주소로 묻는다. 캐시에 없는 클러스터 이름은 CoreDNS에 TCP로, 바깥 이름은 바깥 DNS로 바로 묻는다. Pod와 캐시 사이는 같은 노드 안이고 raw 테이블의 NOTRACK 규칙으로 conntrack을 건너뛰게 해서 앞의 경쟁 상태가 생기지 않는다. CoreDNS로 가는 길은 TCP라서 UDP conntrack 항목이 쌓이지도 않는다.
+
+실습에서 CoreDNS로 같은 구조의 캐시를 하나 더 띄웠다. 실제 `node-cache`도 CoreDNS 기반이고 Corefile이 거의 같다.
+
+```text
+cluster.local:53 {
+    errors
+    cache {
+        success 9984 30
+        denial 9984 5
+    }
+    reload
+    loop
+    bind 127.0.20.10
+    forward . 127.0.10.10 {
+        force_tcp
+    }
+    prometheus 127.0.20.10:9253
+}
+```
+
+`bind`가 실제 배포에서는 `169.254.20.10`(iptables 모드 kube-proxy라면 kube-dns의 ClusterIP도 함께)이고, `forward`의 대상은 CoreDNS Service 주소다. `force_tcp`가 TCP로 묻게 한다. `denial 9984 5`는 NXDOMAIN을 5초만 기억해서 방금 만든 Service가 늦게 풀리는 일을 줄인다. 같은 이름을 세 번 묻고 캐시 뒤쪽(CoreDNS로 가는 길)을 캡처했다.
+
+```bash
+# 노드 캐시에 같은 이름을 세 번
+for i in 1 2 3; do dig +short @127.0.20.10 web.default.svc.cluster.local; done
+
+# 캐시에서 CoreDNS로 나간 질의 (TCP 페이로드가 실린 줄만)
+sudo tcpdump -ni lo 'host 127.0.10.10 and port 53 and src host 127.0.0.1'
+
+# 캐시 메트릭
+curl -s http://127.0.20.10:9253/metrics | grep -E '^coredns_cache_hits_total'
+```
+
+```text
+10.96.120.15
+10.96.120.15
+10.96.120.15
+14:29:37.048457 IP 127.0.0.1.34704 > 127.0.10.10.53: Flags [P.], seq 991083110:991083182, ack 525681763, win 64, options [nop,nop,TS val 2555958856 ecr 2175255178], length 72 26276+ [1au] A? web.default.svc.cluster.local. (70)
+coredns_cache_hits_total{server="dns://127.0.20.10:53",type="success",view="",zones="cluster.local."} 2
+```
+
+세 번 물었는데 CoreDNS로 간 건 TCP 질의 하나(`Flags [P.]`)이고, 나머지 둘은 캐시 적중이다. 클러스터 전체로 보면 CoreDNS가 받는 질의가 노드 수만큼의 캐시 뒤로 숨어 크게 준다.
+
+<NetworkTopology
+  width={400}
+  height={340}
+  caption="NodeLocal DNSCache: Pod는 같은 노드의 캐시에 묻고, 캐시는 CoreDNS에 TCP로 묻는다"
+  zones={[
+    { id: "node", label: "node-1", x: 6, y: 6, w: 240, h: 326, tone: "private" },
+    { id: "ks", label: "kube-system", x: 262, y: 6, w: 132, h: 326, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "pod", label: "app Pod", sub: "10.244.1.5", x: 80, y: 70, icon: "container" },
+    { id: "nat", label: "conntrack", sub: "DNAT·UDP", x: 80, y: 270, icon: "firewall" },
+    { id: "cache", label: "node-cache", sub: "169.254.20.10", x: 180, y: 170, icon: "dns", w: 120 },
+    { id: "core", label: "CoreDNS", sub: "10.96.0.10", x: 328, y: 170, icon: "dns", w: 112 },
+    { id: "up", label: "upstream", sub: "바깥 DNS", x: 328, y: 285, icon: "internet", w: 112 },
+  ]}
+  links={[
+    { from: "pod", to: "nat", label: "예전 길", dashed: true },
+    { from: "nat", to: "core", dashed: true },
+    { from: "pod", to: "cache", label: "UDP 53" },
+    { from: "cache", to: "core", label: "TCP" },
+    { from: "cache", to: "up" },
+  ]}
+  steps={[
+    { path: ["pod", "nat", "core"], packet: "A+AAAA", blocked: true, title: "예전 길: UDP가 DNAT을 지난다", detail: "ClusterIP로 간 A와 AAAA가 같은 소켓에서 동시에 conntrack 항목을 만들다 하나가 버려지면, 리졸버는 5초를 기다린다.", payload: "options timeout:5 (기본값)" },
+    { path: ["pod", "cache"], packet: "A?", title: "같은 노드의 캐시에 묻는다", detail: "resolv.conf의 nameserver가 169.254.20.10이다. 노드 밖으로 나가지 않고, NOTRACK 규칙으로 conntrack을 건너뛴다." },
+    { path: ["cache", "core"], packet: "TCP", highlight: ["ks"], title: "없으면 CoreDNS에 TCP로", detail: "force_tcp로 묻는다. UDP conntrack 항목이 쌓이지 않고, 잃어버린 질의는 TCP가 다시 보낸다." },
+    { path: ["cache", "pod"], packet: "hit", title: "다음부터는 캐시에서 끝난다", detail: "같은 노드의 다른 Pod가 같은 이름을 물으면 CoreDNS까지 가지 않는다. 실습에서는 세 번 중 두 번이 캐시 적중이었다.", payload: "coredns_cache_hits_total{…zones=\"cluster.local.\"} 2" },
+    { path: ["cache", "up"], packet: "A?", title: "바깥 이름은 바로 나간다", detail: "cluster.local이 아닌 이름은 CoreDNS를 거치지 않고 바깥 DNS로 묻는다. CoreDNS의 부하가 그만큼 준다." },
+  ]}
+/>
+
+도입할 때 챙길 것이 있다. 노드 캐시 DaemonSet이 업데이트되거나 죽는 동안 그 노드의 이름 풀이가 멈출 수 있어서, 공식 매니페스트는 캐시가 내려가면 iptables 규칙을 거둬 CoreDNS로 돌아가게 하는 방식(iptables 모드)을 쓴다. kube-proxy가 IPVS 모드면 이 방식이 안 돼서 kubelet의 `clusterDNS`를 `169.254.20.10`으로 바꿔야 하고, 그때는 캐시 장애가 곧 노드의 DNS 장애다. NetworkPolicy로 Egress를 막는 클러스터라면 Pod에서 `169.254.20.10`으로 가는 53번을 `ipBlock`으로 따로 허용해야 한다.
+
+## CoreDNS가 스스로 죽는 경우
+
+CoreDNS Pod가 `CrashLoopBackOff`에 빠지는 가장 흔한 원인은 `loop` 플러그인이다. 실습에서 자기 자신에게 forward하는 설정으로 띄워 봤다.
+
+```bash
+# 자기 주소로 forward하는 설정
+printf '.:53 {\n    bind 127.0.30.30\n    forward . 127.0.30.30\n    loop\n}\n' > Corefile.loop
+coredns -conf Corefile.loop
+```
+
+```text
+[FATAL] plugin/loop: Loop (127.0.0.1:37284 -> 127.0.30.30:53) detected for zone ".", see https://coredns.io/plugins/loop#troubleshooting. Query: "HINFO 4415316548456810544.7505102497765129258."
+```
+
+`loop`는 시작할 때 무작위 이름의 HINFO 질의를 자기에게 보내 보고, 그게 다시 자기에게 돌아오면 질의가 끝없이 돌 거라 판단해 프로세스를 끝낸다. 클러스터에서는 이런 경로로 생긴다. Ubuntu 노드의 `/etc/resolv.conf`는 systemd-resolved의 `nameserver 127.0.0.53`이다. CoreDNS는 노드 설정을 물려받으니 `forward . /etc/resolv.conf`가 `127.0.0.53`을 가리키는데, 이 주소는 CoreDNS Pod 안에서는 Pod 자신의 루프백이다. 결국 자기에게 묻는다. kubelet의 `resolvConf`를 실제 업스트림이 적힌 `/run/systemd/resolve/resolv.conf`로 지정하면 풀린다(kubeadm은 systemd-resolved를 감지하면 이렇게 설정한다). `loop`를 지워서 증상만 없애면 질의가 메모리와 CPU를 먹으며 계속 도니 그러지 않는다.
+
+그 밖에 CoreDNS 쪽에서 볼 것은 이 정도다.
+
+```bash
+# CoreDNS Pod 상태와 재시작 (k8s-app=kube-dns 라벨)
+kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide
+
+# 질의 로그를 잠깐 켜려면 ConfigMap의 Corefile에 log 한 줄 추가 (reload 플러그인이 다시 읽는다)
+kubectl -n kube-system edit configmap coredns
+kubectl -n kube-system logs -l k8s-app=kube-dns -f
+
+# 문제 Pod와 같은 네임스페이스에서 직접 묻기
+kubectl run dnsutils --rm -it --restart=Never --image=registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3 -- \
+  dig +search web
+```
+
+`SERVFAIL`이 많으면 바깥 DNS가 느리거나 막힌 것이라 `forward` 대상과 노드의 DNS를 본다. `i/o timeout`이 CoreDNS 로그에 찍히면 CoreDNS에서 바깥 DNS로 가는 길이다. Pod 쪽에서만 시간 초과가 나고 CoreDNS 로그에 질의가 안 보이면 질의가 CoreDNS까지 못 온 것이라 NetworkPolicy, kube-proxy 규칙, CoreDNS Pod가 있는 노드로 가는 Pod 네트워크([CNI 글](/posts/k8s-cni-pod-network))를 본다. 질의 수에 비해 CoreDNS가 2개(기본)뿐이면 `coredns_dns_request_duration_seconds`의 꼬리가 길어진다. 노드 수에 비례해 늘려 주는 dns-autoscaler를 두거나 NodeLocal DNSCache로 부하를 덜어 낸다.
+
+## 이름 하나 뒤의 질의들
+
+Pod의 이름 풀이는 kubelet이 넣은 resolv.conf에서 시작한다. `ndots:5`와 search 세 줄 때문에 바깥 이름 하나가 A·AAAA 여덟 개로 불어나고, 그중 여섯은 NXDOMAIN이다. 끝에 점을 붙이거나 ndots를 낮추거나 autopath로 줄일 수 있다. CoreDNS는 API 서버를 watch한 내용으로 클러스터 이름에 직접 답하고 나머지는 바깥으로 넘긴다. 가끔 생기는 5초 지연은 UDP 질의가 conntrack과 DNAT을 지나며 버려진 흔적이고, NodeLocal DNSCache는 노드 안에서 캐시하고 CoreDNS에는 TCP로 물어 그 길 자체를 없앤다.
+
+## 면접에서 나올 만한 질문
+
+### Pod에서 이름을 물으면 어떤 순서로 풀리나요?
+
+kubelet이 넣은 resolv.conf에 따라 nameserver(보통 kube-dns ClusterIP)로 묻는다. 이름의 점 개수가 ndots(기본 5)보다 적으면 search 도메인(`<ns>.svc.cluster.local`, `svc.cluster.local`, `cluster.local`)을 차례로 붙여 묻고, 다 실패하면 이름 그대로 묻는다. 질의는 kube-proxy 규칙으로 CoreDNS Pod 중 하나에 가고, 클러스터 이름이면 kubernetes 플러그인이, 아니면 forward가 바깥 DNS로 넘겨 답한다.
+
+### ndots:5 때문에 생기는 문제와 해결책은요?
+
+점이 5개 미만인 바깥 이름은 search 도메인을 모두 돌고 나서야 원래 이름을 묻는다. A와 AAAA를 함께 물으니 `api.example.com` 하나에 질의 8개, 그중 6개가 NXDOMAIN이라 CoreDNS 부하와 지연이 늘어난다. 바깥 이름 끝에 점을 붙여 완전한 이름으로 쓰거나, Pod의 dnsConfig로 ndots를 2 정도로 낮추거나, CoreDNS의 autopath로 서버에서 확장을 대신하게 한다. ndots를 낮추면 점이 많은 클러스터 안 이름이 바깥에 먼저 물어지는 부작용이 있다.
+
+### Pod에서 DNS가 가끔 정확히 5초씩 늦는 이유는요?
+
+glibc가 A와 AAAA 질의를 같은 UDP 소켓으로 동시에 보낼 때, ClusterIP로 가는 DNAT 과정에서 두 패킷이 conntrack 항목을 동시에 만들다 하나가 버려지는 경쟁 상태가 있었다. 답을 못 받은 리졸버가 기본 timeout 5초를 기다린 뒤 다시 묻기 때문에 정확히 5초가 늘어난다. `single-request-reopen` 옵션으로 소켓을 나누거나, NodeLocal DNSCache로 conntrack을 거치지 않게 해서 해결한다. musl 기반 이미지는 그 옵션을 무시한다.
+
+### NodeLocal DNSCache는 무엇이고 왜 쓰나요?
+
+노드마다 DNS 캐시를 DaemonSet으로 띄우고 Pod가 같은 노드의 링크 로컬 주소(169.254.20.10)로 묻게 하는 구성이다. 캐시 적중은 노드 안에서 끝나 CoreDNS 부하와 지연이 줄고, Pod와 캐시 사이는 conntrack을 건너뛰며 캐시에서 CoreDNS로는 TCP로 물어 UDP conntrack 문제를 없앤다. 대신 캐시가 노드마다 하나라 그 Pod의 장애나 업데이트가 노드의 DNS에 영향을 주고, NetworkPolicy에서 그 주소를 따로 열어야 한다.
+
+### headless Service의 DNS는 일반 Service와 어떻게 다른가요?
+
+일반 ClusterIP Service는 VIP 하나의 A 레코드를 돌려주고, headless(`clusterIP: None`)는 ready인 Pod IP들을 A 레코드로 돌려준다. SRV 레코드도 headless는 Pod별 이름을 가리킨다. 클라이언트가 Pod 목록을 직접 받아 분산하거나 멤버를 찾을 때 쓰고, StatefulSet과 함께 쓰면 Pod마다 고정 이름이 생긴다.
+
+### CoreDNS가 'Loop detected'로 CrashLoopBackOff에 빠졌습니다.
+
+CoreDNS의 forward가 결국 자기 자신에게 돌아오는 경로라서 loop 플러그인이 시작 시 감지하고 종료한 것이다. 흔한 원인은 노드의 resolv.conf가 systemd-resolved의 `127.0.0.53`이라, CoreDNS Pod 안에서 그 주소가 자기 루프백이 되는 경우다. kubelet의 resolvConf를 실제 업스트림이 적힌 `/run/systemd/resolve/resolv.conf`로 바꾸거나 forward 대상을 직접 지정한다. loop 플러그인을 지우는 건 질의가 무한히 도는 상태를 숨길 뿐이다.
+
+### 방금 만든 Service 이름이 몇 초간 안 풀리는 이유는요?
+
+만들기 직전에 그 이름을 물어 받은 NXDOMAIN이 캐시에 남아 있어서다. CoreDNS의 cache와 NodeLocal DNSCache의 denial 캐시, 그리고 앱이나 언어 런타임의 자체 캐시가 그 "없다"는 답을 정해진 시간 동안 기억한다. SOA의 negative TTL이나 cache 플러그인의 denial 시간을 줄이면 짧아진다. 앱이 DNS 결과를 무기한 캐시하는 런타임(예전 JVM 설정 등)이면 그쪽 설정도 본다.

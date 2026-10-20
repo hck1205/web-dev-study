@@ -1,0 +1,511 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-network-policy");
+
+보안 점검에서 "아무 Pod나 DB 포트에 붙을 수 있다"는 지적을 받았다. 그래서 `shop` 네임스페이스에 모든 트래픽을 막는 NetworkPolicy부터 걸고, 필요한 길을 하나씩 열기로 했다. 첫 정책을 적용한 순간 모든 앱이 동시에 이런 로그를 뱉었다.
+
+```text
+getaddrinfo EAI_AGAIN db
+```
+
+DB 포트를 막았는데 에러는 DB 연결이 아니라 이름 풀이에서 났다. 그리고 DB가 아니라 모든 서비스 호출이 같은 에러로 죽었다. NetworkPolicy를 처음 걸 때 거의 모두가 한 번은 겪는 일이다. 이 글은 NetworkPolicy가 무엇을 막고 무엇을 열어 주는지, YAML의 들여쓰기 하나가 어떻게 허용 범위를 바꾸는지, 그리고 그 정책이 노드에서 실제로 어떤 규칙이 되는지를 따라간다.
+
+정책을 집행하는 건 CNI 플러그인이다. Pod 네트워크가 어떻게 만들어지는지는 [CNI 글](/posts/k8s-cni-pod-network)에, Service 주소가 Pod 주소로 바뀌는 과정은 [Service 글](/posts/k8s-service-types)에 있다. NetworkPolicy가 L3·L4 필터로서 다른 방화벽들과 증상이 어떻게 다른지는 [OSI 실무 글](/posts/osi-in-practice)에서 짧게 다뤘다.
+
+실습은 두 갈래다. 매니페스트와 `kubectl describe` 출력은 kwok로 띄운 실제 API 서버(v1.30.4)에 적용한 결과다. kwok에는 정책을 집행하는 CNI가 없으니, 노드 하나와 Pod 여섯 개를 네트워크 네임스페이스로 만들고 정책을 Calico 같은 플러그인이 하는 방식대로 iptables 규칙으로 옮겨 실제로 패킷을 막아 봤다. 규칙의 체인 이름은 실습에서 붙인 것이고, 실제 플러그인은 이름과 구조가 다르다.
+
+## 정책은 허용 목록이다
+
+NetworkPolicy에는 "막아라"라는 규칙이 없다. 허용만 적는다. 대신 규칙이 생기는 순간 성격이 바뀐다.
+
+- 어떤 정책에도 선택되지 않은 Pod는 아무것도 막히지 않는다. 쿠버네티스의 기본값은 "모두 허용"이다.
+- Pod가 `policyTypes`에 Ingress가 있는 정책에 하나라도 선택되면, 그 Pod로 들어오는 트래픽은 어느 정책이든 허용한 것만 통과한다. Egress도 같다.
+- 정책은 더해지기만 한다. 정책 A가 web을, 정책 B가 monitoring을 허용하면 둘 다 허용된다. 순서도, 우선순위도, 예외도 없다.
+- 연결이 허용되면 그 응답은 자동으로 통과한다. 상태를 추적하는(stateful) 필터다.
+- 연결 하나가 성립하려면 보내는 Pod의 Egress와 받는 Pod의 Ingress가 둘 다 허용해야 한다.
+
+그래서 운영에서는 네임스페이스마다 "모두 선택, 아무것도 허용 안 함"인 정책을 먼저 걸어 모든 Pod를 격리하고, 필요한 길을 정책으로 하나씩 더한다. 실습 클러스터에 그렇게 걸었다.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: shop
+spec:
+  podSelector: {}        # 이 네임스페이스의 모든 Pod
+  policyTypes:
+    - Ingress
+    - Egress             # ingress·egress 규칙을 하나도 적지 않았으니 둘 다 전부 막힌다
+```
+
+```bash
+# API 서버가 이 정책을 어떻게 이해했는지
+kubectl describe networkpolicy -n shop default-deny-all
+```
+
+```text
+Spec:
+  PodSelector:     <none> (Allowing the specific traffic to all pods in this namespace)
+  Allowing ingress traffic:
+    <none> (Selected pods are isolated for ingress connectivity)
+  Allowing egress traffic:
+    <none> (Selected pods are isolated for egress connectivity)
+  Policy Types: Ingress, Egress
+```
+
+`isolated`가 두 번 나온다. 이 네임스페이스의 Pod는 이제 들어오지도 나가지도 못한다. 정책 스펙의 각 칸이 무엇을 정하는지 눌러 보자.
+
+<UrlAnatomy
+  caption="NetworkPolicy spec의 칸들"
+  base="spec:"
+  separator=" "
+  joiner=" · "
+  params={[
+    { key: "podSelector", display: "podSelector", title: "이 정책이 지키는 Pod", description: "정책과 같은 네임스페이스에서 라벨로 고른다. {}는 네임스페이스의 모든 Pod다. 여기 선택된 Pod만 격리되고, 나머지 Pod에는 이 정책이 아무 영향도 없다.", required: true },
+    { key: "policyTypes", display: "policyTypes", title: "어느 방향을 격리하나", description: "Ingress, Egress 중 무엇을 격리할지. 생략하면 Ingress는 항상 들어가고, egress 규칙이 하나라도 있으면 Egress도 들어간다. egress만 적으려다 받는 쪽까지 막는 실수가 여기서 나온다." },
+    { key: "ingress", display: "ingress[].from", title: "들어오는 쪽 허용 목록", description: "from에는 podSelector, namespaceSelector, ipBlock을 적는다. from 배열의 원소끼리는 OR, 원소 하나 안의 namespaceSelector와 podSelector는 AND다. from을 아예 빼면 모든 출발지." },
+    { key: "egress", display: "egress[].to", title: "나가는 쪽 허용 목록", description: "목적지를 적는다. Service의 ClusterIP가 아니라 그 뒤의 Pod를 적어야 한다. 대부분의 구현은 DNAT 뒤의 Pod 주소로 정책을 판단한다." },
+    { key: "ports", display: "ports", title: "포트와 프로토콜", description: "port는 숫자나 컨테이너 포트 이름, protocol은 TCP(기본)·UDP·SCTP. endPort로 범위도 준다. 빼면 모든 포트다." },
+  ]}
+/>
+
+## 기본 거부를 걸자마자 이름이 안 풀린다
+
+정책만 걸고 실제로 두드려 봤다. 실습 노드에는 `shop`의 web(`10.244.1.10`), api(`.11`), db(`.12`), `monitoring`의 prometheus(`.30`)와 debug(`.20`), 그리고 클러스터 DNS 역할을 하는 Pod(`.53`)가 있다. 정책 전에는 debug에서 DB까지 다 열려 있었다.
+
+```bash
+# 정책 전: 다른 네임스페이스의 debug Pod가 DB에 붙는다
+curl -s -m 2 http://10.244.1.12:5432/
+
+# 기본 거부 후: web → api, debug → db, web의 DNS 질의
+curl -s -m 2 http://10.244.1.11:8080/; echo "exit=$?"
+dig +time=2 +tries=1 +short @10.244.1.53 db.shop.svc.cluster.local; echo "exit=$?"
+```
+
+```text
+hello from db, you are 10.244.1.20
+exit=28
+;; communications error to 10.244.1.53#53: timed out
+;; no servers could be reached
+exit=9
+```
+
+막히는 모양을 기억해 두자. 거절(RST)이 아니라 응답 없음이다. curl은 2초를 채우고 28(시간 초과)로 끝났고, dig도 시간 초과다. 정책은 패킷을 조용히 버린다. 그래서 정책 문제는 늘 "느리다가 실패"로 보인다. 앱에서 보면 이렇다.
+
+```bash
+# web Pod 안의 Node.js가 db라는 이름을 풀려고 할 때 (resolv.conf의 timeout:2, attempts:1)
+time node -e 'require("dns").lookup("db",(e,a)=>console.log(e?e.message:a))'
+```
+
+```text
+getaddrinfo EAI_AGAIN db
+
+real	0m4.063s
+```
+
+`EAI_AGAIN`은 "지금은 이름 서버에 닿지 않으니 다시 해 봐라"라는 뜻이다. DNS 질의는 web Pod에서 kube-system의 CoreDNS로 나가는 UDP 53이고, 기본 거부의 Egress가 그걸 막았다. 처음 장면에서 모든 서비스 호출이 함께 죽은 이유다. 이름을 못 푸니 어느 서비스에도 접속을 시도조차 못 한다. 4초는 질의 두 개(A, AAAA)가 각각 2초씩 기다린 시간이다. 실제 Pod의 기본값(timeout 5초, attempts 2)이면 훨씬 길게 멈춘다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="기본 거부는 서비스 호출보다 DNS 질의를 먼저 막는다"
+  zones={[
+    { id: "shop", label: "namespace shop", x: 6, y: 6, w: 240, h: 316, tone: "private" },
+    { id: "ks", label: "kube-system", x: 262, y: 6, w: 132, h: 150, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "web", label: "web", sub: "10.244.1.10", x: 70, y: 70, icon: "container" },
+    { id: "api", label: "api", sub: "10.244.1.11", x: 180, y: 170, icon: "container" },
+    { id: "db", label: "db", sub: "10.244.1.12", x: 70, y: 270, icon: "db" },
+    { id: "dns", label: "CoreDNS", sub: "10.244.1.53", x: 328, y: 90, icon: "dns", w: 112 },
+  ]}
+  links={[
+    { from: "web", to: "dns", label: "UDP 53" },
+    { from: "web", to: "api", label: "8080" },
+    { from: "api", to: "db", label: "5432" },
+  ]}
+  steps={[
+    { path: ["web", "dns"], packet: "A? db", blocked: true, title: "이름부터 막힌다", detail: "web의 Egress가 격리됐다. 허용 목록이 비었으니 CoreDNS로 가는 UDP 53도 버려진다. 앱은 접속을 시도하기도 전에 EAI_AGAIN으로 죽는다.", payload: ";; communications error to 10.244.1.53#53: timed out" },
+    { path: ["web", "dns"], packet: "A? db", highlight: ["ks"], title: "DNS 길을 먼저 연다", detail: "shop의 모든 Pod에 kube-system의 kube-dns Pod로 가는 UDP·TCP 53을 허용했다. 이름이 풀린다.", payload: "10.244.1.12" },
+    { path: ["web", "api"], packet: "SYN", blocked: true, title: "나가는 쪽만 열면 아직이다", detail: "web의 Egress에 api:8080을 허용했지만, api의 Ingress는 여전히 격리돼 있다. 받는 쪽에서 버린다." },
+    { path: ["web", "api"], packet: "SYN", title: "양쪽이 모두 허용해야 통한다", detail: "api의 Ingress에 web을 허용하자 연결된다. 응답은 conntrack이 기억한 연결이라 따로 열지 않아도 돌아온다.", payload: "hello from api, you are 10.244.1.10" },
+    { path: ["api", "db"], packet: "SYN", blocked: true, title: "적지 않은 길은 계속 막혀 있다", detail: "api → db는 아직 아무도 허용하지 않았다. 필요한 길만 하나씩 더해 가는 게 기본 거부의 쓰임새다." },
+  ]}
+/>
+
+### DNS부터 연다
+
+기본 거부를 걸 때는 DNS 허용 정책을 반드시 같이 건다.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:              # 앞 줄과 같은 원소 안: kube-system 안의 kube-dns Pod만
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP           # 큰 응답은 TCP로 다시 묻는다. 빼먹으면 가끔만 실패한다
+          port: 53
+```
+
+```text
+Spec:
+  PodSelector:     <none> (Allowing the specific traffic to all pods in this namespace)
+  Not affecting ingress traffic
+  Allowing egress traffic:
+    To Port: 53/UDP
+    To Port: 53/TCP
+    To:
+      NamespaceSelector: kubernetes.io/metadata.name=kube-system
+      PodSelector: k8s-app=kube-dns
+  Policy Types: Egress
+```
+
+`kubernetes.io/metadata.name`은 API 서버가 모든 네임스페이스에 자동으로 붙이는 라벨이다(1.22부터 기본). 네임스페이스를 이름으로 고를 때 직접 라벨을 달 필요가 없다. TCP 53을 빼먹으면 평소엔 되다가 응답이 커서 UDP 대신 TCP로 다시 물을 때만 실패한다([DNS 글](/posts/dns)의 UDP에서 TCP로 넘어가는 부분). NodeLocal DNSCache를 쓰는 클러스터라면 Pod가 묻는 곳이 CoreDNS Pod가 아니라 각 노드의 `169.254.20.10`이라서 `ipBlock`으로 그 주소를 따로 열어야 한다. 이건 [CoreDNS 글](/posts/k8s-coredns)에서 이어진다.
+
+## 노드에서 정책은 규칙 묶음이 된다
+
+정책 객체는 API 서버에 저장될 뿐이다. 각 노드의 CNI 에이전트(calico-node, cilium-agent 같은 것)가 정책과 Pod를 지켜보다가, 라벨에 맞는 Pod의 IP를 모아 그 노드의 iptables나 eBPF 규칙으로 바꾼다.
+
+<SequenceDiagram
+  caption="정책 하나가 노드의 규칙이 되기까지"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "agent", label: "CNI 에이전트" },
+    { id: "kernel", label: "노드 커널" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "apply api-from-web", title: "정책을 저장한다", detail: "API 서버는 문법만 검사하고 저장한다. 정책을 집행하는 CNI가 없어도 에러 없이 만들어진다. 그래서 적용 후 꼭 실제로 두드려 본다." },
+    { from: "api", to: "agent", label: "watch", title: "에이전트가 정책과 Pod를 본다", detail: "podSelector app=api에 맞는 Pod, from의 app=web에 맞는 Pod를 찾아 IP 목록을 만든다." },
+    { from: "agent", to: "kernel", label: "규칙 쓰기", title: "IP 목록을 규칙으로 바꾼다", detail: "api Pod로 들어오는 패킷 중 출발지가 web Pod IP이고 TCP 8080인 것만 허용, 나머지는 버리는 규칙을 그 노드에 쓴다.", payload: "-A NP-INGRESS-shop-api -s 10.244.1.10/32 -p tcp --dport 8080 -j ACCEPT\n-A NP-INGRESS-shop-api -j DROP" },
+    { from: "api", to: "agent", label: "web Pod 재생성", title: "Pod IP가 바뀌면 다시 쓴다", detail: "web이 새 IP로 다시 뜨면 에이전트가 목록을 고친다. 이 반영이 늦는 몇 초 동안은 새 Pod가 막힐 수 있다." },
+  ]}
+/>
+
+실습에서 손으로 넣은 규칙이 이 모양이다. 노드의 FORWARD에서 conntrack으로 이미 맺은 연결을 먼저 통과시키고, 격리된 Pod마다 나가는 쪽 체인과 들어오는 쪽 체인을 거치게 했다.
+
+```bash
+# 노드에서 정책이 바뀐 규칙들 (web, api 부분만)
+sudo iptables -S | grep -E 'NP-(EGRESS|INGRESS)-shop-(web|api)'
+```
+
+```text
+-A NP-EGRESS-shop-web -d 10.244.1.11/32 -p tcp -m tcp --dport 8080 -m comment --comment web-to-api -j RETURN
+-A NP-EGRESS-shop-web -d 10.244.1.53/32 -p tcp -m tcp --dport 53 -m comment --comment allow-dns -j RETURN
+-A NP-EGRESS-shop-web -d 10.244.1.53/32 -p udp -m udp --dport 53 -m comment --comment allow-dns -j RETURN
+-A NP-EGRESS-shop-web -m comment --comment default-deny-all -j DROP
+-A NP-FORWARD -s 10.244.1.10/32 -j NP-EGRESS-shop-web
+-A NP-FORWARD -s 10.244.1.11/32 -j NP-EGRESS-shop-api
+-A NP-FORWARD -d 10.244.1.10/32 -j NP-INGRESS-shop-web
+-A NP-FORWARD -d 10.244.1.11/32 -j NP-INGRESS-shop-api
+-A NP-INGRESS-shop-api -s 10.244.1.10/32 -p tcp -m tcp --dport 8080 -m comment --comment api-from-web -j ACCEPT
+-A NP-INGRESS-shop-api -m comment --comment default-deny-all -j DROP
+-A NP-INGRESS-shop-web -m comment --comment default-deny-all -j DROP
+```
+
+정책 셋(`default-deny-all`, `allow-dns`, `web-to-api`·`api-from-web`)이 체인 안에서 허용 줄로 합쳐지고, 맨 끝에 DROP 한 줄이 남는다. 정책이 더해지기만 한다는 말이 규칙에서는 "허용 줄이 늘어난다"로 보인다. 같은 노드의 Pod끼리는 브리지를 지나는데도 이 규칙에 걸리는 건 `br_netfilter` 덕분이다([Docker 드라이버 글](/posts/docker-network-drivers#같은-브리지-안을-막는-iccfalse와-br_netfilter)에서 확인했다).
+
+패킷 하나가 이 체인들을 지나는 순서를 따라가 보자.
+
+<AlgoTrace
+  caption="web → api:8080 SYN 하나가 노드의 정책 규칙을 지나는 순서"
+  memoryLabel="판정"
+  cells={["conntrack", "EGRESS web", "INGRESS api", "통과"]}
+  steps={[
+    { pointer: 0, memory: ["NEW"], caption: "처음 보는 연결이다. ESTABLISHED가 아니니 정책 체인으로 간다." },
+    { pointer: 1, memory: ["NEW", "web egress: RETURN"], caption: "출발지가 web이라 web의 나가는 쪽 체인. 목적지 api:8080이 web-to-api 줄에 맞아 RETURN, 다음 검사로 넘어간다." },
+    { pointer: 2, memory: ["NEW", "web egress: RETURN", "api ingress: ACCEPT"], caption: "목적지가 api라 api의 들어오는 쪽 체인. 출발지 web, 포트 8080이 api-from-web 줄에 맞아 ACCEPT." },
+    { pointer: 3, found: [3], memory: ["ESTABLISHED"], caption: "연결이 맺어지면 conntrack이 기억한다. 응답(api → web)은 첫 줄의 ESTABLISHED에서 통과해 api의 Egress 격리를 거치지 않는다." },
+    { pointer: 2, memory: ["NEW", "debug → api:8080", "DROP"], caption: "다른 예: debug에서 온 SYN. debug는 격리되지 않아 나가는 쪽은 통과하지만, api의 들어오는 쪽 어느 허용 줄에도 맞지 않아 마지막 DROP." },
+  ]}
+/>
+
+응답이 conntrack 덕분에 통과한다는 걸 직접 확인해 봤다. 첫 줄의 ESTABLISHED 허용을 지우면 web의 SYN은 api까지 가지만 api의 SYN-ACK가 api의 Egress 체인 맨 끝 DROP에 걸린다.
+
+```bash
+# ESTABLISHED 허용 줄을 잠깐 지우고 같은 요청
+sudo iptables -D NP-FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+curl -s -m 2 http://10.244.1.11:8080/; echo "exit=$?"
+sudo iptables -L NP-EGRESS-shop-api -n -v | tail -1
+
+# 되돌린다
+sudo iptables -I NP-FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+```
+
+```text
+exit=28
+    3   180 DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* default-deny-all */
+```
+
+DROP 카운터 3은 SYN-ACK 한 번과 재전송 두 번이다. 실제 플러그인은 이 줄을 늘 넣어 두니 응답을 위한 정책을 따로 쓸 일은 없다. 다만 conntrack 테이블이 가득 차거나(`nf_conntrack: table full, dropping packet`이 dmesg에 찍힌다) 오래 쉬던 연결의 항목이 만료되면, 정책상 열려 있어야 할 응답이 버려지는 일이 생긴다.
+
+## 대시 하나가 허용 범위를 바꾼다
+
+NetworkPolicy에서 가장 위험한 실수는 YAML 들여쓰기에서 나온다. api Pod의 메트릭 포트 9090을 "monitoring 네임스페이스의 prometheus Pod"에게만 열려고 두 가지로 써 봤다.
+
+```yaml
+# (가) from에 원소 두 개: namespaceSelector 하나, podSelector 하나
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - podSelector:
+            matchLabels:
+              app: prometheus
+
+# (나) from에 원소 하나: namespaceSelector와 podSelector가 같은 원소 안에
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+```
+
+차이는 `podSelector` 앞의 대시 하나다. 각각 적용하고 `kubectl describe networkpolicy -n shop api-metrics`로 본 결과가 확연히 다르다. (가)는 이렇다.
+
+```text
+  Allowing ingress traffic:
+    To Port: 9090/TCP
+    From:
+      NamespaceSelector: kubernetes.io/metadata.name=monitoring
+    From:
+      PodSelector: app=prometheus
+```
+
+(나)는 이렇다.
+
+```text
+  Allowing ingress traffic:
+    To Port: 9090/TCP
+    From:
+      NamespaceSelector: kubernetes.io/metadata.name=monitoring
+      PodSelector: app=prometheus
+```
+
+(가)는 `From:`이 두 번이다. "monitoring 네임스페이스의 모든 Pod" 또는 "이 정책과 같은 shop 네임스페이스의 app=prometheus Pod"다. (나)는 `From:` 하나 아래 두 조건이 묶여 "monitoring 네임스페이스 안의 app=prometheus Pod"다. 원소 하나 안에서 `podSelector`만 쓰면 정책의 네임스페이스로 한정되고, `namespaceSelector`와 함께 쓰면 그 네임스페이스들 안의 Pod로 바뀐다는 규칙도 여기서 함께 보인다. 노드 규칙으로 옮겨 두드려 봤다.
+
+```bash
+# monitoring의 prometheus(.30)에서, 그다음 debug(.20)에서 api의 9090으로
+curl -s -m 2 http://10.244.1.11:9090/; echo "exit=$?"
+```
+
+(가)일 때는 둘 다 붙는다.
+
+```text
+hello from api-metrics, you are 10.244.1.30
+exit=0
+hello from api-metrics, you are 10.244.1.20
+exit=0
+```
+
+(나)일 때는 debug가 시간 초과로 끝난다.
+
+```text
+hello from api-metrics, you are 10.244.1.30
+exit=0
+exit=28
+```
+
+(가)에서는 monitoring에 있는 아무 Pod, 이를테면 누군가 디버깅하려고 띄운 셸 Pod도 api에 붙는다. 정책은 적용됐고 prometheus도 잘 붙으니 아무도 눈치채지 못한다. 리뷰할 때 `kubectl describe networkpolicy`로 `From:`이 몇 번 나오는지 세는 습관이 가장 싼 방어다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="대시 하나 차이: (가)는 monitoring 전체, (나)는 monitoring의 prometheus만"
+  zones={[
+    { id: "mon", label: "namespace monitoring", x: 6, y: 6, w: 180, h: 286, tone: "edge" },
+    { id: "shop", label: "namespace shop", x: 214, y: 6, w: 180, h: 286, tone: "private" },
+  ]}
+  nodes={[
+    { id: "prom", label: "prometheus", sub: "10.244.1.30", x: 96, y: 90, icon: "server", w: 120 },
+    { id: "debug", label: "debug", sub: "10.244.1.20", x: 96, y: 220, icon: "client", w: 120 },
+    { id: "api", label: "api :9090", sub: "10.244.1.11", x: 304, y: 155, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "prom", to: "api", label: "metrics" },
+    { from: "debug", to: "api" },
+  ]}
+  steps={[
+    { path: ["prom", "api"], packet: "GET", title: "(가)와 (나) 모두 prometheus는 통과", detail: "prometheus는 monitoring 네임스페이스에 있고 app=prometheus 라벨도 있다. 어느 쪽으로 써도 허용된다." },
+    { path: ["debug", "api"], packet: "GET", highlight: ["mon"], title: "(가): 네임스페이스만 맞아도 통과", detail: "from의 첫 원소가 'monitoring의 모든 Pod'라서 라벨과 상관없이 허용된다. 두 원소는 OR로 합쳐진다.", payload: "hello from api-metrics, you are 10.244.1.20" },
+    { path: ["debug", "api"], packet: "GET", blocked: true, title: "(나): 두 조건이 AND라 막힌다", detail: "같은 원소 안의 namespaceSelector와 podSelector는 둘 다 맞아야 한다. debug는 라벨이 app=debug라서 버려진다." },
+  ]}
+/>
+
+같은 종류의 함정이 두 개 더 있다. 하나는 `policyTypes`를 생략했을 때다. db Pod에 "api로만 나갈 수 있게" egress 규칙만 적고 policyTypes를 빼먹으면 API 서버가 이렇게 채운다.
+
+```bash
+# policyTypes 없이 egress만 적은 정책을 만든 뒤
+kubectl get networkpolicy -n shop no-types -o jsonpath='{.spec.policyTypes}{"\n"}'
+```
+
+```text
+["Ingress","Egress"]
+```
+
+Ingress는 생략하면 항상 들어간다. 그래서 db는 나가는 쪽만 제한하려던 의도와 달리 들어오는 쪽까지 격리되고, ingress 규칙이 비었으니 아무도 db에 못 붙는다. 정책을 쓸 때는 `policyTypes`를 늘 직접 적는다.
+
+다른 하나는 `ipBlock`이다. 한 원소 안에서 다른 선택자와 섞을 수 없어서 API 서버가 거절한다.
+
+```text
+The NetworkPolicy "bad" is invalid: spec.ingress[0].from[0]: Forbidden: may not specify both ipBlock and another peer
+```
+
+거절해 주는 건 고마운 쪽이다. 거절되지 않는 문제는 의미다. `ipBlock`은 클러스터 밖의 주소를 위한 칸인데, 출발지 주소가 가는 길에 바뀌면 의도대로 맞지 않는다. 기본 `externalTrafficPolicy: Cluster`인 NodePort·LoadBalancer로 들어온 요청은 노드 주소로 SNAT되어 도착하니([Service 글](/posts/k8s-service-types#externaltrafficpolicy-local)), 외부 사무실 대역을 `ipBlock`으로 허용해도 맞지 않는다. Pod IP를 `ipBlock`으로 적는 것도 피한다. Pod IP는 바뀌고, 구현에 따라 Pod 트래픽에 ipBlock을 적용하는 방식이 다르다.
+
+## 판정을 코드로 따져 보기
+
+지금까지의 규칙(선택된 Pod만 격리, 정책은 OR, 원소 안은 AND, 양쪽 다 허용해야 통과)을 함수로 옮기면 이렇다. 실습의 Pod와 네임스페이스 라벨을 상수로 두고, 정책 목록과 연결 하나를 받아 통과 여부를 돌려준다. 원래 매니페스트의 `from`·`to`는 둘 다 `peers`로 줄여 썼다.
+
+<CodePlayground
+  caption="이 연결은 정책을 통과하나"
+  functionName="allowed"
+  initialCode={`const PODS = {
+  web: { ns: "shop", labels: { app: "web" } },
+  api: { ns: "shop", labels: { app: "api" } },
+  db: { ns: "shop", labels: { app: "db" } },
+  prom: { ns: "monitoring", labels: { app: "prometheus" } },
+  debug: { ns: "monitoring", labels: { app: "debug" } },
+  dns: { ns: "kube-system", labels: { "k8s-app": "kube-dns" } },
+};
+const NS_LABELS = {
+  shop: { "kubernetes.io/metadata.name": "shop" },
+  monitoring: { "kubernetes.io/metadata.name": "monitoring" },
+  "kube-system": { "kubernetes.io/metadata.name": "kube-system" },
+};
+// policies: [{ ns, podSelector, policyTypes, ingress?: [{ peers?, ports? }], egress?: [...] }]
+//   peers 원소: { namespaceSelector?, podSelector? } (원소 안은 AND, 원소끼리는 OR, peers가 없으면 모두)
+//   ports: [{ port, protocol? }] (없거나 비면 모든 포트, protocol 기본 "TCP")
+// 반환: from Pod에서 to Pod의 port로 가는 새 연결이 허용되면 true
+function allowed(policies, from, to, port, protocol = "TCP") {
+  return true;
+}`}
+  solution={`const PODS = {
+  web: { ns: "shop", labels: { app: "web" } },
+  api: { ns: "shop", labels: { app: "api" } },
+  db: { ns: "shop", labels: { app: "db" } },
+  prom: { ns: "monitoring", labels: { app: "prometheus" } },
+  debug: { ns: "monitoring", labels: { app: "debug" } },
+  dns: { ns: "kube-system", labels: { "k8s-app": "kube-dns" } },
+};
+const NS_LABELS = {
+  shop: { "kubernetes.io/metadata.name": "shop" },
+  monitoring: { "kubernetes.io/metadata.name": "monitoring" },
+  "kube-system": { "kubernetes.io/metadata.name": "kube-system" },
+};
+function allowed(policies, from, to, port, protocol = "TCP") {
+  const matches = (sel, labels) => Object.entries(sel).every(([k, v]) => labels[k] === v);
+  const peerOk = (peer, pod, policyNs) =>
+    (peer.namespaceSelector ? matches(peer.namespaceSelector, NS_LABELS[pod.ns]) : pod.ns === policyNs) &&
+    (peer.podSelector ? matches(peer.podSelector, pod.labels) : true);
+  const portOk = (ports) => !ports || ports.length === 0 || ports.some((p) => p.port === port && (p.protocol ?? "TCP") === protocol);
+  const side = (pod, other, type, key) => {
+    const mine = policies.filter((p) => p.ns === pod.ns && p.policyTypes.includes(type) && matches(p.podSelector, pod.labels));
+    if (mine.length === 0) return true; // 격리되지 않은 Pod
+    return mine.some((p) => (p[key] ?? []).some((r) => (!r.peers || r.peers.some((x) => peerOk(x, other, p.ns))) && portOk(r.ports)));
+  };
+  return side(PODS[from], PODS[to], "Egress", "egress") && side(PODS[to], PODS[from], "Ingress", "ingress");
+}`}
+  tests={[
+    { label: "정책이 없으면 모두 허용", args: [[], "debug", "db", 5432], expected: true },
+    { label: "기본 거부는 DNS도 막는다", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }], "web", "dns", 53, "UDP"], expected: false },
+    { label: "DNS 허용을 더하면", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }, { ns: "shop", podSelector: {}, policyTypes: ["Egress"], egress: [{ peers: [{ namespaceSelector: { "kubernetes.io/metadata.name": "kube-system" }, podSelector: { "k8s-app": "kube-dns" } }], ports: [{ port: 53, protocol: "UDP" }] }] }], "web", "dns", 53, "UDP"], expected: true },
+    { label: "나가는 쪽만 열면 막힌다", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }, { ns: "shop", podSelector: { app: "web" }, policyTypes: ["Egress"], egress: [{ peers: [{ podSelector: { app: "api" } }], ports: [{ port: 8080 }] }] }], "web", "api", 8080], expected: false },
+    { label: "양쪽을 열면 통과", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }, { ns: "shop", podSelector: { app: "web" }, policyTypes: ["Egress"], egress: [{ peers: [{ podSelector: { app: "api" } }], ports: [{ port: 8080 }] }] }, { ns: "shop", podSelector: { app: "api" }, policyTypes: ["Ingress"], ingress: [{ peers: [{ podSelector: { app: "web" } }], ports: [{ port: 8080 }] }] }], "web", "api", 8080], expected: true },
+    { label: "(가) 원소 둘: debug도 통과", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }, { ns: "shop", podSelector: { app: "api" }, policyTypes: ["Ingress"], ingress: [{ peers: [{ namespaceSelector: { "kubernetes.io/metadata.name": "monitoring" } }, { podSelector: { app: "prometheus" } }], ports: [{ port: 9090 }] }] }], "debug", "api", 9090], expected: true },
+    { label: "(나) 원소 하나: debug는 막힌다", args: [[{ ns: "shop", podSelector: {}, policyTypes: ["Ingress", "Egress"] }, { ns: "shop", podSelector: { app: "api" }, policyTypes: ["Ingress"], ingress: [{ peers: [{ namespaceSelector: { "kubernetes.io/metadata.name": "monitoring" }, podSelector: { app: "prometheus" } }], ports: [{ port: 9090 }] }] }], "debug", "api", 9090], expected: false },
+  ]}
+/>
+
+## 표준 정책이 못 하는 것
+
+NetworkPolicy는 일부러 작게 만든 API다. 실무에서 금방 부딪히는 한계가 있다.
+
+정책을 집행할지는 CNI에 달렸다. Flannel처럼 정책을 지원하지 않는 CNI에서는 정책이 저장만 되고 아무것도 막지 않는다. 에러도 경고도 없다. 그래서 정책을 적용한 뒤에는 막혀야 할 길을 실제로 두드려 보는 확인을 빼먹지 않는다. [게이트웨이 글](/posts/gateway#게이트웨이를-사이에-두고-로그가-엇갈릴-때)에서 서비스 입구를 게이트웨이 네임스페이스로 좁히고 확인한 방식이 그 예다.
+
+이름으로 막을 수 없다. "api.payments.example.com으로만 나가게"는 표준 정책으로 쓸 수 없고 `ipBlock`으로 IP를 적어야 하는데, 외부 서비스의 IP는 CDN 뒤에서 수시로 바뀐다. Cilium의 `toFQDNs`, Calico의 도메인 기반 정책처럼 CNI 전용 정책을 쓰거나, 정해진 egress 게이트웨이·프록시로만 나가게 만든다.
+
+L7을 보지 않는다. "GET /metrics만 허용"은 포트 단위로만 표현된다. HTTP 메서드와 경로로 거르려면 Cilium의 L7 정책이나 서비스 메시의 인가 정책이 필요하다.
+
+클러스터 관리자가 강제할 방법이 없다. 정책은 네임스페이스 안의 것이고 더하기만 되니, 네임스페이스 주인이 "모두 허용" 정책을 하나 넣으면 관리자의 기본 거부가 무력해진다. 이 빈자리를 위해 SIG Network가 우선순위와 거부(Deny)가 있는 클러스터 단위 AdminNetworkPolicy·BaselineAdminNetworkPolicy를 만들고 있지만, 아직 알파 단계의 별도 API라서 지원하는 CNI를 확인해야 한다. 지금은 Calico의 GlobalNetworkPolicy, Cilium의 CiliumClusterwideNetworkPolicy가 그 역할을 한다.
+
+hostNetwork Pod는 노드의 IP를 쓰니 라벨로 고를 수 없다. kubelet의 프로브처럼 노드에서 자기 노드의 Pod로 오는 트래픽은 대부분의 구현이 정책과 상관없이 허용하지만, 구현마다 다르니 쓰는 CNI의 문서를 확인한다.
+
+## 정책을 걸고 무언가 안 될 때
+
+정책 문제는 증상이 거의 늘 시간 초과다. "느리다가 실패"하면 정책부터 의심하고, 순서대로 좁힌다.
+
+```bash
+# 1. 그 Pod를 고르는 정책이 무엇인가 (podSelector가 비어 있는 정책도 포함)
+kubectl get networkpolicy -n shop
+kubectl get pod web -n shop --show-labels
+
+# 2. 정책이 어떻게 해석됐나 (From:/To:가 몇 번 나오는지 센다)
+kubectl describe networkpolicy -n shop
+
+# 3. 이름이 풀리나. EAI_AGAIN이나 SERVFAIL 없이 시간 초과면 DNS 허용 정책부터
+kubectl exec -n shop web -- nslookup db.shop.svc.cluster.local
+
+# 4. Pod IP로 직접 두드려 Service와 정책을 가른다
+kubectl exec -n shop web -- curl -s -m 3 http://<api Pod IP>:8080/
+
+# 5. CNI가 정책을 집행하고 있나 (Calico와 Cilium 예)
+kubectl -n kube-system get pods -l k8s-app=calico-node
+kubectl -n kube-system exec ds/cilium -- cilium-dbg policy get
+```
+
+Cilium이라면 `hubble observe --verdict DROPPED`가 어느 정책 때문에 버렸는지 직접 보여 주고, Calico라면 노드의 `iptables-save | grep cali-`로 Pod별 체인을 볼 수 있다. 정책을 새로 거는 일은 운영 중인 트래픽을 끊을 수 있으니, 먼저 관측 모드(감사 모드, 로깅만 하는 정책)로 실제 흐름을 모은 뒤 그 흐름을 허용 목록으로 옮기는 순서가 안전하다.
+
+## 허용 목록 하나하나가 길이다
+
+NetworkPolicy는 Pod를 라벨로 골라 그 방향을 격리하고, 정책들이 더해진 허용 목록만 통과시키는 상태 기반 L3·L4 필터다. 연결은 보내는 쪽 Egress와 받는 쪽 Ingress가 모두 허용해야 성립하고, 응답은 conntrack이 통과시킨다. 기본 거부와 DNS 허용은 한 묶음으로 걸고, `from`의 대시 하나가 AND와 OR을 가른다는 것, `policyTypes`를 생략하면 Ingress가 끼어든다는 것을 기억하면 처음 겪는 사고 대부분을 피한다. 정책은 CNI가 노드의 규칙으로 옮겨야 비로소 무언가를 막는다.
+
+## 면접에서 나올 만한 질문
+
+### NetworkPolicy가 없을 때와 하나라도 걸렸을 때 무엇이 달라지나요?
+
+정책이 하나도 없으면 모든 Pod가 서로 통신할 수 있다. 어떤 Pod가 Ingress나 Egress 타입의 정책에 선택되면 그 방향이 격리되어, 그 Pod를 선택한 정책들이 허용한 것만 통과한다. 정책은 허용만 적고 서로 더해지기만 해서 순서나 우선순위가 없다. 선택되지 않은 Pod에는 아무 영향이 없다.
+
+### 기본 거부 정책을 걸었더니 모든 서비스 호출이 실패합니다. 왜 그런가요?
+
+Egress까지 격리하면 CoreDNS로 가는 UDP·TCP 53도 막혀서 이름 풀이부터 실패한다. 앱은 접속을 시도하기도 전에 `EAI_AGAIN` 같은 에러를 내고, 패킷이 버려지니 타임아웃만큼 멈춘 뒤 실패한다. 기본 거부를 걸 때는 kube-system의 kube-dns Pod로 가는 53번(UDP와 TCP)을 허용하는 정책을 함께 건다. NodeLocal DNSCache를 쓰면 그 링크 로컬 주소도 열어야 한다.
+
+### from 아래에 namespaceSelector와 podSelector를 쓸 때 대시 위치가 왜 중요한가요?
+
+from 배열의 원소끼리는 OR이고, 한 원소 안의 namespaceSelector와 podSelector는 AND다. 대시를 두 번 쓰면 "그 네임스페이스의 모든 Pod 또는 같은 네임스페이스의 그 라벨 Pod"가 되고, 한 원소 안에 같이 쓰면 "그 네임스페이스 안의 그 라벨 Pod"가 된다. 앞의 형태는 의도보다 넓게 열려도 정상 트래픽은 잘 되니 발견이 늦다. `kubectl describe`에서 From이 몇 번 나오는지로 확인한다.
+
+### 응답 트래픽을 위한 정책도 따로 써야 하나요?
+
+아니다. NetworkPolicy 구현은 상태를 추적해서, 허용된 연결의 응답은 반대 방향 정책과 상관없이 통과시킨다. 노드 규칙에서는 conntrack의 ESTABLISHED, RELATED를 먼저 허용하는 줄이 그 일을 한다. 다만 conntrack 테이블이 가득 차거나 항목이 만료되면 응답이 버려질 수 있다.
+
+### NetworkPolicy를 적용했는데 아무것도 막히지 않습니다.
+
+정책을 집행하지 않는 CNI일 가능성이 가장 크다. Flannel처럼 정책을 지원하지 않는 CNI에서도 API 서버는 정책을 문제없이 저장하고 아무 경고도 하지 않는다. 다음으로 podSelector가 대상 Pod의 라벨과 맞는지, policyTypes에 원하는 방향이 들어 있는지, 다른 정책이 더 넓게 허용하고 있지 않은지 본다. 정책은 더해지기만 해서 어느 하나가 넓게 열면 나머지가 소용없다.
+
+### ipBlock으로 사무실 IP만 허용했는데 외부에서 들어오는 요청이 막힙니다.
+
+요청이 NodePort나 LoadBalancer를 거치며 노드 주소로 SNAT되어 Pod에 도착하기 때문일 가능성이 크다. 기본 externalTrafficPolicy인 Cluster에서는 Pod가 보는 출발지가 사무실 IP가 아니라 노드 주소라서 ipBlock에 맞지 않는다. Service를 Local로 바꿔 출발지를 지키거나, Ingress 컨트롤러나 로드 밸런서 단에서 출발지를 거른다.
+
+### 표준 NetworkPolicy의 한계와 대안은 무엇인가요?
+
+도메인 이름으로 거를 수 없고, HTTP 경로 같은 L7을 보지 않으며, 거부 규칙과 우선순위가 없어 클러스터 관리자가 네임스페이스 정책 위에서 강제할 수 없다. CNI 전용 정책(Cilium의 toFQDNs와 L7 정책, Calico의 GlobalNetworkPolicy)이나 서비스 메시의 인가 정책으로 보완한다. 클러스터 단위 거부·우선순위는 AdminNetworkPolicy로 표준화가 진행 중이지만 아직 알파다.

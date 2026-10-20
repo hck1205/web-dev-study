@@ -41,6 +41,7 @@ import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
+import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
@@ -83,7 +84,13 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
+import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
+import { K8S_COREDNS } from "./k8s-coredns";
+import { K8S_DEPLOYMENT } from "./k8s-deployment";
+import { K8S_HPA } from "./k8s-hpa";
+import { K8S_NAMESPACE } from "./k8s-namespace";
+import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
 import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
 import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
@@ -93,6 +100,7 @@ import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
 import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { K8S_PV_PVC } from "./k8s-pv-pvc";
 import { K8S_SECRET } from "./k8s-secret";
+import { K8S_SERVICE_TYPES } from "./k8s-service-types";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LATENCY_BANDWIDTH_THROUGHPUT } from "./latency-bandwidth-throughput";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
@@ -122,7 +130,11 @@ import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
 import { PATTERN_BUILDER } from "./pattern-builder";
+import { PATTERN_COMPOSITE } from "./pattern-composite";
+import { PATTERN_DECORATOR } from "./pattern-decorator";
+import { PATTERN_FACADE } from "./pattern-facade";
 import { PATTERN_FACTORY_METHOD } from "./pattern-factory-method";
+import { PATTERN_FLYWEIGHT } from "./pattern-flyweight";
 import { PATTERN_PROTOTYPE } from "./pattern-prototype";
 import { PATTERN_SINGLETON } from "./pattern-singleton";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
@@ -240,6 +252,7 @@ export const QUESTION_SETS = [
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
+  DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
   ELASTICSEARCH_INVERTED_INDEX,
@@ -282,7 +295,13 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
+  K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
+  K8S_COREDNS,
+  K8S_DEPLOYMENT,
+  K8S_HPA,
+  K8S_NAMESPACE,
+  K8S_NETWORK_POLICY,
   K8S_POD_BASICS,
   K8S_POD_LIFECYCLE,
   K8S_POD_MULTICONTAINER,
@@ -292,6 +311,7 @@ export const QUESTION_SETS = [
   K8S_POD_TROUBLESHOOTING,
   K8S_PV_PVC,
   K8S_SECRET,
+  K8S_SERVICE_TYPES,
   KUBERNETES_INGRESS,
   LATENCY_BANDWIDTH_THROUGHPUT,
   LAYER_IP_ADDRESSING,
@@ -321,7 +341,11 @@ export const QUESTION_SETS = [
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
   PATTERN_BUILDER,
+  PATTERN_COMPOSITE,
+  PATTERN_DECORATOR,
+  PATTERN_FACADE,
   PATTERN_FACTORY_METHOD,
+  PATTERN_FLYWEIGHT,
   PATTERN_PROTOTYPE,
   PATTERN_SINGLETON,
   PESSIMISTIC_LOCKING,

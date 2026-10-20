@@ -2,6 +2,213 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-hpa": {
+    "links": [
+      "k8s-deployment",
+      "k8s-namespace",
+      "k8s-pod-resources",
+      "k8s-pod-multicontainer"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "helm-basics"
+    ]
+  },
+  "k8s-deployment": {
+    "links": [
+      "k8s-pod-basics",
+      "k8s-configmap",
+      "helm-chart-templates",
+      "k8s-pod-resources",
+      "k8s-pod-probes",
+      "k8s-pod-lifecycle",
+      "k8s-pod-scheduling",
+      "k8s-pod-troubleshooting",
+      "helm-release-lifecycle",
+      "k8s-hpa",
+      "gateway"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "k8s-pv-pvc",
+      "kubernetes-ingress"
+    ]
+  },
+  "k8s-namespace": {
+    "links": [
+      "k8s-pod-basics",
+      "k8s-secret",
+      "k8s-coredns",
+      "k8s-network-policy",
+      "k8s-pod-resources",
+      "k8s-deployment"
+    ],
+    "mentions": [
+      "k8s-pv-pvc",
+      "k8s-pod-scheduling",
+      "kubernetes-ingress",
+      "iptables-nat",
+      "k8s-service-types",
+      "k8s-configmap",
+      "helm-dependencies-oci-gitops",
+      "docker-container-basics",
+      "k8s-cni-pod-network",
+      "helm-basics",
+      "db-type-key-value",
+      "dns"
+    ]
+  },
+  "k8s-coredns": {
+    "links": [
+      "dns",
+      "k8s-service-types",
+      "k8s-network-policy",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "iptables-nat",
+      "iptables-basics",
+      "ipv6-basics",
+      "packet-capture-tcpdump",
+      "udp-and-quic"
+    ]
+  },
+  "k8s-network-policy": {
+    "links": [
+      "k8s-cni-pod-network",
+      "k8s-service-types",
+      "osi-in-practice",
+      "dns",
+      "k8s-coredns",
+      "docker-network-drivers",
+      "gateway"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "iptables-basics",
+      "ipv6-basics",
+      "kubernetes-ingress",
+      "iptables-nat",
+      "udp-and-quic"
+    ]
+  },
+  "k8s-cni-pod-network": {
+    "links": [
+      "k8s-pod-basics",
+      "docker-network-drivers",
+      "sdn-vxlan-overlay",
+      "layer-ip-addressing",
+      "layer-mtu-fragmentation",
+      "k8s-network-policy",
+      "k8s-service-types"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "iptables-nat",
+      "iptables-basics",
+      "packet-capture-tcpdump",
+      "layer-link-ethernet-arp",
+      "security-groups-nacl",
+      "vpc-basics",
+      "udp-and-quic"
+    ]
+  },
+  "k8s-service-types": {
+    "links": [
+      "iptables-nat",
+      "k8s-pod-lifecycle",
+      "kubernetes-ingress",
+      "k8s-network-policy",
+      "k8s-cni-pod-network",
+      "k8s-coredns"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "iptables-basics",
+      "http-versions",
+      "security-groups-nacl",
+      "vpc-basics",
+      "osi-in-practice",
+      "redis-basics",
+      "dns",
+      "what-happens-google-com",
+      "layer-ip-routing-icmp",
+      "udp-and-quic",
+      "layer-link-ethernet-arp"
+    ]
+  },
+  "docker-network-drivers": {
+    "links": [
+      "docker-network-volume",
+      "iptables-nat",
+      "sdn-vxlan-overlay",
+      "docker-container-basics",
+      "k8s-pod-basics",
+      "layer-mtu-fragmentation",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "iptables-basics",
+      "vlan-basics",
+      "layer-link-ethernet-arp",
+      "vpn-ipsec-wireguard",
+      "security-groups-nacl",
+      "layer-ip-routing-icmp",
+      "vpc-basics",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "pattern-flyweight": {
+    "links": [
+      "design-patterns-overview",
+      "js-memory-leak",
+      "git-internals-basics",
+      "caching-strategies",
+      "pattern-singleton",
+      "pattern-prototype"
+    ],
+    "mentions": []
+  },
+  "pattern-facade": {
+    "links": [
+      "design-patterns-overview",
+      "microservices",
+      "idempotency-key",
+      "git-internals-basics",
+      "gateway",
+      "pattern-adapter"
+    ],
+    "mentions": [
+      "https-tls",
+      "git-staging-area",
+      "dns"
+    ]
+  },
+  "pattern-decorator": {
+    "links": [
+      "design-patterns-overview",
+      "timeouts",
+      "idempotency-key",
+      "retries",
+      "react-rerender",
+      "pattern-adapter",
+      "pattern-composite"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "pattern-composite": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-decorator"
+    ],
+    "mentions": []
+  },
   "dead-letter-queue": {
     "links": [
       "message-queue-basics",
@@ -55,6 +262,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume",
       "k8s-pod-resources",
       "k8s-pod-scheduling",
+      "k8s-deployment",
       "k8s-secret"
     ],
     "mentions": [
@@ -66,6 +274,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "base64",
       "db-type-key-value",
+      "k8s-namespace",
       "k8s-pod-troubleshooting",
       "helm-values-secrets",
       "helm-basics",
@@ -77,6 +286,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "k8s-configmap": {
     "links": [
+      "k8s-namespace",
       "k8s-secret",
       "k8s-pod-multicontainer",
       "helm-chart-templates",
@@ -107,7 +317,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "mvc-pattern",
       "k8s-pod-multicontainer",
-      "pattern-bridge"
+      "pattern-bridge",
+      "pattern-decorator",
+      "pattern-facade"
     ],
     "mentions": [
       "http-status-codes"
@@ -120,7 +332,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "json-crud-http",
       "pattern-builder",
-      "pattern-factory-method"
+      "pattern-factory-method",
+      "pattern-flyweight"
     ],
     "mentions": [
       "k8s-pod-basics",
@@ -133,7 +346,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key",
       "pattern-abstract-factory",
       "pattern-factory-method",
-      "pattern-prototype"
+      "pattern-prototype",
+      "pattern-composite"
     ],
     "mentions": [
       "resilience-patterns",
@@ -332,6 +546,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype",
       "pattern-adapter",
       "pattern-bridge",
+      "pattern-composite",
+      "pattern-decorator",
+      "pattern-facade",
+      "pattern-flyweight",
       "mvc-pattern",
       "resilience-patterns"
     ],
@@ -411,7 +629,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vlan-basics",
       "layer-mtu-fragmentation",
       "vpn-ipsec-wireguard",
-      "vpc-basics"
+      "vpc-basics",
+      "k8s-cni-pod-network"
     ],
     "mentions": [
       "packet-capture-tcpdump",
@@ -588,7 +807,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "iptables-nat",
       "connection-pool",
-      "vpc-peering-transit-privatelink"
+      "vpc-peering-transit-privatelink",
+      "k8s-cni-pod-network"
     ],
     "mentions": [
       "browser-fetch",
@@ -655,7 +875,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
-      "k8s-pod-basics"
+      "k8s-pod-basics",
+      "k8s-hpa"
     ]
   },
   "helm-values-secrets": {
@@ -711,9 +932,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rate-limiting-in-practice",
       "k8s-secret",
+      "k8s-service-types",
       "k8s-pv-pvc",
       "k8s-configmap",
       "docker-container-basics",
+      "k8s-cni-pod-network",
       "dns"
     ]
   },
@@ -737,6 +960,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "k8s-deployment",
       "dns"
     ]
   },
@@ -756,6 +980,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "k8s-deployment",
+      "k8s-service-types",
       "k8s-pod-basics",
       "kubernetes-ingress",
       "event-loop",
@@ -772,6 +998,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-troubleshooting",
+      "k8s-service-types",
       "k8s-pod-basics",
       "iptables-nat",
       "docker-container-basics",
@@ -791,6 +1018,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-scheduling",
+      "k8s-cni-pod-network",
       "kubernetes-ingress",
       "db-type-key-value"
     ]
@@ -1071,6 +1299,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "nginx-reverse-proxy",
+      "k8s-service-types",
       "docker-container-basics",
       "k8s-pod-troubleshooting",
       "ports-and-sockets",
@@ -1123,6 +1352,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump"
     ],
     "mentions": [
+      "k8s-network-policy",
       "timeouts",
       "docker-container-basics",
       "realtime-communication",
@@ -1418,8 +1648,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "vpc-peering-transit-privatelink",
+      "k8s-network-policy",
       "docker-container-basics",
       "vpc-subnets-route-tables",
+      "k8s-cni-pod-network",
       "security-groups-nacl",
       "vpc-basics",
       "dns"
@@ -1456,6 +1688,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpn-ipsec-wireguard",
       "vpc-basics",
       "https-tls",
+      "k8s-cni-pod-network",
       "layer-link-ethernet-arp",
       "http-versions",
       "sdn-vxlan-overlay",
@@ -2275,10 +2508,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "nginx-basics",
       "iptables-basics",
+      "k8s-cni-pod-network",
+      "docker-network-drivers",
       "k8s-pod-troubleshooting",
       "postgres-operations",
       "proxy-reverse-proxy",
       "layer-link-ethernet-arp",
+      "k8s-coredns",
       "sdn-vxlan-overlay",
       "redis-basics",
       "ipv6-basics",
@@ -2381,6 +2617,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "k8s-service-types",
       "vpc-subnets-route-tables",
       "osi-in-practice",
       "packet-capture-tcpdump",
@@ -2749,6 +2986,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump"
     ],
     "mentions": [
+      "k8s-service-types",
       "k8s-pod-probes",
       "proxy-reverse-proxy",
       "iptables-nat",
@@ -2769,6 +3007,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rate-limiting-in-practice",
+      "k8s-network-policy",
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",
