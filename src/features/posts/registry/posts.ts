@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-pv-pvc",
+    title: "PV와 PVC: Pod보다 오래 사는 디스크",
+    summary: "PVC가 PV에 묶이는 규칙, 접근 모드, StorageClass와 WaitForFirstConsumer, 존에 묶인 디스크 때문에 생기는 Pending, Retain과 Delete 회수 정책의 함정, 용량 확장, StatefulSet의 PVC, Multi-Attach 오류까지 실습 클러스터의 실제 출력으로 따라간다.",
+    topic: "programming/server-infra/kubernetes/config",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting", "AWS"],
+    date: "2026-10-21",
+    keywords: ["PersistentVolumeClaim", "PersistentVolume", "WaitForFirstConsumer", "ReadWriteOnce"],
+  },
+  {
+    slug: "k8s-secret",
+    title: "Secret: base64는 암호가 아니다",
+    summary: "Secret 값이 etcd에 평문으로 저장되는 것을 직접 확인하고, 저장 시 암호화와 키 교체, list 권한까지 챙기는 RBAC, 환경 변수와 파일의 차이, imagePullSecrets, 외부 저장소 연동과 값이 샜을 때의 교체 순서를 다룬다.",
+    topic: "programming/server-infra/kubernetes/config",
+    tags: ["Kubernetes", "Security", "DevOps"],
+    date: "2026-10-21",
+    keywords: ["Kubernetes Secret", "EncryptionConfiguration", "imagePullSecrets", "Secrets Store CSI Driver"],
+  },
+  {
+    slug: "k8s-configmap",
+    title: "ConfigMap: 설정은 언제 Pod에 닿나",
+    summary: "환경 변수, 볼륨, subPath에 따라 ConfigMap 값이 언제 읽히고 언제 바뀌는지 따라가고, 해시 어노테이션과 이름 해시로 롤아웃을 일으키는 법, immutable과 1MiB 한도까지 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/config",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["ConfigMap", "subPath", "configMapGenerator", "immutable ConfigMap"],
+  },
+  {
     slug: "pattern-bridge",
     title: "브리지 패턴: 두 방향으로 늘어나는 클래스를 둘로 나누기",
     summary: "서로 상관없이 바뀌는 두 축을 상속 하나로 묶으면 클래스가 곱으로 는다. 무엇을 할지와 어떻게 할지를 두 계층으로 나누고, Go slog, 리액트 렌더러, database/sql에서 같은 구조를 찾아본다.",

@@ -584,7 +584,7 @@ helm template shop-api ./shop-api -s templates/deployment.yaml --set logLevel=de
         checksum/config: 372c51bc51efbfe4475ee557e184527c1d16365e728a48c7e63fa0c03234f0d3
 ```
 
-ConfigMap 내용이 바뀌면 해시가 바뀌고, 해시는 Pod 템플릿의 일부이니 Deployment가 새 ReplicaSet으로 롤아웃한다. 내용이 그대로면 해시도 그대로라 불필요한 재시작이 없다.
+ConfigMap 내용이 바뀌면 해시가 바뀌고, 해시는 Pod 템플릿의 일부이니 Deployment가 새 ReplicaSet으로 롤아웃한다. 내용이 그대로면 해시도 그대로라 불필요한 재시작이 없다. 볼륨으로 마운트한 파일은 왜 재시작 없이도 바뀌고 subPath는 왜 안 바뀌는지는 [ConfigMap 글](/posts/k8s-configmap)에서 본다.
 
 ## 어느 단계에서 잡히나
 

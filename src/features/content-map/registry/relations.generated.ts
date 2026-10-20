@@ -2,6 +2,47 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-pv-pvc": {
+    "links": [
+      "k8s-configmap",
+      "docker-network-volume",
+      "k8s-pod-resources",
+      "k8s-pod-scheduling",
+      "k8s-secret"
+    ],
+    "mentions": [
+      "vpc-basics"
+    ]
+  },
+  "k8s-secret": {
+    "links": [
+      "k8s-configmap",
+      "base64",
+      "db-type-key-value",
+      "k8s-pod-troubleshooting",
+      "helm-values-secrets",
+      "helm-basics",
+      "k8s-pv-pvc"
+    ],
+    "mentions": [
+      "kubernetes-ingress"
+    ]
+  },
+  "k8s-configmap": {
+    "links": [
+      "k8s-secret",
+      "k8s-pod-multicontainer",
+      "helm-chart-templates",
+      "k8s-pv-pvc"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "helm-dependencies-oci-gitops",
+      "helm-basics",
+      "latency-bandwidth-throughput",
+      "db-type-key-value"
+    ]
+  },
   "pattern-bridge": {
     "links": [
       "design-patterns-overview",
@@ -308,6 +349,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-status-codes"
     ],
     "mentions": [
+      "k8s-configmap",
       "postgres-advanced-sql",
       "db-type-key-value",
       "sql-basics",
@@ -550,6 +592,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-undo",
+      "k8s-configmap",
       "docker-container-basics",
       "redis-basics",
       "what-happens-google-com"
@@ -571,16 +614,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "helm-chart-templates",
       "helm-basics",
+      "k8s-secret",
       "helm-dependencies-oci-gitops"
     ],
-    "mentions": []
+    "mentions": [
+      "db-type-key-value"
+    ]
   },
   "helm-chart-templates": {
     "links": [
       "helm-basics",
       "helm-release-lifecycle",
       "k8s-pod-resources",
-      "helm-values-secrets"
+      "helm-values-secrets",
+      "k8s-configmap"
     ],
     "mentions": [
       "k8s-pod-basics"
@@ -596,6 +643,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "k8s-configmap",
       "docker-container-basics",
       "kubernetes-ingress",
       "redis-basics"
@@ -614,6 +662,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rate-limiting-in-practice",
+      "k8s-secret",
+      "k8s-pv-pvc",
+      "k8s-configmap",
       "docker-container-basics",
       "dns"
     ]
@@ -627,6 +678,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting"
     ],
     "mentions": [
+      "k8s-configmap",
       "osi-in-practice"
     ]
   },

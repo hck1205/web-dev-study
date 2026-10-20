@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 190편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 193편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -302,7 +302,7 @@
 - 소제목: 글자만 다니는 길에 바이트를 실으려면 / 3바이트가 4글자가 되는 과정 / 모자란 바이트는 등호로 채운다 / 한글은 UTF-8 바이트부터 만든다 / 인코더를 직접 짜 보기 / 3분의 4만큼 커진다 / URL에 넣으면 더하기와 슬래시가 말썽이다 / 인코딩은 자물쇠가 아니다 / 브라우저의 btoa는 한글을 받지 못한다 / 터미널에서 base64 다루기 / data URL은 요청 하나를 아끼는 대신 / 다시 JSON 속 긴 문자열로 / 면접에서 나올 만한 질문
 - 직접 링크 →: token-login, https-tls
 - 키워드 백링크 →: upper-layers-session-presentation-app, http-versions, what-happens-google-com
-- 이 글로 오는 글 ←: api-pagination-sorting, html-form-http, http-message, realtime-communication, rest-api-design, token-login, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: api-pagination-sorting, html-form-http, http-message, k8s-secret, realtime-communication, rest-api-design, token-login, upper-layers-session-presentation-app
 
 ### Programming › Database (`programming/database`)
 
@@ -424,7 +424,7 @@
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, k8s-pod-basics, optimistic-locking, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, helm-values-secrets, k8s-configmap, k8s-pod-basics, k8s-secret, optimistic-locking, vpc-subnets-route-tables
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -757,7 +757,7 @@
 - 길이: 603줄
 - 소제목: 나중에 저장한 사람이 이긴다 / 버전 번호 하나로 덮어쓰기를 알아챈다 / UPDATE 0이 오면 무엇을 하나 / 잠그지 않는다더니 기다렸다 / 버전 숫자 대신 쓸 수 있는 것들 / 충돌이 잦으면 재시도가 일을 잡아먹는다 / 브라우저까지 버전을 들고 가기 / 다른 저장소에도 같은 모양이 있다 / 현장에서 덮어쓰기를 찾는 법 / 버전은 확인을 쓰기 안으로 넣는 장치다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-locking-deadlock, db-transaction-isolation, resilience-patterns, pessimistic-locking, http-caching-cdn, http-status-codes
-- 키워드 백링크 →: postgres-advanced-sql, db-type-key-value, sql-basics, mongodb-document-model, redis-basics, postgres-getting-started
+- 키워드 백링크 →: k8s-configmap, postgres-advanced-sql, db-type-key-value, sql-basics, mongodb-document-model, redis-basics, postgres-getting-started
 - 이 글로 오는 글 ←: distributed-lock, json-crud-http, pessimistic-locking, rest-api-design
 
 #### `pessimistic-locking` — 비관적 잠금: FOR UPDATE가 세우는 줄
@@ -1310,8 +1310,8 @@
 - 길이: 403줄
 - 소제목: 상태 이름이 멈춘 곳을 알려 준다 / 이벤트는 정렬부터 틀린다 / Pending: 노드를 찾지 못했다 / ContainerCreating에서 멈췄다 / ImagePullBackOff: 이미지를 받지 못했다 / CreateContainerConfigError: 설정이 비어 있다 / CrashLoopBackOff: 뜨자마자 죽는다 / OOMKilled: 메모리 한도에 걸렸다 / Running인데 트래픽을 못 받는다 / Terminating에서 안 넘어간다 / 셸이 없는 컨테이너는 kubectl debug로 연다 / 상태별로 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-scheduling, dockerfile-image-layers, helm-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-resources, kubernetes-ingress, network-troubleshooting-by-layer
-- 키워드 백링크 →: rate-limiting-in-practice, docker-container-basics, dns
-- 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-scheduling, packet-capture-tcpdump
+- 키워드 백링크 →: rate-limiting-in-practice, k8s-secret, k8s-pv-pvc, k8s-configmap, docker-container-basics, dns
+- 이 글로 오는 글 ←: docker-network-volume, dockerfile-image-layers, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-scheduling, k8s-secret, packet-capture-tcpdump
 
 #### `network-troubleshooting-by-layer` — 계층별로 장애 좁히기: 아래에서 위로
 
@@ -1447,7 +1447,7 @@
 - 소제목: 남의 건물 안에 내 층을 하나 빌린다 / 리전, 가용 영역, 서브넷의 포함 관계 / VPC를 이루는 부품 / 주소 다섯 개는 처음부터 내 것이 아니다 / 공인 IP는 인스턴스 안에 없다 / 리눅스 네임스페이스로 VPC 하나 만들기 / 패킷 하나가 VPC를 지나는 길 / VPC끼리는 같은 대역을 써도 섞이지 않는다 / VPC 안의 DNS와 메타데이터 / 기본 VPC를 그대로 쓰면 생기는 일 / 현장에서 VPC 때문에 막히는 순간 / VPC를 몇 개로 나눌까 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vpc-subnets-route-tables, vpc-peering-transit-privatelink, security-groups-nacl, sdn-vxlan-overlay, layer-ip-addressing, iptables-nat
 - 키워드 백링크 →: layer-ip-routing-icmp, iptables-basics, ipv6-basics, layer-link-ethernet-arp, what-happens-google-com, dns
-- 이 글로 오는 글 ←: connection-pool, consistent-hashing, layer-ip-addressing, layer-link-ethernet-arp, layer-mtu-fragmentation, network-layers-overview, redis-cluster, sdn-vxlan-overlay, security-groups-nacl, vlan-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: connection-pool, consistent-hashing, k8s-pv-pvc, layer-ip-addressing, layer-link-ethernet-arp, layer-mtu-fragmentation, network-layers-overview, redis-cluster, sdn-vxlan-overlay, security-groups-nacl, vlan-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables
 
 #### `vpc-peering-transit-privatelink` — VPC 잇기: 피어링, Transit Gateway, PrivateLink
 
@@ -1719,7 +1719,7 @@
 - 소제목: 실험 망: 지연과 대역폭을 따로 돌리는 장치 / 세 숫자가 가리키는 것 / 지연은 네 조각으로 나뉜다 / 작은 파일은 왕복 횟수가, 큰 파일은 대역폭이 정한다 / 창이 작으면 넓은 길도 좁게 쓴다 / 보낸 양과 받은 양이 다르다 / 평균은 꼬리를 숨긴다 / 지연이 늘면 처리량도 줄어든다 / "느리다"를 숫자 셋으로 쪼개기 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: tcp-reliability-congestion, traffic-shaping-qos, cdn-edge-anycast, http-versions, connection-pool, load-balancing-algorithms
 - 키워드 백링크 →: docker-container-basics, https-tls, sql-batch-timeout-pool, what-happens-google-com, dns
-- 이 글로 오는 글 ←: connection-pool, resilience-patterns, traffic-shaping-qos
+- 이 글로 오는 글 ←: connection-pool, k8s-configmap, resilience-patterns, traffic-shaping-qos
 
 #### `traffic-shaping-qos` — 트래픽 셰이핑과 QoS: 병목에서 줄의 순서 정하기
 
@@ -1813,7 +1813,7 @@
 - 소제목: 컨테이너 안의 localhost는 컨테이너 자신이다 / 네트워크 드라이버 다섯 가지 / 이름으로 찾아가는 사용자 정의 브리지 / -p 한 줄이 만드는 것 / 컨테이너에서 호스트로 가는 길 / docker rm 하면 데이터가 왜 사라지나 / 데이터를 바깥에 두는 네 가지 방법 / -v와 --mount 읽기 / 볼륨을 만들고 들여다보기 / 볼륨을 tar로 백업하고 되살리기 / 바인드 마운트와 UID / Postgres와 앱을 처음부터 다시 띄우기 / 격리를 얼마나 풀어 줄지 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, dockerfile-image-layers, iptables-nat, docker-compose
 - 키워드 백링크 →: nginx-basics, iptables-basics, k8s-pod-troubleshooting, postgres-operations, proxy-reverse-proxy, layer-link-ethernet-arp, sdn-vxlan-overlay, redis-basics, ipv6-basics, udp-and-quic, dns
-- 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, layer-link-ethernet-arp, network-troubleshooting-by-layer, ports-and-sockets
+- 이 글로 오는 글 ←: docker-compose, dockerfile-image-layers, k8s-pv-pvc, layer-link-ethernet-arp, network-troubleshooting-by-layer, ports-and-sockets
 
 #### `dockerfile-image-layers` — Dockerfile과 이미지 레이어: 빠르고 작은 이미지 만들기
 
@@ -1848,7 +1848,42 @@
 - 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: k8s-pod-probes, proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, k8s-pod-lifecycle, http-status-codes, what-happens-google-com, cors, dns
-- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, helm-basics, helm-release-lifecycle, http-message, https-tls, iptables-nat, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, osi-in-practice
+- 이 글로 오는 글 ←: cookie-session-login, docker-compose, gateway, helm-basics, helm-release-lifecycle, http-message, https-tls, iptables-nat, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, k8s-secret, osi-in-practice
+
+### Programming › Server/Infra › Kubernetes › Config & Storage (`programming/server-infra/kubernetes/config`)
+
+#### `k8s-configmap` — ConfigMap: 설정은 언제 Pod에 닿나
+
+- 요약: 환경 변수, 볼륨, subPath에 따라 ConfigMap 값이 언제 읽히고 언제 바뀌는지 따라가고, 해시 어노테이션과 이름 해시로 롤아웃을 일으키는 법, immutable과 1MiB 한도까지 실습 클러스터에서 확인한다.
+- 태그: Kubernetes, DevOps, Troubleshooting
+- 키워드: ConfigMap, subPath, configMapGenerator, immutable ConfigMap
+- 길이: 594줄
+- 소제목: 이미지 하나를 여러 환경에서 쓰려면 / ConfigMap을 만드는 세 가지 방법 / Pod에 넣는 두 가지 길 / 없는 ConfigMap을 가리키면 Pod가 뜨지 않는다 / 환경 변수는 컨테이너가 뜰 때 한 번만 읽힌다 / 마운트한 파일은 늦게 바뀐다 / subPath로 꽂은 파일은 끝까지 그대로다 / 설정이 바뀌면 Pod를 다시 띄우게 하기 / immutable로 잠그기 / 1MiB를 넘으면 만들어지지 않는다 / 설정이 안 먹을 때 보는 순서 / ConfigMap은 언제 무엇을 읽나 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-secret, k8s-pod-multicontainer, helm-chart-templates, k8s-pv-pvc
+- 키워드 백링크 →: k8s-pod-basics, helm-dependencies-oci-gitops, helm-basics, latency-bandwidth-throughput, db-type-key-value
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, k8s-pod-multicontainer, k8s-pod-troubleshooting, k8s-pv-pvc, k8s-secret, optimistic-locking
+
+#### `k8s-pv-pvc` — PV와 PVC: Pod보다 오래 사는 디스크
+
+- 요약: PVC가 PV에 묶이는 규칙, 접근 모드, StorageClass와 WaitForFirstConsumer, 존에 묶인 디스크 때문에 생기는 Pending, Retain과 Delete 회수 정책의 함정, 용량 확장, StatefulSet의 PVC, Multi-Attach 오류까지 실습 클러스터의 실제 출력으로 따라간다.
+- 태그: Kubernetes, DevOps, Troubleshooting, AWS
+- 키워드: PersistentVolumeClaim, PersistentVolume, WaitForFirstConsumer, ReadWriteOnce
+- 길이: 627줄
+- 소제목: 컨테이너 안의 파일은 Pod와 함께 사라진다 / 디스크를 요청하는 쪽과 내주는 쪽 / 미리 만든 PV에 PVC가 묶이는 과정 / 접근 모드는 Pod가 아니라 노드를 센다 / StorageClass가 디스크를 만들어 준다 / 노드가 정해진 뒤에 디스크를 만든다 / 디스크가 다른 존에 있으면 Pod가 못 간다 / PVC를 지우면 디스크는 어떻게 되나 / 쓰는 중인 PVC는 지워지지 않는다 / 용량 늘리기 / StatefulSet은 Pod마다 PVC를 만든다 / 현장에서 볼륨 때문에 Pod가 안 뜰 때 / Pod보다 오래 사는 데이터 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-configmap, docker-network-volume, k8s-pod-resources, k8s-pod-scheduling, k8s-secret
+- 키워드 백링크 →: vpc-basics
+- 이 글로 오는 글 ←: k8s-configmap, k8s-pod-troubleshooting, k8s-secret
+
+#### `k8s-secret` — Secret: base64는 암호가 아니다
+
+- 요약: Secret 값이 etcd에 평문으로 저장되는 것을 직접 확인하고, 저장 시 암호화와 키 교체, list 권한까지 챙기는 RBAC, 환경 변수와 파일의 차이, imagePullSecrets, 외부 저장소 연동과 값이 샜을 때의 교체 순서를 다룬다.
+- 태그: Kubernetes, Security, DevOps
+- 키워드: Kubernetes Secret, EncryptionConfiguration, imagePullSecrets, Secrets Store CSI Driver
+- 길이: 693줄
+- 소제목: base64는 암호가 아니다 / ConfigMap과 무엇이 다른가 / stringData와 last-applied에 남는 평문 / 값이 지나가고 머무는 곳 / etcd에는 평문으로 들어간다 / API 서버가 etcd에 쓰기 전에 암호화하기 / 누가 Secret을 읽을 수 있나 / 환경 변수로 넣을까, 파일로 넣을까 / 레지스트리 인증 imagePullSecrets / 클러스터 밖에 원본을 두는 방법 / 비밀 값이 새는 길과 새고 난 뒤 / Secret이 지켜 주는 것과 아닌 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: k8s-configmap, base64, db-type-key-value, k8s-pod-troubleshooting, helm-values-secrets, helm-basics, k8s-pv-pvc
+- 키워드 백링크 →: kubernetes-ingress
+- 이 글로 오는 글 ←: helm-values-secrets, k8s-configmap, k8s-pod-troubleshooting, k8s-pv-pvc
 
 ### Programming › Server/Infra › Kubernetes › Helm (`programming/server-infra/kubernetes/helm`)
 
@@ -1860,8 +1895,8 @@
 - 길이: 567줄
 - 소제목: 복사한 YAML은 환경마다 조금씩 어긋난다 / 차트, 릴리스, 리비전 / helm create가 만들어 주는 것 / install 한 번에 일어나는 일 / 설치하고, 들여다보고, 지우기 / 릴리스 기록은 클러스터 안의 Secret에 있다 / 이미 있는 리소스와 이름이 겹칠 때 / 현장에서 릴리스를 만나는 순간 / Helm 2에는 서버가 있었다 / Helm이 묶어 주는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: helm-dependencies-oci-gitops, helm-chart-templates, helm-release-lifecycle, k8s-pod-lifecycle, helm-values-secrets
-- 키워드 백링크 →: k8s-pod-basics, docker-container-basics, kubernetes-ingress, redis-basics
-- 이 글로 오는 글 ←: helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, helm-values-secrets, k8s-pod-basics, k8s-pod-troubleshooting
+- 키워드 백링크 →: k8s-pod-basics, k8s-configmap, docker-container-basics, kubernetes-ingress, redis-basics
+- 이 글로 오는 글 ←: helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, helm-values-secrets, k8s-configmap, k8s-pod-basics, k8s-pod-troubleshooting, k8s-secret
 
 #### `helm-chart-templates` — 차트 템플릿 문법: values, _helpers.tpl, 들여쓰기
 
@@ -1870,9 +1905,9 @@
 - 키워드: _helpers.tpl, nindent, helm template
 - 길이: 671줄
 - 소제목: 템플릿은 YAML이 아니라 텍스트를 찍는다 / 점 하나가 가리키는 것 / 한 줄을 조각내 읽기 / 공백을 지우는 하이픈 / 들여쓰기가 어긋날 때 나는 오류 / 조각을 만드는 define, 가져다 쓰는 include / 값이 없을 때, 값이 틀린 타입일 때 / 조건과 반복, 그리고 바뀌는 점 / 구조를 통째로 넘기는 toYaml / 값 안의 템플릿을 실행하는 tpl / 설정이 바뀌면 Pod를 다시 띄우게 하기 / 어느 단계에서 잡히나 / 템플릿을 읽는 순서 / 면접에서 나올 만한 질문
-- 직접 링크 →: helm-basics, helm-release-lifecycle, k8s-pod-resources, helm-values-secrets
+- 직접 링크 →: helm-basics, helm-release-lifecycle, k8s-pod-resources, helm-values-secrets, k8s-configmap
 - 키워드 백링크 →: k8s-pod-basics
-- 이 글로 오는 글 ←: helm-basics, helm-dependencies-oci-gitops, helm-values-secrets
+- 이 글로 오는 글 ←: helm-basics, helm-dependencies-oci-gitops, helm-values-secrets, k8s-configmap
 
 #### `helm-dependencies-oci-gitops` — 차트 배포 흐름: 의존성, OCI 저장소, helmfile, ArgoCD
 
@@ -1882,8 +1917,8 @@
 - 길이: 648줄
 - 소제목: 차트가 다른 차트를 품는 의존성 / 부모 values가 하위 차트로 흘러가는 길 / 템플릿만 빌려주는 library 차트 / 차트 버전과 앱 버전 / 차트를 OCI 레지스트리에 올리고 받기 / 릴리스 여러 개를 파일 하나로, helmfile / ArgoCD는 차트를 렌더링만 한다 / Kustomize와 무엇이 다른가 / 차트가 클러스터에 닿기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: helm-basics, helm-chart-templates, helm-values-secrets, helm-release-lifecycle, k8s-pod-basics
-- 키워드 백링크 →: git-undo, docker-container-basics, redis-basics, what-happens-google-com
-- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, helm-values-secrets
+- 키워드 백링크 →: git-undo, k8s-configmap, docker-container-basics, redis-basics, what-happens-google-com
+- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, helm-values-secrets, k8s-configmap
 
 #### `helm-release-lifecycle` — 업그레이드와 롤백: 릴리스가 꼬일 때
 
@@ -1903,8 +1938,9 @@
 - 키워드: values.schema.json, --reuse-values, SOPS
 - 길이: 634줄
 - 소제목: 값이 들어오는 순서 / 맵은 합쳐지고 목록은 통째로 바뀐다 / --set 한 줄에 숨은 규칙 / values 파일 안의 숫자는 실수가 된다 / 업그레이드 때 지난 값은 어디로 가나 / 환경별로 파일을 나누는 방법 / 틀린 값을 미리 막는 values.schema.json / 비밀 값을 values에 평문으로 두면 / SOPS로 암호화해서 git에 두기 / 클러스터 안에서 Secret을 만드는 방법 / lookup은 helm template에서 비어 있다 / 값은 git에, 비밀은 따로 / 면접에서 나올 만한 질문
-- 직접 링크 →: helm-chart-templates, helm-basics, helm-dependencies-oci-gitops
-- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops
+- 직접 링크 →: helm-chart-templates, helm-basics, k8s-secret, helm-dependencies-oci-gitops
+- 키워드 백링크 →: db-type-key-value
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, k8s-secret
 
 ### Programming › Server/Infra › Kubernetes › Pod (`programming/server-infra/kubernetes/pod`)
 
@@ -1917,7 +1953,7 @@
 - 소제목: 컨테이너 대신 Pod를 만드는 이유 / 한 Pod 안에서 나눠 갖는 것 / pause 컨테이너가 붙잡고 있는 것 / kubectl run 한 줄이 지나가는 길 / 매니페스트 한 줄씩 읽기 / 띄우고, 들여다보고, 지우기 / 직접 만든 Pod는 아무도 다시 살려 주지 않는다 / 한 Pod에 무엇을 같이 넣나 / Pod를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting, k8s-pod-lifecycle, iptables-nat, helm-basics, k8s-pod-multicontainer, docker-container-basics
 - 키워드 백링크 →: k8s-pod-scheduling, kubernetes-ingress, db-type-key-value
-- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling, pattern-prototype
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, k8s-configmap, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling, pattern-prototype
 
 #### `k8s-pod-lifecycle` — Pod의 일생: Pending부터 종료까지
 
@@ -1938,8 +1974,8 @@
 - 길이: 361줄
 - 소제목: 한 Pod에 함께 두는 세 가지 모양 / 로그 사이드카를 붙일 때 챙길 것 / 일반 컨테이너끼리는 순서가 없다 / init 컨테이너는 끝나야 다음으로 간다 / 네이티브 사이드카는 init 자리에서 계속 돈다 / Job이 끝나지 않는 이유 / 사이드카도 자리를 차지한다 / 컨테이너를 골라서 들여다본다 / 언제 컨테이너를 더 붙이나 / 여러 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-basics, k8s-pod-resources, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting
-- 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-lifecycle, pattern-adapter
+- 키워드 백링크 →: k8s-configmap, osi-in-practice
+- 이 글로 오는 글 ←: k8s-configmap, k8s-pod-basics, k8s-pod-lifecycle, pattern-adapter
 
 #### `k8s-pod-probes` — liveness·readiness·startup 프로브: 잘못 걸면 장애가 된다
 
@@ -1961,7 +1997,7 @@
 - 소제목: 두 숫자를 읽는 쪽이 다르다 / 자리가 없으면 Pending이다 / QoS 클래스는 두 숫자의 관계로 정해진다 / CPU limits를 넘으면 멈춰 세운다 / 메모리 limits를 넘으면 죽인다 / 런타임은 limits를 모를 수 있다 / 노드가 모자라면 kubelet이 쫓아낸다 / 네임스페이스 단위로 기본값과 한도 걸기 / requests와 limits를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-scheduling, k8s-pod-lifecycle
 - 키워드 백링크 →: k8s-pod-basics
-- 이 글로 오는 글 ←: distributed-lock, docker-container-basics, helm-chart-templates, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-scheduling, k8s-pod-troubleshooting
+- 이 글로 오는 글 ←: distributed-lock, docker-container-basics, helm-chart-templates, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-pv-pvc
 
 #### `k8s-pod-scheduling` — Pod는 어느 노드로 가나: 스케줄러와 Pending
 
@@ -1972,7 +2008,7 @@
 - 소제목: 스케줄러는 거르고 나서 고른다 / FailedScheduling 한 줄 읽기 / 라벨로 노드를 고른다 / taint는 노드가 Pod를 가려 받는 표시다 / Pod끼리 붙이고 떼어 놓기 / 존마다 고르게 나눈다 / 자리가 없으면 덜 중요한 Pod를 밀어낸다 / 스케줄링을 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting
 - 키워드 백링크 →: k8s-pod-basics, dns
-- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-resources, k8s-pod-troubleshooting
+- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-resources, k8s-pod-troubleshooting, k8s-pv-pvc
 
 ### Programming › Server/Infra › Nginx (`programming/server-infra/nginx`)
 
@@ -2507,6 +2543,8 @@
 - CockroachDB → `db-type-newsql`
 - commit-msg 훅 → `git-tips-advanced`
 - compose.yaml → `docker-compose`
+- ConfigMap → `k8s-configmap`
+- configMapGenerator → `k8s-configmap`
 - connect 타임아웃 → `timeouts`
 - CONNECT 터널 → `proxy-reverse-proxy`
 - CONNECT BY → `sqld-top-n-hierarchical-pivot`
@@ -2552,6 +2590,7 @@
 - DuckDB → `db-type-columnar-olap`
 - DynamoDB → `db-type-key-value`
 - Elasticsearch → `elasticsearch-inverted-index`
+- EncryptionConfiguration → `k8s-secret`
 - equal jitter → `exponential-backoff-jitter`
 - ERD → `sqld-data-modeling`
 - ESR 규칙 → `mongodb-document-model`
@@ -2627,6 +2666,8 @@
 - If-Match → `optimistic-locking`
 - IKEv2 → `vpn-ipsec-wireguard`
 - ImagePullBackOff → `k8s-pod-troubleshooting`
+- imagePullSecrets → `k8s-secret`
+- immutable ConfigMap → `k8s-configmap`
 - includeIf → `git-ignore-config`
 - Index Only Scan → `db-index`
 - index-free adjacency → `db-type-graph`
@@ -2657,6 +2698,7 @@
 - ketama → `consistent-hashing`
 - kube-proxy → `iptables-nat`
 - kubectl debug → `k8s-pod-troubleshooting`
+- Kubernetes Secret → `k8s-secret`
 - Kustomize → `helm-dependencies-oci-gitops`
 - L4 로드 밸런서 → `osi-in-practice`
 - L7 로드 밸런서 → `osi-in-practice`
@@ -2733,6 +2775,8 @@
 - pcap → `packet-capture-tcpdump`
 - peer 인증 → `postgres-getting-started`
 - pending-upgrade → `helm-release-lifecycle`
+- PersistentVolume → `k8s-pv-pvc`
+- PersistentVolumeClaim → `k8s-pv-pvc`
 - pg_basebackup → `postgres-operations`
 - pg_blocking_pids → `pessimistic-locking`
 - pg_dump → `postgres-operations`
@@ -2778,6 +2822,7 @@
 - React.memo → `react-rerender`
 - read-your-writes → `db-consistency-cap`
 - readiness probe → `k8s-pod-probes`
+- ReadWriteOnce → `k8s-pv-pvc`
 - Redis → `redis-basics`
 - Redis Cluster → `redis-cluster`
 - Redis Sentinel → `redis-replication-sentinel`
@@ -2808,6 +2853,7 @@
 - SDN → `sdn-vxlan-overlay`
 - search_after → `elasticsearch-inverted-index`
 - search_path → `postgres-getting-started`
+- Secrets Store CSI Driver → `k8s-secret`
 - SECURITY DEFINER → `postgres-functions-triggers`
 - SELF JOIN → `sqld-joins`
 - sendBeacon → `browser-fetch`
@@ -2842,6 +2888,7 @@
 - statement_timeout → `sql-batch-timeout-pool`
 - sticky session → `load-balancer-basics`
 - structuredClone → `pattern-prototype`
+- subPath → `k8s-configmap`
 - SUBSTR → `sqld-single-row-functions`
 - suppressHydrationWarning → `hydration`
 - Suspense 경계 → `streaming-ssr-suspense`
@@ -2893,6 +2940,7 @@
 - VRRP → `load-balancer-basics`
 - VTEP → `sdn-vxlan-overlay`
 - VXLAN → `sdn-vxlan-overlay`
+- WaitForFirstConsumer → `k8s-pv-pvc`
 - WAL 모드 → `db-type-embedded`
 - WeakMap → `js-memory-leak`
 - WebSocket → `realtime-communication`
@@ -2926,7 +2974,6 @@
 - `pattern-adapter` ↔ `pattern-abstract-factory` (17%: 객체, 클래스, pattern, oop, typescript)
 - `pattern-prototype` ↔ `pattern-abstract-factory` (17%: 객체, 클래스, pattern, oop, typescript)
 - `db-type-key-value` ↔ `db-type-graph` (16%: 맞는, 곳과, 아닌, 관계형, nosql)
-- `sqld-null-functions` ↔ `sql-select-where-null` (16%: null은, 값이, null, 다루기)
 - `exponential-backoff-jitter` ↔ `resilience-patterns` (16%: 재시도, resilience, 지수, 백오프와, 지터, 보내기)
 - `db-partitioning` ↔ `db-type-time-series` (16%: 오래된, 통째로, 키가)
 - `db-partitioning` ↔ `db-type-key-value` (16%: 맞는, 파티션, scalability)
@@ -2950,6 +2997,7 @@
 - `pattern-builder` ↔ `pattern-abstract-factory` (13%: 객체, pattern, oop, typescript)
 - `pattern-abstract-factory` ↔ `pattern-singleton` (13%: 섞인다, pattern, oop, typescript)
 - `proxy-reverse-proxy` ↔ `kubernetes-ingress` (13%: https는, 로드, 밸런서, tls)
+- `k8s-configmap` ↔ `helm-chart-templates` (13%: 설정이, 바뀌면, pod를, 띄우게, 하기)
 - `circuit-breaker` ↔ `resilience-patterns` (13%: 타임아웃, 회로를, resilience, 서킷, 브레이커)
 - `sqld-single-row-functions` ↔ `json-crud-http` (13%: 날짜는, 조용히, 숫자)
 
@@ -2957,6 +3005,15 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `k8s-pv-pvc` ↔ `k8s-secret`
+- `k8s-pv-pvc` ↔ `k8s-configmap`
+- `k8s-secret` ↔ `k8s-configmap`
+- `k8s-secret` ↔ `helm-values-secrets`
+- `k8s-secret` ↔ `k8s-pod-troubleshooting`
+- `k8s-configmap` ↔ `helm-dependencies-oci-gitops`
+- `k8s-configmap` ↔ `helm-chart-templates`
+- `k8s-configmap` ↔ `helm-basics`
+- `k8s-configmap` ↔ `k8s-pod-multicontainer`
 - `pattern-bridge` ↔ `pattern-adapter`
 - `pattern-bridge` ↔ `design-patterns-overview`
 - `pattern-adapter` ↔ `design-patterns-overview`

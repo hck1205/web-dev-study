@@ -82,6 +82,7 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
+import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
 import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
 import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
@@ -89,6 +90,8 @@ import { K8S_POD_PROBES } from "./k8s-pod-probes";
 import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
 import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
 import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
+import { K8S_PV_PVC } from "./k8s-pv-pvc";
+import { K8S_SECRET } from "./k8s-secret";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LATENCY_BANDWIDTH_THROUGHPUT } from "./latency-bandwidth-throughput";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
@@ -275,6 +278,7 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
+  K8S_CONFIGMAP,
   K8S_POD_BASICS,
   K8S_POD_LIFECYCLE,
   K8S_POD_MULTICONTAINER,
@@ -282,6 +286,8 @@ export const QUESTION_SETS = [
   K8S_POD_RESOURCES,
   K8S_POD_SCHEDULING,
   K8S_POD_TROUBLESHOOTING,
+  K8S_PV_PVC,
+  K8S_SECRET,
   KUBERNETES_INGRESS,
   LATENCY_BANDWIDTH_THROUGHPUT,
   LAYER_IP_ADDRESSING,
