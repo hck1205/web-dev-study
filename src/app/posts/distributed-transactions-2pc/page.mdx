@@ -1,0 +1,515 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("distributed-transactions-2pc");
+
+결제 서비스와 주문 서비스가 DB를 따로 쓰기 시작한 다음 주에 고객 문의가 왔다. 카드에서 3만 2천 원이 빠졌는데 주문 내역이 없다. 로그를 보니 결제 DB 커밋은 성공했고, 바로 다음 주문 DB `INSERT`를 하려던 순간 주문 서비스 파드가 배포로 내려갔다. 코드에는 `try/catch`도 롤백도 다 있었다. 그런데 롤백할 트랜잭션이 이미 커밋된 뒤였다.
+
+DB 한 대 안에서는 "둘 다 되거나 둘 다 안 되거나"가 공짜였다. DB가 두 대가 되면 그 약속을 누가 지키나. 이 글은 고전적인 답인 2단계 커밋(2PC, two-phase commit)이 어떻게 그 약속을 지키는지, 그리고 왜 그 대가가 커서 마이크로서비스에서는 잘 쓰지 않는지를 PostgreSQL 16 두 대로 직접 돌려 보며 본다. 실습은 Ubuntu 24.04에서 PostgreSQL 16.15 인스턴스 두 개(포트 55441, 55442)와 Node 22로 했다.
+
+이 주제의 다른 글: 서비스를 쪼갤 때 생기는 문제 전체는 [모놀리스에서 마이크로서비스로](/posts/microservices)에서, 2PC 대신 쓰는 방법은 [사가 패턴](/posts/saga-pattern)에서, DB가 분산 트랜잭션을 대신 맡는 구조는 [분산 SQL](/posts/db-type-newsql)에서 다룬다.
+
+## 커밋 두 번 사이에 생기는 틈
+
+DB 한 대의 트랜잭션이 원자적인 이유는 커밋이 한 지점에서 일어나기 때문이다. PostgreSQL은 변경 내용을 WAL(먼저 쓰는 로그)에 적고, 마지막에 커밋 레코드 하나를 디스크에 쓴다. 그 레코드가 디스크에 닿기 전에 죽으면 전부 없던 일이 되고, 닿은 뒤에 죽으면 전부 살아난다. 중간은 없다.
+
+DB가 두 대면 커밋 레코드도 두 개다. 둘을 같은 순간에 쓸 방법이 없으니 반드시 하나가 먼저 커밋되고, 그 사이에 틈이 생긴다. 처음 장면은 그 틈에 프로세스가 죽은 경우다.
+
+<SequenceDiagram
+  caption="2PC 없이 커밋을 두 번 하면: 첫 커밋과 두 번째 커밋 사이의 틈"
+  actors={[
+    { id: "svc", label: "주문 서비스" },
+    { id: "pay", label: "결제 DB" },
+    { id: "ord", label: "주문 DB" },
+  ]}
+  steps={[
+    { from: "svc", to: "pay", label: "BEGIN; UPDATE", title: "지갑에서 돈을 뺀다", detail: "결제 DB에서 트랜잭션을 열고 잔액을 줄인다. 아직 커밋 전이라 다른 세션에는 보이지 않는다." },
+    { from: "svc", to: "ord", label: "BEGIN; INSERT", title: "주문을 넣는다", detail: "주문 DB에서도 따로 트랜잭션을 연다. 두 트랜잭션은 서로를 모른다." },
+    { from: "svc", to: "pay", label: "COMMIT", title: "결제부터 커밋한다", detail: "결제 DB가 커밋 레코드를 디스크에 쓴다. 이 순간부터 돈이 빠진 건 되돌릴 수 없다.", payload: "COMMIT" },
+    { from: "svc", to: "svc", label: "SIGKILL", title: "두 번째 커밋 전에 죽는다", detail: "배포로 파드가 내려갔다. 주문 DB 연결이 끊기자 PostgreSQL은 열려 있던 트랜잭션을 롤백한다." },
+    { from: "ord", to: "ord", label: "ROLLBACK", title: "주문은 사라진다", detail: "결제는 있고 주문은 없다. 순서를 바꿔 주문을 먼저 커밋해도 반대 방향의 같은 문제가 생긴다." },
+  ]}
+/>
+
+순서를 바꾸거나 재시도를 붙여도 틈은 남는다. 첫 커밋이 끝난 뒤 두 번째 DB가 제약 조건 위반으로 거절하면, 이미 커밋된 첫 번째를 취소할 방법이 DB 수준에는 없다. 필요한 건 "커밋하기 전에 모두가 커밋할 수 있는지부터 확인하는 단계"다.
+
+## 먼저 묻고, 모두 된다고 하면 그때 커밋한다
+
+2PC는 이 확인을 별도 단계로 떼어 낸다. 전체를 진행하는 쪽을 코디네이터(조정자), 각 DB를 참여자라고 부른다.
+
+1단계(prepare, 투표)에서 코디네이터는 참여자마다 "커밋할 준비가 됐나"를 묻는다. 참여자는 자기 몫의 변경을 끝까지 해 보고, 제약 조건 검사까지 통과하면 그 상태를 디스크에 기록한 뒤 "예"라고 답한다. 이 "예"는 무거운 약속이다. 지금부터 전원이 나가도, 프로세스가 재시작해도, 코디네이터가 커밋하라고 하면 반드시 커밋할 수 있어야 한다. 그래서 잠금도 그대로 쥐고 있는다.
+
+2단계(commit, 결정)에서 코디네이터는 표를 모은다. 전원이 "예"면 커밋을, 하나라도 "아니오"거나 답이 없으면 롤백을 결정하고, 그 결정을 자기 디스크에 먼저 적은 다음 참여자들에게 알린다.
+
+<SequenceDiagram
+  caption="2단계 커밋: 투표를 모두 받은 뒤에야 결정한다"
+  actors={[
+    { id: "co", label: "코디네이터" },
+    { id: "ord", label: "주문 DB" },
+    { id: "pay", label: "결제 DB" },
+  ]}
+  steps={[
+    { from: "co", to: "ord", label: "INSERT order", title: "각자 일을 한다", detail: "주문 DB에 주문을 넣는다. 아직 평범한 트랜잭션이다." },
+    { from: "co", to: "pay", label: "UPDATE wallet", title: "결제 쪽도 일을 한다", detail: "잔액을 줄이고 결제 기록을 넣는다. 지갑 행에 잠금이 걸린다." },
+    { from: "co", to: "ord", label: "PREPARE", title: "주문 DB에 준비됐는지 묻는다", detail: "주문 DB는 변경과 잠금 정보를 디스크에 남긴다. 이제 이 트랜잭션은 세션이 끊겨도 사라지지 않는다.", payload: "PREPARE TRANSACTION 'o-1042';" },
+    { from: "ord", to: "co", label: "yes", title: "예라고 답한다", detail: "이 답을 한 뒤로 주문 DB는 스스로 롤백할 수 없다. 결정을 기다린다." },
+    { from: "co", to: "pay", label: "PREPARE", title: "결제 DB에도 묻는다", detail: "잔액 CHECK 제약까지 통과해야 예라고 답할 수 있다." },
+    { from: "pay", to: "co", label: "yes", title: "두 표가 다 모였다", detail: "둘 다 예다. 이제 결과는 코디네이터만 정할 수 있다." },
+    { from: "co", to: "co", label: "log COMMIT", title: "결정을 먼저 적는다", detail: "참여자에게 보내기 전에 커밋 결정을 자기 디스크에 기록한다. 이 기록이 2PC 전체의 커밋 지점이다." },
+    { from: "co", to: "ord", label: "COMMIT PREPARED", title: "결정을 알린다", detail: "주문 DB가 준비해 둔 트랜잭션을 커밋하고 잠금을 푼다.", payload: "COMMIT PREPARED 'o-1042';" },
+    { from: "co", to: "pay", label: "COMMIT PREPARED", title: "결제 DB도 커밋한다", detail: "도중에 실패하면 결정은 이미 적혀 있으니 성공할 때까지 다시 보내면 된다." },
+  ]}
+/>
+
+DB 한 대에서 커밋 레코드가 하던 역할을 2PC에서는 코디네이터의 결정 기록이 맡는다. 참여자의 "예"는 언제든 커밋할 수 있게 해 두겠다는 약속이고, 실제로 커밋할지는 그 기록 하나가 정한다.
+
+## PostgreSQL 두 대로 직접 해 보기
+
+PostgreSQL은 참여자 쪽 명령을 그대로 제공한다. `PREPARE TRANSACTION`, `COMMIT PREPARED`, `ROLLBACK PREPARED`다. 다만 기본값으로는 꺼져 있다. 평소 쓰던 클러스터에서 그대로 쳐 보면 이렇게 나온다.
+
+```bash
+# 기본 설정(max_prepared_transactions = 0)인 클러스터에서 시도한다
+sudo -u postgres psql -X -d postgres -c 'BEGIN' -c "PREPARE TRANSACTION 't1'"
+```
+
+```text
+BEGIN
+ERROR:  prepared transactions are disabled
+HINT:  Set max_prepared_transactions to a nonzero value.
+```
+
+`max_prepared_transactions`는 동시에 준비 상태로 둘 수 있는 트랜잭션 수이고 서버 재시작이 필요한 설정이다. 공식 문서는 쓰기로 했다면 `max_connections`만큼 잡으라고 권한다. 복제본이 있으면 복제본의 값이 프라이머리보다 작으면 안 된다. 실습용으로 두 인스턴스를 따로 만들어 10으로 켰다.
+
+```bash
+# 실습용 인스턴스 두 개를 만든다 (postgres 사용자로). 하나는 주문, 하나는 결제
+/usr/lib/postgresql/16/bin/initdb -D ~/v3-lab/orders -A trust -U postgres
+/usr/lib/postgresql/16/bin/initdb -D ~/v3-lab/payments -A trust -U postgres
+# 포트와 준비 트랜잭션 수를 정한다 (payments는 port=55442)
+printf "port=55441\nmax_prepared_transactions=10\n" >> ~/v3-lab/orders/postgresql.conf
+/usr/lib/postgresql/16/bin/pg_ctl -D ~/v3-lab/orders -l ~/v3-lab/orders.log start
+```
+
+예제 테이블은 작게 둔다. 주문 DB에는 `orders`, 결제 DB에는 잔액이 음수가 될 수 없는 `wallets`와 `payments`가 있다.
+
+```sql
+-- 주문 DB (55441, shop_orders)
+CREATE TABLE orders (id text PRIMARY KEY, user_id int NOT NULL, amount int NOT NULL, status text NOT NULL);
+
+-- 결제 DB (55442, shop_payments)
+CREATE TABLE wallets (user_id int PRIMARY KEY, balance int NOT NULL CHECK (balance >= 0));
+CREATE TABLE payments (order_id text PRIMARY KEY, user_id int NOT NULL, amount int NOT NULL);
+INSERT INTO wallets VALUES (7, 50000), (8, 3000);
+```
+
+이제 코디네이터 역할을 손으로 한다. 두 DB에서 각자 일을 하고, 커밋 대신 같은 이름(gid, 전역 트랜잭션 ID)으로 준비만 해 둔다.
+
+```sql
+-- 주문 DB
+BEGIN;
+INSERT INTO orders VALUES ('o-1042', 7, 32000, 'PAID');
+PREPARE TRANSACTION 'o-1042';   -- 커밋 대신 준비. 이 뒤로 세션을 끊어도 된다
+
+-- 결제 DB
+BEGIN;
+UPDATE wallets SET balance = balance - 32000 WHERE user_id = 7;
+INSERT INTO payments VALUES ('o-1042', 7, 32000);
+PREPARE TRANSACTION 'o-1042';
+SELECT gid, prepared, owner, database FROM pg_prepared_xacts;  -- 준비된 트랜잭션 목록
+```
+
+```text
+  gid   |           prepared            |  owner   |   database
+--------+-------------------------------+----------+---------------
+ o-1042 | 2026-10-20 14:18:53.502833+00 | postgres | shop_payments
+(1 row)
+```
+
+psql은 이미 종료됐다. 그런데 트랜잭션은 남아 있다. 보통 트랜잭션은 세션이 끊기면 롤백되지만, 준비된 트랜잭션은 세션에서 떨어져 나와 DB가 따로 들고 있다. 이 시점에 주문 DB에서 `SELECT * FROM orders`를 하면 0행이 나온다. 아직 아무도 커밋하지 않았으니 다른 세션에는 보이지 않는다.
+
+`pg_prepared_xacts`의 한 줄을 뜯어 보면 운영에서 무엇을 봐야 하는지가 보인다.
+
+<UrlAnatomy
+  caption="pg_prepared_xacts 한 줄"
+  base="pg_prepared_xacts"
+  separator=": "
+  joiner=" | "
+  params={[
+    { key: "gid", value: "o-1042", title: "전역 트랜잭션 ID", description: "코디네이터가 붙인 이름이다. 200바이트보다 짧아야 하고 클러스터 안에서 겹치면 안 된다. 어느 코디네이터의 어느 작업인지 알 수 있게 접두어를 붙여 두면 복구할 때 남의 것을 건드리지 않는다.", required: true },
+    { key: "transaction", value: "735", title: "로컬 트랜잭션 ID(xid)", description: "이 DB 안에서의 트랜잭션 번호다. 이 번호가 오래 남아 있으면 VACUUM이 그 뒤의 죽은 행을 치우지 못한다. age(transaction)으로 얼마나 묵었는지 본다." },
+    { key: "prepared", value: "14:19:12", title: "준비된 시각", description: "가장 중요한 열이다. 정상이라면 준비 상태는 밀리초 단위로 끝난다. now() - prepared가 몇 분을 넘으면 코디네이터가 결정을 못 보낸 것이다." },
+    { key: "owner", value: "postgres", title: "준비한 사용자", description: "COMMIT PREPARED는 준비한 사용자나 슈퍼유저만 할 수 있다." },
+    { key: "database", value: "shop_payments", title: "준비한 DB", description: "끝내려면 이 DB에 접속해서 명령해야 한다. 다른 DB에서 하면 'prepared transaction belongs to another database' 에러가 난다." },
+  ]}
+/>
+
+결정을 내린다. 두 곳 다 준비됐으니 커밋한다.
+
+```sql
+COMMIT PREPARED 'o-1042';   -- 주문 DB에서
+COMMIT PREPARED 'o-1042';   -- 결제 DB에서
+```
+
+```text
+COMMIT PREPARED
+COMMIT PREPARED
+   id   | user_id | amount | status
+--------+---------+--------+--------
+ o-1042 |       7 |  32000 | PAID
+(1 row)
+
+ user_id | balance
+---------+---------
+       8 |    3000
+       7 |   18000
+(2 rows)
+```
+
+## 한 곳이 아니라고 답하면
+
+이번에는 잔액이 3천 원뿐인 사용자 8이 3만 2천 원을 결제한다. 주문 DB는 준비에 성공하지만 결제 DB는 `CHECK`에 걸린다.
+
+```sql
+-- 결제 DB
+BEGIN;
+UPDATE wallets SET balance = balance - 32000 WHERE user_id = 8;
+PREPARE TRANSACTION 'o-1043';
+```
+
+```text
+BEGIN
+ERROR:  new row for relation "wallets" violates check constraint "wallets_balance_check"
+DETAIL:  Failing row contains (8, -29000).
+ROLLBACK
+```
+
+마지막 줄을 보자. 실패한 트랜잭션에서 `PREPARE TRANSACTION`을 보내면 PostgreSQL은 에러 대신 `ROLLBACK`이라고 답하고 트랜잭션을 버린다. 이게 "아니오" 표다. 코디네이터는 명령 태그가 `PREPARE TRANSACTION`인지 `ROLLBACK`인지로 표를 읽어야 한다. 에러만 잡으면 이 경우를 놓친다.
+
+표가 하나라도 아니오면 결정은 롤백이다. 이미 준비해 둔 주문 DB 쪽을 거둔다.
+
+```sql
+-- 주문 DB
+ROLLBACK PREPARED 'o-1043';
+SELECT count(*) FROM orders WHERE id = 'o-1043';
+```
+
+```text
+ROLLBACK PREPARED
+ count
+-------
+     0
+(1 row)
+```
+
+## 결정 직전에 코디네이터가 죽으면
+
+2PC의 가장 큰 약점이 여기 있다. 참여자는 "예"라고 답한 순간부터 혼자서는 아무것도 못 한다. 커밋하자니 다른 참여자가 아니오라고 했을 수 있고, 롤백하자니 코디네이터가 이미 커밋을 결정하고 다른 참여자에게는 알렸을 수 있다. 이 상태를 in-doubt(결과 미정)라고 하고, 코디네이터가 돌아올 때까지 기다리는 수밖에 없다는 뜻에서 2PC를 블로킹 프로토콜이라고 부른다.
+
+아래 그림에서 다음을 누르면 결정이 오지 않은 동안 무엇이 묶이는지 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={340}
+  caption="코디네이터가 결정을 보내기 전에 죽었다: 참여자는 잠금을 쥐고 기다린다"
+  zones={[
+    { id: "dbs", label: "참여자", x: 20, y: 135, w: 360, h: 95, tone: "private" },
+  ]}
+  nodes={[
+    { id: "co", label: "coordinator", sub: "order-svc", x: 200, y: 55, icon: "server", w: 120 },
+    { id: "odb", label: "orders DB", sub: ":55441", x: 100, y: 185, icon: "db", w: 112 },
+    { id: "pdb", label: "payments DB", sub: ":55442", x: 300, y: 185, icon: "db", w: 112 },
+    { id: "req", label: "refund API", sub: "wallet 7", x: 300, y: 300, icon: "client", w: 112 },
+  ]}
+  links={[
+    { from: "co", to: "odb" },
+    { from: "co", to: "pdb" },
+    { from: "req", to: "pdb" },
+  ]}
+  steps={[
+    { path: ["co", "odb"], packet: "PREPARE", title: "주문 DB가 준비된다", detail: "주문 o-1044가 준비 상태가 된다. 아직 아무에게도 보이지 않는다." },
+    { path: ["co", "pdb"], packet: "PREPARE", title: "결제 DB도 준비된다", detail: "사용자 7의 지갑 행에 잠금이 걸린 채로 준비 상태가 된다.", payload: "PREPARE TRANSACTION 'o-1044';" },
+    { path: ["co"], highlight: ["co"], title: "결정을 보내기 전에 죽는다", detail: "배포, OOM, 노드 장애. 커밋 결정은 아직 어디에도 적히지 않았다." },
+    { path: ["pdb"], highlight: ["odb", "dbs"], title: "참여자는 스스로 정할 수 없다", detail: "둘 다 '예'라고 답했지만 서로의 표를 모른다. 커밋도 롤백도 못 하고 잠금을 쥔 채 기다린다.", payload: "  gid   | transaction | xid_age\n--------+-------------+---------\n o-1044 |         735 |       2" },
+    { path: ["req", "pdb"], packet: "UPDATE", blocked: true, title: "상관없는 요청이 막힌다", detail: "같은 지갑을 건드리는 환불 요청이 잠금을 기다리다 lock_timeout 3초에 실패한다.", payload: "ERROR:  canceling statement due to lock timeout\nCONTEXT:  while updating tuple (0,3) in relation \"wallets\"" },
+    { path: ["co", "pdb"], packet: "COMMIT", highlight: ["odb"], title: "코디네이터가 돌아와야 풀린다", detail: "다시 뜬 코디네이터가 자기 기록을 보고 결정을 보내야 잠금이 풀린다. 기록이 없으면 롤백한다." },
+  ]}
+/>
+
+이 상황을 그대로 만들어 봤다. 두 DB에서 `o-1044`를 준비만 하고 결정을 보내지 않은 채, 다른 세션에서 같은 지갑을 고쳤다.
+
+```sql
+-- 결제 DB, 다른 세션. 3초 넘게 기다리면 포기한다
+SET lock_timeout = '3s';
+UPDATE wallets SET balance = balance + 500 WHERE user_id = 7;
+```
+
+```text
+ERROR:  canceling statement due to lock timeout
+CONTEXT:  while updating tuple (0,3) in relation "wallets"
+Time: 3001.359 ms (00:03.001)
+```
+
+잠금은 누가 쥐고 있을까. `pg_locks`에서 `pid`가 비어 있는 줄이 준비된 트랜잭션의 잠금이다. 어느 백엔드 프로세스도 이 잠금의 주인이 아니다.
+
+```sql
+SELECT locktype, relation::regclass, mode, granted, virtualtransaction, pid
+FROM pg_locks WHERE pid IS NULL ORDER BY 1, 2;
+```
+
+```text
+   locktype    |   relation   |       mode       | granted | virtualtransaction | pid
+---------------+--------------+------------------+---------+--------------------+-----
+ relation      | wallets      | RowExclusiveLock | t       | 3/22               |
+ relation      | wallets_pkey | RowExclusiveLock | t       | 3/22               |
+ relation      | payments     | RowExclusiveLock | t       | 3/22               |
+ transactionid |              | ExclusiveLock    | t       | 3/22               |
+(4 rows)
+```
+
+그래서 `pg_terminate_backend`로 세션을 죽이는 평소의 해결법이 통하지 않는다. 죽일 세션이 없다. 서버를 재시작해도 그대로다. 결제 DB를 `pg_ctl restart`로 내렸다 올렸더니 서버 로그에 이렇게 남았다.
+
+```text
+LOG:  1 two-phase state file was written for a long-running prepared transaction
+LOG:  recovering prepared transaction 735 from shared memory
+```
+
+```bash
+# 준비된 트랜잭션은 데이터 디렉터리의 pg_twophase에 파일로 남는다 (파일 이름은 xid의 16진수)
+sudo ls ~postgres/v3-lab/payments/pg_twophase
+```
+
+```text
+000002DF
+```
+
+0x2DF는 735다. 재시작 뒤에도 `pg_prepared_xacts`에 `o-1044`가 그대로 있었다. "예"라고 답한 약속을 지키려면 재시작으로 사라지면 안 되니 당연한 동작이다.
+
+잠금만 문제가 아니다. 준비된 트랜잭션은 VACUUM도 붙잡는다. 같은 DB에서 1만 행을 지우고 VACUUM을 돌렸다.
+
+```text
+tuples: 0 removed, 10000 remain, 10000 are dead but not yet removable
+removable cutoff: 735, which was 5 XIDs old when operation ended
+```
+
+`removable cutoff: 735`가 바로 준비된 트랜잭션의 xid다. 735 이후에 죽은 행은 그 트랜잭션이 아직 볼 수 있을지도 모르니 치우지 못한다. 결정을 보내고 다시 돌리자 `10000 removed`로 바뀌었다. 몇 시간, 며칠씩 방치하면 테이블이 부풀고, 극단적으로는 트랜잭션 ID 고갈(wraparound)을 막으려고 DB가 쓰기를 멈출 수도 있다고 공식 문서가 경고한다.
+
+## 결정을 먼저 적어 두는 코디네이터
+
+블로킹을 줄이는 방법은 코디네이터를 빨리, 그리고 정확히 되살리는 것이다. 그러려면 코디네이터가 무엇을 결정했는지 디스크에 남겨야 한다. 간단한 코디네이터를 Node와 `pg`로 짰다. 표를 모으고, 결정을 파일에 적고(fsync), 그다음에 알린다. 일부러 두 지점에서 죽게 할 수 있다.
+
+```js
+// tpc.js 핵심 부분
+for (const p of parts) {
+  try {
+    await p.c.query("BEGIN");
+    for (const s of p.sql) await p.c.query(s);
+    await p.c.query(`PREPARE TRANSACTION '${gid}'`);
+    votes.push(true);
+  } catch (e) {
+    await p.c.query("ROLLBACK").catch(() => {});
+    votes.push(false);
+  }
+}
+if (crashAt === "after-prepare") process.exit(1);          // 결정 전에 죽는다
+const decision = votes.every(Boolean) ? "COMMIT" : "ABORT";
+appendAndFsync(LOG, { gid, decision });                    // 결정을 먼저 적는다
+if (crashAt === "after-decision") process.exit(1);         // 알리기 전에 죽는다
+for (const p of preparedParts) await p.c.query(`${decision === "COMMIT" ? "COMMIT" : "ROLLBACK"} PREPARED '${gid}'`);
+```
+
+복구 루틴은 시작할 때 모든 참여자의 `pg_prepared_xacts`를 훑고, 자기 기록에 결정이 있으면 그대로, 없으면 롤백한다. 결정 기록이 없다는 건 커밋을 결정한 적이 없다는 뜻이니 롤백해도 안전하다. 이 규칙을 추정 롤백(presumed abort)이라고 하고, IBM R* 시절부터 쓰던 최적화다. 롤백은 기록하지 않아도 되니 디스크 쓰기도 줄어든다.
+
+```bash
+# 정상, 결정 전 사망, 결정 후 사망을 차례로 만들고 5초 뒤 복구를 돌린다
+node tpc.js run none o-2001
+node tpc.js run after-prepare o-2002
+U=9 node tpc.js run after-decision o-2003
+sleep 5; node tpc.js recover
+```
+
+```text
+14:22:44.163 orders: PREPARED (vote yes)
+14:22:44.168 payments: PREPARED (vote yes)
+14:22:44.169 decision logged: COMMIT
+14:22:44.170 orders: COMMIT PREPARED
+14:22:44.171 payments: COMMIT PREPARED
+14:22:44.283 orders: PREPARED (vote yes)
+14:22:44.287 payments: PREPARED (vote yes)
+14:22:44.288 coordinator crashed before deciding
+14:22:44.392 orders: PREPARED (vote yes)
+14:22:44.397 payments: PREPARED (vote yes)
+14:22:44.398 decision logged: COMMIT
+14:22:44.398 coordinator crashed after logging decision
+14:22:49.514 recover orders: o-2002 in doubt for 5s -> ABORT (no decision record)
+14:22:49.520 recover orders: o-2003 in doubt for 5s -> COMMIT
+14:22:49.551 recover payments: o-2002 in doubt for 5s -> ABORT (no decision record)
+14:22:49.555 recover payments: o-2003 in doubt for 5s -> COMMIT
+```
+
+`o-2003`은 코디네이터가 참여자에게 한 마디도 못 하고 죽었지만, 결정이 적혀 있었으니 복구 뒤 커밋됐다. 결정이 디스크에 닿은 순간이 커밋 지점이라는 말이 이 뜻이다.
+
+처음 시도에서는 실수도 하나 했다. `o-2002`와 `o-2003`을 같은 사용자 7로 돌렸더니, 세 번째 코디네이터가 `UPDATE wallets`에서 영영 멈췄다. 앞에서 죽은 `o-2002`가 사용자 7의 지갑 잠금을 쥐고 있었기 때문이다. `pg_stat_activity`에는 `wait_event_type = Lock`인 줄만 남았다. 결정 하나가 늦어지면 그 행을 만지는 모든 요청이 줄줄이 서는 장면을 실습 중에 그대로 본 셈이다.
+
+<AlgoTrace
+  caption="코디네이터 결정 기록과 복구: 기록에 없으면 롤백한다"
+  memoryLabel="결정 기록 (coordinator.log)"
+  cells={["o-2001 투표", "o-2001 결정", "o-2002 투표", "사망", "o-2003 투표", "o-2003 결정", "사망", "복구"]}
+  steps={[
+    { pointer: 0, caption: "o-2001은 두 참여자 모두 예라고 답했다." },
+    { pointer: 1, found: [1], memory: ["o-2001 COMMIT"], caption: "결정을 먼저 적고 알렸다. 정상 흐름이다." },
+    { pointer: 2, memory: ["o-2001 COMMIT"], caption: "o-2002도 둘 다 예다. 두 DB에 준비된 트랜잭션이 생겼다." },
+    { pointer: 3, memory: ["o-2001 COMMIT"], caption: "결정을 적기 전에 죽었다. 기록에는 o-2002가 없다." },
+    { pointer: 4, memory: ["o-2001 COMMIT"], caption: "o-2003을 시작한다. 다른 사용자라 o-2002의 잠금에 걸리지 않는다." },
+    { pointer: 5, found: [5], memory: ["o-2001 COMMIT", "o-2003 COMMIT"], caption: "결정을 적었다. 이 순간 o-2003의 커밋이 확정된다." },
+    { pointer: 6, memory: ["o-2001 COMMIT", "o-2003 COMMIT"], caption: "참여자에게 알리기 전에 죽었다. 두 DB에는 준비 상태만 남았다." },
+    { pointer: 7, found: [7], memory: ["o-2001 COMMIT", "o-2003 COMMIT"], caption: "복구: o-2003은 기록대로 커밋, 기록이 없는 o-2002는 롤백한다." },
+  ]}
+/>
+
+복구 규칙을 직접 짜 보자. 결정 기록과 지금 준비된 gid 목록을 받아 무엇을 할지 돌려준다. 같은 DB에 다른 코디네이터의 준비된 트랜잭션이 있을 수 있으니 자기 접두어가 붙은 것만 건드린다.
+
+<CodePlayground
+  caption="복구할 때 무엇을 커밋하고 무엇을 롤백하나"
+  functionName="recoveryActions"
+  initialCode={`function recoveryActions(decisionLog, preparedGids, prefix) {
+  // decisionLog: [{ gid, decision: "COMMIT" | "ABORT" }]
+  // preparedGids: 지금 pg_prepared_xacts에 있는 gid들
+  // 돌려줄 값: [[gid, "COMMIT" | "ROLLBACK"], ...] (preparedGids 순서대로)
+  return [];
+}`}
+  solution={`function recoveryActions(decisionLog, preparedGids, prefix) {
+  const decided = new Map(decisionLog.map((r) => [r.gid, r.decision]));
+  return preparedGids
+    .filter((gid) => gid.startsWith(prefix))
+    .map((gid) => [gid, decided.get(gid) === "COMMIT" ? "COMMIT" : "ROLLBACK"]);
+}`}
+  tests={[
+    { label: "결정대로 커밋", args: [[{ gid: "o-1", decision: "COMMIT" }], ["o-1"], "o-"], expected: [["o-1", "COMMIT"]] },
+    { label: "기록 없음은 롤백", args: [[], ["o-2"], "o-"], expected: [["o-2", "ROLLBACK"]] },
+    { label: "섞인 경우", args: [[{ gid: "o-3", decision: "COMMIT" }, { gid: "o-4", decision: "ABORT" }], ["o-4", "o-3", "o-5"], "o-"], expected: [["o-4", "ROLLBACK"], ["o-3", "COMMIT"], ["o-5", "ROLLBACK"]] },
+    { label: "남의 트랜잭션은 건드리지 않는다", args: [[], ["o-6", "batch-9"], "o-"], expected: [["o-6", "ROLLBACK"]] },
+    { label: "준비된 게 없다", args: [[{ gid: "o-7", decision: "COMMIT" }], [], "o-"], expected: [] },
+  ]}
+/>
+
+코디네이터의 기록이 사라지면 이 모든 게 무너진다. 그래서 실제 트랜잭션 관리자는 결정 기록을 복제된 디스크나 DB에 두고, 코디네이터 자체를 이중화한다. 이 지점에서 문제는 "코디네이터를 어떻게 죽지 않게 하나"로 바뀌고, 그건 합의 알고리즘의 영역이다.
+
+## XA는 이 약속을 표준으로 만든 것
+
+DB 종류가 섞여도 2PC를 하려면 참여자마다 같은 말을 알아들어야 한다. 1991년 X/Open이 정한 XA 규격이 그 공통 언어다. 트랜잭션 관리자(TM)가 리소스 관리자(RM, DB나 메시지 큐)에게 `xa_start`, `xa_end`, `xa_prepare`, `xa_commit`, `xa_rollback`, `xa_recover`를 부른다. Java의 JTA가 이 규격을 감싸고, Atomikos나 Narayana 같은 트랜잭션 관리자가 TM 역할을 한다.
+
+MySQL은 SQL 문으로 XA를 연다. 문법만 옮겨 보면 이렇다(이 실습에서 MySQL은 돌리지 않았다).
+
+```sql
+-- MySQL 8의 XA 문법
+XA START 'o-1042';
+UPDATE wallets SET balance = balance - 32000 WHERE user_id = 7;
+XA END 'o-1042';
+XA PREPARE 'o-1042';
+XA COMMIT 'o-1042';   -- 또는 XA ROLLBACK 'o-1042'
+XA RECOVER;           -- 준비 상태로 남은 트랜잭션 목록. PostgreSQL의 pg_prepared_xacts에 해당한다
+```
+
+PostgreSQL에는 XA 문법이 없고, JDBC 드라이버의 `PGXADataSource`가 XA 호출을 `PREPARE TRANSACTION`과 `COMMIT PREPARED`로 바꿔 준다. PostgreSQL 문서도 이 명령들이 애플리케이션이 직접 쓰라고 만든 게 아니라 외부 트랜잭션 관리자를 위한 것이라고 적는다.
+
+XA 운영에서 나오는 말이 하나 더 있다. 휴리스틱 결정(heuristic commit, heuristic rollback)이다. in-doubt가 너무 오래가면 DBA가 참여자 하나를 손으로 커밋하거나 롤백해 버리는 것이다. 잠금은 풀리지만, 코디네이터의 결정과 반대로 했다면 원자성이 깨진다. TM이 돌아와서 그 사실을 알면 heuristic mixed 같은 예외로 알려 줄 뿐 데이터를 맞춰 주지는 않는다.
+
+## 3PC가 블로킹을 풀지 못하는 이유
+
+2PC가 막히는 건 참여자가 "다른 참여자들이 다 예라고 했는지"를 모르기 때문이다. 3단계 커밋(3PC)은 1981년 스킨(Skeen)이 제안한 방식으로, 투표와 커밋 사이에 pre-commit 단계를 하나 더 넣는다. 코디네이터가 "모두 예라고 했다"를 먼저 알린 뒤에 커밋을 지시한다. 그러면 참여자는 pre-commit을 받았는지 여부로 상황을 짐작해서, 코디네이터가 죽어도 남은 참여자끼리 타임아웃 뒤에 결론을 낼 수 있다.
+
+이 논리는 "죽은 노드는 확실히 죽은 것이고, 메시지는 정해진 시간 안에 반드시 도착한다"는 가정 위에 서 있다. 네트워크가 갈라지면 가정이 깨진다. 한쪽에서는 pre-commit을 받은 참여자들이 커밋하고, 다른 쪽에서는 pre-commit을 못 받은 참여자들이 롤백해서 결과가 갈릴 수 있다. 메시지 왕복도 하나 늘어난다. 그래서 실무에서 3PC를 쓰는 시스템은 거의 없다.
+
+실제로 블로킹을 없앤 방법은 코디네이터와 참여자를 각각 합의 그룹으로 만드는 것이다. 그레이와 램포트의 Paxos Commit이 이 생각을 정리했고, Google Spanner는 참여자 하나하나를 Paxos로 복제된 그룹으로 두고 그 위에서 2PC를 돈다. 코디네이터 리더가 죽어도 그룹의 다른 노드가 결정 기록을 이어받는다. CockroachDB와 TiDB가 Raft 위에서 같은 일을 한다. 구간마다 어떻게 나뉘고 기록되는지는 [분산 SQL](/posts/db-type-newsql)에, 합의 그룹이 기록을 맞추는 원리는 [Raft 합의](/posts/raft-consensus)에 있다.
+
+## 마이크로서비스가 2PC를 피하는 이유
+
+2PC가 정확한데도 서비스 사이에서 잘 쓰지 않는 이유는 비용이 전부 가용성과 지연으로 돌아오기 때문이다.
+
+첫째, 참여자가 모두 살아 있어야 한다. 가용성 99.9%인 서비스 셋이 2PC로 묶이면 전체는 대략 0.999³, 99.7%가 된다. 참여자가 늘수록 더 떨어진다.
+
+둘째, 잠금이 가장 느린 참여자의 시간만큼 이어진다. 준비부터 결정까지 모든 참여자가 행 잠금을 쥐고 있으니, 한 곳이 느리면 다른 DB의 인기 있는 행까지 같이 묶인다. 앞의 지갑 잠금처럼 상관없는 요청이 줄을 선다.
+
+셋째, 참여할 수 없는 상대가 많다. 외부 결제사의 HTTP API, 이메일 발송, 대부분의 NoSQL 저장소는 "준비만 해 두고 기다리기"를 지원하지 않는다. Kafka에도 트랜잭션이 있지만 자기 파티션들 사이의 원자성을 위한 내부 프로토콜이고 XA 참여자로 끼지는 않는다.
+
+넷째, 서비스끼리 강하게 묶인다. 결제 서비스 DB가 주문 서비스의 트랜잭션 관리자 결정을 기다려야 하니 독립 배포와 독립 장애라는 서비스 분리의 목적과 부딪힌다.
+
+그래서 보통은 다른 방향으로 간다.
+
+<ConceptDiagram
+  caption="여러 저장소에 걸친 쓰기를 다루는 선택지"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "q", label: "두 곳에 함께 써야 한다", x: 200, y: 30, w: 190 },
+    { id: "one", label: "한 DB로 합친다", sub: "로컬 트랜잭션", x: 95, y: 110, w: 150 },
+    { id: "tpc", label: "2PC · XA", sub: "같은 팀의 DB들", x: 305, y: 110, w: 150 },
+    { id: "outbox", label: "아웃박스", sub: "DB와 브로커 사이", x: 95, y: 200, w: 150 },
+    { id: "saga", label: "사가", sub: "서비스 사이", x: 305, y: 200, w: 150 },
+    { id: "idem", label: "멱등 처리", sub: "재시도 안전", x: 200, y: 270, w: 150 },
+  ]}
+  edges={[
+    { from: "q", to: "one", label: "경계 재검토" },
+    { from: "q", to: "tpc", label: "강한 원자성" },
+    { from: "one", to: "outbox", dashed: true },
+    { from: "tpc", to: "saga", label: "가용성 우선", dashed: true },
+    { from: "outbox", to: "idem" },
+    { from: "saga", to: "idem" },
+  ]}
+/>
+
+먼저 의심할 것은 경계다. 늘 함께 바뀌어야 하는 데이터라면 같은 서비스, 같은 DB에 있어야 했을 가능성이 크다. 그다음은 DB에 쓰고 이벤트를 내보내는 아웃박스, 단계마다 로컬 트랜잭션을 커밋하고 실패하면 보상하는 [사가](/posts/saga-pattern)다. 둘 다 같은 메시지가 두 번 올 수 있다는 전제라 받는 쪽은 [멱등성 키](/posts/idempotency-key)처럼 중복을 견뎌야 한다. 2PC가 맞는 자리도 있다. 한 팀이 운영하는 DB 두세 개 사이의 짧은 트랜잭션, 금융 원장처럼 잠깐의 불일치도 허용할 수 없는 곳, 그리고 앞에서 본 분산 SQL처럼 DB가 내부에서 합의 위에 2PC를 숨겨 주는 경우다.
+
+PostgreSQL 안에서 다른 서버의 테이블을 읽고 쓰는 `postgres_fdw`도 2PC를 쓰지 않는다. PostgreSQL 16 기준으로 원격 트랜잭션은 로컬 트랜잭션이 커밋될 때 차례로 커밋되고, 그 사이에 원격 서버가 죽으면 일부만 커밋될 수 있다.
+
+## 준비된 채 버려진 트랜잭션을 만났을 때
+
+운영 중에 아무도 안 건드리는 행에서 잠금 대기가 생기고, `pg_stat_activity`를 봐도 잠금을 쥔 세션이 없다면 먼저 `pg_prepared_xacts`를 본다. VACUUM이 `dead but not yet removable`을 계속 남기거나 `age(datfrozenxid)`가 계속 커질 때도 같다.
+
+```sql
+-- 1분 넘게 결정을 못 받은 준비 트랜잭션. 모니터링 쿼리로 걸어 두고 0이 아니면 알린다
+SELECT gid, database, owner, now() - prepared AS waiting, age(transaction) AS xid_age
+FROM pg_prepared_xacts
+WHERE prepared < now() - interval '1 minute'
+ORDER BY prepared;
+```
+
+찾았다면 순서가 있다. gid로 어느 트랜잭션 관리자의 것인지 알아내고, 그 관리자의 결정 기록이나 복구 기능을 먼저 쓴다. 관리자가 살아 있는데 결정을 못 보내고 있다면 그쪽 장애를 먼저 고친다. 관리자도 기록도 완전히 사라졌다면 다른 참여자들의 상태를 모두 확인해서 한 곳이라도 이미 커밋됐으면 커밋, 아무 곳도 커밋되지 않았으면 롤백으로 맞춘다.
+
+<Callout kind="warning" title="COMMIT PREPARED와 ROLLBACK PREPARED는 되돌릴 수 없다">
+손으로 끝내는 순간 그게 휴리스틱 결정이 된다. 다른 참여자와 반대로 하면 결제는 있고 주문은 없는 상태를 DB가 영구히 확정한다. 실행 전에 같은 gid를 모든 참여자 DB에서 `SELECT * FROM pg_prepared_xacts WHERE gid = '...'`로 조회하고, 이미 결정이 끝난 참여자의 데이터(주문 행이 있는지)를 확인한다. 끝낸 뒤에는 무엇을 왜 그렇게 했는지 기록하고, 반대로 끝났어야 했다는 게 밝혀지면 DB가 아니라 보상 작업(환불, 주문 재생성)으로 맞춘다.
+</Callout>
+
+흔한 실수도 몇 가지 있다. `max_prepared_transactions`만 켜 두고 감시 쿼리는 걸지 않아 버려진 트랜잭션이 몇 주씩 VACUUM을 막는다. 연결 풀러를 거치면서 `PREPARE TRANSACTION` 뒤의 `COMMIT PREPARED`를 다른 DB에 보내 `belongs to another database` 에러를 낸다. 코디네이터가 실패한 `PREPARE`의 응답 태그(`ROLLBACK`)를 성공으로 읽는다. 그리고 2PC 안에서 외부 API를 부른다. 준비 상태로 기다리는 동안 결제사가 타임아웃을 내면 그 호출은 되돌릴 방법이 없다.
+
+## 2PC가 남기는 것
+
+2PC는 커밋 지점을 코디네이터의 결정 기록 한 줄로 옮겨 여러 DB의 원자성을 지킨다. 그 대가로 참여자는 "예"라고 답한 순간부터 결정을 기다리며 잠금을 쥐고, 코디네이터가 죽으면 모두가 기다린다. 이 블로킹을 받아들일 수 있는 짧고 가까운 트랜잭션에는 여전히 쓸 만하고, 받아들일 수 없는 서비스 사이에서는 원자성을 조금 내려놓고 [사가](/posts/saga-pattern)로 간다. 코디네이터를 죽지 않게 만드는 쪽은 [리더 선출](/posts/leader-election)과 [Raft 합의](/posts/raft-consensus)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 2PC는 어떻게 원자성을 지키나요?
+
+커밋 전에 모든 참여자에게 커밋할 수 있는지 먼저 묻고, 전원이 예라고 하면 그때 커밋을 결정한다. 참여자는 예라고 답하기 전에 변경과 잠금을 디스크에 남겨 나중에 반드시 커밋할 수 있게 해 둔다. 코디네이터는 결정을 자기 디스크에 먼저 적고 알리므로, 그 기록이 전체의 커밋 지점이 된다.
+
+### 2PC가 블로킹 프로토콜이라는 건 무슨 뜻인가요?
+
+참여자가 예라고 답한 뒤 코디네이터가 죽으면, 참여자는 커밋도 롤백도 스스로 정할 수 없어서 코디네이터가 돌아올 때까지 기다려야 한다는 뜻이다. 다른 참여자가 아니오라고 했는지, 코디네이터가 이미 커밋을 결정했는지 모르기 때문이다. 그동안 잠금을 쥐고 있어서 상관없는 요청까지 막힌다. PostgreSQL에서는 이 트랜잭션이 재시작 뒤에도 남고 VACUUM도 붙잡는다.
+
+### 코디네이터가 재시작하면 in-doubt 트랜잭션을 어떻게 정리하나요?
+
+모든 참여자의 준비된 트랜잭션 목록을 읽고, 자기 결정 기록에 커밋이 있으면 커밋, 없으면 롤백한다. 커밋을 결정했다면 반드시 기록이 먼저 남았을 테니 기록이 없으면 롤백해도 안전하다. 이게 추정 롤백이다. 같은 DB에 다른 관리자의 트랜잭션이 있을 수 있어서 gid 접두어로 자기 것만 고른다.
+
+### PostgreSQL에서 준비된 트랜잭션이 오래 남으면 어떤 문제가 생기나요?
+
+잠금이 풀리지 않아 같은 행을 건드리는 요청이 대기하고, 잠금 주인 세션이 없어서 세션을 죽여 해결할 수도 없다. 그 xid가 VACUUM의 제거 기준선을 붙잡아 죽은 행이 쌓이고, 오래가면 트랜잭션 ID 고갈 위험까지 생긴다. 그래서 `pg_prepared_xacts`의 `prepared` 시각을 감시하고 몇 분 넘게 남으면 알림을 건다.
+
+### 3PC는 2PC의 블로킹을 해결하나요?
+
+장애가 확실히 감지되고 메시지 지연에 상한이 있다는 가정에서만 해결한다. 네트워크 분할이 생기면 양쪽이 서로 다른 결론을 내릴 수 있고 왕복도 하나 늘어서 실무에서는 거의 쓰지 않는다. 실제로 블로킹을 줄인 방법은 코디네이터와 참여자를 Paxos나 Raft 그룹으로 복제해 결정 기록이 한 노드에만 있지 않게 하는 것이다. Spanner와 CockroachDB가 이렇게 한다.
+
+### 마이크로서비스에서 2PC를 잘 쓰지 않는 이유는요?
+
+모든 참여자가 살아 있어야 해서 가용성이 곱으로 떨어지고, 가장 느린 참여자만큼 잠금이 이어지며, 외부 API나 많은 NoSQL처럼 준비 단계를 지원하지 않는 상대가 많기 때문이다. 서비스들이 한 트랜잭션 관리자의 결정에 묶여 독립 배포와 장애 격리라는 분리의 목적과도 부딪힌다. 대신 아웃박스와 사가로 결과적으로 맞추고, 받는 쪽을 멱등하게 만든다.
+
+### XA의 휴리스틱 결정이 위험한 이유는요?
+
+in-doubt 트랜잭션을 사람이 참여자 한 곳에서 직접 커밋하거나 롤백하는 것이라, 코디네이터의 실제 결정과 반대면 원자성이 깨진 채 확정되기 때문이다. 잠금은 풀리지만 데이터 불일치는 트랜잭션 관리자가 고쳐 주지 않는다. 손으로 정리해야 한다면 모든 참여자의 상태를 먼저 확인해 이미 커밋된 곳이 있는지 보고 그 방향으로 맞춘다.

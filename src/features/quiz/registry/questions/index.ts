@@ -3,6 +3,7 @@ import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { BASE64 } from "./base64";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
+import { BLOOM_FILTER } from "./bloom-filter";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
@@ -14,6 +15,7 @@ import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
+import { COUNT_MIN_SKETCH } from "./count-min-sketch";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
@@ -38,13 +40,16 @@ import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
+import { DISTRIBUTED_TRANSACTIONS_2PC } from "./distributed-transactions-2pc";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
+import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
+import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
@@ -77,7 +82,9 @@ import { HTTP_STATUS_CODES } from "./http-status-codes";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
 import { HYDRATION } from "./hydration";
+import { HYPERLOGLOG } from "./hyperloglog";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
+import { IDS_IPS } from "./ids-ips";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
@@ -101,16 +108,24 @@ import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { K8S_PV_PVC } from "./k8s-pv-pvc";
 import { K8S_SECRET } from "./k8s-secret";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
+import { KAFKA_BASICS } from "./kafka-basics";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
 import { LATENCY_BANDWIDTH_THROUGHPUT } from "./latency-bandwidth-throughput";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
+import { LEADER_ELECTION } from "./leader-election";
+import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
+import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
+import { LINUX_PROCESSES_SIGNALS } from "./linux-processes-signals";
+import { LINUX_SYSTEMD_SYSTEMCTL } from "./linux-systemd-systemctl";
 import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
 import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
+import { LOSSY_COUNTING } from "./lossy-counting";
+import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
@@ -130,12 +145,15 @@ import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
 import { PATTERN_BUILDER } from "./pattern-builder";
+import { PATTERN_CHAIN_OF_RESPONSIBILITY } from "./pattern-chain-of-responsibility";
+import { PATTERN_COMMAND } from "./pattern-command";
 import { PATTERN_COMPOSITE } from "./pattern-composite";
 import { PATTERN_DECORATOR } from "./pattern-decorator";
 import { PATTERN_FACADE } from "./pattern-facade";
 import { PATTERN_FACTORY_METHOD } from "./pattern-factory-method";
 import { PATTERN_FLYWEIGHT } from "./pattern-flyweight";
 import { PATTERN_PROTOTYPE } from "./pattern-prototype";
+import { PATTERN_PROXY } from "./pattern-proxy";
 import { PATTERN_SINGLETON } from "./pattern-singleton";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
@@ -153,6 +171,7 @@ import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
+import { RABBITMQ_BASICS } from "./rabbitmq-basics";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
 import { REACT_RERENDER } from "./react-rerender";
@@ -170,8 +189,11 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
+import { SAGA_PATTERN } from "./saga-pattern";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
+import { SERVICE_DISCOVERY } from "./service-discovery";
+import { SERVICE_MESH } from "./service-mesh";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
@@ -194,6 +216,8 @@ import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
+import { TERRAFORM_BASICS } from "./terraform-basics";
+import { TERRAFORM_MODULES_TFVARS } from "./terraform-modules-tfvars";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
@@ -206,6 +230,7 @@ import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privateli
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
+import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
@@ -214,6 +239,7 @@ export const QUESTION_SETS = [
   BASE64,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
+  BLOOM_FILTER,
   BROWSER_FETCH,
   CACHING_STRATEGIES,
   CDN_EDGE_ANYCAST,
@@ -225,6 +251,7 @@ export const QUESTION_SETS = [
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
+  COUNT_MIN_SKETCH,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
@@ -249,13 +276,16 @@ export const QUESTION_SETS = [
   DEAD_LETTER_QUEUE,
   DESIGN_PATTERNS_OVERVIEW,
   DISTRIBUTED_LOCK,
+  DISTRIBUTED_TRANSACTIONS_2PC,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
   DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
+  EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
+  EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
   EXPONENTIAL_BACKOFF_JITTER,
   FRONTEND_BROWSER_CACHE,
@@ -288,7 +318,9 @@ export const QUESTION_SETS = [
   HTTP_VERSIONS,
   HTTPS_TLS,
   HYDRATION,
+  HYPERLOGLOG,
   IDEMPOTENCY_KEY,
+  IDS_IPS,
   IPTABLES_BASICS,
   IPTABLES_NAT,
   IPV6_BASICS,
@@ -312,16 +344,24 @@ export const QUESTION_SETS = [
   K8S_PV_PVC,
   K8S_SECRET,
   K8S_SERVICE_TYPES,
+  KAFKA_BASICS,
   KUBERNETES_INGRESS,
   LATENCY_BANDWIDTH_THROUGHPUT,
   LAYER_IP_ADDRESSING,
   LAYER_IP_ROUTING_ICMP,
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
+  LEADER_ELECTION,
+  LINUX_FILES_PERMISSIONS,
+  LINUX_GREP_AWK_SED,
+  LINUX_PROCESSES_SIGNALS,
+  LINUX_SYSTEMD_SYSTEMCTL,
   LOAD_BALANCER_BASICS,
   LOAD_BALANCING_ALGORITHMS,
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
+  LOSSY_COUNTING,
+  MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
   MICRO_FRONTENDS,
   MICROSERVICES,
@@ -341,12 +381,15 @@ export const QUESTION_SETS = [
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
   PATTERN_BUILDER,
+  PATTERN_CHAIN_OF_RESPONSIBILITY,
+  PATTERN_COMMAND,
   PATTERN_COMPOSITE,
   PATTERN_DECORATOR,
   PATTERN_FACADE,
   PATTERN_FACTORY_METHOD,
   PATTERN_FLYWEIGHT,
   PATTERN_PROTOTYPE,
+  PATTERN_PROXY,
   PATTERN_SINGLETON,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
@@ -364,6 +407,7 @@ export const QUESTION_SETS = [
   PROXY_REVERSE_PROXY,
   PUB_SUB,
   PYTHAGOREAN_THEOREM,
+  RABBITMQ_BASICS,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
   REACT_RERENDER,
@@ -381,8 +425,11 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   RETRIES,
+  SAGA_PATTERN,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,
+  SERVICE_DISCOVERY,
+  SERVICE_MESH,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
   SQL_INSERT_UPDATE_DELETE,
@@ -405,6 +452,8 @@ export const QUESTION_SETS = [
   STREAMING_SSR_SUSPENSE,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
+  TERRAFORM_BASICS,
+  TERRAFORM_MODULES_TFVARS,
   TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
@@ -417,4 +466,5 @@ export const QUESTION_SETS = [
   VPC_SUBNETS_ROUTE_TABLES,
   VPN_IPSEC_WIREGUARD,
   WHAT_HAPPENS_GOOGLE_COM,
+  ZERO_TRUST_ARCHITECTURE,
 ];

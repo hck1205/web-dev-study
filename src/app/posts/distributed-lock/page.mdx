@@ -289,7 +289,7 @@ Error: session expired
 
 etcd도 멈춘 쪽의 임대가 끝나자 다른 쪽에 락을 넘겼다. 합의 시스템이라도 임대 기반 락은 멈춤을 막지 못한다. 다른 점은 두 가지다. 깨어난 쪽이 세션 만료를 알 수 있고, 무엇보다 생성 번호라는 믿을 만한 펜싱 토큰이 있다. 저장소가 이 번호를 검사하면 깨어난 쪽의 쓰기는 거절된다.
 
-ZooKeeper도 모양이 거의 같다. 임시 순차 노드(ephemeral sequential znode)를 만들고, 번호가 가장 작으면 주인, 아니면 바로 앞 번호의 노드를 지켜본다. 세션이 끊기면 임시 노드가 지워져 락이 풀린다. Apache Curator의 `InterProcessMutex`가 이 레시피를 구현한다. 펜싱 토큰으로는 노드의 생성 트랜잭션 ID(`czxid`)를 쓴다. Kubernetes의 컨트롤러 리더 선출은 `coordination.k8s.io`의 `Lease` 객체로 같은 일을 하고, 그 저장소가 etcd다.
+ZooKeeper도 모양이 거의 같다. 임시 순차 노드(ephemeral sequential znode)를 만들고, 번호가 가장 작으면 주인, 아니면 바로 앞 번호의 노드를 지켜본다. 세션이 끊기면 임시 노드가 지워져 락이 풀린다. Apache Curator의 `InterProcessMutex`가 이 레시피를 구현한다. 펜싱 토큰으로는 노드의 생성 트랜잭션 ID(`czxid`)를 쓴다. Kubernetes의 컨트롤러 리더 선출은 `coordination.k8s.io`의 `Lease` 객체로 같은 일을 하고, 그 저장소가 etcd다. 락을 오래 쥐는 리더 선출은 [리더 선출](/posts/leader-election)에서 따로 다룬다.
 
 대가는 운영이다. 합의 시스템은 최소 3대를 따로 운영해야 하고, 쓰기마다 과반의 디스크 기록을 기다려서 Redis보다 느리다. 락을 초당 수만 번 잡는 용도로는 맞지 않는다.
 

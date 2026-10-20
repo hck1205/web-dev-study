@@ -1,0 +1,664 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-basics");
+
+콘솔에서 보안 그룹 규칙 하나를 급하게 열었다. 장애는 넘겼는데 석 달 뒤 감사에서 "이 규칙은 누가 왜 열었나"라는 질문이 온다. 아무도 모른다. 같은 주에 스테이징 환경을 운영과 똑같이 하나 더 만들어 달라는 요청도 왔다. 콘솔 화면을 수십 장 넘기며 운영 설정을 옮겨 적다가 서브넷 하나를 빠뜨린다.
+
+인프라를 코드로 적어 두면 두 문제가 같이 풀린다. 변경은 커밋으로 남고, 같은 코드를 다른 값으로 한 번 더 돌리면 환경이 하나 더 생긴다. 이 글은 그 도구로 가장 많이 쓰이는 Terraform의 기본기를 다룬다. 프로바이더와 리소스, plan과 apply가 무엇을 비교하는지, 그 비교의 기준이 되는 state 파일, 그리고 여러 사람이 함께 쓸 때 필요한 원격 백엔드와 잠금까지 간다. 모듈로 나누고 환경마다 값을 바꾸는 법은 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서, VPC와 서브넷을 실제로 짜는 법은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서 이어진다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.6으로 했다. 출력은 모두 직접 돌린 결과다. 프로바이더는 인터넷 레지스트리 대신 HashiCorp 배포 사이트에서 받은 파일을 로컬 미러로 깔았기 때문에 설치 줄에 `(signed by HashiCorp)` 대신 `(unauthenticated)`가 찍힌다. AWS 쪽은 실제 계정 대신 S3와 DynamoDB를 흉내 내는 모의 서버(moto)에 붙였다. Terraform이 찍는 메시지는 진짜이고, 응답 안의 요청 ID 같은 값만 모의 서버가 만든 것이다.
+
+## 콘솔 대신 코드로 적는 이유
+
+Terraform은 선언형이다. "서브넷을 만들어라"라고 순서를 적는 대신 "서브넷이 이렇게 있어야 한다"는 최종 모습을 적는다. 지금 모습과 적힌 모습의 차이를 계산해서 무엇을 만들고 고치고 지울지는 Terraform이 정한다. 셸 스크립트로 `aws ec2 create-subnet`을 부르는 방식은 두 번 돌리면 서브넷이 두 개 생기거나 에러가 난다. 선언형 도구는 두 번 돌려도 이미 같으면 아무것도 하지 않는다.
+
+비슷한 도구와 견주면 고를 기준이 보인다.
+
+- CloudFormation, ARM, Deployment Manager는 클라우드 회사가 만든 도구다. state를 클라우드가 대신 들고 있어 백엔드 걱정이 없지만 그 클라우드에서만 쓴다.
+- Terraform은 프로바이더만 바꾸면 AWS, GCP, Cloudflare, GitHub, Datadog까지 같은 문법으로 다룬다. 대신 state를 내가 관리해야 한다. 이 글의 절반이 그 이야기다.
+- Pulumi와 AWS CDK는 TypeScript나 Python 같은 일반 언어로 적는다. 추상화가 자유로운 대신 리뷰에서 "그래서 뭐가 생기나"가 덜 보인다.
+- Ansible은 이미 있는 서버 안을 설정하는 데 강하다. 서버를 만드는 일은 Terraform, 서버 안의 패키지와 설정은 Ansible로 나누는 팀이 많다([Ansible로 네트워크 자동화](/posts/ansible-network-automation)).
+
+2023년 8월 HashiCorp가 Terraform 1.6부터 라이선스를 BSL로 바꾸자 오픈소스 포크인 OpenTofu가 나왔다. 문법과 state 형식은 거의 같아서 이 글 내용은 OpenTofu(`tofu` 명령)에도 대부분 그대로 통한다.
+
+설치는 HashiCorp의 apt 저장소를 붙여서 한다.
+
+```bash
+# HashiCorp 서명 키를 받아 키링으로 저장한다
+wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+# 저장소를 등록한다 (noble = 24.04, jammy = 22.04)
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+# 설치하고 버전을 본다
+sudo apt update && sudo apt install terraform
+terraform version
+```
+
+## 프로바이더와 리소스
+
+Terraform 본체는 클라우드 API를 하나도 모른다. AWS를 다루는 코드는 `hashicorp/aws` 프로바이더라는 별도 실행 파일에 있고, 본체는 그 프로바이더에게 "이 리소스를 만들어라, 지금 상태를 읽어라"라고 부탁만 한다. `terraform init`이 하는 일의 대부분이 이 프로바이더를 받아 오는 것이다.
+
+클라우드 계정 없이 따라 할 수 있게 `random`과 `local` 프로바이더로 시작한다. 하나는 임의의 이름을 만들고, 하나는 로컬 파일을 만든다. 클라우드 리소스와 똑같이 state에 기록되고 plan에 나온다.
+
+```hcl
+terraform {
+  required_version = ">= 1.10"
+  required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.7"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+  }
+}
+
+resource "random_pet" "suffix" {
+  length = 2
+}
+
+resource "local_file" "app_conf" {
+  filename        = "${path.module}/out/app.conf"
+  content         = "bucket = \"logs-${random_pet.suffix.id}\"\n"
+  file_permission = "0644"
+}
+
+output "bucket_name" {
+  value = "logs-${random_pet.suffix.id}"
+}
+```
+
+`resource "random_pet" "suffix"`에서 앞은 리소스 종류, 뒤는 이 코드 안에서 부르는 이름이다. 둘을 이어 붙인 `random_pet.suffix`가 주소가 되고, state도 plan도 이 주소로 리소스를 가리킨다. `local_file`의 content가 `random_pet.suffix.id`를 참조하므로 Terraform은 의존 그래프를 그려 이름을 먼저 만들고 파일을 나중에 만든다. 순서를 적지 않아도 참조가 순서를 정한다.
+
+```bash
+# 프로바이더를 받고 .terraform 디렉터리와 잠금 파일을 만든다
+terraform init
+```
+
+```text
+Initializing the backend...
+
+Initializing provider plugins...
+- Finding hashicorp/random versions matching "~> 3.7"...
+- Finding hashicorp/local versions matching "~> 2.5"...
+- Installing hashicorp/random v3.9.1...
+- Installed hashicorp/random v3.9.1 (unauthenticated)
+- Installing hashicorp/local v2.9.1...
+- Installed hashicorp/local v2.9.1 (unauthenticated)
+
+Terraform has created a lock file .terraform.lock.hcl to record the provider
+selections it made above. Include this file in your version control repository
+```
+
+`~> 3.7`이라는 범위 안에서 3.9.1을 골랐고, 그 선택을 `.terraform.lock.hcl`에 적었다. 이 파일은 커밋한다. 버전 고정과 잠금 파일은 [모듈과 tfvars](/posts/terraform-modules-tfvars) 글에서 자세히 본다.
+
+## plan은 세 가지를 맞대 본다
+
+plan을 이해하려면 Terraform이 세 가지를 들고 있다는 것부터 알아야 한다. 내가 적은 코드, 지난번에 만든 것을 기억해 둔 state, 그리고 클라우드에 실제로 있는 것. 아래 그림을 넘겨 보면 plan과 apply가 이 셋 사이를 어떻게 오가는지 보인다.
+
+<SequenceDiagram
+  caption="plan은 state와 실제를 맞춘 뒤 코드와 비교하고, apply는 바꾼 결과를 state에 적는다"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "tf", label: "Terraform" },
+    { id: "st", label: "state" },
+    { id: "pv", label: "프로바이더" },
+    { id: "api", label: "클라우드 API" },
+  ]}
+  steps={[
+    { from: "me", to: "tf", label: "plan", title: "코드를 읽는다", detail: "모든 .tf 파일을 읽어 리소스와 참조로 의존 그래프를 그린다." },
+    { from: "tf", to: "st", label: "읽기", title: "기억을 꺼낸다", detail: "state에 적힌 리소스 목록과 지난번 속성 값을 읽는다. 원격 백엔드라면 이때 잠금도 건다." },
+    { from: "pv", to: "api", label: "Read", title: "실제를 다시 본다 (refresh)", detail: "state에 있는 리소스마다 프로바이더가 API로 지금 모습을 읽는다. 누가 콘솔에서 바꿨다면 여기서 드러난다.", payload: "random_pet.suffix: Refreshing state... [id=leading-magpie]" },
+    { from: "tf", to: "tf", label: "diff", title: "코드와 비교한다", detail: "새로 읽은 실제 모습과 코드를 속성 단위로 비교해 만들기, 고치기, 갈아 끼우기, 지우기를 정한다." },
+    { from: "tf", to: "me", label: "계획", title: "계획을 보여 준다", detail: "여기까지는 아무것도 바꾸지 않았다. -out으로 저장하면 apply가 이 계획을 그대로 실행한다." },
+    { from: "pv", to: "api", label: "Create", title: "apply가 실행한다", detail: "의존 순서대로 프로바이더가 API를 부른다. 서로 기다릴 필요가 없는 리소스는 기본 10개까지 동시에 만든다." },
+    { from: "tf", to: "st", label: "쓰기", title: "결과를 기억한다", detail: "새 ID와 속성을 state에 적고 serial을 올린다. 다음 plan은 이 기록에서 출발한다.", payload: "\"serial\": 3" },
+  ]}
+/>
+
+계획을 파일로 저장해 두고 그 파일을 apply하는 것이 기본 습관이다. 리뷰한 계획과 실행되는 계획이 같다는 보장이 생긴다.
+
+```bash
+# 계획을 파일로 저장한다
+terraform plan -out=tfplan
+# 저장한 계획을 그대로 실행한다 (다시 묻지 않는다)
+terraform apply tfplan
+```
+
+```text
+random_pet.suffix: Creating...
+random_pet.suffix: Creation complete after 0s [id=leading-magpie]
+local_file.app_conf: Creating...
+local_file.app_conf: Creation complete after 0s [id=3f66b68561b908e3a991a581fe656d777bbd6828]
+
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+bucket_name = "logs-leading-magpie"
+```
+
+이름이 먼저, 파일이 나중에 만들어졌다. 바로 다시 plan을 돌리면 `No changes. Your infrastructure matches the configuration.`이 나온다. 선언형 도구가 지키는 약속이 이 한 줄이다. CI에서 매일 plan을 돌려 이 문장이 안 나오면 누군가 코드 밖에서 무언가를 바꿨다는 신호로 쓴다.
+
+## 기호 하나가 다운타임을 말한다
+
+plan 출력에서 가장 먼저 볼 곳은 리소스 앞의 기호다. `+`는 만들기, `~`는 그 자리에서 고치기, `-`는 지우기, `-/+`는 지우고 다시 만들기다. 속성에 따라 그 자리에서 바꿀 수 없는 것이 있어서, 그런 속성이 바뀌면 리소스를 갈아 끼운다. `random_pet`의 length를 2에서 3으로 바꿔 봤다.
+
+```bash
+# length = 2 를 3 으로 바꾼 뒤
+terraform plan
+```
+
+```text
+  # local_file.app_conf must be replaced
+-/+ resource "local_file" "app_conf" {
+      ~ content              = <<-EOT
+            bucket = "logs-leading-magpie"
+        EOT -> (known after apply) # forces replacement
+      ~ id                   = "3f66b68561b908e3a991a581fe656d777bbd6828" -> (known after apply)
+        # (3 unchanged attributes hidden)
+    }
+
+  # random_pet.suffix must be replaced
+-/+ resource "random_pet" "suffix" {
+      ~ id        = "leading-magpie" -> (known after apply)
+      ~ length    = 2 -> 3 # forces replacement
+        # (1 unchanged attribute hidden)
+    }
+
+Plan: 2 to add, 0 to change, 2 to destroy.
+```
+
+(머리말과 해시 속성 몇 줄은 줄였다.) 바꾼 것은 이름 하나인데 파일까지 갈아 끼워진다. 이름이 바뀌면 파일 내용이 바뀌고, 파일의 content는 갈아 끼워야 하는 속성이기 때문이다. 실제 클라우드에서 이 연쇄는 무섭다. 서브넷의 `cidr_block`이나 RDS의 `identifier`처럼 갈아 끼워야 하는 속성을 건드리면 그 위의 인스턴스, 그 인스턴스를 가리키는 레코드까지 줄줄이 `-/+`가 된다. 그래서 리뷰에서 `forces replacement`와 `Plan: ... to destroy`의 숫자를 가장 먼저 본다.
+
+기본 순서는 지우고 나서 만들기다. 이름이 겹칠 수 없는 리소스는 이게 맞지만, 그 사이에는 리소스가 없다. 새 것을 먼저 만들고 옛 것을 지우게 하려면 `lifecycle`에 적는다. 절대 지워지면 안 되는 리소스에는 지우는 계획 자체를 에러로 만드는 장치도 있다.
+
+```hcl
+resource "aws_db_instance" "main" {
+  # ...
+  lifecycle {
+    create_before_destroy = false # true면 새 것을 먼저 만들고 옛 것을 지운다
+    prevent_destroy       = true  # 이 리소스를 지우는 plan은 에러로 멈춘다
+  }
+}
+```
+
+plan이 기호를 고르는 규칙을 직접 짜 보면 머릿속에 오래 남는다. 코드에 있는지, state에 있는지, 실제로 있는지, 어떤 속성이 바뀌었는지를 받아서 다섯 가지 중 하나를 돌려준다.
+
+<CodePlayground
+  caption="plan은 리소스마다 무엇을 할지 어떻게 고르나"
+  functionName="planAction"
+  initialCode={`// r.inCode: 코드에 이 리소스가 있나
+// r.inState: state에 기록이 있나
+// r.exists: refresh 해 보니 실제로 있나
+// r.code, r.real: 속성 이름 → 값 (코드에 적은 값, 실제 값)
+// r.forceNew: 바뀌면 갈아 끼워야 하는 속성 이름 목록
+// "create" | "update" | "replace" | "delete" | "no-op" 중 하나를 돌려준다
+function planAction(r) {
+  return "no-op";
+}`}
+  solution={`function planAction(r) {
+  if (!r.inCode && !r.inState) return "no-op";
+  if (!r.inCode) return "delete";
+  if (!r.inState || !r.exists) return "create";
+  const changed = Object.keys(r.code).filter(
+    (k) => JSON.stringify(r.code[k]) !== JSON.stringify(r.real[k])
+  );
+  if (changed.length === 0) return "no-op";
+  if (changed.some((k) => r.forceNew.includes(k))) return "replace";
+  return "update";
+}`}
+  tests={[
+    { label: "처음 만드는 리소스", args: [{ inCode: true, inState: false, exists: false, code: { length: 2 }, real: {}, forceNew: ["length"] }], expected: "create" },
+    { label: "코드와 실제가 같다", args: [{ inCode: true, inState: true, exists: true, code: { length: 2 }, real: { length: 2 }, forceNew: ["length"] }], expected: "no-op" },
+    { label: "length 2 → 3", args: [{ inCode: true, inState: true, exists: true, code: { length: 3 }, real: { length: 2 }, forceNew: ["length"] }], expected: "replace" },
+    { label: "태그만 바뀜", args: [{ inCode: true, inState: true, exists: true, code: { tags: { Env: "dev" } }, real: { tags: {} }, forceNew: ["cidr_block"] }], expected: "update" },
+    { label: "누가 실제로 지웠다", args: [{ inCode: true, inState: true, exists: false, code: { content: "a" }, real: {}, forceNew: ["content"] }], expected: "create" },
+    { label: "코드에서 뺐다", args: [{ inCode: false, inState: true, exists: true, code: {}, real: { length: 2 }, forceNew: [] }], expected: "delete" },
+  ]}
+/>
+
+마지막 테스트를 눈여겨본다. 코드에서 블록을 지우면 Terraform은 "이제 필요 없다"로 읽고 실제 리소스를 지운다. 코드 정리를 하다가 운영 DB를 지우는 사고가 여기서 난다.
+
+## state 파일 안에 든 것
+
+apply가 끝나면 작업 디렉터리에 `terraform.tfstate`가 생긴다. 그냥 JSON이다.
+
+```bash
+# state 파일을 그대로 열어 본다 (일부)
+cat terraform.tfstate
+```
+
+```text
+{
+  "version": 4,
+  "terraform_version": "1.16.6",
+  "serial": 3,
+  "lineage": "1e3db3e3-5019-fee4-1967-d3356120e87f",
+  "outputs": {
+    "bucket_name": {
+      "value": "logs-leading-magpie",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "random_pet",
+      "name": "suffix",
+      "provider": "provider[\"registry.terraform.io/hashicorp/random\"]",
+      "instances": [
+```
+
+맨 위의 몇 칸이 state를 안전하게 다루는 데 쓰인다. 아래에서 하나씩 눌러 본다.
+
+<UrlAnatomy
+  caption="terraform.tfstate의 맨 윗부분"
+  base="terraform.tfstate"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "version", value: "4", title: "파일 형식 버전", description: "state JSON 구조의 버전이다. Terraform 0.12부터 4를 쓴다. Terraform 버전과는 다른 숫자다.", required: true },
+    { key: "terraform_version", value: "1.16.6", title: "마지막으로 쓴 Terraform", description: "이 state를 마지막으로 저장한 Terraform 버전이다. 새 버전으로 한 번 쓰면 옛 버전이 읽기를 거부할 수 있으니, 팀은 같은 버전을 쓰도록 required_version으로 묶는다." },
+    { key: "serial", value: "3", title: "저장할 때마다 오르는 번호", description: "state를 쓸 때마다 1씩 오른다. 원격 백엔드는 더 낮거나 같은 serial로 덮어쓰려는 시도를 막는다. 오래된 사본으로 최신 state를 덮는 사고를 이 숫자가 막는다.", required: true },
+    { key: "lineage", value: "1e3db3e3-…", title: "state의 혈통", description: "state를 처음 만들 때 정해지는 UUID다. 다른 프로젝트의 state를 실수로 밀어 넣으면 lineage가 달라서 거부된다.", required: true },
+    { key: "outputs", value: "{…}", title: "출력 값", description: "output 블록의 값이다. 다른 Terraform 프로젝트가 terraform_remote_state로 이 값을 읽어 간다. sensitive로 표시해도 파일 안에는 평문으로 있다." },
+    { key: "resources", value: "[…]", title: "리소스 목록과 모든 속성", description: "주소(type.name), 프로바이더, 실제 ID와 모든 속성 값, 의존 관계가 들어 있다. 프로바이더가 API로 읽어 온 값이 그대로 저장되므로 비밀번호와 키도 여기 있다.", required: true },
+  ]}
+/>
+
+state가 없으면 Terraform은 실제 리소스와 코드의 블록을 짝짓지 못한다. AWS에 `vpc-0a1b...`가 있어도 그것이 코드의 `aws_vpc.main`인지 알려 주는 곳은 state뿐이다. state를 잃어버린 채 apply하면 Terraform은 모든 것을 처음 만드는 줄 알고 똑같은 리소스를 하나 더 만들거나, 이름이 겹쳐서 에러를 낸다.
+
+## state를 git에 넣지 않는 이유
+
+처음 Terraform을 쓰는 팀이 가장 많이 하는 실수가 `terraform.tfstate`를 커밋하는 것이다. 이유가 셋 있다.
+
+첫째, 비밀이 평문으로 들어 있다. DB 비밀번호를 하나 만들어 봤다.
+
+```bash
+# 20자 비밀번호를 만드는 리소스를 추가하고 apply한 뒤
+terraform state show random_password.db
+grep -n '"result"' terraform.tfstate
+```
+
+```text
+# random_password.db:
+resource "random_password" "db" {
+    bcrypt_hash = (sensitive value)
+    id          = "none"
+    length      = 20
+    ...
+    result      = (sensitive value)
+    special     = false
+    upper       = true
+}
+73:            "result": "BUJ1hFOvzCbiO65wIMLd",
+```
+
+화면에는 `(sensitive value)`로 가려지지만 파일에는 그대로 있다. `aws_db_instance`의 password, `tls_private_key`의 개인 키, IAM 액세스 키의 secret도 마찬가지다. 한 번 커밋하면 지워도 히스토리에 남는다([git에 올린 비밀 지우기](/posts/git-large-files-secrets)). 1.10부터는 state에 저장되지 않는 ephemeral 리소스가, 1.11부터는 값을 state에 남기지 않는 write-only 인자가 생겼지만, 프로바이더가 지원하는 리소스에만 쓸 수 있다. 결국 state 저장소 자체를 비밀처럼 다뤄야 한다.
+
+둘째, 잠금이 없다. 두 사람이 각자 브랜치에서 apply하면 state 두 벌이 갈라지고, 머지할 때 JSON 충돌을 손으로 풀게 된다. 셋째, apply할 때마다 커밋을 잊지 않아야 한다. 한 번 잊으면 다음 사람은 오래된 state로 plan을 본다.
+
+그래서 저장소에는 이것들을 올리지 않는다.
+
+```bash
+# state와 백업, 프로바이더 디렉터리, 저장한 plan을 .gitignore에 넣는다
+printf '%s\n' '.terraform/' '*.tfstate' '*.tfstate.*' 'tfplan' 'crash.log' >> .gitignore
+```
+
+`.terraform.lock.hcl`은 넣는다. 저장한 plan 파일도 넣지 않는다. 바뀔 값이 평문으로 들어 있다.
+
+## 콘솔에서 고친 것은 drift가 된다
+
+코드와 실제가 어긋난 상태를 drift라고 한다. 장애 대응 중 콘솔에서 보안 그룹을 연 경우가 대표적이다. 실습에서는 Terraform이 만든 파일을 손으로 고쳤다.
+
+```bash
+# Terraform이 만든 파일을 손으로 바꾼다
+echo 'bucket = "logs-hand-edited"' > out/app.conf
+# 무엇이 바뀌었는지만 보고 고치지는 않는다
+terraform plan -refresh-only
+```
+
+```text
+Note: Objects have changed outside of Terraform
+
+Terraform detected the following changes made outside of Terraform since the
+last "terraform apply" which may have affected this plan:
+
+  # local_file.app_conf has been deleted
+  - resource "local_file" "app_conf" {
+      - content              = <<-EOT
+            bucket = "logs-leading-magpie"
+        EOT -> null
+      ...
+    }
+
+This is a refresh-only plan, so Terraform will not take any actions to undo
+these. If you were expecting these changes then you can apply this plan to
+record the updated values in the Terraform state without changing any remote
+objects.
+```
+
+`local_file`은 내용이 다르면 "내가 만든 파일은 사라졌다"고 판단한다. 일반 `terraform plan`을 돌리면 같은 차이를 보고 파일을 다시 만들겠다고 한다(`Plan: 1 to add`). drift를 만났을 때 고를 길은 둘이다.
+
+- 콘솔에서 바꾼 것이 실수였다: 그냥 `terraform apply`로 코드대로 되돌린다.
+- 콘솔에서 바꾼 것이 맞았다: 같은 변경을 코드에 옮겨 적고 plan이 `No changes`가 될 때까지 맞춘다. `-refresh-only`를 apply하면 state만 실제에 맞추는데, 코드는 그대로라 다음 plan이 다시 되돌리려 한다. 코드까지 고쳐야 끝난다.
+
+아래 그림은 운영에서 drift가 생기고 드러나는 과정이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="콘솔에서 연 규칙은 다음 plan의 refresh에서 드러난다"
+  zones={[
+    { id: "team", label: "팀", x: 8, y: 8, w: 384, h: 92, tone: "neutral" },
+    { id: "aws", label: "AWS 계정", x: 8, y: 120, w: 384, h: 172, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ci", label: "CI runner", sub: "terraform", x: 80, y: 58, icon: "server" },
+    { id: "op", label: "on-call", sub: "AWS 콘솔", x: 320, y: 58, icon: "client" },
+    { id: "state", label: "state", sub: "S3 tfstate", x: 80, y: 180, icon: "db" },
+    { id: "api", label: "EC2 API", sub: "ap-northeast-2", x: 200, y: 250, icon: "gateway" },
+    { id: "sg", label: "sg-web", sub: "443, +22", x: 320, y: 180, icon: "firewall" },
+  ]}
+  links={[
+    { from: "ci", to: "state" },
+    { from: "ci", to: "api" },
+    { from: "op", to: "api" },
+    { from: "api", to: "sg" },
+  ]}
+  steps={[
+    { path: ["ci", "api", "sg"], packet: "apply", title: "코드대로 만든다", detail: "CI가 apply로 443만 연 보안 그룹을 만들고 그 결과를 state에 적는다.", payload: "ingress 443 from 0.0.0.0/0" },
+    { path: ["op", "api", "sg"], packet: "+22", highlight: ["op"], title: "콘솔에서 규칙을 더한다", detail: "장애 중 누군가 콘솔에서 22번을 열었다. 코드도 state도 이 사실을 모른다." },
+    { path: ["ci", "state"], packet: "read", title: "다음 plan이 state를 읽는다", detail: "state에는 443 규칙 하나만 적혀 있다." },
+    { path: ["ci", "api", "sg"], packet: "refresh", highlight: ["sg"], title: "refresh가 실제를 다시 읽는다", detail: "API로 읽어 보니 22번이 더 있다. 코드와 비교하면 지워야 할 규칙이다.", payload: "~ ingress: - 22/tcp from 0.0.0.0/0" },
+    { path: ["ci", "api", "sg"], packet: "apply", title: "누가 이길지 사람이 정한다", detail: "그대로 apply하면 22번이 닫힌다. 필요한 규칙이었다면 코드에 옮겨 적고 리뷰를 받는다." },
+  ]}
+/>
+
+drift는 다음 apply가 있을 때만 드러난다는 점이 위험하다. 몇 달 손대지 않던 프로젝트에서 한 줄 바꾸려고 plan을 돌렸더니 기억에 없는 변경이 스무 개 나오는 일이 흔하다. 매일 밤 `terraform plan -detailed-exitcode`를 돌려서 종료 코드 2(차이 있음)가 나오면 알림을 보내는 식으로 일찍 잡는다.
+
+## state를 손보는 명령
+
+state를 직접 열어 고치는 일은 하지 않는다. 필요한 조작은 모두 명령으로 있다. 보는 명령은 `terraform state list`(주소 목록)와 `terraform state show 주소`(저장된 속성), 원격 state를 통째로 받아 보는 `terraform state pull`이다.
+
+가장 자주 하는 조작은 이름 바꾸기다. 코드에서 `random_pet.suffix`를 `random_pet.bucket`으로만 바꾸면 Terraform은 옛 이름은 지우고 새 이름은 만들겠다고 한다. 주소가 곧 정체성이기 때문이다.
+
+```text
+  # local_file.app_conf must be replaced
+  # random_pet.bucket will be created
+  # random_pet.suffix will be destroyed
+  # (because random_pet.suffix is not in configuration)
+Plan: 2 to add, 0 to change, 2 to destroy.
+```
+
+예전에는 `terraform state mv random_pet.suffix random_pet.bucket`으로 state 안의 주소를 옮겼다. 지금(1.1 이상)은 코드에 `moved` 블록을 적는 쪽을 권한다. 리뷰를 거치고, 같은 코드를 쓰는 모든 환경에서 똑같이 옮겨진다.
+
+```hcl
+moved {
+  from = random_pet.suffix
+  to   = random_pet.bucket
+}
+```
+
+```text
+  # random_pet.suffix has moved to random_pet.bucket
+    resource "random_pet" "bucket" {
+        id        = "leading-magpie"
+        # (2 unchanged attributes hidden)
+    }
+
+Plan: 0 to add, 0 to change, 0 to destroy.
+```
+
+반대 방향도 있다. 코드에서는 빼고 싶지만 실제 리소스는 지우면 안 될 때(다른 프로젝트로 넘길 때) `terraform state rm`을 쓰거나, 1.7 이상에서는 `removed` 블록에 `lifecycle { destroy = false }`를 적는다. state에서 기록만 지우고 실제 리소스는 남는다.
+
+이미 콘솔로 만들어 둔 리소스를 Terraform으로 가져올 때는 `import`다. 1.5부터는 코드에 `import` 블록을 적고 plan으로 미리 본다. 코드를 직접 쓰기 귀찮으면 `-generate-config-out`이 초안을 만들어 준다.
+
+```hcl
+import {
+  to = aws_s3_bucket.logs
+  id = "acme-app-logs"
+}
+```
+
+```bash
+# 콘솔에서 만든 버킷을 가져오는 계획을 세우고, 리소스 코드 초안을 파일로 만든다
+terraform plan -generate-config-out=generated.tf
+```
+
+```text
+aws_s3_bucket.logs: Preparing import... [id=acme-app-logs]
+aws_s3_bucket.logs: Refreshing state... [id=acme-app-logs]
+
+  # aws_s3_bucket.logs will be imported
+    resource "aws_s3_bucket" "logs" {
+        arn                         = "arn:aws:s3:::acme-app-logs"
+        bucket                      = "acme-app-logs"
+        bucket_domain_name          = "acme-app-logs.s3.amazonaws.com"
+        bucket_region               = "ap-northeast-2"
+        force_destroy               = false
+        ...
+    }
+
+Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.
+```
+
+`1 to import`이고 바뀌는 것은 없다. 생성된 `generated.tf`는 읽어 보고 다듬어서 쓴다. import 뒤 첫 plan이 `No changes`가 될 때까지 코드를 맞추는 것이 마무리다.
+
+## 원격 백엔드로 옮기기
+
+혼자 쓸 때는 로컬 파일로 충분하지만 팀이 쓰려면 state를 한곳에 두고 잠가야 한다. AWS에서는 S3 버킷이 가장 흔한 자리다. 버킷은 Terraform 바깥에서(또는 별도의 작은 Terraform 프로젝트로) 먼저 만들고, 버전 관리를 켠다. 실수로 state를 덮어써도 이전 버전으로 돌아갈 수 있다.
+
+```bash
+# state 전용 버킷을 만든다
+aws s3api create-bucket --bucket acme-tfstate-prod \
+  --create-bucket-configuration LocationConstraint=ap-northeast-2
+# 버전 관리를 켠다 (덮어쓰기 사고 복구용)
+aws s3api put-bucket-versioning --bucket acme-tfstate-prod \
+  --versioning-configuration Status=Enabled
+```
+
+코드에는 백엔드 블록을 넣는다.
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket       = "acme-tfstate-prod"
+    key          = "hello/terraform.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true # 서버 측 암호화
+    use_lockfile = true # S3 객체로 잠근다 (1.10 이상)
+  }
+}
+```
+
+백엔드를 바꾼 뒤 init을 다시 돌리면 로컬 state를 옮길지 묻는다.
+
+```bash
+# 백엔드를 바꿨으니 다시 초기화하면서 state를 옮긴다
+terraform init -migrate-state
+```
+
+```text
+Initializing the backend...
+Do you want to copy existing state to the new backend?
+  Pre-existing state was found while migrating the previous "local" backend to the
+  newly configured "s3" backend. No existing state was found in the newly
+  configured "s3" backend. Do you want to copy this state to the new "s3"
+  backend? Enter "yes" to copy and "no" to start with an empty state.
+
+  Enter a value: yes
+
+Successfully configured the backend "s3"! Terraform will automatically
+use this backend unless the backend configuration changes.
+```
+
+옮긴 뒤 로컬의 `terraform.tfstate`는 빈 파일이 되고, 옮기기 전 내용은 `terraform.tfstate.backup`에 남는다. 이 백업에도 비밀이 들어 있으니 확인이 끝나면 지운다.
+
+잠금 방식은 버전에 따라 다르다. 오랫동안 S3 백엔드는 DynamoDB 테이블에 잠금 항목을 쓰는 방식(`dynamodb_table`)을 썼다. S3가 조건부 쓰기를 지원하면서 1.10에 S3 객체 하나로 잠그는 `use_lockfile`이 실험 기능으로 들어왔고, 1.11에서 정식이 되면서 DynamoDB 방식은 deprecated가 됐다. 지금 버전에서 `dynamodb_table`을 쓰면 init 때 이렇게 경고한다.
+
+```text
+The parameter "dynamodb_table" is deprecated. Use parameter "use_lockfile"
+instead.
+```
+
+옮길 때는 두 설정을 한동안 같이 켜 둔다. 둘 다 켜면 Terraform이 두 잠금을 모두 잡는다. 옛 버전 Terraform을 쓰는 사람이나 파이프라인이 남아 있는 동안에도 서로 막힌다. 모두 옮긴 뒤 `dynamodb_table`을 뺀다.
+
+GCS, Azure Blob 백엔드는 저장소 자체가 잠금을 지원하고, HCP Terraform(옛 Terraform Cloud)이나 Atlantis, Spacelift 같은 서비스는 state 저장과 잠금, plan 리뷰까지 맡는다.
+
+## 두 사람이 동시에 apply하면
+
+잠금이 없으면 두 apply가 같은 state를 읽고 각자 고친 뒤 나중에 쓴 쪽이 앞의 결과를 덮는다. 먼저 끝난 쪽이 만든 리소스는 실제로 있는데 state에서는 사라진다. 다음 plan은 그 리소스를 모르고 또 만든다. 잠금은 이 경쟁을 순서로 바꾼다([분산 락](/posts/distributed-lock)과 같은 문제다).
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="먼저 잠금 객체를 만든 쪽만 state를 쓴다"
+  zones={[
+    { id: "s3", label: "S3 acme-tfstate-prod", x: 140, y: 120, w: 252, h: 150, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "민지 apply", sub: "노트북", x: 70, y: 40, icon: "client" },
+    { id: "b", label: "CI plan", sub: "main 브랜치", x: 70, y: 200, icon: "server" },
+    { id: "lock", label: ".tflock", sub: "잠금 객체", x: 210, y: 170, icon: "lock" },
+    { id: "st", label: "tfstate", sub: "serial 7", x: 320, y: 230, icon: "db" },
+  ]}
+  links={[
+    { from: "a", to: "lock" },
+    { from: "b", to: "lock" },
+    { from: "lock", to: "st" },
+  ]}
+  steps={[
+    { path: ["a", "lock"], packet: "PUT", title: "잠금 객체를 만든다", detail: "apply는 시작하자마자 key 옆에 .tflock 객체를 조건부로 쓴다. 같은 이름의 객체가 없을 때만 성공한다.", payload: "PutObject hello/terraform.tfstate.tflock\nIf-None-Match: *" },
+    { path: ["a", "lock", "st"], packet: "read", title: "state를 읽고 일한다", detail: "잠금을 쥔 채 state를 읽고 refresh, diff, apply를 한다." },
+    { path: ["b", "lock"], packet: "PUT", blocked: true, title: "두 번째는 412로 막힌다", detail: "CI의 plan도 잠금 객체를 쓰려 하지만 이미 있다. S3가 412 PreconditionFailed를 돌려주고 Terraform은 잠금 정보와 함께 멈춘다.", payload: "StatusCode: 412 PreconditionFailed" },
+    { path: ["a", "lock", "st"], packet: "write", highlight: ["st"], title: "결과를 쓰고 잠금을 푼다", detail: "apply가 끝나면 새 state를 쓰고(serial 8) 잠금 객체를 지운다." },
+    { path: ["b", "lock", "st"], packet: "PUT", title: "이제 CI 차례다", detail: "-lock-timeout을 줬다면 기다렸다가 잠금을 얻고 최신 state로 plan을 시작한다." },
+  ]}
+/>
+
+실제로 한쪽에서 25초 걸리는 apply를 돌려 놓고 다른 터미널에서 plan을 쳤다.
+
+```bash
+# 다른 사람이 apply 중일 때 plan을 돌린다
+terraform plan
+```
+
+```text
+Error: Error acquiring the state lock
+
+Error message: operation error S3: PutObject, https response error
+StatusCode: 412, RequestID:
+2sSJQKqCVnBFvlt0bkNgzodZAk6jWfasvPdtQC8mbidH3nOjAD2g, HostID:
+9Gjjt1m+cjU4OPvX9O9/8RuvnG41MRb/18Oux2o5H5MY7ISNTlXN+Dz9IG62/ILVxhAGI0qyPfg=,
+api error PreconditionFailed: At least one of the pre-conditions you
+specified did not hold
+Lock Info:
+  ID:        b18c9c9e-d8e8-111d-de70-5ae4ecb140f7
+  Path:      acme-tfstate-prod/hello/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       root@vm
+  Version:   1.16.6
+  Created:   2026-10-20 14:21:52.724100049 +0000 UTC
+  Info:      
+
+
+Terraform acquires a state lock to protect the state from being written
+by multiple users at the same time. Please resolve the issue above and try
+again. For most commands, you can disable locking with the "-lock=false"
+flag, but this is not recommended.
+```
+
+`Lock Info`가 누가(`Who`), 무슨 작업으로(`Operation`), 언제부터(`Created`) 잡고 있는지 알려 준다. DynamoDB 방식이면 첫 줄이 `DynamoDB: PutItem ... ConditionalCheckFailedException: The conditional request failed`로 바뀌고 나머지는 같다. 잠금 객체(`hello/terraform.tfstate.tflock`)를 내려받아 열어 보면 같은 정보가 JSON 한 줄로 들어 있다.
+
+CI에서는 바로 실패하지 않고 기다리게 `-lock-timeout=5m` 같은 값을 준다. 그리고 같은 state를 건드리는 파이프라인은 동시에 하나만 돌게 동시 실행 그룹을 묶는다. 잠금은 마지막 방어선이지 줄 세우는 장치가 아니다.
+
+## force-unlock을 치기 전에
+
+잠금이 풀리지 않고 남는 경우가 있다. apply 중에 노트북을 닫았거나, CI 러너가 시간 초과로 죽었거나, 프로세스가 `kill -9`를 맞았을 때다. 정상 종료가 아니니 잠금 객체를 지울 기회가 없었다. 실습에서 apply를 6초 만에 죽였다.
+
+<AlgoTrace
+  caption="apply가 중간에 죽으면 잠금과 state가 어떻게 남나"
+  memoryLabel="S3에 남은 것"
+  cells={["잠금", "state 읽기", "옛 것 삭제", "새 것 생성", "state 쓰기", "잠금 해제"]}
+  steps={[
+    { pointer: 0, memory: ["tfstate s7", ".tflock"], caption: "잠금 객체를 만들고 시작한다." },
+    { pointer: 1, memory: ["tfstate s7", ".tflock"], caption: "state(serial 7)를 읽고 갈아 끼울 리소스를 정한다." },
+    { pointer: 2, found: [2], memory: ["tfstate s7", ".tflock"], caption: "옛 리소스를 지웠다. Terraform은 중간중간 state를 쓰지만 이 순간은 아직 반영 전이다." },
+    { pointer: 3, memory: ["tfstate s7", ".tflock"], caption: "새 리소스를 만드는 중에 kill -9를 맞았다. 이 아래 칸은 실행되지 않는다." },
+    { pointer: 5, memory: ["tfstate s7", ".tflock"], caption: "잠금 객체는 그대로 남고, state는 지운 리소스가 아직 있는 줄 안다. 다음 plan은 잠금에 막힌다." },
+  ]}
+/>
+
+이때 다음 명령은 아까와 같은 에러로 멈춘다. 잠금 ID를 들고 `force-unlock`을 하면 풀린다.
+
+```bash
+# 잠금 ID로 강제로 푼다 (확인을 묻는다)
+terraform force-unlock 9d931e7d-4fb4-bd2e-9be8-1aaa1977d0fd
+```
+
+```text
+Do you really want to force-unlock?
+  Terraform will remove the lock on the remote state.
+  This will allow local Terraform commands to modify this state, even though it
+  may still be in use. Only 'yes' will be accepted to confirm.
+
+  Enter a value: yes
+
+Terraform state has been successfully unlocked!
+```
+
+<Callout kind="warning" title="잠금 주인이 정말 죽었는지 먼저 본다">
+force-unlock은 잠금이 맞는지 확인하지 않고 지운다. 다른 사람의 apply가 아직 돌고 있는데 풀면 두 apply가 같은 state를 쓰고, 한쪽이 만든 리소스가 state에서 사라진다. Lock Info의 Who와 Created를 보고 그 사람이나 그 CI 작업에 직접 확인한 다음에 푼다. 잘못 풀어서 state가 꼬였다면 S3 버전 관리에서 직전 버전을 내려받아(`aws s3api list-object-versions`, `get-object --version-id`) 상태를 비교하고, 필요하면 `terraform state push`로 되돌린다. `-lock=false`로 잠금을 건너뛰는 것도 같은 위험이다.
+</Callout>
+
+잠금을 푼 뒤에는 바로 apply하지 말고 plan부터 본다. 실습에서도 state는 죽기 전 모습(serial 그대로)이라 지워진 리소스를 아직 있는 줄 알았고, plan이 그것을 다시 갈아 끼우겠다고 나왔다(`Plan: 1 to add, 0 to change, 1 to destroy`). 실제 클라우드라면 refresh가 "없어졌다"를 확인하고 다시 만든다. 반대로 만들기 도중 죽었다면 클라우드에는 있는데 state에는 없는 고아 리소스가 생길 수 있다. 이름이 겹쳐 `AlreadyExists` 에러가 나면 그 리소스를 import로 가져온다.
+
+## 현장에서 state 때문에 막히는 순간
+
+증상별로 먼저 볼 곳을 모았다.
+
+- `Error acquiring the state lock`: Lock Info의 Who와 Created부터 본다. 진행 중인 파이프라인이면 기다린다. 몇 시간 전 시각이고 주인이 죽었다면 그때 force-unlock이다.
+- plan에 기억에 없는 변경이 잔뜩 나온다: drift다. `-refresh-only`로 무엇이 바깥에서 바뀌었는지만 따로 보고, 하나씩 코드로 옮길지 되돌릴지 정한다.
+- `already exists`로 apply가 실패한다: 콘솔로 같은 이름을 만들었거나 이전 apply가 중간에 죽은 것이다. import로 가져온다.
+- 이름만 바꿨는데 `-/+`가 나온다: moved 블록을 빠뜨렸다.
+- 노트북에서는 `No changes`인데 CI에서는 변경이 나온다: 서로 다른 state를 보고 있다. 한쪽이 로컬 backend거나 다른 key다. `terraform state pull | head`로 lineage와 serial을 비교한다.
+- 갑자기 `Unsupported state file format`: 누군가 더 새 Terraform으로 state를 썼다. `required_version`으로 팀 버전을 묶는다.
+
+state 버킷의 권한도 운영 문제다. state를 읽을 수 있으면 그 안의 비밀번호를 읽을 수 있다. 개발자 역할은 plan만 되도록 읽기 권한만, 쓰기는 CI 역할에만 주고, 버킷을 KMS 키로 암호화해서 키 권한으로 한 번 더 묶는 구성이 흔하다. CI에서 plan과 apply를 나누는 흐름은 [EKS 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)에서 다룬다.
+
+## 기억은 state가, 판단은 plan이
+
+Terraform은 코드에 적힌 모습과 실제 모습의 차이만큼만 움직인다. 그 차이를 계산하려면 "코드의 이 블록이 실제의 저 리소스"라는 짝을 기억해야 하고, 그 기억이 state다. 그래서 state는 비밀처럼 보관하고(git 말고 암호화한 원격 저장소), 한 번에 한 사람만 쓰게 잠그고(use_lockfile), 사람이 손으로 고치지 않는다(moved, import, removed). plan을 읽을 때는 기호와 `forces replacement`, destroy 숫자부터 본다. 다음 글 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서는 이 코드를 VPC와 EKS 모듈로 나누고 환경마다 다른 값으로 돌린다.
+
+## 면접에서 나올 만한 질문
+
+### Terraform의 state는 왜 필요한가요?
+
+코드의 리소스 블록과 실제 클라우드 리소스를 짝지어 기억하기 위해서다. state가 있어야 plan이 "이 VPC는 이미 내가 만든 것"이라고 알고 차이만 계산한다. 속성 값을 저장해 두니 API 호출을 줄이고, 리소스 사이 의존 관계를 기억해서 지우는 순서도 정한다. state를 잃으면 같은 리소스를 또 만들려고 한다.
+
+### state 파일을 git에 커밋하면 왜 안 되나요?
+
+비밀번호와 키가 평문으로 들어 있고, 잠금이 없고, 커밋을 빠뜨리면 다른 사람이 오래된 state를 보기 때문이다. 화면에 sensitive로 가려지는 값도 파일에는 그대로 있다. 그래서 S3 같은 원격 백엔드에 암호화해서 두고, 버전 관리를 켜고, 접근 권한을 좁힌다. 잠금 파일(.terraform.lock.hcl)은 커밋한다.
+
+### plan에서 `-/+`가 나오면 무엇을 확인하나요?
+
+어느 속성에 `# forces replacement`가 붙었는지와 그 연쇄로 함께 교체되는 리소스를 본다. 갈아 끼우기는 기본으로 지우고 만들기 순서라 그 사이 다운타임이 생긴다. 이름이 겹치지 않는 리소스라면 `create_before_destroy`로 순서를 바꾸고, 지우면 안 되는 리소스에는 `prevent_destroy`를 둔다. 이름만 바꿨는데 교체가 나온다면 moved 블록이 빠진 것이다.
+
+### drift란 무엇이고 어떻게 다루나요?
+
+Terraform 밖에서 실제 리소스가 바뀌어 코드와 어긋난 상태다. plan의 refresh 단계에서 드러나고, `-refresh-only`로 바깥 변경만 따로 볼 수 있다. 실수였으면 apply로 코드대로 되돌리고, 맞는 변경이면 코드에 옮겨 적어 plan이 No changes가 되게 맞춘다. 정기적으로 `plan -detailed-exitcode`를 돌려 일찍 잡는다.
+
+### 원격 백엔드의 잠금은 어떻게 동작하나요? DynamoDB는 아직 필요한가요?
+
+apply나 plan이 시작할 때 잠금 항목을 조건부로 써서, 이미 있으면 실패하게 만드는 방식이다. S3 백엔드는 예전에 DynamoDB 테이블에 PutItem을 조건부로 했고, 1.10부터는 S3 조건부 쓰기로 `.tflock` 객체를 만드는 `use_lockfile`이 생겨 1.11에서 정식이 됐다. 지금은 DynamoDB 방식이 deprecated라 새로 만든다면 use_lockfile만 쓴다. 옮기는 동안에는 둘을 함께 켜 두면 두 잠금을 모두 잡는다.
+
+### 잠금이 풀리지 않을 때 force-unlock을 바로 써도 되나요?
+
+잠금 주인이 정말 끝났는지 확인한 뒤에만 쓴다. Lock Info의 Who, Operation, Created를 보고 해당 사람이나 CI 작업이 죽었는지 확인한다. 살아 있는 apply의 잠금을 풀면 두 apply가 state를 덮어써 리소스를 잃는다. 푼 뒤에는 plan으로 중간에 끊긴 작업의 흔적(남은 리소스, 고아 리소스)을 먼저 본다.
+
+### 이미 콘솔로 만든 리소스를 Terraform으로 관리하려면 어떻게 하나요?
+
+코드에 import 블록을 적고 plan으로 `1 to import`가 나오는지 본 뒤 apply한다. 1.5부터는 `-generate-config-out`으로 리소스 코드 초안을 받을 수 있다. 가져온 뒤 첫 plan이 No changes가 될 때까지 코드를 실제에 맞추는 것이 마무리다. `terraform import` 명령도 있지만 리뷰를 거치지 않고 state를 바로 바꾼다.

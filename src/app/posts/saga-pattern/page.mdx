@@ -1,0 +1,436 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("saga-pattern");
+
+배송이 안 되는 지역으로 들어온 주문이 재고 예약과 카드 결제까지 끝난 뒤에야 배송 단계에서 실패한다. 주문 서비스는 결제를 환불하고 재고를 돌려놓는 보상 작업을 시작한다. 그런데 환불 요청을 보내고 그 사실을 기록하기 직전에 주문 서비스가 재시작된다. 다시 뜬 서비스는 어디까지 했는지 모르니 환불을 처음부터 또 보낸다. 환불이 멱등하지 않다면 고객은 결제 금액의 두 배를 돌려받는다.
+
+여러 서비스에 걸친 작업을 2PC 없이 묶는 방법이 사가(saga)다. 단계마다 각 서비스의 로컬 트랜잭션을 그냥 커밋하고, 뒤에서 실패하면 앞에서 끝낸 단계를 반대 작업으로 상쇄한다. 개념은 짧지만 위 장면처럼 실제로 굴려 보면 질문이 많다. 어떤 순서로 단계를 놓아야 보상이 적은지, 보상 도중에 죽으면 어떻게 이어 가는지, 중간 상태를 다른 요청이 보면 어떻게 되는지, 상태를 바꾸고 다음 단계에 알리는 일을 어떻게 한 번에 하는지. 이 글은 PostgreSQL 16 DB 세 개를 서비스 셋으로 두고 Node 22로 짠 사가 오케스트레이터를 일부러 망가뜨려 가며 이 질문들을 따라간다.
+
+이 주제의 다른 글: 서비스를 쪼갤 때 사가가 왜 필요해지는지는 [모놀리스에서 마이크로서비스로](/posts/microservices)에서, 사가가 포기한 2PC가 어떻게 동작하고 왜 막히는지는 [분산 트랜잭션과 2단계 커밋](/posts/distributed-transactions-2pc)에서 다룬다.
+
+## 되돌리지 않고 반대로 한다
+
+2PC는 커밋하기 전에 모두의 동의를 받는다. 사가는 순서를 뒤집는다. 먼저 커밋하고, 문제가 생기면 나중에 갚는다. 1987년 가르시아-몰리나와 세일럼이 오래 걸리는 트랜잭션(long-lived transaction)을 쪼개려고 낸 개념이다. 긴 트랜잭션 하나를 T1, T2, …, Tn이라는 짧은 트랜잭션으로 나누고, 각각에 짝이 되는 보상 트랜잭션 C1, C2, …를 정해 둔다. Tk에서 실패하면 C(k-1), …, C1을 거꾸로 실행한다.
+
+보상은 롤백이 아니다. 롤백은 없던 일로 만드는 것이고, 보상은 일어난 일을 그대로 두고 그 효과를 상쇄하는 새 작업이다. 카드 승인은 환불로, 재고 차감은 재고 복구로, 쿠폰 사용은 쿠폰 재발급으로 갚는다. 기록은 둘 다 남는다. 그래서 몇 가지 성질이 필요해진다.
+
+보상은 실패하면 안 된다. 정확히는, 실패하더라도 언젠가 성공할 때까지 다시 시도할 수 있어야 한다. 보상이 영영 실패하면 사가는 반쯤 끝난 채로 남는다. 그리고 보상은 여러 번 실행돼도 한 번 실행한 것과 같아야 한다. 처음 장면처럼 다시 시작한 오케스트레이터가 같은 보상을 또 보내는 일은 반드시 생긴다.
+
+되돌릴 수 없는 일도 있다. 이미 보낸 이메일, 출고된 택배, 외부에 공개된 게시물은 반대 작업이 없다. 그런 단계는 보상할 필요가 없도록 사가의 맨 뒤로 보낸다.
+
+## 단계는 세 종류로 나뉜다
+
+크리스 리처드슨의 『Microservices Patterns』는 사가의 단계를 셋으로 나눈다. 보상 가능한(compensatable) 단계는 뒤에서 실패하면 되돌릴 수 있는 단계다. 피벗(pivot) 단계는 사가의 분기점이다. 이 단계가 성공하면 사가는 끝까지 가야 하고, 실패하면 앞을 보상한다. 재시도(retriable) 단계는 피벗 뒤에 오는 단계로, 실패하면 보상하지 않고 성공할 때까지 다시 시도한다. 그래서 재시도 단계는 영구적으로 실패할 일이 없어야 한다.
+
+<ConceptDiagram
+  caption="사가 단계의 순서: 되돌릴 수 있는 것 → 분기점 → 반드시 끝낼 것"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "c1", label: "주문 생성", sub: "보상: 취소", x: 80, y: 40, w: 130 },
+    { id: "c2", label: "재고 예약", sub: "보상: 복구", x: 80, y: 120, w: 130 },
+    { id: "p", label: "카드 결제", sub: "피벗", x: 200, y: 200, w: 130 },
+    { id: "r1", label: "배송 예약", sub: "재시도", x: 320, y: 120, w: 130 },
+    { id: "r2", label: "확인 메일", sub: "재시도", x: 320, y: 40, w: 130 },
+  ]}
+  edges={[
+    { from: "c1", to: "c2" },
+    { from: "c2", to: "p" },
+    { from: "p", to: "r1", label: "성공하면 끝까지" },
+    { from: "r1", to: "r2" },
+    { from: "p", to: "c2", label: "실패하면 보상", dashed: true },
+  ]}
+/>
+
+이 분류가 설계를 바꾼다. 실패할 가능성이 큰 검사(배송 가능 지역, 재고, 한도)는 피벗 앞에, 되돌리기 비싼 작업(외부 결제)은 피벗으로, 실패하면 안 되는 작업은 피벗 뒤에 둔다. 아래 실습은 일부러 이 원칙을 어겼다. 배송 가능 여부를 결제 뒤에서 검사하니 결제와 재고를 모두 보상해야 했다. 배송 지역 검사를 맨 앞으로 옮기면 같은 실패에 보상할 게 하나도 없다.
+
+실패한 단계의 위치를 받아 다음에 할 일을 정하는 함수를 짜 보자. 피벗 뒤의 실패는 다시 시도하고, 피벗까지의 실패는 앞의 보상 가능한 단계를 거꾸로 되돌린다.
+
+<CodePlayground
+  caption="실패한 단계에 따라 보상할까, 다시 시도할까"
+  functionName="nextMove"
+  initialCode={`function nextMove(steps, failedIndex) {
+  // steps: [{ name, kind: "compensatable" | "pivot" | "retriable" }]
+  // 돌려줄 값: { action: "retry", step } 또는 { action: "compensate", undo: [이름들, 되돌릴 순서대로] }
+  return { action: "compensate", undo: [] };
+}`}
+  solution={`function nextMove(steps, failedIndex) {
+  const pivot = steps.findIndex((s) => s.kind === "pivot");
+  if (pivot !== -1 && failedIndex > pivot) {
+    return { action: "retry", step: steps[failedIndex].name };
+  }
+  const undo = steps
+    .slice(0, failedIndex)
+    .filter((s) => s.kind === "compensatable")
+    .map((s) => s.name)
+    .reverse();
+  return { action: "compensate", undo };
+}`}
+  tests={[
+    { label: "재고 예약 실패", args: [[{ name: "createOrder", kind: "compensatable" }, { name: "reserveStock", kind: "compensatable" }, { name: "chargeCard", kind: "pivot" }, { name: "scheduleShipping", kind: "retriable" }], 1], expected: { action: "compensate", undo: ["createOrder"] } },
+    { label: "피벗(결제) 실패", args: [[{ name: "createOrder", kind: "compensatable" }, { name: "reserveStock", kind: "compensatable" }, { name: "chargeCard", kind: "pivot" }, { name: "scheduleShipping", kind: "retriable" }], 2], expected: { action: "compensate", undo: ["reserveStock", "createOrder"] } },
+    { label: "피벗 뒤 실패", args: [[{ name: "createOrder", kind: "compensatable" }, { name: "reserveStock", kind: "compensatable" }, { name: "chargeCard", kind: "pivot" }, { name: "scheduleShipping", kind: "retriable" }], 3], expected: { action: "retry", step: "scheduleShipping" } },
+    { label: "첫 단계 실패", args: [[{ name: "createOrder", kind: "compensatable" }, { name: "chargeCard", kind: "pivot" }], 0], expected: { action: "compensate", undo: [] } },
+    { label: "피벗이 없는 사가", args: [[{ name: "a", kind: "compensatable" }, { name: "b", kind: "compensatable" }, { name: "c", kind: "compensatable" }], 2], expected: { action: "compensate", undo: ["b", "a"] } },
+  ]}
+/>
+
+## 지휘하는 쪽이 순서를 쥐는 오케스트레이션
+
+사가를 굴리는 방법은 둘이다. 먼저 한 곳이 순서를 쥐는 오케스트레이션(orchestration)부터 짰다. 주문 서비스 안의 오케스트레이터가 단계를 차례로 부르고, 무엇을 했는지 `saga_log` 테이블에 적는다. DB는 PostgreSQL 16 세 개를 서비스 셋처럼 썼다.
+
+```sql
+-- 주문 서비스 DB (saga_orders): 주문, 사가 진행 기록, 아웃박스
+CREATE TABLE orders (id text PRIMARY KEY, sku text, qty int, amount int, zip text, status text NOT NULL, reason text);
+CREATE TABLE saga_log (saga_id text, seq serial, step text, phase text, at timestamptz DEFAULT now(), PRIMARY KEY (saga_id, seq));
+CREATE TABLE outbox (id bigserial PRIMARY KEY, topic text, payload jsonb, created_at timestamptz DEFAULT now(), sent_at timestamptz);
+
+-- 재고 서비스 DB (saga_inventory)
+CREATE TABLE stock (sku text PRIMARY KEY, available int NOT NULL CHECK (available >= 0));
+CREATE TABLE reservations (saga_id text PRIMARY KEY, sku text, qty int, status text NOT NULL);
+INSERT INTO stock VALUES ('SHOE-270', 5);
+
+-- 결제 서비스 DB (saga_payments)
+CREATE TABLE payments (saga_id text PRIMARY KEY, amount int, status text NOT NULL);
+CREATE TABLE refunds (saga_id text PRIMARY KEY, amount int, at timestamptz DEFAULT now());
+```
+
+모든 단계와 보상은 사가 ID를 키로 삼는다. `reservations`, `payments`, `refunds`의 기본 키가 사가 ID라서 같은 요청이 두 번 와도 행은 하나만 생긴다. 이게 단계를 멱등하게 만드는 가장 단순한 방법이다.
+
+```js
+// saga.js 일부: 단계 정의와 멱등한 보상
+const STEPS = [
+  { name: "reserve", run: reserve, undo: release },
+  { name: "charge", run: charge, undo: refund },
+  { name: "ship", run: ship, undo: null },          // 마지막 단계는 보상이 없다
+];
+
+async function refund(o) {
+  await pay.query("BEGIN");
+  const r = await pay.query(
+    `INSERT INTO refunds (saga_id, amount)
+     SELECT saga_id, amount FROM payments WHERE saga_id = $1
+     ON CONFLICT (saga_id) DO NOTHING`, [o.id]);       // 두 번째 환불은 아무것도 넣지 않는다
+  await pay.query("UPDATE payments SET status = 'REFUNDED' WHERE saga_id = $1", [o.id]);
+  await pay.query("COMMIT");
+  return r.rowCount === 1 ? "refunded" : "already refunded";
+}
+
+async function release(o) {
+  await inv.query("BEGIN");
+  const r = await inv.query(
+    `UPDATE reservations SET status = 'RELEASED'
+     WHERE saga_id = $1 AND status = 'RESERVED' RETURNING sku, qty`, [o.id]); // 예약 상태일 때만 복구
+  if (r.rowCount === 1) await inv.query("UPDATE stock SET available = available + $2 WHERE sku = $1", [r.rows[0].sku, r.rows[0].qty]);
+  await inv.query("COMMIT");
+  return r.rowCount === 1 ? "released" : "nothing to release";
+}
+```
+
+정상 주문 하나와, 배송이 안 되는 우편번호(63으로 시작)로 주문 하나를 넣었다.
+
+```bash
+# 사가 ID와 우편번호를 넘겨 사가를 시작한다
+node saga.js start o-3001 06236
+node saga.js start o-3002 63309
+```
+
+```text
+14:28:31.402 saga o-3001 started (order PENDING)
+14:28:31.407   reserve: reserved
+14:28:31.410   charge: captured
+14:28:31.411   ship: scheduled
+14:28:31.414 order o-3001 -> APPROVED
+14:28:31.497 saga o-3002 started (order PENDING)
+14:28:31.503   reserve: reserved
+14:28:31.506   charge: captured
+14:28:31.507   ship: FAILED no carrier for zip 63309
+14:28:31.512   undo charge: refunded
+14:28:31.516   undo reserve: released
+14:28:31.520 order o-3002 -> CANCELLED (no carrier for zip 63309)
+```
+
+보상은 끝낸 순서의 반대로 돈다. 결제를 먼저 환불하고, 그다음 재고를 돌려놓는다. 각 보상도 그 서비스 DB의 로컬 트랜잭션 하나다.
+
+## 보상 도중에 오케스트레이터가 죽으면
+
+처음 장면을 재현한다. 세 번째 주문은 환불 요청을 보낸 직후, 그 사실을 `saga_log`에 적기 전에 프로세스를 죽게 했다. 다시 띄운 오케스트레이터는 `PENDING`으로 남은 주문을 찾아 기록을 읽고 이어서 진행한다.
+
+```bash
+# 환불 직후 죽게 하고, 다시 띄워 이어 간다
+node saga.js start o-3003 63120 after-undo-charge
+node saga.js resume
+```
+
+```text
+14:28:44.140 saga o-3003 started (order PENDING)
+14:28:44.145   reserve: reserved
+14:28:44.148   charge: captured
+14:28:44.149   ship: FAILED no carrier for zip 63120
+14:28:44.152   undo charge: refunded
+14:28:44.152 orchestrator crashed before recording
+14:28:44.246 resume o-3003: log = saga:STARTED, reserve:DONE, charge:DONE, ship:FAILED, saga:COMPENSATING
+14:28:44.252   undo charge: already refunded
+14:28:44.266   undo reserve: released
+14:28:44.271 order o-3003 -> CANCELLED (resumed compensation)
+```
+
+기록에는 `charge:COMPENSATED`가 없으니 오케스트레이터는 환불을 한 번 더 보냈다. 결제 서비스는 `refunds`의 기본 키 덕분에 두 번째 요청을 `already refunded`로 흘려보냈고, 환불 행은 하나만 남았다. 오케스트레이터가 "보냈다"와 "적었다" 사이에서 죽는 일은 막을 수 없다. 막을 수 있는 건 다시 보냈을 때 결과가 같게 만드는 것뿐이다.
+
+<SequenceDiagram
+  caption="보상 도중에 죽은 오케스트레이터가 기록을 읽고 이어 간다"
+  actors={[
+    { id: "orc", label: "오케스트레이터" },
+    { id: "log", label: "saga_log" },
+    { id: "pay", label: "결제" },
+    { id: "inv", label: "재고" },
+  ]}
+  steps={[
+    { from: "orc", to: "log", label: "COMPENSATING", title: "보상을 시작한다고 적는다", detail: "배송 단계가 실패했다. 다시 시작하더라도 앞으로 가지 않고 보상을 이어 가도록 먼저 표시한다." },
+    { from: "orc", to: "pay", label: "refund o-3003", title: "환불을 보낸다", detail: "결제 서비스가 환불 행을 넣고 커밋한다.", payload: "INSERT INTO refunds ... ON CONFLICT (saga_id) DO NOTHING\n→ 1 row" },
+    { from: "orc", to: "orc", label: "crash", title: "기록하기 전에 죽는다", detail: "환불은 끝났지만 saga_log에는 charge:COMPENSATED가 없다." },
+    { from: "orc", to: "log", label: "SELECT log", title: "다시 떠서 기록을 읽는다", detail: "PENDING으로 남은 주문을 찾고, 그 사가의 기록을 순서대로 읽는다.", payload: "saga:STARTED, reserve:DONE, charge:DONE,\nship:FAILED, saga:COMPENSATING" },
+    { from: "orc", to: "pay", label: "refund o-3003", title: "환불을 또 보낸다", detail: "기록이 없으니 끝났는지 모른다. 같은 사가 ID로 다시 보낸다." },
+    { from: "pay", to: "orc", label: "already refunded", title: "두 번째는 아무 일도 하지 않는다", detail: "기본 키가 같아 행이 추가되지 않는다. 환불은 한 번만 나갔다.", payload: "→ 0 rows" },
+    { from: "orc", to: "inv", label: "release o-3003", title: "남은 보상을 이어 간다", detail: "재고 예약을 RESERVED에서 RELEASED로 바꾸고 수량을 돌려놓는다." },
+    { from: "orc", to: "log", label: "CANCELLED", title: "사가를 닫는다", detail: "주문 상태를 CANCELLED로 바꾸고 기록을 끝낸다. 다시 resume을 돌려도 PENDING 주문이 없으니 아무 일도 없다." },
+  ]}
+/>
+
+이 사가의 기록과 최종 상태는 이렇다.
+
+```sql
+SELECT seq, step, phase FROM saga_log WHERE saga_id = 'o-3003' ORDER BY seq;
+```
+
+```text
+ seq |  step   |    phase
+-----+---------+--------------
+  14 | saga    | STARTED
+  15 | reserve | DONE
+  16 | charge  | DONE
+  17 | ship    | FAILED
+  18 | saga    | COMPENSATING
+  19 | charge  | COMPENSATED
+  20 | reserve | COMPENSATED
+  21 | saga    | CANCELLED
+(8 rows)
+```
+
+재고는 5개에서 승인된 주문 몫 2개만 빠진 3개, 환불 행은 취소된 두 주문 몫으로 2개였다. 기록을 한 줄씩 따라가면 오케스트레이터가 다시 떴을 때 무엇을 판단했는지 보인다.
+
+<AlgoTrace
+  caption="saga_log를 읽고 다음 일을 정한다"
+  memoryLabel="해야 할 보상 (위에서부터)"
+  cells={["STARTED", "reserve DONE", "charge DONE", "ship FAILED", "COMPENSATING", "charge COMP.", "reserve COMP.", "CANCELLED"]}
+  steps={[
+    { pointer: 0, caption: "사가가 시작됐다. 아직 보상할 것이 없다." },
+    { pointer: 1, memory: ["release"], caption: "재고 예약이 끝났다. 뒤에서 실패하면 재고를 돌려놓아야 한다." },
+    { pointer: 2, memory: ["release", "refund"], caption: "결제가 끝났다. 보상 목록 맨 위에 환불이 올라간다." },
+    { pointer: 3, memory: ["release", "refund"], caption: "배송이 실패했다. 보상은 목록의 위(나중에 한 것)부터 꺼낸다." },
+    { pointer: 4, memory: ["release", "refund"], caption: "다시 시작한 오케스트레이터는 여기까지만 읽는다. COMPENSATING이 있으니 앞으로 가지 않는다." },
+    { pointer: 5, memory: ["release"], caption: "환불을 다시 보냈고 이미 끝난 것으로 확인됐다. 목록에서 뺀다." },
+    { pointer: 6, memory: [], caption: "재고를 돌려놓았다. 보상할 것이 남지 않았다." },
+    { pointer: 7, found: [7], caption: "주문을 CANCELLED로 닫는다. 같은 기록을 다시 읽어도 할 일이 없다." },
+  ]}
+/>
+
+## 지휘자 없이 이벤트로 잇는 코레오그래피
+
+다른 방법은 중심을 두지 않는 코레오그래피(choreography)다. 각 서비스가 자기 일을 끝내면 이벤트를 내고, 그 이벤트를 듣는 서비스가 다음 일을 한다. 보상도 이벤트로 퍼진다. 배송 서비스가 `ShippingFailed`를 내면 결제 서비스가 그걸 듣고 환불하고, `PaymentRefunded`를 들은 재고 서비스가 재고를 돌려놓는다.
+
+<SequenceDiagram
+  caption="코레오그래피: 이벤트를 듣고 각자 다음 일을 한다"
+  actors={[
+    { id: "ord", label: "주문" },
+    { id: "inv", label: "재고" },
+    { id: "pay", label: "결제" },
+    { id: "ship", label: "배송" },
+  ]}
+  steps={[
+    { from: "ord", to: "inv", label: "OrderCreated", title: "주문이 생겼다고 알린다", detail: "주문 서비스는 PENDING 주문을 저장하고 이벤트만 낸다. 누가 들을지 모른다." },
+    { from: "inv", to: "pay", label: "StockReserved", title: "재고가 예약됐다", detail: "재고 서비스가 OrderCreated를 듣고 예약한 뒤 이벤트를 낸다. 결제 서비스가 이걸 듣는다." },
+    { from: "pay", to: "ship", label: "PaymentCaptured", title: "결제가 끝났다", detail: "배송 서비스가 결제 완료를 듣고 배송을 잡으려 한다." },
+    { from: "ship", to: "pay", label: "ShippingFailed", title: "배송이 실패한다", detail: "이번에는 실패 이벤트가 거꾸로 흐른다. 결제 서비스가 이걸 듣고 환불해야 한다." },
+    { from: "pay", to: "inv", label: "PaymentRefunded", title: "환불했다고 알린다", detail: "재고 서비스가 환불 이벤트를 듣고 예약을 푼다." },
+    { from: "inv", to: "ord", label: "StockReleased", title: "주문이 실패로 닫힌다", detail: "주문 서비스가 마지막 이벤트를 듣고 CANCELLED로 바꾼다. 흐름 전체를 아는 코드는 어디에도 없다." },
+  ]}
+/>
+
+코레오그래피는 단계가 두세 개일 때 가볍다. 중앙 서비스가 없어 서비스끼리 덜 묶이고, 새 서비스가 기존 이벤트를 듣기만 하면 끼어들 수 있다. 대신 흐름이 이벤트 구독 코드에 흩어진다. "주문 하나가 지금 어디까지 갔나"를 물으면 네 서비스의 로그를 사가 ID로 이어 붙여야 답할 수 있다. 결제가 재고 이벤트를 듣고, 재고가 결제 이벤트를 듣는 식의 순환 의존도 쉽게 생긴다.
+
+오케스트레이션은 흐름이 한 파일에 있어 읽고 고치기 쉽고, 사가별 상태를 한 테이블에서 조회할 수 있다. 대신 오케스트레이터가 모든 참여자의 API를 알아야 하고, 비즈니스 로직이 오케스트레이터로 몰리기 쉽다. 단계가 네 개를 넘거나 분기와 시간 제한(결제 대기 15분)이 있으면 오케스트레이션이 낫고, 서로 다른 팀이 이벤트를 느슨하게 듣는 짧은 흐름이면 코레오그래피가 낫다. 이벤트로 서비스를 잇는 방식 전반은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에 있다.
+
+## 중간 상태가 남에게 보인다
+
+사가에는 격리(ACID의 I)가 없다. 결제는 끝났는데 주문은 `PENDING`인 순간이 몇 백 밀리초에서 몇 분까지 이어지고, 그사이 다른 요청이 그 상태를 보고 행동할 수 있다. 사가끼리 끼어들어 생기는 이상 현상은 DB 격리 수준에서 보던 것과 모양이 같다. 다른 사가가 덮어써서 내 변경이 사라지는 갱신 손실, 나중에 보상될 값을 읽고 판단하는 더티 리드, 한 사가 안에서 같은 값을 두 번 읽었는데 다른 값이 나오는 퍼지 리드다.
+
+막는 장치들에는 이름이 붙어 있다. 리처드슨의 책이 정리한 것 중 자주 쓰는 것만 보자.
+
+의미상 잠금(semantic lock)은 상태 값으로 거는 잠금이다. 사가가 진행 중인 주문은 `PENDING`이고, 다른 기능은 `PENDING` 주문을 보면 기다리거나 거절한다. 예를 들어 고객이 진행 중인 주문을 취소하려 하면 상태를 조건으로 건 `UPDATE`가 막는다.
+
+```sql
+-- 진행 중(PENDING)일 때만 취소 요청을 받는다. o-3001은 이미 APPROVED라 바뀌지 않는다
+UPDATE orders SET status = 'CANCEL_REQUESTED' WHERE id = 'o-3001' AND status = 'PENDING';
+```
+
+```text
+UPDATE 0
+```
+
+0행이면 애플리케이션은 "이미 처리된 주문이라 환불 절차로 안내한다"처럼 다른 길로 보낸다. 의미상 잠금은 DB 잠금과 달리 몇 분씩 걸어 둬도 DB를 막지 않지만, 사가가 끝나지 않으면 영영 풀리지 않는다. 그래서 `PENDING`에는 반드시 시한을 둔다.
+
+교환 가능한 갱신(commutative update)은 순서와 상관없이 같은 결과가 나오게 쓰는 것이다. 잔액을 `SET balance = 18000`처럼 덮어쓰지 않고 `balance = balance - 32000`처럼 차감하면, 결제와 환불이 어떤 순서로 섞여도 최종 잔액이 맞는다. 실습의 재고 복구가 `available = available + qty`인 이유다.
+
+비관적 관점(pessimistic view)은 단계 순서를 바꿔 더티 리드의 피해를 줄인다. 다른 사가가 읽을 수 있는 값을 바꾸는 단계를 가능한 한 뒤로, 되돌릴 일이 없을 때로 미룬다. 앞에서 말한 "배송 지역 검사를 결제 앞으로"도 같은 생각이다.
+
+다시 읽기(reread value)는 덮어쓰기 직전에 값이 사가 시작 때와 같은지 확인하는 것이고, 낙관적 잠금의 버전 열과 같은 방식이다. 자세한 구현은 [낙관적 잠금](/posts/optimistic-locking)에 있다.
+
+## 상태를 바꾸고 알리는 일을 한 번에: 아웃박스
+
+코레오그래피든 오케스트레이션이든, 단계 하나는 "내 DB를 고친다"와 "다음 단계에 알린다"로 이뤄진다. DB 커밋과 브로커 전송은 하나의 트랜잭션이 아니니 둘 사이에서 죽으면 한쪽만 남는다. 그래서 이벤트를 같은 DB 트랜잭션 안에서 `outbox` 테이블에 넣고, 별도의 릴레이가 그 테이블을 읽어 브로커로 보낸다. 실습의 오케스트레이터도 주문 상태를 바꾸는 트랜잭션 안에서 이벤트를 넣는다.
+
+```js
+// 주문 상태 변경과 이벤트 기록을 한 로컬 트랜잭션으로
+await orders.query("BEGIN");
+await orders.query("UPDATE orders SET status = $2, reason = $3 WHERE id = $1", [id, status, reason]);
+await orders.query("INSERT INTO outbox (topic, payload) VALUES ($1, $2)", [`order.${status.toLowerCase()}`, { orderId: id, reason }]);
+await orders.query("COMMIT");
+```
+
+<UrlAnatomy
+  caption="outbox 테이블의 한 줄"
+  base="outbox"
+  separator=": "
+  joiner=" | "
+  params={[
+    { key: "id", value: "2", title: "보낼 순서", description: "bigserial이라 커밋 순서와 대체로 같지만 완전히 같지는 않다. 동시에 열린 트랜잭션이 번호를 먼저 받고 늦게 커밋할 수 있다. 순서가 중요한 주문 단위라면 payload의 orderId로 같은 파티션에 보내 그 안에서만 순서를 지킨다.", required: true },
+    { key: "topic", value: "order.cancelled", title: "어디로 보낼지", description: "릴레이가 브로커의 토픽이나 라우팅 키로 바꾼다. Debezium의 outbox 이벤트 라우터도 이런 열을 읽어 토픽을 정한다." },
+    { key: "payload", value: "{orderId: o-3002}", title: "이벤트 내용", description: "받는 쪽이 중복을 거를 수 있도록 사가 ID나 이벤트 ID를 반드시 넣는다." },
+    { key: "created_at", value: "14:28:31", title: "만든 시각", description: "now() - created_at이 커지면 릴레이가 밀리고 있다는 뜻이다. 지연 알림의 기준이 된다." },
+    { key: "sent_at", value: "NULL", title: "보낸 시각", description: "NULL이면 아직 안 보냈다. 보낸 뒤 채우고, 오래된 행은 주기적으로 지운다. 지우지 않으면 테이블이 계속 커진다." },
+  ]}
+/>
+
+릴레이는 처음에 실수했다. `UPDATE outbox SET sent_at = now() WHERE sent_at IS NULL RETURNING ...`으로 먼저 표시하고 그다음 보내도록 짰는데, 이러면 표시한 뒤 보내기 전에 죽을 때 이벤트가 영영 사라진다. 최대 한 번(at-most-once)이 되는 것이다. 순서를 바꿔 보낸 다음 표시하게 고쳤다. 여러 릴레이가 동시에 돌아도 같은 행을 집지 않도록 `FOR UPDATE SKIP LOCKED`를 붙인다.
+
+```js
+await orders.query("BEGIN");
+const { rows } = await orders.query(
+  "SELECT id, topic, payload FROM outbox WHERE sent_at IS NULL ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED");
+for (const r of rows) {
+  await broker.send(r.topic, r.payload);                                    // 먼저 보내고
+  await orders.query("UPDATE outbox SET sent_at = now() WHERE id = $1", [r.id]); // 그다음 표시한다
+}
+await orders.query("COMMIT");
+```
+
+이제 반대 문제가 생긴다. 보낸 뒤 표시하기 전에 릴레이가 죽게 해 봤다.
+
+```bash
+# 첫 이벤트를 보낸 직후 죽게 하고, 다시 돌린다
+CRASH=after-publish node saga.js relay
+node saga.js relay
+```
+
+```text
+14:28:58.918 publish #1 order.approved {"reason":null,"orderId":"o-3001"}
+14:28:58.920 relay crashed before marking sent
+14:28:59.024 publish #1 order.approved {"reason":null,"orderId":"o-3001"}
+14:28:59.026 publish #2 order.cancelled {"reason":"no carrier for zip 63309","orderId":"o-3002"}
+14:28:59.027 publish #3 order.cancelled {"reason":"resumed compensation","orderId":"o-3003"}
+```
+
+`#1`이 두 번 나갔다. 아웃박스가 보장하는 건 "적어도 한 번"이다. 그래서 받는 쪽이 이벤트 ID로 중복을 걸러야 하고, 이건 사가의 단계가 멱등해야 하는 것과 같은 이유다. 최대 한 번, 적어도 한 번, 정확히 한 번이 각각 무엇을 대가로 하는지는 [메시지 전달 보장](/posts/message-delivery-semantics)에서, 받는 쪽이 중복 요청을 거르는 저장소 설계는 [멱등성 키](/posts/idempotency-key)에서 다룬다.
+
+아래 그림은 주문 서비스가 이벤트를 남기고, 릴레이가 브로커로 넘기고, 다음 서비스가 받기까지의 경로다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="아웃박스 경로: 같은 트랜잭션에 적고, 릴레이가 나중에 보낸다"
+  zones={[
+    { id: "ordsvc", label: "주문 서비스", x: 15, y: 20, w: 200, h: 200, tone: "private" },
+    { id: "bus", label: "브로커", x: 235, y: 20, w: 150, h: 90, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "orc", label: "orchestrator", sub: "saga.js", x: 115, y: 70, icon: "server", w: 120 },
+    { id: "odb", label: "orders DB", sub: "orders+outbox", x: 115, y: 175, icon: "db", w: 130 },
+    { id: "relay", label: "relay", sub: "SKIP LOCKED", x: 310, y: 175, icon: "container", w: 120 },
+    { id: "topic", label: "order.*", sub: "topic", x: 310, y: 70, icon: "switch", w: 110 },
+    { id: "pay", label: "payments", sub: "dedupe by id", x: 200, y: 285, icon: "server", w: 130 },
+  ]}
+  links={[
+    { from: "orc", to: "odb" },
+    { from: "odb", to: "relay" },
+    { from: "relay", to: "topic" },
+    { from: "topic", to: "pay" },
+  ]}
+  steps={[
+    { path: ["orc", "odb"], packet: "COMMIT", title: "상태와 이벤트를 함께 커밋한다", detail: "orders의 상태 변경과 outbox 행이 한 트랜잭션이다. 둘 다 남거나 둘 다 없다.", payload: "UPDATE orders SET status = 'CANCELLED' ...\nINSERT INTO outbox (topic, payload) ..." },
+    { path: ["odb", "relay"], packet: "SELECT", title: "릴레이가 안 보낸 행을 집는다", detail: "FOR UPDATE SKIP LOCKED로 다른 릴레이가 집은 행은 건너뛴다." },
+    { path: ["relay", "topic"], packet: "#1", title: "브로커로 보낸다", detail: "보낸 뒤 sent_at을 채우기 전에 죽으면 다음 릴레이가 같은 행을 또 보낸다." },
+    { path: ["topic", "pay"], packet: "#1", title: "받는 쪽에 도착한다", detail: "결제 서비스는 이벤트 ID를 처리한 기록이 있는지 먼저 본다." },
+    { path: ["relay", "topic", "pay"], packet: "#1 dup", blocked: true, title: "중복은 받는 쪽에서 거른다", detail: "재시작한 릴레이가 #1을 다시 보냈다. 이미 처리한 ID라 아무 일도 하지 않는다.", payload: "INSERT INTO processed_events (event_id) VALUES (1)\n  ON CONFLICT DO NOTHING;\nINSERT 0 0" },
+  ]}
+/>
+
+테이블을 주기적으로 훑는 대신 DB의 변경 로그(WAL)를 따라가는 CDC(변경 데이터 캡처)로 릴레이를 대신할 수도 있다. Debezium이 PostgreSQL의 논리 복제 슬롯으로 `outbox` 테이블의 INSERT를 읽어 Kafka로 보내는 방식이다. 폴링 지연과 DB 부하가 줄지만, 복제 슬롯이 밀리면 WAL이 쌓여 디스크가 찬다는 새 운영 문제가 생긴다.
+
+## 워크플로 엔진에 맡길 때
+
+직접 짠 오케스트레이터는 `saga_log`, 재시작 시 이어 가기, 단계별 재시도와 시한을 모두 스스로 만들어야 한다. 이 부분을 대신하는 게 워크플로 엔진이다. Temporal은 워크플로를 평범한 코드로 쓰면 각 단계의 결과를 이벤트 기록으로 남기고, 워커가 죽으면 그 기록을 다시 재생해 멈춘 곳부터 잇는다. Java SDK에는 보상을 쌓아 두었다가 거꾸로 실행하는 `Saga` 클래스가 있다. AWS Step Functions는 상태 기계를 JSON(ASL)으로 정의하고, 보상은 `Catch`로 실패를 받아 보상 상태로 넘기는 식으로 직접 그린다. 기능으로서의 보상이 따로 있지는 않다.
+
+엔진을 써도 바뀌지 않는 것이 있다. 각 단계와 보상은 여전히 멱등해야 하고(엔진도 재시도하고, 활동이 끝났다는 응답을 잃으면 다시 실행한다), 단계 순서와 피벗은 여전히 사람이 정해야 한다.
+
+## 사가가 꼬였을 때 현장에서 보는 것
+
+사가 장애는 대개 "결제는 됐는데 주문이 처리 중에서 안 넘어간다"는 문의로 시작한다. 먼저 시한을 넘긴 사가를 찾는다.
+
+```sql
+-- 10분 넘게 PENDING인 주문과 그 사가의 마지막 기록
+SELECT o.id, o.status, l.step, l.phase, now() - l.at AS since_last
+FROM orders o
+JOIN LATERAL (SELECT step, phase, at FROM saga_log WHERE saga_id = o.id ORDER BY seq DESC LIMIT 1) l ON true
+WHERE o.status = 'PENDING' AND l.at < now() - interval '10 minutes';
+```
+
+마지막 기록이 무엇이냐에 따라 보는 곳이 다르다. `charge:DONE`에서 멈췄다면 오케스트레이터가 죽었거나 다음 단계 호출이 계속 실패하는 것이니 오케스트레이터 로그를 사가 ID로 찾는다. `COMPENSATING`에서 멈췄다면 보상이 실패하고 있는 것이다. 보상 실패는 가장 위험한 상태라 따로 알림을 건다. 환불 API가 몇 시간 내려가 있다면 보상은 백오프하며 계속 다시 시도하고, 정해진 횟수를 넘기면 사람이 처리할 대기열(DLQ, 수동 처리 목록)로 넘긴다. 손으로 처리할 때도 같은 사가 ID로 보상을 부르면 이미 끝난 부분은 멱등하게 건너뛴다.
+
+아웃박스 쪽은 `SELECT count(*), min(created_at) FROM outbox WHERE sent_at IS NULL`로 밀린 양과 가장 오래된 행을 본다. 숫자가 계속 늘면 릴레이가 죽었거나 브로커로 못 보내는 것이다.
+
+흔한 실수도 정리해 둔다. 보상을 "앞 단계 응답에서 받은 값으로 되돌리기"로 짜서, 그 응답을 못 받은 경우(타임아웃) 보상을 못 한다. 보상은 사가 ID만으로 찾아서 되돌릴 수 있어야 한다. 타임아웃 난 단계를 실패로 보고 보상을 건너뛰기도 한다. 타임아웃은 "결과를 모른다"이니 그 단계도 보상 목록에 넣어야 하고, 그래서 아직 실행되지 않은 단계에 대한 보상이 먼저 도착해도 견뎌야 한다(나중에 도착한 원래 요청은 거절). 마지막으로 사가 ID를 로그와 이벤트에 넣지 않아 장애 때 흐름을 이어 붙이지 못한다. 분산 추적의 trace ID와 함께 사가 ID를 모든 로그에 남긴다.
+
+## 사가가 약속하는 것과 하지 않는 것
+
+사가는 "결국에는 전부 되거나 전부 상쇄된다"를 약속한다. 그사이의 중간 상태는 남에게 보이고, 그 대가는 의미상 잠금과 단계 순서로 줄인다. 실제로 굴러가게 만드는 건 개념보다 세부다. 실패할 단계를 피벗 앞에 두고, 진행 기록을 남기고, 모든 단계와 보상과 이벤트 소비를 같은 ID로 멱등하게 만든다. 위 실습에서 사고를 막은 것도 결국 `refunds`의 기본 키 한 줄이었다.
+
+## 면접에서 나올 만한 질문
+
+### 사가의 보상 트랜잭션은 롤백과 무엇이 다른가요?
+
+롤백은 커밋 전의 변경을 없던 일로 만들고, 보상은 이미 커밋된 일의 효과를 새 작업으로 상쇄한다. 카드 승인을 지우는 게 아니라 환불을 새로 하는 식이라 기록이 둘 다 남는다. 그래서 보상은 언젠가 반드시 성공할 수 있어야 하고, 여러 번 실행돼도 결과가 같아야 한다. 이메일 발송처럼 반대 작업이 없는 일은 사가의 맨 뒤에 둔다.
+
+### 보상 가능 단계, 피벗, 재시도 단계는 어떻게 배치하나요?
+
+실패할 가능성이 큰 검사와 되돌리기 쉬운 단계를 앞에, 사가의 운명을 정하는 되돌리기 비싼 단계(외부 결제)를 피벗으로, 피벗 뒤에는 실패하더라도 다시 시도하면 결국 성공하는 단계만 둔다. 피벗까지의 실패는 앞을 보상하고, 피벗 뒤의 실패는 보상하지 않고 재시도한다. 배송 가능 지역 검사를 결제 뒤에 두면 결제와 재고를 모두 보상해야 하지만, 앞으로 옮기면 보상할 게 없다.
+
+### 오케스트레이터가 보상 도중에 죽으면 어떻게 되나요?
+
+다시 뜬 오케스트레이터가 사가 진행 기록을 읽고, 보상 중이었으면 아직 완료로 기록되지 않은 보상을 다시 보낸다. 보냈지만 기록하지 못한 보상도 다시 나가므로 보상은 사가 ID를 키로 멱등해야 한다. 실습에서는 환불 테이블의 기본 키 덕분에 두 번째 환불이 0행으로 끝났다. 보냈다와 적었다 사이에서 죽는 건 막을 수 없으니, 다시 보내도 결과가 같게 만드는 게 대책이다.
+
+### 오케스트레이션과 코레오그래피는 언제 무엇을 고르나요?
+
+단계가 많거나 분기와 시한이 있으면 흐름이 한곳에 모이는 오케스트레이션이 읽고 운영하기 쉽다. 두세 단계의 짧은 흐름이고 여러 팀이 이벤트를 느슨하게 듣는 구조라면 코레오그래피가 가볍다. 코레오그래피는 흐름이 구독 코드에 흩어져 사가의 현재 위치를 알기 어렵고 순환 의존이 생기기 쉽다. 오케스트레이션은 오케스트레이터에 로직이 몰리고 그 서비스가 모든 참여자의 API를 알아야 한다.
+
+### 사가에 격리가 없어서 생기는 문제와 대책은요?
+
+결제는 끝났는데 주문은 진행 중인 중간 상태를 다른 요청이 보고 행동할 수 있어서 갱신 손실, 더티 리드 같은 이상이 생긴다. 상태 값으로 진행 중임을 표시해 다른 기능이 기다리거나 거절하게 하는 의미상 잠금, 덮어쓰지 않고 증감으로 쓰는 교환 가능한 갱신, 남이 읽을 값을 바꾸는 단계를 뒤로 미루는 단계 재배치, 덮어쓰기 전에 다시 읽어 버전을 확인하는 방법으로 줄인다. 의미상 잠금에는 반드시 시한을 둔다.
+
+### 아웃박스 릴레이에서 중복 이벤트가 생기는 이유와 대응은요?
+
+릴레이가 브로커로 보낸 뒤 보냈다고 표시하기 전에 죽으면 다음 릴레이가 같은 행을 다시 보내기 때문이다. 표시를 먼저 하면 중복은 없지만 보내기 전에 죽을 때 이벤트가 사라지니 그쪽이 더 나쁘다. 그래서 아웃박스는 적어도 한 번 전달로 보고, 소비자가 이벤트 ID를 처리 기록에 남겨 중복을 거른다. 여러 릴레이를 돌릴 때는 `FOR UPDATE SKIP LOCKED`로 같은 행을 동시에 집지 않게 한다.
+
+### 사가 단계가 타임아웃으로 끝났다면 보상해야 하나요?
+
+보상 목록에 넣어야 한다. 타임아웃은 실패가 아니라 결과를 모른다는 뜻이라 상대 쪽에서는 처리됐을 수 있다. 그래서 보상은 원래 요청이 도착하지 않았거나 나중에 도착하는 경우까지 견뎌야 하고, 보상이 먼저 처리된 사가 ID의 원래 요청은 거절하게 만든다. 보상을 앞 단계의 응답 값에 기대지 않고 사가 ID만으로 찾을 수 있게 짜는 이유도 이것이다.

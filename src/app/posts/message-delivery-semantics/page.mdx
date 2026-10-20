@@ -1,0 +1,448 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("message-delivery-semantics");
+
+"포인트가 두 번 적립됐어요"라는 문의가 왔다. 1042번 주문의 410점이 두 번 들어가 있다. 로그를 맞춰 보니 적립 시각이 포인트 컨슈머가 배포로 재시작된 시각과 겹친다. 회의에서 누군가 "Kafka에 exactly-once 설정이 있다던데 그걸 켜면 되지 않나"라고 했다. 켜면 될까?
+
+결론부터 말하면 그 설정만으로는 안 된다. Kafka의 "정확히 한 번"은 Kafka 안에서 읽고 Kafka에 쓰는 구간에만 걸린다. 포인트를 PostgreSQL에 적립하는 순간 그 보장 밖으로 나간다. 이 글은 메시지가 지나는 구간마다 무엇이 잃게 하고 무엇이 두 번 하게 하는지 나눠 보고, 각 구간을 무엇으로 막는지를 실제로 돌려 본다. Kafka 3.9.1 브로커 세 대(KRaft), Node.js `kafkajs` 2.2.4, PostgreSQL 16이다.
+
+이 주제의 다른 글: 가시성 타임아웃 때문에 같은 메시지를 두 번 받는 장면은 [메시지 큐 기초](/posts/message-queue-basics)에, Kafka 오프셋을 처리 전과 후 언제 커밋하느냐는 [Kafka 기초](/posts/kafka-basics)에, DB에 쓴 사실을 빠짐없이 내보내는 아웃박스는 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에, HTTP API 쪽 중복 요청을 막는 저장소는 [멱등성 키](/posts/idempotency-key)에 있다. 여기서는 이 장치들을 한 줄로 이어서 "어디까지가 정확히 한 번인가"를 본다.
+
+## 확인이 사라지면 보낸 쪽은 모른다
+
+세 가지 전달 보장은 실패했을 때 보내는 쪽이 무엇을 하느냐로 갈린다.
+
+최대 한 번(at-most-once)은 다시 보내지 않는다. 확인을 못 받으면 그냥 넘어간다. 잃을 수는 있어도 두 번 가지는 않는다. Kafka 프로듀서의 `acks=0`, 처리 전에 오프셋을 커밋하는 컨슈머가 이렇다.
+
+최소 한 번(at-least-once)은 확인을 받을 때까지 다시 보낸다. 잃지 않는 대신 두 번 갈 수 있다. 대부분의 브로커와 클라이언트의 기본이다.
+
+정확히 한 번(exactly-once)은 다시 보내되 받는 쪽이 같은 걸 알아보고 한 번만 반영한다. 전달 자체를 한 번으로 만드는 게 아니라, 최소 한 번 전달 위에 중복 제거를 얹은 것이다. 그래서 "정확히 한 번 처리"나 "실질적으로 한 번(effectively once)"이라고 부르는 편이 정확하다.
+
+왜 전달 자체를 한 번으로 만들 수 없는지는 아래 그림이 보여 준다.
+
+<SequenceDiagram
+  caption="저장은 됐는데 확인이 사라지면, 보낸 쪽은 다시 보낼 수밖에 없다"
+  actors={[
+    { id: "p", label: "프로듀서" },
+    { id: "b", label: "브로커" },
+    { id: "c", label: "포인트 컨슈머" },
+    { id: "db", label: "포인트 DB" },
+  ]}
+  steps={[
+    { from: "p", to: "b", label: "OrderPaid 1042", title: "메시지를 보낸다", detail: "브로커가 받아서 로그에 적는다." },
+    { from: "b", to: "p", label: "ack (유실)", title: "확인이 오다가 사라진다", detail: "네트워크가 끊겼거나 응답이 타임아웃보다 늦었다. 프로듀서는 저장이 됐는지 안 됐는지 구별할 수 없다." },
+    { from: "p", to: "b", label: "OrderPaid 1042", title: "다시 보낸다", detail: "잃지 않으려면 다시 보내야 한다. 브로커가 알아보지 못하면 로그에 두 개가 쌓인다." },
+    { from: "b", to: "c", label: "deliver", title: "컨슈머가 받는다", detail: "같은 일이 이 구간에서도 반복된다. 컨슈머가 처리하고 오프셋을 커밋하기 전에 죽으면 다시 받는다." },
+    { from: "c", to: "db", label: "+410", title: "적립한다", detail: "처리 결과는 Kafka 밖의 DB에 있다. 컨슈머가 이 직후 죽으면 커밋 못 한 오프셋부터 다시 받아 또 적립한다." },
+    { from: "c", to: "db", label: "+410 (중복)", title: "처음 문의의 장면", detail: "어느 구간도 버그가 없는데 두 번 들어갔다. 막으려면 각 구간에서 받는 쪽이 중복을 알아봐야 한다." },
+  ]}
+/>
+
+보내는 쪽 입장에서 "저장됐는데 확인만 사라진 경우"와 "저장도 안 된 경우"는 똑같이 보인다. 둘을 구별할 방법이 없으니 잃지 않으려면 다시 보내고, 다시 보내면 중복이 생긴다. 그래서 정확히 한 번은 언제나 받는 쪽의 일이다. 메시지에 변하지 않는 ID를 붙이고, 받는 쪽이 그 ID를 기억했다가 같은 게 오면 반영하지 않는다.
+
+그림에는 구간이 셋 있다. 프로듀서에서 브로커, 브로커 안에서 읽고 다시 쓰기, 컨슈머에서 바깥 저장소. 구간마다 중복을 알아보는 장치가 다르다.
+
+## 프로듀서와 브로커 사이: 멱등 프로듀서
+
+첫 구간은 Kafka가 직접 막아 준다. 멱등 프로듀서(`enable.idempotence=true`)는 3.0부터 자바 클라이언트의 기본값이다. 프로듀서가 처음 연결할 때 브로커에게 프로듀서 ID(PID)를 받고, 파티션마다 배치에 0부터 오르는 시퀀스 번호를 붙여 보낸다. 브로커는 PID별로 마지막 시퀀스를 기억해 두었다가, 이미 받은 번호가 다시 오면 로그에 붙이지 않고 성공만 돌려준다.
+
+실제로 로그 파일에 무엇이 적히는지 `kafka-dump-log`로 열어 봤다. 트랜잭션 프로듀서로 쓴 `point-ledger` 토픽의 세그먼트다(트랜잭션 프로듀서는 항상 멱등 프로듀서이기도 하다).
+
+```bash
+# 세그먼트 파일을 배치 단위로 풀어서 보여 준다
+kafka-dump-log.sh --files kdata/n1/point-ledger-0/00000000000000000000.log --print-data-log
+```
+
+```text
+Dumping kdata/n1/point-ledger-0/00000000000000000000.log
+Log starting offset: 0
+baseOffset: 0 lastOffset: 1 count: 2 baseSequence: 0 lastSequence: 1 producerId: 5 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: true isControl: false deleteHorizonMs: OptionalLong.empty position: 0 CreateTime: 1792506225559 size: 112 magic: 2 compresscodec: none crc: 1614056819 isvalid: true
+| offset: 0 CreateTime: 1792506225559 keySize: 2 valueSize: 17 sequence: 0 headerKeys: [] key: u1 payload: +100 (order 1042)
+| offset: 1 CreateTime: 1792506225559 keySize: 2 valueSize: 16 sequence: 1 headerKeys: [] key: u1 payload: +50 (order 1043)
+baseOffset: 2 lastOffset: 2 count: 1 baseSequence: -1 lastSequence: -1 producerId: 5 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: true isControl: true deleteHorizonMs: OptionalLong.empty position: 112 CreateTime: 1792506225723 size: 78 magic: 2 compresscodec: none crc: 426803627 isvalid: true
+| offset: 2 CreateTime: 1792506225723 keySize: 4 valueSize: 6 sequence: -1 headerKeys: [] endTxnMarker: ABORT coordinatorEpoch: 0
+baseOffset: 3 lastOffset: 4 count: 2 baseSequence: 2 lastSequence: 3 producerId: 5 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: true isControl: false deleteHorizonMs: OptionalLong.empty position: 190 CreateTime: 1792506226439 size: 112 magic: 2 compresscodec: none crc: 2402924597 isvalid: true
+| offset: 3 CreateTime: 1792506226439 keySize: 2 valueSize: 17 sequence: 2 headerKeys: [] key: u1 payload: +100 (order 1042)
+| offset: 4 CreateTime: 1792506226439 keySize: 2 valueSize: 16 sequence: 3 headerKeys: [] key: u1 payload: +50 (order 1043)
+baseOffset: 5 lastOffset: 5 count: 1 baseSequence: -1 lastSequence: -1 producerId: 5 producerEpoch: 0 partitionLeaderEpoch: 0 isTransactional: true isControl: true deleteHorizonMs: OptionalLong.empty position: 302 CreateTime: 1792506226460 size: 78 magic: 2 compresscodec: none crc: 2995379285 isvalid: true
+| offset: 5 CreateTime: 1792506226460 keySize: 4 valueSize: 6 sequence: -1 headerKeys: [] endTxnMarker: COMMIT coordinatorEpoch: 0
+```
+
+배치 첫 줄이 길어서 조각으로 나눠 읽는다. 아래 조각을 누르면 각 필드가 중복 제거에서 어떤 역할을 하는지 나온다.
+
+<UrlAnatomy
+  caption="kafka-dump-log의 배치 머리 한 줄"
+  separator=""
+  joiner="  "
+  params={[
+    { key: "baseOffset", value: "3", display: "baseOffset: 3", title: "baseOffset, lastOffset", description: "이 배치가 차지한 오프셋 범위다. 3과 4에 메시지 두 개가 들어갔다." },
+    { key: "baseSequence", value: "2", display: "baseSequence: 2", title: "baseSequence, lastSequence: 중복을 알아보는 번호", description: "이 프로듀서가 이 파티션에 보낸 메시지 번호다. 앞 배치가 0~1이었으니 2부터 이어진다. 같은 번호의 배치가 다시 오면 브로커는 붙이지 않고 성공만 돌려준다.", required: true },
+    { key: "producerId", value: "5", display: "producerId: 5", title: "producerId: 누가 보냈나", description: "브로커가 나눠 준 프로듀서 ID다. 시퀀스는 PID마다 따로 센다. 프로듀서를 재시작해 PID가 바뀌면 이전 번호와 이어지지 않는다.", required: true },
+    { key: "producerEpoch", value: "0", display: "producerEpoch: 0", title: "producerEpoch: 몇 번째 세대인가", description: "같은 transactional.id로 새 인스턴스가 뜨면 에포크가 오른다. 옛 에포크로 온 쓰기는 거절된다(펜싱)." },
+    { key: "isTransactional", value: "true", display: "isTransactional: true", title: "isTransactional: 트랜잭션의 일부인가", description: "커밋이나 중단 표시가 나오기 전까지 read_committed 컨슈머는 이 배치를 보지 않는다." },
+    { key: "isControl", value: "false", display: "isControl: false", title: "isControl: 데이터인가 표시인가", description: "true면 메시지가 아니라 트랜잭션 끝 표시(COMMIT/ABORT)다. 표시도 오프셋 하나를 차지한다. 위 출력의 2번과 5번이 그렇다." },
+  ]}
+/>
+
+브로커가 시퀀스를 어떻게 검사하는지 단계로 보면 이렇다.
+
+<AlgoTrace
+  caption="브로커는 PID마다 마지막 시퀀스를 기억하고, 다음 번호만 붙인다"
+  cells={["seq 0-1", "seq 2-3", "seq 2-3 재전송", "seq 6", "seq 4"]}
+  memoryLabel="PID 5의 마지막 시퀀스"
+  steps={[
+    { caption: "PID 5가 처음 보낸다. 브로커가 기억하는 번호가 없다.", memory: ["없음"] },
+    { pointer: 0, found: [0], caption: "0부터 시작하니 붙인다. 마지막 시퀀스는 1.", memory: ["last 1"] },
+    { pointer: 1, found: [0, 1], caption: "2는 1 다음이니 붙인다. 마지막은 3.", memory: ["last 3"] },
+    { pointer: 2, found: [0, 1], caption: "확인을 못 받은 프로듀서가 2-3을 다시 보냈다. 이미 본 번호라 붙이지 않고 성공만 돌려준다.", memory: ["last 3", "DUPLICATE"] },
+    { pointer: 3, found: [0, 1], caption: "6이 왔다. 4가 와야 하는데 건너뛰었다. 순서가 어긋났다고 거절한다.", memory: ["last 3", "OUT_OF_ORDER"] },
+    { pointer: 4, found: [0, 1, 4], caption: "4가 오면 붙이고, 그 뒤에 다시 보낸 5, 6도 차례로 붙는다.", memory: ["last 4"] },
+  ]}
+/>
+
+브로커는 PID마다 최근 배치 5개의 범위를 기억한다. 프로듀서가 응답을 기다리지 않고 동시에 보낼 수 있는 요청 수(`max.in.flight.requests.per.connection`)가 5 이하여야 멱등이 켜지는 이유가 여기 있다. 그보다 많으면 재전송된 배치가 기억 밖으로 밀려나 중복인지 알 수 없다. 이 장치는 순서도 지켜 준다. 1번 배치가 실패하고 2번이 먼저 붙는 일을 시퀀스 검사가 막는다.
+
+규칙을 직접 짜 보자. 아래 함수는 브로커가 받는 배치 목록을 차례로 검사해서 결과를 돌려준다. 실제 브로커보다 단순하게, 기억하는 범위의 제한과 PID 만료는 뺐다.
+
+<CodePlayground
+  caption="멱등 프로듀서의 시퀀스 검사 (단순화한 브로커)"
+  functionName="check"
+  initialCode={`function check(batches) {
+  // batches: [{ pid, epoch, seq, count }] 도착 순서
+  // 결과: "APPEND" | "DUPLICATE" | "OUT_OF_ORDER" | "FENCED"
+  // 규칙
+  // - 처음 보는 pid, 또는 더 높은 epoch: seq가 0이어야 APPEND, 아니면 OUT_OF_ORDER
+  // - 기억한 epoch보다 낮으면 FENCED
+  // - 같은 epoch: seq가 마지막+1이면 APPEND, 마지막 이하면 DUPLICATE, 그 밖은 OUT_OF_ORDER
+  // - APPEND면 마지막 시퀀스는 seq + count - 1
+  return batches.map(() => "APPEND");
+}`}
+  solution={`function check(batches) {
+  const state = new Map(); // pid -> { epoch, last }
+  return batches.map((b) => {
+    const s = state.get(b.pid);
+    if (!s || b.epoch > s.epoch) {
+      if (b.seq !== 0) return "OUT_OF_ORDER";
+      state.set(b.pid, { epoch: b.epoch, last: b.count - 1 });
+      return "APPEND";
+    }
+    if (b.epoch < s.epoch) return "FENCED";
+    if (b.seq === s.last + 1) {
+      s.last = b.seq + b.count - 1;
+      return "APPEND";
+    }
+    if (b.seq <= s.last) return "DUPLICATE";
+    return "OUT_OF_ORDER";
+  });
+}`}
+  tests={[
+    { label: "평소", args: [[{ pid: 5, epoch: 0, seq: 0, count: 2 }, { pid: 5, epoch: 0, seq: 2, count: 2 }]], expected: ["APPEND", "APPEND"] },
+    { label: "확인 유실 뒤 재전송", args: [[{ pid: 5, epoch: 0, seq: 0, count: 2 }, { pid: 5, epoch: 0, seq: 2, count: 2 }, { pid: 5, epoch: 0, seq: 2, count: 2 }]], expected: ["APPEND", "APPEND", "DUPLICATE"] },
+    { label: "번호를 건너뜀", args: [[{ pid: 5, epoch: 0, seq: 0, count: 2 }, { pid: 5, epoch: 0, seq: 4, count: 1 }]], expected: ["APPEND", "OUT_OF_ORDER"] },
+    { label: "새 세대가 뜬 뒤 옛 인스턴스", args: [[{ pid: 5, epoch: 0, seq: 0, count: 1 }, { pid: 5, epoch: 1, seq: 0, count: 1 }, { pid: 5, epoch: 0, seq: 1, count: 1 }]], expected: ["APPEND", "APPEND", "FENCED"] },
+    { label: "PID가 다르면 따로 센다", args: [[{ pid: 5, epoch: 0, seq: 0, count: 1 }, { pid: 6, epoch: 0, seq: 0, count: 1 }, { pid: 5, epoch: 0, seq: 1, count: 1 }, { pid: 6, epoch: 0, seq: 0, count: 1 }]], expected: ["APPEND", "APPEND", "APPEND", "DUPLICATE"] },
+  ]}
+/>
+
+마지막 테스트가 멱등 프로듀서의 범위를 보여 준다. 중복은 같은 PID 안에서만 알아본다. 프로듀서 프로세스가 재시작하면 새 PID를 받으니, 재시작 전에 보냈는지 모르는 메시지를 재시작 후에 다시 보내면 브로커는 다른 메시지로 본다. 애플리케이션이 "보냈는지 모르니 다시 보내자"를 하는 순간 멱등 프로듀서는 도와주지 못한다. 아웃박스 릴레이가 죽었다 살아나 같은 이벤트를 다시 보내는 경우가 정확히 이것이다.
+
+## Kafka 안에서 읽고 쓰기: 트랜잭션
+
+두 번째 구간은 "토픽에서 읽고, 처리해서, 다른 토픽에 쓰는" 컨슈머다. 주문 이벤트를 읽어 포인트 원장 토픽에 적립 기록을 쓴다고 하자. 쓰기는 됐는데 읽은 오프셋을 커밋하기 전에 죽으면, 다시 읽어서 원장에 또 쓴다.
+
+Kafka 트랜잭션은 이 둘을 묶는다. 출력 토픽에 쓰는 것과 입력 토픽의 오프셋을 커밋하는 것(`sendOffsetsToTransaction`)을 한 트랜잭션으로 커밋한다. 둘 다 반영되거나 둘 다 버려진다. 트랜잭션 하나를 중단하고, 같은 내용을 다시 보내 커밋해 봤다.
+
+```js
+// transactionalId가 있으면 트랜잭션 프로듀서가 된다 (멱등도 함께 켜진다)
+const p = kafka.producer({ transactionalId: "point-writer-1", idempotent: true, maxInFlightRequests: 1 });
+await p.connect();
+
+let tx = await p.transaction();
+await tx.send({ topic: "point-ledger", messages: [{ key: "u1", value: "+100 (order 1042)" }, { key: "u1", value: "+50 (order 1043)" }] });
+await tx.abort();   // 중간에 실패했다고 치고 버린다
+
+tx = await p.transaction();
+await tx.send({ topic: "point-ledger", messages: [{ key: "u1", value: "+100 (order 1042)" }, { key: "u1", value: "+50 (order 1043)" }] });
+await tx.commit();  // 실제 앱이라면 여기 전에 tx.sendOffsets(...)로 입력 오프셋도 넣는다
+```
+
+같은 토픽을 두 격리 수준으로 읽었다.
+
+```bash
+# 커밋 안 된 것까지 보는 기본값
+kafka-console-consumer.sh --bootstrap-server localhost:9091 --topic point-ledger --from-beginning \
+  --property print.offset=true --isolation-level read_uncommitted --timeout-ms 5000
+
+# 커밋된 트랜잭션만 보는 설정
+kafka-console-consumer.sh --bootstrap-server localhost:9091 --topic point-ledger --from-beginning \
+  --property print.offset=true --isolation-level read_committed --timeout-ms 5000
+```
+
+```text
+-- read_uncommitted
+Offset:0	+100 (order 1042)
+Offset:1	+50 (order 1043)
+Offset:3	+100 (order 1042)
+Offset:4	+50 (order 1043)
+Processed a total of 4 messages
+
+-- read_committed
+Offset:3	+100 (order 1042)
+Offset:4	+50 (order 1043)
+Processed a total of 2 messages
+```
+
+중단한 트랜잭션의 메시지(0, 1)는 로그에서 지워지지 않는다. 그대로 남아 있고, 앞의 덤프에서 본 ABORT 표시(오프셋 2)가 "이건 버린 것"이라고 알릴 뿐이다. 컨슈머의 기본 격리 수준은 `read_uncommitted`라서 버린 메시지까지 읽는다. 트랜잭션을 쓰는 쪽만 바꾸고 읽는 쪽을 `read_committed`로 바꾸지 않으면 보장이 없다. 오프셋 2와 5가 비는 것도 눈여겨본다. 트랜잭션 표시도 오프셋을 차지하니 "오프셋이 연속"이라고 가정한 코드는 틀린다.
+
+`read_committed` 컨슈머는 아직 끝나지 않은 트랜잭션이 있으면 그 지점(LSO, 마지막 안정 오프셋)에서 멈춰 기다린다. 오래 열린 트랜잭션 하나가 그 파티션의 모든 `read_committed` 컨슈머를 붙잡는다. 트랜잭션 시간 한도(`transaction.timeout.ms`, 기본 1분)를 넘기면 코디네이터가 중단시킨다.
+
+## 같은 이름의 옛 인스턴스를 막는 펜싱
+
+트랜잭션 프로듀서에는 `transactional.id`라는 고정된 이름이 있다. 이 이름으로 새 인스턴스가 뜨면 코디네이터가 에포크를 올리고, 옛 에포크로 온 요청을 거절한다. 배포 중에 옛 Pod가 GC로 멈춰 있다가 깨어나 쓰기를 마저 하는 좀비를 막는 장치다.
+
+같은 `transactional.id`로 프로듀서 둘을 띄워, 옛 쪽이 트랜잭션을 연 상태에서 새 쪽이 커밋하게 했다.
+
+```text
+old commit: INVALID_PRODUCER_EPOCH - Producer attempted an operation with an old epoch. Either there is a newer producer with the same transactionalId, or the producer's transaction has been expired by the broker
+```
+
+```text
+baseOffset: 6 lastOffset: 6 count: 1 baseSequence: 0 lastSequence: 0 producerId: 5 producerEpoch: 1 partitionLeaderEpoch: 0 isTransactional: true isControl: false ...
+| offset: 6 CreateTime: 1792506269095 keySize: 2 valueSize: 25 sequence: 0 headerKeys: [] key: u1 payload: +30 (order 1050) from old
+baseOffset: 7 lastOffset: 7 count: 1 baseSequence: -1 lastSequence: -1 producerId: 5 producerEpoch: 2 partitionLeaderEpoch: 0 isTransactional: true isControl: true ...
+| offset: 7 CreateTime: 1792506269121 keySize: 4 valueSize: 6 sequence: -1 headerKeys: [] endTxnMarker: ABORT coordinatorEpoch: 0
+baseOffset: 8 lastOffset: 8 count: 1 baseSequence: 0 lastSequence: 0 producerId: 5 producerEpoch: 3 partitionLeaderEpoch: 0 isTransactional: true isControl: false ...
+| offset: 8 CreateTime: 1792506269966 keySize: 2 valueSize: 25 sequence: 0 headerKeys: [] key: u1 payload: +30 (order 1050) from new
+baseOffset: 9 lastOffset: 9 count: 1 baseSequence: -1 lastSequence: -1 producerId: 5 producerEpoch: 3 partitionLeaderEpoch: 0 isTransactional: true isControl: true ...
+| offset: 9 CreateTime: 1792506269997 keySize: 4 valueSize: 6 sequence: -1 headerKeys: [] endTxnMarker: COMMIT coordinatorEpoch: 0
+```
+
+옛 인스턴스(에포크 1)가 쓴 6번은 새 인스턴스가 뜨는 순간 ABORT 표시(7번)로 닫혔고, 새 인스턴스는 에포크 3으로 8번을 쓰고 커밋했다. 옛 인스턴스의 커밋은 `INVALID_PRODUCER_EPOCH`로 거절됐다. `read_committed`로 읽으면 "from old"는 보이지 않는다. PID는 5로 같다. 같은 `transactional.id`는 재시작해도 같은 PID를 이어 받으니, 멱등 프로듀서와 달리 재시작을 넘어서도 신원이 유지된다.
+
+## 어디까지가 Kafka의 정확히 한 번인가
+
+여기까지를 한 그림에 놓으면 보장이 끝나는 곳이 보인다.
+
+<NetworkTopology
+  caption="Kafka 트랜잭션이 묶는 범위와 그 밖"
+  width={400}
+  height={260}
+  zones={[{ id: "kafka", label: "Kafka 트랜잭션 범위", x: 10, y: 20, w: 250, h: 160, tone: "private" }]}
+  nodes={[
+    { id: "in", label: "orders", sub: "입력 토픽", x: 75, y: 70, icon: "switch" },
+    { id: "app", label: "points app", sub: "read-process", x: 195, y: 70, icon: "container" },
+    { id: "out", label: "point-ledger", sub: "출력 토픽", x: 75, y: 145, icon: "switch", w: 112 },
+    { id: "off", label: "offsets", sub: "__consumer_off", x: 195, y: 145, icon: "lock" },
+    { id: "pg", label: "PostgreSQL", sub: "points", x: 330, y: 70, icon: "db" },
+    { id: "mail", label: "Mail API", x: 330, y: 220, icon: "internet" },
+  ]}
+  links={[
+    { from: "in", to: "app" },
+    { from: "app", to: "out" },
+    { from: "app", to: "off" },
+    { from: "app", to: "pg", dashed: true },
+    { from: "app", to: "mail", dashed: true },
+  ]}
+  steps={[
+    { path: ["in", "app"], packet: "read", title: "입력 토픽에서 읽는다", detail: "read_committed로 읽어야 중단된 트랜잭션의 메시지를 보지 않는다." },
+    { path: ["app", "out"], packet: "write", highlight: ["kafka"], title: "출력 토픽에 쓴다", detail: "트랜잭션 안의 쓰기다. 커밋 전까지 read_committed 컨슈머에게 안 보인다." },
+    { path: ["app", "off"], packet: "offsets", highlight: ["kafka"], title: "입력 오프셋도 같은 트랜잭션에", detail: "sendOffsetsToTransaction. 쓰기와 커밋이 함께 반영되거나 함께 버려진다. 여기까지가 정확히 한 번이다." },
+    { path: ["app", "pg"], packet: "+410", blocked: true, title: "DB 적립은 범위 밖", detail: "Kafka 트랜잭션이 중단돼도 PostgreSQL에 쓴 410점은 돌아가지 않는다. 다시 읽으면 또 쓴다." },
+    { path: ["app", "mail"], packet: "send", blocked: true, title: "메일 발송도 범위 밖", detail: "보낸 메일은 취소할 수 없다. 받는 API가 멱등성 키를 받는지 확인해야 한다." },
+  ]}
+/>
+
+Kafka 트랜잭션은 "Kafka에서 읽고 Kafka에 쓰는" 처리에서만 정확히 한 번이다. Kafka Streams가 `processing.guarantee=exactly_once_v2`로 해 주는 일이 이것이다. 처음 문의의 포인트 적립은 PostgreSQL에 쓰니 범위 밖이다. 이 구간은 받는 쪽 DB가 직접 중복을 알아봐야 한다.
+
+## 받는 쪽 DB에서 거르는 인박스 테이블
+
+방법은 처리한 메시지 ID를 업무 데이터와 같은 트랜잭션에 적는 것이다. 이 표를 인박스(inbox)라고 부른다. 메시지 ID를 기본 키로 두면 같은 ID의 두 번째 INSERT는 들어가지 않는다.
+
+```sql
+CREATE TABLE points (user_id bigint PRIMARY KEY, balance int NOT NULL);
+INSERT INTO points VALUES (7, 0);
+
+-- 컨슈머별로 처리한 메시지 ID를 적는다
+CREATE TABLE inbox (
+  consumer     text        NOT NULL,              -- 같은 메시지를 다른 컨슈머도 처리할 수 있다
+  message_id   text        NOT NULL,              -- 이벤트 ID (재전송해도 바뀌지 않는 값)
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (consumer, message_id)
+);
+```
+
+처음 받았을 때와 다시 받았을 때를 차례로 실행했다.
+
+```sql
+-- 처음 받음: 인박스에 들어가면(INSERT 0 1) 적립한다
+BEGIN;
+INSERT INTO inbox (consumer, message_id) VALUES ('points', 'evt-1042-paid')
+ON CONFLICT DO NOTHING;
+UPDATE points SET balance = balance + 410 WHERE user_id = 7;
+COMMIT;
+
+-- 다시 받음: 인박스에 이미 있어서 INSERT 0 0. 적립하지 않고 끝낸다
+BEGIN;
+INSERT INTO inbox (consumer, message_id) VALUES ('points', 'evt-1042-paid')
+ON CONFLICT DO NOTHING;
+ROLLBACK;
+SELECT * FROM points;
+```
+
+```text
+BEGIN
+INSERT 0 1
+UPDATE 1
+COMMIT
+BEGIN
+INSERT 0 0
+ROLLBACK
+ user_id | balance 
+---------+---------
+       7 |     410
+(1 row)
+```
+
+앱 코드에서는 INSERT가 바꾼 행 수(또는 `RETURNING`으로 받은 행)를 보고 0이면 업무 처리를 건너뛰고, 1이면 처리한 뒤 커밋한다. 커밋이 끝난 뒤에 Kafka 오프셋을 커밋한다. 오프셋 커밋 전에 죽어도 다시 받은 메시지는 인박스에서 걸러진다.
+
+두 컨슈머가 같은 메시지를 동시에 받으면 어떻게 될까. 리밸런싱 직후에 실제로 생기는 일이다. 세션 A가 트랜잭션 안에서 INSERT를 하고 커밋하지 않은 사이에, 세션 B가 같은 ID로 INSERT를 했다.
+
+<SequenceDiagram
+  caption="같은 메시지가 두 컨슈머에 동시에 왔을 때, 기본 키가 줄을 세운다"
+  actors={[
+    { id: "a", label: "컨슈머 A" },
+    { id: "db", label: "inbox" },
+    { id: "b", label: "컨슈머 B" },
+  ]}
+  steps={[
+    { from: "a", to: "db", label: "INSERT evt-1043", title: "A가 먼저 넣는다", detail: "INSERT 0 1. 아직 커밋 전이라 다른 세션에는 보이지 않는다." },
+    { from: "b", to: "db", label: "INSERT evt-1043", title: "B도 같은 ID를 넣으려 한다", detail: "보이지는 않지만 같은 키를 A가 잡고 있어서 B는 A가 끝날 때까지 기다린다." },
+    { from: "db", to: "b", label: "대기 (Lock)", title: "B가 잠금 대기에 들어간다", detail: "pg_stat_activity에서 wait_event_type이 Lock, wait_event가 transactionid로 보인다." },
+    { from: "a", to: "db", label: "적립 + COMMIT", title: "A가 적립하고 커밋한다", detail: "인박스 행과 포인트가 함께 반영된다." },
+    { from: "db", to: "b", label: "INSERT 0 0", title: "B는 충돌로 끝난다", detail: "A가 커밋하자 B의 INSERT는 아무것도 넣지 않고 끝난다. B는 적립하지 않는다. A가 롤백했다면 B의 INSERT가 들어갔을 것이다." },
+  ]}
+/>
+
+```text
+-- B가 기다리는 동안 pg_stat_activity
+25995|Lock|transactionid|active|INSERT INTO inbox (consumer, message_id) VALUES ('points', '
+
+-- A
+BEGIN
+INSERT 0 1
+COMMIT
+
+-- B (A의 커밋 직후, 약 8ms 뒤에 끝났다)
+SET
+BEGIN
+INSERT 0 0
+COMMIT
+```
+
+"먼저 조회하고 없으면 처리"로 짜면 두 컨슈머가 동시에 "없음"을 보고 둘 다 적립한다. 기본 키에 먼저 넣고 그 결과로 판단해야 경쟁에서도 하나만 이긴다. [멱등성 키](/posts/idempotency-key) 글의 "확인하고 넣으면 둘 다 통과한다"와 같은 이야기다.
+
+인박스가 안 되는 경우도 알아 둔다. 업무 데이터와 인박스가 같은 DB에 있어야 한 트랜잭션으로 묶인다. 적립이 다른 서비스의 API 호출이면 인박스만으로는 안 되고, 그 API에 메시지 ID를 멱등성 키로 넘겨야 한다. 업무 처리 자체가 원래 멱등하면 인박스가 필요 없다. `UPDATE orders SET status = 'paid' WHERE id = 1042`는 두 번 해도 결과가 같다. `balance = balance + 410`은 아니다. 가능하면 "더하기" 대신 "이 이벤트의 결과로 이 값이 된다"로 바꾸는 게 가장 싼 중복 방지다.
+
+## 중복을 얼마나 오래 기억할까
+
+인박스는 계속 커진다. 언젠가는 지워야 하고, 지운 뒤에 같은 ID가 오면 처음 보는 메시지로 처리된다. 그래서 "얼마나 오래 기억할까"는 "얼마나 늦게 온 중복까지 막을까"와 같은 질문이다.
+
+기준은 같은 메시지가 다시 올 수 있는 가장 긴 시간이다. Kafka라면 오프셋을 되돌려 재처리할 수 있는 기간(토픽 보관 기간, 기본 7일)이 상한이다. DLQ에서 며칠 뒤 되돌려 보내는 운영을 한다면 그 기간도 더한다. 그보다 짧게 지우면 재처리 때 중복이 생긴다. 다른 시스템의 기본값도 같은 고민의 결과다. SQS FIFO 큐는 같은 중복 제거 ID를 5분 동안만 걸러 주고, Kafka 멱등 프로듀서는 한 프로듀서 세션 안의 최근 배치 5개만 기억한다.
+
+지우는 쿼리는 시간 열에 인덱스가 있어야 운영 중에 돌릴 수 있다. 60만 행 인박스에서 오래된 쪽을 세는 쿼리로 비교했다.
+
+```sql
+-- 인덱스 없이
+EXPLAIN ANALYZE SELECT count(*) FROM inbox WHERE processed_at < now() - interval '28 days';
+```
+
+```text
+ Finalize Aggregate  (cost=9821.25..9821.26 rows=1 width=8) (actual time=45.543..50.400 rows=1 loops=1)
+   ->  Gather  (cost=9821.03..9821.24 rows=2 width=8) (actual time=45.425..50.389 rows=3 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Partial Aggregate  (cost=8821.03..8821.04 rows=1 width=8) (actual time=41.807..41.808 rows=1 loops=3)
+               ->  Parallel Seq Scan on inbox  (cost=0.00..8777.00 rows=17613 width=0) (actual time=0.020..40.907 rows=13333 loops=3)
+                     Filter: (processed_at < (now() - '28 days'::interval))
+                     Rows Removed by Filter: 186667
+ Planning Time: 0.112 ms
+ Execution Time: 50.428 ms
+```
+
+```sql
+CREATE INDEX inbox_processed_at_idx ON inbox (processed_at);
+EXPLAIN ANALYZE SELECT count(*) FROM inbox WHERE processed_at < now() - interval '28 days';
+```
+
+```text
+ Aggregate  (cost=5803.48..5803.49 rows=1 width=8) (actual time=14.007..14.009 rows=1 loops=1)
+   ->  Bitmap Heap Scan on inbox  (cost=556.04..5697.80 rows=42272 width=0) (actual time=2.183..12.313 rows=40006 loops=1)
+         Recheck Cond: (processed_at < (now() - '28 days'::interval))
+         Heap Blocks: exact=4402
+         ->  Bitmap Index Scan on inbox_processed_at_idx  (cost=0.00..545.47 rows=42272 width=0) (actual time=1.655..1.656 rows=40006 loops=1)
+               Index Cond: (processed_at < (now() - '28 days'::interval))
+ Planning Time: 0.211 ms
+ Execution Time: 14.038 ms
+```
+
+인덱스가 없으면 `Parallel Seq Scan`이 60만 행을 다 읽고(`loops=3`이니 작업자 셋이 평균 18만 6천여 행씩 걸러 냈다) 50ms가 걸렸다. 인덱스를 만들자 `Bitmap Index Scan`으로 해당하는 4만 행만 찾아 14ms가 됐다. 표가 커질수록 차이가 벌어진다. 지울 때는 한 번에 다 지우지 않고 묶음으로 나눠 잠금과 WAL이 한꺼번에 몰리지 않게 한다.
+
+```sql
+-- 7일 지난 기록을 1만 건씩 지운다. 0건이 나올 때까지 반복한다
+DELETE FROM inbox
+WHERE ctid IN (
+  SELECT ctid FROM inbox
+  WHERE processed_at < now() - interval '7 days'
+  LIMIT 10000
+);
+```
+
+```text
+DELETE 10000
+```
+
+하루에 수천만 건이 쌓인다면 `processed_at`으로 날짜별 파티션을 나누고 오래된 파티션을 통째로 떼어 내는 편이 낫다. 묶음 삭제와 진행 위치 관리는 [배치 처리](/posts/batch-processing)에서 더 자세히 다룬다.
+
+## 중복 적립 문의를 받았을 때 볼 것
+
+처음 문의로 돌아가자. 포인트가 두 번 들어갔다면 이 순서로 확인한다.
+
+먼저 같은 이벤트가 두 번 왔는지, 서로 다른 이벤트 두 개였는지 가른다. 적립 기록에 이벤트 ID가 남아 있지 않으면 이것부터 남기게 고친다. 이벤트 ID가 다르면 발행 쪽 문제다. 아웃박스 릴레이가 재시작하며 다시 보냈는지, 프로듀서 재시작으로 PID가 바뀐 뒤 재전송했는지 본다. 이 경우 이벤트 ID를 재전송 때 새로 만들고 있지 않은지 확인한다. ID를 보낼 때마다 새로 만들면 받는 쪽은 영영 중복을 알아보지 못한다.
+
+이벤트 ID가 같으면 받는 쪽 문제다. 컨슈머 재시작이나 리밸런싱 시각과 겹치는지 브로커 로그의 `Preparing to rebalance`로 보고, 인박스 INSERT와 적립이 정말 같은 트랜잭션인지 코드를 본다. 인박스를 먼저 커밋하고 적립을 따로 하면 그 사이에 죽었을 때 적립이 빠지고, 순서를 바꾸면 중복이 생긴다. 인박스 보관 기간이 재처리 기간보다 짧았는지도 본다.
+
+Kafka 트랜잭션을 쓰는데 중복이 보인다면 읽는 쪽이 `read_committed`인지부터 본다. 기본값 그대로면 중단된 트랜잭션의 메시지까지 읽는다.
+
+## 정확히 한 번은 구간마다 받는 쪽이 만든다
+
+전달 자체를 한 번으로 만드는 방법은 없다. 확인이 사라지면 보낸 쪽은 다시 보낼 수밖에 없기 때문이다. 그래서 정확히 한 번은 구간마다 받는 쪽이 중복을 알아보는 장치를 둬서 만든다. 프로듀서에서 브로커까지는 멱등 프로듀서의 PID와 시퀀스가, Kafka 안에서 읽고 쓰는 처리는 트랜잭션과 `read_committed`가, 바깥 DB는 인박스 테이블이, 바깥 API는 멱등성 키가 맡는다. 하나라도 비면 그 구간에서 중복이 생긴다. 처음 회의의 질문에는 "그 설정은 Kafka 안쪽 구간만 막는다. 포인트 DB에는 인박스가 필요하다"가 답이다.
+
+## 면접에서 나올 만한 질문
+
+### at-most-once, at-least-once, exactly-once는 어떻게 다른가?
+
+실패했을 때 다시 보내느냐로 갈린다. 최대 한 번은 다시 보내지 않아 잃을 수 있고, 최소 한 번은 확인을 받을 때까지 다시 보내 중복이 생길 수 있다. 정확히 한 번은 최소 한 번 전달 위에 받는 쪽의 중복 제거를 얹은 것이고, 전달 자체가 한 번인 것은 아니다. 확인이 사라진 경우와 저장이 안 된 경우를 보낸 쪽이 구별할 수 없기 때문이다.
+
+### Kafka 멱등 프로듀서는 어떻게 중복을 막나?
+
+프로듀서가 브로커에게 받은 PID와 파티션별 시퀀스 번호를 배치에 붙이고, 브로커는 PID별로 최근 배치 5개의 시퀀스를 기억해 이미 받은 번호면 붙이지 않고 성공만 돌려준다. 그래서 `max.in.flight.requests.per.connection`이 5 이하여야 한다. 3.0부터 기본으로 켜져 있다. 다만 같은 PID 안에서만 알아보므로, 프로듀서가 재시작해 새 PID를 받은 뒤 애플리케이션이 다시 보낸 메시지는 막지 못한다.
+
+### Kafka 트랜잭션이 보장하는 범위는 어디까지인가?
+
+Kafka에서 읽고 Kafka에 쓰는 처리에서, 출력 쓰기와 입력 오프셋 커밋을 한 트랜잭션으로 묶어 함께 반영하거나 함께 버린다. 읽는 쪽이 `read_committed`여야 중단된 메시지를 보지 않는다. 외부 DB 쓰기나 메일 발송 같은 Kafka 밖의 부수 효과는 범위 밖이라 트랜잭션이 중단돼도 되돌아가지 않는다. 그런 구간은 인박스나 멱등성 키로 따로 막는다.
+
+### transactional.id와 펜싱은 왜 필요한가?
+
+재시작이나 배포로 같은 역할의 인스턴스가 둘이 되는 순간, 멈췄다 깨어난 옛 인스턴스가 쓰기를 마저 하는 걸 막기 위해서다. 같은 `transactional.id`로 새 인스턴스가 초기화하면 코디네이터가 옛 트랜잭션을 중단하고 에포크를 올려, 옛 에포크의 요청을 `INVALID_PRODUCER_EPOCH`로 거절한다. 실험에서도 옛 인스턴스의 커밋이 거절되고 그 메시지는 ABORT로 닫혔다.
+
+### 인박스 테이블은 어떻게 만들고 무엇을 조심하나?
+
+(컨슈머, 메시지 ID)를 기본 키로 두고, 메시지를 받으면 같은 트랜잭션에서 먼저 인박스에 INSERT한 뒤 들어갔을 때만 업무 처리를 하고 커밋한다. 먼저 조회하고 처리하면 동시에 온 중복이 둘 다 통과하니 INSERT 결과로 판단한다. 업무 데이터와 같은 DB에 있어야 하고, 오프셋 커밋은 DB 커밋 뒤에 한다. 메시지 ID는 재전송해도 바뀌지 않는 값이어야 한다.
+
+### 중복 제거 기록은 얼마나 보관해야 하나?
+
+같은 메시지가 다시 올 수 있는 가장 긴 시간보다 길게 둔다. Kafka 토픽 보관 기간 안에서는 오프셋을 되돌려 재처리할 수 있고, DLQ 재처리 운영까지 생각하면 그 기간도 더한다. 지울 때는 시간 열 인덱스와 묶음 삭제, 양이 많으면 날짜 파티션을 쓴다. SQS FIFO의 5분처럼 시스템이 정한 짧은 창에만 기대면 그보다 늦은 중복은 그대로 들어온다.
+
+### 업무 처리 자체를 멱등하게 만드는 방법에는 무엇이 있나?
+
+"더하기"를 "이 값으로 만들기"로 바꾸는 것이 가장 싸다. `balance = balance + 410` 대신 이벤트별 적립 행을 이벤트 ID 유일 제약과 함께 넣고 잔액은 합으로 구하거나, 상태 변경을 `status = 'paid'`처럼 덮어쓰기로 한다. 순서가 바뀔 수 있으면 대상별 버전을 함께 저장해 옛 버전의 이벤트를 버린다. 이렇게 하면 인박스 없이도 같은 메시지를 두 번 처리해도 결과가 같다.

@@ -1,0 +1,496 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-chain-of-responsibility");
+
+프런트엔드에서 API 에러를 사용자 문구로 바꾸는 `toUserMessage(error)`가 있다. 처음엔 "401이면 다시 로그인"이 전부였다. 지금은 이렇다.
+
+```ts
+declare class HttpError extends Error {
+  status: number;
+  headers: Record<string, string>;
+}
+
+function toUserMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "";
+  } else if (error instanceof HttpError) {
+    if (error.status === 401) return "다시 로그인해 주세요.";
+    else if (error.status === 429) return `${error.headers["retry-after"] ?? "잠시"}초 뒤에 다시 시도해 주세요.`;
+    else if (error.status >= 500) return "서버에 문제가 생겼어요.";
+    // 결제 팀이 402를 여기 넣고 싶어 한다. 검색 팀은 422를.
+  } else if (error instanceof TypeError) {
+    return "인터넷 연결을 확인해 주세요.";
+  }
+  return "알 수 없는 오류가 발생했어요.";
+}
+```
+
+팀마다 자기 에러를 넣고 싶어 해서 이 함수는 모든 팀이 고치는 파일이 됐다. 분기 하나를 넣으려면 전체 구조를 읽어야 하고, `HttpError` 안쪽 `if`가 아무것도 돌려주지 않으면 맨 아래로 떨어지는 길도 따로 기억해야 한다. 이번 글은 이 분기들을 "내 것이면 처리하고, 아니면 다음으로"를 따르는 처리기들의 줄로 바꾸는 책임 연쇄(Chain of Responsibility) 패턴이다.
+
+## 내 일이 아니면 다음 처리기로 넘긴다
+
+GoF의 정의는 요청을 보내는 쪽과 받는 쪽을 떼어 내는 것이다. 보내는 쪽은 줄의 맨 앞에만 요청을 건넨다. 처리기마다 자기가 처리할 수 있는지 보고, 할 수 있으면 처리하고 끝낸다. 못 하면 자기 뒤의 처리기에 넘긴다. 보내는 쪽은 누가 처리했는지 모른다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="처리기는 모두 같은 모양이고, 각자 다음 처리기 하나만 안다"
+  nodes={[
+    { id: "client", label: "toUserMessage", sub: "Client", x: 200, y: 35, w: 140 },
+    { id: "iface", label: "Handler", sub: "handle(e) · next", x: 200, y: 115, w: 140 },
+    { id: "a", label: "Unauthorized", sub: "401", x: 70, y: 210, w: 110 },
+    { id: "b", label: "RateLimited", sub: "429", x: 200, y: 210, w: 110 },
+    { id: "c", label: "Fallback", sub: "마지막", x: 330, y: 210, w: 100 },
+  ]}
+  edges={[
+    { from: "client", to: "iface", label: "첫 처리기에 건넨다" },
+    { from: "a", to: "b", label: "next" },
+    { from: "b", to: "c", label: "next" },
+    { from: "a", to: "iface", dashed: true },
+    { from: "c", to: "iface", dashed: true },
+  ]}
+/>
+
+GoF 책의 모양대로 쓰면 처리기가 다음 처리기를 필드로 들고 있는 연결 리스트가 된다.
+
+```ts
+declare class HttpError extends Error {
+  status: number;
+  headers: Record<string, string>;
+}
+
+abstract class ErrorHandler {
+  private next?: ErrorHandler;
+
+  setNext(next: ErrorHandler): ErrorHandler {
+    this.next = next;
+    return next; // a.setNext(b).setNext(c)로 이어 붙이려고
+  }
+
+  handle(error: unknown): string {
+    return this.next ? this.next.handle(error) : "알 수 없는 오류가 발생했어요.";
+  }
+}
+
+class UnauthorizedHandler extends ErrorHandler {
+  handle(error: unknown) {
+    if (error instanceof HttpError && error.status === 401) return "다시 로그인해 주세요.";
+    return super.handle(error); // 내 것이 아니면 다음으로
+  }
+}
+
+class RateLimitHandler extends ErrorHandler {
+  handle(error: unknown) {
+    if (error instanceof HttpError && error.status === 429) {
+      return `${error.headers["retry-after"] ?? "잠시"}초 뒤에 다시 시도해 주세요.`;
+    }
+    return super.handle(error);
+  }
+}
+
+const chain = new UnauthorizedHandler();
+chain.setNext(new RateLimitHandler());
+```
+
+결제 팀은 `PaymentRequiredHandler`를 만들어 줄에 끼우기만 하면 된다. 다른 처리기는 고치지 않는다. 처리기 하나하나가 작은 클래스라 따로 테스트하기도 쉽다.
+
+## 배열 하나와 반복문 하나로 충분하다
+
+자바스크립트에서는 이 연결 리스트가 대개 과하다. 처리기가 "내 것이면 문구, 아니면 `undefined`"를 돌려주는 함수라면, 줄은 배열이고 넘기는 일은 반복문이 한다.
+
+```ts
+class HttpError extends Error {
+  constructor(readonly status: number, readonly headers: Record<string, string> = {}) {
+    super(`HTTP ${status}`);
+  }
+}
+
+type ErrorHandler = (error: unknown) => string | undefined; // 내 것이 아니면 undefined
+
+const handlers: ErrorHandler[] = [
+  (e) => (e instanceof DOMException && e.name === "AbortError" ? "" : undefined), // 사용자가 취소했다
+  (e) => (e instanceof HttpError && e.status === 401 ? "다시 로그인해 주세요." : undefined),
+  (e) => (e instanceof HttpError && e.status === 429 ? `${e.headers["retry-after"] ?? "잠시"}초 뒤에 다시 시도해 주세요.` : undefined),
+  (e) => (e instanceof HttpError && e.status >= 500 ? "서버에 문제가 생겼어요." : undefined),
+  (e) => (e instanceof TypeError ? "인터넷 연결을 확인해 주세요." : undefined), // fetch의 네트워크 실패
+];
+
+export function toUserMessage(error: unknown): string {
+  for (const handle of handlers) {
+    const message = handle(error);
+    if (message !== undefined) return message; // 처음 처리한 곳에서 멈춘다
+  }
+  return "알 수 없는 오류가 발생했어요.";
+}
+```
+
+여섯 가지 에러를 넣어 돌린 결과다.
+
+```text
+HTTP 401     -> "다시 로그인해 주세요."
+HTTP 429     -> "30초 뒤에 다시 시도해 주세요."
+HTTP 503     -> "서버에 문제가 생겼어요."
+TypeError    -> "인터넷 연결을 확인해 주세요."
+AbortError   -> ""
+Error        -> "알 수 없는 오류가 발생했어요."
+```
+
+취소된 요청이 빈 문자열을 돌려주는 줄을 보자. "아무 말도 하지 않는다"도 처리다. 그래서 "처리 안 함"은 빈 문자열이 아니라 `undefined`로 표시했다. 둘을 같은 값으로 쓰면 취소된 요청이 맨 아래까지 내려가 "알 수 없는 오류" 토스트를 띄운다. 아래 그림에서 에러 셋이 줄을 따라 내려가는 모습을 보자.
+
+<NetworkTopology
+  caption="에러는 처리할 수 있는 처리기를 만날 때까지 줄을 따라간다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "src", label: "fetch 실패", x: 45, y: 120, icon: "client", w: 80 },
+    { id: "abort", label: "Abort", x: 130, y: 60, icon: "switch", w: 66 },
+    { id: "auth", label: "401", x: 210, y: 60, icon: "lock", w: 60 },
+    { id: "rate", label: "429", x: 290, y: 60, icon: "firewall", w: 60 },
+    { id: "server", label: "5xx", x: 290, y: 180, icon: "server", w: 60 },
+    { id: "fallback", label: "Fallback", x: 175, y: 180, icon: "gateway", w: 80 },
+  ]}
+  links={[
+    { from: "src", to: "abort" },
+    { from: "abort", to: "auth" },
+    { from: "auth", to: "rate" },
+    { from: "rate", to: "server" },
+    { from: "server", to: "fallback" },
+  ]}
+  steps={[
+    { path: ["src", "abort", "auth"], packet: "401", highlight: ["auth"], title: "401은 두 번째에서 끝난다", detail: "Abort 처리기는 자기 것이 아니라 넘기고, 401 처리기가 문구를 돌려준다. 뒤의 처리기는 불리지도 않는다.", payload: "다시 로그인해 주세요." },
+    { path: ["src", "abort", "auth", "rate"], packet: "429", highlight: ["rate"], title: "429는 세 번째에서 끝난다", detail: "처리기가 헤더의 Retry-After를 읽어 문구에 넣는다. 처리기는 에러 전체를 받으니 필요한 정보를 직접 꺼낸다.", payload: "30초 뒤에 다시 시도해 주세요." },
+    { path: ["src", "abort", "auth", "rate", "server", "fallback"], packet: "Error", title: "아무도 받지 않으면 끝까지 간다", detail: "모르는 에러는 모든 처리기를 지나 Fallback이 받는다. 마지막 처리기가 없으면 undefined가 화면까지 올라간다." },
+  ]}
+/>
+
+## 줄의 순서가 곧 규칙이다
+
+처리기를 따로 떼어 놓으니 순서가 숨는다. 결제 팀이 "503이면 '결제 대행사 점검 중'을 띄워 달라"고 해서 처리기를 배열 끝에 추가했다고 하자.
+
+```ts
+type ErrorHandler = (error: unknown) => string | undefined;
+declare const handlers: ErrorHandler[];
+declare class HttpError extends Error {
+  status: number;
+}
+
+handlers.push((e) => (e instanceof HttpError && e.status === 503 ? "결제 대행사 점검 중입니다." : undefined));
+```
+
+이 처리기는 영원히 불리지 않는다. 앞에 있는 `status >= 500` 처리기가 503을 먼저 가져간다. 테스트에서 처리기 하나만 떼어 돌리면 통과하니 더 찾기 어렵다. 그래서 줄 전체를 대상으로 "이 에러는 이 처리기에서 끝난다"를 확인하는 테스트가 따로 필요하다. 구체적인 처리기를 앞에, 넓게 받는 처리기를 뒤에 두는 것이 규칙이고, 처리기에 이름을 붙여 "누가 처리했는지"를 로그에 남기면 운영 중에 엉뚱한 문구가 나왔을 때 바로 원인을 찾는다.
+
+줄이 길어질 때의 비용도 있다. 처리기가 백 개면 마지막에 걸리는 요청은 앞의 아흔아홉 개를 지난다. 에러 문구 정도는 상관없지만 요청마다 도는 서버 쪽 사슬이라면, 요청 종류(경로, 상태 코드)로 먼저 나누는 표를 두고 그 안에서만 줄을 서게 한다. 라우터가 하는 일이 그것이다.
+
+## 모두 거쳐 가는 사슬, 미들웨어
+
+지금까지는 "처음 처리한 하나가 끝낸다"였다. GoF가 말한 책임 연쇄의 원래 모양이다. 웹 서버의 미들웨어는 조금 다르다. 요청이 모든 처리기를 차례로 지나가고, 각 처리기는 일을 하고 넘기거나 거기서 응답하고 끊는다. Express 미들웨어가 사슬을 끊는 장면은 [디자인 패턴 개요](/posts/design-patterns-overview#이미-매일-쓰고-있는-패턴)에서 봤으니, 여기서는 넘긴 뒤에 다시 돌아오는 Koa의 사슬을 본다.
+
+Koa에서 `await next()`는 "뒤쪽 사슬이 다 끝날 때까지 기다린다"는 뜻이다. 그래서 `next()` 앞과 뒤에 코드를 쓸 수 있다. 타이머, 캐시, 핸들러 세 개를 Koa 2.16에 올리고 요청을 두 번 보냈다.
+
+```ts
+import Koa from "koa";
+
+const app = new Koa();
+app.use(async (ctx, next) => {
+  console.log("1 timer before");
+  await next(); // 뒤쪽이 모두 끝날 때까지 기다린다
+  console.log("5 timer after", ctx.status);
+});
+app.use(async (ctx, next) => {
+  console.log("2 cache before");
+  if (ctx.path === "/stop") {
+    ctx.body = "cached"; // next를 부르지 않으면 사슬이 여기서 돌아선다
+    return;
+  }
+  await next();
+  console.log("4 cache after");
+});
+app.use(async (ctx) => {
+  console.log("3 handler");
+  ctx.body = "fresh";
+});
+app.listen(3000);
+```
+
+```text
+--- GET /orders
+1 timer before
+2 cache before
+3 handler
+4 cache after
+5 timer after 200
+client got 200 fresh
+--- GET /stop
+1 timer before
+2 cache before
+5 timer after 200
+client got 200 cached
+```
+
+`/stop`에서는 3과 4가 없다. 캐시가 사슬을 끊었다. 그런데 5는 찍혔다. 끊긴 지점에서 앞쪽 처리기들로 다시 돌아 나오기 때문이다. 그래서 응답 시간을 재는 타이머는 사슬 맨 앞에 둬야 캐시 적중까지 잰다. 이 앞뒤 구조를 만드는 것이 `koa-compose`의 `dispatch` 함수다.
+
+<AlgoTrace
+  caption="dispatch(i)가 i번째를 부르고, next는 dispatch(i + 1)이다"
+  memoryLabel="호출 스택 (아래가 먼저)"
+  cells={["timer 앞", "cache 앞", "handler", "cache 뒤", "timer 뒤"]}
+  steps={[
+    { pointer: 0, memory: ["dispatch(0) timer"], caption: "dispatch(0)이 timer를 부른다. timer는 앞 코드를 실행하고 next()를 부른다." },
+    { pointer: 1, memory: ["dispatch(0) timer", "dispatch(1) cache"], caption: "next()는 dispatch(1)이다. cache가 스택에 올라간다." },
+    { pointer: 2, found: [2], memory: ["dispatch(0) timer", "dispatch(1) cache", "dispatch(2) handler"], caption: "handler는 next를 부르지 않는다. 사슬의 끝이다." },
+    { pointer: 3, memory: ["dispatch(0) timer", "dispatch(1) cache"], caption: "handler가 끝나 스택에서 빠진다. cache의 await next()가 풀려 뒤 코드가 돈다." },
+    { pointer: 4, found: [2, 4], memory: [], caption: "마지막으로 timer의 뒤 코드가 돈다. 들어간 순서의 반대로 나온다." },
+  ]}
+/>
+
+## next를 잊거나 두 번 부르면
+
+사슬은 처리기들이 약속을 지킬 때만 동작한다. 약속이 깨지는 대표적인 두 경우를 직접 일으켜 봤다.
+
+첫째, `next()`를 잊으면. Express에서 미들웨어가 응답도 하지 않고 `next()`도 부르지 않으면 요청은 그 자리에 멈춘다. 에러가 나지 않는다. 클라이언트에 2초 타임아웃을 걸고 요청했다(Express 5.3).
+
+```text
+--- GET /forgot
+parse
+client: TimeoutError The operation was aborted due to timeout
+```
+
+앱 로그에는 `parse` 한 줄뿐이고 에러도 없다. 앞에 로드 밸런서가 있으면 사용자는 504를 받는다. "504인데 앱 로그는 깨끗하다"면 응답 없이 끝나는 미들웨어 분기부터 찾는다. 특히 `if`로 일찍 `return`하는 분기가 의심 대상이다. Koa는 이 경우 본문이 없으면 404로 끝내서 멈추지는 않지만, 의도하지 않은 404가 나온다.
+
+둘째, `next()`를 두 번 부르면. 같은 Koa 앱에서 캐시 미들웨어가 `await next()`를 두 번 부르게 했다.
+
+```text
+--- GET /twice
+1 timer before
+2 cache before
+3 handler
+app error: next() called multiple times
+client got 500 Internal Server Error
+```
+
+`koa-compose`는 "지금 몇 번째까지 불렀는지"를 기억해 두고, 이미 지난 번호로 다시 들어오면 에러를 던진다. Express에는 이 검사가 없다. 같은 실수를 Express 5.3에서 하되, 바로 뒤에 비동기로 토큰을 확인하는 인증 미들웨어를 뒀다.
+
+```ts
+import express from "express";
+
+const app = express();
+app.use((req, res, next) => {
+  next();
+  next(); // 실수로 두 번
+});
+app.use((req, res, next) => {
+  console.log("B auth (async)");
+  setTimeout(() => {
+    console.log("B auth done");
+    next();
+  }, 20); // 토큰 확인에 20ms
+});
+app.use((req, res, next) => {
+  console.log("C");
+  next();
+});
+app.get("/a", (req, res) => {
+  console.log("handler runs");
+  res.send("ok");
+});
+```
+
+```text
+B auth (async)
+C
+handler runs
+express: 200 ok
+B auth done
+```
+
+에러가 없다. 대신 인증이 끝나기도 전에 핸들러가 응답을 보냈다. 두 번째 `next()`가 인증이 쥐고 있던 차례를 건너 다음 칸으로 넘어갔기 때문이다. 인증 미들웨어가 나중에 토큰이 틀렸다고 판단해도 응답은 이미 나갔다. 사슬이 약속 위반을 잡아 주지 않으면 이런 버그는 보안 사고로 이어진다.
+
+### 에러만 받는 두 번째 줄
+
+Express에는 사슬이 둘 있다. 인자가 셋인 일반 미들웨어 줄과, 인자가 넷인 `(err, req, res, next)` 에러 처리기 줄이다. 어느 처리기든 `next(err)`를 부르면 남은 일반 미들웨어를 모두 건너뛰고 에러 처리기 줄로 넘어간다.
+
+```text
+--- GET /orders?bad=1
+parse
+validate
+errorLogger: invalid id
+errorResponder
+client got 400 {"error":"invalid id"}
+```
+
+`validate` 뒤에 있던 `audit`과 핸들러가 찍히지 않았다. 에러 처리기끼리도 책임 연쇄다. `errorLogger`는 로그만 남기고 `next(err)`로 넘기고, `errorResponder`가 응답을 보낸다. Express가 인자 개수(`fn.length`)로 두 줄을 구분하기 때문에, 에러 처리기에서 쓰지 않는다고 `next`를 지우면 일반 미들웨어로 취급되어 에러를 받지 못한다. 린터가 "쓰지 않는 인자"를 지우라고 해도 남겨 둬야 하는 자리다.
+
+## 브라우저에서 위로 올라가는 사슬
+
+DOM 이벤트의 버블링도 책임 연쇄다. 버튼을 누르면 `click` 이벤트가 버튼에서 시작해 부모, 그 부모로 올라간다. 어느 단계든 처리할 수 있고, `stopPropagation()`을 부르면 거기서 사슬이 끊긴다. 목록 전체에 리스너 하나를 두는 이벤트 위임은 "버튼은 처리하지 않고 넘기고, 위에서 한꺼번에 처리한다"는 뜻이다. jsdom 24에서 같은 버튼을 두 번 눌렀다. 두 번째는 행에 `data-locked`를 붙인 뒤다.
+
+```text
+--- click 1
+button    target=del currentTarget=del
+li        target=del currentTarget=row
+ul        target=del currentTarget=list
+ul: delegated delete for row
+document  target=del currentTarget=document
+--- click 2 (locked row)
+button    target=del currentTarget=del
+li        target=del currentTarget=row
+li: stopPropagation
+```
+
+<SequenceDiagram
+  caption="클릭은 버튼에서 위로 올라가고, 누구든 끊을 수 있다"
+  actors={[
+    { id: "btn", label: "button" },
+    { id: "li", label: "li" },
+    { id: "ul", label: "ul" },
+    { id: "doc", label: "document" },
+  ]}
+  steps={[
+    { from: "btn", to: "btn", label: "click", title: "이벤트는 누른 요소에서 시작한다", detail: "target은 끝까지 button이다. 사슬의 어느 단계에서 봐도 처음 눌린 곳을 안다." },
+    { from: "btn", to: "li", label: "bubble", title: "버튼은 처리하지 않고 넘긴다", detail: "버튼에 달린 리스너가 아무것도 막지 않으면 이벤트가 부모로 올라간다." },
+    { from: "li", to: "ul", label: "bubble", title: "행은 잠겨 있는지만 본다", detail: "잠기지 않았으니 그대로 넘긴다." },
+    { from: "ul", to: "ul", label: "closest(button)", title: "목록이 위임받아 처리한다", detail: "리스너 하나로 모든 행의 삭제 버튼을 처리한다. 행이 천 개여도 리스너는 하나다.", payload: "ul: delegated delete for row" },
+    { from: "ul", to: "doc", label: "bubble", title: "처리한 뒤에도 계속 올라간다", detail: "DOM은 처리했다고 멈추지 않는다. 끊으려면 직접 stopPropagation을 불러야 한다." },
+    { from: "li", to: "li", label: "stopPropagation", title: "잠긴 행에서는 행이 사슬을 끊는다", detail: "두 번째 클릭에서는 li가 stopPropagation을 불러 ul과 document가 이벤트를 받지 못한다. 삭제가 일어나지 않는다." },
+  ]}
+/>
+
+DOM은 처리했다고 저절로 멈추지 않는다는 점이 GoF 모양과 다르다. 그래서 `stopPropagation`을 함부로 부르면 위쪽에서 기다리던 처리기가 조용히 망가진다. 바깥을 누르면 닫히는 드롭다운이나 분석 도구가 `document`에서 클릭을 듣고 있다가 아무것도 받지 못하는 경우가 흔하다. 기본 동작만 막고 싶다면 `preventDefault()`를 쓰고 사슬은 그대로 둔다.
+
+React의 에러 경계(Error Boundary)도 같은 방향이다. 컴포넌트가 렌더링 중에 던진 에러는 트리를 따라 위로 올라가 가장 가까운 에러 경계가 받는다. 경계가 없는 곳에서 난 에러는 더 위의 경계까지 올라가고, 끝까지 없으면 앱 전체가 내려간다. 자바스크립트의 `try/catch`가 호출 스택을 따라 올라가는 것도 같은 생각이다.
+
+## 등록 순서와 실행 순서가 다른 곳
+
+axios의 인터셉터도 사슬이다. 요청 인터셉터들이 설정 객체를 차례로 고친 뒤 실제 요청이 나가고, 응답 인터셉터들이 응답을 차례로 받는다. 그런데 순서에 함정이 있다. axios 1.20에서 인증 헤더 인터셉터를 먼저, 추적 헤더 인터셉터를 나중에 등록하고 요청을 보냈다.
+
+```text
+request #2 (trace)
+request #1 (auth)
+adapter: send trace>auth>
+response #1
+response #2
+data: ok
+```
+
+요청 인터셉터는 나중에 등록한 것부터 돈다. axios 내부가 요청 인터셉터를 배열 앞에 `unshift`로 끼워 넣기 때문이다. 응답 인터셉터는 등록한 순서대로다. "인증 인터셉터가 붙인 헤더를 보고 서명하는 인터셉터"를 나중에 등록하면, 서명이 먼저 돌아 헤더가 없는 요청에 서명한다. 사슬을 쓰는 라이브러리를 처음 만나면 순서부터 확인한다.
+
+<UrlAnatomy
+  caption="axios 인터셉터 하나를 사슬에 거는 자리 (axios 1.x)"
+  base="api.interceptors.request.use("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "fulfilled", display: "onFulfilled", title: "앞 단계가 성공했을 때", description: "설정 객체(config)를 받아 고친 뒤 돌려준다. 돌려준 값이 다음 인터셉터의 입력이 된다. 돌려주지 않으면 다음 단계가 undefined를 받는다.", required: true, code: "(config) => {\n  config.headers.Authorization = `Bearer ${token}`;\n  return config;\n}" },
+    { key: "rejected", display: "onRejected", title: "앞 단계가 실패했을 때", description: "앞 인터셉터가 던진 에러를 받는다. 다시 던지면 실패가 이어지고, 값을 돌려주면 복구된 것으로 보고 다음으로 넘어간다." },
+    { key: "options", display: "{ synchronous, runWhen })", title: "이 고리를 언제 끼울지", description: "runWhen(config)이 false를 돌려주면 이번 요청에서는 이 인터셉터를 건너뛴다. 모든 요청 인터셉터가 synchronous: true면 Promise 없이 동기로 돈다.", code: "{ runWhen: (c) => c.url?.startsWith(\"/admin\") }" },
+  ]}
+/>
+
+서버 쪽에도 같은 모양이 많다. 자바 서블릿의 `Filter`는 `chain.doFilter(request, response)`를 불러 다음 필터로 넘기고, 부르지 않으면 거기서 끝난다. Spring Security는 이런 필터 수십 개를 `SecurityFilterChain`으로 묶어 요청마다 순서대로 통과시킨다. 직접 만든 토큰 필터를 인가 필터 뒤에 끼우면 인가 단계에서 아직 인증 정보가 없어 요청이 거부되니, 여기서도 순서가 곧 규칙이다.
+
+## 데코레이터, 커맨드와 헷갈릴 때
+
+Koa의 미들웨어는 [데코레이터](/posts/pattern-decorator)와 닮았다. 둘 다 다음 것을 부르고 앞뒤에 일을 더한다. 가르는 질문은 "끊을 수 있나"다. 데코레이터는 원칙적으로 항상 안쪽을 부르고 결과에 무언가를 더한다. 책임 연쇄의 처리기는 처리하고 사슬을 끝낼 수 있고, 그게 존재 이유다. 미들웨어는 둘을 섞은 모양이라 양쪽 성질을 다 갖는다.
+
+[커맨드](/posts/pattern-command)와는 함께 쓰인다. 요청 자체를 객체(커맨드)로 만들어 사슬에 흘려보내면, 처리기들은 그 객체를 보고 자기 것인지 판단한다. macOS의 responder chain처럼 메뉴 명령이 들어오면 포커스가 있는 뷰부터 창, 앱 순서로 "이 명령을 처리할 수 있나"를 묻는 구조가 그렇다. [옵서버](/posts/pattern-observer)와는 대상 수가 다르다. 옵서버는 구독자 모두에게 알리고, 책임 연쇄는 처리할 하나를 찾는다. DOM 이벤트가 둘을 함께 쓴다. 한 요소의 리스너 여럿은 모두 불리고(옵서버), 요소에서 요소로는 사슬을 따라 올라간다(책임 연쇄).
+
+[컴포지트](/posts/pattern-composite)의 트리 위에서 책임 연쇄가 돌기도 한다. DOM 버블링이 정확히 그렇다. 사슬의 "다음"이 따로 있지 않고 트리의 부모가 다음이다.
+
+## compose 직접 만들기
+
+Koa의 `compose`를 동기 버전으로 만들어 보자. `compose(middlewares)`는 `ctx` 하나를 받는 함수를 돌려준다. 그 함수는 첫 미들웨어를 `(ctx, next)`로 부르고, `next()`는 다음 미들웨어를 부른다. 마지막 다음은 아무것도 하지 않는다. 같은 미들웨어에서 `next()`를 두 번 부르면 `"next() called multiple times"` 에러를 던진다.
+
+<CodePlayground
+  caption="미들웨어 사슬을 돌리는 compose"
+  functionName="scenario"
+  initialCode={`function compose(middlewares) {
+  return (ctx) => {
+    // 여기를 채운다
+  };
+}
+
+// 아래는 고치지 않는다.
+function scenario(path) {
+  const ctx = { path, log: [], body: null };
+  const timer = (ctx, next) => { ctx.log.push("timer>"); next(); ctx.log.push("<timer"); };
+  const cache = (ctx, next) => {
+    ctx.log.push("cache>");
+    if (ctx.path === "/cached") { ctx.body = "cached"; return; }
+    if (ctx.path === "/twice") { next(); next(); return; }
+    next();
+    ctx.log.push("<cache");
+  };
+  const handler = (ctx) => { ctx.log.push("handler"); ctx.body = "fresh"; };
+  const chain = ctx.path === "/solo" ? [handler] : [timer, cache, handler];
+  try { compose(chain)(ctx); } catch (e) { ctx.log.push("error: " + e.message); }
+  return [ctx.body, ctx.log];
+}`}
+  solution={`function compose(middlewares) {
+  return (ctx) => {
+    let last = -1; // 지금까지 부른 가장 큰 번호
+    const dispatch = (i) => {
+      if (i <= last) throw new Error("next() called multiple times");
+      last = i;
+      const mw = middlewares[i];
+      if (!mw) return; // 사슬 끝
+      mw(ctx, () => dispatch(i + 1));
+    };
+    dispatch(0);
+  };
+}
+
+function scenario(path) {
+  const ctx = { path, log: [], body: null };
+  const timer = (ctx, next) => { ctx.log.push("timer>"); next(); ctx.log.push("<timer"); };
+  const cache = (ctx, next) => {
+    ctx.log.push("cache>");
+    if (ctx.path === "/cached") { ctx.body = "cached"; return; }
+    if (ctx.path === "/twice") { next(); next(); return; }
+    next();
+    ctx.log.push("<cache");
+  };
+  const handler = (ctx) => { ctx.log.push("handler"); ctx.body = "fresh"; };
+  const chain = ctx.path === "/solo" ? [handler] : [timer, cache, handler];
+  try { compose(chain)(ctx); } catch (e) { ctx.log.push("error: " + e.message); }
+  return [ctx.body, ctx.log];
+}`}
+  tests={[
+    { args: ["/orders"], expected: ["fresh", ["timer>", "cache>", "handler", "<cache", "<timer"]], label: "들어간 순서의 반대로 나온다" },
+    { args: ["/cached"], expected: ["cached", ["timer>", "cache>", "<timer"]], label: "next를 안 부르면 거기서 돌아선다" },
+    { args: ["/twice"], expected: ["fresh", ["timer>", "cache>", "handler", "error: next() called multiple times"]], label: "next를 두 번 부르면 에러" },
+    { args: ["/solo"], expected: ["fresh", ["handler"]], label: "하나짜리 사슬" },
+  ]}
+/>
+
+`dispatch`가 번호 하나로 두 가지를 해결한다. 다음 미들웨어를 찾는 일과, 이미 지나간 자리로 되돌아오는 잘못된 호출을 잡는 일이다.
+
+책임 연쇄는 처리할 수 있는 쪽이 여럿일 때 보내는 쪽이 누가 처리할지 모르게 하고, 처리기를 줄로 세워 차례로 묻는 패턴이다. 처리기를 더하고 빼기 쉬워지는 대신 순서가 규칙이 되고, 아무도 받지 않거나 처리기가 약속(`next` 한 번)을 어기는 경우가 새 버그가 된다. 사슬을 만났을 때 순서, 끝, 끊는 조건 세 가지를 먼저 확인하면 대부분의 이상한 동작이 설명된다.
+
+## 면접에서 나올 만한 질문
+
+### 책임 연쇄 패턴은 무엇이고 왜 쓰나요?
+
+요청을 처리할 수 있는 객체들을 줄로 세우고, 각자 처리할 수 있으면 처리하고 아니면 다음으로 넘기는 패턴이다. 보내는 쪽은 줄의 첫 처리기만 알면 되고 누가 처리했는지 몰라도 된다. 커지는 if/else 분기를 처리기 단위로 나눠, 새 경우를 추가할 때 다른 처리기를 고치지 않아도 되게 한다.
+
+### Express나 Koa의 미들웨어는 책임 연쇄인가요?
+
+넓게 보면 그렇지만 GoF의 원래 모양과는 조금 다르다. 원래 책임 연쇄는 처리한 하나가 끝내는 데 목적이 있고, 미들웨어는 요청이 대부분의 처리기를 지나가며 각자 일을 하고, 필요할 때만 끊는다. Koa처럼 next 앞뒤에 코드를 쓰는 양파 구조는 데코레이터 성질까지 섞인 형태다.
+
+### 미들웨어에서 next를 부르지 않으면 어떻게 되나요?
+
+응답을 보내지도 않았다면 Express에서는 요청이 에러 없이 그 자리에 멈춘다. 클라이언트는 타임아웃이 날 때까지 기다리고, 앞에 로드 밸런서가 있으면 504가 난다. 앱 로그에 에러가 없으니 일찍 return하는 분기에서 응답이나 next가 빠지지 않았는지 찾는다. Koa는 본문이 없으면 404로 끝낸다.
+
+### 처리기 순서 때문에 생기는 버그를 예로 들어 주세요.
+
+넓게 받는 처리기가 앞에 있으면 뒤의 구체적인 처리기가 영원히 불리지 않는다. 5xx를 모두 받는 처리기 뒤에 503 전용 처리기를 추가하면 503은 앞에서 처리된다. axios처럼 요청 인터셉터를 등록 순서의 반대로 실행하는 라이브러리도 있어서, 사슬을 쓰는 곳에서는 실행 순서를 문서와 테스트로 확인해야 한다. 줄 전체에 대해 "이 입력은 이 처리기에서 끝난다"를 검증하는 테스트가 필요하다.
+
+### Express에서 에러 처리 미들웨어는 어떻게 동작하나요?
+
+인자가 넷인 (err, req, res, next) 함수를 에러 처리기로 보고, 일반 미들웨어와 별도의 줄을 만든다. 어디서든 next(err)를 부르면 남은 일반 미들웨어를 건너뛰고 에러 처리기 줄로 넘어간다. 인자 개수로 구분하니, 쓰지 않는다고 next 인자를 지우면 에러 처리기로 인식되지 않는다.
+
+### DOM 이벤트 버블링과 책임 연쇄는 어떤 관계인가요?
+
+버블링은 트리의 부모를 다음 처리기로 삼는 책임 연쇄다. 이벤트가 눌린 요소에서 위로 올라가며 각 단계의 리스너가 처리할 기회를 갖고, stopPropagation으로 사슬을 끊을 수 있다. 처리했다고 저절로 멈추지는 않는다는 점이 GoF 모양과 다르고, 이 덕분에 이벤트 위임이 가능하다.
+
+### 책임 연쇄와 데코레이터는 어떻게 구분하나요?
+
+끊을 수 있느냐로 가른다. 데코레이터는 항상 감싼 객체를 부르고 그 앞뒤에 기능을 더한다. 책임 연쇄의 처리기는 요청을 처리하고 사슬을 끝낼 수 있으며, 처리할 하나를 찾는 것이 목적이다.

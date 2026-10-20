@@ -1,0 +1,501 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-proxy");
+
+주문 API 서버를 재시작하면 첫 요청을 받을 때까지 꽤 걸린다. 시작 과정을 재 보니 영수증 PDF를 만드는 `PdfReportRenderer`의 생성자가 폰트와 템플릿을 읽느라 300ms를 쓰고 있었다. 이 객체는 컨테이너가 뜰 때 다른 서비스와 함께 만들어져 핸들러에 주입된다. 그런데 영수증 PDF는 하루에 몇 번 쓰이지 않는다. 대부분의 프로세스는 한 번도 쓰지 않을 객체를 만드느라 300ms를 기다린다.
+
+`OrderController`가 렌더러를 쓰는 곳은 많다. 쓰는 곳마다 "아직 없으면 만들고"를 넣고 싶지는 않다. 부르는 쪽은 그대로 두고, 렌더러 자리에 "처음 불릴 때 진짜를 만드는 대리인"을 세우면 된다. 이번 글은 그 대리인, 프록시(Proxy) 패턴이다.
+
+## 같은 이름의 네트워크 프록시와 무엇이 같나
+
+"프록시"라는 말은 네트워크에서 먼저 들었을 것이다. 회사 포워드 프록시, 서버 앞의 nginx 리버스 프록시는 [프록시와 리버스 프록시 글](/posts/proxy-reverse-proxy)에서 다뤘다. 생각은 같다. 클라이언트는 진짜 서버와 이야기한다고 믿지만 실제로는 중간의 대리인과 이야기하고, 대리인이 요청을 넘길지, 막을지, 저장해 둔 응답을 줄지 정한다.
+
+다른 건 층이다. 네트워크 프록시는 HTTP 메시지를 받아 다른 호스트로 넘긴다. 프록시 패턴은 한 프로세스 안에서 메서드 호출을 받아 다른 객체로 넘긴다. 그래서 이 글에서는 헤더나 TLS 이야기는 하지 않고, 객체 사이에서 대리인을 세울 때 생기는 문제를 본다. 이 글에서 쓰는 비유는 하나, 대리인이다.
+
+## 진짜와 똑같은 얼굴을 한 대리인
+
+규칙은 둘이다. 프록시는 진짜 객체(GoF는 RealSubject라고 부른다)와 같은 인터페이스를 구현한다. 그리고 진짜 객체로 가는 길을 쥐고 있다. 같은 인터페이스라서 부르는 쪽은 대리인과 이야기하는지 모르고, 길을 쥐고 있어서 대리인은 언제 넘길지 정할 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="프록시는 Subject이면서 진짜 Subject로 가는 길을 쥐고 있다"
+  nodes={[
+    { id: "client", label: "OrderController", sub: "Client", x: 200, y: 35, w: 150 },
+    { id: "iface", label: "ReportRenderer", sub: "Subject", x: 200, y: 120, w: 140 },
+    { id: "real", label: "PdfRenderer", sub: "RealSubject", x: 85, y: 215, w: 120 },
+    { id: "proxy", label: "LazyRenderer", sub: "Proxy", x: 310, y: 215, w: 130 },
+  ]}
+  edges={[
+    { from: "client", to: "iface", label: "render()" },
+    { from: "real", to: "iface", label: "implements", dashed: true },
+    { from: "proxy", to: "iface", label: "implements", dashed: true },
+    { from: "proxy", to: "real", label: "만들고 넘긴다" },
+  ]}
+/>
+
+그림의 마지막 화살표가 [데코레이터](/posts/pattern-decorator)와 갈리는 지점이다. 데코레이터는 이미 만들어진 객체를 바깥에서 받아 감싼다. 프록시는 진짜 객체를 스스로 만들거나, 만들 시점을 정하거나, 아예 다른 프로세스에 있는 것을 가리킨다. 진짜 객체의 수명을 프록시가 관리하는 경우가 많다.
+
+GoF는 쓰임새에 따라 프록시를 넷으로 나눴다. 생성을 미루는 가상 프록시, 권한을 확인하는 보호 프록시, 다른 주소 공간의 객체를 대신하는 원격 프록시, 호출할 때 부가 작업(참조 세기, 잠금)을 하는 스마트 참조다. 요즘은 결과를 저장해 두는 캐싱 프록시를 따로 꼽는 경우가 많다. 하나씩 코드로 보자.
+
+## 처음 부를 때 만든다
+
+가상 프록시는 처음 상황을 그대로 푼다. 렌더러 자리에 들어가는 프록시는 생성자에서 아무것도 하지 않고, `render`가 처음 불릴 때 진짜를 만든다.
+
+```ts
+interface ReportRenderer {
+  render(orderId: string): string;
+}
+
+class PdfReportRenderer implements ReportRenderer {
+  constructor() {
+    loadFontsAndTemplates(); // 300ms
+  }
+  render(orderId: string) {
+    return `%PDF order ${orderId}`;
+  }
+}
+
+class LazyReportRenderer implements ReportRenderer {
+  private real?: PdfReportRenderer;
+
+  render(orderId: string) {
+    this.real ??= new PdfReportRenderer(); // 처음 부를 때 한 번만 만든다
+    return this.real.render(orderId);
+  }
+}
+
+declare function loadFontsAndTemplates(): void;
+```
+
+생성자를 300ms 동안 멈추게 해 놓고 시간을 재 봤다(Node.js 22).
+
+```text
+eager: new             300ms
+lazy: new              0ms
+lazy: 1st render       300ms
+lazy: 2nd render       0ms
+```
+
+비용이 사라진 것은 아니다. 시작할 때 내던 300ms를 첫 `render`를 부른 사용자가 낸다. 대신 한 번도 PDF를 만들지 않는 프로세스는 그 비용을 아예 내지 않는다. 아래 그림에서 다음을 누르면 첫 호출과 두 번째 호출이 어떻게 다른지 보인다.
+
+<SequenceDiagram
+  caption="가상 프록시는 첫 호출에서만 진짜 객체를 만든다"
+  actors={[
+    { id: "ctrl", label: "Controller" },
+    { id: "proxy", label: "LazyRenderer" },
+    { id: "real", label: "PdfRenderer" },
+  ]}
+  steps={[
+    { from: "ctrl", to: "proxy", label: "new", title: "시작할 때는 대리인만 만든다", detail: "생성자가 비어 있어 서버가 바로 뜬다. 진짜 렌더러는 아직 없다." },
+    { from: "ctrl", to: "proxy", label: "render(A-1)", title: "첫 호출이 들어온다", detail: "Controller는 상대가 대리인인지 모른다. ReportRenderer의 render를 불렀을 뿐이다." },
+    { from: "proxy", to: "real", label: "new (300ms)", title: "이때 진짜를 만든다", detail: "폰트와 템플릿을 읽는 300ms를 첫 사용자가 기다린다.", payload: "this.real ??= new PdfReportRenderer()" },
+    { from: "proxy", to: "real", label: "render(A-1)", title: "만든 객체에 호출을 넘긴다", detail: "인자를 그대로 넘긴다." },
+    { from: "real", to: "ctrl", label: "%PDF…", title: "결과가 돌아온다", detail: "프록시는 결과를 손대지 않고 넘긴다." },
+    { from: "ctrl", to: "proxy", label: "render(A-2)", title: "두 번째 호출", detail: "this.real이 이미 있다." },
+    { from: "proxy", to: "real", label: "render(A-2)", title: "만들지 않고 바로 넘긴다", detail: "두 번째부터는 대리인이 호출 하나를 더 거치게 할 뿐이다. 측정값은 0ms다." },
+  ]}
+/>
+
+### 비동기로 만들 때 생기는 경쟁
+
+진짜 객체를 만드는 일이 비동기라면 함정이 하나 있다. 번역 모델을 읽어 오는 `ModelTranslator.load()`가 100ms 걸리는 Promise를 돌려준다고 하자. "없으면 기다려서 만든다"를 그대로 쓰면 이렇다.
+
+```ts
+interface Translator {
+  translate(text: string): Promise<string>;
+}
+
+declare class ModelTranslator implements Translator {
+  static load(): Promise<ModelTranslator>;
+  translate(text: string): Promise<string>;
+}
+
+class NaiveLazyTranslator implements Translator {
+  private real?: ModelTranslator;
+  async translate(text: string) {
+    if (!this.real) this.real = await ModelTranslator.load(); // await 동안 다른 호출도 여기 들어온다
+    return this.real.translate(text);
+  }
+}
+
+class LazyTranslator implements Translator {
+  private real?: Promise<ModelTranslator>;
+  async translate(text: string) {
+    this.real ??= ModelTranslator.load(); // 인스턴스가 아니라 Promise를 기억한다
+    return (await this.real).translate(text);
+  }
+}
+```
+
+번역 요청 세 개를 `Promise.all`로 동시에 보냈다.
+
+```text
+naive lazy: load() called 3 times
+promise lazy: load() called 1 times
+```
+
+첫 번째 방식은 `await`에서 멈춘 사이 다른 두 호출도 `this.real`이 비어 있는 것을 보고 각자 `load()`를 부른다. 모델을 세 번 읽어 메모리를 세 배로 쓴다. Promise를 기억하면 두 번째 호출부터는 이미 진행 중인 Promise를 함께 기다린다. 다만 `load()`가 실패하면 실패한 Promise가 남아 이후 호출이 모두 실패하니, `catch`에서 `this.real = undefined`로 비워 다시 시도할 수 있게 해 둔다. 서버 시작 시간이 짧아진 대신 첫 요청이 느려지는 것이 싫다면, 서버가 뜬 직후 한 번 미리 불러 데워 두는 방법도 있다.
+
+프런트엔드에서 같은 생각을 쓰는 곳이 `React.lazy(() => import("./Chart"))`다. 차트 컴포넌트 자리에 대리인을 세우고, 처음 그려질 때 모듈을 받아 온다. 이 이야기는 [코드 스플리팅 글](/posts/code-splitting)에 있다.
+
+## 들여보낼지, 저장해 둔 걸 줄지
+
+가상 프록시는 "언제" 넘길지를 정했다. 보호 프록시는 "넘길지 말지"를, 캐싱 프록시는 "진짜에게 물어볼 필요가 있는지"를 정한다. 둘 다 진짜 객체는 그대로 두고 앞에 대리인만 세운다.
+
+```ts
+type Role = "admin" | "staff" | "guest";
+
+interface OrderRepository {
+  findById(id: string): Promise<{ id: string; total: number }>;
+  refund(id: string): Promise<void>;
+}
+
+class GuardedOrderRepository implements OrderRepository {
+  constructor(private readonly real: OrderRepository, private readonly role: () => Role) {}
+
+  findById(id: string) {
+    return this.real.findById(id);
+  }
+
+  async refund(id: string) {
+    if (this.role() !== "admin") throw new Error("403 refund requires admin");
+    return this.real.refund(id);
+  }
+}
+
+class CachedOrderRepository implements OrderRepository {
+  private readonly cache = new Map<string, { at: number; value: Promise<{ id: string; total: number }> }>();
+  constructor(private readonly real: OrderRepository, private readonly ttlMs = 5_000) {}
+
+  findById(id: string) {
+    const hit = this.cache.get(id);
+    if (hit && Date.now() - hit.at < this.ttlMs) return hit.value;
+    const value = this.real.findById(id);
+    this.cache.set(id, { at: Date.now(), value });
+    return value;
+  }
+
+  async refund(id: string) {
+    await this.real.refund(id);
+    this.cache.delete(id); // 바꾸는 호출은 캐시를 지운다
+  }
+}
+```
+
+요청 하나가 이 대리인들을 어떻게 지나가는지 그림으로 보자. 생김새가 nginx 앞단과 닮은 것은 우연이 아니다.
+
+<NetworkTopology
+  caption="대리인은 넘기거나, 막거나, 저장해 둔 값을 준다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "client", label: "Controller", x: 45, y: 115, icon: "client", w: 80 },
+    { id: "guard", label: "Guarded", sub: "보호", x: 145, y: 115, icon: "lock", w: 76 },
+    { id: "cache", label: "Cached", sub: "TTL 5s", x: 245, y: 115, icon: "switch", w: 76 },
+    { id: "real", label: "Repository", sub: "진짜", x: 350, y: 115, icon: "db", w: 80 },
+  ]}
+  links={[
+    { from: "client", to: "guard" },
+    { from: "guard", to: "cache" },
+    { from: "cache", to: "real" },
+  ]}
+  steps={[
+    { path: ["client", "guard", "cache", "real"], packet: "find(42)", title: "처음 조회는 끝까지 간다", detail: "조회는 누구나 할 수 있으니 보호 프록시가 그대로 넘긴다. 캐시에 없으니 진짜 저장소까지 간다." },
+    { path: ["real", "cache", "guard", "client"], packet: "order", title: "돌아오면서 캐시에 남긴다", detail: "캐싱 프록시가 결과(정확히는 Promise)를 5초 동안 기억한다." },
+    { path: ["client", "guard", "cache"], packet: "find(42)", highlight: ["cache"], title: "5초 안의 같은 조회는 캐시에서 끝난다", detail: "진짜 저장소는 호출이 있었는지도 모른다." },
+    { path: ["client", "guard"], packet: "refund", blocked: true, title: "권한이 없으면 문 앞에서 막힌다", detail: "staff가 환불을 부르면 보호 프록시가 403을 던진다. 뒤쪽은 아무 일도 하지 않는다." },
+    { path: ["client", "guard", "cache", "real"], packet: "refund", title: "admin의 환불은 통과하고 캐시를 지운다", detail: "바꾸는 호출이 지나가면 캐싱 프록시가 그 주문의 캐시를 지운다. 안 지우면 5초 동안 환불 전 금액이 보인다." },
+  ]}
+/>
+
+캐시는 Promise를 저장했다. 같은 주문을 동시에 열 번 조회해도 진짜 저장소에는 한 번만 간다. 앞의 번역기와 같은 이유다. 대신 실패한 Promise도 5초 동안 남으니 실패하면 지우는 처리가 필요하다. 캐시를 어디에 두고 언제 지울지는 패턴보다 큰 주제라 [캐싱 전략 글](/posts/caching-strategies)에서 따로 다뤘다.
+
+보호 프록시는 권한 검사를 한곳에 모으지만, 그 프록시를 거치지 않는 길이 있으면 의미가 없다. 진짜 저장소를 다른 모듈에서도 바로 import할 수 있다면 검사는 구멍이 난다. 조립하는 곳에서만 진짜를 만들고 바깥에는 인터페이스만 내보내야 보호가 된다.
+
+## 멀리 있는 객체를 가까이 있는 것처럼
+
+원격 프록시는 다른 프로세스나 다른 서버에 있는 객체를 이 프로세스 안의 객체처럼 보이게 한다. gRPC가 `.proto`에서 만들어 주는 클라이언트 스텁이 교과서 예다. `client.getUser({ id })`는 그냥 메서드 호출처럼 보이지만, 스텁이 인자를 직렬화해 HTTP/2로 보내고 응답을 객체로 되돌린다. 자바 RMI의 스텁, AWS SDK의 클라이언트도 같은 자리에 있다.
+
+tRPC 클라이언트는 자바스크립트 `Proxy`로 원격 프록시를 만든다. `trpc.user.byId.query({ id: 1 })`에서 `user`와 `byId`는 미리 정의된 속성이 아니다. 속성에 접근할 때마다 경로를 쌓는 재귀 Proxy가 돌려주는 값이고, 마지막에 `query`가 불리면 쌓인 경로(`user.byId`)로 HTTP 요청을 보낸다. 서버의 라우터 타입을 가져다 쓰니 존재하지 않는 경로는 컴파일에서 걸린다.
+
+원격 프록시의 함정은 너무 잘 숨긴다는 데 있다. 지역 호출은 마이크로초, 원격 호출은 밀리초다. 지역 호출은 네트워크 때문에 실패하지 않는다. 메서드 호출처럼 생겼다고 반복문 안에서 부르면 요청이 수백 개 나간다. 그래서 원격 프록시 앞에는 [타임아웃](/posts/timeouts), [재시도](/posts/retries), [서킷 브레이커](/posts/circuit-breaker)가 붙는다. 서킷 브레이커 자체도 진짜 서비스로 가는 호출을 통제하는 대리인이다. "원격이라는 사실을 숨기되, 원격의 비용과 실패는 숨기지 않는다"가 좋은 원격 프록시의 조건이다.
+
+## 언어가 내장한 대리인, Proxy 객체
+
+ES2015부터 자바스크립트에는 `Proxy`가 내장되어 있다. 지금까지는 인터페이스의 메서드를 하나하나 다시 구현해 대리인을 만들었다. `Proxy`는 객체에 대한 기본 동작(속성 읽기, 쓰기, `in`, 삭제, 함수 호출) 자체를 가로챈다. 메서드가 서른 개인 객체도 함정(trap) 하나로 감쌀 수 있다.
+
+<UrlAnatomy
+  caption="new Proxy(target, handler) 한 줄 뜯어보기"
+  base="new Proxy("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "target", display: "target", title: "진짜 객체", description: "대리할 대상이다. 프록시는 이 객체를 품고, 함정이 없는 동작은 모두 이 객체로 그대로 넘어간다.", required: true },
+    { key: "handler", display: "{ get(t, prop, receiver)", title: "가로챌 동작을 적은 handler", description: "get, set, has, deleteProperty, apply, construct 등 13가지 함정을 둘 수 있다. 여기서는 속성 읽기(get)만 가로챈다.", required: true },
+    { key: "prop", display: "prop", title: "읽으려는 속성 이름", description: "문자열이나 심볼이다. 메서드를 부를 때도 먼저 속성 읽기가 일어나니, 메서드 호출도 여기로 들어온다." },
+    { key: "receiver", display: "receiver", title: "this가 될 객체", description: "보통 프록시 자신이다. getter 안의 this를 프록시로 유지하려면 이 값을 Reflect.get에 그대로 넘긴다." },
+    { key: "body", display: "Reflect.get(t, prop, receiver) })", title: "기본 동작으로 넘기기", description: "Reflect는 각 함정과 이름과 인자가 같은 함수를 갖고 있다. 하고 싶은 일을 하고 기본 동작은 Reflect에 맡기는 것이 관례다.", code: "get(t, prop, receiver) {\n  log(prop);\n  return Reflect.get(t, prop, receiver);\n}" },
+  ]}
+/>
+
+`t[prop]`으로 넘기지 않고 `Reflect.get`을 쓰는 이유는 getter에서 보인다. `get full() { return this.first + " " + this.last }`가 있는 객체를 두 방식으로 감싸고 `full`을 읽었을 때 함정이 본 속성들이다.
+
+```text
+target[prop]: full
+Reflect.get : full, first, last
+```
+
+`t[prop]`으로 넘기면 getter 안의 `this`가 진짜 객체라서 `first`, `last` 읽기가 프록시를 우회한다. 의존성을 추적하는 라이브러리라면 `full`이 `first`에 기대고 있다는 사실을 놓친다. 바로 다음에 볼 Vue가 이 문제를 피하려고 `Reflect.get`에 receiver를 넘긴다.
+
+## Vue 3의 reactive는 대리인이 장부를 적는 것이다
+
+Vue 3의 `reactive(obj)`는 `obj`의 Proxy를 돌려준다. `get` 함정에서는 "지금 실행 중인 effect(렌더 함수 등)가 이 속성을 읽었다"를 장부에 적고(track), `set` 함정에서는 그 속성을 읽었던 effect를 다시 실행한다(trigger). `@vue/reactivity` 3.5로 직접 돌려 봤다.
+
+```ts
+import { effect, isReactive, reactive, toRaw } from "@vue/reactivity";
+
+const raw = { count: 0, user: { name: "Kim" } };
+const state = reactive(raw);
+
+console.log(state === raw, isReactive(state), toRaw(state) === raw);
+effect(() => console.log("render count =", state.count));
+state.count++;
+raw.count++; // 원본을 바꾸면 아무도 모른다
+console.log("raw.count now", raw.count);
+state.count++;
+console.log(isReactive(state.user));
+```
+
+```text
+false true true
+render count = 0
+render count = 1
+raw.count now 2
+render count = 3
+true
+```
+
+`raw.count++`는 대리인을 거치지 않았으니 장부에도 남지 않고 다시 그리지도 않는다. 다음 `state.count++`에서 값이 2를 건너뛰고 3으로 그려진다. 중첩된 `user`도 `true`다. Vue는 객체를 읽는 순간 그 객체도 Proxy로 감싸 돌려준다. 처음부터 끝까지 다 감싸지 않고 읽을 때 감싸니, 이것도 가상 프록시다.
+
+<AlgoTrace
+  caption="get이 장부에 적고, set이 장부를 보고 다시 실행한다"
+  memoryLabel="장부 (속성 → 다시 실행할 effect)"
+  cells={["effect 실행", "get count", "count++", "effect 재실행", "raw.count++", "count++"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "effect가 처음 실행된다. 지금 실행 중인 effect로 자기를 등록한다." },
+    { pointer: 1, memory: ["count → render"], caption: "state.count를 읽자 get 함정이 '이 effect가 count를 본다'고 적는다." },
+    { pointer: 2, memory: ["count → render"], caption: "state.count++는 set 함정을 지난다. 장부에서 count를 찾는다." },
+    { pointer: 3, found: [3], memory: ["count → render"], caption: "count를 본 effect를 다시 실행한다. render count = 1이 찍힌다." },
+    { pointer: 4, memory: ["count → render"], caption: "원본을 바꾸면 함정을 지나지 않는다. 값은 2가 됐지만 아무도 다시 실행되지 않는다." },
+    { pointer: 5, found: [3, 5], memory: ["count → render"], caption: "다시 프록시로 바꾸자 effect가 돈다. 화면은 1에서 3으로 건너뛴다." },
+  ]}
+/>
+
+이 구조를 알면 Vue의 흔한 실수 두 가지가 설명된다. `const { count } = state`로 구조 분해하면 숫자 값만 꺼내 오니 이후 변경을 따라가지 못한다(그래서 `toRefs`가 있다). 그리고 라이브러리 인스턴스나 큰 데이터를 `reactive`에 넣으면 읽을 때마다 함정과 장부 기록 비용을 낸다. Vue 2는 `Object.defineProperty`로 속성마다 getter를 심어서, 나중에 추가한 속성은 감지하지 못해 `Vue.set`이 필요했다. Proxy는 속성 이름을 미리 몰라도 가로채니 그 문제가 사라졌다. MobX 6의 observable과 Immer의 draft도 같은 Proxy 위에 만들어져 있다.
+
+## ORM이 건네준 가짜 엔티티
+
+ORM의 지연 로딩도 가상 프록시다. Hibernate(JPA)에서 `@ManyToOne(fetch = FetchType.LAZY)`인 `order.getCustomer()`는 진짜 Customer가 아니라 Customer를 상속한 프록시를 돌려준다. id만 들고 있다가 `getName()`처럼 다른 필드를 처음 읽을 때 SELECT를 보낸다.
+
+여기서 두 가지 문제가 나온다. 하나는 주문 100건을 돌며 `getCustomer().getName()`을 부르면 프록시마다 쿼리가 하나씩 나가 1 + 100번 쿼리가 된다는 것이다. 이 [N+1](/posts/sql-query-rewrite) 문제는 프록시가 비용을 숨겼기 때문에 생긴다. 다른 하나는 트랜잭션(세션)이 끝난 뒤에 프록시를 처음 건드리면 대리인이 진짜를 불러올 연결이 없어 `LazyInitializationException`이 난다는 것이다. Spring Boot가 `spring.jpa.open-in-view`를 기본으로 켜 두고 시작할 때 경고를 찍는 이유가 이것이다. 뷰를 그리는 동안까지 세션을 열어 두면 예외는 사라지지만, 커넥션을 그만큼 오래 붙잡는다.
+
+TypeORM은 관계 타입을 `Promise<Customer>`로 선언하면 지연 로딩을 해 준다. 타입에 Promise가 보이니 비용이 덜 숨겨진다. 대리인을 쓸 때는 그 대리인이 무엇을 숨기는지 알고 있어야 한다는 점이 여기서도 같다.
+
+## 대리인을 건너뛰는 호출
+
+프록시는 호출이 자기를 지나갈 때만 일을 한다. 지나가지 않는 호출이 생각보다 많다.
+
+가장 유명한 예가 Spring의 `@Transactional`이다. 기본 설정에서 Spring은 빈을 감싼 AOP 프록시를 주입하고, 프록시가 트랜잭션을 연 뒤 진짜 빈에 호출을 넘긴다. 진짜 빈 안에서 `this.saveOrder()`처럼 자기 메서드를 부르면 `this`는 프록시가 아니라 진짜 빈이다. 그래서 `saveOrder`에 붙인 `@Transactional`은 적용되지 않는다. Spring 문서도 프록시 모드에서는 바깥에서 프록시를 거쳐 들어온 호출만 가로챈다고 적고 있다. 같은 구조를 TypeScript로 만들어 자바스크립트 `Proxy`와 비교했다.
+
+```ts
+class OrderService {
+  placeOrder(id: string) {
+    console.log(`  placeOrder(${id})`);
+    this.saveOrder(id); // 자기 메서드를 부른다
+  }
+  saveOrder(id: string) {
+    console.log(`  saveOrder(${id})`);
+  }
+}
+
+// 진짜 객체에 위임하는 클래스 프록시 (Spring AOP 프록시와 같은 모양)
+class TxOrderService extends OrderService {
+  constructor(private readonly target: OrderService) {
+    super();
+  }
+  placeOrder(id: string) {
+    console.log("  [tx] placeOrder");
+    this.target.placeOrder(id);
+  }
+  saveOrder(id: string) {
+    console.log("  [tx] saveOrder");
+    this.target.saveOrder(id);
+  }
+}
+
+// JS Proxy: receiver를 넘기니 메서드 안의 this가 프록시다
+const traced = <T extends object>(target: T): T =>
+  new Proxy(target, {
+    get(t, prop, receiver) {
+      const value = Reflect.get(t, prop, receiver);
+      if (typeof value !== "function") return value;
+      return function (this: unknown, ...args: unknown[]) {
+        console.log(`  [tx] ${String(prop)}`);
+        return value.apply(this, args);
+      };
+    },
+  });
+
+console.log("wrapper proxy:");
+new TxOrderService(new OrderService()).placeOrder("A-1");
+console.log("JS Proxy:");
+traced(new OrderService()).placeOrder("A-1");
+```
+
+```text
+wrapper proxy:
+  [tx] placeOrder
+  placeOrder(A-1)
+  saveOrder(A-1)
+JS Proxy:
+  [tx] placeOrder
+  placeOrder(A-1)
+  [tx] saveOrder
+  saveOrder(A-1)
+```
+
+위임 프록시에서는 `saveOrder`에 `[tx]`가 없다. 호출이 진짜 객체 안에서 끝났기 때문이다. Spring에서 이 문제를 피하려면 메서드를 다른 빈으로 옮겨 프록시를 거치게 하는 것이 가장 깔끔하다. 자바스크립트 `Proxy`는 `this`가 프록시로 남아 안쪽 호출도 가로챈다. 그런데 이게 늘 좋은 것은 아니다. `this`가 프록시라서 깨지는 것들이 있다. 아래 세 가지를 각각 try/catch로 감싸 결과를 찍었다.
+
+```ts
+class Account {
+  #balance = 100;
+  balance() {
+    return this.#balance;
+  }
+}
+new Proxy(new Account(), {}).balance(); // this가 프록시라 #balance를 못 찾는다
+new Proxy(new Map([["a", 1]]), {}).get("a"); // 내부 슬롯도 마찬가지다
+```
+
+```text
+private: TypeError - Cannot read private member #balance from an object whose class did not declare it
+map: TypeError - Method Map.prototype.get called on incompatible receiver #<Map>
+proxy === raw: false | new Set([raw]).has(proxy): false
+```
+
+`#balance` 같은 private 필드와 `Map`, `Set`, `Date`의 내부 슬롯은 진짜 객체에만 있다. 메서드 안의 `this`가 프록시면 찾지 못해 `TypeError`가 난다. `Map`을 감쌀 때는 `get` 함정에서 함수를 꺼내 `value.bind(target)`으로 돌려주거나 메서드별로 따로 구현해야 한다. Vue가 `Map`과 `Set`에 별도의 handler를 두는 이유다. 마지막 줄처럼 프록시와 원본은 다른 객체라서, 원본을 `Set`에 넣고 프록시로 찾으면 못 찾는다.
+
+대리인은 공짜도 아니다. 같은 객체의 속성을 1천만 번 읽는 시간을 Node.js 22에서 재 봤다(다섯 번 중 가장 빠른 값).
+
+```text
+plain      1e7 reads 10.7ms
+empty      1e7 reads 129.1ms
+trap       1e7 reads 335.3ms
+```
+
+함정이 없는 Proxy도 일반 객체보다 열 배 넘게 느리고, `get` 함정을 두면 30배 남짓이다. 한 번에 수십 나노초라 화면 상태나 설정 객체에서는 신경 쓸 일이 아니다. 수십만 개짜리 배열을 정렬하는 반복문 안에서 프록시를 읽고 있다면 이야기가 다르다. Vue가 큰 읽기 전용 데이터에 `shallowRef`나 `markRaw`를 권하는 이유다.
+
+## 데코레이터와 같은 코드, 다른 의도
+
+프록시와 데코레이터는 코드 모양이 같다. 같은 인터페이스를 구현하고 호출을 넘긴다. 감싸는 패턴끼리의 비교표는 [어댑터 글](/posts/pattern-adapter#비슷한-구조-패턴과-헷갈릴-때)에 있으니, 프록시 쪽에서 본 차이만 적는다.
+
+데코레이터는 기능을 더하려고 감싼다. 감쌀 객체를 바깥에서 받고, 여러 겹을 쌓아 조합하는 것이 전제다. 프록시는 진짜 객체로 가는 접근을 통제하려고 감싼다. 진짜 객체를 스스로 만들거나(가상), 다른 곳에 있는 것을 가리키고(원격), 대개 한 겹이다. 캐싱 프록시처럼 경계에 있는 경우는 이렇게 묻는다. "부르는 쪽이 진짜 객체의 존재를 알고 직접 골라 감싸나?" 그렇다면 데코레이터에 가깝고, 진짜 객체를 숨긴 채 대리인만 건넨다면 프록시다.
+
+[퍼사드](/posts/pattern-facade)와도 헷갈린다. 퍼사드는 여러 객체 앞에 더 단순한 새 인터페이스를 만들고, 프록시는 한 객체 앞에 같은 인터페이스를 둔다.
+
+## 직접 만드는 캐싱 프록시
+
+자바스크립트 `Proxy`로 캐싱 프록시를 만들어 보자. `cached(target)`은 `target`의 메서드를 부르면 메서드 이름과 인자가 같은 호출의 결과를 기억해 두었다가 돌려준다. 메서드가 아닌 속성은 그대로 넘긴다. `realCalls`는 진짜 메서드가 실제로 불린 횟수다.
+
+<CodePlayground
+  caption="같은 호출은 진짜에게 한 번만 묻는 대리인"
+  functionName="scenario"
+  initialCode={`// target을 대신하는 Proxy를 돌려준다.
+// 메서드 호출은 "이름 + 인자"가 같으면 저장해 둔 결과를 준다.
+function cached(target) {
+  return target;
+}
+
+// 아래는 고치지 않는다.
+function scenario(calls) {
+  let hits = 0;
+  const api = {
+    baseUrl: "/api",
+    price(id) { hits++; return id * 100; },
+    stock(id, store) { hits++; return id + store; },
+  };
+  const proxy = cached(api);
+  const results = calls.map(([method, ...args]) =>
+    method === "baseUrl" ? proxy.baseUrl : proxy[method](...args));
+  return { results, realCalls: hits };
+}`}
+  solution={`function cached(target) {
+  const cache = new Map();
+  return new Proxy(target, {
+    get(t, prop, receiver) {
+      const value = Reflect.get(t, prop, receiver);
+      if (typeof value !== "function") return value; // 속성은 그대로
+      return (...args) => {
+        const key = String(prop) + ":" + JSON.stringify(args);
+        if (!cache.has(key)) cache.set(key, value.apply(t, args));
+        return cache.get(key);
+      };
+    },
+  });
+}
+
+function scenario(calls) {
+  let hits = 0;
+  const api = {
+    baseUrl: "/api",
+    price(id) { hits++; return id * 100; },
+    stock(id, store) { hits++; return id + store; },
+  };
+  const proxy = cached(api);
+  const results = calls.map(([method, ...args]) =>
+    method === "baseUrl" ? proxy.baseUrl : proxy[method](...args));
+  return { results, realCalls: hits };
+}`}
+  tests={[
+    { args: [[["price", 1], ["price", 1], ["price", 1]]], expected: { results: [100, 100, 100], realCalls: 1 }, label: "같은 호출 세 번은 진짜 한 번" },
+    { args: [[["price", 1], ["price", 2], ["price", 1]]], expected: { results: [100, 200, 100], realCalls: 2 }, label: "인자가 다르면 따로 기억한다" },
+    { args: [[["price", 3], ["stock", 3, 10], ["stock", 3, 10]]], expected: { results: [300, 13, 13], realCalls: 2 }, label: "메서드가 다르면 따로 기억한다" },
+    { args: [[["baseUrl"], ["price", 5]]], expected: { results: ["/api", 500], realCalls: 1 }, label: "속성은 그대로 넘긴다" },
+    { args: [[["stock", 1, 2], ["stock", 2, 1]]], expected: { results: [3, 3], realCalls: 2 }, label: "결과가 같아도 인자가 다르면 다른 호출" },
+  ]}
+/>
+
+이 프록시는 `scenario` 입장에서 `api`와 구별되지 않는다. 그래서 위험하기도 하다. 값이 바뀌는 메서드(재고처럼)까지 영원히 기억하고, 키를 지우지 않아 메모리가 계속 는다. 실제로 쓸 때는 앞의 `CachedOrderRepository`처럼 TTL과 지우는 시점을 함께 정한다.
+
+프록시는 진짜 객체와 같은 얼굴을 한 대리인을 세워, 부르는 쪽을 고치지 않고 생성 시점, 권한, 위치, 캐시를 통제하는 패턴이다. 대리인이 숨기는 비용(지연 로딩의 쿼리, 원격 호출의 지연)과 대리인을 건너뛰는 길(자기 호출, 원본 직접 수정)을 함께 알아 두면, 프레임워크가 건네는 프록시 때문에 생기는 이상한 버그를 빨리 찾을 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 프록시 패턴은 무엇이고 언제 쓰나요?
+
+진짜 객체와 같은 인터페이스를 가진 대리 객체를 세워서, 진짜 객체로 가는 접근을 통제하는 패턴이다. 생성 비용이 큰 객체를 처음 쓸 때 만드는 가상 프록시, 권한을 확인하는 보호 프록시, 다른 프로세스의 객체를 대신하는 원격 프록시, 결과를 저장하는 캐싱 프록시가 대표적이다. 부르는 쪽 코드를 고치지 않고 이런 통제를 넣을 수 있다는 것이 쓰는 이유다.
+
+### 프록시와 데코레이터는 코드가 같은데 무엇이 다른가요?
+
+의도와 진짜 객체를 누가 관리하느냐가 다르다. 데코레이터는 바깥에서 받은 객체에 기능을 더하려고 감싸고 여러 겹 조합하는 것이 전제다. 프록시는 접근을 통제하려고 감싸고, 진짜 객체를 스스로 만들거나 그 위치를 숨기는 경우가 많으며 대개 한 겹이다.
+
+### 비동기로 초기화하는 지연 로딩 프록시에서 주의할 점은 무엇인가요?
+
+인스턴스가 아니라 초기화 Promise를 저장해야 한다. 인스턴스를 저장하면 초기화를 기다리는 동안 들어온 다른 호출도 비어 있는 것을 보고 초기화를 또 시작한다. 동시에 세 번 부르면 세 번 만들어진다. 실패한 Promise가 남지 않게 실패 시 비워 두는 처리도 필요하다.
+
+### 자바스크립트 Proxy에서 Reflect를 쓰는 이유는 무엇인가요?
+
+함정에서 기본 동작으로 넘길 때 receiver를 정확히 전달하기 위해서다. target[prop]으로 넘기면 getter 안의 this가 원본이 되어 그 안의 속성 읽기가 프록시를 우회한다. Reflect.get(target, prop, receiver)는 this를 프록시로 유지한다. Vue 3의 reactive가 getter 안에서 읽은 속성까지 추적할 수 있는 이유다.
+
+### Vue 3의 reactive는 어떻게 동작하나요? 원본 객체를 바꾸면 어떻게 되나요?
+
+reactive는 원본의 Proxy를 돌려주고, get 함정에서 지금 실행 중인 effect가 그 속성을 읽었다고 기록하고, set 함정에서 그 effect들을 다시 실행한다. 원본을 직접 바꾸면 함정을 지나지 않으니 화면이 갱신되지 않는다. 구조 분해로 값을 꺼내도 추적이 끊겨서 toRefs를 쓴다.
+
+### Spring에서 같은 클래스 안의 @Transactional 메서드를 부르면 왜 트랜잭션이 안 걸리나요?
+
+Spring의 트랜잭션은 빈을 감싼 프록시가 처리하는데, 클래스 안에서 this로 부른 호출은 프록시를 거치지 않기 때문이다. 프록시가 진짜 빈에 호출을 넘긴 뒤에는 this가 진짜 빈이다. 메서드를 다른 빈으로 분리해 프록시를 거치게 하는 것이 가장 단순한 해결이다.
+
+### ORM의 지연 로딩이 프록시와 어떤 관계이고, 어떤 문제가 생기나요?
+
+지연 로딩된 연관 엔티티는 id만 가진 프록시이고, 다른 필드를 처음 읽을 때 쿼리를 보낸다. 목록을 돌며 연관 엔티티를 읽으면 프록시마다 쿼리가 나가는 N+1 문제가 생기고, 세션이 닫힌 뒤 처음 접근하면 LazyInitializationException이 난다. 필요한 연관은 fetch join이나 배치 로딩으로 미리 가져온다.

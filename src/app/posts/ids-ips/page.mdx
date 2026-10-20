@@ -1,0 +1,416 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ids-ips");
+
+웹 서버 접근 로그에 `GET /products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--` 같은 줄이 섞여 있다. 방화벽은 80번을 열어 두었으니 막을 이유가 없었다. 포트와 주소만 보는 방화벽에게 이 요청은 평범한 웹 요청이다. 요청의 내용을 읽고 "이건 공격 모양이다"라고 판단하는 장치가 따로 필요하다. 그게 IDS와 IPS다.
+
+IDS(Intrusion Detection System)는 지나가는 트래픽을 복사해서 보고 경보만 낸다. IPS(Intrusion Prevention System)는 트래픽 길목에 서서 의심스러운 패킷을 직접 버린다. 같은 엔진을 어디에 세우느냐에 따라 둘 중 하나가 된다. 이 글은 오픈소스 엔진 Suricata로 공격 트래픽을 직접 만들어 탐지하고, 길목에 세워 막아 보고, 잘못 울리는 경보를 줄이는 과정까지 따라간다.
+
+실습은 Ubuntu 24.04 컨테이너에서 Suricata 7.0.3(Ubuntu 패키지)으로 했다. 네트워크 네임스페이스로 공격자(10.66.0.2), 라우터, 웹 서버(10.66.1.2)를 만들고 라우터에서 트래픽을 잡았다. 포트와 연결 상태로 거르는 방화벽 자체는 [iptables 글](/posts/iptables-basics)과 [보안 그룹 글](/posts/security-groups-nacl)에, 패킷을 잡아 읽는 법은 [tcpdump 글](/posts/packet-capture-tcpdump)에 있다. 여기서는 그 위, 패킷 내용을 보는 층을 다룬다.
+
+## 방화벽이 못 보는 것
+
+방화벽 규칙은 "누가, 어디로, 어느 포트로"를 본다. 출발지 IP, 목적지 IP, 포트, 연결 상태. 80번을 열면 80번으로 오는 건 다 통과한다. 그 안에 SQL 인젝션이 들었는지, 경로 조작(`../../etc/passwd`)이 들었는지는 보지 않는다.
+
+IDS는 패킷을 다시 이어 붙여 TCP 스트림을 복원하고, HTTP·DNS·TLS 같은 프로토콜을 해석한 뒤 규칙과 맞춰 본다. 요청 URI, 헤더, 본문, DNS 질의 이름, TLS의 SNI까지 본다. 이걸 심층 패킷 검사(DPI)라고 부른다. 웹 애플리케이션 방화벽(WAF)도 비슷한 일을 하지만, WAF는 HTTP 하나에 집중해서 애플리케이션 앞에 서고, IDS/IPS는 네트워크 길목에서 여러 프로토콜을 본다는 차이가 있다.
+
+## 길목에 서느냐, 옆에서 보느냐
+
+같은 Suricata라도 놓는 자리가 역할을 정한다. 아래 그림에서 다음을 누르면 복사본을 보는 IDS와 길목의 IPS가 같은 공격에 어떻게 다르게 반응하는지 볼 수 있다.
+
+<NetworkTopology
+  caption="IDS는 복사본을 보고 알리고, IPS는 길목에서 버린다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "edge", label: "경계", x: 8, y: 8, w: 384, h: 72, tone: "edge" },
+    { id: "dmz", label: "서비스망 10.66.1.0/24", x: 8, y: 160, w: 384, h: 132, tone: "private" },
+  ]}
+  nodes={[
+    { id: "net", label: "Internet", sub: "10.66.0.2", x: 70, y: 48, icon: "internet" },
+    { id: "fw", label: "Firewall", sub: "80·443 허용", x: 250, y: 48, icon: "firewall" },
+    { id: "ips", label: "IPS", sub: "inline", x: 250, y: 122, icon: "lock" },
+    { id: "sw", label: "Switch", sub: "SPAN", x: 250, y: 214, icon: "switch" },
+    { id: "ids", label: "IDS", sub: "복사본만", x: 70, y: 214, icon: "server" },
+    { id: "web", label: "web", sub: "10.66.1.2", x: 250, y: 266, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "net", to: "fw" },
+    { from: "fw", to: "ips" },
+    { from: "ips", to: "sw" },
+    { from: "sw", to: "web" },
+    { from: "sw", to: "ids", dashed: true, label: "mirror" },
+  ]}
+  steps={[
+    { path: ["net", "fw", "ips", "sw", "web"], packet: "GET /", title: "평범한 요청은 그대로 지난다", detail: "방화벽은 80번이라 통과시키고, IPS는 규칙에 걸리는 게 없어 넘긴다. 홉 하나만큼 지연이 붙는다." },
+    { path: ["sw", "ids"], packet: "copy", title: "스위치가 복사본을 IDS에 보낸다", detail: "SPAN 포트나 TAP이 같은 프레임을 하나 더 만든다. IDS가 느려도 원래 트래픽은 영향이 없다." },
+    { path: ["net", "fw", "ips"], packet: "UNION", blocked: true, title: "IPS는 공격을 그 자리에서 버린다", detail: "drop 규칙에 걸린 패킷은 서버에 닿지 않는다. 그 TCP 흐름의 뒤 패킷도 함께 버린다." },
+    { path: ["sw", "ids"], packet: "alert", highlight: ["web"], title: "IDS 자리였다면 이미 늦었다", detail: "IDS는 복사본을 보고 경보를 낼 뿐이다. 원본은 이미 웹 서버에 닿아 처리됐다. 막는 건 사람이나 다른 장치의 몫이다." },
+  ]}
+/>
+
+트레이드오프가 분명하다. IDS는 복사본을 보니 엔진이 느려지거나 죽어도 서비스에 영향이 없고, 오탐이 나도 경보 하나로 끝난다. 대신 막지 못한다. IPS는 막을 수 있지만, 모든 패킷이 엔진을 지나니 지연과 처리량 한계가 생기고, 엔진이 죽으면 트래픽을 통과시킬지(fail-open) 끊을지(fail-closed) 정해야 하며, 오탐이 곧 정상 사용자의 장애가 된다. 그래서 새 규칙은 IDS 모드나 alert 동작으로 먼저 돌려 보고, 오탐이 없다는 확신이 생긴 규칙만 drop으로 바꾸는 게 보통이다.
+
+복사본을 얻는 방법도 둘이다. 스위치의 SPAN(포트 미러링)은 설정만으로 되지만, 스위치가 바쁘면 복사본부터 버린다. 네트워크 TAP은 선 중간에 끼우는 장비라 빠짐없이 복사한다. 클라우드에서는 AWS VPC Traffic Mirroring처럼 인스턴스의 ENI 트래픽을 다른 인스턴스로 복사하는 기능을 쓴다.
+
+## 규칙 한 줄 뜯어보기
+
+Suricata와 Snort의 규칙은 같은 뿌리의 문법을 쓴다. 실습에 쓴 SQL 인젝션 규칙을 조각으로 나눠 보면 이렇다.
+
+<UrlAnatomy
+  caption="Suricata 규칙 한 줄"
+  base="alert http any any -> $HOME_NET any"
+  separator=" ("
+  joiner="; "
+  params={[
+    { key: "msg", value: "\"LOCAL SQLi UNION SELECT in URI\"", title: "경보에 찍힐 이름", description: "eve.json의 alert.signature에 이 문자열이 그대로 들어간다. 경보를 보는 사람이 바로 알아볼 수 있게 쓴다." },
+    { key: "flow", value: "established,to_server", title: "어느 방향의 어떤 흐름인가", description: "연결이 맺어진 뒤 클라이언트에서 서버로 가는 데이터만 본다. 응답까지 검사하지 않으니 빠르고, 응답 본문의 우연한 문자열에 걸리지 않는다." },
+    { key: "http.uri", display: "http.uri", title: "어디를 볼지 정하는 버퍼", description: "HTTP 요청의 URI만 본다. 퍼센트 인코딩을 풀고 경로를 정리한(정규화한) 값이다. 그래서 %20UNION%20도 union으로 맞는다.", required: true },
+    { key: "content", value: "\"union\"; nocase", title: "찾을 문자열", description: "대소문자를 무시하고 union을 찾는다. 엔진은 규칙마다 가장 드문 content 하나를 골라 빠른 사전 검사(fast pattern)에 쓴다." },
+    { key: "content", value: "\"select\"; nocase; distance:0", title: "이어서 찾을 문자열", description: "distance:0은 앞에서 찾은 union 뒤에서 select를 찾으라는 뜻이다. 순서가 맞아야 걸린다." },
+    { key: "classtype", value: "web-application-attack", title: "분류", description: "분류마다 우선순위가 정해져 있다. web-application-attack은 우선순위 1(가장 높음)로 찍힌다." },
+    { key: "sid", value: "1000001; rev:1", title: "규칙 번호와 개정 번호", description: "sid는 규칙의 고유 번호다. 직접 쓰는 규칙은 관례상 1000000~1999999를 쓴다. 규칙을 고치면 rev를 올린다.", required: true },
+  ]}
+/>
+
+맨 앞 단어가 동작이다. `alert`는 경보만, `drop`은 IPS 모드에서 패킷을 버리고 경보, `reject`는 버리면서 RST나 ICMP로 거절을 알린다, `pass`는 이 흐름을 더 검사하지 않는다. 그다음이 프로토콜, 출발지 주소와 포트, 방향, 목적지 주소와 포트다. `$HOME_NET`은 설정 파일에 적어 둔 보호 대상 네트워크다.
+
+실무에서는 규칙을 직접 다 쓰지 않는다. Proofpoint의 ET Open(무료)이나 ET Pro(유료), Snort라면 Cisco Talos 규칙을 받아 쓰고, `suricata-update`로 매일 갱신한다. 직접 쓰는 건 우리 서비스에만 있는 경로나 패턴을 위한 몇 줄이다.
+
+## 공격 트래픽을 만들어 돌려 보기
+
+공격자 네임스페이스에서 평범한 요청과 공격 모양의 요청을 섞어 보내고, 라우터에서 pcap으로 잡았다. 마지막은 scapy로 20~99번 포트에 SYN을 하나씩 보내는 포트 스캔이다.
+
+```bash
+# 라우터에서 웹 서버 쪽 인터페이스를 pcap으로 저장한다
+sudo ip netns exec n5r tcpdump -i n5r1 -w attack.pcap -U 'host 10.66.1.2' &
+
+# 공격자 쪽에서 요청을 섞어 보낸다
+X="sudo ip netns exec n5x"
+$X curl -s -o /dev/null http://10.66.1.2/                                         # 평범한 요청
+$X curl -s -o /dev/null "http://10.66.1.2/search?q=select+chair"                  # 의자를 검색했을 뿐
+$X curl -s -o /dev/null "http://10.66.1.2/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--"
+$X curl -s -o /dev/null --path-as-is "http://10.66.1.2/static/../../etc/passwd"   # 경로 조작
+$X curl -s -o /dev/null -A "sqlmap/1.7.2#stable (https://sqlmap.org)" "http://10.66.1.2/products?id=1"
+$X python3 scan.py                                                                 # SYN 스캔 80개
+```
+
+```text
+sent=80 answered=80 open=[80]
+```
+
+규칙 파일에는 앞의 SQL 인젝션 규칙 말고 네 개를 더 넣었다. "URI에 select가 있으면"이라는 순진한 규칙(sid 1000002), 경로 조작(1000003), sqlmap의 User-Agent(1000004), 10초에 SYN 30개마다 한 번 울리는 스캔 규칙(1000005)이다.
+
+```text
+alert http any any -> $HOME_NET any (msg:"LOCAL SQL keyword select in URI (naive)"; flow:established,to_server; http.uri; content:"select"; nocase; classtype:web-application-attack; sid:1000002; rev:1;)
+alert http any any -> $HOME_NET any (msg:"LOCAL path traversal to /etc/passwd"; flow:established,to_server; http.uri.raw; content:"../"; content:"etc/passwd"; nocase; distance:0; classtype:web-application-attack; sid:1000003; rev:1;)
+alert http any any -> $HOME_NET any (msg:"LOCAL sqlmap user-agent"; flow:established,to_server; http.user_agent; content:"sqlmap"; nocase; classtype:web-application-attack; sid:1000004; rev:1;)
+alert tcp any any -> $HOME_NET any (msg:"LOCAL possible SYN port scan"; flow:stateless; flags:S,12; threshold: type threshold, track by_src, count 30, seconds 10; classtype:attempted-recon; sid:1000005; rev:1;)
+```
+
+pcap을 Suricata에 넣고 경보만 골라 한 줄씩 줄여 봤다.
+
+```bash
+# 오프라인 모드(-r)로 pcap을 읽는다. -S는 이 규칙 파일만 쓴다는 뜻, -k none은 체크섬 검사를 끈다
+suricata -r attack.pcap -S local.rules -l out1 -k none --set vars.address-groups.HOME_NET="[10.66.1.0/24]"
+
+# eve.json에서 경보만 골라 핵심 필드만 본다
+jq -c 'select(.event_type=="alert") | {sid:.alert.signature_id, msg:.alert.signature, uri:.http.url}' out1/eve.json
+```
+
+```text
+{"sid":1000002,"msg":"LOCAL SQL keyword select in URI (naive)","uri":"/search?q=select+chair"}
+{"sid":1000005,"msg":"LOCAL possible SYN port scan","uri":null}
+{"sid":1000001,"msg":"LOCAL SQLi UNION SELECT in URI","uri":"/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--"}
+{"sid":1000002,"msg":"LOCAL SQL keyword select in URI (naive)","uri":"/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--"}
+{"sid":1000003,"msg":"LOCAL path traversal to /etc/passwd","uri":"/static/../../etc/passwd"}
+{"sid":1000005,"msg":"LOCAL possible SYN port scan","uri":null}
+{"sid":1000004,"msg":"LOCAL sqlmap user-agent","uri":"/products?id=1"}
+```
+
+공격 넷은 모두 잡혔다. 스캔 경보는 SYN 80개 중 30번째와 60번째에 한 번씩 두 번 울렸다. 첫 줄은 오탐이다. 의자를 검색한 사용자가 SQL 인젝션 경보를 받았다. 이 이야기는 아래에서 다시 한다.
+
+경보 하나를 펼쳐 보면 판단에 필요한 정보가 더 있다. 몇몇 필드는 줄였다.
+
+```text
+{
+  "timestamp": "2026-10-20T14:36:09.554818+0000",
+  "flow_id": 405613113386961,
+  "event_type": "alert",
+  "src_ip": "10.66.0.2",
+  "src_port": 46984,
+  "dest_ip": "10.66.1.2",
+  "dest_port": 80,
+  "proto": "TCP",
+  "alert": {
+    "action": "allowed",
+    "gid": 1,
+    "signature_id": 1000001,
+    "rev": 1,
+    "signature": "LOCAL SQLi UNION SELECT in URI",
+    "category": "Web Application Attack",
+    "severity": 1
+  },
+  "http": {
+    "hostname": "10.66.1.2",
+    "url": "/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--",
+    "http_user_agent": "curl/8.5.0",
+    "http_method": "GET",
+    "status": 404,
+    "length": 0
+  },
+  ...
+}
+```
+
+`"action": "allowed"`는 IDS로 봤으니 막지 않았다는 뜻이다. `http.status: 404`는 서버가 그 요청에 404로 답했다는 뜻이라, 공격 시도는 있었지만 그 경로가 없어서 실패했다고 읽는다. 경보를 받으면 먼저 응답 코드부터 본다. 200이고 응답 길이가 평소보다 크다면 정말 데이터가 나갔을 수 있다. `flow_id`로 같은 흐름의 다른 이벤트(http, fileinfo, flow)를 묶어 볼 수 있다.
+
+하나 더 확인할 것이 있다. 경로 조작 규칙에 `http.uri` 대신 `http.uri.raw`를 쓴 이유다. 두 버전을 나란히 돌려 봤다.
+
+```text
+{"sid":1000102,"msg":"TEST traversal on raw uri"}
+```
+
+`http.uri`에 `content:"../"`를 건 규칙(1000101)은 울리지 않았다. Suricata가 URI를 정규화하면서 `/static/../../etc/passwd`를 `/etc/passwd`로 정리했기 때문이다. 정규화는 `%2e%2e%2f` 같은 인코딩 우회를 막아 주지만, "점 두 개가 있었다"는 흔적 자체를 지운다. 무엇을 보려는지에 따라 버퍼를 골라야 한다.
+
+## 이름표로 찾기, 평소와 다른 것 찾기
+
+방금 쓴 방식이 시그니처 기반 탐지다. 알려진 공격의 모양(문자열, 바이트 패턴, 순서)을 규칙으로 적어 두고 맞춰 본다. 정확하고 왜 울렸는지 설명하기 쉽다. 대신 규칙이 없는 새 공격(제로데이)은 못 잡고, 공격자가 모양을 살짝 바꾸면(대소문자, 주석 끼워 넣기 `UN/**/ION`, 인코딩) 놓친다.
+
+다른 방식은 이상 탐지(anomaly-based)다. 평소 트래픽의 기준선을 배워 두고 거기서 크게 벗어나면 알린다. "이 IP가 분당 12건 남짓 보내다 갑자기 200건", "이 서버가 새벽 3시에 처음 보는 나라로 2GB를 보냄" 같은 것이다. 모르는 공격도 잡을 수 있지만, 평소와 다른 정상 상황(이벤트 트래픽, 배치 작업, 신규 기능)도 똑같이 울린다. 그리고 왜 울렸는지 설명하기 어렵다.
+
+Suricata는 기본적으로 시그니처 엔진이고, 프로토콜이 규격을 어기는 경우(잘못된 HTTP 헤더, 겹치는 TCP 조각)를 잡는 이벤트 규칙 정도가 이상 탐지에 가깝다. 행동 기반 이상 탐지는 Zeek 같은 분석 도구, 흐름 로그(NetFlow, VPC Flow Logs)를 보는 시스템, 클라우드의 위협 탐지 서비스가 주로 맡는다. 흐름 로그로 무엇을 볼 수 있는지는 [흐름 로그 글](/posts/network-flow-logs)에 있다.
+
+이상 탐지의 가장 단순한 형태를 직접 짜 보자. 직전 `window`개 값의 평균과 표준편차로 기준선을 만들고, 지금 값이 평균 + k × 표준편차를 넘으면 이상으로 본다. 표준편차가 0이면 아주 작은 변화에도 울리니 1을 바닥으로 둔다.
+
+<CodePlayground
+  caption="이동 기준선으로 이상한 분 찾기"
+  functionName="anomalies"
+  initialCode={`// counts: 분당 요청 수, window: 기준선에 쓸 직전 개수, k: 표준편차 배수
+// 이상으로 본 인덱스 목록을 돌려준다 (window 번째부터 검사)
+function anomalies(counts, window, k) {
+  return [];
+}`}
+  solution={`function anomalies(counts, window, k) {
+  const out = [];
+  for (let i = window; i < counts.length; i++) {
+    const base = counts.slice(i - window, i);
+    const mean = base.reduce((a, b) => a + b, 0) / window;
+    const sd = Math.sqrt(base.reduce((a, b) => a + (b - mean) ** 2, 0) / window);
+    if (counts[i] > mean + k * Math.max(sd, 1)) out.push(i);
+  }
+  return out;
+}`}
+  tests={[
+    { label: "90과 200 둘 다 튄다", args: [[12, 15, 11, 14, 13, 12, 90, 14, 13, 200], 5, 3], expected: [6, 9] },
+    { label: "90이 기준선을 오염시키면", args: [[12, 15, 11, 14, 13, 12, 90, 14, 13, 120], 5, 3], expected: [6] },
+    { label: "완전히 평평할 때 14", args: [[10, 10, 10, 10, 10, 14], 5, 3], expected: [5] },
+    { label: "평평할 때 13은 넘지 않음", args: [[10, 10, 10, 10, 10, 13], 5, 3], expected: [] },
+    { label: "기준선이 모자라면 검사 안 함", args: [[5, 6, 5], 5, 3], expected: [] },
+  ]}
+/>
+
+두 번째 테스트가 이상 탐지의 약점을 보여 준다. 90이라는 튀는 값이 기준선 창에 들어가자 표준편차가 커져서, 뒤의 120은 이상으로 잡히지 않는다. 공격자가 천천히 양을 늘리면 기준선도 따라 올라간다. 그래서 실제 시스템은 튀는 값을 기준선에서 빼거나, 요일·시간대별 기준선을 따로 두거나, 시그니처와 함께 쓴다.
+
+## 길목에 세워서 막기
+
+이번에는 라우터 네임스페이스의 FORWARD 체인에 NFQUEUE 규칙을 걸어, 지나가는 모든 패킷을 커널이 Suricata에 넘기고 판정(통과·버림)을 받게 했다. SQL 인젝션 규칙의 동작만 `drop`으로 바꿨다. 아래 그림에서 다음을 누르면 패킷 하나가 판정을 받는 과정을 볼 수 있다.
+
+<SequenceDiagram
+  caption="NFQUEUE: 커널이 패킷을 붙들고 Suricata의 판정을 기다린다"
+  actors={[
+    { id: "atk", label: "공격자" },
+    { id: "kern", label: "라우터 커널" },
+    { id: "suri", label: "Suricata" },
+    { id: "web", label: "web" },
+  ]}
+  steps={[
+    { from: "atk", to: "kern", label: "SYN", title: "연결이 라우터에 도착한다", detail: "FORWARD 체인의 NFQUEUE 규칙이 패킷을 큐 0번에 넣는다." },
+    { from: "kern", to: "suri", label: "queue 0", title: "커널은 패킷을 붙들고 묻는다", detail: "패킷은 커널 안에서 판정을 기다린다. Suricata가 늦으면 그만큼 지연이 붙는다." },
+    { from: "suri", to: "kern", label: "ACCEPT", title: "핸드셰이크는 통과시킨다", detail: "SYN에는 아직 HTTP가 없다. 흐름을 기억해 두고 통과시킨다." },
+    { from: "atk", to: "kern", label: "GET …UNION…", title: "요청 본문이 도착한다", detail: "Suricata가 스트림을 이어 붙이고 HTTP를 해석해 URI를 꺼낸다." },
+    { from: "suri", to: "kern", label: "DROP", title: "drop 규칙에 걸린다", detail: "이 패킷을 버리고, 같은 흐름의 뒤 패킷도 모두 버린다. 경보의 action은 blocked로 찍힌다." },
+    { from: "atk", to: "atk", label: "재전송…", title: "공격자는 응답을 못 받는다", detail: "서버에는 아무것도 닿지 않았다. 클라이언트는 응답을 기다리다 시간 초과로 끝난다." },
+  ]}
+/>
+
+```bash
+# 라우터를 지나는 모든 패킷을 큐 0번으로 보낸다
+sudo ip netns exec n5r iptables -I FORWARD -j NFQUEUE --queue-num 0
+
+# Suricata를 인라인(IPS) 모드로 큐 0번에 붙인다
+sudo ip netns exec n5r suricata -q 0 -S ips.rules -l out-ips -k none --set vars.address-groups.HOME_NET="[10.66.1.0/24]"
+
+# 평범한 요청, SQL 인젝션, sqlmap UA를 차례로 보낸다 (각 5초 제한)
+X="sudo ip netns exec n5x"
+$X curl -s -m 5 -o /dev/null -w "%{http_code} normal time=%{time_total}s\n" http://10.66.1.2/
+$X curl -s -m 5 -o /dev/null -w "%{http_code} sqli (exit=%{exitcode}) time=%{time_total}s\n" "http://10.66.1.2/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--"
+$X curl -s -m 5 -o /dev/null -w "%{http_code} sqlmap-ua time=%{time_total}s\n" -A "sqlmap/1.7.2#stable (https://sqlmap.org)" "http://10.66.1.2/products?id=1"
+```
+
+```text
+200 normal time=0.002700s
+000 sqli (exit=28) time=5.002422s
+404 sqlmap-ua time=0.003899s
+{"action":"blocked","sid":1000001,"msg":"LOCAL SQLi UNION SELECT in URI","url":"/products?id=1%20UNION%20SELECT%20username,password%20FROM%20users--"}
+{"action":"allowed","sid":1000004,"msg":"LOCAL sqlmap user-agent","url":"/products?id=1"}
+```
+
+뒤의 두 줄은 eve.json에서 뽑은 경보다. SQL 인젝션은 `blocked`로 찍혔고, 웹 서버의 접근 로그에는 이 시각의 UNION 요청이 아예 없었다. alert 동작인 sqlmap 규칙은 경보만 내고 통과시켰다. `exit=28`은 curl의 시간 초과다. drop은 공격자에게 아무 답도 주지 않아서 클라이언트는 기다리다 끝난다. 즉시 거절을 알리고 싶다면 `reject`를 쓴다.
+
+지연도 쟀다. 같은 경로로 연결마다 새로 여는 요청 2,000개를 보냈다(웹 서버가 Python `http.server`라 요청마다 연결을 닫는다). NFQUEUE를 켜고 끄기를 두 번씩 했다.
+
+```text
+# IPS 켬
+requests=2000 conc=1 errors=0 rps=480 p50=1.547ms p90=3.171ms p99=6.014ms
+requests=2000 conc=1 errors=0 rps=638 p50=1.232ms p90=2.000ms p99=4.754ms
+# IPS 끔
+requests=2000 conc=1 errors=0 rps=809 p50=0.879ms p90=1.881ms p99=4.730ms
+requests=2000 conc=1 errors=0 rps=716 p50=0.855ms p90=2.370ms p99=5.462ms
+```
+
+중간값이 0.4~0.7ms 정도 늘었다. CPU 4개짜리 컨테이너에서 클라이언트, 서버, Suricata가 함께 돈 값이라 절대값보다는 "모든 패킷이 사용자 공간을 한 번 다녀온다"는 비용이 있다는 정도로 읽는다. 실제 장비에서는 처리량이 한계에 가까워질 때 지연이 급격히 커지는 게 더 큰 문제다.
+
+엔진이 죽으면 어떻게 될까. Suricata를 띄우기 전, NFQUEUE 규칙만 걸린 상태에서 요청을 보냈을 때는 `000 (exit=28) time=3.002497s`로 모든 트래픽이 끊겼다. 큐에 받는 쪽이 없으면 커널이 패킷을 버리기 때문이다(fail-closed). 규칙에 `--queue-bypass`를 붙이면 받는 쪽이 없을 때 그냥 통과시킨다(fail-open). Suricata를 끈 뒤 이 옵션으로 SQL 인젝션을 다시 보냈더니 `404 with bypass, no IPS: time=0.001273s`, 즉 공격이 서버까지 갔다.
+
+<Callout kind="warning" title="원격 서버에 NFQUEUE를 걸 때">
+`--queue-bypass` 없이 INPUT이나 FORWARD 전체를 NFQUEUE로 보내면, Suricata가 아직 안 떴거나 죽는 순간 SSH까지 끊긴다. 먼저 `iptables -I INPUT -p tcp --dport 22 -j ACCEPT`로 관리 포트를 위에 두고, 원격 작업이라면 `at now + 5 minutes`로 `iptables -D FORWARD -j NFQUEUE --queue-num 0`을 예약해 둔다. 되돌릴 때는 같은 규칙을 `-D`로 지운다.
+</Callout>
+
+fail-open과 fail-closed는 보안과 가용성 중 무엇을 고를지의 문제다. 결제망처럼 검사 없이 통과시키면 안 되는 곳은 closed, 일반 웹 서비스는 엔진 장애가 곧 서비스 장애가 되지 않도록 open을 고르고, 엔진 상태를 따로 감시하는 경우가 많다.
+
+## 울리면 안 될 때 울린다
+
+실습의 오탐 두 가지를 보자. 하나는 앞에서 본 `select` 규칙이다. 의자를 검색한 요청에 SQL 인젝션 경보가 붙었다. 다른 하나는 더 실감 난다. IPS를 켜고 지연을 재는 동안 포트 스캔 규칙이 136번 울렸다.
+
+```bash
+# IPS 실행 중 쌓인 경보를 규칙과 목적지 포트별로 센다
+jq -r 'select(.event_type=="alert") | "\(.alert.signature_id) \(.dest_port)"' out-ips/eve.json | sort | uniq -c | sort -rn
+```
+
+```text
+    136 1000005 80
+      1 1000004 80
+      1 1000001 80
+```
+
+목적지 포트가 전부 80이다. 스캔이 아니라 연결을 매번 새로 여는 부하 테스트였다. 규칙이 "10초에 SYN 30개"만 셌지 "서로 다른 포트 30개"를 세지 않았기 때문이다. 아래 그림은 이 규칙이 진짜 스캔과 부하 테스트를 구분하지 못하는 과정이다.
+
+<AlgoTrace
+  caption="SYN 수만 세는 규칙은 포트를 구분하지 않는다"
+  memoryLabel="10.66.0.2의 10초 창 SYN 수"
+  cells={["스캔 :20", "스캔 :49", "스캔 :79", "부하 :80", "부하 :80", "부하 :80"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "스캔이 20번 포트부터 SYN을 하나씩 보낸다." },
+    { pointer: 1, memory: ["30"], found: [1], caption: "30번째 SYN에서 처음 울린다. 여기까지는 의도대로다." },
+    { pointer: 2, memory: ["60"], found: [1, 2], caption: "60번째에서 또 울린다. threshold 타입은 30개마다 한 번씩 울린다." },
+    { pointer: 3, memory: ["1"], caption: "다른 시간, 같은 IP가 80번에만 연결을 계속 연다. 부하 테스트다." },
+    { pointer: 4, memory: ["30"], found: [4], caption: "포트는 하나뿐인데 SYN이 30개라 울린다. 오탐이다." },
+    { pointer: 5, memory: ["약 4,100개 → 136건"], found: [4, 5], caption: "요청 수천 개 동안 136번. 경보를 보는 사람은 진짜 스캔 경보를 이 사이에서 찾아야 한다." },
+  ]}
+/>
+
+고치는 방법은 규칙마다 다르다. 스캔 규칙은 서비스 포트를 빼거나(`-> $HOME_NET ![80,443]`), 서로 다른 포트 수를 세는 도구(Zeek의 스캔 탐지 등)에 맡긴다. `select` 규칙은 순서와 맥락을 더 요구하도록(`union` 뒤의 `select`, 또는 `select ... from`) 좁힌다. 규칙은 맞는데 특정 출발지에서만 오탐이 난다면 `threshold.config`에 suppress를 건다.
+
+```text
+# 사내 취약점 스캐너(10.20.0.5)에서 오는 1000005 경보는 무시한다
+suppress gen_id 1, sig_id 1000005, track by_src, ip 10.20.0.5
+```
+
+오탐이 왜 이렇게 중요한지는 숫자로 보면 분명하다. 하루 요청 100만 건, 실제 공격 10건, 규칙의 오탐률이 0.1%이고 공격은 모두 잡는다고 하자. 경보는 오탐 약 1,000건 + 진짜 10건이다. 경보 하나가 진짜일 확률은 10 / 1,010, 1%도 안 된다. 경보를 보는 사람은 며칠 안에 경보를 무시하기 시작한다. 탐지율보다 오탐률이 운영의 질을 정하는 경우가 많다.
+
+## 어디에 세울까
+
+자리에 따라 보이는 것이 다르다. 아래 그림에서 다음을 누르면 같은 요청이 TLS로 암호화된 구간과 풀린 구간을 지날 때 IDS가 보는 것이 어떻게 다른지 볼 수 있다.
+
+<NetworkTopology
+  caption="TLS가 풀린 뒤에 서야 내용이 보인다"
+  width={400}
+  height={240}
+  zones={[
+    { id: "pub", label: "퍼블릭 서브넷", x: 8, y: 4, w: 384, h: 90, tone: "public" },
+    { id: "pri", label: "프라이빗 서브넷", x: 8, y: 118, w: 384, h: 114, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "client", sub: "HTTPS", x: 70, y: 56, icon: "client" },
+    { id: "lb", label: "ALB", sub: "TLS 종료", x: 250, y: 56, icon: "lb" },
+    { id: "ids1", label: "IDS-A", sub: "LB 앞", x: 70, y: 180, icon: "server" },
+    { id: "ids2", label: "IDS-B", sub: "LB 뒤", x: 200, y: 180, icon: "server" },
+    { id: "app", label: "app", sub: "10.0.2.10", x: 330, y: 180, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "user", to: "lb", label: "TLS" },
+    { from: "lb", to: "app", label: "HTTP" },
+    { from: "user", to: "ids1", dashed: true },
+    { from: "lb", to: "ids2", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "ids1"], packet: "TLS", title: "LB 앞에서는 암호문만 보인다", detail: "IDS-A가 볼 수 있는 건 IP, 포트, TLS의 SNI와 인증서, 클라이언트 지문 정도다. URI의 UNION SELECT는 보이지 않는다." },
+    { path: ["user", "lb"], packet: "TLS", title: "TLS는 로드 밸런서에서 풀린다", detail: "인증서와 개인 키가 LB에 있으니 여기서 평문이 된다." },
+    { path: ["lb", "ids2"], packet: "GET", title: "LB 뒤에서는 요청이 다 보인다", detail: "IDS-B는 평문 HTTP를 보고 규칙을 맞출 수 있다. 대신 출발지가 LB 주소로 바뀌어 원래 IP는 X-Forwarded-For 헤더에서 찾아야 한다." },
+    { path: ["lb", "app"], packet: "GET", highlight: ["ids2"], title: "앱까지 다시 암호화하면", detail: "LB와 앱 사이도 TLS(또는 메시의 mTLS)라면 IDS-B도 다시 장님이 된다. 그때는 호스트 기반 탐지나 WAF 같은 애플리케이션 층 검사로 옮겨 간다." },
+  ]}
+/>
+
+TLS가 많아질수록 네트워크 IDS가 볼 수 있는 내용은 줄어든다. 내부 통신까지 mTLS로 바꾸는 흐름([서비스 메시 글](/posts/service-mesh), [제로 트러스트 글](/posts/zero-trust-architecture))에서는 더 그렇다. 그래서 위치를 이렇게 나눠 생각한다.
+
+- 경계(north-south): 인터넷에서 들어오는 길목. 알려진 공격과 스캔을 가장 먼저 보는 곳이다. TLS를 푸는 장비 뒤에 둬야 내용이 보인다.
+- 내부(east-west): 서버끼리의 트래픽. 침입한 공격자가 옆으로 움직이는(lateral movement) 걸 잡는다. 트래픽 양이 경계보다 훨씬 많아 전부 보기 어렵고, 중요 구간을 골라 미러링한다.
+- 호스트(HIDS): 서버 안에서 로그, 파일 변경, 프로세스, 시스템 콜을 본다(Wazuh, OSSEC, Falco 같은 것). 암호화와 무관하게 결과를 본다.
+
+클라우드에서는 직접 장비를 세우는 대신 관리형 서비스를 쓰기도 한다. AWS Network Firewall은 상태 기반 규칙을 Suricata 호환 문법으로 받는다. 위의 규칙 문법을 알면 그대로 읽을 수 있다.
+
+## 현장에서 IDS 경보를 받았을 때
+
+경보 하나를 받으면 이 순서로 본다. 첫째, 같은 `flow_id`의 http 이벤트에서 응답 코드와 길이를 본다. 404·403이면 시도가 실패한 것이고, 200에 큰 응답이면 실제로 무언가 나갔을 수 있다. 둘째, 출발지가 사내 스캐너나 모니터링인지 확인한다. 셋째, 같은 출발지의 다른 경보와 흐름을 시간 순서로 늘어놓는다. 스캔 다음 공격, 공격 다음 이상한 외부 연결이 이어지면 우선순위를 올린다.
+
+경보가 갑자기 줄었다면 기뻐하기 전에 엔진을 의심한다. IDS가 패킷을 다 못 받고 버리면 공격도 조용히 놓친다. Suricata의 `stats.log`에서 `capture.kernel_drops`가 늘고 있는지 본다. 인라인 모드라면 `ips.blocked`, `ips.accepted`를 본다. 실습의 IPS 실행 뒤 통계는 이랬다.
+
+```bash
+# 마지막 통계에서 IPS 판정 수
+grep -E "^ips\.(accepted|blocked)|^detect.alert " out-ips/stats.log | tail -3
+```
+
+```text
+ips.accepted                                  | Total                     | 41488
+ips.blocked                                   | Total                     | 9
+detect.alert                                  | Total                     | 138
+```
+
+`blocked` 9는 SQL 인젝션 요청의 흐름에서 버린 패킷 수다. drop 규칙에 걸린 패킷 하나와, 흐름이 막힌 뒤 같은 흐름에서 들어온 패킷 여덟 개다(재전송 등). `ips.drop_reason`에 rules 1, flow_drop 8로 나뉘어 찍혔다.
+
+흔한 실수도 있다. `HOME_NET`을 기본값(사설 대역 전체)으로 두면 방향이 꼬여 규칙이 엉뚱하게 걸리거나 안 걸린다. 규칙 갱신(`suricata-update`)을 자동으로 돌리면서 결과를 확인하지 않으면, 새로 들어온 규칙 하나가 오탐 수천 건을 만들거나 인라인 모드에서 정상 트래픽을 막는다. 오프로드(GRO·LRO)를 켠 채 잡으면 엔진이 비정상적으로 큰 패킷을 보고 스트림 재조립을 틀린다. 실습에서 인터페이스 오프로드를 끈 이유다.
+
+## 경보는 시작일 뿐이다
+
+IDS와 IPS는 패킷 내용을 보고 알려진 공격 모양을 찾는 장치다. 옆에서 복사본을 보면 IDS, 길목에서 판정하면 IPS다. 시그니처는 정확하지만 새 공격에 약하고, 이상 탐지는 새 공격도 보지만 오탐이 많다. 어디에 세우느냐가 무엇을 볼 수 있느냐를 정하고, 오탐률이 경보의 가치를 정한다. 네트워크 경계 하나로 안을 믿는 방식이 왜 무너졌는지는 [제로 트러스트 글](/posts/zero-trust-architecture)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### IDS와 IPS의 차이는 무엇인가요?
+
+IDS는 트래픽의 복사본을 보고 경보만 내고, IPS는 트래픽 길목(인라인)에 서서 의심스러운 패킷을 직접 버린다. IDS는 엔진이 느리거나 죽어도 서비스에 영향이 없지만 막지 못한다. IPS는 막을 수 있는 대신 지연이 붙고, 오탐이 곧 정상 사용자 차단이 되며, 엔진 장애 때 fail-open과 fail-closed 중 하나를 골라야 한다.
+
+### 방화벽이 있는데 IDS/IPS가 왜 필요한가요?
+
+방화벽은 주소, 포트, 연결 상태만 보고 내용은 보지 않는다. 80번을 열면 그 안의 SQL 인젝션도 통과한다. IDS/IPS는 TCP 스트림을 복원하고 HTTP·DNS 같은 프로토콜을 해석해 내용이 공격 모양인지 본다. 둘은 서로 다른 층을 맡는다.
+
+### 시그니처 기반과 이상 탐지 기반은 어떻게 다른가요?
+
+시그니처 기반은 알려진 공격 패턴을 규칙으로 적어 맞춰 보는 방식이라 정확하고 이유를 설명하기 쉽지만, 규칙이 없는 새 공격이나 살짝 바꾼 변형은 놓친다. 이상 탐지는 평소 기준선에서 벗어난 것을 잡아 모르는 공격도 볼 수 있지만, 평소와 다른 정상 상황도 울려 오탐이 많고 기준선이 서서히 오염될 수 있다. 실무에서는 둘을 섞어 쓴다.
+
+### 인라인 IPS 엔진이 죽으면 트래픽은 어떻게 되나요?
+
+설정에 따라 다르다. 리눅스 NFQUEUE라면 기본은 받는 쪽이 없을 때 패킷을 버리는 fail-closed라 모든 트래픽이 끊기고, `--queue-bypass`를 주면 검사 없이 통과시키는 fail-open이 된다. 보안이 우선인 구간은 closed, 가용성이 우선인 서비스는 open을 고르고 엔진 상태를 따로 감시한다. 원격 서버라면 관리 포트를 예외로 두는 안전장치가 필요하다.
+
+### 경보가 너무 많아서 아무도 안 봅니다. 어떻게 하나요?
+
+오탐률부터 낮춘다. 공격이 드물면 오탐률이 조금만 높아도 경보 대부분이 오탐이 되기 때문이다. 경보를 규칙별로 세어 많이 울리는 규칙부터 보고, 규칙을 좁히거나(맥락·순서 요구, 서비스 포트 제외), 특정 출발지만 suppress하고, 우리 환경에 맞지 않는 규칙은 끈다. 경보에 응답 코드 같은 맥락을 붙여 우선순위를 나누는 것도 도움이 된다.
+
+### HTTPS 트래픽도 IDS가 탐지할 수 있나요?
+
+내용은 TLS를 푼 뒤에만 볼 수 있다. 암호화 구간에서는 IP, 포트, SNI, 인증서, 클라이언트 지문 같은 메타데이터만 보인다. 그래서 로드 밸런서처럼 TLS가 끝나는 지점 뒤에 IDS를 두거나, 앱까지 암호화가 이어지면 WAF나 호스트 기반 탐지로 검사 위치를 옮긴다.
+
+### 경보 하나를 받았을 때 무엇부터 보나요?
+
+같은 흐름의 응답부터 본다. 404나 403이면 시도가 실패한 것이고, 200에 응답이 평소보다 크면 실제로 데이터가 나갔을 수 있다. 그다음 출발지가 사내 스캐너인지, 같은 출발지에서 스캔·공격·외부 연결이 이어지는지 시간 순서로 본다. 경보가 갑자기 줄면 엔진의 패킷 드롭(`capture.kernel_drops`)도 확인한다.

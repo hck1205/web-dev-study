@@ -1,0 +1,516 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("bloom-filter");
+
+크롤러를 만들면 제일 먼저 부딪히는 질문이 "이 URL, 전에 가 봤나?"다. 방문한 URL이 1억 개쯤 쌓이면 그걸 전부 `Set`에 담아 두기가 부담스럽다. URL 하나가 평균 80바이트만 잡아도 문자열만 8GB이고, 해시 테이블의 포인터와 빈칸까지 치면 그 두 배를 쉽게 넘는다. 그런데 이 질문에는 이상한 성질이 있다. "처음 보는 URL인데 가 봤다고 착각"하는 일이 100번에 한 번쯤 생겨도 크게 손해가 없다. 그 페이지 하나를 이번에 건너뛸 뿐이다. 반대로 "가 본 URL을 처음 본다고 착각"하면 같은 페이지를 끝없이 다시 긁는다.
+
+블룸 필터(Bloom filter)는 바로 이 비대칭을 이용한다. "없다"는 절대 틀리지 않고 "있다"는 가끔 틀리는 대신, 원소 하나에 10비트 남짓만 쓴다. 1억 개에 120MB다. 이 글은 비트 배열과 해시 몇 개로 그게 어떻게 되는지, 거짓 양성 확률 공식이 실제로 맞는지, 크기와 해시 개수는 어떻게 고르는지, 지울 수 없다는 약점은 어떻게 메우는지, 그리고 LSM 트리 저장소와 CDN, 브라우저, Redis, PostgreSQL에서 어떻게 쓰이는지를 차례로 본다. 숫자는 모두 이 글을 쓰면서 Node.js 22로 직접 돌려 잰 값이고, Redis는 Ubuntu 24.04의 Redis 7.0.15에 RedisBloom 2.6.12 모듈을 올려서 실제로 실행했다.
+
+캐시 앞에서 없는 키 요청을 거르는 용도는 [캐싱 전략 글](/posts/caching-strategies)에서 짧게 다뤘다. 여기서는 그 구조 자체를 깊게 판다.
+
+## 비트 배열에 도장 세 개 찍기
+
+블룸 필터는 길이 m짜리 비트 배열 하나와 해시 함수 k개로 끝난다. 처음에는 모든 비트가 0이다.
+
+- 넣을 때: 원소를 k개 해시에 넣어 나온 k개 위치의 비트를 1로 만든다.
+- 물을 때: 같은 k개 위치를 본다. 하나라도 0이면 "확실히 없다". 모두 1이면 "있을지도 모른다".
+
+넣은 원소의 비트는 반드시 1이 되어 있으니 "없다"는 틀릴 수가 없다. 하지만 다른 원소들이 찍어 둔 1이 우연히 내 k개 자리를 모두 덮으면 넣은 적 없는 원소도 "있다"가 나온다. 이게 거짓 양성(false positive)이다.
+
+아래 그림은 비트 16개(m=16), 해시 3개(k=3)짜리 필터에 실제로 `cat`, `dog`, `fox`를 넣고 두 단어를 물어본 과정이다. 위치는 아래 플레이그라운드에 있는 해시 함수로 계산한 값 그대로다. 초록 칸이 1이 된 비트다.
+
+<AlgoTrace
+  caption="m=16, k=3 블룸 필터에 넣고 물어보기"
+  memoryLabel="비트 배열 (0번부터)"
+  cells={["·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"]}
+  steps={[
+    { memory: ["0000 0000 0000 0000"], caption: "비트 16개가 모두 0이다. 해시 3개로 위치를 고른다." },
+    { pointer: 12, found: [12, 13, 14], memory: ["0000 0000 0000 1110", "cat → 12, 13, 14"], caption: "cat을 넣는다. 해시 세 개가 12, 13, 14를 가리켜서 그 비트를 1로 만든다." },
+    { pointer: 0, found: [0, 7, 9, 12, 13, 14], memory: ["1000 0001 0100 1110", "dog → 7, 0, 9"], caption: "dog을 넣는다. 0, 7, 9가 1이 된다." },
+    { pointer: 4, found: [0, 4, 7, 9, 10, 12, 13, 14], memory: ["1000 1001 0110 1110", "fox → 4, 7, 10"], caption: "fox를 넣는다. 7은 이미 1이라 그대로고 4, 10이 새로 1이 된다." },
+    { pointer: 5, found: [0, 4, 7, 9, 10, 12, 13, 14], memory: ["1000 1001 0110 1110", "owl → 10, 5, 0", "5번이 0 → 확실히 없다"], caption: "owl을 물어본다. 5번 비트가 0이니 owl은 넣은 적이 없다. 이 답은 절대 틀리지 않는다." },
+    { pointer: 13, found: [7, 10, 13], memory: ["1000 1001 0110 1110", "tiger → 13, 10, 7", "셋 다 1 → 있을지도"], caption: "tiger를 물어본다. 13은 cat, 10은 fox, 7은 dog과 fox가 찍은 비트다. 넣은 적 없는데 '있다'가 나온다. 거짓 양성이다." },
+  ]}
+/>
+
+tiger는 한 원소와 겹친 게 아니라 세 원소가 찍은 도장을 하나씩 빌려서 통과했다. 비트가 1로 채워질수록 이런 우연이 늘어난다. 그래서 블룸 필터의 정확도는 "얼마나 꽉 찼나"로 정해진다.
+
+필터는 원소 자체를 저장하지 않는다. 그래서 무엇이 들어 있는지 목록을 뽑을 수 없고, 같은 원소를 두 번 넣어도 공간이 더 들지 않는다. 메모리는 원소의 크기와 무관하게 비트 수 m으로만 정해진다. 80바이트 URL이든 8바이트 정수든 원소 하나에 드는 비용이 같다.
+
+## 거짓 양성 확률을 계산하고 재 보기
+
+거짓 양성 확률은 간단한 확률로 나온다. 비트 하나만 놓고 따져 보자.
+
+1. 해시 한 번이 특정 비트를 비켜 갈 확률은 1 − 1/m이다.
+2. 원소 n개를 넣으면 해시가 kn번 찍힌다. 특정 비트가 끝까지 0으로 남을 확률은 (1 − 1/m)^(kn)이고, m이 크면 e^(−kn/m)과 거의 같다.
+3. 넣지 않은 원소를 물었을 때 k개 위치가 모두 1이어야 거짓 양성이다. 비트들이 서로 독립이라고 치면 확률은 이렇다.
+
+```text
+p ≈ (1 − e^(−kn/m))^k
+```
+
+비트들이 엄밀하게 독립은 아니라서 근사식이다. 실제로 얼마나 맞는지 재 봤다. 원소 10만 개(`user:0` ~ `user:99999`)를 넣고, 넣지 않은 문자열 100만 개(`other:0` ~ …)를 물어서 "있다"가 나온 비율을 셌다. 해시는 FNV-1a에 MurmurHash3의 마무리 섞기를 붙인 32비트 함수 두 개를 썼다.
+
+```text
+bits/원소  k   이론 FP     측정 FP     1인 비트 비율
+      8   1   11.750%    11.709%   11.8%
+      8   3    3.058%     3.027%   31.3%
+      8   5    2.168%     2.164%   46.5%
+      8   6    2.158%     2.176%   52.8%
+      8   8    2.549%     2.588%   63.2%
+  9.585   7    1.004%     0.988%   51.8%
+     10   4    1.181%     1.162%   33.0%
+     10   7    0.819%     0.830%   50.3%
+     10  10    1.019%     1.023%   63.2%
+ 14.378  10    0.100%     0.099%   50.1%
+     16  11    0.046%     0.044%   49.8%
+```
+
+모든 줄에서 측정값이 이론값과 0.05%p 안쪽으로 맞았다. 공식은 믿고 써도 된다. 표에서 볼 것이 두 가지 더 있다.
+
+첫째, 해시 개수 k에는 최적값이 있다. 원소당 8비트일 때 k=1이면 11.7%, k=5~6이면 2.2%, k=8이면 다시 2.6%로 나빠진다. 해시가 적으면 원소 하나가 찍는 도장이 적어 우연히 통과하기 쉽고, 많으면 배열이 빨리 1로 차서 아무나 통과한다.
+
+둘째, 최적 k에서는 1인 비트 비율이 거의 정확히 50%다(50.3%, 51.8%, 50.1%, 49.8%). 우연이 아니다. 공식을 k로 미분하면 최적점이 이렇게 나온다.
+
+```text
+최적 k   = (m / n) · ln 2  ≈ 0.693 · (원소당 비트)
+그때 p   = (1/2)^k          ≈ 0.6185^(m/n)
+필요한 m = −n · ln p / (ln 2)²  ≈ 1.44 · n · log2(1/p)
+```
+
+이때 비트가 0으로 남을 확률 e^(−kn/m)이 정확히 1/2이 된다. 비트 하나하나가 정보를 가장 많이 담는 상태, 0과 1이 반반인 상태가 최적이라는 뜻이다. 운영 중인 필터의 1 비율을 재 보면 지금 설계대로 쓰이고 있는지 바로 알 수 있다. 50%를 한참 넘었다면 원소를 계획보다 많이 넣고 있는 것이다.
+
+## 크기와 해시 개수를 고르는 법
+
+설계는 거꾸로 한다. 넣을 원소 수 n과 견딜 수 있는 거짓 양성 확률 p를 먼저 정하고 m과 k를 계산한다. 위 식으로 계산한 값이다.
+
+```text
+목표 p     원소당 비트   최적 k   원소 1억 개   원소 100만 개
+10%           4.79        3.3      59.9 MB       585 KB
+1%            9.59        6.6     119.8 MB     1,170 KB
+0.1%         14.38       10.0     179.7 MB     1,755 KB
+0.01%        19.17       13.3     239.6 MB     2,340 KB
+```
+
+규칙이 보인다. 거짓 양성을 10배 줄일 때마다 원소당 약 4.8비트가 더 든다. 1%에서 0.1%로 가는 데 메모리 1.5배, 0.01%까지 가도 2배다. 그래서 "1%면 원소당 10비트, 해시 7개"가 실무에서 가장 흔한 출발점이다. RocksDB의 `NewBloomFilterPolicy(10)`이 바로 키당 10비트이고, 문서에서도 약 1% 거짓 양성으로 설명한다.
+
+k는 계산값을 반올림하면 된다. 6.6이 나오면 7을 쓴다. 표에서 봤듯 최적점 근처는 평평해서(8비트일 때 k=5와 k=6이 2.16%, 2.18%) 하나쯤 차이는 별 영향이 없다. 오히려 해시 계산이 조회 비용이니, 성능이 급하면 k를 최적보다 한두 개 줄이는 쪽을 고르기도 한다.
+
+해시 함수를 정말 k개 따로 만들 필요는 없다. 해시 두 개 h1, h2만 계산하고 i번째 위치를 `h1 + i·h2 (mod m)`으로 만드는 이중 해싱(double hashing)을 써도 거짓 양성 확률이 점근적으로 같다는 결과가 있다(Kirsch–Mitzenmacher, 2006). 위 측정도 이 방식으로 했다. 64비트 해시 하나를 반으로 갈라 h1, h2로 쓰는 구현이 많다.
+
+아래 플레이그라운드에서 `bloomCheck`를 완성해 보자. 해시와 위치 계산은 이미 들어 있고, 비트를 켜고 확인하는 부분만 쓰면 된다. 마지막 테스트는 비트 64개에 원소 40개를 넣은 경우다. 원소당 1.6비트밖에 안 되니 넣지 않은 `guest:*` 여섯 개 중 세 개가 "있다"로 나온다.
+
+<CodePlayground
+  caption="블룸 필터에 넣고 물어보기"
+  functionName="bloomCheck"
+  initialCode={`// 32비트 해시 (FNV-1a + 섞기). seed만 바꿔서 두 개를 만든다
+function hash32(str, seed) {
+  let h = seed >>> 0;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+// 이중 해싱: i번째 위치 = (h1 + i * h2) mod m
+function positions(item, m, k) {
+  const h1 = hash32(item, 0x811c9dc5);
+  const h2 = hash32(item, 0x9747b28c) | 1;
+  const out = [];
+  for (let i = 0; i < k; i++) out.push(((h1 + Math.imul(i, h2)) >>> 0) % m);
+  return out;
+}
+
+// added를 모두 넣은 뒤, query마다 "있을지도"면 true, "확실히 없다"면 false
+function bloomCheck(m, k, added, queries) {
+  const bits = new Uint8Array(m);
+  // 1. added의 원소마다 positions의 비트를 1로
+  // 2. 각 query의 positions가 모두 1인지 확인
+  return queries.map(() => false);
+}`}
+  solution={`function hash32(str, seed) {
+  let h = seed >>> 0;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+function positions(item, m, k) {
+  const h1 = hash32(item, 0x811c9dc5);
+  const h2 = hash32(item, 0x9747b28c) | 1;
+  const out = [];
+  for (let i = 0; i < k; i++) out.push(((h1 + Math.imul(i, h2)) >>> 0) % m);
+  return out;
+}
+
+function bloomCheck(m, k, added, queries) {
+  const bits = new Uint8Array(m);
+  for (const item of added) for (const p of positions(item, m, k)) bits[p] = 1;
+  return queries.map((q) => positions(q, m, k).every((p) => bits[p] === 1));
+}`}
+  tests={[
+    { label: "그림의 예: tiger는 거짓 양성", args: [16, 3, ["cat", "dog", "fox"], ["cat", "dog", "owl", "tiger"]], expected: [true, true, false, true] },
+    { label: "빈 필터는 모두 없다", args: [16, 3, [], ["cat"]], expected: [false] },
+    { label: "원소당 9.6비트, k=7", args: [960, 7, Array.from({ length: 100 }, (_, i) => "user:" + i), ["user:0", "user:99", "user:100", "guest:1", "guest:2"]], expected: [true, true, false, false, false] },
+    { label: "너무 꽉 찬 필터", args: [64, 3, Array.from({ length: 40 }, (_, i) => "user:" + i), ["guest:1", "guest:2", "guest:3", "guest:4", "guest:5", "guest:6"]], expected: [true, false, true, false, true, false] },
+  ]}
+/>
+
+## 계획보다 많이 넣으면 무너진다
+
+블룸 필터는 크기를 만들 때 정한다. 원소 10만 개, 1%로 만든 필터(m = 958,506비트, k = 7)에 원소를 더 넣어 가며 쟀다.
+
+```text
+넣은 원소   이론 FP   측정 FP   1인 비트 비율
+  50,000     0.03%     0.02%      30.6%
+ 100,000     1.00%     0.99%      51.8%
+ 150,000     5.79%     5.76%      66.5%
+ 200,000    15.75%    15.69%      76.8%
+ 300,000    43.60%    43.63%      88.8%
+ 500,000    83.19%    83.12%      97.4%
+```
+
+1.5배만 넣어도 거짓 양성이 5.8배, 2배면 16배가 된다. 비트가 1로 차는 속도에 k제곱이 걸려 있어서 선형으로 나빠지지 않는다. 5배쯤 넣으면 필터가 거의 아무 질문에나 "있다"고 답한다. 에러가 나거나 느려지지 않고 조용히 쓸모없어진다. 그게 무섭다.
+
+현장에서는 이렇게 드러난다. 크롤러가 새 페이지를 점점 덜 찾는다. 캐시 앞에 둔 필터가 없는 키를 걸러 주지 못해 DB 조회가 슬금슬금 는다. 로그를 봐도 오류가 없다. 확인 방법은 두 가지다. 필터의 1 비율을 재거나(50%가 기준), 넣은 원소 수를 따로 세어 설계값과 비교한다.
+
+해결책도 두 가지다. 주기적으로 더 크게 다시 만들거나, 꽉 차면 새 필터를 옆에 붙이는 스케일러블 블룸 필터(scalable Bloom filter)를 쓴다. 후자는 필터를 층층이 쌓고, 물을 때 모든 층을 본다. 층마다 거짓 양성 목표를 r배씩(보통 0.5) 줄여 두면 전체 확률이 등비급수로 묶여 처음 목표를 넘지 않는다. 대신 층이 늘수록 조회가 층 수만큼 느려진다. RedisBloom의 `BF.*`가 기본으로 이 방식이다.
+
+## Redis에서 쓰기 (RedisBloom)
+
+Redis 자체에는 블룸 필터가 없고 RedisBloom 모듈이 `BF.*` 명령을 준다. Redis Stack에 들어 있고, Redis 8부터는 기본 배포에 포함됐다. Ubuntu 24.04의 `redis-server` 패키지(7.0.15)에는 없어서, 이 글에서는 RedisBloom 2.6.12 소스를 빌드해 `--loadmodule`로 올렸다. 명령 하나의 구조부터 보자.
+
+<UrlAnatomy
+  caption="BF.RESERVE 한 줄에 들어 있는 설계값"
+  base="BF.RESERVE"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "seen:urls", display: "seen:urls", title: "키", description: "필터가 저장될 Redis 키. 다른 타입처럼 TTL, DEL, RDB 저장이 그대로 적용된다.", required: true },
+    { key: "0.01", display: "0.01", title: "error_rate", description: "목표 거짓 양성 확률. 여기서 원소당 비트와 해시 개수가 계산된다. 스케일링 필터는 첫 층을 이 값의 절반으로 더 빡빡하게 만든다.", required: true },
+    { key: "100000", display: "100000", title: "capacity", description: "첫 층이 목표 확률을 지키며 받을 수 있는 원소 수. 이걸 넘기면 새 층이 붙는다.", required: true },
+    { key: "EXPANSION", value: "2", display: "EXPANSION 2", title: "다음 층의 크기 배수", description: "새 층은 이전 층 용량의 2배(기본값)로 만든다. 크게 잡을수록 층 수가 덜 늘어 조회가 빠르지만 메모리를 한 번에 많이 잡는다." },
+    { key: "NONSCALING", display: "NONSCALING", title: "층을 붙이지 않는다", description: "용량을 넘기면 BF.ADD가 에러를 낸다. 대신 첫 층을 절반 확률로 만들지 않아 메모리가 덜 든다. EXPANSION과 함께 쓸 수 없다." },
+  ]}
+/>
+
+실제로 만들어 넣고 물어본 결과다.
+
+```bash
+# RedisBloom 모듈을 올려서 이 글 전용 포트로 띄운다 (영속화 끔)
+redis-server --port 6731 --bind 127.0.0.1 --save '' --appendonly no \
+  --loadmodule /path/to/redisbloom.so --daemonize yes
+redis-cli -p 6731 MODULE LIST          # name bf, ver 20612 이 보이면 성공
+```
+
+```text
+127.0.0.1:6731> BF.RESERVE seen:urls 0.01 100000
+OK
+127.0.0.1:6731> BF.ADD seen:urls /posts/bloom-filter
+(integer) 1
+127.0.0.1:6731> BF.ADD seen:urls /posts/bloom-filter
+(integer) 0
+127.0.0.1:6731> BF.MADD seen:urls /posts/dns /posts/oauth
+1) (integer) 1
+2) (integer) 1
+127.0.0.1:6731> BF.MEXISTS seen:urls /posts/oauth /posts/nope
+1) (integer) 1
+2) (integer) 0
+127.0.0.1:6731> BF.INFO seen:urls
+ 1) Capacity
+ 2) (integer) 100000
+ 3) Size
+ 4) (integer) 137944
+ 5) Number of filters
+ 6) (integer) 1
+ 7) Number of items inserted
+ 8) (integer) 3
+ 9) Expansion rate
+10) (integer) 2
+```
+
+`BF.ADD`가 0을 돌려주면 "이미 있을지도 모른다"는 뜻이다. 두 번째 `BF.ADD`가 0인 건 당연하지만, 처음 넣는 원소도 거짓 양성이면 0이 나온다. `Size` 137,944바이트는 원소당 약 11비트다. 공식대로라면 1%에 9.6비트인데 더 큰 이유는, 스케일링 필터가 첫 층을 목표의 절반인 0.5%로 만들기 때문이다(−ln 0.005 / (ln 2)² ≈ 11.03).
+
+같은 필터에 원소 10만 개를 넣고 넣지 않은 100만 개를 물었다. 그다음 25만 개까지 더 넣고 다시 물었다.
+
+```text
+넣은 원소 10만 개: 거짓 양성 5,120 / 1,000,000 = 0.51%
+  Capacity 100000 · Size 137944 · Number of filters 1 · Number of items inserted 99932
+넣은 원소 25만 개: 거짓 양성 5,497 / 1,000,000 = 0.55%
+  Capacity 300000 · Size 449776 · Number of filters 2 · Number of items inserted 249169
+```
+
+용량을 넘기자 층이 하나 붙어 `Capacity`가 10만 + 20만 = 30만이 됐고, 거짓 양성은 0.55%로 묶였다. 직접 만든 고정 필터가 2.5배를 넣으면 30%대로 무너지는 것과 대조적이다. `Number of items inserted`가 넣은 수보다 조금 적은 것도 볼 만하다. 처음 넣는 원소 중 68개는 이미 "있다"로 판정돼 들어가지 않은 것으로 세어졌다. 이 숫자는 필터가 아는 값이지 정확한 원소 수가 아니다.
+
+`NONSCALING`으로 만든 필터는 `Size`가 119,912바이트(원소당 9.6비트)로 더 작지만, 용량을 다 채우면 이렇게 된다.
+
+```text
+127.0.0.1:6731> BF.ADD fixed one-more
+(error) ERR non scaling filter is full
+```
+
+조용히 무너지는 대신 시끄럽게 실패하니, 원소 수 상한이 분명할 때는 오히려 이쪽이 안전하다. 키 하나가 100KB를 넘는 큰 값이 된다는 것도 기억해 둔다. `DEL`이나 만료가 메인 스레드를 잠깐 붙잡을 수 있고, 클러스터에서는 한 슬롯에 몰린다.
+
+## 지울 수 없는 이유와 대안
+
+기본 블룸 필터에서는 원소를 지울 수 없다. 비트 하나를 여러 원소가 함께 쓰기 때문이다. 앞 그림에서 7번 비트는 dog과 fox가 함께 켰다. dog을 지운다고 7번을 0으로 만들면 fox까지 "없다"가 된다. "없다는 절대 틀리지 않는다"는 약속이 깨지는 거짓 음성(false negative)이다.
+
+비트 대신 작은 카운터를 두면 지울 수 있다. 카운팅 블룸 필터(counting Bloom filter)는 넣을 때 k개 카운터를 1씩 올리고, 지울 때 1씩 내린다. 4비트 카운터면 넘칠 확률이 아주 작지만 메모리가 4배다. 그리고 함정이 하나 있다. 넣은 적 없는 원소를 지우면 남의 카운터를 깎는다. 앞의 예로 실제 계산했다.
+
+<AlgoTrace
+  caption="카운팅 블룸 필터: 거짓 양성 원소를 지우면 진짜 원소가 사라진다"
+  memoryLabel="카운터 (0번부터 15번)"
+  cells={["cat", "dog", "fox", "tiger?", "del tiger", "cat?", "fox?"]}
+  steps={[
+    { pointer: 0, memory: ["0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 0"], caption: "cat을 넣으면 12, 13, 14번 카운터가 1이 된다." },
+    { pointer: 1, memory: ["1 0 0 0 0 0 0 1 0 1 0 0 1 1 1 0"], caption: "dog이 0, 7, 9번을 1로 올린다." },
+    { pointer: 2, memory: ["1 0 0 0 1 0 0 2 0 1 1 0 1 1 1 0"], caption: "fox가 4, 7, 10번을 올린다. 7번은 dog과 함께 써서 2다." },
+    { pointer: 3, memory: ["1 0 0 0 1 0 0 2 0 1 1 0 1 1 1 0", "13, 10, 7 모두 0보다 큼"], caption: "tiger를 물어보면 '있다'가 나온다. 넣은 적 없는 거짓 양성이다." },
+    { pointer: 4, memory: ["1 0 0 0 1 0 0 1 0 1 0 0 1 0 1 0", "13: 1→0, 10: 1→0, 7: 2→1"], caption: "있다고 하니 tiger를 지운다. 13, 10, 7번을 하나씩 내린다. 남의 카운터를 깎았다." },
+    { pointer: 5, memory: ["13번이 0 → cat 없음"], caption: "cat을 물어보면 13번이 0이라 '없다'가 나온다. 넣은 원소를 없다고 하는 거짓 음성이다." },
+    { pointer: 6, found: [1], memory: ["10번이 0 → fox 없음", "dog은 0, 7, 9 그대로라 있음"], caption: "fox도 사라졌다. 지우기는 확실히 넣은 원소에만 해야 한다." },
+  ]}
+/>
+
+그래서 삭제를 지원하는 필터를 쓸 때는 "지우기 전에 원본 저장소에서 정말 있는지 확인한다"가 규칙이다. 필터가 있다고 했다는 이유만으로 지우면 안 된다.
+
+요즘 삭제가 필요하면 카운팅 블룸 필터보다 쿠쿠 필터(cuckoo filter, 2014)를 먼저 본다. 원소마다 8~16비트짜리 지문(fingerprint)을 해시 테이블 칸에 저장하고, 들어갈 칸이 두 개 중 하나로 정해진다. 둘 다 차 있으면 기존 지문을 다른 칸으로 밀어내는데, 뻐꾸기가 남의 둥지 알을 밀어내는 데서 이름이 왔다. 지문을 지우면 되니 삭제가 되고, 거짓 양성 3% 이하 구간에서는 같은 확률의 블룸 필터보다 공간도 적게 쓴다. 조회도 칸 두 개만 보면 된다. 대신 테이블이 95% 근처까지 차면 밀어내기가 끝나지 않아 삽입이 실패할 수 있다. RedisBloom의 `CF.*`로 써 봤다.
+
+```text
+127.0.0.1:6731> CF.RESERVE carts 1000
+OK
+127.0.0.1:6731> CF.ADD carts item:1
+(integer) 1
+127.0.0.1:6731> CF.ADD carts item:1
+(integer) 1
+127.0.0.1:6731> CF.COUNT carts item:1
+(integer) 2
+127.0.0.1:6731> CF.DEL carts item:1
+(integer) 1
+127.0.0.1:6731> CF.EXISTS carts item:1
+(integer) 1
+127.0.0.1:6731> CF.DEL carts item:1
+(integer) 1
+127.0.0.1:6731> CF.EXISTS carts item:1
+(integer) 0
+```
+
+같은 원소를 두 번 넣으면 지문도 두 개 들어가고(`CF.COUNT` 2), 두 번 지워야 사라진다. 중복을 막고 싶으면 `CF.ADDNX`를 쓴다. 다만 버킷 하나에 같은 지문이 너무 많이 쌓이면 넣기가 실패하니, 같은 원소를 수없이 `CF.ADD`하는 코드는 버그를 부른다.
+
+여러 필터의 관계를 한 그림으로 모으면 이렇다.
+
+<ConceptDiagram
+  caption="블룸 필터 가족"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "bf", label: "블룸 필터", sub: "비트 + 해시 k개", x: 200, y: 40, w: 140 },
+    { id: "cbf", label: "카운팅 BF", sub: "삭제 가능 · 메모리 4배", x: 85, y: 140, w: 140 },
+    { id: "sbf", label: "스케일러블 BF", sub: "층을 붙여 확장", x: 315, y: 140, w: 140 },
+    { id: "cf", label: "쿠쿠 필터", sub: "지문 저장 · 삭제", x: 85, y: 250, w: 140 },
+    { id: "xor", label: "XOR · 리본 필터", sub: "정적 집합 · 더 작다", x: 315, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "bf", to: "cbf", label: "삭제" },
+    { from: "bf", to: "sbf", label: "확장" },
+    { from: "cbf", to: "cf", label: "더 작게", dashed: true },
+    { from: "bf", to: "xor", label: "다시 안 넣으면" },
+  ]}
+/>
+
+오른쪽 아래는 원소를 한 번에 다 알고 다시 넣지 않는 경우다. 디스크에 한 번 쓰고 바뀌지 않는 파일의 필터가 그렇다. 이때는 XOR 필터나 리본 필터(ribbon filter)처럼 만들 때 계산을 더 하고 공간을 덜 쓰는 구조가 낫다. RocksDB는 6.15부터 `NewRibbonFilterPolicy`를 제공하는데, 같은 거짓 양성에서 블룸 필터보다 메모리를 약 30% 덜 쓰는 대신 만드는 CPU가 더 든다.
+
+## 디스크를 읽기 전에 묻는다
+
+블룸 필터가 가장 많이 쓰이는 곳은 LSM 트리 저장소다. Cassandra, RocksDB, LevelDB, HBase, ScyllaDB가 이 구조를 쓴다. 쓰기를 메모리(멤테이블)에 모았다가 정렬된 파일(SSTable)로 한꺼번에 내리기 때문에, 같은 키를 찾으려면 여러 파일을 뒤져야 할 수 있다. 쓰기 경로와 컴팩션은 [와이드 컬럼 DB 글](/posts/db-type-wide-column)에서 봤다. 여기서는 읽기 경로에서 필터가 하는 일만 따라간다. 아래 그림에서 다음을 누르면 키 하나를 읽는 동안 디스크를 몇 번 건너뛰는지 보인다.
+
+<SequenceDiagram
+  caption="LSM 트리에서 키 하나 읽기"
+  actors={[
+    { id: "app", label: "읽기 요청" },
+    { id: "mem", label: "멤테이블" },
+    { id: "bf", label: "블룸 필터" },
+    { id: "sst", label: "SSTable 디스크" },
+  ]}
+  steps={[
+    { from: "app", to: "mem", label: "get user:42", title: "먼저 메모리를 본다", detail: "가장 최근 쓰기는 멤테이블에 있다. 여기 없으면 디스크의 SSTable들을 최신 것부터 본다." },
+    { from: "app", to: "bf", label: "SST-3에 있나?", title: "파일마다 필터에 묻는다", detail: "각 SSTable의 블룸 필터는 메모리에 올라와 있다. 묻는 데 마이크로초도 안 걸린다." },
+    { from: "bf", to: "app", label: "확실히 없음", title: "디스크 읽기 하나를 건너뛴다", detail: "SST-3의 필터가 '없다'고 했다. 이 답은 틀리지 않으니 파일을 열지 않는다." },
+    { from: "app", to: "bf", label: "SST-2에 있나?", title: "다음 파일의 필터", detail: "SST-2의 필터는 '있을지도'라고 답한다. 이번에는 실제로 확인해야 한다." },
+    { from: "app", to: "sst", label: "인덱스 → 블록 읽기", title: "디스크를 한 번 읽는다", detail: "SSTable 인덱스로 블록 위치를 찾아 읽는다. 키가 있으면 끝, 없으면 거짓 양성이었으니 다음 파일로 간다." },
+    { from: "sst", to: "app", label: "value", title: "값을 돌려준다", detail: "필터가 없었다면 SST-3도 열어야 했다. 파일이 수십 개면 필터가 디스크 읽기를 수십 번에서 거의 한 번으로 줄인다." },
+  ]}
+/>
+
+이 구조에서 거짓 양성 1%는 "없는 키를 물을 때 파일 100개 중 하나는 헛걸음한다"는 뜻이다. 그래서 설정이 곧 메모리와 디스크 I/O의 맞교환이다.
+
+- Cassandra는 테이블 옵션 `bloom_filter_fp_chance`로 정한다. 기본값은 0.01이고, LeveledCompactionStrategy 테이블은 0.1이다. 레벨 구조라 키를 볼 파일 수가 이미 적어서 필터를 덜 빡빡하게 둔다. 필터는 힙 밖(off-heap) 메모리에 올라가니, 노드 메모리를 계산할 때 따로 잡는다.
+- RocksDB는 `BlockBasedTableOptions.filter_policy`로 정하고 키당 10비트가 흔한 출발점이다. 범위 조회(scan)는 필터의 도움을 못 받는다. 접두사로 묶어 찾는 패턴이면 prefix extractor로 접두사 필터를 만든다.
+
+Cassandra에서 필터가 일을 하는지는 `nodetool tablestats`로 본다. 아래는 형식을 보여 주는 예시다(이 컨테이너에는 Cassandra가 없다).
+
+```text
+		Bloom filter false positives: 1542
+		Bloom filter false ratio: 0.00981
+		Bloom filter space used: 1874432
+		Bloom filter off heap memory used: 1874400
+```
+
+`false ratio`가 설정한 `bloom_filter_fp_chance`보다 한참 높다면 SSTable이 계획보다 커졌거나 컴팩션 뒤 필터가 새로 만들어지지 않은 것이다. 옵션을 바꾼 뒤에는 기존 SSTable을 다시 써야(`nodetool upgradesstables -a`) 새 필터가 적용된다. 옵션만 바꾸고 "효과가 없다"는 것이 흔한 실수다.
+
+## 한 번 보고 마는 것들을 거른다
+
+CDN 엣지 서버는 디스크가 한정돼 있다. 요청이 온 객체를 모두 디스크에 쓰면, 딱 한 번 요청되고 다시는 안 올 객체들이 인기 있는 객체를 밀어낸다. 이런 객체를 원 히트 원더(one-hit wonder)라고 부른다. Akamai가 2015년 논문에서 자사 CDN 객체의 약 4분의 3이 한 번만 요청된다고 보고했고, 그래서 "두 번째 요청부터 캐시에 쓴다" 규칙을 블룸 필터로 구현했다. 처음 온 객체는 필터에 이름만 적고, 필터에 이미 있는 객체가 오면 그때 디스크에 쓴다.
+
+<NetworkTopology
+  width={400}
+  height={240}
+  caption="두 번째 요청부터 엣지 디스크에 쓴다"
+  zones={[
+    { id: "edge", label: "엣지 PoP", x: 130, y: 20, w: 140, h: 200, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "u", label: "user", x: 60, y: 120, icon: "client", w: 90 },
+    { id: "bf", label: "bloom", sub: "본 적 있나", x: 200, y: 75, icon: "lock", w: 110 },
+    { id: "disk", label: "edge disk", sub: "캐시", x: 200, y: 170, icon: "db", w: 110 },
+    { id: "o", label: "origin", x: 340, y: 120, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "u", to: "bf" },
+    { from: "bf", to: "o" },
+    { from: "bf", to: "disk", dashed: true },
+    { from: "o", to: "disk", dashed: true },
+  ]}
+  steps={[
+    { path: ["u", "bf", "o"], packet: "GET a.js", title: "처음 온 객체", detail: "필터에 없다. 오리진에서 받아 사용자에게 주기만 하고 디스크에는 쓰지 않는다. 필터에 이름만 적는다." },
+    { path: ["u", "bf", "o", "disk"], packet: "GET a.js", highlight: ["disk"], title: "두 번째 요청", detail: "필터가 '있을지도'라고 한다. 이번에는 오리진에서 받은 응답을 디스크에도 쓴다." },
+    { path: ["u", "bf", "disk"], packet: "HIT", highlight: ["disk"], title: "세 번째부터는 적중", detail: "디스크에 있으니 오리진까지 가지 않는다. 한 번 보고 만 객체는 디스크를 차지하지 않았다." },
+    { path: ["u", "bf", "o"], packet: "GET z.png", title: "한 번뿐인 객체", detail: "이 객체는 다시 오지 않는다. 디스크 쓰기 한 번과 밀려날 뻔한 인기 객체를 아꼈다." },
+  ]}
+/>
+
+이 규칙이 정말 이득인지 시뮬레이션으로 확인했다. 객체 200만 개에서 Zipf 분포(지수 0.8)로 요청 100만 개를 뽑고, LRU 캐시에 "항상 쓰기"와 "두 번째부터 쓰기(블룸 필터 100만 개, 1%)"를 비교했다. 실제 CDN 로그가 아니라 분포를 가정한 시뮬레이션이다.
+
+```text
+요청 1,000,000 · 서로 다른 객체 482,515 · 한 번만 온 객체 353,581 (73.3%)
+캐시 크기    정책          적중률   캐시 쓰기
+ 20,000      항상 쓰기      23.7%    762,709
+ 20,000      두 번째부터    28.7%    230,547
+100,000      항상 쓰기      38.3%    616,694
+100,000      두 번째부터    38.5%    132,268
+```
+
+쓰기가 70~79% 줄었는데 적중률은 오히려 같거나 올랐다. 캐시가 작을수록 효과가 컸다. 한 번 보고 마는 객체가 인기 객체를 밀어내지 못하기 때문이다. 대가는 모든 객체의 두 번째 요청이 오리진까지 간다는 것이다. 필터는 시간이 지나면 꽉 차니 실무에서는 두 개를 번갈아 쓰며 주기적으로 비운다.
+
+비슷한 생각이 다른 곳에도 있다. 크롬은 초기 Safe Browsing에서 위험한 URL 목록을 블룸 필터로 들고 있다가 나중에 정렬된 해시 접두사 목록으로 바꿨다. 원리는 같다. 로컬 구조가 "없다"고 하면 바로 페이지를 열고, "있을지도"라고 할 때만 서버에 전체 해시를 물어 확인한다. 방문하는 URL 대부분을 서버에 보내지 않아도 되니 개인정보와 지연 시간을 함께 아낀다. 이 로컬-먼저-서버-확인 구조가 블룸 필터의 기본 사용법이다. 필터는 혼자 답을 내지 않고, 비싼 확인을 건너뛸지 정한다.
+
+## DB 안에도 있다: PostgreSQL bloom 인덱스
+
+PostgreSQL에는 contrib 확장으로 `bloom` 인덱스가 있다. 컬럼이 많은 테이블에서 아무 컬럼 조합으로나 등호 검색을 할 때, 조합마다 B-tree를 만드는 대신 행마다 작은 서명(signature)을 저장한다. PostgreSQL 16에서 정수 컬럼 6개짜리 500만 행으로 직접 해 봤다.
+
+```sql
+CREATE EXTENSION bloom;                -- contrib에 들어 있다
+CREATE TABLE products AS               -- 컬럼 6개에 0~1000 무작위 값
+SELECT g AS id,
+       (random()*1000)::int AS brand_id, (random()*1000)::int AS color_id,
+       (random()*1000)::int AS size_id,  (random()*1000)::int AS shop_id,
+       (random()*1000)::int AS season_id, (random()*1000)::int AS origin_id
+FROM generate_series(1, 5000000) g;
+
+-- 행마다 80비트 서명, 컬럼마다 비트 2개
+CREATE INDEX products_bloom ON products USING bloom
+  (brand_id, color_id, size_id, shop_id, season_id, origin_id)
+  WITH (length=80, col1=2, col2=2, col3=2, col4=2, col5=2, col6=2);
+
+-- 비교용: 같은 6개 컬럼의 B-tree
+CREATE INDEX products_btree ON products
+  (brand_id, color_id, size_id, shop_id, season_id, origin_id);
+
+SELECT relname, pg_size_pretty(pg_relation_size(oid))
+FROM pg_class WHERE relname IN ('products', 'products_bloom', 'products_btree')
+ORDER BY 1;
+```
+
+```text
+    relname     | pg_size_pretty 
+----------------+----------------
+ products       | 288 MB
+ products_bloom | 77 MB
+ products_btree | 193 MB
+(3 rows)
+```
+
+순서가 상관없는 등호 검색에서 인덱스 크기가 B-tree의 40% 정도다. 앞 컬럼이 빠진 조건(`color_id`, `season_id`)에서도 쓸 수 있다는 게 장점이다. 계획을 강제로 bloom 인덱스로 돌려 보면 블룸 필터의 성질이 그대로 보인다.
+
+```sql
+SET enable_seqscan = off;   -- 비교를 위해 잠깐만 순차 스캔을 끈다
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT * FROM products WHERE color_id = 7 AND season_id = 42;
+```
+
+```text
+ Bitmap Heap Scan on products (actual time=27.257..28.566 rows=9 loops=1)
+   Recheck Cond: ((color_id = 7) AND (season_id = 42))
+   Rows Removed by Index Recheck: 1400
+   Heap Blocks: exact=1388
+   ->  Bitmap Index Scan on products_bloom (actual time=26.684..26.686 rows=1409 loops=1)
+         Index Cond: ((color_id = 7) AND (season_id = 42))
+ Planning Time: 0.078 ms
+ Execution Time: 28.636 ms
+(8 rows)
+```
+
+인덱스는 후보 1,409행을 줬고, 테이블을 읽어 다시 확인(`Recheck`)했더니 1,400행이 거짓 양성이었다(`Rows Removed by Index Recheck`). 진짜는 9행이다. 그래도 순차 스캔(병렬 2 워커, 137ms)보다 5배쯤 빨랐다. 그런데 `enable_seqscan`을 되돌리면 플래너는 이 인덱스를 고르지 않고 순차 스캔을 택했다. bloom 인덱스의 비용 추정은 보수적이라, 쓰려면 실제 쿼리로 `EXPLAIN ANALYZE`를 돌려 확인해야 한다. 결국 범용 인덱스라기보다 "조합이 너무 많아 B-tree를 다 만들 수 없을 때"의 선택지다.
+
+## 블룸 필터가 사고를 내는 방식
+
+구조는 단순한데 쓰는 쪽에서 실수가 잘 나온다.
+
+새 원소를 넣는 순서. 캐시 관통을 막으려고 "필터에 없으면 404"를 했다면, 새 상품을 DB에 넣고 필터에 넣기 전 그 사이에 들어온 요청은 404를 받는다. 필터에 먼저 넣고 DB에 쓰면 그 반대 경우는 거짓 양성 한 번일 뿐이다. 순서를 거꾸로 하면 거짓 음성이 생긴다.
+
+재시작. 앱 메모리에 만든 필터는 프로세스가 죽으면 사라진다. 다시 만드는 동안 빈 필터가 모든 요청에 "없다"고 하면 장애다. 빈 필터일 때는 필터를 건너뛰고 DB를 보게 하거나, Redis처럼 디스크에 남는 곳에 둔다.
+
+여러 서버가 같은 필터를 만들 때 해시. 서버 A는 MurmurHash, 서버 B는 다른 해시로 위치를 계산하면 같은 필터를 공유해도 엉뚱한 비트를 본다. 언어마다 기본 해시 함수가 다르니, 필터를 직렬화해 주고받을 때는 해시 함수와 시드, m, k를 같이 저장한다.
+
+악의적인 입력. 해시 함수가 공개돼 있으면 공격자가 비트를 최대한 많이 켜는 원소들을 골라 넣어 필터를 빨리 망가뜨리거나, 거짓 양성이 나는 값을 골라 확인 단계를 계속 때리게 만들 수 있다. 외부 입력을 넣는 필터라면 비밀 키를 섞은 해시(SipHash 같은 keyed hash)를 쓴다.
+
+개인정보. 필터를 다른 사람에게 넘기면 거기 들어 있는지 시험해 볼 수 있다. 비트코인 경량 지갑이 관심 주소를 블룸 필터로 노드에 보내던 방식(BIP37)은 이 때문에 지갑 주소가 드러난다는 연구가 나와 지금은 권장되지 않는다. 블룸 필터는 압축이지 암호화가 아니다.
+
+## 조금 틀려도 되는 질문에만 쓴다
+
+블룸 필터는 "없다"를 확실히 말하는 대신 "있다"를 가끔 틀리는 비트 배열이다. 넣을 원소 수와 견딜 거짓 양성을 먼저 정하면 원소당 비트(1%에 9.6)와 해시 개수(그 비트의 0.69배)가 정해지고, 최적 상태에서는 비트의 절반이 1이다. 계획보다 많이 넣으면 조용히 무너지니 1 비율이나 원소 수를 지켜본다. 지워야 하면 쿠쿠 필터, 늘어나야 하면 스케일러블 필터, 다시 안 넣으면 리본·XOR 필터를 본다. 그리고 항상 필터 뒤에는 정답을 아는 원본이 있어야 한다.
+
+집합에 "있나 없나"가 아니라 "몇 개나 다르냐"를 묻고 싶다면 [HyperLogLog](/posts/hyperloglog)를, "얼마나 자주 나왔냐"를 묻고 싶다면 [Count-Min Sketch](/posts/count-min-sketch)와 [Lossy Counting](/posts/lossy-counting)을 이어서 보면 된다. 셋 다 같은 생각, 조금 틀려도 되는 질문에 아주 작은 메모리로 답한다는 생각에서 나왔다.
+
+## 면접에서 나올 만한 질문
+
+### 블룸 필터에서 "없다"는 답이 틀리지 않는 이유는?
+
+넣은 원소의 k개 위치는 넣는 순간 1이 되고, 기본 블룸 필터에서는 비트가 다시 0이 되는 일이 없기 때문이다. 그래서 물어본 위치 중 하나라도 0이면 그 원소는 넣은 적이 없다. 반대로 모두 1인 건 다른 원소들이 찍은 비트일 수 있어서 "있다"는 확률적인 답이다.
+
+### 거짓 양성 확률은 어떻게 계산하고, 해시 개수는 어떻게 고르나?
+
+원소 n개, 비트 m개, 해시 k개면 확률은 대략 (1 − e^(−kn/m))^k다. 이 값을 가장 작게 하는 k는 (m/n)·ln 2이고, 그때 비트의 절반이 1이며 확률은 0.6185^(m/n)이다. 실무에서는 n과 목표 p로 m = −n·ln p/(ln 2)²를 먼저 구하고 k를 반올림한다. 1%면 원소당 약 9.6비트, 해시 7개다.
+
+### 해시 함수 k개를 정말 따로 만들어야 하나?
+
+아니다. 해시 두 개로 h1 + i·h2를 계산하는 이중 해싱을 써도 거짓 양성 확률이 점근적으로 같다. 64비트 해시 하나를 반으로 갈라 쓰는 구현이 흔하다. 대신 h2가 0이 되거나 m과 공약수가 크면 위치가 겹치니 홀수로 만드는 식의 처리를 한다.
+
+### 계획보다 원소를 많이 넣으면 어떻게 되나?
+
+에러 없이 거짓 양성이 급격히 는다. 1%로 만든 필터에 1.5배를 넣으면 약 5.8%, 2배면 약 16%가 된다. 그래서 1인 비트 비율(최적이면 50%)이나 넣은 수를 지켜보고, 늘어날 수 있으면 스케일러블 필터(RedisBloom 기본)를 쓰거나 크게 다시 만든다. 상한이 분명하면 꽉 찼을 때 에러를 내는 NONSCALING이 더 안전하다.
+
+### 블룸 필터에서 삭제가 안 되는 이유와 대안은?
+
+비트 하나를 여러 원소가 함께 쓰기 때문에 하나를 지우려고 0으로 만들면 다른 원소가 거짓 음성이 된다. 카운팅 블룸 필터는 카운터로 바꿔 지울 수 있게 하지만 메모리가 몇 배가 되고, 넣지 않은 원소를 지우면 여전히 거짓 음성이 생긴다. 요즘은 지문을 저장해 지울 수 있고 공간도 작은 쿠쿠 필터를 많이 쓴다. 어느 쪽이든 지우기 전에 원본에서 정말 있는지 확인해야 한다.
+
+### LSM 트리 저장소는 왜 SSTable마다 블룸 필터를 두나?
+
+키 하나를 읽으려면 멤테이블과 여러 SSTable을 봐야 할 수 있는데, 파일마다 디스크를 읽으면 읽기가 느려진다. 필터가 "이 파일엔 확실히 없다"를 메모리에서 답하면 대부분의 파일을 열지 않아도 된다. 거짓 양성률은 헛걸음 비율이라 메모리와 디스크 I/O의 맞교환이고, Cassandra는 `bloom_filter_fp_chance`(기본 0.01, LCS는 0.1)로 정한다. 바꾼 뒤에는 SSTable을 다시 써야 적용된다.
+
+### 캐시 앞에 블룸 필터를 둘 때 조심할 점은?
+
+새 데이터를 DB보다 필터에 먼저 넣어야 한다. 반대로 하면 그 사이 요청이 거짓 음성으로 404를 받는다. 재시작 직후 빈 필터가 모든 것을 "없다"고 하지 않도록 필터를 영속 저장소에 두거나 만들어질 때까지 우회한다. 외부 입력을 받는다면 비밀 키를 섞은 해시로 공격자가 필터를 망가뜨리지 못하게 한다.
