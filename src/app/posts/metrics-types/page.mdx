@@ -1,0 +1,447 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("metrics-types");
+
+검색 API가 느리다는 이야기가 나와서 대시보드를 열었다. 평균 응답 시간 108ms. 나쁘지 않다. p99 패널을 하나 추가했더니 0.955초가 나왔다. 그런데 같은 시간 동안 요청 로그로 직접 계산한 p99는 0.886초였다. 둘 중 무엇을 믿어야 할까. 그리고 10%의 사용자가 0.7초 넘게 기다리는데 평균은 왜 108ms일까.
+
+지표는 숫자 하나가 아니라 "어떤 그릇에 어떻게 담았나"에 따라 같은 사건이 다른 숫자가 된다. Prometheus 계열의 지표 타입은 넷이다. 카운터(counter), 게이지(gauge), 히스토그램(histogram), 서머리(summary). 이 글은 각 그릇이 무엇을 잃고 무엇을 지키는지, `rate()`가 카운터를 어떻게 읽는지, 히스토그램의 칸 경계가 분위수를 얼마나 틀리게 만드는지, 레이블 하나가 시계열을 몇 배로 늘리는지를 실제로 재 본다.
+
+이 주제의 다른 글: 무엇을 잴지 정하는 [모니터링 기본](/posts/monitoring-basics), 지표·로그·trace의 역할을 나누는 [관측 가능성 기본](/posts/observability-basics). 백분위 자체의 뜻과 계산은 [백분위 지연 글](/posts/percentile-latency)에, 시계열 저장소 안쪽은 [시계열 DB 글](/posts/db-type-time-series)에 있다. 카운터 리셋의 기본 보정 규칙은 [네트워크 모니터링](/posts/network-monitoring)에서 손으로 계산해 봤으니, 여기서는 그다음 문제들을 본다.
+
+실습 환경은 Ubuntu 24.04, Node.js 22, `prom-client` 15.1.3, Prometheus 3.5.0(scrape 간격 5초)이다. 검색 API는 90%가 15~35ms, 10%가 700~900ms 걸리도록 만들었고, 주문 API는 5~30ms에 2%가 500을 돌려준다.
+
+## 그릇은 넷, 고르는 기준은 하나
+
+먼저 `/metrics`에 실제로 무엇이 찍히는지 보자. 실습 앱에서 검색 API 부분만 뽑았다(OpenMetrics 형식).
+
+```text
+# HELP http_requests HTTP requests
+# TYPE http_requests counter
+http_requests_total{method="GET",route="/api/search",status="200"} 3000
+# HELP http_request_duration_seconds HTTP request duration
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_sum{method="GET",route="/api/search"} 319.35770024800007
+http_request_duration_seconds_count{method="GET",route="/api/search"} 3000
+# HELP http_request_duration_summary_seconds duration summary
+# TYPE http_request_duration_summary_seconds summary
+http_request_duration_summary_seconds{quantile="0.5",route="/api/search"} 0.0267744517547128
+http_request_duration_summary_seconds{quantile="0.9",route="/api/search"} 0.5338354819113788
+http_request_duration_summary_seconds{quantile="0.99",route="/api/search"} 0.8861842635648998
+http_request_duration_summary_seconds_sum{route="/api/search"} 319.35770024800007
+http_request_duration_summary_seconds_count{route="/api/search"} 3000
+# HELP http_in_flight_requests in-flight requests
+# TYPE http_in_flight_requests gauge
+http_in_flight_requests 0
+```
+
+카운터는 늘기만 하는 수다. 요청 수, 오류 수, 보낸 바이트처럼 "지금까지 몇 번"을 센다. 이름 끝에 `_total`을 붙이는 게 규칙이다. OpenMetrics 형식에서는 `# TYPE` 줄에 `_total`을 뺀 이름을 쓰고, 예전 텍스트 형식(0.0.4)에서는 `# TYPE http_requests_total counter`처럼 붙여 쓴다. 같은 앱을 두 형식으로 내보내 보면 이 차이가 실제로 보인다.
+
+게이지는 오르내리는 지금 값이다. 동시에 처리 중인 요청 수, 큐 길이, 메모리 사용량, 온도.
+
+히스토그램은 값을 미리 정한 칸(bucket)에 나눠 센 카운터 묶음이다. 위 출력에서 칸(`_bucket`) 줄은 뺐는데, 뒤에서 자세히 본다. `_sum`(값의 합)과 `_count`(관측 수)가 따라온다.
+
+서머리는 앱이 직접 계산한 분위수(p50, p90, p99)를 내놓는다. 역시 `_sum`, `_count`가 붙는다.
+
+고르는 기준은 하나다. "나중에 이 숫자로 무엇을 계산할 것인가". 그림으로 보면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="재고 싶은 것에 따라 그릇이 정해진다"
+  nodes={[
+    { id: "q", label: "무엇을 재나", x: 200, y: 30, w: 130 },
+    { id: "c", label: "counter", sub: "몇 번 일어났나", x: 70, y: 115, w: 110 },
+    { id: "g", label: "gauge", sub: "지금 얼마인가", x: 200, y: 115, w: 110 },
+    { id: "h", label: "histogram", sub: "어떻게 퍼져 있나", x: 330, y: 115, w: 120 },
+    { id: "r", label: "rate·increase", sub: "초당·구간 증가량", x: 70, y: 210, w: 130 },
+    { id: "a", label: "avg·max_over_time", x: 200, y: 245, w: 150 },
+    { id: "hq", label: "histogram_quantile", sub: "여러 대 합쳐서", x: 330, y: 210, w: 140 },
+  ]}
+  edges={[
+    { from: "q", to: "c" },
+    { from: "q", to: "g" },
+    { from: "q", to: "h" },
+    { from: "c", to: "r" },
+    { from: "g", to: "a" },
+    { from: "h", to: "hq" },
+  ]}
+/>
+
+흔한 실수는 그릇을 거꾸로 고르는 것이다. 요청 수를 게이지로 두고 "1분마다 0으로 초기화"하면, scrape 사이에 초기화가 끼는 순간 그 1분 동안의 수가 통째로 사라진다. 반대로 큐 길이를 카운터로 두면 줄어들 때마다 리셋으로 오해받는다. 늘기만 하는 건 카운터, 오르내리는 건 게이지다. 게이지에 `rate()`를 씌우는 것도 실수다. 게이지의 변화 속도가 필요하면 `deriv()`나 `delta()`를 쓴다.
+
+## rate는 카운터를 어떻게 읽나
+
+카운터의 원래 값(3000)은 그 자체로는 쓸모가 거의 없다. 프로세스가 언제 떴느냐에 따라 달라지기 때문이다. 쓸모 있는 건 "최근 얼마 동안 얼마나 늘었나"이고, 이걸 `rate()`(초당)와 `increase()`(구간 전체)가 계산한다.
+
+`increase()`를 처음 쓰면 이상한 값에 놀란다. 주문 API의 최근 1분 동안 500 오류 개수를 물었다.
+
+```bash
+promtool query instant http://127.0.0.1:19390 'increase(http_requests_total{route="/api/orders",status="500"}[1m])'
+```
+
+```text
+{instance="127.0.0.1:19311", job="shop", method="GET", route="/api/orders", status="500"} => 5.37525 @[1792525955.439]
+```
+
+오류가 5.37525번 났을 리는 없다. Prometheus는 범위 안의 첫 샘플과 마지막 샘플의 차이를 구한 다음, 그 두 샘플이 범위 양 끝에서 떨어진 만큼 비례해서 늘려 잡는다(extrapolation). 1분 범위인데 샘플이 55초 구간에만 있으면, 남은 5초 동안에도 같은 속도로 늘었다고 가정해 키우는 식이다. `increase()`는 사실 `rate() × 범위 초`라서 정수가 나올 이유가 없다. 정확한 개수가 필요하면 지표가 아니라 로그나 DB에서 센다. 지표는 추세를 보는 도구다.
+
+### 재시작은 rate가 보정하지만, 빼기는 보정하지 못한다
+
+다른 앱(shop2)에 주문을 초당 20건씩 90초 동안 보내다가, 40초쯤에 `kill -9`로 죽이고 1초 뒤 다시 띄웠다. 카운터는 새 프로세스에서 0부터 다시 센다.
+
+<SequenceDiagram
+  caption="90초 동안 앱이 한 번 죽고 다시 뜬다 (10초 간격으로 본 합계)"
+  actors={[
+    { id: "a1", label: "앱 1차" },
+    { id: "a2", label: "앱 2차" },
+    { id: "p", label: "Prometheus" },
+    { id: "q", label: "쿼리" },
+  ]}
+  steps={[
+    { from: "p", to: "a1", label: "scrape", title: "0에서 시작해 늘어난다", detail: "시작할 때 레이블 조합을 0으로 만들어 뒀다. 10초마다 약 200씩 늘어난다.", payload: "0 → 148 → 347 → 545 → 744" },
+    { from: "a1", to: "a1", label: "kill -9", title: "프로세스가 죽는다", detail: "메모리에 있던 카운터 값도 사라진다. 마지막 scrape 이후 죽기 전까지 늘어난 몇 건은 Prometheus가 영영 보지 못한다." },
+    { from: "p", to: "a2", label: "scrape", title: "새 프로세스는 0부터", detail: "1초 뒤 다시 뜬 앱의 카운터는 0부터 센다. Prometheus 눈에는 744였던 값이 126으로 줄었다.", payload: "744 → 126 → 325 → 523 → 722 → 920 → 983" },
+    { from: "q", to: "p", label: "끝 − 처음", title: "단순 빼기는 틀린다", detail: "마지막 값에서 처음 값을 빼면 983이다. 앞 프로세스가 센 744건이 사라졌다.", payload: "983 - 0 = 983" },
+    { from: "q", to: "p", label: "increase()", title: "increase는 리셋을 이어 붙인다", detail: "값이 줄어든 곳을 리셋으로 보고, 줄어든 뒤의 값을 증가분에 더한다. 실제 성공한 1,776건에 가까운 1,755가 나온다.", payload: "increase(...[100s]) => 1755.0\nresets(...[100s]) => 2" },
+  ]}
+/>
+
+실제 쿼리와 결과다. 부하를 보낸 쪽은 1,800건 중 1,776건이 성공했다(앱이 죽어 있던 1초 남짓 동안 24건이 실패했다).
+
+```bash
+# 10초 간격으로 본 합계
+promtool query range --start=1792526114 --end=1792526214 --step=10s http://127.0.0.1:19390 'sum(http_requests_total{job="shop2"})'
+# 리셋을 보정한 증가량, 리셋 횟수, 단순 빼기
+promtool query instant http://127.0.0.1:19390 'sum(increase(http_requests_total{job="shop2"}[100s] @ 1792526214))'
+promtool query instant http://127.0.0.1:19390 'sum(resets(http_requests_total{job="shop2"}[100s] @ 1792526214))'
+promtool query instant http://127.0.0.1:19390 'sum(http_requests_total{job="shop2"} @ 1792526214) - sum(http_requests_total{job="shop2"} @ 1792526114)'
+```
+
+```text
+{} =>
+0 @[1792526114]
+148 @[1792526124]
+347 @[1792526134]
+545 @[1792526144]
+744 @[1792526154]
+126 @[1792526164]
+325 @[1792526174]
+523 @[1792526184]
+722 @[1792526194]
+920 @[1792526204]
+983 @[1792526214]
+{} => 1755.0180210526314 @[1792526213.587]
+{} => 2 @[1792526213.644]
+{} => 983 @[1792526213.697]
+```
+
+`resets`가 2인 건 status="200"과 "500" 두 시계열이 각각 한 번씩 리셋됐기 때문이다. 순서도 중요하다. `sum`을 먼저 하고 `rate`를 씌우면(`rate(sum(...)[1m])`, 서브쿼리로만 가능하다) 여러 인스턴스 중 하나만 재시작해도 합계가 줄어든 것처럼 보여 리셋으로 오해받는다. 항상 `rate`를 먼저, `sum`을 나중에 한다. `sum(rate(...))`가 맞다.
+
+### 처음 나타난 시계열은 첫 증가분을 잃는다
+
+이번에는 다른 함정이다. 처음 부하를 줄 때는 레이블 조합을 0으로 미리 만들어 두지 않았다. `prom-client`는 레이블 조합이 처음 쓰일 때 시계열을 만든다. 그래서 첫 요청이 오기 전에는 `/metrics`에 그 줄이 아예 없다.
+
+```bash
+# 검색 API 카운터가 처음 보인 순간부터 5초 간격으로
+promtool query range --start=$(date -d 2026-10-20T19:51:40Z +%s) --end=$(( $(date -d 2026-10-20T19:51:40Z +%s) + 40 )) \
+  --step=5s http://127.0.0.1:19390 'http_requests_total{job="shop",route="/api/search"}'
+```
+
+```text
+http_requests_total{instance="127.0.0.1:19311", job="shop", method="GET", route="/api/search", status="200"} =>
+575 @[1792525915]
+1495 @[1792525920]
+2439 @[1792525925]
+3000 @[1792525930]
+3000 @[1792525935]
+3000 @[1792525940]
+```
+
+Prometheus가 이 시계열을 처음 본 순간 값이 이미 575였다. Prometheus는 "처음 본 값이 0에서 시작했다"고 가정하지 않으니, 첫 575건은 `rate`와 `increase`에 영영 들어가지 않는다. 그 결과 이 구간의 주문 오류율이 로그로 센 실제 값(50/3000 = 1.67%)보다 낮은 1.39%로 나왔다. 오류처럼 드물게 생기는 레이블일수록 피해가 크다. 첫 오류 하나는 늘 안 보이기 때문이다.
+
+고치는 방법은 앱이 시작할 때 쓸 레이블 조합을 0으로 미리 만드는 것이다. `prom-client`에서는 `counter.inc({ ... }, 0)` 한 줄이다. 실습 뒤쪽의 실험(shop2)은 이렇게 해 둬서 범위 그래프가 0에서 시작했다. Prometheus 3.5에는 앱이 알려 주는 생성 시각(`_created`)을 보고 0을 먼저 넣어 주는 기능(`--enable-feature=created-timestamp-zero-ingestion`)도 있지만 기본은 꺼져 있다.
+
+## 히스토그램은 칸으로 센다
+
+히스토그램은 값 하나하나를 저장하지 않는다. "0.025초 이하가 몇 개, 0.05초 이하가 몇 개"처럼 칸마다 센다. 칸 수는 누적이다. `le="0.05"` 칸에는 0.025 이하인 것까지 포함된다. 검색 API 3,000건의 실제 칸이다(줄 끝의 exemplar는 뺐다).
+
+```text
+http_request_duration_seconds_bucket{le="0.005",method="GET",route="/api/search"} 0
+http_request_duration_seconds_bucket{le="0.01",method="GET",route="/api/search"} 0
+http_request_duration_seconds_bucket{le="0.025",method="GET",route="/api/search"} 1349
+http_request_duration_seconds_bucket{le="0.05",method="GET",route="/api/search"} 2671
+http_request_duration_seconds_bucket{le="0.1",method="GET",route="/api/search"} 2681
+http_request_duration_seconds_bucket{le="0.25",method="GET",route="/api/search"} 2682
+http_request_duration_seconds_bucket{le="0.5",method="GET",route="/api/search"} 2682
+http_request_duration_seconds_bucket{le="1",method="GET",route="/api/search"} 3000
+http_request_duration_seconds_bucket{le="2.5",method="GET",route="/api/search"} 3000
+http_request_duration_seconds_bucket{le="5",method="GET",route="/api/search"} 3000
+http_request_duration_seconds_bucket{le="10",method="GET",route="/api/search"} 3000
+http_request_duration_seconds_bucket{le="+Inf",method="GET",route="/api/search"} 3000
+```
+
+<UrlAnatomy
+  caption="히스토그램 칸 한 줄"
+  separator=""
+  joiner=""
+  params={[
+    { key: "name", display: "http_request_duration_seconds_bucket", title: "칸 시계열 이름", description: "히스토그램 이름 뒤에 _bucket이 붙는다. 단위를 이름에 넣는 게 규칙이고, 시간은 초를 쓴다(밀리초를 쓰면 다른 지표와 합칠 때 1000배가 틀린다).", required: true },
+    { key: "le", display: '{le="1",', title: "칸의 위쪽 경계", description: "less or equal. 1초 이하로 끝난 요청을 센다. 아래쪽 경계는 따로 없고, 바로 앞 칸의 le가 사실상 아래 경계다. 맨 끝에는 반드시 le=\"+Inf\" 칸이 있고 그 값이 전체 개수(_count)와 같다.", required: true },
+    { key: "labels", display: 'route="/api/search"}', title: "나머지 레이블", description: "route마다 칸 묶음이 따로 생긴다. 레이블 조합 하나가 칸 수 + 3개(+Inf, _sum, _count)의 시계열이 된다." },
+    { key: "value", display: " 3000", title: "누적 개수", description: "1초 이하인 요청이 지금까지 3,000건이다. 칸 하나하나가 카운터라서 rate를 씌워 쓴다. 0.5초 칸이 2,682이니 0.5~1초 사이가 318건이다.", required: true },
+  ]}
+/>
+
+칸 안에서는 값이 어디 있었는지 잊어버린다. 0.5초 칸과 1초 칸 사이에 318건이 있다는 것만 안다. 그래서 `histogram_quantile()`은 칸 안에 값이 고르게 퍼져 있다고 가정하고 선을 그어 짐작한다. p90을 구하는 과정을 따라가 보자. 3,000건의 90%, 즉 2,700번째 값을 찾는다.
+
+<AlgoTrace
+  caption="누적 칸을 따라가며 2,700번째 값이 든 칸 찾기"
+  memoryLabel="계산"
+  cells={["≤0.025: 1349", "≤0.05: 2671", "≤0.1: 2681", "≤0.25: 2682", "≤0.5: 2682", "≤1: 3000"]}
+  steps={[
+    { pointer: 0, memory: ["찾는 순번 2700"], caption: "전체 3,000건 × 0.9 = 2,700번째를 찾는다. 첫 칸은 1,349건이라 아직 모자라다." },
+    { pointer: 1, memory: ["찾는 순번 2700", "2671 < 2700"], caption: "0.05초 칸까지 2,671건. 아직 29건 모자라다." },
+    { pointer: 3, memory: ["찾는 순번 2700", "2682 < 2700"], caption: "0.1, 0.25초 칸에서 11건이 더해졌지만 여전히 모자라다." },
+    { pointer: 4, memory: ["찾는 순번 2700", "0.5초 칸도 2682"], caption: "0.25~0.5초 사이에는 한 건도 없다. 느린 요청은 그보다 위에 몰려 있다." },
+    { pointer: 5, found: [5], memory: ["0.5~1 칸에 318건", "그중 18번째", "0.5 + 0.5 × 18/318 = 0.528"], caption: "1초 칸에서 처음 2,700을 넘는다. 칸 안의 318건 중 18번째이고, 고르게 퍼져 있다고 보면 0.528초다. 실제 p90은 0.715초였다." },
+  ]}
+/>
+
+짐작이 틀린 이유는 가정이 틀렸기 때문이다. 0.5~1초 칸의 318건은 고르게 퍼져 있지 않고 0.7~0.9초에 몰려 있다. 칸이 넓을수록, 값이 칸 안에서 한쪽에 몰려 있을수록 오차가 커진다. Prometheus에 물어본 값과 로그(jq)로 직접 계산한 값을 나란히 놓았다.
+
+```bash
+# 히스토그램으로 짐작한 p90, p99
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.9, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/search"}[5m])))'
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/search"}[5m])))'
+# 같은 요청 3,000건의 실제 값 (요청 로그의 duration_ms)
+grep '"/api/search"' app1.log | jq -s '[.[].duration_ms] | sort
+  | {n: length, avg: (add/length), p50: .[(length*0.5|floor)], p90: .[(length*0.9|floor)], p99: .[(length*0.99|floor)], max: .[-1]}'
+```
+
+```text
+{} => 0.552583025830258 @[1792525955.112]
+{} => 0.9552583025830257 @[1792525955.173]
+{
+  "n": 3000,
+  "avg": 107.88770000000005,
+  "p50": 26.4,
+  "p90": 714.8,
+  "p99": 886.2,
+  "max": 911.1
+}
+```
+
+히스토그램 p90은 0.553초로 실제(0.715초)보다 23% 낮고, p99는 0.955초로 실제(0.886초)보다 8% 높다. 손으로 계산한 0.528과 Prometheus의 0.553이 조금 다른 건, 앞 절에서 본 "처음 575건을 못 본" 문제 때문이다. 첫 샘플의 칸 값(0.5초 칸 528, 1초 칸 575)을 빼고 남은 2,425건으로 다시 계산하면 0.5 + 0.5 × (2182.5 − 2154) / 271 = 0.5526이 되어 Prometheus의 답과 맞는다.
+
+### 칸은 지키고 싶은 숫자 주변에 촘촘히
+
+기본 칸(`prom-client`의 기본값은 0.005초부터 10초까지 11칸)은 어느 서비스에나 대충 맞도록 만든 값이다. 우리가 지켜야 할 숫자가 "검색 p90이 0.8초를 넘지 않는다"라면, 0.5~1초 사이에 칸을 더 둬야 한다. 0.6, 0.7, 0.8, 0.9초 칸을 넣고 같은 부하를 다시 보냈다.
+
+```bash
+# 칸을 바꾼 앱으로 같은 부하를 준 뒤
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.9, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/search"}[1m])))'
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/search"}[1m])))'
+```
+
+```text
+{} => 0.7102286582455258 @[1792526067.729]
+{} => 0.9400877594499579 @[1792526067.785]
+```
+
+같은 부하의 실제 값은 p90 0.709초, p99 0.887초였다. p90 오차가 23%에서 0.2%로 줄었다. p99는 0.9~1초 칸 안에서 짐작하다 보니 여전히 6% 높다. 다만 칸을 늘리면 시계열도 늘어난다. 칸 4개를 더하면 레이블 조합마다 시계열이 4개씩 는다. 그래서 칸은 SLO 경계값(예: 0.8초) 바로 위아래와 평소 분포의 중심 근처에 집중해서 둔다. SLO를 세우는 법은 [SLI와 SLO 글](/posts/sli-slo)에서 이어진다.
+
+`histogram_quantile`이 알려 주는 값의 범위에도 한계가 있다. 순번이 `+Inf` 칸에 떨어지면 마지막 유한한 칸의 경계를 돌려준다. 칸이 10초까지인데 요청이 30초씩 걸리면 p99는 10초로 나온다. "p99가 정확히 10초"인 그래프를 보면 칸이 모자란 것이다.
+
+아래에서 직접 짜 보자. 누적 칸 배열(`[경계, 누적 개수]`, 마지막은 `"+Inf"`)을 받아 분위수를 돌려준다. 첫 칸의 아래 경계는 0으로 보고, 결과는 소수 넷째 자리에서 반올림한다. 전체가 0이면 `null`이다.
+
+<CodePlayground
+  caption="histogram_quantile을 직접 구현하기"
+  functionName="histogramQuantile"
+  initialCode={`// buckets: [[0.005, 0], [0.01, 0], ..., ["+Inf", 3000]] (누적 개수, 경계 오름차순)
+function histogramQuantile(q, buckets) {
+  return null;
+}`}
+  solution={`function histogramQuantile(q, buckets) {
+  const total = buckets[buckets.length - 1][1];
+  if (total === 0) return null;
+  const rank = q * total;
+  let prevLe = 0, prevCount = 0;
+  for (const [le, count] of buckets) {
+    if (count >= rank) {
+      if (le === "+Inf") return prevLe;
+      const v = prevLe + (le - prevLe) * ((rank - prevCount) / (count - prevCount));
+      return Math.round(v * 10000) / 10000;
+    }
+    if (le !== "+Inf") prevLe = le;
+    prevCount = count;
+  }
+  return null;
+}`}
+  tests={[
+    { args: [0.9, [[0.005, 0], [0.01, 0], [0.025, 1349], [0.05, 2671], [0.1, 2681], [0.25, 2682], [0.5, 2682], [1, 3000], [2.5, 3000], [5, 3000], [10, 3000], ["+Inf", 3000]]], expected: 0.5283, label: "실습 검색 API p90" },
+    { args: [0.99, [[0.005, 0], [0.01, 0], [0.025, 1349], [0.05, 2671], [0.1, 2681], [0.25, 2682], [0.5, 2682], [1, 3000], [2.5, 3000], [5, 3000], [10, 3000], ["+Inf", 3000]]], expected: 0.9528, label: "실습 검색 API p99" },
+    { args: [0.5, [[0.005, 0], [0.01, 0], [0.025, 1349], [0.05, 2671], [0.1, 2681], [0.25, 2682], [0.5, 2682], [1, 3000], [2.5, 3000], [5, 3000], [10, 3000], ["+Inf", 3000]]], expected: 0.0279, label: "실습 검색 API p50" },
+    { args: [0.5, [[1, 10], [2, 30], ["+Inf", 30]]], expected: 1.25, label: "둘째 칸 안에서 짐작" },
+    { args: [0.99, [[0.1, 50], [0.5, 90], ["+Inf", 100]]], expected: 0.5, label: "+Inf 칸에 떨어지면 마지막 경계" },
+    { args: [0.5, [[0.1, 0], ["+Inf", 0]]], expected: null, label: "관측 없음" },
+  ]}
+/>
+
+칸 경계의 오차를 근본적으로 줄이려는 것이 네이티브 히스토그램(native histogram)이다. 칸을 미리 정하지 않고 지수적으로 촘촘한 칸을 알아서 만들며, 시계열 하나에 분포 전체를 담는다. Prometheus 2.40에서 실험 기능으로 들어왔고, 3.5에서도 `--enable-feature=native-histograms`를 켜야 받는다. 클라이언트 라이브러리 지원도 언어마다 다르니, 지금은 기존 히스토그램의 칸을 잘 고르는 게 먼저다.
+
+## 서머리는 정확하지만 더할 수 없다
+
+서머리는 앱 안에서 값을 모아 분위수를 직접 계산해 내놓는다. 칸 경계 오차가 없다. 위 출력에서 서머리의 p99는 0.886초로 로그로 계산한 값과 거의 같았다. 그럼 왜 모두 서머리를 쓰지 않을까. 서버가 여러 대일 때를 생각해 보자.
+
+서버 A는 주문 API(대부분 빠름), 서버 B는 검색 API(10%가 느림)를 처리한다고 하자. 실습 로그의 실제 값으로 계산했다.
+
+```bash
+# A = 주문 3,000건, B = 검색 3,000건 (같은 로그 파일의 duration_ms)
+node agg.js app1.log
+```
+
+```text
+{
+  nA: 3000,
+  nB: 3000,
+  p99_A: 49.2,
+  p99_B: 886.2,
+  avg_of_p99s: 467.7,
+  max_of_p99s: 886.2,
+  true_p99_merged: 867.1,
+  p50_A: 18.6,
+  p50_B: 26.4,
+  p50_merged: 22.5
+}
+```
+
+<AlgoTrace
+  caption="서버 두 대의 p99를 합치는 세 가지 방법"
+  memoryLabel="결과"
+  cells={["A p99 49.2ms", "B p99 886.2ms", "합친 6,000건"]}
+  steps={[
+    { pointer: 0, memory: ["A: 49.2"], caption: "서버 A가 내놓은 p99는 49.2ms다. 서머리는 이 숫자 하나만 준다." },
+    { pointer: 1, memory: ["A: 49.2", "B: 886.2"], caption: "서버 B의 p99는 886.2ms다." },
+    { pointer: 1, memory: ["평균 467.7", "최댓값 886.2"], caption: "둘을 평균하면 467.7ms다. 이런 지연을 겪은 요청은 사실상 없다. 최댓값은 실제보다 높게 나온다." },
+    { pointer: 2, found: [2], memory: ["평균 467.7", "최댓값 886.2", "실제 867.1"], caption: "6,000건을 모두 모아 다시 계산해야 867.1ms가 나온다. 분위수는 합치면 원래 값이 다시 필요하다." },
+  ]}
+/>
+
+분위수는 평균처럼 더하거나 평균 낼 수 없다. 서머리는 서버마다 분위수 하나만 내놓으니, 서비스 전체의 p99를 정확히 알 방법이 없다. 히스토그램은 칸마다 개수를 세 두니 서버 열 대의 칸을 더한 다음(`sum by (le)`) 분위수를 구하면 된다. 칸 경계 오차를 감수하는 대신 합칠 수 있다. 서버가 한 대 이상이면 거의 항상 히스토그램을 고르는 이유다.
+
+서머리의 단점이 하나 더 있다. 분위수를 "최근 몇 분" 창으로 계산한다. `prom-client`에서 `maxAgeSeconds: 60`으로 둔 앱에 검색 3,000건을 보내고, 부하가 끝난 뒤 20초마다 `/metrics`를 읽었다.
+
+```bash
+# 부하가 끝난 직후부터 20초 간격으로 세 번 더
+for t in 0 20 20 20; do sleep $t; echo "t+$t"; curl -s 127.0.0.1:19315/metrics | grep -E '^http_request_duration_summary_seconds(\{quantile="0.99"|_count)'; done
+```
+
+```text
+t+0
+http_request_duration_summary_seconds{quantile="0.99",route="/api/search"} 0.8807199130838193
+http_request_duration_summary_seconds_count{route="/api/search"} 3000
+t+20
+http_request_duration_summary_seconds{quantile="0.99",route="/api/search"} 0.879795716079242
+http_request_duration_summary_seconds_count{route="/api/search"} 3000
+t+20
+http_request_duration_summary_seconds{quantile="0.99",route="/api/search"} 0.8807827450246939
+http_request_duration_summary_seconds_count{route="/api/search"} 3000
+t+20
+http_request_duration_summary_seconds{quantile="0.99",route="/api/search"} 0
+http_request_duration_summary_seconds_count{route="/api/search"} 3000
+```
+
+1분이 지나 창에서 값이 다 빠져나가자 p99가 0이 됐다. `_count`는 그대로 3,000이다. 요청이 뜸한 시간대의 그래프에서 p99가 0으로 뚝 떨어지면 "빨라졌다"가 아니라 "창 안에 값이 없다"일 수 있다. 값이 조금씩 변하는 것도 눈여겨볼 만하다. `prom-client`는 메모리를 아끼려고 값을 다 저장하지 않고 근사 구조(t-digest)로 분위수를 계산해서, 같은 값들로도 결과가 미세하게 흔들린다. 창 길이는 앱 설정에 숨어 있어서 쿼리하는 사람은 알 수 없고, 나중에 다른 창으로 다시 계산할 수도 없다. 히스토그램은 `rate(...[5m])`처럼 범위를 쿼리할 때 정한다.
+
+서머리가 맞는 경우도 있다. 서버가 한 대뿐이고, 정확한 분위수가 필요하고, 칸 경계를 미리 정하기 어려울 때다. 배치 작업 하나의 처리 시간 같은 것이 그렇다.
+
+## 평균은 왜 거짓말을 하나
+
+위 로그 계산에서 검색 API의 평균은 107.9ms였다. 중간값(p50)은 26.4ms, p90은 714.8ms다. 평균 108ms를 겪은 요청은 거의 없다. 대부분은 30ms 안쪽이고, 10%는 0.7초가 넘는다. 분포가 두 덩어리로 나뉘어 있으면 평균은 그 사이 빈 곳을 가리킨다.
+
+평균은 히스토그램의 `_sum`과 `_count`로 쉽게 구한다(`rate(_sum) / rate(_count)`). 그래서 대시보드에 가장 먼저 걸리는 숫자이기도 하다. 문제는 느린 10%가 20%로 늘어도 평균은 108ms에서 약 180ms로 "조금" 오를 뿐이라는 것이다. 그 사이 0.7초를 기다린 사용자는 두 배가 됐다. 사용자 경험을 말할 때는 분포의 꼬리(p95, p99)를 본다. 꼬리가 왜 생기고 서비스가 커질수록 왜 더 중요해지는지는 [꼬리 지연 글](/posts/tail-latency)에 있다.
+
+평균이 쓸모없지는 않다. 처리량과 곱해서 "초당 몇 초어치 일을 하나"(리틀의 법칙으로 동시에 처리 중인 요청 수를 짐작할 때)를 구할 때는 평균이 맞는 숫자다. 질문에 따라 고른다.
+
+## 레이블 하나가 scrape를 서른 배로
+
+마지막은 레이블이다. 지표 하나에 레이블을 붙이면 값 조합마다 시계열이 생긴다. 실습 앱에 "사용자별 요청 수"라는 나쁜 카운터(`http_requests_by_user_total{route, user_id}`)를 추가하고 같은 부하(사용자 5,000명 중 무작위)를 보냈다. 붙이기 전과 후를 쟀다.
+
+```bash
+# Prometheus가 메모리(head)에 들고 있는 시계열 수와 힙 사용량
+curl -s 127.0.0.1:19390/metrics | grep -E '^(prometheus_tsdb_head_series|go_memstats_heap_inuse_bytes) '
+# 앱 /metrics의 줄 수와 바이트
+curl -s 127.0.0.1:19311/metrics | wc -c -l
+# scrape 한 번에 가져온 샘플 수와 걸린 시간
+promtool query instant http://127.0.0.1:19390 'scrape_samples_scraped{job="shop"}'
+promtool query instant http://127.0.0.1:19390 'scrape_duration_seconds{job="shop"}'
+```
+
+```text
+# 붙이기 전
+go_memstats_heap_inuse_bytes 2.932736e+07
+prometheus_tsdb_head_series 1023
+    202   13229
+scrape_samples_scraped{instance="127.0.0.1:19311", job="shop"} => 131 @[1792525990.663]
+scrape_duration_seconds{instance="127.0.0.1:19311", job="shop"} => 0.002875695 @[1792525990.731]
+# 사용자 레이블을 붙이고 같은 부하를 보낸 뒤
+go_memstats_heap_inuse_bytes 3.1342592e+07
+prometheus_tsdb_head_series 5495
+   4676  312418
+scrape_samples_scraped{instance="127.0.0.1:19311", job="shop"} => 4603 @[1792526067.329]
+scrape_duration_seconds{instance="127.0.0.1:19311", job="shop"} => 0.038325631 @[1792526067.397]
+```
+
+카운터 하나 때문에 scrape 한 번의 샘플이 131개에서 4,603개로 35배, `/metrics` 응답이 13KB에서 312KB로 24배, scrape 시간이 2.9ms에서 38ms로 13배가 됐다. 시계열 수(head series)는 1,023에서 5,495로 늘었다. 힙은 29MB에서 31MB로 조금만 늘었는데, 실습이 몇 분짜리라 시계열마다 쌓인 샘플이 적어서다. 시계열은 오래 살아 있을수록 메모리와 디스크를 계속 먹고, 사용자는 계속 새로 들어오니 숫자는 줄지 않고 쌓인다. 6,000건 요청에서 이 정도면 사용자 백만 명짜리 서비스에서는 Prometheus가 버티지 못한다.
+
+어떤 지표, 어떤 레이블이 범인인지는 TSDB 상태 API가 바로 알려 준다.
+
+```bash
+# 시계열이 가장 많은 지표, 값 종류가 가장 많은 레이블
+curl -s 127.0.0.1:19390/api/v1/status/tsdb | jq -c '.data.seriesCountByMetricName[:3], .data.labelValueCountByLabelName[:3]'
+```
+
+```text
+[{"name":"http_requests_by_user_total","value":4464},{"name":"node_scrape_collector_duration_seconds","value":46},{"name":"node_scrape_collector_success","value":46}]
+[{"name":"user_id","value":3357},{"name":"__name__","value":312},{"name":"collector","value":46}]
+```
+
+시계열이 갑자기 늘었다는 알림(`prometheus_tsdb_head_series`의 증가)을 받으면 이 API부터 연다. 범인은 대개 사용자 ID, 요청 ID, 전체 URL 경로(`/orders/12345`), 오류 메시지 원문, 타임스탬프처럼 값이 끝없이 늘어나는 레이블이다. 고치는 방법은 셋이다. 코드에서 그 레이블을 빼거나 틀로 바꾸고(`/orders/:id`), 당장 막아야 하면 scrape 설정의 `metric_relabel_configs`에서 떨어뜨리고(`action: labeldrop`), 대상마다 `sample_limit`을 걸어 한 앱이 Prometheus 전체를 무너뜨리지 못하게 한다. `sample_limit`을 넘으면 그 scrape 전체가 실패 처리되니 넉넉하게 잡는다. 사용자별로 봐야 하는 숫자는 [구조화 로그](/posts/structured-logging)의 필드로 남긴다.
+
+## 처음 질문으로 돌아가면
+
+평균 108ms는 거짓말은 아니지만 사용자 누구의 경험도 아니었다. 히스토그램의 0.955초는 칸 경계 사이를 고르게 메운 짐작이었고, 칸을 지키고 싶은 숫자 주변에 촘촘히 두자 실제 값에 붙었다. 카운터는 `rate`가 리셋을 이어 붙여 주지만 처음 나타난 시계열의 첫 증가분은 잃으니 0으로 미리 만든다. 서버가 여럿이면 합칠 수 있는 히스토그램을 고르고, 레이블에는 끝없이 늘어나는 값을 넣지 않는다. 이 숫자들로 무엇을 지켜볼지는 [모니터링 기본](/posts/monitoring-basics)에서 정리했다.
+
+## 면접에서 나올 만한 질문
+
+### 카운터와 게이지는 어떻게 고르나요?
+
+늘기만 하는 누적값이면 카운터, 오르내리는 지금 값이면 게이지다. 요청 수, 오류 수, 보낸 바이트는 카운터로 두고 `rate()`로 읽는다. 동시 처리 수, 큐 길이, 메모리는 게이지로 두고 `avg_over_time`이나 `max_over_time`으로 읽는다. 요청 수를 게이지로 두고 주기적으로 0으로 초기화하면 scrape 사이의 값이 사라지고, 게이지에 `rate()`를 씌우면 줄어들 때마다 리셋으로 오해받는다.
+
+### rate()는 프로세스 재시작을 어떻게 처리하나요?
+
+범위 안에서 값이 줄어든 지점을 리셋으로 보고, 줄어든 뒤의 값을 증가분에 더해서 이어 붙인다. 실습에서 단순 빼기는 983이 나왔지만 `increase()`는 실제 1,776건에 가까운 1,755를 돌려줬다. 다만 마지막 scrape 이후 죽기 전까지 늘어난 몇 건은 잃는다. 그리고 `sum` 뒤에 `rate`를 하면 인스턴스 하나의 재시작이 합계의 감소로 보이니 항상 `sum(rate(...))` 순서로 쓴다.
+
+### increase() 결과가 정수가 아닌 이유는요?
+
+`increase()`는 범위 안 첫 샘플과 마지막 샘플의 차이를 범위 양 끝까지 비례해서 늘려 잡기 때문이다. 사실상 `rate() × 범위 초`다. 그래서 오류 5번이 5.37로 나올 수 있다. 정확한 건수가 필요하면 로그나 DB에서 세고, 지표는 추세와 비율에 쓴다.
+
+### 히스토그램과 서머리 중 무엇을 쓰나요?
+
+서버가 여러 대면 히스토그램이다. 히스토그램은 칸마다 개수를 세서 서버별 칸을 더한 뒤 분위수를 구할 수 있지만, 서머리는 서버마다 계산한 분위수만 내놓아 합칠 방법이 없다. 실습에서 두 서버 p99의 평균은 467.7ms였지만 실제 합친 p99는 867.1ms였다. 서머리는 한 대짜리 작업에서 칸 경계 없이 정확한 분위수가 필요할 때 쓴다.
+
+### histogram_quantile 값이 실제와 다른 이유와 줄이는 방법은요?
+
+칸 안의 값 분포를 모르니 고르게 퍼져 있다고 가정하고 선형으로 짐작하기 때문이다. 실습에서 기본 칸으로는 p90이 실제보다 23% 낮았다. 지키고 싶은 경계값(SLO) 주변에 칸을 촘촘히 두자 오차가 0.2%로 줄었다. 칸을 늘리면 시계열도 늘어나니 필요한 구간에만 둔다. 결과가 마지막 칸 경계에 딱 붙어 있으면 칸이 모자라다는 신호다.
+
+### 평균 응답 시간만 보면 왜 위험한가요?
+
+분포가 한쪽으로 치우치거나 두 덩어리로 나뉘면 평균은 실제로 아무도 겪지 않은 값을 가리킨다. 실습에서 평균은 108ms였지만 10%의 요청은 0.7초가 넘었고, 느린 요청이 두 배가 돼도 평균은 조금만 오른다. 사용자 경험은 p95, p99 같은 꼬리로 본다. 평균은 처리량과 곱해 동시 처리 수를 짐작할 때처럼 맞는 질문에만 쓴다.
+
+### Prometheus 시계열이 갑자기 늘었습니다. 어떻게 찾고 막나요?
+
+`/api/v1/status/tsdb`에서 시계열이 많은 지표와 값 종류가 많은 레이블을 먼저 본다. 범인은 대개 사용자 ID, 전체 URL, 오류 메시지처럼 끝없이 늘어나는 레이블이다. 당장은 `metric_relabel_configs`로 그 레이블을 떨어뜨리고 대상마다 `sample_limit`을 걸어 피해를 막고, 코드에서는 레이블을 빼거나 `/orders/:id`처럼 틀로 바꾼다. 사용자별 분석은 로그나 trace 필드로 옮긴다.

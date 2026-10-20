@@ -1,0 +1,467 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("structured-logging");
+
+주문 실패 문의가 들어와 로그를 열었다. 이런 줄이 수천 개 있다.
+
+```text
+2026-10-20T20:20:32.604Z ERROR order failed GET /api/orders 500 28.9ms user=u169 coupon=FALL10
+```
+
+사람 눈에는 잘 읽힌다. 문제는 "어제 오류 난 주문 중 쿠폰이 있던 것만, 쿠폰별로 몇 건인지"를 물을 때다. grep으로 ERROR를 고르고, awk로 일곱 번째 칸을 자르고, `coupon=` 뒤를 sed로 뽑는다. 그러다 누군가 메시지에 띄어쓰기를 하나 넣으면 칸 번호가 밀리고 스크립트가 조용히 틀린 답을 낸다.
+
+구조화 로그(structured logging)는 로그 한 줄을 문장이 아니라 필드가 있는 데이터로 남기는 방식이다. 보통 한 줄에 JSON 객체 하나를 쓴다. 같은 사건을 `pino`로 남기면 이렇다.
+
+```text
+{"level":50,"time":"2026-10-20T20:20:32.607Z","service":"shop","method":"GET","route":"/api/orders","status":500,"duration_ms":28.9,"user":"u169","coupon":"FALL10","msg":"order failed"}
+```
+
+이 글은 로그를 이렇게 남길 때 정할 것들(필드, 레벨, 요청을 잇는 ID, 개인정보 가리기, 고르기와 비용)과 남긴 로그를 jq와 Loki의 LogQL로 묻는 법을 실습으로 따라간다.
+
+이 주제의 다른 글: 지표·로그·trace의 역할을 나누는 [관측 가능성 기본](/posts/observability-basics), 로그와 trace를 trace_id로 잇는 장면이 나오는 [분산 추적](/posts/distributed-tracing), 숫자로 지켜볼 것을 정하는 [모니터링 기본](/posts/monitoring-basics). 이 글은 로그 한 줄을 어떻게 쓰고 어떻게 읽느냐에만 집중한다.
+
+실습 환경은 Ubuntu 24.04, Node.js 22, `pino` 10.4.0, Loki 3.5.3(`logcli` 3.5.3), jq 1.7이다. 앱은 주문·검색 API이고 요청마다 로그 한 줄을 남긴다.
+
+## 한 줄에 담을 것
+
+실습 앱이 실제로 남긴 오류 로그 한 줄을 뜯어 보자.
+
+<UrlAnatomy
+  caption="주문 실패 로그 한 줄 (실습 값, 일부 필드 생략)"
+  base="{"
+  separator=""
+  joiner=","
+  params={[
+    { key: "level", display: '"level":50', title: "레벨", description: "pino는 레벨을 숫자로 쓴다. 10 trace, 20 debug, 30 info, 40 warn, 50 error, 60 fatal. 숫자라서 level >= 40 같은 비교가 쉽다. 문자로 바꾸고 싶으면 formatters.level로 바꾼다.", required: true },
+    { key: "time", display: '"time":"2026-10-20T19:51:55.292Z"', title: "시각", description: "ISO 8601에 UTC(Z)로 쓴다. 서버마다 시간대가 다르면 여러 서비스 로그를 시간순으로 섞을 때 틀린다. pino 기본값은 epoch 밀리초 숫자이고, 실습에서는 stdTimeFunctions.isoTime으로 바꿨다.", required: true },
+    { key: "service", display: '"service":"shop"', title: "어느 서비스", description: "모든 줄에 붙는 고정 필드다. 지표와 trace에서 쓰는 서비스 이름과 똑같이 맞춰야 셋을 오갈 수 있다." },
+    { key: "trace", display: '"trace_id":"c31261b4…"', title: "요청을 잇는 열쇠", description: "현재 span의 trace_id다. 같은 요청에서 나온 모든 줄, 다른 서비스의 줄, trace 저장소의 span을 이 값 하나로 찾는다." },
+    { key: "route", display: '"route":"/api/orders"', title: "틀로 바꾼 경로", description: "/api/orders/123 같은 실제 경로 대신 틀을 넣어 묶기 좋게 한다. 실제 경로가 필요하면 다른 필드에 둔다." },
+    { key: "status", display: '"status":500', title: "숫자는 숫자로", description: "\"500\"처럼 문자열로 넣으면 status >= 500 같은 비교에서 실수가 난다. 같은 필드는 모든 줄에서 같은 타입을 유지한다." },
+    { key: "dur", display: '"duration_ms":28.9', title: "단위를 이름에", description: "duration이라고만 쓰면 초인지 밀리초인지 모른다. 이름에 단위를 붙인다." },
+    { key: "msg", display: '"msg":"order failed"', title: "사람이 읽는 문장", description: "메시지는 고정된 짧은 문장으로 두고 바뀌는 값은 필드로 뺀다. 'order 123 failed for kim'처럼 값을 문장에 섞으면 같은 종류의 사건을 메시지로 묶을 수 없다.", required: true },
+  ]}
+/>
+
+필드를 정할 때 지킬 것은 몇 가지뿐이다. 바뀌는 값은 메시지가 아니라 필드에 둔다. 같은 이름의 필드는 언제나 같은 타입으로 쓴다(Elasticsearch처럼 필드 타입을 처음 본 값으로 정하는 저장소는 한 번 숫자로 들어온 필드에 문자열이 오면 그 줄을 거부한다). 필드 이름은 팀 전체가 하나의 사전을 쓴다. 누구는 `userId`, 누구는 `user_id`, 누구는 `uid`를 쓰면 검색할 때마다 셋을 다 넣어야 한다. 이름이 고민되면 OpenTelemetry 시맨틱 컨벤션(`http.request.method`, `url.path`, `http.response.status_code`)을 따르는 것도 방법이다.
+
+요청 하나에 줄 하나를 남기는 습관도 권할 만하다. 요청이 끝날 때 그 요청에 대한 모든 것(경로, 상태, 걸린 시간, 사용자, 중요한 업무 값)을 넓은 한 줄로 남기면, 줄 여러 개를 이어 붙이지 않아도 질문 대부분에 답할 수 있다. 처리 도중의 자세한 단계는 debug 레벨로 따로 남긴다.
+
+## 레벨은 누가 깨어나야 하는지로 정한다
+
+레벨을 정하는 기준은 "이 줄을 보고 누가 무엇을 해야 하나"다.
+
+- error: 요청이 실패했고 누군가 봐야 한다. 오류 하나에 줄 하나다. 같은 오류를 호출 단계마다 다시 찍지 않는다.
+- warn: 지금은 처리됐지만 그대로 두면 문제가 된다. 재시도 끝에 성공, 설정 기본값으로 대체, 폐기 예정 API 호출.
+- info: 정상적인 중요한 사건. 요청 완료, 주문 생성, 서버 시작.
+- debug: 원인을 찾을 때만 필요한 자세한 단계. 운영에서는 평소에 끈다.
+
+debug를 켜면 얼마나 늘어날까. 같은 주문 1,000건을 info와 debug로 각각 돌렸다. debug에서는 요청마다 "캐시 조회" 줄이 하나 더 찍힌다.
+
+```bash
+# 레벨별로 앱을 띄우고 주문 1,000건을 보낸 뒤 로그 크기 비교
+for lvl in info debug; do
+  PORT=19313 LOG_LEVEL=$lvl OTEL_OFF=1 node server.js > lvl_$lvl.log 2>&1 &
+  sleep 1; node load.js /api/orders 1000 10 19313 > /dev/null
+  kill %1; sleep 1; wc -lc lvl_$lvl.log
+done
+grep -m1 'cache lookup' lvl_debug.log
+```
+
+```text
+  1001 265501 lvl_info.log
+  2001 387457 lvl_debug.log
+{"level":20,"time":"2026-10-20T19:57:58.314Z","service":"shop","route":"/api/orders","cache":"miss","msg":"cache lookup"}
+```
+
+줄은 두 배, 바이트는 46% 늘었다. 실제 서비스에서는 debug 줄이 요청마다 몇십 개씩이라 차이가 훨씬 크다. 그래서 debug는 기본으로 끄고, 장애 때 특정 인스턴스나 특정 요청에만 켠다. 재배포 없이 바꾸려면 레벨을 환경 변수나 관리용 엔드포인트로 바꿀 수 있게 만들어 둔다(`logger.level = "debug"`).
+
+꺼 둔 레벨의 비용은 거의 없다. pino에서 꺼진 레벨의 함수는 아무 일도 안 하는 함수로 바뀐다. 20만 줄을 `/dev/null`에 쓰는 시간을 재 봤다(같은 스크립트를 두 번 돌렸다).
+
+```bash
+node bench.js; node bench.js
+```
+
+```text
+JSON.stringify + writeSync     673 ms   297250 lines/s
+pino sync                     1356 ms   147491 lines/s
+pino async(buffered)          1854 ms   107882 lines/s
+pino debug() at info level       4 ms 55051028 lines/s
+pino sync + redact            1434 ms   139480 lines/s
+JSON.stringify + writeSync     702 ms   284876 lines/s
+pino sync                     1199 ms   166854 lines/s
+pino async(buffered)          1767 ms   113171 lines/s
+pino debug() at info level       4 ms 47836888 lines/s
+pino sync + redact            1486 ms   134603 lines/s
+```
+
+꺼진 debug 호출 20만 번이 4ms다. 켜진 로그 한 줄은 pino로 약 6~7마이크로초 걸렸다. 손으로 `JSON.stringify` 해서 바로 쓰는 것보다 두 배쯤 느린 건, pino가 레벨·시각·기본 필드를 붙이고 문자열을 안전하게 이스케이프하는 일을 더 하기 때문이다. 이 측정에서는 비동기 버퍼링이 오히려 느렸다. 쓰기를 기다리는 동안 다른 일을 할 수 있어야 이득인데, 일만 하는 반복문이라 버퍼 관리 비용만 남았다. 숫자보다 기억할 것은, 꺼진 로그는 공짜에 가깝지만 꺼진 로그에 넘길 인자를 만드는 일(`log.debug({ body: JSON.stringify(bigObject) })`)은 공짜가 아니라는 것이다. 무거운 인자는 `if (log.isLevelEnabled("debug"))`로 감싼다.
+
+## 요청 하나에서 나온 줄을 모두 찾는다
+
+로그가 쌓이면 "이 실패한 요청에서 무슨 일이 있었나"를 찾는 일이 가장 잦다. 서버에 요청이 동시에 수십 개 들어오면 줄이 뒤섞여서 시각만으로는 같은 요청의 줄을 고를 수 없다. 그래서 요청마다 ID를 정해 모든 줄에 붙인다.
+
+실습 앱은 OpenTelemetry가 만든 trace_id를 그 ID로 쓴다. pino의 `mixin`은 줄을 쓸 때마다 불리는 함수라서, 여기서 현재 span을 꺼내 붙이면 코드 곳곳에서 ID를 넘기지 않아도 된다.
+
+```js
+const { trace } = require("@opentelemetry/api");
+const pino = require("pino");
+
+const log = pino({
+  level: process.env.LOG_LEVEL || "info",
+  base: { service: "shop" },                      // 모든 줄에 붙는 고정 필드
+  timestamp: pino.stdTimeFunctions.isoTime,       // "time":"2026-...Z"
+  mixin() {                                       // 줄마다 현재 요청의 trace_id를 붙인다
+    const c = trace.getActiveSpan()?.spanContext();
+    return c ? { trace_id: c.traceId, span_id: c.spanId } : {};
+  },
+});
+```
+
+OpenTelemetry를 쓰지 않는다면 요청이 들어올 때 ID를 만들고(`X-Request-Id` 헤더가 있으면 그 값을 쓰고), `log.child({ req_id })`로 그 요청 전용 로거를 만들어 넘긴다. Node.js에서 로거를 함수마다 넘기기 번거로우면 `AsyncLocalStorage`에 넣어 두고 꺼내 쓴다. 다른 서비스를 부를 때 그 ID를 헤더로 넘겨야 서비스 너머까지 이어지는 것은 trace와 똑같다. 헤더가 서비스를 건너는 과정은 [분산 추적의 traceparent 절](/posts/distributed-tracing)에 자세히 있다.
+
+아래 그림에서 다음을 누르면 요청 하나의 로그가 앱에서 저장소까지 가서 다시 찾아지는 길이 보인다.
+
+<SequenceDiagram
+  caption="trace_id가 붙은 한 줄이 Loki에 들어가 다시 찾아지기까지"
+  actors={[
+    { id: "u", label: "사용자" },
+    { id: "a", label: "앱(pino)" },
+    { id: "o", label: "stdout" },
+    { id: "s", label: "수집기" },
+    { id: "l", label: "Loki" },
+  ]}
+  steps={[
+    { from: "u", to: "a", label: "GET /api/orders", title: "요청이 들어온다", detail: "HTTP 계측이 span을 열고 trace_id를 정한다. 이 요청 안에서 남기는 모든 줄이 같은 값을 갖는다." },
+    { from: "a", to: "o", label: "JSON 1줄", title: "표준 출력에 쓴다", detail: "앱은 파일 위치나 저장소를 몰라도 된다. 표준 출력에 한 줄씩 쓰면 컨테이너 런타임이 노드의 파일로 받아 둔다.", payload: '{"level":50,"trace_id":"c31261b4...","route":"/api/orders","status":500,"msg":"order failed"}' },
+    { from: "o", to: "s", label: "tail", title: "수집기가 읽어 간다", detail: "노드마다 하나씩 도는 수집기(Grafana Alloy, Fluent Bit, OTel Collector)가 파일 끝을 따라 읽는다. 어디까지 읽었는지 기억해서 재시작해도 이어 읽는다." },
+    { from: "s", to: "l", label: "push", title: "레이블은 적게 붙여 보낸다", detail: "app, env, level 같은 값 종류가 적은 것만 레이블로 붙인다. trace_id는 본문에 그대로 둔다. 레이블 조합마다 스트림이 생기기 때문이다.", payload: '{app="shop", env="lab", level="error"}' },
+    { from: "u", to: "l", label: "|= trace_id", title: "나중에 그 요청을 찾는다", detail: "레이블로 범위를 좁히고(app=shop), 본문에서 trace_id 문자열을 찾는다. 같은 요청의 다른 서비스 로그도 같은 값으로 나온다." },
+  ]}
+/>
+
+## 개인정보는 남기기 전에 가린다
+
+로그는 많은 사람이 보고, 오래 남고, 여러 시스템으로 복사된다. 한번 남은 이메일이나 토큰은 지우기 어렵다. 그래서 남기기 전에 가린다. pino의 `redact`는 경로를 지정하면 그 자리를 바꿔 쓴다.
+
+```js
+redact: { paths: ["user.email", "req.headers.authorization"], censor: "[REDACTED]" }
+```
+
+실습 앱도 이렇게 해 뒀다. 그리고 Loki에 들어간 오류 로그를 열어 봤는데, 이메일이 그대로 있었다.
+
+```text
+{"level":50,"time":"2026-10-20T19:51:55.292Z","service":"shop","trace_id":"c31261b42da613c3b3275abb1845ab0d","span_id":"1673ed150f4d089c","req":{"method":"GET","url":"/api/orders?email=kim@example.com","headers":{"authorization":"[REDACTED]"}},"route":"/api/orders","status":500,"duration_ms":28.9,"user":{"id":"u169","email":"[REDACTED]"},"msg":"order failed"}
+```
+
+`user.email`은 가렸지만, 프런트엔드가 이메일을 쿼리 문자열로 보내고 있어서 `req.url`에 그대로 실려 왔다. 경로를 지정하는 방식은 정해 둔 자리만 지킨다. 같은 값이 다른 자리로 들어오면 그대로 새어 나간다. URL, 오류 메시지, 요청 본문, 외부 API 응답이 흔한 구멍이다.
+
+고친 방법은 `req`를 남길 때 URL의 민감한 파라미터를 가리는 serializer를 거치게 한 것이다.
+
+```js
+const SENSITIVE = ["email", "token", "phone"];
+function safeUrl(u) {
+  const url = new URL(u, "http://x");
+  for (const k of SENSITIVE) if (url.searchParams.has(k)) url.searchParams.set(k, "[REDACTED]");
+  return url.pathname + (url.search ? decodeURIComponent(url.search) : "");
+}
+const log = pino({
+  redact: { paths: ["user.email", "req.headers.authorization"], censor: "[REDACTED]" },
+  serializers: { req: (r) => ({ ...r, url: safeUrl(r.url) }) }, // req 필드는 이 함수를 거쳐서 남는다
+});
+```
+
+```bash
+# 고치기 전 로거와 고친 로거에 같은 사건을 남긴다
+node redact.js
+```
+
+```text
+{"level":50,"time":"2026-10-20T20:20:32.522Z","service":"shop","req":{"method":"GET","url":"/api/orders?email=kim@example.com&coupon=FALL10","headers":{"authorization":"[REDACTED]"}},"user":{"id":"u169","email":"[REDACTED]"},"status":500,"msg":"order failed"}
+{"level":50,"time":"2026-10-20T20:20:32.523Z","service":"shop","req":{"method":"GET","url":"/api/orders?email=[REDACTED]&coupon=FALL10","headers":{"authorization":"[REDACTED]"}},"user":{"id":"u169","email":"[REDACTED]"},"status":500,"msg":"order failed"}
+```
+
+아래 그림은 가리기를 어느 단계에 두는지 보여 준다. 점선이 실습에서 새어 나간 길이다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="가리기는 여러 겹으로 둔다"
+  nodes={[
+    { id: "src", label: "요청 값", sub: "본문·헤더·URL", x: 200, y: 30, w: 150 },
+    { id: "rd", label: "redact 경로", sub: "user.email", x: 90, y: 110, w: 130 },
+    { id: "sr", label: "serializer", sub: "req.url 다듬기", x: 310, y: 110, w: 140 },
+    { id: "col", label: "수집기 규칙", sub: "이메일·카드 패턴", x: 200, y: 185, w: 160 },
+    { id: "st", label: "저장소", sub: "보관·삭제 절차", x: 200, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "src", to: "rd" },
+    { from: "src", to: "sr" },
+    { from: "rd", to: "col" },
+    { from: "sr", to: "col" },
+    { from: "col", to: "st" },
+    { from: "src", to: "st", dashed: true, label: "URL로 샘" },
+  ]}
+/>
+
+방어는 여러 겹으로 한다. 앱에서는 가릴 자리를 정하고 serializer로 URL과 오류를 다듬는다. 수집기(Collector, Alloy)에서 이메일·카드 번호 같은 패턴을 한 번 더 지운다. 그리고 근본적으로 민감한 값을 URL에 싣지 않게 API를 고친다. URL은 로그뿐 아니라 프록시 접근 로그, 브라우저 기록에도 남기 때문이다. 사용자를 구분해야 하면 이메일 대신 내부 ID를 남긴다. 이미 새어 나간 경우에는 보관 기간이 끝나기를 기다리지 말고 저장소에서 지우는 절차(Loki는 삭제 API를 켜야 한다)를 밟고, 어디까지 복사됐는지 따라간다.
+
+## 다 남길 수 없을 때 고르는 법
+
+실습 로그 6,000건(검색 3,000, 주문 3,000)은 2.1MB였다. 한 줄에 평균 약 350바이트다. 초당 1,000건이면 하루에 30GB를 넘는다. 저장소는 보통 들어온 양과 보관 기간으로 값을 매기니, 성공한 요청 로그가 비용 대부분을 차지한다.
+
+그렇다고 무작위로 버리면 곤란하다. 버린 쪽에 하필 장애 단서가 있을 수 있다. 실무에서 많이 쓰는 규칙은 이렇다. 오류는 전부 남긴다. 느린 요청도 전부 남긴다. 나머지 성공 요청만 일정 비율로 고른다. 고를 때는 `Math.random()` 대신 trace_id로 정한다. 그래야 여러 서비스가 같은 요청을 똑같이 남기거나 똑같이 버려서, 남긴 요청은 처음부터 끝까지 이어 볼 수 있다.
+
+<AlgoTrace
+  caption="로그 한 줄씩 남길지 정하기 (성공 요청은 10%)"
+  memoryLabel="남긴 줄"
+  cells={["500 28ms", "200 892ms", "200 24ms …ac7c", "200 33ms …ac47", "200 141ms …ac7"]}
+  steps={[
+    { pointer: 0, memory: ["오류"], caption: "500 오류다. 비율과 상관없이 남긴다." },
+    { pointer: 1, memory: ["오류", "느림"], caption: "0.89초 걸렸다. 500ms를 넘는 느린 요청도 전부 남긴다." },
+    { pointer: 2, memory: ["오류", "느림"], caption: "빠른 성공 요청이다. trace_id 끝 8자리를 수로 바꿔 100으로 나눈 나머지가 96이다. 10보다 크니 버린다." },
+    { pointer: 3, memory: ["오류", "느림", "표본 3"], caption: "나머지가 3이다. 10보다 작으니 남긴다. 다른 서비스도 같은 trace_id로 같은 계산을 하니 같은 결정을 내린다." },
+    { pointer: 4, found: [0, 1, 3, 4], memory: ["오류", "느림", "표본 3", "표본 7"], caption: "나머지가 7이라 남긴다. 다섯 줄 중 넷을 남겼지만, 실제 트래픽에서는 성공 요청이 대부분이라 전체의 15% 정도만 남는다." },
+  ]}
+/>
+
+이 규칙을 실습 로그 전체에 돌려 봤다.
+
+```bash
+# 오류와 500ms 넘는 요청은 전부, 나머지는 trace_id로 10%만
+node sample.js app1.log
+```
+
+```text
+{
+  total_lines: 6001,
+  kept: 944,
+  errors: 50,
+  slow: 318,
+  sampled_ok: 576,
+  bytes_before: 2109315,
+  bytes_after: 328971,
+  ratio: 0.156
+}
+```
+
+크기가 15.6%로 줄었고, 오류 50건과 느린 요청 318건은 하나도 잃지 않았다. 대신 지켜야 할 것이 있다. 고른 뒤의 로그로는 개수를 세면 안 된다. "오류율"을 로그 줄 수로 계산하면 성공 요청만 10%로 줄어 오류율이 열 배 가까이 부풀려진다. 세는 일은 지표에 맡기고, 로그에는 고른 비율(`sample_rate: 0.1`)을 필드로 남겨 두면 필요할 때 거꾸로 곱해 볼 수 있다.
+
+아래는 이 결정 함수다. 오류(레벨 50 이상)와 500ms 넘는 요청은 늘 남기고, 나머지는 trace_id 끝 8자리를 16진수로 읽어 100으로 나눈 나머지가 비율보다 작을 때 남긴다. 테스트의 trace_id는 실습에서 나온 실제 값이다.
+
+<CodePlayground
+  caption="오류·느린 요청은 전부, 나머지는 trace_id로 고르기"
+  functionName="shouldKeep"
+  initialCode={`// entry: { level, duration_ms, trace_id }, percent: 성공 요청을 남길 비율(0~100)
+function shouldKeep(entry, percent) {
+  return true;
+}`}
+  solution={`function shouldKeep(entry, percent) {
+  if (entry.level >= 50) return true;
+  if (entry.duration_ms > 500) return true;
+  return parseInt(entry.trace_id.slice(-8), 16) % 100 < percent;
+}`}
+  tests={[
+    { args: [{ level: 50, trace_id: "c31261b42da613c3b3275abb1845ab0d", duration_ms: 28.9 }, 10], expected: true, label: "오류는 늘 남김" },
+    { args: [{ level: 30, trace_id: "5c78891d24b6ca2f98001fc160d2cfb8", duration_ms: 892 }, 10], expected: true, label: "느린 요청은 늘 남김" },
+    { args: [{ level: 30, trace_id: "e8e889c793508a548312f5f12e40ac7c", duration_ms: 24.2 }, 10], expected: false, label: "나머지 96 → 버림" },
+    { args: [{ level: 30, trace_id: "abeaeacb924d8c90e05435b3518bac47", duration_ms: 33.3 }, 10], expected: true, label: "나머지 3 → 남김" },
+    { args: [{ level: 30, trace_id: "249600eec8a15b934b48d14e4969fd95", duration_ms: 52.6 }, 10], expected: false, label: "나머지 65 → 버림" },
+    { args: [{ level: 30, trace_id: "249600eec8a15b934b48d14e4969fd95", duration_ms: 52.6 }, 100], expected: true, label: "100%면 다 남김" },
+    { args: [{ level: 50, trace_id: "249600eec8a15b934b48d14e4969fd95", duration_ms: 52.6 }, 0], expected: true, label: "0%여도 오류는 남김" },
+  ]}
+/>
+
+고르는 위치도 정해야 한다. 앱에서 고르면 네트워크와 수집 비용까지 아끼지만 규칙을 바꾸려면 배포해야 한다. 수집기에서 고르면 규칙을 한곳에서 바꿀 수 있지만 앱에서 수집기까지는 다 흘려보낸다. 보관 기간도 레벨마다 다르게 둘 수 있다. error는 90일, info는 14일, debug는 3일처럼.
+
+## 로그가 저장소까지 가는 길
+
+컨테이너 환경에서 앱은 파일이 아니라 표준 출력에 쓴다. 로그 파일을 돌리고(rotate) 지우고 보내는 일은 앱 바깥의 몫이다. 쿠버네티스라면 컨테이너 런타임이 표준 출력을 노드의 `/var/log/pods/` 아래 파일로 받고, 노드마다 하나씩 도는 수집기가 그 파일을 읽어 저장소로 보낸다. Loki를 쓴다면 예전에는 Promtail을 많이 썼고, 지금 Grafana는 Promtail 대신 Alloy를 권한다. OpenTelemetry Collector의 `filelog` 수신기로 읽어 OTLP로 보내는 것도 흔하다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="노드마다 수집기가 표준 출력 파일을 읽어 Loki로 보낸다"
+  zones={[
+    { id: "node", label: "노드 (쿠버네티스)", x: 8, y: 16, w: 236, h: 270, tone: "private" },
+    { id: "be", label: "로그 저장소", x: 264, y: 16, w: 128, h: 270, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "p1", label: "shop pod", sub: "stdout", x: 70, y: 70, icon: "container", w: 100 },
+    { id: "p2", label: "billing pod", sub: "stdout", x: 70, y: 150, icon: "container", w: 100 },
+    { id: "f", label: "pod logs", sub: "/var/log/pods", x: 70, y: 232, icon: "db", w: 112 },
+    { id: "ag", label: "Alloy", sub: "DaemonSet", x: 186, y: 150, icon: "router", w: 96 },
+    { id: "lk", label: "Loki", sub: ":3100", x: 328, y: 150, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "p1", to: "f", dashed: true },
+    { from: "p2", to: "f", dashed: true },
+    { from: "f", to: "ag" },
+    { from: "ag", to: "lk", label: "push" },
+  ]}
+  steps={[
+    { path: ["p1", "f"], packet: "JSON", title: "앱은 표준 출력에만 쓴다", detail: "컨테이너 런타임이 줄마다 시각과 stdout/stderr 표시를 붙여 노드의 파일로 받는다. 파일 돌리기도 런타임이 한다." },
+    { path: ["f", "ag"], packet: "tail", title: "수집기가 파일 끝을 따라 읽는다", detail: "어디까지 읽었는지(오프셋)를 기록해 두고, 재시작하면 그 자리부터 다시 읽는다. 파드 이름, 네임스페이스 같은 메타데이터를 붙인다." },
+    { path: ["ag", "lk"], packet: "push", title: "레이블은 적게, 본문은 그대로", detail: "app, namespace, level 정도만 레이블로 붙인다. 레이블 조합마다 스트림이 따로 생기고 색인되기 때문이다.", payload: '{app="shop", env="lab", level="error", service_name="shop"}' },
+    { path: ["ag", "lk"], packet: "push", blocked: true, title: "Loki가 받지 못하면", detail: "수집기는 버퍼에 쌓으며 다시 시도한다. 버퍼가 차기 전에 노드 파일이 돌아가 지워지면 그 사이 로그는 잃는다. 수집기의 버린 줄 수와 지연을 지표로 지켜보는 이유다." },
+  ]}
+/>
+
+실습에서는 수집기 대신 작은 스크립트로 Loki의 push API에 넣었다. 레이블은 `app`, `env`, `level` 셋만 붙였고, Loki 3.5가 `service_name`을 알아서 하나 더 붙였다.
+
+```bash
+# Loki에 생긴 레이블과 스트림
+logcli labels --quiet
+logcli series --quiet --since=1h '{app="shop"}'
+```
+
+```text
+app
+env
+level
+service_name
+{app="shop", env="lab", level="info", service_name="shop"}
+{app="shop", env="lab", level="error", service_name="shop"}
+```
+
+요청 6,000건이 스트림 두 개에 들어갔다. trace_id나 사용자 ID를 레이블로 올렸다면 스트림이 요청 수만큼 생겼을 것이다. Loki는 레이블만 색인하고 본문은 압축해서 덩어리로 저장하는 설계라서, 레이블이 적을수록 싸고 빠르다. 자주 거르는 필드가 꼭 필요하면 Loki 3.x의 구조화 메타데이터(structured metadata)에 두면 레이블처럼 스트림을 쪼개지 않으면서 거를 수 있다.
+
+### 프로세스가 갑자기 죽으면 마지막 줄이 사라진다
+
+쓰기 방식에서 꼭 알아야 할 함정이 하나 있다. pino는 기본값으로 표준 출력에 버퍼를 두고 비동기로 쓴다. 정상 종료할 때는 남은 버퍼를 비우지만, `SIGKILL`이나 메모리 초과로 커널이 프로세스를 죽이면 버퍼에 남은 줄은 그대로 사라진다. 1만 줄을 쓰자마자 `SIGKILL`로 죽는 스크립트로 확인했다.
+
+```bash
+# 기본 설정 pino로 1만 줄을 쓰고 바로 SIGKILL
+node crash2.js > crash_default.log; wc -l crash_default.log
+# 파일에 동기로 쓰는 경우와 버퍼(4KB)를 두는 경우
+node crash.js sync crash_sync.log; wc -l < crash_sync.log
+node crash.js async crash_async.log; wc -l < crash_async.log
+```
+
+```text
+1 crash_default.log
+10001
+0
+```
+
+기본 설정은 1만 줄 중 첫 줄만 남았다. 반복문이 이벤트 루프를 놓아주지 않아 첫 쓰기 이후의 줄이 모두 버퍼에 있다가 함께 죽었다. 실제 서버는 요청 사이에 이벤트 루프가 돌아서 버퍼가 이렇게까지 쌓이지는 않지만, 죽기 직전 몇 줄(대개 가장 중요한 "왜 죽었나"의 단서)이 사라지는 일은 그대로 일어난다. 쿠버네티스에서 `OOMKilled`로 끝난 파드의 마지막 로그가 비어 있다면 이걸 의심한다. 오류와 치명적 오류는 동기로 쓰거나(`pino.destination({ sync: true })`를 따로 둔다), `uncaughtException` 처리에서 `logger.flush()`를 부른 뒤 종료하고, 메모리 한도와 힙 크기(`--max-old-space-size`)를 맞춰 커널보다 Node.js가 먼저 알아채게 한다.
+
+## jq와 LogQL로 묻기
+
+남긴 로그는 물어볼 수 있어야 쓸모가 있다. 파일이 손에 있으면 jq가 가장 빠르다.
+
+```bash
+# 상태 코드와 route별 건수
+jq -c 'select(.status) | {s: .status, r: .route}' app1.log | sort | uniq -c
+# 검색 API의 지연 분포 (요청 로그의 duration_ms로 직접 계산)
+grep '"/api/search"' app1.log | jq -s '[.[].duration_ms] | sort
+  | {n: length, p50: .[(length*0.5|floor)], p90: .[(length*0.9|floor)], p99: .[(length*0.99|floor)]}'
+```
+
+```text
+   2950 {"s":200,"r":"/api/orders"}
+   3000 {"s":200,"r":"/api/search"}
+     50 {"s":500,"r":"/api/orders"}
+{
+  "n": 3000,
+  "p50": 26.4,
+  "p90": 714.8,
+  "p99": 886.2
+}
+```
+
+여러 서버의 로그는 Loki에 모아 LogQL로 묻는다. LogQL은 Prometheus의 PromQL과 모양이 같다. 레이블로 스트림을 고르고(`{app="shop"}`), 파이프로 줄을 거르고 해석한 뒤, 필요하면 숫자로 바꿔 집계한다.
+
+```bash
+# 1. 주문 API 오류 줄만: 레이블로 좁히고, json으로 해석한 뒤 필드로 거른다
+logcli query --quiet --since=1h --limit=1 '{app="shop", level="error"} | json | route="/api/orders"'
+# 2. 상태 코드별 건수: 로그 줄을 숫자로 바꾼다
+logcli instant-query --quiet --now=2026-10-20T20:00:00Z \
+  'sum by (status) (count_over_time({app="shop"} | json | route="/api/orders" [1h]))'
+# 3. 로그의 숫자 필드로 p99: unwrap으로 필드 값을 꺼낸다
+logcli instant-query --quiet --now=2026-10-20T20:00:00Z \
+  'quantile_over_time(0.99, {app="shop"} | json | route="/api/search" | unwrap duration_ms [1h]) by (route)'
+```
+
+```text
+2026-10-20T19:51:55Z {duration_ms="28.9", span_id="1673ed150f4d089c", time="2026-10-20T19:51:55.292Z", trace_id="c31261b42da613c3b3275abb1845ab0d", user_id="u169"}  {"level":50,"time":"2026-10-20T19:51:55.292Z","service":"shop","trace_id":"c31261b42da613c3b3275abb1845ab0d","span_id":"1673ed150f4d089c","req":{"method":"GET","url":"/api/orders?email=kim@example.com","headers":{"authorization":"[REDACTED]"}},"route":"/api/orders","status":500,"duration_ms":28.9,"user":{"id":"u169","email":"[REDACTED]"},"msg":"order failed"}
+[
+  {
+    "metric": {
+      "status": "200"
+    },
+    "value": [
+      1792526400,
+      "2950"
+    ]
+  },
+  {
+    "metric": {
+      "status": "500"
+    },
+    "value": [
+      1792526400,
+      "50"
+    ]
+  }
+]
+[
+  {
+    "metric": {
+      "route": "/api/search"
+    },
+    "value": [
+      1792526400,
+      "886.101"
+    ]
+  }
+]
+```
+
+첫 결과의 중괄호 부분은 `json` 단계가 줄에서 뽑아낸 필드다(일부만 보인다). 세 번째 결과의 p99 886.1ms는 jq로 계산한 886.2ms와 거의 같다. 로그는 값 하나하나를 갖고 있어서 히스토그램처럼 칸 경계 오차가 없다. 대신 이 쿼리는 1시간 치 로그 줄을 모두 읽어서 계산하니, 같은 그래프를 대시보드에 걸어 두고 계속 돌리면 지표보다 훨씬 비싸다. 자주 보는 숫자는 지표로 만들고, 로그 쿼리는 처음 보는 질문에 쓴다.
+
+LogQL을 쓸 때 속도를 가르는 건 순서다. 레이블 선택자로 스트림을 최대한 좁히고, `|= "문자열"` 같은 단순 거르기를 `| json`보다 앞에 둔다. `json` 해석은 줄마다 비용이 드니 이미 걸러진 줄에만 하는 게 낫다. trace_id 하나를 찾을 때 `| json | trace_id="..."`보다 `|= "c31261b4..."`가 빠른 이유다.
+
+## 로그를 다듬을 때 자주 하는 실수
+
+현장에서 자주 보는 것들을 모았다.
+
+- 같은 오류를 계층마다 찍는다. DB 계층에서 error, 서비스 계층에서 error, 컨트롤러에서 또 error. 한 번의 실패가 세 줄이 되고 오류 건수가 세 배로 보인다. 오류는 처리하는 곳에서 한 번만 남기고, 아래 계층은 오류를 감싸서 위로 던진다.
+- 오류 객체를 문자열로 바꿔 남긴다. `msg: err.toString()`은 스택을 잃는다. pino는 `log.error({ err }, "...")`처럼 `err` 필드로 넘기면 기본 serializer가 type, message, stack을 나눠 남긴다.
+- 반복문 안에서 info를 찍는다. 주문 하나에 상품 100개면 줄 100개다. 반복이 끝난 뒤 개수와 요약을 한 줄로 남긴다.
+- 로그로 숫자를 센다. 샘플링을 켜거나 수집기가 줄을 버리는 순간 그래프가 틀린다. 세는 일은 [지표](/posts/metrics-types)가 맡는다.
+- 사람이 읽기 좋게 개발 환경의 예쁜 출력(`pino-pretty`)을 운영에서도 켠다. 운영에는 JSON 그대로 내보내고, 보기 좋은 출력은 개발자 화면에서만 쓴다(`node app.js | pino-pretty`).
+
+## 처음 그 줄을 다시 쓰면
+
+grep과 awk로 칸을 세던 처음 장면의 줄은, 같은 내용을 필드로 나눠 JSON 한 줄로 남기는 것만으로 jq와 LogQL이 바로 묻는 데이터가 됐다. 거기에 요청을 잇는 trace_id, 남기기 전에 가린 개인정보, 오류와 느린 요청은 지키고 나머지만 고르는 규칙을 더하면 로그가 장애 때 실제로 답을 주는 도구가 된다. 로그가 지표·trace와 어떻게 나눠 일하는지는 [관측 가능성 기본](/posts/observability-basics)에 정리했다.
+
+## 면접에서 나올 만한 질문
+
+### 구조화 로그는 무엇이고 왜 쓰나요?
+
+로그 한 줄을 문장이 아니라 필드가 있는 데이터(보통 JSON 한 줄)로 남기는 방식이다. 바뀌는 값을 필드로 빼 두면 grep과 awk로 칸을 세지 않고도 jq나 LogQL로 필드별로 거르고 묶고 셀 수 있다. 메시지 형식이 조금 바뀌어도 쿼리가 깨지지 않는다. 필드 이름과 타입을 팀 전체가 일관되게 지키는 것이 함께 따라와야 한다.
+
+### 로그 레벨은 어떻게 나누나요?
+
+이 줄을 보고 누가 무엇을 해야 하는지로 나눈다. error는 실패해서 누군가 봐야 할 때, warn은 지금은 처리됐지만 그대로 두면 문제가 될 때, info는 정상적인 중요한 사건, debug는 원인 분석용 자세한 단계다. 운영에서는 debug를 꺼 두고 필요할 때만 재배포 없이 켤 수 있게 만든다. 실습에서는 debug를 켜자 같은 요청의 로그가 46% 늘었다.
+
+### 여러 서비스에 걸친 요청의 로그를 어떻게 한 번에 찾나요?
+
+요청마다 ID를 정해 모든 줄에 넣고, 다른 서비스를 부를 때 헤더로 넘긴다. OpenTelemetry를 쓰면 trace_id를 그 ID로 쓰면 되고, pino의 mixin처럼 줄을 쓸 때마다 현재 span의 trace_id를 붙이면 코드 곳곳에서 넘기지 않아도 된다. 저장소에서는 그 ID를 레이블이 아니라 본문 필드로 두고 문자열 검색으로 찾는다.
+
+### 로그에서 개인정보를 어떻게 막나요?
+
+남기기 전에 가린다. 로거의 redact로 정해 둔 경로를 가리고, URL·오류 메시지·요청 본문처럼 값이 섞여 들어오는 자리는 serializer로 다듬고, 수집기에서 패턴으로 한 번 더 지운다. 실습에서는 user.email을 가려 뒀는데 이메일이 쿼리 문자열로 들어와 req.url로 새어 나갔다. 경로 지정 방식은 정해 둔 자리만 지키기 때문에 여러 겹으로 막고, 애초에 민감한 값을 URL에 싣지 않게 API를 고친다.
+
+### 로그 비용이 너무 많이 나옵니다. 어떻게 줄이나요?
+
+오류와 느린 요청은 전부 남기고 나머지 성공 요청만 비율로 고른다. 고를 때 trace_id로 정하면 여러 서비스가 같은 요청을 똑같이 남기거나 버려서 남긴 요청을 끝까지 따라갈 수 있다. 실습에서는 이렇게 해서 크기가 15.6%로 줄었고 오류와 느린 요청은 하나도 잃지 않았다. 레벨별 보관 기간을 다르게 두고, 고른 뒤의 로그로는 개수를 세지 않는다.
+
+### Loki에서 trace_id나 사용자 ID를 레이블로 두면 안 되는 이유는요?
+
+Loki는 레이블 조합마다 스트림을 만들고 레이블만 색인한다. 요청마다 다른 값을 레이블로 두면 스트림이 요청 수만큼 생겨 색인이 커지고 작은 덩어리가 넘쳐 느려진다. 레이블은 app, env, level처럼 값 종류가 적은 것만 두고, trace_id는 본문에 둔 채 `|=` 같은 줄 거르기로 찾는다. 자주 거르는 필드는 구조화 메타데이터에 둔다.
+
+### 컨테이너가 OOMKilled로 죽었는데 마지막 로그가 없습니다. 왜 그럴까요?
+
+로거가 버퍼를 두고 비동기로 쓰고 있었다면, 커널이 SIGKILL로 프로세스를 죽일 때 버퍼에 남은 줄이 함께 사라진다. 실습에서 기본 설정의 pino로 1만 줄을 쓰고 바로 SIGKILL을 보내자 첫 줄만 남았다. 오류와 치명적 오류는 동기로 쓰거나 종료 전에 flush하고, 힙 크기를 메모리 한도보다 작게 잡아 Node.js가 먼저 오류를 내며 남길 기회를 갖게 한다.

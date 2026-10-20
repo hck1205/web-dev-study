@@ -2,6 +2,125 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rollback-strategy": {
+    "links": [
+      "k8s-deployment",
+      "k8s-deploy-pipeline-eks",
+      "helm-release-lifecycle",
+      "ci-cd-basics",
+      "build-caching",
+      "feature-flags",
+      "zero-downtime-migrations",
+      "db-migration-tools",
+      "dead-letter-queue"
+    ],
+    "mentions": [
+      "git-undo",
+      "k8s-configmap",
+      "postgres-operations",
+      "redis-basics",
+      "cookie-session-login"
+    ]
+  },
+  "feature-flags": {
+    "links": [
+      "ab-testing",
+      "ci-cd-basics",
+      "rollback-strategy"
+    ],
+    "mentions": [
+      "observability-basics",
+      "autoscaling",
+      "distributed-tracing",
+      "redis-basics"
+    ]
+  },
+  "build-caching": {
+    "links": [
+      "dockerfile-image-layers",
+      "github-actions-docker-ecr",
+      "ci-cd-basics",
+      "feature-flags",
+      "rollback-strategy"
+    ],
+    "mentions": [
+      "git-internals-basics"
+    ]
+  },
+  "ci-cd-basics": {
+    "links": [
+      "github-actions-docker-ecr",
+      "k8s-deploy-pipeline-eks",
+      "network-config-cicd",
+      "build-caching",
+      "feature-flags",
+      "rollback-strategy",
+      "k8s-configmap",
+      "k8s-secret",
+      "git-branching-strategy"
+    ],
+    "mentions": [
+      "ab-testing",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "dns"
+    ]
+  },
+  "structured-logging": {
+    "links": [
+      "observability-basics",
+      "distributed-tracing",
+      "monitoring-basics",
+      "metrics-types"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "docker-container-basics",
+      "event-loop",
+      "linux-grep-awk-sed"
+    ]
+  },
+  "metrics-types": {
+    "links": [
+      "monitoring-basics",
+      "observability-basics",
+      "db-type-time-series",
+      "network-monitoring",
+      "structured-logging"
+    ],
+    "mentions": [
+      "latency-bandwidth-throughput"
+    ]
+  },
+  "monitoring-basics": {
+    "links": [
+      "observability-basics",
+      "metrics-types",
+      "structured-logging",
+      "network-monitoring"
+    ],
+    "mentions": [
+      "service-discovery",
+      "microservices",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "observability-basics": {
+    "links": [
+      "monitoring-basics",
+      "metrics-types",
+      "structured-logging",
+      "distributed-tracing",
+      "db-type-time-series"
+    ],
+    "mentions": [
+      "http-status-codes",
+      "grpc"
+    ]
+  },
   "scaling-horizontal-vertical": {
     "links": [
       "autoscaling",
@@ -398,6 +517,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "distributed-tracing": {
     "links": [
+      "observability-basics",
+      "structured-logging",
       "db-index",
       "event-driven-architecture",
       "service-mesh",
@@ -442,6 +563,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "network-monitoring": {
     "links": [
+      "observability-basics",
+      "metrics-types",
       "network-troubleshooting-by-layer",
       "traffic-shaping-qos",
       "tcp-reliability-congestion",
@@ -491,7 +614,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
-      "db-type-key-value"
+      "db-type-key-value",
+      "build-caching"
     ]
   },
   "crdt": {
@@ -738,6 +862,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "layer-ip-routing-icmp",
       "kubernetes-ingress",
+      "build-caching",
       "security-groups-nacl",
       "what-happens-google-com",
       "layer-ip-addressing",
@@ -1416,6 +1541,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "exponential-backoff-jitter",
       "rabbitmq-basics",
       "kafka-basics",
+      "structured-logging",
       "idempotency-key",
       "message-delivery-semantics"
     ],
@@ -1525,6 +1651,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-abstract-factory"
     ],
     "mentions": [
+      "observability-basics",
       "sql-batch-timeout-pool",
       "grpc"
     ]
@@ -1541,7 +1668,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
-      "http-status-codes"
+      "http-status-codes",
+      "structured-logging"
     ]
   },
   "pattern-prototype": {
@@ -2153,6 +2281,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-basics",
       "service-mesh",
+      "rollback-strategy",
       "k8s-hpa"
     ]
   },
@@ -2551,6 +2680,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-ignore-config"
     ],
     "mentions": [
+      "build-caching",
       "linux-files-permissions",
       "git-staging-area",
       "db-modeling-normalization"
@@ -3019,6 +3149,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational"
     ],
     "mentions": [
+      "metrics-types",
       "db-partitioning",
       "sqld-group-by-having",
       "db-replication-sharding",
@@ -3349,7 +3480,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "git-tips-advanced",
       "git-branching-strategy",
-      "git-large-files-secrets"
+      "git-large-files-secrets",
+      "build-caching"
     ]
   },
   "git-branch-merge": {
@@ -4185,6 +4317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "micro-frontends": {
     "links": [],
     "mentions": [
+      "build-caching",
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
       "microservices",
@@ -4317,6 +4450,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "grpc",
+      "observability-basics",
       "db-type-columnar-olap",
       "rabbitmq-basics",
       "client-data-cache",

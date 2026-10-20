@@ -9,8 +9,10 @@ import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { BUILD_CACHING } from "./build-caching";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
+import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
@@ -63,6 +65,7 @@ import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
+import { FEATURE_FLAGS } from "./feature-flags";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
@@ -146,9 +149,11 @@ import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
+import { METRICS_TYPES } from "./metrics-types";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
+import { MONITORING_BASICS } from "./monitoring-basics";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
@@ -162,6 +167,7 @@ import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { OBSERVABILITY_BASICS } from "./observability-basics";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
@@ -227,6 +233,7 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
+import { ROLLBACK_STRATEGY } from "./rollback-strategy";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
@@ -256,6 +263,7 @@ import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
+import { STRUCTURED_LOGGING } from "./structured-logging";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
@@ -292,8 +300,10 @@ export const QUESTION_SETS = [
   BIG_O_NOTATION,
   BLOOM_FILTER,
   BROWSER_FETCH,
+  BUILD_CACHING,
   CACHING_STRATEGIES,
   CDN_EDGE_ANYCAST,
+  CI_CD_BASICS,
   CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
@@ -346,6 +356,7 @@ export const QUESTION_SETS = [
   EVENT_LOOP,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
+  FEATURE_FLAGS,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
   GATEWAY,
@@ -429,9 +440,11 @@ export const QUESTION_SETS = [
   MERKLE_TREE,
   MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
+  METRICS_TYPES,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
+  MONITORING_BASICS,
   MVC_PATTERN,
   N_PLUS_ONE_QUERIES,
   NETWORK_CONFIG_CICD,
@@ -445,6 +458,7 @@ export const QUESTION_SETS = [
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  OBSERVABILITY_BASICS,
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
@@ -510,6 +524,7 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   RETRIES,
+  ROLLBACK_STRATEGY,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
@@ -539,6 +554,7 @@ export const QUESTION_SETS = [
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
   STREAMING_SSR_SUSPENSE,
+  STRUCTURED_LOGGING,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
   TERRAFORM_BASICS,

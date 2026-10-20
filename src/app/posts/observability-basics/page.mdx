@@ -1,0 +1,453 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("observability-basics");
+
+"쿠폰을 넣고 주문하면 가끔 한참 걸린다"는 문의가 들어왔다. 대시보드를 열었다. 주문 API의 오류율은 평소처럼 2% 안팎이고, 중간값(p50) 응답은 19.5ms다. p99가 0.37초로 조금 높지만 원래 가끔 튀던 값이다. 그래프만 보면 아무 문제가 없다. 그런데 문의한 사람은 분명히 느렸다.
+
+대시보드는 미리 정해 둔 질문에만 답한다. "주문 API 오류율이 몇 %인가"는 답하지만, "쿠폰을 넣은 주문만 느린가"는 아무도 미리 묻지 않았으니 답이 없다. 관측 가능성(observability)은 이렇게 미리 생각하지 못한 질문을 장애가 난 뒤에 던져도 답할 수 있는 성질을 말한다. 이 글은 그 성질이 무엇이고, 지표·로그·trace가 각자 무엇을 맡으며 어떻게 이어지는지, 그리고 OpenTelemetry가 그 사이에서 무슨 역할을 하는지 실습으로 따라간다.
+
+이 주제의 다른 글: 무엇을 지켜볼지 정하는 [모니터링 기본](/posts/monitoring-basics), 숫자를 담는 그릇인 [지표 타입](/posts/metrics-types), 사건을 남기는 [구조화 로그](/posts/structured-logging), 요청을 서비스 너머로 따라가는 [분산 추적](/posts/distributed-tracing). 이 글은 그 넷을 묶는 큰 그림만 맡는다.
+
+실습 환경은 Ubuntu 24.04, Node.js 22, Prometheus 3.5.0, Loki 3.5.3, OpenTelemetry Collector contrib 0.132.0이다. 앱은 `prom-client` 15.1.3으로 지표를, `pino` 10.4.0으로 JSON 로그를, OpenTelemetry JS SDK(`@opentelemetry/sdk-node` 0.223.0)로 trace를 남긴다.
+
+## 아는 질문과 모르는 질문
+
+모니터링과 관측 가능성은 자주 같은 말처럼 쓰이지만 출발점이 다르다.
+
+모니터링은 "이미 아는 실패"를 지켜본다. 디스크가 차면 안 된다는 걸 아니까 디스크 사용률을 그린다. 5xx가 늘면 안 된다는 걸 아니까 오류율에 알림을 건다. 질문을 먼저 정하고, 그 답이 될 숫자를 모은다.
+
+관측 가능성은 원래 제어 이론의 말이다. 시스템 바깥으로 나오는 출력만 보고 안의 상태를 얼마나 알아낼 수 있느냐를 뜻한다. 소프트웨어로 옮기면 "코드를 새로 배포하지 않고도, 지금 남기고 있는 데이터만으로 처음 보는 질문에 답할 수 있는가"가 된다. 쿠폰 장면에서 필요한 건 바로 이것이다. 쿠폰이 원인일 거라고 미리 알았다면 대시보드에 쿠폰별 그래프를 만들어 뒀을 것이다. 모르니까 문제다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="질문을 언제 정하느냐가 다르다"
+  nodes={[
+    { id: "k", label: "아는 실패", sub: "디스크 풀, 5xx 증가", x: 90, y: 50, w: 150 },
+    { id: "u", label: "모르는 실패", sub: "쿠폰 주문만 느림", x: 310, y: 50, w: 150 },
+    { id: "m", label: "모니터링", sub: "질문을 먼저 정한다", x: 90, y: 140, w: 150 },
+    { id: "o", label: "관측 가능성", sub: "질문을 나중에 던진다", x: 310, y: 140, w: 150 },
+    { id: "d", label: "대시보드·알림", x: 90, y: 225, w: 140 },
+    { id: "e", label: "풍부한 이벤트", sub: "필드로 자르고 묶기", x: 310, y: 225, w: 150 },
+  ]}
+  edges={[
+    { from: "k", to: "m" },
+    { from: "u", to: "o" },
+    { from: "m", to: "d" },
+    { from: "o", to: "e" },
+    { from: "d", to: "o", dashed: true, label: "이상 신호" },
+  ]}
+/>
+
+둘은 경쟁하지 않는다. 점선처럼 모니터링이 "뭔가 이상하다"를 먼저 알려 주고, 관측 가능성이 "왜"를 찾는다. 모니터링 없이 관측 가능성만 있으면 문제가 났는지도 모르고, 관측 가능성 없이 모니터링만 있으면 문제가 났다는 것만 안다.
+
+모르는 질문에 답하려면 데이터가 두 가지를 갖춰야 한다. 하나는 요청 하나하나의 맥락(어떤 쿠폰, 어떤 사용자, 어떤 버전)이 남아 있어야 한다는 것, 다른 하나는 그 맥락으로 나중에 자르고 묶을 수 있어야 한다는 것이다. 숫자 하나로 미리 합쳐 버린 데이터는 다시 쪼갤 수 없다.
+
+## 세 가지 신호는 서로 다른 질문에 답한다
+
+흔히 지표(metric), 로그(log), trace를 관측 가능성의 세 기둥이라고 부른다. 셋은 데이터를 줄이는 방식이 달라서 잘 답하는 질문도 다르다.
+
+지표는 일정한 간격으로 센 숫자다. "지난 1분 동안 주문 API 요청이 초당 몇 개였나", "그중 몇 %가 실패했나"처럼 추세와 비율에 강하다. 요청이 천 개든 백만 개든 저장하는 양이 거의 같다. 대신 미리 정한 레이블(route, status)로만 쪼갤 수 있다.
+
+로그는 일어난 일 하나를 한 줄로 남긴다. 요청마다 쿠폰, 사용자, 걸린 시간을 다 적을 수 있어서 맥락이 가장 풍부하다. 대신 요청 수만큼 쌓인다.
+
+trace는 요청 하나가 여러 서비스와 DB를 지나는 동안 각 구간에 쓴 시간을 나무 모양으로 남긴다. "이 요청이 어디서 시간을 썼나"에 답한다. 자세한 구조는 [분산 추적](/posts/distributed-tracing)에 있다.
+
+실습 앱에 요청 12,000개를 보내고 세 신호가 차지한 양을 재 봤다.
+
+```bash
+# trace: Collector가 파일로 내보낸 span 수
+jq '[.resourceSpans[].scopeSpans[].spans[]] | length' traces.jsonl | paste -sd+ | bc
+# 로그 두 파일(실행마다 요청 6,000건)과 trace 파일 크기
+ls -l traces.jsonl app1.log app.log
+# 지표: Prometheus가 scrape 한 번에 가져가는 샘플 수
+promtool query instant http://127.0.0.1:19390 'scrape_samples_scraped{job="shop"}'
+```
+
+```text
+12000
+-rw-r--r-- 1 root root 2043387 Oct 20 19:54 app.log
+-rw-r--r-- 1 root root 2109315 Oct 20 19:52 app1.log
+-rw-r--r-- 1 root root 9990256 Oct 20 19:54 traces.jsonl
+scrape_samples_scraped{instance="127.0.0.1:19311", job="shop"} => 131 @[1792525990.663]
+```
+
+로그는 한 줄에 약 350바이트, span은 압축하지 않은 JSON으로 약 830바이트다. 둘 다 요청 수에 비례한다. 지표는 앱 하나가 scrape마다 131개 숫자를 내놓을 뿐이고, 요청이 열 배가 되어도 그대로다. 그래서 오래 보관하고 넓게 훑는 건 지표, 깊게 파는 건 로그와 trace가 맡는다. 저장소에 넣으면 압축되니 실제 비용은 이보다 작지만, "요청 수에 비례하느냐 아니냐"라는 차이는 그대로다.
+
+아래 그림은 실습 앱에서 세 신호가 각자 어디로 가는지 보여 준다. 다음을 누르면 경로가 하나씩 그려진다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="한 앱에서 나간 세 신호가 각자의 저장소로 간다"
+  zones={[
+    { id: "app", label: "앱 프로세스", x: 8, y: 16, w: 150, h: 270, tone: "private" },
+    { id: "obs", label: "관측 백엔드", x: 190, y: 16, w: 202, h: 270, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "a", label: "shop", sub: ":19311", x: 83, y: 150, icon: "server" },
+    { id: "p", label: "Prometheus", sub: ":19390", x: 300, y: 66, icon: "db", w: 116 },
+    { id: "l", label: "Loki", sub: ":19310", x: 300, y: 150, icon: "db" },
+    { id: "c", label: "Collector", sub: "OTLP :19318", x: 300, y: 236, icon: "router", w: 116 },
+  ]}
+  links={[
+    { from: "p", to: "a", label: "GET /metrics" },
+    { from: "a", to: "l", label: "push" },
+    { from: "a", to: "c", label: "OTLP" },
+  ]}
+  steps={[
+    { path: ["p", "a", "p"], packet: "scrape", title: "지표는 가져간다", detail: "Prometheus가 5초마다 앱의 /metrics를 읽어 간다. 앱은 지금까지 센 숫자만 내놓는다. 요청 하나하나는 남지 않는다.", payload: 'http_requests_total{route="/api/orders",status="500"} 50' },
+    { path: ["a", "l"], packet: "log", title: "로그는 보낸다", detail: "요청이 끝날 때마다 JSON 한 줄을 쓰고, 수집기가 모아서 Loki로 밀어 넣는다. 쿠폰, 사용자, 걸린 시간 같은 맥락이 그대로 남는다." },
+    { path: ["a", "c"], packet: "spans", title: "span도 보낸다", detail: "끝난 span을 모았다가 OTLP로 Collector에 보낸다. Collector가 고르고 바꿔서 원하는 백엔드로 넘긴다." },
+    { path: ["a"], highlight: ["p", "l", "c"], title: "세 신호를 잇는 열쇠", detail: "로그 한 줄, span 하나, 지표의 exemplar가 모두 같은 trace_id를 갖고 있다. 이 값이 없으면 세 저장소는 서로 모르는 남이 된다." },
+  ]}
+/>
+
+마지막 단계가 이 글에서 가장 중요하다. 세 기둥이라는 말 때문에 셋을 따로 세워 두는 경우가 많은데, 따로 있으면 장애 때 사람이 세 화면을 오가며 시각을 맞춰 봐야 한다. 관측 가능성은 신호 개수가 아니라 신호 사이를 건너갈 수 있느냐로 정해진다.
+
+## 쿠폰 하나가 p99를 끌어올렸다
+
+처음 장면을 실습으로 다시 만들었다. 주문 3,000건 중 60건(2%)만 `?coupon=FALL10`을 붙였고, 쿠폰 확인에 300ms 남짓 걸리게 해 두었다. 지표에는 쿠폰 레이블이 없다. 먼저 대시보드가 보는 숫자다.
+
+```bash
+# 주문 API 응답 시간 중간값과 p99, 오류율 (부하가 끝난 시점 기준 2분)
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/orders"}[2m] @ 1792526380)))'
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route="/api/orders"}[2m] @ 1792526380)))'
+promtool query instant http://127.0.0.1:19390 \
+  'sum(rate(http_requests_total{route="/api/orders",status=~"5.."}[2m] @ 1792526380)) / sum(rate(http_requests_total{route="/api/orders"}[2m] @ 1792526380))'
+```
+
+```text
+{} => 0.01950653983353151 @[1792526564.361]
+{} => 0.3729166666666668 @[1792526564.429]
+{} => 0.020655737704918034 @[1792526564.569]
+```
+
+p99가 0.37초라는 건 "100건 중 1건쯤은 0.37초 넘게 걸린다"는 뜻이다. 지표가 할 수 있는 말은 여기까지다. 어떤 1건인지는 모른다. route와 status 말고는 쪼갤 칼이 없기 때문이다.
+
+로그에는 요청마다 쿠폰 필드가 남아 있다. Loki에서 "250ms 넘게 걸린 주문"을 아무 필드로나 묶어 보면 된다. 처음에는 무엇으로 묶을지 몰라 사용자, 버전, 쿠폰을 차례로 넣어 보다가 쿠폰에서 걸렸다.
+
+```bash
+# 250ms 넘은 주문을 쿠폰 값으로 묶어 센다 (LogQL)
+logcli instant-query --now=2026-10-20T20:00:00Z \
+  'sum by (coupon) (count_over_time({app="shop"} | json | route="/api/orders" | duration_ms > 250 [2m]))'
+```
+
+```text
+[
+  {
+    "metric": {
+      "coupon": "FALL10"
+    },
+    "value": [
+      1792526400,
+      "60"
+    ]
+  }
+]
+```
+
+느린 주문 60건이 전부 같은 쿠폰이다. 쿠폰이 없는 주문은 한 건도 없다. 같은 로그 파일을 jq로 묶어도 같은 답이 나온다.
+
+```bash
+# 쿠폰 값별 건수, 평균, 최댓값
+jq -s '[.[] | select(.route=="/api/orders")] | group_by(.coupon)
+  | map({coupon: (.[0].coupon // "-"), n: length,
+         avg_ms: ((map(.duration_ms)|add/length)*10|round/10),
+         max_ms: (map(.duration_ms)|max)})' app3.log
+```
+
+```text
+[
+  {
+    "coupon": "-",
+    "n": 2940,
+    "avg_ms": 20.2,
+    "max_ms": 155.2
+  },
+  {
+    "coupon": "FALL10",
+    "n": 60,
+    "avg_ms": 352.7,
+    "max_ms": 403.1
+  }
+]
+```
+
+아래 그림은 로그 줄을 하나씩 읽으며 필드 값별로 묶는 과정이다. 질문을 바꾸면(사용자별, 버전별) 같은 데이터를 다시 묶으면 된다. 지표는 이미 합쳐진 숫자라 이렇게 다시 묶을 수 없다.
+
+<AlgoTrace
+  caption="느린 주문 로그를 coupon 필드로 묶기"
+  memoryLabel="coupon별 느린 건수"
+  cells={["- 21ms", "FALL10 352ms", "- 18ms", "FALL10 371ms", "- 155ms", "FALL10 340ms"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "쿠폰 없음, 21ms다. 250ms 조건에 걸리지 않아 건너뛴다." },
+    { pointer: 1, memory: ["FALL10: 1"], caption: "FALL10, 352ms. 조건에 맞아 FALL10 칸에 하나 센다." },
+    { pointer: 2, memory: ["FALL10: 1"], caption: "쿠폰 없음, 18ms. 건너뛴다." },
+    { pointer: 3, memory: ["FALL10: 2"], caption: "FALL10이 또 느리다. 둘째다." },
+    { pointer: 4, memory: ["FALL10: 2"], caption: "쿠폰 없는 가장 느린 요청도 155ms라 조건 밖이다." },
+    { pointer: 5, found: [1, 3, 5], memory: ["FALL10: 3"], caption: "느린 요청이 모두 같은 값으로 모였다. 필드를 미리 정하지 않았어도 나중에 묶을 수 있었다." },
+  ]}
+/>
+
+이 차이가 관측 가능성의 실체다. 요청 하나를 넓은 이벤트(wide event)로 남기면, 즉 필드를 넉넉히 담은 한 줄로 남기면, 나중에 어떤 질문이 와도 그 필드로 자르고 묶을 수 있다. 이 생각을 밀어붙인 도구(Honeycomb 같은 이벤트 저장소)는 미리 합친 지표보다 이런 이벤트를 중심에 두고, 숫자가 필요할 때 이벤트에서 그때그때 계산한다.
+
+## 지표의 튄 점에서 trace와 로그로 건너가기
+
+쿠폰처럼 운 좋게 로그 필드로 답이 나올 때도 있지만, 보통은 "이 느린 요청 하나를 통째로 보고 싶다"가 먼저다. 그 다리가 exemplar다. 히스토그램의 칸마다 "이 칸에 들어간 요청 중 하나의 trace_id"를 붙여 두는 기능이다. `prom-client`에서 `enableExemplars`를 켜고 OpenMetrics 형식으로 내보내면 `/metrics`에 이렇게 나온다.
+
+```text
+http_request_duration_seconds_bucket{le="1",method="GET",route="/api/search"} 3000 # {trace_id="5c78891d24b6ca2f98001fc160d2cfb8"} 0.892049173 1792525929.025
+```
+
+<UrlAnatomy
+  caption="exemplar가 붙은 히스토그램 한 줄 (실습 값)"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "series", display: 'http_request_duration_seconds_bucket{le="1",route="/api/search"}', title: "시계열", description: "검색 API에서 1초 이하로 끝난 요청 수를 세는 칸이다. method 레이블은 줄여서 뺐다.", required: true },
+    { key: "value", display: "3000", title: "누적 개수", description: "지금까지 1초 이하로 끝난 요청이 3,000건이다. 이 칸 자체는 평범한 카운터다.", required: true },
+    { key: "hash", display: "#", title: "exemplar 시작", description: "OpenMetrics 형식에서 # 뒤는 이 칸의 예시 하나다. 예전 Prometheus 텍스트 형식(0.0.4)에는 이 부분이 없다." },
+    { key: "labels", display: '{trace_id="5c78891d…"}', title: "예시의 레이블", description: "이 칸에 마지막으로 들어간 요청의 trace_id다. 이 값을 들고 trace 저장소와 로그 저장소로 건너간다." },
+    { key: "obs", display: "0.892049173", title: "그 요청의 실제 값", description: "그 요청이 걸린 시간 0.892초다. 칸의 경계(1초)가 아니라 실제 측정값이다." },
+    { key: "ts", display: "1792525929.025", title: "관측 시각", description: "그 요청이 끝난 시각(유닉스 초)이다." },
+  ]}
+/>
+
+Prometheus 3.5는 `--enable-feature=exemplar-storage`로 띄워야 exemplar를 저장한다. 저장된 값은 `/api/v1/query_exemplars`로 꺼낸다.
+
+```bash
+# 부하를 준 19:50~19:53 사이, 검색 API 히스토그램 칸마다 붙은 exemplar 중 마지막 것만
+S=$(date -d 2026-10-20T19:50:00Z +%s); E=$(date -d 2026-10-20T19:53:00Z +%s)
+curl -s -g "127.0.0.1:19390/api/v1/query_exemplars?query=http_request_duration_seconds_bucket{route=\"/api/search\"}&start=$S&end=$E" \
+  | jq -c '.data[] | {le: .seriesLabels.le, last: .exemplars[-1] | {trace_id: .labels.trace_id, value}}'
+```
+
+```text
+{"le":"0.025","last":{"trace_id":"e8e889c793508a548312f5f12e40ac7c","value":"0.0241866"}}
+{"le":"0.05","last":{"trace_id":"abeaeacb924d8c90e05435b3518bac47","value":"0.033298272"}}
+{"le":"0.1","last":{"trace_id":"9ef35c9df97f66eac52dc545333d121e","value":"0.051813231"}}
+{"le":"0.25","last":{"trace_id":"c22a497f65c8d0e3c1429acdc7775ac7","value":"0.140780202"}}
+{"le":"1.0","last":{"trace_id":"5c78891d24b6ca2f98001fc160d2cfb8","value":"0.892049173"}}
+```
+
+느린 칸(`le="1.0"`)의 trace_id를 들고 두 저장소를 찾아갔다. 아래 그림에서 다음을 누르면 순서대로 건너간다.
+
+<SequenceDiagram
+  caption="p99가 튄 그래프에서 그 요청의 로그 한 줄까지"
+  actors={[
+    { id: "op", label: "운영자" },
+    { id: "pr", label: "Prometheus" },
+    { id: "tr", label: "trace 저장소" },
+    { id: "lk", label: "Loki" },
+  ]}
+  steps={[
+    { from: "op", to: "pr", label: "p99 그래프", title: "튄 점을 본다", detail: "검색 API의 p99가 0.9초 가까이 올라간 구간을 고른다. 여기까지는 몇 건이 느렸는지만 안다." },
+    { from: "pr", to: "op", label: "exemplar", title: "느린 칸의 예시 하나", detail: "1초 칸에 붙은 exemplar가 trace_id 하나를 돌려준다.", payload: "trace_id=5c78891d24b6ca2f98001fc160d2cfb8 value=0.892" },
+    { from: "op", to: "tr", label: "trace 열기", title: "그 요청의 구간들", detail: "trace 저장소에서 같은 id를 찾는다. 서버 span 하나가 894.9ms다. 여러 서비스를 거쳤다면 어느 구간이 길었는지 여기서 보인다.", payload: 'name=GET url.path=/api/search status=200\nstart=...28.133 end=...29.028' },
+    { from: "op", to: "lk", label: "|= trace_id", title: "같은 id로 로그를 찾는다", detail: "그 요청이 남긴 로그 한 줄에는 사용자, 쿼리, 상태 코드가 다 있다. trace에 없는 업무 맥락은 로그가 갖고 있다." },
+    { from: "lk", to: "op", label: "로그 1줄", title: "세 신호가 한 요청으로 모인다", detail: "숫자(지표) → 구간(trace) → 맥락(로그)을 같은 열쇠로 건넜다. 시각을 맞춰 가며 화면을 오갈 필요가 없다." },
+  ]}
+/>
+
+```bash
+# 같은 trace_id로 로그 검색
+logcli query --since=1h --limit=3 '{app="shop"} |= "5c78891d24b6ca2f98001fc160d2cfb8"'
+```
+
+```text
+2026-10-20T19:52:09Z {} {"level":30,"time":"2026-10-20T19:52:09.028Z","service":"shop","trace_id":"5c78891d24b6ca2f98001fc160d2cfb8","span_id":"bd8f94186f25d906","req":{"method":"GET","url":"/api/search","headers":{"authorization":"[REDACTED]"}},"route":"/api/search","status":200,"duration_ms":892,"user":{"id":"u2190","email":"[REDACTED]"},"msg":"request done"}
+```
+
+trace_id를 로그 필드에 넣는 방법과 개인정보를 가리는 `[REDACTED]`는 [구조화 로그](/posts/structured-logging)에서 자세히 다룬다. 여기서 볼 것은 trace_id를 Loki의 레이블이 아니라 로그 본문에 두고 `|=`로 찾았다는 것이다. 요청마다 다른 값을 레이블로 만들면 저장소가 스트림을 요청 수만큼 만들다가 무너진다. 이건 다음 절의 이야기와 같다.
+
+## 무엇이든 레이블로 만들 수는 없다
+
+"그럼 지표에도 쿠폰 레이블을 붙이면 되지 않나"라는 생각이 든다. 쿠폰 종류가 몇 개뿐이면 그래도 된다. 문제는 사용자 ID나 trace_id처럼 값이 끝없이 늘어나는 필드다. 지표 저장소는 레이블 값 조합마다 시계열(series)을 하나씩 만든다. 시계열 수는 레이블별 값 개수를 곱한 만큼이고, 히스토그램이면 거기에 칸 수가 또 곱해진다. 이 숫자를 카디널리티라고 부른다.
+
+실습에서 사용자 ID 레이블 하나를 붙였더니 Prometheus가 들고 있는 시계열이 1,023개에서 5,495개로 늘었다. 측정 과정과 scrape 크기 변화는 [지표 타입 글](/posts/metrics-types)에, 저장소 안에서 왜 비싼지는 [시계열 DB 글](/posts/db-type-time-series)에 있다. 아래에서 레이블 설계를 숫자로 바꿔 보자. 지표 목록을 받아 시계열 수를 돌려주는 함수다. 히스토그램은 칸마다 하나, `+Inf` 칸 하나, `_sum`과 `_count`가 하나씩이고, summary는 분위수마다 하나에 `_sum`, `_count`가 붙는다.
+
+<CodePlayground
+  caption="레이블 설계가 시계열 몇 개가 되는지 세기"
+  functionName="seriesCount"
+  initialCode={`// metrics: [{ type: "counter" | "gauge" | "histogram" | "summary",
+//             labels: [레이블별 값 개수...], buckets?: 칸 수(+Inf 제외), quantiles?: 분위수 개수 }]
+function seriesCount(metrics) {
+  return 0;
+}`}
+  solution={`function seriesCount(metrics) {
+  let total = 0;
+  for (const m of metrics) {
+    const combos = m.labels.reduce((a, n) => a * n, 1);
+    const per = m.type === "histogram" ? m.buckets + 1 + 2
+      : m.type === "summary" ? m.quantiles + 2 : 1;
+    total += combos * per;
+  }
+  return total;
+}`}
+  tests={[
+    { args: [[{ type: "counter", labels: [2, 3, 4] }]], expected: 24, label: "method 2 × route 3 × status 4" },
+    { args: [[{ type: "histogram", labels: [2], buckets: 11 }]], expected: 28, label: "route 2개, 기본 칸 11개" },
+    { args: [[{ type: "summary", labels: [2], quantiles: 3 }]], expected: 10, label: "summary 분위수 3개" },
+    { args: [[{ type: "gauge", labels: [] }]], expected: 1, label: "레이블 없는 게이지" },
+    { args: [[{ type: "counter", labels: [2, 5000] }]], expected: 10000, label: "사용자 5,000명을 레이블로" },
+    { args: [[{ type: "histogram", labels: [3, 2, 5000], buckets: 11 }, { type: "counter", labels: [3, 2, 4] }]], expected: 420024, label: "히스토그램에 사용자까지" },
+  ]}
+/>
+
+둘째와 셋째 테스트 값은 실습 앱의 `/metrics`에서 실제로 센 줄 수(28줄, 10줄)와 같다. 마지막 테스트가 현실의 함정이다. 사용자 5,000명은 작은 서비스인데도 히스토그램 하나가 42만 시계열이 된다.
+
+그래서 역할을 나눈다. 값 종류가 적고 미리 알 수 있는 차원(route, status, region, 배포 버전)은 지표 레이블로, 끝없이 늘어나는 차원(사용자, 주문 번호, trace_id, 쿠폰 코드처럼 사용자가 넣는 값)은 로그와 trace의 필드로 둔다. 쿠폰 장면에서 지표가 답하지 못한 건 실수가 아니라 이 설계의 결과다. 지표는 "이상하다"를 싸게 알려 주고, 로그가 "왜"를 비싸게 답한다.
+
+## OpenTelemetry는 계측과 저장소 사이의 약속
+
+지금까지 앱은 지표를 `prom-client`로, 로그를 `pino`로, trace를 OpenTelemetry로 남겼다. 회사가 trace 저장소를 Jaeger에서 상용 서비스로 바꾸면 어떻게 될까. 예전에는 벤더마다 에이전트와 라이브러리가 달라서 앱 코드의 계측을 통째로 바꿔야 했다.
+
+OpenTelemetry(줄여서 OTel)는 이 문제를 풀려고 생겼다. 2019년에 OpenTracing과 OpenCensus 두 프로젝트가 합쳐져 CNCF 프로젝트가 됐다. OTel 자체는 저장소가 아니다. 계측하는 쪽과 저장하는 쪽 사이의 약속을 정한다. 구성은 넷이다.
+
+- API: 앱 코드가 부르는 인터페이스. `trace.getTracer()`, `meter.createCounter()` 같은 것이다. 구현 없이 불러도 아무 일도 안 하도록 만들어져 있어서, 라이브러리 작성자가 안심하고 넣을 수 있다.
+- SDK: API 뒤에서 실제로 span을 모으고 샘플링하고 내보내는 구현이다. 앱을 띄우는 쪽이 고른다.
+- OTLP: 지표·로그·trace를 보내는 공통 전송 형식이다. HTTP(4318)와 gRPC(4317)가 있다.
+- Collector: OTLP를 받아서 묶고, 걸러 내고, 원하는 백엔드 형식으로 바꿔 보내는 별도 프로세스다.
+
+여기에 시맨틱 컨벤션(semantic conventions)이라는 이름 규칙이 붙는다. HTTP 메서드는 `http.request.method`, 경로는 `url.path`, 상태 코드는 `http.response.status_code`처럼 속성 이름을 정해 둬서, 어느 언어로 계측해도 같은 이름으로 찾을 수 있다. 실습에서 Collector가 파일로 내보낸 span에도 이 이름이 그대로 찍혔다.
+
+```text
+{"traceId":"5c78891d24b6ca2f98001fc160d2cfb8","spanId":"bd8f94186f25d906","name":"GET","kind":2,"start":"1792525928133000000","end":"1792525929027925276","attrs":[{"http.request.method":"GET"},{"url.scheme":"http"},{"url.path":"/api/search"},{"http.response.status_code":"200"}]}
+```
+
+벤더를 바꾸는 장면을 Collector 설정으로 보자. 실습에서는 처음에 파일로만 내보내다가, 앱은 건드리지 않고 Collector 설정에 `debug` 내보내기를 하나 더 붙였다.
+
+```yaml
+# otelcol.yaml: 앱은 이 Collector의 4318 대신 19318로 보낸다
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:19318
+processors:
+  batch: {}
+exporters:
+  debug:
+    verbosity: basic
+  file:
+    path: /path/to/traces.jsonl
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file, debug]   # 백엔드를 바꾸거나 늘릴 때 여기만 고친다
+```
+
+```bash
+# Collector만 다시 띄우고 주문 50건을 보낸 뒤 Collector 로그 확인
+otelcol-contrib --config otelcol.yaml > otelcol2.log 2>&1 &
+node load.js /api/orders 50 5
+grep Traces otelcol2.log
+```
+
+```text
+2026-10-20T19:58:47.925Z	info	Traces	{"resource": {"service.instance.id": "7bbd7851-346c-437a-9b9b-939719c68bba", "service.name": "otelcol-contrib", "service.version": "0.132.0"}, "otelcol.component.id": "debug", "otelcol.component.kind": "exporter", "otelcol.signal": "traces", "resource spans": 1, "spans": 50}
+```
+
+span 50개가 같은 배치에 실려 두 곳으로 갔다. 실제 운영에서는 `file` 대신 `otlphttp`(Jaeger, Tempo, 상용 서비스 대부분이 OTLP를 받는다)를 두거나, 두 백엔드에 한동안 같이 보내며 옮겨 간다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="앱은 Collector만 알고, 백엔드는 Collector 설정으로 바뀐다"
+  zones={[
+    { id: "apps", label: "서비스들", x: 8, y: 16, w: 124, h: 260, tone: "private" },
+    { id: "be", label: "백엔드", x: 268, y: 16, w: 124, h: 260, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "a1", label: "shop", sub: "Node.js", x: 70, y: 80, icon: "server", w: 96 },
+    { id: "a2", label: "billing", sub: "Go", x: 70, y: 210, icon: "server", w: 96 },
+    { id: "c", label: "Collector", sub: "batch·sample", x: 200, y: 145, icon: "router", w: 112 },
+    { id: "j", label: "Jaeger", x: 330, y: 66, icon: "db", w: 96 },
+    { id: "v", label: "Vendor", sub: "OTLP", x: 330, y: 145, icon: "internet", w: 96 },
+    { id: "f", label: "file", x: 330, y: 224, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "a1", to: "c" },
+    { from: "a2", to: "c" },
+    { from: "c", to: "j" },
+    { from: "c", to: "v" },
+    { from: "c", to: "f" },
+  ]}
+  steps={[
+    { path: ["a1", "c"], packet: "OTLP", title: "언어가 달라도 같은 형식", detail: "Node.js 서비스도 Go 서비스도 OTLP로 보낸다. 속성 이름도 시맨틱 컨벤션을 따라 같다." },
+    { path: ["a2", "c", "f"], packet: "spans", title: "지금은 파일로", detail: "Collector가 묶어서(batch) 파일로 내보낸다. 실습의 처음 설정이다." },
+    { path: ["a1", "c", "j"], packet: "spans", highlight: ["v"], title: "백엔드를 바꿀 때", detail: "exporters 목록만 고친다. 앱은 다시 배포하지 않는다. 두 곳에 같이 보내며 옮겨 갈 수도 있다." },
+    { path: ["c", "v"], packet: "drop", blocked: true, title: "Collector가 죽으면", detail: "앱의 내보내기 큐가 차고 넘친 span은 버려진다. 응답은 늦어지지 않지만 그 사이 데이터는 사라진다. 그래서 Collector를 노드마다(에이전트) 두고 앞에 하나 더(게이트웨이) 두는 2단 구성을 많이 쓴다." },
+  ]}
+/>
+
+신호마다 성숙도가 다르다는 것도 알아 둬야 한다. trace와 지표는 사양과 주요 언어 SDK가 안정 단계다. 로그는 데이터 모델과 OTLP 형식은 안정이지만, 언어별 SDK는 아직 차이가 크다. 실습에 쓴 JS 기준으로 `@opentelemetry/sdk-metrics`와 `sdk-trace-base`는 2.12.0인데 `@opentelemetry/sdk-logs`는 0.223.0이다. 버전이 0.x라는 건 API가 바뀔 수 있다는 뜻이다. 그래서 로그는 지금처럼 `pino` 같은 익숙한 라이브러리로 쓰고, 로그 줄에 trace_id만 넣어서 잇는 방식이 여전히 흔하다.
+
+OTel을 쓴다고 Prometheus를 버려야 하는 것도 아니다. Prometheus 3.x는 OTLP로 지표를 받는 수신 기능이 있고(`--web.enable-otlp-receiver`), Collector는 Prometheus 형식으로 scrape해서 OTLP로 넘길 수도 있다. 앱이 이미 `/metrics`를 잘 내놓고 있다면 그대로 두고, trace부터 OTel로 시작해도 된다.
+
+## 어디서부터 들일까
+
+모든 걸 한 번에 들일 필요는 없다. 서비스가 커지는 순서대로 보면 이렇다.
+
+서비스가 하나고 사람이 서넛일 때는 요청마다 남기는 구조화 로그와 RED 지표(초당 요청 수, 오류율, 응답 시간 분포)로 충분하다. RED가 무엇인지는 [모니터링 기본](/posts/monitoring-basics)에 있다. 이때부터 로그에 요청 ID를 넣어 두면 나중에 trace를 붙일 때 그대로 trace_id로 바꾸면 된다.
+
+서비스가 셋을 넘어가고 요청이 서로를 부르기 시작하면 "어디서 느린지"를 로그만으로 맞추기 어려워진다. 이때 OTel 자동 계측으로 trace를 붙이고, 로그에 trace_id를 넣고, 히스토그램에 exemplar를 켠다. 샘플링(전부 저장하지 않고 고르기)은 이때부터 고민한다. 방법은 [분산 추적의 샘플링 절](/posts/distributed-tracing)에 있다.
+
+비용이 눈에 띄기 시작하면 줄이는 순서가 있다. 디버그 로그와 성공한 요청 로그를 먼저 샘플링하고, 오류와 느린 요청은 전부 남긴다. 지표는 레이블을 점검해 끝없이 늘어나는 레이블부터 없앤다. 보관 기간은 신호마다 다르게 잡는다(지표는 길게, 로그와 trace는 짧게).
+
+흔한 실수도 몇 가지 정리해 둔다.
+
+- 도구 셋을 다 들였는데 서로 이어지지 않는다. 로그에 trace_id가 없고, 서비스 이름이 도구마다 다르다(`shop`, `shop-api`, `shop_prod`). OTel의 `service.name`처럼 이름 하나를 정해 세 신호에 똑같이 쓴다.
+- 레이블에 사용자 ID, 전체 URL(`/orders/12345`)을 넣는다. route는 `/orders/:id`처럼 틀로 바꿔서 넣는다.
+- 로그로 숫자를 센다. "오류 로그가 몇 줄인가"로 오류율을 그리면 로그 샘플링을 켜는 순간 그래프가 틀린다. 세는 일은 지표에 맡긴다.
+- 대시보드를 수십 장 만들고 관측 가능성을 갖췄다고 생각한다. 대시보드는 아는 질문의 답이다. 모르는 질문은 필드가 넉넉한 이벤트에서 답이 나온다.
+
+## "가끔 느리다"는 문의를 받았을 때
+
+처음 장면으로 돌아가 실제로 손이 가는 순서를 적어 보면 이렇다.
+
+1. 지표로 범위를 좁힌다. 언제부터인지, 어느 route인지, 오류인지 느림인지. `histogram_quantile`로 p99를 보고 평균은 믿지 않는다.
+2. 튄 구간의 exemplar에서 trace를 하나 연다. 서비스가 여럿이면 어느 구간이 긴지 여기서 보인다.
+3. trace만으로 이유가 안 보이면, 같은 시간대의 느린 요청 로그를 필드별로 묶어 본다. 사용자, 버전, 리전, 요청 파라미터를 하나씩 넣어 본다. 한 값으로 쏠리면 그게 단서다.
+4. 단서가 나오면 그 차원이 지표로 지켜볼 만한지 판단한다. 쿠폰 종류가 열 개 남짓이라면 지표 레이블로 올리고 알림을 건다. 다음번에는 "아는 질문"이 된다.
+
+4번이 중요하다. 관측 가능성으로 찾은 답은 모니터링으로 옮겨서 다음번에는 기계가 먼저 알게 만든다. 이걸 반복하며 둘이 같이 자란다.
+
+## 다시 쿠폰 문의 앞에서
+
+대시보드가 "정상"이라고 말한 건 거짓말이 아니었다. 묻지 않은 질문이었을 뿐이다. 요청마다 맥락을 남기고, 세 신호를 trace_id 하나로 이어 두면 처음 보는 질문에도 데이터를 다시 묶어 답할 수 있다. OpenTelemetry는 그 계측을 특정 벤더에 묶이지 않게 해 주는 약속이다. 다음으로는 [모니터링 기본](/posts/monitoring-basics)에서 무엇을 대시보드와 알림으로 올릴지, [구조화 로그](/posts/structured-logging)에서 로그 한 줄을 어떻게 남길지 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### 모니터링과 관측 가능성은 어떻게 다른가요?
+
+모니터링은 미리 정한 질문을 지켜보는 일이고, 관측 가능성은 미리 생각하지 못한 질문에도 지금 남긴 데이터로 답할 수 있는 시스템의 성질이다. 모니터링은 대시보드와 알림으로 "이상하다"를 알려 주고, 관측 가능성은 요청마다 남긴 맥락을 다시 자르고 묶어 "왜"를 찾게 해 준다. 둘은 대체 관계가 아니라 순서 관계다. 관측으로 찾은 원인은 다시 모니터링 항목으로 올린다.
+
+### 지표, 로그, trace는 각각 언제 쓰나요?
+
+지표는 추세와 비율을 싸게 오래 보는 데 쓴다. 요청 수와 상관없이 저장량이 거의 일정하다. 로그는 요청 하나의 맥락을 남겨서 나중에 어떤 필드로든 묶어 볼 때, trace는 요청 하나가 여러 서비스에서 어디에 시간을 썼는지 볼 때 쓴다. 로그와 trace는 요청 수에 비례해 쌓이니 샘플링과 보관 기간 관리가 필요하다.
+
+### 세 신호를 어떻게 연결하나요?
+
+같은 trace_id를 세 곳에 남긴다. 로그 한 줄에 현재 span의 trace_id를 넣고, 히스토그램에는 exemplar로 trace_id를 붙인다. 그러면 지표의 튄 점에서 trace로, trace에서 같은 id의 로그로 건너갈 수 있다. 서비스 이름 같은 공통 속성도 세 신호에 똑같이 써야 한다.
+
+### 사용자 ID를 지표 레이블로 넣으면 왜 안 되나요?
+
+레이블 값 조합마다 시계열이 하나씩 생겨서 시계열 수가 사용자 수만큼 곱해지기 때문이다. 히스토그램이면 칸 수가 또 곱해져 사용자 5,000명만으로도 수십만 시계열이 된다. 메모리, scrape 시간, 쿼리 속도가 함께 나빠진다. 사용자별로 봐야 하면 로그나 trace의 필드로 남기고 거기서 묶는다.
+
+### OpenTelemetry는 무엇이고 왜 쓰나요?
+
+OpenTelemetry는 지표·로그·trace를 만들고 보내는 방식을 표준으로 정한 CNCF 프로젝트로, 저장소가 아니라 계측과 저장소 사이의 약속이다. API, SDK, OTLP 전송 형식, Collector로 이루어진다. 앱은 OTLP로 Collector에 보내고, 백엔드는 Collector 설정으로 고르니 벤더를 바꿔도 앱 코드를 다시 계측하지 않아도 된다. 속성 이름도 시맨틱 컨벤션으로 맞춰져 언어가 달라도 같은 이름으로 검색된다.
+
+### Collector를 꼭 둬야 하나요? 앱에서 백엔드로 바로 보내면 안 되나요?
+
+작은 구성에서는 바로 보내도 된다. 다만 Collector를 두면 묶어 보내기, 꼬리 샘플링, 민감한 속성 지우기, 백엔드 교체를 앱 배포 없이 한곳에서 할 수 있다. 대신 Collector가 새 장애 지점이 되니 노드마다 에이전트로 두고 앞에 게이트웨이를 두는 식으로 이중화하고, Collector 자체의 큐 길이와 버린 span 수도 지표로 본다.
+
+### 관측 비용이 너무 커지면 무엇부터 줄이나요?
+
+요청 수에 비례하는 것부터 줄인다. 성공한 요청과 디버그 로그를 샘플링하되 오류와 느린 요청은 전부 남기고, trace도 같은 기준으로 고른다. 지표는 끝없이 늘어나는 레이블을 찾아 없애고, 보관 기간을 신호마다 다르게 잡는다. 오류율 같은 숫자는 로그가 아니라 지표에서 세야 샘플링을 켜도 틀리지 않는다.
