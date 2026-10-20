@@ -1,0 +1,606 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pessimistic-locking");
+
+주문 확정 API의 응답 시간이 평소에는 10ms 안쪽인데, 이벤트가 열린 시간에만 p99가 100ms를 넘고 가끔 수 초까지 튄다. DB 서버 CPU는 20%도 안 쓴다. 쿼리 하나하나는 빠르다. 느린 건 쿼리가 아니라 줄이었다. 주문마다 이벤트 상품의 재고 행을 `SELECT ... FOR UPDATE`로 잠그고 있었고, 모든 요청이 그 한 행 앞에 서 있었다.
+
+`FOR UPDATE`가 무엇이고 재고 차감에서 언제 쓰는지, `NOWAIT`와 `SKIP LOCKED`의 기본 모양은 [잠금과 교착 상태 글](/posts/db-locking-deadlock)에서 다뤘다. 이 글은 그다음 질문을 다룬다. 비관적 잠금(pessimistic locking)을 걸었을 때 PostgreSQL 안에서 실제로 무엇이 일어나는지, 잠금이 어디에 적히고 누가 누구를 기다리는지 어떻게 보는지, 행 잠금 네 가지 세기 중 무엇을 골라야 하는지, 행이 아닌 것을 잠그는 advisory lock은 언제 쓰는지다. 잠그지 않고 충돌을 알아채는 반대편은 [낙관적 잠금 글](/posts/optimistic-locking)에 있다. 기준은 PostgreSQL 16이고, 출력은 PostgreSQL 16.15에서 psql 세션 여러 개를 동시에 붙여 실제로 실행한 결과다.
+
+## 상품과 주문 두 테이블
+
+글 끝까지 쓰는 예제다. 주문은 상품을 외래 키로 참조한다. 이 외래 키가 뒤에서 중요해진다.
+
+```sql
+CREATE TABLE products (
+  product_id bigint  PRIMARY KEY,
+  name       text    NOT NULL,
+  price      integer NOT NULL,
+  stock      integer NOT NULL CHECK (stock >= 0)
+);
+
+CREATE TABLE orders (
+  order_id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  product_id bigint  NOT NULL REFERENCES products,   -- 외래 키
+  qty        integer NOT NULL,
+  status     text    NOT NULL DEFAULT 'ready'
+);
+
+INSERT INTO products VALUES
+  (1001, '무선 이어폰', 89000, 3),
+  (1002, '충전 케이스', 19000, 30),
+  (1003, '이어팁', 5000, 120);
+INSERT INTO orders (product_id, qty) VALUES (1001, 1), (1002, 2), (1003, 4), (1002, 1), (1003, 2);
+```
+
+## 잠금은 한 행 앞에 줄을 세운다
+
+비관적 잠금은 "곧 누가 끼어들 것"이라고 보고 읽는 순간부터 행을 붙잡는다. 붙잡은 트랜잭션이 끝날 때까지 다른 트랜잭션은 그 행을 고치거나 같은 세기로 잠글 수 없고, 기다린다. 확실한 대신 대가는 줄이다. 그 줄이 얼마나 비싼지 pgbench로 쟀다. 트랜잭션마다 행 하나를 `FOR UPDATE`로 잠그고, 앱이 계산하는 시간이라 치고 5ms 쉰 뒤, 재고를 줄이고 커밋한다.
+
+```sql
+-- hot.sql: 모든 클라이언트가 1번 행 하나만 잠근다 (spread.sql은 1~1000 중 무작위)
+\set id 1
+BEGIN;
+SELECT stock FROM bench_products WHERE product_id = :id FOR UPDATE;
+SELECT pg_sleep(0.005);                  -- 잠금을 쥔 채 앱이 일하는 시간
+UPDATE bench_products SET stock = stock - 1 WHERE product_id = :id;
+COMMIT;
+```
+
+```bash
+# 클라이언트 수를 1, 4, 16으로 바꿔 가며 5초씩 돌린다
+for c in 1 4 16; do
+  pgbench -h 127.0.0.1 -U belocks_user -n -c $c -j $c -T 5 -f hot.sql belocks_shop | grep -E 'latency average|^tps'
+done
+```
+
+```text
+-- hot.sql (행 1개에 몰림)
+c=1   latency average = 6.337 ms     tps = 157.797120
+c=4   latency average = 25.529 ms    tps = 156.682739
+c=16  latency average = 103.185 ms   tps = 155.061786
+
+-- spread.sql (행 1,000개에 흩어짐)
+c=1   latency average = 6.432 ms     tps = 155.484630
+c=4   latency average = 6.433 ms     tps = 621.801813
+c=16  latency average = 6.820 ms     tps = 2345.913943
+```
+
+(`(without initial connection time)` 꼬리는 줄였다.) 행이 흩어져 있으면 클라이언트를 16배로 늘린 만큼 처리량이 15배 늘었다. 한 행에 몰리면 클라이언트를 아무리 늘려도 처리량이 초당 약 157건에 붙어 있고, 늘린 만큼 지연만 길어졌다. 한 번에 한 트랜잭션만 행을 쥘 수 있으니 처리량의 상한은 1초 ÷ 잠금을 쥔 시간(약 6.3ms)이다. 지연은 줄 길이 × 쥔 시간이라, 16명이 서면 약 100ms다. 처음 장면의 "CPU는 한가한데 느리다"가 이 모양이다.
+
+<SequenceDiagram
+  caption="한 행 앞에 선 줄: 앞사람이 커밋해야 다음이 들어간다"
+  actors={[
+    { id: "a", label: "요청 A" },
+    { id: "row", label: "재고 행 1001" },
+    { id: "b", label: "요청 B" },
+    { id: "c", label: "요청 C" },
+  ]}
+  steps={[
+    { from: "a", to: "row", label: "FOR UPDATE", title: "A가 행을 잡는다", detail: "재고 3을 읽고 행을 붙잡는다. 커밋이나 롤백 전까지 놓지 않는다.", payload: " stock\n-------\n     3" },
+    { from: "b", to: "row", label: "FOR UPDATE", title: "B는 기다린다", detail: "같은 행을 같은 세기로 잡으려 하니 A가 끝날 때까지 멈춘다. CPU는 쓰지 않는다. 그냥 잠들어 있다." },
+    { from: "c", to: "row", label: "FOR UPDATE", title: "C도 B 뒤에 선다", detail: "줄이 길어질수록 맨 뒤 요청의 대기는 앞사람들이 쥔 시간의 합이 된다." },
+    { from: "a", to: "row", label: "COMMIT", title: "A가 놓는다", detail: "A가 재고를 2로 줄이고 커밋한다. 이제야 B가 들어간다." },
+    { from: "row", to: "b", label: "stock = 2", title: "B는 최신 값을 본다", detail: "B는 A가 남긴 2를 읽는다. 낡은 값을 볼 틈이 없다는 게 비관적 잠금의 장점이고, 그 대가가 지금까지의 대기다.", payload: " stock\n-------\n     2\n(1 row)\n\nTime: 2912.465 ms (00:02.912)" },
+  ]}
+/>
+
+마지막 단계의 시간은 실제로 A가 3초 가까이 쥐고 있었을 때 B가 기다린 시간이다. 잠금을 쥔 시간이 곧 다른 요청의 대기 시간이 된다. 그래서 비관적 잠금을 쓸 때 가장 먼저 하는 일은 잠금을 쥔 구간을 줄이는 것이다. 잠그기 전에 할 수 있는 계산은 다 끝내 두고, 잠근 뒤에는 DB 안의 일만 하고 바로 커밋한다. 잠근 채 외부 API를 부르면 그 API의 응답 시간이 모든 요청의 대기 시간에 더해진다.
+
+## 행 잠금은 행 안에 적힌다
+
+누가 누구를 기다리는지 보려면 잠금이 어디에 기록되는지 알아야 한다. PostgreSQL의 행 잠금은 메모리의 잠금 표가 아니라 행 자체에 적힌다. 잠근 트랜잭션의 ID가 행 머리의 `xmax` 칸에 들어가고, 잠금 세기는 플래그로 표시된다. 행을 백만 개 잠가도 공유 메모리가 넘치지 않는 이유다. 대신 `pg_locks`에는 행 잠금이 직접 보이지 않는다. 행에 적힌 잠금은 확장 `pgrowlocks`로 읽는다.
+
+```sql
+-- 확장 설치는 슈퍼유저로 한 번 (contrib 패키지에 들어 있다)
+CREATE EXTENSION IF NOT EXISTS pgrowlocks;
+
+-- [1] A
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR UPDATE;
+
+-- [2] 다른 세션에서: products 테이블의 잠긴 행 보기
+SELECT locked_row, locker, multi, xids, modes, pids FROM pgrowlocks('products');
+```
+
+```text
+ locked_row | locker | multi |  xids   |     modes      |  pids
+------------+--------+-------+---------+----------------+---------
+ (0,1)      |  58369 | f     | {58369} | {"For Update"} | {19698}
+(1 row)
+```
+
+`locked_row`는 행의 물리 위치(0번 페이지의 1번 칸), `locker`는 잠근 트랜잭션 ID다. `pgrowlocks`는 테이블을 처음부터 끝까지 읽으니 큰 테이블에서 함부로 돌리지 않는다.
+
+그럼 기다리는 쪽은 무엇을 기다릴까. 행을 기다리는 일은 결국 그 행을 잠근 트랜잭션이 끝나기를 기다리는 일이다. 그래서 대기는 `pg_locks`에서 "트랜잭션 ID에 대한 잠금"으로 보인다. A가 잡고 B가 기다리는 순간 세 번째 세션에서 봤다.
+
+```sql
+SELECT l.pid, l.locktype, l.relation::regclass AS rel, l.page, l.tuple,
+       l.transactionid AS xid, l.mode, l.granted
+FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE a.datname = 'belocks_shop' AND l.pid <> pg_backend_pid()
+  AND l.locktype IN ('relation', 'tuple', 'transactionid')
+ORDER BY l.pid, l.locktype, rel;
+```
+
+```text
+  pid  |   locktype    |      rel      | page | tuple |  xid  |        mode         | granted
+-------+---------------+---------------+------+-------+-------+---------------------+---------
+ 19614 | relation      | products      |      |       |       | RowShareLock        | t
+ 19614 | relation      | products_pkey |      |       |       | RowShareLock        | t
+ 19614 | transactionid |               |      |       | 58360 | ExclusiveLock       | t
+ 19615 | relation      | products      |      |       |       | RowShareLock        | t
+ 19615 | relation      | products_pkey |      |       |       | RowShareLock        | t
+ 19615 | transactionid |               |      |       | 58360 | ShareLock           | f
+ 19615 | tuple         | products      |    0 |     1 |       | AccessExclusiveLock | t
+(7 rows)
+```
+
+읽는 법은 이렇다. 19614(A)는 자기 트랜잭션 ID 58360에 `ExclusiveLock`을 쥐고 있다. 모든 트랜잭션은 시작하면서 자기 ID를 잠그고, 끝날 때 놓는다. 19615(B)는 58360에 `ShareLock`을 요청했고 `granted = f`다. "A가 끝나기를 기다린다"는 뜻이다. B가 쥔 `tuple` 잠금(0번 페이지 1번 행)은 "이 행을 기다리는 줄의 맨 앞 자리"다. 같은 행을 노리는 세 번째 트랜잭션이 오면 이 `tuple` 잠금을 얻으려고 B 뒤에 선다. 테이블에 걸린 `RowShareLock`은 `FOR UPDATE`가 테이블에도 거는 약한 잠금으로, 그동안 테이블을 `DROP`하거나 `ALTER`하지 못하게 한다.
+
+사람이 보기엔 `pg_stat_activity`가 더 편하다.
+
+```sql
+SELECT pid, pg_blocking_pids(pid) AS blocked_by, state, wait_event_type, wait_event,
+       left(query, 40) AS query
+FROM pg_stat_activity
+WHERE datname = 'belocks_shop' AND pid <> pg_backend_pid()
+ORDER BY pid;
+```
+
+```text
+  pid  | blocked_by |        state        | wait_event_type |  wait_event   |                  query
+-------+------------+---------------------+-----------------+---------------+------------------------------------------
+ 19614 | {}         | idle in transaction | Client          | ClientRead    | SELECT stock FROM products WHERE product
+ 19615 | {19614}    | active              | Lock            | transactionid | SELECT stock FROM products WHERE product
+(2 rows)
+```
+
+`wait_event`가 `transactionid`면 다른 트랜잭션이 잡은 행을 기다리는 중이고, `tuple`이면 같은 행을 기다리는 줄의 두 번째 이후에 서 있다는 뜻이다. `advisory`는 뒤에서 볼 advisory lock, `relation`은 테이블 단위 잠금(대개 `ALTER TABLE`이나 `LOCK TABLE`)이다.
+
+## 네 가지 세기 중 무엇을 고르나
+
+행 잠금은 `FOR UPDATE` 하나가 아니다. PostgreSQL에는 네 가지 세기가 있다. 약한 것부터 `FOR KEY SHARE`, `FOR SHARE`, `FOR NO KEY UPDATE`, `FOR UPDATE`다. 평범한 `UPDATE`도 내부적으로 이 중 하나를 건다. 키 열(기본 키, 유일 인덱스 열)을 안 바꾸는 `UPDATE`는 `FOR NO KEY UPDATE`, 키를 바꾸거나 `DELETE`하면 `FOR UPDATE`다.
+
+이 구분이 왜 필요한지는 외래 키에서 드러난다. 주문을 넣으면 PostgreSQL은 참조하는 상품이 정말 있는지 확인하면서, 확인이 끝날 때까지 그 상품이 지워지지 않게 상품 행에 `FOR KEY SHARE`를 건다. 재고를 줄이려고 상품 행을 `FOR UPDATE`로 잡아 두면, 그 상품을 참조하는 주문 `INSERT`까지 멈춘다.
+
+```sql
+-- [1] A: 상품 행을 FOR UPDATE로 잡는다
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR UPDATE;
+
+-- [2] B: 이 상품의 주문을 넣는다 (lock_timeout 2s)
+SET lock_timeout = '2s';
+INSERT INTO orders (product_id, qty) VALUES (1001, 1);
+```
+
+```text
+ERROR:  canceling statement due to lock timeout
+CONTEXT:  while locking tuple (0,1) in relation "products"
+SQL statement "SELECT 1 FROM ONLY "public"."products" x WHERE "product_id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x"
+Time: 2002.051 ms (00:02.002)
+```
+
+에러의 `SQL statement` 줄이 외래 키 확인 쿼리다. 상품 테이블에 `FOR KEY SHARE`를 걸려다 A의 `FOR UPDATE`에 막혔다. 같은 장면에서 A를 `FOR NO KEY UPDATE`로 바꾸면 결과가 다르다.
+
+```sql
+-- [1] A
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR NO KEY UPDATE;
+
+-- [2] B
+INSERT INTO orders (product_id, qty) VALUES (1001, 1);
+-- [3] 다른 세션
+SELECT locked_row, locker, multi, xids, modes, pids FROM pgrowlocks('products');
+```
+
+```text
+-- [2] B
+INSERT 0 1
+Time: 1.244 ms
+-- [3]
+ locked_row | locker | multi |     xids      |               modes               |   pids
+------------+--------+-------+---------------+-----------------------------------+-----------
+ (0,1)      |      3 | t     | {58371,58372} | {"For No Key Update","Key Share"} | {19698,0}
+(1 row)
+```
+
+`INSERT`가 1ms에 끝났다. 한 행에 잠금 둘이 같이 걸려 있고, `multi = t`는 여러 트랜잭션이 한 행을 함께 잠갔다는 뜻이다. 이때 `xmax`에는 트랜잭션 ID 대신 MultiXact라는 묶음 ID(여기서는 3)가 들어간다. 이 묶음 ID도 트랜잭션 ID처럼 VACUUM이 주기적으로 정리해야 하는 자원이라, 외래 키로 같은 부모 행을 엄청나게 많이 참조하는 시스템에서는 `pg_multixact` 디렉터리 크기와 MultiXact 나이도 지켜본다.
+
+정리하면, 행을 지우거나 키를 바꿀 게 아니라면 `FOR UPDATE` 대신 `FOR NO KEY UPDATE`로 충분하다. 그냥 `UPDATE`가 거는 잠금과 같은 세기라, "곧 이 행을 고칠 것"이라는 뜻을 정확히 표현한다. ORM의 잠금 옵션(JPA의 `PESSIMISTIC_WRITE` 같은 것)이 어느 세기로 나가는지는 버전과 방언마다 다를 수 있으니, 외래 키가 많은 테이블이라면 SQL 로그로 실제 문장을 확인한다. `FOR SHARE`는 "읽는 동안 아무도 못 고치게" 할 때 쓰고, 여럿이 함께 걸 수 있다.
+
+어떤 세기끼리 부딪히는지는 외우기보다 규칙으로 보는 게 쉽다. 약한 것부터 0, 1, 2, 3을 붙이면, 두 세기의 합이 3 이상일 때 부딪힌다. 아래 함수를 그 규칙으로 채워 보자. 다른 트랜잭션들이 쥔 잠금 목록과 내가 요청한 세기를 받아 바로 얻을 수 있는지 돌려준다.
+
+<CodePlayground
+  caption="canLock: 행 잠금 세기끼리 부딪히는지 판단하기"
+  functionName="canLock"
+  initialCode={`function canLock(held, requested) {
+  // held: 다른 트랜잭션들이 이 행에 쥔 잠금들. 예) ["FOR SHARE", "FOR KEY SHARE"]
+  // requested: 내가 걸려는 잠금. "FOR KEY SHARE" | "FOR SHARE" | "FOR NO KEY UPDATE" | "FOR UPDATE"
+  // 바로 얻을 수 있으면 true, 기다려야 하면 false
+  return true;
+}`}
+  solution={`function canLock(held, requested) {
+  // 약한 것부터 0~3. 두 세기의 합이 3 이상이면 부딪힌다
+  const RANK = { "FOR KEY SHARE": 0, "FOR SHARE": 1, "FOR NO KEY UPDATE": 2, "FOR UPDATE": 3 };
+  return held.every((h) => RANK[h] + RANK[requested] < 3);
+}`}
+  tests={[
+    { label: "FOR UPDATE가 외래 키 확인을 막는다", args: [["FOR UPDATE"], "FOR KEY SHARE"], expected: false },
+    { label: "NO KEY UPDATE는 외래 키 확인을 통과시킨다", args: [["FOR NO KEY UPDATE"], "FOR KEY SHARE"], expected: true },
+    { label: "공유끼리는 함께", args: [["FOR SHARE"], "FOR SHARE"], expected: true },
+    { label: "공유 중에는 고칠 수 없다", args: [["FOR SHARE"], "FOR UPDATE"], expected: false },
+    { label: "쓰기끼리는 줄을 선다", args: [["FOR NO KEY UPDATE"], "FOR NO KEY UPDATE"], expected: false },
+    { label: "여럿 중 하나라도 부딪히면", args: [["FOR KEY SHARE", "FOR SHARE"], "FOR NO KEY UPDATE"], expected: false },
+    { label: "아무도 안 잡았다", args: [[], "FOR UPDATE"], expected: true },
+  ]}
+/>
+
+## 공유 잠금은 줄을 새치기한다
+
+줄이 공정하다고 생각하기 쉽지만 행 잠금에는 예외가 있다. A가 `FOR SHARE`로 읽고 있고, B가 `FOR UPDATE`로 고치려고 기다리는 중에, C가 `FOR SHARE`로 들어오면 어떻게 될까. 실제로 해 봤다.
+
+```sql
+-- [1] A
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR SHARE;
+-- [2] B: A 때문에 기다린다
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR UPDATE;
+-- [3] C (\timing on)
+BEGIN;
+SELECT stock FROM products WHERE product_id = 1001 FOR SHARE;
+```
+
+```text
+-- [3] C
+ stock
+-------
+     3
+(1 row)
+
+Time: 1.340 ms
+
+-- 그 순간 pg_stat_activity
+  pid  | blocked_by | wait_event_type |  wait_event   |                            query
+-------+------------+-----------------+---------------+--------------------------------------------------------------
+ 20334 | {}         | Client          | ClientRead    | SELECT stock FROM products WHERE product_id = 1001 FOR SHARE
+ 20335 | {}         | Client          | ClientRead    | SELECT stock FROM products WHERE product_id = 1001 FOR SHARE
+ 20337 | {20334}    | Lock            | transactionid | SELECT stock FROM products WHERE product_id = 1001 FOR UPDAT
+(3 rows)
+```
+
+C는 기다리는 B를 앞질러 1ms 만에 잠금을 얻었다. C가 보기에 행에는 A의 공유 잠금만 적혀 있고, 공유끼리는 부딪히지 않으니 줄을 확인하지 않고 바로 들어간다. B는 이제 A와 C가 모두 끝나야 들어갈 수 있다. 아래 그림처럼 공유 잠금이 계속 들어오면 B는 하염없이 기다린다. 이걸 기아(starvation)라고 한다.
+
+<AlgoTrace
+  caption="공유 잠금이 이어지면 FOR UPDATE는 굶는다"
+  memoryLabel="행에 걸린 잠금"
+  cells={["A SHARE", "B UPDATE", "C SHARE", "A 커밋", "D SHARE", "C 커밋"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["A:share"], caption: "A가 FOR SHARE로 행을 잡는다." },
+    { pointer: 1, memory: ["A:share"], caption: "B는 FOR UPDATE를 원한다. 공유 잠금과 부딪히니 A가 끝나길 기다린다." },
+    { pointer: 2, found: [0, 2], memory: ["A:share", "C:share"], caption: "C가 FOR SHARE로 온다. 공유끼리는 괜찮으니 B를 앞질러 바로 들어간다." },
+    { pointer: 3, found: [2], memory: ["C:share"], caption: "A가 끝났다. 하지만 C가 남아 있어 B는 여전히 못 들어간다." },
+    { pointer: 4, found: [2, 4], memory: ["C:share", "D:share"], caption: "D도 공유 잠금으로 새치기한다. 읽는 쪽이 끊이지 않으면 B 차례는 오지 않는다." },
+    { pointer: 5, found: [4], memory: ["D:share"], caption: "C가 끝나도 D가 있다. 공유 잠금은 짧게 쓰고, 고칠 거라면 처음부터 쓰기 잠금으로 잡는다." },
+  ]}
+/>
+
+실무에서 `FOR SHARE`를 직접 쓰는 일은 드물지만, 외래 키 확인이 거는 `FOR KEY SHARE`는 매일 일어난다. 다행히 `FOR KEY SHARE`는 `FOR UPDATE`와만 부딪히니, 앞 절처럼 `FOR NO KEY UPDATE`를 쓰면 문제가 되지 않는다.
+
+## 기다릴지, 포기할지, 건너뛸지
+
+줄에 서는 게 늘 맞는 건 아니다. 잠금을 얻지 못했을 때의 선택지는 세 가지다. 기다린다(기본), 바로 포기한다(`NOWAIT`), 잠긴 행은 건너뛴다(`SKIP LOCKED`). 기다리되 상한을 두려면 `lock_timeout`을 쓴다. 각각의 에러 모양은 [잠금과 교착 상태 글](/posts/db-locking-deadlock)에 있고, 여기서는 고르는 기준만 본다.
+
+사용자가 버튼을 누르고 기다리는 요청이면 짧은 `lock_timeout`(1~3초)이 맞다. 30초 기다려 성공하는 것보다 2초 만에 "잠시 후 다시 시도해 주세요"를 보는 게 낫고, 무엇보다 커넥션 풀을 막지 않는다. 잠금을 기다리는 동안 그 요청은 DB 연결을 하나 쥐고 있다. 줄이 길어지면 풀이 비고, 그다음엔 잠금과 상관없는 요청까지 연결을 못 얻어 멈춘다. 잠금 대기가 풀 고갈로 번지는 이 경로는 [커넥션 풀 글](/posts/connection-pool)에서 이어서 다룬다.
+
+`NOWAIT`는 기다릴 이유가 아예 없을 때 쓴다. "다른 관리자가 이 주문을 처리하는 중입니다"를 바로 보여 주고 싶을 때다. `SKIP LOCKED`는 어느 행이든 상관없는 경우, 즉 작업 큐에 맞는다. 워커 여러 개가 같은 테이블에서 일감을 집어 갈 때, 남이 잡은 일감은 건너뛰고 다음 일감을 잡는다.
+
+```sql
+-- [1] 워커 A: 대기 중인 주문 두 건을 집는다
+BEGIN;
+SELECT order_id, product_id FROM orders
+WHERE status = 'ready' ORDER BY order_id
+LIMIT 2 FOR UPDATE SKIP LOCKED;
+
+-- [2] 워커 B: 같은 쿼리
+BEGIN;
+SELECT order_id, product_id FROM orders
+WHERE status = 'ready' ORDER BY order_id
+LIMIT 2 FOR UPDATE SKIP LOCKED;
+
+-- [3] 잠금 없이 세면 여전히 다섯 건
+SELECT count(*) FROM orders WHERE status = 'ready';
+```
+
+```text
+-- [1] A
+ order_id | product_id
+----------+------------
+        1 |       1001
+        2 |       1002
+(2 rows)
+
+-- [2] B
+ order_id | product_id
+----------+------------
+        3 |       1003
+        4 |       1002
+(2 rows)
+
+-- [3]
+ count
+-------
+     5
+(1 row)
+```
+
+두 워커가 서로 기다리지 않고 겹치지 않는 일감을 가져갔다. 아래 그림에서 다음을 누르면 일감이 워커로 나뉘어 가는 과정이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="SKIP LOCKED로 일감을 나눠 가지는 워커들"
+  zones={[
+    { id: "workers", label: "워커", x: 10, y: 20, w: 140, h: 260, tone: "edge" },
+    { id: "dbz", label: "PostgreSQL", x: 200, y: 20, w: 190, h: 260, tone: "private" },
+  ]}
+  nodes={[
+    { id: "wa", label: "worker A", sub: "1, 2번 잡음", x: 80, y: 80, icon: "server" },
+    { id: "wb", label: "worker B", sub: "3, 4번 잡음", x: 80, y: 160, icon: "server" },
+    { id: "wc", label: "worker C", sub: "5번 잡음", x: 80, y: 240, icon: "server" },
+    { id: "q", label: "orders", sub: "status=ready", x: 295, y: 120, icon: "db" },
+    { id: "lk", label: "row locks", sub: "1,2 / 3,4 / 5", x: 295, y: 210, icon: "lock" },
+  ]}
+  links={[
+    { from: "wa", to: "q" },
+    { from: "wb", to: "q" },
+    { from: "wc", to: "q" },
+    { from: "q", to: "lk", dashed: true },
+  ]}
+  steps={[
+    { path: ["wa", "q", "lk"], packet: "LIMIT 2", title: "A가 앞의 두 건을 잡는다", detail: "1번과 2번 행에 잠금이 적힌다. 커밋 전까지 다른 워커는 이 두 행을 잡을 수 없다." },
+    { path: ["wb", "q", "lk"], packet: "LIMIT 2", title: "B는 잠긴 행을 건너뛴다", detail: "1, 2번은 잠겨 있으니 기다리지 않고 3, 4번을 잡는다.", payload: " order_id\n----------\n        3\n        4" },
+    { path: ["wc", "q", "lk"], packet: "LIMIT 2", title: "C는 남은 한 건만 받는다", detail: "남은 건 5번 하나다. LIMIT 2여도 한 건만 돌아온다. 일감이 없으면 0행이다." },
+    { path: ["wa", "q"], packet: "COMMIT", highlight: ["lk"], title: "A가 처리하고 커밋한다", detail: "status를 done으로 바꾸고 커밋하면 잠금이 풀린다. A가 도중에 죽으면 롤백되어 1, 2번은 다시 ready로 남고, 다른 워커가 집어 간다." },
+  ]}
+/>
+
+`SKIP LOCKED`의 결과는 "지금 잠기지 않은 행"이라 일관된 읽기가 아니다. 위의 B는 1, 2번이 없는 것처럼 봤다. 그래서 집계나 보고서처럼 정확한 그림이 필요한 곳에는 쓰면 안 된다. 순서도 엄격하지 않다. 앞의 일감이 잠겨 있으면 뒤의 일감이 먼저 처리되니, 같은 고객의 이벤트를 순서대로 처리해야 하는 큐라면 고객 ID별로 하나만 처리 중이게 하는 장치가 따로 필요하다. 워커가 일감을 오래 쥐는 작업(몇 분짜리 영상 변환 같은 것)은 잠금을 쥔 트랜잭션을 그만큼 열어 두게 되니, `status = 'running'`과 시작 시각을 짧은 트랜잭션으로 적어 두고 잠금은 바로 놓는 편이 낫다.
+
+## FOR UPDATE를 붙일 수 없는 쿼리
+
+잠금은 "어느 행"을 잠글지 정해져야 걸 수 있다. 결과 한 줄이 원래 행 하나에 대응하지 않는 쿼리에는 붙일 수 없다.
+
+```sql
+SELECT sum(qty) FROM orders WHERE product_id = 1002 FOR UPDATE;
+SELECT DISTINCT product_id FROM orders FOR UPDATE;
+```
+
+```text
+ERROR:  FOR UPDATE is not allowed with aggregate functions
+ERROR:  FOR UPDATE is not allowed with DISTINCT clause
+```
+
+`GROUP BY`, `UNION`, 윈도 함수도 마찬가지다. 합계를 지키고 싶다면 합계 대상 행들을 먼저 `SELECT ... FOR UPDATE`로 잠그고 따로 더하거나, 합계를 들고 있는 부모 행(예: 계좌 잔액 행) 하나를 잠근다.
+
+조인에서는 반대로 너무 많이 잠그는 실수가 흔하다. `FOR UPDATE`만 쓰면 조인에 참여한 모든 테이블의 행이 잠긴다. 주문을 처리하면서 상품 정보를 같이 읽었을 뿐인데 상품 행까지 잠가서 같은 상품의 다른 주문을 모두 세워 둔다. `OF`로 잠글 테이블을 고른다.
+
+```sql
+BEGIN;
+SELECT o.order_id, p.stock
+FROM orders o JOIN products p USING (product_id)
+WHERE o.order_id = 2
+FOR UPDATE OF o;                         -- 주문 행만 잠근다
+
+SELECT locked_row, modes FROM pgrowlocks('products');
+SELECT locked_row, modes FROM pgrowlocks('orders');
+```
+
+```text
+ locked_row | modes
+------------+-------
+(0 rows)
+
+ locked_row |     modes
+------------+----------------
+ (0,2)      | {"For Update"}
+(1 row)
+```
+
+상품 쪽에는 잠금이 없고 주문 2번만 잠겼다. `ORDER BY ... LIMIT`과 함께 쓸 때도 주의할 점이 하나 있다. 잠금을 기다렸다가 얻은 행은 그새 값이 바뀌었을 수 있고, PostgreSQL은 바뀐 행이 여전히 `WHERE`에 맞는지는 다시 보지만 정렬 순서는 다시 맞추지 않는다. 그래서 정렬이 어긋난 결과나 `LIMIT`보다 적은 행이 돌아올 수 있다(공식 문서의 `SELECT` 잠금 절에 적혀 있다).
+
+## 행이 아닌 것을 잠그는 advisory lock
+
+가끔은 잠그고 싶은 게 행이 아니다. "정산 배치는 서버가 몇 대든 한 번에 하나만 돌아야 한다" 같은 경우다. 잠글 행이 없으니 `FOR UPDATE`를 못 쓴다. 이럴 때 PostgreSQL의 advisory lock을 쓴다. 앱이 정한 숫자 하나에 잠금을 거는 기능이다. 숫자가 무엇을 뜻하는지는 DB가 모르고, 앱끼리 약속한다. 문자열 이름은 `hashtext`로 숫자로 바꿔 쓴다.
+
+```sql
+-- [1] 서버 A의 크론: 잠금을 시도한다. 기다리지 않고 바로 true/false
+SELECT pg_try_advisory_lock(hashtext('job:daily-settlement'));
+-- [2] 서버 B의 크론: 같은 이름
+SELECT pg_try_advisory_lock(hashtext('job:daily-settlement'));
+-- [3] 다른 세션에서 보기
+SELECT hashtext('job:daily-settlement');
+SELECT pid, locktype, classid, objid, objsubid, mode, granted
+FROM pg_locks WHERE locktype = 'advisory';
+```
+
+```text
+-- [1] A
+ pg_try_advisory_lock
+----------------------
+ t
+(1 row)
+
+-- [2] B
+ pg_try_advisory_lock
+----------------------
+ f
+(1 row)
+
+-- [3]
+  hashtext
+-------------
+ -1593163648
+(1 row)
+
+  pid  | locktype |  classid   |   objid    | objsubid |     mode      | granted
+-------+----------+------------+------------+----------+---------------+---------
+ 20965 | advisory | 4294967295 | 2701803648 |        1 | ExclusiveLock | t
+(1 row)
+```
+
+B는 `f`를 받고 이번 실행을 건너뛴다. 64비트 키는 `pg_locks`에서 위 32비트(`classid`)와 아래 32비트(`objid`)로 나뉘어 보인다. -1593163648을 64비트로 늘리면 위쪽이 전부 1이라 `classid`가 4294967295, 아래쪽이 2701803648이 된다. 기다리는 쪽이 있으면 `pg_stat_activity`에 `wait_event = advisory`로 보인다.
+
+```text
+  pid  | blocked_by | wait_event_type | wait_event |            query
+-------+------------+-----------------+------------+------------------------------
+ 21043 | {}         | Client          | ClientRead | SELECT pg_advisory_lock(42);
+ 21044 | {21043}    | Lock            | advisory   | SELECT pg_advisory_lock(42);
+(2 rows)
+```
+
+<SequenceDiagram
+  caption="크론 두 대 중 하나만 정산을 돌린다"
+  actors={[
+    { id: "a", label: "서버 A 크론" },
+    { id: "pg", label: "PostgreSQL" },
+    { id: "b", label: "서버 B 크론" },
+  ]}
+  steps={[
+    { from: "a", to: "pg", label: "try_lock", title: "A가 먼저 잡는다", detail: "정산 이름의 해시에 잠금을 건다. 아무도 없으니 true다.", payload: "pg_try_advisory_lock(hashtext('job:daily-settlement')) → t" },
+    { from: "b", to: "pg", label: "try_lock", title: "B는 실패하고 건너뛴다", detail: "같은 이름이라 false다. 기다리지 않고 이번 실행은 하지 않는다.", payload: "→ f" },
+    { from: "a", to: "a", label: "정산 실행", title: "A가 정산을 돌린다", detail: "잠금은 세션에 붙어 있다. 중간에 커밋을 여러 번 해도 풀리지 않는다." },
+    { from: "a", to: "pg", label: "unlock", title: "끝나면 놓는다", detail: "pg_advisory_unlock으로 놓는다. A의 연결이 끊기면 DB가 알아서 놓는다. 서버가 죽어도 잠금이 영원히 남지 않는다." },
+  ]}
+/>
+
+advisory lock은 두 종류다. `pg_advisory_lock`은 세션 잠금이라 커밋해도 남고, 직접 놓거나 연결이 끊길 때 풀린다. 실제로 A가 `BEGIN; COMMIT;`을 한 뒤에도 B의 시도는 계속 `f`였다. 같은 키를 두 번 잡았으면 두 번 놓아야 하고, 안 잡은 걸 놓으면 경고가 난다.
+
+```text
+ pg_advisory_unlock
+--------------------
+ t
+(1 row)
+
+WARNING:  you don't own a lock of type ExclusiveLock
+ pg_advisory_unlock
+--------------------
+ f
+(1 row)
+```
+
+`pg_advisory_xact_lock`은 트랜잭션 잠금이라 커밋이나 롤백 때 저절로 풀린다. 트랜잭션 안에서 잡은 뒤 `pg_locks`에 1건이던 것이 커밋 후 0건이 됐다. 놓는 걸 잊을 일이 없으니 가능하면 이쪽을 쓴다.
+
+<Callout kind="warning" title="PgBouncer 트랜잭션 모드에서는 세션 잠금을 쓰지 않는다">
+PgBouncer를 `pool_mode = transaction`으로 쓰면 트랜잭션마다 서버 연결이 바뀐다. 세션 advisory lock을 잡은 연결은 다른 클라이언트에게 넘어가고, 잡은 쪽은 다음 쿼리에서 다른 연결을 받아 잠금을 놓지 못한다. 잠금이 남의 연결에 붙어 영원히 안 풀리거나, 엉뚱한 클라이언트가 잠금을 쥔 연결을 쓰게 된다. 이 모드에서는 `pg_advisory_xact_lock`만 쓰고, 이미 꼬였다면 `pg_locks`에서 advisory 잠금을 쥔 `pid`를 찾아 `SELECT pg_terminate_backend(pid);`로 그 서버 연결을 끊는다. 끊긴 연결의 잠금은 풀리고 PgBouncer가 새 연결을 만든다.
+</Callout>
+
+advisory lock은 DB 한 대가 판정하니 판정은 확실하다. 다만 키 이름을 해시하면 다른 이름이 같은 숫자가 될 수 있고(32비트 `hashtext` 기준으로 이름이 수만 개면 충돌을 무시하기 어렵다), DB 장애 조치로 프라이머리가 바뀌면 잠금은 사라진다. 여러 서비스가 쓰는 범용 잠금이 필요하다면 [분산 락 글](/posts/distributed-lock)의 선택지들과 비교한다.
+
+## MySQL InnoDB에서 달라지는 것
+
+MySQL 8.0 InnoDB도 `SELECT ... FOR UPDATE`와 `FOR SHARE`(예전 문법은 `LOCK IN SHARE MODE`), `NOWAIT`, `SKIP LOCKED`를 지원한다. 크게 다른 건 두 가지다.
+
+첫째, 기본 격리 수준 `REPEATABLE READ`에서 InnoDB는 행만이 아니라 인덱스 사이의 빈틈도 잠근다(gap lock, next-key lock). `WHERE product_id BETWEEN 1000 AND 2000 FOR UPDATE`는 그 범위에 새 행이 들어오는 것까지 막는다. 없는 행을 `FOR UPDATE`로 조회해도 빈틈이 잠겨서, "없으면 넣는다" 코드 두 개가 서로의 `INSERT`를 기다리다 교착 상태가 되는 일이 흔하다. PostgreSQL은 빈틈을 잠그지 않는다. 없는 행을 `FOR UPDATE`로 조회하면 아무것도 잠기지 않으니, "없으면 넣는다"는 유일 제약과 `INSERT ... ON CONFLICT`로 막는다.
+
+둘째, 잠금 대기의 기본 상한이 있다. `innodb_lock_wait_timeout` 기본값이 50초라 그 뒤에 `ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction`이 난다. PostgreSQL의 `lock_timeout` 기본값은 0(무제한)이다. 둘 다 사용자 요청에는 너무 길거나 무제한이니 직접 짧게 건다. 그리고 InnoDB는 기본 설정에서 잠금 대기 시간 초과 때 트랜잭션 전체가 아니라 그 문장만 롤백한다. 앱이 에러를 잡고 커밋하면 반쪽짜리 트랜잭션이 커밋될 수 있다.
+
+## 잠금 대기를 좁혀 가는 순서
+
+처음 장면처럼 "DB는 한가한데 느리다"면 잠금 대기를 의심한다. 보는 순서는 이렇다.
+
+먼저 기다리는 세션이 있는지, 누가 막고 있는지 본다. 막는 세션이 또 다른 세션에 막혀 있을 수 있으니, 막힘이 없는 맨 앞 세션(뿌리)을 찾는다.
+
+```sql
+-- 막힌 세션과 막는 세션, 막는 쪽의 트랜잭션 나이
+SELECT w.pid AS waiting, w.wait_event, left(w.query, 30) AS waiting_query,
+       b.pid AS blocking, b.state AS blocking_state,
+       now() - b.xact_start AS blocking_xact_age, left(b.query, 30) AS blocking_query
+FROM pg_stat_activity w
+JOIN LATERAL unnest(pg_blocking_pids(w.pid)) AS bp(pid) ON true
+JOIN pg_stat_activity b ON b.pid = bp.pid
+ORDER BY blocking_xact_age DESC;
+```
+
+뿌리 세션의 `state`가 `idle in transaction`이면 앱이 트랜잭션을 연 채 다른 일을 하고 있다. `active`면 그 세션의 쿼리 자체가 느린 것이다. 아래 그림처럼 뿌리 하나가 여러 세션을 줄줄이 세우는 경우가 많다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="막는 세션을 따라가면 뿌리 하나가 나온다"
+  nodes={[
+    { id: "root", label: "pid 3101", sub: "idle in transaction", x: 200, y: 45, w: 170 },
+    { id: "w1", label: "pid 3122", sub: "Lock: transactionid", x: 95, y: 140, w: 160 },
+    { id: "w2", label: "pid 3125", sub: "Lock: tuple", x: 305, y: 140, w: 160 },
+    { id: "w3", label: "pid 3130", sub: "Lock: tuple", x: 305, y: 235, w: 160 },
+    { id: "w4", label: "pid 3133", sub: "Lock: relation", x: 95, y: 235, w: 160 },
+  ]}
+  edges={[
+    { from: "w1", to: "root", label: "기다림" },
+    { from: "w2", to: "w1", label: "줄" },
+    { from: "w3", to: "w2", label: "줄" },
+    { from: "w4", to: "root", label: "기다림" },
+  ]}
+/>
+
+(그림의 pid는 설명을 위한 예다.) 뿌리를 찾았으면 그 세션이 무슨 요청인지 앱 로그에서 찾는다. `pg_stat_activity`의 `application_name`, `client_addr`, `backend_start`가 단서가 된다. 앱이 연결할 때 `application_name`을 서비스 이름으로 넣어 두면 이때 바로 보인다.
+
+지난 일은 로그로 본다. `log_lock_waits`를 켜면 `deadlock_timeout`(기본 1초)보다 오래 기다린 잠금을 서버 로그에 남긴다. 기본값은 꺼져 있다. 클러스터 전체에 켜는 건 `postgresql.conf`나 `ALTER SYSTEM`이고, 이 실험에서는 슈퍼유저 세션에서 `SET log_lock_waits = on`으로 그 세션만 켰다.
+
+```text
+2026-10-20 13:27:19.668 UTC [21127] postgres@belocks_shop LOG:  process 21127 still waiting for ShareLock on transaction 76216 after 1000.132 ms
+2026-10-20 13:27:19.668 UTC [21127] postgres@belocks_shop DETAIL:  Process holding the lock: 21123. Wait queue: 21127.
+2026-10-20 13:27:19.668 UTC [21127] postgres@belocks_shop CONTEXT:  while updating tuple (0,1) in relation "products"
+2026-10-20 13:27:19.668 UTC [21127] postgres@belocks_shop STATEMENT:  UPDATE products SET stock = stock - 1 WHERE product_id = 1001
+2026-10-20 13:27:21.668 UTC [21127] postgres@belocks_shop ERROR:  canceling statement due to lock timeout
+```
+
+<UrlAnatomy
+  caption="log_lock_waits가 남긴 한 건 읽기"
+  base="LOG: process 21127 still waiting"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "FOR", display: "for ShareLock on transaction 76216", title: "무엇을 기다리나", description: "트랜잭션 76216이 끝나기를 기다린다. 행 대기는 항상 이 모양이다. 그 트랜잭션이 어느 행을 잡았는지는 CONTEXT 줄에 나온다.", required: true },
+    { key: "AFTER", display: "after 1000.132 ms", title: "언제 기록됐나", description: "deadlock_timeout(기본 1초)만큼 기다린 시점에 한 번 남긴다. 그 뒤 얼마나 더 기다렸는지는 같은 pid의 다음 로그(성공하면 acquired, 실패하면 ERROR)로 본다. 여기서는 2초 뒤 lock_timeout에 걸렸다." },
+    { key: "DETAIL", display: "Process holding the lock: 21123", title: "누가 막았나", description: "잠금을 쥔 프로세스와 대기 줄이다. 줄에 pid가 여럿이면 그만큼 사람이 서 있었다. 막은 쪽의 쿼리는 이 로그에 없으니 같은 시각의 앱 로그나 log_min_duration_statement 기록과 맞춰 본다.", required: true },
+    { key: "CONTEXT", display: "tuple (0,1) in products", title: "어느 행인가", description: "products 테이블의 (0,1) 위치 행이다. 같은 행 이름이 로그에 반복되면 그 행이 핫스폿이다." },
+    { key: "STMT", display: "STATEMENT", title: "기다린 쪽의 쿼리", description: "기다린 쪽이 실행하던 문장이다. 어떤 API가 줄을 섰는지 여기서 안다.", code: "UPDATE products SET stock = stock - 1 WHERE product_id = 1001" },
+  ]}
+/>
+
+급하면 뿌리 세션을 끊는다. `pg_cancel_backend(pid)`는 실행 중인 쿼리만 취소하니, `idle in transaction`처럼 아무 쿼리도 안 돌리는 세션에는 효과가 없다. 그때는 `pg_terminate_backend(pid)`로 연결을 끊는다. 그 세션의 트랜잭션은 롤백되니, 무엇을 하던 세션인지 확인하고 끊는다. 다시 생기지 않게 하려면 앱의 DB 사용자에 `lock_timeout`과 `idle_in_transaction_session_timeout`을 걸고([잠금과 교착 상태 글](/posts/db-locking-deadlock)의 설정), 핫스폿 행이라면 잠금 대신 한 문장짜리 조건부 `UPDATE`로 바꾸거나, 재고를 여러 행으로 쪼개(재고 10개씩 열 행) 줄을 나누는 방법을 검토한다.
+
+## 잠금은 줄을 세우는 도구다
+
+비관적 잠금은 읽는 순간부터 행을 붙잡아 다른 트랜잭션을 줄 세운다. 그래서 낡은 값을 볼 틈이 없는 대신, 한 행에 몰리면 처리량이 "1초 ÷ 잠금을 쥔 시간"에 묶이고 대기는 줄 길이만큼 길어진다. 잠금은 행 안에 적히고 대기는 트랜잭션 ID에 대한 잠금으로 보이니 `pg_stat_activity`와 `pg_blocking_pids`로 뿌리를 찾는다. 키를 안 바꾸면 `FOR NO KEY UPDATE`, 조인에는 `OF`, 사용자 요청에는 짧은 `lock_timeout`, 행이 아닌 것에는 advisory lock을 쓴다. 충돌이 드문 곳이라면 잠그지 않는 [낙관적 잠금](/posts/optimistic-locking)이, 재고 차감처럼 한 문장으로 되는 곳이라면 [잠금과 교착 상태 글](/posts/db-locking-deadlock)의 조건부 `UPDATE`가 더 싸다.
+
+## 면접에서 나올 만한 질문
+
+### 비관적 잠금을 쓰면 성능이 왜 떨어지나요?
+
+같은 행을 원하는 트랜잭션이 한 번에 하나씩만 들어가기 때문이다. 처리량의 상한이 1초 ÷ 잠금을 쥔 시간이 되고, 대기는 줄 길이 × 쥔 시간이 된다. 실제로 한 행에 클라이언트를 1개에서 16개로 늘려도 처리량은 초당 157건 그대로였고 평균 지연만 6ms에서 103ms로 늘었다. 행이 흩어져 있으면 같은 조건에서 처리량이 15배 늘었다.
+
+### FOR UPDATE와 FOR NO KEY UPDATE는 어떻게 다른가요?
+
+`FOR NO KEY UPDATE`는 키 열을 바꾸지 않는 수정용 잠금이라 외래 키 확인이 거는 `FOR KEY SHARE`와 부딪히지 않는다. `FOR UPDATE`는 행 삭제나 키 변경까지 막는 가장 강한 잠금이라 자식 테이블의 `INSERT`까지 기다리게 한다. 상품 행을 `FOR UPDATE`로 잡으면 그 상품을 참조하는 주문 `INSERT`가 멈췄고, `FOR NO KEY UPDATE`로 바꾸자 1ms에 들어갔다. 행을 지우거나 키를 바꿀 게 아니면 `FOR NO KEY UPDATE`로 충분하다.
+
+### PostgreSQL에서 행 잠금은 어디에 저장되나요?
+
+행 머리의 `xmax`에 잠근 트랜잭션 ID와 잠금 세기 플래그로 적힌다. 공유 메모리 잠금 표를 쓰지 않아서 많은 행을 잠가도 잠금 표가 넘치지 않는다. 여러 트랜잭션이 한 행을 함께 잠그면 MultiXact ID가 들어간다. 그래서 `pg_locks`에는 행 잠금이 보이지 않고, 대기는 상대 트랜잭션 ID에 대한 `ShareLock` 요청으로 보인다.
+
+### 잠금 대기로 느려졌을 때 어떻게 원인을 찾나요?
+
+`pg_stat_activity`에서 `wait_event_type = 'Lock'`인 세션을 찾고 `pg_blocking_pids`로 막는 세션을 따라가 뿌리를 찾는다. 뿌리가 `idle in transaction`이면 앱이 트랜잭션을 연 채 외부 일을 하는 것이고, `active`면 그 쿼리가 느린 것이다. 지난 일은 `log_lock_waits`를 켜서 서버 로그로 본다. 급하면 `pg_terminate_backend`로 뿌리를 끊고, 재발은 `lock_timeout`, `idle_in_transaction_session_timeout`, 잠금 구간 축소로 막는다.
+
+### SKIP LOCKED는 언제 쓰고 무엇을 조심하나요?
+
+여러 워커가 큐 테이블에서 일감을 나눠 집을 때 쓴다. 남이 잠근 행은 기다리지 않고 건너뛰니 워커끼리 겹치지 않고, 워커가 죽으면 롤백되어 일감이 다시 남는다. 결과가 "지금 안 잠긴 행"이라 일관된 읽기가 아니므로 집계에 쓰면 안 되고, 처리 순서도 보장하지 않는다. 오래 걸리는 작업은 상태 값을 먼저 바꾸고 잠금은 바로 놓는다.
+
+### advisory lock은 언제 쓰나요?
+
+잠글 행이 없는 것, 예를 들어 "정산 배치는 한 번에 하나만"을 DB 하나로 판정하고 싶을 때 쓴다. `pg_try_advisory_lock`으로 잡으면 다른 서버는 false를 받고 건너뛴다. 세션 잠금은 커밋해도 남고 연결이 끊기면 풀리며, 트랜잭션 잠금은 커밋 때 풀린다. PgBouncer 트랜잭션 모드에서는 연결이 바뀌니 트랜잭션 잠금만 쓴다.
+
+### MySQL InnoDB의 FOR UPDATE는 PostgreSQL과 무엇이 다른가요?
+
+InnoDB는 `REPEATABLE READ`에서 인덱스 사이의 빈틈까지 잠그는 gap lock, next-key lock을 건다. 범위 조회나 없는 행 조회에도 잠금이 생겨서 "없으면 넣는다" 코드끼리 교착 상태가 자주 난다. PostgreSQL은 빈틈을 잠그지 않아 유일 제약과 `ON CONFLICT`로 막는다. 잠금 대기 기본 상한도 InnoDB는 50초, PostgreSQL은 무제한이라 둘 다 직접 짧게 설정한다.

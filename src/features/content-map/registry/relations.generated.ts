@@ -2,6 +2,69 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "distributed-lock": {
+    "links": [
+      "redis-basics",
+      "idempotency-key",
+      "optimistic-locking",
+      "pessimistic-locking"
+    ],
+    "mentions": [
+      "redis-cluster",
+      "browser-fetch",
+      "k8s-pod-resources",
+      "iptables-basics",
+      "db-locking-deadlock",
+      "resilience-patterns",
+      "db-type-key-value",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "consistent-hashing": {
+    "links": [
+      "db-sharding",
+      "redis-cluster"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "db-type-wide-column",
+      "vpc-basics",
+      "redis-basics",
+      "caching-strategies"
+    ]
+  },
+  "pessimistic-locking": {
+    "links": [
+      "db-locking-deadlock",
+      "optimistic-locking",
+      "distributed-lock"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "sql-batch-timeout-pool",
+      "db-transaction-isolation",
+      "postgres-getting-started"
+    ]
+  },
+  "optimistic-locking": {
+    "links": [
+      "db-locking-deadlock",
+      "db-transaction-isolation",
+      "resilience-patterns",
+      "pessimistic-locking",
+      "http-caching-cdn",
+      "http-status-codes"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "db-type-key-value",
+      "sql-basics",
+      "mongodb-document-model",
+      "redis-basics",
+      "postgres-getting-started"
+    ]
+  },
   "sdn-vxlan-overlay": {
     "links": [
       "vlan-basics",
@@ -95,6 +158,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "http-methods",
       "rest-api-design",
+      "distributed-lock",
       "sql-batch-timeout-pool"
     ],
     "mentions": [
@@ -746,6 +810,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-insert-update-delete"
     ],
     "mentions": [
+      "pessimistic-locking",
       "postgres-mvcc-vacuum",
       "db-architecture-by-scale",
       "postgres-getting-started"
@@ -1252,6 +1317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "pessimistic-locking",
       "db-architecture-by-scale",
       "db-type-relational",
       "postgres-getting-started",
@@ -1608,6 +1674,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "pessimistic-locking",
       "db-type-time-series",
       "postgres-advanced-sql",
       "db-type-columnar-olap",
@@ -1673,6 +1740,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "tcp-connection-lifecycle",
       "browser-fetch",
+      "consistent-hashing",
       "osi-in-practice",
       "redis-basics",
       "resilience-patterns",
@@ -1753,6 +1821,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "redis-cluster",
+      "distributed-lock",
       "db-type-relational",
       "db-transaction-isolation",
       "dns"
@@ -1814,6 +1883,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "optimistic-locking",
       "loading-patterns",
       "upper-layers-session-presentation-app",
       "client-data-cache",
@@ -2062,6 +2132,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "base64",
+      "optimistic-locking",
       "loading-patterns",
       "db-locking-deadlock",
       "db-index-design",

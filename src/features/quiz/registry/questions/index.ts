@@ -8,6 +8,7 @@ import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CODE_SPLITTING } from "./code-splitting";
+import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
@@ -32,6 +33,7 @@ import { DB_TYPE_RELATIONAL } from "./db-type-relational";
 import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
+import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
@@ -101,8 +103,10 @@ import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
+import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
+import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
 import { POSTGRES_ARCHITECTURE } from "./postgres-architecture";
@@ -180,6 +184,7 @@ export const QUESTION_SETS = [
   CDN_EDGE_ANYCAST,
   CLIENT_DATA_CACHE,
   CODE_SPLITTING,
+  CONSISTENT_HASHING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
@@ -204,6 +209,7 @@ export const QUESTION_SETS = [
   DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
+  DISTRIBUTED_LOCK,
   DNS,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
@@ -273,8 +279,10 @@ export const QUESTION_SETS = [
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
   OAUTH,
+  OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
+  PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,
   POSTGRES_ARCHITECTURE,

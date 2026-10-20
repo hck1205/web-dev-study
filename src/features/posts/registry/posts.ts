@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "distributed-lock",
+    title: "분산 락: 만료되는 락과 펜싱 토큰",
+    summary: "만료 시간이 있는 분산 락이 프로세스 멈춤과 장애 조치로 둘이 되는 장면을 재현하고, 펜싱 토큰으로 저장소가 늦은 쓰기를 거절하게 만든다. Redlock 논쟁과 etcd, ZooKeeper 락까지 비교한다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Redis", "Concurrency", "PostgreSQL"],
+    date: "2026-10-20",
+    keywords: ["펜싱 토큰", "Redlock", "락 임대"],
+  },
+  {
+    slug: "consistent-hashing",
+    title: "일관된 해싱: 가상 노드, 점프 해시, 랑데부",
+    summary: "서버를 늘릴 때 옮기는 키를 최소로 만드는 방법들을 직접 재서 비교한다. 가상 노드 수에 따른 편차, 점프 해시와 랑데부 해싱, Nginx의 hash consistent, 운영에서 링이 어긋나는 경우를 다룬다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Scalability", "Cache", "Algorithm", "Nginx"],
+    date: "2026-10-20",
+    keywords: ["점프 해시", "랑데부 해싱", "ketama"],
+  },
+  {
+    slug: "pessimistic-locking",
+    title: "비관적 잠금: FOR UPDATE가 세우는 줄",
+    summary: "읽는 순간부터 행을 붙잡는 잠금이 PostgreSQL 안에서 어디에 적히고 누가 누구를 기다리는지 본다. 행 잠금 네 가지 세기, 외래 키와의 충돌, 잠금 대기 추적, advisory lock까지 두 세션으로 재현한다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "PostgreSQL", "SQL", "Concurrency", "Transaction", "Troubleshooting"],
+    date: "2026-10-20",
+    keywords: ["FOR NO KEY UPDATE", "advisory lock", "pg_blocking_pids"],
+  },
+  {
+    slug: "optimistic-locking",
+    title: "낙관적 잠금: 버전으로 덮어쓰기를 알아채기",
+    summary: "잠그지 않고 쓰는 순간에 버전을 확인해 덮어쓰기를 알아채는 방법이다. 버전으로 무엇을 쓸지, 0행이 오면 무엇을 할지, 충돌이 잦으면 왜 무너지는지, ETag와 If-Match로 브라우저까지 버전을 들고 가는 법을 실제 출력으로 본다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "PostgreSQL", "SQL", "Concurrency", "Transaction", "HTTP"],
+    date: "2026-10-20",
+    keywords: ["If-Match", "버전 컬럼", "@Version"],
+  },
+  {
     slug: "sdn-vxlan-overlay",
     title: "SDN과 VXLAN 오버레이: 물리망 위에 논리망 얹기",
     summary: "Pod IP가 노드 캡처에 안 보이는 이유를 VXLAN 캡슐화로 푼다. VTEP과 FDB, flood-and-learn과 EVPN, 제어 평면을 떼어 낸 SDN, 조용히 사라지는 큰 패킷과 ECMP까지 실제 캡처로 본다.",

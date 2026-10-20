@@ -1,0 +1,602 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("optimistic-locking");
+
+관리자 페이지에서 무선 이어폰 가격을 89,000원에서 79,000원으로 내렸다. 저장 버튼을 누르고 "저장되었습니다"도 봤다. 10분 뒤 고객센터에서 연락이 왔다. 할인가가 안 보인다고. 확인해 보니 그사이 다른 관리자가 같은 상품의 이름 오타를 고쳤고, 그 사람의 수정 화면에는 할인 전 가격 89,000원이 그대로 들어 있었다. 그 화면이 저장되면서 내 할인가를 덮었다. 에러는 어디에도 없었다.
+
+이 글은 이런 덮어쓰기를 "막는" 대신 "알아채는" 방법, 낙관적 잠금을 깊게 판다. 재고 차감 같은 짧은 작업에서 조건부 `UPDATE`, `FOR UPDATE`, 버전 열을 한자리에서 비교한 건 [잠금과 교착 상태 글](/posts/db-locking-deadlock)에 있다. 여기서는 버전을 무엇으로 삼을지, 0행이 돌아왔을 때 무엇을 할지, 충돌이 잦아지면 왜 무너지는지, HTTP의 `ETag`와 `If-Match`로 브라우저까지 버전을 들고 가는 법을 본다. SQL은 PostgreSQL 16 기준이고, 출력은 PostgreSQL 16.15에 psql 두 개를 붙여 실제로 실행한 결과다.
+
+## 나중에 저장한 사람이 이긴다
+
+예제 테이블은 상품 세 줄이다. 글 끝까지 이 테이블을 쓴다.
+
+```sql
+CREATE TABLE products (
+  product_id bigint  PRIMARY KEY,
+  name       text    NOT NULL,
+  price      integer NOT NULL,
+  stock      integer NOT NULL CHECK (stock >= 0),
+  version    integer NOT NULL DEFAULT 1,          -- 고칠 때마다 1씩 올린다
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO products (product_id, name, price, stock) VALUES
+  (1001, '무선 이어폰', 89000, 1),
+  (1002, '충전 케이스', 19000, 30),
+  (1003, '이어팁', 5000, 120);
+```
+
+관리자 수정 화면은 보통 폼 전체를 보낸다. 바꾼 칸만이 아니라 화면에 있던 모든 값으로 `UPDATE`한다. 처음 장면을 두 세션으로 재현하면 이렇다. A가 가격을, B가 이름을 고친다. 둘 다 같은 시점에 화면을 열었다.
+
+```sql
+-- [1] A, B 둘 다 수정 화면을 연다
+SELECT name, price, version FROM products WHERE product_id = 1001;
+
+-- [2] A: 가격만 바꿨지만 폼 전체를 보낸다
+UPDATE products SET name = '무선 이어폰', price = 79000 WHERE product_id = 1001;
+
+-- [3] B: 이름만 바꿨지만 화면에 있던 옛 가격도 같이 보낸다
+UPDATE products SET name = '무선 이어폰 프로', price = 89000 WHERE product_id = 1001;
+```
+
+```text
+-- [2] A
+UPDATE 1
+-- [3] B
+UPDATE 1
+-- 이후 다시 읽으면
+       name       | price | version
+------------------+-------+---------
+ 무선 이어폰 프로 | 89000 |       1
+(1 row)
+```
+
+둘 다 `UPDATE 1`을 받았고 에러도 없다. A의 할인가만 조용히 사라졌다. 이걸 갱신 손실(lost update)이라고 부른다. 트랜잭션으로 감싸도 막히지 않는 이유는 [트랜잭션과 격리 수준 글](/posts/db-transaction-isolation)에서 다뤘다. 여기서 눈여겨볼 건 두 `UPDATE` 사이의 시간이다. 사람이 화면을 보고 고민하는 몇 분이 그 사이에 있다. 이 몇 분 동안 DB 트랜잭션을 열어 두고 행을 잠글 수는 없다. 그래서 수정 화면 같은 곳에는 잠그지 않고, 저장하는 순간에 "내가 본 뒤로 누가 바꿨나"만 확인하는 방식이 맞는다.
+
+<SequenceDiagram
+  caption="잠금 없이 폼 전체를 저장하면 생기는 일"
+  actors={[
+    { id: "a", label: "관리자 A" },
+    { id: "db", label: "DB" },
+    { id: "b", label: "관리자 B" },
+  ]}
+  steps={[
+    { from: "a", to: "db", label: "SELECT", title: "A가 수정 화면을 연다", detail: "가격 89,000원, 버전 1을 받아 화면에 띄운다.", payload: "name=무선 이어폰, price=89000" },
+    { from: "b", to: "db", label: "SELECT", title: "B도 같은 화면을 연다", detail: "B도 89,000원을 본다. 둘은 서로가 화면을 연 줄 모른다." },
+    { from: "a", to: "db", label: "UPDATE 79000", title: "A가 할인가를 저장한다", detail: "가격이 79,000원이 된다. A는 저장 완료 메시지를 본다.", payload: "UPDATE 1" },
+    { from: "b", to: "db", label: "UPDATE 89000", title: "B가 이름을 고쳐 저장한다", detail: "B의 폼에는 옛 가격 89,000원이 남아 있었다. 이름과 함께 그 값이 그대로 들어간다.", payload: "UPDATE 1" },
+    { from: "db", to: "db", label: "할인가 사라짐", title: "마지막 저장이 이긴다", detail: "에러는 없다. A의 변경만 흔적 없이 사라졌다. 이걸 알아채게 하는 게 낙관적 잠금이다." },
+  ]}
+/>
+
+## 버전 번호 하나로 덮어쓰기를 알아챈다
+
+방법은 단순하다. 행마다 `version` 숫자를 두고, 읽을 때 같이 받아 둔다. 저장할 때는 "내가 읽은 버전일 때만" 고치고, 고치면서 버전을 1 올린다. 비교와 쓰기가 한 문장 안에서 일어나니 그 사이에 끼어들 틈이 없다. CPU의 compare-and-swap(CAS) 명령과 같은 생각이다. 기대한 값과 같을 때만 바꾸고, 다르면 실패를 알린다.
+
+<UrlAnatomy
+  caption="버전 확인이 들어간 UPDATE 한 줄 읽기"
+  base="UPDATE products"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "SET", display: "SET price = 79000", title: "바꿀 값", description: "화면에서 고친 값이다. 폼 전체를 보내도 되고 바뀐 칸만 보내도 된다. 버전 확인이 있으면 어느 쪽이든 덮어쓰기는 걸러진다.", required: true },
+    { key: "VER", display: ", version = version + 1", title: "버전 올리기", description: "고칠 때마다 1씩 올린다. 다음에 이 행을 읽은 사람은 새 버전을 들고 와야 한다. 앱이 계산한 값(version = 2)이 아니라 DB가 계산하게 두는 편이 실수가 적다.", required: true },
+    { key: "WHERE", display: "WHERE product_id = 1001", title: "고칠 행", description: "기본 키로 한 행을 고른다. 낙관적 잠금은 행 하나 단위의 확인이다." },
+    { key: "AND", display: "AND version = 1", title: "내가 읽은 버전일 때만", description: "핵심 조건이다. 그사이 누가 고쳤다면 버전이 2 이상이라 이 조건에 맞는 행이 없다. 에러가 아니라 0행 수정으로 끝난다.", required: true },
+    { key: "RET", display: "RETURNING version", title: "새 버전 돌려받기", description: "성공하면 새 버전을 바로 받는다. 다시 SELECT하지 않고 화면에 넘겨줄 수 있다. 0행이면 결과도 0행이다.", code: " version\n---------\n       2\n(1 row)\n\nUPDATE 1" },
+  ]}
+/>
+
+같은 장면을 버전 조건을 넣어 다시 돌렸다.
+
+```sql
+-- [1] A, B 둘 다 읽는다. 둘 다 version = 1
+SELECT name, price, version FROM products WHERE product_id = 1001;
+
+-- [2] A
+UPDATE products
+SET name = '무선 이어폰', price = 79000,
+    version = version + 1, updated_at = now()
+WHERE product_id = 1001 AND version = 1        -- 내가 읽은 버전
+RETURNING version;
+
+-- [3] B: B도 버전 1을 읽었다
+UPDATE products
+SET name = '무선 이어폰 프로', price = 89000,
+    version = version + 1, updated_at = now()
+WHERE product_id = 1001 AND version = 1
+RETURNING version;
+```
+
+```text
+-- [2] A
+ version
+---------
+       2
+(1 row)
+
+UPDATE 1
+-- [3] B
+ version
+---------
+(0 rows)
+
+UPDATE 0
+```
+
+B는 `UPDATE 0`을 받았다. 앱은 영향받은 행 수를 보고 충돌을 안다. node-postgres라면 `result.rowCount`, JDBC라면 `executeUpdate()`의 반환값이다. 이 숫자를 안 보는 코드가 생각보다 많다. 0행이 돌아와도 예외가 아니니, 확인하지 않으면 여전히 "저장되었습니다"가 뜬다.
+
+## UPDATE 0이 오면 무엇을 하나
+
+0행이 돌아왔다고 다 충돌은 아니다. 그사이 누가 행을 지웠을 수도 있다. 없는 상품을 고치려 해도 똑같이 `UPDATE 0`이 나온다.
+
+```sql
+UPDATE products SET price = 1 WHERE product_id = 9999 AND version = 1;   -- 없는 상품
+```
+
+```text
+UPDATE 0
+```
+
+그래서 0행이면 한 번 더 읽어서 구분한다. 행이 없으면 404, 있는데 버전이 다르면 충돌(HTTP로는 409나 412)이다. 충돌이면 그다음은 누가 고치는 중이었냐에 따라 갈린다.
+
+사람이 화면에서 고친 경우에는 자동으로 재시도하면 안 된다. 다시 읽고 B의 값으로 다시 저장하면, 그게 바로 처음의 덮어쓰기다. 대신 B에게 "그사이 다른 사람이 고쳤다"고 알리고 최신 값을 보여 준다. 위키나 문서 편집기처럼 바뀐 칸만 비교해 겹치지 않으면 합쳐 주는 방법도 있다. A는 가격, B는 이름을 고쳤으니 합쳐도 된다. 같은 칸을 둘 다 고쳤을 때만 사람에게 묻는다.
+
+기계가 계산한 값이라면 다시 읽고 다시 계산해서 재시도한다. 재고를 줄이는 배치, 포인트 적립 같은 경우다. 아래는 B가 충돌을 받고 다시 시도하는 과정이다.
+
+```sql
+-- [4] B: 다시 읽는다
+SELECT name, price, version FROM products WHERE product_id = 1001;
+
+-- [5] B: 새 버전으로 다시 쓴다 (A의 가격을 살리고 이름만 바꾼다)
+UPDATE products
+SET name = '무선 이어폰 프로', price = 79000,
+    version = version + 1, updated_at = now()
+WHERE product_id = 1001 AND version = 2
+RETURNING version;
+```
+
+```text
+-- [4] B
+    name     | price | version
+-------------+-------+---------
+ 무선 이어폰 | 79000 |       2
+(1 row)
+
+-- [5] B
+ version
+---------
+       3
+(1 row)
+
+UPDATE 1
+```
+
+재시도 루프는 읽기, 계산, 조건부 쓰기 세 단계를 통째로 반복한다. 아래 그림은 워커 둘이 같은 행의 재고를 하나씩 줄이는 과정이다. 칸은 시도 순서이고, 오른쪽 상자는 DB에 있는 행의 지금 상태다.
+
+<AlgoTrace
+  caption="충돌하면 다시 읽고 다시 계산한다"
+  memoryLabel="DB의 행"
+  cells={["A 읽기", "B 읽기", "A 쓰기", "B 쓰기", "B 다시 읽기", "B 다시 쓰기"]}
+  steps={[
+    { memory: ["stock=120", "version=1"], caption: "처음 상태다. 재고 120, 버전 1." },
+    { pointer: 0, memory: ["stock=120", "version=1"], caption: "A가 읽는다. 120과 버전 1을 기억한다." },
+    { pointer: 1, memory: ["stock=120", "version=1"], caption: "B도 읽는다. B도 120과 버전 1을 기억한다." },
+    { pointer: 2, found: [2], memory: ["stock=119", "version=2"], caption: "A가 version = 1 조건으로 119를 쓴다. 성공해서 버전이 2가 된다." },
+    { pointer: 3, memory: ["stock=119", "version=2"], caption: "B도 version = 1 조건으로 119를 쓰려 한다. 버전이 2라 0행이다. 행은 그대로다." },
+    { pointer: 4, memory: ["stock=119", "version=2"], caption: "B는 읽은 값을 버리고 처음부터 다시 읽는다. 119와 버전 2." },
+    { pointer: 5, found: [2, 5], memory: ["stock=118", "version=3"], caption: "버전 2 조건으로 118을 쓴다. 이번엔 성공이다. 두 차감이 모두 남았다." },
+  ]}
+/>
+
+재시도할 때 이전 시도에서 읽은 값을 재사용하면 안 된다. 계산까지 다시 해야 의미가 있다. 재시도 횟수에는 상한(보통 3~5번)을 두고, 시도 사이에 무작위 지연을 섞는다. 상한을 넘기면 사용자에게 실패를 돌려준다. 끝없이 재시도하는 코드는 충돌이 몰리는 순간 DB에 같은 쿼리를 쏟아붓는다. 재시도와 지터에 대한 일반적인 이야기는 [장애에 버티는 패턴 글](/posts/resilience-patterns)에 있다.
+
+## 잠그지 않는다더니 기다렸다
+
+"낙관적 잠금은 잠그지 않는다"는 말은 반만 맞다. 읽을 때 잠그지 않는다는 뜻이다. `UPDATE`는 어떤 방식이든 쓰는 순간 그 행에 잠금을 건다. 그래서 A가 버전 조건으로 고친 뒤 트랜잭션을 열어 둔 채 머물면, B의 같은 `UPDATE`는 기다린다.
+
+```sql
+-- [1] A: 트랜잭션 안에서 고치고 아직 커밋하지 않는다
+BEGIN;
+UPDATE products SET price = 79000, version = version + 1
+WHERE product_id = 1001 AND version = 1;
+
+-- [2] B: 같은 조건으로 고친다 (\timing on)
+UPDATE products SET price = 99000, version = version + 1
+WHERE product_id = 1001 AND version = 1;
+
+-- [3] A: 2초쯤 뒤에 커밋
+COMMIT;
+```
+
+```text
+-- [1] A
+BEGIN
+UPDATE 1
+-- [2] B: A가 커밋한 뒤에야 돌아온다
+UPDATE 0
+Time: 2007.031 ms (00:02.007)
+```
+
+B는 A가 커밋할 때까지 2초를 기다렸다. 그리고 `UPDATE 0`이 됐다. `READ COMMITTED`에서 PostgreSQL은 기다리던 행이 바뀌면 바뀐 최신 버전을 가져와 `WHERE` 조건을 다시 검사한다. 최신 행의 버전은 2라서 `version = 1`이 거짓이 됐다. A가 롤백했다면 B는 원래 행에 그대로 써서 `UPDATE 1`이 됐을 것이다. 잠금 대기는 있어도 판정은 정확하다.
+
+여기서 실무의 결론이 두 가지 나온다. 하나는 버전 확인 `UPDATE`를 실행한 트랜잭션을 길게 끌면 안 된다는 것이다. 버전 확인 뒤에 결제 API를 부르면 낙관적 잠금을 쓰는데도 다른 요청이 그 시간만큼 줄을 선다. 다른 하나는 앱에서 먼저 확인하고 나중에 쓰는 코드가 위험하다는 것이다.
+
+```ts
+// 하면 안 되는 모양: 확인과 쓰기 사이에 틈이 있다
+const row = await db.query("SELECT version FROM products WHERE product_id = $1", [id]);
+if (row.rows[0].version !== expected) throw new Conflict();
+await db.query("UPDATE products SET price = $1, version = version + 1 WHERE product_id = $2", [price, id]);
+
+// 이렇게: 확인을 UPDATE의 WHERE에 넣고 영향받은 행 수를 본다
+const r = await db.query(
+  "UPDATE products SET price = $1, version = version + 1 WHERE product_id = $2 AND version = $3",
+  [price, id, expected],
+);
+if (r.rowCount === 0) throw new Conflict(); // 없는 행인지 한 번 더 읽어 404와 구분한다
+```
+
+첫 번째 코드는 `SELECT`와 `UPDATE` 사이에 다른 요청이 끼어들 수 있다. 확인한 시점(time of check)과 쓴 시점(time of use)이 다르면 확인은 의미가 없다.
+
+## 버전 숫자 대신 쓸 수 있는 것들
+
+버전 열 말고 이미 있는 값을 버전처럼 쓰고 싶어진다. 각각 함정이 있다.
+
+`updated_at`을 버전으로 쓰는 경우가 가장 흔하다. 열을 새로 만들 필요가 없어서다. 그런데 PostgreSQL의 `timestamptz`는 마이크로초까지 저장하고, 자바스크립트 `Date`는 밀리초까지만 다룬다. 화면에 내려간 시각을 그대로 돌려받아 비교하면 맞을 수가 없다.
+
+```sql
+SELECT updated_at FROM products WHERE product_id = 1002;
+-- 브라우저가 들고 있던 값은 new Date(...).toISOString() = '2026-10-20T13:18:35.057Z'
+UPDATE products SET price = 18000, updated_at = now()
+WHERE product_id = 1002 AND updated_at = '2026-10-20T13:18:35.057Z';
+```
+
+```text
+          updated_at
+------------------------------
+ 2026-10-20 13:18:35.05726+00
+(1 row)
+
+UPDATE 0
+```
+
+아무도 안 고쳤는데 항상 충돌이 난다. 반대 방향의 함정도 있다. `now()`는 트랜잭션이 시작한 시각을 돌려주므로, 한 트랜잭션 안에서 두 번 고치면 시각이 같다.
+
+```sql
+BEGIN;
+UPDATE products SET price = 17000, updated_at = now() WHERE product_id = 1003 RETURNING updated_at;
+UPDATE products SET price = 16000, updated_at = now() WHERE product_id = 1003 RETURNING updated_at;
+COMMIT;
+```
+
+```text
+          updated_at
+-------------------------------
+ 2026-10-20 13:18:35.327612+00
+(1 row)
+
+UPDATE 1
+          updated_at
+-------------------------------
+ 2026-10-20 13:18:35.327612+00
+(1 row)
+
+UPDATE 1
+```
+
+값이 바뀌었는데 "버전"은 그대로다. 시계를 되돌리는 서버(NTP 보정)가 섞이면 더 꼬인다. 시각은 보여 주는 용도로 두고 비교는 정수 버전으로 하는 게 낫다.
+
+PostgreSQL에는 숨은 시스템 열 `xmin`이 있다. 그 행 버전을 만든 트랜잭션 ID라서 행을 고칠 때마다 바뀐다.
+
+```sql
+SELECT xmin, version FROM products WHERE product_id = 1001;
+UPDATE products SET stock = stock WHERE product_id = 1001;   -- 값은 그대로 두고 UPDATE만
+SELECT xmin, version FROM products WHERE product_id = 1001;
+```
+
+```text
+ xmin  | version
+-------+---------
+ 52479 |       2
+(1 row)
+
+UPDATE 1
+ xmin  | version
+-------+---------
+ 52481 |       2
+(1 row)
+```
+
+열을 따로 만들지 않아도 되니 편하다. .NET의 EF Core용 Npgsql 드라이버가 이 방식을 지원한다. 다만 PostgreSQL 전용이고, 덤프 후 복원하면 값이 전부 바뀌며, 값이 그대로인 `UPDATE`에도 바뀐다. 오래된 행은 VACUUM이 얼려서(freeze) 의미가 달라지기도 한다. 이식성과 예측 가능성을 생각하면 명시적인 `version` 열이 낫다.
+
+버전 열을 둘 수 없는 레거시 테이블이라면 읽었던 모든 값을 `WHERE`에 거는 방법이 있다. `WHERE product_id = 1001 AND name = '무선 이어폰' AND price = 89000`. 열이 많으면 문장이 길어지고, `NULL`이 섞이면 `=` 대신 `IS NOT DISTINCT FROM`을 써야 한다. 값이 A → B → A로 돌아오는 경우(ABA 문제)는 못 잡는다. 버전 숫자는 계속 올라가기만 하니 ABA가 없다.
+
+DB에 맡기는 방법도 있다. `REPEATABLE READ`에서는 내가 읽은 뒤 다른 트랜잭션이 고친 행을 고치려 하면 PostgreSQL이 에러를 낸다.
+
+```sql
+-- [1] A
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT price FROM products WHERE product_id = 1001;   -- 89000
+-- [2] B
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT price FROM products WHERE product_id = 1001;   -- 89000
+-- [3] A
+UPDATE products SET price = 79000 WHERE product_id = 1001;
+COMMIT;
+-- [4] B
+UPDATE products SET price = 99000 WHERE product_id = 1001;
+```
+
+```text
+-- [4] B
+ERROR:  could not serialize access due to concurrent update
+```
+
+DB가 대신 해 주는 낙관적 검사다. SQLSTATE 40001이 오면 트랜잭션 전체를 다시 실행한다. 하지만 트랜잭션 하나 안에서만 통한다. 사람이 화면을 보는 몇 분 동안 트랜잭션을 열어 둘 수 없으니 수정 화면에는 쓸 수 없다. 요청과 요청 사이를 건너는 확인에는 버전 열이 필요하다. MySQL InnoDB의 `REPEATABLE READ`는 이 에러를 내지 않고 최신 값에 그대로 쓴다. MySQL에서는 버전 열이 더 중요하다.
+
+## 충돌이 잦으면 재시도가 일을 잡아먹는다
+
+낙관적 잠금은 "충돌이 드물다"에 거는 내기다. 내기가 틀리면 어떻게 되는지 재 봤다. psycopg로 워커를 여러 개 띄우고, 워커마다 카운터를 1씩 올린다. 읽고 2ms 쉬고(앱이 계산하는 시간이라 치고) 버전 조건으로 쓴다. 0행이면 바로 다시 시도한다. 같은 일을 `FOR UPDATE`로 잠그고 한 것과 비교했다. 행이 1개면 모든 워커가 한 행에 몰리고, 1,000개면 무작위로 흩어진다. 이 컨테이너의 로컬 PostgreSQL 16.15에서 잰 값이다.
+
+```text
+mode         workers rows  성공  시도   충돌  충돌 비율  걸린 시간
+optimistic         2    1   400   718    318     44.3%    1.34s
+pessimistic        2    1   400   400      0      0.0%    1.35s
+optimistic         8    1   400  2718   2318     85.3%    1.54s
+pessimistic        8    1   400   400      0      0.0%    1.36s
+optimistic        32    1   384  5497   5113     93.0%    2.66s
+pessimistic       32    1   384   384      0      0.0%    1.52s
+optimistic         2 1000   400   400      0      0.0%    0.69s
+pessimistic        2 1000   400   400      0      0.0%    0.79s
+optimistic         8 1000   400   401      1      0.2%    0.28s
+pessimistic        8 1000   400   400      0      0.0%    0.34s
+optimistic        32 1000   384   388      4      1.0%    0.35s
+pessimistic       32 1000   384   384      0      0.0%    0.38s
+```
+
+한 행에 워커 32개가 몰리면 384번 성공하려고 5,497번 시도했다. 시도 열 번 중 아홉 번이 버려진 셈이고, 버려진 시도마다 `SELECT`와 `UPDATE`가 DB에 갔다. 같은 조건에서 `FOR UPDATE`는 줄을 서서 한 번에 하나씩 처리해 더 빨리 끝났다. 반대로 행이 흩어져 있으면 충돌이 거의 없고(1% 이하), 잠금을 잡고 푸는 비용이 없는 낙관적 쪽이 조금 빨랐다.
+
+숫자가 말하는 건 하나다. 낙관적 잠금은 같은 행을 동시에 고칠 확률이 낮을 때 싸고, 높을 때 비싸다. 선착순 한정 판매의 재고 행, 인기 게시글의 조회수처럼 쓰기가 한 행에 몰리는 곳에는 맞지 않는다. 그런 곳은 아래처럼 고른다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="같은 행을 고칠 때 무엇을 고르나"
+  nodes={[
+    { id: "q", label: "한 문장으로 되나", sub: "stock = stock - 1", x: 200, y: 40, w: 170 },
+    { id: "atomic", label: "조건부 UPDATE", sub: "잠금도 재시도도 없음", x: 95, y: 130, w: 160 },
+    { id: "q2", label: "사람이 오래 보나", sub: "수정 화면, 문서", x: 305, y: 130, w: 160 },
+    { id: "opt", label: "낙관적 잠금", sub: "버전 열, If-Match", x: 95, y: 220, w: 160 },
+    { id: "q3", label: "충돌이 잦은가", sub: "한 행에 몰림", x: 305, y: 220, w: 160 },
+    { id: "pes", label: "비관적 잠금", sub: "FOR UPDATE", x: 305, y: 300, w: 160 },
+    { id: "opt2", label: "낙관적 + 재시도", sub: "상한, 지터", x: 95, y: 300, w: 160 },
+  ]}
+  edges={[
+    { from: "q", to: "atomic", label: "예" },
+    { from: "q", to: "q2", label: "아니요" },
+    { from: "q2", to: "opt", label: "예" },
+    { from: "q2", to: "q3", label: "아니요" },
+    { from: "q3", to: "pes", label: "예" },
+    { from: "q3", to: "opt2", label: "아니요" },
+  ]}
+/>
+
+한 문장으로 표현되는 계산이면 버전도 잠금도 필요 없다. `UPDATE products SET stock = stock - 1 WHERE product_id = 1003 AND stock > 0`은 DB가 행 잠금 안에서 최신 값으로 계산하니 충돌 자체가 없다. 낙관적 잠금은 앱이 읽은 값을 바탕으로 판단해야 하고, 그 판단이 길거나 사람이 끼는 경우에 쓴다. 충돌이 잦은데 판단도 복잡하면 [비관적 잠금](/posts/pessimistic-locking)으로 줄을 세우는 편이 낫다.
+
+## 브라우저까지 버전을 들고 가기
+
+수정 화면이 브라우저에 있으면 버전도 브라우저까지 다녀와야 한다. 응답 본문에 `version` 필드를 넣어도 되지만, HTTP에는 이 용도의 표준 헤더가 있다. 서버가 응답에 `ETag`(자원의 지금 버전을 나타내는 꼬리표)를 붙이고, 클라이언트는 고칠 때 `If-Match`에 받은 꼬리표를 담는다. 서버는 꼬리표가 지금 버전과 다르면 `412 Precondition Failed`로 거절한다. `ETag`가 캐시 재검증(`If-None-Match`)에서 어떻게 쓰이는지는 [HTTP 캐싱 글](/posts/http-caching-cdn)에 있다. 같은 꼬리표를 이번에는 쓰기 쪽에 쓰는 것이다.
+
+<SequenceDiagram
+  caption="ETag와 If-Match로 덮어쓰기를 막는다"
+  actors={[
+    { id: "a", label: "브라우저 A" },
+    { id: "api", label: "API" },
+    { id: "b", label: "브라우저 B" },
+  ]}
+  steps={[
+    { from: "a", to: "api", label: "GET", title: "A가 상품을 읽는다", detail: "응답 헤더에 ETag가 붙어 온다. 버전 3이라는 뜻이다.", payload: "HTTP/1.1 200 OK\nETag: \"v3\"" },
+    { from: "b", to: "api", label: "GET", title: "B도 읽는다", detail: "B도 같은 꼬리표 \"v3\"을 받는다." },
+    { from: "a", to: "api", label: "PUT If-Match v3", title: "A가 저장한다", detail: "받았던 꼬리표를 If-Match에 담는다. 지금 버전과 같으니 저장하고 새 꼬리표를 돌려준다.", payload: "PUT /products/1001\nIf-Match: \"v3\"\n\nHTTP/1.1 200 OK\nETag: \"v4\"" },
+    { from: "b", to: "api", label: "PUT If-Match v3", title: "B가 낡은 꼬리표로 저장한다", detail: "지금은 v4다. 서버는 조건이 맞지 않는다며 아무것도 바꾸지 않는다.", payload: "HTTP/1.1 412 Precondition Failed\nETag: \"v4\"" },
+    { from: "api", to: "b", label: "최신 값", title: "B에게 최신 상태를 보여 준다", detail: "B는 A의 변경을 보고 자기 변경을 다시 적용할지 고른다. 덮어쓰기가 아니라 사람의 선택이 된다." },
+  ]}
+/>
+
+노드로 작은 서버를 만들어 curl로 확인했다. 상품을 메모리에 두고, `PUT`은 `If-Match`가 없으면 428, 지금 꼬리표와 다르면 412를 돌려준다.
+
+```bash
+# 읽기: ETag를 받는다
+curl -si http://localhost:3077/products/1001
+# A의 저장: 받은 꼬리표로 조건부 PUT
+curl -si -X PUT -H 'If-Match: "v3"' -H 'Content-Type: application/json' \
+  -d '{"price":79000}' http://localhost:3077/products/1001
+# B의 저장: 같은 낡은 꼬리표
+curl -si -X PUT -H 'If-Match: "v3"' -H 'Content-Type: application/json' \
+  -d '{"name":"무선 이어폰 프로"}' http://localhost:3077/products/1001
+# 꼬리표 없이 저장
+curl -si -X PUT -H 'Content-Type: application/json' -d '{"name":"x"}' http://localhost:3077/products/1001
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json
+ETag: "v3"
+
+{"id":1001,"name":"무선 이어폰","price":89000,"version":3}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+ETag: "v4"
+
+{"id":1001,"name":"무선 이어폰","price":79000,"version":4}
+
+HTTP/1.1 412 Precondition Failed
+Content-Type: application/json
+ETag: "v4"
+
+{"error":"version mismatch","current":{"id":1001,"name":"무선 이어폰","price":79000,"version":4}}
+
+HTTP/1.1 428 Precondition Required
+Content-Type: application/json
+
+{"error":"If-Match header required"}
+```
+
+(`Date`, `Connection` 같은 공통 헤더는 줄였다.) 412 응답에 지금 꼬리표와 최신 값을 함께 주면 클라이언트가 다시 읽는 왕복을 줄인다. 428은 RFC 6585에 있는 코드로, "조건 없이 고치는 요청은 받지 않겠다"는 뜻이다. 클라이언트가 `If-Match`를 빠뜨리는 실수를 서버가 막아 준다. 상태 코드 전반은 [HTTP 상태 코드 글](/posts/http-status-codes)에 있다.
+
+이 데모 서버는 메모리 객체를 고치니 확인과 쓰기 사이에 틈이 없다. 실제 서버는 꼬리표에서 버전을 꺼내 앞의 `UPDATE ... WHERE version = $3`에 그대로 넣는다. 꼬리표를 `SELECT`로 비교하고 따로 `UPDATE`하면 앞에서 본 틈이 다시 생긴다.
+
+전체 흐름을 네트워크 쪽에서 보면, 낡은 꼬리표는 DB까지 갔다가 조건에 걸려 돌아온다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="낡은 If-Match는 DB의 WHERE에서 걸러진다"
+  zones={[
+    { id: "server", label: "서버 쪽", x: 150, y: 20, w: 240, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "b", label: "브라우저 B", sub: "If-Match v3", x: 70, y: 125, icon: "client", w: 110 },
+    { id: "api", label: "API 서버", sub: "PUT 처리", x: 215, y: 125, icon: "server", w: 100 },
+    { id: "db", label: "PostgreSQL", sub: "version = 4", x: 335, y: 125, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "b", to: "api" },
+    { from: "api", to: "db" },
+  ]}
+  steps={[
+    { path: ["b", "api"], packet: "v3", title: "낡은 꼬리표가 들어온다", detail: "B는 몇 분 전에 받은 \"v3\"을 If-Match에 담아 보낸다.", payload: "PUT /products/1001\nIf-Match: \"v3\"" },
+    { path: ["api", "db"], packet: "WHERE v3", blocked: true, title: "DB에서 0행이 된다", detail: "API는 꼬리표의 버전을 UPDATE 조건에 넣는다. 지금 버전은 4라서 고친 행이 없다.", payload: "UPDATE products ... WHERE product_id = 1001 AND version = 3\nUPDATE 0" },
+    { path: ["db", "api", "b"], packet: "412", title: "412로 돌려보낸다", detail: "0행이고 행은 존재하니 충돌이다. 지금 꼬리표 \"v4\"와 최신 값을 함께 준다.", payload: "HTTP/1.1 412 Precondition Failed\nETag: \"v4\"" },
+  ]}
+/>
+
+꼬리표에는 세부 규칙이 몇 개 있다. `If-Match`는 강한 비교(strong comparison)를 쓴다. `W/"v3"`처럼 앞에 `W/`가 붙은 약한 꼬리표는 "의미상 같다" 정도의 뜻이라 쓰기 조건에는 절대 맞지 않는다(RFC 9110). Nginx 같은 프록시가 gzip 압축을 하면서 강한 `ETag`를 약하게 바꾸는 경우가 있어서, 정적 파일 쪽 `ETag`를 그대로 쓰기 조건에 쓰면 이상하게 항상 412가 날 수 있다. 쓰기용 꼬리표는 앱이 버전으로 직접 만든다. 쉼표로 여러 꼬리표를 줄 수 있고(그중 하나라도 맞으면 통과), `If-Match: *`는 "자원이 존재하기만 하면" 통과다.
+
+아래 함수는 서버의 이 판단을 그대로 옮긴 것이다. 행과 `If-Match` 값(없으면 `null`), 바꿀 값을 받아서 응답을 돌려준다.
+
+<CodePlayground
+  caption="handlePut: If-Match를 보고 저장할지 정한다"
+  functionName="handlePut"
+  initialCode={`function handlePut(row, ifMatch, patch) {
+  // row: { id, price, version }  지금 꼬리표는 "v" + version을 따옴표로 감싼 것
+  // ifMatch: 요청 헤더 값. 없으면 null
+  // 없으면 { status: 428 }
+  // 안 맞으면 { status: 412, etag: 지금 꼬리표 }
+  // 맞으면 { status: 200, etag: 새 꼬리표, row: 고친 행(버전 + 1) }
+  return { status: 500 };
+}`}
+  solution={`function handlePut(row, ifMatch, patch) {
+  const current = \`"v\${row.version}"\`;
+  if (ifMatch == null) return { status: 428 };
+
+  // 쉼표로 여러 개가 올 수 있다. W/ 붙은 약한 꼬리표는 강한 비교에서 절대 맞지 않는다
+  const tags = ifMatch.split(",").map((t) => t.trim());
+  const ok = tags.some((t) => t === "*" || t === current);
+  if (!ok) return { status: 412, etag: current };
+
+  const version = row.version + 1;
+  return { status: 200, etag: \`"v\${version}"\`, row: { ...row, ...patch, version } };
+}`}
+  tests={[
+    { label: "맞는 꼬리표", args: [{ id: 1001, price: 89000, version: 3 }, "\"v3\"", { price: 79000 }], expected: { status: 200, etag: "\"v4\"", row: { id: 1001, price: 79000, version: 4 } } },
+    { label: "낡은 꼬리표", args: [{ id: 1001, price: 89000, version: 3 }, "\"v2\"", { price: 79000 }], expected: { status: 412, etag: "\"v3\"" } },
+    { label: "헤더 없음", args: [{ id: 1001, price: 89000, version: 3 }, null, { price: 79000 }], expected: { status: 428 } },
+    { label: "약한 꼬리표", args: [{ id: 1001, price: 89000, version: 3 }, "W/\"v3\"", { price: 79000 }], expected: { status: 412, etag: "\"v3\"" } },
+    { label: "여러 개 중 하나", args: [{ id: 1001, price: 89000, version: 3 }, "\"v1\", \"v3\"", { price: 99000 }], expected: { status: 200, etag: "\"v4\"", row: { id: 1001, price: 99000, version: 4 } } },
+    { label: "별표", args: [{ id: 1001, price: 89000, version: 3 }, "*", { price: 1 }], expected: { status: 200, etag: "\"v4\"", row: { id: 1001, price: 1, version: 4 } } },
+  ]}
+/>
+
+## 다른 저장소에도 같은 모양이 있다
+
+버전을 들고 와서 같을 때만 쓰는 모양은 DB 밖에서도 자주 만난다. 알아 두면 처음 보는 에러 메시지도 "아, 낙관적 잠금이구나" 하고 읽힌다.
+
+Kubernetes는 모든 객체에 `resourceVersion`을 붙이고, `kubectl replace`나 컨트롤러의 업데이트는 그 값이 맞을 때만 받아 준다. kwok로 띄운 API 서버(v1.30)에서 ConfigMap을 받아 둔 뒤, 다른 쪽이 먼저 고치고 나서 받아 둔 파일로 바꿔 봤다.
+
+```bash
+# 받아 두기 (resourceVersion: "219"가 파일에 들어 있다)
+kubectl get configmap price -o yaml > cm.yaml
+# 다른 쪽이 먼저 고친다 (resourceVersion이 220으로 오른다)
+kubectl patch configmap price -p '{"data":{"earbuds":"79000"}}'
+# 받아 둔 파일로 통째로 바꾸기
+kubectl replace -f cm.yaml
+```
+
+```text
+configmap/price patched
+Error from server (Conflict): error when replacing "cm.yaml": Operation cannot be fulfilled on configmaps "price": the object has been modified; please apply your changes to the latest version and try again
+```
+
+컨트롤러 로그에서 이 메시지를 자주 보는데, 대부분 다시 읽고 다시 시도하면 되는 정상적인 충돌이다(client-go의 `retry.RetryOnConflict`가 그 일을 한다). Redis에는 `WATCH`가 있다. 지켜보던 키가 `EXEC` 전에 바뀌면 트랜잭션 전체가 버려지고 nil이 돌아온다.
+
+```text
+127.0.0.1:6390> WATCH stock:1003
+OK
+127.0.0.1:6390> GET stock:1003
+"120"
+127.0.0.1:6390> MULTI
+OK
+127.0.0.1:6390(TX)> SET stock:1003 119
+QUEUED
+127.0.0.1:6390(TX)> EXEC
+(nil)
+```
+
+`MULTI`와 `EXEC` 사이에 다른 클라이언트가 `DECRBY stock:1003 5`를 실행했다. 값은 115로 남고, 이 클라이언트는 다시 읽어야 한다. DynamoDB의 조건부 쓰기(`ConditionExpression`)가 실패하면 `ConditionalCheckFailedException`이, MongoDB는 버전 필드를 필터에 넣은 `updateOne`의 `matchedCount`가 0이 된다. 모양은 전부 같다.
+
+ORM은 이걸 자동으로 해 준다. JPA라면 엔티티에 `@Version` 필드를 두면 Hibernate가 `UPDATE ... SET ..., version = ? WHERE id = ? AND version = ?`를 만들고, 0행이면 `OptimisticLockException`을 던진다. Spring에서는 `ObjectOptimisticLockingFailureException`으로 감싸져 올라온다. 자동이라 생기는 실수도 있다.
+
+- JPQL이나 네이티브 SQL로 여러 행을 한꺼번에 고치는 벌크 업데이트는 버전을 올리지 않는다. 그 순간 들고 있던 엔티티들은 바뀐 줄 모른다.
+- 화면에서 돌아온 DTO를 새 엔티티로 만들어 `merge`하면서 버전 값을 채우지 않거나, DB에서 다시 읽은 엔티티에 값만 복사하면 비교 대상이 클라이언트가 본 버전이 아니라 방금 읽은 버전이 된다. 그러면 검사가 항상 통과한다. 클라이언트가 보낸 버전을 비교에 써야 한다.
+- 예외를 잡아서 같은 트랜잭션 안에서 재시도하면 안 된다. JPA에서는 예외가 나면 트랜잭션이 롤백 전용으로 표시된다. 재시도는 트랜잭션 바깥에서 새로 시작한다.
+
+## 현장에서 덮어쓰기를 찾는 법
+
+덮어쓰기는 로그에 아무것도 안 남는 게 가장 큰 문제다. "분명히 바꿨는데 원래대로 돌아갔다"는 문의가 첫 증상이다. 이런 문의가 오면 먼저 그 행이 누구의 요청으로 언제 몇 번 바뀌었는지 본다. 감사 로그(audit log)나 변경 이력 테이블이 있으면 거의 같은 시각에 두 사람의 저장이 보인다. 없다면 접근 로그에서 같은 자원에 대한 `PUT`, `PATCH`를 시각순으로 찾는다.
+
+```bash
+# 같은 상품에 대한 수정 요청을 시각순으로 (Nginx combined 로그 기준)
+grep -E '"(PUT|PATCH) /api/products/1001 ' /var/log/nginx/access.log | awk '{print $4, $6, $7, $9}'
+```
+
+낙관적 잠금을 넣은 뒤에는 충돌 수가 지표가 된다. 앱에서 `UPDATE 0`(또는 412, 409) 횟수를 엔드포인트별로 센다. 평소 0에 가깝다가 어느 날 튀면, 같은 자원을 동시에 고치는 새 흐름이 생겼다는 신호다. 배치 작업이 관리자와 같은 행을 고치기 시작했거나, 클라이언트가 같은 요청을 두 번 보내고 있을 수 있다. 앞의 측정처럼 충돌 비율이 수십 %로 올라가면 재시도가 DB 부하의 대부분을 차지하게 되니 방식을 바꿀 때다.
+
+PostgreSQL 쪽에서는 충돌 자체가 에러가 아니라 보이지 않는다. 대신 같은 행에 대한 `UPDATE`가 짧게 서로 기다리는 일이 늘어나면 `pg_stat_activity`의 `wait_event_type = 'Lock'`이 자주 잡힌다. 이걸 보는 법은 [비관적 잠금 글](/posts/pessimistic-locking)에서 다룬다.
+
+마지막으로 흔한 실수를 모아 두면 이렇다. 영향받은 행 수를 안 본다. 버전을 클라이언트에서 받지 않고 서버에서 다시 읽은 값을 쓴다. 충돌을 받으면 사람의 변경인데도 자동으로 재시도해서 덮어쓴다. `updated_at`의 정밀도를 잃는다. 확인을 `SELECT`로 하고 쓰기를 따로 한다. 다섯 가지 모두 증상은 "가끔 값이 사라진다" 하나다.
+
+## 버전은 확인을 쓰기 안으로 넣는 장치다
+
+낙관적 잠금은 읽을 때는 아무것도 막지 않고, 쓰는 순간 "내가 본 버전이 아직 그대로인가"를 같은 `UPDATE` 문장 안에서 확인한다. 그래서 사람이 오래 들여다보는 수정 화면처럼 잠금을 쥘 수 없는 곳에 맞고, 같은 행에 쓰기가 몰리면 재시도가 일을 잡아먹는다. 버전은 정수로 두고, 0행을 꼭 확인하고, HTTP에서는 `ETag`와 `If-Match`로 그 버전을 브라우저까지 들고 간다. 같은 행에 줄을 세워야 하는 경우는 [비관적 잠금 글](/posts/pessimistic-locking)에서 이어서 보고, 조건부 `UPDATE`와 교착 상태까지 한 장면에서 비교한 건 [잠금과 교착 상태 글](/posts/db-locking-deadlock)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 낙관적 잠금은 어떻게 동작하나요?
+
+읽을 때 잠그지 않고 버전 값을 함께 읽어 두었다가, 쓸 때 `WHERE id = ? AND version = ?` 조건으로 버전이 그대로일 때만 고치면서 버전을 1 올린다. 그사이 누가 고쳤다면 조건에 맞는 행이 없어 0행이 수정된다. 앱은 영향받은 행 수를 보고 충돌을 알아채서, 사람에게 알리거나 다시 읽고 다시 계산한다. 확인과 쓰기가 한 문장 안에 있어서 틈이 없다.
+
+### 낙관적 잠금은 정말 아무것도 잠그지 않나요?
+
+읽을 때만 잠그지 않는다. 버전 조건이 붙은 `UPDATE`도 쓰는 순간 행 잠금을 잡기 때문에, 다른 트랜잭션이 같은 행을 고치고 커밋하지 않았다면 기다린다. 실제로 앞 트랜잭션이 2초 뒤 커밋할 때까지 기다렸다가 `UPDATE 0`을 받았다. 그래서 버전 확인 뒤 트랜잭션 안에서 외부 호출을 하면 낙관적 잠금이어도 다른 요청이 줄을 선다.
+
+### 충돌이 나면 자동으로 재시도해도 되나요?
+
+기계가 계산한 값이면 되고, 사람이 화면에서 입력한 값이면 안 된다. 사람의 변경을 다시 읽어 그대로 다시 쓰면 다른 사람의 변경을 덮어써서 처음 문제로 돌아간다. 자동 재시도는 읽기와 계산부터 다시 하고, 횟수 상한과 지터를 둔다. 같은 트랜잭션 안에서 재시도하지 않고 새 트랜잭션으로 시작한다.
+
+### 낙관적 잠금과 비관적 잠금 중 무엇을 고르나요?
+
+같은 행을 동시에 고칠 확률과 판단 시간으로 고른다. 충돌이 드물고 판단이 길거나 사람이 끼면 낙관적, 충돌이 잦으면 비관적이다. 한 행에 워커 32개를 몰았을 때 낙관적 방식은 시도의 93%가 충돌로 버려져 `FOR UPDATE`보다 느렸고, 행이 흩어져 있을 때는 충돌이 1% 이하라 낙관적 방식이 조금 빨랐다. 계산이 한 문장으로 되면 둘 다 필요 없이 조건부 `UPDATE`가 가장 낫다.
+
+### updated_at을 버전으로 쓰면 안 되나요?
+
+쓸 수는 있지만 함정이 많다. PostgreSQL은 마이크로초까지 저장하는데 자바스크립트 `Date`는 밀리초라서 왕복하면 값이 잘려 항상 충돌이 난다. `now()`는 트랜잭션 시작 시각이라 한 트랜잭션에서 두 번 고쳐도 같은 값이고, 서버 시계 보정도 끼어든다. 증가만 하는 정수 버전이 비교에 안전하다.
+
+### HTTP API에서는 어떻게 구현하나요?
+
+응답에 `ETag`로 버전을 내려 주고, 수정 요청은 `If-Match`에 그 값을 담게 한다. 서버는 꼬리표의 버전을 `UPDATE`의 `WHERE`에 넣고, 0행이면 `412 Precondition Failed`와 지금 `ETag`를 돌려준다. 헤더 없는 수정을 막으려면 `428 Precondition Required`를 쓴다. `If-Match`는 강한 비교라 `W/` 약한 꼬리표는 맞지 않으니 쓰기용 꼬리표는 앱이 버전으로 직접 만든다.
+
+### REPEATABLE READ면 버전 열이 필요 없지 않나요?
+
+트랜잭션 하나 안에서는 PostgreSQL이 `could not serialize access due to concurrent update`로 충돌을 알려 주니 비슷한 효과가 있다. 하지만 수정 화면처럼 읽기와 쓰기가 서로 다른 HTTP 요청이면 그 사이에 트랜잭션을 열어 둘 수 없어서 쓸 수 없다. MySQL InnoDB의 `REPEATABLE READ`는 이 에러를 내지 않고 최신 값에 그대로 쓴다. 요청을 건너는 확인에는 버전 열이 필요하다.
