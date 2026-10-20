@@ -83,6 +83,7 @@ import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
+import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
@@ -240,6 +241,7 @@ export const QUESTION_SETS = [
   LAYER_IP_ROUTING_ICMP,
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
+  LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
   MICRO_FRONTENDS,
   MICROSERVICES,

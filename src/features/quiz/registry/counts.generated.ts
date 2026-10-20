@@ -86,6 +86,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "layer-ip-routing-icmp": 6,
   "layer-link-ethernet-arp": 6,
   "layer-mtu-fragmentation": 6,
+  "loading-patterns": 5,
   "local-custom-domain": 6,
   "micro-frontends": 8,
   "microservices": 8,

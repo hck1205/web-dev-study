@@ -96,6 +96,7 @@ export const TOPICS: Topic[] = [
       },
       { id: "security", label: "Security", description: "웹 보안, 브라우저 보안 정책, 공격과 방어" },
       { id: "system-design", label: "System Design", description: "대규모 시스템 설계" },
+      { id: "ui-ux", label: "UI/UX", description: "사용자가 기다리고 고르고 되돌리는 순간의 화면 설계" },
     ],
   },
   {

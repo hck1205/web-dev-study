@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 154편 · 토픽 45개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 155편 · 토픽 46개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -29,7 +29,7 @@
 - 길이: 384줄
 - 소제목: 요청 하나가 지나가는 길 / 원래 MVC는 웹을 위한 게 아니었다 / HTTP 위로 옮기면서 생긴 변화 / 컨트롤러가 뚱뚱해지는 이유 / 업무 규칙은 서비스와 모델에 둔다 / MVP와 MVVM은 무엇을 바꿨나 / 브라우저로 옮겨 온 MVC와 양방향 바인딩의 한계 / 서비스가 커지면 계층보다 기능으로 나눈다 / 경계가 무너진 코드는 장애 문의로 돌아온다 / 다시 쿠폰 입력칸으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-locking-deadlock
-- 키워드 백링크 →: client-data-cache, http-status-codes, gateway
+- 키워드 백링크 →: client-data-cache, loading-patterns, http-status-codes, gateway
 
 #### `rest-api-design` — REST API를 설계할 때 정할 것들
 
@@ -39,8 +39,8 @@
 - 길이: 580줄
 - 소제목: 주소는 자원의 이름이다 / CRUD로 안 떨어지는 동작 / 메서드와 상태 코드를 제대로 쓴다 / 목록을 거르고 줄 세우기 / 같은 글이 두 번 나온 이유 / 다음 페이지 주소를 알려 주는 방법 / 에러 응답도 모양을 정한다 / 필요한 만큼만 받기 / 버전을 올리지 않고 바꾸는 법 / 그래도 버전을 나눠야 할 때 / POST를 두 번 받아도 괜찮게 / 너무 많이 부르는 클라이언트 / 이름과 값의 모양을 통일한다 / 링크를 따라가는 API / REST가 맞지 않는 곳 / 운영 로그에서 설계 실수가 드러날 때 / 다시 무한 스크롤로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-status-codes, http-caching-cdn, resilience-patterns, gateway, microservices, nginx-reverse-proxy, network-troubleshooting-by-layer
-- 키워드 백링크 →: base64, db-locking-deadlock, db-index-design, http-message, http-versions, redis-basics, sql-query-rewrite
-- 이 글로 오는 글 ←: browser-fetch, client-data-cache, docker-container-basics, html-form-http, http-status-codes, json-crud-http, sql-query-rewrite
+- 키워드 백링크 →: base64, loading-patterns, db-locking-deadlock, db-index-design, http-message, http-versions, redis-basics, sql-query-rewrite
+- 이 글로 오는 글 ←: browser-fetch, client-data-cache, docker-container-basics, html-form-http, http-status-codes, json-crud-http, loading-patterns, sql-query-rewrite
 
 ### Programming › Backend › Auth (`programming/backend/auth`)
 
@@ -299,7 +299,7 @@
 - 길이: 485줄
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 클러스터가 yellow나 red로 바뀌면 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db
-- 키워드 백링크 →: db-index, mongodb-document-model, db-modeling-normalization
+- 키워드 백링크 →: db-index, mongodb-document-model, loading-patterns, db-modeling-normalization
 - 이 글로 오는 글 ←: db-architecture-by-scale, db-types-overview, http-methods, ports-and-sockets, postgres-jsonb-search
 
 #### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
@@ -731,7 +731,7 @@
 - 길이: 634줄
 - 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index, sql-batch-timeout-pool
-- 키워드 백링크 →: rest-api-design, db-index-design, postgres-architecture, db-transaction-isolation
+- 키워드 백링크 →: rest-api-design, loading-patterns, db-index-design, postgres-architecture, db-transaction-isolation
 - 이 글로 오는 글 ←: big-o-notation, postgres-operations, postgres-reporting-sql, rest-api-design, sql-batch-timeout-pool, sql-query-tuning
 
 #### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
@@ -977,8 +977,8 @@
 - 길이: 579줄
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
-- 키워드 백링크 →: http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, microservices, mvc-pattern, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
+- 키워드 백링크 →: http-caching-cdn, loading-patterns
+- 이 글로 오는 글 ←: browser-fetch, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, loading-patterns, microservices, mvc-pattern, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -989,7 +989,7 @@
 - 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: http-versions, rendering-strategies
-- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions, islands-resumability, rendering-csr-spa
+- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions, islands-resumability, loading-patterns, rendering-csr-spa
 
 #### `core-web-vitals` — Core Web Vitals: LCP, INP, CLS
 
@@ -999,8 +999,8 @@
 - 길이: 514줄
 - 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, code-splitting, event-loop
-- 키워드 백링크 →: ab-testing, cors, dns
-- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, hydration, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
+- 키워드 백링크 →: ab-testing, loading-patterns, cors, dns
+- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, hydration, loading-patterns, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
 
 #### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
 
@@ -1010,7 +1010,7 @@
 - 길이: 645줄
 - 소제목: 요청 하나가 거치는 캐시들 / HTTP 캐시는 서버가 정한 기한을 따른다 / 뒤로 가기가 즉시 뜨는 bfcache / 페이지 앞에 선 프록시, Service Worker / 설치, 활성화, 가로채기 / 캐시를 먼저 볼까 네트워크를 먼저 볼까 / 미리 담기와 쓰면서 담기 / 이 블로그의 sw.js 읽기 / 버전을 올리고 옛 캐시를 지운다 / 새 Service Worker는 기다린다 / Workbox를 쓰면 / 데이터는 어디에 저장하나 / 용량과 지워지는 순서 / 다음에 필요한 것을 미리 받기 / 개발자 도구에서 확인하기 / 사용자 브라우저의 캐시 상태를 숫자로 받기 / 처음 장면으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-caching-cdn, caching-strategies, client-data-cache, core-web-vitals, code-splitting
-- 키워드 백링크 →: realtime-communication, what-happens-google-com, cors
+- 키워드 백링크 →: realtime-communication, loading-patterns, what-happens-google-com, cors
 - 이 글로 오는 글 ←: browser-fetch, client-data-cache, http-caching-cdn, rendering-csr-spa
 
 ### Programming › Frontend › React (`programming/frontend/react`)
@@ -1067,6 +1067,7 @@
 - 길이: 457줄
 - 소제목: SSR은 시점의 이야기, RSC는 코드의 이야기 / 서버가 보내는 것은 HTML이 아니다 / 첫 요청과 그다음 이동은 다르게 흐른다 / 경계는 파일 단위로 그어진다 / 경계를 넘을 수 있는 값 / 컴포넌트가 직접 데이터를 가져온다 / 서버 전용 코드가 브라우저로 새지 않게 / 서버 액션은 경계를 넘는 함수다 / props가 무거우면 payload도 무겁다 / 현장에서 서버 컴포넌트를 들여다보는 법 / 다시 315바이트로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-strategies, hydration, rendering-ssr, oauth, streaming-ssr-suspense, nextjs-static-dynamic-rendering
+- 키워드 백링크 →: loading-patterns
 - 이 글로 오는 글 ←: html-form-http, hydration, islands-resumability, nextjs-static-dynamic-rendering, rendering-ssg-isr, rendering-strategies, streaming-ssr-suspense
 
 #### `rendering-csr-spa` — CSR과 SPA: 빈 HTML이 화면이 되기까지
@@ -1111,7 +1112,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, nextjs-static-dynamic-rendering, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -1122,7 +1123,7 @@
 - 소제목: 응답을 끝내지 않고 열어 둔다 / 셸이 먼저 나가고 경계 안쪽이 뒤따른다 / 늦게 온 조각이 제자리를 찾는 방법 / React 19는 교체를 모아서 한다 / 셸만 기다릴까, 전부 기다릴까 / 상태 코드는 첫 조각과 함께 떠난다 / 중간에서 모아 버리는 것들 / 봇과 링크 미리보기가 보는 HTML / Next.js에서는 loading.tsx가 경계다 / 경계를 어디에 두나 / 운영에서 스트리밍이 안 될 때 보는 순서 / 다시 운영 주소로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-strategies, rendering-ssr, hydration, nginx-reverse-proxy, react-server-components, core-web-vitals
 - 키워드 백링크 →: proxy-reverse-proxy, http-versions, http-status-codes
-- 이 글로 오는 글 ←: hydration, islands-resumability, nextjs-static-dynamic-rendering, react-server-components, rendering-ssr, rendering-strategies
+- 이 글로 오는 글 ←: hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, react-server-components, rendering-ssr, rendering-strategies
 
 ### Programming › In Practice (`programming/in-practice`)
 
@@ -1202,7 +1203,7 @@
 - 길이: 401줄
 - 소제목: 응답은 여러 곳에 복사된다 / 신선한 동안은 묻지도 않는다 / Cache-Control 한 줄 뜯어 보기 / 상한 사본이 아직 맞는지 묻기 / 무엇을 같은 요청으로 보나 / 이름에 해시를 넣으면 영원히 캐시할 수 있다 / 엣지에서 기한을 정하는 쪽은 누구인가 / 한꺼번에 만료되면 오리진이 몰린다 / 지우는 데도 시간이 걸린다 / 사람마다 다른 페이지를 공유 캐시에 두면 / 응답 헤더로 확인한다 / 처음 장면을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com
-- 키워드 백링크 →: http-message, frontend-browser-cache, http-versions, redis-basics, cookie-session-login, cors, dns
+- 키워드 백링크 →: http-message, frontend-browser-cache, http-versions, loading-patterns, redis-basics, cookie-session-login, cors, dns
 - 이 글로 오는 글 ←: ab-testing, browser-fetch, caching-strategies, client-data-cache, cors, db-architecture-by-scale, frontend-browser-cache, http-message, http-methods, http-status-codes, json-crud-http, nextjs-static-dynamic-rendering, nginx-https-performance, proxy-reverse-proxy, rendering-ssg-isr, rendering-ssr, rendering-strategies, rest-api-design, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `proxy-reverse-proxy` — 프록시와 리버스 프록시: 누구를 대신하나
@@ -1225,7 +1226,7 @@
 - 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 로컬에선 되는데 서버에 올리면 멈출 때 / 무엇을 고를까 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-versions, cors, resilience-patterns, nginx-reverse-proxy
 - 키워드 백링크 →: json-crud-http, proxy-reverse-proxy, base64, redis-basics, http-status-codes
-- 이 글로 오는 글 ←: frontend-browser-cache, nginx-basics, nginx-reverse-proxy, osi-in-practice
+- 이 글로 오는 글 ←: frontend-browser-cache, loading-patterns, nginx-basics, nginx-reverse-proxy, osi-in-practice
 
 #### `what-happens-google-com` — 주소창에 google.com을 치면 일어나는 일
 
@@ -1292,7 +1293,7 @@
 - 길이: 804줄
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
-- 키워드 백링크 →: cors, upper-layers-session-presentation-app, client-data-cache, resilience-patterns, http-caching-cdn
+- 키워드 백링크 →: cors, loading-patterns, upper-layers-session-presentation-app, client-data-cache, resilience-patterns, http-caching-cdn
 - 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, upper-layers-session-presentation-app
 
 ### Programming › Network › OSI · TCP/IP (`programming/network/layers`)
@@ -1730,6 +1731,18 @@
 - 키워드 백링크 →: client-data-cache, osi-in-practice, sql-batch-timeout-pool, http-methods
 - 이 글로 오는 글 ←: browser-fetch, caching-strategies, gateway, html-form-http, http-methods, http-status-codes, https-tls, json-crud-http, k8s-pod-probes, microservices, nginx-reverse-proxy, osi-in-practice, realtime-communication, rest-api-design
 
+### Programming › UI/UX (`programming/ui-ux`)
+
+#### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
+
+- 요약: 스피너, 스켈레톤, 프로그레스 바, 낙관적 UI, 무한 스크롤까지 로딩 패턴 열두 가지를 기다리는 시간, 진행률을 아는지, 모양을 아는지, 누가 시작했는지에 따라 고른다. 스피너 깜빡임, 가짜 진행률, 접근성 같은 실수도 짚는다.
+- 태그: UX, Frontend, Performance, React, Accessibility
+- 키워드: 스켈레톤 UI, 무한 스크롤, 지연 로딩, Optimistic UI
+- 길이: 412줄
+- 소제목: 기다리는 시간이 표시를 정한다 / 얼마나 남았는지 아는가 / 무엇이 올지 모양을 아는가 / 스피너가 깜빡이면 더 느려 보인다 / 버튼을 누른 사람에게 먼저 답한다 / 내용이 조각으로 도착할 때 / 손가락으로 당겨서 새로고침 / 모든 로딩 표시에 같이 챙길 것 / 이름을 알면 부탁이 짧아진다 / 면접에서 나올 만한 질문
+- 직접 링크 →: core-web-vitals, streaming-ssr-suspense, rendering-strategies, client-data-cache, realtime-communication, rest-api-design, code-splitting
+- 이 글로 오는 글 ←: client-data-cache, core-web-vitals, elasticsearch-inverted-index, frontend-browser-cache, http-caching-cdn, json-crud-http, mvc-pattern, react-server-components, rest-api-design, sql-query-rewrite
+
 ### 자기개발 › 수학 (`self-development/math`)
 
 #### `pythagorean-theorem` — 피타고라스 정리, 삼각형 네 개를 옮겨 보면
@@ -1809,6 +1822,7 @@
 - 멱등성 → `http-methods`
 - 멱등성 키 → `resilience-patterns`
 - 모놀리스 → `microservices`
+- 무한 스크롤 → `loading-patterns`
 - 문자 인코딩 → `upper-layers-session-presentation-app`
 - 반정규화 → `db-keys-denormalization`
 - 배럴 파일 → `code-splitting`
@@ -1850,6 +1864,7 @@
 - 세션 쿠키 → `cookie-session-login`
 - 세션 ID → `cookie-session-login`
 - 스칼라 서브쿼리 → `sqld-correlated-subquery`
+- 스켈레톤 UI → `loading-patterns`
 - 스테이징 영역 → `git-staging-area`
 - 스트랭글러 피그 → `microservices`
 - 스트리밍 복제 → `db-replication-sharding`
@@ -1904,6 +1919,7 @@
 - 중첩 서브쿼리 → `sqld-subquery-set-operators`
 - 증폭 공격 → `udp-and-quic`
 - 지수 백오프 → `resilience-patterns`
+- 지연 로딩 → `loading-patterns`
 - 집계 파이프라인 → `mongodb-document-model`
 - 집계 함수 → `sqld-group-by-having`
 - 집합 연산자 → `sqld-set-operators`
@@ -2206,6 +2222,7 @@
 - onShellReady → `streaming-ssr-suspense`
 - OOMKilled → `k8s-pod-resources`
 - openssl s_client → `network-troubleshooting-by-layer`
+- Optimistic UI → `loading-patterns`
 - OSI 7계층 → `network-layers-overview`
 - OSI 모델 → `network-layers-overview`
 - OUTER JOIN → `sqld-joins`
@@ -2380,7 +2397,6 @@
 - `db-partitioning` ↔ `db-modeling-normalization` (19%: 테이블을, 떼어, 키가)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `redis-cluster` ↔ `db-sharding` (18%: 키를, 나누는, 해시)
-- `sqld-null-functions` ↔ `sql-select-where-null` (17%: null은, 고르는, null, 다루기)
 - `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
 - `proxy-reverse-proxy` ↔ `gateway` (16%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
 - `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
@@ -2390,6 +2406,7 @@
 - `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
 - `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 - `postgres-connections-pg-hba` ↔ `postgres-roles-security` (14%: pg, 들어오는, 지나는)
+- `sqld-null-functions` ↔ `sql-select-where-null` (14%: null은, null, 다루기)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (13%: 밖에서, 요청마다, next.js, ssr)
 - `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
 - `sql-insert-update-delete` ↔ `db-transaction-isolation` (13%: commit, rollback, 트랜잭션이, transaction)
@@ -2401,6 +2418,9 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `loading-patterns` ↔ `client-data-cache`
+- `loading-patterns` ↔ `rest-api-design`
+- `loading-patterns` ↔ `core-web-vitals`
 - `helm-dependencies-oci-gitops` ↔ `helm-release-lifecycle`
 - `helm-dependencies-oci-gitops` ↔ `helm-values-secrets`
 - `helm-dependencies-oci-gitops` ↔ `helm-basics`

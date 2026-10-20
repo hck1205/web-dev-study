@@ -2,6 +2,18 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "loading-patterns": {
+    "links": [
+      "core-web-vitals",
+      "streaming-ssr-suspense",
+      "rendering-strategies",
+      "client-data-cache",
+      "realtime-communication",
+      "rest-api-design",
+      "code-splitting"
+    ],
+    "mentions": []
+  },
   "helm-dependencies-oci-gitops": {
     "links": [
       "helm-basics",
@@ -187,7 +199,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "streaming-ssr-suspense",
       "nextjs-static-dynamic-rendering"
     ],
-    "mentions": []
+    "mentions": [
+      "loading-patterns"
+    ]
   },
   "streaming-ssr-suspense": {
     "links": [
@@ -530,6 +544,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rest-api-design",
+      "loading-patterns",
       "db-index-design",
       "postgres-architecture",
       "db-transaction-isolation"
@@ -1516,6 +1531,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "realtime-communication",
+      "loading-patterns",
       "what-happens-google-com",
       "cors"
     ]
@@ -1530,7 +1546,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak"
     ],
     "mentions": [
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "loading-patterns"
     ]
   },
   "json-crud-http": {
@@ -1544,6 +1561,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "loading-patterns",
       "upper-layers-session-presentation-app",
       "client-data-cache",
       "resilience-patterns",
@@ -1783,6 +1801,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "base64",
+      "loading-patterns",
       "db-locking-deadlock",
       "db-index-design",
       "http-message",
@@ -1878,6 +1897,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ab-testing",
+      "loading-patterns",
       "cors",
       "dns"
     ]
@@ -1897,6 +1917,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "loading-patterns",
       "http-status-codes",
       "gateway"
     ]
@@ -1909,6 +1930,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-message",
       "frontend-browser-cache",
       "http-versions",
+      "loading-patterns",
       "redis-basics",
       "cookie-session-login",
       "cors",
@@ -1922,6 +1944,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "mongodb-document-model",
+      "loading-patterns",
       "db-modeling-normalization"
     ]
   },

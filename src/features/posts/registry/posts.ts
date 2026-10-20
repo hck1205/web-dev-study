@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "loading-patterns",
+    title: "로딩 패턴: 기다리는 화면을 고르는 법",
+    summary: "스피너, 스켈레톤, 프로그레스 바, 낙관적 UI, 무한 스크롤까지 로딩 패턴 열두 가지를 기다리는 시간, 진행률을 아는지, 모양을 아는지, 누가 시작했는지에 따라 고른다. 스피너 깜빡임, 가짜 진행률, 접근성 같은 실수도 짚는다.",
+    topic: "programming/ui-ux",
+    tags: ["UX", "Frontend", "Performance", "React", "Accessibility"],
+    date: "2026-10-21",
+    keywords: ["스켈레톤 UI", "무한 스크롤", "지연 로딩", "Optimistic UI"],
+  },
+  {
     slug: "helm-dependencies-oci-gitops",
     title: "차트 배포 흐름: 의존성, OCI 저장소, helmfile, ArgoCD",
     summary: "ArgoCD로 배포한 앱이 helm history에 없는 이유에서 출발해 하위 차트와 values 전달, library 차트, 차트 버전과 앱 버전, OCI 레지스트리에 올리고 받기, helmfile, 렌더링만 하는 ArgoCD, Kustomize와의 차이를 정리한다.",
