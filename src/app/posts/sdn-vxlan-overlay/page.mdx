@@ -1,0 +1,380 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sdn-vxlan-overlay");
+
+쿠버네티스 노드 두 대에 뜬 Pod끼리 통신이 이상하다. 노드의 `eth0`에서 tcpdump로 Pod IP(`10.244.1.5`)를 찾으면 아무것도 안 잡힌다. 대신 노드 IP끼리 UDP 8472번 패킷이 쉴 새 없이 오간다. Pod 주소는 어디로 사라졌을까. 같은 주에 클라우드 문서를 읽다가 "VPC는 물리망 위에 캡슐화된 가상 망"이라는 문장을 만났다. 두 이야기가 같은 기술이다.
+
+이 글은 물리망(언더레이) 위에 논리망(오버레이)을 얹는 방법, 그중 가장 널리 쓰이는 VXLAN을 실제 패킷으로 따라간다. 그리고 그 오버레이를 사람이 아니라 소프트웨어가 중앙에서 그리는 SDN(Software-Defined Networking)이 무엇을 바꿨는지 본다. VLAN의 한계에서 출발하니 [VLAN 글](/posts/vlan-basics)을 먼저 보면 좋다. 패킷을 감싸면 MTU가 줄어드는 문제는 [MTU 글](/posts/layer-mtu-fragmentation)에서, 암호화하는 터널은 [VPN 글](/posts/vpn-ipsec-wireguard)에서 다뤘다.
+
+기준 OS는 Ubuntu 24.04다. 네트워크 네임스페이스 네 개(호스트 두 대, 각 호스트의 컨테이너 하나씩)를 만들고 커널의 VXLAN 장치로 실제 오버레이를 만들어 캡처했다. 이 글의 출력은 모두 그 실습에서 나온 것이다.
+
+## 랙을 넘어가면 VLAN이 버겁다
+
+VLAN은 스위치 안에서 망을 나누기에 훌륭하다. 데이터센터 규모가 되면 세 가지가 걸린다.
+
+첫째, 개수다. VLAN ID는 12비트라 4094개까지다. 클라우드처럼 고객마다 망을 따로 줘야 하면 금방 바닥난다.
+
+둘째, L2를 멀리 늘리기 어렵다. VM을 다른 랙의 서버로 옮겨도(라이브 마이그레이션) IP를 유지하려면 두 랙이 같은 L2 망이어야 한다. VLAN을 여러 랙과 건물에 걸치면 스위치들이 하나의 거대한 브로드캐스트 도메인으로 묶이고, 루프를 막는 STP가 링크 일부를 막아 둔다. 비싼 링크의 절반이 놀고, 한 곳의 브로드캐스트 폭주가 전체로 번진다.
+
+셋째, 바꾸는 속도다. 고객이 API로 망을 만들 때마다 사람이 스위치 수십 대에 VLAN을 추가할 수는 없다.
+
+현대 데이터센터는 물리망을 L3로 단순하게 짠다. 랙 위 스위치(ToR)부터 모든 링크가 라우팅되고, 같은 비용의 여러 경로(ECMP)로 트래픽을 나눈다. STP가 필요 없고 링크를 다 쓴다. 그 위에서 "같은 L2 망"이 필요하면 L2 프레임을 UDP 패킷에 싸서 L3 망을 건너게 한다. 이게 오버레이다.
+
+이 글에서는 오버레이를 "택배 상자 안의 택배 상자"로 생각하겠다. 안쪽 상자(원래 이더넷 프레임)에는 받는 사람(컨테이너 MAC)이 적혀 있고, 바깥 상자(UDP 패킷)에는 배송 센터(호스트 IP)만 적혀 있다. 택배 회사(언더레이)는 바깥 상자만 보고 나른다. 처음 장면에서 Pod IP가 안 보인 이유다. tcpdump가 본 건 바깥 상자였다.
+
+## 50바이트를 덧씌운다
+
+VXLAN(Virtual eXtensible LAN, RFC 7348)은 이더넷 프레임 앞에 VXLAN 헤더 8바이트를 붙이고, 그걸 UDP 페이로드로 보낸다. 표준 포트는 4789다. 실습에서 캡처한 패킷 한 개를 층별로 뜯어 보자.
+
+```text
+13:22:37.072833 0e:e8:4c:de:e1:a6 > a2:45:58:35:72:df, ethertype IPv4 (0x0800), length 148: 192.168.100.1.35238 > 192.168.100.2.4789: VXLAN, flags [I] (0x08), vni 100
+02:00:0a:c8:00:11 > 02:00:0a:c8:00:12, ethertype IPv4 (0x0800), length 98: 10.200.0.11 > 10.200.0.12: ICMP echo request, id 18881, seq 1, length 64
+```
+
+<UrlAnatomy
+  caption="VXLAN 패킷 한 개 (148바이트 = 50 + 안쪽 98)"
+  separator=""
+  joiner=" | "
+  params={[
+    { key: "oeth", display: "바깥 Ether 14B", title: "바깥 이더넷 헤더", description: "호스트 1의 랜카드 MAC에서 다음 홉(여기서는 호스트 2)의 MAC으로. 언더레이 스위치는 이 헤더만 본다." },
+    { key: "oip", display: "바깥 IP 20B", title: "바깥 IP 헤더", description: "192.168.100.1 → 192.168.100.2. 양 끝 VTEP(터널 끝점)의 주소다. 언더레이 라우터는 이 주소로 길을 찾는다." },
+    { key: "udp", display: "UDP 8B → 4789", title: "UDP 헤더", description: "목적지 4789는 표준 VXLAN 포트다. 출발지 포트(35238)는 안쪽 프레임의 해시로 정해서 흐름마다 다르다. 언더레이의 ECMP가 이 값으로 경로를 나눈다." },
+    { key: "vx", display: "VXLAN 8B: I, VNI 100", title: "VXLAN 헤더", description: "플래그 1바이트(0x08: VNI가 유효함), 예약 3바이트, VNI 3바이트, 예약 1바이트. VNI는 24비트라 약 1,677만 개의 망을 가른다. VLAN ID의 역할이다." },
+    { key: "inner", display: "안쪽 Ether 14B + IP …", title: "원래 이더넷 프레임 (98바이트)", description: "컨테이너 c1의 MAC에서 c2의 MAC으로, 10.200.0.11 → 10.200.0.12 ICMP. 컨테이너가 보낸 그대로다. 언더레이는 이 안을 보지 않는다." },
+  ]}
+/>
+
+바깥에 붙는 건 14 + 20 + 8 + 8 = 50바이트다. 다만 MTU는 IP 패킷 크기라 바깥 이더넷 14바이트는 빼고 따져야 한다. 안쪽 프레임의 이더넷 헤더 14바이트가 바깥 IP 패킷 안에 들어가니 결국 안쪽 IP 패킷은 1500 - 20 - 8 - 8 - 14 = 1450바이트까지만 실을 수 있다. 실습에서 만든 VXLAN 장치의 MTU가 1450으로 잡힌 이유다.
+
+## 직접 오버레이를 만든다
+
+호스트 두 대를 `192.168.100.0/24` 언더레이로 잇고, 각 호스트에 VXLAN 장치(`vxlan100`)와 브리지(`br0`)를 만들었다. 컨테이너는 veth로 브리지에 꽂았다. 컨테이너 둘은 `10.200.0.0/24`라는, 언더레이와 전혀 상관없는 대역을 쓴다.
+
+```bash
+# 호스트 1: VNI 100, 표준 포트 4789, 상대 VTEP 192.168.100.2로 보내는 VXLAN 장치
+sudo ip link add vxlan100 type vxlan id 100 dstport 4789 \
+  local 192.168.100.1 remote 192.168.100.2 dev ul1
+# 브리지를 만들고 VXLAN 장치와 컨테이너 쪽 veth를 꽂는다
+sudo ip link add br0 type bridge
+sudo ip link set vxlan100 master br0
+sudo ip link set vethc1 master br0
+sudo ip link set vxlan100 up; sudo ip link set br0 up
+# VXLAN 장치 설정 확인
+ip -d link show vxlan100
+```
+
+```text
+3: vxlan100: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue master br0 state UNKNOWN mode DEFAULT group default qlen 1000
+    link/ether f2:c2:7f:83:f8:8f brd ff:ff:ff:ff:ff:ff promiscuity 1  allmulti 1 minmtu 68 maxmtu 65535
+    vxlan id 100 remote 192.168.100.2 fan-map local 192.168.100.1 dev ul1 srcport 0 0 dstport 4789 ttl auto ageing 300 udpcsum noudp6zerocsumtx noudp6zerocsumrx
+```
+
+(둘째 줄 뒤의 브리지 포트 정보는 줄였다.) `vxlan id 100`이 VNI, `remote`가 상대 VTEP, `dstport 4789`가 포트, `mtu 1450`이 위에서 계산한 값이다. `fan-map`은 Ubuntu가 iproute2에 덧붙인 패치가 찍는 표시라 무시해도 된다. `dstport`를 빼먹으면 리눅스는 IANA 표준 이전에 쓰던 8472번을 쓴다. Flannel과 Cilium의 VXLAN 모드가 기본으로 8472를 쓰는 것도 이 역사 때문이다. 처음 장면의 UDP 8472가 그것이다.
+
+여기서 VTEP(VXLAN Tunnel End Point)라는 말이 나온다. 프레임을 감싸고 푸는 지점이다. 여기서는 각 호스트의 `vxlan100` 장치가 VTEP이고, 하드웨어 스위치가 VTEP 역할을 하는 데이터센터도 많다. 아래 그림에서 다음을 누르면 컨테이너 c1의 첫 ping이 c2에 닿기까지가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={340}
+  caption="VTEP이 프레임을 UDP로 감싸 언더레이를 건넌다"
+  zones={[
+    { id: "h1", label: "host1 192.168.100.1", x: 6, y: 6, w: 186, h: 200, tone: "private" },
+    { id: "h2", label: "host2 192.168.100.2", x: 208, y: 6, w: 186, h: 200, tone: "private" },
+    { id: "ul", label: "언더레이 (L3)", x: 6, y: 220, w: 388, h: 114, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "c1", label: "c1", sub: "10.200.0.11", x: 99, y: 56, icon: "container" },
+    { id: "v1", label: "vxlan100", sub: "VTEP", x: 99, y: 150, icon: "gateway" },
+    { id: "c2", label: "c2", sub: "10.200.0.12", x: 301, y: 56, icon: "container" },
+    { id: "v2", label: "vxlan100", sub: "VTEP", x: 301, y: 150, icon: "gateway" },
+    { id: "r", label: "fabric", sub: "ECMP 라우팅", x: 200, y: 280, icon: "router" },
+  ]}
+  links={[
+    { from: "c1", to: "v1", label: "br0" },
+    { from: "v1", to: "r" },
+    { from: "r", to: "v2" },
+    { from: "v2", to: "c2", label: "br0" },
+  ]}
+  steps={[
+    { path: ["c1", "v1"], packet: "ARP", title: "c1은 평범한 LAN이라고 믿는다", detail: "10.200.0.12의 MAC을 모르니 ARP 브로드캐스트를 보낸다. 브리지가 VXLAN 포트로도 내보낸다.", payload: "02:00:0a:c8:00:11 > ff:ff:ff:ff:ff:ff, ARP who-has 10.200.0.12" },
+    { path: ["v1", "r", "v2"], packet: "UDP", title: "브로드캐스트를 감싸 상대 VTEP들에 보낸다", detail: "목적지 MAC을 모르니 '모두에게' 목록(00:00:00:00:00:00 항목)의 VTEP마다 복사해 보낸다. 바깥은 호스트 IP끼리의 UDP 4789다.", payload: "192.168.100.1.55649 > 192.168.100.2.4789: VXLAN, vni 100" },
+    { path: ["v2", "c2"], packet: "ARP", title: "풀어서 브리지에 넣는다", detail: "VNI 100인 걸 확인하고 바깥 헤더를 벗겨 br0에 넣는다. 동시에 'c1의 MAC은 VTEP 192.168.100.1 뒤에 있다'를 배운다." },
+    { path: ["c2", "v2", "r", "v1", "c1"], packet: "reply", title: "응답은 한 VTEP으로만 간다", detail: "c2의 응답 목적지 MAC은 방금 배운 항목에 있다. 복사 없이 192.168.100.1로만 감싸 보낸다." },
+    { path: ["c1", "v1", "r", "v2", "c2"], packet: "ping", title: "이제 유니캐스트로 흐른다", detail: "양쪽이 서로의 위치를 배웠다. 출발지 포트는 이 흐름의 해시라 ARP 때(55649)와 다른 35238이다.", payload: "192.168.100.1.35238 > 192.168.100.2.4789: VXLAN, vni 100\n10.200.0.11 > 10.200.0.12: ICMP echo request" },
+  ]}
+/>
+
+호스트 2의 언더레이 랜카드에서 본 실제 캡처다. `-e`로 MAC까지 찍어서 바깥 프레임과 안쪽 프레임이 두 줄로 나온다.
+
+```bash
+# 언더레이 인터페이스에서 VXLAN만 본다. tcpdump가 4789를 VXLAN으로 알아보고 안쪽까지 풀어 준다
+sudo tcpdump -e -n -i ul2 udp port 4789
+```
+
+```text
+13:22:37.072784 0e:e8:4c:de:e1:a6 > a2:45:58:35:72:df, ethertype IPv4 (0x0800), length 92: 192.168.100.1.55649 > 192.168.100.2.4789: VXLAN, flags [I] (0x08), vni 100
+02:00:0a:c8:00:11 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 10.200.0.12 tell 10.200.0.11, length 28
+13:22:37.072819 a2:45:58:35:72:df > 0e:e8:4c:de:e1:a6, ethertype IPv4 (0x0800), length 92: 192.168.100.2.55649 > 192.168.100.1.4789: VXLAN, flags [I] (0x08), vni 100
+02:00:0a:c8:00:12 > 02:00:0a:c8:00:11, ethertype ARP (0x0806), length 42: Reply 10.200.0.12 is-at 02:00:0a:c8:00:12, length 28
+13:22:37.072833 0e:e8:4c:de:e1:a6 > a2:45:58:35:72:df, ethertype IPv4 (0x0800), length 148: 192.168.100.1.35238 > 192.168.100.2.4789: VXLAN, flags [I] (0x08), vni 100
+02:00:0a:c8:00:11 > 02:00:0a:c8:00:12, ethertype IPv4 (0x0800), length 98: 10.200.0.11 > 10.200.0.12: ICMP echo request, id 18881, seq 1, length 64
+13:22:37.072976 a2:45:58:35:72:df > 0e:e8:4c:de:e1:a6, ethertype IPv4 (0x0800), length 148: 192.168.100.2.35238 > 192.168.100.1.4789: VXLAN, flags [I] (0x08), vni 100
+02:00:0a:c8:00:12 > 02:00:0a:c8:00:11, ethertype IPv4 (0x0800), length 98: 10.200.0.12 > 10.200.0.11: ICMP echo reply, id 18881, seq 1, length 64
+```
+
+각 쌍의 첫 줄이 바깥(언더레이), 둘째 줄이 안쪽(오버레이)이다. 바깥 MAC은 호스트 랜카드 주소, 안쪽 MAC은 컨테이너 주소다. ARP의 바깥 길이 92는 50 + 안쪽 42, ping은 50 + 98 = 148이다. 처음 장면에서 `tcpdump host 10.244.1.5`로 아무것도 못 잡은 건, 필터가 바깥 IP 헤더만 보기 때문이다. 오버레이 안을 거르려면 tcpdump에 `udp port 4789`로 범위를 좁힌 뒤 안쪽 주소를 눈으로 찾거나, 컨테이너 쪽 인터페이스(veth, `cni0` 같은 브리지)에서 캡처한다.
+
+## MAC이 어느 호스트 뒤에 있는지 누가 아나
+
+VTEP의 핵심 질문은 하나다. "이 목적지 MAC은 어느 VTEP 뒤에 있나." 리눅스 VXLAN 장치는 이걸 브리지의 포워딩 테이블(FDB)에 적는다. ping 직후 호스트 1의 FDB다.
+
+```bash
+# VXLAN 장치의 FDB: MAC → 상대 VTEP 주소
+bridge fdb show dev vxlan100
+```
+
+```text
+02:00:0a:c8:00:12 master br0
+9a:7d:0a:8a:34:7b master br0
+f2:c2:7f:83:f8:8f master br0 permanent
+02:00:0a:c8:00:12 dst 192.168.100.2 self
+9a:7d:0a:8a:34:7b dst 192.168.100.2 self
+00:00:00:00:00:00 dst 192.168.100.2 via ul1 self permanent
+```
+
+`master br0` 줄은 브리지가 "이 MAC은 vxlan100 포트 쪽"이라고 배운 것이고, `self` 줄은 VXLAN 장치가 "그 MAC은 192.168.100.2 뒤"라고 배운 것이다. 마지막 줄의 `00:00:00:00:00:00`은 모르는 MAC과 브로드캐스트를 보낼 곳이다. `remote`를 하나 주면 이 항목이 자동으로 생긴다. 호스트가 여럿이면 이 항목을 VTEP마다 하나씩 두고, 브로드캐스트를 모두에게 복사해 보낸다(헤드엔드 복제). 아래 그림이 VTEP이 목적지를 정하는 순서다.
+
+<AlgoTrace
+  caption="vxlan100이 안쪽 프레임의 목적지 MAC으로 VTEP을 고르는 순서"
+  memoryLabel="보낼 VTEP"
+  cells={["dst MAC", "그룹 비트?", "FDB 일치?", "00:00 항목"]}
+  steps={[
+    { pointer: 0, caption: "안쪽 프레임의 목적지 MAC을 꺼낸다. 이번 프레임은 ff:ff:ff:ff:ff:ff (ARP 요청)." },
+    { pointer: 1, memory: ["192.168.100.2", "192.168.100.3"], caption: "첫 바이트의 맨 아래 비트가 1이면 브로드캐스트·멀티캐스트다. 00:00 항목의 VTEP 모두에 복사한다." },
+    { pointer: 0, caption: "다음 프레임. 목적지는 02:00:0a:c8:00:12 (c2)." },
+    { pointer: 2, found: [2], memory: ["192.168.100.2"], caption: "FDB에 이 MAC이 있다. 그 VTEP 하나로만 보낸다." },
+    { pointer: 0, caption: "다음 프레임. 목적지는 02:00:0a:c8:00:99, 아직 아무도 본 적 없는 MAC." },
+    { pointer: 3, found: [3], memory: ["192.168.100.2", "192.168.100.3"], caption: "FDB에 없으니 브로드캐스트처럼 00:00 항목 모두에 보낸다. 답이 오면 그때 배운다." },
+  ]}
+/>
+
+이 판단을 코드로 옮겨 보자.
+
+<CodePlayground
+  caption="이 프레임은 어느 VTEP으로 감싸 보내나"
+  functionName="vtepFor"
+  initialCode={`// fdb: [{ mac: "02:00:0a:c8:00:12", dst: "192.168.100.2" }, ...]
+//      mac이 "00:00:00:00:00:00"이면 '모르는 목적지와 브로드캐스트를 보낼 곳'
+// dstMac: 안쪽 프레임의 목적지 MAC
+// 반환: 감싸서 보낼 VTEP 주소 배열 (FDB에 적힌 순서)
+function vtepFor(fdb, dstMac) {
+  return [];
+}`}
+  solution={`function vtepFor(fdb, dstMac) {
+  const first = parseInt(dstMac.slice(0, 2), 16);
+  const flood = fdb.filter((e) => e.mac === "00:00:00:00:00:00").map((e) => e.dst);
+  if (first & 1) return flood; // 브로드캐스트·멀티캐스트
+  const hit = fdb.find((e) => e.mac === dstMac);
+  return hit ? [hit.dst] : flood;
+}`}
+  tests={[
+    { args: [[{ mac: "00:00:00:00:00:00", dst: "192.168.100.2" }, { mac: "00:00:00:00:00:00", dst: "192.168.100.3" }, { mac: "02:00:0a:c8:00:12", dst: "192.168.100.2" }], "02:00:0a:c8:00:12"], expected: ["192.168.100.2"], label: "배운 MAC은 한 곳으로" },
+    { args: [[{ mac: "00:00:00:00:00:00", dst: "192.168.100.2" }, { mac: "00:00:00:00:00:00", dst: "192.168.100.3" }, { mac: "02:00:0a:c8:00:12", dst: "192.168.100.2" }], "ff:ff:ff:ff:ff:ff"], expected: ["192.168.100.2", "192.168.100.3"], label: "브로드캐스트는 모두에게" },
+    { args: [[{ mac: "00:00:00:00:00:00", dst: "192.168.100.2" }, { mac: "00:00:00:00:00:00", dst: "192.168.100.3" }, { mac: "02:00:0a:c8:00:12", dst: "192.168.100.2" }], "02:00:0a:c8:00:99"], expected: ["192.168.100.2", "192.168.100.3"], label: "모르는 MAC도 모두에게" },
+    { args: [[{ mac: "00:00:00:00:00:00", dst: "192.168.100.2" }, { mac: "00:00:00:00:00:00", dst: "192.168.100.3" }], "33:33:00:00:00:01"], expected: ["192.168.100.2", "192.168.100.3"], label: "IPv6 멀티캐스트 MAC" },
+    { args: [[{ mac: "02:00:0a:c8:00:12", dst: "192.168.100.2" }], "02:00:0a:c8:00:13"], expected: [], label: "00:00 항목이 없으면 버린다 (Flannel 방식)" },
+  ]}
+/>
+
+이렇게 "모르면 다 뿌리고, 답을 보며 배우는" 방식을 flood-and-learn이라고 한다. 단순하지만 호스트가 수백 대면 ARP 하나가 수백 개로 복사되고, VM이 옮겨 가면 옛 항목이 만료될 때까지(실습 장치의 `ageing 300`, 5분) 엉뚱한 곳으로 간다. 그래서 큰 오버레이는 MAC과 VTEP의 짝을 미리 알려 주는 제어 평면을 따로 둔다.
+
+- 정적 항목: 오케스트레이터가 `bridge fdb append`로 항목을 직접 넣는다. Flannel의 VXLAN 모드는 노드마다 VTEP MAC과 노드 IP를 FDB와 이웃 테이블에 미리 넣고, 모르는 목적지로 뿌리는 항목은 아예 두지 않는다. 위 마지막 테스트가 그 동작이다.
+- BGP EVPN(RFC 7432, VXLAN에는 RFC 8365): 스위치와 호스트가 BGP로 "이 MAC·IP는 내 뒤에 있다"를 광고한다. 데이터센터 스위치 패브릭의 표준이 됐다. ARP 요청도 VTEP이 대신 답해(ARP 억제) 언더레이로 퍼지지 않는다.
+- 중앙 컨트롤러: 클라우드는 전체 망의 위치 정보를 중앙에서 계산해 각 호스트에 내려 준다. 이게 다음 절의 SDN이다.
+
+## 컨트롤러가 망을 그린다
+
+전통적인 스위치와 라우터는 장비마다 두뇌를 갖고 있다. 장비들이 OSPF, BGP, STP 같은 프로토콜로 서로 대화하며 각자 경로를 계산하고(제어 평면), 계산 결과대로 패킷을 보낸다(데이터 평면). 정책을 바꾸려면 장비 수십 대에 들어가 각각 설정해야 한다.
+
+SDN은 이 둘을 떼어 놓는다. 장비는 "이 조건의 패킷은 이렇게 처리하라"는 규칙대로 보내기만 하고, 규칙은 중앙 컨트롤러가 망 전체를 보고 계산해서 내려 준다. 2008년 스탠퍼드에서 나온 OpenFlow가 이 아이디어를 처음 표준 프로토콜로 만들었다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="SDN: 제어 평면을 장비에서 떼어 컨트롤러로 모은다"
+  nodes={[
+    { id: "app", label: "앱·오케스트레이터", sub: "VPC API, k8s, 정책", x: 200, y: 34, w: 170, h: 44 },
+    { id: "ctl", label: "SDN 컨트롤러", sub: "전체 망 지도", x: 200, y: 124, w: 150, h: 44 },
+    { id: "s1", label: "vSwitch / VTEP", sub: "호스트 1", x: 70, y: 262, w: 124, h: 44 },
+    { id: "s2", label: "vSwitch / VTEP", sub: "호스트 2", x: 200, y: 262, w: 124, h: 44 },
+    { id: "s3", label: "ToR 스위치", sub: "하드웨어 VTEP", x: 330, y: 262, w: 120, h: 44 },
+  ]}
+  edges={[
+    { from: "app", to: "ctl", label: "노스바운드 API" },
+    { from: "ctl", to: "s1", label: "흐름 규칙" },
+    { from: "ctl", to: "s2" },
+    { from: "ctl", to: "s3", label: "OpenFlow·OVSDB·BGP" },
+    { from: "s1", to: "s2", dashed: true, arrow: "both", label: "VXLAN" },
+  ]}
+/>
+
+위쪽으로 앱과 대화하는 인터페이스를 노스바운드, 아래쪽으로 장비에 규칙을 내리는 인터페이스를 사우스바운드라고 부른다. 처음 그렸던 "모든 하드웨어 스위치를 OpenFlow로 제어한다"는 그림은 데이터센터 전체로는 잘 퍼지지 않았다. 대신 같은 생각이 다른 모습으로 살아남았다.
+
+- 클라우드 VPC: 사용자가 콘솔에서 서브넷과 라우트 테이블을 만들면 클라우드의 컨트롤러가 각 호스트의 가상 스위치(AWS는 Nitro 카드)에 규칙을 내린다. 물리망은 단순한 L3이고 고객 망은 전부 캡슐화된 오버레이다([VPC 글](/posts/vpc-basics)).
+- 쿠버네티스 CNI: API 서버가 노드와 Pod 정보를 들고 있고, 각 노드의 에이전트(flanneld, calico-node, cilium-agent)가 그걸 읽어 자기 노드의 경로, FDB, eBPF 규칙을 맞춘다. 컨트롤러가 분산된 SDN이다([CNI 글](/posts/k8s-cni-pod-network)).
+- Open vSwitch와 OVN: OpenStack과 일부 쿠버네티스 배포판이 쓰는 가상 스위치와 그 컨트롤러다. OpenFlow 규칙이 지금도 이 안에서 돈다.
+- 데이터센터 패브릭: 하드웨어 스위치는 BGP EVPN으로 분산 제어를 하면서, 설정은 중앙 도구가 의도(intent)에서 생성해 밀어 넣는다.
+
+SDN의 이점은 망을 코드처럼 다룰 수 있다는 것이다. 고객이 API를 부르면 몇 초 만에 격리된 망이 생기고, 정책이 한곳에 있으니 감사와 변경 이력이 남는다. 대가도 있다. 컨트롤러가 망가지거나 잘못된 규칙을 내리면 피해가 망 전체로 한 번에 퍼진다. 그래서 컨트롤러는 여러 대로 띄우고, 컨트롤러가 죽어도 이미 내려간 규칙으로 데이터 평면은 계속 돌게 설계한다. 쿠버네티스에서 API 서버가 잠깐 죽어도 기존 Pod 통신이 끊기지 않는 이유다.
+
+## 오버레이가 조용히 패킷을 버릴 때
+
+오버레이 장애의 단골은 MTU다. 실습 컨테이너의 `eth0`은 기본값 1500인데 VXLAN 장치는 1450이다. 크기를 바꿔 가며 DF 비트를 켠 ping을 보냈다.
+
+```bash
+# 안쪽 IP 1450바이트 (1422 + ICMP 8 + IP 20): VXLAN MTU에 딱 맞는다
+sudo ip netns exec nxc1 ping -c 2 -W 1 -M do -s 1422 10.200.0.12
+# 안쪽 IP 1500바이트: 컨테이너 MTU로는 허용되지만 VXLAN에는 안 들어간다
+sudo ip netns exec nxc1 ping -c 2 -W 1 -M do -s 1472 10.200.0.12
+```
+
+```text
+--- 10.200.0.12 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1018ms
+--- 10.200.0.12 ping statistics ---
+2 packets transmitted, 0 received, 100% packet loss, time 1010ms
+```
+
+두 번째가 무섭다. 오류 메시지가 하나도 없다. 컨테이너는 자기 MTU 1500에 맞으니 그냥 보냈고, 호스트의 브리지는 1450짜리 VXLAN 포트로 내보낼 수 없는 프레임을 조용히 버렸다. 브리지는 L2 장치라 ICMP "너무 크다"를 돌려보내지 않는다. 경로 MTU 탐색이 기댈 신호가 아예 없는 것이다. 실제 서비스에서는 "Pod 사이 작은 API 호출은 되는데 큰 응답만 타임아웃"으로 나타난다.
+
+컨테이너 쪽 MTU를 1450으로 맞추면 같은 명령이 바로 실패를 알려 준다. 커널이 보내기 전에 막기 때문이다.
+
+```bash
+sudo ip -n nxc1 link set eth0 mtu 1450
+sudo ip netns exec nxc1 ping -c 1 -W 1 -M do -s 1472 10.200.0.12
+```
+
+```text
+PING 10.200.0.12 (10.200.0.12) 1472(1500) bytes of data.
+ping: local error: message too long, mtu=1450
+```
+
+TCP는 이제 MSS를 1410으로 잡아 처음부터 맞는 크기로 보낸다. CNI가 Pod 인터페이스의 MTU를 오버레이 헤더만큼 줄여서 잡는 이유가 이것이다. 노드 MTU가 9001(AWS 점보 프레임)인지 1500인지, 오버레이가 VXLAN(50)인지 WireGuard 암호화까지 더했는지에 따라 값이 달라지니, 클러스터를 만든 뒤 노드 종류를 바꿨다면 CNI의 MTU 설정을 다시 확인한다. 언더레이 MTU를 1550 이상으로 올려 안쪽을 1500으로 유지하는 방법도 있다. 데이터센터 패브릭은 보통 9000 이상으로 잡는다.
+
+## 언더레이는 출발지 포트를 보고 길을 나눈다
+
+캡처에서 ARP는 출발지 포트 55649, ping은 35238이었다. 리눅스 VXLAN은 안쪽 프레임의 주소·포트를 해시해서 바깥 UDP 출발지 포트를 정한다(`srcport 0 0`은 커널 기본 범위를 쓴다는 뜻이다). 이유는 언더레이의 ECMP다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="바깥 UDP 출발지 포트가 흐름마다 달라야 여러 경로를 고루 쓴다"
+  zones={[
+    { id: "fab", label: "스파인-리프 패브릭", x: 6, y: 6, w: 388, h: 288, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "l1", label: "leaf1", sub: "VTEP host1", x: 80, y: 230, icon: "switch" },
+    { id: "s1", label: "spine1", sub: "ECMP", x: 120, y: 70, icon: "router" },
+    { id: "s2", label: "spine2", sub: "ECMP", x: 280, y: 70, icon: "router" },
+    { id: "l2", label: "leaf2", sub: "VTEP host2", x: 320, y: 230, icon: "switch" },
+  ]}
+  links={[
+    { from: "l1", to: "s1" },
+    { from: "l1", to: "s2" },
+    { from: "s1", to: "l2" },
+    { from: "s2", to: "l2" },
+  ]}
+  steps={[
+    { path: ["l1", "s1", "l2"], packet: "55649", title: "흐름 A는 spine1로", detail: "leaf1은 바깥 헤더의 출발지·목적지 IP, 프로토콜, 포트 다섯 값을 해시해 경로를 고른다. 출발지 포트 55649는 spine1로 갔다." },
+    { path: ["l1", "s2", "l2"], packet: "35238", title: "흐름 B는 spine2로", detail: "다른 컨테이너 흐름은 출발지 포트가 다르니 해시도 달라 spine2로 간다. 두 링크를 고루 쓴다." },
+    { path: ["l1", "s1", "l2"], packet: "35238", highlight: ["s2"], title: "포트가 고정이면 한 길로 몰린다", detail: "모든 흐름의 출발지 포트가 같다면 바깥 다섯 값이 호스트 쌍마다 하나뿐이라 한 spine에 몰린다. 다른 spine은 논다." },
+    { path: ["l1", "s1"], packet: "35238", blocked: true, title: "spine1이 죽으면 다른 길로", detail: "같은 흐름은 언제나 같은 포트라 같은 길로 가서 순서가 지켜진다. spine1이 죽으면 경로 목록이 바뀌어 해시를 다시 계산하고, 이 흐름은 남은 spine2로 옮겨 간다." },
+  ]}
+/>
+
+이 해시 덕분에 같은 TCP 연결은 한 경로에 머물러 순서가 지켜지고, 연결이 많으면 여러 경로에 고루 퍼진다. 반대로 호스트 두 대 사이에 거대한 연결 하나만 있으면(대용량 백업 하나) 아무리 경로가 많아도 한 링크만 쓴다. 오버레이가 아니라 ECMP의 성질이다.
+
+## VXLAN 말고 다른 선택지
+
+오버레이를 만드는 방식은 VXLAN만 있는 게 아니다. 무엇을 고를지는 "안쪽이 L2여야 하나"와 "언더레이를 내가 제어하나"에 달려 있다.
+
+- Geneve(UDP 6081, RFC 8926): VXLAN과 비슷하지만 헤더에 가변 길이 옵션을 붙일 수 있다. 메타데이터(보안 그룹 ID, 정책 태그)를 실어 나르려는 SDN에서 쓴다. OVN, AWS Gateway Load Balancer가 Geneve를 쓴다.
+- IP-in-IP와 GRE: L2가 필요 없고 IP 패킷만 나르면 될 때 쓴다. 헤더가 더 작다(IP-in-IP는 20바이트). Calico가 IP-in-IP 모드를 지원한다. 다만 UDP가 아니라서 출발지 포트로 ECMP를 나누지 못하고, 클라우드 보안 그룹이 이 프로토콜을 막는 경우가 있다.
+- 오버레이 없이 라우팅: 언더레이 라우터에 Pod·VM 대역의 경로를 직접 알려 준다. Calico의 BGP 모드, 클라우드의 VPC 네이티브 CNI(AWS VPC CNI는 Pod에 VPC IP를 직접 준다)가 이쪽이다. 캡슐화 비용과 MTU 문제가 없고 tcpdump에 Pod IP가 그대로 보인다. 대신 언더레이가 그 대역을 알아야 하고, 주소 공간이 언더레이 대역에 묶인다.
+- 암호화 오버레이: WireGuard나 IPsec으로 감싸면 노드 사이를 지나는 트래픽이 암호화된다. Cilium과 Calico 모두 WireGuard 모드가 있다. MTU가 더 줄고 CPU를 더 쓴다.
+
+VXLAN은 L2를 그대로 늘릴 수 있고, UDP라 ECMP와 NAT를 잘 지나고, 거의 모든 하드웨어 스위치와 NIC가 캡슐화를 하드웨어에서 처리한다(`ethtool -k`의 `tx-udp_tnl-segmentation`). 그래서 기본값이 됐다.
+
+## 오버레이에서 장애를 좁히는 법
+
+오버레이 장애는 "언더레이 문제인가, 오버레이 문제인가"로 먼저 나눈다. 언더레이가 깨지면 그 호스트 쌍의 모든 컨테이너가 안 되고, 오버레이 설정이 틀리면 특정 컨테이너나 특정 크기만 안 된다.
+
+언더레이부터 본다. 호스트끼리 ping이 되고, VXLAN 포트가 열려 있는지 확인한다. 클라우드 보안 그룹이나 노드 방화벽이 UDP 4789(또는 Flannel·Cilium의 8472)를 막으면 같은 노드 안의 Pod끼리는 되는데 다른 노드로만 안 된다.
+
+```bash
+# 호스트끼리 기본 연결
+ping -c 2 192.168.100.2
+# 오버레이 패킷이 나가고 들어오는지 (나가기만 하면 상대 쪽 방화벽·보안 그룹)
+sudo tcpdump -n -i eth0 'udp port 4789 or udp port 8472'
+# 들어온 VXLAN 패킷을 커널이 버리고 있는지 (UDP 수신 오류 카운터)
+nstat -az | grep -E 'UdpInErrors|UdpNoPorts'
+```
+
+그다음 오버레이 설정이다. VNI가 양쪽에서 같은지, FDB에 상대 VTEP이 있는지 본다. VNI가 다르면 패킷은 도착하지만 상대 커널은 해당 VNI 장치가 없어서 버린다.
+
+```bash
+# VNI, 포트, 로컬 주소, MTU
+ip -d link show vxlan100
+# 목적지 MAC이 어느 VTEP으로 가는지
+bridge fdb show dev vxlan100
+# 오버레이 쪽 이웃(ARP)이 채워졌는지
+ip neigh show dev br0
+```
+
+크기만 문제면 위에서 본 MTU다. `ping -M do -s`로 경계를 찾고, 컨테이너·Pod 인터페이스의 MTU가 오버레이 MTU 이하인지 본다.
+
+보안도 짚어 둔다. VXLAN에는 인증도 암호화도 없다. 언더레이에서 UDP 4789로 패킷을 보낼 수 있는 사람은 아무 VNI의 프레임이나 만들어 넣을 수 있다. 실습 장치도 `remote`가 아닌 곳에서 온 패킷을 따로 거르지 않았다. 오버레이 포트는 노드 대역에서 온 것만 받도록 방화벽으로 막고, 노드 사이 구간 자체를 믿을 수 없다면 WireGuard·IPsec 모드를 쓴다.
+
+```bash
+# VXLAN 포트는 노드 대역에서 온 것만 받는다
+sudo iptables -A INPUT -p udp --dport 4789 -s 192.168.100.0/24 -j ACCEPT
+sudo iptables -A INPUT -p udp --dport 4789 -j DROP
+```
+
+## 상자 속의 상자, 그리고 그걸 그리는 손
+
+오버레이는 L2 프레임을 UDP 상자에 넣어 L3 언더레이를 건너게 한다. 언더레이는 바깥 주소만 보고 단순하게 라우팅하고, 오버레이는 VNI로 수천만 개의 망을 가른다. 대가는 50바이트의 헤더와, 그 때문에 조용히 사라지는 큰 패킷이다. 어떤 MAC이 어느 호스트 뒤에 있는지를 배우는 방법(뿌리고 배우기, 정적 항목, EVPN, 컨트롤러)이 오버레이마다 다르고, 그 지도를 중앙의 소프트웨어가 그리게 한 것이 SDN이다. 장애가 나면 언더레이와 오버레이를 나눠, 바깥 상자가 오가는지부터 확인한다.
+
+## 면접에서 나올 만한 질문
+
+### VXLAN은 왜 필요한가요?
+
+VLAN의 4094개 한계와, L2 망을 여러 랙과 데이터센터로 늘릴 때 생기는 STP와 브로드캐스트 문제를 풀려고 나왔습니다. L2 프레임을 UDP로 감싸 L3로 라우팅되는 언더레이를 건너게 해서, 물리망은 ECMP로 링크를 다 쓰는 단순한 L3로 두고 그 위에 24비트 VNI로 약 1,677만 개의 논리 L2 망을 만듭니다.
+
+### VXLAN 캡슐화 오버헤드는 얼마이고, 어떤 문제를 만드나요?
+
+바깥 이더넷 14, IP 20, UDP 8, VXLAN 8을 더해 50바이트입니다. 언더레이 MTU가 1500이면 안쪽 IP 패킷은 1450까지만 실을 수 있습니다. 컨테이너나 VM 인터페이스가 1500으로 남아 있으면 큰 패킷이 브리지에서 ICMP 없이 버려져, 작은 요청은 되고 큰 응답만 멈추는 증상이 납니다. 안쪽 MTU를 1450으로 낮추거나 언더레이 MTU를 키워서 해결합니다.
+
+### VTEP은 목적지 MAC이 어느 호스트에 있는지 어떻게 아나요?
+
+기본은 flood-and-learn으로, 모르는 MAC과 브로드캐스트를 모든 VTEP에 복사해 보내고 돌아오는 패킷의 출발지로 배웁니다. 규모가 커지면 복제 부하와 이동 시 옛 항목 문제 때문에 제어 평면을 둡니다. 오케스트레이터가 FDB를 정적으로 넣거나(Flannel), BGP EVPN으로 MAC·IP 위치를 광고하거나, SDN 컨트롤러가 내려 줍니다.
+
+### 노드 eth0에서 tcpdump로 Pod IP를 찾았는데 아무것도 안 보입니다. 왜 그런가요?
+
+오버레이를 쓰면 노드 랜카드에는 노드 IP끼리의 UDP 패킷(VXLAN 4789 또는 8472)만 보이고 Pod IP는 그 안쪽 헤더에 있기 때문입니다. tcpdump의 host 필터는 바깥 헤더를 봅니다. `udp port 8472`로 잡아 안쪽을 풀어 보거나, Pod 쪽 veth나 cni0 브리지에서 캡처합니다.
+
+### VXLAN의 바깥 UDP 출발지 포트는 왜 매번 다른가요?
+
+안쪽 흐름의 주소와 포트를 해시해서 정하기 때문입니다. 언더레이 스위치는 바깥 헤더의 다섯 값으로 ECMP 경로를 고르는데, 출발지 포트가 흐름마다 달라야 여러 경로에 고루 퍼집니다. 같은 흐름은 같은 포트라 한 경로에 머물러 패킷 순서가 지켜집니다.
+
+### SDN은 무엇이고, 지금은 어디에 쓰이나요?
+
+경로와 정책을 계산하는 제어 평면을 장비에서 떼어 중앙 컨트롤러로 모으고, 장비는 내려받은 규칙대로 전달만 하게 하는 구조입니다. 망을 API로 만들고 바꿀 수 있게 됩니다. 클라우드 VPC, 쿠버네티스 CNI, Open vSwitch·OVN, EVPN 패브릭의 중앙 설정 도구가 이 생각을 구현한 예입니다. 컨트롤러 장애나 잘못된 규칙이 망 전체로 퍼질 수 있어 컨트롤러를 이중화하고 데이터 평면은 컨트롤러 없이도 기존 규칙으로 돌게 만듭니다.
+
+### 오버레이 대신 라우팅(BGP) 방식을 고르는 건 언제인가요?
+
+언더레이 라우터에 Pod·VM 대역 경로를 알려 줄 수 있고 L2 확장이 필요 없을 때입니다. 캡슐화가 없어 MTU 손실과 CPU 비용이 없고 패킷 캡처에서 원래 주소가 그대로 보여 운영이 쉽습니다. 대신 언더레이가 그 대역을 알아야 하므로 네트워크 팀과의 협업이 필요하고, 언더레이를 제어할 수 없는 환경(일부 클라우드, 남의 망)에서는 오버레이가 현실적입니다.
+
+### VXLAN은 안전한가요?
+
+인증도 암호화도 없어서 언더레이에서 UDP 4789로 패킷을 보낼 수 있으면 아무 VNI의 프레임이나 주입할 수 있습니다. 오버레이 포트를 노드 대역에서만 받도록 방화벽으로 막고, 노드 사이 구간을 믿을 수 없으면 WireGuard나 IPsec으로 감싸는 모드를 씁니다. VNI 분리는 격리이지 암호화가 아니라는 점을 구분해야 합니다.

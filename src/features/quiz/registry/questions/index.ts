@@ -72,6 +72,7 @@ import { HYDRATION } from "./hydration";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
+import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
@@ -132,6 +133,7 @@ import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
+import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
@@ -159,9 +161,11 @@ import { TOKEN_LOGIN } from "./token-login";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
+import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
+import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
@@ -240,6 +244,7 @@ export const QUESTION_SETS = [
   IDEMPOTENCY_KEY,
   IPTABLES_BASICS,
   IPTABLES_NAT,
+  IPV6_BASICS,
   ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
@@ -300,6 +305,7 @@ export const QUESTION_SETS = [
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
+  SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
@@ -327,8 +333,10 @@ export const QUESTION_SETS = [
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
+  VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,
   VPC_SUBNETS_ROUTE_TABLES,
+  VPN_IPSEC_WIREGUARD,
   WHAT_HAPPENS_GOOGLE_COM,
 ];

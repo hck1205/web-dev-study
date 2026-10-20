@@ -1,0 +1,458 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("vlan-basics");
+
+랙에 새 서버를 꽂고 IP를 `10.0.10.12/24`로 줬다. 옆 서버 `10.0.10.11`과 같은 대역, 같은 스위치다. 그런데 ping이 안 간다. `ip neigh`를 보면 상대 주소가 `FAILED`로 남아 있다. 케이블도 멀쩡하고 링크 불도 들어와 있다. 네트워크 담당자에게 물었더니 한마디가 돌아온다. "그 포트 VLAN 20이에요."
+
+같은 스위치에 꽂고 같은 대역 주소를 줘도 VLAN이 다르면 서로 다른 망이다. 이 글은 왜 그렇게 되는지, 스위치가 프레임에 무엇을 붙이고 떼는지, VLAN 사이를 어떻게 잇는지, 현장에서 VLAN 때문에 생기는 장애를 어떻게 좁히는지를 본다. 이더넷 프레임과 스위치가 MAC을 배우는 법은 [데이터 링크 계층 글](/posts/layer-link-ethernet-arp)에서 다뤘고, 그 글의 VLAN 절은 태그 모양까지만 짧게 짚었다. 여기서는 그 다음, 포트 설정과 태그가 붙고 떨어지는 순간, 라우팅과 보안까지 들어간다.
+
+기준 OS는 Ubuntu 24.04다. 실습 컨테이너의 커널에는 802.1Q 모듈(`8021q`)도, 브리지의 VLAN 필터링도 빠져 있었다(`ip link add ... type vlan`이 `Error: Unknown device type.`, `vlan_filtering 1`이 `Operation not supported`). 그래서 파이썬으로 VLAN을 이해하는 작은 스위치를 만들어 네트워크 네임스페이스 사이에 두고, 프레임은 tcpdump로 실제로 캡처했다. 리눅스 VLAN 인터페이스 명령의 출력은 실제 형식대로 쓴 예시이고, 그렇다고 따로 표시했다.
+
+## 스위치 하나에 망 하나면 생기는 일
+
+스위치는 처음 보는 목적지나 브로드캐스트를 받으면 모든 포트로 뿌린다. 같은 스위치(또는 스위치끼리 이어진 묶음)에 붙은 기기 전체가 한 브로드캐스트 도메인이다. 기기가 수십 대일 때는 괜찮다. 수백, 수천 대가 되면 ARP와 DHCP 같은 브로드캐스트가 모든 기기의 CPU를 깨운다. 고장 난 랜카드 하나가 브로드캐스트를 쏟아 내면 층 전체가 느려진다.
+
+보안도 문제다. 같은 브로드캐스트 도메인에 있으면 ARP 응답을 위조해 남의 트래픽을 가로챌 수 있다. 손님용 Wi-Fi, CCTV, 사무용 PC, 서버가 한 망에 섞여 있으면 CCTV 하나가 뚫리는 순간 서버까지 같은 망에서 닿는다.
+
+망을 나누는 가장 단순한 방법은 스위치를 따로 사서 케이블을 따로 까는 것이다. 부서가 자리를 옮길 때마다 배선을 다시 해야 한다. VLAN(Virtual LAN)은 스위치 한 대를 소프트웨어로 여러 대처럼 쪼갠다. 포트 설정 한 줄로 "이 포트는 10번 망, 저 포트는 20번 망"을 정한다. 같은 스위치에 꽂혀 있어도 VLAN이 다르면 브로드캐스트가 닿지 않고, 앞 장면처럼 ARP도 되지 않는다.
+
+이 글에서는 VLAN을 "건물 하나에 색깔별 우편함"으로 생각하겠다. 같은 건물(스위치)에 살아도 우편물은 자기 색깔 우편함에만 들어간다. 건물 사이를 오가는 우편 트럭(트렁크)은 여러 색 우편물을 한꺼번에 싣는데, 뒤섞이지 않게 봉투마다 색 스티커(태그)를 붙인다.
+
+## 4바이트 태그 한 장
+
+스위치끼리 여러 VLAN의 프레임을 한 케이블로 나를 때, 받는 쪽은 프레임이 어느 VLAN 것인지 알아야 한다. IEEE 802.1Q는 이더넷 헤더의 출발지 MAC 바로 뒤에 4바이트 태그를 끼운다. 실제 캡처에서 그 태그는 이렇게 찍힌다.
+
+```text
+13:23:29.645765 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.13 tell 10.0.10.11, length 28
+```
+
+태그의 4바이트를 조각으로 나눠 보자. 조각을 누르면 비트 수와 뜻이 나온다.
+
+<UrlAnatomy
+  caption="802.1Q 태그: 81 00 | 00 0a"
+  separator=""
+  joiner=" | "
+  params={[
+    { key: "TPID", display: "TPID 0x8100", title: "태그 프로토콜 ID (16비트)", description: "원래 EtherType이 있던 자리에 0x8100이 오면 '뒤에 VLAN 태그가 있다'는 뜻이다. 태그를 모르는 장비는 이걸 알 수 없는 EtherType으로 보고 버린다. 원래 EtherType(IPv4는 0x0800, ARP는 0x0806)은 태그 4바이트 뒤로 밀린다." },
+    { key: "PCP", display: "PCP 0", title: "우선순위 (3비트)", description: "0~7. 802.1p 서비스 등급이다. 음성 전화 VLAN에 5를 줘서 혼잡할 때 먼저 보내게 하는 식으로 쓴다. tcpdump에는 'p 0'으로 나온다." },
+    { key: "DEI", display: "DEI 0", title: "버려도 되는 표시 (1비트)", description: "혼잡할 때 먼저 버려도 되는 프레임에 1을 단다. 예전 이름은 CFI였다." },
+    { key: "VID", display: "VID 10", title: "VLAN ID (12비트)", description: "0x00a = 10. 12비트라 0~4095인데 0(우선순위만 표시)과 4095(예약)를 빼면 쓸 수 있는 건 1~4094다. 이 4094개가 데이터센터에서 모자라 VXLAN이 나왔다." },
+  ]}
+/>
+
+태그 4바이트가 붙으니 프레임 최대 크기가 1518에서 1522바이트로 늘어난다. 안쪽 IP 패킷의 MTU 1500은 그대로다. 대부분의 장비가 1522를 받아 주지만, 오래된 장비가 태그 프레임을 "너무 크다"며 버려서 큰 패킷만 사라지는 경우가 있다.
+
+캡처에서 16진수 4바이트를 보고 바로 읽을 수 있게, 태그를 해석하는 함수를 만들어 보자. 802.1Q(0x8100)와 뒤에서 볼 QinQ용 802.1ad(0x88a8)를 구분한다.
+
+<CodePlayground
+  caption="VLAN 태그 4바이트 해석하기"
+  functionName="parseVlanTag"
+  initialCode={`// hex: 태그 4바이트를 공백 없는 16진수 8자리로 (예: "8100000a")
+// 반환: [종류("802.1Q" | "802.1ad"), PCP, DEI, VID]
+//      VLAN 태그가 아니면 null
+function parseVlanTag(hex) {
+  return null;
+}`}
+  solution={`function parseVlanTag(hex) {
+  const tpid = parseInt(hex.slice(0, 4), 16);
+  const tci = parseInt(hex.slice(4, 8), 16);
+  const kind = tpid === 0x8100 ? "802.1Q" : tpid === 0x88a8 ? "802.1ad" : null;
+  if (!kind) return null;
+  return [kind, tci >> 13, (tci >> 12) & 1, tci & 0x0fff];
+}`}
+  tests={[
+    { args: ["8100000a"], expected: ["802.1Q", 0, 0, 10], label: "이 글의 캡처 (vlan 10, p 0)" },
+    { args: ["8100a014"], expected: ["802.1Q", 5, 0, 20], label: "음성 VLAN 20, 우선순위 5" },
+    { args: ["81003fff"], expected: ["802.1Q", 1, 1, 4095], label: "예약된 VID 4095" },
+    { args: ["88a80064"], expected: ["802.1ad", 0, 0, 100], label: "QinQ 바깥 태그" },
+    { args: ["08004500"], expected: null, label: "태그 없는 IPv4 프레임" },
+  ]}
+/>
+
+## 액세스 포트와 트렁크 포트
+
+스위치 포트는 두 종류로 설정한다.
+
+액세스 포트는 VLAN 하나에만 속한다. 서버나 PC가 꽂히는 포트다. 기기는 VLAN을 전혀 모르고 태그 없는 평범한 프레임을 보낸다. 스위치가 들어온 프레임에 "이건 VLAN 10"이라고 속으로 표시하고, 같은 VLAN 10의 액세스 포트로 내보낼 때는 태그 없이 내보낸다. 그래서 처음 장면의 서버 담당자는 VLAN을 몰라도 된다. 대신 포트 설정을 모르면 원인을 찾지 못한다.
+
+트렁크 포트는 여러 VLAN의 프레임을 함께 나른다. 스위치끼리, 스위치와 라우터, 스위치와 가상화 호스트를 잇는 포트다. 나갈 때 태그를 붙이고, 들어올 때 태그를 보고 VLAN을 가른다. 트렁크마다 "어떤 VLAN을 실어 나를지" 허용 목록이 있다.
+
+아래 그림은 스위치 두 대를 트렁크로 이었다. 다음을 누르면 같은 VLAN끼리는 트렁크를 건너 통하고, VLAN이 다르면 같은 대역 주소여도 막히는 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="액세스 포트는 태그 없이, 트렁크는 태그를 붙여 나른다"
+  zones={[
+    { id: "z1", label: "1층 스위치", x: 6, y: 6, w: 190, h: 220, tone: "neutral" },
+    { id: "z2", label: "2층 스위치", x: 204, y: 6, w: 190, h: 220, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "a", label: "A (VLAN10)", sub: "10.0.10.11", x: 100, y: 60, icon: "server", w: 112 },
+    { id: "b", label: "B (VLAN20)", sub: "10.0.10.12", x: 100, y: 180, icon: "server", w: 112 },
+    { id: "sw1", label: "sw1", sub: "trunk 10,20", x: 100, y: 120, icon: "switch" },
+    { id: "sw2", label: "sw2", sub: "trunk 10,20", x: 300, y: 120, icon: "switch" },
+    { id: "c", label: "C (VLAN10)", sub: "10.0.10.13", x: 300, y: 60, icon: "server", w: 112 },
+    { id: "d", label: "D (VLAN20)", sub: "10.0.20.14", x: 300, y: 180, icon: "server", w: 112 },
+    { id: "r", label: "router", sub: "VLAN 사이", x: 200, y: 280, icon: "router" },
+  ]}
+  links={[
+    { from: "a", to: "sw1" },
+    { from: "b", to: "sw1" },
+    { from: "sw1", to: "sw2", label: "802.1Q" },
+    { from: "c", to: "sw2" },
+    { from: "d", to: "sw2" },
+    { from: "sw2", to: "r", dashed: true },
+  ]}
+  steps={[
+    { path: ["a", "sw1"], packet: "ARP", title: "A가 태그 없이 보낸다", detail: "A는 VLAN을 모른다. 스위치가 액세스 포트 설정을 보고 이 프레임을 VLAN 10으로 분류한다.", payload: "02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype ARP" },
+    { path: ["sw1", "sw2"], packet: "vlan10", title: "트렁크에서는 태그를 붙인다", detail: "브로드캐스트를 VLAN 10 포트와 트렁크로만 내보낸다. 트렁크로 갈 때 VID 10 태그를 끼운다. B의 포트로는 가지 않는다.", payload: "ethertype 802.1Q (0x8100): vlan 10, p 0, ethertype ARP" },
+    { path: ["sw2", "c"], packet: "ARP", title: "C에게는 태그를 떼고 준다", detail: "sw2는 태그를 보고 VLAN 10 액세스 포트로 넘긴다. 내보낼 때 태그를 떼므로 C는 평범한 ARP를 받는다." },
+    { path: ["a", "sw1", "b"], packet: "ARP", blocked: true, title: "같은 대역이어도 VLAN이 다르면 막힌다", detail: "B가 10.0.10.12를 쓰고 있어도 VLAN 20 포트라서 A의 ARP가 닿지 않는다. 처음 장면의 FAILED가 이것이다." },
+    { path: ["a", "sw1", "sw2", "r", "sw2", "d"], packet: "ping", title: "VLAN 사이는 라우터를 거친다", detail: "D는 다른 대역 10.0.20.0/24다. A는 게이트웨이(라우터)로 보내고, 라우터가 VLAN 20 쪽으로 다시 내보낸다. 같은 트렁크를 두 번 지난다." },
+  ]}
+/>
+
+## 직접 만들어 본 VLAN 스위치
+
+실제로 확인해 보자. 네임스페이스 여섯 개를 만들었다. 호스트 A, B, C, 라우터, 트렁크 반대편에서 엿보기만 하는 관찰자, 그리고 가운데 스위치다. 스위치는 커널 모듈 대신 아래 파이썬 코드가 맡는다. 포트 설정과 태그를 붙이고 떼는 부분만 옮겼다.
+
+```python
+# 포트 설정: 액세스 포트는 VLAN 하나, 트렁크는 실어 나를 VLAN 목록
+PORTS = {"pa": ("access", 10), "pb": ("access", 20), "pc": ("access", 10),
+         "pr10": ("access", 10), "pr20": ("access", 20), "tr": ("trunk", (10, 20))}
+
+# 들어올 때: 액세스 포트면 포트의 VLAN, 트렁크면 태그에서 VID를 읽고 태그를 뗀다
+if kind == "access":
+    vlan = conf
+else:
+    vlan = struct.unpack("!H", frame[14:16])[0] & 0x0fff
+    frame = frame[:12] + frame[16:]
+
+# MAC 표는 (VLAN, MAC) 쌍으로 배운다
+mac_table[(vlan, src)] = inport
+
+# 나갈 때: 트렁크로 가면 출발지 MAC 뒤에 0x8100 + VID를 끼운다
+f = frame if k == "access" else frame[:12] + struct.pack("!HH", 0x8100, vlan) + frame[12:]
+```
+
+MAC 표를 `(VLAN, MAC)` 쌍으로 배우는 게 요점이다. 같은 MAC이라도 VLAN이 다르면 다른 항목이다. 아래 그림은 이 표로 프레임 하나의 갈 곳을 정하는 과정이다.
+
+<AlgoTrace
+  caption="VLAN 스위치가 프레임 하나를 보내는 순서"
+  memoryLabel="결정"
+  cells={["in: pa", "VLAN 10", "dst ff:ff..", "pb(20)", "pc(10)", "tr(10,20)"]}
+  steps={[
+    { pointer: 0, caption: "A의 ARP 요청이 액세스 포트 pa로 들어온다. 태그가 없다." },
+    { pointer: 1, memory: ["VLAN=10"], caption: "pa는 VLAN 10 액세스 포트다. 이 프레임은 이제부터 VLAN 10이다." },
+    { pointer: 2, memory: ["VLAN=10", "배움 (10, ..:10:0a)→pa"], caption: "출발지 MAC을 (VLAN 10, MAC) 쌍으로 표에 적는다. 목적지는 브로드캐스트라 표를 볼 필요 없이 뿌린다." },
+    { pointer: 3, memory: ["VLAN=10", "배움 (10, ..:10:0a)→pa", "pb: VLAN 20, 건너뜀"], caption: "pb는 VLAN 20이다. 같은 스위치지만 보내지 않는다." },
+    { pointer: 4, found: [4], memory: ["VLAN=10", "배움 (10, ..:10:0a)→pa", "pb: VLAN 20, 건너뜀", "pc: 태그 없이"], caption: "pc는 VLAN 10 액세스 포트다. 태그 없이 내보낸다." },
+    { pointer: 5, found: [4, 5], memory: ["VLAN=10", "배움 (10, ..:10:0a)→pa", "pb: VLAN 20, 건너뜀", "pc: 태그 없이", "tr: 태그 10 붙여"], caption: "트렁크는 VLAN 10을 허용한다. 0x8100, VID 10을 끼워 내보낸다." },
+  ]}
+/>
+
+이제 A에서 C(같은 VLAN 10)와 B(VLAN 20, 하지만 같은 `10.0.10.0/24` 주소)로 ping을 보낸다. 동시에 트렁크 반대편과 B에서 캡처한다.
+
+```bash
+# 스위치를 9초 동안 돌린다 (끝나면 배운 MAC 표를 찍는다)
+sudo ip netns exec nvsw python3 vlan_switch.py 9 &
+# 트렁크 반대편과 B의 랜카드에서 MAC까지 보이게 캡처한다
+sudo ip netns exec nvtr tcpdump -l -e -n -i eth0 &
+sudo ip netns exec nvhb tcpdump -l -e -n -i eth0 &
+# A → C (같은 VLAN 10)
+sudo ip netns exec nvha ping -c 2 -W 1 10.0.10.13
+# A → B (다른 VLAN 20, 같은 대역)
+sudo ip netns exec nvha ping -c 2 -W 1 10.0.10.12
+```
+
+```text
+== A -> C (VLAN 10)
+2 packets transmitted, 2 received, 0% packet loss, time 1010ms
+== A -> B (VLAN 20, same subnet)
+2 packets transmitted, 0 received, 100% packet loss, time 1019ms
+```
+
+트렁크에서 본 프레임이다.
+
+```text
+13:23:29.645765 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.13 tell 10.0.10.11, length 28
+13:23:30.660198 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.12 tell 10.0.10.11, length 28
+13:23:31.679467 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.12 tell 10.0.10.11, length 28
+13:23:32.703487 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.12 tell 10.0.10.11, length 28
+```
+
+볼 곳은 세 군데다. `ethertype 802.1Q (0x8100)` 뒤에 `vlan 10, p 0`이 붙어 있고, 진짜 EtherType(ARP)은 그 뒤에 나온다. B를 찾는 ARP도 `vlan 10`이 붙어 트렁크로 나갔다. A가 VLAN 10에 있으니 A가 보낸 모든 것은 VLAN 10이다. 그리고 B를 찾는 요청이 1초 간격으로 세 번 반복되는데 답이 없다. B 쪽 캡처는 이렇다.
+
+```text
+listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+
+0 packets captured
+0 packets received by filter
+```
+
+B의 랜카드에는 아무것도 오지 않았다. A의 이웃 테이블과 스위치가 배운 MAC 표다.
+
+```text
+10.0.10.12 dev eth0 FAILED
+10.0.10.13 dev eth0 lladdr 02:00:00:00:10:0c REACHABLE
+
+VLAN  MAC                PORT
+10    02:00:00:00:10:0a  pa
+10    02:00:00:00:10:0c  pc
+```
+
+처음 장면과 똑같다. 주소 계획만 보면 같은 망인데 L2에서는 다른 망이다. 장애를 볼 때 IP 대역보다 포트의 VLAN을 먼저 확인해야 하는 이유다.
+
+## VLAN 사이를 잇는 라우터
+
+VLAN이 다른 기기끼리 통신하려면 L3, 즉 라우터를 거쳐야 한다. VLAN마다 IP 대역을 하나씩 주고(VLAN 10은 `10.0.10.0/24`, VLAN 20은 `10.0.20.0/24`) 라우터가 두 대역에 모두 발을 걸친다.
+
+라우터를 붙이는 방법은 둘이다. 하나는 라우터의 물리 포트 하나를 트렁크로 스위치에 꽂고, 그 포트에 VLAN마다 하위 인터페이스를 만드는 방식이다. 케이블 한 가닥에 모든 VLAN이 매달려서 "막대기 위의 라우터(router-on-a-stick)"라고 부른다. 싸고 단순하지만, VLAN 사이 트래픽이 같은 케이블을 들어갔다 나오니 그 케이블의 대역폭이 병목이 된다. 다른 하나는 L3 스위치다. 스위치 안에 VLAN마다 가상 인터페이스(SVI)를 두고 스위치 칩이 직접 라우팅한다. 데이터센터와 사무실 코어 스위치는 대부분 이렇게 한다.
+
+실습에서는 라우터 네임스페이스를 VLAN 10과 VLAN 20 액세스 포트에 하나씩 꽂았다. SVI와 같은 구조다. B의 주소를 `10.0.20.12`로 바꾸고 A에서 다시 ping을 보냈다.
+
+```bash
+# B를 VLAN 20의 대역으로 옮긴다. 게이트웨이는 라우터의 VLAN 20 주소
+sudo ip -n nvhb addr del 10.0.10.12/24 dev eth0
+sudo ip -n nvhb addr add 10.0.20.12/24 dev eth0
+sudo ip -n nvhb route add default via 10.0.20.1
+# 라우터는 두 VLAN에 주소가 있고 포워딩을 켰다
+sudo ip netns exec nvr sysctl -w net.ipv4.ip_forward=1
+sudo ip netns exec nvha ping -c 1 -W 1 10.0.20.12
+```
+
+```text
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+```
+
+트렁크에서 본 프레임에 VLAN 10과 VLAN 20이 함께 보인다. 첫 줄은 A가 게이트웨이 `10.0.10.1`의 MAC을 묻는 ARP(VLAN 10), 둘째 줄은 라우터가 VLAN 20 쪽에서 B의 MAC을 묻는 ARP(VLAN 20)다.
+
+```text
+13:23:46.490500 02:00:00:00:10:0a > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Request who-has 10.0.10.1 tell 10.0.10.11, length 28
+13:23:46.490615 06:75:85:62:e8:93 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 20, p 0, ethertype ARP (0x0806), Request who-has 10.0.20.12 tell 10.0.20.1, length 28
+```
+
+스위치의 MAC 표에는 라우터의 두 인터페이스가 각자 다른 VLAN에 적혀 있다.
+
+```text
+VLAN  MAC                PORT
+10    02:00:00:00:10:0a  pa
+10    f6:79:7c:93:f5:71  pr10
+20    02:00:00:00:20:0b  pb
+20    06:75:85:62:e8:93  pr20
+```
+
+아래 그림은 A의 ping 하나가 라우터를 거쳐 가는 동안 L2 헤더가 몇 번 바뀌는지 보여 준다.
+
+<SequenceDiagram
+  caption="VLAN 10의 A가 VLAN 20의 B로 ping을 보낼 때"
+  actors={[
+    { id: "a", label: "A (VLAN10)" },
+    { id: "sw", label: "스위치" },
+    { id: "r", label: "라우터" },
+    { id: "b", label: "B (VLAN20)" },
+  ]}
+  steps={[
+    { from: "a", to: "a", label: "목적지는 다른 대역", title: "게이트웨이로 보내기로 한다", detail: "10.0.20.12는 내 대역(10.0.10.0/24)이 아니다. 기본 게이트웨이 10.0.10.1로 보낸다." },
+    { from: "a", to: "sw", label: "ARP who-has 10.0.10.1", title: "게이트웨이의 MAC을 묻는다", detail: "브로드캐스트는 VLAN 10 안에서만 퍼진다. 라우터의 VLAN 10 쪽 인터페이스가 받는다." },
+    { from: "sw", to: "r", label: "VLAN 10 프레임", title: "라우터의 VLAN 10 쪽으로", detail: "목적지 MAC은 라우터의 VLAN 10 인터페이스, 목적지 IP는 B다.", payload: "02:00:00:00:10:0a > f6:79:7c:93:f5:71\n10.0.10.11 > 10.0.20.12: ICMP echo request" },
+    { from: "r", to: "r", label: "라우팅, TTL-1", title: "라우터가 다음 홉을 고른다", detail: "10.0.20.0/24는 VLAN 20 쪽 인터페이스에 직접 붙은 망이다. TTL을 하나 줄인다." },
+    { from: "r", to: "sw", label: "VLAN 20 프레임", title: "새 L2 헤더로 다시 내보낸다", detail: "출발지 MAC이 라우터의 VLAN 20 인터페이스로 바뀐다. IP 주소는 그대로다.", payload: "06:75:85:62:e8:93 > 02:00:00:00:20:0b\n10.0.10.11 > 10.0.20.12: ICMP echo request" },
+    { from: "sw", to: "b", label: "태그 없이", title: "B는 VLAN을 모른 채 받는다", detail: "VLAN 20 액세스 포트로 태그 없이 나간다. B의 응답은 같은 길을 거꾸로 돈다." },
+  ]}
+/>
+
+VLAN 사이를 라우터로 잇는 게 귀찮아 보이지만, 그 자리가 바로 정책을 거는 자리다. 라우터나 L3 스위치에 ACL을 걸어 "게스트 VLAN은 인터넷만, 서버 VLAN으로는 못 감"을 강제한다. VLAN을 나누기만 하고 라우터에서 모든 VLAN 사이를 다 허용하면, 브로드캐스트는 줄어도 보안 효과는 거의 없다.
+
+## 태그 없는 프레임은 어느 VLAN인가
+
+트렁크로 태그 없는 프레임이 들어오면 스위치는 그 트렁크에 정해 둔 네이티브 VLAN으로 본다. 기본값은 대부분 VLAN 1이다. 나갈 때도 네이티브 VLAN의 프레임은 태그를 붙이지 않는다. 태그를 모르는 오래된 장비를 트렁크에 물려도 기본 망은 통하게 하려는 장치였다.
+
+이 편의 기능이 두 가지 문제를 만든다.
+
+첫째, 양쪽 스위치의 네이티브 VLAN이 다르면 프레임이 조용히 다른 VLAN으로 샌다. sw1은 네이티브 VLAN 1, sw2는 네이티브 VLAN 99라면, sw1의 VLAN 1 프레임이 태그 없이 나가 sw2에서 VLAN 99로 들어간다. 시스코 장비는 CDP로 이걸 알아채 `%CDP-4-NATIVE_VLAN_MISMATCH` 로그를 남기지만, 장비가 섞여 있으면 아무 경고도 없다.
+
+둘째는 공격이다. 네이티브 VLAN에 있는 공격자가 태그를 두 겹 붙인 프레임을 보내면, 첫 스위치는 바깥 태그(네이티브 VLAN)를 떼고 "네이티브니까 태그 없이" 트렁크로 내보낸다. 그런데 안쪽 태그가 남아 있으니 다음 스위치는 그걸 진짜 태그로 읽고 다른 VLAN으로 넘긴다. 이게 이중 태깅(double tagging) VLAN 호핑이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="네이티브 VLAN을 이용한 이중 태깅 공격"
+  zones={[
+    { id: "z1", label: "sw1 (native 1)", x: 6, y: 6, w: 190, h: 200, tone: "edge" },
+    { id: "z2", label: "sw2 (native 1)", x: 204, y: 6, w: 190, h: 200, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "atk", label: "attacker", sub: "VLAN 1 포트", x: 100, y: 60, icon: "client", w: 108 },
+    { id: "sw1", label: "sw1", sub: "trunk", x: 100, y: 150, icon: "switch" },
+    { id: "sw2", label: "sw2", sub: "trunk", x: 300, y: 150, icon: "switch" },
+    { id: "v", label: "db (VLAN20)", sub: "10.0.20.30", x: 300, y: 60, icon: "db", w: 112 },
+    { id: "fw", label: "VLAN1 미사용", sub: "native 999", x: 200, y: 260, icon: "lock", w: 120 },
+  ]}
+  links={[
+    { from: "atk", to: "sw1" },
+    { from: "sw1", to: "sw2", label: "802.1Q" },
+    { from: "sw2", to: "v" },
+  ]}
+  steps={[
+    { path: ["atk", "sw1"], packet: "1|20", title: "태그를 두 겹 붙여 보낸다", detail: "바깥 태그는 자기 포트의 VLAN 1, 안쪽 태그는 노리는 VLAN 20이다.", payload: "802.1Q vlan 1 → 802.1Q vlan 20 → IPv4 → 10.0.20.30" },
+    { path: ["sw1", "sw2"], packet: "20", title: "sw1이 바깥 태그만 뗀다", detail: "VLAN 1은 트렁크의 네이티브 VLAN이라 태그 없이 내보낸다. 그런데 안쪽 태그 20이 그대로 남아 있다." },
+    { path: ["sw2", "v"], packet: "IPv4", title: "sw2는 남은 태그를 진짜로 믿는다", detail: "트렁크로 들어온 프레임에 VLAN 20 태그가 보이니 VLAN 20 포트로 넘긴다. 라우터와 ACL을 건너뛰었다." },
+    { path: ["v", "sw2", "sw1", "atk"], packet: "reply", blocked: true, title: "답장은 돌아오지 않는다", detail: "db의 응답은 VLAN 20으로 정상 처리돼 공격자의 VLAN 1로 오지 않는다. 그래서 단방향 공격(UDP 한 방, 위조 요청)에 쓰인다." },
+    { path: ["fw"], highlight: ["z1", "z2"], title: "막는 법", detail: "네이티브 VLAN을 아무도 쓰지 않는 번호(예: 999)로 바꾸고, 사용자 포트를 그 VLAN에 두지 않는다. 트렁크에서 네이티브 VLAN도 태그를 붙이게 할 수 있다." },
+  ]}
+/>
+
+또 하나의 VLAN 호핑은 스위치 흉내다. 시스코의 DTP는 상대가 "나 스위치야, 트렁크 하자"고 하면 포트를 자동으로 트렁크로 바꾼다. 사용자 포트에 이게 켜져 있으면 노트북이 트렁크를 협상해 모든 VLAN을 받는다. 사용자 포트는 `switchport mode access`와 `switchport nonegotiate`로 고정하는 게 기본 설정이다.
+
+## 리눅스 서버에서 VLAN 다루기
+
+가상화 호스트나 쿠버네티스 노드처럼 랜카드 하나로 여러 망에 붙어야 할 때, 서버가 직접 태그를 붙인다. 스위치 포트는 트렁크로 설정하고 서버에 VLAN 하위 인터페이스를 만든다.
+
+```bash
+# 802.1Q 모듈을 올린다 (Ubuntu 기본 커널에는 들어 있다)
+sudo modprobe 8021q
+# eth0 위에 VLAN 10 인터페이스를 만든다. 이 인터페이스로 나가는 프레임에 태그 10이 붙는다
+sudo ip link add link eth0 name eth0.10 type vlan id 10
+sudo ip addr add 10.0.10.5/24 dev eth0.10
+sudo ip link set eth0.10 up
+# VLAN 설정이 맞는지 자세히 본다
+ip -d link show eth0.10
+```
+
+```text
+5: eth0.10@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff promiscuity 0 minmtu 0 maxmtu 65535
+    vlan protocol 802.1Q id 10 <REORDER_HDR> numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535
+```
+
+(예시 출력이다. 이 글의 실습 커널에는 `8021q`가 없어 만들 수 없었다.) `eth0.10@eth0`은 eth0 위에 얹힌 인터페이스라는 뜻이고, `vlan protocol 802.1Q id 10`이 태그 번호다. MAC은 부모 인터페이스와 같다.
+
+`ip` 명령으로 만든 인터페이스는 재부팅하면 사라진다. Ubuntu에서는 netplan에 적어 영구로 만든다.
+
+```yaml
+# /etc/netplan/60-vlans.yaml
+network:
+  version: 2
+  ethernets:
+    eth0: {}
+  vlans:
+    vlan10:
+      id: 10
+      link: eth0
+      addresses: [10.0.10.5/24]
+    vlan20:
+      id: 20
+      link: eth0
+      addresses: [10.0.20.5/24]
+```
+
+```bash
+# 120초 안에 Enter를 누르지 않으면 이전 설정으로 되돌린다
+sudo netplan try
+# 문제없으면 적용
+sudo netplan apply
+```
+
+<Callout kind="warning">
+원격으로 접속 중인 인터페이스(보통 eth0)의 netplan 설정을 바꿀 때는 `netplan apply` 대신 `netplan try`를 먼저 쓴다. 스위치 포트가 액세스 포트인데 서버만 VLAN 하위 인터페이스로 바꾸면 SSH가 바로 끊긴다. `netplan try`는 확인을 받지 못하면 120초 뒤 원래 설정으로 돌아간다. 스위치 쪽 트렁크 설정과 순서를 맞추고, 콘솔(IPMI, 클라우드 시리얼 콘솔) 접근 경로를 확보한 뒤 작업한다.
+</Callout>
+
+VM이나 컨테이너를 여러 VLAN에 붙일 때는 리눅스 브리지에 VLAN 필터링을 켠다. 브리지 하나가 VLAN을 아는 스위치가 되어, 포트마다 액세스·트렁크를 정한다.
+
+```bash
+# VLAN을 이해하는 브리지를 만든다
+sudo ip link add br0 type bridge vlan_filtering 1
+sudo ip link set eth0 master br0       # 업링크(트렁크)
+sudo ip link set vnet0 master br0      # VM 포트
+# 업링크는 VLAN 10, 20을 태그 붙여 나른다
+sudo bridge vlan add dev eth0 vid 10
+sudo bridge vlan add dev eth0 vid 20
+# VM 포트는 VLAN 10 액세스 포트: 태그 없는 프레임을 10으로 보고(pvid), 나갈 때 태그를 뗀다(untagged)
+sudo bridge vlan add dev vnet0 vid 10 pvid untagged
+sudo bridge vlan del dev vnet0 vid 1
+# 포트별 VLAN 확인
+bridge vlan show
+```
+
+```text
+port              vlan-id
+eth0              1 PVID Egress Untagged
+                  10
+                  20
+vnet0             10 PVID Egress Untagged
+br0               1 PVID Egress Untagged
+```
+
+(예시 출력이다.) `PVID`는 태그 없이 들어온 프레임을 어느 VLAN으로 볼지, `Egress Untagged`는 나갈 때 태그를 떼는지다. 액세스 포트는 두 표시가 같은 VLAN 하나에 붙고, 트렁크는 표시 없이 여러 VLAN이 나열된다. 처음 만들면 모든 포트가 VLAN 1을 PVID로 갖고 있어서, `vid 1`을 지우지 않으면 의도치 않게 VLAN 1에도 걸쳐 있게 된다.
+
+## 4094개로 모자랄 때
+
+VLAN ID는 12비트라 4094개가 한계다. 회사 하나에는 넉넉하지만 고객마다 망을 따로 줘야 하는 통신사나 클라우드에는 턱없이 모자란다. 두 가지 해법이 있다.
+
+QinQ(802.1ad)는 태그를 두 겹 쓴다. 바깥 태그(S-tag, TPID `0x88a8`)는 통신사가 고객을 구분하고, 안쪽 태그(C-tag, `0x8100`)는 고객이 원래 쓰던 VLAN이다. 4094 × 4094까지 늘어난다. 프레임이 4바이트 더 커지니 경로의 MTU도 같이 챙겨야 한다.
+
+데이터센터는 다른 길로 갔다. VLAN은 L2라서 같은 VLAN을 여러 랙과 건물에 걸치려면 스위치들이 하나의 거대한 L2로 묶여야 하고, 루프를 막는 STP가 링크 절반을 놀린다. 그래서 L3로 라우팅되는 망 위에 L2 프레임을 UDP로 싸서 나르는 VXLAN을 쓴다. VNI가 24비트라 약 1,677만 개까지 나눌 수 있다. 이 이야기는 [VXLAN 오버레이 글](/posts/sdn-vxlan-overlay)에서 잇는다. 클라우드의 VPC도 같은 원리로 고객 망을 가른다([VPC 글](/posts/vpc-basics)).
+
+## 현장에서 VLAN을 의심하는 순간
+
+VLAN 장애는 "링크는 살아 있는데 아무것도 안 된다" 모양으로 온다. 물리 계층은 정상이고 L2에서 막히기 때문이다. 증상별로 이렇게 좁힌다.
+
+새 서버가 DHCP 주소를 못 받거나 같은 대역 장비에 ping이 안 간다. 포트의 VLAN이 맞는지 본다. 서버 쪽에서는 스위치 설정이 안 보이니, 실제로 들어오는 브로드캐스트를 보면 어느 망에 붙었는지 짐작할 수 있다. 다른 대역의 ARP가 보이면 다른 VLAN에 꽂혀 있는 것이다.
+
+```bash
+# 들어오는 ARP를 보며 어느 대역 장비들이 있는지 확인한다
+sudo tcpdump -e -n -i eth0 arp -c 10
+# 시스코 장비라면 CDP 패킷에 스위치 이름, 포트, 네이티브 VLAN이 실려 온다 (최대 60초 대기)
+sudo tcpdump -nn -v -i eth0 -s 1500 -c 1 'ether[20:2] == 0x2000'
+```
+
+VLAN 하위 인터페이스(`eth0.10`)는 만들었는데 아무것도 안 들어온다. 스위치 포트가 트렁크인지, 그 트렁크의 허용 목록에 10이 있는지 본다. 트렁크를 새로 만들 때 "VLAN 10, 20만 허용"으로 적었는데 나중에 VLAN 30을 추가하면서 허용 목록 갱신을 잊는 실수가 흔하다. 시스코에서 `switchport trunk allowed vlan 30`이라고 치면 목록이 30 하나로 덮어써진다. 추가하려면 `allowed vlan add 30`이다. 이 한 단어 때문에 트렁크의 다른 VLAN이 모두 끊기는 사고가 실제로 많다.
+
+부모 인터페이스에서 태그를 보고 싶다. `tcpdump -e -i eth0`은 태그 프레임에 `vlan 10`을 찍어 준다. 특정 VLAN만 거르려면 `vlan` 필터를 쓴다.
+
+```bash
+# VLAN 10 태그가 붙은 프레임만 본다
+sudo tcpdump -e -n -i eth0 vlan 10
+# 태그가 붙은 ICMP만 본다 (vlan 키워드 뒤의 조건은 태그 안쪽 헤더 기준)
+sudo tcpdump -e -n -i eth0 'vlan and icmp'
+```
+
+랜카드가 태그를 하드웨어에서 떼어 커널에 넘기는 경우가 있다(rx-vlan-offload). 리눅스 tcpdump는 떼어 낸 태그를 다시 붙여서 보여 주지만, 캡처 지점이나 도구에 따라 태그가 안 보일 수 있다. 태그가 안 보인다고 바로 "태그가 안 왔다"고 결론 내리기 전에 `ethtool -k eth0 | grep vlan`으로 오프로드 설정을 확인한다.
+
+작은 요청은 되는데 큰 응답만 끊긴다. 태그 4바이트, QinQ면 8바이트 때문에 중간 장비가 큰 프레임을 버리는 경우다. 증상과 확인 방법은 [MTU 글](/posts/layer-mtu-fragmentation)과 같다.
+
+## 같은 스위치, 다른 망
+
+VLAN은 스위치에 "이 포트는 어느 망인가"라는 꼬리표를 붙여 한 장비를 여러 망으로 나눈다. 액세스 포트는 태그 없이 들어온 프레임에 꼬리표를 정해 주고, 트렁크는 꼬리표를 프레임에 직접 적어 다음 스위치로 넘긴다. 다른 꼬리표끼리는 L2에서 서로 보이지 않으니, 통신하려면 라우터를 거쳐야 하고 바로 그 자리에서 정책을 건다. 장애가 나면 IP 대역보다 포트의 VLAN과 트렁크 허용 목록을 먼저 본다.
+
+## 면접에서 나올 만한 질문
+
+### VLAN은 왜 쓰나요?
+
+스위치 하나를 논리적으로 여러 브로드캐스트 도메인으로 나누려고 씁니다. 브로드캐스트가 망 전체로 퍼지는 걸 막아 성능을 지키고, 부서나 용도별로 망을 갈라 같은 L2에서 생기는 ARP 위조 같은 공격 범위를 줄입니다. 배선을 바꾸지 않고 포트 설정만으로 망을 옮길 수 있다는 운영상의 이점도 큽니다.
+
+### 액세스 포트와 트렁크 포트의 차이는요?
+
+액세스 포트는 VLAN 하나에 속하고 태그 없는 프레임을 주고받아서, 꽂힌 기기는 VLAN을 몰라도 됩니다. 트렁크 포트는 여러 VLAN을 함께 나르기 위해 802.1Q 태그를 붙여 보내고, 받은 프레임의 태그를 보고 VLAN을 가릅니다. 트렁크에는 실어 나를 VLAN 허용 목록과 태그 없이 다룰 네이티브 VLAN이 따로 설정됩니다.
+
+### 같은 스위치에 꽂혀 있고 IP 대역도 같은데 통신이 안 됩니다. 무엇을 의심하나요?
+
+두 포트의 VLAN이 다른지를 먼저 의심합니다. VLAN이 다르면 ARP 브로드캐스트가 닿지 않아 이웃 테이블이 FAILED로 남고, IP 대역이 같아 라우터로 보내지도 않으니 통신이 안 됩니다. 서버에서는 tcpdump로 들어오는 ARP의 대역을 보거나 CDP/LLDP 정보로 스위치 포트를 확인하고, 네트워크 쪽에 포트의 VLAN 설정을 요청합니다.
+
+### 다른 VLAN끼리는 어떻게 통신하나요?
+
+L3 장비가 필요합니다. VLAN마다 다른 IP 대역을 주고, 라우터의 트렁크 하위 인터페이스(router-on-a-stick)나 L3 스위치의 SVI가 각 VLAN의 게이트웨이가 되어 라우팅합니다. router-on-a-stick은 VLAN 간 트래픽이 한 링크를 왕복해 병목이 되기 쉽고, 규모가 있는 망은 L3 스위치를 씁니다. 이 지점에 ACL을 걸어 VLAN 사이 정책을 강제합니다.
+
+### 네이티브 VLAN이 뭐고, 왜 보안 문제가 되나요?
+
+트렁크에서 태그 없이 오가는 프레임이 속하는 VLAN으로, 기본값은 보통 VLAN 1입니다. 공격자가 네이티브 VLAN에서 태그를 두 겹 붙여 보내면 첫 스위치가 바깥 태그만 떼고 보내서 다음 스위치가 안쪽 태그를 믿고 다른 VLAN으로 넘기는 이중 태깅 공격이 가능합니다. 네이티브 VLAN을 쓰지 않는 번호로 바꾸고, 사용자 포트를 액세스로 고정해 DTP 협상을 끄는 것이 기본 대책입니다. 양쪽 네이티브 VLAN이 다르면 프레임이 다른 VLAN으로 새는 설정 오류도 생깁니다.
+
+### VLAN ID가 4094개로 부족하면 어떻게 하나요?
+
+통신사 구간에서는 바깥 태그를 하나 더 붙이는 QinQ(802.1ad)로 고객별로 VLAN 공간을 겹쳐 씁니다. 데이터센터와 클라우드는 L3 망 위에 L2 프레임을 UDP로 감싸는 VXLAN을 써서 24비트 VNI로 약 1,677만 개의 망을 만들고, L2를 랙 너머로 늘릴 때 생기는 STP 문제도 피합니다.
+
+### 트렁크에 VLAN 하나를 추가했더니 다른 VLAN이 모두 끊겼습니다. 무엇을 잘못했을까요?
+
+허용 목록을 추가가 아니라 덮어쓰기로 설정했을 가능성이 큽니다. 시스코에서 `switchport trunk allowed vlan 30`은 목록을 30 하나로 바꾸고, 추가하려면 `allowed vlan add 30`을 써야 합니다. `show interfaces trunk`로 허용 목록과 실제로 활성인 VLAN을 확인하고 원래 목록을 복구합니다.

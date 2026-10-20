@@ -2,6 +2,66 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sdn-vxlan-overlay": {
+    "links": [
+      "vlan-basics",
+      "layer-mtu-fragmentation",
+      "vpn-ipsec-wireguard",
+      "vpc-basics"
+    ],
+    "mentions": [
+      "packet-capture-tcpdump",
+      "layer-link-ethernet-arp",
+      "security-groups-nacl",
+      "ipv6-basics",
+      "layer-ip-routing-icmp",
+      "udp-and-quic"
+    ]
+  },
+  "vpn-ipsec-wireguard": {
+    "links": [
+      "layer-mtu-fragmentation",
+      "sdn-vxlan-overlay",
+      "udp-and-quic",
+      "layer-ip-routing-icmp"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "what-happens-google-com",
+      "ipv6-basics",
+      "dns"
+    ]
+  },
+  "vlan-basics": {
+    "links": [
+      "layer-link-ethernet-arp",
+      "sdn-vxlan-overlay",
+      "vpc-basics",
+      "layer-mtu-fragmentation"
+    ],
+    "mentions": [
+      "packet-capture-tcpdump",
+      "layer-ip-routing-icmp",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "ipv6-basics": {
+    "links": [
+      "layer-ip-addressing",
+      "layer-link-ethernet-arp",
+      "iptables-nat",
+      "iptables-basics",
+      "layer-mtu-fragmentation",
+      "vlan-basics"
+    ],
+    "mentions": [
+      "packet-capture-tcpdump",
+      "security-groups-nacl",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
   "batch-processing": {
     "links": [
       "sql-batch-timeout-pool",
@@ -56,7 +116,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "http-status-codes",
       "osi-in-practice",
-      "redis-basics"
+      "redis-basics",
+      "ipv6-basics"
     ]
   },
   "rate-limiting-algorithms": {
@@ -125,6 +186,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "iptables-basics",
       "redis-basics",
+      "ipv6-basics",
       "layer-ip-addressing",
       "realtime-communication"
     ]
@@ -134,12 +196,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "vpc-peering-transit-privatelink",
       "security-groups-nacl",
+      "sdn-vxlan-overlay",
       "layer-ip-addressing",
       "iptables-nat"
     ],
     "mentions": [
       "layer-ip-routing-icmp",
       "iptables-basics",
+      "ipv6-basics",
       "layer-link-ethernet-arp",
       "what-happens-google-com",
       "dns"
@@ -450,6 +514,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations",
       "security-groups-nacl",
       "sql-batch-timeout-pool",
+      "ipv6-basics",
       "layer-ip-addressing"
     ]
   },
@@ -811,10 +876,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ports-and-sockets"
     ],
     "mentions": [
+      "vpn-ipsec-wireguard",
       "iptables-basics",
       "packet-capture-tcpdump",
       "https-tls",
+      "sdn-vxlan-overlay",
       "security-groups-nacl",
+      "ipv6-basics",
       "layer-ip-routing-icmp"
     ]
   },
@@ -836,6 +904,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "redis-basics",
       "what-happens-google-com",
+      "ipv6-basics",
       "layer-ip-routing-icmp",
       "dns"
     ]
@@ -888,6 +957,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-peering-transit-privatelink",
       "http-versions",
       "security-groups-nacl",
+      "vlan-basics",
+      "ipv6-basics",
       "vpc-basics",
       "dns"
     ]
@@ -899,7 +970,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume",
       "layer-ip-routing-icmp",
       "layer-ip-addressing",
-      "iptables-basics"
+      "vlan-basics",
+      "iptables-basics",
+      "ipv6-basics"
     ],
     "mentions": [
       "vpc-peering-transit-privatelink",
@@ -915,6 +988,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-routing-icmp",
       "iptables-nat",
       "ports-and-sockets",
+      "ipv6-basics",
       "proxy-reverse-proxy"
     ],
     "mentions": [
@@ -940,6 +1014,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-link-ethernet-arp",
       "iptables-nat",
       "security-groups-nacl",
+      "ipv6-basics",
       "udp-and-quic"
     ]
   },
@@ -953,12 +1028,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tcp-connection-lifecycle"
     ],
     "mentions": [
+      "vpn-ipsec-wireguard",
       "vpc-basics",
       "https-tls",
       "layer-link-ethernet-arp",
       "http-versions",
+      "sdn-vxlan-overlay",
       "security-groups-nacl",
       "http-status-codes",
+      "ipv6-basics",
       "udp-and-quic",
       "dns"
     ]
@@ -1260,6 +1338,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-insert-update-delete",
       "db-index-design",
       "sql-batch-timeout-pool",
+      "ipv6-basics",
       "layer-ip-addressing",
       "dns"
     ]
@@ -1578,6 +1657,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "http-status-codes",
       "what-happens-google-com",
+      "ipv6-basics",
       "db-modeling-normalization"
     ]
   },
@@ -1658,6 +1738,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-addressing",
       "http-status-codes",
       "what-happens-google-com",
+      "ipv6-basics",
       "udp-and-quic",
       "dns"
     ]
@@ -1762,7 +1843,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations",
       "proxy-reverse-proxy",
       "layer-link-ethernet-arp",
+      "sdn-vxlan-overlay",
       "redis-basics",
+      "ipv6-basics",
       "udp-and-quic",
       "dns"
     ]
@@ -1849,6 +1932,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "layer-mtu-fragmentation",
       "what-happens-google-com",
+      "ipv6-basics",
       "layer-ip-routing-icmp",
       "udp-and-quic",
       "layer-link-ethernet-arp",
@@ -1868,6 +1952,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
+      "ipv6-basics",
       "udp-and-quic",
       "dns"
     ]
@@ -2198,7 +2283,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "cdn-edge-anycast",
       "sql-batch-timeout-pool",
-      "udp-and-quic"
+      "udp-and-quic",
+      "ipv6-basics"
     ]
   },
   "hosts-file": {
@@ -2209,7 +2295,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "local-custom-domain",
       "http-versions",
-      "what-happens-google-com"
+      "what-happens-google-com",
+      "ipv6-basics"
     ]
   },
   "kubernetes-ingress": {
@@ -2297,6 +2384,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "cdn-edge-anycast",
       "http-status-codes",
+      "ipv6-basics",
       "udp-and-quic"
     ]
   },

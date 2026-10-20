@@ -75,6 +75,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "idempotency-key": 7,
   "iptables-basics": 7,
   "iptables-nat": 7,
+  "ipv6-basics": 7,
   "islands-resumability": 6,
   "js-memory-leak": 7,
   "json-crud-http": 7,
@@ -135,6 +136,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "rendering-strategies": 8,
   "resilience-patterns": 7,
   "rest-api-design": 8,
+  "sdn-vxlan-overlay": 7,
   "security-groups-nacl": 7,
   "sql-basics": 6,
   "sql-batch-timeout-pool": 5,
@@ -162,8 +164,10 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "udp-and-quic": 6,
   "upper-layers-session-presentation-app": 6,
   "vector-db": 8,
+  "vlan-basics": 6,
   "vpc-basics": 6,
   "vpc-peering-transit-privatelink": 6,
   "vpc-subnets-route-tables": 6,
+  "vpn-ipsec-wireguard": 7,
   "what-happens-google-com": 8
 };

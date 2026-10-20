@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sdn-vxlan-overlay",
+    title: "SDN과 VXLAN 오버레이: 물리망 위에 논리망 얹기",
+    summary: "Pod IP가 노드 캡처에 안 보이는 이유를 VXLAN 캡슐화로 푼다. VTEP과 FDB, flood-and-learn과 EVPN, 제어 평면을 떼어 낸 SDN, 조용히 사라지는 큰 패킷과 ECMP까지 실제 캡처로 본다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "Kubernetes", "Linux", "Troubleshooting", "VXLAN"],
+    date: "2026-10-20",
+    keywords: ["VXLAN", "VTEP", "SDN", "언더레이"],
+  },
+  {
+    slug: "vpn-ipsec-wireguard",
+    title: "VPN: IPsec과 WireGuard로 터널 만들기",
+    summary: "패킷을 암호화해 다른 패킷 안에 넣는 VPN을 IPsec의 IKEv2·ESP와 WireGuard의 핸드셰이크·AllowedIPs로 따라간다. NO_PROPOSAL_CHOSEN 같은 실패 메시지, NAT-T, 스플릿 터널과 MTU 문제까지 다룬다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "Security", "Linux", "Troubleshooting", "VPN"],
+    date: "2026-10-20",
+    keywords: ["IPsec", "WireGuard", "IKEv2", "AllowedIPs"],
+  },
+  {
+    slug: "vlan-basics",
+    title: "VLAN: 스위치 하나를 여러 망으로 나누기",
+    summary: "같은 대역인데 ping이 안 되는 이유를 802.1Q 태그와 액세스·트렁크 포트로 푼다. VLAN 사이 라우팅, 네이티브 VLAN과 VLAN 호핑, 리눅스 VLAN 인터페이스와 현장 점검 순서까지 다룬다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "TCP/IP", "Linux", "Security", "Troubleshooting", "VLAN"],
+    date: "2026-10-20",
+    keywords: ["VLAN", "802.1Q", "트렁크 포트", "네이티브 VLAN"],
+  },
+  {
+    slug: "ipv6-basics",
+    title: "IPv6: 주소를 스스로 만들고 이웃을 찾는 법",
+    summary: "DHCP 없이 생기는 IPv6 주소의 정체를 라우터 광고와 SLAAC, 중복 검사, NDP 이웃 찾기로 따라간다. 링크 로컬 게이트웨이, 듀얼 스택과 NAT64, ICMPv6를 막으면 생기는 장애까지 다룬다.",
+    topic: "programming/network/layers",
+    tags: ["Network", "TCP/IP", "Linux", "Security", "IPv6"],
+    date: "2026-10-20",
+    keywords: ["IPv6", "SLAAC", "NDP", "링크 로컬 주소", "NAT64"],
+  },
+  {
     slug: "batch-processing",
     title: "배치 처리: 묶음, 체크포인트, 다시 돌려도 같은 결과",
     summary: "대량 데이터를 묶음으로 나눠 처리하고, 결과와 같은 트랜잭션에 진행 위치를 적어 죽은 자리에서 이어 가고, 쓰기를 멱등하게 만들어 두 번 돌아도 숫자가 맞게 하는 법을 실제로 죽여 보며 확인한다. 묶음 크기별 속도, SKIP LOCKED 작업자, 중복 실행 방지도 다룬다.",
