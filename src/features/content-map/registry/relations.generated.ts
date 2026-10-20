@@ -2,6 +2,76 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "traffic-shaping-qos": {
+    "links": [
+      "latency-bandwidth-throughput",
+      "rate-limiting-algorithms"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "iptables-basics",
+      "tcp-reliability-congestion",
+      "layer-ip-routing-icmp"
+    ]
+  },
+  "latency-bandwidth-throughput": {
+    "links": [
+      "tcp-reliability-congestion",
+      "traffic-shaping-qos",
+      "cdn-edge-anycast",
+      "http-versions",
+      "load-balancing-algorithms"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "https-tls",
+      "sql-batch-timeout-pool",
+      "what-happens-google-com",
+      "dns"
+    ]
+  },
+  "load-balancing-algorithms": {
+    "links": [
+      "load-balancer-basics",
+      "nginx-reverse-proxy",
+      "consistent-hashing",
+      "osi-in-practice"
+    ],
+    "mentions": [
+      "iptables-nat",
+      "realtime-communication",
+      "iptables-basics",
+      "http-versions",
+      "cookie-session-login",
+      "caching-strategies"
+    ]
+  },
+  "load-balancer-basics": {
+    "links": [
+      "load-balancing-algorithms",
+      "nginx-reverse-proxy",
+      "osi-in-practice",
+      "dns",
+      "proxy-reverse-proxy",
+      "ports-and-sockets",
+      "tcp-connection-lifecycle",
+      "k8s-pod-probes",
+      "cdn-edge-anycast"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "iptables-nat",
+      "vpc-subnets-route-tables",
+      "docker-container-basics",
+      "realtime-communication",
+      "browser-fetch",
+      "layer-link-ethernet-arp",
+      "http-versions",
+      "security-groups-nacl",
+      "redis-basics",
+      "client-data-cache"
+    ]
+  },
   "pattern-abstract-factory": {
     "links": [
       "pattern-factory-method",
@@ -68,6 +138,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "consistent-hashing": {
     "links": [
       "db-sharding",
+      "load-balancing-algorithms",
       "redis-cluster"
     ],
     "mentions": [
@@ -233,7 +304,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "rate-limiting-in-practice",
       "resilience-patterns",
-      "nginx-https-performance"
+      "nginx-https-performance",
+      "traffic-shaping-qos"
     ],
     "mentions": [
       "redis-cluster",
@@ -243,6 +315,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "cdn-edge-anycast": {
     "links": [
       "http-caching-cdn",
+      "load-balancing-algorithms",
       "dns",
       "security-groups-nacl",
       "proxy-reverse-proxy"
@@ -964,6 +1037,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "tcp-connection-lifecycle",
       "http-versions",
+      "traffic-shaping-qos",
       "network-troubleshooting-by-layer",
       "layer-mtu-fragmentation",
       "udp-and-quic"
@@ -1088,6 +1162,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-peering-transit-privatelink",
       "docker-container-basics",
       "what-happens-google-com",
+      "load-balancer-basics",
       "vpc-basics"
     ]
   },
@@ -1777,6 +1852,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "proxy-reverse-proxy",
       "nginx-basics",
+      "load-balancing-algorithms",
       "http-status-codes",
       "realtime-communication",
       "nginx-https-performance",
@@ -1785,6 +1861,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "tcp-connection-lifecycle",
       "browser-fetch",
+      "load-balancer-basics",
       "consistent-hashing",
       "osi-in-practice",
       "redis-basics",
@@ -2385,6 +2462,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "latency-bandwidth-throughput",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "http-methods"
@@ -2512,6 +2590,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "html-form-http",
+      "load-balancer-basics",
       "kubernetes-ingress",
       "redis-basics",
       "what-happens-google-com"

@@ -1,0 +1,553 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("load-balancer-basics");
+
+서버를 두 대로 늘리고 앞에 로드 밸런서를 붙였다. 평소엔 조용한데 배포할 때마다 몇 초씩 502가 섞여 나온다. 재시작 순서를 바꿔도 비슷하다. 나중에 보니 로드 밸런서는 죽어 가는 서버에 계속 요청을 보내고 있었고, 서버는 처리 중이던 요청을 버리고 내려가고 있었다.
+
+로드 밸런서는 "요청을 여러 서버에 나눠 주는 장치"라고만 알면 이런 장애를 설명하지 못한다. 실제로 하는 일은 넷이다. 주소 하나로 받고, 보낼 서버를 고르고, 서버가 살아 있는지 계속 묻고, 서버를 안전하게 빼고 넣는다. 이 글은 고르는 방법을 뺀 나머지 셋과, 로드 밸런서 자신이 죽는 경우를 다룬다. 서버를 고르는 알고리즘은 [로드 밸런싱 알고리즘 글](/posts/load-balancing-algorithms)에서 따로 본다. nginx `upstream` 설정 문법은 [Nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)에, L4와 L7의 차이와 헬스 체크를 어느 층까지 할지는 [OSI를 현장에서 쓰는 글](/posts/osi-in-practice)에 있으니 여기서는 그 위로 한 단계 더 들어간다.
+
+출력은 Ubuntu 24.04 컨테이너의 network namespace 안에서 찍었다. 같은 namespace에 Node.js 백엔드 세 개(`b1`·`b2`·`b3`, 포트 9001~9003)를 띄우고 앞에 nginx 1.24와, 능동 헬스 체크·드레이닝·쿠키 고정을 넣은 100줄짜리 Node.js 로드 밸런서를 번갈아 세웠다.
+
+## 로드 밸런서가 맡은 네 가지 일
+
+클라이언트는 서버가 몇 대인지 모른다. 아는 건 주소 하나다. 이 주소를 VIP(가상 IP)라고 부른다. 특정 서버 한 대의 주소가 아니라 서버 묶음 전체를 대표하는 주소라서 "가상"이다. 로드 밸런서는 VIP로 들어온 요청을 받아 뒤쪽 서버 하나를 골라 넘긴다.
+
+아래 그림에서 다음을 누르면 요청이 VIP를 거쳐 서버로 가는 모습, 헬스 체크가 실패한 서버가 빠지는 모습을 차례로 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={244}
+  caption="VIP 하나로 받아서, 살아 있는 서버 중 하나로 넘긴다"
+  zones={[
+    { id: "pool", label: "서버 풀 10.0.1.0/24", x: 8, y: 146, w: 384, h: 90, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Client", sub: "203.0.113.7", x: 200, y: 28, icon: "client" },
+    { id: "lb", label: "LB", sub: "VIP 10.0.0.10", x: 200, y: 98, icon: "lb" },
+    { id: "b1", label: "b1", sub: "10.0.1.11", x: 72, y: 200, icon: "server" },
+    { id: "b2", label: "b2", sub: "10.0.1.12", x: 200, y: 200, icon: "server" },
+    { id: "b3", label: "b3", sub: "10.0.1.13", x: 328, y: 200, icon: "server" },
+  ]}
+  links={[
+    { from: "client", to: "lb" },
+    { from: "lb", to: "b1" },
+    { from: "lb", to: "b2" },
+    { from: "lb", to: "b3" },
+  ]}
+  steps={[
+    {
+      path: ["client", "lb", "b1"],
+      packet: "GET /",
+      title: "VIP 하나로 받는다",
+      detail: "클라이언트는 10.0.0.10만 안다. LB가 서버 셋 중 b1을 골라 넘긴다.",
+    },
+    {
+      path: ["client", "lb", "b2"],
+      packet: "GET /",
+      title: "다음 요청은 다른 서버로",
+      detail: "어느 서버를 고를지는 알고리즘이 정한다. 여기서는 차례대로 돌렸다.",
+    },
+    {
+      path: ["lb", "b3"],
+      packet: "health",
+      blocked: true,
+      title: "헬스 체크가 실패한다",
+      detail: "LB는 손님 요청과 별개로 1초마다 /health를 묻는다. b3가 503을 세 번 연속 돌려줬다.",
+      payload: "GET /health → 503 db down",
+    },
+    {
+      path: ["client", "lb", "b1"],
+      packet: "GET /",
+      highlight: ["b3"],
+      title: "빠진 서버는 고르지 않는다",
+      detail: "b3는 후보에서 빠졌다. 요청은 b1과 b2 사이에서만 돈다. 클라이언트는 아무것도 모른다.",
+    },
+    {
+      path: ["lb", "b3"],
+      packet: "health",
+      title: "회복하면 다시 넣는다",
+      detail: "두 번 연속 200이 오면 b3를 후보로 되돌린다. 빼는 기준과 넣는 기준을 다르게 둬서 들락날락하지 않게 한다.",
+      payload: "GET /health → 200 ok",
+    },
+  ]}
+/>
+
+한 가지 더 기억할 것은, 요청 하나를 넘길 때 로드 밸런서가 어떤 "단위"로 나누느냐다. L4 로드 밸런서는 TCP 연결 하나를 통째로 한 서버에 붙이고, L7 로드 밸런서는 HTTP 요청마다 고른다. 이 차이가 오래 열린 연결(gRPC, WebSocket)에서 한 서버만 바빠지는 현상을 만든다. 자세한 건 [OSI 글](/posts/osi-in-practice)에서 다뤘다.
+
+## DNS로 나누면 안 되나
+
+로드 밸런서 없이도 나누는 방법이 있다. 도메인에 A 레코드를 서버 수만큼 걸어 두면 리졸버가 순서를 돌려 가며 답한다(DNS 라운드 로빈). 장비가 하나도 필요 없다.
+
+문제는 DNS가 서버 상태를 모른다는 점이다. 서버 하나가 죽어도 레코드는 그대로 나가고, 클라이언트는 죽은 IP로 연결을 시도한다. 레코드를 고쳐도 [TTL](/posts/dns) 동안 캐시에 남은 옛 답이 계속 쓰인다. 브라우저와 OS, 회사 리졸버가 저마다 캐시를 들고 있어서 TTL을 30초로 둬도 실제로는 몇 분씩 끌리기도 한다. 또 큰 리졸버 하나 뒤에 사용자 수만 명이 있으면 그 리졸버가 받은 답 하나로 수만 명이 같은 서버에 몰린다.
+
+그래서 DNS는 "어느 지역·어느 로드 밸런서로 갈지"를 정하는 큰 단위(GSLB, 지역별 응답)에 쓰고, 그 아래에서 서버 한 대 한 대를 고르는 일은 상태를 보는 로드 밸런서가 맡는 식으로 겹쳐 쓴다. 클라우드 로드 밸런서도 도메인 이름으로 접근하는데, 그 이름이 가리키는 IP는 로드 밸런서 노드들의 주소이고 노드가 늘고 줄면 바뀐다. AWS ALB의 IP를 방화벽에 박아 두면 어느 날 갑자기 막히는 이유다. 고정 IP가 필요하면 NLB처럼 고정 주소를 주는 제품을 쓴다.
+
+## 패킷이 서버까지 가는 길
+
+로드 밸런서가 서버를 골랐다고 끝이 아니다. 패킷을 서버까지 어떤 모양으로 보내고, 응답이 어떤 길로 돌아오느냐에 따라 방식이 갈린다.
+
+가장 흔한 건 프록시 방식이다. nginx, HAProxy, AWS ALB가 이렇게 일한다. 로드 밸런서가 클라이언트와 TCP 연결을 끝내고(종단), 서버 쪽으로 새 연결을 따로 연다. 연결이 둘이니 서버가 보는 출발지는 로드 밸런서 주소다. 원래 클라이언트 IP는 `X-Forwarded-For`나 PROXY protocol로 따로 넘긴다([프록시 글](/posts/proxy-reverse-proxy)).
+
+L4 장비는 연결을 끝내지 않고 패킷을 고쳐서 넘기는 방식도 쓴다. 리눅스 커널의 IPVS(LVS)와 하드웨어 L4 장비가 대표적이다.
+
+- NAT 방식은 목적지 주소를 VIP에서 서버 IP로 바꿔(DNAT) 보낸다. 서버의 응답은 출발지를 다시 VIP로 되돌려야 하니 반드시 로드 밸런서를 지나야 한다. 서버의 기본 게이트웨이를 로드 밸런서로 잡는 이유다.
+- DSR(Direct Server Return) 방식은 IP 주소는 그대로 두고 목적지 MAC 주소만 서버 것으로 바꿔 넘긴다. 서버는 자기 루프백에 VIP를 붙여 두고 그 패킷을 자기 것으로 받는다. 응답은 출발지가 이미 VIP이니 로드 밸런서를 거치지 않고 라우터로 바로 나간다.
+- 터널 방식은 원래 패킷을 IP-in-IP나 GUE로 한 번 감싸서 보낸다. MAC만 바꾸는 DSR은 로드 밸런서와 서버가 같은 L2 망에 있어야 하는데, 감싸서 보내면 다른 망에 있는 서버에도 DSR처럼 응답을 바로 보낼 수 있다. Google Maglev, Meta Katran이 이 계열이다.
+
+아래 그림은 같은 요청이 NAT 방식과 DSR 방식에서 어떻게 돌아오는지 보여 준다.
+
+<NetworkTopology
+  width={400}
+  height={226}
+  caption="NAT는 응답도 LB를 지나고, DSR은 응답이 LB를 건너뛴다"
+  zones={[
+    { id: "l2", label: "같은 L2 망", x: 10, y: 128, w: 380, h: 88, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Client", sub: "203.0.113.7", x: 200, y: 26, icon: "client" },
+    { id: "router", label: "Router", x: 200, y: 92, icon: "router" },
+    { id: "lb", label: "L4 LB", sub: "VIP 10.0.0.10", x: 96, y: 178, icon: "lb" },
+    { id: "srv", label: "server", sub: "lo: VIP", x: 304, y: 178, icon: "server" },
+  ]}
+  links={[
+    { from: "client", to: "router" },
+    { from: "router", to: "lb" },
+    { from: "lb", to: "srv" },
+    { from: "srv", to: "router", dashed: true, label: "DSR 응답" },
+  ]}
+  steps={[
+    {
+      path: ["client", "router", "lb"],
+      packet: "SYN",
+      title: "VIP로 들어온다",
+      detail: "두 방식 모두 들어오는 길은 같다. 라우터는 VIP 10.0.0.10을 LB에게 넘긴다.",
+      payload: "203.0.113.7:51514 → 10.0.0.10:443",
+    },
+    {
+      path: ["lb", "srv"],
+      packet: "DNAT",
+      title: "NAT: 목적지 IP를 바꾼다",
+      detail: "LB가 목적지를 서버의 실제 IP로 고쳐 쓴다. 이 변환을 기억해 둬야 응답을 되돌릴 수 있다.",
+      payload: "203.0.113.7:51514 → 10.0.1.11:443",
+    },
+    {
+      path: ["srv", "lb", "router", "client"],
+      packet: "SYN-ACK",
+      title: "NAT: 응답도 LB를 지난다",
+      detail: "LB가 출발지를 VIP로 되돌린다. 응답은 대개 요청보다 훨씬 크니 LB가 양쪽 트래픽을 모두 감당해야 한다.",
+    },
+    {
+      path: ["lb", "srv"],
+      packet: "MAC",
+      title: "DSR: MAC 주소만 바꾼다",
+      detail: "IP 헤더는 그대로다. 서버는 루프백에 VIP를 붙여 두었기 때문에 목적지가 VIP인 패킷을 자기 것으로 받는다.",
+      payload: "dst IP 10.0.0.10 그대로, dst MAC → server",
+    },
+    {
+      path: ["srv", "router", "client"],
+      packet: "SYN-ACK",
+      title: "DSR: 응답은 LB를 건너뛴다",
+      detail: "출발지가 이미 VIP라서 서버가 라우터로 바로 보낸다. LB는 작은 요청만 보고 큰 응답은 보지 않는다.",
+    },
+  ]}
+/>
+
+DSR이 매력적인 이유는 숫자에 있다. 웹 트래픽은 요청이 작고 응답이 크다. 요청 1KB에 응답 100KB라면 NAT 방식의 로드 밸런서는 101KB를 처리하지만 DSR은 1KB만 본다. 영상이나 파일 다운로드처럼 응답이 큰 서비스에서 로드 밸런서 장비 수를 크게 줄인다.
+
+대신 제약이 많다. 로드 밸런서가 응답을 보지 못하니 TCP 상태를 반쯤만 알고, TLS를 풀거나 HTTP 헤더를 고칠 수 없다. 서버마다 루프백에 VIP를 붙이고, 서버가 그 VIP로 ARP에 답하지 않게(`arp_ignore=1`, `arp_announce=2`) 막아야 한다. 이걸 빠뜨리면 서버가 "VIP는 나야"라고 ARP에 답해 버려서 트래픽이 로드 밸런서를 건너뛰고 서버 한 대로 몰린다. 그래서 웹 서비스 대부분은 앞에 DSR이나 ECMP 같은 L4 계층을 두고, 그 뒤에 프록시 방식 L7 계층을 겹쳐 쓴다.
+
+## 앞에서 받은 연결과 뒤로 여는 연결
+
+프록시 방식 로드 밸런서는 서버 쪽으로 연결을 직접 연다. TCP 연결은 출발지 IP, 출발지 포트, 목적지 IP, 목적지 포트 네 값으로 구별된다([포트와 소켓 글](/posts/ports-and-sockets)). 로드 밸런서 IP 하나에서 서버 하나(같은 IP와 포트)로 가는 연결은 출발지 포트만 바뀔 수 있다. 리눅스가 쓰는 임시 포트 범위는 이렇다.
+
+```bash
+# 나가는 연결에 쓰는 임시 포트 범위, FIN 대기 시간
+sysctl net.ipv4.ip_local_port_range net.ipv4.tcp_fin_timeout
+```
+
+```text
+net.ipv4.ip_local_port_range = 32768	60999
+net.ipv4.tcp_fin_timeout = 60
+```
+
+32768부터 60999까지 28232개다. 연결을 먼저 끊은 쪽은 그 포트 조합을 TIME_WAIT로 60초 동안 붙잡는다([TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)). 로드 밸런서가 요청마다 연결을 새로 열고 먼저 끊는다면, 서버 한 대로 1초에 열 수 있는 새 연결은 28232 ÷ 60 ≈ 470개 정도에서 막힌다. 그 이상이면 `connect()`가 `EADDRNOTAVAIL`(Cannot assign requested address)로 실패한다. 클라우드 NAT 게이트웨이에서 "포트 할당 실패" 지표가 오르는 것도 같은 구조다.
+
+nginx는 기본으로 업스트림에 요청마다 새 연결을 연다. 3000개 요청을 보낸 직후 소켓 상태를 세 봤다.
+
+```bash
+# 3000개 요청을 동시 20개로 보낸 뒤, 백엔드 포트 쪽 TIME-WAIT 개수
+node load.js 3000
+ss -tanH state time-wait '( sport = :9001 or sport = :9002 or sport = :9003 )' | wc -l
+```
+
+```text
+3000 requests in 454ms
+3000
+```
+
+요청 3000개에 연결 3000개를 썼다. 이 실습에서는 nginx가 `Connection: close`를 보내고 Node가 먼저 닫아서 TIME_WAIT가 백엔드 쪽에 쌓였지만, 어느 쪽이 먼저 끊느냐에 따라 로드 밸런서 쪽 포트가 묶이기도 한다. upstream에 `keepalive 16`을 넣고 같은 부하를 다시 줬다.
+
+```text
+3000 requests in 444ms
+TIME-WAIT (backend side): 0
+TIME-WAIT (nginx side): 311
+ESTABLISHED nginx->backend: 19
+```
+
+열린 연결 19개와 닫힌 연결 311개, 모두 330개로 3000개를 처리했다. 동시 요청 20개가 남겨 둘 연결 수 16을 넘는 순간에 생긴 연결은 일이 끝나면 nginx가 닫아서 311개가 생겼다. `keepalive` 값을 평소 동시 요청 수에 맞춰 잡으면 이 숫자도 줄어든다. 포트가 모자랄 때 고치는 순서는 연결 재사용이 먼저고, 그다음이 로드 밸런서 출발지 IP를 늘리거나(`proxy_bind`, 클라우드는 NAT IP 추가) 서버 쪽 포트를 늘리는 것이다. `tcp_tw_reuse`를 켜는 건 나가는 연결에만 효과가 있고 원인을 가리기만 하니 마지막에 본다.
+
+## 살아 있는지 묻는 법: 수동과 능동
+
+로드 밸런서가 서버의 생사를 아는 방법은 둘이다. 실제 요청을 보내 보다가 실패를 세는 수동(passive) 방식과, 따로 주기적으로 물어보는 능동(active) 방식이다.
+
+오픈 소스 nginx는 수동 방식만 있다. 백엔드 `b2` 프로세스를 죽인 뒤 요청 6개를 보내고 로그를 봤다. 설정은 서버마다 `max_fails=1 fail_timeout=10s`다.
+
+```bash
+# b2를 죽이고 요청 6개, 그 뒤 access.log와 error.log
+kill $(cat b2.pid)
+for i in $(seq 6); do curl -s -o /dev/null -w '%{http_code} ' 127.0.0.1:8000/; done
+cat logs/access.log logs/error.log
+```
+
+```text
+200 200 200 200 200 200
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9001 ups=200 rt=0.003
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9002, 127.0.0.1:9003 ups=502, 200 rt=0.000, 0.003
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9003 ups=200 rt=0.002
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9001 ups=200 rt=0.002
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9003 ups=200 rt=0.002
+127.0.0.1 "GET / HTTP/1.1" 200 up=127.0.0.1:9001 ups=200 rt=0.003
+2026/10/20 13:31:20 [error] 22373#22373: *15 connect() failed (111: Connection refused) while connecting to upstream, client: 127.0.0.1, server: , request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:9002/", host: "127.0.0.1:8000"
+2026/10/20 13:31:20 [warn] 22373#22373: *15 upstream server temporarily disabled while connecting to upstream, client: 127.0.0.1, server: , request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:9002/", host: "127.0.0.1:8000"
+```
+
+사용자는 6번 모두 200을 받았다. 두 번째 줄을 보면 이유가 있다. `up=` 칸에 서버가 두 개 찍혔다. 9002로 연결하다 거절당하자 nginx가 같은 요청을 9003으로 다시 보냈다. 그리고 9002를 `temporarily disabled`로 10초 동안 뺐다. 그 뒤로는 9001과 9003만 받는다.
+
+이 방식은 공짜인 대신 두 가지를 놓친다. 하나는 손님 요청이 실패해야 비로소 안다는 점이다. 이번엔 연결 거절이라 재시도로 가려졌지만, 요청을 보낸 뒤에 서버가 끊기면 POST는 재시도하지 않으니 사용자가 502를 본다. 다른 하나는 "살아 있지만 아픈" 서버를 모른다는 점이다. DB 연결이 끊긴 서버가 200 대신 500을 빠르게 내면, 기본 설정의 nginx는 그걸 실패로 세지 않는다.
+
+능동 방식은 손님 요청과 별개로 헬스 체크 요청을 주기적으로 보낸다. 판정에 쓰는 숫자는 세 개다. 묻는 간격(interval), 몇 번 연속 실패하면 뺄지(fall), 몇 번 연속 성공하면 넣을지(rise). 실습용 로드 밸런서에 1초, 3번, 2번을 넣고 `b3`의 `/health`가 503을 내게 바꿨다가 되돌렸다.
+
+```text
+  0.0s lb listening :8080
+  2.0s health b3 실패 1/3: HTTP 503
+  3.0s health b3 실패 2/3: HTTP 503
+  4.0s health b3 실패 3/3: HTTP 503
+  4.0s health b3 DOWN, 새 요청에서 뺀다
+  6.0s health b3 UP (2번 연속 성공)
+```
+
+`/health`를 503으로 바꾼 건 약 1.2초 시점이었다. 다음 검사(2.0초)에서 첫 실패를 보고, 세 번째 실패(4.0초)에서 뺐다. 약 2.8초 동안은 아픈 서버에 요청이 갔다는 뜻이다. 그사이 보낸 요청과 그 뒤 요청의 분배를 함께 보면 이렇다.
+
+```text
+b1 b2 b3
+b2 b1 b2 b1
+b2 b3 b1
+```
+
+첫 줄은 셋 다 건강할 때, 둘째 줄은 b3가 빠진 동안, 셋째 줄은 b3가 돌아온 뒤다. 판정이 진행되는 과정을 카운터로 따라가 보면 아래와 같다.
+
+<AlgoTrace
+  caption="fall 3, rise 2: 연속 횟수가 기준에 닿아야 상태가 바뀐다"
+  memoryLabel="상태 · 연속 실패 · 연속 성공"
+  cells={["200", "503", "503", "200", "503", "503", "503", "200", "200"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["UP", "fail 0", "ok 0"], caption: "건강하다. 성공은 UP 상태에서는 따로 세지 않는다." },
+    { pointer: 1, memory: ["UP", "fail 1", "ok 0"], caption: "첫 실패. 아직 뺄 때가 아니다. 순간적인 GC 멈춤일 수도 있다." },
+    { pointer: 2, memory: ["UP", "fail 2", "ok 0"], caption: "두 번째 실패." },
+    { pointer: 3, found: [3], memory: ["UP", "fail 0", "ok 0"], caption: "중간에 한 번 성공하면 연속 실패 수가 0으로 돌아간다. 들쭉날쭉한 서버가 쉽게 빠지지 않는 이유다." },
+    { pointer: 6, memory: ["DOWN", "fail 3", "ok 0"], caption: "세 번 연속 실패해서 DOWN. 이제 새 요청은 이 서버로 가지 않는다." },
+    { pointer: 7, found: [7], memory: ["DOWN", "fail 0", "ok 1"], caption: "회복 신호 한 번. 아직 넣지 않는다." },
+    { pointer: 8, found: [8], memory: ["UP", "fail 0", "ok 2"], caption: "두 번 연속 성공해서 다시 UP. 빼는 기준과 넣는 기준을 따로 둬서 깜빡이지 않게 한다." },
+  ]}
+/>
+
+이 숫자들로 장애를 알아채는 데 걸리는 시간이 정해진다. 최악의 경우는 대략 interval × fall에 마지막 검사의 timeout을 더한 값이다. AWS ALB 기본값(간격 30초, 비정상 임계 2번, 타임아웃 5초)이면 서버가 죽고 1분 가까이 지나서야 빠질 수 있다. 줄이면 빨리 알지만, 순간적인 지연에도 서버가 빠졌다 들어오기를 반복한다(flapping). 서버 수가 적을 때 하나가 빠지면 나머지가 그만큼 더 받으니, 너무 예민한 기준은 연쇄로 서버를 빼는 장애를 부르기도 한다.
+
+HAProxy에서는 이 숫자들이 `server` 한 줄에 붙는다. 조각을 누르면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="HAProxy backend 안의 server 한 줄"
+  base="server b1 10.0.1.11:3000"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "check", title: "능동 헬스 체크 켜기", description: "이게 없으면 HAProxy는 이 서버를 검사하지 않는다. 무엇을 물을지는 backend의 option httpchk GET /health 같은 줄이 정한다. 없으면 TCP 연결만 맺어 본다.", required: true },
+    { key: "inter", value: "2s", display: "inter 2s", title: "검사 간격", description: "기본값 2초. 서버 수 × 로드 밸런서 수만큼 검사가 나가니, LB 노드가 많은 환경에서는 /health가 초당 수십 번 불리기도 한다. 그래서 헬스 엔드포인트는 가볍게 만든다." },
+    { key: "fall", value: "3", display: "fall 3", title: "몇 번 실패하면 뺄지", description: "기본값 3. 연속으로 실패해야 센다. 중간에 한 번 성공하면 처음부터 다시 센다." },
+    { key: "rise", value: "2", display: "rise 2", title: "몇 번 성공하면 넣을지", description: "기본값 2. fall과 다르게 두면 막 살아난 서버가 금방 다시 빠지는 깜빡임을 줄인다." },
+    { key: "slowstart", value: "30s", display: "slowstart 30s", title: "천천히 받기 시작", description: "다시 들어온 서버의 가중치를 30초에 걸쳐 0에서 원래 값까지 올린다. JIT 워밍업이나 캐시가 비어 있는 서버에 한꺼번에 몰리지 않게 한다." },
+    { key: "cookie", value: "b1", display: "cookie b1", title: "세션 고정용 이름", description: "backend에 cookie SERVERID insert가 있을 때, 이 서버를 고른 응답에 SERVERID=b1 쿠키를 붙인다. 다음 요청에 이 쿠키가 있으면 같은 서버로 보낸다." },
+  ]}
+/>
+
+헬스 엔드포인트에서 무엇을 확인할지는 따로 고민할 문제다. DB까지 확인하면 DB가 잠깐 느려질 때 모든 서버가 한꺼번에 빠진다. 이 함정과 쿠버네티스 readiness·liveness의 구분은 [프로브 글](/posts/k8s-pod-probes)에 자세히 있다. 로드 밸런서마다 "전부 아프면 어떻게 하나"도 다르다. AWS ALB와 NLB는 모든 대상이 비정상이면 전부에게 그냥 보내고(fail-open), nginx 수동 방식은 남은 서버가 없으면 `no live upstreams`와 함께 502를 낸다.
+
+아래 함수에 검사 결과(성공 `true`, 실패 `false`) 배열과 fall, rise를 넣으면 검사마다의 상태를 돌려주게 만들어 보자. 처음 상태는 UP이다.
+
+<CodePlayground
+  caption="fall·rise로 상태 판정하기"
+  functionName="healthStates"
+  initialCode={`function healthStates(results, fall, rise) {
+  // 예: healthStates([true, false, false, false, true, true], 3, 2)
+  //   → ["UP", "UP", "UP", "DOWN", "DOWN", "UP"]
+  const out = [];
+  return out;
+}`}
+  solution={`function healthStates(results, fall, rise) {
+  const out = [];
+  let up = true, fails = 0, oks = 0;
+  for (const ok of results) {
+    if (ok) {
+      fails = 0;
+      if (!up && ++oks >= rise) { up = true; oks = 0; }
+    } else {
+      oks = 0;
+      if (up && ++fails >= fall) { up = false; fails = 0; }
+    }
+    out.push(up ? "UP" : "DOWN");
+  }
+  return out;
+}`}
+  tests={[
+    { args: [[true, false, false, false, true, true], 3, 2], expected: ["UP", "UP", "UP", "DOWN", "DOWN", "UP"], label: "빠졌다가 돌아온다" },
+    { args: [[false, false, true, false, false, true], 3, 2], expected: ["UP", "UP", "UP", "UP", "UP", "UP"], label: "중간 성공이 실패 수를 지운다" },
+    { args: [[false, true, false, true, true], 1, 2], expected: ["DOWN", "DOWN", "DOWN", "DOWN", "UP"], label: "fall 1은 한 번에 빠진다" },
+    { args: [[false, false, true, true, true], 2, 3], expected: ["UP", "DOWN", "DOWN", "DOWN", "UP"], label: "rise 3" },
+  ]}
+/>
+
+## 서버를 뺄 때는 드레이닝부터
+
+헬스 체크는 서버가 죽은 뒤를 다룬다. 배포처럼 서버를 일부러 내릴 때는 죽기 전에 손을 쓸 수 있다. 새 요청은 더 이상 보내지 않고, 이미 처리 중인 요청은 끝날 때까지 기다린 다음에 내리는 것, 이걸 드레이닝(connection draining)이라고 한다. AWS에서는 deregistration delay라고 부른다.
+
+두 경우를 실습했다. 먼저 4초 걸리는 요청을 `b1`에 보내 놓고, 0.3초 뒤에 `b1`을 드레이닝으로 바꿨다.
+
+```bash
+# 4초 걸리는 요청을 보내 둔 채로 b1 드레이닝, 그사이 새 요청 4개
+curl -s -o /dev/null -w 'slow request: %{http_code} %{time_total}s\n' '127.0.0.1:8080/upload?ms=4000' &
+sleep 0.3; curl -s '127.0.0.1:8080/lb/drain?b=b1'
+for i in 1 2 3 4; do curl -s 127.0.0.1:8080/; done
+curl -s 127.0.0.1:8080/lb/status
+```
+
+```text
+draining
+b3 b2 b3 b2
+b1 up=true drain=true inflight=1
+b2 up=true drain=false inflight=0
+b3 up=true drain=false inflight=0
+slow request: 200 4.013752s
+  0.0s lb listening :8080
+  0.8s drain b1 시작: 새 요청 중단, 처리 중 1개
+  4.5s drain b1 끝: 처리 중 0개, 내려도 된다
+```
+
+새 요청 4개는 b2와 b3로만 갔고, b1에 걸려 있던 느린 요청은 4초를 다 채우고 200으로 끝났다. 로드 밸런서는 처리 중인 요청이 0이 된 4.5초에 "내려도 된다"고 알렸다. 이번엔 드레이닝 없이 같은 요청이 걸린 상태에서 `b1`을 `kill -9`로 바로 죽였다.
+
+```text
+502 ECONNRESET
+ -> 502 0.502793s
+```
+
+처리 중이던 요청은 0.5초 만에 502로 끝났다. 처음에 본 "배포할 때마다 섞이는 502"가 이것이다. 순서를 그림으로 보면 이렇다.
+
+<SequenceDiagram
+  caption="새 요청을 먼저 끊고, 남은 요청이 끝난 뒤에 내린다"
+  actors={[
+    { id: "deploy", label: "배포 도구" },
+    { id: "lb", label: "LB" },
+    { id: "b1", label: "b1 (내릴 서버)" },
+    { id: "b2", label: "b2" },
+  ]}
+  steps={[
+    { from: "deploy", to: "lb", label: "drain b1", title: "내리기 전에 LB에 알린다", detail: "프로세스를 죽이기 전에 LB에서 먼저 빼는 게 순서다. 쿠버네티스에서는 Pod가 Terminating이 되면 엔드포인트에서 빠지면서 이 일이 일어난다." },
+    { from: "lb", to: "b2", label: "새 요청", title: "새 요청은 다른 서버로", detail: "b1은 후보에서 빠졌다. 들어오는 요청은 b2가 받는다." },
+    { from: "b1", to: "lb", label: "200 (4초 뒤)", title: "처리 중이던 요청은 끝까지 간다", detail: "이미 b1에서 돌던 업로드는 끊지 않는다. 응답이 정상으로 나간다." },
+    { from: "lb", to: "lb", label: "inflight 0", title: "남은 요청이 0이 됐다", detail: "기다리는 시간에는 상한이 있다. AWS는 기본 300초, 넘으면 남은 연결을 끊는다." },
+    { from: "lb", to: "deploy", label: "drained", title: "내려도 된다", detail: "이제 프로세스를 멈춰도 잃는 요청이 없다." },
+    { from: "deploy", to: "b1", label: "SIGTERM", title: "그다음에 종료한다", detail: "앱도 SIGTERM을 받으면 새 연결을 받지 않고 남은 요청을 마친 뒤 끝나게 짜 둔다(graceful shutdown)." },
+  ]}
+/>
+
+현장에서 드레이닝이 어긋나는 지점은 세 군데다.
+
+첫째, 빼는 신호와 종료 신호가 동시에 가는 경우다. 쿠버네티스는 Pod를 지울 때 엔드포인트 제거와 컨테이너의 SIGTERM을 거의 동시에 보낸다. 그런데 각 노드의 kube-proxy와 바깥 로드 밸런서가 엔드포인트 변경을 반영하는 데는 몇 초가 걸린다. 그사이 앱이 먼저 닫아 버리면 반영이 늦은 쪽에서 보낸 요청이 거절당한다. 그래서 `preStop` 훅에 `sleep 5` 같은 짧은 대기를 넣어 앱이 늦게 종료하게 만든다. 이 대기를 포함한 전체 시간이 `terminationGracePeriodSeconds`(기본 30초)를 넘으면 SIGKILL이 오니 둘을 함께 맞춘다.
+
+둘째, 오래 열린 연결이다. WebSocket, 스트리밍, gRPC 스트림은 "요청이 끝나기를" 기다려도 끝나지 않는다. 드레이닝 상한에 닿아 강제로 끊기니, 서버가 먼저 종료 메시지(WebSocket close, HTTP/2 GOAWAY)를 보내 클라이언트가 다른 서버로 다시 붙게 만든다.
+
+셋째, 드레이닝 시간을 습관처럼 길게 두는 경우다. AWS 기본 300초를 그대로 두면 서버 한 대를 빼는 데 5분이 걸리고, 롤링 배포는 그 배수로 느려진다. API의 가장 긴 요청이 30초라면 드레이닝도 그 근처면 충분하다.
+
+반대 방향도 있다. 새로 들어온 서버는 캐시가 비어 있고 JIT가 덜 데워져 있어서, 정상 몫을 한꺼번에 받으면 처음 몇십 초 동안 느리다. 로드 밸런서의 slow start(HAProxy `slowstart`, AWS ALB 대상 그룹의 slow start 30~900초)는 몫을 서서히 늘려 이 구간을 넘긴다. 다만 least-connections처럼 "가장 한가한 서버"를 고르는 방식에서는 새 서버가 연결 0개로 들어오자마자 몰리기 쉬워서 slow start가 더 중요하다.
+
+## 같은 손님을 같은 서버로
+
+로그인 정보를 서버 메모리에 두는 앱은 요청마다 서버가 바뀌면 로그아웃된다. 이때 쓰는 게 세션 고정(sticky session, session affinity)이다. 방법은 크게 둘이다. 클라이언트 IP를 해시해서 고르는 방법(nginx `ip_hash`)과, 처음 고른 서버 이름을 쿠키에 적어 두는 방법이다. IP 방식의 한계는 [Nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)에서 봤으니 여기서는 쿠키 방식을 본다.
+
+실습 로드 밸런서는 쿠키가 없는 요청에 서버를 고른 뒤 `lb=서버이름` 쿠키를 붙인다. curl에 쿠키 저장소를 주고 요청을 이어 보낸 다음, 고정된 서버 `b1`을 죽였다.
+
+```bash
+# 쿠키를 저장하고 다시 보내면서 어느 서버가 받는지 본다
+curl -s -c jar -b jar -D - -o /dev/null 127.0.0.1:8080/ | grep -iE '^(x-backend|set-cookie)'
+```
+
+```text
+x-backend: b1 set-cookie: lb=b1; Path=/; HttpOnly
+x-backend: b1
+x-backend: b1
+--- b1 down
+x-backend: b3 set-cookie: lb=b3; Path=/; HttpOnly
+x-backend: b3
+x-backend: b3
+```
+
+첫 응답에서 쿠키를 받고 그 뒤로는 계속 b1으로 갔다. b1이 헬스 체크에서 빠지자 로드 밸런서는 쿠키를 무시하고 b3를 고른 뒤 쿠키를 새로 썼다. 사용자는 계속 서비스를 쓰지만, b1 메모리에 있던 세션은 사라졌다. 그리고 b1이 죽은 뒤 DOWN 판정까지 걸린 약 3초 동안 `lb=b1` 쿠키를 가진 요청은 죽은 서버로 갔다. 쿠키 고정은 "그 서버에만" 보내니, 판정이 나기 전까지 다른 서버로 피해 가지도 못한다.
+
+드레이닝과 겹치는 부분도 있다. 실습 로드 밸런서는 HAProxy처럼 드레이닝 중인 서버라도 쿠키가 있는 손님은 계속 받게 했다. 세션을 이어 주려는 배려인데, 그만큼 드레이닝이 늦게 끝난다. 세션 고정은 이렇게 다른 기능들과 계속 부딪힌다.
+
+- 부하가 고르지 않다. 오래 머무는 사용자 몇 명이 한 서버에 몰려도 옮길 수 없다.
+- 서버를 늘려도 기존 사용자는 옛 서버에 남아서 새 서버는 한동안 한가하다.
+- 서버 하나가 죽으면 그 서버의 세션이 전부 사라진다.
+
+그래서 세션 고정은 옮기는 동안 쓰는 임시방편으로 보고, 세션을 Redis 같은 공유 저장소나 토큰으로 빼서 어느 서버가 받아도 되게(stateless) 만드는 게 정석이다. 반대로 세션 고정이 정말 필요한 곳도 있다. 서버마다 로컬 캐시를 크게 두는 경우, WebSocket 재연결이 같은 방에 붙어야 하는 경우다. 이때는 쿠키나 IP보다 "키로 서버를 정하는" 일관 해싱이 더 잘 맞는다. [로드 밸런싱 알고리즘 글](/posts/load-balancing-algorithms)에서 이어서 본다.
+
+## 로드 밸런서가 죽으면
+
+서버를 여러 대로 나눠 놓고 앞에 로드 밸런서 한 대를 두면, 이번엔 그 한 대가 단일 장애점이다. 직접 운영하는 로드 밸런서는 보통 두 대를 두고 VIP를 넘겨받게 만든다. 이때 쓰는 규약이 VRRP이고, 리눅스에서는 keepalived가 구현한다. 아래 그림에서 다음을 누르면 마스터가 죽었을 때 VIP가 옮겨 가는 과정이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="VRRP: 광고가 끊기면 백업이 VIP를 가져가고 GARP로 알린다"
+  zones={[
+    { id: "pair", label: "LB 이중화", x: 8, y: 140, w: 384, h: 84, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "client", label: "Client", x: 200, y: 26, icon: "client" },
+    { id: "sw", label: "Switch", x: 200, y: 96, icon: "switch" },
+    { id: "lb1", label: "LB-1", sub: "MASTER", x: 92, y: 190, icon: "lb" },
+    { id: "lb2", label: "LB-2", sub: "BACKUP", x: 308, y: 190, icon: "lb" },
+    { id: "app", label: "app pool", sub: "b1 b2 b3", x: 200, y: 268, icon: "server" },
+  ]}
+  links={[
+    { from: "client", to: "sw" },
+    { from: "sw", to: "lb1" },
+    { from: "sw", to: "lb2" },
+    { from: "lb1", to: "lb2", dashed: true, label: "VRRP" },
+    { from: "lb1", to: "app" },
+    { from: "lb2", to: "app" },
+  ]}
+  steps={[
+    {
+      path: ["client", "sw", "lb1", "app"],
+      packet: "GET /",
+      title: "VIP는 지금 LB-1에 있다",
+      detail: "스위치는 VIP의 MAC 주소가 LB-1이라고 배워 두었다. 손님 트래픽은 모두 LB-1로 간다.",
+      payload: "10.0.0.10 is-at <LB-1 MAC>",
+    },
+    {
+      path: ["lb1", "lb2"],
+      packet: "ADVERT",
+      title: "마스터는 1초마다 광고한다",
+      detail: "LB-1이 '내가 마스터다'라는 VRRP 광고를 멀티캐스트(224.0.0.18)로 보낸다. LB-2는 듣기만 한다.",
+    },
+    {
+      path: ["lb2", "lb1"],
+      packet: "?",
+      blocked: true,
+      title: "광고가 끊긴다",
+      detail: "LB-1이 죽었다. LB-2는 광고 간격의 약 세 배(1초 간격이면 3초 남짓)를 기다린 뒤 마스터가 없다고 판단한다.",
+    },
+    {
+      path: ["lb2", "sw"],
+      packet: "GARP",
+      title: "LB-2가 VIP를 가져간다",
+      detail: "LB-2가 VIP를 자기 인터페이스에 붙이고, 묻지도 않은 ARP 응답(GARP)을 뿌려 스위치와 이웃의 표를 고친다.",
+      payload: "10.0.0.10 is-at <LB-2 MAC>",
+    },
+    {
+      path: ["client", "sw", "lb2", "app"],
+      packet: "GET /",
+      title: "같은 VIP로 계속 들어온다",
+      detail: "클라이언트는 주소를 바꿀 필요가 없다. 다만 LB-1에 붙어 있던 TCP 연결은 끊기고 다시 맺어야 한다.",
+    },
+  ]}
+/>
+
+두 가지를 알아 둔다. 하나는 넘어가는 순간 기존 연결이 끊긴다는 점이다. 프록시 방식 로드 밸런서는 연결 상태를 자기 메모리에 들고 있어서, 백업은 그 연결을 모른다. L4 장비는 연결 표를 서로 동기화하는 기능(conntrackd, LVS 동기화 데몬)으로 이걸 줄이기도 한다. 다른 하나는 둘이 서로를 못 보는데 둘 다 살아 있는 경우다. 두 LB 사이 링크만 끊기면 둘 다 마스터가 되어 같은 VIP를 주장한다(split brain). VRRP 광고가 지나는 경로를 손님 트래픽과 같은 스위치에 두거나, keepalived의 `track_script`로 바깥 상태를 함께 보게 한다. 그리고 클라우드에서는 L2 멀티캐스트와 GARP가 막혀 있어서 VRRP가 그대로 동작하지 않는다. 그곳에서는 클라우드 API로 Elastic IP를 옮기거나, 처음부터 관리형 로드 밸런서를 쓴다.
+
+VRRP는 한 대만 일하고 한 대는 노는 방식이다. 큰 서비스는 L4 로드 밸런서 여러 대가 같은 VIP를 BGP로 동시에 광고하고, 라우터가 ECMP로 연결을 나눠 보내는 방식을 쓴다. 모두가 일하고, 한 대가 빠지면 라우터가 경로에서 지운다. 이때 남은 로드 밸런서들이 같은 연결을 같은 서버로 보내려면 서버 선택이 "어느 LB가 받든 같은 답"이어야 해서, Maglev 같은 일관 해싱을 쓴다. 같은 IP를 여러 곳에서 광고하는 애니캐스트는 [CDN과 애니캐스트 글](/posts/cdn-edge-anycast)에서 지역 단위로 다시 나온다.
+
+## 현장에서 로드 밸런서를 의심하는 순간
+
+로드 밸런서는 장애가 나도 자기 로그를 잘 안 보는 자리라서, 증상으로 거꾸로 짚는 게 빠르다.
+
+배포할 때만 502·503이 몇 개씩 섞인다면 드레이닝 순서부터 본다. 앱이 SIGTERM을 받자마자 바로 죽는지, 쿠버네티스라면 `preStop` 대기가 있는지, readiness가 내려간 뒤 엔드포인트에서 빠지는 시간보다 앱이 빨리 닫히는지 확인한다.
+
+```bash
+# Pod가 지워질 때 엔드포인트에서 빠지는 시점 보기
+kubectl get endpointslices -l kubernetes.io/service-name=app -w
+# 앱이 SIGTERM에서 곧바로 끝나는지 로그 타임스탬프로 비교
+kubectl logs deploy/app --timestamps | grep -i -E 'sigterm|shutdown'
+```
+
+서버 하나만 CPU가 높고 나머지는 한가하다면 고정이 걸려 있는지 본다. 세션 고정 쿠키, `ip_hash`, L4 로드 밸런서 뒤의 오래 열린 연결(gRPC, HTTP/2, WebSocket)이 대표적이다. 액세스 로그에서 업스트림별 요청 수를 세면 바로 드러난다.
+
+```bash
+# nginx access.log의 upstream_addr별 요청 수 (로그 형식에 up=$upstream_addr가 있을 때)
+grep -o 'up=[0-9.:]*' /var/log/nginx/access.log | sort | uniq -c | sort -rn
+```
+
+새로 늘린 서버에 요청이 안 간다면 헬스 체크 대상 상태를 본다. 헬스 체크 경로가 404를 내거나(앱은 `/healthz`, LB는 `/health`), 보안 그룹이 로드 밸런서의 검사 요청을 막고 있는 경우가 많다.
+
+```bash
+# AWS 대상 그룹의 대상별 상태와 이유
+aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
+  --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]' --output table
+```
+
+트래픽이 많을 때만 연결 실패가 늘고 앱에는 흔적이 없다면 출발지 포트를 의심한다. 로드 밸런서 서버에서 TIME_WAIT 개수와 `Cannot assign requested address` 로그를 본다.
+
+```bash
+# 소켓 상태 요약. timewait 숫자가 수만이면 포트가 바닥나고 있다
+ss -s
+```
+
+마지막으로 트래픽이 적을 때만 가끔 502가 난다면 keep-alive 시간이 어긋난 것이다. 이건 [OSI 글](/posts/osi-in-practice)에서 그림으로 따라갔다.
+
+## 고르는 것보다 빼고 넣는 것이 어렵다
+
+로드 밸런서를 붙이면 요청이 고르게 나뉘는 건 금방 된다. 장애는 서버가 빠지고 들어오는 순간에 난다. 헬스 체크는 몇 초 늦게 알고, 그 몇 초를 재시도가 덮어 주며, 일부러 내릴 때는 드레이닝이 처리 중인 요청을 지킨다. 세션 고정은 이 모든 걸 어렵게 만들고, 로드 밸런서 자신도 이중화가 필요하다. 다음 글에서는 남은 하나, 살아 있는 서버 중 어디로 보낼지를 고르는 알고리즘을 같은 요청 흐름에 돌려 비교한다.
+
+## 면접에서 나올 만한 질문
+
+### 로드 밸런서는 어떤 일을 하나요?
+
+VIP 하나로 요청을 받아서 뒤쪽 서버 중 하나를 골라 넘기고, 서버가 살아 있는지 계속 확인해 아픈 서버를 빼며, 배포할 때 서버를 안전하게 빼고 넣게 해 준다. 덕분에 서버를 늘리고 줄이는 일이 클라이언트에게 보이지 않는다. 프록시 방식이면 TLS 종료나 경로 라우팅도 함께 맡는다.
+
+### DNS 라운드 로빈만으로 부하를 나누면 안 되나요?
+
+작은 규모에서는 되지만 장애에 약하다. DNS는 서버 상태를 모르고, 레코드를 고쳐도 TTL 동안 캐시된 옛 주소가 계속 쓰인다. 큰 리졸버 하나 뒤의 사용자가 같은 서버로 몰리기도 한다. 그래서 DNS는 지역이나 로드 밸런서 단위로 나누는 데 쓰고, 서버 단위는 로드 밸런서가 맡는다.
+
+### DSR은 무엇이고 언제 쓰나요?
+
+로드 밸런서가 목적지 MAC만 바꿔 서버로 넘기고, 서버가 VIP를 출발지로 해서 응답을 클라이언트에게 직접 보내는 방식이다. 응답이 로드 밸런서를 지나지 않으니 응답이 큰 서비스에서 장비 부담이 크게 준다. 대신 TLS 종료나 헤더 수정이 안 되고, 서버마다 루프백 VIP와 ARP 설정이 필요하며, 같은 L2 망이어야 한다(터널을 쓰면 이 제약은 없다).
+
+### 수동 헬스 체크와 능동 헬스 체크는 어떻게 다른가요?
+
+수동은 실제 요청이 실패하는 걸 세서 빼고, 능동은 별도 요청을 주기적으로 보내 판정한다. 수동은 추가 비용이 없지만 손님 요청이 실패해야 알고, 살아 있지만 오류를 내는 서버를 놓치기 쉽다. 능동은 interval, fall, rise로 판정 시간을 조절할 수 있고, 최악의 감지 시간은 대략 interval × fall에 timeout을 더한 값이다. 실무에서는 둘을 함께 쓴다.
+
+### 배포할 때마다 502가 몇 개씩 납니다. 어디부터 보나요?
+
+서버를 빼는 순서가 맞는지 본다. 프로세스가 처리 중인 요청을 버리고 죽거나, 로드 밸런서가 서버를 빼기 전에 앱이 먼저 연결을 닫으면 그 사이 요청이 502가 된다. 드레이닝을 켜서 새 요청을 먼저 끊고 남은 요청이 끝난 뒤에 내리고, 쿠버네티스라면 preStop 대기와 graceful shutdown, terminationGracePeriodSeconds를 함께 맞춘다.
+
+### 세션 고정은 왜 피하라고 하나요?
+
+부하가 고르게 나뉘지 않고, 서버를 늘려도 기존 사용자는 옮겨 가지 않으며, 서버가 죽으면 그 서버의 세션이 전부 사라지기 때문이다. 드레이닝도 고정된 손님 때문에 늦게 끝난다. 세션을 Redis 같은 공유 저장소로 빼서 어느 서버든 받을 수 있게 만드는 게 근본적인 해결이다.
+
+### 로드 밸런서 자체의 장애는 어떻게 대비하나요?
+
+직접 운영하면 두 대를 두고 VRRP(keepalived)로 VIP를 넘겨받게 한다. 마스터의 광고가 끊기면 백업이 VIP를 가져가고 GARP로 알리는데, 기존 연결은 끊긴다. 규모가 크면 여러 대가 같은 VIP를 BGP로 광고하고 라우터의 ECMP로 나누는 active-active 구성을 쓰며, 이때 어느 로드 밸런서가 받아도 같은 서버를 고르도록 일관 해싱을 쓴다. 클라우드에서는 관리형 로드 밸런서가 이 일을 대신한다.
+
+### 요청이 많을 때만 로드 밸런서에서 연결 오류가 납니다. 무엇을 의심하나요?
+
+출발지 포트 고갈을 의심한다. 로드 밸런서 IP 하나에서 서버 하나로 가는 연결은 출발지 포트만 바뀔 수 있어서, 기본 범위 28232개를 TIME_WAIT 60초가 묶으면 초당 470개 정도에서 새 연결이 막힌다. `ss -s`로 TIME_WAIT 수를 보고, 업스트림 keepalive로 연결을 재사용하는 것부터 고친다.

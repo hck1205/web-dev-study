@@ -87,10 +87,13 @@ import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
 import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
 import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
+import { LATENCY_BANDWIDTH_THROUGHPUT } from "./latency-bandwidth-throughput";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
+import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
+import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { MICRO_FRONTENDS } from "./micro-frontends";
@@ -166,6 +169,7 @@ import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TOKEN_LOGIN } from "./token-login";
+import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
@@ -267,10 +271,13 @@ export const QUESTION_SETS = [
   K8S_POD_SCHEDULING,
   K8S_POD_TROUBLESHOOTING,
   KUBERNETES_INGRESS,
+  LATENCY_BANDWIDTH_THROUGHPUT,
   LAYER_IP_ADDRESSING,
   LAYER_IP_ROUTING_ICMP,
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
+  LOAD_BALANCER_BASICS,
+  LOAD_BALANCING_ALGORITHMS,
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
   MICRO_FRONTENDS,
@@ -346,6 +353,7 @@ export const QUESTION_SETS = [
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
   TOKEN_LOGIN,
+  TRAFFIC_SHAPING_QOS,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,

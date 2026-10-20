@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "traffic-shaping-qos",
+    title: "트래픽 셰이핑과 QoS: 병목에서 줄의 순서 정하기",
+    summary: "백업이 돌면 SSH가 늦어지는 이유를 병목의 큐로 푼다. tc의 tbf와 HTB로 셰이핑과 폴리싱을 비교하고, 큐 깊이가 지연이 되는 bufferbloat, 클래스별 몫과 우선순위, DSCP 표시, ifb로 들어오는 트래픽을 다루는 법을 측정값과 함께 본다.",
+    topic: "programming/network/performance",
+    tags: ["Network", "Performance", "Linux", "TCP/IP"],
+    date: "2026-10-20",
+    keywords: ["트래픽 셰이핑", "폴리싱", "bufferbloat", "HTB", "DSCP"],
+  },
+  {
+    slug: "latency-bandwidth-throughput",
+    title: "지연, 대역폭, 처리량: 빠르다는 말의 세 가지 숫자",
+    summary: "회선을 열 배로 올려도 API가 빨라지지 않는 이유를 지연·대역폭·처리량을 떼어 재 보며 푼다. 지연의 네 조각, 작은 요청을 지배하는 왕복 횟수, 창 크기가 정하는 상한, 손실이 만드는 꼬리 지연, 리틀의 법칙까지 다룬다.",
+    topic: "programming/network/performance",
+    tags: ["Network", "Performance", "TCP/IP", "Linux"],
+    date: "2026-10-20",
+    keywords: ["전파 지연", "직렬화 지연", "goodput", "리틀의 법칙"],
+  },
+  {
+    slug: "load-balancing-algorithms",
+    title: "로드 밸런싱 알고리즘: 라운드 로빈부터 P2C, 일관 해싱까지",
+    summary: "같은 요청 2만 개에 라운드 로빈, 가중치, least-conn, IP 해시, P2C를 돌려 서버별 몫과 p99를 비교했다. 느린 서버 앞에 쌓이는 줄, 여러 로드 밸런서가 한 서버로 몰리는 현상, 해시가 서버 증감에 흔들리는 정도를 숫자로 보고 언제 무엇을 고를지 정리한다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "Load Balancer", "Algorithm", "Performance"],
+    date: "2026-10-20",
+    keywords: ["Power of Two Choices", "P2C", "가중 라운드 로빈", "least request"],
+  },
+  {
+    slug: "load-balancer-basics",
+    title: "로드 밸런서 기본: 헬스 체크, 드레이닝, 세션 고정, 이중화",
+    summary: "VIP로 받은 요청을 서버로 넘기는 길(프록시·NAT·DSR), 수동·능동 헬스 체크의 판정 시간, 드레이닝으로 배포 중 502를 없애는 순서, 쿠키 세션 고정의 함정, VRRP로 로드 밸런서 자신을 이중화하는 법을 실제 출력으로 따라간다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "Load Balancer", "DevOps", "Linux"],
+    date: "2026-10-20",
+    keywords: ["커넥션 드레이닝", "Direct Server Return", "VRRP", "sticky session", "능동 헬스 체크"],
+  },
+  {
     slug: "pattern-abstract-factory",
     title: "추상 팩토리 패턴: 짝이 맞는 객체를 한 벌로 고르기",
     summary: "저장소와 큐를 따로 골랐다가 파드 경계에서 끊기는 사고를 재현하고, 짝이 맞아야 하는 객체를 한 벌로 묶는 추상 팩토리로 막는다. knex의 방언별 Client, 새 제품을 더하기 어려운 트레이드오프, 팩토리 메서드와의 차이, 배포 직후 왕복 점검을 다룬다.",
