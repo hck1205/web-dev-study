@@ -2,6 +2,40 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "ray-casting": {
+    "links": [
+      "geohash",
+      "quadtree"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "db-modeling-normalization"
+    ]
+  },
+  "quadtree": {
+    "links": [
+      "geohash",
+      "ray-casting"
+    ],
+    "mentions": [
+      "db-type-key-value"
+    ]
+  },
+  "geohash": {
+    "links": [
+      "quadtree",
+      "ray-casting"
+    ],
+    "mentions": [
+      "redis-cluster",
+      "db-index",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "mongodb-document-model",
+      "db-index-design",
+      "redis-basics"
+    ]
+  },
   "distributed-tracing": {
     "links": [
       "db-index",
@@ -2320,7 +2354,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "db-index-pitfalls"
     ],
-    "mentions": []
+    "mentions": [
+      "quadtree"
+    ]
   },
   "sql-insert-update-delete": {
     "links": [

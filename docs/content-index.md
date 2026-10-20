@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 256편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 259편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -54,6 +54,17 @@
 - 키워드 백링크 →: message-delivery-semantics, js-memory-leak, db-consistency-cap, http-methods
 - 이 글로 오는 글 ←: clock-skew, db-consistency-cap, eventual-consistency, operational-transform, pattern-command, realtime-communication
 
+#### `geohash` — 지오해시: 2차원 위치를 한 줄 문자열로 접기
+
+- 요약: 위도와 경도를 번갈아 반으로 접어 비트를 끼워 넣고 base32 글자로 바꾸는 과정, 글자 수별 칸 크기, 접두사가 가까움을 보장하지 않는 경계 문제와 이웃 8칸 검색을 실제 좌표로 따라간다. Redis GEOSEARCH의 속과 느려지는 조건, PostgreSQL B-tree 접두사 검색, S2·H3와의 차이까지 다룬다.
+- 태그: Algorithm, System Design, Geospatial, Redis, PostgreSQL
+- 키워드: 지오해시, Geohash, GEOSEARCH, Z-순서 곡선
+- 길이: 696줄
+- 소제목: 지도를 반씩 접어 가며 비트를 적는다 / 다섯 비트를 글자 하나로 / 앞자리가 같으면 가깝다, 대체로 / 10m 옆인데 접두사가 다르다 / 이웃 여덟 칸까지 같이 찾는다 / Redis GEOSEARCH 속에서 일어나는 일 / 후보가 많으면 Redis 전체가 멈춘다 / PostgreSQL에서 접두사로 찾기 / 칸 모양이 다른 S2와 H3 / 현장에서 지오해시가 말썽을 부리는 순간 / 면접에서 나올 만한 질문
+- 직접 링크 →: quadtree, ray-casting
+- 키워드 백링크 →: redis-cluster, db-index, db-type-wide-column, db-type-key-value, mongodb-document-model, db-index-design, redis-basics
+- 이 글로 오는 글 ←: quadtree, ray-casting
+
 #### `hyperloglog` — HyperLogLog: 12KB로 서로 다른 개수 세기
 
 - 요약: 하루 방문자 100만 명을 Set 대신 키 하나로 세는 데서 출발해 연속 0의 길이, 레지스터 최댓값, 조화 평균, 1.04/√m 오차를 실측으로 확인한다. Redis PFADD·PFCOUNT·PFMERGE, 작은 값과 큰 값 보정, 교집합의 한계, 다른 방법과 고르는 기준까지 다룬다.
@@ -97,6 +108,17 @@
 - 직접 링크 →: crdt, realtime-communication, eventual-consistency
 - 이 글로 오는 글 ←: crdt, pattern-command, realtime-communication
 
+#### `quadtree` — 쿼드트리: 붐비는 곳만 잘게 나누기
+
+- 요약: 꽉 찬 칸만 넷으로 나누는 쿼드트리로 넣기, 사각형 범위 찾기, 거리순 대기열로 가장 가까운 k개 찾기를 직접 짜서 100만 개로 재 본다. 밀도가 고르지 않을 때와 같은 좌표가 몰릴 때의 문제, R-tree와의 차이, PostgreSQL GiST와 SP-GiST 쿼드트리 비교까지 다룬다.
+- 태그: Algorithm, Data Structure, Geospatial, PostgreSQL, Index
+- 키워드: 쿼드트리, Quadtree, SP-GiST, R-tree
+- 길이: 524줄
+- 소제목: 꽉 차면 넷으로 나눈다 / 겹치지 않는 칸은 통째로 버린다 / 가장 가까운 k개는 거리순 대기열로 / 100만 개로 재 보기 / 밀도가 고르지 않으면 트리도 기운다 / 같은 건물에 가게가 다섯 곳이면 / 쿼드트리, 지오해시, R-tree는 무엇이 다른가 / PostgreSQL에 이미 있는 쿼드트리 / 위도·경도를 그대로 평면에 놓으면 / 현장에서 쿼드트리를 의심하는 순간 / 면접에서 나올 만한 질문
+- 직접 링크 →: geohash, ray-casting
+- 키워드 백링크 →: db-type-key-value
+- 이 글로 오는 글 ←: db-index-design, geohash, ray-casting
+
 #### `raft-consensus` — Raft 합의: 로그 복제, 커밋, 안전한 리더 교체
 
 - 요약: 과반을 잃은 etcd 리더가 쓰기를 거절하는 장면에서 출발해 AppendEntries와 커밋 번호, 어긋난 로그 고치기와 스냅숏, 로그가 최신인 후보만 이기는 투표 규칙, 고립된 멤버가 임기를 부풀리는 현상과 Pre-Vote, learner로 멤버 바꾸기를 etcd 3.4 실제 로그로 따라간다.
@@ -107,6 +129,17 @@
 - 직접 링크 →: leader-election, db-type-newsql, db-consistency-cap
 - 키워드 백링크 →: db-type-key-value, kafka-basics
 - 이 글로 오는 글 ←: db-type-key-value, db-type-newsql, distributed-transactions-2pc, leader-election, network-partitions, rabbitmq-basics
+
+#### `ray-casting` — 레이 캐스팅: 광선 하나로 안팎과 벽을 찾는다
+
+- 요약: 배달 구역 다각형 안에 주소가 있는지 광선이 변을 넘는 횟수로 판정하고, 꼭짓점·가로 변·경계 위의 점, 짝홀 규칙과 감는 수의 차이를 실제로 돌려 본다. GPS 흔들림으로 생기는 지오펜스 알림 폭주, 구역 1만 개에서 빨리 찾기, 빠른 총알 충돌 판정과 울펜슈타인식 레이캐스터까지 다룬다.
+- 태그: Algorithm, Geometry, Geospatial, PostgreSQL
+- 키워드: 레이 캐스팅, PNPOLY, 지오펜싱, 감는 수, 레이캐스터
+- 길이: 503줄
+- 소제목: 광선을 쏘아 변을 넘은 횟수를 센다 / 코드는 짧고, 조건 하나가 전부다 / 꼭짓점을 지나면 한 번인가 두 번인가 / 변이 엇갈리는 다각형: 짝홀과 감는 수 / 지도 위의 다각형에서 조심할 것 / GPS가 흔들리면 들어왔다 나갔다를 반복한다 / 구역이 만 개면 다 검사할 수 없다 / 게임에서는 광선이 벽을 찾는다 / 격자 지도에서 3D 화면 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: geohash, quadtree
+- 키워드 백링크 →: pythagorean-theorem, db-modeling-normalization
+- 이 글로 오는 글 ←: geohash, quadtree
 
 #### `rsync-algorithm` — rsync 알고리즘: 바뀐 블록만 보내는 굴리는 체크섬
 
@@ -524,7 +557,7 @@
 - 길이: 471줄
 - 소제목: 주문 하나가 문서 하나 / 넣을까, 가리킬까 / 스키마가 없다는 건 검사도 내가 한다는 뜻 / 인덱스 필드 순서는 ESR / 문서 하나는 원자적이다 / 쓰기가 끝났다는 건 어디까지인가 / 샤드 키 하나가 클러스터 모양을 정한다 / 모아서 계산하기: 집계 파이프라인 / 느린 쿼리 로그에 COLLSCAN이 보이면 / 결국 읽는 모양에서 출발한다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: distributed-transactions-2pc, db-index-design, db-type-relational, db-replication-sharding, db-modeling-normalization
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index, eventual-consistency, network-partitions, optimistic-locking, pattern-interpreter
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-relational, db-types-overview, elasticsearch-inverted-index, eventual-consistency, geohash, network-partitions, optimistic-locking, pattern-interpreter
 
 #### `vector-db` — 벡터 DB, 뜻이 가까운 것을 찾는 데이터베이스
 
@@ -591,7 +624,7 @@
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: raft-consensus, leader-election, dns
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, helm-values-secrets, k8s-configmap, k8s-namespace, k8s-pod-basics, k8s-project-structure, k8s-secret, leader-election, merkle-tree, network-flow-logs, network-partitions, optimistic-locking, raft-consensus, service-discovery, terraform-basics, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, geohash, helm-values-secrets, k8s-configmap, k8s-namespace, k8s-pod-basics, k8s-project-structure, k8s-secret, leader-election, merkle-tree, network-flow-logs, network-partitions, optimistic-locking, quadtree, raft-consensus, service-discovery, terraform-basics, vpc-subnets-route-tables
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -635,7 +668,7 @@
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: db-sharding, db-type-relational, bloom-filter, db-index-pitfalls, db-partitioning, dns
-- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, k8s-service-types, kafka-basics, merkle-tree, network-partitions
+- 이 글로 오는 글 ←: bloom-filter, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, geohash, k8s-service-types, kafka-basics, merkle-tree, network-partitions
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -782,7 +815,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
 - 키워드 백링크 →: redis-cluster, distributed-lock, pub-sub, db-type-relational, kafka-basics, db-transaction-isolation, dns
-- 이 글로 오는 글 ←: batch-processing, bloom-filter, caching-strategies, circuit-breaker, clock-skew, consistent-hashing, cookie-session-login, count-min-sketch, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, exponential-backoff-jitter, gateway, helm-basics, helm-dependencies-oci-gitops, http-caching-cdn, hyperloglog, idempotency-key, k8s-service-types, load-balancer-basics, lossy-counting, message-queue-basics, network-partitions, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, service-discovery, tcp-reliability-congestion, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: batch-processing, bloom-filter, caching-strategies, circuit-breaker, clock-skew, consistent-hashing, cookie-session-login, count-min-sketch, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, exponential-backoff-jitter, gateway, geohash, helm-basics, helm-dependencies-oci-gitops, http-caching-cdn, hyperloglog, idempotency-key, k8s-service-types, load-balancer-basics, lossy-counting, message-queue-basics, network-partitions, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, service-discovery, tcp-reliability-congestion, vpc-subnets-route-tables
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -793,7 +826,7 @@
 - 소제목: Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 현장에서 노드 하나가 죽었을 때 / 데이터를 나누는 대가 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-replication-sentinel, redis-basics
 - 키워드 백링크 →: vpc-basics
-- 이 글로 오는 글 ←: caching-strategies, consistent-hashing, db-sharding, distributed-lock, pub-sub, rate-limiting-algorithms, redis-basics, redis-persistence-ha, redis-replication-sentinel
+- 이 글로 오는 글 ←: caching-strategies, consistent-hashing, db-sharding, distributed-lock, geohash, pub-sub, rate-limiting-algorithms, redis-basics, redis-persistence-ha, redis-replication-sentinel
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -850,7 +883,7 @@
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index-pitfalls, sql-query-tuning, db-index-design
 - 키워드 백링크 →: postgres-mvcc-vacuum, db-sharding, db-transaction-isolation, sql-basics
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, distributed-tracing, elasticsearch-inverted-index, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, postgres-reporting-sql, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-correlated-subquery, sqld-data-modeling, sqld-top-n-hierarchical-pivot, sqld-type-conversion
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index-design, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-replication-sharding, db-sharding, db-type-graph, db-type-relational, db-type-time-series, db-types-overview, distributed-tracing, elasticsearch-inverted-index, geohash, postgres-architecture, postgres-data-types, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-operations, postgres-reporting-sql, sql-basics, sql-batch-timeout-pool, sql-query-rewrite, sql-query-tuning, sql-select-where-null, sqld-correlated-subquery, sqld-data-modeling, sqld-top-n-hierarchical-pivot, sqld-type-conversion
 
 #### `db-index-design` — 인덱스 고르기: 복합, 커버링, 부분, 식 인덱스와 GIN·BRIN
 
@@ -860,7 +893,8 @@
 - 길이: 593줄
 - 소제목: 앞 글의 주문 100만 건 그대로 / 여러 컬럼 인덱스는 순서가 결과를 바꾼다 / 표까지 가지 않는 커버링 인덱스 / 일부 줄만 담는 부분 인덱스 / 함수를 씌운 컬럼과 유니크 인덱스 / B-tree가 아닌 인덱스들 / 인덱스를 하나 더 만들자는 리뷰를 받았을 때 / 쿼리 모양에 맞춰 고른다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-index, db-index-pitfalls
-- 이 글로 오는 글 ←: api-pagination-sorting, db-index, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-type-columnar-olap, db-type-time-series, message-queue-basics, microservices, mongodb-document-model, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-query-rewrite, vector-db
+- 키워드 백링크 →: quadtree
+- 이 글로 오는 글 ←: api-pagination-sorting, db-index, db-index-pitfalls, db-keys-denormalization, db-modeling-normalization, db-type-columnar-olap, db-type-time-series, geohash, message-queue-basics, microservices, mongodb-document-model, postgres-functions-triggers, postgres-jsonb-search, postgres-mvcc-vacuum, postgres-roles-security, rest-api-design, sql-query-rewrite, vector-db
 
 #### `db-index-pitfalls` — 인덱스가 안 타는 이유와 인덱스의 대가
 
@@ -904,7 +938,7 @@
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
 - 키워드 백링크 →: json-crud-http, db-index-design, sqld-entity-attribute-relationship
-- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-ignore-config, git-large-files-secrets, http-message, idempotency-key, ids-ips, lossy-counting, mongodb-document-model, nginx-basics, rendering-ssr, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
+- 이 글로 오는 글 ←: ab-testing, db-architecture-by-scale, db-keys-denormalization, db-type-relational, elasticsearch-inverted-index, git-ignore-config, git-large-files-secrets, http-message, idempotency-key, ids-ips, lossy-counting, mongodb-document-model, nginx-basics, ray-casting, rendering-ssr, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
@@ -2898,7 +2932,7 @@
 - 길이: 267줄
 - 소제목: 직각삼각형의 세 변 사이에 있는 규칙 / 삼각형 네 개를 옮겨 보면 / 3, 4, 5 같은 숫자들 / 거꾸로도 성립한다 / 거리 공식이 되기까지 / 이름은 피타고라스지만 / 정리 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: vector-db
-- 이 글로 오는 글 ←: vector-db
+- 이 글로 오는 글 ←: ray-casting, vector-db
 
 ## 키워드 소유 (백링크 대상)
 
@@ -2924,6 +2958,7 @@
 - 가시성 타임아웃 → `message-queue-basics`
 - 가용 영역 → `vpc-basics`
 - 가중 라운드 로빈 → `load-balancing-algorithms`
+- 감는 수 → `ray-casting`
 - 같은 출처 정책 → `cors`
 - 개념적 모델링 → `sqld-data-modeling`
 - 갱신 손실 → `db-transaction-isolation`
@@ -2985,7 +3020,9 @@
 - 락 임대 → `distributed-lock`
 - 랑데부 해싱 → `consistent-hashing`
 - 램포트 시계 → `clock-skew`
+- 레이 캐스팅 → `ray-casting`
 - 레이아웃 스래싱 → `core-web-vitals`
+- 레이캐스터 → `ray-casting`
 - 렌더링 파이프라인 → `what-happens-google-com`
 - 로그 복제 → `raft-consensus`
 - 로그 컴팩션 → `kafka-basics`
@@ -3189,6 +3226,8 @@
 - 지수 백오프 → `resilience-patterns`
 - 지연 로딩 → `pattern-proxy`
 - 지연 로딩 → `loading-patterns`
+- 지오펜싱 → `ray-casting`
+- 지오해시 → `geohash`
 - 직렬화 지연 → `latency-bandwidth-throughput`
 - 집계 파이프라인 → `mongodb-document-model`
 - 집계 함수 → `sqld-group-by-having`
@@ -3227,6 +3266,7 @@
 - 쿠버네티스 네임스페이스 → `k8s-namespace`
 - 쿠쿠 필터 → `bloom-filter`
 - 쿠키 세션 → `cookie-session-login`
+- 쿼드트리 → `quadtree`
 - 쿼럼 큐 → `rabbitmq-basics`
 - 큐 깊이 → `message-queue-basics`
 - 클라이언트 라우팅 → `rendering-csr-spa`
@@ -3469,6 +3509,8 @@
 - gcTime → `client-data-cache`
 - generate_series → `postgres-reporting-sql`
 - generateStaticParams → `rendering-ssg-isr`
+- Geohash → `geohash`
+- GEOSEARCH → `geohash`
 - git add -p → `git-staging-area`
 - git bisect → `git-tips-advanced`
 - git blame → `git-tips-advanced`
@@ -3692,6 +3734,7 @@
 - PKCE → `oauth`
 - PL/pgSQL → `postgres-functions-triggers`
 - PMTUD → `layer-mtu-fragmentation`
+- PNPOLY → `ray-casting`
 - Pod phase → `k8s-pod-lifecycle`
 - podCIDR → `k8s-cni-pod-network`
 - poison record → `batch-processing`
@@ -3720,8 +3763,10 @@
 - pushState → `rendering-csr-spa`
 - PUT과 PATCH → `http-methods`
 - QoS 클래스 → `k8s-pod-resources`
+- Quadtree → `quadtree`
 - QUIC → `http-versions`
 - Qwik → `islands-resumability`
+- R-tree → `quadtree`
 - RabbitMQ → `rabbitmq-basics`
 - Raft 합의 → `raft-consensus`
 - RAG → `vector-db`
@@ -3794,6 +3839,7 @@
 - SO_REUSEADDR → `ports-and-sockets`
 - SO_REUSEPORT → `ports-and-sockets`
 - SOPS → `helm-values-secrets`
+- SP-GiST → `quadtree`
 - SPA 폴백 → `rendering-csr-spa`
 - Space-Saving → `lossy-counting`
 - Speculation Rules → `frontend-browser-cache`
@@ -3903,13 +3949,14 @@
 - XID 랩어라운드 → `postgres-mvcc-vacuum`
 - XState → `pattern-state`
 - Yjs → `crdt`
+- Z-순서 곡선 → `geohash`
 - zdiff3 → `git-merge-conflict`
 
 ## 겹칠 수 있는 글 (자동 추정)
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `k8s-pod-basics` ↔ `docker-container-basics` (26%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
+- `k8s-pod-basics` ↔ `docker-container-basics` (27%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
 - `db-index-pitfalls` ↔ `db-index-design` (24%: 100만, 인덱스, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (24%: 100만, 인덱스, 인덱스가, 인덱스를, index)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
@@ -3928,10 +3975,11 @@
 - `proxy-reverse-proxy` ↔ `gateway` (16%: 프록시와, 리버스, 로드, 밸런서, api, 게이트웨이)
 - `lossy-counting` ↔ `hyperloglog` (16%: 낸다, 세는, data, structure, probabilistic)
 - `frontend-browser-cache` ↔ `client-data-cache` (16%: 미리, 쓰면, 받기, 캐시, 돌아가서, cache, frontend)
+- `nextjs-static-dynamic-rendering` ↔ `rendering-ssr` (15%: 요청이, cache, 요청마다, rendering, ssr)
+- `quadtree` ↔ `db-type-time-series` (15%: 통째로, 버린다, 개로, 고르지, postgresql에, 그대로)
 - `security-groups-nacl` ↔ `iptables-basics` (15%: 연결을, firewall, 기억하는, 방화벽)
 - `db-types-overview` ↔ `redis-basics` (15%: 빠른, 이유는, 하나씩, nosql)
 - `git-branch-merge` ↔ `git-remote-collaboration` (15%: 브랜치는, 브랜치를, 지운다, 원격)
-- `nextjs-static-dynamic-rendering` ↔ `rendering-ssr` (15%: 요청이, cache, 요청마다, rendering, ssr)
 - `raft-consensus` ↔ `leader-election` (15%: 리더가, 자꾸, 바뀌거나, resilience, 합의, 리더)
 - `network-flow-logs` ↔ `vpc-subnets-route-tables` (14%: vpc, nat, 주소가, 바뀐다)
 - `load-balancing-algorithms` ↔ `load-balancer-basics` (14%: 서버로, 서버를, load, balancer, 로드)
@@ -3941,19 +3989,21 @@
 - `count-min-sketch` ↔ `hyperloglog` (14%: redis에서, 코드로, 세는, data, structure, probabilistic)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-ssg-isr` (14%: 응답, cache, 어떤, 페이지가, next.js, rendering)
 - `k8s-network-policy` ↔ `k8s-service-types` (14%: 정책은, 목록이다, 따져, 정책을)
+- `pattern-flyweight` ↔ `dockerfile-image-layers` (14%: 바뀌는, 것을, 상태는, 두고)
 - `islands-resumability` ↔ `hydration` (14%: 하이드레이션, 하이드레이션을, 하지, rendering)
 - `packet-capture-tcpdump` ↔ `db-index` (14%: 처음부터, 끝까지, 줄을, 필요한)
 - `db-index-design` ↔ `db-index` (14%: 100만, 인덱스, 인덱스를, index)
 - `proxy-reverse-proxy` ↔ `kubernetes-ingress` (14%: https는, 로드, 밸런서, tls)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
 - `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
-- `circuit-breaker` ↔ `resilience-patterns` (14%: 타임아웃, 회로를, resilience, 서킷, 브레이커)
-- `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `ray-casting` ↔ `quadtree`
+- `ray-casting` ↔ `geohash`
+- `quadtree` ↔ `geohash`
 - `distributed-tracing` ↔ `network-flow-logs`
 - `distributed-tracing` ↔ `event-driven-architecture`
 - `network-flow-logs` ↔ `network-monitoring`

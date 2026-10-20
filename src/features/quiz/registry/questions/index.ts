@@ -58,6 +58,7 @@ import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GATEWAY } from "./gateway";
+import { GEOHASH } from "./geohash";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
 import { GIT_IGNORE_CONFIG } from "./git-ignore-config";
@@ -192,10 +193,12 @@ import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
+import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
 import { RAFT_CONSENSUS } from "./raft-consensus";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
+import { RAY_CASTING } from "./ray-casting";
 import { REACT_RERENDER } from "./react-rerender";
 import { REACT_SERVER_COMPONENTS } from "./react-server-components";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
@@ -317,6 +320,7 @@ export const QUESTION_SETS = [
   EXPONENTIAL_BACKOFF_JITTER,
   FRONTEND_BROWSER_CACHE,
   GATEWAY,
+  GEOHASH,
   GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
   GIT_IGNORE_CONFIG,
@@ -451,10 +455,12 @@ export const QUESTION_SETS = [
   PROXY_REVERSE_PROXY,
   PUB_SUB,
   PYTHAGOREAN_THEOREM,
+  QUADTREE,
   RABBITMQ_BASICS,
   RAFT_CONSENSUS,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
+  RAY_CASTING,
   REACT_RERENDER,
   REACT_SERVER_COMPONENTS,
   REALTIME_COMMUNICATION,

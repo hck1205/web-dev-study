@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "ray-casting",
+    title: "레이 캐스팅: 광선 하나로 안팎과 벽을 찾는다",
+    summary: "배달 구역 다각형 안에 주소가 있는지 광선이 변을 넘는 횟수로 판정하고, 꼭짓점·가로 변·경계 위의 점, 짝홀 규칙과 감는 수의 차이를 실제로 돌려 본다. GPS 흔들림으로 생기는 지오펜스 알림 폭주, 구역 1만 개에서 빨리 찾기, 빠른 총알 충돌 판정과 울펜슈타인식 레이캐스터까지 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["Algorithm", "Geometry", "Geospatial", "PostgreSQL"],
+    date: "2026-10-22",
+    keywords: ["레이 캐스팅", "PNPOLY", "지오펜싱", "감는 수", "레이캐스터"],
+  },
+  {
+    slug: "quadtree",
+    title: "쿼드트리: 붐비는 곳만 잘게 나누기",
+    summary: "꽉 찬 칸만 넷으로 나누는 쿼드트리로 넣기, 사각형 범위 찾기, 거리순 대기열로 가장 가까운 k개 찾기를 직접 짜서 100만 개로 재 본다. 밀도가 고르지 않을 때와 같은 좌표가 몰릴 때의 문제, R-tree와의 차이, PostgreSQL GiST와 SP-GiST 쿼드트리 비교까지 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["Algorithm", "Data Structure", "Geospatial", "PostgreSQL", "Index"],
+    date: "2026-10-22",
+    keywords: ["쿼드트리", "Quadtree", "SP-GiST", "R-tree"],
+  },
+  {
+    slug: "geohash",
+    title: "지오해시: 2차원 위치를 한 줄 문자열로 접기",
+    summary: "위도와 경도를 번갈아 반으로 접어 비트를 끼워 넣고 base32 글자로 바꾸는 과정, 글자 수별 칸 크기, 접두사가 가까움을 보장하지 않는 경계 문제와 이웃 8칸 검색을 실제 좌표로 따라간다. Redis GEOSEARCH의 속과 느려지는 조건, PostgreSQL B-tree 접두사 검색, S2·H3와의 차이까지 다룬다.",
+    topic: "programming/algorithms/system-design",
+    tags: ["Algorithm", "System Design", "Geospatial", "Redis", "PostgreSQL"],
+    date: "2026-10-22",
+    keywords: ["지오해시", "Geohash", "GEOSEARCH", "Z-순서 곡선"],
+  },
+  {
     slug: "distributed-tracing",
     title: "분산 추적: 요청 하나를 서비스 셋에 걸쳐 따라가기",
     summary: "Node.js 서비스 셋에 OpenTelemetry를 붙이고 Jaeger에 모인 trace에서 느린 구간을 찾아 고친다. traceparent 헤더로 문맥을 잇는 법, 전파가 조용히 끊기는 자리, 헤드와 꼬리 샘플링의 차이, 로그와 trace를 trace_id로 잇는 법까지 다룬다.",
