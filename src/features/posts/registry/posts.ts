@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "schema-versioning",
+    title: "스키마 버전 관리: Avro, 스키마 레지스트리, 옛 이벤트 읽기",
+    summary: "로그에 남는 이벤트는 코드보다 오래 산다. Avro가 쓴 쪽과 읽는 쪽 스키마를 맞춰 읽는 방식, 스키마 레지스트리와 호환성 규칙, TRANSITIVE가 필요한 이유, protobuf와 JSON Schema에서 조용히 깨지는 변경, 옛 이벤트를 올리는 업캐스터를 직접 돌려 본다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Messaging", "Architecture", "Distributed Systems", "API"],
+    date: "2026-10-21",
+    keywords: ["스키마 레지스트리", "Avro", "업캐스터", "BACKWARD_TRANSITIVE"],
+  },
+  {
+    slug: "zero-downtime-migrations",
+    title: "무중단 스키마 변경: ALTER TABLE의 잠금과 재작성을 재 보기",
+    summary: "ALTER TABLE마다 잡는 잠금과 테이블 재작성 여부를 200만 행에서 직접 재고, 잠금 줄이 서비스를 멈추는 장면과 lock_timeout의 효과, NOT VALID와 VALIDATE, 배치 백필, int 기본 키를 bigint로 바꾸는 전 과정, MySQL 온라인 DDL을 다룬다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "PostgreSQL", "SQL", "Performance", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["lock_timeout", "NOT VALID", "백필", "무중단 스키마 변경"],
+  },
+  {
+    slug: "db-migration-tools",
+    title: "마이그레이션 도구: 기록 표, 잠금, 체크섬, 실패한 마이그레이션 되살리기",
+    summary: "Flyway, knex, node-pg-migrate, golang-migrate를 PostgreSQL 16에서 돌려 기록 표와 잠금이 하는 일을 본다. 파드 여러 개의 동시 실행, 중간에 죽은 마이그레이션의 잔재, 적용한 파일을 고치면 막히는 이유, down 대신 roll forward를 쓰는 이유를 다룬다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "PostgreSQL", "SQL", "DevOps", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["Flyway", "마이그레이션 도구", "flyway_schema_history", "schema_migrations"],
+  },
+  {
+    slug: "n-plus-one-queries",
+    title: "N+1 쿼리 깊이 보기: ORM 지연 로딩, 즉시 로딩, DataLoader",
+    summary: "ORM이 언제 쿼리를 몰래 보내는지 Sequelize로 101개 쿼리를 재현하고, JOIN과 IN 중 무엇을 고를지, GraphQL 리졸버의 N+1을 DataLoader로 묶는 법, pg_stat_statements와 쿼리 수 테스트로 운영에서 찾고 막는 법을 다룬다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Performance", "Node.js"],
+    date: "2026-10-21",
+    keywords: ["DataLoader", "즉시 로딩", "eager loading"],
+  },
+  {
     slug: "thread-safety",
     title: "스레드 안전: 같이 써도 깨지지 않는 코드",
     summary: "Go 맵의 concurrent map writes, 자바 HashMap의 사라지는 키, volatile 없이 멈추지 않는 스레드, x86에서 실제로 바뀌는 메모리 순서를 직접 보고 happens-before로 정리한다. 한정·불변·원자적 연산·락 네 가지 길, 언어별 스레드 안전 컬렉션, DB 연결 객체를 요청끼리 나누면 생기는 사고까지 다룬다.",

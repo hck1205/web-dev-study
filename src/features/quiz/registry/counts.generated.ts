@@ -31,6 +31,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "db-index-pitfalls": 5,
   "db-keys-denormalization": 5,
   "db-locking-deadlock": 5,
+  "db-migration-tools": 7,
   "db-modeling-normalization": 5,
   "db-partitioning": 5,
   "db-replication-sharding": 5,
@@ -149,6 +150,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "microservices": 8,
   "mongodb-document-model": 8,
   "mvc-pattern": 8,
+  "n-plus-one-queries": 7,
   "network-config-cicd": 7,
   "network-flow-logs": 7,
   "network-layers-overview": 6,
@@ -227,6 +229,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "retries": 7,
   "rsync-algorithm": 7,
   "saga-pattern": 7,
+  "schema-versioning": 7,
   "sdn-vxlan-overlay": 7,
   "security-groups-nacl": 7,
   "server-sent-events": 7,
@@ -272,5 +275,6 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "webhooks": 6,
   "websocket-deep-dive": 7,
   "what-happens-google-com": 8,
+  "zero-downtime-migrations": 7,
   "zero-trust-architecture": 7
 };

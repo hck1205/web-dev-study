@@ -28,6 +28,7 @@ import { DB_INDEX_DESIGN } from "./db-index-design";
 import { DB_INDEX_PITFALLS } from "./db-index-pitfalls";
 import { DB_KEYS_DENORMALIZATION } from "./db-keys-denormalization";
 import { DB_LOCKING_DEADLOCK } from "./db-locking-deadlock";
+import { DB_MIGRATION_TOOLS } from "./db-migration-tools";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_PARTITIONING } from "./db-partitioning";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
@@ -146,6 +147,7 @@ import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
 import { NETWORK_FLOW_LOGS } from "./network-flow-logs";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
@@ -224,6 +226,7 @@ import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
+import { SCHEMA_VERSIONING } from "./schema-versioning";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
@@ -269,6 +272,7 @@ import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
+import { ZERO_DOWNTIME_MIGRATIONS } from "./zero-downtime-migrations";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
@@ -303,6 +307,7 @@ export const QUESTION_SETS = [
   DB_INDEX_PITFALLS,
   DB_KEYS_DENORMALIZATION,
   DB_LOCKING_DEADLOCK,
+  DB_MIGRATION_TOOLS,
   DB_MODELING_NORMALIZATION,
   DB_PARTITIONING,
   DB_REPLICATION_SHARDING,
@@ -421,6 +426,7 @@ export const QUESTION_SETS = [
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MVC_PATTERN,
+  N_PLUS_ONE_QUERIES,
   NETWORK_CONFIG_CICD,
   NETWORK_FLOW_LOGS,
   NETWORK_LAYERS_OVERVIEW,
@@ -499,6 +505,7 @@ export const QUESTION_SETS = [
   RETRIES,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
+  SCHEMA_VERSIONING,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,
   SERVER_SENT_EVENTS,
@@ -544,5 +551,6 @@ export const QUESTION_SETS = [
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
+  ZERO_DOWNTIME_MIGRATIONS,
   ZERO_TRUST_ARCHITECTURE,
 ];

@@ -2,6 +2,70 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "schema-versioning": {
+    "links": [
+      "api-versioning",
+      "grpc",
+      "kafka-basics",
+      "event-driven-architecture",
+      "db-migration-tools",
+      "zero-downtime-migrations",
+      "message-delivery-semantics"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "rest-api-design",
+      "dead-letter-queue"
+    ]
+  },
+  "zero-downtime-migrations": {
+    "links": [
+      "db-migration-tools",
+      "db-architecture-by-scale",
+      "db-index-pitfalls",
+      "pessimistic-locking",
+      "postgres-mvcc-vacuum",
+      "batch-processing"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "db-replication-sharding",
+      "sql-basics"
+    ]
+  },
+  "db-migration-tools": {
+    "links": [
+      "zero-downtime-migrations",
+      "schema-versioning",
+      "db-architecture-by-scale",
+      "db-index-pitfalls"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "k8s-pod-probes",
+      "k8s-deploy-pipeline-eks",
+      "sql-basics"
+    ]
+  },
+  "n-plus-one-queries": {
+    "links": [
+      "sql-query-rewrite",
+      "sql-query-tuning",
+      "connection-pool",
+      "pattern-proxy",
+      "latency-bandwidth-throughput",
+      "caching-strategies",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "event-loop",
+      "db-architecture-by-scale",
+      "vpc-basics",
+      "loading-patterns",
+      "sql-batch-timeout-pool",
+      "redis-basics"
+    ]
+  },
   "thread-safety": {
     "links": [
       "race-conditions",
@@ -154,7 +218,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "rest-api-design",
       "grpc",
-      "http-caching-cdn"
+      "zero-downtime-migrations",
+      "http-caching-cdn",
+      "schema-versioning"
     ],
     "mentions": [
       "kafka-basics",
@@ -974,6 +1040,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "optimistic-locking",
       "db-replication-sharding",
       "message-delivery-semantics",
+      "schema-versioning",
       "kafka-basics",
       "rabbitmq-basics",
       "dead-letter-queue",
@@ -1029,6 +1096,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leader-election"
     ],
     "mentions": [
+      "zero-downtime-migrations",
       "network-partitions",
       "kafka-basics",
       "db-types-overview",
@@ -1487,6 +1555,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "postgres-roles-security",
       "postgres-mvcc-vacuum",
+      "db-migration-tools",
       "db-architecture-by-scale",
       "https-tls",
       "latency-bandwidth-throughput",
@@ -1702,6 +1771,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-lock"
     ],
     "mentions": [
+      "zero-downtime-migrations",
       "db-architecture-by-scale",
       "sql-batch-timeout-pool",
       "db-transaction-isolation",
@@ -2131,6 +2201,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types",
       "k8s-pod-basics",
       "iptables-nat",
+      "db-migration-tools",
       "docker-container-basics",
       "k8s-deploy-pipeline-eks",
       "linux-processes-signals",
@@ -2554,6 +2625,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-tuning",
       "db-index",
       "api-pagination-sorting",
+      "n-plus-one-queries",
       "sql-batch-timeout-pool"
     ],
     "mentions": [
@@ -2598,6 +2670,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "db-migration-tools",
       "db-replication-sharding",
       "sql-basics"
     ]
@@ -3080,6 +3153,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "pessimistic-locking",
+      "db-migration-tools",
       "db-architecture-by-scale",
       "linux-files-permissions",
       "db-type-relational",
@@ -3115,6 +3189,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "json-crud-http",
       "postgres-getting-started",
+      "db-migration-tools",
       "sql-basics",
       "db-locking-deadlock",
       "db-index-design",
@@ -3141,6 +3216,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-roles-security"
     ],
     "mentions": [
+      "db-migration-tools",
       "db-type-relational"
     ]
   },
@@ -3443,7 +3519,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices",
       "event-driven-architecture",
       "mongodb-document-model",
-      "vector-db"
+      "vector-db",
+      "zero-downtime-migrations"
     ],
     "mentions": [
       "pessimistic-locking",
@@ -3451,6 +3528,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-advanced-sql",
       "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
+      "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
       "rabbitmq-basics",
@@ -3940,6 +4018,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "n-plus-one-queries",
       "api-versioning",
       "base64",
       "optimistic-locking",
