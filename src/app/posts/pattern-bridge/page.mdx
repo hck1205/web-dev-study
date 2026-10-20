@@ -1,0 +1,426 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-bridge");
+
+관리자 화면에 매출 차트를 넣었다. 처음에는 SVG 막대 차트 하나였다. 그다음 요청은 접근성 때문에 표처럼 읽히는 텍스트 버전, 그다음은 대량 데이터를 위한 Canvas 버전이었다. 그사이 차트 종류도 막대, 꺾은선, 상위 N개 막대로 늘었다. 파일 목록을 열어 보니 이렇다.
+
+```text
+charts/
+  svg-bar-chart.ts       canvas-bar-chart.ts       text-bar-chart.ts
+  svg-line-chart.ts      canvas-line-chart.ts      text-line-chart.ts
+  svg-top-n-chart.ts     canvas-top-n-chart.ts     text-top-n-chart.ts
+```
+
+막대 높이를 계산하는 코드가 세 파일에 복사돼 있고, 반올림 버그를 하나 고치면 세 파일을 고쳐야 한다. PDF 내보내기가 들어오면 파일이 세 개 더 생긴다. 차트 종류와 그리는 방식, 두 가지가 서로 상관없이 바뀌는데 그걸 상속 하나로 표현하려니 곱셈이 된다. 이 둘을 서로 다른 계층으로 떼어 놓고 사이를 객체 참조 하나로 잇는 것이 브리지 패턴이다. 구조 패턴 전체의 지도는 [디자인 패턴 개요](/posts/design-patterns-overview)에 있다.
+
+## 두 방향으로 갈라지는 상속
+
+클래스 이름에 단어 두 개가 붙어 있다는 게 신호다. `SvgBarChart`의 `Svg`는 그리는 방식이고 `Bar`는 차트 종류다. 이 두 축은 바뀌는 이유가 다르다. 차트 종류는 기획 요구로 늘고, 그리는 방식은 플랫폼과 성능 요구로 는다. 상속으로 둘을 함께 표현하면 축 하나가 늘 때마다 다른 축의 개수만큼 클래스가 생긴다.
+
+아래 그림은 같은 요구사항이 차례로 들어올 때 두 구조에서 클래스 수가 어떻게 변하는지 보여 준다. 칸은 들어온 요구사항이다.
+
+<AlgoTrace
+  caption="상속으로 묶으면 곱으로, 둘로 나누면 합으로 는다"
+  memoryLabel="클래스 수"
+  cells={["SVG 막대", "+ 꺾은선", "+ Canvas", "+ 텍스트", "+ 상위 N", "+ PDF"]}
+  steps={[
+    { pointer: 0, memory: ["상속: 1", "브리지: 2"], caption: "처음에는 상속이 더 단순하다. 브리지는 차트 하나와 렌더러 하나, 두 개가 필요하다." },
+    { pointer: 1, memory: ["상속: 2", "브리지: 3"], caption: "차트 종류가 늘면 상속은 SvgLineChart를, 브리지는 LineChart를 하나 더한다." },
+    { pointer: 2, memory: ["상속: 4", "브리지: 4"], caption: "그리는 방식이 늘자 상속은 차트 종류 수만큼 Canvas 클래스를 만든다. 여기서 둘이 같아진다." },
+    { pointer: 3, memory: ["상속: 6", "브리지: 5"], caption: "텍스트 렌더러를 넣으면 상속은 두 개, 브리지는 한 개가 는다." },
+    { pointer: 4, found: [4], memory: ["상속: 9", "브리지: 6"], caption: "차트 종류 3 × 방식 3 = 9개. 막대 높이 계산이 세 군데에 복사돼 있다." },
+    { pointer: 5, found: [5], memory: ["상속: 12", "브리지: 7"], caption: "PDF를 더하면 상속은 12개, 브리지는 7개다. 차이는 축이 늘수록 커진다." },
+  ]}
+/>
+
+첫 단계에서는 상속이 더 적다. 축이 하나뿐이고 앞으로도 늘 계획이 없다면 브리지는 클래스만 늘린다. 패턴이 값을 하는 건 두 축이 실제로 따로 늘어날 때다.
+
+## 무엇을 그릴지와 어떻게 그릴지를 떼어 놓는다
+
+GoF(1994)는 브리지의 의도를 "추상을 구현에서 분리해 둘이 독립적으로 변할 수 있게 한다"고 적었다. 등장인물은 넷이다. 클라이언트가 쓰는 Abstraction(`Chart`)과 그걸 확장한 RefinedAbstraction(`BarChart`, `TopNBarChart`), 그리고 Abstraction이 들고 있는 Implementor(`Renderer`)와 그 구현들(`SvgRenderer`, `AsciiRenderer`)이다. 두 계층을 잇는 화살표 하나가 다리다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="왼쪽은 무엇을 그릴지, 오른쪽은 어떻게 그릴지. 둘은 renderer 참조 하나로 이어진다"
+  nodes={[
+    { id: "chart", label: "Chart", sub: "Abstraction", x: 90, y: 50, w: 120 },
+    { id: "renderer", label: "Renderer", sub: "Implementor", x: 310, y: 50, w: 120 },
+    { id: "bar", label: "BarChart", x: 90, y: 150, w: 120 },
+    { id: "topn", label: "TopNBarChart", x: 90, y: 230, w: 130 },
+    { id: "svg", label: "SvgRenderer", x: 310, y: 150, w: 120 },
+    { id: "ascii", label: "AsciiRenderer", x: 310, y: 230, w: 130 },
+  ]}
+  edges={[
+    { from: "chart", to: "renderer", label: "bridge" },
+    { from: "bar", to: "chart", label: "확장", dashed: true },
+    { from: "topn", to: "bar", label: "확장", dashed: true },
+    { from: "svg", to: "renderer", label: "구현", dashed: true },
+    { from: "ascii", to: "renderer", label: "구현", dashed: true },
+  ]}
+/>
+
+Implementor 쪽부터 보자. 렌더러는 사각형과 글자를 그리는 법만 안다. 막대 차트가 무엇인지 모른다.
+
+```ts
+// Implementor: 그리는 방법. 차트가 무엇인지 모른다
+export interface Renderer {
+  rect(x: number, y: number, w: number, h: number): void;
+  text(x: number, y: number, s: string): void;
+  output(): string;
+}
+
+export class SvgRenderer implements Renderer {
+  private parts: string[] = [];
+  constructor(private readonly width: number, private readonly height: number) {}
+  rect(x: number, y: number, w: number, h: number) {
+    this.parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}"/>`);
+  }
+  text(x: number, y: number, s: string) {
+    this.parts.push(`<text x="${x}" y="${y}">${s}</text>`);
+  }
+  output() {
+    return `<svg viewBox="0 0 ${this.width} ${this.height}">${this.parts.join("")}</svg>`;
+  }
+}
+
+// 터미널과 테스트용: 한 칸 = 글자 하나
+export class AsciiRenderer implements Renderer {
+  private grid: string[][];
+  constructor(width: number, private readonly height: number) {
+    this.grid = Array.from({ length: height }, () => Array(width).fill(" "));
+  }
+  rect(x: number, y: number, w: number, h: number) {
+    for (let r = y; r < y + h; r++) for (let c = x; c < x + w; c++) this.grid[r][c] = "█";
+  }
+  text(x: number, y: number, s: string) {
+    [...s].forEach((ch, i) => (this.grid[y][x + i] = ch));
+  }
+  output() {
+    return this.grid.map((row) => row.join("").trimEnd()).join("\n");
+  }
+}
+```
+
+Abstraction 쪽은 무엇을 어디에 그릴지 계산하고, 실제로 그리는 일은 들고 있는 렌더러에 맡긴다.
+
+```ts
+// Abstraction: 무엇을 그릴지. 어떻게 그리는지는 renderer에 맡긴다
+export abstract class Chart {
+  constructor(protected readonly renderer: Renderer) {}
+  abstract draw(data: { label: string; value: number }[]): string;
+}
+
+// Refined Abstraction: 막대 차트
+export class BarChart extends Chart {
+  draw(data: { label: string; value: number }[]) {
+    const max = Math.max(...data.map((d) => d.value));
+    const chartH = 6;
+    data.forEach((d, i) => {
+      const h = Math.round((d.value / max) * chartH);
+      this.renderer.rect(i * 4, chartH - h, 3, h);
+      this.renderer.text(i * 4, chartH, d.label);
+    });
+    return this.renderer.output();
+  }
+}
+
+// Refined Abstraction: 큰 순서로 상위 n개만
+export class TopNBarChart extends BarChart {
+  constructor(renderer: Renderer, private readonly n: number) {
+    super(renderer);
+  }
+  draw(data: { label: string; value: number }[]) {
+    return super.draw([...data].sort((a, b) => b.value - a.value).slice(0, this.n));
+  }
+}
+```
+
+막대 높이 계산은 이제 `BarChart` 한곳에만 있다. `TopNBarChart`는 데이터를 골라 넘길 뿐이고, 어떤 렌더러와도 조합된다. 아래 그림에서 다음을 누르면 상위 2개 차트가 렌더러에게 그리기를 맡기는 순서가 나온다.
+
+<SequenceDiagram
+  caption="차트는 좌표를 계산하고, 렌더러는 받은 좌표를 자기 방식으로 그린다"
+  actors={[
+    { id: "page", label: "관리자 화면" },
+    { id: "chart", label: "TopNBarChart" },
+    { id: "r", label: "SvgRenderer" },
+  ]}
+  steps={[
+    { from: "page", to: "chart", label: "draw(sales)", title: "조합은 만드는 쪽이 정한다", detail: "화면은 new TopNBarChart(new SvgRenderer(16, 7), 2)로 둘을 묶었다. 텍스트 버전이 필요하면 렌더러만 바꾼다." },
+    { from: "chart", to: "chart", label: "정렬, 상위 2개", title: "무엇을 그릴지는 차트가 고른다", detail: "Tue 30, Thu 24만 남는다. 렌더러는 이 판단에 끼지 않는다." },
+    { from: "chart", to: "r", label: "rect(0, 0, 3, 6)", title: "좌표로 말한다", detail: "가장 큰 값이 높이 6을 차지한다. 차트는 SVG 태그를 모른다. 사각형을 그려 달라고만 한다." },
+    { from: "chart", to: "r", label: "text(0, 6, \"Tue\")", title: "라벨도 같은 방식으로", detail: "막대 아래에 라벨을 둔다. 글꼴이나 정렬 같은 그리는 쪽 사정은 렌더러가 안다." },
+    { from: "chart", to: "r", label: "rect(4, 1, 3, 5)", title: "두 번째 막대", detail: "24 / 30 × 6 = 4.8을 반올림해 높이 5가 됐다. 이 계산은 BarChart 한곳에만 있다." },
+    { from: "r", to: "page", label: "output()", title: "결과물의 형식은 렌더러가 정한다", detail: "같은 호출 순서가 SvgRenderer에서는 SVG 문자열, AsciiRenderer에서는 글자 그림이 된다.", payload: "<svg viewBox=\"0 0 16 7\"><rect x=\"0\" y=\"0\" width=\"3\" height=\"6\"/>…</svg>" },
+  ]}
+/>
+
+같은 데이터를 조합만 바꿔 그린 실제 출력이다.
+
+```ts
+console.log(new BarChart(new AsciiRenderer(16, 7)).draw(sales));
+console.log(new TopNBarChart(new AsciiRenderer(16, 7), 2).draw(sales));
+console.log(new TopNBarChart(new SvgRenderer(16, 7), 2).draw(sales));
+```
+
+```text
+    ███
+    ███     ███
+    ███ ███ ███
+    ███ ███ ███
+███ ███ ███ ███
+███ ███ ███ ███
+Mon Tue Wed Thu
+███
+███ ███
+███ ███
+███ ███
+███ ███
+███ ███
+Tue Thu
+<svg viewBox="0 0 16 7"><rect x="0" y="0" width="3" height="6"/><text x="0" y="6">Tue</text><rect x="4" y="1" width="3" height="5"/><text x="4" y="6">Thu</text></svg>
+```
+
+## 여기서 말하는 구현은 implements가 아니다
+
+브리지 설명에서 가장 헷갈리는 말이 "추상과 구현의 분리"다. 여기서 추상은 `abstract class`가 아니고, 구현은 `implements` 키워드가 아니다. 추상은 클라이언트가 보고 쓰는 고수준의 개념(차트, 로거, DB 연결)이고, 구현은 그걸 실제로 해내는 저수준의 수단(SVG, 표준 출력, PostgreSQL 프로토콜)이다. 보통의 인터페이스와 구현 클래스 관계라면 추상 쪽은 하나이고 구현 쪽만 여럿이다. 브리지에서는 추상 쪽도 따로 계층을 이루며 늘어난다. 앞의 `BarChart`와 `TopNBarChart`처럼.
+
+C++에서 쓰는 pimpl(pointer to implementation) 관용구도 같은 계보다. 헤더에 공개되는 클래스는 구현 객체를 가리키는 포인터 하나만 들고, 실제 필드와 로직은 소스 파일 안의 구현 클래스에 둔다. 구현을 바꿔도 헤더가 바뀌지 않아 그 헤더를 쓰는 코드를 다시 컴파일하지 않아도 된다. GoF 책도 브리지의 다른 이름으로 Handle/Body를 적어 두었다.
+
+## Go의 slog가 나눠 놓은 두 쪽
+
+Go 1.21에 들어온 표준 로그 패키지 `log/slog`는 브리지 구조가 잘 드러나는 예다. 앱이 부르는 `Logger`와 출력 형식을 정하는 `Handler`가 따로 있다. `Logger`의 메서드는 인자로 `Record`를 만들어 `Handler`에 넘기고, 어떻게 쓸지는 `Handler`가 정한다. 생성 코드 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="Logger와 Handler를 잇는 한 줄"
+  base="slog.New("
+  separator=""
+  joiner=""
+  params={[
+    { key: "handler", display: "slog.NewJSONHandler(", title: "구현 쪽을 고른다", description: "TextHandler는 key=value 한 줄, JSONHandler는 JSON 한 줄을 쓴다. OpenTelemetry나 클라우드 로그 서비스용 Handler도 같은 인터페이스를 구현한다.", required: true },
+    { key: "w", display: "os.Stdout,", title: "어디에 쓸지", description: "io.Writer라면 무엇이든 된다. 파일, 네트워크 연결, 테스트용 버퍼." },
+    { key: "opts", display: " &slog.HandlerOptions{Level: slog.LevelWarn}", title: "걸러 내는 기준도 구현 쪽에", description: "레벨 기준은 Handler의 Enabled 메서드가 판단한다. Logger는 출력 전에 Enabled를 먼저 물어보고, false면 Record를 만들지도 않는다." },
+    { key: "close", display: "))", title: "돌아오는 건 추상 쪽", description: "결과는 *slog.Logger다. 앱 코드는 Info, Warn, With 같은 Logger 메서드만 쓰고 어떤 Handler가 붙었는지 모른다." },
+  ]}
+/>
+
+```go
+// 같은 Logger 코드, 다른 Handler
+text := slog.New(slog.NewTextHandler(os.Stdout, nil))
+json := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+for _, logger := range []*slog.Logger{text, json} {
+	logger.Info("결제 승인", "orderId", "A-1042", "amount", 39000)
+	logger.Warn("결제 지연", "orderId", "A-1043", "ms", 2300)
+}
+```
+
+```bash
+# Go 1.24에서 실행한다
+go run .
+```
+
+```text
+time=2026-10-20T14:11:07.792Z level=INFO msg="결제 승인" orderId=A-1042 amount=39000
+time=2026-10-20T14:11:07.792Z level=WARN msg="결제 지연" orderId=A-1043 ms=2300
+{"time":"2026-10-20T14:11:07.792683029Z","level":"WARN","msg":"결제 지연","orderId":"A-1043","ms":2300}
+```
+
+같은 호출 네 번이 세 줄이 됐다. JSON 쪽의 `Info`는 Handler가 레벨 기준에서 걸렀다. 로그 한 줄이 이 두 계층을 지나는 길을 그림으로 보자.
+
+<NetworkTopology
+  caption="Logger는 Record를 만들어 넘기고, Handler가 거르고 형식을 정한다"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "app", label: "app code", x: 50, y: 110, icon: "client", w: 84 },
+    { id: "logger", label: "Logger", sub: "abstraction", x: 155, y: 110, icon: "server", w: 92 },
+    { id: "th", label: "TextHandler", x: 275, y: 50, icon: "switch", w: 100 },
+    { id: "jh", label: "JSONHandler", sub: "Level: Warn", x: 275, y: 170, icon: "switch", w: 100 },
+    { id: "out", label: "stdout", x: 365, y: 110, icon: "db", w: 64 },
+  ]}
+  links={[
+    { from: "app", to: "logger" },
+    { from: "logger", to: "th" },
+    { from: "logger", to: "jh" },
+    { from: "th", to: "out" },
+    { from: "jh", to: "out" },
+  ]}
+  steps={[
+    { path: ["app", "logger", "th", "out"], packet: "Info", title: "텍스트 Handler는 Info를 쓴다", detail: "Logger가 Record를 만들어 넘기고, TextHandler가 key=value 형식으로 쓴다.", payload: "level=INFO msg=\"결제 승인\" orderId=A-1042 amount=39000" },
+    { path: ["app", "logger", "jh"], packet: "Info", blocked: true, title: "JSON Handler는 Info를 거른다", detail: "Logger가 Enabled를 먼저 묻는다. Warn 미만이라 false가 돌아오고, Record도 만들지 않는다." },
+    { path: ["app", "logger", "jh", "out"], packet: "Warn", title: "Warn은 JSON으로 나간다", detail: "같은 Logger 메서드인데 형식과 기준이 Handler에 따라 다르다.", payload: "{\"level\":\"WARN\",\"msg\":\"결제 지연\",\"orderId\":\"A-1043\",\"ms\":2300}" },
+    { path: ["app", "logger"], packet: "LogAttrs", highlight: ["th", "jh"], title: "추상 쪽도 따로 늘어난다", detail: "InfoContext, LogAttrs 같은 편의 메서드는 Logger에만 있다. 어떤 메서드로 불러도 Handler가 받는 건 Record 하나라서, 메서드가 늘어도 Handler는 고칠 것이 없다." },
+  ]}
+/>
+
+마지막 단계가 브리지와 단순한 인터페이스 구현을 가르는 지점이다. `Handler` 인터페이스는 `Enabled`, `Handle`, `WithAttrs`, `WithGroup` 네 메서드뿐이고, 레벨별 메서드와 `Context`를 받는 변형, `LogAttrs` 같은 편의 기능은 모두 `Logger` 쪽에 있다. 추상 쪽은 쓰기 편한 메서드로 늘고, 구현 쪽은 출력 대상으로 는다. 두 쪽이 서로를 고치지 않고 따로 자란다.
+
+## 렌더러를 바꿔 끼우는 프레임워크들
+
+리액트가 큰 예다. 컴포넌트, 훅, 재조정 알고리즘은 `react`와 `react-reconciler` 쪽에 있고, 실제 화면에 노드를 만들고 붙이는 일은 렌더러가 한다. `react-dom`은 DOM 노드를, React Native는 네이티브 뷰를, ink는 터미널 글자를 만든다. 렌더러는 `createInstance`, `appendChild`, `commitUpdate` 같은 함수를 담은 host config를 재조정기에 넘긴다. 같은 컴포넌트 코드가 브라우저와 모바일과 터미널에서 도는 이유가 이 다리다. 재조정이 무엇을 비교하는지는 [리렌더링](/posts/react-rerender) 글에 있다.
+
+Go의 `database/sql`도 같은 구조다. 앱이 쓰는 `sql.DB`는 커넥션 풀, 트랜잭션, `QueryRow` 같은 편의 기능을 가진 추상 쪽이고, 각 DB 드라이버는 `database/sql/driver` 패키지의 `Driver`, `Conn`, `Stmt` 인터페이스를 구현한다. 커넥션 풀 기능이 좋아지면 모든 드라이버가 덕을 보고, 새 드라이버는 풀을 다시 만들 필요가 없다. 자바의 JDBC도 `DriverManager`와 `Connection` 인터페이스 아래에 벤더 드라이버를 두는 같은 모양이다.
+
+쿠버네티스의 kubelet은 컨테이너를 직접 띄우지 않고 CRI(Container Runtime Interface)라는 gRPC 인터페이스로 containerd나 CRI-O에 맡긴다. 저장소는 CSI, 네트워크는 CNI가 같은 역할을 한다. kubelet의 Pod 관리 기능과 런타임 구현이 서로를 고치지 않고 따로 발전한다.
+
+## 가짜 렌더러로 차트 로직만 테스트하기
+
+브리지로 나누면 테스트도 둘로 나뉜다. 차트 쪽은 "어떤 좌표에 무엇을 그려 달라고 했는가"만 확인하면 된다. 그리지 않고 호출만 적어 두는 렌더러를 끼우면 SVG 문자열을 비교하는 깨지기 쉬운 테스트가 필요 없다.
+
+```ts
+// 그리지 않고 호출만 적어 두는 가짜 구현
+class RecordingRenderer implements Renderer {
+  calls: string[] = [];
+  rect(x: number, y: number, w: number, h: number) { this.calls.push(`rect ${x},${y} ${w}x${h}`); }
+  text(x: number, y: number, s: string) { this.calls.push(`text ${s}`); }
+  output() { return ""; }
+}
+
+test("상위 2개만 큰 순서로 그린다", () => {
+  const r = new RecordingRenderer();
+  new TopNBarChart(r, 2).draw([
+    { label: "Mon", value: 12 },
+    { label: "Tue", value: 30 },
+    { label: "Thu", value: 24 },
+  ]);
+  assert.deepEqual(r.calls, ["rect 0,0 3x6", "text Tue", "rect 4,1 3x5", "text Thu"]);
+});
+```
+
+```text
+✔ 상위 2개만 큰 순서로 그린다 (2.660823ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+```
+
+렌더러 쪽은 반대로 "사각형 하나를 주면 올바른 SVG 태그가 나오는가"만 확인한다. 상속 구조였다면 차트 종류 3개 × 방식 3개, 9개 클래스마다 높이 계산과 출력 형식을 함께 검사해야 했다. 나누면 차트 3개, 렌더러 3개를 각자 검사하고 조합은 몇 개만 통합 테스트로 확인한다.
+
+## 직접 늘려 보는 두 축
+
+아래 코드에는 막대 차트와 ASCII 렌더러가 하나씩 있다. 추상 쪽에 상위 2개 차트(`top2`, 큰 값부터 2개)를, 구현 쪽에 CSV 렌더러(`csv`, 첫 줄 `label,value` 뒤에 `라벨,값`)를 하나씩 더해 보자. 둘을 다 만들면 마지막 테스트는 코드를 더 쓰지 않아도 통과한다.
+
+<CodePlayground
+  caption="차트 종류와 렌더러를 따로 늘리기"
+  functionName="render"
+  initialCode={`// Implementor
+class AsciiRenderer {
+  begin(title) { this.lines = ["# " + title]; }
+  bar(label, value, max) { this.lines.push(label.padEnd(4) + "|" + "#".repeat(Math.round((value / max) * 10)) + " " + value); }
+  end() { return this.lines.join("\\n"); }
+}
+
+// Abstraction
+class BarChart {
+  constructor(renderer) { this.renderer = renderer; }
+  draw(title, data) {
+    const max = Math.max(...data.map((d) => d.value));
+    this.renderer.begin(title);
+    for (const d of this.select(data)) this.renderer.bar(d.label, d.value, max);
+    return this.renderer.end();
+  }
+  select(data) { return data; }
+}
+
+// 여기에 TopNBarChart와 CsvRenderer를 더한다
+
+const charts = { bar: (r) => new BarChart(r) };
+const renderers = { ascii: () => new AsciiRenderer() };
+
+function render(chart, renderer, data) {
+  return charts[chart](renderers[renderer]()).draw("sales", data);
+}`}
+  solution={`class AsciiRenderer {
+  begin(title) { this.lines = ["# " + title]; }
+  bar(label, value, max) { this.lines.push(label.padEnd(4) + "|" + "#".repeat(Math.round((value / max) * 10)) + " " + value); }
+  end() { return this.lines.join("\\n"); }
+}
+
+// 구현 쪽에 하나: 차트가 무엇인지 모른다
+class CsvRenderer {
+  begin() { this.lines = ["label,value"]; }
+  bar(label, value) { this.lines.push(label + "," + value); }
+  end() { return this.lines.join("\\n"); }
+}
+
+class BarChart {
+  constructor(renderer) { this.renderer = renderer; }
+  draw(title, data) {
+    const max = Math.max(...data.map((d) => d.value));
+    this.renderer.begin(title);
+    for (const d of this.select(data)) this.renderer.bar(d.label, d.value, max);
+    return this.renderer.end();
+  }
+  select(data) { return data; }
+}
+
+// 추상 쪽에 하나: 어떻게 그려지는지 모른다
+class TopNBarChart extends BarChart {
+  constructor(renderer, n) { super(renderer); this.n = n; }
+  select(data) { return [...data].sort((a, b) => b.value - a.value).slice(0, this.n); }
+}
+
+const charts = { bar: (r) => new BarChart(r), top2: (r) => new TopNBarChart(r, 2) };
+const renderers = { ascii: () => new AsciiRenderer(), csv: () => new CsvRenderer() };
+
+function render(chart, renderer, data) {
+  return charts[chart](renderers[renderer]()).draw("sales", data);
+}`}
+  tests={[
+    { args: ["bar", "ascii", [{ label: "Mon", value: 12 }, { label: "Tue", value: 30 }, { label: "Wed", value: 18 }]], expected: "# sales\nMon |#### 12\nTue |########## 30\nWed |###### 18", label: "막대 × ASCII" },
+    { args: ["top2", "ascii", [{ label: "Mon", value: 12 }, { label: "Tue", value: 30 }, { label: "Wed", value: 18 }]], expected: "# sales\nTue |########## 30\nWed |###### 18", label: "상위 2개 × ASCII" },
+    { args: ["bar", "csv", [{ label: "Mon", value: 12 }, { label: "Tue", value: 30 }, { label: "Wed", value: 18 }]], expected: "label,value\nMon,12\nTue,30\nWed,18", label: "막대 × CSV" },
+    { args: ["top2", "csv", [{ label: "Mon", value: 12 }, { label: "Tue", value: 30 }, { label: "Wed", value: 18 }]], expected: "label,value\nTue,30\nWed,18", label: "상위 2개 × CSV는 저절로" },
+  ]}
+/>
+
+클래스 두 개를 더했는데 조합은 네 개가 됐다. 상속이었다면 `AsciiTopNChart`, `CsvBarChart`, `CsvTopNChart` 세 개를 새로 써야 했다.
+
+## 전략, 어댑터와 무엇이 다른가
+
+코드만 보면 브리지는 [전략 패턴](/posts/pattern-strategy)과 거의 같다. 둘 다 객체가 인터페이스 타입의 필드를 들고 일을 위임한다. 차이는 의도와 수명이다. 전략은 알고리즘 하나를 갈아 끼우는 것이 목적이라 실행 중에도 바꾸곤 하고, 전략을 쓰는 쪽은 보통 계층이 없다. 브리지는 두 계층이 각자 확장되는 구조를 처음부터 설계하는 것이 목적이고, 한 번 묶으면 객체가 사는 동안 잘 바꾸지 않는다. "쓰는 쪽도 하위 클래스로 늘어나는가"를 물어보면 대체로 갈린다.
+
+[어댑터](/posts/pattern-adapter)와는 시점이 다르다. 어댑터는 이미 있는 두 인터페이스가 맞지 않을 때 나중에 끼운다. 브리지는 아직 구현이 하나뿐이라도 두 축이 따로 늘어날 것을 알고 미리 나눈다. 실제로는 둘이 함께 쓰인다. 렌더러 인터페이스를 정해 둔 뒤, 외부 차트 라이브러리를 그 인터페이스에 맞추는 어댑터를 렌더러 구현 중 하나로 넣는 식이다.
+
+[추상 팩토리](/posts/pattern-abstract-factory)는 브리지를 조립할 때 쓰인다. GoF 책도 둘의 관계를 그렇게 적었다. 실행 환경에 맞는 렌더러를 고르는 팩토리를 두면, 차트를 만드는 코드는 어떤 렌더러가 붙는지 몰라도 된다.
+
+## 미리 나눴다가 후회하는 경우
+
+가장 흔한 실수는 축이 하나뿐인데 나누는 것이다. 렌더러가 SVG 하나뿐이고 늘 계획도 없다면 `Renderer` 인터페이스는 읽는 사람이 한 번 더 건너가야 하는 다리일 뿐이다. 클래스 이름이 두 단어의 곱으로 늘기 시작하거나, 한쪽을 고칠 때마다 같은 수정이 여러 파일에 복사되는 걸 본 뒤에 나눠도 늦지 않다. 앞의 클래스 수 그림에서 보듯 축이 둘 다 두 개 이상이 되기 전까지는 상속 쪽이 더 단순하다.
+
+더 어려운 건 Implementor 인터페이스를 정하는 일이다. 첫 렌더러가 SVG라서 인터페이스를 SVG 기능에 맞춰 만들면, 나중에 들어온 텍스트 렌더러는 그라데이션이나 투명도를 표현할 방법이 없다. 반대로 모든 렌더러가 할 수 있는 것만 남기면 SVG의 장점을 못 쓴다. 인터페이스는 구현 하나의 기능 목록이 아니라 추상 쪽이 실제로 필요로 하는 동작(`rect`, `text`처럼 차트가 요구하는 것)으로 정한다. 특정 구현만 할 수 있는 일은 그 구현의 옵션으로 둔다.
+
+성능은 거의 걱정할 일이 없다. 호출 하나에 간접 참조가 한 번 더 붙을 뿐이다. 차트처럼 그릴 것이 수만 개라면 `rect`를 하나씩 부르는 대신 `rects(batch)`처럼 묶어서 넘기는 메서드를 인터페이스에 두는 편이 렌더러 쪽에서 최적화할 여지를 준다.
+
+처음의 파일 아홉 개로 돌아가면, 브리지가 한 일은 클래스 이름에 붙어 있던 두 단어를 두 계층으로 떼어 놓은 것이다. 그 뒤로 차트 종류는 차트 쪽에서, 그리는 방식은 렌더러 쪽에서 각자 늘어난다.
+
+## 면접에서 나올 만한 질문
+
+### 브리지 패턴은 어떤 문제를 푸나요?
+
+두 가지 축이 서로 상관없이 바뀌는데 상속 하나로 표현하면 클래스가 곱으로 느는 문제를 푼다. 추상 쪽(무엇을 할지)과 구현 쪽(어떻게 할지)을 별도 계층으로 나누고, 추상이 구현을 참조로 들게 한다. 그러면 한쪽에 클래스를 더해도 다른 쪽은 고치지 않고, 클래스 수가 곱이 아니라 합으로 는다.
+
+### 여기서 말하는 추상과 구현은 abstract class와 implements를 뜻하나요?
+
+아니다. 추상은 클라이언트가 쓰는 고수준 개념이고, 구현은 그걸 실제로 해내는 저수준 수단이다. 차트와 렌더러, slog의 Logger와 Handler, database/sql의 DB와 드라이버가 그 예다. 보통의 인터페이스 구현과 달리 추상 쪽도 하위 클래스로 따로 확장된다.
+
+### 브리지와 전략 패턴은 어떻게 다른가요?
+
+구조는 거의 같고 의도가 다르다. 전략은 알고리즘 하나를 바꿔 끼우는 게 목적이라 실행 중에도 교체하고, 쓰는 쪽은 보통 계층이 없다. 브리지는 추상과 구현 두 계층이 각자 확장되는 구조를 처음부터 설계하는 것이고, 묶은 조합은 잘 바꾸지 않는다.
+
+### 브리지와 어댑터는 어떻게 다른가요?
+
+어댑터는 이미 있는 맞지 않는 인터페이스를 나중에 맞추는 패턴이고, 브리지는 두 축이 따로 늘어날 것을 알고 미리 나누는 패턴이다. 둘을 함께 쓰는 경우도 많다. 브리지의 구현 인터페이스를 정해 두고, 외부 라이브러리를 그 인터페이스에 맞추는 어댑터를 구현 중 하나로 넣는다.
+
+### 실제로 쓰이는 예를 들어 주세요.
+
+리액트는 컴포넌트와 재조정을 한쪽에 두고, react-dom, React Native, ink 같은 렌더러가 host config로 실제 노드를 만든다. Go의 slog는 Logger와 Handler를, database/sql은 sql.DB와 드라이버 인터페이스를 나눴다. 쿠버네티스 kubelet이 CRI로 containerd나 CRI-O에 컨테이너 실행을 맡기는 것도 같은 구조다.
+
+### 브리지를 쓰지 말아야 할 때는요?
+
+축이 하나뿐이거나 구현이 하나뿐이고 늘 계획이 없을 때다. 이때는 인터페이스가 한 번 더 건너가야 하는 간접 계층만 만든다. 클래스 이름이 두 단어의 곱으로 늘거나 같은 수정이 여러 파일에 복사되는 걸 본 뒤에 나눠도 늦지 않다.
+
+### 구현 쪽 인터페이스는 어떻게 정해야 하나요?
+
+첫 구현의 기능 목록이 아니라 추상 쪽이 실제로 필요로 하는 동작으로 정한다. 첫 구현에 맞추면 나중 구현이 표현할 수 없는 메서드가 생기고, 모든 구현의 공통분모만 남기면 좋은 구현의 장점을 못 쓴다. 특정 구현만 가능한 기능은 그 구현의 옵션으로 두고, 호출이 많다면 묶어서 넘기는 메서드를 둬 구현 쪽이 최적화할 여지를 준다.

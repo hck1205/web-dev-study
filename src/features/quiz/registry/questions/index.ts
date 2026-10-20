@@ -114,7 +114,11 @@ import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
+import { PATTERN_ADAPTER } from "./pattern-adapter";
+import { PATTERN_BRIDGE } from "./pattern-bridge";
+import { PATTERN_BUILDER } from "./pattern-builder";
 import { PATTERN_FACTORY_METHOD } from "./pattern-factory-method";
+import { PATTERN_PROTOTYPE } from "./pattern-prototype";
 import { PATTERN_SINGLETON } from "./pattern-singleton";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
@@ -303,7 +307,11 @@ export const QUESTION_SETS = [
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
   PATTERN_ABSTRACT_FACTORY,
+  PATTERN_ADAPTER,
+  PATTERN_BRIDGE,
+  PATTERN_BUILDER,
   PATTERN_FACTORY_METHOD,
+  PATTERN_PROTOTYPE,
   PATTERN_SINGLETON,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,

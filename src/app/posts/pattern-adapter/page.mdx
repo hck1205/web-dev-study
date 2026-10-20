@@ -1,0 +1,444 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-adapter");
+
+로그 라이브러리를 winston에서 pino로 바꾸기로 했다. 처리량이 더 좋다는 이유였다. 앱 곳곳에 `logger.info("결제 실패", { orderId })` 같은 호출이 수백 개 있으니, `logger`만 pino 인스턴스로 갈아 끼우면 될 거라고 생각했다. 배포하고 나서 로그를 보니 이렇다.
+
+```js
+w.info("결제 실패", { orderId: "A-1042", code: "CARD_DECLINED" }); // winston 3.19
+p.info("결제 실패", { orderId: "A-1042", code: "CARD_DECLINED" }); // pino 9.14
+p.info({ orderId: "A-1042", code: "CARD_DECLINED" }, "결제 실패");  // pino가 원하는 순서
+```
+
+```text
+{"code":"CARD_DECLINED","level":"info","message":"결제 실패","orderId":"A-1042"}
+{"level":30,"msg":"결제 실패"}
+{"level":30,"orderId":"A-1042","code":"CARD_DECLINED","msg":"결제 실패"}
+```
+
+두 번째 줄에 주문 번호가 없다. pino는 객체를 첫 인자로, 메시지를 두 번째 인자로 받는다. 순서가 반대인 호출은 에러 없이 메타데이터를 버린다. 장애가 나서 주문 번호로 로그를 찾으려 할 때에야 알게 되는 종류의 사고다. 앱 코드 수백 곳을 고치는 대신, 앱이 기대하는 모양과 pino의 모양 사이에 변환기를 하나 끼우면 된다. 그게 어댑터 패턴이다. 구조 패턴 전체의 지도는 [디자인 패턴 개요](/posts/design-patterns-overview)에 있다.
+
+## 모양이 다른 플러그에 끼우는 변환기
+
+해외여행에서 쓰는 전원 변환 플러그를 떠올리면 된다. 노트북 충전기도 벽의 콘센트도 고치지 않는다. 그 사이에 끼우는 작은 물건이 한쪽 모양을 다른 쪽 모양으로 바꿔 줄 뿐이다. GoF(1994)의 정의도 같다. 클래스의 인터페이스를 클라이언트가 기대하는 다른 인터페이스로 바꿔서, 인터페이스가 맞지 않아 함께 쓸 수 없던 클래스들을 함께 쓰게 한다.
+
+등장인물은 넷이다. 기대하는 모양을 가진 Target, 그 모양으로 부르는 Client, 이미 있지만 모양이 다른 Adaptee, 그리고 둘 사이의 Adapter다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="앱은 Logger만 알고, PinoLogger가 pino의 모양으로 바꿔 넘긴다"
+  nodes={[
+    { id: "client", label: "OrderService", sub: "Client", x: 90, y: 50, w: 140 },
+    { id: "target", label: "Logger", sub: "Target", x: 300, y: 50, w: 120 },
+    { id: "adapter", label: "PinoLogger", sub: "Adapter", x: 300, y: 150, w: 130 },
+    { id: "adaptee", label: "pino.Logger", sub: "Adaptee", x: 300, y: 230, w: 130 },
+    { id: "w", label: "WinstonLogger", sub: "Adapter", x: 90, y: 150, w: 140 },
+  ]}
+  edges={[
+    { from: "client", to: "target", label: "info(msg, meta)" },
+    { from: "adapter", to: "target", label: "구현", dashed: true },
+    { from: "w", to: "target", label: "구현", dashed: true },
+    { from: "adapter", to: "adaptee", label: "info(meta, msg)" },
+  ]}
+/>
+
+```ts
+import pino from "pino";
+import winston from "winston";
+
+// Target: 앱이 기대하는 모양. 앱 코드 곳곳이 이 모양으로 부른다
+export interface Logger {
+  info(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+// 지금까지 쓰던 라이브러리. 모양이 같아서 거의 그대로 넘긴다
+export class WinstonLogger implements Logger {
+  constructor(private readonly w: winston.Logger) {}
+  info(message: string, meta: Record<string, unknown> = {}) { this.w.info(message, meta); }
+  error(message: string, meta: Record<string, unknown> = {}) { this.w.error(message, meta); }
+}
+
+// Adapter: 앱의 모양을 pino의 모양으로 바꾼다
+export class PinoLogger implements Logger {
+  constructor(private readonly p: pino.Logger) {}
+  info(message: string, meta: Record<string, unknown> = {}) {
+    this.p.info(meta, message); // 인자 순서가 반대다
+  }
+  error(message: string, meta: Record<string, unknown> = {}) {
+    const { err, ...rest } = meta;
+    // pino는 Error 객체를 err 키에서 찾아 stack까지 직렬화한다
+    this.p.error(err instanceof Error ? { ...rest, err } : rest, message);
+  }
+}
+```
+
+앱은 이제 pino를 import하지 않는다. `Logger` 인터페이스만 알고, 시작할 때 어떤 어댑터를 넣을지만 정한다. `error()` 쪽이 `info()`보다 길다. 단순히 인자 순서만 바꾸는 게 아니라, pino의 관례(에러는 `err` 키에 넣어야 `type`, `message`, `stack`이 직렬화된다)까지 맞춰 주기 때문이다. 어댑터의 메서드 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="어댑터 메서드 하나가 하는 일"
+  base="info(message, meta = {}) { "
+  separator=""
+  joiner=" "
+  params={[
+    { key: "recv", display: "this.p", title: "감싼 객체에 넘긴다", description: "어댑터는 pino를 상속하지 않고 필드로 들고 있다. 객체 어댑터라 부르는 형태다. 테스트에서는 가짜 pino를 넣을 수 있다." },
+    { key: "call", display: ".info(", title: "이름이 같아도 모양은 다르다", description: "메서드 이름이 같아서 그냥 넘겨도 될 것처럼 보인다. 이 착각이 처음 장면의 사고를 만들었다." },
+    { key: "meta", display: "meta,", title: "객체가 먼저", description: "pino는 첫 인자가 객체면 그 필드를 로그 줄에 합친다. 첫 인자가 문자열이면 메시지로 보고, 뒤의 인자는 %s 같은 자리 표시자에만 쓴다.", required: true },
+    { key: "msg", display: "message) }", title: "메시지가 뒤로", description: "결과 줄에서 키 이름도 다르다. winston은 message, pino는 msg다. 로그 검색 쿼리가 키 이름에 묶여 있다면 이것도 맞춰야 한다.", code: "{\"level\":30,\"orderId\":\"A-1042\",\"msg\":\"결제 실패\"}" },
+  ]}
+/>
+
+호출이 어떻게 흘러가는지 보자. 아래 그림에서 다음을 누르면 결제 서비스의 로그 한 줄이 어댑터를 지나 표준 출력까지 간다.
+
+<SequenceDiagram
+  caption="앱의 호출 모양은 그대로이고, 어댑터 안에서 모양이 바뀐다"
+  actors={[
+    { id: "svc", label: "OrderService" },
+    { id: "adapter", label: "PinoLogger" },
+    { id: "pino", label: "pino" },
+    { id: "out", label: "stdout" },
+  ]}
+  steps={[
+    { from: "svc", to: "adapter", label: "info(msg, meta)", title: "앱은 원래 하던 대로 부른다", detail: "앱 코드 수백 곳은 한 글자도 바뀌지 않았다. 받는 쪽이 Logger 인터페이스라는 것만 안다.", payload: "info(\"결제 실패\", { orderId: \"A-1042\" })" },
+    { from: "adapter", to: "adapter", label: "순서 뒤집기", title: "어댑터가 모양을 바꾼다", detail: "메타 객체를 앞으로, 메시지를 뒤로 보낸다. 에러가 있으면 err 키로 옮긴다." },
+    { from: "adapter", to: "pino", label: "info(meta, msg)", title: "pino가 원하는 모양으로 넘긴다", detail: "pino 입장에서는 평범한 호출이다. 어댑터가 있다는 것도 모른다.", payload: "info({ orderId: \"A-1042\" }, \"결제 실패\")" },
+    { from: "pino", to: "out", label: "JSON 한 줄", title: "주문 번호가 남는다", detail: "처음 장면에서 사라졌던 orderId가 로그 줄에 들어 있다.", payload: "{\"level\":30,\"orderId\":\"A-1042\",\"msg\":\"결제 실패\"}" },
+  ]}
+/>
+
+## 객체 어댑터와 클래스 어댑터
+
+GoF는 어댑터를 두 가지로 나눈다. 위처럼 Adaptee를 필드로 들고 위임하는 것이 객체 어댑터다. Adaptee를 상속하면서 Target도 구현하는 것이 클래스 어댑터다.
+
+```ts
+// 클래스 어댑터: Adaptee를 상속하고 Target을 구현한다
+class LegacyClientAdapter extends LegacyPayClient implements PaymentGateway {
+  // 같은 이름으로 재정의하고, 부모의 콜백 버전은 super로 부른다
+  approve(orderId: string, amountKrw: number): Promise<Payment> {
+    return new Promise((resolve, reject) => {
+      super.approve(orderId, amountKrw, (err, r) => {
+        if (err || !r) return reject(err);
+        resolve({ id: r.tid, amountKrw: Number(r.amt), status: "approved", approvedAt: new Date() });
+      });
+    });
+  }
+}
+```
+
+C++처럼 다중 상속이 있는 언어에서는 클래스 어댑터로 Adaptee의 protected 멤버에 접근하거나 일부 동작만 재정의할 수 있다. 대신 Adaptee의 특정 클래스 하나에 묶이고, Adaptee의 공개 메서드가 모두 어댑터에도 새어 나온다. 위 코드는 이름까지 겹쳐서 더 위험하다. 타입스크립트는 이 재정의를 받아 준다. 메서드 인자는 적어도 되고, 부모의 반환 타입이 `void`라 Promise를 돌려줘도 통과한다. 그런데 이 어댑터를 `LegacyPayClient` 타입으로 받아 콜백을 넘기던 옛 코드는 이렇게 된다.
+
+```ts
+const old: LegacyPayClient = new LegacyClientAdapter();
+old.approve("A-1042", 39000, (err, r) => console.log("callback:", err, r));
+console.log("callback never called; returned:", Object.prototype.toString.call(old.approve("A-1043", 1000, () => {})));
+```
+
+```text
+callback never called; returned: [object Promise]
+```
+
+컴파일도 되고 에러도 없는데 콜백이 영영 불리지 않는다. 부모 자리에 자식을 넣었더니 약속이 깨졌으니 리스코프 치환 원칙을 어긴 셈이다. 타입스크립트와 자바는 클래스를 하나만 상속할 수 있다는 제약도 있어서, 실무에서는 거의 객체 어댑터를 쓴다. 테스트에서 가짜를 끼우기도 그쪽이 쉽다.
+
+## 이름만 바꾸는 게 아니다
+
+로그 어댑터는 인자 순서만 바꿨다. 결제처럼 돈이 걸린 연동에서는 바꿔야 할 것이 훨씬 많다. 오래된 결제 SDK와 새 결제 SDK를 같은 `PaymentGateway`로 감싸 본다. 두 SDK 이름은 예제로 지었다.
+
+```ts
+export interface Payment {
+  id: string;
+  amountKrw: number;
+  status: "approved" | "declined";
+  approvedAt: Date;
+}
+export interface PaymentGateway {
+  approve(orderId: string, amountKrw: number): Promise<Payment>;
+}
+
+const DECLINED_CODES = new Set(["3011", "3012"]);
+
+export class LegacyPayAdapter implements PaymentGateway {
+  private readonly approveAsync;
+  constructor(client: LegacyPayClient) {
+    // 콜백을 Promise로: 이것도 어댑터다. bind를 빠뜨리면 this를 잃는다
+    this.approveAsync = promisify(client.approve).bind(client);
+  }
+  async approve(orderId: string, amountKrw: number): Promise<Payment> {
+    const r = (await this.approveAsync(orderId, amountKrw)) as LegacyResult;
+    if (r.resultCode !== "0000" && !DECLINED_CODES.has(r.resultCode)) {
+      throw new Error(`unknown resultCode ${r.resultCode}`); // 모르는 코드를 승인으로 넘기지 않는다
+    }
+    const d = r.authDate; // "yyyyMMddHHmmss", 한국 시간
+    return {
+      id: r.tid,
+      amountKrw: Number(r.amt), // 문자열 금액을 숫자로
+      status: r.resultCode === "0000" ? "approved" : "declined",
+      approvedAt: new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${d.slice(8, 10)}:${d.slice(10, 12)}:${d.slice(12, 14)}+09:00`),
+    };
+  }
+}
+
+export class NewPayAdapter implements PaymentGateway {
+  constructor(private readonly client: NewPayClient) {}
+  async approve(orderId: string, amountKrw: number): Promise<Payment> {
+    const c = await this.client.charges({ reference: orderId, amount: amountKrw });
+    return {
+      id: c.id,
+      amountKrw: c.amount.value,
+      status: c.state === "captured" ? "approved" : "declined",
+      approvedAt: new Date(c.created * 1000), // 초 단위 유닉스 시간을 밀리초로
+    };
+  }
+}
+```
+
+옛 SDK 응답의 필드 하나하나가 어떻게 바뀌는지 따라가 보자. 아래 그림의 칸은 옛 SDK가 준 필드이고, 오른쪽에 앱의 `Payment`가 채워진다.
+
+<AlgoTrace
+  caption="필드마다 이름, 타입, 단위, 의미가 바뀐다"
+  memoryLabel="Payment"
+  cells={["tid", "amt: \"39000\"", "resultCode", "authDate"]}
+  steps={[
+    { pointer: 0, memory: ["id: T-A-1042"], caption: "이름만 바뀐다. tid가 id가 된다." },
+    { pointer: 1, memory: ["id: T-A-1042", "amountKrw: 39000"], caption: "문자열 금액을 숫자로 바꾼다. 그대로 두면 \"39000\" + 1000이 \"390001000\"이 된다." },
+    { pointer: 2, memory: ["id: T-A-1042", "amountKrw: 39000", "status: approved"], caption: "\"0000\"은 승인, 3011과 3012는 거절이다. 코드표를 앱 쪽 말로 옮긴다." },
+    { pointer: 2, found: [2], memory: ["id: T-A-1042", "amountKrw: 39000", "unknown code"], caption: "표에 없는 코드가 오면 에러를 던진다. else로 승인이나 거절에 넣으면 모르는 상황을 아는 척하게 된다." },
+    { pointer: 3, memory: ["id: T-A-1042", "amountKrw: 39000", "status: approved", "approvedAt: 09:00Z"], caption: "\"20261021180000\"은 한국 시간이다. +09:00을 붙여야 UTC 09:00이 된다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["Payment 완성"], caption: "앱은 이제 어느 SDK에서 왔는지 모르는 Payment 하나만 다룬다." },
+  ]}
+/>
+
+두 어댑터로 같은 주문을 승인한 결과다. 원본의 모양은 전혀 달랐지만 앱이 받는 값은 같다.
+
+```text
+LegacyPayAdapter  T-A-1042   39000 approved 2026-10-21T09:00:00.000Z
+NewPayAdapter     ch_A-1042  39000 approved 2026-10-21T09:00:00.000Z
+```
+
+시간 변환은 개발자 PC에서 잘 드러나지 않는다. 오프셋 없이 `new Date("2026-10-21T18:00:00")`로 만들면 그 컴퓨터의 시간대로 해석된다. 한국 시간대인 노트북에서는 맞게 나오고, UTC로 도는 서버에서는 아홉 시간이 밀린다. 새 SDK의 `created`는 초 단위라 1000을 곱해야 한다. 곱하지 않으면 `1970-01-21T17:56:13.200Z`가 나온다.
+
+어댑터가 끝내 맞출 수 없는 것도 있다. 옛 SDK가 부분 환불을 지원하지 않는다면, 어댑터가 할 수 있는 일은 그 사실을 분명히 알리는 것뿐이다.
+
+<NetworkTopology
+  caption="앱은 PaymentGateway 하나로 부르고, 어댑터가 SDK마다 길을 낸다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "checkout", label: "Checkout", x: 48, y: 120, icon: "client", w: 84 },
+    { id: "gw", label: "Gateway", sub: "interface", x: 145, y: 120, icon: "switch", w: 88 },
+    { id: "la", label: "OldAdapter", x: 250, y: 70, icon: "gateway", w: 104 },
+    { id: "na", label: "NewAdapter", x: 250, y: 170, icon: "gateway", w: 104 },
+    { id: "lsdk", label: "LegacyPay", x: 352, y: 70, icon: "internet", w: 80 },
+    { id: "nsdk", label: "NewPay", x: 352, y: 170, icon: "internet", w: 80 },
+  ]}
+  links={[
+    { from: "checkout", to: "gw" },
+    { from: "gw", to: "la" },
+    { from: "gw", to: "na" },
+    { from: "la", to: "lsdk" },
+    { from: "na", to: "nsdk" },
+  ]}
+  steps={[
+    { path: ["checkout", "gw", "la", "lsdk"], packet: "approve", title: "옛 SDK로 승인한다", detail: "어댑터가 콜백을 Promise로 바꾸고 응답을 Payment로 옮긴다.", payload: "{ resultCode: \"0000\", tid: \"T-A-1042\", amt: \"39000\" }" },
+    { path: ["checkout", "gw", "na", "nsdk"], packet: "approve", title: "새 SDK로도 같은 호출", detail: "Checkout 코드는 그대로다. 설정에서 어댑터만 바꿨다." },
+    { path: ["nsdk", "na", "gw", "checkout"], packet: "Payment", title: "같은 모양으로 돌아온다", detail: "초 단위 시간, 중첩된 금액 객체는 어댑터 안에서 풀렸다.", payload: "{ id: \"ch_A-1042\", amountKrw: 39000, status: \"approved\" }" },
+    { path: ["checkout", "gw", "la"], packet: "refund 5000", blocked: true, title: "못 하는 일은 어댑터에서 멈춘다", detail: "옛 SDK에는 부분 환불이 없다. 전액 환불로 바꿔 보내면 큰 사고가 난다. 지원하지 않는다는 에러를 던진다.", payload: "Error: partial refund not supported by LegacyPay" },
+  ]}
+/>
+
+아래 코드는 옛 SDK 응답을 바꾸는 함수인데 세 군데가 틀렸다. 금액 타입, 시간대, 모르는 코드 처리다. 고쳐서 테스트를 통과시켜 보자.
+
+<CodePlayground
+  caption="옛 결제 SDK 응답을 앱의 Payment로"
+  functionName="adapt"
+  initialCode={`// 옛 SDK 응답: { resultCode, tid, amt, authDate }
+// - resultCode "0000"은 승인, "3011"·"3012"는 카드 거절, 그 밖의 코드는 모르는 코드라 에러를 던진다
+// - amt는 문자열 금액, authDate는 한국 시간 "yyyyMMddHHmmss"
+// 앱이 원하는 모양: { id, amountKrw(숫자), status("approved" | "declined"), approvedAt(ISO 문자열, UTC) }
+function toPayment(r) {
+  const d = r.authDate;
+  return {
+    id: r.tid,
+    amountKrw: r.amt,
+    status: r.resultCode === "0000" ? "approved" : "declined",
+    approvedAt: new Date(d.slice(0, 4) + "-" + d.slice(4, 6) + "-" + d.slice(6, 8) + "T" + d.slice(8, 10) + ":" + d.slice(10, 12) + ":" + d.slice(12, 14) + "Z").toISOString(),
+  };
+}
+
+// 아래는 고치지 않는다
+function adapt(raw) {
+  try {
+    return toPayment(raw);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  solution={`const DECLINED = new Set(["3011", "3012"]);
+
+function toPayment(r) {
+  if (r.resultCode !== "0000" && !DECLINED.has(r.resultCode)) {
+    throw new Error("unknown resultCode " + r.resultCode);
+  }
+  const d = r.authDate;
+  return {
+    id: r.tid,
+    amountKrw: Number(r.amt),
+    status: r.resultCode === "0000" ? "approved" : "declined",
+    // 한국 시간이라는 걸 오프셋으로 밝힌다
+    approvedAt: new Date(d.slice(0, 4) + "-" + d.slice(4, 6) + "-" + d.slice(6, 8) + "T" + d.slice(8, 10) + ":" + d.slice(10, 12) + ":" + d.slice(12, 14) + "+09:00").toISOString(),
+  };
+}
+
+function adapt(raw) {
+  try {
+    return toPayment(raw);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  tests={[
+    { args: [{ resultCode: "0000", tid: "T-A-1042", amt: "39000", authDate: "20261021180000" }], expected: { id: "T-A-1042", amountKrw: 39000, status: "approved", approvedAt: "2026-10-21T09:00:00.000Z" }, label: "승인: 금액은 숫자, 시각은 UTC" },
+    { args: [{ resultCode: "3011", tid: "T-A-1049", amt: "12500", authDate: "20261021000500" }], expected: { id: "T-A-1049", amountKrw: 12500, status: "declined", approvedAt: "2026-10-20T15:05:00.000Z" }, label: "카드 거절, 자정 직후는 전날 UTC" },
+    { args: [{ resultCode: "9999", tid: "T-A-1050", amt: "1000", authDate: "20261021120000" }], expected: "error:unknown resultCode 9999", label: "모르는 코드는 승인도 거절도 아니다" },
+  ]}
+/>
+
+## 콜백을 Promise로 바꾸는 것도 어댑터다
+
+Node.js의 `util.promisify`는 표준 라이브러리에 들어 있는 어댑터다. 마지막 인자로 `(err, result)` 콜백을 받는 함수를 Promise를 돌려주는 함수로 바꾼다. 위의 `LegacyPayAdapter`가 이걸 썼는데, 메서드를 꺼내 넘길 때 함정이 있다.
+
+```js
+const client = new LegacyPayClient("sk_live_xxx");
+
+const broken = promisify(client.approve);
+await broken("A-1042", 39000);
+
+const approve = promisify(client.approve).bind(client);
+console.log(await approve("A-1042", 39000));
+```
+
+```text
+TypeError: Cannot read properties of undefined (reading 'apiKey')
+{ resultCode: '0000', tid: 'T-A-1042', amt: '39000' }
+```
+
+`client.approve`를 꺼내는 순간 `this`와의 연결이 끊긴다. 변환된 함수가 원래 메서드를 부를 때 `this`가 `undefined`라서, 메서드 안의 `this.apiKey`에서 터진다. `bind(client)`로 묶거나 `(...args) => client.approve(...args)`로 감싼다.
+
+같은 계열의 어댑터가 여럿 있다. `stream.Readable.fromWeb()`과 `Readable.toWeb()`은 Node.js 17부터 Node 스트림과 웹 표준 스트림을 서로 바꾼다. `fetch`의 `res.body`(웹 스트림)를 Node 스트림만 받는 라이브러리에 넘길 때 쓴다. Go의 `http.HandlerFunc`는 공식 문서가 "보통 함수를 HTTP 핸들러로 쓰게 해 주는 어댑터"라고 소개한다. `func(w, r)` 모양의 함수를 `ServeHTTP` 메서드를 가진 `Handler` 인터페이스로 바꿔 준다.
+
+## 매일 지나가는 어댑터
+
+axios는 실제로 요청을 보내는 부분을 어댑터라고 부른다. 브라우저에서는 XHR 어댑터, Node.js에서는 http 어댑터를 쓰고, 1.7부터는 fetch 어댑터도 고를 수 있다. 앱은 `axios.get()` 하나만 쓰고 그 아래가 바뀐다. 이 차이는 [fetch](/posts/browser-fetch) 글에서 비교했다. Spring MVC의 `HandlerAdapter`는 모양이 제각각인 핸들러(애노테이션 컨트롤러, 옛 `Controller` 인터페이스, `HttpRequestHandler`)를 DispatcherServlet이 같은 방식으로 부를 수 있게 한다. 요청 흐름은 [MVC 패턴](/posts/mvc-pattern) 글에 있다. 자바의 `InputStreamReader`는 바이트 스트림을 문자 스트림으로 바꾸는 고전적인 예다.
+
+프런트엔드에서는 명령형 라이브러리를 리액트 컴포넌트로 감쌀 때 어댑터를 만든다. 지도나 차트 라이브러리는 `map.setCenter()`처럼 명령으로 움직이는데, 리액트는 props로 상태를 선언한다. 감싸는 컴포넌트가 `useEffect` 안에서 props가 바뀔 때마다 명령을 부르면, 바깥에서는 `<Map center={...} />`라는 선언형 모양만 보인다.
+
+쿠버네티스에도 같은 이름의 패턴이 있다. 자기 형식으로만 상태를 내놓는 오래된 앱 옆에 exporter 컨테이너를 두고, Prometheus가 읽을 수 있는 `/metrics`로 바꿔 내놓는 어댑터 컨테이너다. 이건 [멀티 컨테이너 Pod](/posts/k8s-pod-multicontainer) 글에서 다뤘다.
+
+## 어댑터를 바꾸기 전에 계약 테스트부터
+
+처음 장면의 사고는 테스트가 있었다면 배포 전에 잡혔다. 어댑터를 여러 개 두는 구조에서는 같은 테스트를 모든 어댑터에 돌리는 계약 테스트가 잘 맞는다. 테스트는 Target 인터페이스의 약속만 검사하고, 어댑터 목록을 돌며 같은 검사를 반복한다.
+
+```ts
+const adapters: [string, (s: Writable) => Logger, string][] = [
+  ["winston", (s) => new WinstonLogger(winston.createLogger({ format: winston.format.json(), transports: [new winston.transports.Stream({ stream: s })] })), "message"],
+  ["pino", (s) => new PinoLogger(pino({ base: undefined }, s)), "msg"],
+];
+
+// 같은 계약 테스트를 모든 어댑터에 돌린다
+for (const [name, make, msgKey] of adapters) {
+  describe(`${name} adapter`, () => {
+    test("메시지와 메타데이터가 함께 남는다", async () => {
+      const { lines, stream } = memory(); // 출력 줄을 배열에 모으는 가짜 스트림
+      make(stream).info("결제 실패", { orderId: "A-1042" });
+      await new Promise((r) => setImmediate(r));
+      assert.equal(lines[0][msgKey], "결제 실패");
+      assert.equal(lines[0].orderId, "A-1042");
+    });
+  });
+}
+```
+
+pino 어댑터를 처음 장면처럼 인자 순서 그대로 넘기게 만들어 두고 돌려 봤다.
+
+```bash
+# Node.js 22에서 TypeScript 테스트를 바로 돌린다
+node --experimental-transform-types --no-warnings --test --test-reporter=spec naive.test.ts
+```
+
+```text
+▶ winston adapter
+  ✔ 메시지와 메타데이터가 함께 남는다 (7.886682ms)
+✔ winston adapter (8.920711ms)
+▶ pino adapter
+  ✖ 메시지와 메타데이터가 함께 남는다 (4.730878ms)
+✖ pino adapter (5.682842ms)
+ℹ tests 2
+ℹ pass 1
+ℹ fail 1
+
+✖ failing tests:
+
+test at naive.test.ts:28:5
+✖ 메시지와 메타데이터가 함께 남는다 (4.730878ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + undefined
+  - 'A-1042'
+```
+
+`orderId`가 `undefined`로 나왔다. 순서를 뒤집은 `PinoLogger`로 바꾸면 두 어댑터 모두 통과한다. 이 테스트는 진짜 pino와 winston을 쓰되 출력만 메모리로 받는다. 라이브러리를 가짜로 바꿔 치면 "pino가 실제로 이 인자를 어떻게 다루는가"를 검사하지 못한다. 어댑터 테스트의 목적이 바로 그 검사라서, Adaptee만큼은 진짜를 쓰는 편이 낫다.
+
+## 비슷한 구조 패턴과 헷갈릴 때
+
+어댑터, 데코레이터, 프록시는 모두 다른 객체를 감싸고 호출을 넘긴다. 코드 모양이 거의 같아서 구분은 의도로 한다. 면접에서 자주 묶어 묻는 부분이라 나란히 둔다.
+
+| 패턴 | 바깥에 보이는 인터페이스 | 감싸는 이유 |
+| --- | --- | --- |
+| 어댑터 | 감싼 객체와 다르다 | 맞지 않는 모양을 기대하는 모양으로 바꾼다 |
+| 데코레이터 | 감싼 객체와 같다 | 같은 모양에 기능을 덧붙인다 |
+| 프록시 | 감싼 객체와 같다 | 접근을 통제한다(지연 생성, 권한, 캐시) |
+| 퍼사드 | 새로 만든 단순한 모양 | 여러 객체를 묶어 쓰기 쉽게 한다 |
+| 브리지 | 처음부터 나눠 설계한다 | 추상과 구현을 따로 늘린다 |
+
+어댑터는 이미 있는 것을 나중에 맞추는 패턴이고, [브리지](/posts/pattern-bridge)는 처음부터 두 계층을 나눠 두는 패턴이다. 모양이 같은 인터페이스에 로깅이나 재시도를 덧붙인다면 [데코레이터](/posts/pattern-decorator)이고, 같은 모양으로 접근을 막거나 늦춘다면 [프록시](/posts/pattern-proxy)다. 여러 하위 시스템을 하나의 쉬운 입구로 묶는다면 [퍼사드](/posts/pattern-facade)다. 퍼사드와 어댑터는 둘 다 새 인터페이스를 내놓지만, 어댑터는 이미 정해진 Target에 맞추고 퍼사드는 쓰기 편한 인터페이스를 새로 정의한다.
+
+## 어댑터가 쌓일 때 생기는 일
+
+어댑터는 바깥 세계와 만나는 경계에 둔다. 도메인 주도 설계에서 말하는 부패 방지 계층(anti-corruption layer)이 이 생각이다. 바깥 시스템의 이름, 코드표, 시간 형식이 도메인 코드 안으로 스며들지 않게 경계에서 번역한다. 헥사고날 아키텍처(포트와 어댑터)는 이걸 구조 전체의 원칙으로 삼는다. 도메인이 정한 인터페이스(포트)를 바깥 기술마다 어댑터가 구현한다.
+
+조심할 점도 있다. 여러 SDK를 하나의 인터페이스로 맞추다 보면 가장 기능이 적은 SDK에 맞춰 인터페이스가 깎인다. 새 SDK만 지원하는 기능이 필요해지면 인터페이스에 옵션을 붙이고, 옛 어댑터는 그 옵션에서 "지원하지 않음"을 던지게 해 둔다. 조용히 무시하면 앞의 부분 환불 같은 사고가 난다.
+
+어댑터를 너무 일찍 만드는 것도 비용이다. 라이브러리를 바꿀 계획이 없는데 모든 라이브러리를 어댑터로 감싸면, 그 라이브러리의 문서를 읽고도 우리 인터페이스를 다시 배워야 한다. 바꿀 가능성이 크거나(결제, 메시지 발송, 로그), 바깥 모양이 도메인을 더럽히거나, 테스트에서 가짜를 끼워야 할 때 만든다. 어댑터 위에 또 어댑터를 쌓아 같은 값을 두 번 바꾸고 있다면 한쪽을 지울 때다.
+
+처음의 pino 사고로 돌아가면, 어댑터는 앱 코드 수백 곳 대신 클래스 하나에서 모양 차이를 흡수했다. 그리고 계약 테스트가 그 클래스가 정말로 차이를 흡수했는지 확인해 준다.
+
+## 면접에서 나올 만한 질문
+
+### 어댑터 패턴은 무엇인가요?
+
+이미 있는 클래스의 인터페이스를 클라이언트가 기대하는 인터페이스로 바꿔 주는 패턴이다. 클라이언트와 기존 클래스 어느 쪽도 고치지 않고, 그 사이에 변환하는 객체를 둔다. 외부 라이브러리 교체, 레거시 연동, 콜백 API를 Promise로 바꾸는 일이 대표적인 쓰임이다.
+
+### 객체 어댑터와 클래스 어댑터의 차이는요?
+
+객체 어댑터는 Adaptee를 필드로 들고 위임하고, 클래스 어댑터는 Adaptee를 상속하면서 Target을 구현한다. 클래스 어댑터는 Adaptee의 일부 동작을 재정의할 수 있지만 특정 클래스에 묶이고 Adaptee의 메서드가 바깥에 새어 나오며, 같은 이름을 재정의하면 부모 타입으로 쓰던 코드의 약속을 깰 수 있다. 단일 상속 언어에서는 객체 어댑터를 주로 쓰고 테스트하기도 쉽다.
+
+### 어댑터와 데코레이터, 프록시는 어떻게 구분하나요?
+
+셋 다 객체를 감싸지만 바깥 인터페이스와 의도가 다르다. 어댑터는 인터페이스를 다른 모양으로 바꾸고, 데코레이터는 같은 인터페이스에 기능을 덧붙이고, 프록시는 같은 인터페이스로 접근을 통제한다. 감싼 뒤 인터페이스가 바뀌면 어댑터라고 보면 된다.
+
+### 어댑터를 만들 때 흔히 하는 실수는요?
+
+이름만 맞추고 의미를 맞추지 않는 실수다. 문자열 금액, 초와 밀리초, 시간대 없는 날짜, 모르는 상태 코드를 그대로 넘기면 타입은 맞아도 값이 틀린다. 모르는 값은 기본값으로 넣지 말고 에러로 알리고, 지원하지 않는 기능은 조용히 무시하지 말고 명시적으로 실패시킨다.
+
+### util.promisify로 메서드를 감쌀 때 주의할 점은요?
+
+메서드를 꺼내 넘기면 this 연결이 끊긴다. 변환된 함수가 원래 메서드를 부를 때 this가 undefined라서, 메서드 안에서 this의 필드를 읽다가 TypeError가 난다. bind로 원래 객체에 묶거나 화살표 함수로 감싸서 넘긴다.
+
+### 어댑터는 어떻게 테스트하나요?
+
+Target 인터페이스의 약속을 검사하는 계약 테스트를 만들고 모든 어댑터에 같은 테스트를 돌린다. 이때 Adaptee는 가짜로 바꾸지 않고 진짜 라이브러리를 쓰되 출력이나 네트워크만 가로챈다. 어댑터 테스트의 목적이 실제 라이브러리가 인자를 어떻게 다루는지 확인하는 데 있기 때문이다.
+
+### 모든 외부 라이브러리를 어댑터로 감싸야 하나요?
+
+아니다. 바꿀 가능성이 크거나, 바깥 모양이 도메인 코드에 스며들거나, 테스트에서 가짜를 끼워야 하는 경계에만 둔다. 바꿀 계획이 없는 라이브러리까지 감싸면 문서와 다른 우리만의 인터페이스를 하나 더 배워야 하는 비용만 생긴다.

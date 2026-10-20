@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 186편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 190편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -30,7 +30,7 @@
 - 소제목: 요청 하나가 지나가는 길 / 원래 MVC는 웹을 위한 게 아니었다 / HTTP 위로 옮기면서 생긴 변화 / 컨트롤러가 뚱뚱해지는 이유 / 업무 규칙은 서비스와 모델에 둔다 / MVP와 MVVM은 무엇을 바꿨나 / 브라우저로 옮겨 온 MVC와 양방향 바인딩의 한계 / 서비스가 커지면 계층보다 기능으로 나눈다 / 경계가 무너진 코드는 장애 문의로 돌아온다 / 다시 쿠폰 입력칸으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-locking-deadlock
 - 키워드 백링크 →: client-data-cache, loading-patterns, http-status-codes, gateway
-- 이 글로 오는 글 ←: design-patterns-overview
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter
 
 #### `rest-api-design` — REST API를 설계할 때 정할 것들
 
@@ -76,7 +76,7 @@
 - 소제목: 확인하고 넣으면 둘 다 통과한다 / 키 한 줄에 담는 것 / 선점하고, 작업하고, 응답을 적는다 / 키 하나가 거치는 상태 / 처리 도중에 서버가 죽으면 / 트랜잭션 하나로 묶으면 기다리게 된다 / 바깥 결제사를 부르는 단계가 끼면 / 어떤 응답을 저장할지 / 키는 누가, 언제 만드나 / 키 말고도 중복을 막는 방법 / 운영에서 이런 증상을 보면 / 키 저장소가 정확해야 재시도가 안전하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, http-methods, rest-api-design, distributed-lock, sql-batch-timeout-pool
 - 키워드 백링크 →: postgres-advanced-sql, redis-basics, http-status-codes, db-modeling-normalization
-- 이 글로 오는 글 ←: batch-processing, circuit-breaker, distributed-lock, rate-limiting-in-practice, resilience-patterns, retries
+- 이 글로 오는 글 ←: batch-processing, circuit-breaker, distributed-lock, pattern-builder, rate-limiting-in-practice, resilience-patterns, retries
 
 #### `rate-limiting-in-practice` — 요청 수 제한을 API에 붙이기: 키, 429, 장애 대응
 
@@ -479,7 +479,7 @@
 - 소제목: 같은 주문을 여러 모양으로 저장하기 / 무엇으로 찾는지가 먼저다 / 빠른 이유는 저마다 하나씩 / 질문 여섯 개로 서점의 저장소 고르기 / 원본에서 사본으로 흘러가는 길 / 시리즈 지도 / 모양과 질문을 먼저 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, db-type-time-series, db-type-columnar-olap, db-type-newsql, db-type-embedded, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
 - 키워드 백링크 →: db-index
-- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series
+- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series, pattern-prototype
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
@@ -791,7 +791,7 @@
 - 소제목: 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 쿼리 바깥에서 새는 시간 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, sql-query-rewrite, db-index, sql-insert-update-delete, connection-pool
 - 키워드 백링크 →: pessimistic-locking, postgres-mvcc-vacuum, db-architecture-by-scale, postgres-getting-started
-- 이 글로 오는 글 ←: batch-processing, circuit-breaker, connection-pool, db-architecture-by-scale, db-replication-sharding, design-patterns-overview, dns, idempotency-key, iptables-nat, latency-bandwidth-throughput, pattern-abstract-factory, pattern-singleton, pessimistic-locking, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, resilience-patterns, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle, timeouts
+- 이 글로 오는 글 ←: batch-processing, circuit-breaker, connection-pool, db-architecture-by-scale, db-replication-sharding, design-patterns-overview, dns, idempotency-key, iptables-nat, latency-bandwidth-throughput, pattern-abstract-factory, pattern-bridge, pattern-singleton, pessimistic-locking, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, resilience-patterns, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle, timeouts
 
 #### `sql-insert-update-delete` — 행 넣고 고치고 지우기: UPSERT, 트랜잭션, TRUNCATE
 
@@ -988,9 +988,9 @@
 - 키워드: 디자인 패턴, GoF, 상속보다 합성
 - 길이: 305줄
 - 소제목: 반복되는 문제에 붙인 이름 / 스물세 개를 세 갈래로 나눈 기준 / 두 문장으로 줄이면 / 이미 매일 쓰고 있는 패턴 / 함수가 있으면 사라지는 패턴도 있다 / 패턴을 꺼내기 전에 / 면접에서 나올 만한 질문
-- 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, mvc-pattern, resilience-patterns
+- 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-adapter, pattern-bridge, mvc-pattern, resilience-patterns
 - 키워드 백링크 →: loading-patterns, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: pattern-abstract-factory, pattern-factory-method, pattern-singleton
+- 이 글로 오는 글 ←: pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-factory-method, pattern-prototype, pattern-singleton
 
 ### Programming › Design Patterns › Creational (`programming/design-patterns/creational`)
 
@@ -1001,9 +1001,20 @@
 - 키워드: 추상 팩토리, Abstract Factory, 제품군
 - 길이: 430줄
 - 소제목: 따로 고르면 섞인다 / 한 벌을 통째로 만드는 객체 / 시작할 때 한 번 고르고 끝까지 쓴다 / 라이브러리 속의 추상 팩토리 / 새 벌은 쉽고 새 제품은 어렵다 / 클래스 없이 한 벌 만들기 / 팩토리 메서드와 무엇이 다른가 / 배포 전에 한 벌을 확인한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: pattern-factory-method, pattern-singleton
+- 직접 링크 →: pattern-factory-method, pattern-singleton, pattern-builder
 - 키워드 백링크 →: k8s-pod-probes, sql-batch-timeout-pool, design-patterns-overview
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-factory-method, vpn-ipsec-wireguard
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-bridge, pattern-builder, pattern-factory-method, pattern-prototype, vpn-ipsec-wireguard
+
+#### `pattern-builder` — 빌더 패턴: 인자 여덟 개짜리 생성자를 단계로 나누기
+
+- 요약: 위치로 넘기던 생성자 인자를 이름 붙은 단계로 바꾸고, 필드 사이의 규칙을 build 한곳에서 검사한다. 가변 빌더를 나눠 쓰면 설정이 섞이는 함정과 스텝 빌더, 테스트 데이터 빌더까지 본다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript
+- 키워드: 빌더 패턴, 플루언트 인터페이스, 테스트 데이터 빌더
+- 길이: 565줄
+- 소제목: false, false가 무엇인지 아무도 모른다 / 객체 리터럴로 모자라는 순간 / 한 단계씩 쌓고 build에서 검사한다 / GoF의 빌더에는 감독이 있다 / 매일 쓰는 빌더들 / 빌더를 재사용했더니 헤더가 섞였다 / 직접 만들어 보는 쿼리 빌더 / 빠뜨린 단계를 컴파일러가 잡게 하기 / 테스트 데이터를 만드는 빌더 / 빌더가 짐이 되는 경우 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, idempotency-key, pattern-abstract-factory, pattern-factory-method, pattern-prototype
+- 키워드 백링크 →: resilience-patterns, http-methods
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-factory-method, pattern-prototype
 
 #### `pattern-factory-method` — 팩토리 메서드 패턴: new가 박힌 자리를 바꿔 끼우기
 
@@ -1012,8 +1023,19 @@
 - 키워드: 팩토리 메서드, Factory Method, 정적 팩토리 메서드
 - 길이: 388줄
 - 소제목: new가 박힌 자리를 메서드로 바꾼다 / 이름이 비슷한 세 가지 / 매일 쓰는 팩토리 메서드 / 상속 대신 함수를 넘기면 / 채널 하나를 추가할 때 고치는 곳 / 모르는 채널은 시작할 때 막는다 / 테스트에서 가짜 채널 끼우기 / 팩토리 메서드가 과한 경우 / 면접에서 나올 만한 질문
-- 직접 링크 →: design-patterns-overview, pattern-abstract-factory
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-singleton
+- 직접 링크 →: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-prototype
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-singleton
+
+#### `pattern-prototype` — 프로토타입 패턴: 클래스를 몰라도 복제해서 만든다
+
+- 요약: 복제를 객체 자신의 clone()에 맡겨 구체 클래스를 몰라도 사본을 만든다. 얕은 복사 사고, JSON과 structuredClone이 잃는 것, 복제가 정말 빠른지를 직접 재 본다.
+- 태그: Design Pattern, OOP, TypeScript, JavaScript, Performance
+- 키워드: 프로토타입 패턴, structuredClone, 깊은 복사
+- 길이: 509줄
+- 소제목: 복사할 줄 아는 건 객체 자신이다 / 자바스크립트의 프로토타입과는 다른 이야기 / 얕은 복사가 기본값을 오염시킨다 / 깊은 복사 도구마다 잃어버리는 것 / 클래스 인스턴스는 스스로 복제해야 한다 / 원본을 등록해 두고 꺼내 쓰기 / 복제가 정말 빠른가 / 매일 쓰는 복제 / 직접 만드는 깊은 복사 / 복제가 맞지 않는 객체 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, pattern-abstract-factory, browser-fetch, json-crud-http, pattern-builder, pattern-factory-method
+- 키워드 백링크 →: k8s-pod-basics, db-types-overview
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-factory-method
 
 #### `pattern-singleton` — 싱글턴 패턴: 하나만 만들기보다 어려운 하나 지키기
 
@@ -1025,6 +1047,30 @@
 - 직접 링크 →: design-patterns-overview, micro-frontends, rate-limiting-in-practice, redis-basics, rendering-ssr, pattern-factory-method
 - 키워드 백링크 →: sql-batch-timeout-pool
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory
+
+### Programming › Design Patterns › Structural (`programming/design-patterns/structural`)
+
+#### `pattern-adapter` — 어댑터 패턴: 맞지 않는 인터페이스 사이에 끼우는 변환기
+
+- 요약: 앱이 기대하는 모양과 라이브러리의 모양 사이에 변환기를 끼워 앱 코드를 고치지 않고 교체한다. 인자 순서, 단위, 시간대처럼 이름 뒤에 숨은 차이와 계약 테스트로 확인하는 법을 다룬다.
+- 태그: Design Pattern, OOP, TypeScript, Node.js
+- 키워드: 어댑터 패턴, 부패 방지 계층
+- 길이: 445줄
+- 소제목: 모양이 다른 플러그에 끼우는 변환기 / 객체 어댑터와 클래스 어댑터 / 이름만 바꾸는 게 아니다 / 콜백을 Promise로 바꾸는 것도 어댑터다 / 매일 지나가는 어댑터 / 어댑터를 바꾸기 전에 계약 테스트부터 / 비슷한 구조 패턴과 헷갈릴 때 / 어댑터가 쌓일 때 생기는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, browser-fetch, mvc-pattern, k8s-pod-multicontainer, pattern-bridge
+- 키워드 백링크 →: http-status-codes
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-bridge
+
+#### `pattern-bridge` — 브리지 패턴: 두 방향으로 늘어나는 클래스를 둘로 나누기
+
+- 요약: 서로 상관없이 바뀌는 두 축을 상속 하나로 묶으면 클래스가 곱으로 는다. 무엇을 할지와 어떻게 할지를 두 계층으로 나누고, Go slog, 리액트 렌더러, database/sql에서 같은 구조를 찾아본다.
+- 태그: Design Pattern, OOP, TypeScript, React
+- 키워드: 브리지 패턴, pimpl
+- 길이: 427줄
+- 소제목: 두 방향으로 갈라지는 상속 / 무엇을 그릴지와 어떻게 그릴지를 떼어 놓는다 / 여기서 말하는 구현은 implements가 아니다 / Go의 slog가 나눠 놓은 두 쪽 / 렌더러를 바꿔 끼우는 프레임워크들 / 가짜 렌더러로 차트 로직만 테스트하기 / 직접 늘려 보는 두 축 / 전략, 어댑터와 무엇이 다른가 / 미리 나눴다가 후회하는 경우 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-patterns-overview, react-rerender, pattern-adapter, pattern-abstract-factory
+- 키워드 백링크 →: sql-batch-timeout-pool
+- 이 글로 오는 글 ←: design-patterns-overview, pattern-adapter
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -1073,7 +1119,7 @@
 - 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 에러 수집기에 Failed to fetch만 쌓일 때 / 다시 처음 코드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn, network-troubleshooting-by-layer
 - 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, rendering-csr-spa, dns
-- 이 글로 오는 글 ←: client-data-cache, distributed-lock, html-form-http, http-versions, json-crud-http, load-balancer-basics, nginx-reverse-proxy, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard
+- 이 글로 오는 글 ←: client-data-cache, distributed-lock, html-form-http, http-versions, json-crud-http, load-balancer-basics, nginx-reverse-proxy, pattern-adapter, pattern-prototype, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard
 
 #### `event-loop` — 자바스크립트 이벤트 루프: 브라우저와 Node.js
 
@@ -1153,7 +1199,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals
-- 이 글로 오는 글 ←: client-data-cache, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, pattern-bridge, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -1447,7 +1493,7 @@
 - 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 프록시는 멱등성을 보고 재시도를 고른다 / 다시 메일 링크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes, nginx-reverse-proxy
 - 키워드 백링크 →: json-crud-http, elasticsearch-inverted-index, gateway, client-data-cache, what-happens-google-com
-- 이 글로 오는 글 ←: batch-processing, browser-fetch, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, idempotency-key, json-crud-http, microservices, nginx-reverse-proxy, resilience-patterns, rest-api-design, retries
+- 이 글로 오는 글 ←: batch-processing, browser-fetch, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, idempotency-key, json-crud-http, microservices, nginx-reverse-proxy, pattern-builder, resilience-patterns, rest-api-design, retries
 
 #### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
 
@@ -1458,7 +1504,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / access.log에서 5xx를 갈라 보기 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, nginx-reverse-proxy, network-troubleshooting-by-layer, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, db-locking-deadlock, http-versions, osi-in-practice, what-happens-google-com, dns
-- 이 글로 오는 글 ←: browser-fetch, cors, db-type-time-series, html-form-http, http-message, http-methods, http-versions, idempotency-key, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, optimistic-locking, osi-in-practice, proxy-reverse-proxy, rate-limiting-in-practice, realtime-communication, rendering-csr-spa, rendering-ssr, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship, streaming-ssr-suspense, what-happens-google-com
+- 이 글로 오는 글 ←: browser-fetch, cors, db-type-time-series, html-form-http, http-message, http-methods, http-versions, idempotency-key, json-crud-http, kubernetes-ingress, layer-mtu-fragmentation, mvc-pattern, network-layers-overview, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, optimistic-locking, osi-in-practice, pattern-adapter, proxy-reverse-proxy, rate-limiting-in-practice, realtime-communication, rendering-csr-spa, rendering-ssr, rendering-strategies, rest-api-design, sqld-entity-attribute-relationship, streaming-ssr-suspense, what-happens-google-com
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -1480,7 +1526,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, pattern-prototype, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, upper-layers-session-presentation-app
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -1871,7 +1917,7 @@
 - 소제목: 컨테이너 대신 Pod를 만드는 이유 / 한 Pod 안에서 나눠 갖는 것 / pause 컨테이너가 붙잡고 있는 것 / kubectl run 한 줄이 지나가는 길 / 매니페스트 한 줄씩 읽기 / 띄우고, 들여다보고, 지우기 / 직접 만든 Pod는 아무도 다시 살려 주지 않는다 / 한 Pod에 무엇을 같이 넣나 / Pod를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-resources, k8s-pod-troubleshooting, k8s-pod-lifecycle, iptables-nat, helm-basics, k8s-pod-multicontainer, docker-container-basics
 - 키워드 백링크 →: k8s-pod-scheduling, kubernetes-ingress, db-type-key-value
-- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling
+- 이 글로 오는 글 ←: helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-scheduling, pattern-prototype
 
 #### `k8s-pod-lifecycle` — Pod의 일생: Pending부터 종료까지
 
@@ -1893,7 +1939,7 @@
 - 소제목: 한 Pod에 함께 두는 세 가지 모양 / 로그 사이드카를 붙일 때 챙길 것 / 일반 컨테이너끼리는 순서가 없다 / init 컨테이너는 끝나야 다음으로 간다 / 네이티브 사이드카는 init 자리에서 계속 돈다 / Job이 끝나지 않는 이유 / 사이드카도 자리를 차지한다 / 컨테이너를 골라서 들여다본다 / 언제 컨테이너를 더 붙이나 / 여러 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-basics, k8s-pod-resources, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-lifecycle
+- 이 글로 오는 글 ←: k8s-pod-basics, k8s-pod-lifecycle, pattern-adapter
 
 #### `k8s-pod-probes` — liveness·readiness·startup 프로브: 잘못 걸면 장애가 된다
 
@@ -2062,7 +2108,7 @@
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: timeouts, retries, exponential-backoff-jitter, idempotency-key, circuit-breaker, gateway
 - 키워드 백링크 →: client-data-cache, latency-bandwidth-throughput, osi-in-practice, sql-batch-timeout-pool, http-methods
-- 이 글로 오는 글 ←: batch-processing, browser-fetch, caching-strategies, circuit-breaker, design-patterns-overview, distributed-lock, exponential-backoff-jitter, gateway, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, json-crud-http, k8s-pod-probes, microservices, nginx-reverse-proxy, optimistic-locking, osi-in-practice, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, timeouts
+- 이 글로 오는 글 ←: batch-processing, browser-fetch, caching-strategies, circuit-breaker, design-patterns-overview, distributed-lock, exponential-backoff-jitter, gateway, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, json-crud-http, k8s-pod-probes, microservices, nginx-reverse-proxy, optimistic-locking, osi-in-practice, pattern-builder, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, timeouts
 
 #### `retries` — 재시도는 공짜가 아니다: 무엇을, 몇 번, 어디서 다시 보내나
 
@@ -2144,6 +2190,7 @@
 - 교착 상태 → `db-locking-deadlock`
 - 권한 있는 네임서버 → `dns`
 - 그래프 DB → `db-type-graph`
+- 깊은 복사 → `pattern-prototype`
 - 낙관적 업데이트 → `client-data-cache`
 - 낙관적 잠금 → `db-locking-deadlock`
 - 내용 주소 지정 → `git-internals-basics`
@@ -2218,12 +2265,15 @@
 - 부분 유니크 인덱스 → `db-keys-denormalization`
 - 부분 인덱스 → `db-index-design`
 - 부분 clone → `git-remote-collaboration`
+- 부패 방지 계층 → `pattern-adapter`
 - 분산 락 → `redis-basics`
 - 분산 SQL → `db-type-newsql`
 - 분할 상환 → `big-o-notation`
+- 브리지 패턴 → `pattern-bridge`
 - 비관적 잠금 → `db-locking-deadlock`
 - 비식별 관계 → `sqld-entity-attribute-relationship`
 - 빈약한 도메인 모델 → `mvc-pattern`
+- 빌더 패턴 → `pattern-builder`
 - 빌드 캐시 → `dockerfile-image-layers`
 - 사가 패턴 → `microservices`
 - 사설 대역 → `layer-ip-addressing`
@@ -2266,6 +2316,7 @@
 - 애니캐스트 → `cdn-edge-anycast`
 - 액세스 토큰 → `token-login`
 - 얕은 clone → `git-remote-collaboration`
+- 어댑터 패턴 → `pattern-adapter`
 - 언더레이 → `sdn-vxlan-overlay`
 - 엣지 PoP → `cdn-edge-anycast`
 - 역색인 → `elasticsearch-inverted-index`
@@ -2352,6 +2403,7 @@
 - 키셋 페이지네이션 → `sql-query-rewrite`
 - 킬 스위치 → `ab-testing`
 - 태스크 큐 → `event-loop`
+- 테스트 데이터 빌더 → `pattern-builder`
 - 툼스톤 → `db-type-wide-column`
 - 트래픽 셰이핑 → `traffic-shaping-qos`
 - 트랜잭셔널 아웃박스 → `microservices`
@@ -2372,7 +2424,9 @@
 - 표현 계층 → `upper-layers-session-presentation-app`
 - 풀 고갈 → `connection-pool`
 - 프라이빗 서브넷 → `vpc-subnets-route-tables`
+- 프로토타입 패턴 → `pattern-prototype`
 - 프론트 컨트롤러 → `mvc-pattern`
+- 플루언트 인터페이스 → `pattern-builder`
 - 피처 플래그 → `ab-testing`
 - 피타고라스 수 → `pythagorean-theorem`
 - 피타고라스 정리 → `pythagorean-theorem`
@@ -2687,6 +2741,7 @@
 - pg_trgm → `postgres-jsonb-search`
 - pg_upgrade → `postgres-operations`
 - PgBouncer → `db-architecture-by-scale`
+- pimpl → `pattern-bridge`
 - PITR → `postgres-operations`
 - PIVOT → `sqld-top-n-hierarchical-pivot`
 - PKCE → `oauth`
@@ -2786,6 +2841,7 @@
 - startupProbe → `k8s-pod-probes`
 - statement_timeout → `sql-batch-timeout-pool`
 - sticky session → `load-balancer-basics`
+- structuredClone → `pattern-prototype`
 - SUBSTR → `sqld-single-row-functions`
 - suppressHydrationWarning → `hydration`
 - Suspense 경계 → `streaming-ssr-suspense`
@@ -2857,50 +2913,59 @@
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
 - `k8s-pod-basics` ↔ `docker-container-basics` (26%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, container)
-- `db-index-pitfalls` ↔ `db-index-design` (21%: 100만, 인덱스는, 인덱스를, index)
-- `db-index-pitfalls` ↔ `db-index` (21%: 100만, 인덱스가, 인덱스를, index)
-- `pattern-abstract-factory` ↔ `pattern-factory-method` (21%: 시작할, 팩토리, pattern, oop, typescript, 패턴)
+- `pattern-bridge` ↔ `pattern-factory-method` (22%: 상속, 바꿔, 가짜, pattern, oop, typescript)
+- `db-index-pitfalls` ↔ `db-index-design` (20%: 100만, 인덱스는, 인덱스를, index)
+- `db-index-pitfalls` ↔ `db-index` (20%: 100만, 인덱스가, 인덱스를, index)
+- `pattern-adapter` ↔ `pattern-prototype` (19%: 객체, 클래스, pattern, oop, typescript, 맞지)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (19%: ssr, next.js, 스트리밍, ssr과, 준비된, 부분부터)
-- `db-partitioning` ↔ `db-type-time-series` (19%: 오래된, 통째로, 키가)
-- `db-partitioning` ↔ `db-modeling-normalization` (19%: 테이블을, 떼어, 키가)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
-- `pattern-factory-method` ↔ `design-patterns-overview` (18%: 매일, pattern, oop, typescript, 패턴)
-- `pattern-singleton` ↔ `design-patterns-overview` (18%: 이미, pattern, oop, typescript, 패턴)
+- `pattern-abstract-factory` ↔ `pattern-factory-method` (19%: 시작할, 팩토리, pattern, oop, typescript)
 - `consistent-hashing` ↔ `redis-cluster` (18%: 키를, 노드, 해시)
 - `redis-cluster` ↔ `db-sharding` (18%: 키를, 나누는, 해시)
-- `pattern-abstract-factory` ↔ `pattern-singleton` (17%: 섞인다, pattern, oop, typescript, 패턴)
-- `vpc-peering-transit-privatelink` ↔ `vpc-basics` (17%: vpc, 없다, 장면으로, aws, cloud)
+- `sqld-null-functions` ↔ `sqld-single-row-functions` (17%: 글에서, 사원, 함수, oracle)
+- `pattern-adapter` ↔ `pattern-abstract-factory` (17%: 객체, 클래스, pattern, oop, typescript)
+- `pattern-prototype` ↔ `pattern-abstract-factory` (17%: 객체, 클래스, pattern, oop, typescript)
+- `db-type-key-value` ↔ `db-type-graph` (16%: 맞는, 곳과, 아닌, 관계형, nosql)
+- `sqld-null-functions` ↔ `sql-select-where-null` (16%: null은, 값이, null, 다루기)
 - `exponential-backoff-jitter` ↔ `resilience-patterns` (16%: 재시도, resilience, 지수, 백오프와, 지터, 보내기)
-- `db-index-pitfalls` ↔ `db-type-wide-column` (16%: 쓰기를, 것도, 대가)
+- `db-partitioning` ↔ `db-type-time-series` (16%: 오래된, 통째로, 키가)
+- `db-partitioning` ↔ `db-type-key-value` (16%: 맞는, 파티션, scalability)
+- `db-partitioning` ↔ `db-modeling-normalization` (16%: 테이블을, 떼어, 키가)
+- `db-partitioning` ↔ `db-architecture-by-scale` (16%: 떼어, 낸다, scalability)
+- `pattern-bridge` ↔ `pattern-adapter` (16%: 끼우는, 어댑터와, pattern, oop, typescript)
+- `vpc-peering-transit-privatelink` ↔ `vpc-basics` (16%: vpc, 없다, 장면으로, aws, cloud)
 - `db-locking-deadlock` ↔ `db-transaction-isolation` (15%: 트랜잭션이, sqld에서, 묻는, transaction, concurrency)
+- `db-index-pitfalls` ↔ `db-type-wide-column` (15%: 쓰기를, 것도, 대가)
+- `pattern-adapter` ↔ `pattern-factory-method` (15%: 비슷한, pattern, oop, typescript)
+- `pattern-abstract-factory` ↔ `design-patterns-overview` (15%: pattern, oop, typescript, architecture)
+- `pattern-singleton` ↔ `design-patterns-overview` (15%: 이미, pattern, oop, typescript)
+- `security-groups-nacl` ↔ `iptables-basics` (15%: 연결을, firewall, 기억하는, 방화벽)
 - `packet-capture-tcpdump` ↔ `db-index` (15%: 처음부터, 끝까지, 줄을, 필요한)
-- `db-types-overview` ↔ `redis-basics` (15%: 빠른, 이유는, 하나씩, nosql)
 - `git-branch-merge` ↔ `git-remote-collaboration` (15%: 브랜치는, 브랜치를, 지운다, 원격)
-- `pattern-abstract-factory` ↔ `design-patterns-overview` (14%: pattern, oop, typescript, 패턴)
 - `vpc-subnets-route-tables` ↔ `vpc-basics` (14%: 서브넷의, 개로, 나눌까, aws, cloud, vpc)
-- `sqld-null-functions` ↔ `sql-select-where-null` (14%: null은, null, 다루기)
-- `sqld-null-functions` ↔ `sqld-single-row-functions` (14%: 글에서, 사원, oracle)
-- `pattern-factory-method` ↔ `pattern-singleton` (14%: pattern, oop, typescript, 패턴)
-- `db-type-key-value` ↔ `db-type-graph` (14%: 곳과, 아닌, 관계형, nosql)
-- `sqld-single-row-functions` ↔ `json-crud-http` (14%: 날짜는, 조용히, 숫자)
+- `db-types-overview` ↔ `redis-basics` (14%: 빠른, 이유는, 하나씩, nosql)
+- `load-balancing-algorithms` ↔ `load-balancer-basics` (14%: 서버로, 서버를, load, balancer, 로드)
+- `nginx-reverse-proxy` ↔ `proxy-reverse-proxy` (14%: proxy, 진짜, 리버스, 프록시와, 로드)
+- `proxy-reverse-proxy` ↔ `gateway` (14%: 프록시와, 리버스, 로드, 밸런서, 게이트웨이)
+- `pattern-builder` ↔ `pattern-abstract-factory` (13%: 객체, pattern, oop, typescript)
+- `pattern-abstract-factory` ↔ `pattern-singleton` (13%: 섞인다, pattern, oop, typescript)
+- `proxy-reverse-proxy` ↔ `kubernetes-ingress` (13%: https는, 로드, 밸런서, tls)
 - `circuit-breaker` ↔ `resilience-patterns` (13%: 타임아웃, 회로를, resilience, 서킷, 브레이커)
-- `retries` ↔ `resilience-patterns` (13%: 보내도, 타임아웃, 재시도, resilience)
-- `connection-pool` ↔ `sql-batch-timeout-pool` (13%: 연결은, 커넥션, 비용)
-- `vlan-basics` ↔ `ports-and-sockets` (13%: 포트와, 포트, 어느)
-- `vlan-basics` ↔ `layer-link-ethernet-arp` (13%: 스위치, vlan, 망으로)
-- `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (13%: 밖에서, 요청마다, next.js, ssr)
-- `postgres-connections-pg-hba` ↔ `osi-in-practice` (13%: 에러, 알려, 준다)
-- `postgres-connections-pg-hba` ↔ `postgres-roles-security` (13%: pg, 들어오는, 지나는)
-- `sql-batch-timeout-pool` ↔ `db-architecture-by-scale` (13%: 묶어서, 연결은, 풀로)
-- `sql-insert-update-delete` ↔ `db-transaction-isolation` (13%: commit, rollback, 트랜잭션이, transaction)
-- `vpn-ipsec-wireguard` ↔ `vpc-basics` (12%: 남의, 패킷, 안에, 지나는, 없다)
-- `optimistic-locking` ↔ `db-locking-deadlock` (12%: update, concurrency, transaction, 잠금)
-- `db-locking-deadlock` ↔ `postgres-mvcc-vacuum` (12%: 막는, 남기는, 트랜잭션, update)
+- `sqld-single-row-functions` ↔ `json-crud-http` (13%: 날짜는, 조용히, 숫자)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `pattern-bridge` ↔ `pattern-adapter`
+- `pattern-bridge` ↔ `design-patterns-overview`
+- `pattern-adapter` ↔ `design-patterns-overview`
+- `pattern-prototype` ↔ `pattern-builder`
+- `pattern-prototype` ↔ `pattern-factory-method`
+- `pattern-prototype` ↔ `design-patterns-overview`
+- `pattern-builder` ↔ `pattern-abstract-factory`
+- `pattern-builder` ↔ `pattern-factory-method`
+- `pattern-builder` ↔ `design-patterns-overview`
 - `exponential-backoff-jitter` ↔ `retries`
 - `exponential-backoff-jitter` ↔ `timeouts`
 - `exponential-backoff-jitter` ↔ `caching-strategies`

@@ -2,6 +2,56 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "pattern-bridge": {
+    "links": [
+      "design-patterns-overview",
+      "react-rerender",
+      "pattern-adapter",
+      "pattern-abstract-factory"
+    ],
+    "mentions": [
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "pattern-adapter": {
+    "links": [
+      "design-patterns-overview",
+      "browser-fetch",
+      "mvc-pattern",
+      "k8s-pod-multicontainer",
+      "pattern-bridge"
+    ],
+    "mentions": [
+      "http-status-codes"
+    ]
+  },
+  "pattern-prototype": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-abstract-factory",
+      "browser-fetch",
+      "json-crud-http",
+      "pattern-builder",
+      "pattern-factory-method"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "db-types-overview"
+    ]
+  },
+  "pattern-builder": {
+    "links": [
+      "design-patterns-overview",
+      "idempotency-key",
+      "pattern-abstract-factory",
+      "pattern-factory-method",
+      "pattern-prototype"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
   "exponential-backoff-jitter": {
     "links": [
       "resilience-patterns",
@@ -153,7 +203,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pattern-abstract-factory": {
     "links": [
       "pattern-factory-method",
-      "pattern-singleton"
+      "pattern-singleton",
+      "pattern-builder"
     ],
     "mentions": [
       "k8s-pod-probes",
@@ -164,7 +215,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pattern-factory-method": {
     "links": [
       "design-patterns-overview",
-      "pattern-abstract-factory"
+      "pattern-abstract-factory",
+      "pattern-builder",
+      "pattern-prototype"
     ],
     "mentions": []
   },
@@ -186,6 +239,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-singleton",
       "pattern-factory-method",
       "pattern-abstract-factory",
+      "pattern-builder",
+      "pattern-prototype",
+      "pattern-adapter",
+      "pattern-bridge",
       "mvc-pattern",
       "resilience-patterns"
     ],

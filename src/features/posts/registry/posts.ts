@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "pattern-bridge",
+    title: "브리지 패턴: 두 방향으로 늘어나는 클래스를 둘로 나누기",
+    summary: "서로 상관없이 바뀌는 두 축을 상속 하나로 묶으면 클래스가 곱으로 는다. 무엇을 할지와 어떻게 할지를 두 계층으로 나누고, Go slog, 리액트 렌더러, database/sql에서 같은 구조를 찾아본다.",
+    topic: "programming/design-patterns/structural",
+    tags: ["Design Pattern", "OOP", "TypeScript", "React"],
+    date: "2026-10-21",
+    keywords: ["브리지 패턴", "pimpl"],
+  },
+  {
+    slug: "pattern-adapter",
+    title: "어댑터 패턴: 맞지 않는 인터페이스 사이에 끼우는 변환기",
+    summary: "앱이 기대하는 모양과 라이브러리의 모양 사이에 변환기를 끼워 앱 코드를 고치지 않고 교체한다. 인자 순서, 단위, 시간대처럼 이름 뒤에 숨은 차이와 계약 테스트로 확인하는 법을 다룬다.",
+    topic: "programming/design-patterns/structural",
+    tags: ["Design Pattern", "OOP", "TypeScript", "Node.js"],
+    date: "2026-10-21",
+    keywords: ["어댑터 패턴", "부패 방지 계층"],
+  },
+  {
+    slug: "pattern-prototype",
+    title: "프로토타입 패턴: 클래스를 몰라도 복제해서 만든다",
+    summary: "복제를 객체 자신의 clone()에 맡겨 구체 클래스를 몰라도 사본을 만든다. 얕은 복사 사고, JSON과 structuredClone이 잃는 것, 복제가 정말 빠른지를 직접 재 본다.",
+    topic: "programming/design-patterns/creational",
+    tags: ["Design Pattern", "OOP", "TypeScript", "JavaScript", "Performance"],
+    date: "2026-10-21",
+    keywords: ["프로토타입 패턴", "structuredClone", "깊은 복사"],
+  },
+  {
+    slug: "pattern-builder",
+    title: "빌더 패턴: 인자 여덟 개짜리 생성자를 단계로 나누기",
+    summary: "위치로 넘기던 생성자 인자를 이름 붙은 단계로 바꾸고, 필드 사이의 규칙을 build 한곳에서 검사한다. 가변 빌더를 나눠 쓰면 설정이 섞이는 함정과 스텝 빌더, 테스트 데이터 빌더까지 본다.",
+    topic: "programming/design-patterns/creational",
+    tags: ["Design Pattern", "OOP", "TypeScript", "JavaScript"],
+    date: "2026-10-21",
+    keywords: ["빌더 패턴", "플루언트 인터페이스", "테스트 데이터 빌더"],
+  },
+  {
     slug: "exponential-backoff-jitter",
     title: "지수 백오프와 지터: 같은 순간 실패한 클라이언트를 흩어 보내기",
     summary: "지터 없는 지수 백오프가 같은 순간 실패한 클라이언트들을 같은 박자로 되돌려 보내는 thundering herd를 클라이언트 1000개 시뮬레이션으로 재 보고, full, equal, decorrelated jitter를 비교한다. Retry-After를 따르는 법과 cron, 캐시 만료, 재시작처럼 같은 시각에 몰리는 다른 경우도 다룬다.",
