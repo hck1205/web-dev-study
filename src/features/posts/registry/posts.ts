@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "pattern-abstract-factory",
+    title: "추상 팩토리 패턴: 짝이 맞는 객체를 한 벌로 고르기",
+    summary: "저장소와 큐를 따로 골랐다가 파드 경계에서 끊기는 사고를 재현하고, 짝이 맞아야 하는 객체를 한 벌로 묶는 추상 팩토리로 막는다. knex의 방언별 Client, 새 제품을 더하기 어려운 트레이드오프, 팩토리 메서드와의 차이, 배포 직후 왕복 점검을 다룬다.",
+    topic: "programming/design-patterns/creational",
+    tags: ["Design Pattern", "OOP", "TypeScript", "AWS", "Architecture"],
+    date: "2026-10-21",
+    keywords: ["추상 팩토리", "Abstract Factory", "제품군"],
+  },
+  {
+    slug: "pattern-factory-method",
+    title: "팩토리 메서드 패턴: new가 박힌 자리를 바꿔 끼우기",
+    summary: "흐름은 상위 클래스가 쥐고 무엇을 만들지는 하위 클래스가 정하게 하는 팩토리 메서드를 영수증 발송 코드로 리팩터링한다. 심플 팩토리·정적 팩토리 메서드와의 차이, for...of 속 Symbol.iterator, 함수 표와 satisfies, 테스트에서 가짜 끼우기까지 다룬다.",
+    topic: "programming/design-patterns/creational",
+    tags: ["Design Pattern", "OOP", "TypeScript", "JavaScript"],
+    date: "2026-10-21",
+    keywords: ["팩토리 메서드", "Factory Method", "정적 팩토리 메서드"],
+  },
+  {
+    slug: "pattern-singleton",
+    title: "싱글턴 패턴: 하나만 만들기보다 어려운 하나 지키기",
+    summary: "인스턴스를 하나로 제한하는 싱글턴이 개발 서버 재평가, 패키지 중복 설치, 비동기 초기화 경쟁, 여러 프로세스에서 어떻게 깨지는지 실제로 돌려 보고, 테스트를 망가뜨리는 전역 상태를 의존성 주입으로 바꾸는 법을 정리한다.",
+    topic: "programming/design-patterns/creational",
+    tags: ["Design Pattern", "OOP", "TypeScript", "Node.js", "Concurrency"],
+    date: "2026-10-21",
+    keywords: ["싱글턴 패턴", "Singleton 패턴", "dual package hazard"],
+  },
+  {
+    slug: "design-patterns-overview",
+    title: "디자인 패턴 개요: 스물세 개의 이름과 꺼낼 때",
+    summary: "디자인 패턴은 반복되는 설계 문제에 붙인 이름이다. GoF 23개를 생성·구조·행위로 나눈 기준, 상속보다 합성을 고르는 이유, Express 요청 안에 숨은 패턴, 함수가 있는 언어에서 단순해지는 패턴, 그리고 패턴을 꺼내지 말아야 할 때를 정리한다.",
+    topic: "programming/design-patterns",
+    tags: ["Design Pattern", "OOP", "TypeScript", "Architecture", "JavaScript"],
+    date: "2026-10-21",
+    keywords: ["디자인 패턴", "GoF", "상속보다 합성"],
+  },
+  {
     slug: "distributed-lock",
     title: "분산 락: 만료되는 락과 펜싱 토큰",
     summary: "만료 시간이 있는 분산 락이 프로세스 멈춤과 장애 조치로 둘이 되는 장면을 재현하고, 펜싱 토큰으로 저장소가 늦은 쓰기를 거절하게 만든다. Redlock 논쟁과 etcd, ZooKeeper 락까지 비교한다.",

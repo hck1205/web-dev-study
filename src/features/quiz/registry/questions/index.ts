@@ -33,6 +33,7 @@ import { DB_TYPE_RELATIONAL } from "./db-type-relational";
 import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
+import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DNS } from "./dns";
 import { DOCKER_COMPOSE } from "./docker-compose";
@@ -106,6 +107,9 @@ import { OAUTH } from "./oauth";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
+import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
+import { PATTERN_FACTORY_METHOD } from "./pattern-factory-method";
+import { PATTERN_SINGLETON } from "./pattern-singleton";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
@@ -209,6 +213,7 @@ export const QUESTION_SETS = [
   DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
+  DESIGN_PATTERNS_OVERVIEW,
   DISTRIBUTED_LOCK,
   DNS,
   DOCKER_COMPOSE,
@@ -282,6 +287,9 @@ export const QUESTION_SETS = [
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
+  PATTERN_ABSTRACT_FACTORY,
+  PATTERN_FACTORY_METHOD,
+  PATTERN_SINGLETON,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,

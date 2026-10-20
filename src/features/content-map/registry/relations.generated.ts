@@ -2,6 +2,50 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "pattern-abstract-factory": {
+    "links": [
+      "pattern-factory-method",
+      "pattern-singleton"
+    ],
+    "mentions": [
+      "k8s-pod-probes",
+      "sql-batch-timeout-pool",
+      "design-patterns-overview"
+    ]
+  },
+  "pattern-factory-method": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-abstract-factory"
+    ],
+    "mentions": []
+  },
+  "pattern-singleton": {
+    "links": [
+      "design-patterns-overview",
+      "micro-frontends",
+      "rate-limiting-in-practice",
+      "redis-basics",
+      "rendering-ssr",
+      "pattern-factory-method"
+    ],
+    "mentions": [
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "design-patterns-overview": {
+    "links": [
+      "pattern-singleton",
+      "pattern-factory-method",
+      "pattern-abstract-factory",
+      "mvc-pattern",
+      "resilience-patterns"
+    ],
+    "mentions": [
+      "loading-patterns",
+      "sql-batch-timeout-pool"
+    ]
+  },
   "distributed-lock": {
     "links": [
       "redis-basics",
@@ -92,6 +136,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "what-happens-google-com",
       "ipv6-basics",
+      "pattern-abstract-factory",
       "dns"
     ]
   },

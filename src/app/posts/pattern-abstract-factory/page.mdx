@@ -1,0 +1,429 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-abstract-factory");
+
+스테이징에 배포하고 프로필 사진을 올렸는데 썸네일이 영영 생기지 않는다. 업로드 API는 200을 돌려줬고, 워커 로그에는 이런 줄이 쌓인다.
+
+```text
+worker : ENOENT: no such file or directory, open 'pod-b/uploads/avatar-42.png'
+```
+
+환경 변수를 열어 보니 `STORAGE_DRIVER=local`, `QUEUE_DRIVER=sqs`다. 파일은 업로드 API가 떠 있는 파드의 디스크에 저장됐는데, 작업 메시지는 클러스터 전체가 보는 SQS로 나갔다. 메시지를 받은 워커는 다른 파드에 떠 있어서 그 디스크를 볼 수 없다. 저장소와 큐는 각각 멀쩡하다. 문제는 둘이 서로 짝이 맞지 않는 조합이라는 데 있다.
+
+이런 사고를 구조로 막는 것이 추상 팩토리 패턴이다. 서로 짝이 맞아야 하는 객체들을 한 벌(제품군)로 묶어서, 고를 때도 한 벌을 통째로 고르게 한다. 이 글은 [팩토리 메서드](/posts/pattern-factory-method)를 읽었다고 가정하고, 둘의 차이도 뒤에서 짚는다.
+
+## 따로 고르면 섞인다
+
+위 사고를 그림으로 다시 따라가 보자. 아래 그림에서 다음을 누르면 업로드 한 건이 API 파드에서 워커 파드로 넘어가다 막히는 자리가 보인다.
+
+<NetworkTopology
+  caption="저장소는 로컬 디스크, 큐는 공유 SQS. 섞인 조합은 파드 경계에서 끊긴다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "za", label: "pod-a", x: 90, y: 20, w: 120, h: 220, tone: "private" },
+    { id: "zb", label: "pod-b", x: 280, y: 20, w: 115, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "User", x: 45, y: 70, icon: "client", w: 70 },
+    { id: "api", label: "Upload API", x: 150, y: 70, icon: "server", w: 100 },
+    { id: "diska", label: "Disk A", x: 150, y: 190, icon: "db", w: 80 },
+    { id: "sqs", label: "SQS", x: 245, y: 130, icon: "gateway", w: 56 },
+    { id: "worker", label: "Worker", x: 337, y: 70, icon: "container", w: 90 },
+    { id: "diskb", label: "Disk B", x: 337, y: 190, icon: "db", w: 80 },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "diska" },
+    { from: "api", to: "sqs" },
+    { from: "sqs", to: "worker" },
+    { from: "worker", to: "diskb" },
+  ]}
+  steps={[
+    { path: ["user", "api"], packet: "PUT", title: "사진이 업로드 API에 도착한다", detail: "pod-a에 떠 있는 API가 요청을 받는다." },
+    { path: ["api", "diska"], packet: "png", title: "STORAGE_DRIVER=local이라 자기 디스크에 쓴다", detail: "저장소는 이 파드 안에서만 보이는 경로를 돌려준다. 이 파드 혼자라면 문제없다.", payload: "uploads/avatar-42.png" },
+    { path: ["api", "sqs"], packet: "job", title: "QUEUE_DRIVER=sqs라 공유 큐로 보낸다", detail: "큐는 클러스터 어디서나 받을 수 있다. 메시지에는 방금 받은 로컬 경로가 실려 있다.", payload: "{ \"type\": \"make-thumbnail\", \"ref\": \"uploads/avatar-42.png\" }" },
+    { path: ["sqs", "worker"], packet: "job", title: "다른 파드의 워커가 받는다", detail: "pod-b의 워커가 메시지를 꺼낸다. 큐 입장에서는 정상 동작이다." },
+    { path: ["worker", "diskb"], packet: "read", blocked: true, highlight: ["diska"], title: "자기 디스크에는 그 파일이 없다", detail: "같은 경로를 pod-b의 디스크에서 찾으니 ENOENT다. 저장소와 큐가 서로 다른 세계를 가정하고 있었다.", payload: "ENOENT: no such file or directory, open 'pod-b/uploads/avatar-42.png'" },
+  ]}
+/>
+
+로컬 디스크 저장소는 같은 프로세스 안의 메모리 큐와 짝이다. S3는 SQS와 짝이다. 둘은 "다른 프로세스가 이 참조를 받아도 읽을 수 있다"는 같은 가정을 공유한다. 이 가정이 깨지는 조합을 고를 수 없게 만들면 된다. 위 사고는 실제로 재현해서 확인했다. 두 파드는 `pod-a`, `pod-b` 디렉터리로, SQS는 둘이 같이 보는 배열로 흉내 냈다.
+
+```ts
+// 저장소는 각 파드의 로컬 디스크, 큐는 공유 큐. 두 벌에서 하나씩 섞었다
+const apiStorage = new LocalInfra("pod-a").createStorage();
+const workerStorage = new LocalInfra("pod-b").createStorage();
+
+const ref = await apiStorage.put("uploads/avatar-42.png", Buffer.from("png..."));
+await sharedQueue.send({ type: "make-thumbnail", ref });
+console.log("api    : stored", ref, "and enqueued");
+
+const job = await sharedQueue.receive();
+try {
+  await workerStorage.get(job!.ref);
+} catch (error) {
+  console.log("worker :", (error as Error).message);
+}
+```
+
+```text
+api    : stored uploads/avatar-42.png and enqueued
+worker : ENOENT: no such file or directory, open 'pod-b/uploads/avatar-42.png'
+```
+
+## 한 벌을 통째로 만드는 객체
+
+GoF의 정의는 이렇다. 서로 관련 있거나 의존하는 객체들의 군을, 구체 클래스를 지정하지 않고 만드는 인터페이스를 제공한다. 등장인물은 추상 팩토리, 구체 팩토리, 추상 제품, 구체 제품이다. 제품 종류가 둘 이상이라서 팩토리 메서드와 갈린다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="앱은 InfraFactory만 안다. 어떤 벌이 오든 제품끼리는 짝이 맞는다"
+  nodes={[
+    { id: "app", label: "App", x: 60, y: 45, w: 80 },
+    { id: "f", label: "InfraFactory", sub: "인터페이스", x: 240, y: 45, w: 140 },
+    { id: "aws", label: "AwsInfra", x: 130, y: 135, w: 120 },
+    { id: "local", label: "LocalInfra", x: 320, y: 135, w: 120 },
+    { id: "awsp", label: "S3 · SQS", sub: "한 벌", x: 130, y: 220, w: 120 },
+    { id: "localp", label: "Disk · Memory", sub: "한 벌", x: 320, y: 220, w: 130 },
+  ]}
+  edges={[
+    { from: "app", to: "f", label: "create*()" },
+    { from: "aws", to: "f", label: "구현", dashed: true },
+    { from: "local", to: "f", label: "구현", dashed: true },
+    { from: "aws", to: "awsp", label: "생성" },
+    { from: "local", to: "localp", label: "생성" },
+  ]}
+/>
+
+코드로 옮기면 제품 인터페이스 둘과, 그 둘을 만드는 메서드를 가진 팩토리 인터페이스 하나가 나온다.
+
+```ts
+// 제품 A: 파일 저장소
+export interface Storage {
+  put(key: string, data: Buffer): Promise<string>; // 다른 서버도 읽을 수 있는 주소를 돌려준다
+  get(ref: string): Promise<Buffer>;
+}
+
+// 제품 B: 작업 큐
+export interface JobQueue {
+  send(job: { type: string; ref: string }): Promise<void>;
+  receive(): Promise<{ type: string; ref: string } | undefined>;
+}
+
+// 추상 팩토리: 짝이 맞는 제품을 한 벌로 만든다
+export interface InfraFactory {
+  createStorage(): Storage;
+  createQueue(): JobQueue;
+}
+```
+
+운영용 한 벌은 S3와 SQS를 같은 리전, 같은 설정으로 만든다. AWS SDK v3 기준이다.
+
+```ts
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { ReceiveMessageCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
+
+export class AwsInfra implements InfraFactory {
+  constructor(private readonly opts: { region: string; bucket: string; queueUrl: string }) {}
+
+  createStorage(): Storage {
+    const s3 = new S3Client({ region: this.opts.region });
+    const Bucket = this.opts.bucket;
+    return {
+      async put(key, data) {
+        await s3.send(new PutObjectCommand({ Bucket, Key: key, Body: data }));
+        return key;
+      },
+      async get(ref) {
+        const res = await s3.send(new GetObjectCommand({ Bucket, Key: ref }));
+        return Buffer.from(await res.Body!.transformToByteArray());
+      },
+    };
+  }
+
+  createQueue(): JobQueue {
+    const sqs = new SQSClient({ region: this.opts.region });
+    const QueueUrl = this.opts.queueUrl;
+    return {
+      async send(job) {
+        await sqs.send(new SendMessageCommand({ QueueUrl, MessageBody: JSON.stringify(job) }));
+      },
+      async receive() {
+        const res = await sqs.send(
+          new ReceiveMessageCommand({ QueueUrl, MaxNumberOfMessages: 1, WaitTimeSeconds: 20 }),
+        );
+        const body = res.Messages?.[0]?.Body;
+        return body ? JSON.parse(body) : undefined;
+      },
+    };
+  }
+}
+```
+
+`LocalInfra`는 같은 인터페이스를 디스크와 메모리 배열로 구현한다. 달라지는 건 고르는 곳이다. 환경 변수 두 개를 하나로 줄이고, 앱 시작점에서 한 번만 고른다.
+
+```ts
+export function infraFor(kind: string | undefined): InfraFactory {
+  switch (kind) {
+    case "aws":
+      return new AwsInfra({
+        region: process.env.AWS_REGION ?? "ap-northeast-2",
+        bucket: process.env.UPLOAD_BUCKET ?? "",
+        queueUrl: process.env.JOB_QUEUE_URL ?? "",
+      });
+    case "local":
+      return new LocalInfra(".data");
+    default:
+      throw new Error(`unknown INFRA: ${kind}`);
+  }
+}
+
+// 앱 시작점에서 한 번만 고른다
+const infra = infraFor(process.env.INFRA);
+export const storage = infra.createStorage();
+export const queue = infra.createQueue();
+```
+
+이제 `STORAGE_DRIVER=local`과 `QUEUE_DRIVER=sqs`를 섞을 방법이 없다. `INFRA=aws`면 둘 다 AWS, `INFRA=local`이면 둘 다 로컬이다. 잘못된 조합을 조심하는 대신 그런 조합이 존재하지 않게 만들었다.
+
+## 시작할 때 한 번 고르고 끝까지 쓴다
+
+추상 팩토리가 일하는 시점은 앱 수명에서 아주 짧다. 아래 그림처럼 시작점에서 한 벌을 고르고 나면, 나머지 코드는 팩토리가 있었다는 것도 모른 채 제품 인터페이스만 쓴다.
+
+<SequenceDiagram
+  caption="팩토리는 시작할 때 한 번 일하고, 그 뒤로는 제품만 돌아다닌다"
+  actors={[
+    { id: "main", label: "시작점" },
+    { id: "f", label: "AwsInfra" },
+    { id: "api", label: "업로드 API" },
+    { id: "worker", label: "워커" },
+  ]}
+  steps={[
+    { from: "main", to: "main", label: "INFRA=aws", title: "환경 변수 하나를 읽는다", detail: "고를 것은 한 벌뿐이다. 제품마다 따로 고르는 스위치가 없다." },
+    { from: "main", to: "f", label: "infraFor(\"aws\")", title: "구체 팩토리를 만든다", detail: "리전, 버킷, 큐 주소 같은 설정이 이 객체 하나에 모인다. 제품들은 같은 설정을 나눠 쓴다." },
+    { from: "f", to: "main", label: "storage, queue", title: "제품 두 개를 한 벌로 받는다", detail: "createStorage()와 createQueue()가 S3 저장소와 SQS 큐를 만든다. 둘 다 같은 계정과 리전을 본다." },
+    { from: "main", to: "api", label: "주입", title: "필요한 곳에 제품만 넘긴다", detail: "업로드 API는 Storage와 JobQueue 인터페이스만 받는다. AWS라는 사실을 모른다." },
+    { from: "main", to: "worker", label: "주입", title: "워커도 같은 벌을 받는다", detail: "워커 프로세스도 같은 INFRA 값으로 시작하니 같은 벌을 쓴다. API가 쓴 참조를 워커가 읽을 수 있다." },
+    { from: "api", to: "worker", label: "job(ref)", title: "참조가 프로세스 경계를 넘어도 통한다", detail: "S3 키는 어느 파드에서나 같은 객체를 가리킨다. 앞의 ENOENT가 날 자리가 없다.", payload: "{ \"type\": \"make-thumbnail\", \"ref\": \"uploads/avatar-42.png\" }" },
+  ]}
+/>
+
+테스트용 한 벌도 같은 자리에 들어간다. 저장소는 `Map`, 큐는 배열로 만든 `MemoryInfra`를 넘기면 업로드부터 썸네일 생성까지의 흐름을 네트워크 없이 끝까지 돌릴 수 있다. 테스트 대역을 하나씩 따로 만들다 보면 저장소는 가짜인데 큐는 진짜인 어정쩡한 조합이 생기기 쉽다. 대역도 한 벌로 만들면 이런 일이 없다.
+
+## 라이브러리 속의 추상 팩토리
+
+Node.js 쿼리 빌더 knex가 좋은 예다. knex의 `Client` 클래스에는 `queryCompiler()`, `schemaCompiler()`, `tableCompiler()`, `columnCompiler()` 같은 생성 메서드가 모여 있고, PostgreSQL, MySQL, SQL Server 같은 방언마다 이 메서드들을 재정의한 하위 클래스가 있다(knex 3.1.0 소스 기준). 설정의 `client` 한 줄이 그 한 벌을 고른다.
+
+<UrlAnatomy
+  caption="knex 설정에서 client 하나가 방언 한 벌을 고른다"
+  base="knex("
+  separator="{ "
+  joiner=", "
+  params={[
+    { key: "client", display: "client: \"pg\"", title: "구체 팩토리를 고른다", description: "pg, mysql2, mssql, sqlite3 같은 이름이 방언별 Client 하위 클래스로 이어진다. 이 하나가 쿼리, 스키마, 테이블, 컬럼 컴파일러를 모두 그 방언 것으로 맞춘다.", required: true },
+    { key: "connection", display: "connection: process.env.DATABASE_URL", title: "제품들이 같이 쓰는 설정", description: "접속 정보는 팩토리가 들고 있고, 만드는 제품들이 나눠 쓴다. 컴파일러만 쓸 거라면 없어도 된다." },
+    { key: "pool", display: "pool: { min: 0, max: 10 }", title: "방언과 무관한 공통 설정", description: "커넥션 풀 크기는 상위 Client가 처리한다. 방언마다 바뀌는 것과 공통인 것이 나뉘어 있다." },
+  ]}
+/>
+
+같은 쿼리와 테이블 정의를 방언만 바꿔 문자열로 뽑아 보면 한 벌씩 다르게 나온다. 접속 없이 SQL만 만드는 것이라 DB가 없어도 돌아간다.
+
+```js
+const knex = require("knex");
+for (const client of ["pg", "mysql2", "mssql"]) {
+  const db = knex({ client });
+  const q = db("users").select("id", "email").where({ id: 42 }).limit(1).toString();
+  const ddl = db.schema.createTable("users", (t) => t.increments("id")).toString();
+  console.log(client.padEnd(6), "|", q);
+  console.log("".padEnd(6), "|", ddl);
+}
+```
+
+```text
+pg     | select "id", "email" from "users" where "id" = 42 limit 1
+       | create table "users" ("id" serial primary key)
+mysql2 | select `id`, `email` from `users` where `id` = 42 limit 1
+       | create table `users` (`id` int unsigned not null auto_increment primary key)
+mssql  | select top (1) [id], [email] from [users] where [id] = 42
+       | CREATE TABLE [users] ([id] int identity(1,1) not null primary key)
+```
+
+따옴표 종류, `LIMIT`과 `TOP`, 자동 증가 열 문법이 방언마다 함께 바뀐다. 쿼리는 PostgreSQL식으로 만들고 테이블은 MySQL식으로 만드는 조합은 나올 수 없다. 처음 장면의 저장소와 큐가 바로 이 상태여야 했다.
+
+자바에서는 JDBC의 `Connection`이 자주 꼽힌다. `createStatement()`, `prepareStatement()`가 드라이버에 맞는 `Statement` 구현을 한 벌로 만들어 준다. Spring에서는 `@Profile("test")`, `@Profile("prod")`를 붙인 설정 클래스가 빈 여러 개를 묶어 한 벌로 바꿔 끼운다. 이름은 다르지만 설정 클래스 하나가 구체 팩토리 노릇을 한다.
+
+## 새 벌은 쉽고 새 제품은 어렵다
+
+추상 팩토리의 트레이드오프는 한쪽 방향으로 기울어 있다. 제품군을 하나 더하는 건 쉽고, 제품 종류를 하나 더하는 건 어렵다. 아래 그림에서 두 경우에 손대는 파일을 비교해 보자.
+
+<AlgoTrace
+  caption="GCP 한 벌을 더하면 파일 하나, 캐시라는 제품을 더하면 모든 팩토리"
+  memoryLabel="고친 파일"
+  cells={["InfraFactory", "AwsInfra", "LocalInfra", "MemoryInfra", "GcpInfra"]}
+  steps={[
+    { caption: "지금은 AWS, 로컬, 테스트용 메모리 세 벌이 있다. 제품은 저장소와 큐 두 가지다." },
+    { pointer: 4, found: [4], memory: ["GcpInfra (새 파일)"], caption: "GCP 한 벌을 추가한다. Cloud Storage와 Pub/Sub로 두 메서드를 구현한 GcpInfra 파일 하나만 생긴다. 기존 코드는 그대로다." },
+    { pointer: 0, found: [4], memory: ["GcpInfra (새 파일)", "InfraFactory"], caption: "이번에는 제품 종류를 늘린다. 캐시가 필요해서 인터페이스에 createCache()를 넣는다." },
+    { pointer: 1, found: [0, 4], memory: ["GcpInfra (새 파일)", "InfraFactory", "AwsInfra"], caption: "인터페이스가 바뀌었으니 모든 구체 팩토리가 컴파일 에러를 낸다. AWS에는 ElastiCache 구현을 붙인다." },
+    { pointer: 3, found: [0, 1, 2, 4], memory: ["GcpInfra (새 파일)", "InfraFactory", "AwsInfra", "LocalInfra", "MemoryInfra"], caption: "로컬과 테스트용에도 캐시를 붙인다. 쓸 일이 없어도 인터페이스를 채워야 한다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["GcpInfra (새 파일)", "InfraFactory", "AwsInfra", "LocalInfra", "MemoryInfra", "GcpInfra"], caption: "방금 만든 GCP에도 다시 손댄다. 제품 하나에 팩토리 수만큼 수정이 따라온다." },
+  ]}
+/>
+
+그래서 제품 종류가 자주 바뀌는 초기에는 추상 팩토리를 서두를 필요가 없다. 제품군이 둘 이상 실제로 존재하고, 제품 목록이 어느 정도 굳었을 때 들이는 게 맞다. 운영과 로컬이라는 두 벌이 있고 저장소, 큐, 메일러 같은 목록이 몇 달째 그대로라면 좋은 시점이다.
+
+제품이 자주 늘어난다면 팩토리를 쪼개는 방법이 있다. `InfraFactory` 하나에 모든 걸 넣지 않고 `StorageAndQueue`처럼 같은 가정을 공유하는 것끼리만 묶는다. 서로 짝이 맞아야 할 이유가 없는 메일러까지 같은 벌에 넣으면 묶을 이유 없는 것들의 수정만 늘어난다. 인터페이스 분리 원칙(ISP)이 여기서도 통한다.
+
+## 클래스 없이 한 벌 만들기
+
+자바스크립트라면 팩토리를 클래스로 만들지 않아도 된다. 한 벌을 돌려주는 함수와, 그 함수들을 모은 표 하나면 충분하다.
+
+```ts
+interface Infra {
+  storage: Storage;
+  queue: JobQueue;
+}
+
+const families = {
+  aws: (): Infra => {
+    const factory = new AwsInfra({ region: "ap-northeast-2", bucket: "uploads", queueUrl: "https://sqs..." });
+    return { storage: factory.createStorage(), queue: factory.createQueue() };
+  },
+  local: (): Infra => {
+    const factory = new LocalInfra(".data");
+    return { storage: factory.createStorage(), queue: factory.createQueue() };
+  },
+} satisfies Record<string, () => Infra>;
+```
+
+벌마다 `{ storage, queue }` 객체를 만드는 함수가 곧 구체 팩토리다. 클래스 형태가 나은 경우는 제품들이 생성 후에도 팩토리의 상태(공유 커넥션, 자격 증명 갱신)를 계속 같이 쓸 때다. 그럴 때는 팩토리 객체가 그 상태를 들고 있는 편이 자연스럽다.
+
+연습으로 한 벌을 직접 만들어 보자. 글 카드 하나를 HTML, 마크다운, 일반 텍스트로 그리는 "출력 키트"다. 제목과 링크를 그리는 함수가 한 벌이고, 키트끼리 섞이면 HTML 제목 아래 마크다운 링크가 붙는 이상한 결과가 나온다.
+
+<CodePlayground
+  caption="출력 키트 한 벌 만들기"
+  functionName="renderCard"
+  initialCode={`// kind에 맞는 키트(heading, link 한 벌)를 돌려준다. 모르는 kind면 "unknown kit: " + kind 에러를 던진다.
+// html은 만들어 두었다. markdown과 plain을 추가해 보자.
+//   markdown: heading -> "## 제목", link -> "[글자](주소)"
+//   plain:    heading -> 제목을 대문자로, link -> "글자: 주소"
+function createKit(kind) {
+  if (kind === "html") {
+    return {
+      heading: (text) => "<h2>" + text + "</h2>",
+      link: (text, href) => "<a href=\\"" + href + "\\">" + text + "</a>",
+    };
+  }
+  throw new Error("unknown kit: " + kind);
+}
+
+// 아래는 고치지 않는다. 한 벌에서만 꺼내 쓰니 섞일 수 없다.
+function renderCard(kind, title, href) {
+  try {
+    const kit = createKit(kind);
+    return kit.heading(title) + "\\n" + kit.link("more", href);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  solution={`const kits = new Map([
+  ["html", {
+    heading: (text) => "<h2>" + text + "</h2>",
+    link: (text, href) => "<a href=\\"" + href + "\\">" + text + "</a>",
+  }],
+  ["markdown", {
+    heading: (text) => "## " + text,
+    link: (text, href) => "[" + text + "](" + href + ")",
+  }],
+  ["plain", {
+    heading: (text) => text.toUpperCase(),
+    link: (text, href) => text + ": " + href,
+  }],
+]);
+
+function createKit(kind) {
+  const kit = kits.get(kind);
+  if (!kit) throw new Error("unknown kit: " + kind);
+  return kit;
+}
+
+function renderCard(kind, title, href) {
+  try {
+    const kit = createKit(kind);
+    return kit.heading(title) + "\\n" + kit.link("more", href);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  tests={[
+    { args: ["html", "Singleton", "/posts/pattern-singleton"], expected: "<h2>Singleton</h2>\n<a href=\"/posts/pattern-singleton\">more</a>" },
+    { args: ["markdown", "Singleton", "/posts/pattern-singleton"], expected: "## Singleton\n[more](/posts/pattern-singleton)", label: "markdown 한 벌" },
+    { args: ["plain", "Singleton", "/posts/pattern-singleton"], expected: "SINGLETON\nmore: /posts/pattern-singleton", label: "plain 한 벌" },
+    { args: ["pdf", "Singleton", "/x"], expected: "error:unknown kit: pdf", label: "모르는 키트는 에러" },
+  ]}
+/>
+
+## 팩토리 메서드와 무엇이 다른가
+
+둘은 이름도 비슷하고 실제로 같이 쓰이기도 해서 자주 섞인다. 비교가 필요한 자리라 표로 나눈다.
+
+| | 팩토리 메서드 | 추상 팩토리 |
+|---|---|---|
+| 만드는 것 | 제품 하나 | 짝이 맞는 제품 여러 개 |
+| 바꾸는 방법 | 하위 클래스가 메서드 하나를 재정의 | 팩토리 객체를 통째로 교체 |
+| 주된 수단 | 상속 | 객체 조합(팩토리를 넘겨받음) |
+| 쉬운 변경 | 새 제품 하위 클래스 추가 | 새 제품군 추가 |
+| 어려운 변경 | 흐름 자체를 바꾸는 것 | 제품 종류 추가 |
+
+둘은 경쟁 관계가 아니다. 추상 팩토리의 `createStorage()`, `createQueue()` 하나하나가 구체 팩토리에서 재정의되는 팩토리 메서드다. knex의 방언 클라이언트가 정확히 이 모양이다. 팩토리 메서드는 "무엇을 만들지 하위 클래스가 정한다"는 기법이고, 추상 팩토리는 "짝 맞는 것들을 한 벌로 고른다"는 구조다.
+
+[빌더](/posts/pattern-builder)와도 헷갈린다. 빌더는 복잡한 객체 하나를 단계별로 조립하고 마지막에 돌려준다. 추상 팩토리는 여러 제품을 각각 한 번에 돌려준다. 그리고 구체 팩토리는 앱에 하나면 충분해서 [싱글턴](/posts/pattern-singleton)으로 만드는 경우가 많은데, 그보다는 시작점에서 하나 만들어 넘기는 편이 테스트하기 쉽다.
+
+## 배포 전에 한 벌을 확인한다
+
+처음 장면의 사고는 업로드는 성공하고 워커에서만 터졌다. 짝이 안 맞는 문제는 이렇게 경계를 넘는 순간에야 드러나서, 단위 테스트로는 잘 잡히지 않는다. 그래서 시작할 때 고른 한 벌로 왕복을 한 번 해 보는 점검을 둔다.
+
+```ts
+export async function selfCheck(infra: InfraFactory): Promise<void> {
+  const storage = infra.createStorage();
+  const queue = infra.createQueue();
+  const ref = await storage.put(`healthcheck/${Date.now()}.txt`, Buffer.from("ok"));
+  await queue.send({ type: "healthcheck", ref });
+  const job = await queue.receive();
+  if (!job || (await storage.get(job.ref)).toString() !== "ok") {
+    throw new Error("storage and queue do not see the same world");
+  }
+}
+```
+
+API와 워커가 다른 프로세스라면 이 점검을 워커 쪽 시작 과정에도 둔다. 큐로 받은 참조를 자기 저장소로 읽을 수 있는지가 진짜 확인 대상이기 때문이다. 쿠버네티스라면 readiness probe가 이 점검을 통과한 뒤에만 성공하게 해서, 짝이 안 맞는 파드가 트래픽을 받기 전에 멈추게 할 수 있다. 공유 큐에 점검 메시지가 섞이는 게 싫다면 점검 전용 큐를 쓰거나 저장소만 다른 프로세스에서 읽어 보는 식으로 줄인다.
+
+추상 팩토리는 "하나씩 따로 고르면 섞일 수 있는 것"을 한 벌로 묶어 한 번에 고르게 하는 패턴이다. 선택지를 줄여서 잘못된 조합을 아예 만들 수 없게 하는 것, 이 패턴이 주는 이득은 거기서 나온다.
+
+## 면접에서 나올 만한 질문
+
+### 추상 팩토리 패턴이 무엇인가요?
+
+서로 짝이 맞아야 하는 객체들을 구체 클래스를 드러내지 않고 한 벌로 만드는 인터페이스를 두는 패턴이다. 클라이언트는 팩토리 인터페이스와 제품 인터페이스만 알고, 어떤 벌을 쓸지는 시작점에서 구체 팩토리 하나를 골라 정한다. 그래서 AWS용 저장소에 로컬 큐가 붙는 것 같은 잘못된 조합이 생기지 않는다.
+
+### 팩토리 메서드와 어떻게 다른가요?
+
+팩토리 메서드는 제품 하나를 하위 클래스가 재정의하는 메서드로 만들고, 추상 팩토리는 제품 여러 개를 만드는 객체를 통째로 바꿔 끼운다. 앞의 것은 상속, 뒤의 것은 객체 조합에 기댄다. 실제로는 추상 팩토리의 각 생성 메서드가 팩토리 메서드로 구현되는 경우가 많다.
+
+### 이 패턴의 단점은요?
+
+새 제품군을 더하기는 쉽지만 새 제품 종류를 더하기는 어렵다. 인터페이스에 생성 메서드 하나를 넣으면 모든 구체 팩토리를 고쳐야 한다. 그래서 제품 목록이 굳은 뒤에 들이고, 짝이 맞을 이유가 없는 제품까지 한 팩토리에 몰아넣지 않는다.
+
+### 실제로 쓰이는 예를 들어 주세요.
+
+knex의 Client가 쿼리, 스키마, 테이블, 컬럼 컴파일러를 만드는 메서드를 갖고 방언별 하위 클래스가 재정의한다. 설정의 client 한 줄로 PostgreSQL이나 MySQL 한 벌이 정해진다. 자바에서는 JDBC Connection이 드라이버에 맞는 Statement 구현들을 만들어 주고, Spring의 프로필별 설정 클래스도 빈 한 벌을 바꿔 끼우는 역할을 한다.
+
+### 환경 변수를 제품마다 따로 두면 안 되나요?
+
+조합 수만큼 잘못된 설정이 가능해진다. 저장소와 큐를 따로 고르면 로컬 디스크와 공유 큐 같은 조합이 생기고, 이 문제는 프로세스 경계를 넘는 순간에야 드러난다. 값 하나로 한 벌을 고르게 하면 그런 조합이 존재하지 않는다.
+
+### 테스트에서는 어떻게 활용하나요?
+
+메모리 저장소와 메모리 큐로 된 테스트용 한 벌을 만들어 시작점에 넘긴다. 업로드부터 후속 작업까지 전체 흐름을 네트워크 없이 돌릴 수 있고, 가짜와 진짜가 섞이는 일도 없다. 운영 쪽은 시작할 때 고른 한 벌로 쓰고 읽는 왕복 점검을 두어 설정 실수를 배포 직후에 잡는다.
