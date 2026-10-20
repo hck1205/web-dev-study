@@ -52,6 +52,11 @@ import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
+import { HELM_BASICS } from "./helm-basics";
+import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
+import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
+import { HELM_RELEASE_LIFECYCLE } from "./helm-release-lifecycle";
+import { HELM_VALUES_SECRETS } from "./helm-values-secrets";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
@@ -204,6 +209,11 @@ export const QUESTION_SETS = [
   GIT_TIPS_ADVANCED,
   GIT_TROUBLESHOOTING,
   GIT_UNDO,
+  HELM_BASICS,
+  HELM_CHART_TEMPLATES,
+  HELM_DEPENDENCIES_OCI_GITOPS,
+  HELM_RELEASE_LIFECYCLE,
+  HELM_VALUES_SECRETS,
   HOSTS_FILE,
   HTML_FORM_HTTP,
   HTTP_CACHING_CDN,

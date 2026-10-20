@@ -2,10 +2,72 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "helm-dependencies-oci-gitops": {
+    "links": [
+      "helm-basics",
+      "helm-chart-templates",
+      "helm-values-secrets",
+      "helm-release-lifecycle",
+      "k8s-pod-basics"
+    ],
+    "mentions": [
+      "git-undo",
+      "docker-container-basics",
+      "redis-basics",
+      "what-happens-google-com"
+    ]
+  },
+  "helm-release-lifecycle": {
+    "links": [
+      "helm-basics",
+      "k8s-pod-probes",
+      "k8s-pod-lifecycle",
+      "helm-dependencies-oci-gitops",
+      "kubernetes-ingress"
+    ],
+    "mentions": [
+      "k8s-pod-basics"
+    ]
+  },
+  "helm-values-secrets": {
+    "links": [
+      "helm-chart-templates",
+      "helm-basics",
+      "helm-dependencies-oci-gitops"
+    ],
+    "mentions": []
+  },
+  "helm-chart-templates": {
+    "links": [
+      "helm-basics",
+      "helm-release-lifecycle",
+      "k8s-pod-resources",
+      "helm-values-secrets"
+    ],
+    "mentions": [
+      "k8s-pod-basics"
+    ]
+  },
+  "helm-basics": {
+    "links": [
+      "helm-dependencies-oci-gitops",
+      "helm-chart-templates",
+      "helm-release-lifecycle",
+      "k8s-pod-lifecycle",
+      "helm-values-secrets"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "docker-container-basics",
+      "kubernetes-ingress",
+      "redis-basics"
+    ]
+  },
   "k8s-pod-troubleshooting": {
     "links": [
       "k8s-pod-scheduling",
       "dockerfile-image-layers",
+      "helm-basics",
       "k8s-pod-lifecycle",
       "k8s-pod-probes",
       "k8s-pod-resources",
@@ -83,6 +145,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting",
       "k8s-pod-lifecycle",
       "iptables-nat",
+      "helm-basics",
       "k8s-pod-multicontainer",
       "docker-container-basics"
     ],

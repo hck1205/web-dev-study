@@ -1,0 +1,566 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("helm-basics");
+
+앱 하나를 쿠버네티스에 올리면 YAML이 생각보다 많다. Deployment, Service, ConfigMap, Ingress, ServiceAccount 정도만 해도 다섯 개다. 처음에는 `kubectl apply -f k8s/`로 충분하다. 그런데 개발·스테이징·운영 세 환경에 같은 앱을 올리기 시작하면 이 다섯 개가 세 벌이 된다. 이미지 태그 하나 바꾸려고 파일 세 개를 고치고, 운영 쪽 레플리카 수만 다르게 둔 줄을 누군가 덮어쓴다. 앱을 내리려는데 이 앱 소속 리소스가 어디까지인지 아무도 모른다. 어제 배포가 잘못됐을 때 어제 그제의 YAML이 정확히 무엇이었는지도 git 기록을 뒤져야 안다.
+
+Helm은 이 세 가지를 한꺼번에 푼다. 이 글은 Helm이 무엇을 묶어서 무엇이라 부르는지, `helm install` 한 번에 클러스터에서 실제로 무슨 일이 생기는지, 그 기록이 어디에 남는지를 따라간다. 템플릿 문법, values 나누기, 업그레이드와 롤백은 이어지는 글에서 하나씩 자세히 본다.
+
+이 글의 출력은 Helm 3.16과 kwok로 띄운 실습 클러스터(Kubernetes 1.30)에서 받았다. kwok는 API 서버와 컨트롤러는 진짜로 띄우고 노드와 컨테이너만 흉내 내는 도구라서, Helm이 클러스터에 남기는 기록은 실제와 같다. Pod IP가 `10.0.0.x`처럼 단순한 건 그래서다.
+
+## 복사한 YAML은 환경마다 조금씩 어긋난다
+
+YAML 세 벌을 들고 있을 때 생기는 문제를 하나씩 떼어 보면 성격이 다르다.
+
+첫째는 반복이다. 세 환경의 Deployment는 95%가 같고 이미지 태그, 레플리카 수, 리소스 크기, 도메인 정도만 다르다. 그런데 파일은 통째로 복사돼 있으니 같은 부분을 고칠 때도 세 번 고쳐야 한다. 한 번 빠뜨리면 그때부터 환경끼리 조용히 어긋난다. 해결은 "같은 부분은 틀로 한 번만 쓰고, 다른 부분만 값으로 뺀다"이다.
+
+둘째는 묶음이다. 쿠버네티스에게 Deployment와 Service는 서로 모르는 별개의 리소스다. 이 다섯 개가 `shop-api`라는 앱 하나라는 사실은 사람 머릿속에만 있다. 그래서 앱을 지울 때 ConfigMap 하나가 남거나, 반대로 다른 앱이 같이 쓰던 Secret을 지운다. 필요한 건 "이 리소스들은 이 설치 소속"이라는 기록이다.
+
+셋째는 이력이다. `kubectl apply`는 지금 상태를 바꿀 뿐 이전 상태를 기억하지 않는다. 배포가 잘못되면 git에서 이전 커밋을 찾아 다시 apply해야 하는데, 그사이 누가 클러스터에서 직접 고친 게 있으면 그것도 섞인다. "몇 번째 배포에서 정확히 무엇을 적용했나"를 클러스터 쪽에 남겨 두고, 그 번호로 돌아갈 수 있어야 한다.
+
+Helm은 스스로를 쿠버네티스의 패키지 매니저라고 부른다. Ubuntu의 `apt`를 떠올리면 맞다. `apt`가 `.deb` 패키지를 받아 설치하고, 무엇이 설치됐는지 기억하고, 지울 때 그 패키지가 깔았던 파일만 지우는 것처럼, Helm은 차트라는 패키지를 받아 클러스터에 설치하고 그 설치를 기억한다. 이 글에서는 이 비유 하나만 들고 간다.
+
+## 차트, 릴리스, 리비전
+
+Helm 용어는 네 개면 충분하다.
+
+차트(chart)는 패키지다. 템플릿이 된 YAML 묶음과 기본값(`values.yaml`), 이름과 버전을 적은 `Chart.yaml`이 든 디렉터리다. `apt`로 치면 `.deb` 파일이다. 차트 자체는 클러스터와 상관없이 존재한다. 내 노트북 디렉터리에 있을 수도 있고, 압축 파일(`.tgz`)로 저장소에 올라가 있을 수도 있다.
+
+릴리스(release)는 차트를 클러스터에 설치한 결과 하나다. 같은 차트를 `shop-dev` 네임스페이스에 한 번, `shop-prod`에 한 번 설치하면 릴리스가 둘이다. 이름이 같아도 네임스페이스가 다르면 다른 릴리스다. `apt`는 한 기계에 패키지를 한 번만 깔지만, Helm은 같은 차트를 이름만 달리해 여러 번 깔 수 있다.
+
+리비전(revision)은 릴리스가 바뀔 때마다 하나씩 올라가는 번호다. 처음 설치하면 1번, 업그레이드하면 2번, 롤백해도 새 번호(3번)가 붙는다. 리비전마다 그때 쓴 차트, 넣은 값, 렌더링된 매니페스트 전체가 기록된다. 롤백은 이 기록으로 하는 일이다.
+
+저장소(repository)는 차트를 받아 오는 곳이다. 예전에는 `index.yaml`을 둔 HTTP 서버였고, 요즘은 컨테이너 이미지와 같은 OCI 레지스트리에 차트를 올리는 방식이 늘었다. 저장소와 의존성은 [차트 배포 흐름 글](/posts/helm-dependencies-oci-gitops)에서 따로 본다.
+
+아래 그림은 이 넷이 어떻게 이어지는지 보여 준다. 차트 하나와 values 파일 둘에서 릴리스 둘이 나오고, 릴리스마다 리비전 기록이 클러스터 안에 쌓인다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="같은 차트에 다른 값을 넣으면 다른 릴리스가 된다. 리비전 기록은 각 네임스페이스의 Secret에 남는다."
+  nodes={[
+    { id: "repo", label: "저장소", sub: "OCI·HTTP", x: 70, y: 45, w: 110 },
+    { id: "chart", label: "차트", sub: "shop-api 0.1.0", x: 220, y: 45, w: 128 },
+    { id: "vdev", label: "values-dev", sub: "replicas 1", x: 80, y: 150, w: 120 },
+    { id: "vprod", label: "values-prod", sub: "replicas 6", x: 360, y: 150, w: 120 },
+    { id: "rdev", label: "릴리스", sub: "shop-dev", x: 80, y: 255, w: 120 },
+    { id: "rprod", label: "릴리스", sub: "shop-prod", x: 360, y: 255, w: 120 },
+    { id: "rev", label: "리비전 기록", sub: "Secret v1, v2…", x: 220, y: 255, w: 120 },
+  ]}
+  edges={[
+    { from: "repo", to: "chart", label: "pull" },
+    { from: "chart", to: "rdev", label: "install" },
+    { from: "chart", to: "rprod", label: "install" },
+    { from: "vdev", to: "rdev" },
+    { from: "vprod", to: "rprod" },
+    { from: "rdev", to: "rev", dashed: true },
+    { from: "rprod", to: "rev", dashed: true },
+  ]}
+/>
+
+이 구분이 실무에서 중요한 이유는 버전이 두 개 생기기 때문이다. 차트에는 차트 버전(`version: 0.1.0`)과 앱 버전(`appVersion: "1.16.0"`)이 따로 있고, 릴리스에는 리비전 번호가 있다. "지금 운영에 뭐가 떠 있나"라는 질문에 셋 중 무엇으로 답하는지 팀 안에서 맞춰 두지 않으면 대화가 엇갈린다.
+
+## helm create가 만들어 주는 것
+
+차트를 처음부터 손으로 만들 일은 드물다. `helm create`가 쓸 만한 뼈대를 준다.
+
+```bash
+# shop-api라는 이름으로 차트 뼈대를 만든다
+helm create shop-api
+
+# 만들어진 파일을 본다
+find shop-api | sort
+```
+
+```text
+Creating shop-api
+shop-api
+shop-api/.helmignore
+shop-api/Chart.yaml
+shop-api/charts
+shop-api/templates
+shop-api/templates/NOTES.txt
+shop-api/templates/_helpers.tpl
+shop-api/templates/deployment.yaml
+shop-api/templates/hpa.yaml
+shop-api/templates/ingress.yaml
+shop-api/templates/service.yaml
+shop-api/templates/serviceaccount.yaml
+shop-api/templates/tests
+shop-api/templates/tests/test-connection.yaml
+shop-api/values.yaml
+```
+
+파일마다 하는 일은 이렇다.
+
+`Chart.yaml`은 차트의 신분증이다. 주석을 빼면 몇 줄 안 된다.
+
+```yaml
+apiVersion: v2          # Helm 3 차트라는 뜻 (Helm 2 차트는 v1)
+name: shop-api
+description: A Helm chart for Kubernetes
+type: application       # 설치할 수 있는 차트. library는 템플릿만 빌려준다
+version: 0.1.0          # 차트 버전. 차트를 고칠 때마다 올린다
+appVersion: "1.16.0"    # 차트가 담은 앱의 버전. 정보용이다
+```
+
+`values.yaml`은 기본값이다. 템플릿에서 `.Values.replicaCount`처럼 꺼내 쓰는 값이 여기 모여 있다. 기본으로 nginx 이미지를 띄우게 되어 있어서 뼈대 그대로도 설치가 된다.
+
+```yaml
+replicaCount: 1
+image:
+  repository: nginx
+  pullPolicy: IfNotPresent
+  tag: ""                # 비우면 Chart.yaml의 appVersion을 쓴다
+service:
+  type: ClusterIP
+  port: 80
+ingress:
+  enabled: false
+resources: {}
+```
+
+`templates/` 아래가 실제 매니페스트의 틀이다. Go 템플릿 문법으로 쓴 YAML이라서 `{{ .Values.replicaCount }}` 같은 자리가 설치할 때 값으로 바뀐다. 밑줄로 시작하는 `_helpers.tpl`은 매니페스트로 렌더링되지 않고, 이름이나 라벨처럼 여러 템플릿이 같이 쓰는 조각을 정의해 둔다. `NOTES.txt`는 설치가 끝나면 화면에 찍히는 안내문이고, `tests/` 아래는 `helm test`로 돌리는 확인용 Pod다. 문법은 [차트 템플릿 글](/posts/helm-chart-templates)에서 한 줄씩 읽는다.
+
+`charts/`는 비어 있는 디렉터리다. 이 차트가 다른 차트(예: Redis)에 의존하면 받아 온 하위 차트가 여기 들어간다. `.helmignore`는 `.dockerignore`처럼 패키징할 때 뺄 파일을 적는다.
+
+## install 한 번에 일어나는 일
+
+설치해 보자. `-n`은 네임스페이스, `--create-namespace`는 없으면 만들라는 뜻이다. `--set`으로 이미지 태그 하나만 바꿨다.
+
+```bash
+# shop-dev 네임스페이스에 shop-api라는 릴리스로 설치한다
+helm install shop-api ./shop-api -n shop-dev --create-namespace --set image.tag=1.27.0
+```
+
+```text
+NAME: shop-api
+LAST DEPLOYED: Sun Oct 18 23:28:32 2026
+NAMESPACE: shop-dev
+STATUS: deployed
+REVISION: 1
+NOTES:
+1. Get the application URL by running these commands:
+  export POD_NAME=$(kubectl get pods --namespace shop-dev -l "app.kubernetes.io/name=shop-api,app.kubernetes.io/instance=shop-api" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace shop-dev $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace shop-dev port-forward $POD_NAME 8080:$CONTAINER_PORT
+```
+
+`STATUS: deployed`와 `REVISION: 1`이 볼 곳이다. 아래 `NOTES`는 `NOTES.txt`를 렌더링한 결과라 차트마다 다르다.
+
+이 명령 한 줄 뒤에서 일어나는 일을 단계로 나눠 보면 이렇다. 핵심은 템플릿을 YAML로 바꾸는 일이 클러스터가 아니라 내 컴퓨터의 `helm` 프로세스 안에서 끝난다는 점이다. 클러스터는 완성된 매니페스트만 받는다. 다음을 눌러 따라가 보자.
+
+<SequenceDiagram
+  caption="helm install shop-api ./shop-api"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "helm", label: "helm CLI" },
+    { id: "api", label: "API 서버" },
+    { id: "ctrl", label: "컨트롤러" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "helm",
+      label: "install",
+      title: "차트와 값을 넘긴다",
+      detail: "차트 경로, 릴리스 이름, 네임스페이스, --set과 -f로 준 값을 받는다. kubeconfig의 현재 컨텍스트로 어느 클러스터인지 정한다.",
+    },
+    {
+      from: "helm",
+      to: "helm",
+      label: "values 병합",
+      title: "값을 하나로 합친다",
+      detail: "values.yaml 기본값 위에 -f 파일, 그 위에 --set을 덮는다. 순서는 values 글에서 자세히 본다.",
+    },
+    {
+      from: "helm",
+      to: "helm",
+      label: "렌더링",
+      title: "템플릿을 YAML로 바꾼다",
+      detail: "templates/ 아래 파일을 Go 템플릿으로 실행해 완성된 매니페스트를 만든다. 문법 오류는 여기서 터지고 클러스터에는 아무것도 가지 않는다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "기존 릴리스 조회",
+      title: "같은 이름이 있는지 본다",
+      detail: "네임스페이스에서 owner=helm, name=shop-api 라벨이 붙은 Secret을 찾는다. 이미 배포된 릴리스가 있으면 설치를 멈춘다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "Secret v1 생성",
+      title: "기록을 먼저 남긴다",
+      detail: "리비전 1의 기록을 status=pending-install로 만든다. 여기서 프로세스가 죽으면 이 상태가 그대로 남는다.",
+      payload: "sh.helm.release.v1.shop-api.v1\nstatus=pending-install",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "리소스 생성",
+      title: "정해진 순서로 만든다",
+      detail: "종류별 순서(Namespace, ServiceAccount, Secret, ConfigMap, Service, Deployment, Ingress…)로 정렬해 만든다. 리소스마다 이 릴리스 소속이라는 라벨과 어노테이션을 붙인다.",
+    },
+    {
+      from: "api",
+      to: "ctrl",
+      label: "변경 알림",
+      title: "그다음은 쿠버네티스 몫이다",
+      detail: "Deployment 컨트롤러가 ReplicaSet과 Pod를 만들고 스케줄러가 노드를 고른다. Helm은 --wait를 주지 않으면 이걸 기다리지 않는다.",
+    },
+    {
+      from: "helm",
+      to: "api",
+      label: "status=deployed",
+      title: "기록을 확정한다",
+      detail: "리소스 생성 요청이 모두 받아들여지면 Secret의 상태를 deployed로 바꾸고 NOTES를 찍는다.",
+    },
+  ]}
+/>
+
+여기서 두 가지를 기억해 둘 만하다. 하나는 `STATUS: deployed`가 "Pod가 잘 떴다"는 뜻이 아니라는 것이다. 기본 동작에서 Helm은 API 서버가 리소스를 받아들이면 바로 성공으로 친다. 이미지 주소가 틀려서 Pod가 `ImagePullBackOff`에 빠져도 릴리스는 deployed다. Pod가 Ready가 될 때까지 기다리게 하려면 `--wait`를 줘야 하고, 이건 [업그레이드와 롤백 글](/posts/helm-release-lifecycle)에서 다룬다. Pod가 뜨는 과정 자체는 [Pod의 일생 글](/posts/k8s-pod-lifecycle)에 있다.
+
+다른 하나는 Helm이 클러스터 안에 따로 돌아가는 서버를 두지 않는다는 점이다. 그냥 내 kubeconfig의 권한으로 API 서버에 요청을 보낸다. 그래서 `kubectl`로 Deployment를 만들 권한이 없는 사람은 Helm으로도 못 만든다. 당연해 보이지만 예전에는 아니었다. 이 이야기는 뒤에서 한다.
+
+## 설치하고, 들여다보고, 지우기
+
+설치된 릴리스는 `helm list`로 본다. 네임스페이스를 안 주면 현재 컨텍스트의 기본 네임스페이스만 보니, 전체를 보려면 `-A`를 붙인다.
+
+```bash
+# shop-dev 네임스페이스의 릴리스 목록
+helm list -n shop-dev
+
+# 모든 네임스페이스의 릴리스 (실패하거나 지운 것까지 보려면 -a)
+helm list -A
+```
+
+```text
+NAME    	NAMESPACE	REVISION	UPDATED                                	STATUS  	CHART         	APP VERSION
+shop-api	shop-dev 	1       	2026-10-18 23:28:32.581935512 +0000 UTC	deployed	shop-api-0.1.0	1.16.0     
+```
+
+`CHART` 칸은 차트 이름과 차트 버전을 붙인 것이고 `APP VERSION`은 `Chart.yaml`의 `appVersion`이다. 방금 `--set image.tag=1.27.0`으로 nginx 1.27.0을 띄웠는데도 `APP VERSION`은 1.16.0이다. 이 칸은 실제로 떠 있는 이미지를 보고 채우는 게 아니라 차트에 적힌 글자를 그대로 보여 준다. 그래서 "운영에 뭐가 떠 있나"는 이 칸이 아니라 실제 리소스에서 확인해야 한다.
+
+Helm이 만든 리소스는 평소처럼 `kubectl`로 본다.
+
+```bash
+# 릴리스가 만든 Pod와 Service
+kubectl get pods,svc -n shop-dev
+```
+
+```text
+NAME                            READY   STATUS    RESTARTS   AGE
+pod/shop-api-6fcd9cf764-l6qxp   1/1     Running   0          0s
+
+NAME               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+service/shop-api   ClusterIP   10.0.0.148   <none>        80/TCP    0s
+```
+
+릴리스에 무엇이 들어갔는지는 `helm get`으로 꺼낸다. 하위 명령이 여럿인데 실무에서 자주 쓰는 건 셋이다.
+
+```bash
+# 이번 리비전에 사용자가 넣은 값 (차트 기본값은 빠진다)
+helm get values shop-api -n shop-dev
+
+# 실제로 적용된 매니페스트 전체
+helm get manifest shop-api -n shop-dev
+
+# 릴리스의 요약 정보
+helm get metadata shop-api -n shop-dev
+```
+
+```text
+USER-SUPPLIED VALUES:
+image:
+  tag: 1.27.0
+```
+
+`helm get values`는 사용자가 덮어쓴 값만 보여 준다. 차트 기본값까지 합친 최종 값이 보고 싶으면 `--all`을 붙인다. 장애 때 "이 환경에는 무슨 값이 들어갔지?"를 git이 아니라 클러스터에서 바로 확인할 수 있다는 게 Helm을 쓰는 큰 이유 중 하나다.
+
+값을 바꿔 다시 배포하는 건 `helm upgrade`다. 이미지 태그를 1.27.1로 올려 보자.
+
+```bash
+# 같은 릴리스에 새 값으로 다시 배포한다
+helm upgrade shop-api ./shop-api -n shop-dev --set image.tag=1.27.1
+
+# 리비전 기록을 본다
+helm history shop-api -n shop-dev
+```
+
+```text
+Release "shop-api" has been upgraded. Happy Helming!
+NAME: shop-api
+LAST DEPLOYED: Sun Oct 18 23:28:33 2026
+NAMESPACE: shop-dev
+STATUS: deployed
+REVISION: 2
+```
+
+```text
+REVISION	UPDATED                 	STATUS    	CHART         	APP VERSION	DESCRIPTION     
+1       	Sun Oct 18 23:28:32 2026	superseded	shop-api-0.1.0	1.16.0     	Install complete
+2       	Sun Oct 18 23:28:33 2026	deployed  	shop-api-0.1.0	1.16.0     	Upgrade complete
+```
+
+리비전 1은 `superseded`(대체됨), 2는 `deployed`가 됐다. 한 릴리스에서 `deployed`는 언제나 하나뿐이다. 리비전 상태가 어떻게 바뀌는지 아래 그림으로 이어서 보자. 업그레이드가 한 번 실패하고 롤백하는 경우까지 넣었다.
+
+<AlgoTrace
+  caption="리비전이 쌓이면서 상태가 바뀐다"
+  memoryLabel="helm history"
+  cells={["rev 1", "rev 2", "rev 3", "rev 4"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["1 deployed"],
+      caption: "처음 설치하면 리비전 1이 생기고 deployed가 된다.",
+    },
+    {
+      pointer: 1,
+      memory: ["1 superseded", "2 deployed"],
+      caption: "업그레이드에 성공하면 2가 deployed, 1은 superseded로 물러난다.",
+    },
+    {
+      pointer: 2,
+      memory: ["1 superseded", "2 deployed", "3 failed"],
+      caption: "세 번째 배포가 실패하면 3은 failed로 남고, 2가 여전히 deployed다. 클러스터에는 3이 반쯤 적용됐을 수 있다.",
+    },
+    {
+      pointer: 3,
+      found: [1],
+      memory: ["1 superseded", "2 superseded", "3 failed", "4 deployed"],
+      caption: "helm rollback shop-api 2를 하면 2를 다시 적용한 새 리비전 4가 생긴다. 번호는 되돌아가지 않고 늘어난다.",
+    },
+  ]}
+/>
+
+롤백도 새 리비전을 만든다는 점이 중요하다. 기록을 지우고 과거로 돌아가는 게 아니라, 과거의 내용을 다시 적용한 새 배포를 하나 더 쌓는다. 그래서 history를 보면 언제 누가 무엇으로 되돌렸는지까지 남는다.
+
+마지막으로 지우기다.
+
+```bash
+# 릴리스와, 릴리스가 만든 리소스를 모두 지운다
+helm uninstall shop-api -n shop-dev
+
+# 지워졌는지 확인한다
+kubectl get all,secret -n shop-dev
+```
+
+```text
+release "shop-api" uninstalled
+No resources found in shop-dev namespace.
+```
+
+<Callout kind="warning" title="uninstall은 리소스까지 지운다">
+  `helm uninstall`은 릴리스 기록만 지우는 게 아니라 그 릴리스가 만든 Deployment, Service, ConfigMap, Secret을 실제로 삭제한다. 컨텍스트나 `-n`을 잘못 주면 운영 앱이 바로 내려간다. 지우기 전에 `kubectl config current-context`와 `helm list -n 네임스페이스`로 대상을 확인한다. 기록을 남기려면 `--keep-history`를 주는데, 이때도 리소스는 지워진다. 남겨야 하는 리소스는 템플릿에 `helm.sh/resource-policy: keep` 어노테이션을 달아 두면 uninstall에서 빠진다. StatefulSet의 `volumeClaimTemplates`로 생긴 PVC는 Helm이 만든 게 아니라서 원래 지워지지 않는다. 되돌리는 방법은 다시 `helm install`하는 것뿐이고, PVC가 남아 있다면 같은 이름으로 다시 붙는다.
+</Callout>
+
+## 릴리스 기록은 클러스터 안의 Secret에 있다
+
+앞에서 `helm list`와 `helm history`가 보여 준 정보는 어디서 왔을까. 내 컴퓨터에는 아무것도 저장되지 않는다. 릴리스가 있는 네임스페이스의 Secret에 들어 있다.
+
+```bash
+# 업그레이드 후 shop-dev의 Secret을 라벨과 함께 본다
+kubectl get secret -n shop-dev -l owner=helm --show-labels
+```
+
+```text
+NAME                             TYPE                 DATA   AGE   LABELS
+sh.helm.release.v1.shop-api.v1   helm.sh/release.v1   1      1s    modifiedAt=1792366112,name=shop-api,owner=helm,status=superseded,version=1
+sh.helm.release.v1.shop-api.v2   helm.sh/release.v1   1      0s    modifiedAt=1792366112,name=shop-api,owner=helm,status=deployed,version=2
+```
+
+리비전 하나가 Secret 하나다. 이름을 조각내 보면 규칙이 보인다. 눌러서 하나씩 보자.
+
+<UrlAnatomy
+  caption="릴리스 기록 Secret의 이름"
+  separator=""
+  joiner="."
+  params={[
+    {
+      key: "sh",
+      display: "sh",
+      title: "Helm 3의 접두어",
+      description: "helm.sh 도메인을 뒤집어 쓴 접두어다. 이 Secret을 Helm이 쓴다는 표시라서 kubectl get secret 목록에서 쉽게 골라낼 수 있다.",
+    },
+    {
+      key: "helm",
+      display: "helm",
+      title: "도구 이름",
+      description: "접두어의 나머지 절반이다. sh.helm까지가 고정이다.",
+    },
+    {
+      key: "release",
+      display: "release",
+      title: "무엇의 기록인지",
+      description: "릴리스 기록이라는 뜻이다. Secret의 type도 helm.sh/release.v1이다.",
+    },
+    {
+      key: "v1",
+      display: "v1",
+      title: "저장 형식의 버전",
+      description: "리비전 번호가 아니라 기록을 저장하는 형식의 버전이다. Helm 3 내내 v1이다.",
+    },
+    {
+      key: "name",
+      display: "shop-api",
+      title: "릴리스 이름",
+      description: "helm install에 준 이름이다. Secret 이름에 들어가기 때문에 릴리스 이름은 53자를 넘을 수 없다.",
+      required: true,
+    },
+    {
+      key: "rev",
+      display: "v2",
+      title: "리비전 번호",
+      description: "1부터 하나씩 늘어난다. helm history의 REVISION과 같다. 라벨의 version=2, status=deployed로도 찾을 수 있다.",
+      required: true,
+    },
+  ]}
+/>
+
+안에는 무엇이 들었을까. `release` 키 하나에 값이 들어 있는데, Helm이 JSON을 gzip으로 압축하고 base64로 한 번 바꾼 걸, 쿠버네티스가 Secret 규칙대로 base64로 한 번 더 감쌌다. 그래서 두 번 풀어야 한다.
+
+```bash
+# 리비전 2의 기록을 꺼내 최상위 키와 사용자 값만 본다
+kubectl get secret sh.helm.release.v1.shop-api.v2 -n shop-dev \
+  -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip \
+  | jq -c '{keys: keys, config, version, status: .info.status}'
+```
+
+```text
+{"keys":["chart","config","hooks","info","manifest","name","namespace","version"],"config":{"image":{"tag":"1.27.1"}},"version":2,"status":"deployed"}
+```
+
+`chart`에는 그때 쓴 차트 전체(템플릿과 기본 values까지), `config`에는 사용자가 준 값, `manifest`에는 렌더링된 YAML 전체가 들어 있다. 롤백이 차트 파일 없이도 되는 이유가 이것이다. 필요한 건 전부 이 Secret 안에 있다.
+
+이 구조가 실무에서 의미하는 바가 몇 가지 있다.
+
+하나, 기록이 클러스터에 있으니 노트북을 바꾸든 CI에서 돌리든 같은 릴리스를 이어서 다룰 수 있다. 반대로 네임스페이스를 지우면 기록도 같이 사라진다.
+
+둘, `config`에 사용자가 넣은 값이 평문 JSON으로 들어간다. `--set db.password=...`로 비밀번호를 넣었다면 이 네임스페이스의 Secret을 읽을 수 있는 사람은 누구나 꺼내 볼 수 있다. 비밀 값을 어떻게 넣어야 하는지는 [values와 비밀 값 글](/posts/helm-values-secrets)에서 본다.
+
+셋, 리비전마다 차트 전체를 담으니 기록이 쌓이면 Secret도 쌓인다. `helm upgrade`는 기본으로 리비전을 10개까지만 남기고(`--history-max`, 기본 10), 오래된 것부터 지운다. 너무 오래된 리비전으로는 롤백할 수 없다는 뜻이기도 하다. 또 Secret 하나는 1MB를 넘을 수 없어서, 큰 파일을 템플릿에 통째로 넣은 차트는 `data: Too long: must have at most 1048576 bytes` 같은 오류로 설치가 막힌다.
+
+넷, 저장소는 바꿀 수 있다. 환경 변수 `HELM_DRIVER`로 `secret`(기본) 대신 `configmap`, `sql`(PostgreSQL), `memory`를 고를 수 있다. 대부분은 기본값 그대로 쓴다.
+
+## 이미 있는 리소스와 이름이 겹칠 때
+
+Helm을 도입하는 첫날 자주 만나는 오류가 있다. 원래 `kubectl apply`로 관리하던 앱을 Helm 차트로 바꿔 설치하면 이렇게 멈춘다.
+
+```bash
+# legacy 네임스페이스에 kubectl로 만든 ServiceAccount가 이미 있다
+kubectl create sa shop-api -n legacy
+
+# 같은 이름의 리소스를 만드는 차트를 설치한다
+helm install shop-api ./shop-api -n legacy
+```
+
+```text
+serviceaccount/shop-api created
+Error: INSTALLATION FAILED: Unable to continue with install: ServiceAccount "shop-api" in namespace "legacy" exists and cannot be imported into the current release: invalid ownership metadata; label validation error: missing key "app.kubernetes.io/managed-by": must be set to "Helm"; annotation validation error: missing key "meta.helm.sh/release-name": must be set to "shop-api"; annotation validation error: missing key "meta.helm.sh/release-namespace": must be set to "legacy"
+```
+
+Helm은 자기가 만든 리소스에 표시를 남긴다. 라벨 `app.kubernetes.io/managed-by: Helm`과 어노테이션 `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`다. 설치하려는데 같은 이름의 리소스가 이미 있고 이 표시가 없으면, 남의 리소스를 덮어쓰지 않으려고 멈춘다. 오류 문구가 친절하게 무엇을 붙이면 되는지까지 알려 준다. 정말로 이 리소스를 릴리스로 가져오려는 거라면 그 표시를 붙이고 다시 설치한다.
+
+```bash
+# 기존 리소스를 shop-api 릴리스 소속으로 표시한다
+kubectl label sa shop-api -n legacy app.kubernetes.io/managed-by=Helm
+kubectl annotate sa shop-api -n legacy meta.helm.sh/release-name=shop-api meta.helm.sh/release-namespace=legacy
+
+# 이제 설치가 기존 리소스를 넘겨받는다
+helm install shop-api ./shop-api -n legacy
+```
+
+반대 방향도 있다. 실행 중인 Deployment의 표시를 보면 Helm이 붙인 라벨과 어노테이션이 그대로 보인다.
+
+```bash
+# Helm이 리소스에 남긴 소속 표시를 본다
+kubectl get deploy shop-api -n shop -o jsonpath='{.metadata.labels}{"\n"}{.metadata.annotations}{"\n"}'
+```
+
+```text
+{"app.kubernetes.io/instance":"shop-api","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/name":"shop-api","app.kubernetes.io/version":"1.16.0","helm.sh/chart":"shop-api-0.1.0"}
+{"deployment.kubernetes.io/revision":"1","meta.helm.sh/release-name":"shop-api","meta.helm.sh/release-namespace":"shop"}
+```
+
+두 번째로 흔한 건 이름 재사용이다. `--keep-history`로 지운 릴리스는 기록이 `uninstalled` 상태로 남아 있어서, 같은 이름으로 `helm install`을 하면 거절당한다.
+
+```bash
+# 기록을 남기고 지운 뒤 같은 이름으로 다시 설치해 본다
+helm uninstall shop-api -n shop --keep-history
+helm list -n shop -a
+helm install shop-api ./shop-api -n shop
+```
+
+```text
+release "shop-api" uninstalled
+NAME    	NAMESPACE	REVISION	UPDATED                                	STATUS     	CHART         	APP VERSION
+shop-api	shop     	1       	2026-10-18 23:27:48.831135858 +0000 UTC	uninstalled	shop-api-0.1.0	1.16.0     
+Error: INSTALLATION FAILED: cannot re-use a name that is still in use
+```
+
+`helm list`에 `-a`를 붙여야 이 줄이 보인다는 점이 함정이다. 그냥 `helm list`에는 안 나오니 "릴리스가 없는데 이름이 쓰이고 있다"는 말이 이상하게 들린다. 이 상태에서는 `helm upgrade --install`이 새 리비전으로 다시 설치해 주고, 기록이 필요 없으면 `helm uninstall`을 한 번 더 해서 지운다. CI에서는 처음부터 `helm upgrade --install`을 쓰는 게 보통이다. 처음이면 설치하고, 있으면 업그레이드한다.
+
+## 현장에서 릴리스를 만나는 순간
+
+Helm을 알고 나면 장애를 볼 때 확인 순서가 하나 늘어난다. 몇 가지 증상과 처음 볼 곳을 적어 둔다.
+
+`kubectl scale`로 레플리카를 6으로 늘려 급한 불을 껐는데, 다음 배포에서 다시 2로 돌아갔다. Helm은 차트와 values로 매니페스트를 다시 만들어 적용하니, 클러스터에서 손으로 고친 값은 다음 업그레이드에 덮인다. 바꿀 값은 values에 넣어야 남는다. 손으로 고친 것과 Helm 기록이 어긋나는 문제는 [업그레이드와 롤백 글](/posts/helm-release-lifecycle)에서 three-way merge와 함께 자세히 본다.
+
+배포는 성공했다고 나오는데 서비스가 안 된다. 앞에서 본 대로 `STATUS: deployed`는 API 서버가 리소스를 받았다는 뜻일 뿐이다. `kubectl get pods`와 `kubectl describe pod`로 Pod를 직접 본다. CI에서는 `--wait --timeout`을 걸어 Pod가 Ready가 안 되면 배포 자체를 실패로 만든다.
+
+`helm list`에 릴리스가 안 보인다. 네임스페이스 문제가 대부분이다. `helm list -A -a`로 전체 네임스페이스, 전체 상태를 본다. 그래도 없으면 Helm이 아니라 다른 도구(ArgoCD처럼 차트를 렌더링만 하고 직접 적용하는 도구)가 배포한 것일 수 있다. 이건 [배포 흐름 글](/posts/helm-dependencies-oci-gitops)에서 다룬다.
+
+같은 질문 "지금 운영 이미지가 뭐냐"에 `helm list`의 `APP VERSION`으로 답하면 틀릴 수 있다. 실제 이미지는 리소스에서 본다.
+
+```bash
+# 실제로 떠 있는 이미지를 리소스에서 확인한다
+kubectl get deploy shop-api -n shop-dev -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
+```
+
+```text
+nginx:1.27.1
+```
+
+## Helm 2에는 서버가 있었다
+
+예전 글이나 오래된 차트를 보면 Tiller라는 이름이 나온다. Helm 2는 클러스터 안에 Tiller라는 서버를 띄우고, `helm` CLI는 Tiller에게 요청만 보냈다. 실제 리소스는 Tiller가 만들었다. 문제는 Tiller가 어떤 네임스페이스에든 무엇이든 만들어야 하니 보통 cluster-admin 권한으로 돌았다는 점이다. Tiller에 닿을 수 있는 사람은 사실상 클러스터 관리자가 됐다. 릴리스 기록도 Tiller가 있는 `kube-system`의 ConfigMap에 모여 있었다.
+
+2019년에 나온 Helm 3는 Tiller를 없앴다. CLI가 사용자의 kubeconfig로 API 서버에 직접 요청하고, 권한은 쿠버네티스 RBAC가 그대로 판단한다. 기록은 릴리스가 있는 네임스페이스의 Secret으로 옮겼다. 그래서 Helm 3부터는 릴리스 이름이 네임스페이스마다 따로다.
+
+2025년 11월에는 Helm 4가 나왔다. 차트 형식(`apiVersion: v2`)은 그대로 쓰고, 리소스 적용 방식(서버 사이드 적용)이나 일부 플래그 이름이 바뀌었다. 이 시리즈의 명령은 Helm 3.16 기준이고, Helm 4에서 이름이 달라진 플래그는 해당 글에서 짚는다. 회사 CI가 어느 버전을 쓰는지 `helm version`으로 먼저 확인하는 게 좋다.
+
+## Helm이 묶어 주는 것
+
+정리하면 Helm은 YAML 묶음을 차트라는 패키지로 만들어 반복을 없애고, 설치 하나를 릴리스라는 이름으로 묶고, 바뀔 때마다 리비전으로 기록을 남긴다. 템플릿을 YAML로 바꾸는 일은 내 컴퓨터에서 끝나고 클러스터는 결과만 받는다. 기록은 네임스페이스의 Secret에 있어서 누구든 이어서 다룰 수 있지만, 그 안에 값이 평문으로 남는다는 것도 함께 기억해야 한다. 다음 글에서는 `templates/` 안의 문법을 한 줄씩 읽는다.
+
+## 면접에서 나올 만한 질문
+
+### Helm은 어떤 문제를 풀려고 쓰나요?
+
+쿠버네티스 매니페스트를 환경마다 복사해 관리하면 생기는 반복, 묶음, 이력 문제를 푼다. 같은 부분은 템플릿으로 한 번만 쓰고 환경별 차이만 values로 뺀다. 설치 하나를 릴리스로 묶어서 함께 지우고 함께 업그레이드할 수 있고, 리비전마다 적용한 내용을 남겨 롤백할 수 있다.
+
+### 차트, 릴리스, 리비전은 어떻게 다른가요?
+
+차트는 템플릿과 기본값을 담은 패키지이고 클러스터와 무관하게 존재한다. 릴리스는 그 차트를 특정 네임스페이스에 특정 이름으로 설치한 결과라서, 같은 차트로 여러 릴리스를 만들 수 있다. 리비전은 릴리스가 바뀔 때마다 늘어나는 번호로, 롤백도 새 리비전을 만든다.
+
+### Helm은 릴리스 정보를 어디에 저장하나요?
+
+기본으로 릴리스가 있는 네임스페이스의 Secret에 리비전마다 하나씩 `sh.helm.release.v1.<이름>.v<번호>`로 저장한다. 안에는 차트 전체, 사용자 값, 렌더링된 매니페스트가 gzip과 base64로 들어 있다. 그래서 롤백에 원래 차트 파일이 필요 없고, 반대로 그 네임스페이스의 Secret을 읽을 수 있는 사람은 값도 볼 수 있다.
+
+### helm install이 성공했는데 서비스가 안 되는 건 왜인가요?
+
+기본 동작에서 Helm은 API 서버가 리소스를 받아들이면 성공으로 기록하고 Pod가 Ready가 되기를 기다리지 않는다. 이미지 오류나 프로브 실패로 Pod가 안 떠도 릴리스는 deployed다. `--wait`와 `--timeout`을 주면 Ready까지 기다리고, 시간 안에 안 되면 실패로 기록한다.
+
+### Helm 2에서 3으로 오면서 무엇이 바뀌었나요?
+
+가장 큰 변화는 Tiller 제거다. Helm 2는 클러스터 안의 Tiller가 보통 cluster-admin 권한으로 리소스를 만들어서 권한 관리가 사실상 무너졌다. Helm 3는 CLI가 사용자 권한으로 API 서버에 직접 요청하므로 RBAC가 그대로 적용되고, 릴리스 기록도 네임스페이스별 Secret으로 옮겨 이름이 네임스페이스 단위가 됐다.
+
+### 기존에 kubectl로 만든 리소스를 Helm으로 넘기려면 어떻게 하나요?
+
+같은 이름의 리소스에 Helm 소속 표시가 없으면 install이 `invalid ownership metadata`로 멈춘다. 리소스에 `app.kubernetes.io/managed-by: Helm` 라벨과 `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace` 어노테이션을 붙이면 다음 설치나 업그레이드가 그 리소스를 넘겨받는다. 붙이기 전에 차트가 만드는 내용과 기존 리소스가 맞는지 먼저 비교해 두는 게 안전하다.
+
+### helm list의 APP VERSION으로 배포 버전을 확인해도 되나요?
+
+안 된다. `APP VERSION`은 차트의 `Chart.yaml`에 적힌 `appVersion`을 그대로 보여 줄 뿐이고, `--set image.tag`로 다른 이미지를 띄워도 바뀌지 않는다. 실제 이미지는 Deployment의 `spec.template.spec.containers[].image`에서 확인한다. 차트를 만들 때 태그 기본값을 appVersion으로 두면 둘을 맞추기 쉽다.

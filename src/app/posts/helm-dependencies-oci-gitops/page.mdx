@@ -1,0 +1,647 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("helm-dependencies-oci-gitops");
+
+ArgoCD로 배포하는 클러스터에서 장애가 났다. 이전 버전으로 되돌리려고 `helm history shop-api -n shop-prod`를 쳤더니 `Error: release: not found`가 나온다. `helm list -A`에도 아무것도 없다. 분명히 Helm 차트로 배포한 앱인데 Helm은 그런 릴리스를 모른다고 한다.
+
+이건 고장이 아니라 ArgoCD가 Helm을 쓰는 방식이다. 차트를 만드는 쪽에서 클러스터에 적용되는 쪽까지 가는 길이 여러 갈래라서 생기는 일이다. 이 글은 그 길을 따라간다. 차트가 다른 차트에 기대는 의존성, 차트 버전을 붙이는 규칙, 차트를 OCI 레지스트리에 올리고 받는 법, 릴리스 여러 개를 한 파일로 묶는 helmfile, 그리고 ArgoCD가 차트를 다루는 방식과 Kustomize와의 비교까지 본다.
+
+이 시리즈의 앞 글들([기본](/posts/helm-basics), [템플릿](/posts/helm-chart-templates), [values](/posts/helm-values-secrets), [업그레이드와 롤백](/posts/helm-release-lifecycle))에서 만든 `shop-api` 차트를 계속 쓴다. 출력은 Helm 3.16, 로컬에 띄운 OCI 레지스트리와 HTTP 차트 저장소, kwok 실습 클러스터(Kubernetes 1.30)에서 받았다. ArgoCD는 직접 띄우지 않았고, ArgoCD가 하는 일을 같은 명령으로 재현해 보였다.
+
+## 차트가 다른 차트를 품는 의존성
+
+`shop-api`가 캐시로 Redis를 쓴다고 하자. Redis를 띄우는 StatefulSet, Service, ConfigMap을 직접 쓰는 대신, 잘 만들어진 Redis 차트를 하위 차트로 넣는다. 여러 서비스가 같이 쓰는 라벨이나 이름 규칙은 공용 차트로 빼서 함께 넣는다. `Chart.yaml`의 `dependencies`에 적는다.
+
+```yaml
+# shop-api/Chart.yaml
+apiVersion: v2
+name: shop-api
+version: 0.2.0
+appVersion: "1.27.1"
+dependencies:
+  - name: shop-common
+    version: 0.1.0
+    repository: file://../shop-common
+  - name: redis
+    version: "~20.6.0"
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: redis.enabled
+```
+
+`repository`는 하위 차트를 받을 곳이다. `file://`은 같은 저장소 안의 디렉터리, `oci://`는 OCI 레지스트리, `https://`는 예전 방식의 차트 저장소다. `version`에는 정확한 버전이나 범위를 쓴다. `condition`은 이 값이 false면 하위 차트를 통째로 빼라는 뜻이다. 개발 환경에서는 Redis를 띄우고 운영에서는 관리형 Redis를 쓰는 식으로 고를 수 있다.
+
+적어 두기만 해서는 안 되고, 받아 와야 한다.
+
+```bash
+# 범위에 맞는 버전을 골라 charts/ 아래에 받고 Chart.lock을 만든다
+helm dependency update shop-api
+
+# 상태를 본다
+helm dependency list shop-api
+cat shop-api/Chart.lock
+```
+
+```text
+Saving 2 charts
+Downloading redis from repo oci://registry-1.docker.io/bitnamicharts
+Pulled: registry-1.docker.io/bitnamicharts/redis:20.6.3
+Digest: sha256:b63a6dba4a1591d54e205d8597f1435c4703582ba548cf8b2c692e9acdcd5060
+Deleting outdated charts
+NAME       	VERSION	REPOSITORY                              	STATUS
+shop-common	0.1.0  	file://../shop-common                   	ok    
+redis      	~20.6.0	oci://registry-1.docker.io/bitnamicharts	ok    
+
+dependencies:
+- name: shop-common
+  repository: file://../shop-common
+  version: 0.1.0
+- name: redis
+  repository: oci://registry-1.docker.io/bitnamicharts
+  version: 20.6.3
+digest: sha256:fb1478c06952bfb4b5485f24a73a5bc8bdf1eb1d90bf5188e82ef0f295ef653c
+generated: "2026-10-18T23:54:31.399172348Z"
+```
+
+`~20.6.0`이라는 범위가 실제로는 20.6.3으로 정해졌고, 그 결정이 `Chart.lock`에 적혔다. `package-lock.json`과 같은 역할이다. `helm dependency update`는 범위를 다시 풀어서 lock을 새로 쓰고, `helm dependency build`는 lock에 적힌 버전 그대로 받는다. CI에서는 build를 써야 오늘과 내일의 빌드가 같은 하위 차트를 쓴다. `Chart.lock`은 git에 올리고, 받아 온 `charts/*.tgz`는 보통 올리지 않는다.
+
+이 과정에서 실제로 Docker Hub가 `429 Too Many Requests`를 돌려준 적이 있다. 공용 레지스트리는 요청 수 제한이 있어서, CI가 빌드마다 하위 차트를 받으면 막힐 수 있다. 회사에서는 하위 차트를 사내 레지스트리에 미러링해 두고 거기서 받는 경우가 많다.
+
+## 부모 values가 하위 차트로 흘러가는 길
+
+하위 차트는 자기 `values.yaml`을 가진 독립된 차트다. 부모는 하위 차트 이름을 키로 해서 값을 넘긴다. 부모의 `redis:` 아래 값은 Redis 차트의 최상위 값이 된다.
+
+```yaml
+# shop-api/values.yaml
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    existingSecret: shop-redis
+```
+
+```bash
+# 부모 차트에서 하위 차트 값을 바꿔 렌더링한다
+helm template shop-api ./shop-api --set redis.master.persistence.size=20Gi \
+  -s charts/redis/templates/master/application.yaml | grep 'storage: "'
+```
+
+```text
+            storage: "20Gi"
+```
+
+반대 방향은 막혀 있다. 하위 차트는 부모의 값을 볼 수 없고, 형제 하위 차트의 값도 볼 수 없다. 예외가 `global`이다. 부모 values의 `global:` 아래 값은 부모와 모든 하위 차트에서 `.Values.global`로 보인다. 이미지 레지스트리 주소처럼 모두가 같이 써야 하는 값을 여기에 둔다. 아래 그림은 값이 흐르는 방향이다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="부모의 redis 키는 redis 하위 차트로, global은 모두에게 간다. 하위 차트끼리는 서로의 값을 볼 수 없다."
+  nodes={[
+    { id: "pv", label: "부모 values", sub: "shop-api", x: 220, y: 45, w: 130 },
+    { id: "glob", label: "global", sub: "imageRegistry", x: 380, y: 45, w: 100 },
+    { id: "api", label: "shop-api", sub: "부모 템플릿", x: 220, y: 165, w: 120 },
+    { id: "redis", label: "redis", sub: "하위 차트", x: 70, y: 165, w: 110 },
+    { id: "lib", label: "shop-common", sub: "library", x: 370, y: 165, w: 120 },
+    { id: "out", label: "매니페스트", sub: "하나로 합쳐짐", x: 220, y: 280, w: 130 },
+  ]}
+  edges={[
+    { from: "pv", to: "api", label: ".Values" },
+    { from: "pv", to: "redis", label: "redis:" },
+    { from: "glob", to: "redis", dashed: true },
+    { from: "glob", to: "api", dashed: true },
+    { from: "lib", to: "api", label: "include" },
+    { from: "api", to: "out" },
+    { from: "redis", to: "out" },
+  ]}
+/>
+
+`global`이 정말로 하위 차트까지 가는지는 Bitnami Redis 차트에 `global.imageRegistry`를 줘 보면 바로 보인다. 이 차트는 원래와 다른 이미지가 들어오면 일부러 렌더링을 멈추는데, 멈추면서 바뀐 이미지 목록을 보여 준다.
+
+```bash
+# 부모에서 준 global 값이 하위 차트 이미지 주소를 바꾸는지 본다
+helm template shop-api ./shop-api --set global.imageRegistry=mirror.example.com
+```
+
+```text
+Unrecognized images:
+  - mirror.example.com/bitnami/redis:7.4.2-debian-12-r0
+  - mirror.example.com/bitnami/redis-sentinel:7.4.2-debian-12-r0
+  - mirror.example.com/bitnami/redis-exporter:1.67.0-debian-12-r0
+```
+
+부모에서 한 번 준 값이 하위 차트의 모든 이미지 주소에 들어갔다. 미러 레지스트리를 쓸 때 이 차트는 `global.security.allowInsecureImages`도 함께 켜라고 안내한다. 하위 차트를 쓸 때는 그 차트의 `values.yaml`을 `helm show values`로 꼭 열어 본다. 무엇을 바꿀 수 있는지는 거기에만 있다.
+
+## 템플릿만 빌려주는 library 차트
+
+`shop-common`은 `type: library`인 차트다. 리소스를 하나도 만들지 않고 `define`한 조각만 빌려준다. 서비스 열 개가 같은 라벨 규칙을 쓰게 하고 싶을 때 각 차트의 `_helpers.tpl`을 복사하는 대신 이렇게 만든다.
+
+```yaml
+# shop-common/Chart.yaml
+apiVersion: v2
+name: shop-common
+type: library
+version: 0.1.0
+```
+
+```yaml
+# shop-common/templates/_labels.tpl
+{{- define "shop-common.labels" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/part-of: shop
+{{- end }}
+```
+
+```bash
+# 부모 템플릿에서 include "shop-common.labels" . 로 부른 결과
+helm template shop-api ./shop-api -s templates/service.yaml | sed -n 3,10p
+
+# library 차트는 혼자 설치할 수 없다
+helm install x ./shop-common
+```
+
+```text
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-api
+  labels:
+    app.kubernetes.io/name: shop-api
+    app.kubernetes.io/instance: shop-api
+    app.kubernetes.io/part-of: shop
+Error: INSTALLATION FAILED: library charts are not installable
+```
+
+`.Chart.Name`이 `shop-common`이 아니라 `shop-api`로 나온 점을 보자. 조각에 넘긴 점(`.`)이 부모의 최상위 객체라서, 조각 안의 `.Chart`도 부모 차트다.
+
+실제로 이 차트를 만들다 한 번 걸린 게 있다. `helm create shop-common`으로 뼈대를 만들면 `_helpers.tpl`에 `shop-common.labels`라는 이름의 조각이 이미 들어 있다. 거기에 `_labels.tpl`로 같은 이름을 하나 더 정의했더니, 렌더링 결과에 내가 쓴 라벨이 아니라 뼈대의 라벨이 나왔다. `define` 이름은 부모와 모든 하위 차트가 한 공간을 같이 쓰고, 같은 이름이 둘이면 하나가 조용히 다른 하나를 덮는다. 오류가 나지 않으니 이름에 차트 이름을 붙이고, library 차트에서는 뼈대의 `_helpers.tpl`을 지우고 시작한다.
+
+## 차트 버전과 앱 버전
+
+`Chart.yaml`에는 버전이 두 개 있다. `version`은 차트 자체의 버전이고 SemVer(주.부.수)를 지켜야 한다. 템플릿이든 기본값이든 차트 안의 무엇이라도 바뀌면 올린다. `appVersion`은 차트가 담은 앱의 버전이고 형식 제한이 없는 정보용 값이다. 앱 이미지만 새로 나와도 차트를 새로 낼지, 이미지 태그는 values로만 바꿀지는 팀이 정한다. 여기서 중요한 건 같은 차트 버전으로 내용이 다른 차트를 두 번 올리지 않는 것이다. 받는 쪽은 버전 번호만 보고 같은 차트라고 믿는다.
+
+SemVer는 번호마다 약속이 있다. 주 버전은 깨지는 변경(values 키 이름 변경, 셀렉터 변경), 부 버전은 하위 호환되는 기능 추가(새 값, 새 리소스), 수 버전은 고치기만 한 변경이다. 의존성 범위는 이 약속을 믿고 쓰는 문법이다. 아래 그림은 저장소에 0.1.0, 0.1.1, 0.2.0, 0.3.0-rc.1이 있을 때 `^0.1.0`이 어떤 버전을 고르는지 보여 준다.
+
+<AlgoTrace
+  caption="^0.1.0은 0.x에서 부 버전을 고정한다"
+  memoryLabel="후보"
+  cells={["0.1.0", "0.1.1", "0.2.0", "0.3.0-rc.1"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["0.1.0"],
+      caption: "0.1.0은 범위의 시작이라 후보에 든다.",
+    },
+    {
+      pointer: 1,
+      memory: ["0.1.0", "0.1.1"],
+      caption: "0.1.1도 0.1.0 이상, 0.2.0 미만이라 든다.",
+    },
+    {
+      pointer: 2,
+      memory: ["0.1.0", "0.1.1"],
+      caption: "주 버전이 0일 때 ^는 부 버전을 깨지는 변경으로 본다. 0.2.0은 범위 밖이다.",
+    },
+    {
+      pointer: 3,
+      memory: ["0.1.0", "0.1.1"],
+      caption: "-rc.1 같은 사전 배포 버전은 범위에 사전 배포 표시가 없으면 아예 고려하지 않는다.",
+    },
+    {
+      pointer: 1,
+      found: [1],
+      memory: ["선택: 0.1.1"],
+      caption: "후보 중 가장 높은 0.1.1을 고르고 Chart.lock에 적는다.",
+    },
+  ]}
+/>
+
+로컬 HTTP 차트 저장소에 네 버전을 올려 두고 범위만 바꿔 가며 실제로 받아 봤다.
+
+```bash
+# 저장소에 있는 버전 (--devel을 붙여야 rc가 보인다)
+helm search repo shop/shop-common --versions
+```
+
+```text
+NAME            	CHART VERSION	APP VERSION	DESCRIPTION                
+shop/shop-common	0.2.0        	1.16.0     	A Helm chart for Kubernetes
+shop/shop-common	0.1.1        	1.16.0     	A Helm chart for Kubernetes
+shop/shop-common	0.1.0        	1.16.0     	A Helm chart for Kubernetes
+```
+
+```text
+^0.1.0 -> shop-common-0.1.1.tgz
+~0.1.0 -> shop-common-0.1.1.tgz
+>=0.2.0 -> shop-common-0.2.0.tgz
+0.1.0 -> shop-common-0.1.0.tgz
+```
+
+`>=0.2.0`도 0.3.0-rc.1을 고르지 않았다. 규칙을 직접 구현해 보자. Helm은 Masterminds/semver 라이브러리를 쓰고, 아래 테스트는 그 규칙을 따른다.
+
+<CodePlayground
+  caption="SemVer 범위 검사"
+  functionName="satisfies"
+  initialCode={`function satisfies(version, constraint) {
+  // constraint: "1.2.3"(정확히), "^1.2.3", "~1.2.3", ">=1.2.3"
+  // ^: 가장 왼쪽의 0 아닌 자리를 고정 (^1.2.3 → <2.0.0, ^0.2.3 → <0.3.0)
+  // ~: 부 버전까지 고정 (~1.2.3 → <1.3.0)
+  // "-rc.1" 같은 사전 배포 버전은 항상 false
+  return false;
+}`}
+  solution={`function satisfies(version, constraint) {
+  const parse = (v) => {
+    const [core, pre] = v.split("-");
+    return { v: core.split(".").map(Number), pre };
+  };
+  const cmp = (a, b) => {
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    return 0;
+  };
+  const ver = parse(version);
+  if (ver.pre) return false;
+  const op = constraint.match(/^(\\^|~|>=)?/)[0];
+  const base = parse(constraint.slice(op.length)).v;
+  const [ma, mi, pa] = base;
+  if (op === "") return cmp(ver.v, base) === 0;
+  if (op === ">=") return cmp(ver.v, base) >= 0;
+  let upper;
+  if (op === "~") upper = [ma, mi + 1, 0];
+  else if (ma > 0) upper = [ma + 1, 0, 0];
+  else if (mi > 0) upper = [0, mi + 1, 0];
+  else upper = [0, 0, pa + 1];
+  return cmp(ver.v, base) >= 0 && cmp(ver.v, upper) < 0;
+}`}
+  tests={[
+    { args: ["20.6.3", "~20.6.0"], expected: true, label: "~ 안의 수 버전" },
+    { args: ["20.7.0", "~20.6.0"], expected: false, label: "~ 밖의 부 버전" },
+    { args: ["1.9.2", "^1.2.0"], expected: true, label: "^1은 2 미만" },
+    { args: ["2.0.0", "^1.2.0"], expected: false, label: "주 버전이 바뀜" },
+    { args: ["0.3.0", "^0.2.3"], expected: false, label: "^0.2는 0.3 미만" },
+    { args: ["1.3.0-rc.1", "^1.2.0"], expected: false, label: "사전 배포 제외" },
+    { args: ["3.0.0", ">=2.1.0"], expected: true, label: ">= 이상" },
+  ]}
+/>
+
+어떤 범위를 쓸지는 하위 차트를 얼마나 믿느냐에 달렸다. 외부 차트는 `~`로 수 버전만 받는 게 무난하고, 운영 배포는 결국 `Chart.lock`의 정확한 버전으로 나간다. 범위를 넓게 열어 두고 `helm dependency update`를 CI에서 매번 돌리면, 어느 날 하위 차트의 새 부 버전이 기본값을 바꿔 아무도 차트를 안 고쳤는데 배포가 달라진다.
+
+## 차트를 OCI 레지스트리에 올리고 받기
+
+예전 차트 저장소는 `index.yaml`과 `.tgz` 파일을 올려 둔 정적 웹 서버였다. `helm repo add`로 등록하고 `helm repo update`로 목록을 받고 `helm search repo`로 찾는다. 차트가 많아지면 `index.yaml` 하나가 수 MB가 되고, 인증과 권한은 웹 서버 설정에 맡겨야 했다.
+
+Helm 3.8부터는 차트를 컨테이너 이미지처럼 OCI 레지스트리에 올리는 기능이 정식이 됐다. 이미 쓰는 레지스트리(ECR, GCR, Harbor, GHCR, Docker Hub)에 이미지와 차트를 함께 두고, 같은 인증과 권한, 같은 복제와 보존 정책을 쓴다. 요즘 새로 만드는 차트 배포는 대부분 이쪽이다.
+
+```bash
+# 차트를 .tgz로 묶는다 (파일 이름은 이름-차트버전)
+helm package shop-api
+
+# 레지스트리에 로그인한다 (로컬 실습 레지스트리는 인증이 없어 생략)
+helm registry login registry.example.com -u ci-bot
+
+# 올린다. 주소에는 차트 이름을 빼고 저장소 경로까지만 쓴다
+helm push shop-api-0.2.0.tgz oci://localhost:1338/charts --plain-http
+```
+
+```text
+Pushed: localhost:1338/charts/shop-api:0.2.0
+Digest: sha256:f95fed4f9467c523225e6f38f076d4a652087ab807e4b561f1247dd095e91b6f
+```
+
+`--plain-http`는 실습용 레지스트리가 HTTPS가 아니라서 붙였다. 차트 버전이 이미지 태그가 됐다. 이 주소 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="OCI 차트 주소"
+  base="oci://"
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "host",
+      display: "registry.example.com",
+      title: "레지스트리 호스트",
+      description: "이미지를 올리는 레지스트리와 같은 곳이다. helm registry login으로 받은 자격 증명이 이 호스트에 쓰인다.",
+      required: true,
+    },
+    {
+      key: "path",
+      display: "/charts",
+      title: "저장소 경로",
+      description: "이미지와 섞이지 않게 charts 같은 경로를 따로 둔다. helm push에는 여기까지만 쓴다.",
+    },
+    {
+      key: "name",
+      display: "/shop-api",
+      title: "차트 이름",
+      description: "Chart.yaml의 name에서 온다. helm push가 패키지를 보고 붙인다.",
+      required: true,
+    },
+    {
+      key: "tag",
+      display: ":0.2.0",
+      title: "차트 버전이 태그",
+      description: "Chart.yaml의 version이다. OCI 태그에는 +를 쓸 수 없어서 0.2.0+build.1 같은 빌드 메타데이터는 _로 바뀌어 올라간다. 설치할 때는 --version으로 준다.",
+    },
+    {
+      key: "digest",
+      display: "@sha256:f95f…b6f",
+      title: "내용의 지문",
+      description: "태그는 다시 올리면 바뀔 수 있지만 다이제스트는 내용이 같을 때만 같다. 운영에서 정확히 같은 차트를 쓰려면 다이제스트로 고정한다.",
+      code: "helm install shop-api oci://registry.example.com/charts/shop-api@sha256:f95fed4f…",
+    },
+  ]}
+/>
+
+받을 때는 `helm repo add` 없이 주소를 바로 쓴다.
+
+```bash
+# OCI 주소로 바로 설치한다
+helm upgrade --install shop-api oci://localhost:1338/charts/shop-api --version 0.2.0 \
+  --plain-http -n shop-oci --create-namespace --set redis.enabled=false
+
+# 차트 메타데이터만 본다
+helm show chart oci://localhost:1338/charts/shop-api --version 0.2.0 --plain-http
+```
+
+```text
+Release "shop-api" does not exist. Installing it now.
+Pulled: localhost:1338/charts/shop-api:0.2.0
+Digest: sha256:f95fed4f9467c523225e6f38f076d4a652087ab807e4b561f1247dd095e91b6f
+NAME: shop-api
+LAST DEPLOYED: Sun Oct 18 23:55:11 2026
+NAMESPACE: shop-oci
+STATUS: deployed
+REVISION: 1
+```
+
+OCI 쪽에는 `helm search`가 없다. 어떤 버전이 있는지는 레지스트리의 UI나 API로 본다. `--version`을 빼면 가장 높은 정식 버전을 받는데, 운영 배포에서는 늘 버전을 적는다. 오늘 받은 "최신"과 내일 받은 "최신"은 다를 수 있다.
+
+## 릴리스 여러 개를 파일 하나로, helmfile
+
+서비스가 열 개가 되면 배포 스크립트에 `helm upgrade --install`이 열 줄, 환경별로 세 벌이 된다. 순서(DB가 먼저, 앱은 그다음)와 값 파일 경로도 스크립트 안에 흩어진다. helmfile은 이걸 선언 파일 하나로 모은다. docker compose가 컨테이너 여러 개를 파일 하나로 묶는 것과 비슷하다.
+
+```yaml
+# helmfile.yaml.gotmpl
+environments:
+  stg:
+    values:
+      - env/stg.yaml        # apiReplicas: 2
+  prod:
+    values:
+      - env/prod.yaml       # apiReplicas: 6
+---
+repositories:
+  - name: shop-charts
+    url: localhost:1338/charts
+    oci: true
+    plainHttp: true
+
+releases:
+  - name: shop-api
+    namespace: shop-{{ .Environment.Name }}
+    chart: shop-charts/shop-api
+    version: 0.2.0
+    values:
+      - values/shop-api.yaml
+      - values/shop-api-{{ .Environment.Name }}.yaml
+    set:
+      - name: replicaCount
+        value: {{ .Values.apiReplicas }}
+
+  - name: shop-worker
+    namespace: shop-{{ .Environment.Name }}
+    chart: shop-charts/shop-api
+    version: 0.2.0
+    needs:
+      - shop-{{ .Environment.Name }}/shop-api
+    values:
+      - values/shop-worker.yaml
+```
+
+```bash
+# 스테이징 환경의 릴리스를 모두 맞춘다
+helmfile -e stg sync
+
+# 운영 환경으로 렌더링만 해 본다
+helmfile -e prod template | grep -E 'replicas:|image: "nginx'
+```
+
+```text
+UPDATED RELEASES:
+NAME          NAMESPACE   CHART                  VERSION   DURATION
+shop-api      shop-stg    shop-charts/shop-api   0.2.0           0s
+shop-worker   shop-stg    shop-charts/shop-api   0.2.0           0s
+```
+
+```text
+  replicas: 6
+          image: "nginx:1.27.0"
+  replicas: 1
+          image: "nginx:1.27.1"
+```
+
+위의 두 줄이 운영 값(레플리카 6, 운영 이미지 태그)이 들어간 shop-api, 아래 두 줄이 shop-worker다. `needs`가 순서를 정하고, `-e`가 환경을 고른다. `helmfile diff`는 helm-diff 플러그인으로 바뀔 내용을 보여 주고, `helmfile apply`는 diff를 본 뒤 바뀐 릴리스만 업그레이드한다. 실습에서는 helm-diff가 `--plain-http` 플래그를 몰라 apply가 실패해서 sync를 썼다. 사내 레지스트리가 HTTPS라면 생기지 않는 문제다. helmfile도 결국 `helm upgrade`를 부르는 것이라, 클러스터에는 평범한 Helm 릴리스가 남는다. `helm list`와 `helm rollback`이 그대로 된다.
+
+## ArgoCD는 차트를 렌더링만 한다
+
+글 처음의 상황으로 돌아가자. ArgoCD는 git(또는 차트 저장소)에 있는 원하는 상태와 클러스터의 실제 상태를 계속 비교하고 맞추는 GitOps 도구다. 차트를 배포할 때 ArgoCD는 `helm install`을 하지 않는다. `helm template`으로 매니페스트를 만들고, 그 결과를 자기가 직접 적용하고 추적한다. Helm 릴리스 기록(Secret)이 생기지 않으니 `helm list`에 아무것도 없는 게 정상이다.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shop-api-prod
+  namespace: argocd
+spec:
+  project: shop
+  source:
+    repoURL: registry.example.com/charts   # OCI 저장소 표기는 ArgoCD 버전에 따라 다르다
+    chart: shop-api
+    targetRevision: 0.2.0
+    helm:
+      releaseName: shop-api
+      valuesObject:
+        replicaCount: 6
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shop-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
+
+같은 일을 손으로 재현하면 이렇다.
+
+```bash
+# ArgoCD처럼 렌더링한 결과를 직접 적용한다
+helm template shop-api ./shop-api -n shop-argo --set redis.enabled=false | kubectl apply -n shop-argo -f -
+
+# Helm은 이 릴리스를 모른다
+helm list -n shop-argo
+kubectl get secret -n shop-argo -l owner=helm
+```
+
+```text
+serviceaccount/shop-api created
+service/shop-api created
+deployment.apps/shop-api created
+pod/shop-api-test-connection created
+NAME	NAMESPACE	REVISION	UPDATED	STATUS	CHART	APP VERSION
+No resources found in shop-argo namespace.
+```
+
+`helm list`가 비었다. 그리고 하나가 더 눈에 띈다. `helm test`용 Pod(`shop-api-test-connection`)가 평범한 Pod로 만들어졌다. `helm template`은 훅 리소스도 일반 매니페스트와 함께 출력하기 때문이다. ArgoCD는 이걸 그냥 적용하지 않고 Helm 훅 어노테이션을 자기 Sync 훅으로 바꿔 실행한다. pre-install과 pre-upgrade는 PreSync로, post-install과 post-upgrade는 PostSync로 바뀌는 식이다. 그래서 훅이 도는 시점과 지워지는 시점이 Helm으로 배포할 때와 조금 다르다.
+
+아래 그림은 차트가 만들어져 클러스터에 닿기까지의 흐름이다. 마지막 두 단계가 Helm으로 배포할 때와 다르다.
+
+<SequenceDiagram
+  caption="차트를 OCI에 올리고 ArgoCD가 배포하는 흐름"
+  actors={[
+    { id: "ci", label: "CI" },
+    { id: "reg", label: "OCI 레지스트리" },
+    { id: "argo", label: "ArgoCD" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    {
+      from: "ci",
+      to: "ci",
+      label: "lint·package",
+      title: "차트를 검사하고 묶는다",
+      detail: "helm dependency build로 lock에 적힌 하위 차트를 받고, helm lint와 helm template 결과 검사를 거친 뒤 helm package로 묶는다.",
+    },
+    {
+      from: "ci",
+      to: "reg",
+      label: "helm push",
+      title: "차트를 올린다",
+      detail: "차트 버전이 태그가 된다. 이미지 빌드와 같은 파이프라인에서 이미지와 차트를 함께 올리는 경우가 많다.",
+      payload: "Pushed: registry.example.com/charts/shop-api:0.2.0",
+    },
+    {
+      from: "ci",
+      to: "argo",
+      label: "git 커밋",
+      title: "원하는 상태를 바꾼다",
+      detail: "배포 저장소의 Application에서 targetRevision이나 values를 바꿔 커밋한다. ArgoCD는 이 저장소를 지켜본다.",
+    },
+    {
+      from: "argo",
+      to: "reg",
+      label: "pull",
+      title: "차트를 받는다",
+      detail: "ArgoCD의 repo-server가 0.2.0 차트를 받는다.",
+    },
+    {
+      from: "argo",
+      to: "argo",
+      label: "helm template",
+      title: "렌더링만 한다",
+      detail: "클러스터에 붙지 않고 렌더링하니 lookup은 빈 값이고, .Release.IsInstall은 늘 true다. Helm 릴리스 기록은 만들지 않는다.",
+    },
+    {
+      from: "argo",
+      to: "api",
+      label: "apply·비교",
+      title: "직접 적용하고 계속 비교한다",
+      detail: "렌더링 결과를 적용하고, 이후에도 클러스터가 달라지면 OutOfSync로 표시한다. selfHeal을 켜면 손으로 바꾼 값을 되돌린다.",
+    },
+  ]}
+/>
+
+이 방식이 실무에서 바꾸는 것들이 있다. 되돌리기는 `helm rollback`이 아니라 git revert나 `argocd app rollback`으로 한다. 업그레이드와 롤백 글에서 본 three-way merge 대신, ArgoCD의 비교와 selfHeal이 drift를 다룬다. `kubectl scale`로 늘린 레플리카는 selfHeal이 켜져 있으면 몇 초 안에 되돌아간다. [values 글](/posts/helm-values-secrets)에서 본 `lookup` 차트는 동기화마다 값이 바뀐다. 그리고 `helm list`가 비었다고 해서 Helm 차트가 아닌 게 아니니, 배포 주체가 무엇인지는 리소스의 라벨(`app.kubernetes.io/instance`)과 ArgoCD 쪽 어노테이션으로 확인한다.
+
+## Kustomize와 무엇이 다른가
+
+같은 문제(환경마다 조금씩 다른 YAML)를 다르게 푸는 도구가 Kustomize다. `kubectl`에 내장돼 있어서 `kubectl apply -k`나 `kubectl kustomize`로 바로 쓴다. 템플릿 없이, 완성된 YAML(base) 위에 환경별 패치(overlay)를 덮는다.
+
+```yaml
+# overlays/prod/kustomization.yaml
+resources:
+  - ../../base
+namespace: shop-prod
+images:
+  - name: registry.example.com/shop-api
+    newTag: "1.4.1"
+patches:
+  - target:
+      kind: Deployment
+      name: shop-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 6
+```
+
+```bash
+# overlay를 적용한 결과를 본다
+kubectl kustomize overlays/prod
+```
+
+```text
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api
+  namespace: shop-prod
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: shop-api
+  template:
+    metadata:
+      labels:
+        app: shop-api
+    spec:
+      containers:
+      - image: registry.example.com/shop-api:1.4.1
+        name: shop-api
+```
+
+둘의 차이를 나란히 놓으면 이렇다.
+
+| | Helm | Kustomize |
+|---|---|---|
+| 방식 | 템플릿에 값을 넣어 YAML을 만든다 | 완성된 YAML에 패치를 덮는다 |
+| 바꿀 수 있는 곳 | 차트 작성자가 열어 둔 values만 | YAML의 어느 필드든 |
+| 배포 단위와 기록 | 릴리스, 리비전, 롤백 | 없음 (git과 GitOps 도구가 맡음) |
+| 배포·공유 | 차트 패키지, 저장소, 의존성 | 디렉터리, git 참조 |
+| 훅 | 있음 | 없음 |
+
+남에게 나눠 줄 소프트웨어(오퍼레이터, 공용 인프라 구성 요소)는 Helm 차트가 사실상 표준이다. 사용자가 바꿀 손잡이를 values로 정해 줄 수 있고 버전으로 배포할 수 있다. 우리 팀의 앱 몇 개를 환경별로 조금씩 다르게 배포하는 정도라면 Kustomize가 더 단순하다. 템플릿 문법을 배울 필요가 없고, 결과가 원래 YAML과 거의 같아 읽기 쉽다.
+
+둘을 섞는 경우도 흔하다. 외부 차트를 쓰고 싶은데 차트가 열어 두지 않은 필드 하나를 바꿔야 할 때다. Kustomize의 `helmCharts`로 차트를 렌더링한 뒤 그 위에 패치를 덮거나, ArgoCD에서 Helm 소스에 Kustomize를 함께 거는 식이다. Helm 쪽에서는 `--post-renderer`로 렌더링 결과를 Kustomize에 통과시킬 수 있다. 차트에 values를 추가해 달라는 PR을 기다리는 동안 쓰는 방법이기도 하다.
+
+## 차트가 클러스터에 닿기까지
+
+정리하면 차트는 `dependencies`로 하위 차트를 품고, `Chart.lock`으로 고른 버전을 고정한다. 하위 차트에는 이름 키로 값을 넘기고, 모두가 함께 쓸 값은 `global`에 둔다. 차트 버전은 SemVer로 올리고, 같은 버전으로 다른 내용을 다시 올리지 않는다. 차트는 OCI 레지스트리에 이미지와 함께 올리고, 여러 릴리스는 helmfile로 묶는다. ArgoCD는 차트를 렌더링만 하고 직접 적용하므로 Helm 릴리스 기록이 없다. 그래서 롤백도 drift 처리도 ArgoCD 쪽에서 한다. 이 시리즈에서 본 Pod가 실제로 어떻게 뜨고 죽는지는 [Pod 기본 글](/posts/k8s-pod-basics)부터 이어서 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### Chart.lock은 왜 필요하고, dependency update와 build는 어떻게 다른가요?
+
+`Chart.yaml`의 의존성 버전은 범위라서, 받는 날에 따라 다른 버전이 골라질 수 있다. `helm dependency update`는 범위를 풀어 고른 버전을 `Chart.lock`에 적고, `helm dependency build`는 lock에 적힌 버전 그대로 받는다. CI에서는 build를 써야 같은 커밋이 늘 같은 하위 차트로 빌드된다.
+
+### 부모 차트에서 하위 차트로 값을 넘기는 방법은요?
+
+부모 values에서 하위 차트 이름을 키로 쓰면 그 아래 값이 하위 차트의 최상위 값이 된다. 하위 차트는 부모나 형제 차트의 값을 볼 수 없고, 예외로 `global:` 아래 값만 모두에게 보인다. 이미지 레지스트리 주소처럼 공통으로 써야 하는 값을 global에 둔다.
+
+### 차트 version과 appVersion은 어떻게 다른가요?
+
+`version`은 차트 자체의 SemVer 버전으로, 템플릿이나 기본값이 조금이라도 바뀌면 올려야 한다. `appVersion`은 차트가 담은 앱 버전을 알려 주는 정보용 값이고 실제 이미지를 정하지 않는다. 같은 차트 버전으로 내용이 다른 패키지를 다시 올리면 받는 쪽이 같은 차트로 믿고 쓰기 때문에 금지에 가깝다.
+
+### 차트를 OCI 레지스트리에 두면 무엇이 좋나요?
+
+이미지와 같은 레지스트리, 같은 인증과 권한, 같은 복제·보존 정책을 쓸 수 있다. 예전 저장소처럼 거대한 `index.yaml`을 관리할 필요가 없고, 다이제스트로 정확한 내용을 고정할 수 있다. 대신 `helm search`가 되지 않고, 버전 목록은 레지스트리 쪽에서 본다.
+
+### ArgoCD로 배포한 Helm 차트는 왜 helm list에 안 나오나요?
+
+ArgoCD는 `helm install`이 아니라 `helm template`으로 렌더링한 매니페스트를 직접 적용하고 추적한다. Helm 릴리스 기록 Secret이 만들어지지 않으니 Helm은 그 릴리스를 모른다. 그래서 롤백은 git revert나 ArgoCD 롤백으로 하고, `lookup`은 늘 빈 값이며, Helm 훅은 ArgoCD Sync 훅으로 바뀌어 실행된다.
+
+### Helm과 Kustomize는 언제 무엇을 고르나요?
+
+Helm은 템플릿과 values로 사용자가 바꿀 손잡이를 정하고, 버전 있는 패키지와 릴리스·롤백을 제공해서 남에게 배포할 소프트웨어에 맞다. Kustomize는 완성된 YAML 위에 패치를 덮는 방식이라 어느 필드든 바꿀 수 있고 문법이 단순해서, 자기 팀 앱을 환경별로 조금씩 다르게 배포할 때 편하다. 외부 차트를 쓰면서 차트가 열어 두지 않은 필드를 바꿀 때는 둘을 섞는다.
+
+### helmfile은 어떤 문제를 푸나요?
+
+릴리스 여러 개의 차트, 버전, values 파일, 순서, 환경 구분을 선언 파일 하나에 모은다. 배포 스크립트에 흩어진 `helm upgrade` 명령을 대신하고, `helmfile diff`와 `apply`로 바뀐 릴리스만 업그레이드한다. 결국 helm을 부르는 것이라 클러스터에는 일반 Helm 릴리스가 남는다는 점이 ArgoCD와 다르다.
