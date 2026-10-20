@@ -1,0 +1,508 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("dead-letter-queue");
+
+메일 큐의 깊이 그래프가 0까지 내려가지 않고 1에서 멈춰 있다. 메일은 잘 나가고 있고 워커도 살아 있다. 워커 로그를 열어 보면 같은 작업 ID가 1초마다 한 줄씩 찍힌다. `payload.to is missing`. 누군가 받는 사람 주소 없이 넣은 작업 하나가 몇 시간째 실패하고, 다시 보이고, 또 실패하고 있다.
+
+이런 메시지를 독이 든 메시지(poison message)라고 부른다. 몇 번을 다시 줘도 처리될 수 없는 메시지다. 데드 레터 큐(dead-letter queue, DLQ)는 이런 메시지를 정해진 횟수만큼 시도한 뒤 원래 큐에서 빼서 따로 보관하는 큐다. 이 글은 몇 번에서 포기할지, 어떤 실패는 바로 포기해야 하는지, DLQ에 무엇을 같이 남겨야 하는지, 언제 알람을 울릴지, 고친 뒤 어떻게 안전하게 되돌려 보내는지(redrive)를 다룬다. PostgreSQL 16 테이블 큐와 Redis 7.0 Streams로 직접 만들어 돌렸고, Amazon SQS 설정은 예시 출력으로 보인다.
+
+이 주제의 다른 글: ack, 가시성 타임아웃, 재전달처럼 이 글이 깔고 가는 큐의 동작은 [메시지 큐 기초](/posts/message-queue-basics)에, Redis Streams 소비자 그룹과 `XPENDING`·`XCLAIM`은 [발행·구독](/posts/pub-sub)에 있다. 몇 번, 얼마 간격으로 다시 시도할지는 [재시도](/posts/retries)와 [지수 백오프와 지터](/posts/exponential-backoff-jitter)에서 다룬다.
+
+## 같은 실패가 끝없이 돌아온다
+
+처음 장면을 그대로 재현했다. 실패하면 1초 뒤 다시 보이게 하는 PostgreSQL 큐 워커에, 주소가 있는 작업 둘과 주소가 빠진 작업 하나를 넣었다. 큐 테이블 구조는 [메시지 큐 기초](/posts/message-queue-basics)의 것에 `last_error` 열만 더했다.
+
+```bash
+# 상한 없이 재시도하는 워커를 4.5초 돌린다
+node poison.js 4.5
+
+# 남은 작업
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -c "SELECT id, payload, attempts, last_error FROM jobs"
+```
+
+```text
+ 0.0s job 1 sent to a@example.com
+ 0.0s job 2 failed attempts=1: payload.to is missing
+ 0.0s job 3 sent to c@example.com
+ 1.1s job 2 failed attempts=2: payload.to is missing
+ 2.1s job 2 failed attempts=3: payload.to is missing
+ 3.1s job 2 failed attempts=4: payload.to is missing
+ 4.1s job 2 failed attempts=5: payload.to is missing
+ id |      payload       | attempts |      last_error       
+----+--------------------+----------+-----------------------
+  2 | {"tpl": "welcome"} |        5 | payload.to is missing
+(1 row)
+```
+
+4.5초 동안 다섯 번 실패했다. 그대로 두면 한 시간에 3600번이다. 하나라면 로그가 지저분한 정도로 끝나지만, 배포 하나가 잘못된 형식의 메시지를 만 개 쏟아 내면 워커는 만 개를 계속 돌리느라 정상 메시지를 처리할 시간이 없다. 깊이 그래프는 줄지 않고, 처리 시간은 늘고, 로그 비용이 튄다.
+
+순서를 지키는 큐에서는 더 나쁘다. SQS FIFO의 메시지 그룹이나 Kafka 파티션처럼 앞 메시지가 끝나야 다음 것이 나가는 구조에서는 독이 든 메시지 하나가 그 뒤의 메시지를 모두 막는다. 주문 7번의 결제 이벤트가 계속 실패하면 7번의 배송 이벤트는 영원히 나가지 않는다.
+
+## 몇 번 시도하고 포기할지
+
+DLQ의 기본 규칙은 단순하다. 메시지를 내준 횟수를 세고, 기준을 넘으면 원래 큐에서 지우고 DLQ에 넣는다. 아래 그림에서 다음을 누르면 메시지가 정해진 횟수만큼 돌다가 DLQ로 빠지고, 알람이 울린다.
+
+<NetworkTopology
+  caption="정해진 횟수를 넘으면 DLQ로 빠진다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "main", label: "원래 흐름", x: 8, y: 20, w: 384, h: 110, tone: "private" },
+    { id: "side", label: "격리", x: 8, y: 142, w: 384, h: 110, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "api", label: "Signup API", x: 66, y: 80, icon: "server", w: 104 },
+    { id: "q", label: "mail-q", sub: "max 4", x: 196, y: 80, icon: "db", w: 96 },
+    { id: "w", label: "Mail Worker", x: 322, y: 80, icon: "container", w: 120 },
+    { id: "dlq", label: "mail-dlq", sub: "14 days", x: 196, y: 200, icon: "db", w: 96 },
+    { id: "alarm", label: "Alarm", sub: "depth > 0", x: 322, y: 200, icon: "lock", w: 112 },
+  ]}
+  links={[
+    { from: "api", to: "q" },
+    { from: "q", to: "w" },
+    { from: "q", to: "dlq", dashed: true },
+    { from: "dlq", to: "alarm" },
+  ]}
+  steps={[
+    { path: ["api", "q"], packet: "bad", title: "주소 없는 작업이 들어온다", detail: "프로듀서의 버그로 to 필드가 빠졌다. 큐는 내용을 검사하지 않는다." },
+    { path: ["q", "w"], packet: "#1", blocked: true, title: "첫 시도가 실패한다", detail: "워커는 예외를 내고 ack하지 않는다. 받은 횟수는 1이다." },
+    { path: ["q", "w"], packet: "#4", blocked: true, title: "네 번째도 실패한다", detail: "가시성 타임아웃이 지날 때마다 다시 나왔다. 받은 횟수가 상한 4에 닿았다." },
+    { path: ["q", "dlq"], packet: "bad", title: "DLQ로 옮겨진다", detail: "다섯 번째로 내주려는 순간 큐가 원래 큐에서 지우고 DLQ에 넣는다. 원래 큐의 깊이는 이제 0으로 내려간다." },
+    { path: ["dlq", "alarm"], packet: "1", title: "DLQ 깊이가 알람을 울린다", detail: "DLQ에 하나라도 있으면 누군가 봐야 한다. 조용히 쌓이게 두면 DLQ는 그냥 휴지통이다." },
+  ]}
+/>
+
+SQS는 원래 큐의 속성 `RedrivePolicy`에 DLQ와 상한을 적는다. 메시지를 받을 때마다 `ApproximateReceiveCount`가 오르고, 이 값이 `maxReceiveCount`를 넘으려 할 때 DLQ로 옮긴다. DLQ도 그냥 SQS 큐다. 같은 계정, 같은 리전에 있어야 하고, 원래 큐가 FIFO면 DLQ도 FIFO여야 한다.
+
+<UrlAnatomy
+  caption="SQS RedrivePolicy와 RedriveAllowPolicy (예시)"
+  base="RedrivePolicy"
+  separator=" = "
+  joiner=", "
+  params={[
+    { key: "deadLetterTargetArn", value: "arn:aws:sqs:ap-northeast-2:123456789012:mail-dlq", display: "deadLetterTargetArn=…:mail-dlq", title: "deadLetterTargetArn", description: "실패한 메시지를 옮길 큐다. 원래 큐와 같은 계정·리전이어야 하고, 원래 큐가 FIFO면 이것도 FIFO여야 한다.", required: true },
+    { key: "maxReceiveCount", value: "4", title: "maxReceiveCount", description: "몇 번 받아 간 뒤 옮길지. 1~1000. 실패 횟수가 아니라 받아 간 횟수라서, 처리가 가시성 타임아웃보다 길어 다시 나온 것도 센다. 1로 두면 느린 처리 한 번에 DLQ로 간다.", required: true },
+    { key: "redrivePermission", value: "byQueue", title: "RedriveAllowPolicy (DLQ 쪽)", description: "DLQ 쪽 속성이다. 어느 원래 큐가 이 큐를 DLQ로 쓸 수 있는지 정한다. allowAll, denyAll, byQueue 중 하나이고 byQueue면 sourceQueueArns에 원래 큐를 적는다.", code: '{"redrivePermission":"byQueue","sourceQueueArns":["arn:aws:sqs:ap-northeast-2:123456789012:mail-q"]}' },
+  ]}
+/>
+
+```bash
+# 예시: DLQ를 만들고 보관 기간을 최대(14일)로 둔다
+aws sqs create-queue --queue-name mail-dlq \
+  --attributes MessageRetentionPeriod=1209600
+
+# 예시: 원래 큐에 RedrivePolicy를 건다 (JSON을 문자열로 넘긴다)
+aws sqs set-queue-attributes \
+  --queue-url https://sqs.ap-northeast-2.amazonaws.com/123456789012/mail-q \
+  --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"arn:aws:sqs:ap-northeast-2:123456789012:mail-dlq\",\"maxReceiveCount\":\"4\"}"}'
+```
+
+```text
+{
+    "QueueUrl": "https://sqs.ap-northeast-2.amazonaws.com/123456789012/mail-dlq"
+}
+```
+
+`set-queue-attributes`는 성공하면 아무것도 출력하지 않는다. 위 출력은 예시다(실제 계정에서 돌린 것이 아니다).
+
+상한은 얼마가 좋을까. 너무 작으면 일시적인 장애(메일 서버가 1분 동안 죽었다)에도 멀쩡한 메시지가 DLQ로 간다. 너무 크면 독이 든 메시지가 오래 돈다. 보통 3~5에서 시작하고, 재시도 간격과 곱해서 "장애가 이 정도 길이면 버틴다"가 되는지 본다. 람다가 SQS를 읽는 구성이라면 람다가 스로틀링될 때도 받은 횟수가 오르기 때문에 AWS 문서는 5 이상을 권한다.
+
+다른 브로커에도 같은 장치가 있다. RabbitMQ는 큐에 `x-dead-letter-exchange`를 지정하면 거절되거나 만료된 메시지를 그 익스체인지로 보내고, 쿼럼 큐는 `x-delivery-limit`으로 횟수를 센다([RabbitMQ 기초](/posts/rabbitmq-basics)). Kafka에는 브로커가 해 주는 DLQ가 없다. 컨슈머가 실패한 레코드를 별도 토픽에 써 넣고 오프셋을 넘기는 방식으로 직접 만든다([Kafka 기초](/posts/kafka-basics)).
+
+## 바로 포기할 실패, 기다려 볼 실패
+
+받은 횟수만 세는 건 출발점이다. 실패에는 성격이 다른 두 종류가 있다. 메일 서버가 `421 try again later`를 돌려주거나 연결이 끊긴 건 일시적인 실패다. 기다렸다 다시 하면 된다. 받는 사람 주소가 없거나, 메일 서버가 `550 mailbox unavailable`(그런 사서함 없음)을 돌려준 건 영구적인 실패다. 백 번 다시 해도 같다. 영구적인 실패를 상한까지 재시도하는 건 시간 낭비이고, 그동안 다른 메시지가 기다린다.
+
+그래서 워커가 실패를 나눠서 다르게 다룬다. 일시적이면 지연을 늘려 가며 다시 보이게 하고, 영구적이면 횟수와 상관없이 바로 DLQ로 보낸다. PostgreSQL 큐에서는 `dead_jobs` 테이블이 DLQ다. 원래 큐에서 지우고 DLQ에 넣는 걸 한 문장으로 묶어서, 그 사이에 죽어도 메시지가 사라지거나 두 군데 있지 않게 한다.
+
+```sql
+CREATE TABLE dead_jobs (
+  id          bigint PRIMARY KEY,          -- 원래 작업 id를 그대로
+  queue       text        NOT NULL,
+  payload     jsonb       NOT NULL,
+  attempts    int         NOT NULL,
+  last_error  text        NOT NULL,
+  first_seen  timestamptz NOT NULL,        -- 원래 큐에 들어온 시각
+  dead_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- 원래 큐에서 지운 행을 그대로 DLQ에 넣는다 (한 문장이라 원자적이다)
+WITH moved AS (DELETE FROM jobs WHERE id = $1 RETURNING *)
+INSERT INTO dead_jobs (id, queue, payload, attempts, last_error, first_seen)
+SELECT id, queue, payload, attempts, $2, created_at FROM moved;
+```
+
+```js
+// 실패를 나눠서 처리한다 (dlqworker.js의 일부)
+const MAX_ATTEMPTS = 4;
+class Permanent extends Error {}
+
+if (e instanceof Permanent || job.attempts >= MAX_ATTEMPTS) {
+  await db.query(TO_DLQ, [job.id, e.message]);                  // 바로 격리
+} else {
+  const delayMs = 200 * 2 ** (job.attempts - 1);                // 200, 400, 800ms ...
+  await db.query(
+    "UPDATE jobs SET visible_at = now() + $2 * interval '1 millisecond', last_error = $3 WHERE id = $1",
+    [job.id, delayMs, e.message],
+  );
+}
+```
+
+작업 넷을 넣었다. 1번은 정상, 2번은 주소가 없고, 3번은 메일 서버가 처음 두 번만 421을 돌려주며, 4번은 메일 서버에 아예 연결이 안 된다.
+
+```bash
+# 네 가지 작업을 넣고 워커를 3초 돌린다
+node dlqworker.js 3
+
+# 큐에 남은 수와 DLQ
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -c "SELECT count(*) AS ready FROM jobs" -c "SELECT id, payload, attempts, last_error FROM dead_jobs ORDER BY id"
+```
+
+```text
+ 0.0s job 1 ok (attempts=1)
+ 0.0s job 2 -> DLQ (attempts=1): payload.to is missing
+ 0.0s job 3 retry in 200ms (attempts=1): SMTP 421 try again later
+ 0.0s job 4 retry in 200ms (attempts=1): SMTP connect ETIMEDOUT
+ 0.3s job 3 retry in 400ms (attempts=2): SMTP 421 try again later
+ 0.3s job 4 retry in 400ms (attempts=2): SMTP connect ETIMEDOUT
+ 0.7s job 3 ok (attempts=3)
+ 0.7s job 4 retry in 800ms (attempts=3): SMTP connect ETIMEDOUT
+ 1.5s job 4 -> DLQ (attempts=4): SMTP connect ETIMEDOUT
+ ready 
+-------
+     0
+(1 row)
+
+ id |          payload           | attempts |       last_error       
+----+----------------------------+----------+------------------------
+  2 | {"tpl": "welcome"}         |        1 | payload.to is missing
+  4 | {"to": "down@example.com"} |        4 | SMTP connect ETIMEDOUT
+(2 rows)
+```
+
+2번은 한 번 만에 격리됐고, 3번은 세 번째에 성공했다. 4번은 간격을 200, 400, 800ms로 늘려 가며 버티다가 네 번째에 격리됐다. 아래 그림은 같은 실행을 단계별로 다시 보여 준다. 아래 칸이 DLQ에 들어간 것이다.
+
+<AlgoTrace
+  caption="실패의 종류에 따라 갈 길이 갈린다"
+  memoryLabel="dead_jobs"
+  cells={["1 정상", "2 주소 없음", "3 일시 421", "4 연결 실패"]}
+  steps={[
+    { pointer: 0, found: [0], memory: [], caption: "1번은 바로 성공하고 지워진다." },
+    { pointer: 1, memory: ["2"], caption: "2번은 영구적인 실패다. 횟수를 채우지 않고 바로 DLQ로 간다." },
+    { pointer: 2, memory: ["2"], caption: "3번은 421을 받았다. 200ms 뒤에 다시 보이게 해 둔다." },
+    { pointer: 3, memory: ["2"], caption: "4번은 연결 실패다. 이것도 일시적이라고 보고 200ms 뒤로 미룬다." },
+    { pointer: 2, found: [0, 2], memory: ["2"], caption: "3번은 세 번째 시도에서 성공한다. 상한을 너무 작게 잡았다면 멀쩡한 메일을 잃을 뻔했다." },
+    { pointer: 3, found: [0, 2], memory: ["2", "4"], caption: "4번은 네 번째에도 실패해 상한에 닿는다. DLQ로 옮겨진다." },
+  ]}
+/>
+
+이 판단 규칙을 함수 하나로 만들어 보자. 숫자 코드는 SMTP 응답 코드로 보고 4xx는 일시적, 5xx는 영구적이다. 문자열 코드 중 `VALIDATION`, `NOT_FOUND`는 영구적이고, 그 밖의 것(네트워크 에러와 처음 보는 에러)은 일시적이라고 보고 상한까지만 재시도한다. 재시도 지연은 200ms에서 두 배씩 늘리되 10초를 넘기지 않는다. 실제로는 여기에 지터를 더하지만, 테스트를 위해 뺐다.
+
+<CodePlayground
+  caption="다시 시도할까, DLQ로 보낼까"
+  functionName="nextAction"
+  initialCode={`// code: SMTP 응답 코드(숫자) 또는 에러 코드(문자열)
+// attempts: 지금까지 시도한 횟수 (방금 실패한 것 포함)
+// maxAttempts: 상한
+// 반환: "retry:<지연 ms>" 또는 "dlq"
+function nextAction(code, attempts, maxAttempts) {
+  return "dlq";
+}`}
+  solution={`function nextAction(code, attempts, maxAttempts) {
+  const PERMANENT = ["VALIDATION", "NOT_FOUND"];
+  let permanent;
+  if (typeof code === "number") permanent = code >= 500;
+  else permanent = PERMANENT.includes(code);
+  if (permanent || attempts >= maxAttempts) return "dlq";
+  return "retry:" + Math.min(200 * 2 ** (attempts - 1), 10000);
+}`}
+  tests={[
+    { args: [421, 1, 4], expected: "retry:200", label: "421 첫 실패" },
+    { args: [421, 3, 4], expected: "retry:800", label: "421 세 번째 실패" },
+    { args: [421, 4, 4], expected: "dlq", label: "상한에 닿았다" },
+    { args: [550, 1, 4], expected: "dlq", label: "550은 바로 격리" },
+    { args: ["ETIMEDOUT", 2, 4], expected: "retry:400", label: "네트워크 에러" },
+    { args: ["VALIDATION", 1, 4], expected: "dlq", label: "형식 오류" },
+    { args: ["SomethingWeird", 1, 4], expected: "retry:200", label: "처음 보는 에러는 상한까지" },
+    { args: [421, 7, 10], expected: "retry:10000", label: "지연 상한 10초" },
+  ]}
+/>
+
+처음 보는 에러를 일시적으로 볼지 영구적으로 볼지는 선택이다. 일시적으로 보면 상한만큼 시간을 쓰지만 진짜 일시적인 장애에서 메시지를 덜 잃는다. 어느 쪽이든 상한은 반드시 둔다. 분류 코드에 버그가 있어도 상한이 마지막 그물이 된다.
+
+## Redis Streams로 만드는 DLQ
+
+Redis Streams에는 DLQ 기능이 따로 없다. 대신 재료가 다 있다. `XPENDING`이 항목마다 내준 횟수(delivery count)를 알려 주고, `XAUTOCLAIM`으로 묵은 항목을 다시 가져올 때마다 이 숫자가 오른다. 숫자가 상한에 닿으면 별도 스트림에 사본을 넣고 원래 항목은 ack한다. 두 동작을 `MULTI`로 묶어서 사본만 생기고 ack는 안 되는(그래서 또 돌아오는) 틈을 줄인다.
+
+```js
+// streamdlq.js의 실패 처리 부분
+const [[, , , deliveries]] = await r.xpending("stream:mail", "mailer", id, id, 1);
+if (deliveries >= MAX_DELIVERIES) {
+  await r.multi()
+    .xadd("stream:mail:dlq", "*", "orig-id", id, "error", e.message,
+          "deliveries", deliveries, ...Object.entries(fields).flat())
+    .xack("stream:mail", "mailer", id)
+    .exec();
+}
+// 실패하면 ack하지 않는다. 300ms 넘게 묵으면 XAUTOCLAIM이 다시 가져온다
+```
+
+```bash
+# 정상 둘, to가 빠진 하나를 넣고 3회 상한으로 돌린다
+node streamdlq.js
+
+# DLQ 스트림과 원래 그룹의 미확인 수
+redis-cli -p 6492 XRANGE stream:mail:dlq - +
+redis-cli -p 6492 XPENDING stream:mail mailer
+```
+
+```text
+ 0.0s 1792505964927-0 sent to a@example.com
+ 0.0s 1792505964927-1 failed (deliveries=1): field 'to' is missing
+ 0.0s 1792505964928-0 sent to c@example.com
+ 0.4s 1792505964927-1 failed (deliveries=2): field 'to' is missing
+ 0.8s 1792505964927-1 -> dlq after 3 deliveries
+1) 1) "1792505965638-0"
+   2) 1) "orig-id"
+      2) "1792505964927-1"
+      3) "error"
+      4) "field 'to' is missing"
+      5) "deliveries"
+      6) "3"
+      7) "tpl"
+      8) "welcome"
+1) (integer) 0
+2) (nil)
+3) (nil)
+4) (nil)
+```
+
+DLQ 항목에 원래 ID, 에러, 횟수, 원래 필드가 모두 남았고, 원래 그룹의 pending은 0이 됐다. 여기서 주의할 점이 하나 있다. delivery count는 "실패한 횟수"가 아니라 "내준 횟수"다. 처리 중에 시간이 오래 걸려 다른 소비자가 `XAUTOCLAIM`으로 가져가도 오른다. 처리 시간보다 `min-idle-time`을 짧게 잡으면 멀쩡한 항목이 DLQ로 간다. SQS의 `maxReceiveCount`도 같다.
+
+## DLQ에 무엇을 같이 남기나
+
+DLQ에 원래 메시지만 있으면 나중에 보는 사람은 왜 여기 왔는지 알 수 없다. 위 두 구현에서 같이 남긴 것들이 각각 이유가 있다. 마지막 에러(무엇을 고쳐야 하나), 시도 횟수(일시적 장애였나, 처음부터 안 됐나), 원래 큐 이름(여러 큐가 DLQ 하나를 공유할 때 어디로 되돌릴지), 원래 들어온 시각과 DLQ에 온 시각(언제부터 터졌나, 아직 의미 있는 메시지인가), 원래 메시지 ID(되돌려 보낼 때 중복 제거 키). 가능하면 처리한 워커의 버전이나 배포 ID도 넣는다. "어제 18시 배포 이후"가 한눈에 보인다.
+
+SQS는 옮길 때 에러를 붙여 주지 않는다. 메시지는 그대로 옮겨지고 `ApproximateReceiveCount` 같은 시스템 속성만 남는다. 에러 원인은 워커 로그에서 메시지 ID로 찾아야 한다. 그래서 워커는 실패 로그에 메시지 ID와 받은 횟수를 반드시 같이 남긴다. 로그를 구조화해 두면 이 검색이 쉬워진다([구조화된 로그](/posts/structured-logging)).
+
+DLQ가 쌓이면 먼저 에러별로 묶어 본다. 하나하나 보는 것보다 어떤 종류가 몇 개인지가 먼저다.
+
+```bash
+# DLQ를 에러별로 묶는다
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -f triage.sql
+```
+
+```sql
+SELECT queue, last_error, count(*) AS n,
+       min(dead_at)::time(0) AS first_dead, max(dead_at)::time(0) AS last_dead
+  FROM dead_jobs
+ GROUP BY queue, last_error
+ ORDER BY n DESC;
+```
+
+```text
+ queue |          last_error          | n  | first_dead | last_dead 
+-------+------------------------------+----+------------+-----------
+ mail  | SMTP connect ETIMEDOUT       | 23 | 13:39:43   | 14:18:43
+ mail  | SMTP 550 mailbox unavailable | 12 | 13:40:43   | 14:16:43
+ mail  | payload.to is missing        |  5 | 13:44:43   | 14:12:43
+(3 rows)
+```
+
+(연습용으로 넣은 데이터다.) 세 줄이 각각 다른 처리를 요구한다. 연결 실패 23건은 메일 서버가 돌아오면 되돌려 보내면 된다. 550 12건은 되돌려도 또 실패하니 되돌리지 않고, 잘못된 주소를 회원 데이터에서 정리할 대상이다. 그리고 이 12건은 원래 상한까지 재시도하지 말고 바로 격리했어야 할 실패라서 분류 코드를 고쳐야 한다는 신호이기도 하다. 주소 없음 5건은 프로듀서 버그다. 프로듀서를 고치기 전에는 되돌릴 의미가 없다.
+
+## 알람은 DLQ에 하나라도 있으면
+
+DLQ는 정상일 때 비어 있어야 한다. 그래서 알람 기준도 단순하다. 깊이가 0보다 크면 울린다. 많이 쌓인 뒤에 울리게 하면 그동안의 사용자(메일을 못 받은 회원)는 이미 피해를 봤다. 하나만 들어와도 시끄럽다면 그건 상한이나 분류를 고칠 신호다.
+
+SQS에서 이 알람을 걸 때 흔한 실수가 있다. "들어온 메시지 수"인 `NumberOfMessagesSent`에 걸면 울리지 않는다. 재시도 상한을 넘어 DLQ로 옮겨진 메시지는 이 지표에 잡히지 않기 때문이다. DLQ 알람은 `ApproximateNumberOfMessagesVisible`에 건다.
+
+```bash
+# 예시: mail-dlq에 하나라도 보이면 5분 안에 알람
+aws cloudwatch put-metric-alarm \
+  --alarm-name mail-dlq-not-empty \
+  --namespace AWS/SQS --metric-name ApproximateNumberOfMessagesVisible \
+  --dimensions Name=QueueName,Value=mail-dlq \
+  --statistic Maximum --period 300 --evaluation-periods 1 \
+  --threshold 0 --comparison-operator GreaterThanThreshold \
+  --treat-missing-data notBreaching \
+  --alarm-actions arn:aws:sns:ap-northeast-2:123456789012:oncall
+```
+
+`put-metric-alarm`도 성공하면 출력이 없다(예시 명령이다). 깊이와 함께 DLQ의 `ApproximateAgeOfOldestMessage`도 본다. 이게 보관 기간에 가까워지면 메시지가 사라지기 직전이다.
+
+보관 기간에는 함정이 있다. SQS 표준 큐에서 메시지의 만료는 원래 큐에 처음 들어온 시각을 기준으로 한다. DLQ로 옮겨도 시계가 다시 시작되지 않는다. 원래 큐의 보관 기간이 4일이고 DLQ도 4일이라면, 3일 동안 재시도하다 DLQ에 온 메시지는 하루 뒤에 사라진다. 그래서 DLQ의 보관 기간은 원래 큐보다 길게, 보통 최대인 14일로 둔다. PostgreSQL 큐라면 직접 지우기 전까지 남지만, `dead_jobs`가 무한히 커지지 않게 오래된 것을 정리하는 작업을 따로 둔다. 무엇을 얼마나 오래 둘지 정하는 건 알람 설계와 함께 [알림 설계](/posts/alerting)에서 다룬다.
+
+## 고친 뒤 되돌려 보내기
+
+원인을 고쳤으면 DLQ의 메시지를 원래 큐로 되돌린다. 이걸 redrive라고 부른다. 되돌리는 순간 같은 메시지가 다시 처리되므로 두 가지를 확인한다. 고친 코드가 정말 배포됐는가(안 그러면 그대로 다시 DLQ로 온다). 그리고 이 메시지들 중 일부는 이미 효과를 남겼을 수 있는가.
+
+두 번째가 자주 놓치는 부분이다. 포인트 적립 컨슈머 v1에 버그가 있었다고 하자. 적립을 커밋한 뒤 로그를 남기다가 예외가 났다. 메시지는 ack되지 않았고, 재시도를 거쳐 DLQ로 갔다. 그런데 적립은 이미 됐다. 이 메시지를 되돌려 보내면 두 번 적립된다. 그래서 컨슈머는 처리한 메시지 ID를 업무 데이터와 같은 트랜잭션에 기록해 두고, 이미 있는 ID는 건너뛴다. [멱등성 키](/posts/idempotency-key)와 같은 원리다.
+
+아래 그림에서 다음을 누르면 DLQ의 세 메시지가 원래 큐로 돌아가고, 이미 처리된 하나는 건너뛰어진다.
+
+<NetworkTopology
+  caption="되돌려 보낸 메시지 중 이미 처리된 것은 건너뛴다"
+  width={400}
+  height={250}
+  zones={[{ id: "db", label: "PostgreSQL", x: 216, y: 140, w: 176, h: 102, tone: "private" }]}
+  nodes={[
+    { id: "dlq", label: "dead_jobs", sub: "p-101..103", x: 70, y: 70, icon: "db", w: 112 },
+    { id: "q", label: "jobs", sub: "points", x: 210, y: 70, icon: "db", w: 92 },
+    { id: "w", label: "Points v2", x: 336, y: 70, icon: "container", w: 104 },
+    { id: "pm", label: "processed", sub: "msg_id PK", x: 304, y: 200, icon: "lock", w: 120 },
+  ]}
+  links={[
+    { from: "dlq", to: "q", label: "redrive" },
+    { from: "q", to: "w" },
+    { from: "w", to: "pm" },
+  ]}
+  steps={[
+    { path: ["dlq", "q"], packet: "x3", title: "세 건을 원래 큐로 옮긴다", detail: "DLQ에서 지우고 원래 큐에 넣는 걸 한 문장으로 한다. 시도 횟수는 0부터 다시 센다." },
+    { path: ["q", "w", "pm"], packet: "p-101", blocked: true, title: "p-101은 이미 처리됐다", detail: "processed_messages에 p-101이 이미 있어 INSERT가 0줄이다. 적립하지 않고 ack만 한다." },
+    { path: ["q", "w", "pm"], packet: "p-102", title: "p-102는 처음이다", detail: "ID 기록과 적립과 ack가 한 트랜잭션에서 커밋된다." },
+    { path: ["q", "w", "pm"], packet: "p-103", title: "p-103도 적립된다", detail: "되돌려 보낸 세 건 중 실제로 적립된 건 두 건이다. 회원 42번은 한 번만 500점을 받았다." },
+  ]}
+/>
+
+v1이 남긴 상태(p-101만 적립되고 셋 다 DLQ에 있음)를 만들어 두고, 고친 v2 컨슈머로 실제로 돌렸다.
+
+```sql
+-- redrive.sql: DLQ에서 100개씩 원래 큐로 되돌린다
+WITH moved AS (
+  DELETE FROM dead_jobs
+   WHERE id IN (SELECT id FROM dead_jobs WHERE queue = 'points' ORDER BY id LIMIT 100)
+  RETURNING queue, payload
+)
+INSERT INTO jobs (queue, payload)
+SELECT queue, payload FROM moved
+RETURNING id, payload->>'msg_id' AS msg_id;
+```
+
+```js
+// points.js: 처리 기록, 적립, ack를 한 트랜잭션에
+await db.query("BEGIN");
+const r = await db.query(
+  "INSERT INTO processed_messages (msg_id) VALUES ($1) ON CONFLICT DO NOTHING", [p.msg_id]);
+if (r.rowCount === 1) {
+  await db.query("INSERT INTO points_ledger VALUES ($1, $2, $3)", [p.user, p.points, p.msg_id]);
+}
+await db.query("DELETE FROM jobs WHERE id = $1", [jobId]);
+await db.query("COMMIT");
+```
+
+```bash
+# DLQ 상태
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -c "SELECT id, payload->>'msg_id' AS msg_id, attempts, left(last_error, 40) AS last_error FROM dead_jobs ORDER BY id"
+
+# 되돌리고, 고친 컨슈머를 돌리고, 적립 결과를 본다
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -f redrive.sql
+node points.js
+psql -h 127.0.0.1 -U v2mq -d v2mq_demo -c "SELECT user_id, sum(points) AS points, string_agg(msg_id, ',' ORDER BY msg_id) AS msgs FROM points_ledger GROUP BY user_id ORDER BY user_id"
+```
+
+```text
+ id | msg_id | attempts |                last_error                
+----+--------+----------+------------------------------------------
+ 11 | p-101  |        4 | TypeError: Cannot read properties of und
+ 12 | p-102  |        4 | TypeError: Cannot read properties of und
+ 13 | p-103  |        4 | TypeError: Cannot read properties of und
+(3 rows)
+
+ id | msg_id 
+----+--------
+  1 | p-101
+  2 | p-102
+  3 | p-103
+(3 rows)
+
+INSERT 0 3
+job 1 p-101 already processed, skip
+job 2 p-102 applied +300 to user 42
+job 3 p-103 applied +1000 to user 77
+ user_id | points |    msgs     
+---------+--------+-------------
+      42 |    800 | p-101,p-102
+      77 |   1000 | p-103
+(2 rows)
+```
+
+회원 42번은 500 + 300 = 800점이다. 멱등 처리가 없었다면 1300점이 됐다. 이 예에서 컨슈머가 멱등했던 건 적립과 기록이 같은 DB에 있어서다. 메일이나 결제 API처럼 바깥으로 나가는 효과는 상대 API가 멱등성 키를 받는지 확인하고, 안 받는다면 "보내기 전에 기록, 실패하면 사람이 확인"처럼 한쪽으로 치우친 선택을 해야 한다.
+
+SQS는 콘솔의 "Start DLQ redrive" 또는 `StartMessageMoveTask` API로 DLQ의 메시지를 원래 큐(또는 다른 큐)로 옮긴다. 속도 상한을 줄 수 있다.
+
+```bash
+# 예시: 초당 50개씩 원래 큐로 되돌린다 (목적지를 생략하면 원래 큐로)
+aws sqs start-message-move-task \
+  --source-arn arn:aws:sqs:ap-northeast-2:123456789012:mail-dlq \
+  --max-number-of-messages-per-second 50
+
+# 예시: 진행 상황
+aws sqs list-message-move-tasks \
+  --source-arn arn:aws:sqs:ap-northeast-2:123456789012:mail-dlq
+```
+
+```text
+{
+    "TaskHandle": "eyJ0YXNrSWQiOiI1YjYxZmE0Ni0..."
+}
+{
+    "Results": [
+        {
+            "TaskHandle": "eyJ0YXNrSWQiOiI1YjYxZmE0Ni0...",
+            "Status": "RUNNING",
+            "SourceArn": "arn:aws:sqs:ap-northeast-2:123456789012:mail-dlq",
+            "MaxNumberOfMessagesPerSecond": 50,
+            "ApproximateNumberOfMessagesMoved": 1200,
+            "ApproximateNumberOfMessagesToMove": 3500,
+            "StartedTimestamp": 1792505964927
+        }
+    ]
+}
+```
+
+위 출력도 예시다. 속도 상한을 주는 이유가 있다. DLQ에 쌓인 3500개를 한꺼번에 쏟으면 원래 큐 깊이가 갑자기 뛰고, 컨슈머가 의존하는 메일 서버나 DB가 순간적으로 몰린 요청을 받는다. 메일 서버 장애 때문에 쌓였던 메시지라면 막 살아난 메일 서버를 다시 쓰러뜨릴 수 있다. 소량을 먼저 되돌려 보고, 다시 DLQ로 돌아오지 않는지 확인한 뒤 나머지를 보낸다.
+
+## DLQ를 두고도 메시지를 잃는 경우
+
+DLQ를 만들어 놓고 알람을 안 걸면 메시지는 보관 기간이 끝날 때 조용히 사라진다. 이게 가장 흔하다. DLQ는 누군가 본다는 약속과 함께 있어야 의미가 있다.
+
+`maxReceiveCount`를 1로 두면 처리가 한 번 가시성 타임아웃을 넘기거나, 배포 중에 워커가 죽거나, 람다가 스로틀링되기만 해도 멀쩡한 메시지가 DLQ로 간다. DLQ에 쌓인 메시지를 그대로 되돌렸더니 전부 성공한다면 이 경우다. 상한을 올리고 가시성 타임아웃을 처리 시간에 맞춘다.
+
+SNS 구독에도 DLQ가 따로 있다. SNS가 구독 대상(SQS 큐, 람다, HTTP)에 전달하지 못한 메시지를 보관하는 곳이라, SQS 큐의 DLQ(컨슈머가 처리하지 못한 메시지)와는 다른 단계의 실패를 받는다. 큐 정책 권한이 틀려 SNS가 SQS에 넣지 못하면, SQS DLQ에는 아무것도 없고 메시지는 SNS 단계에서 사라진다. 팬아웃 구성은 [발행·구독](/posts/pub-sub)에 있다.
+
+FIFO 큐에서 메시지 하나가 DLQ로 빠지면 그 그룹의 다음 메시지가 진행된다. 막힘은 풀리지만, 순서가 중요한 흐름에서 중간 이벤트 하나가 빠진 채로 뒤 이벤트가 처리된다. 주문 7번의 결제 이벤트가 DLQ로 가고 배송 이벤트가 처리되는 식이다. 이런 흐름에서는 DLQ에 들어간 메시지의 그룹 ID를 보고, 그 그룹의 이후 메시지도 함께 멈출지 정해야 한다.
+
+## 큐에서 빠진 메시지는 누군가 봐야 한다
+
+데드 레터 큐는 처리할 수 없는 메시지가 정상 흐름을 막지 않게 따로 떼어 두는 곳이다. 횟수 상한은 마지막 그물이고, 실패를 일시적과 영구적으로 나누면 시간 낭비가 줄며, DLQ에 원인과 시각을 함께 남겨야 나중에 고칠 수 있다. 알람은 하나라도 들어오면 울리고, 고친 뒤에는 멱등한 컨슈머로 천천히 되돌려 보낸다. 전달 보장 전체를 다시 정리하고 싶다면 [메시지 전달 보장](/posts/message-delivery-semantics)으로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 데드 레터 큐는 왜 필요한가요?
+
+몇 번을 다시 시도해도 처리할 수 없는 메시지가 큐를 계속 도는 걸 막으려고다. 그런 메시지는 워커 시간을 쓰고, 로그를 채우고, 순서를 지키는 큐에서는 뒤의 메시지를 모두 막는다. 정해진 횟수가 넘으면 따로 옮겨 보관하고, 사람이 원인을 고친 뒤 되돌려 보낸다.
+
+### maxReceiveCount는 어떻게 정하나요?
+
+일시적인 장애를 버틸 만큼은 크게, 독이 든 메시지가 오래 돌지 않을 만큼은 작게 잡는다. 보통 3~5에서 시작해 재시도 간격과 곱한 시간이 흔한 장애 길이를 덮는지 본다. 받은 횟수는 실패가 아니라 받아 간 횟수라서 가시성 타임아웃이 처리 시간보다 짧거나 람다가 스로틀링되면 멀쩡한 메시지도 센다. 1은 피한다.
+
+### 모든 실패를 똑같이 재시도하면 무엇이 문제인가요?
+
+영구적인 실패(형식 오류, 없는 대상, 5xx 영구 거절)는 몇 번을 해도 같은 결과라서 상한까지 시간과 자원만 쓴다. 워커가 실패를 일시적과 영구적으로 나눠 영구적이면 바로 DLQ로 보내고, 일시적이면 지수 백오프와 지터로 간격을 늘려 다시 시도한다. 처음 보는 에러는 일시적으로 보되 상한을 둔다.
+
+### DLQ 알람은 어떻게 거나요?
+
+DLQ 깊이가 0보다 크면 울린다. DLQ는 정상일 때 비어 있어야 하니 하나라도 있으면 누군가 봐야 한다. SQS에서는 재시도 끝에 옮겨진 메시지가 NumberOfMessagesSent에 잡히지 않으므로 ApproximateNumberOfMessagesVisible에 건다. 가장 오래된 메시지의 나이도 함께 봐서 보관 기간이 끝나기 전에 처리한다.
+
+### DLQ의 보관 기간은 원래 큐와 같게 두면 되나요?
+
+더 길게 둔다. SQS 표준 큐는 원래 큐에 들어온 시각으로 만료를 계산하고, DLQ로 옮겨도 그 시각이 바뀌지 않는다. 원래 큐에서 재시도하며 쓴 시간만큼 DLQ에 머무를 시간이 줄어서, 같게 두면 옮겨지자마자 사라질 수 있다. 보통 최대인 14일로 둔다.
+
+### DLQ의 메시지를 되돌려 보낼 때 주의할 점은?
+
+원인을 고친 코드가 배포됐는지, 메시지 중 일부가 이미 효과를 남겼는지 확인한다. 처리 후 ack 전에 죽은 메시지도 DLQ에 있을 수 있으니 컨슈머는 메시지 ID로 중복을 걸러야 한다. 한꺼번에 쏟지 말고 속도를 제한해 소량부터 되돌리고, 다시 DLQ로 돌아오지 않는지 본다. 영구 실패로 분류된 것은 되돌리지 않고 따로 처리한다.
+
+### Kafka에는 DLQ가 있나요?
+
+브로커가 해 주는 DLQ는 없다. 컨슈머가 실패한 레코드를 별도 토픽에 써 넣고 오프셋을 넘기는 방식으로 직접 만들고, 재시도 간격별로 재시도 토픽을 여러 개 두기도 한다. 파티션 안의 순서를 지키는 구조라서 실패한 레코드에서 멈추면 그 파티션 전체가 막히기 때문에, 언제 건너뛰고 DLQ로 보낼지 명확히 정해 둬야 한다.

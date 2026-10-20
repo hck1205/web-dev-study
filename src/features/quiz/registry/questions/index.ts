@@ -35,6 +35,7 @@ import { DB_TYPE_RELATIONAL } from "./db-type-relational";
 import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
+import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DNS } from "./dns";
@@ -102,6 +103,7 @@ import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
 import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
+import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
@@ -137,6 +139,7 @@ import { POSTGRES_OPERATIONS } from "./postgres-operations";
 import { POSTGRES_REPORTING_SQL } from "./postgres-reporting-sql";
 import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
+import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
@@ -231,6 +234,7 @@ export const QUESTION_SETS = [
   DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
+  DEAD_LETTER_QUEUE,
   DESIGN_PATTERNS_OVERVIEW,
   DISTRIBUTED_LOCK,
   DNS,
@@ -298,6 +302,7 @@ export const QUESTION_SETS = [
   LOAD_BALANCING_ALGORITHMS,
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
+  MESSAGE_QUEUE_BASICS,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
@@ -333,6 +338,7 @@ export const QUESTION_SETS = [
   POSTGRES_REPORTING_SQL,
   POSTGRES_ROLES_SECURITY,
   PROXY_REVERSE_PROXY,
+  PUB_SUB,
   PYTHAGOREAN_THEOREM,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,

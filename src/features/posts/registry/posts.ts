@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "dead-letter-queue",
+    title: "데드 레터 큐: 독이 든 메시지, 재시도 상한, 되돌려 보내기",
+    summary: "끝없이 돌아오는 실패 메시지를 재시도 상한과 실패 분류로 격리하고, DLQ에 무엇을 남길지, 알람을 언제 울릴지, 고친 뒤 중복 없이 되돌려 보내는 법을 PostgreSQL과 Redis Streams로 직접 확인한다.",
+    topic: "programming/backend/messaging",
+    tags: ["Messaging", "Backend", "PostgreSQL", "Redis", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["데드 레터 큐", "DLQ", "독이 든 메시지", "maxReceiveCount", "redrive"],
+  },
+  {
+    slug: "pub-sub",
+    title: "발행·구독: 토픽, Redis Streams 소비자 그룹, SNS와 SQS 팬아웃",
+    summary: "큐는 한 명에게, 토픽은 모두에게 준다. Redis PUB/SUB가 끊긴 구독자와 느린 구독자의 메시지를 버리는 모습, Streams 소비자 그룹의 lag와 pending, SNS 뒤에 SQS를 붙이는 이유와 필터 정책까지 정리한다.",
+    topic: "programming/backend/messaging",
+    tags: ["Messaging", "Redis", "AWS", "Backend", "Distributed Systems"],
+    date: "2026-10-21",
+    keywords: ["소비자 그룹", "팬아웃", "XAUTOCLAIM", "필터 정책", "client-output-buffer-limit"],
+  },
+  {
+    slug: "message-queue-basics",
+    title: "메시지 큐 기초: ack, 가시성 타임아웃, 재전달",
+    summary: "메시지를 꺼낸 뒤 처리 전에 죽으면 사라지는 큐를 고쳐 가며 ack와 가시성 타임아웃, 최소 한 번 전달에서 생기는 중복, 워커를 늘리면 깨지는 순서, 큐 깊이로 읽는 처리 상태를 Redis와 PostgreSQL로 직접 돌려 본다.",
+    topic: "programming/backend/messaging",
+    tags: ["Messaging", "Backend", "Redis", "PostgreSQL", "Distributed Systems"],
+    date: "2026-10-21",
+    keywords: ["가시성 타임아웃", "경쟁하는 컨슈머", "큐 깊이", "BLMOVE"],
+  },
+  {
     slug: "k8s-pv-pvc",
     title: "PV와 PVC: Pod보다 오래 사는 디스크",
     summary: "PVC가 PV에 묶이는 규칙, 접근 모드, StorageClass와 WaitForFirstConsumer, 존에 묶인 디스크 때문에 생기는 Pending, Retain과 Delete 회수 정책의 함정, 용량 확장, StatefulSet의 PVC, Multi-Attach 오류까지 실습 클러스터의 실제 출력으로 따라간다.",

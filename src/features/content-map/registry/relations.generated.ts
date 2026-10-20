@@ -2,6 +2,53 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "dead-letter-queue": {
+    "links": [
+      "message-queue-basics",
+      "pub-sub",
+      "retries",
+      "exponential-backoff-jitter",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "redis-basics",
+      "http-methods"
+    ]
+  },
+  "pub-sub": {
+    "links": [
+      "message-queue-basics",
+      "dead-letter-queue",
+      "redis-basics",
+      "redis-cluster"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "dns"
+    ]
+  },
+  "message-queue-basics": {
+    "links": [
+      "pub-sub",
+      "dead-letter-queue",
+      "redis-basics",
+      "db-locking-deadlock",
+      "db-architecture-by-scale",
+      "idempotency-key",
+      "exponential-backoff-jitter",
+      "microservices",
+      "postgres-mvcc-vacuum",
+      "redis-persistence-ha",
+      "redis-memory-eviction"
+    ],
+    "mentions": [
+      "db-index-design",
+      "resilience-patterns",
+      "realtime-communication",
+      "http-methods"
+    ]
+  },
   "k8s-pv-pvc": {
     "links": [
       "k8s-configmap",
@@ -179,6 +226,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "iptables-basics",
       "tcp-reliability-congestion",
+      "message-queue-basics",
       "layer-ip-routing-icmp"
     ]
   },
@@ -2128,6 +2176,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "redis-basics": {
     "links": [
+      "message-queue-basics",
       "redis-memory-eviction",
       "network-troubleshooting-by-layer",
       "event-loop",
@@ -2137,6 +2186,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "redis-cluster",
       "distributed-lock",
+      "pub-sub",
       "db-type-relational",
       "db-transaction-isolation",
       "dns"
@@ -2643,6 +2693,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "db-type-columnar-olap",
       "client-data-cache",
+      "pub-sub",
       "db-index-design",
       "http-versions",
       "js-memory-leak",
