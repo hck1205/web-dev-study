@@ -2,6 +2,74 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "batch-processing": {
+    "links": [
+      "sql-batch-timeout-pool",
+      "api-pagination-sorting",
+      "idempotency-key",
+      "db-locking-deadlock"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "db-architecture-by-scale",
+      "postgres-mvcc-vacuum",
+      "postgres-architecture",
+      "redis-basics",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "api-pagination-sorting": {
+    "links": [
+      "rest-api-design",
+      "sql-query-rewrite"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "base64",
+      "db-index-design"
+    ]
+  },
+  "idempotency-key": {
+    "links": [
+      "resilience-patterns",
+      "http-methods",
+      "rest-api-design",
+      "sql-batch-timeout-pool"
+    ],
+    "mentions": [
+      "postgres-advanced-sql",
+      "redis-basics",
+      "http-status-codes",
+      "db-modeling-normalization"
+    ]
+  },
+  "rate-limiting-in-practice": {
+    "links": [
+      "rate-limiting-algorithms",
+      "nginx-https-performance",
+      "gateway",
+      "resilience-patterns",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "http-status-codes",
+      "osi-in-practice",
+      "redis-basics"
+    ]
+  },
+  "rate-limiting-algorithms": {
+    "links": [
+      "rate-limiting-in-practice",
+      "resilience-patterns",
+      "nginx-https-performance"
+    ],
+    "mentions": [
+      "redis-cluster",
+      "redis-basics"
+    ]
+  },
   "cdn-edge-anycast": {
     "links": [
       "http-caching-cdn",
@@ -162,6 +230,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "rate-limiting-in-practice",
       "docker-container-basics",
       "dns"
     ]
@@ -223,7 +292,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics",
       "iptables-nat",
       "docker-container-basics",
-      "kubernetes-ingress"
+      "kubernetes-ingress",
+      "batch-processing"
     ]
   },
   "k8s-pod-basics": {
@@ -620,6 +690,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sql-query-tuning",
       "db-index",
+      "api-pagination-sorting",
       "sql-batch-timeout-pool"
     ],
     "mentions": [
@@ -1898,6 +1969,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-caching-cdn",
       "resilience-patterns",
       "gateway",
+      "rate-limiting-algorithms",
+      "rate-limiting-in-practice",
       "microservices",
       "nginx-reverse-proxy",
       "network-troubleshooting-by-layer"
@@ -2106,6 +2179,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "resilience-patterns": {
     "links": [
+      "idempotency-key",
       "gateway"
     ],
     "mentions": [
@@ -2164,6 +2238,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns"
     ],
     "mentions": [
+      "rate-limiting-in-practice",
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",

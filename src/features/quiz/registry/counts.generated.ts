@@ -2,7 +2,9 @@
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
+  "api-pagination-sorting": 6,
   "base64": 7,
+  "batch-processing": 6,
   "big-o-notation": 8,
   "browser-fetch": 8,
   "caching-strategies": 8,
@@ -70,6 +72,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "http-versions": 8,
   "https-tls": 7,
   "hydration": 6,
+  "idempotency-key": 7,
   "iptables-basics": 7,
   "iptables-nat": 7,
   "islands-resumability": 6,
@@ -116,6 +119,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "postgres-roles-security": 7,
   "proxy-reverse-proxy": 7,
   "pythagorean-theorem": 6,
+  "rate-limiting-algorithms": 6,
+  "rate-limiting-in-practice": 6,
   "react-rerender": 8,
   "react-server-components": 6,
   "realtime-communication": 8,

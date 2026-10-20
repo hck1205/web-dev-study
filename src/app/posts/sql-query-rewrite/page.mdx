@@ -211,7 +211,7 @@ ORDER BY created_at DESC, id DESC
 LIMIT 20;
 ```
 
-실행 계획을 보면 `Index Cond: (ROW(created_at, id) < ROW(...))`로 인덱스 안에서 바로 시작점을 찾고 6페이지만 읽었다. 행 비교를 지원하지 않는 DB나 쿼리 빌더라면 같은 뜻을 `created_at < $1 OR (created_at = $1 AND id < $2)`로 풀어 쓴다.
+실행 계획을 보면 `Index Cond: (ROW(created_at, id) < ROW(...))`로 인덱스 안에서 바로 시작점을 찾고 6페이지만 읽었다. 행 비교를 지원하지 않는 DB나 쿼리 빌더라면 같은 뜻을 `created_at < $1 OR (created_at = $1 AND id < $2)`로 풀어 쓴다. 이렇게 풀어 쓴 OR 조건이 인덱스 시작점을 못 찾는 문제와 정렬 방향이 섞이거나 NULL이 있는 경우는 [페이지와 정렬](/posts/api-pagination-sorting)에서 실행 계획으로 따로 봤다.
 
 키셋의 대가는 "45001페이지로 바로 가기"를 못 한다는 점이다. 다음, 이전, 더 보기(무한 스크롤)만 된다. 대부분의 목록 화면은 그걸로 충분하다. 페이지 번호가 꼭 필요하면 OFFSET을 쓰되 갈 수 있는 페이지 수에 상한을 둔다. API에서는 마지막 행의 값을 그대로 노출하지 않고 base64 같은 불투명한 커서 문자열로 감싸 주는 경우가 많다.
 
