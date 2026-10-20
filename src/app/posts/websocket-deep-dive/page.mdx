@@ -1,0 +1,581 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("websocket-deep-dive");
+
+채팅 기능을 붙여서 배포했다. 로컬에서는 멀쩡했는데 운영에서 이상한 신고가 들어온다. "채팅방을 켜 두고 잠깐 딴 일을 하면 메시지가 안 온다", "서버를 두 대로 늘린 날부터 메시지가 절반만 간다", "가끔 서버 메모리가 계단처럼 오른다". 셋 다 WebSocket이 무엇인지 알아서는 풀리지 않는다. 연결 하나를 몇 시간씩 열어 두는 순간 생기는 문제들이다.
+
+폴링, SSE와 비교하면서 WebSocket이 왜 필요한지는 [서버가 먼저 말하게 하기](/posts/realtime-communication)에 정리했다. 이 글은 그다음 이야기다. 회선에 실제로 어떤 바이트가 오가는지 tcpdump로 잡아서 뜯어 보고, 그 위에서 연결을 오래 살려 두는 법, 죽은 연결을 찾는 법, 느린 상대를 다루는 법, 서버를 늘리는 법, 인증을 거는 법을 하나씩 직접 재현한다. 실습 환경은 Ubuntu 24.04, Node.js 22, `ws` 8, nginx 1.24, Redis 7.0, Chromium 141이다.
+
+이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [롱 폴링](/posts/long-polling) · [Server-Sent Events](/posts/server-sent-events)
+
+## 101 응답이 확인해 주는 것
+
+WebSocket 연결은 HTTP 요청 한 번으로 시작한다. 헤더 하나하나의 뜻은 개요 글에서 봤으니, 여기서는 정말 그 계산대로 답이 오는지만 확인한다. 먼저 브라우저가 만드는 것처럼 16바이트 무작위 값을 Base64로 만들고, 서버가 돌려줘야 할 값을 직접 계산해 둔다.
+
+```bash
+# 16바이트 무작위 키를 만들고, 표준 GUID를 붙여 SHA-1 → Base64로 바꾼다
+node -e '
+const c = require("crypto");
+const key = c.randomBytes(16).toString("base64");
+const h = c.createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest();
+console.log(key); console.log(h.toString("hex")); console.log(h.toString("base64"));'
+```
+
+```text
+Q1ILmfcWTv6W9K2zpkPMDg==
+5f270a05c55471f4c220b0e7c562e88d03bf7965
+XycKBcVUcfTCILDnxWLojQO/eWU=
+```
+
+그다음 `ws`로 띄운 에코 서버에 이 키를 그대로 실어 업그레이드를 요청한다.
+
+```bash
+# 업그레이드 요청을 손으로 보낸다. 101이 오면 TCP 연결은 그대로 WebSocket이 된다
+curl -s -i --max-time 2 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: Q1ILmfcWTv6W9K2zpkPMDg==' \
+  http://127.0.0.1:19761/chat
+```
+
+```text
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: XycKBcVUcfTCILDnxWLojQO/eWU=
+```
+
+`Sec-WebSocket-Accept`가 미리 계산한 값과 같다. 이 값이 증명하는 건 "이 서버는 WebSocket을 알고, 방금 그 요청에 답했다"는 것뿐이다. 키는 비밀이 아니고 누가 연결하는지도 말해 주지 않는다. 인증은 따로 해야 하고, 그 이야기는 뒤에서 한다. 101 뒤로는 같은 TCP 연결에 HTTP가 다시 오가지 않는다. 지금부터 오가는 건 프레임이다.
+
+## 루프백에서 프레임을 잡아 보기
+
+프레임이 실제로 어떻게 생겼는지 보려면 잡아 보는 게 가장 빠르다. 에코 서버에 짧은 텍스트, 200바이트 텍스트, 70,000바이트 바이너리, 둘로 쪼갠 텍스트, ping, close를 차례로 보내면서 루프백 인터페이스를 캡처했다. tcpdump 사용법 자체는 [tcpdump로 계층을 눈으로 보기](/posts/packet-capture-tcpdump)에 있다.
+
+```bash
+# 루프백에서 19761 포트를 오가는 패킷을 파일로 저장한다
+sudo tcpdump -i lo -s 0 -w frames.pcap 'tcp port 19761' &
+# 여러 종류의 프레임을 보내는 클라이언트를 돌린다
+node frames-client.js
+# 캡처를 멈춘다
+sudo kill %1
+# 데이터가 있는 패킷만 16진수로 본다
+tcpdump -r frames.pcap -nn -X 'tcp[tcpflags] & tcp-push != 0'
+```
+
+첫 메시지 `"hi"`가 실린 패킷과 서버가 돌려준 패킷이다.
+
+```text
+19:33:24.223716 IP 127.0.0.1.44200 > 127.0.0.1.19761: Flags [P.], seq 159:167, ack 130, win 64, options [nop,nop,TS val 3026707071 ecr 3404625217], length 8
+	0x0000:  4500 003c 88a4 4000 4006 b415 7f00 0001  E..<..@.@.......
+	0x0010:  7f00 0001 aca8 4d31 dcf2 8244 8ee7 0fb4  ......M1...D....
+	0x0020:  8018 0040 fe30 0000 0101 080a b467 e27f  ...@.0.......g..
+	0x0030:  caee 7541 8182 6b0f 8653 0366            ..uA..k..S.f
+19:33:24.225866 IP 127.0.0.1.19761 > 127.0.0.1.44200: Flags [P.], seq 130:134, ack 167, win 64, options [nop,nop,TS val 3404625223 ecr 3026707071], length 4
+	0x0000:  4500 0038 b946 4000 4006 8377 7f00 0001  E..8.F@.@..w....
+	0x0010:  7f00 0001 4d31 aca8 8ee7 0fb4 dcf2 824c  ....M1.........L
+	0x0020:  8018 0040 fe2c 0000 0101 080a caee 7547  ...@.,........uG
+	0x0030:  b467 e27f 8102 6869                      .g....hi
+```
+
+IP 헤더 20바이트와 TCP 헤더 32바이트(옵션 포함)를 지나 0x0034부터가 WebSocket이다. 클라이언트 쪽은 `81 82 6b 0f 86 53 03 66` 8바이트, 서버 쪽은 `81 02 68 69` 4바이트다. 같은 `"hi"`인데 길이가 다르고, 서버 쪽 끝에는 `hi`가 그대로 보이는데 클라이언트 쪽에는 안 보인다. 아래 그림에서 클라이언트 프레임을 한 바이트씩 읽어 보자.
+
+<AlgoTrace
+  caption="클라이언트가 보낸 8바이트를 앞에서부터 읽는다"
+  cells={["81", "82", "6b", "0f", "86", "53", "03", "66"]}
+  memoryLabel="읽어 낸 값"
+  steps={[
+    { pointer: 0, memory: ["FIN=1", "op=1 텍스트"], caption: "0x81 = 1000 0001. 맨 앞 비트가 FIN이라 이 프레임으로 메시지가 끝난다. 아래 4비트 0001은 텍스트 프레임이다." },
+    { pointer: 1, memory: ["FIN=1", "op=1 텍스트", "MASK=1", "len=2"], caption: "0x82 = 1000 0010. 맨 앞 비트가 MASK, 나머지 7비트가 길이 2다. 125 이하라 길이는 여기서 끝난다." },
+    { pointer: 2, found: [2, 3, 4, 5], memory: ["FIN=1", "op=1 텍스트", "MASK=1", "len=2", "key=6b0f8653"], caption: "MASK가 1이면 다음 4바이트가 마스킹 키다. 브라우저와 ws 클라이언트는 프레임마다 새 키를 뽑는다." },
+    { pointer: 6, found: [2], memory: ["FIN=1", "op=1 텍스트", "MASK=1", "len=2", "key=6b0f8653", "03^6b=68 'h'"], caption: "본문 첫 바이트 0x03을 키의 첫 바이트 0x6b와 XOR하면 0x68, 'h'다." },
+    { pointer: 7, found: [3], memory: ["FIN=1", "op=1 텍스트", "MASK=1", "len=2", "key=6b0f8653", "03^6b=68 'h'", "66^0f=69 'i'"], caption: "둘째 바이트는 키의 둘째 바이트와 XOR한다. 0x66 ^ 0x0f = 0x69, 'i'다. 서버 프레임은 MASK=0이라 키 없이 68 69가 그대로 실린다." },
+  ]}
+/>
+
+헤더가 2바이트에서 시작한다는 게 WebSocket을 쓰는 이유 중 하나다. 같은 `"hi"`를 HTTP 요청으로 보냈다면 요청 줄과 헤더만 수백 바이트였다. 클라이언트 쪽이 4바이트 더 긴 건 마스킹 키 때문이다.
+
+## 길이가 125를 넘으면 헤더가 길어진다
+
+나머지 프레임들은 TCP 본문의 앞 20바이트만 찍어서 봤다. 캡처 파일에서 TCP 본문만 꺼내는 작은 스크립트(`pcap-hex.js`)를 썼다.
+
+```bash
+# 방향, 본문 길이, 본문 앞 20바이트를 찍는다
+node pcap-hex.js frames.pcap 19761 20
+```
+
+```text
+ 8 C->S     8 81 82 6b 0f 86 53 03 66
+ 9 S->C     4 81 02 68 69
+11 C->S   208 81 fe 00 c8 5e 21 55 31 3f 40 34 50 3f 40 34 50 3f 40 34 50
+12 S->C   204 81 7e 00 c8 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61
+14 C->S 32768 82 ff 00 00 00 00 00 01 11 70 39 f4 8a 78 5b 96 e8 1a 5b 96
+18 S->C 32768 82 7f 00 00 00 00 00 01 11 70 62 62 62 62 62 62 62 62 62 62
+24 C->S     9 01 83 64 84 3f b5 2c e1 53
+26 C->S     8 80 82 f3 fa 59 52 9f 95
+28 S->C     7 81 05 48 65 6c 6c 6f
+30 C->S     8 89 82 ab da 0c 13 db eb
+31 S->C     4 8a 02 70 31
+33 C->S    11 88 85 c4 68 89 dd c7 80 eb a4 a1
+34 S->C     7 88 05 03 e8 62 79 65
+```
+
+200바이트짜리(11번 줄) 헤더를 조각으로 나눠 보면 길이 필드가 어떻게 늘어나는지 보인다.
+
+<UrlAnatomy
+  caption="200바이트 텍스트를 실은 클라이언트 프레임의 앞부분"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "b0",
+      display: "81",
+      title: "FIN, RSV1~3, opcode",
+      description: "1000 0001. FIN=1이고 opcode 1(텍스트)이다. 가운데 RSV 세 비트는 확장이 쓴다. permessage-deflate 압축을 켜면 압축된 메시지의 첫 프레임에 RSV1이 1로 선다.",
+      code: "opcode  0 이어지는 조각   1 텍스트   2 바이너리\n        8 close   9 ping   A pong",
+      required: true,
+    },
+    {
+      key: "b1",
+      display: "fe",
+      title: "MASK와 7비트 길이",
+      description: "1111 1110. MASK=1, 7비트 길이는 126이다. 126은 진짜 길이가 아니라 '다음 2바이트에 길이가 있다'는 표시다. 127이면 다음 8바이트에 길이가 있다.",
+      code: "0~125   → 이 7비트가 곧 길이\n126     → 뒤 2바이트가 길이 (최대 65,535)\n127     → 뒤 8바이트가 길이",
+      required: true,
+    },
+    {
+      key: "ext",
+      display: "00 c8",
+      title: "확장 길이 2바이트",
+      description: "0x00c8 = 200. 70,000바이트를 보낸 14번 줄은 7비트 자리가 127(0xff에서 MASK를 뺀 값)이고, 뒤 8바이트 00 00 00 00 00 01 11 70 = 70,000이다.",
+    },
+    {
+      key: "mask",
+      display: "5e 21 55 31",
+      title: "마스킹 키",
+      description: "클라이언트가 보내는 프레임에만 있다. 서버가 보낸 12번 줄은 81 7e 00 c8 다음에 바로 본문 61 61 ...('a')이 온다.",
+    },
+    {
+      key: "body",
+      display: "3f 40 34 50 3f 40 34 50 …",
+      title: "마스킹된 본문",
+      description: "'a'(0x61)를 키 네 바이트와 차례로 XOR한 값이 네 바이트마다 되풀이된다. 마스킹이 내용을 숨기지 못한다는 증거다.",
+    },
+  ]}
+/>
+
+70,000바이트 메시지는 프레임 하나지만 TCP 세그먼트 세 개(32768 + 32768 + 4478바이트)에 나뉘어 실렸다. 프레임 경계와 TCP 패킷 경계는 아무 관계가 없다. 서버는 바이트를 계속 받아 쌓다가 헤더가 말한 길이만큼 모이면 메시지 하나를 꺼낸다. 반대로 메시지 하나를 프레임 여러 개로 쪼갤 수도 있다. 24번 줄 `01 83`은 FIN=0인 텍스트 프레임 "Hel"이고, 26번 줄 `80 82`는 opcode 0(이어지는 조각)에 FIN=1인 "lo"다. 서버 쪽 `message` 이벤트는 둘을 합친 "Hello" 한 번으로 올라왔고, 에코도 28번 줄처럼 프레임 하나로 돌아왔다.
+
+제어 프레임은 규칙이 더 엄격하다. ping(30번, `89`), pong(31번, `8a`), close(33·34번, `88`)는 본문이 125바이트를 넘으면 안 되고 쪼갤 수도 없다. 그래서 큰 메시지를 조각내 보내는 중간에도 ping은 끼어들 수 있다. close 본문의 앞 2바이트는 종료 코드다. `03 e8`은 1000(정상 종료)이고 뒤의 `62 79 65`가 이유 문자열 "bye"다.
+
+## 마스킹은 암호화가 아니다
+
+위 200바이트 프레임에서 본문이 `3f 40 34 50`의 반복이었다. 같은 글자를 같은 키로 XOR하니 같은 값이 네 바이트 주기로 나온다. 키도 프레임 안에 그대로 실려 있다. 마스킹은 내용을 숨기려는 장치가 아니라, 페이지 스크립트가 회선에 실릴 바이트를 마음대로 고르지 못하게 하는 장치다. 왜 그게 필요했는지(오래된 투명 프록시의 캐시 오염)는 개요 글에 있다. 내용을 숨기는 건 `wss://`, 즉 TLS의 몫이다.
+
+규칙은 양쪽에 다르다. 클라이언트에서 서버로 가는 프레임은 반드시 마스킹하고, 서버에서 클라이언트로 가는 프레임은 마스킹하지 않는다. 어기면 받는 쪽이 연결을 끊어야 한다. 마스킹 없는 프레임을 일부러 서버에 보내 봤다.
+
+```bash
+# 핸드셰이크 뒤 MASK 비트가 0인 텍스트 프레임 81 02 68 69를 보낸다
+node raw-unmasked.js
+```
+
+```text
+HTTP/1.1 101 Switching Protocols
+recv 88 02 03 ea
+close code 1002 ""
+tcp closed
+```
+
+서버는 close 프레임 `88 02 03 ea`, 즉 1002(프로토콜 오류)를 보내고 끊었다. 여기까지는 맞는 동작이다. 문제는 서버 프로세스 쪽 로그였다.
+
+```text
+node:events:497
+      throw er; // Unhandled 'error' event
+      ^
+
+RangeError: Invalid WebSocket frame: MASK must be set
+    at Receiver.getInfo (.../node_modules/ws/lib/receiver.js:351:28)
+```
+
+에코 서버가 통째로 죽었다. 연결마다 `ws.on("error", ...)`를 달지 않았기 때문이다. Node.js의 EventEmitter는 `error` 이벤트를 받는 리스너가 없으면 예외를 던진다. 잘못된 프레임 하나, 너무 큰 메시지 하나(`maxPayload`, 기본 100MiB)로 그 서버에 붙은 모든 사용자의 연결이 끊기는 셈이다. 아래 함수로 프레임 헤더를 직접 읽어 보면 서버가 무엇을 검사하는지 감이 온다. 테스트는 위에서 잡은 바이트를 그대로 썼다.
+
+<CodePlayground
+  caption="캡처한 바이트로 WebSocket 프레임 읽기"
+  functionName="decodeFrame"
+  initialCode={`function decodeFrame(hex) {
+  // hex: "81 82 6b 0f ..." 처럼 공백으로 나눈 16진수
+  // 반환: { fin, opcode, masked, length, payload }
+  // payload는 마스킹을 푼 본문을 글자로 바꾼 것. 본문이 덜 왔으면 null
+  const b = hex.trim().split(/\\s+/).map((h) => parseInt(h, 16));
+  return {};
+}`}
+  solution={`function decodeFrame(hex) {
+  const b = hex.trim().split(/\\s+/).map((h) => parseInt(h, 16));
+  const fin = (b[0] & 0x80) !== 0;
+  const opcode = b[0] & 0x0f;
+  const masked = (b[1] & 0x80) !== 0;
+  let length = b[1] & 0x7f;
+  let i = 2;
+  if (length === 126) { length = b[2] * 256 + b[3]; i = 4; }
+  else if (length === 127) {
+    length = 0;
+    for (let k = 2; k < 10; k++) length = length * 256 + b[k];
+    i = 10;
+  }
+  const key = masked ? b.slice(i, i + 4) : null;
+  if (masked) i += 4;
+  const body = b.slice(i);
+  if (body.length < length) return { fin, opcode, masked, length, payload: null };
+  const bytes = body.slice(0, length).map((x, j) => (masked ? x ^ key[j % 4] : x));
+  return { fin, opcode, masked, length, payload: String.fromCharCode(...bytes) };
+}`}
+  tests={[
+    { label: "클라이언트 텍스트 hi", args: ["81 82 6b 0f 86 53 03 66"], expected: { fin: true, opcode: 1, masked: true, length: 2, payload: "hi" } },
+    { label: "쪼갠 첫 조각 (FIN=0)", args: ["01 83 64 84 3f b5 2c e1 53"], expected: { fin: false, opcode: 1, masked: true, length: 3, payload: "Hel" } },
+    { label: "이어지는 조각 (opcode 0)", args: ["80 82 f3 fa 59 52 9f 95"], expected: { fin: true, opcode: 0, masked: true, length: 2, payload: "lo" } },
+    { label: "서버의 pong", args: ["8a 02 70 31"], expected: { fin: true, opcode: 10, masked: false, length: 2, payload: "p1" } },
+    { label: "126: 2바이트 확장 길이, 본문 덜 옴", args: ["81 fe 00 c8 5e 21 55 31 3f 40 34 50"], expected: { fin: true, opcode: 1, masked: true, length: 200, payload: null } },
+    { label: "127: 8바이트 확장 길이", args: ["82 7f 00 00 00 00 00 01 11 70 62 62"], expected: { fin: true, opcode: 2, masked: false, length: 70000, payload: null } },
+  ]}
+/>
+
+## 1분 만에 끊기는 채팅방
+
+처음 신고로 돌아가자. "켜 두고 딴 일을 하면 메시지가 안 온다." 앞에 nginx를 두고 업그레이드 헤더만 넘기게 설정한 뒤(`proxy_read_timeout`은 적지 않아 기본값 60초), 연결만 열고 아무것도 보내지 않는 클라이언트를 붙였다. 같은 nginx에 경로를 하나 더 만들어, 25초마다 서버가 ping을 보내는 앱 쪽으로도 붙였다.
+
+```nginx
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+location /ws/ {                       # ping 없는 앱
+    proxy_pass http://127.0.0.1:19762;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+}
+location /ws-ping/ {                  # 25초마다 ping 보내는 앱
+    proxy_pass http://127.0.0.1:19763;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+}
+```
+
+```text
+ws://127.0.0.1:19770/ws/ open
+ws://127.0.0.1:19770/ws/ close 1006 after 60.0s
+ws://127.0.0.1:19770/ws-ping/ open
+ws://127.0.0.1:19770/ws-ping/ ping at 24.5s
+ws://127.0.0.1:19770/ws-ping/ ping at 49.5s
+ws://127.0.0.1:19770/ws-ping/ ping at 74.5s
+ws://127.0.0.1:19770/ws-ping/ still open after 95s
+```
+
+ping이 없는 쪽은 정확히 60초에 1006으로 끊겼다. 1006은 close 프레임 없이 TCP가 끊겼다는 뜻으로, 회선에 실리는 코드가 아니라 받는 쪽이 스스로 붙이는 값이다. nginx 로그에는 이렇게 남았다.
+
+```text
+127.0.0.1 "GET /ws/ HTTP/1.1" 101 0 rt=60.013
+127.0.0.1 "GET /ws-ping/ HTTP/1.1" 101 6 rt=95.021
+2026/10/20 19:35:26 [info] 5075#5075: *1 upstream timed out (110: Connection timed out) while proxying upgraded connection, client: 127.0.0.1, server: , request: "GET /ws/ HTTP/1.1", upstream: "http://127.0.0.1:19762/ws/", host: "127.0.0.1:19770"
+```
+
+access.log의 `rt=60.013`이 단서다. WebSocket 요청은 연결이 끝날 때 한 줄 남고, 그 줄의 요청 시간이 연결이 살아 있던 시간이다. 101 줄의 `rt`가 60 근처에 몰려 있으면 유휴 타임아웃을 의심한다. 원인을 말해 주는 줄은 `[info]` 레벨이라 `error_log`를 기본 수준(`error`)으로 두면 보이지 않는다. ping을 보낸 쪽은 95초 동안 버텼고, 본문 바이트 6은 서버가 보낸 2바이트짜리 ping 프레임(`89 00`) 세 개다. 아래 그림에서 두 경우를 차례로 보자.
+
+<NetworkTopology
+  caption="nginx는 업그레이드된 연결도 60초 동안 아무것도 오가지 않으면 끊는다"
+  width={400}
+  height={190}
+  zones={[{ id: "srv", label: "서버 쪽", x: 132, y: 55, w: 262, h: 115, tone: "private" }]}
+  nodes={[
+    { id: "browser", label: "Browser", sub: "new WebSocket", x: 62, y: 110, icon: "client", w: 108 },
+    { id: "nginx", label: "nginx", sub: "read 60s", x: 205, y: 110, icon: "lb", w: 100 },
+    { id: "app", label: "app", sub: "ws 서버", x: 330, y: 110, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "browser", to: "nginx" },
+    { from: "nginx", to: "app" },
+  ]}
+  steps={[
+    { path: ["browser", "nginx", "app"], packet: "Upgrade", title: "업그레이드 요청이 앱까지 간다", detail: "nginx가 Upgrade와 Connection 헤더를 넘겨야 앱이 업그레이드 요청으로 알아본다. 넘기지 않으면 평범한 GET이 된다." },
+    { path: ["app", "nginx", "browser"], packet: "101", title: "101이 돌아오면 nginx는 바이트를 그대로 잇는다", detail: "이때부터 nginx는 HTTP를 해석하지 않고 양쪽 소켓을 이어 주는 파이프가 된다. 타이머는 계속 돈다." },
+    { path: ["nginx"], highlight: ["srv"], title: "60초 동안 아무 바이트도 오가지 않는다", detail: "채팅방이 조용하면 정상적인 상황이다. 하지만 nginx 입장에서는 멈춘 연결과 구분이 안 된다." },
+    { path: ["browser", "nginx"], packet: "msg", blocked: true, title: "60초가 되는 순간 nginx가 양쪽을 끊는다", detail: "브라우저는 close 프레임 없이 끊긴 걸 보고 1006을 받는다. 그 뒤에 보낸 메시지는 갈 곳이 없다." },
+    { path: ["app", "nginx", "browser"], packet: "ping", title: "다시 붙어서, 이번엔 서버가 25초마다 ping을 보낸다", detail: "2바이트짜리 프레임 하나가 지나가면서 nginx의 타이머가 다시 0부터 시작한다." },
+    { path: ["browser", "nginx", "app"], packet: "pong", title: "브라우저가 알아서 pong을 돌려준다", detail: "페이지 코드와 상관없이 브라우저가 답한다. 95초가 지나도 연결이 살아 있었다." },
+  ]}
+/>
+
+고치는 순서는 이렇다. 먼저 하트비트 간격을 경로에 있는 모든 장비의 유휴 한도 중 가장 짧은 것보다 짧게 잡는다. nginx 60초, AWS ALB 기본 60초, 사내 프록시나 NAT 장비는 그보다 짧을 수도 있으니 20~30초가 흔하다. 그다음 nginx에서 WebSocket 경로만 `proxy_read_timeout`을 늘린다. 늘리기만 하고 하트비트를 안 보내면 다른 장비에서 또 끊기고, 아래에서 볼 죽은 연결도 오래 남는다. 각 계층 타임아웃의 관계는 [타임아웃은 계층마다 따로 있다](/posts/timeouts)에 정리했다.
+
+## 죽은 연결은 스스로 알려 주지 않는다
+
+반대 방향의 문제도 있다. 사용자의 노트북이 잠들거나, 지하철에서 신호가 끊기거나, 클라이언트 프로세스가 멈추면 서버에는 아무 신호도 오지 않는다. TCP는 보낼 게 없으면 상대가 살아 있는지 묻지 않는다. 그 연결은 서버 메모리에 열린 채로 남고, 서버는 계속 그 사용자에게 메시지를 쌓는다.
+
+클라이언트 두 개를 붙인 뒤 `kill -STOP`으로 프로세스를 얼려서 재현했다. 한 서버는 5초마다 ping을 보내고, 다음 ping을 보낼 때까지 pong이 안 왔으면 연결을 끊는다. 다른 서버는 아무것도 하지 않는다.
+
+```js
+// 하트비트: ping을 보내기 전에 지난번 pong이 왔는지 본다
+ws.isAlive = true;
+ws.on("pong", () => { ws.isAlive = true; });
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) { ws.terminate(); continue; } // close 인사 없이 소켓을 닫는다
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 5000);
+```
+
+```text
+   0.0s listening 19766 ping 5000
+   0.6s open 41030
+  10.0s no pong, terminate
+  10.0s close 1006
+---
+   0.0s listening 19767 ping off
+   0.6s open 40172
+---
+Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+0      0          127.0.0.1:19767    127.0.0.1:40172
+```
+
+하트비트가 있는 서버는 5초에 ping을 보내고, 10초에 pong이 없는 걸 보고 정리했다. 없는 서버의 연결은 `ss`로 봐도 ESTABLISHED 그대로다. 프로세스는 얼었지만 커널은 살아 있어서 TCP ACK는 계속 돌려준다. 그래서 TCP keepalive를 켜도 이 경우는 못 잡는다. keepalive는 상대 커널이 살아 있는지만 묻고, 리눅스 기본값으로는 2시간을 쉰 뒤에야 묻기 시작한다([TCP 연결의 일생](/posts/tcp-connection-lifecycle)의 keepalive 부분). 앱이 응답하는지까지 보려면 앱 수준의 ping/pong이 필요하다.
+
+<SequenceDiagram
+  caption="pong이 안 오면 다음 ping 차례에 정리한다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    { from: "server", to: "client", label: "ping (0s)", title: "ping을 보내고 표시를 내린다", detail: "isAlive를 false로 바꾸고 ping을 보낸다. 살아 있는 상대라면 곧 pong이 와서 다시 true가 된다." },
+    { from: "client", to: "server", label: "pong", title: "살아 있는 클라이언트는 바로 답한다", detail: "브라우저와 ws 클라이언트는 pong을 자동으로 보낸다. 페이지 코드가 할 일은 없다." },
+    { from: "server", to: "client", label: "ping (5s)", title: "다음 차례에도 같은 일을 한다", detail: "이번에는 클라이언트 프로세스가 멈췄다. 커널은 TCP ACK만 돌려주고 pong은 오지 않는다." },
+    { from: "server", to: "server", label: "isAlive=false", title: "10초 차례에 표시가 그대로다", detail: "지난 ping 뒤 pong이 없었다는 뜻이다. 최대 두 주기 안에 죽은 연결을 찾는다." },
+    { from: "server", to: "client", label: "terminate", title: "인사 없이 소켓을 닫는다", detail: "close()는 상대의 close 응답을 기다리는데, 멈춘 상대는 답하지 않는다. 그래서 terminate()로 바로 닫고 연결에 묶인 메모리와 구독을 정리한다." },
+  ]}
+/>
+
+브라우저 쪽에서도 같은 고민이 있다. 브라우저 `WebSocket` API에는 ping을 보내는 메서드가 없다. 서버가 사라졌는지 클라이언트가 알고 싶으면 `{"type":"ping"}` 같은 앱 메시지를 주고받는다. 모바일에서 화면이 꺼졌다 켜지면 연결이 이미 죽어 있는데 `readyState`는 OPEN인 경우가 있어서, `visibilitychange`나 `online` 이벤트 때 앱 수준 ping을 한 번 보내 보는 방법을 많이 쓴다.
+
+## 느린 수신자가 서버 메모리를 먹는다
+
+세 번째 신고, 메모리가 계단처럼 오르는 문제다. `ws.send()`는 상대가 받을 때까지 기다리지 않는다. 커널 송신 버퍼가 차면 나머지는 프로세스 메모리에 쌓아 두고 바로 돌아온다. 쌓인 양은 `bufferedAmount`로 보인다.
+
+멈춰 있는(SIGSTOP) 클라이언트에게 10ms마다 64KB씩, 메시지마다 새 버퍼를 만들어 보냈다. 두 번째 실행은 `bufferedAmount`가 1MB를 넘으면 그 메시지를 보내지 않게 했다.
+
+```text
+1s sent=95 skipped=0 bufferedAmount=   2.2MB rss=  61.4MB
+2s sent=192 skipped=0 bufferedAmount=   8.3MB rss=  67.7MB
+4s sent=386 skipped=0 bufferedAmount=  20.4MB rss=  77.5MB
+6s sent=581 skipped=0 bufferedAmount=  32.6MB rss=  88.7MB
+8s sent=774 skipped=0 bufferedAmount=  44.6MB rss=  99.9MB
+10s sent=969 skipped=0 bufferedAmount=  56.8MB rss= 111.5MB
+====
+1s sent=76 skipped=18 bufferedAmount=   1.0MB rss=  60.1MB
+2s sent=76 skipped=114 bufferedAmount=   1.0MB rss=  60.4MB
+6s sent=76 skipped=504 bufferedAmount=   1.0MB rss=  60.4MB
+10s sent=76 skipped=890 bufferedAmount=   1.0MB rss=  59.3MB
+```
+
+첫 실행은 초당 약 6MB씩 늘었다. 처음 1초에 보낸 95개(약 6MB) 중 2.2MB만 남은 건, 나머지를 커널 송신 버퍼와 상대 쪽 수신 버퍼가 받아 줬기 때문이다. 그게 차고 나면 전부 프로세스 메모리에 쌓인다. 이런 클라이언트가 수백 명이면 서버는 메모리 부족으로 죽고, 그 서버에 붙은 멀쩡한 사용자들까지 함께 끊긴다.
+
+브라우저에서도 똑같다. Chromium에서 읽기를 멈춘 서버로 64KB씩 보내 봤다.
+
+```text
+1s sent=100 skipped=0 bufferedAmount=2.2MB
+2s sent=200 skipped=0 bufferedAmount=8.4MB
+4s sent=401 skipped=0 bufferedAmount=21.0MB
+===
+1s sent=81 skipped=19 bufferedAmount=1.0MB
+4s sent=81 skipped=319 bufferedAmount=1.0MB
+```
+
+`WebSocket.send()`에는 "잠깐 멈춰"라는 신호가 없다. 버퍼가 얼마나 찼는지를 직접 보고 판단하는 수밖에 없다. 받는 쪽이 못 따라올 때 할 수 있는 일은 데이터의 성격에 따라 다르다.
+
+시세나 커서 위치처럼 최신 값만 의미 있는 데이터는 버리거나 합친다. 밀린 동안의 중간값은 보내지 않고 마지막 값만 보낸다. 채팅 메시지처럼 하나도 잃으면 안 되는 데이터는 보내는 쪽에서 멈추고, 한도를 넘게 밀린 연결은 끊는다. 끊을 때 1008(정책 위반)이나 1013(잠시 후 다시)을 보내고, 클라이언트는 다시 붙으면서 마지막으로 받은 번호부터 이어 받는다. Chromium에는 스트림처럼 받는 쪽 속도에 맞춰 주는 `WebSocketStream`이 있지만 아직 모든 브라우저가 지원하지는 않는다. 생산자와 소비자의 속도 차이를 다루는 일반적인 방법은 [백프레셔](/posts/backpressure)에서 다룬다.
+
+## 끊긴 뒤 다시 붙고 이어 받기
+
+WebSocket에는 재연결이 없다. 끊기면 `close` 이벤트 하나가 오고 끝이다. 다시 붙는 것과, 끊긴 동안 놓친 메시지를 받는 것은 전부 앱이 만든다. 서버가 300ms마다 번호 붙은 이벤트를 만들고 최근 100개를 보관하게 했다. 클라이언트는 다시 붙자마자 첫 메시지로 `{"resume": 마지막 번호}`를 보내고, 끊기면 [full jitter](/posts/exponential-backoff-jitter)로 기다렸다가 다시 시도한다. 서버를 2초에 내렸다가 5초에 다시 올렸다.
+
+```text
+  0.02s open, resume after 0
+  1.94s close 1006, last=7, retry #1 in 262ms
+  2.20s close 1006, last=7, retry #2 in 402ms
+  2.61s close 1006, last=7, retry #3 in 163ms
+  2.77s close 1006, last=7, retry #4 in 116ms
+  2.89s close 1006, last=7, retry #5 in 1185ms
+  4.08s close 1006, last=7, retry #6 in 2154ms
+  6.24s open, resume after 7
+```
+
+서버 로그에는 `resume from 7, replay 3`이 찍혔다. 7번까지 받았던 클라이언트는 새 서버에서 8·9·10번을 먼저 받고 이어서 실시간 이벤트를 받았다. 번호가 건너뛰면 `gap!`을 찍게 했는데 한 줄도 나오지 않았다. 대기 시간이 262ms, 402ms, 163ms처럼 들쭉날쭉한 게 지터다. 배포로 수만 개 연결이 한꺼번에 끊길 때 이 무작위성이 없으면 전부 같은 박자로 새 서버를 두드린다.
+
+실무에서 덧붙일 것이 몇 가지 있다. 다시 붙을 때마다 무조건 재시도하면 안 되는 종료가 있다. 인증이 만료돼 서버가 4401 같은 앱 정의 코드(4000~4999는 앱이 쓰라고 비워 둔 범위)로 닫았다면 토큰을 새로 받은 뒤 붙어야 하고, 1008처럼 정책 위반으로 닫혔다면 같은 요청을 반복해 봐야 소용없다. 연결이 열리자마자 다시 끊기는 경우에 백오프 단계를 0으로 돌리면 재시도가 빠르게 반복되니, 연결 뒤 몇 초 동안 버틴 경우에만 단계를 초기화하는 편이 안전하다. 서버가 보관하는 이력은 길이 제한이 있으니, 클라이언트가 보관 범위보다 오래된 번호를 들고 오면 "처음부터 다시 받아라"라고 답하는 경로도 있어야 한다.
+
+## 서버가 두 대가 되면 메시지가 반만 간다
+
+두 번째 신고다. 연결은 처음 붙은 서버에 머물고, 서버는 자기에게 붙은 연결만 안다. 서버 A와 B를 띄우고 민지는 A, 진우는 B에 붙인 뒤 민지가 메시지를 보냈다. 먼저 서버가 자기 연결에만 뿌리는 경우다.
+
+```text
+minji  got {"from":"minji","text":"점심 뭐 먹지","via":"A"}
+```
+
+진우는 아무것도 받지 못했다. 로컬 개발에서는 서버가 한 대라 모두가 같은 서버에 붙어 있으니 이 버그가 보이지 않는다. 이번에는 받은 메시지를 Redis `room:7` 채널에 publish하고, 각 서버가 그 채널을 subscribe해서 자기 연결에 뿌리게 했다.
+
+```text
+jinwoo got {"from":"minji","text":"점심 뭐 먹지","via":"A"}
+minji  got {"from":"minji","text":"점심 뭐 먹지","via":"A"}
+[A] from redis: {"from":"minji","text":"점심 뭐 먹지","via":"A"}
+[B] from redis: {"from":"minji","text":"점심 뭐 먹지","via":"A"}
+```
+
+```bash
+# 이 채널을 듣고 있는 구독자 수 (서버 두 대가 각각 하나씩)
+redis-cli -p 19772 PUBSUB NUMSUB room:7
+```
+
+```text
+room:7
+2
+```
+
+<NetworkTopology
+  caption="연결은 각자의 서버에 붙어 있고, 메시지는 Redis를 거쳐 건너간다"
+  width={400}
+  height={330}
+  zones={[{ id: "apps", label: "앱 서버", x: 18, y: 150, w: 364, h: 165, tone: "private" }]}
+  nodes={[
+    { id: "minji", label: "minji", sub: "Browser", x: 70, y: 40, icon: "client", w: 100 },
+    { id: "jinwoo", label: "jinwoo", sub: "Browser", x: 330, y: 40, icon: "client", w: 100 },
+    { id: "lb", label: "LB", sub: "L4 / L7", x: 200, y: 105, icon: "lb", w: 100 },
+    { id: "a", label: "server A", sub: ":19773", x: 90, y: 200, icon: "server", w: 108 },
+    { id: "b", label: "server B", sub: ":19774", x: 310, y: 200, icon: "server", w: 108 },
+    { id: "redis", label: "Redis", sub: "room:7", x: 200, y: 275, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "minji", to: "lb" },
+    { from: "jinwoo", to: "lb" },
+    { from: "lb", to: "a" },
+    { from: "lb", to: "b" },
+    { from: "a", to: "redis", label: "publish" },
+    { from: "redis", to: "b", label: "subscribe" },
+  ]}
+  steps={[
+    { path: ["minji", "lb", "a"], packet: "msg", title: "민지의 메시지는 A로 간다", detail: "민지의 WebSocket은 처음 업그레이드할 때 LB가 고른 A에 붙어 있다. 같은 TCP 연결이니 다른 서버로 갈 수 없다." },
+    { path: ["a"], highlight: ["jinwoo", "b"], title: "버스가 없으면 A는 진우를 모른다", detail: "A의 wss.clients에는 민지만 있다. 자기 연결에만 뿌리면 진우는 아무것도 받지 못한다." },
+    { path: ["a", "redis"], packet: "PUBLISH", title: "A가 room:7 채널에 publish한다", detail: "자기 연결에 직접 보내지 않고 버스에 먼저 올린다. 그래야 모든 서버가 같은 순서로 받는다." },
+    { path: ["redis", "b", "lb", "jinwoo"], packet: "msg", title: "구독 중인 B가 받아 진우에게 내려보낸다", detail: "B는 room:7을 듣고 있다가 받은 메시지를 자기에게 붙은 진우의 연결로 보낸다." },
+    { path: ["redis", "a", "lb", "minji"], packet: "msg", title: "A도 같은 메시지를 받아 민지에게 보낸다", detail: "보낸 사람도 버스를 거친 메시지를 받으니, 모두가 같은 순서로 대화를 본다." },
+  ]}
+/>
+
+Redis Pub/Sub은 그 순간 듣고 있는 구독자에게만 전달하고 저장하지 않는다. 서버 B가 재시작하는 몇 초 동안 올라온 메시지는 B에 붙을 사용자들에게 영영 가지 않는다. 앞에서 만든 번호와 이어 받기가 여기서도 필요하고, 메시지 자체를 Redis Streams나 DB에 남겨 두는 구성이 그래서 나온다. 느린 구독자가 끊기는 동작과 Streams 소비자 그룹은 [발행·구독](/posts/pub-sub)에 있다.
+
+스티키 세션은 순수 WebSocket에는 필요 없다. 연결 하나가 TCP 하나라 처음 고른 서버에 그대로 머문다. 필요해지는 건 연결 하나가 여러 HTTP 요청으로 이루어질 때다. Socket.IO는 기본으로 롱 폴링으로 먼저 붙었다가 WebSocket으로 갈아타는데, 그 요청들이 모두 같은 서버로 가야 해서 스티키 세션을 켠다. 스티키 세션의 방식과 단점은 [로드 밸런서 기초](/posts/load-balancer-basics)에 정리했다.
+
+서버를 늘릴 때 같이 보는 숫자도 있다. 연결 하나는 파일 디스크립터 하나를 쓰니 `ulimit -n`과 nginx `worker_connections`가 동시 연결 수의 상한이 된다. nginx는 프록시할 때 클라이언트 쪽과 업스트림 쪽 소켓을 하나씩 쓰므로 연결 하나에 두 개를 쓴다. 배포할 때는 서버를 한 번에 내리지 말고, 새 연결을 받지 않게 한 뒤 1001(떠남)로 조금씩 닫아서 재연결이 한꺼번에 몰리지 않게 한다.
+
+## 쿠키로 인증하면 다른 사이트도 연결을 연다
+
+WebSocket 업그레이드 요청에는 브라우저가 그 사이트의 쿠키를 붙인다. 그리고 [CORS](/posts/cors)는 WebSocket에 적용되지 않는다. 쿠키 세션으로 인증하는 서버에 Origin 검사가 없으면, 다른 사이트의 페이지가 로그인한 사용자의 권한으로 연결을 열고 응답까지 읽는다. 이걸 CSWSH(Cross-Site WebSocket Hijacking)라고 부른다. [CSRF](/posts/csrf)와 뿌리가 같지만, 응답을 읽을 수 있다는 점에서 더 위험하다.
+
+쿠키 `sid`로 사용자를 찾는 서버 두 개를 띄웠다. 하나는 Origin을 보지 않고, 하나는 허용 목록과 비교한다.
+
+```bash
+# 19764는 Origin을 보지 않는 서버, 19765는 허용 목록과 비교하는 서버
+# 같은 쿠키에 Origin만 바꿔 업그레이드를 요청한다
+for p in 19764 19765; do for o in https://app.example.com https://evil.example; do
+  echo "== port $p origin $o"
+  curl -s -i --max-time 1 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: Q1ILmfcWTv6W9K2zpkPMDg==' \
+    -H "Origin: $o" -H 'Cookie: sid=s3cr3t' http://127.0.0.1:$p/live --output -
+done; done
+```
+
+```text
+== port 19764 origin https://evil.example
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: XycKBcVUcfTCILDnxWLojQO/eWU=
+
+{"hello":"minji","unread":3}
+== port 19765 origin https://evil.example
+HTTP/1.1 403 Forbidden
+Connection: close
+Content-Length: 0
+```
+
+네 경우 중 evil.example에서 온 두 개만 옮겼다. app.example.com은 두 서버 모두 101로 받았다. 검사 없는 서버는 evil.example에서 온 요청에도 민지의 데이터를 그대로 보냈다(데이터 앞의 프레임 헤더 2바이트 `81 1c`는 터미널에 깨져 보여서 뺐다). 그럼 실제 브라우저도 다른 사이트에서 쿠키를 붙여 줄까. Chromium 141에서 `app.test`에 로그인해 SameSite를 지정하지 않은 쿠키를 받은 뒤, 세 출처의 페이지에서 `ws://app.test/live`를 열어 봤다.
+
+```text
+server: origin=http://app.test:19776 cookie=sid=s3cr3t
+server: origin=http://blog.app.test:19776 cookie=sid=s3cr3t
+server: origin=http://evil.test:19776 cookie=(none)
+```
+
+다른 사이트인 evil.test에서는 쿠키가 붙지 않았다. 크롬 계열은 SameSite를 지정하지 않은 쿠키를 Lax로 취급해서 사이트를 넘는 WebSocket 요청에 싣지 않는다. 하지만 같은 사이트의 다른 서브도메인인 blog.app.test에서는 쿠키가 붙었다. 사용자 콘텐츠를 올리는 서브도메인이나 탈취된 다른 서브도메인이 있으면 공격이 그대로 성립한다. 모든 브라우저가 기본값을 Lax로 두는 것도 아니고, `SameSite=None`으로 설정한 쿠키라면 사이트를 넘어서도 붙는다. 그래서 브라우저 기본값에 기대지 않고 서버가 Origin을 정확한 문자열로 비교한다. `endsWith("app.example.com")` 같은 비교는 `evilapp.example.com`을 통과시킨다.
+
+<SequenceDiagram
+  caption="쿠키 대신 첫 메시지로 인증하는 흐름"
+  actors={[
+    { id: "page", label: "페이지" },
+    { id: "api", label: "API 서버" },
+    { id: "ws", label: "WS 서버" },
+  ]}
+  steps={[
+    { from: "page", to: "api", label: "POST /ws-ticket", title: "짧게 사는 티켓을 받는다", detail: "평소 API 인증(쿠키 + CSRF 방어, 또는 Authorization 헤더)으로 30초짜리 일회용 티켓을 받는다.", payload: "200 OK\n{ \"ticket\": \"t_9f2c...\", \"expiresIn\": 30 }" },
+    { from: "page", to: "ws", label: "Upgrade", title: "업그레이드 요청에서는 Origin만 본다", detail: "허용 목록에 없는 Origin이면 403으로 끊는다. 이 단계에서는 아직 누구인지 모른다." },
+    { from: "ws", to: "page", label: "101", title: "연결은 열리지만 아직 아무것도 주지 않는다", detail: "서버는 이 연결을 '인증 대기'로 두고, 5초 안에 인증 메시지가 안 오면 닫는다." },
+    { from: "page", to: "ws", label: "auth 티켓", title: "첫 메시지로 티켓을 보낸다", detail: "URL에 넣지 않으니 접근 로그와 Referer에 남지 않는다. 서버는 티켓을 확인하고 바로 지운다.", payload: "{ \"type\": \"auth\", \"ticket\": \"t_9f2c...\" }" },
+    { from: "ws", to: "page", label: "ready", title: "그제야 구독을 시작한다", detail: "티켓이 틀리거나 만료됐으면 4401로 닫는다. 클라이언트는 이 코드를 보면 재연결 대신 티켓부터 다시 받는다." },
+  ]}
+/>
+
+브라우저 `WebSocket` API는 요청 헤더를 붙일 수 없어서 `Authorization: Bearer`를 쓸 수 없다. 쿼리 문자열에 토큰을 넣는 방법이 흔한데, nginx 접근 로그, 프록시 로그, 브라우저 기록에 그대로 남는다. 넣어야 한다면 위 그림처럼 금방 만료되는 일회용 티켓만 넣는다. 연결이 몇 시간씩 유지되니 인증이 연결 도중에 만료되는 것도 챙긴다. 토큰 만료 시각에 서버가 연결을 닫거나, 클라이언트가 새 토큰을 메시지로 보내 갱신하게 한다. 받은 메시지는 일반 HTTP 입력처럼 검증하고, `maxPayload`로 메시지 크기를 제한한다.
+
+## 운영에서 WebSocket 장애를 좁히는 순서
+
+증상마다 먼저 볼 곳이 다르다. 연결이 아예 안 열리면 핸드셰이크를 curl로 흉내 내서 101이 오는지 본다. 400, 426, 404가 오면 프록시가 Upgrade 헤더를 넘기지 않는 경우가 대부분이다(개요 글의 마지막 실습). 403이면 Origin 검사나 인증에서 막힌 것이다.
+
+열린 뒤 일정 시간마다 끊기면 끊긴 시각의 간격을 본다. 클라이언트 close 코드가 1006이고 access.log 101 줄의 `rt`가 60, 3600처럼 둥근 숫자에 몰려 있으면 경로 어딘가의 유휴 타임아웃이다. 하트비트 간격이 그보다 짧은지, nginx 뒤에 LB가 하나 더 있는지 확인한다.
+
+서버 메모리가 계속 오르면 연결 수와 밀린 양을 나눠 본다. `ss -tn state established '( sport = :8080 )' | wc -l`로 연결 수를 세고, 앱에서 연결별 `bufferedAmount` 최댓값과 합계를 지표로 내보낸다. 연결 수는 그대로인데 메모리만 오르면 느린 수신자, 연결 수가 접속자 수보다 계속 많아지면 하트비트가 없어서 죽은 연결이 쌓이는 것이다.
+
+일부 사용자만 메시지를 못 받으면 서버 간 버스를 의심한다. `PUBSUB NUMSUB`의 숫자가 떠 있는 서버 수와 같은지, 메시지를 못 받은 사용자가 최근 재시작한 서버에 붙어 있었는지 본다. 서버 프로세스가 가끔 통째로 재시작되면 로그에서 `Unhandled 'error' event`를 찾는다. 연결 하나의 오류가 프로세스를 죽이고 있는 것이다.
+
+## 연결을 오래 쥐는 대가
+
+WebSocket 프레임 자체는 단순하다. 2바이트 헤더, 마스킹 키, 길이 규칙 몇 개가 전부다. 어려운 건 연결을 몇 시간씩 쥐고 있는 데서 온다. 경로의 모든 장비가 조용한 연결을 끊으려 하고, 상대가 사라져도 아무도 알려 주지 않으며, 느린 상대의 몫은 내 메모리에 쌓이고, 연결은 한 서버에 묶여 있다. 그래서 WebSocket을 쓰기로 했다면 하트비트, 버퍼 한도, 번호와 이어 받기, 서버 간 버스, Origin 검사까지 같이 고른 것이다. 서버에서만 소식이 오는 기능이라면 이 중 상당 부분을 표준이 대신해 주는 [Server-Sent Events](/posts/server-sent-events)가 더 가볍고, WebSocket이 막힌 환경을 위한 대비책은 [롱 폴링](/posts/long-polling)에서 다룬다.
+
+이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [롱 폴링](/posts/long-polling) · [Server-Sent Events](/posts/server-sent-events)
+
+## 면접에서 나올 만한 질문
+
+### WebSocket 프레임은 어떻게 생겼나요?
+
+첫 바이트에 FIN 비트와 opcode(텍스트 1, 바이너리 2, close 8, ping 9, pong A)가 있고, 둘째 바이트에 MASK 비트와 7비트 길이가 있다. 길이가 126이면 뒤 2바이트, 127이면 뒤 8바이트가 진짜 길이다. 클라이언트가 보내는 프레임에는 4바이트 마스킹 키가 붙는다. 그래서 짧은 메시지의 헤더는 서버 쪽 2바이트, 클라이언트 쪽 6바이트다.
+
+### 마스킹은 왜 클라이언트에서 서버로 갈 때만 하나요?
+
+공격자 페이지의 스크립트가 회선에 실릴 바이트를 마음대로 정하지 못하게 하려는 것이다. WebSocket을 모르는 중간 프록시가 그 바이트를 HTTP 요청으로 오해해 캐시를 오염시키는 공격을 막는다. 서버는 페이지 스크립트가 조종할 수 없으니 마스킹할 필요가 없다. 키가 프레임에 그대로 실리니 암호화 효과는 없고, 내용 보호는 wss의 TLS가 맡는다.
+
+### WebSocket 연결이 1분쯤 뒤에 끊기면 무엇을 보나요?
+
+경로에 있는 프록시나 로드 밸런서의 유휴 타임아웃을 먼저 본다. nginx `proxy_read_timeout`과 AWS ALB idle timeout이 기본 60초다. nginx access.log의 101 줄 요청 시간이 60초 근처에 몰려 있으면 확실하다. 서버에서 그보다 짧은 간격(20~30초)으로 ping을 보내고, 필요하면 WebSocket 경로의 타임아웃을 늘린다.
+
+### TCP keepalive가 있는데 ping/pong이 따로 필요한가요?
+
+필요하다. TCP keepalive는 상대 커널이 살아 있는지만 확인해서, 앱 프로세스가 멈췄는데 커널은 살아 있는 경우를 못 잡는다. 리눅스 기본값으로는 2시간을 쉰 뒤에야 확인을 시작하고, 중간 장비는 keepalive 패킷을 보지 못한 채 연결을 끊기도 한다. 앱 수준 ping/pong은 중간 장비의 유휴 타이머도 리셋하고 앱이 응답하는지도 확인한다.
+
+### bufferedAmount는 언제 봐야 하나요?
+
+보내는 속도가 받는 쪽보다 빠를 수 있을 때 항상 본다. `send()`는 상대가 받을 때까지 기다리지 않고 못 보낸 데이터를 메모리에 쌓기 때문에, 느린 수신자가 있으면 서버나 브라우저 메모리가 계속 늘어난다. 한도를 정해 두고 넘으면 최신 값만 남기고 버리거나, 보내기를 멈추거나, 연결을 끊고 재연결 때 이어 받게 한다.
+
+### WebSocket 서버를 여러 대로 늘리려면 무엇이 필요한가요?
+
+연결이 한 서버에 묶여 있으니, 다른 서버에 붙은 사용자에게 메시지를 보낼 버스가 필요하다. 보통 Redis Pub/Sub으로 시작하는데, 그 순간 듣는 구독자에게만 전달하고 저장하지 않으니 재시작 사이에 메시지가 빠질 수 있다. 그래서 메시지 번호와 이어 받기를 함께 만들거나 Streams처럼 기록이 남는 쪽을 쓴다. 순수 WebSocket에는 스티키 세션이 필요 없고, 롱 폴링으로 시작하는 라이브러리를 쓸 때 필요하다.
+
+### CSWSH는 무엇이고 어떻게 막나요?
+
+쿠키로 인증하는 WebSocket 서버에 다른 사이트의 페이지가 연결을 열어, 사용자의 권한으로 메시지를 주고받는 공격이다. CORS가 적용되지 않아서 생긴다. 서버가 업그레이드 요청의 Origin을 허용 목록과 정확히 비교해 막는 것이 기본이다. 크롬 계열은 SameSite 기본값 Lax 덕분에 다른 사이트에서는 쿠키를 안 보내지만, 같은 사이트의 서브도메인에서는 보내므로 기본값에 기대지 않는다. 쿠키 대신 일회용 티켓을 첫 메시지로 보내는 방식도 쓴다.

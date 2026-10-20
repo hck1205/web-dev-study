@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "server-sent-events",
+    title: "Server-Sent Events 깊게 보기: 재연결, 연결 수 제한, 프록시 버퍼링",
+    summary: "EventSource가 Last-Event-ID를 들고 다시 붙는 과정과 영영 포기하는 응답을 Chromium으로 확인한다. HTTP/1.1의 연결 6개 제한, nginx와 압축이 이벤트를 붙잡는 곳, 하트비트, LLM 답변 스트리밍과 WebSocket 대신 SSE를 고를 때를 다룬다.",
+    topic: "programming/network",
+    tags: ["HTTP", "Network", "Nginx", "Browser", "Performance"],
+    date: "2026-10-21",
+    keywords: ["text/event-stream", "Last-Event-ID", "X-Accel-Buffering"],
+  },
+  {
+    slug: "long-polling",
+    title: "롱 폴링 깊게 보기: 대기 시간, 커서, 재연결 폭주, 서버 자원",
+    summary: "응답을 붙잡는 시간을 프록시 한도에 맞추는 법과, 응답 사이의 틈에서 이벤트가 사라지는 문제를 커서로 막는 법을 직접 재 본다. 배포 때 몰리는 재연결과 붙잡힌 요청 하나가 쓰는 메모리, 작업자 풀이 멈추는 사고까지 다룬다.",
+    topic: "programming/network",
+    tags: ["HTTP", "Network", "Nginx", "Resilience", "Performance"],
+    date: "2026-10-21",
+    keywords: ["hanging GET", "Comet", "롱 폴링 커서"],
+  },
+  {
+    slug: "websocket-deep-dive",
+    title: "WebSocket 깊게 보기: 프레임 바이트부터 하트비트, 백프레셔, 서버 확장까지",
+    summary: "tcpdump로 잡은 프레임을 바이트 단위로 읽고, nginx 60초 유휴 타임아웃과 ping, 죽은 연결 찾기, bufferedAmount로 보는 백프레셔를 직접 재현한다. 재연결과 이어 받기, Redis로 서버를 늘리는 법, CSWSH와 Origin 검사까지 다룬다.",
+    topic: "programming/network",
+    tags: ["WebSocket", "Network", "Nginx", "Redis", "Security"],
+    date: "2026-10-21",
+    keywords: ["WebSocket 프레임", "Sec-WebSocket-Accept", "bufferedAmount", "CSWSH"],
+  },
+  {
     slug: "network-config-cicd",
     title: "네트워크 설정 CI/CD: PR에서 plan, 승인, apply, drift 감지까지",
     summary: "콘솔에서 지운 경로가 사흘 뒤 엉뚱한 PR에서 되살아난 일에서 출발해 lint와 validate, 저장한 plan만 apply하는 흐름, plan과 apply의 권한 분리, 변경 창, state 분리와 단계적 배포로 폭발 반경 줄이기, refresh-only와 --check로 drift 찾기, git revert로 되돌리기를 다룬다.",

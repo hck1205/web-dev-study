@@ -139,6 +139,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "load-balancing-algorithms": 6,
   "loading-patterns": 5,
   "local-custom-domain": 6,
+  "long-polling": 6,
   "lossy-counting": 6,
   "merkle-tree": 7,
   "message-delivery-semantics": 7,
@@ -226,6 +227,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "saga-pattern": 7,
   "sdn-vxlan-overlay": 7,
   "security-groups-nacl": 7,
+  "server-sent-events": 7,
   "service-discovery": 6,
   "service-mesh": 7,
   "sql-basics": 6,
@@ -265,6 +267,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "vpc-subnets-route-tables": 6,
   "vpn-ipsec-wireguard": 7,
   "webhooks": 6,
+  "websocket-deep-dive": 7,
   "what-happens-google-com": 8,
   "zero-trust-architecture": 7
 };

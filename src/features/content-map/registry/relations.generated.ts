@@ -2,6 +2,61 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "server-sent-events": {
+    "links": [
+      "realtime-communication",
+      "websocket-deep-dive",
+      "long-polling",
+      "http-versions",
+      "loading-patterns"
+    ],
+    "mentions": [
+      "streaming-ssr-suspense",
+      "http-message",
+      "http-caching-cdn",
+      "nginx-reverse-proxy",
+      "base64",
+      "http-status-codes"
+    ]
+  },
+  "long-polling": {
+    "links": [
+      "realtime-communication",
+      "websocket-deep-dive",
+      "server-sent-events",
+      "timeouts",
+      "message-delivery-semantics",
+      "exponential-backoff-jitter"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "http-versions",
+      "event-loop",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "redis-basics"
+    ]
+  },
+  "websocket-deep-dive": {
+    "links": [
+      "realtime-communication",
+      "long-polling",
+      "server-sent-events",
+      "packet-capture-tcpdump",
+      "timeouts",
+      "tcp-connection-lifecycle",
+      "exponential-backoff-jitter",
+      "pub-sub",
+      "load-balancer-basics",
+      "cors"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "base64",
+      "redis-basics",
+      "cookie-session-login"
+    ]
+  },
   "network-config-cicd": {
     "links": [
       "terraform-network-iac",
@@ -2423,6 +2478,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "saga-pattern",
       "event-driven-architecture",
       "distributed-transactions-2pc",
+      "sql-batch-timeout-pool",
       "postgres-getting-started"
     ]
   },
@@ -3780,7 +3836,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "nginx-reverse-proxy",
       "operational-transform",
-      "crdt"
+      "crdt",
+      "websocket-deep-dive",
+      "long-polling",
+      "server-sent-events"
     ],
     "mentions": [
       "json-crud-http",

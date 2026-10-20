@@ -136,6 +136,7 @@ import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
 import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
+import { LONG_POLLING } from "./long-polling";
 import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
@@ -223,6 +224,7 @@ import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
+import { SERVER_SENT_EVENTS } from "./server-sent-events";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SQL_BASICS } from "./sql-basics";
@@ -262,6 +264,7 @@ import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privateli
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WEBHOOKS } from "./webhooks";
+import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
@@ -405,6 +408,7 @@ export const QUESTION_SETS = [
   LOAD_BALANCING_ALGORITHMS,
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
+  LONG_POLLING,
   LOSSY_COUNTING,
   MERKLE_TREE,
   MESSAGE_DELIVERY_SEMANTICS,
@@ -492,6 +496,7 @@ export const QUESTION_SETS = [
   SAGA_PATTERN,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,
+  SERVER_SENT_EVENTS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
   SQL_BASICS,
@@ -531,6 +536,7 @@ export const QUESTION_SETS = [
   VPC_SUBNETS_ROUTE_TABLES,
   VPN_IPSEC_WIREGUARD,
   WEBHOOKS,
+  WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
   ZERO_TRUST_ARCHITECTURE,
 ];

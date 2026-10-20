@@ -1,0 +1,379 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("long-polling");
+
+알림 기능을 롱 폴링으로 만들었다. 요청을 걸어 두면 서버가 새 알림이 생길 때까지 붙잡고 있다가 답하는, 단순한 구조다. 개발 서버에서는 잘 됐는데 운영에 올리자 로그에 504가 일정한 간격으로 찍히고, 가끔 "알림이 하나 빠졌다"는 문의가 오고, 배포할 때마다 API 서버 CPU가 순간적으로 치솟는다. 롱 폴링은 원리가 쉬운 만큼 이런 부분이 잘 안 보인다.
+
+롱 폴링이 폴링, SSE, WebSocket 사이에서 어떤 자리에 있는지는 [서버가 먼저 말하게 하기](/posts/realtime-communication)에서 비교했다. 이 글은 롱 폴링 하나만 깊게 본다. 요청을 얼마나 오래 붙잡아야 하는지, 응답 사이의 틈에서 이벤트가 어떻게 사라지는지, 커서를 어떻게 설계하는지, 수천 명이 동시에 다시 붙을 때 무슨 일이 생기는지, 붙잡힌 요청 하나가 서버에서 실제로 얼마를 쓰는지를 직접 재 본다. 실습은 Ubuntu 24.04, Node.js 22, Python 3.13, nginx 1.24에서 했다.
+
+이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [WebSocket 깊게 보기](/posts/websocket-deep-dive) · [Server-Sent Events](/posts/server-sent-events)
+
+## 요청 하나를 붙잡아 두는 서버
+
+롱 폴링 서버가 하는 일은 세 가지다. 클라이언트가 "N번까지 받았다"며 요청하면 N보다 새 이벤트가 있는지 본다. 있으면 바로 답한다. 없으면 응답 객체를 대기 목록에 넣어 두고, 이벤트가 생기면 대기 목록의 응답을 전부 끝낸다. 정해 둔 시간이 지나도 이벤트가 없으면 빈 응답으로 끝낸다.
+
+```js
+// 이벤트가 없으면 응답을 대기 목록에 걸어 두고, HOLD_MS 뒤에는 204로 끝낸다
+const ready = log.filter((e) => e.id > after);
+if (ready.length) return reply(res, 200, { events: ready, next: ready.at(-1).id });
+const w = { res, after };
+w.timer = setTimeout(() => { waiting.delete(w); reply(res, 204); }, HOLD_MS);
+waiting.add(w);
+// 클라이언트가 먼저 끊으면 대기 목록에서 지운다. 안 지우면 죽은 응답에 쓰려고 든다
+req.on("close", () => { if (!res.writableEnded) { waiting.delete(w); clearTimeout(w.timer); } });
+```
+
+curl로 세 경우를 차례로 확인했다. 이미 이벤트가 있을 때, 3초 뒤에 이벤트가 생길 때, 끝까지 아무 일도 없을 때다.
+
+```bash
+F='code=%{http_code} total=%{time_total}s\n'
+# 1번 이벤트를 만든다
+curl -s -o /dev/null -w "$F" -X POST --data '조리 중' http://127.0.0.1:19780/publish
+# 0번까지 받았다고 묻는다. 이미 1번이 있으니 바로 온다
+curl -s -w "\n$F" 'http://127.0.0.1:19780/events?after=0'
+# 3초 뒤에 2번을 만드는 작업을 뒤에 걸어 두고, 1번까지 받았다고 묻는다
+( sleep 3; curl -s -o /dev/null -X POST --data '배달 중' http://127.0.0.1:19780/publish ) &
+curl -s -w "\n$F" 'http://127.0.0.1:19780/events?after=1'
+# 2번까지 받았다고 묻는다. 25초 동안 아무 일도 없다
+curl -s -w "$F" 'http://127.0.0.1:19780/events?after=2'
+```
+
+```text
+code=201 total=0.012508s
+{"events":[{"id":1,"data":"조리 중"}],"next":1}
+code=200 total=0.005823s
+{"events":[{"id":2,"data":"배달 중"}],"next":2}
+code=200 total=3.004265s
+code=204 total=25.026162s
+```
+
+`total`을 보면 동작이 그대로 드러난다. 두 번째 요청은 3.004초, 이벤트가 생긴 바로 그 순간 끝났다. 세 번째는 25초를 채우고 204로 끝났다. 짧은 폴링이라면 3초짜리 변화를 잡으려고 그 사이에 요청을 여러 번 보냈을 것이다.
+
+요청 URL에 들어가는 값도 정해 두는 게 좋다. 아래 조각을 눌러 보면 각 값이 왜 필요한지 나온다.
+
+<UrlAnatomy
+  caption="롱 폴링 요청 하나에 실리는 값"
+  base="GET /orders/42/events"
+  params={[
+    { key: "after", value: "7", title: "어디까지 받았는지 (커서)", description: "클라이언트가 마지막으로 처리한 이벤트 번호다. 서버는 이 값보다 큰 것만 돌려준다. 이 값이 있어야 응답 사이의 틈에 생긴 이벤트를 놓치지 않고, 같은 요청을 다시 보내도 결과가 같다.", required: true },
+    { key: "wait", value: "25", title: "최대 대기 시간 (초)", description: "서버가 상한을 두고 이 값을 참고한다. 경로에 있는 프록시와 LB의 유휴 한도보다 짧아야 한다. 클라이언트의 요청 타임아웃은 이보다 10초쯤 길게 잡는다." },
+    { key: "limit", value: "100", title: "한 번에 받을 최대 개수", description: "오래 끊겨 있던 클라이언트가 돌아오면 밀린 이벤트가 수천 개일 수 있다. 나눠 받게 하면 응답 하나가 너무 커지지 않는다. 다 못 받았으면 서버가 바로 답하니 클라이언트는 그냥 다시 요청하면 된다." },
+    { key: "_", value: "1729420000", title: "캐시 무력화 (선택)", description: "중간 캐시가 GET 응답을 저장해 같은 결과를 돌려주는 걸 막으려고 넣기도 한다. 응답에 Cache-Control: no-store를 붙이는 쪽이 더 정확한 방법이다." },
+  ]}
+/>
+
+## 붙잡는 시간은 경로에서 가장 짧은 한도가 정한다
+
+붙잡는 시간을 길게 할수록 요청 수는 준다. 60초로 하면 25초일 때보다 요청이 절반 이하다. 하지만 이 값은 마음대로 정할 수 없다. 클라이언트와 앱 사이의 모든 장비가 "응답이 이만큼 안 오면 포기한다"는 한도를 따로 갖고 있다. 기본 설정의 nginx 뒤에 70초를 붙잡는 앱과 25초를 붙잡는 앱을 두고 동시에 요청했다.
+
+```bash
+# 두 요청을 동시에 보낸다. lp70은 70초, lp25는 25초를 붙잡는 앱으로 간다
+curl -s -w "\n$F" 'http://127.0.0.1:19770/lp70/events?after=0' &
+curl -s -w "$F" 'http://127.0.0.1:19770/lp25/events?after=2'; wait
+```
+
+```text
+code=204 total=25.005219s
+<html>
+<head><title>504 Gateway Time-out</title></head>
+<body>
+<center><h1>504 Gateway Time-out</h1></center>
+<hr><center>nginx/1.24.0 (Ubuntu)</center>
+</body>
+</html>
+
+code=504 total=60.044663s
+```
+
+```text
+127.0.0.1 "GET /lp25/events?after=2 HTTP/1.1" 204 0 rt=25.005
+127.0.0.1 "GET /lp70/events?after=0 HTTP/1.1" 504 176 rt=60.039
+2026/10/20 19:48:38 [error] 24221#24221: *7 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 127.0.0.1, server: , request: "GET /lp70/events?after=0 HTTP/1.1", upstream: "http://127.0.0.1:19781/events?after=0", host: "127.0.0.1:19770"
+```
+
+70초 쪽은 nginx의 `proxy_read_timeout` 기본값 60초에서 504가 됐다. 앱은 아무 잘못이 없는데 오류율 지표에는 504가 쌓이고, 클라이언트는 오류로 보고 재시도 로직을 탄다. 앞의 문제 상황에서 "504가 일정한 간격으로 찍힌다"는 게 이 경우다. access.log에서 같은 경로의 504가 `rt=60.0` 근처에 몰려 있으면 확실하다.
+
+<NetworkTopology
+  caption="응답을 붙잡는 시간은 경로에 있는 모든 한도보다 짧아야 한다"
+  width={400}
+  height={200}
+  zones={[{ id: "dc", label: "서버 쪽", x: 100, y: 55, w: 296, h: 125, tone: "private" }]}
+  nodes={[
+    { id: "client", label: "Browser", sub: "timeout 35s", x: 50, y: 115, icon: "client", w: 88 },
+    { id: "alb", label: "ALB", sub: "idle 60s", x: 152, y: 115, icon: "lb", w: 86 },
+    { id: "nginx", label: "nginx", sub: "read 60s", x: 252, y: 115, icon: "gateway", w: 80 },
+    { id: "app", label: "app", sub: "hold ?", x: 348, y: 115, icon: "server", w: 80 },
+  ]}
+  links={[
+    { from: "client", to: "alb" },
+    { from: "alb", to: "nginx" },
+    { from: "nginx", to: "app" },
+  ]}
+  steps={[
+    { path: ["client", "alb", "nginx", "app"], packet: "GET", title: "요청이 세 구간을 지나 앱에 닿는다", detail: "구간마다 타이머가 따로 돈다. 브라우저의 요청 타임아웃, ALB의 유휴 한도, nginx의 읽기 한도다." },
+    { path: ["app"], highlight: ["dc"], title: "앱이 70초 동안 응답을 붙잡는다", detail: "이벤트가 없으니 기다린다. 앱 입장에서는 정상 동작이다." },
+    { path: ["nginx", "app"], packet: "504", blocked: true, title: "60초에 nginx가 먼저 포기한다", detail: "nginx는 앱에서 응답 헤더가 60초 동안 안 오자 504를 만들어 클라이언트에게 보낸다. 실습에서 rt=60.039였다." },
+    { path: ["app", "nginx", "alb", "client"], packet: "204", title: "25초에 앱이 먼저 끝내면 정상 흐름이 된다", detail: "가장 짧은 한도(60초)보다 넉넉히 짧게 끝내고, 클라이언트는 204를 받자마자 다음 요청을 건다." },
+  ]}
+/>
+
+값을 고르는 순서는 이렇다. 경로에 있는 한도를 전부 적는다. nginx `proxy_read_timeout` 60초, AWS ALB idle timeout 기본 60초, 회사 프록시나 모바일 통신사 장비는 그보다 짧을 수도 있다. 그중 가장 짧은 값보다 넉넉히 짧게, 보통 20~30초로 서버의 대기 시간을 잡는다. 클라이언트의 요청 타임아웃은 그보다 길게(대기 시간 + 10초 정도) 둔다. 브라우저 `fetch`에는 기본 타임아웃이 없어서 끊긴 연결을 몇 분씩 기다리기도 하니 `AbortSignal.timeout()`으로 직접 건다. 계층마다 타임아웃이 어떻게 겹치는지는 [타임아웃은 계층마다 따로 있다](/posts/timeouts)에서 자세히 다룬다.
+
+nginx의 `proxy_next_upstream` 기본값에는 `timeout`이 들어 있다는 것도 알아 두면 좋다. 업스트림이 여러 대이고 nginx가 먼저 타임아웃을 내면, 같은 롱 폴링 요청을 다음 서버로 다시 보내서 한 번 더 기다리게 한다. 서버가 먼저 끝내도록 대기 시간을 짧게 잡으면 이 문제도 같이 사라진다.
+
+## 응답과 다음 요청 사이의 틈
+
+롱 폴링에서 이벤트가 사라지는 곳은 정해져 있다. 응답을 받은 클라이언트는 화면을 고치고 다음 요청을 보낸다. 그 몇 밀리초 동안 서버에는 걸려 있는 요청이 없다. 이때 생긴 이벤트를 "지금 기다리는 요청에게만 준다"는 식으로 처리하면 받을 사람이 없어서 그대로 사라진다.
+
+<SequenceDiagram
+  caption="커서가 없으면 틈에 생긴 이벤트는 갈 곳이 없다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "server", label: "서버" },
+    { id: "pub", label: "이벤트 발생" },
+  ]}
+  steps={[
+    { from: "pub", to: "server", label: "#8", title: "8번 이벤트가 생긴다", detail: "걸려 있던 요청이 있으니 그 응답으로 8번을 보낸다." },
+    { from: "server", to: "client", label: "200 [#8]", title: "클라이언트가 8번을 받는다", detail: "이제 클라이언트는 화면을 고친다. 다음 요청은 아직 보내지 않았다." },
+    { from: "pub", to: "server", label: "#9", title: "그 틈에 9번이 생긴다", detail: "커서 없는 서버라면 기다리는 요청이 없으니 9번을 버린다. 커서 있는 서버는 로그에 남겨 둔다." },
+    { from: "client", to: "server", label: "GET ?after=8", title: "다음 요청에 '8번까지 받았다'를 싣는다", detail: "서버는 로그에서 8보다 큰 것을 찾는다." },
+    { from: "server", to: "client", label: "200 [#9]", title: "커서 덕분에 9번을 바로 돌려준다", detail: "기다릴 필요도 없다. 커서가 없었다면 이 요청은 10번이 생길 때까지 기다렸고, 9번은 영영 안 왔다." },
+  ]}
+/>
+
+틈이 얼마나 위험한지 재 봤다. 발행자가 이벤트 400개를 5ms씩 쉬어 가며 만들고(발행 요청의 왕복 시간이 더해져 실제 간격은 그보다 조금 길다), 클라이언트는 응답을 받을 때마다 화면 그리는 시간만큼 쉬었다가 다시 요청한다. 커서 없이 기다리는 요청에만 주는 서버와, 커서(`after`)를 받아 로그에서 찾아 주는 서버를 비교했다.
+
+```text
+render 3ms
+ naive : published=400 received=400 missed=0 polls=400
+ cursor: published=400 received=400 missed=0 polls=400
+render 8ms
+ naive : published=400 received=200 missed=200 polls=200
+ cursor: published=400 received=400 missed=0 polls=280
+render 20ms
+ naive : published=400 received=102 missed=298 polls=102
+ cursor: published=400 received=400 missed=0 polls=129
+```
+
+화면 그리는 시간이 이벤트 간격보다 짧으면(3ms) 둘 다 문제가 없어 보인다. 개발 환경에서 버그가 안 보이는 이유다. 처리 시간이 간격을 넘는 순간(8ms) 커서 없는 서버는 절반을 잃었고, 20ms에서는 4분의 3을 잃었다. 커서 서버는 하나도 잃지 않았고, 오히려 요청 수가 줄었다(129번). 틈에 쌓인 이벤트를 한 응답에 묶어 보냈기 때문이다. 실제 서비스에서는 이벤트가 몰리는 순간, 모바일 기기가 느릴 때, 네트워크가 잠깐 멈출 때 이 틈이 벌어진다.
+
+## 커서와 보관 범위 설계
+
+커서를 쓰려면 서버가 최근 이벤트를 보관해야 한다. 무한히 보관할 수는 없으니 범위를 정하고, 범위 밖의 커서가 들어왔을 때 어떻게 할지도 정해야 한다. 아래 그림은 1~4번이 이미 지워지고 5~9번이 남은 로그에서 커서별로 무엇을 돌려주는지 따라간다.
+
+<AlgoTrace
+  caption="보관 중인 로그 5~9번과 들어온 커서"
+  cells={["#5", "#6", "#7", "#8", "#9"]}
+  memoryLabel="응답"
+  steps={[
+    { pointer: 2, found: [3, 4], memory: ["after=7", "→ [8, 9]"], caption: "after=7이면 7보다 큰 8, 9를 돌려주고 next=9를 알려 준다." },
+    { pointer: 4, memory: ["after=9", "→ 대기"], caption: "after=9면 줄 게 없으니 요청을 대기 목록에 건다. 새 이벤트나 대기 한도 중 먼저 오는 쪽에 답한다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["after=4", "→ [5..9]"], caption: "after=4는 다음 번호 5가 로그에 있으니 빠진 게 없다. 전부 준다." },
+    { pointer: 0, memory: ["after=2", "→ reset"], caption: "after=2면 3, 4번이 이미 지워졌다. 일부만 주면 클라이언트는 빠진 줄 모른다. '처음부터 다시 받아라'고 알려야 한다." },
+    { pointer: 4, memory: ["after=1500", "→ reset"], caption: "서버가 재시작하며 번호가 1부터 다시 시작했는데 클라이언트는 1500을 들고 왔다. 그대로 두면 이 클라이언트는 1500번이 생길 때까지 영원히 기다린다." },
+  ]}
+/>
+
+마지막 경우가 실제로 자주 놓치는 버그다. 이벤트 번호를 프로세스 메모리의 카운터로 만들면 배포할 때마다 1부터 다시 시작하고, 큰 번호를 들고 있던 클라이언트는 조용히 멈춘다. 번호를 DB 시퀀스나 Redis `INCR`처럼 재시작해도 이어지는 곳에서 받거나, 번호에 서버 세대를 섞는다(`epoch:seq`). 그리고 커서가 범위를 벗어나면 서버가 명시적으로 알려 준다. HTTP 상태로 410 Gone을 쓰거나, 200에 `reset: true`를 실어 클라이언트가 전체 상태를 다시 불러오게 한다. 아래 함수에 그 규칙을 넣어 보자.
+
+<CodePlayground
+  caption="커서 다음 이벤트 고르기"
+  functionName="eventsAfter"
+  initialCode={`function eventsAfter(log, after, limit) {
+  // log: 보관 중인 이벤트 번호 배열 (오름차순, 앞쪽은 이미 지워졌을 수 있다)
+  // after: 클라이언트가 마지막으로 받은 번호
+  // 반환: { events: 돌려줄 번호들(최대 limit개), next: 다음 커서, reset: 처음부터 다시 받아야 하는지 }
+  return { events: [], next: after, reset: false };
+}`}
+  solution={`function eventsAfter(log, after, limit) {
+  const first = log.length ? log[0] : null;
+  const last = log.length ? log[log.length - 1] : 0;
+  // 서버가 모르는 미래 번호: 재시작으로 번호가 처음부터 다시 시작한 경우
+  if (after > last) return { events: [], next: last, reset: true };
+  // 보관 범위보다 오래된 번호: 사이의 이벤트가 이미 지워졌다
+  if (first !== null && after < first - 1) return { events: [], next: last, reset: true };
+  const events = log.filter((id) => id > after).slice(0, limit);
+  return { events, next: events.length ? events[events.length - 1] : after, reset: false };
+}`}
+  tests={[
+    { label: "7, 8을 돌려준다", args: [[5, 6, 7, 8], 6, 10], expected: { events: [7, 8], next: 8, reset: false } },
+    { label: "다 받았으면 빈 배열 (대기)", args: [[5, 6, 7, 8], 8, 10], expected: { events: [], next: 8, reset: false } },
+    { label: "3, 4가 지워졌으면 reset", args: [[5, 6, 7, 8], 2, 10], expected: { events: [], next: 8, reset: true } },
+    { label: "4 다음이 5면 빠진 게 없다", args: [[5, 6, 7, 8], 4, 10], expected: { events: [5, 6, 7, 8], next: 8, reset: false } },
+    { label: "limit으로 나눠 준다", args: [[5, 6, 7, 8], 4, 2], expected: { events: [5, 6], next: 6, reset: false } },
+    { label: "로그가 비었을 때", args: [[], 0, 10], expected: { events: [], next: 0, reset: false } },
+    { label: "재시작으로 번호가 줄었으면 reset", args: [[1, 2], 1500, 10], expected: { events: [], next: 2, reset: true } },
+  ]}
+/>
+
+커서는 사실상 확인 응답(ack) 역할도 한다. 클라이언트가 `after=9`로 요청했다는 건 9번까지 처리했다는 뜻이다. 그런데 응답이 클라이언트에 닿기 직전에 연결이 끊기면, 클라이언트는 같은 `after=7`로 다시 요청하고 8, 9번을 한 번 더 받는다. 그래서 롱 폴링은 "최소 한 번" 전달이 되고, 클라이언트는 이미 처리한 번호를 건너뛰어야 한다. 커서를 받을 때마다 갱신하고 처리는 번호 기준으로 멱등하게 만든다. 전달 보장의 세 단계는 [메시지 전달 보장](/posts/message-delivery-semantics)에 정리했다.
+
+사용자별로 이벤트가 다르다면 보관도 사용자별이다. 알림처럼 사용자마다 쌓이는 이벤트는 DB에 이미 저장돼 있으니 그 테이블의 증가하는 id나 `created_at`을 그대로 커서로 쓰면 된다. 단, `created_at`은 같은 시각에 여러 개가 생기면 경계에서 빠지거나 겹치니 `(created_at, id)`처럼 끊김 없는 순서를 쓴다.
+
+## 모두가 같은 순간에 다시 묻는다
+
+롱 폴링은 클라이언트들의 박자를 맞춰 버리는 성질이 있다. 여러 클라이언트가 같은 이벤트를 기다리면, 이벤트 하나에 모든 요청이 동시에 끝나고 모두가 동시에 다음 요청을 보낸다. 2,000개 클라이언트가 같은 채널을 기다리게 하고 이벤트를 하나 만든 뒤, 다음 요청이 도착한 시각을 50ms 칸으로 셌다.
+
+```text
+    0-   50ms     0
+   50-  100ms     0
+  100-  150ms     0
+  150-  200ms   292 ############
+  200-  250ms   638 ##########################
+  250-  300ms   110 ####
+  300-  350ms   176 #######
+  350-  400ms   259 ##########
+  400-  450ms   291 ############
+  450-  500ms   177 #######
+  500-  550ms    57 ##
+```
+
+이벤트 하나에 2,000개의 응답과 2,000개의 새 요청이 0.4초 안에 몰렸다. 클라이언트 2,000개가 한 프로세스에서 돌아서 퍼진 게 이 정도고, 실제 기기들이라면 더 좁게 몰린다. 서버가 응답을 만들 때 DB를 조회한다면 그 조회도 같은 순간에 2,000번이다. 이벤트를 응답에 실어 보내서 다시 조회할 일을 없애고, 새 요청이 들어왔을 때는 메모리에 있는 최근 로그에서 답하게 하는 이유다.
+
+더 심한 건 서버가 재시작할 때다. 붙어 있던 연결이 동시에 끊기고, 클라이언트가 고정된 간격으로 재시도하면 새 서버가 뜨자마자 같은 박자로 몰린다. 2,000개 클라이언트로 서버를 내렸다 바로 올리면서, 재시도 대기를 1초로 고정한 경우와 0~2초 사이 무작위로 둔 경우를 비교했다. 새 서버가 뜬 시각부터 250ms 칸으로 센 요청 수다.
+
+```text
+== fixed: requests arriving at the new server after restart
+    0-  250ms     0
+  250-  500ms     0
+  500-  750ms     0
+  750- 1000ms    85 ###
+ 1000- 1250ms   277 ###########
+ 1250- 1500ms  1546 ##############################################################
+ 1500- 1750ms     0
+ 1750- 2000ms     0
+ 2000- 2250ms    92 ####
+ 2250- 2500ms     0
+== jitter: requests arriving at the new server after restart
+    0-  250ms   234 #########
+  250-  500ms   253 ##########
+  500-  750ms   257 ##########
+  750- 1000ms   258 ##########
+ 1000- 1250ms   287 ###########
+ 1250- 1500ms   236 #########
+ 1500- 1750ms   235 #########
+ 1750- 2000ms   237 #########
+ 2000- 2250ms     3
+```
+
+고정 간격은 1,546개가 250ms 한 칸에 몰렸다. 마지막 92개는 새 서버가 뜨기 전에 재시도했다가 거절당하고 1초 뒤에 다시 온 것들이다. 무작위로 흩은 쪽은 같은 2,000개가 2초에 걸쳐 칸마다 230~290개로 고르게 들어왔다. 배포할 때마다 CPU가 치솟던 문제 상황이 이 그림이다.
+
+<NetworkTopology
+  caption="서버가 재시작하면 기다리던 요청이 모두 같은 순간 돌아온다"
+  width={400}
+  height={250}
+  zones={[{ id: "pool", label: "API 서버", x: 200, y: 20, w: 194, h: 215, tone: "private" }]}
+  nodes={[
+    { id: "c1", label: "client 1", x: 62, y: 50, icon: "client", w: 100 },
+    { id: "c2", label: "client 2", x: 62, y: 125, icon: "client", w: 100 },
+    { id: "c3", label: "client N", sub: "x 2000", x: 62, y: 200, icon: "client", w: 100 },
+    { id: "old", label: "old pod", sub: "종료 중", x: 300, y: 70, icon: "server", w: 110 },
+    { id: "new", label: "new pod", sub: "막 뜸", x: 300, y: 175, icon: "server", w: 110 },
+  ]}
+  links={[
+    { from: "c1", to: "old" },
+    { from: "c2", to: "old" },
+    { from: "c3", to: "old" },
+    { from: "c1", to: "new", dashed: true },
+    { from: "c2", to: "new", dashed: true },
+    { from: "c3", to: "new", dashed: true },
+  ]}
+  steps={[
+    { path: ["c2", "old"], highlight: ["c1", "c3"], title: "모두 같은 서버에서 기다리고 있다", detail: "각 클라이언트의 롱 폴링 요청이 old pod에 걸려 있다. 평소에는 이벤트마다 조금씩 엇갈려 들어온다." },
+    { path: ["old", "c2"], packet: "RST", blocked: true, highlight: ["c1", "c3"], title: "old pod가 내려가며 연결이 한꺼번에 끊긴다", detail: "2,000개 클라이언트가 같은 밀리초에 연결 오류를 받는다. 모두의 재시도 시계가 같은 순간에 시작된다." },
+    { path: ["c2", "new"], packet: "1s", highlight: ["c1", "c3"], title: "고정 1초 뒤 모두가 new pod로 온다", detail: "막 뜬 서버가 캐시도 비고 커넥션 풀도 덜 찬 상태에서 1,546개를 250ms 안에 받는다. 버티지 못하면 다시 쓰러지고 같은 일이 반복된다." },
+    { path: ["c1", "new"], packet: "0.3s", title: "지터를 섞으면 도착이 흩어진다", detail: "0~2초 사이 무작위로 기다리면 같은 2,000개가 2초에 걸쳐 고르게 들어온다." },
+    { path: ["c3", "new"], packet: "1.7s", title: "늦게 오는 쪽도 결국 붙는다", detail: "평균 대기는 고정 1초와 같다. 몰리는 순간만 없앤 것이다." },
+  ]}
+/>
+
+대책은 세 겹이다. 클라이언트는 재시도에 지터를 섞는다([지수 백오프와 지터](/posts/exponential-backoff-jitter)). 정상 응답 뒤의 재요청에도 아주 작은 무작위 지연(수십~수백 ms)을 섞으면 이벤트 하나로 맞춰진 박자가 풀린다. 서버는 배포할 때 연결을 한꺼번에 끊지 않는다. 종료 신호를 받으면 대기 중인 요청에 순서대로 204를 돌려줘서 몇 초에 걸쳐 흩어지게 하고, 새 요청은 받지 않는다. 대기 시간 자체에도 무작위를 섞어(예: 20~30초) 모든 요청의 만료가 같은 박자로 맞춰지지 않게 한다.
+
+## 붙잡힌 요청 하나가 쓰는 자원
+
+롱 폴링이 "서버 자원을 많이 쓴다"는 말은 서버 구조에 따라 맞기도 하고 틀리기도 하다. 직접 재 봤다. Node.js 롱 폴링 서버에 N개의 요청을 걸어 두고 연결 수, 서버 메모리(RSS), 스레드 수를 봤다.
+
+```bash
+# 파일 디스크립터 한도를 올린다. 연결 하나가 하나씩 쓴다
+ulimit -n 20000
+# 서버 포트에 맺힌 연결 수
+ss -Htn state established '( sport = :19784 )' | wc -l
+# 서버 프로세스의 실제 메모리 사용량과 스레드 수
+grep VmRSS /proc/$PID/status; ls /proc/$PID/task | wc -l
+```
+
+```text
+N=1000 established=1000 server_rss_before=45.8203 MB after=64.2734 MB threads=7
+N=5000 established=5000 server_rss_before=45.8047 MB after=103.383 MB threads=7
+N=10000 established=10000 server_rss_before=45.8125 MB after=147.332 MB threads=7
+```
+
+요청 1만 개를 붙잡는 데 약 100MB, 하나에 10KB 정도였다. 스레드는 7개 그대로다. 이벤트 루프 서버에서 기다리는 요청은 소켓 하나와 작은 객체 몇 개일 뿐이다. 같은 일을 요청마다 스레드를 하나 쓰는 Python `ThreadingHTTPServer`로 해 봤다.
+
+```text
+N=1000 established=1000 server_rss_before=18.3203 MB after=46.2109 MB threads=1001
+N=5000 established=5000 server_rss_before=18.3125 MB after=156.91 MB threads=5001
+```
+
+5,000개에서 스레드가 5,001개, 메모리가 요청당 약 28KB였다. 가상 메모리(VSZ)는 스레드 스택 예약 때문에 42GB까지 잡혔다. 스레드 수 한도(`ulimit -u`, 컨테이너의 pids 한도)에 먼저 걸릴 수 있고, 스레드 수천 개를 스케줄링하는 비용도 붙는다.
+
+더 흔한 사고는 작업자 수가 고정된 서버에서 난다. 작업자 8개짜리 풀 서버에 롱 폴링 요청 8개를 걸어 두고, 바로 답하는 `/health`를 불렀다.
+
+```text
+before: /health code=200 total=0.002594s
+with 8 long-polls held: /health code=200 total=19.011985s
+```
+
+2ms짜리 요청이 19초 걸렸다. 작업자 8개가 전부 롱 폴링을 붙잡고 있어서 `/health`는 롱 폴링 하나가 끝날 때까지 줄을 섰다. 작업자 수를 프로세스 수로 정하는 동기식 서버(예: gunicorn sync 워커, PHP-FPM)에 롱 폴링 엔드포인트를 같이 두면, 접속자가 작업자 수만큼만 와도 일반 API까지 멈추고 헬스 체크가 실패해서 서버가 재시작되기도 한다. 롱 폴링은 비동기 I/O 서버로 따로 빼거나, 적어도 별도 작업자 풀에서 처리한다.
+
+브라우저 쪽에도 한도가 있다. HTTP/1.1에서 크롬 계열은 출처 하나에 연결을 6개까지만 연다. 롱 폴링 요청은 그중 하나를 계속 차지하니, 같은 사이트를 여러 탭으로 열면 탭마다 하나씩 빼앗긴다. HTTP/2에서는 연결 하나에 요청을 섞어 보내서 이 문제가 사라진다. 직접 재 본 결과는 [Server-Sent Events](/posts/server-sent-events) 글에 있다.
+
+## 롱 폴링 장애를 만났을 때
+
+증상별로 먼저 볼 곳을 정리하면 이렇다.
+
+504나 502가 일정 간격으로 쌓이면 access.log에서 롱 폴링 경로의 요청 시간을 본다. `rt`가 60.0처럼 한 값에 몰려 있으면 앞단 한도가 앱의 대기 시간보다 짧은 것이다. 앱의 대기 시간을 줄이는 게 먼저고, 프록시 타임아웃을 늘리는 건 그다음이다. 롱 폴링 경로는 오류율 지표에서 따로 떼어 보지 않으면 정상적인 204가 지연 시간 p99를 25초로 끌어올리니, 대시보드에서도 분리해 둔다.
+
+"가끔 하나가 빠진다"는 신고가 오면 서버가 커서를 받는지부터 본다. 받는다면 보관 범위와 재시작 시의 번호 처리를 본다. 배포 직후에 빠졌다는 신고가 몰리면 번호가 메모리 카운터라 재시작으로 처음부터 다시 시작했을 가능성이 크다.
+
+배포 때마다 CPU나 DB 연결이 순간적으로 치솟으면 요청 도착 시각의 분포를 본다. 위 히스토그램처럼 한 칸에 몰려 있으면 재시도에 지터가 없거나, 서버가 종료할 때 연결을 한꺼번에 끊는 것이다.
+
+일반 API까지 느려지면 서버의 작업자 모델을 본다. 동기식 작업자 풀이라면 `ss`로 롱 폴링 포트의 연결 수를 세고, 그 수가 작업자 수에 닿았는지 확인한다.
+
+## 롱 폴링을 고르는 경우
+
+새로 만드는 기능이라면 롱 폴링을 먼저 고를 일은 많지 않다. 서버에서만 소식이 오면 [Server-Sent Events](/posts/server-sent-events)가 재연결과 이어 받기까지 표준으로 해 주고, 양쪽이 자주 말하면 [WebSocket](/posts/websocket-deep-dive)이 맞다. 그래도 롱 폴링은 평범한 HTTP 요청-응답이라서 어떤 프록시, 어떤 방화벽, 어떤 오래된 클라이언트에서도 통한다. 스트리밍 응답을 끊어 버리는 회사 프록시나, 응답 하나를 끝까지 받아야만 처리하는 환경에서는 롱 폴링만 살아남는다. Socket.IO가 처음 연결을 롱 폴링으로 시작하는 것도, 큐 서비스들이 메시지를 가져가는 API에 대기 시간 파라미터를 두는 것(예: Amazon SQS의 `WaitTimeSeconds`, 최대 20초)도 같은 이유다.
+
+롱 폴링을 쓴다면 세 가지만 지키면 된다. 경로에서 가장 짧은 한도보다 짧게 붙잡고, 커서로 틈을 메우고, 다시 붙을 때 흩어서 붙는다. 붙잡는 비용은 이벤트 루프 서버에서는 작지만, 고정 작업자 풀에서는 서버 전체를 멈출 만큼 크다.
+
+이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [WebSocket 깊게 보기](/posts/websocket-deep-dive) · [Server-Sent Events](/posts/server-sent-events)
+
+## 면접에서 나올 만한 질문
+
+### 롱 폴링은 짧은 폴링과 무엇이 다른가요?
+
+짧은 폴링은 서버가 바로 답하고 클라이언트가 일정 간격으로 다시 묻는다. 롱 폴링은 새 데이터가 없으면 서버가 응답을 미뤄 두고, 데이터가 생기는 순간 답한다. 그래서 지연은 이벤트가 생긴 즉시로 줄고, 헛된 요청은 대기 시간마다 하나로 준다. 대신 서버가 열린 요청을 많이 붙잡고 있어야 한다.
+
+### 서버가 요청을 붙잡는 시간은 어떻게 정하나요?
+
+클라이언트와 서버 사이의 모든 프록시와 로드 밸런서의 유휴 한도 중 가장 짧은 값보다 넉넉히 짧게 잡는다. nginx와 AWS ALB 기본값이 60초라 보통 20~30초다. 더 길면 중간 장비가 먼저 끊어서 504나 502가 되고, 실습에서도 70초를 붙잡은 요청이 60초에 504가 됐다. 클라이언트의 요청 타임아웃은 대기 시간보다 길게 둔다.
+
+### 롱 폴링에서 이벤트가 유실되는 경우와 막는 방법은요?
+
+응답을 받고 다음 요청을 보내기 전의 틈에 생긴 이벤트가 유실된다. 클라이언트가 마지막으로 받은 번호(커서)를 요청에 싣고, 서버가 최근 이벤트를 보관했다가 그 뒤의 것을 돌려주면 막힌다. 실습에서 처리 시간이 이벤트 간격보다 길어지자 커서 없는 서버는 절반 넘게 잃었고 커서 서버는 하나도 잃지 않았다.
+
+### 커서가 보관 범위를 벗어나면 어떻게 하나요?
+
+일부만 돌려주면 클라이언트가 빠진 걸 모르니, 410이나 reset 표시로 처음부터 다시 받으라고 알린다. 서버 재시작으로 번호가 처음부터 다시 시작해서 클라이언트가 서버보다 큰 번호를 들고 오는 경우도 같은 처리가 필요하다. 그대로 두면 그 클라이언트는 영원히 기다린다. 번호는 DB 시퀀스처럼 재시작에도 이어지는 곳에서 만든다.
+
+### 롱 폴링의 전달 보장은 어느 수준인가요?
+
+커서를 쓰면 최소 한 번이다. 서버가 응답을 보냈는데 클라이언트에 닿기 전에 끊기면, 클라이언트는 같은 커서로 다시 요청해 같은 이벤트를 또 받는다. 그래서 클라이언트는 이벤트 번호로 중복을 걸러 멱등하게 처리한다.
+
+### 배포할 때 롱 폴링 서버에 부하가 몰리는 이유와 대책은요?
+
+연결이 한꺼번에 끊기고 모든 클라이언트가 같은 박자로 재시도하기 때문이다. 실습에서는 고정 1초 재시도 때 2,000개 중 1,546개가 250ms 안에 새 서버로 몰렸다. 재시도에 지터를 섞고, 서버는 종료할 때 대기 중인 요청을 조금씩 끝내며, 대기 시간 자체에도 무작위를 섞는다.
+
+### 롱 폴링이 서버 자원을 많이 쓰나요?
+
+서버 구조에 달렸다. 이벤트 루프 서버에서는 기다리는 요청이 소켓과 작은 객체뿐이라 실습에서 1만 개에 약 100MB였다. 요청마다 스레드를 쓰거나 작업자 수가 고정된 서버에서는 기다리는 요청이 스레드나 작업자를 통째로 점유해서, 작업자 8개 서버에서는 롱 폴링 8개만으로 2ms짜리 요청이 19초 걸렸다.
