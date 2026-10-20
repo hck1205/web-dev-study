@@ -2,6 +2,8 @@ import { AB_TESTING } from "./ab-testing";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
+import { AUTOSCALING } from "./autoscaling";
+import { BACKPRESSURE } from "./backpressure";
 import { BASE64 } from "./base64";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
@@ -62,6 +64,7 @@ import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
+import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
@@ -226,6 +229,7 @@ import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
+import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
@@ -281,6 +285,8 @@ export const QUESTION_SETS = [
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
+  AUTOSCALING,
+  BACKPRESSURE,
   BASE64,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
@@ -341,6 +347,7 @@ export const QUESTION_SETS = [
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
   FRONTEND_BROWSER_CACHE,
+  GARBAGE_COLLECTION,
   GATEWAY,
   GEOHASH,
   GIT_BRANCH_MERGE,
@@ -505,6 +512,7 @@ export const QUESTION_SETS = [
   RETRIES,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
+  SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
   SDN_VXLAN_OVERLAY,
   SECURITY_GROUPS_NACL,

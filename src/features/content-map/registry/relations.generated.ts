@@ -2,6 +2,76 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "scaling-horizontal-vertical": {
+    "links": [
+      "autoscaling",
+      "db-replication-sharding",
+      "db-sharding",
+      "garbage-collection",
+      "cookie-session-login",
+      "caching-strategies",
+      "distributed-lock",
+      "leader-election",
+      "load-balancer-basics",
+      "consistent-hashing"
+    ],
+    "mentions": [
+      "linux-processes-signals",
+      "network-partitions",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "autoscaling": {
+    "links": [
+      "scaling-horizontal-vertical",
+      "k8s-hpa",
+      "garbage-collection",
+      "db-replication-sharding",
+      "db-sharding",
+      "rate-limiting-in-practice",
+      "backpressure"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "event-loop",
+      "vpc-basics",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "message-queue-basics"
+    ]
+  },
+  "backpressure": {
+    "links": [
+      "autoscaling",
+      "tcp-reliability-congestion",
+      "rate-limiting-in-practice",
+      "retries",
+      "message-queue-basics",
+      "connection-pool"
+    ],
+    "mentions": [
+      "rabbitmq-basics",
+      "latency-bandwidth-throughput",
+      "http-versions",
+      "kafka-basics",
+      "sql-batch-timeout-pool",
+      "grpc"
+    ]
+  },
+  "garbage-collection": {
+    "links": [
+      "js-memory-leak",
+      "k8s-pod-resources"
+    ],
+    "mentions": [
+      "helm-basics",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "layer-mtu-fragmentation"
+    ]
+  },
   "schema-versioning": {
     "links": [
       "api-versioning",
@@ -157,6 +227,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "timeouts",
       "tcp-connection-lifecycle",
+      "backpressure",
       "exponential-backoff-jitter",
       "pub-sub",
       "load-balancer-basics",
@@ -284,6 +355,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "postgres-advanced-sql",
       "message-delivery-semantics",
+      "autoscaling",
       "linux-files-permissions",
       "postgres-architecture",
       "redis-basics",
@@ -811,6 +883,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "ipv6-basics",
       "helm-basics",
+      "autoscaling",
       "security-groups-nacl",
       "what-happens-google-com",
       "layer-ip-addressing",
@@ -955,6 +1028,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "iptables-basics",
       "hosts-file",
+      "autoscaling",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "grpc",
@@ -1358,6 +1432,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-driven-architecture",
       "redis-basics",
       "redis-cluster",
+      "backpressure",
       "kafka-basics"
     ],
     "mentions": [
@@ -1377,12 +1452,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "idempotency-key",
       "exponential-backoff-jitter",
+      "backpressure",
       "microservices",
       "postgres-mvcc-vacuum",
       "redis-persistence-ha",
       "redis-memory-eviction"
     ],
     "mentions": [
+      "autoscaling",
       "db-index-design",
       "resilience-patterns",
       "realtime-communication",
@@ -1522,6 +1599,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "service-mesh",
+      "backpressure",
       "grpc"
     ]
   },
@@ -1558,8 +1636,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-migration-tools",
       "db-architecture-by-scale",
       "https-tls",
+      "autoscaling",
       "latency-bandwidth-throughput",
       "db-replication-sharding",
+      "backpressure",
       "postgres-getting-started",
       "vpc-basics"
     ]
@@ -1934,6 +2014,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "redis-cluster",
+      "backpressure",
       "redis-basics"
     ]
   },
@@ -2300,6 +2381,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration"
     ],
     "mentions": [
+      "autoscaling",
       "react-server-components",
       "redis-basics",
       "count-min-sketch"
@@ -2652,6 +2734,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "distributed-transactions-2pc",
+      "scaling-horizontal-vertical",
       "redis-basics"
     ]
   },
@@ -2974,6 +3057,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics",
       "raft-consensus",
       "distributed-transactions-2pc",
+      "scaling-horizontal-vertical",
       "postgres-getting-started"
     ]
   },
@@ -3032,7 +3116,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-getting-started"
     ],
     "mentions": [
-      "db-index"
+      "db-index",
+      "scaling-horizontal-vertical"
     ]
   },
   "db-type-relational": {
@@ -3056,6 +3141,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series",
       "db-type-key-value",
       "sqld-top-n-hierarchical-pivot",
+      "scaling-horizontal-vertical",
       "postgres-architecture",
       "postgres-jsonb-search",
       "db-partitioning",
@@ -3501,6 +3587,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-consistency-cap",
       "db-architecture-by-scale",
+      "scaling-horizontal-vertical",
       "sql-batch-timeout-pool",
       "db-type-key-value",
       "postgres-architecture",
@@ -3979,7 +4066,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "kafka-basics",
       "redis-basics",
-      "http-status-codes"
+      "http-status-codes",
+      "backpressure"
     ]
   },
   "browser-fetch": {
@@ -4088,6 +4176,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "garbage-collection",
       "event-loop",
       "layer-mtu-fragmentation",
       "dns"
@@ -4253,6 +4342,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "service-mesh",
       "latency-bandwidth-throughput",
+      "backpressure",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "grpc",

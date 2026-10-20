@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "scaling-horizontal-vertical",
+    title: "수평 확장과 수직 확장: 더 큰 서버냐, 더 많은 서버냐",
+    summary: "서버를 키워도 앱이 늘어난 코어를 못 쓰는 경우와, 서버를 늘리면 메모리 세션 때문에 로그인이 풀리는 경우를 직접 재현한다. 늘린 만큼 빨라지지 않는 이유를 암달의 법칙과 보편 확장성 법칙으로 계산하고, 언제 무엇을 고를지 정리한다.",
+    topic: "programming/system-design",
+    tags: ["Scalability", "System Design", "Architecture", "Performance", "Session"],
+    date: "2026-10-21",
+    keywords: ["수평 확장", "수직 확장", "암달의 법칙", "보편 확장성 법칙"],
+  },
+  {
+    slug: "autoscaling",
+    title: "오토스케일링: 언제, 무엇을 보고, 얼마나 빨리 늘리나",
+    summary: "새 인스턴스가 요청을 받기까지의 반응 시간에서 출발해 반응형·예약형·예측형의 차이, CPU·요청 수·큐 깊이 중 무엇을 볼지, 쿨다운으로 플래핑을 막는 법을 시뮬레이션으로 비교한다. AWS Auto Scaling 그룹 정책과 쿠버네티스에서 Pod와 노드가 따로 늘어나는 구조도 정리한다.",
+    topic: "programming/system-design",
+    tags: ["Scalability", "System Design", "DevOps", "AWS", "Cloud"],
+    date: "2026-10-21",
+    keywords: ["오토스케일링", "대상 추적 정책", "예측 스케일링", "웜 풀"],
+  },
+  {
+    slug: "backpressure",
+    title: "백프레셔: 받는 쪽이 느릴 때 보내는 쪽을 늦추기",
+    summary: "생산자가 소비자보다 빠를 때 쌓이는 몫을 Node 스트림의 write()와 drain, pipeline()으로 막고, 신호를 무시하면 메모리가 얼마나 늘어나는지 잰다. 같은 원리가 TCP 수신 창, 상한 있는 대기열과 503, Reactive Streams의 request(n)에서 어떻게 반복되는지도 따라간다.",
+    topic: "programming/computer-science",
+    tags: ["Node.js", "Performance", "Backend", "TCP/IP", "Resilience"],
+    date: "2026-10-21",
+    keywords: ["백프레셔", "highWaterMark", "drain 이벤트", "부하 차단"],
+  },
+  {
+    slug: "garbage-collection",
+    title: "가비지 컬렉션 안쪽: 세대, 멈춤, 그리고 컨테이너 메모리 한도",
+    summary: "참조 카운팅과 추적 GC의 차이, V8의 Scavenge와 Mark-Compact를 --trace-gc 로그로 읽고, 힙 한도와 컨테이너 한도가 어긋나면 왜 로그 없이 OOMKilled가 되는지 cgroup으로 재현한다. GC 멈춤이 꼬리 지연으로 나타나는 모습과 JVM G1·ZGC, Go의 GOGC·GOMEMLIMIT도 실제 로그로 비교한다.",
+    topic: "programming/computer-science",
+    tags: ["Performance", "Node.js", "JavaScript", "Troubleshooting", "Kubernetes"],
+    date: "2026-10-21",
+    keywords: ["세대별 가설", "참조 카운팅", "스캐빈지", "GOMEMLIMIT", "--max-old-space-size"],
+  },
+  {
     slug: "schema-versioning",
     title: "스키마 버전 관리: Avro, 스키마 레지스트리, 옛 이벤트 읽기",
     summary: "로그에 남는 이벤트는 코드보다 오래 산다. Avro가 쓴 쪽과 읽는 쪽 스키마를 맞춰 읽는 방식, 스키마 레지스트리와 호환성 규칙, TRANSITIVE가 필요한 이유, protobuf와 JSON Schema에서 조용히 깨지는 변경, 옛 이벤트를 올리는 업캐스터를 직접 돌려 본다.",
