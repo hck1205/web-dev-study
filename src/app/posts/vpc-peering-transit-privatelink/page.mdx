@@ -1,0 +1,538 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("vpc-peering-transit-privatelink");
+
+결제 서비스 VPC(A)와 공용 로그 수집 VPC(B)를 피어링으로 이었다. 잘 된다. 몇 주 뒤 정산 서비스 VPC(C)도 B와 피어링했다. A와 B, B와 C가 이어졌으니 A에서 C의 정산 API도 부를 수 있을 거라 생각하고 A의 라우트 테이블에 C 대역을 B 쪽 피어링으로 넣었다. 그런데 패킷이 사라진다. 같은 주에 인수한 회사의 VPC(D)와도 이어야 하는데, D의 대역이 하필 A와 똑같은 `10.0.0.0/16`이다.
+
+VPC끼리 잇는 방법은 크게 셋이다. 피어링, Transit Gateway, PrivateLink. 셋은 "무엇을 연결하는가"부터 다르다. 피어링은 망 둘을, Transit Gateway는 망 여럿을 허브로, PrivateLink는 망이 아니라 서비스 하나를 잇는다. 이 글은 셋이 패킷을 어떻게 보내는지, 왜 위 장면처럼 막히는지, 언제 무엇을 고르는지를 본다. [VPC 기본 글](/posts/vpc-basics)과 [라우트 테이블 글](/posts/vpc-subnets-route-tables)의 내용을 안다고 보고, 실습은 Ubuntu 24.04의 네트워크 네임스페이스로 VPC 넷을 만들어 진행한다.
+
+## 다리 하나에 VPC 둘: 피어링
+
+VPC 피어링은 VPC 두 개를 사설 IP로 직접 잇는다. 따로 장비가 생기지 않는다. AWS 망 안에서 두 VPC의 라우트 테이블이 서로의 대역을 알게 될 뿐이라 대역폭 한도나 단일 장애점이 없다. 같은 계정이든 다른 계정이든, 같은 리전이든 다른 리전이든 맺을 수 있다.
+
+맺는 과정은 한쪽이 요청하고 다른 쪽이 수락하는 순서다. 수락만으로는 아무것도 통하지 않는다는 게 흔한 함정이다. 다음을 누르면 순서대로 볼 수 있다.
+
+<SequenceDiagram
+  caption="피어링을 맺고 실제로 통하기까지"
+  actors={[
+    { id: "a", label: "VPC A 담당" },
+    { id: "aws", label: "AWS" },
+    { id: "b", label: "VPC B 담당" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "aws",
+      label: "create-vpc-peering",
+      title: "요청한다",
+      detail: "A 쪽이 B의 VPC ID와 계정, 리전을 적어 요청한다. 이 순간 대역이 겹치는지 검사하고, 겹치면 맺어지지 않는다.",
+      payload: "aws ec2 create-vpc-peering-connection \\\n  --vpc-id vpc-0aaa1111 --peer-vpc-id vpc-0bbb2222",
+    },
+    {
+      from: "aws",
+      to: "b",
+      label: "pending-acceptance",
+      title: "수락을 기다린다",
+      detail: "B 쪽에서 7일 안에 수락하지 않으면 요청은 만료된다. 다른 계정이면 B 계정 사람이 직접 수락해야 한다.",
+    },
+    {
+      from: "b",
+      to: "aws",
+      label: "accept",
+      title: "수락하면 active가 된다",
+      detail: "pcx-로 시작하는 피어링 ID가 생긴다. 하지만 아직 어느 라우트 테이블에도 경로가 없어서 패킷은 하나도 지나가지 않는다.",
+      payload: "\"Status\": { \"Code\": \"active\" }",
+    },
+    {
+      from: "a",
+      to: "a",
+      label: "경로 10.1.0.0/16 → pcx",
+      title: "A의 테이블에 B 대역을 넣는다",
+      detail: "B에 닿아야 하는 서브넷들의 라우트 테이블마다 넣는다. 테이블이 AZ별로 나뉘어 있으면 전부 넣어야 한다.",
+    },
+    {
+      from: "b",
+      to: "b",
+      label: "경로 10.0.0.0/16 → pcx",
+      title: "B의 테이블에도 A 대역을 넣는다",
+      detail: "이걸 빠뜨리면 요청은 B에 닿지만 응답이 기본 경로로 빠져 돌아오지 못한다. 증상은 timeout이다.",
+    },
+    {
+      from: "b",
+      to: "b",
+      label: "SG 인바운드 허용",
+      title: "보안 그룹을 연다",
+      detail: "경로가 있어도 B 서버의 보안 그룹이 A 대역(또는 같은 리전이면 A의 보안 그룹 ID)을 허용해야 한다.",
+    },
+  ]}
+/>
+
+## 친구의 친구는 친구가 아니다
+
+처음 장면의 문제로 가자. A–B, B–C 피어링이 있어도 A에서 C로는 갈 수 없다. 피어링은 전이되지 않는다(non-transitive). B가 라우터처럼 A의 패킷을 받아 C로 넘겨 주지 않는다. 피어링으로 들어온 패킷은 그 VPC 안의 목적지에만 닿을 수 있다.
+
+같은 이유로 상대 VPC의 출구도 빌려 쓸 수 없다. B에 NAT 게이트웨이나 VPN 연결이 있어도 A가 B의 피어링을 지나 그걸 쓰지 못한다. AWS 문서는 이걸 엣지 간 라우팅(edge-to-edge routing)을 지원하지 않는다고 적는다. 아래 그림에서 다음을 누르면 네 가지 경우가 차례로 지나간다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="A–B, B–C 피어링이 있을 때 A에서 C로는 갈 수 없다"
+  zones={[
+    { id: "za", label: "VPC A 10.0/16", x: 6, y: 96, w: 124, h: 144, tone: "private" },
+    { id: "zb", label: "VPC B 10.1/16", x: 138, y: 96, w: 124, h: 144, tone: "private" },
+    { id: "zc", label: "VPC C 10.2/16", x: 270, y: 96, w: 124, h: 144, tone: "private" },
+  ]}
+  nodes={[
+    { id: "nat", label: "NAT (B)", x: 200, y: 36, icon: "gateway" },
+    { id: "a", label: "pay", sub: "10.0.1.10", x: 68, y: 190, icon: "server", w: 100 },
+    { id: "b", label: "logs", sub: "10.1.1.10", x: 200, y: 190, icon: "server", w: 100 },
+    { id: "c", label: "settle", sub: "10.2.1.10", x: 332, y: 190, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "a", to: "b", label: "pcx-ab" },
+    { from: "b", to: "c", label: "pcx-bc" },
+    { from: "b", to: "nat" },
+  ]}
+  steps={[
+    {
+      path: ["a", "b"],
+      packet: "ping",
+      title: "A와 B는 통한다",
+      detail: "양쪽 라우트 테이블에 상대 대역이 pcx-ab로 들어 있다.",
+    },
+    {
+      path: ["a", "b", "c"],
+      packet: "ping",
+      blocked: true,
+      title: "B를 거쳐 C로는 못 간다",
+      detail: "A의 테이블에 10.2.0.0/16 → pcx-ab를 넣어도 B가 넘겨 주지 않는다. 피어링으로 들어온 패킷은 B 안의 주소에만 닿는다.",
+    },
+    {
+      path: ["a", "b", "nat"],
+      packet: "GET",
+      blocked: true,
+      title: "B의 NAT도 빌릴 수 없다",
+      detail: "엣지 간 라우팅은 지원하지 않는다. A가 인터넷에 나가려면 A 자신의 NAT나 IGW가 있어야 한다.",
+    },
+    {
+      path: ["b", "c"],
+      packet: "ping",
+      title: "B와 C는 직접 통한다",
+      detail: "A와 C를 이으려면 A–C 피어링을 하나 더 맺거나, 허브(Transit Gateway)를 둔다.",
+    },
+  ]}
+/>
+
+모형에서도 같은 상황을 만들었다. VPC마다 라우터 네임스페이스(`vp-ra`, `vp-rb`, `vp-rc`)와 서버 네임스페이스 하나씩을 두고, 라우터끼리 veth로 피어링 링크를 만들었다. 리눅스 라우터는 받으면 넘겨 주는 게 기본이라, AWS의 "피어링끼리는 넘기지 않는다"는 규칙을 B 라우터의 FORWARD 규칙 두 줄로 흉내 냈다.
+
+```bash
+# B 라우터: 피어링에서 들어와 다른 피어링으로 나가는 패킷은 버린다 (AWS 규칙을 흉내)
+sudo ip netns exec vp-rb iptables -A FORWARD -i pcx-ba -o pcx-bc -j DROP
+sudo ip netns exec vp-rb iptables -A FORWARD -i pcx-bc -o pcx-ba -j DROP
+# A에서 C로 가는 경로가 아직 없을 때
+sudo ip netns exec vp-a1 ping -c2 -W1 10.2.1.10
+```
+
+```text
+PING 10.2.1.10 (10.2.1.10) 56(84) bytes of data.
+From 10.0.1.1 icmp_seq=1 Destination Net Unreachable
+From 10.0.1.1 icmp_seq=2 Destination Net Unreachable
+
+--- 10.2.1.10 ping statistics ---
+2 packets transmitted, 0 received, +2 errors, 100% packet loss, time 1015ms
+```
+
+경로가 없으니 A의 라우터(`10.0.1.1`)가 바로 "망에 닿을 수 없다"고 답했다. 이제 처음 장면처럼 A의 테이블에 C 대역을 B 쪽 피어링으로 넣는다.
+
+```bash
+# A 라우터에 C 대역을 B 쪽 피어링으로 넣는다 (처음 장면의 시도)
+sudo ip netns exec vp-ra ip route add 10.2.0.0/16 via 169.254.10.2
+sudo ip netns exec vp-a1 ping -c2 -W1 10.2.1.10
+# B 라우터에서 버려진 패킷 수
+sudo ip netns exec vp-rb iptables -L FORWARD -v -n
+```
+
+```text
+PING 10.2.1.10 (10.2.1.10) 56(84) bytes of data.
+
+--- 10.2.1.10 ping statistics ---
+2 packets transmitted, 0 received, 100% packet loss, time 1033ms
+
+Chain FORWARD (policy ACCEPT 4 packets, 336 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+    2   168 DROP       0    --  pcx-ba pcx-bc  0.0.0.0/0            0.0.0.0/0           
+    0     0 DROP       0    --  pcx-bc pcx-ba  0.0.0.0/0            0.0.0.0/0           
+```
+
+증상이 바뀌었다. 이번엔 에러 메시지도 없이 조용히 사라진다. 첫 줄 DROP 카운터 2가 ping 두 개다. 실제 AWS에서도 경로는 넣을 수 있지만 B를 넘지 못하고 사라지고, 흐름 로그에도 C 쪽에는 아무것도 남지 않는다.
+
+## 대역이 겹치면 다리를 놓을 자리가 없다
+
+D가 A와 같은 `10.0.0.0/16`이면 피어링 요청 자체가 실패한다. AWS가 겹치는 대역끼리의 피어링을 허용하지 않는다. 허용한다 해도 쓸 수가 없다. A의 라우트 테이블에서 `10.0.0.0/16`은 이미 `local`이라 D로 보낼 경로를 둘 자리가 없기 때문이다. 모형에서 B에 D 쪽 경로를 같은 대역으로 하나 더 넣어 보면 리눅스도 거절한다.
+
+```bash
+# B 라우터에 10.0.0.0/16을 다른 방향으로 하나 더 넣으려 하면
+sudo ip netns exec vp-rb ip route add 10.0.0.0/16 via 169.254.11.2
+```
+
+```text
+RTNETLINK answers: File exists
+```
+
+같은 목적지에 두 길이 있으면 어느 쪽인지 고를 수 없다. 대역이 일부만 겹쳐도(예: `10.0.0.0/8`과 `10.20.0.0/16`) 겹치는 구간은 최장 일치 때문에 한쪽으로만 간다. 그래서 VPC를 만들 때 회사 전체의 대역 표를 보고 겹치지 않게 고른다. 대역 목록을 받아 겹치는 쌍을 찾는 함수를 직접 짜 보자. 결과는 겹치는 두 항목의 인덱스 쌍 목록이다.
+
+<CodePlayground
+  caption="겹치는 CIDR 쌍 찾기"
+  functionName="findOverlaps"
+  initialCode={`function findOverlaps(cidrs) {
+  // ["10.0.0.0/16", "10.0.0.0/16"] → [[0, 1]]
+  return [];
+}`}
+  solution={`function findOverlaps(cidrs) {
+  const toInt = (a) => a.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+  const range = (c) => {
+    const [net, len] = c.split("/");
+    const size = 2 ** (32 - Number(len));
+    const start = Math.floor(toInt(net) / size) * size;
+    return [start, start + size - 1];
+  };
+  const out = [];
+  for (let i = 0; i < cidrs.length; i++) {
+    for (let j = i + 1; j < cidrs.length; j++) {
+      const [a1, a2] = range(cidrs[i]);
+      const [b1, b2] = range(cidrs[j]);
+      if (a1 <= b2 && b1 <= a2) out.push([i, j]);
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "A, B, C 모두 다름", args: [["10.0.0.0/16", "10.1.0.0/16", "10.2.0.0/16"]], expected: [] },
+    { label: "A와 D가 같음", args: [["10.0.0.0/16", "10.0.0.0/16"]], expected: [[0, 1]] },
+    { label: "큰 대역이 작은 대역을 품음", args: [["10.0.0.0/8", "10.20.0.0/16", "172.31.0.0/16"]], expected: [[0, 1]] },
+    { label: "기본 VPC와 Docker", args: [["172.31.0.0/16", "172.17.0.0/16", "172.16.0.0/12"]], expected: [[0, 2], [1, 2]] },
+    { label: "맞닿기만 한 두 /17", args: [["10.0.0.0/17", "10.0.128.0/17"]], expected: [] },
+  ]}
+/>
+
+## VPC가 많아지면 다리 대신 허브: Transit Gateway
+
+피어링은 전이되지 않으니 VPC가 n개면 서로 다 이으려면 n(n-1)/2개가 필요하다. 5개면 10개, 10개면 45개, 20개면 190개다. 피어링마다 양쪽 라우트 테이블에 경로를 넣어야 하니 관리할 줄 수는 훨씬 많다. VPC당 피어링 할당량도 기본 50개(최대 125개)라 언젠가 막힌다.
+
+Transit Gateway(TGW)는 리전 안의 허브 라우터다. VPC, VPN, Direct Connect를 각각 하나의 연결(attachment)로 TGW에 붙이면, TGW가 자기 라우트 테이블을 보고 연결 사이로 패킷을 넘긴다. 피어링과 달리 전이가 된다. 그게 목적이니까. VPC가 n개여도 연결은 n개다.
+
+TGW의 라우트 테이블은 두 가지 설정으로 움직인다.
+
+- 연결(association): 이 attachment에서 들어온 패킷은 어느 TGW 라우트 테이블을 볼까. attachment 하나는 테이블 하나에 연결된다.
+- 전파(propagation): 이 attachment의 대역을 어느 테이블에 자동으로 적어 넣을까.
+
+이 둘을 나눠 쓰면 망을 쪼갤 수 있다. prod와 dev가 공용(shared) VPC에는 닿되 서로는 못 닿게 하려면, prod와 dev attachment가 보는 테이블에는 shared 대역만 전파하고, shared가 보는 테이블에는 모두를 전파한다. 아래 그림에서 다음을 누르면 이 분리가 패킷 단위로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="Transit Gateway 하나에 VPC 셋. 라우트 테이블로 prod와 dev를 떼어 놓는다"
+  zones={[
+    { id: "zprod", label: "prod 10.0/16", x: 6, y: 176, w: 124, h: 106, tone: "private" },
+    { id: "zshared", label: "shared 10.1/16", x: 138, y: 176, w: 124, h: 106, tone: "public" },
+    { id: "zdev", label: "dev 10.2/16", x: 270, y: 176, w: 124, h: 106, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "tgw", label: "TGW", sub: "rtb 3개", x: 200, y: 50, icon: "router" },
+    { id: "rtp", label: "rtb-prod", sub: "→ shared", x: 68, y: 116, icon: "switch", w: 112 },
+    { id: "rtd", label: "rtb-dev", sub: "→ shared", x: 332, y: 116, icon: "switch", w: 112 },
+    { id: "prod", label: "pay", sub: "10.0.1.10", x: 68, y: 232, icon: "server", w: 100 },
+    { id: "shared", label: "logs", sub: "10.1.1.10", x: 200, y: 232, icon: "server", w: 100 },
+    { id: "dev", label: "test", sub: "10.2.1.10", x: 332, y: 232, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "prod", to: "rtp" },
+    { from: "rtp", to: "tgw" },
+    { from: "dev", to: "rtd" },
+    { from: "rtd", to: "tgw" },
+    { from: "shared", to: "tgw", label: "rtb-shared" },
+  ]}
+  steps={[
+    {
+      path: ["prod", "rtp", "tgw", "shared"],
+      packet: "logs",
+      title: "prod는 shared로 간다",
+      detail: "prod attachment는 rtb-prod를 본다. 거기에는 shared 대역 하나만 전파되어 있다.",
+      payload: "rtb-prod: 10.1.0.0/16 → tgw-attach-shared",
+    },
+    {
+      path: ["dev", "rtd", "tgw", "shared"],
+      packet: "logs",
+      title: "dev도 shared로 간다",
+      detail: "rtb-dev도 shared 대역만 안다. 공용 서비스는 양쪽에서 다 쓴다.",
+    },
+    {
+      path: ["prod", "rtp", "tgw"],
+      packet: "→dev",
+      blocked: true,
+      highlight: ["dev"],
+      title: "prod에서 dev로는 경로가 없다",
+      detail: "rtb-prod에 10.2.0.0/16이 없으니 TGW가 버린다. VPC 라우트 테이블에 경로를 넣어 봐야 TGW에서 막힌다.",
+    },
+    {
+      path: ["shared", "tgw", "rtd", "dev"],
+      packet: "reply",
+      title: "shared는 모두에게 답한다",
+      detail: "rtb-shared에는 세 대역이 모두 전파되어 있어 prod와 dev 양쪽으로 응답이 돌아간다.",
+      payload: "rtb-shared: 10.0.0.0/16, 10.2.0.0/16 → 각 attachment",
+    },
+  ]}
+/>
+
+모형에서는 TGW 네임스페이스에 attachment마다 veth를 하나씩 두고, `ip rule iif`로 attachment별 테이블을 고르게 했다. 서브넷별 라우트 테이블을 만들 때와 같은 방법이다.
+
+```bash
+# prod(att-a)와 dev(att-c)는 shared 대역만 아는 테이블을, shared(att-b)는 전부 아는 테이블을 본다
+sudo ip netns exec vp-tgw ip route add 10.1.0.0/16 via 169.254.21.2 table 210   # rtb-prod
+sudo ip netns exec vp-tgw ip route add 10.1.0.0/16 via 169.254.21.2 table 230   # rtb-dev
+sudo ip netns exec vp-tgw ip rule add iif att-a table 210 pref 100
+sudo ip netns exec vp-tgw ip rule add iif att-b table 200 pref 101
+sudo ip netns exec vp-tgw ip rule add iif att-c table 230 pref 102
+sudo ip netns exec vp-tgw ip rule
+```
+
+```text
+0:	from all lookup local
+100:	from all iif att-a lookup 210
+101:	from all iif att-b lookup 200
+102:	from all iif att-c lookup 230
+32766:	from all lookup main
+32767:	from all lookup default
+```
+
+prod 서버에서 shared와 dev를 차례로 찔러 보고, TGW에게 직접 경로를 물어본다.
+
+```bash
+# prod → shared
+sudo ip netns exec vp-a1 ping -c1 -W1 10.1.1.10
+# prod → dev
+sudo ip netns exec vp-a1 ping -c2 -W1 10.2.1.10
+# TGW가 prod attachment에서 들어온 패킷의 경로를 어떻게 고르는지
+sudo ip netns exec vp-tgw ip route get 10.2.1.10 from 10.0.1.10 iif att-a
+sudo ip netns exec vp-tgw ip route get 10.1.1.10 from 10.0.1.10 iif att-a
+```
+
+```text
+PING 10.1.1.10 (10.1.1.10) 56(84) bytes of data.
+64 bytes from 10.1.1.10: icmp_seq=1 ttl=61 time=0.083 ms
+
+--- 10.1.1.10 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.083/0.083/0.083/0.000 ms
+PING 10.2.1.10 (10.2.1.10) 56(84) bytes of data.
+
+--- 10.2.1.10 ping statistics ---
+2 packets transmitted, 0 received, 100% packet loss, time 1014ms
+
+RTNETLINK answers: Network is unreachable
+10.1.1.10 from 10.0.1.10 via 169.254.21.2 dev att-b table 210 
+    cache iif att-a 
+```
+
+`table 210`에는 dev 대역이 없으니 `Network is unreachable`이다. AWS의 TGW도 맞는 경로가 없으면 패킷을 버린다. TGW 라우트 테이블에는 일부러 버리는 blackhole 경로도 넣을 수 있어서, 넓은 대역을 전파받더라도 특정 구간만 확실히 막을 수 있다.
+
+TGW는 공짜가 아니다. attachment마다 시간당 요금(us-east-1 기준 0.05달러)과 처리한 데이터 GB당 요금(0.02달러)이 붙는다. 같은 AZ 안의 피어링 트래픽은 전송 요금이 없으니, 트래픽이 아주 많은 두 VPC는 TGW와 별개로 피어링을 하나 더 두는 설계도 흔하다. 피어링 경로와 TGW 경로가 함께 있으면 더 구체적인 쪽이 이기니, 대역을 같은 크기로 넣었는지 확인해야 한다.
+
+한 가지 더. TGW 뒤에 상태를 기억하는 방화벽 장비를 여러 AZ에 두면, 요청은 AZ a의 방화벽으로, 응답은 AZ c의 방화벽으로 가서 버려지는 일이 생긴다. 방화벽 VPC의 attachment에 어플라이언스 모드(appliance mode)를 켜면 한 흐름의 양방향이 같은 AZ로 가도록 맞춰 준다.
+
+## 망을 잇지 않고 서비스 하나만 내놓기: PrivateLink
+
+D 회사의 문제로 돌아가자. 대역이 겹치니 피어링도 TGW도 안 된다. 그런데 D가 필요한 건 A의 망 전체가 아니라 A의 결제 API 하나다. PrivateLink는 이럴 때 쓴다.
+
+- 서비스 제공자(A)는 서비스 앞에 NLB(네트워크 로드 밸런서)를 두고 엔드포인트 서비스로 등록한다.
+- 소비자(D)는 자기 서브넷에 인터페이스 엔드포인트를 만든다. 그러면 D의 서브넷에 ENI가 하나 생기고, D 대역의 사설 IP를 받는다.
+- D의 서버는 그 ENI의 IP(또는 DNS 이름)로 요청한다. AWS가 그 연결을 A의 NLB로 넘기고, NLB가 A의 서버로 보낸다.
+
+라우팅이 아니라 연결을 대신 이어 주는 방식이라 대역이 겹쳐도 상관없다. D는 A의 대역을 알 필요가 없고 A도 D의 대역을 모른다. 방향도 한쪽뿐이다. 소비자만 연결을 시작할 수 있고 제공자는 소비자 망으로 먼저 들어갈 수 없다. Datadog이나 Snowflake 같은 SaaS가 고객 VPC에 사설 연결을 제공할 때 쓰는 방법이 이것이다.
+
+<NetworkTopology
+  width={400}
+  height={270}
+  caption="같은 10.0.0.0/16을 쓰는 두 VPC가 PrivateLink로 서비스 하나만 주고받는다"
+  zones={[
+    { id: "zd", label: "소비자 D 10.0.0.0/16", x: 6, y: 40, w: 186, h: 222, tone: "edge" },
+    { id: "za", label: "제공자 A 10.0.0.0/16", x: 208, y: 40, w: 186, h: 222, tone: "private" },
+  ]}
+  nodes={[
+    { id: "d1", label: "client", sub: "10.0.1.10", x: 99, y: 98, icon: "client" },
+    { id: "ep", label: "endpoint", sub: "10.0.2.50", x: 99, y: 200, icon: "lock" },
+    { id: "nlb", label: "NLB", sub: "10.0.3.20", x: 301, y: 200, icon: "lb" },
+    { id: "a1", label: "pay-api", sub: "10.0.1.10", x: 301, y: 98, icon: "server" },
+  ]}
+  links={[
+    { from: "d1", to: "ep" },
+    { from: "ep", to: "nlb", label: "PrivateLink" },
+    { from: "nlb", to: "a1" },
+  ]}
+  steps={[
+    {
+      path: ["d1", "ep"],
+      packet: ":443",
+      title: "소비자는 자기 망의 ENI로 보낸다",
+      detail: "엔드포인트 ENI는 D의 서브넷에 있는 D 대역 주소다. D의 라우트 테이블은 local 경로 하나로 충분하다.",
+      payload: "src 10.0.1.10  dst 10.0.2.50:443",
+    },
+    {
+      path: ["ep", "nlb"],
+      packet: ":443",
+      title: "AWS가 연결을 제공자의 NLB로 넘긴다",
+      detail: "라우팅이 아니라 주소를 바꿔 이어 붙인다. 그래서 양쪽 대역이 같아도 섞이지 않는다.",
+    },
+    {
+      path: ["nlb", "a1"],
+      packet: ":8080",
+      title: "NLB가 서비스로 보낸다",
+      detail: "제공자 서버에는 NLB의 사설 IP가 출발지로 보인다. 소비자를 구분하려면 프록시 프로토콜 v2로 엔드포인트 ID를 받는다.",
+      payload: "src 10.0.3.20  dst 10.0.1.10:8080",
+    },
+    {
+      path: ["a1", "nlb", "ep"],
+      packet: "→D",
+      blocked: true,
+      title: "제공자가 먼저 들어갈 수는 없다",
+      detail: "PrivateLink는 소비자에서 제공자로 가는 한 방향이다. A가 D의 다른 서버에 연결을 시작할 길은 없다.",
+    },
+  ]}
+/>
+
+모형에서는 엔드포인트 ENI 역할의 네임스페이스(`vp-ep`)와 NLB 역할의 네임스페이스(`vp-nlb`)가 각자 DNAT와 SNAT로 연결을 이어 붙이게 했다. 실제 PrivateLink 내부 구현과는 다르지만 "양쪽 망에서 보이는 주소"는 똑같이 재현된다.
+
+```bash
+# 소비자 D의 서버와 제공자 A의 서버는 주소가 완전히 같다
+sudo ip netns exec vp-d1 ip -br addr show eth0
+sudo ip netns exec vp-a1 ip -br addr show eth0
+# D의 서버가 자기 망의 엔드포인트 주소로 요청한다
+sudo ip netns exec vp-d1 curl -sS -m3 -o /dev/null -w '%{http_code}\n' http://10.0.2.50:443/
+```
+
+```text
+eth0@if18        UP             10.0.1.10/24 
+eth0@if12        UP             10.0.1.10/24 
+200
+```
+
+제공자 서버의 접속 로그에는 NLB 주소가 찍힌다.
+
+```text
+10.0.3.20 - - [20/Oct/2026 13:21:22] "GET / HTTP/1.1" 200 -
+```
+
+엔드포인트를 만들면 DNS 이름이 여러 개 생긴다. 조각을 눌러 보면 각 부분의 뜻이 나온다.
+
+<UrlAnatomy
+  caption="인터페이스 엔드포인트의 지역 DNS 이름"
+  base="https://"
+  separator=""
+  joiner="."
+  params={[
+    {
+      key: "id",
+      display: "vpce-0a1b2c3d4e5f67890-abcd1234",
+      title: "엔드포인트 ID와 무작위 접미사",
+      description: "엔드포인트마다 다르다. 이 이름은 모든 AZ의 엔드포인트 ENI IP를 돌려준다. 뒤에 -ap-northeast-2a처럼 AZ를 붙인 이름도 함께 생기는데, 그건 그 AZ의 ENI만 돌려준다.",
+      required: true,
+    },
+    {
+      key: "svc",
+      display: "execute-api",
+      title: "서비스 이름",
+      description: "AWS 서비스(API Gateway, ECR, STS 등)면 서비스 이름이 들어간다. 직접 만든 엔드포인트 서비스에는 이 부분이 없다.",
+    },
+    {
+      key: "region",
+      display: "ap-northeast-2",
+      title: "리전",
+      description: "인터페이스 엔드포인트는 리전 자원이다. 다른 리전의 서비스에 닿으려면 그 리전에 엔드포인트를 만들거나 별도 설정이 필요하다.",
+      required: true,
+    },
+    {
+      key: "zone",
+      display: "vpce.amazonaws.com",
+      title: "엔드포인트용 공개 DNS 영역",
+      description: "이 이름은 공개 DNS에서도 조회되지만 돌려주는 값은 사설 IP다. 사설 DNS를 켜면 원래 서비스 이름(예: sts.ap-northeast-2.amazonaws.com)이 VPC 안에서 이 ENI IP로 바뀌어 코드를 고치지 않아도 된다.",
+      code: "$ dig +short sts.ap-northeast-2.amazonaws.com\n10.0.2.50   ← 사설 DNS를 켠 VPC 안에서 (예시)",
+    },
+  ]}
+/>
+
+사설 DNS를 켜는 게 실무에서 가장 중요한 설정이다. 켜 두면 SDK가 평소처럼 `sts.ap-northeast-2.amazonaws.com`을 불러도 엔드포인트로 간다. 이 기능은 VPC의 `enableDnsSupport`와 `enableDnsHostnames`가 둘 다 켜져 있어야 동작한다. 꺼져 있으면 엔드포인트는 만들어졌는데 트래픽은 여전히 NAT로 나가는 상황이 된다.
+
+PrivateLink는 엔드포인트마다, AZ마다 시간당 요금과 GB당 처리 요금이 있다. 여러 VPC에서 같은 AWS 서비스 엔드포인트가 필요하면 공용 VPC에 한 번 만들고 TGW로 나눠 쓰는 중앙 집중 방식도 쓴다.
+
+## 셋 중 무엇을 고르나
+
+결정은 "무엇을 잇고 싶은가"에서 시작한다.
+
+- VPC 두세 개를 망 대 망으로 잇고, 대역이 겹치지 않는다: 피어링. 장비가 없어 대역폭 걱정이 없고, 같은 AZ 안의 트래픽은 전송 요금도 없다. 같은 리전이면 상대 VPC의 보안 그룹 ID를 규칙에 쓸 수도 있다.
+- VPC가 열 개를 넘어가거나, VPN·Direct Connect로 사내망까지 한곳에 모아야 한다: Transit Gateway. 라우트 테이블로 망을 나누고 중앙 방화벽을 둘 수 있다. 대신 attachment와 데이터 처리 요금이 붙는다.
+- 망 전체가 아니라 서비스 하나만 내놓고 싶다, 대역이 겹친다, 상대가 다른 회사다: PrivateLink. 한 방향이고 서비스 단위라 노출 범위가 가장 좁다.
+
+규모로 보면 대체로 이렇게 흘러간다. VPC 두세 개일 때는 피어링으로 시작한다. 피어링 수가 VPC 수보다 빠르게 늘어나고 라우트 테이블 관리가 버거워지면 TGW로 옮긴다. 회사 밖과 이어야 하거나 대역 정리를 할 수 없는 상대는 처음부터 PrivateLink로 간다. 서비스 단위 연결을 HTTP 수준에서 더 세밀하게 관리하려면 VPC Lattice 같은 서비스 네트워크 제품도 있는데, 이건 [서비스 메시](/posts/service-mesh)와 비슷한 문제를 클라우드 쪽에서 푸는 방식이다.
+
+## 연결했는데 안 통할 때 보는 순서
+
+VPC끼리 이었는데 timeout이 나면 이 순서로 본다.
+
+1. 연결 상태: 피어링이 `active`인지, TGW attachment가 `available`인지, 엔드포인트가 `available`(제공자 수락이 필요한 서비스면 `pendingAcceptance`가 아닌지)인지.
+2. 양쪽 VPC 라우트 테이블: 출발 서브넷과 도착 서브넷 테이블에 상대 대역이 들어 있는지. 한쪽만 넣는 실수가 가장 흔하다.
+3. TGW 라우트 테이블: attachment가 어느 테이블에 연결되어 있고, 그 테이블에 목적지 대역이 전파되어 있는지.
+4. 보안 그룹과 NACL: 도착 쪽 인바운드가 출발 대역을 허용하는지. NACL은 응답용 임시 포트까지 열려 있는지([보안 그룹과 NACL 글](/posts/security-groups-nacl)).
+5. DNS: 엔드포인트를 쓰는데 서비스 이름이 공인 IP로 풀린다면 사설 DNS 설정을 본다.
+
+```bash
+# 피어링 상태와 양쪽 대역을 한 번에 본다
+aws ec2 describe-vpc-peering-connections \
+  --vpc-peering-connection-ids pcx-0ab12cd34ef567890 \
+  --query 'VpcPeeringConnections[].{Status:Status.Code,Requester:RequesterVpcInfo.CidrBlock,Accepter:AccepterVpcInfo.CidrBlock}'
+```
+
+```text
+[
+    {
+        "Status": "active",
+        "Requester": "10.0.0.0/16",
+        "Accepter": "10.1.0.0/16"
+    }
+]
+```
+
+(예시 출력이다. 형식은 AWS CLI v2와 같다.) 상태가 `active`인데도 안 되면 2번 이후를 본다. 실제로 패킷이 어디서 버려지는지는 양쪽 ENI의 [흐름 로그](/posts/network-flow-logs)에서 REJECT가 찍히는 쪽을 찾으면 된다.
+
+## 다시 처음 장면으로
+
+A에서 C로 가는 패킷이 사라진 건 피어링이 전이되지 않아서 B가 넘겨 주지 않았기 때문이다. A–C 피어링을 하나 더 맺거나, VPC가 계속 늘어날 거라면 Transit Gateway로 허브를 만든다. A와 대역이 똑같은 D는 라우팅으로는 이을 수 없으니, D가 필요한 결제 API만 PrivateLink로 내놓는다. 망을 잇는 일은 결국 "누가 누구의 대역을 알아야 하나"를 정하는 일이다. 피어링과 TGW는 서로의 대역을 알게 하고, PrivateLink는 몰라도 되게 한다.
+
+## 면접에서 나올 만한 질문
+
+### VPC 피어링은 왜 전이되지 않나요? 그러면 어떻게 하나요?
+
+피어링은 두 VPC의 라우트 테이블이 서로의 대역을 아는 직접 연결일 뿐이고, 가운데 VPC가 다른 피어링으로 패킷을 넘겨 주지 않게 설계되어 있다. 같은 이유로 상대 VPC의 NAT, IGW, VPN도 빌려 쓸 수 없다. A와 C가 통해야 하면 A–C 피어링을 추가하거나 Transit Gateway 같은 허브로 옮긴다.
+
+### 피어링을 수락했는데 통신이 안 됩니다. 무엇이 빠졌을까요?
+
+수락은 연결을 만들 뿐이고 경로는 직접 넣어야 한다. 양쪽 VPC의 해당 서브넷 라우트 테이블에 상대 대역 → pcx 경로가 있는지 보고, 한쪽만 있으면 응답이 돌아오지 못해 timeout이 난다. 그다음 도착 쪽 보안 그룹과 NACL이 출발 대역을 허용하는지 본다.
+
+### 대역이 겹치는 두 VPC를 연결해야 하면 어떻게 하나요?
+
+피어링과 Transit Gateway는 라우팅이라 겹치는 대역 사이를 이을 수 없다. 필요한 게 특정 서비스라면 PrivateLink로 제공자 쪽 NLB를 엔드포인트 서비스로 내놓고, 소비자 VPC에 인터페이스 엔드포인트를 만든다. 망 전체가 필요하면 한쪽 대역을 바꾸거나 중간에 NAT를 두는 방법뿐이라 비용이 크다. 그래서 처음부터 대역 표를 관리한다.
+
+### Transit Gateway에서 prod와 dev를 서로 못 닿게 하려면 어떻게 하나요?
+
+TGW 라우트 테이블을 나누고 연결과 전파를 따로 설정한다. prod와 dev attachment가 보는 테이블에는 shared 대역만 전파하고, shared가 보는 테이블에는 모두를 전파한다. 그러면 prod에서 dev로 가는 경로가 TGW 테이블에 없어 버려지고, 확실히 하려면 blackhole 경로를 넣는다.
+
+### 피어링과 Transit Gateway 중 무엇을 고르나요?
+
+VPC가 몇 개 안 되고 트래픽이 많으면 피어링이 싸고 단순하다. 장비가 없어 대역폭 한도가 없고 같은 AZ 트래픽은 전송 요금도 없다. VPC가 많아져 n(n-1)/2개 연결 관리가 버거워지거나 VPN과 사내망까지 한곳에 모아야 하면 TGW로 간다. TGW는 attachment와 GB당 요금이 붙으니 트래픽이 큰 쌍은 피어링을 따로 두기도 한다.
+
+### PrivateLink를 쓰면 제공자 서버에 보이는 출발지 IP는 무엇인가요?
+
+제공자 쪽 NLB의 사설 IP가 보인다. 소비자의 실제 주소나 대역은 전달되지 않는다. 어느 소비자에서 왔는지 구분하려면 NLB에서 프록시 프로토콜 v2를 켜고 엔드포인트 ID 정보를 읽는다.
+
+### 인터페이스 엔드포인트를 만들었는데 트래픽이 여전히 NAT로 나갑니다. 왜 그럴까요?
+
+사설 DNS가 꺼져 있거나 VPC의 DNS 속성이 꺼져 있어서 서비스 이름이 여전히 공인 IP로 풀리는 경우가 대부분이다. 엔드포인트의 사설 DNS를 켜고 VPC의 enableDnsSupport와 enableDnsHostnames를 둘 다 켠다. VPC 안에서 dig로 서비스 이름이 엔드포인트 ENI의 사설 IP로 풀리는지 확인한다.

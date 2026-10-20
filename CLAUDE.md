@@ -115,7 +115,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI, Algorithms, Backend › Auth, Common › Git, Computer Science, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React, Rendering}, Network › {HTTP, OSI · TCP/IP}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Docker, Kubernetes › {Helm, Pod}, Nginx}, Security, System Design), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI, Algorithms › For System Design, Backend › {API Design, Auth, Messaging}, Common › Git, Computer Science, Design Patterns › {Behavioral, Creational, Structural}, In Practice, Database › {DB Types, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, JavaScript, Performance, React, Rendering}, Network › {Cloud Networking, HTTP, Infrastructure, OSI · TCP/IP, Performance}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Cloud, Docker, IaC, Kubernetes › {Config & Storage, EKS, Foundation, Helm, Networking, Operations, Platform, Pod, Security, Workloads}, Nginx, Observability, SRE}, Security, System Design, UI/UX), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -168,6 +168,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 | `<SequenceDiagram actors steps />` | 주체들이 메시지를 주고받는 흐름 (인증, 네트워크 요청, RAG 등) | 단계마다 화살표가 그려지고 메시지 점이 날아가며 번호에 물결이 퍼진다 |
 | `<ConceptDiagram nodes edges />` | 용어·주체 사이의 관계도 | 화살표 방향으로 점이 계속 흐른다 |
 | `<NetworkTopology zones nodes links steps />` | 네트워크 구성도: VPC·서브넷·존 같은 영역 안의 장비와 패킷 경로 (라우팅, 방화벽 차단, 로드 밸런서, 서비스 메시) | 단계마다 경로가 홉 단위로 그려지고 패킷이 그 길을 따라 이동한다. 도착하면 물결, 막히면(`blocked`) X가 튀어나와 흔들린다. `steps`가 없으면 연결선을 따라 점이 흐른다 |
+| `<LoadingDemo patterns caption />` | UI 패턴을 작은 앱 화면에서 실제로 움직여 보여 줄 때 (로딩: spinner, skeleton, progress-bar, lazy-loading, progress-ring, blur-up, stepper, infinite-scroll, streaming-text, optimistic-ui, pull-to-refresh, loading-button) | 화면에 들어오면 장면이 반복 재생된다. 하나만 주면 큰 카드, 여러 개면 격자 |
 | `<UrlAnatomy base params />` | 긴 URL·헤더·설정을 조각으로 나눠 읽기 | 처음 보일 때 조각이 차례로 반짝이고, 고른 조각이 튀어나온다 |
 | `<AlgoTrace cells steps />` | 배열·문자열을 훑으며 스택/해시맵이 변하는 과정 | 현재 칸이 튀어나오고 값이 떨어져 쌓였다가 위로 빠진다 |
 | `<VectorSpace points groups query edges steps />` | 거리·유사도·최근접 탐색·그래프 탐색 | 점이 퍼지듯 나타나고, 질문 점·이웃 선·반경·탐색 경로가 단계별로 그려진다 |
@@ -260,7 +261,10 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - `src/features/content-map/registry/relations.generated.ts`: `/map`(글 지도 페이지, 푸터 링크)이 쓰는 글 사이 관계. 직접 고치지 않는다.
 
 새 글을 쓰거나 글을 쪼갤 때 순서:
-1. `pnpm content:index` 후 `docs/content-index.md`를 읽는다. 같은 주제를 다룬 글이 있으면 새로 쓰지 않고 그 글을 보강하거나, 겹치는 부분은 링크로 넘긴다.
+1. `pnpm content:index` 후 `docs/content-index.md`를 읽는다. 같은 주제를 다룬 글이 있으면 셋 중 하나를 고른다.
+   - **건너뛴다**: 기존 글이 이미 충분히 깊으면 새로 쓰지 않고 링크만 건다.
+   - **보충한다**: 기존 글에 빠진 내용(실무 사례, 엣지 케이스, 새 버전 변화)을 그 글에 더한다.
+   - **시리즈로 넓힌다**: 같은 주제라도 다른 각도(개념 → 내부 동작 → 실무 장애 → 설계 판단)로 글을 하나 더 써서 시리즈처럼 풍부하게 만든다. 이때 각 글은 서로 다른 질문에 답해야 하고, 글 앞뒤에서 "이 주제의 다른 글"을 서로 링크하며, 같은 설명을 반복하지 않고 링크로 넘긴다. 키워드도 글마다 다르게 둔다.
 2. 토픽은 색인의 토픽 목록에서 고르고, 키워드는 "키워드 소유"에 없는 말로 정한다.
 3. 본문에서 이어지는 글은 직접 링크한다. 앞뒤 글(시리즈)도 서로 링크한다.
 4. 글 하나는 한 주제만 다룬다. 900줄을 넘기면 주제별로 나눈다(나눈 글끼리 링크하고, 퀴즈 `anchor`·`post`도 옮긴 글에 맞춘다).

@@ -2,6 +2,81 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "cdn-edge-anycast": {
+    "links": [
+      "http-caching-cdn",
+      "dns",
+      "security-groups-nacl",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "realtime-communication",
+      "http-versions"
+    ]
+  },
+  "security-groups-nacl": {
+    "links": [
+      "vpc-basics",
+      "iptables-basics",
+      "vpc-peering-transit-privatelink"
+    ],
+    "mentions": [
+      "vpc-subnets-route-tables",
+      "ports-and-sockets",
+      "layer-ip-routing-icmp",
+      "postgres-getting-started",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "vpc-peering-transit-privatelink": {
+    "links": [
+      "vpc-basics",
+      "vpc-subnets-route-tables",
+      "security-groups-nacl"
+    ],
+    "mentions": [
+      "db-sharding",
+      "ports-and-sockets",
+      "layer-ip-addressing",
+      "iptables-nat",
+      "dns"
+    ]
+  },
+  "vpc-subnets-route-tables": {
+    "links": [
+      "vpc-basics",
+      "layer-ip-routing-icmp",
+      "security-groups-nacl",
+      "iptables-nat",
+      "vpc-peering-transit-privatelink"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "db-type-key-value",
+      "iptables-basics",
+      "redis-basics",
+      "layer-ip-addressing",
+      "realtime-communication"
+    ]
+  },
+  "vpc-basics": {
+    "links": [
+      "vpc-subnets-route-tables",
+      "vpc-peering-transit-privatelink",
+      "security-groups-nacl",
+      "layer-ip-addressing",
+      "iptables-nat"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "iptables-basics",
+      "layer-link-ethernet-arp",
+      "what-happens-google-com",
+      "dns"
+    ]
+  },
   "loading-patterns": {
     "links": [
       "core-web-vitals",
@@ -303,6 +378,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "postgres-operations",
+      "security-groups-nacl",
       "sql-batch-timeout-pool",
       "layer-ip-addressing"
     ]
@@ -312,7 +388,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-replication-sentinel",
       "redis-basics"
     ],
-    "mentions": []
+    "mentions": [
+      "vpc-basics"
+    ]
   },
   "redis-replication-sentinel": {
     "links": [
@@ -465,6 +543,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "what-happens-google-com",
       "docker-container-basics",
+      "security-groups-nacl",
       "http-status-codes",
       "dns"
     ]
@@ -493,6 +572,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "realtime-communication",
       "http-versions",
+      "security-groups-nacl",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
       "udp-and-quic"
@@ -627,8 +707,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "what-happens-google-com",
+      "vpc-subnets-route-tables",
       "browser-fetch",
       "iptables-basics",
+      "security-groups-nacl",
       "sql-batch-timeout-pool"
     ]
   },
@@ -661,6 +743,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "packet-capture-tcpdump",
       "https-tls",
+      "security-groups-nacl",
       "layer-ip-routing-icmp"
     ]
   },
@@ -675,8 +758,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "elasticsearch-inverted-index",
+      "vpc-subnets-route-tables",
       "iptables-basics",
       "postgres-getting-started",
+      "security-groups-nacl",
       "sql-batch-timeout-pool",
       "redis-basics",
       "what-happens-google-com",
@@ -725,10 +810,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "proxy-reverse-proxy",
+      "vpc-subnets-route-tables",
       "docker-container-basics",
       "gateway",
       "iptables-basics",
+      "vpc-peering-transit-privatelink",
       "http-versions",
+      "security-groups-nacl",
+      "vpc-basics",
       "dns"
     ]
   },
@@ -742,8 +831,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics"
     ],
     "mentions": [
+      "vpc-peering-transit-privatelink",
       "docker-container-basics",
-      "what-happens-google-com"
+      "what-happens-google-com",
+      "vpc-basics"
     ]
   },
   "layer-ip-addressing": {
@@ -756,7 +847,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy"
     ],
     "mentions": [
+      "vpc-peering-transit-privatelink",
       "docker-container-basics",
+      "vpc-subnets-route-tables",
+      "security-groups-nacl",
+      "vpc-basics",
       "dns"
     ]
   },
@@ -769,9 +864,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dns"
     ],
     "mentions": [
+      "vpc-subnets-route-tables",
       "docker-container-basics",
       "layer-link-ethernet-arp",
       "iptables-nat",
+      "security-groups-nacl",
       "udp-and-quic"
     ]
   },
@@ -785,9 +882,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tcp-connection-lifecycle"
     ],
     "mentions": [
+      "vpc-basics",
       "https-tls",
       "layer-link-ethernet-arp",
       "http-versions",
+      "security-groups-nacl",
       "http-status-codes",
       "udp-and-quic",
       "dns"
@@ -1442,6 +1541,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cookie-session-login",
+      "security-groups-nacl",
       "what-happens-google-com",
       "udp-and-quic",
       "dns"
@@ -1482,6 +1582,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "iptables-basics",
       "http-versions",
+      "security-groups-nacl",
       "ports-and-sockets",
       "layer-ip-addressing",
       "http-status-codes",
@@ -1674,6 +1775,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "tcp-connection-lifecycle",
+      "security-groups-nacl",
       "layer-mtu-fragmentation",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
@@ -1688,6 +1790,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "vpc-subnets-route-tables",
       "osi-in-practice",
       "packet-capture-tcpdump",
       "proxy-reverse-proxy",
@@ -1924,7 +2027,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "http-caching-cdn": {
     "links": [
-      "what-happens-google-com"
+      "what-happens-google-com",
+      "cdn-edge-anycast"
     ],
     "mentions": [
       "http-message",
@@ -2018,6 +2122,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-versions",
+      "cdn-edge-anycast",
       "sql-batch-timeout-pool",
       "udp-and-quic"
     ]
@@ -2115,6 +2220,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "hosts-file",
       "http-versions",
+      "cdn-edge-anycast",
       "http-status-codes",
       "udp-and-quic"
     ]

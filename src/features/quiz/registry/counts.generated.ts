@@ -6,6 +6,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "big-o-notation": 8,
   "browser-fetch": 8,
   "caching-strategies": 8,
+  "cdn-edge-anycast": 6,
   "client-data-cache": 7,
   "code-splitting": 8,
   "cookie-session-login": 7,
@@ -129,6 +130,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "rendering-strategies": 8,
   "resilience-patterns": 7,
   "rest-api-design": 8,
+  "security-groups-nacl": 7,
   "sql-basics": 6,
   "sql-batch-timeout-pool": 5,
   "sql-insert-update-delete": 5,
@@ -155,5 +157,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "udp-and-quic": 6,
   "upper-layers-session-presentation-app": 6,
   "vector-db": 8,
+  "vpc-basics": 6,
+  "vpc-peering-transit-privatelink": 6,
+  "vpc-subnets-route-tables": 6,
   "what-happens-google-com": 8
 };

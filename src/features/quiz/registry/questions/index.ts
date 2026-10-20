@@ -3,6 +3,7 @@ import { BASE64 } from "./base64";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { CACHING_STRATEGIES } from "./caching-strategies";
+import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
@@ -126,6 +127,7 @@ import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
+import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
@@ -152,6 +154,9 @@ import { TOKEN_LOGIN } from "./token-login";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
+import { VPC_BASICS } from "./vpc-basics";
+import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
+import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
@@ -161,6 +166,7 @@ export const QUESTION_SETS = [
   BIG_O_NOTATION,
   BROWSER_FETCH,
   CACHING_STRATEGIES,
+  CDN_EDGE_ANYCAST,
   CLIENT_DATA_CACHE,
   CODE_SPLITTING,
   COOKIE_SESSION_LOGIN,
@@ -284,6 +290,7 @@ export const QUESTION_SETS = [
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
+  SECURITY_GROUPS_NACL,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
   SQL_INSERT_UPDATE_DELETE,
@@ -310,5 +317,8 @@ export const QUESTION_SETS = [
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
+  VPC_BASICS,
+  VPC_PEERING_TRANSIT_PRIVATELINK,
+  VPC_SUBNETS_ROUTE_TABLES,
   WHAT_HAPPENS_GOOGLE_COM,
 ];
