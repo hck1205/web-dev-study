@@ -1,0 +1,609 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-gateway-api");
+
+클러스터 관리자가 이 명령을 돌렸더니 Pod 목록이 나왔다.
+
+```bash
+# 이 클러스터가 커뮤니티 ingress-nginx에 기대고 있는지 확인 (공식 공지에 나온 명령)
+kubectl get pods --all-namespaces --selector app.kubernetes.io/name=ingress-nginx
+```
+
+커뮤니티 ingress-nginx는 2026년 3월 24일에 은퇴했다. 돌고 있는 컨트롤러가 멈추지는 않지만 그 뒤로는 보안 패치도 버그 수정도 없다. 옮길 곳으로 가장 많이 거론되는 게 Gateway API다. 그런데 막상 들여오려고 하면 개념 설명에서는 잘 안 나오는 질문이 줄줄이 생긴다. CRD는 누가 어떤 버전으로 설치하나. Gateway를 만들었는데 왜 `PROGRAMMED`가 `Unknown`인가. TCP도 받을 수 있나. 어노테이션 수십 개는 어디로 옮기나.
+
+이 글은 그 질문들, Gateway API를 실제 클러스터에 들여오고 운영할 때 걸리는 것들을 다룬다. 이 주제의 다른 글도 있다. Ingress 규칙과 컨트롤러가 요청을 Pod까지 보내는 흐름은 [Ingress 글](/posts/kubernetes-ingress)에, API 게이트웨이 개념과 Gateway API의 역할 분리, HTTPRoute 필드, 매칭 우선순위, 헤더·가중치 카나리, ReferenceGrant의 기본은 [게이트웨이 글](/posts/gateway#리소스를-역할별로-나눈-gateway-api)에 있다. 여기서는 그 설명을 다시 하지 않는다.
+
+실습은 kwok로 띄운 Kubernetes v1.37.0 API 서버(kubectl v1.37.0)에 Gateway API v1.6.3 standard CRD를 설치해서 했다. kwok에는 실제 데이터 플레인과 Gateway 컨트롤러가 없어서, API 서버가 직접 하는 일(설치, 검증, 기본 status)은 실제 출력이고, 컨트롤러가 써 넣는 status는 API 정의에 있는 값으로 모양만 보여 준다.
+
+## Ingress는 멈췄고 Gateway API는 따로 나온다
+
+쿠버네티스 문서의 Ingress 페이지 맨 위에는 이런 안내가 있다. "The Ingress API has been frozen." Ingress는 GA API라서 지원이 계속되고 없어질 계획도 없지만, 더는 개발하지 않고 어떤 변경도 하지 않는다는 뜻이다. 앞으로 생기는 기능은 Gateway API에만 들어간다.
+
+Gateway API는 쿠버네티스 본체에 들어 있지 않다. CRD 묶음(번들)으로 따로 릴리스되고, 클러스터 버전과 상관없이 설치한다. 그래서 버전이 세 겹이다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="쿠버네티스, Gateway API CRD, 구현체는 각자 버전이 있고 셋이 맞아야 기능이 동작한다"
+  nodes={[
+    { id: "k8s", label: "Kubernetes", sub: "예: v1.37", x: 80, y: 44, w: 130 },
+    { id: "crd", label: "Gateway API CRD", sub: "예: v1.6.3 standard", x: 290, y: 44, w: 160 },
+    { id: "impl", label: "구현체 컨트롤러", sub: "Envoy Gateway, Istio …", x: 290, y: 150, w: 160 },
+    { id: "obj", label: "Gateway·HTTPRoute", sub: "사용자 객체", x: 80, y: 150, w: 130 },
+    { id: "proxy", label: "데이터 플레인", sub: "실제 프록시·LB", x: 290, y: 246, w: 160 },
+  ]}
+  edges={[
+    { from: "k8s", to: "crd", label: "CEL 검증 실행" },
+    { from: "crd", to: "obj", label: "스키마" },
+    { from: "impl", to: "obj", label: "watch·status", arrow: "both" },
+    { from: "impl", to: "proxy", label: "설정" },
+  ]}
+/>
+
+버전 흐름은 이렇다. 2023년 10월 v1.0에서 GatewayClass, Gateway, HTTPRoute가 v1(GA)이 됐고, 2024년 5월 v1.1에서 GRPCRoute와 서비스 메시 지원(라우트의 parentRef로 Service를 가리키는 방식)이 표준이 됐다. 2025년 10월 v1.4에서 BackendTLSPolicy, 2026년 2월 27일 v1.5에서 ListenerSet, TLSRoute, CORS 필터 등이 표준으로 올라왔고, 2026년 6월 30일 v1.6에서 TCPRoute와 UDPRoute가 표준 `v1`이 됐다. v1.5부터는 기능 동결일에 준비된 것만 싣는 정기 릴리스(release train) 방식이다.
+
+채널도 두 개다. standard 채널은 하위 호환을 약속하는 기능만 담고, experimental 채널은 아직 바뀔 수 있는 필드와 리소스까지 담는다. v1.6부터 실험 리소스는 아예 다른 API 그룹 `gateway.networking.x-k8s.io`로 옮겨 가고 이름 앞에 X가 붙는다(`XBackend`, `XMesh`처럼). 실험 기능을 쓰는지 리소스 이름만 봐도 알 수 있게 하려는 것이다.
+
+## CRD를 누가 설치하나
+
+Gateway API CRD는 클러스터 전체에 한 벌만 있다. 구현체 두 개(예: 사내 Envoy Gateway와 서비스 메시)가 각자 자기 Helm 차트로 CRD를 설치하려 들면 버전이 엉킨다. 그래서 CRD는 플랫폼 팀이 정해진 버전으로 직접 설치하고, 구현체 차트에서는 CRD 설치를 끄는 편이 안전하다. 실습 클러스터에 v1.6.3 standard 번들을 넣었다.
+
+```bash
+# v1.6.3 standard 채널 CRD 설치 (저장소의 config/crd/standard 디렉터리)
+kubectl apply --server-side -f config/crd/standard/
+
+# 생긴 리소스 종류와 짧은 이름
+kubectl api-resources --api-group=gateway.networking.k8s.io
+
+# 설치된 CRD의 채널과 번들 버전 (어노테이션에 적혀 있다)
+kubectl get crd -o custom-columns='NAME:.metadata.name,CHANNEL:.metadata.annotations.gateway\.networking\.k8s\.io/channel,BUNDLE:.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version'
+```
+
+```text
+customresourcedefinition.apiextensions.k8s.io/backendtlspolicies.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/gatewayclasses.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/grpcroutes.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/httproutes.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/listenersets.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/referencegrants.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/tcproutes.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/tlsroutes.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/udproutes.gateway.networking.k8s.io serverside-applied
+validatingadmissionpolicy.admissionregistration.k8s.io/safe-upgrades.gateway.networking.k8s.io serverside-applied
+validatingadmissionpolicybinding.admissionregistration.k8s.io/safe-upgrades.gateway.networking.k8s.io serverside-applied
+NAME                 SHORTNAMES   APIVERSION                     NAMESPACED   KIND
+backendtlspolicies   btlspolicy   gateway.networking.k8s.io/v1   true         BackendTLSPolicy
+gatewayclasses       gc           gateway.networking.k8s.io/v1   false        GatewayClass
+gateways             gtw          gateway.networking.k8s.io/v1   true         Gateway
+grpcroutes                        gateway.networking.k8s.io/v1   true         GRPCRoute
+httproutes                        gateway.networking.k8s.io/v1   true         HTTPRoute
+listenersets         lset         gateway.networking.k8s.io/v1   true         ListenerSet
+referencegrants      refgrant     gateway.networking.k8s.io/v1   true         ReferenceGrant
+tcproutes                         gateway.networking.k8s.io/v1   true         TCPRoute
+tlsroutes                         gateway.networking.k8s.io/v1   true         TLSRoute
+udproutes                         gateway.networking.k8s.io/v1   true         UDPRoute
+NAME                                           CHANNEL    BUNDLE
+backendtlspolicies.gateway.networking.k8s.io   standard   v1.6.3
+gatewayclasses.gateway.networking.k8s.io       standard   v1.6.3
+...
+```
+
+`--server-side`를 쓴 이유가 있다. CRD 파일 하나가 수천 줄이라 클라이언트 쪽 apply가 남기는 `last-applied-configuration` 어노테이션이 크기 제한(256KiB)을 넘을 수 있다. 그리고 목록 끝의 ValidatingAdmissionPolicy 두 개가 눈에 띈다. 번들에 들어 있는 안전장치다. 이미 standard CRD가 깔린 클러스터에 experimental CRD를 덮어쓰거나, v1.5보다 오래된 CRD로 되돌리려 하면 막는다. 둘 다 해 봤다.
+
+```bash
+# standard 위에 experimental HTTPRoute CRD를 덮어쓰기
+kubectl apply --server-side -f config/crd/experimental/gateway.networking.k8s.io_httproutes.yaml
+
+# v1.4.1 HTTPRoute CRD로 되돌리기
+kubectl apply --server-side --force-conflicts -f httproutes-v141.yaml
+```
+
+```text
+The customresourcedefinitions "httproutes.gateway.networking.k8s.io" is invalid: : ValidatingAdmissionPolicy 'safe-upgrades.gateway.networking.k8s.io' with binding 'safe-upgrades.gateway.networking.k8s.io' denied request: Installing experimental CRDs on top of standard channel CRDs is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install experimental CRDs on top of standard channel CRDs.
+The customresourcedefinitions "httproutes.gateway.networking.k8s.io" is invalid: : ValidatingAdmissionPolicy 'safe-upgrades.gateway.networking.k8s.io' with binding 'safe-upgrades.gateway.networking.k8s.io' denied request: Installing CRDs with version before v1.5.0 is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install older versions.
+```
+
+막는 데는 이유가 있다. 채널을 오가면 저장된 객체의 필드가 사라질 수 있다. v1.5 릴리스 노트에는 이런 경고가 있다. v1.4 이하 experimental로 만든 TLSRoute는 `v1alpha2`·`v1alpha3`으로 저장돼 있는데 v1.5 standard 번들에는 그 버전이 없어서, standard로 갈아타면 기존 TLSRoute를 쓸 수 없게 된다. CRD 버전을 바꿀 때는 지금 객체가 어떤 버전으로 저장돼 있는지(`kubectl get crd <이름> -o jsonpath='{.status.storedVersions}'`)부터 본다.
+
+<Callout kind="warning">
+CRD를 지우면 그 종류의 객체가 클러스터 전체에서 함께 지워진다. `kubectl delete -f config/crd/standard/`로 "깨끗이 다시 깔기"를 하면 모든 팀의 Gateway와 HTTPRoute가 사라지고, 구현체는 그에 맞춰 프록시 설정과 로드 밸런서를 내린다. 버전을 바꿀 때는 지우지 말고 새 번들을 `apply --server-side`로 덮어쓴다. 실수로 지웠다면 Git에 있는 매니페스트로 다시 만드는 수밖에 없으니, Gateway API 객체도 GitOps 저장소에 두는 게 되돌리는 방법이다.
+</Callout>
+
+## 라우트 종류마다 성숙도가 다르다
+
+v1.6.3 standard 번들의 리소스는 모두 `v1`이다. 그렇다고 모든 구현체가 다 지원하는 건 아니다. Gateway API는 기능을 Core(모든 구현체가 지원해야 함), Extended(지원하면 표준대로), Implementation-specific(구현체 마음대로)으로 나누고, 구현체는 어느 프로필을 통과했는지 적합성(conformance) 보고서로 밝힌다. 고르기 전에 그 보고서와 구현체 문서를 본다.
+
+| 리소스 | 표준이 된 시점 | 무엇으로 고르나 |
+|---|---|---|
+| HTTPRoute | v1.0 (2023-10) | host, path, 헤더, 쿼리, 메서드 |
+| GRPCRoute | v1.1 (2024-05) | gRPC 서비스와 메서드 이름 |
+| TLSRoute | v1.5 (2026-02) | TLS 핸드셰이크의 SNI |
+| TCPRoute, UDPRoute | v1.6 (2026-06) | 리스너의 프로토콜과 포트만 |
+
+TCPRoute와 UDPRoute가 표준이 되면서 DB, DNS, 게임 서버처럼 HTTP가 아닌 트래픽도 같은 Gateway에 붙일 수 있게 됐다. 그 전에는 LoadBalancer Service를 따로 만들거나 구현체 전용 CRD를 써야 했다. 실습에서 같은 Gateway에 HTTPS 리스너와 TCP 리스너를 함께 두었다.
+
+```yaml
+# infra 네임스페이스의 Gateway (플랫폼 팀)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: public, namespace: infra }
+spec:
+  gatewayClassName: example
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs: [{ name: wildcard-example-com }]
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector: { matchLabels: { gateway-access: "true" } }
+    - name: postgres
+      protocol: TCP
+      port: 5432
+      allowedRoutes:
+        kinds: [{ kind: TCPRoute }]      # 이 리스너에는 TCPRoute만
+        namespaces: { from: Same }       # 그리고 infra 네임스페이스 것만
+---
+# 같은 Gateway의 postgres 리스너에 붙는 TCPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata: { name: orders-db, namespace: infra }
+spec:
+  parentRefs: [{ name: public, sectionName: postgres }]
+  rules:
+    - backendRefs: [{ name: orders-postgres, port: 5432 }]
+```
+
+TCPRoute에는 matches가 없다. 바이트 흐름만 보니 고를 근거가 포트뿐이다. 그래서 TCP 서비스마다 리스너 포트를 하나씩 쓴다. 같은 포트에서 여러 TLS 서비스를 나누고 싶으면 SNI를 보는 TLSRoute를 쓴다. `sectionName`을 빼면 그 Gateway의 모든 TCP 리스너에 붙는다는 것도 기억해 둔다. 리스너를 나중에 추가했을 때 의도하지 않은 포트에 DB가 열릴 수 있다.
+
+## API 서버가 먼저 거절하는 것들
+
+Gateway API CRD에는 OpenAPI 패턴과 CEL 검증 규칙이 촘촘히 들어 있어서, 잘못된 객체는 컨트롤러까지 가기 전에 API 서버가 거절한다. Ingress는 대부분 받아 주고 컨트롤러 로그에서야 문제가 드러났던 것과 다르다. 흔한 실수를 몰아넣은 객체 두 개를 넣어 봤다.
+
+```bash
+# 대문자 호스트, / 없는 경로, 상한을 넘는 가중치를 넣은 HTTPRoute
+kubectl apply -f bad-route.yaml
+
+# 이름이 겹치고, 포트·프로토콜·호스트가 겹치고, 인증서 없는 HTTPS 리스너가 있는 Gateway
+kubectl apply -f bad-gateway.yaml
+```
+
+```text
+The HTTPRoute "bad" is invalid: 
+* spec.rules[0].backendRefs[0].weight: Invalid value: 2000000: spec.rules[0].backendRefs[0].weight in body should be less than or equal to 1000000
+* spec.hostnames[1]: Invalid value: "Shop.Example.com": spec.hostnames[1] in body should match '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+* spec.rules[0].matches[0].path: Invalid value: value must be an absolute path and start with '/' when type one of ['Exact', 'PathPrefix']
+The Gateway "bad" is invalid: 
+* spec.listeners[1]: Duplicate value: {"name":"web"}
+* spec.listeners: Invalid value: Listener name must be unique within the Gateway
+* spec.listeners: Invalid value: Combination of port, protocol and hostname must be unique for each listener
+* spec.listeners[3].tls: Invalid value: "object": no such key: certificateRefs evaluating rule: certificateRefs or options must be specified when mode is Terminate
+```
+
+호스트 이름은 소문자만 받는다. Ingress 매니페스트를 옮기다 보면 대문자가 섞인 호스트가 종종 나온다. 반대로 API 서버가 못 거르는 것도 있다. 스펙 주석에는 hostnames에 IP를 쓸 수 없다고 적혀 있지만, `hostnames: ["10.0.0.1"]`인 HTTPRoute는 그대로 만들어졌다. 패턴이 숫자로 된 이름을 막지 못하기 때문이다. 이런 건 구현체가 status로 거절한다. 그래서 다음 절의 status가 중요하다.
+
+## 붙었는지는 status가 말한다
+
+Gateway API에서 가장 자주 받는 질문은 "만들었는데 왜 안 되나"다. 답은 거의 항상 객체의 status에 있다. 컨트롤러가 없는 실습 클러스터에서 GatewayClass와 Gateway를 만들고 바로 봤다.
+
+```bash
+kubectl get gatewayclass,gateway -A
+kubectl get gateway public -n infra -o yaml | sed -n '/^status:/,$p'
+```
+
+```text
+NAME                                             CONTROLLER                       ACCEPTED   AGE
+gatewayclass.gateway.networking.k8s.io/example   example.com/gateway-controller   Unknown    0s
+
+NAMESPACE   NAME                                       CLASS     ADDRESS   PROGRAMMED   AGE
+infra       gateway.gateway.networking.k8s.io/public   example             Unknown      0s
+status:
+  conditions:
+  - lastTransitionTime: "1970-01-01T00:00:00Z"
+    message: Waiting for controller
+    reason: Pending
+    status: Unknown
+    type: Accepted
+  - lastTransitionTime: "1970-01-01T00:00:00Z"
+    message: Waiting for controller
+    reason: Pending
+    status: Unknown
+    type: Programmed
+```
+
+`Waiting for controller`, `1970-01-01`은 CRD에 박힌 기본값이다. 이 객체를 맡은 컨트롤러가 아직 한 번도 손대지 않았다는 뜻이다. 실제 클러스터에서 이 상태가 계속되면 원인은 대개 둘이다. GatewayClass의 `controllerName`이 설치한 구현체의 이름과 다르거나(오타, 다른 구현체 문서의 예제를 복사), 구현체가 떠 있지 않다. HTTPRoute는 더 조용하다. 실습의 `checkout` 라우트는 status 칸 자체가 없었다. 라우트의 status는 붙으려는 Gateway의 컨트롤러가 `status.parents`에 Gateway별로 한 줄씩 적기 때문에, 아무도 받아 주지 않으면 비어 있다.
+
+아래 그림에서 다음을 누르면 컨트롤러가 객체를 받아들이고 status를 채우는 순서가 보인다.
+
+<SequenceDiagram
+  caption="구현체 컨트롤러는 자기 controllerName의 GatewayClass부터 받아들이고, 프록시를 설정한 뒤 status를 채운다"
+  actors={[
+    { id: "user", label: "플랫폼 팀" },
+    { id: "api", label: "API 서버" },
+    { id: "ctl", label: "구현체 컨트롤러" },
+    { id: "px", label: "프록시·LB" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "apply Gateway", title: "객체가 저장된다", detail: "CEL 검증을 통과하면 저장되고 status는 기본값(Pending, Waiting for controller)이다.", payload: "PROGRAMMED   Unknown" },
+    { from: "api", to: "ctl", label: "watch", title: "자기 몫인지 본다", detail: "컨트롤러는 gatewayClassName이 가리키는 GatewayClass의 controllerName이 자기 이름일 때만 맡는다. 다르면 아무것도 쓰지 않아 Unknown이 계속된다." },
+    { from: "ctl", to: "px", label: "리스너 설정", title: "데이터 플레인을 만든다", detail: "리스너마다 포트를 열고 인증서를 붙인다. 클라우드 구현체라면 로드 밸런서를 만든다. 포트가 겹치거나 인증서를 못 찾으면 리스너 단위로 실패를 기록한다." },
+    { from: "ctl", to: "api", label: "status 갱신", title: "Gateway status를 쓴다", detail: "Accepted, Programmed 조건과 할당된 주소, 리스너마다 붙은 라우트 수(attachedRoutes)를 적는다.", payload: "addresses: [{ value: 203.0.113.10 }]\nlisteners[https].attachedRoutes: 2" },
+    { from: "ctl", to: "api", label: "route parents", title: "라우트마다 결과를 적는다", detail: "HTTPRoute의 status.parents에 이 Gateway 이름과 Accepted, ResolvedRefs 조건을 남긴다. 실패하면 reason에 이유가 있다." },
+  ]}
+/>
+
+컨트롤러가 채운 뒤의 모양은 이렇다. 아래는 v1.6.3 API 정의의 조건 이름과 reason으로 만든 예시다.
+
+```text
+# 예시: ReferenceGrant가 없을 때 HTTPRoute의 status
+status:
+  parents:
+  - parentRef: { name: public, namespace: infra, sectionName: https }
+    controllerName: example.com/gateway-controller
+    conditions:
+    - type: Accepted
+      status: "True"
+      reason: Accepted
+    - type: ResolvedRefs
+      status: "False"
+      reason: RefNotPermitted
+      message: backendRef pay-api in namespace payments is not permitted by any ReferenceGrant
+```
+
+조건별로 볼 곳이 정해져 있다. 라우트의 `Accepted`가 False면 라우트가 리스너에 붙지 못한 것이고 reason이 이유를 말한다. `NotAllowedByListeners`는 리스너의 allowedRoutes(종류나 네임스페이스)가 막은 것, `NoMatchingListenerHostname`은 호스트 이름이 겹치지 않는 것, `NoMatchingParent`는 parentRef의 이름·sectionName·port에 맞는 리스너가 없는 것이다. `ResolvedRefs`가 False면 붙기는 했지만 백엔드를 못 쓰는 것이다. `RefNotPermitted`(ReferenceGrant 없음), `BackendNotFound`(Service 없음), `InvalidKind`(지원하지 않는 종류)가 있다. Gateway 쪽에서는 리스너마다 `Conflicted`(HostnameConflict, ProtocolConflict)와 `ResolvedRefs`(InvalidCertificateRef)를 본다.
+
+### 라우트가 리스너에 붙는 순서
+
+컨트롤러가 라우트 하나를 리스너에 붙일지 판단하는 순서를 따라가 보자. sandbox 네임스페이스의 라우트가 `public` Gateway의 https 리스너에 붙으려 한다.
+
+<AlgoTrace
+  caption="라우트 하나가 리스너에 붙기까지 거치는 검사. 하나라도 걸리면 Accepted가 False다"
+  memoryLabel="판정"
+  cells={["parentRef", "sectionName", "kinds", "namespaces", "hostnames"]}
+  steps={[
+    { pointer: 0, memory: ["infra/public 있음"], caption: "parentRef가 가리키는 Gateway infra/public이 있는지 본다. 없거나 다른 컨트롤러 것이면 이 컨트롤러는 아무것도 쓰지 않는다." },
+    { pointer: 1, memory: ["infra/public", "리스너 https"], caption: "sectionName: https인 리스너를 고른다. 이름이 틀리면 NoMatchingParent다. 비워 두면 모든 리스너를 후보로 본다." },
+    { pointer: 2, memory: ["https", "HTTPRoute 허용"], caption: "리스너의 allowedRoutes.kinds를 본다. 비어 있으면 프로토콜에 맞는 기본 종류(HTTPS면 HTTPRoute)를 받는다. postgres 리스너였다면 TCPRoute만 받는다." },
+    { pointer: 3, memory: ["https", "sandbox에 라벨 없음", "NotAllowedByListeners"], caption: "from: Selector는 gateway-access: true 라벨을 요구한다. sandbox 네임스페이스에는 없어서 여기서 거절된다." },
+    { found: [4], memory: ["shop 라우트", "shop.example.com ⊂ *.example.com", "Accepted"], caption: "라벨이 있는 shop 네임스페이스의 라우트라면 마지막으로 호스트 이름 교집합을 본다. *.example.com은 shop.example.com과 a.b.example.com은 받고 example.com은 받지 않는다." },
+  ]}
+/>
+
+## 가중치로 나눌 때 비는 몫
+
+가중치 기본은 [게이트웨이 글](/posts/gateway#헤더로-고르고-비율로-나누기)에 있다. 운영에서 문제가 되는 건 백엔드 일부가 잘못됐을 때다. 스펙(`kubectl explain`으로 그대로 볼 수 있다)은 이렇게 정한다.
+
+```bash
+kubectl explain httproute.spec.rules.backendRefs.weight
+```
+
+```text
+GROUP:      gateway.networking.k8s.io
+KIND:       HTTPRoute
+VERSION:    v1
+
+FIELD: weight <integer>
+
+
+DESCRIPTION:
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+    
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+```
+
+그리고 backendRefs 필드의 설명에는 실패 규칙이 있다. 잘못된 백엔드(없는 Service, 허락되지 않은 참조)로 갈 몫은 500을 받는다. 둘이 같은 가중치인데 하나가 잘못됐으면 요청의 50%가 500이다. 엔드포인트가 하나도 Ready가 아닌 Service로 갈 몫은 503을 주는 것이 권장이다. 카나리 대상인 새 Service 이름에 오타가 나면 5%짜리 카나리가 "에러율 5%"로 보이는 이유다. 비율을 직접 계산해 보자.
+
+<CodePlayground
+  caption="HTTPRoute 규칙 하나에서 요청이 어디로, 몇 %씩 가나"
+  functionName="split"
+  initialCode={`// backends: [{ name: "api", weight: 95, valid: true, ready: 3 }, ...]
+//   weight가 없으면 1, valid=false면 그 몫은 "500", ready=0이면 "503"
+// 반환: { 목적지: 비율 } (소수 셋째 자리 반올림, 0인 항목은 넣지 않는다)
+function split(backends) {
+  return {};
+}`}
+  solution={`function split(backends) {
+  const w = (b) => (b.weight === undefined ? 1 : b.weight);
+  const total = backends.reduce((s, b) => s + w(b), 0);
+  const out = {};
+  if (total === 0) return out;
+  for (const b of backends) {
+    if (w(b) === 0) continue;
+    const key = !b.valid ? "500" : b.ready === 0 ? "503" : b.name;
+    out[key] = (out[key] || 0) + w(b) / total;
+  }
+  for (const k of Object.keys(out)) out[k] = Math.round(out[k] * 1000) / 1000;
+  return out;
+}`}
+  tests={[
+    { label: "95:5 카나리", args: [[{ name: "pay-api", weight: 95, valid: true, ready: 3 }, { name: "pay-api-next", weight: 5, valid: true, ready: 1 }]], expected: { "pay-api": 0.95, "pay-api-next": 0.05 } },
+    { label: "합이 100이 아니어도 된다", args: [[{ name: "a", weight: 9, valid: true, ready: 2 }, { name: "b", weight: 1, valid: true, ready: 2 }]], expected: { a: 0.9, b: 0.1 } },
+    { label: "카나리 Service 이름 오타", args: [[{ name: "pay-api", weight: 95, valid: true, ready: 3 }, { name: "pay-api-nxt", weight: 5, valid: false, ready: 0 }]], expected: { "pay-api": 0.95, "500": 0.05 } },
+    { label: "새 버전 Pod가 아직 Ready 아님", args: [[{ name: "v1", weight: 3, valid: true, ready: 2 }, { name: "v2", weight: 1, valid: true, ready: 0 }]], expected: { v1: 0.75, "503": 0.25 } },
+    { label: "weight 생략은 1", args: [[{ name: "a", valid: true, ready: 1 }, { name: "b", valid: true, ready: 1 }, { name: "c", weight: 0, valid: true, ready: 1 }]], expected: { a: 0.5, b: 0.5 } },
+  ]}
+/>
+
+가중치 분배는 대개 요청 단위라서, 같은 사용자가 두 버전을 오갈 수 있다. 그리고 비율은 구현체의 인스턴스마다 따로 계산된다. 프록시가 여러 대면 요청이 적을 때 실제 비율이 꽤 흔들린다. 하루 요청이 몇백 개인 서비스에 1% 카나리를 걸면 하루 종일 새 버전이 한 번도 안 불릴 수도 있다.
+
+## ReferenceGrant가 막는 것
+
+ReferenceGrant의 문법은 [게이트웨이 글](/posts/gateway#네임스페이스를-넘어-참조하기)에 있다. 여기서는 왜 "참조당하는 쪽"이 허락하게 만들었는지를 본다. 라우트가 아무 네임스페이스의 Service나 가리킬 수 있다면, 라우트를 만들 권한만 있는 사람이 남의 백엔드로 트래픽을 끌어가거나 남의 내부 서비스를 공용 Gateway에 노출할 수 있다. Gateway가 남의 네임스페이스의 TLS Secret을 가리킬 수 있다면 인증서와 개인 키를 빌려 쓰는 셈이 된다. 권한 있는 대리인(컨트롤러)을 속여 권한 없는 일을 시키는 혼동된 대리인(confused deputy) 문제다.
+
+실습 클러스터에는 shop 네임스페이스의 HTTPRoute가 payments의 `pay-api`로 보내는 규칙과, payments에 그걸 허락하는 ReferenceGrant를 만들었다.
+
+```yaml
+# payments 네임스페이스가 shop의 HTTPRoute에게 자기 Service를 허락한다
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata: { name: from-shop-routes, namespace: payments }
+spec:
+  from: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, namespace: shop }]
+  to: [{ group: "", kind: Service }]
+```
+
+```bash
+kubectl get httproute,grpcroute,tcproute,referencegrant -A
+```
+
+```text
+NAMESPACE   NAME                                           HOSTNAMES              AGE
+shop        httproute.gateway.networking.k8s.io/checkout   ["shop.example.com"]   0s
+
+NAMESPACE   NAME                                            HOSTNAMES              AGE
+shop        grpcroute.gateway.networking.k8s.io/inventory   ["grpc.example.com"]   0s
+
+NAMESPACE   NAME                                           AGE
+infra       tcproute.gateway.networking.k8s.io/orders-db   0s
+
+NAMESPACE   NAME                                                        AGE
+payments    referencegrant.gateway.networking.k8s.io/from-shop-routes   0s
+```
+
+ReferenceGrant는 v1.5에서 `v1`으로 표준이 됐다. v1.6.3 CRD는 `v1`과 `v1beta1`을 모두 제공하고 저장은 아직 `v1beta1`로 한다. 아래 그림에서 다음을 누르면 허락이 있는 길과 없는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="네임스페이스를 넘는 참조는 참조당하는 쪽의 ReferenceGrant가 있어야 열린다"
+  zones={[
+    { id: "infra", label: "ns infra", x: 6, y: 6, w: 388, h: 92, tone: "edge" },
+    { id: "shop", label: "ns shop", x: 6, y: 112, w: 186, h: 100, tone: "private" },
+    { id: "sandbox", label: "ns sandbox", x: 208, y: 112, w: 186, h: 100, tone: "neutral" },
+    { id: "pay", label: "ns payments", x: 6, y: 226, w: 388, h: 98, tone: "public" },
+  ]}
+  nodes={[
+    { id: "user", label: "client", sub: "인터넷", x: 66, y: 56, icon: "client" },
+    { id: "gw", label: "public", sub: "Gateway :443", x: 300, y: 56, icon: "gateway", w: 120 },
+    { id: "r1", label: "checkout", sub: "HTTPRoute", x: 99, y: 166, icon: "router" },
+    { id: "r2", label: "steal", sub: "HTTPRoute", x: 301, y: 166, icon: "router" },
+    { id: "grant", label: "RefGrant", sub: "from shop", x: 99, y: 280, icon: "lock" },
+    { id: "svc", label: "pay-api", sub: "Service", x: 301, y: 280, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "gw" },
+    { from: "gw", to: "r1", dashed: true },
+    { from: "gw", to: "r2", dashed: true },
+    { from: "r1", to: "svc", label: "backendRef" },
+    { from: "r2", to: "svc", label: "backendRef" },
+    { from: "grant", to: "svc", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "gw", "r1"], packet: "GET /pay", title: "shop의 라우트에 맞는다", detail: "shop 네임스페이스에는 gateway-access: true 라벨이 있어 라우트가 https 리스너에 붙었다.", payload: "Host: shop.example.com" },
+    { path: ["r1", "svc"], packet: "GET /pay", highlight: ["grant", "pay"], title: "허락된 참조라 간다", detail: "payments의 ReferenceGrant가 shop의 HTTPRoute를 허락한다. ResolvedRefs가 True이고 요청이 pay-api로 간다." },
+    { path: ["gw", "r2"], packet: "attach", blocked: true, highlight: ["sandbox"], title: "sandbox 라우트는 붙지도 못한다", detail: "sandbox 네임스페이스에는 라벨이 없어 allowedRoutes가 막는다. Accepted False, reason NotAllowedByListeners." },
+    { path: ["r2", "svc"], packet: "ref", blocked: true, highlight: ["sandbox"], title: "라벨을 붙여도 백엔드는 못 쓴다", detail: "누가 sandbox에 라벨을 붙여 라우트를 붙였다고 해도, ReferenceGrant의 from에 sandbox가 없다. ResolvedRefs False, RefNotPermitted이고 그 몫의 요청은 500을 받는다." },
+  ]}
+/>
+
+설계할 때 두 가지를 같이 본다. 하나, 네임스페이스에 붙이는 `gateway-access` 같은 라벨이 사실상 권한이 된다. 네임스페이스 라벨을 누구나 고칠 수 있으면 allowedRoutes는 의미가 없으니, 라벨 변경을 RBAC이나 어드미션 정책으로 막는다. 둘, ReferenceGrant의 `to`에 `name`을 적어 Service 하나로 좁힐 수 있다. 네임스페이스 통째로 허락하면 나중에 생긴 내부용 Service까지 열린다.
+
+## ingress-nginx에서 옮기기
+
+일정부터 정리한다. SIG Network와 보안 대응 위원회는 2025년 11월 11일에 은퇴를 발표했고, 2026년 3월 24일에 은퇴했다(1.36 릴리스 노트 기준). 그 뒤로 릴리스, 버그 수정, 보안 패치가 없다. 이미 배포된 컨트롤러는 계속 돌고, Helm 차트와 이미지도 내려받을 수 있다. 바로 그 점이 위험하다. 2026년 1월 운영위원회 성명은 "확인하지 않으면 침해당하기 전까지 영향을 받는지 모를 수 있다"고 썼다. ingress-nginx의 후속으로 만들던 InGate도 함께 은퇴했다. 이름이 비슷한 F5의 NGINX Ingress Controller는 별개 프로젝트다.
+
+옮기는 길은 둘이다. Gateway API 구현체로 가거나, Ingress를 그대로 두고 다른 Ingress 컨트롤러로 바꾼다. 어느 쪽이든 그대로 끼워 넣으면 되는 대체품은 없다.
+
+### 변환 도구가 해 주는 것과 못 해 주는 것
+
+SIG Network의 ingress2gateway가 Ingress와 ingress-nginx 어노테이션을 Gateway API로 옮겨 준다. 2026년 3월 1.0에서 지원 어노테이션이 3개에서 30개 이상으로 늘었다. 소스에서 빌드한 v1.2.0으로 흔한 모양의 Ingress 두 개(본 Ingress와 canary Ingress)를 변환했다.
+
+```bash
+# 클러스터 대신 파일을 읽어 ingress-nginx 리소스만 변환한다
+ingress2gateway print --input-file ingress.yaml --providers ingress-nginx > gateway.yaml
+```
+
+경고가 먼저 나온다.
+
+```text
+┌─ WARN  ────────────────────────────────────────
+│  Unsupported annotation nginx.ingress.kubernetes.io/configuration-snippet
+│  source: INGRESS-NGINX
+│  object: Ingress: shop/shop
+└─
+┌─ WARN  ────────────────────────────────────────
+│  Failed to apply shop.shop.metadata.annotations."nginx.ingress.kubernetes.io/proxy-body-size" from shop/shop: Most Gateway API implementations have reasonable body size and buffering defaults
+│  source: STANDARD_EMITTER
+│  object: HTTPRoute: shop/shop-shop-example-com
+└─
+┌─ WARN  ────────────────────────────────────────
+│  Gateway API does not support configuring URL normalization (RFC 3986, Section 6). Please check if this matters for your use case and consult implementation-specific details.
+│  source: STANDARD_EMITTER
+└─
+```
+
+출력의 HTTPRoute 부분이다.
+
+```text
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  annotations:
+    gateway.networking.k8s.io/generator: ingress2gateway-dev
+  name: shop-shop-example-com
+  namespace: shop
+spec:
+  hostnames:
+  - shop.example.com
+  parentRefs:
+  - name: nginx
+    port: 443
+    sectionName: shop-example-com-https
+  rules:
+  - backendRefs:
+    - name: api
+      port: 8080
+      weight: 90
+    - name: api-next
+      port: 8080
+      weight: 10
+    matches:
+    - path:
+        type: PathPrefix
+        value: /api
+  - backendRefs:
+    - name: web
+      port: 80
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+```
+
+canary Ingress의 `canary-weight: "10"`은 같은 규칙의 90:10 가중치로 합쳐졌고, `ssl-redirect`는 80번 리스너에 붙는 별도 HTTPRoute(`RequestRedirect`, 308)가 됐다. 변환 결과를 실습 API 서버에 `--dry-run=server`로 넣어 보니 세 객체 모두 검증을 통과했다. 반면 `configuration-snippet`은 옮길 곳이 없다는 경고만 남았다. 임의의 nginx 설정을 끼워 넣는 이 어노테이션은 ingress-nginx가 보안 문제로 은퇴하게 된 이유 중 하나이기도 하다. 그 안에서 하던 일(여기서는 응답 헤더 추가)은 HTTPRoute의 `ResponseHeaderModifier` 필터처럼 표준 필드로 하나씩 다시 써야 한다. `proxy-body-size`는 구현체의 정책 CRD에서 찾는다.
+
+### 변환이 맞아도 동작이 바뀌는 곳
+
+더 무서운 건 경고가 안 나오는 차이다. ingress-nginx의 기본 동작 중에는 사람들이 모르고 기대고 있는 것들이 있다. 쿠버네티스 블로그가 2026년 2월에 정리한 다섯 가지 중 두 개를 nginx 1.24로 직접 재현했다. ingress-nginx가 만드는 것과 같은 모양의 location 설정이다.
+
+```text
+# use-regex: "true" + path "/[A-Z]{3}" 일 때 생기는 모양: 대소문자 무시, 앞부분만 맞으면 된다
+location ~* "^/[A-Z]{3}" { proxy_pass http://127.0.0.1:18681; }
+# path "/my-path/" 일 때 생기는 모양
+location /my-path/ { proxy_pass http://127.0.0.1:18681; }
+location / { return 404; }
+```
+
+```bash
+# 경로마다 상태 코드와 리다이렉트 주소, 백엔드가 받은 경로를 본다
+for p in /ABC /uuid /abc/def /AB /my-path /my-path/; do
+  printf '%-10s ' $p
+  curl -s -o body -w '%{http_code} %{redirect_url} ' http://127.0.0.1:18680$p; head -1 body; echo
+done
+```
+
+```text
+/ABC       200  backend got /ABC
+/uuid      200  backend got /uuid
+/abc/def   200  backend got /abc/def
+/AB        404  <html>
+/my-path   301 http://127.0.0.1:18680/my-path/ <html>
+/my-path/  200  backend got /my-path/
+```
+
+"대문자 세 글자" 패턴인데 `/uuid`와 `/abc/def`가 백엔드로 갔다. 정규식이 대소문자를 무시하고 앞부분만 맞으면 통과하기 때문이다. Envoy 계열 Gateway 구현체(Istio, Envoy Gateway, kgateway)의 `RegularExpression`은 대소문자를 구분하는 전체 일치라서, 변환하면 이 요청들이 404가 된다. 그리고 `/my-path`는 nginx가 알아서 `/my-path/`로 301을 보냈다. 표준을 따르는 Gateway 구현체는 이런 리다이렉트를 몰래 만들지 않으니, 끝에 `/` 없이 부르던 클라이언트가 404를 받는다. 옮기기 전에 지금 Ingress의 접근 로그에서 실제로 들어오는 경로를 뽑아, 새 규칙에서도 같은 응답이 나오는지 비교하는 이유다.
+
+### 나란히 두고 조금씩 돌린다
+
+한 번에 바꾸지 않는다. 새 Gateway를 기존 Ingress 컨트롤러 옆에 세우고, 같은 Service를 가리키게 한 뒤, DNS 가중치로 트래픽을 조금씩 옮긴다. 아래 그림에서 단계를 넘겨 보자.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="기존 ingress-nginx와 새 Gateway를 나란히 두고 DNS 가중치로 옮긴다"
+  zones={[
+    { id: "edge", label: "입구", x: 6, y: 96, w: 388, h: 92, tone: "edge" },
+    { id: "app", label: "ns shop", x: 6, y: 202, w: 388, h: 92, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "shop.example.com", x: 90, y: 40, icon: "client", w: 120 },
+    { id: "dns", label: "DNS", sub: "가중치 레코드", x: 300, y: 40, icon: "dns", w: 120 },
+    { id: "old", label: "ingress-nginx", sub: "198.51.100.7", x: 99, y: 146, icon: "lb", w: 120 },
+    { id: "new", label: "Gateway", sub: "203.0.113.10", x: 301, y: 146, icon: "gateway", w: 120 },
+    { id: "api", label: "api", sub: "Service", x: 99, y: 250, icon: "server" },
+    { id: "web", label: "web", sub: "Service", x: 301, y: 250, icon: "server" },
+  ]}
+  links={[
+    { from: "cli", to: "dns", dashed: true },
+    { from: "cli", to: "old" },
+    { from: "cli", to: "new" },
+    { from: "old", to: "api" },
+    { from: "old", to: "web" },
+    { from: "new", to: "api" },
+    { from: "new", to: "web" },
+  ]}
+  steps={[
+    { path: ["cli", "old", "api"], packet: "GET /api", title: "처음에는 전부 기존 입구로", detail: "새 Gateway를 세우고 같은 Service를 가리키는 HTTPRoute를 붙였다. DNS는 아직 기존 주소만 준다. 새 입구는 Host 헤더를 붙여 직접 시험한다.", payload: "curl -H 'Host: shop.example.com' https://203.0.113.10/api --resolve ..." },
+    { path: ["cli", "dns"], packet: "A?", title: "DNS 가중치를 조금 준다", detail: "shop.example.com 레코드에 새 Gateway 주소를 5% 가중치로 더한다. TTL을 미리 60초 정도로 낮춰 두면 되돌릴 때 빨리 반영된다." },
+    { path: ["cli", "new", "web"], packet: "GET /", highlight: ["new"], title: "일부 사용자가 새 입구로 온다", detail: "두 입구의 접근 로그에서 같은 경로의 상태 코드 분포를 비교한다. 404나 301이 한쪽에만 많으면 앞에서 본 동작 차이다." },
+    { path: ["cli", "new", "api"], packet: "GET /api", highlight: ["new"], title: "비율을 올리고 기존 입구를 내린다", detail: "문제가 없으면 25, 50, 100%로 올린다. 기존 레코드를 뺀 뒤에도 TTL과 캐시를 넘길 만큼 기다렸다가 ingress-nginx를 지운다." },
+  ]}
+/>
+
+## Gateway가 붙지 않을 때 보는 순서
+
+현장에서 "Gateway API로 바꿨는데 안 된다"는 말을 들으면 이 순서로 좁힌다.
+
+```bash
+# 1. CRD 버전과 채널 (팀마다 다른 번들을 깔았는지)
+kubectl get crd -o custom-columns='NAME:.metadata.name,BUNDLE:.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version' | grep -E 'NAME|gateway'
+
+# 2. GatewayClass가 받아들여졌는지, controllerName이 구현체와 같은지
+kubectl get gatewayclass -o wide
+
+# 3. Gateway의 Programmed, 주소, 리스너별 붙은 라우트 수
+kubectl get gateway -A
+kubectl get gateway public -n infra -o jsonpath='{range .status.listeners[*]}{.name}{"\t"}{.attachedRoutes}{"\t"}{.conditions[?(@.type=="Programmed")].status}{"\n"}{end}'
+
+# 4. 라우트가 어느 Gateway에 붙었고 왜 안 붙었는지
+kubectl get httproute checkout -n shop -o jsonpath='{range .status.parents[*]}{.parentRef.name}{"\t"}{range .conditions[*]}{.type}={.status}({.reason}) {end}{"\n"}{end}'
+```
+
+1번에서 CRD마다 번들 버전이 다르면 누군가 구현체 차트로 다른 번들을 덮어쓴 것이다. 3번의 `attachedRoutes`가 0이면 라우트 쪽 status를 보고, 라우트에 status가 아예 없으면 parentRef의 이름·네임스페이스 오타이거나 그 Gateway를 맡은 컨트롤러가 없는 것이다. 라우트가 `Accepted=True`, `ResolvedRefs=True`인데 요청이 실패하면 그때부터는 데이터 플레인 문제라서 구현체 프록시의 접근 로그와, [Service 타입 글](/posts/k8s-service-types)에서 본 엔드포인트 확인으로 넘어간다.
+
+## 입구를 바꾸는 일은 설치와 상태 읽기부터
+
+Ingress는 기능이 멈췄고, 그 위에서 가장 많이 쓰이던 ingress-nginx는 은퇴했다. Gateway API는 쿠버네티스와 따로 나오는 CRD 번들이라 플랫폼 팀이 버전과 채널을 정해 한 벌만 설치해야 하고, 번들의 안전장치가 채널 혼용과 되돌리기를 막는다. 잘못된 객체는 API 서버가 CEL로 먼저 거절하고, 나머지는 컨트롤러가 status의 Accepted와 ResolvedRefs, 그 reason으로 알려 준다. 가중치는 잘못된 백엔드의 몫을 500으로, Ready 없는 백엔드의 몫을 503으로 돌려준다. 옮길 때는 변환 도구의 경고보다 경고 없이 바뀌는 동작(정규식, 끝의 슬래시)을 더 조심하고, 두 입구를 나란히 두고 DNS로 조금씩 옮긴다. 이 주제의 다른 글: Ingress 동작은 [Ingress 글](/posts/kubernetes-ingress), 역할 분리와 HTTPRoute 기본은 [게이트웨이 글](/posts/gateway).
+
+## 면접에서 나올 만한 질문
+
+### Ingress가 frozen이라는 건 무슨 뜻인가요? 없어지나요?
+
+없어지지 않는다. Ingress는 GA API라서 계속 지원되고 제거 계획도 없지만, 더는 개발하지 않고 어떤 변경도 하지 않는다. 헤더 매칭, 가중치, TCP 같은 새 기능은 Gateway API에만 들어간다. 그래서 단순한 HTTP 라우팅은 Ingress로 계속 써도 되지만, 새로 설계하거나 컨트롤러를 바꿔야 한다면 Gateway API를 먼저 검토한다.
+
+### Gateway API는 쿠버네티스 버전을 올리면 따라 올라가나요?
+
+아니다. CRD 번들로 따로 릴리스되고 클러스터에 직접 설치한다. 그래서 쿠버네티스 버전, CRD 번들 버전과 채널(standard, experimental), 구현체 버전 세 가지를 맞춰야 한다. 구현체마다 CRD를 따로 설치하면 엉키니 플랫폼 팀이 한 번들을 정해 설치하고, 번들에 든 ValidatingAdmissionPolicy가 standard 위에 experimental을 덮거나 v1.5 이전으로 되돌리는 것을 막는다.
+
+### Gateway를 만들었는데 PROGRAMMED가 계속 Unknown입니다.
+
+그 Gateway를 맡은 컨트롤러가 한 번도 status를 쓰지 않은 상태다. message가 `Waiting for controller`이면 CRD 기본값 그대로다. GatewayClass의 controllerName이 설치한 구현체 이름과 같은지, 구현체 Pod가 떠 있는지, Gateway의 gatewayClassName이 그 GatewayClass를 가리키는지 본다. 컨트롤러가 받았는데 False라면 reason(ListenersNotValid, AddressNotAssigned 등)이 이유를 말한다.
+
+### HTTPRoute가 Gateway에 붙지 않는 이유는 어떻게 찾나요?
+
+라우트의 `status.parents`에서 Gateway별 Accepted와 ResolvedRefs 조건을 본다. Accepted False의 reason이 NotAllowedByListeners면 allowedRoutes의 종류나 네임스페이스 조건, NoMatchingListenerHostname이면 호스트 이름 교집합, NoMatchingParent면 parentRef의 이름이나 sectionName이 문제다. ResolvedRefs False면 붙기는 했고 백엔드 참조가 문제인데, RefNotPermitted는 ReferenceGrant, BackendNotFound는 Service 이름이다. status가 아예 없으면 parentRef 오타나 컨트롤러 부재다.
+
+### ReferenceGrant는 왜 참조당하는 쪽에 만드나요?
+
+자원을 가진 쪽이 공유를 결정해야 혼동된 대리인 문제를 막을 수 있어서다. 라우트를 만들 권한만으로 남의 Service에 트래픽을 끌어가거나 남의 인증서 Secret을 쓸 수 있다면, 컨트롤러가 그 사람 대신 권한 밖의 일을 해 준다. 그래서 다른 네임스페이스의 Service나 Secret을 가리키려면 그 네임스페이스가 from에 허락할 상대를 적은 ReferenceGrant를 둔다. 허락이 없으면 ResolvedRefs가 RefNotPermitted가 되고 그 몫의 요청은 500을 받는다.
+
+### 가중치 카나리에서 새 버전 Service 이름에 오타가 나면 어떻게 되나요?
+
+그 백엔드로 갈 몫만큼 500이 난다. 스펙은 잘못된 backendRef로 갈 요청 비율에 500을 주라고 정하고 있어서, 95:5 카나리면 요청의 5%가 실패한다. Service는 맞는데 Ready인 엔드포인트가 없으면 그 몫에 503이 권장된다. 그래서 카나리 에러율이 가중치와 정확히 같은 숫자로 나오면 새 버전 코드보다 참조와 Ready 상태를 먼저 본다.
+
+### ingress-nginx에서 Gateway API로 옮길 때 가장 조심할 점은요?
+
+변환 도구가 경고 없이 넘기는 동작 차이다. ingress-nginx의 정규식 경로는 대소문자를 무시하고 앞부분만 맞추지만 Envoy 계열 구현체는 대소문자를 구분하는 전체 일치이고, ingress-nginx는 끝에 슬래시가 없는 요청을 알아서 301로 넘기지만 표준 구현체는 그러지 않는다. `configuration-snippet` 같은 어노테이션은 아예 옮길 곳이 없어 표준 필터나 정책 CRD로 다시 써야 한다. 그래서 실제 접근 로그의 경로로 새 입구의 응답을 비교하고, 두 입구를 나란히 둔 채 DNS 가중치로 조금씩 옮긴다.

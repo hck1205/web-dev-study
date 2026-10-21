@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-storageclass-snapshots",
+    title: "StorageClass와 VolumeSnapshot: 디스크를 고르고, 찍고, 되살리기",
+    summary: "만든 뒤 고칠 수 없는 StorageClass를 등급별로 설계하는 법과 기본 class가 둘일 때의 함정을 보고, 실제 CSI 드라이버로 VolumeSnapshot을 찍고 되살린다. 다른 네임스페이스로 넘기는 법, 스냅샷이 백업이 아닌 이유, 1.36에 GA가 된 볼륨 그룹 스냅샷까지 다룬다.",
+    topic: "programming/server-infra/kubernetes/config",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting", "AWS", "Database"],
+    date: "2026-10-22",
+    keywords: ["StorageClass", "VolumeSnapshot", "VolumeGroupSnapshot", "VolumeAttributesClass"],
+  },
+  {
+    slug: "k8s-gateway-api",
+    title: "Gateway API 운영: CRD 채널부터 status 조건, ingress-nginx에서 옮기기까지",
+    summary: "Gateway API를 실제 클러스터에 들여올 때 걸리는 것들을 다룬다. CRD 번들과 채널 관리, API 서버의 CEL 검증, status의 Accepted·ResolvedRefs 읽기, 가중치에서 비는 몫, TCPRoute·GRPCRoute의 성숙도, 은퇴한 ingress-nginx에서 경고 없이 바뀌는 동작까지 본다.",
+    topic: "programming/server-infra/kubernetes/networking",
+    tags: ["Kubernetes", "Gateway", "Ingress", "HTTP", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["TCPRoute", "GRPCRoute", "ingress2gateway", "ListenerSet"],
+  },
+  {
+    slug: "k8s-kube-proxy-modes",
+    title: "kube-proxy 모드: iptables 체인이 nftables 맵으로 바뀌는 이유",
+    summary: "kube-proxy가 Service를 노드의 커널 규칙으로 옮기는 방식을 iptables·nftables·IPVS로 비교한다. 2만 개 규칙에서의 첫 패킷 지연과 갱신 비용을 직접 재 보고, br_netfilter와 UDP conntrack이 모드와 상관없이 일으키는 장애를 재현한다.",
+    topic: "programming/server-infra/kubernetes/networking",
+    tags: ["Kubernetes", "Network", "Linux", "Firewall", "Performance", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["kube-proxy 모드", "nftables 모드", "IPVS 모드", "bridge-nf-call-iptables"],
+  },
+  {
     slug: "k8s-in-place-resize",
     title: "재시작 없는 Pod 리소스 변경: resize 하위 리소스와 resizePolicy",
     summary: "Deployment를 고치면 Pod가 모두 새로 뜨는 문제에서 출발해 1.35에 GA가 된 in-place resize를 resize 하위 리소스로 요청하고, 원하는 값과 실제 값이 갈리는 과정, resizePolicy로 재시작을 고르는 법, 바꿀 수 없는 것들, 스케줄러와 쿼터가 이를 세는 방식을 본다.",

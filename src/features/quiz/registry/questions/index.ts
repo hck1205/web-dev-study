@@ -140,8 +140,10 @@ import { K8S_COREDNS } from "./k8s-coredns";
 import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
 import { K8S_FEATURE_MATURITY } from "./k8s-feature-maturity";
+import { K8S_GATEWAY_API } from "./k8s-gateway-api";
 import { K8S_HPA } from "./k8s-hpa";
 import { K8S_IN_PLACE_RESIZE } from "./k8s-in-place-resize";
+import { K8S_KUBE_PROXY_MODES } from "./k8s-kube-proxy-modes";
 import { K8S_LABELS_SELECTORS } from "./k8s-labels-selectors";
 import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
@@ -162,6 +164,7 @@ import { K8S_SECRET } from "./k8s-secret";
 import { K8S_SECURITY_CONTEXT } from "./k8s-security-context";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
 import { K8S_SERVICEACCOUNT_TOKENS } from "./k8s-serviceaccount-tokens";
+import { K8S_STORAGECLASS_SNAPSHOTS } from "./k8s-storageclass-snapshots";
 import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
@@ -488,8 +491,10 @@ export const QUESTION_SETS = [
   K8S_DEPLOY_PIPELINE_EKS,
   K8S_DEPLOYMENT,
   K8S_FEATURE_MATURITY,
+  K8S_GATEWAY_API,
   K8S_HPA,
   K8S_IN_PLACE_RESIZE,
+  K8S_KUBE_PROXY_MODES,
   K8S_LABELS_SELECTORS,
   K8S_NAMESPACE,
   K8S_NETWORK_POLICY,
@@ -510,6 +515,7 @@ export const QUESTION_SETS = [
   K8S_SECURITY_CONTEXT,
   K8S_SERVICE_TYPES,
   K8S_SERVICEACCOUNT_TOKENS,
+  K8S_STORAGECLASS_SNAPSHOTS,
   K8S_VPA,
   KAFKA_BASICS,
   KUBECONFIG_CONTEXTS,

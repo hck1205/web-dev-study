@@ -375,11 +375,11 @@ spec:
 | 역할 분리 | 인프라 설정과 라우팅이 한 객체에 | 제공자·운영자·개발자별로 나뉨 |
 | 매칭 | host, path | host, path, 헤더, 쿼리, 메서드 |
 | 가중치 분배 | 표준 없음 (어노테이션) | backendRefs의 weight |
-| 프로토콜 | HTTP, HTTPS | HTTP, gRPC 등 (TCP·UDP는 실험 단계) |
+| 프로토콜 | HTTP, HTTPS | HTTP, gRPC, TLS, TCP·UDP (TCP·UDP는 v1.6부터 표준) |
 | 네임스페이스 넘나들기 | 불가 | allowedRoutes, ReferenceGrant |
 | 상태 | 기능 동결 | 계속 확장 중 |
 
-옮기는 작업은 대개 Ingress 하나를 Gateway(입구 부분)와 HTTPRoute(규칙 부분)로 쪼개는 일이다. kubernetes-sigs의 ingress2gateway 도구가 기본 필드와 일부 컨트롤러의 어노테이션을 변환해 준다. 다만 컨트롤러 전용 어노테이션은 대응하는 표준 필드가 없는 것도 많아서, 결국 목록을 뽑아 하나씩 옮길 곳을 정해야 한다. 한동안은 Ingress와 Gateway를 같은 클러스터에 함께 두고, DNS를 조금씩 새 입구로 돌리는 방식이 안전하다.
+옮기는 작업은 대개 Ingress 하나를 Gateway(입구 부분)와 HTTPRoute(규칙 부분)로 쪼개는 일이다. kubernetes-sigs의 ingress2gateway 도구가 기본 필드와 일부 컨트롤러의 어노테이션을 변환해 준다. 다만 컨트롤러 전용 어노테이션은 대응하는 표준 필드가 없는 것도 많아서, 결국 목록을 뽑아 하나씩 옮길 곳을 정해야 한다. 한동안은 Ingress와 Gateway를 같은 클러스터에 함께 두고, DNS를 조금씩 새 입구로 돌리는 방식이 안전하다. CRD 버전과 채널 관리, status 조건 읽기, 변환 도구가 경고 없이 바꾸는 동작은 [Gateway API 운영 글](/posts/k8s-gateway-api)에서 이어진다.
 
 모든 Ingress를 당장 바꿔야 하는 건 아니다. 도메인 하나에 경로 몇 개짜리라면 Ingress로도 충분하다. 다만 커뮤니티 ingress-nginx가 은퇴하면서 어차피 컨트롤러를 바꿔야 하는 팀이 많고, 그 김에 Gateway API로 넘어가는 경우가 늘었다. 여러 팀이 입구를 공유하거나 카나리 배포를 표준 방식으로 하고 싶다면 그 시점이 기회다.
 

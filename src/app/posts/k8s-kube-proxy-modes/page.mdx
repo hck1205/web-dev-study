@@ -1,0 +1,618 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-kube-proxy-modes");
+
+클러스터를 1.35 이상으로 올리면 IPVS 모드로 돌던 kube-proxy가 이 모드는 deprecated라는 경고를 남긴다. 그럼 무엇으로 옮겨야 할까. iptables로 돌아가면 Service가 수만 개일 때 느리다고 들었고, nftables는 이름만 들어 봤다. 모드를 바꾸면 노드의 규칙이 어떻게 바뀌는지, 트래픽은 끊기지 않는지, 바꾼 뒤에 무엇이 달라지는지 알아야 결정할 수 있다.
+
+이 글은 kube-proxy의 세 모드를 비교하고 고르는 데 필요한 내부 동작을 다룬다. 이 주제의 다른 글도 있다. iptables 모드의 `KUBE-SERVICES → KUBE-SVC → KUBE-SEP` 체인과 `statistic` 확률이 엔드포인트를 고르는 원리는 [iptables NAT 글](/posts/iptables-nat#쿠버네티스-service는-nat-규칙-묶음이다)에, ClusterIP·NodePort와 `externalTrafficPolicy`의 Local·Cluster 차이와 클라이언트 IP 보존은 [Service 타입 글](/posts/k8s-service-types#트래픽-정책을-직접-따져-보기)에 있다. 여기서는 그 설명을 반복하지 않고, 같은 Service가 nftables 모드에서는 어떤 모양이 되는지, 규칙 수가 늘면 무엇이 느려지는지, conntrack이 모드와 상관없이 일으키는 문제를 직접 만든 규칙으로 확인한다.
+
+실습 환경은 Ubuntu 24.04 LTS(커널 6.x, `nft` 1.0.9, `iptables` 1.8.10의 nf_tables 백엔드)다. 실제 kube-proxy 대신 kube-proxy v1.37.0 소스의 테스트가 기대하는 규칙과 같은 구조를 손으로 넣었다. 버전 정보는 kubernetes.io 문서 저장소와 1.37 릴리스 기준으로 확인했다.
+
+## kube-proxy는 패킷을 나르지 않고 규칙을 쓴다
+
+이름에 proxy가 들어 있지만 지금의 kube-proxy는 패킷을 한 바이트도 중계하지 않는다. 노드마다 하나씩 떠서 API 서버의 Service와 EndpointSlice를 지켜보다가, 바뀐 내용을 커널의 netfilter 규칙으로 옮겨 적을 뿐이다. 패킷을 실제로 바꾸는 건 커널이다. 그래서 kube-proxy Pod가 죽어도 이미 써 둔 규칙으로 기존 Service는 계속 동작하고, 대신 새 Pod나 사라진 Pod가 규칙에 반영되지 않는다.
+
+모드는 그 규칙을 어떤 커널 API로 쓰느냐의 차이다. `iptables`는 iptables 규칙 목록으로, `nftables`는 nftables 표와 맵으로, `ipvs`는 커널의 L4 로드 밸런서 IPVS에 가상 서버를 등록하는 방식으로 쓴다. 아래 그림에서 다음을 누르면 Pod 하나가 바뀌었을 때 규칙이 고쳐지기까지가 보인다.
+
+<SequenceDiagram
+  caption="Pod가 바뀌면 kube-proxy는 모아 두었다가 한 번에 커널 규칙을 고친다"
+  actors={[
+    { id: "api", label: "API 서버" },
+    { id: "kp", label: "kube-proxy" },
+    { id: "kernel", label: "커널 netfilter" },
+  ]}
+  steps={[
+    { from: "api", to: "kp", label: "EndpointSlice 변경", title: "변경을 지켜본다", detail: "kube-proxy는 Service와 EndpointSlice를 watch한다. Pod가 Ready에서 빠지면 EndpointSlice의 그 엔드포인트가 ready: false로 바뀌고 이벤트가 온다.", payload: "10.244.1.12 ready: true → false" },
+    { from: "kp", to: "kp", label: "minSyncPeriod 대기", title: "잠깐 모은다", detail: "바로 쓰지 않고 minSyncPeriod(기본 1초) 동안 들어온 변경을 모은다. Deployment를 지워 100개가 한꺼번에 빠져도 몇 번의 갱신으로 끝난다." },
+    { from: "kp", to: "kp", label: "원하는 규칙 계산", title: "이번에 쓸 규칙을 만든다", detail: "현재 Service와 엔드포인트로 원하는 규칙 전체를 계산하고, 지난번과 달라진 부분을 고른다." },
+    { from: "kp", to: "kernel", label: "iptables-restore / nft -f", title: "커널에 한 번에 쓴다", detail: "iptables 모드는 iptables-restore로, nftables 모드는 nft 트랜잭션 하나로 쓴다. 쓰는 중간 상태가 패킷에 보이지 않게 원자적으로 바뀐다.", payload: "sync_proxy_rules_duration_seconds 에 걸린 시간이 기록된다" },
+    { from: "kp", to: "kernel", label: "UDP conntrack 정리", title: "오래된 UDP 기억을 지운다", detail: "사라진 엔드포인트로 가는 UDP conntrack 항목을 지운다. 지우지 않으면 규칙이 바뀌어도 예전 Pod로 계속 간다(뒤에서 재현한다)." },
+    { from: "kp", to: "kp", label: "syncPeriod 30s", title: "주기적으로 다시 맞춘다", detail: "변경이 없어도 syncPeriod(기본 30초)마다 규칙을 확인한다. 다른 프로그램이 규칙을 건드렸으면 되돌린다." },
+  ]}
+/>
+
+설정값은 v1.37 소스의 기본값이다. `minSyncPeriod`와 `syncPeriod`는 모드별 섹션(`iptables:`, `nftables:`)에 따로 있다.
+
+```yaml
+# kube-proxy 설정 파일(KubeProxyConfiguration)의 일부
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: nftables          # 비워 두면 1.37 기준 iptables. 앞으로 기본값이 바뀔 예정이라 명시한다
+nftables:
+  minSyncPeriod: 1s     # 변경을 모으는 최소 간격
+  syncPeriod: 30s       # 변경이 없어도 다시 맞추는 주기
+conntrack:
+  maxPerCore: 32768     # 코어당 conntrack 항목 수
+  min: 131072           # 최소 conntrack 항목 수
+```
+
+`minSyncPeriod`를 크게 잡으면 CPU는 덜 쓰지만 Pod가 빠진 뒤 규칙에서 빠지기까지 그만큼 늦어진다. 예전에는 대형 클러스터에서 이 값을 수십 초로 올리는 조언이 흔했는데, 1.28부터 iptables 모드도 바뀐 Service만 다시 쓰도록 바뀌어서 공식 문서는 오래전에 올려 둔 값을 기본값(1초)으로 되돌려 보라고 권한다.
+
+## 실습 노드 하나 만들기
+
+노드 역할을 할 네트워크 네임스페이스 하나에 브리지 `cni0`를 두고, Pod 역할 네임스페이스 넷(web Pod 셋, 클라이언트 하나)을 veth로 꽂았다. [CNI 글](/posts/k8s-cni-pod-network)의 bridge 플러그인이 만드는 모양과 같다. 노드 쪽에는 바깥으로 나가는 기본 경로도 하나 붙였다.
+
+```bash
+# 노드 역할 네임스페이스와 브리지
+sudo ip netns add r6-node
+sudo ip netns exec r6-node ip link add cni0 type bridge
+sudo ip netns exec r6-node ip addr add 10.244.1.1/24 dev cni0
+sudo ip netns exec r6-node ip link set cni0 up
+sudo ip netns exec r6-node sysctl -w net.ipv4.ip_forward=1
+
+# Pod 하나 붙이기 (pa=.11, pb=.12, pc=.13, cli=.20 으로 네 번 반복)
+sudo ip netns add r6-pa
+sudo ip link add v-r6-pa netns r6-node type veth peer name eth0 netns r6-pa
+sudo ip netns exec r6-node ip link set v-r6-pa master cni0 up
+sudo ip netns exec r6-pa ip addr add 10.244.1.11/24 dev eth0
+sudo ip netns exec r6-pa ip link set eth0 up
+sudo ip netns exec r6-pa ip route add default via 10.244.1.1
+
+# 각 web Pod에서 8080을 듣는 작은 HTTP 서버를 띄운다 (응답: "web-pa saw <출발지 IP>")
+sudo ip netns exec r6-pa env POD=web-pa python3 srv.py &
+```
+
+Service는 `default/web`(ClusterIP `10.96.0.10:80` → 세 Pod의 8080)와 엔드포인트가 없는 `default/web-typo`(`10.96.0.20:80`) 둘이다.
+
+## nftables 모드가 쓰는 맵 하나
+
+kube-proxy의 nftables 모드는 `ip kube-proxy`라는 자기 전용 표를 만든다. iptables 모드가 모든 프로그램이 같이 쓰는 `nat` 테이블에 체인을 끼워 넣는 것과 다르다. 아래는 실습 노드에 넣은 규칙 중 Service와 관련된 부분이다(전체 파일은 `nft -f kp.nft`로 한 번에 넣었다).
+
+```bash
+# 표 이름 확인
+sudo ip netns exec r6-node nft list tables
+
+# 모든 Service의 입구 체인과 맵
+sudo ip netns exec r6-node nft list chain ip kube-proxy services
+sudo ip netns exec r6-node nft list map ip kube-proxy service-ips
+
+# web Service 전용 체인
+sudo ip netns exec r6-node nft list chain ip kube-proxy 'service-AXVDYQUX-default/web/tcp/http'
+```
+
+```text
+table ip kube-proxy
+table ip kube-proxy {
+	chain services {
+		ip daddr @cluster-ips ip saddr != 10.244.0.0/16 meta mark set meta mark | 0x00004000 comment "masquerade clusterIP traffic from outside cluster"
+		ip daddr . meta l4proto . th dport vmap @service-ips
+	}
+}
+table ip kube-proxy {
+	map service-ips {
+		type ipv4_addr . inet_proto . inet_service : verdict
+		comment "ClusterIP, ExternalIP and LoadBalancer IP traffic"
+		elements = { 10.96.0.10 . tcp . 80 : goto service-AXVDYQUX-default/web/tcp/http }
+	}
+}
+table ip kube-proxy {
+	chain service-AXVDYQUX-default/web/tcp/http {
+		meta l4proto tcp dnat ip to numgen random mod 3 map { 0 : 10.244.1.11 . 8080, 1 : 10.244.1.12 . 8080, 2 : 10.244.1.13 . 8080 }
+	}
+}
+```
+
+`services` 체인의 둘째 줄 하나가 iptables 모드의 `KUBE-SERVICES` 체인 전체를 대신한다. 아래에서 그 줄을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="모든 Service를 맵 조회 한 번으로 고르는 규칙"
+  base="ip daddr"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: ". meta l4proto", display: ". meta l4proto", title: "프로토콜을 붙인다", description: "목적지 주소 뒤에 L4 프로토콜(tcp, udp, sctp)을 이어 붙인다. 같은 IP와 포트라도 TCP와 UDP는 다른 Service 포트다." },
+    { key: ". th dport", display: ". th dport", title: "포트를 붙인다", description: "th는 transport header다. 목적지 포트까지 이어 붙여 (주소, 프로토콜, 포트) 세 칸짜리 열쇠가 된다.", code: "10.96.0.10 . tcp . 80" },
+    { key: "vmap", display: "vmap", title: "판정이 들어 있는 맵", description: "verdict map. 열쇠로 찾은 값이 accept, drop 같은 판정이나 goto 체인이다. 해시로 찾으니 원소가 2만 개여도 한 번에 찾는다." },
+    { key: "@service-ips", display: "@service-ips", title: "kube-proxy가 고치는 곳", description: "Service가 생기거나 사라지면 kube-proxy는 이 맵의 원소 하나만 넣고 뺀다. 규칙 목록 전체를 다시 쓰지 않는다.", code: "add element ip kube-proxy service-ips { 10.96.0.10 . tcp . 80 : goto service-...-default/web/tcp/http }" },
+  ]}
+/>
+
+Service 체인 안에서 엔드포인트를 고르는 방식도 다르다. iptables 모드는 규칙마다 1/3, 1/2, 나머지 순서로 확률을 걸어 차례로 검사하지만, nftables 모드는 `numgen random mod 3`으로 0~2 중 하나를 한 번 뽑고 그 번호로 DNAT할 주소를 맵에서 꺼낸다. 엔드포인트가 몇 개든 난수 한 번, 맵 조회 한 번이다. 클라이언트 Pod에서 300번 요청해 확인했다.
+
+```bash
+# 클라이언트 Pod에서 ClusterIP로 300번 요청하고 응답한 Pod별로 센다
+for i in $(seq 300); do sudo ip netns exec r6-cli curl -s http://10.96.0.10/; done | sort | uniq -c
+
+# 방금 연결 하나의 conntrack 항목
+sudo ip netns exec r6-node conntrack -L -p tcp --orig-dst 10.96.0.10
+```
+
+```text
+     99 web-pa saw 10.244.1.20
+    105 web-pb saw 10.244.1.20
+     96 web-pc saw 10.244.1.20
+tcp      6 119 TIME_WAIT src=10.244.1.20 dst=10.96.0.10 sport=56414 dport=80 src=10.244.1.12 dst=10.244.1.20 sport=8080 dport=56414 [ASSURED] mark=0 use=1
+conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.
+```
+
+셋으로 고르게 갈렸고, Pod들은 진짜 클라이언트 IP `10.244.1.20`을 봤다. conntrack 항목의 앞쪽 절반은 클라이언트가 보낸 그대로(`dst=10.96.0.10 dport=80`), 뒤쪽 절반은 돌아올 응답의 모양(`src=10.244.1.12 sport=8080`)이다. 이 항목이 있는 동안 같은 연결의 패킷은 규칙을 다시 타지 않는다. 아래 그림에서 다음을 누르면 SYN 하나가 지나는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="ClusterIP로 보낸 SYN은 노드의 nftables 표에서 Pod 주소로 바뀐다"
+  zones={[
+    { id: "node", label: "r6-node 10.244.1.0/24", x: 6, y: 6, w: 388, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "10.244.1.20", x: 200, y: 58, icon: "client" },
+    { id: "br", label: "cni0", sub: "10.244.1.1", x: 90, y: 150, icon: "switch" },
+    { id: "nf", label: "kube-proxy", sub: "nft 표", x: 300, y: 150, icon: "firewall" },
+    { id: "pa", label: "web-pa", sub: "10.244.1.11", x: 75, y: 250, icon: "container" },
+    { id: "pb", label: "web-pb", sub: "10.244.1.12", x: 200, y: 250, icon: "container" },
+    { id: "pc", label: "web-pc", sub: "10.244.1.13", x: 325, y: 250, icon: "container" },
+  ]}
+  links={[
+    { from: "cli", to: "br" },
+    { from: "br", to: "nf", label: "L3" },
+    { from: "br", to: "pa" },
+    { from: "br", to: "pb" },
+    { from: "br", to: "pc" },
+  ]}
+  steps={[
+    { path: ["cli", "br", "nf"], packet: "SYN", title: "VIP로 보낸다", detail: "10.96.0.10은 브리지에 없는 주소라 기본 게이트웨이 10.244.1.1, 곧 노드의 L3로 넘어온다. 여기서 prerouting 훅의 nat-prerouting 체인이 services로 점프한다.", payload: "10.244.1.20:56414 → 10.96.0.10:80" },
+    { path: ["nf"], packet: "vmap", title: "맵에서 한 번에 찾는다", detail: "(10.96.0.10, tcp, 80)을 service-ips 맵에서 찾아 web Service 체인으로 간다. numgen random mod 3이 1을 뽑았고 맵에서 10.244.1.12:8080을 꺼내 DNAT한다.", payload: "dst 10.96.0.10:80 → 10.244.1.12:8080" },
+    { path: ["nf", "br", "pb"], packet: "SYN", title: "이제 평범한 Pod 사이 패킷이다", detail: "목적지가 Pod IP가 됐으니 브리지로 다시 내려가 web-pb에 닿는다. conntrack이 이 변환을 기억한다." },
+    { path: ["pb", "br", "nf", "cli"], packet: "SYN-ACK", title: "응답은 되돌려 적힌다", detail: "응답의 출발지 10.244.1.12:8080을 conntrack이 10.96.0.10:80으로 되돌린다. 클라이언트는 VIP와 대화했다고 믿는다. 같은 브리지 안의 응답이 이 과정을 거치려면 조건이 하나 더 필요하다(다음 절)." },
+  ]}
+/>
+
+### 없는 포트, 빈 Service, 할당되지 않은 주소
+
+nftables 모드는 iptables 모드보다 실패를 분명하게 돌려준다. 같은 노드에서 세 가지를 시험했다.
+
+```bash
+# 엔드포인트가 없는 Service
+sudo ip netns exec r6-cli curl -sS -m 3 http://10.96.0.20/
+# 있는 ClusterIP의 없는 포트
+sudo ip netns exec r6-cli curl -sS -m 3 http://10.96.0.10:81/
+# Service CIDR 안이지만 아무 Service에도 할당되지 않은 주소
+sudo ip netns exec r6-cli curl -sS -m 3 http://10.96.0.99/
+# ClusterIP로 ping
+sudo ip netns exec r6-cli ping -c 2 -W 1 10.96.0.10
+```
+
+```text
+curl: (7) Failed to connect to 10.96.0.20 port 80 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 10.96.0.10 port 81 after 0 ms: Couldn't connect to server
+curl: (28) Connection timed out after 3001 milliseconds
+PING 10.96.0.10 (10.96.0.10) 56(84) bytes of data.
+From 10.244.1.1 icmp_seq=1 Destination Port Unreachable
+From 10.244.1.1 icmp_seq=2 Destination Port Unreachable
+```
+
+규칙 쪽에서 보면 이렇다.
+
+```text
+table ip kube-proxy {
+	chain cluster-ips-check {
+		ip daddr @cluster-ips reject comment "Reject traffic to invalid ports of ClusterIPs"
+		ip daddr 10.96.0.0/16 drop comment "Drop traffic to unallocated ClusterIPs"
+	}
+}
+table ip kube-proxy {
+	map no-endpoint-services {
+		type ipv4_addr . inet_proto . inet_service : verdict
+		comment "vmap to drop or reject packets to services with no endpoints"
+		elements = { 10.96.0.20 . tcp . 80 comment "default/web-typo:http" : goto reject-chain }
+	}
+}
+```
+
+엔드포인트가 없는 Service는 `no-endpoint-services` 맵이 거절한다(iptables 모드의 `REJECT ... has no endpoints`와 같은 증상). 다른 점은 아래 두 줄이다. 살아 있는 ClusterIP의 엉뚱한 포트나 ICMP는 바로 거절되고, Service CIDR 안의 빈 주소는 조용히 버려진다. iptables 모드에서는 이런 패킷이 아무 규칙에도 걸리지 않고 노드의 기본 경로로 나가 버린다. [Service 타입 글](/posts/k8s-service-types#clusterip-어느-장치에도-없는-주소)에서 ping이 아무 답 없이 100% 손실로 끝난 것이 그 경우다. 모드를 바꾼 뒤 "ClusterIP ping이 이제 Port Unreachable을 준다"는 차이를 보고 놀랄 필요는 없다.
+
+## 브리지를 지나는 응답도 netfilter를 거쳐야 한다
+
+앞 그림의 마지막 단계에는 숨은 조건이 있다. 클라이언트와 web Pod가 같은 브리지에 붙어 있으면, Pod의 응답은 노드의 L3를 거치지 않고 브리지 안에서 바로 클라이언트로 간다. 그러면 conntrack이 출발지를 VIP로 되돌릴 기회가 없다. 리눅스는 이 문제를 `br_netfilter` 모듈로 푼다. `net.bridge.bridge-nf-call-iptables=1`이면 브리지를 지나는 IPv4 패킷도 netfilter 훅을 탄다. 이름에 iptables가 들어 있지만 nftables 규칙도 같은 훅에서 돈다. 실습 노드에서 이 값을 0으로 바꾸고 클라이언트 쪽에서 패킷을 잡았다.
+
+```bash
+# 브리지 패킷이 netfilter를 건너뛰게 한다 (실습용, 실제 노드에서는 하지 않는다)
+sudo ip netns exec r6-node sysctl -w net.bridge.bridge-nf-call-iptables=0
+
+# 클라이언트 Pod에서 패킷을 보면서 요청
+sudo ip netns exec r6-cli tcpdump -nn -i eth0 -c 4 tcp &
+sudo ip netns exec r6-cli curl -s -m 2 http://10.96.0.10/
+```
+
+```text
+net.bridge.bridge-nf-call-iptables = 0
+00:50:17.896282 IP 10.244.1.20.33742 > 10.96.0.10.80: Flags [S], seq 2214409645, win 64240, options [mss 1460,sackOK,TS val 3615033499 ecr 0,nop,wscale 10], length 0
+00:50:17.896624 IP 10.244.1.13.8080 > 10.244.1.20.33742: Flags [S.], seq 3080932961, ack 2214409646, win 65160, options [mss 1460,sackOK,TS val 1068972657 ecr 3615033499,nop,wscale 10], length 0
+00:50:17.896630 IP 10.244.1.20.33742 > 10.244.1.13.8080: Flags [R], seq 2214409646, win 0, length 0
+00:50:18.915396 IP 10.244.1.20.33742 > 10.96.0.10.80: Flags [S], seq 2214409645, win 64240, options [mss 1460,sackOK,TS val 3615034519 ecr 0,nop,wscale 10], length 0
+```
+
+둘째 줄이 문제다. SYN-ACK의 출발지가 `10.96.0.10.80`이 아니라 `10.244.1.13.8080`이다. 클라이언트 커널은 보낸 적 없는 상대에게서 온 SYN-ACK라서 셋째 줄처럼 RST를 보내고, 넷째 줄에서 SYN을 다시 보낸다. curl은 결국 시간 초과로 끝난다. 아래 그림에서 순서대로 보자.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="bridge-nf-call-iptables=0이면 응답이 브리지 안에서 되돌려지지 않고 RST로 끝난다"
+  zones={[
+    { id: "node", label: "r6-node 10.244.1.0/24", x: 6, y: 6, w: 388, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "10.244.1.20", x: 200, y: 58, icon: "client" },
+    { id: "br", label: "cni0", sub: "nf-call=0", x: 90, y: 150, icon: "switch" },
+    { id: "nf", label: "kube-proxy", sub: "nft 표", x: 300, y: 150, icon: "firewall" },
+    { id: "pa", label: "web-pa", sub: "10.244.1.11", x: 75, y: 250, icon: "container" },
+    { id: "pb", label: "web-pb", sub: "10.244.1.12", x: 200, y: 250, icon: "container" },
+    { id: "pc", label: "web-pc", sub: "10.244.1.13", x: 325, y: 250, icon: "container" },
+  ]}
+  links={[
+    { from: "cli", to: "br" },
+    { from: "br", to: "nf", label: "L3" },
+    { from: "br", to: "pa" },
+    { from: "br", to: "pb" },
+    { from: "br", to: "pc" },
+  ]}
+  steps={[
+    { path: ["cli", "br", "nf", "br", "pc"], packet: "SYN", title: "가는 길은 똑같다", detail: "VIP로 가는 SYN은 L3를 지나므로 브리지 설정과 상관없이 DNAT된다. 이번에는 web-pc가 뽑혔다.", payload: "dst 10.96.0.10:80 → 10.244.1.13:8080" },
+    { path: ["pc", "br", "cli"], packet: "SYN-ACK", highlight: ["nf"], title: "응답이 지름길로 간다", detail: "목적지 10.244.1.20은 같은 브리지에 있으니 L2로 바로 간다. netfilter를 타지 않아 출발지가 VIP로 되돌려지지 않는다.", payload: "10.244.1.13.8080 > 10.244.1.20.33742: Flags [S.]" },
+    { path: ["cli", "br", "pc"], packet: "RST", blocked: true, title: "모르는 상대라 끊는다", detail: "클라이언트는 10.96.0.10에 SYN을 보냈는데 10.244.1.13이 답했다. 맞는 소켓이 없으니 RST를 보내고, 1초 뒤 SYN을 다시 보낸다. 사용자에게는 시간 초과로 보인다." },
+  ]}
+/>
+
+현장에서는 이 값이 커널 모듈을 올리지 않은 새 노드 이미지에서 빠진다. kubeadm은 preflight에서 `/proc/sys/net/bridge/bridge-nf-call-iptables`가 없으면 경고를 낸다. 증상이 묘하다. 다른 노드의 Pod로 가는 연결은 응답이 L3를 지나니 멀쩡하고, 같은 노드에 있는 Pod가 뽑힌 연결만 실패한다. Pod 수가 적은 개발 클러스터에서 "가끔 Service가 안 된다"로 나타나는 이유다.
+
+```bash
+# 노드 부팅 때마다 모듈과 sysctl이 올라오게 한다 (Ubuntu 24.04)
+echo br_netfilter | sudo tee /etc/modules-load.d/k8s.conf
+printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.ipv4.ip_forward = 1\n' | sudo tee /etc/sysctl.d/k8s.conf
+sudo modprobe br_netfilter && sudo sysctl --system
+```
+
+### 자기 Service로 돌아오는 연결
+
+같은 브리지 문제의 변형이 하나 더 있다. web-pa가 자기 Service를 불렀는데 자기 자신이 뽑히는 경우다. 패킷이 들어온 브리지 포트로 다시 나가야 해서 브리지 포트에 hairpin 모드가 켜져 있어야 한다. 실습 노드에서 꺼진 채로 30번 불렀다.
+
+```bash
+# web-pa에서 자기 Service로 30번, 응답 코드만 센다 (000은 실패)
+for i in $(seq 30); do sudo ip netns exec r6-pa curl -s -m 1 -o /dev/null -w '%{http_code}\n' http://10.96.0.10/; done | sort | uniq -c
+
+# 브리지 포트에 hairpin을 켜고 다시
+sudo ip netns exec r6-node bridge link set dev v-r6-pa hairpin on
+for i in $(seq 30); do sudo ip netns exec r6-pa curl -s -m 1 http://10.96.0.10/ || echo FAIL; done | sort | uniq -c
+```
+
+```text
+      8 000
+     22 200
+     15 web-pa saw 10.244.1.1
+      8 web-pb saw 10.244.1.11
+      7 web-pc saw 10.244.1.11
+```
+
+대략 셋 중 하나, 자기 자신이 뽑힌 연결만 실패했다. 켠 뒤에는 자기에게 돌아온 연결의 출발지가 `10.244.1.1`(노드 브리지 주소)로 보인다. nftables 모드는 이 경우를 `hairpin-connections` 집합으로 고른다. (Pod IP, Pod IP, tcp, 포트) 원소가 있고, `masquerading` 체인의 `ct status dnat ... @hairpin-connections masquerade` 줄이 출발지를 노드 주소로 바꾼다. iptables 모드의 `KUBE-SEP`마다 붙던 `-s 자기IP -j KUBE-MARK-MASQ` 줄을 집합 하나로 모은 것이다. hairpin 플래그 자체는 kubelet이나 CNI 플러그인(bridge 플러그인의 `hairpinMode: true`)이 켠다.
+
+## 규칙이 2만 개일 때 첫 패킷
+
+iptables 모드의 약점은 규칙을 위에서부터 차례로 검사한다는 데서 온다. Service 포트마다 `KUBE-SERVICES`에 한 줄이 있으니, 목록 끝에 있는 Service로 가는 새 연결은 그 앞의 모든 줄을 지나야 한다. 아래 그림에서 두 방식이 같은 Service를 찾는 과정을 비교해 보자.
+
+<AlgoTrace
+  caption="iptables 모드는 한 줄씩 비교하고, nftables 모드는 맵에서 바로 꺼낸다"
+  memoryLabel="비교한 횟수"
+  cells={["svc0 10.97.0.0", "svc1 10.97.0.1", "…", "svc19999", "web 10.96.0.10"]}
+  steps={[
+    { pointer: 0, memory: ["iptables", "1"], caption: "새 연결의 첫 패킷이 KUBE-SERVICES 첫 줄과 비교된다. 목적지가 10.97.0.0:80이 아니니 다음 줄로." },
+    { pointer: 1, memory: ["iptables", "2"], caption: "둘째 줄도 아니다. 줄마다 주소, 프로토콜, 포트를 비교한다." },
+    { pointer: 2, memory: ["iptables", "…"], caption: "가짜 Service 2만 개가 앞에 있으면 이 비교를 2만 번 한다." },
+    { pointer: 3, memory: ["iptables", "20000"], caption: "마지막 가짜 Service까지 지났다." },
+    { found: [4], memory: ["iptables", "20001"], caption: "2만 1번째 줄에서 web Service가 맞는다. 다음 연결도 처음부터 다시 훑는다." },
+    { found: [4], memory: ["nftables", "1"], caption: "nftables 모드는 (주소, 프로토콜, 포트)를 해시해 service-ips 맵에서 한 번에 찾는다. 원소가 몇 개든 비슷하다." },
+  ]}
+/>
+
+실제로 재 봤다. 같은 노드에 가짜 Service를 0~2만 개 넣고 web Service는 맨 뒤에 둔 뒤, 클라이언트 Pod에서 TCP 연결을 3000번 열어 `connect()`가 끝나는 시간(SYN이 나가고 SYN-ACK가 돌아오기까지)을 쟀다. iptables 쪽은 Service마다 kube-proxy가 쓰는 것처럼 `KUBE-SERVICES`, `KUBE-SVC`, `KUBE-SEP` 규칙 여섯 줄 정도를 만들었고, nftables 쪽은 맵 원소와 체인을 하나씩 만들었다.
+
+```bash
+# 측정 스크립트: 연결 3000번, connect() 시간의 p50과 p90
+sudo ip netns exec r6-cli python3 bench.py 3000
+```
+
+```text
+iptables N=0 connects=3000 p50=14us p90=18us
+nftables N=0 connects=3000 p50=14us p90=34us
+iptables N=1000 connects=3000 p50=21us p90=50us
+nftables N=1000 connects=3000 p50=14us p90=28us
+iptables N=5000 connects=3000 p50=49us p90=106us
+nftables N=5000 connects=3000 p50=14us p90=20us
+iptables N=10000 connects=3000 p50=93us p90=180us
+nftables N=10000 connects=3000 p50=14us p90=17us
+iptables N=20000 connects=3000 p50=294us p90=515us
+nftables N=20000 connects=3000 p50=14us p90=17us
+```
+
+iptables 쪽은 Service 수에 비례해 늘어 2만 개에서 연결 하나에 0.3ms가 더 붙었고, nftables 쪽은 14µs에서 움직이지 않았다. 컨테이너 안 가상 네트워크에서 잰 값이라 절대값보다는 기울기를 봐야 한다. 그리고 이 차이는 새 연결의 첫 패킷에만 붙는다. 이미 맺어진 연결은 conntrack이 기억한 변환을 쓰니 Service 수와 상관없다. 연결을 재사용하는 서비스보다, 요청마다 연결을 새로 여는 서비스에서 크게 느껴진다.
+
+흥미로운 점이 하나 있다. Ubuntu 24.04의 `iptables`는 이름만 iptables이고 실제로는 nf_tables 커널 엔진에 규칙을 쓴다(`iptables -V`가 `(nf_tables)`라고 답한다). 그래도 선형으로 느려졌다. 느린 원인이 엔진이 아니라 규칙을 한 줄씩 늘어놓는 구조라는 뜻이다.
+
+### 규칙을 고치는 비용
+
+규칙 개수가 더 크게 문제 되는 곳은 데이터 경로보다 갱신 쪽이다. 같은 2만 개 상태에서 재 봤다.
+
+```bash
+# iptables: 전체 규칙 12만 줄을 처음부터 넣기
+time sudo ip netns exec r6-node iptables-restore < ipt-20000.txt
+
+# iptables: KUBE-SERVICES 체인 하나(2만 줄)만 다시 쓰기
+time sudo ip netns exec r6-node iptables-restore --noflush < partial.txt
+
+# nftables: 맵 원소 하나 넣기
+time sudo ip netns exec r6-node nft add element ip kube-proxy service-ips '{ 10.98.0.1 . tcp . 80 : goto service-F0000001-fake/svc1/tcp/http }'
+```
+
+```text
+iptables N=20000 restore=2.268105470s rules=120028
+
+real	0m5.066s
+user	0m4.438s
+sys	0m0.577s
+
+real	0m0.055s
+user	0m0.025s
+sys	0m0.029s
+```
+
+전체 넣기가 2.3초, `KUBE-SERVICES` 체인 하나만 바꾸는 데 5초가 걸렸다. `--noflush`는 기존 규칙을 읽어 와 맞춰야 해서 오히려 더 걸렸다. 1.28 이후 iptables 모드도 바뀐 Service의 체인만 다시 쓰지만, `iptables-restore` 형식에서는 Service 하나를 더하려 해도 `KUBE-SERVICES` 체인을 통째로 다시 보내야 한다. 그래서 갱신량이 전체 Service 수에 비례한다. nftables 모드는 바뀐 원소만 보내니 0.055초(대부분 `nft` 프로세스를 띄우는 시간)로 끝났다. 이 시간이 길면 Pod가 사라진 뒤에도 몇 초 동안 규칙에 남아 그 Pod로 연결이 가고, 새 Pod는 Ready가 돼도 한동안 트래픽을 못 받는다. kube-proxy의 `kubeproxy_sync_proxy_rules_duration_seconds` 지표가 이 시간이다.
+
+## IPVS는 왜 밀려났나
+
+IPVS 모드는 정확히 위 두 문제를 풀려고 만들어졌다. 커널 IPVS는 가상 서버를 해시 테이블로 찾고, 서버를 하나씩 더하고 빼는 API를 쓰니 전체를 다시 쓰지 않는다. `rr`, `lc`, `sh` 같은 분산 알고리즘도 고를 수 있었다.
+
+문제는 IPVS가 쿠버네티스 Service 모델과 잘 맞지 않았다는 것이다. 모든 ClusterIP를 `kube-ipvs0`라는 더미 장치에 실제로 붙여야 해서 노드가 그 주소들을 자기 주소로 여기게 되고, 출발지에 따라 엔드포인트가 달라지는 `externalTrafficPolicy: Local` 같은 기능은 IPVS만으로 못 만들어 결국 iptables 규칙과 ipset을 함께 썼다. 그러면서 iptables의 확장 문제도 일부 다시 떠안았다. 일괄 갱신 API가 없어서 변경이 한꺼번에 많으면 오히려 iptables보다 느렸다. 분산 알고리즘도 기대만큼 쓸모가 없었다. kube-proxy는 노드마다 따로 돌아서 `lc`(최소 연결)를 골라도 각 노드가 자기 연결만 셀 뿐이다.
+
+일정은 버전마다 문서를 확인해야 한다. 확인한 내용은 이렇다.
+
+- 1.35: IPVS 모드 deprecated. 켜면 경고를 남긴다.
+- 1.37 문서: 1.40부터 기본으로 꺼지고 `KubeProxyIPVS` 기능 게이트로 다시 켤 수 있으며, 1.43에서 완전히 제거된다고 적혀 있다(이 게이트는 1.37에 deprecated 단계로 생겼다). 그보다 앞서 나온 SIG Network의 블로그 초안은 1.40 제거라고 적고 있어서, 정확한 시점은 쓰는 버전의 릴리스 노트로 다시 확인한다.
+- RHEL 계열은 iptables API 자체를 없애는 방향이라, iptables에 기대는 IPVS 모드도 함께 막힌다.
+
+공식 문서는 IPVS 사용자에게 nftables 모드로 옮기라고 권하고, 커널이 너무 오래돼서 nftables 모드를 못 쓰면 iptables 모드도 고려하라고 한다. iptables 모드 자체가 IPVS가 처음 나왔을 때보다 훨씬 빨라졌기 때문이다.
+
+## nftables 모드로 옮길 때 달라지는 것
+
+nftables 모드는 1.29에 알파로 들어와 1.31에 베타, 1.33에 GA가 됐다. 그런데 1.37까지도 기본값은 iptables다. 호환성 때문에 기본값을 미뤄 두었고, 문서에는 앞으로 기본값이 nftables로 바뀐다고 적혀 있다. 그래서 지금 iptables를 쓰고 있다면 설정에 `mode: iptables`를 명시해 두는 편이 안전하다. 업그레이드하다가 모르는 사이에 모드가 바뀌는 일을 막는다.
+
+옮기는 절차 자체는 단순하다. kube-proxy 설정의 `mode`를 바꾸고 kube-proxy Pod를 다시 띄운다. 노드를 재부팅할 필요는 없다. nftables 모드로 뜬 kube-proxy는 남아 있는 iptables·IPVS 규칙을 지우고, 반대로 되돌리면 nftables 표를 지운다.
+
+```bash
+# 지금 노드의 kube-proxy가 어떤 모드인지 (메트릭 포트의 /proxyMode)
+curl -s http://127.0.0.1:10249/proxyMode
+
+# kubeadm 클러스터라면 설정은 ConfigMap에 있다
+kubectl -n kube-system get configmap kube-proxy -o yaml | grep -n 'mode:'
+
+# 바꾼 뒤 kube-proxy를 다시 띄운다
+kubectl -n kube-system rollout restart daemonset kube-proxy
+
+# 로그 첫 부분에 어떤 Proxier를 골랐는지 남는다 (Using iptables / ipvs / nftables Proxier)
+kubectl -n kube-system logs -l k8s-app=kube-proxy --tail=200 | grep 'Proxier'
+```
+
+동작이 일부러 다르게 바뀐 곳은 미리 확인한다. 공식 문서가 꼽는 차이다.
+
+- NodePort를 받는 주소: iptables 모드는 노드의 모든 로컬 주소에서 받지만, nftables 모드는 기본값이 `--nodeport-addresses primary`라서 노드의 기본 IP에서만 받는다. 보조 IP나 `127.0.0.1`로 NodePort에 붙던 스크립트가 있다면 깨진다. localhost NodePort는 1.37에 알파 게이트 `KubeProxyNFTablesLocalhostNodePorts`로 다시 생겼다. 쓰고 있었는지는 iptables 모드에서 `kubeproxy_iptables_localhost_nodeports_accepted_packets_total`이 0이 아닌지로 본다.
+- 노드 방화벽: iptables 모드는 NodePort마다 들어오는 트래픽을 허용하는 규칙을 덧붙여 과하게 막는 방화벽을 피해 갔다. nftables 모드는 그러지 않으니 nftables 기반 노드 방화벽이 있다면 NodePort 범위(기본 30000~32767)를 직접 열어 둔다.
+- conntrack 우회: 6.1 이전 커널에는 오래 사는 TCP 연결이 `Connection reset by peer`로 끊기는 버그가 있었고, iptables 모드는 conntrack이 INVALID로 본 패킷을 버리는 우회 규칙을 넣었다. nftables 모드는 기본으로 넣지 않는다. `kubeproxy_iptables_ct_state_invalid_dropped_packets_total`이 늘고 있었다면 `--conntrack-tcp-be-liberal`을 켠다.
+- 요구 사항: 커널 5.13 이상, 노드의 `nft` 명령 1.0.0 이상. CNI나 NetworkPolicy 구현이 kube-proxy의 iptables 규칙에 직접 기대고 있지 않은지도 그 프로젝트 문서에서 확인한다.
+
+<Callout kind="warning">
+모드를 바꿔 kube-proxy를 다시 띄우는 동안에도 conntrack에 남은 기존 연결은 계속 흐르지만, 새 규칙이 다 써지기 전의 새 연결은 실패할 수 있다. 한 번에 모든 노드를 바꾸지 말고 노드 몇 개를 골라 DaemonSet의 `updateStrategy.rollingUpdate.maxUnavailable`을 작게 두고 진행한다. 되돌릴 때는 `mode`를 이전 값으로 고치고 다시 rollout restart하면, 새로 뜬 kube-proxy가 nftables 표를 지우고 예전 규칙을 다시 쓴다.
+</Callout>
+
+## conntrack이 기억하는 동안 규칙은 다시 읽히지 않는다
+
+어느 모드든 DNAT 결정은 연결의 첫 패킷에서 한 번만 하고, 나머지는 conntrack 항목이 기억한 대로 처리된다. TCP는 연결이 끝나면 항목도 정리되지만 UDP는 연결이라는 개념이 없어서, 같은 (출발지, 목적지, 포트) 조합으로 패킷이 계속 오면 항목의 수명이 계속 늘어난다. 그래서 엔드포인트가 바뀌어도 예전 Pod로 계속 간다. DNS처럼 출발지 포트를 고정해 두고 계속 묻는 클라이언트, statsd처럼 응답 없이 보내기만 하는 클라이언트에서 흔하다.
+
+실습 노드에 UDP Service(`10.96.0.53:53` → web-pa의 5353)를 만들고, 클라이언트가 출발지 포트 40000으로 0.2초마다 물었다. 중간에 web-pa를 끊고(Pod가 사라진 상황) 규칙을 web-pb로 바꿨다.
+
+```bash
+# 규칙을 새 엔드포인트로 바꾼다 (kube-proxy가 하는 일을 손으로)
+C='service-XB3RHWTE-kube-system/dns/udp/dns'
+sudo ip netns exec r6-node nft flush chain ip kube-proxy "$C"
+sudo ip netns exec r6-node nft add rule ip kube-proxy "$C" meta l4proto udp dnat to 10.244.1.12:5353
+
+# 규칙은 바뀌었는데 conntrack 항목은 그대로다
+sudo ip netns exec r6-node conntrack -L -p udp
+
+# 그 Service로 가는 UDP 항목을 지운다
+sudo ip netns exec r6-node conntrack -D -p udp --orig-dst 10.96.0.53
+```
+
+```text
+00:51:24 rule now -> 10.244.1.12
+udp      17 119 src=10.244.1.20 dst=10.96.0.53 sport=40000 dport=53 src=10.244.1.11 dst=10.244.1.20 sport=5353 dport=40000 [ASSURED] mark=0 use=1
+conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.
+udp      17 119 src=10.244.1.20 dst=10.96.0.53 sport=40000 dport=53 src=10.244.1.11 dst=10.244.1.20 sport=5353 dport=40000 [ASSURED] mark=0 use=1
+conntrack v1.4.8 (conntrack-tools): 1 flow entries have been deleted.
+00:51:26 conntrack entry deleted
+```
+
+클라이언트 쪽 기록이다.
+
+```text
+00:51:23 dns-pa
+00:51:24 dns-pa
+00:51:25 timeout
+00:51:26 timeout
+00:51:27 timeout
+00:51:27 dns-pb
+00:51:28 dns-pb
+```
+
+규칙이 바뀐 뒤에도 항목의 응답 쪽은 `src=10.244.1.11`, 사라진 Pod였고, 남은 시간 119초는 패킷이 올 때마다 다시 채워졌다(`[ASSURED]` UDP의 기본 수명이 `nf_conntrack_udp_timeout_stream` 120초다). 지운 다음 패킷부터 web-pb가 답했다. 아래 그림에서 시간 순서로 보자.
+
+<AlgoTrace
+  caption="UDP conntrack 항목은 패킷이 올 때마다 수명이 늘어 예전 Pod를 계속 가리킨다"
+  memoryLabel="conntrack 항목"
+  cells={["규칙: → pa", "규칙: → pb", "conntrack -D", "새 항목"]}
+  steps={[
+    { pointer: 0, memory: ["40000 → 10.96.0.53:53", "응답 쪽 pa .11", "수명 120s"], caption: "첫 패킷이 규칙을 타고 web-pa로 DNAT됐다. 응답이 오가며 항목이 ASSURED가 된다." },
+    { pointer: 1, memory: ["40000 → 10.96.0.53:53", "응답 쪽 pa .11", "수명 119s"], caption: "web-pa가 사라지고 kube-proxy가 규칙을 pb로 바꿨다. 하지만 같은 4튜플의 패킷은 규칙을 다시 읽지 않는다." },
+    { pointer: 1, memory: ["40000 → 10.96.0.53:53", "응답 쪽 pa .11", "수명 120s로 갱신"], caption: "클라이언트는 0.2초마다 계속 보낸다. 답이 없어도 패킷이 올 때마다 수명이 다시 찬다. 끝나지 않는다." },
+    { pointer: 2, memory: ["(비었음)"], caption: "그 Service를 가리키는데 응답 쪽이 살아 있는 엔드포인트가 아닌 항목을 지운다. kube-proxy가 동기화 때마다 하는 일이다." },
+    { found: [3], memory: ["40000 → 10.96.0.53:53", "응답 쪽 pb .12"], caption: "다음 패킷은 conntrack에 없으니 규칙을 새로 타고 web-pb로 간다." },
+  ]}
+/>
+
+실제 kube-proxy는 이 정리를 직접 한다. v1.37 소스(`pkg/proxy/conntrack/cleanup.go`)의 규칙은 이렇다. UDP Service만 본다. 항목의 원래 목적지가 Service의 ClusterIP·LoadBalancer IP·External IP와 포트인데 응답 쪽 주소와 포트가 serving 상태의 엔드포인트 목록에 없으면 지운다. NodePort는 목적지 포트로만 맞추므로 엔드포인트가 하나도 없으면 건드리지 않는다. 같은 포트를 쓰는 남의 트래픽까지 지울 수 있어서다. 이 판정을 직접 옮겨 보자.
+
+<CodePlayground
+  caption="kube-proxy가 지울 UDP conntrack 항목 고르기"
+  functionName="staleEntries"
+  initialCode={`// services: [{ proto: "udp", vips: ["10.96.0.53"], port: 53, nodePort: 0,
+//               endpoints: [{ ip: "10.244.1.12", port: 5353, serving: true }] }]
+// entries: [{ proto: "udp", origDst: "10.96.0.53", origPort: 53,
+//             replySrc: "10.244.1.11", replyPort: 5353 }]
+// 반환: 지울 항목의 인덱스 배열 (오름차순)
+function staleEntries(services, entries) {
+  return [];
+}`}
+  solution={`function staleEntries(services, entries) {
+  const byVip = new Map();
+  const byNodePort = new Map();
+  for (const s of services) {
+    if (s.proto !== "udp") continue;
+    const eps = new Set(s.endpoints.filter((e) => e.serving).map((e) => e.ip + ":" + e.port));
+    for (const v of s.vips) byVip.set(v + ":" + s.port, eps);
+    if (s.nodePort && eps.size > 0) byNodePort.set(s.nodePort, eps);
+  }
+  const out = [];
+  entries.forEach((e, i) => {
+    if (e.proto !== "udp") return;
+    const reply = e.replySrc + ":" + e.replyPort;
+    const a = byVip.get(e.origDst + ":" + e.origPort);
+    if (a && !a.has(reply)) { out.push(i); return; }
+    const b = byNodePort.get(e.origPort);
+    if (b && !b.has(reply)) out.push(i);
+  });
+  return out;
+}`}
+  tests={[
+    { label: "사라진 Pod를 가리키면 지운다", args: [[{ proto: "udp", vips: ["10.96.0.53"], port: 53, nodePort: 0, endpoints: [{ ip: "10.244.1.12", port: 5353, serving: true }] }], [{ proto: "udp", origDst: "10.96.0.53", origPort: 53, replySrc: "10.244.1.11", replyPort: 5353 }, { proto: "udp", origDst: "10.96.0.53", origPort: 53, replySrc: "10.244.1.12", replyPort: 5353 }]], expected: [0] },
+    { label: "serving이 아닌 엔드포인트도 지운다", args: [[{ proto: "udp", vips: ["10.96.0.53"], port: 53, nodePort: 0, endpoints: [{ ip: "10.244.1.12", port: 5353, serving: false }] }], [{ proto: "udp", origDst: "10.96.0.53", origPort: 53, replySrc: "10.244.1.12", replyPort: 5353 }]], expected: [0] },
+    { label: "TCP 항목은 건드리지 않는다", args: [[{ proto: "tcp", vips: ["10.96.0.10"], port: 80, nodePort: 0, endpoints: [] }], [{ proto: "tcp", origDst: "10.96.0.10", origPort: 80, replySrc: "10.244.1.11", replyPort: 8080 }]], expected: [] },
+    { label: "엔드포인트가 없으면 VIP 항목은 다 지운다", args: [[{ proto: "udp", vips: ["10.96.0.53", "203.0.113.9"], port: 53, nodePort: 30053, endpoints: [] }], [{ proto: "udp", origDst: "203.0.113.9", origPort: 53, replySrc: "10.244.1.11", replyPort: 5353 }, { proto: "udp", origDst: "192.168.50.11", origPort: 30053, replySrc: "10.244.1.11", replyPort: 5353 }]], expected: [0] },
+    { label: "NodePort 항목은 엔드포인트가 있을 때만", args: [[{ proto: "udp", vips: ["10.96.0.53"], port: 53, nodePort: 30053, endpoints: [{ ip: "10.244.1.12", port: 5353, serving: true }] }], [{ proto: "udp", origDst: "192.168.50.11", origPort: 30053, replySrc: "10.244.1.11", replyPort: 5353 }, { proto: "udp", origDst: "192.168.50.11", origPort: 30053, replySrc: "10.244.1.12", replyPort: 5353 }]], expected: [0] },
+  ]}
+/>
+
+그래도 문제가 남는 경우가 있다. kube-proxy가 정리하는 건 동기화 시점이라 그 사이 몇 초는 예전 Pod로 간다. Pod가 Terminating이어도 serving이면 지우지 않는다. 그리고 conntrack 표가 가득 차면 새 연결 자체가 버려진다. 커널 로그에 `nf_conntrack: table full, dropping packet`이 찍히는 상황이다. 표 크기와 지금 쓰는 양은 이렇게 본다.
+
+```bash
+# 지금 항목 수, 최대치, 타임아웃
+sudo sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+sudo sysctl net.netfilter.nf_conntrack_udp_timeout net.netfilter.nf_conntrack_udp_timeout_stream net.netfilter.nf_conntrack_tcp_timeout_established
+
+# CPU별 통계. drop, insert_failed, early_drop이 늘면 표가 차거나 충돌이 나는 중이다
+sudo conntrack -S | head -3
+```
+
+```text
+net.netfilter.nf_conntrack_count = 3
+net.netfilter.nf_conntrack_max = 262144
+net.netfilter.nf_conntrack_udp_timeout = 30
+net.netfilter.nf_conntrack_udp_timeout_stream = 120
+net.netfilter.nf_conntrack_tcp_timeout_established = 432000
+cpu=0   	found=0 invalid=1172 insert=0 insert_failed=0 drop=0 early_drop=0 error=0 search_restart=0 clash_resolve=0 chaintoolong=0 
+cpu=1   	found=0 invalid=1622 insert=0 insert_failed=0 drop=0 early_drop=0 error=0 search_restart=0 clash_resolve=0 chaintoolong=0 
+cpu=2   	found=0 invalid=1324 insert=0 insert_failed=0 drop=0 early_drop=0 error=0 search_restart=0 clash_resolve=0 chaintoolong=0 
+```
+
+kube-proxy는 뜰 때 `nf_conntrack_max`를 `max(maxPerCore × 코어 수, min)`으로 맞추고, TCP established 타임아웃을 커널 기본값 5일(432000초)에서 1일로 줄인다. 4코어 노드면 32768 × 4 = 131072다. 초당 새 연결이 많은 노드(NAT 게이트웨이 역할, 짧은 HTTP 연결을 마구 여는 클라이언트)는 TIME_WAIT 항목까지 합쳐 이 값을 넘을 수 있으니 `maxPerCore`를 올린다. 항목 하나가 커널 메모리 수백 바이트를 쓴다는 것도 함께 계산한다.
+
+## kube-proxy를 아예 빼는 방식
+
+세 모드 모두 netfilter 위에 규칙을 쓴다는 점은 같다. Cilium 같은 CNI는 kube-proxy를 아예 빼고 eBPF 프로그램으로 같은 일을 한다. 소켓이 `connect()`를 부르는 순간 목적지를 Pod 주소로 바꿔 버리기도 해서, 패킷 단위 DNAT와 그에 딸린 conntrack 항목이 생기지 않는다. 이 방식의 원리와 트레이드오프는 [Cilium과 eBPF 글](/posts/cilium-ebpf)에서 다룬다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="kube-proxy의 세 모드는 netfilter에 규칙을 쓰고, eBPF 방식은 kube-proxy 자리를 대신한다"
+  nodes={[
+    { id: "api", label: "Service", sub: "EndpointSlice", x: 200, y: 36 },
+    { id: "kp", label: "kube-proxy", sub: "노드마다", x: 110, y: 126 },
+    { id: "cil", label: "Cilium 에이전트", sub: "kube-proxy 대체", x: 300, y: 126, w: 140 },
+    { id: "ipt", label: "iptables", sub: "선형 체인", x: 54, y: 214, w: 96 },
+    { id: "nft", label: "nftables", sub: "맵 조회", x: 156, y: 214, w: 96 },
+    { id: "ipvs", label: "IPVS", sub: "1.35 deprecated", x: 54, y: 274, w: 96 },
+    { id: "nf", label: "netfilter", sub: "conntrack", x: 156, y: 274, w: 96 },
+    { id: "bpf", label: "eBPF 프로그램", sub: "소켓·tc 훅", x: 300, y: 244, w: 140 },
+  ]}
+  edges={[
+    { from: "api", to: "kp", label: "watch" },
+    { from: "api", to: "cil", label: "watch" },
+    { from: "kp", to: "ipt" },
+    { from: "kp", to: "nft" },
+    { from: "ipt", to: "nf", dashed: true },
+    { from: "nft", to: "nf", dashed: true },
+    { from: "ipvs", to: "nf", dashed: true },
+    { from: "cil", to: "bpf" },
+  ]}
+/>
+
+## 모드 때문에 생기는 증상을 좁히는 순서
+
+Service 문제를 만났을 때 모드를 먼저 의심할 일은 많지 않다. 엔드포인트가 비었거나 targetPort가 틀린 경우가 훨씬 흔하고, 그 순서는 [Service 타입 글](/posts/k8s-service-types#service에-붙는데-응답이-이상할-때)에 있다. 아래는 그걸 다 본 뒤에도 이상할 때 모드와 커널 쪽에서 보는 순서다.
+
+1. 어떤 모드인지 확인한다. 노드에서 `curl -s 127.0.0.1:10249/proxyMode`. 노드마다 다를 수 있다(설정을 바꾸고 일부만 재시작한 경우).
+2. 규칙이 실제로 있는지 본다. iptables 모드는 `iptables -t nat -S | grep '<네임스페이스>/<서비스>'`, nftables 모드는 `nft list map ip kube-proxy service-ips | grep <ClusterIP>`. 없으면 kube-proxy 로그에서 동기화 실패(`kubeproxy_sync_proxy_rules_iptables_restore_failures_total`, `kubeproxy_sync_proxy_rules_nftables_sync_failures_total`)를 찾는다.
+3. Pod가 바뀐 뒤 반영이 늦으면 `kubeproxy_sync_proxy_rules_duration_seconds`와 `kubeproxy_network_programming_duration_seconds`를 본다. 앞의 것은 한 번 쓰는 데 걸린 시간, 뒤의 것은 EndpointSlice가 바뀐 때부터 규칙에 반영되기까지의 시간이다. iptables 모드에서 수 초씩 나오면 nftables 모드로 옮길 신호다.
+4. 같은 노드의 Pod로 가는 연결만 실패하면 `bridge-nf-call-iptables`와 브리지 포트의 hairpin 설정을 본다.
+5. UDP Service만 Pod 교체 뒤에 끊기면 `conntrack -L -p udp --orig-dst <ClusterIP>`의 응답 쪽 주소가 살아 있는 Pod인지 본다. 급하면 `conntrack -D`로 지운다.
+6. 연결이 가끔 처음부터 실패하고 커널 로그에 `table full`이 있으면 `nf_conntrack_count`와 `max`, `conntrack -S`의 `drop`을 본다.
+
+## 규칙을 쓰는 방식이 곧 모드다
+
+kube-proxy는 Service와 EndpointSlice를 노드의 커널 규칙으로 옮겨 적는 프로그램이고, 모드는 그 규칙의 자료 구조다. iptables 모드는 Service마다 한 줄씩 늘어놓아 첫 패킷 비용과 갱신 비용이 Service 수에 비례하고, nftables 모드는 맵 하나로 찾고 바뀐 원소만 고쳐 둘 다 거의 일정하다. IPVS는 그 문제를 먼저 풀었지만 Service 모델과 맞지 않아 1.35에 deprecated가 됐다. 어느 모드든 DNAT 결정은 conntrack이 기억하므로, UDP의 오래된 항목과 표 크기는 모드와 상관없이 챙겨야 한다. 이 주제의 다른 글: 체인 구조는 [iptables NAT 글](/posts/iptables-nat), 트래픽 정책과 클라이언트 IP는 [Service 타입 글](/posts/k8s-service-types), kube-proxy 없는 데이터 경로는 [Cilium과 eBPF 글](/posts/cilium-ebpf).
+
+## 면접에서 나올 만한 질문
+
+### kube-proxy는 Service 트래픽을 직접 중계하나요?
+
+아니다. kube-proxy는 API 서버의 Service와 EndpointSlice를 watch하다가 노드의 커널 규칙(iptables, nftables, IPVS)을 고칠 뿐이고, 패킷의 목적지를 Pod IP로 바꾸는 건 커널의 netfilter와 conntrack이다. 그래서 kube-proxy가 잠깐 죽어도 기존 Service는 동작하지만, Pod 변경이 규칙에 반영되지 않아 사라진 Pod로 연결이 가고 새 Pod는 트래픽을 못 받는다.
+
+### iptables 모드는 Service가 많아지면 왜 느려지나요?
+
+규칙을 위에서부터 한 줄씩 비교하기 때문이다. `KUBE-SERVICES` 체인에 Service 포트마다 한 줄이 있어 새 연결의 첫 패킷 비용이 Service 수에 비례하고, 갱신할 때도 `iptables-restore`로 그 체인을 통째로 다시 보내야 한다. 실습에서 Service 2만 개 뒤의 연결은 connect가 0.3ms 늘었고, 체인 하나를 다시 쓰는 데 5초가 걸렸다. 이미 맺어진 연결은 conntrack이 처리하니 영향이 없다.
+
+### nftables 모드는 무엇이 다른가요?
+
+`ip kube-proxy`라는 전용 표를 쓰고, 모든 Service를 (주소, 프로토콜, 포트) 열쇠의 verdict map 하나로 찾는다. 엔드포인트 선택도 `numgen random mod N`으로 한 번에 뽑는다. Service가 바뀌면 맵 원소만 넣고 빼므로 갱신량이 바뀐 만큼만이다. 1.33에 GA가 됐지만 1.37까지 기본값은 iptables라서 설정에서 명시해야 한다.
+
+### IPVS 모드가 deprecated된 이유는요?
+
+성능 문제는 풀었지만 쿠버네티스 Service 모델과 맞지 않았다. 모든 ClusterIP를 `kube-ipvs0` 장치에 붙여야 했고, 출발지에 따라 엔드포인트가 달라지는 기능은 결국 iptables와 ipset을 섞어 만들어 같은 확장 문제를 떠안았으며, 일괄 갱신 API가 없어 대량 변경에 약했다. 노드마다 따로 도는 구조라 최소 연결 같은 스케줄러도 기대만큼 의미가 없었다. nftables 모드가 같은 성능을 더 단순하게 내면서 1.35에 deprecated가 됐고, 1.37 문서 기준으로 1.40에 기본 비활성, 1.43에 제거 예정이다.
+
+### iptables에서 nftables 모드로 옮길 때 무엇을 확인하나요?
+
+커널 5.13 이상과 `nft` 1.0.0 이상인지, CNI나 NetworkPolicy 구현이 kube-proxy의 iptables 규칙에 기대지 않는지 먼저 본다. 동작 차이로는 NodePort가 기본으로 노드의 기본 IP에서만 열리고, NodePort용 방화벽 허용 규칙을 넣어 주지 않으며, conntrack INVALID 패킷 우회 규칙이 없다는 점이 있다. 각각 기존 지표(localhost NodePort 수신 수, INVALID drop 수)로 영향을 미리 확인하고, 노드 몇 개씩 kube-proxy를 재시작해 옮긴다. 되돌리면 kube-proxy가 nftables 표를 지우고 예전 규칙을 다시 쓴다.
+
+### UDP Service에서 Pod를 바꿨는데 예전 Pod로 계속 패킷이 갑니다.
+
+conntrack 항목이 남아 있어서다. DNAT 결정은 첫 패킷에서 한 번만 하고, UDP는 같은 4튜플로 패킷이 계속 오면 항목 수명이 계속 늘어나 규칙이 바뀌어도 다시 읽히지 않는다. kube-proxy는 동기화 때 Service로 가는데 응답 쪽이 serving 엔드포인트가 아닌 UDP 항목을 지우지만, 그 사이나 kube-proxy가 문제가 있을 때는 남는다. `conntrack -L -p udp --orig-dst <ClusterIP>`로 응답 쪽 주소를 보고, 필요하면 `conntrack -D`로 지운다.
+
+### 같은 노드에 있는 Pod로 가는 연결만 가끔 실패합니다.
+
+`net.bridge.bridge-nf-call-iptables`가 꺼져 있을 가능성이 크다. 같은 브리지 안의 응답은 L3를 거치지 않고 바로 클라이언트로 가서 conntrack이 출발지를 VIP로 되돌리지 못하고, 클라이언트는 모르는 상대의 SYN-ACK에 RST를 보낸다. 다른 노드 Pod로 가는 연결은 L3를 지나니 멀쩡해서 "가끔"으로 보인다. `br_netfilter` 모듈과 sysctl을 켜고, Pod가 자기 Service를 부르는 경우를 위해 브리지 포트의 hairpin 설정도 확인한다.

@@ -2,6 +2,62 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-storageclass-snapshots": {
+    "links": [
+      "k8s-pv-pvc",
+      "backup-strategy"
+    ],
+    "mentions": [
+      "gateway",
+      "k8s-pod-scheduling",
+      "k8s-api-objects",
+      "k8s-configmap",
+      "docker-container-basics",
+      "k8s-architecture",
+      "cron-jobs",
+      "local-k8s-kind-minikube",
+      "grpc"
+    ]
+  },
+  "k8s-gateway-api": {
+    "links": [
+      "kubernetes-ingress",
+      "gateway",
+      "k8s-service-types"
+    ],
+    "mentions": [
+      "https-tls",
+      "helm-basics",
+      "service-mesh",
+      "api-versioning",
+      "http-status-codes",
+      "what-happens-google-com",
+      "local-k8s-kind-minikube",
+      "grpc",
+      "cors",
+      "dns"
+    ]
+  },
+  "k8s-kube-proxy-modes": {
+    "links": [
+      "iptables-nat",
+      "k8s-service-types",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "k8s-network-policy",
+      "vpc-subnets-route-tables",
+      "osi-in-practice",
+      "tcp-connection-lifecycle",
+      "iptables-basics",
+      "cors",
+      "k8s-architecture",
+      "layer-ip-addressing",
+      "layer-ip-routing-icmp",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
   "k8s-in-place-resize": {
     "links": [
       "k8s-vpa",
@@ -424,6 +480,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-hpa",
       "k8s-service-types",
+      "k8s-storageclass-snapshots",
       "k8s-pod-basics",
       "iptables-nat",
       "helm-dependencies-oci-gitops",
@@ -1991,6 +2048,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-lifecycle",
+      "k8s-storageclass-snapshots",
       "k8s-pod-basics",
       "git-undo",
       "k8s-architecture",
@@ -2022,6 +2080,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "github-actions-docker-ecr",
+      "k8s-storageclass-snapshots",
       "vpc-subnets-route-tables",
       "docker-container-basics",
       "dependency-hell",
@@ -2552,6 +2611,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pv-pvc",
       "k8s-pod-scheduling",
+      "k8s-storageclass-snapshots",
       "terraform-modules-tfvars",
       "kubernetes-ingress",
       "iptables-nat",
@@ -2580,6 +2640,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "k8s-kube-proxy-modes",
       "iptables-nat",
       "iptables-basics",
       "ipv6-basics",
@@ -2649,6 +2710,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "db-type-wide-column",
       "iptables-basics",
+      "k8s-kube-proxy-modes",
       "local-k8s-kind-minikube",
       "http-versions",
       "kafka-basics",
@@ -2815,6 +2877,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-security-admission",
       "k8s-labels-selectors",
+      "k8s-storageclass-snapshots",
       "k8s-architecture",
       "cloud-cost-optimization",
       "vpc-basics",
@@ -3586,6 +3649,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "k8s-service-types",
       "k8s-pv-pvc",
+      "k8s-storageclass-snapshots",
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
@@ -5398,6 +5462,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "k8s-kube-proxy-modes",
       "k8s-service-types",
       "vpc-subnets-route-tables",
       "osi-in-practice",
@@ -5829,6 +5894,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "gateway": {
     "links": [
       "kubernetes-ingress",
+      "k8s-gateway-api",
       "resilience-patterns"
     ],
     "mentions": [
