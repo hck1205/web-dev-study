@@ -31,6 +31,7 @@ export const TOPICS: Topic[] = [
           { id: "architecture", label: "Architecture", description: "모놀리스, 마이크로서비스, 레이어드, 헥사고날, CQRS, 이벤트 소싱" },
           { id: "auth", label: "Auth", description: "로그인, 세션, 토큰, 권한 위임" },
           { id: "frameworks", label: "Frameworks", description: "Node.js 런타임, Express 미들웨어, FastAPI" },
+          { id: "languages", label: "Languages", description: "Go 동시성, JVM 메모리와 GC 등 서버 언어의 런타임" },
           { id: "messaging", label: "Messaging", description: "이벤트 기반 구조, Kafka, RabbitMQ, 전달 보장" },
           { id: "testing", label: "Testing", description: "단위·통합·E2E 테스트, 테스트 더블, 실제 DB로 테스트" },
         ],
@@ -63,6 +64,7 @@ export const TOPICS: Topic[] = [
         description: "RDB, NoSQL, 쿼리와 인덱스",
         children: [
           { id: "db-types", label: "DB Types", description: "관계형, 키-값, 문서, 컬럼, 그래프, 시계열 등 DB 종류별 장단점과 쓰임새" },
+          { id: "mysql", label: "MySQL", description: "InnoDB 구조, 잠금, 복제와 온라인 스키마 변경" },
           { id: "postgresql", label: "PostgreSQL", description: "설치부터 내부 구조, 운영, 튜닝, 백업까지" },
           { id: "redis", label: "Redis", description: "인메모리 자료구조 저장소, 캐시, 메모리 관리" },
           { id: "sql", label: "SQL", description: "SQL 문법, 인덱스, 쿼리 튜닝, 테이블 설계, 트랜잭션" },
