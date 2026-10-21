@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-architecture",
+    title: "쿠버네티스 구조: kubectl apply 뒤에서 움직이는 부품들",
+    summary: "API 서버, etcd, 스케줄러, 컨트롤러 매니저, cloud-controller-manager와 노드의 kubelet, kube-proxy, 런타임이 각각 무엇을 맡는지 보고, Deployment 하나가 apply된 뒤의 흐름을 따라간다. 실습 클러스터에서 부품을 하나씩 멈춰 어디서 흐름이 끊기는지 확인한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Distributed Systems", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["쿠버네티스 컨트롤 플레인", "kube-apiserver", "kube-controller-manager", "kubelet"],
+  },
+  {
+    slug: "cloud-cost-optimization",
+    title: "클라우드 비용 줄이기: 시간과 바이트에 붙는 요금",
+    summary: "청구서를 큰 항목부터 읽고 NAT 처리 요금, AZ 사이 전송, 놀고 있는 볼륨과 IP, 저장 등급에서 새는 돈을 찾는다. 크기 맞추기, Savings Plans와 스팟, 서버리스와 상시 서버의 손익 계산, 태그와 쇼백까지 다룬다.",
+    topic: "programming/server-infra/cloud",
+    tags: ["Cloud", "AWS", "DevOps", "Network", "Scalability"],
+    date: "2026-10-21",
+    keywords: ["Savings Plans", "스팟 인스턴스", "Cost Explorer", "쇼백"],
+  },
+  {
+    slug: "serverless-limits",
+    title: "서버리스의 한계: 시간, 크기, 동시성, DB 연결",
+    summary: "15분 실행 한도와 29초 게이트웨이 한도, 6MB 페이로드와 base64, 계정 전체가 나눠 쓰는 동시성과 거절, /tmp, 동시 실행 수만큼 늘어나는 DB 연결을 실제로 재현하고, 서버리스를 쓰지 말아야 할 때를 정리한다.",
+    topic: "programming/server-infra/cloud",
+    tags: ["Cloud", "AWS", "Scalability", "PostgreSQL", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["예약 동시성", "RDS Proxy", "presigned URL", "TooManyRequestsException"],
+  },
+  {
+    slug: "cold-starts",
+    title: "콜드 스타트: 실행 환경을 새로 만드는 비용",
+    summary: "서버리스 함수가 실행 환경을 새로 만들 때 microVM, 런타임 init, 핸들러 바깥 코드가 차례로 지연을 더한다. 로컬에서 import 비용과 번들링·지연 불러오기 효과를 재 보고, 프로비저닝된 동시성, SnapStart, 핑으로 데우기를 비교한다.",
+    topic: "programming/server-infra/cloud",
+    tags: ["Cloud", "AWS", "Performance", "Node.js", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["콜드 스타트", "프로비저닝된 동시성", "SnapStart", "Init Duration"],
+  },
+  {
     slug: "postmortems",
     title: "포스트모템: 비난 없이 쓰고, 닫히는 후속 조치로 끝낸다",
     summary: "장애 뒤에 무엇을 남기고 어떻게 바꿀지 정하는 문서와 과정이다. 비난 없는 문장, 로그로 뽑는 타임라인, 다섯 번의 왜가 놓치는 가지와 기여 요인, 담당자와 날짜가 있는 후속 조치, 템플릿 한 장을 다룬다.",

@@ -22,7 +22,9 @@ import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
+import { CLOUD_COST_OPTIMIZATION } from "./cloud-cost-optimization";
 import { CODE_SPLITTING } from "./code-splitting";
+import { COLD_STARTS } from "./cold-starts";
 import { CONNECTION_POOL } from "./connection-pool";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
@@ -125,6 +127,7 @@ import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
+import { K8S_ARCHITECTURE } from "./k8s-architecture";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_COREDNS } from "./k8s-coredns";
@@ -264,6 +267,7 @@ import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
+import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SLI_SLO } from "./sli-slo";
@@ -342,7 +346,9 @@ export const QUESTION_SETS = [
   CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
+  CLOUD_COST_OPTIMIZATION,
   CODE_SPLITTING,
+  COLD_STARTS,
   CONNECTION_POOL,
   CONSISTENT_HASHING,
   COOKIE_SESSION_LOGIN,
@@ -445,6 +451,7 @@ export const QUESTION_SETS = [
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
+  K8S_ARCHITECTURE,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
   K8S_COREDNS,
@@ -584,6 +591,7 @@ export const QUESTION_SETS = [
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
   SERVER_SENT_EVENTS,
+  SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
   SLI_SLO,

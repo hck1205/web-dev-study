@@ -2,6 +2,85 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-architecture": {
+    "links": [
+      "k8s-pod-scheduling",
+      "k8s-pod-lifecycle",
+      "optimistic-locking",
+      "k8s-secret",
+      "raft-consensus",
+      "leader-election",
+      "eks-cluster-basics",
+      "k8s-service-types",
+      "k8s-cni-pod-network",
+      "iptables-nat"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "grpc",
+      "iptables-basics",
+      "health-checks",
+      "db-type-key-value",
+      "kubernetes-ingress",
+      "osi-in-practice"
+    ]
+  },
+  "cloud-cost-optimization": {
+    "links": [
+      "serverless-limits",
+      "autoscaling",
+      "vpc-subnets-route-tables",
+      "vpc-peering-transit-privatelink",
+      "k8s-pod-resources",
+      "network-flow-logs"
+    ],
+    "mentions": [
+      "terraform-basics",
+      "db-type-key-value",
+      "docker-container-basics",
+      "rest-api-design",
+      "kafka-basics",
+      "postgres-architecture",
+      "redis-basics",
+      "github-actions-docker-ecr",
+      "vpc-basics"
+    ]
+  },
+  "serverless-limits": {
+    "links": [
+      "cold-starts",
+      "cloud-cost-optimization",
+      "timeouts",
+      "idempotency-key",
+      "connection-pool"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "db-type-key-value",
+      "rest-api-design",
+      "iam-basics",
+      "db-type-relational",
+      "resilience-patterns",
+      "dead-letter-queue",
+      "webhooks"
+    ]
+  },
+  "cold-starts": {
+    "links": [
+      "serverless-limits",
+      "autoscaling",
+      "percentile-latency",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "https-tls",
+      "k8s-deploy-pipeline-eks",
+      "docker-container-basics",
+      "latency-bandwidth-throughput",
+      "vpc-basics",
+      "webhooks"
+    ]
+  },
   "postmortems": {
     "links": [
       "production-incidents",
@@ -186,6 +265,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics"
     ],
     "mentions": [
+      "k8s-architecture",
       "git-staging-area",
       "sql-batch-timeout-pool",
       "db-type-key-value",
@@ -203,6 +283,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rate-limiting-in-practice",
+      "k8s-architecture",
       "resilience-patterns",
       "event-loop",
       "vpc-basics",
@@ -398,6 +479,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "nginx-reverse-proxy",
       "k8s-configmap",
+      "k8s-architecture",
       "packet-capture-tcpdump",
       "linux-processes-signals",
       "kafka-basics",
@@ -650,12 +732,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scaling-horizontal-vertical",
       "k8s-hpa",
       "garbage-collection",
+      "cold-starts",
       "db-replication-sharding",
       "db-sharding",
       "rate-limiting-in-practice",
       "backpressure"
     ],
     "mentions": [
+      "k8s-architecture",
       "k8s-pod-lifecycle",
       "event-loop",
       "vpc-basics",
@@ -979,6 +1063,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key"
     ],
     "mentions": [
+      "k8s-architecture",
       "pessimistic-locking",
       "postgres-advanced-sql",
       "message-delivery-semantics",
@@ -1106,6 +1191,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-consistency-cap"
     ],
     "mentions": [
+      "k8s-architecture",
       "db-type-key-value",
       "kafka-basics"
     ]
@@ -1344,6 +1430,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle",
       "k8s-pod-basics",
       "git-undo",
+      "k8s-architecture",
       "helm-basics",
       "security-groups-nacl",
       "vpc-basics",
@@ -1521,6 +1608,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "base64",
       "ipv6-basics",
+      "k8s-architecture",
       "helm-basics",
       "iam-basics",
       "ssrf",
@@ -1588,6 +1676,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dockerfile-image-layers",
       "k8s-deploy-pipeline-eks",
+      "k8s-architecture",
       "client-data-cache"
     ]
   },
@@ -1614,6 +1703,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-multicontainer",
+      "k8s-architecture",
       "linux-systemd-systemctl"
     ]
   },
@@ -1671,6 +1761,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "iptables-basics",
       "hosts-file",
+      "k8s-architecture",
       "autoscaling",
       "osi-in-practice",
       "sql-batch-timeout-pool",
@@ -1695,6 +1786,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-service-types",
       "iptables-basics",
+      "k8s-architecture",
       "packet-capture-tcpdump",
       "kubernetes-ingress",
       "retries",
@@ -1776,6 +1868,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-transactions-2pc"
     ],
     "mentions": [
+      "k8s-architecture",
       "browser-fetch",
       "failover",
       "network-partitions",
@@ -1832,9 +1925,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics"
     ],
     "mentions": [
+      "k8s-architecture",
       "k8s-pod-basics",
       "cron-jobs",
       "helm-basics",
+      "cold-starts",
       "kafka-basics"
     ]
   },
@@ -1885,6 +1980,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "leader-election",
       "k8s-cni-pod-network",
+      "k8s-architecture",
       "helm-basics",
       "db-type-key-value",
       "dns",
@@ -1899,6 +1995,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network"
     ],
     "mentions": [
+      "k8s-architecture",
       "iptables-nat",
       "iptables-basics",
       "ipv6-basics",
@@ -1921,6 +2018,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "iptables-basics",
       "ipv6-basics",
+      "k8s-architecture",
       "kubernetes-ingress",
       "service-mesh",
       "iptables-nat",
@@ -1941,6 +2039,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-routing-icmp",
       "iptables-nat",
       "iptables-basics",
+      "k8s-architecture",
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
@@ -1960,6 +2059,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-coredns"
     ],
     "mentions": [
+      "k8s-architecture",
       "db-type-wide-column",
       "iptables-basics",
       "http-versions",
@@ -2125,6 +2225,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret"
     ],
     "mentions": [
+      "k8s-architecture",
+      "cloud-cost-optimization",
       "vpc-basics",
       "eks-cluster-basics"
     ]
@@ -2142,6 +2244,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "k8s-architecture",
       "cron-jobs",
       "kubernetes-ingress",
       "encryption-at-rest",
@@ -2161,6 +2264,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-basics",
       "helm-dependencies-oci-gitops",
+      "k8s-architecture",
       "helm-basics",
       "latency-bandwidth-throughput",
       "db-type-key-value"
@@ -2176,6 +2280,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "k8s-architecture",
       "sql-batch-timeout-pool",
       "grpc"
     ]
@@ -2237,6 +2342,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-lifecycle",
       "client-data-cache",
+      "k8s-architecture",
       "redis-basics",
       "dns"
     ]
@@ -2429,6 +2535,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-factory-method"
     ],
     "mentions": [
+      "k8s-architecture",
       "cron-jobs",
       "thread-safety",
       "leader-election",
@@ -2843,7 +2950,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-project-structure",
-      "k8s-pod-basics"
+      "k8s-pod-basics",
+      "k8s-architecture"
     ]
   },
   "helm-basics": {
@@ -2881,6 +2989,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "k8s-cni-pod-network",
+      "k8s-architecture",
       "dns"
     ]
   },
@@ -2894,6 +3003,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-configmap",
+      "k8s-architecture",
       "service-mesh",
       "osi-in-practice"
     ]
@@ -2915,7 +3025,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
-      "k8s-pod-basics"
+      "k8s-pod-basics",
+      "k8s-architecture"
     ]
   },
   "k8s-pod-probes": {
@@ -2929,6 +3040,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deployment",
       "k8s-service-types",
       "k8s-pod-basics",
+      "k8s-architecture",
       "kubernetes-ingress",
       "event-loop",
       "what-happens-google-com"
@@ -2950,6 +3062,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-migration-tools",
       "docker-container-basics",
       "k8s-deploy-pipeline-eks",
+      "k8s-architecture",
       "linux-processes-signals",
       "kubernetes-ingress",
       "batch-processing"
@@ -2968,6 +3081,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-scheduling",
       "k8s-cni-pod-network",
+      "k8s-architecture",
       "kubernetes-ingress",
       "db-type-key-value"
     ]
@@ -4475,6 +4589,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-cluster",
       "bloom-filter",
       "db-type-columnar-olap",
+      "cold-starts",
       "tail-latency",
       "db-replication-sharding",
       "dns"
@@ -4602,6 +4717,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-probes",
       "github-actions-docker-ecr",
       "docker-compose",
+      "k8s-architecture",
       "k8s-pod-troubleshooting",
       "dns"
     ]
@@ -4628,6 +4744,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-reverse-proxy"
     ],
     "mentions": [
+      "serverless-limits",
       "csrf",
       "rest-api-design",
       "base64",
