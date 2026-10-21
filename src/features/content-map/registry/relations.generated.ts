@@ -2,6 +2,38 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "reverse-proxy-lb-api-gateway": {
+    "links": [
+      "proxy-reverse-proxy",
+      "gateway",
+      "nginx-reverse-proxy",
+      "load-balancer-basics",
+      "load-balancing-algorithms",
+      "rate-limiting-in-practice",
+      "https-tls",
+      "distributed-tracing",
+      "kubernetes-ingress",
+      "k8s-gateway-api",
+      "retries",
+      "tail-latency",
+      "rate-limiting-algorithms"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "rest-api-design",
+      "service-mesh",
+      "http-versions",
+      "security-groups-nacl",
+      "vpc-basics",
+      "redis-basics",
+      "http-status-codes",
+      "what-happens-google-com",
+      "high-availability",
+      "grpc",
+      "udp-and-quic",
+      "token-login"
+    ]
+  },
   "sql-study-path": {
     "links": [
       "sql-basics",
@@ -2493,6 +2525,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "timeouts",
       "k8s-deploy-pipeline-eks",
+      "reverse-proxy-lb-api-gateway",
       "vpc-basics",
       "osi-in-practice",
       "redis-basics"
@@ -4140,6 +4173,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sdn-vxlan-overlay"
     ],
     "mentions": [
+      "reverse-proxy-lb-api-gateway",
       "curl-for-debugging",
       "k8s-architecture",
       "http-status-codes",
@@ -4604,6 +4638,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rate-limiting-in-practice",
+      "reverse-proxy-lb-api-gateway",
       "k8s-architecture",
       "resilience-patterns",
       "sd-start-single-server",
@@ -4808,6 +4843,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "k8s-architecture",
       "packet-capture-tcpdump",
+      "reverse-proxy-lb-api-gateway",
       "authn-vs-authz",
       "linux-processes-signals",
       "kafka-basics",
@@ -4849,6 +4885,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "retries",
       "docker-container-basics",
+      "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
       "autoscaling",
       "osi-in-practice",
@@ -4892,6 +4929,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "docker-container-basics",
       "realtime-communication",
+      "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",
       "autoscaling",
       "linux-processes-signals",
@@ -5269,6 +5307,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "reverse-proxy-lb-api-gateway",
       "http-versions",
       "event-loop",
       "osi-in-practice",
@@ -5295,6 +5334,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "sd-queue-logging-automation",
+      "reverse-proxy-lb-api-gateway",
       "base64",
       "redis-basics",
       "cookie-session-login"
@@ -6149,6 +6189,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "waf",
       "vpc-subnets-route-tables",
+      "reverse-proxy-lb-api-gateway",
       "layer-ip-addressing",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
@@ -6173,6 +6214,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "iptables-basics",
       "hosts-file",
+      "reverse-proxy-lb-api-gateway",
       "k8s-architecture",
       "autoscaling",
       "osi-in-practice",
@@ -6868,6 +6910,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "reverse-proxy-lb-api-gateway",
       "packet-capture-tcpdump",
       "deadlocks",
       "what-happens-google-com",
@@ -6991,6 +7034,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "realtime-communication",
       "browser-fetch",
+      "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
       "layer-link-ethernet-arp",
       "http-versions",
@@ -7988,6 +8032,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "timeouts",
       "docker-container-basics",
       "realtime-communication",
+      "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
       "service-mesh",
       "http-versions",
@@ -8157,6 +8202,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "browser-fetch",
       "iptables-basics",
+      "reverse-proxy-lb-api-gateway",
       "ddos-protection",
       "security-groups-nacl",
       "sql-batch-timeout-pool"
@@ -8278,6 +8324,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "gateway",
       "iptables-basics",
+      "reverse-proxy-lb-api-gateway",
       "vpc-peering-transit-privatelink",
       "router-vs-switch",
       "http-versions",
@@ -9101,6 +9148,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tcp-connection-lifecycle",
       "browser-fetch",
       "load-balancer-basics",
+      "reverse-proxy-lb-api-gateway",
       "consistent-hashing",
       "race-conditions",
       "osi-in-practice",
@@ -9159,7 +9207,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-reverse-proxy",
       "http-caching-cdn",
       "local-custom-domain",
-      "gateway"
+      "gateway",
+      "reverse-proxy-lb-api-gateway"
     ],
     "mentions": [
       "docker-container-basics",
@@ -9422,6 +9471,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "packet-capture-tcpdump",
       "proxy-reverse-proxy",
+      "reverse-proxy-lb-api-gateway",
       "cilium-ebpf",
       "http-versions",
       "sql-batch-timeout-pool",
@@ -9448,6 +9498,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "https-tls",
       "html-form-http",
+      "reverse-proxy-lb-api-gateway",
       "kubernetes-ingress",
       "base64",
       "db-modeling-normalization"
@@ -9486,6 +9537,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "zero-trust-architecture",
       "nginx-https-performance",
+      "reverse-proxy-lb-api-gateway",
       "webhooks",
       "service-mesh",
       "http-versions",
@@ -9508,6 +9560,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",
       "base64",
       "kafka-basics",
@@ -9873,6 +9926,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls",
       "k8s-admission-control",
       "k8s-pod-lifecycle",
+      "reverse-proxy-lb-api-gateway",
       "service-mesh",
       "http-status-codes",
       "what-happens-google-com",
@@ -9894,6 +9948,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",
+      "reverse-proxy-lb-api-gateway",
       "cilium-ebpf",
       "token-login",
       "redis-basics",

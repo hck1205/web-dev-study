@@ -373,6 +373,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "resilience-patterns": 7,
   "rest-api-design": 8,
   "retries": 7,
+  "reverse-proxy-lb-api-gateway": 7,
   "rollback-strategy": 7,
   "rolling-deployment": 6,
   "router-vs-switch": 7,

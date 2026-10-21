@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "reverse-proxy-lb-api-gateway",
+    title: "리버스 프록시, 로드 밸런서, API 게이트웨이를 한 줄로 세우기",
+    summary: "nginx, HAProxy, 직접 짠 게이트웨이를 한 컴퓨터에 겹쳐 띄우고 같은 요청이 층마다 어떻게 바뀌고 어디서 막히는지 본다. 실제 서비스에서 층을 쌓고 고르는 기준과, 502·503·504·429를 만든 층을 가려내는 법까지 다룬다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Network", "Load Balancer", "Nginx", "API", "Architecture"],
+    date: "2026-10-23",
+    keywords: ["TLS 종료", "AWS ALB", "Kong"],
+  },
+  {
     slug: "sql-study-path",
     title: "SQL 공부 순서: 쿼리 하나를 여섯 단계로 키우며 보는 SELECT부터 윈도 함수까지",
     summary: "회원 넷, 주문 일곱으로 쿼리 하나를 SELECT, WHERE, GROUP BY, JOIN, 서브쿼리, 윈도 함수 순서로 키운다. 갈래마다 자주 틀리는 자리를 실제 psql 출력으로 짚고 자세한 글로 넘긴다.",

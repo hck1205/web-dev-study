@@ -370,6 +370,7 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
+import { REVERSE_PROXY_LB_API_GATEWAY } from "./reverse-proxy-lb-api-gateway";
 import { ROLLBACK_STRATEGY } from "./rollback-strategy";
 import { ROLLING_DEPLOYMENT } from "./rolling-deployment";
 import { ROUTER_VS_SWITCH } from "./router-vs-switch";
@@ -889,6 +890,7 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   RETRIES,
+  REVERSE_PROXY_LB_API_GATEWAY,
   ROLLBACK_STRATEGY,
   ROLLING_DEPLOYMENT,
   ROUTER_VS_SWITCH,
