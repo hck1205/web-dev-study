@@ -1,0 +1,635 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("test-pyramid-unit-tests");
+
+회원 가입 코드에 테스트가 열두 개 있고 전부 초록불이라고 해 보자. 배포하고 하루가 지나자 가입 API가 가끔 500을 낸다. 로그를 보니 이미 `kim@x.com`으로 가입한 사람이 `Kim@x.com`으로 다시 가입하려 할 때다. DB에는 이메일을 소문자로 비교하는 유니크 인덱스가 있는데, 코드는 대소문자를 그대로 비교해서 찾고 있었다. 찾기에서는 "없다"가 나오고, 넣기에서 DB가 중복이라며 거절한다.
+
+테스트는 왜 이걸 못 잡았을까. 테스트 속 저장소가 진짜 DB가 아니라 "없다"고 답하도록 만들어 둔 목(mock)이었기 때문이다. 목은 우리가 상상한 DB처럼 답했고, 상상이 틀렸다.
+
+이 글은 테스트를 어디에 얼마나 둘지(테스트 피라미드), Node.js에 들어 있는 `node:test`로 단위 테스트를 쓰는 법, 진짜 대신 세우는 테스트 대역의 종류와 그것이 거짓말을 하는 순간, 시간과 난수처럼 테스트를 흔드는 것들을 다룬다. 진짜 PostgreSQL에 붙여서 위 버그를 실제로 잡는 이야기는 이어지는 글 [실제 DB로 도는 통합 테스트](/posts/integration-tests-real-db)에서 한다. 예제는 모두 Node 22.22에서 돌렸다.
+
+## 테스트가 있으면 무엇이 빨라지나
+
+테스트를 쓰는 이유를 "버그를 없애려고"라고 하면 반만 맞다. 테스트는 버그를 없애지 않는다. 버그가 생긴 걸 빨리, 싸게 알려 줄 뿐이다. 같은 버그도 저장하자마자 알면 1분이고, 코드 리뷰에서 알면 한 시간이고, 운영에서 알면 장애 보고서다.
+
+그래서 테스트의 값은 대부분 미래에 나온다. 지금 짠 코드를 6개월 뒤 다른 사람이 고칠 때, 고쳐도 되는지 알려 주는 게 테스트다. 테스트가 없으면 리팩터링은 기도가 된다. 덤으로 테스트는 코드가 어떻게 쓰이는지 보여 주는 문서가 되고, 테스트하기 어려운 코드는 대개 의존이 엉킨 코드라서 설계를 다시 보라는 신호도 준다.
+
+대신 비용이 있다. 쓰는 시간, 돌리는 시간, 그리고 가장 큰 비용인 고치는 시간이다. 동작은 그대로인데 내부 구조를 바꿨다고 테스트 서른 개가 깨지면, 그 테스트들은 안전망이 아니라 족쇄다. 좋은 테스트를 고르는 기준은 결국 둘이다. 진짜 버그가 생기면 깨지는가, 버그가 아닌 변경에는 깨지지 않는가.
+
+## 피라미드와 트로피가 다투는 것
+
+테스트는 얼마나 넓은 범위를 한 번에 확인하느냐로 나눈다. 아래 그림에서 다음을 누르면 같은 서비스를 세 범위로 확인할 때 요청이 어디까지 가는지 보인다.
+
+<NetworkTopology
+  caption="같은 서비스를 확인하는 세 가지 범위"
+  width={400}
+  height={250}
+  zones={[
+    { id: "app", label: "우리 서비스", x: 110, y: 20, w: 200, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "test", label: "test", x: 40, y: 125, icon: "client" },
+    { id: "browser", label: "browser", x: 150, y: 60, icon: "client" },
+    { id: "api", label: "HTTP API", x: 260, y: 60, icon: "server" },
+    { id: "logic", label: "signUp", sub: "업무 규칙", x: 260, y: 140, icon: "container" },
+    { id: "db", label: "PostgreSQL", x: 260, y: 205, icon: "db" },
+    { id: "mail", label: "mail API", x: 360, y: 140, icon: "internet" },
+  ]}
+  links={[
+    { from: "test", to: "logic", dashed: true },
+    { from: "test", to: "api", dashed: true },
+    { from: "test", to: "browser", dashed: true },
+    { from: "browser", to: "api" },
+    { from: "api", to: "logic" },
+    { from: "logic", to: "db" },
+    { from: "logic", to: "mail" },
+  ]}
+  steps={[
+    { path: ["test", "logic"], packet: "signUp()", title: "단위 테스트", detail: "함수를 직접 부른다. DB와 메일은 가짜로 바꿔 끼운다. 수 밀리초에 끝나고, 깨지면 어디가 틀렸는지 바로 보인다." },
+    { path: ["test", "api", "logic", "db"], packet: "POST /signup", title: "통합 테스트", detail: "진짜 HTTP 서버와 진짜 DB까지 묶는다. 유니크 인덱스나 SQL 오타처럼 경계에서 생기는 버그를 잡는다. 대신 수십~수백 밀리초가 든다." },
+    { path: ["test", "browser", "api", "logic", "db"], packet: "click", title: "E2E 테스트", detail: "사용자가 하듯 브라우저로 버튼을 누른다. 가장 믿을 만하지만 가장 느리고, 실패했을 때 원인을 찾는 데 오래 걸린다." },
+    { path: ["logic", "mail"], packet: "send", blocked: true, title: "바깥 서비스는 막아 둔다", detail: "남의 서비스는 어느 범위에서도 진짜로 부르지 않는 게 보통이다. 가짜를 꽂고, 약속이 맞는지는 계약 테스트로 따로 확인한다." },
+  ]}
+/>
+
+마이크 콘(Mike Cohn)이 2009년 책 『Succeeding with Agile』에서 그린 테스트 피라미드는 바닥에 단위 테스트를 가장 많이, 위로 갈수록 적게 두라고 한다. 아래가 빠르고 싸고 원인을 바로 짚어 주니까. 당시에는 UI 테스트가 느리고 자주 깨지는 게 큰 문제였고, 피라미드는 그 반대편으로 무게를 옮기자는 제안이었다.
+
+그 뒤에 다른 모양들이 나왔다. 켄트 C. 도즈(Kent C. Dodds)의 테스팅 트로피는 맨 아래에 타입 검사·린트 같은 정적 분석을 깔고, 가장 두꺼운 층을 통합 테스트에 준다. 프런트엔드에서 컴포넌트를 함수 단위로 잘게 쪼개 테스트하면 실제 사용과 거리가 멀어서다. 스포티파이가 마이크로서비스에 쓴 벌집(honeycomb) 모양도 서비스 하나를 통째로 띄워 확인하는 통합 테스트를 가운데에 둔다. 서비스 안의 로직은 얇고 대부분이 다른 시스템과의 대화라서다.
+
+| 모양 | 가장 두꺼운 층 | 잘 맞는 곳 |
+|---|---|---|
+| 피라미드 | 단위 테스트 | 계산·규칙이 많은 도메인, 라이브러리 |
+| 트로피 | 통합 테스트(+정적 분석) | UI 컴포넌트, 화면 단위 동작 |
+| 벌집 | 서비스 단위 통합 테스트 | 로직이 얇고 입출력이 많은 마이크로서비스 |
+
+셋은 생각만큼 다르지 않다. 다투는 건 "단위"를 얼마나 작게 보느냐다. 모두가 동의하는 건 느리고 원인을 짚기 어려운 E2E를 꼭대기에 조금만 두라는 것, 그리고 테스트의 비율은 코드의 성격을 따라가야 한다는 것이다. 할인 계산이 복잡한 결제 서비스와, DB에서 꺼내 그대로 내려주는 조회 API는 같은 비율일 수 없다.
+
+## node:test로 함수 하나를 붙잡기
+
+Node 18에 실험 기능으로 들어온 `node:test`는 Node 20부터 안정 기능이다. Jest나 Vitest를 설치하지 않아도 `node --test` 하나로 돈다. 장바구니 합계 함수로 시작한다. 3만 원 이상이면 배송비가 없고, 쿠폰은 퍼센트로 깎는다.
+
+```js
+// cart.js
+export function cartTotal(items, { couponPct = 0 } = {}) {
+  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const discount = Math.floor((subtotal * couponPct) / 100);
+  const afterDiscount = subtotal - discount;
+  const shipping = afterDiscount >= 30000 || afterDiscount === 0 ? 0 : 3000;
+  return { subtotal, discount, shipping, total: afterDiscount + shipping };
+}
+```
+
+```js
+// cart.test.js
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { cartTotal } from "./cart.js";
+
+describe("cartTotal", () => {
+  test("3만 원 미만이면 배송비 3000원이 붙는다", () => {
+    const r = cartTotal([{ price: 12000, qty: 2 }]);
+    assert.deepEqual(r, { subtotal: 24000, discount: 0, shipping: 3000, total: 27000 });
+  });
+
+  test("할인 뒤 금액으로 무료 배송을 판단한다", () => {
+    // 32000원에서 10% 할인하면 28800원이라 배송비가 다시 붙는다
+    const r = cartTotal([{ price: 16000, qty: 2 }], { couponPct: 10 });
+    assert.equal(r.total, 31800);
+  });
+
+  test("빈 장바구니는 0원이다", () => {
+    assert.equal(cartTotal([]).total, 0);
+  });
+});
+```
+
+```bash
+node --test --test-reporter=spec cart.test.js
+```
+
+```text
+▶ cartTotal
+  ✔ 3만 원 미만이면 배송비 3000원이 붙는다 (2.94401ms)
+  ✔ 할인 뒤 금액으로 무료 배송을 판단한다 (0.353798ms)
+  ✔ 빈 장바구니는 0원이다 (0.310551ms)
+✔ cartTotal (5.335912ms)
+ℹ tests 3
+ℹ suites 1
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 211.195746
+```
+
+`node:assert/strict`를 쓰는 데는 이유가 있다. 그냥 `node:assert`의 `equal`은 `==`로 비교해서 `"1" == 1`을 통과시킨다. strict 모드에서는 `equal`이 `strictEqual`이 된다.
+
+누군가 무료 배송 조건을 `subtotal >= 30000`으로 "단순하게" 바꿨다고 해 보자. 두 번째 테스트가 바로 잡는다.
+
+```text
+✖ 할인 뒤 금액으로 무료 배송을 판단한다 (0.871182ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  28800 !== 31800
+```
+
+테스트 이름이 문장이라 실패 메시지만 읽어도 무슨 규칙이 깨졌는지 안다. 이름을 "test2"나 "cartTotal 동작 확인"으로 지으면 이 장점이 사라진다. 테스트 본문은 흔히 준비(Arrange), 실행(Act), 확인(Assert) 세 덩어리로 나누는데, 이 짧은 테스트들에서도 그 순서가 보인다.
+
+자주 쓰는 옵션은 명령 한 줄에 모인다. 아래 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="node --test 명령 읽기 (Node 22 기준)"
+  base="node"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "--test", title: "테스트 러너로 실행", description: "파일을 주지 않으면 *.test.js, test 폴더 같은 이름 규칙으로 파일을 찾는다. Node 22에서는 파일마다 별도 프로세스로 돌린다.", required: true },
+    { key: "--test-reporter", value: "spec", title: "출력 형식", description: "터미널이 아니면 기본값이 TAP이다. CI 로그에서 사람이 읽으려면 spec, 도구에 넘기려면 junit을 쓴다." },
+    { key: "--test-name-pattern", value: "\"배송비\"", title: "이름으로 골라 돌리기", description: "정규식에 맞는 테스트만 실행한다. 혼자 돌리면 통과하는 테스트를 찾을 때 쓴다." },
+    { key: "--test-concurrency", value: "1", title: "동시에 돌릴 파일 수", description: "기본은 CPU 수에 맞춰 여러 파일을 동시에 돌린다. 1로 두면 하나씩 돌아서 공유 자원 충돌을 가려낼 수 있다." },
+    { key: "--experimental-test-coverage", title: "커버리지 보고", description: "Node 22에서는 아직 실험 기능이다. 줄·분기·함수 비율을 테스트 결과 뒤에 붙여 준다." },
+    { key: "--watch", title: "저장할 때마다 다시", description: "파일이 바뀌면 관련 테스트를 다시 돌린다. 짧은 되먹임 고리를 만드는 가장 싼 방법이다." },
+  ]}
+/>
+
+## 단위는 함수가 아니라 행동이다
+
+"단위 테스트의 단위가 뭐냐"는 질문에는 두 학파가 있다. 고전파(디트로이트 학파)는 단위를 하나의 행동으로 보고, 그 행동을 만드는 객체 여러 개를 진짜로 함께 쓴다. DB나 메일처럼 느리거나 공유되는 것만 가짜로 바꾼다. 마틴 파울러는 이런 테스트를 사교적(sociable) 단위 테스트라고 불렀다. 목 중심 학파(런던 학파)는 단위를 클래스 하나로 보고, 협력하는 다른 클래스를 전부 목으로 바꾼다. 이쪽은 고독한(solitary) 단위 테스트다.
+
+런던 학파의 장점은 실패 위치가 정확하다는 것이다. 테스트 하나는 클래스 하나만 본다. 대신 테스트가 "누가 누구를 어떤 순서로 부르는지"를 알게 되고, 그 구조를 바꾸면 동작이 같아도 테스트가 깨진다. 고전파는 리팩터링에 강하지만, 깨졌을 때 원인이 여러 객체 중 어디인지 한 번 더 찾아야 한다.
+
+현장에서 둘 중 하나만 쓰는 팀은 드물다. 다만 기본값을 정해 두면 판단이 쉬워진다. 이 글은 고전파 쪽을 기본으로 둔다. 바깥 경계(DB, 외부 API, 시계, 난수)만 바꿔 끼우고, 안쪽은 진짜로 돌린다. 이 경계가 [헥사고날 아키텍처](/posts/hexagonal-architecture)의 포트와 정확히 겹치는 건 우연이 아니다. 테스트하기 쉬운 경계와 바꿔 끼우기 쉬운 경계는 같은 자리다.
+
+## 진짜 대신 세우는 것들
+
+진짜 협력자 대신 세우는 객체를 통틀어 테스트 대역(test double)이라고 한다. 영화에서 위험한 장면을 대신 찍는 스턴트 대역에서 따온 말이고, 제라드 메스자로스(Gerard Meszaros)가 『xUnit Test Patterns』에서 다섯 가지로 나눴다. 이름이 섞여 쓰이는 일이 많아서 면접에서 자주 묻는다.
+
+<ConceptDiagram
+  caption="테스트 대역 다섯 가지와 하는 일"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "double", label: "테스트 대역", sub: "test double", x: 200, y: 40, w: 120 },
+    { id: "dummy", label: "더미", sub: "자리만 채움", x: 50, y: 140, w: 84 },
+    { id: "stub", label: "스텁", sub: "정해 둔 답", x: 125, y: 210, w: 84 },
+    { id: "spy", label: "스파이", sub: "호출을 기록", x: 200, y: 140, w: 84 },
+    { id: "mock", label: "목", sub: "기대를 검증", x: 275, y: 210, w: 84 },
+    { id: "fake", label: "가짜", sub: "작게 동작", x: 350, y: 140, w: 84 },
+  ]}
+  edges={[
+    { from: "double", to: "dummy" },
+    { from: "double", to: "stub", label: "입력" },
+    { from: "double", to: "spy", label: "출력" },
+    { from: "double", to: "mock" },
+    { from: "double", to: "fake" },
+    { from: "spy", to: "mock", dashed: true, label: "+단언" },
+  ]}
+/>
+
+- 더미(dummy)는 인자 자리를 채우기만 하고 쓰이지 않는다. 이미 가입된 이메일이면 메일을 보내지 않으니, 그 테스트에서 메일러는 더미여도 된다.
+- 스텁(stub)은 정해 둔 값을 돌려준다. 코드로 들어가는 간접 입력을 통제한다. "저장소가 null을 준다면"을 만드는 게 스텁이다.
+- 스파이(spy)는 진짜처럼 혹은 스텁처럼 동작하면서 어떤 인자로 몇 번 불렸는지 기록한다. 코드에서 나가는 간접 출력을 본다.
+- 목(mock)은 기대를 미리 담고 있다가 그 기대대로 불렸는지 검증한다. 기록만 하는 스파이에 단언을 붙이면 사실상 목이 된다.
+- 가짜(fake)는 진짜와 같은 일을 단순하게 해내는 작은 구현이다. 메모리 Map으로 만든 저장소, SQLite로 띄운 DB가 여기 든다.
+
+스텁과 가짜는 결과 상태를 보는 상태 검증에, 목은 호출 자체를 보는 행동 검증에 쓰인다. `node:test`에는 `mock.fn()`과 `t.mock.method()`가 들어 있어서 따로 라이브러리 없이 스텁과 스파이를 만든다. 이름은 mock이지만 실제로는 호출을 기록하는 스파이다. 검증은 우리가 `assert`로 직접 한다.
+
+가입 함수를 하나 두고 대역을 꽂아 보자. 저장소와 메일러, 시계를 인자로 받는다.
+
+```js
+// signup.js (v1): 먼저 찾아보고 없으면 넣는다
+export function makeSignUp({ users, mailer, clock }) {
+  return async function signUp(email) {
+    if (await users.findByEmail(email)) return { ok: false, reason: "TAKEN" };
+    const user = await users.insert({ email, createdAt: clock.now() });
+    await mailer.send(email, "welcome");
+    return { ok: true, id: user.id };
+  };
+}
+```
+
+```js
+// signup.mock.test.js
+import { test, mock } from "node:test";
+import assert from "node:assert/strict";
+import { makeSignUp } from "./signup.js";
+
+test("새 이메일이면 가입시키고 환영 메일을 보낸다 (목)", async () => {
+  const users = {
+    findByEmail: mock.fn(async () => null),                 // 스텁: 정해 둔 답
+    insert: mock.fn(async (u) => ({ id: 1, ...u })),
+  };
+  const mailer = { send: mock.fn(async () => {}) };         // 스파이: 호출을 기록
+  const clock = { now: () => new Date("2026-10-23T00:00:00Z") };
+  const r = await makeSignUp({ users, mailer, clock })("Kim@x.com");
+
+  assert.deepEqual(r, { ok: true, id: 1 });
+  assert.equal(users.findByEmail.mock.callCount(), 1);      // 목처럼: 상호작용을 검증
+  assert.deepEqual(mailer.send.mock.calls[0].arguments, ["Kim@x.com", "welcome"]);
+});
+```
+
+같은 행동을 가짜 저장소로도 확인한다. 가짜는 이메일을 소문자로 바꿔 키로 쓰고, 중복이면 PostgreSQL처럼 `23505` 코드를 단 에러를 던진다.
+
+```js
+// fake-users.js
+export function fakeUsers() {
+  const rows = new Map();
+  let seq = 0;
+  const key = (e) => e.toLowerCase();
+  return {
+    rows,
+    async findByEmail(email) { return rows.get(key(email)) ?? null; },
+    async insert(u) {
+      if (rows.has(key(u.email))) throw Object.assign(new Error("duplicate key"), { code: "23505" });
+      const row = { id: ++seq, ...u }; rows.set(key(u.email), row); return row;
+    },
+    async insertIfAbsent(u) { return rows.has(key(u.email)) ? null : this.insert(u); },
+  };
+}
+```
+
+```js
+// signup.fake.test.js (일부)
+test("대소문자만 다른 이메일은 이미 있는 것으로 본다 (가짜)", async () => {
+  const { mailer, signUp } = setup();          // setup()이 fakeUsers()를 꽂는다
+  await signUp("kim@x.com");
+  assert.deepEqual(await signUp("Kim@x.com"), { ok: false, reason: "TAKEN" });
+  assert.equal(mailer.send.mock.callCount(), 1);
+});
+```
+
+```text
+✔ 새 이메일이면 가입시키고 환영 메일을 한 통 보낸다 (가짜) (4.205018ms)
+✔ 대소문자만 다른 이메일은 이미 있는 것으로 본다 (가짜) (0.523341ms)
+✔ 새 이메일이면 가입시키고 환영 메일을 보낸다 (목) (2.35419ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+```
+
+두 파일이 동시에 돌아서 출력 순서가 파일 순서와 다르다. Node 22의 러너는 파일마다 프로세스를 따로 띄워 병렬로 돌린다.
+
+## 목이 거짓말을 하는 두 가지 방식
+
+셋 다 초록이다. 그런데 이 글 처음의 500 버그는 여기 그대로 있다. 진짜 저장소의 `findByEmail`이 `WHERE email = $1`로 대소문자를 구분해 찾기 때문이다. 아래 그림은 테스트에서의 흐름과 운영에서의 흐름을 이어서 보여 준다.
+
+<SequenceDiagram
+  caption="테스트가 본 저장소와 운영의 저장소"
+  actors={[
+    { id: "caller", label: "test / API" },
+    { id: "su", label: "signUp" },
+    { id: "repo", label: "users" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "caller", to: "su", label: "Kim@x.com", title: "테스트가 가입을 부른다", detail: "kim@x.com은 이미 가입된 상태라고 가정한다." },
+    { from: "su", to: "repo", label: "findByEmail", title: "스텁은 상상대로 답한다", detail: "테스트 작성자가 정해 둔 대로 null을 준다. 가짜 저장소라면 소문자로 비교해서 이미 있다고 답한다. 둘 다 DB에 묻지 않는다." },
+    { from: "caller", to: "su", label: "Kim@x.com", title: "운영에서 같은 요청", detail: "이번에는 진짜 저장소가 꽂혀 있다." },
+    { from: "repo", to: "db", label: "WHERE email=$1", title: "진짜 저장소는 그대로 비교한다", detail: "Kim@x.com과 kim@x.com은 다른 문자열이라 0행이 나온다.", payload: "SELECT id FROM users WHERE email = 'Kim@x.com'  -- 0 rows" },
+    { from: "repo", to: "db", label: "INSERT", title: "넣을 때 DB가 거절한다", detail: "lower(email) 유니크 인덱스에 걸린다. 테스트의 어떤 대역도 이 에러를 낸 적이 없다.", payload: "ERROR: duplicate key value violates unique constraint (23505)" },
+    { from: "su", to: "caller", label: "500", title: "처리하지 않은 에러가 500이 된다", detail: "signUp은 TAKEN을 돌려줄 기회를 놓쳤다. 테스트는 여전히 초록이다." },
+  ]}
+/>
+
+첫 번째 거짓말은 이것이다. 대역은 우리가 아는 만큼만 진짜를 흉내 낸다. 스텁은 작성자가 상상한 답을 주고, 가짜는 작성자가 이해한 규칙대로 동작한다. 상상이 틀리면 테스트와 운영이 같이 틀리는 게 아니라, 테스트만 맞고 운영은 틀린다. 위의 가짜는 오히려 너무 똑똑해서 진짜 저장소의 버그를 덮었다.
+
+두 번째 거짓말은 반대 방향이다. 동작은 그대로인데 테스트가 깨진다. 찾기와 넣기 사이에 다른 요청이 끼어들 틈을 없애려고 `insertIfAbsent` 한 번으로 바꿨다고 하자. 사용자에게 보이는 결과는 똑같다.
+
+```js
+// signup-v2.js: 찾기와 넣기를 한 번에 (동작은 같다)
+export function makeSignUp({ users, mailer, clock }) {
+  return async function signUp(email) {
+    const user = await users.insertIfAbsent({ email, createdAt: clock.now() });
+    if (!user) return { ok: false, reason: "TAKEN" };
+    await mailer.send(email, "welcome");
+    return { ok: true, id: user.id };
+  };
+}
+```
+
+```text
+✔ 새 이메일이면 가입시키고 환영 메일을 한 통 보낸다 (가짜) (2.422122ms)
+✔ 대소문자만 다른 이메일은 이미 있는 것으로 본다 (가짜) (0.307665ms)
+✖ 새 이메일이면 가입시키고 환영 메일을 보낸다 (목) (1.466786ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+
+✖ 새 이메일이면 가입시키고 환영 메일을 보낸다 (목) (1.466786ms)
+  TypeError: users.insertIfAbsent is not a function
+```
+
+결과 상태를 본 가짜 테스트는 그대로 통과하고, "findByEmail이 한 번 불렸다"를 확인한 목 테스트만 깨졌다. 이 테스트는 무엇을 하는지가 아니라 어떻게 하는지를 고정하고 있었다. 이런 테스트가 많으면 리팩터링할 때마다 테스트를 고치게 되고, 고치다 보면 테스트가 뭘 지키려 했는지 아무도 기억하지 못한다.
+
+그래서 쓰는 원칙이 몇 가지 있다.
+
+- 내 것이 아닌 타입은 목으로 만들지 않는다. 결제사 SDK나 `pg` 클라이언트를 직접 목으로 바꾸지 말고, 그걸 감싼 우리 쪽 인터페이스를 대역으로 바꾼다. 남의 라이브러리 동작을 상상해서 흉내 내는 순간 첫 번째 거짓말이 시작된다.
+- 결과로 확인할 수 있으면 결과로 확인한다. 호출 검증은 메일 발송이나 결제 요청처럼 호출 자체가 결과인 경우에 아껴 쓴다.
+- 가짜와 진짜에 같은 테스트를 돌린다. 저장소의 약속("대소문자 없이 하나만")을 테스트 묶음으로 써서 메모리 구현과 PostgreSQL 구현 양쪽에 돌리면 둘이 다르게 동작하는 순간 드러난다. 이 계약 테스트 방식은 헥사고날 아키텍처 글의 [두 구현에 같은 계약 테스트를 돌린다](/posts/hexagonal-architecture#두-구현에-같은-계약-테스트를-돌린다)에서 코드로 볼 수 있다.
+- 경계 너머는 소수의 통합 테스트로 확인한다. 위 버그는 진짜 DB에 대고 돌리는 테스트 하나면 잡힌다. 그 과정은 [다음 글](/posts/integration-tests-real-db)에서 실제로 돌려 본다.
+
+## 시계와 난수를 테스트 손에 쥐여 준다
+
+단위 테스트를 흔드는 가장 흔한 원인은 숨은 입력이다. `Date.now()`와 `Math.random()`은 인자로 받지 않았는데 부를 때마다 값이 바뀐다. 쿠폰 만료처럼 오늘 날짜에 묶인 테스트가 어느 날 갑자기 깨지는 이유가 이것이다. 숨은 입력을 찾아 바깥으로 빼는 이야기는 [순수 함수](/posts/js-pure-functions) 글에 자세히 있으니, 여기서는 테스트 도구 쪽을 본다.
+
+방법은 둘이다. 하나는 시계를 인자로 받는 것이다. 위의 `makeSignUp`이 `clock`을 받은 게 그 예다. 다른 하나는 타이머를 품고 있는 코드를 그대로 두고 런타임의 시계를 가짜로 바꾸는 것이다. 30분 동안 요청이 없으면 끝나는 세션을 진짜 시간으로 테스트하면 30분을 기다려야 한다.
+
+```js
+// session.js
+export function makeSession({ onExpire, idleMs = 30 * 60 * 1000 }) {
+  let timer = setTimeout(onExpire, idleMs);
+  const startedAt = Date.now();
+  return {
+    touch() { clearTimeout(timer); timer = setTimeout(onExpire, idleMs); },
+    ageMs() { return Date.now() - startedAt; },
+  };
+}
+```
+
+```js
+// session.test.js
+test("29분에 요청이 오면 그때부터 다시 30분을 센다", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  let expired = 0;
+  const s = makeSession({ onExpire: () => expired++ });
+
+  t.mock.timers.tick(29 * 60 * 1000);
+  s.touch();
+  t.mock.timers.tick(29 * 60 * 1000);
+  assert.equal(expired, 0);
+  assert.equal(s.ageMs(), 58 * 60 * 1000);
+
+  t.mock.timers.tick(60 * 1000);
+  assert.equal(expired, 1);
+});
+```
+
+```text
+(node:4270) ExperimentalWarning: The MockTimers API is an experimental feature and might change at any time
+✔ 29분에 요청이 오면 그때부터 다시 30분을 센다 (1.417299ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+```
+
+59분짜리 시나리오가 1.4ms에 끝났다. `t.mock.timers`는 Node 20.4에 들어왔고, Node 22에서는 아직 실험 기능이라 경고가 한 줄 뜬다. `t.mock`으로 켠 가짜는 테스트가 끝나면 알아서 원래대로 돌아간다. 모듈 수준의 `mock.timers`를 썼다면 `reset()`을 직접 불러야 다음 테스트에 새지 않는다.
+
+가짜 시계 안에서는 `tick`이 무슨 일을 하는지 알아야 덜 헤맨다. 아래 그림은 타이머 두 개를 예약하고 시계를 두 번 넘기는 과정이다.
+
+<AlgoTrace
+  caption="가짜 시계는 예약표를 시각순으로 꺼낸다"
+  memoryLabel="예약된 타이머 (시각순)"
+  cells={["after a 100", "after b 50", "tick 60", "tick 40"]}
+  steps={[
+    { pointer: 0, memory: ["a@100"], caption: "시계는 0이다. a를 100에 예약한다. 아무것도 실행되지 않는다." },
+    { pointer: 1, memory: ["b@50", "a@100"], caption: "b는 50에 예약된다. 나중에 넣었지만 시각이 이르니 앞에 선다." },
+    { pointer: 2, memory: ["a@100"], found: [1], caption: "60까지 넘긴다. 50에 예약된 b가 울리고 시계는 60에 멈춘다." },
+    { pointer: 3, memory: [], found: [0, 1], caption: "40을 더 넘기면 100에 닿아 a가 울린다. 실제로 흐른 시간은 거의 0이다." },
+  ]}
+/>
+
+가짜 시계가 콜백을 불러 주지 않아 헤매는 경우도 있다. 타이머를 `await` 뒤에서 예약하는 코드라면, 테스트가 `tick`을 부르는 순간에는 아직 예약 전일 수 있다. 이 순서 문제는 [마이크로태스크와 매크로태스크](/posts/js-microtask-macrotask#처음-테스트는-장부의-어디서-어긋났나) 글에서 장부를 적어 가며 풀었다.
+
+난수도 같은 방식으로 손에 쥔다. 함수가 난수 생성기를 인자로 받게 하고, 테스트에서는 시드(seed)가 같으면 같은 수열을 내는 생성기를 넘긴다.
+
+```js
+// rng.js
+export function seeded(seed) {           // mulberry32: 같은 시드면 같은 수열
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+export function shuffle(arr, rand = Math.random) {   // 피셔-예이츠 셔플
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+```
+
+```js
+test("시드 42로 섞은 결과는 언제나 같다", () => {
+  assert.deepEqual(shuffle(["a", "b", "c", "d", "e"], seeded(42)), ["a", "e", "c", "b", "d"]);
+});
+
+test("어떤 시드로 섞어도 원소는 그대로다", () => {
+  const input = [1, 2, 3, 4, 5, 6, 7, 8];
+  for (let seed = 1; seed <= 500; seed++) {
+    const out = shuffle(input, seeded(seed));
+    assert.deepEqual([...out].sort((x, y) => x - y), input, `seed=${seed}`); // 실패하면 시드가 남는다
+  }
+});
+```
+
+```text
+✔ 시드 42로 섞은 결과는 언제나 같다 (1.683198ms)
+✔ 어떤 시드로 섞어도 원소는 그대로다 (4.320549ms)
+ℹ pass 2
+ℹ fail 0
+```
+
+두 번째 테스트는 특정 결과가 아니라 "어떤 입력에도 지켜져야 하는 성질"을 확인한다. 이걸 넓힌 게 속성 기반 테스트(property-based testing)이고, JavaScript에서는 fast-check 같은 라이브러리가 입력을 만들어 주고 실패하면 가장 작은 반례로 줄여 준다. 어느 쪽이든 실패 메시지에 시드를 남겨야 다시 재현할 수 있다.
+
+## 혼자 돌리면 통과하는 테스트
+
+같은 코드로 다시 돌리면 통과하는 테스트, 즉 플레이키 테스트의 원인과 CI에서 다루는 순서는 [CI/CD 글](/posts/ci-cd-basics#가끔-실패하는-테스트)에 정리돼 있다. 여기서는 단위 테스트 안에서 자주 만드는 원인 하나만 본다. 테스트끼리 상태를 나눠 쓰는 것이다.
+
+```js
+// limiter.js: 사용자별로 3번까지 허용. 카운터는 모듈에 하나뿐이다
+const hits = new Map();
+export function allow(userId) {
+  const n = (hits.get(userId) ?? 0) + 1;
+  hits.set(userId, n);
+  return n <= 3;
+}
+```
+
+```js
+test("세 번까지는 허용한다", () => {
+  assert.deepEqual([allow("u1"), allow("u1"), allow("u1")], [true, true, true]);
+});
+test("첫 요청은 허용한다", () => {
+  assert.equal(allow("u1"), true);
+});
+```
+
+```text
+✔ 세 번까지는 허용한다 (1.816823ms)
+✖ 첫 요청은 허용한다 (0.786281ms)
+ℹ pass 1
+ℹ fail 1
+  false !== true
+```
+
+두 번째 테스트만 골라 돌리면 통과한다.
+
+```bash
+node --test --test-reporter=spec --test-name-pattern="첫 요청" limiter.test.js
+```
+
+```text
+✔ 첫 요청은 허용한다 (0.723652ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+```
+
+앞 테스트가 `u1`의 카운터를 3으로 올려 두고 갔다. 이런 테스트는 순서가 바뀌거나 앞 테스트가 빠지는 순간 결과가 뒤집힌다. 고치는 방향은 상태를 모듈 밖으로 꺼내는 것이다. `createLimiter()`가 Map을 만들어 돌려주게 하면 테스트마다 새 인스턴스를 쓴다. 꺼낼 수 없는 상태라면 `beforeEach`에서 초기화하는 함수를 열어 둔다. Node 22 러너는 파일 단위로는 프로세스를 나눠 주지만, 한 파일 안의 테스트끼리는 같은 모듈 인스턴스를 공유한다는 점을 기억해 둔다.
+
+## 커버리지 100%인데 버그가 그대로다
+
+커버리지는 테스트가 코드의 몇 퍼센트를 실행했는지 잰다. 확인했는지는 재지 않는다. 단언이 하나도 없는 테스트를 돌려 보자.
+
+```js
+// 단언 없이 부르기만 해도 줄은 '실행됨'으로 잡힌다
+test("합계를 계산한다", () => {
+  cartTotal([{ price: 12000, qty: 2 }]);
+  cartTotal([{ price: 16000, qty: 2 }], { couponPct: 10 });
+  cartTotal([]);
+});
+```
+
+```bash
+node --test --test-reporter=spec --experimental-test-coverage --test-coverage-include='cart.js' cart.cov.test.js
+```
+
+```text
+✔ 합계를 계산한다 (0.968115ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 102.075633
+ℹ start of coverage report
+ℹ ----------------------------------------------------------
+ℹ file      | line % | branch % | funcs % | uncovered lines
+ℹ ----------------------------------------------------------
+ℹ cart.js   | 100.00 |   100.00 |  100.00 | 
+ℹ ----------------------------------------------------------
+ℹ all files | 100.00 |   100.00 |  100.00 | 
+ℹ ----------------------------------------------------------
+ℹ end of coverage report
+```
+
+줄, 분기, 함수 모두 100%다. 앞에서 만든 `subtotal >= 30000` 버그를 넣어도 이 테스트는 통과한다. 커버리지는 낮을 때 의미가 있는 숫자다. 30%라면 테스트가 손대지 않은 곳이 확실히 있다는 뜻이다. 높다고 안전하다는 뜻은 아니다. 커버리지 목표를 강하게 걸면 이런 단언 없는 테스트가 늘어난다.
+
+테스트가 정말 버그를 잡는지 재고 싶으면 변이 테스트(mutation testing)를 쓴다. 도구가 코드의 `>=`를 `>`로, `+`를 `-`로 일부러 바꿔 보고, 그래도 테스트가 통과하면 "살아남은 변이"로 보고한다. JavaScript에서는 Stryker가 흔히 쓰인다. 코드를 수백 번 바꿔 돌리니 느려서, 보통은 핵심 모듈에만 가끔 돌린다.
+
+## 직접 만들어 보는 가짜 시계
+
+`t.mock.timers`가 안에서 하는 일을 작게 만들어 보자. 연산 목록을 받아 울린 타이머를 `이름@시각` 문자열로 돌려준다.
+
+- `["after", name, ms]`: 지금부터 ms 뒤에 울릴 타이머를 예약한다. 네 번째 값으로 `[nextName, nextMs]`를 주면, 이 타이머가 울릴 때 그 시각부터 nextMs 뒤에 다음 타이머를 예약한다(재시도처럼).
+- `["tick", ms]`: 시계를 ms만큼 넘긴다. 그 사이에 닿는 타이머를 시각순으로, 같은 시각이면 예약한 순서로 울린다. 넘기는 도중에 새로 예약된 타이머도 범위 안이면 울린다.
+- `["cancel", name]`: 그 이름의 타이머를 지운다.
+
+<CodePlayground
+  caption="가짜 시계 runClock"
+  functionName="runClock"
+  initialCode={`function runClock(ops) {
+  let now = 0;
+  const fired = [];
+  // ops를 하나씩 처리하면서 울린 타이머를 fired에 "이름@시각"으로 쌓는다
+  return fired;
+}`}
+  solution={`function runClock(ops) {
+  let now = 0;
+  let seq = 0;
+  let timers = [];
+  const fired = [];
+
+  function schedule(name, ms, then) {
+    timers.push({ at: now + ms, seq: seq++, name: name, then: then });
+  }
+
+  function tick(ms) {
+    const end = now + ms;
+    while (true) {
+      const due = timers.filter((t) => t.at <= end);
+      if (due.length === 0) break;
+      due.sort((a, b) => a.at - b.at || a.seq - b.seq);
+      const t = due[0];
+      timers = timers.filter((x) => x !== t);
+      now = t.at;
+      fired.push(t.name + "@" + now);
+      if (t.then) schedule(t.then[0], t.then[1]);
+    }
+    now = end;
+  }
+
+  for (const op of ops) {
+    if (op[0] === "after") schedule(op[1], op[2], op[3]);
+    else if (op[0] === "cancel") timers = timers.filter((t) => t.name !== op[1]);
+    else if (op[0] === "tick") tick(op[1]);
+  }
+  return fired;
+}`}
+  tests={[
+    { label: "시각순으로 울린다", args: [[["after", "a", 100], ["after", "b", 50], ["tick", 200]]], expected: ["b@50", "a@100"] },
+    { label: "닿지 않으면 울리지 않는다", args: [[["after", "a", 100], ["tick", 99]]], expected: [] },
+    { label: "두 번에 나눠 넘겨도 같다", args: [[["after", "a", 100], ["tick", 60], ["tick", 40]]], expected: ["a@100"] },
+    { label: "같은 시각은 예약 순서", args: [[["after", "x", 10], ["after", "y", 10], ["tick", 10]]], expected: ["x@10", "y@10"] },
+    { label: "넘기는 중에 생긴 타이머", args: [[["after", "a", 10, ["b", 5]], ["tick", 20]]], expected: ["a@10", "b@15"] },
+    { label: "재시도 간격", args: [[["after", "retry1", 1000, ["retry2", 2000]], ["tick", 2500], ["tick", 500]]], expected: ["retry1@1000", "retry2@3000"] },
+    { label: "취소하고 다시 예약", args: [[["after", "expire", 1800], ["tick", 1700], ["cancel", "expire"], ["after", "expire", 1800], ["tick", 1800]]], expected: ["expire@3500"] },
+  ]}
+/>
+
+다섯 번째 테스트가 함정이다. `tick` 시작 때 한 번 골라 둔 목록만 돌면, 넘기는 도중에 생긴 `b`를 놓친다. 하나 울릴 때마다 남은 예약표를 다시 봐야 한다.
+
+## React 컴포넌트도 같은 질문을 받는다
+
+프런트엔드에서도 "무엇을 대역으로 바꿀까"가 같은 질문으로 돌아온다. 컴포넌트 안의 커스텀 훅을 목으로 바꾸면, 훅의 이름이나 반환 모양을 바꾸는 순간 동작은 같아도 테스트가 깨진다. 두 번째 거짓말이다. 그래서 React Testing Library는 사용자가 보는 것(역할, 라벨, 텍스트)으로 요소를 찾고 클릭과 입력으로 확인하라고 권한다. 상태 값이나 훅 호출 횟수는 보지 않는다.
+
+서버 요청도 같다. `fetch`나 데이터 훅을 직접 목으로 바꾸기보다 네트워크 경계에서 가짜 응답을 주는 방식(MSW 같은 도구)이 덜 거짓말을 한다. 컴포넌트, 데이터 훅, 캐시가 진짜로 함께 돌기 때문이다. 이렇게 쓰면 자연스럽게 트로피 모양이 된다. 화면의 데이터 캐시가 어떻게 움직이는지는 [클라이언트 데이터 캐시](/posts/client-data-cache) 글에 있다.
+
+## 대역이 흉내 내지 못하는 것
+
+테스트는 버그를 빨리 알려 주는 장치이고, 좋은 테스트는 진짜 버그에는 깨지고 리팩터링에는 깨지지 않는다. 그래서 대역은 바깥 경계에만 꽂고, 결과로 확인하고, 시계와 난수는 손에 쥔다. 대역이 아무리 잘 만들어져도 진짜 DB의 유니크 인덱스는 흉내 내지 못한다. 그 경계를 진짜로 확인하는 방법은 [실제 DB로 도는 통합 테스트](/posts/integration-tests-real-db)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 테스트 피라미드는 무엇이고, 왜 그런 모양인가요?
+
+아래층일수록 빠르고 싸며 실패 원인을 정확히 짚는 테스트를 많이 두라는 모델이다. 단위 테스트가 바닥, 통합 테스트가 가운데, E2E가 꼭대기에 적게 온다. 느리고 깨지기 쉬운 UI 테스트에 기대던 관행을 바꾸려고 마이크 콘이 제안했다. 비율은 정답이 아니라 코드의 성격에 맞춰 정하고, 프런트엔드나 로직이 얇은 서비스는 통합 테스트를 더 두껍게 두는 트로피나 벌집 모양을 쓰기도 한다.
+
+### 단위 테스트의 "단위"는 무엇인가요?
+
+학파마다 다르다. 고전파는 하나의 행동을 단위로 보고 그 안의 객체들은 진짜로 함께 돌리며 느리거나 공유되는 바깥 의존만 대역으로 바꾼다. 런던 학파는 클래스 하나를 단위로 보고 협력자를 모두 목으로 바꾼다. 앞쪽은 리팩터링에 강하고 뒤쪽은 실패 위치를 정확히 짚는다. 나는 바깥 경계만 바꾸는 고전파를 기본으로 두고, 협력 자체가 중요한 곳에만 목을 쓴다.
+
+### 스텁과 목은 무엇이 다른가요?
+
+스텁은 코드로 들어가는 간접 입력을 통제하려고 정해 둔 값을 돌려주고, 목은 코드에서 나가는 호출이 기대대로 일어났는지 검증한다. 스텁을 쓰면 결과 상태로 확인하는 상태 검증이 되고, 목을 쓰면 호출 자체를 보는 행동 검증이 된다. 호출을 기록만 하는 것은 스파이, 진짜처럼 단순하게 동작하는 구현은 가짜라고 부른다.
+
+### 목을 많이 쓰면 어떤 문제가 생기나요?
+
+두 방향으로 거짓말을 한다. 목이 진짜 의존성과 다르게 답하면 테스트는 통과하는데 운영에서 깨지고, 목이 호출 순서나 횟수를 고정하면 동작이 같은 리팩터링에도 테스트가 깨진다. 그래서 내 것이 아닌 타입은 목으로 만들지 않고, 결과로 확인할 수 있으면 결과로 확인하며, 경계 너머는 진짜를 쓰는 통합 테스트로 보완한다.
+
+### 가짜 구현이 진짜와 다르게 동작하는 건 어떻게 막나요?
+
+같은 계약 테스트 묶음을 가짜와 진짜 구현 양쪽에 돌린다. 저장소라면 "대소문자 없이 이메일은 하나"처럼 포트가 약속하는 동작을 테스트로 써 두고, 메모리 구현과 DB 구현에 똑같이 실행한다. 가짜가 진짜보다 너그럽거나 엄격하면 그 자리에서 실패한다.
+
+### 현재 시각에 의존하는 코드는 어떻게 테스트하나요?
+
+시계를 인자나 생성자로 받아서 테스트가 시각을 정하게 하는 게 가장 깔끔하다. 바꿀 수 없는 코드라면 `node:test`의 `mock.timers`나 Jest·Vitest의 가짜 타이머로 `setTimeout`과 `Date`를 바꾸고 `tick`으로 시간을 넘긴다. 타이머가 `await` 뒤에서 예약되면 넘기기 전에 마이크로태스크를 비워야 하고, 가짜 타이머는 테스트가 끝나면 원래대로 돌려야 다음 테스트에 새지 않는다.
+
+### 혼자 돌리면 통과하고 같이 돌리면 실패하는 테스트는 어떻게 찾나요?
+
+테스트 사이에 상태가 새는 경우가 대부분이다. 이름 패턴으로 하나씩 골라 돌려 보고, 동시 실행 수를 1로 줄여서 순서와 병렬 중 무엇이 원인인지 가른다. 모듈 수준 변수, 지우지 않은 DB 행, 돌려놓지 않은 목과 환경 변수, 같은 포트나 임시 파일이 흔한 원인이다. 상태를 인스턴스로 꺼내 테스트마다 새로 만들면 근본적으로 사라진다.
+
+### 커버리지가 높으면 테스트가 충분하다고 볼 수 있나요?
+
+아니다. 커버리지는 실행했는지를 잴 뿐 확인했는지는 재지 않아서, 단언이 없는 테스트로도 100%가 나온다. 낮은 커버리지가 "테스트가 안 닿은 곳이 있다"는 신호로 쓸모 있다. 테스트가 버그를 잡는 힘을 재려면 코드를 일부러 바꿔 보고 테스트가 실패하는지 보는 변이 테스트를 쓴다.

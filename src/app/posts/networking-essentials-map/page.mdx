@@ -4,16 +4,16 @@ export const metadata = getPostMetadata("networking-essentials-map");
 
 카페에서 노트북을 열고 Wi-Fi에 붙은 뒤, 주소창에 `https://example.com`을 치고 엔터를 누른다. 화면이 뜨기까지 1초 남짓이다. 그 1초 동안 노트북은 주소를 빌리고, 이름을 숫자로 바꾸고, 옆 기기의 하드웨어 주소를 묻고, 공유기를 지나 주소를 바꿔 달고, 방화벽 검문을 지나, 서버의 특정 프로그램과 연결을 맺고, 내용을 암호화해서 주고받는다.
 
-"네트워크 필수 개념 15가지"로 흔히 묶이는 것들(IP 주소, 서브넷, DHCP, DNS, MAC 주소, 스위치, 라우터, NAT, 방화벽, 포트, TCP, UDP, HTTP, HTTPS, VPN)이 모두 이 1초 안에서 한 번씩 일한다. 이 글은 그 순서, 키보드에서 서버까지의 순서대로 열다섯 개념을 늘어놓고 각각이 어떤 질문에 답하는지, 현장에서 어떤 모양으로 보이는지, 자세한 글은 어디 있는지를 잇는 지도다. 개념마다 깊이 들어가는 일은 링크한 글이 맡는다.
+"네트워크 필수 개념 15가지"나 "20가지"로 흔히 묶이는 것들(패킷, IP 주소, 서브넷, DHCP, DNS, MAC 주소, ARP, 스위치, 라우터와 라우팅, NAT, 프록시, CDN, 로드 밸런서, 리버스 프록시, 방화벽, 포트, TCP, UDP, TLS, HTTP와 HTTPS, WebSocket, VPN, 지연 시간, 그리고 이들을 층으로 묶는 OSI 모델)이 모두 이 1초 안에서 한 번씩 일한다. 목록마다 고르는 항목이 조금씩 다를 뿐이다. 이 글은 그 합집합을 키보드에서 서버까지의 순서대로 늘어놓고, 각각이 어떤 질문에 답하는지, 현장에서 어떤 모양으로 보이는지, 자세한 글은 어디 있는지를 잇는 지도다. 개념마다 깊이 들어가는 일은 링크한 글이 맡는다.
 
-비슷한 지도가 둘 더 있다. [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)은 브라우저 쪽(HSTS, 렌더링)에 무게를 둔 이야기이고, [DevOps 네트워킹 지도](/posts/devops-networking-roadmap)는 클라우드, 컨테이너, 관측까지 포함한 운영자의 공부 순서와 증상별 안내다. 이 글은 그 둘의 바닥에 깔린 기본 열다섯 개만 다룬다. 여기서 보이는 출력은 이 지도의 각 글을 쓰며 네트워크 네임스페이스 실습에서 실제로 받은 것을 옮겨 온 것이다.
+비슷한 지도가 둘 더 있다. [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)은 브라우저 쪽(HSTS, 렌더링)에 무게를 둔 이야기이고, [DevOps 네트워킹 지도](/posts/devops-networking-roadmap)는 클라우드, 컨테이너, 관측까지 포함한 운영자의 공부 순서와 증상별 안내다. 이 글은 그 둘의 바닥에 깔린 기본 개념만 다룬다. 주소가 없는 순간부터 첫 응답까지를 실제 캡처 한 벌로 따라가는 이야기는 [Wi-Fi에 붙은 노트북이 첫 페이지를 받기까지](/posts/first-page-from-power-on)에 있다. 여기서 보이는 출력은 이 지도의 각 글을 쓰며 네트워크 네임스페이스 실습에서 실제로 받은 것을 옮겨 온 것이다.
 
 ## 1초를 펼쳐 놓으면
 
 아래 그림은 엔터를 누른 뒤의 1초를 주고받은 메시지 순서대로 펼친 것이다. 다음을 누르면 개념 하나씩 차례로 일한다. 실제로는 DHCP가 Wi-Fi에 붙는 순간 미리 끝나 있고, 게이트웨이 MAC과 DNS 답은 캐시에 있으면 건너뛴다.
 
 <SequenceDiagram
-  caption="엔터에서 첫 화면까지, 열다섯 개념이 일하는 순서"
+  caption="엔터에서 첫 화면까지, 개념들이 일하는 순서"
   actors={[
     { id: "pc", label: "노트북" },
     { id: "gw", label: "공유기" },
@@ -23,8 +23,8 @@ export const metadata = getPostMetadata("networking-essentials-map");
   steps={[
     { from: "pc", to: "gw", label: "DHCP DORA", title: "주소를 빌린다 (DHCP, IP, 서브넷)", detail: "Wi-Fi에 붙자마자 브로드캐스트로 묻고, 공유기가 주소, 서브넷 마스크, 게이트웨이, DNS 서버를 빌려준다.", payload: "bound to 192.168.50.109 -- renewal in 53 seconds." },
     { from: "pc", to: "gw", label: "ARP who-has 게이트웨이", title: "게이트웨이 MAC을 묻는다 (MAC, 스위치)", detail: "서버는 다른 망이니 게이트웨이로 보내야 한다. 그 MAC을 브로드캐스트로 묻고, 스위치(AP)가 모든 포트로 뿌린다." },
-    { from: "pc", to: "dns", label: "A example.com?", title: "이름을 주소로 (DNS)", detail: "리졸버에게 묻고 IP를 받는다. 이 질의도 UDP 53번 포트로 공유기와 라우터를 지난다." },
-    { from: "pc", to: "web", label: "SYN :443", title: "연결을 맺는다 (라우터, NAT, 방화벽, 포트, TCP)", detail: "공유기가 출발지를 공인 주소로 바꾸고(NAT), 라우터들이 한 칸씩 넘기고, 서버 앞 방화벽이 443을 허락한다. 3-way handshake가 오간다." },
+    { from: "pc", to: "dns", label: "A example.com?", title: "이름을 주소로 (DNS)", detail: "리졸버에게 묻고 IP를 받는다. 이 질의도 UDP 53번 포트로 공유기와 라우터를 지난다. CDN을 쓰는 사이트라면 가까운 엣지의 주소가 돌아온다." },
+    { from: "pc", to: "web", label: "SYN :443", title: "연결을 맺는다 (라우터, NAT, 방화벽, 포트, TCP)", detail: "공유기가 출발지를 공인 주소로 바꾸고(NAT), 라우터들이 라우팅 테이블을 보며 한 칸씩 넘기고, 서버 앞 방화벽이 443을 허락한다. 3-way handshake의 상대는 대개 서버가 아니라 로드 밸런서나 리버스 프록시다." },
     { from: "web", to: "pc", label: "SYN-ACK", title: "응답은 바뀐 주소로 돌아온다", detail: "서버는 공인 주소에 답하고, 공유기가 변환 기록을 보고 노트북에게 돌려준다." },
     { from: "pc", to: "web", label: "ClientHello …", title: "암호화 터널을 만든다 (HTTPS)", detail: "TLS 1.3 핸드셰이크로 서버 인증서를 확인하고 키를 정한다. 여기서 바이트가 가장 많이 든다." },
     { from: "pc", to: "web", label: "GET /", title: "드디어 요청 (HTTP)", detail: "암호화된 레코드 안에 HTTP 요청이 실린다. 82바이트 요청이 선 위에서는 194바이트어치가 된다." },
@@ -32,10 +32,10 @@ export const metadata = getPostMetadata("networking-essentials-map");
   ]}
 />
 
-열다섯 개념은 서로 기대고 있다. DHCP가 주소와 DNS 서버를 주지 않으면 DNS를 못 묻고, 같은 망인지 아닌지(서브넷)를 알아야 MAC으로 바로 보낼지 라우터로 보낼지 정한다. 아래 그림의 화살표는 "이게 있어야 저게 일한다"는 뜻이다.
+이 개념들은 서로 기대고 있다. DHCP가 주소와 DNS 서버를 주지 않으면 DNS를 못 묻고, 같은 망인지 아닌지(서브넷)를 알아야 MAC으로 바로 보낼지 라우터로 보낼지 정한다. 아래 그림의 화살표는 "이게 있어야 저게 일한다"는 뜻이다.
 
 <ConceptDiagram
-  caption="열다섯 개념이 서로 기대는 방향"
+  caption="개념들이 서로 기대는 방향"
   width={400}
   height={370}
   nodes={[
@@ -46,6 +46,7 @@ export const metadata = getPostMetadata("networking-essentials-map");
     { id: "rt", label: "라우터 · NAT", sub: "망을 건넌다", x: 330, y: 190, w: 116 },
     { id: "vpn", label: "VPN", sub: "한 겹 더 싼다", x: 70, y: 265, w: 116 },
     { id: "fw", label: "방화벽", sub: "통과를 정한다", x: 330, y: 265, w: 116 },
+    { id: "mid", label: "CDN · LB · 프록시", sub: "받아서 넘긴다", x: 200, y: 265, w: 124 },
     { id: "http", label: "HTTPS · HTTP", sub: "내용", x: 70, y: 340, w: 116 },
     { id: "l4", label: "포트 · TCP · UDP", sub: "프로그램까지", x: 260, y: 340, w: 140 },
   ]}
@@ -56,6 +57,8 @@ export const metadata = getPostMetadata("networking-essentials-map");
     { from: "ip", to: "mac", label: "같은 망" },
     { from: "ip", to: "rt", label: "다른 망" },
     { from: "rt", to: "fw" },
+    { from: "rt", to: "mid", dashed: true },
+    { from: "mid", to: "l4", label: "새 연결" },
     { from: "fw", to: "l4", label: "포트로 판단" },
     { from: "l4", to: "http" },
     { from: "vpn", to: "ip", dashed: true, label: "감싼다" },
@@ -64,15 +67,19 @@ export const metadata = getPostMetadata("networking-essentials-map");
 
 ## 망에 들어서는 순간
 
-### 1. IP 주소
+### 1. 패킷
+
+네트워크로 가는 모든 데이터는 잘게 나뉜 조각, 패킷으로 간다. 조각마다 앞에 주소와 순서 같은 헤더가 붙고 뒤에 실제 내용(페이로드)이 실린다. 이더넷 한 장에 실을 수 있는 크기(MTU)가 보통 1500바이트라서 큰 응답은 수십, 수백 장으로 나뉘어 가고, 그 덕에 여러 사람의 통신이 같은 선을 번갈아 나눠 쓴다. 엄밀히는 층마다 이름이 달라서 L2에서는 프레임, L3에서는 패킷, TCP에서는 세그먼트라고 부른다. 아래 개념들은 모두 이 헤더의 어느 칸을 읽고 쓰느냐의 이야기다. 요청 하나가 선 위에서 몇 장, 몇 바이트가 되는지는 [패킷 캡슐화 글](/posts/packet-encapsulation)에서 셌다.
+
+### 2. IP 주소
 
 인터넷에서 기기를 가리키는 주소다. 답하는 질문은 "어느 망의 몇 번 기기인가"이고, 주소 하나 안에 망 번호와 기기 번호가 함께 들어 있다. 사설 대역(`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)은 인터넷에서 길이 없어서 밖에 나갈 때 NAT가 필요하다. 주소가 모자라서 나온 IPv6는 128비트이고, 주소를 스스로 만든다([IPv6 글](/posts/ipv6-basics)).
 
-### 2. 서브넷과 CIDR
+### 3. 서브넷과 CIDR
 
 `/24`처럼 앞에서 몇 비트가 망 번호인지 적는 표기다. 답하는 질문은 "상대가 나와 같은 망인가"다. 같으면 직접(MAC으로), 다르면 게이트웨이로 보낸다. 이 판단 하나가 뒤의 모든 경로를 가른다. 대역이 겹치면 길이 사라지는 사고까지 [IP 주소와 서브넷 글](/posts/layer-ip-addressing)에 있다.
 
-### 3. DHCP
+### 4. DHCP
 
 위 두 가지와 게이트웨이, DNS 서버 주소를 기한부로 빌려준다. 주소가 없는 기기는 `0.0.0.0`에서 `255.255.255.255`로 묻고, DISCOVER, OFFER, REQUEST, ACK 네 번으로 주소를 받는다. 받은 주소에는 남은 시간이 붙어 있다.
 
@@ -85,17 +92,21 @@ export const metadata = getPostMetadata("networking-essentials-map");
 
 ## 이름을 주소로
 
-### 4. DNS
+### 5. DNS 조회
 
 `example.com`을 IP로 바꾼다. 리졸버가 루트, TLD, 권한 있는 네임서버를 차례로 물어 답을 찾고, 답에는 TTL이 붙어 그동안 캐시된다. "도메인을 바꿨는데 일부 사용자만 옛 서버로 간다"는 대개 이 캐시 때문이다. 질의는 보통 UDP 53번이고 답이 크면 TCP로 넘어간다. 레코드 종류와 `dig`로 장애를 찾는 법은 [DNS 글](/posts/dns), DNS보다 먼저 보는 한 줄은 [hosts 파일 글](/posts/hosts-file)에 있다.
 
 ## 같은 망 안의 한 칸
 
-### 5. MAC 주소
+### 6. MAC 주소
 
-랜 카드에 붙은 48비트 하드웨어 주소다. IP가 출발지에서 목적지까지의 주소라면, MAC은 이번 한 구간의 주소다. 같은 망의 상대 IP는 알지만 MAC을 모를 때 ARP로 "이 IP 누구야"를 브로드캐스트한다. 다른 망으로 갈 때는 서버의 MAC이 아니라 게이트웨이의 MAC을 묻는다. [데이터 링크 계층 글](/posts/layer-link-ethernet-arp)에 ARP 캐시와 Gratuitous ARP까지 있다.
+랜 카드에 붙은 48비트 하드웨어 주소다. IP가 출발지에서 목적지까지의 주소라면, MAC은 이번 한 구간의 주소다. 그래서 라우터를 지날 때마다 새로 쓰인다.
 
-### 6. 스위치
+### 7. ARP
+
+IP는 아는데 MAC을 모를 때 "이 IP 누구야"를 브로드캐스트로 묻고, 주인이 자기 MAC으로 답한다. 받은 답은 이웃 표(ARP 캐시)에 잠시 남는다. 다른 망으로 갈 때는 서버의 MAC이 아니라 게이트웨이의 MAC을 묻는다는 점이 자주 나오는 꼬리 질문이다. 대답이 없으면 내 커널이 직접 `Destination Host Unreachable`을 낸다. [데이터 링크 계층 글](/posts/layer-link-ethernet-arp)에 ARP 캐시 상태와 Gratuitous ARP까지 있다.
+
+### 8. 스위치
 
 같은 망의 기기들을 잇는다. 프레임의 받는 MAC을 MAC 표에서 정확히 찾아 그 포트로만 내보내고, 모르는 MAC과 브로드캐스트는 모든 포트로 뿌린다. 프레임을 고치지 않는다. 실습 브리지가 배운 표다.
 
@@ -108,7 +119,7 @@ export const metadata = getPostMetadata("networking-essentials-map");
 
 ## 망을 건너는 일
 
-### 7. 라우터
+### 9. 라우터
 
 서로 다른 망을 잇는다. 받는 IP를 라우팅 테이블에서 가장 길게 맞는 줄로 찾아 다음 칸을 정하고, 바깥 이더넷 봉투를 새로 씌우고 TTL을 하나 줄인다. 브로드캐스트는 라우터에서 멈춘다. 스위치와 라우터를 같은 실습 망에 세워 차이를 본 글이 [라우터와 스위치](/posts/router-vs-switch)이고, 라우팅 테이블과 traceroute는 [라우팅과 ICMP 글](/posts/layer-ip-routing-icmp)에 있다. 라우터 하나를 지난 응답은 TTL이 하나 줄어 있다.
 
@@ -116,7 +127,11 @@ export const metadata = getPostMetadata("networking-essentials-map");
 64 bytes from 10.0.2.13: icmp_seq=1 ttl=63 time=0.296 ms
 ```
 
-### 8. NAT
+### 10. 라우팅
+
+라우터가 "다음 칸"을 고르는 일 자체다. 기기마다 라우팅 테이블이 있어서, 목적지와 가장 길게 맞는 줄(longest prefix match)을 고르고, 맞는 줄이 없으면 기본 경로(`default via ...`)로 보낸다. 노트북의 테이블은 보통 두 줄(내 망은 직접, 나머지는 공유기)뿐이고, 인터넷의 큰 라우터들은 BGP로 서로 경로를 알려 주며 수십만 줄을 들고 있다. 경로가 없으면 패킷은 버려지고 ICMP로 알려 주거나 조용히 사라진다. `ip route get 목적지`로 어느 줄이 쓰일지 바로 확인할 수 있고, `traceroute`는 TTL을 하나씩 늘려 지나는 라우터를 보여 준다([라우팅과 ICMP 글](/posts/layer-ip-routing-icmp)).
+
+### 11. NAT
 
 사설 주소를 공인 주소로 바꿔 내보내고, 그 변환을 기억했다가 답을 돌려준다. 집 공유기, 클라우드 NAT 게이트웨이, Docker, 쿠버네티스 Service가 모두 이 일을 한다. 변환 기록 한 줄은 이렇게 생겼다.
 
@@ -155,37 +170,65 @@ udp      17 118 src=10.0.0.2 dst=203.0.113.10 sport=40000 dport=3478 src=203.0.1
   ]}
 />
 
+## 가운데 서는 상자들
+
+인터넷을 건넌 요청이 곧바로 서버 프로그램에 닿는 일은 드물다. 대부분 중간의 상자가 먼저 받아서 새 연결로 넘긴다. 아래 넷 모두 "받아서 넘긴다"는 점은 같고, 누구 편에 서서 무엇을 보고 넘기느냐가 다르다.
+
+### 12. 프록시
+
+클라이언트 편에서 대신 나가 주는 상자다. 회사망에서 브라우저가 직접 나가지 않고 프록시에게 "이 주소로 가 달라"고 부탁하면, 서버에게는 프록시의 주소만 보인다. 접근 제어, 로그, 캐시를 한곳에서 하려고 쓴다. HTTPS는 `CONNECT`로 터널만 파 주니 내용은 못 보지만, 회사가 루트 인증서를 깔아 TLS를 열어 보는 경우도 있다. [프록시와 리버스 프록시 글](/posts/proxy-reverse-proxy)에 CONNECT와 `HTTPS_PROXY` 설정이 있다.
+
+### 13. CDN
+
+정적 파일을 사용자 가까운 도시의 엣지 서버에 복사해 두고 거기서 답한다. 서울 사용자가 미국 서버까지 왕복하지 않아도 되니 지연 시간이 크게 준다. 가까운 엣지로 보내는 방법은 DNS가 위치별로 다른 주소를 주거나, 여러 도시가 같은 IP를 광고하는 애니캐스트다. 얼마나 오래 캐시할지는 HTTP 캐시 헤더가 정한다. [CDN 엣지와 애니캐스트 글](/posts/cdn-edge-anycast), [HTTP 캐싱과 CDN 글](/posts/http-caching-cdn)에 있다.
+
+### 14. 로드 밸런서
+
+같은 일을 하는 서버 여러 대 앞에서 요청을 나눠 준다. 헬스 체크로 죽은 서버를 빼고, 배포할 때는 연결을 비우며(드레이닝) 한 대씩 내린다. TCP 연결 단위로 나누면 L4, HTTP 요청을 읽고 경로별로 나누면 L7이다. 앞에서 받은 연결과 뒤로 여는 연결이 따로라서, 앱이 보는 출발지는 로드 밸런서 주소다. [로드 밸런서 기본 글](/posts/load-balancer-basics)과 [분배 알고리즘 글](/posts/load-balancing-algorithms)에 있다.
+
+### 15. 리버스 프록시
+
+프록시를 서버 편에 돌려 세운 것이다. 클라이언트는 리버스 프록시가 서버인 줄 알고, 리버스 프록시가 뒤의 앱에게 넘긴다. TLS를 여기서 끝내고, 정적 파일과 압축, 캐시, 경로별 라우팅을 맡는다. 진짜 클라이언트 IP는 `X-Forwarded-For` 헤더로 넘긴다. Nginx 한 대가 리버스 프록시와 로드 밸런서를 겸하는 일이 흔해서 둘의 경계는 역할로 나눈다. 설정은 [Nginx 리버스 프록시 글](/posts/nginx-reverse-proxy)에, 세 상자를 같은 요청 앞에 세워 비교한 이야기는 [리버스 프록시, 로드 밸런서, API 게이트웨이](/posts/reverse-proxy-lb-api-gateway)에 있다.
+
 ## 문 앞의 검문
 
-### 9. 방화벽
+### 16. 방화벽
 
 패킷마다 통과를 정한다. 출발지, 목적지, 포트, 연결 상태를 보고 허용하거나 버린다. 연결 상태를 기억하는 방화벽(stateful)은 나간 요청의 답을 자동으로 들여보내고, 기억하지 않는 방화벽(stateless)은 답의 포트까지 따로 열어 줘야 한다. 리눅스 서버의 iptables는 [iptables 글](/posts/iptables-basics)에, 클라우드의 보안 그룹과 네트워크 ACL의 차이는 [보안 그룹과 NACL 글](/posts/security-groups-nacl)에 있다. 방화벽이 버리면(DROP) 클라이언트는 타임아웃을, 거절하면(REJECT) 바로 `Connection refused`를 본다. 이 차이가 장애를 좁히는 단서가 된다.
 
 ## 프로그램까지 찾아가기
 
-### 10. 포트
+### 17. 포트
 
 한 기기 안에서 어느 프로그램에게 줄지 가리키는 16비트 번호다. 연결 하나는 프로토콜, 출발지 IP와 포트, 목적지 IP와 포트 다섯 값으로 구별된다. 서버 쪽은 443처럼 정해진 포트를 듣고, 클라이언트 쪽은 커널이 고른 임시 포트(리눅스 기본 32768~60999)를 쓴다. `Address already in use`와 임시 포트 고갈은 [포트와 소켓 글](/posts/ports-and-sockets)에서 다뤘다.
 
-### 11. TCP
+### 18. TCP
 
 순서와 도착을 보장하는 연결이다. 3-way handshake로 시작하고, 잃어버린 조각은 다시 보내고, 받는 쪽과 길이 넘치지 않게 속도를 조절한다. 그 대가로 왕복 한 번의 연결 비용과 손실 시 대기가 생긴다. 연결의 상태(TIME_WAIT, CLOSE_WAIT)는 [TCP 연결의 일생](/posts/tcp-connection-lifecycle)에, 재전송과 혼잡 제어는 [TCP 신뢰성 글](/posts/tcp-reliability-congestion)에 있다.
 
-### 12. UDP
+### 19. UDP
 
-연결 없이 주소만 적어 던진다. 헤더가 8바이트이고 순서와 도착을 보장하지 않는다. DNS, 화상 통화, 게임처럼 늦게 온 데이터가 쓸모없는 곳에서 쓰고, HTTP/3의 QUIC은 UDP 위에 TCP가 하던 일을 다시 지었다. [UDP와 QUIC 글](/posts/udp-and-quic)에 있다.
+연결 없이 주소만 적어 던진다. 헤더가 8바이트이고 순서와 도착을 보장하지 않는다. DNS, 화상 통화, 게임처럼 늦게 온 데이터가 쓸모없는 곳에서 쓰고, HTTP/3의 QUIC은 UDP 위에 TCP가 하던 일을 다시 지었다. [UDP와 QUIC 글](/posts/udp-and-quic)에 있다. TCP냐 UDP냐는 보장을 얻는 대신 지연을 감수할지, 보장을 버리고 빨리 갈지의 선택이다.
 
 ## 내용을 지키고 주고받기
 
-### 13. HTTPS
+### 20. TLS
 
-HTTP를 TLS로 감싼 것이다. 서버 인증서로 상대가 진짜인지 확인하고, 키를 정해 내용을 암호화하고, 위변조를 검사한다. TLS 1.3은 왕복 한 번으로 핸드셰이크를 끝낸다. 인증서 체인과 핸드셰이크는 [HTTPS와 TLS 글](/posts/https-tls)에 있다.
+TCP 위에 얹는 암호화 층이다. 서버 인증서로 상대가 진짜인지 확인하고, 키를 정해 내용을 암호화하고, 위변조를 검사한다. TLS 1.3은 왕복 한 번으로 핸드셰이크를 끝낸다. 그래도 다 숨지는 않는다. 첫 메시지(ClientHello)의 SNI에 접속할 도메인이 평문으로 실려서 중간에서 보인다. 인증서 체인과 핸드셰이크는 [HTTPS와 TLS 글](/posts/https-tls)에 있다.
 
-### 14. HTTP
+### 21. HTTPS
 
-요청 줄, 헤더, 본문으로 이루어진 텍스트 규약이다. 메서드(GET, POST), 상태 코드(200, 404, 502), 캐시 헤더가 모두 이 층의 말이다. [HTTP 메시지](/posts/http-message), [메서드](/posts/http-methods), [상태 코드](/posts/http-status-codes), [HTTP 버전](/posts/http-versions) 글로 나뉘어 있다.
+HTTP를 TLS로 감싼 것이다. HTTP와 HTTPS의 차이는 규약이 아니라 포장이다. 요청과 응답의 모양은 똑같고, HTTPS는 그걸 TLS 레코드 안에 넣어 보낸다(기본 포트 80 대 443). 그래서 HTTP로 보내면 공유기, 카페 Wi-Fi, ISP 누구든 쿠키와 비밀번호를 읽고 바꿀 수 있고, HTTPS로 보내면 도메인 정도만 보인다. 브라우저가 처음부터 HTTPS로만 가게 하는 HSTS는 [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)에 있다.
 
-### 15. VPN
+### 22. HTTP
+
+요청 줄, 헤더, 본문으로 이루어진 규약이다. 메서드(GET, POST), 상태 코드(200, 404, 502), 캐시 헤더가 모두 이 층의 말이다. 요청 하나에 응답 하나이고, 서버가 먼저 말을 걸 수는 없다. [HTTP 메시지](/posts/http-message), [메서드](/posts/http-methods), [상태 코드](/posts/http-status-codes), [HTTP 버전](/posts/http-versions) 글로 나뉘어 있다.
+
+### 23. WebSocket
+
+HTTP로 시작해서 연결을 양방향 통로로 바꾼다. 클라이언트가 `Upgrade: websocket` 헤더로 요청하고 서버가 `101 Switching Protocols`로 답하면, 그 TCP 연결 위로 양쪽이 아무 때나 작은 프레임을 보낼 수 있다. 채팅, 알림, 실시간 시세처럼 서버가 먼저 보내야 할 때 쓴다. 연결을 오래 쥐고 있으니 중간 프록시나 로드 밸런서의 유휴 타임아웃(예: 60초)에 끊기지 않게 하트비트를 보내야 하고, 서버가 여러 대면 메시지를 나눠 줄 장치가 따로 필요하다. [WebSocket 깊게 보기](/posts/websocket-deep-dive)에 있고, 폴링, SSE와의 비교는 [실시간 통신 글](/posts/realtime-communication)에 있다.
+
+### 24. VPN
 
 남의 망(인터넷) 위에 내 전용 통로를 낸다. 원래 패킷을 통째로 암호화해 새 헤더로 한 번 더 싸서 보내고, 반대편 게이트웨이가 벗긴다. 인터넷의 라우터는 바깥 헤더만 보니 안쪽 사설 주소가 드러나지 않는다. 대신 헤더가 늘어(WireGuard는 IPv4에서 60바이트) MTU를 줄여야 한다. IPsec과 WireGuard는 [VPN 글](/posts/vpn-ipsec-wireguard)에 있다.
 
@@ -221,20 +264,26 @@ HTTP를 TLS로 감싼 것이다. 서버 인증서로 상대가 진짜인지 확�
   ]}
 />
 
+## 1초는 어디에 쓰이나
+
+### 25. 지연 시간
+
+요청을 보내고 답이 오기까지 걸리는 시간이다. 빛이 광섬유를 지나는 시간, 라우터마다 줄 서는 시간, 서버가 일하는 시간이 더해진다. 첫 접속은 DNS, TCP, TLS, HTTP가 각각 왕복을 하나 이상 쓰니, 서버까지 왕복이 100ms인 곳이라면 첫 바이트 전에 400ms가 든다. 그래서 지연을 줄이는 방법은 대부분 왕복을 없애는 쪽이다. CDN으로 거리를 줄이고, 연결을 재사용하고, TLS 1.3과 HTTP/3로 핸드셰이크를 줄인다. 대역폭(한 번에 얼마나 많이)과는 다른 숫자라서, 작은 요청이 느리면 대역폭을 늘려도 소용없다. [지연 시간, 대역폭, 처리량 글](/posts/latency-bandwidth-throughput)에서 셋을 따로 재 봤다.
+
 ## 층으로 묶어 보면
 
-열다섯 개념을 위아래로 쌓으면 OSI 7계층(실무에서는 TCP/IP 4계층)이 된다. MAC과 스위치는 L2, IP·서브넷·라우터·NAT는 L3, 포트·TCP·UDP는 L4, HTTP·HTTPS·DNS·DHCP는 그 위의 응용 계층이다. 방화벽과 VPN은 장비나 기능의 이름이라 여러 층에 걸친다(L3·L4를 보는 방화벽, L7을 보는 WAF, L3를 싸는 IPsec). 아래 그림에서 다음을 누르면 층마다 개념이 하나씩 쌓인다.
+이 개념들을 위아래로 쌓으면 OSI 7계층(실무에서는 TCP/IP 4계층)이 된다. MAC·ARP·스위치는 L2, 패킷·IP·서브넷·라우터·라우팅·NAT는 L3, 포트·TCP·UDP는 L4, TLS·HTTP·HTTPS·WebSocket·DNS·DHCP는 그 위의 응용 계층이다. 방화벽, VPN, 프록시, 로드 밸런서는 장비나 기능의 이름이라 여러 층에 걸친다(L3·L4를 보는 방화벽, L7을 보는 WAF, L3를 싸는 IPsec, L4와 L7 로드 밸런서). CDN은 L7의 캐시이고, 지연 시간은 모든 층에 조금씩 쌓인다. 아래 그림에서 다음을 누르면 층마다 개념이 하나씩 쌓인다.
 
 <AlgoTrace
-  caption="열다섯 개념을 층에 놓기"
+  caption="개념들을 층에 놓기"
   memoryLabel="이 층에서 일하는 것"
   cells={["L2 링크", "L3 네트워크", "L4 전송", "L7 응용"]}
   steps={[
-    { pointer: 0, memory: ["MAC 주소", "스위치"], caption: "같은 망 안의 한 구간. 주소는 MAC, 장비는 스위치. 프레임에 TTL이 없다." },
-    { pointer: 1, memory: ["IP 주소", "서브넷", "라우터", "NAT"], caption: "망과 망 사이. 주소는 IP, 길은 라우터가 찾고, NAT는 이 층의 주소(와 L4 포트)를 바꾼다." },
+    { pointer: 0, memory: ["MAC 주소", "ARP", "스위치"], caption: "같은 망 안의 한 구간. 주소는 MAC, 그 MAC을 ARP로 묻고, 장비는 스위치. 프레임에 TTL이 없다." },
+    { pointer: 1, memory: ["패킷", "IP 주소", "서브넷", "라우터", "라우팅", "NAT"], caption: "망과 망 사이. 주소는 IP, 길은 라우팅 테이블로 찾고, NAT는 이 층의 주소(와 L4 포트)를 바꾼다." },
     { pointer: 2, memory: ["포트", "TCP", "UDP"], caption: "기기 안의 프로그램까지. 믿을 만한 연결(TCP)이냐, 가볍게 던지느냐(UDP)." },
-    { pointer: 3, memory: ["DHCP", "DNS", "HTTP", "HTTPS"], caption: "응용이 쓰는 약속들. DHCP와 DNS는 다른 개념이 일하도록 주소와 이름을 마련해 준다." },
-    { found: [1, 2, 3], memory: ["방화벽: L3~L7", "VPN: L3를 L3·L4로 싼다"], caption: "방화벽과 VPN은 층을 가로지른다. 무엇을 보고 무엇을 싸는지로 층을 말한다." },
+    { pointer: 3, memory: ["DHCP", "DNS", "TLS", "HTTP", "HTTPS", "WebSocket", "CDN"], caption: "응용이 쓰는 약속들. DHCP와 DNS는 다른 개념이 일하도록 주소와 이름을 마련해 준다." },
+    { found: [1, 2, 3], memory: ["방화벽: L3~L7", "VPN: L3를 L3·L4로 싼다", "LB: L4 또는 L7", "프록시: L7 (CONNECT는 터널)"], caption: "방화벽, VPN, 로드 밸런서, 프록시는 층을 가로지른다. 무엇을 보고 무엇을 싸는지로 층을 말한다." },
   ]}
 />
 
@@ -284,20 +333,26 @@ function headerAtServer(path, start) {
 | 3 | DHCP | [DHCP](/posts/dhcp) | 주소는 누가 언제까지 주나 |
 | 4 | MAC, 스위치 | [데이터 링크 계층](/posts/layer-link-ethernet-arp) | 같은 망 안에서 누구에게 주나 |
 | 5 | 라우터 | [라우터와 스위치](/posts/router-vs-switch) | 망을 건널 때 무엇이 바뀌나 |
-| 6 | DNS | [DNS](/posts/dns) | 이름은 어떻게 IP가 되나 |
-| 7 | 포트 | [포트와 소켓](/posts/ports-and-sockets) | 기기 안 어느 프로그램인가 |
-| 8 | TCP | [TCP 연결의 일생](/posts/tcp-connection-lifecycle) | 연결은 어떻게 맺고 끊나 |
-| 9 | UDP | [UDP와 QUIC](/posts/udp-and-quic) | 보장을 버리면 무엇을 얻나 |
-| 10 | NAT | [iptables NAT](/posts/iptables-nat) | 사설 주소는 어떻게 밖에 나가나 |
-| 11 | 방화벽 | [보안 그룹과 NACL](/posts/security-groups-nacl) | 무엇을 기억하고 무엇을 막나 |
-| 12 | HTTP | [HTTP 메시지](/posts/http-message) | 요청과 응답은 어떻게 생겼나 |
-| 13 | HTTPS | [HTTPS와 TLS](/posts/https-tls) | 상대를 어떻게 믿고 숨기나 |
-| 14 | VPN | [VPN](/posts/vpn-ipsec-wireguard) | 남의 길 위에 내 길을 어떻게 내나 |
-| 15 | 캡슐화 | [패킷 캡슐화](/posts/packet-encapsulation) | 실제로 몇 바이트가 드나 |
+| 6 | 라우팅 | [라우팅과 ICMP](/posts/layer-ip-routing-icmp) | 다음 칸은 어떻게 고르나 |
+| 7 | DNS | [DNS](/posts/dns) | 이름은 어떻게 IP가 되나 |
+| 8 | 포트 | [포트와 소켓](/posts/ports-and-sockets) | 기기 안 어느 프로그램인가 |
+| 9 | TCP | [TCP 연결의 일생](/posts/tcp-connection-lifecycle) | 연결은 어떻게 맺고 끊나 |
+| 10 | UDP | [UDP와 QUIC](/posts/udp-and-quic) | 보장을 버리면 무엇을 얻나 |
+| 11 | NAT | [iptables NAT](/posts/iptables-nat) | 사설 주소는 어떻게 밖에 나가나 |
+| 12 | 방화벽 | [보안 그룹과 NACL](/posts/security-groups-nacl) | 무엇을 기억하고 무엇을 막나 |
+| 13 | HTTP | [HTTP 메시지](/posts/http-message) | 요청과 응답은 어떻게 생겼나 |
+| 14 | TLS, HTTPS | [HTTPS와 TLS](/posts/https-tls) | 상대를 어떻게 믿고 숨기나 |
+| 15 | 지연 시간 | [지연, 대역폭, 처리량](/posts/latency-bandwidth-throughput) | 빠르다는 건 어떤 숫자인가 |
+| 16 | 프록시, 리버스 프록시 | [프록시와 리버스 프록시](/posts/proxy-reverse-proxy) | 중간 상자는 누구를 대신하나 |
+| 17 | 로드 밸런서 | [로드 밸런서 기본](/posts/load-balancer-basics) | 여러 대에 어떻게 나누고 빼나 |
+| 18 | CDN | [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast) | 가까운 곳에서 어떻게 답하나 |
+| 19 | WebSocket | [WebSocket 깊게 보기](/posts/websocket-deep-dive) | 서버가 먼저 말하려면 |
+| 20 | VPN | [VPN](/posts/vpn-ipsec-wireguard) | 남의 길 위에 내 길을 어떻게 내나 |
+| 21 | 캡슐화 | [패킷 캡슐화](/posts/packet-encapsulation) | 실제로 몇 바이트가 드나 |
 
-다 읽은 뒤에는 실전으로 넘어간다. 개념을 엮어 장애를 좁히는 순서는 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer), 눈으로 확인하는 도구는 [tcpdump 글](/posts/packet-capture-tcpdump)에 있다. NAT 뒤의 기기끼리 직접 연결하는 문제는 [NAT traversal](/posts/nat-traversal)이 이어 받는다.
+다 읽은 뒤에는 실전으로 넘어간다. 여섯 규약이 한 번의 접속에서 실제로 어떤 패킷이 되는지는 [Wi-Fi에 붙은 노트북이 첫 페이지를 받기까지](/posts/first-page-from-power-on)에서 캡처로 확인한다. 개념을 엮어 장애를 좁히는 순서는 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer), 눈으로 확인하는 도구는 [tcpdump 글](/posts/packet-capture-tcpdump)에 있다. NAT 뒤의 기기끼리 직접 연결하는 문제는 [NAT traversal](/posts/nat-traversal)이 이어 받는다.
 
-열다섯 개념을 외우는 것보다, 패킷 하나가 지나며 어느 순간에 어느 개념이 일하는지 말할 수 있는 게 더 쓸모 있다. 주소를 빌리고(DHCP), 같은 망인지 보고(서브넷), 이름을 풀고(DNS), 다음 칸의 MAC을 얻고(ARP, 스위치), 망을 건너며 주소가 바뀌고(라우터, NAT), 검문을 지나(방화벽), 프로그램을 찾아(포트, TCP, UDP), 내용을 숨겨 주고받는다(HTTPS, HTTP). VPN은 이 전체를 한 겹 더 싼다.
+개념 목록을 외우는 것보다, 패킷 하나가 지나며 어느 순간에 어느 개념이 일하는지 말할 수 있는 게 더 쓸모 있다. 주소를 빌리고(DHCP), 같은 망인지 보고(서브넷), 이름을 풀고(DNS), 다음 칸의 MAC을 얻고(ARP, 스위치), 망을 건너며 길을 고르고 주소가 바뀌고(라우팅, NAT), 중간 상자를 거쳐(CDN, 로드 밸런서, 리버스 프록시), 검문을 지나(방화벽), 프로그램을 찾아(포트, TCP, UDP), 내용을 숨겨 주고받는다(TLS, HTTPS, HTTP, WebSocket). VPN은 이 전체를 한 겹 더 싸고, 지연 시간은 이 모든 단계의 왕복이 쌓인 값이다.
 
 ## 면접에서 나올 만한 질문
 
@@ -324,6 +379,10 @@ function headerAtServer(path, start) {
 ### 방화벽이 DROP할 때와 REJECT할 때 클라이언트가 보는 증상은 어떻게 다른가요?
 
 DROP은 아무 답 없이 버리니 클라이언트는 타임아웃까지 기다린다. REJECT는 TCP RST나 ICMP 오류를 돌려주니 클라이언트가 바로 `Connection refused` 같은 오류를 본다. 그래서 바로 거절되면 방화벽의 REJECT이거나 그 포트를 듣는 프로그램이 없는 것이고, 한참 걸려 타임아웃이면 중간에서 버려졌거나 경로가 없는 것이다.
+
+### 프록시, 리버스 프록시, 로드 밸런서는 어떻게 다른가요?
+
+누구 편에 서서 무엇을 하느냐가 다르다. 프록시는 클라이언트 편에서 대신 나가 주고, 서버는 프록시의 주소만 본다. 리버스 프록시는 서버 편에서 대신 받아 주고, TLS 종료, 캐시, 경로별 라우팅을 맡는다. 로드 밸런서는 그중 여러 서버에 나눠 주는 일과 헬스 체크에 집중한 것이다. Nginx 한 대가 리버스 프록시와 로드 밸런서를 함께 하는 경우가 많아서, 장비 이름보다 그 자리에서 맡은 역할로 구분한다.
 
 ### VPN을 쓰면 MTU 문제가 왜 생기나요?
 

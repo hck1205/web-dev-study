@@ -1,6 +1,7 @@
 import { AB_TESTING } from "./ab-testing";
 import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
+import { AGENTIC_RAG } from "./agentic-rag";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
@@ -108,6 +109,7 @@ import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
+import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
@@ -129,6 +131,7 @@ import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
+import { GRAPH_RAG } from "./graph-rag";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -152,6 +155,7 @@ import { IAC_BASICS } from "./iac-basics";
 import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
+import { INTEGRATION_TESTS_REAL_DB } from "./integration-tests-real-db";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
@@ -355,6 +359,7 @@ import { RABBITMQ_BASICS } from "./rabbitmq-basics";
 import { RACE_CONDITIONS } from "./race-conditions";
 import { RAFT_CONSENSUS } from "./raft-consensus";
 import { RAG_CLASSIC_PIPELINE } from "./rag-classic-pipeline";
+import { RAG_PATTERNS_OVERVIEW } from "./rag-patterns-overview";
 import { RAG_RETRIEVAL_QUALITY } from "./rag-retrieval-quality";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
@@ -496,6 +501,7 @@ import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
 import { TERRAFORM_MODULES_TFVARS } from "./terraform-modules-tfvars";
 import { TERRAFORM_NETWORK_IAC } from "./terraform-network-iac";
+import { TEST_PYRAMID_UNIT_TESTS } from "./test-pyramid-unit-tests";
 import { THREAD_SAFETY } from "./thread-safety";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
@@ -517,6 +523,7 @@ import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 import { XSS } from "./xss";
 import { YAML_FOR_K8S } from "./yaml-for-k8s";
+import { YOUTUBE_URL_TO_VIDEO } from "./youtube-url-to-video";
 import { ZERO_DOWNTIME_MIGRATIONS } from "./zero-downtime-migrations";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
@@ -525,6 +532,7 @@ export const QUESTION_SETS = [
   AB_TESTING,
   ABORT_CONTROLLER,
   ACID_TRANSACTIONS,
+  AGENTIC_RAG,
   ALERTING,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
@@ -632,6 +640,7 @@ export const QUESTION_SETS = [
   FAILOVER,
   FAULT_TOLERANCE,
   FEATURE_FLAGS,
+  FIRST_PAGE_FROM_POWER_ON,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
   GATEWAY,
@@ -653,6 +662,7 @@ export const QUESTION_SETS = [
   GITHUB_ACTIONS_DOCKER_ECR,
   GITOPS_ARGOCD_VS_FLUX,
   GRAFANA_DASHBOARDS,
+  GRAPH_RAG,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,
@@ -676,6 +686,7 @@ export const QUESTION_SETS = [
   IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
+  INTEGRATION_TESTS_REAL_DB,
   IPTABLES_BASICS,
   IPTABLES_NAT,
   IPV6_BASICS,
@@ -879,6 +890,7 @@ export const QUESTION_SETS = [
   RACE_CONDITIONS,
   RAFT_CONSENSUS,
   RAG_CLASSIC_PIPELINE,
+  RAG_PATTERNS_OVERVIEW,
   RAG_RETRIEVAL_QUALITY,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
@@ -1020,6 +1032,7 @@ export const QUESTION_SETS = [
   TERRAFORM_BASICS,
   TERRAFORM_MODULES_TFVARS,
   TERRAFORM_NETWORK_IAC,
+  TEST_PYRAMID_UNIT_TESTS,
   THREAD_SAFETY,
   TIMEOUTS,
   TOKEN_LOGIN,
@@ -1041,6 +1054,7 @@ export const QUESTION_SETS = [
   WHAT_HAPPENS_GOOGLE_COM,
   XSS,
   YAML_FOR_K8S,
+  YOUTUBE_URL_TO_VIDEO,
   ZERO_DOWNTIME_MIGRATIONS,
   ZERO_TRUST_ARCHITECTURE,
 ];

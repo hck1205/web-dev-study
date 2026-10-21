@@ -1,0 +1,698 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("integration-tests-real-db");
+
+[앞 글](/posts/test-pyramid-unit-tests)에서 가입 테스트 세 개가 모두 초록이었는데, 운영에서는 `Kim@x.com`으로 가입하려는 사람에게 500이 났다. 테스트의 저장소가 스텁과 가짜였고, 둘 다 진짜 DB의 `lower(email)` 유니크 인덱스를 모른 채 "있다" 혹은 "없다"를 답했다. 대역을 아무리 정교하게 만들어도 이런 버그는 남는다. 대역은 우리가 아는 만큼만 진짜를 흉내 내기 때문이다.
+
+이 글은 그 경계를 진짜로 확인한다. 같은 가입 코드를 실제 PostgreSQL 16에 붙여 버그를 재현하고, 테스트끼리 서로 더럽히지 않게 트랜잭션으로 되돌리는 법, 그 방법이 통하지 않는 순간들, 팩토리로 테스트 데이터를 만드는 법, HTTP 서버를 띄워 요청 단위로 확인하는 법, 그리고 CI에서 DB를 어떻게 준비하는지까지 간다. 단위 테스트와 테스트 대역의 종류는 앞 글에서 다뤘으니 여기서는 다시 설명하지 않는다.
+
+예제는 Node 22.22, `pg` 8, Ubuntu 24.04의 PostgreSQL 16.15로 돌렸다. 테스트 러너는 `node:test`다.
+
+## 진짜 DB에 붙이자 바로 빨간불이 떴다
+
+스키마는 이렇다. 이메일은 대소문자 없이 하나만 허용하려고 표현식 인덱스를 걸었다. 주문의 외래 키는 일부러 `DEFERRABLE INITIALLY DEFERRED`로 두었는데, 이유는 뒤에서 나온다.
+
+```sql
+CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email      text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
+
+CREATE TABLE orders (
+  id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id bigint NOT NULL,
+  amount  integer NOT NULL CHECK (amount > 0),
+  status  text NOT NULL DEFAULT 'PENDING'
+);
+ALTER TABLE orders ADD CONSTRAINT orders_user_fk
+  FOREIGN KEY (user_id) REFERENCES users (id) DEFERRABLE INITIALLY DEFERRED;
+```
+
+진짜 저장소는 `pg`의 커넥션이나 풀을 받아 SQL을 보낸다. 처음 버전의 `findByEmail`은 `WHERE email = $1`이었다. 앞 글의 `signUp`은 그대로 두고 저장소만 이걸로 꽂는다.
+
+```js
+// signup.int.test.js
+test("대소문자만 다른 이메일은 TAKEN이다 (진짜 DB)", async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const signUp = makeSignUp({
+      users: pgUsers(client),
+      mailer: { send: async () => {} },
+      clock: { now: () => new Date("2026-10-23T00:00:00Z") },
+    });
+    await signUp("kim@x.com");
+    assert.deepEqual(await signUp("Kim@x.com"), { ok: false, reason: "TAKEN" });
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+```
+
+```text
+✖ 대소문자만 다른 이메일은 TAKEN이다 (진짜 DB) (362.864229ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+
+✖ 대소문자만 다른 이메일은 TAKEN이다 (진짜 DB) (362.864229ms)
+  error: duplicate key value violates unique constraint "users_email_lower_key"
+      at async Object.insert (file:///.../users-repo.js:9:24)
+    code: '23505',
+    detail: 'Key (lower(email))=(kim@x.com) already exists.',
+```
+
+운영의 500과 같은 에러가 테스트에서 났다. 찾기는 대소문자를 구분해 0행을 냈고, 넣기에서 인덱스가 막았다. 찾는 쿼리를 `WHERE lower(email) = lower($1)`로 고치면 이 테스트는 30ms 만에 통과한다. 쿼리가 인덱스와 같은 표현식을 써야 인덱스를 탄다는 덤도 생긴다.
+
+## 고쳤는데 동시에 오면 또 터진다
+
+찾고 나서 넣는 코드에는 틈이 하나 더 있다. 두 요청이 거의 같은 순간에 오면 둘 다 "없다"를 보고 둘 다 넣으려 한다. 이건 테스트 하나가 커넥션 하나로 도는 구조로는 재현되지 않는다. 각자 다른 커넥션에서 커밋해야 한다.
+
+<SequenceDiagram
+  caption="찾고 나서 넣기 사이에 다른 요청이 끼어든다"
+  actors={[
+    { id: "r1", label: "요청 A" },
+    { id: "r2", label: "요청 B" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "r1", to: "db", label: "find lee@x.com", title: "A가 먼저 찾는다", detail: "아직 아무도 없으니 0행이다." },
+    { from: "r2", to: "db", label: "find Lee@x.com", title: "B도 찾는다", detail: "A가 아직 넣기 전이라 B도 0행을 본다. 둘 다 가입시켜도 된다고 판단했다." },
+    { from: "r1", to: "db", label: "INSERT", title: "A가 넣고 커밋한다", detail: "id 1로 저장된다. A는 201을 받는다.", payload: "{\"ok\":true,\"id\":\"1\"}" },
+    { from: "r2", to: "db", label: "INSERT", title: "B의 INSERT를 인덱스가 막는다", detail: "lower(email)이 같아 23505가 난다. 앱이 이 에러를 TAKEN으로 바꾸지 않으면 500이다.", payload: "ERROR 23505 users_email_lower_key" },
+  ]}
+/>
+
+```js
+// race.test.js: 커넥션 두 개를 미리 열어 두고 같은 이메일로 동시에 가입한다
+beforeEach(async () => {
+  await pool.query("TRUNCATE users, orders RESTART IDENTITY");
+  await Promise.all([pool.query("SELECT 1"), pool.query("SELECT 1")]);
+});
+
+test("같은 이메일로 동시에 두 번 가입하면 하나만 성공한다", async () => {
+  const signUp = makeSignUp({ users: pgUsers(pool), mailer, clock });
+  const results = await Promise.allSettled([signUp("lee@x.com"), signUp("Lee@x.com")]);
+  console.log(results.map((r) => r.status === "fulfilled" ? JSON.stringify(r.value) : r.reason.code));
+  assert.equal(results.filter((r) => r.status === "rejected").length, 0);
+});
+```
+
+```text
+[ '{"ok":true,"id":"1"}', '23505' ]
+✖ 같은 이메일로 동시에 두 번 가입하면 하나만 성공한다 (149.11615ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 0
+```
+
+경쟁 조건이라 매번 터지지는 않는다. 같은 테스트를 30번 돌린 결과는 아래와 같다. 고친 v2는 찾기를 빼고 `INSERT ... ON CONFLICT ((lower(email))) DO NOTHING RETURNING id`로 한 번에 처리한다. 이미 있으면 0행이 돌아오니 그걸 TAKEN으로 바꾼다.
+
+```bash
+# 같은 테스트를 구현마다 30번씩 돌려 통과·실패를 센다
+for impl in ./signup.js ./signup-v2.js; do
+  pass=0; fail=0
+  for i in $(seq 1 30); do
+    if IMPL=$impl node --test race.test.js >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); fi
+  done
+  echo "$impl pass=$pass fail=$fail"
+done
+```
+
+```text
+./signup.js pass=1 fail=29
+./signup-v2.js pass=30 fail=0
+```
+
+두 가지를 짚어 두자. 출력의 `"id":"1"`은 따옴표가 붙은 문자열이다. `pg`는 PostgreSQL의 `bigint`(int8)를 자바스크립트 숫자의 안전 범위를 넘을 수 있다는 이유로 기본적으로 문자열로 준다. 응답 스키마가 숫자를 기대한다면 목으로는 절대 보이지 않는 차이다. 그리고 커넥션을 미리 열어 두지 않은 첫 시도에서는 이 테스트가 통과했다. 두 번째 요청이 새 커넥션을 맺느라 늦어서 경쟁이 일어나지 않은 것이다. 경쟁을 테스트할 때는 "동시에"를 정말 동시로 만드는 준비가 필요하다.
+
+## 테스트마다 트랜잭션을 열고 되돌린다
+
+통합 테스트가 느리고 서로 간섭한다는 불평의 대부분은 정리에서 나온다. 앞 테스트가 남긴 행이 다음 테스트의 개수 세기를 망친다. 가장 싼 정리 방법은 테스트마다 트랜잭션을 열고 끝나면 `ROLLBACK`하는 것이다. 테스트가 쓴 것은 커밋되지 않으니 지울 것도 없다.
+
+```js
+// tx.js
+export function useTransaction() {
+  const ctx = { db: null };
+  beforeEach(async () => {
+    ctx.db = await pool.connect();       // 테스트 하나가 커넥션 하나를 쥔다
+    await ctx.db.query("BEGIN");
+  });
+  afterEach(async () => {
+    await ctx.db.query("ROLLBACK");      // 무엇을 했든 되돌린다
+    ctx.db.release();
+  });
+  after(() => pool.end());
+  return ctx;
+}
+```
+
+아래 그림이 테스트 하나의 생애다. 중요한 건 테스트가 쓰는 코드도 같은 커넥션을 받아야 한다는 점이다.
+
+<SequenceDiagram
+  caption="트랜잭션 하나 안에서 끝나는 테스트"
+  actors={[
+    { id: "hook", label: "beforeEach" },
+    { id: "test", label: "test" },
+    { id: "code", label: "repo / 코드" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "hook", to: "db", label: "BEGIN", title: "커넥션을 빌려 트랜잭션을 연다", detail: "이 커넥션은 테스트가 끝날 때까지 이 테스트만 쓴다." },
+    { from: "test", to: "db", label: "INSERT users", title: "팩토리가 필요한 행을 만든다", detail: "같은 트랜잭션 안이라 다른 커넥션에는 보이지 않는다." },
+    { from: "test", to: "code", label: "같은 client", title: "테스트할 코드에 커넥션을 넘긴다", detail: "코드가 자기 풀에서 새 커넥션을 꺼내면 방금 만든 행을 못 본다." },
+    { from: "code", to: "db", label: "SELECT sum", title: "코드가 쿼리한다", detail: "커밋 전의 행도 자기 트랜잭션 안에서는 보인다." },
+    { from: "hook", to: "db", label: "ROLLBACK", title: "afterEach가 되돌린다", detail: "만든 행이 전부 사라진다. TRUNCATE도 DELETE도 필요 없다.", payload: "users 0 | orders 0" },
+  ]}
+/>
+
+```js
+// orders.int.test.js
+const tx = useTransaction();
+
+test("사용자의 결제 완료 주문 합계를 낸다", async () => {
+  const user = await createUser(tx.db);
+  await createOrder(tx.db, { user, amount: 12000, status: "PAID" });
+  await createOrder(tx.db, { user, amount: 8000, status: "PAID" });
+  await createOrder(tx.db, { user, amount: 5000 });               // PENDING은 빠진다
+  const { rows } = await tx.db.query(
+    "SELECT sum(amount)::int AS total FROM orders WHERE user_id = $1 AND status = 'PAID'", [user.id]);
+  console.log("user.id =", user.id);
+  assert.equal(rows[0].total, 20000);
+});
+
+test("다른 테스트가 만든 행은 보이지 않는다", async () => {
+  const { rows } = await tx.db.query("SELECT count(*)::int AS n FROM orders");
+  const u = await createUser(tx.db);
+  console.log("count =", rows[0].n, " user.id =", u.id);
+  assert.equal(rows[0].n, 0);
+});
+
+test("금액이 0이면 CHECK 제약이 막는다", async () => {
+  await assert.rejects(createOrder(tx.db, { amount: 0 }), { code: "23514" });
+});
+```
+
+```text
+user.id = 1
+✔ 사용자의 결제 완료 주문 합계를 낸다 (45.84446ms)
+count = 0  user.id = 2
+✔ 다른 테스트가 만든 행은 보이지 않는다 (4.857214ms)
+✔ 금액이 0이면 CHECK 제약이 막는다 (7.825285ms)
+ℹ tests 3
+ℹ pass 3
+ℹ fail 0
+```
+
+테스트가 끝난 뒤 psql로 두 테이블을 세어 보면 `users`도 `orders`도 0행이다.
+
+세 번째 테스트는 단위 테스트로는 쓸 수 없는 종류다. `CHECK` 제약은 DB에만 있다. 에러 코드 `23514`(check_violation)까지 확인하면 앱이 그 에러를 400으로 바꾸는 코드도 믿을 수 있다.
+
+## 되돌려도 남는 것, 되돌려서 놓치는 것
+
+`ROLLBACK`은 편하지만 모든 걸 되돌리지는 않는다. 같은 파일을 한 번 더 돌리면 이렇게 나온다.
+
+```text
+user.id = 4
+count = 0  user.id = 5
+```
+
+첫 실행에서 1, 2를 썼고, 세 번째 테스트의 팩토리가 사용자 3을 만들었다. 모두 되돌렸는데 번호는 4부터 다시 시작했다. PostgreSQL의 시퀀스(IDENTITY도 안에서는 시퀀스다)는 여러 트랜잭션이 동시에 번호를 받아 가도 막히지 않도록 트랜잭션 밖에서 움직인다. 그래서 `ROLLBACK`으로 돌아가지 않는다.
+
+<AlgoTrace
+  caption="롤백해도 시퀀스는 앞으로만 간다"
+  memoryLabel="한 번이라도 나간 users.id"
+  cells={["1회 테스트1", "1회 테스트2", "1회 테스트3", "2회 테스트1", "2회 테스트2"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "첫 테스트가 사용자 1을 만들고 끝에 되돌린다. 행은 사라지지만 1은 이미 나갔다." },
+    { pointer: 1, memory: ["1", "2"], caption: "다음 테스트는 빈 테이블을 보지만 받는 번호는 2다." },
+    { pointer: 2, memory: ["1", "2", "3"], caption: "CHECK에 걸린 테스트도 사용자를 먼저 만들었으니 3을 썼다." },
+    { pointer: 3, memory: ["1", "2", "3", "4"], found: [3], caption: "다시 돌리면 테이블은 비어 있는데 번호는 4부터다." },
+    { pointer: 4, memory: ["1", "2", "3", "4", "5"], found: [3, 4], caption: "id가 1이라고 적어 둔 테스트는 첫 실행에서만 통과한다." },
+  ]}
+/>
+
+그러니 테스트에 `id === 1`을 박지 않는다. 팩토리가 돌려준 행의 id를 쓴다. 번호를 꼭 맞춰야 하면 `TRUNCATE ... RESTART IDENTITY`로 정리하는 방식을 고른다.
+
+반대로 되돌려서 놓치는 것도 있다. 위 스키마의 주문 외래 키는 `INITIALLY DEFERRED`라서 검사가 커밋 때 일어난다. 없는 사용자 999의 주문을 넣는 테스트를 돌려 보자.
+
+```js
+test("없는 사용자의 주문은 저장되면 안 된다", async () => {
+  const p = tx.db.query("INSERT INTO orders (user_id, amount) VALUES (999, 1000)");
+  await assert.rejects(p, { code: "23503" });   // foreign_key_violation
+});
+```
+
+```text
+✖ 없는 사용자의 주문은 저장되면 안 된다 (40.873303ms)
+ℹ tests 1
+ℹ pass 0
+ℹ fail 1
+
+✖ 없는 사용자의 주문은 저장되면 안 된다 (40.873303ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+```
+
+INSERT가 성공했다. 커밋이 오지 않으니 외래 키 검사는 영영 일어나지 않는다. 운영이라면 커밋에서 실패할 데이터를 테스트는 통과시킨 셈이다. 지연 제약을 쓰는 스키마라면 `useTransaction`의 `BEGIN` 바로 뒤에 `SET CONSTRAINTS ALL IMMEDIATE`를 한 줄 더 보내 커밋 때 볼 검사를 그 자리로 당긴다. 이렇게 바꾸면 같은 테스트가 `23503`을 받고 통과한다.
+
+지연 제약이 왜 필요한지는 [트랜잭션과 ACID](/posts/acid-transactions) 글의 순서 바꾸기 예제에 있다. 커밋 시점에만 도는 것은 이것 말고도 있다. 지연 제약 트리거, `LISTEN`으로 받는 `NOTIFY`(커밋될 때 전달된다), 커밋 뒤에 일어나는 아웃박스 처리가 그렇다. 이런 동작을 확인하는 테스트는 롤백 방식에서 빼서 커밋하고 지우는 방식으로 돌린다.
+
+## 코드가 자기 커넥션을 쓰면 테스트가 못 본다
+
+트랜잭션 방식에서 가장 자주 만나는 실패는 이것이다. 테스트할 코드가 커넥션을 받지 않고 모듈의 `pool`을 직접 쓴다.
+
+```js
+async function countUsers() {
+  const { rows } = await pool.query("SELECT count(*)::int AS n FROM users");  // 새 커넥션
+  return rows[0].n;
+}
+
+test("방금 만든 사용자가 집계에 잡힌다", async () => {
+  await createUser(tx.db);
+  assert.equal(await countUsers(), 1);
+});
+```
+
+```text
+✖ 방금 만든 사용자가 집계에 잡힌다 (38.266006ms)
+  0 !== 1
+```
+
+테스트의 행은 커밋 전이라 다른 커넥션에는 보이지 않는다. PostgreSQL에는 커밋 안 된 데이터를 읽는 격리 수준이 없다. `READ UNCOMMITTED`를 지정해도 `READ COMMITTED`처럼 동작한다. 격리 수준은 [트랜잭션 격리 수준](/posts/db-transaction-isolation)에서 자세히 본다.
+
+코드가 스스로 `BEGIN`과 `COMMIT`을 부르는 경우는 더 조용히 망가진다. psql로 같은 순서를 보내 보면 이렇다.
+
+```sql
+BEGIN;                                           -- 테스트가 연 트랜잭션
+INSERT INTO users (email) VALUES ('a@test.dev');
+BEGIN;                                           -- 코드가 또 연다
+COMMIT;                                          -- 코드가 커밋한다
+ROLLBACK;                                        -- 테스트가 되돌리려 한다
+SELECT count(*) FROM users;
+```
+
+```text
+BEGIN
+INSERT 0 1
+WARNING:  there is already a transaction in progress
+BEGIN
+COMMIT
+WARNING:  there is no transaction in progress
+ROLLBACK
+ count 
+-------
+     1
+(1 row)
+```
+
+안쪽 `BEGIN`은 경고만 내고 무시된다. 그런데 안쪽 `COMMIT`은 바깥 트랜잭션을 통째로 커밋한다. 테스트의 `ROLLBACK`은 되돌릴 게 없고, 행이 남아 다음 테스트를 더럽힌다. 경고는 로그에만 찍히니 눈치채기 어렵다.
+
+고치는 방향은 하나다. 트랜잭션 경계를 코드가 직접 열지 않고 커넥션을 받아서 쓰게 하고, 이미 트랜잭션 안이면 `SAVEPOINT`로 내려가는 도우미를 쓴다. Knex, Prisma, TypeORM 같은 도구의 중첩 트랜잭션도 안에서는 대개 세이브포인트다. 세이브포인트로 되돌리면 그 지점 뒤의 일만 사라진다.
+
+```sql
+BEGIN;
+INSERT INTO sp_demo (v) VALUES ('a');
+SAVEPOINT s1;
+INSERT INTO sp_demo (v) VALUES ('b');
+ROLLBACK TO SAVEPOINT s1;      -- b만 사라진다
+INSERT INTO sp_demo (v) VALUES ('c');
+COMMIT;
+SELECT id, v FROM sp_demo ORDER BY id;
+```
+
+```text
+ id | v 
+----+---
+  1 | a
+  3 | c
+(2 rows)
+```
+
+여기서도 `b`가 받아 간 2번은 돌아오지 않았다. 하나 더 알아 둘 것은 트랜잭션 안에서 에러가 나면 그 트랜잭션은 끝날 때까지 아무 쿼리도 받지 않는다는 점이다.
+
+```text
+BEGIN
+ERROR:  new row for relation "orders" violates check constraint "orders_amount_check"
+DETAIL:  Failing row contains (15, 1, 0, PENDING).
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ROLLBACK
+```
+
+제약 위반을 확인한 뒤 같은 테스트에서 쿼리를 더 보내야 한다면, 위반이 날 문장 앞에 세이브포인트를 두고 그리로 되돌린다.
+
+## 롤백, TRUNCATE, DELETE를 재 보면
+
+트랜잭션으로 덮을 수 없는 테스트(동시성, 커밋 뒤 동작, 다른 프로세스가 쓰는 서버)는 직접 지워야 한다. 같은 일을 하는 테스트 200개를 세 가지 정리 방식으로 돌려 봤다. 테스트 하나는 사용자 하나와 주문 두 개를 만든다.
+
+커넥션 하나로 200번을 돌고, 매번 `BEGIN`/`ROLLBACK`으로 감싸거나, 끝에 `TRUNCATE users, orders RESTART IDENTITY`를 보내거나, `DELETE FROM orders`와 `DELETE FROM users`를 보냈다. 스크립트를 두 번 돌린 결과다.
+
+```text
+ROLLBACK  : 167ms for 200 tests
+TRUNCATE  : 2909ms for 200 tests
+DELETE    : 2124ms for 200 tests
+ROLLBACK  : 328ms for 200 tests
+TRUNCATE  : 3566ms for 200 tests
+DELETE    : 2428ms for 200 tests
+```
+
+다른 작업과 함께 쓰는 서버라 절대값은 흔들리지만 순서는 두 번 다 같았다. 롤백이 7~13배 빠르다. 의외인 건 `TRUNCATE`가 `DELETE`보다 느렸다는 점이다. `TRUNCATE`는 테이블 파일을 새로 만들고 예전 파일을 버리는 방식이라 행 수와 상관없이 드는 고정 비용이 있다. 몇 행 안 되는 테스트 테이블에서는 그 고정 비용이 행을 하나씩 지우는 비용보다 크다. 테이블이 수십 개로 늘면 `TRUNCATE` 한 문장에 모두 적는 쪽이 낫고, 대량 데이터를 넣는 테스트라면 `TRUNCATE`가 이긴다. 정리 방식도 재 보고 고른다.
+
+## 팩토리는 필요한 값만 드러낸다
+
+테스트 데이터를 준비하는 방법은 크게 둘이다. 픽스처(fixture)는 미리 써 둔 SQL이나 JSON을 통째로 넣는다. 사용자 10명, 주문 30건 같은 공용 데이터를 한 번 깔고 모든 테스트가 같이 쓴다. 읽기 전용 참조 데이터(국가 코드, 요금표)에는 잘 맞는다. 문제는 테스트가 픽스처의 어느 행에 기대는지 본문에 드러나지 않는다는 것이다. 누군가 픽스처의 주문 하나를 PAID로 바꾸면, 상관없어 보이는 합계 테스트 다섯 개가 깨진다.
+
+팩토리(factory)는 테스트가 필요한 행을 그 자리에서 만든다. 기본값은 팩토리가 채우고, 테스트에 중요한 값만 테스트 본문에 적는다.
+
+```js
+// factories.js
+let n = 0;
+export async function createUser(db, overrides = {}) {
+  n += 1;
+  const row = { email: `user${n}@test.dev`, ...overrides };   // 유니크해야 하는 값은 카운터로
+  const { rows } = await db.query("INSERT INTO users (email) VALUES ($1) RETURNING *", [row.email]);
+  return rows[0];
+}
+export async function createOrder(db, overrides = {}) {
+  const user = overrides.user ?? (await createUser(db));        // 부모 행은 알아서 만든다
+  const { rows } = await db.query(
+    "INSERT INTO orders (user_id, amount, status) VALUES ($1, $2, $3) RETURNING *",
+    [user.id, overrides.amount ?? 10000, overrides.status ?? "PENDING"]);
+  return rows[0];
+}
+```
+
+앞의 합계 테스트를 다시 보면 금액과 상태만 적혀 있다. 이메일이나 생성 시각은 그 테스트와 상관없으니 보이지 않는 게 맞다. 팩토리를 쓸 때 흔한 실수는 둘이다. 유니크 값을 상수로 두어 두 번째 호출에서 23505를 만나는 것, 그리고 팩토리가 부모 행을 너무 많이 만들어서 테스트 하나가 행 수십 개를 쓰게 되는 것. 객체를 단계별로 쌓는 테스트 데이터 빌더는 [빌더 패턴 글](/posts/pattern-builder#테스트-데이터를-만드는-빌더)에 따로 있다.
+
+## HTTP 서버를 띄워 요청으로 확인한다
+
+저장소 단위를 넘어서 라우팅, JSON 파싱, 상태 코드, 에러 변환까지 한 번에 보려면 진짜 서버를 띄워 진짜 요청을 보낸다. Express의 supertest가 하는 일도 결국 같다. 앱을 임시 포트에 띄우고 HTTP로 부른다. Node 22에는 `fetch`가 들어 있으니 따로 설치할 것이 없다.
+
+<NetworkTopology
+  caption="HTTP 통합 테스트에서 요청이 지나는 길"
+  width={400}
+  height={240}
+  zones={[
+    { id: "proc", label: "테스트 프로세스", x: 10, y: 20, w: 250, h: 200, tone: "private" },
+    { id: "pgz", label: "PostgreSQL 16", x: 280, y: 100, w: 110, h: 120, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "runner", label: "node:test", x: 60, y: 70, icon: "client" },
+    { id: "server", label: ":17601", sub: "http.Server", x: 190, y: 70, icon: "server" },
+    { id: "pool", label: "pg.Pool", x: 190, y: 170, icon: "switch" },
+    { id: "db", label: "b2_app", x: 335, y: 170, icon: "db" },
+    { id: "mail", label: "fake mail", x: 60, y: 170, icon: "container" },
+  ]}
+  links={[
+    { from: "runner", to: "server", label: "fetch" },
+    { from: "server", to: "pool" },
+    { from: "pool", to: "db" },
+    { from: "server", to: "mail", dashed: true },
+    { from: "runner", to: "db", dashed: true },
+  ]}
+  steps={[
+    { path: ["runner", "db"], packet: "TRUNCATE", title: "테스트 전에 테이블을 비운다", detail: "서버는 자기 커넥션으로 커밋하니 롤백으로는 지울 수 없다. 그래서 이 묶음은 TRUNCATE로 정리한다." },
+    { path: ["runner", "server", "pool", "db"], packet: "POST /signup", title: "진짜 요청이 진짜 DB까지 간다", detail: "JSON 파싱, 검증, 저장소, 인덱스를 모두 지난다." },
+    { path: ["server", "mail"], packet: "welcome", title: "메일은 가짜가 받는다", detail: "남의 서비스는 부르지 않는다. 가짜가 받은 메일을 배열에 남기고 테스트가 그걸 본다." },
+    { path: ["db", "pool", "server", "runner"], packet: "409", title: "상태 코드와 본문을 확인한다", detail: "대소문자만 다른 두 번째 가입은 409와 TAKEN이 돌아와야 한다.", payload: "{\"error\":\"TAKEN\"}" },
+  ]}
+/>
+
+```js
+// signup.http.test.js
+const sent = [];
+const server = createApp({ pool, mailer: { send: async (to, kind) => sent.push([to, kind]) } });
+const base = "http://127.0.0.1:17601";
+const post = (body) => fetch(`${base}/signup`, {
+  method: "POST", headers: { "content-type": "application/json" }, body,
+});
+
+before(async () => { server.listen(17601, "127.0.0.1"); await once(server, "listening"); });
+after(async () => { server.close(); await once(server, "close"); await pool.end(); });
+beforeEach(async () => {
+  sent.length = 0;
+  await pool.query("TRUNCATE users, orders RESTART IDENTITY");
+});
+
+test("가입하면 201과 id를 준다", async () => {
+  const res = await post(JSON.stringify({ email: "kim@x.com" }));
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), { id: "1" });
+  assert.deepEqual(sent, [["kim@x.com", "welcome"]]);
+});
+
+test("대소문자만 다른 이메일은 409다", async () => {
+  await post(JSON.stringify({ email: "kim@x.com" }));
+  const res = await post(JSON.stringify({ email: "Kim@x.com" }));
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: "TAKEN" });
+  assert.equal(sent.length, 1);
+});
+
+// 깨진 JSON에 400을 주는지 보는 세 번째 테스트는 생략
+```
+
+```text
+✔ 가입하면 201과 id를 준다 (68.025987ms)
+✔ 대소문자만 다른 이메일은 409다 (15.882401ms)
+✔ JSON이 깨지면 400이다 (23.673465ms)
+ℹ tests 3
+ℹ pass 3
+ℹ fail 0
+ℹ duration_ms 341.608819
+```
+
+`{ id: "1" }`이 문자열인 것도 이 테스트가 고정해 두었다. 나중에 누가 `bigint`를 숫자로 바꾸는 타입 파서를 넣으면 이 테스트가 알려 준다. 포트는 고정값 대신 `listen(0)`으로 운영체제가 빈 포트를 고르게 하고 `server.address().port`를 읽어 쓰면 여러 파일이 동시에 돌아도 부딪히지 않는다. Express 앱의 미들웨어 순서와 에러 처리 미들웨어는 [Express 미들웨어](/posts/express-middleware) 글에서 다룬다.
+
+정리 코드 한 줄을 빼먹으면 어떻게 되는지도 재 봤다. `after`에서 `pool.end()`를 지우고 돌리면 테스트는 전부 통과하는데 러너가 보고한 시간이 `duration_ms 10321.765101`, 10초가 넘는다.
+
+`pg.Pool`이 쉬는 커넥션을 닫는 기본 시간(`idleTimeoutMillis`)이 10초라서, 그동안 프로세스가 살아 있었다. 그 값을 0으로 두는 설정이라면 아예 끝나지 않는다. "CI에서 테스트가 다 통과했는데 잡이 타임아웃으로 죽는다"는 증상은 대개 닫지 않은 커넥션, 서버, 타이머다. Node 22의 `--test-force-exit`로 끝낼 수는 있지만, 새는 걸 찾는 게 먼저다.
+
+## 파일이 동시에 돌면 같은 테이블을 두고 싸운다
+
+`node --test`는 파일마다 프로세스를 띄워 병렬로 돌린다. 두 파일이 같은 DB에서 `TRUNCATE`로 정리하면 서로의 데이터를 지운다. 파일 두 개에 "한 명 넣으면 한 명이다" 테스트를 다섯 개씩 넣고 돌렸다.
+
+```text
+ℹ pass 0 ℹ fail 10
+ℹ pass 0 ℹ fail 10
+ℹ pass 2 ℹ fail 8
+```
+
+실패 메시지는 `0 !== 1`(다른 파일이 방금 비웠다)과 `2 !== 1`(다른 파일이 하나 넣었다)이 섞여 나온다. `--test-concurrency=1`로 하나씩 돌리면 10개 모두 통과하지만 병렬의 이점을 버린다. 나은 방법은 파일(프로세스)마다 DB를 따로 주는 것이다. 스키마를 한 번 적용해 둔 DB를 템플릿으로 삼아 복제한다.
+
+<ConceptDiagram
+  caption="스키마는 한 번, DB는 프로세스마다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "mig", label: "migrations", sub: "한 번만 적용", x: 70, y: 50, w: 110 },
+    { id: "tpl", label: "b2_template", sub: "접속 금지", x: 200, y: 115, w: 116 },
+    { id: "w1", label: "b2_t_<pid1>", sub: "a.test.js", x: 90, y: 195, w: 110 },
+    { id: "w2", label: "b2_t_<pid2>", sub: "b.test.js", x: 310, y: 195, w: 110 },
+  ]}
+  edges={[
+    { from: "mig", to: "tpl", label: "schema.sql" },
+    { from: "tpl", to: "w1", label: "TEMPLATE" },
+    { from: "tpl", to: "w2", label: "TEMPLATE" },
+  ]}
+/>
+
+```js
+// shared-db.js (일부): 파일마다 템플릿에서 DB를 복제하고 끝나면 지운다
+const name = `b2_t_${process.pid}`;
+before(async () => {
+  const c = new pg.Client(admin); await c.connect();
+  await c.query(`CREATE DATABASE ${name} TEMPLATE b2_template`);
+  await c.end();
+  ctx.pool = new pg.Pool({ connectionString: admin.replace("/postgres", `/${name}`) });
+});
+// after()에서는 ctx.pool.end() 뒤에 DROP DATABASE로 지운다
+```
+
+```text
+ℹ tests 10
+ℹ pass 10
+ℹ fail 0
+ℹ duration_ms 2848.795899
+```
+
+이번 실험에서 복제가 공짜는 아니었다. psql에서 `\timing on`을 켜고 빈 DB 하나, 템플릿 복제 하나를 차례로 만든 시간이다.
+
+```text
+CREATE DATABASE
+Time: 143.918 ms
+CREATE DATABASE
+Time: 245.327 ms
+```
+
+스키마가 테이블 두 개뿐이라 마이그레이션을 직접 돌리는 데는 33ms 남짓이 들었다. 이 크기에서는 템플릿이 이득이 없다. 마이그레이션이 수백 개로 쌓였거나 기본 데이터를 많이 깔아야 할 때 템플릿 복제가 값을 한다. 그리고 템플릿에는 아무도 붙어 있으면 안 된다.
+
+```text
+ERROR:  source database "b2_template" is being accessed by other users
+DETAIL:  There is 1 other session using the database.
+```
+
+IDE의 DB 탐색기가 템플릿에 붙어 있으면 이 에러로 테스트 전체가 시작조차 못 한다. 템플릿은 마이그레이션 직후 연결을 모두 끊고 건드리지 않는다. 연결 문자열에 `application_name`을 붙여 두면 `pg_stat_activity`에서 누가 붙어 있는지 바로 보인다.
+
+<UrlAnatomy
+  caption="테스트용 DATABASE_URL 읽기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "scheme", display: "postgres://", title: "드라이버", description: "pg와 대부분의 도구가 postgres://와 postgresql:// 둘 다 받는다." },
+    { key: "auth", display: "b2_tester:b2pass", title: "테스트 전용 계정", description: "운영 계정을 쓰지 않는다. CREATEDB 권한만 있으면 템플릿 복제와 삭제를 할 수 있다. 비밀번호에 @나 /가 있으면 퍼센트 인코딩한다." },
+    { key: "host", display: "@127.0.0.1:5432", title: "호스트와 포트", description: "localhost는 IPv6 ::1로 먼저 갈 수 있다. pg_hba.conf 규칙이 127.0.0.1에만 있으면 주소를 명시하는 편이 덜 헷갈린다." },
+    { key: "db", display: "/b2_t_4242", title: "프로세스마다 다른 DB", description: "이름에 PID를 넣어 병렬로 도는 테스트 파일끼리 부딪히지 않게 한다. 테스트가 끝나면 지운다." },
+    { key: "application_name", display: "?application_name=signup-test", title: "누가 붙어 있나", description: "pg_stat_activity의 application_name 열에 이 값이 보인다. 템플릿에 붙은 세션이나 새는 커넥션을 찾을 때 쓴다." },
+  ]}
+/>
+
+## CI에서는 DB를 컨테이너로 띄운다
+
+로컬의 공용 DB에 기대는 테스트는 그 DB의 상태와 버전에 묶인다. 팀원마다 PostgreSQL 버전이 다르면 같은 테스트가 다르게 돈다. 그래서 테스트용 DB는 테스트가 직접 띄우고 직접 버리는 게 좋다.
+
+방법은 두 가지가 흔하다. 하나는 Testcontainers다. 테스트 코드가 Docker로 정해진 이미지의 컨테이너를 띄우고, 준비될 때까지 기다리고, 접속 주소를 받아 쓰고, 끝나면 지운다. Java에서 시작했고 Node, Go, Python 등에도 같은 이름의 라이브러리가 있다. 아래는 예시이고, 이 글을 쓴 환경에서는 Docker를 쓰지 않아 돌려 보지 않았다.
+
+```js
+// 예시: @testcontainers/postgresql (돌려 보지 않은 코드)
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
+
+let container;
+before(async () => {
+  container = await new PostgreSqlContainer("postgres:16").start();   // 이미지 버전을 운영과 맞춘다
+  process.env.DATABASE_URL = container.getConnectionUri();
+}, { timeout: 120_000 });                                            // 첫 실행은 이미지를 받느라 느리다
+after(() => container.stop());
+```
+
+다른 하나는 CI가 잡 옆에 DB 컨테이너를 붙여 주는 서비스 컨테이너다. GitHub Actions라면 이렇게 쓴다(예시).
+
+```yaml
+# 예시: .github/workflows/test.yml 일부
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm run migrate && npm test   # DATABASE_URL은 127.0.0.1:5432
+```
+
+`--health-cmd`가 빠지면 DB가 아직 접속을 받기 전에 테스트가 시작돼 `ECONNREFUSED`로 첫 테스트만 실패하는 일이 생긴다. Testcontainers는 이 대기를 라이브러리가 대신 해 준다. 둘을 고르는 기준은 단순하다. CI와 로컬에서 똑같이 돌고 테스트 코드가 환경을 다 쥐길 원하면 Testcontainers, CI 설정에 맡기고 로컬에서는 각자 띄운 DB를 쓰면 서비스 컨테이너다.
+
+버리는 DB에는 속도를 위해 안전장치를 끄는 설정을 쓰기도 한다. `fsync=off`, `synchronous_commit=off` 같은 값을 컨테이너 실행 인자로 주고, 데이터 디렉터리를 메모리(tmpfs)에 둔다. 서버가 죽으면 데이터가 깨져도 되는 테스트 전용 DB에서만 하는 일이다. 여러 사람이 같이 쓰는 서버나 운영 DB에서는 절대 쓰지 않는다.
+
+## 다른 서비스와의 약속은 따로 확인한다
+
+DB는 우리가 띄울 수 있지만, 결제사나 다른 팀의 API는 테스트마다 진짜로 부를 수 없다. 느리고, 비용이 들고, 상대의 상태에 테스트가 흔들린다. 그래서 그쪽은 통합 테스트에서 가짜로 바꾸고, 가짜가 진짜와 같은 약속을 지키는지는 계약 테스트로 따로 확인한다.
+
+방향은 둘이다. 우리 쪽 포트에 대한 계약 테스트는 같은 테스트 묶음을 가짜 구현과 진짜 구현(샌드박스) 양쪽에 돌린다. [헥사고날 아키텍처](/posts/hexagonal-architecture#두-구현에-같은-계약-테스트를-돌린다) 글에 코드가 있다. 서비스 사이의 계약은 소비자 주도 계약 테스트로 간다. 소비자가 "이 요청을 보내고 응답의 이 필드를 쓴다"를 계약 파일로 남기고, 제공자가 배포 전에 그 계약을 확인한다. Pact가 대표 도구이고, 흐름은 [API 버전 관리](/posts/api-versioning#소비자가-쓰는-것만-지킨다) 글에서 다뤘다.
+
+## 직접 만들어 보는 세이브포인트
+
+트랜잭션과 세이브포인트, 그리고 되돌아가지 않는 시퀀스를 작게 흉내 내 보자. 연산 목록을 받아 최종적으로 커밋된 행을 `id:값` 문자열로 돌려준다.
+
+- `["insert", v]`: 시퀀스에서 번호를 하나 받아 행을 넣는다. 트랜잭션 밖이면 바로 커밋된다. 번호는 되돌려지지 않는다.
+- `["begin"]`, `["commit"]`, `["rollback"]`: 트랜잭션을 열고, 커밋하고, 되돌린다. 커밋 전에 끝나면(목록이 끝나면) 아무것도 남지 않는다.
+- `["savepoint", name]`, `["rollback_to", name]`: 그 지점을 기억하고, 그 지점 뒤의 행만 버린다. PostgreSQL처럼 되돌린 뒤에도 그 세이브포인트는 남아 있고, 그 뒤에 만든 세이브포인트는 사라진다.
+
+<CodePlayground
+  caption="트랜잭션과 세이브포인트 흉내 내기"
+  functionName="runTx"
+  initialCode={`function runTx(ops) {
+  const committed = [];
+  let seq = 0;
+  // ops를 하나씩 처리한다
+  return committed;
+}`}
+  solution={`function runTx(ops) {
+  const committed = [];
+  let seq = 0;
+  let pending = null;          // null이면 트랜잭션 밖
+  let savepoints = [];         // { name, size }
+  for (const op of ops) {
+    const kind = op[0];
+    if (kind === "begin") {
+      if (pending === null) { pending = []; savepoints = []; }
+    } else if (kind === "insert") {
+      seq += 1;                // 번호는 되돌리지 않는다
+      const row = seq + ":" + op[1];
+      if (pending === null) committed.push(row);
+      else pending.push(row);
+    } else if (kind === "savepoint") {
+      if (pending !== null) savepoints.push({ name: op[1], size: pending.length });
+    } else if (kind === "rollback_to") {
+      if (pending === null) continue;
+      let i = savepoints.length - 1;
+      while (i >= 0 && savepoints[i].name !== op[1]) i--;
+      if (i < 0) continue;
+      pending = pending.slice(0, savepoints[i].size);
+      savepoints = savepoints.slice(0, i + 1);
+    } else if (kind === "commit") {
+      if (pending !== null) committed.push(...pending);
+      pending = null; savepoints = [];
+    } else if (kind === "rollback") {
+      pending = null; savepoints = [];
+    }
+  }
+  return committed;
+}`}
+  tests={[
+    { label: "트랜잭션 밖은 바로 커밋", args: [[["insert", "a"], ["insert", "b"]]], expected: ["1:a", "2:b"] },
+    { label: "롤백해도 번호는 간다", args: [[["begin"], ["insert", "a"], ["rollback"], ["insert", "b"]]], expected: ["2:b"] },
+    { label: "커밋하면 남는다", args: [[["begin"], ["insert", "a"], ["commit"]]], expected: ["1:a"] },
+    { label: "세이브포인트 뒤만 버린다", args: [[["begin"], ["insert", "a"], ["savepoint", "s1"], ["insert", "b"], ["rollback_to", "s1"], ["insert", "c"], ["commit"]]], expected: ["1:a", "3:c"] },
+    { label: "안쪽 세이브포인트도 같이 사라진다", args: [[["begin"], ["insert", "a"], ["savepoint", "s1"], ["insert", "b"], ["savepoint", "s2"], ["insert", "c"], ["rollback_to", "s1"], ["commit"]]], expected: ["1:a"] },
+    { label: "되돌린 뒤에도 세이브포인트는 남는다", args: [[["begin"], ["insert", "a"], ["savepoint", "s1"], ["rollback_to", "s1"], ["insert", "b"], ["rollback_to", "s1"], ["insert", "c"], ["commit"]]], expected: ["1:a", "3:c"] },
+    { label: "커밋 없이 끝나면 없다", args: [[["begin"], ["insert", "a"]]], expected: [] },
+  ]}
+/>
+
+네 번째 테스트의 기대값은 위 psql 결과와 똑같다. 여섯 번째도 PostgreSQL에서 같은 순서로 돌려 `1 a`, `3 c`가 나오는 것을 확인했다.
+
+## 진짜 DB가 알려 준 것들
+
+이 글에서 진짜 DB가 잡은 것을 다시 보면 대역으로는 하나도 안 보이던 것들이다. 표현식 유니크 인덱스, 두 커넥션 사이의 경쟁, `bigint`가 문자열로 오는 것, `CHECK` 제약, 커밋 때만 도는 검사, 닫지 않은 커넥션. 통합 테스트는 이런 경계를 확인하는 데 쓰고, 계산과 규칙은 빠른 단위 테스트에 맡긴다. 정리는 롤백을 기본으로 두되 커밋이 필요한 테스트만 골라 지우는 방식으로 돌리고, 병렬로 돌린다면 프로세스마다 DB를 나눈다.
+
+## 면접에서 나올 만한 질문
+
+### 단위 테스트가 있는데 통합 테스트가 왜 필요한가요?
+
+단위 테스트의 대역은 우리가 아는 만큼만 진짜를 흉내 내기 때문이다. 유니크 인덱스, CHECK 제약, 드라이버의 타입 변환, 동시 요청의 경쟁처럼 경계에서 생기는 버그는 진짜 DB와 진짜 서버를 거쳐야 보인다. 그래서 규칙과 계산은 단위 테스트로 넓게 덮고, 경계마다 진짜로 도는 통합 테스트를 소수 둔다.
+
+### 테스트끼리 DB 데이터가 섞이지 않게 하려면 어떻게 하나요?
+
+테스트마다 트랜잭션을 열고 끝나면 ROLLBACK하는 게 가장 빠르고 깔끔하다. 이 글의 실험에서는 TRUNCATE나 DELETE보다 열 배쯤 빨랐다. 다만 테스트할 코드가 같은 커넥션을 받아 써야 하고, 동시성이나 커밋 뒤 동작을 보는 테스트는 커밋한 뒤 TRUNCATE나 DELETE로 지운다. 병렬로 도는 파일끼리는 DB나 스키마를 나눠 준다.
+
+### 트랜잭션 롤백 방식의 함정은 무엇인가요?
+
+세 가지가 대표적이다. 시퀀스는 롤백되지 않아 id가 계속 늘어나므로 id 값을 테스트에 박으면 안 된다. 지연 제약이나 NOTIFY처럼 커밋 때 일어나는 일은 커밋이 없으니 확인되지 않는다. 그리고 코드가 자기 커넥션을 쓰거나 스스로 COMMIT하면 테스트가 데이터를 못 보거나 롤백이 무력해진다. 지연 제약은 SET CONSTRAINTS ALL IMMEDIATE로, 중첩 트랜잭션은 세이브포인트로 푼다.
+
+### 픽스처와 팩토리는 어떻게 다르고 무엇을 고르나요?
+
+픽스처는 미리 만든 데이터를 통째로 깔아 여러 테스트가 같이 쓰고, 팩토리는 테스트가 필요한 행을 그 자리에서 기본값과 덮어쓴 값으로 만든다. 픽스처는 테스트가 어떤 행에 기대는지 본문에 드러나지 않아, 하나를 고치면 상관없어 보이는 테스트가 깨진다. 그래서 바뀌는 데이터는 팩토리로 만들고, 국가 코드 같은 읽기 전용 참조 데이터만 픽스처로 둔다.
+
+### 테스트가 다 통과했는데 CI 잡이 끝나지 않거나 늦게 끝납니다. 어디를 보나요?
+
+닫지 않은 자원이 이벤트 루프를 붙잡고 있는 경우가 대부분이다. DB 풀, HTTP 서버, 타이머, 메시지 큐 커넥션을 after 훅에서 닫았는지 본다. 이 글의 예에서는 pool.end()를 빼먹자 pg 풀의 유휴 타임아웃 10초만큼 늦게 끝났다. 강제 종료 옵션은 증상만 가리니 새는 자원을 찾아 닫는다.
+
+### Testcontainers와 CI 서비스 컨테이너는 어떻게 다른가요?
+
+둘 다 테스트용 DB를 컨테이너로 띄우지만 누가 띄우느냐가 다르다. Testcontainers는 테스트 코드가 직접 컨테이너를 띄우고 준비를 기다리고 지워서 로컬과 CI가 똑같이 돈다. 서비스 컨테이너는 CI 설정이 잡 옆에 붙여 주는 방식이라 설정이 단순하고 Docker 소켓 접근이 필요 없다. 어느 쪽이든 이미지 버전을 운영과 맞추고 헬스 체크로 준비를 기다린다.
+
+### 병렬로 도는 통합 테스트가 서로를 깨뜨립니다. 어떻게 나누나요?
+
+같은 테이블을 두고 정리와 삽입이 섞이는 게 원인이다. 프로세스마다 DB를 따로 주는 게 가장 확실하고, 스키마를 한 번 적용한 템플릿 DB를 CREATE DATABASE ... TEMPLATE로 복제하면 마이그레이션이 많을 때 빠르다. 템플릿에는 다른 세션이 붙어 있으면 복제가 실패하니 연결을 끊어 둔다. 더 가볍게는 스키마를 나누거나, 동시 실행 수를 1로 줄여 원인부터 확인한다.

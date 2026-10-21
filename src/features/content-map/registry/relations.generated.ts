@@ -2,11 +2,148 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rag-patterns-overview": {
+    "links": [
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "graph-rag",
+      "agentic-rag",
+      "vector-db"
+    ],
+    "mentions": [
+      "kafka-basics",
+      "on-call"
+    ]
+  },
+  "agentic-rag": {
+    "links": [
+      "graph-rag",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "rag-patterns-overview",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "observability-basics",
+      "kafka-basics",
+      "vector-db",
+      "on-call"
+    ]
+  },
+  "graph-rag": {
+    "links": [
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "agentic-rag",
+      "rag-patterns-overview",
+      "db-type-graph",
+      "sql-cte-recursive"
+    ],
+    "mentions": [
+      "sqld-top-n-hierarchical-pivot",
+      "db-modeling-normalization",
+      "vector-db",
+      "on-call"
+    ]
+  },
+  "integration-tests-real-db": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "acid-transactions",
+      "db-transaction-isolation",
+      "pattern-builder",
+      "hexagonal-architecture",
+      "api-versioning"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "postgres-connections-pg-hba",
+      "sql-insert-update-delete",
+      "event-loop",
+      "osi-in-practice",
+      "db-index-design",
+      "ports-and-sockets",
+      "http-status-codes",
+      "ipv6-basics",
+      "postgres-getting-started"
+    ]
+  },
+  "test-pyramid-unit-tests": {
+    "links": [
+      "integration-tests-real-db",
+      "hexagonal-architecture",
+      "js-pure-functions",
+      "js-microtask-macrotask",
+      "ci-cd-basics",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "event-loop",
+      "microservices",
+      "db-type-embedded"
+    ]
+  },
+  "first-page-from-power-on": {
+    "links": [
+      "what-happens-google-com",
+      "networking-essentials-map",
+      "packet-capture-tcpdump",
+      "dhcp",
+      "layer-link-ethernet-arp",
+      "dns",
+      "tcp-connection-lifecycle",
+      "iptables-nat",
+      "https-tls",
+      "http-message",
+      "latency-bandwidth-throughput",
+      "http-status-codes",
+      "network-troubleshooting-by-layer"
+    ],
+    "mentions": [
+      "nginx-basics",
+      "iptables-basics",
+      "ipv6-basics",
+      "layer-ip-addressing",
+      "layer-ip-routing-icmp",
+      "local-custom-domain",
+      "webhooks",
+      "security-groups-nacl",
+      "udp-and-quic"
+    ]
+  },
+  "youtube-url-to-video": {
+    "links": [
+      "what-happens-google-com",
+      "first-page-from-power-on",
+      "cdn-edge-anycast",
+      "reverse-proxy-lb-api-gateway",
+      "http-versions",
+      "udp-and-quic",
+      "https-tls",
+      "rendering-csr-spa",
+      "hydration",
+      "sd-video-streaming-cost",
+      "cors",
+      "network-troubleshooting-by-layer",
+      "packet-capture-tcpdump"
+    ],
+    "mentions": [
+      "sd-video-upload-transcoding",
+      "sd-multi-datacenter",
+      "sd-start-single-server",
+      "http-status-codes",
+      "dns",
+      "authn-vs-authz",
+      "ipv6-basics"
+    ]
+  },
   "rag-retrieval-quality": {
     "links": [
       "rag-classic-pipeline",
       "vector-db",
-      "elasticsearch-inverted-index"
+      "elasticsearch-inverted-index",
+      "graph-rag",
+      "agentic-rag"
     ],
     "mentions": [
       "db-index-design",
@@ -18,7 +155,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "rag-classic-pipeline": {
     "links": [
       "vector-db",
-      "rag-retrieval-quality"
+      "rag-retrieval-quality",
+      "graph-rag",
+      "agentic-rag"
     ],
     "mentions": [
       "kafka-basics"
@@ -94,6 +233,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "high-availability",
       "grpc",
+      "first-page-from-power-on",
       "udp-and-quic",
       "token-login"
     ]
@@ -1686,6 +1826,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "sd-autocomplete-trie",
+      "test-pyramid-unit-tests",
       "pattern-proxy"
     ]
   },
@@ -1827,7 +1968,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-async-await",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "test-pyramid-unit-tests"
+    ]
   },
   "js-execution-context": {
     "links": [
@@ -2058,6 +2201,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "what-happens-google-com",
       "devops-networking-roadmap",
+      "first-page-from-power-on",
       "packet-encapsulation",
       "ipv6-basics",
       "layer-ip-addressing",
@@ -2116,6 +2260,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "what-happens-google-com",
+      "first-page-from-power-on",
       "layer-link-ethernet-arp",
       "vlan-basics",
       "http-versions",
@@ -2330,6 +2475,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "js-strict-mode",
+      "test-pyramid-unit-tests",
       "js-es-modules",
       "http-methods"
     ]
@@ -3794,6 +3940,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "local-k8s-kind-minikube",
       "grpc",
       "cors",
+      "first-page-from-power-on",
       "dns"
     ]
   },
@@ -4313,6 +4460,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "local-k8s-kind-minikube",
       "grpc",
+      "first-page-from-power-on",
       "http-methods",
       "dns"
     ]
@@ -4923,6 +5071,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "redis-basics",
       "what-happens-google-com",
+      "first-page-from-power-on",
       "vpc-basics",
       "layer-link-ethernet-arp",
       "dns"
@@ -6268,6 +6417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "layer-ip-routing-icmp",
       "https-tls",
+      "first-page-from-power-on",
       "vpc-basics",
       "db-modeling-normalization",
       "dns"
@@ -6646,6 +6796,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cilium-ebpf",
       "grpc",
       "layer-ip-routing-icmp",
+      "first-page-from-power-on",
       "udp-and-quic",
       "layer-link-ethernet-arp"
     ]
@@ -7059,6 +7210,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "load-balancing-algorithms"
     ],
     "mentions": [
+      "first-page-from-power-on",
       "docker-container-basics",
       "https-tls",
       "packet-encapsulation",
@@ -7127,6 +7279,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-probes",
+      "test-pyramid-unit-tests",
       "sql-batch-timeout-pool",
       "design-patterns-overview"
     ]
@@ -8052,6 +8205,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting",
       "ports-and-sockets",
       "what-happens-google-com",
+      "first-page-from-power-on",
       "udp-and-quic",
       "dns"
     ]
@@ -8078,6 +8232,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "security-groups-nacl",
       "http-status-codes",
+      "first-page-from-power-on",
       "dns"
     ]
   },
@@ -8115,6 +8270,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "encryption-in-transit",
       "grpc",
       "layer-ip-routing-icmp",
+      "first-page-from-power-on",
       "udp-and-quic"
     ]
   },
@@ -8363,7 +8519,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "youtube-url-to-video",
       "grpc",
+      "first-page-from-power-on",
       "packet-encapsulation",
       "packet-capture-tcpdump",
       "http-versions",
@@ -8700,6 +8858,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "graph-rag",
       "sd-start-single-server",
       "db-type-relational"
     ]
@@ -9247,6 +9406,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "security-groups-nacl",
       "what-happens-google-com",
+      "first-page-from-power-on",
       "udp-and-quic",
       "dns"
     ]
@@ -9296,6 +9456,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "dhcp",
       "ipv6-basics",
+      "first-page-from-power-on",
       "udp-and-quic",
       "dns"
     ]
@@ -9576,6 +9737,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "reverse-proxy-lb-api-gateway",
       "kubernetes-ingress",
       "base64",
+      "first-page-from-power-on",
       "db-modeling-normalization"
     ]
   },
@@ -9617,6 +9779,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "service-mesh",
       "http-versions",
       "encryption-in-transit",
+      "first-page-from-power-on",
       "udp-and-quic",
       "http-methods"
     ]
@@ -9983,7 +10146,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "linux-files-permissions",
       "what-happens-google-com",
-      "ipv6-basics"
+      "ipv6-basics",
+      "first-page-from-power-on"
     ]
   },
   "kubernetes-ingress": {
@@ -10007,6 +10171,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-status-codes",
       "what-happens-google-com",
       "cors",
+      "first-page-from-power-on",
       "dns",
       "webhooks"
     ]
@@ -10064,6 +10229,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "cookie-session-login",
       "oauth",
+      "first-page-from-power-on",
       "dns"
     ]
   },
@@ -10089,6 +10255,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cdn-edge-anycast",
       "http-status-codes",
       "ipv6-basics",
+      "first-page-from-power-on",
       "udp-and-quic"
     ]
   },

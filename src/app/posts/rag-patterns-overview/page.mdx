@@ -1,0 +1,254 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rag-patterns-overview");
+
+사내 위키 챗봇을 만든다고 하자. 들어오는 질문은 제각각이다. "order-events 토픽의 보존 기간은?"처럼 문서 한 줄에 답이 있는 질문도 있고, "payment-api가 쓰는 DB를 운영하는 팀의 온콜 채널은?"처럼 문서 세 개를 이어야 하는 질문도 있고, "Kafka 4.0에서 ZooKeeper는 어떻게 됐나?"처럼 위키에 아예 없는 질문도 있다. 셋 다 RAG로 풀 수 있지만, 같은 RAG로 풀면 어느 하나는 꼭 틀린다.
+
+RAG 시리즈에서 본 세 방식을 한 줄씩 줄이면 이렇다. 기본 RAG는 찾는다. GraphRAG는 잇는다. 에이전틱 RAG는 따져 보며 다시 찾는다. 이 글은 같은 문서 20개와 같은 질문 다섯 개로 셋을 나란히 돌려 보고, 질문 모양과 시간 예산에 따라 무엇을 고르는지 정리한다. 각 방식의 속은 시리즈 글에서 자세히 다뤘다.
+
+- [기본 RAG 파이프라인](/posts/rag-classic-pipeline): 청크, 임베딩, top-k, 프롬프트 조립, 실패 유형
+- [RAG 검색 품질](/posts/rag-retrieval-quality): recall@k와 nDCG로 재기, 하이브리드 검색, 리랭킹
+- [GraphRAG](/posts/graph-rag): 개체·관계 추출, 지식 그래프 탐색, 커뮤니티 요약
+- [에이전틱 RAG](/posts/agentic-rag): 계획·도구·평가 루프, 멈출 조건, 프롬프트 인젝션
+- 그 아래의 검색 엔진인 [벡터 DB](/posts/vector-db): 임베딩, 코사인 유사도, HNSW
+
+## 찾는다, 잇는다, 따져 본다
+
+세 방식은 검색 뒤의 LLM 단계가 같다. 다른 건 근거를 모으는 방법이다. 아래 그림의 점이 각 방식에서 근거가 흘러가는 길이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="근거를 모으는 세 가지 길"
+  nodes={[
+    { id: "q", label: "질문", x: 50, y: 150, w: 70 },
+    { id: "vdb", label: "벡터 검색", sub: "가까운 k개", x: 190, y: 45, w: 110 },
+    { id: "kg", label: "지식 그래프", sub: "관계 따라가기", x: 190, y: 150, w: 120 },
+    { id: "agent", label: "에이전트", sub: "계획·평가 반복", x: 190, y: 255, w: 120 },
+    { id: "llm", label: "LLM", sub: "근거로 답하기", x: 340, y: 150, w: 90 },
+  ]}
+  edges={[
+    { from: "q", to: "vdb", label: "찾는다" },
+    { from: "q", to: "kg", label: "잇는다" },
+    { from: "q", to: "agent", label: "따져 본다" },
+    { from: "vdb", to: "llm" },
+    { from: "kg", to: "llm" },
+    { from: "agent", to: "llm" },
+    { from: "agent", to: "vdb", dashed: true },
+    { from: "agent", to: "kg", dashed: true },
+  ]}
+/>
+
+기본 RAG는 질문을 임베딩해 의미가 가까운 청크 k개를 한 번 가져온다. 빠르고 싸고 단순하다. 답이 청크 하나에 있으면 이걸로 충분하다.
+
+GraphRAG는 색인할 때 문서에서 개체와 관계를 뽑아 그래프로 저장해 둔다. 질문에서 개체를 찾고 관계를 따라가 사슬 전체를 근거로 넘긴다. 질문과 닮지 않은 중간 문서도 개체를 건너 찾아온다.
+
+에이전틱 RAG는 검색을 한 번으로 끝내지 않는다. 모델이 도구와 검색어를 고르고, 결과를 채점해서 모자라면 다시 찾는다. 그림의 점선처럼 벡터 검색이나 그래프는 에이전트가 쥐는 도구 중 하나가 된다. 세 방식은 서로 대신하는 관계라기보다 겹쳐 쓰는 관계다.
+
+## 같은 질문 다섯 개를 세 방식에 넣었다
+
+실험 조건은 시리즈 글들과 같다. 가상의 쇼핑몰 사내 위키 문서 20개(서비스, 저장소, 팀, 온콜 채널, 운영 메모), Node 22로 만든 TF-IDF 벡터 검색(실제 임베딩 모델의 대역), 규칙 기반 추출기로 만든 트리플 17개짜리 그래프, 규칙으로 계획과 평가를 흉내 낸 결정적인 스텁 에이전트다. LLM은 부르지 않았다. 그래서 답이 맞았는지가 아니라, 답에 필요한 근거 문서(정답 근거)를 몇 개나 모았는지를 쟀다. 질문은 이렇다.
+
+```text
+Q1 order-events 토픽의 보존 기간은?                       정답 근거: d14
+Q2 결제 실패율이 오르면 먼저 무엇을 보나?                     정답 근거: d13
+Q3 payment-api가 쓰는 DB를 운영하는 팀의 온콜 채널은?          정답 근거: d03, d04, d05
+Q4 pg-main에 저장하는 서비스를 개발한 팀의 온콜 채널은?         정답 근거: d03, d12, d17
+Q5 Kafka 4.0에서 ZooKeeper는 어떻게 됐나?                  정답 근거: 웹 문서
+```
+
+기본 RAG는 top-3, GraphRAG는 질문에서 찾은 개체와 관계 경로로 그래프를 따라가고, 에이전트는 벡터·그래프·웹 검색 스텁을 쥐고 최대 5단계까지 돈다. 실제 출력이다.
+
+```text
+Q1 classic 1/1 ctx=3 calls=1 | graph 0/1 ctx=0 calls=2 (no path) | agent 1/1 ctx=3 calls=3 stop=answered
+Q2 classic 1/1 ctx=3 calls=1 | graph 0/1 ctx=0 calls=2 (no seed) | agent 1/1 ctx=3 calls=4 stop=repeat
+Q3 classic 0/3 ctx=3 calls=1 | graph 3/3 ctx=3 calls=2 | agent 3/3 ctx=3 calls=3 stop=answered
+Q4 classic 2/3 ctx=3 calls=1 | graph 3/3 ctx=3 calls=2 | agent 3/3 ctx=6 calls=6 stop=repeat
+Q5 classic 0/1 ctx=3 calls=1 | graph 0/1 ctx=0 calls=2 (no seed) | agent 1/1 ctx=1 calls=3 stop=answered
+```
+
+`1/1`, `0/3` 같은 숫자가 정답 근거 중 모은 개수, `ctx`는 프롬프트에 들어간 문서 수, `calls`는 모델 호출 수다. 기본 RAG는 늘 1번(답변), GraphRAG는 2번(경로 질의 만들기와 답변)으로 셌고, 에이전트는 스텁이 센 값이다. 아래 그림에서 다음을 누르면 질문마다 어느 방식이 근거를 다 모았는지 하나씩 보인다.
+
+<AlgoTrace
+  caption="질문 다섯 개, 근거를 다 모은 방식"
+  memoryLabel="근거를 다 모은 방식"
+  cells={["Q1 보존 기간", "Q2 실패율", "Q3 DB 운영팀", "Q4 개발팀", "Q5 Kafka 4.0"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["classic", "agent"], caption: "Q1. 답이 d14 한 줄에 있다. 기본 RAG가 한 번에 찾는다. 그래프에는 보존 기간이 트리플로 들어가지 않아서 못 찾는다." },
+    { pointer: 1, found: [0, 1], memory: ["classic", "agent"], caption: "Q2. 운영 메모 d13은 개체가 없는 문장이라 그래프에 없다. 질문에 개체도 없어서 GraphRAG는 출발점조차 못 잡는다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["graph", "agent"], caption: "Q3. 문서 세 개를 이어야 한다. 기본 RAG는 온콜 목록만 가져와 0/3. 그래프와 에이전트는 3/3이다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["graph", "agent"], caption: "Q4. 방향이 거꾸로인 사슬이다. 기본 RAG는 d03을 놓쳐 2/3. 그래프는 경로 한 번에 3/3." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["agent"], caption: "Q5. 위키에 없는 최신 정보다. 웹 검색을 쥔 에이전트만 근거를 가져온다." },
+  ]}
+/>
+
+결과만 보면 에이전트가 다섯 개 모두 근거를 모았으니 이긴 것 같다. 그런데 기록을 자세히 보면 그렇게 말하기 어렵다.
+
+## 숫자 뒤에 숨은 것
+
+Q2와 Q4에서 에이전트는 `stop=repeat`로 멈췄다. 근거를 모으긴 했지만 평가 스텁이 "충분하다"고 확인하지 못해 같은 검색어를 반복하다 멈춘 것이다. Q4의 실제 기록이다.
+
+```text
+{"step":1,"tool":"vector_search","input":"pg-main에 저장하는 서비스를 개발한 팀의 온콜 채널은?","got":["d12","d17","d11"],"verdict":"irrelevant"}
+{"step":2,"tool":"vector_search","input":"pg-main 저장한다","got":["d03","d09","d06"],"verdict":"partial"}
+{"step":3,"tool":"vector_search","input":"pg-main 저장한다","note":"같은 질의 반복"}
+```
+
+계획 스텁이 "개발한 팀"이라는 관계 표현을 몰라서 사슬을 잘못 읽었다. 1단계에서 d12, d17이 들어온 건 질문에 "팀의 온콜 채널"이 있어서 운 좋게 걸린 것이고, 계획은 끝까지 사슬을 완성하지 못했다. LLM 에이전트라면 이 질문을 더 잘 읽겠지만, 계획이나 평가가 틀리면 근거를 들고도 엉뚱하게 멈출 수 있다는 건 그대로다. 근거를 모았느냐와 답을 확인했느냐는 다른 문제다.
+
+Q4의 에이전트는 문서 6개를 넣었고 모델을 6번 불렀다. GraphRAG는 같은 근거를 문서 3개, 호출 2번으로 모았다. 그래프에 관계 경로가 미리 있으면 에이전트가 검색 몇 번으로 더듬어 찾을 일을 질의 한 번에 끝낸다.
+
+GraphRAG의 실패는 반대 방향이다. Q1, Q2처럼 답이 관계가 아니라 속성이나 설명문에 있으면 그래프에는 아예 없다. 실무 GraphRAG가 그래프만 쓰지 않고 원문 청크 검색을 함께 두는 이유다. 출발 개체를 못 찾거나 경로가 없으면 벡터 검색으로 넘어가게 만드는 게 보통이다.
+
+모델 호출 한 번에 800ms, 검색 한 번에 50ms라고 가정하고(실제 값은 모델과 프롬프트 길이에 따라 크게 다르다) 시간을 어림하면 이렇다.
+
+```text
+기본 RAG            검색 1 + 모델 1  =   850ms
+GraphRAG            질의 1 + 모델 2  = 1,650ms
+에이전트 Q3 (그래프)  검색 1 + 모델 3  = 2,450ms
+에이전트 Q2          검색 2 + 모델 4  = 3,300ms
+에이전트 Q4          검색 2 + 모델 6  = 4,900ms
+```
+
+같은 근거를 모아도 길이 다르면 시간이 몇 배 차이 난다. 비용도 비슷하게 벌어지고, 에이전트는 바퀴마다 쌓인 근거를 다시 넣으니 입력 토큰은 더 가파르게 는다. GraphRAG의 비용은 질의 시간보다 색인 시간에 있다. 청크마다 추출 호출이 붙고, 문서가 바뀔 때마다 다시 뽑아야 한다. 이 숫자에는 그 비용이 빠져 있다.
+
+## 질문 하나가 세 길을 지나는 모습
+
+Q3 하나를 세 방식이 어떻게 처리하는지 경로로 그리면 차이가 한눈에 보인다. 다음을 누르면 기본 RAG, GraphRAG, 에이전트 순으로 지나간다.
+
+<NetworkTopology
+  caption="Q3 'payment-api가 쓰는 DB를 운영하는 팀의 온콜 채널은?'"
+  width={400}
+  height={300}
+  zones={[
+    { id: "store", label: "근거 저장소", x: 150, y: 10, w: 120, h: 280, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", x: 40, y: 150, icon: "client", w: 64 },
+    { id: "app", label: "app", x: 100, y: 150, icon: "gateway", w: 60 },
+    { id: "vdb", label: "vector DB", x: 210, y: 60, icon: "db", w: 96 },
+    { id: "kg", label: "graph", x: 210, y: 150, icon: "db", w: 80 },
+    { id: "web", label: "web", x: 210, y: 240, icon: "internet", w: 70 },
+    { id: "llm", label: "LLM", x: 340, y: 150, icon: "server", w: 70 },
+  ]}
+  links={[
+    { from: "user", to: "app" },
+    { from: "app", to: "vdb" },
+    { from: "app", to: "kg" },
+    { from: "app", to: "web" },
+    { from: "vdb", to: "llm" },
+    { from: "kg", to: "llm" },
+  ]}
+  steps={[
+    { path: ["user", "app", "vdb"], packet: "top-3", title: "기본 RAG: 가까운 것을 찾는다", detail: "온콜 목록 d17, d20, d19가 온다. 질문과 닮았지만 답의 고리는 하나도 없다." },
+    { path: ["user", "app", "vdb", "llm"], packet: "0/3", blocked: true, title: "근거가 틀린 채로 답한다", detail: "모델은 받은 근거 안에서 답한다. 결제팀 채널이 그럴듯한 오답 후보로 남는다." },
+    { path: ["user", "app", "kg"], packet: "경로", title: "GraphRAG: 관계를 따라간다", detail: "payment-api에서 STORES_IN, OPERATES(거꾸로), ONCALL을 따라간다." },
+    { path: ["user", "app", "kg", "llm"], packet: "3/3", title: "사슬을 순서대로 넘긴다", detail: "d03, d04, d05 세 문장. 모델 호출 2번." },
+    { path: ["user", "app", "kg", "app"], packet: "평가", title: "에이전트: 고르고, 채점한다", detail: "라우터가 관계 질문으로 보고 그래프를 먼저 부른다. 평가가 충분하다고 해서 한 바퀴에 멈춘다." },
+    { path: ["user", "app", "kg", "llm"], packet: "3/3", title: "같은 근거, 호출 하나 더", detail: "계획, 평가, 답변으로 모델 호출 3번. 그래프가 없었다면 벡터 검색으로 네 바퀴를 돌았다." },
+  ]}
+/>
+
+## 질문 모양으로 고르기
+
+결국 고르는 기준은 질문이다. 실제 질문 로그를 몇백 개 뽑아 손으로 분류해 보면 어느 방식이 필요한지 대부분 드러난다.
+
+답이 문서 한 곳에 있는 질문("이 기능 어떻게 써요?", "보존 기간은?")이 대부분이면 기본 RAG다. 여기서 품질이 모자라면 방식을 바꾸기 전에 검색부터 고친다. 청크 크기, 하이브리드 검색, 리랭킹, 메타데이터 필터로 recall@k를 올리는 게 먼저다. 방법은 [RAG 검색 품질](/posts/rag-retrieval-quality)에 있다.
+
+"A의 B의 C" 모양의 멀티홉 질문이 반복되고, 데이터가 정해진 종류의 개체(서비스, 팀, 고객, 부품)와 관계로 정리된다면 GraphRAG다. "전체에서 무엇이 무엇과 이어지나"처럼 출발점 없이 전체를 묻는 질문이 중요하면 커뮤니티 요약까지 간다. 색인 비용과 갱신 관리를 감당할 수 있는지가 조건이다.
+
+질문이 다양하고, 사내 문서와 데이터와 외부 정보를 섞어야 하고, 몇 초를 기다려도 되는 곳이면 에이전틱 RAG다. 멀티홉 질문이 가끔이라 그래프를 미리 만들기 아까울 때도 에이전트가 질문을 쪼개 여러 번 검색하는 쪽으로 버틴다. 대신 멈출 조건, 권한, 추적을 직접 설계해야 한다.
+
+시간 예산이 판단을 크게 바꾼다. 검색창 자동 응답처럼 1초 남짓이면 루프를 돌 여유가 없으니 기본 RAG나 미리 만든 그래프를 쓴다. 분석 도우미처럼 수십 초를 기다려도 되면 에이전트를 쓸 수 있다.
+
+실제 서비스는 하나만 고르지 않는다. 가장 흔한 모양은 싼 것부터 시도하고 모자랄 때만 비싼 쪽으로 넘기는 구성이다. 아래 그림에서 다음을 누르면 질문이 단계적으로 넘어가는 흐름이 보인다.
+
+<SequenceDiagram
+  caption="싼 것부터 시도하고 모자라면 넘긴다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "router", label: "라우터" },
+    { id: "classic", label: "기본 RAG" },
+    { id: "graph", label: "그래프" },
+    { id: "agent", label: "에이전트" },
+  ]}
+  steps={[
+    { from: "user", to: "router", label: "질문", title: "질문을 받는다", detail: "질문 모양(개체가 있나, 관계 표현이 있나, 최신 정보인가)을 먼저 본다." },
+    { from: "router", to: "classic", label: "설명 질문", title: "대부분은 기본 RAG로 간다", detail: "한 번 찾고 한 번 답한다. 가장 싸고 빠르다." },
+    { from: "classic", to: "router", label: "근거 부족", title: "평가가 모자라다고 하면", detail: "답할 근거가 없다고 판단되면 다음 단계로 넘긴다. 이때만 비용이 늘어난다." },
+    { from: "router", to: "graph", label: "관계 질문", title: "개체와 관계가 보이면 그래프로", detail: "개체 연결과 경로 질의로 사슬을 가져온다. 출발점이 없으면 건너뛴다." },
+    { from: "router", to: "agent", label: "남은 질문", title: "그래도 안 되면 에이전트로", detail: "최신 정보, 여러 출처, 정해지지 않은 단계가 필요한 질문만 루프로 간다. 단계와 시간 상한을 둔다." },
+    { from: "agent", to: "user", label: "답 + 출처", title: "어느 길로 왔든 출처를 붙인다", detail: "어떤 방식으로 답했는지, 근거가 무엇인지 함께 보여 준다. 추적 로그에도 경로를 남긴다." },
+  ]}
+/>
+
+이 판단 규칙을 직접 짜 보자. 질문의 특징을 받아 `"classic"`, `"graph"`, `"agentic"` 중 하나를 돌려준다. 규칙은 위에서부터 차례로 본다. 전체를 묻는 질문(`global`)이면 커뮤니티 요약을 쓰는 `"graph"`. 최신 정보가 필요하면(`fresh`) `"agentic"`. 2단계 이상 이어야 하는 질문(`hops >= 2`)은 같은 모양이 반복되면(`recurring`) `"graph"`, 아니면 시간 예산(`latencyMs`)이 3000 이상일 때 `"agentic"`, 모자라면 `"graph"`. 나머지는 `"classic"`이다.
+
+<CodePlayground
+  caption="질문 모양과 시간 예산으로 RAG 방식 고르기"
+  functionName="pickPattern"
+  initialCode={`function pickPattern(q) {
+  // q: { hops, fresh, global, recurring, latencyMs }
+  // 결과: "classic" | "graph" | "agentic"
+  return "classic";
+}`}
+  solution={`function pickPattern(q) {
+  if (q.global) return "graph";          // 출발점 없는 전체 질문은 커뮤니티 요약
+  if (q.fresh) return "agentic";         // 사내 문서에 없는 정보는 도구가 필요하다
+  if (q.hops >= 2) {
+    if (q.recurring) return "graph";     // 같은 모양이 반복되면 미리 만든 그래프가 싸다
+    return q.latencyMs >= 3000 ? "agentic" : "graph";
+  }
+  return "classic";
+}`}
+  tests={[
+    { label: "보존 기간 같은 단일 질문", args: [{ hops: 1, fresh: false, global: false, recurring: false, latencyMs: 1000 }], expected: "classic" },
+    { label: "반복되는 3단계 질문", args: [{ hops: 3, fresh: false, global: false, recurring: true, latencyMs: 1500 }], expected: "graph" },
+    { label: "드문 3단계 질문, 예산 넉넉", args: [{ hops: 3, fresh: false, global: false, recurring: false, latencyMs: 8000 }], expected: "agentic" },
+    { label: "드문 2단계 질문, 예산 빠듯", args: [{ hops: 2, fresh: false, global: false, recurring: false, latencyMs: 1200 }], expected: "graph" },
+    { label: "최신 정보", args: [{ hops: 1, fresh: true, global: false, recurring: false, latencyMs: 5000 }], expected: "agentic" },
+    { label: "전체를 묻는 질문", args: [{ hops: 1, fresh: false, global: true, recurring: false, latencyMs: 20000 }], expected: "graph" },
+  ]}
+/>
+
+규칙의 숫자(3000ms 같은)는 예시다. 실제로는 서비스의 시간 예산과 질문 분포를 보고 정한다. 그리고 이 규칙을 누가 판단하느냐가 또 하나의 설계다. 규칙으로 고를 수도 있고, 작은 분류 모델이나 LLM 라우터에 맡길 수도 있다. 어느 쪽이든 라우팅 결정을 로그로 남기고 질문 유형별 정답 방식으로 정확도를 잰다.
+
+## 어느 방식이든 공통으로 지키는 것
+
+방식을 바꿔도 남는 일이 있다. 먼저 평가 세트다. 실제 질문과 정답 근거를 묶은 세트가 없으면 위 실험 같은 비교를 할 수 없다. 이 글에서도 정답 근거를 미리 정해 둔 덕분에 "근거를 몇 개 모았나"를 셀 수 있었다. 단일 질문, 멀티홉 질문, 답이 없는 질문, 최신 정보 질문을 고르게 섞는다. 답이 없는 질문이 빠지면 "모른다"고 답해야 할 때 지어내는지 확인할 수 없다.
+
+다음은 출처다. 기본 RAG의 청크 id, GraphRAG의 트리플 출처, 에이전트의 바퀴별 검색 결과까지, 답과 함께 근거를 보여 주고 로그에도 남긴다. 틀린 답이 신고되면 근거가 틀렸는지 근거는 맞는데 답이 틀렸는지부터 가른다.
+
+마지막은 권한과 인젝션이다. 검색해 온 문서는 어느 방식에서든 지시가 아니라 데이터로 다룬다. 사용자가 볼 권한이 없는 문서는 검색 단계에서 걸러야 하고, 그래프의 관계도 출처 문서의 권한을 따라야 한다. 에이전트처럼 도구를 부르는 구성일수록 권한 범위를 좁게 잡는다.
+
+RAG는 하나의 기법이라기보다 근거를 모으는 방법의 묶음이다. 찾는 방법(기본 RAG)으로 시작해서, 질문이 문서를 건너야 하면 잇는 방법(GraphRAG)을, 질문이 정해진 길로 안 풀리면 따져 보는 방법(에이전틱 RAG)을 얹는다. 무엇을 얹든 그만큼 비용이 늘어나니, 실제 질문 로그와 평가 세트가 그 비용을 정당화하는지 먼저 확인한다.
+
+## 면접에서 나올 만한 질문
+
+### 기본 RAG, GraphRAG, 에이전틱 RAG는 어떻게 다른가요?
+
+근거를 모으는 방법이 다르다. 기본 RAG는 질문과 의미가 가까운 청크를 한 번 찾는다. GraphRAG는 색인할 때 개체와 관계를 그래프로 뽑아 두고 질문의 개체에서 관계를 따라가 사슬을 모은다. 에이전틱 RAG는 모델이 도구와 검색어를 고르고 결과를 채점해서 모자라면 다시 찾는다. 뒤로 갈수록 풀 수 있는 질문이 넓어지는 대신 비용과 복잡도가 커진다.
+
+### 기본 RAG의 품질이 나쁘면 바로 GraphRAG나 에이전트로 가야 하나요?
+
+아니다. 먼저 질문 로그를 보고 실패가 어떤 모양인지 가른다. 답이 문서 한 곳에 있는데 못 찾는 거라면 청크 크기, 하이브리드 검색, 리랭킹, 메타데이터 필터로 검색을 고치는 게 먼저다. 답이 여러 문서에 나뉜 멀티홉 질문이 반복될 때 GraphRAG를, 최신 정보나 여러 출처가 필요한 질문이 많을 때 에이전트를 검토한다.
+
+### GraphRAG가 기본 RAG보다 못한 경우는 언제인가요?
+
+답이 관계가 아니라 속성이나 설명문에 있는 질문이다. 이 글의 실험에서도 보존 기간이나 운영 메모처럼 개체가 하나뿐인 문장은 트리플이 되지 않아 그래프에 없었다. 질문에 개체가 없으면 출발점도 못 잡는다. 그래서 원문 청크 검색을 함께 두고, 그래프 탐색이 실패하면 벡터 검색으로 넘어가게 만든다.
+
+### 에이전틱 RAG가 근거를 다 모았는데도 문제가 될 수 있나요?
+
+있다. 계획이나 평가가 틀리면 근거를 들고도 충분하다는 걸 확인하지 못하고 반복하다 멈추거나, 반대로 너무 일찍 멈춘다. 바퀴마다 근거가 쌓여 관계없는 문서가 섞이고 모델 호출이 몇 배로 는다. 같은 근거를 그래프는 호출 2번에, 에이전트는 6번에 모은 경우도 있었다. 그래서 문서별 관련도 채점, 멈출 조건, 바퀴별 추적이 필요하다.
+
+### 지연 시간 예산은 선택에 어떤 영향을 주나요?
+
+예산이 1초 남짓이면 루프를 돌 여유가 없어서 기본 RAG나 미리 만든 그래프를 쓴다. 몇 초 이상 기다릴 수 있으면 에이전트를 쓸 수 있다. 실무에서는 싼 방식으로 먼저 답해 보고 평가가 모자랄 때만 비싼 방식으로 넘기는 단계적 구성을 많이 쓴다. 이렇게 하면 대부분의 질문은 빠르게 끝나고 어려운 질문만 시간을 쓴다.
+
+### 세 방식을 비교하려면 무엇을 재나요?
+
+실제 질문과 정답 근거를 묶은 평가 세트로 근거 재현율(정답 근거 중 모은 비율), 프롬프트에 들어간 문서 수, 모델 호출 수, 지연 시간, 비용을 함께 잰다. 정답률만 보면 비싼 방식이 이기기 쉬워서 비용 대비로 본다. 단일·멀티홉·답 없음·최신 정보 질문을 섞어야 각 방식의 약점이 드러난다.
+
+### 여러 방식을 섞을 때 공통으로 챙길 것은 무엇인가요?
+
+라우팅 결정과 근거 출처를 로그로 남기고, 답에도 출처를 보여 준다. 검색해 온 문서는 지시가 아니라 데이터로 다뤄 프롬프트 인젝션에 대비하고, 사용자 권한 밖의 문서는 검색 단계에서 거른다. 그래프의 관계도 출처 문서의 권한을 따라야 한다. 방식을 바꿀 때마다 같은 평가 세트로 회귀를 확인한다.

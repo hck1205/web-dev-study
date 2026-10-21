@@ -1,0 +1,652 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("first-page-from-power-on");
+
+노트북을 카페 Wi-Fi에 막 붙였다. 아직 IP 주소도 없고, 게이트웨이가 누구인지도, DNS 서버가 어디인지도 모른다. 이 상태에서 주소창에 `https://shop.n2.test`를 치면 화면이 뜨기까지 여섯 가지 규약이 차례로 일한다. DHCP, ARP, DNS, TCP, TLS, HTTP다.
+
+이 순서를 말로 외우는 건 어렵지 않다. 그런데 "사이트가 안 열려요"라는 말을 들었을 때 여섯 칸 중 어디서 멈췄는지 고르려면, 각 칸이 선 위에서 실제로 어떤 모양인지 알아야 한다. 그래서 이 글은 노트북, 공유기, 서버 세 칸짜리 망을 리눅스 네트워크 네임스페이스로 만들고, 주소가 없는 순간부터 첫 응답까지를 tcpdump로 한 번에 찍어 한 줄씩 읽는다. 그다음 같은 접속을 한 번 더 해서 무엇이 빠지는지 보고, 칸마다 일부러 고장을 내서 고장 난 캡처가 어떻게 생겼는지 본다.
+
+같은 주제의 다른 글과는 각도가 다르다. [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)은 DNS부터 시작해 브라우저가 HTML을 그리는 데까지 가고, [네트워크 필수 개념 지도](/posts/networking-essentials-map)는 개념 하나하나가 무엇인지를 잇는다. 이 글은 그 둘이 건너뛴 앞부분(주소를 받기 전)과, 같은 흐름을 패킷으로 확인하는 일에 집중한다. tcpdump 자체의 사용법은 [tcpdump 글](/posts/packet-capture-tcpdump)에 있다.
+
+## 세 칸짜리 실습 망
+
+기준 환경은 Ubuntu 24.04다. 네트워크 네임스페이스 세 개를 만들어 각각 노트북(`n2lap`), 집 공유기(`n2rtr`), 인터넷 너머의 서버(`n2web`) 역할을 맡겼다. 공유기 안에는 브리지(`n2br0`)를 두어 Wi-Fi AP처럼 LAN 쪽을 묶고, WAN 쪽은 서버와 바로 이었다. 공유기는 NAT를 하고, dnsmasq 하나로 DHCP 서버와 DNS 포워더를 겸한다. 서버에서는 nginx가 HTTPS를, 또 다른 dnsmasq가 `n2.test` 영역의 DNS 답을 맡는다.
+
+```bash
+# 네임스페이스 세 개: 노트북, 공유기, 서버
+for n in n2lap n2rtr n2web; do sudo ip netns add $n; done
+
+# 노트북 ↔ 공유기 LAN (공유기 안의 브리지에 꽂는다)
+sudo ip link add n2lap0 type veth peer name n2lan0
+sudo ip link set n2lap0 netns n2lap
+sudo ip link set n2lan0 netns n2rtr
+sudo ip -n n2rtr link add n2br0 type bridge
+sudo ip -n n2rtr link set n2lan0 master n2br0
+sudo ip -n n2rtr addr add 192.168.50.1/24 dev n2br0
+
+# 공유기 WAN ↔ 서버 (203.0.113.0/24는 문서용 대역이다)
+sudo ip link add n2wan0 type veth peer name n2web0
+sudo ip link set n2wan0 netns n2rtr
+sudo ip link set n2web0 netns n2web
+sudo ip -n n2rtr addr add 203.0.113.2/24 dev n2wan0
+sudo ip -n n2web addr add 203.0.113.10/24 dev n2web0
+# (각 인터페이스와 lo를 ip link set ... up 으로 올리는 줄은 생략)
+
+# 공유기: 패킷을 넘겨 주고(라우터), 나갈 때 출발지를 WAN 주소로 바꾼다(NAT)
+sudo ip netns exec n2rtr sysctl -w net.ipv4.ip_forward=1
+sudo ip netns exec n2rtr iptables -t nat -A POSTROUTING -o n2wan0 -j MASQUERADE
+
+# 공유기: LAN에 DHCP를 주고, DNS 질의는 서버 쪽 DNS로 넘긴다 (임대 2분)
+sudo ip netns exec n2rtr dnsmasq --conf-file=/dev/null --no-resolv --no-hosts \
+  --interface=n2br0 --bind-interfaces --server=203.0.113.10 \
+  --dhcp-range=192.168.50.100,192.168.50.150,255.255.255.0,2m \
+  --dhcp-option=option:router,192.168.50.1 --dhcp-option=option:dns-server,192.168.50.1 \
+  --log-queries --log-dhcp --log-facility=$LAB/dns-rtr.log
+
+# 서버: shop.n2.test 의 답을 가진 DNS, 그리고 17850번에서 HTTPS를 받는 nginx
+sudo ip netns exec n2web dnsmasq --conf-file=/dev/null --no-resolv --no-hosts \
+  --listen-address=203.0.113.10 --bind-interfaces \
+  --host-record=shop.n2.test,203.0.113.10 --local=/n2.test/ --local-ttl=300
+sudo ip netns exec n2web nginx -c $LAB/nginx.conf
+```
+
+인증서는 실습용 CA를 하나 만들어 `shop.n2.test` 이름으로 서명했다. 노트북 쪽 DHCP 클라이언트는 BusyBox의 `udhcpc`를 썼다. Ubuntu 데스크톱이라면 NetworkManager가, 서버라면 systemd-networkd가 같은 일을 한다. 이 망에서 패킷이 어떤 길로 가는지 먼저 그림으로 보자. 다음을 누르면 여섯 단계가 차례로 지나가고, 공유기를 지날 때 헤더가 어떻게 바뀌는지 함께 나온다.
+
+<NetworkTopology
+  width={400}
+  height={200}
+  caption="실습 망: 노트북, 공유기, 서버 세 칸"
+  zones={[
+    { id: "home", label: "집 LAN 192.168.50.0/24", x: 6, y: 6, w: 220, h: 188, tone: "private" },
+    { id: "net", label: "인터넷", x: 232, y: 6, w: 162, h: 188, tone: "public" },
+  ]}
+  nodes={[
+    { id: "lap", label: "n2lap", sub: ".122 (DHCP)", x: 60, y: 110, icon: "client", w: 92 },
+    { id: "rtr", label: "n2rtr", sub: "NAT · DHCP", x: 180, y: 110, icon: "router", w: 84 },
+    { id: "srv", label: "n2web", sub: "203.0.113.10", x: 320, y: 110, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "lap", to: "rtr", label: "n2br0" },
+    { from: "rtr", to: "srv", label: "n2wan0" },
+  ]}
+  steps={[
+    { path: ["lap", "rtr"], packet: "DISCOVER", title: "주소부터 빌린다", detail: "출발지 0.0.0.0, 목적지 255.255.255.255. 주소가 없으니 LAN 전체에 묻는다.", payload: "0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request" },
+    { path: ["lap", "rtr"], packet: "who-has", title: "게이트웨이의 MAC을 묻는다", detail: "서버는 다른 망이라 첫 칸은 공유기다. 공유기의 MAC을 ARP로 얻는다.", payload: "Request who-has 192.168.50.1 tell 192.168.50.122" },
+    { path: ["lap", "rtr", "srv"], packet: "A?", title: "이름을 묻는다", detail: "노트북은 공유기에게 묻고, 공유기는 캐시에 없으니 서버 쪽 DNS로 넘긴다.", payload: "A? shop.n2.test.\nA 203.0.113.10" },
+    { path: ["lap", "rtr", "srv"], packet: "SYN", highlight: ["rtr"], title: "공유기를 지나며 헤더가 바뀐다", detail: "출발지 IP가 WAN 주소로, MAC은 구간마다 새것으로, TTL은 하나 줄어든다. 포트는 그대로 남았다.", payload: "LAN: 192.168.50.122.36530 > 203.0.113.10.17850  ttl 64\nWAN: 203.0.113.2.36530   > 203.0.113.10.17850  ttl 63" },
+    { path: ["lap", "rtr", "srv"], packet: "TLS", title: "암호 터널을 연다", detail: "ClientHello에는 서버 이름이 평문으로 실린다. 서버의 답부터는 대부분 암호문이다." },
+    { path: ["srv", "rtr", "lap"], packet: "200 OK", highlight: ["rtr"], title: "응답은 변환 기록을 따라 돌아온다", detail: "서버는 203.0.113.2에 답하고, 공유기가 conntrack 기록을 보고 노트북에게 돌려준다." },
+  ]}
+/>
+
+캡처는 노트북 인터페이스(`n2lap0`)와 공유기 WAN(`n2wan0`) 두 곳에서 동시에 떴다. 한 곳만 보면 NAT가 무엇을 바꿨는지 알 수 없기 때문이다.
+
+```bash
+# 두 지점에서 파일로 남긴다 (나중에 -v, -e, -X 로 여러 번 다시 읽는다)
+sudo ip netns exec n2lap tcpdump -i n2lap0 -s0 -w cold-lap.pcap &
+sudo ip netns exec n2rtr tcpdump -i n2wan0 -s0 -w cold-wan.pcap &
+
+# 주소 받기 → 접속
+sudo ip netns exec n2lap busybox udhcpc -i n2lap0 -q -f -s ./udhcpc.script
+sudo ip netns exec n2lap curl -v -s --cacert ca.pem https://shop.n2.test:17850/
+```
+
+먼저 전체 그림을 한 장으로 본다. 아래 그림은 이 캡처의 패킷을 묶음별로 펼친 것이다. 다음을 누르면 실제 캡처 줄이 함께 나온다.
+
+<SequenceDiagram
+  caption="주소가 없는 순간부터 200 OK까지, 실제 캡처 순서"
+  actors={[
+    { id: "lap", label: "노트북" },
+    { id: "rtr", label: "공유기" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "lap", to: "rtr", label: "DISCOVER", title: "DHCP: 주소를 달라고 외친다", detail: "13.538초. 주소가 없으니 0.0.0.0에서 브로드캐스트로 보낸다.", payload: "0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09" },
+    { from: "rtr", to: "rtr", label: "ping .122", title: "공유기가 3초 동안 확인한다", detail: "빌려줄 주소를 누가 이미 쓰는지 ARP와 ping으로 확인한다. 아무도 답하지 않아야 준다.", payload: "ARP, Request who-has 192.168.50.122 tell 192.168.50.1 (x3)" },
+    { from: "rtr", to: "lap", label: "OFFER · ACK", title: "주소, 게이트웨이, DNS 서버를 받는다", detail: "16.604초에 ACK. 여기까지 3.07초가 걸렸다.", payload: "Your-IP 192.168.50.122\nDefault-Gateway 192.168.50.1\nDomain-Name-Server 192.168.50.1\nLease-Time 120" },
+    { from: "lap", to: "rtr", label: "ARP who-has .1", title: "ARP: 게이트웨이의 MAC", detail: "주소를 받자마자 공유기의 MAC부터 묻는다. 답은 0.01ms 만에 온다.", payload: "Reply 192.168.50.1 is-at 02:00:00:00:50:01" },
+    { from: "lap", to: "srv", label: "A? shop.n2.test", title: "DNS: 공유기를 거쳐 서버 쪽 DNS까지", detail: "노트북은 공유기에게 묻고, 공유기는 서버 쪽 DNS에 다시 묻는다. 2.1ms.", payload: "52438+ A? shop.n2.test. (30)\n52438* 1/0/0 A 203.0.113.10 (46)" },
+    { from: "lap", to: "srv", label: "S → S. → .", title: "TCP: 세 번의 인사", detail: "0.28ms. 여기서 MSS 1460과 창 배율 10을 서로 알린다.", payload: "Flags [S], seq 281092793\nFlags [S.], seq 42729889, ack 281092794\nFlags [.], ack 1" },
+    { from: "lap", to: "srv", label: "ClientHello 517B", title: "TLS: 이름은 평문으로", detail: "ClientHello 안의 SNI에 shop.n2.test가 그대로 보인다.", payload: "Flags [P.], seq 1:518, length 517" },
+    { from: "srv", to: "lap", label: "ServerHello… 1367B", title: "서버가 인증서까지 한 번에", detail: "ServerHello만 평문이고, 인증서와 서명은 암호화된 레코드 안에 있다.", payload: "Flags [P.], seq 1:1368, length 1367" },
+    { from: "lap", to: "srv", label: "Finished · GET", title: "HTTP: 암호 레코드 안의 요청", detail: "Finished 80바이트 바로 뒤에 GET이 103바이트짜리 레코드로 나간다.", payload: "seq 518:598, length 80\nseq 598:701, length 103" },
+    { from: "srv", to: "lap", label: "200 OK", title: "응답과 세션 티켓", detail: "세션 티켓 두 장(303바이트씩)과 응답(284바이트)이 온다. DNS부터 여기까지 8ms.", payload: "length 303\nlength 303\nlength 284" },
+  ]}
+/>
+
+이제 한 칸씩 들여다본다.
+
+## 주소가 없을 때: DHCP 네 번과 3초
+
+노트북 쪽 출력부터 보자.
+
+```text
+udhcpc: started, v1.36.1
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.168.50.122, server 192.168.50.1
+udhcpc: lease of 192.168.50.122 obtained from 192.168.50.1, lease time 120
+```
+
+DISCOVER가 두 번 나갔다. 같은 시간의 캡처를 보면 이유가 보인다.
+
+```text
+12:30:13.538769 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+12:30:13.539266 ARP, Request who-has 192.168.50.122 tell 192.168.50.1, length 28
+12:30:14.562734 ARP, Request who-has 192.168.50.122 tell 192.168.50.1, length 28
+12:30:15.582684 ARP, Request who-has 192.168.50.122 tell 192.168.50.1, length 28
+12:30:16.543848 IP 192.168.50.1 > 192.168.50.122: ICMP echo request, id 10779, seq 0, length 28
+12:30:16.543903 IP 192.168.50.1.67 > 192.168.50.122.68: BOOTP/DHCP, Reply, length 300
+12:30:16.558804 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+12:30:16.559105 IP 192.168.50.1.67 > 192.168.50.122.68: BOOTP/DHCP, Reply, length 300
+12:30:16.582814 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+12:30:16.604708 IP 192.168.50.1.67 > 192.168.50.122.68: BOOTP/DHCP, Reply, length 300
+```
+
+첫 줄의 출발지는 `0.0.0.0`, 목적지는 `255.255.255.255`다. 주소가 없는 기기가 "누구든 DHCP 서버면 대답해 달라"고 외치는 모양이다. 그런데 공유기는 바로 답하지 않고 3초 동안 `192.168.50.122`가 있는지 ARP로 세 번 묻는다. dnsmasq는 주소를 빌려주기 전에 그 주소를 이미 누가 쓰고 있지 않은지 ping으로 확인한다(`--no-ping`으로 끌 수 있다). 아무도 답하지 않으니 OFFER를 보냈는데, 그 순간 클라이언트의 3초 재시도 타이머도 거의 같이 울려서 DISCOVER가 한 번 더 나갔다. 결국 이 실습에서 주소를 받는 데 3.07초가 들었고, 그중 3초가 이 확인 시간이다. 공유기마다 이런 확인을 하는지, 얼마나 기다리는지는 다르지만, 망에 붙은 직후의 첫 접속이 유독 느리다면 주소를 받는 단계부터 의심해 볼 만하다.
+
+각 메시지가 무엇인지는 `-v`로 다시 읽으면 나온다. 마지막 ACK만 옮겼다.
+
+```bash
+tcpdump -nn -v -r cold-lap.pcap 'udp port 67 or udp port 68'
+```
+
+```text
+	  Your-IP 192.168.50.122
+	    DHCP-Message (53), length 1: ACK
+	    Server-ID (54), length 4: 192.168.50.1
+	    Lease-Time (51), length 4: 120
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Domain-Name-Server (6), length 4: 192.168.50.1
+	    Default-Gateway (3), length 4: 192.168.50.1
+```
+
+이 다섯 줄이 이후 모든 단계의 재료다. 주소와 마스크가 있어야 "상대가 같은 망인가"를 판단하고, 게이트웨이가 있어야 다른 망으로 보낼 수 있고, DNS 서버 주소가 있어야 이름을 묻는다. 노트북에 적용된 결과는 이렇다.
+
+```bash
+ip -n n2lap addr show n2lap0 | grep -A1 "inet "   # 받은 주소와 남은 임대 시간
+ip -n n2lap route                                # 기본 경로가 게이트웨이를 가리키는지
+```
+
+```text
+    inet 192.168.50.122/24 scope global dynamic n2lap0
+       valid_lft 120sec preferred_lft 120sec
+default via 192.168.50.1 dev n2lap0 
+192.168.50.0/24 dev n2lap0 proto kernel scope link src 192.168.50.122 
+```
+
+DISCOVER, OFFER, REQUEST, ACK 각각이 왜 브로드캐스트인지, 임대 연장의 두 시계(T1, T2)와 릴레이는 [DHCP 글](/posts/dhcp)에서 자세히 다뤘으니 여기서는 넘어간다.
+
+아래 그림은 DHCP가 건네준 다섯 줄이 뒤의 단계에 어떻게 이어지는지 보여 준다. 화살표는 "앞의 것이 있어야 뒤의 것이 시작한다"는 뜻이다.
+
+<ConceptDiagram
+  caption="앞 단계가 다음 단계에 건네는 것"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "dhcp", label: "DHCP", sub: "주소 · 게이트웨이 · DNS", x: 200, y: 40, w: 170 },
+    { id: "arp", label: "ARP", sub: "게이트웨이 MAC", x: 80, y: 130, w: 120 },
+    { id: "dns", label: "DNS", sub: "서버 IP", x: 320, y: 130, w: 120 },
+    { id: "tcp", label: "TCP", sub: "바이트 스트림", x: 200, y: 190, w: 120 },
+    { id: "tls", label: "TLS", sub: "세션 키", x: 90, y: 260, w: 110 },
+    { id: "http", label: "HTTP", sub: "요청 · 응답", x: 310, y: 260, w: 110 },
+  ]}
+  edges={[
+    { from: "dhcp", to: "arp", label: "게이트웨이" },
+    { from: "dhcp", to: "dns", label: "DNS 서버" },
+    { from: "arp", to: "dns", label: "첫 칸 MAC" },
+    { from: "dns", to: "tcp", label: "목적지 IP" },
+    { from: "arp", to: "tcp", dashed: true },
+    { from: "tcp", to: "tls", label: "스트림" },
+    { from: "tls", to: "http", label: "키" },
+  ]}
+/>
+
+## 게이트웨이의 MAC을 먼저 묻는 이유
+
+주소를 받은 직후의 두 줄이다.
+
+```text
+12:30:16.631398 ARP, Request who-has 192.168.50.1 tell 192.168.50.122, length 28
+12:30:16.631410 ARP, Reply 192.168.50.1 is-at 02:00:00:00:50:01, length 28
+```
+
+노트북이 묻는 건 서버(`203.0.113.10`)의 MAC이 아니라 공유기(`192.168.50.1`)의 MAC이다. 방금 본 라우팅 테이블에서 `203.0.113.10`은 `192.168.50.0/24`에 맞지 않으니 `default via 192.168.50.1`로 간다. 이더넷 프레임은 한 구간만 가니, 첫 구간의 받는 사람은 공유기다. DNS 서버도 공유기이니 이 ARP 한 번으로 DNS 질의와 이후의 웹 연결이 모두 같은 MAC을 쓴다. ARP 캐시의 상태 변화와 Gratuitous ARP는 [데이터 링크 계층 글](/posts/layer-link-ethernet-arp)에 있다.
+
+## 이름 하나에 질의 두 번
+
+노트북 쪽과 공유기 WAN 쪽 캡처를 시간순으로 섞어 보면 질의가 두 번 일어났다.
+
+```text
+# 노트북 쪽 (n2lap0)
+12:30:16.631412 IP 192.168.50.122.32837 > 192.168.50.1.53: 52438+ A? shop.n2.test. (30)
+12:30:16.633508 IP 192.168.50.1.53 > 192.168.50.122.32837: 52438* 1/0/0 A 203.0.113.10 (46)
+
+# 공유기 WAN 쪽 (n2wan0)
+12:30:16.633071 ARP, Request who-has 203.0.113.10 tell 203.0.113.2, length 28
+12:30:16.633085 ARP, Reply 203.0.113.10 is-at 02:00:00:00:71:0a, length 28
+12:30:16.633092 IP 203.0.113.2.33721 > 203.0.113.10.53: 35415+ [1au] A? shop.n2.test. (41)
+12:30:16.633356 IP 203.0.113.10.53 > 203.0.113.2.33721: 35415* 1/0/1 A 203.0.113.10 (57)
+```
+
+노트북은 질의 ID 52438로 공유기에게 묻고, 공유기는 자기 캐시에 답이 없으니 새 ID 35415로 서버 쪽 DNS에 다시 묻는다. 공유기도 WAN 쪽에서 처음 말을 거는 거라 ARP부터 한다. `[1au]`는 공유기가 EDNS 옵션(추가 레코드 하나)을 붙였다는 표시이고, 답의 `*`는 권한 있는 서버가 준 답이라는 뜻이다. 공유기 로그에는 이 과정이 그대로 남는다.
+
+```text
+dnsmasq[6208]: query[A] shop.n2.test from 192.168.50.122
+dnsmasq[6208]: forwarded shop.n2.test to 203.0.113.10
+dnsmasq[6208]: reply shop.n2.test is 203.0.113.10
+```
+
+`forwarded`가 핵심 단서다. 두 번째 접속에서 이 줄이 `cached`로 바뀐다. 실제 인터넷이라면 공유기가 넘긴 질의를 ISP의 재귀 리졸버가 받아 루트부터 찾아 내려가는데, 그 과정은 [DNS 글](/posts/dns)에 있다.
+
+## 공유기를 지나며 바뀌는 세 가지
+
+이제 TCP다. 같은 SYN 하나를 양쪽 캡처에서 `-e -v`로 읽으면 MAC과 TTL까지 보인다.
+
+```bash
+tcpdump -nn -e -v -r cold-lap.pcap 'tcp[tcpflags]==tcp-syn'
+tcpdump -nn -e -v -r cold-wan.pcap 'tcp[tcpflags]==tcp-syn'
+```
+
+```text
+12:30:16.633938 02:00:00:00:50:09 > 02:00:00:00:50:01, ethertype IPv4 (0x0800), length 74: (tos 0x0, ttl 64, id 6620, offset 0, flags [DF], proto TCP (6), length 60)
+    192.168.50.122.36530 > 203.0.113.10.17850: Flags [S], cksum 0x2f5c (incorrect -> 0xcc46), seq 281092793, win 64240, options [mss 1460,sackOK,TS val 3610538620 ecr 0,nop,wscale 10], length 0
+12:30:16.634186 02:00:00:00:71:02 > 02:00:00:00:71:0a, ethertype IPv4 (0x0800), length 74: (tos 0x0, ttl 63, id 6620, offset 0, flags [DF], proto TCP (6), length 60)
+    203.0.113.2.36530 > 203.0.113.10.17850: Flags [S], cksum 0x783c (incorrect -> 0x8366), seq 281092793, win 64240, options [mss 1460,sackOK,TS val 3610538620 ecr 0,nop,wscale 10], length 0
+```
+
+두 줄을 위아래로 맞춰 보면 바뀐 건 셋이다. MAC은 구간이 바뀌었으니 둘 다 새로 쓰였다. TTL은 공유기가 라우터 노릇을 하며 64에서 63으로 줄였다. 출발지 IP는 NAT가 `192.168.50.122`를 `203.0.113.2`로 바꿨다. 출발지 포트 36530은 겹치는 연결이 없어서 그대로 두었다. `seq`와 IP `id` 6620이 같으니 같은 패킷이 맞다.
+
+`cksum ... (incorrect -> ...)`는 고장이 아니다. 체크섬 계산을 랜 카드(여기서는 veth)에 미루는 오프로드 때문에, 보내는 쪽에서 찍으면 아직 채워지지 않은 값이 보인다. 송신 측 캡처에서 이 표시만 보고 "체크섬 오류로 패킷이 버려진다"고 결론 내리는 실수가 흔하다.
+
+공유기가 기억하는 변환 기록은 conntrack으로 본다.
+
+```bash
+sudo ip netns exec n2rtr conntrack -L -p tcp   # 공유기의 NAT 변환 기록
+```
+
+```text
+conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.
+tcp      6 119 TIME_WAIT src=192.168.50.122 dst=203.0.113.10 sport=52420 dport=17850 src=203.0.113.10 dst=203.0.113.2 sport=17850 dport=52420 [ASSURED] mark=0 use=1
+```
+
+(이 줄은 다른 회차의 접속이라 포트가 52420이다.) 앞쪽 묶음이 나갈 때의 모습, 뒤쪽 묶음이 돌아올 때 기대하는 모습이다. 서버의 답(`203.0.113.10:17850 → 203.0.113.2:52420`)이 오면 공유기는 이 줄을 찾아 목적지를 노트북으로 되돌린다. 세 번의 인사 자체와 TIME_WAIT는 [TCP 연결의 일생](/posts/tcp-connection-lifecycle)에, NAT 규칙은 [iptables NAT 글](/posts/iptables-nat)에 있다.
+
+## TLS: 이름만 보이고 나머지는 잠긴다
+
+curl `-v`는 TLS 1.3 핸드셰이크를 메시지 단위로 적어 준다.
+
+```text
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / RSASSA-PSS
+* ALPN: server accepted http/1.1
+* Server certificate:
+*  subject: CN=shop.n2.test
+*  subjectAltName: host "shop.n2.test" matched cert's "shop.n2.test"
+*  issuer: CN=n2 Lab CA
+*  SSL certificate verify ok.
+```
+
+선 위에서는 이게 TCP 묶음 네 개다. 클라이언트가 517바이트(ClientHello), 서버가 1367바이트(ServerHello부터 Finished까지), 클라이언트가 80바이트(Finished)를 보내고, 그다음 103바이트가 GET이다. 서버의 1367바이트는 평문 ServerHello 레코드 127바이트, 호환용 Change Cipher Spec 6바이트, 그리고 암호화된 레코드 네 개 1234바이트(Encrypted Extensions, Certificate, CertificateVerify, Finished가 하나씩)로 나뉜다. 인증서가 암호 레코드 안에 있다는 게 TLS 1.2와 다른 점이다. 1.2에서는 인증서가 평문으로 지나갔다.
+
+그래도 다 숨지는 않는다. ClientHello를 `-X`로 열어 보면 서버 이름이 그대로 있다.
+
+```bash
+tcpdump -nn -X -r cold-lap.pcap 'tcp dst port 17850 and greater 500'
+```
+
+```text
+	0x00c0:  0100 0175 0000 0011 000f 0000 0c73 686f  ...u.........sho
+	0x00d0:  702e 6e32 2e74 6573 7400 0b00 0403 0001  p.n2.test.......
+```
+
+이 바이트들이 SNI(Server Name Indication) 확장이다. 서버 하나가 여러 도메인의 인증서를 들고 있을 때 어느 인증서를 꺼낼지 고르라고, 암호화가 시작되기 전에 이름을 알려 주는 칸이다. 아래 그림에서 조각을 하나씩 누르면 의미가 나온다.
+
+<UrlAnatomy
+  caption="ClientHello 안의 SNI 확장 바이트"
+  base="ClientHello …"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "type", display: "00 00", title: "확장 종류: server_name", description: "확장 번호 0이 SNI다. 이 앞의 01 75는 확장 전체 길이(373바이트)다.", required: true },
+    { key: "extlen", display: "00 11", title: "이 확장의 길이: 17바이트", description: "뒤따르는 목록 길이 2바이트 + 이름 종류 1바이트 + 이름 길이 2바이트 + 이름 12바이트 = 17." },
+    { key: "listlen", display: "00 0f", title: "이름 목록 길이: 15바이트", description: "이름이 여러 개 올 수 있는 형식이지만 실제로는 하나만 보낸다." },
+    { key: "nametype", display: "00", title: "이름 종류: host_name", description: "0은 DNS 호스트 이름이라는 뜻이다. 다른 값은 쓰이지 않는다." },
+    { key: "namelen", display: "00 0c", title: "이름 길이: 12바이트", description: "shop.n2.test는 정확히 12글자다." },
+    { key: "name", display: "73 68 6f 70 2e 6e 32 2e 74 65 73 74", title: "shop.n2.test", description: "ASCII 그대로다. 공유기, 회사 프록시, ISP 누구든 이 바이트를 읽을 수 있다.", code: "s  h  o  p  .  n  2  .  t  e  s  t" },
+  ]}
+/>
+
+그래서 HTTPS를 써도 "어느 사이트에 접속했는지"는 중간에서 보인다. DNS 질의(평문 UDP 53), 목적지 IP, 그리고 이 SNI 세 군데로 새어 나간다. 회사 방화벽이 HTTPS 사이트를 도메인 단위로 막을 수 있는 것도 SNI를 보기 때문이다. 이걸 가리려는 게 DNS over HTTPS와 ECH(Encrypted Client Hello)인데, ECH는 서버와 브라우저가 모두 지원해야 하고 아직 모든 사이트에서 쓰이지는 않는다. 인증서 체인을 믿는 원리와 키 교환은 [HTTPS와 TLS 글](/posts/https-tls)에 있다.
+
+## 암호 봉투 안의 GET 한 줄
+
+curl이 보낸 요청은 이렇다.
+
+```text
+> GET / HTTP/1.1
+> Host: shop.n2.test:17850
+> User-Agent: curl/8.5.0
+> Accept: */*
+```
+
+줄 끝의 CRLF까지 세면 81바이트다. TLS 1.3은 여기에 내용 종류 1바이트와 인증 태그 16바이트를 붙여 98바이트로 암호화하고, 레코드 헤더 5바이트를 앞에 단다. 그래서 캡처의 103바이트가 나온다.
+
+```text
+12:30:16.639132 IP 192.168.50.122.36530 > 203.0.113.10.17850: Flags [P.], seq 598:701, ack 1368, win 66, options [nop,nop,TS val 3610538625 ecr 2970642156], length 103
+	0x0030:  b110 66ec 1703 0300 624e 0c95 b6ba 791e  ..f.....bN....y.
+```
+
+`17 03 03 00 62`가 레코드 헤더다. `17`은 "응용 데이터", `03 03`은 호환용 버전 표시, `00 62`는 길이 98이다. 그 뒤는 알아볼 수 없는 바이트다. 핸드셰이크가 끝나면 레코드 종류가 전부 `17`로 보이도록 감춰서, 중간에서는 이게 요청인지 세션 티켓인지조차 크기로만 짐작할 수 있다.
+
+응답 쪽은 303바이트 두 개와 284바이트 하나다. 303바이트 둘은 curl `-v`의 `Newsession Ticket (4)` 두 줄이다. 서버가 "다음에 오면 이걸 내밀어라"고 준 세션 티켓이고, 두 번째 접속에서 쓰인다. 284바이트가 `HTTP/1.1 200 OK` 헤더와 17바이트 본문이다. 마지막 24바이트는 curl이 보낸 close_notify 경고이고, 그 뒤 FIN이 오간다. HTTP 메시지의 구조는 [HTTP 메시지 글](/posts/http-message)에 있다.
+
+여기까지의 시간을 캡처 타임스탬프로 다시 재면 DHCP 3.07초, ARP부터 응답까지 8ms다. 로컬 실습이라 왕복 시간이 0.3ms 안팎이어서 그렇다. 실제 인터넷에서 서버까지 왕복이 50ms라면 DNS(캐시 없음) 1회 이상, TCP 1회, TLS 1회, HTTP 1회로 최소 네 번의 왕복, 200ms 이상이 첫 바이트 전에 든다. 거리와 왕복 시간 이야기는 [지연 시간, 대역폭, 처리량 글](/posts/latency-bandwidth-throughput)에 있다.
+
+## 두 번째 접속에서 사라지는 것들
+
+같은 노트북에서 몇 초 뒤 다시 접속했다. 이번에는 curl 한 번에 같은 주소를 두 번 요청하고, 단계별 시간도 찍었다.
+
+```bash
+sudo ip -n n2lap neigh show dev n2lap0     # ARP 캐시가 남아 있는지
+sudo ip netns exec n2lap curl -s -o /dev/null -o /dev/null --cacert ca.pem \
+  -w 'dns %{time_namelookup}  tcp %{time_connect}  tls %{time_appconnect}  ttfb %{time_starttransfer}  total %{time_total}\n' \
+  https://shop.n2.test:17850/ https://shop.n2.test:17850/
+```
+
+```text
+192.168.50.1 lladdr 02:00:00:00:50:01 REACHABLE 
+dns 0.007037  tcp 0.007470  tls 0.012460  ttfb 0.012859  total 0.012895
+dns 0.000017  tcp 0.000000  tls 0.000000  ttfb 0.000250  total 0.000277
+```
+
+첫 줄의 밀리초 값은 로컬이라 의미가 크지 않다(프로세스 시작 시간이 섞인다). 볼 것은 두 번째 요청의 `tcp 0`, `tls 0`이다. 연결을 새로 맺지 않았다는 뜻이다. 캡처로 확인하면 더 분명하다.
+
+```text
+12:31:12.071140 IP 192.168.50.122.35660 > 192.168.50.1.53: 9554+ A? shop.n2.test. (30)
+12:31:12.071878 IP 192.168.50.1.53 > 192.168.50.122.35660: 9554 1/0/0 A 203.0.113.10 (46)
+12:31:12.072078 IP 192.168.50.122.38608 > 203.0.113.10.17850: Flags [S], seq 3701887826, win 64240, ...
+...
+12:31:12.077447 IP 192.168.50.122.38608 > 203.0.113.10.17850: Flags [P.], seq 598:701, ack 1368, ..., length 103
+...
+12:31:12.078292 IP 192.168.50.122.38608 > 203.0.113.10.17850: Flags [P.], seq 701:804, ack 2258, ..., length 103
+12:31:12.078452 IP 203.0.113.10.17850 > 192.168.50.122.38608: Flags [P.], seq 2258:2542, ack 804, ..., length 284
+```
+
+(옵션 부분은 `...`로 줄였다.) 빠진 것을 세어 본다. DHCP가 없다. 임대가 아직 남아 있으니 다시 묻지 않는다. ARP가 없다. 공유기 MAC이 캐시에 `REACHABLE`로 있다. DNS는 노트북이 다시 물었지만 답에 `*`가 없고, 공유기 WAN 캡처에는 DNS 패킷이 한 줄도 없다. 공유기 로그가 이유를 말해 준다.
+
+```text
+dnsmasq[6208]: query[A] shop.n2.test from 192.168.50.122
+dnsmasq[6208]: cached shop.n2.test is 203.0.113.10
+```
+
+이 실습의 노트북에는 로컬 DNS 캐시가 없어서 공유기까지는 갔다. Ubuntu 기본 설치는 systemd-resolved가 `127.0.0.53`에서 캐시를 들고 있어서 이 질의조차 노트북 밖으로 나가지 않는 경우가 많고, 브라우저도 자체 캐시를 둔다. 마지막으로 두 번째 GET(`seq 701:804`)은 SYN 없이 같은 연결(포트 38608) 위로 바로 나갔다. curl이 연결을 열어 둔 채(keep-alive) 재사용했기 때문이다.
+
+연결을 새로 맺어야 할 때도 TLS는 조금 줄어든다. 첫 접속에서 받은 세션 티켓을 내밀면 서버는 인증서를 다시 보내지 않는다. curl은 프로세스가 끝나면 티켓을 버려서, `openssl s_client`로 티켓을 파일에 저장했다가 다시 썼다.
+
+```bash
+# 첫 연결: 세션 티켓을 sess.pem 에 저장
+openssl s_client -connect 203.0.113.10:17850 -servername shop.n2.test -CAfile ca.pem -sess_out sess.pem -ign_eof
+# 두 번째 연결: 저장한 티켓으로 재개
+openssl s_client -connect 203.0.113.10:17850 -servername shop.n2.test -CAfile ca.pem -sess_in sess.pem -ign_eof
+```
+
+```text
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Reused, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+```
+
+캡처에서 두 연결의 첫 묶음 크기를 비교하면 차이가 보인다. 첫 연결은 ClientHello 314바이트에 서버 응답 1352바이트, 재개한 연결은 ClientHello 617바이트에 서버 응답 245바이트였다. 클라이언트는 티켓을 실어 300바이트쯤 더 보내고, 서버는 인증서와 서명을 빼서 1100바이트쯤 덜 보낸다. 다만 TLS 1.3에서 재개해도 왕복 횟수는 그대로 한 번이다. 줄어드는 건 인증서 전송과 서명 검증 비용이다. 왕복까지 없애려면 0-RTT를 써야 하는데, 재전송 공격 위험 때문에 안전한 요청에만 쓴다([HTTPS와 TLS 글](/posts/https-tls)).
+
+아래 그림은 첫 접속과 두 번째 접속을 같은 여섯 칸 위에서 비교한다. 다음을 누르면 첫 접속이 칸마다 무엇을 기억해 두는지, 두 번째 접속이 그 기억으로 어느 칸을 건너뛰는지 나온다.
+
+<AlgoTrace
+  caption="첫 접속이 남긴 기억, 두 번째 접속이 건너뛰는 칸"
+  memoryLabel="남아 있는 기억"
+  cells={["DHCP", "ARP", "DNS", "TCP", "TLS", "HTTP"]}
+  steps={[
+    { pointer: 0, memory: ["임대 .122 (120초)"], caption: "첫 접속. 주소를 빌리고 남은 시간을 기억한다." },
+    { pointer: 1, memory: ["임대 .122 (120초)", "ARP .1 → 50:01"], caption: "공유기 MAC을 얻어 이웃 표에 넣는다." },
+    { pointer: 2, memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초"], caption: "공유기가 서버 쪽 DNS까지 물어 답을 캐시한다." },
+    { pointer: 3, memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초", "열린 연결 :36530"], caption: "세 번의 인사로 연결을 연다." },
+    { pointer: 4, memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초", "열린 연결 :36530", "세션 티켓 2장"], caption: "핸드셰이크 뒤 서버가 세션 티켓을 준다." },
+    { pointer: 5, found: [0, 1], memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초", "열린 연결 :36530", "세션 티켓 2장"], caption: "두 번째 접속. 임대와 ARP 캐시가 남아 있어 DHCP, ARP를 건너뛴다." },
+    { pointer: 2, found: [0, 1], memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초", "열린 연결 :36530", "세션 티켓 2장"], caption: "DNS는 묻지만 공유기가 캐시로 답한다. 인터넷 쪽으로는 질의가 나가지 않는다." },
+    { found: [0, 1, 2, 3, 4], pointer: 5, memory: ["임대 .122 (120초)", "ARP .1 → 50:01", "공유기 DNS 캐시 300초", "열린 연결 :36530", "세션 티켓 2장"], caption: "같은 연결을 재사용하면 TCP와 TLS 없이 GET만 간다. 새 연결이라도 티켓으로 인증서를 생략한다." },
+  ]}
+/>
+
+## 어느 칸에서 멈췄는지 캡처가 말해 준다
+
+이제 칸마다 하나씩 일부러 고장을 내 본다. 같은 "안 열린다"도 캡처 모양이 다 다르다. 각 실험은 이 실습 망 안에서만 한 것이다.
+
+DHCP 서버(공유기의 dnsmasq)를 끄고 주소를 받아 보면 DISCOVER만 2초 간격으로 나가고 답이 없다.
+
+```text
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: no lease, failing
+12:33:36.722773 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+12:33:38.754801 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+12:33:40.782800 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:50:09, length 300
+```
+
+이 상태에서 curl과 ping을 해 보면 오해하기 좋은 메시지가 나온다.
+
+```text
+curl: (6) Could not resolve host: shop.n2.test
+ping: connect: Network is unreachable
+```
+
+curl은 DNS 실패라고 말하지만 진짜 원인은 주소가 없는 것이다. DNS 서버에 질의를 보낼 경로부터 없다. 그래서 "DNS가 안 된다"는 신고를 받으면 `dig`보다 `ip -br addr`을 먼저 친다. Windows와 macOS는 이때 `169.254.x.x` 주소를 스스로 붙이는데(링크 로컬), 그 주소가 보이면 DHCP 대답을 못 받았다는 뜻이다. 리눅스는 설정에 따라 이 실습처럼 주소가 아예 없기도 하다.
+
+같은 망에 없는 기기(`192.168.50.77`)에 ping을 보내면 ARP가 답을 못 받는다.
+
+```text
+From 192.168.50.122 icmp_seq=1 Destination Host Unreachable
+From 192.168.50.122 icmp_seq=2 Destination Host Unreachable
+12:32:14.566476 ARP, Request who-has 192.168.50.77 tell 192.168.50.122, length 28
+12:32:15.582657 ARP, Request who-has 192.168.50.77 tell 192.168.50.122, length 28
+12:32:16.606659 ARP, Request who-has 192.168.50.77 tell 192.168.50.122, length 28
+192.168.50.77 dev n2lap0 FAILED
+```
+
+`From` 뒤의 주소가 내 주소(`.122`)라는 데 주목한다. 길 중간의 라우터가 아니라 내 커널이 "옆자리에 그런 기기가 없다"고 판정한 것이다. 이웃 표에는 `FAILED`가 남는다. 게이트웨이의 ARP가 이렇게 실패하면 바깥 모든 곳이 안 된다.
+
+없는 이름을 물으면 DNS는 빠르게, 그러나 "없다"고 답한다.
+
+```text
+curl: (6) Could not resolve host: nope2.n2.test
+12:32:12.053504 IP 192.168.50.122.44510 > 192.168.50.1.53: 39708+ A? nope2.n2.test. (31)
+12:32:12.055094 IP 192.168.50.1.53 > 192.168.50.122.44510: 39708 NXDomain 0/0/0 (31)
+```
+
+앞의 DHCP 실패와 curl 메시지는 똑같이 `(6)`이지만 캡처는 전혀 다르다. 여기는 질의가 나가고 답(`NXDomain`)이 왔다. 망은 멀쩡하고 이름이 틀렸거나 레코드가 없다.
+
+TCP 단계는 두 가지로 갈린다. 아무도 듣지 않는 포트(17851)와, 공유기가 버리는 포트(17852, 실습용으로 공유기 FORWARD 체인에 DROP 규칙을 넣었다)다.
+
+```text
+curl: (7) Failed to connect to shop.n2.test port 17851 after 3 ms: Couldn't connect to server
+curl: (28) Failed to connect to shop.n2.test port 17852 after 8001 ms: Timeout was reached
+12:32:26.958886 IP 192.168.50.122.38958 > 203.0.113.10.17851: Flags [S], seq 3837512575, ...
+12:32:26.959389 IP 203.0.113.10.17851 > 192.168.50.122.38958: Flags [R.], seq 0, ack 3837512576, win 0, length 0
+12:32:26.975001 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:28.002667 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:29.026805 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:30.046872 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:31.070753 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:32.094695 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+12:32:34.110717 IP 192.168.50.122.53562 > 203.0.113.10.17852: Flags [S], seq 1216458241, ...
+```
+
+17851은 서버 커널이 RST(`[R.]`)로 바로 거절했다. 서버까지는 갔고 그 포트에 프로그램이 없다는 뜻이다. 17852는 같은 `seq`의 SYN만 반복되고 아무 답이 없다. 중간에서 버려졌다. 재전송 간격이 1초씩 일정하다가 마지막에 2초로 늘어난 건 이 실습 커널(6.18)의 `net.ipv4.tcp_syn_linear_timeouts = 4` 설정 때문이다. 이 설정이 없는 커널에서는 1, 2, 4초처럼 처음부터 두 배씩 늘어난다.
+
+공유기의 NAT 규칙을 지우면 또 다른 모양이 나온다. 공유기 WAN에서 찍었다.
+
+```text
+curl: (28) Failed to connect to shop.n2.test port 17850 after 3003 ms: Timeout was reached
+12:33:16.096453 IP 192.168.50.122.46700 > 203.0.113.10.17850: Flags [S], seq 4188312646, ...
+12:33:17.118699 IP 192.168.50.122.46700 > 203.0.113.10.17850: Flags [S], seq 4188312646, ...
+12:33:18.142731 IP 192.168.50.122.46700 > 203.0.113.10.17850: Flags [S], seq 4188312646, ...
+```
+
+인터넷 쪽에 사설 주소(`192.168.50.122`)가 그대로 나왔다. 서버는 SYN을 받았지만 `192.168.50.0/24`로 가는 길이 없으니 답을 못 한다. 실제 인터넷에서는 ISP가 사설 출발지 패킷을 대개 버린다. 증상은 DROP과 같은 타임아웃이지만, 바깥 캡처에서 출발지 주소를 보면 바로 구별된다.
+
+TLS 단계에서는 인증서를 믿지 못하는 경우가 가장 흔하다. `--cacert` 없이, 그리고 인증서에 없는 이름으로 접속해 봤다.
+
+```text
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+curl: (60) SSL: no alternative certificate subject name matches target host name 'www.n2.test'
+```
+
+(두 줄 모두 뒤에 붙는 안내 문단은 줄였다. 두 번째는 `--resolve www.n2.test:17850:203.0.113.10`으로 같은 서버에 다른 이름으로 붙었다.)
+
+첫 번째 경우의 캡처는 핸드셰이크 도중에 끝난다. 서버가 1367바이트를 보낸 직후 클라이언트가 7바이트를 보내고 연결을 끊는다.
+
+```text
+12:33:01.158740 IP 192.168.50.122.48944 > 203.0.113.10.17850: Flags [P.], seq 517:524, ack 1368, ..., length 7
+	0x0030:  54cf 516b 1503 0300 0202 30              T.Qk......0
+```
+
+`15`는 경고(alert) 레코드, `02`는 치명적(fatal), `30`은 48번 `unknown_ca`다. 인증서를 발급한 CA를 모른다는 뜻이다. 이 경고는 클라이언트가 보낸 것이라 서버의 nginx 접근 로그에는 아무 줄도 남지 않았다. "서버 로그엔 요청이 없는데 사용자는 접속이 안 된다"는 상황에서 인증서를 의심해야 하는 이유다.
+
+마지막으로 nginx가 503을 주는 경로(`/down`)다.
+
+```text
+503
+```
+
+캡처를 보면 정상 접속과 모양이 같다. 세 번의 인사, 517바이트와 1367바이트의 핸드셰이크, 세션 티켓 두 장이 그대로 오가고, 다른 건 크기뿐이다. 요청은 경로가 네 글자 길어져 107바이트, 응답은 284바이트 대신 414바이트였다. 상태 코드는 네트워크가 끝까지 일했다는 증거이고, 원인은 서버 애플리케이션이나 그 뒤에 있다. 상태 코드별로 볼 곳은 [HTTP 상태 코드 글](/posts/http-status-codes)에 있다.
+
+아래 그림은 이 실험들을 같은 망 위에 다시 놓은 것이다. 다음을 누르면 패킷이 어디까지 가서 멈추는지 나온다.
+
+<NetworkTopology
+  width={400}
+  height={210}
+  caption="칸마다 고장 내 보면 패킷이 멈추는 자리가 다르다"
+  zones={[
+    { id: "home", label: "집 LAN", x: 6, y: 6, w: 220, h: 198, tone: "private" },
+    { id: "net", label: "인터넷", x: 232, y: 6, w: 162, h: 198, tone: "public" },
+  ]}
+  nodes={[
+    { id: "lap", label: "n2lap", sub: ".122", x: 60, y: 120, icon: "client", w: 84 },
+    { id: "ghost", label: "없는 기기", sub: ".77", x: 60, y: 40, icon: "client", w: 84 },
+    { id: "rtr", label: "n2rtr", sub: "NAT · DHCP", x: 180, y: 120, icon: "router", w: 84 },
+    { id: "srv", label: "n2web", sub: "203.0.113.10", x: 320, y: 120, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "lap", to: "rtr" },
+    { from: "lap", to: "ghost", dashed: true },
+    { from: "rtr", to: "srv" },
+  ]}
+  steps={[
+    { path: ["lap", "rtr"], packet: "DISCOVER", blocked: true, title: "DHCP 서버가 없다", detail: "DISCOVER만 반복된다. 주소가 없으니 curl은 엉뚱하게 DNS 실패(6)를 말한다.", payload: "udhcpc: no lease, failing\nping: connect: Network is unreachable" },
+    { path: ["lap", "ghost"], packet: "who-has", blocked: true, title: "ARP가 답을 못 받는다", detail: "내 커널이 직접 Destination Host Unreachable을 낸다. 이웃 표에 FAILED.", payload: "From 192.168.50.122 icmp_seq=1 Destination Host Unreachable" },
+    { path: ["lap", "rtr", "lap"], packet: "NXDOMAIN", highlight: ["rtr"], title: "이름이 없다", detail: "질의와 답은 정상으로 오갔다. 망은 멀쩡하고 이름이 틀렸다.", payload: "39708 NXDomain 0/0/0" },
+    { path: ["lap", "rtr", "srv", "rtr", "lap"], packet: "SYN → RST", title: "포트에 아무도 없다", detail: "서버까지 갔다가 RST로 바로 돌아온다. 3ms 만에 (7).", payload: "Flags [R.], seq 0, ack 3837512576, win 0" },
+    { path: ["lap", "rtr"], packet: "SYN", blocked: true, title: "중간에서 버린다", detail: "같은 seq의 SYN만 반복된다. 8초 뒤 (28) 타임아웃.", payload: "iptables -A FORWARD -p tcp --dport 17852 -j DROP" },
+    { path: ["lap", "rtr", "srv"], packet: "SYN", blocked: true, highlight: ["rtr"], title: "NAT가 빠졌다", detail: "사설 출발지 그대로 서버에 닿고, 서버는 돌아갈 길이 없다. 증상은 타임아웃.", payload: "IP 192.168.50.122.46700 > 203.0.113.10.17850: Flags [S]" },
+    { path: ["lap", "rtr", "srv"], packet: "alert 48", blocked: true, title: "인증서를 믿지 못한다", detail: "핸드셰이크 도중 클라이언트가 unknown_ca 경고를 보내고 끊는다. 서버 접근 로그엔 아무것도 없다.", payload: "15 03 03 00 02 02 30" },
+    { path: ["lap", "rtr", "srv", "rtr", "lap"], packet: "503", title: "네트워크는 끝까지 일했다", detail: "모든 단계가 성공했고 응답 내용만 다르다. 이제 서버 쪽을 본다." },
+  ]}
+/>
+
+캡처 모양을 증상과 나란히 놓으면 이렇다. 위에서부터 차례로 확인하면 된다.
+
+| 멈춘 칸 | 사용자가 보는 것 | 캡처의 모양 | 먼저 칠 명령 |
+|---|---|---|---|
+| DHCP | 169.254 주소, 또는 주소 없음, curl `(6)` | DISCOVER만 반복 | `ip -br addr` |
+| ARP | `Destination Host Unreachable` (From 내 주소) | who-has만 반복 | `ip neigh` |
+| DNS | curl `(6)` | 질의와 `NXDomain` 답 | `dig 이름` |
+| TCP 거절 | curl `(7)`, `Connection refused` | SYN 뒤 바로 `[R.]` | `ss -ltnp` (서버) |
+| TCP 차단 | curl `(28)`, 타임아웃 | 같은 seq의 SYN 반복 | 방화벽 규칙, 보안 그룹 |
+| NAT | 타임아웃 | 바깥에 사설 출발지 | `iptables -t nat -S`, `conntrack -L` |
+| TLS | curl `(60)`, 브라우저 인증서 경고 | 핸드셰이크 중 7바이트 alert | `openssl s_client -servername` |
+| HTTP | 4xx, 5xx 페이지 | 정상과 같은 모양 | 서버 로그 |
+
+여섯 칸을 차례로 확인하는 순서를 코드로 옮겨 볼 수 있다. 아래 함수는 관찰한 사실을 받아 처음으로 실패한 칸의 이름을 돌려준다. 앞 칸이 실패하면 뒤 칸은 볼 필요가 없다는 점, 그리고 같은 curl `(6)`도 주소가 없으면 DHCP 문제라는 점이 핵심이다.
+
+<CodePlayground
+  caption="처음으로 멈춘 칸 고르기"
+  functionName="firstFailedStep"
+  initialCode={`// obs: 관찰한 사실
+//   addr: 내 IPv4 주소 (없으면 null)
+//   gwArp: 게이트웨이 ARP 응답이 왔나 (true/false)
+//   dns: "ok" | "nxdomain" | "timeout"
+//   syn: "synack" | "rst" | "none"
+//   tlsAlert: TLS 경고 번호 (없으면 null)
+//   status: HTTP 상태 코드 (없으면 null)
+// 반환: "DHCP" | "ARP" | "DNS" | "TCP-refused" | "TCP-timeout" | "TLS" | "HTTP" | "OK"
+function firstFailedStep(obs) {
+  return "OK";
+}`}
+  solution={`function firstFailedStep(obs) {
+  if (!obs.addr || obs.addr.startsWith("169.254.")) return "DHCP";
+  if (!obs.gwArp) return "ARP";
+  if (obs.dns !== "ok") return "DNS";
+  if (obs.syn === "rst") return "TCP-refused";
+  if (obs.syn !== "synack") return "TCP-timeout";
+  if (obs.tlsAlert !== null) return "TLS";
+  if (obs.status >= 400) return "HTTP";
+  return "OK";
+}`}
+  tests={[
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "ok", syn: "synack", tlsAlert: null, status: 200 }], expected: "OK", label: "정상 접속" },
+    { args: [{ addr: null, gwArp: false, dns: "timeout", syn: "none", tlsAlert: null, status: null }], expected: "DHCP", label: "주소 없음 (curl은 6을 말한다)" },
+    { args: [{ addr: "169.254.12.7", gwArp: false, dns: "timeout", syn: "none", tlsAlert: null, status: null }], expected: "DHCP", label: "링크 로컬 주소" },
+    { args: [{ addr: "192.168.50.122", gwArp: false, dns: "timeout", syn: "none", tlsAlert: null, status: null }], expected: "ARP", label: "게이트웨이가 ARP에 답하지 않음" },
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "nxdomain", syn: "none", tlsAlert: null, status: null }], expected: "DNS", label: "NXDOMAIN" },
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "ok", syn: "rst", tlsAlert: null, status: null }], expected: "TCP-refused", label: "RST가 돌아옴" },
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "ok", syn: "none", tlsAlert: null, status: null }], expected: "TCP-timeout", label: "SYN만 반복" },
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "ok", syn: "synack", tlsAlert: 48, status: null }], expected: "TLS", label: "unknown_ca" },
+    { args: [{ addr: "192.168.50.122", gwArp: true, dns: "ok", syn: "synack", tlsAlert: null, status: 503 }], expected: "HTTP", label: "503" },
+  ]}
+/>
+
+실제 장애에서는 각 칸을 층별 명령으로 더 파고들어야 한다. 그 순서는 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer)에 있다.
+
+## 여섯 칸을 한 줄로
+
+주소가 없는 노트북은 DHCP로 주소, 게이트웨이, DNS 서버를 빌리고, ARP로 게이트웨이의 MAC을 얻고, DNS로 서버 IP를 알아낸다. 그다음 TCP로 연결을 열고, TLS로 서버를 확인해 키를 정하고, 그 안에 HTTP 요청을 싣는다. 공유기를 지날 때 MAC, TTL, 출발지 IP가 바뀐다. 두 번째 접속에서는 임대, ARP 캐시, DNS 캐시, 열린 연결, 세션 티켓이 앞의 칸들을 건너뛰게 해 준다. 그리고 "안 열린다"는 말을 들으면 캡처의 모양으로 몇 번째 칸에서 멈췄는지부터 고른다. 개념 하나하나를 더 보려면 [네트워크 필수 개념 지도](/posts/networking-essentials-map)에서, 브라우저가 받은 HTML을 그리는 뒷이야기는 [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 노트북을 Wi-Fi에 연결하고 웹사이트를 열기까지의 과정을 설명해 주세요
+
+DHCP, ARP, DNS, TCP, TLS, HTTP 순서다. 먼저 DHCP로 주소, 서브넷 마스크, 게이트웨이, DNS 서버를 빌린다. 서버가 다른 망이니 ARP로 게이트웨이의 MAC을 얻고, DNS로 이름을 IP로 바꾼다. 공유기가 NAT로 출발지를 공인 주소로 바꿔 내보내면 TCP 3-way handshake, TLS 핸드셰이크를 거쳐 암호화된 HTTP 요청과 응답이 오간다. 두 번째부터는 임대, ARP 캐시, DNS 캐시, 연결 재사용 덕분에 앞 단계 대부분을 건너뛴다.
+
+### IP 주소가 없는데 DHCP 서버와 어떻게 통신하나요?
+
+출발지를 `0.0.0.0`, 목적지를 `255.255.255.255`로 한 UDP 브로드캐스트를 쓴다(클라이언트 68번, 서버 67번 포트). 같은 LAN의 모두가 받으니 DHCP 서버도 받고, 서버는 클라이언트의 MAC 주소를 보고 답한다. 브로드캐스트라서 라우터를 넘지 못하고, 다른 망의 서버를 쓰려면 DHCP 릴레이가 필요하다.
+
+### 공유기를 지나면서 패킷의 무엇이 바뀌나요?
+
+MAC 주소, TTL, 출발지 IP 세 가지가 바뀐다. MAC은 구간마다 새로 쓰이고, 라우터를 지나니 TTL이 하나 줄고, NAT가 사설 출발지를 공인 주소로 바꾼다. 출발지 포트는 겹치지 않으면 그대로 두지만 겹치면 바꾼다. 공유기는 이 변환을 conntrack에 기록해 두었다가 답이 오면 거꾸로 되돌린다.
+
+### HTTPS를 쓰면 중간에서 접속한 사이트를 알 수 없나요?
+
+알 수 있다. 내용은 암호화되지만 DNS 질의(평문일 때), 목적지 IP, 그리고 ClientHello의 SNI에 도메인이 평문으로 남는다. 회사 방화벽이 HTTPS 사이트를 도메인 단위로 막을 수 있는 것도 SNI를 보기 때문이다. DNS over HTTPS와 ECH로 가릴 수 있지만, ECH는 서버와 클라이언트가 모두 지원해야 한다.
+
+### 두 번째 접속이 빠른 이유는 무엇인가요?
+
+앞 단계의 결과가 곳곳에 캐시되어 있어서다. DHCP 임대가 남아 있고, 게이트웨이 MAC이 ARP 캐시에, 서버 IP가 OS·브라우저·리졸버의 DNS 캐시에 있다. 연결을 열어 두었다면(keep-alive) TCP와 TLS 핸드셰이크 없이 바로 요청을 보낸다. 새 연결이어도 TLS 세션 티켓으로 인증서 전송과 검증을 생략한다.
+
+### TLS 1.3 세션 재개를 하면 왕복이 줄어드나요?
+
+일반 재개는 왕복을 줄이지 않는다. TLS 1.3 핸드셰이크는 원래 1-RTT이고, 재개해도 1-RTT다. 줄어드는 건 서버가 인증서와 서명을 다시 보내지 않아 생기는 바이트와 CPU다(실습에서 서버 응답이 1352바이트에서 245바이트로 줄었다). 왕복까지 없애려면 0-RTT로 첫 패킷에 요청을 실어야 하는데, 재전송 공격 위험 때문에 멱등한 요청에만 쓴다.
+
+### curl이 "Could not resolve host"를 냈는데 DNS 문제가 아닐 수 있나요?
+
+있다. 주소나 기본 경로가 없으면 DNS 서버에 질의를 보낼 수조차 없어서 같은 메시지가 나온다. 그래서 `ip -br addr`과 `ip route`로 주소와 게이트웨이부터 보고, 그다음 캡처나 `dig`로 질의가 나가는지, 답이 `NXDOMAIN`인지 확인한다. 질의가 나가고 `NXDOMAIN`이 왔다면 진짜 이름 문제다.
+
+### Connection refused와 timeout은 캡처에서 어떻게 다르게 보이나요?
+
+refused는 SYN 바로 뒤에 상대가 RST(`[R.]`)를 돌려준 것이다. 서버까지는 닿았고 그 포트를 듣는 프로그램이 없거나 방화벽이 REJECT한 것이다. timeout은 같은 seq의 SYN만 재전송되고 아무 답이 없다. 중간 방화벽이 DROP했거나, 경로가 없거나, NAT가 빠져 답이 돌아올 길이 없는 경우다.
