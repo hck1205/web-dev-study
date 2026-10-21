@@ -10,6 +10,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "ansible-network-automation": 7,
   "api-pagination-sorting": 6,
   "api-versioning": 6,
+  "architecture-patterns-overview": 6,
   "argocd-basics": 7,
   "authn-vs-authz": 7,
   "autoscaling": 6,

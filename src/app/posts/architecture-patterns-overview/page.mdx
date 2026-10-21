@@ -1,0 +1,351 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("architecture-patterns-overview");
+
+세 명이 만들던 서비스에 지금은 열다섯 명이 커밋한다. 저장소도 하나, 배포 파이프라인도 하나다. 결제 팀의 테스트 하나가 깨지면 검색 팀의 문구 수정도 같이 멈추고, 금요일 오후에는 배포 순서를 정하는 스레드가 길어진다. 회고에서 누군가 말한다. "이제 MSA로 가야 하지 않을까요?"
+
+그 말이 틀렸다고 하기는 어렵다. 그런데 이어지는 대화를 들어 보면 사람마다 다른 걸 말하고 있다. 한 명은 서비스를 나누자고 하고, 한 명은 헥사고날로 코드를 정리하자고 하고, 또 한 명은 이벤트로 바꾸면 결합이 풀린다고 한다. 셋 다 "아키텍처"라는 같은 단어를 쓰지만 서로 다른 질문에 답하고 있다.
+
+이 글은 백엔드 아키텍처 시리즈의 지도다. 패턴마다 자세한 설명은 각 글에 있고, 여기서는 패턴들이 어느 질문에 대한 답인지 나누고, 지금 상황에서 무엇을 먼저 바꿔야 하는지 고르는 기준을 정리한다.
+
+## 세 가지 질문을 섞어서 하고 있다
+
+아키텍처 패턴이라고 묶여 나오는 것들은 실제로 세 축에 나뉘어 있다.
+
+첫째 축은 배포 구조다. 실행되는 덩어리를 몇 개로 나누고 각각을 누가 언제 배포하는가. 모놀리스, 모듈러 모놀리스, 마이크로서비스, 서버리스가 여기에 있다.
+
+둘째 축은 코드 구조다. 배포 단위 하나 안에서 업무 규칙과 DB, HTTP 같은 기술을 어떻게 떼어 놓는가. 레이어드, 헥사고날, 클린 아키텍처, 그리고 업무 경계를 긋는 DDD가 여기에 있다.
+
+셋째 축은 데이터와 통신이다. 상태를 어디에 어떤 모양으로 저장하고, 바뀐 사실을 누구에게 어떻게 알리는가. 이벤트 기반 아키텍처, CQRS, 이벤트 소싱, 아웃박스, 사가가 여기에 있다.
+
+축이 다르면 서로 배타적이지 않다. 모놀리스 안을 헥사고날로 짜도 되고, 마이크로서비스 하나하나를 레이어드로 짜도 된다. 아래 그림에서 화살표는 "이것을 고르면 저것이 필요해지거나 쉬워진다"는 관계다.
+
+<ConceptDiagram
+  caption="배포·코드·데이터 세 축과 서로 끌어당기는 패턴"
+  width={400}
+  height={370}
+  nodes={[
+    { id: "mono", label: "monolith", sub: "배포", x: 52, y: 40, w: 88, h: 44 },
+    { id: "modm", label: "modular mono", sub: "배포", x: 150, y: 40, w: 92, h: 44 },
+    { id: "ms", label: "microservices", sub: "배포", x: 250, y: 40, w: 92, h: 44 },
+    { id: "sls", label: "serverless", sub: "배포", x: 348, y: 40, w: 88, h: 44 },
+    { id: "lay", label: "layered", sub: "코드", x: 52, y: 160, w: 88, h: 44 },
+    { id: "hex", label: "hexagonal", sub: "코드", x: 150, y: 160, w: 92, h: 44 },
+    { id: "clean", label: "clean", sub: "코드", x: 250, y: 160, w: 92, h: 44 },
+    { id: "ddd", label: "DDD context", sub: "경계", x: 348, y: 160, w: 88, h: 44 },
+    { id: "cqrs", label: "CQRS", sub: "데이터", x: 52, y: 270, w: 88, h: 44 },
+    { id: "es", label: "event sourcing", sub: "데이터", x: 150, y: 336, w: 92, h: 44 },
+    { id: "eda", label: "event-driven", sub: "통신", x: 250, y: 270, w: 92, h: 44 },
+    { id: "outbox", label: "outbox, saga", sub: "통신", x: 348, y: 336, w: 88, h: 44 },
+  ]}
+  edges={[
+    { from: "mono", to: "lay", label: "흔한 시작", dashed: true },
+    { from: "modm", to: "ddd" },
+    { from: "ms", to: "ddd", label: "업무 경계" },
+    { from: "ddd", to: "outbox", label: "경계 넘기" },
+    { from: "hex", to: "cqrs", label: "포트 뒤에서", dashed: true },
+    { from: "cqrs", to: "es", label: "선택", dashed: true },
+    { from: "es", to: "eda", label: "사건 발행" },
+    { from: "outbox", to: "eda", label: "발행 보장" },
+  ]}
+/>
+
+이 구분이 실무에서 쓸모 있는 이유는 증상이 축마다 다르기 때문이다. 배포 대기열이 길다는 건 첫째 축의 증상이다. 결제사를 바꾸려는데 업무 코드 곳곳이 SDK를 안다는 건 둘째 축의 증상이다. 주문 API가 알림 서버 응답을 기다리느라 느리다는 건 셋째 축의 증상이다. 배포 대기열 문제를 헥사고날로 풀 수 없고, 결제사 결합 문제를 서비스 분리로 풀 수 없다. 처음 회의의 세 사람이 엇갈린 이유가 이것이다.
+
+## 배포 단위를 몇 개로 둘까
+
+[모놀리스](/posts/monolith-architecture)는 기능 전체를 하나로 빌드하고 하나로 배포한다. 함수 호출과 트랜잭션 하나로 여러 테이블을 묶는 단순함을 얻는다. 대가는 코드보다 사람이 늘어날 때 온다. 모두가 같은 파이프라인을 줄 서서 쓰고, 한 기능의 메모리 누수가 전체 프로세스를 내린다.
+
+[모듈러 모놀리스](/posts/modular-monolith)는 배포는 하나로 두고 코드 안에 업무 모듈 경계를 세운 뒤, 그 경계를 사람의 주의 대신 빌드 규칙과 DB 권한으로 지킨다. 네트워크 비용 없이 경계를 얻는다. 나중에 모듈 하나를 서비스로 떼어 낼 때 가장 쉬운 출발점이기도 하다.
+
+[마이크로서비스](/posts/microservices)는 업무 경계마다 따로 배포되는 서비스를 두고 네트워크로만 대화하게 한다. 팀이 서로를 기다리지 않고 배포하게 되는 대신, 함수 호출이 네트워크 호출로, 트랜잭션이 사가로, 조인이 API 합치기로 바뀐다. 어디서 자르고 어떤 순서로 옮기는지는 [마이크로서비스 분해](/posts/microservices-decomposition)에서 커밋 기록과 DB 카탈로그로 따져 본다.
+
+[서버리스](/posts/serverless-architecture)는 배포 단위를 함수 하나까지 줄이고 서버 관리를 플랫폼에 넘긴다. 사건 하나에 반응하는 짧은 작업, 트래픽이 들쭉날쭉한 작업에 잘 맞는다. 실행 시간, 페이로드 크기, 동시성, DB 연결 같은 한도가 있어서 구조가 그 한도에 맞춰진다. 그 숫자들은 [서버리스의 한계](/posts/serverless-limits)에 모아 두었다.
+
+네 가지는 한 줄 위의 점이 아니다. 모놀리스 옆에 이미지 리사이즈 같은 일만 서버리스 함수로 붙이는 구성도 흔하다. 배포 단위를 고른다는 건 "무엇을 함께 배포하고 무엇을 따로 배포할까"를 업무 덩어리마다 정하는 일이다.
+
+## 한 배포 단위 안의 코드는 어떻게 놓을까
+
+[레이어드 아키텍처](/posts/layered-architecture)는 프레젠테이션, 비즈니스, 퍼시스턴스 순으로 층을 쌓고 위에서 아래로만 부른다. 처음 배우기 쉽고 CRUD가 많은 서비스에는 충분하다. 의존이 결국 DB 쪽을 향하기 때문에 업무 규칙이 ORM 모델 모양에 끌려가기 쉽다.
+
+[헥사고날 아키텍처](/posts/hexagonal-architecture)는 그 의존을 뒤집는다. 업무 코어가 필요한 구멍(포트)을 직접 정의하고, DB나 결제사 SDK는 바깥에서 어댑터로 꽂는다. 외부 기술을 바꾸거나 가짜 어댑터로 테스트하기 쉬워진다.
+
+[클린 아키텍처](/posts/clean-architecture)는 같은 생각을 엔티티, 유스케이스, 어댑터, 프레임워크의 동심원과 "의존은 안쪽으로"라는 규칙 하나로 정리했다. 헥사고날과 경쟁하는 패턴이라기보다 같은 원칙을 다르게 그린 그림에 가깝다.
+
+[DDD의 바운디드 컨텍스트와 애그리거트](/posts/ddd-bounded-context)는 층을 어떻게 쌓을지가 아니라 업무를 어디서 자를지에 답한다. 같은 단어가 같은 뜻으로 쓰이는 범위가 경계가 되고, 그 경계가 모듈러 모놀리스의 모듈이 되고, 나중에는 서비스가 된다. 그래서 첫째 축과 둘째 축을 잇는 다리 역할을 한다.
+
+이 축에서 자주 하는 오해는 "헥사고날을 해야 마이크로서비스로 갈 수 있다"는 말이다. 서비스를 떼어 내기 쉽게 만드는 건 포트와 어댑터가 아니라 업무 경계와 데이터 소유권이다. 헥사고날로 잘 짠 코드라도 주문 코어가 회원 테이블을 직접 조인하고 있으면 떼어 낼 수 없다.
+
+## 데이터와 메시지는 어떻게 흐를까
+
+[이벤트 기반 아키텍처](/posts/event-driven-architecture)는 "이걸 해 달라"고 부르는 대신 "이런 일이 있었다"고 알린다. 보내는 쪽이 받는 쪽을 모르게 되고, 주문 API가 알림 서버를 기다리지 않아도 된다. 대신 흐름이 코드 한곳에 보이지 않고, 데이터가 잠깐 어긋나는 시간을 받아들여야 한다.
+
+[CQRS](/posts/cqrs)는 바꾸는 모델과 읽는 모델을 나눈다. 복잡한 목록 화면이 쓰기용 정규화 테이블을 매번 조인하느라 느릴 때, 읽기 전용 모델을 따로 채워 두는 방식이다. 같은 DB 안의 별도 테이블로도 할 수 있어서 반드시 이벤트나 다른 저장소가 필요한 건 아니다.
+
+[이벤트 소싱](/posts/event-sourcing)은 현재 상태 대신 일어난 사건을 원본으로 저장하고, 상태는 사건을 접어서 만든다. 감사 기록과 지난 시점 조회가 공짜로 생기는 대신 스냅숏, 사건 형식 변경, 개인정보 삭제 같은 일을 직접 설계해야 한다.
+
+[트랜잭셔널 아웃박스](/posts/transactional-outbox)는 "DB에 쓰고 브로커에 보내는" 두 번의 쓰기 사이에서 끊기는 문제를 막는다. 이벤트를 같은 트랜잭션으로 아웃박스 테이블에 쓰고, 릴레이가 그걸 브로커로 옮긴다.
+
+[사가](/posts/saga-pattern)는 여러 서비스에 걸친 업무를 단계로 나누고, 중간에 실패하면 앞 단계를 반대 동작(보상)으로 되돌린다. 서비스마다 DB가 따로 생긴 순간 분산 트랜잭션 대신 고르는 방법이다.
+
+이 축의 패턴은 배포 구조에 끌려온다. 모놀리스 하나에 DB 하나면 트랜잭션 하나로 끝나는 일이, 서비스를 나누는 순간 아웃박스와 사가가 필요한 일로 바뀐다. 처음 그림에서 마이크로서비스가 업무 경계를 거쳐 아웃박스와 사가로 이어진 화살표가 그 뜻이다.
+
+## 패턴은 겹쳐서 쓴다
+
+실제 시스템에서는 세 축의 패턴이 한 요청 안에 함께 나온다. 주문 서비스 하나가 안은 헥사고날로 짜여 있고, 저장할 때 아웃박스에 이벤트를 남기고, 목록 화면은 CQRS 읽기 모델에서 읽는다고 해 보자. 아래 그림에서 다음을 누르면 주문 명령 하나가 어느 패턴의 영역을 지나가는지 차례로 보인다.
+
+<SequenceDiagram
+  caption="주문 명령 하나가 헥사고날 코어, 아웃박스, 브로커, 읽기 모델을 지나가는 길"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "http", label: "HTTP 어댑터" },
+    { id: "core", label: "주문 코어" },
+    { id: "db", label: "DB" },
+    { id: "mq", label: "브로커" },
+    { id: "proj", label: "프로젝터" },
+  ]}
+  steps={[
+    { from: "c", to: "http", label: "POST /orders", title: "요청은 바깥 어댑터가 받는다", detail: "HTTP 형식을 아는 건 여기까지다. 본문을 검증하고 명령 객체로 바꾼다.", payload: "{ \"sku\": \"A-12\", \"qty\": 2 }" },
+    { from: "http", to: "core", label: "placeOrder(cmd)", title: "들어오는 포트로 코어를 부른다", detail: "코어는 HTTP도 DB도 모른다. 헥사고날 글의 들어오는 포트가 이 자리다." },
+    { from: "core", to: "core", label: "규칙 검사", title: "업무 규칙은 코어 안에서", detail: "재고, 한도, 상태 전이를 확인한다. 가짜 어댑터로 테스트할 수 있는 부분이다." },
+    { from: "core", to: "db", label: "orders + outbox", title: "상태와 이벤트를 한 트랜잭션에", detail: "나가는 포트의 저장소 어댑터가 주문 행과 OrderPlaced 행을 같이 커밋한다. 둘 중 하나만 남는 일이 없다.", payload: "BEGIN; INSERT INTO orders ...; INSERT INTO outbox ...; COMMIT;" },
+    { from: "http", to: "c", label: "201 Created", title: "응답은 커밋 직후에 나간다", detail: "브로커 전송을 기다리지 않는다. 알림, 적립, 목록 갱신은 뒤에서 따라온다." },
+    { from: "db", to: "mq", label: "relay: OrderPlaced", title: "릴레이가 아웃박스를 옮긴다", detail: "아직 안 보낸 행을 읽어 브로커에 발행하고 보냈다고 표시한다. 중간에 죽으면 다시 보내니 받는 쪽은 중복을 견뎌야 한다." },
+    { from: "mq", to: "proj", label: "OrderPlaced", title: "구독자가 사건을 받는다", detail: "프로젝터 말고도 알림, 포인트 같은 구독자가 각자 받는다. 주문 서비스는 이들을 모른다." },
+    { from: "proj", to: "proj", label: "order_list upsert", title: "읽기 모델을 고친다", detail: "목록 화면에 맞춘 테이블에 한 줄을 넣는다. 이 사건 번호를 이미 반영했으면 건너뛴다." },
+    { from: "c", to: "proj", label: "GET /orders", title: "조회는 읽기 모델에서", detail: "명령 직후라면 아직 반영 전일 수 있다. 이 틈을 화면에서 어떻게 받을지는 CQRS 글에서 다룬다." },
+  ]}
+/>
+
+그림의 아홉 단계 중 앞의 셋은 둘째 축(코드 구조), 넷째와 여섯째는 셋째 축(아웃박스), 마지막 셋은 셋째 축(CQRS)이다. 이 서비스가 모놀리스 안의 한 모듈이어도 그림은 거의 같다. 브로커 자리에 같은 프로세스 안의 이벤트 버스가 들어갈 뿐이다. 축이 서로 독립이라는 말이 이런 뜻이다.
+
+## 언제 다음 단계로 넘어가나
+
+배포 구조는 한 번 정하고 끝나는 게 아니라 조직과 함께 움직인다. 흔한 경로는 모놀리스에서 시작해 모듈러 모놀리스로 경계를 다지고, 압력이 큰 모듈 하나부터 서비스로 떼어 내는 것이다. 아래 그림은 그 세 단계를 결제 모듈 하나로 따라간다.
+
+<NetworkTopology
+  caption="모놀리스 안의 결제 모듈이 경계를 갖추고 서비스로 나가기까지"
+  width={400}
+  height={320}
+  zones={[
+    { id: "zapp", label: "app (1 deploy)", x: 10, y: 66, w: 250, h: 244, tone: "private" },
+    { id: "zpay", label: "pay-svc", x: 272, y: 66, w: 118, h: 244, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "client", label: "client", x: 200, y: 30, icon: "client" },
+    { id: "orders", label: "orders", x: 70, y: 140, icon: "server" },
+    { id: "catalog", label: "catalog", x: 196, y: 140, icon: "server" },
+    { id: "paymod", label: "payments", sub: "module", x: 70, y: 250, icon: "server" },
+    { id: "appdb", label: "app DB", x: 196, y: 250, icon: "db" },
+    { id: "paysvc", label: "payments", sub: "service", x: 331, y: 140, icon: "container" },
+    { id: "paydb", label: "pay DB", x: 331, y: 250, icon: "db" },
+  ]}
+  links={[
+    { from: "client", to: "orders" },
+    { from: "client", to: "catalog" },
+    { from: "orders", to: "catalog" },
+    { from: "orders", to: "paymod" },
+    { from: "orders", to: "appdb", dashed: true },
+    { from: "paymod", to: "appdb" },
+    { from: "catalog", to: "appdb" },
+    { from: "orders", to: "paysvc", dashed: true },
+    { from: "paysvc", to: "paydb" },
+  ]}
+  steps={[
+    { path: ["client", "orders", "catalog"], packet: "price()", highlight: ["zapp"], title: "모놀리스: 아무 함수나 부른다", detail: "주문이 상품 모듈의 내부 함수를 바로 부른다. 빠르고 단순하지만 누가 무엇을 쓰는지 아무도 모른다." },
+    { path: ["orders", "paymod", "appdb"], packet: "charge()", title: "트랜잭션 하나로 묶인다", detail: "주문과 결제가 같은 DB에 같은 트랜잭션으로 쓴다. 이 편함이 나중에 떼어 낼 때 가장 큰 짐이 된다." },
+    { path: ["orders", "catalog"], packet: "catalog.api", title: "모듈러 모놀리스: 공개 API만", detail: "각 모듈은 index에 연 함수만 바깥에 보인다. 침범은 CI의 의존 규칙이 막는다." },
+    { path: ["orders", "appdb"], packet: "SELECT pay_*", blocked: true, title: "남의 테이블은 권한이 막는다", detail: "결제 테이블은 결제 모듈의 스키마에 있고, 주문 모듈의 DB 계정은 읽을 수 없다. 데이터 소유권이 여기서 생긴다." },
+    { path: ["orders", "paysvc", "paydb"], packet: "POST /charges", highlight: ["zpay"], title: "압력이 큰 모듈 하나만 떼어 낸다", detail: "결제는 따로 배포하고 자기 DB를 가진다. 주문과의 트랜잭션은 이제 사가와 아웃박스가 맡는다." },
+    { path: ["paymod"], highlight: ["appdb"], title: "옛 모듈은 대조가 끝나면 지운다", detail: "병행 실행으로 두 쪽 결과를 비교하고, 데이터가 맞는 걸 확인한 뒤 모듈과 테이블을 걷어 낸다." },
+  ]}
+/>
+
+넷째 단계가 이 경로의 고비다. 모듈러 모놀리스 단계에서 남의 테이블 읽기를 끊어 두지 않으면 다섯째 단계로 갈 수 없다. 떼어 낸 서비스가 여전히 옛 DB를 읽게 되고, 그건 서비스를 나눈 게 아니라 네트워크를 하나 더 끼운 것이다.
+
+그럼 언제 넘어가나. 정답 숫자는 없지만, 판단에 쓸 신호는 재 볼 수 있는 것들이다. 아래 숫자는 이 글에서 쓰는 기준선이고, 팀마다 조정해야 한다.
+
+- 팀 수. 한 팀은 대략 5~9명, 한자리에서 의사결정이 끝나는 크기다. 팀이 하나면 배포 단위를 나눌 이유가 거의 없다. 팀이 셋을 넘기고 서로의 배포를 기다리기 시작하면 첫 신호다.
+- 배포 대기. 머지한 코드가 다른 팀 때문에 운영에 나가지 못하고 기다리는 시간이다. 하루에 몇 번 배포하던 팀이 반나절(4시간 이상)씩 줄을 서고 있으면 배포 단위가 사람 수를 못 따라온 것이다.
+- 함께 바뀌는 비율. 커밋 하나가 모듈 두 개 이상을 건드리는 비율이다. 이 값이 20%를 넘으면 경계가 아직 틀렸거나 덜 굳었다는 뜻이다. 이때 서비스로 나누면 매번 두 서비스를 같이 배포하게 된다.
+- 부하 편차. 특정 기능만 나머지보다 10배 넘게 자원을 쓰거나, 혼자만 다른 확장 방식이 필요한 경우다. 먼저 [역할별 프로세스](/posts/monolith-architecture)로 같은 코드를 다르게 띄워 보고, 그래도 안 되면 떼어 낸다.
+- 운영 여력. 떼어 낸 서비스의 배포, 대시보드, 알림, 온콜을 맡을 팀이 실제로 있는가. 없으면 다른 신호가 모두 켜져도 아직이다.
+
+처음 장면의 팀으로 이 신호를 차례로 짚어 보면 아래와 같다. 열다섯 명이 세 팀이고, 배포 대기는 평균 6시간, 커밋의 35%가 모듈 두 개 이상을 건드리고, 결제만 결제일마다 평소의 20배 트래픽을 받는다.
+
+<AlgoTrace
+  caption="열다섯 명, 세 팀의 상황을 신호 순서대로 짚기"
+  cells={["팀 수", "배포 대기", "함께 바뀜", "경계 안정", "부하 편차", "운영 여력"]}
+  memoryLabel="지금까지의 판단"
+  steps={[
+    { pointer: 0, caption: "팀이 셋이다. 한 팀이면 모놀리스로 충분하다고 여기서 끝냈을 것이다.", memory: ["팀 3: 나눌 이유 있음"] },
+    { pointer: 1, caption: "머지 후 운영까지 평균 6시간을 기다린다. 기준선 4시간을 넘었다.", memory: ["팀 3: 나눌 이유 있음", "대기 6h: 압력 큼"] },
+    { pointer: 2, caption: "커밋의 35%가 모듈 두 개 이상을 건드린다. 지금 나누면 매번 함께 배포하게 된다.", memory: ["팀 3: 나눌 이유 있음", "대기 6h: 압력 큼", "함께 바뀜 35%: 경계 먼저"] },
+    { caption: "남은 신호를 보기 전에 여기서 멈춘다. 지금 할 일은 모듈러 모놀리스로 경계부터 다지는 것이다.", found: [0, 1], memory: ["판단: modular-monolith"] },
+    { pointer: 2, caption: "반년 뒤 다시 잰다. 모듈 의존 규칙을 CI에 걸고 나니 함께 바뀌는 비율이 8%로 내려갔다.", memory: ["함께 바뀜 8%: 통과", "경계 안정: 통과"] },
+    { pointer: 4, caption: "결제만 결제일에 20배를 받는다. 떼어 낼 후보가 분명해졌다.", memory: ["함께 바뀜 8%: 통과", "경계 안정: 통과", "결제 20배: 후보"] },
+    { pointer: 5, caption: "결제 팀이 온콜까지 맡겠다고 한다. 결제 하나만 서비스로 떼어 낸다.", found: [0, 1, 2, 3, 4, 5], memory: ["판단: extract payments"] },
+  ]}
+/>
+
+순서가 중요하다. 함께 바뀌는 비율을 부하 편차보다 먼저 본다. 결제에 트래픽이 몰린다는 이유만으로 경계가 덜 굳은 상태에서 떼어 내면, 결제 쪽 코드를 고칠 때마다 주문 쪽도 함께 배포해야 하는 상황을 만든다.
+
+## 신호를 함수로 적어 보면
+
+위의 판단 순서를 함수 하나로 적어 보자. 신호 객체를 받아 `"monolith"`, `"modular-monolith"`, `"extract-service"` 중 하나를 돌려준다. 규칙은 이렇다. 팀이 하나 이하면 모놀리스다. 함께 바뀌는 비율이 0.2 이상이거나 경계가 아직 자주 바뀌면 모듈러 모놀리스다. 배포 대기가 4시간 이상이거나 부하 편차가 10배 이상이고, 맡을 팀이 준비돼 있으면 서비스로 떼어 낸다. 나머지는 모듈러 모놀리스에 머문다.
+
+<CodePlayground
+  caption="신호로 다음 단계 고르기"
+  functionName="recommend"
+  initialCode={`// s = { teams, deployWaitHours, coChangeRate, boundariesStable, hotspotRatio, ownerReady }
+function recommend(s) {
+  // 1. 팀이 하나 이하면 "monolith"
+  // 2. 함께 바뀌는 비율 >= 0.2 이거나 경계가 안정되지 않았으면 "modular-monolith"
+  // 3. (배포 대기 >= 4시간 또는 부하 편차 >= 10) 이고 맡을 팀이 있으면 "extract-service"
+  // 4. 그 밖에는 "modular-monolith"
+  return "monolith";
+}`}
+  solution={`function recommend(s) {
+  if (s.teams <= 1) return "monolith";
+  if (s.coChangeRate >= 0.2 || !s.boundariesStable) return "modular-monolith";
+  const pressure = s.deployWaitHours >= 4 || s.hotspotRatio >= 10;
+  if (pressure && s.ownerReady) return "extract-service";
+  return "modular-monolith";
+}`}
+  tests={[
+    { label: "한 팀, 경계도 아직 흔들림", args: [{ teams: 1, deployWaitHours: 0.5, coChangeRate: 0.1, boundariesStable: false, hotspotRatio: 3, ownerReady: false }], expected: "monolith" },
+    { label: "세 팀, 함께 바뀜 35%", args: [{ teams: 3, deployWaitHours: 6, coChangeRate: 0.35, boundariesStable: true, hotspotRatio: 20, ownerReady: true }], expected: "modular-monolith" },
+    { label: "반년 뒤, 함께 바뀜 8%", args: [{ teams: 3, deployWaitHours: 6, coChangeRate: 0.08, boundariesStable: true, hotspotRatio: 20, ownerReady: true }], expected: "extract-service" },
+    { label: "압력은 있는데 맡을 팀이 없음", args: [{ teams: 4, deployWaitHours: 6, coChangeRate: 0.05, boundariesStable: true, hotspotRatio: 2, ownerReady: false }], expected: "modular-monolith" },
+    { label: "경계는 좋은데 압력이 없음", args: [{ teams: 3, deployWaitHours: 1, coChangeRate: 0.05, boundariesStable: true, hotspotRatio: 2, ownerReady: true }], expected: "modular-monolith" },
+    { label: "부하는 30배지만 경계가 흔들림", args: [{ teams: 2, deployWaitHours: 2, coChangeRate: 0.1, boundariesStable: false, hotspotRatio: 30, ownerReady: true }], expected: "modular-monolith" },
+    { label: "대기는 짧고 부하 편차 12배", args: [{ teams: 5, deployWaitHours: 1, coChangeRate: 0.1, boundariesStable: true, hotspotRatio: 12, ownerReady: true }], expected: "extract-service" },
+  ]}
+/>
+
+함수로 적어 보면 규칙이 꽤 보수적이라는 게 보인다. 일곱 경우 중 서비스로 떼어 내라는 답은 둘뿐이다. 실제 판단도 이 정도로 보수적인 편이 안전하다. 모듈 경계를 옮기는 건 리팩터링이지만, 서비스 경계를 옮기는 건 API와 데이터 이전이다.
+
+## 함께 바뀌는 비율을 직접 재 보기
+
+신호 중에 가장 재기 쉽고 가장 자주 건너뛰는 게 함께 바뀌는 비율이다. git 기록만 있으면 된다. 아래는 이 블로그 저장소에서 `src/features` 아래 폴더(scope)를 모듈로 보고 잰 것이다.
+
+```bash
+# 커밋마다 src/features 아래 몇 개의 scope를 건드렸는지 세고, 두 개 이상인 비율을 낸다
+git log --no-merges --format='format:@' --name-only -- src/features \
+  | awk -F/ '/^@$/ { flush(); next }
+             $1 == "src" && $2 == "features" { seen[$3] = 1 }
+             function flush(  k, n) { n = 0; for (k in seen) n++; if (n) total++; if (n >= 2) multi++; delete seen }
+             END { flush(); printf "commits=%d  multi-scope=%d (%.0f%%)\n", total, multi, 100 * multi / total }'
+```
+
+```text
+commits=147  multi-scope=120 (82%)
+```
+
+82%면 기준선 20%의 네 배다. 어떤 짝이 함께 바뀌는지 보려면 짝마다 센다.
+
+```bash
+# 같은 커밋에서 함께 바뀐 scope 짝을 세어 많은 순으로 본다
+git log --no-merges --format='format:@' --name-only -- src/features \
+  | awk -F/ '/^@$/ { flush(); next }
+             $1 == "src" && $2 == "features" { seen[$3] = 1 }
+             function flush(  k, j) { for (k in seen) for (j in seen) if (k < j) pair[k " + " j]++; delete seen }
+             END { flush(); for (p in pair) print pair[p], p }' \
+  | sort -rn | head -4
+```
+
+```text
+108 posts + quiz
+87 content-map + quiz
+86 content-map + posts
+11 posts + topics
+```
+
+글 하나를 추가하면 글 목록, 퀴즈, 글 지도 생성 파일이 같은 커밋에 들어가기 때문이다(숫자는 이 글을 쓸 때 기준이고 커밋이 늘면 바뀐다). 이 셋을 서비스 셋으로 나누면 글 하나 올릴 때마다 세 번 배포해야 한다. 함께 바뀌는 것들은 한 경계 안에 두라는 신호다. 반대로 `topics`는 짝이 11번뿐이라 따로 떼어 놓아도 아프지 않다.
+
+배포 대기는 CI 기록에서, 부하 편차는 엔드포인트별 CPU나 요청 수 대시보드에서 잰다. 숫자를 들고 회의에 가면 "MSA로 가자"는 말이 "결제부터 뗄까, 경계부터 다질까"라는 구체적인 질문으로 바뀐다. 정한 내용은 아키텍처 결정 기록(ADR)으로 남긴다. 마이클 나이가드가 2011년에 제안한 짧은 문서 형식인데, 배경, 결정, 그 결정으로 생기는 결과를 한 장에 적는다. 1년 뒤 새로 온 사람이 "왜 결제만 따로 있지?"라고 물을 때 답이 된다.
+
+## 잘못 고르면 생기는 일
+
+가장 흔하고 가장 비싼 실수는 [분산 모놀리스](/posts/monolith-architecture)다. 서비스는 나눴는데 여전히 함께 바뀌고 함께 배포해야 하는 상태다. 아래 그림에서 단계를 넘기면 어떤 모습으로 드러나는지 보인다.
+
+<NetworkTopology
+  caption="나눴지만 여전히 한 덩어리로 움직이는 서비스들"
+  width={400}
+  height={290}
+  nodes={[
+    { id: "client", label: "client", x: 200, y: 30, icon: "client" },
+    { id: "gw", label: "gateway", x: 200, y: 100, icon: "gateway" },
+    { id: "order", label: "order-svc", x: 70, y: 180, icon: "container" },
+    { id: "user", label: "user-svc", x: 200, y: 180, icon: "container" },
+    { id: "price", label: "price-svc", x: 330, y: 180, icon: "container" },
+    { id: "db", label: "shared DB", x: 200, y: 258, icon: "db" },
+  ]}
+  links={[
+    { from: "client", to: "gw" },
+    { from: "gw", to: "order" },
+    { from: "order", to: "user" },
+    { from: "user", to: "price" },
+    { from: "order", to: "db" },
+    { from: "user", to: "db" },
+    { from: "price", to: "db" },
+  ]}
+  steps={[
+    { path: ["client", "gw", "order", "user", "price"], packet: "GET /order/1", title: "화면 하나에 동기 호출이 줄줄이", detail: "주문 상세 하나를 그리려고 세 서비스를 차례로 부른다. 지연은 더해지고 가용성은 곱해진다." },
+    { path: ["order", "user", "price"], packet: "timeout", blocked: true, title: "끝의 하나가 느리면 전부 실패", detail: "가격 서비스가 2초 늦으면 주문 상세도 실패한다. 장애를 나눈다는 장점이 사라졌다." },
+    { path: ["order", "db"], packet: "ALTER TABLE", highlight: ["user", "price"], title: "컬럼 하나에 세 서비스 배포", detail: "같은 테이블을 셋이 읽으니 컬럼 이름 하나를 바꿀 때 세 서비스를 같은 날 배포해야 한다." },
+    { path: ["order"], highlight: ["db"], title: "고치는 방향은 둘이다", detail: "경계를 다시 그어 데이터 소유권을 나누거나, 늘 함께 바뀌는 서비스는 다시 합친다. 합치는 것도 정상적인 선택이다." },
+  ]}
+/>
+
+이런 상태는 대개 기술 계층으로 잘랐거나(화면 서비스, 로직 서비스, DB 서비스), 경계가 굳기 전에 잘랐거나, DB를 공유한 채로 잘랐을 때 생긴다. 확인은 앞에서 잰 함께 바뀌는 비율을 서비스 저장소 단위로 재고, 배포 기록에서 같은 날 함께 나간 서비스 묶음을 세 보면 된다. 늘 같이 나가는 묶음이 있다면 그 묶음이 실제 배포 단위다.
+
+CQRS를 모든 곳에 쓰는 것도 흔한 실수다. 회원 정보 수정 화면처럼 쓰는 모델과 읽는 모델이 거의 같은 곳에 읽기 모델을 따로 두면, 얻는 것 없이 반영 지연과 프로젝터 운영만 생긴다. CQRS는 목록이나 대시보드처럼 읽는 모양이 쓰는 모양과 크게 다르고 읽기가 훨씬 많은 화면 몇 곳에만 둔다. 같은 서비스 안에서도 화면마다 고른다.
+
+단순 CRUD에 이벤트 소싱을 쓰는 것도 비슷하다. 게시판 글이나 설정값처럼 "지금 값"만 의미가 있는 데이터를 사건으로 저장하면, 목록 하나 보여 주려고 프로젝션을 만들고 사건 형식이 바뀔 때마다 업캐스터를 짜야 한다. 이벤트 소싱이 값을 하는 곳은 원장, 결제, 재고처럼 "어떻게 이 값이 됐나"가 업무에서 실제로 필요한 곳이다. 그런 데이터도 감사 기록만 필요하다면 일반 테이블에 변경 이력 테이블을 붙이는 쪽이 훨씬 싸다.
+
+코드 구조 축에도 같은 함정이 있다. 엔드포인트 세 개짜리 관리자 API에 포트, 어댑터, 유스케이스, 프레젠터를 다 만들면 파일이 열 배로 늘어난다. 바꿀 외부 기술도, 따로 테스트할 업무 규칙도 없다면 레이어드로 충분하다. 반대로 결제사, 메시지 브로커, 외부 API를 여럿 붙이는 코어라면 헥사고날의 비용을 치를 만하다.
+
+서버리스를 오래 도는 일이나 꾸준히 높은 부하에 쓰는 것도 맞지 않는다. 실행 시간 한도에 걸려 중간에 끊기고, 호출 수와 실행 시간으로 과금되니 상시 부하에서는 항상 켜 둔 서버보다 비싸질 수 있다. 처음 요청이 느린 [콜드 스타트](/posts/cold-starts)도 지연에 민감한 API에서는 따져 봐야 한다.
+
+<Callout kind="warning">
+배포 구조를 바꾸는 결정은 되돌리는 비용이 가장 크다. 서비스를 나눌 때는 옛 경로로 돌아갈 라우팅 스위치와 데이터 대조 절차를 먼저 만들어 두고, 한 번에 하나만 옮긴다. 되돌아갈 길을 남기는 방법은 [마이크로서비스 분해](/posts/microservices-decomposition)에 있다.
+</Callout>
+
+## 처음 회의로 돌아가면
+
+"MSA로 가자"는 말에는 보통 세 질문이 섞여 있다. 배포 단위를 나눌지, 코드 안을 정리할지, 데이터와 알림 흐름을 바꿀지. 배포 대기가 아프면 첫째 축을, 외부 기술이 업무 코드에 스며든 게 아프면 둘째 축을, 동기 호출 사슬과 느린 조회가 아프면 셋째 축을 본다. 첫째 축을 바꿀 때는 함께 바뀌는 비율부터 재고, 그 값이 내려가기 전까지는 모듈러 모놀리스에서 경계를 다지는 쪽이 대부분 싸다. 각 패턴이 안에서 어떻게 움직이는지는 이 글에 링크한 시리즈 글에서 이어 보면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 백엔드 아키텍처 패턴들을 어떤 기준으로 구분하나요?
+
+세 축으로 나눠 본다. 배포 단위를 어떻게 나누느냐(모놀리스, 모듈러 모놀리스, 마이크로서비스, 서버리스), 배포 단위 안의 코드를 어떻게 놓느냐(레이어드, 헥사고날, 클린, DDD 경계), 데이터와 메시지를 어떻게 흘리느냐(이벤트 기반, CQRS, 이벤트 소싱, 아웃박스, 사가)다. 축이 다르면 함께 쓸 수 있어서, 모놀리스 안을 헥사고날로 짜고 일부 화면에만 CQRS를 두는 구성이 자연스럽다.
+
+### 모놀리스에서 마이크로서비스로는 언제 넘어가야 하나요?
+
+기술보다 조직 신호가 먼저다. 팀이 여럿이고 서로의 배포를 기다리느라 머지 후 운영까지 몇 시간씩 걸리는지, 특정 기능만 확장 요구가 크게 다른지, 떼어 낸 서비스를 온콜까지 맡을 팀이 있는지를 본다. 다만 그 전에 커밋이 모듈 여러 개를 함께 건드리는 비율이 낮아졌는지 확인한다. 그 비율이 높은데 나누면 분산 모놀리스가 된다.
+
+### 모듈러 모놀리스를 중간 단계로 두는 이유는 뭔가요?
+
+경계를 싸게 실험할 수 있기 때문이다. 모듈 경계를 옮기는 건 리팩터링 한 번이지만 서비스 경계를 옮기는 건 API와 데이터 이전이다. 공개 API만 열고 남의 테이블 접근을 DB 권한으로 막아 두면, 경계가 맞는지 운영 중에 확인할 수 있고 나중에 한 모듈을 떼어 낼 때 그대로 서비스 경계가 된다.
+
+### 헥사고날 아키텍처를 쓰면 마이크로서비스로 가기 쉬워지나요?
+
+직접적인 관계는 약하다. 헥사고날은 배포 단위 안에서 업무 코어와 외부 기술을 떼어 놓는 코드 구조이고, 서비스 분리를 가능하게 하는 건 업무 경계와 데이터 소유권이다. 포트와 어댑터로 잘 짠 코드라도 다른 업무의 테이블을 직접 조인하고 있으면 떼어 낼 수 없다. 떼어 낸 뒤에 외부 호출을 어댑터 하나로 바꿔 끼우기 쉬워지는 정도의 도움은 있다.
+
+### 분산 모놀리스는 어떻게 알아보고 어떻게 고치나요?
+
+서비스는 나뉘었는데 기능 하나를 바꿀 때 여러 서비스를 같은 날 배포해야 하면 분산 모놀리스다. 배포 기록에서 늘 함께 나가는 서비스 묶음, 공유 DB, 화면 하나에 줄줄이 이어지는 동기 호출이 신호다. 고치는 방법은 데이터 소유권 기준으로 경계를 다시 긋거나, 늘 함께 바뀌는 서비스를 다시 합치는 것이다. 합치는 것도 실패가 아니라 정상적인 선택이다.
+
+### CQRS를 쓰면 이벤트 소싱도 같이 해야 하나요?
+
+아니다. CQRS는 쓰는 모델과 읽는 모델을 나누는 것이고, 같은 DB 안의 별도 테이블로도 할 수 있다. 이벤트 소싱은 상태 대신 사건을 원본으로 저장하는 것이라 읽기 모델이 거의 필수가 되지만, 반대 방향은 성립하지 않는다. 둘 다 읽기 모양이 쓰기 모양과 크게 다르거나 변경 이력이 업무에서 필요한 곳에만 둔다.
+
+### 서비스를 나눈 뒤 주문 저장과 이벤트 발행은 어떻게 같이 보장하나요?
+
+트랜잭셔널 아웃박스를 쓴다. 주문 행과 이벤트 행을 같은 DB 트랜잭션으로 커밋하고, 별도의 릴레이가 아웃박스를 읽어 브로커로 보낸다. 릴레이는 실패하면 다시 보내므로 전달은 최소 한 번이 되고, 받는 쪽은 이벤트 ID로 중복을 걸러야 한다. 여러 서비스에 걸친 업무의 실패 처리는 그 위에 사가를 얹어 보상 동작으로 푼다.
+
+### 서버리스는 어떤 일에 맞고 어떤 일에 안 맞나요?
+
+사건 하나에 반응하는 짧은 작업, 트래픽이 들쭉날쭉하거나 거의 없는 작업에 맞는다. 파일 업로드 후처리, 웹훅 수신, 예약 작업이 그런 예다. 실행 시간 한도를 넘는 긴 작업, 상시 높은 부하, 콜드 스타트가 문제 되는 지연 민감 API, DB 연결을 많이 여는 작업에는 맞지 않는다. 모놀리스 옆에 일부 작업만 함수로 붙이는 섞어 쓰기도 흔하다.

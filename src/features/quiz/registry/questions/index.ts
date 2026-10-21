@@ -7,6 +7,7 @@ import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
+import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview";
 import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
@@ -524,6 +525,7 @@ export const QUESTION_SETS = [
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
+  ARCHITECTURE_PATTERNS_OVERVIEW,
   ARGOCD_BASICS,
   AUTHN_VS_AUTHZ,
   AUTOSCALING,

@@ -2,6 +2,34 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "architecture-patterns-overview": {
+    "links": [
+      "monolith-architecture",
+      "modular-monolith",
+      "microservices",
+      "microservices-decomposition",
+      "serverless-architecture",
+      "serverless-limits",
+      "layered-architecture",
+      "hexagonal-architecture",
+      "clean-architecture",
+      "ddd-bounded-context",
+      "event-driven-architecture",
+      "cqrs",
+      "event-sourcing",
+      "transactional-outbox",
+      "saga-pattern",
+      "cold-starts"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "js-memory-leak",
+      "schema-versioning",
+      "db-modeling-normalization",
+      "on-call",
+      "webhooks"
+    ]
+  },
   "system-design-study-path": {
     "links": [
       "system-design-concepts-map",

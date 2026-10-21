@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "architecture-patterns-overview",
+    title: "백엔드 아키텍처 패턴 고르기: 배포, 코드, 데이터 세 축으로 나눠 보기",
+    summary: "모놀리스, 헥사고날, CQRS 같은 패턴은 배포 구조, 코드 구조, 데이터 흐름이라는 서로 다른 질문에 답한다. 축을 나눠 패턴이 어떻게 겹치는지 보고, 팀 수·배포 대기·함께 바뀌는 비율·부하 편차로 다음 단계를 고르는 기준과 분산 모놀리스, CQRS 남용 같은 실수를 정리한다.",
+    topic: "programming/backend/architecture",
+    tags: ["Architecture", "Backend", "MSA", "System Design"],
+    date: "2026-10-22",
+    keywords: ["아키텍처 패턴 선택", "아키텍처 결정 기록"],
+  },
+  {
     slug: "system-design-study-path",
     title: "시스템 디자인 공부 순서: 서버 한 대에서 증권 거래소까지 60편 읽는 법",
     summary: "System Design Notes 시리즈 60편을 읽는 순서를 정리한다. 서버 한 대에 부품을 하나씩 붙이는 기초 12편을 먼저 읽고, 설계 사례는 일관된 해싱, 고유 ID, 큐와 팬아웃, WebSocket, 지리 색인, 멱등 키처럼 사례마다 다시 나오는 부품으로 묶어 읽는다.",
