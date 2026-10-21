@@ -70,6 +70,7 @@ import { DDD_BOUNDED_CONTEXT } from "./ddd-bounded-context";
 import { DDOS_PROTECTION } from "./ddos-protection";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
+import { DEBOUNCE_THROTTLE } from "./debounce-throttle";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
@@ -84,14 +85,17 @@ import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
+import { DOM_BASICS } from "./dom-basics";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { ERROR_BUDGETS } from "./error-budgets";
+import { EVENT_DELEGATION } from "./event-delegation";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
+import { EVENT_PROPAGATION } from "./event-propagation";
 import { EVENT_SOURCING } from "./event-sourcing";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
@@ -515,6 +519,7 @@ export const QUESTION_SETS = [
   DDOS_PROTECTION,
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
+  DEBOUNCE_THROTTLE,
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
@@ -529,14 +534,17 @@ export const QUESTION_SETS = [
   DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
+  DOM_BASICS,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
   ERROR_BUDGETS,
+  EVENT_DELEGATION,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
+  EVENT_PROPAGATION,
   EVENT_SOURCING,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,

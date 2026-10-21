@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "debounce-throttle",
+    title: "디바운스와 스로틀: 멈춘 뒤 한 번, 움직이는 동안 일정하게",
+    summary: "디바운스는 멈춘 뒤 한 번, 스로틀은 움직이는 동안 일정하게 실행한다. React에서 디바운스가 망가지는 이유와, 디바운스로 풀리지 않는 응답 순서 문제까지 다룬다.",
+    topic: "programming/frontend/javascript/browser",
+    tags: ["JavaScript", "Browser", "React", "Performance"],
+    date: "2026-10-22",
+    keywords: ["디바운스", "debounce", "leading과 trailing"],
+  },
+  {
+    slug: "event-delegation",
+    title: "이벤트 위임: 부모 하나가 자식들의 클릭을 받는다",
+    summary: "자식마다 리스너를 다는 대신 부모 하나에서 버블링된 이벤트를 받아 closest로 누가 눌렸는지 찾는다. 나중에 붙은 요소도 저절로 동작하고, React는 이미 루트에서 이렇게 하고 있다.",
+    topic: "programming/frontend/javascript/browser",
+    tags: ["JavaScript", "Browser", "DOM", "React"],
+    date: "2026-10-22",
+    keywords: ["이벤트 위임", "event delegation"],
+  },
+  {
+    slug: "event-propagation",
+    title: "이벤트 전파: 캡처, 타깃, 버블",
+    summary: "클릭 하나는 window에서 내려갔다가 다시 올라온다. stopPropagation과 preventDefault가 막는 대상, passive 리스너, React가 이벤트를 받는 자리까지 실제 출력으로 따라간다.",
+    topic: "programming/frontend/javascript/browser",
+    tags: ["JavaScript", "Browser", "DOM", "React"],
+    date: "2026-10-22",
+    keywords: ["이벤트 버블링", "이벤트 캡처링", "passive 리스너"],
+  },
+  {
+    slug: "dom-basics",
+    title: "DOM 기초: 트리, 찾기, 리플로",
+    summary: "브라우저는 HTML을 객체 트리로 바꿔 들고 있고, 찾는 방법마다 살아 있는 목록과 찍어 둔 목록이 갈린다. DOM을 바꾸는 것보다 바꾼 직후 크기를 읽는 것이 비싸다는 것을 레이아웃 횟수로 확인한다.",
+    topic: "programming/frontend/javascript/browser",
+    tags: ["JavaScript", "Browser", "DOM", "Performance", "React"],
+    date: "2026-10-22",
+    keywords: ["DOM 트리", "HTMLCollection", "강제 동기 레이아웃"],
+  },
+  {
     slug: "system-design-concepts-map",
     title: "시스템 설계 25가지 개념 지도: 공부 순서와 읽을 글",
     summary: "Scalability부터 Authorization까지 시스템 설계 25가지 개념을 주문 요청 하나 위에 놓고 재는 말, 앞단, 데이터, 일관성, 비동기, 서비스 경계, 보안의 일곱 묶음으로 공부 순서를 정한다. 개념마다 답하는 질문과 그 자리에 두는 이유, 읽을 글을 잇고, 면접 질문별로 펼칠 글을 정리한다.",

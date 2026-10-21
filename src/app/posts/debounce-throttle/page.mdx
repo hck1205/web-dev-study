@@ -1,0 +1,393 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("debounce-throttle");
+
+검색창에 글자를 칠 때마다 검색 API를 부르는 코드다. 서버는 짧은 검색어일수록 결과가 많아 느리다고 가정하고, 지연을 `r` 500ms부터 `react` 100ms까지 다르게 줬다.
+
+```js
+async function onInput(e) {
+  const term = e.target.value;
+  const text = await searchApi(term);
+  results.textContent = text;
+}
+q.addEventListener("input", onInput);
+```
+
+Playwright로 Chromium 141을 띄워 `react`를 한 글자에 80ms 간격으로 쳤다.
+
+```text
+269ms request "r"
+357ms request "re"
+444ms request "rea"
+529ms request "reac"
+612ms request "react"
+680ms render "results for reac"
+714ms render "results for react"
+770ms render "results for r"
+807ms render "results for re"
+844ms render "results for rea"
+final screen: "results for rea" (input "react")
+```
+
+다섯 글자에 요청이 다섯 번 나갔다. 그리고 응답이 보낸 순서와 다르게 돌아와서, 입력창에는 `react`가 있는데 화면에는 `rea`의 결과가 남았다. 앞의 문제는 요청이 너무 많다는 것이고, 뒤의 문제는 늦게 온 낡은 응답이 최신 결과를 덮었다는 것이다.
+
+이 글은 앞의 문제를 푸는 두 도구, 디바운스(debounce)와 스로틀(throttle)을 다룬다. 어떻게 동작하는지 타이머 단위로 따라가고, 언제 무엇을 고르는지, React에서 왜 자주 망가지는지, 그리고 둘로 풀리지 않는 문제를 짚는다. 브라우저 출력은 Chromium 141(헤드리스), 타이머 실험은 Node.js 22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 디바운스가 타이머 id를 기억하는 원리는 [클로저](/posts/js-closures)이고, 타이머가 정확히 그 시간에 울리지 않는 이유는 [타이머의 정확도](/posts/js-timers-accuracy)에 있다. 이벤트 자체가 오는 길은 [이벤트 전파](/posts/event-propagation)에서 다뤘다.
+
+## 조용해질 때까지 기다린다
+
+디바운스는 "마지막 호출 뒤로 정해진 시간 동안 조용하면 그때 한 번 실행한다"는 규칙이다. 호출될 때마다 예약해 둔 타이머를 취소하고 새로 건다. 계속 치는 동안에는 타이머가 계속 미뤄지고, 손을 멈추면 그제야 울린다.
+
+```js
+function debounce(fn, wait) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
+q.addEventListener("input", debounce(onInput, 300));
+```
+
+`timer` 변수는 `debounce`가 돌려준 함수만 아는 상태다. 호출 사이에 이 값을 기억하는 것이 클로저다. 같은 입력을 다시 쳤다.
+
+```text
+677ms request "react"
+778ms render "results for react"
+final screen: "results for react" (input "react")
+```
+
+요청이 한 번만 나갔다. 아래 그림에서 다음을 누르면 타이머가 어떻게 미뤄지는지 보인다.
+
+<SequenceDiagram
+  caption="300ms 디바운스: 칠 때마다 타이머를 다시 건다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "deb", label: "debounce" },
+    { id: "timer", label: "타이머" },
+    { id: "api", label: "검색 API" },
+  ]}
+  steps={[
+    { from: "user", to: "deb", label: "r", title: "첫 글자", detail: "타이머가 없으니 300ms 뒤로 하나 건다." },
+    { from: "deb", to: "timer", label: "clear + set", title: "두 번째 글자가 80ms 뒤에 온다", detail: "아직 울리지 않은 타이머를 취소하고 다시 300ms를 건다. 이 일이 글자마다 반복된다." },
+    { from: "user", to: "deb", label: "react", title: "마지막 글자", detail: "마지막으로 건 타이머만 남는다. 이후 300ms 동안 입력이 없다." },
+    { from: "timer", to: "api", label: "search(\"react\")", title: "조용해지면 한 번 실행한다", detail: "마지막 호출의 인자로 한 번 부른다. 중간 글자들의 호출은 버려졌다." },
+  ]}
+/>
+
+같은 일을 시간 축의 칸으로 보면 이렇다. 칸은 이벤트가 들어온 시각이고(대기 시간 250ms), 아래 상자는 지금 예약돼 있는 실행이다.
+
+<AlgoTrace
+  caption="이벤트 0, 100, 200, 300ms에 250ms 디바운스"
+  memoryLabel="예약된 실행"
+  cells={["0", "100", "200", "300", "550"]}
+  steps={[
+    { pointer: 0, memory: ["250ms에 실행"], caption: "0ms에 첫 호출. 250ms 뒤로 예약한다." },
+    { pointer: 1, memory: ["350ms에 실행"], caption: "100ms에 또 왔다. 앞 예약을 지우고 350ms로 미룬다." },
+    { pointer: 2, memory: ["450ms에 실행"], caption: "200ms. 또 미룬다." },
+    { pointer: 3, memory: ["550ms에 실행"], caption: "300ms. 마지막 호출이다. 550ms로 미룬다." },
+    { pointer: 4, found: [4], memory: [], caption: "550ms까지 아무도 안 왔다. 한 번 실행한다. 네 번 불렸지만 실행은 한 번이다." },
+  ]}
+/>
+
+계속 이벤트가 오면 디바운스는 영원히 실행하지 않는다. 검색어 입력처럼 "다 친 뒤의 값"만 중요할 때는 이게 장점이지만, 스크롤 위치에 따라 무언가를 갱신해야 할 때는 스크롤하는 내내 아무 일도 안 일어난다. 그래서 다른 규칙이 필요하다.
+
+## 일정 간격마다 한 번만 통과시킨다
+
+스로틀은 "정해진 간격 안에서는 한 번만 실행한다"는 규칙이다. 처음 호출은 바로 실행하고(leading), 그 뒤 간격이 끝날 때까지 온 호출은 막는다. 흔한 구현은 간격 동안 들어온 호출이 있었으면 간격이 끝날 때 마지막 것을 한 번 더 실행한다(trailing). 끝 위치를 놓치지 않으려고다.
+
+```js
+function throttle(fn, wait) {
+  let timer = null, pendingArgs = null;
+  const startWindow = () => {
+    timer = setTimeout(() => {
+      if (pendingArgs) { fn(...pendingArgs); pendingArgs = null; startWindow(); }
+      else timer = null;
+    }, wait);
+  };
+  return (...args) => {
+    if (timer === null) { fn(...args); startWindow(); }  // 쉬고 있었으면 바로
+    else pendingArgs = args;                              // 간격 안이면 마지막 것만 기억
+  };
+}
+```
+
+같은 이벤트(0, 100, 200, 300ms)에 250ms 스로틀을 걸면 0, 250, 500ms에 실행한다.
+
+<AlgoTrace
+  caption="이벤트 0, 100, 200, 300ms에 250ms 스로틀 (leading + trailing)"
+  memoryLabel="간격 상태"
+  cells={["0", "100", "200", "250", "300", "500"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["~250 간격", "실행: 0"], caption: "쉬고 있었으니 바로 실행한다. 250ms까지 간격을 연다." },
+    { pointer: 1, memory: ["~250 간격", "대기: 100"], caption: "간격 안이다. 실행하지 않고 기억만 한다." },
+    { pointer: 2, memory: ["~250 간격", "대기: 200"], caption: "또 간격 안이다. 기억을 200의 것으로 바꾼다." },
+    { pointer: 3, found: [0, 3], memory: ["~500 간격", "실행: 250"], caption: "간격이 끝났다. 기억해 둔 마지막 호출을 실행하고 새 간격을 연다." },
+    { pointer: 4, memory: ["~500 간격", "대기: 300"], caption: "300ms 호출은 새 간격 안이다. 기억한다." },
+    { pointer: 5, found: [0, 3, 5], memory: ["실행: 500"], caption: "500ms에 마지막으로 한 번 더 실행한다. 이후 오는 것이 없으니 쉰다." },
+  ]}
+/>
+
+둘의 차이를 한 줄로 줄이면, 디바운스는 "멈춘 뒤 한 번", 스로틀은 "움직이는 동안 일정하게"다. 고르는 기준도 거기서 나온다.
+
+| 상황 | 고를 것 | 이유 |
+| --- | --- | --- |
+| 검색어 자동완성, 입력 검증 | 디바운스 | 다 친 뒤의 값만 의미가 있다 |
+| 창 크기 바뀐 뒤 레이아웃 다시 계산 | 디바운스 | 끌고 있는 중간 크기는 버려도 된다 |
+| 입력 중 자동 저장 | 디바운스 + `maxWait` | 계속 치는 사람의 내용도 몇 초마다는 저장해야 한다 |
+| 스크롤 위치로 진행 막대, 헤더 숨기기 | 스로틀(또는 프레임 단위) | 움직이는 동안 계속 반응해야 한다 |
+| 버튼 연타로 같은 요청 반복 | 스로틀(leading만) 또는 진행 중 비활성화 | 첫 번째만 받으면 된다 |
+
+## 옵션 이름으로 보는 변형들
+
+실무에서는 직접 만들기보다 lodash의 `debounce`, `throttle`을 쓰는 경우가 많다. 옵션 세 개가 위 규칙들을 조합한다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="lodash debounce의 옵션. throttle은 이 조합 중 하나다"
+  base="_.debounce(save, 1000, "
+  separator="{ "
+  joiner=", "
+  params={[
+    { key: "leading", value: "false", display: "leading: false", title: "leading", description: "true면 조용하다가 처음 온 호출을 바로 실행한다. 버튼 연타 막기에 쓴다. 기본 false." },
+    { key: "trailing", value: "true", display: "trailing: true", title: "trailing", description: "대기 시간이 끝났을 때 마지막 호출을 실행한다. 디바운스의 기본 동작이다. 기본 true." },
+    { key: "maxWait", value: "5000", display: "maxWait: 5000 }", title: "maxWait", description: "아무리 계속 불려도 이 시간이 지나면 한 번은 실행한다. 이 값을 대기 시간과 같게 주면 스로틀이 된다. lodash의 throttle이 실제로 debounce에 leading: true, maxWait: wait를 넘겨 만든다." },
+  ]}
+/>
+
+lodash의 디바운스 함수에는 `cancel()`과 `flush()`도 붙어 있다. `cancel`은 예약된 실행을 버리고, `flush`는 기다리지 않고 지금 실행한다. 이 둘이 아래에서 보는 실수 두 개의 해답이 된다. 번들에 lodash 전체를 넣지 않으려면 `lodash-es`나 `lodash/debounce`처럼 함수 하나만 가져온다. 이건 [코드 스플리팅](/posts/code-splitting)에서 실제 크기로 비교했다.
+
+## 스크롤에는 프레임이라는 기준이 이미 있다
+
+화면을 갱신하는 일이라면 시간 간격보다 프레임이 자연스러운 단위다. 화면은 어차피 한 프레임에 한 번 그려지니, 그보다 자주 계산해 봐야 보이지 않는다. `requestAnimationFrame`으로 "다음 그리기 직전에 한 번"만 하게 묶는 방법이 흔히 쓰인다.
+
+```js
+let ticking = false;
+addEventListener("scroll", () => {
+  scrollEvents++;
+  if (ticking) return;
+  ticking = true;
+  requestAnimationFrame(() => { rafRuns++; ticking = false; });   // 프레임당 한 번
+}, { passive: true });
+addEventListener("scroll", throttle(() => timeRuns++, 100), { passive: true });
+```
+
+페이지를 휠로 60번, 16ms 간격으로 굴린 결과다.
+
+```text
+2327ms: scroll events 60, rAF runs 60, throttle(100) runs 21
+```
+
+rAF로 묶었는데 실행 횟수가 줄지 않았다. 크롬 계열에서 `scroll` 이벤트는 이미 렌더링 단계에서 프레임당 한 번만 보내기 때문이다. 명세도 스크롤 이벤트를 그리기 직전 단계에서 보내게 정해 두었다. 그러니 스크롤 핸들러를 rAF로 감싸는 것은 횟수를 줄이는 장치라기보다 "DOM 쓰기를 그리기 직전으로 모은다"는 의미가 크다. 실제로 횟수를 줄인 것은 시간 기준 스로틀(100ms에 21번)이다. 화면 갱신은 프레임 단위로, 무거운 계산이나 네트워크 요청은 시간 기준으로 줄인다.
+
+많은 경우 스크롤 핸들러 자체가 필요 없다. "어떤 요소가 화면에 들어오면"은 `IntersectionObserver`가, "요소 크기가 바뀌면"은 `ResizeObserver`가 브라우저 안에서 판단해서 알려 준다. 무한 스크롤이나 이미지 지연 로딩은 이쪽이 정답에 가깝고, 그 패턴은 [로딩 패턴](/posts/loading-patterns)에 있다. 스크롤 리스너를 꼭 달아야 하면 `passive: true`를 주는 것도 잊지 않는다. 이유는 [이벤트 전파](/posts/event-propagation)의 passive 절에 있다.
+
+## React에서 디바운스가 안 먹는 이유
+
+React 컴포넌트에서 디바운스를 가장 흔하게 틀리는 방법은 이것이다.
+
+```js
+function SearchBox() {
+  const [text, setText] = useState("");
+  const debouncedSearch = debounce(search, 300);          // 렌더마다 새로 만든다
+  return <input value={text} onChange={e => { setText(e.target.value); debouncedSearch(e.target.value); }} />;
+}
+```
+
+React 19.3에서 `react`를 80ms 간격으로 쳤다.
+
+```text
+broken: 5 calls ["r","re","rea","reac","react"]
+```
+
+디바운스가 전혀 안 됐다. 글자를 칠 때마다 `setText`로 다시 렌더링되고, 렌더링마다 `debounce`를 새로 불러 새 `timer` 변수를 가진 새 함수가 생긴다. 이전 함수의 타이머를 취소할 길이 없으니 다섯 개가 모두 울린다. 디바운스 함수는 컴포넌트가 사는 동안 하나여야 한다.
+
+```js
+const debouncedSearch = useMemo(() => debounce(search, 300), []);
+useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);  // 언마운트 때 취소
+```
+
+```text
+fixed: 1 calls ["react"]
+```
+
+`cancel`을 부르는 정리 함수도 넣었다. 컴포넌트가 사라진 뒤 예약된 실행이 울려 없는 화면의 상태를 바꾸는 일을 막는다.
+
+그런데 하나로 고정하자 다른 문제가 생긴다. 디바운스된 함수 안에서 상태를 읽으면 처음 렌더링의 값에 묶인다.
+
+```js
+const debounced = useMemo(() => debounce(() => calls.push(`text="${text}" count=${count}`), 300), []);
+```
+
+```text
+stale: 1 calls ["text=\"\" count=0"]
+```
+
+다섯 글자를 쳤는데 `text`는 빈 문자열, `count`는 0이다. `useMemo`가 첫 렌더링 때 만든 함수가 그때의 `text`와 `count`를 잡고 있다. [클로저](/posts/js-closures)의 오래된 값 문제다. 위의 `fixed`가 멀쩡했던 건 상태를 읽지 않고 인자로 값을 받았기 때문이다. 인자로 넘길 수 없을 때는 "디바운스 함수는 하나로 두고, 실제로 부를 함수는 최신 것으로 바꿔 두는" ref를 쓴다.
+
+```js
+const latest = useRef(null);
+useLayoutEffect(() => { latest.current = () => calls.push(`text="${text}" count=${count}`); });  // 커밋마다 최신 값으로
+const debounced = useMemo(() => debounce(() => latest.current(), 300), []);
+```
+
+```text
+ref: 1 calls ["text=\"react\" count=5"]
+```
+
+React에서 디바운스를 쓸 때는 함수를 `useMemo`나 `useRef`로 하나만 만들고, 언마운트 때 `cancel`하고, 상태는 인자로 넘기거나 최신 함수를 ref로 읽는다.
+
+입력할 때마다 무거운 목록을 다시 그리는 게 문제라면 디바운스보다 `useDeferredValue`가 맞을 수 있다. 고정된 시간을 기다리지 않고 기기가 빠르면 바로 그리기 때문이다. 둘의 차이는 [리렌더링](/posts/react-rerender)에서 다뤘다. 서버 요청 횟수를 줄이는 일은 여전히 디바운스의 몫이다.
+
+## 디바운스로는 풀리지 않는 것
+
+처음 출력의 두 번째 문제, 응답 순서가 뒤집히는 것은 디바운스로 사라지지 않는다. 줄어들 뿐이다. 사용자가 `rea`까지 치고 400ms 쉬었다가 `ct`를 치면 요청은 두 번 나가고, `rea`의 응답이 더 늦으면 같은 일이 난다.
+
+<NetworkTopology
+  width={400}
+  height={200}
+  caption="디바운스를 해도 요청 두 개가 겹치면 응답 순서가 뒤집힐 수 있다"
+  nodes={[
+    { id: "ui", label: "검색창", sub: "react", x: 70, y: 100, icon: "client" },
+    { id: "lb", label: "API", x: 210, y: 100, icon: "lb", w: 80 },
+    { id: "srv", label: "검색 서버", x: 335, y: 100, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "ui", to: "lb" },
+    { from: "lb", to: "srv" },
+  ]}
+  steps={[
+    { path: ["ui", "lb", "srv"], packet: "rea", title: "쉬는 사이 첫 요청이 나간다", detail: "300ms 동안 입력이 없었으니 디바운스가 rea로 요청한다. 결과가 많아 400ms 걸린다." },
+    { path: ["ui", "lb", "srv"], packet: "react", title: "다시 쳐서 두 번째 요청", detail: "react 요청은 100ms면 끝난다." },
+    { path: ["srv", "lb", "ui"], packet: "react 결과", title: "최신 결과가 먼저 그려진다", detail: "화면은 맞다. 아직은." },
+    { path: ["srv", "lb", "ui"], packet: "rea 결과", blocked: true, title: "낡은 응답이 덮어쓴다", detail: "늦게 온 rea의 결과가 화면을 덮는다. 받기 전에 이 응답이 아직 최신인지 확인해야 한다." },
+  ]}
+/>
+
+이건 요청 쪽에서 푼다. 새 요청을 보내기 전에 이전 요청을 `AbortController`로 취소하거나, 응답을 받았을 때 그 검색어가 아직 입력창의 값인지 확인하고 아니면 버린다. 자세한 방법은 [AbortController](/posts/abort-controller)에서 이어진다. TanStack Query 같은 라이브러리는 검색어를 쿼리 키에 넣으면 지난 키의 응답을 화면에 쓰지 않아 이 문제가 자연스럽게 사라진다.
+
+디바운스는 서버 보호 장치도 아니다. 클라이언트 코드는 사용자가 바꿀 수 있고, 다른 클라이언트가 같은 API를 부를 수도 있다. 요청 수를 실제로 제한하는 일은 서버의 [레이트 리밋](/posts/rate-limiting-algorithms)이 한다. 디바운스는 착한 클라이언트가 쓸데없는 요청을 덜 보내게 하는 예의다.
+
+## 현장에서 자주 보는 증상
+
+자동 저장을 디바운스로 만들면 마지막 입력이 사라지는 제보가 온다. 사용자가 치고 1초가 지나기 전에 탭을 닫으면 예약된 저장이 영영 실행되지 않는다. 페이지를 떠날 때 `flush()`로 기다리던 저장을 바로 실행한다. 모바일에서는 `beforeunload`가 잘 오지 않으니 `visibilitychange`(숨겨질 때)나 `pagehide`에서 부르고, 전송은 페이지가 닫혀도 끝나는 `navigator.sendBeacon`이나 `fetch(..., { keepalive: true })`로 한다.
+
+스크롤이 멈춘 뒤의 위치가 반영되지 않는다면 trailing 없이 leading만 하는 스로틀을 쓰고 있을 가능성이 크다. 마지막 스크롤 이벤트가 간격 안에 들어와 버려졌다. 직접 만든 스로틀이라면 위 구현처럼 마지막 호출을 기억했다가 간격 끝에 실행한다.
+
+탭을 잠깐 다른 곳에 두었다 오면 디바운스가 늦게 울린다는 제보도 있다. 백그라운드 탭의 타이머는 브라우저가 일부러 늦춘다. 이건 [타이머의 정확도](/posts/js-timers-accuracy)에서 다뤘다. 디바운스 대기 시간을 정확한 시계로 쓰지 않는다.
+
+테스트에서는 실제 시간을 기다리지 않는다. 진짜 `setTimeout`을 쓰는 테스트는 느리고 가끔 실패한다. Jest와 Vitest는 가짜 타이머(`useFakeTimers`, `advanceTimersByTime`)를 준다. 이 글의 타이머 실험도 `setTimeout`과 `clearTimeout`을 시간을 직접 넘기는 작은 가짜 시계로 바꿔 끼우고 돌렸다. 위에서 만든 구현에 같은 이벤트 시각을 넣었을 때의 실제 출력이다(이벤트 시각, 대기 시간, 실행 시각 순).
+
+```text
+[0,100,200,300] 250 debounce [550] | throttle [0,250,500]
+[0,100,200,600,700] 300 debounce [500,1000] | throttle [0,300,600,900]
+[0,50,100,150,200,250,300,350] 100 debounce [450] | throttle [0,100,200,300,400]
+```
+
+세 번째 줄이 둘의 성격을 잘 보여 준다. 50ms마다 오는 이벤트에 100ms를 걸면 디바운스는 끝날 때까지 기다렸다 한 번(450ms), 스로틀은 100ms마다 꼬박꼬박 다섯 번 실행한다.
+
+## 시간을 넣고 실행 시각을 받는 함수
+
+타이머 없이 시간을 직접 다뤄 보자. 이벤트가 들어온 시각 배열(오름차순, ms)과 대기 시간을 받아, 핸들러가 실제로 실행되는 시각의 배열을 돌려주는 함수다. 같은 시각에 타이머 만료와 새 이벤트가 겹치면 타이머가 먼저 울린다고 본다. 기대값은 위의 실제 `setTimeout` 구현을 가짜 시계로 돌린 결과와 모두 맞춰 봤다.
+
+먼저 디바운스다. 다음 이벤트까지의 간격이 대기 시간 이상이거나 마지막 이벤트면 `시각 + 대기 시간`에 실행된다.
+
+<CodePlayground
+  caption="디바운스 실행 시각"
+  functionName="debounceFires"
+  initialCode={`function debounceFires(times, wait) {
+  // times: 이벤트 시각(ms), 오름차순
+  return [];
+}`}
+  solution={`function debounceFires(times, wait) {
+  const fires = [];
+  for (let i = 0; i < times.length; i++) {
+    const isLast = i === times.length - 1;
+    if (isLast || times[i + 1] - times[i] >= wait) fires.push(times[i] + wait);
+  }
+  return fires;
+}`}
+  tests={[
+    { label: "계속 치다 멈춤", args: [[0, 100, 200, 300], 250], expected: [550] },
+    { label: "두 번 몰아침", args: [[0, 100, 200, 600, 700], 300], expected: [500, 1000] },
+    { label: "간격이 대기와 같다", args: [[0, 300, 600], 300], expected: [300, 600, 900] },
+    { label: "한 번", args: [[0], 300], expected: [300] },
+    { label: "50ms마다", args: [[0, 50, 100, 150, 200, 250, 300, 350], 100], expected: [450] },
+    { label: "경계 바로 앞뒤", args: [[0, 100, 199, 200, 201], 100], expected: [100, 301] },
+  ]}
+/>
+
+다음은 leading과 trailing을 모두 하는 스로틀이다. 쉬던 중에 온 이벤트는 바로 실행하고 간격을 연다. 간격 안에 온 이벤트가 있으면 간격이 끝나는 시각에 한 번 실행하고, 그 시각부터 새 간격이 열린다.
+
+<CodePlayground
+  caption="스로틀 실행 시각 (leading + trailing)"
+  functionName="throttleFires"
+  initialCode={`function throttleFires(times, wait) {
+  return [];
+}`}
+  solution={`function throttleFires(times, wait) {
+  const fires = [];
+  let windowEnd = -Infinity; // 지금 열린 간격이 끝나는 시각
+  let pending = false;       // 간격 안에 들어온 호출이 있나
+  for (const t of times) {
+    if (pending && windowEnd <= t) {   // 이 이벤트 전에 간격이 끝났다
+      fires.push(windowEnd);            // trailing 실행
+      pending = false;
+      windowEnd += wait;                // 그 시각부터 새 간격
+    }
+    if (t >= windowEnd) {               // 쉬던 중이면 바로 실행
+      fires.push(t);
+      windowEnd = t + wait;
+    } else {
+      pending = true;
+    }
+  }
+  if (pending) fires.push(windowEnd);
+  return fires;
+}`}
+  tests={[
+    { label: "계속 치다 멈춤", args: [[0, 100, 200, 300], 250], expected: [0, 250, 500] },
+    { label: "두 번 몰아침", args: [[0, 100, 200, 600, 700], 300], expected: [0, 300, 600, 900] },
+    { label: "간격이 대기와 같다", args: [[0, 300, 600], 300], expected: [0, 300, 600] },
+    { label: "한 번", args: [[0], 300], expected: [0] },
+    { label: "50ms마다", args: [[0, 50, 100, 150, 200, 250, 300, 350], 100], expected: [0, 100, 200, 300, 400] },
+    { label: "떨어진 두 묶음", args: [[0, 10, 500, 510, 520], 200], expected: [0, 200, 500, 700] },
+    { label: "경계 바로 앞뒤", args: [[0, 100, 199, 200, 201], 100], expected: [0, 100, 200, 300] },
+  ]}
+/>
+
+"두 번 몰아침"에서 600ms 이벤트를 눈여겨보자. 300ms에 trailing으로 실행하며 600ms까지 새 간격을 열었지만 그 안에 온 이벤트가 없다. 600ms 이벤트는 간격이 막 끝난 때에 왔으니 쉬던 중으로 보고 바로 실행한다.
+
+## 다시 검색창으로
+
+글자마다 나가던 요청 다섯 개는 300ms 디바운스로 한 개가 됐다. 디바운스는 멈춘 뒤 한 번, 스로틀은 움직이는 동안 일정하게 실행한다는 차이만 붙잡고 있으면 고르는 건 어렵지 않다. React에서는 디바운스 함수를 렌더마다 새로 만들지 않고, 응답 순서 문제는 요청 취소로 따로 푼다.
+
+## 면접에서 나올 만한 질문
+
+### 디바운스와 스로틀의 차이는 무엇인가요?
+
+디바운스는 마지막 호출 뒤 정해진 시간 동안 조용하면 한 번 실행하고, 스로틀은 정해진 간격마다 최대 한 번 실행한다. 50ms마다 오는 이벤트에 100ms를 걸면 디바운스는 끝난 뒤 한 번, 스로틀은 100ms마다 실행된다. 검색어 입력처럼 최종 값만 중요하면 디바운스, 스크롤처럼 움직이는 동안 반응해야 하면 스로틀을 쓴다.
+
+### 디바운스를 직접 구현해 보세요
+
+클로저에 타이머 id를 하나 두고, 호출될 때마다 `clearTimeout`으로 이전 예약을 지운 뒤 `setTimeout`으로 다시 건다. 실행할 때는 마지막 호출의 인자와 `this`를 넘긴다. 실무용이라면 `cancel`과 `flush`, 그리고 계속 불려도 한 번은 실행하는 `maxWait`를 더한다.
+
+### leading과 trailing은 무엇인가요?
+
+leading은 쉬다가 온 첫 호출을 바로 실행하는 것이고, trailing은 대기나 간격이 끝날 때 마지막 호출을 실행하는 것이다. 디바운스는 보통 trailing만, 스로틀은 둘 다 한다. trailing을 빼면 스크롤이 멈춘 마지막 위치를 놓칠 수 있고, 버튼 연타 방지처럼 첫 번째만 받으면 될 때는 leading만 쓴다.
+
+### React 컴포넌트에서 디바운스가 동작하지 않는 이유는 무엇인가요?
+
+컴포넌트 본문에서 `debounce(fn, 300)`을 부르면 렌더마다 새 타이머를 가진 새 함수가 생겨서 이전 예약을 취소하지 못한다. `useMemo`나 `useRef`로 하나만 만들고, 언마운트 때 `cancel`한다. 그렇게 고정한 함수 안에서 상태를 읽으면 첫 렌더의 값에 묶이니, 값을 인자로 넘기거나 최신 콜백을 ref에 담아 부른다.
+
+### 스크롤 핸들러에 requestAnimationFrame을 쓰는 이유는 무엇이고, 한계는 무엇인가요?
+
+화면 갱신을 다음 그리기 직전에 한 번으로 모으려고 쓴다. 다만 크롬 계열은 `scroll` 이벤트를 이미 프레임당 한 번 보내기 때문에, 실제로 재 보면 rAF로 감싸도 실행 횟수는 줄지 않았다. 횟수를 줄이려면 시간 기준 스로틀을 쓰고, 요소가 보이는지 확인하는 일이면 `IntersectionObserver`로 스크롤 리스너 자체를 없앤다.
+
+### 검색에 디바운스를 걸었는데도 가끔 이전 결과가 보입니다. 왜 그런가요?
+
+디바운스는 요청 수를 줄일 뿐 응답 순서를 보장하지 않는다. 사용자가 중간에 잠깐 쉬면 요청이 두 번 나가고, 먼저 보낸 요청의 응답이 늦게 오면 최신 결과를 덮는다. 새 요청 전에 `AbortController`로 이전 요청을 취소하거나, 응답이 현재 검색어의 것인지 확인하고 아니면 버린다.
+
+### 디바운스로 자동 저장을 만들 때 주의할 점은 무엇인가요?
+
+대기 중에 탭을 닫으면 마지막 입력이 저장되지 않는다. `visibilitychange`나 `pagehide`에서 `flush`로 바로 저장하고, 전송은 `sendBeacon`이나 `keepalive` fetch로 한다. 계속 타이핑하는 사용자의 내용도 주기적으로 저장되게 `maxWait`를 준다.

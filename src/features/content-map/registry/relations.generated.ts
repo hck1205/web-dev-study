@@ -2,6 +2,61 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "debounce-throttle": {
+    "links": [
+      "js-closures",
+      "js-timers-accuracy",
+      "event-propagation",
+      "code-splitting",
+      "loading-patterns",
+      "react-rerender",
+      "rate-limiting-algorithms"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "pattern-proxy"
+    ]
+  },
+  "event-delegation": {
+    "links": [
+      "event-propagation",
+      "dom-basics",
+      "js-memory-leak",
+      "react-rerender",
+      "debounce-throttle"
+    ],
+    "mentions": [
+      "js-optional-chaining-nullish",
+      "js-closures"
+    ]
+  },
+  "event-propagation": {
+    "links": [
+      "dom-basics",
+      "event-delegation",
+      "debounce-throttle",
+      "js-memory-leak",
+      "core-web-vitals"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "js-function-forms"
+    ]
+  },
+  "dom-basics": {
+    "links": [
+      "event-propagation",
+      "event-delegation",
+      "js-prototype-chain",
+      "xss",
+      "event-loop",
+      "animation-performance",
+      "core-web-vitals",
+      "js-memory-leak",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
   "system-design-concepts-map": {
     "links": [
       "networking-essentials-map",
@@ -313,6 +368,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-object-methods",
       "js-execution-context",
+      "event-delegation",
       "js-classes",
       "js-es-modules",
       "js-destructuring",
@@ -865,6 +921,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-iife-module-pattern",
       "js-currying-partial",
       "js-memoization",
+      "debounce-throttle",
       "js-classes",
       "react-rerender"
     ],
@@ -4274,6 +4331,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "event-delegation",
       "http-status-codes"
     ]
   },
@@ -7801,6 +7859,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-browser-cache",
       "rendering-csr-spa",
       "race-conditions",
+      "debounce-throttle",
       "dns"
     ]
   },
@@ -7884,6 +7943,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-timers-accuracy"
     ],
     "mentions": [
+      "dom-basics",
       "js-es-modules",
       "osi-in-practice"
     ]
@@ -7893,6 +7953,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "dom-basics",
       "js-memoization",
       "js-function-forms",
       "garbage-collection",
@@ -7945,6 +8006,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-es-modules",
+      "debounce-throttle",
       "http-versions",
       "rendering-strategies"
     ]
@@ -8013,6 +8075,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization",
       "js-function-forms",
       "js-pure-functions",
+      "debounce-throttle",
       "js-primitive-vs-reference"
     ]
   },

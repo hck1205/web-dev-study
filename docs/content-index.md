@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 442편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 446편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -1582,7 +1582,7 @@
 - 길이: 497줄
 - 소제목: 내 일이 아니면 다음 처리기로 넘긴다 / 배열 하나와 반복문 하나로 충분하다 / 줄의 순서가 곧 규칙이다 / 모두 거쳐 가는 사슬, 미들웨어 / next를 잊거나 두 번 부르면 / 브라우저에서 위로 올라가는 사슬 / 등록 순서와 실행 순서가 다른 곳 / 데코레이터, 커맨드와 헷갈릴 때 / compose 직접 만들기 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-decorator, pattern-command, pattern-observer, pattern-composite
-- 키워드 백링크 →: http-status-codes
+- 키워드 백링크 →: event-delegation, http-status-codes
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-composite, pattern-decorator, pattern-strategy
 
 #### `pattern-command` — 커맨드 패턴: 요청을 값으로 만들면 되돌릴 수 있다
@@ -1828,7 +1828,7 @@
 - 소제목: 같은 이름의 네트워크 프록시와 무엇이 같나 / 진짜와 똑같은 얼굴을 한 대리인 / 처음 부를 때 만든다 / 들여보낼지, 저장해 둔 걸 줄지 / 멀리 있는 객체를 가까이 있는 것처럼 / 언어가 내장한 대리인, Proxy 객체 / Vue 3의 reactive는 대리인이 장부를 적는 것이다 / ORM이 건네준 가짜 엔티티 / 대리인을 건너뛰는 호출 / 데코레이터와 같은 코드, 다른 의도 / 직접 만드는 캐싱 프록시 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, pattern-decorator, code-splitting, caching-strategies, timeouts, retries, circuit-breaker, sql-query-rewrite, pattern-adapter, pattern-facade
 - 키워드 백링크 →: json-crud-http, resilience-patterns, http-versions, js-immutability-react, js-destructuring, loading-patterns, grpc, design-patterns-overview, dns
-- 이 글로 오는 글 ←: core-web-vitals, design-patterns-overview, frontend-browser-cache, hexagonal-architecture, http-caching-cdn, js-object-methods, loading-patterns, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-adapter, pattern-decorator, react-server-components, sql-query-rewrite
+- 이 글로 오는 글 ←: core-web-vitals, debounce-throttle, design-patterns-overview, frontend-browser-cache, hexagonal-architecture, http-caching-cdn, js-object-methods, loading-patterns, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-adapter, pattern-decorator, react-server-components, sql-query-rewrite
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -1876,8 +1876,8 @@
 - 길이: 553줄
 - 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 에러 수집기에 Failed to fetch만 쌓일 때 / 다시 처음 코드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn, network-troubleshooting-by-layer
-- 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, rendering-csr-spa, race-conditions, dns
-- 이 글로 오는 글 ←: chaos-engineering, client-data-cache, distributed-lock, failover, html-form-http, http-versions, js-async-await, js-iife-module-pattern, js-promise-combinators, js-promises, json-crud-http, leader-election, load-balancer-basics, network-partitions, nginx-reverse-proxy, pattern-adapter, pattern-decorator, pattern-prototype, race-conditions, service-discovery, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard, websocket-deep-dive
+- 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, rendering-csr-spa, race-conditions, debounce-throttle, dns
+- 이 글로 오는 글 ←: chaos-engineering, client-data-cache, distributed-lock, event-propagation, failover, html-form-http, http-versions, js-async-await, js-iife-module-pattern, js-promise-combinators, js-promises, json-crud-http, leader-election, load-balancer-basics, network-partitions, nginx-reverse-proxy, pattern-adapter, pattern-decorator, pattern-prototype, race-conditions, service-discovery, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard, websocket-deep-dive
 
 #### `event-loop` — 자바스크립트 이벤트 루프: 브라우저와 Node.js
 
@@ -1887,8 +1887,8 @@
 - 길이: 567줄
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals, js-execution-context, js-microtask-macrotask, js-timers-accuracy
-- 키워드 백링크 →: js-es-modules, osi-in-practice
-- 이 글로 오는 글 ←: animation-performance, autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-execution-context, js-memory-leak, js-microtask-macrotask, js-promise-combinators, js-promises, js-timers-accuracy, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
+- 키워드 백링크 →: dom-basics, js-es-modules, osi-in-practice
+- 이 글로 오는 글 ←: animation-performance, autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, dom-basics, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-execution-context, js-memory-leak, js-microtask-macrotask, js-promise-combinators, js-promises, js-timers-accuracy, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -1897,8 +1897,8 @@
 - 키워드: 메모리 누수, 힙 스냅샷, 가비지 컬렉션, WeakMap, detached DOM
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: client-data-cache, redis-memory-eviction, js-memoization, js-function-forms, garbage-collection, event-loop, js-strict-mode, js-closures, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, fault-tolerance, garbage-collection, js-call-apply-bind, js-closures, js-first-class-callbacks, js-immutability-react, js-memoization, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
+- 키워드 백링크 →: client-data-cache, redis-memory-eviction, dom-basics, js-memoization, js-function-forms, garbage-collection, event-loop, js-strict-mode, js-closures, layer-mtu-fragmentation, dns
+- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, dom-basics, event-delegation, event-propagation, fault-tolerance, garbage-collection, js-call-apply-bind, js-closures, js-first-class-callbacks, js-immutability-react, js-memoization, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
 
 ### Programming › Frontend › JavaScript › Async (`programming/frontend/javascript/async`)
 
@@ -1976,7 +1976,7 @@
 - 소제목: 지연 시간은 약속이 아니라 하한이다 / setInterval은 밀린 호출을 몰아서 주지 않는다 / 0ms를 줘도 0ms가 아니다 / 너무 큰 값은 바로 울린다 / 탭을 떠나면 브라우저가 일부러 늦춘다 / 어느 시계로 잴 것인가 / 움직임은 프레임에 맞춘다 / React에서 카운트다운을 짤 때 / Node.js 서버의 타이머 / 연습: 남은 시간 표시하기 / 다시 인증번호 3분으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: event-loop, js-execution-context, js-microtask-macrotask, animation-performance, js-closures
 - 키워드 백링크 →: realtime-communication, js-function-forms, clock-skew
-- 이 글로 오는 글 ←: animation-performance, event-loop, js-execution-context, js-microtask-macrotask
+- 이 글로 오는 글 ←: animation-performance, debounce-throttle, event-loop, js-execution-context, js-microtask-macrotask
 
 ### Programming › Frontend › JavaScript › Basics (`programming/frontend/javascript/basics`)
 
@@ -2021,7 +2021,7 @@
 - 길이: 451줄
 - 소제목: 물음표 하나가 체인을 멈춘다 / 한 번 멈추면 체인 끝까지 건너뛴다 / 대괄호와 함수 호출에도 붙는다 / 옵셔널 체이닝을 쓸 수 없는 자리 / null 병합은 null과 undefined만 없는 값으로 본다 / 괄호 없이는 섞을 수 없다 / 비어 있을 때만 대입하는 논리 대입 / 오래된 환경으로 내려가면 코드가 길어진다 / React에서 빈 배열 기본값이 effect를 계속 부른다 / 물음표가 늘어날수록 버그는 조용해진다 / 없어도 되는 값에만 물음표를 찍는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-truthy-falsy-typeof, js-short-circuit, js-destructuring, react-rerender, client-data-cache
-- 이 글로 오는 글 ←: js-destructuring, js-equality-coercion, js-function-forms, js-short-circuit, js-template-literals, js-truthy-falsy-typeof
+- 이 글로 오는 글 ←: event-delegation, js-destructuring, js-equality-coercion, js-function-forms, js-short-circuit, js-template-literals, js-truthy-falsy-typeof
 
 #### `js-primitive-vs-reference` — 원시값과 참조: 자바스크립트는 무엇을 복사하나
 
@@ -2088,6 +2088,51 @@
 - 키워드 백링크 →: js-function-forms
 - 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-iife-module-pattern, js-primitive-vs-reference, js-scope-lexical
 
+### Programming › Frontend › JavaScript › Browser & DOM (`programming/frontend/javascript/browser`)
+
+#### `debounce-throttle` — 디바운스와 스로틀: 멈춘 뒤 한 번, 움직이는 동안 일정하게
+
+- 요약: 디바운스는 멈춘 뒤 한 번, 스로틀은 움직이는 동안 일정하게 실행한다. React에서 디바운스가 망가지는 이유와, 디바운스로 풀리지 않는 응답 순서 문제까지 다룬다.
+- 태그: JavaScript, Browser, React, Performance
+- 키워드: 디바운스, debounce, leading과 trailing
+- 길이: 394줄
+- 소제목: 조용해질 때까지 기다린다 / 일정 간격마다 한 번만 통과시킨다 / 옵션 이름으로 보는 변형들 / 스크롤에는 프레임이라는 기준이 이미 있다 / React에서 디바운스가 안 먹는 이유 / 디바운스로는 풀리지 않는 것 / 현장에서 자주 보는 증상 / 시간을 넣고 실행 시각을 받는 함수 / 다시 검색창으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-closures, js-timers-accuracy, event-propagation, code-splitting, loading-patterns, react-rerender, rate-limiting-algorithms
+- 키워드 백링크 →: client-data-cache, pattern-proxy
+- 이 글로 오는 글 ←: browser-fetch, code-splitting, event-delegation, event-propagation, js-closures, react-rerender
+
+#### `dom-basics` — DOM 기초: 트리, 찾기, 리플로
+
+- 요약: 브라우저는 HTML을 객체 트리로 바꿔 들고 있고, 찾는 방법마다 살아 있는 목록과 찍어 둔 목록이 갈린다. DOM을 바꾸는 것보다 바꾼 직후 크기를 읽는 것이 비싸다는 것을 레이아웃 횟수로 확인한다.
+- 태그: JavaScript, Browser, DOM, Performance, React
+- 키워드: DOM 트리, HTMLCollection, 강제 동기 레이아웃
+- 길이: 448줄
+- 소제목: HTML 문자열이 객체 트리가 된다 / 트리를 위에서부터 훑어 찾는다 / 찾는 방법마다 돌려주는 것이 다르다 / 선택자는 오른쪽 끝부터 맞춰 본다 / 속성과 프로퍼티는 다른 값이다 / textContent와 innerText, innerHTML / DOM을 바꾸면 화면은 나중에 바뀐다 / 현장에서 이 구조를 만나는 순간 / React를 쓰면 DOM을 덜 만질 뿐이다 / 직접 만들어 보는 querySelectorAll / 다시 할 일 목록으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-propagation, event-delegation, js-prototype-chain, xss, event-loop, animation-performance, core-web-vitals, js-memory-leak, react-rerender
+- 이 글로 오는 글 ←: event-delegation, event-loop, event-propagation, js-memory-leak
+
+#### `event-delegation` — 이벤트 위임: 부모 하나가 자식들의 클릭을 받는다
+
+- 요약: 자식마다 리스너를 다는 대신 부모 하나에서 버블링된 이벤트를 받아 closest로 누가 눌렸는지 찾는다. 나중에 붙은 요소도 저절로 동작하고, React는 이미 루트에서 이렇게 하고 있다.
+- 태그: JavaScript, Browser, DOM, React
+- 키워드: 이벤트 위임, event delegation
+- 길이: 327줄
+- 소제목: 리스너를 부모 하나에 단다 / target이 버튼이 아니라 아이콘일 때 / 실제로 얼마나 줄어드나 / 위임이 통하지 않는 이벤트 / React는 이미 위임하고 있다 / 위임 코드를 볼 때 확인하는 것 / 직접 만들어 보는 위임 판정 / 다시 3번 글의 삭제 버튼으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-propagation, dom-basics, js-memory-leak, react-rerender, debounce-throttle
+- 키워드 백링크 →: js-optional-chaining-nullish, js-closures
+- 이 글로 오는 글 ←: dom-basics, event-propagation, js-this-binding, pattern-chain-of-responsibility
+
+#### `event-propagation` — 이벤트 전파: 캡처, 타깃, 버블
+
+- 요약: 클릭 하나는 window에서 내려갔다가 다시 올라온다. stopPropagation과 preventDefault가 막는 대상, passive 리스너, React가 이벤트를 받는 자리까지 실제 출력으로 따라간다.
+- 태그: JavaScript, Browser, DOM, React
+- 키워드: 이벤트 버블링, 이벤트 캡처링, passive 리스너
+- 길이: 441줄
+- 소제목: 클릭 하나가 내려갔다가 올라온다 / target과 currentTarget / 막는 방법은 세 가지이고 막는 대상이 다르다 / 거품을 타지 않는 이벤트 / passive 리스너가 스크롤을 지킨다 / React가 이벤트를 받는 자리 / 클릭이 안 먹을 때 보는 순서 / 직접 만들어 보는 디스패치 순서 / 다시 드롭다운으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: dom-basics, event-delegation, debounce-throttle, js-memory-leak, core-web-vitals
+- 키워드 백링크 →: browser-fetch, js-function-forms
+- 이 글로 오는 글 ←: debounce-throttle, dom-basics, event-delegation
+
 ### Programming › Frontend › JavaScript › Functions (`programming/frontend/javascript/functions`)
 
 #### `js-closures` — 클로저: 함수가 기억하는 것
@@ -2097,8 +2142,8 @@
 - 키워드: 클로저, 오래된 클로저, stale closure, useEffectEvent
 - 길이: 482줄
 - 소제목: 함수는 태어난 자리를 기억한다 / 호출이 끝나도 상자는 남는다 / 값이 아니라 변수를 잡는다 / 반복문 안에서 만든 함수 / 엔진이 실제로 남기는 것 / 클로저로 만드는 것들 / React 컴포넌트에서 오래된 값을 보는 이유 / 현장에서 오래된 값을 찾는 순서 / 연습: 숨긴 상태를 가진 카운터 / 멈춘 타이머가 알려 준 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, js-classes, react-rerender
-- 이 글로 오는 글 ←: design-patterns-overview, islands-resumability, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
+- 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, debounce-throttle, js-classes, react-rerender
+- 이 글로 오는 글 ←: debounce-throttle, design-patterns-overview, event-delegation, islands-resumability, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
 
 #### `js-currying-partial` — 커링과 부분 적용: 인자는 지금, 실행은 나중에
 
@@ -2131,7 +2176,7 @@
 - 소제목: 함수를 만드는 문법들 / 정의보다 위에서 부를 수 있는 함수 / 화살표 함수가 갖지 않는 것 / 이름 있는 함수 표현식을 쓰는 자리 / 매개변수 자리에서 일어나는 일 / arguments 객체와 나머지 매개변수 / React 컴포넌트에서 만나는 함수 모양 / 어떤 모양을 고를까 / 연습: 기본값 규칙 흉내 내기 / 기계적인 변환이 깨뜨린 두 줄 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-this-binding, js-call-apply-bind, js-optional-chaining-nullish, js-spread-rest, js-strict-mode, js-destructuring
 - 키워드 백링크 →: js-classes, js-es-modules, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-execution-context, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-adapter, react-rerender
+- 이 글로 오는 글 ←: event-propagation, js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-execution-context, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-adapter, react-rerender
 
 #### `js-iife-module-pattern` — IIFE와 모듈 패턴: 모듈 시스템이 없던 시절의 스코프
 
@@ -2278,7 +2323,7 @@
 - 소제목: 객체마다 숨은 연결이 하나 있다 / 함수의 prototype 속성은 따로 있다 / 읽을 때는 올라가고 쓸 때는 올라가지 않는다 / 내 것인지 물려받은 것인지 / 사전으로 쓸 객체는 체인을 끊는다 / 요청 하나가 모든 객체를 바꾸는 법 / 프로토타입에 둔 배열은 모두가 같이 쓴다 / instanceof는 체인을 훑는다 / 체인이 길면 느릴까 / 체인이 끊기는 경계들 / 연습: instanceof 직접 만들기 / 없으면 위에 물어본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-this-binding, js-classes, pattern-prototype, js-strict-mode, js-call-apply-bind, json-crud-http, js-truthy-falsy-typeof, js-spread-rest
 - 키워드 백링크 →: rendering-strategies, js-es-modules, js-primitive-vs-reference
-- 이 글로 오는 글 ←: js-call-apply-bind, js-classes, js-object-methods, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, json-crud-http, pattern-prototype
+- 이 글로 오는 글 ←: dom-basics, js-call-apply-bind, js-classes, js-object-methods, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, json-crud-http, pattern-prototype
 
 #### `js-strict-mode` — strict 모드: 조용히 넘어가던 실수를 에러로
 
@@ -2299,7 +2344,7 @@
 - 길이: 556줄
 - 소제목: this는 함수가 아니라 호출에 붙는다 / 네 가지 규칙 / 규칙끼리 부딪히면 / 점이 사라지는 자리들 / 받는 쪽이 this를 정해 주는 API / 파일 맨 위의 this / React 클래스 컴포넌트에서 사라지던 this / 에러 메시지에서 호출 자리까지 / 연습: 메서드를 한꺼번에 묶기 / 호출 자리를 먼저 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-call-apply-bind, js-function-forms, js-prototype-chain, js-strict-mode, react-rerender, js-closures
-- 키워드 백링크 →: js-object-methods, js-execution-context, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
+- 키워드 백링크 →: js-object-methods, js-execution-context, event-delegation, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
 - 이 글로 오는 글 ←: js-call-apply-bind, js-callback-hell, js-classes, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-scope-lexical, js-strict-mode
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
@@ -2313,7 +2358,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, js-memoization, loading-patterns
-- 이 글로 오는 글 ←: browser-fetch, cqrs, exponential-backoff-jitter, frontend-browser-cache, hexagonal-architecture, html-form-http, http-methods, http-status-codes, js-async-await, js-destructuring, js-immutability-react, js-memoization, js-memory-leak, js-optional-chaining-nullish, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns, transactional-outbox
+- 이 글로 오는 글 ←: browser-fetch, cqrs, debounce-throttle, exponential-backoff-jitter, frontend-browser-cache, hexagonal-architecture, html-form-http, http-methods, http-status-codes, js-async-await, js-destructuring, js-immutability-react, js-memoization, js-memory-leak, js-optional-chaining-nullish, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns, transactional-outbox
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -2323,8 +2368,8 @@
 - 길이: 491줄
 - 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
-- 키워드 백링크 →: js-es-modules, http-versions, rendering-strategies
-- 이 글로 오는 글 ←: core-web-vitals, frontend-browser-cache, http-versions, islands-resumability, js-es-modules, js-hoisting-tdz, loading-patterns, pattern-proxy, rendering-csr-spa
+- 키워드 백링크 →: js-es-modules, debounce-throttle, http-versions, rendering-strategies
+- 이 글로 오는 글 ←: core-web-vitals, debounce-throttle, frontend-browser-cache, http-versions, islands-resumability, js-es-modules, js-hoisting-tdz, loading-patterns, pattern-proxy, rendering-csr-spa
 
 #### `core-web-vitals` — Core Web Vitals: LCP, INP, CLS
 
@@ -2335,7 +2380,7 @@
 - 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, code-splitting, event-loop
 - 키워드 백링크 →: ab-testing, loading-patterns, pattern-proxy, cors, dns
-- 이 글로 오는 글 ←: ab-testing, animation-performance, code-splitting, event-loop, frontend-browser-cache, hydration, loading-patterns, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, animation-performance, code-splitting, dom-basics, event-loop, event-propagation, frontend-browser-cache, hydration, loading-patterns, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
 
 #### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
 
@@ -2358,8 +2403,8 @@
 - 길이: 642줄
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
-- 키워드 백링크 →: core-web-vitals, js-memoization, js-function-forms, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-microtask-macrotask, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
+- 키워드 백링크 →: core-web-vitals, js-memoization, js-function-forms, js-pure-functions, debounce-throttle, js-primitive-vs-reference
+- 이 글로 오는 글 ←: client-data-cache, debounce-throttle, dom-basics, event-delegation, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-microtask-macrotask, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -3269,7 +3314,7 @@
 - 소제목: 데이터가 코드가 되는 세 가지 길 / 나가는 자리에 맞게 이스케이프한다 / React는 왜 비교적 안전한가, 그리고 어디서 뚫리나 / HTML을 허용해야 한다면 정제한다 / CSP로 주입돼도 실행을 막는다 / 터져도 피해를 줄이는 장치들 / 실제로 XSS를 만나는 순간 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-form-http, cookie-session-login, csrf
 - 키워드 백링크 →: json-crud-http, sql-injection
-- 이 글로 오는 글 ←: csrf, js-template-literals, sql-injection, waf
+- 이 글로 오는 글 ←: csrf, dom-basics, js-template-literals, sql-injection, waf
 
 #### `zero-trust-architecture` — 제로 트러스트: 사내 IP 대신 요청마다 확인한다
 
@@ -4793,7 +4838,7 @@
 - 소제목: 한도를 거는 이유부터 / 같은 요청 열다섯 개를 다섯 방식에 흘려 본다 / 창을 고정하면 경계에서 두 배가 샌다 / 요청 시각을 다 적어 두는 슬라이딩 로그 / 두 칸을 섞어 어림하는 슬라이딩 윈도 카운터 / 토큰 버킷은 몰림을 얼마나 봐줄지 정한다 / 새는 양동이는 내보내는 속도를 고르게 만든다 / 다섯 가지를 놓고 고르기 / 서버가 여러 대면 세는 일이 경쟁이 된다 / 직접 짜 보는 토큰 버킷 / 숫자를 고를 때 자주 하는 실수 / 다섯 가지는 결국 두 질문이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: rate-limiting-in-practice, resilience-patterns, nginx-https-performance, traffic-shaping-qos
 - 키워드 백링크 →: tail-latency, redis-cluster, backpressure, redis-basics
-- 이 글로 오는 글 ←: count-min-sketch, ddos-protection, rate-limiting-in-practice, rest-api-design, system-design-concepts-map, tail-latency, traffic-shaping-qos
+- 이 글로 오는 글 ←: count-min-sketch, ddos-protection, debounce-throttle, rate-limiting-in-practice, rest-api-design, system-design-concepts-map, tail-latency, traffic-shaping-qos
 
 #### `resilience-patterns` — 장애가 번지지 않게: 타임아웃, 재시도, 서킷 브레이커
 
@@ -4925,7 +4970,7 @@
 - 소제목: 한 프레임에 쓸 수 있는 시간 / 속성마다 깨우는 단계가 다르다 / 합성 단계에서 끝나는 애니메이션 / will-change는 층을 미리 만든다 / 끊김을 재는 방법 / 움직임이 불편한 사람들 / 현장에서 버벅임을 좁히는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: animation-patterns, spring-animation, view-transitions-shared-element, what-happens-google-com, event-loop, core-web-vitals
 - 키워드 백링크 →: js-timers-accuracy
-- 이 글로 오는 글 ←: animation-patterns, js-timers-accuracy, spring-animation, view-transitions-shared-element
+- 이 글로 오는 글 ←: animation-patterns, dom-basics, js-timers-accuracy, spring-animation, view-transitions-shared-element
 
 #### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
 
@@ -4936,7 +4981,7 @@
 - 소제목: 기다리는 시간이 표시를 정한다 / 얼마나 남았는지 아는가 / 무엇이 올지 모양을 아는가 / 스피너가 깜빡이면 더 느려 보인다 / 버튼을 누른 사람에게 먼저 답한다 / 내용이 조각으로 도착할 때 / 손가락으로 당겨서 새로고침 / 모든 로딩 표시에 같이 챙길 것 / 이름을 알면 부탁이 짧아진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals, streaming-ssr-suspense, rendering-strategies, client-data-cache, realtime-communication, rest-api-design, code-splitting, animation-patterns
 - 키워드 백링크 →: pattern-proxy
-- 이 글로 오는 글 ←: animation-patterns, client-data-cache, core-web-vitals, design-patterns-overview, elasticsearch-inverted-index, frontend-browser-cache, hexagonal-architecture, http-caching-cdn, json-crud-http, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-proxy, react-server-components, rest-api-design, server-sent-events, sql-query-rewrite
+- 이 글로 오는 글 ←: animation-patterns, client-data-cache, core-web-vitals, debounce-throttle, design-patterns-overview, elasticsearch-inverted-index, frontend-browser-cache, hexagonal-architecture, http-caching-cdn, json-crud-http, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-proxy, react-server-components, rest-api-design, server-sent-events, sql-query-rewrite
 
 #### `spring-animation` — 스프링 애니메이션: 시간 대신 힘으로 움직이기
 
@@ -5004,6 +5049,7 @@
 - 가중 라운드 로빈 → `load-balancing-algorithms`
 - 감는 수 → `ray-casting`
 - 감쇠비 → `spring-animation`
+- 강제 동기 레이아웃 → `dom-basics`
 - 같은 출처 정책 → `cors`
 - 개념적 모델링 → `sqld-data-modeling`
 - 객체 수준 인가 → `authn-vs-authz`
@@ -5105,6 +5151,7 @@
 - 동적 import → `code-splitting`
 - 동점 처리 열 → `api-pagination-sorting`
 - 되돌리기 스택 → `pattern-command`
+- 디바운스 → `debounce-throttle`
 - 디바이스 플러그인 → `k8s-gpu-dra`
 - 디자인 패턴 → `design-patterns-overview`
 - 라벨 셀렉터 → `k8s-labels-selectors`
@@ -5395,9 +5442,12 @@
 - 이더넷 프레임 → `layer-link-ethernet-arp`
 - 이벤트 기반 아키텍처 → `event-driven-architecture`
 - 이벤트 루프 → `event-loop`
+- 이벤트 버블링 → `event-propagation`
 - 이벤트 소싱 → `event-driven-architecture`
 - 이벤트 스토밍 → `ddd-bounded-context`
+- 이벤트 위임 → `event-delegation`
 - 이벤트 저장소 → `event-sourcing`
+- 이벤트 캡처링 → `event-propagation`
 - 이상 점수 → `waf`
 - 이전 페이지 커서 → `api-pagination-sorting`
 - 이중 쓰기 → `transactional-outbox`
@@ -5855,6 +5905,7 @@
 - DDL → `sql-basics`
 - DDoS → `ddos-protection`
 - dead man's switch → `cron-jobs`
+- debounce → `debounce-throttle`
 - DECODE → `sqld-null-functions`
 - Decorator 패턴 → `pattern-decorator`
 - decorrelated jitter → `exponential-backoff-jitter`
@@ -5890,6 +5941,7 @@
 - Dockerfile → `dockerfile-image-layers`
 - dockershim → `k8s-cri-cni-csi`
 - DoH → `dns`
+- DOM 트리 → `dom-basics`
 - DOMPurify → `xss`
 - DORA 지표 → `ci-cd-basics`
 - Draft Mode → `rendering-ssg-isr`
@@ -5921,6 +5973,7 @@
 - etcd 스냅숏 → `k8s-etcd-backup`
 - etcdctl elect → `leader-election`
 - etcdutl → `k8s-etcd-backup`
+- event delegation → `event-delegation`
 - Event-Carried State Transfer → `event-driven-architecture`
 - EventBridge → `serverless-architecture`
 - EventSource → `realtime-communication`
@@ -6039,6 +6092,7 @@
 - HSTS → `what-happens-google-com`
 - HTB → `traffic-shaping-qos`
 - HTML 폼 → `html-form-http`
+- HTMLCollection → `dom-basics`
 - HTTP/2 → `http-versions`
 - HTTP/3 → `http-versions`
 - HTTPRoute → `gateway`
@@ -6151,6 +6205,7 @@
 - Last-Event-ID → `server-sent-events`
 - LATERAL → `postgres-reporting-sql`
 - LCP → `core-web-vitals`
+- leading과 trailing → `debounce-throttle`
 - Lease 객체 → `leader-election`
 - least request → `load-balancing-algorithms`
 - least_conn → `nginx-reverse-proxy`
@@ -6298,6 +6353,7 @@
 - PACELC → `db-consistency-cap`
 - packfile → `git-internals-basics`
 - partition 롤링 업데이트 → `k8s-statefulset`
+- passive 리스너 → `event-propagation`
 - Patroni → `failover`
 - pause 컨테이너 → `k8s-pod-basics`
 - pcap → `packet-capture-tcpdump`
@@ -6738,6 +6794,15 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `debounce-throttle` ↔ `event-propagation`
+- `debounce-throttle` ↔ `js-closures`
+- `debounce-throttle` ↔ `code-splitting`
+- `debounce-throttle` ↔ `react-rerender`
+- `event-delegation` ↔ `event-propagation`
+- `event-delegation` ↔ `dom-basics`
+- `event-propagation` ↔ `dom-basics`
+- `dom-basics` ↔ `event-loop`
+- `dom-basics` ↔ `js-memory-leak`
 - `js-timers-accuracy` ↔ `js-microtask-macrotask`
 - `js-timers-accuracy` ↔ `js-execution-context`
 - `js-timers-accuracy` ↔ `animation-performance`
