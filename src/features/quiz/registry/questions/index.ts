@@ -158,6 +158,7 @@ import { JS_CURRYING_PARTIAL } from "./js-currying-partial";
 import { JS_DESTRUCTURING } from "./js-destructuring";
 import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
 import { JS_ES_MODULES } from "./js-es-modules";
+import { JS_EXECUTION_CONTEXT } from "./js-execution-context";
 import { JS_FIRST_CLASS_CALLBACKS } from "./js-first-class-callbacks";
 import { JS_FUNCTION_FORMS } from "./js-function-forms";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
@@ -165,6 +166,7 @@ import { JS_IIFE_MODULE_PATTERN } from "./js-iife-module-pattern";
 import { JS_IMMUTABILITY_REACT } from "./js-immutability-react";
 import { JS_MEMOIZATION } from "./js-memoization";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
+import { JS_MICROTASK_MACROTASK } from "./js-microtask-macrotask";
 import { JS_OBJECT_METHODS } from "./js-object-methods";
 import { JS_OPTIONAL_CHAINING_NULLISH } from "./js-optional-chaining-nullish";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
@@ -179,6 +181,7 @@ import { JS_SPREAD_REST } from "./js-spread-rest";
 import { JS_STRICT_MODE } from "./js-strict-mode";
 import { JS_TEMPLATE_LITERALS } from "./js-template-literals";
 import { JS_THIS_BINDING } from "./js-this-binding";
+import { JS_TIMERS_ACCURACY } from "./js-timers-accuracy";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
@@ -599,6 +602,7 @@ export const QUESTION_SETS = [
   JS_DESTRUCTURING,
   JS_EQUALITY_COERCION,
   JS_ES_MODULES,
+  JS_EXECUTION_CONTEXT,
   JS_FIRST_CLASS_CALLBACKS,
   JS_FUNCTION_FORMS,
   JS_HOISTING_TDZ,
@@ -606,6 +610,7 @@ export const QUESTION_SETS = [
   JS_IMMUTABILITY_REACT,
   JS_MEMOIZATION,
   JS_MEMORY_LEAK,
+  JS_MICROTASK_MACROTASK,
   JS_OBJECT_METHODS,
   JS_OPTIONAL_CHAINING_NULLISH,
   JS_PRIMITIVE_VS_REFERENCE,
@@ -620,6 +625,7 @@ export const QUESTION_SETS = [
   JS_STRICT_MODE,
   JS_TEMPLATE_LITERALS,
   JS_THIS_BINDING,
+  JS_TIMERS_ACCURACY,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,

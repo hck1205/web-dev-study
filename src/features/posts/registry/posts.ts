@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "js-timers-accuracy",
+    title: "타이머는 왜 늦게 울리나: setTimeout, 스로틀링, requestAnimationFrame",
+    summary: "setTimeout의 지연이 하한일 뿐인 이유, 중첩 4ms 규칙과 32비트 넘침, 백그라운드 탭 스로틀링을 실측과 함께 본다. 카운트다운과 애니메이션을 끝나는 시각과 타임스탬프로 계산하는 법도 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Browser", "Node.js", "React", "Performance"],
+    date: "2026-10-22",
+    keywords: ["백그라운드 탭 스로틀링", "TimeoutOverflowWarning", "requestAnimationFrame", "performance.now()"],
+  },
+  {
+    slug: "js-microtask-macrotask",
+    title: "마이크로태스크와 매크로태스크: 출력 순서를 장부로 푼다",
+    summary: "대기열에 무엇이 어떤 순서로 들어가는지 장부를 적어 가며 then 체인과 await 순서 퍼즐을 푼다. 가짜 타이머 테스트가 깨지는 이유, 마이크로태스크 에러가 가는 곳, React가 업데이트를 묶는 자리도 본다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js", "React", "Browser"],
+    date: "2026-10-22",
+    keywords: ["매크로태스크", "queueMicrotask", "MutationObserver", "advanceTimersByTimeAsync"],
+  },
+  {
+    slug: "js-execution-context",
+    title: "실행 컨텍스트와 콜 스택: 함수 호출이 쌓이고 넘치는 과정",
+    summary: "함수를 부를 때마다 엔진이 만드는 실행 컨텍스트와 그것이 쌓이는 콜 스택을 본다. 스택 오버플로가 나는 이유, 깊이를 힙으로 옮겨 고치는 법, await 너머의 스택 트레이스 읽는 법까지 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js", "React"],
+    date: "2026-10-22",
+    keywords: ["실행 컨텍스트", "스택 오버플로", "Maximum call stack size exceeded", "트램펄린"],
+  },
+  {
     slug: "authn-vs-authz",
     title: "인증과 인가: 누구냐와 해도 되냐는 다른 질문이다",
     summary: "로그인한 사용자가 주문 번호만 바꿔 남의 주문을 본 IDOR에서 출발해 401·403·404, ACL·RBAC·ABAC·ReBAC(Zanzibar), OPA 정책과 테스트, 게이트웨이와 서비스의 검사 분담, 토큰 속 역할이 낡는 문제, 목록 API의 인가를 Node와 OPA로 재현한다.",

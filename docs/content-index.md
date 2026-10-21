@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 438편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 441편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -17,7 +17,7 @@
 - 길이: 419줄
 - 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 운영에서 n²은 이런 모양으로 드러난다 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-rewrite
-- 키워드 백링크 →: js-memoization, sql-filtering-operators, event-loop
+- 키워드 백링크 →: js-execution-context, js-memoization, sql-filtering-operators, event-loop
 - 이 글로 오는 글 ←: js-memoization
 
 ### Programming › Algorithms › For System Design (`programming/algorithms/system-design`)
@@ -117,7 +117,7 @@
 - 길이: 524줄
 - 소제목: 꽉 차면 넷으로 나눈다 / 겹치지 않는 칸은 통째로 버린다 / 가장 가까운 k개는 거리순 대기열로 / 100만 개로 재 보기 / 밀도가 고르지 않으면 트리도 기운다 / 같은 건물에 가게가 다섯 곳이면 / 쿼드트리, 지오해시, R-tree는 무엇이 다른가 / PostgreSQL에 이미 있는 쿼드트리 / 위도·경도를 그대로 평면에 놓으면 / 현장에서 쿼드트리를 의심하는 순간 / 면접에서 나올 만한 질문
 - 직접 링크 →: geohash, ray-casting
-- 키워드 백링크 →: db-type-key-value, sql-filtering-operators
+- 키워드 백링크 →: js-execution-context, db-type-key-value, sql-filtering-operators
 - 이 글로 오는 글 ←: db-index-design, geohash, ray-casting
 
 #### `raft-consensus` — Raft 합의: 로그 복제, 커밋, 안전한 리더 교체
@@ -1783,6 +1783,7 @@
 - 길이: 420줄
 - 소제목: 세트 안에 세트가 들어오던 날 / 하나와 묶음이 같은 질문에 답한다 / 계산은 잎에서 시작해 위로 올라온다 / add를 어디에 둘 것인가 / 클래스 없이 트리 하나와 fold 하나 / 매일 쓰는 트리들 / 트리가 그래프가 되는 순간 / 데코레이터와 같은 모양, 다른 목적 / 직접 만들어 보는 세트 계산 / 컴포지트가 과한 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-visitor, pattern-decorator, pattern-chain-of-responsibility, pattern-iterator
+- 키워드 백링크 →: js-execution-context
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-decorator, pattern-interpreter, pattern-visitor
 
 #### `pattern-decorator` — 데코레이터 패턴: 같은 모양으로 감싸 기능을 겹쳐 붙이기
@@ -1885,9 +1886,9 @@
 - 키워드: 이벤트 루프, 마이크로태스크, 태스크 큐, process.nextTick, setImmediate
 - 길이: 567줄
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
-- 직접 링크 →: core-web-vitals
+- 직접 링크 →: core-web-vitals, js-execution-context, js-microtask-macrotask, js-timers-accuracy
 - 키워드 백링크 →: js-es-modules, osi-in-practice
-- 이 글로 오는 글 ←: animation-performance, autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-memory-leak, js-promise-combinators, js-promises, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
+- 이 글로 오는 글 ←: animation-performance, autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-execution-context, js-memory-leak, js-microtask-macrotask, js-promise-combinators, js-promises, js-timers-accuracy, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -1910,7 +1911,7 @@
 - 소제목: async 함수는 부르는 즉시 Promise를 준다 / forEach는 반환값을 버린다 / 하나씩 기다릴까, 한꺼번에 보낼까 / 미리 시작해 둔 Promise가 먼저 실패하면 / return과 return await는 try 안에서 다르다 / 최상위 await는 모듈 로딩을 멈춘다 / React effect에는 async를 바로 넘기지 않는다 / 직접 해 보기: 동시성을 제한하면 몇 ms 걸리나 / 처음 코드로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-promises, js-callback-hell, js-promise-combinators, event-loop, js-es-modules, client-data-cache
 - 키워드 백링크 →: browser-fetch, js-function-forms, js-truthy-falsy-typeof, js-destructuring
-- 이 글로 오는 글 ←: js-callback-hell, js-es-modules, js-first-class-callbacks, js-promise-combinators, js-promises
+- 이 글로 오는 글 ←: js-callback-hell, js-es-modules, js-first-class-callbacks, js-microtask-macrotask, js-promise-combinators, js-promises
 
 #### `js-callback-hell` — 콜백 지옥: 들여쓰기보다 무서운 것
 
@@ -1922,6 +1923,27 @@
 - 직접 링크 →: js-promises, js-async-await, js-promise-combinators, js-first-class-callbacks, event-loop, saga-pattern, js-this-binding
 - 키워드 백링크 →: json-crud-http, message-delivery-semantics, js-function-forms
 - 이 글로 오는 글 ←: js-async-await, js-first-class-callbacks, js-promise-combinators, js-promises
+
+#### `js-execution-context` — 실행 컨텍스트와 콜 스택: 함수 호출이 쌓이고 넘치는 과정
+
+- 요약: 함수를 부를 때마다 엔진이 만드는 실행 컨텍스트와 그것이 쌓이는 콜 스택을 본다. 스택 오버플로가 나는 이유, 깊이를 힙으로 옮겨 고치는 법, await 너머의 스택 트레이스 읽는 법까지 다룬다.
+- 태그: JavaScript, Node.js, React
+- 키워드: 실행 컨텍스트, 스택 오버플로, Maximum call stack size exceeded, 트램펄린
+- 길이: 520줄
+- 소제목: 함수를 부를 때마다 작업 공간이 하나 생긴다 / 만들어질 때 한 번, 실행할 때 한 번 / 콜 스택은 컨텍스트를 쌓는 접시 더미다 / 몇 장까지 쌓이나 / 넘치는 곳은 재귀만이 아니다 / 스택 트레이스는 콜 스택의 사진이다 / await 너머의 스택 / 깊이를 스택에서 빼내는 방법 / React에서 콜 스택을 만나는 자리 / 현장에서 스택 오버플로를 좁히는 순서 / 연습: 댓글 트리를 스택 없이 펼치기 / 다시 댓글 2만 개로 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-loop, js-microtask-macrotask, js-timers-accuracy, js-scope-lexical, js-hoisting-tdz, js-closures
+- 키워드 백링크 →: js-function-forms, js-strict-mode
+- 이 글로 오는 글 ←: big-o-notation, event-loop, js-hoisting-tdz, js-microtask-macrotask, js-spread-rest, js-this-binding, js-timers-accuracy, pattern-composite, quadtree
+
+#### `js-microtask-macrotask` — 마이크로태스크와 매크로태스크: 출력 순서를 장부로 푼다
+
+- 요약: 대기열에 무엇이 어떤 순서로 들어가는지 장부를 적어 가며 then 체인과 await 순서 퍼즐을 푼다. 가짜 타이머 테스트가 깨지는 이유, 마이크로태스크 에러가 가는 곳, React가 업데이트를 묶는 자리도 본다.
+- 태그: JavaScript, Node.js, React, Browser
+- 키워드: 매크로태스크, queueMicrotask, MutationObserver, advanceTimersByTimeAsync
+- 길이: 496줄
+- 소제목: 매크로태스크라는 말은 명세에 없다 / 장부를 적으며 푸는 법 / await 하나는 한 틱이다 / 처음 테스트는 장부의 어디서 어긋났나 / Node.js 11에서 바뀐 순서 / 마이크로태스크에서 던진 에러는 어디로 가나 / DOM 변경은 마이크로태스크로 묶인다 / React가 업데이트를 묶는 자리 / 순서 버그를 현장에서 좁히는 법 / 연습: 체인 여러 개의 출력 순서 / 다시 retry 테스트로 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-loop, js-execution-context, js-timers-accuracy, js-promises, js-async-await, react-rerender
+- 이 글로 오는 글 ←: event-loop, js-execution-context, js-timers-accuracy
 
 #### `js-promise-combinators` — Promise.all, allSettled, race, any 고르기
 
@@ -1943,7 +1965,18 @@
 - 소제목: 결과를 담을 상자를 먼저 받는다 / then이 돌려주는 건 새 상자다 / 실패는 다음 catch까지 미끄러진다 / 아무도 받지 않은 거부 / 상자를 하나 더 씌울 때 흔한 실수 / resolve에 Promise를 넘기면 늦어진다 / React에서 Promise를 만나는 자리 / 직접 만들어 보는 체인 판정기 / 처음 버그를 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-callback-hell, js-async-await, js-promise-combinators, event-loop, browser-fetch, client-data-cache
 - 키워드 백링크 →: rendering-strategies, js-function-forms, http-status-codes
-- 이 글로 오는 글 ←: js-async-await, js-callback-hell, js-promise-combinators, pattern-observer
+- 이 글로 오는 글 ←: js-async-await, js-callback-hell, js-microtask-macrotask, js-promise-combinators, pattern-observer
+
+#### `js-timers-accuracy` — 타이머는 왜 늦게 울리나: setTimeout, 스로틀링, requestAnimationFrame
+
+- 요약: setTimeout의 지연이 하한일 뿐인 이유, 중첩 4ms 규칙과 32비트 넘침, 백그라운드 탭 스로틀링을 실측과 함께 본다. 카운트다운과 애니메이션을 끝나는 시각과 타임스탬프로 계산하는 법도 다룬다.
+- 태그: JavaScript, Browser, Node.js, React, Performance
+- 키워드: 백그라운드 탭 스로틀링, TimeoutOverflowWarning, requestAnimationFrame, performance.now()
+- 길이: 454줄
+- 소제목: 지연 시간은 약속이 아니라 하한이다 / setInterval은 밀린 호출을 몰아서 주지 않는다 / 0ms를 줘도 0ms가 아니다 / 너무 큰 값은 바로 울린다 / 탭을 떠나면 브라우저가 일부러 늦춘다 / 어느 시계로 잴 것인가 / 움직임은 프레임에 맞춘다 / React에서 카운트다운을 짤 때 / Node.js 서버의 타이머 / 연습: 남은 시간 표시하기 / 다시 인증번호 3분으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: event-loop, js-execution-context, js-microtask-macrotask, animation-performance, js-closures
+- 키워드 백링크 →: realtime-communication, js-function-forms, clock-skew
+- 이 글로 오는 글 ←: animation-performance, event-loop, js-execution-context, js-microtask-macrotask
 
 ### Programming › Frontend › JavaScript › Basics (`programming/frontend/javascript/basics`)
 
@@ -1976,9 +2009,9 @@
 - 키워드: 호이스팅, TDZ, Temporal Dead Zone
 - 길이: 510줄
 - 소제목: 실행 전에 이름부터 등록한다 / 선언마다 초기화하는 시점이 다르다 / 오류 문구로 원인을 가른다 / TDZ는 위치가 아니라 시간이다 / 바깥 이름이 있어도 TDZ가 이긴다 / 블록 안의 함수 선언은 모드마다 다르다 / 순환 import가 TDZ를 부른다 / React 파일에서 만나는 경우 / 도구로 미리 잡기 / 다시 formatPrice로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-var-let-const, js-scope-lexical, js-strict-mode, js-es-modules
+- 직접 링크 →: js-var-let-const, js-scope-lexical, js-execution-context, js-strict-mode, js-es-modules
 - 키워드 백링크 →: js-function-forms, code-splitting
-- 이 글로 오는 글 ←: dependency-hell, js-classes, js-es-modules, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const
+- 이 글로 오는 글 ←: dependency-hell, js-classes, js-es-modules, js-execution-context, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const
 
 #### `js-optional-chaining-nullish` — 옵셔널 체이닝과 ??: 어디서 멈추고 무엇을 없음으로 보나
 
@@ -2009,7 +2042,7 @@
 - 소제목: 이름은 안쪽부터 바깥으로 찾는다 / 쓴 자리가 바깥을 정한다 / 함수는 태어난 환경을 들고 다닌다 / 엔진은 실행 전에 찾을 곳을 정해 둔다 / 같은 이름으로 가리기 / 선언 없이 대입하면 전역이 생긴다 / 매개변수 기본값에는 따로 범위가 있다 / eval과 with는 규칙을 흐린다 / 개발자 도구에서 스코프 체인 보기 / React에서 컴포넌트 안에 컴포넌트를 쓰면 / 다시 로그인 버그로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-var-let-const, js-hoisting-tdz, js-this-binding, js-closures, js-memory-leak, js-strict-mode, react-rerender
 - 키워드 백링크 →: js-object-methods, js-function-forms, js-es-modules
-- 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-strict-mode, js-var-let-const
+- 이 글로 오는 글 ←: js-closures, js-execution-context, js-hoisting-tdz, js-strict-mode, js-var-let-const
 
 #### `js-short-circuit` — 단락 평가: &&와 ||는 언제 멈추고 무엇을 돌려주나
 
@@ -2065,7 +2098,7 @@
 - 길이: 482줄
 - 소제목: 함수는 태어난 자리를 기억한다 / 호출이 끝나도 상자는 남는다 / 값이 아니라 변수를 잡는다 / 반복문 안에서 만든 함수 / 엔진이 실제로 남기는 것 / 클로저로 만드는 것들 / React 컴포넌트에서 오래된 값을 보는 이유 / 현장에서 오래된 값을 찾는 순서 / 연습: 숨긴 상태를 가진 카운터 / 멈춘 타이머가 알려 준 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, js-classes, react-rerender
-- 이 글로 오는 글 ←: design-patterns-overview, islands-resumability, js-currying-partial, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: design-patterns-overview, islands-resumability, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
 
 #### `js-currying-partial` — 커링과 부분 적용: 인자는 지금, 실행은 나중에
 
@@ -2098,7 +2131,7 @@
 - 소제목: 함수를 만드는 문법들 / 정의보다 위에서 부를 수 있는 함수 / 화살표 함수가 갖지 않는 것 / 이름 있는 함수 표현식을 쓰는 자리 / 매개변수 자리에서 일어나는 일 / arguments 객체와 나머지 매개변수 / React 컴포넌트에서 만나는 함수 모양 / 어떤 모양을 고를까 / 연습: 기본값 규칙 흉내 내기 / 기계적인 변환이 깨뜨린 두 줄 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-this-binding, js-call-apply-bind, js-optional-chaining-nullish, js-spread-rest, js-strict-mode, js-destructuring
 - 키워드 백링크 →: js-classes, js-es-modules, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-var-let-const, pattern-adapter, react-rerender
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-execution-context, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-adapter, react-rerender
 
 #### `js-iife-module-pattern` — IIFE와 모듈 패턴: 모듈 시스템이 없던 시절의 스코프
 
@@ -2209,6 +2242,7 @@
 - 길이: 524줄
 - 소제목: 같은 점 세 개가 반대 방향으로 일한다 / 배열 전개는 이터레이터에서 꺼낸다 / 객체 전개는 자기 속성만 베낀다 / 뒤에 쓴 것이 이긴다 / Object.assign과 무엇이 다른가 / 나머지 매개변수는 진짜 배열이다 / 빼고 나머지를 넘긴다 / 펼친 만큼 값을 치른다 / React 컴포넌트에서 props를 펼칠 때 / TypeScript는 길이를 모르는 전개를 막는다 / undefined는 건너뛰는 병합 함수 / 세 점 앞에서 물어볼 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-destructuring, js-shallow-deep-copy, js-prototype-chain, js-object-methods, js-currying-partial, js-function-forms, js-immutability-react, js-array-mutation
+- 키워드 백링크 →: js-execution-context
 - 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-call-apply-bind, js-currying-partial, js-destructuring, js-first-class-callbacks, js-function-forms, js-object-methods, js-prototype-chain, js-pure-functions
 
 ### Programming › Frontend › JavaScript › this & OOP (`programming/frontend/javascript/oop`)
@@ -2255,7 +2289,7 @@
 - 소제목: 조용한 실패를 에러로 바꾸는 모드 / 어디서 켜지고 어디서 꺼지나 / 지시어 하나가 남의 코드까지 바꾼다 / 에러로 바뀌는 조용한 실패들 / 파싱 단계에서 막히는 문법 / arguments가 매개변수를 따라 바뀌지 않는다 / 이름만 비슷한 두 strict / 오래된 코드를 엄격 모드로 옮길 때 / 연습: 엄격 모드라면 이 대입이 성공할까 / 실수를 늦게 알 이유가 없다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-scope-lexical, js-iife-module-pattern, js-object-methods, js-this-binding, js-function-forms, js-prototype-chain
 - 키워드 백링크 →: js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
-- 이 글로 오는 글 ←: build-caching, js-array-mutation, js-call-apply-bind, js-classes, js-es-modules, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-memory-leak, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-this-binding, k8s-crd, pattern-flyweight
+- 이 글로 오는 글 ←: build-caching, js-array-mutation, js-call-apply-bind, js-classes, js-es-modules, js-execution-context, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-memory-leak, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-this-binding, k8s-crd, pattern-flyweight
 
 #### `js-this-binding` — this 바인딩: 부르는 방식이 this를 정한다
 
@@ -2265,7 +2299,7 @@
 - 길이: 556줄
 - 소제목: this는 함수가 아니라 호출에 붙는다 / 네 가지 규칙 / 규칙끼리 부딪히면 / 점이 사라지는 자리들 / 받는 쪽이 this를 정해 주는 API / 파일 맨 위의 this / React 클래스 컴포넌트에서 사라지던 this / 에러 메시지에서 호출 자리까지 / 연습: 메서드를 한꺼번에 묶기 / 호출 자리를 먼저 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-call-apply-bind, js-function-forms, js-prototype-chain, js-strict-mode, react-rerender, js-closures
-- 키워드 백링크 →: js-object-methods, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
+- 키워드 백링크 →: js-object-methods, js-execution-context, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
 - 이 글로 오는 글 ←: js-call-apply-bind, js-callback-hell, js-classes, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-scope-lexical, js-strict-mode
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
@@ -2325,7 +2359,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals, js-memoization, js-function-forms, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-microtask-macrotask, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -2594,7 +2628,7 @@
 - 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 로컬에선 되는데 서버에 올리면 멈출 때 / 무엇을 고를까 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-versions, cors, resilience-patterns, nginx-reverse-proxy, operational-transform, crdt, websocket-deep-dive, long-polling, server-sent-events
 - 키워드 백링크 →: json-crud-http, proxy-reverse-proxy, base64, kafka-basics, redis-basics, http-status-codes, backpressure
-- 이 글로 오는 글 ←: blue-green-deployment, cdn-edge-anycast, frontend-browser-cache, kubectl-essentials, load-balancer-basics, load-balancing-algorithms, loading-patterns, long-polling, message-queue-basics, nginx-basics, nginx-reverse-proxy, operational-transform, osi-in-practice, server-sent-events, serverless-architecture, vpc-subnets-route-tables, webhooks, websocket-deep-dive
+- 이 글로 오는 글 ←: blue-green-deployment, cdn-edge-anycast, frontend-browser-cache, js-timers-accuracy, kubectl-essentials, load-balancer-basics, load-balancing-algorithms, loading-patterns, long-polling, message-queue-basics, nginx-basics, nginx-reverse-proxy, operational-transform, osi-in-practice, server-sent-events, serverless-architecture, vpc-subnets-route-tables, webhooks, websocket-deep-dive
 
 #### `server-sent-events` — Server-Sent Events 깊게 보기: 재연결, 연결 수 제한, 프록시 버퍼링
 
@@ -4583,7 +4617,7 @@
 - 소제목: 서버마다 시계가 다르게 가는 이유 / chrony가 시계를 맞추는 두 가지 방법 / 시간을 잴 때는 단조 시계로 / 토큰이 일찍 죽고 늦게 산다 / 윤초와 번지기 / 시계 없이 순서를 정한다 / 시계가 의심될 때 보는 순서 / 시계는 순서를 증명하지 못한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-consistency-cap, distributed-lock, eventual-consistency, network-partitions, event-driven-architecture, crdt, db-type-newsql
 - 키워드 백링크 →: network-monitoring, ipv6-basics, security-groups-nacl, redis-basics, udp-and-quic, dns, token-login
-- 이 글로 오는 글 ←: authn-vs-authz, consistency-models, crdt, eventual-consistency, jwt-key-rotation, multi-region, webhooks
+- 이 글로 오는 글 ←: authn-vs-authz, consistency-models, crdt, eventual-consistency, js-timers-accuracy, jwt-key-rotation, multi-region, webhooks
 
 #### `consistency-models` — 일관성 모델: 선형화, 순차, 인과를 실행 기록으로 판정하기
 
@@ -4879,7 +4913,8 @@
 - 길이: 398줄
 - 소제목: 한 프레임에 쓸 수 있는 시간 / 속성마다 깨우는 단계가 다르다 / 합성 단계에서 끝나는 애니메이션 / will-change는 층을 미리 만든다 / 끊김을 재는 방법 / 움직임이 불편한 사람들 / 현장에서 버벅임을 좁히는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: animation-patterns, spring-animation, view-transitions-shared-element, what-happens-google-com, event-loop, core-web-vitals
-- 이 글로 오는 글 ←: animation-patterns, spring-animation, view-transitions-shared-element
+- 키워드 백링크 →: js-timers-accuracy
+- 이 글로 오는 글 ←: animation-patterns, js-timers-accuracy, spring-animation, view-transitions-shared-element
 
 #### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
 
@@ -5100,6 +5135,7 @@
 - 마이크로서비스 → `microservices`
 - 마이크로세그멘테이션 → `zero-trust-architecture`
 - 마이크로태스크 → `event-loop`
+- 매크로태스크 → `js-microtask-macrotask`
 - 머클 트리 → `merkle-tree`
 - 머티리얼라이즈드 뷰 → `postgres-reporting-sql`
 - 멀티 리전 → `multi-region`
@@ -5140,6 +5176,7 @@
 - 배치 체크포인트 → `batch-processing`
 - 배치 INSERT → `sql-batch-timeout-pool`
 - 배포 파이프라인 → `k8s-deploy-pipeline-eks`
+- 백그라운드 탭 스로틀링 → `js-timers-accuracy`
 - 백프레셔 → `backpressure`
 - 백필 → `zero-downtime-migrations`
 - 버전 컬럼 → `optimistic-locking`
@@ -5253,6 +5290,7 @@
 - 스키마 레지스트리 → `schema-versioning`
 - 스키마 온 리드 → `sql-vs-nosql`
 - 스태거 애니메이션 → `animation-patterns`
+- 스택 오버플로 → `js-execution-context`
 - 스테이징 영역 → `git-staging-area`
 - 스트랭글러 피그 → `microservices`
 - 스트리밍 복제 → `db-replication-sharding`
@@ -5270,6 +5308,7 @@
 - 시점 복구 → `postgres-operations`
 - 식 인덱스 → `db-index-design`
 - 식별자 주입 → `sql-injection`
+- 실행 컨텍스트 → `js-execution-context`
 - 싱글턴 패턴 → `pattern-singleton`
 - 싱크홀 안티패턴 → `layered-architecture`
 - 쓰기 왜곡 → `db-transaction-isolation`
@@ -5530,6 +5569,7 @@
 - 트래픽 셰이핑 → `traffic-shaping-qos`
 - 트랜잭셔널 아웃박스 → `microservices`
 - 트랜잭셔널 프로듀서 → `message-delivery-semantics`
+- 트램펄린 → `js-execution-context`
 - 트렁크 기반 개발 → `git-branching-strategy`
 - 트렁크 포트 → `vlan-basics`
 - 트리 셰이킹 → `code-splitting`
@@ -5627,6 +5667,7 @@
 - ADD_MONTHS → `sqld-single-row-functions`
 - Address already in use → `ports-and-sockets`
 - AdminNetworkPolicy → `k8s-network-policy`
+- advanceTimersByTimeAsync → `js-microtask-macrotask`
 - advisory lock → `pessimistic-locking`
 - aggregated ClusterRole → `k8s-rbac`
 - AggregateError → `js-promise-combinators`
@@ -6129,6 +6170,7 @@
 - matchExpressions → `k8s-labels-selectors`
 - max_fails → `rolling-deployment`
 - max_prepared_statements → `connection-pool`
+- Maximum call stack size exceeded → `js-execution-context`
 - MaxListenersExceededWarning → `pattern-observer`
 - maxmemory → `redis-memory-eviction`
 - maxReceiveCount → `dead-letter-queue`
@@ -6160,6 +6202,7 @@
 - multipart/form-data → `http-message`
 - multiwindow multi-burn-rate → `error-budgets`
 - MutatingAdmissionPolicy → `k8s-admission-control`
+- MutationObserver → `js-microtask-macrotask`
 - MVC 패턴 → `mvc-pattern`
 - MVCC → `db-transaction-isolation`
 - MVVM → `mvc-pattern`
@@ -6247,6 +6290,7 @@
 - pcap → `packet-capture-tcpdump`
 - peer 인증 → `postgres-getting-started`
 - pending-upgrade → `helm-release-lifecycle`
+- performance.now() → `js-timers-accuracy`
 - PersistentVolume → `k8s-pv-pvc`
 - PersistentVolumeClaim → `k8s-pv-pvc`
 - persistentVolumeClaimRetentionPolicy → `k8s-statefulset`
@@ -6319,6 +6363,7 @@
 - QoS 클래스 → `k8s-pod-resources`
 - Quadtree → `quadtree`
 - QUALIFY → `sql-logical-order`
+- queueMicrotask → `js-microtask-macrotask`
 - QUIC → `http-versions`
 - Qwik → `islands-resumability`
 - R-tree → `quadtree`
@@ -6353,6 +6398,7 @@
 - repl-backlog-size → `redis-replication-sentinel`
 - ReplicaSet → `k8s-pod-basics`
 - ReportBatchItemFailures → `serverless-architecture`
+- requestAnimationFrame → `js-timers-accuracy`
 - require(esm) → `js-es-modules`
 - rerere → `git-merge-conflict`
 - resize 하위 리소스 → `k8s-in-place-resize`
@@ -6511,6 +6557,7 @@
 - TiDB → `db-type-newsql`
 - tied request → `tail-latency`
 - TIME_WAIT → `tcp-connection-lifecycle`
+- TimeoutOverflowWarning → `js-timers-accuracy`
 - TimescaleDB → `db-type-time-series`
 - timestamptz → `postgres-data-types`
 - tini → `linux-processes-signals`
@@ -6678,6 +6725,14 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `js-timers-accuracy` ↔ `js-microtask-macrotask`
+- `js-timers-accuracy` ↔ `js-execution-context`
+- `js-timers-accuracy` ↔ `animation-performance`
+- `js-timers-accuracy` ↔ `event-loop`
+- `js-microtask-macrotask` ↔ `js-execution-context`
+- `js-microtask-macrotask` ↔ `event-loop`
+- `js-execution-context` ↔ `js-hoisting-tdz`
+- `js-execution-context` ↔ `event-loop`
 - `authn-vs-authz` ↔ `k8s-admission-control`
 - `authn-vs-authz` ↔ `zero-trust-architecture`
 - `acid-transactions` ↔ `saga-pattern`

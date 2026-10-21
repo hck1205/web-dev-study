@@ -2,6 +2,45 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "js-timers-accuracy": {
+    "links": [
+      "event-loop",
+      "js-execution-context",
+      "js-microtask-macrotask",
+      "animation-performance",
+      "js-closures"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "js-function-forms",
+      "clock-skew"
+    ]
+  },
+  "js-microtask-macrotask": {
+    "links": [
+      "event-loop",
+      "js-execution-context",
+      "js-timers-accuracy",
+      "js-promises",
+      "js-async-await",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
+  "js-execution-context": {
+    "links": [
+      "event-loop",
+      "js-microtask-macrotask",
+      "js-timers-accuracy",
+      "js-scope-lexical",
+      "js-hoisting-tdz",
+      "js-closures"
+    ],
+    "mentions": [
+      "js-function-forms",
+      "js-strict-mode"
+    ]
+  },
   "authn-vs-authz": {
     "links": [
       "cookie-session-login",
@@ -201,6 +240,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
+      "js-execution-context",
       "js-classes",
       "js-es-modules",
       "js-destructuring",
@@ -558,7 +598,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "core-web-vitals"
     ],
-    "mentions": []
+    "mentions": [
+      "js-timers-accuracy"
+    ]
   },
   "view-transitions-shared-element": {
     "links": [
@@ -849,7 +891,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-immutability-react",
       "js-array-mutation"
     ],
-    "mentions": []
+    "mentions": [
+      "js-execution-context"
+    ]
   },
   "js-destructuring": {
     "links": [
@@ -1026,6 +1070,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-var-let-const",
       "js-scope-lexical",
+      "js-execution-context",
       "js-strict-mode",
       "js-es-modules"
     ],
@@ -3654,6 +3699,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ray-casting"
     ],
     "mentions": [
+      "js-execution-context",
       "db-type-key-value",
       "sql-filtering-operators"
     ]
@@ -4809,7 +4855,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-chain-of-responsibility",
       "pattern-iterator"
     ],
-    "mentions": []
+    "mentions": [
+      "js-execution-context"
+    ]
   },
   "dead-letter-queue": {
     "links": [
@@ -7428,6 +7476,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "js-execution-context",
       "js-memoization",
       "sql-filtering-operators",
       "event-loop"
@@ -7757,7 +7806,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "event-loop": {
     "links": [
-      "core-web-vitals"
+      "core-web-vitals",
+      "js-execution-context",
+      "js-microtask-macrotask",
+      "js-timers-accuracy"
     ],
     "mentions": [
       "js-es-modules",
