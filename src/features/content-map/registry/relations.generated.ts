@@ -2,6 +2,85 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "release-cutover-hypercare": {
+    "links": [
+      "enterprise-system-integration",
+      "global-rollout-localization",
+      "sit-uat-testing",
+      "rollback-strategy",
+      "microservices-decomposition",
+      "zero-downtime-migrations",
+      "on-call",
+      "blue-green-deployment",
+      "feature-flags",
+      "canary-release",
+      "sli-slo",
+      "alerting",
+      "distributed-tracing",
+      "structured-logging",
+      "production-incidents",
+      "postmortems"
+    ],
+    "mentions": [
+      "http-status-codes",
+      "dns"
+    ]
+  },
+  "sit-uat-testing": {
+    "links": [
+      "enterprise-system-integration",
+      "global-rollout-localization",
+      "release-cutover-hypercare",
+      "test-pyramid-unit-tests",
+      "integration-tests-real-db",
+      "api-versioning"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "http-status-codes",
+      "webhooks"
+    ]
+  },
+  "global-rollout-localization": {
+    "links": [
+      "enterprise-system-integration",
+      "sit-uat-testing",
+      "release-cutover-hypercare",
+      "feature-flags",
+      "cron-jobs",
+      "hydration",
+      "pattern-strategy"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "rendering-strategies",
+      "db-modeling-normalization"
+    ]
+  },
+  "enterprise-system-integration": {
+    "links": [
+      "global-rollout-localization",
+      "sit-uat-testing",
+      "release-cutover-hypercare",
+      "webhooks",
+      "batch-processing",
+      "pattern-adapter",
+      "hexagonal-architecture",
+      "ddd-bounded-context",
+      "idempotency-key",
+      "timeouts",
+      "message-delivery-semantics",
+      "exponential-backoff-jitter",
+      "circuit-breaker",
+      "dead-letter-queue",
+      "transactional-outbox",
+      "sd-payment-reliability",
+      "api-versioning"
+    ],
+    "mentions": [
+      "http-status-codes"
+    ]
+  },
   "parallax-scrollytelling": {
     "links": [
       "scroll-driven-animations",
@@ -1302,6 +1381,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sd-start-single-server",
       "lossy-counting",
+      "global-rollout-localization",
       "osi-in-practice",
       "db-modeling-normalization"
     ]
@@ -10154,6 +10234,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rag-retrieval-quality",
       "mongodb-document-model",
       "loading-patterns",
+      "global-rollout-localization",
       "transactional-outbox",
       "kafka-basics",
       "db-modeling-normalization"

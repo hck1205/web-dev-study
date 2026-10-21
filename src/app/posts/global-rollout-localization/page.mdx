@@ -1,0 +1,378 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("global-rollout-localization");
+
+미국에서 먼저 만든 주문 화면을 한국에 열기로 했다. 첫 테스트 화면에서 가격이 `₩459,900`으로 나온다. 실제 가격은 4,599만 원이다. 고객 이름은 "길동 홍"으로 찍히고, 주소 입력란은 `State`를 채우라고 한다. 자정 직후에 들어온 주문은 일별 매출 리포트에서 전날로 잡힌다. 코드는 한 줄도 틀리지 않았다. 미국이라는 가정이 코드 곳곳에 녹아 있었을 뿐이다.
+
+이 글은 이미 다른 나라에서 돌고 있는 플랫폼을 새 시장에 여는 일을 본다. 시장마다 달라지는 값을 어디에 두는지, 통화·시간대·이름·주소·검색에서 무엇이 깨지는지, 세금계산서나 결제처럼 현지에만 있는 요구(로컬 갭)를 어떻게 찾고 순서를 정하는지, 그리고 어떤 순서로 여는지다. 실습은 Node 22.22.0(ICU 77.1)에서 돌렸다. 서버 시간대는 UTC다.
+
+이 주제의 다른 글: [벤더·레거시 시스템 연동](/posts/enterprise-system-integration), [SIT와 UAT](/posts/sit-uat-testing), [컷오버와 하이퍼케어](/posts/release-cutover-hypercare).
+
+## 나라마다 다른 값은 코드 밖으로 뺀다
+
+처음 증상들의 원인은 하나다. 통화가 USD라는 것, 이름은 이름-성 순서라는 것, 주소에 주(state)가 있다는 것, 영업일은 태평양 시간으로 자른다는 것이 코드에 박혀 있었다. 새 시장을 열 때 첫 작업은 이런 가정을 찾아 시장별 설정으로 빼는 일이다. 코드는 하나로 두고, 시장마다 다른 값은 설정이 정하고, 현지에만 있는 기능은 시장별 어댑터가 맡는다.
+
+<ConceptDiagram
+  caption="공통 코어, 시장 설정, 현지 어댑터"
+  width={420}
+  height={230}
+  nodes={[
+    { id: "core", label: "공통 코어", sub: "주문·재고·가격 규칙", x: 210, y: 45, w: 150 },
+    { id: "us", label: "US 설정", sub: "USD, LA 시간", x: 80, y: 120, w: 110 },
+    { id: "kr", label: "KR 설정", sub: "KRW, 서울 시간", x: 340, y: 120, w: 110 },
+    { id: "tax", label: "세금 어댑터", sub: "전자 계산서", x: 260, y: 195, w: 110 },
+    { id: "pay", label: "결제 어댑터", sub: "현지 결제 수단", x: 380, y: 195, w: 90 },
+    { id: "flags", label: "시장별 플래그", sub: "켜고 끄기", x: 100, y: 195, w: 120 },
+  ]}
+  edges={[
+    { from: "core", to: "us", label: "읽는다" },
+    { from: "core", to: "kr", label: "읽는다" },
+    { from: "kr", to: "tax", label: "고른다" },
+    { from: "kr", to: "pay", label: "고른다" },
+    { from: "core", to: "flags", label: "묻는다", dashed: true },
+  ]}
+/>
+
+시장 설정 하나를 조각으로 나눠 보면 무엇을 빼야 하는지가 보인다. 아래 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="KR 시장 설정을 조각으로 읽기"
+  separator=""
+  joiner=" · "
+  params={[
+    { key: "locale", value: "ko-KR", display: "locale: ko-KR", title: "언어와 지역", description: "숫자, 날짜, 목록을 어떻게 쓸지 정한다. 번역 문구를 고르는 기준이기도 하다. 사용자가 고른 언어와 시장은 다를 수 있다. 한국 시장에서 영어 화면을 쓰는 사용자도 있다.", required: true },
+    { key: "currency", value: "KRW", display: "currency: KRW", title: "통화", description: "소수 자릿수는 통화가 정한다. KRW는 0자리, USD는 2자리다. 금액을 '센트' 단위 정수로 저장하는 코드는 통화마다 자릿수가 다르다는 걸 알아야 한다.", code: "KRW digits: 0\nUSD digits: 2", required: true },
+    { key: "timeZone", value: "Asia/Seoul", display: "tz: Asia/Seoul", title: "영업일을 자르는 시간대", description: "'오늘 주문', '일별 매출', '배송 예정일'이 이 시간대로 정해진다. 저장은 UTC로 하고, 날짜로 자를 때만 이 값을 쓴다.", required: true },
+    { key: "address", value: "zip>road>detail", display: "address: zip>road>detail", title: "주소 칸과 순서", description: "한국 주소는 우편번호 5자리, 도로명 주소, 상세 주소로 큰 단위부터 쓴다. 주(state) 칸이 없다. 주소 검색 API로 고르게 하는 경우가 많다." },
+    { key: "tax", value: "inclusive 10%", display: "tax: inclusive 10%", title: "세금 표시 방식", description: "한국 소비자 가격은 부가세 포함으로 보여 주는 게 일반적이다. 미국처럼 결제 직전에 세금을 더하는 흐름을 그대로 쓰면 가격이 달라 보인다." },
+    { key: "invoice", value: "kr-e-tax-invoice", display: "invoice: kr-e-tax-invoice", title: "현지 어댑터 이름", description: "전자세금계산서처럼 그 나라에만 있는 연동은 코드가 아니라 어댑터 이름으로 고른다. 없는 시장은 null이다." },
+    { key: "dataRegion", value: "kr", display: "region: kr", title: "데이터를 둘 곳", description: "개인정보를 어느 리전에 저장할지 정한다. 법적 요구인지, 고객 요구인지, 단지 지연 때문인지는 시장마다 다르다." },
+  ]}
+/>
+
+설정은 공통 기본값 위에 시장 값을 덮는 방식으로 만든다. 여기서 흔한 실수가 "덮지 않은 값은 기본값이 쓰인다"는 점이다. 일본 시장을 추가하면서 주소 형식을 깜빡하면, 일본 화면에 미국 주소 칸이 조용히 나온다. 그래서 시장마다 반드시 덮어야 하는 키를 정해 두고, 서버가 시작할 때 검사한다.
+
+```js
+// market.mjs (줄임)
+const base = { locale: "en-US", currency: "USD", timeZone: "America/Los_Angeles", invoice: null, dataRegion: "us" /* ... */ };
+const markets = { US: {}, KR: { locale: "ko-KR", currency: "KRW", timeZone: "Asia/Seoul", invoice: "kr-e-tax-invoice", dataRegion: "kr" /* ... */ },
+                  JP: { locale: "ja-JP", currency: "JPY", timeZone: "Asia/Tokyo" } };
+const required = { KR: ["invoice", "dataRegion"], JP: ["address", "invoice"] };
+
+function resolve(code) {
+  const missing = (required[code] ?? []).filter((k) => markets[code][k] == null);
+  if (missing.length) throw new Error(`market ${code}: missing ${missing.join(", ")}`);
+  return { ...base, ...markets[code], market: code };
+}
+```
+
+```text
+US en-US America/Los_Angeles $459.90 addr: line1>line2>city>state>zip invoice: null region: us
+KR ko-KR Asia/Seoul ₩45,990,000 addr: zip>road>detail invoice: kr-e-tax-invoice region: kr
+FAIL market JP: missing address, invoice
+```
+
+JP는 서버가 뜨지 않는다. 그게 맞다. 설정이 빠진 채로 열려서 고객이 먼저 발견하는 것보다, 배포 파이프라인에서 막히는 편이 싸다.
+
+설정과 플래그는 역할이 다르다. 설정은 그 시장에서 늘 참인 사실(통화, 시간대)이고, 플래그는 언제 켤지 정하는 스위치다. 한국에서만 간편결제를 켜고 새 결제 화면은 한국에서만 잠시 꺼 두는 식이다.
+
+```text
+US easy-pay: false new-checkout: true
+KR easy-pay: true new-checkout: false
+```
+
+플래그 규칙에 `market` 속성을 조건으로 넣으면 이렇게 된다. 규칙의 평가 순서, 플래그 서비스가 죽었을 때의 기본값, 다 쓴 플래그 정리는 [피처 플래그](/posts/feature-flags)에서 다뤘다. 시장별 플래그는 나라를 열고 나서도 오래 남기 쉽다. 출시가 끝나면 "모든 시장에서 켜짐"이 된 플래그부터 지운다.
+
+## 통화와 세금은 정수로 다룬다
+
+처음의 `₩459,900`은 이 코드에서 나왔다. 금액을 최소 단위 정수로 저장하고, 보여 줄 때 100으로 나눈다. 달러에서는 맞다. 1달러는 100센트니까. 원화에는 그보다 작은 단위가 없다.
+
+```js
+const priceKRW = 45990000; // 원 단위 정수
+const won = (loc) => new Intl.NumberFormat(loc, { style: "currency", currency: "KRW" });
+console.log(won("ko-KR").format(priceKRW));
+console.log(won("en-US").format(priceKRW));
+console.log("KRW digits:", won("ko-KR").resolvedOptions().maximumFractionDigits,
+  "USD digits:", new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).resolvedOptions().maximumFractionDigits);
+// 센트를 가정한 코드
+const formatCents = (minor, cur, loc) => new Intl.NumberFormat(loc, { style: "currency", currency: cur }).format(minor / 100);
+console.log("cents 가정 버그:", formatCents(45990000, "KRW", "ko-KR"));
+console.log("ko-KR compact:", new Intl.NumberFormat("ko-KR", { notation: "compact" }).format(priceKRW));
+```
+
+```text
+₩45,990,000
+₩45,990,000
+KRW digits: 0 USD digits: 2
+cents 가정 버그: ₩459,900
+ko-KR compact: 4599만
+```
+
+`Intl.NumberFormat`은 통화마다 소수 자릿수를 알고 있다(ISO 4217의 minor unit). KRW는 0, USD는 2, 쿠웨이트 디나르(KWD)처럼 3인 통화도 있다. 그러니 "최소 단위 정수 + 통화 코드"로 저장하되, 변환 계수를 100으로 박지 말고 통화의 자릿수에서 가져온다. 소수 연산(`0.1 + 0.2`)을 피하려고 정수를 쓰는 건 맞는 선택이다. 그 정수의 단위가 통화마다 다를 뿐이다.
+
+세금도 계산 방향이 바뀐다. 미국은 보통 세전 가격에 주·도시별 판매세를 더한다. 한국 소비자 가격은 부가세 10%가 포함된 값으로 보여 주고, 세금계산서나 영수증에는 공급가액과 세액을 나눠 적는다. 포함가에서 거꾸로 나누면 끝자리가 생긴다.
+
+```text
+합계 45990000 -> 공급가 41809091 + 세액 4180909
+합계 15900 -> 공급가 14455 + 세액 1445
+합계 9900 -> 공급가 9000 + 세액 900
+```
+
+여기서는 `Math.round(합계 / 1.1)`로 공급가를 구하고 나머지를 세액으로 했다. 반올림할지 버릴지, 품목마다 나눌지 주문 전체에서 나눌지는 회계·세무 쪽이 정하는 규칙이라 코드에서 정하지 않는다. 개발이 할 일은 그 규칙을 한 함수에 모으고, 합계가 언제나 공급가와 세액의 합과 같게(1원도 새지 않게) 만드는 것이다.
+
+## 같은 순간이 서울에서는 다음 날이다
+
+일별 매출 리포트의 날짜가 하루씩 밀린 이유를 보자. 서버는 UTC로 돌고, 리포트는 주문 시각을 `toISOString().slice(0, 10)`으로 잘라 날짜를 만들었다.
+
+```js
+const t = new Date("2026-10-22T15:30:00Z");
+for (const tz of ["UTC", "Asia/Seoul", "America/Los_Angeles"])
+  console.log(tz.padEnd(20), new Intl.DateTimeFormat("ko-KR", { timeZone: tz, dateStyle: "full", timeStyle: "short" }).format(t));
+console.log("toISOString().slice(0,10):", t.toISOString().slice(0, 10));
+console.log("Seoul 영업일:", new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(t));
+```
+
+```text
+UTC                  2026년 10월 22일 목요일 오후 3:30
+Asia/Seoul           2026년 10월 23일 금요일 오전 12:30
+America/Los_Angeles  2026년 10월 22일 목요일 오전 8:30
+toISOString().slice(0,10): 2026-10-22
+Seoul 영업일: 2026-10-23
+```
+
+서울에서 금요일 0시 30분에 들어온 주문이 UTC로 자르면 목요일이다. 한국 시간 0시부터 9시 사이의 주문이 매일 전날로 간다. `en-CA` 로캘은 날짜를 `YYYY-MM-DD`로 내기 때문에 시간대를 지정해 날짜 문자열을 얻을 때 자주 쓰는 방법이다. 아래 그림은 이 주문이 리포트에 닿기까지의 길이다.
+
+<SequenceDiagram
+  caption="자정 직후 주문이 전날 매출로 잡히는 길"
+  actors={[
+    { id: "user", label: "서울 고객" },
+    { id: "api", label: "주문 API" },
+    { id: "db", label: "DB (UTC)" },
+    { id: "report", label: "일별 리포트" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "주문 00:30 KST", title: "금요일 0시 30분에 주문한다", detail: "고객에게는 금요일 주문이다." },
+    { from: "api", to: "db", label: "15:30Z 저장", title: "UTC로 저장한다", detail: "저장은 맞다. 같은 순간을 하나의 기준으로 적었다.", payload: "ordered_at = 2026-10-22T15:30:00Z" },
+    { from: "report", to: "db", label: "slice(0,10)", title: "UTC 날짜로 자른다", detail: "2026-10-22, 목요일이 된다. 틀린 곳은 여기다." },
+    { from: "report", to: "report", label: "Asia/Seoul로", title: "시장의 시간대로 자른다", detail: "날짜로 바꾸는 순간에만 시장 설정의 timeZone을 쓴다. 2026-10-23이 나온다.", payload: "date_trunc('day', ordered_at AT TIME ZONE 'Asia/Seoul')" },
+  ]}
+/>
+
+규칙은 단순하다. 순간(instant)은 UTC로 저장하고, 날짜로 자르거나 화면에 보일 때만 시장의 시간대를 쓴다. 생일이나 배송 희망일처럼 순간이 아니라 달력의 날짜인 값은 시간대 없이 `DATE` 타입으로 저장한다. 이걸 `timestamptz`에 자정으로 넣으면 다른 시간대에서 읽을 때 하루가 밀린다.
+
+한국은 지금 일광 절약 시간(서머타임)이 없어서 UTC+9로 고정이지만, 미국 시장은 1년에 두 번 시차가 바뀐다. 미국과 한국을 함께 운영하면 "매일 오전 9시 배치"가 한쪽 기준으로는 계절마다 한 시간씩 움직인다. 배치를 어느 시간대 기준으로 돌릴지 시장마다 정해야 한다. 이 함정은 [크론 작업](/posts/cron-jobs) 글에도 있다. 화면 쪽에서도 같은 문제가 있다. 서버 렌더링은 UTC로, 브라우저는 사용자 시간대로 날짜를 그려서 React 하이드레이션 경고가 나는 경우가 있는데, 그건 [하이드레이션](/posts/hydration)에서 다뤘다.
+
+## 이름, 주소, 전화번호의 모양
+
+이름 순서부터 보자. 한국 이름은 성이 앞이고 대개 띄어 쓰지 않는다. 미국 화면은 `given family` 순서로 이어 붙였다.
+
+```text
+길동 홍 | 홍길동
+서울, 부산 및 대구
+Seoul, Busan, and Daegu
+```
+
+첫 줄이 이름 조합의 차이, 둘째 줄과 셋째 줄은 `Intl.ListFormat`이 같은 목록을 언어마다 다르게 잇는 모습이다. 이름은 조합 규칙을 시장 설정에 두는 것보다, 처음부터 "전체 이름" 칸 하나를 두고 필요할 때만 성과 이름을 따로 받는 편이 덜 깨진다. 서양식 화면이 고집하는 middle name, 이름과 성의 최소 길이, 영문만 받는 검증 규칙이 모두 새 시장에서 가입을 막는다. 한글 이름을 받는 칸에 `^[A-Za-z]+$` 같은 검증이 남아 있지 않은지 찾는다.
+
+주소는 칸 자체가 다르다. 한국은 우편번호 5자리, 도로명 주소, 상세 주소(동·호수)로 큰 단위부터 적는다. 주 칸이 없고, 사용자가 직접 치기보다 주소 검색으로 고르는 화면이 흔하다. 같은 건물을 지번 주소로도 부를 수 있어서, 벤더나 물류사가 어느 쪽을 받는지 확인한다. 주소를 한 문자열로만 저장하면 나중에 물류 연동에서 다시 쪼개야 하니 칸별로 저장하고, 원문도 함께 남긴다.
+
+전화번호는 저장할 때 국제 형식(E.164)으로 맞춘다. 국내에서 쓰는 앞자리 0을 빼고 국가 번호를 붙인다.
+
+```text
+010-1234-5678 -> +821012345678 | 02-312-3456 -> +8223123456
+```
+
+예시의 변환은 한국 번호만 다루는 간단한 코드다. 실제로는 국가마다 규칙이 달라서 libphonenumber 같은 검증된 라이브러리를 쓴다. 화면에는 사용자가 익숙한 국내 형식(`010-1234-5678`)으로 보여 주고, SMS 벤더에는 E.164로 넘긴다.
+
+## 한글 검색과 정렬은 따로 챙긴다
+
+고객 목록을 이름순으로 정렬하고, 상담원이 "ㅎㄱㄷ"으로 검색하는 화면을 만든다고 하자. 기본 `sort()`와 한국어 비교기로 정렬하면 이렇게 다르다.
+
+```text
+기본 sort : 10번 매장, 2번 매장, Kim, kim, 가나다, 강민준, 김하늘, 이서연
+ko collator: 2번 매장, 10번 매장, 가나다, 강민준, 김하늘, 이서연, kim, Kim
+```
+
+기본 정렬은 UTF-16 코드 단위 순서라서 `10번`이 `2번`보다 앞에 온다. `Intl.Collator("ko", { numeric: true })`는 숫자를 수로 읽고, 한국어 규칙대로 한글을 라틴 문자보다 앞에 둔다. 비교기를 한 번 만들어 재사용하는 이유와 속도 차이는 [전략 패턴](/posts/pattern-strategy) 글에서 쟀다. DB에서 정렬한다면 DB의 정렬 규칙(collation)이 결과를 정하므로 앱과 DB가 다른 순서를 내지 않는지 확인한다. PostgreSQL은 ICU collation(`ko-x-icu`)을 열이나 쿼리에 지정할 수 있다.
+
+검색에는 함정이 하나 더 있다. 같은 "홍길동"도 유니코드로는 두 가지 모양이 있다. 완성형 음절 세 글자(NFC)와, 자모를 하나씩 이어 쓴 아홉 글자(NFD)다. macOS에서 만든 파일 이름이나 일부 입력기가 NFD를 낸다.
+
+```text
+NFD length: 9 NFC length: 3 includes: false after NFC: true
+```
+
+NFD 문자열에서 "길동"을 찾으면 못 찾는다. 저장할 때와 검색할 때 모두 `normalize("NFC")`로 맞춘다.
+
+초성 검색은 한글 음절이 유니코드에 규칙적으로 놓여 있어서 계산으로 된다. 음절 하나의 번호에서 `0xAC00`을 빼고 588(중성 21 × 종성 28)로 나눈 몫이 초성의 순번이다. 아래 그림에서 "홍길동"이 "ㅎㄱㄷ"이 되는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="음절 번호에서 초성 꺼내기"
+  memoryLabel="초성"
+  cells={["홍 U+D64D", "길 U+AE38", "동 U+B3D9"]}
+  steps={[
+    { pointer: 0, memory: ["ㅎ"], caption: "0xD64D - 0xAC00 = 10829. 10829 / 588의 몫은 18, 초성 목록의 18번째는 ㅎ이다." },
+    { pointer: 1, memory: ["ㅎ", "ㄱ"], caption: "0xAE38 - 0xAC00 = 568. 588보다 작아 몫은 0, ㄱ이다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["ㅎ", "ㄱ", "ㄷ"], caption: "0xB3D9 - 0xAC00 = 2009. 몫은 3, ㄷ이다. 홍길동의 초성은 ㅎㄱㄷ." },
+  ]}
+/>
+
+직접 짜 보자. 검색어의 각 글자가 이름의 연속된 글자와 같거나, 그 글자의 초성과 같으면 맞는 것으로 본다.
+
+<CodePlayground
+  caption="초성이 섞인 검색어로 이름 찾기"
+  functionName="chosungMatch"
+  initialCode={`function chosungMatch(name, query) {
+  const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+  // 1. name, query를 NFC로 맞춘다
+  // 2. 이름의 어느 위치에서든 query 길이만큼 연속으로 비교한다
+  // 3. 글자가 같거나, 이름 글자가 한글 음절(0xAC00~)이고 그 초성이 query 글자와 같으면 통과
+  return false;
+}`}
+  solution={`function chosungMatch(name, query) {
+  const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+  const n = [...name.normalize("NFC")];
+  const q = [...query.normalize("NFC")];
+  const same = (ch, qc) => {
+    if (ch === qc) return true;
+    const c = ch.charCodeAt(0) - 0xac00;
+    return c >= 0 && c < 11172 && CHO[Math.floor(c / 588)] === qc;
+  };
+  for (let i = 0; i + q.length <= n.length; i++) {
+    if (q.every((qc, j) => same(n[i + j], qc))) return true;
+  }
+  return false;
+}`}
+  tests={[
+    { label: "홍길동 / ㄱㄷ", args: ["홍길동", "ㄱㄷ"], expected: true },
+    { label: "홍길동 / 홍ㄱ", args: ["홍길동", "홍ㄱ"], expected: true },
+    { label: "홍길동 / ㄱ동", args: ["홍길동", "ㄱ동"], expected: true },
+    { label: "건너뛴 초성은 아니다", args: ["홍길동", "ㅎㄷ"], expected: false },
+    { label: "Kim 하늘 / ㅎㄴ", args: ["Kim 하늘", "ㅎㄴ"], expected: true },
+    { label: "NFD로 저장된 이름", args: ["홍길동".normalize("NFD"), "길동"], expected: true },
+    { label: "쌍자음은 다른 초성", args: ["까치", "ㄱㅊ"], expected: false },
+  ]}
+/>
+
+마지막 테스트처럼 "까치"의 초성은 ㄲ이라 ㄱ으로는 안 맞는다. 사용자가 이걸 기대하는지는 화면마다 다르다. 이 방식은 고객 수천 명 정도의 목록을 브라우저나 앱 메모리에서 거를 때 맞는다. 수백만 건을 검색한다면 초성 문자열을 미리 계산해 별도 열이나 검색 엔진 필드로 색인해 둔다.
+
+## 데이터를 어디에 둘지가 구조를 바꾼다
+
+기능보다 늦게 드러나서 비싼 갭이 데이터 위치다. 나라마다 개인정보를 국외로 옮기는 일에 조건을 두는 법이 있고, 고객사 계약이 특정 리전 저장을 요구하기도 한다. 한국에도 개인정보 보호법에 국외 이전에 관한 규정이 있다. 요건이 무엇인지, 우리 서비스에 무엇이 적용되는지는 법무와 개인정보 담당이 판단할 일이고 규정도 바뀐다. 이 글은 법률 판단을 하지 않는다. 개발이 할 일은 "어떤 데이터가 어디로 흐르는지"를 그림으로 그려 그 판단에 쓸 수 있게 하는 것, 그리고 결정이 나왔을 때 따를 수 있는 구조를 만드는 것이다.
+
+아래 그림은 흔히 고르는 구조 하나다. 원본 개인정보는 한국 리전에 두고, 글로벌 분석에는 가명 처리한 데이터만 보낸다.
+
+<NetworkTopology
+  caption="개인정보는 시장 리전에, 바깥에는 가명 데이터만"
+  width={420}
+  height={250}
+  zones={[
+    { id: "kr", label: "KR 리전", x: 10, y: 20, w: 230, h: 215, tone: "private" },
+    { id: "global", label: "글로벌 리전", x: 270, y: 20, w: 140, h: 215, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "KR user", x: 45, y: 70, icon: "client" },
+    { id: "app", label: "order svc", x: 140, y: 70, icon: "server" },
+    { id: "pii", label: "PII DB", x: 140, y: 190, icon: "db" },
+    { id: "etl", label: "pseudonymize", x: 200, y: 130, icon: "lock", w: 100 },
+    { id: "dw", label: "analytics", x: 340, y: 130, icon: "db" },
+    { id: "core", label: "global core", x: 340, y: 60, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "app" },
+    { from: "app", to: "pii" },
+    { from: "app", to: "etl" },
+    { from: "etl", to: "dw" },
+    { from: "app", to: "core", dashed: true },
+    { from: "pii", to: "dw", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "app", "pii"], packet: "주문", title: "원본은 시장 리전에 저장한다", detail: "이름, 전화번호, 주소는 KR 리전의 DB에만 둔다." },
+    { path: ["app", "etl", "dw"], packet: "가명 id", title: "분석에는 가명 처리한 값만", detail: "고객 id를 키가 있는 해시로 바꾸고 이름·연락처는 뺀 뒤 보낸다. 집계는 글로벌에서 돈다." },
+    { path: ["app", "core"], packet: "SKU, 수량", title: "공통 기능에는 필요한 필드만", detail: "재고·가격처럼 개인정보가 없는 호출은 글로벌 코어로 간다. 요청 본문에 개인정보가 섞이지 않는지 로그로 확인한다." },
+    { path: ["pii", "dw"], packet: "원본 복제", blocked: true, title: "원본 복제는 막는다", detail: "편하다고 DB 전체를 글로벌로 복제하면 이 구조가 무너진다. 백업과 로그도 같은 기준으로 본다." },
+  ]}
+/>
+
+이 그림에서 자주 새는 곳은 기능이 아니라 부수 경로다. 에러 추적 도구에 요청 본문이 통째로 실리고, 글로벌 로그 플랫폼에 전화번호가 찍히고, 장애 분석용 DB 덤프가 다른 리전 버킷에 올라간다. 로그 마스킹, 백업 위치, 벤더 도구의 데이터 리전 설정까지 목록에 넣는다.
+
+## 로컬 갭은 목록으로 만들고 줄을 세운다
+
+새 시장을 열 때 할 일은 "그 나라에 있어야 하는데 지금 플랫폼에 없는 것"의 목록, 흔히 핏-갭(fit-gap) 분석이라 부르는 작업에서 시작한다. 한국을 예로 들면 이런 항목이 나온다.
+
+- 전자세금계산서 발행: 사업자 고객과 거래할 때 필요할 수 있다. 발행 대상, 시점, 연동 방식(직접 연동 또는 대행 서비스)은 세무 쪽과 확인한다.
+- 현지 결제 수단: 국내 카드사, 계좌이체, 간편결제. 해외 결제 게이트웨이 하나로는 안 되는 경우가 많다.
+- 본인 확인: 휴대폰 본인 확인 같은 현지 관행이 있는 업종이 있다.
+- 주소 검색, 우편번호: 도로명 주소 검색 API 연동.
+- 알림 채널: SMS 외에 현지에서 흔히 쓰는 메신저 알림.
+- 개인정보 처리: 동의 문구, 보관 기간, 국외 이전 여부. 법무 판단 항목이다.
+
+목록이 생기면 순서를 정한다. 기준은 대개 세 가지다. 이게 없으면 열 수 없는가(법·계약상 필수), 임시 방편이 있는가(수작업, 기존 기능 재사용), 고객이 얼마나 자주 만나는가. 아래 그림은 갭 다섯 개를 이 기준으로 나누는 과정이다.
+
+<AlgoTrace
+  caption="갭을 출시 전, 임시 방편, 출시 후로 나눈다"
+  memoryLabel="출시 전에 반드시"
+  cells={["세금계산서", "간편결제", "주소 검색", "메신저 알림", "포인트 연동"]}
+  steps={[
+    { pointer: 0, memory: ["세금계산서"], caption: "법인 고객에게 필요하다면 빠질 수 없다. 대행 서비스로 붙이면 기간이 줄어든다." },
+    { pointer: 1, memory: ["세금계산서"], caption: "카드 결제로 열 수 있다. 간편결제는 시장 플래그를 꺼 둔 채 다음 단계로 미룬다." },
+    { pointer: 2, memory: ["세금계산서", "주소 검색"], caption: "주소를 손으로 치게 하면 배송 실패가 늘어난다. 모든 주문이 거치니 먼저 한다." },
+    { pointer: 3, memory: ["세금계산서", "주소 검색"], caption: "SMS로 대신할 수 있다. 출시 후로 미룬다." },
+    { pointer: 4, found: [0, 2], memory: ["세금계산서", "주소 검색"], caption: "있으면 좋지만 출시를 막지 않는다. 남은 두 개가 출시 범위다." },
+  ]}
+/>
+
+이 판단을 표 한 장으로 남기고, 임시 방편을 고른 항목에는 언제 없앨지를 같이 적는다. 수작업 임시 방편은 출시 첫 주에는 버티지만 주문이 늘면 사람이 병목이 된다. 갭 하나를 메우는 방법이 벤더 연동이라면 [벤더·레거시 시스템 연동](/posts/enterprise-system-integration)의 문제가 그대로 따라온다.
+
+## 여는 순서
+
+새 시장은 한 번에 다 열지 않는다. 흔한 순서는 이렇다.
+
+1. 내부 사용자: 직원 계정만 시장 플래그를 켠다. 실제 결제는 소액이나 취소 전제로 한다.
+2. 파일럿: 매장이나 지역 하나, 또는 초대한 고객만 연다. 현지 운영팀이 수작업 임시 방편을 실제로 돌려 본다.
+3. 부분 개방: 신규 가입이나 특정 상품군부터 연다. 지표를 본 뒤 넓힌다.
+4. 전체 개방: 임시 방편과 시장 플래그를 정리할 일정을 같이 잡는다.
+
+단계를 넘어갈지는 날짜가 아니라 숫자로 정한다. 결제 성공률, 주소 오류로 인한 배송 실패율, 현지 고객센터 문의 종류 같은 시장별 지표를 미리 정하고, 그 지표가 기존 시장과 같은 대시보드에서 시장 필터로 갈라 보이게 해 둔다. 각 단계 전에 하는 통합·인수 테스트는 [SIT와 UAT](/posts/sit-uat-testing), 실제로 여는 날 밤의 절차는 [컷오버와 하이퍼케어](/posts/release-cutover-hypercare)에서 이어진다.
+
+## 새 시장에서 처음 보는 증상들
+
+- 가격이 100배 작거나 크게 보인다: 최소 단위 변환 계수를 100으로 박은 코드를 찾는다. 통화마다 자릿수가 다르다.
+- 일별 숫자가 시장 담당자의 숫자와 매일 조금씩 다르다: 날짜를 UTC로 자르고 있다. 경계 시간대(한국이라면 0~9시)의 건을 비교해 본다.
+- 특정 고객만 가입이 안 된다: 이름·주소 검증 정규식, 필수 칸(state, middle name), 글자 수 제한을 본다.
+- 검색에서 분명히 있는 이름이 안 나온다: 유니코드 정규화(NFC·NFD)부터 확인한다. 문자열 길이를 찍어 보면 바로 보인다.
+- 정렬이 화면과 엑셀 내려받기에서 다르다: 앱의 `Intl.Collator`와 DB collation이 다르다.
+- 개인정보가 다른 리전에서 발견됐다: 에러 추적 도구, 로그 플랫폼, 백업 버킷의 리전부터 본다.
+
+## 미국이라는 가정을 찾아 설정으로 옮긴다
+
+새 시장을 여는 일은 새 기능을 만드는 일보다 숨은 가정을 찾는 일에 가깝다. 통화 자릿수, 날짜를 자르는 시간대, 이름과 주소의 모양, 한글 정규화와 정렬은 시장 설정과 검증된 라이브러리로 옮기고, 설정이 빠지면 서버가 뜨지 않게 한다. 현지에만 있는 요구는 목록으로 만들어 출시 전, 임시 방편, 출시 후로 나누고, 데이터 위치처럼 구조를 바꾸는 결정은 법무 판단을 받아 일찍 내린다.
+
+## 면접에서 나올 만한 질문
+
+### 이미 운영 중인 플랫폼을 새 나라에 열 때 가장 먼저 무엇을 하나요?
+
+코드에 박힌 시장 가정을 찾아 시장별 설정으로 빼는 일부터 한다. 통화, 시간대, 로캘, 주소·이름 형식, 세금 방식을 공통 기본값 위에 시장 값으로 덮고, 반드시 덮어야 하는 키는 서버 시작 시 검사한다. 그와 함께 현지에만 있는 요구를 갭 목록으로 만들어 출시 범위를 정한다.
+
+### 금액을 정수로 저장하는데 원화 가격이 100분의 1로 보였습니다. 원인은요?
+
+최소 단위로 바꾸는 계수를 100으로 고정한 코드 때문이다. USD는 소수 2자리지만 KRW는 0자리라, 원 단위 정수를 100으로 나누면 100분의 1이 된다. 금액은 최소 단위 정수와 통화 코드를 함께 저장하고, 자릿수는 통화에서 가져와야 한다. `Intl.NumberFormat`도 통화별 자릿수를 알고 있다.
+
+### 시간은 어떻게 저장하고, 날짜는 언제 정하나요?
+
+순간은 UTC로 저장하고, 날짜로 자르거나 화면에 보여 줄 때만 시장 시간대를 쓴다. UTC로 날짜를 자르면 한국 기준 0시~9시 주문이 전날로 잡힌다. 생일이나 배송 희망일처럼 달력의 날짜인 값은 시간대 없는 `DATE`로 저장해야 다른 시간대에서 읽어도 밀리지 않는다.
+
+### 한글 이름 검색이 어떤 데이터에서만 실패합니다. 무엇을 확인하나요?
+
+유니코드 정규화를 먼저 본다. 같은 글자도 완성형(NFC)과 자모 분리형(NFD)이 있어서, NFD로 저장된 이름은 NFC 검색어와 `includes`로 비교하면 못 찾는다. 저장과 검색 양쪽에서 NFC로 맞추고, 정렬은 코드 단위 비교 대신 `Intl.Collator`나 DB의 ICU collation을 쓴다.
+
+### 초성 검색은 어떻게 구현하나요?
+
+한글 음절은 유니코드에 초성·중성·종성 순서로 규칙적으로 놓여 있어서, 음절 번호에서 `0xAC00`을 빼고 588로 나눈 몫이 초성 순번이다. 검색어의 각 글자가 이름 글자와 같거나 그 초성과 같은지 연속 구간으로 비교한다. 데이터가 많으면 초성 문자열을 미리 계산해 색인해 둔다.
+
+### 데이터 레지던시 요구가 있으면 구조가 어떻게 바뀌나요?
+
+개인정보 원본은 시장 리전에 두고, 글로벌 시스템에는 가명 처리하거나 개인정보를 뺀 데이터만 보내는 구조가 흔하다. 어떤 요구가 적용되는지는 법무가 판단하고, 개발은 데이터 흐름도를 그려 그 판단을 돕는다. 놓치기 쉬운 곳은 로그 플랫폼, 에러 추적 도구, 백업처럼 기능이 아닌 부수 경로다.
+
+### 로컬 갭이 많을 때 출시 범위는 어떻게 정하나요?
+
+법이나 계약상 없으면 열 수 없는지, 임시 방편이 있는지, 고객이 얼마나 자주 만나는지로 나눈다. 필수인 것만 출시 전에 하고, 임시 방편이 있는 것은 시장 플래그를 꺼 둔 채 미루되 없앨 날짜를 같이 적는다. 그다음 내부 사용자, 파일럿, 부분 개방, 전체 순서로 열고 단계 이동은 시장별 지표로 정한다.

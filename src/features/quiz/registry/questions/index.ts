@@ -98,6 +98,7 @@ import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
+import { ENTERPRISE_SYSTEM_INTEGRATION } from "./enterprise-system-integration";
 import { ERROR_BUDGETS } from "./error-budgets";
 import { EVENT_DELEGATION } from "./event-delegation";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
@@ -133,6 +134,7 @@ import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
+import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRAPH_RAG } from "./graph-rag";
 import { GRPC } from "./grpc";
@@ -377,6 +379,7 @@ import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
+import { RELEASE_CUTOVER_HYPERCARE } from "./release-cutover-hypercare";
 import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
 import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
 import { RENDERING_SSR } from "./rendering-ssr";
@@ -464,6 +467,7 @@ import { SERVERLESS_ARCHITECTURE } from "./serverless-architecture";
 import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
+import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
 import { SPRING_ANIMATION } from "./spring-animation";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
@@ -637,6 +641,7 @@ export const QUESTION_SETS = [
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
+  ENTERPRISE_SYSTEM_INTEGRATION,
   ERROR_BUDGETS,
   EVENT_DELEGATION,
   EVENT_DRIVEN_ARCHITECTURE,
@@ -672,6 +677,7 @@ export const QUESTION_SETS = [
   GIT_UNDO,
   GITHUB_ACTIONS_DOCKER_ECR,
   GITOPS_ARGOCD_VS_FLUX,
+  GLOBAL_ROLLOUT_LOCALIZATION,
   GRAFANA_DASHBOARDS,
   GRAPH_RAG,
   GRPC,
@@ -916,6 +922,7 @@ export const QUESTION_SETS = [
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
   REDIS_REPLICATION_SENTINEL,
+  RELEASE_CUTOVER_HYPERCARE,
   RENDERING_CSR_SPA,
   RENDERING_SSG_ISR,
   RENDERING_SSR,
@@ -1003,6 +1010,7 @@ export const QUESTION_SETS = [
   SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
+  SIT_UAT_TESTING,
   SLI_SLO,
   SPRING_ANIMATION,
   SQL_AGGREGATION_PITFALLS,
