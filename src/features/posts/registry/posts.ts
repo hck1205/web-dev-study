@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "external-secrets",
+    title: "External Secrets Operator: 외부 저장소의 값을 Secret으로 옮기는 동안",
+    summary: "SecretStore·ClusterSecretStore·ExternalSecret이 나눠 맡는 일과 컨트롤러의 동기화 주기를 따라가며, refreshInterval과 앱이 새 값을 쓰는 시점의 차이, Secret의 주인과 삭제, 저장소 장애, 팀 간 권한 구멍을 다룬다. CSI 드라이버·Sealed Secrets·SOPS와 고르는 기준도 정리한다.",
+    topic: "programming/server-infra/kubernetes/config",
+    tags: ["Kubernetes", "Security", "DevOps", "AWS"],
+    date: "2026-10-22",
+    keywords: ["External Secrets Operator", "ExternalSecret", "ClusterSecretStore", "Sealed Secrets"],
+  },
+  {
+    slug: "cilium-ebpf",
+    title: "Cilium과 eBPF: 규칙 대신 커널 안의 프로그램과 맵",
+    summary: "검증기, 맵, XDP·tc 훅을 작은 eBPF 프로그램을 직접 커널에 올려 확인하고, 그 위에서 Cilium이 소켓 단계에서 Service를 풀어 kube-proxy를 대신하는 법, identity로 정책을 판정하는 법, Hubble로 흐름을 보는 법을 정리한다.",
+    topic: "programming/network/infrastructure",
+    tags: ["Kubernetes", "Network", "Linux", "Firewall", "Performance"],
+    date: "2026-10-22",
+    keywords: ["eBPF", "Cilium", "XDP", "Hubble"],
+  },
+  {
+    slug: "k8s-batch-kueue",
+    title: "Kueue와 배치 스케줄링: 대기열, 몫, 그리고 gang scheduling",
+    summary: "Pod를 하나씩 놓는 기본 스케줄러에서 두 학습 Job이 GPU를 반씩 잡고 멈추는 교착을 재현하고, Kueue가 Job을 멈춰 둔 채 ClusterQueue 몫과 cohort 빌리기·돌려받기로 받아들이는 과정을 실제 컨트롤러로 따라간다. PodGroup gang 정책과 JobSet까지 다룬다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "AI", "Distributed Systems"],
+    date: "2026-10-22",
+    keywords: ["Kueue", "ClusterQueue", "cohort", "JobSet"],
+  },
+  {
+    slug: "k8s-gpu-dra",
+    title: "GPU와 DRA: 쿠버네티스가 장치를 세고 나눠 주는 법",
+    summary: "디바이스 플러그인이 GPU를 nvidia.com/gpu 개수로 알리는 과정과 정수·오버커밋 금지 규칙, 테인트로 나눈 GPU 노드 풀, MIG와 time-slicing을 따라간다. 개수로는 말할 수 없는 조건을 ResourceSlice·DeviceClass·ResourceClaim으로 적는 DRA를 kwok 클러스터에서 직접 할당해 본다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "AI", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["Dynamic Resource Allocation", "ResourceClaim", "DeviceClass", "디바이스 플러그인", "MIG"],
+  },
+  {
     slug: "k8s-api-aggregation-schedulers",
     title: "API 집계와 커스텀 스케줄러: 쿠버네티스를 넓히는 두 자리",
     summary: "APIService로 API 서버 앞에 별도 서버를 붙이는 집계 API와, 스케줄링 프레임워크·프로필·두 번째 스케줄러로 배치 방식을 바꾸는 법, 그리고 워커를 묶어 배치하는 gang scheduling을 실습 클러스터에서 확인한다.",

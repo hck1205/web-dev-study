@@ -19,6 +19,7 @@ import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
+import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
@@ -82,6 +83,7 @@ import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
+import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
@@ -136,6 +138,7 @@ import { K8S_API_AGGREGATION_SCHEDULERS } from "./k8s-api-aggregation-schedulers
 import { K8S_API_OBJECTS } from "./k8s-api-objects";
 import { K8S_ARCHITECTURE } from "./k8s-architecture";
 import { K8S_AUDIT_LOGGING } from "./k8s-audit-logging";
+import { K8S_BATCH_KUEUE } from "./k8s-batch-kueue";
 import { K8S_CERTIFICATES_PKI } from "./k8s-certificates-pki";
 import { K8S_CLUSTER_UPGRADE } from "./k8s-cluster-upgrade";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
@@ -150,6 +153,7 @@ import { K8S_DEPLOYMENT } from "./k8s-deployment";
 import { K8S_ETCD_BACKUP } from "./k8s-etcd-backup";
 import { K8S_FEATURE_MATURITY } from "./k8s-feature-maturity";
 import { K8S_GATEWAY_API } from "./k8s-gateway-api";
+import { K8S_GPU_DRA } from "./k8s-gpu-dra";
 import { K8S_HPA } from "./k8s-hpa";
 import { K8S_IN_PLACE_RESIZE } from "./k8s-in-place-resize";
 import { K8S_JOB_CRONJOB } from "./k8s-job-cronjob";
@@ -384,6 +388,7 @@ export const QUESTION_SETS = [
   CDN_EDGE_ANYCAST,
   CHAOS_ENGINEERING,
   CI_CD_BASICS,
+  CILIUM_EBPF,
   CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
@@ -447,6 +452,7 @@ export const QUESTION_SETS = [
   EVENT_LOOP,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
+  EXTERNAL_SECRETS,
   FAILOVER,
   FEATURE_FLAGS,
   FRONTEND_BROWSER_CACHE,
@@ -501,6 +507,7 @@ export const QUESTION_SETS = [
   K8S_API_OBJECTS,
   K8S_ARCHITECTURE,
   K8S_AUDIT_LOGGING,
+  K8S_BATCH_KUEUE,
   K8S_CERTIFICATES_PKI,
   K8S_CLUSTER_UPGRADE,
   K8S_CNI_POD_NETWORK,
@@ -515,6 +522,7 @@ export const QUESTION_SETS = [
   K8S_ETCD_BACKUP,
   K8S_FEATURE_MATURITY,
   K8S_GATEWAY_API,
+  K8S_GPU_DRA,
   K8S_HPA,
   K8S_IN_PLACE_RESIZE,
   K8S_JOB_CRONJOB,

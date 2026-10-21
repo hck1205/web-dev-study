@@ -2,11 +2,92 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "external-secrets": {
+    "links": [
+      "k8s-secret",
+      "secrets-management",
+      "helm-values-secrets",
+      "k8s-configmap"
+    ],
+    "mentions": [
+      "kubernetes-ingress",
+      "k8s-cri-cni-csi",
+      "k8s-architecture",
+      "helm-basics",
+      "iam-basics",
+      "base64",
+      "local-k8s-kind-minikube",
+      "eks-cluster-basics",
+      "db-type-key-value"
+    ]
+  },
+  "cilium-ebpf": {
+    "links": [
+      "k8s-kube-proxy-modes",
+      "k8s-network-policy",
+      "service-mesh",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "iptables-nat",
+      "k8s-daemonset",
+      "linux-namespaces-cgroups",
+      "iptables-basics",
+      "k8s-coredns",
+      "packet-capture-tcpdump",
+      "db-type-key-value",
+      "sdn-vxlan-overlay",
+      "osi-in-practice",
+      "layer-ip-routing-icmp",
+      "https-tls",
+      "udp-and-quic",
+      "layer-mtu-fragmentation",
+      "dns"
+    ]
+  },
+  "k8s-batch-kueue": {
+    "links": [
+      "k8s-job-cronjob",
+      "k8s-api-aggregation-schedulers",
+      "k8s-gpu-dra"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "k8s-pod-resources",
+      "k8s-feature-maturity",
+      "k8s-node-maintenance",
+      "postgres-architecture",
+      "local-k8s-kind-minikube",
+      "dns",
+      "webhooks"
+    ]
+  },
+  "k8s-gpu-dra": {
+    "links": [
+      "k8s-pod-scheduling",
+      "k8s-pod-resources",
+      "k8s-batch-kueue"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-storageclass-snapshots",
+      "k8s-feature-maturity",
+      "k8s-daemonset",
+      "k8s-node-autoscaling-karpenter",
+      "k8s-configmap",
+      "api-versioning",
+      "local-k8s-kind-minikube",
+      "grpc",
+      "eks-cluster-basics"
+    ]
+  },
   "k8s-api-aggregation-schedulers": {
     "links": [
       "k8s-crd",
       "k8s-operators",
       "k8s-pod-scheduling",
+      "k8s-batch-kueue",
       "k8s-hpa",
       "k8s-namespace",
       "k8s-feature-maturity"
@@ -30,6 +111,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pv-pvc",
       "k8s-pod-resources",
       "eks-cluster-basics",
+      "k8s-gpu-dra",
       "k8s-crd",
       "k8s-api-aggregation-schedulers"
     ],
@@ -47,6 +129,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-multicontainer",
       "dockerfile-image-layers",
       "iptables-basics",
+      "cilium-ebpf",
       "sdn-vxlan-overlay",
       "osi-in-practice",
       "local-k8s-kind-minikube",
@@ -289,6 +372,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "cron-jobs",
       "batch-processing",
+      "k8s-batch-kueue",
       "k8s-pod-lifecycle",
       "k8s-pod-disruption-budget",
       "helm-release-lifecycle",
@@ -320,6 +404,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "k8s-statefulset",
       "k8s-job-cronjob",
+      "k8s-gpu-dra",
       "k8s-node-autoscaling-karpenter",
       "k8s-node-maintenance",
       "k8s-pod-troubleshooting",
@@ -331,6 +416,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deployment",
       "iptables-nat",
       "iptables-basics",
+      "cilium-ebpf",
       "local-k8s-kind-minikube",
       "eks-cluster-basics"
     ]
@@ -412,7 +498,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "iptables-nat",
       "k8s-service-types",
-      "k8s-cni-pod-network"
+      "k8s-cni-pod-network",
+      "cilium-ebpf"
     ],
     "mentions": [
       "k8s-network-policy",
@@ -860,6 +947,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "http-status-codes",
       "resilience-patterns",
+      "cilium-ebpf",
       "on-call"
     ]
   },
@@ -882,6 +970,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops",
       "k8s-cri-cni-csi",
       "helm-basics",
+      "cilium-ebpf",
       "db-type-embedded",
       "iac-basics",
       "k8s-pod-scheduling",
@@ -1033,6 +1122,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "health-checks",
       "db-type-key-value",
       "kubernetes-ingress",
+      "cilium-ebpf",
       "osi-in-practice"
     ]
   },
@@ -1275,6 +1365,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-large-files-secrets",
       "k8s-secret",
       "helm-values-secrets",
+      "external-secrets",
       "dockerfile-image-layers",
       "github-actions-docker-ecr",
       "iam-basics",
@@ -2487,6 +2578,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops"
     ],
     "mentions": [
+      "external-secrets",
       "github-actions-docker-ecr",
       "k8s-storageclass-snapshots",
       "vpc-subnets-route-tables",
@@ -2833,6 +2925,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "packet-capture-tcpdump",
       "kubernetes-ingress",
+      "cilium-ebpf",
       "retries",
       "tail-latency",
       "osi-in-practice",
@@ -3042,6 +3135,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network",
       "k8s-architecture",
       "helm-basics",
+      "cilium-ebpf",
       "local-k8s-kind-minikube",
       "db-type-key-value",
       "dns",
@@ -3085,6 +3179,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics",
       "k8s-architecture",
       "kubernetes-ingress",
+      "cilium-ebpf",
       "service-mesh",
       "local-k8s-kind-minikube",
       "iptables-nat",
@@ -3110,6 +3205,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
+      "cilium-ebpf",
       "network-flow-logs",
       "security-groups-nacl",
       "local-k8s-kind-minikube",
@@ -3142,6 +3238,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics",
       "dns",
       "what-happens-google-com",
+      "cilium-ebpf",
       "grpc",
       "layer-ip-routing-icmp",
       "udp-and-quic",
@@ -3324,6 +3421,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "kubectl-apply-ssa",
+      "external-secrets",
       "k8s-cri-cni-csi",
       "grpc",
       "k8s-architecture",
@@ -3743,6 +3841,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
+      "cilium-ebpf",
       "security-groups-nacl",
       "ipv6-basics",
       "layer-ip-routing-icmp",
@@ -4028,6 +4127,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops"
     ],
     "mentions": [
+      "external-secrets",
       "local-k8s-kind-minikube",
       "eks-cluster-basics",
       "db-type-key-value"
@@ -5908,6 +6008,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "packet-capture-tcpdump",
       "proxy-reverse-proxy",
+      "cilium-ebpf",
       "http-versions",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
@@ -6346,6 +6447,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",
+      "cilium-ebpf",
       "token-login",
       "redis-basics",
       "what-happens-google-com",
