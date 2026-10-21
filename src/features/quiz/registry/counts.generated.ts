@@ -300,6 +300,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "monolith-architecture": 7,
   "multi-region": 7,
   "mvc-pattern": 8,
+  "mysql-innodb-basics": 7,
+  "mysql-replication-online-ddl": 7,
   "n-plus-one-queries": 7,
   "nat-traversal": 7,
   "network-config-cicd": 7,

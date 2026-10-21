@@ -297,6 +297,8 @@ import { MONITORING_BASICS } from "./monitoring-basics";
 import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { MYSQL_INNODB_BASICS } from "./mysql-innodb-basics";
+import { MYSQL_REPLICATION_ONLINE_DDL } from "./mysql-replication-online-ddl";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
 import { NAT_TRAVERSAL } from "./nat-traversal";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
@@ -842,6 +844,8 @@ export const QUESTION_SETS = [
   MONOLITH_ARCHITECTURE,
   MULTI_REGION,
   MVC_PATTERN,
+  MYSQL_INNODB_BASICS,
+  MYSQL_REPLICATION_ONLINE_DDL,
   N_PLUS_ONE_QUERIES,
   NAT_TRAVERSAL,
   NETWORK_CONFIG_CICD,

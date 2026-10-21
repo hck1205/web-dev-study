@@ -2,6 +2,36 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "mysql-replication-online-ddl": {
+    "links": [
+      "mysql-innodb-basics",
+      "db-replication-sharding",
+      "zero-downtime-migrations"
+    ],
+    "mentions": [
+      "db-migration-tools",
+      "sql-batch-timeout-pool",
+      "sql-basics"
+    ]
+  },
+  "mysql-innodb-basics": {
+    "links": [
+      "postgres-architecture",
+      "db-transaction-isolation",
+      "db-index",
+      "mysql-replication-online-ddl",
+      "postgres-mvcc-vacuum",
+      "db-locking-deadlock",
+      "deadlocks",
+      "pessimistic-locking"
+    ],
+    "mentions": [
+      "sql-basics",
+      "distributed-transactions-2pc",
+      "sd-kv-store-write-read-path",
+      "postgres-operations"
+    ]
+  },
   "java-jvm-memory-gc": {
     "links": [
       "garbage-collection",
@@ -1574,6 +1604,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-key-value",
+      "mysql-innodb-basics",
       "sd-start-single-server",
       "db-type-relational",
       "db-replication-sharding",
@@ -1888,6 +1919,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "leader-election",
+      "mysql-replication-online-ddl",
       "postgres-operations",
       "redis-basics",
       "postgres-architecture"
@@ -2309,6 +2341,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "postgres-advanced-sql",
       "db-architecture-by-scale",
+      "mysql-innodb-basics",
       "sd-start-single-server",
       "resilience-patterns",
       "postgres-getting-started",
@@ -5333,6 +5366,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "mysql-innodb-basics",
       "linux-files-permissions",
       "optimistic-locking",
       "vpc-basics",
@@ -5661,6 +5695,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
+      "mysql-replication-online-ddl",
+      "mysql-innodb-basics",
       "db-replication-sharding",
       "sql-basics"
     ]
@@ -6186,6 +6222,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "consistency-models",
       "sd-kv-store-versioning",
       "sql-batch-timeout-pool",
+      "mysql-replication-online-ddl",
       "postgres-architecture",
       "dns"
     ]
@@ -7652,6 +7689,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "zero-downtime-migrations",
       "db-architecture-by-scale",
+      "mysql-innodb-basics",
       "sql-batch-timeout-pool",
       "db-transaction-isolation",
       "postgres-getting-started"
@@ -7672,6 +7710,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sql-basics",
       "mongodb-document-model",
+      "mysql-innodb-basics",
       "redis-basics",
       "local-k8s-kind-minikube",
       "postgres-getting-started"
@@ -8541,6 +8580,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture",
       "postgres-reporting-sql",
       "db-index",
+      "mysql-innodb-basics",
       "db-sharding",
       "db-index-design",
       "db-types-overview",
@@ -8556,6 +8596,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-basics",
       "saga-pattern",
+      "mysql-innodb-basics",
       "event-driven-architecture",
       "distributed-transactions-2pc",
       "sql-batch-timeout-pool",
@@ -8587,6 +8628,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rest-api-design",
+      "mysql-innodb-basics",
       "loading-patterns",
       "db-index-design",
       "sql-subqueries-exists-lateral",
@@ -8626,6 +8668,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding"
     ],
     "mentions": [
+      "mysql-innodb-basics",
       "sd-start-single-server",
       "sd-mq-storage-partitions"
     ]
@@ -8639,6 +8682,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-mvcc-vacuum",
       "db-migration-tools",
+      "mysql-replication-online-ddl",
+      "mysql-innodb-basics",
       "db-replication-sharding",
       "sql-basics"
     ]
@@ -8946,6 +8991,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-reporting-sql",
       "db-sharding",
+      "mysql-innodb-basics",
       "kafka-basics",
       "db-replication-sharding",
       "acid-transactions",
@@ -8983,6 +9029,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-insert-update-delete",
+      "mysql-innodb-basics",
       "sd-start-single-server",
       "sqld-window-functions",
       "api-versioning",
@@ -9056,6 +9103,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-time-series",
+      "mysql-innodb-basics",
       "db-type-key-value",
       "sqld-top-n-hierarchical-pivot",
       "scaling-horizontal-vertical",
@@ -9136,6 +9184,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
       "sd-mq-storage-partitions",
+      "mysql-innodb-basics",
       "db-type-relational",
       "acid-transactions"
     ]
@@ -9150,6 +9199,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations"
     ],
     "mentions": [
+      "mysql-innodb-basics",
       "db-index-design",
       "distributed-transactions-2pc"
     ]
@@ -9231,6 +9281,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-migration-tools",
+      "mysql-innodb-basics",
       "db-type-relational"
     ]
   },
@@ -9503,6 +9554,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "mysql-innodb-basics",
       "db-index-design",
       "sqld-entity-attribute-relationship"
     ]
@@ -9513,7 +9565,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "mysql-innodb-basics",
       "sql-basics",
+      "mysql-replication-online-ddl",
       "bloom-filter",
       "acid-transactions",
       "postgres-getting-started"
@@ -9526,12 +9580,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "sql-query-tuning",
       "caching-strategies",
+      "mysql-replication-online-ddl",
       "failover"
     ],
     "mentions": [
       "db-consistency-cap",
       "prometheus-basics",
       "db-architecture-by-scale",
+      "mysql-innodb-basics",
       "sd-start-single-server",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
@@ -9591,6 +9647,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "mysql-replication-online-ddl",
+      "mysql-innodb-basics",
       "db-sharding",
       "db-transaction-isolation",
       "sql-basics"
@@ -9737,6 +9795,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational",
       "kafka-basics",
       "db-transaction-isolation",
+      "mysql-innodb-basics",
       "acid-transactions",
       "dns"
     ]
@@ -9756,6 +9815,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cache-write-policies",
       "bloom-filter",
       "db-type-columnar-olap",
+      "mysql-replication-online-ddl",
       "sd-start-single-server",
       "js-memoization",
       "cold-starts",

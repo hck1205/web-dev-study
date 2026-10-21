@@ -5,6 +5,26 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "mysql-replication-online-ddl",
+    title: "MySQL 복제와 온라인 DDL: binlog, GTID, 반동기 복제, 메타데이터 잠금",
+    summary: "프라이머리에서 9초에 끝난 ALTER가 레플리카를 17초 뒤처지게 만든 장면을 서버 두 대로 재현하고, binlog 형식, 받는 스레드와 적용 스레드, GTID와 errant 트랜잭션, 반동기 복제의 timeout 전환, Seconds_Behind_Source의 함정, GTID로 기다리는 읽기를 실제 출력으로 본다. INSTANT·INPLACE·COPY의 차이, 메타데이터 잠금 줄, gh-ost와 pt-osc도 다룬다.",
+    topic: "programming/database/mysql",
+    tags: ["Database", "MySQL", "Distributed Systems", "Performance", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["binlog", "GTID", "반동기 복제", "온라인 DDL"],
+    companies: ["tesla"],
+  },
+  {
+    slug: "mysql-innodb-basics",
+    title: "MySQL InnoDB 기초: 클러스터드 인덱스, 버퍼 풀, redo·undo, 넥스트 키 잠금",
+    summary: "다른 이메일 두 개로 가입하다 교착 상태가 나는 장면에서 출발해, InnoDB가 기본 키 B-tree로 행을 쌓고 버퍼 풀의 old 구역으로 핫 페이지를 지키며 redo와 undo로 커밋과 옛 버전을 다루는 과정을 MySQL 8.0 실제 출력으로 따라간다. 간격 잠금이 어디에 걸리는지와 잠금 대기를 좁히는 순서, PostgreSQL과의 차이도 정리한다.",
+    topic: "programming/database/mysql",
+    tags: ["Database", "MySQL", "Transaction", "Concurrency", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["InnoDB", "버퍼 풀", "넥스트 키 잠금", "undo 로그"],
+    companies: ["tesla"],
+  },
+  {
     slug: "java-jvm-memory-gc",
     title: "JVM 메모리와 스레드: 힙 밖 메모리, OOM 다섯 가지, 스레드 풀과 가상 스레드",
     summary: "-Xmx를 한도 바로 아래로 줬는데 로그 없이 OOMKilled가 되는 장면을 재현하고, Native Memory Tracking으로 힙 밖 메모리를 읽는다. OOM 메시지별 원인, 컨테이너에서 MaxRAMPercentage로 힙 몫 정하기, 스레드 풀 고갈과 RUNNABLE로 보이는 대기, Java 21 가상 스레드와 pinning, jcmd로 멈춘 서비스를 뜨는 순서를 다룬다.",
