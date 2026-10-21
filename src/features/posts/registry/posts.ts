@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "serverless-architecture",
+    title: "서버리스 아키텍처: 트리거가 부르는 방식과 실패의 행방",
+    summary: "서버리스 구조를 트리거 중심으로 본다. 동기·비동기·폴링 호출의 재시도, 배치 부분 실패, 재귀 고리, 팬아웃과 워크플로, 비용 계산을 다룬다.",
+    topic: "programming/backend/architecture",
+    tags: ["Architecture", "AWS", "Cloud", "Backend", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["서버리스 아키텍처", "ReportBatchItemFailures", "Step Functions", "EventBridge"],
+  },
+  {
+    slug: "transactional-outbox",
+    title: "아웃박스 릴레이 운영: 깨우기, 순서, 실패, 청소",
+    summary: "아웃박스의 원리 다음 단계로 릴레이를 운영할 때 고를 것들을 본다. NOTIFY로 깨우기, 주문마다 맨 앞 사건만 보내 순서 지키기, 실패하는 사건, 파티션 청소, 외부 API로 보내기를 다룬다.",
+    topic: "programming/backend/architecture",
+    tags: ["Architecture", "Messaging", "Backend", "PostgreSQL", "Transaction"],
+    date: "2026-10-22",
+    keywords: ["아웃박스 릴레이", "이중 쓰기"],
+  },
+  {
+    slug: "event-sourcing",
+    title: "이벤트 소싱 구현: decide와 evolve, 스냅숏, 업캐스팅, 크립토 셰딩",
+    summary: "상태 대신 사건을 원본으로 저장할 때 실제로 짜야 하는 것들을 본다. 명령 처리와 동시성, 지난 시점 조회, 긴 스트림, 바뀌는 사건 형식, 개인정보 삭제까지 다룬다.",
+    topic: "programming/backend/architecture",
+    tags: ["Architecture", "System Design", "Backend", "PostgreSQL", "TypeScript"],
+    date: "2026-10-22",
+    keywords: ["업캐스팅", "크립토 셰딩", "이벤트 저장소"],
+  },
+  {
+    slug: "cqrs",
+    title: "CQRS: 바꾸는 모델과 읽는 모델을 나누는 이유",
+    summary: "느린 목록 화면 하나를 계기로 명령과 조회를 다른 모델로 나눈다. 프로젝터와 체크포인트로 읽기 모델을 채우고, 방금 바꾼 게 안 보이는 지연과 중복 반영을 다룬다.",
+    topic: "programming/backend/architecture",
+    tags: ["Architecture", "System Design", "Backend", "PostgreSQL", "React"],
+    date: "2026-10-22",
+    keywords: ["CQRS", "읽기 모델", "명령 처리기"],
+  },
+  {
     slug: "consistency-models",
     title: "일관성 모델: 선형화, 순차, 인과를 실행 기록으로 판정하기",
     summary: "답장이 질문보다 먼저 보이는 복제본 시뮬레이션에서 출발해, 일관성 모델을 허용되는 히스토리의 규칙으로 정의하고 작은 검사기로 선형화와 순차 일관성을 판정한다. 쿼럼을 맞춰도 선형화가 깨지는 장면과 동기 읽기 복구, 벡터 시계로 인과 순서를 지키는 법, 직렬화 가능성과의 차이를 다룬다.",

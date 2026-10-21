@@ -2,6 +2,87 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "serverless-architecture": {
+    "links": [
+      "serverless-limits",
+      "cold-starts",
+      "pub-sub",
+      "transactional-outbox",
+      "saga-pattern",
+      "cloud-cost-optimization",
+      "idempotency-key",
+      "nextjs-static-dynamic-rendering"
+    ],
+    "mentions": [
+      "dead-letter-queue",
+      "realtime-communication",
+      "message-queue-basics",
+      "db-type-key-value",
+      "message-delivery-semantics",
+      "kafka-basics",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "transactional-outbox": {
+    "links": [
+      "db-architecture-by-scale",
+      "saga-pattern",
+      "event-driven-architecture",
+      "message-delivery-semantics",
+      "postgres-functions-triggers",
+      "dead-letter-queue",
+      "idempotency-key",
+      "distributed-transactions-2pc",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "postgres-reporting-sql",
+      "microservices",
+      "db-index-design",
+      "resilience-patterns",
+      "kafka-basics",
+      "db-replication-sharding",
+      "http-methods",
+      "webhooks"
+    ]
+  },
+  "event-sourcing": {
+    "links": [
+      "event-driven-architecture",
+      "cqrs",
+      "transactional-outbox",
+      "schema-versioning"
+    ],
+    "mentions": [
+      "postgres-architecture"
+    ]
+  },
+  "cqrs": {
+    "links": [
+      "event-sourcing",
+      "transactional-outbox",
+      "event-driven-architecture",
+      "db-replication-sharding",
+      "postgres-advanced-sql",
+      "optimistic-locking",
+      "eventual-consistency",
+      "client-data-cache",
+      "message-delivery-semantics"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "postgres-reporting-sql",
+      "db-locking-deadlock",
+      "sql-insert-update-delete",
+      "postgres-architecture",
+      "redis-basics",
+      "resilience-patterns",
+      "db-modeling-normalization",
+      "http-methods"
+    ]
+  },
   "consistency-models": {
     "links": [
       "db-consistency-cap",
@@ -278,7 +359,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "monolith-architecture",
       "layered-architecture",
-      "postgres-roles-security"
+      "postgres-roles-security",
+      "transactional-outbox",
+      "cqrs"
     ],
     "mentions": [
       "rabbitmq-basics",
@@ -1239,6 +1322,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-in-place-resize"
     ],
     "mentions": [
+      "serverless-architecture",
       "k8s-pod-basics",
       "k8s-daemonset",
       "k8s-api-objects",
@@ -1833,6 +1917,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs"
     ],
     "mentions": [
+      "serverless-architecture",
       "k8s-node-autoscaling-karpenter",
       "terraform-basics",
       "db-type-key-value",
@@ -1856,6 +1941,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "serverless-architecture",
       "db-architecture-by-scale",
       "db-type-key-value",
       "rest-api-design",
@@ -1874,6 +1960,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cloud-cost-optimization"
     ],
     "mentions": [
+      "serverless-architecture",
       "https-tls",
       "k8s-deploy-pipeline-eks",
       "docker-container-basics",
@@ -2055,6 +2142,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-rbac"
     ],
     "mentions": [
+      "serverless-architecture",
       "http-status-codes"
     ]
   },
@@ -2515,6 +2603,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series"
     ],
     "mentions": [
+      "event-sourcing",
       "http-status-codes",
       "grpc"
     ]
@@ -2608,6 +2697,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "rest-api-design",
+      "event-sourcing",
       "dead-letter-queue"
     ]
   },
@@ -3161,6 +3251,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-state"
     ],
     "mentions": [
+      "cqrs",
       "design-patterns-overview"
     ]
   },
@@ -3388,6 +3479,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "operational-transform",
       "redis-basics",
       "microservices",
+      "cqrs",
       "crdt",
       "js-closures"
     ]
@@ -3656,6 +3748,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "batch-processing"
     ],
     "mentions": [
+      "transactional-outbox",
       "db-transaction-isolation",
       "resilience-patterns",
       "dead-letter-queue",
@@ -3698,6 +3791,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pub-sub",
       "saga-pattern",
       "optimistic-locking",
+      "event-sourcing",
+      "cqrs",
       "db-replication-sharding",
       "message-delivery-semantics",
       "schema-versioning",
@@ -3741,6 +3836,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key"
     ],
     "mentions": [
+      "serverless-architecture",
       "postgres-advanced-sql",
       "db-architecture-by-scale",
       "db-type-columnar-olap",
@@ -4092,6 +4188,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "transactional-outbox",
       "autoscaling",
       "db-index-design",
       "resilience-patterns",
@@ -5457,6 +5554,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "distributed-transactions-2pc",
+      "transactional-outbox",
+      "cqrs",
       "scaling-horizontal-vertical",
       "redis-basics",
       "high-availability"
@@ -6362,6 +6461,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
+      "transactional-outbox",
       "rabbitmq-basics",
       "db-type-key-value",
       "message-delivery-semantics",
@@ -7026,6 +7126,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "mongodb-document-model",
       "loading-patterns",
+      "transactional-outbox",
       "kafka-basics",
       "db-modeling-normalization"
     ]
@@ -7083,6 +7184,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "grpc",
       "modular-monolith",
+      "serverless-architecture",
       "observability-basics",
       "db-type-columnar-olap",
       "rabbitmq-basics",
@@ -7093,7 +7195,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index-design",
       "http-versions",
       "js-memory-leak",
+      "transactional-outbox",
       "kafka-basics",
+      "cqrs",
       "http-methods",
       "on-call"
     ]

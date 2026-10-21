@@ -34,6 +34,7 @@ import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { COUNT_MIN_SKETCH } from "./count-min-sketch";
+import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
@@ -84,6 +85,7 @@ import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { ERROR_BUDGETS } from "./error-budgets";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
+import { EVENT_SOURCING } from "./event-sourcing";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { EXTERNAL_SECRETS } from "./external-secrets";
@@ -340,6 +342,7 @@ import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SEMANTIC_VERSIONING } from "./semantic-versioning";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
+import { SERVERLESS_ARCHITECTURE } from "./serverless-architecture";
 import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
@@ -380,6 +383,7 @@ import { THREAD_SAFETY } from "./thread-safety";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
+import { TRANSACTIONAL_OUTBOX } from "./transactional-outbox";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
@@ -436,6 +440,7 @@ export const QUESTION_SETS = [
   CORE_WEB_VITALS,
   CORS,
   COUNT_MIN_SKETCH,
+  CQRS,
   CRDT,
   CRON_JOBS,
   CSRF,
@@ -486,6 +491,7 @@ export const QUESTION_SETS = [
   ERROR_BUDGETS,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
+  EVENT_SOURCING,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
   EXTERNAL_SECRETS,
@@ -742,6 +748,7 @@ export const QUESTION_SETS = [
   SECURITY_GROUPS_NACL,
   SEMANTIC_VERSIONING,
   SERVER_SENT_EVENTS,
+  SERVERLESS_ARCHITECTURE,
   SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
@@ -782,6 +789,7 @@ export const QUESTION_SETS = [
   TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
+  TRANSACTIONAL_OUTBOX,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
