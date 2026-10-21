@@ -8,7 +8,12 @@ export const TOPICS: Topic[] = [
     label: "Programming",
     description: "개발과 컴퓨터 과학 전반",
     children: [
-      { id: "ai", label: "AI", description: "머신러닝, LLM, 에이전트" },
+      {
+        id: "ai",
+        label: "AI",
+        description: "머신러닝, LLM, 에이전트",
+        children: [{ id: "rag", label: "RAG", description: "검색 증강 생성: 기본 RAG, 검색 품질, GraphRAG, 에이전틱 RAG" }],
+      },
       {
         id: "algorithms",
         label: "Algorithms",
