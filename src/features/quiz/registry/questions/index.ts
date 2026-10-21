@@ -111,6 +111,7 @@ import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
 import { HYDRATION } from "./hydration";
 import { HYPERLOGLOG } from "./hyperloglog";
+import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
 import { IPTABLES_BASICS } from "./iptables-basics";
@@ -119,6 +120,7 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
+import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_COREDNS } from "./k8s-coredns";
@@ -251,6 +253,7 @@ import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
+import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
 import { SERVICE_DISCOVERY } from "./service-discovery";
@@ -420,6 +423,7 @@ export const QUESTION_SETS = [
   HTTPS_TLS,
   HYDRATION,
   HYPERLOGLOG,
+  IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
   IPTABLES_BASICS,
@@ -428,6 +432,7 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
+  JWT_KEY_ROTATION,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
   K8S_COREDNS,
@@ -560,6 +565,7 @@ export const QUESTION_SETS = [
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
   SDN_VXLAN_OVERLAY,
+  SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
   SERVER_SENT_EVENTS,
   SERVICE_DISCOVERY,

@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "jwt-key-rotation",
+    title: "JWT 서명 키 교체: kid, JWKS, 그리고 검증자의 캐시",
+    summary: "키를 바꾼 직후 401이 쏟아진 이유를 jose로 재현하고, 게시·서명 전환·퇴역으로 키를 겹쳐 두는 교체 순서, 키가 샜을 때의 비상 교체, 교체와 회수의 차이, HS256 교체가 어려운 이유를 다룬다.",
+    topic: "programming/backend/auth",
+    tags: ["JWT", "Security", "Authentication", "Node.js", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["JWKS", "kid 헤더", "서명 키 교체", "JWKS 캐시"],
+  },
+  {
+    slug: "iam-basics",
+    title: "IAM 기본: 거부가 이기는 정책 판정과 역할 빌리기",
+    summary: "정책에 Allow가 있는데도 AccessDenied가 나는 장면에서 시작해 주체와 정책의 겹, 명시적 거부·허락·암묵적 거부 순서, AssumeRole과 STS 임시 자격 증명, RBAC와 ABAC, AccessDenied를 좁혀 가는 순서를 다룬다.",
+    topic: "programming/security",
+    tags: ["Security", "AWS", "Cloud", "Authorization", "DevOps"],
+    date: "2026-10-21",
+    keywords: ["IAM 정책", "AssumeRole", "권한 경계", "ABAC"],
+  },
+  {
+    slug: "secrets-management",
+    title: "비밀 관리: 비밀 값은 어디로 새고, 어떻게 짧게 빌려 쓰나",
+    summary: "지운 커밋, 환경 변수, CI 로그, 크래시 리포트처럼 비밀 값이 새는 길을 직접 열어 보고, Vault의 동적 비밀과 lease, AWS Secrets Manager, SOPS가 각각 무엇을 막는지 정리한다.",
+    topic: "programming/security",
+    tags: ["Security", "DevOps", "Git", "PostgreSQL", "Linux"],
+    date: "2026-10-21",
+    keywords: ["gitleaks", "동적 비밀", "HashiCorp Vault", "secret zero"],
+  },
+  {
     slug: "health-checks",
     title: "헬스 체크 설계: 얕은 검사, 깊은 검사, 그리고 연쇄 장애",
     summary: "공유 Redis를 확인하는 깊은 검사 때문에 HAProxy 뒤의 서버 세 대가 함께 빠지는 장면을 재현하고, 얕은 검사와 요청 단위 실패로 장애를 줄이는 법, 검사 부하와 타임아웃, 뜰 때 하는 검사, /livez·/readyz 설계를 다룬다.",

@@ -1,0 +1,653 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("secrets-management");
+
+결제사에서 메일이 왔다. 우리 API 키로 낯선 IP에서 요청이 들어오고 있다는 내용이다. 저장소를 뒤져 보니 `.env`는 `.gitignore`에 들어 있고 작업 트리에도 없다. 그런데 석 달 전 커밋 하나가 `.env`를 올렸다가 바로 다음 커밋에서 지웠다. 그 사이에 저장소는 외주사에 한 번 공유됐다.
+
+비밀 값은 지웠다고 사라지지 않는다. 한 번 복사된 곳마다 남는다. git 히스토리, CI 로그, 이미지 레이어, 프로세스의 환경 변수, 크래시 리포트까지 비밀 값이 지나가는 길은 생각보다 많다. 이 글은 그 길을 하나씩 직접 열어 보고, 비밀 값을 한곳에 모아 짧게 빌려 쓰게 하는 비밀 저장소(Vault, AWS Secrets Manager)와 git에 암호문으로 두는 SOPS가 각각 어떤 문제를 푸는지 정리한다.
+
+실습은 Ubuntu 24.04 컨테이너에서 gitleaks 8.28.0, HashiCorp Vault 1.20.4(dev 모드), PostgreSQL 16, SOPS 3.10.2와 age 1.1.1로 했다. AWS 계정은 없어서 AWS CLI 출력은 실제 형식을 따른 예시이고, 그때마다 예시라고 적는다. 이미 올라간 값을 히스토리에서 지우는 절차는 [커밋에 들어가면 안 되는 것](/posts/git-large-files-secrets#비밀-값이-든-env를-커밋했다)에, 쿠버네티스 Secret 객체가 etcd에 어떻게 저장되는지는 [Secret 글](/posts/k8s-secret)에, Helm values를 SOPS로 다루는 방법은 [values와 비밀 값](/posts/helm-values-secrets)에 있다. 외부 저장소의 값을 클러스터 Secret으로 옮겨 주는 도구는 [External Secrets 글](/posts/external-secrets)에서 따로 본다.
+
+## 비밀 값이 지나가는 길
+
+API 키 하나가 개발자 노트북에서 운영 서버까지 가는 동안 몇 군데에 사본이 생기는지 따라가 보자. 아래 그림에서 다음을 누르면 사본이 생기는 지점이 차례로 보인다.
+
+<NetworkTopology
+  caption="키 하나가 지나가며 남기는 사본"
+  width={400}
+  height={200}
+  nodes={[
+    { id: "laptop", label: "노트북", sub: ".env", x: 60, y: 50, icon: "client" },
+    { id: "git", label: "git 원격", sub: "히스토리", x: 200, y: 50, icon: "server" },
+    { id: "ci", label: "CI 러너", sub: "잡 로그", x: 340, y: 50, icon: "gateway" },
+    { id: "reg", label: "레지스트리", sub: "이미지 레이어", x: 340, y: 150, icon: "db" },
+    { id: "app", label: "앱 서버", sub: "환경 변수", x: 200, y: 150, icon: "server" },
+    { id: "logs", label: "로그·리포트", sub: "크래시 덤프", x: 60, y: 150, icon: "db" },
+  ]}
+  links={[
+    { from: "laptop", to: "git" },
+    { from: "git", to: "ci" },
+    { from: "ci", to: "reg" },
+    { from: "reg", to: "app" },
+    { from: "app", to: "logs" },
+  ]}
+  steps={[
+    { path: ["laptop", "git"], packet: ".env", title: "커밋 한 번이면 영원히 남는다", detail: "다음 커밋에서 지워도 그 커밋의 트리에 파일이 그대로 있다. clone한 모든 사람이 히스토리째 받아 간다." },
+    { path: ["git", "ci"], packet: "token", title: "CI가 값을 받아 쓴다", detail: "CI 설정에 넣은 비밀 값은 잡이 돌 때 환경 변수로 들어온다. 스크립트가 set -x로 명령을 찍으면 로그에 값이 남는다." },
+    { path: ["ci", "reg"], packet: "layer", title: "빌드가 이미지에 굽는다", detail: "ARG나 COPY로 넣은 값은 레이어에 남는다. 다음 줄에서 지워도 아래 레이어를 꺼내면 보인다." },
+    { path: ["reg", "app"], packet: "env", title: "실행 중에는 환경 변수로 산다", detail: "같은 사용자나 root는 /proc/<pid>/environ으로 읽을 수 있다. 명령줄 인자로 넘겼다면 다른 사용자도 ps로 본다." },
+    { path: ["app", "logs"], packet: "dump", title: "죽을 때 덤프에 실린다", detail: "진단 리포트나 에러 추적 도구는 환경 변수를 통째로 담기도 한다. 그 파일은 비밀 저장소보다 훨씬 느슨하게 관리된다." },
+  ]}
+/>
+
+이 길에서 비밀 값을 지키는 방법은 크게 두 가지다. 사본이 생기는 지점마다 막거나(스캔, 마스킹, 빌드 시크릿), 사본이 생겨도 금방 쓸모없어지게 만든다(짧은 수명, 자동 교체). 앞쪽은 각 지점에서 하는 일이고, 뒤쪽이 비밀 저장소가 하는 일이다. 순서대로 본다.
+
+## 지운 커밋에도 남아 있다
+
+처음 장면을 그대로 만들었다. `.env`를 커밋하고, 다음 커밋에서 추적을 끊고 `.gitignore`에 넣었다.
+
+```bash
+# 커밋 목록
+git log --oneline
+# 작업 트리에는 .env가 없다
+ls -a
+# 그 문자열이 생기거나 사라진 커밋을 찾는다
+git log --all --oneline -S AWS_SECRET_ACCESS_KEY
+```
+
+```text
+dbc719c remove .env
+6021aa0 add config
+011faa9 init
+.
+..
+.git
+.gitignore
+app.js
+dbc719c remove .env
+6021aa0 add config
+```
+
+`-S`는 그 문자열의 개수가 바뀐 커밋을 찾는다. 들어간 커밋과 빠진 커밋 둘이 나온다. 값 자체는 `git log -p`로 바로 보인다.
+
+```bash
+# 해당 커밋의 변경 내용을 그대로 출력한다
+git show --format= 6021aa0 -- .env
+```
+
+```text
+diff --git a/.env b/.env
+new file mode 100644
+index 0000000..89c4e0f
+--- /dev/null
++++ b/.env
+@@ -0,0 +1,4 @@
++DB_HOST=db.internal
++AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
++AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
++PAYMENT_API_KEY=pk9Qz7RmT2xVb4Ne8LcW1sHd6Jf3Ka0Y
+```
+
+AWS 키는 AWS 문서에 나오는 예시 값이고, 결제 키는 지어낸 문자열이다. 이걸 사람이 매번 `git log -p`로 찾을 수는 없으니 스캐너를 쓴다. gitleaks는 규칙(정규식과 무작위성 기준) 수백 개로 히스토리 전체를 훑는다.
+
+```bash
+# 현재 작업 트리의 파일만 검사
+gitleaks dir --no-banner .
+# 모든 커밋의 변경 내용을 검사, 값은 가려서 출력
+gitleaks git --no-banner --redact -v .
+echo "exit=$?"
+```
+
+```text
+8:28PM INF scanned ~23 bytes (23 bytes) in 2.41ms
+8:28PM INF no leaks found
+Finding:     PAYMENT_API_KEY=REDACTED
+Secret:      REDACTED
+RuleID:      generic-api-key
+Entropy:     5.000000
+File:        .env
+Line:        4
+Commit:      6021aa02e030593deedb4e5f72070677a8b0a30d
+Author:      dev
+Email:       dev@example.com
+Date:        2026-10-19T01:05:00Z
+Fingerprint: 6021aa02e030593deedb4e5f72070677a8b0a30d:.env:generic-api-key:4
+
+8:28PM INF 3 commits scanned.
+8:28PM INF scanned ~194 bytes (194 bytes) in 331ms
+8:28PM WRN leaks found: 1
+exit=1
+```
+
+볼 곳이 셋이다. 작업 트리 검사(`dir`)는 깨끗하다고 나온다. "지금 파일에 없으니 괜찮다"는 판단이 틀린 이유가 이 차이다. 히스토리 검사(`git`)는 커밋 해시까지 짚어 준다. 그리고 AWS 키 두 줄은 잡히지 않았다. AWS 문서의 예시 키(`...EXAMPLE`)는 gitleaks가 일부러 건너뛴다. 진짜 형식의 키였다면 `aws-access-token` 규칙에 걸렸을 것이다. 찾은 게 있으면 종료 코드가 1이라 CI에서 그대로 빌드를 멈출 수 있다.
+
+같은 검사를 커밋하기 전에 걸 수도 있다. 스테이징한 내용만 검사하는 모드다. GitHub 개인 토큰 형식의 문자열(`const token = "ghp_..."`)을 넣은 파일을 스테이징하고 돌렸다.
+
+```bash
+# 스테이징 영역만 검사한다 (pre-commit 훅에 넣는 형태)
+gitleaks git --pre-commit --staged --no-banner --redact -v .
+```
+
+```text
+Finding:     REDACTED
+Secret:      REDACTED
+RuleID:      github-pat
+Entropy:     4.871928
+File:        client.js
+Line:        1
+Fingerprint: client.js:github-pat:1
+
+8:28PM INF 0 commits scanned.
+8:28PM INF scanned ~58 bytes (58 bytes) in 338ms
+8:28PM WRN leaks found: 1
+```
+
+다만 pre-commit 훅은 개발자가 설치해야 돌고 `--no-verify`로 건너뛸 수 있다. 그래서 훅은 실수를 줄이는 장치로 두고, 원격에서 막는 장치(GitHub의 push protection, CI의 히스토리 스캔)를 따로 둔다. 오탐은 지문(Fingerprint)을 `.gitleaksignore`에 적어 넘기거나 그 줄 끝에 `gitleaks:allow` 주석을 단다. 이미 올라간 값이 발견됐을 때 히스토리를 다시 쓰는 절차는 [git 글](/posts/git-large-files-secrets#비밀-값이-든-env를-커밋했다)에 있다. 그 글에서도 강조하듯 키 폐기가 먼저다.
+
+## 무작위해 보이는 문자열을 찾는 법
+
+`github-pat`처럼 접두사가 정해진 토큰은 정규식 하나로 잡힌다. 문제는 접두사 없는 키다. 위의 `PAYMENT_API_KEY`는 `generic-api-key` 규칙으로 잡혔는데, 이 규칙은 `key`, `token`, `secret` 같은 이름 뒤에 오는 값 중에서 "충분히 무작위해 보이는" 것만 골라낸다. 그 기준이 출력에 찍힌 `Entropy`, 섀넌 엔트로피다.
+
+엔트로피는 문자 하나가 평균 몇 비트의 정보를 담는지다. 같은 글자가 반복되면 낮고, 여러 글자가 고르게 섞이면 높다. 각 글자의 비율을 p라고 할 때 모든 글자의 `-p × log2(p)`를 더한다. 아래 그림은 `Pa55w0rd`의 글자 수를 세는 과정이다.
+
+<AlgoTrace
+  caption="글자 수를 세고 비율로 엔트로피를 낸다"
+  memoryLabel="글자별 개수"
+  cells={["P", "a", "5", "5", "w", "0", "r", "d"]}
+  steps={[
+    { pointer: 0, memory: ["P:1"], caption: "P를 처음 본다. 개수 1." },
+    { pointer: 2, memory: ["P:1", "a:1", "5:1"], caption: "a, 5도 처음이다. 아직 모든 글자가 한 번씩이다." },
+    { pointer: 3, found: [2, 3], memory: ["P:1", "a:1", "5:2"], caption: "5가 또 나왔다. 반복된 글자는 정보량을 깎는다." },
+    { pointer: 7, memory: ["P:1", "a:1", "5:2", "w:1", "0:1", "r:1", "d:1"], caption: "끝까지 셌다. 8글자 중 서로 다른 글자는 7개다." },
+    { found: [0, 1, 2, 3, 4, 5, 6, 7], memory: ["6 × 0.375", "+ 0.5", "= 2.75"], caption: "1/8인 글자 여섯은 각각 0.375비트, 2/8인 5는 0.5비트. 합이 2.75다. 사람이 고른 비밀번호는 이 정도다." },
+  ]}
+/>
+
+같은 방식으로 계산하면 `aaaaaaaa`는 0, `production`은 3.12, 결제 키는 5다. 32글자가 모두 다르면 log2(32) = 5가 최대라서, gitleaks가 찍은 5.000000과 똑같다. 아래 함수를 직접 채워 보자. 소수 둘째 자리에서 반올림한다.
+
+<CodePlayground
+  caption="섀넌 엔트로피 계산"
+  functionName="shannonEntropy"
+  initialCode={`function shannonEntropy(s) {
+  // 글자별 개수를 세고, 비율 p마다 -p * log2(p)를 더한다
+  return 0;
+}`}
+  solution={`function shannonEntropy(s) {
+  if (s.length === 0) return 0;
+  const counts = {};
+  for (const ch of s) counts[ch] = (counts[ch] || 0) + 1;
+  let h = 0;
+  for (const c of Object.values(counts)) {
+    const p = c / s.length;
+    h -= p * Math.log2(p);
+  }
+  return Math.round(h * 100) / 100;
+}`}
+  tests={[
+    { args: ["aaaaaaaa"], expected: 0 },
+    { args: ["abababab"], expected: 1 },
+    { args: ["Pa55w0rd"], expected: 2.75 },
+    { args: ["production"], expected: 3.12 },
+    { args: ["pk9Qz7RmT2xVb4Ne8LcW1sHd6Jf3Ka0Y"], expected: 5 },
+    { args: ["ZHRfOGZLMnBROXhMbTN2Ujc="], expected: 4.25 },
+  ]}
+/>
+
+엔트로피만 보면 오탐과 미탐이 둘 다 생긴다. `db.internal`(3.28)과 `password123`(3.28)이 같은 값이 나오듯, 짧고 사람이 만든 비밀번호는 평범한 단어와 구별되지 않는다. 반대로 커밋 해시, UUID, 빌드 해시 같은 무작위 문자열은 비밀이 아닌데 높게 나온다. 그래서 스캐너는 엔트로피를 단독으로 쓰지 않고 "이름이 key·secret·token인 자리"라는 조건과 묶는다. 처음부터 `sk_live_`, `ghp_`처럼 접두사가 붙은 키를 발급하는 서비스가 늘어난 것도 이 때문이다. 접두사가 있으면 스캐너와 GitHub의 비밀 스캔이 정확히 잡는다.
+
+## 환경 변수는 생각보다 많이 보인다
+
+설정은 환경 변수로 넣으라는 말이 널리 퍼져 있다(Twelve-Factor App의 "config"). 코드와 설정을 떼는 데는 맞는 말인데, 비밀 값의 그릇으로는 약점이 있다. 실행 중인 프로세스에 비밀번호를 환경 변수로 넣고 밖에서 들여다봤다.
+
+```bash
+# 환경 변수로 비밀번호를 넣어 실행한다
+env -i PATH=/usr/bin:/bin NODE_ENV=production DB_PASSWORD='s3cr3t-Pa55' node app.js &
+PID=$!
+# 같은 사용자(여기서는 root)는 그대로 읽는다
+cat /proc/$PID/environ | tr '\0' '\n'
+ls -l /proc/$PID/environ
+# 다른 사용자(nobody)로 읽어 본다
+sudo -u nobody cat /proc/$PID/environ
+```
+
+```text
+PATH=/usr/bin:/bin
+NODE_ENV=production
+DB_PASSWORD=s3cr3t-Pa55
+-r-------- 1 root root 0 Oct 20 20:29 /proc/6372/environ
+cat: /proc/6372/environ: Permission denied
+```
+
+`/proc/<pid>/environ`은 프로세스가 시작될 때 받은 환경 변수 목록이다. 주인과 root만 읽을 수 있다. 다른 사용자에게는 막혀 있으니 괜찮아 보이지만, 같은 사용자로 도는 모든 것(같은 컨테이너의 사이드카, 디버그 셸, 침투한 웹셸)은 읽는다. 자식 프로세스는 환경 변수를 통째로 물려받는다. 앱이 `ImageMagick`이나 셸 스크립트를 부르면 그 프로그램도 DB 비밀번호를 갖고 시작한다. 컨테이너라면 `docker inspect`의 `Config.Env`에도 그대로 나온다.
+
+명령줄 인자는 더 넓게 보인다.
+
+```bash
+# 비밀번호를 인자로 넘긴다
+node app.js --db-password=s3cr3t-Pa55 &
+# 다른 사용자도 볼 수 있다
+sudo -u nobody ps -o pid,user,args -p $!
+```
+
+```text
+  PID USER     COMMAND
+ 6535 root     /opt/node22/bin/node app.js --db-password=s3cr3t-Pa55
+```
+
+`/proc/<pid>/cmdline`은 기본적으로 모든 사용자가 읽는다(`/proc`를 `hidepid=2`로 마운트하면 막힌다). 셸 히스토리에도 남는다. 비밀 값은 인자로 넘기지 않는다.
+
+가장 덜 알려진 길은 죽을 때다. Node.js의 진단 리포트는 크래시 원인을 찾으라고 스택, 힙 통계와 함께 환경 변수를 통째로 담는다.
+
+```bash
+# 잡히지 않은 예외가 나면 진단 리포트를 쓴다
+env -i PATH=/usr/bin:/bin DB_PASSWORD='s3cr3t-Pa55' \
+  node --report-uncaught-exception --report-directory=. crash.js
+# 리포트의 환경 변수 항목
+jq '.environmentVariables' report.*.json
+```
+
+```text
+{
+  "PATH": "/usr/bin:/bin",
+  "DB_PASSWORD": "s3cr3t-Pa55"
+}
+```
+
+리포트 파일은 장애 티켓에 첨부되고, 공유 드라이브에 올라가고, 외부 지원 업체에 보내진다. Node 22.13·23.3부터 생긴 `--report-exclude-env`를 붙이면 이 항목이 빠진다(같은 실행에서 `null`로 나왔다). 에러 추적 서비스의 SDK, 코어 덤프(`gcore`, 메모리 전체를 쓰니 환경 변수도 들어간다), 앱이 시작할 때 설정을 출력하는 디버그 코드도 같은 길이다.
+
+그래서 많이 쓰는 타협은 이렇다. 비밀 값은 환경 변수 대신 파일(권한 0400, 컨테이너라면 tmpfs 볼륨)로 받고, 앱은 시작할 때 읽어 메모리에만 둔다. 환경 변수로 받아야 하는 프레임워크라면 읽은 직후 `delete process.env.DB_PASSWORD`로 지워 자식 프로세스에 넘어가지 않게 한다. 다만 `/proc/<pid>/environ`은 시작 시점의 내용이라 이렇게 지워도 거기에는 남는다.
+
+## CI 로그와 이미지
+
+CI는 비밀 값을 가장 많이 다루면서 로그를 가장 널리 공유하는 곳이다. 배포 스크립트 디버깅용으로 `set -x`를 켜 둔 장면을 재현했다.
+
+```bash
+# set -x가 켜진 배포 스크립트에 토큰을 넣어 실행한다
+DEPLOY_TOKEN=dt_8fK2pQ9xLm3vR7 bash deploy.sh
+```
+
+```text
++ curl -s -o /dev/null -H 'Authorization: Bearer dt_8fK2pQ9xLm3vR7' http://127.0.0.1:9/
++ true
+```
+
+셸이 변수를 펼친 뒤의 명령을 찍으니 토큰이 그대로 나온다. GitHub Actions 같은 CI는 등록된 비밀 값과 똑같은 문자열을 로그에서 `***`로 바꿔 준다. 이 마스킹은 문자열 일치라서 바뀐 모양은 못 잡는다. 같은 토큰을 base64로 바꾸면 `ZHRfOGZLMnBROXhMbTN2Ujc=`가 되는데, 이건 등록된 값과 다른 문자열이라 그대로 찍힌다. JSON 안에 이스케이프된 값, 여러 줄 값의 일부, URL 인코딩된 값도 마찬가지다. 실행 중에 만든 값(받아 온 임시 토큰)은 `::add-mask::`로 직접 마스킹 목록에 넣어야 한다. 공개 저장소에서 포크의 PR이 비밀 값을 받는 트리거(`pull_request_target`)를 쓰면 남의 코드가 비밀 값을 읽을 수 있다는 점도 자주 사고가 난다.
+
+이미지는 레이어 단위로 쌓여서 지운 파일도 아래 레이어에 남는다. `ARG`와 `ENV` 값은 `docker history`에 보인다. 빌드 중에 토큰이 필요하면 `RUN --mount=type=secret`으로 넘긴다. 이 내용은 [Dockerfile 글](/posts/dockerfile-image-layers)에 실제 출력과 함께 있다. CI가 클라우드에 접근할 때 쓰는 오래 사는 액세스 키를 아예 없애는 OIDC 방식은 [GitHub Actions와 ECR 글](/posts/github-actions-docker-ecr#오래-사는-키-대신-oidc로-역할을-잠깐-빌린다)에서 다뤘다.
+
+## 비밀을 한곳에 모으는 저장소
+
+여기까지는 새는 구멍을 하나씩 막는 이야기였다. 구멍은 계속 생긴다. 그래서 두 번째 방어선이 필요하다. 비밀 값의 원본을 한곳에 두고, 누가 언제 읽었는지 남기고, 값을 자주 바꾸고, 가능하면 쓸 때마다 새로 만들어 짧게 빌려주는 것이다. HashiCorp Vault(와 그 포크인 OpenBao), AWS Secrets Manager, GCP Secret Manager, Azure Key Vault가 이 자리를 맡는다. 구성 요소는 제품마다 이름이 다르지만 하는 일은 비슷하다. Vault의 이름으로 보면 이렇다.
+
+<ConceptDiagram
+  caption="Vault의 구성: 신원을 확인하고, 정책으로 거르고, 엔진이 값을 내준다"
+  width={400}
+  height={290}
+  nodes={[
+    { id: "client", label: "앱·사람", sub: "요청하는 쪽", x: 70, y: 40, w: 110 },
+    { id: "auth", label: "auth method", sub: "k8s·AWS·OIDC", x: 230, y: 40, w: 130 },
+    { id: "token", label: "토큰", sub: "정책이 붙는다", x: 70, y: 140, w: 110 },
+    { id: "policy", label: "policy", sub: "경로별 권한", x: 230, y: 140, w: 120 },
+    { id: "engine", label: "secrets engine", sub: "kv·database·pki", x: 230, y: 240, w: 140 },
+    { id: "lease", label: "lease", sub: "TTL·갱신·회수", x: 70, y: 240, w: 110 },
+    { id: "audit", label: "audit", sub: "HMAC 로그", x: 345, y: 140, w: 90 },
+  ]}
+  edges={[
+    { from: "client", to: "auth", label: "로그인" },
+    { from: "auth", to: "token" },
+    { from: "token", to: "policy", label: "요청마다" },
+    { from: "policy", to: "engine", label: "허락" },
+    { from: "engine", to: "lease" },
+    { from: "policy", to: "audit", dashed: true },
+  ]}
+/>
+
+앱은 먼저 자기 신원을 증명해서(auth method) 토큰을 받는다. 토큰에는 정책이 붙어 있고, 정책은 "어느 경로를 읽을 수 있나"를 적는다. 경로 뒤에는 값을 만들어 주는 엔진이 있다. 저장만 하는 KV 엔진, DB 계정을 즉석에서 만드는 database 엔진, 인증서를 발급하는 PKI 엔진 같은 것들이다. 엔진이 준 값에는 수명(lease)이 붙는다. 모든 요청과 응답은 감사 로그(audit device)에 남는다.
+
+가장 단순한 KV 엔진부터 본다. 결제 키를 두 번 썼다.
+
+```bash
+# dev 서버: 메모리 저장, 자동 unseal, root 토큰 고정 (실습 전용)
+vault server -dev -dev-root-token-id=root -dev-listen-address=127.0.0.1:18217 &
+export VAULT_ADDR=http://127.0.0.1:18217 VAULT_TOKEN=root
+# 같은 경로에 두 번 쓰면 버전이 쌓인다 (출력은 두 번째 put과 마지막 get만 남겼다)
+vault kv put secret/shop/payment api_key=pk_test_51abc
+vault kv put secret/shop/payment api_key=pk_test_99xyz
+# 지난 버전도 읽을 수 있다
+vault kv get -version=1 -field=api_key secret/shop/payment
+```
+
+```text
+====== Secret Path ======
+secret/data/shop/payment
+
+======= Metadata =======
+Key                Value
+---                -----
+created_time       2026-10-20T20:29:42.572655074Z
+custom_metadata    <nil>
+deletion_time      n/a
+destroyed          false
+version            2
+pk_test_51abc
+```
+
+KV v2는 쓸 때마다 버전을 남긴다. 키를 바꿨다가 문제가 생기면 이전 버전으로 돌아갈 수 있다. 출력의 실제 경로가 `secret/data/...`인 것도 눈여겨본다. 정책은 CLI에 적은 경로가 아니라 이 API 경로 기준으로 써야 해서, `secret/shop/*`로 정책을 쓰고 왜 403이 나는지 헤매는 일이 흔하다.
+
+정책은 경로 단위로 쓴다. 뒤에서 앱에 붙일 `orders-app` 정책은 DB 계정 발급 경로 하나만 연다. 이 정책이 붙은 토큰으로 `secret/shop/payment`를 읽으면 `Code: 403`과 함께 `preflight capability check returned 403`이 돌아왔다.
+
+```hcl
+# orders-app.hcl: 이 경로만 읽을 수 있다
+path "database/creds/orders-ro" {
+  capabilities = ["read"]
+}
+```
+
+감사 로그도 켜 봤다. 누가 어느 경로를 읽었는지는 평문으로, 값은 HMAC으로 남는다.
+
+```bash
+# 파일 감사 장치를 켜고, 값을 한 번 읽은 뒤 마지막 줄을 본다
+vault audit enable file file_path=$PWD/audit.log
+vault kv get -field=api_key secret/shop/payment > /dev/null
+tail -1 audit.log | jq -c '{type, auth: {policies: .auth.policies}, request: {operation: .request.operation, path: .request.path}, data: .response.data.data}'
+```
+
+```text
+Success! Enabled the file audit device at: file/
+{"type":"response","auth":{"policies":["root"]},"request":{"operation":"read","path":"secret/data/shop/payment"},"data":{"api_key":"hmac-sha256:9d7943752e515b21648a82744192bba01433701395c309ac600d9bd05b65f2b9"}}
+```
+
+로그를 본 사람이 값을 알 수는 없지만, 유출된 값이 있을 때 `sys/audit-hash` API로 같은 HMAC을 만들어 "이 값을 누가 언제 읽었나"를 찾을 수 있다. 사고가 났을 때 가장 먼저 필요한 게 이 기록이다. 감사 장치가 하나라도 켜져 있는데 모두 쓰기에 실패하면 Vault는 요청 자체를 거부한다. 기록 없이 값을 내주지 않겠다는 설계다. 디스크가 차서 Vault가 멈추는 장애가 여기서 나온다.
+
+<Callout kind="warning" title="dev 모드는 운영에 쓰지 않는다">
+`vault server -dev`는 값을 메모리에만 두고, 봉인(seal)을 자동으로 풀고, TLS 없이 root 토큰을 고정해서 띄운다. 재시작하면 모두 사라진다. 운영 서버는 Raft 같은 저장소와 TLS를 설정하고, 시작할 때마다 봉인을 풀어야 한다. 봉인 해제 키를 사람이 나눠 들고 있거나(Shamir 분할), 클라우드 KMS로 자동 해제(auto-unseal)한다. 실습이 끝나면 dev 서버 프로세스를 종료한다.
+</Callout>
+
+## 쓸 때마다 새로 만드는 비밀번호
+
+KV에 넣은 값은 결국 오래 사는 비밀번호다. 누가 한 번 읽어 가면 바꿀 때까지 쓸 수 있다. 동적 비밀(dynamic secret)은 반대로 간다. 앱이 요청할 때마다 Vault가 DB에 접속해 새 계정을 만들고, 수명이 끝나면 지운다. 앱마다, Pod마다 서로 다른 계정이 생기니 로그에서 누가 무엇을 했는지 갈리고, 샌 계정은 길어야 TTL만큼만 쓸모 있다.
+
+PostgreSQL 16에 연결해 봤다. Vault에는 역할을 만들 수 있는 관리 계정 하나만 준다.
+
+```bash
+# database 엔진을 켜고 PostgreSQL 연결을 등록한다
+vault secrets enable database
+vault write database/config/shop plugin_name=postgresql-database-plugin \
+  allowed_roles=orders-ro \
+  connection_url='postgresql://{{username}}:{{password}}@127.0.0.1:5432/v17_shop' \
+  username=v17_vault_admin password=v17-admin-pw
+# 계정을 만드는 SQL과 수명을 정한 역할
+vault write database/roles/orders-ro db_name=shop \
+  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT SELECT ON orders TO \"{{name}}\";" \
+  default_ttl=1h max_ttl=24h
+# 앱이 하는 일: 계정 하나를 빌린다
+vault read database/creds/orders-ro
+```
+
+```text
+Success! Enabled the database secrets engine at: database/
+Success! Data written to: database/config/shop
+Success! Data written to: database/roles/orders-ro
+Key                Value
+---                -----
+lease_id           database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+lease_duration     1h
+lease_renewable    true
+password           x9DWDoE-Rkj7BLONi4hG
+username           v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191
+```
+
+DB 쪽에서 보면 진짜 역할이 생겼고, 만료 시각이 걸려 있다. 권한도 역할에 적은 대로다.
+
+```sql
+-- Vault가 만든 역할과 만료 시각
+SELECT rolname, rolvaliduntil FROM pg_roles WHERE rolname LIKE 'v-token%';
+```
+
+```text
+                     rolname                      |     rolvaliduntil
+--------------------------------------------------+------------------------
+ v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191 | 2026-10-20 21:29:56+00
+(1 row)
+```
+
+```bash
+# 빌린 계정으로 접속: 읽기는 되고 지우기는 안 된다
+PGPASSWORD=x9DWDoE-Rkj7BLONi4hG psql -h 127.0.0.1 -U v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191 -d v17_shop -c 'SELECT * FROM orders'
+PGPASSWORD=x9DWDoE-Rkj7BLONi4hG psql -h 127.0.0.1 -U v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191 -d v17_shop -c 'DELETE FROM orders'
+```
+
+```text
+ id |   item
+----+----------
+  1 | keyboard
+  2 | mouse
+(2 rows)
+
+ERROR:  permission denied for table orders
+```
+
+`VALID UNTIL`을 함께 건 데는 이유가 있다. Vault가 죽어서 회수를 못 해도 DB가 스스로 만료시킨다. 이중 안전장치다.
+
+## 빌려준 비밀에는 기한이 있다
+
+동적 비밀의 중심은 lease다. 받은 값마다 lease ID가 붙고, 이 ID로 수명을 늘리거나 거둬들인다. ID는 경로 구조를 그대로 따른다.
+
+<UrlAnatomy
+  caption="lease ID는 어디서 나온 값인지를 경로로 담는다"
+  separator=""
+  joiner="/"
+  params={[
+    { key: "database", display: "database", title: "엔진이 붙은 경로", description: "database 엔진을 마운트한 위치다. 이 접두사로 엔진이 내준 모든 lease를 한 번에 거둘 수 있다.", required: true },
+    { key: "creds", display: "creds", title: "발급 동작", description: "계정을 새로 만들어 달라는 경로다. 읽을 때마다 새 계정이 생긴다.", required: true },
+    { key: "orders-ro", display: "orders-ro", title: "역할 이름", description: "어떤 SQL로 계정을 만들지, TTL은 얼마인지 정한 역할이다. 사고가 나면 이 역할 단위로 회수한다.", code: "vault lease revoke -prefix database/creds/orders-ro", required: true },
+    { key: "id", display: "2zQLVvIZAeqQI6QqhE7xcOnO", title: "이번 대여의 번호", description: "이번에 빌려준 계정 하나를 가리킨다. 이 ID로 갱신(renew)하거나 회수(revoke)한다." },
+  ]}
+/>
+
+갱신과 회수가 실제로 어떻게 움직이는지는 아래 그림에서 다음을 누르며 본다.
+
+<SequenceDiagram
+  caption="lease 하나의 일생: 빌리고, 늘리고, 거둬들인다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "vault", label: "Vault" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "vault", label: "read creds", title: "계정을 빌린다", detail: "토큰의 정책이 이 경로를 허락하면 Vault가 역할에 적힌 SQL을 실행할 준비를 한다." },
+    { from: "vault", to: "db", label: "CREATE ROLE", title: "DB에 새 역할이 생긴다", detail: "이름과 비밀번호는 Vault가 무작위로 만든다. VALID UNTIL로 DB 쪽 만료도 함께 건다.", payload: "CREATE ROLE \"v-token-orders-r-...\" WITH LOGIN PASSWORD '...' VALID UNTIL '2026-10-20 21:29:56+00'" },
+    { from: "vault", to: "app", label: "user, pw, 1h", title: "lease와 함께 돌려준다", detail: "앱은 lease_duration이 끝나기 전에 갱신하거나 새로 빌려야 한다." },
+    { from: "app", to: "vault", label: "renew", title: "기한을 늘린다", detail: "increment는 지금부터의 새 TTL이다. 남은 시간에 더해지는 게 아니다. max_ttl을 넘길 수는 없다." },
+    { from: "app", to: "vault", label: "revoke", title: "다 쓰면 반납한다", detail: "앱이 종료할 때, 또는 사고가 났을 때 운영자가 회수한다. 기한이 끝나면 Vault가 알아서 회수한다." },
+    { from: "vault", to: "db", label: "DROP ROLE", title: "역할을 지운다", detail: "그 계정으로는 더 이상 로그인되지 않는다. 연결된 세션도 끊는 SQL을 revocation_statements에 넣을 수 있다." },
+  ]}
+/>
+
+실제로 갱신과 회수를 해 봤다.
+
+```bash
+# 남은 시간 확인
+vault lease lookup database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+# 30분으로 갱신
+vault lease renew -increment=30m database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+# 회수한 뒤 같은 계정으로 접속해 본다
+vault lease revoke database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+PGPASSWORD=x9DWDoE-Rkj7BLONi4hG psql -h 127.0.0.1 -U v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191 -d v17_shop -c 'SELECT 1'
+```
+
+```text
+Key             Value
+---             -----
+expire_time     2026-10-20T21:29:51.50722572Z
+id              database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+issue_time      2026-10-20T20:29:51.507225544Z
+last_renewal    <nil>
+renewable       true
+ttl             59m53s
+Key                Value
+---                -----
+lease_id           database/creds/orders-ro/2zQLVvIZAeqQI6QqhE7xcOnO
+lease_duration     30m
+lease_renewable    true
+All revocation operations queued successfully!
+psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "v-token-orders-r-zK8RT4h4nDJhW3WlDVyW-1792528191"
+```
+
+`ttl 59m53s`였던 lease를 30분으로 "갱신"했더니 30분이 됐다. `increment`를 "더하기"로 읽고 짧은 값을 주면 오히려 수명이 줄어든다. 회수하자 역할이 사라져서 로그인이 막혔다.
+
+`max_ttl`은 갱신으로도 넘을 수 없는 상한이다. TTL 20초, 상한 40초인 역할을 만들고 10초 뒤에 1시간으로 갱신을 요청했다.
+
+```bash
+vault lease renew -increment=1h database/creds/orders-short/gARre25piDtvdvpdtZCl1pVP
+```
+
+```text
+WARNING! The following warnings were returned from Vault:
+
+  * TTL of "1h" exceeded the effective max_ttl of "30s"; TTL value is capped
+  accordingly
+
+Key                Value
+---                -----
+lease_id           database/creds/orders-short/gARre25piDtvdvpdtZCl1pVP
+lease_duration     30s
+lease_renewable    true
+```
+
+발급 시점부터 40초이니 남은 30초로 잘렸다. 35초 뒤 `pg_roles`에서 이 역할의 개수는 1에서 0이 됐다. 누가 반납하지 않아도 Vault가 거둔다. 그래서 동적 비밀을 쓰는 앱은 "max_ttl이 끝나기 전에 새 계정을 빌려 커넥션 풀을 바꿔 끼우는" 코드를 가져야 한다. Vault Agent나 SDK의 lifetime watcher가 이 일을 대신한다. 이걸 빼먹으면 배포한 지 정확히 24시간(max_ttl) 뒤에 모든 Pod가 동시에 DB 인증 실패를 낸다. 동적 비밀을 처음 들일 때 흔히 겪는 장애다.
+
+회수는 토큰을 따라 번진다. lease는 그것을 만든 토큰의 자식이라서 토큰을 회수하면 그 토큰으로 빌린 계정이 함께 사라진다. 사고가 난 역할의 계정을 한꺼번에 거두는 것도 경로 접두사 하나로 된다. 계정 3개를 빌려 둔 상태에서 `vault lease revoke -prefix database/creds/orders-ro`를 실행하자 `All revocation operations queued successfully!`가 나왔고, `pg_roles`에 남은 `v-token%` 역할은 0개였다. 대신 치르는 값도 있다. 요청마다 DB에 역할이 생기니 Pod가 수천 개면 역할도 수천 개이고, Vault가 죽으면 새 Pod는 DB 계정을 받지 못해 뜨지 못한다. Vault 자체의 가용성(여러 노드로 묶은 Raft 클러스터)이 곧 서비스의 가용성이 된다.
+
+## 저장소에 들어가려면 무엇을 내미나
+
+비밀 저장소를 들이면 바로 이 질문이 나온다. 앱이 Vault에 로그인하려면 뭔가를 내밀어야 하는데, 그 뭔가도 비밀 아닌가. 이걸 secret zero 문제라고 부른다. Vault 토큰을 환경 변수로 넣으면 원점이다.
+
+답은 플랫폼이 이미 보증하는 신원을 쓰는 것이다. 쿠버네티스라면 Pod에 자동으로 붙는 ServiceAccount 토큰, AWS라면 인스턴스나 Pod에 붙은 IAM 역할, CI라면 GitHub이 잡마다 발급하는 OIDC 토큰이다. 이 값들은 플랫폼이 짧은 수명으로 자동 발급하고 자동 교체한다. 아래 그림에서 다음을 누르면 Pod가 저장해 둔 비밀 없이 DB 계정까지 받는 과정이 보인다.
+
+<NetworkTopology
+  caption="Pod는 자기 신원만 내밀고 DB 계정을 빌린다"
+  width={400}
+  height={220}
+  zones={[
+    { id: "k8s", label: "클러스터", x: 8, y: 10, w: 124, h: 200, tone: "private" },
+    { id: "vz", label: "Vault", x: 140, y: 10, w: 120, h: 90, tone: "edge" },
+    { id: "dbz", label: "DB 서브넷", x: 268, y: 120, w: 124, h: 90, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "orders Pod", sub: "SA 토큰 파일", x: 70, y: 60, icon: "container" },
+    { id: "kapi", label: "k8s API", sub: "TokenReview", x: 70, y: 170, icon: "server" },
+    { id: "vault", label: "Vault", sub: "k8s auth", x: 200, y: 60, icon: "lock" },
+    { id: "pg", label: "PostgreSQL", sub: "orders DB", x: 330, y: 170, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "vault" },
+    { from: "vault", to: "kapi", dashed: true },
+    { from: "vault", to: "pg" },
+    { from: "app", to: "pg" },
+  ]}
+  steps={[
+    { path: ["app"], highlight: ["k8s"], title: "저장한 비밀이 없다", detail: "Pod에는 kubelet이 넣어 준 ServiceAccount 토큰 파일만 있다. 수명이 짧고 kubelet이 알아서 갈아 끼운다." },
+    { path: ["app", "vault"], packet: "SA JWT", title: "신원을 내민다", detail: "Vault의 kubernetes auth에 토큰과 역할 이름을 보낸다. 역할에는 어느 네임스페이스의 어느 ServiceAccount만 받을지 적혀 있다." },
+    { path: ["vault", "kapi"], packet: "review", title: "Vault가 클러스터에 확인한다", detail: "TokenReview API로 이 토큰이 진짜인지, 어느 ServiceAccount인지 묻는다. Vault가 직접 서명을 믿지 않고 발급자에게 확인한다." },
+    { path: ["vault", "app"], packet: "token", title: "정책이 붙은 Vault 토큰", detail: "orders-app 정책이 붙은 토큰을 1시간짜리로 돌려준다. 이 토큰은 DB 계정 발급 경로 하나만 읽을 수 있다." },
+    { path: ["app", "vault", "pg"], packet: "creds", title: "계정 요청이 계정 생성으로 이어진다", detail: "Pod가 creds 경로를 읽으면 Vault가 DB에 이 Pod만을 위한 역할을 만든다." },
+    { path: ["app", "pg"], packet: "SELECT", title: "빌린 계정으로 붙는다", detail: "Pod는 받은 계정으로 접속한다. 이 계정은 TTL이 끝나면 사라지고, 다음 Pod는 다른 계정을 받는다." },
+  ]}
+/>
+
+같은 원리를 AWS에서는 IAM 역할이 맡는다. EC2 인스턴스 프로필, EKS의 IRSA와 Pod Identity가 앱에 임시 자격 증명을 주고, 앱은 그 자격 증명으로 Secrets Manager를 부른다. 그 구조는 [IAM 기본 글](/posts/iam-basics)과 [EKS 글](/posts/eks-cluster-basics#pod에-aws-권한-주기)에 있다.
+
+## AWS Secrets Manager와 SOPS는 어디에 서나
+
+AWS Secrets Manager는 관리형 KV에 자동 교체가 붙은 서비스다. 동적 비밀처럼 요청마다 새 계정을 만들지는 않고, 정해진 주기로 값을 바꾼다. 바꾸는 동안 값이 여러 버전으로 공존하는데, 각 버전에 붙은 라벨로 구분한다. 아래는 교체가 진행 중일 때의 `describe-secret` 응답 예시다(AWS 계정이 없어 실제 형식을 따라 쓴 예시다).
+
+```bash
+# 비밀의 버전과 라벨을 본다
+aws secretsmanager describe-secret --secret-id prod/orders/db \
+  --query 'VersionIdsToStages'
+```
+
+```text
+{
+    "4f1c2e0a-7b3d-4a9e-9c51-0d6e8f2a1b37": [
+        "AWSPENDING"
+    ],
+    "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d": [
+        "AWSCURRENT"
+    ],
+    "c3d2e1f0-a9b8-4c7d-9e6f-5a4b3c2d1e0f": [
+        "AWSPREVIOUS"
+    ]
+}
+```
+
+교체는 Lambda 함수가 네 단계로 한다. 새 값을 만들어 `AWSPENDING`으로 저장하고(createSecret), DB에 그 비밀번호를 설정하고(setSecret), 새 값으로 접속해 보고(testSecret), 라벨을 옮겨 새 값을 `AWSCURRENT`로 만든다(finishSecret). 앱은 라벨 없이 읽으면 `AWSCURRENT`를 받는다. 앱이 값을 캐시한다면 교체 직후 옛 비밀번호로 접속을 시도하게 된다. 그래서 사용자 하나의 비밀번호를 바꾸는 방식 대신, 사용자 둘을 번갈아 바꾸는 방식(alternating users)이 있다. 옛 사용자는 다음 교체 때까지 살아 있으니 캐시가 늦어도 접속이 끊기지 않는다.
+
+SOPS는 위치가 다르다. 서버가 없다. 파일 안의 값만 암호화해서 git에 두고, 배포할 때 키(age 키, KMS 키)를 가진 쪽이 푼다.
+
+```bash
+# age 키를 만들고 password 필드만 암호화한다
+age-keygen -o key.txt
+sops encrypt --age age1k2j6h6cyfja38g5rm84dl79xm4d5su7f67p79gumn65a529yhqpqf3693p \
+  --encrypted-regex '^(password)$' secrets.yaml > secrets.enc.yaml
+head -3 secrets.enc.yaml
+```
+
+```text
+Public key: age1k2j6h6cyfja38g5rm84dl79xm4d5su7f67p79gumn65a529yhqpqf3693p
+db:
+    host: db.internal
+    password: ENC[AES256_GCM,data:ERrbN8id0FKwVvw=,iv:kwOUDSJ9xukYjiQuOAIJt/z6+gGivaX5y2ySI/IOeVY=,tag:2ZI2UmIThrOdIRnqF8Yjwg==,type:str]
+```
+
+키 이름과 구조는 평문이라 리뷰할 때 diff가 읽힌다. 대신 SOPS는 "누가 읽었나"를 남기지 못하고, 값을 바꾸려면 커밋을 해야 하며, 개인 키를 가진 사람이 퇴사하면 모든 파일을 새 키로 다시 암호화하고 값까지 바꿔야 한다. Helm과 엮는 방법은 [values와 비밀 값 글](/posts/helm-values-secrets#sops로-암호화해서-git에-두기)에 있다.
+
+고르는 기준을 정리하면 이렇다. 팀이 작고 비밀 값이 몇 개 안 되면 SOPS로 git에 두는 것만으로 평문 커밋은 막는다. AWS에서만 돌고 DB 비밀번호 교체가 목적이면 Secrets Manager(또는 RDS의 관리형 마스터 비밀번호)가 운영 부담이 가장 적다. 여러 클라우드와 온프레미스에 걸쳐 있고, 접근 기록과 동적 비밀, 인증서 발급까지 한곳에서 하고 싶으면 Vault 계열을 고른다. 대신 Vault는 직접 운영해야 하는 고가용성 시스템이 하나 늘어나는 것이다. 라이선스도 본다. HashiCorp는 2023년 8월 Vault를 BSL로 바꿨고, 이전 MPL 코드에서 갈라진 OpenBao가 Linux Foundation 아래에서 개발된다.
+
+## 키가 샜다는 연락을 받았을 때
+
+처음 장면으로 돌아가 보자. 결제사가 낯선 IP를 알려 왔다. 할 일의 순서가 중요하다.
+
+먼저 키를 바꾼다. 결제사 콘솔에서 새 키를 발급해 비밀 저장소에 넣고, 앱이 새 값을 읽은 걸 확인한 뒤 옛 키를 폐기한다. 옛 키부터 폐기하면 결제가 멈춘다. 반대로 히스토리 정리에 하루를 쓰면 그 하루 동안 키가 살아 있다.
+
+다음은 피해 범위다. 옛 키가 마지막으로 정상 사용된 때와 처음 이상하게 쓰인 때를 결제사 로그와 우리 쪽 감사 로그(Vault audit, AWS라면 CloudTrail)에서 맞춘다. 어디서 샜는지도 찾는다. `gitleaks git`으로 저장소 전체를 훑고, 같은 값이 CI 로그 보관소나 이미지 레지스트리에 있는지 검색한다. 같은 값이 다른 곳에도 쓰였다면(스테이징과 운영이 같은 키) 그 키도 바꾼다.
+
+마지막이 히스토리 정리와 재발 방지다. pre-commit과 CI에 gitleaks를 넣고, 앱이 비밀 값을 환경 변수 대신 저장소에서 짧게 빌려 쓰게 바꾼다. 수명이 한 시간인 비밀은 새도 한 시간 뒤면 문자열일 뿐이다.
+
+비밀 관리를 한 줄로 줄이면 "새는 것을 전제로 짧게 쓰게 한다"다. 사본이 생기는 길(git, CI, 이미지, 환경 변수, 덤프)은 스캔과 마스킹으로 줄이고, 그래도 새는 값은 수명과 회수로 무력화한다. 저장소에 들어가는 첫 열쇠는 플랫폼이 주는 신원으로 대신한다. 이 신원이 무엇을 할 수 있는지 정하는 이야기는 [IAM 기본 글](/posts/iam-basics)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 커밋에서 비밀 값이 든 파일을 지웠는데 왜 위험한가요?
+
+히스토리에 남기 때문이다. git은 커밋마다 그 시점의 트리 전체를 저장하니 다음 커밋에서 지워도 이전 커밋에는 그대로 있고, clone한 모든 사본과 포크에도 들어 있다. 그래서 작업 트리 검사가 아니라 `gitleaks git`처럼 히스토리 전체를 검사해야 하고, 발견하면 히스토리 정리보다 키 폐기와 교체가 먼저다.
+
+### 비밀 값을 환경 변수로 넣으면 무엇이 문제인가요?
+
+같은 사용자로 도는 프로세스와 root는 `/proc/<pid>/environ`으로 읽을 수 있고, 자식 프로세스가 통째로 물려받으며, `docker inspect`, 진단 리포트, 코어 덤프, 에러 추적 도구에 실려 나가기 쉽다. 그래서 tmpfs에 마운트한 파일로 받아 메모리에만 두거나, 환경 변수로 받더라도 읽은 뒤 지우고 리포트에서 환경 변수를 빼는 설정을 쓴다. 명령줄 인자는 다른 사용자도 `ps`로 보니 더 나쁘다.
+
+### 동적 비밀(dynamic secret)은 정적 비밀과 무엇이 다른가요?
+
+요청할 때마다 새 자격 증명을 만들고 수명이 끝나면 지운다는 점이다. Vault database 엔진은 앱이 읽을 때 DB에 새 역할을 만들고 lease를 붙여 돌려주며, TTL이나 max_ttl이 끝나면 역할을 DROP한다. 샌 값의 수명이 짧고 앱·Pod마다 계정이 달라 추적이 쉬운 대신, Vault가 죽으면 새 계정을 못 받으니 Vault의 가용성이 서비스 가용성에 묶이고, 앱은 만료 전에 새 계정으로 갈아 끼우는 코드가 있어야 한다.
+
+### lease를 갱신하면 끝없이 쓸 수 있나요?
+
+아니다. 갱신의 increment는 지금부터의 새 TTL이고, 역할의 max_ttl을 넘길 수 없다. 실습에서 상한 40초인 lease를 10초 뒤 1시간으로 갱신하자 남은 30초로 잘렸고 그 뒤 자동 회수됐다. 그래서 오래 도는 앱은 max_ttl 전에 새 자격 증명을 빌려야 하고, 이를 빼먹으면 배포 후 정확히 max_ttl 시점에 인증 실패가 한꺼번에 난다.
+
+### secret zero 문제는 어떻게 푸나요?
+
+비밀 저장소에 로그인할 첫 비밀을 따로 저장하지 않고 플랫폼이 보증하는 신원을 쓴다. 쿠버네티스에서는 ServiceAccount 토큰을 Vault가 TokenReview로 확인하고, AWS에서는 IAM 역할의 임시 자격 증명을, CI에서는 OIDC 토큰을 쓴다. 이 신원들은 플랫폼이 짧은 수명으로 자동 발급·교체하니 사람이 관리할 장기 비밀이 남지 않는다.
+
+### CI가 비밀 값을 `***`로 가려 주는데 왜 로그에서 새나요?
+
+마스킹이 등록된 값과 똑같은 문자열만 바꾸기 때문이다. base64로 인코딩하거나 JSON으로 이스케이프하거나 일부만 출력하면 다른 문자열이라 그대로 찍힌다. `set -x`처럼 명령을 펼쳐 찍는 디버그 옵션을 끄고, 실행 중에 만든 토큰은 `::add-mask::`로 직접 등록하며, 가능하면 장기 비밀 대신 OIDC로 임시 자격 증명을 받는다.
+
+### Vault, AWS Secrets Manager, SOPS 중 무엇을 고르나요?
+
+어디서 돌고 무엇이 필요한지로 고른다. SOPS는 서버 없이 git에 암호문을 두는 방식이라 작은 팀에 맞지만 접근 기록과 자동 교체가 없다. Secrets Manager는 AWS 안에서 관리형으로 저장과 주기적 교체(AWSCURRENT, AWSPENDING 라벨)를 주고, Vault는 여러 환경에 걸친 동적 비밀, 감사 로그, PKI까지 하지만 직접 운영할 고가용성 시스템이 하나 늘어난다.
+
+### 키가 유출됐을 때 대응 순서는요?
+
+새 키 발급과 배포, 그다음 옛 키 폐기가 먼저다. 옛 키부터 끊으면 서비스가 멈추고, 히스토리 정리를 먼저 하면 그동안 키가 살아 있다. 이어서 감사 로그로 피해 범위와 유출 경로를 찾고, 같은 값이 다른 환경에 쓰였는지 확인한 뒤, 마지막으로 히스토리를 정리하고 pre-commit과 CI 스캔으로 재발을 막는다.

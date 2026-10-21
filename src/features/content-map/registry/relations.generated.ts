@@ -2,6 +2,47 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "jwt-key-rotation": {
+    "links": [
+      "token-login",
+      "oauth",
+      "secrets-management",
+      "clock-skew"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "base64"
+    ]
+  },
+  "iam-basics": {
+    "links": [
+      "eks-cluster-basics",
+      "github-actions-docker-ecr",
+      "secrets-management",
+      "ssrf"
+    ],
+    "mentions": [
+      "http-status-codes"
+    ]
+  },
+  "secrets-management": {
+    "links": [
+      "git-large-files-secrets",
+      "k8s-secret",
+      "helm-values-secrets",
+      "dockerfile-image-layers",
+      "github-actions-docker-ecr",
+      "iam-basics",
+      "eks-cluster-basics"
+    ],
+    "mentions": [
+      "git-staging-area",
+      "sql-batch-timeout-pool",
+      "db-type-key-value",
+      "dns",
+      "token-login"
+    ]
+  },
   "health-checks": {
     "links": [
       "load-balancer-basics",
@@ -217,7 +258,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "encryption-at-rest": {
     "links": [
       "encryption-in-transit",
-      "sql-injection"
+      "sql-injection",
+      "iam-basics",
+      "secrets-management"
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
@@ -1321,6 +1364,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "ipv6-basics",
       "helm-basics",
+      "iam-basics",
       "ssrf",
       "autoscaling",
       "security-groups-nacl",
@@ -3013,6 +3057,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-ignore-config"
     ],
     "mentions": [
+      "secrets-management",
       "build-caching",
       "linux-files-permissions",
       "git-staging-area",
@@ -3855,7 +3900,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-large-files-secrets",
-      "git-branch-merge"
+      "git-branch-merge",
+      "secrets-management"
     ]
   },
   "git-remote-collaboration": {
@@ -4977,7 +5023,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "base64",
-      "csrf"
+      "csrf",
+      "jwt-key-rotation"
     ]
   },
   "oauth": {
