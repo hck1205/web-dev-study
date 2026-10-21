@@ -62,6 +62,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "db-type-time-series": 6,
   "db-type-wide-column": 6,
   "db-types-overview": 5,
+  "ddos-protection": 6,
   "dead-letter-queue": 7,
   "deadlocks": 7,
   "dependency-hell": 7,

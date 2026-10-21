@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "ddos-protection",
+    title: "DDoS 방어: 회선, 연결 표, 비싼 요청 중 무엇이 먼저 차나",
+    summary: "DDoS를 바닥나는 자원으로 나눠 지표로 가려내고, 애니캐스트 스크러빙, SYN 쿠키와 conntrack, 요청 수 제한과 챌린지, WAF, 캐시, 오리진 잠금을 층별로 본다. 공격이 시작된 날 무엇부터 확인하고 누구를 부르고 무엇을 켤지도 정리한다.",
+    topic: "programming/security",
+    tags: ["Security", "Network", "TCP/IP", "Nginx", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["DDoS", "SYN 쿠키", "스크러빙", "증폭률", "RTBH"],
+  },
+  {
     slug: "k8s-learning-roadmap",
     title: "쿠버네티스 학습 지도: 로드맵 순서로 읽기와 증상별로 펼 글",
     summary: "kubectl apply 한 줄이 지나는 부품에서 출발해 이 블로그의 쿠버네티스 글을 로드맵의 여덟 칸 순서로 엮고, 글마다 어떤 질문에 답하고 왜 그 자리에서 읽는지 적는다. Pending, CrashLoopBackOff, 403, drain 멈춤 같은 증상에서 처음 펼 글을 고르는 길도 놓는다.",

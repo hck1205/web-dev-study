@@ -2,6 +2,37 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "ddos-protection": {
+    "links": [
+      "tcp-connection-lifecycle",
+      "udp-and-quic",
+      "waf",
+      "network-flow-logs",
+      "cdn-edge-anycast",
+      "layer-mtu-fragmentation",
+      "iptables-basics",
+      "rate-limiting-in-practice",
+      "rate-limiting-algorithms",
+      "nginx-https-performance",
+      "edge-caching",
+      "autoscaling",
+      "cloud-cost-optimization",
+      "security-groups-nacl",
+      "on-call",
+      "production-incidents",
+      "network-monitoring"
+    ],
+    "mentions": [
+      "layer-link-ethernet-arp",
+      "sql-injection",
+      "packet-capture-tcpdump",
+      "https-tls",
+      "cilium-ebpf",
+      "vpc-basics",
+      "dns",
+      "webhooks"
+    ]
+  },
   "k8s-learning-roadmap": {
     "links": [
       "k8s-certifications",
@@ -324,6 +355,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sdn-vxlan-overlay",
       "osi-in-practice",
+      "ddos-protection",
       "layer-ip-routing-icmp",
       "https-tls",
       "udp-and-quic",
@@ -1843,6 +1875,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ids-ips",
       "rate-limiting-in-practice",
+      "ddos-protection",
       "sql-injection",
       "xss",
       "csrf",
@@ -4272,7 +4305,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "osi-in-practice",
       "realtime-communication",
-      "http-versions"
+      "http-versions",
+      "ddos-protection"
     ]
   },
   "security-groups-nacl": {
@@ -5096,6 +5130,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "browser-fetch",
       "iptables-basics",
+      "ddos-protection",
       "security-groups-nacl",
       "sql-batch-timeout-pool"
     ]
@@ -5134,6 +5169,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "packet-capture-tcpdump",
       "https-tls",
+      "ddos-protection",
       "sdn-vxlan-overlay",
       "security-groups-nacl",
       "network-monitoring",

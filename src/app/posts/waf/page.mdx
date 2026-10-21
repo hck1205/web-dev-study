@@ -6,7 +6,7 @@ export const metadata = getPostMetadata("waf");
 
 이 글은 WAF가 무엇을 읽고 어떻게 점수를 매겨 막는지, 그리고 이 댓글 같은 오탐을 어떻게 좁게 풀어 주는지를 따라간다. 실습은 Ubuntu 24.04 컨테이너에서 nginx 1.24 + ModSecurity v3(3.0.12) + OWASP CRS 3.3.5(모두 Ubuntu 패키지)를 127.0.0.1에만 띄워서 했다. 막히는 요청은 한두 개만 보냈고, 우회 기법은 개념으로만 다룬다.
 
-이 주제의 다른 글: 패킷 내용을 네트워크 길목에서 보는 [IDS와 IPS](/posts/ids-ips), 요청 수로 막는 [레이트 리밋 실전](/posts/rate-limiting-in-practice). WAF가 막으려는 공격 자체는 [SQL 인젝션](/posts/sql-injection), [XSS](/posts/xss), [CSRF](/posts/csrf), [SSRF](/posts/ssrf) 글에서 자세히 본다.
+이 주제의 다른 글: 패킷 내용을 네트워크 길목에서 보는 [IDS와 IPS](/posts/ids-ips), 요청 수로 막는 [레이트 리밋 실전](/posts/rate-limiting-in-practice). 요청 내용이 아니라 양으로 밀어붙이는 공격은 [DDoS 방어](/posts/ddos-protection)에서 층별로 다룬다. WAF가 막으려는 공격 자체는 [SQL 인젝션](/posts/sql-injection), [XSS](/posts/xss), [CSRF](/posts/csrf), [SSRF](/posts/ssrf) 글에서 자세히 본다.
 
 ## 443번이 열려 있으면 방화벽은 할 일이 끝난다
 

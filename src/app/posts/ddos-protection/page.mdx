@@ -1,0 +1,674 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ddos-protection");
+
+금요일 저녁, 응답 시간 알림이 울린다. 대시보드를 열어 보니 입력 트래픽 그래프의 윗부분이 칼로 자른 듯 평평하다. 서버 CPU는 20%대로 한가한데 사용자는 접속이 안 된다고 한다. 앱 로그에는 에러가 거의 없다. 요청이 앱까지 오지도 못하고 있다는 뜻이다.
+
+DDoS(Distributed Denial of Service, 분산 서비스 거부)는 많은 곳에서 한꺼번에 트래픽을 보내 서비스가 정상 사용자에게 답하지 못하게 만드는 공격이다. 데이터를 훔치는 공격과 달리 목표는 하나, 어떤 자원을 먼저 바닥나게 하는 것이다. 그래서 방어도 "어느 자원이 먼저 찼나"를 알아내는 데서 시작한다.
+
+이 글은 서비스를 지키는 쪽의 이야기다. 공격 종류는 개념만 다루고, 막는 장치를 층별로 본 다음, 실제로 당한 날 무엇부터 하는지 순서를 적는다. 기준 OS는 Ubuntu 24.04 LTS(커널 6.8)이고, 커널 동작은 커널 6.18에서 네트워크 네임스페이스 두 개를 만들어 직접 확인했다. 트래픽은 그 두 네임스페이스 사이에서만 흘렸다.
+
+이 주제의 다른 글: TCP 상태와 SYN 큐의 기본은 [TCP 연결의 일생](/posts/tcp-connection-lifecycle), UDP 반사·증폭의 원리는 [UDP와 QUIC](/posts/udp-and-quic), 요청 내용을 보고 막는 쪽은 [WAF](/posts/waf)에서 다룬다.
+
+## 세 가지 공격, 바닥나는 자원이 다르다
+
+DDoS를 나누는 기준은 도구가 아니라 무엇을 채우느냐다.
+
+볼륨형은 회선을 채운다. 서버로 들어오는 길의 굵기(예: 10Gbps)보다 많은 바이트를 밀어 넣으면, 서버가 아무리 빨라도 패킷이 문 앞에서 버려진다. 공격자가 그만한 대역폭을 직접 갖지 않아도 된다. 작은 질문에 큰 답을 주는 UDP 서비스에 출발지를 피해자 주소로 위조해 물으면, 답이 피해자에게 몰린다. 반사·증폭이다. 이때 응답 바이트를 요청 바이트로 나눈 값이 증폭률이다.
+
+프로토콜형은 연결 상태를 적는 표를 채운다. 대표가 SYN flood다. TCP는 연결을 맺는 동안 반쯤 열린 연결을 기억해야 하는데, 마지막 ACK가 영원히 오지 않는 SYN을 쏟아 부으면 그 기억 공간이 찬다. 방화벽의 conntrack 표, 로드 밸런서의 연결 표도 같은 방식으로 찬다. 바이트는 많지 않은데 패킷 수(pps)가 크다.
+
+애플리케이션층(L7) 공격은 CPU, DB, 외부 API 호출 같은 비싼 일을 채운다. 연결을 정상적으로 맺고 진짜 HTTP 요청을 보낸다. 요청 하나하나는 정상처럼 생겼다. 검색, 로그인, 장바구니 계산처럼 처리 비용이 큰 경로를 노린다.
+
+아래 그림은 공격 종류와 바닥나는 자원, 그리고 그게 보이는 지표를 잇는다.
+
+<ConceptDiagram
+  caption="공격 종류마다 먼저 차는 자원과 그게 보이는 지표"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "vol", label: "볼륨형", sub: "UDP 반사·증폭", x: 70, y: 40, w: 118 },
+    { id: "pro", label: "프로토콜형", sub: "SYN flood", x: 70, y: 115, w: 118 },
+    { id: "l7", label: "L7", sub: "HTTP 요청 폭주", x: 70, y: 190, w: 118 },
+    { id: "pipe", label: "회선", sub: "bps", x: 205, y: 40, w: 80 },
+    { id: "table", label: "연결 표", sub: "pps, 상태 수", x: 205, y: 115, w: 80 },
+    { id: "cpu", label: "CPU·DB", sub: "요청 수", x: 205, y: 190, w: 80 },
+    { id: "m1", label: "bps 천장", sub: "CPU는 한가", x: 330, y: 40, w: 104 },
+    { id: "m2", label: "SYN-RECV", sub: "쿠키·드롭 카운터", x: 330, y: 115, w: 104 },
+    { id: "m3", label: "경로별 RPS", sub: "5xx, 지연", x: 330, y: 190, w: 104 },
+  ]}
+  edges={[
+    { from: "vol", to: "pipe" },
+    { from: "pro", to: "table" },
+    { from: "l7", to: "cpu" },
+    { from: "pipe", to: "m1" },
+    { from: "table", to: "m2" },
+    { from: "cpu", to: "m3" },
+  ]}
+/>
+
+나눠 보는 이유가 있다. 방어 장치마다 막을 수 있는 층이 정해져 있기 때문이다. 서버 커널 설정은 회선이 찬 볼륨형 앞에서 아무 힘이 없고, SYN 쿠키는 정상 연결을 맺고 들어오는 L7 요청을 하나도 못 걸러 낸다. 엉뚱한 층을 붙잡고 있으면 시간만 간다.
+
+## 내 지표에서 어느 쪽인지 가른다
+
+처음 장면으로 돌아가 보자. 입력 bps가 평평하게 잘리고 CPU가 한가하다면 볼륨형을 먼저 의심한다. 회선이 꽉 차서 그 이상이 들어오지 못하는 모양이다. 이때는 서버 안에서 할 수 있는 일이 거의 없다. 오는 패킷의 출발지 포트가 53, 123, 11211처럼 특정 UDP 서비스 하나에 몰려 있으면 반사 공격일 가능성이 크다. 이 값은 [플로 로그](/posts/network-flow-logs)나 상위 라우터의 샘플링 데이터에서 본다.
+
+bps는 크지 않은데 pps가 튀고, 새 연결이 잘 안 맺히는데 이미 맺은 연결은 멀쩡하다면 프로토콜형이다. 서버에서 바로 확인할 수 있다.
+
+```bash
+# SYN-RECV(반쯤 열린 연결) 개수. 평소 거의 0이다
+ss -Htn state syn-recv | wc -l
+# SYN 쿠키를 보냈는지, 큐가 넘쳐 버렸는지 누적 카운터로 본다
+nstat -az TcpExtSyncookiesSent TcpExtSyncookiesRecv TcpExtSyncookiesFailed TcpExtListenDrops TcpExtTCPReqQFullDrop
+# conntrack 표를 얼마나 썼는지 (nf_conntrack 모듈이 올라와 있을 때)
+sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+# 커널 경고. -t는 타임스탬프 없이 보여 준다
+sudo dmesg -t | grep -Ei "syn flooding|conntrack"
+```
+
+`ss -s`의 요약도 자주 보지만 한 가지 함정이 있다. 직접 네트워크 네임스페이스 안에서 `ss -s`를 돌렸더니 `closed` 숫자가 그 네임스페이스에 있는 소켓 수보다 훨씬 크게 나왔다. `ss -s`는 `/proc/net/sockstat`의 할당 수(`alloc`)를 쓰는데, 이 값이 네임스페이스별이 아니라 호스트 전체 기준이기 때문이다. 컨테이너나 Pod 안에서 `ss -s`의 closed가 수만이라고 놀라기 전에 `ss -Htan | wc -l`로 실제 목록을 세 본다.
+
+요청은 앱에 도착하는데 특정 경로의 초당 요청 수가 평소의 수십 배이고 DB가 먼저 느려진다면 L7이다. nginx 접근 로그(combined 형식)에서 경로별, IP별 상위를 뽑는다.
+
+```bash
+# 최근 로그에서 경로별 요청 수 상위 10개 (7번째 칸이 경로)
+tail -n 200000 /var/log/nginx/access.log | awk '{print $7}' | sort | uniq -c | sort -rn | head
+# IP별 상위 10개. 수천 개 IP에 고르게 퍼져 있으면 IP 차단만으로는 어렵다
+tail -n 200000 /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
+L7에서 가장 헷갈리는 건 공격과 진짜 인기를 가르는 일이다. 방송에 소개됐거나 할인 행사가 시작됐을 때도 요청이 폭증한다. 정상 폭주는 여러 경로에 퍼지고, 상품 페이지에서 장바구니, 결제로 이어지는 흐름이 보이고, 리퍼러와 브라우저가 다양하다. 공격은 한두 경로에 몰리고, 다음 페이지로 넘어가지 않고, 캐시를 피하려고 쿼리 문자열이 매번 바뀌는 경우가 많다. 마케팅 일정과 배포 기록을 먼저 확인하는 이유가 이것이다. 내가 배포한 코드의 무한 재시도가 우리 API를 두드리는 경우도 생각보다 흔하다.
+
+## 파이프가 차면 서버는 할 일이 없다
+
+볼륨형은 회선보다 위에서 막아야 한다. 10Gbps 회선에 40Gbps가 오면 버려지는 30Gbps 안에 정상 사용자의 패킷도 섞여 있고, 어느 것을 버릴지 고를 기회는 회선 앞에 있는 장비에만 있다. 그래서 선택지는 모두 "내 회선보다 굵은 누군가"다.
+
+첫째는 애니캐스트로 흩어 받는 방법이다. CDN이나 DDoS 방어 업체는 같은 IP 대역을 전 세계 PoP에서 함께 광고한다. 공격 트래픽도 출발지마다 가까운 PoP로 나뉘어 들어가니, 한 지점이 전체를 받지 않는다. 원리는 [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast)에서 봤다. 각 PoP는 받은 트래픽에서 공격처럼 생긴 것(내가 쓰지 않는 UDP 포트, 비정상 플래그, 알려진 반사 포트에서 온 응답)을 걸러 내고 깨끗한 것만 오리진으로 보낸다. 이 거르는 일을 스크러빙이라고 한다.
+
+둘째는 평소에는 내 회선으로 받다가 공격이 오면 경로를 바꾸는 방식(on-demand)이다. 방어 업체가 내 /24 대역을 BGP로 대신 광고해 트래픽을 자기 스크러빙 센터로 끌어가고, 걸러 낸 트래픽을 GRE 터널이나 전용 회선으로 돌려준다. 늘 켜 두는 방식(always-on)보다 싸지만 경로를 바꾸는 데 몇 분이 걸리고, BGP로 광고할 수 있는 가장 작은 단위가 보통 /24라서 IP 몇 개만 빌려 쓰는 서비스는 쓰기 어렵다. GRE로 돌려받으면 터널 헤더만큼 MTU가 줄어 큰 패킷이 깨지는 문제도 따라온다([MTU와 단편화](/posts/layer-mtu-fragmentation)).
+
+셋째는 ISP에 요청하는 블랙홀(RTBH, Remote Triggered Black Hole)이다. 공격받는 IP로 가는 트래픽을 ISP 쪽에서 전부 버린다. 그 IP는 완전히 죽지만 같은 회선을 쓰는 다른 서비스는 산다. 공격자가 바라던 결과를 내 손으로 완성하는 셈이라 최후의 수단이다.
+
+클라우드에 있다면 기본 방어가 이미 깔려 있는 경우가 많다. AWS는 Shield Standard가 모든 고객에게 L3/L4 방어를 자동으로 적용하고, 유료인 Shield Advanced는 대응팀 지원과 공격 중 늘어난 요금 일부를 돌려주는 비용 보호를 더한다. GCP는 Cloud Armor, Azure는 DDoS Protection이 비슷한 자리에 있다. 제공 범위와 요금은 자주 바뀌니 계약 전에 문서를 확인한다.
+
+아래 그림에서 다음을 누르면 정상 요청과 공격 트래픽이 엣지에서 어떻게 갈리는지, 그리고 오리진 IP로 직접 오는 트래픽이 어디서 막히는지 볼 수 있다.
+
+<NetworkTopology
+  caption="애니캐스트 엣지가 흩어 받고, 오리진은 CDN 대역만 받는다"
+  width={400}
+  height={330}
+  zones={[
+    { id: "edge", label: "애니캐스트 엣지", x: 8, y: 80, w: 270, h: 84, tone: "edge" },
+    { id: "vpc", label: "오리진 VPC", x: 100, y: 186, w: 200, h: 136, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", sub: "정상 사용자", x: 60, y: 36, icon: "client" },
+    { id: "bots", label: "botnet", sub: "수만 개 IP", x: 190, y: 36, icon: "internet" },
+    { id: "atk", label: "attacker", sub: "오리진 IP 직행", x: 330, y: 36, icon: "client" },
+    { id: "pop1", label: "PoP ICN", sub: "스크러빙", x: 70, y: 130, icon: "server" },
+    { id: "pop2", label: "PoP NRT", sub: "스크러빙", x: 190, y: 130, icon: "server" },
+    { id: "sg", label: "SG", sub: "CDN 대역만", x: 200, y: 236, icon: "firewall" },
+    { id: "origin", label: "origin", sub: "10.0.1.10", x: 200, y: 292, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "pop1" },
+    { from: "bots", to: "pop1" },
+    { from: "bots", to: "pop2" },
+    { from: "pop1", to: "sg" },
+    { from: "pop2", to: "sg" },
+    { from: "sg", to: "origin" },
+    { from: "atk", to: "sg", dashed: true },
+  ]}
+  steps={[
+    {
+      path: ["user", "pop1", "sg", "origin"],
+      packet: "GET /",
+      title: "정상 요청은 가까운 PoP를 거친다",
+      detail: "사용자는 엣지 IP만 안다. PoP가 TLS를 끝내고, 캐시에 없으면 오리진에 묻는다.",
+    },
+    {
+      path: ["bots", "pop1"],
+      packet: "UDP",
+      blocked: true,
+      highlight: ["edge"],
+      title: "공격 트래픽은 엣지에서 버려진다",
+      detail: "웹 서비스는 UDP 반사 응답을 받을 일이 없다. PoP는 이런 패킷을 회선 앞에서 거른다. 오리진 회선은 이 바이트를 보지 못한다.",
+    },
+    {
+      path: ["bots", "pop2"],
+      packet: "SYN",
+      blocked: true,
+      highlight: ["pop1"],
+      title: "같은 공격이 여러 PoP로 흩어진다",
+      detail: "봇마다 가까운 PoP가 다르다. 한 지점이 전체를 받지 않으니 각자 감당할 만큼만 받는다.",
+    },
+    {
+      path: ["pop2", "sg", "origin"],
+      packet: "clean",
+      title: "걸러진 트래픽만 오리진으로 간다",
+      detail: "엣지에서 오리진으로 오는 연결은 CDN이 공개한 대역에서 나온다. 보안 그룹은 그 대역만 허락한다.",
+    },
+    {
+      path: ["atk", "sg"],
+      packet: "SYN",
+      blocked: true,
+      highlight: ["origin"],
+      title: "오리진 IP로 직접 오면 막힌다",
+      detail: "누군가 오리진 IP를 알아내 직접 보내도 보안 그룹이 CDN 대역이 아니면 버린다. 버리면 상대는 응답 없이 타임아웃만 본다.",
+      payload: "curl: (28) Connection timed out after 3001 milliseconds  # 예시",
+    },
+  ]}
+/>
+
+마지막 단계가 이 글 뒤쪽 "오리진 IP가 새면" 부분의 결론이다. 엣지가 아무리 굵어도 공격자가 엣지를 건너뛸 수 있으면 소용이 없다.
+
+## 반쯤 열린 연결이 줄을 채운다
+
+이제 서버까지 패킷이 오는 경우다. TCP 서버가 SYN을 받으면 커널은 작은 대기 항목(request sock)을 만들어 SYN 큐에 넣고, SYN-ACK를 보낸 다음 마지막 ACK를 기다린다. 이 상태가 SYN-RECV다. ACK가 오면 연결이 완성되어 accept 큐로 옮겨 가고, 앱이 `accept()`로 꺼내 간다.
+
+출발지를 위조한 SYN에 대한 SYN-ACK는 엉뚱한 곳으로 가니 ACK가 돌아오지 않는다. 커널은 `tcp_synack_retries`(기본 5) 만큼 SYN-ACK를 다시 보내며 기다린다. 처음 1초에서 두 배씩 늘어나는 간격이라 마지막 재전송 뒤 기다림까지 합하면 한 항목이 약 63초 동안 자리를 차지한다. 그 사이 큐가 차면 새로 오는 정상 사용자의 SYN이 들어갈 자리가 없다.
+
+여기서 큐의 크기를 정하는 값은 하나가 아니다. 먼저 실측한 컨테이너의 기본값이다.
+
+```bash
+# SYN 방어와 관련된 커널 값을 한 번에 본다
+sysctl net.ipv4.tcp_syncookies net.ipv4.tcp_max_syn_backlog net.core.somaxconn net.ipv4.tcp_synack_retries net.netfilter.nf_conntrack_max
+```
+
+```text
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 1024
+net.core.somaxconn = 4096
+net.ipv4.tcp_synack_retries = 5
+net.netfilter.nf_conntrack_max = 262144
+```
+
+`somaxconn`은 앱이 `listen(fd, backlog)`으로 달라고 한 backlog의 상한이다. 앱이 8을 달라고 하면 8, 10000을 달라고 하면 4096으로 깎인다. 4096은 커널 5.4부터의 기본값이고 그 전에는 128이었다. 앱 쪽 기본값도 확인해야 한다. nginx는 리눅스에서 `listen`의 backlog가 기본 511이고, Node.js의 `server.listen()`도 511이다.
+
+`tcp_max_syn_backlog`는 이름과 달리 요즘 커널에서 쿠키를 켠 상태로는 큐의 상한이 아니다. SYN 큐가 넘쳤는지는 리스닝 소켓의 backlog를 기준으로 본다. `tcp_max_syn_backlog`는 쿠키를 껐을 때 큐가 4분의 3쯤 차면 검증되지 않은 상대의 SYN을 미리 버리는 기준으로 쓰인다. 이 값은 부팅할 때 메모리 크기로 정해져서 서버마다 다를 수 있다.
+
+`nf_conntrack_max`도 메모리로 정해지는 값이라, 같은 Ubuntu 24.04라도 인스턴스 크기에 따라 다르게 나온다.
+
+## SYN 쿠키는 줄 없이 기억한다
+
+큐가 찼을 때 리눅스의 답이 SYN 쿠키다. 기억할 자리가 없으면 기억을 상대에게 맡긴다. 연결 정보(양쪽 주소와 포트, 시간 조각)를 커널만 아는 비밀값과 함께 해시하고, 클라이언트가 보낸 MSS를 몇 가지 대표값 중 하나로 줄여 그 결과에 섞은 다음, SYN-ACK의 시퀀스 번호로 써서 보낸다. 큐에는 아무것도 넣지 않는다.
+
+진짜 클라이언트라면 ACK에 그 번호 + 1을 담아 돌려준다. 커널은 ACK 번호에서 1을 빼 다시 계산해 보고 맞으면 그 자리에서 연결을 만들어 accept 큐에 넣는다. 위조된 SYN에는 ACK가 오지 않으니 커널이 잃는 것은 SYN-ACK 한 번 보낸 비용뿐이다.
+
+<SequenceDiagram
+  caption="SYN 큐가 찼을 때 쿠키로 연결을 맺는 과정"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "k", label: "서버 커널" },
+    { id: "a", label: "앱" },
+  ]}
+  steps={[
+    {
+      from: "c",
+      to: "k",
+      label: "SYN (MSS 1460)",
+      title: "연결을 청한다",
+      detail: "클라이언트가 MSS, 윈도 스케일, SACK 허용 같은 옵션을 담아 SYN을 보낸다.",
+    },
+    {
+      from: "k",
+      to: "k",
+      label: "큐 가득 참",
+      title: "SYN 큐에 자리가 없다",
+      detail: "이미 SYN-RECV 항목이 backlog를 넘었다. 쿠키를 껐다면 여기서 이 SYN을 버린다.",
+    },
+    {
+      from: "k",
+      to: "k",
+      label: "쿠키 계산",
+      title: "기억 대신 번호를 만든다",
+      detail: "주소, 포트, 시간 조각을 비밀값과 함께 해시하고 MSS를 대표값 하나로 줄여 섞는다. 이 32비트가 시퀀스 번호가 된다.",
+      payload: "seq = hash(src, sport, dst, dport, t, secret) + mss_index",
+    },
+    {
+      from: "k",
+      to: "c",
+      label: "SYN-ACK seq=쿠키",
+      title: "아무것도 저장하지 않고 답한다",
+      detail: "큐에 항목을 만들지 않는다. 이때 dmesg에 Sending cookies 경고가 한 번 찍히고 SyncookiesSent가 오른다.",
+    },
+    {
+      from: "c",
+      to: "k",
+      label: "ACK ack=쿠키+1",
+      title: "진짜 클라이언트만 돌려준다",
+      detail: "출발지를 위조한 SYN이었다면 SYN-ACK는 엉뚱한 곳으로 갔으니 이 ACK는 오지 않는다.",
+    },
+    {
+      from: "k",
+      to: "k",
+      label: "쿠키 검증",
+      title: "다시 계산해서 맞춰 본다",
+      detail: "ack에서 1을 빼고 같은 해시를 다시 계산한다. 맞으면 MSS를 복원해 연결을 만들고 SyncookiesRecv가 오른다. 틀리면 SyncookiesFailed다.",
+    },
+    {
+      from: "k",
+      to: "a",
+      label: "accept()",
+      title: "앱은 차이를 모른다",
+      detail: "완성된 연결이 accept 큐로 가고 앱이 평소처럼 꺼낸다. 쿠키를 거쳤는지 앱 쪽에서는 보이지 않는다.",
+    },
+  ]}
+/>
+
+쿠키는 큐가 넘쳤을 때만 쓰인다. `tcp_syncookies=1`(기본값)의 뜻이 이것이고, `2`로 두면 큐와 상관없이 항상 쿠키를 쓴다. 항상 쓰는 설정은 시험용에 가깝다. 쿠키로 맺은 연결은 뒤에서 볼 손실이 있기 때문이다.
+
+## 큐를 직접 채워 본 결과
+
+네임스페이스 두 개를 만들어 한쪽에 backlog를 일부러 8로 작게 잡은 서버(10.216.0.1:8080)를 띄우고, 다른 쪽에서 응답하지 않는 SYN 40개를 한꺼번에 보낸 다음 정상 클라이언트로 접속해 봤다. 아래 그림은 그 큐가 차는 모습을 12칸으로 줄여 그린 것이다.
+
+<AlgoTrace
+  caption="backlog 8인 리스닝 소켓에 SYN이 몰릴 때"
+  memoryLabel="SYN 큐 (SYN-RECV)"
+  cells={["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8", "#9", "#10", "#11", "#40"]}
+  steps={[
+    { pointer: 0, memory: ["#1"], caption: "첫 SYN이 오면 SYN 큐에 항목 하나가 생기고 SYN-ACK를 보낸다." },
+    { pointer: 4, memory: ["#1", "#2", "#3", "#4", "#5"], caption: "ACK가 돌아오지 않으니 항목이 빠지지 않고 쌓인다." },
+    { pointer: 7, memory: ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8"], caption: "backlog 8에 닿았다. 커널은 넘었는지를 보므로 아직 하나 더 받는다." },
+    { pointer: 8, memory: ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8", "#9"], caption: "9개째까지 들어갔다. 실측에서도 SYN-RECV는 9개였다." },
+    { pointer: 9, found: [9], memory: ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8", "#9"], caption: "10번째부터는 큐에 넣지 않고 쿠키를 담은 SYN-ACK로 답한다. dmesg 경고가 이때 한 번 찍힌다." },
+    { pointer: 11, found: [9, 10, 11], memory: ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8", "#9"], caption: "나머지는 전부 쿠키로 답한다. 40개 중 31개가 쿠키였다. 큐는 더 늘지 않는다." },
+    { found: [9, 10, 11], memory: [], caption: "SYN-ACK를 5번 다시 보내도 ACK가 없으면 약 63초 뒤 항목이 지워지고 큐가 빈다." },
+  ]}
+/>
+
+실제 숫자다. SYN-RECV에 머문 연결 수부터 본다.
+
+```bash
+# 8080번으로 들어온 반쯤 열린 연결 수
+sudo ip netns exec srv ss -Htn state syn-recv '( sport = :8080 )' | wc -l
+```
+
+```text
+9
+```
+
+커널 로그에는 이 한 줄이 남았다.
+
+```bash
+# 타임스탬프 없이 SYN flood 경고만 찾는다
+sudo dmesg -t | grep -i "syn flooding"
+```
+
+```text
+TCP: request_sock_TCP: Possible SYN flooding on port 10.216.0.1:8080. Sending cookies.
+```
+
+이 경고는 리스닝 소켓마다 처음 한 번만 찍힌다. 몇 줄 찍혔는지로 규모를 가늠하면 안 되고, 규모는 카운터로 본다.
+
+```bash
+# 쿠키를 몇 번 보냈고 몇 번 맞게 돌아왔나
+sudo ip netns exec srv nstat -az TcpExtSyncookiesSent TcpExtSyncookiesRecv
+```
+
+```text
+#kernel
+TcpExtSyncookiesSent            31                 0.0
+TcpExtSyncookiesRecv            1                  0.0
+```
+
+SyncookiesSent 31은 큐에 들어가지 못한 SYN 31개에 쿠키로 답했다는 뜻이다. 9 + 31 = 40으로 보낸 SYN 수와 맞는다. SyncookiesRecv 1은 뒤에 접속한 정상 클라이언트다. 큐가 꽉 차 있었는데도 쿠키로 연결을 맺었다. 공격 중에 Sent는 계속 오르는데 Recv가 거의 0이면, 쿠키를 받은 쪽 대부분이 돌아오지 않는 위조 SYN이라는 뜻이다. Failed가 오르면 엉뚱한 ACK를 던지는 다른 종류의 트래픽을 의심한다.
+
+같은 실험을 `tcp_syncookies=0`으로 바꿔서 다시 했다.
+
+```bash
+# 쿠키를 끈다 (비교 실험용. 운영 서버에서는 하지 않는다)
+sudo ip netns exec srv sysctl -w net.ipv4.tcp_syncookies=0
+# 같은 SYN 40개를 보낸 뒤 카운터를 본다
+sudo ip netns exec srv nstat -az TcpExtListenDrops TcpExtTCPReqQFullDrop
+```
+
+```text
+#kernel
+TcpExtListenDrops               37                 0.0
+TcpExtTCPReqQFullDrop           37                 0.0
+```
+
+이번에는 큐가 찬 뒤로 오는 SYN을 그냥 버렸다. ReqQFullDrop은 SYN 큐가 차서 버렸다는 카운터이고, ListenDrops는 리스닝 소켓이 버린 전체 수다. 버려진 37개 안에는 정상 클라이언트의 SYN도 섞여 있었고, 그 클라이언트는 접속에 7.1초가 걸렸다. 리눅스 클라이언트는 SYN에 답이 없으면 1초에서 두 배씩 늘려 가며 다시 보내니 0, 1, 3, 7초에 SYN이 나간다. 7.1초는 앞의 세 번이 버려지고 네 번째에야 자리를 얻었다는 시간과 맞는다. 사용자 입장에서는 "가끔 7초씩 멈추는 사이트"로 보인다.
+
+## 쿠키가 잃어버리는 것
+
+쿠키는 32비트 시퀀스 번호에 정보를 담으니 SYN에 실려 온 옵션을 다 기억할 수 없다. MSS는 몇 개 대표값 중 가까운 쪽으로 줄어든다. 윈도 스케일(wscale)과 SACK 허용 여부는 TCP 타임스탬프 옵션의 남는 비트에 숨겨 두는데, 클라이언트가 타임스탬프를 쓰지 않으면 숨길 곳이 없다.
+
+실제로 클라이언트에서 `net.ipv4.tcp_timestamps=0`으로 끄고 쿠키를 거쳐 연결한 뒤 서버에서 `ss -ti`로 보니, 평소 연결에는 있는 `wscale:` 항목이 사라져 있었다. 아래는 형식을 보여 주는 예시이고, 측정에서 확인한 것은 wscale 항목이 빠졌다는 사실뿐이다.
+
+```text
+# 예시: 평범한 연결 (앞부분만)
+	 cubic wscale:7,7 rto:204 rtt:0.05/0.025
+# 예시: 타임스탬프 없이 쿠키로 맺은 연결 (wscale이 없다)
+	 cubic rto:204 rtt:0.05/0.025
+```
+
+윈도 스케일이 없으면 받는 창이 64KB로 묶인다. 왕복 시간이 긴 사용자에게 큰 파일을 보낼 때 처리량이 눈에 띄게 떨어진다. 공격 중 잠깐이면 괜찮지만, `tcp_syncookies=2`로 늘 쿠키를 쓰거나 backlog가 너무 작아 평소에도 쿠키가 쓰이면 이 손실을 계속 안고 간다. 평소에도 dmesg에 경고가 찍힌다면 공격보다 앱의 backlog부터 의심한다.
+
+실무에서 손대는 값은 대개 이 정도다.
+
+```bash
+# /etc/sysctl.d/90-syn.conf 에 영구 저장할 값 (숫자는 예시, 서버에 맞춰 정한다)
+sudo tee /etc/sysctl.d/90-syn.conf >/dev/null <<'EOF'
+# 쿠키는 늘 켜 둔다 (0으로 끄지 않는다)
+net.ipv4.tcp_syncookies = 1
+# listen backlog의 상한. 앱 backlog를 올릴 때 함께 올린다
+net.core.somaxconn = 8192
+# SYN-ACK 재전송 횟수. 줄이면 반쯤 열린 항목이 빨리 빠진다
+net.ipv4.tcp_synack_retries = 3
+EOF
+# 파일의 값을 적용한다
+sudo sysctl --system
+```
+
+`tcp_synack_retries`를 줄이면 위조 항목이 빨리 빠지는 대신, 손실이 많은 모바일 망에서 ACK 하나를 잃은 정상 사용자가 연결에 실패할 가능성이 커진다. 5에서 2~3 정도가 흔한 선택이다. 그리고 앱의 backlog를 같이 올려야 `somaxconn`을 올린 의미가 있다. nginx라면 `listen 443 ssl backlog=8192;`처럼 적는다.
+
+쿠키에도 한계가 있다. 메모리는 아끼지만 SYN 하나하나에 해시를 계산하고 SYN-ACK를 보내는 CPU와 나가는 대역폭은 든다. 초당 수백만 개 SYN이면 커널의 패킷 처리(softirq)가 먼저 무너진다. 이 규모는 엣지에서 막거나, 커널이 소켓을 만들기 전에 패킷을 버리는 XDP 같은 장치가 맡는다. 방어 업체들이 그 층에서 일한다.
+
+아래 그림에서 다음을 누르면 SYN 큐 길과 쿠키 길이 어떻게 갈리고, 쿠키를 끄면 정상 사용자가 어디서 막히는지 볼 수 있다.
+
+<NetworkTopology
+  caption="큐가 차면 쿠키 길로, 쿠키를 끄면 버린다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "kern", label: "서버 커널 10.216.0.1", x: 8, y: 104, w: 384, h: 186, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "정상", x: 80, y: 40, icon: "client" },
+    { id: "bad", label: "spoofed", sub: "가짜 출발지", x: 320, y: 40, icon: "internet" },
+    { id: "lsn", label: "listen", sub: "backlog 8", x: 200, y: 160, icon: "server" },
+    { id: "synq", label: "SYN queue", sub: "SYN-RECV", x: 70, y: 244, icon: "switch" },
+    { id: "app", label: "app", sub: "accept()", x: 200, y: 244, icon: "container" },
+    { id: "ck", label: "cookie", sub: "상태 없음", x: 330, y: 244, icon: "lock" },
+  ]}
+  links={[
+    { from: "cli", to: "lsn" },
+    { from: "bad", to: "lsn" },
+    { from: "lsn", to: "synq" },
+    { from: "lsn", to: "ck" },
+    { from: "synq", to: "app" },
+    { from: "ck", to: "app" },
+  ]}
+  steps={[
+    {
+      path: ["cli", "lsn", "synq", "app"],
+      packet: "SYN",
+      title: "평소에는 SYN 큐를 거친다",
+      detail: "SYN이 오면 SYN 큐에 항목을 만들고, ACK가 오면 완성된 연결이 앱으로 간다.",
+    },
+    {
+      path: ["bad", "lsn", "synq"],
+      packet: "SYN x9",
+      blocked: true,
+      title: "가짜 SYN이 큐를 채운다",
+      detail: "SYN-ACK가 위조된 주소로 가서 ACK가 돌아오지 않는다. 항목 9개가 약 63초 동안 자리를 차지한다.",
+    },
+    {
+      path: ["bad", "lsn", "ck"],
+      packet: "SYN x31",
+      highlight: ["synq"],
+      title: "큐가 차면 쿠키로 답한다",
+      detail: "큐에 넣지 않고 시퀀스 번호에 정보를 담은 SYN-ACK를 보낸다. 커널 메모리는 늘지 않는다.",
+      payload: "TCP: request_sock_TCP: Possible SYN flooding on port 10.216.0.1:8080. Sending cookies.",
+    },
+    {
+      path: ["cli", "lsn", "ck", "app"],
+      packet: "ACK",
+      title: "정상 사용자는 쿠키로 들어온다",
+      detail: "ACK 번호가 계산과 맞으면 연결을 만든다. 큐가 꽉 차 있어도 바로 접속된다.",
+      payload: "TcpExtSyncookiesRecv            1                  0.0",
+    },
+    {
+      path: ["cli", "lsn"],
+      packet: "SYN",
+      blocked: true,
+      highlight: ["synq"],
+      title: "쿠키를 끄면 정상 SYN도 버린다",
+      detail: "syncookies=0이면 큐가 찬 동안 오는 SYN을 버린다. 정상 클라이언트는 재전송을 거듭하다 7.1초 뒤에야 접속했다.",
+      payload: "TcpExtTCPReqQFullDrop           37                 0.0",
+    },
+  ]}
+/>
+
+## conntrack 표도 같은 방식으로 찬다
+
+서버에 iptables나 nftables 상태 규칙이 있으면 커널은 새 연결마다 conntrack 표에 항목을 만든다([iptables 기본](/posts/iptables-basics)에서 본 그 표다). 위조 SYN도 한 칸씩 차지하고, SYN 상태 항목은 기본 타임아웃(SYN_SENT 120초, SYN_RECV 60초) 동안 남는다. 표가 다 차면 새 연결의 첫 패킷을 버리고 커널 로그에 이런 줄이 찍힌다. 이 줄은 이번 실험에서 재현하지 않았고 커널 메시지 형식을 옮긴 예시다.
+
+```text
+# 예시
+nf_conntrack: table full, dropping packet
+```
+
+이때 앱은 아무것도 모르고, 이미 맺은 연결은 표에 자리가 있으니 멀쩡하다. 그래서 "기존 사용자는 괜찮은데 새로 들어오는 사람만 안 된다"는 증상이 된다. SYN 큐가 찼을 때와 비슷하니 둘 다 본다.
+
+대처는 세 갈래다. 표를 키우는 건 가장 쉽지만 메모리를 먹고 근본 해결은 아니다. 타임아웃을 줄이면 위조 항목이 빨리 빠진다. 가장 확실한 방법은 상태 추적이 필요 없는 트래픽을 표에서 빼는 것이다. 공개 웹 포트로 들어오는 패킷을 raw 테이블에서 `NOTRACK`으로 빼고 상태 없는 규칙만 걸면, 공격이 표를 채울 방법이 사라진다. iptables의 `SYNPROXY` 타깃은 이걸 한 단계 더 나가서, 핸드셰이크를 방화벽이 쿠키로 대신 끝낸 뒤 검증된 연결만 표에 넣고 뒤의 서버로 넘긴다.
+
+```bash
+# 지금 표 사용량과 한도. 비율이 70~80%를 넘으면 알림을 건다
+sudo sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+# SYN 상태 항목의 타임아웃 (초)
+sudo sysctl net.netfilter.nf_conntrack_tcp_timeout_syn_recv net.netfilter.nf_conntrack_tcp_timeout_syn_sent
+```
+
+클라우드 로드 밸런서 뒤에 있으면 이 표는 로드 밸런서 쪽에 있고, 대개 내가 크기를 고를 수 없다. 대신 관리형 서비스가 SYN 쿠키에 해당하는 방어를 이미 한다. 서버 커널 설정이 중요한 건 서버가 인터넷에 직접 열려 있을 때다.
+
+## 요청은 정상처럼 생겼다
+
+L7 공격은 핸드셰이크를 정상으로 끝내고 들어온다. 출발지를 위조할 수 없으니(TCP 연결을 맺어야 하므로) 진짜 IP를 쓰지만, 수만 개 기기로 이뤄진 봇넷이면 IP 하나당 요청은 사람 한 명과 크게 다르지 않다. 그래서 막는 장치는 "얼마나 자주", "무엇을", "사람인가"를 각각 본다.
+
+얼마나 자주는 요청 수 제한이 맡는다. 키를 무엇으로 잡을지, 429와 `Retry-After`를 어떻게 돌려줄지는 [요청 수 제한 실전](/posts/rate-limiting-in-practice)에서, 토큰 버킷이나 슬라이딩 윈도 같은 알고리즘은 [요청 수 제한 알고리즘](/posts/rate-limiting-algorithms)에서 다뤘다. DDoS 대응에서는 두 가지를 덧붙인다. IP당 한도만으로는 넓게 퍼진 봇넷을 못 막으니 경로 전체에 거는 한도(이 검색 API는 서버 전체에서 초당 500건까지)를 함께 둔다. 한도를 넘으면 정상 사용자도 일부 막히지만 서비스 전체가 쓰러지는 것보다 낫다. 그리고 제한은 앞에서 걸수록 싸다. 앱에서 세면 이미 TLS를 풀고 요청을 파싱한 뒤다.
+
+nginx의 `limit_req`로 직접 확인했다. 초당 5건, burst 5로 걸고 12건을 동시에 보냈다.
+
+```nginx
+# IP별로 초당 5건. 상태는 10MB 공유 메모리에 둔다
+limit_req_zone $binary_remote_addr zone=perip:10m rate=5r/s;
+
+server {
+    listen 8080;
+    location / {
+        # 순간적으로 5건까지 더 받는다. nodelay면 기다리게 하지 않고 바로 처리한다
+        limit_req zone=perip burst=5 nodelay;
+        # 기본 503 대신 429로 거절한다
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:9000;
+    }
+}
+```
+
+```bash
+# 같은 IP에서 12건을 동시에 보내고 상태 코드별로 센다
+seq 12 | xargs -P 12 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://10.216.0.1:8080/ | sort | uniq -c
+```
+
+```text
+      6 200
+      6 429
+```
+
+1건은 바로, 5건은 burst 자리로 통과하고 나머지 6건이 429다. `nodelay`가 없으면 burst 5건은 200ms 간격으로 늦게 나가고 개수는 같다. 거절할 때 에러 로그에 이런 줄이 남는다(값과 시각은 형식을 보여 주는 예시다).
+
+```text
+# 예시
+2026/10/21 14:03:12 [error] 4127#4127: *8 limiting requests, excess: 5.000 by zone "perip", client: 10.216.0.2, server: _, request: "GET / HTTP/1.1", host: "10.216.0.1:8080"
+```
+
+실험하다 걸린 함정이 하나 있다. 처음에는 백엔드 없이 `location / { limit_req ...; return 200 "ok"; }`로 시험했는데 12건이 모두 200이었다. nginx는 요청을 단계(phase)별로 처리하는데, `return`은 rewrite 단계에서 응답을 끝내 버리고 `limit_req`는 그 뒤 preaccess 단계에서 돈다. 그래서 `return`이 있는 location에서는 `limit_req`가 아예 실행되지 않는다. 제한을 시험할 때는 `proxy_pass`나 정적 파일처럼 실제 콘텐츠 단계까지 가는 location을 써야 한다. 설정 세부는 [Nginx HTTPS·성능 설정](/posts/nginx-https-performance)에 있다.
+
+"사람인가"는 챌린지가 본다. CDN이나 WAF가 응답 대신 작은 자바스크립트 계산이나 CAPTCHA를 내밀고, 통과한 브라우저에 쿠키를 준다. 단순한 HTTP 클라이언트로 만든 봇은 여기서 걸러진다. 대가도 있다. API를 부르는 앱이나 서버 간 호출은 챌린지를 풀 수 없으니 웹 페이지 경로에만 걸어야 하고, 검색 엔진 크롤러가 막히지 않게 예외를 둬야 한다. 많은 CDN이 공격 중에 켜는 "모든 방문자에게 챌린지" 모드를 둔다. 평소에 켜 두면 사용자 경험이 나빠지니 스위치로 둔다.
+
+"무엇을"은 WAF가 본다. WAF는 원래 요청 내용에서 SQL 주입 같은 모양을 찾는 장치지만([WAF](/posts/waf)), DDoS 때는 공격 요청에 공통으로 붙은 특징(같은 User-Agent, 존재하지 않는 경로, 특정 국가나 ASN에서만 오는 트래픽, 늘 같은 헤더 순서)으로 규칙을 만들어 빨리 막는 데 쓴다. 관리형 WAF는 IP별 요청 수 규칙과 알려진 봇 IP 목록도 함께 제공한다.
+
+## 캐시가 오리진 대신 맞는다
+
+L7 공격이 아프려면 요청마다 서버가 일을 해야 한다. 엣지 캐시에서 답할 수 있는 요청은 오리진을 건드리지 않는다. 히트율이 95%인 사이트에 초당 10만 건이 오면 오리진에는 5천 건만 간다. 캐시 키를 어떻게 잡고 히트율을 어떻게 올리는지는 [엣지 캐싱](/posts/edge-caching)에서 다뤘다.
+
+공격자도 이걸 알아서 캐시를 피하는 요청을 보낸다. 가장 흔한 게 `/?q=무작위값`처럼 쿼리 문자열을 매번 바꾸는 것이다. 캐시 키에 모든 쿼리 문자열이 들어가면 요청마다 미스가 나서 오리진으로 직행한다. 막는 방법은 캐시 키에 쓰는 쿼리 인자를 허용 목록으로 정하는 것, 오리진이 느려질 때 상한 사본이라도 내주는 `stale-if-error`, 같은 키의 미스를 하나로 모으는 요청 병합이다. 로그인한 사용자 페이지, 검색, 결제처럼 캐시할 수 없는 경로는 따로 목록을 만들어 두고 거기에 요청 수 제한과 챌린지를 집중한다. 공격의 표적은 거의 늘 그 목록 안에 있다.
+
+## 서버를 늘리면 청구서도 같이 는다
+
+오토스케일링이 있으니 버틸 수 있다고 생각하기 쉽다. 두 가지가 맞지 않는다.
+
+첫째, 속도다. 인스턴스를 새로 띄워 트래픽을 받기까지 몇 분이 걸리는데([오토스케일링](/posts/autoscaling)), 공격은 몇 초 만에 최대치로 올라간다. 볼륨형이면 늘어난 서버도 같은 회선 뒤에 있으니 아무 소용이 없다. 늘려서 버틸 수 있는 건 L7이고, 그것도 DB가 같이 늘어날 때 이야기다. 앱 서버를 열 배로 늘려 DB 연결이 열 배가 되면 DB가 먼저 쓰러진다.
+
+둘째, 돈이다. 공격이 계속되는 한 늘어난 서버는 줄지 않는다. 서버리스는 호출마다, CDN과 로드 밸런서는 요청과 바이트마다 요금이 붙는다. 공격자는 서비스를 멈추지 못해도 청구서로 피해를 줄 수 있다. 그래서 오토스케일링 최대치는 "하루 동안 그 개수로 돌아도 감당할 수 있는 비용"으로 정하고, 예산 알림을 걸어 둔다. 바이트와 요청에 붙는 요금은 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에서 봤다. AWS Shield Advanced의 비용 보호처럼 공격 때문에 늘어난 요금을 돌려주는 상품이 있는 이유도 이것이다.
+
+## 오리진 IP가 새면 앞단은 소용없다
+
+엣지와 스크러빙은 트래픽이 그 앞을 지날 때만 효과가 있다. 오리진 서버의 진짜 IP를 알면 공격자는 엣지를 건너뛰고 오리진 회선에 바로 보낸다. 오리진 IP는 생각보다 여러 곳으로 샌다.
+
+- CDN을 붙이기 전의 DNS 기록. 과거 A 레코드를 모아 두는 서비스가 있다.
+- CDN을 거치지 않는 하위 도메인(`mail.`, `ftp.`, `dev.`)이 같은 서버를 가리킨다.
+- 메일 서버가 오리진이면 보낸 메일의 헤더에 IP가 찍힌다.
+- 오리진이 밖으로 보내는 요청(웹훅, 이미지 URL 미리보기)이 출발지 IP를 드러낸다.
+- 인터넷 전체를 훑는 스캐너가 IP마다 받은 TLS 인증서를 색인한다. 오리진이 사이트 인증서를 아무에게나 보여 주면 그 IP가 사이트와 이어진다.
+
+그래서 CDN을 붙인 뒤에는 오리진 IP를 한 번 바꾸고, 오리진이 CDN에서 오는 연결만 받게 잠근다. 클라우드라면 [보안 그룹](/posts/security-groups-nacl)에서 CDN 대역만 허용한다. AWS는 CloudFront의 오리진 쪽 대역을 관리형 프리픽스 목록(`com.amazonaws.global.cloudfront.origin-facing`)으로 제공해서, 대역이 바뀌어도 규칙을 손으로 고칠 필요가 없다. 서버에 직접 거는 경우는 iptables로 한다.
+
+네임스페이스 실험에서는 한쪽 네임스페이스에 "CDN"이라고 정한 /28 대역을 주고, 서버가 그 대역에서 온 8080 연결만 받게 했다. 아래 명령의 대역 값은 예시로 바꿔 적었다.
+
+<Callout kind="warning">
+원격 서버에서 INPUT 규칙을 바꾸다 SSH 포트까지 막으면 콘솔로 들어가야 한다. 바꾸기 전에 규칙을 파일로 저장하고, `ESTABLISHED,RELATED` 허용과 SSH 허용을 맨 앞에 둔다. 확신이 없으면 몇 분 뒤 자동으로 되돌리는 예약(`echo "iptables-restore < /root/iptables.before" | sudo at now + 5 minutes`)을 걸고 작업한 다음, 잘 되면 그 예약을 지운다(`atq`, `atrm`).
+</Callout>
+
+```bash
+# 1) 지금 규칙을 저장해 둔다
+sudo iptables-save | sudo tee /root/iptables.before >/dev/null
+# 2) 이미 맺은 연결과 SSH는 계속 받는다
+sudo iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+sudo iptables -I INPUT 2 -p tcp --dport 22 -j ACCEPT
+# 3) CDN 대역에서 오는 웹 연결만 허용한다 (대역은 예시)
+sudo iptables -A INPUT -p tcp --dport 8080 -s 198.51.100.0/28 -j ACCEPT
+# 4) 나머지 8080 연결은 응답 없이 버린다
+sudo iptables -A INPUT -p tcp --dport 8080 -j DROP
+# 5) 규칙 순서를 확인한다
+sudo iptables -L INPUT -n --line-numbers
+```
+
+CDN 대역이 아닌 곳에서 직접 붙어 보면 연결이 타임아웃으로 끝났다. 실험에서 확인한 건 타임아웃으로 끝났다는 결과이고, 아래 출력의 밀리초 값은 예시다.
+
+```bash
+# CDN 대역 밖에서 오리진으로 직접 붙어 본다. 3초만 기다린다
+curl -sS --connect-timeout 3 http://10.216.0.1:8080/
+```
+
+```text
+# 예시
+curl: (28) Connection timed out after 3001 milliseconds
+```
+
+`REJECT`가 아니라 `DROP`을 쓴 이유가 있다. REJECT는 RST를 돌려줘서 "여기 서버가 있다"는 걸 알려 주고, 공격 패킷마다 응답을 만드는 비용도 든다. DROP은 아무 말도 하지 않는다. 확인이 끝나면 `sudo netfilter-persistent save`(Ubuntu의 `iptables-persistent` 패키지)로 영구 저장하고, 되돌릴 때는 `sudo iptables-restore < /root/iptables.before`를 쓴다. RHEL 계열이면 firewalld의 rich rule이나 ipset으로 같은 일을 한다. CDN 대역은 수십 개라 ipset 하나에 모아 두고 업체가 공개하는 목록으로 주기적으로 갱신하는 편이 낫다.
+
+대역만으로 잠그면 같은 CDN을 쓰는 다른 고객도 내 오리진에 닿을 수 있다. CDN 대역은 그 CDN의 모든 고객이 함께 쓰기 때문이다. 한 겹 더 하려면 CDN이 오리진에 붙을 때 클라이언트 인증서를 내밀게 하는 mTLS(Cloudflare의 Authenticated Origin Pulls 같은 기능)나, CDN만 아는 비밀 헤더를 확인하는 방법을 더한다. 오리진이 밖으로 나가는 연결만 맺고 들어오는 포트를 아예 열지 않는 터널 방식도 있다.
+
+## 공격이 시작된 날의 순서
+
+공격은 대개 준비 안 된 시간에 온다. 그날 머리로 순서를 짜면 늦으니 [온콜](/posts/on-call) 런북에 미리 적어 둔다. 장애 대응의 일반 흐름(감지, 분류, 완화, 해결)은 [프로덕션 장애 대응](/posts/production-incidents)에서 다뤘고, 여기서는 DDoS에만 해당하는 부분이다.
+
+처음 10분은 확인이다. 진짜 공격인지, 내 배포나 설정 변경 때문은 아닌지 먼저 본다. 최근 배포, 마케팅 일정, 클라이언트 앱의 재시도 로직이 바뀌었는지 확인한다. 그다음 어느 층인지 가른다. 엣지 대시보드의 요청 수와 bps, 오리진 회선의 bps와 pps, SYN-RECV와 쿠키 카운터, conntrack 사용률, 경로별 요청 수를 차례로 본다. 엣지 숫자는 크게 늘었는데 오리진이 조용하면 엣지가 막고 있는 것이고, 오리진 회선이 찼는데 엣지가 조용하면 오리진 IP가 샌 것이다.
+
+부를 사람은 미리 정해 둔다. 장애 지휘자를 세우고, CDN이나 방어 업체의 긴급 지원 창구에 연락한다. 업체 지원은 계약 등급에 따라 응답 시간이 다르니 계정 ID, 계약 번호, 연락처를 런북 첫 화면에 적어 둔다. 볼륨형이 회선을 채우고 있으면 회선을 준 ISP의 NOC에 연락해 상위에서 막아 줄 수 있는지 묻는다. 비용이 걸린 결정(유료 방어 켜기, 서버 최대치 올리기)을 내릴 사람도 정해 둔다.
+
+켤 것들도 미리 스위치로 만들어 둔다.
+
+1. CDN의 공격 대응 모드나 전체 챌린지
+2. 표적 경로에 더 낮은 요청 수 제한, 경로 전체 한도
+3. 공격 요청의 공통 특징으로 만든 WAF 규칙. 처음엔 세기만 하는 모드로 몇 분 보고 막는 모드로 바꾼다
+4. 트래픽이 특정 국가나 ASN에 몰려 있으면 그 범위에 챌린지나 차단
+5. 비싼 기능 끄기: 검색 자동 완성, 추천, 실시간 재고처럼 없어도 서비스가 도는 것
+6. 캐시 수명 늘리기와 상한 사본 내주기
+
+오토스케일링 최대치를 올리는 건 맨 뒤다. 어느 층에서 막히는지 모른 채 서버만 늘리면 비용만 커진다.
+
+알릴 것도 정해 둔다. 사용자에게는 상태 페이지에 "접속이 느리거나 실패할 수 있다, 다음 갱신은 30분 뒤"처럼 지금 상태와 다음 갱신 시각을 쓴다. 공격이라는 사실을 밝힐지는 미리 정한 기준을 따른다. 내부에는 정해진 간격으로 무엇을 켰고 효과가 있었는지를 공유한다. 공격 직전이나 중간에 "돈을 보내면 멈추겠다"는 메일(랜섬 DDoS)이 오기도 한다. 보내지 않고, 메일을 보존해 방어 업체와 KISA 같은 신고 창구에 넘긴다. 돈을 보낸 곳은 다시 표적이 되기 쉽다.
+
+끝났다고 바로 다 끄지 않는다. 공격은 몇 시간 간격으로 다시 오는 경우가 많아서, 켠 장치는 하루쯤 유지하면서 정상 사용자 차단(오탐)만 줄인다. 그 사이 샘플을 남긴다. 플로 로그, 짧은 패킷 캡처, 엣지 로그의 상위 IP·경로·User-Agent다. 사후 검토에서는 "오리진 IP가 어떻게 샜나", "어느 스위치가 없어서 늦었나"를 묻는다.
+
+## 증폭률과 회선 용량 계산하기
+
+방어 계획에는 숫자가 필요하다. 내 회선이 초당 몇 개의 패킷을 받을 수 있는지, 증폭률이 50인 반사 공격이면 공격자는 얼마만큼만 있으면 내 회선을 채우는지를 계산해 두면, 어디까지 서버에서 버티고 어디부터 업체에 맡길지 정할 수 있다.
+
+이더넷 프레임은 회선 위에서 프레임 앞의 프리앰블 8바이트와 프레임 사이 간격 12바이트를 더 쓴다. 가장 작은 프레임 64바이트면 회선에서는 84바이트, 672비트다. 10Gbps 회선이면 10,000,000,000 / 672 = 14,880,952 pps다. 서버가 이만큼의 패킷을 한 코어가 아니라 여러 코어로 나눠 받아도 커널 소켓 처리로는 버거운 숫자라, SYN flood의 pps가 이 근처면 서버 설정보다 앞단을 봐야 한다.
+
+아래 함수 `ddosMath(q)`를 채워 보자. 인자 객체에 들어 있는 값에 따라 세 가지 중 하나를 돌려준다.
+
+- `linkGbps`와 `frameBytes`가 있으면 그 회선이 받을 수 있는 최대 pps(소수점 버림)
+- `reqBytes`와 `respBytes`가 있으면 증폭률(응답 ÷ 요청, 반올림)
+- `linkGbps`와 `factor`가 있으면 그 회선을 채우는 데 공격자가 보내야 하는 Gbps(소수 셋째 자리 반올림)
+
+<CodePlayground
+  caption="회선 pps와 증폭률"
+  functionName="ddosMath"
+  initialCode={`function ddosMath(q) {
+  // 1) q.linkGbps, q.frameBytes → 최대 pps
+  //    회선 위에서는 프레임마다 20바이트(프리앰블 8 + 간격 12)가 더 든다
+  // 2) q.reqBytes, q.respBytes → 증폭률
+  // 3) q.linkGbps, q.factor → 공격자에게 필요한 Gbps
+  return null;
+}`}
+  solution={`function ddosMath(q) {
+  if (q.linkGbps !== undefined && q.frameBytes !== undefined) {
+    const wire = q.frameBytes + 20;
+    return Math.floor((q.linkGbps * 1e9) / (wire * 8));
+  }
+  if (q.reqBytes !== undefined && q.respBytes !== undefined) {
+    return Math.round(q.respBytes / q.reqBytes);
+  }
+  if (q.linkGbps !== undefined && q.factor !== undefined) {
+    return Math.round((q.linkGbps / q.factor) * 1000) / 1000;
+  }
+  return null;
+}`}
+  tests={[
+    { label: "10Gbps, 64바이트 프레임", args: [{ linkGbps: 10, frameBytes: 64 }], expected: 14880952 },
+    { label: "1Gbps, 64바이트 프레임", args: [{ linkGbps: 1, frameBytes: 64 }], expected: 1488095 },
+    { label: "10Gbps, 1500바이트 프레임", args: [{ linkGbps: 10, frameBytes: 1500 }], expected: 822368 },
+    { label: "60B 요청, 3000B 응답", args: [{ reqBytes: 60, respBytes: 3000 }], expected: 50 },
+    { label: "50B 요청, 10300B 응답", args: [{ reqBytes: 50, respBytes: 10300 }], expected: 206 },
+    { label: "15B 요청, 750000B 응답", args: [{ reqBytes: 15, respBytes: 750000 }], expected: 50000 },
+    { label: "10Gbps를 증폭률 50으로", args: [{ linkGbps: 10, factor: 50 }], expected: 0.2 },
+    { label: "100Gbps를 증폭률 50000으로", args: [{ linkGbps: 100, factor: 50000 }], expected: 0.002 },
+  ]}
+/>
+
+결과는 이렇게 읽는다. 증폭률 50이면 공격자는 0.2Gbps만 있으면 10Gbps 회선을 채운다. 증폭률이 50000이면 100Gbps 회선도 0.002Gbps, 즉 2Mbps로 채울 수 있다는 계산이 나온다. 집 인터넷 한 줄로 데이터센터 회선을 채울 수 있다는 뜻이라, 이런 서비스(인터넷에 열린 UDP 서비스)를 내 서버에서 열어 두지 않는 것도 방어다. 내 서버가 남을 공격하는 반사기가 되기 때문이다. 같은 이유로 1500바이트 프레임이면 pps는 82만으로 떨어진다. 같은 10Gbps라도 작은 패킷 공격이 서버 CPU에는 훨씬 아프다.
+
+## 어느 자원이 먼저 차는가
+
+DDoS 방어는 장치 하나를 고르는 일이 아니라, 회선, 연결 표, CPU 가운데 어느 것이 먼저 찼는지 지표로 가려내고 그 층에 맞는 장치를 미리 깔아 두는 일이다. 회선은 나보다 굵은 엣지와 스크러빙이 받고, 연결 표는 SYN 쿠키와 conntrack 관리가 지키고, 비싼 요청은 캐시와 요청 수 제한, 챌린지, WAF가 나눠 맡는다. 그리고 이 모두가 오리진 IP가 숨어 있을 때만 의미가 있다. 다음 단계로는 이 지표들을 평소에 그려 두는 [네트워크 모니터링](/posts/network-monitoring)을 보면 좋다. 기준선이 없으면 "평소의 수십 배"라는 말을 할 수 없다.
+
+## 면접에서 나올 만한 질문
+
+### DDoS 공격을 어떻게 분류하고, 왜 나눠서 보나요?
+
+바닥나는 자원으로 나눈다. 회선을 채우는 볼륨형, 연결 상태 표를 채우는 프로토콜형, CPU나 DB 같은 처리 비용을 채우는 L7이다. 방어 장치마다 막을 수 있는 층이 달라서 나눠 본다. 회선이 찬 상황에서 서버 커널 설정은 소용이 없고, SYN 쿠키는 정상 연결을 맺고 오는 L7 요청을 거르지 못한다.
+
+### 지금 받는 공격이 어느 종류인지 무엇으로 판단하나요?
+
+입력 bps가 회선 용량에서 평평하게 잘리고 CPU가 한가하면 볼륨형이다. bps는 작은데 pps가 크고 SYN-RECV 개수, SyncookiesSent, conntrack 사용률이 오르며 새 연결만 실패하면 프로토콜형이다. 요청이 앱까지 오고 특정 경로의 초당 요청 수와 DB 부하가 오르면 L7이다. L7은 진짜 인기 폭주와 헷갈리니 경로 분포, 다음 페이지로 이어지는 흐름, 배포와 마케팅 일정을 함께 본다.
+
+### SYN 쿠키는 어떻게 동작하고, 단점은 무엇인가요?
+
+SYN 큐가 찼을 때 연결 정보를 비밀값과 함께 해시해서 SYN-ACK의 시퀀스 번호로 보내고 큐에는 아무것도 저장하지 않는다. 정상 클라이언트가 그 번호 + 1로 ACK하면 다시 계산해 맞을 때 연결을 만든다. 대신 32비트에 다 담지 못해 MSS가 대표값으로 줄고, 타임스탬프가 없는 클라이언트는 윈도 스케일과 SACK를 잃는다. 실제로 타임스탬프를 끈 클라이언트의 쿠키 연결에서 `ss -ti`의 wscale이 사라졌다. 그래서 평소에도 쿠키가 쓰이면 backlog가 작은 건 아닌지 본다.
+
+### tcp_syncookies를 0으로 끄면 어떻게 되나요?
+
+큐가 찬 동안 오는 SYN을 그냥 버린다. 정상 클라이언트의 SYN도 같이 버려져서, 직접 시험했을 때 ReqQFullDrop이 37까지 오르고 정상 클라이언트는 SYN 재전송을 거듭하다 7.1초 만에 접속했다. 사용자에게는 가끔 수 초씩 멈추는 사이트로 보인다. 쿠키를 켠 상태에서는 같은 상황에서도 정상 클라이언트가 바로 접속했다.
+
+### dmesg에 "Possible SYN flooding"이 찍혔습니다. 바로 공격이라고 볼 수 있나요?
+
+아니다. 리스닝 소켓의 SYN 큐가 넘쳐 쿠키를 보내기 시작했다는 뜻일 뿐이다. 앱의 listen backlog가 너무 작거나 `somaxconn`에 깎여 정상 트래픽에도 찍힐 수 있다. 이 경고는 소켓마다 한 번만 찍히니, 규모는 nstat의 SyncookiesSent와 Recv 비율, SYN-RECV 개수로 판단한다. Sent는 크게 오르는데 Recv가 거의 없으면 돌아오지 않는 위조 SYN이 많다는 신호다.
+
+### CDN을 앞에 뒀는데도 오리진이 공격받았습니다. 무엇을 의심하나요?
+
+오리진 IP가 샌 것이다. 엣지 지표는 조용한데 오리진 회선이 차 있으면 거의 확실하다. 과거 DNS 기록, CDN을 거치지 않는 하위 도메인, 메일 헤더, 오리진이 보내는 웹훅, IP별 인증서 색인 같은 경로로 샌다. 오리진 IP를 바꾸고, 보안 그룹이나 iptables로 CDN 대역만 받게 잠그고, 필요하면 오리진 mTLS나 비밀 헤더로 같은 CDN의 다른 고객까지 막는다. 차단은 DROP으로 해서 응답을 주지 않는다.
+
+### 오토스케일링으로 DDoS를 버틸 수 있지 않나요?
+
+L7 일부만 해당하고 대가가 크다. 새 인스턴스가 트래픽을 받기까지 몇 분이 걸리는데 공격은 몇 초 만에 올라가고, 볼륨형이면 늘어난 서버도 같은 회선 뒤라서 소용이 없다. 앱 서버만 늘면 DB 연결이 같이 늘어 DB가 먼저 쓰러진다. 게다가 공격이 이어지는 동안 서버와 요청 요금이 계속 나가니, 최대치를 예산에 맞춰 묶어 두고 엣지 캐시와 요청 수 제한으로 먼저 걸러야 한다.
+
+### 반사·증폭 공격에서 증폭률이 왜 중요한가요?
+
+공격자가 가져야 할 대역폭을 정하기 때문이다. 증폭률은 응답 바이트를 요청 바이트로 나눈 값이고, 내 회선 용량을 증폭률로 나누면 공격자에게 필요한 대역폭이 나온다. 증폭률 50이면 10Gbps 회선을 0.2Gbps로, 50000이면 100Gbps 회선을 2Mbps로 채울 수 있다. 그래서 볼륨형은 서버 쪽에서 막을 수 없고 회선보다 굵은 엣지나 스크러빙에 맡겨야 하며, 내 서버에 인터넷으로 열린 UDP 서비스를 두지 않아 반사기가 되지 않게 하는 것도 방어에 들어간다.
