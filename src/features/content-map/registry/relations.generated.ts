@@ -2,6 +2,67 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "db-performance-map": {
+    "links": [
+      "db-index",
+      "db-index-design",
+      "connection-pool",
+      "caching-strategies",
+      "db-replication-sharding",
+      "db-partitioning",
+      "bloom-filter",
+      "db-sharding",
+      "db-architecture-by-scale",
+      "db-index-pitfalls",
+      "caching-concepts-map",
+      "sd-db-replication-intro",
+      "sd-sharding-intro",
+      "sql-query-tuning",
+      "postgres-architecture"
+    ],
+    "mentions": [
+      "postgres-connections-pg-hba",
+      "mysql-innodb-basics",
+      "sd-payment-flow",
+      "sd-start-single-server",
+      "sd-mq-storage-partitions",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "mongodb-document-model",
+      "dns",
+      "webhooks"
+    ]
+  },
+  "sd-music-streaming": {
+    "links": [
+      "sd-video-upload-transcoding",
+      "sd-video-streaming-cost",
+      "system-design-study-path",
+      "sd-capacity-estimation",
+      "sd-object-storage-architecture",
+      "sd-object-storage-durability",
+      "sd-cache-and-cdn-tier",
+      "sd-db-replication-intro",
+      "sd-sharding-intro",
+      "elasticsearch-inverted-index",
+      "sd-autocomplete-trie",
+      "sd-autocomplete-data-pipeline",
+      "kafka-basics",
+      "sd-ad-click-exactly-once",
+      "vector-db",
+      "sd-object-storage-versioning-multipart",
+      "youtube-url-to-video"
+    ],
+    "mentions": [
+      "caching-strategies",
+      "db-index",
+      "mongodb-document-model",
+      "db-type-key-value",
+      "sd-start-single-server",
+      "db-type-relational",
+      "redis-basics"
+    ]
+  },
   "acid-vs-base": {
     "links": [
       "acid-transactions",
@@ -776,6 +837,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-video-streaming-cost",
       "sd-file-sync-block-upload",
       "sd-file-sync-conflicts",
+      "sd-music-streaming",
       "sd-proximity-service",
       "sd-nearby-friends",
       "sd-maps-tiles-routing",
@@ -1471,7 +1533,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cloud-cost-optimization"
     ],
     "mentions": [
-      "packet-encapsulation"
+      "packet-encapsulation",
+      "sd-music-streaming"
     ]
   },
   "sd-video-upload-transcoding": {

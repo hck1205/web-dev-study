@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "db-performance-map",
+    title: "DB를 빠르게 만드는 8가지: 인덱스부터 샤딩까지 꺼내는 순서",
+    summary: "주문 테이블 하나가 자라는 순서대로 인덱스, B-tree, 커넥션 풀, 캐시, 복제, 파티셔닝, 블룸 필터, 샤딩을 꺼낸다. 각각 무엇을 풀고 무엇을 새로 떠안는지 PostgreSQL 16에서 잰 숫자로 보고, 깊은 내용은 주제별 글로 넘긴다.",
+    topic: "programming/database",
+    tags: ["Database", "PostgreSQL", "Performance", "Index", "Scalability"],
+    date: "2026-10-24",
+    keywords: ["DB 성능 지도", "DB 최적화 순서"],
+  },
+  {
+    slug: "sd-music-streaming",
+    title: "음악 스트리밍 서비스 설계: 음원 600TB와 메타데이터 70GB를 따로 다루기",
+    summary: "곡 파일은 객체 저장소와 CDN에서 Range 요청으로 조각내 받고, 곡 정보와 재생목록은 리더와 팔로워로 나눈 SQL에 둔다. 재생 기록은 큐로 빼서 실시간 집계와 정산을 다른 길로 만들고, 중복과 30초 미만 재생을 걸러 정확히 센다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "CDN", "Cache", "Database", "Messaging"],
+    date: "2026-10-24",
+    keywords: ["음악 스트리밍", "재생 수 정산", "오프라인 재생", "DRM"],
+  },
+  {
     slug: "acid-vs-base",
     title: "ACID와 BASE: 저장소마다 다른 트랜잭션의 약속",
     summary: "Redis의 MULTI/EXEC는 롤백하지 않고, Cassandra의 조건부 쓰기는 왕복 네 번이 든다. 노드가 여러 대이거나 NoSQL로 가면 ACID의 네 글자가 각각 어떻게 바뀌는지, 비는 글자를 앱이 어떻게 메우는지 본다.",

@@ -64,6 +64,7 @@ import { DB_LOCKING_DEADLOCK } from "./db-locking-deadlock";
 import { DB_MIGRATION_TOOLS } from "./db-migration-tools";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_PARTITIONING } from "./db-partitioning";
+import { DB_PERFORMANCE_MAP } from "./db-performance-map";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
 import { DB_SHARDING } from "./db-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
@@ -440,6 +441,7 @@ import { SD_MQ_CONSUMER_GROUPS } from "./sd-mq-consumer-groups";
 import { SD_MQ_REPLICATION } from "./sd-mq-replication";
 import { SD_MQ_STORAGE_PARTITIONS } from "./sd-mq-storage-partitions";
 import { SD_MULTI_DATACENTER } from "./sd-multi-datacenter";
+import { SD_MUSIC_STREAMING } from "./sd-music-streaming";
 import { SD_NEARBY_FRIENDS } from "./sd-nearby-friends";
 import { SD_NEWS_FEED_PUBLISHING } from "./sd-news-feed-publishing";
 import { SD_NEWS_FEED_RETRIEVAL } from "./sd-news-feed-retrieval";
@@ -616,6 +618,7 @@ export const QUESTION_SETS = [
   DB_MIGRATION_TOOLS,
   DB_MODELING_NORMALIZATION,
   DB_PARTITIONING,
+  DB_PERFORMANCE_MAP,
   DB_REPLICATION_SHARDING,
   DB_SHARDING,
   DB_TRANSACTION_ISOLATION,
@@ -992,6 +995,7 @@ export const QUESTION_SETS = [
   SD_MQ_REPLICATION,
   SD_MQ_STORAGE_PARTITIONS,
   SD_MULTI_DATACENTER,
+  SD_MUSIC_STREAMING,
   SD_NEARBY_FRIENDS,
   SD_NEWS_FEED_PUBLISHING,
   SD_NEWS_FEED_RETRIEVAL,
