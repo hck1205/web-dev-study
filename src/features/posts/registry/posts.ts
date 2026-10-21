@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "iac-basics",
+    title: "IaC 기본 개념: 선언형, state, 불변 인프라와 조정 루프",
+    summary: "손으로 고친 서버가 서로 달라지는 문제에서 출발해 명령형 스크립트와 선언형 수렴의 차이, 멱등성, state가 필요한 이유, 도구가 읽지 못하는 것은 관리하지 못한다는 한계, 가변과 불변 인프라, 한 번 맞추는 도구와 계속 맞추는 조정 루프를 직접 확인한다. Terraform, Pulumi, CloudFormation, Ansible을 고르는 기준도 정리한다.",
+    topic: "programming/server-infra/iac",
+    tags: ["IaC", "Terraform", "DevOps", "GitOps", "Linux"],
+    date: "2026-10-21",
+    keywords: ["선언형 인프라", "불변 인프라", "조정 루프", "구성 드리프트", "Pulumi"],
+  },
+  {
+    slug: "dependency-hell",
+    title: "의존성 지옥: 다이아몬드, 유령 의존성, peer 충돌과 lockfile",
+    summary: "같은 패키지가 두 벌 깔리는 다이아몬드, 호이스팅이 만드는 유령 의존성과 pnpm의 엄격한 구조, ERESOLVE를 읽고 고치는 순서, overrides, npm install과 npm ci의 차이를 사설 레지스트리로 재현한다. 설치 스크립트와 숙성 기간 같은 공급망 방어, Renovate·Dependabot 운영 전략까지 다룬다.",
+    topic: "programming/common",
+    tags: ["JavaScript", "Node.js", "Security", "CI/CD", "Troubleshooting", "npm"],
+    date: "2026-10-21",
+    keywords: ["유령 의존성", "다이아몬드 의존성", "ERESOLVE", "lockfile"],
+  },
+  {
+    slug: "semantic-versioning",
+    title: "Semantic Versioning: 세 숫자의 약속과 npm 범위 규칙",
+    summary: "MAJOR.MINOR.PATCH가 약속하는 것, 사전 배포 버전의 정렬 규칙, npm의 캐럿과 물결표가 실제로 여는 범위와 0.x에서 한 칸 좁아지는 이유를 직접 돌려 본다. 타입·기본값·engines 변경이 왜 깨는 변경인지, dist-tag 사고, Changesets 릴리스 흐름까지 따라간다.",
+    topic: "programming/common",
+    tags: ["JavaScript", "Node.js", "TypeScript", "CI/CD", "Git", "npm"],
+    date: "2026-10-21",
+    keywords: ["Semantic Versioning", "캐럿 범위", "사전 배포 버전", "dist-tag", "Changesets"],
+  },
+  {
     slug: "k8s-architecture",
     title: "쿠버네티스 구조: kubectl apply 뒤에서 움직이는 부품들",
     summary: "API 서버, etcd, 스케줄러, 컨트롤러 매니저, cloud-controller-manager와 노드의 kubelet, kube-proxy, 런타임이 각각 무엇을 맡는지 보고, Deployment 하나가 apply된 뒤의 흐름을 따라간다. 실습 클러스터에서 부품을 하나씩 멈춰 어디서 흐름이 끊기는지 확인한다.",

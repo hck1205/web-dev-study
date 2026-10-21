@@ -58,6 +58,7 @@ import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
+import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
@@ -117,6 +118,7 @@ import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
 import { HYDRATION } from "./hydration";
 import { HYPERLOGLOG } from "./hyperloglog";
+import { IAC_BASICS } from "./iac-basics";
 import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
@@ -266,6 +268,7 @@ import { SCHEMA_VERSIONING } from "./schema-versioning";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
+import { SEMANTIC_VERSIONING } from "./semantic-versioning";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
 import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
@@ -382,6 +385,7 @@ export const QUESTION_SETS = [
   DB_TYPES_OVERVIEW,
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
+  DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
@@ -441,6 +445,7 @@ export const QUESTION_SETS = [
   HTTPS_TLS,
   HYDRATION,
   HYPERLOGLOG,
+  IAC_BASICS,
   IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
@@ -590,6 +595,7 @@ export const QUESTION_SETS = [
   SDN_VXLAN_OVERLAY,
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
+  SEMANTIC_VERSIONING,
   SERVER_SENT_EVENTS,
   SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,

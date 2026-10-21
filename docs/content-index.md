@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 321편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 324편 · 토픽 68개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -197,7 +197,7 @@
 - 소제목: 추가했을 뿐인데 깨지는 이유 / 깨는 변경을 배포 전에 기계로 잡는다 / 소비자가 쓰는 것만 지킨다 / 한 서버가 여러 버전을 내는 방법 / 헤더로 버전을 고르면 캐시가 섞인다 / 옛 버전을 끝내는 순서 / 이벤트와 메시지에도 버전이 있다 / GraphQL은 버전 없이 진화한다 / 버전 때문에 장애가 났을 때 / 버전은 약속을 관리하는 도구다 / 면접에서 나올 만한 질문
 - 직접 링크 →: rest-api-design, grpc, zero-downtime-migrations, http-caching-cdn, schema-versioning
 - 키워드 백링크 →: kafka-basics, http-status-codes, webhooks
-- 이 글로 오는 글 ←: db-type-embedded, event-driven-architecture, git-branching-strategy, grpc, helm-dependencies-oci-gitops, json-crud-http, rest-api-design, rolling-deployment, schema-versioning
+- 이 글로 오는 글 ←: db-type-embedded, event-driven-architecture, git-branching-strategy, grpc, helm-dependencies-oci-gitops, json-crud-http, rest-api-design, rolling-deployment, schema-versioning, semantic-versioning
 
 #### `batch-processing` — 배치 처리: 묶음, 체크포인트, 다시 돌려도 같은 결과
 
@@ -380,6 +380,17 @@
 
 ### Programming › Common (`programming/common`)
 
+#### `dependency-hell` — 의존성 지옥: 다이아몬드, 유령 의존성, peer 충돌과 lockfile
+
+- 요약: 같은 패키지가 두 벌 깔리는 다이아몬드, 호이스팅이 만드는 유령 의존성과 pnpm의 엄격한 구조, ERESOLVE를 읽고 고치는 순서, overrides, npm install과 npm ci의 차이를 사설 레지스트리로 재현한다. 설치 스크립트와 숙성 기간 같은 공급망 방어, Renovate·Dependabot 운영 전략까지 다룬다.
+- 태그: JavaScript, Node.js, Security, CI/CD, Troubleshooting, npm
+- 키워드: 유령 의존성, 다이아몬드 의존성, ERESOLVE, lockfile
+- 길이: 662줄
+- 소제목: 다이아몬드 모양에서 두 벌이 깔린다 / node_modules는 왜 평평한가 / 선언하지 않은 패키지를 쓰는 유령 의존성 / pnpm은 링크로 경계를 세운다 / peer dependency가 부딪히면 ERESOLVE / 남의 의존성 버전을 바꾸는 overrides / lockfile이 기록하는 것 / 설치는 남의 코드를 실행하는 일이다 / 업데이트를 봇에게 맡기는 방법 / 현장에서 의존성이 꼬였을 때 / 범위는 바람이고 lockfile은 결정이다 / 면접에서 나올 만한 질문
+- 직접 링크 →: semantic-versioning, build-caching, pattern-singleton, secrets-management
+- 키워드 백링크 →: dockerfile-image-layers
+- 이 글로 오는 글 ←: build-caching, git-troubleshooting, k8s-project-structure, semantic-versioning, terraform-basics
+
 #### `local-custom-domain` — localhost 대신 내 도메인으로 개발하기
 
 - 요약: app.matt.test, api.matt.test처럼 배포와 같은 모양의 주소로 로컬 개발 환경을 만든다. hosts·dnsmasq로 이름을 돌리고, 리버스 프록시로 나누고, mkcert로 브라우저가 믿는 HTTPS를 붙인다.
@@ -390,6 +401,17 @@
 - 직접 링크 →: cors, hosts-file
 - 키워드 백링크 →: proxy-reverse-proxy, nginx-basics, ssrf, csrf, http-versions, what-happens-google-com, cookie-session-login, oauth, dns
 - 이 글로 오는 글 ←: cors, hosts-file, https-tls, network-flow-logs, network-monitoring, proxy-reverse-proxy
+
+#### `semantic-versioning` — Semantic Versioning: 세 숫자의 약속과 npm 범위 규칙
+
+- 요약: MAJOR.MINOR.PATCH가 약속하는 것, 사전 배포 버전의 정렬 규칙, npm의 캐럿과 물결표가 실제로 여는 범위와 0.x에서 한 칸 좁아지는 이유를 직접 돌려 본다. 타입·기본값·engines 변경이 왜 깨는 변경인지, dist-tag 사고, Changesets 릴리스 흐름까지 따라간다.
+- 태그: JavaScript, Node.js, TypeScript, CI/CD, Git, npm
+- 키워드: Semantic Versioning, 캐럿 범위, 사전 배포 버전, dist-tag, Changesets
+- 길이: 658줄
+- 소제목: 세 숫자에 담긴 약속 / 버전 문자열 한 줄 뜯어보기 / 사전 배포 버전은 어떤 순서로 줄을 서나 / 캐럿과 물결표가 실제로 여는 범위 / 0.x에서 캐럿은 한 칸 더 좁아진다 / 범위 안의 사전 배포 버전은 같은 줄에서만 / npm install은 범위에서 하나를 고른다 / dist-tag가 가리키는 곳 / 무엇이 깨지는 변경인가 / 버전 번호를 사람이 고르지 않게 / 현장에서 버전 때문에 깨지는 순간 / 숫자 세 개를 믿을 수 있게 만드는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: dependency-hell, git-branching-strategy, api-versioning, helm-dependencies-oci-gitops
+- 키워드 백링크 →: helm-basics
+- 이 글로 오는 글 ←: dependency-hell, git-branching-strategy, helm-dependencies-oci-gitops
 
 ### Programming › Common › Git (`programming/common/git`)
 
@@ -410,9 +432,9 @@
 - 키워드: Git Flow, GitHub Flow, 트렁크 기반 개발, Conventional Commits, squash 머지
 - 길이: 511줄
 - 소제목: 전략이 정하는 것은 통합하는 때와 곳이다 / Git Flow는 브랜치를 역할별로 나눈다 / Git Flow로 핫픽스 내보내기 / 릴리스 브랜치의 수정은 cherry-pick으로 돌려보낸다 / GitHub Flow는 main 하나로 버틴다 / GitLab Flow는 환경마다 브랜치를 둔다 / 트렁크 기반 개발은 하루에도 여러 번 합친다 / 무엇을 고를지는 배포 주기가 정한다 / PR을 합치는 세 가지 버튼 / 커밋 메시지에 규칙을 둔다 / 버전 번호와 태그 / main을 지키는 규칙은 서버에 둔다 / 모노레포에서는 브랜치보다 경로가 경계다 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-branch-merge, git-remote-collaboration, git-tips-advanced
+- 직접 링크 →: git-branch-merge, git-remote-collaboration, git-tips-advanced, semantic-versioning
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, ab-testing, api-versioning
-- 이 글로 오는 글 ←: ci-cd-basics, git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced, github-actions-docker-ecr
+- 이 글로 오는 글 ←: ci-cd-basics, git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced, github-actions-docker-ecr, semantic-versioning
 
 #### `git-ignore-config` — .gitignore와 git config: 무시 규칙, 세 겹 설정, 줄바꿈
 
@@ -532,7 +554,7 @@
 - 길이: 521줄
 - 소제목: 문제가 어디서 났는지부터 가른다 / 푸시가 fetch first로 거절된다 / pull이 divergent branches라며 멈춘다 / refusing to merge unrelated histories / 바꾼 파일이 덮어써진다며 브랜치를 못 바꾼다 / stash pop에서 충돌이 났다 / detached HEAD에서 만든 커밋이 사라졌다 / 브랜치를 실수로 지웠다 / 이미 푸시한 커밋 메시지가 틀렸다 / rebase가 끝나지 않은 채로 남아 있다 / pnpm-lock.yaml에서 충돌이 났다 / 오류를 만났을 때의 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, git-repo-errors, git-undo, git-rebase, git-remote-collaboration, git-tips-advanced
-- 키워드 백링크 →: git-branch-merge, git-ignore-config, git-staging-area, git-stash-reflog
+- 키워드 백링크 →: git-branch-merge, git-ignore-config, dependency-hell, git-staging-area, git-stash-reflog
 - 이 글로 오는 글 ←: git-ignore-config, git-internals-basics, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-stash-reflog, git-tips-advanced, git-undo
 
 #### `git-undo` — 되돌리기: restore, reset, revert와 히스토리 속 비밀 값
@@ -1511,7 +1533,7 @@
 - 소제목: 하나만 만들고 모두가 같이 쓴다 / 자바스크립트에서는 모듈이 이미 하나다 / 같은 모듈이 두 번 로드되는 경우 / 비동기 초기화에서는 둘이 만들어진다 / 프로세스 하나에 하나일 뿐이다 / 요청마다 달라야 할 값을 넣으면 섞인다 / 테스트가 순서에 따라 깨진다 / 다른 언어는 어떻게 막나 / 직접 만들어 보는 once / 싱글턴을 써도 되는 자리 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, micro-frontends, rate-limiting-in-practice, redis-basics, rendering-ssr, pattern-factory-method
 - 키워드 백링크 →: k8s-architecture, cron-jobs, thread-safety, leader-election, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-flyweight
+- 이 글로 오는 글 ←: dependency-hell, design-patterns-overview, pattern-abstract-factory, pattern-flyweight
 
 ### Programming › Design Patterns › Structural (`programming/design-patterns/structural`)
 
@@ -1851,7 +1873,7 @@
 - 길이: 748줄
 - 소제목: 트리 한 장을 위에서부터 / app: 이미지를 만드는 재료 / k8s: 리소스 종류마다 폴더 하나 / kubectl apply의 순서는 파일 이름순이다 / 클라이언트 검사만 믿으면 안 된다 / secret.yaml을 git에 두면 비밀이 아니다 / terraform: 클러스터와 네트워크를 만드는 코드 / .gitignore가 막아야 하는 것 / scripts: 손으로 치던 명령을 모은 곳 / 환경이 늘어날 때: 복사, Kustomize, Helm / 앱과 배포 설정을 한 저장소에 둘까 / 처음 받은 저장소는 이 순서로 읽는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-deploy-pipeline-eks, dockerfile-image-layers, k8s-namespace, k8s-deployment, k8s-configmap, k8s-hpa, k8s-pv-pvc, git-large-files-secrets, k8s-secret, helm-values-secrets, terraform-modules-tfvars, eks-cluster-basics, terraform-basics, git-ignore-config, helm-basics, helm-dependencies-oci-gitops
-- 키워드 백링크 →: github-actions-docker-ecr, vpc-subnets-route-tables, docker-container-basics, db-type-key-value, layer-ip-routing-icmp, kubernetes-ingress, build-caching, security-groups-nacl, what-happens-google-com, layer-ip-addressing, vpc-basics
+- 키워드 백링크 →: github-actions-docker-ecr, vpc-subnets-route-tables, docker-container-basics, dependency-hell, db-type-key-value, layer-ip-routing-icmp, kubernetes-ingress, build-caching, security-groups-nacl, what-happens-google-com, layer-ip-addressing, vpc-basics
 - 이 글로 오는 글 ←: github-actions-docker-ecr, helm-chart-templates, k8s-deploy-pipeline-eks, k8s-namespace, terraform-modules-tfvars
 
 #### `network-troubleshooting-by-layer` — 계층별로 장애 좁히기: 아래에서 위로
@@ -1874,7 +1896,7 @@
 - 소제목: 에러 메시지는 어느 층이 말했는지 알려 준다 / 같은 메시지가 다른 층에서 나오기도 한다 / 로드 밸런서는 어느 층에서 나누느냐로 고른다 / 방화벽도 층마다 따로 있다 / 헬스 체크는 어느 층까지 물어보나 / TLS를 어디서 풀지 정한다 / 타임아웃은 안쪽으로 갈수록 짧게 / 클라우드 제품 이름을 층으로 읽는다 / 네트워크 탓이라고 말하기 전에 모을 것 / 층 번호는 질문을 좁히는 말이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, http-status-codes, nginx-reverse-proxy, iptables-basics, dns, layer-link-ethernet-arp, proxy-reverse-proxy, tcp-connection-lifecycle, ports-and-sockets, resilience-patterns, https-tls, upper-layers-session-presentation-app, iptables-nat, kubernetes-ingress, gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: k8s-network-policy, timeouts, docker-container-basics, realtime-communication, service-mesh, http-versions, security-groups-nacl, what-happens-google-com, encryption-in-transit, grpc, layer-ip-routing-icmp, udp-and-quic
-- 이 글로 오는 글 ←: autoscaling, caching-strategies, cdn-edge-anycast, ci-cd-basics, circuit-breaker, consistent-hashing, deadlocks, disaster-recovery, event-loop, failover, gateway, grpc, health-checks, http-status-codes, iptables-nat, k8s-architecture, k8s-network-policy, k8s-pod-multicontainer, k8s-service-types, kubernetes-ingress, linux-grep-awk-sed, linux-processes-signals, load-balancer-basics, load-balancing-algorithms, long-polling, multi-region, network-flow-logs, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, on-call, packet-capture-tcpdump, postmortems, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, rendering-ssr, resilience-patterns, rolling-deployment, service-discovery, service-mesh, sli-slo, upper-layers-session-presentation-app, what-happens-google-com
+- 이 글로 오는 글 ←: autoscaling, caching-strategies, cdn-edge-anycast, ci-cd-basics, circuit-breaker, consistent-hashing, deadlocks, disaster-recovery, event-loop, failover, gateway, grpc, health-checks, http-status-codes, iac-basics, iptables-nat, k8s-architecture, k8s-network-policy, k8s-pod-multicontainer, k8s-service-types, kubernetes-ingress, linux-grep-awk-sed, linux-processes-signals, load-balancer-basics, load-balancing-algorithms, long-polling, multi-region, network-flow-logs, network-layers-overview, network-troubleshooting-by-layer, nginx-reverse-proxy, on-call, packet-capture-tcpdump, postmortems, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, rendering-ssr, resilience-patterns, rolling-deployment, service-discovery, service-mesh, sli-slo, upper-layers-session-presentation-app, what-happens-google-com
 
 #### `packet-capture-tcpdump` — tcpdump로 계층을 눈으로 보기
 
@@ -1898,7 +1920,7 @@
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
 - 키워드 백링크 →: http-versions, cdn-edge-anycast, sql-batch-timeout-pool, udp-and-quic, ipv6-basics
-- 이 글로 오는 글 ←: bloom-filter, blue-green-deployment, browser-fetch, cache-invalidation, caching-strategies, cdn-edge-anycast, ci-cd-basics, circuit-breaker, clock-skew, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, disaster-recovery, distributed-lock, docker-compose, docker-network-drivers, docker-network-volume, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, eventual-consistency, exponential-backoff-jitter, failover, gateway, grpc, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, ipv6-basics, js-memory-leak, k8s-coredns, k8s-namespace, k8s-network-policy, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leader-election, load-balancer-basics, local-custom-domain, lossy-counting, monitoring-basics, multi-region, network-flow-logs, network-layers-overview, network-monitoring, network-partitions, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, pattern-facade, pattern-proxy, percentile-latency, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, pub-sub, rabbitmq-basics, redis-basics, redis-memory-eviction, redis-persistence-ha, scaling-horizontal-vertical, secrets-management, security-groups-nacl, service-discovery, sli-slo, ssrf, timeouts, udp-and-quic, upper-layers-session-presentation-app, vlan-basics, vpc-basics, vpc-peering-transit-privatelink, vpn-ipsec-wireguard, waf, webhooks, what-happens-google-com
+- 이 글로 오는 글 ←: bloom-filter, blue-green-deployment, browser-fetch, cache-invalidation, caching-strategies, cdn-edge-anycast, ci-cd-basics, circuit-breaker, clock-skew, core-web-vitals, db-replication-sharding, db-type-key-value, db-type-wide-column, disaster-recovery, distributed-lock, docker-compose, docker-network-drivers, docker-network-volume, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, eventual-consistency, exponential-backoff-jitter, failover, gateway, grpc, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iac-basics, ids-ips, iptables-basics, iptables-nat, ipv6-basics, js-memory-leak, k8s-coredns, k8s-namespace, k8s-network-policy, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leader-election, load-balancer-basics, local-custom-domain, lossy-counting, monitoring-basics, multi-region, network-flow-logs, network-layers-overview, network-monitoring, network-partitions, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, packet-capture-tcpdump, pattern-facade, pattern-proxy, percentile-latency, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, pub-sub, rabbitmq-basics, redis-basics, redis-memory-eviction, redis-persistence-ha, scaling-horizontal-vertical, secrets-management, security-groups-nacl, service-discovery, sli-slo, ssrf, timeouts, udp-and-quic, upper-layers-session-presentation-app, vlan-basics, vpc-basics, vpc-peering-transit-privatelink, vpn-ipsec-wireguard, waf, webhooks, what-happens-google-com
 
 #### `hosts-file` — hosts 파일: DNS보다 먼저 보는 한 줄
 
@@ -2010,7 +2032,7 @@
 - 소제목: 두 방화벽이 서 있는 자리 / 보안 그룹은 연결을 기억한다 / NACL은 패킷 하나하나를 본다 / 응답 패킷은 포트가 다르다 / 규칙을 지웠는데 연결이 살아 있다 / 어디서 막혔는지 확인하기 / 무엇을 어디에 걸까 / 두 장면을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: vpc-basics, iptables-basics, network-flow-logs, terraform-network-iac, vpc-peering-transit-privatelink
 - 키워드 백링크 →: vpc-subnets-route-tables, ports-and-sockets, layer-ip-routing-icmp, postgres-getting-started, udp-and-quic, dns
-- 이 글로 오는 글 ←: ansible-network-automation, cdn-edge-anycast, ci-cd-basics, clock-skew, docker-network-drivers, eks-cluster-basics, failover, ids-ips, iptables-basics, ipv6-basics, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-service-types, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, load-balancer-basics, network-config-cicd, network-flow-logs, network-layers-overview, network-partitions, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, ports-and-sockets, postgres-connections-pg-hba, proxy-reverse-proxy, sdn-vxlan-overlay, ssrf, tcp-connection-lifecycle, terraform-basics, terraform-modules-tfvars, terraform-network-iac, udp-and-quic, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, zero-trust-architecture
+- 이 글로 오는 글 ←: ansible-network-automation, cdn-edge-anycast, ci-cd-basics, clock-skew, docker-network-drivers, eks-cluster-basics, failover, iac-basics, ids-ips, iptables-basics, ipv6-basics, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-service-types, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, load-balancer-basics, network-config-cicd, network-flow-logs, network-layers-overview, network-partitions, network-troubleshooting-by-layer, nginx-https-performance, osi-in-practice, ports-and-sockets, postgres-connections-pg-hba, proxy-reverse-proxy, sdn-vxlan-overlay, ssrf, tcp-connection-lifecycle, terraform-basics, terraform-modules-tfvars, terraform-network-iac, udp-and-quic, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, zero-trust-architecture
 
 #### `vpc-basics` — VPC 기본: 클라우드 안에 빌린 내 사설망
 
@@ -2021,7 +2043,7 @@
 - 소제목: 남의 건물 안에 내 층을 하나 빌린다 / 리전, 가용 영역, 서브넷의 포함 관계 / VPC를 이루는 부품 / 주소 다섯 개는 처음부터 내 것이 아니다 / 공인 IP는 인스턴스 안에 없다 / 리눅스 네임스페이스로 VPC 하나 만들기 / 패킷 하나가 VPC를 지나는 길 / VPC끼리는 같은 대역을 써도 섞이지 않는다 / VPC 안의 DNS와 메타데이터 / 기본 VPC를 그대로 쓰면 생기는 일 / 현장에서 VPC 때문에 막히는 순간 / VPC를 몇 개로 나눌까 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vpc-subnets-route-tables, vpc-peering-transit-privatelink, security-groups-nacl, sdn-vxlan-overlay, layer-ip-addressing, iptables-nat, terraform-network-iac, network-flow-logs
 - 키워드 백링크 →: layer-ip-routing-icmp, terraform-basics, iptables-basics, ipv6-basics, ssrf, layer-link-ethernet-arp, what-happens-google-com, eks-cluster-basics, dns
-- 이 글로 오는 글 ←: ansible-network-automation, autoscaling, chaos-engineering, cloud-cost-optimization, cold-starts, connection-pool, consistent-hashing, docker-network-drivers, eks-cluster-basics, encryption-at-rest, encryption-in-transit, failover, health-checks, ids-ips, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-pv-pvc, k8s-service-types, layer-ip-addressing, layer-link-ethernet-arp, layer-mtu-fragmentation, monitoring-basics, n-plus-one-queries, network-config-cicd, network-flow-logs, network-layers-overview, redis-cluster, sdn-vxlan-overlay, security-groups-nacl, ssrf, terraform-basics, terraform-modules-tfvars, terraform-network-iac, vlan-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, webhooks, zero-trust-architecture
+- 이 글로 오는 글 ←: ansible-network-automation, autoscaling, chaos-engineering, cloud-cost-optimization, cold-starts, connection-pool, consistent-hashing, docker-network-drivers, eks-cluster-basics, encryption-at-rest, encryption-in-transit, failover, health-checks, iac-basics, ids-ips, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-pv-pvc, k8s-service-types, layer-ip-addressing, layer-link-ethernet-arp, layer-mtu-fragmentation, monitoring-basics, n-plus-one-queries, network-config-cicd, network-flow-logs, network-layers-overview, redis-cluster, sdn-vxlan-overlay, security-groups-nacl, ssrf, terraform-basics, terraform-modules-tfvars, terraform-network-iac, vlan-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, webhooks, zero-trust-architecture
 
 #### `vpc-peering-transit-privatelink` — VPC 잇기: 피어링, Transit Gateway, PrivateLink
 
@@ -2067,7 +2089,7 @@
 - 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 프록시는 멱등성을 보고 재시도를 고른다 / 다시 메일 링크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes, nginx-reverse-proxy
 - 키워드 백링크 →: json-crud-http, elasticsearch-inverted-index, gateway, csrf, client-data-cache, what-happens-google-com
-- 이 글로 오는 글 ←: ansible-network-automation, batch-processing, browser-fetch, crdt, csrf, dead-letter-queue, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, idempotency-key, json-crud-http, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, pattern-builder, pattern-decorator, race-conditions, resilience-patterns, rest-api-design, retries, service-mesh, tail-latency, webhooks
+- 이 글로 오는 글 ←: ansible-network-automation, batch-processing, browser-fetch, crdt, csrf, dead-letter-queue, distributed-lock, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, iac-basics, idempotency-key, json-crud-http, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, pattern-builder, pattern-decorator, race-conditions, resilience-patterns, rest-api-design, retries, service-mesh, tail-latency, webhooks
 
 #### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
 
@@ -2462,7 +2484,7 @@
 - 소제목: 비밀 값이 지나가는 길 / 지운 커밋에도 남아 있다 / 무작위해 보이는 문자열을 찾는 법 / 환경 변수는 생각보다 많이 보인다 / CI 로그와 이미지 / 비밀을 한곳에 모으는 저장소 / 쓸 때마다 새로 만드는 비밀번호 / 빌려준 비밀에는 기한이 있다 / 저장소에 들어가려면 무엇을 내미나 / AWS Secrets Manager와 SOPS는 어디에 서나 / 키가 샜다는 연락을 받았을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, k8s-secret, helm-values-secrets, dockerfile-image-layers, github-actions-docker-ecr, iam-basics, eks-cluster-basics
 - 키워드 백링크 →: k8s-architecture, git-staging-area, sql-batch-timeout-pool, db-type-key-value, dns, token-login
-- 이 글로 오는 글 ←: encryption-at-rest, git-large-files-secrets, git-undo, iam-basics, jwt-key-rotation
+- 이 글로 오는 글 ←: dependency-hell, encryption-at-rest, git-large-files-secrets, git-undo, iac-basics, iam-basics, jwt-key-rotation
 
 #### `sql-injection` — SQL 주입: 이어 붙인 문자열이 쿼리가 될 때
 
@@ -2540,8 +2562,8 @@
 - 길이: 519줄
 - 소제목: 캐시가 기억하는 것은 입력과 결과의 짝이다 / 의존성 설치는 무엇을 캐시해야 빨라지나 / 캐시 키 한 줄 뜯어보기 / 정확히 맞지 않으면 비슷한 것이라도 / 키는 어떤 순서로 맞춰 보나 / 작업 결과까지 캐시하는 도구들 / 해시에 없는 입력이 만드는 틀린 적중 / 원격 캐시는 팀 전체의 기억이다 / 남이 올린 결과물을 믿어도 되나 / Docker 빌드의 캐시는 어디에 두나 / 캐시가 이상할 때 보는 순서 / 같은 입력이면 같은 결과라는 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, github-actions-docker-ecr, ci-cd-basics, feature-flags, rollback-strategy
-- 키워드 백링크 →: git-internals-basics
-- 이 글로 오는 글 ←: ci-cd-basics, git-internals-basics, git-large-files-secrets, k8s-project-structure, merkle-tree, micro-frontends, rollback-strategy
+- 키워드 백링크 →: dependency-hell, git-internals-basics
+- 이 글로 오는 글 ←: ci-cd-basics, dependency-hell, git-internals-basics, git-large-files-secrets, k8s-project-structure, merkle-tree, micro-frontends, rollback-strategy
 
 #### `canary-release` — 카나리 릴리스: 작게 겪고 지표로 넓힌다
 
@@ -2596,7 +2618,7 @@
 - 소제목: 네트워크 설정의 원본은 git 하나 / PR이 올라오면 기계가 먼저 본다 / plan은 한 번 만들고 그대로 apply한다 / 권한은 plan과 apply를 나눈다 / 언제 바꿀지도 코드로 정한다 / 한 번에 다 바꾸지 않는다 / 코드 밖에서 바뀐 것 찾기 / 되돌리기는 git revert부터 / 현장에서 파이프라인이 막히는 순간 / 사람은 plan을 보고, 기계는 나머지를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-network-iac, ansible-network-automation, github-actions-docker-ecr, k8s-deploy-pipeline-eks, terraform-basics
 - 키워드 백링크 →: vpc-subnets-route-tables, iptables-basics, security-groups-nacl, vpc-basics
-- 이 글로 오는 글 ←: ansible-network-automation, chaos-engineering, ci-cd-basics, terraform-network-iac
+- 이 글로 오는 글 ←: ansible-network-automation, chaos-engineering, ci-cd-basics, iac-basics, terraform-network-iac
 
 #### `rollback-strategy` — 롤백 전략: 되돌릴 수 있는 것과 없는 것, 자동 롤백
 
@@ -2607,7 +2629,7 @@
 - 소제목: 롤백할까, 고쳐서 내보낼까 / 되돌릴 수 있는 것과 없는 것 / 롤백했더니 DB가 맞지 않는다 / down 마이그레이션이 지우는 것 / 큐에 남은 새 형식의 메시지 / 쿠버네티스에서 되돌리기 / 사람보다 먼저 되돌리게 하기 / 되돌리기가 실패하는 자리 / 되돌릴 수 있게 만드는 것이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-deployment, k8s-deploy-pipeline-eks, helm-release-lifecycle, ci-cd-basics, build-caching, feature-flags, zero-downtime-migrations, db-migration-tools, dead-letter-queue, sli-slo, error-budgets, canary-release, blue-green-deployment, production-incidents, postmortems
 - 키워드 백링크 →: git-undo, k8s-configmap, postgres-operations, redis-basics, cookie-session-login
-- 이 글로 오는 글 ←: blue-green-deployment, build-caching, canary-release, ci-cd-basics, feature-flags, helm-release-lifecycle
+- 이 글로 오는 글 ←: blue-green-deployment, build-caching, canary-release, ci-cd-basics, feature-flags, helm-release-lifecycle, iac-basics
 
 #### `rolling-deployment` — 롤링 배포: 빼고, 기다리고, 확인하고, 넣는다
 
@@ -2710,7 +2732,7 @@
 - 소제목: 문제가 된 Dockerfile / 명령어 한 줄씩 읽기 / ENTRYPOINT와 CMD, exec 형식과 셸 형식 / 명령 하나가 레이어 한 장 / 캐시는 처음 바뀐 줄에서 끊긴다 / 잘 안 바뀌는 것을 위에 둔다 / .dockerignore로 보내는 것부터 줄인다 / 빌드 도구는 두고 결과만 옮기는 멀티 스테이지 빌드 / 베이스 이미지: slim, alpine, distroless / root가 아닌 사용자로, 상태는 HEALTHCHECK로 / BuildKit 캐시 마운트와 여러 아키텍처 빌드 / 태그 붙여 올리고, 올리기 전에 검사하기 / 빌드는 됐는데 서버에서 안 뜰 때 / 처음 문제로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, docker-network-volume
 - 키워드 백링크 →: k8s-pod-probes, github-actions-docker-ecr, docker-compose, k8s-architecture, k8s-pod-troubleshooting, dns
-- 이 글로 오는 글 ←: build-caching, docker-compose, docker-container-basics, docker-network-drivers, docker-network-volume, git-tips-advanced, github-actions-docker-ecr, k8s-pod-lifecycle, k8s-pod-troubleshooting, k8s-project-structure, linux-files-permissions, linux-systemd-systemctl, secrets-management
+- 이 글로 오는 글 ←: build-caching, dependency-hell, docker-compose, docker-container-basics, docker-network-drivers, docker-network-volume, git-tips-advanced, github-actions-docker-ecr, iac-basics, k8s-pod-lifecycle, k8s-pod-troubleshooting, k8s-project-structure, linux-files-permissions, linux-systemd-systemctl, secrets-management
 
 ### Programming › Server/Infra › IaC (`programming/server-infra/iac`)
 
@@ -2723,7 +2745,18 @@
 - 소제목: Terraform이 들어가지 못하는 곳 / 인벤토리와 group_vars: 무엇을 어디에 적나 / 플레이북 한 번 돌리기 / 두 번째 실행은 아무것도 바꾸지 않아야 한다 / 바꾸기 전에 --check --diff / 설정 파일은 템플릿으로, 다시 읽기는 핸들러로 / 규칙을 한 줄씩 맞출까, 파일 전체를 맞출까 / 한 대씩 바꾸고, 틀리면 멈춘다 / 네트워크 장비도 같은 방식으로 / 현장에서 자동화가 사고를 키우는 순간 / 같은 값을 몇 번이고 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-network-iac, iptables-basics, iptables-nat, network-config-cicd
 - 키워드 백링크 →: terraform-basics, security-groups-nacl, vlan-basics, vpc-basics, http-methods
-- 이 글로 오는 글 ←: network-config-cicd, rolling-deployment, terraform-basics, terraform-network-iac
+- 이 글로 오는 글 ←: iac-basics, network-config-cicd, rolling-deployment, terraform-basics, terraform-network-iac
+
+#### `iac-basics` — IaC 기본 개념: 선언형, state, 불변 인프라와 조정 루프
+
+- 요약: 손으로 고친 서버가 서로 달라지는 문제에서 출발해 명령형 스크립트와 선언형 수렴의 차이, 멱등성, state가 필요한 이유, 도구가 읽지 못하는 것은 관리하지 못한다는 한계, 가변과 불변 인프라, 한 번 맞추는 도구와 계속 맞추는 조정 루프를 직접 확인한다. Terraform, Pulumi, CloudFormation, Ansible을 고르는 기준도 정리한다.
+- 태그: IaC, Terraform, DevOps, GitOps, Linux
+- 키워드: 선언형 인프라, 불변 인프라, 조정 루프, 구성 드리프트, Pulumi
+- 길이: 570줄
+- 소제목: 손으로 만든 서버는 서로 조금씩 다르다 / 스크립트도 코드인데 무엇이 다른가 / 원하는 모습을 적고 차이만 메운다 / 차이를 계산하려면 기억이 필요하다 / 도구가 읽지 못하는 것은 관리하지 못한다 / 고쳐 쓸까, 새로 갈아 끼울까 / 한 번 맞추는 도구와 계속 맞추는 도구 / 도구를 고르는 기준 / 코드로 바꾸면 리뷰할 수 있다 / IaC가 오히려 사고를 키우는 순간 / 같은 결과를 몇 번이고 만들 수 있게 / 면접에서 나올 만한 질문
+- 직접 링크 →: terraform-basics, terraform-modules-tfvars, terraform-network-iac, ansible-network-automation, network-config-cicd, dockerfile-image-layers, helm-dependencies-oci-gitops, secrets-management
+- 키워드 백링크 →: disaster-recovery, rollback-strategy, security-groups-nacl, osi-in-practice, vpc-basics, http-methods, dns
+- 이 글로 오는 글 ←: terraform-basics
 
 #### `terraform-basics` — Terraform 기본: plan, apply, state와 잠금
 
@@ -2732,9 +2765,9 @@
 - 키워드: Terraform, terraform plan, state 파일, force-unlock
 - 길이: 665줄
 - 소제목: 콘솔 대신 코드로 적는 이유 / 프로바이더와 리소스 / plan은 세 가지를 맞대 본다 / 기호 하나가 다운타임을 말한다 / state 파일 안에 든 것 / state를 git에 넣지 않는 이유 / 콘솔에서 고친 것은 drift가 된다 / state를 손보는 명령 / 원격 백엔드로 옮기기 / 두 사람이 동시에 apply하면 / force-unlock을 치기 전에 / 현장에서 state 때문에 막히는 순간 / 기억은 state가, 판단은 plan이 / 면접에서 나올 만한 질문
-- 직접 링크 →: terraform-modules-tfvars, terraform-network-iac, ansible-network-automation, git-large-files-secrets, distributed-lock, k8s-deploy-pipeline-eks
-- 키워드 백링크 →: json-crud-http, db-type-key-value, security-groups-nacl, eks-cluster-basics, vpc-basics
-- 이 글로 오는 글 ←: ansible-network-automation, cloud-cost-optimization, eks-cluster-basics, github-actions-docker-ecr, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure, network-config-cicd, terraform-modules-tfvars, terraform-network-iac, vpc-basics
+- 직접 링크 →: terraform-modules-tfvars, terraform-network-iac, iac-basics, ansible-network-automation, git-large-files-secrets, distributed-lock, k8s-deploy-pipeline-eks
+- 키워드 백링크 →: json-crud-http, dependency-hell, db-type-key-value, security-groups-nacl, eks-cluster-basics, vpc-basics
+- 이 글로 오는 글 ←: ansible-network-automation, cloud-cost-optimization, eks-cluster-basics, github-actions-docker-ecr, iac-basics, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure, network-config-cicd, terraform-modules-tfvars, terraform-network-iac, vpc-basics
 
 #### `terraform-modules-tfvars` — Terraform 모듈과 tfvars: 환경마다 복사하지 않기
 
@@ -2745,7 +2778,7 @@
 - 소제목: 폴더 하나가 모듈 하나 / 변수에 규칙을 건다 / 계산은 locals에 모은다 / 모듈의 값은 outputs로만 나온다 / count로 만들면 순서가 주소가 된다 / 값은 어디서 들어오나 / 환경마다 tfvars와 state를 나눈다 / workspace는 언제 쓰나 / 버전을 묶는 세 군데 / 레지스트리 모듈을 감싸서 쓴다 / 모듈을 나누다 생기는 사고 / 같은 코드, 다른 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-basics, terraform-network-iac, eks-cluster-basics, layer-ip-addressing, k8s-project-structure
 - 키워드 백링크 →: docker-container-basics, security-groups-nacl, ipv6-basics, vpc-basics
-- 이 글로 오는 글 ←: eks-cluster-basics, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure, terraform-basics, terraform-network-iac
+- 이 글로 오는 글 ←: eks-cluster-basics, iac-basics, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure, terraform-basics, terraform-network-iac
 
 #### `terraform-network-iac` — 네트워크를 Terraform으로: 주소 계획부터 끊기지 않는 변경까지
 
@@ -2755,7 +2788,7 @@
 - 길이: 679줄
 - 소제목: 네트워크 리소스는 서로 물려 있다 / 주소 계획을 코드에 먼저 적는다 / VPC 한 벌을 for_each로 짓는다 / 보안 그룹 규칙을 적는 세 가지 방법 / 인라인과 개별 규칙을 섞으면 plan이 끝나지 않는다 / 설명 한 줄 고쳤는데 보안 그룹이 갈아 끼워진다 / 물결표 하나가 서브넷을 인터넷에서 떼어 낸다 / 콘솔에서 연 규칙을 코드로 데려오기 / plan을 사람 눈 대신 정책으로 한 번 더 본다 / 현장에서 네트워크 plan을 읽는 순서 / 코드는 바꾸되 길은 끊지 않는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-basics, terraform-modules-tfvars, vpc-basics, vpc-subnets-route-tables, security-groups-nacl, vpc-peering-transit-privatelink, layer-ip-addressing, network-flow-logs, network-config-cicd, ansible-network-automation
-- 이 글로 오는 글 ←: ansible-network-automation, network-config-cicd, security-groups-nacl, terraform-basics, terraform-modules-tfvars, vpc-basics
+- 이 글로 오는 글 ←: ansible-network-automation, iac-basics, network-config-cicd, security-groups-nacl, terraform-basics, terraform-modules-tfvars, vpc-basics
 
 ### Programming › Server/Infra › Kubernetes (`programming/server-infra/kubernetes`)
 
@@ -2853,7 +2886,7 @@
 - 소제목: 복사한 YAML은 환경마다 조금씩 어긋난다 / 차트, 릴리스, 리비전 / helm create가 만들어 주는 것 / install 한 번에 일어나는 일 / 설치하고, 들여다보고, 지우기 / 릴리스 기록은 클러스터 안의 Secret에 있다 / 이미 있는 리소스와 이름이 겹칠 때 / 현장에서 릴리스를 만나는 순간 / Helm 2에는 서버가 있었다 / Helm이 묶어 주는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: helm-dependencies-oci-gitops, helm-chart-templates, helm-release-lifecycle, k8s-pod-lifecycle, helm-values-secrets
 - 키워드 백링크 →: k8s-pod-basics, k8s-configmap, docker-container-basics, kubernetes-ingress, redis-basics
-- 이 글로 오는 글 ←: eks-cluster-basics, garbage-collection, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, helm-values-secrets, k8s-configmap, k8s-deploy-pipeline-eks, k8s-hpa, k8s-namespace, k8s-pod-basics, k8s-pod-troubleshooting, k8s-project-structure, k8s-secret
+- 이 글로 오는 글 ←: eks-cluster-basics, garbage-collection, helm-chart-templates, helm-dependencies-oci-gitops, helm-release-lifecycle, helm-values-secrets, k8s-configmap, k8s-deploy-pipeline-eks, k8s-hpa, k8s-namespace, k8s-pod-basics, k8s-pod-troubleshooting, k8s-project-structure, k8s-secret, semantic-versioning
 
 #### `helm-chart-templates` — 차트 템플릿 문법: values, _helpers.tpl, 들여쓰기
 
@@ -2874,8 +2907,8 @@
 - 길이: 648줄
 - 소제목: 차트가 다른 차트를 품는 의존성 / 부모 values가 하위 차트로 흘러가는 길 / 템플릿만 빌려주는 library 차트 / 차트 버전과 앱 버전 / 차트를 OCI 레지스트리에 올리고 받기 / 릴리스 여러 개를 파일 하나로, helmfile / ArgoCD는 차트를 렌더링만 한다 / Kustomize와 무엇이 다른가 / 차트가 클러스터에 닿기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: helm-basics, helm-chart-templates, helm-values-secrets, helm-release-lifecycle, k8s-pod-basics
-- 키워드 백링크 →: git-undo, k8s-configmap, docker-container-basics, api-versioning, redis-basics, what-happens-google-com, github-actions-docker-ecr
-- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, helm-values-secrets, k8s-configmap, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure
+- 키워드 백링크 →: git-undo, k8s-configmap, semantic-versioning, docker-container-basics, api-versioning, redis-basics, what-happens-google-com, github-actions-docker-ecr
+- 이 글로 오는 글 ←: helm-basics, helm-release-lifecycle, helm-values-secrets, iac-basics, k8s-configmap, k8s-deploy-pipeline-eks, k8s-namespace, k8s-project-structure, semantic-versioning
 
 #### `helm-release-lifecycle` — 업그레이드와 롤백: 릴리스가 꼬일 때
 
@@ -3250,7 +3283,7 @@
 - 소제목: 디스크가 사라진 날 잃은 39건 / 얼마나 잃고 얼마나 멈추나 / 마지막으로 바깥에 나간 기록이 RPO를 정한다 / RTO는 복원 단계를 더한 값이다 / 네 단계의 DR 구성 / 비용과 RTO를 함께 놓고 고르기 / DR 훈련: 문서대로 되살아나는지 / 훈련에서 자주 터지는 것들 / 두 질문에 숫자로 답하기 / 면접에서 나올 만한 질문
 - 직접 링크 →: backup-strategy, failover, multi-region, postgres-operations, chaos-engineering
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, docker-container-basics, db-replication-sharding, osi-in-practice, postgres-architecture, dns, on-call
-- 이 글로 오는 글 ←: backup-strategy, db-replication-sharding, failover, multi-region, network-monitoring, postgres-operations, tcp-reliability-congestion
+- 이 글로 오는 글 ←: backup-strategy, db-replication-sharding, failover, iac-basics, multi-region, network-monitoring, postgres-operations, tcp-reliability-congestion
 
 #### `failover` — 장애 조치: 감지, 펜싱, 클라이언트 전환과 멈춘 시간 재기
 
@@ -3669,6 +3702,7 @@
 - 관측 가능성 → `observability-basics`
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
 - 교착 상태 → `db-locking-deadlock`
+- 구성 드리프트 → `iac-basics`
 - 구조화 로그 → `structured-logging`
 - 굴러가는 창 → `sli-slo`
 - 굴리는 체크섬 → `rsync-algorithm`
@@ -3696,6 +3730,7 @@
 - 능동 헬스 체크 → `load-balancer-basics`
 - 다섯 번의 왜 → `postmortems`
 - 다운샘플링 → `db-type-time-series`
+- 다이아몬드 의존성 → `dependency-hell`
 - 단방향 데이터 흐름 → `mvc-pattern`
 - 단일 테이블 설계 → `db-type-key-value`
 - 단일행 함수 → `sqld-single-row-functions`
@@ -3816,6 +3851,7 @@
 - 분산 추적 → `distributed-tracing`
 - 분산 SQL → `db-type-newsql`
 - 분할 상환 → `big-o-notation`
+- 불변 인프라 → `iac-basics`
 - 브리지 패턴 → `pattern-bridge`
 - 블라인드 인덱스 → `encryption-at-rest`
 - 블라인드 SQL 주입 → `sql-injection`
@@ -3834,6 +3870,7 @@
 - 사설 대역 → `layer-ip-addressing`
 - 사용자 정의 브리지 → `docker-network-volume`
 - 사이드카 컨테이너 → `k8s-pod-multicontainer`
+- 사전 배포 버전 → `semantic-versioning`
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상속보다 합성 → `design-patterns-overview`
 - 상태 코드 → `http-status-codes`
@@ -3849,6 +3886,7 @@
 - 서비스 레지스트리 → `service-discovery`
 - 서비스 메시 → `service-mesh`
 - 서킷 브레이커 → `resilience-patterns`
+- 선언형 인프라 → `iac-basics`
 - 선택적 하이드레이션 → `hydration`
 - 선형화 가능성 → `db-consistency-cap`
 - 세대별 가설 → `garbage-collection`
@@ -3930,6 +3968,7 @@
 - 윈도우 프레임 → `sqld-window-functions`
 - 윈도우 함수 → `sqld-window-functions`
 - 유닛 파일 → `linux-systemd-systemctl`
+- 유령 의존성 → `dependency-hell`
 - 유클리드 거리 → `pythagorean-theorem`
 - 유한 상태 기계 → `pattern-state`
 - 윤초 → `clock-skew`
@@ -3995,6 +4034,7 @@
 - 정확히 한 번 → `message-delivery-semantics`
 - 제로 트러스트 → `zero-trust-architecture`
 - 제품군 → `pattern-abstract-factory`
+- 조정 루프 → `iac-basics`
 - 좀비 프로세스 → `linux-processes-signals`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
@@ -4034,6 +4074,7 @@
 - 카오스 엔지니어링 → `chaos-engineering`
 - 카운터 리셋 → `metrics-types`
 - 카티션 곱 → `sqld-joins`
+- 캐럿 범위 → `semantic-versioning`
 - 캐시 관통 → `caching-strategies`
 - 캐시 리스 → `cache-invalidation`
 - 캐시 무효화 → `http-caching-cdn`
@@ -4217,6 +4258,7 @@
 - certbot → `nginx-https-performance`
 - cgroups → `docker-container-basics`
 - Chain of Responsibility → `pattern-chain-of-responsibility`
+- Changesets → `semantic-versioning`
 - check-then-act → `race-conditions`
 - cherry-pick → `git-tips-advanced`
 - CI 캐시 → `build-caching`
@@ -4284,6 +4326,7 @@
 - detached DOM → `js-memory-leak`
 - detached HEAD → `git-branch-merge`
 - Direct Server Return → `load-balancer-basics`
+- dist-tag → `semantic-versioning`
 - DISTINCT ON → `postgres-reporting-sql`
 - distroless → `dockerfile-image-layers`
 - divergent branches → `git-troubleshooting`
@@ -4321,6 +4364,7 @@
 - EndpointSlice → `k8s-service-types`
 - equal jitter → `exponential-backoff-jitter`
 - ERD → `sqld-data-modeling`
+- ERESOLVE → `dependency-hell`
 - ESR 규칙 → `mongodb-document-model`
 - ETag → `http-caching-cdn`
 - etcd → `db-type-key-value`
@@ -4500,6 +4544,7 @@
 - load shedding → `tail-latency`
 - location 블록 → `nginx-basics`
 - lock_timeout → `zero-downtime-migrations`
+- lockfile → `dependency-hell`
 - LogQL → `structured-logging`
 - Lossy Counting → `lossy-counting`
 - LSM 트리 → `db-type-wide-column`
@@ -4651,6 +4696,7 @@
 - psql → `postgres-getting-started`
 - pull 방식 배포 → `k8s-deploy-pipeline-eks`
 - pull.rebase → `git-rebase`
+- Pulumi → `iac-basics`
 - push protection → `git-large-files-secrets`
 - pushState → `rendering-csr-spa`
 - PUT과 PATCH → `http-methods`
@@ -4722,6 +4768,7 @@
 - SECURITY DEFINER → `postgres-functions-triggers`
 - sed -i → `linux-grep-awk-sed`
 - SELF JOIN → `sqld-joins`
+- Semantic Versioning → `semantic-versioning`
 - sendBeacon → `browser-fetch`
 - server_name → `nginx-basics`
 - server-only → `react-server-components`
@@ -4908,8 +4955,8 @@
 - `sqld-set-operators` ↔ `sqld-top-n-hierarchical-pivot` (19%: 행을, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-group-by-having` (19%: 행을, 시험, 포인트)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
-- `sqld-null-functions` ↔ `sqld-top-n-hierarchical-pivot` (18%: 함수, 따라, 행을, 시험, 포인트)
-- `sqld-null-functions` ↔ `sqld-group-by-having` (18%: 함수, 행을, 시험, 포인트, oracle)
+- `sqld-null-functions` ↔ `sqld-top-n-hierarchical-pivot` (19%: 함수, 따라, 행을, 시험, 포인트)
+- `sqld-null-functions` ↔ `sqld-group-by-having` (19%: 함수, 행을, 시험, 포인트, oracle)
 - `network-config-cicd` ↔ `terraform-basics` (18%: plan은, 코드로, 막히는, terraform, iac, plan, apply)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (17%: 밖에서, 확인하기, 요청마다, next.js, rendering, ssr)
 - `multi-region` ↔ `git-merge-conflict` (17%: 않게, 충돌을, 충돌)
@@ -4929,6 +4976,11 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `iac-basics` ↔ `terraform-basics`
+- `dependency-hell` ↔ `semantic-versioning`
+- `dependency-hell` ↔ `build-caching`
+- `semantic-versioning` ↔ `helm-dependencies-oci-gitops`
+- `semantic-versioning` ↔ `git-branching-strategy`
 - `k8s-architecture` ↔ `health-checks`
 - `k8s-architecture` ↔ `raft-consensus`
 - `k8s-architecture` ↔ `eks-cluster-basics`

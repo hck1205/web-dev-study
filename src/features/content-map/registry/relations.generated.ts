@@ -2,6 +2,49 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "iac-basics": {
+    "links": [
+      "terraform-basics",
+      "terraform-modules-tfvars",
+      "terraform-network-iac",
+      "ansible-network-automation",
+      "network-config-cicd",
+      "dockerfile-image-layers",
+      "helm-dependencies-oci-gitops",
+      "secrets-management"
+    ],
+    "mentions": [
+      "disaster-recovery",
+      "rollback-strategy",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "vpc-basics",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "dependency-hell": {
+    "links": [
+      "semantic-versioning",
+      "build-caching",
+      "pattern-singleton",
+      "secrets-management"
+    ],
+    "mentions": [
+      "dockerfile-image-layers"
+    ]
+  },
+  "semantic-versioning": {
+    "links": [
+      "dependency-hell",
+      "git-branching-strategy",
+      "api-versioning",
+      "helm-dependencies-oci-gitops"
+    ],
+    "mentions": [
+      "helm-basics"
+    ]
+  },
   "k8s-architecture": {
     "links": [
       "k8s-pod-scheduling",
@@ -622,6 +665,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rollback-strategy"
     ],
     "mentions": [
+      "dependency-hell",
       "git-internals-basics"
     ]
   },
@@ -1460,6 +1504,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "vpc-subnets-route-tables",
       "docker-container-basics",
+      "dependency-hell",
       "db-type-key-value",
       "layer-ip-routing-icmp",
       "kubernetes-ingress",
@@ -1641,6 +1686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "terraform-modules-tfvars",
       "terraform-network-iac",
+      "iac-basics",
       "ansible-network-automation",
       "git-large-files-secrets",
       "distributed-lock",
@@ -1648,6 +1694,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "dependency-hell",
       "db-type-key-value",
       "security-groups-nacl",
       "eks-cluster-basics",
@@ -2906,6 +2953,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "git-undo",
       "k8s-configmap",
+      "semantic-versioning",
       "docker-container-basics",
       "api-versioning",
       "redis-basics",
@@ -4199,7 +4247,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "git-branch-merge",
       "git-remote-collaboration",
-      "git-tips-advanced"
+      "git-tips-advanced",
+      "semantic-versioning"
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
@@ -4219,6 +4268,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "git-branch-merge",
       "git-ignore-config",
+      "dependency-hell",
       "git-staging-area",
       "git-stash-reflog"
     ]

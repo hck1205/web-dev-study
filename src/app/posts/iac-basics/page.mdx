@@ -1,0 +1,569 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("iac-basics");
+
+웹 서버 세 대 중 한 대에서만 가끔 502가 난다. 세 대는 같은 날 같은 문서를 보고 만들었다. 비교해 보니 문제의 서버만 nginx 설정의 타임아웃 값이 다르다. 반년 전 누군가 장애를 막으려고 SSH로 들어가 고친 흔적이다. 아무도 기억하지 못하고, 어디에도 적혀 있지 않다. 이제 네 번째 서버를 만들어야 하는데, 세 대 중 어느 것을 따라 만들어야 할까.
+
+인프라를 코드로 관리한다(Infrastructure as Code, IaC)는 말은 이 질문에 답하려고 생겼다. 이 글은 특정 도구의 사용법이 아니라 IaC라는 생각 자체를 다룬다. 명령을 순서대로 적는 방식과 원하는 모습을 적는 방식이 무엇이 다른지, 그 차이를 계산하려면 왜 state가 필요한지, 서버를 고쳐 쓰는 것과 갈아 끼우는 것의 차이, 한 번 맞추는 도구와 계속 맞추는 도구, 그리고 Terraform, Pulumi, CloudFormation, Ansible을 고르는 기준까지 간다.
+
+이 주제의 다른 글: Terraform의 plan, apply, state와 잠금은 [Terraform 기본](/posts/terraform-basics)에서, 모듈과 환경별 값은 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서, VPC와 보안 그룹을 코드로 짜는 법은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서, 서버 안의 설정을 맞추는 Ansible은 [Ansible로 네트워크 자동화](/posts/ansible-network-automation)에서, PR에서 plan을 돌리고 승인하는 파이프라인은 [네트워크 설정 CI/CD](/posts/network-config-cicd)에서 다룬다. 여기서는 그 글들이 공통으로 기대고 있는 개념을 정리한다.
+
+실습은 Ubuntu 24.04에서 했다. 클라우드 계정 대신 리눅스 네트워크 네임스페이스와 로컬 파일을 "인프라"로 삼았다. 네임스페이스는 한 컴퓨터 안에 따로 떨어진 작은 네트워크를 만드는 기능이라, 서버 두 대와 그 사이 케이블을 흉내 내기에 알맞다. Terraform은 1.9.8, 프로바이더는 HashiCorp 배포 사이트에서 받아 로컬 미러로 깔았다(그래서 설치 줄에 `unauthenticated`가 찍힌다). 출력은 모두 직접 돌린 결과다.
+
+## 손으로 만든 서버는 서로 조금씩 다르다
+
+콘솔을 클릭하거나 SSH로 들어가 명령을 치는 방식을 오래 쓰면 세 가지가 무너진다.
+
+첫째, 같은 것을 다시 만들 수 없다. 문서는 쓰는 순간부터 낡는다. 사람은 단계를 빠뜨린다. 재해 복구 훈련에서 "백업은 있는데 그걸 올릴 서버를 똑같이 만드는 데 사흘이 걸린다"가 흔한 결과다.
+
+둘째, 누가 무엇을 왜 바꿨는지 남지 않는다. 처음 장면의 타임아웃처럼 손으로 고친 값은 시간이 지나면 이유를 잃는다. 이렇게 같아야 할 것들이 조금씩 달라지는 현상을 구성 드리프트(configuration drift)라고 부르고, 그렇게 혼자 달라져 다시 만들 수 없게 된 서버를 눈송이 서버라고 부른다. 눈송이처럼 하나하나 다르다는 뜻이다.
+
+셋째, 바꾸기 전에 아무도 보지 못한다. 코드는 PR로 리뷰하는데 인프라 변경은 리뷰 없이 운영에 바로 들어간다. 보안 그룹 하나를 잘못 열어도 다음 감사까지 모른다.
+
+인프라를 코드 파일로 적고 Git에 두면 이 셋이 같이 풀린다. 같은 코드를 다시 돌리면 같은 것이 생기고, 변경은 커밋으로 남고, 적용하기 전에 PR에서 무엇이 바뀔지 본다. 그런데 "코드로 적는다"에는 두 가지 방식이 있고, 둘의 차이가 IaC를 이해하는 출발점이다.
+
+## 스크립트도 코드인데 무엇이 다른가
+
+가장 쉬운 IaC는 하던 명령을 셸 스크립트로 옮기는 것이다. 네임스페이스 두 개(web, db)를 만들고 가상 케이블(veth)로 잇고 주소를 붙이는 스크립트를 짰다.
+
+```bash
+#!/bin/bash
+set -e
+# 네임스페이스 둘과 veth 한 쌍을 만들고 주소를 붙인다
+ip netns add v21-web
+ip netns add v21-db
+ip link add v21-w0 type veth peer name v21-d0
+ip link set v21-w0 netns v21-web
+ip link set v21-d0 netns v21-db
+ip -n v21-web addr add 10.21.0.1/24 dev v21-w0
+ip -n v21-db addr add 10.21.0.2/24 dev v21-d0
+ip -n v21-web link set v21-w0 up
+ip -n v21-db link set v21-d0 up
+echo "setup done"
+```
+
+```bash
+# 처음 실행, 그리고 같은 스크립트를 한 번 더 실행한다
+sudo ./setup.sh; echo "exit $?"
+sudo ./setup.sh; echo "exit $?"
+```
+
+```text
+setup done
+exit 0
+Cannot create namespace file "/run/netns/v21-web": File exists
+exit 1
+```
+
+처음에는 잘 돈다. 두 번째에는 첫 줄에서 "이미 있다"며 멈춘다. 스크립트는 "무엇을 하라"는 명령의 목록이라, 이미 된 일을 다시 시키면 실패하거나 같은 것을 두 개 만든다. 이걸 명령형(imperative) 방식이라고 한다.
+
+더 곤란한 건 중간 상태다. 누군가 db 네임스페이스만 지웠다고 하자. veth는 한쪽 끝이 사라지면 같이 없어지니 web 쪽 케이블도 사라진다. 이 상태에서 스크립트를 다시 돌렸다.
+
+```bash
+# db만 지운 뒤 다시 실행한다
+sudo ip netns del v21-db
+sudo ./setup.sh; echo "exit $?"
+ip netns list
+```
+
+```text
+Cannot create namespace file "/run/netns/v21-web": File exists
+exit 1
+v21-web (id: 0)
+```
+
+필요한 건 db와 케이블인데 스크립트는 첫 줄에서 막혀 거기까지 가지 못한다. 고치려면 줄마다 "이미 있으면 건너뛴다"를 붙여야 한다. 그 조건문을 모든 줄에 다 붙이고 나면, 사실상 다음 절의 방식을 손으로 다시 만든 셈이 된다.
+
+## 원하는 모습을 적고 차이만 메운다
+
+반대 방식은 "결과가 이래야 한다"를 적는 것이다. 네임스페이스 두 개가 있어야 하고, 그 사이에 케이블이 있어야 하고, 각자 이 주소를 가져야 한다. 실행할 때마다 지금 모습을 확인하고, 다른 곳만 고친다. 이게 선언형(declarative) 방식이다. 같은 일을 하는 수렴 스크립트를 직접 짜 보면 선언형 도구가 속에서 하는 일이 보인다.
+
+```bash
+#!/bin/bash
+# 원하는 모습: 네임스페이스 v21-web, v21-db와 그 사이 veth, 양쪽 주소
+changed=0
+has_ns()   { ip netns list 2>/dev/null | grep -qw "$1"; }
+has_link() { ip -n "$1" link show "$2" >/dev/null 2>&1; }
+has_addr() { ip -n "$1" -br addr show "$2" 2>/dev/null | grep -q "$3"; }
+
+for ns in v21-web v21-db; do
+  if has_ns $ns; then echo "ok      netns $ns"; else ip netns add $ns; echo "create  netns $ns"; changed=1; fi
+done
+if has_link v21-web v21-w0 && has_link v21-db v21-d0; then
+  echo "ok      veth v21-w0<->v21-d0"
+else
+  ip -n v21-web link del v21-w0 2>/dev/null; ip -n v21-db link del v21-d0 2>/dev/null
+  ip link add v21-w0 netns v21-web type veth peer name v21-d0 netns v21-db
+  echo "create  veth v21-w0<->v21-d0"; changed=1
+fi
+for spec in "v21-web v21-w0 10.21.0.1/24" "v21-db v21-d0 10.21.0.2/24"; do
+  set -- $spec
+  if has_addr $1 $2 $3; then echo "ok      addr $3 on $2"; else ip -n $1 addr add $3 dev $2; ip -n $1 link set $2 up; echo "create  addr $3 on $2"; changed=1; fi
+done
+echo "changed=$changed"
+```
+
+db만 사라진 그 상태에서 두 번 돌렸다.
+
+```bash
+# 반쯤 망가진 상태에서 한 번, 그대로 한 번 더
+sudo ./converge.sh
+sudo ./converge.sh
+# 실제로 이어졌는지 web에서 db로 ping
+sudo ip netns exec v21-web ping -c1 -W1 10.21.0.2
+```
+
+```text
+ok      netns v21-web
+create  netns v21-db
+create  veth v21-w0<->v21-d0
+create  addr 10.21.0.1/24 on v21-w0
+create  addr 10.21.0.2/24 on v21-d0
+changed=1
+```
+
+```text
+ok      netns v21-web
+ok      netns v21-db
+ok      veth v21-w0<->v21-d0
+ok      addr 10.21.0.1/24 on v21-w0
+ok      addr 10.21.0.2/24 on v21-d0
+changed=0
+```
+
+```text
+PING 10.21.0.2 (10.21.0.2) 56(84) bytes of data.
+64 bytes from 10.21.0.2: icmp_seq=1 ttl=64 time=0.232 ms
+```
+
+첫 실행은 있는 web은 두고 빠진 것만 만들었다. 두 번째는 아무것도 바꾸지 않았다. 몇 번을 실행해도 결과가 같은 성질을 멱등성이라고 하고, IaC 도구가 지켜야 하는 첫 번째 약속이다. 그래야 "일단 다시 돌려 보자"가 안전한 행동이 된다. 아래 그림은 수렴 한 번이 어떤 순서로 판단하는지 보여 준다.
+
+<AlgoTrace
+  caption="원하는 모습과 지금 모습을 한 항목씩 맞대 본다"
+  memoryLabel="할 일"
+  cells={["netns web", "netns db", "veth", "addr .1", "addr .2"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "web 네임스페이스는 이미 있다. 할 일이 없다." },
+    { pointer: 1, memory: ["create netns db"], caption: "db가 없다. 만들 목록에 올린다." },
+    { pointer: 2, memory: ["create netns db", "create veth"], caption: "케이블 한쪽 끝이 없으니 쌍을 새로 만든다." },
+    { pointer: 3, memory: ["create netns db", "create veth", "create addr .1"], caption: "케이블을 새로 만들었으니 web 쪽 주소도 다시 붙여야 한다." },
+    { pointer: 4, found: [1, 2, 3, 4], memory: ["create netns db", "create veth", "create addr .1", "create addr .2"], caption: "db 쪽 주소까지. 다음 실행에서는 다섯 항목 모두 그대로라 목록이 빈다." },
+  ]}
+/>
+
+원하는 모습과 지금 모습의 차이를 계산하는 부분만 떼어서 짜 보자. 이게 `terraform plan`이나 쿠버네티스 컨트롤러가 매번 하는 계산의 뼈대다. 기대값은 node로 직접 돌려 확인했다.
+
+<CodePlayground
+  caption="원하는 모습과 지금 모습의 차이 계산"
+  functionName="reconcile"
+  initialCode={`function reconcile(desired, actual, prune) {
+  // desired, actual: { 이름: 설정값 }
+  // desired 이름순으로: actual에 없으면 "create 이름", 값이 다르면 "update 이름"
+  // prune이 true면 그다음 actual 이름순으로: desired에 없으면 "delete 이름"
+  return [];
+}`}
+  solution={`function reconcile(desired, actual, prune) {
+  const actions = [];
+  for (const name of Object.keys(desired).sort()) {
+    if (!(name in actual)) actions.push("create " + name);
+    else if (actual[name] !== desired[name]) actions.push("update " + name);
+  }
+  if (prune) {
+    for (const name of Object.keys(actual).sort()) {
+      if (!(name in desired)) actions.push("delete " + name);
+    }
+  }
+  return actions;
+}`}
+  tests={[
+    { args: [{ web: "10.21.0.1/24", db: "10.21.0.2/24" }, { web: "10.21.0.1/24" }, true], expected: ["create db"], label: "빠진 것만 만든다" },
+    { args: [{ web: "10.21.0.1/24", db: "10.21.0.2/24" }, { web: "10.21.0.1/24", db: "10.21.0.2/24" }, true], expected: [], label: "같으면 할 일 없음" },
+    { args: [{ web: "10.21.0.1/24" }, { web: "10.21.0.9/24" }, true], expected: ["update web"], label: "값이 다르면 고친다" },
+    { args: [{ web: "a" }, { web: "a", old: "b" }, true], expected: ["delete old"], label: "코드에서 빠진 것" },
+    { args: [{ web: "a" }, { web: "a", old: "b" }, false], expected: [], label: "prune이 꺼져 있으면" },
+    { args: [{ b: "1", a: "1" }, {}, false], expected: ["create a", "create b"], label: "이름순" },
+  ]}
+/>
+
+다섯 번째 테스트가 다음 절의 주제다. 코드에서 리소스를 지웠을 때 실제로도 지울지(prune)는 공짜로 알 수 없다. "지금 있는 것 중 원래 내가 만든 것"을 알아야 하기 때문이다.
+
+## 차이를 계산하려면 기억이 필요하다
+
+수렴 스크립트는 정해진 다섯 항목만 확인했다. 그런데 코드에서 항목 하나를 지우면 어떻게 될까. 스크립트는 그 항목을 더는 보지 않으니, 실제 리소스는 그대로 남는다. 클라우드 계정 안의 모든 것을 뒤져서 "코드에 없으니 지운다"고 할 수도 없다. 다른 팀이 만든 것, 콘솔에서 만든 것이 섞여 있다.
+
+그래서 도구마다 "내가 만든 것" 목록을 어딘가에 기억한다. 이 기억을 두는 곳이 도구를 가르는 큰 기준이다.
+
+- Terraform·OpenTofu는 state 파일에 주소(`local_file.upstream_conf`)와 실제 리소스 ID의 짝을 적는다. 코드에서 빠진 주소가 state에 있으면 지울 대상이 된다. state를 어디에 두고 어떻게 잠그는지는 [Terraform 기본](/posts/terraform-basics#state-파일-안에-든-것)에서 자세히 본다.
+- Pulumi도 같은 구조의 state를 Pulumi Cloud나 S3 같은 백엔드에 둔다.
+- CloudFormation은 스택이라는 단위로 AWS가 직접 기억한다. state 파일을 관리할 필요가 없는 대신 AWS 밖은 다루지 못한다.
+- 쿠버네티스는 리소스마다 라벨과 소유자 참조(ownerReferences)를 붙여 기억한다. ArgoCD 같은 도구는 라벨로 "내가 배포한 것"을 찾는다.
+- Ansible은 기억하지 않는다. 매번 대상 서버의 지금 모습을 확인하고 적힌 것만 맞춘다. 그래서 플레이북에서 작업을 지우면 지워지지 않는다. 지우려면 `state: absent`로 "없어야 한다"를 적어야 한다.
+
+Terraform의 기억을 열어 보면 이렇다.
+
+```bash
+# state가 기억하는 주소 목록
+terraform state list
+# state 파일의 머리: 형식 버전, 쓴 Terraform 버전, 몇 번째 기록인지, 이 state의 고유 계보
+python3 -c "import json;s=json.load(open('terraform.tfstate'));print({k:s[k] for k in ['version','terraform_version','serial','lineage']})"
+```
+
+```text
+local_file.upstream_conf
+terraform_data.netns
+{'version': 4, 'terraform_version': '1.9.8', 'serial': 3, 'lineage': '4c9c199a-e8ea-33b7-392e-51751f73f578'}
+```
+
+기억을 가진 도구는 강력한 대신 기억이 틀어지면 위험하다. state를 잃으면 이미 있는 리소스를 모르고 새로 만들려 하고, 두 사람이 다른 state로 같은 리소스를 다루면 서로의 변경을 지운다. 기억 없이 매번 확인하는 도구는 그런 사고가 없는 대신 정리(삭제)가 약하다. 서버를 처음 만들고 지우는 일은 기억을 가진 도구에, 이미 있는 서버 안의 설정은 기억 없는 도구에 맡기는 조합이 흔한 이유다.
+
+## 도구가 읽지 못하는 것은 관리하지 못한다
+
+선언형 도구라고 모든 것을 선언적으로 다루는 건 아니다. 차이를 계산하려면 지금 모습을 읽을 수 있어야 하고, 읽는 일은 프로바이더(그 리소스를 아는 플러그인)가 맡는다. 읽을 방법이 없는 것은 도구 눈에 보이지 않는다.
+
+Terraform으로 두 가지를 만들어 비교했다. 하나는 `local_file`로 만든 설정 파일이고, 프로바이더가 파일 내용을 읽어 비교할 줄 안다. 다른 하나는 `local-exec`로 `ip netns add`를 한 번 실행하는 `terraform_data`다.
+
+```hcl
+variable "upstreams" {
+  type    = list(string)
+  default = ["10.21.0.2:8080", "10.21.0.3:8080"]
+}
+
+# 웹 서버가 읽을 설정 파일. 내용이 원하는 모습이다
+resource "local_file" "upstream_conf" {
+  filename = "${path.module}/out/upstream.conf"
+  content  = join("", [for u in var.upstreams : "server ${u};\n"])
+}
+
+# 명령을 한 번 실행하는 리소스. 결과를 Terraform이 읽어 오지 못한다
+resource "terraform_data" "netns" {
+  input = "v21-tf"
+  provisioner "local-exec" {
+    command = "ip netns add ${self.input}"
+  }
+}
+```
+
+```bash
+# 만들고, 그대로 한 번 더 적용한다
+terraform apply -auto-approve
+terraform apply -auto-approve
+```
+
+```text
+terraform_data.netns: Provisioning with 'local-exec'...
+terraform_data.netns (local-exec): Executing: ["/bin/sh" "-c" "ip netns add v21-tf"]
+terraform_data.netns: Creation complete after 0s [id=480121a3-f574-a3b5-b4ea-b60b2e76e583]
+local_file.upstream_conf: Creating...
+local_file.upstream_conf: Creation complete after 0s [id=ff7c933504fd95b129afbd33025d8ead6e8d3ee3]
+
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+```
+
+```text
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+```
+
+두 번째 적용은 아무것도 하지 않았다. 여기까지는 둘 다 멀쩡하다. 이제 코드 밖에서 둘 다 건드렸다. 설정 파일에 서버 한 줄을 손으로 더하고, 네임스페이스는 지웠다.
+
+```bash
+# 코드 밖에서 바꾼다: 파일에 한 줄 추가, 네임스페이스 삭제
+echo "server 10.99.0.9:8080;" >> out/upstream.conf
+sudo ip netns del v21-tf
+terraform plan
+```
+
+```text
+terraform_data.netns: Refreshing state... [id=480121a3-f574-a3b5-b4ea-b60b2e76e583]
+local_file.upstream_conf: Refreshing state... [id=ff7c933504fd95b129afbd33025d8ead6e8d3ee3]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # local_file.upstream_conf will be created
+  + resource "local_file" "upstream_conf" {
+      + content              = <<-EOT
+            server 10.21.0.2:8080;
+            server 10.21.0.3:8080;
+        EOT
+...
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+파일은 내용이 달라진 걸 알아채고 원래 내용으로 다시 만들겠다고 한다(local 프로바이더는 내용이 다르면 "없어졌다"고 보고 새로 만든다). 네임스페이스는 plan에 한 줄도 없다. Terraform이 기억하는 건 "명령을 한 번 실행했다"는 사실뿐이고, 그 결과가 아직 있는지 읽어 올 방법이 없다. 실제로는 사라졌는데 state에는 멀쩡히 있다.
+
+프로비저너(`local-exec`, `remote-exec`)를 Terraform 문서가 "최후의 수단"이라고 부르는 이유가 이것이다. 선언형 도구 안에 명령형 스크립트를 넣으면 그 부분만큼 드리프트 감지와 멱등성을 잃는다. 다시 실행시키려면 `triggers_replace`로 교체 조건을 직접 적거나 `terraform apply -replace=terraform_data.netns`로 손으로 지시해야 한다. 같은 일을 하는 제대로 된 프로바이더나 모듈이 있으면 그것을 쓰고, 서버 안의 설정은 Ansible처럼 매번 지금 모습을 확인하는 도구에 넘긴다.
+
+## 고쳐 쓸까, 새로 갈아 끼울까
+
+처음 장면의 서버가 달라진 건, 서버를 한 번 만들고 그 위에서 계속 고쳐 썼기 때문이다. 패키지 업데이트, 설정 수정, 핫픽스가 서버마다 조금씩 다른 순서로 쌓인다. 이렇게 운영 중인 서버를 제자리에서 바꾸는 방식을 가변 인프라(mutable infrastructure)라고 한다.
+
+반대로 한 번 띄운 서버는 절대 고치지 않는 방식이 불변 인프라(immutable infrastructure)다. 바꿀 것이 있으면 새 이미지를 굽고, 그 이미지로 새 서버를 띄우고, 옛 서버를 뺀다. 서버는 이름 붙여 돌보는 애완동물이 아니라 번호로 부르는 가축처럼 다룬다. 이미지는 Packer로 굽는 VM 이미지(AMI)일 수도 있고, Docker 이미지일 수도 있다. 컨테이너가 사실상 불변 인프라를 표준으로 만들었다([Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)).
+
+<NetworkTopology
+  caption="불변 인프라: 고치지 않고 새 서버로 갈아 끼운다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "asg", label: "Auto Scaling 그룹", x: 10, y: 95, w: 380, h: 110, tone: "private" },
+  ]}
+  nodes={[
+    { id: "lb", label: "LB", sub: "health check", x: 200, y: 45, icon: "lb", w: 120 },
+    { id: "v1a", label: "web v1 a", sub: "image v1", x: 75, y: 155, icon: "server" },
+    { id: "v1b", label: "web v1 b", sub: "image v1", x: 200, y: 155, icon: "server" },
+    { id: "v2a", label: "web v2 a", sub: "image v2", x: 325, y: 155, icon: "server" },
+    { id: "img", label: "image v2", sub: "Packer/Docker", x: 325, y: 255, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "lb", to: "v1a" },
+    { from: "lb", to: "v1b" },
+    { from: "lb", to: "v2a", dashed: true },
+    { from: "img", to: "v2a", dashed: true },
+  ]}
+  steps={[
+    { path: ["lb", "v1a"], packet: "req", title: "지금은 v1 두 대가 받는다", detail: "두 서버는 같은 이미지 v1에서 떴다. 그 뒤로 아무도 들어가 고치지 않았으니 지금도 같다." },
+    { path: ["img", "v2a"], packet: "boot", title: "새 이미지로 새 서버", detail: "타임아웃을 바꿔야 하면 설정을 고친 이미지 v2를 굽고, 그 이미지로 서버를 하나 더 띄운다.", highlight: ["asg"] },
+    { path: ["lb", "v2a"], packet: "health", title: "건강 검사를 통과하면 합류", detail: "로드 밸런서가 새 서버의 헬스 체크를 보고 트래픽을 나눠 주기 시작한다." },
+    { path: ["lb", "v1a"], packet: "drain", blocked: true, title: "옛 서버는 고치지 않고 뺀다", detail: "v1 서버는 연결을 비운 뒤 종료한다. 되돌리려면 이미지 v1로 다시 띄우면 된다." },
+    { path: ["lb", "v2a"], packet: "req", title: "모든 서버가 같은 이미지", detail: "v1 b도 같은 방식으로 교체한다. 손으로 고친 서버가 끼어들 틈이 없다." },
+  ]}
+/>
+
+Terraform의 plan에도 같은 구분이 나온다. 리소스의 어떤 속성은 제자리에서 바꿀 수 있고(`~ update in-place`), 어떤 속성은 바꾸려면 지우고 새로 만들어야 한다(`-/+`). 앞의 설정 파일에서 서버 주소 하나를 바꿔 plan을 봤다.
+
+```bash
+# 변수 값만 바꿔 plan을 본다
+terraform plan -var 'upstreams=["10.21.0.2:8080","10.21.0.4:8080"]'
+```
+
+```text
+  # local_file.upstream_conf must be replaced
+-/+ resource "local_file" "upstream_conf" {
+      ~ content              = <<-EOT # forces replacement
+            server 10.21.0.2:8080;
+          - server 10.21.0.3:8080;
+          + server 10.21.0.4:8080;
+        EOT
+...
+Plan: 1 to add, 0 to change, 1 to destroy.
+```
+
+<UrlAnatomy
+  caption="plan 한 줄이 말하는 것"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "sym", display: "-/+", title: "지우고 새로 만든다", description: "제자리 수정(~)이 불가능한 변경이다. 기본은 지운 뒤 만들어서 그 사이에 리소스가 없는 순간이 생긴다. lifecycle의 create_before_destroy로 순서를 뒤집을 수 있다.", required: true },
+    { key: "addr", display: "local_file.upstream_conf", title: "리소스 주소", description: "state가 실제 리소스를 찾는 열쇠다. 이름을 바꾸면 다른 리소스로 보고 지우고 만들려 하니, 이름만 바꿀 때는 moved 블록을 쓴다.", required: true },
+    { key: "attr", display: "~ content", title: "바뀌는 속성", description: "~는 값이 바뀐다는 뜻이다. 어느 속성 때문에 교체되는지는 그 줄 끝에 붙는다." },
+    { key: "why", display: "# forces replacement", title: "교체의 원인", description: "이 속성은 프로바이더가 제자리에서 못 바꾼다고 정해 둔 것이다. 리뷰에서 가장 먼저 찾아야 할 표시다. 서버라면 다운타임, DB라면 데이터 손실일 수 있다." },
+  ]}
+/>
+
+교체 표시가 다운타임으로 이어지는 구체적인 경우는 [Terraform 기본](/posts/terraform-basics#기호-하나가-다운타임을-말한다)과 [네트워크를 Terraform으로](/posts/terraform-network-iac#설명-한-줄-고쳤는데-보안-그룹이-갈아-끼워진다)에 있다.
+
+불변 인프라가 늘 정답은 아니다. 이미지를 굽고 서버를 띄우는 데 몇 분이 걸려서 설정 한 줄을 바꾸는 데도 그만큼 기다린다. 데이터를 가진 서버(DB, 큐)는 갈아 끼울 수 없으니 데이터는 디스크나 관리형 서비스로 빼야 한다. 로드 밸런서, 헬스 체크, 자동 확장 같은 바탕이 먼저 있어야 한다. 그래서 웹·API 서버는 불변으로, DB와 오래 사는 서버는 가변이되 Ansible 같은 도구로 매번 같은 모습으로 맞추는 식으로 섞어 쓰는 경우가 많다.
+
+## 한 번 맞추는 도구와 계속 맞추는 도구
+
+Terraform은 누가 `apply`를 쳐야 움직인다. 적용한 직후에는 코드와 실제가 같지만, 그다음 누가 콘솔에서 바꾸면 다음 `plan`까지 아무도 모른다. 반대로 계속 돌면서 차이를 찾아 메우는 도구도 있다. 쿠버네티스 컨트롤러, ArgoCD·Flux 같은 GitOps 도구, Puppet 에이전트(기본 30분마다), 클라우드 리소스를 쿠버네티스 방식으로 다루는 Crossplane이 그렇다. 이 반복을 조정 루프(reconcile loop)라고 한다.
+
+앞의 수렴 스크립트를 5초마다 돌게 하고, 도는 중에 db 네임스페이스를 손으로 지웠다.
+
+```bash
+# 5초마다 수렴 스크립트를 돌리며 바뀐 게 있을 때만 기록한다
+sudo ./loop.sh >> loop.log &
+# 7초쯤 뒤 손으로 지운다
+sudo ip netns del v21-db
+cat loop.log
+```
+
+```text
+00:39:27 in sync
+00:39:32 in sync
+00:39:34 ** ip netns del v21-db (손으로 지움)
+00:39:37 drift fixed:
+    create  netns v21-db
+    create  veth v21-w0<->v21-d0
+    create  addr 10.21.0.1/24 on v21-w0
+    create  addr 10.21.0.2/24 on v21-d0
+00:39:42 in sync
+```
+
+지운 지 3초 만에 다음 회차가 돌며 되살렸다. 조정 루프가 있으면 드리프트는 쌓이지 않고 다음 주기에 사라진다. 대신 콘솔에서 급히 고친 것도 똑같이 되돌려진다. 장애 중에 손으로 늘린 값이 몇 분 뒤 원래대로 돌아가 장애가 다시 터지는 일이 여기서 생긴다. 그래서 루프가 있는 환경의 핫픽스는 반드시 Git을 거쳐야 하고, 급할 때 잠시 루프를 멈추는 방법(ArgoCD의 자동 동기화 끄기 등)을 미리 정해 둔다.
+
+이 차이는 누가 변경을 밀어 넣느냐로도 볼 수 있다. CI가 클라우드 API를 직접 부르는 방식이 push, 클러스터 안의 에이전트가 Git을 읽어 와 스스로 맞추는 방식이 pull이다.
+
+<NetworkTopology
+  caption="push 방식과 pull 방식은 자격 증명이 있는 곳이 다르다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "cloud", label: "운영 계정", x: 10, y: 105, w: 380, h: 185, tone: "private" },
+  ]}
+  nodes={[
+    { id: "dev", label: "laptop", sub: "git push", x: 70, y: 45, icon: "client" },
+    { id: "git", label: "git repo", sub: "원하는 모습", x: 200, y: 45, icon: "server" },
+    { id: "ci", label: "CI runner", sub: "terraform", x: 330, y: 45, icon: "server" },
+    { id: "agent", label: "GitOps agent", sub: "ArgoCD/Flux", x: 80, y: 160, icon: "container", w: 120 },
+    { id: "api", label: "cloud API", sub: "관리 권한", x: 330, y: 160, icon: "gateway" },
+    { id: "res", label: "resources", sub: "서버, LB, DNS", x: 200, y: 250, icon: "server", w: 120 },
+  ]}
+  links={[
+    { from: "dev", to: "git" },
+    { from: "git", to: "ci" },
+    { from: "ci", to: "api" },
+    { from: "api", to: "res" },
+    { from: "agent", to: "git", dashed: true },
+    { from: "agent", to: "res" },
+  ]}
+  steps={[
+    { path: ["dev", "git", "ci", "api", "res"], packet: "apply", title: "push: CI가 밀어 넣는다", detail: "머지되면 CI가 terraform apply를 돌린다. CI 러너가 운영 계정의 강한 권한을 들고 있어야 한다." },
+    { path: ["res"], packet: "edit", highlight: ["res"], title: "누가 콘솔에서 바꾼다", detail: "push 방식은 다음 파이프라인이 돌 때까지 이 변화를 모른다. 정기적으로 plan을 돌려 찾아야 한다." },
+    { path: ["agent", "git"], packet: "fetch", title: "pull: 에이전트가 읽어 온다", detail: "운영 계정 안의 에이전트가 주기적으로 Git의 원하는 모습을 가져온다. 밖에서 들어오는 권한이 필요 없다." },
+    { path: ["agent", "res"], packet: "sync", title: "차이를 찾아 되돌린다", detail: "지금 모습과 비교해 콘솔에서 바꾼 것을 원래대로 돌린다. 드리프트가 다음 주기에 사라진다." },
+    { path: ["dev", "api"], packet: "kubectl", blocked: true, title: "사람의 직접 변경은 막는다", detail: "pull 방식을 쓰면 사람 계정에서 운영 쓰기 권한을 거둘 수 있다. 바꾸고 싶으면 Git에 PR을 연다." },
+  ]}
+/>
+
+GitOps는 이 pull 방식에 "Git이 유일한 원본"이라는 규칙을 더한 운영 방식이다. 쿠버네티스에서 ArgoCD가 차트를 렌더링해 맞추는 과정은 [Helm 의존성과 GitOps](/posts/helm-dependencies-oci-gitops#argocd는-차트를-렌더링만-한다)에서 이어진다. Terraform 쪽에서 push 방식의 약점을 메우는 법(정기 drift 감지, plan과 apply 권한 분리)은 [네트워크 설정 CI/CD](/posts/network-config-cicd#코드-밖에서-바뀐-것-찾기)에 있다.
+
+## 도구를 고르는 기준
+
+도구는 다루는 층이 다르다. 클라우드에 무엇을 만들지(프로비저닝), 만든 서버 안을 어떻게 설정할지(구성 관리), 그 위에 앱을 어떻게 올릴지(배포)를 나눠 보면 겹치는 곳과 비는 곳이 보인다.
+
+<ConceptDiagram
+  caption="IaC 도구가 맡는 층"
+  width={400}
+  height={280}
+  nodes={[
+    { id: "prov", label: "프로비저닝", sub: "VPC, 서버, DB, DNS", x: 110, y: 45, w: 170 },
+    { id: "cfg", label: "구성 관리", sub: "패키지, 설정 파일", x: 110, y: 140, w: 170 },
+    { id: "app", label: "앱 배포", sub: "컨테이너, 차트", x: 110, y: 235, w: 170 },
+    { id: "t1", label: "Terraform", sub: "Pulumi, CFN", x: 310, y: 45, w: 130 },
+    { id: "t2", label: "Ansible", sub: "Chef, Puppet", x: 310, y: 140, w: 130 },
+    { id: "t3", label: "Helm", sub: "ArgoCD, Flux", x: 310, y: 235, w: 130 },
+  ]}
+  edges={[
+    { from: "prov", to: "cfg", label: "서버를 넘긴다" },
+    { from: "cfg", to: "app", label: "실행 환경" },
+    { from: "t1", to: "prov", dashed: true },
+    { from: "t2", to: "cfg", dashed: true },
+    { from: "t3", to: "app", dashed: true },
+  ]}
+/>
+
+이미지를 굽는 불변 인프라에서는 가운데 층이 이미지 빌드(Packer, Dockerfile)로 옮겨 간다. 서버 안을 운영 중에 고치지 않으니 구성 관리 도구가 할 일이 줄어든다.
+
+프로비저닝 도구끼리는 이렇게 갈린다.
+
+| | Terraform·OpenTofu | Pulumi | CloudFormation·CDK | Ansible |
+|---|---|---|---|---|
+| 쓰는 언어 | HCL | TypeScript, Python, Go 등 | YAML·JSON (CDK는 일반 언어로 생성) | YAML 플레이북 |
+| 기억 | state 파일 (직접 관리) | state (Pulumi Cloud나 S3) | AWS가 스택으로 보관 | 없음 |
+| 범위 | 프로바이더가 있는 모든 것 | Terraform과 비슷 | AWS 안 | SSH·API로 닿는 모든 것 |
+| 삭제 | 코드에서 빼면 지운다 | 코드에서 빼면 지운다 | 템플릿에서 빼면 지운다 | `state: absent`를 적어야 |
+
+Terraform은 프로바이더 생태계가 가장 넓고, HCL이 단순해서 리뷰어가 "그래서 무엇이 생기나"를 읽기 쉽다. 2023년 라이선스 변경 이후 같은 문법의 오픈소스 포크 OpenTofu가 있다. Pulumi는 반복문, 함수, 타입 검사, 단위 테스트를 일반 언어 그대로 쓸 수 있어 추상화가 자유롭다. 대신 코드가 영리해질수록 리뷰에서 결과가 덜 보이니 `pulumi preview` 출력을 리뷰의 중심에 둬야 한다. CloudFormation은 state 걱정이 없고 실패하면 스택 단위로 자동 롤백하지만 AWS 밖은 다루지 못한다. CDK는 일반 언어로 CloudFormation 템플릿을 만들어 주는 층이다. Ansible은 프로비저닝도 할 수 있지만 기억이 없어 정리가 약하니, 서버 안의 설정을 맞추는 데 주로 쓴다.
+
+같은 S3 버킷 하나를 세 도구로 적으면 차이가 감이 온다.
+
+```hcl
+# Terraform
+resource "aws_s3_bucket" "logs" {
+  bucket = "shop-logs-prod"
+}
+```
+
+```ts
+// Pulumi (TypeScript)
+import * as aws from "@pulumi/aws";
+const logs = new aws.s3.Bucket("logs", { bucket: "shop-logs-prod" });
+```
+
+```yaml
+# CloudFormation
+Resources:
+  Logs:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: shop-logs-prod
+```
+
+고르는 기준은 대개 기술보다 팀이다. AWS만 쓰고 state 관리를 하기 싫으면 CloudFormation이나 CDK, 여러 클라우드와 SaaS(DNS, 모니터링, GitHub)를 한 곳에서 다루려면 Terraform, 인프라 담당 없이 애플리케이션 개발자가 직접 인프라를 다루고 테스트까지 쓰려면 Pulumi가 맞는 경우가 많다. 이미 한 도구로 상당한 인프라를 관리하고 있다면 갈아타는 비용(state 이전, import)이 대부분의 장점보다 크다.
+
+## 코드로 바꾸면 리뷰할 수 있다
+
+IaC의 진짜 이득은 변경이 PR을 지난다는 데 있다. 흐름은 도구와 상관없이 비슷하다.
+
+<SequenceDiagram
+  caption="인프라 변경이 운영에 닿기까지"
+  actors={[
+    { id: "dev", label: "작성자" },
+    { id: "pr", label: "PR" },
+    { id: "ci", label: "CI" },
+    { id: "infra", label: "운영 인프라" },
+  ]}
+  steps={[
+    { from: "dev", to: "pr", label: "타임아웃 60s", title: "변경을 코드로", detail: "SSH로 고치는 대신 설정 값을 바꾼 커밋을 올린다. 이유는 PR 설명에 남는다.", payload: "proxy_read_timeout 30s → 60s" },
+    { from: "pr", to: "ci", label: "plan", title: "무엇이 바뀔지 먼저 계산", detail: "CI가 plan(Pulumi는 preview, CloudFormation은 변경 세트)을 만들어 PR에 붙인다." },
+    { from: "ci", to: "pr", label: "1 to change", title: "사람과 정책이 본다", detail: "리뷰어는 코드보다 plan을 본다. forces replacement 같은 표시와 정책 검사 결과가 여기서 걸린다.", payload: "Plan: 0 to add, 1 to change, 0 to destroy." },
+    { from: "pr", to: "ci", label: "merge", title: "승인된 plan만 적용", detail: "머지되면 저장해 둔 plan 그대로 apply한다. 그사이 실제가 바뀌었으면 plan을 다시 만든다." },
+    { from: "ci", to: "infra", label: "apply", title: "세 대 모두 같은 값", detail: "같은 코드가 모든 서버에 같은 값을 넣는다. 네 번째 서버도 같은 코드로 생긴다." },
+  ]}
+/>
+
+plan을 저장해서 그대로 적용하는 이유, plan과 apply의 권한을 나누는 법은 [네트워크 설정 CI/CD](/posts/network-config-cicd#plan은-한-번-만들고-그대로-apply한다)에서, 사람 눈 대신 정책으로 plan을 검사하는 법은 [네트워크를 Terraform으로](/posts/terraform-network-iac#plan을-사람-눈-대신-정책으로-한-번-더-본다)에서 다룬다.
+
+## IaC가 오히려 사고를 키우는 순간
+
+코드로 관리한다고 안전해지는 건 아니다. 사람이 한 대씩 고칠 때는 실수도 한 대에서 끝났지만, 코드는 같은 실수를 모든 곳에 동시에 넣는다. 현장에서 자주 보는 장면들이다.
+
+콘솔 핫픽스가 다음 apply에 되돌려진다. 장애 중에 콘솔에서 인스턴스 수를 늘렸는데, 며칠 뒤 상관없는 PR의 apply가 코드 값으로 되돌려 다시 장애가 난다. plan에 `~ desired_capacity = 6 -> 3`처럼 내가 바꾸지 않은 줄이 있으면 멈춘다. 핫픽스는 끝나는 즉시 코드에 옮긴다.
+
+plan에 예상하지 못한 destroy가 있다. 리소스 이름을 바꿨거나(`moved` 블록 없이), 모듈 구조를 바꿨거나, `count`의 순서가 밀렸다. `Plan: ... N to destroy`의 N이 0이 아니면 그 줄을 다 읽기 전에는 적용하지 않는다. DB나 버킷처럼 지워지면 안 되는 리소스에는 `lifecycle { prevent_destroy = true }`를 걸어 둔다.
+
+이미 있는 인프라를 코드로 옮기다 중복이 생긴다. 콘솔로 만든 리소스를 코드에 적고 그대로 apply하면 같은 이름으로 하나 더 만들려다 실패하거나, 이름 제약이 없는 리소스는 정말 둘이 된다. 먼저 `import`로 state에 데려온 뒤 plan이 `No changes`가 될 때까지 코드를 맞춘다.
+
+한 번의 apply가 너무 많은 것을 건드린다. 네트워크, DB, 앱 서버가 state 하나에 다 들어 있으면 작은 변경의 plan도 수백 줄이 되고, 잠금 하나에 모든 팀이 줄을 선다. 바뀌는 주기와 담당자가 다른 것끼리 state를 나눈다([모듈과 tfvars](/posts/terraform-modules-tfvars#환경마다-tfvars와-state를-나눈다)).
+
+비밀 값이 state에 평문으로 남는다. DB 비밀번호를 리소스에 넘기면 state 파일에 그대로 기록된다. state 저장소의 접근 권한과 암호화를 코드만큼 엄격하게 관리하고, 비밀 값 자체는 시크릿 저장소에서 읽어 오게 한다([시크릿 관리](/posts/secrets-management#비밀을-한곳에-모으는-저장소)).
+
+## 같은 결과를 몇 번이고 만들 수 있게
+
+IaC는 인프라의 원하는 모습을 코드로 적고, 도구가 지금 모습과의 차이를 계산해 메우게 하는 방식이다. 명령을 나열한 스크립트는 다시 돌리면 깨지지만, 선언형 도구는 몇 번을 돌려도 같은 결과로 수렴한다. 차이를 계산하려면 지금 모습을 읽을 수 있어야 하고, 무엇을 지울지 알려면 내가 만든 것을 기억해야 한다. 서버를 고쳐 쓰지 않고 이미지로 갈아 끼우면 드리프트가 생길 틈이 줄고, 조정 루프가 있으면 생긴 드리프트도 다음 주기에 사라진다. 도구는 그 위에서 언어, 기억하는 곳, 다루는 범위로 고른다. 처음 장면의 질문에 대한 답은 "세 대 중 어느 것도 아니고, 코드를 따라 만든다"다.
+
+## 면접에서 나올 만한 질문
+
+### IaC를 왜 쓰나요?
+
+같은 인프라를 몇 번이고 똑같이 만들고, 모든 변경을 리뷰와 기록 아래 두려고 쓴다. 손으로 고친 서버는 시간이 지나며 서로 달라지는 구성 드리프트가 생기고 다시 만들 수 없게 된다. 코드로 두면 변경은 커밋으로 남고, PR에서 plan으로 미리 보고, 재해 복구나 새 환경 구성 때 같은 코드를 다시 돌리면 된다.
+
+### 선언형과 명령형의 차이는요?
+
+명령형은 "이걸 만들어라"를 순서대로 적고, 선언형은 "이렇게 있어야 한다"는 최종 모습을 적는다. 명령형 스크립트는 다시 돌리면 이미 있는 것 때문에 실패하거나 중복을 만들고, 중간에 깨진 상태에서 이어 가지 못한다. 선언형 도구는 매번 지금 모습을 읽어 차이만 메우므로 멱등하고, 반쯤 망가진 상태에서도 원하는 모습으로 수렴한다.
+
+### 멱등성이 왜 중요한가요?
+
+몇 번을 실행해도 결과가 같아야 "일단 다시 돌려 보자"가 안전한 행동이 되기 때문이다. 실패한 배포를 재시도하거나, 조정 루프가 주기적으로 같은 작업을 반복하는 것도 멱등성을 전제로 한다. 두 번째 실행에서 변경이 0이 아니면 그 코드나 모듈은 어딘가 명령형으로 동작하고 있다는 신호다.
+
+### Terraform은 왜 state 파일이 필요한가요?
+
+코드의 리소스 주소와 실제 리소스 ID를 짝지어 기억해야 차이를 계산하고, 특히 코드에서 빠진 리소스를 지울 수 있기 때문이다. 계정 안의 모든 리소스를 뒤져서는 무엇이 내가 만든 것인지 알 수 없다. CloudFormation은 이 기억을 AWS가 스택으로 들고 있고, Ansible은 기억이 없어서 지우려면 `state: absent`를 직접 적어야 한다.
+
+### 가변 인프라와 불변 인프라는 무엇이 다른가요?
+
+가변 인프라는 운영 중인 서버를 제자리에서 업데이트하고 고치는 방식이고, 불변 인프라는 바꿀 것이 있으면 새 이미지로 새 서버를 띄우고 옛 서버를 빼는 방식이다. 불변 쪽은 드리프트가 생길 틈이 없고 되돌리기가 옛 이미지로 다시 띄우는 것이라 단순하다. 대신 이미지 빌드 시간이 들고, 데이터를 가진 서버에는 그대로 적용하기 어렵고, 로드 밸런서와 헬스 체크 같은 바탕이 먼저 있어야 한다.
+
+### 콘솔에서 고친 값이 다음 배포 때 사라졌습니다. 왜 그런가요?
+
+코드가 원본이고 도구는 실제를 코드에 맞추기 때문이다. Terraform이면 다음 apply가, GitOps나 컨트롤러가 있으면 다음 조정 주기가 코드 값으로 되돌린다. plan에 내가 바꾸지 않은 변경 줄이 있으면 드리프트를 의심하고, 핫픽스는 끝나는 즉시 코드에 반영한다. 조정 루프가 있는 환경은 긴급 시 자동 동기화를 잠시 멈추는 절차를 미리 정해 둔다.
+
+### Terraform, Pulumi, CloudFormation, Ansible은 어떻게 고르나요?
+
+먼저 층을 나눈다. 클라우드에 무엇을 만들지는 Terraform·Pulumi·CloudFormation이, 서버 안의 설정은 Ansible 같은 구성 관리 도구가 맡는다. 프로비저닝 중에서는 AWS만 쓰고 state 관리를 피하고 싶으면 CloudFormation·CDK, 여러 클라우드와 SaaS를 한 문법으로 다루려면 Terraform이나 OpenTofu, 일반 언어의 추상화와 테스트가 필요하면 Pulumi를 고른다. 이미 쓰는 도구가 있으면 옮기는 비용을 먼저 따진다.

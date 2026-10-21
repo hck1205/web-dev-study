@@ -434,7 +434,7 @@ Refs: #318
 
 Semantic Versioning(SemVer)은 버전을 `MAJOR.MINOR.PATCH`로 쓰고 올리는 자리에 의미를 준다. 호환을 깨는 변경이면 MAJOR, 호환되는 기능 추가면 MINOR, 호환되는 버그 수정이면 PATCH를 올린다. Conventional Commits와 짝이 맞는다. 지난 태그 이후 `fix`만 있으면 1.4.0에서 1.4.1, `feat`가 하나라도 있으면 1.5.0, `!`나 `BREAKING CHANGE`가 있으면 2.0.0이다. semantic-release나 release-please 같은 도구가 이 규칙으로 다음 버전과 변경 로그를 자동으로 만든다.
 
-정식 출시 전 후보는 `1.5.0-rc.1`처럼 하이픈 뒤에 붙인다. SemVer에서 `1.5.0-rc.1`은 `1.5.0`보다 앞선 버전이다. `0.y.z`는 초기 개발 단계라 MINOR가 바뀌어도 호환이 깨질 수 있다는 뜻으로 읽힌다.
+정식 출시 전 후보는 `1.5.0-rc.1`처럼 하이픈 뒤에 붙인다. SemVer에서 `1.5.0-rc.1`은 `1.5.0`보다 앞선 버전이다. `0.y.z`는 초기 개발 단계라 MINOR가 바뀌어도 호환이 깨질 수 있다는 뜻으로 읽힌다. 사전 배포 버전의 정렬 규칙과 npm의 `^`·`~` 범위가 0.x에서 어떻게 달라지는지는 [Semantic Versioning](/posts/semantic-versioning)에서 따로 다룬다.
 
 ```bash
 # 릴리스 후보 태그
