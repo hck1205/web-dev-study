@@ -1,0 +1,563 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-currying-partial");
+
+상품 목록에 버튼을 달고, 누르면 그 상품을 선택하게 했다. 화면이 뜨기도 전에 에러가 난다.
+
+```jsx
+function List() {
+  const [selected, setSelected] = useState(null);
+  function select(id) { setSelected(id); }
+  return (
+    <ul>
+      {items.map((it) => (
+        <li key={it.id}><button onClick={select(it.id)}>{it.name}</button></li>
+      ))}
+    </ul>
+  );
+}
+```
+
+React 19.3 개발 빌드를 크로미움에서 돌리면 이렇게 나온다. 프로덕션 빌드에서는 같은 에러가 번호로만 나온다.
+
+```text
+Too many re-renders. React limits the number of renders to prevent an infinite loop.
+Minified React error #301; visit https://react.dev/errors/301 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+```
+
+`onClick`에 넘긴 건 함수가 아니라 `select(it.id)`를 실행한 결과다. 렌더링하는 도중에 `setSelected`가 불리고, 상태가 바뀌니 다시 렌더링하고, 그 렌더링이 또 `select`를 부른다. 원한 건 "id를 지금 정해 두고, 실행은 클릭할 때"였다. 인자 일부를 먼저 받고 나머지 일은 나중에 하는 함수가 필요했던 셈이다.
+
+이 글은 그런 함수를 만드는 두 방법, 커링(currying)과 부분 적용(partial application)을 다룬다. 둘이 어떻게 다른지, 범용 `curry`가 어디서 깨지는지, 실무에서 언제 쓸 만하고 언제 짐이 되는지를 본다. 출력은 Node.js 22와 크로미움에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 함수를 돌려주는 함수의 기본은 [일급 함수와 콜백](/posts/js-first-class-callbacks)에서, 돌려준 함수가 앞에서 받은 인자를 기억하는 원리는 [클로저](/posts/js-closures)에서 다뤘다. 여기서는 그 위에서 "인자를 나눠 받는 설계"만 본다.
+
+<SequenceDiagram
+  caption="함수 대신 실행 결과를 넘기면 렌더링이 렌더링을 부른다"
+  actors={[
+    { id: "react", label: "React" },
+    { id: "list", label: "List 렌더링" },
+    { id: "state", label: "상태" },
+  ]}
+  steps={[
+    { from: "react", to: "list", label: "render", title: "목록을 그린다", detail: "React가 List 함수를 부른다." },
+    { from: "list", to: "list", label: "select(1)", title: "JSX를 만들다 함수를 실행한다", detail: "onClick 자리의 식을 평가하느라 select가 바로 불린다.", payload: "onClick={select(it.id)} // 결과 undefined가 들어간다" },
+    { from: "list", to: "state", label: "setSelected(1)", title: "렌더링 중에 상태를 바꾼다", detail: "클릭도 안 했는데 상태 변경이 예약된다." },
+    { from: "state", to: "react", label: "다시 그려라", title: "또 렌더링한다", detail: "상태가 바뀌었으니 List를 다시 부른다. 거기서 또 select가 불린다." },
+    { from: "react", to: "react", label: "#301", title: "React가 멈춘다", detail: "렌더링 중 업데이트가 계속 쌓이면 무한 루프로 보고 에러를 던진다.", payload: "Too many re-renders." },
+  ]}
+/>
+
+고치는 방법은 두 가지다. `onClick={() => select(it.id)}`처럼 그 자리에서 함수로 감싸거나, `select` 자체를 "id를 받아 핸들러를 돌려주는 함수"로 바꾼다.
+
+```jsx
+const select = (id) => () => setSelected(id);
+// ...
+<button onClick={select(it.id)}>{it.name}</button>
+```
+
+이제 `select(it.id)`는 클릭을 기다리는 함수를 돌려준다. 인자 하나를 먼저 받고, 나머지 일은 다음 호출로 미룬 것이다. 이 모양을 일반화하면 커링이 된다.
+
+## 인자를 나눠 받는 두 가지 방법
+
+가격 계산 함수 하나로 비교해 보자. 세율, 할인율, 금액 세 인자를 받는다.
+
+```js
+function price(rate, discount, amount) {
+  return Math.round(amount * (1 - discount) * (1 + rate));
+}
+// 커링: 인자를 하나씩 받는 함수의 사슬
+const curriedPrice = (rate) => (discount) => (amount) => price(rate, discount, amount);
+console.log(curriedPrice(0.1)(0.2)(10000));
+
+// 부분 적용: 일부 인자를 미리 고정한 새 함수
+const krPrice = price.bind(null, 0.1);
+console.log(krPrice(0.2, 10000));
+const vipKr = (amount) => price(0.1, 0.2, amount);
+console.log(vipKr(10000));
+console.log(typeof curriedPrice(0.1), typeof curriedPrice(0.1)(0.2));
+```
+
+```text
+8800
+8800
+8800
+function function
+```
+
+결과는 셋 다 같지만 모양이 다르다.
+
+커링은 인자 n개짜리 함수를 "인자 하나를 받아 다음 함수를 돌려주는 함수" n개의 사슬로 바꾸는 변환이다. 수학자 해스켈 커리(Haskell Curry)의 이름에서 왔다. `curriedPrice(0.1)`도 함수, `curriedPrice(0.1)(0.2)`도 함수고, 마지막 인자가 들어가야 값이 나온다.
+
+부분 적용은 인자 일부를 미리 채워 넣고, 나머지 인자를 받는 새 함수를 만드는 일이다. `krPrice`는 세율만 고정했고 남은 두 인자를 한 번에 받는다. 커링한 함수에 인자 하나를 넣는 것도 부분 적용의 한 형태지만, 부분 적용은 커링 없이도 `bind`나 화살표 함수 하나로 할 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="커링은 함수의 모양을 바꾸고, 부분 적용은 인자를 미리 채운다"
+  nodes={[
+    { id: "orig", label: "price", sub: "(rate, discount, amount)", x: 200, y: 35, w: 190 },
+    { id: "c1", label: "rate =>", sub: "함수를 돌려준다", x: 70, y: 130, w: 110 },
+    { id: "c2", label: "discount =>", sub: "함수를 돌려준다", x: 70, y: 220, w: 120 },
+    { id: "p1", label: "krPrice", sub: "(discount, amount)", x: 310, y: 130, w: 150 },
+    { id: "p2", label: "vipKr", sub: "(amount)", x: 310, y: 220, w: 110 },
+  ]}
+  edges={[
+    { from: "orig", to: "c1", label: "curry" },
+    { from: "c1", to: "c2", label: "(0.1)" },
+    { from: "orig", to: "p1", label: "bind(null, 0.1)" },
+    { from: "orig", to: "p2", label: "두 개 고정", dashed: true },
+  ]}
+/>
+
+실무에서 더 자주 쓰는 건 부분 적용이다. 설정은 한 번 정하고 데이터는 여러 번 바뀌는 경우가 많기 때문이다. 기본 주소가 정해진 API 클라이언트, 모듈 이름이 붙은 로거, 세율이 정해진 계산기가 그렇다. 커링은 그 부분 적용을 "아무 위치에서나, 몇 개씩이든" 할 수 있게 만드는 일반적인 도구다.
+
+## 범용 curry는 이렇게 동작한다
+
+매번 화살표를 겹겹이 쓰는 대신, 아무 함수나 커링해 주는 `curry`를 만들 수 있다.
+
+```js
+function curry(fn) {
+  return function curried(...args) {
+    if (args.length >= fn.length) return fn.apply(this, args);
+    return (...more) => curried.apply(this, [...args, ...more]);
+  };
+}
+const p = curry(price);
+console.log(p(0.1)(0.2)(10000));
+console.log(p(0.1, 0.2)(10000));
+console.log(p(0.1)(0.2, 10000));
+console.log(p(0.1, 0.2, 10000));
+const kr = p(0.1);
+console.log(kr(0)(10000), kr(0.5)(10000));
+```
+
+```text
+8800
+8800
+8800
+8800
+11000 5500
+```
+
+실제로 일하는 건 두 줄이다. 지금까지 모인 인자가 원래 함수의 매개변수 개수(`fn.length`) 이상이면 원래 함수를 부른다. 모자라면 지금까지의 인자를 기억하는 새 함수를 돌려준다. 새 함수는 다음 인자를 받으면 둘을 이어 붙여 `curried`를 다시 부른다. 엄밀한 커링은 인자를 하나씩만 받지만, 자바스크립트 라이브러리의 `curry`는 보통 이렇게 여러 개를 한꺼번에 받아도 되게 만든다.
+
+<AlgoTrace
+  caption="모자라면 기억하고, 다 모이면 실행한다"
+  memoryLabel="모인 인자"
+  cells={["p(0.1)", "(0.2)", "(10000)", "price 실행"]}
+  steps={[
+    { pointer: 0, memory: ["0.1"], caption: "인자 1개, fn.length는 3. 모자라니 [0.1]을 기억한 함수를 돌려준다." },
+    { pointer: 1, memory: ["0.1", "0.2"], caption: "앞의 인자에 0.2를 이어 붙인 새 배열. 아직 2개라 또 함수를 돌려준다." },
+    { pointer: 2, memory: ["0.1", "0.2", "10000"], caption: "3개가 모였다. 이제 원래 함수를 부를 차례다." },
+    { pointer: 3, found: [3], memory: ["→ 8800"], caption: "price(0.1, 0.2, 10000)을 실행해 값을 돌려준다." },
+  ]}
+/>
+
+`[...args, ...more]`로 매번 새 배열을 만드는 게 중요하다. 그래야 `kr = p(0.1)`을 만들어 두고 `kr(0)`과 `kr(0.5)`로 여러 번 써도 서로 섞이지 않는다.
+
+## 인자 배열을 같이 쓰면 두 번째 호출이 망가진다
+
+인터넷에서 보이는 `curry` 구현 중에는 인자를 배열 하나에 계속 `push`하는 것이 있다. 한 번만 쓰면 멀쩡해 보인다.
+
+```js
+function badCurry(fn) {
+  const args = []; // 모든 호출이 이 배열 하나를 같이 쓴다
+  return function curried(...more) {
+    args.push(...more);
+    if (args.length >= fn.length) return fn(...args);
+    return curried;
+  };
+}
+const join3 = (a, b, c) => `${a}-${b}-${c}`;
+const c = badCurry(join3);
+const fromA = c("a");
+console.log(fromA("b")("c"));
+try { console.log(fromA("x")("y")); } catch (e) { console.log(e.name + ": " + e.message); }
+console.log(c("z"));
+```
+
+```text
+a-b-c
+TypeError: fromA(...) is not a function
+a-b-c
+```
+
+첫 호출은 맞다. 그런데 `fromA`를 다시 쓰자 배열에는 이미 `a, b, c`가 들어 있다. `x`가 붙어 네 개가 되니 바로 실행해서 문자열을 돌려주고, 그 문자열에 `("y")`를 하다 에러가 났다. 마지막 줄은 아예 새로 시작한 것처럼 보이지만 옛 인자로 실행됐다.
+
+<AlgoTrace
+  caption="배열 하나를 같이 쓰면 앞 호출의 인자가 남는다"
+  memoryLabel="공유 args"
+  cells={["c('a')", "('b')('c')", "fromA('x')", "('y')"]}
+  steps={[
+    { pointer: 0, memory: ["a"], caption: "fromA를 만들었다. 공유 배열에 a가 들어간다." },
+    { pointer: 1, memory: ["a", "b", "c"], caption: "3개가 차서 a-b-c를 돌려준다. 배열은 비우지 않는다." },
+    { pointer: 2, memory: ["a", "b", "c", "x"], caption: "fromA를 다시 썼다. x가 붙으니 바로 실행해 문자열을 돌려준다." },
+    { pointer: 3, memory: ["'a-b-c'('y')"], caption: "문자열을 함수처럼 부르다 TypeError가 난다." },
+  ]}
+/>
+
+이런 버그는 테스트에서 한 번씩만 불러 보면 통과한다. 중간 함수를 재사용하는 순간에야 드러난다. 커링한 함수를 모듈 상단에서 만들어 두고 여러 곳에서 쓰는 실무 코드에서 특히 위험하다. 직접 만들 때는 호출마다 새 배열을 만들었는지부터 본다. 글 끝의 연습 문제가 이 경우를 테스트한다.
+
+## fn.length를 믿으면 생기는 일
+
+범용 `curry`는 언제 실행할지를 `fn.length`로 정한다. 그런데 `length`는 생각보다 자주 작다.
+
+```js
+const cases = [
+  ["(a, b, c)", function (a, b, c) {}],
+  ["(a, b = 1, c)", function (a, b = 1, c) {}],
+  ["(url, options = {})", function (url, options = {}) {}],
+  ["(...args)", function (...args) {}],
+  ["(a, ...rest)", function (a, ...rest) {}],
+  ["({ id, name })", function ({ id, name }) {}],
+  ["bind(null, 1) of (a, b)", ((a, b) => a + b).bind(null, 1)],
+];
+for (const [label, f] of cases) console.log(String(f.length).padStart(2), label);
+```
+
+```text
+ 3 (a, b, c)
+ 1 (a, b = 1, c)
+ 1 (url, options = {})
+ 0 (...args)
+ 1 (a, ...rest)
+ 1 ({ id, name })
+ 1 bind(null, 1) of (a, b)
+```
+
+`length`는 기본값이 있는 첫 매개변수 앞까지만 센다. 그 뒤는 기본값이 없어도 세지 않는다. 나머지 매개변수(`...rest`)도 세지 않는다. 구조 분해는 매개변수 하나로 센다. `bind`로 인자를 채운 함수는 채운 만큼 줄어든다.
+
+그래서 기본값이 있는 함수를 커링하면 첫 인자만 넣어도 바로 실행된다. 요청 함수로 확인해 보자.
+
+```js
+async function request(baseURL, method = "GET", path) {
+  return `${method} ${baseURL}${path}`;
+}
+const req = curry(request);
+const api = req("https://api.example.com");
+console.log(api);
+try { api("POST"); } catch (e) { console.log(e.name + ": " + e.message); }
+```
+
+```text
+Promise { 'GET https://api.example.comundefined' }
+TypeError: api is not a function
+```
+
+`request.length`가 1이라서 `req(baseURL)`에서 바로 요청이 나갔다. 주소 끝에 `undefined`가 붙은 요청이다. 실제 `fetch`였다면 서버 로그에 `/undefined`로 404가 찍혔을 것이다. 받은 건 함수가 아니라 Promise라 다음 호출에서 터진다.
+
+고치는 방법은 인자 개수를 직접 알려 주는 것이다. Ramda는 `curryN(n, fn)`, lodash는 `_.curry(fn, n)`으로 받는다.
+
+```js
+function curryN(n, fn) {
+  return function curried(...args) {
+    if (args.length >= n) return fn.apply(this, args);
+    return (...more) => curried.apply(this, [...args, ...more]);
+  };
+}
+const req3 = curryN(3, request);
+req3("https://api.example.com")("POST")("/orders").then(console.log);
+```
+
+```text
+POST https://api.example.com/orders
+```
+
+다만 이러면 기본값이 의미 없어진다. 세 번째 인자가 올 때까지 실행하지 않으니 `method`를 생략할 방법이 없다. 선택 인자가 있는 함수, 인자 개수가 가변인 함수는 커링과 잘 맞지 않는다. 그런 함수는 옵션 객체 하나를 받게 하고 필요한 값만 부분 적용하는 편이 낫다.
+
+## lodash의 placeholder로 빈자리 남기기
+
+인자를 앞에서부터만 채울 수 있으면 불편할 때가 있다. 세율은 나중에 정하고 할인율과 금액을 먼저 정하고 싶다면? lodash 4.17의 `curry`와 `partial`은 `_`를 빈자리 표시(placeholder)로 쓴다.
+
+```js
+const _ = require("lodash");
+const p = _.curry(price);
+console.log(p(0.1)(0.2)(10000));
+const anyRate = p(_, 0.2, 10000);           // 첫 인자만 비워 둔다
+console.log(anyRate(0.1), anyRate(0));
+const fixedDiscount = _.partial(price, _, 0.5);
+console.log(fixedDiscount(0.1, 10000));
+const lastFixed = _.partialRight(price, 10000);
+console.log(lastFixed(0.1, 0.2));
+```
+
+```text
+8800
+8800 8000
+5500
+8800
+```
+
+`_.curry`도 `fn.length`를 쓰니 기본값 함정은 똑같다. 앞의 `request`를 `_.curry(request)`로 감싸면 `req(baseURL)`에서 바로 `GET https://api.example.comundefined`가 나왔고, `_.curry(request, 3)`으로 개수를 알려 주자 고쳐졌다.
+
+## bind로 하는 부분 적용과 this
+
+라이브러리 없이 하는 부분 적용은 `Function.prototype.bind`가 기본이다. 첫 인자는 `this`, 그 뒤는 앞에서부터 채울 인자다. 메서드를 부분 적용할 때 특히 쓸모 있다.
+
+<UrlAnatomy
+  caption="bind 한 줄을 조각으로 읽기"
+  base="const warnAuth = logger.log.bind("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "this", display: "logger", title: "고정할 this", description: "warnAuth를 어떻게 부르든 log 안의 this는 logger다. call이나 apply로도 바꿀 수 없다.", required: true },
+    { key: "level", display: "\"WARN\"", title: "첫 인자 고정", description: "log(level, scope, msg)의 level 자리가 채워진다." },
+    { key: "scope", display: "\"auth\")", title: "둘째 인자 고정", description: "scope도 채운다. 남은 msg 하나만 받는 함수가 된다. length는 3에서 1로 준다." },
+  ]}
+/>
+
+```js
+const logger = {
+  prefix: "[app]",
+  log(level, scope, msg) { return `${this.prefix} ${level} ${scope}: ${msg}`; },
+};
+const warnAuth = logger.log.bind(logger, "WARN", "auth");
+console.log(warnAuth("토큰 만료"));
+console.log(warnAuth.name, warnAuth.length);
+const other = { prefix: "[other]" };
+console.log(warnAuth.call(other, "this는 못 바꾼다"));
+```
+
+```text
+[app] WARN auth: 토큰 만료
+bound log 1
+[app] WARN auth: this는 못 바꾼다
+```
+
+이름이 `bound log`로 바뀌고 `length`가 1이 된다. 스택 트레이스에도 이 이름이 찍힌다. 한 번 묶은 `this`는 `call`로도 못 바꾼다. 화살표 함수에 `bind`를 하면 `this`는 무시되고 인자만 채워진다. 화살표 함수는 원래 자기 `this`가 없어서다. `this`가 정해지는 규칙과 `call`, `apply`, `bind`의 차이는 [call, apply, bind](/posts/js-call-apply-bind)에서 따로 다룬다.
+
+`this`가 필요 없는 함수라면 `bind(null, ...)` 대신 화살표 함수 `(msg) => log("WARN", "auth", msg)`가 읽기 쉽다. 어떤 인자가 고정됐는지 눈에 보이고, 타입 추론도 잘 된다.
+
+## 데이터를 마지막 인자에 두는 이유
+
+커링이 진짜 빛나는 곳은 함수를 이어 붙일 때다. 작은 함수를 부분 적용해 두고 파이프로 연결하면 데이터가 지나갈 길을 먼저 만들 수 있다.
+
+```js
+const map = curry((f, xs) => xs.map(f));
+const filter = curry((pred, xs) => xs.filter(pred));
+const prop = curry((key, obj) => obj[key]);
+const pipe = (...fns) => (x) => fns.reduce((v, f) => f(v), x);
+
+const users = [
+  { name: "kim", active: true, age: 31 },
+  { name: "lee", active: false, age: 25 },
+  { name: "park", active: true, age: 19 },
+];
+const activeNames = pipe(filter(prop("active")), map(prop("name")));
+console.log(activeNames(users));
+```
+
+```text
+[ 'kim', 'park' ]
+```
+
+`filter(prop("active"))`는 "배열을 받아 active인 것만 남기는 함수"다. 이게 되려면 데이터(`xs`)가 마지막 인자여야 한다. 설정을 앞에, 데이터를 뒤에 두는 이 순서를 data-last라고 한다. Ramda가 모든 함수를 이 순서로 만든 이유이고, lodash가 따로 `lodash/fp`를 둔 이유다. 반대로 `Array.prototype.map`처럼 데이터가 먼저 오는 API는 메서드 체이닝과 맞는다.
+
+아래 그림에서 다음을 누르면 데이터가 파이프를 지나며 줄어드는 과정을 따라간다.
+
+<NetworkTopology
+  caption="부분 적용한 함수들이 미리 깔아 둔 길"
+  width={400}
+  height={220}
+  zones={[
+    { id: "pipe", label: "activeNames = pipe(...)", x: 110, y: 20, w: 180, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "in", label: "users", sub: "3명", x: 50, y: 110, icon: "db", w: 80 },
+    { id: "f", label: "filter", sub: "prop('active')", x: 200, y: 65, icon: "firewall", w: 130 },
+    { id: "m", label: "map", sub: "prop('name')", x: 200, y: 160, icon: "router", w: 130 },
+    { id: "out", label: "결과", sub: "['kim','park']", x: 345, y: 110, icon: "container", w: 90 },
+  ]}
+  links={[
+    { from: "in", to: "f" },
+    { from: "f", to: "m" },
+    { from: "m", to: "out" },
+  ]}
+  steps={[
+    { path: ["f"], title: "길을 먼저 깐다", detail: "filter와 map에 설정만 넣었다. 둘 다 아직 배열을 기다리는 함수다." },
+    { path: ["in", "f"], packet: "3명", title: "데이터가 들어온다", detail: "pipe가 users를 첫 함수에 넘긴다. 이제야 filter가 실행된다." },
+    { path: ["f", "m"], packet: "2명", title: "걸러진 배열이 다음으로", detail: "lee가 빠진 배열이 map의 마지막 인자로 들어간다." },
+    { path: ["m", "out"], packet: "이름 2개", title: "이름만 남는다", detail: "prop('name')이 객체마다 이름을 꺼낸다.", payload: "[ 'kim', 'park' ]" },
+  ]}
+/>
+
+이 스타일을 끝까지 밀면 인자 이름을 하나도 쓰지 않는 포인트 프리(point-free) 코드가 된다. 짧지만, 팀원이 함수형 관례에 익숙하지 않으면 읽기 어렵고 디버깅할 때 중간값에 중단점을 걸 곳이 없다. 표준에 파이프라인 연산자(`|>`)를 넣자는 제안이 있지만 아직 제안 단계라 그대로는 쓸 수 없다. 팀 코드에서는 이름 붙은 중간 변수와 섞어 쓰는 게 보통 낫다.
+
+## 함수가 늘어나는 만큼 드는 비용
+
+커링한 함수는 호출할 때마다 클로저와 배열을 새로 만든다. 얼마나 드는지 Node 22에서 500만 번씩 돌려 봤다.
+
+```js
+const add3 = (a, b, c) => a + b + c;
+const manual = (a) => (b) => (c) => a + b + c;
+const generic = curry(add3);
+const lodashC = _.curry(add3);
+bench("직접 호출", (i) => add3(i, 1, 2));
+bench("손으로 쓴 커링", (i) => manual(i)(1)(2));
+bench("범용 curry 한 번에", (i) => generic(i, 1, 2));
+bench("범용 curry 하나씩", (i) => generic(i)(1)(2));
+bench("lodash curry 하나씩", (i) => lodashC(i)(1)(2));
+```
+
+```text
+직접 호출                      7ms
+손으로 쓴 커링                  37ms
+범용 curry 한 번에            211ms
+범용 curry 하나씩            1653ms
+lodash curry 하나씩       12906ms
+```
+
+두 번 돌렸을 때 순서는 같았고 숫자는 조금씩 달랐다. 손으로 쓴 화살표 사슬은 엔진이 잘 최적화하지만, 범용 `curry`는 나머지 매개변수와 배열 펼치기, `apply`가 매번 끼어서 수십 배 느려졌다. lodash는 placeholder 처리까지 해서 더 느렸다. 호출 한 번에 몇 마이크로초라 버튼 핸들러나 설정 함수에서는 신경 쓸 일이 없다. 수십만 번 도는 반복문이나 렌더링마다 수천 번 부르는 함수라면 커링한 함수를 미리 만들어 두거나, 그 경로에서는 직접 호출한다.
+
+## TypeScript에서 커링 타입 잡기
+
+커링한 함수에 타입을 붙이면 잘못된 인자와 너무 이른 사용을 컴파일 단계에서 잡는다. 재귀 조건부 타입으로 인자 목록을 하나씩 벗겨 낸다.
+
+```ts
+type Curried<A extends unknown[], R> =
+  A extends [infer First, ...infer Rest]
+    ? (arg: First) => Rest extends [] ? R : Curried<Rest, R>
+    : R;
+
+declare function curry<A extends unknown[], R>(fn: (...args: A) => R): Curried<A, R>;
+
+function price(rate: number, discount: number, amount: number): number {
+  return Math.round(amount * (1 - discount) * (1 + rate));
+}
+const p = curry(price);
+const total: number = p(0.1)(0.2)(10000);
+const wrong = p(0.1)("20%");
+const early: number = p(0.1)(0.2);
+```
+
+TypeScript 5.9로 검사한 결과다.
+
+```text
+t1.ts(13,22): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+t1.ts(14,23): error TS2322: Type '(arg: number) => number' is not assignable to type 'number'.
+```
+
+두 번째 에러가 특히 쓸모 있다. 인자를 덜 넣어 함수가 남았는데 숫자처럼 쓰려는 실수를 잡는다. 앞에서 본 `fn.length` 함정도 타입으로는 드러나지 않으니(타입은 인자 셋, 런타임은 하나) 기본값이 있는 함수는 여전히 조심해야 한다. 이 타입은 한 번에 하나씩 받는 경우만 표현한다. 여러 개를 한꺼번에 받는 것까지 표현하려면 타입이 훨씬 복잡해지고, 에러 메시지도 읽기 어려워진다. 실무에서는 이 정도 단순한 사슬이나 명시적인 화살표 함수가 낫다.
+
+## React에서 커링한 핸들러가 memo를 깬다
+
+처음 예제의 `select = (id) => () => setSelected(id)`는 무한 루프를 고쳤다. 그런데 이 핸들러 공장은 렌더링마다 상품 수만큼 새 함수를 만든다. 자식을 `memo`로 감쌌다면 문제가 된다.
+
+```jsx
+const RowA = memo(function RowA({ item, onSelect }) { /* ... */ });
+const RowB = memo(function RowB({ item, onSelect }) {
+  return <li onClick={() => onSelect(item.id)}>{item.name}</li>;
+});
+
+// A: 커링한 핸들러 공장. 렌더링마다 새 함수 100개
+const select = (id) => () => setSelected(id);
+items.map((it) => <RowA key={it.id} item={it} onSelect={select(it.id)} />);
+
+// B: 하나의 안정된 함수에 id를 나중에 넘긴다
+const onSelect = useCallback((id) => setSelected(id), []);
+items.map((it) => <RowB key={it.id} item={it} onSelect={onSelect} />);
+```
+
+상품 100개로 첫 렌더링 뒤 부모의 다른 상태를 한 번 바꾸고, 각 줄이 몇 번 렌더링됐는지 셌다.
+
+```text
+첫 렌더링: {"A":100,"B":100}
+부모 상태 변경 후: {"A":100,"B":0}
+```
+
+A는 `select(it.id)`가 매번 새 함수라서 `memo`가 props를 다르다고 보고 100줄을 전부 다시 그렸다. B는 부모가 넘기는 함수가 하나로 고정돼 있고, id는 자식이 클릭할 때 넘긴다. 부분 적용을 부모가 아니라 자식 안에서 하는 셈이다. `memo`가 언제 듣고 언제 안 듣는지는 [React 리렌더링](/posts/react-rerender)에서 자세히 다뤘다. `memo`를 쓰지 않는 목록이라면 A도 문제없다. 어차피 부모를 따라 다시 그려지니 함수가 새것이든 아니든 차이가 없다.
+
+폼에서 필드 이름을 부분 적용하는 핸들러도 흔하다.
+
+```jsx
+const handleChange = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+<input value={form.email} onChange={handleChange("email")} />
+```
+
+필드가 몇 개 안 되는 폼에서는 이게 가장 읽기 쉽다. 입력 필드를 `memo`로 감싼 큰 폼이라면 `name` 속성을 두고 `e.target.name`으로 필드를 고르는 핸들러 하나로 바꾸면 함수가 고정된다.
+
+## 연습: curry 직접 만들기
+
+`curry`를 채워 보자. 인자를 하나씩, 묶어서, 한 번에 다 넘겨도 돼야 한다. 중간에 만든 함수를 다시 써도 앞 호출의 인자가 섞이면 안 된다. 앞에서 본 공유 배열 구현은 네 번째 테스트에서 걸린다.
+
+<CodePlayground
+  caption="curry: 인자가 다 모일 때까지 기다리기"
+  functionName="run"
+  initialCode={`function curry(fn) {
+  // fn.length만큼 인자가 모이면 fn을 부르고, 아니면 나머지를 받을 함수를 돌려준다.
+  // 한 번에 여러 개를 넘겨도 되고, 중간에 만든 함수를 여러 번 써도 결과가 섞이면 안 된다.
+  return fn;
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// groups의 인자 묶음을 차례로 넘긴다. 첫 묶음으로 만든 함수를 again으로 한 번 더 쓴다.
+function run(groups, again) {
+  const join3 = (a, b, c) => [a, b, c].join("");
+  const callAll = (f, gs) => gs.reduce((g, args) => (typeof g === "function" ? g(...args) : g), f);
+  const first = curry(join3)(...groups[0]);
+  const show = (v) => (typeof v === "function" ? "함수" : v);
+  return [show(callAll(first, groups.slice(1))), show(callAll(first, again))];
+}`}
+  solution={`function curry(fn) {
+  return function curried(...args) {
+    if (args.length >= fn.length) return fn.apply(this, args);
+    return (...more) => curried.apply(this, [...args, ...more]);
+  };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// groups의 인자 묶음을 차례로 넘긴다. 첫 묶음으로 만든 함수를 again으로 한 번 더 쓴다.
+function run(groups, again) {
+  const join3 = (a, b, c) => [a, b, c].join("");
+  const callAll = (f, gs) => gs.reduce((g, args) => (typeof g === "function" ? g(...args) : g), f);
+  const first = curry(join3)(...groups[0]);
+  const show = (v) => (typeof v === "function" ? "함수" : v);
+  return [show(callAll(first, groups.slice(1))), show(callAll(first, again))];
+}`}
+  tests={[
+    { label: "하나씩 넘긴다", args: [[[1], [2], [3]], [[4], [5]]], expected: ["123", "145"] },
+    { label: "묶어서 넘긴다", args: [[[1, 2], [3]], [[9]]], expected: ["123", "129"] },
+    { label: "한 번에 다 넘긴다", args: [[[1, 2, 3]], []], expected: ["123", "123"] },
+    { label: "중간 함수를 다시 써도 안 섞인다", args: [[["a"], ["b"], ["c"]], [["x"], ["y"]]], expected: ["abc", "axy"] },
+    { label: "덜 넘기면 아직 함수다", args: [[["a"], ["b"]], [["x", "y"]]], expected: ["함수", "axy"] },
+    { label: "빈 호출은 그대로 기다린다", args: [[[], [1], [], [2, 3]], [[1], [7, 8]]], expected: ["123", "178"] },
+  ]}
+/>
+
+## 다시 버튼 목록으로
+
+처음 버튼이 무한 루프를 돈 건 "인자는 지금, 실행은 나중"을 표현하지 못해서였다. 커링은 함수를 인자 하나씩 받는 사슬로 바꾸고, 부분 적용은 일부 인자를 채운 새 함수를 만든다. 실무에서는 설정을 미리 채운 부분 적용이 대부분이고, 범용 `curry`는 `fn.length`와 공유 상태, 호출 비용을 알고 써야 한다. React 목록에서는 부분 적용을 어디서 하느냐(부모냐 자식이냐)에 따라 `memo`가 듣기도 하고 깨지기도 한다.
+
+## 면접에서 나올 만한 질문
+
+### 커링이란 무엇인가요?
+
+인자 여러 개를 받는 함수를, 인자 하나를 받아 다음 함수를 돌려주는 함수들의 사슬로 바꾸는 변환이다. `f(a, b, c)`가 `f(a)(b)(c)`가 된다. 앞 인자는 클로저로 기억해 두었다가 마지막 인자가 들어올 때 원래 함수를 실행한다.
+
+### 커링과 부분 적용은 어떻게 다른가요?
+
+커링은 함수의 모양을 바꾸는 변환이고, 부분 적용은 인자 일부를 채워 나머지를 받는 새 함수를 만드는 일이다. 커링한 함수에 인자를 하나 넣는 것도 부분 적용이지만, 부분 적용은 `bind`나 화살표 함수로 커링 없이 할 수 있다. 실무에서는 기본 주소를 채운 API 함수처럼 부분 적용을 더 자주 쓴다.
+
+### 범용 curry는 언제 원래 함수를 실행하나요?
+
+보통 모인 인자 수가 `fn.length` 이상이 될 때 실행한다. 그래서 기본값 매개변수, 나머지 매개변수, `bind`된 함수처럼 `length`가 실제보다 작은 함수는 너무 일찍 실행된다. 이럴 때는 lodash의 `_.curry(fn, n)`이나 Ramda의 `curryN`처럼 인자 수를 직접 정한다.
+
+### 직접 만든 curry에서 중간 함수를 재사용하면 결과가 이상해지는 이유는요?
+
+인자를 배열 하나에 계속 `push`하는 구현이라서 그렇다. 첫 사용 때 들어간 인자가 배열에 남아 있으니 두 번째 사용에서 바로 개수가 차거나 옛 인자로 실행된다. 호출마다 `[...args, ...more]`처럼 새 배열을 만들어야 중간 함수를 여러 번 써도 섞이지 않는다.
+
+### bind로 부분 적용할 때 주의할 점은요?
+
+첫 인자가 `this`로 고정되고 이후 `call`이나 `apply`로도 바꿀 수 없다. 함수 이름이 `bound 원래이름`으로 바뀌고 `length`가 채운 인자 수만큼 준다. 화살표 함수에는 `this` 고정이 무시된다. `this`가 필요 없다면 화살표 함수로 감싸는 편이 읽기 쉽다.
+
+### 왜 함수형 라이브러리는 데이터를 마지막 인자로 두나요?
+
+설정 인자를 먼저 부분 적용해 "데이터를 기다리는 함수"를 만들고, 그 함수들을 `pipe`로 이어 붙이기 위해서다. `filter(isActive)`처럼 데이터 없이 동작만 정해 둘 수 있다. 데이터가 먼저 오면 이런 조합이 안 되고, 그래서 lodash는 data-last 순서의 `lodash/fp`를 따로 제공한다.
+
+### 커링을 남용하면 어떤 문제가 있나요?
+
+호출마다 클로저와 배열이 생겨서 범용 `curry`는 직접 호출보다 수십 배 느릴 수 있고, 스택 트레이스에 익명 함수가 겹겹이 쌓여 디버깅이 어렵다. 선택 인자가 있는 함수와는 잘 맞지 않고, 포인트 프리 스타일은 익숙하지 않은 팀원이 읽기 힘들다. 설정을 미리 채우는 부분 적용처럼 이득이 분명한 곳에만 쓴다.
+
+### React에서 `onClick={select(id)}`를 쓰면 왜 무한 루프가 나고, 어떻게 고치나요?
+
+`select(id)`가 렌더링 중에 바로 실행되어 상태를 바꾸고, 그 때문에 다시 렌더링되며 또 실행되기 때문이다. `() => select(id)`로 감싸거나 `select`를 `(id) => () => ...` 모양의 핸들러 공장으로 바꾼다. 다만 핸들러 공장은 렌더링마다 새 함수를 만들어 `memo`로 감싼 자식을 매번 다시 그리게 하니, 그럴 때는 고정된 함수 하나를 넘기고 id는 자식이 넘기게 한다.

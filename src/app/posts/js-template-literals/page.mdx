@@ -1,0 +1,532 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-template-literals");
+
+로그인한 사용자에게 인사 문구를 띄우는 코드를 고쳤다. 원래 `user.name`을 넣던 자리에 실수로 `user`를 넣었다. 템플릿 문자열은 아무 말 없이 받아 줬고, 화면에는 이렇게 나왔다.
+
+```js
+const user = { id: 7, name: "민지" };
+console.log(`${user}님 환영합니다`);
+console.log(`장바구니: ${["사과", "배"]}`);
+console.log(`쿠폰: ${null}, 포인트: ${undefined}`);
+```
+
+```text
+[object Object]님 환영합니다
+장바구니: 사과,배
+쿠폰: null, 포인트: undefined
+```
+
+오류가 나지 않으니 화면을 보기 전까지 아무도 모른다. 템플릿 문자열은 무엇이든 문자열로 바꿔 끼워 넣는다. 객체는 `[object Object]`, 배열은 쉼표로 이은 글자, `null`과 `undefined`는 그 이름 그대로다. 이 글은 백틱 안에서 값이 어떻게 문자열이 되는지, 태그 함수가 조각과 값을 어떻게 나눠 받는지, 그리고 그 구조가 SQL 인젝션과 XSS를 어떻게 막는지 따라간다. Node 22 기준으로 돌린 출력이다.
+
+`&&`와 `||`가 어떤 값을 돌려주는지는 [단락 평가 글](/posts/js-short-circuit)에서, `?.`와 `??`는 [옵셔널 체이닝 글](/posts/js-optional-chaining-nullish)에서 다룬다. 이 글에서도 두 연산자가 템플릿 안에 들어갈 때 생기는 일은 짚는다.
+
+## 백틱 안의 값은 문자열로 바뀐다
+
+템플릿 리터럴(template literal)은 ES2015에 들어온 문법이다. 백틱(`` ` ``)으로 감싸고, `${ }` 안에 아무 표현식이나 넣는다. 명세는 `${ }` 안의 값을 ToString으로 바꾼다. 객체라면 그 전에 ToPrimitive를 "string" 힌트로 부른다. 같은 객체를 `+`로 이으면 힌트가 "default"다. 이 차이는 `Symbol.toPrimitive`로 직접 확인할 수 있다.
+
+```js
+const price = {
+  [Symbol.toPrimitive](hint) {
+    console.log("hint:", hint);
+    return hint === "number" ? 1200 : hint === "string" ? "1,200원" : "기본";
+  },
+};
+console.log(`${price}`);
+console.log("" + price);
+console.log(String(price));
+
+const v = { valueOf() { return 42; }, toString() { return "사십이"; } };
+console.log(`${v}`, "" + v);
+```
+
+```text
+hint: string
+1,200원
+hint: default
+기본
+hint: string
+1,200원
+사십이 42
+```
+
+`toString`과 `valueOf`를 둘 다 가진 객체에서 차이가 드러난다. 템플릿은 `toString`을 먼저 보고, `+`는 `valueOf`를 먼저 본다. 그래서 `` `${v}` ``는 `사십이`, `"" + v`는 `42`가 된다. 템플릿 문자열은 `String(v)`와 같은 규칙이라고 기억하면 된다. 변환 규칙 자체는 [==와 === 글](/posts/js-equality-coercion)에서 자세히 다뤘다.
+
+`Date`는 기본 힌트도 문자열로 취급하도록 정해져 있어서 두 방식의 결과가 같다. 반대로 Symbol은 문자열로 자동 변환되지 않는다.
+
+```js
+try {
+  console.log(`${Symbol("id")}`);
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+console.log(String(Symbol("id")));
+```
+
+```text
+TypeError: Cannot convert a Symbol value to a string
+Symbol(id)
+```
+
+`String(sym)`은 되고 `` `${sym}` ``은 안 된다. 명시적 변환만 허락해서 Symbol 키가 실수로 문자열 키로 바뀌는 일을 막으려는 설계다. 로그에 Symbol을 찍다가 이 오류를 만나면 `String()`이나 `sym.description`으로 감싼다.
+
+아래 그림은 값 네 개가 템플릿 안에서 무엇으로 바뀌는지 차례로 보여 준다. 다음을 누르면 결과 문자열에 조각이 쌓인다.
+
+<AlgoTrace
+  caption="값마다 ToString을 거쳐 결과 문자열에 붙는다"
+  memoryLabel="만들어진 문자열"
+  cells={["user", "[\"사과\",\"배\"]", "null", "v (둘 다 있음)"]}
+  steps={[
+    { pointer: 0, memory: ["[object Object]"], caption: "평범한 객체는 Object.prototype.toString을 쓴다. 이름이 아니라 [object Object]가 나온다." },
+    { pointer: 1, memory: ["[object Object]", "사과,배"], caption: "배열의 toString은 join(\",\")이다. 대괄호도 공백도 없다." },
+    { pointer: 2, memory: ["[object Object]", "사과,배", "null"], caption: "null과 undefined는 이름 그대로 글자가 된다. 빈 문자열이 되지 않는다." },
+    { pointer: 3, found: [3], memory: ["[object Object]", "사과,배", "null", "사십이"], caption: "string 힌트라서 toString이 먼저 불린다. +로 이었다면 valueOf의 42가 나왔다." },
+  ]}
+/>
+
+## 줄바꿈과 들여쓰기는 그대로 들어간다
+
+템플릿 문자열은 여러 줄을 쓸 수 있다. 편하지만 소스의 들여쓰기도 문자열에 들어간다.
+
+```js
+function buildMail(name) {
+  return `
+    안녕하세요 ${name}님,
+    주문이 접수됐습니다.
+  `;
+}
+console.log(JSON.stringify(buildMail("민지")));
+```
+
+```text
+"\n    안녕하세요 민지님,\n    주문이 접수됐습니다.\n  "
+```
+
+첫 줄의 줄바꿈, 줄마다 앞의 공백 네 칸, 마지막 줄의 공백 두 칸이 모두 남았다. HTML 안이라면 공백이 접혀서 티가 덜 나지만, 메일 본문·슬랙 메시지·마크다운·YAML처럼 공백이 의미를 가지는 곳에서는 모양이 깨진다. 특히 YAML이나 마크다운 코드 블록은 들여쓰기 하나로 뜻이 바뀐다.
+
+고치는 방법은 세 가지다. 줄을 배열로 만들어 `join("\n")`하거나, 템플릿을 왼쪽 끝에 붙여 쓰거나, 들여쓰기를 걷어 내는 태그 함수(흔히 `dedent`라고 부른다)를 쓴다. 태그 함수가 무엇인지는 바로 다음에 본다. 줄 끝에 `\`를 붙이면 그 줄바꿈은 문자열에 들어가지 않는다. 긴 한 줄을 소스에서만 나눠 쓸 때 쓴다.
+
+## 태그 함수는 조각과 값을 따로 받는다
+
+템플릿 앞에 함수 이름을 붙이면 문자열을 만들지 않고 그 함수를 부른다. 이것이 태그된 템플릿(tagged template)이다. 함수는 첫 인자로 고정된 글자 조각의 배열을, 나머지 인자로 `${ }` 값들을 받는다.
+
+```js
+function tag(strings, ...values) {
+  console.log(strings, strings.raw, values);
+  console.log(strings.length, values.length, Object.isFrozen(strings));
+  return "tag의 반환값";
+}
+const name = "민지", n = 3;
+console.log(tag`안녕 ${name}, 새 메시지 ${n}개`);
+console.log(tag`${name}`);
+```
+
+```text
+[ '안녕 ', ', 새 메시지 ', '개' ] [ '안녕 ', ', 새 메시지 ', '개' ] [ '민지', 3 ]
+3 2 true
+tag의 반환값
+[ '', '' ] [ '', '' ] [ '민지' ]
+2 1 true
+tag의 반환값
+```
+
+출력에서 볼 것은 세 가지다. 조각은 언제나 값보다 하나 많다. 값이 맨 앞이나 맨 끝에 있으면 그 자리에 빈 문자열 조각이 생긴다(`` tag`${name}` ``의 `['', '']`). 그리고 값은 문자열로 바뀌지 않은 원래 값 그대로다. 숫자 `3`이 숫자로 왔다. 무엇으로 바꿀지는 태그 함수가 정한다. 반환값도 문자열일 필요가 없다. 위 함수는 고정 문자열을 돌려줬지만 객체든 함수든 돌려줄 수 있다.
+
+아래 그림에서 조각을 하나씩 누르면 각 자리가 태그 함수의 어느 인자로 들어가는지 보인다.
+
+<UrlAnatomy
+  caption="태그된 템플릿 한 줄을 인자로 나누기"
+  base="tag`"
+  separator=""
+  joiner=""
+  params={[
+    { key: "s0", display: "안녕 ", title: "strings[0]", description: "첫 값 앞의 고정 글자다. 값이 맨 앞에 오면 빈 문자열이 된다.", required: true },
+    { key: "v0", display: "${name}", title: "values[0] = \"민지\"", description: "표현식을 평가한 값이 그대로 두 번째 인자로 온다. 문자열로 바꾸지 않는다." },
+    { key: "s1", display: ", 새 메시지 ", title: "strings[1]", description: "두 값 사이의 글자다. 공백도 그대로 들어 있다." },
+    { key: "v1", display: "${n}", title: "values[1] = 3", description: "숫자는 숫자로 온다. 이스케이프할지, 따옴표로 감쌀지, 자리표시자로 바꿀지는 태그가 정한다." },
+    { key: "s2", display: "개`", title: "strings[2]", description: "마지막 값 뒤의 글자다. 그래서 strings.length는 언제나 values.length + 1이다.", required: true },
+  ]}
+/>
+
+태그 함수가 결과를 만드는 흔한 모양은 조각과 값을 번갈아 이어 붙이는 것이다. `reduce`의 초깃값 없이 돌리면 첫 조각이 누적값이 되고, 그다음부터 "값 하나, 조각 하나"씩 붙는다.
+
+```js
+const join = (strings, ...values) =>
+  strings.reduce((out, s, i) => out + `[${values[i - 1]}]` + s);
+console.log(join`안녕 ${"민지"}, 새 메시지 ${3}개`);
+```
+
+```text
+안녕 [민지], 새 메시지 [3]개
+```
+
+<AlgoTrace
+  caption="reduce가 조각과 값을 번갈아 잇는다"
+  memoryLabel="out (누적값)"
+  cells={["\"안녕 \"", "\"민지\"", "\", 새 메시지 \"", "3", "\"개\""]}
+  steps={[
+    { pointer: 0, memory: ["안녕 "], caption: "초깃값이 없으니 strings[0]이 첫 누적값이 된다." },
+    { pointer: 1, memory: ["안녕 ", "[민지]"], caption: "i = 1에서 values[0]을 먼저 붙인다. 감쌀지 바꿀지는 여기서 정한다." },
+    { pointer: 2, memory: ["안녕 ", "[민지]", ", 새 메시지 "], caption: "같은 차례에 strings[1]을 붙인다." },
+    { pointer: 3, memory: ["안녕 ", "[민지]", ", 새 메시지 ", "[3]"], caption: "i = 2에서 values[1]을 붙인다." },
+    { pointer: 4, found: [0, 2, 4], memory: ["안녕 ", "[민지]", ", 새 메시지 ", "[3]", "개"], caption: "마지막 조각까지 붙으면 끝이다. 조각이 하나 더 많아서 번갈아 잇기가 딱 맞는다." },
+  ]}
+/>
+
+## 같은 자리의 strings는 한 번만 만들어진다
+
+조각 배열에는 성질이 두 개 더 있다. 얼어 있고(`Object.isFrozen`이 `true`), 같은 소스 위치의 템플릿이면 몇 번을 실행해도 같은 배열 객체가 온다. 명세에서는 이것을 템플릿 객체(template object)라고 부르고, 엔진이 소스의 그 위치(Parse Node)마다 하나씩 만들어 기억해 둔다.
+
+```js
+const seen = [];
+const keep = (strings) => { seen.push(strings); return strings; };
+for (let i = 0; i < 3; i++) keep`id ${i}`;
+keep`id ${0}`;
+console.log(seen[0] === seen[1], seen[1] === seen[2], seen[0] === seen[3]);
+```
+
+```text
+true true false
+```
+
+반복문 안의 같은 템플릿은 세 번 모두 같은 배열을 받았다. 글자가 똑같아도 소스의 다른 줄에 있는 템플릿은 다른 배열을 받는다. 값은 매번 다르지만 고정 조각은 그 자리에서 변하지 않는다는 보장이다.
+
+이 보장 덕분에 태그 라이브러리는 조각 배열을 캐시 키로 쓴다. 화면 템플릿 라이브러리인 lit은 처음 본 조각 배열에서만 HTML을 분석해 템플릿을 만들고, 다음부터는 값만 갈아 끼운다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="같은 소스 위치는 같은 템플릿 객체를 가리킨다"
+  nodes={[
+    { id: "loop", label: "반복문 안 tag`id ${i}`", sub: "1·2·3번째 실행", x: 110, y: 50, w: 190 },
+    { id: "other", label: "다른 줄 tag`id ${0}`", sub: "글자는 같다", x: 300, y: 50, w: 170 },
+    { id: "objA", label: "템플릿 객체 A", sub: "[\"id \", \"\"] · frozen", x: 110, y: 150, w: 170 },
+    { id: "objB", label: "템플릿 객체 B", sub: "[\"id \", \"\"] · frozen", x: 300, y: 150, w: 170 },
+    { id: "cache", label: "태그의 캐시", sub: "Map(strings → 분석 결과)", x: 205, y: 225, w: 200 },
+  ]}
+  edges={[
+    { from: "loop", to: "objA", label: "매번 같은 것" },
+    { from: "other", to: "objB", label: "따로 만든다" },
+    { from: "objA", to: "cache", dashed: true },
+    { from: "objB", to: "cache", dashed: true },
+  ]}
+/>
+
+## 쿼리를 문자열로 만들면 생기는 일
+
+템플릿 문자열이 편하니 SQL도 그렇게 만들고 싶어진다. 로그인 폼에서 받은 이메일을 그대로 넣어 보자. PostgreSQL 16에 `users` 테이블을 하나 만들고 `pg` 드라이버로 실제로 실행했다.
+
+```text
+ id |       email       | status
+----+-------------------+---------
+  1 | minji@example.com | active
+  2 | admin@example.com | active
+  3 | old@example.com   | deleted
+```
+
+```js
+import pg from "pg";
+const client = new pg.Client({ host: "localhost", user: "j7", password: "j7pw", database: "j7_tl" });
+await client.connect();
+
+function sql(strings, ...values) {
+  // 값이 들어갈 자리를 $1, $2로 바꾸고 값은 따로 모은다
+  return { text: strings.reduce((acc, s, i) => acc + "$" + i + s), values };
+}
+
+const email = "x' OR '1'='1";
+const unsafe = await client.query(`SELECT id, email FROM users WHERE email = '${email}'`);
+console.log("문자열로 이어 붙임:", unsafe.rows);
+const safe = await client.query(sql`SELECT id, email FROM users WHERE email = ${email}`);
+console.log("태그로 매개변수화:", safe.rows);
+await client.end();
+```
+
+```text
+문자열로 이어 붙임: [
+  { id: 1, email: 'minji@example.com' },
+  { id: 2, email: 'admin@example.com' },
+  { id: 3, email: 'old@example.com' }
+]
+태그로 매개변수화: []
+```
+
+두 줄의 차이는 백틱 앞에 붙은 `sql` 세 글자뿐이다. 첫 줄은 입력의 작은따옴표가 문자열을 닫아 버려서 `WHERE email = 'x' OR '1'='1'`이 됐고, 조건이 언제나 참이라 모든 사용자가 나왔다. 두 번째 줄은 태그가 쿼리를 `{ text: "... WHERE email = $1", values: ["x' OR '1'='1"] }`로 나눴다. 드라이버는 이 둘을 따로 보내고, PostgreSQL은 `$1` 자리에 값을 "글자 하나의 덩어리"로만 넣는다. 따옴표가 아무리 섞여 있어도 쿼리의 문법이 되지 못한다.
+
+아래 그림에서 다음을 누르면 태그된 쿼리가 어떤 모양으로 DB까지 가는지 보인다.
+
+<SequenceDiagram
+  caption="태그는 쿼리 문법과 값을 갈라서 보낸다"
+  actors={[
+    { id: "app", label: "앱 코드" },
+    { id: "tag", label: "sql 태그" },
+    { id: "drv", label: "pg 드라이버" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "tag", label: "strings, values", title: "엔진이 태그를 부른다", detail: "고정 조각 배열과 사용자 입력이 따로 넘어간다. 이 순간에는 아직 문자열이 하나도 합쳐지지 않았다.", payload: "strings: [\"SELECT ... email = \", \"\"]\nvalues:  [\"x' OR '1'='1\"]" },
+    { from: "tag", to: "tag", label: "$1 자리표시자", title: "문법만 이어 붙인다", detail: "값이 들어갈 자리에 $1, $2를 넣는다. 값은 손대지 않고 배열로 모은다." },
+    { from: "tag", to: "drv", label: "{ text, values }", title: "쿼리와 값을 한 객체로", detail: "pg의 client.query는 이 모양의 객체를 그대로 받는다.", payload: "{ text: \"SELECT id, email FROM users WHERE email = $1\",\n  values: [\"x' OR '1'='1\"] }" },
+    { from: "drv", to: "db", label: "Parse · Bind", title: "문법과 값을 따로 보낸다", detail: "확장 질의 프로토콜에서 쿼리 문법(Parse)과 값(Bind)은 다른 메시지다. 값은 파서를 거치지 않는다." },
+    { from: "db", to: "app", label: "0 rows", title: "그런 이메일은 없다", detail: "따옴표가 섞인 이메일 문자열과 같은 줄을 찾았고, 없으니 빈 결과가 돌아온다." },
+  ]}
+/>
+
+이 방식은 postgres.js, Slonik, Prisma의 `$queryRaw`처럼 여러 라이브러리가 쓰는 모양이다. 라이브러리마다 이름과 반환 모양은 다르지만 "조각은 문법, 값은 매개변수"라는 원리는 같다.
+
+<Callout kind="warning" title="괄호로 부르면 태그가 아니다">
+`` sql`... ${email}` ``과 `` sql(`... ${email}`) ``은 전혀 다르다. 괄호 안의 템플릿은 먼저 문자열 하나로 합쳐진 뒤 넘어가서, 태그 함수는 값과 문법을 구분할 수 없다. 라이브러리에 따라 오류를 내거나, 문자열을 날 SQL로 그대로 실행한다. 직접 만드는 태그라면 첫 인자에 `raw`가 있는지 검사해서 막는다.
+</Callout>
+
+```js
+function sql(strings, ...values) {
+  if (!Array.isArray(strings) || !("raw" in strings)) {
+    throw new TypeError("sql은 태그로만 호출한다: sql`...`");
+  }
+  return { text: strings.reduce((acc, s, i) => acc + "$" + i + s), values };
+}
+const email = "a@b.c";
+try { sql(`SELECT * FROM users WHERE email = '${email}'`); } catch (e) { console.log(e.message); }
+```
+
+```text
+sql은 태그로만 호출한다: sql`...`
+```
+
+태그 함수로도 바꿀 수 없는 자리가 있다. 테이블 이름, 컬럼 이름, `ORDER BY`의 방향은 매개변수로 넣을 수 없다. 이런 값은 허용 목록(`["created_at", "price"]` 중 하나인지)으로 검사하고 넣는다. 라이브러리들이 식별자용 함수를 따로 두는 이유다.
+
+## HTML에 끼워 넣을 때도 같은 원리다
+
+서버에서 HTML을 문자열로 만들 때도 똑같은 구멍이 생긴다. 사용자가 이름에 `<script>`를 넣으면 템플릿은 그 글자를 그대로 태그로 만든다. 이것이 저장형 XSS의 출발점이다. 공격 전체 그림은 [XSS 글](/posts/xss)에서 다뤘고, 여기서는 태그 함수가 어떻게 막는지만 본다.
+
+아래 그림에서 다음을 누르면 공격자가 넣은 이름이 다른 사용자의 브라우저까지 가는 길이 보인다. 마지막 단계는 이스케이프하는 태그를 썼을 때다.
+
+<NetworkTopology
+  width={420}
+  height={250}
+  caption="이름 칸에 넣은 스크립트가 다른 사람 화면까지 간다"
+  zones={[{ id: "srv", label: "서버", x: 140, y: 20, w: 150, h: 210, tone: "private" }]}
+  nodes={[
+    { id: "atk", label: "공격자", sub: "이름 입력", x: 60, y: 70, icon: "client" },
+    { id: "api", label: "API", sub: "html 템플릿", x: 215, y: 70, icon: "server" },
+    { id: "db", label: "DB", sub: "users.name", x: 215, y: 180, icon: "db" },
+    { id: "vic", label: "다른 사용자", sub: "프로필 화면", x: 360, y: 125, icon: "client" },
+  ]}
+  links={[
+    { from: "atk", to: "api" },
+    { from: "api", to: "db" },
+    { from: "api", to: "vic" },
+  ]}
+  steps={[
+    { path: ["atk", "api", "db"], packet: "<script>", title: "이름에 스크립트를 넣는다", detail: "서버는 이름을 검사하지 않고 그대로 저장한다. 저장 자체는 문제가 아니다.", payload: "name = \"<script>steal()</script>\"" },
+    { path: ["db", "api", "vic"], packet: "<script>", title: "템플릿이 태그로 만든다", detail: "<p>${name}</p> 템플릿은 글자를 그대로 이어 붙인다. 브라우저는 이것을 진짜 script 태그로 읽고 실행한다." },
+    { path: ["db", "api", "vic"], packet: "&lt;script", blocked: true, title: "이스케이프하면 글자로 남는다", detail: "html 태그가 값의 <, >, &, 따옴표를 엔티티로 바꾼다. 화면에는 <script>라는 글자가 보일 뿐 실행되지 않는다.", payload: "<p>&lt;script&gt;steal()&lt;/script&gt;</p>" },
+  ]}
+/>
+
+React의 JSX는 이 일을 기본으로 해 준다. `{name}`으로 넣은 문자열은 텍스트로만 들어간다. 그래서 React 코드에서 템플릿 문자열로 HTML을 만들어 `dangerouslySetInnerHTML`에 넣는 순간 React가 지켜 주던 이스케이프는 사라진다.
+
+## 태그가 쓰이는 다른 자리
+
+태그된 템플릿은 "값을 어떻게 끼울지 내가 정한다"가 필요한 곳마다 쓰인다.
+
+- CSS-in-JS: 이 블로그도 쓰는 Emotion의 `` styled.div`...` ``와 `` css`...` ``가 태그 함수다. 값 자리에 함수를 넣으면 props를 받아 스타일을 계산한다.
+- GraphQL: `` gql`query { ... }` ``는 쿼리 문자열을 문서 객체로 파싱해 돌려준다.
+- 번역(i18n): 조각 배열을 번역 키로 쓰고, 값은 언어마다 다른 위치에 끼운다.
+- 셸 명령: zx 같은 도구의 `` $`ls ${dir}` ``는 값을 셸 인자로 따옴표 처리해서 넣는다.
+
+Emotion의 `css`가 무엇을 돌려주는지 Node에서 직접 불러 봤다.
+
+```js
+const { css } = require("@emotion/react");
+const gap = "1rem";
+const a = css`display: flex; gap: ${gap};`;
+console.log(a);
+const b = css`display: flex; gap: ${gap};`;
+console.log(a.name === b.name);
+```
+
+```text
+{
+  name: '9s86ic',
+  styles: 'display: flex; gap: 1rem;',
+  next: undefined
+}
+true
+```
+
+문자열이 아니라 `{ name, styles }` 객체다. `name`은 최종 스타일 문자열의 해시라서 내용이 같으면 같은 이름이 나오고, 같은 클래스를 다시 쓴다. 태그 함수의 반환값이 문자열일 필요가 없다는 예다.
+
+## 이스케이프를 해석하지 않은 원본, raw
+
+조각 배열의 `raw` 속성에는 역슬래시를 해석하기 전 원본이 들어 있다. 이것을 그대로 이어 주는 내장 태그가 `String.raw`다.
+
+```js
+console.log(String.raw`C:\new\table ${1 + 1}`);
+console.log(`C:\new\table`);
+```
+
+```text
+C:\new\table 2
+C:
+ew	able
+```
+
+일반 템플릿에서는 `\n`이 줄바꿈, `\t`가 탭이 돼서 경로가 부서졌다. `String.raw`는 Windows 경로, 정규식 원본, LaTeX처럼 역슬래시가 많은 글자에 쓴다. 값 자리는 여전히 평가된다(`2`).
+
+ES2018부터는 태그된 템플릿에 한해 잘못된 이스케이프도 허락한다. 일반 템플릿에서 `\unicode`는 문법 오류지만, 태그된 템플릿에서는 해석한 값(cooked)이 `undefined`가 되고 `raw`에는 원본이 남는다. LaTeX의 `\unicode`나 Windows의 `\u` 경로를 담는 DSL을 만들 수 있게 한 변경이다.
+
+```js
+const t = (s) => [s[0], s.raw[0]];
+console.log(t`\unicode`);
+```
+
+```text
+[ undefined, '\\unicode' ]
+```
+
+```text
+const x = `\unicode`;
+           ^^^^^^
+
+SyntaxError: Invalid Unicode escape sequence
+```
+
+## React 코드에서 템플릿 문자열을 만나는 자리
+
+가장 흔한 자리는 `className`이다. 조건에 따라 클래스를 붙이려고 템플릿 안에 `&&`를 넣으면, 조건이 거짓일 때 `false`라는 글자가 클래스로 들어간다. `&&`가 불리언이 아니라 왼쪽 값을 그대로 돌려주기 때문이다.
+
+```js
+const isActive = false, size = undefined;
+console.log(`btn ${isActive && "btn--active"} ${size}`);
+console.log(["btn", isActive && "btn--active", size].filter(Boolean).join(" "));
+```
+
+```text
+btn false undefined
+btn
+```
+
+`class="btn false undefined"`는 화면이 깨지지 않아서 오래 남는다. 개발자 도구에서 요소의 class를 보면 바로 보인다. 배열에 모아 `filter(Boolean)`으로 거짓 값을 걸러 내거나, 삼항 연산자로 빈 문자열을 넣거나, `clsx` 같은 작은 라이브러리를 쓴다.
+
+두 번째 자리는 URL이다. 검색어를 그대로 끼우면 `+`, `&`, 공백이 URL 문법으로 읽힌다.
+
+```js
+const q = "C++ & Rust";
+console.log(`/search?q=${q}&page=2`);
+console.log(`/search?q=${encodeURIComponent(q)}&page=2`);
+console.log(new URLSearchParams({ q, page: 2 }).toString());
+```
+
+```text
+/search?q=C++ & Rust&page=2
+/search?q=C%2B%2B%20%26%20Rust&page=2
+q=C%2B%2B+%26+Rust&page=2
+```
+
+첫 줄을 그대로 주소로 쓰면 받는 쪽은 이렇게 읽는다. `new URL()`에 넣고 `searchParams`를 펼쳐 봤다.
+
+```text
+[ [ 'q', 'C   ' ], [ ' Rust', '' ], [ 'page', '2' ] ]
+```
+
+`+`는 공백으로 읽혀서 `q`는 C 뒤에 공백 세 개가 붙은 값이 됐고, `&` 뒤의 ` Rust`는 값이 빈 별도 파라미터가 됐다. SQL, HTML과 같은 문제다. 값이 들어갈 문법에 맞게 바꾸는 일을 템플릿은 해 주지 않는다. 쿼리 문자열은 `URLSearchParams`가 가장 안전하다. 공백을 `%20` 대신 `+`로 바꾸는 차이는 있지만 둘 다 서버가 공백으로 읽는다.
+
+세 번째는 숫자다. `` `${n}원` ``은 `toString`이라 천 단위 구분이 없고, 부동소수점 오차도 그대로 나온다.
+
+```js
+const n = 1234567.891;
+console.log(`합계 ${n}원`, `합계 ${n.toLocaleString("ko-KR")}원`);
+console.log(`${0.1 + 0.2}`);
+```
+
+```text
+합계 1234567.891원 합계 1,234,567.891원
+0.30000000000000004
+```
+
+화면에 보일 숫자는 `toLocaleString`이나 `Intl.NumberFormat`으로 바꿔서 넣는다. 서버 렌더링과 브라우저의 로캘이 다르면 하이드레이션 불일치 경고가 나는 자리이기도 하니, 로캘을 `"ko-KR"`처럼 명시한다.
+
+## 템플릿이 위험해지는 순간
+
+정리하면 템플릿 문자열이 문제를 일으키는 패턴은 하나다. 값이 들어가는 자리가 또 하나의 언어(SQL, HTML, URL, 셸, YAML)인데 그 언어의 규칙으로 바꾸지 않고 끼워 넣는 것이다. 현장에서는 이런 증상으로 나타난다.
+
+- 로그나 화면에 `[object Object]`, `undefined`, `false`가 찍힌다. 끼운 값의 타입을 확인한다. TypeScript의 `@typescript-eslint/restrict-template-expressions` 규칙을 켜면 객체나 `undefined`를 넣는 순간 잡는다.
+- 특정 사용자 이름에서만 쿼리가 깨지거나 결과가 이상하다. 쿼리를 백틱으로 만들고 있는지 찾는다. ``grep -rn 'query(`' src``처럼 괄호 바로 뒤에 백틱이 오는 곳이 의심 지점이다.
+- 검색어에 `&`나 `#`이 있으면 결과가 비어 있다. URL을 템플릿으로 만든 곳에서 인코딩을 빠뜨린 경우다.
+- 배포한 YAML이나 메일 본문의 모양이 깨진다. 여러 줄 템플릿의 들여쓰기가 들어간 경우다.
+
+반대로 성능을 걱정해 템플릿 문자열을 피할 이유는 없다. 문자열을 이어 붙이는 비용은 `+`와 같은 수준이고, 엔진이 알아서 최적화한다. 문제는 속도가 아니라 값이 어디로 들어가느냐다.
+
+아래 칸에서 HTML용 태그 함수를 직접 완성해 보자. 지금 코드는 값을 그대로 끼워서 대부분의 테스트가 실패한다. 값의 `&`, `<`, `>`, `"`, `'`를 엔티티로 바꾸고, `null`과 `false`는 JSX처럼 아무것도 그리지 않게 만든다. 함정은 순서다. `&`를 가장 먼저 바꾸지 않으면 이미 만든 `&lt;`의 `&`가 다시 바뀐다.
+
+<CodePlayground
+  caption="값만 이스케이프하는 html 태그"
+  functionName="html"
+  initialCode={`function html(strings, ...values) {
+  // 지금은 값을 그대로 끼워 넣는다. 사용자 입력이 태그가 된다.
+  return strings.reduce((out, s, i) => out + values[i - 1] + s);
+}`}
+  solution={`function html(strings, ...values) {
+  const escape = (v) =>
+    String(v)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  return strings.reduce((out, s, i) => {
+    const v = values[i - 1];
+    return out + (v == null || v === false ? "" : escape(v)) + s;
+  });
+}`}
+  tests={[
+    { args: [["<p>", "</p>"], "<script>alert(1)</script>"], expected: "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>", label: "태그가 글자가 된다" },
+    { args: [["<b>", "</b>"], "Tom & Jerry"], expected: "<b>Tom &amp; Jerry</b>", label: "&는 맨 먼저 바꾼다" },
+    { args: [["<a title=\"", "\">링크</a>"], "\" onmouseover=\"steal()"], expected: "<a title=\"&quot; onmouseover=&quot;steal()\">링크</a>", label: "속성 밖으로 못 나간다" },
+    { args: [["<i>", "</i>"], "it's"], expected: "<i>it&#39;s</i>", label: "작은따옴표" },
+    { args: [["<span>", "개 중 ", "개</span>"], 3, 10], expected: "<span>3개 중 10개</span>", label: "숫자 두 개" },
+    { args: [["<p>", "", "</p>"], null, false], expected: "<p></p>", label: "null과 false는 지운다" },
+    { args: [["<hr>"]], expected: "<hr>", label: "값이 없는 템플릿" },
+  ]}
+/>
+
+테스트에서는 조각 배열을 평범한 배열로 넘기지만, 실제로 `` html`<p>${name}</p>` ``로 부르면 같은 모양의 인자가 들어온다. 조각은 개발자가 쓴 글자라 믿고 값만 의심한다. 태그 함수의 기본 자세다.
+
+## 조각은 믿고 값은 의심한다
+
+템플릿 문자열은 값을 `String()`과 같은 규칙으로 바꿔 이어 붙이는 문법이고, 태그를 붙이면 그 이어 붙이기를 내 함수가 맡는다. 태그 함수는 개발자가 쓴 고정 조각과 실행 중에 들어온 값을 따로 받기 때문에, 값만 골라 이스케이프하거나 매개변수로 빼낼 수 있다. SQL 인젝션과 XSS를 막는 라이브러리들이 태그 문법을 쓰는 이유가 이것이다. 다음으로는 템플릿 안에 자주 들어가는 [`&&`와 `||`의 반환값](/posts/js-short-circuit)을 보면 `false`가 클래스에 찍히는 이유가 완전히 풀린다.
+
+## 면접에서 나올 만한 질문
+
+### 템플릿 리터럴과 문자열 이어 붙이기는 무엇이 다른가
+
+결과는 대부분 같지만 변환 규칙이 조금 다르다. 템플릿은 값을 `String(v)`처럼 string 힌트로 바꿔서 `toString`을 먼저 보고, `+`는 default 힌트라 `valueOf`를 먼저 본다. 그래서 둘 다 가진 객체는 결과가 달라질 수 있다. 그 밖에 여러 줄을 그대로 쓸 수 있고, 태그 함수를 붙일 수 있다는 차이가 있다.
+
+### 태그된 템플릿에서 태그 함수는 무엇을 받나
+
+첫 인자로 고정 글자 조각의 배열을, 나머지 인자로 `${ }` 안의 값을 평가한 원래 값을 받는다. 조각은 언제나 값보다 하나 많고, 값이 맨 앞이나 끝에 있으면 빈 문자열 조각이 생긴다. 조각 배열에는 이스케이프를 해석하기 전 원본인 `raw`가 붙어 있다. 반환값은 문자열이 아니어도 된다.
+
+### 조각 배열이 매번 같은 객체라는 건 무슨 뜻이고 어디에 쓰나
+
+엔진은 소스 위치마다 템플릿 객체를 한 번만 만들고 얼려서, 같은 자리의 템플릿이 다시 실행되면 같은 배열을 넘긴다. 글자가 같아도 다른 줄의 템플릿은 다른 객체다. 라이브러리는 이 배열을 캐시 키로 써서 템플릿 분석을 한 번만 한다. lit이 대표적인 예다.
+
+### 템플릿 문자열로 SQL을 만들면 왜 위험하고, 태그는 어떻게 막나
+
+값이 쿼리 문법과 합쳐진 뒤 DB로 가서, 입력에 든 따옴표가 문자열을 닫고 조건을 바꿀 수 있다. 태그 함수는 조각과 값을 따로 받으니 조각만 이어 `$1` 같은 자리표시자를 넣고, 값은 매개변수 배열로 따로 보낸다. DB는 매개변수를 문법으로 해석하지 않는다. 단, 괄호로 부르면 문자열 하나가 넘어가서 이 보호가 사라진다.
+
+### 식별자(테이블 이름, 정렬 컬럼)도 태그로 안전하게 넣을 수 있나
+
+매개변수는 값 자리에만 쓸 수 있어서 식별자는 그 방식으로 넣지 못한다. 허용 목록으로 검사해 정해진 몇 개 중 하나만 받거나, 라이브러리가 주는 식별자 이스케이프 함수를 쓴다. 사용자가 정렬 기준을 고르는 화면에서 자주 생기는 구멍이다.
+
+### String.raw는 언제 쓰나
+
+역슬래시를 이스케이프로 해석하지 않은 원본 글자가 필요할 때 쓴다. Windows 경로, 정규식 원본, LaTeX 수식처럼 역슬래시가 많은 문자열이 대상이다. 값 자리는 여전히 평가되어 들어간다.
+
+### React에서 템플릿 문자열로 className을 만들 때 생기는 실수는
+
+`` `btn ${isActive && "active"}` ``처럼 쓰면 조건이 거짓일 때 `false`라는 글자가 클래스에 들어간다. `&&`는 불리언이 아니라 왼쪽 값을 돌려주기 때문이다. 배열에 모아 `filter(Boolean)`으로 거르거나 삼항 연산자로 빈 문자열을 넣거나 `clsx`를 쓴다. 화면이 깨지지 않아 오래 남으니 class 속성을 직접 확인한다.
+
+### 일반 템플릿에서는 문법 오류인 `\u`가 태그된 템플릿에서는 왜 허용되나
+
+ES2018에서 태그된 템플릿에 한해 잘못된 이스케이프를 허용하도록 바뀌었다. 해석한 값은 `undefined`가 되고 `raw`에는 원본이 남는다. LaTeX처럼 역슬래시 문법을 가진 언어를 태그 DSL로 담을 수 있게 하려는 변경이다. 일반 템플릿은 여전히 문법 오류다.

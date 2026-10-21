@@ -1,0 +1,469 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-pure-functions");
+
+장바구니 요약에 배송비 줄을 붙였다. 로컬 개발 서버에서는 배송비가 두 줄로 보이고 합계도 2,500원 더 많다. 배포한 화면은 멀쩡하다.
+
+```jsx
+function Summary({ cart }) {
+  const lines = cart.items;
+  lines.push({ name: "배송비", price: 2500 }); // 렌더링 중에 props를 고친다
+  const total = lines.reduce((s, i) => s + i.price, 0);
+  return (
+    <ul>
+      {lines.map((l, i) => <li key={i}>{l.name}</li>)}
+      <li>합계 {total}</li>
+    </ul>
+  );
+}
+// <StrictMode><Summary cart={cart} /></StrictMode>
+```
+
+상품 두 개(1,000원, 3,000원)를 넣고 React 19.3을 크로미움에서 돌렸다. 화면의 글자를 그대로 이어 붙였다.
+
+```text
+개발 빌드:     펜 | 공책 | 배송비 | 배송비 | 합계 9000
+프로덕션 빌드: 펜 | 공책 | 배송비 | 합계 6500
+```
+
+개발 모드의 `StrictMode`는 컴포넌트 함수를 일부러 두 번 부른다. 함수가 같은 입력에 같은 결과를 내고 바깥을 건드리지 않는다면 두 번 불러도 차이가 없어야 한다. 이 컴포넌트는 부를 때마다 `cart.items`에 줄을 하나씩 더 넣었다. 프로덕션이 멀쩡해 보이는 것도 운이다. 부모가 다시 렌더링되면 그때마다 배송비가 하나씩 늘어난다.
+
+React가 요구하는 이 성질을 순수 함수라고 부른다. 이 글은 순수 함수가 정확히 무엇인지, 숨은 입력과 숨은 출력을 어떻게 찾는지, 부수 효과를 없애지 않고 한쪽으로 모으는 설계를 본다. 출력은 Node.js 22와 크로미움에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 원본을 고치는 배열 메서드와 고치지 않는 메서드는 [배열을 바꾸는 메서드](/posts/js-array-mutation)에서, 객체를 복사하는 방법은 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서, React 상태를 불변으로 고치는 패턴은 [불변성과 React](/posts/js-immutability-react)에서 다룬다. 여기서는 그 모두의 바탕인 "함수가 무엇을 받고 무엇을 남기나"에 집중한다.
+
+<AlgoTrace
+  caption="두 번 부르면 두 번 고친다"
+  memoryLabel="cart.items"
+  cells={["렌더 1", "렌더 2", "화면"]}
+  steps={[
+    { pointer: 0, memory: ["펜", "공책", "배송비"], caption: "StrictMode의 첫 호출. props로 받은 배열에 배송비를 넣는다." },
+    { pointer: 1, memory: ["펜", "공책", "배송비", "배송비"], caption: "두 번째 호출은 같은 배열을 다시 받는다. 이미 하나 들어 있는데 또 넣는다." },
+    { pointer: 2, found: [2], memory: ["4줄", "합계 9000"], caption: "React는 두 번째 결과를 쓴다. 배송비가 두 줄, 합계는 2,500원 더 많다." },
+  ]}
+/>
+
+## 같은 입력에 같은 결과, 그리고 흔적 없음
+
+순수 함수는 두 조건을 모두 지키는 함수다.
+
+1. 결과가 인자에만 달려 있다. 같은 인자를 넣으면 언제, 몇 번을 불러도 같은 값이 나온다.
+2. 결과를 돌려주는 것 말고는 아무 일도 하지 않는다. 인자로 받은 객체를 고치지 않고, 바깥 변수를 바꾸지 않고, 네트워크나 파일, DOM, 콘솔에 손대지 않는다.
+
+두 번째 조건을 어기는 일을 부수 효과(side effect)라고 한다. 영어 표현이 "부작용"과 같아서 나쁜 일처럼 들리지만, 그냥 "반환값 말고 남는 흔적"이라는 뜻이다. 데이터를 저장하고 화면을 바꾸는 것도 부수 효과다. 프로그램은 결국 부수 효과를 내려고 존재한다. 순수 함수를 쓰자는 말은 부수 효과를 없애자는 게 아니라, 어디서 일어나는지 알 수 있게 모아 두자는 말이다.
+
+두 조건을 지키면 함수 호출을 그 결과값으로 바꿔 써도 프로그램의 동작이 같다. `price(10000, 0.1)`이 11000이라면, 코드 어디서든 `price(10000, 0.1)`을 `11000`으로 바꿔도 된다. 이걸 참조 투명성(referential transparency)이라고 한다. 결과를 캐시해도 되고, 순서를 바꿔 불러도 되고, 동시에 불러도 된다는 보장이 여기서 나온다.
+
+함수 하나를 상자로 보면 받는 것과 내보내는 것이 보인다. 순수 함수는 인자와 반환값, 정문 두 개만 있다. 순수하지 않은 함수는 옆문이 있다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="정문은 인자와 반환값뿐이다. 나머지는 옆문이다"
+  nodes={[
+    { id: "args", label: "인자", sub: "cart, rate", x: 70, y: 135, w: 100 },
+    { id: "fn", label: "함수", x: 200, y: 135, w: 90 },
+    { id: "ret", label: "반환값", sub: "total", x: 330, y: 135, w: 100 },
+    { id: "hidIn", label: "숨은 입력", sub: "Date.now, 전역 변수", x: 110, y: 35, w: 170 },
+    { id: "hidOut", label: "숨은 출력", sub: "인자 수정, fetch, DOM", x: 290, y: 235, w: 180 },
+  ]}
+  edges={[
+    { from: "args", to: "fn" },
+    { from: "fn", to: "ret" },
+    { from: "hidIn", to: "fn", dashed: true },
+    { from: "fn", to: "hidOut", dashed: true },
+  ]}
+/>
+
+## 숨은 입력은 테스트를 시간에 묶는다
+
+인자 말고 다른 데서 값을 읽으면 첫 조건이 깨진다. 가장 단순한 예는 바깥 변수다.
+
+```js
+let taxRate = 0.1;
+function priceA(amount) { return Math.round(amount * (1 + taxRate)); }   // 바깥 변수를 읽는다
+function priceB(amount, rate) { return Math.round(amount * (1 + rate)); } // 받은 것만 쓴다
+console.log(priceA(10000), priceB(10000, 0.1));
+taxRate = 0.08;                       // 다른 코드가 바꿨다
+console.log(priceA(10000), priceB(10000, 0.1));
+```
+
+```text
+11000 11000
+10800 11000
+```
+
+`priceA(10000)`은 같은 인자인데 결과가 바뀌었다. 무엇이 바꿨는지는 `priceA`만 봐서는 알 수 없다. `taxRate`를 쓰는 모든 코드를 찾아야 한다.
+
+현장에서 더 자주 만나는 숨은 입력은 시간과 난수다. `Date.now()`, `new Date()`, `Math.random()`, `crypto.randomUUID()`는 부를 때마다 다른 값을 준다. 쿠폰 만료를 검사하는 함수와 테스트를 보자. 테스트는 상반기에 썼다고 하자.
+
+```js
+// coupon.js
+function isUsableImpure(coupon) { return Date.now() < coupon.expiresAt; } // 숨은 입력: 지금 시각
+function isUsable(coupon, now) { return now < coupon.expiresAt; }         // 시각을 인자로 받는다
+
+// coupon.test.js
+const coupon = { code: "SUMMER", expiresAt: Date.UTC(2026, 5, 30) };
+test("impure: 쓸 수 있는 쿠폰", () => {
+  assert.strictEqual(isUsableImpure(coupon), true);
+});
+test("pure: 만료 하루 전", () => {
+  assert.strictEqual(isUsable(coupon, Date.UTC(2026, 5, 29)), true);
+});
+test("pure: 만료 시각 정각", () => {
+  assert.strictEqual(isUsable(coupon, Date.UTC(2026, 5, 30)), false);
+});
+```
+
+```bash
+# Node 22 내장 테스트 러너로 돌린다
+node --test --test-reporter=spec coupon.test.js
+```
+
+```text
+✖ impure: 쓸 수 있는 쿠폰 (1.651529ms)
+✔ pure: 만료 하루 전 (0.191524ms)
+✔ pure: 만료 시각 정각 (0.1878ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+...
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  false !== true
+```
+
+이 글을 쓰는 2026년 10월에 돌리니 첫 테스트가 실패했다. 6월에는 통과했을 테스트다. 코드는 한 줄도 안 바뀌었는데 CI가 어느 날 갑자기 빨개진다. 자정이나 월말, 서머타임이 바뀌는 날에만 실패하는 테스트도 대부분 이 모양이다. 시각을 인자로 받는 쪽은 "하루 전"과 "정각" 같은 경계를 마음대로 만들어 시험할 수 있다.
+
+시각을 인자로 받으면 부르는 쪽이 매번 `Date.now()`를 넘겨야 해서 귀찮다. 그래서 실무에서는 바깥 껍데기에서 한 번 읽어 넘기거나, `function isUsable(coupon, now = Date.now())`처럼 기본값을 둔다. 기본값을 쓰면 엄밀히는 순수하지 않지만, 테스트에서는 `now`를 넘겨 순수하게 쓸 수 있다. 테스트 도구의 가짜 타이머(Jest의 `useFakeTimers`, Node의 `mock.timers`)로 시계를 바꾸는 방법도 있지만, 시각을 인자로 받는 설계가 더 단순하다.
+
+## 숨은 출력은 두 번째 호출에서 드러난다
+
+두 번째 조건을 가장 흔하게 어기는 방법은 인자로 받은 객체를 고치는 것이다. 자바스크립트에서 객체는 참조로 넘어가니, 함수 안에서 고치면 부른 쪽의 객체가 바뀐다.
+
+```js
+function applyDiscount(cart, rate) {
+  for (const item of cart.items) item.price = Math.round(item.price * (1 - rate));
+  return cart.items.reduce((s, i) => s + i.price, 0);
+}
+const cart = { items: [{ name: "펜", price: 1000 }, { name: "공책", price: 3000 }] };
+console.log(applyDiscount(cart, 0.1));
+console.log(applyDiscount(cart, 0.1));    // 같은 인자로 한 번 더
+console.log(cart.items.map((i) => i.price));
+```
+
+```text
+3600
+3240
+[ 810, 2430 ]
+```
+
+10% 할인을 보여 주려고 한 번, 결제 직전에 한 번 더 부르면 할인이 두 번 들어간다. 이 함수는 첫 조건도 같이 깨졌다. 같은 `cart`를 넣었는데 결과가 3600에서 3240으로 바뀌었다. 숨은 출력이 다음 호출의 숨은 입력이 된 것이다.
+
+<AlgoTrace
+  caption="고친 흔적이 다음 호출의 입력이 된다"
+  memoryLabel="cart.items의 가격"
+  cells={["처음", "1번째 호출", "2번째 호출"]}
+  steps={[
+    { pointer: 0, memory: ["1000", "3000"], caption: "부르는 쪽이 들고 있는 장바구니." },
+    { pointer: 1, memory: ["900", "2700"], caption: "할인을 계산하며 원본 가격을 덮어썼다. 3600을 돌려준다." },
+    { pointer: 2, memory: ["810", "2430"], caption: "같은 cart를 다시 넘겼지만 이미 할인된 가격에서 또 깎는다. 3240." },
+  ]}
+/>
+
+순수하게 바꾸려면 원본은 읽기만 하고 새 객체를 만든다.
+
+```js
+function applyDiscountPure(cart, rate) {
+  const items = cart.items.map((i) => ({ ...i, price: Math.round(i.price * (1 - rate)) }));
+  return { ...cart, items, total: items.reduce((s, i) => s + i.price, 0) };
+}
+const cart2 = { items: [{ name: "펜", price: 1000 }, { name: "공책", price: 3000 }] };
+console.log(applyDiscountPure(cart2, 0.1).total, applyDiscountPure(cart2, 0.1).total);
+console.log(cart2.items.map((i) => i.price));
+```
+
+```text
+3600 3600
+[ 1000, 3000 ]
+```
+
+여기서 자주 하는 실수가 겉만 복사하는 것이다.
+
+```js
+function shallowPure(cart, rate) {
+  const copy = { ...cart };                // 겉만 복사했다
+  copy.items.forEach((i) => { i.price = Math.round(i.price * (1 - rate)); });
+  return copy;
+}
+const cart = { items: [{ name: "펜", price: 1000 }] };
+const out = shallowPure(cart, 0.5);
+console.log(out === cart, out.items === cart.items, cart.items[0].price);
+```
+
+```text
+false true 500
+```
+
+`out`은 새 객체지만 `items` 배열과 그 안의 상품은 원본과 같은 객체다. 그래서 원본 가격이 500으로 바뀌었다. 바꾸려는 깊이까지는 전부 새로 만들어야 한다. 어디까지 복사되는지는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 자세히 본다.
+
+### 고치는 코드를 테스트에서 잡는 법
+
+남이 짠 함수가 인자를 고치는지 확인하고 싶다면, 테스트에서 입력을 얼려서 넘긴다. strict mode에서 얼린 객체에 쓰면 에러가 난다.
+
+```js
+"use strict";
+function deepFreeze(o) {
+  Object.values(o).forEach((v) => typeof v === "object" && v !== null && deepFreeze(v));
+  return Object.freeze(o);
+}
+const cart = deepFreeze({ items: [{ name: "펜", price: 1000 }] });
+try { applyDiscount(cart, 0.1); } catch (e) { console.log(e.name + ": " + e.message); }
+```
+
+```text
+TypeError: Cannot assign to read only property 'price' of object '#<Object>'
+```
+
+strict mode가 아니면 에러 없이 조용히 무시되니 주의한다. ES 모듈과 클래스 본문은 자동으로 strict mode다. `Object.freeze`는 한 단계만 얼리니 중첩 객체까지 얼리려면 위처럼 재귀로 돌려야 한다. 얼리는 데도 비용이 드니 운영 코드보다는 테스트나 개발 모드에서 쓴다. Immer 같은 라이브러리는 개발 모드에서 만든 결과를 자동으로 얼려 이 실수를 잡아 준다.
+
+## 안에서 고치는 건 괜찮다
+
+순수함은 바깥에서 본 성질이다. 함수 안에서 새로 만든 배열에 `push`하거나 지역 변수를 다시 대입하는 건 부수 효과가 아니다. 부른 쪽은 그 배열을 본 적이 없기 때문이다.
+
+```js
+function range(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(i); // 지역 배열을 고친다
+  return out;
+}
+```
+
+`range(3)`은 몇 번을 불러도 `[0, 1, 2]`를 돌려주고 바깥에 아무 흔적도 없으니 순수 함수다. 큰 데이터를 매 단계 `[...acc, x]`로 복사하는 것보다 이렇게 쓰는 게 훨씬 빠르다. `reduce` 안에서 누적값을 매번 `[...acc, x]`로 펼쳐 복사하면 원소 수의 제곱만큼 복사가 일어난다. 그 비용은 [전개와 나머지 문법](/posts/js-spread-rest)에서 숫자로 본다. 기준은 "받은 것과 바깥 것을 고치지 않는다"이지 "변수를 바꾸지 않는다"가 아니다.
+
+콘솔 로그는 엄밀히 부수 효과다. 디버깅용 `console.log`를 넣었다고 함수의 의미가 바뀌지는 않으니 보통은 문제 삼지 않는다. 다만 StrictMode에서 렌더링 중 찍은 로그가 두 번 나오는 이유가 이것이다. React 18부터는 두 번 다 찍히고, React DevTools가 설치돼 있으면 두 번째 로그를 흐리게 보여 준다.
+
+## 계산은 안쪽, 입출력은 바깥쪽
+
+부수 효과는 없앨 수 없으니 모은다. 순수한 계산을 가운데 두고 DB 조회, 시각 읽기, 저장, 응답 같은 일은 얇은 바깥 껍데기에서만 한다. 이 구조를 functional core, imperative shell(순수한 핵심과 명령형 껍데기)이라고 부른다. 결제 핸들러로 보자.
+
+```js
+// 핵심: 순수 함수. 무엇을 받는지 시그니처에 다 보인다
+function checkout(cart, coupon, now) {
+  const subtotal = cart.items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const usable = coupon !== null && now < coupon.expiresAt && subtotal >= coupon.minTotal;
+  const discount = usable ? Math.round(subtotal * coupon.rate) : 0;
+  return { subtotal, discount, total: subtotal - discount, applied: usable ? coupon.code : null };
+}
+
+// 껍데기: 부수 효과는 여기서만
+async function handleCheckout(req, res) {
+  const cart = await db.carts.find(req.user.id);
+  const coupon = req.body.code ? await db.coupons.find(req.body.code) : null;
+  const result = checkout(cart, coupon, Date.now());
+  await db.orders.insert({ userId: req.user.id, ...result });
+  res.json(result);
+}
+```
+
+<UrlAnatomy
+  caption="순수 함수의 시그니처가 의존성 목록이다"
+  base="checkout("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "cart", display: "cart", title: "읽기만 하는 데이터", description: "장바구니를 받아 합계를 계산한다. 고치지 않으니 부른 쪽은 호출 뒤에도 같은 cart를 들고 있다.", required: true },
+    { key: "coupon", display: "coupon", title: "없을 수도 있는 입력", description: "DB에서 찾는 일은 껍데기가 했다. checkout은 null이거나 쿠폰 객체라는 것만 안다." },
+    { key: "now", display: "now)", title: "시간도 인자", description: "Date.now()를 안에서 부르지 않는다. 테스트는 만료 직전과 직후를 숫자 하나로 만든다.", required: true },
+  ]}
+/>
+
+아래 그림에서 다음을 누르면 요청 하나가 껍데기와 핵심을 어떻게 지나가는지 보인다.
+
+<SequenceDiagram
+  caption="부수 효과는 양 끝에, 계산은 가운데에"
+  actors={[
+    { id: "client", label: "브라우저" },
+    { id: "shell", label: "핸들러 (껍데기)" },
+    { id: "core", label: "checkout (핵심)" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "client", to: "shell", label: "POST /checkout", title: "요청이 들어온다", detail: "쿠폰 코드가 본문에 실려 온다." },
+    { from: "shell", to: "db", label: "cart, coupon 조회", title: "입력을 모은다", detail: "읽기 부수 효과는 껍데기가 한다. 지금 시각도 여기서 한 번 읽는다." },
+    { from: "shell", to: "core", label: "checkout(cart, coupon, now)", title: "순수한 계산", detail: "checkout은 DB도 시계도 모른다. 받은 값으로 결과만 계산해 돌려준다.", payload: "{ subtotal: 15000, discount: 1500, total: 13500 }" },
+    { from: "shell", to: "db", label: "orders.insert", title: "결과를 저장한다", detail: "쓰기 부수 효과도 껍데기에서." },
+    { from: "shell", to: "client", label: "200 JSON", title: "응답한다", detail: "핵심을 테스트할 때는 이 왼쪽 오른쪽 단계가 하나도 필요 없다." },
+  ]}
+/>
+
+이렇게 나누면 테스트가 둘로 갈린다. 가운데 함수는 입력과 기대 결과만 적는 표 형태의 단위 테스트로 경계값까지 촘촘히 시험한다. 목(mock) 객체가 필요 없다. 껍데기는 분기가 거의 없으니 DB와 함께 도는 통합 테스트 몇 개로 충분하다. 테스트에 목이 많고 준비 코드가 길다면, 계산과 입출력이 한 함수에 섞여 있다는 신호다. 같은 생각을 아키텍처 크기로 키운 게 [헥사고날 아키텍처](/posts/hexagonal-architecture)의 포트와 어댑터다.
+
+## 순수하면 얻는 것들
+
+참조 투명성에서 실무적인 이득이 몇 가지 바로 나온다.
+
+결과를 캐시할 수 있다. 같은 입력이면 같은 결과이니 한 번 계산한 걸 기억해 두고 돌려줘도 된다. 숨은 입력이 있는 함수를 캐시하면 오래된 결과를 돌려주는 버그가 된다. 이 이야기는 [메모이제이션](/posts/js-memoization)에서 이어 간다.
+
+다시 실행해도 안전하다. React가 StrictMode에서 두 번 부르고, 렌더링을 중간에 버렸다 다시 시작하고(동시성 렌더링), 서버와 클라이언트에서 같은 컴포넌트를 각각 실행할 수 있는 이유가 렌더링이 순수하다는 전제다.
+
+여기서 헷갈리기 쉬운 개념이 멱등성(idempotency)이다. 멱등은 "여러 번 해도 한 번 한 것과 결과 상태가 같다"는 뜻이다. HTTP `PUT /users/1`은 같은 본문을 열 번 보내도 결과가 같으니 멱등이지만, DB를 고치니 순수하지는 않다. 순수 함수는 아무것도 고치지 않으니 당연히 멱등이지만, 멱등한 작업이 순수한 건 아니다. 결제 재시도를 안전하게 만드는 건 순수성이 아니라 멱등성이고, 그 설계는 [메시지 큐](/posts/message-queue-basics)나 [사가 패턴](/posts/saga-pattern)처럼 재시도가 일어나는 곳에서 다룬다.
+
+## React가 순수함을 요구하는 세 자리
+
+React에서 순수해야 하는 함수는 세 종류다. 컴포넌트 함수(렌더링), `useState`와 `useReducer`에 넘기는 업데이터와 리듀서, `useMemo`에 넘기는 계산 함수. StrictMode는 개발 모드에서 이 셋을 모두 두 번 부른다.
+
+리듀서가 상태를 고쳐서 돌려주면 어떻게 되는지 보자. 개발 빌드와 프로덕션 빌드 모두에서 같은 결과가 나왔다.
+
+```jsx
+function badReducer(state, action) {
+  if (action.type === "add") { state.items.push(action.item); return state; } // 고쳐서 같은 객체를 돌려준다
+  return state;
+}
+function goodReducer(state, action) {
+  if (action.type === "add") return { ...state, items: [...state.items, action.item] };
+  return state;
+}
+// 두 카트에 각각 dispatch({ type: "add", item: "펜" })
+```
+
+```text
+bad: 0개 | good: 1개
+```
+
+`badReducer`의 상태 안에는 펜이 들어갔다. 그런데 화면은 0개다. 리듀서가 같은 객체를 돌려주니 React가 `Object.is(이전, 다음)`으로 비교해 "바뀐 게 없다"고 보고 렌더링을 건너뛰었다. 나중에 다른 이유로 렌더링되면 그제야 개수가 튄다.
+
+<SequenceDiagram
+  caption="고쳐서 돌려준 상태는 바뀌지 않은 상태로 보인다"
+  actors={[
+    { id: "ui", label: "버튼" },
+    { id: "react", label: "React" },
+    { id: "reducer", label: "리듀서" },
+  ]}
+  steps={[
+    { from: "ui", to: "react", label: "dispatch(add)", title: "액션을 보낸다", detail: "펜을 담는다." },
+    { from: "react", to: "reducer", label: "reducer(state, action)", title: "다음 상태를 묻는다", detail: "현재 상태 객체를 그대로 넘긴다." },
+    { from: "reducer", to: "reducer", label: "state.items.push", title: "받은 상태를 고친다", detail: "이전 상태가 사라졌다. 비교할 원본이 없다." },
+    { from: "reducer", to: "react", label: "return state", title: "같은 객체를 돌려준다", detail: "내용은 바뀌었지만 참조는 같다." },
+    { from: "react", to: "react", label: "Object.is → true", title: "렌더링을 건너뛴다", detail: "참조가 같으니 바뀐 게 없다고 판단한다. 화면은 0개로 남는다.", payload: "Object.is(prev, next) // true" },
+  ]}
+/>
+
+업데이터 함수 안에 부수 효과를 넣는 실수도 있다.
+
+```jsx
+const add = () => setN((prev) => {
+  toasts.push("담았다"); // 업데이터 안에서 바깥 배열을 고친다
+  return prev + 1;
+});
+```
+
+버튼을 한 번 누른 뒤 `toasts.length`를 찍었다.
+
+```text
+개발 빌드:     count 1 | toasts: 2
+프로덕션 빌드: count 1 | toasts: 1
+```
+
+개발 모드에서는 업데이터가 두 번 불려 알림이 두 개 쌓였다. 숫자는 1로 맞는데 알림만 두 번 뜨는 버그는 이 모양이다. 업데이터는 이전 값으로 다음 값만 계산하고, 알림이나 요청은 이벤트 핸들러 안의 업데이터 바깥에서 한다. 렌더링 결과에 따라 해야 하는 일은 `useEffect`가 맡는다.
+
+처음의 배송비 버그는 `const lines = [...cart.items, { name: "배송비", price: 2500 }]`처럼 새 배열을 만들면 고쳐진다. 정렬이라면 `sort` 대신 `toSorted`를 쓴다(ES2023, 크롬 110·Node 20부터). 이 차이는 [배열을 바꾸는 메서드](/posts/js-array-mutation)에서 정리했다.
+
+## 연습: 결제 계산을 순수하게
+
+아래 `checkout`은 결과는 맞게 계산하려 하지만 순수하지 않다. `cart`에 합계를 써 넣고, 상품 가격을 깎고, 시각을 `Date.now()`로 읽는다. 테스트는 같은 인자로 두 번 불러 결과가 같은지, 입력이 그대로인지 본다. 그대로 실행하면 쿠폰이 적용돼야 할 첫 테스트부터 틀린다. 테스트의 `now`는 2025년 1월 1일이고 쿠폰은 2026년 1월 1일에 끝나는데, `Date.now()`는 지금 시각을 읽기 때문이다.
+
+<CodePlayground
+  caption="checkout: 숨은 입력과 숨은 출력 없애기"
+  functionName="run"
+  initialCode={`// 이 함수는 순수하지 않다. 결과는 그대로 두고 순수 함수로 고쳐 보자.
+// 1) cart를 고치지 않는다  2) 지금 시각은 Date.now() 대신 now 인자로 받는다
+function checkout(cart, coupon, now) {
+  cart.subtotal = 0;
+  for (const item of cart.items) cart.subtotal += item.price * item.qty;
+  let discount = 0;
+  if (coupon && Date.now() < coupon.expiresAt && cart.subtotal >= coupon.minTotal) {
+    discount = Math.round(cart.subtotal * coupon.rate);
+    cart.items.forEach((item) => { item.price -= Math.round(item.price * coupon.rate); });
+  }
+  return { subtotal: cart.subtotal, discount, total: cart.subtotal - discount, applied: discount > 0 ? coupon.code : null };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// 같은 인자로 두 번 불러 결과가 같은지, cart와 coupon이 그대로인지 본다.
+function run(cart, coupon, now) {
+  const before = JSON.stringify([cart, coupon]);
+  const first = checkout(cart, coupon, now);
+  const second = checkout(cart, coupon, now);
+  return {
+    first,
+    sameTwice: JSON.stringify(first) === JSON.stringify(second),
+    inputUntouched: JSON.stringify([cart, coupon]) === before,
+  };
+}`}
+  solution={`function checkout(cart, coupon, now) {
+  const subtotal = cart.items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const usable = coupon !== null && now < coupon.expiresAt && subtotal >= coupon.minTotal;
+  const discount = usable ? Math.round(subtotal * coupon.rate) : 0;
+  return { subtotal, discount, total: subtotal - discount, applied: usable ? coupon.code : null };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// 같은 인자로 두 번 불러 결과가 같은지, cart와 coupon이 그대로인지 본다.
+function run(cart, coupon, now) {
+  const before = JSON.stringify([cart, coupon]);
+  const first = checkout(cart, coupon, now);
+  const second = checkout(cart, coupon, now);
+  return {
+    first,
+    sameTwice: JSON.stringify(first) === JSON.stringify(second),
+    inputUntouched: JSON.stringify([cart, coupon]) === before,
+  };
+}`}
+  tests={[
+    { label: "쿠폰을 쓸 수 있는 때", args: [{ items: [{ name: "펜", price: 1500, qty: 2 }, { name: "공책", price: 4000, qty: 3 }] }, { code: "SPRING10", rate: 0.1, minTotal: 10000, expiresAt: 1767225600000 }, 1735689600000], expected: { first: { subtotal: 15000, discount: 1500, total: 13500, applied: "SPRING10" }, sameTwice: true, inputUntouched: true } },
+    { label: "만료된 뒤", args: [{ items: [{ name: "펜", price: 1500, qty: 2 }, { name: "공책", price: 4000, qty: 3 }] }, { code: "SPRING10", rate: 0.1, minTotal: 10000, expiresAt: 1767225600000 }, 1767225600000], expected: { first: { subtotal: 15000, discount: 0, total: 15000, applied: null }, sameTwice: true, inputUntouched: true } },
+    { label: "최소 금액 미달", args: [{ items: [{ name: "펜", price: 1500, qty: 2 }] }, { code: "SPRING10", rate: 0.1, minTotal: 10000, expiresAt: 1767225600000 }, 1735689600000], expected: { first: { subtotal: 3000, discount: 0, total: 3000, applied: null }, sameTwice: true, inputUntouched: true } },
+    { label: "쿠폰 없음", args: [{ items: [{ name: "펜", price: 1500, qty: 2 }, { name: "공책", price: 4000, qty: 3 }] }, null, 1735689600000], expected: { first: { subtotal: 15000, discount: 0, total: 15000, applied: null }, sameTwice: true, inputUntouched: true } },
+    { label: "빈 장바구니", args: [{ items: [] }, { code: "SPRING10", rate: 0.1, minTotal: 10000, expiresAt: 1767225600000 }, 1735689600000], expected: { first: { subtotal: 0, discount: 0, total: 0, applied: null }, sameTwice: true, inputUntouched: true } },
+  ]}
+/>
+
+## 배송비가 한 줄로 돌아오기까지
+
+배송비가 두 줄로 보인 건 렌더링 함수가 받은 배열을 고쳤기 때문이고, StrictMode는 그걸 일부러 드러냈을 뿐이다. 순수 함수는 인자만 보고 결과만 돌려준다. 시각과 난수, 전역 변수 같은 숨은 입력은 인자로 끌어올리고, 인자 수정과 입출력 같은 숨은 출력은 바깥 껍데기로 밀어낸다. 그러면 가운데의 계산은 몇 번을 불러도, 캐시해도, 테스트에서 시각을 바꿔도 같은 답을 낸다.
+
+## 면접에서 나올 만한 질문
+
+### 순수 함수란 무엇인가요?
+
+같은 인자에는 항상 같은 결과를 돌려주고, 결과를 돌려주는 것 말고는 아무 흔적도 남기지 않는 함수다. 인자 외의 값(전역 변수, 현재 시각, 난수)을 읽지 않고, 인자로 받은 객체나 바깥 상태를 고치지 않으며, 네트워크나 DOM에 손대지 않는다. 그래서 호출을 결과값으로 바꿔 써도 프로그램이 똑같이 동작한다.
+
+### 부수 효과에는 어떤 것들이 있나요?
+
+인자로 받은 객체 수정, 전역이나 모듈 변수 변경, 네트워크 요청, DB와 파일 입출력, DOM 조작, 타이머 등록, 로그 출력이 모두 부수 효과다. 부수 효과는 나쁜 게 아니라 프로그램의 목적이라서 없앨 수는 없다. 대신 계산과 분리해 정해진 곳(핸들러, effect, 바깥 껍데기)에 모은다.
+
+### 함수 안에서 지역 배열에 push하면 순수하지 않은 건가요?
+
+아니다. 순수함은 바깥에서 본 성질이라, 함수 안에서 새로 만든 값을 고치는 건 부르는 쪽이 볼 수 없으니 부수 효과가 아니다. 받은 인자나 바깥 변수를 고치면 순수하지 않다. 큰 데이터를 다룰 때는 오히려 지역 변수를 고치는 쪽이 복사를 반복하는 것보다 빠르다.
+
+### `Date.now()`를 쓰는 함수는 어떻게 테스트하나요?
+
+시각을 인자로 받게 바꾸는 게 가장 단순하다. 테스트에서 만료 직전, 정각, 직후 같은 경계값을 숫자 하나로 만들 수 있다. 부르는 쪽이 번거로우면 기본값으로 `Date.now()`를 두거나 바깥 껍데기에서 한 번 읽어 넘긴다. 가짜 타이머로 시계를 바꾸는 방법도 있지만 설정이 늘고 테스트끼리 영향을 주기 쉽다.
+
+### 순수 함수와 멱등성은 어떻게 다른가요?
+
+멱등은 여러 번 해도 결과 상태가 한 번 한 것과 같다는 뜻이고, 순수는 아예 상태를 바꾸지 않는다는 뜻이다. HTTP PUT은 같은 요청을 반복해도 결과가 같으니 멱등이지만 DB를 바꾸니 순수하지 않다. 순수 함수는 항상 멱등이지만 그 역은 아니며, 재시도를 안전하게 만드는 데 필요한 건 멱등성이다.
+
+### React는 왜 렌더링이 순수해야 한다고 하나요?
+
+React가 렌더링을 언제, 몇 번 할지 마음대로 정할 수 있어야 하기 때문이다. 동시성 렌더링은 렌더링을 중간에 버리고 다시 시작하고, 서버와 클라이언트에서 같은 컴포넌트를 실행하며, StrictMode는 개발 중에 일부러 두 번 부른다. 렌더링 중에 props를 고치거나 요청을 보내면 횟수만큼 효과가 쌓여 화면과 데이터가 어긋난다.
+
+### 리듀서에서 state를 직접 고쳐서 반환하면 어떻게 되나요?
+
+화면이 갱신되지 않는다. React는 이전 상태와 새 상태를 `Object.is`로 비교하는데, 같은 객체를 돌려주면 바뀐 게 없다고 보고 렌더링을 건너뛴다. 이전 상태도 사라져서 비교나 되돌리기가 불가능하다. 바뀐 부분만 새 객체로 만들어 돌려주거나 Immer 같은 도구를 쓴다.
+
+### 순수하지 않은 함수를 메모이제이션하면 어떤 문제가 생기나요?
+
+숨은 입력이 바뀌어도 인자가 같으면 캐시된 옛 결과를 돌려준다. 환율이나 현재 시각을 안에서 읽는 함수를 캐시하면 값이 바뀌어도 화면이 그대로인 버그가 된다. 캐시 키에 들어가지 않은 입력이 결과에 영향을 주면 안 되니, 캐시하기 전에 그 함수가 인자만으로 결과가 정해지는지부터 확인한다.

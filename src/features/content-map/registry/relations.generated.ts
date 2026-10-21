@@ -2,16 +2,196 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "microservices-decomposition": {
+    "links": [
+      "microservices",
+      "ddd-bounded-context",
+      "modular-monolith",
+      "feature-flags",
+      "hexagonal-architecture",
+      "event-driven-architecture",
+      "transactional-outbox",
+      "distributed-tracing",
+      "monolith-architecture"
+    ],
+    "mentions": [
+      "db-type-columnar-olap",
+      "sql-query-rewrite"
+    ]
+  },
+  "ddd-bounded-context": {
+    "links": [
+      "microservices",
+      "microservices-decomposition",
+      "modular-monolith",
+      "dead-letter-queue",
+      "pattern-adapter",
+      "db-transaction-isolation",
+      "pessimistic-locking",
+      "transactional-outbox",
+      "event-driven-architecture"
+    ],
+    "mentions": [
+      "monolith-architecture",
+      "db-locking-deadlock",
+      "http-status-codes"
+    ]
+  },
+  "clean-architecture": {
+    "links": [
+      "hexagonal-architecture",
+      "layered-architecture",
+      "modular-monolith",
+      "ddd-bounded-context",
+      "js-pure-functions",
+      "cqrs"
+    ],
+    "mentions": [
+      "http-status-codes"
+    ]
+  },
+  "hexagonal-architecture": {
+    "links": [
+      "layered-architecture",
+      "clean-architecture",
+      "pattern-adapter",
+      "js-shallow-deep-copy",
+      "resilience-patterns",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "db-type-embedded",
+      "js-currying-partial",
+      "pattern-proxy",
+      "loading-patterns",
+      "http-status-codes",
+      "grpc"
+    ]
+  },
+  "js-es-modules": {
+    "links": [
+      "js-iife-module-pattern",
+      "code-splitting",
+      "pattern-singleton",
+      "js-hoisting-tdz",
+      "js-async-await",
+      "rendering-ssr"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "http-versions",
+      "js-destructuring",
+      "cors"
+    ]
+  },
+  "js-short-circuit": {
+    "links": [
+      "js-truthy-falsy-typeof",
+      "js-optional-chaining-nullish",
+      "js-array-transform",
+      "js-template-literals"
+    ],
+    "mentions": [
+      "js-pure-functions"
+    ]
+  },
+  "js-optional-chaining-nullish": {
+    "links": [
+      "js-truthy-falsy-typeof",
+      "js-short-circuit",
+      "js-destructuring",
+      "react-rerender",
+      "client-data-cache"
+    ],
+    "mentions": []
+  },
+  "js-template-literals": {
+    "links": [
+      "js-short-circuit",
+      "js-optional-chaining-nullish",
+      "js-equality-coercion",
+      "xss"
+    ],
+    "mentions": [
+      "hydration",
+      "rendering-strategies"
+    ]
+  },
+  "js-memoization": {
+    "links": [
+      "js-pure-functions",
+      "js-closures",
+      "react-rerender",
+      "big-o-notation",
+      "js-memory-leak",
+      "caching-strategies",
+      "client-data-cache",
+      "js-immutability-react",
+      "garbage-collection"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "rendering-strategies",
+      "redis-basics",
+      "js-primitive-vs-reference",
+      "dns"
+    ]
+  },
+  "js-pure-functions": {
+    "links": [
+      "js-array-mutation",
+      "js-shallow-deep-copy",
+      "js-immutability-react",
+      "js-spread-rest",
+      "hexagonal-architecture",
+      "js-memoization",
+      "message-queue-basics",
+      "saga-pattern"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "js-es-modules",
+      "http-methods"
+    ]
+  },
+  "js-currying-partial": {
+    "links": [
+      "js-first-class-callbacks",
+      "js-closures",
+      "react-rerender"
+    ],
+    "mentions": [
+      "js-function-forms",
+      "js-spread-rest",
+      "js-destructuring"
+    ]
+  },
+  "js-iife-module-pattern": {
+    "links": [
+      "js-closures",
+      "js-var-let-const",
+      "js-primitive-vs-reference",
+      "js-es-modules",
+      "pattern-singleton"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "rendering-strategies",
+      "js-function-forms"
+    ]
+  },
   "js-immutability-react": {
     "links": [
       "js-array-mutation",
       "js-shallow-deep-copy",
       "react-rerender",
+      "js-pure-functions",
       "client-data-cache",
       "js-object-methods"
     ],
     "mentions": [
       "js-memory-leak",
+      "js-memoization",
       "js-function-forms",
       "db-modeling-normalization"
     ]
@@ -38,7 +218,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
-      "pattern-proxy"
+      "pattern-proxy",
+      "js-es-modules"
     ]
   },
   "animation-performance": {
@@ -127,6 +308,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "event-driven-architecture",
       "cqrs",
+      "js-pure-functions",
       "transactional-outbox",
       "schema-versioning"
     ],
@@ -239,6 +421,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection",
       "js-var-let-const",
       "js-memory-leak",
+      "js-iife-module-pattern",
+      "js-currying-partial",
+      "js-memoization",
       "react-rerender"
     ],
     "mentions": []
@@ -252,6 +437,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-array-transform",
       "js-async-await",
       "pattern-decorator",
+      "js-memoization",
+      "js-currying-partial",
       "js-memory-leak",
       "react-rerender",
       "retries"
@@ -265,10 +452,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-first-class-callbacks",
       "js-closures",
       "js-hoisting-tdz",
+      "js-optional-chaining-nullish",
       "js-spread-rest",
       "js-destructuring"
     ],
     "mentions": [
+      "js-es-modules",
       "js-truthy-falsy-typeof"
     ]
   },
@@ -308,6 +497,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-sharding",
       "db-type-columnar-olap",
+      "js-short-circuit",
       "postgres-getting-started"
     ]
   },
@@ -316,6 +506,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-destructuring",
       "js-shallow-deep-copy",
       "js-object-methods",
+      "js-currying-partial",
       "js-function-forms",
       "js-immutability-react",
       "js-array-mutation"
@@ -325,12 +516,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "js-destructuring": {
     "links": [
       "js-spread-rest",
+      "js-optional-chaining-nullish",
       "react-rerender",
+      "js-memoization",
       "js-object-methods"
     ],
     "mentions": [
       "client-data-cache",
       "pattern-iterator",
+      "js-pure-functions",
       "js-primitive-vs-reference"
     ]
   },
@@ -341,6 +535,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-shallow-deep-copy",
       "js-immutability-react",
       "js-spread-rest",
+      "js-pure-functions",
       "js-object-methods"
     ],
     "mentions": []
@@ -351,13 +546,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-equality-coercion",
       "js-promise-combinators",
       "react-rerender",
+      "js-memoization",
+      "js-short-circuit",
       "js-immutability-react",
       "js-spread-rest"
     ],
     "mentions": [
       "pattern-iterator",
       "js-function-forms",
-      "js-truthy-falsy-typeof"
+      "js-truthy-falsy-typeof",
+      "js-pure-functions"
     ]
   },
   "js-promise-combinators": {
@@ -383,6 +581,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-callback-hell",
       "js-promise-combinators",
       "event-loop",
+      "js-es-modules",
       "client-data-cache"
     ],
     "mentions": [
@@ -428,6 +627,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "monolith-architecture",
       "mvc-pattern",
       "n-plus-one-queries",
+      "hexagonal-architecture",
+      "clean-architecture",
       "client-data-cache"
     ],
     "mentions": [
@@ -441,7 +642,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "modular-monolith": {
     "links": [
       "monolith-architecture",
+      "microservices-decomposition",
       "layered-architecture",
+      "ddd-bounded-context",
       "postgres-roles-security",
       "transactional-outbox",
       "cqrs"
@@ -467,6 +670,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scaling-horizontal-vertical",
       "db-architecture-by-scale",
       "feature-flags",
+      "microservices-decomposition",
       "micro-frontends"
     ],
     "mentions": [
@@ -480,7 +684,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "js-hoisting-tdz": {
     "links": [
       "js-var-let-const",
-      "js-scope-lexical"
+      "js-scope-lexical",
+      "js-es-modules"
     ],
     "mentions": [
       "js-function-forms",
@@ -497,7 +702,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
-      "js-function-forms"
+      "js-function-forms",
+      "js-es-modules"
     ]
   },
   "js-var-let-const": {
@@ -505,6 +711,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-scope-lexical",
       "js-hoisting-tdz",
       "js-closures",
+      "js-iife-module-pattern",
+      "js-es-modules",
       "js-object-methods",
       "js-primitive-vs-reference",
       "js-immutability-react",
@@ -518,6 +726,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-primitive-vs-reference",
       "js-equality-coercion",
+      "js-optional-chaining-nullish",
+      "js-short-circuit",
       "js-hoisting-tdz"
     ],
     "mentions": [
@@ -529,16 +739,19 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-primitive-vs-reference",
       "js-truthy-falsy-typeof",
-      "react-rerender"
+      "react-rerender",
+      "js-optional-chaining-nullish"
     ],
     "mentions": [
-      "sql-injection"
+      "sql-injection",
+      "js-template-literals"
     ]
   },
   "js-primitive-vs-reference": {
     "links": [
       "js-equality-coercion",
       "js-truthy-falsy-typeof",
+      "js-pure-functions",
       "js-shallow-deep-copy",
       "js-var-let-const",
       "js-object-methods",
@@ -2787,6 +3000,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "rest-api-design",
       "event-sourcing",
+      "js-pure-functions",
       "dead-letter-queue"
     ]
   },
@@ -3343,6 +3557,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-state"
     ],
     "mentions": [
+      "js-pure-functions",
       "cqrs",
       "design-patterns-overview"
     ]
@@ -3364,6 +3579,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-admission-control",
       "mongodb-document-model",
+      "js-short-circuit",
       "js-closures"
     ]
   },
@@ -3414,7 +3630,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-locking-deadlock"
     ],
     "mentions": [
-      "client-data-cache"
+      "client-data-cache",
+      "js-pure-functions"
     ]
   },
   "k8s-deploy-pipeline-eks": {
@@ -3549,6 +3766,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-embedded",
+      "js-memoization",
       "cdn-edge-anycast",
       "redis-basics",
       "dns"
@@ -3842,6 +4060,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "transactional-outbox",
+      "js-pure-functions",
       "db-transaction-isolation",
       "resilience-patterns",
       "dead-letter-queue",
@@ -4182,7 +4401,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
-      "js-object-methods"
+      "js-object-methods",
+      "js-es-modules"
     ]
   },
   "pattern-facade": {
@@ -4197,6 +4417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "https-tls",
+      "clean-architecture",
       "git-staging-area",
       "dns"
     ]
@@ -4287,6 +4508,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "db-index-design",
       "resilience-patterns",
+      "js-pure-functions",
       "realtime-communication",
       "http-methods"
     ]
@@ -4387,6 +4609,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "hexagonal-architecture",
       "js-function-forms",
       "http-status-codes",
       "structured-logging"
@@ -4632,8 +4855,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "hexagonal-architecture",
       "cron-jobs",
       "thread-safety",
+      "js-es-modules",
       "leader-election",
       "sql-batch-timeout-pool"
     ]
@@ -5241,6 +5466,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "code-splitting"
     ],
     "mentions": [
+      "js-es-modules",
       "streaming-ssr-suspense",
       "rendering-strategies",
       "js-closures"
@@ -5397,7 +5623,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-correlated-subquery",
       "sqld-single-row-functions"
     ],
-    "mentions": []
+    "mentions": [
+      "js-pure-functions"
+    ]
   },
   "sqld-correlated-subquery": {
     "links": [
@@ -6740,6 +6968,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-cluster",
       "bloom-filter",
       "db-type-columnar-olap",
+      "js-memoization",
       "cold-starts",
       "tail-latency",
       "db-replication-sharding",
@@ -6757,6 +6986,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "realtime-communication",
+      "js-pure-functions",
       "pattern-proxy",
       "loading-patterns",
       "what-happens-google-com",
@@ -6774,6 +7004,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "js-memoization",
       "loading-patterns"
     ]
   },
@@ -6802,6 +7033,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "js-memoization",
       "sql-filtering-operators",
       "event-loop"
     ]
@@ -6984,6 +7216,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-inverted-index",
       "gateway",
       "csrf",
+      "js-pure-functions",
       "client-data-cache",
       "what-happens-google-com"
     ]
@@ -7129,6 +7362,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
+      "js-es-modules",
       "osi-in-practice"
     ]
   },
@@ -7137,6 +7371,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "js-memoization",
       "js-function-forms",
       "garbage-collection",
       "event-loop",
@@ -7152,6 +7387,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
       "microservices",
+      "js-es-modules",
       "cors"
     ]
   },
@@ -7185,6 +7421,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
+      "js-es-modules",
       "http-versions",
       "rendering-strategies"
     ]
@@ -7196,6 +7433,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "pattern-observer",
+      "js-pure-functions",
       "pattern-proxy",
       "loading-patterns",
       "http-status-codes",
@@ -7249,7 +7487,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "core-web-vitals",
+      "js-memoization",
       "js-function-forms",
+      "js-pure-functions",
       "js-primitive-vs-reference"
     ]
   },
@@ -7279,7 +7519,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing",
       "distributed-transactions-2pc",
       "saga-pattern",
-      "gateway"
+      "gateway",
+      "microservices-decomposition"
     ],
     "mentions": [
       "db-architecture-by-scale",
@@ -7287,6 +7528,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "modular-monolith",
       "serverless-architecture",
       "observability-basics",
+      "ddd-bounded-context",
       "db-type-columnar-olap",
       "rabbitmq-basics",
       "client-data-cache",
@@ -7408,6 +7650,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "csrf",
+      "js-pure-functions",
       "http-status-codes"
     ]
   },

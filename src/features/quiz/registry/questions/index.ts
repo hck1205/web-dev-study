@@ -24,6 +24,7 @@ import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CLEAN_ARCHITECTURE } from "./clean-architecture";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
 import { CLOUD_COST_OPTIMIZATION } from "./cloud-cost-optimization";
@@ -63,6 +64,7 @@ import { DB_TYPE_RELATIONAL } from "./db-type-relational";
 import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
+import { DDD_BOUNDED_CONTEXT } from "./ddd-bounded-context";
 import { DDOS_PROTECTION } from "./ddos-protection";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
@@ -122,6 +124,7 @@ import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
 import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
 import { HELM_RELEASE_LIFECYCLE } from "./helm-release-lifecycle";
 import { HELM_VALUES_SECRETS } from "./helm-values-secrets";
+import { HEXAGONAL_ARCHITECTURE } from "./hexagonal-architecture";
 import { HIGH_AVAILABILITY } from "./high-availability";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
@@ -146,20 +149,28 @@ import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
 import { JS_CALLBACK_HELL } from "./js-callback-hell";
 import { JS_CLOSURES } from "./js-closures";
+import { JS_CURRYING_PARTIAL } from "./js-currying-partial";
 import { JS_DESTRUCTURING } from "./js-destructuring";
 import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
+import { JS_ES_MODULES } from "./js-es-modules";
 import { JS_FIRST_CLASS_CALLBACKS } from "./js-first-class-callbacks";
 import { JS_FUNCTION_FORMS } from "./js-function-forms";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
+import { JS_IIFE_MODULE_PATTERN } from "./js-iife-module-pattern";
 import { JS_IMMUTABILITY_REACT } from "./js-immutability-react";
+import { JS_MEMOIZATION } from "./js-memoization";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JS_OBJECT_METHODS } from "./js-object-methods";
+import { JS_OPTIONAL_CHAINING_NULLISH } from "./js-optional-chaining-nullish";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
 import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
 import { JS_PROMISES } from "./js-promises";
+import { JS_PURE_FUNCTIONS } from "./js-pure-functions";
 import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
 import { JS_SHALLOW_DEEP_COPY } from "./js-shallow-deep-copy";
+import { JS_SHORT_CIRCUIT } from "./js-short-circuit";
 import { JS_SPREAD_REST } from "./js-spread-rest";
+import { JS_TEMPLATE_LITERALS } from "./js-template-literals";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
@@ -247,6 +258,7 @@ import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
+import { MICROSERVICES_DECOMPOSITION } from "./microservices-decomposition";
 import { MODULAR_MONOLITH } from "./modular-monolith";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
@@ -437,6 +449,7 @@ export const QUESTION_SETS = [
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CLEAN_ARCHITECTURE,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
   CLOUD_COST_OPTIMIZATION,
@@ -476,6 +489,7 @@ export const QUESTION_SETS = [
   DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
+  DDD_BOUNDED_CONTEXT,
   DDOS_PROTECTION,
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
@@ -535,6 +549,7 @@ export const QUESTION_SETS = [
   HELM_DEPENDENCIES_OCI_GITOPS,
   HELM_RELEASE_LIFECYCLE,
   HELM_VALUES_SECRETS,
+  HEXAGONAL_ARCHITECTURE,
   HIGH_AVAILABILITY,
   HOSTS_FILE,
   HTML_FORM_HTTP,
@@ -559,20 +574,28 @@ export const QUESTION_SETS = [
   JS_ASYNC_AWAIT,
   JS_CALLBACK_HELL,
   JS_CLOSURES,
+  JS_CURRYING_PARTIAL,
   JS_DESTRUCTURING,
   JS_EQUALITY_COERCION,
+  JS_ES_MODULES,
   JS_FIRST_CLASS_CALLBACKS,
   JS_FUNCTION_FORMS,
   JS_HOISTING_TDZ,
+  JS_IIFE_MODULE_PATTERN,
   JS_IMMUTABILITY_REACT,
+  JS_MEMOIZATION,
   JS_MEMORY_LEAK,
   JS_OBJECT_METHODS,
+  JS_OPTIONAL_CHAINING_NULLISH,
   JS_PRIMITIVE_VS_REFERENCE,
   JS_PROMISE_COMBINATORS,
   JS_PROMISES,
+  JS_PURE_FUNCTIONS,
   JS_SCOPE_LEXICAL,
   JS_SHALLOW_DEEP_COPY,
+  JS_SHORT_CIRCUIT,
   JS_SPREAD_REST,
+  JS_TEMPLATE_LITERALS,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,
@@ -660,6 +683,7 @@ export const QUESTION_SETS = [
   METRICS_TYPES,
   MICRO_FRONTENDS,
   MICROSERVICES,
+  MICROSERVICES_DECOMPOSITION,
   MODULAR_MONOLITH,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
