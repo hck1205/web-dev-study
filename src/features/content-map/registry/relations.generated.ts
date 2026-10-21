@@ -2,6 +2,136 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "parallax-scrollytelling": {
+    "links": [
+      "scroll-driven-animations",
+      "scroll-triggered-intersection-observer",
+      "css-sticky-scroll-snap",
+      "scroll-patterns-overview",
+      "animation-performance"
+    ],
+    "mentions": [
+      "dom-basics"
+    ]
+  },
+  "scroll-triggered-intersection-observer": {
+    "links": [
+      "scroll-patterns-overview",
+      "scroll-driven-animations",
+      "parallax-scrollytelling",
+      "dom-basics",
+      "core-web-vitals",
+      "debounce-throttle",
+      "loading-patterns"
+    ],
+    "mentions": [
+      "css-sticky-scroll-snap",
+      "animation-performance",
+      "pattern-proxy",
+      "event-loop"
+    ]
+  },
+  "scroll-driven-animations": {
+    "links": [
+      "scroll-patterns-overview",
+      "css-sticky-scroll-snap",
+      "scroll-triggered-intersection-observer",
+      "parallax-scrollytelling",
+      "animation-performance",
+      "debounce-throttle"
+    ],
+    "mentions": [
+      "pattern-proxy"
+    ]
+  },
+  "css-sticky-scroll-snap": {
+    "links": [
+      "scroll-patterns-overview",
+      "parallax-scrollytelling"
+    ],
+    "mentions": [
+      "scroll-triggered-intersection-observer",
+      "animation-performance"
+    ]
+  },
+  "scroll-patterns-overview": {
+    "links": [
+      "css-sticky-scroll-snap",
+      "scroll-triggered-intersection-observer",
+      "scroll-driven-animations",
+      "parallax-scrollytelling",
+      "animation-patterns",
+      "loading-patterns",
+      "dom-basics",
+      "event-propagation",
+      "animation-performance",
+      "debounce-throttle",
+      "core-web-vitals"
+    ],
+    "mentions": []
+  },
+  "fastapi-basics": {
+    "links": [
+      "express-middleware",
+      "nodejs-server-runtime",
+      "hexagonal-architecture",
+      "timeouts",
+      "connection-pool",
+      "k8s-pod-lifecycle"
+    ],
+    "mentions": [
+      "autoscaling",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "http-status-codes"
+    ]
+  },
+  "express-middleware": {
+    "links": [
+      "pattern-chain-of-responsibility",
+      "nodejs-server-runtime",
+      "fastapi-basics",
+      "cors",
+      "rest-api-design",
+      "k8s-pod-lifecycle",
+      "linux-processes-signals"
+    ],
+    "mentions": [
+      "js-promises",
+      "iptables-nat",
+      "k8s-architecture",
+      "event-loop",
+      "js-pure-functions",
+      "osi-in-practice",
+      "http-status-codes"
+    ]
+  },
+  "nodejs-server-runtime": {
+    "links": [
+      "event-loop",
+      "js-microtask-macrotask",
+      "express-middleware",
+      "fastapi-basics",
+      "monolith-architecture",
+      "thread-safety",
+      "sd-load-balancer-stateless",
+      "websocket-deep-dive",
+      "k8s-pod-resources",
+      "connection-pool"
+    ],
+    "mentions": [
+      "load-balancer-basics",
+      "realtime-communication",
+      "js-memory-leak",
+      "sd-start-single-server",
+      "autoscaling",
+      "race-conditions",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "dns"
+    ]
+  },
   "rag-patterns-overview": {
     "links": [
       "rag-classic-pipeline",
@@ -52,6 +182,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "acid-transactions",
       "db-transaction-isolation",
       "pattern-builder",
+      "express-middleware",
       "hexagonal-architecture",
       "api-versioning"
     ],
@@ -1285,6 +1416,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-queue-basics"
     ],
     "mentions": [
+      "nodejs-server-runtime",
       "sd-url-shortener-api-redirect",
       "sd-object-storage-architecture",
       "sd-start-single-server",
@@ -2565,7 +2697,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
-      "js-timers-accuracy"
+      "js-timers-accuracy",
+      "parallax-scrollytelling"
     ]
   },
   "view-transitions-shared-element": {
@@ -6032,6 +6165,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "express-middleware",
       "ab-testing",
       "redis-basics",
       "js-closures",
@@ -6223,6 +6357,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "express-middleware",
       "sd-payment-flow",
       "event-delegation",
       "http-status-codes"
@@ -6434,6 +6569,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "load-balancer-basics"
     ],
     "mentions": [
+      "nodejs-server-runtime",
       "iptables-nat",
       "browser-fetch",
       "iptables-basics",
@@ -7929,6 +8065,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "code-splitting"
     ],
     "mentions": [
+      "scroll-triggered-intersection-observer",
       "js-es-modules",
       "streaming-ssr-suspense",
       "rendering-strategies",

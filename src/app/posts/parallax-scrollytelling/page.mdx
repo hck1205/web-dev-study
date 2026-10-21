@@ -1,0 +1,338 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("parallax-scrollytelling");
+
+랜딩 페이지의 큰 배경 그림을 글보다 천천히 올라가게 만든다고 하자. 스크롤할 때 배경 레이어의 `top`을 `scrollY`의 절반만큼 바꾸는 흔한 코드다. 섹션이 서른 개쯤 되면 느린 휴대폰에서 스크롤이 눈에 띄게 끈적해진다. 같은 페이지를 아이폰 사파리에서 열면 또 다른 문제가 보인다. `height: 100vh`로 꽉 채운 첫 화면의 아래쪽이 주소창 뒤로 잘린다.
+
+패럴랙스, 스크롤하면서 확대되는 장면, 세로로 내렸는데 가로로 흐르는 섹션, 그림은 붙어 있고 글이 지나가는 스크롤리텔링. 화려한 스크롤 장면은 대부분 몇 가지 재료의 조합이다. `position: sticky`로 무대를 붙잡고, 스크롤 진행률을 `transform`에 묶고, 장면 전환은 IntersectionObserver가 알려 준다. 이 글은 그 조합을 크로미움 141(Playwright, 헤드리스)에서 재 보면서 성능, 모바일 화면 높이, 움직임 줄이기까지 다룬다.
+
+재료는 앞의 글에 있다. 진행률을 CSS에 묶는 법은 [스크롤 기반 애니메이션](/posts/scroll-driven-animations), 경계를 지날 때 알림받는 법은 [IntersectionObserver](/posts/scroll-triggered-intersection-observer), 무대를 붙잡는 `sticky`는 [sticky와 scroll-snap](/posts/css-sticky-scroll-snap)에서 다뤘다. 아홉 가지 스크롤 패턴의 전체 지도는 [스크롤 패턴 한눈에 보기](/posts/scroll-patterns-overview)에 있다.
+
+## 배경이 글보다 느리면 깊이가 생긴다
+
+기차 창밖을 보면 가까운 전봇대는 휙 지나가고 먼 산은 천천히 움직인다. 뇌는 이 속도 차이를 거리로 읽는다. 패럴랙스는 이걸 흉내 낸다. 글(앞 레이어)은 스크롤과 같은 속도로 움직이고, 배경(뒤 레이어)은 그보다 느리게 움직인다.
+
+<ScrollDemo patterns={["parallax"]} caption="글은 스크롤한 만큼 올라가고, 배경은 절반만 따라온다" />
+
+아래 그림에서 다음을 누르면 화면(테두리)이 80씩 내려간다. 앞 레이어는 80을 다 움직이고, 배경은 40만 움직인다.
+
+<GeometryMorph
+  caption="스크롤 80마다 앞 레이어는 80, 배경은 40 올라간다"
+  width={400}
+  height={300}
+  shapes={[{ id: "viewport", tone: "outline" }, { id: "bg", tone: "series2" }, { id: "fg", tone: "series1" }]}
+  steps={[
+    { title: "스크롤 0", detail: "배경과 글 카드가 처음 자리에 있다.", shapes: { viewport: [[110, 60], [290, 60], [290, 260], [110, 260]], bg: [[130, 70], [270, 70], [270, 230], [130, 230]], fg: [[150, 200], [250, 200], [250, 240], [150, 240]] }, labels: [{ x: 300, y: 150, text: "배경", tone: "series2", size: "sm" }, { x: 300, y: 225, text: "글", tone: "series1", size: "sm" }], focus: ["fg"] },
+    { title: "스크롤 80", detail: "글은 80 올라갔다. 배경은 절반인 40만 올라갔다.", shapes: { viewport: [[110, 60], [290, 60], [290, 260], [110, 260]], bg: [[130, 30], [270, 30], [270, 190], [130, 190]], fg: [[150, 120], [250, 120], [250, 160], [150, 160]] }, labels: [{ x: 300, y: 110, text: "배경 -40", tone: "series2", size: "sm" }, { x: 300, y: 145, text: "글 -80", tone: "series1", size: "sm" }], focus: ["fg", "bg"] },
+    { title: "스크롤 160", detail: "차이가 계속 벌어진다. 이 속도 차이가 깊이로 보인다.", shapes: { viewport: [[110, 60], [290, 60], [290, 260], [110, 260]], bg: [[130, -10], [270, -10], [270, 150], [130, 150]], fg: [[150, 40], [250, 40], [250, 80], [150, 80]] }, labels: [{ x: 300, y: 130, text: "배경 -80", tone: "series2", size: "sm" }, { x: 300, y: 65, text: "글 -160", tone: "series1", size: "sm" }], focus: ["bg"] },
+  ]}
+/>
+
+구현은 "배경에 스크롤 반대 방향으로 조금씩 밀어 주는 이동을 더한다"는 한 줄로 끝난다. 그런데 무엇으로 미느냐에 따라 비용이 수십 배 차이 난다.
+
+## top으로 밀면 레이아웃을 2400번 한다
+
+390×800 화면에 높이 400px 섹션 30개를 두고, 각 섹션 안의 배경 레이어를 세 가지 방법으로 움직였다. 휠을 120px씩 80번 굴리면서 성능 트레이스를 떴다.
+
+```js
+// 1) js-top: 스크롤마다 섹션 위치를 재고 배경의 top을 바꾼다
+addEventListener("scroll", () => {
+  for (const b of bgs) {
+    const r = b.parentElement.getBoundingClientRect();   // 읽기
+    b.style.top = -r.top * 0.5 + "px";                    // 쓰기 → 다음 읽기가 레이아웃을 강제한다
+  }
+}, { passive: true });
+
+// 2) js-transform: 섹션 위치는 처음 한 번만 재 두고, transform만 바꾼다
+const tops = bgs.map((b) => b.parentElement.offsetTop);
+addEventListener("scroll", () => {
+  const y = scrollY;
+  bgs.forEach((b, i) => { b.style.transform = `translateY(${(tops[i] - y) * -0.5}px)`; });
+}, { passive: true });
+```
+
+```css
+/* 3) css-view-timeline: 자바스크립트 없이 섹션이 지나가는 동안 배경을 민다 */
+.hero { position: relative; height: 400px; overflow: clip; }
+.hero-bg {
+  position: absolute;
+  inset: -100px 0;
+  animation: drift linear both;
+  animation-timeline: view();
+  animation-range: cover 0% cover 100%;
+}
+@keyframes drift {
+  from { transform: translateY(-100px); }
+  to { transform: translateY(100px); }
+}
+```
+
+```text
+js-top             핸들러 113.5ms | Layout 2400회 54.8ms | Paint 80회 16.2ms | Style 2400회 23.2ms
+js-transform       핸들러 10.6ms | Layout 1회 0.2ms | Paint 390회 10.1ms | Style 80회 14.6ms
+css-view-timeline  핸들러 0.0ms | Layout 0회 0.0ms | Paint 31회 2.7ms | Style 80회 21.4ms
+```
+
+`js-top`의 2400은 스크롤 이벤트 80번 × 섹션 30개다. 루프 안에서 `top`을 쓰고 다음 섹션의 위치를 읽을 때마다 브라우저가 그 자리에서 레이아웃을 다시 계산했다. 이 강제 동기 레이아웃 때문에 자바스크립트 시간도 가장 크다. `js-transform`은 위치를 처음 한 번만 재 두고 `transform`만 쓰니 레이아웃이 사라졌다. `css-view-timeline`은 자바스크립트가 0이다. 크로미움이 transform 애니메이션을 합성 단계에서 처리할 수 있는 경우라면 메인 스레드가 바빠도 배경이 따라간다. 속성마다 깨우는 단계가 다른 이유는 [애니메이션 성능과 접근성](/posts/animation-performance)에 정리했다.
+
+세 번째 방법의 CSS에 `overflow: clip`이 있는 데는 이유가 있다. 처음에는 흔히 쓰는 `overflow: hidden`으로 썼다가 배경이 한 픽셀도 움직이지 않았다. 스크롤 위치별로 배경의 `translateY`를 읽어 봤다.
+
+```text
+overflow:hidden 0:0  200:0  700:0  1000:0  1500:0
+overflow:clip   0:-100  200:-85.7  700:-14.3  1000:28.6  1500:100
+```
+
+`overflow: hidden`인 요소도 스크롤 컨테이너다. `view()`는 가장 가까운 조상 스크롤 컨테이너 안에서 요소가 얼마나 보이는지를 보는데, 그게 스크롤되지 않는 `.hero`가 되어 버렸다. `overflow: clip`은 넘친 부분을 똑같이 잘라 내지만 스크롤 컨테이너를 만들지 않는다. 패럴랙스 레이어는 거의 항상 잘라 내는 부모 안에 있으니 이 함정에 잘 걸린다. 같은 원인이 진행 막대를 멈추게 하는 경우는 [스크롤 기반 애니메이션](/posts/scroll-driven-animations#막대가-처음부터-꽉-차-있다)에서 봤다.
+
+`clip` 쪽 숫자도 계산과 맞는지 확인해 두자. `view()`의 대상은 `.hero-bg` 자신이다. 위아래로 100px씩 넓혀서 문서 위 900px 지점에서 시작하는 높이 600px 상자다. `cover` 구간은 상자 윗변이 화면 아랫변에 닿는 `scrollY` 100(900 − 800)에서 아랫변이 화면 위로 빠지는 1500까지 1400px이다. 700이면 600 / 1400 ≈ 0.43이라 −100 + 200 × 0.43 ≈ −14.3이다.
+
+## 확대되며 다가오는 장면
+
+스크롤하면 사진이 점점 커지면서 화면을 채우는 효과(zoom on scroll)는 패럴랙스의 사촌이다. 움직이는 속성이 `translate`에서 `scale`로 바뀌었을 뿐이다. 사진이 화면에 붙어 있는 동안 커져야 하니 `sticky` 무대 안에 넣고, 바깥 섹션이 지나가는 구간을 타임라인으로 쓴다.
+
+<ScrollDemo patterns={["zoom-on-scroll"]} caption="무대가 화면에 붙어 있는 동안 사진이 커져서 화면을 채운다" />
+
+```css
+.zoom-section { height: 300vh; view-timeline-name: --zoom; }
+.zoom-stage   { position: sticky; top: 0; height: 100vh; overflow: clip; }
+.zoom-stage img {
+  animation: zoom-in linear both;
+  animation-timeline: --zoom;                  /* 바깥 섹션의 타임라인을 이름으로 가져온다 */
+  animation-range: contain 0% contain 100%;    /* 무대가 화면을 꽉 덮고 있는 동안 */
+}
+@keyframes zoom-in { from { scale: 0.6; } to { scale: 1.4; } }
+```
+
+이름 붙인 타임라인(`view-timeline-name: --zoom`)을 쓴 이유는 둘이다. 하나, 붙어 있는 무대 안의 사진은 화면에서 거의 움직이지 않으니 사진 자신의 `view()`는 쓸모가 없다. 진행률은 바깥 섹션이 지나가는 정도에서 가져와야 한다. 둘, 무대의 `overflow: clip`이 아니라 `hidden`이었다면 바로 앞에서 본 함정에 또 걸린다. 이름으로 가져오면 가까운 스크롤 컨테이너를 찾지 않는다.
+
+확대에는 성능 함정이 하나 더 있다. `scale`은 합성 단계에서 끝나는 속성이지만, 작게 래스터화한 그림을 크게 늘리면 흐릿해진다. 브라우저가 중간에 다시 래스터화하면 그 순간 메인 스레드나 GPU 메모리를 쓴다. 사진을 처음부터 최종 크기의 해상도로 준비하고 작게 시작하는 편이 깨끗하다. 무대가 화면을 꽉 채우는 큰 이미지라면 휴대폰에서는 디코딩한 이미지 크기만으로 수십 MB가 될 수 있으니 실제 기기에서 메모리를 본다.
+
+## 세로로 내렸는데 가로로 흐른다
+
+가로 스크롤 섹션은 세로 스크롤을 가로 이동으로 바꾼다. 구조는 셋이다. 키 큰 바깥 섹션, 그 안에서 화면에 붙어 있는 무대(`sticky`), 무대 안에서 옆으로 움직이는 긴 띠다.
+
+<ScrollDemo patterns={["horizontal-scroll"]} caption="세로로 내리는 동안 무대는 붙어 있고 패널 띠가 옆으로 흐른다" />
+
+```css
+.h-section { height: 400vh; view-timeline-name: --h; }
+.h-stage   { position: sticky; top: 0; height: 100vh; overflow: hidden; }
+.h-track {
+  display: flex;
+  width: 400vw;                              /* 화면 폭 패널 네 장 */
+  height: 100%;
+  animation: slide linear both;
+  animation-timeline: --h;
+  animation-range: contain 0% contain 100%;
+}
+.h-track > .panel { flex: none; width: 100vw; }
+@keyframes slide { to { transform: translateX(-300vw); } }
+```
+
+여기서는 무대에 `overflow: hidden`을 써도 괜찮다. 띠가 이름 붙인 타임라인 `--h`를 쓰기 때문에 가까운 스크롤 컨테이너를 찾지 않는다. 390×800 화면에서 섹션을 문서 위 800px 지점에 두고 스크롤 위치별로 쟀다.
+
+```text
+{"y":0,"secTop":800,"stickTop":800,"tx":0}
+{"y":800,"secTop":0,"stickTop":0,"tx":0}
+{"y":1200,"secTop":-400,"stickTop":0,"tx":-195}
+{"y":1600,"secTop":-800,"stickTop":0,"tx":-390}
+{"y":2000,"secTop":-1200,"stickTop":0,"tx":-585}
+{"y":2400,"secTop":-1600,"stickTop":0,"tx":-780}
+{"y":2800,"secTop":-2000,"stickTop":0,"tx":-975}
+{"y":3200,"secTop":-2400,"stickTop":0,"tx":-1170}
+```
+
+`secTop`은 섹션이 화면 위로 계속 올라가는데 `stickTop`은 0에 붙어 있다. 무대가 붙어 있는 동안 띠의 `tx`가 0에서 −1170(300vw = 3 × 390)까지 일정하게 줄어든다.
+
+<AlgoTrace
+  caption="섹션이 화면을 덮고 있는 2400px 동안 띠가 1170px 옆으로 간다"
+  memoryLabel="띠 위치"
+  cells={["800", "1200", "1600", "2000", "2400", "2800", "3200"]}
+  steps={[
+    { pointer: 0, memory: ["0%", "tx 0"], caption: "섹션 윗변이 화면 윗변에 닿았다. contain 구간이 시작되고 무대가 붙는다." },
+    { pointer: 1, memory: ["16.7%", "tx -195"], caption: "400px 내렸다. 2400px 중 1/6이라 띠는 1170의 1/6만큼 갔다." },
+    { pointer: 3, memory: ["50%", "tx -585"], caption: "절반이다. 패널 두 장째와 세 장째의 경계가 화면 가운데에 온다." },
+    { pointer: 5, memory: ["83.3%", "tx -975"], caption: "마지막 패널이 거의 다 들어왔다." },
+    { pointer: 6, found: [6], memory: ["100%", "tx -1170"], caption: "섹션 아랫변이 화면 아랫변에 닿았다. 무대가 떨어지고 다음 내용이 올라온다." },
+  ]}
+/>
+
+세로 2400px에 가로 1170px이니 띠는 스크롤보다 두 배쯤 느리게 간다. 세로로 내린 만큼 가로로 가게 하려면(1:1) 섹션 높이를 "화면 높이 + 띠가 움직일 거리"로 잡는다. 이 화면이라면 800 + 1170 = 1970px이다. 섹션 높이를 늘리면 천천히, 줄이면 빠르게 간다. 직접 계산해 보자. 처음 다섯 테스트는 위에서 잰 값이다.
+
+<CodePlayground
+  caption="가로 스크롤 섹션의 띠 위치 계산"
+  functionName="horizontalShift"
+  initialCode={`function horizontalShift(scrollY, sectionTop, sectionHeight, vh, trackWidth, vw) {
+  // sectionTop: 문서 위에서 섹션 윗변까지(px), sectionHeight: 섹션 높이
+  // vh, vw: 화면 높이와 폭, trackWidth: 띠 전체 폭
+  // 섹션 윗변이 화면 윗변에 닿을 때 0, 섹션 아랫변이 화면 아랫변에 닿을 때 끝
+  // 끝에서 띠는 -(trackWidth - vw)만큼 가 있다. 구간 밖은 양 끝 값으로 자른다
+  // 반환: translateX(px)를 정수로 반올림
+  return 0;
+}`}
+  solution={`function horizontalShift(scrollY, sectionTop, sectionHeight, vh, trackWidth, vw) {
+  const start = sectionTop;
+  const end = sectionTop + sectionHeight - vh;
+  const p = Math.min(1, Math.max(0, (scrollY - start) / (end - start)));
+  return Math.round(-p * (trackWidth - vw)) || 0;
+}`}
+  tests={[
+    { label: "섹션 전", args: [0, 800, 3200, 800, 1560, 390], expected: 0 },
+    { label: "1/6 지점 (잰 값 -195)", args: [1200, 800, 3200, 800, 1560, 390], expected: -195 },
+    { label: "절반 (잰 값 -585)", args: [2000, 800, 3200, 800, 1560, 390], expected: -585 },
+    { label: "끝 (잰 값 -1170)", args: [3200, 800, 3200, 800, 1560, 390], expected: -1170 },
+    { label: "섹션 지난 뒤", args: [5000, 800, 3200, 800, 1560, 390], expected: -1170 },
+    { label: "1:1 높이 1970px에서 585px 내림", args: [1385, 800, 1970, 800, 1560, 390], expected: -585 },
+  ]}
+/>
+
+마지막 테스트가 1:1의 확인이다. 섹션 높이를 1970px로 잡으면 585px 내렸을 때 띠도 585px 간다. 다만 이 계산은 화면 폭과 높이에 따라 달라지니, CSS에서는 `height: calc(100vh + 300vw)`처럼 단위로 바로 쓴다.
+
+가로 스크롤 섹션에는 사용성 함정이 있다. 트랙패드나 Shift+휠로 가로 스크롤을 시도하는 사람에게는 아무 반응이 없다. 진짜 가로 스크롤이 아니기 때문이다. 키보드로 패널 안의 링크에 Tab으로 이동하면 브라우저는 그 링크가 보이도록 스크롤하려고 하는데, 띠는 `transform`으로 밀려 있어서 포커스가 화면 밖에 있을 수 있다. 패널 안에 누를 것이 있다면 진짜 가로 스크롤 목록에 [scroll-snap](/posts/css-sticky-scroll-snap)을 거는 쪽이 낫다. 그리고 바깥 어딘가에 `overflow-x: hidden`이 있으면 `sticky`가 붙지 않아 섹션 전체가 그냥 지나간다.
+
+## 그림은 붙어 있고 글이 지나간다
+
+스크롤리텔링은 화면 한쪽에 그림(차트, 지도, 도식)을 붙여 두고, 옆으로 짧은 글 단락들이 지나가게 한다. 단락 하나가 화면 가운데에 올 때마다 그림이 그 단락에 맞는 장면으로 바뀐다. 데이터 저널리즘 기사에서 흔히 보는 형식이다.
+
+<ScrollDemo patterns={["scrollytelling"]} caption="단락이 화면 가운데를 지날 때마다 붙어 있는 그림이 다음 장면으로 바뀐다" />
+
+여기서 단계 전환은 연속 움직임이 아니라 사건이다. "2단계가 됐다"는 상태가 바뀌는 일이라 [IntersectionObserver](/posts/scroll-triggered-intersection-observer)가 맞다. 화면 가운데에 높이 0인 선을 만들고 그 선을 넘는 단락을 잡는다. `rootMargin`을 위아래 −50%로 주면 영역이 화면 가운데 한 줄로 줄어든다.
+
+```js
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (e.isIntersecting) setStep(e.target.dataset.step);   // 가운데 선에 걸린 단락
+  }
+}, { rootMargin: "-50% 0px -50% 0px" });
+
+document.querySelectorAll(".step").forEach((s) => io.observe(s));
+```
+
+높이 600px 단락 셋을 문서 위 400px 지점부터 이어 두고, 800px 화면에서 20px씩 내려 가며 바뀐 순간을 기록했다.
+
+```text
+{"scrollY":0,"step":"1"}
+{"scrollY":600,"step":"2"}
+{"scrollY":1200,"step":"3"}
+```
+
+가운데 선은 `scrollY + 400`에 있다. 1단계는 처음부터 400px 지점에서 선에 닿아 있었고, 2단계 윗변(1000)은 `scrollY` 600에서, 3단계 윗변(1600)은 1200에서 선에 닿았다. 높이 0인 영역이라도 가장자리에 닿으면 겹친 것으로 치기 때문에 정확히 그 위치에서 바뀐다.
+
+<SequenceDiagram
+  caption="단락이 가운데 선을 넘으면 그림이 바뀐다"
+  actors={[
+    { id: "step", label: "글 단락" },
+    { id: "io", label: "관찰자" },
+    { id: "state", label: "현재 단계" },
+    { id: "graphic", label: "붙은 그림" },
+  ]}
+  steps={[
+    { from: "step", to: "io", label: "2단계가 선에 닿음", title: "단락이 화면 가운데를 지난다", detail: "rootMargin -50%로 만든 높이 0인 선에 2단계 단락의 윗변이 닿는다." },
+    { from: "io", to: "state", label: "isIntersecting", title: "관찰자가 알려 준다", detail: "다음 태스크에서 콜백이 온다. 그 단락의 data-step 값을 현재 단계로 저장한다." },
+    { from: "state", to: "graphic", label: "step = 2", title: "그림이 다음 장면으로", detail: "그림은 현재 단계만 보고 그린다. 막대가 자라거나 지도가 확대되는 전환 애니메이션은 시간 기반으로 재생한다." },
+    { from: "step", to: "io", label: "위로 되돌림", title: "거꾸로 올라가도 같다", detail: "1단계 단락이 다시 선에 닿으면 1단계로 돌아간다. 방향을 따로 처리할 필요가 없다." },
+  ]}
+/>
+
+그림을 붙이는 쪽은 그냥 `position: sticky; top: 0`이다. React라면 현재 단계를 상태 하나로 두고, 그림 컴포넌트는 그 값만 받는다. 스크롤 위치를 상태에 넣지 않는 것이 요령이다. 상태가 바뀌는 횟수가 단계 수만큼으로 줄어든다.
+
+휴대폰에서는 그림과 글을 나란히 둘 폭이 없다. 보통 그림을 화면 위쪽에 붙이고 글 단락을 그 위로 지나가게 한다. 이때 단락 배경을 반투명하게 두면 그림이 가려지는 동안에도 글이 읽힌다. 단락 사이 간격은 화면 높이 정도로 넉넉하게 두어야 한 장면을 볼 시간이 생긴다.
+
+## 휴대폰에서 화면 높이가 흔들린다
+
+처음 이야기의 두 번째 문제로 돌아가자. 모바일 사파리와 크롬은 스크롤을 내리면 주소창이 줄어들고 올리면 다시 커진다. 그래서 "화면 높이"가 하나가 아니다. CSS에는 그 경우마다 단위가 따로 있다.
+
+<ConceptDiagram
+  caption="주소창 상태에 따라 달라지는 화면 높이 단위"
+  width={420}
+  height={230}
+  nodes={[
+    { id: "svh", label: "100svh", sub: "주소창이 펼쳐진 작은 높이", x: 100, y: 50, w: 170 },
+    { id: "lvh", label: "100lvh", sub: "주소창이 접힌 큰 높이", x: 100, y: 180, w: 170 },
+    { id: "dvh", label: "100dvh", sub: "지금 이 순간의 높이", x: 320, y: 115, w: 160 },
+    { id: "vh", label: "100vh", sub: "대부분 lvh와 같다", x: 320, y: 200, w: 160 },
+  ]}
+  edges={[
+    { from: "svh", to: "dvh", label: "펼쳐졌을 때" },
+    { from: "lvh", to: "dvh", label: "접혔을 때" },
+    { from: "vh", to: "lvh", dashed: true },
+  ]}
+/>
+
+`100vh`는 모바일 브라우저 대부분에서 주소창이 접힌 큰 높이(`lvh`)와 같다. 그래서 처음 열었을 때, 즉 주소창이 펼쳐져 있을 때 첫 화면의 아래쪽이 가려진다. 첫 화면을 꽉 채우는 히어로에는 `100svh`가 맞다. 어떤 상태에서도 다 보인다.
+
+`100dvh`는 주소창이 움직이는 동안 값이 계속 바뀐다. 붙어 있는 무대(`sticky`)나 스크롤리텔링의 그림 높이에 쓰면 스크롤할 때마다 높이가 바뀌어 레이아웃을 다시 하고, 내용이 출렁인다. 스크롤 장면의 무대에는 `svh`나 `lvh`처럼 고정된 값을 쓰고, `dvh`는 스크롤과 상관없는 전체 화면 모달 정도에 쓴다.
+
+```css
+.hero {
+  min-height: 100vh;    /* 새 단위를 모르는 브라우저를 위한 바닥 */
+  min-height: 100svh;   /* 아는 브라우저는 이 줄로 덮어쓴다 */
+}
+```
+
+헤드리스 크로미움으로는 이 차이를 재현하지 못했다. 데스크톱 창에는 줄어드는 주소창이 없어서 네 값이 모두 같다.
+
+```text
+{"innerHeight":844,"vh":844,"svh":844,"lvh":844,"dvh":844}
+```
+
+그래서 위의 설명은 실제 기기 동작을 바탕으로 한 것이고, 확인은 실제 휴대폰에서 해야 한다. 새 단위는 크롬 108, 사파리 15.4, 파이어폭스 101쯤부터 지원한다. 안드로이드 크롬은 버전에 따라 주소창이 레이아웃 높이에 반영되는 방식이 달라진 적이 있으니, 오래된 기기를 지원해야 한다면 기기에서 직접 본다.
+
+## 움직임이 불편한 사람에게서 장면을 거둔다
+
+패럴랙스와 확대는 전정 장애가 있는 사람에게 어지러움을 일으키는 대표적인 효과다. 배경과 글이 다른 속도로 움직이면 눈은 둘 중 무엇을 기준으로 삼아야 할지 헷갈린다. 스크롤에 묶인 효과는 스크롤하는 내내 이어지니 버튼을 눌렀을 때 한 번 움직이는 효과보다 피하기도 어렵다.
+
+운영체제의 "동작 줄이기" 설정은 `prefers-reduced-motion`으로 읽는다. 처음부터 효과를 켜 두고 `reduce`일 때 끄는 것보다, 효과를 `no-preference` 안에서만 켜는 쪽이 안전하다. 미디어 쿼리를 이해하지 못하는 환경에서도 효과가 없는 상태로 남기 때문이다.
+
+```css
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .hero-bg {
+      animation: drift linear both;
+      animation-timeline: view();
+      animation-range: cover 0% cover 100%;
+    }
+  }
+}
+```
+
+Playwright에서는 `page.emulateMedia({ reducedMotion: "reduce" })`로 이 설정을 흉내 낼 수 있다. 켠 뒤 `matchMedia("(prefers-reduced-motion: reduce)").matches`를 읽으면 `true`가 나온다. 설정을 켠 상태에서 페이지를 끝까지 넘겨 보며 장면이 의미를 잃지 않는지 확인하는 테스트를 하나 두면 좋다.
+
+```text
+reduce true
+```
+
+효과를 끈다고 내용까지 사라지면 안 된다. 스크롤리텔링이라면 단계 전환은 남기고 전환 애니메이션만 즉시 끝나게 하고, 가로 스크롤 섹션이라면 패널을 세로로 쌓는다. 어떤 효과가 전정 장애에 문제가 되는지, WCAG 2.3.3이 무엇을 요구하는지는 [애니메이션 성능과 접근성](/posts/animation-performance)에서 다뤘다.
+
+마지막으로 스크롤 재킹은 피한다. 휠 이벤트를 가로채 `preventDefault()`하고 대신 정해진 거리만큼 장면을 넘기는 방식은 사용자가 스크롤 속도를 조절할 수 없게 만들고, 트랙패드의 관성 스크롤, 키보드, 화면 읽기 프로그램과 충돌한다. 이 글의 장면은 모두 사용자가 내린 만큼만 움직인다.
+
+스크롤 장면은 `sticky`로 무대를 붙잡고, 진행률을 `transform`과 `opacity`에 묶고, 장면 전환은 관찰자에게 맡기는 조합이다. 진행률은 CSS 타임라인에 맡기되 `overflow: hidden` 조상 때문에 타임라인이 꺼지지 않았는지 보고, 모바일 높이는 `svh`로, 움직임 줄이기 설정에서는 효과를 거둔다.
+
+## 면접에서 나올 만한 질문
+
+### 패럴랙스를 어떻게 구현하나요?
+
+배경 레이어에 스크롤 진행률에 비례한 `transform: translateY()`를 더해서 글보다 느리게 움직이게 한다. 지원하는 브라우저에서는 `animation-timeline: view()`로 자바스크립트 없이 하고, 아니면 위치를 처음에 재 두고 스크롤 리스너에서 transform만 쓴다. `top`이나 `background-position`을 바꾸면 매 프레임 레이아웃이나 페인트가 다시 돈다.
+
+### top으로 움직이면 왜 느린가요?
+
+`top`은 위치를 바꾸는 속성이라 레이아웃을 다시 계산해야 하고, 루프 안에서 쓰기와 읽기를 섞으면 강제 동기 레이아웃이 요소 수만큼 일어난다. 섹션 30개 기준으로 스크롤 80번에 레이아웃이 2400번 일어났다. `transform`은 레이아웃을 건너뛰고, CSS 타임라인을 쓰면 자바스크립트도 0이 됐다.
+
+### view() 패럴랙스가 전혀 안 움직여요.
+
+레이어를 잘라 내는 부모가 `overflow: hidden`인지 본다. 그 부모가 가장 가까운 스크롤 컨테이너가 되는데 실제로는 스크롤되지 않으니 타임라인이 비활성이 된다. 부모를 `overflow: clip`으로 바꾸거나, 바깥 섹션에 `view-timeline-name`을 주고 이름으로 가져온다.
+
+### 가로 스크롤 섹션은 어떻게 만들고, 높이는 어떻게 정하나요?
+
+키 큰 섹션 안에 `sticky` 무대를 붙이고, 무대 안의 긴 띠를 섹션의 `contain` 구간 동안 `translateX`로 민다. 띠가 움직이는 거리는 띠 폭에서 화면 폭을 뺀 값이고, 세로 이동과 1:1로 맞추려면 섹션 높이를 화면 높이에 그 거리를 더한 값으로 잡는다. 진짜 가로 스크롤이 아니라 트랙패드 가로 제스처와 키보드 포커스 이동이 어색하다는 단점이 있다.
+
+### 스크롤리텔링에서 단계 전환은 무엇으로 감지하나요?
+
+IntersectionObserver에 `rootMargin: "-50% 0px -50% 0px"`를 줘서 화면 가운데에 높이 0인 선을 만들고, 그 선에 닿는 단락을 현재 단계로 삼는다. 단계 전환은 상태가 바뀌는 사건이라 연속적인 타임라인보다 관찰자가 맞다. React에서는 스크롤 위치가 아니라 단계 번호만 상태로 두어 렌더링을 단계 수만큼으로 줄인다.
+
+### 모바일에서 100vh 히어로가 잘리는 이유는요?
+
+모바일 브라우저는 대부분 `100vh`를 주소창이 접힌 큰 높이로 계산해서, 주소창이 펼쳐진 처음 화면에서는 아래가 가려진다. 첫 화면에는 `100svh`를 쓰고, 스크롤 중 계속 변하는 `100dvh`는 붙어 있는 무대에 쓰지 않는다. 높이가 바뀔 때마다 레이아웃을 다시 해서 내용이 출렁이기 때문이다.
+
+### 접근성은 어떻게 챙기나요?
+
+스크롤에 묶인 패럴랙스와 확대는 `@media (prefers-reduced-motion: no-preference)` 안에서만 켜고, 효과를 꺼도 내용과 단계 전환은 남긴다. 휠을 가로채는 스크롤 재킹은 하지 않는다. 가로 스크롤 섹션처럼 포커스 이동과 충돌하는 구조에는 누를 것을 넣지 않거나 진짜 스크롤 목록으로 바꾼다.

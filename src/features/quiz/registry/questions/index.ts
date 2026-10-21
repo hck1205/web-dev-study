@@ -49,6 +49,7 @@ import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
+import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
@@ -105,8 +106,10 @@ import { EVENT_PROPAGATION } from "./event-propagation";
 import { EVENT_SOURCING } from "./event-sourcing";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
+import { EXPRESS_MIDDLEWARE } from "./express-middleware";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
@@ -303,6 +306,7 @@ import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-renderi
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
+import { NODEJS_SERVER_RUNTIME } from "./nodejs-server-runtime";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
 import { ON_CALL } from "./on-call";
@@ -311,6 +315,7 @@ import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
+import { PARALLAX_SCROLLYTELLING } from "./parallax-scrollytelling";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -387,6 +392,9 @@ import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
+import { SCROLL_DRIVEN_ANIMATIONS } from "./scroll-driven-animations";
+import { SCROLL_PATTERNS_OVERVIEW } from "./scroll-patterns-overview";
+import { SCROLL_TRIGGERED_INTERSECTION_OBSERVER } from "./scroll-triggered-intersection-observer";
 import { SD_AD_CLICK_EXACTLY_ONCE } from "./sd-ad-click-exactly-once";
 import { SD_AD_CLICK_STREAM_WINDOWS } from "./sd-ad-click-stream-windows";
 import { SD_AUTOCOMPLETE_DATA_PIPELINE } from "./sd-autocomplete-data-pipeline";
@@ -580,6 +588,7 @@ export const QUESTION_SETS = [
   CRDT,
   CRON_JOBS,
   CSRF,
+  CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
@@ -636,8 +645,10 @@ export const QUESTION_SETS = [
   EVENT_SOURCING,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
+  EXPRESS_MIDDLEWARE,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FASTAPI_BASICS,
   FAULT_TOLERANCE,
   FEATURE_FLAGS,
   FIRST_PAGE_FROM_POWER_ON,
@@ -834,6 +845,7 @@ export const QUESTION_SETS = [
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
+  NODEJS_SERVER_RUNTIME,
   OAUTH,
   OBSERVABILITY_BASICS,
   ON_CALL,
@@ -842,6 +854,7 @@ export const QUESTION_SETS = [
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
+  PARALLAX_SCROLLYTELLING,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -918,6 +931,9 @@ export const QUESTION_SETS = [
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
+  SCROLL_DRIVEN_ANIMATIONS,
+  SCROLL_PATTERNS_OVERVIEW,
+  SCROLL_TRIGGERED_INTERSECTION_OBSERVER,
   SD_AD_CLICK_EXACTLY_ONCE,
   SD_AD_CLICK_STREAM_WINDOWS,
   SD_AUTOCOMPLETE_DATA_PIPELINE,

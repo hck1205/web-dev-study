@@ -28,4 +28,6 @@ export const mdxComponents: MDXComponents = {
   NetworkTopology,
   LoadingDemo,
   MotionDemo,
+  // 스크롤 패턴(sticky, scroll-snap, parallax …)도 MotionDemo의 장면이다. 글에서 이름이 더 잘 읽히도록 같은 컴포넌트를 이 이름으로도 연결한다
+  ScrollDemo: MotionDemo,
 };

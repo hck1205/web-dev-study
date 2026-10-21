@@ -1,0 +1,538 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("express-middleware");
+
+주문 API 서버가 하루에 몇 번씩 재시작된다. 컨테이너 재시작 횟수만 조용히 올라가고, 그때마다 몇 명의 요청이 응답 없이 끊긴다. 마지막 로그는 늘 같은 모양이다.
+
+```text
+async-err.js:8
+async function findOrder() { throw new Error("db connection refused"); }
+                                   ^
+
+Error: db connection refused
+    at findOrder (async-err.js:8:36)
+    at async-err.js:5:23
+    at Layer.handle [as handle_request] (node_modules/express/lib/router/layer.js:95:5)
+    ...
+
+Node.js v22.22.0
+```
+
+에러 처리 미들웨어는 분명히 등록해 두었다. DB가 잠깐 끊기면 500을 돌려주고 끝나야 할 일이 프로세스를 내렸다. 원인은 Express 4가 `async` 핸들러에서 던진 에러를 모른다는 데 있다. 이 글은 이 장면에서 출발해 요청 하나가 Express 미들웨어 줄을 어떻게 지나가는지, 그 줄의 순서와 경계에서 생기는 버그를 차례로 본다.
+
+`next()`를 잊거나 두 번 부를 때 생기는 일, 인자 4개짜리 에러 처리기가 따로 줄을 서는 원리는 [책임 연쇄 패턴 글](/posts/pattern-chain-of-responsibility#next를-잊거나-두-번-부르면)에서 실험과 함께 다뤘다. 여기서는 그걸 전제로 실제 서비스의 미들웨어 구성을 다룬다. Express 아래에서 Node.js가 요청을 어떻게 받는지는 [Node.js 서버 런타임 글](/posts/nodejs-server-runtime), 같은 서비스를 파이썬으로 만들면 무엇이 다른지는 [FastAPI 글](/posts/fastapi-basics)에 있다.
+
+실행 결과는 Node.js 22.22에서 Express 4.22.3과 5.3.0, zod 4.6.7로 직접 돌린 것이다. 출력의 긴 경로는 줄였다.
+
+## 요청이 지나가는 줄
+
+미들웨어는 `(req, res, next)`를 받는 함수다. 요청을 보고, 필요하면 `req`에 무언가를 붙이고, 응답하고 끝내거나 `next()`로 다음에 넘긴다. Express 앱은 이런 함수를 등록한 순서대로 늘어놓은 줄이다. 주문 서비스의 줄을 이렇게 짰다.
+
+```js
+const app = express();
+
+// 1. 요청 ID: 가장 먼저. 이후 모든 로그가 이 값을 쓴다
+app.use((req, res, next) => {
+  req.id = req.get("x-request-id") ?? randomUUID().slice(0, 8);
+  res.set("x-request-id", req.id);
+  next();
+});
+// 2. 접근 로그: 응답이 끝날 때 찍는다
+app.use((req, res, next) => {
+  const t0 = performance.now();
+  res.on("finish", () =>
+    console.log(`${req.id} ${req.method} ${req.originalUrl} ${res.statusCode} ${(performance.now() - t0).toFixed(1)}ms`));
+  next();
+});
+// 3. 본문 파싱
+app.use(express.json({ limit: "10kb" }));
+// 4~6. 인증 → 검증 → 핸들러
+app.post("/orders", auth, validate(CreateOrder), async (req, res) => {
+  res.status(201).json({ id: 42, ...req.body });
+});
+// 7. 404: 모든 라우트 뒤
+app.use((req, res) => res.status(404).json({ error: "not found" }));
+// 8. 에러 처리기: 맨 마지막, 인자 4개
+app.use((err, req, res, next) => {
+  console.log(`${req.id} error: ${err.message}`);
+  if (res.headersSent) return next(err);
+  res.status(err.status ?? 500).json({ error: err.status ? err.type : "internal", requestId: req.id });
+});
+```
+
+요청 다섯 개를 보냈다. 정상, 토큰 없음, 잘못된 값, 깨진 JSON, 없는 주소 순서다.
+
+```text
+{"id":42,"productId":"p-7","qty":2} -> 201
+{"error":"unauthorized"} -> 401
+{"error":"invalid","issues":["productId: Too small: expected string to have >=1 characters","qty: Invalid input: expected number, received string"]} -> 400
+{"error":"entity.parse.failed","requestId":"req-4"} -> 400
+{"error":"not found"} -> 404
+```
+
+서버 로그는 이렇다.
+
+```text
+req-1 POST /orders 201 12.2ms
+req-2 POST /orders 401 1.0ms
+req-3 POST /orders 400 3.0ms
+req-4 error: Expected double-quoted property name in JSON at position 19 (line 1 column 20)
+req-4 POST /orders 400 1.8ms
+req-5 GET /order 404 0.9ms
+```
+
+다섯 요청이 모두 같은 줄로 들어왔지만 빠져나간 자리가 다르다. 아래 그림에서 다음을 누르면 요청마다 어디서 멈췄는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="같은 줄, 다른 출구"
+  zones={[
+    { id: "common", label: "모든 요청", x: 8, y: 60, w: 384, h: 74, tone: "edge" },
+    { id: "route", label: "POST /orders", x: 8, y: 146, w: 384, h: 74, tone: "private" },
+    { id: "tail", label: "줄의 끝", x: 8, y: 232, w: 384, h: 62, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "c", label: "Client", x: 200, y: 26, icon: "client" },
+    { id: "rid", label: "reqId", x: 72, y: 100, icon: "switch" },
+    { id: "log", label: "logger", x: 200, y: 100, icon: "switch" },
+    { id: "json", label: "json()", x: 328, y: 100, icon: "switch" },
+    { id: "auth", label: "auth", x: 72, y: 186, icon: "lock" },
+    { id: "val", label: "validate", x: 200, y: 186, icon: "firewall" },
+    { id: "h", label: "handler", x: 328, y: 186, icon: "server" },
+    { id: "nf", label: "404", x: 120, y: 264, icon: "server" },
+    { id: "err", label: "error MW", x: 280, y: 264, icon: "server" },
+  ]}
+  links={[
+    { from: "c", to: "rid" },
+    { from: "rid", to: "log" },
+    { from: "log", to: "json" },
+    { from: "json", to: "auth" },
+    { from: "auth", to: "val" },
+    { from: "val", to: "h" },
+    { from: "json", to: "nf", dashed: true },
+    { from: "json", to: "err", dashed: true },
+  ]}
+  steps={[
+    { path: ["c", "rid", "log", "json", "auth", "val", "h"], packet: "req-1", title: "끝까지 간다", detail: "모든 미들웨어가 next()를 불렀다. 핸들러가 201로 응답한다.", payload: "req-1 POST /orders 201 12.2ms" },
+    { path: ["c", "rid", "log", "json", "auth"], packet: "req-2", blocked: true, title: "인증에서 끊긴다", detail: "auth가 401로 응답하고 next()를 부르지 않는다. 검증과 핸들러는 돌지 않는다." },
+    { path: ["c", "rid", "log", "json", "auth", "val"], packet: "req-3", blocked: true, title: "검증에서 끊긴다", detail: "qty가 문자열이다. validate가 400과 이유 목록을 돌려준다." },
+    { path: ["c", "rid", "log", "json", "err"], packet: "req-4", title: "파서가 next(err)를 부른다", detail: "JSON이 깨졌다. 남은 일반 미들웨어를 모두 건너뛰고 에러 처리기로 간다. 요청 ID는 이미 붙어 있다." },
+    { path: ["c", "rid", "log", "json", "nf"], packet: "req-5", title: "맞는 라우트가 없다", detail: "GET /order에 맞는 라우트가 없으니 줄 끝의 404 미들웨어까지 내려온다." },
+  ]}
+/>
+
+로그가 다섯 줄 모두 찍힌 데에 이유가 있다. 접근 로그를 `res.on("finish")`에 걸었기 때문이다. 미들웨어가 `next()` 뒤에 로그를 찍으면 응답이 비동기로 나가는 경우를 놓치고, 앞에서 끊긴 요청은 아예 로그가 없다. 응답이 실제로 끝나는 순간에 찍어야 401과 400도 남는다. Express에서 `next()`는 뒤쪽이 끝나기를 기다리지 않는다. Koa처럼 `await next()` 뒤에 코드를 쓰는 양파 구조가 아니라서, 응답 후 처리는 `res`의 이벤트로 건다.
+
+## 등록 순서가 곧 동작이다
+
+Express는 미들웨어를 등록한 순서대로 시험한다. 그래서 순서를 바꾸면 코드는 같아도 동작이 달라진다. 실무에서 자주 보는 순서 버그는 몇 가지 모양으로 정리된다.
+
+첫째, 본문 파서보다 먼저 등록한 라우트. 아래 `/early`는 `express.json()`보다 위에 있다.
+
+```js
+app.post("/early", (req, res) => res.json({ body: req.body ?? "undefined" })); // json 파서보다 먼저
+app.use(express.json());
+app.post("/orders", (req, res) => res.json({ body: req.body ?? "undefined" }));
+```
+
+```text
+registered before json(): {"body":"undefined"} -> 200
+json ok:          {"body":{"qty":2}} -> 200
+```
+
+같은 본문을 보냈는데 `/early`는 본문이 없다. 요청이 `/early`에 도착했을 때 파서는 아직 돌지 않았다. 라우터 파일을 따로 두고 `app.use("/api", router)`를 파서보다 위에 걸 때 똑같이 생긴다.
+
+둘째, 라우트보다 먼저 등록한 에러 처리기. 에러는 줄을 따라 아래로만 흐르기 때문에 위에 있는 에러 처리기는 절대 불리지 않는다.
+
+```js
+// 실수: 에러 처리기를 라우트보다 먼저 등록했다
+app.use((err, req, res, next) => res.status(500).json({ error: "internal" }));
+app.get("/boom", async () => { throw new Error("secret db host 10.0.3.7 refused"); });
+```
+
+에러는 Express의 기본 처리기(finalhandler)까지 내려간다. 기본 처리기는 `NODE_ENV`에 따라 응답이 다르다.
+
+```text
+=== NODE_ENV=development
+<pre>Error: secret db host 10.0.3.7 refused<br> &nbsp; &nbsp;at order.js:5:38<br> &nbsp; &nbsp;at Layer.han...
+=== NODE_ENV=production
+<pre>Internal Server Error</pre>
+```
+
+`NODE_ENV`를 설정하지 않으면 development로 취급한다. 그래서 컨테이너에 `NODE_ENV=production`을 빠뜨린 채 배포하면 스택 트레이스와 에러 메시지 속 내부 주소가 HTML로 사용자에게 나간다. 자기 에러 처리기를 맨 아래에 두고, 환경 변수도 확인한다.
+
+셋째, 범위가 너무 넓은 미들웨어. `app.use(auth)`를 맨 위에 두면 헬스 체크와 정적 파일까지 토큰을 요구한다. 로드 밸런서의 헬스 체크가 401을 받아 모든 인스턴스가 빠지는 장애로 이어진다. 인증은 라우터 단위(`router.use(auth)`)나 라우트 단위로 건다. 반대로 CORS 처리는 인증보다 앞에 있어야 한다. 브라우저의 사전 요청(OPTIONS)에는 토큰이 실리지 않기 때문이다. 이 부분은 [CORS 글](/posts/cors)에 자세히 있다.
+
+정리하면 순서의 뼈대는 이렇다. 요청 ID와 로그처럼 모든 요청에 필요한 것, 보안 헤더와 CORS, 본문 파서, 라우터별 인증과 검증, 핸들러, 404, 에러 처리기.
+
+## 라우트 한 줄 뜯어보기
+
+라우트 정의 한 줄에도 미들웨어 줄이 들어 있다. 경로 뒤에 넘긴 함수들이 그 경로에만 적용되는 작은 줄이 된다. 조각을 눌러 보면 각각이 무슨 일을 하는지 보인다.
+
+<UrlAnatomy
+  base="app.post"
+  separator="("
+  joiner=", "
+  caption="경로 뒤의 함수들은 이 라우트 전용 미들웨어다"
+  params={[
+    { key: "path", display: "\"/orders\"", title: "경로", description: "메서드와 경로가 둘 다 맞아야 이 줄로 들어온다. Express 5에서는 와일드카드를 *가 아니라 /*splat처럼 이름을 붙여 쓴다.", required: true },
+    { key: "auth", display: "auth", title: "인증", description: "토큰이 틀리면 401로 응답하고 끝낸다. 맞으면 req.user를 붙이고 next()를 부른다.", code: "if (!ok) return res.status(401).json(...)\nnext();" },
+    { key: "validate", display: "validate(CreateOrder)", title: "검증", description: "스키마를 받아 미들웨어를 돌려주는 함수다. 통과하면 req.body를 검증된 값으로 바꾼다. 모르는 필드는 버려진다." },
+    { key: "handler", display: "async (req, res) => {…}", title: "핸들러", description: "여기까지 왔다면 인증과 검증은 끝났다. 비즈니스 로직만 남는다. Express 5는 여기서 거부된 Promise를 에러 처리기로 넘긴다.", required: true },
+  ]}
+/>
+
+이렇게 나누면 핸들러가 짧아지고, 같은 검증을 여러 라우트가 재사용한다. 인증이 필요한 라우트를 하나씩 확인할 수 있다는 장점도 있다. 대신 미들웨어가 `req`에 붙이는 값(`req.user`, `req.id`)은 타입이 보장되지 않으니 TypeScript에서는 `Request` 타입을 확장해 둔다.
+
+## async 핸들러가 던진 에러
+
+처음 장면으로 돌아간다. 문제의 핸들러는 이렇게 생겼다.
+
+```js
+app.get("/orders/:id", async (req, res) => {
+  const order = await findOrder(req.params.id); // DB가 죽었다고 치자
+  res.json(order);
+});
+async function findOrder() { throw new Error("db connection refused"); }
+app.use((err, req, res, next) => {
+  console.log("error handler:", err.message);
+  res.status(500).json({ error: "internal" });
+});
+```
+
+같은 코드를 Express 4와 5에서 돌리고 요청을 두 번 보냈다.
+
+```text
+=== express4
+ -> HTTP 000          (curl exit 52: 응답 없이 연결이 끊김)
+second request -> HTTP 000   (curl exit 7: 접속 불가)
+server log: Error: db connection refused ... Node.js v22.22.0
+
+=== express5
+{"error":"internal"} -> HTTP 500
+second request -> HTTP 500
+server log:
+error handler: db connection refused
+error handler: db connection refused
+```
+
+Express 4에서는 첫 요청이 응답을 받지 못했고, 두 번째 요청은 접속조차 못 했다. 프로세스가 죽었기 때문이다. 에러 처리기는 한 번도 불리지 않았다.
+
+<SequenceDiagram
+  caption="Express 4는 핸들러의 반환값을 보지 않는다"
+  actors={[
+    { id: "c", label: "Client" },
+    { id: "r", label: "Router" },
+    { id: "h", label: "async 핸들러" },
+    { id: "p", label: "Node 프로세스" },
+  ]}
+  steps={[
+    { from: "c", to: "r", label: "GET /orders/1", title: "요청이 라우터에 온다", detail: "라우터는 try/catch로 핸들러를 감싸 부른다. 동기 throw라면 여기서 잡혀 에러 처리기로 간다." },
+    { from: "r", to: "h", label: "handle(req, res, next)", title: "핸들러가 Promise를 돌려준다", detail: "async 함수는 첫 await에서 바로 Promise를 반환한다. try/catch는 이미 아무 일 없이 끝났다." },
+    { from: "h", to: "h", label: "reject", title: "나중에 Promise가 거부된다", detail: "findOrder가 던진 에러로 Promise가 거부된다. Express 4는 이 Promise를 받아 두지 않았다." },
+    { from: "h", to: "p", label: "unhandledRejection", title: "아무도 처리하지 않은 거부", detail: "Node 15부터 처리되지 않은 거부의 기본 동작은 throw다. 프로세스가 종료 코드 1로 끝난다.", payload: "Error: db connection refused\n    at findOrder (async-err.js:8:36)" },
+    { from: "p", to: "c", label: "connection reset", title: "응답 없이 끊긴다", detail: "이 요청뿐 아니라 같은 프로세스에서 처리 중이던 다른 요청도 모두 끊긴다. Express 5는 거부를 받아 next(err)로 넘겨 500이 나간다." },
+  ]}
+/>
+
+Express 4 라우터는 핸들러를 `try { fn(req, res, next) } catch (err) { next(err) }`로 부른다. 동기 코드에서 던진 에러는 이걸로 잡힌다. 그런데 `async` 함수는 에러를 던지지 않고 거부된 Promise를 돌려준다. Express 4는 반환값을 보지 않으니 거부는 공중에 뜬다. Node.js 15부터 처리되지 않은 거부는 기본으로 프로세스를 끝낸다(`--unhandled-rejections=throw`). 그 전 버전에서는 경고만 찍고 요청이 응답 없이 매달렸다. 어느 쪽이든 사용자는 응답을 못 받는다.
+
+Express 5는 핸들러가 Promise를 돌려주면 거부됐을 때 `next(err)`를 대신 불러 준다. 그래서 같은 코드가 500으로 끝난다. Express 4를 계속 써야 한다면 핸들러를 감싸는 함수를 쓴다.
+
+```js
+// Express 4: 거부된 Promise를 next로 넘기는 래퍼
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+app.get("/orders/:id", wrap(async (req, res) => {
+  res.json(await findOrder(req.params.id));
+}));
+```
+
+래퍼를 하나라도 빠뜨리면 그 라우트에서 같은 장애가 난다. 그래서 `express-async-errors`처럼 라우터를 패치하는 패키지를 쓰는 팀도 있지만, 지금은 Express 5로 올리는 게 가장 확실하다. 5.0은 2024년 가을에 나왔고, 2025년 봄 5.1부터 npm의 기본 버전이 됐다.
+
+주의할 곳이 하나 남는다. Express 5도 핸들러가 돌려준 Promise만 본다. 핸들러 안에서 `setTimeout`이나 이벤트 콜백 안에서 던진 에러는 여전히 잡지 못한다. 콜백 API는 Promise로 감싸서 `await`하는 습관이 필요하다. 그리고 `process.on("unhandledRejection")`에서 로그만 찍고 프로세스를 계속 살려 두는 건 피한다. 상태가 어떻게 깨졌는지 모르는 프로세스로 요청을 계속 받게 된다. 로그를 남기고 정상 종료 절차를 밟는 편이 낫다.
+
+## 본문은 의심하면서 읽는다
+
+`express.json()`은 세 가지를 검사한다. `Content-Type`이 JSON인지, 길이가 한도(`limit`, 기본 100kb) 안인지, 파싱이 되는지. 여섯 가지 요청을 Express 4와 5에 보냈다.
+
+```text
+=== express4
+json ok:          {"body":{"qty":2}} -> 200
+form (curl -d):   {"body":{}} -> 200
+text/plain:       {"body":{}} -> 200
+broken json:      {"error":"entity.parse.failed"} -> 400
+150KB body:       {"error":"entity.too.large"} -> 413
+=== express5
+json ok:          {"body":{"qty":2}} -> 200
+form (curl -d):   {"body":"undefined"} -> 200
+text/plain:       {"body":"undefined"} -> 200
+broken json:      {"error":"entity.parse.failed"} -> 400
+150KB body:       {"error":"entity.too.large"} -> 413
+```
+
+`Content-Type`이 JSON이 아니면 파서는 본문을 건드리지 않고 그냥 넘긴다. 에러가 아니다. Express 4는 이때 `req.body`가 빈 객체 `{}`이고, Express 5는 `undefined`다. 그래서 Express 5로 올린 뒤 `req.body.qty`에서 `TypeError: Cannot read properties of undefined`가 나는 경우가 있다. 클라이언트가 헤더를 빠뜨린 것인데 서버에서는 500으로 보인다. 검증 미들웨어가 `req.body`가 객체인지부터 확인하면 400으로 바뀐다.
+
+깨진 JSON과 큰 본문은 파서가 `next(err)`를 부른다. 에러 객체에는 `status`(400, 413)와 `type`(`entity.parse.failed`, `entity.too.large`)이 붙어 있어서, 에러 처리기에서 이 값을 그대로 쓰면 된다. 위 주문 서버의 에러 처리기가 `err.status ?? 500`을 쓴 이유다.
+
+한도는 엔드포인트마다 다르게 잡는다. 주문 생성 본문은 몇 KB면 충분하니 `10kb`로 줄였다. 파일 업로드처럼 큰 본문이 필요한 곳만 그 라우터에 따로 큰 한도를 준다. 한도를 전역으로 `50mb`처럼 키우면 큰 JSON 하나를 파싱하는 동안 이벤트 루프가 막힌다. 앞단의 nginx에도 `client_max_body_size`(기본 1m)가 있어서, 앱의 한도를 올렸는데도 413이 난다면 nginx가 먼저 막은 것이다. 이때는 응답 본문이 JSON이 아니라 nginx의 HTML 페이지라서 구분이 된다.
+
+## 검증은 핸들러 앞에서 한 번
+
+검증을 핸들러 안에 흩어 두면 빠지는 곳이 생긴다. 스키마를 미들웨어로 만들어 라우트 앞에 둔다.
+
+```js
+const CreateOrder = z.object({
+  productId: z.string().min(1),
+  qty: z.number().int().positive().max(100),
+});
+const validate = (schema) => (req, res, next) => {
+  const r = schema.safeParse(req.body);
+  if (!r.success)
+    return res.status(400).json({ error: "invalid", issues: r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) });
+  req.body = r.data; // 검증을 통과한 값으로 바꿔 끼운다
+  next();
+};
+```
+
+`req.body = r.data`가 중요한 줄이다. 클라이언트가 스키마에 없는 필드를 섞어 보내 봤다.
+
+```bash
+curl -s localhost:17523/orders -H 'authorization: Bearer t0k3n' -H 'content-type: application/json' \
+  -d '{"productId":"p-7","qty":2,"price":0,"isAdmin":true}'
+```
+
+```text
+{"id":42,"productId":"p-7","qty":2} -> 201
+```
+
+`price`와 `isAdmin`이 사라졌다. zod의 `z.object`는 모르는 키를 기본으로 버린다. 원본 `req.body`를 그대로 DB에 넣는 코드였다면 가격을 0으로 바꾸거나 관리자 권한을 얻는 요청이 통과했을 것이다. 이런 공격을 매스 어사인먼트(mass assignment)라고 부른다. 검증한 값만 다음 단계로 넘기면 이 구멍이 닫힌다.
+
+검증 실패에 400을 쓸지 422를 쓸지는 팀마다 다르다. 형식이 깨진 요청은 400, 형식은 맞는데 값이 규칙에 어긋나면 422로 나누는 쪽도 있다. 중요한 건 한 서비스 안에서 일관되게 쓰고, 어느 필드가 왜 틀렸는지를 응답에 담는 것이다. 응답 모양을 정하는 법은 [REST API 설계 글](/posts/rest-api-design)에 있다.
+
+## 응답은 한 번만 보낸다
+
+자주 보는 로그가 하나 있다. 재고 조회 핸들러에서 `return`을 빠뜨렸다.
+
+```js
+app.get("/stock/:id", async (req, res) => {
+  if (req.params.id === "0") {
+    res.status(404).json({ error: "no such product" }); // return을 빠뜨렸다
+  }
+  const stock = await Promise.resolve(3);
+  res.json({ id: req.params.id, stock });
+});
+```
+
+```text
+{"error":"no such product"} -> 404
+error handler: ERR_HTTP_HEADERS_SENT | headersSent = true
+Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers after they are sent to the client
+    at ServerResponse.setHeader (node:_http_outgoing:700:11)
+    at ServerResponse.json (express/lib/response.js:249:15)
+    at twice.js:8:7
+```
+
+클라이언트는 404를 정상적으로 받았다. 그런데 코드는 계속 내려가 `res.json`을 한 번 더 불렀고, 이미 나간 헤더를 다시 쓰려다 에러가 났다. 사용자에게는 문제가 없어 보여서 오래 방치되기 쉽다. 하지만 두 번째 `res.json` 전에 DB를 고치는 코드가 있었다면 "없는 상품"이라고 답해 놓고 재고를 바꾸는 일이 생긴다.
+
+에러 처리기에 `if (res.headersSent) return next(err)`를 둔 이유도 이것이다. 응답이 이미 나가기 시작한 뒤에 에러가 나면 상태 코드를 바꿀 수 없다. 그때는 Express 기본 처리기에 넘기면 연결을 닫아 클라이언트가 응답이 잘렸다는 걸 알게 한다. 응답하는 줄에는 `return res.status(...).json(...)`처럼 `return`을 붙이는 습관이 가장 싸다.
+
+## 끄는 것도 요청 처리다
+
+배포할 때마다 몇 건씩 502가 난다면 서버가 꺼지는 방식을 본다. 2초 걸리는 `/slow` 요청을 처리하는 도중에 `SIGTERM`을 보냈다. 처음은 아무 처리도 하지 않은 서버, 다음은 정상 종료 처리를 넣은 서버다.
+
+```js
+process.on("SIGTERM", () => {
+  const t0 = Date.now();
+  console.log("SIGTERM: stop accepting new connections");
+  server.close((err) => {
+    console.log(`all connections closed after ${Date.now() - t0}ms`);
+    process.exit(err ? 1 : 0);
+  });
+  setTimeout(() => {
+    console.log("still busy after 10s, forcing exit");
+    process.exit(1);
+  }, 10_000).unref();
+});
+```
+
+```text
+=== plain
+ -> in-flight: curl exit 52        (0.3초 만에 응답 없이 끊김)
+ -> new request: curl exit 7
+server exit code 143
+
+=== graceful
+ -> new request: curl exit 7
+{"ok":true} -> in-flight 200 after 2.011599s
+server exit code 0
+SIGTERM: stop accepting new connections
+all connections closed after 1724ms
+```
+
+핸들러가 없으면 `SIGTERM`의 기본 동작대로 프로세스가 즉시 죽는다. 종료 코드 143은 128 + 15(SIGTERM)다. 처리 중이던 결제 승인 요청은 응답을 받지 못했다. 정상 종료 쪽은 새 연결을 바로 거절하면서도 처리 중이던 요청을 끝까지 마쳤고, 1.7초 뒤에 스스로 종료 코드 0으로 끝났다.
+
+<AlgoTrace
+  caption="server.close()는 문을 닫고 안에 있는 손님을 기다린다"
+  memoryLabel="열려 있는 연결"
+  cells={["SIGTERM", "listen 닫기", "처리 중 대기", "놀던 연결 닫기", "exit 0"]}
+  steps={[
+    { pointer: 0, memory: ["/slow (처리 중)", "keep-alive (놀고 있음)"], caption: "SIGTERM이 온다. 연결 하나는 일하는 중이고 하나는 다음 요청을 기다리며 놀고 있다." },
+    { pointer: 1, memory: ["/slow (처리 중)", "keep-alive (놀고 있음)"], caption: "server.close()가 리슨 소켓을 닫는다. 이제 새 연결은 ECONNREFUSED다." },
+    { pointer: 3, memory: ["/slow (처리 중)"], caption: "Node 19부터 close()가 놀고 있는 keep-alive 연결도 바로 닫는다." },
+    { pointer: 2, memory: ["/slow (처리 중)"], caption: "처리 중인 요청은 끝까지 기다린다. 강제 종료 타이머 10초가 안전장치다." },
+    { pointer: 4, found: [4], memory: [], caption: "마지막 응답이 나가고 연결이 닫히면 close 콜백이 불린다. 종료 코드 0으로 끝난다." },
+  ]}
+/>
+
+놀고 있는 keep-alive 연결이 어떻게 되는지도 봤다. 300ms마다 같은 연결로 요청하는 클라이언트를 붙이고 1초쯤에 `SIGTERM`을 보냈다.
+
+```text
+13ms req1 200 connection=keep-alive socket#1
+306ms req2 200 connection=keep-alive socket#1
+609ms req3 200 connection=keep-alive socket#1
+908ms req4 200 connection=keep-alive socket#1
+1208ms req5 ECONNREFUSED
+1508ms req6 ECONNREFUSED
+```
+
+Node 22의 `server.close()`는 놀고 있던 연결을 바로 닫고 프로세스가 끝났다. Node 18 이하에서는 `close()`가 놀고 있는 연결을 닫지 않아서, keep-alive 연결 하나 때문에 프로세스가 `keepAliveTimeout`이 지날 때까지 안 꺼지는 일이 흔했다. 그 버전에서는 `server.closeIdleConnections()`를 같이 불러야 한다.
+
+그런데 위 출력의 req5와 req6이 실제 배포에서 생기는 502다. 쿠버네티스는 Pod에 `SIGTERM`을 보내는 일과 Service의 엔드포인트에서 Pod를 빼는 일을 동시에 시작한다. 엔드포인트 변경이 kube-proxy나 로드 밸런서에 퍼지는 데 몇 초가 걸리고, 그동안 요청이 이미 문을 닫은 서버로 계속 온다.
+
+<SequenceDiagram
+  caption="SIGTERM과 엔드포인트 제거는 동시에 시작한다"
+  actors={[
+    { id: "lb", label: "LB" },
+    { id: "k8s", label: "kubelet" },
+    { id: "app", label: "Express" },
+  ]}
+  steps={[
+    { from: "k8s", to: "app", label: "SIGTERM", title: "종료 신호가 간다", detail: "같은 순간 컨트롤 플레인은 이 Pod를 엔드포인트에서 빼기 시작한다. 퍼지는 데는 시간이 든다." },
+    { from: "app", to: "app", label: "server.close()", title: "앱이 바로 문을 닫는다", detail: "핸들러가 신호를 받자마자 리슨 소켓을 닫았다." },
+    { from: "lb", to: "app", label: "GET /orders", title: "LB는 아직 모른다", detail: "엔드포인트 목록이 아직 갱신되지 않았다. 새 요청이 닫힌 포트로 온다.", payload: "ECONNREFUSED → 502" },
+    { from: "app", to: "app", label: "sleep 5s 먼저", title: "고치는 법: 먼저 기다린다", detail: "preStop 훅에서 몇 초 기다리거나, SIGTERM을 받으면 readiness를 503으로 바꾸고 몇 초 뒤에 close()를 부른다." },
+    { from: "lb", to: "app", label: "트래픽 없음", title: "그다음에 닫는다", detail: "LB가 Pod를 뺀 뒤에 close()가 불리니 거절되는 요청이 없다. 남은 요청은 끝까지 처리된다." },
+  ]}
+/>
+
+정리하면 Express 앱의 종료 순서는 이렇다. `SIGTERM`을 받으면 readiness를 실패로 바꾸고 몇 초 기다린다. 그다음 `server.close()`로 새 연결을 막고 처리 중인 요청을 마친다. DB 풀과 메시지 큐 연결을 닫는다. 정해 둔 시간이 지나면 강제로 끝낸다. 이 시간은 쿠버네티스의 `terminationGracePeriodSeconds`(기본 30초)보다 짧아야 한다. 아니면 `SIGKILL`이 먼저 온다. preStop 훅과 종료 순서의 자세한 흐름은 [Pod 생명주기 글](/posts/k8s-pod-lifecycle#prestop에-sleep을-두는-이유), 컨테이너의 PID 1이 시그널을 넘기지 않는 문제(`npm start`로 띄우면 `SIGTERM`이 node까지 안 가는 경우)는 [프로세스와 시그널 글](/posts/linux-processes-signals)에 있다.
+
+## 4에서 5로 옮길 때 바뀌는 것
+
+앞에서 본 차이들을 포함해서, 옮길 때 실제로 부딪히는 것만 모았다.
+
+```js
+try { app.get("*", handler); } catch (e) { console.log(e.message); }
+app.get("/q", (req, res) => res.json(req.query));
+// GET /q?filter[status]=paid&tag=a&tag=b
+```
+
+```text
+express4 req.query = {"filter":{"status":"paid"},"tag":["a","b"]}
+express5 app.get("*") -> PathError: Missing parameter name at index 1: *; visit https://git.new/pathToRegexpError for info
+express5 req.query = {"filter[status]":"paid","tag":["a","b"]}
+```
+
+- 거부된 Promise를 에러 처리기로 넘긴다. 래퍼를 지워도 된다
+- 경로 문법이 바뀌었다. `*`만 쓰면 앱이 뜰 때 바로 에러가 난다. `/*splat`처럼 이름을 붙이고, 선택 구간은 `?` 대신 `{/:id}`처럼 중괄호로 쓴다
+- `req.query`의 기본 파서가 `simple`로 바뀌었다. `filter[status]=paid`가 더 이상 중첩 객체가 되지 않는다. 필요하면 `app.set("query parser", "extended")`로 되돌린다
+- 본문 파서가 처리하지 않은 요청의 `req.body`가 `{}`에서 `undefined`로 바뀌었다
+- Node.js 18 이상이 필요하다
+
+경로 문법은 뜨는 순간 실패해서 금방 찾지만, `req.query`와 `req.body` 변화는 특정 요청에서만 드러난다. 쿼리 문자열로 필터를 받는 API가 있다면 옮기기 전에 그 엔드포인트의 테스트부터 확인한다.
+
+아래에서 Express의 두 줄 규칙을 직접 구현해 보자. 미들웨어 목록을 데이터로 받는다. `kind`가 `"normal"`이면 일반 미들웨어, `"error"`면 인자 4개짜리 에러 처리기다. `does`는 그 미들웨어가 하는 일로, `"next"`는 넘기기(에러 처리기라면 받은 에러를 그대로 `next(err)`), `"respond"`는 응답하고 끝내기, `"fail"`은 `next(err)` 부르기다. 들른 미들웨어 이름과 최종 응답한 곳을 돌려준다. 끝까지 아무도 응답하지 않으면 에러가 있을 때 `"finalhandler 500"`, 없을 때 `"finalhandler 404"`다.
+
+<CodePlayground
+  caption="Express 미들웨어 디스패처"
+  functionName="runStack"
+  initialCode={`function runStack(stack) {
+  const visited = [];
+  // 에러가 없으면 normal만, 에러가 있으면 error만 실행한다
+  return { visited, result: "finalhandler 404" };
+}`}
+  solution={`function runStack(stack) {
+  const visited = [];
+  let err = null;
+  for (const mw of stack) {
+    // 지금 줄에 맞지 않는 미들웨어는 건너뛴다
+    if ((mw.kind === "error") !== (err !== null)) continue;
+    visited.push(mw.name);
+    if (mw.does === "respond") return { visited, result: mw.name };
+    if (mw.does === "fail") err = mw.name;
+  }
+  return { visited, result: err ? "finalhandler 500" : "finalhandler 404" };
+}`}
+  tests={[
+    {
+      label: "인증에서 끊긴다",
+      args: [[{ name: "reqId", kind: "normal", does: "next" }, { name: "auth", kind: "normal", does: "respond" }, { name: "handler", kind: "normal", does: "respond" }]],
+      expected: { visited: ["reqId", "auth"], result: "auth" },
+    },
+    {
+      label: "파서 실패는 에러 줄로",
+      args: [[{ name: "reqId", kind: "normal", does: "next" }, { name: "json", kind: "normal", does: "fail" }, { name: "auth", kind: "normal", does: "next" }, { name: "handler", kind: "normal", does: "respond" }, { name: "notFound", kind: "normal", does: "respond" }, { name: "errLog", kind: "error", does: "next" }, { name: "errRes", kind: "error", does: "respond" }]],
+      expected: { visited: ["reqId", "json", "errLog", "errRes"], result: "errRes" },
+    },
+    {
+      label: "맞는 라우트가 없다",
+      args: [[{ name: "reqId", kind: "normal", does: "next" }, { name: "errRes", kind: "error", does: "respond" }]],
+      expected: { visited: ["reqId"], result: "finalhandler 404" },
+    },
+    {
+      label: "에러 처리기를 위에 둔 순서 버그",
+      args: [[{ name: "errRes", kind: "error", does: "respond" }, { name: "handler", kind: "normal", does: "fail" }]],
+      expected: { visited: ["handler"], result: "finalhandler 500" },
+    },
+    {
+      label: "로그만 하고 넘기는 에러 처리기",
+      args: [[{ name: "a", kind: "normal", does: "fail" }, { name: "errLog", kind: "error", does: "next" }]],
+      expected: { visited: ["a", "errLog"], result: "finalhandler 500" },
+    },
+    {
+      label: "핸들러가 응답하면 404는 돌지 않는다",
+      args: [[{ name: "reqId", kind: "normal", does: "next" }, { name: "handler", kind: "normal", does: "respond" }, { name: "notFound", kind: "normal", does: "respond" }]],
+      expected: { visited: ["reqId", "handler"], result: "handler" },
+    },
+  ]}
+/>
+
+## 미들웨어 줄을 다시 보면
+
+Express 앱은 등록한 순서대로 늘어선 함수의 줄이고, 요청은 그 줄을 위에서 아래로 지나가다 누군가 응답하면 멈춘다. 에러는 따로 난 아래쪽 줄로만 흐른다. 그래서 순서가 곧 동작이다. 파서는 본문을 읽는 라우트보다 위에, 에러 처리기는 맨 아래에 둔다. 처음 장면의 재시작은 Express 4가 `async` 핸들러의 거부를 보지 못해서 생겼고, Express 5로 올리거나 래퍼로 감싸면 사라진다. 본문은 한도와 형식을 검사한 뒤 검증한 값만 넘기고, 응답은 `return`과 함께 한 번만 보내고, 끌 때는 먼저 트래픽이 빠지길 기다린다. 같은 서비스를 FastAPI로 옮기면 이 일들이 어디로 가는지는 [FastAPI 글](/posts/fastapi-basics)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### Express 미들웨어는 어떤 순서로 실행되나요?
+
+등록한 순서대로 실행된다. 각 미들웨어는 응답하고 끝내거나 `next()`로 다음에 넘긴다. 경로가 맞지 않는 라우트는 건너뛰고, 아무도 응답하지 않고 줄 끝에 닿으면 기본 처리기가 404를 보낸다. 그래서 공통 처리(요청 ID, 로그, CORS, 본문 파서)를 위에, 404와 에러 처리기를 맨 아래에 둔다.
+
+### 에러 처리 미들웨어는 일반 미들웨어와 어떻게 구분되나요?
+
+인자가 4개(`err, req, res, next`)인 함수가 에러 처리기다. Express가 함수의 `length`로 구분한다. `next(err)`가 불리면 남은 일반 미들웨어를 건너뛰고 그 아래의 에러 처리기로 간다. 에러는 아래로만 흐르기 때문에 라우트보다 위에 등록한 에러 처리기는 불리지 않는다.
+
+### Express 4에서 async 핸들러가 에러를 던지면 어떻게 되나요?
+
+에러 처리기로 가지 않는다. Express 4는 핸들러를 try/catch로 감싸 부르지만, async 함수는 거부된 Promise를 돌려줄 뿐 던지지 않는다. Express 4는 반환값을 보지 않으니 처리되지 않은 거부가 되고, Node 15 이상에서는 프로세스가 종료된다. 래퍼로 `.catch(next)`를 붙이거나 거부를 직접 처리하는 Express 5로 올린다.
+
+### Express 5에서도 잡히지 않는 비동기 에러가 있나요?
+
+있다. Express 5는 핸들러가 돌려준 Promise의 거부만 처리한다. `setTimeout`, 이벤트 리스너, 콜백 API 안에서 던진 에러는 그 Promise와 상관이 없어서 잡히지 않는다. 콜백 API는 Promise로 감싸서 `await`하고, 그래도 놓친 에러는 `uncaughtException` 로그를 남긴 뒤 프로세스를 정상 종료시키는 편이 안전하다.
+
+### req.body가 undefined로 나옵니다. 무엇을 확인하나요?
+
+세 가지를 본다. 본문 파서가 그 라우트보다 먼저 등록됐는지, 클라이언트가 `Content-Type: application/json`을 보냈는지, Express 5인지다. 파서는 타입이 맞지 않으면 에러 없이 건너뛰고, Express 5에서는 이때 `req.body`가 `undefined`다. Express 4에서는 `{}`라서 같은 실수가 조용히 숨는다.
+
+### 요청 본문 크기 제한은 왜 필요하고 어디에 거나요?
+
+큰 본문은 메모리를 쓰고, JSON 파싱 동안 이벤트 루프를 막는다. `express.json({ limit })`으로 엔드포인트 성격에 맞게 작게 걸고, 넘으면 413이 나간다. 앞단 nginx의 `client_max_body_size`도 함께 맞춘다. 업로드처럼 큰 본문이 필요한 곳만 따로 큰 한도를 주거나 스트리밍으로 받는다.
+
+### "Cannot set headers after they are sent" 에러는 왜 나나요?
+
+응답을 이미 보낸 뒤에 다시 응답하려고 했기 때문이다. 흔한 원인은 응답한 줄에 `return`이 없어서 코드가 계속 내려가는 경우, 그리고 응답한 뒤에 `next()`나 `next(err)`를 부르는 경우다. 사용자는 첫 응답을 정상으로 받기 때문에 놓치기 쉽지만, 두 번째 응답 전의 부수 효과는 실제로 실행된다. 에러 처리기에서는 `res.headersSent`를 확인하고 이미 보냈으면 기본 처리기로 넘긴다.
+
+### Express 서버의 graceful shutdown은 어떻게 구현하나요?
+
+`SIGTERM`을 받으면 readiness를 실패로 바꾸고 로드 밸런서가 트래픽을 뺄 몇 초를 기다린다. 그다음 `server.close()`로 새 연결을 막고 처리 중인 요청을 끝까지 마친 뒤, DB와 큐 연결을 닫고 종료한다. 정해 둔 시간을 넘기면 강제로 끝내되, 그 시간은 `terminationGracePeriodSeconds`보다 짧게 잡는다. 기다리지 않고 바로 닫으면 엔드포인트가 갱신되기 전 몇 초 동안 들어온 요청이 502가 된다.

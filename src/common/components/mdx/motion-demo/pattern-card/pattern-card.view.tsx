@@ -7,6 +7,7 @@ import { MARQUEE_ITEMS, RIPPLE_TAPS, STAGGER_GAP_MS, STAGGER_ROWS, during, swing
 import { useFlip } from "./hooks/use-flip";
 import { angleFromPointer, useTilt } from "./hooks/use-tilt";
 import { usePatternCard } from "./pattern-card";
+import { SCROLL_SCENES } from "./scroll-scenes";
 import {
   AppIcon,
   Avatar,
@@ -314,6 +315,7 @@ const SCENES: Record<MotionPattern, (props: SceneProps) => ReactNode> = {
   "path-draw": PathDrawScene,
   marquee: MarqueeScene,
   tilt: TiltScene,
+  ...SCROLL_SCENES,
 };
 
 export function PatternCard(props: PatternCardProps) {
