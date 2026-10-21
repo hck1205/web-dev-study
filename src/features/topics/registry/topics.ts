@@ -23,6 +23,7 @@ export const TOPICS: Topic[] = [
         description: "서버 애플리케이션, API 설계",
         children: [
           { id: "api", label: "API Design", description: "페이지네이션, 멱등성, 속도 제한, 배치 처리" },
+          { id: "architecture", label: "Architecture", description: "모놀리스, 마이크로서비스, 레이어드, 헥사고날, CQRS, 이벤트 소싱" },
           { id: "auth", label: "Auth", description: "로그인, 세션, 토큰, 권한 위임" },
           { id: "messaging", label: "Messaging", description: "이벤트 기반 구조, Kafka, RabbitMQ, 전달 보장" },
         ],
@@ -67,7 +68,19 @@ export const TOPICS: Topic[] = [
         description: "브라우저, 렌더링, React · Next.js",
         children: [
           { id: "architecture", label: "Architecture", description: "프런트엔드 구조 설계, 마이크로 프런트엔드" },
-          { id: "javascript", label: "JavaScript", description: "언어와 런타임, 이벤트 루프, 메모리" },
+          {
+            id: "javascript",
+            label: "JavaScript",
+            description: "언어와 런타임, 이벤트 루프, 메모리",
+            children: [
+              { id: "basics", label: "Basics", description: "변수, 스코프, 호이스팅, 타입, 비교" },
+              { id: "functions", label: "Functions", description: "함수 형태, 클로저, 고차 함수, 커링, 메모이제이션" },
+              { id: "objects", label: "Objects & Arrays", description: "배열 메서드, 구조 분해, 복사와 불변성, 최신 문법" },
+              { id: "oop", label: "this & OOP", description: "this, call·apply·bind, 프로토타입, 클래스, strict mode" },
+              { id: "async", label: "Async", description: "콜백, Promise, async/await, 실행 순서" },
+              { id: "browser", label: "Browser & DOM", description: "DOM, 이벤트 전파와 위임, 디바운스, 저장소" },
+            ],
+          },
           { id: "performance", label: "Performance", description: "웹 성능 지표, 로딩·렌더링 최적화" },
           { id: "react", label: "React", description: "렌더링 모델, 상태, 렌더링 전략" },
           { id: "rendering", label: "Rendering", description: "CSR, SSR, SSG·ISR, 하이드레이션, 스트리밍, 서버 컴포넌트" },
@@ -131,7 +144,15 @@ export const TOPICS: Topic[] = [
         ],
       },
       { id: "security", label: "Security", description: "웹 보안, 브라우저 보안 정책, 공격과 방어" },
-      { id: "system-design", label: "System Design", description: "대규모 시스템 설계" },
+      {
+        id: "system-design",
+        label: "System Design",
+        description: "대규모 시스템 설계",
+        children: [
+          { id: "fundamentals", label: "기초부터 차근차근", description: "서버 한 대에서 수백만 사용자까지, 어림 계산, 면접 진행법" },
+          { id: "case-studies", label: "설계 사례", description: "URL 단축기, 채팅, 뉴스 피드, 결제, 증권 거래소 같은 실제 시스템을 처음부터 설계하기" },
+        ],
+      },
       { id: "ui-ux", label: "UI/UX", description: "사용자가 기다리고 고르고 되돌리는 순간의 화면 설계" },
     ],
   },

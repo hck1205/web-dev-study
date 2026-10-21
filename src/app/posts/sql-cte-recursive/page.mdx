@@ -1,0 +1,645 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-cte-recursive");
+
+강의 상세 화면에 "이 강의를 들으려면 먼저 들어야 하는 강의"를 모두 보여 달라는 요청을 받았다. 선수 강의 관계는 `course_prereqs`라는 표에 한 줄씩 들어 있다. 바로 위 단계는 조인 한 번으로 나온다. 그런데 선수 강의에도 선수 강의가 있다. 조인을 한 번 더 붙이면 두 단계까지 나오고, 세 단계짜리가 생기면 또 붙여야 한다. 몇 단계가 될지는 데이터가 정한다.
+
+SQL에서 "끝날 때까지 따라가기"를 쓰는 표준 방법이 재귀 CTE(`WITH RECURSIVE`)다. 조직도를 재귀 CTE로 그리는 기본 문법과 `SEARCH` 절은 [SQLD 계층형 쿼리 글](/posts/sqld-top-n-hierarchical-pivot#postgresql과-sql-server는-재귀-cte로-쓴다)에서 다뤘다. 이 글은 그 다음 질문을 본다. 트리가 아니라 한 강의에 여러 길로 닿는 그래프일 때 무엇이 겹치는지, 데이터에 고리가 생기면 왜 쿼리가 끝나지 않는지, 재귀 쪽에 왜 집계나 `LEFT JOIN`을 못 쓰는지, 20만 개짜리 트리에서 인덱스 하나가 실행 시간을 얼마나 바꾸는지다. 재귀가 아닌 `WITH`가 실행 계획에 녹아드는 방식(PostgreSQL 12의 인라인 변화)은 [PostgreSQL다운 SQL 글](/posts/postgres-advanced-sql#cte가-최적화를-막던-시절)에 있어서 여기서는 그 글에 없는 함정 하나만 짚는다.
+
+데이터는 [SELECT의 논리적 처리 순서](/posts/sql-logical-order)부터 [CASE WHEN 글](/posts/sql-case-when)까지 이어 온 강의 사이트(`students`, `courses`, `enrollments`, `payments`)다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고 출력은 모두 실제로 돌린 결과다. MySQL 8과의 차이는 문서로 확인해 짧게 적는다.
+
+## 선수 강의는 몇 단계일지 모른다
+
+강의 다섯 개에 프로젝트 강의 하나를 더하고, 선수 강의 표를 만든다.
+
+```sql
+INSERT INTO courses (title, category, price) VALUES ('백엔드 실전', 'project', 120000);
+
+CREATE TABLE course_prereqs (
+  course_id integer NOT NULL REFERENCES courses (id),  -- 이 강의를 들으려면
+  prereq_id integer NOT NULL REFERENCES courses (id),  -- 먼저 들어야 하는 강의
+  PRIMARY KEY (course_id, prereq_id)
+);
+
+INSERT INTO course_prereqs VALUES
+  (2, 1),                  -- PostgreSQL 튜닝 ← SQL 기초
+  (3, 5),                  -- React 입문 ← Git
+  (4, 5),                  -- Docker 실전 ← Git
+  (6, 2), (6, 3), (6, 4);  -- 백엔드 실전 ← 튜닝, React, Docker
+
+SELECT id, title, price FROM courses ORDER BY id;
+```
+
+```text
+ id |      title      | price
+----+-----------------+--------
+  1 | SQL 기초        |  30000
+  2 | PostgreSQL 튜닝 |  90000
+  3 | React 입문      |  50000
+  4 | Docker 실전     |  70000
+  5 | 100% 실습 Git   |  20000
+  6 | 백엔드 실전     | 120000
+(6 rows)
+```
+
+한 강의에 선수 강의가 여럿일 수 있고, 한 강의가 여러 강의의 선수 강의일 수도 있다. 부모가 하나뿐인 조직도와 다르다. Git은 React와 Docker 양쪽의 선수 강의라서 백엔드 실전에서 출발하면 두 길로 닿는다. 아래 그림의 화살표가 "먼저 들어야 한다"는 방향이다.
+
+<ConceptDiagram
+  caption="백엔드 실전에서 출발하면 Git에 두 길로 닿는다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "c6", label: "백엔드 실전", sub: "id 6", x: 200, y: 36, w: 120 },
+    { id: "c2", label: "PG 튜닝", sub: "id 2", x: 70, y: 125, w: 100 },
+    { id: "c3", label: "React 입문", sub: "id 3", x: 200, y: 125, w: 100 },
+    { id: "c4", label: "Docker 실전", sub: "id 4", x: 330, y: 125, w: 104 },
+    { id: "c1", label: "SQL 기초", sub: "id 1", x: 70, y: 214, w: 100 },
+    { id: "c5", label: "Git", sub: "id 5", x: 265, y: 214, w: 100 },
+  ]}
+  edges={[
+    { from: "c6", to: "c2" },
+    { from: "c6", to: "c3" },
+    { from: "c6", to: "c4" },
+    { from: "c2", to: "c1" },
+    { from: "c3", to: "c5" },
+    { from: "c4", to: "c5" },
+  ]}
+/>
+
+셀프 조인으로는 깊이를 쿼리에 박아야 한다. 두 단계까지 써 본다.
+
+```sql
+SELECT p1.prereq_id AS lvl1, p2.prereq_id AS lvl2
+FROM course_prereqs p1
+LEFT JOIN course_prereqs p2 ON p2.course_id = p1.prereq_id   -- 한 단계 더
+WHERE p1.course_id = 6
+ORDER BY 1, 2;
+```
+
+```text
+ lvl1 | lvl2
+------+------
+    2 |    1
+    3 |    5
+    4 |    5
+(3 rows)
+```
+
+지금은 맞다. SQL 기초에 선수 강의가 생기는 날 이 쿼리는 아무 에러 없이 한 단계를 빠뜨린다. 단계 수를 데이터에 맡기려면 쿼리가 스스로 반복해야 한다.
+
+## WITH 하나는 이름 붙인 중간 결과다
+
+재귀로 가기 전에 보통의 `WITH`부터 짚는다. `WITH 이름 AS (쿼리)`는 그 문장 안에서만 쓰는 임시 결과에 이름을 붙인다. PostgreSQL 12부터는 한 번만 참조되는 `WITH`를 바깥 쿼리에 녹여 넣고, 두 번 이상 참조되면 한 번 계산해 저장해 둔다(materialize). 강의별 수강 건수가 가장 많은 강의를 찾는 쿼리로 확인한다.
+
+```sql
+WITH per_course AS (
+  SELECT course_id, count(*) AS n FROM enrollments GROUP BY course_id
+)
+SELECT a.course_id, a.n FROM per_course a
+WHERE a.n = (SELECT max(n) FROM per_course);   -- per_course를 두 번 쓴다
+```
+
+```text
+ course_id | n
+-----------+---
+         3 | 3
+         1 | 3
+(2 rows)
+```
+
+`EXPLAIN`을 붙이면 두 번 참조한 `per_course`가 `CTE per_course` 아래에서 한 번만 계산되고, 그 결과를 `CTE Scan`이 두 번 읽는다.
+
+```text
+ CTE Scan on per_course a
+   Filter: (n = $1)
+   CTE per_course
+     ->  HashAggregate
+           Group Key: enrollments.course_id
+           ->  Seq Scan on enrollments
+   InitPlan 2 (returns $1)
+     ->  Aggregate
+           ->  CTE Scan on per_course
+```
+
+`AS NOT MATERIALIZED`로 쓰면 저장하지 않고 두 자리에 각각 녹여 넣는다. 같은 쿼리의 계획이 이렇게 바뀐다.
+
+```text
+ HashAggregate
+   Group Key: enrollments.course_id
+   Filter: (count(*) = $0)
+   InitPlan 1 (returns $0)
+     ->  Aggregate
+           ->  HashAggregate
+                 Group Key: enrollments_1.course_id
+                 ->  Seq Scan on enrollments enrollments_1
+   ->  Seq Scan on enrollments
+```
+
+`enrollments`를 두 번 읽는 대신 바깥 조건을 안으로 밀어 넣을 기회가 생긴다. 어느 쪽이 빠른지는 데이터 크기에 달려 있어서 `EXPLAIN ANALYZE`로 둘 다 재 본다.
+
+여기서 하나 놓치기 쉬운 것이 있다. `NOT MATERIALIZED`는 부탁이지 명령이 아니다. 안에 `random()`처럼 부를 때마다 값이 바뀌는 함수(volatile 함수)가 있으면 PostgreSQL은 이 지시를 무시하고 한 번만 계산한다.
+
+```sql
+WITH pick AS NOT MATERIALIZED (
+  SELECT id FROM students ORDER BY random() LIMIT 1    -- 무작위로 한 명
+)
+SELECT (SELECT id FROM pick) AS first, (SELECT id FROM pick) AS second;
+```
+
+```text
+ first | second
+-------+--------
+     2 |      2
+(1 row)
+```
+
+몇 번을 돌려도 두 값은 늘 같다. 계획에 `CTE pick`이 따로 있고 `CTE Scan on pick`이 두 번 나온다. 한 문장 안에서 같은 무작위 값을 두 번 쓰고 싶다면 이 동작이 오히려 맞다. 반대로 매번 다른 값을 기대했다면 `WITH`가 아니라 서브쿼리를 두 번 쓴다.
+
+## 재귀 CTE는 새 행이 없을 때까지 같은 쿼리를 돈다
+
+이제 선수 강의를 끝까지 따라간다. 출발점인 강의 6을 앵커(처음 한 번 도는 쿼리)로 두고, `UNION ALL` 아래의 재귀 쿼리가 방금 찾은 강의의 선수 강의를 찾는다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id, 0 AS depth                     -- 앵커: 출발 강의
+  FROM courses WHERE id = 6
+  UNION ALL
+  SELECT p.prereq_id, n.depth + 1           -- 재귀: 방금 찾은 강의의 선수 강의
+  FROM need n
+  JOIN course_prereqs p ON p.course_id = n.id
+)
+SELECT n.id, c.title, n.depth
+FROM need n JOIN courses c ON c.id = n.id
+ORDER BY n.depth, n.id;
+```
+
+```text
+ id |      title      | depth
+----+-----------------+-------
+  6 | 백엔드 실전     |     0
+  2 | PostgreSQL 튜닝 |     1
+  3 | React 입문      |     1
+  4 | Docker 실전     |     1
+  1 | SQL 기초        |     2
+  5 | 100% 실습 Git   |     2
+  5 | 100% 실습 Git   |     2
+(7 rows)
+```
+
+깊이를 적지 않았는데 두 단계까지 다 나왔다. Git이 두 번 나온 건 다음 절에서 본다. 아래 조각을 누르면 이 문장의 각 부분이 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="재귀 CTE 한 문장을 조각으로 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "with", display: "WITH RECURSIVE need AS (", title: "자기 이름을 안에서 쓴다", description: "RECURSIVE가 있어야 괄호 안에서 need를 참조할 수 있다. 하나라도 재귀 CTE가 있으면 WITH 바로 뒤에 한 번만 쓴다.", required: true },
+    { key: "anchor", display: "SELECT id, 0 ...", title: "앵커", description: "처음 한 번만 돈다. 결과에 들어가고, 첫 반복의 입력이 된다. 컬럼 개수와 타입이 여기서 정해진다.", required: true },
+    { key: "union", display: "UNION ALL", title: "합치는 방식", description: "UNION ALL은 나온 행을 모두 쌓는다. UNION은 이미 나온 행과 같은 행을 버리고, 버린 행은 다음 반복에도 넘기지 않는다.", required: true },
+    { key: "rec", display: "SELECT ... FROM need n JOIN ...", title: "재귀 쿼리", description: "여기의 need는 지금까지의 전체 결과가 아니라 바로 앞 반복에서 새로 나온 행만 가리킨다. 이 집합을 작업 테이블이라고 부른다.", required: true },
+    { key: "close", display: ")", title: "끝나는 조건", description: "재귀 쿼리가 0행을 내면 멈춘다. 따로 종료 조건을 적는 곳은 없다. 데이터가 끝나야 끝난다." },
+  ]}
+/>
+
+PostgreSQL 문서는 이 반복을 작업 테이블(working table)과 중간 테이블(intermediate table) 두 개로 설명한다. 앵커 결과를 결과와 작업 테이블에 넣는다. 재귀 쿼리를 돌릴 때 `need`는 작업 테이블을 읽는다. 새로 나온 행을 결과에 더하고, 작업 테이블을 그 새 행들로 바꾼다. 새 행이 0개면 끝난다. 아래 그림에서 다음을 누르면 작업 테이블이 반복마다 어떻게 바뀌는지 보인다.
+
+<AlgoTrace
+  caption="작업 테이블에는 직전 반복에서 새로 나온 행만 남는다"
+  cells={["6 백엔드", "2 튜닝", "3 React", "4 Docker", "1 SQL", "5 Git"]}
+  memoryLabel="작업 테이블"
+  steps={[
+    { pointer: 0, found: [0], memory: ["6"], caption: "앵커가 강의 6 한 줄을 만든다. 결과에도 넣고 작업 테이블에도 넣는다." },
+    { pointer: 1, found: [0, 1, 2, 3], memory: ["2", "3", "4"], caption: "1회차: 작업 테이블의 6과 조인해 2, 3, 4를 찾는다. 결과에 더하고 작업 테이블을 이 셋으로 바꾼다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4, 5], memory: ["1", "5", "5"], caption: "2회차: 2에서 1, 3에서 5, 4에서 또 5가 나온다. UNION ALL은 중복을 버리지 않아 5가 두 번 들어간다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "3회차: 1과 5에는 선수 강의가 없다. 0행이 나와 반복이 끝난다. 결과는 1 + 3 + 3 = 7행이다." },
+  ]}
+/>
+
+재귀 쿼리는 전체 결과를 다시 보지 않는다. 그래서 같은 행을 다시 만들지 않는 한 반복은 데이터의 깊이만큼만 돈다. 반대로 같은 행이 다시 나오면, 이를 막을 장치가 없는 한 계속 돈다.
+
+## 두 길로 닿은 강의는 두 번 나온다
+
+위 결과에서 Git이 두 번 나왔다. React를 거쳐 한 번, Docker를 거쳐 한 번이다. 이대로 수강료 합계를 내면 Git 값이 두 번 더해진다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id FROM courses WHERE id = 6
+  UNION ALL
+  SELECT p.prereq_id FROM need n JOIN course_prereqs p ON p.course_id = n.id
+)
+SELECT count(*) AS courses, sum(c.price) AS total
+FROM need n JOIN courses c ON c.id = n.id;
+```
+
+```text
+ courses | total
+---------+--------
+       7 | 400000
+(1 row)
+```
+
+`UNION ALL`을 `UNION`으로 바꾸면 이미 결과에 있는 행과 같은 행은 버리고, 버린 행은 다음 반복으로 넘기지도 않는다.
+
+```text
+ courses | total
+---------+--------
+       6 | 380000
+(1 row)
+```
+
+여섯 강의, 38만 원이 맞다. 조인 결과에서 행이 곱해지는 문제와 뿌리가 같다. [조인 실전 글](/posts/sql-joins-in-practice#행이-곱해지는-자리를-숫자로-찾는다)에서 본 것처럼, 합계를 내기 전에 행 수부터 센다.
+
+`UNION`이 중복을 거르는 기준은 행 전체다. 컬럼에 `depth`나 경로처럼 길마다 달라지는 값이 있으면 같은 강의라도 다른 행이 되어 걸러지지 않는다. 지금 데이터에서는 Git이 두 길 모두 깊이 2라서 우연히 걸러지지만, 백엔드 실전이 Git을 직접 선수 강의로 두면 깊이 1과 2인 Git이 둘 다 남는다. 강의 목록만 필요하면 재귀 안에서는 `id`만 들고 다니고, 깊이는 바깥에서 `min(depth)`로 따로 구한다.
+
+## 고리 하나가 쿼리를 끝나지 않게 한다
+
+관리 화면에서 누군가 실수로 "Git을 들으려면 백엔드 실전을 먼저 들어야 한다"를 넣었다. 6 → 4 → 5 → 6으로 고리가 생긴다.
+
+```sql
+INSERT INTO course_prereqs VALUES (5, 6);   -- 실수: Git ← 백엔드 실전
+
+SET statement_timeout = '2s';               -- 이 세션에서 2초를 넘는 문장은 끊는다
+
+WITH RECURSIVE need AS (
+  SELECT prereq_id, 1 AS depth FROM course_prereqs WHERE course_id = 6
+  UNION ALL
+  SELECT p.prereq_id, n.depth + 1 FROM course_prereqs p JOIN need n ON p.course_id = n.prereq_id
+)
+SELECT count(*) FROM need;
+```
+
+```text
+ERROR:  canceling statement due to statement timeout
+```
+
+`UNION ALL`은 고리를 돌 때마다 같은 강의를 새 행으로 만들어서 작업 테이블이 비지 않는다. 타임아웃이 없었다면 메모리와 임시 파일을 쓰며 계속 돈다. 같은 쿼리를 `UNION`으로 바꾸고 `depth`를 빼면 끝난다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT prereq_id FROM course_prereqs WHERE course_id = 6
+  UNION
+  SELECT p.prereq_id FROM course_prereqs p JOIN need n ON p.course_id = n.prereq_id
+)
+SELECT * FROM need ORDER BY 1;
+```
+
+```text
+ prereq_id
+-----------
+         1
+         2
+         3
+         4
+         5
+         6
+(6 rows)
+```
+
+고리를 한 바퀴 돌고 나면 새 행이 없어서 멈췄다. 결과에 6이 들어 있다는 것, 즉 "백엔드 실전의 선수 강의에 백엔드 실전이 있다"가 데이터가 잘못됐다는 신호다. 그런데 여기에 `depth`를 다시 넣으면 `UNION`이어도 다시 2초 뒤에 끊긴다. 바퀴마다 깊이가 1씩 늘어 매번 새로운 행이 되기 때문이다.
+
+PostgreSQL 14부터는 표준의 `CYCLE` 절로 고리를 직접 잡는다. `CYCLE id SET is_cycle USING path`는 지나온 `id`를 `path` 배열에 쌓고, 지금 행의 `id`가 이미 `path`에 있으면 `is_cycle`을 참으로 두고 그 행에서 더 나가지 않는다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id, 0 AS depth FROM courses WHERE id = 6
+  UNION ALL
+  SELECT p.prereq_id, n.depth + 1
+  FROM need n JOIN course_prereqs p ON p.course_id = n.id
+) CYCLE id SET is_cycle USING path
+SELECT id, depth, is_cycle, path FROM need ORDER BY depth, path;
+```
+
+```text
+ id | depth | is_cycle |       path
+----+-------+----------+-------------------
+  6 |     0 | f        | {(6)}
+  2 |     1 | f        | {(6),(2)}
+  3 |     1 | f        | {(6),(3)}
+  4 |     1 | f        | {(6),(4)}
+  1 |     2 | f        | {(6),(2),(1)}
+  5 |     2 | f        | {(6),(3),(5)}
+  5 |     2 | f        | {(6),(4),(5)}
+  6 |     3 | t        | {(6),(3),(5),(6)}
+  6 |     3 | t        | {(6),(4),(5),(6)}
+(9 rows)
+```
+
+`WHERE is_cycle`로 거르면 고리를 이루는 길만 남는다. 운영에서는 이 쿼리를 데이터 검사용으로 돌려 두면 잘못 들어간 관계를 바로 찾는다. 아래 그림에서 다음을 누르면 `CYCLE` 절이 어느 시점에 멈추는지 보인다.
+
+<SequenceDiagram
+  caption="CYCLE 절은 경로에 이미 있는 강의를 만나면 그 길을 닫는다"
+  actors={[
+    { id: "work", label: "작업 테이블" },
+    { id: "edge", label: "course_prereqs" },
+    { id: "check", label: "CYCLE 검사" },
+  ]}
+  steps={[
+    { from: "work", to: "edge", label: "6", title: "출발", detail: "앵커가 6을 넣는다. path는 {6}이다." },
+    { from: "edge", to: "check", label: "2, 3, 4", title: "1회차", detail: "6의 선수 강의 셋이 나온다. path에 없으니 통과하고 path가 하나씩 길어진다." },
+    { from: "edge", to: "check", label: "1, 5, 5", title: "2회차", detail: "Git은 두 길로 와서 두 줄이다. 길마다 path가 달라서 둘 다 통과한다." },
+    { from: "edge", to: "check", label: "6, 6", title: "3회차", detail: "잘못 넣은 (5, 6) 때문에 Git에서 다시 6이 나온다." },
+    { from: "check", to: "check", label: "6 ∈ path", title: "고리를 찾았다", detail: "두 줄 모두 path에 6이 이미 있다. is_cycle을 참으로 두고 결과에는 남긴다.", payload: "{(6),(4),(5),(6)}" },
+    { from: "check", to: "work", label: "0행", title: "더 나가지 않는다", detail: "is_cycle인 행은 다음 반복에 넘기지 않는다. 작업 테이블이 비어서 끝난다. UNION ALL만 있었다면 여기서 6 → 2, 3, 4로 다시 돈다." },
+  ]}
+/>
+
+<Callout kind="warning">
+재귀 CTE를 사용자 입력이나 관리 화면에서 바뀌는 데이터 위에 돌린다면 끝나지 않는 경우를 먼저 막는다. `CYCLE` 절(14 이상)을 쓰거나, 재귀 쪽에 `WHERE n.depth < 20` 같은 깊이 제한을 두고, 애플리케이션 계정에 `statement_timeout`을 걸어 둔다. PostgreSQL에는 MySQL의 `cte_max_recursion_depth`(기본 1000) 같은 반복 횟수 제한이 없다.
+</Callout>
+
+`CYCLE`이 쓰는 `path`는 행마다 배열을 하나씩 들고 다녀서 깊고 넓은 그래프에서는 메모리를 쓴다. 고리가 생길 수 없게 쓰기 쪽에서 막을 수 있다면 그편이 낫다. 확인한 다음 잘못 넣은 행은 지운다.
+
+```sql
+DELETE FROM course_prereqs WHERE course_id = 5 AND prereq_id = 6;
+```
+
+## 재귀 쪽에 쓸 수 없는 문법
+
+재귀 쿼리를 쓰다 보면 처음 보는 에러를 몇 번 만난다. 전부 "재귀 쪽은 작업 테이블의 행을 하나씩 받아 새 행을 만든다"는 규칙에서 나온다.
+
+반복마다 강의 하나만 고르려고 재귀 쪽에 집계를 넣으면 막힌다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id, 0 AS depth FROM courses WHERE id = 6
+  UNION ALL
+  SELECT max(p.prereq_id), n.depth + 1
+  FROM need n JOIN course_prereqs p ON p.course_id = n.id
+  GROUP BY n.depth
+)
+SELECT * FROM need;
+```
+
+```text
+ERROR:  aggregate functions are not allowed in a recursive query's recursive term
+LINE 4:   SELECT max(p.prereq_id), n.depth + 1
+                 ^
+```
+
+선수 강의가 없는 강의도 남기려고 `LEFT JOIN`의 오른쪽에 `need`를 두거나, `IN (SELECT ... FROM need)`처럼 서브쿼리 안에 넣거나, 한 재귀 쪽에서 `need`를 두 번 조인해도 각각 막힌다.
+
+```text
+ERROR:  recursive reference to query "need" must not appear within an outer join
+ERROR:  recursive reference to query "need" must not appear within a subquery
+ERROR:  recursive reference to query "need" must not appear more than once
+```
+
+`LEFT JOIN`도 `need`를 왼쪽에 두고 `need n LEFT JOIN course_prereqs p`로 쓰면 문법은 통한다. 다만 짝이 없는 행이 NULL과 함께 다시 작업 테이블에 들어가니 다음 반복에서 걸러 내야 한다. 집계와 정렬은 재귀가 끝난 바깥 쿼리에서 한다.
+
+타입도 앵커가 정한다. 할인된 누적 금액을 들고 다니려고 앵커에 `0`을 두면 이렇게 된다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id, 0 AS total FROM courses WHERE id = 6
+  UNION ALL
+  SELECT p.prereq_id, n.total + c.price * 0.9
+  FROM need n
+  JOIN course_prereqs p ON p.course_id = n.id
+  JOIN courses c ON c.id = p.prereq_id
+)
+SELECT * FROM need;
+```
+
+```text
+ERROR:  recursive query "need" column 2 has type integer in non-recursive term but type numeric overall
+LINE 2:   SELECT id, 0 AS total FROM courses WHERE id = 6
+                     ^
+HINT:  Cast the output of the non-recursive term to the correct type.
+```
+
+`0`은 `integer`인데 `price * 0.9`는 `numeric`이다. 힌트대로 앵커에서 `0::numeric`으로 맞추면 돈다. 경로를 문자열로 쌓을 때 `varchar(n)`로 시작해도 같은 에러가 난다. 앵커 쪽 타입을 넉넉하게 잡는다.
+
+## 거꾸로 따라가기와 이미 들은 강의 빼기
+
+조인 방향만 바꾸면 반대 질문이 된다. "Git을 들으면 어떤 강의가 열리나"는 `prereq_id`로 찾아 `course_id`를 내놓는다.
+
+```sql
+WITH RECURSIVE unlock AS (
+  SELECT id, 0 AS depth FROM courses WHERE id = 5
+  UNION ALL
+  SELECT p.course_id, u.depth + 1
+  FROM unlock u JOIN course_prereqs p ON p.prereq_id = u.id   -- 방향이 반대
+)
+SELECT u.id, c.title, u.depth FROM unlock u JOIN courses c ON c.id = u.id ORDER BY u.depth, u.id;
+```
+
+```text
+ id |     title     | depth
+----+---------------+-------
+  5 | 100% 실습 Git |     0
+  3 | React 입문    |     1
+  4 | Docker 실전   |     1
+  6 | 백엔드 실전   |     2
+  6 | 백엔드 실전   |     2
+(5 rows)
+```
+
+여기서도 백엔드 실전이 두 번이다. 그래프에서는 어느 방향으로 가든 여러 길이 한곳에 모일 수 있다.
+
+화면에 실제로 필요한 건 "kim이 아직 안 들은 선수 강의"였다. 재귀로 후보를 만들고 바깥에서 [안티 조인](/posts/sql-joins-in-practice#짝이-없는-행을-찾는-세-가지-모양)으로 뺀다. 재귀 쪽에는 조건을 넣지 않는다. kim이 들은 강의에서 멈추면 그 강의의 선수 강의까지 사라지기 때문이다.
+
+```sql
+WITH RECURSIVE need AS (
+  SELECT id FROM courses WHERE id = 6
+  UNION
+  SELECT p.prereq_id FROM need n JOIN course_prereqs p ON p.course_id = n.id
+)
+SELECT n.id, c.title
+FROM need n JOIN courses c ON c.id = n.id
+WHERE n.id <> 6
+  AND NOT EXISTS (SELECT 1 FROM enrollments e          -- kim(1)이 끝낸 강의는 뺀다
+                  WHERE e.student_id = 1 AND e.course_id = n.id AND e.status = 'completed')
+ORDER BY n.id;
+```
+
+```text
+ id |     title
+----+---------------
+  3 | React 입문
+  4 | Docker 실전
+  5 | 100% 실습 Git
+(3 rows)
+```
+
+kim은 SQL 기초와 PostgreSQL 튜닝을 끝냈으니 남은 건 셋이다. React 입문은 수강 중(`active`)이라 아직 남는다.
+
+## 20만 개 트리에서 반복마다 읽는 양
+
+재귀 CTE의 성능은 반복 횟수 × 반복 한 번의 비용이다. 반복 한 번은 작업 테이블과 원본 테이블의 조인인데, 원본 쪽에 인덱스가 없으면 반복마다 테이블 전체를 읽는다. 강의 분류 트리를 20만 개로 만들어 확인한다. 노드마다 자식이 다섯 개다.
+
+```sql
+CREATE TABLE categories (
+  id        integer PRIMARY KEY,
+  parent_id integer REFERENCES categories (id),
+  name      text NOT NULL
+);
+-- 1번이 뿌리, i번의 부모는 (i + 3) / 5번 → 자식이 5개씩
+INSERT INTO categories
+SELECT i, CASE WHEN i = 1 THEN NULL ELSE (i + 3) / 5 END, 'cat' || i
+FROM generate_series(1, 200000) AS i;
+VACUUM ANALYZE categories;
+```
+
+외래 키를 걸어도 PostgreSQL은 참조하는 쪽(`parent_id`)에 인덱스를 자동으로 만들지 않는다. 40번 분류 아래를 모두 세어 본다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+WITH RECURSIVE sub AS (
+  SELECT id, 0 AS depth FROM categories WHERE id = 40
+  UNION ALL
+  SELECT c.id, s.depth + 1 FROM sub s JOIN categories c ON c.parent_id = s.id
+)
+SELECT count(*), max(depth) FROM sub;
+```
+
+```text
+ Aggregate (actual time=185.975..185.981 rows=1 loops=1)
+   Buffers: shared hit=7594
+   CTE sub
+     ->  Recursive Union (actual time=0.019..184.621 rows=3906 loops=1)
+           ->  Index Only Scan using categories_pkey on categories (actual time=0.016..0.018 rows=1 loops=1)
+                 Index Cond: (id = 40)
+           ->  Hash Join (actual time=8.779..30.651 rows=651 loops=6)
+                 Hash Cond: (c.parent_id = s.id)
+                 ->  Seq Scan on categories c (actual time=0.003..14.168 rows=200000 loops=6)
+                 ->  Hash (actual time=0.155..0.156 rows=651 loops=6)
+                       ->  WorkTable Scan on sub s (actual time=0.003..0.053 rows=651 loops=6)
+ Execution Time: 186.168 ms
+```
+
+읽는 법은 이렇다. `Recursive Union`의 첫 자식이 앵커, 둘째 자식이 재귀 쪽이다. 재귀 쪽 줄의 `loops=6`이 반복 횟수(다섯 단계 + 빈 결과를 확인한 마지막 한 번)이고, `rows=651`은 반복당 평균이다. 3906행을 찾으려고 `Seq Scan`이 20만 행을 여섯 번, 120만 행을 읽었다. 인덱스를 만든다.
+
+```sql
+CREATE INDEX categories_parent_idx ON categories (parent_id);
+```
+
+```text
+ Aggregate (actual time=5.620..5.622 rows=1 loops=1)
+   Buffers: shared hit=8603 read=14
+   CTE sub
+     ->  Recursive Union (actual time=0.016..4.558 rows=3906 loops=1)
+           ->  Index Only Scan using categories_pkey on categories (actual time=0.014..0.015 rows=1 loops=1)
+                 Index Cond: (id = 40)
+           ->  Nested Loop (actual time=0.379..0.675 rows=651 loops=6)
+                 ->  WorkTable Scan on sub s (actual time=0.000..0.034 rows=651 loops=6)
+                 ->  Index Scan using categories_parent_idx on categories c (actual time=0.001..0.001 rows=1 loops=3906)
+                       Index Cond: (parent_id = s.id)
+ Execution Time: 5.688 ms
+```
+
+186ms가 5.7ms가 됐다. 이제 작업 테이블의 행마다 인덱스로 자식만 찾는다(`loops=3906`). 버퍼 수는 오히려 조금 늘었는데, 행마다 인덱스를 따로 타서 같은 페이지를 여러 번 세기 때문이다. 찾는 범위가 트리의 대부분이면 `Seq Scan` 쪽이 이길 수도 있다. 아래 그림에서 다음을 누르면 두 계획이 반복마다 어디를 읽는지 보인다.
+
+<NetworkTopology
+  caption="재귀 쪽 조인은 반복마다 다시 실행된다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "anchor", label: "앵커", sub: "pkey, id = 40", x: 60, y: 45, icon: "db", w: 96 },
+    { id: "ru", label: "Recursive Union", x: 200, y: 45, w: 130 },
+    { id: "wt", label: "WorkTable", sub: "직전 반복의 행", x: 200, y: 130, w: 110 },
+    { id: "join", label: "조인", x: 200, y: 205, w: 70 },
+    { id: "heap", label: "categories", sub: "Seq Scan 20만 행", x: 70, y: 205, icon: "db", w: 110 },
+    { id: "idx", label: "parent_idx", sub: "Index Scan", x: 330, y: 205, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "anchor", to: "ru" },
+    { from: "ru", to: "wt" },
+    { from: "wt", to: "join" },
+    { from: "join", to: "heap" },
+    { from: "join", to: "idx", dashed: true },
+  ]}
+  steps={[
+    { path: ["anchor", "ru"], packet: "1행", title: "앵커는 한 번", detail: "기본 키로 40번 한 행을 찾는다. 이후로는 다시 돌지 않는다." },
+    { path: ["ru", "wt", "join"], packet: "5행", title: "작업 테이블이 조인으로", detail: "직전 반복에서 나온 행이 조인의 한쪽이 된다. 반복마다 5, 25, 125, 625, 3125행으로 늘어난다." },
+    { path: ["join", "heap"], packet: "Seq Scan", highlight: ["heap"], title: "인덱스가 없으면 전체를 읽는다", detail: "parent_id에 인덱스가 없어 반복마다 20만 행을 다 읽고 해시로 맞춘다. 여섯 번이면 120만 행이다.", payload: "Seq Scan ... rows=200000 loops=6" },
+    { path: ["join", "idx"], packet: "parent_id = ?", highlight: ["idx"], title: "인덱스가 있으면 자식만", detail: "작업 테이블의 행마다 인덱스에서 자식 다섯 개만 찾는다. 186ms가 5.7ms가 됐다.", payload: "Index Scan ... loops=3906" },
+    { path: ["join", "ru"], packet: "0행", title: "빈 반복에서 끝난다", detail: "잎 노드의 자식을 찾는 마지막 반복이 0행을 내면 Recursive Union이 멈춘다." },
+  ]}
+/>
+
+재귀 쿼리가 느리다는 제보를 받으면 계획에서 재귀 쪽 조인 아래의 스캔 방식과 `loops`부터 본다. 조인 컬럼(`parent_id`, `course_id`, `prereq_id`처럼 재귀 쪽 `ON`에 나오는 컬럼)에 인덱스가 있는지가 대부분을 정한다. `course_prereqs`의 기본 키 `(course_id, prereq_id)`는 아래로 내려가는 방향에는 쓰이지만, 거꾸로 올라가는 `prereq_id = ?`에는 맨 앞 컬럼이 아니라서 쓰이지 않는다. 양방향으로 따라간다면 `(prereq_id, course_id)` 인덱스를 하나 더 둔다.
+
+## 트리를 저장하는 다른 방법
+
+지금까지 쓴 "부모 id를 컬럼에 적는" 방식을 인접 리스트(adjacency list)라고 한다. 쓰기는 한 줄이고 읽기는 재귀다. 읽기가 훨씬 많고 트리가 깊다면 저장 방식을 바꾸는 선택지도 있다.
+
+| 방식 | 저장하는 것 | 하위 전체 읽기 | 노드 옮기기 |
+|---|---|---|---|
+| 인접 리스트 | 부모 id 하나 | 재귀 CTE | 한 줄 수정 |
+| 경로 열거 (`ltree`) | `1.2.7.36` 같은 전체 경로 | `path <@ '1.2'`, GiST 인덱스 | 하위 전체의 경로 수정 |
+| 클로저 테이블 | 조상-자손 쌍 전부 | 조인 한 번 | 쌍을 지우고 다시 넣기 |
+| 중첩 집합 | 왼쪽·오른쪽 번호 | 범위 조건 한 번 | 절반 가까운 행의 번호 수정 |
+
+`ltree`는 PostgreSQL에 같이 들어 있는 확장(`CREATE EXTENSION ltree`)이다. 클로저 테이블은 그래프(부모가 여럿)에도 쓸 수 있지만 행 수가 노드 수 × 평균 깊이만큼 늘어난다. 메뉴나 카테고리처럼 수천 개 수준이면 인접 리스트와 인덱스면 충분하다. 수백만 노드에서 하위 전체를 자주 읽는데 구조는 거의 안 바뀐다면 그때 다른 방식을 따져 본다.
+
+MySQL은 8.0부터 `WITH RECURSIVE`를 지원한다. 반복 횟수가 `cte_max_recursion_depth`(기본 1000)를 넘으면 에러로 멈추고, `CYCLE`과 `SEARCH` 절은 없어서 고리는 경로 문자열을 들고 다니며 직접 막는다.
+
+## 재귀를 손으로 돌려 보기
+
+작업 테이블 반복을 자바스크립트로 짜 본다. `[강의, 선수 강의]` 쌍의 목록과 출발 강의를 받아서, 한 단계 이상 따라가 닿는 모든 강의를 오름차순 배열로 돌려준다. `UNION`처럼 이미 찾은 강의는 다시 작업 목록에 넣지 않아야 고리가 있어도 끝난다. 고리 때문에 출발 강의로 되돌아오면 출발 강의도 결과에 넣는다. 첫 테스트는 본문의 선수 강의 표이고, 셋째 테스트는 실수로 넣은 `(5, 6)`이 있는 경우다.
+
+<CodePlayground
+  caption="작업 테이블로 선수 강의 모두 찾기"
+  functionName="allPrereqs"
+  initialCode={`function allPrereqs(edges, start) {
+  // edges: [[course_id, prereq_id], ...]
+  return [];
+}`}
+  solution={`function allPrereqs(edges, start) {
+  const found = new Set();
+  let work = [start];                       // 앵커
+  while (work.length > 0) {                 // 작업 테이블이 빌 때까지
+    const next = [];
+    for (const id of work) {
+      for (const [course, prereq] of edges) {
+        if (course === id && !found.has(prereq)) {   // UNION: 이미 나온 행은 버린다
+          found.add(prereq);
+          next.push(prereq);
+        }
+      }
+    }
+    work = next;                            // 새로 나온 행만 다음 반복으로
+  }
+  return [...found].sort((a, b) => a - b);
+}`}
+  tests={[
+    { label: "백엔드 실전(6)", args: [[[2, 1], [3, 5], [4, 5], [6, 2], [6, 3], [6, 4]], 6], expected: [1, 2, 3, 4, 5] },
+    { label: "선수 강의 없음", args: [[[2, 1], [3, 5], [4, 5], [6, 2], [6, 3], [6, 4]], 5], expected: [] },
+    { label: "고리가 생긴 데이터", args: [[[2, 1], [3, 5], [4, 5], [6, 2], [6, 3], [6, 4], [5, 6]], 6], expected: [1, 2, 3, 4, 5, 6] },
+    { label: "세 개짜리 고리", args: [[[1, 2], [2, 3], [3, 1]], 1], expected: [1, 2, 3] },
+  ]}
+/>
+
+## 멈추는 조건은 데이터가 정한다
+
+재귀 CTE는 앵커를 한 번 돌리고, 직전 반복에서 새로 나온 행만 재귀 쿼리에 넣는 일을 0행이 나올 때까지 되풀이한다. 그래서 종료는 데이터에 달려 있다. 여러 길로 닿는 그래프에서는 같은 행이 겹치고(`UNION`이나 바깥 `DISTINCT`로 거른다), 고리가 있으면 끝나지 않는다(`CYCLE` 절, 깊이 제한, `statement_timeout`). 느리다면 재귀 쪽 조인 컬럼의 인덱스와 `loops`를 본다. 결과를 순위나 누적 합계로 다듬는 일은 [PostgreSQL 윈도우 함수 글](/posts/sql-window-functions-pg)에서, 이 결과를 이름 붙여 저장해 두는 일은 [뷰와 머티리얼라이즈드 뷰 글](/posts/sql-views-materialized)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### CTE(WITH 절)는 무엇이고 서브쿼리와 무엇이 다른가요?
+
+문장 안에서만 쓰는 임시 결과에 이름을 붙이는 문법입니다. 서브쿼리를 안쪽으로 겹치는 대신 위에서 아래로 읽히게 쓸 수 있고, 같은 결과를 여러 번 참조할 수 있습니다. PostgreSQL 12부터 한 번만 참조하는 CTE는 서브쿼리처럼 바깥 쿼리에 녹아들고, 두 번 이상 참조하면 한 번 계산해 저장합니다. `MATERIALIZED`, `NOT MATERIALIZED`로 이 선택을 바꿀 수 있지만, 안에 volatile 함수가 있으면 `NOT MATERIALIZED`는 무시됩니다.
+
+### 재귀 CTE는 어떻게 실행되나요?
+
+앵커 쿼리를 한 번 돌려 결과와 작업 테이블에 넣고, 재귀 쿼리가 작업 테이블만 읽어 새 행을 만드는 일을 0행이 나올 때까지 반복합니다. 재귀 쿼리 안의 CTE 이름은 전체 결과가 아니라 직전 반복에서 새로 나온 행을 가리킵니다. 별도의 종료 조건 문법은 없어서 데이터가 끝나야 끝납니다.
+
+### 재귀 CTE에서 UNION과 UNION ALL은 어떻게 다른가요?
+
+`UNION ALL`은 나온 행을 모두 쌓고, `UNION`은 이미 결과에 있는 행과 같은 행을 버리고 다음 반복에도 넘기지 않습니다. 여러 길로 같은 노드에 닿는 그래프에서는 `UNION ALL`이 중복을 만들어 합계가 부풀고, `UNION`은 이를 막습니다. 다만 비교 기준이 행 전체라서 깊이나 경로처럼 길마다 다른 컬럼이 있으면 중복도 고리도 걸러지지 않습니다.
+
+### 데이터에 순환이 있으면 어떻게 되고, 어떻게 막나요?
+
+같은 행이 계속 새로 만들어져 작업 테이블이 비지 않으므로 쿼리가 끝나지 않습니다. PostgreSQL에는 기본 반복 제한이 없어서 메모리와 임시 파일을 쓰며 돕니다. 14 이상이면 `CYCLE id SET is_cycle USING path`로 지나온 경로에 있는 노드를 만나면 멈추게 하고, 그 아래 버전이면 경로 배열을 직접 들고 다니거나 깊이 제한을 둡니다. 운영에서는 `statement_timeout`도 함께 겁니다.
+
+### 재귀 쪽에 집계 함수나 LEFT JOIN을 쓰면 왜 에러가 나나요?
+
+재귀 쪽은 작업 테이블의 행을 받아 새 행을 만드는 단계라서, 반복 전체를 봐야 하는 집계나 재귀 참조를 바깥 조인의 안쪽에 두는 것, 서브쿼리 안에서 참조하는 것, 두 번 참조하는 것을 PostgreSQL이 막습니다. 집계와 정렬은 재귀가 끝난 바깥 쿼리에서 합니다. 앵커가 컬럼 타입을 정하므로 재귀 쪽 식의 타입이 다르면 앵커에서 캐스팅해 맞춥니다.
+
+### 재귀 쿼리가 느릴 때 무엇을 보나요?
+
+`EXPLAIN ANALYZE`에서 `Recursive Union` 아래 재귀 쪽 조인의 스캔 방식과 `loops`를 봅니다. 재귀 쪽 `ON`에 쓰인 컬럼(`parent_id` 같은)에 인덱스가 없으면 반복마다 테이블 전체를 읽습니다. 외래 키를 걸어도 참조하는 쪽 컬럼에는 인덱스가 자동으로 생기지 않으니 직접 만들어야 하고, 위아래 양방향으로 따라간다면 방향마다 맞는 인덱스가 필요합니다.
+
+### 트리 구조를 재귀 없이 읽는 방법은 없나요?
+
+경로 열거(`ltree`), 클로저 테이블, 중첩 집합이 있습니다. 셋 다 하위 전체를 인덱스 조건 한 번이나 조인 한 번으로 읽는 대신 노드를 옮길 때 여러 행을 고쳐야 합니다. 쓰기가 잦고 노드가 수천 개 수준이면 부모 id와 인덱스, 재귀 CTE로 충분하고, 구조가 거의 안 바뀌는 큰 트리를 자주 읽을 때 다른 방식을 고릅니다.

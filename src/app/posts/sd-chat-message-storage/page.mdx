@@ -1,0 +1,457 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-chat-message-storage");
+
+이 시리즈에서 이 글의 자리: [㉖ 채팅 시스템 ①: 연결](/posts/sd-chat-connections)에서 WebSocket 연결과 상태 있는 채팅 서버를 정했다. 이 글은 그 연결로 오간 메시지를 어디에, 어떤 번호로 쌓을지 정하고, 휴대폰과 노트북이 같은 대화를 빠짐없이 보게 만든다. 같은 장의 다음 글 [㉘ 채팅 시스템 ③: 접속 상태 표시](/posts/sd-chat-presence)가 이 장의 마지막이고, 그다음은 [㉙ 검색어 자동완성 ①](/posts/sd-autocomplete-trie)이다.
+
+출근길에 휴대폰으로 단체방을 읽었다. 회사에 와서 노트북을 열었더니 아침에 온 메시지 몇 개가 노트북에는 없다. 반대로 어떤 날은 같은 메시지가 두 번 보이거나, 답장이 질문보다 위에 찍혀 있다. 셋 다 저장소와 메시지 번호를 어떻게 설계했느냐에서 나오는 증상이다.
+
+앞 글에서 연결은 언제든 끊긴다고 했다. 끊긴 사이의 메시지를 되찾으려면 메시지가 먼저 저장돼 있어야 하고, 앱이 "어디까지 받았는지"를 말할 수 있어야 한다. 이 글은 PostgreSQL 16 테이블 하나로 시작해서, 읽는 모양에 맞게 키를 바꾸고, 번호를 매기고, 기기마다 따라잡는 법까지 간다.
+
+## 표 하나에 다 쌓던 첫 버전
+
+가장 먼저 떠오르는 설계는 메시지 테이블 하나에 전체 일련번호를 붙이는 것이다. 방 번호(`channel_id`)는 1:1 대화든 단체방이든 대화 하나에 하나씩 준다.
+
+```sql
+-- 처음 설계: 전체에서 하나로 느는 번호(id)가 기본 키다
+CREATE TABLE messages_v1 (
+  id         bigserial PRIMARY KEY,   -- 모든 방을 통틀어 1, 2, 3, ...
+  channel_id int    NOT NULL,         -- 어느 대화방인가
+  sender_id  int    NOT NULL,         -- 누가 보냈나
+  body       text   NOT NULL,
+  created_at timestamptz NOT NULL
+);
+```
+
+실험용으로 100만 줄을 2,000개 방에 나눠 넣었다. 그중 42번 방은 처음에만 대화가 오가다 조용해진 방으로 만들었다.
+
+```sql
+-- 100만 줄을 2,000개 방에 고르게 넣되, 42번 방은 10만 번째 줄 뒤로 메시지를 받지 않게 한다
+INSERT INTO messages_v1 (channel_id, sender_id, body, created_at)
+SELECT CASE WHEN 1 + g % 2000 = 42 AND g > 100000 THEN 43 ELSE 1 + g % 2000 END,
+       1 + g % 50000, 'message ' || g,
+       timestamptz '2026-01-01' + g * interval '20 seconds'
+FROM generate_series(1, 1000000) g;
+ANALYZE messages_v1;   -- 통계를 갱신해 실행 계획이 실제 분포를 보게 한다
+```
+
+42번 방의 최근 메시지 세 줄은 이렇다.
+
+```sql
+-- 42번 방의 최근 메시지 3개
+SELECT id, channel_id, sender_id, body
+FROM messages_v1
+WHERE channel_id = 42
+ORDER BY id DESC
+LIMIT 3;
+```
+
+```text
+  id   | channel_id | sender_id |     body      
+-------+------------+-----------+---------------
+ 98041 |         42 |     48042 | message 98041
+ 96041 |         42 |     46042 | message 96041
+ 94041 |         42 |     44042 | message 94041
+(3 rows)
+```
+
+앱이 이 테이블에 묻는 질문은 사실상 세 가지다. 방에 들어갔을 때 "최근 20개", 위로 스크롤할 때 "이 번호보다 오래된 20개", 다시 연결했을 때 "이 번호 다음부터 전부". 셋 다 방 하나 안에서 번호 순서로 읽는다. 다른 방과 섞어 읽거나, 본문으로 조인하는 일은 거의 없다.
+
+## 채팅 기록이 읽히는 모양
+
+저장소를 고르기 전에 규모를 어림한다. 하루 사용자 5,000만 명이 하루 40개씩 보낸다고 하자. 하루 20억 개, 초당 평균 약 23,000개를 쓴다. 메시지 하나를 메타데이터 포함 100바이트로 잡으면 하루 200GB, 1년 73TB이고 복제본 셋이면 그 세 배다. 쓰기가 아주 많고, 지우지 않고 계속 쌓인다.
+
+읽기는 쓰기와 비슷한 양인데 쏠림이 크다. 사람들은 거의 최근 메시지만 본다. 1년 전 메시지는 검색하거나 위로 한참 올릴 때만 읽는다. 이렇게 오래된 데이터가 길게 꼬리처럼 쌓여 있고 거의 읽히지 않는 모양을 긴 꼬리(long tail)라고 한다. 테이블 하나에 몇십 TB가 쌓이면 인덱스가 메모리에 다 들어가지 않고, 오래된 줄을 읽을 때마다 디스크를 무작위로 뒤지게 된다.
+
+정리하면 채팅 기록 저장소에 필요한 성질은 이렇다. 쓰기를 서버 여러 대로 나눠 받을 수 있어야 하고, 한 방의 메시지를 번호 순서로 연속해서 읽는 게 빨라야 하고, 조인과 복잡한 트랜잭션은 거의 필요 없다. 같은 조건에서 메신저 서비스들이 HBase나 Cassandra 같은 키-값·와이드 컬럼 저장소를 써 왔다. 들어가기 전에 지금 테이블에서 무엇이 느린지부터 보자.
+
+## 조용한 방이 느려지는 이유
+
+42번 방에 들어갔을 때의 쿼리를 `EXPLAIN ANALYZE`로 돌렸다. 계획만 보는 `EXPLAIN`과 달리 실제로 실행해서 걸린 시간과 읽은 줄 수를 보여 준다.
+
+```sql
+-- 42번 방에 들어갈 때: 최근 20개
+EXPLAIN (ANALYZE, BUFFERS OFF)
+SELECT id, sender_id, body FROM messages_v1
+WHERE channel_id = 42 ORDER BY id DESC LIMIT 20;
+```
+
+```text
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..1484.98 rows=20 width=26) (actual time=139.080..144.309 rows=20 loops=1)
+   ->  Index Scan Backward using messages_v1_pkey on messages_v1  (cost=0.42..36817.43 rows=496 width=26) (actual time=139.078..144.300 rows=20 loops=1)
+         Filter: (channel_id = 42)
+         Rows Removed by Filter: 939940
+ Planning Time: 0.374 ms
+ Execution Time: 144.334 ms
+(6 rows)
+```
+
+볼 줄은 `Index Scan Backward`와 `Rows Removed by Filter: 939940`이다. `id` 인덱스를 큰 번호부터 거꾸로 훑으면서 42번 방이 아닌 줄을 하나씩 버렸다. 42번 방은 오래전에 조용해졌으니 20개를 찾을 때까지 94만 줄을 넘겼고 144ms가 걸렸다. 바쁜 방은 금방 찾으니 빠르고, 조용한 방일수록 느리다. 줄이 늘수록 더 나빠진다.
+
+`channel_id`에 인덱스를 하나 더 거는 방법도 있지만, 질문이 언제나 "방 안에서 번호 순서"라면 기본 키 자체를 (방, 방 안 번호)로 바꾸는 게 맞다. 같은 방의 메시지가 인덱스에서 붙어 있게 된다.
+
+```sql
+-- 바꾼 설계: 방 번호와 방 안 번호를 함께 기본 키로
+CREATE TABLE messages (
+  channel_id int    NOT NULL,
+  message_id bigint NOT NULL,          -- 방마다 1부터 다시 센다
+  sender_id  int    NOT NULL,
+  body       text   NOT NULL,
+  created_at timestamptz NOT NULL,
+  PRIMARY KEY (channel_id, message_id)
+);
+-- 같은 데이터를 옮기며 방마다 1부터 번호를 다시 매긴다
+INSERT INTO messages
+SELECT channel_id, row_number() OVER (PARTITION BY channel_id ORDER BY id), sender_id, body, created_at
+FROM messages_v1;
+ANALYZE messages;
+
+-- 같은 질문을 새 테이블에
+EXPLAIN (ANALYZE, BUFFERS OFF)
+SELECT message_id, sender_id, body FROM messages
+WHERE channel_id = 42 ORDER BY message_id DESC LIMIT 20;
+```
+
+```text
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..35.43 rows=20 width=26) (actual time=0.043..0.054 rows=20 loops=1)
+   ->  Index Scan Backward using messages_pkey on messages  (cost=0.42..868.61 rows=496 width=26) (actual time=0.042..0.050 rows=20 loops=1)
+         Index Cond: (channel_id = 42)
+ Planning Time: 0.467 ms
+ Execution Time: 0.093 ms
+(5 rows)
+```
+
+`Filter`가 `Index Cond`로 바뀌었고 버린 줄이 없다. 인덱스에서 42번 방이 시작하는 곳으로 바로 가서 20개만 읽었다. 144ms가 0.093ms가 됐다. 메시지 번호도 방마다 1부터 다시 센다.
+
+```text
+ channel_id | message_id |     body     
+------------+------------+--------------
+         42 |          1 | message 41
+         42 |          2 | message 2041
+         43 |          1 | message 42
+         43 |          2 | message 2042
+(4 rows)
+```
+
+이 모양이 그대로 키-값 저장소로 옮겨 간다. 키를 고르는 일은 데이터베이스 종류보다 먼저다.
+
+## 키-값 저장소로 옮길 때
+
+테이블이 서버 한 대를 넘으면 메시지를 여러 서버에 나눠야 한다. 와이드 컬럼 저장소인 Cassandra로 옮긴다면 위 기본 키가 거의 그대로 들어간다. `channel_id`는 파티션 키가 되어 어느 서버에 저장할지를 정하고, `message_id`는 클러스터링 키가 되어 그 서버 안에서 번호 순서로 붙여 저장한다. 그래서 "방 하나, 번호 순서로" 읽기가 서버 한 대에서 연속으로 끝난다. 파티션 키와 클러스터링 키, 쓰기를 싸게 하는 구조는 [와이드 컬럼 DB](/posts/db-type-wide-column)에서, 링 위에 나누고 복제하는 법은 [⑬ 키-값 저장소 ①](/posts/sd-kv-store-partition-replication)에서 다뤘다.
+
+<ConceptDiagram
+  caption="같은 방의 메시지는 한 파티션에 번호 순으로 붙는다"
+  width={420}
+  height={240}
+  nodes={[
+    { id: "key", label: "(channel_id, message_id)", x: 210, y: 35, w: 220 },
+    { id: "pk", label: "파티션 키", sub: "channel_id → 서버", x: 100, y: 120, w: 140 },
+    { id: "ck", label: "클러스터링 키", sub: "message_id → 순서", x: 320, y: 120, w: 140 },
+    { id: "node", label: "노드 B", sub: "room:7 전부", x: 100, y: 205, w: 120 },
+    { id: "rows", label: "#1 #2 #3 …", sub: "붙어서 저장", x: 320, y: 205, w: 120 },
+  ]}
+  edges={[
+    { from: "key", to: "pk" },
+    { from: "key", to: "ck" },
+    { from: "pk", to: "node", label: "해시" },
+    { from: "ck", to: "rows", label: "정렬" },
+  ]}
+/>
+
+이 키에도 약점이 있다. 아주 시끄러운 방 하나의 메시지가 모두 한 파티션에 몰린다. 몇 년 동안 쌓이면 파티션 하나가 너무 커지고, 그 방에 쓰는 요청이 서버 한 대에 몰린다. Cassandra는 파티션을 대략 100MB 아래로 두기를 권한다. 그래서 키에 기간을 섞어 `(channel_id, 월)`을 파티션 키로 쓰는 방법이 흔하다. 방 하나의 기록이 달마다 다른 파티션으로 나뉜다. 대가로 "최근 20개"가 월 경계에 걸리면 파티션 두 개를 읽어야 한다.
+
+관계형 DB를 버리라는 뜻은 아니다. 사용자, 친구 관계, 방 멤버 목록, 설정처럼 양이 적고 서로 엮인 데이터는 관계형 DB가 편하다. 양이 많고 질문이 고정된 채팅 기록만 따로 떼어 낸다.
+
+## 메시지 번호가 지켜야 할 것
+
+`message_id`는 두 가지를 지켜야 한다. 같은 방 안에서 겹치지 않을 것, 그리고 번호 순서가 곧 보여 줄 순서일 것. 시각(`created_at`)으로 정렬하면 되지 않을까 싶지만, 서버마다 시계가 조금씩 다르다. chat-2의 시계가 40ms 늦다고 일부러 설정하고 두 메시지를 저장해 봤다.
+
+```js
+// skew.mjs 일부: 민지는 chat-1, 준호는 chat-2에 붙어 있다. chat-2 시계가 40ms 늦다
+save("chat-1", "민지", "점심 뭐 먹어?");
+await new Promise((r) => setTimeout(r, 15));
+save("chat-2", "준호", "김치찌개");               // 15ms 뒤에 답한다
+```
+
+```text
+저장한 순서:
+  12:00:00.000Z chat-1 민지: 점심 뭐 먹어?
+  11:59:59.975Z chat-2 준호: 김치찌개
+시각으로 정렬해 보여 준 순서:
+  준호: 김치찌개
+  민지: 점심 뭐 먹어?
+방 번호로 정렬:
+  #1 민지: 점심 뭐 먹어?
+  #2 준호: 김치찌개
+```
+
+15ms 뒤에 보낸 답장이 25ms 이른 시각으로 찍혀서 질문보다 위로 올라갔다. NTP로 시계를 맞춰도 서버 사이에 몇 ms 차이는 흔하니, 사람이 빠르게 주고받는 채팅에서는 실제로 생기는 일이다. 방마다 번호를 하나씩 올려 매기면 저장한 순서가 곧 번호 순서다.
+
+번호를 매기는 방법은 두 갈래다. 하나는 [⑰ 고유 ID 생성기](/posts/sd-unique-id-generator)의 Snowflake처럼 시각과 기계 번호를 섞은 64비트 ID를 쓰는 것이다. 어느 서버에서든 따로 만들 수 있고 전체에서 겹치지 않는다. 다만 순서는 "대략 시간순"이라 위와 같은 시계 차이에 그대로 흔들린다. 다른 하나는 방 안에서만 겹치지 않는 지역 번호다. 1:1 대화든 단체방이든 순서가 필요한 범위는 방 하나뿐이니, 방마다 따로 세면 충분하다. Redis의 `INCR`은 키의 숫자를 원자적으로 1 올리고 새 값을 돌려준다.
+
+```bash
+# 따로 띄운 Redis(포트 6391)에서 방마다 번호를 하나씩 올린다
+redis-cli -p 6391 INCR seq:room:7
+```
+
+```text
+127.0.0.1:6391> INCR seq:room:7
+(integer) 1
+127.0.0.1:6391> INCR seq:room:7
+(integer) 2
+127.0.0.1:6391> INCR seq:dm:alice:bob
+(integer) 1
+127.0.0.1:6391> INCR seq:room:7
+(integer) 3
+```
+
+<AlgoTrace
+  caption="도착하는 메시지에 방마다 번호를 매긴다"
+  cells={["room7 민지", "dm 앨리스", "room7 서연", "room7 준호", "dm 밥"]}
+  memoryLabel="방마다 마지막 번호"
+  steps={[
+    { pointer: 0, memory: ["room:7 → 1"], caption: "room:7의 첫 메시지라 1번을 받는다." },
+    { pointer: 1, memory: ["room:7 → 1", "dm:alice:bob → 1"], caption: "다른 방이다. 그 방의 번호는 따로 1부터 센다." },
+    { pointer: 2, memory: ["room:7 → 2", "dm:alice:bob → 1"], caption: "room:7로 돌아왔다. 2번이다. 사이에 다른 방 메시지가 있었어도 상관없다." },
+    { pointer: 3, memory: ["room:7 → 3", "dm:alice:bob → 1"], caption: "서버가 달라도 같은 카운터에서 받으니 3번이다. 시계는 보지 않는다." },
+    { pointer: 4, found: [0, 2, 3], memory: ["room:7 → 3", "dm:alice:bob → 2"], caption: "번호는 방 안에서만 의미가 있다. 방 이름과 번호를 함께 써야 메시지 하나를 가리킨다." },
+  ]}
+/>
+
+지역 번호를 쓰면 방마다 번호를 나눠 주는 곳이 하나뿐이다. 카운터가 있는 Redis가 느려지면 그 방의 모든 쓰기가 기다린다. 카운터를 방 기준으로 샤딩해서 한 곳에 몰리지 않게 하고, Redis가 장애로 번호를 잃으면 저장소의 그 방 마지막 번호에서 다시 시작하게 만든다. 번호를 저장소 쪽에서 매기는 방법도 있다. 방마다 담당 서버 하나를 정해 그 서버가 순서대로 매기게 하면 카운터와 저장이 한 곳에서 끝난다. 어느 쪽이든 한 방의 쓰기가 한 줄로 서는 것이 순서를 지키는 값이다.
+
+1:1 대화의 방 이름은 두 사람의 ID로 만든다. 민지가 준호에게 보내든 준호가 민지에게 보내든 같은 방이어야 하니 ID를 정렬해서 `dm:junho:minji`처럼 붙인다.
+
+## 단체방은 복사할까, 한 곳에서 읽을까
+
+단체방 메시지를 저장하는 방법은 두 가지다. 방 기록에 한 번만 쓰고 모두가 거기서 읽거나, 멤버마다 받은편지함을 두고 메시지를 멤버 수만큼 복사해 넣거나. 받은편지함 쪽을 메시지 동기화 큐라고도 부른다. [㉔ 뉴스 피드 ①](/posts/sd-news-feed-publishing)의 쓰기 시점 팬아웃과 같은 고민이다.
+
+<NetworkTopology
+  caption="4명 방에 메시지 하나: 받은편지함마다 복사하기"
+  width={420}
+  height={250}
+  zones={[
+    { id: "inbox", label: "멤버별 받은편지함", x: 230, y: 15, w: 180, h: 225, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "민지", x: 50, y: 125, icon: "client" },
+    { id: "chat", label: "chat-1", x: 145, y: 125, icon: "server" },
+    { id: "ib", label: "준호 함", sub: "seq 812", x: 320, y: 55, icon: "db" },
+    { id: "ic", label: "서연 함", sub: "seq 77", x: 320, y: 125, icon: "db" },
+    { id: "id", label: "도윤 함", sub: "seq 3401", x: 320, y: 195, icon: "db" },
+  ]}
+  links={[
+    { from: "a", to: "chat" },
+    { from: "chat", to: "ib" },
+    { from: "chat", to: "ic" },
+    { from: "chat", to: "id" },
+  ]}
+  steps={[
+    { path: ["a", "chat"], packet: "room:7", title: "한 번 보낸다", detail: "민지가 room:7에 메시지 하나를 보낸다." },
+    { path: ["chat", "ib"], packet: "복사 1", title: "준호 함에 넣는다", detail: "준호의 받은편지함 번호로 813번이 된다. 번호는 방이 아니라 사람마다 센다." },
+    { path: ["chat", "ic"], packet: "복사 2", title: "서연 함에 넣는다", detail: "같은 메시지가 서연 함에서는 78번이다." },
+    { path: ["chat", "id"], packet: "복사 3", title: "도윤 함에 넣는다", detail: "보낸 사람 빼고 세 번 썼다. 100명 방이면 99번 쓴다." },
+    { path: ["ic"], highlight: ["ib", "id"], title: "읽을 때는 자기 함 하나만", detail: "다시 연결한 서연은 방이 몇 개든 자기 함에서 78번 다음부터만 읽으면 된다." },
+  ]}
+/>
+
+복사하는 쪽은 읽기가 아주 단순하다. 기기는 커서 하나만 들고 다니고, 다시 연결하면 질문 하나로 모든 방의 새 메시지를 받는다. 대신 쓰기가 멤버 수만큼 늘어난다. 100명 방에 하루 1,000개면 10만 번 쓴다. 멤버 수에 상한이 있는 작은 단체방(예를 들어 100명)이라 감당할 수 있는 설계다.
+
+한 곳에서 읽는 쪽은 쓰기가 한 번이다. 대신 기기가 방마다 커서를 들고, 다시 연결하면 들어간 방마다 "이 번호 다음부터"를 물어야 한다. 방이 300개면 질문이 300개다. 실제로는 "새 메시지가 있는 방 목록"을 따로 유지해서 바뀐 방만 묻는다. 수천~수만 명 방이나 공개 채널은 복사가 감당이 안 되니 이쪽으로 간다. 작은 방은 복사하고 큰 방은 한 곳에서 읽게 섞는 것도 피드 설계와 같다.
+
+## 메시지 하나가 저장되고 전달되기까지
+
+이제 앞 글의 연결과 이 글의 저장을 한 줄로 이어 보자. 순서가 중요하다. 번호를 받고, 저장하고, 보낸 사람에게 확인을 주고, 그다음에 전달한다. 전달이 실패해도 메시지는 저장소에 남아 있으니 받는 쪽이 나중에 가져갈 수 있다.
+
+<NetworkTopology
+  caption="민지가 준호에게 보낸 메시지 하나의 길"
+  width={420}
+  height={270}
+  zones={[
+    { id: "store", label: "저장", x: 150, y: 175, w: 260, h: 85, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "민지", x: 45, y: 60, icon: "client" },
+    { id: "c1", label: "chat-1", x: 165, y: 60, icon: "server" },
+    { id: "seq", label: "번호 카운터", sub: "Redis", x: 210, y: 220, icon: "db" },
+    { id: "kv", label: "메시지 저장소", sub: "KV", x: 345, y: 220, icon: "db" },
+    { id: "c2", label: "chat-2", x: 300, y: 60, icon: "server" },
+    { id: "b", label: "준호", x: 390, y: 120, icon: "client" },
+  ]}
+  links={[
+    { from: "a", to: "c1" },
+    { from: "c1", to: "seq" },
+    { from: "c1", to: "kv" },
+    { from: "c1", to: "c2" },
+    { from: "c2", to: "b" },
+  ]}
+  steps={[
+    { path: ["a", "c1"], packet: "c-7f3a", title: "앱이 임시 ID를 붙여 보낸다", detail: "앱이 만든 clientMsgId를 함께 보낸다. 재전송해도 같은 값이다.", payload: "{ \"room\": \"dm:junho:minji\", \"clientMsgId\": \"c-7f3a\", \"text\": \"자료 보냈어\" }" },
+    { path: ["c1", "seq"], packet: "INCR", title: "방 번호를 받는다", detail: "이 방의 다음 번호 41을 받는다." },
+    { path: ["c1", "kv"], packet: "#41 저장", title: "먼저 저장한다", detail: "(방, 41) 키로 저장한다. 복제본 과반이 받으면 성공으로 본다." },
+    { path: ["c1", "a"], packet: "ack #41", title: "보낸 쪽에 확인", detail: "저장이 끝나야 확인을 준다. 앱은 임시 ID c-7f3a를 41번으로 바꾸고 전송 중 표시를 지운다." },
+    { path: ["c1", "c2", "b"], packet: "#41", title: "그다음에 전달한다", detail: "준호가 붙은 chat-2로 넘겨 내려보낸다. 여기서 빠져도 준호가 다시 연결하면 저장소에서 가져간다." },
+  ]}
+/>
+
+확인이 늦게 오면 앱은 같은 메시지를 다시 보낸다. 첫 요청이 이미 저장됐는데 확인만 사라진 경우라면 같은 메시지가 두 번 저장된다. 이걸 막는 게 `clientMsgId`다. 서버는 저장하기 전에 이 ID를 본 적이 있는지 확인한다.
+
+```text
+127.0.0.1:6391> SET sent:minji:c-7f3a 1 NX EX 86400
+OK
+127.0.0.1:6391> SET sent:minji:c-7f3a 1 NX EX 86400
+(nil)
+```
+
+`NX`는 키가 없을 때만 쓰라는 뜻이다. 첫 번째는 `OK`로 처음 본 메시지, 두 번째는 `(nil)`로 이미 본 메시지다. 이미 본 메시지면 새로 번호를 받지 않고 처음 매긴 번호로 확인을 다시 준다. 실제로는 이 키에 1 대신 처음 받은 번호를 넣어 두면 된다. 재전송과 중복 제거를 일반적으로 다룬 글은 [멱등성 키](/posts/idempotency-key)와 [메시지 전달 보장](/posts/message-delivery-semantics)이다.
+
+## 휴대폰과 노트북이 각자 따라잡기
+
+한 사람이 기기를 여러 대 쓰면, 기기마다 어디까지 받았는지가 다르다. 그래서 커서는 사람이 아니라 기기가 들고 있다. 커서는 방마다 "이 기기가 마지막으로 받은 번호"다. 노트북 덮개를 닫은 사이 메시지가 오는 상황을 Node로 흉내 냈다.
+
+```text
+민지 → room:7#1
+  phone 받음 room:7#1 점심 뭐 먹어?
+  laptop 받음 room:7#1 점심 뭐 먹어?
+-- 노트북 덮개를 닫는다
+서연 → room:7#2
+  phone 받음 room:7#2 김치찌개
+민지 → dm:junho:minji#1
+  phone 받음 dm:junho:minji#1 자료 보냈어
+민지 → room:7#3
+  phone 받음 room:7#3 12시에 1층
+커서: {"phone":{"room:7":3,"dm:junho:minji":1},"laptop":{"room:7":1,"dm:junho:minji":0}}
+-- 노트북을 다시 연다: 방마다 커서 다음부터 달라고 묻는다
+  room:7 after=1 → #2, #3
+  dm:junho:minji after=0 → #1
+커서: {"phone":{"room:7":3,"dm:junho:minji":1},"laptop":{"room:7":3,"dm:junho:minji":1}}
+```
+
+휴대폰은 연결로 실시간으로 받아 커서가 3과 1까지 갔고, 노트북은 1과 0에 멈춰 있었다. 노트북이 다시 연결하면서 방마다 커서 다음을 물어 빠진 세 개를 받았고, 두 기기의 커서가 같아졌다. 저장소에 보내는 질문은 앞에서 만든 기본 키를 그대로 탄다.
+
+```sql
+-- 43번 방에서 480번 다음부터 50개 (다시 연결한 기기가 묻는 질문)
+EXPLAIN (ANALYZE, BUFFERS OFF)
+SELECT message_id, body FROM messages
+WHERE channel_id = 43 AND message_id > 480
+ORDER BY message_id LIMIT 50;
+```
+
+```text
+                                                            QUERY PLAN                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..94.61 rows=50 width=22) (actual time=0.064..0.080 rows=50 loops=1)
+   ->  Index Scan using messages_pkey on messages  (cost=0.42..104.02 rows=55 width=22) (actual time=0.063..0.075 rows=50 loops=1)
+         Index Cond: ((channel_id = 43) AND (message_id > 480))
+ Planning Time: 0.405 ms
+ Execution Time: 0.102 ms
+(5 rows)
+```
+
+방 번호와 커서가 둘 다 `Index Cond`에 들어가서, 인덱스에서 (43, 481) 자리로 바로 가 50개를 읽었다. 50개보다 많이 밀렸으면 마지막 번호를 새 커서로 삼아 다시 묻는다.
+
+<SequenceDiagram
+  caption="노트북이 다시 연결하며 따라잡기"
+  actors={[
+    { id: "l", label: "노트북" },
+    { id: "c", label: "채팅 서버" },
+    { id: "kv", label: "메시지 저장소" },
+  ]}
+  steps={[
+    { from: "l", to: "c", label: "연결 + 커서", title: "커서를 들고 연결한다", detail: "다시 연결하자마자 방마다 마지막으로 받은 번호를 보낸다.", payload: "{ \"room:7\": 1, \"dm:junho:minji\": 0 }" },
+    { from: "c", to: "kv", label: "room:7 > 1", title: "방마다 다음 번호부터 찾는다", detail: "기본 키 (방, 번호)를 타고 커서 다음 자리로 바로 간다." },
+    { from: "kv", to: "c", label: "#2, #3", title: "빠진 메시지가 돌아온다", detail: "덮개를 닫은 사이 온 두 개다. 다른 방도 같은 식으로 묻는다." },
+    { from: "c", to: "l", label: "#2 #3 · dm #1", title: "기기로 내려보낸다", detail: "번호 순서대로 보낸다. 노트북은 받은 만큼 커서를 올린다." },
+    { from: "c", to: "l", label: "실시간 #4", title: "그 뒤로는 실시간", detail: "따라잡는 동안 새로 온 메시지도 같은 연결로 온다. 번호로 중복을 걸러 낸다." },
+  ]}
+/>
+
+따라잡기와 실시간 전달이 겹치는 순간을 조심해야 한다. 노트북이 #2, #3을 받는 사이 #4가 실시간으로 먼저 도착할 수 있다. 그래서 기기는 화면에 그리기 전에 번호로 정렬하고 이미 가진 번호는 버린다.
+
+## 커서를 함부로 올리면 빠진다
+
+출근길 노트북에서 메시지 하나가 영영 안 보이는 경우는 대부분 커서를 잘못 올려서 생긴다. 실시간 전달은 순서가 뒤바뀌어 올 수 있다. 커서가 3인 상태에서 #6, #4가 왔다고 커서를 6으로 올리면 #5는 다시는 묻지 않는다. 커서는 빈칸 없이 이어진 데까지만 올리고, 빈칸은 따로 저장소에 물어 채워야 한다.
+
+<CodePlayground
+  caption="빈칸 없이 이어진 데까지만 커서를 올리기"
+  functionName="advance"
+  initialCode={`function advance(cursor, received) {
+  // cursor: 지금까지 빈칸 없이 받은 마지막 번호
+  // received: 이번에 받은 번호들 (순서가 섞여 있고, 이미 받은 번호가 다시 올 수도 있다)
+  // 반환: { cursor: 새 커서, missing: 새 커서와 받은 번호 중 가장 큰 것 사이의 빈 번호들(오름차순) }
+  return { cursor, missing: [] };
+}`}
+  solution={`function advance(cursor, received) {
+  const got = new Set(received);
+  let c = cursor;
+  while (got.has(c + 1)) c++;
+  const max = received.length ? Math.max(...received) : c;
+  const missing = [];
+  for (let id = c + 1; id < max; id++) if (!got.has(id)) missing.push(id);
+  return { cursor: c, missing };
+}`}
+  tests={[
+    { label: "순서대로 도착", args: [3, [4, 5, 6]], expected: { cursor: 6, missing: [] } },
+    { label: "#5가 빠진 채 도착", args: [3, [6, 4]], expected: { cursor: 4, missing: [5] } },
+    { label: "이미 받은 번호가 다시 옴", args: [10, [9, 10]], expected: { cursor: 10, missing: [] } },
+    { label: "첫 메시지들이 아직 안 옴", args: [0, [3]], expected: { cursor: 0, missing: [1, 2] } },
+    { label: "받은 게 없음", args: [5, []], expected: { cursor: 5, missing: [] } },
+    { label: "섞여서 도착", args: [7, [8, 11, 9]], expected: { cursor: 9, missing: [10] } },
+  ]}
+/>
+
+빈칸이 생기면 바로 묻지 말고 잠깐 기다리는 편이 낫다. 넘기는 과정에서 몇십 ms 늦게 오는 경우가 대부분이라, 1~2초 안에 채워지지 않을 때만 저장소에 묻는다. 그래도 남는 빈칸은 다음 연결 때 커서 기준 질문이 채운다.
+
+## 현장에서 만나는 증상
+
+"노트북에만 메시지 하나가 없다"면 그 기기의 커서와 저장소를 나란히 본다. 기기 로그에 남은 커서가 빠진 번호보다 크면 커서를 건너뛰어 올린 것이다. 위 함수처럼 이어진 데까지만 올리게 고친다. 커서가 빠진 번호보다 작은데도 안 받았다면 따라잡기 질문의 `LIMIT`을 한 번만 돌고 멈췄는지 본다.
+
+"답장이 질문보다 위에 있다"면 정렬 기준이 서버 시각인지 확인한다. 화면 정렬을 `created_at`으로 하고 있었다면 방 번호로 바꾼다. 시각은 표시용으로만 쓴다.
+
+"같은 메시지가 두 번 보인다"면 저장소에서 같은 `clientMsgId`가 두 번호로 저장됐는지 찾는다. 있다면 중복 확인이 저장보다 늦게 일어나는 것이다. 확인과 기록을 한 번에 하는 `SET NX`나 DB의 유일 제약을 저장 앞에 둔다.
+
+"특정 큰 방만 느리다"면 파티션 크기를 의심한다. Cassandra라면 `nodetool tablehistograms`에서 파티션 크기 분포를 보고, 몇 개만 유난히 크면 `(channel_id, 월)`처럼 파티션 키에 기간을 섞는다.
+
+## 다음에 읽을 글
+
+채팅 기록은 방 하나 안에서 번호 순서로 읽힌다. 그래서 기본 키를 (방, 방 안 번호)로 두면 관계형 DB에서도 144ms가 0.1ms가 되고, 그대로 키-값 저장소의 파티션 키와 클러스터링 키가 된다. 번호는 방 안에서만 겹치지 않으면 되니 방마다 따로 세고, 시계는 믿지 않는다. 저장이 전달보다 먼저고, 기기는 방마다 커서를 들고 빈칸 없이 이어진 데까지만 올린다.
+
+채팅 화면에서 남은 건 친구 이름 옆 초록 점이다. 그 점은 연결이 끊긴 걸 언제 알아챌지, 수많은 친구에게 바뀐 상태를 어떻게 알릴지의 문제다. [㉘ 채팅 시스템 ③: 접속 상태 표시](/posts/sd-chat-presence)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 채팅 기록은 어떤 저장소에 두나요?
+
+양이 많고 질문이 고정된 채팅 기록은 Cassandra나 HBase 같은 키-값·와이드 컬럼 저장소에 둔다. 쓰기가 초당 수만 건이고 지우지 않고 계속 쌓이며, 읽기는 방 하나 안에서 번호 순서로만 하니 수평 확장이 쉬운 저장소가 맞다. 사용자, 친구, 방 멤버 같은 작고 서로 엮인 데이터는 관계형 DB에 남긴다.
+
+### 키는 어떻게 잡나요?
+
+`(channel_id, message_id)`로 잡는다. 방 번호가 파티션 키라서 한 방의 메시지가 한 곳에 모이고, 방 안 번호가 클러스터링 키라서 그 안에서 순서대로 붙는다. "최근 20개"와 "이 번호 다음부터"가 한 파티션에서 연속으로 읽힌다. 아주 큰 방은 파티션이 커지니 `(channel_id, 월)`처럼 기간을 섞는다.
+
+### 메시지 순서를 시각으로 정하면 안 되나요?
+
+서버마다 시계가 몇 ms씩 달라서 빠르게 주고받는 메시지의 순서가 뒤집힌다. 시계를 NTP로 맞춰도 차이를 없앨 수는 없다. 순서가 필요한 범위는 방 하나이니 방마다 하나씩 올리는 지역 번호를 쓰고, 시각은 표시용으로만 둔다.
+
+### Snowflake 같은 전역 ID와 방마다 매기는 번호는 무엇이 다른가요?
+
+Snowflake는 어디서든 따로 만들 수 있고 전체에서 겹치지 않지만, 순서는 대략 시간순이라 시계 차이에 흔들린다. 방마다 매기는 번호는 방 안의 순서를 정확히 지키고 빈칸을 찾기 쉬워 동기화에 유리하지만, 방마다 번호를 나눠 주는 곳이 한 줄로 서야 한다. 그래서 카운터를 방 기준으로 샤딩하고 장애 때 저장소의 마지막 번호에서 다시 시작하게 한다.
+
+### 단체방 메시지는 멤버마다 복사하나요?
+
+멤버 수가 작으면 복사한다. 멤버별 받은편지함에 넣으면 기기는 커서 하나로 모든 방을 따라잡을 수 있어 읽기가 단순하다. 대신 쓰기가 멤버 수만큼 늘어나니 수천 명 이상 방은 방 기록에 한 번만 쓰고 각자 읽게 한다. 작은 방은 복사하고 큰 방은 읽기 시점에 모으는 혼합도 쓴다.
+
+### 여러 기기의 동기화는 어떻게 하나요?
+
+기기마다 방별로 마지막으로 받은 번호를 커서로 들고, 다시 연결하면 커서 다음 번호부터 저장소에 묻는다. 기본 키가 (방, 번호)라 이 질문은 인덱스에서 바로 그 자리로 간다. 실시간으로 받은 메시지와 따라잡기 결과가 겹칠 수 있으니 번호로 정렬하고 중복을 버린다. 커서는 빈칸 없이 이어진 데까지만 올린다.
+
+### 확인이 늦어 앱이 같은 메시지를 다시 보내면요?
+
+앱이 메시지마다 만든 `clientMsgId`로 중복을 거른다. 서버는 저장 전에 이 ID를 처음 보는지 `SET NX`나 유일 제약으로 확인하고, 이미 본 ID면 새 번호를 매기지 않고 처음 번호로 확인만 다시 준다. 이렇게 하면 앱은 마음 놓고 재전송할 수 있다.
+
+### 메시지 저장소의 노드 하나가 죽으면 어떻게 되나요?
+
+메시지는 복제본 여러 개에 저장하고 과반이 받았을 때 성공으로 보니, 노드 하나가 죽어도 남은 복제본에서 읽고 쓴다. 저장이 확인돼야 보낸 쪽에 확인을 주므로 확인받은 메시지는 잃지 않는다. 죽은 노드가 돌아오면 놓친 쓰기를 따라잡게 하는 장치가 필요하고, 그 방법은 [⑮ 키-값 저장소 ③](/posts/sd-kv-store-failure-handling)에 있다.

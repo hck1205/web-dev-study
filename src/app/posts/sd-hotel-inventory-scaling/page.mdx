@@ -1,0 +1,470 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-hotel-inventory-scaling");
+
+이 시리즈에서 이 글의 자리: [㊻ 호텔 예약 시스템 설계 ①](/posts/sd-hotel-double-booking)에서 같은 방이 두 번 팔리는 이중 예약을 막았다. 이 글은 같은 장의 두 번째 글로, 그때 미뤄 둔 재고 테이블의 모양, 결제를 기다리는 동안의 예약 상태, 트래픽이 커질 때의 DB와 캐시, 서비스를 나눴을 때의 데이터 맞추기를 다룬다. 다음 글부터는 새 장인 [㊽ 이메일 서비스 설계 ①](/posts/sd-email-protocols)이다.
+
+호텔 운영팀에서 요청이 하나 왔다. "1203호 에어컨이 고장 나서 이번 주는 못 판다. 그런데 1203호로 예약한 손님이 벌써 있다." 손님에게 연락해서 1205호로 바꿔 달라고 해야 할까. 손님은 1203호를 고른 적이 없다. 디럭스 더블 하나를 원했을 뿐이다.
+
+앞 글에서는 이 차이를 덮어 두고 재고 테이블을 그냥 썼다. 이 글은 그 테이블이 왜 그런 모양인지부터 시작해서, 서비스가 커질 때 무엇이 차례로 부족해지는지 따라간다. SQL은 PostgreSQL 16에서 실행한 결과다.
+
+## 방이 아니라 객실 유형을 판다
+
+에어비앤비 같은 숙소는 방 하나하나가 상품이다. 손님은 "그 집"을 예약한다. 그러면 예약을 방 번호에 붙이면 된다. 호텔은 다르다. 같은 디럭스 더블이 40개 있고, 손님은 그중 아무거나 하나를 산다. 방 번호는 체크인할 때 프런트가 정한다. 그 사이에 방 하나가 고장 나도, 같은 유형의 다른 방을 주면 그만이다.
+
+그래서 호텔 예약은 방 번호가 아니라 "호텔, 객실 유형, 날짜"의 남은 수를 센다. 예약 API도 방 번호 대신 객실 유형과 방 개수를 받는다.
+
+```text
+POST /v1/reservations
+{
+  "reservation_id": "7f3c9a2e-res",
+  "hotel_id": 1,
+  "room_type_id": 10,
+  "check_in": "2026-12-24",
+  "check_out": "2026-12-27",
+  "room_count": 2
+}
+```
+
+테이블은 넷으로 나눈다. 아래 그림의 화살표는 "이것을 보고 저것을 만든다"는 방향이다.
+
+<ConceptDiagram
+  caption="객실 유형으로 파는 예약의 테이블"
+  width={440}
+  height={250}
+  nodes={[
+    { id: "rt", label: "room_type", sub: "유형별 실제 방 수", x: 90, y: 50, w: 130 },
+    { id: "room", label: "room", sub: "방 번호, 층, 상태", x: 90, y: 200, w: 130 },
+    { id: "inv", label: "inventory", sub: "유형 × 날짜의 남은 수", x: 330, y: 50, w: 150 },
+    { id: "resv", label: "reservation", sub: "유형, 날짜, 방 개수", x: 330, y: 200, w: 170 },
+  ]}
+  edges={[
+    { from: "rt", to: "inv", label: "매일 줄 생성" },
+    { from: "rt", to: "room", label: "유형에 속함", dashed: true },
+    { from: "resv", to: "inv", label: "날짜마다 +n" },
+    { from: "room", to: "resv", label: "체크인 때 배정", dashed: true },
+  ]}
+/>
+
+`room_type`은 "이 호텔의 디럭스 더블은 20개"를 적는다. `room`은 방 번호와 청소, 고장 같은 상태를 적고, 판매와는 직접 엮이지 않는다. `reservation`은 객실 유형과 날짜, 방 개수를 적는다. 판매의 중심은 그림에서 inventory로 줄여 적은 `room_type_inventory`다. 호텔, 객실 유형, 날짜마다 한 줄이 있고 "팔 수 있는 수"와 "팔린 수"를 적는다. 1203호가 고장 나면 그 주의 `total_inventory`를 1씩 줄인다. 이미 팔린 수가 그보다 많아지면 운영팀이 다른 유형으로 업그레이드를 해 주는 식으로 처리한다.
+
+날짜마다 한 줄씩 두는 이유는 질문이 늘 날짜 단위이기 때문이다. "24일부터 27일까지 디럭스 2개가 되나"는 24일, 25일, 26일 세 줄을 보면 끝난다. 예약 기록을 모아서 그날 몇 개가 팔렸는지 매번 세는 방식도 가능하지만, 그러면 확인할 때마다 그날에 걸친 예약을 모두 훑어야 하고 앞 글의 잠금도 걸 대상이 없다.
+
+## 날짜마다 한 줄씩 미리 만든다
+
+줄이 미리 있어야 UPDATE로 더할 수 있다. 그래서 앞으로 팔 날짜만큼 줄을 만들어 둔다. 호텔 200곳에 객실 유형 10개씩, 365일치를 만들어 봤다.
+
+```sql
+CREATE TABLE room_type_inventory (
+  hotel_id        int  NOT NULL,
+  room_type_id    int  NOT NULL,
+  date            date NOT NULL,
+  total_inventory int  NOT NULL,
+  total_reserved  int  NOT NULL DEFAULT 0,
+  PRIMARY KEY (hotel_id, room_type_id, date),
+  -- 10%까지 초과 예약 허용 (아래에서 설명)
+  CONSTRAINT check_overbooking CHECK (total_reserved * 10 <= total_inventory * 11)
+);
+
+\timing on
+INSERT INTO room_type_inventory (hotel_id, room_type_id, date, total_inventory)
+SELECT rt.hotel_id, rt.room_type_id, d::date, rt.rooms
+FROM room_type rt,                                   -- 2,000개 유형
+     generate_series(date '2026-10-22', date '2026-10-22' + 364, interval '1 day') d;
+\timing off
+
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_table_size('room_type_inventory')) AS table_size,
+       pg_size_pretty(pg_indexes_size('room_type_inventory')) AS index_size,
+       round(pg_total_relation_size('room_type_inventory')::numeric / count(*)) AS bytes_per_row
+FROM room_type_inventory;
+```
+
+```text
+Time: 2058.383 ms (00:02.058)
+  rows  | table_size | index_size | bytes_per_row 
+--------+------------+------------+---------------
+ 730000 | 36 MB      | 31 MB      |            97
+(1 row)
+```
+
+73만 줄이 2초 만에 들어갔고, 인덱스까지 합쳐 한 줄에 97바이트다. 이 숫자로 큰 체인을 어림할 수 있다. 호텔 3,000곳에 유형 15개씩, 2년치를 둔다면 3,000 × 15 × 730 = 3,285만 줄이고, 97바이트를 곱하면 3.2GB 정도다. 서버 한 대의 메모리에 다 들어가는 크기다. 저장 공간은 이 시스템의 걱정거리가 아니다.
+
+그다음 날짜의 줄은 매일 새벽 작업이 하나씩 만든다. 이 작업은 실패해서 다시 돌 수 있으니, 두 번 돌아도 같은 결과가 나오게 쓴다.
+
+```sql
+-- 매일 새벽: 365일 뒤 날짜의 줄을 만든다
+INSERT INTO room_type_inventory (hotel_id, room_type_id, date, total_inventory)
+SELECT hotel_id, room_type_id, date '2026-10-22' + 365, rooms
+FROM room_type
+ON CONFLICT (hotel_id, room_type_id, date) DO NOTHING;
+-- 같은 작업이 재시도로 한 번 더 돌았다
+-- (같은 문장)
+-- 줄이 없는 날짜를 예약하려 하면
+UPDATE room_type_inventory SET total_reserved = total_reserved + 1
+WHERE hotel_id = 1 AND room_type_id = 10 AND date >= '2027-12-24' AND date < '2027-12-26';
+```
+
+```text
+INSERT 0 2000
+INSERT 0 0
+UPDATE 0
+```
+
+마지막 줄을 눈여겨봐야 한다. 아직 줄이 없는 날짜를 예약하면 UPDATE는 오류 없이 0줄을 고친다. 앱이 "오류가 없었으니 성공"으로 처리하면 재고는 그대로인데 예약 기록만 생긴다. 고친 줄 수가 묵는 날짜 수와 같은지 꼭 확인하고, 다르면 롤백한다. 새벽 작업이 며칠 멈춰 있었는데 아무도 몰랐다면, 판매 가능한 마지막 날짜 근처에서 이 증상이 먼저 보인다. 그래서 "가장 먼 날짜의 줄이 오늘 + 365일인가"를 매일 확인하는 알림을 걸어 둔다.
+
+## 3박 예약은 세 밤을 모두 본다
+
+이제 남은 방을 확인한다. 디럭스 더블 20개짜리 유형에서 24일 체크인, 27일 체크아웃(3박)으로 2개를 원하는 손님이 왔다.
+
+호텔은 보통 예약의 일부가 취소되거나 나타나지 않을 것을 알고 방보다 조금 더 판다. 이를 초과 예약(overbooking)이라고 한다. 여기서는 10%까지 받기로 했다. 방 20개면 22개까지 판다. 제약은 정수 계산으로 적었다. `total_inventory * 1.1`은 소수가 되니 양쪽에 10을 곱해 `total_reserved * 10 <= total_inventory * 11`로 썼다.
+
+```sql
+SELECT date, total_inventory, total_reserved,
+       total_inventory * 11 / 10 AS sell_limit,          -- 10% 초과 예약까지
+       total_inventory * 11 / 10 - total_reserved AS can_sell
+FROM room_type_inventory
+WHERE hotel_id = 1 AND room_type_id = 10
+  AND date >= '2026-12-24' AND date < '2026-12-27'
+ORDER BY date;
+```
+
+```text
+    date    | total_inventory | total_reserved | sell_limit | can_sell 
+------------+-----------------+----------------+------------+----------
+ 2026-12-24 |              20 |             18 |         22 |        4
+ 2026-12-25 |              20 |             21 |         22 |        1
+ 2026-12-26 |              20 |             15 |         22 |        7
+(3 rows)
+```
+
+세 밤 중 하나라도 모자라면 예약은 안 된다. 그래서 "몇 개까지 팔 수 있나"는 세 줄의 `can_sell` 중 가장 작은 값이다.
+
+<AlgoTrace
+  caption="3박에 2개: 가장 빠듯한 밤이 답을 정한다"
+  cells={["24일 4", "25일 1", "26일 7"]}
+  memoryLabel="지금까지 가장 작은 남은 수"
+  steps={[
+    { pointer: 0, memory: ["4"], caption: "24일은 22개까지 팔 수 있고 18개가 팔렸다. 4개 남았다." },
+    { pointer: 1, memory: ["1"], caption: "25일은 21개가 팔려 1개 남았다. 가장 작은 값이 1로 내려간다." },
+    { pointer: 2, memory: ["1"], caption: "26일은 7개 남았지만 이미 1이 더 작다." },
+    { pointer: 1, found: [1], memory: ["1", "2개 요청 → 거절"], caption: "세 밤에 모두 묵어야 하니 최대 1개다. 2개 요청은 25일 때문에 안 된다." },
+  ]}
+/>
+
+DB에 직접 시켜 보면 같은 답이 나온다. 2개를 더하면 25일 줄이 23이 되어 제약에 걸리고, 같은 문장이니 24일과 26일도 함께 되돌려진다.
+
+```sql
+UPDATE room_type_inventory SET total_reserved = total_reserved + 2
+WHERE hotel_id = 1 AND room_type_id = 10
+  AND date >= '2026-12-24' AND date < '2026-12-27';
+UPDATE room_type_inventory SET total_reserved = total_reserved + 1
+WHERE hotel_id = 1 AND room_type_id = 10
+  AND date >= '2026-12-24' AND date < '2026-12-27';
+```
+
+```text
+ERROR:  new row for relation "room_type_inventory" violates check constraint "check_overbooking"
+DETAIL:  Failing row contains (1, 10, 2026-12-25, 20, 23).
+UPDATE 3
+```
+
+`DETAIL`에 찍힌 줄이 25일이다. 2개 요청은 막혔고 1개 요청은 세 줄(`UPDATE 3`)을 함께 고쳤다. 앱은 이 숫자가 묵는 밤의 수와 같은지 확인한 뒤 커밋한다.
+
+이 확인 쿼리는 기본 키 `(hotel_id, room_type_id, date)`의 앞부분과 날짜 범위를 그대로 쓰기 때문에 인덱스로 바로 찾는다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT date, total_inventory, total_reserved
+FROM room_type_inventory
+WHERE hotel_id = 1 AND room_type_id = 10
+  AND date >= '2026-12-24' AND date < '2026-12-27';
+```
+
+```text
+ Bitmap Heap Scan on room_type_inventory (actual time=0.008..0.009 rows=3 loops=1)
+   Recheck Cond: ((hotel_id = 1) AND (room_type_id = 10) AND (date >= '2026-12-24'::date) AND (date < '2026-12-27'::date))
+   Heap Blocks: exact=1
+   ->  Bitmap Index Scan on room_type_inventory_pkey (actual time=0.005..0.005 rows=3 loops=1)
+         Index Cond: ((hotel_id = 1) AND (room_type_id = 10) AND (date >= '2026-12-24'::date) AND (date < '2026-12-27'::date))
+ Planning Time: 0.049 ms
+ Execution Time: 0.025 ms
+(7 rows)
+```
+
+`Index Cond`에 세 조건이 모두 들어갔고 `rows=3`, 실행 0.025ms다. 73만 줄 중 세 줄만 읽었다. 기본 키의 열 순서를 `(date, hotel_id, room_type_id)`로 잡았다면 날짜 범위가 앞에 와서 그 사흘에 걸친 모든 호텔의 줄을 훑게 된다. 인덱스 열 순서를 고르는 기준은 [인덱스 설계](/posts/db-index)에서 다뤘다.
+
+초과 예약에는 운영 쪽 대가가 있다. 22명이 모두 나타나면 2명은 방이 없다. 그래서 초과 비율은 호텔마다, 날짜마다 다르게 둘 수 있게 `room_type` 쪽에 열로 빼 두는 편이 낫다. 연휴 전날은 취소가 적어서 비율을 낮추고, 평일 출장 시즌은 높이는 식이다.
+
+## 방을 잡아 두고 결제를 기다린다
+
+앞 글에서 잠금을 쥔 채 결제를 부르지 말라고 했다. 그러면 순서는 "방을 먼저 잡고, 커밋하고, 그다음 결제"가 된다. 방을 잡았지만 아직 돈을 받지 않은 이 중간 상태를 예약 상태로 적어 둔다.
+
+<ConceptDiagram
+  caption="예약 한 건의 상태"
+  width={440}
+  height={230}
+  nodes={[
+    { id: "pending", label: "pending", sub: "방 잡음, 결제 전", x: 80, y: 110, w: 120 },
+    { id: "paid", label: "paid", sub: "결제 완료", x: 230, y: 45, w: 110 },
+    { id: "expired", label: "expired", sub: "15분 지남", x: 230, y: 180, w: 110 },
+    { id: "canceled", label: "canceled", sub: "손님이 취소", x: 370, y: 45, w: 110 },
+    { id: "refunded", label: "refunded", sub: "환불 완료", x: 370, y: 180, w: 110 },
+  ]}
+  edges={[
+    { from: "pending", to: "paid", label: "결제 성공" },
+    { from: "pending", to: "expired", label: "시간 초과" },
+    { from: "paid", to: "canceled", label: "취소 요청" },
+    { from: "canceled", to: "refunded", label: "환불" },
+  ]}
+/>
+
+`pending`으로 끝없이 남아 있으면 방이 묶인다. 결제 화면에서 손님이 앱을 닫아 버리면 그렇게 된다. 그래서 일정 시간(여기서는 15분)이 지난 `pending`을 풀어 주는 작업을 1분마다 돌린다. 예약 상태를 바꾸는 것과 재고를 되돌리는 것은 한 트랜잭션에 넣어야 한다. 둘 중 하나만 되면 방이 영영 묶이거나 두 번 풀린다.
+
+```sql
+-- 방을 잡아 둔 예약 셋: r-101, r-102는 20분 전, r-103은 방금
+WITH expired AS (
+  UPDATE reservation SET status = 'expired'
+  WHERE status = 'pending' AND created_at < now() - interval '15 minutes'
+  RETURNING hotel_id, room_type_id, check_in, check_out, room_count
+), nights AS (                -- 예약 하나를 묵는 밤마다 한 줄로 펼쳐서 날짜별로 합한다
+  SELECT e.hotel_id, e.room_type_id, d::date AS date, sum(e.room_count) AS n
+  FROM expired e, generate_series(e.check_in, e.check_out - 1, interval '1 day') d
+  GROUP BY 1, 2, 3
+)
+UPDATE room_type_inventory i
+   SET total_reserved = i.total_reserved - nights.n
+  FROM nights
+ WHERE i.hotel_id = nights.hotel_id AND i.room_type_id = nights.room_type_id AND i.date = nights.date
+RETURNING i.date, nights.n AS released, i.total_reserved;
+```
+
+```text
+    date    | released | total_reserved 
+------------+----------+----------------
+ 2026-12-26 |        2 |             14
+ 2026-12-25 |        3 |             19
+ 2026-12-24 |        1 |             18
+(3 rows)
+
+UPDATE 3
+```
+
+r-101(24~26일, 1개)과 r-102(25~27일, 2개)가 함께 풀렸다. 25일은 두 예약이 겹쳐서 3개가 돌아왔다. 날짜별로 먼저 합한 이유가 여기 있다. 합하지 않고 예약마다 UPDATE하면 같은 줄을 한 문장에서 두 번 고치려 하게 되는데, PostgreSQL의 `UPDATE ... FROM`은 한 줄에 맞는 원본이 여럿이면 그중 하나만 적용하고, 어느 것을 쓸지도 정해 두지 않는다. 25일 줄에 1개와 2개를 빼는 원본 두 줄을 붙여 시험해 보니 `UPDATE 1`과 함께 1만 빠졌다. 3개가 돌아와야 할 자리에서 2개가 조용히 사라진다.
+
+이제 늦게 온 결제를 보자. 만료 작업이 끝난 직후 r-101의 결제 성공 알림이 도착했다.
+
+```sql
+UPDATE reservation SET status = 'paid'
+WHERE reservation_id = 'r-101' AND status = 'pending';   -- 만료된 뒤 도착
+UPDATE reservation SET status = 'paid'
+WHERE reservation_id = 'r-103' AND status = 'pending';   -- 제때 도착
+```
+
+```text
+UPDATE 0
+UPDATE 1
+```
+
+상태를 바꿀 때 `AND status = 'pending'`을 조건에 넣었기 때문에 만료와 결제 중 먼저 온 쪽만 이긴다. r-101은 `UPDATE 0`을 받았다. 돈은 빠져나갔는데 방은 이미 풀렸다는 뜻이다. 이때 할 일은 둘 중 하나다. 아직 방이 남아 있으면 다시 잡아서 `paid`로 만들고, 없으면 환불한다. 어느 쪽이든 손님에게 결과를 알려야 한다. 조건 없이 `SET status = 'paid'`로 덮어쓰면 풀린 방을 다른 손님이 이미 샀을 수 있는데도 예약이 살아나서 앞 글의 이중 예약이 다른 경로로 돌아온다.
+
+## 서비스를 나누면 트랜잭션이 끊긴다
+
+여기까지는 예약과 재고가 같은 DB에 있어서 트랜잭션 하나로 묶을 수 있었다. 시스템을 서비스 여러 개로 나누면 이야기가 달라진다. 서비스마다 자기 DB를 갖는 것이 [마이크로서비스](/posts/microservices)의 기본 모양인데, 예약 서비스와 재고 서비스를 따로 두면 "예약 기록"과 "재고 +1"이 서로 다른 DB에 들어간다. 한쪽만 성공하고 다른 쪽이 실패하는 순간이 생긴다.
+
+결제는 처음부터 다른 서비스, 심지어 다른 회사다. 그래서 "방 잡기 → 결제 → 확정"은 원래부터 DB 트랜잭션 하나로 묶을 수 없다. 이 흐름을 단계마다 짧은 트랜잭션으로 끊고, 뒤 단계가 실패하면 앞 단계를 되돌리는 작업(보상)을 실행하는 방식을 사가라고 한다.
+
+<SequenceDiagram
+  caption="방 잡기, 결제, 확정을 단계별로 끊는다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "resv", label: "예약 서비스" },
+    { id: "pay", label: "결제 서비스" },
+  ]}
+  steps={[
+    { from: "app", to: "resv", label: "POST 예약", title: "방을 잡는다", detail: "예약을 pending으로 넣고 재고 +n을 한 트랜잭션으로 커밋한다. 여기까지는 같은 DB다." },
+    { from: "resv", to: "pay", label: "결제 요청", title: "결제를 부른다", detail: "예약 id를 결제의 멱등성 키로 넘긴다. 재시도해도 두 번 빠져나가지 않는다." },
+    { from: "pay", to: "resv", label: "실패", title: "카드가 거절됐다", detail: "결제 서비스는 자기 쪽 기록만 남기고 끝난다. 예약 서비스는 방을 쥐고 있다." },
+    { from: "resv", to: "resv", label: "보상: 방 풀기", title: "앞 단계를 되돌린다", detail: "예약을 canceled로 바꾸고 재고 -n을 한 트랜잭션으로 커밋한다. 만료 작업과 같은 SQL이다." },
+    { from: "resv", to: "app", label: "결제 실패", title: "손님에게 알린다", detail: "손님은 다른 카드로 다시 시도할 수 있다. 같은 주문서면 새 예약 id를 받는다." },
+  ]}
+/>
+
+사가는 중간에 다른 사람이 볼 수 있는 상태가 생긴다. 결제 실패 직전의 짧은 순간에는 방이 잡혀 있어서 다른 손님에게 매진으로 보인다. 이것을 받아들일 수 있는지가 설계 판단이다. 호텔에서는 대개 받아들인다. 몇 초 뒤면 풀리고, 이중 예약보다 훨씬 낫다. 보상 단계가 실패하면 어떻게 다시 시도하는지, 단계를 누가 지휘하는지는 [사가 패턴](/posts/saga-pattern)에 있다.
+
+대안으로 여러 DB가 함께 "준비됐다"를 확인한 뒤 함께 커밋하는 2단계 커밋(2PC)이 있다. 원자성은 확실하지만 참여자 하나가 느리면 모두가 잠금을 쥔 채 기다리고, 결제 회사 같은 바깥 시스템은 참여시킬 수도 없다. 자세한 비교는 [분산 트랜잭션과 2PC](/posts/distributed-transactions-2pc)에서 다뤘다.
+
+그래서 현실적인 답은 경계를 잘 긋는 것이다. 예약 기록과 재고는 같은 서비스, 같은 DB에 두고 트랜잭션 하나로 묶는다. 둘은 늘 함께 바뀌고, 따로 두면 얻는 것보다 맞추는 비용이 훨씬 크다. 호텔 정보, 가격, 결제는 서비스로 나눈다. 면접에서 "그건 순수한 마이크로서비스가 아니지 않나"라는 질문이 오면, 함께 바뀌는 데이터를 억지로 나누는 비용을 설명하면 된다. 예약 서비스가 다른 서비스에 "예약이 확정됐다"를 알릴 때는 같은 트랜잭션에 이벤트를 적어 두고 따로 보내는 [아웃박스](/posts/transactional-outbox)를 쓴다.
+
+## 트래픽이 1,000배가 되면
+
+호텔 체인 하나라면 지금 구조로 충분하다. 면접관은 여기서 묻는다. "이 시스템을 수천 개 호텔이 입점한 여행 사이트에 쓰면?"
+
+숫자로 보자. 하루 예약이 300만 건이라면 평균 초당 35건 정도다. 예약 1건마다 객실 상세를 100번쯤 본다면 조회는 초당 3,500건, 저녁 시간에 평균의 5배가 몰린다면 17,000건을 넘는다. 웹 서버와 서비스는 상태를 갖지 않으니 대수를 늘리면 된다([③ 로드 밸런서와 무상태 웹 계층](/posts/sd-load-balancer-stateless)). 막히는 건 상태를 가진 DB다.
+
+먼저 읽기를 덜어 낸다. 호텔 설명과 사진은 거의 바뀌지 않으니 캐시와 CDN에 둔다. 객실 상세 화면의 "남은 방" 숫자는 아래에서 캐시에 올린다. 그래도 쓰기와 남은 읽기가 서버 한 대를 넘으면 DB를 나눈다. 이 시스템의 거의 모든 쿼리는 `hotel_id`를 조건에 갖고 있다. 재고 확인도, 예약도, 만료 작업도 한 호텔 안에서 끝난다. 그래서 `hotel_id`로 샤드를 정한다.
+
+<NetworkTopology
+  caption="hotel_id로 샤드를 고른다"
+  width={440}
+  height={250}
+  zones={[
+    { id: "svc", label: "예약 서비스", x: 10, y: 10, w: 170, h: 230, tone: "private" },
+    { id: "shards", label: "재고·예약 DB 샤드 16개", x: 195, y: 10, w: 235, h: 230, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "api", label: "예약 API", x: 55, y: 125, icon: "server" },
+    { id: "router", label: "샤드 라우터", x: 135, y: 125, icon: "router" },
+    { id: "s0", label: "샤드 0", x: 260, y: 50, icon: "db" },
+    { id: "s7", label: "샤드 7", x: 260, y: 125, icon: "db" },
+    { id: "s15", label: "샤드 15", x: 260, y: 200, icon: "db" },
+    { id: "guest", label: "손님별 색인", x: 375, y: 125, icon: "db" },
+  ]}
+  links={[
+    { from: "api", to: "router" },
+    { from: "router", to: "s0" },
+    { from: "router", to: "s7" },
+    { from: "router", to: "s15" },
+    { from: "s7", to: "guest", dashed: true },
+  ]}
+  steps={[
+    { path: ["api", "router", "s7"], packet: "hotel 23", title: "호텔 23의 예약", detail: "hash(23) % 16 = 7이라면 샤드 7로 간다. 재고 확인과 예약, 커밋이 모두 이 샤드 안에서 끝난다." },
+    { path: ["api", "router", "s0"], packet: "hotel 512", title: "다른 호텔은 다른 샤드로", detail: "호텔끼리는 재고를 나눠 쓰지 않으니 서로 기다릴 일이 없다." },
+    { path: ["s7", "guest"], packet: "이벤트", title: "내 예약 목록은 따로 모은다", detail: "'이 손님의 예약 전부'는 여러 샤드에 흩어진다. 예약이 생길 때 손님 id 기준 색인에도 적어 둔다." },
+    { path: ["api", "router", "s0", "s7", "s15"], packet: "?", title: "피해야 할 질문", detail: "hotel_id 없이 묻는 쿼리는 모든 샤드를 돌아야 한다. 그런 화면은 따로 만든 색인이나 검색 시스템이 맡는다." },
+  ]}
+/>
+
+초당 2만 건을 샤드 16개로 나누면 샤드 하나에 1,250건이다. 짧은 인덱스 조회와 몇 줄짜리 UPDATE라면 서버 한 대가 감당할 만한 수준이다. 다만 샤드를 나눠도 앞 글의 문제, 즉 같은 호텔의 같은 날짜에 몰리는 요청은 한 샤드의 한 줄로 몰린다. 샤딩은 전체 양을 나눌 뿐 한 줄의 줄서기는 풀지 못한다. 샤드 키를 고르는 법과 다시 나누는 법은 [⑧ 샤딩 입문](/posts/sd-sharding-intro)에 있다.
+
+예약 기록은 시간이 지나면 거의 읽히지 않는다. 체크아웃이 지난 예약은 일정 기간 뒤 저렴한 저장소로 옮기고, 운영 DB에는 현재와 미래 예약만 둔다. 재고 줄도 지난 날짜는 지운다. 그러면 테이블 크기가 "앞으로 팔 날짜 수"에 묶여 커지지 않는다.
+
+어림셈을 직접 해 보자. 한 줄의 크기는 위에서 잰 97바이트를 쓴다.
+
+<CodePlayground
+  caption="재고 테이블의 크기와 샤드당 QPS"
+  functionName="estimate"
+  initialCode={`// hotels: 호텔 수, types: 호텔당 객실 유형 수, days: 미리 만들어 둘 날짜 수
+// bytesPerRow: 인덱스를 포함한 한 줄의 크기
+// peakQps: 가장 바쁠 때 DB로 오는 초당 요청 수, shards: 샤드 수
+// 반환: { rows: 줄 수, gb: 전체 크기 GB(1e9 바이트, 소수 첫째 자리 반올림), perShard: 샤드당 QPS(올림) }
+function estimate(hotels, types, days, bytesPerRow, peakQps, shards) {
+  return { rows: 0, gb: 0, perShard: 0 };
+}`}
+  solution={`function estimate(hotels, types, days, bytesPerRow, peakQps, shards) {
+  const rows = hotels * types * days;
+  const gb = Math.round((rows * bytesPerRow) / 1e8) / 10;
+  const perShard = Math.ceil(peakQps / shards);
+  return { rows, gb, perShard };
+}`}
+  tests={[
+    { label: "3,000곳 · 15유형 · 2년 · 16샤드", args: [3000, 15, 730, 97, 20000, 16], expected: { rows: 32850000, gb: 3.2, perShard: 1250 } },
+    { label: "실험한 크기", args: [200, 10, 365, 97, 100, 1], expected: { rows: 730000, gb: 0.1, perShard: 100 } },
+    { label: "8,000곳 · 12유형 · 2년 · 24샤드", args: [8000, 12, 730, 100, 30000, 24], expected: { rows: 70080000, gb: 7, perShard: 1250 } },
+    { label: "올림 확인", args: [1, 1, 1, 97, 1, 4], expected: { rows: 1, gb: 0, perShard: 1 } },
+  ]}
+/>
+
+첫 번째 결과가 이 장의 요점을 숫자로 보여 준다. 저장은 3.2GB로 작다. 샤드를 나누는 이유는 크기가 아니라 초당 요청 수다.
+
+## 남은 방 수를 캐시에 올린다
+
+객실 상세 화면마다 DB에 남은 방을 묻는 대신, Redis에 `inv:호텔:유형:날짜 → 남은 수`를 올려 두고 읽는다. 여기서 정할 것은 캐시를 언제 고치느냐다. 예약 서비스가 DB에 쓰고 나서 캐시도 직접 고치면, 그 사이 서버가 죽거나 두 요청의 순서가 엇갈려 캐시가 틀린 값으로 남을 수 있다. 그래서 DB의 변경을 따라 읽어서 캐시에 반영하는 방식을 많이 쓴다. 이렇게 DB에 일어난 변경을 순서대로 뽑아내 다른 시스템에 전하는 것을 변경 데이터 캡처(CDC)라고 한다. 실제 서비스에서는 Debezium 같은 도구가 PostgreSQL의 WAL(변경 기록)을 읽어서 이 일을 한다.
+
+<NetworkTopology
+  caption="읽기는 캐시에서, 쓰기는 DB에서, 캐시는 변경을 따라간다"
+  width={440}
+  height={230}
+  zones={[
+    { id: "svc", label: "서비스", x: 10, y: 10, w: 150, h: 210, tone: "private" },
+    { id: "store", label: "저장소", x: 175, y: 10, w: 255, h: 210, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "web", label: "객실 화면 API", x: 85, y: 55, icon: "server" },
+    { id: "resv", label: "예약 서비스", x: 85, y: 170, icon: "server" },
+    { id: "redis", label: "Redis 캐시", x: 250, y: 55, icon: "db" },
+    { id: "db", label: "재고 DB", x: 250, y: 170, icon: "db" },
+    { id: "cdc", label: "변경 동기화기", x: 375, y: 110, icon: "container" },
+  ]}
+  links={[
+    { from: "web", to: "redis" },
+    { from: "resv", to: "db" },
+    { from: "db", to: "cdc" },
+    { from: "cdc", to: "redis" },
+  ]}
+  steps={[
+    { path: ["web", "redis"], packet: "GET", title: "화면은 캐시를 읽는다", detail: "남은 방 1개를 보여 준다. DB에는 가지 않는다." },
+    { path: ["resv", "db"], packet: "+1", title: "예약은 DB에 쓴다", detail: "제약을 통과해 커밋된다. 남은 방은 0이 됐지만 캐시는 아직 1이다." },
+    { path: ["db", "cdc", "redis"], packet: "0", title: "변경이 캐시로 흘러간다", detail: "동기화기가 변경 기록을 읽어 캐시를 0으로 고친다. 그 사이의 짧은 시간 동안 화면은 옛 값을 보여 준다." },
+    { path: ["resv", "db"], packet: "+1", blocked: true, title: "옛 값을 보고 온 손님", detail: "캐시만 믿었다면 팔렸겠지만 쓰기는 DB가 판정한다. 제약이 거절한다." },
+  ]}
+/>
+
+이 그림의 마지막 단계가 정말 그렇게 되는지 돌려 봤다. Redis(`redis-server`)를 로컬에 띄우고, DB에는 재고가 바뀔 때마다 변경 기록 테이블에 한 줄을 남기는 트리거를 달았다. 동기화기는 그 테이블을 300ms마다 읽어 Redis에 반영하는 작은 Node 프로그램이다. Debezium을 흉내 낸 것이라 지연은 실제 도구와 다르다. 실제 도구도 지연이 0은 아니다.
+
+```text
+   85ms  캐시 채움 inv:1:10:2026-12-24 = 1
+  194ms  손님 A가 본 화면: 남은 방 1
+  251ms  손님 A: DB에서 예약 성공
+  313ms  손님 B가 본 화면: 남은 방 1  (DB는 이미 0)
+  372ms  손님 B: DB가 거절 (check_overbooking)
+  442ms  동기화기: 변경 1 반영 → inv:1:10:2026-12-24 = 0
+ 1083ms  손님 C가 본 화면: 남은 방 0
+```
+
+<AlgoTrace
+  caption="캐시가 옛 값을 보여 준 약 190ms (실측)"
+  cells={["194ms", "251ms", "313ms", "372ms", "442ms"]}
+  memoryLabel="캐시 / DB의 남은 방"
+  steps={[
+    { pointer: 0, memory: ["캐시 1", "DB 1"], caption: "둘이 같다. 손님 A는 1개 남았다고 본다." },
+    { pointer: 1, memory: ["캐시 1", "DB 0"], caption: "A의 예약이 커밋됐다. 이 순간부터 캐시가 틀렸다." },
+    { pointer: 2, memory: ["캐시 1", "DB 0"], caption: "손님 B는 캐시를 보고 1개 남았다고 믿는다." },
+    { pointer: 3, memory: ["캐시 1", "DB 0", "B 거절"], caption: "B의 예약은 DB 제약이 막았다. 이중 예약은 생기지 않았다." },
+    { pointer: 4, found: [4], memory: ["캐시 0", "DB 0"], caption: "동기화기가 변경을 반영했다. 커밋 뒤 약 190ms 만이다." },
+  ]}
+/>
+
+손님 B는 "1개 남음"을 보고 눌렀다가 "방금 매진됐다"는 답을 받았다. 불편하지만 틀린 것은 아니다. 캐시가 정확했더라도 손님이 결제 화면에서 망설이는 몇 분 사이에 같은 일이 일어난다. 그래서 이 설계에서 캐시는 보여 주는 용도로만 쓰고, 판정은 늘 DB 제약이 한다. 캐시 값으로 예약을 허락하는 순간 앞 글의 이중 예약이 캐시 지연만큼 다시 열린다.
+
+현장에서 이 구조가 고장 나는 모습은 대개 동기화기가 멈추는 것이다. 에러는 없는데 "남은 방이 있다고 나와서 눌렀더니 매진"이라는 불만이 늘고, 화면에 보이는 수와 실제 수의 차이가 하루 종일 그대로다. 그래서 동기화 지연(마지막으로 반영한 변경의 커밋 시각과 지금의 차이)을 지표로 두고, 몇 초를 넘으면 알린다. 캐시 키에는 TTL을 걸어 둔다. 동기화기가 아예 죽어도 키가 만료되면 다음 읽기가 DB에서 다시 채우니, 틀린 값이 영원히 남지는 않는다. 지난 날짜의 키도 저절로 사라진다. 캐시를 채우고 지우는 전략의 차이는 [캐시 전략](/posts/caching-strategies)과 [캐시 무효화](/posts/cache-invalidation)에서 다뤘다.
+
+## 다음 장: 예약에서 이메일로
+
+호텔 예약 두 편을 모으면 이렇다. 방이 아니라 객실 유형을 날짜별로 세고, 그 줄을 미리 만들어 둔다. 몇 박이든 가장 빠듯한 밤이 답을 정하고, 초과 예약 규칙은 CHECK 제약 하나로 DB에 적는다. 방을 먼저 잡고 결제는 그 뒤에 하며, 기다리다 만료된 예약과 늦게 온 결제는 조건부 상태 변경으로 가른다. 함께 바뀌는 예약과 재고는 한 DB에 두고, 그 밖의 서비스와는 사가로 맞춘다. 트래픽이 커지면 `hotel_id`로 샤드를 나누고 남은 방 수를 캐시에 올리되, 판정은 계속 DB가 한다.
+
+다음 장 [㊽ 이메일 서비스 설계 ①](/posts/sd-email-protocols)에서는 전혀 다른 모양의 시스템을 본다. 예약은 한 줄에 몰리는 쓰기가 문제였다면, 이메일은 다른 회사의 서버와 수십 년 된 규칙으로 대화해야 하는 것이 문제다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 방 번호가 아니라 객실 유형으로 재고를 관리하나요?
+
+호텔 손님은 특정 방이 아니라 유형을 사기 때문이다. 방 번호는 체크인할 때 정해지고, 그 사이 고장이나 청소 일정으로 바뀐다. 유형과 날짜마다 "팔 수 있는 수"와 "팔린 수"를 한 줄에 두면 몇 박이든 그 날짜 줄만 보면 확인이 끝나고, 이중 예약을 막는 잠금이나 제약도 그 줄에 건다.
+
+### 재고 테이블은 얼마나 커지나요? 한 대로 되나요?
+
+호텔 수 × 유형 수 × 미리 만들 날짜 수다. 실험에서 인덱스를 포함해 한 줄이 97바이트였으니, 호텔 3,000곳에 유형 15개, 2년치면 3,285만 줄에 3.2GB 정도로 한 대에 충분히 들어간다. 지난 날짜를 지우면 크기는 더 자라지 않는다. 샤드를 나눌 이유는 크기보다 초당 요청 수에서 나온다.
+
+### 10% 초과 예약은 어떻게 구현하나요?
+
+판정 규칙을 `total_reserved <= total_inventory × 1.1`로 바꾸면 된다. 소수를 피하려고 `total_reserved * 10 <= total_inventory * 11`처럼 정수로 CHECK 제약에 적었다. 호텔과 날짜마다 비율이 다를 수 있으니 실제로는 비율을 별도 열로 두고 운영팀이 바꿀 수 있게 한다.
+
+### 결제 화면에서 손님이 떠나면 잡아 둔 방은 어떻게 되나요?
+
+예약을 `pending` 상태로 두고, 일정 시간이 지나면 만료 작업이 상태를 `expired`로 바꾸면서 같은 트랜잭션에서 재고를 되돌린다. 여러 예약이 같은 날짜에 겹칠 수 있어 날짜별로 합한 뒤 한 번에 뺀다. 만료 뒤에 결제 성공이 늦게 오면 `status = 'pending'` 조건 때문에 상태 변경이 0줄이 되고, 방을 다시 잡거나 환불하는 흐름으로 넘긴다.
+
+### 예약과 재고를 서로 다른 마이크로서비스로 나누면 안 되나요?
+
+나눌 수는 있지만 둘은 늘 함께 바뀌어서, 나누면 트랜잭션 하나로 끝나던 일을 사가나 2PC로 맞춰야 한다. 그 사이 한쪽만 반영된 상태가 보이고, 보상 실패 같은 새 장애가 생긴다. 함께 바뀌는 데이터는 한 서비스와 한 DB에 두고, 결제처럼 원래 바깥에 있는 단계만 사가로 엮는 편이 실용적이다.
+
+### 트래픽이 1,000배가 되면 어디부터 손대나요?
+
+무상태 서버는 대수를 늘리고, 읽기를 캐시와 CDN으로 먼저 덜어 낸다. 그래도 DB가 모자라면 거의 모든 쿼리가 조건으로 갖는 `hotel_id`로 샤드를 나눈다. 손님별 예약 목록처럼 `hotel_id` 없이 묻는 화면은 별도 색인으로 받는다. 샤딩은 전체 양을 나눌 뿐 같은 호텔, 같은 날짜에 몰리는 줄서기는 풀지 못한다. 이것도 함께 말한다.
+
+### 캐시에 남은 방이 1개로 보였는데 실제로는 매진이었다면요?
+
+정상적으로 일어날 수 있는 일이고, 판정을 DB가 하는 한 이중 예약은 생기지 않는다. 실험에서는 커밋 뒤 약 190ms 동안 캐시가 옛 값을 보여 줬고, 그때 온 예약은 DB 제약이 거절했다. 캐시는 보여 주는 용도로만 쓰고, 동기화 지연을 지표로 지켜보며, TTL을 걸어 동기화기가 멈춰도 틀린 값이 오래 남지 않게 한다.
+
+### 변경 동기화기가 죽으면요?
+
+캐시가 마지막 값에 멈춘다. 예약은 여전히 DB가 판정하니 정확성은 지켜지지만, 화면의 남은 방 수가 계속 틀려 불만이 쌓인다. 마지막으로 반영한 변경의 시각으로 지연을 재서 알리고, 동기화기는 어디까지 읽었는지 저장해 두었다가 다시 뜨면 그 지점부터 이어 읽는다. 캐시 키의 TTL이 마지막 안전망이다.

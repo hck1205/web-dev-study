@@ -1,0 +1,504 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-memoization");
+
+배송비 계산이 느리다는 말을 듣고 결과를 기억해 두는 래퍼를 씌웠다. 그 뒤로 제주 사용자에게도 서울 배송비가 찍힌다.
+
+```js
+function memoize(fn) {
+  const cache = {};
+  return function (...args) {
+    const key = args.join(",");          // 인자를 문자열로 이어 키를 만든다
+    if (key in cache) return cache[key];
+    return (cache[key] = fn(...args));
+  };
+}
+function shippingFee(user) {
+  return user.region === "jeju" ? 6000 : 3000;
+}
+const fee = memoize(shippingFee);
+console.log(fee({ id: 1, region: "seoul" }));
+console.log(fee({ id: 2, region: "jeju" }));
+console.log(String({ id: 2, region: "jeju" }));
+```
+
+```text
+3000
+3000
+[object Object]
+```
+
+객체를 문자열로 바꾸면 내용과 상관없이 전부 `[object Object]`가 된다. 첫 사용자의 결과가 모든 사용자의 결과가 됐다. 캐시는 빠르게 만들어 줬지만 틀린 답을 빠르게 돌려준다.
+
+<AlgoTrace
+  caption="키가 겹치면 캐시는 첫 답만 기억한다"
+  memoryLabel="cache"
+  cells={["fee(서울 사용자)", "fee(제주 사용자)"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "키를 만든다. 객체를 문자열로 바꾸니 [object Object]다." },
+    { pointer: 0, memory: ["[object Object] → 3000"], caption: "캐시에 없으니 계산하고 3000을 넣는다." },
+    { pointer: 1, memory: ["[object Object] → 3000"], caption: "제주 사용자도 키가 [object Object]다." },
+    { pointer: 1, found: [1], memory: ["[object Object] → 3000"], caption: "캐시에 있다고 보고 계산 없이 3000을 돌려준다. 틀린 답이다." },
+  ]}
+/>
+
+이렇게 함수의 결과를 입력별로 기억해 두었다가 같은 입력이 오면 다시 계산하지 않고 돌려주는 기법을 메모이제이션(memoization)이라고 한다. 원리는 한 줄이지만 실제로 쓰면 키를 어떻게 만들지, 언제 버릴지, 비동기 결과는 어떻게 다룰지에서 버그가 난다. 이 글은 그 세 가지와 React의 `useMemo`가 이 기법을 어떻게 줄여 쓴 것인지를 본다. 출력은 Node.js 22와 lodash 4.17에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 결과를 기억해 둬도 되는 함수의 조건은 [순수 함수와 부수 효과](/posts/js-pure-functions)에서, 캐시를 함수 안에 숨기는 원리는 [클로저](/posts/js-closures)에서 다뤘다. React에서 `memo`, `useMemo`, `useCallback`을 언제 써야 하는지는 [React 리렌더링](/posts/react-rerender)에 정리했으니 여기서는 반복하지 않는다.
+
+## 같은 입력이면 같은 답이라는 약속
+
+메모이제이션은 함수가 순수하다는 약속 위에서만 맞다. 같은 인자에 같은 결과가 나와야 기억해 둔 결과를 돌려줘도 되기 때문이다. 함수 안에서 현재 시각이나 환율, 전역 설정을 읽는다면 인자가 같아도 답이 바뀌고, 캐시는 옛 답을 돌려준다.
+
+쓸 만한 경우도 정해져 있다. 계산이 비싸야 하고, 같은 입력이 반복돼야 한다. 둘 중 하나라도 아니면 캐시를 확인하고 저장하는 비용만 남는다. 가장 극적인 예는 재귀다.
+
+```js
+let calls = 0;
+function fib(n) { calls++; return n < 2 ? n : fib(n - 1) + fib(n - 2); }
+let t = performance.now();
+console.log("plain fib(35) =", fib(35), "calls", calls, (performance.now() - t).toFixed(0) + "ms");
+
+calls = 0;
+const memo = new Map();
+function fibMemo(n) {
+  calls++;
+  if (memo.has(n)) return memo.get(n);
+  const v = n < 2 ? n : fibMemo(n - 1) + fibMemo(n - 2);
+  memo.set(n, v);
+  return v;
+}
+t = performance.now();
+console.log("memo  fib(35) =", fibMemo(35), "calls", calls, (performance.now() - t).toFixed(2) + "ms");
+calls = 0;
+console.log("memo  fib(35) again calls", (fibMemo(35), calls));
+```
+
+```text
+plain fib(35) = 9227465 calls 29860703 127ms
+memo  fib(35) = 9227465 calls 69 0.06ms
+memo  fib(35) again calls 1
+```
+
+그냥 재귀는 같은 `fib(n)`을 수없이 다시 계산해서 호출이 약 3천만 번이다. 메모한 쪽은 `fib(0)`부터 `fib(35)`까지 36개를 한 번씩만 계산하고, 나머지는 캐시 확인이라 69번이다. 한 번 채운 뒤 다시 부르면 표에서 바로 꺼내니 1번이다. 호출 수가 왜 이렇게 불어나는지는 [빅오 표기법](/posts/big-o-notation)에서 셌다. 아래 그림은 `fib(5)`로 표가 채워지는 순서를 따라간다.
+
+<AlgoTrace
+  caption="아래부터 한 번씩 채우고, 두 번째부터는 표에서 꺼낸다"
+  memoryLabel="memo"
+  cells={["fib(0)", "fib(1)", "fib(2)", "fib(3)", "fib(4)", "fib(5)"]}
+  steps={[
+    { pointer: 5, memory: [], caption: "fib(5)는 fib(4)를, fib(4)는 fib(3)을 부르며 바닥까지 내려간다." },
+    { pointer: 1, memory: ["1→1", "0→0"], caption: "바닥에 닿았다. fib(1)과 fib(0)이 표에 들어간다." },
+    { pointer: 2, found: [2], memory: ["1→1", "0→0", "2→1"], caption: "fib(2) = 1 + 0. 계산하고 기록한다." },
+    { pointer: 3, found: [1, 3], memory: ["1→1", "0→0", "2→1", "3→2"], caption: "fib(3)은 fib(2)+fib(1). fib(1)은 다시 계산하지 않고 표에서 꺼낸다." },
+    { pointer: 4, found: [2, 4], memory: ["1→1", "0→0", "2→1", "3→2", "4→3"], caption: "fib(4)에 필요한 fib(2)도 표에 있다." },
+    { pointer: 5, found: [3, 5], memory: ["1→1", "0→0", "2→1", "3→2", "4→3", "5→5"], caption: "fib(5) = 3 + 2. 각 칸은 딱 한 번만 계산됐다." },
+  ]}
+/>
+
+함정이 하나 있다. 범용 `memoize`로 바깥에서 감싸기만 하면 재귀는 빨라지지 않는다.
+
+```js
+function memoize(fn) { const c = new Map(); return (n) => c.has(n) ? c.get(n) : (c.set(n, fn(n)), c.get(n)); }
+calls = 0;
+const wrapped = memoize(fib);
+t = performance.now();
+wrapped(35);
+console.log("memoize(fib)(35) calls", calls, (performance.now() - t).toFixed(0) + "ms");
+```
+
+```text
+memoize(fib)(35) calls 29860703 124ms
+```
+
+`fib` 안의 재귀 호출은 `wrapped`가 아니라 원래 `fib`를 부른다. 캐시를 거치는 건 바깥의 첫 호출 하나뿐이다. 재귀를 메모하려면 함수 안에서 캐시를 보거나, 재귀 호출이 메모된 함수를 부르도록 이름을 바꿔 묶어야 한다. 이 재귀 메모를 표로 정리하면 동적 계획법(DP)이 된다.
+
+## 캐시 키가 결과를 결정한다
+
+처음 버그처럼 키가 겹치면 틀린 답이 나오고, 키가 너무 잘게 갈리면 캐시가 안 맞는다. 인자 모양에 따라 맞는 키가 다르다.
+
+인자가 문자열이나 숫자 하나라면 그대로 `Map`의 키로 쓴다. 이때 캐시를 일반 객체(`{}`)로 만들면 안 된다.
+
+```js
+function memoObj(fn) {
+  const cache = {};
+  return (key) => (key in cache ? cache[key] : (cache[key] = fn(key)));
+}
+const label = memoObj((word) => word.toUpperCase());
+console.log(label("hello"));
+console.log(label("constructor"));
+console.log(label("toString"));
+```
+
+```text
+HELLO
+[Function: Object]
+[Function: toString]
+```
+
+일반 객체는 `Object.prototype`을 물려받는다. `in` 연산자는 프로토타입까지 찾으니 `constructor`, `toString` 같은 이름은 캐시에 넣은 적이 없는데도 있다고 나온다. 사용자가 입력한 검색어가 키라면 언젠가 이 단어가 들어온다. `Map`은 이런 상속이 없고, 숫자 1과 문자열 "1"도 다른 키로 구분한다.
+
+인자가 여러 개라면 키에 전부 들어가야 한다. lodash의 `_.memoize`는 기본으로 첫 인자만 키로 쓴다.
+
+```js
+const _ = require("lodash");
+let computed = 0;
+const power = (base, exp) => { computed++; return base ** exp; };
+const p = _.memoize(power);
+console.log(p(2, 3), p(2, 4), "computed", computed);
+const p2 = _.memoize(power, (base, exp) => `${base}:${exp}`);
+console.log(p2(2, 3), p2(2, 4), "computed", computed);
+```
+
+```text
+8 8 computed 1
+8 16 computed 3
+```
+
+`2의 4제곱`이 8로 나왔다. 두 번째 인자가 키에 없어서 `p(2, 3)`의 결과를 그대로 돌려줬다. 두 번째 인자로 키를 만드는 함수(resolver)를 넘겨야 한다.
+
+여러 인자나 객체 인자를 `JSON.stringify`로 키를 만드는 방법도 흔하다. 편하지만 구멍이 있다.
+
+```js
+const keys = [[{ a: 1, b: 2 }], [{ b: 2, a: 1 }], [undefined], [null], [NaN], [new Date(0)], ["1970-01-01T00:00:00.000Z"]];
+for (const k of keys) console.log(JSON.stringify(k));
+```
+
+```text
+[{"a":1,"b":2}]
+[{"b":2,"a":1}]
+[null]
+[null]
+[null]
+["1970-01-01T00:00:00.000Z"]
+["1970-01-01T00:00:00.000Z"]
+```
+
+내용이 같은 객체도 속성 순서가 다르면 다른 키가 되고(캐시가 안 맞는다), `undefined`와 `null`과 `NaN`은 같은 키가 되고(틀린 답이 나온다), `Date`와 그 문자열도 같은 키가 된다. 함수나 `Map`, 순환 참조가 들어 있으면 아예 키를 못 만든다. 인자 모양을 내가 정할 수 있는 함수에서만 쓰고, 그렇지 않다면 키를 직접 만든다.
+
+객체 하나가 인자이고 그 객체를 바꾸지 않고 다룬다면(불변 데이터) 내용 대신 객체 자체를 키로 쓸 수 있다. 같은 객체면 같은 결과라는 뜻이다. 이때는 `WeakMap`이 맞다. 뒤에서 메모리 이야기와 함께 본다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="인자 모양에 따라 키 만드는 법이 다르다"
+  nodes={[
+    { id: "arg", label: "인자", x: 200, y: 35, w: 90 },
+    { id: "prim", label: "원시값 하나", sub: "Map 키로 그대로", x: 70, y: 135, w: 130 },
+    { id: "many", label: "여러 개", sub: "resolver로 직접", x: 200, y: 135, w: 120 },
+    { id: "obj", label: "불변 객체", sub: "WeakMap, 참조로", x: 330, y: 135, w: 130 },
+    { id: "bad", label: "String(obj)", sub: "[object Object]", x: 200, y: 225, w: 150 },
+  ]}
+  edges={[
+    { from: "arg", to: "prim" },
+    { from: "arg", to: "many" },
+    { from: "arg", to: "obj" },
+    { from: "many", to: "bad", label: "피한다", dashed: true },
+  ]}
+/>
+
+## 버리지 않는 캐시는 메모리 누수다
+
+캐시는 결과를 들고 있는 동안 메모리를 쓴다. 입력 종류가 끝없이 늘어나는 함수에 버리는 규칙 없는 캐시를 붙이면 그게 곧 누수다. 검색어마다 결과를 기억하는 함수에 서로 다른 검색어 10만 개를 넣어 봤다.
+
+```js
+// node --expose-gc 로 실행한다. memoize는 버리지 않는 Map 캐시, memoizeLRU는 아래에서 만든다
+const search = (q) => ({ q, ids: Array.from({ length: 50 }, (_, i) => i) }); // 검색 결과 흉내
+for (const [label, f] of [["무제한", memoize(search)], ["LRU 1000", memoizeLRU(search, 1000)]]) {
+  global.gc(); const start = process.memoryUsage().heapUsed;
+  for (let i = 0; i < 100_000; i++) f("query-" + i);         // 검색어가 매번 다르다
+  global.gc();
+  console.log(label.padEnd(9), "증가", ((process.memoryUsage().heapUsed - start) / 1024 / 1024).toFixed(1) + "MB");
+}
+```
+
+```text
+무제한       증가 53.1MB
+LRU 1000  증가 0.6MB
+```
+
+브라우저 탭은 닫으면 끝나지만, 서버 프로세스는 며칠씩 돈다. 모듈 최상위에 둔 무제한 캐시는 요청이 쌓이는 만큼 커지고, 결국 컨테이너가 메모리 한도에 걸려 재시작된다. 힙 스냅샷을 비교하면 `Map`의 엔트리 수가 계속 늘어나는 게 보인다. 찾는 순서는 [메모리 누수](/posts/js-memory-leak)에 정리했다.
+
+버리는 규칙으로 가장 흔한 것이 LRU(Least Recently Used), "가장 오래 안 쓴 것부터 버린다"다. `Map`은 넣은 순서를 기억하니 쉽게 만들 수 있다. 꺼내 쓸 때 지웠다가 다시 넣으면 맨 뒤(가장 최근)로 가고, 넘치면 맨 앞(가장 오래된 것)을 지운다.
+
+```js
+function memoizeLRU(fn, max) {
+  const cache = new Map();
+  return (key) => {
+    if (cache.has(key)) {
+      const v = cache.get(key);
+      cache.delete(key); cache.set(key, v);   // 최근에 쓴 것을 맨 뒤로
+      return v;
+    }
+    const v = fn(key);
+    cache.set(key, v);
+    if (cache.size > max) cache.delete(cache.keys().next().value); // 가장 오래 안 쓴 것
+    return v;
+  };
+}
+```
+
+<AlgoTrace
+  caption="꺼내 쓴 것은 뒤로 가고, 넘치면 맨 앞이 빠진다 (최대 2개)"
+  memoryLabel="Map 순서 (왼쪽이 오래됨)"
+  cells={["A", "B", "A", "C", "B"]}
+  steps={[
+    { pointer: 0, memory: ["A"], caption: "A를 계산해 넣는다." },
+    { pointer: 1, memory: ["A", "B"], caption: "B를 계산해 넣는다. 꽉 찼다." },
+    { pointer: 2, found: [2], memory: ["B", "A"], caption: "A는 캐시에 있다. 꺼내면서 맨 뒤로 옮긴다." },
+    { pointer: 3, memory: ["A", "C"], caption: "C를 넣으니 3개. 맨 앞의 B가 빠진다." },
+    { pointer: 4, memory: ["C", "B"], caption: "B는 이미 버렸으니 다시 계산한다. 이번엔 A가 빠진다." },
+  ]}
+/>
+
+LRU가 늘 정답은 아니다. 데이터가 바뀌면 크기와 상관없이 버려야 하니 시간 기준(TTL)이 필요하고, 여러 서버가 같은 결과를 나눠 써야 하면 프로세스 안의 캐시가 아니라 Redis 같은 바깥 캐시가 필요하다. 그쪽 설계는 [캐싱 전략](/posts/caching-strategies)에서, 브라우저에서 서버 데이터를 캐시하는 도구는 [화면 데이터 캐시](/posts/client-data-cache)에서 다룬다. 실무에서 LRU를 직접 짤 일은 드물고 `lru-cache` 같은 패키지를 쓰지만, 원리는 위의 열 줄이다.
+
+## 객체를 키로 쓸 때는 WeakMap
+
+객체 인자를 참조로 캐시할 때 `Map`을 쓰면 캐시가 그 객체를 붙잡는다. 화면을 떠나 아무도 안 쓰는 주문 객체도 캐시에 키로 남아 있으니 가비지 컬렉션이 못 치운다. `WeakMap`은 키를 약하게 잡는다. 키 객체를 다른 곳에서 아무도 안 쓰면 엔트리째 사라진다.
+
+```js
+// node --expose-gc 로 실행한다
+const mb = (b) => (b / 1024 / 1024).toFixed(1) + "MB";
+function memoByObject(Store, fn) {
+  const cache = new Store();
+  return (obj) => { if (!cache.has(obj)) cache.set(obj, fn(obj)); return cache.get(obj); };
+}
+const summarize = (order) => ({ total: order.lines.reduce((s, x) => s + x, 0), copy: [...order.lines] });
+const keep = [];
+for (const Store of [Map, WeakMap]) {
+  const memo = memoByObject(Store, summarize);
+  keep.push(memo); // 메모 함수는 계속 살아 있다
+  global.gc(); const start = process.memoryUsage().heapUsed;
+  for (let i = 0; i < 20_000; i++) {
+    const order = { id: i, lines: Array.from({ length: 100 }, (_, k) => k) }; // 화면을 떠나면 버려지는 주문
+    memo(order);
+  }
+  global.gc();
+  console.log(Store.name.padEnd(7), "남은 메모리", mb(process.memoryUsage().heapUsed - start));
+}
+```
+
+```text
+Map     남은 메모리 34.8MB
+WeakMap 남은 메모리 0.3MB
+```
+
+대신 `WeakMap`은 원시값을 키로 받지 않고, 크기를 알 수도 순회할 수도 없다. 그래서 "이 객체에서 파생된 값"을 붙여 두는 용도에 맞는다. Redux의 셀렉터 라이브러리(reselect 5)의 `weakMapMemoize`가 이 방식이다. 객체를 고쳐 쓰는 코드와 함께 쓰면 안 된다. 같은 객체에 내용만 바뀌면 캐시는 옛 결과를 돌려준다. 참조로 캐시하는 건 불변 데이터를 다룰 때만 맞다. 이 둘이 왜 같이 다니는지는 [불변성과 React](/posts/js-immutability-react)에서 본다. `WeakMap`과 GC의 관계는 [가비지 컬렉션](/posts/garbage-collection)에서 더 다룬다.
+
+## Promise를 기억하면 요청이 하나로 합쳐진다
+
+비동기 함수를 메모할 때는 결과가 아니라 Promise를 바로 캐시에 넣는다. 결과가 올 때까지 기다렸다가 넣으면, 그 사이 들어온 같은 요청은 캐시가 비어 있으니 또 요청을 보낸다. Promise를 넣으면 동시에 들어온 호출이 모두 같은 Promise를 받아 요청이 하나로 합쳐진다.
+
+그런데 실패한 Promise도 캐시에 남는다. 환율 API가 잠깐 503을 낸 상황을 흉내 냈다.
+
+```js
+function memoizeAsync(fn, { dropOnError }) {
+  const cache = new Map();
+  return (key) => {
+    if (cache.has(key)) return cache.get(key);
+    const p = fn(key);
+    cache.set(key, p);                       // 결과가 아니라 Promise를 바로 넣는다
+    if (dropOnError) p.catch(() => cache.delete(key));
+    return p;
+  };
+}
+// 실패하는 API에 동시에 3번 → API 복구 → 다시 호출
+```
+
+```text
+dropOnError=false 동시 3번 → rejected,rejected,rejected 요청 1
+  복구 뒤 다시 호출 → 503 from rate API 요청 1
+dropOnError=true 동시 3번 → rejected,rejected,rejected 요청 1
+  복구 뒤 다시 호출 → 1380 요청 2
+```
+
+둘 다 동시 호출 3번을 요청 1번으로 합쳤다. 하지만 실패를 지우지 않은 쪽은 API가 살아난 뒤에도 프로세스가 재시작될 때까지 503을 돌려준다. 요청 수가 1에서 안 늘어난 게 그 증거다. "잠깐 장애가 났는데 그 뒤로 계속 에러다, 재배포하니 고쳐졌다"는 증상이면 실패를 캐시하고 있는지 먼저 본다.
+
+<SequenceDiagram
+  caption="같은 Promise를 나눠 받고, 실패하면 지운다"
+  actors={[
+    { id: "a", label: "호출 A" },
+    { id: "b", label: "호출 B" },
+    { id: "memo", label: "memoizeAsync" },
+    { id: "api", label: "환율 API" },
+  ]}
+  steps={[
+    { from: "a", to: "memo", label: "rate('USD')", title: "첫 호출", detail: "캐시가 비어 있다. 요청을 보내고 Promise를 바로 캐시에 넣는다." },
+    { from: "memo", to: "api", label: "GET /rates/USD", title: "요청은 한 번", detail: "아직 응답이 오지 않았다." },
+    { from: "b", to: "memo", label: "rate('USD')", title: "같은 키가 또 온다", detail: "캐시에 Promise가 있다. 새 요청 없이 같은 Promise를 돌려준다." },
+    { from: "api", to: "memo", label: "503", title: "실패가 돌아온다", detail: "A와 B 모두 같은 에러를 받는다." },
+    { from: "memo", to: "memo", label: "cache.delete('USD')", title: "실패는 지운다", detail: "지우지 않으면 API가 살아나도 이 거절된 Promise를 계속 돌려준다.", payload: "p.catch(() => cache.delete(key))" },
+  ]}
+/>
+
+이 캐시에는 만료가 없다는 점도 기억해야 한다. 환율은 바뀐다. 시간이 지나면 버리는 규칙(TTL)이 필요하고, 그 정도가 되면 TanStack Query나 SWR처럼 무효화와 재시도를 갖춘 도구를 쓰는 게 낫다.
+
+## 기억하는 비용이 계산보다 클 때
+
+캐시 확인도 공짜가 아니다. 키를 만들고 `Map`에서 찾는 비용이 계산보다 크면 메모는 오히려 느리다. 100가지 입력을 200만 번 반복해 넣어 봤다.
+
+```js
+const double = (n) => n * 2;
+const heavy = (n) => { let s = 0; for (let i = 0; i < 2000; i++) s += Math.sqrt(n + i); return s; };
+bench("double 직접", double);
+bench("double 메모", memoize(double));
+bench("heavy 직접", heavy);
+bench("heavy 메모", memoize(heavy));
+```
+
+```text
+double 직접            7ms
+double 메모           52ms
+heavy 직접         10650ms
+heavy 메모            61ms
+```
+
+곱셈 하나짜리 함수는 메모하니 일곱 배 느려졌다. 반복문 2000번짜리는 거의 모든 호출이 캐시에서 끝나 170배쯤 빨라졌다. 두 번 돌렸을 때 메모한 `double`은 52ms와 118ms로 들쑥날쑥했지만 직접 호출보다 느린 건 같았다. 메모를 붙이기 전에 그 함수가 실제로 느린지 프로파일러로 먼저 재고, 같은 입력이 얼마나 반복되는지(캐시 적중률)를 본다. 적중률이 낮으면 메모리만 쓰고 이득이 없다.
+
+## useMemo는 칸이 하나뿐인 캐시다
+
+React의 `useMemo`는 지금까지 본 메모이제이션을 아주 좁게 쓴 것이다. 컴포넌트 하나에 칸 하나, 마지막 입력 하나만 기억한다.
+
+<UrlAnatomy
+  caption="useMemo 한 줄을 캐시로 읽기"
+  base="const visible = useMemo("
+  separator=""
+  joiner=" "
+  params={[
+    { key: "fn", display: "() => filterList(list, q),", title: "계산 함수", description: "캐시가 맞지 않을 때만 부른다. 인자를 받지 않으니 필요한 값은 클로저로 읽는다. 순수해야 하고, StrictMode에서는 두 번 불린다.", required: true },
+    { key: "deps", display: "[list, q]", title: "캐시 키", description: "직전 렌더링의 배열과 원소마다 Object.is로 비교한다. 하나라도 다르면 다시 계산한다. 내용이 아니라 참조를 본다.", required: true },
+    { key: "end", display: ")", title: "칸은 하나", description: "직전 값 하나만 기억한다. a, b, a로 바뀌면 세 번 다 계산한다. React가 필요하면 캐시를 버릴 수도 있다." },
+  ]}
+/>
+
+같은 규칙으로 동작하는 함수를 만들어 확인해 보자.
+
+```js
+function memoizeLast(fn) {
+  let lastDeps = null, lastValue;
+  return (...deps) => {
+    if (lastDeps && deps.length === lastDeps.length && deps.every((d, i) => Object.is(d, lastDeps[i]))) return lastValue;
+    lastDeps = deps;
+    return (lastValue = fn(...deps));
+  };
+}
+let computed = 0;
+const filterList = memoizeLast((list, q) => { computed++; return list.filter((x) => x.includes(q)); });
+const list = ["apple", "banana", "grape"];
+filterList(list, "a"); filterList(list, "a"); filterList(list, "a");
+console.log("같은 입력 3번:", computed);
+computed = 0;
+for (const q of ["a", "b", "a", "b"]) filterList(list, q);
+console.log("a, b 번갈아 4번:", computed);
+computed = 0;
+filterList(["apple", "banana", "grape"], "a"); filterList(["apple", "banana", "grape"], "a");
+console.log("내용 같은 새 배열 2번:", computed);
+```
+
+```text
+같은 입력 3번: 1
+a, b 번갈아 4번: 3
+내용 같은 새 배열 2번: 2
+```
+
+직전 입력이 `a`였으니 번갈아 넣은 첫 `a`만 맞고 나머지 셋은 다시 계산했다. 칸이 하나라서 두 값이 번갈아 오면 소용이 없다. 마지막 줄은 React에서 가장 흔한 실수다. 렌더링마다 `[...]`나 `filter` 결과처럼 새로 만든 배열을 의존성에 넣으면 내용이 같아도 참조가 달라 매번 다시 계산한다. 의존성은 위에서 `useMemo`로 고정한 값이나 상태, props처럼 참조가 유지되는 것이어야 한다.
+
+나머지 도구도 같은 틀로 읽힌다. `useCallback(fn, deps)`는 `useMemo(() => fn, deps)`와 같다. 계산 결과 대신 함수 자체를 기억한다. `React.memo(Component)`는 컴포넌트의 props를 키로 하는 칸 하나짜리 캐시이고, props를 하나씩 `Object.is`로 비교한다. React 공식 문서는 `useMemo`를 성능 최적화로만 쓰라고 한다. 개발 중에 파일을 고치거나 첫 마운트 도중 컴포넌트가 suspend되는 경우처럼 React가 캐시를 버릴 수 있으니, 이 캐시가 없으면 동작이 틀어지는 코드(캐시된 객체의 참조가 같다는 데 기대는 로직)는 쓰지 않는다.
+
+서버 쪽에도 같은 생각이 있다. 서버 컴포넌트에서 쓰는 React의 `cache(fn)`은 요청 하나 동안만 결과를 기억해서, 같은 요청 안에서 여러 컴포넌트가 같은 사용자 정보를 불러도 한 번만 조회하게 한다. 요청이 끝나면 버리니 앞에서 본 무제한 캐시나 요청 사이에 값이 섞이는 문제가 없다. 그리고 React Compiler는 이 모든 메모를 빌드할 때 자동으로 넣어 준다. 그 이야기는 [React 리렌더링](/posts/react-rerender#react-compiler가-대신해-주는-것)에 있다.
+
+## 연습: 크기 제한이 있는 memoize
+
+인자 전체로 키를 만들고, 기억한 개수가 `maxSize`를 넘으면 가장 오래 안 쓴 것부터 버리는 `memoize`를 만들어 보자. 꺼내 쓴 것도 "방금 쓴 것"이 돼야 한다. 넣은 순서대로만 버리는(FIFO) 풀이는 네 번째 테스트에서, 인자를 `join(",")`으로 이어 키를 만드는 풀이는 마지막 테스트에서 걸린다.
+
+<CodePlayground
+  caption="memoize: 키 만들기와 LRU"
+  functionName="run"
+  initialCode={`function memoize(fn, maxSize) {
+  // 인자 전체로 키를 만들어 결과를 기억한다. (2, 3)과 (2, 4)는 다른 키다.
+  // 기억한 개수가 maxSize를 넘으면 가장 오래 안 쓴 것부터 버린다 (LRU).
+  // 캐시에서 꺼내 쓴 것도 "방금 쓴 것"이 된다.
+  return (...args) => fn(...args);
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// calls의 인자로 차례로 부르고, 실제 계산이 몇 번 일어났는지 센다.
+function run(calls, maxSize) {
+  const computed = [];
+  const power = (base, exp) => { computed.push(base + "^" + exp); return base ** exp; };
+  const p = memoize(power, maxSize);
+  const results = calls.map((args) => p(...args));
+  return { results, computed };
+}`}
+  solution={`function memoize(fn, maxSize) {
+  const cache = new Map();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    if (cache.has(key)) {
+      const value = cache.get(key);
+      cache.delete(key);
+      cache.set(key, value);
+      return value;
+    }
+    const value = fn(...args);
+    cache.set(key, value);
+    if (cache.size > maxSize) cache.delete(cache.keys().next().value);
+    return value;
+  };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// calls의 인자로 차례로 부르고, 실제 계산이 몇 번 일어났는지 센다.
+function run(calls, maxSize) {
+  const computed = [];
+  const power = (base, exp) => { computed.push(base + "^" + exp); return base ** exp; };
+  const p = memoize(power, maxSize);
+  const results = calls.map((args) => p(...args));
+  return { results, computed };
+}`}
+  tests={[
+    { label: "같은 인자는 한 번만 계산", args: [[[2, 10], [2, 10], [2, 10]], 5], expected: { results: [1024, 1024, 1024], computed: ["2^10"] } },
+    { label: "두 번째 인자도 키에 들어간다", args: [[[2, 3], [2, 4], [2, 3]], 5], expected: { results: [8, 16, 8], computed: ["2^3", "2^4"] } },
+    { label: "넘치면 가장 오래된 것을 버린다", args: [[[1, 1], [2, 1], [3, 1], [1, 1]], 2], expected: { results: [1, 2, 3, 1], computed: ["1^1", "2^1", "3^1", "1^1"] } },
+    { label: "꺼내 쓴 것은 살아남는다 (LRU)", args: [[[1, 1], [2, 1], [1, 1], [3, 1], [1, 1], [2, 1]], 2], expected: { results: [1, 2, 1, 3, 1, 2], computed: ["1^1", "2^1", "3^1", "2^1"] } },
+    { label: "문자열 \"2\"와 숫자 2는 다르다", args: [[[2, 2], ["2", 2]], 5], expected: { results: [4, 4], computed: ["2^2", "2^2"] } },
+  ]}
+/>
+
+## 빠르게 틀리지 않으려면
+
+처음 버그는 캐시가 아니라 키가 틀려서 생겼다. 메모이제이션은 순수한 함수의 결과를 입력별로 기억하는 단순한 기법이지만, 키가 입력을 빠짐없이 구분하는지, 캐시를 언제 버리는지, 실패와 만료를 어떻게 다루는지에서 거의 모든 버그가 나온다. React의 `useMemo`는 그중 칸 하나짜리 캐시이고, 의존성은 참조로 비교된다는 것만 기억하면 대부분의 함정을 피한다.
+
+## 면접에서 나올 만한 질문
+
+### 메모이제이션이란 무엇인가요?
+
+함수의 결과를 입력별로 기억해 두었다가 같은 입력이 다시 오면 계산하지 않고 기억한 값을 돌려주는 기법이다. 클로저 안에 `Map` 같은 캐시를 두고 키로 찾는다. 재귀 피보나치처럼 같은 하위 계산이 반복되는 경우 호출 수가 지수에서 선형으로 준다.
+
+### 어떤 함수에 메모이제이션을 쓰면 안 되나요?
+
+순수하지 않은 함수다. 현재 시각, 환율, 전역 설정처럼 인자 밖의 값을 읽으면 같은 인자에도 답이 바뀌는데 캐시는 옛 답을 돌려준다. 계산이 싸거나 같은 입력이 거의 반복되지 않는 함수도 캐시 확인과 메모리 비용만 늘어서 오히려 느려진다.
+
+### 캐시 키는 어떻게 만들어야 하나요?
+
+입력을 빠짐없이, 그러면서 같은 입력은 같은 키로 만들어야 한다. 원시값 하나면 `Map`의 키로 그대로 쓰고, 일반 객체를 캐시로 쓰면 `constructor` 같은 상속된 이름이 걸린다. 객체를 `String`으로 바꾸면 모두 `[object Object]`가 되고, `JSON.stringify`는 속성 순서와 `undefined`/`null` 구분, `Date` 같은 값에서 구멍이 있다. lodash `memoize`는 기본으로 첫 인자만 키로 쓰니 resolver를 넘긴다.
+
+### 메모이제이션 캐시가 메모리 누수가 되는 이유와 대책은요?
+
+버리는 규칙이 없으면 입력 종류만큼 캐시가 커지기 때문이다. 서버처럼 오래 도는 프로세스에서 사용자 입력을 키로 쓰면 메모리가 계속 는다. LRU처럼 크기 제한을 두거나 TTL로 만료시키고, 객체를 참조로 캐시할 때는 `WeakMap`을 써서 키 객체가 버려지면 엔트리도 사라지게 한다.
+
+### Map과 WeakMap 중 무엇을 캐시로 쓰나요?
+
+키가 원시값이거나 캐시를 순회하고 크기를 알아야 하면 `Map`, 키가 객체이고 그 객체가 살아 있는 동안만 결과가 필요하면 `WeakMap`이다. `WeakMap`은 키를 약하게 잡아서 다른 곳에서 키 객체를 안 쓰면 GC가 엔트리째 치운다. 참조로 캐시하니 객체 내용을 고쳐 쓰는 코드와 함께 쓰면 옛 결과가 나온다.
+
+### 비동기 함수를 메모할 때 주의할 점은요?
+
+결과가 아니라 Promise를 바로 캐시에 넣어야 동시에 들어온 같은 요청이 하나로 합쳐진다. 실패한 Promise는 지워야 한다. 그대로 두면 일시적인 장애 뒤에도 프로세스가 재시작될 때까지 같은 에러를 돌려준다. 데이터가 바뀌는 값이라면 만료 시간도 둬야 해서, 보통은 무효화와 재시도를 갖춘 데이터 패칭 도구를 쓴다.
+
+### useMemo는 일반적인 메모이제이션과 무엇이 다른가요?
+
+컴포넌트 인스턴스마다 직전 값 하나만 기억하는 칸 하나짜리 캐시다. 의존성 배열을 원소마다 `Object.is`로 비교해서, 렌더링마다 새로 만든 배열이나 객체를 넣으면 내용이 같아도 매번 다시 계산한다. React가 필요하면 캐시를 버릴 수 있다고 문서에 밝혀 두었으니 성능 최적화로만 쓰고, 언제 써야 하는지는 프로파일러로 잰 뒤 정한다.
+
+### 재귀 함수를 바깥에서 memoize로 감싸면 왜 빨라지지 않나요?
+
+함수 안의 재귀 호출은 감싼 함수가 아니라 원래 함수의 이름을 직접 부르기 때문이다. 캐시를 거치는 건 바깥에서 들어온 첫 호출뿐이라 하위 계산은 전부 다시 일어난다. 함수 안에서 캐시를 확인하거나, 재귀 호출이 메모된 함수를 가리키도록 바꿔야 한다.

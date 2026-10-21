@@ -169,6 +169,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 | `<ConceptDiagram nodes edges />` | 용어·주체 사이의 관계도 | 화살표 방향으로 점이 계속 흐른다 |
 | `<NetworkTopology zones nodes links steps />` | 네트워크 구성도: VPC·서브넷·존 같은 영역 안의 장비와 패킷 경로 (라우팅, 방화벽 차단, 로드 밸런서, 서비스 메시) | 단계마다 경로가 홉 단위로 그려지고 패킷이 그 길을 따라 이동한다. 도착하면 물결, 막히면(`blocked`) X가 튀어나와 흔들린다. `steps`가 없으면 연결선을 따라 점이 흐른다 |
 | `<LoadingDemo patterns caption />` | UI 패턴을 작은 앱 화면에서 실제로 움직여 보여 줄 때 (로딩: spinner, skeleton, progress-bar, lazy-loading, progress-ring, blur-up, stepper, infinite-scroll, streaming-text, optimistic-ui, pull-to-refresh, loading-button) | 화면에 들어오면 장면이 반복 재생된다. 하나만 주면 큰 카드, 여러 개면 격자 |
+| `<MotionDemo patterns caption />` | UI 애니메이션 패턴을 작은 앱 화면에서 실제로 움직여 보여 줄 때 (gooey, slide-in, spring-pop, stagger, shared-element, ripple, path-draw, marquee, tilt) | 화면에 보이는 동안 장면이 반복 재생되고 벗어나면 멈춘다. tilt는 마우스를 따라 기울고, 터치 기기에서는 가짜 커서로 자동 재생한다. 하나만 주면 큰 카드, 여러 개면 격자 |
 | `<UrlAnatomy base params />` | 긴 URL·헤더·설정을 조각으로 나눠 읽기 | 처음 보일 때 조각이 차례로 반짝이고, 고른 조각이 튀어나온다 |
 | `<AlgoTrace cells steps />` | 배열·문자열을 훑으며 스택/해시맵이 변하는 과정 | 현재 칸이 튀어나오고 값이 떨어져 쌓였다가 위로 빠진다 |
 | `<VectorSpace points groups query edges steps />` | 거리·유사도·최근접 탐색·그래프 탐색 | 점이 퍼지듯 나타나고, 질문 점·이웃 선·반경·탐색 경로가 단계별로 그려진다 |

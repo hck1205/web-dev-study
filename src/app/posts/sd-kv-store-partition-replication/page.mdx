@@ -1,0 +1,439 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-kv-store-partition-replication");
+
+이 시리즈에서 이 글의 자리: 앞 글 [⑫ 처리율 제한기 설계](/posts/sd-rate-limiter-design)에서 기초를 마치고 첫 설계 사례를 풀었다. 이 글부터 네 편에 걸쳐 키-값 저장소를 만든다. 이 글은 데이터를 여러 서버에 나누고 몇 벌씩 복제할지 정한다. 다음 글은 [⑭ 동시에 고친 값과 벡터 시계](/posts/sd-kv-store-versioning)이고, 같은 장의 나머지는 [⑮ 죽은 노드 알아채기와 대신 받아 두기](/posts/sd-kv-store-failure-handling), [⑯ 쓰기 경로와 읽기 경로](/posts/sd-kv-store-write-read-path)다.
+
+면접에서 "키-값 저장소를 설계해 보세요"라는 질문을 받았다고 하자. 만들 기능은 두 개뿐이다. `put(key, value)`로 넣고 `get(key)`로 꺼낸다. 장바구니라면 키는 `cart:alice`, 값은 담은 상품 목록이다. SQL도 조인도 없다. 그런데도 이 질문이 단골인 이유는, 기능이 단순한 만큼 "여러 대로 나눴을 때 무엇이 깨지는가"에만 집중할 수 있어서다.
+
+이 글은 서버 한 대로 시작해서, 데이터가 한 대에 안 들어갈 때와 서버가 죽을 때를 차례로 푼다. 키-값 모델 자체와 Redis, DynamoDB, etcd 같은 실제 제품의 차이는 [키-값 저장소 글](/posts/db-type-key-value)에 정리해 두었으니, 여기서는 "직접 만든다면"에 집중한다.
+
+## 서버 한 대, 해시 테이블 하나로 시작하면
+
+가장 작은 버전은 프로세스 메모리에 해시 테이블 하나를 두는 것이다. 해시 테이블은 키를 해시 함수에 넣어 나온 숫자로 칸을 바로 찾는 자료구조라서, 데이터가 많아져도 `put`과 `get`이 거의 일정한 시간에 끝난다. Node의 `Map`이 그 역할을 한다. 값 100바이트짜리 키 100만 개를 넣고 메모리가 얼마나 늘어나는지 재 봤다.
+
+```js
+// single.js
+const store = new Map();
+const put = (k, v) => store.set(k, v);
+const get = (k) => store.get(k) ?? null;
+
+global.gc();
+const before = process.memoryUsage().heapUsed;
+for (let i = 0; i < 1_000_000; i++) put(`user:${i}`, "x".repeat(99) + (i % 10));
+global.gc();
+const after = process.memoryUsage().heapUsed;
+console.log(`키 ${store.size.toLocaleString()}개, 힙 증가 ${((after - before) / 1024 / 1024).toFixed(0)} MB, 키 하나당 약 ${((after - before) / store.size).toFixed(0)} 바이트`);
+console.log(`get("user:42") → ${get("user:42").slice(-5)}, get("user:x") → ${get("user:x")}`);
+```
+
+```bash
+node --expose-gc single.js   # Node 22
+```
+
+```text
+키 1,000,000개, 힙 증가 287 MB, 키 하나당 약 301 바이트
+get("user:42") → xxxx2, get("user:x") → null
+```
+
+키와 값을 합치면 110바이트 정도인데 실제로는 301바이트를 쓴다. 문자열 객체의 머리, 해시 테이블의 빈칸, 포인터 같은 부가 비용이 붙어서다. 이 비율로 키 1억 개면 28GB쯤 된다. 서버 메모리가 64GB면 아직 버틴다. 값이 1KB로 커지거나 키가 10억 개로 늘면 한 대에는 안 들어간다. 자주 안 쓰는 값을 디스크로 내리거나 압축하면 조금 더 버티지만, 결국 한계가 온다.
+
+더 급한 문제는 따로 있다. 이 서버가 재부팅되면 메모리의 데이터가 모두 사라진다. 디스크에 저장하게 고쳐도 서버가 고장 나면 고칠 때까지 아무도 장바구니를 못 연다. 한 대짜리 저장소는 이렇게 두 번 깨진다.
+
+<NetworkTopology
+  caption="서버 한 대짜리 저장소가 깨지는 두 순간"
+  width={400}
+  height={220}
+  zones={[{ id: "dc", label: "서버 한 대", x: 150, y: 30, w: 230, h: 160, tone: "private" }]}
+  nodes={[
+    { id: "app", label: "앱 서버", x: 60, y: 110, icon: "client" },
+    { id: "kv", label: "KV 서버", sub: "Map in RAM", x: 220, y: 110, icon: "server" },
+    { id: "ram", label: "RAM 64GB", x: 330, y: 70, icon: "db" },
+    { id: "disk", label: "디스크", x: 330, y: 150, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "kv" },
+    { from: "kv", to: "ram" },
+    { from: "kv", to: "disk", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "kv", "ram"], packet: "put", title: "처음엔 빠르다", detail: "메모리 해시 테이블에 넣고 꺼낸다. 요청 하나가 수 마이크로초에 끝난다." },
+    { path: ["app", "kv", "ram"], packet: "put", blocked: true, title: "메모리가 찬다", detail: "키가 1억 개를 넘고 값이 커지면 64GB에 다 안 들어간다. 첫 번째 벽이다." },
+    { path: ["kv", "disk"], packet: "spill", title: "디스크로 내려 버틴다", detail: "덜 쓰는 값을 디스크로 내리면 조금 더 버틴다. 대신 그 값은 느려진다." },
+    { path: ["app", "kv"], packet: "get", blocked: true, title: "서버가 죽는다", detail: "이 서버 하나가 멈추면 모든 키가 함께 사라진다. 두 번째 벽이다." },
+  ]}
+/>
+
+첫 번째 벽은 데이터를 여러 서버에 나눠서(파티셔닝) 넘고, 두 번째 벽은 같은 데이터를 여러 서버에 복사해서(복제) 넘는다. 이 글의 나머지가 그 두 가지다.
+
+## 무엇을 만들지 먼저 좁힌다
+
+면접에서는 바로 그림을 그리기 전에 조건을 정한다. [⑪ 면접 진행 4단계](/posts/sd-interview-framework)에서 말한 범위 정하기다. 이 시리즈는 이렇게 가정한다.
+
+- 값은 작다. 대부분 10KB 아래다. 동영상 같은 큰 파일은 [객체 저장소](/posts/sd-object-storage-architecture)의 일이다.
+- 키는 수십억 개까지 늘어날 수 있고, 서버를 더하면 그만큼 용량과 처리량이 늘어야 한다.
+- 서버 몇 대가 죽어도 읽고 쓸 수 있어야 한다. 가용성이 일관성보다 조금 더 중요하다.
+- 일관성 수준은 사용하는 쪽이 고를 수 있으면 좋다. 장바구니와 결제 잔액은 원하는 수준이 다르다.
+- 대부분의 요청이 수 ms 안에 끝나야 한다.
+
+세 번째 줄이 설계 전체의 방향을 정한다. 네트워크가 끊겨도 쓰기를 받아 주겠다는 선택이고, [CAP과 PACELC 글](/posts/db-consistency-cap)의 말로 하면 AP 쪽에 선다. Amazon이 장바구니를 위해 만든 Dynamo, 그 설계를 이어받은 Cassandra와 Riak이 이 자리에 있다. 반대로 etcd처럼 몇 개 안 되는 중요한 값을 절대 틀리지 않게 지키려면 [Raft 합의](/posts/raft-consensus)로 가는 게 맞다. 이 시리즈는 앞쪽을 만든다.
+
+## 키를 서버에 나눠 주는 규칙
+
+서버가 여러 대가 되면 "이 키는 어느 서버에 있나"를 모두가 똑같이 계산할 수 있어야 한다. 가장 쉬운 방법은 `hash(key) % 서버 수`다. 서버 4대일 때 `hash("cart:alice")`가 10이면 10 % 4 = 2번 서버다. 문제는 서버를 5대로 늘리는 순간 10 % 5 = 0이 되어 거의 모든 키의 자리가 바뀐다는 것이다. 키 수십억 개를 한꺼번에 옮겨야 한다.
+
+그래서 일관된 해싱(consistent hashing)을 쓴다. 해시 값의 범위를 시계처럼 둥근 링으로 보고, 서버도 같은 해시로 링 위에 점을 찍는다. 키는 자기 위치에서 시계 방향으로 가다가 처음 만나는 서버가 맡는다. 서버가 하나 늘어도 새 서버와 그 앞 서버 사이의 키만 옮긴다. 서버 하나가 링에 점 하나만 찍으면 구간이 들쭉날쭉해지니 이름을 바꿔 여러 점을 찍는데, 이 점들을 가상 노드(virtual node)라고 부른다. 몇 개를 찍어야 고르게 나뉘는지, 점프 해시나 랑데부 해싱 같은 다른 방법은 [일관된 해싱 글](/posts/consistent-hashing)에서 직접 재 봤다.
+
+여기서 하나만 더 짚는다. 가상 노드 수는 서버마다 달라도 된다. 디스크가 두 배인 서버에는 점을 두 배로 찍으면 키도 대략 두 배를 받는다. 장비를 한꺼번에 바꾸지 못하는 현실에서 꽤 쓸모 있는 성질이다.
+
+아래 그림은 요청이 어디로 가는지 보여 준다. 클라이언트는 아무 노드에나 요청을 보내고, 받은 노드가 링을 보고 담당 노드를 찾는다.
+
+<NetworkTopology
+  caption="아무 노드나 받아서 담당에게 넘긴다"
+  width={420}
+  height={280}
+  zones={[{ id: "ring", label: "KV 클러스터 (링)", x: 130, y: 20, w: 280, h: 245, tone: "private" }]}
+  nodes={[
+    { id: "c", label: "앱 서버", x: 55, y: 140, icon: "client" },
+    { id: "a", label: "node A", x: 200, y: 65, icon: "db" },
+    { id: "b", label: "node B", x: 340, y: 65, icon: "db" },
+    { id: "cc", label: "node C", x: 340, y: 215, icon: "db" },
+    { id: "d", label: "node D", x: 200, y: 215, icon: "db" },
+  ]}
+  links={[
+    { from: "c", to: "a" },
+    { from: "c", to: "d" },
+    { from: "a", to: "b" },
+    { from: "b", to: "cc" },
+    { from: "cc", to: "d" },
+    { from: "d", to: "a" },
+  ]}
+  steps={[
+    { path: ["c", "a"], packet: "get", title: "가까운 노드에 보낸다", detail: "앱은 cart:alice가 어디 있는지 몰라도 된다. 아무 노드 A에 보낸다." },
+    { path: ["a"], highlight: ["ring"], title: "링에서 위치를 계산한다", detail: "A는 키를 해시해 링 위 위치를 구하고, 시계 방향으로 첫 담당이 D라는 걸 안다.", payload: "md5('cart:alice') 앞 4바이트 = 2153297985" },
+    { path: ["a", "d"], packet: "get", title: "담당에게 넘긴다", detail: "A가 D에 대신 묻는다. 요청을 받아 대신 처리하는 이 노드를 코디네이터라고 부른다." },
+    { path: ["c", "d"], packet: "get", title: "링을 아는 클라이언트", detail: "클라이언트 라이브러리가 링을 들고 있으면 처음부터 D로 보낸다. 한 번 건너뛰는 만큼 빠르다." },
+  ]}
+/>
+
+모든 노드가 같은 링 정보를 들고 있어야 이게 된다. 노드가 새로 들어오거나 빠질 때 그 소식이 어떻게 퍼지는지는 [⑮ 죽은 노드 알아채기](/posts/sd-kv-store-failure-handling)의 가십 프로토콜에서 다룬다.
+
+## 같은 키를 세 대에 둔다
+
+파티셔닝은 첫 번째 벽만 넘는다. D가 죽으면 D가 맡은 키는 여전히 사라진다. 그래서 키 하나를 N대에 복사한다. N은 복제 계수(replication factor)라고 부르고 흔히 3이다. 어느 세 대에 둘지도 링이 정한다. 키 위치에서 시계 방향으로 가며 만나는 서버 N대가 그 키를 맡는다. 이 N대의 목록을 선호 목록(preference list)이라고 한다. 첫 번째가 원래 담당이고, 나머지 둘이 복제본이다.
+
+그런데 가상 노드를 쓰면 함정이 있다. 링 위의 다음 점 세 개를 그대로 고르면 같은 물리 서버의 가상 노드가 두 번 뽑힐 수 있다. 그러면 복제본 세 개 중 둘이 같은 서버에 있어서, 그 서버 하나가 죽을 때 두 벌이 함께 사라진다. 노드 4대에 가상 노드를 3개씩 찍고 직접 골라 봤다.
+
+```js
+// ring.js (발췌)
+const pos = (s) => crypto.createHash("md5").update(s).digest().readUInt32BE(0);
+// 노드 A~D, 가상 노드 A#0, A#1, A#2 ... 를 링에 찍고 위치 순으로 정렬
+function walk(key, n, distinct) {
+  let i = ring.findIndex((r) => r.p >= pos(key));
+  if (i === -1) i = 0;                                // 링 끝을 넘으면 처음으로
+  const picked = [], seen = new Set();
+  for (let step = 0; step < ring.length && picked.length < n; step++) {
+    const r = ring[(i + step) % ring.length];
+    if (distinct && seen.has(r.node)) continue;       // 이미 고른 물리 노드는 건너뛴다
+    seen.add(r.node);
+    picked.push(r.v);
+  }
+  return picked;
+}
+```
+
+```text
+링 위의 가상 노드 (위치 순)
+  1761541434  B#2
+  2255709714  D#0
+  2313904738  B#0
+  2538429283  C#1
+  2617948611  D#2
+  2627254927  A#1
+  2969671659  B#1
+  3103869100  A#2
+  3414233331  C#2
+  3796934404  D#1
+  4037693931  C#0
+  4169070134  A#0
+
+user:42  위치 1457184536
+  가상 노드 3개를 그대로: B#2 → D#0 → B#0
+  물리 노드가 겹치지 않게: B#2 → D#0 → C#1
+
+cart:alice  위치 2153297985
+  가상 노드 3개를 그대로: D#0 → B#0 → C#1
+  물리 노드가 겹치지 않게: D#0 → B#0 → C#1
+```
+
+`user:42`를 보면 된다. 링 위의 다음 세 점을 그대로 고르면 B#2, D#0, B#0이라서 B가 두 번 나온다. 이미 고른 물리 서버를 건너뛰면 B, D, C 세 대로 나뉜다. `cart:alice`는 우연히 처음부터 서로 달라서 결과가 같다. 이렇게 "우연히 괜찮은" 키가 많아서 테스트에서 잘 안 드러나는 실수다.
+
+<AlgoTrace
+  caption="user:42의 선호 목록 고르기 (N=3)"
+  memoryLabel="고른 복제본"
+  cells={["B#2", "D#0", "B#0", "C#1", "D#2", "A#1"]}
+  steps={[
+    { memory: [], caption: "user:42의 위치는 1457184536이다. 시계 방향으로 첫 점은 B#2다." },
+    { pointer: 0, memory: ["B"], caption: "B#2는 물리 서버 B다. 첫 번째 담당으로 고른다." },
+    { pointer: 1, memory: ["B", "D"], caption: "D#0은 처음 보는 D다. 두 번째 복제본으로 고른다." },
+    { pointer: 2, memory: ["B", "D"], caption: "B#0은 또 B다. 고르면 B가 죽을 때 두 벌이 함께 사라진다. 건너뛴다." },
+    { pointer: 3, found: [0, 1, 3], memory: ["B", "D", "C"], caption: "C#1은 C다. 세 번째로 고르고 멈춘다. 선호 목록은 B, D, C다." },
+  ]}
+/>
+
+같은 생각을 한 단계 더 넓히면, 서로 다른 서버를 넘어 서로 다른 랙이나 가용 영역(AZ)에 두어야 한다. 가용 영역은 클라우드에서 전원과 네트워크가 독립된 데이터 센터 묶음이다. 서버 세 대가 같은 랙에 있으면 랙 스위치 하나가 고장 날 때 세 벌이 함께 안 보인다. Cassandra의 `NetworkTopologyStrategy`는 링을 걸을 때 랙 정보를 보고 이미 고른 랙을 건너뛰고, 데이터 센터마다 복제 수를 따로 정하게 한다. 데이터 센터를 여러 곳에 두는 이야기는 [⑥ 데이터 센터 여러 곳](/posts/sd-multi-datacenter)과 이어진다.
+
+<NetworkTopology
+  caption="복제본 세 벌을 서로 다른 AZ에"
+  width={420}
+  height={250}
+  zones={[
+    { id: "az1", label: "AZ a", x: 120, y: 20, w: 90, h: 215, tone: "private" },
+    { id: "az2", label: "AZ b", x: 220, y: 20, w: 90, h: 215, tone: "public" },
+    { id: "az3", label: "AZ c", x: 320, y: 20, w: 90, h: 215, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "co", label: "코디네이터", x: 50, y: 125, icon: "gateway" },
+    { id: "b", label: "node B", x: 165, y: 80, icon: "db" },
+    { id: "a", label: "node A", x: 165, y: 175, icon: "db" },
+    { id: "d", label: "node D", x: 265, y: 80, icon: "db" },
+    { id: "e", label: "node E", x: 265, y: 175, icon: "db" },
+    { id: "cc", label: "node C", x: 365, y: 125, icon: "db" },
+  ]}
+  links={[
+    { from: "co", to: "b" },
+    { from: "co", to: "d" },
+    { from: "co", to: "cc" },
+    { from: "co", to: "a", dashed: true },
+  ]}
+  steps={[
+    { path: ["co", "b"], packet: "put", title: "첫 담당은 AZ a의 B", detail: "user:42의 첫 담당 B에 쓴다." },
+    { path: ["co", "d"], packet: "put", title: "두 번째는 다른 AZ에서", detail: "링을 따라가다 AZ a의 A가 나와도 건너뛰고 AZ b의 D를 고른다." },
+    { path: ["co", "cc"], packet: "put", title: "세 번째는 남은 AZ에서", detail: "AZ c의 C를 고른다. 이제 AZ 하나가 통째로 멈춰도 두 벌이 남는다." },
+    { path: ["co", "a"], packet: "put", blocked: true, title: "같은 AZ 두 벌은 피한다", detail: "B와 A에 나눠 두면 AZ a 정전 한 번에 두 벌을 잃는다." },
+  ]}
+/>
+
+## 세 대 모두 기다려야 하나: N, W, R
+
+키를 세 대에 쓰기로 했다. 그럼 클라이언트에게 "성공"을 언제 돌려줄까. 세 대가 모두 저장했다고 답할 때까지 기다리면 가장 안전하지만, 한 대만 느려도 전체가 느리고 한 대만 죽어도 쓰기가 실패한다. 한 대만 답해도 성공이라고 하면 빠르지만, 그 한 대가 다른 두 대에 전하기 전에 죽으면 쓴 값을 잃는다.
+
+그래서 숫자 세 개로 이 사이를 고른다. N은 복제본 수, W는 쓰기 성공으로 치기 위해 확인을 받아야 하는 복제본 수, R은 읽을 때 응답을 받아야 하는 복제본 수다. 이렇게 일부만 모여서 결정하는 방식을 쿼럼(quorum)이라고 부른다. 코디네이터는 N대 모두에 요청을 보내고, W개(또는 R개)의 응답이 오는 순간 클라이언트에게 답한다. 나머지 응답은 늦게 와도 버리지 않고 처리한다.
+
+<SequenceDiagram
+  caption="N=3, W=2로 쓰고 R=2로 읽기"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "co", label: "코디네이터" },
+    { id: "b", label: "B" },
+    { id: "d", label: "D" },
+    { id: "x", label: "C" },
+  ]}
+  steps={[
+    { from: "c", to: "co", label: "put user:42", title: "쓰기 요청", detail: "클라이언트가 값을 보낸다. 코디네이터는 선호 목록 B, D, C를 계산한다." },
+    { from: "co", to: "b", label: "write", title: "세 대에 동시에 보낸다", detail: "B, D, C에 한꺼번에 보낸다. 하나씩 차례로 보내지 않는다." },
+    { from: "b", to: "co", label: "ack 1", title: "첫 확인", detail: "B가 저장했다고 답한다. 아직 W=2에 못 미친다." },
+    { from: "d", to: "co", label: "ack 2", title: "두 번째 확인", detail: "D도 답했다. 확인이 W개 모였다." },
+    { from: "co", to: "c", label: "200 OK", title: "여기서 성공을 돌려준다", detail: "C는 아직 답이 없지만 기다리지 않는다. C에도 요청은 이미 가 있다." },
+    { from: "c", to: "co", label: "get user:42", title: "읽기 요청", detail: "R=2이므로 두 대의 답을 모아야 한다." },
+    { from: "co", to: "x", label: "read", title: "두 대에서 읽는다", detail: "C와 B에서 답이 왔다. C의 값이 아직 옛것이라도 B는 새 값을 갖고 있다." },
+    { from: "co", to: "c", label: "새 값", title: "더 새 값을 고른다", detail: "두 답 중 더 새 버전을 돌려준다. 무엇이 더 새 값인지 가리는 법은 다음 글의 주제다." },
+  ]}
+/>
+
+마지막 단계가 중요하다. W개에 쓰고 R개에서 읽을 때, 두 집합이 반드시 한 대 이상 겹치면 읽기는 최신 쓰기를 본 복제본을 적어도 하나 만난다. 겹침이 보장되는 조건은 W + R > N이다. N=3, W=2, R=2면 2 + 2 = 4 > 3이다. 정말 그런지, 쓰기가 닿은 W대와 읽는 R대의 모든 조합을 세어 봤다.
+
+```js
+// quorum.js (발췌): 쓴 집합과 읽은 집합이 겹치는 조합을 센다
+for (const [W, R] of [[1, 1], [2, 1], [1, 2], [2, 2], [3, 1], [1, 3]]) {
+  let hit = 0, total = 0;
+  for (const ws of subsets(3, W))
+    for (const rs of subsets(3, R)) {
+      total++;
+      if (rs.some((r) => ws.includes(r))) hit++;
+    }
+  console.log(`${W} ${R} | ${W + R > 3 ? "예" : "아니오"} | ${hit}/${total}`);
+}
+```
+
+```text
+W R | W+R>N | 겹치는 조합 / 전체 조합
+1 1 |  아니오 | 3/9
+2 1 |  아니오 | 6/9
+1 2 |  아니오 | 6/9
+2 2 |  예   | 9/9
+3 1 |  예   | 3/3
+1 3 |  예   | 3/3
+```
+
+W + R > N인 세 줄만 모든 조합에서 겹친다. W=1, R=1이면 아홉 경우 중 세 번만 새 값을 만난다. 다만 이건 "쓰기가 막 끝난 순간"의 이야기다. 나머지 복제본에도 요청이 이미 가 있으니 보통 몇 ms 뒤면 다 따라잡는다. 시간이 지나며 옛 값을 볼 확률이 얼마나 빨리 떨어지는지는 [최종 일관성 글](/posts/eventual-consistency)에서 시뮬레이션으로 따로 쟀다.
+
+<AlgoTrace
+  caption="W=2로 쓴 직후, R을 바꿔 가며 읽기"
+  memoryLabel="읽은 복제본의 값"
+  cells={["B: v2", "D: v2", "C: v1"]}
+  steps={[
+    { found: [0, 1], memory: [], caption: "W=2 쓰기가 끝난 순간이다. B와 D는 새 값 v2를, C는 아직 옛 값 v1을 갖고 있다." },
+    { pointer: 2, memory: ["C=v1"], caption: "R=1로 읽는데 하필 C에 물었다. 옛 값 v1을 돌려준다. W + R = 3이라 겹침이 보장되지 않는다." },
+    { pointer: 2, memory: ["C=v1"], caption: "R=2로 읽는다. 먼저 C가 v1로 답했다." },
+    { pointer: 0, found: [0], memory: ["C=v1", "B=v2"], caption: "두 번째로 B가 v2로 답했다. 셋 중 둘을 고르면 B나 D 중 하나는 반드시 들어간다." },
+    { found: [0, 1], memory: ["v2 반환"], caption: "더 새 값 v2를 돌려준다. W + R = 4 > 3이라 어떤 두 대를 골라도 새 값이 섞인다." },
+  ]}
+/>
+
+## W를 정하면 기다리는 시간도 정해진다
+
+W와 R은 일관성만 바꾸지 않는다. 기다리는 시간도 바꾼다. W=2는 "세 응답 중 두 번째로 빠른 것"을 기다린다는 뜻이다. 복제본 응답 시간을 보통 1~3ms로 두고, 2% 확률로 GC나 디스크 때문에 40~80ms 걸린다고 가정해 10만 번 돌려 봤다.
+
+```js
+// quorum.js (발췌): need번째로 빠른 응답이 오는 순간이 응답 시간이다
+const one = () => (rand() < 0.02 ? 40 + rand() * 40 : 1 + rand() * 2);
+for (const need of [1, 2, 3]) {
+  const xs = [];
+  for (let t = 0; t < 100000; t++) {
+    const lat = [one(), one(), one()].sort((a, b) => a - b);
+    xs.push(lat[need - 1]);
+  }
+  // xs를 정렬해 p50, p99, p99.9를 찍는다
+}
+```
+
+```text
+기다리는 응답 수 | p50(ms) | p99(ms) | p99.9(ms)
+       1개       |  1.4   |   2.6   |   2.9
+       2개       |  2.0   |   2.9   |  54.4
+       3개       |  2.6   |  72.9   |  79.4
+```
+
+중간값(p50)은 1.4ms, 2.0ms, 2.6ms로 큰 차이가 없다. 차이는 꼬리에서 난다. 세 대를 모두 기다리면 요청 100개 중 1개가 73ms 가까이 걸린다. 세 대 중 하나라도 느리면 걸리기 때문이다. 두 대만 기다리면 느린 한 대를 무시할 수 있어서 p99가 2.9ms로 내려온다. 두 대가 동시에 느린 경우만 남으니 p99.9에서야 54ms가 보인다. 복제본 수가 늘면 그중 하나가 느릴 확률도 늘어나므로, 모두를 기다리는 설계는 노드가 많아질수록 꼬리가 길어진다.
+
+이 표가 W=N을 잘 안 쓰는 이유다. 느려서도 그렇지만, 한 대만 죽어도 쓰기가 아예 실패한다. 조합별로 정리하면 이렇다.
+
+| 설정 (N=3) | 쓰기가 견디는 고장 | 읽기가 견디는 고장 | 막 쓴 값을 읽나 | 쓰임새 |
+|---|---|---|---|---|
+| W=1, R=1 | 2대 | 2대 | 보장 안 됨 | 로그, 조회수처럼 조금 늦어도 되는 값 |
+| W=2, R=2 | 1대 | 1대 | 겹침 보장 | 기본값으로 무난하다 |
+| W=3, R=1 | 0대 | 2대 | 겹침 보장 | 읽기가 아주 많고 쓰기는 드물 때 |
+| W=1, R=3 | 2대 | 0대 | 겹침 보장 | 쓰기를 절대 놓치면 안 되고 읽기는 드물 때 |
+
+## 실제 저장소에서는 이 숫자를 어디서 고르나
+
+같은 손잡이가 제품마다 다른 이름으로 붙어 있다.
+
+- Cassandra는 키스페이스를 만들 때 복제 수(N)를 정하고, 요청마다 일관성 수준으로 W나 R을 고른다. `ONE`, `QUORUM`(과반, N=3이면 2), `ALL`, 그리고 여러 데이터 센터에서 쓰는 `LOCAL_QUORUM`이 있다. 자세한 쓰임은 [와이드 컬럼 DB 글](/posts/db-type-wide-column)에 있다.
+- DynamoDB는 복제를 감추고 읽기에서만 고르게 한다. 기본 읽기는 최종 일관성이고, `ConsistentRead: true`를 주면 강한 일관성 읽기가 되는데 읽기 용량을 두 배로 쓴다.
+- Riak은 버킷마다 `n_val`, 요청마다 `r`, `w`를 숫자로 준다. Dynamo 논문의 이름을 가장 그대로 쓴다.
+
+```sql
+-- Cassandra CQL: 데이터 센터 dc1에 3벌 (N=3)
+CREATE KEYSPACE shop
+  WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3};
+-- cqlsh에서 이 세션의 일관성 수준을 QUORUM으로 (W, R = 2)
+CONSISTENCY QUORUM;
+```
+
+면접에서 숫자를 고를 때는 데이터마다 다르게 말하는 게 좋다. 장바구니는 W=2, R=2로 두고, 상품 조회수 카운터는 W=1, R=1로 둔다. 같은 저장소 안에서도 요청마다 바꿀 수 있다는 게 이 설계의 장점이다.
+
+## 몇 대가 필요한지 직접 세 보기
+
+이제 서버 수를 계산할 수 있다. 저장할 원본 크기에 복제 수 N을 곱하고, 서버 한 대가 안전하게 담을 수 있는 양으로 나눈다. 디스크를 꽉 채우면 안 된다. [⑯ 쓰기 경로](/posts/sd-kv-store-write-read-path)에서 볼 컴팩션은 파일을 합치는 동안 잠시 두 벌을 들고 있어서 여유 공간이 필요하다. Cassandra의 크기 단계 컴팩션(STCS)이라면 디스크를 절반 정도만 채우라는 권고가 흔하고, 다른 방식은 그보다 덜 남겨도 된다. 마지막으로, 복제본은 서로 다른 서버에 있어야 하니 서버 수는 N보다 작을 수 없다.
+
+<CodePlayground
+  caption="키-값 저장소에 서버가 몇 대 필요한가"
+  functionName="nodesNeeded"
+  initialCode={`function nodesNeeded(keys, avgBytes, replicas, diskGB, fillRatio) {
+  // keys: 키 개수, avgBytes: 키+값 평균 크기(바이트)
+  // replicas: 복제 수 N, diskGB: 서버 한 대 디스크(GB, 1GB = 1e9 바이트)
+  // fillRatio: 디스크를 어디까지 채울지 (0.5 = 절반)
+  // 서버 수는 정수로 올림하고, replicas보다 작으면 replicas를 돌려준다
+  return 0;
+}`}
+  solution={`function nodesNeeded(keys, avgBytes, replicas, diskGB, fillRatio) {
+  const totalBytes = keys * avgBytes * replicas;      // 복제까지 포함한 전체 크기
+  const perNode = diskGB * 1e9 * fillRatio;            // 한 대가 안전하게 담는 양
+  return Math.max(replicas, Math.ceil(totalBytes / perNode));
+}`}
+  tests={[
+    { args: [1e9, 1000, 3, 2000, 0.5], expected: 3, label: "키 10억 · 1KB · N=3 · 2TB · 50%" },
+    { args: [1e10, 1000, 3, 2000, 0.5], expected: 30, label: "키가 10배" },
+    { args: [1e8, 1000, 3, 2000, 0.5], expected: 3, label: "작아도 N대는 있어야 한다" },
+    { args: [1e10, 1000, 3, 2000, 0.7], expected: 22, label: "70%까지 채우면" },
+    { args: [5e9, 2000, 3, 4000, 0.6], expected: 13, label: "2KB · 4TB · 60%" },
+    { args: [1e9, 1000, 5, 2000, 0.5], expected: 5, label: "N=5로 올리면" },
+  ]}
+/>
+
+키 10억 개, 평균 1KB면 원본은 1TB다. 세 벌이면 3TB이고, 2TB 디스크를 절반만 쓰면 한 대에 1TB씩이라 3대가 나온다. 키가 10배가 되면 30대다. 여기에 한 대가 죽었을 때 남은 서버가 그 몫을 받을 여유, 그리고 트래픽(초당 요청 수)을 감당할 대수까지 따로 계산해서 더 큰 쪽을 고른다. 초당 요청 수 계산은 [⑩ 용량 추정](/posts/sd-capacity-estimation)에서 연습했다.
+
+## 쿼럼을 맞춰도 남는 틈
+
+W + R > N이면 강한 일관성이라고 소개하는 자료가 많지만, 그대로 믿으면 면접 꼬리 질문에서 막힌다. 세 가지 틈이 있다.
+
+첫째, 실패한 쓰기가 흔적을 남긴다. W=2인데 한 대만 확인하고 나머지가 시간 초과로 실패하면 클라이언트는 실패를 받는다. 하지만 확인한 한 대에는 값이 이미 들어가 있다. 되돌리지 않는다. 다음 읽기가 그 한 대를 만나면 "실패한" 값이 보인다.
+
+둘째, 동시에 쓰면 무엇이 최신인지 모호하다. 두 클라이언트가 같은 키를 거의 동시에 다른 코디네이터로 쓰면, 복제본마다 도착 순서가 다를 수 있다. 읽기에서 두 값을 만났을 때 어느 쪽이 나중인지 가려야 하는데, 서버 시계는 믿을 수 없다. 이게 [⑭ 동시에 고친 값과 벡터 시계](/posts/sd-kv-store-versioning)의 주제다.
+
+셋째, 담당 노드가 죽었을 때 다른 노드가 대신 받아 주는 느슨한 쿼럼을 켜면 W대와 R대가 겹친다는 계산 자체가 깨진다. [⑮ 죽은 노드 알아채기](/posts/sd-kv-store-failure-handling)에서 실제로 깨뜨려 본다.
+
+그래서 쿼럼은 "막 끝난 쓰기를 대부분 본다" 정도로 이해하는 게 안전하다. 끝난 쓰기를 모두가 반드시 같은 순서로 보는 선형화(linearizability)가 왜 쿼럼만으로는 안 되는지는 [일관성 모델 글](/posts/consistency-models)에 실행 기록으로 남겨 두었다.
+
+<ConceptDiagram
+  caption="이 글에서 정한 것과 다음 글로 넘긴 것"
+  width={400}
+  height={280}
+  nodes={[
+    { id: "ring", label: "링 + 가상 노드", sub: "키가 갈 곳", x: 100, y: 45, w: 140 },
+    { id: "pref", label: "선호 목록", sub: "서로 다른 N대", x: 300, y: 45, w: 130 },
+    { id: "q", label: "N, W, R", sub: "몇 대를 기다리나", x: 200, y: 140, w: 140 },
+    { id: "ver", label: "⑭ 버전", sub: "동시 쓰기", x: 80, y: 240, w: 110 },
+    { id: "fail", label: "⑮ 장애", sub: "죽은 담당", x: 200, y: 240, w: 110 },
+    { id: "path", label: "⑯ 디스크", sub: "한 대 안쪽", x: 320, y: 240, w: 110 },
+  ]}
+  edges={[
+    { from: "ring", to: "pref" },
+    { from: "pref", to: "q" },
+    { from: "q", to: "ver", dashed: true },
+    { from: "q", to: "fail", dashed: true },
+    { from: "q", to: "path", dashed: true },
+  ]}
+/>
+
+## 다음에 읽을 글
+
+키를 링으로 나누고, 서로 다른 서버 N대에 복제하고, W와 R로 기다릴 응답 수를 정했다. 남은 문제는 두 복제본이 서로 다른 값을 들고 있을 때다. 다음 글 [⑭ 동시에 고친 값과 벡터 시계](/posts/sd-kv-store-versioning)에서 장바구니 하나를 두 기기에서 동시에 고쳐 보며 "어느 쪽이 최신인가"를 가리는 법을 만든다.
+
+링 자체를 더 깊게 보려면 [일관된 해싱](/posts/consistent-hashing), 이미 있는 DB를 나누는 관점은 [⑧ 샤딩 입문](/posts/sd-sharding-intro)과 [DB 샤딩](/posts/db-sharding)으로 가면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 키를 서버에 어떻게 나누나요? 왜 hash % N을 쓰지 않나요?
+
+일관된 해싱으로 나눈다. `hash % N`은 서버 수가 바뀌면 거의 모든 키의 자리가 바뀌어 대량 이동이 생긴다. 링을 쓰면 서버 하나가 늘거나 줄 때 그 이웃 구간의 키만 옮긴다. 서버마다 가상 노드를 여러 개 찍어 구간을 고르게 하고, 큰 서버에는 더 많이 찍어 더 많은 키를 맡긴다.
+
+### 복제본은 어디에 두나요?
+
+키 위치에서 링을 시계 방향으로 걸으며 서로 다른 물리 서버 N대를 고른다. 가상 노드를 그대로 세면 같은 서버가 두 번 뽑힐 수 있어서 이미 고른 서버는 건너뛴다. 운영에서는 한 단계 더 나가 서로 다른 랙이나 가용 영역에 두어, 랙 스위치나 AZ 하나의 장애로 여러 벌을 함께 잃지 않게 한다.
+
+### N, W, R은 각각 무엇이고 어떻게 고르나요?
+
+N은 복제본 수, W는 쓰기 성공에 필요한 확인 수, R은 읽기에 필요한 응답 수다. W + R > N이면 읽는 집합과 쓴 집합이 겹쳐서 막 끝난 쓰기를 볼 가능성이 높아진다. 기본은 N=3, W=2, R=2로 한 대 고장을 견디고, 조금 늦어도 되는 데이터는 W=1, R=1로 지연과 가용성을 얻는다. 요청마다 바꿀 수 있다는 점이 장점이다.
+
+### W=3으로 하면 더 안전하지 않나요?
+
+데이터를 잃을 위험은 줄지만 두 가지를 잃는다. 한 대만 죽어도 쓰기가 실패하고, 세 응답 중 가장 느린 것을 기다리므로 꼬리 지연이 길어진다. 시뮬레이션에서 p50은 2.0ms와 2.6ms로 비슷했지만 p99는 2.9ms에서 72.9ms로 뛰었다. 대개 W=2로 두고 나머지 한 대는 비동기로 따라오게 한다.
+
+### W + R > N이면 항상 최신 값을 읽나요?
+
+아니다. 실패로 끝난 쓰기가 일부 복제본에 남아 다음 읽기에 보일 수 있고, 동시 쓰기는 어느 쪽이 최신인지 가리는 규칙이 따로 필요하다. 느슨한 쿼럼을 켜면 대신 받아 준 노드 때문에 겹침 계산이 깨진다. 끝난 쓰기를 모두가 같은 순서로 보는 선형화가 필요하면 Raft 같은 합의 알고리즘을 쓰는 저장소를 고른다.
+
+### 서버가 몇 대 필요한지 어떻게 계산하나요?
+
+키 수 × 평균 크기 × 복제 수로 전체 크기를 구하고, 서버 한 대가 안전하게 담을 양으로 나눈다. 컴팩션 여유 때문에 디스크는 절반에서 70% 정도까지만 채운다고 잡는다. 키 10억 개, 1KB, N=3, 2TB 디스크 절반이면 3대다. 이 값과 트래픽 기준 대수, 한 대가 빠졌을 때의 여유 중 큰 것을 고른다.
+
+### 트래픽이 10배가 되면 무엇을 바꾸나요?
+
+서버를 더해 링에 가상 노드를 찍으면 이웃 구간의 키만 새 서버로 옮겨 가고, 읽기와 쓰기도 그만큼 나뉜다. 다만 특정 키 하나에 몰리는 트래픽은 서버를 늘려도 그 키의 N대에만 간다. 이런 핫 키는 키를 쪼개거나(예: 키 뒤에 번호를 붙여 여러 키로 나누기) 앞에 캐시를 두어 따로 푼다.
+
+### 클라이언트는 담당 노드를 어떻게 찾나요?
+
+두 방법이 있다. 아무 노드에 보내면 그 노드가 코디네이터가 되어 담당에게 넘기는 방법은 클라이언트가 단순하지만 한 번 더 건너뛴다. 클라이언트 라이브러리가 링 정보를 받아 들고 있다가 담당에게 바로 보내는 방법은 빠르지만, 링이 바뀔 때 클라이언트도 새 정보를 받아야 한다. Cassandra 드라이버의 토큰 인식 라우팅이 뒤쪽이다.

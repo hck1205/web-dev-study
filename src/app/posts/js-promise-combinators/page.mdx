@@ -1,0 +1,448 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-promise-combinators");
+
+마이페이지 대시보드는 위젯 세 개로 되어 있다. 프로필, 최근 주문, 추천 상품. 셋을 하나씩 기다리면 느리니까 `Promise.all`로 한꺼번에 불러온다.
+
+```js
+const [profile, orders, recommend] = await Promise.all([
+  getProfile(),
+  getOrders(),
+  getRecommend(),
+]);
+```
+
+어느 날 추천 서버가 503을 돌려주기 시작했다. 그러자 대시보드 전체가 "오류가 발생했습니다" 화면으로 바뀌었다. 프로필과 주문은 멀쩡히 응답했는데도 그렇다. 가장 덜 중요한 위젯 하나가 페이지를 통째로 죽인 셈이다.
+
+`Promise.all`이 잘못한 건 없다. "모두 성공해야 의미가 있다"는 뜻의 도구를, "되는 것만이라도 보여 주자"는 상황에 썼을 뿐이다. 여러 Promise를 한 번에 기다리는 표준 함수는 네 개이고, 각각 다른 질문에 답한다. 이 글은 그 넷을 실제 장애 상황에 대 보며 고르는 법을 본다.
+
+이 주제의 다른 글: [콜백 지옥](/posts/js-callback-hell) · [Promise](/posts/js-promises) · [async/await](/posts/js-async-await)
+
+## 네 함수가 답하는 질문
+
+넷 다 Promise 배열(정확히는 아무 iterable)을 받아 Promise 하나를 돌려준다. 다른 점은 언제 끝나고 무엇을 돌려주느냐다.
+
+| 함수 | 이행되는 때 | 거부되는 때 | 결과 모양 | 도입 |
+| --- | --- | --- | --- | --- |
+| `Promise.all` | 모두 이행 | 하나라도 거부되는 즉시 | 값 배열(입력 순서) | ES2015 |
+| `Promise.allSettled` | 모두 확정 | 거부되지 않음 | `{ status, value }` 또는 `{ status, reason }` 배열 | ES2020 |
+| `Promise.race` | 가장 먼저 확정된 게 이행 | 가장 먼저 확정된 게 거부 | 그 하나의 값이나 이유 | ES2015 |
+| `Promise.any` | 하나라도 이행되는 즉시 | 모두 거부 | 첫 이행 값, 실패 시 `AggregateError` | ES2021 |
+
+말로 바꾸면 이렇다. `all`은 "전부 필요하다, 하나라도 빠지면 의미 없다". `allSettled`는 "각각 어떻게 됐는지 다 알려 달라". `race`는 "누구든 먼저 끝나면 그걸로 정한다, 실패도 포함해서". `any`는 "하나만 성공하면 된다".
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="무엇이 필요한지에 따라 고른다"
+  nodes={[
+    { id: "q", label: "여러 Promise", sub: "무엇이 필요한가", x: 200, y: 40, w: 150 },
+    { id: "all", label: "Promise.all", sub: "전부 성공해야 한다", x: 90, y: 140, w: 150 },
+    { id: "settled", label: "allSettled", sub: "부분 실패를 견딘다", x: 310, y: 140, w: 150 },
+    { id: "race", label: "Promise.race", sub: "먼저 끝난 쪽으로", x: 90, y: 245, w: 150 },
+    { id: "any", label: "Promise.any", sub: "하나만 성공하면 된다", x: 310, y: 245, w: 150 },
+  ]}
+  edges={[
+    { from: "q", to: "all", label: "모두" },
+    { from: "q", to: "settled", label: "각각" },
+    { from: "q", to: "race", label: "먼저", dashed: true },
+    { from: "q", to: "any", label: "아무거나", dashed: true },
+  ]}
+/>
+
+이제 하나씩 장애 상황에 넣어 본다.
+
+## 하나가 실패하면 all은 바로 포기한다
+
+처음 대시보드를 재현해 보자. 프로필은 100ms, 주문은 300ms, 추천은 200ms에 503으로 실패한다.
+
+```js
+const api = (name, delay, fail = false) =>
+  new Promise((resolve, reject) =>
+    setTimeout(() => {
+      console.log(ms(), name, fail ? "실패" : "응답");
+      fail ? reject(new Error(`${name} 503`)) : resolve(name);
+    }, delay),
+  );
+
+Promise.all([api("profile", 100), api("orders", 300), api("recommend", 200, true)])
+  .then((r) => console.log(ms(), "all 이행:", r))
+  .catch((e) => console.log(ms(), "all 거부:", e.message));
+```
+
+```text
+100ms profile 응답
+200ms recommend 실패
+200ms all 거부: recommend 503
+300ms orders 응답
+```
+
+두 가지를 봐야 한다. `all`은 첫 거부가 오는 200ms에 바로 거부된다. 300ms까지 기다리지 않는다. 그리고 그 뒤에도 주문 요청은 계속 돌아서 300ms에 응답한다. `all`이 포기했다고 나머지 작업이 취소되지는 않는다. Promise에는 "취소"라는 개념이 없다. 그 응답은 아무도 쓰지 않고 버려진다.
+
+<SequenceDiagram
+  caption="all은 첫 실패에서 끝나지만, 나머지 요청은 그대로 돈다"
+  actors={[
+    { id: "page", label: "대시보드" },
+    { id: "p", label: "profile" },
+    { id: "r", label: "recommend" },
+    { id: "o", label: "orders" },
+  ]}
+  steps={[
+    { from: "page", to: "p", label: "요청", title: "세 요청을 동시에 보낸다", detail: "Promise.all에 넣기 전, 호출하는 순간 이미 셋 다 출발했다." },
+    { from: "p", to: "page", label: "100ms 응답", title: "프로필 도착", detail: "결과 배열의 0번 자리에 들어간다. 남은 건 둘이다." },
+    { from: "r", to: "page", label: "200ms 503", title: "추천 실패", detail: "all은 이 순간 거부된다. 이미 받은 프로필 값도 함께 버린다." },
+    { from: "page", to: "page", label: "오류 화면", title: "페이지 전체가 실패", detail: "await Promise.all에서 예외가 나 catch로 간다. 위젯 하나 때문에 화면 전체가 오류가 된다." },
+    { from: "o", to: "page", label: "300ms 응답", title: "주문은 뒤늦게 도착", detail: "요청은 취소되지 않았다. 서버는 일을 다 했고 응답은 버려진다." },
+  ]}
+/>
+
+결과 배열의 순서도 짚어 둘 만하다. 모두 성공했을 때 `all`의 결과는 끝난 순서가 아니라 넣은 순서다. 그래서 `const [profile, orders] = await Promise.all(...)`처럼 구조 분해로 받을 수 있다. 내부적으로 각 Promise에 "끝나면 `results[i]`에 넣어라"라는 핸들러를 붙이고, 남은 개수가 0이 되면 이행한다.
+
+<AlgoTrace
+  caption="all은 자리를 정해 두고 채우다가, 거부 하나에 통째로 포기한다"
+  memoryLabel="results 배열"
+  cells={["profile 100", "orders 300", "recommend 200"]}
+  steps={[
+    { pointer: 0, memory: ["_", "_", "_"], caption: "0ms: 세 자리를 비워 두고 남은 개수 3으로 시작한다." },
+    { pointer: 0, found: [0], memory: ["profile", "_", "_"], caption: "100ms: 프로필이 0번 자리에 들어간다. 남은 개수 2." },
+    { pointer: 2, found: [0], memory: ["profile", "_", "✕"], caption: "200ms: 추천이 거부됐다. all은 이 이유로 바로 거부되고 배열은 버려진다." },
+    { pointer: 1, found: [0, 1], memory: ["(버려짐)"], caption: "300ms: 주문 응답이 와도 이미 끝난 Promise라 아무 일도 없다." },
+  ]}
+/>
+
+이 동작은 "모두 필요하다"는 상황에서는 장점이다. 결제 화면에서 장바구니, 배송지, 결제 수단 중 하나라도 없으면 진행할 수 없다. 그럴 때 가장 빨리 실패를 알려 주는 게 맞다. 실무에서 조심할 건 쓰기 작업이다. 주문 다섯 건을 `all`로 동시에 저장하다 하나가 실패하면 `all`은 실패로 끝나지만 나머지 네 건은 이미 저장됐을 수 있다. "실패했으니 다시 시도"하면 중복 저장이 된다. 이 경우 각 결과를 확인해야 하므로 다음 함수가 맞다. 재시도를 안전하게 만드는 방법은 [멱등성 키](/posts/idempotency-key) 글에 있다.
+
+## 부분 실패를 받아들이는 allSettled
+
+대시보드의 요구 사항은 "되는 위젯은 보여 주고 안 되는 위젯만 비워 둔다"였다. `allSettled`는 거부되지 않는다. 모든 Promise가 확정되면 각 결과를 객체로 담아 이행한다.
+
+```js
+Promise.allSettled([api("profile", 100), api("orders", 300), api("recommend", 200, true)])
+  .then((results) => {
+    for (const r of results) console.log(r.status, r.status === "fulfilled" ? r.value : r.reason.message);
+  });
+```
+
+```text
+fulfilled { name: 'profile' }
+fulfilled { name: 'orders' }
+rejected recommend 503
+```
+
+<AlgoTrace
+  caption="allSettled는 실패도 결과로 담고 끝까지 기다린다"
+  memoryLabel="결과 배열"
+  cells={["profile 100", "orders 300", "recommend 200"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["ok profile", "_", "_"], caption: "100ms: { status: 'fulfilled', value }로 0번 자리에 담는다." },
+    { pointer: 2, found: [0, 2], memory: ["ok profile", "_", "✕ 503"], caption: "200ms: 거부도 { status: 'rejected', reason }으로 담는다. 멈추지 않는다." },
+    { pointer: 1, found: [0, 1, 2], memory: ["ok profile", "ok orders", "✕ 503"], caption: "300ms: 마지막 결과가 오면 이행된다. 가장 느린 요청만큼 걸린다." },
+  ]}
+/>
+
+서버에서 데이터를 받아 그리는 React 서버 컴포넌트라면 이렇게 쓸 수 있다.
+
+```jsx
+const [profile, orders, recommend] = await Promise.allSettled([getProfile(), getOrders(), getRecommend()]);
+
+return (
+  <>
+    {profile.status === "fulfilled" ? <Profile data={profile.value} /> : <WidgetError />}
+    {orders.status === "fulfilled" ? <Orders data={orders.value} /> : <WidgetError />}
+    {recommend.status === "fulfilled" && <Recommend data={recommend.value} />}
+  </>
+);
+```
+
+`allSettled`의 대가는 시간이다. 실패가 일찍 와도 가장 느린 요청이 끝날 때까지 기다린다. 그래서 "전부 기다렸다 한 번에 그리기"보다 위젯마다 따로 불러오고 따로 그리는 방식도 많이 쓴다. TanStack Query의 `useQueries`나 위젯별 Suspense 경계가 그 방식이다. 위젯마다 로딩과 에러 상태가 따로 생기고, 하나가 느려도 나머지는 먼저 보인다. 요청과 캐시를 컴포넌트 단위로 나누는 이야기는 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있다.
+
+`allSettled`를 쓰고 나서 흔히 빠뜨리는 게 있다. 거부된 결과를 아무도 보지 않는 것이다. `allSettled`는 절대 거부되지 않으니 처리되지 않은 거부 경고도 나지 않는다. 실패가 조용히 묻힌다. 실패한 항목은 최소한 로그나 지표로 남긴다.
+
+## race로 건 타임아웃은 아무것도 멈추지 않는다
+
+`race`는 가장 먼저 확정된 Promise를 따른다. 이행이든 거부든 상관없다. 가장 흔한 쓰임은 타임아웃이다. 느린 쿼리와 500ms 뒤에 거부되는 타이머를 경주시킨다.
+
+```js
+const slowQuery = () => new Promise((r) => setTimeout(() => { console.log(ms(), "쿼리는 계속 돌아서 끝났다"); r("rows"); }, 1500));
+const timeout = (limit) => new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout ${limit}ms`)), limit));
+
+Promise.race([slowQuery(), timeout(500)])
+  .then((v) => console.log(ms(), "결과:", v))
+  .catch((e) => console.log(ms(), "race 거부:", e.message));
+process.on("exit", () => console.log(ms(), "프로세스 종료"));
+```
+
+```text
+ 500ms race 거부: timeout 500ms
+1500ms 쿼리는 계속 돌아서 끝났다
+1500ms 프로세스 종료
+```
+
+호출한 쪽은 500ms에 타임아웃 에러를 받았다. 하지만 쿼리는 1500ms까지 계속 돌았다. DB 커넥션도 그동안 잡혀 있다. 트래픽이 몰려 DB가 느려지면, 타임아웃으로 포기한 요청들이 뒤에서 계속 커넥션을 차지한 채 쌓인다. 사용자는 에러를 받고 다시 누르니 쿼리는 더 쌓인다. 타임아웃이 부하를 줄여 주지 못하는 구조다.
+
+<SequenceDiagram
+  caption="race는 기다리기만 그만둘 뿐, 진 쪽 작업은 끝까지 돈다"
+  actors={[
+    { id: "app", label: "API 핸들러" },
+    { id: "race", label: "race" },
+    { id: "timer", label: "500ms 타이머" },
+    { id: "db", label: "DB 쿼리" },
+  ]}
+  steps={[
+    { from: "app", to: "db", label: "query 시작", title: "쿼리와 타이머가 함께 출발", detail: "race에 넣기 전에 쿼리는 이미 DB로 갔다." },
+    { from: "app", to: "timer", label: "타이머 시작", title: "타임아웃 Promise", detail: "500ms 뒤에 거부되는 Promise다." },
+    { from: "timer", to: "race", label: "500ms reject", title: "타이머가 먼저 확정", detail: "race는 먼저 확정된 쪽을 따르니 타임아웃 에러로 거부된다." },
+    { from: "race", to: "app", label: "timeout", title: "호출한 쪽은 포기한다", detail: "사용자에게는 에러가 간다. 여기까지가 race가 하는 일의 전부다." },
+    { from: "db", to: "race", label: "1500ms rows", title: "쿼리는 끝까지 돈다", detail: "커넥션을 1.5초 동안 잡고 있다가 결과를 돌려주고, 그 결과는 버려진다." },
+  ]}
+/>
+
+반대 방향의 실수도 있다. 쿼리가 먼저 끝나면 타이머가 남는다.
+
+```js
+Promise.race([fast(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000))])
+  .then((v) => console.log(ms(), "정리 안 한 race:", v));
+```
+
+```text
+ 200ms 정리 안 한 race: rows
+5000ms 프로세스 종료
+```
+
+200ms에 결과를 받았는데 프로세스는 5초 뒤에야 끝났다. 진 타이머가 이벤트 루프를 붙잡고 있었다. CLI 도구나 서버리스 함수라면 그만큼 늦게 끝나고, 요청마다 타이머를 만드는 서버라면 끝난 요청의 타이머가 수천 개씩 쌓인다. 이긴 쪽이 정해지면 타이머를 지운다.
+
+```js
+function withTimeout(promise, limit) {
+  let timer;
+  const t = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout ${limit}ms`)), limit);
+  });
+  return Promise.race([promise, t]).finally(() => clearTimeout(timer));
+}
+```
+
+```text
+ 200ms withTimeout: rows
+ 200ms 프로세스 종료
+```
+
+참고로 5초 뒤 타이머가 거부해도 처리되지 않은 거부 경고는 나지 않는다. `race`가 넣은 모든 Promise에 핸들러를 붙여 두기 때문이다.
+
+진 쪽 작업까지 멈추려면 취소 신호를 그 작업에 넘겨야 한다. `fetch`는 `AbortSignal`을 받는다. 브라우저와 Node.js 18 이상에는 시간이 지나면 스스로 취소되는 `AbortSignal.timeout(ms)`도 있다. Node.js 22에서 1.5초 걸리는 로컬 서버에 500ms 제한을 걸어 보면 이렇다.
+
+```js
+await fetch("http://localhost:3019/slow", { signal: AbortSignal.timeout(500) });
+```
+
+```text
+504ms TimeoutError The operation was aborted due to timeout
+```
+
+이번에는 연결 자체가 끊긴다. 에러 이름도 `TimeoutError`라서 사용자가 누른 취소(`AbortError`)와 구분할 수 있다. 다만 서버가 이미 받은 요청을 끝까지 처리할지는 서버 몫이다. DB 쿼리라면 드라이버의 쿼리 타임아웃이나 `statement_timeout` 같은 서버 쪽 설정이 따로 필요하다. 취소 신호를 여러 겹으로 조합하는 방법은 [AbortController](/posts/abort-controller)에서, 타임아웃 값을 어떻게 정하는지는 [타임아웃](/posts/timeouts) 글에서 다룬다.
+
+## any는 첫 성공을 기다린다
+
+`any`는 `race`와 비슷해 보이지만 실패를 건너뛴다. 하나라도 이행되면 그 값으로 이행하고, 모두 거부돼야 거부된다. 같은 파일을 여러 미러에 두고 가장 빨리 응답하는 곳을 쓰는 상황에 맞다.
+
+아래 그림에서 다음을 눌러 보자. 가장 가까운 kr 미러는 죽어 있고, jp와 us는 살아 있다.
+
+<NetworkTopology
+  width={420}
+  height={260}
+  caption="any: 먼저 실패한 미러는 건너뛰고 첫 성공을 쓴다"
+  zones={[{ id: "mirrors", label: "미러 서버", x: 200, y: 20, w: 200, h: 225, tone: "edge" }]}
+  nodes={[
+    { id: "app", label: "앱", sub: "Promise.any", x: 80, y: 130, icon: "client" },
+    { id: "kr", label: "kr 미러", sub: "100ms 실패", x: 300, y: 60, icon: "server" },
+    { id: "jp", label: "jp 미러", sub: "250ms 성공", x: 300, y: 135, icon: "server" },
+    { id: "us", label: "us 미러", sub: "400ms 성공", x: 300, y: 210, icon: "server" },
+  ]}
+  links={[
+    { from: "app", to: "kr" },
+    { from: "app", to: "jp" },
+    { from: "app", to: "us" },
+  ]}
+  steps={[
+    { path: ["app", "kr"], packet: "GET", highlight: ["jp", "us"], title: "세 미러에 동시에 요청", detail: "any에 넣는 순간 세 요청이 모두 출발한다." },
+    { path: ["kr", "app"], packet: "down", blocked: true, title: "100ms: kr 실패", detail: "race였다면 여기서 바로 실패로 끝났다. any는 이 실패를 기록만 하고 계속 기다린다." },
+    { path: ["jp", "app"], packet: "200 OK", title: "250ms: jp 성공", detail: "첫 이행이 왔으니 any는 jp의 값으로 이행된다." },
+    { path: ["us", "app"], packet: "200 OK", title: "400ms: us는 버려진다", detail: "us 응답도 오지만 이미 끝났다. all처럼 남은 요청이 취소되지는 않으니, 필요하면 AbortController로 끊는다." },
+  ]}
+/>
+
+```js
+const mirror = (name, delay, ok) =>
+  new Promise((resolve, reject) => setTimeout(() => (ok ? resolve(name) : reject(new Error(`${name} down`))), delay));
+
+Promise.any([mirror("kr", 100, false), mirror("jp", 250, true), mirror("us", 400, true)])
+  .then((v) => console.log("any 이행:", v));
+
+Promise.any([mirror("kr", 100, false), mirror("jp", 50, false)])
+  .catch((e) => console.log("any 거부:", e.constructor.name, e.message, e.errors.map((x) => x.message)));
+
+Promise.race([mirror("kr", 100, false), mirror("jp", 250, true)])
+  .then((v) => console.log("race 이행:", v), (e) => console.log("race 거부:", e.message));
+```
+
+```text
+any 거부: AggregateError All promises were rejected [ 'kr down', 'jp down' ]
+race 거부: kr down
+any 이행: jp
+```
+
+모두 실패하면 `AggregateError`가 온다. 개별 이유는 `errors` 배열에 있는데, 순서는 실패한 순서가 아니라 넣은 순서다. 위에서 jp가 50ms로 먼저 실패했지만 `errors`에서는 두 번째 자리다. 같은 입력을 `race`에 넣으면 가장 먼저 확정된 kr의 실패를 그대로 따른다.
+
+`any`를 쓸 때는 "실패해도 다른 걸 쓰면 되는" 작업인지 확인해야 한다. 같은 결제를 여러 결제 대행사에 동시에 보내고 먼저 성공한 걸 쓰는 식은 안 된다. 나머지도 성공하면 이중 결제다. 읽기처럼 여러 번 해도 결과가 같은 작업에만 쓴다.
+
+## 빈 배열을 넣으면 생기는 일
+
+입력이 비어 있을 때 넷의 동작이 다르다. 검색 결과가 0건이라 요청할 게 없는 경우처럼 실제로 자주 만난다.
+
+```js
+const a = Promise.all([]);
+const s = Promise.allSettled([]);
+const r = Promise.race([]);
+Promise.any([]).catch((e) => console.log("any([]):", e.constructor.name, e.errors));
+Promise.all([1, "x", Promise.resolve(3)]).then((v) => console.log("값 섞기:", v));
+// 10ms 뒤에 util.inspect로 상태를 찍었다
+```
+
+```text
+값 섞기: [ 1, 'x', 3 ]
+all([]): Promise { [] }
+allSettled([]): Promise { [] }
+race([]): Promise { <pending> }
+any([]): AggregateError []
+```
+
+`all([])`과 `allSettled([])`는 빈 배열로 바로 이행된다. `any([])`는 성공할 후보가 없으니 바로 거부된다. 문제는 `race([])`다. 경주에 참가자가 없으니 영원히 pending이다. 에러도 없이 그 줄에서 멈춘다. 입력이 동적으로 만들어진다면 빈 경우를 먼저 걸러 낸다. 그리고 Promise가 아닌 값을 섞어 넣어도 `Promise.resolve`로 감싸서 다루기 때문에 그대로 결과에 들어간다.
+
+## 한꺼번에 너무 많이 넣을 때
+
+`Promise.all(ids.map(fetchItem))`은 짧고 편해서 개수를 생각하지 않고 쓰기 쉽다. 테스트할 때 10개였던 `ids`가 운영에서 5,000개가 되면 요청 5,000개가 동시에 출발한다. 외부 API라면 레이트 리밋에 걸려 429가 섞이고, `all`은 그중 첫 429로 실패한다. Node.js에서 파일 5,000개를 동시에 열면 `EMFILE: too many open files`가 난다.
+
+`Promise.all`은 동시에 몇 개를 돌릴지 조절하지 않는다. 시작은 이미 `map`에서 일어났고 `all`은 기다리기만 한다. 개수가 많으면 동시에 N개까지만 돌리는 제한을 둔다. 일꾼 N개가 일감을 나눠 가져가는 `mapLimit` 구현과 걸리는 시간 계산은 [async/await](/posts/js-async-await) 글에 있다.
+
+## Promise.all을 직접 만들어 보면
+
+`all`의 동작은 몇 줄로 옮길 수 있다. 면접에서 직접 구현을 시키기도 한다.
+
+```js
+function promiseAll(iterable) {
+  return new Promise((resolve, reject) => {
+    const items = [...iterable];
+    const results = new Array(items.length);
+    let left = items.length;
+    if (left === 0) return resolve(results);
+    items.forEach((item, i) => {
+      Promise.resolve(item).then((value) => {   // 값이 Promise가 아니어도 감싼다
+        results[i] = value;                      // 끝난 순서가 아니라 자기 자리에
+        if (--left === 0) resolve(results);
+      }, reject);                                // 첫 거부가 이긴다. 나머지 reject는 무시된다
+    });
+  });
+}
+
+promiseAll([later("a", 30), 2, later("c", 10)]).then((v) => console.log("성공:", v));
+promiseAll([later("a", 30), later("b", 10, true), later("c", 20, true)]).catch((e) => console.log("실패:", e.message));
+promiseAll([]).then((v) => console.log("빈 배열:", v));
+promiseAll(new Set([1, 2])).then((v) => console.log("Set:", v));
+```
+
+```text
+빈 배열: []
+Set: [ 1, 2 ]
+실패: b
+성공: [ 'a', 2, 'c' ]
+```
+
+구현에서 짚을 곳이 넷 있다. 빈 입력은 바로 이행한다. `results[i]`로 넣어 입력 순서를 지킨다. 남은 개수로 끝을 판단한다(`results.length`는 처음부터 3이라 쓸 수 없다). 그리고 `reject`를 여러 번 불러도 [Promise](/posts/js-promises)는 처음 한 번만 받아들이니 "첫 거부가 이긴다"가 따로 코드 없이 성립한다.
+
+아래에서는 네 함수의 결과를 규칙만으로 계산해 보자. 실제로 기다리지 않는다. 입력마다 성공 여부(`ok`), 값 또는 실패 이유(`value`), 끝나는 시각(`ms`)이 주어진다. 같은 시각이면 앞 번호가 먼저 끝난다고 본다. 결과는 `{ state, value, at }`이다.
+
+- `all`: 첫 거부가 있으면 그 이유와 시각으로 거부, 아니면 값 배열과 마지막 시각으로 이행. 빈 입력은 `[]`, 0ms.
+- `allSettled`: 항상 이행. 값은 `{ status: "fulfilled", value }` 또는 `{ status: "rejected", reason }` 배열.
+- `race`: 가장 먼저 끝난 것을 따른다. 빈 입력이면 `{ state: "pending", value: null, at: null }`.
+- `any`: 첫 이행을 따른다. 모두 실패하면 이유 배열(입력 순서)과 마지막 시각으로 거부.
+
+테스트의 기대값은 같은 입력을 진짜 `setTimeout`과 `Promise` 조합 함수로 돌린 결과와 같다.
+
+<CodePlayground
+  caption="네 조합 함수의 결과 계산하기"
+  functionName="combine"
+  initialCode={`function combine(kind, inputs) {
+  // kind: "all" | "allSettled" | "race" | "any"
+  // inputs: [{ ok, value, ms }]
+  // 반환: { state, value, at }
+}`}
+  solution={`function combine(kind, inputs) {
+  // 끝나는 시각 순으로 줄 세운다. 같은 시각이면 앞 번호가 먼저다
+  const order = inputs.map((x, i) => ({ ...x, i })).sort((a, b) => a.ms - b.ms || a.i - b.i);
+  const last = inputs.length ? Math.max(...inputs.map((x) => x.ms)) : 0;
+  if (kind === "all") {
+    const firstFail = order.find((x) => !x.ok);
+    if (firstFail) return { state: "rejected", value: firstFail.value, at: firstFail.ms };
+    return { state: "fulfilled", value: inputs.map((x) => x.value), at: last };
+  }
+  if (kind === "allSettled") {
+    const value = inputs.map((x) =>
+      x.ok ? { status: "fulfilled", value: x.value } : { status: "rejected", reason: x.value },
+    );
+    return { state: "fulfilled", value, at: last };
+  }
+  if (kind === "race") {
+    if (!order.length) return { state: "pending", value: null, at: null };
+    const first = order[0];
+    return { state: first.ok ? "fulfilled" : "rejected", value: first.value, at: first.ms };
+  }
+  if (kind === "any") {
+    const firstOk = order.find((x) => x.ok);
+    if (firstOk) return { state: "fulfilled", value: firstOk.value, at: firstOk.ms };
+    return { state: "rejected", value: inputs.map((x) => x.value), at: last };
+  }
+}`}
+  tests={[
+    { label: "all: 대시보드, 추천 실패", args: ["all", [{ ok: true, value: "profile", ms: 100 }, { ok: true, value: "orders", ms: 300 }, { ok: false, value: "recommend 503", ms: 200 }]], expected: { state: "rejected", value: "recommend 503", at: 200 } },
+    { label: "all: 결과는 입력 순서", args: ["all", [{ ok: true, value: "a", ms: 100 }, { ok: true, value: "b", ms: 50 }]], expected: { state: "fulfilled", value: ["a", "b"], at: 100 } },
+    { label: "allSettled: 대시보드", args: ["allSettled", [{ ok: true, value: "profile", ms: 100 }, { ok: true, value: "orders", ms: 300 }, { ok: false, value: "recommend 503", ms: 200 }]], expected: { state: "fulfilled", value: [{ status: "fulfilled", value: "profile" }, { status: "fulfilled", value: "orders" }, { status: "rejected", reason: "recommend 503" }], at: 300 } },
+    { label: "race: 먼저 끝난 실패를 따른다", args: ["race", [{ ok: false, value: "kr down", ms: 100 }, { ok: true, value: "jp", ms: 250 }, { ok: true, value: "us", ms: 400 }]], expected: { state: "rejected", value: "kr down", at: 100 } },
+    { label: "any: 실패를 건너뛴다", args: ["any", [{ ok: false, value: "kr down", ms: 100 }, { ok: true, value: "jp", ms: 250 }, { ok: true, value: "us", ms: 400 }]], expected: { state: "fulfilled", value: "jp", at: 250 } },
+    { label: "any: 모두 실패하면 입력 순서로", args: ["any", [{ ok: false, value: "kr down", ms: 100 }, { ok: false, value: "jp down", ms: 50 }]], expected: { state: "rejected", value: ["kr down", "jp down"], at: 100 } },
+    { label: "all: 빈 입력", args: ["all", []], expected: { state: "fulfilled", value: [], at: 0 } },
+    { label: "race: 빈 입력은 영원히 대기", args: ["race", []], expected: { state: "pending", value: null, at: null } },
+  ]}
+/>
+
+## 대시보드는 결국 어떻게 고쳤나
+
+처음 문제는 "모두 필요하다"는 도구를 "되는 것만 보여 주자"는 상황에 쓴 데서 생겼다. 위젯처럼 각자 독립적인 결과라면 `allSettled`로 받아 실패한 위젯만 비우거나, 아예 위젯마다 따로 불러온다. 하나라도 빠지면 진행할 수 없을 때는 `all`, 여러 후보 중 하나만 성공하면 될 때는 `any`, 먼저 끝난 쪽으로 정할 때는 `race`다. 그리고 넷 모두 기다리는 방식만 정할 뿐, 진 쪽이나 남은 작업을 멈추지 않는다는 점을 기억해 둔다. 멈추게 하는 건 취소 신호의 몫이다.
+
+## 면접에서 나올 만한 질문
+
+### Promise.all과 Promise.allSettled는 어떻게 다른가요?
+
+`all`은 하나라도 거부되면 그 즉시 그 이유로 거부되고, 모두 성공해야 값 배열로 이행한다. `allSettled`는 거부되지 않고 모두 확정될 때까지 기다린 뒤 각 결과를 `{ status, value }`나 `{ status, reason }`으로 담아 돌려준다. 하나라도 빠지면 의미가 없는 작업이면 `all`, 부분 실패를 견뎌야 하는 화면이나 일괄 작업이면 `allSettled`를 쓴다.
+
+### Promise.all에서 하나가 실패하면 나머지 요청은 어떻게 되나요?
+
+계속 실행된다. `all`은 결과를 기다리는 일만 그만둘 뿐이고, Promise에는 취소 개념이 없어서 이미 시작된 요청은 끝까지 돌고 결과는 버려진다. 서버 자원을 아끼려면 `AbortController`로 남은 요청을 끊어야 한다. 쓰기 작업이라면 일부는 이미 반영됐을 수 있으니 재시도 전에 상태를 확인하거나 멱등하게 만들어야 한다.
+
+### Promise.all의 결과 순서는 끝난 순서인가요?
+
+아니다. 입력한 순서다. 내부적으로 각 Promise가 끝나면 자기 인덱스 자리에 값을 넣고, 남은 개수가 0이 되면 이행한다. 그래서 구조 분해로 받아도 안전하다. `any`가 모두 실패했을 때의 `AggregateError.errors`도 실패한 순서가 아니라 입력 순서다.
+
+### Promise.race로 타임아웃을 구현할 때 주의할 점은?
+
+`race`는 먼저 끝난 쪽을 따를 뿐 진 쪽 작업을 멈추지 않는다. 타임아웃이 이겨도 원래 요청은 계속 돌며 커넥션 같은 자원을 잡고 있고, 요청이 이기면 타이머가 남아 프로세스 종료를 늦춘다. 그래서 `finally`에서 타이머를 지우고, 가능하면 `fetch`에 `AbortSignal.timeout`을 넘겨 요청 자체를 끊는다.
+
+### Promise.race와 Promise.any는 어떻게 다른가요?
+
+`race`는 이행이든 거부든 가장 먼저 확정된 것을 따른다. `any`는 거부를 건너뛰고 첫 이행을 기다리며, 모두 거부돼야 `AggregateError`로 거부된다. 그래서 먼저 실패한 미러가 있어도 다른 미러가 성공하면 `any`는 성공한다. `any`는 ES2021에 들어왔다.
+
+### 빈 배열을 넣으면 각각 어떻게 되나요?
+
+`all`과 `allSettled`는 빈 배열로 바로 이행되고, `any`는 후보가 없으니 빈 `errors`를 가진 `AggregateError`로 바로 거부된다. `race`는 참가자가 없어 영원히 pending으로 남는다. 입력이 동적으로 만들어지면 `race` 앞에서 빈 경우를 먼저 처리한다.
+
+### 요청 1만 개를 Promise.all로 보내면 어떤 문제가 있나요?
+
+`Promise.all`은 동시 실행 개수를 조절하지 않는다. `map`에서 이미 1만 개가 출발하므로 서버 레이트 리밋에 걸려 429가 나고, 그중 하나로 `all` 전체가 실패한다. Node.js에서는 파일 핸들이나 소켓이 모자라 `EMFILE` 같은 에러가 난다. 동시에 N개까지만 돌리는 제한을 두고, 실패를 개별로 다뤄야 하면 `allSettled`와 함께 쓴다.

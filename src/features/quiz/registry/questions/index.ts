@@ -1,9 +1,15 @@
 import { AB_TESTING } from "./ab-testing";
+import { ABORT_CONTROLLER } from "./abort-controller";
+import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ALERTING } from "./alerting";
+import { ANIMATION_PATTERNS } from "./animation-patterns";
+import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
+import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview";
 import { ARGOCD_BASICS } from "./argocd-basics";
+import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
@@ -13,6 +19,7 @@ import { BIG_O_NOTATION } from "./big-o-notation";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHING_STRATEGIES } from "./caching-strategies";
@@ -22,17 +29,20 @@ import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CLEAN_ARCHITECTURE } from "./clean-architecture";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
 import { CLOUD_COST_OPTIMIZATION } from "./cloud-cost-optimization";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COLD_STARTS } from "./cold-starts";
 import { CONNECTION_POOL } from "./connection-pool";
+import { CONSISTENCY_MODELS } from "./consistency-models";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { COUNT_MIN_SKETCH } from "./count-min-sketch";
+import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
@@ -59,12 +69,15 @@ import { DB_TYPE_RELATIONAL } from "./db-type-relational";
 import { DB_TYPE_TIME_SERIES } from "./db-type-time-series";
 import { DB_TYPE_WIDE_COLUMN } from "./db-type-wide-column";
 import { DB_TYPES_OVERVIEW } from "./db-types-overview";
+import { DDD_BOUNDED_CONTEXT } from "./ddd-bounded-context";
 import { DDOS_PROTECTION } from "./ddos-protection";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
+import { DEBOUNCE_THROTTLE } from "./debounce-throttle";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
+import { DHCP } from "./dhcp";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -75,18 +88,23 @@ import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
+import { DOM_BASICS } from "./dom-basics";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { ERROR_BUDGETS } from "./error-budgets";
+import { EVENT_DELEGATION } from "./event-delegation";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
+import { EVENT_PROPAGATION } from "./event-propagation";
+import { EVENT_SOURCING } from "./event-sourcing";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
@@ -116,6 +134,8 @@ import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
 import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
 import { HELM_RELEASE_LIFECYCLE } from "./helm-release-lifecycle";
 import { HELM_VALUES_SECRETS } from "./helm-values-secrets";
+import { HEXAGONAL_ARCHITECTURE } from "./hexagonal-architecture";
+import { HIGH_AVAILABILITY } from "./high-availability";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
@@ -134,7 +154,44 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
+import { JS_ARRAY_MUTATION } from "./js-array-mutation";
+import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
+import { JS_ASYNC_AWAIT } from "./js-async-await";
+import { JS_CALL_APPLY_BIND } from "./js-call-apply-bind";
+import { JS_CALLBACK_HELL } from "./js-callback-hell";
+import { JS_CLASSES } from "./js-classes";
+import { JS_CLOSURES } from "./js-closures";
+import { JS_CURRYING_PARTIAL } from "./js-currying-partial";
+import { JS_DESTRUCTURING } from "./js-destructuring";
+import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
+import { JS_ES_MODULES } from "./js-es-modules";
+import { JS_EXECUTION_CONTEXT } from "./js-execution-context";
+import { JS_FIRST_CLASS_CALLBACKS } from "./js-first-class-callbacks";
+import { JS_FUNCTION_FORMS } from "./js-function-forms";
+import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
+import { JS_IIFE_MODULE_PATTERN } from "./js-iife-module-pattern";
+import { JS_IMMUTABILITY_REACT } from "./js-immutability-react";
+import { JS_MEMOIZATION } from "./js-memoization";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
+import { JS_MICROTASK_MACROTASK } from "./js-microtask-macrotask";
+import { JS_OBJECT_METHODS } from "./js-object-methods";
+import { JS_OPTIONAL_CHAINING_NULLISH } from "./js-optional-chaining-nullish";
+import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
+import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
+import { JS_PROMISES } from "./js-promises";
+import { JS_PROTOTYPE_CHAIN } from "./js-prototype-chain";
+import { JS_PURE_FUNCTIONS } from "./js-pure-functions";
+import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
+import { JS_SHALLOW_DEEP_COPY } from "./js-shallow-deep-copy";
+import { JS_SHORT_CIRCUIT } from "./js-short-circuit";
+import { JS_SPREAD_REST } from "./js-spread-rest";
+import { JS_STRICT_MODE } from "./js-strict-mode";
+import { JS_TEMPLATE_LITERALS } from "./js-template-literals";
+import { JS_THIS_BINDING } from "./js-this-binding";
+import { JS_TIMERS_ACCURACY } from "./js-timers-accuracy";
+import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
+import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
 import { K8S_ADMISSION_CONTROL } from "./k8s-admission-control";
@@ -200,6 +257,7 @@ import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
+import { LAYERED_ARCHITECTURE } from "./layered-architecture";
 import { LEADER_ELECTION } from "./leader-election";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
@@ -219,17 +277,22 @@ import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
+import { MICROSERVICES_DECOMPOSITION } from "./microservices-decomposition";
+import { MODULAR_MONOLITH } from "./modular-monolith";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
+import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
+import { NAT_TRAVERSAL } from "./nat-traversal";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
 import { NETWORK_FLOW_LOGS } from "./network-flow-logs";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
 import { NETWORK_MONITORING } from "./network-monitoring";
 import { NETWORK_PARTITIONS } from "./network-partitions";
 import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
+import { NETWORKING_ESSENTIALS_MAP } from "./networking-essentials-map";
 import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
@@ -241,6 +304,7 @@ import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
+import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -308,26 +372,100 @@ import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { ROLLBACK_STRATEGY } from "./rollback-strategy";
 import { ROLLING_DEPLOYMENT } from "./rolling-deployment";
+import { ROUTER_VS_SWITCH } from "./router-vs-switch";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
+import { SD_AD_CLICK_EXACTLY_ONCE } from "./sd-ad-click-exactly-once";
+import { SD_AD_CLICK_STREAM_WINDOWS } from "./sd-ad-click-stream-windows";
+import { SD_AUTOCOMPLETE_DATA_PIPELINE } from "./sd-autocomplete-data-pipeline";
+import { SD_AUTOCOMPLETE_TRIE } from "./sd-autocomplete-trie";
+import { SD_CACHE_AND_CDN_TIER } from "./sd-cache-and-cdn-tier";
+import { SD_CAPACITY_ESTIMATION } from "./sd-capacity-estimation";
+import { SD_CHAT_CONNECTIONS } from "./sd-chat-connections";
+import { SD_CHAT_MESSAGE_STORAGE } from "./sd-chat-message-storage";
+import { SD_CHAT_PRESENCE } from "./sd-chat-presence";
+import { SD_DB_REPLICATION_INTRO } from "./sd-db-replication-intro";
+import { SD_EMAIL_PROTOCOLS } from "./sd-email-protocols";
+import { SD_EMAIL_STORAGE_SEARCH } from "./sd-email-storage-search";
+import { SD_FILE_SYNC_BLOCK_UPLOAD } from "./sd-file-sync-block-upload";
+import { SD_FILE_SYNC_CONFLICTS } from "./sd-file-sync-conflicts";
+import { SD_HOTEL_DOUBLE_BOOKING } from "./sd-hotel-double-booking";
+import { SD_HOTEL_INVENTORY_SCALING } from "./sd-hotel-inventory-scaling";
+import { SD_INTERVIEW_FRAMEWORK } from "./sd-interview-framework";
+import { SD_KV_STORE_FAILURE_HANDLING } from "./sd-kv-store-failure-handling";
+import { SD_KV_STORE_PARTITION_REPLICATION } from "./sd-kv-store-partition-replication";
+import { SD_KV_STORE_VERSIONING } from "./sd-kv-store-versioning";
+import { SD_KV_STORE_WRITE_READ_PATH } from "./sd-kv-store-write-read-path";
+import { SD_LATENCY_NUMBERS } from "./sd-latency-numbers";
+import { SD_LEADERBOARD_SCALING } from "./sd-leaderboard-scaling";
+import { SD_LEADERBOARD_SORTED_SET } from "./sd-leaderboard-sorted-set";
+import { SD_LOAD_BALANCER_STATELESS } from "./sd-load-balancer-stateless";
+import { SD_MAPS_LOCATION_ETA } from "./sd-maps-location-eta";
+import { SD_MAPS_TILES_ROUTING } from "./sd-maps-tiles-routing";
+import { SD_METRICS_COLLECTION } from "./sd-metrics-collection";
+import { SD_METRICS_STORAGE_ALERTING } from "./sd-metrics-storage-alerting";
+import { SD_MQ_CONSUMER_GROUPS } from "./sd-mq-consumer-groups";
+import { SD_MQ_REPLICATION } from "./sd-mq-replication";
+import { SD_MQ_STORAGE_PARTITIONS } from "./sd-mq-storage-partitions";
+import { SD_MULTI_DATACENTER } from "./sd-multi-datacenter";
+import { SD_NEARBY_FRIENDS } from "./sd-nearby-friends";
+import { SD_NEWS_FEED_PUBLISHING } from "./sd-news-feed-publishing";
+import { SD_NEWS_FEED_RETRIEVAL } from "./sd-news-feed-retrieval";
+import { SD_NOTIFICATION_RELIABILITY } from "./sd-notification-reliability";
+import { SD_NOTIFICATION_SYSTEM } from "./sd-notification-system";
+import { SD_OBJECT_STORAGE_ARCHITECTURE } from "./sd-object-storage-architecture";
+import { SD_OBJECT_STORAGE_DURABILITY } from "./sd-object-storage-durability";
+import { SD_OBJECT_STORAGE_VERSIONING_MULTIPART } from "./sd-object-storage-versioning-multipart";
+import { SD_PAYMENT_FLOW } from "./sd-payment-flow";
+import { SD_PAYMENT_RELIABILITY } from "./sd-payment-reliability";
+import { SD_PROXIMITY_SERVICE } from "./sd-proximity-service";
+import { SD_QUEUE_LOGGING_AUTOMATION } from "./sd-queue-logging-automation";
+import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
+import { SD_SHARDING_INTRO } from "./sd-sharding-intro";
+import { SD_SPLIT_WEB_AND_DB } from "./sd-split-web-and-db";
+import { SD_START_SINGLE_SERVER } from "./sd-start-single-server";
+import { SD_STOCK_EXCHANGE_LOW_LATENCY } from "./sd-stock-exchange-low-latency";
+import { SD_STOCK_EXCHANGE_ORDER_BOOK } from "./sd-stock-exchange-order-book";
+import { SD_UNIQUE_ID_GENERATOR } from "./sd-unique-id-generator";
+import { SD_URL_SHORTENER_API_REDIRECT } from "./sd-url-shortener-api-redirect";
+import { SD_URL_SHORTENER_KEY_GENERATION } from "./sd-url-shortener-key-generation";
+import { SD_VIDEO_STREAMING_COST } from "./sd-video-streaming-cost";
+import { SD_VIDEO_UPLOAD_TRANSCODING } from "./sd-video-upload-transcoding";
+import { SD_WALLET_EVENT_SOURCING } from "./sd-wallet-event-sourcing";
+import { SD_WALLET_TRANSFER } from "./sd-wallet-transfer";
+import { SD_WEB_CRAWLER_ARCHITECTURE } from "./sd-web-crawler-architecture";
+import { SD_WEB_CRAWLER_POLITENESS_DEDUP } from "./sd-web-crawler-politeness-dedup";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SEMANTIC_VERSIONING } from "./semantic-versioning";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
+import { SERVERLESS_ARCHITECTURE } from "./serverless-architecture";
 import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SLI_SLO } from "./sli-slo";
+import { SPRING_ANIMATION } from "./spring-animation";
+import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_CASE_WHEN } from "./sql-case-when";
+import { SQL_CTE_RECURSIVE } from "./sql-cte-recursive";
+import { SQL_FILTERING_OPERATORS } from "./sql-filtering-operators";
 import { SQL_INJECTION } from "./sql-injection";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_INTERVIEW_PROBLEMS } from "./sql-interview-problems";
+import { SQL_JOINS_IN_PRACTICE } from "./sql-joins-in-practice";
+import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
+import { SQL_VIEWS_MATERIALIZED } from "./sql-views-materialized";
+import { SQL_VS_NOSQL } from "./sql-vs-nosql";
+import { SQL_WINDOW_FUNCTIONS_PG } from "./sql-window-functions-pg";
 import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
@@ -344,6 +482,8 @@ import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { SSRF } from "./ssrf";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
+import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
+import { SYSTEM_DESIGN_STUDY_PATH } from "./system-design-study-path";
 import { TAIL_LATENCY } from "./tail-latency";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
@@ -354,10 +494,12 @@ import { THREAD_SAFETY } from "./thread-safety";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
+import { TRANSACTIONAL_OUTBOX } from "./transactional-outbox";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
 import { VELERO_BACKUP } from "./velero-backup";
+import { VIEW_TRANSITIONS_SHARED_ELEMENT } from "./view-transitions-shared-element";
 import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
@@ -375,11 +517,17 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  ABORT_CONTROLLER,
+  ACID_TRANSACTIONS,
   ALERTING,
+  ANIMATION_PATTERNS,
+  ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
+  ARCHITECTURE_PATTERNS_OVERVIEW,
   ARGOCD_BASICS,
+  AUTHN_VS_AUTHZ,
   AUTOSCALING,
   BACKPRESSURE,
   BACKUP_STRATEGY,
@@ -389,6 +537,7 @@ export const QUESTION_SETS = [
   BLOOM_FILTER,
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
+  BROWSER_STORAGE,
   BUILD_CACHING,
   CACHE_INVALIDATION,
   CACHING_STRATEGIES,
@@ -398,17 +547,20 @@ export const QUESTION_SETS = [
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CLEAN_ARCHITECTURE,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
   CLOUD_COST_OPTIMIZATION,
   CODE_SPLITTING,
   COLD_STARTS,
   CONNECTION_POOL,
+  CONSISTENCY_MODELS,
   CONSISTENT_HASHING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
   COUNT_MIN_SKETCH,
+  CQRS,
   CRDT,
   CRON_JOBS,
   CSRF,
@@ -435,12 +587,15 @@ export const QUESTION_SETS = [
   DB_TYPE_TIME_SERIES,
   DB_TYPE_WIDE_COLUMN,
   DB_TYPES_OVERVIEW,
+  DDD_BOUNDED_CONTEXT,
   DDOS_PROTECTION,
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
+  DEBOUNCE_THROTTLE,
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
+  DHCP,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -451,18 +606,23 @@ export const QUESTION_SETS = [
   DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
+  DOM_BASICS,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
   ERROR_BUDGETS,
+  EVENT_DELEGATION,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
+  EVENT_PROPAGATION,
+  EVENT_SOURCING,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FAULT_TOLERANCE,
   FEATURE_FLAGS,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
@@ -492,6 +652,8 @@ export const QUESTION_SETS = [
   HELM_DEPENDENCIES_OCI_GITOPS,
   HELM_RELEASE_LIFECYCLE,
   HELM_VALUES_SECRETS,
+  HEXAGONAL_ARCHITECTURE,
+  HIGH_AVAILABILITY,
   HOSTS_FILE,
   HTML_FORM_HTTP,
   HTTP_CACHING_CDN,
@@ -510,7 +672,44 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JAVASCRIPT_ROADMAP,
+  JS_ARRAY_MUTATION,
+  JS_ARRAY_TRANSFORM,
+  JS_ASYNC_AWAIT,
+  JS_CALL_APPLY_BIND,
+  JS_CALLBACK_HELL,
+  JS_CLASSES,
+  JS_CLOSURES,
+  JS_CURRYING_PARTIAL,
+  JS_DESTRUCTURING,
+  JS_EQUALITY_COERCION,
+  JS_ES_MODULES,
+  JS_EXECUTION_CONTEXT,
+  JS_FIRST_CLASS_CALLBACKS,
+  JS_FUNCTION_FORMS,
+  JS_HOISTING_TDZ,
+  JS_IIFE_MODULE_PATTERN,
+  JS_IMMUTABILITY_REACT,
+  JS_MEMOIZATION,
   JS_MEMORY_LEAK,
+  JS_MICROTASK_MACROTASK,
+  JS_OBJECT_METHODS,
+  JS_OPTIONAL_CHAINING_NULLISH,
+  JS_PRIMITIVE_VS_REFERENCE,
+  JS_PROMISE_COMBINATORS,
+  JS_PROMISES,
+  JS_PROTOTYPE_CHAIN,
+  JS_PURE_FUNCTIONS,
+  JS_SCOPE_LEXICAL,
+  JS_SHALLOW_DEEP_COPY,
+  JS_SHORT_CIRCUIT,
+  JS_SPREAD_REST,
+  JS_STRICT_MODE,
+  JS_TEMPLATE_LITERALS,
+  JS_THIS_BINDING,
+  JS_TIMERS_ACCURACY,
+  JS_TRUTHY_FALSY_TYPEOF,
+  JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
   K8S_ADMISSION_CONTROL,
@@ -576,6 +775,7 @@ export const QUESTION_SETS = [
   LAYER_IP_ROUTING_ICMP,
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
+  LAYERED_ARCHITECTURE,
   LEADER_ELECTION,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
@@ -595,17 +795,22 @@ export const QUESTION_SETS = [
   METRICS_TYPES,
   MICRO_FRONTENDS,
   MICROSERVICES,
+  MICROSERVICES_DECOMPOSITION,
+  MODULAR_MONOLITH,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
+  MONOLITH_ARCHITECTURE,
   MULTI_REGION,
   MVC_PATTERN,
   N_PLUS_ONE_QUERIES,
+  NAT_TRAVERSAL,
   NETWORK_CONFIG_CICD,
   NETWORK_FLOW_LOGS,
   NETWORK_LAYERS_OVERVIEW,
   NETWORK_MONITORING,
   NETWORK_PARTITIONS,
   NETWORK_TROUBLESHOOTING_BY_LAYER,
+  NETWORKING_ESSENTIALS_MAP,
   NEXTJS_STATIC_DYNAMIC_RENDERING,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
@@ -617,6 +822,7 @@ export const QUESTION_SETS = [
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
+  PACKET_ENCAPSULATION,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -684,26 +890,100 @@ export const QUESTION_SETS = [
   RETRIES,
   ROLLBACK_STRATEGY,
   ROLLING_DEPLOYMENT,
+  ROUTER_VS_SWITCH,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
+  SD_AD_CLICK_EXACTLY_ONCE,
+  SD_AD_CLICK_STREAM_WINDOWS,
+  SD_AUTOCOMPLETE_DATA_PIPELINE,
+  SD_AUTOCOMPLETE_TRIE,
+  SD_CACHE_AND_CDN_TIER,
+  SD_CAPACITY_ESTIMATION,
+  SD_CHAT_CONNECTIONS,
+  SD_CHAT_MESSAGE_STORAGE,
+  SD_CHAT_PRESENCE,
+  SD_DB_REPLICATION_INTRO,
+  SD_EMAIL_PROTOCOLS,
+  SD_EMAIL_STORAGE_SEARCH,
+  SD_FILE_SYNC_BLOCK_UPLOAD,
+  SD_FILE_SYNC_CONFLICTS,
+  SD_HOTEL_DOUBLE_BOOKING,
+  SD_HOTEL_INVENTORY_SCALING,
+  SD_INTERVIEW_FRAMEWORK,
+  SD_KV_STORE_FAILURE_HANDLING,
+  SD_KV_STORE_PARTITION_REPLICATION,
+  SD_KV_STORE_VERSIONING,
+  SD_KV_STORE_WRITE_READ_PATH,
+  SD_LATENCY_NUMBERS,
+  SD_LEADERBOARD_SCALING,
+  SD_LEADERBOARD_SORTED_SET,
+  SD_LOAD_BALANCER_STATELESS,
+  SD_MAPS_LOCATION_ETA,
+  SD_MAPS_TILES_ROUTING,
+  SD_METRICS_COLLECTION,
+  SD_METRICS_STORAGE_ALERTING,
+  SD_MQ_CONSUMER_GROUPS,
+  SD_MQ_REPLICATION,
+  SD_MQ_STORAGE_PARTITIONS,
+  SD_MULTI_DATACENTER,
+  SD_NEARBY_FRIENDS,
+  SD_NEWS_FEED_PUBLISHING,
+  SD_NEWS_FEED_RETRIEVAL,
+  SD_NOTIFICATION_RELIABILITY,
+  SD_NOTIFICATION_SYSTEM,
+  SD_OBJECT_STORAGE_ARCHITECTURE,
+  SD_OBJECT_STORAGE_DURABILITY,
+  SD_OBJECT_STORAGE_VERSIONING_MULTIPART,
+  SD_PAYMENT_FLOW,
+  SD_PAYMENT_RELIABILITY,
+  SD_PROXIMITY_SERVICE,
+  SD_QUEUE_LOGGING_AUTOMATION,
+  SD_RATE_LIMITER_DESIGN,
+  SD_SHARDING_INTRO,
+  SD_SPLIT_WEB_AND_DB,
+  SD_START_SINGLE_SERVER,
+  SD_STOCK_EXCHANGE_LOW_LATENCY,
+  SD_STOCK_EXCHANGE_ORDER_BOOK,
+  SD_UNIQUE_ID_GENERATOR,
+  SD_URL_SHORTENER_API_REDIRECT,
+  SD_URL_SHORTENER_KEY_GENERATION,
+  SD_VIDEO_STREAMING_COST,
+  SD_VIDEO_UPLOAD_TRANSCODING,
+  SD_WALLET_EVENT_SOURCING,
+  SD_WALLET_TRANSFER,
+  SD_WEB_CRAWLER_ARCHITECTURE,
+  SD_WEB_CRAWLER_POLITENESS_DEDUP,
   SDN_VXLAN_OVERLAY,
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
   SEMANTIC_VERSIONING,
   SERVER_SENT_EVENTS,
+  SERVERLESS_ARCHITECTURE,
   SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
   SLI_SLO,
+  SPRING_ANIMATION,
+  SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
+  SQL_CASE_WHEN,
+  SQL_CTE_RECURSIVE,
+  SQL_FILTERING_OPERATORS,
   SQL_INJECTION,
   SQL_INSERT_UPDATE_DELETE,
+  SQL_INTERVIEW_PROBLEMS,
+  SQL_JOINS_IN_PRACTICE,
+  SQL_LOGICAL_ORDER,
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
+  SQL_SUBQUERIES_EXISTS_LATERAL,
+  SQL_VIEWS_MATERIALIZED,
+  SQL_VS_NOSQL,
+  SQL_WINDOW_FUNCTIONS_PG,
   SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,
@@ -720,6 +1000,8 @@ export const QUESTION_SETS = [
   SSRF,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
+  SYSTEM_DESIGN_CONCEPTS_MAP,
+  SYSTEM_DESIGN_STUDY_PATH,
   TAIL_LATENCY,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
@@ -730,10 +1012,12 @@ export const QUESTION_SETS = [
   TIMEOUTS,
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
+  TRANSACTIONAL_OUTBOX,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
   VELERO_BACKUP,
+  VIEW_TRANSITIONS_SHARED_ELEMENT,
   VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,

@@ -1,0 +1,666 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-aggregation-pitfalls");
+
+주간 회의에서 숫자 두 개가 부딪쳤다. 대시보드는 전체 평균 점수가 80점이라고 하고, 운영팀이 뽑은 리포트는 44점이라고 한다. 둘 다 같은 `enrollments` 테이블에서 나왔고, 쿼리에 에러도 없었다.
+
+```sql
+SELECT avg(score) FROM enrollments;                 -- 대시보드
+SELECT sum(score) / count(*) FROM enrollments;      -- 운영 리포트
+```
+
+집계 함수는 여러 행을 한 값으로 줄인다. 줄이는 과정에서 NULL을 빼고, 타입을 정하고, 행이 없으면 무엇을 낼지를 함수마다 따로 정해 둔다. 그 규칙을 모르면 숫자가 조용히 틀린다. 이 글은 PostgreSQL 16에서 그런 경우를 하나씩 재현한다. `count(*)`와 `count(컬럼)`, NULL이 섞인 평균, 정수 나눗셈, 빈 집합, `LEFT JOIN` 뒤의 개수, `FILTER`와 `WHERE`, `GROUP BY`에 무엇을 적어야 하는지까지다.
+
+같은 데이터로 이어지는 시리즈의 세 번째 글이다. [SELECT의 논리적 처리 순서](/posts/sql-logical-order)에서 집계가 언제 계산되는지, [WHERE 연산자 글](/posts/sql-filtering-operators)에서 행을 어떻게 거르는지 봤다. 집계 함수와 `GROUP BY`, `HAVING`의 기본 문법은 [SQLD 집계 글](/posts/sqld-group-by-having)에 있으니 여기서는 반복하지 않는다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고, 출력은 모두 실제로 돌린 결과다. MySQL 8과의 차이는 문서로 확인해 덧붙였다.
+
+## 아홉 줄, 점수 다섯 개
+
+[첫 글](/posts/sql-logical-order)의 테이블을 그대로 쓴다. 수강 기록은 아홉 줄이고, 그중 점수가 있는 건 다섯 줄이다. 수강 중(`active`)이거나 환불한 기록은 아직 채점하지 않아서 `score`가 NULL이다. jung은 수강 기록이 없고, `100% 실습 Git`(5번 강의)은 수강생이 없다.
+
+```text
+ id | student_id | course_id |  status   | score  |      enrolled_at
+----+------------+-----------+-----------+--------+------------------------
+  1 |          1 |         1 | completed |     90 | 2026-09-28 10:00:00+09
+  2 |          1 |         2 | completed |     70 | 2026-10-01 00:00:00+09
+  3 |          2 |         1 | active    | (null) | 2026-10-05 13:20:00+09
+  4 |          2 |         3 | completed |     85 | 2026-10-12 09:00:00+09
+  5 |          1 |         3 | active    | (null) | 2026-10-15 08:00:00+09
+  6 |          4 |         2 | completed |     95 | 2026-10-20 21:00:00+09
+  7 |          3 |         1 | active    | (null) | 2026-10-31 18:30:00+09
+  8 |          3 |         4 | completed |     60 | 2026-10-31 23:59:30+09
+  9 |          4 |         3 | refunded  | (null) | 2026-11-01 00:00:00+09
+(9 rows)
+```
+
+## 같은 아홉 줄을 세는 방법이 셋이다
+
+처음의 두 숫자를 한 문장에 모아 본다.
+
+```sql
+SELECT count(*)                   AS rows,       -- 행 수
+       count(score)               AS scored,     -- score가 NULL이 아닌 행 수
+       count(DISTINCT student_id) AS students,   -- 겹치지 않는 수강생 수
+       sum(score)                 AS total,
+       avg(score)                 AS avg_score,
+       avg(coalesce(score, 0))    AS avg_zero,
+       sum(score) / count(*)      AS int_div
+FROM enrollments;
+```
+
+```text
+ rows | scored | students | total |      avg_score      |      avg_zero       | int_div
+------+--------+----------+-------+---------------------+---------------------+---------
+    9 |      5 |        4 |   400 | 80.0000000000000000 | 44.4444444444444444 |      44
+(1 row)
+```
+
+`count(*)`는 행을 센다. 값이 무엇이든, 모든 컬럼이 NULL이어도 센다. `count(score)`는 `score`가 NULL이 아닌 행만 센다. `count(DISTINCT student_id)`는 NULL을 빼고 겹친 값을 하나로 친다. `sum`, `avg`, `min`, `max`도 NULL을 건너뛴다. 값을 하나로 줄이는 집계에서 NULL을 세는 건 `count(*)`뿐이다. 예외로 `array_agg`는 NULL도 배열에 그대로 담는다.
+
+그래서 `avg(score)`는 `sum(score) / count(score)` = 400 / 5 = 80이다. 운영 리포트의 `sum(score) / count(*)`는 400 / 9로, 분모에 점수 없는 네 줄이 끼었다. 아래 그림에서 다음을 누르면 한 줄씩 훑으며 각 함수가 무엇을 쌓는지 본다.
+
+<AlgoTrace
+  caption="count(*)는 모든 행을, 나머지 집계는 NULL이 아닌 값만 쌓는다"
+  memoryLabel="count(*) · count(score) · sum"
+  cells={["90", "70", "NULL", "85", "NULL", "95", "NULL", "60", "NULL"]}
+  steps={[
+    { memory: ["0", "0", "NULL"], caption: "시작. 아무 행도 안 봤을 때 count는 0, sum은 NULL이다. 이 시작값이 빈 집합의 결과가 된다." },
+    { pointer: 0, found: [0], memory: ["1", "1", "90"], caption: "90. 세 값이 모두 움직인다." },
+    { pointer: 1, found: [0, 1], memory: ["2", "2", "160"], caption: "70. 마찬가지로 쌓인다." },
+    { pointer: 2, found: [0, 1], memory: ["3", "2", "160"], caption: "NULL. count(*)만 올라간다. count(score)와 sum은 이 행을 건너뛴다." },
+    { pointer: 5, found: [0, 1, 3, 5], memory: ["6", "4", "335"], caption: "85, NULL, 95까지. NULL을 만날 때마다 count(*)와 count(score)의 차이가 벌어진다." },
+    { pointer: 8, found: [0, 1, 3, 5, 7], memory: ["9", "5", "400"], caption: "끝. avg(score)는 400 ÷ 5 = 80. 분모에 count(*)를 쓰면 400 ÷ 9가 된다." },
+  ]}
+/>
+
+`count(*)`와 `count(1)`은 결과가 같다. `1`은 NULL이 될 수 없는 상수라서 모든 행을 센다. 헷갈리는 쪽은 `count(컬럼)`이다. 행 수를 세려고 `count(score)`를 쓰면 NULL인 행이 빠진다. 무엇을 세는지 이름으로 드러나게, 행 수는 `count(*)`로 쓴다.
+
+## 평균이 둘로 갈라진 이유
+
+80점과 44점 중 어느 쪽이 맞을까. 정하는 건 SQL이 아니라 NULL의 뜻이다. 이 테이블에서 NULL은 "아직 채점 전"이다. 0점을 받았다는 뜻이 아니다. 채점 전인 수강을 0점으로 치면 평균이 이상하게 낮아진다. 반대로 "응시하지 않으면 0점"이 규칙인 시험이라면 `coalesce(score, 0)`이 맞다. 강의별로 나눠 보면 차이가 더 크다.
+
+```sql
+SELECT course_id, count(*) AS n, count(score) AS scored,
+       round(avg(score), 1)              AS avg_scored,
+       round(avg(coalesce(score, 0)), 1) AS avg_zero
+FROM enrollments
+GROUP BY course_id
+ORDER BY course_id;
+```
+
+```text
+ course_id | n | scored | avg_scored | avg_zero
+-----------+---+--------+------------+----------
+         1 | 3 |      1 |       90.0 |     30.0
+         2 | 2 |      2 |       82.5 |     82.5
+         3 | 3 |      1 |       85.0 |     28.3
+         4 | 1 |      1 |       60.0 |     60.0
+(4 rows)
+```
+
+아래 그림에서 다음을 누르면 막대가 두 정의 사이를 오간다.
+
+<GeometryMorph
+  caption="NULL을 빼고 낸 평균과 0으로 채운 평균"
+  width={400}
+  height={230}
+  shapes={[
+    { id: "c1", tone: "series1" },
+    { id: "c2", tone: "series1" },
+    { id: "c3", tone: "series1" },
+    { id: "c4", tone: "series1" },
+    { id: "base", tone: "muted" },
+  ]}
+  steps={[
+    {
+      title: "avg(score)",
+      detail: "NULL을 건너뛴다. 1번 강의는 점수가 하나(90)뿐이라 평균도 90이다.",
+      shapes: {
+        c1: [[40, 55], [90, 55], [90, 190], [40, 190]],
+        c2: [[125, 66], [175, 66], [175, 190], [125, 190]],
+        c3: [[210, 62], [260, 62], [260, 190], [210, 190]],
+        c4: [[295, 100], [345, 100], [345, 190], [295, 190]],
+        base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 65, y: 45, text: "90", tone: "text", size: "sm" },
+        { x: 150, y: 56, text: "82.5", tone: "text", size: "sm" },
+        { x: 235, y: 52, text: "85", tone: "text", size: "sm" },
+        { x: 320, y: 90, text: "60", tone: "text", size: "sm" },
+        { x: 65, y: 212, text: "강의 1", tone: "text", size: "sm" },
+        { x: 150, y: 212, text: "강의 2", tone: "text", size: "sm" },
+        { x: 235, y: 212, text: "강의 3", tone: "text", size: "sm" },
+        { x: 320, y: 212, text: "강의 4", tone: "text", size: "sm" },
+      ],
+    },
+    {
+      title: "avg(coalesce(score, 0))",
+      detail: "채점 전인 수강을 0점으로 센다. NULL이 둘씩 있던 1번과 3번 강의가 3분의 1로 내려앉는다.",
+      shapes: {
+        c1: [[40, 145], [90, 145], [90, 190], [40, 190]],
+        c2: [[125, 66], [175, 66], [175, 190], [125, 190]],
+        c3: [[210, 148], [260, 148], [260, 190], [210, 190]],
+        c4: [[295, 100], [345, 100], [345, 190], [295, 190]],
+        base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 65, y: 135, text: "30", tone: "accent", size: "sm" },
+        { x: 150, y: 56, text: "82.5", tone: "text", size: "sm" },
+        { x: 235, y: 138, text: "28.3", tone: "accent", size: "sm" },
+        { x: 320, y: 90, text: "60", tone: "text", size: "sm" },
+        { x: 65, y: 212, text: "강의 1", tone: "text", size: "sm" },
+        { x: 150, y: 212, text: "강의 2", tone: "text", size: "sm" },
+        { x: 235, y: 212, text: "강의 3", tone: "text", size: "sm" },
+        { x: 320, y: 212, text: "강의 4", tone: "text", size: "sm" },
+      ],
+      focus: ["c1", "c3"],
+    },
+    {
+      title: "NULL이 없는 강의는 그대로",
+      detail: "2번과 4번은 모든 수강에 점수가 있어서 두 정의가 같다. 차이는 NULL이 있는 곳에서만 생긴다.",
+      shapes: {
+        c1: [[40, 145], [90, 145], [90, 190], [40, 190]],
+        c2: [[125, 66], [175, 66], [175, 190], [125, 190]],
+        c3: [[210, 148], [260, 148], [260, 190], [210, 190]],
+        c4: [[295, 100], [345, 100], [345, 190], [295, 190]],
+        base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 150, y: 56, text: "82.5", tone: "accent", size: "sm" },
+        { x: 320, y: 90, text: "60", tone: "accent", size: "sm" },
+        { x: 65, y: 212, text: "강의 1", tone: "text", size: "sm" },
+        { x: 150, y: 212, text: "강의 2", tone: "text", size: "sm" },
+        { x: 235, y: 212, text: "강의 3", tone: "text", size: "sm" },
+        { x: 320, y: 212, text: "강의 4", tone: "text", size: "sm" },
+      ],
+      focus: ["c2", "c4"],
+    },
+  ]}
+/>
+
+그런데 운영 리포트는 44.44도 아니고 44였다. 이건 NULL과 별개인 두 번째 함정이다. 결과 타입을 확인해 본다.
+
+```sql
+SELECT pg_typeof(sum(score))             AS sum_t,
+       pg_typeof(avg(score))             AS avg_t,
+       pg_typeof(count(*))               AS cnt_t,
+       pg_typeof(sum(score) / count(*))  AS div_t
+FROM enrollments;
+```
+
+```text
+ sum_t  |  avg_t  | cnt_t  | div_t
+--------+---------+--------+--------
+ bigint | numeric | bigint | bigint
+(1 row)
+```
+
+`integer`의 `sum`은 넘침을 막으려고 `bigint`를 돌려주고, `count`도 `bigint`다. PostgreSQL에서 정수끼리 나누면 정수가 되고 소수점 아래는 버린다. `7 / 2`가 3이다. `avg`는 정수 컬럼이어도 `numeric`을 돌려줘서 이 문제가 없다. 직접 나눠야 한다면 한쪽을 `numeric`으로 바꾼다.
+
+```sql
+SELECT sum(score)::numeric / count(*)           AS fixed,
+       round(sum(score)::numeric / count(*), 2) AS rounded
+FROM enrollments;
+```
+
+```text
+        fixed        | rounded
+---------------------+---------
+ 44.4444444444444444 |   44.44
+(1 row)
+```
+
+비율을 퍼센트로 낼 때 `100 * a / b` 대신 `100.0 * a / b`를 쓰는 것도 같은 이유다. MySQL 8은 여기서 반대다. `/`는 정수끼리여도 소수를 돌려주고(`7 / 2`가 3.5000), 정수 나눗셈은 `DIV`로 따로 쓴다. 그래서 MySQL에서 맞던 비율 쿼리가 PostgreSQL로 옮기면 0으로 떨어지기도 한다.
+
+## 행이 하나도 없을 때
+
+수강생이 없는 5번 강의의 숫자를 본다.
+
+```sql
+SELECT count(*), sum(score), avg(score), max(score)
+FROM enrollments WHERE course_id = 5;
+
+SELECT course_id, count(*)
+FROM enrollments WHERE course_id = 5
+GROUP BY course_id;
+```
+
+```text
+ count |  sum   |  avg   |  max
+-------+--------+--------+--------
+     0 | (null) | (null) | (null)
+(1 row)
+
+ course_id | count
+-----------+-------
+(0 rows)
+```
+
+`GROUP BY`가 없으면 결과는 언제나 한 줄이고, 행이 없을 때 `count`는 0, 나머지는 NULL이다. 합계가 0이 아니라 NULL이라는 게 문제를 만든다. 앱에서 `total + fee`를 계산하면 NULL이 퍼지고, 화면에는 빈칸이 뜬다. 합계는 `coalesce(sum(score), 0)`로 받는다. `GROUP BY`가 있으면 묶을 행이 없으니 줄 자체가 안 나온다. 이 차이는 [SQLD 집계 글](/posts/sqld-group-by-having)에서도 짚었다.
+
+0인 개수는 나눗셈에서 또 터진다. 강의별 환불률을 구하는데 5번 강의를 넣으려고 `courses`에서 `LEFT JOIN`했다.
+
+```sql
+SELECT c.title,
+       round(100.0 * count(e.id) FILTER (WHERE e.status = 'refunded') / count(e.id), 1) AS pct
+FROM courses c
+LEFT JOIN enrollments e ON e.course_id = c.id
+GROUP BY c.id
+ORDER BY c.id;
+```
+
+```text
+ERROR:  division by zero
+```
+
+5번 강의는 `count(e.id)`가 0이다. 분모를 `nullif(count(e.id), 0)`으로 바꾸면 0이 NULL이 되고, NULL로 나누면 에러 대신 NULL이 나온다. "수강생이 없어서 비율을 낼 수 없다"는 뜻이 그대로 남는다.
+
+```text
+      title      |  pct
+-----------------+--------
+ SQL 기초        |    0.0
+ PostgreSQL 튜닝 |    0.0
+ React 입문      |   33.3
+ Docker 실전     |    0.0
+ 100% 실습 Git   | (null)
+(5 rows)
+```
+
+## LEFT JOIN 뒤의 `count(*)`는 0을 세지 못한다
+
+앞 쿼리에서 분모를 `count(*)`가 아니라 `count(e.id)`로 쓴 데는 이유가 있다. 수강생마다 수강 건수를 세 보면 보인다.
+
+```sql
+SELECT s.name, count(*) AS star, count(e.id) AS enrolled
+FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+GROUP BY s.id, s.name
+ORDER BY s.id;
+```
+
+```text
+ name | star | enrolled
+------+------+----------
+ kim  |    3 |        3
+ lee  |    2 |        2
+ park |    2 |        2
+ choi |    2 |        2
+ jung |    1 |        0
+(5 rows)
+```
+
+수강 기록이 없는 jung이 `count(*)`로는 1건이다. `LEFT JOIN`은 짝이 없는 왼쪽 행을 버리지 않고, 오른쪽 컬럼을 모두 NULL로 채운 한 줄을 만든다. `count(*)`는 그 줄도 행이니 센다. 오른쪽 테이블의 NOT NULL 컬럼(보통 기본 키)을 세면 NULL로 채운 줄은 빠진다. `LEFT JOIN` 뒤에 개수를 셀 때는 항상 오른쪽의 키를 센다.
+
+조인과 집계가 만나면 반대 방향의 실수도 있다. 수강생마다 수강 기록과 결제 기록을 둘 다 조인해 놓고 `sum`을 하면, 한쪽 행이 다른 쪽 행 수만큼 복제돼 합계가 부풀어 오른다. 이 행 곱하기 문제는 [조인 실전 글](/posts/sql-joins-in-practice)에서 다룬다.
+
+## 조건별로 세면 WHERE와 FILTER가 다른 행을 지운다
+
+강의별 환불 건수 리포트를 만든다. 먼저 떠오르는 건 `WHERE`다.
+
+```sql
+SELECT course_id, count(*) AS refunded
+FROM enrollments
+WHERE status = 'refunded'
+GROUP BY course_id
+ORDER BY course_id;
+```
+
+```text
+ course_id | refunded
+-----------+----------
+         3 |        1
+(1 row)
+```
+
+환불이 없는 강의가 리포트에서 사라졌다. `WHERE`는 묶기 전에 행을 지우니, 환불 기록이 없는 강의는 묶을 행이 하나도 남지 않는다. 0건이 나와야 할 강의가 아예 없는 강의처럼 보인다. 집계 함수마다 조건을 따로 거는 `FILTER`(PostgreSQL 9.4부터)를 쓰면 행은 그대로 두고 그 집계에 들어가는 행만 고른다.
+
+```sql
+SELECT course_id,
+       count(*)                                      AS total,
+       count(*) FILTER (WHERE status = 'refunded')   AS refunded,
+       round(100.0 * count(*) FILTER (WHERE status = 'refunded') / count(*), 1) AS refund_pct
+FROM enrollments
+GROUP BY course_id
+ORDER BY course_id;
+```
+
+```text
+ course_id | total | refunded | refund_pct
+-----------+-------+----------+------------
+         1 |     3 |        0 |        0.0
+         2 |     2 |        0 |        0.0
+         3 |     3 |        1 |       33.3
+         4 |     1 |        0 |        0.0
+(4 rows)
+```
+
+여기에도 5번 강의는 없다. `enrollments`에 5번 강의 행이 아예 없어서다. 묶을 행이 없는 그룹까지 보려면 앞 섹션처럼 그룹의 원본인 `courses`에서 출발해 `LEFT JOIN`한다. 아래 그림에서 다음을 누르면 1번 강의와 5번 강의가 각 방법에서 어디까지 살아남는지 보인다.
+
+<NetworkTopology
+  caption="조건을 어디에 거느냐에 따라 사라지는 그룹이 다르다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "courses", label: "courses", sub: "강의 5개", x: 50, y: 50, icon: "db", w: 76 },
+    { id: "rows", label: "enrollments", sub: "9줄", x: 50, y: 170, icon: "db", w: 84 },
+    { id: "where", label: "WHERE", x: 150, y: 170, w: 70 },
+    { id: "group", label: "GROUP BY", x: 245, y: 110, w: 80 },
+    { id: "having", label: "HAVING", x: 245, y: 200, w: 70 },
+    { id: "out", label: "리포트", x: 350, y: 110, icon: "client", w: 70 },
+  ]}
+  links={[
+    { from: "courses", to: "group", label: "LEFT JOIN", dashed: true },
+    { from: "rows", to: "where" },
+    { from: "where", to: "group" },
+    { from: "group", to: "having" },
+    { from: "group", to: "out" },
+    { from: "having", to: "out" },
+  ]}
+  steps={[
+    { path: ["rows", "where"], packet: "강의1", blocked: true, title: "WHERE status = 'refunded'", detail: "1번 강의의 세 줄은 모두 환불이 아니라 WHERE에서 지워진다. 묶음이 생기지 않으니 리포트에 줄이 없다." },
+    { path: ["rows", "where", "group", "out"], packet: "강의1", title: "FILTER (WHERE ...)", detail: "WHERE 없이 세 줄이 다 묶이고, 환불 개수를 세는 집계에만 조건이 걸린다. refunded = 0으로 남는다." },
+    { path: ["rows", "where", "group", "having"], packet: "강의1", blocked: true, title: "HAVING count(*) FILTER (...) >= 1", detail: "묶은 뒤에 묶음을 거른다. 환불이 하나도 없는 묶음이 여기서 빠진다. 의도적으로 지울 때 쓴다." },
+    { path: ["rows", "where"], packet: "강의5", blocked: true, highlight: ["courses"], title: "enrollments에 없는 강의", detail: "5번 강의는 수강 기록이 아예 없어서 어떤 조건을 걸어도 묶음이 생기지 않는다." },
+    { path: ["courses", "group", "out"], packet: "강의5", title: "courses에서 출발", detail: "강의 목록에서 LEFT JOIN하면 짝 없는 강의도 한 줄이 된다. count(e.id)는 0, 비율은 nullif로 NULL." },
+  ]}
+/>
+
+`FILTER`는 행을 줄이지 않는다는 점도 알아 둔다. 상태별 개수 셋을 한 번에 세면 테이블을 한 번만 읽는다. 20만 줄짜리 `enrollments_big`([첫 글](/posts/sql-logical-order#논리-순서와-실제-실행은-다르다)에서 만든 테이블)에서 확인한다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT count(*) FILTER (WHERE status = 'completed') AS completed,
+       count(*) FILTER (WHERE status = 'refunded')  AS refunded,
+       count(*) FILTER (WHERE status = 'active')    AS active
+FROM enrollments_big;
+```
+
+```text
+                                                         QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=6600.00..6600.01 rows=1 width=24) (actual time=37.985..37.987 rows=1 loops=1)
+   ->  Seq Scan on enrollments_big  (cost=0.00..3600.00 rows=200000 width=9) (actual time=0.004..14.130 rows=200000 loops=1)
+ Planning Time: 0.088 ms
+ Execution Time: 38.015 ms
+(4 rows)
+```
+
+`Seq Scan`이 한 번, `rows=200000`이다. 상태마다 쿼리를 따로 날리면 같은 테이블을 세 번 읽는다. 반대로 숫자 하나만 필요하다면 `FILTER`보다 `WHERE`가 낫다. `WHERE`는 인덱스로 읽을 행 자체를 줄일 수 있지만, `FILTER`는 모든 행을 읽은 다음에 고른다.
+
+MySQL 8에는 `FILTER`가 없다. `SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END)`나, 비교 결과가 1과 0이 되는 MySQL의 특성을 써서 `SUM(status = 'refunded')`로 쓴다.
+
+## ELSE 0을 붙인 count는 전부를 센다
+
+`FILTER`가 없는 DB에서 옮겨 온 쿼리, 또는 `FILTER`를 모르고 쓴 쿼리에서 자주 보는 실수가 있다.
+
+```sql
+SELECT course_id,
+       count(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS wrong,
+       count(CASE WHEN status = 'completed' THEN 1 END)        AS cnt_case,
+       sum(CASE WHEN status = 'completed' THEN 1 ELSE 0 END)   AS sum_case,
+       count(*) FILTER (WHERE status = 'completed')            AS filtered
+FROM enrollments
+GROUP BY course_id
+ORDER BY course_id;
+```
+
+```text
+ course_id | wrong | cnt_case | sum_case | filtered
+-----------+-------+----------+----------+----------
+         1 |     3 |        1 |        1 |        1
+         2 |     2 |        2 |        2 |        2
+         3 |     3 |        1 |        1 |        1
+         4 |     1 |        1 |        1 |        1
+(4 rows)
+```
+
+`wrong`만 전체 행 수와 같다. 조각으로 나눠 보면 이유가 보인다.
+
+<UrlAnatomy
+  caption="count는 0도 센다"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "count", display: "count(", title: "NULL이 아닌 값을 센다", description: "count(식)은 식의 값이 무엇인지 보지 않는다. NULL이 아니면 1을 더한다. 0도, false도, 빈 문자열도 NULL이 아니다.", required: true },
+    { key: "when", display: "CASE WHEN status = 'completed' THEN 1", title: "완료면 1", description: "완료한 행은 1이 된다. 센다." },
+    { key: "else", display: "ELSE 0", title: "범인", description: "완료가 아닌 행이 0이 된다. 0은 NULL이 아니니 count가 이것도 센다. 그래서 결과가 count(*)와 같아진다.", code: "count(CASE WHEN ... THEN 1 END)      -- ELSE가 없으면 NULL\nsum(CASE WHEN ... THEN 1 ELSE 0 END) -- sum은 0을 더해도 그대로" },
+    { key: "end", display: "END)", title: "고치는 법", description: "ELSE 0을 지워 나머지를 NULL로 두거나, count를 sum으로 바꾸거나, FILTER를 쓴다. 셋 다 결과가 같다." },
+  ]}
+/>
+
+`count`와 `CASE`를 같이 쓸 거라면 `ELSE`를 쓰지 않는다. 읽는 사람이 헷갈리지 않게 PostgreSQL에서는 `FILTER`가 가장 낫다. `CASE`로 조건부 집계와 피벗을 만드는 법은 [CASE WHEN 글](/posts/sql-case-when)에 따로 있다.
+
+## WHERE에 쓸지 HAVING에 쓸지는 숫자로 정한다
+
+"평균 80점 이상"을 원했다고 해 보자. 두 사람이 이렇게 썼다.
+
+```sql
+-- 80점 이상인 점수만 모아서 평균
+SELECT student_id, round(avg(score), 1) AS avg80
+FROM enrollments WHERE score >= 80
+GROUP BY student_id ORDER BY student_id;
+
+-- 모든 점수의 평균이 80 이상인 수강생
+SELECT student_id, round(avg(score), 1) AS avg_all
+FROM enrollments
+GROUP BY student_id HAVING avg(score) >= 80
+ORDER BY student_id;
+```
+
+```text
+ student_id | avg80
+------------+-------
+          1 |  90.0
+          2 |  85.0
+          4 |  95.0
+(3 rows)
+
+ student_id | avg_all
+------------+---------
+          1 |    80.0
+          2 |    85.0
+          4 |    95.0
+(3 rows)
+```
+
+같은 세 명이 나왔다. 그런데 1번 kim의 숫자가 다르다. 첫 쿼리는 kim의 70점을 `WHERE`에서 미리 지우고 90점 하나로 평균을 냈다. 둘째는 90과 70의 평균 80으로 거른 뒤 보여 줬다. 집계 대상을 바꾸는 조건은 `WHERE`, 집계 결과로 그룹을 고르는 조건은 `HAVING`이다. 결과의 행이 같아 보여도 숫자가 다를 수 있으니 테스트에서 행 목록만 비교하면 놓친다.
+
+집계가 들어가지 않은 조건이라면 어디에 써도 결과는 같다. PostgreSQL은 그런 `HAVING` 조건을 알아서 `WHERE`로 내리는데, 그 실행 계획은 [첫 글의 실행 계획 섹션](/posts/sql-logical-order#논리-순서와-실제-실행은-다르다)에 있다. 그래도 사람이 읽기 좋게 묶기 전 조건은 `WHERE`에 쓴다.
+
+## GROUP BY에는 무엇을 적어야 하나
+
+수강생 이름과 도시별 수강 건수를 뽑는다. 이름으로 묶었다.
+
+```sql
+SELECT s.name, s.city, count(e.id)
+FROM students s LEFT JOIN enrollments e ON e.student_id = s.id
+GROUP BY s.name;
+```
+
+```text
+ERROR:  column "s.city" must appear in the GROUP BY clause or be used in an aggregate function
+LINE 1: SELECT s.name, s.city, count(e.id) FROM students s LEFT JOIN...
+                       ^
+```
+
+묶은 뒤에는 한 줄이 한 묶음이다. 이름이 같은 사람이 둘이고 도시가 다르면, 그 묶음의 `city`는 하나로 정해지지 않는다. 그래서 `SELECT`에는 묶은 컬럼이나 집계만 올 수 있다. 에러를 피하려고 `GROUP BY s.name, s.city`로 늘리기 쉬운데, 진짜 문제는 이름으로 묶었다는 것이다. 동명이인이 생기면 조용히 합쳐진다. 트랜잭션 안에서 인천에 사는 kim을 한 명 더 넣어 본다.
+
+```sql
+BEGIN;
+INSERT INTO students (name, city) VALUES ('kim', 'incheon');          -- id 6
+INSERT INTO enrollments (student_id, course_id, status, score, enrolled_at)
+VALUES (6, 4, 'completed', 40, '2026-10-25 10:00+09');
+
+SELECT s.name, count(*) AS n, round(avg(e.score), 1) AS avg_score
+FROM enrollments e JOIN students s ON s.id = e.student_id
+GROUP BY s.name ORDER BY s.name;
+
+SELECT s.id, s.name, count(*) AS n, round(avg(e.score), 1) AS avg_score
+FROM enrollments e JOIN students s ON s.id = e.student_id
+GROUP BY s.id ORDER BY s.id;
+ROLLBACK;
+```
+
+```text
+ name | n | avg_score
+------+---+-----------
+ choi | 2 |      95.0
+ kim  | 4 |      66.7
+ lee  | 2 |      85.0
+ park | 2 |      60.0
+(4 rows)
+
+ id | name | n | avg_score
+----+------+---+-----------
+  1 | kim  | 3 |      80.0
+  2 | lee  | 2 |      85.0
+  3 | park | 2 |      60.0
+  4 | choi | 2 |      95.0
+  6 | kim  | 1 |      40.0
+(5 rows)
+```
+
+이름으로 묶으면 두 kim이 4건, 66.7점인 한 사람이 된다. 사람을 묶으려면 사람을 가리키는 키로 묶는다. 둘째 쿼리는 `GROUP BY s.id`만 적었는데 `s.name`을 `SELECT`에 써도 에러가 나지 않았다. PostgreSQL 9.1부터는 묶은 컬럼이 그 테이블의 기본 키이면, 같은 테이블의 다른 컬럼은 기본 키로 하나로 정해진다고 보고 허용한다. 이것을 함수 종속이라고 한다.
+
+다만 PostgreSQL이 알아보는 함수 종속은 좁다. 기준은 "묶은 컬럼이 그 테이블의 기본 키인가" 하나다.
+
+- `GROUP BY e.student_id`로 묶고 `s.name`을 쓰면 에러다. 조인 조건으로 `e.student_id = s.id`가 같다는 걸 사람은 알지만, `s`의 기본 키로 묶은 게 아니라서 인정하지 않는다.
+- `UNIQUE NOT NULL`인 컬럼으로 묶어도 에러다. 이 DB에서 `code text UNIQUE NOT NULL`로 묶고 `label`을 쓰자 같은 `must appear in the GROUP BY clause` 에러가 났다. 기본 키만 된다.
+
+아래 그림은 이 규칙을 화살표로 정리한 것이다.
+
+<ConceptDiagram
+  caption="PostgreSQL이 인정하는 함수 종속은 기본 키에서 나오는 것뿐이다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "sid", label: "s.id", sub: "students 기본 키", x: 90, y: 60, w: 120 },
+    { id: "cols", label: "s.name, s.city", sub: "하나로 정해진다", x: 300, y: 60, w: 130 },
+    { id: "esid", label: "e.student_id", sub: "다른 테이블 컬럼", x: 90, y: 190, w: 120 },
+    { id: "sname", label: "s.name", sub: "동명이인 가능", x: 300, y: 190, w: 120 },
+  ]}
+  edges={[
+    { from: "sid", to: "cols", label: "GROUP BY s.id 허용" },
+    { from: "esid", to: "sid", label: "조인으로 같음", arrow: "none", dashed: true },
+    { from: "esid", to: "cols", label: "PG는 모른다", dashed: true },
+    { from: "sname", to: "cols", label: "묶으면 합쳐짐", dashed: true },
+  ]}
+/>
+
+정말 아무 값이나 하나면 되는 컬럼도 있다. 같은 묶음 안에서 값이 모두 같다고 확신하지만 PostgreSQL이 모를 때다. 이때 `max(s.name)`처럼 쓰던 것을, PostgreSQL 16부터는 `any_value(s.name)`로 의도를 드러내 쓸 수 있다. 값이 정말 같은지는 검사하지 않으니 확신이 있을 때만 쓴다.
+
+MySQL 8은 `ONLY_FULL_GROUP_BY`가 기본으로 켜져 있어서(5.7.5부터) 비슷하게 막는다. 다만 함수 종속을 PostgreSQL보다 넓게 알아본다. 기본 키뿐 아니라 `UNIQUE NOT NULL` 컬럼, `WHERE`나 `ON`의 같음 조건에서 나오는 종속도 인정한다. 그래서 MySQL에서 돌던 `GROUP BY e.student_id` 쿼리가 PostgreSQL에서 에러가 날 수 있다. 이 모드를 끈 옛 MySQL은 묶음 안의 아무 값이나 골라 보여 줬다. 그때 작성된 쿼리를 옮길 때 숫자가 바뀌는 이유가 된다.
+
+## NULL도 한 묶음이 되고, 이어 붙이기는 순서를 적어야 한다
+
+`WHERE city = NULL`은 아무것도 고르지 못하지만, `GROUP BY city`에서 NULL은 하나의 묶음이 된다. 묶을 때는 NULL끼리 같다고 본다. 그 묶음 안에서 `count(city)`는 다시 0이다.
+
+```sql
+SELECT city, count(*) AS star, count(city) AS cnt_city
+FROM students GROUP BY city ORDER BY city;
+```
+
+```text
+  city  | star | cnt_city
+--------+------+----------
+ busan  |    1 |        1
+ daegu  |    1 |        1
+ seoul  |    2 |        2
+ (null) |    1 |        0
+(4 rows)
+```
+
+리포트에서 이 줄의 이름이 빈칸으로 나오면 읽는 사람은 무엇인지 모른다. `coalesce(city, '미입력')`으로 이름을 붙여 보여 준다.
+
+`string_agg`와 `array_agg`는 입력 순서대로 이어 붙이는데, 그 순서는 정해져 있지 않다. 지금은 우연히 원하는 순서로 나와도 실행 계획이 바뀌면 달라진다. 순서가 필요하면 집계 안에 `ORDER BY`를 적는다.
+
+```sql
+SELECT course_id, string_agg(s.name, ', ' ORDER BY s.name) AS names
+FROM enrollments e JOIN students s ON s.id = e.student_id
+GROUP BY course_id ORDER BY course_id;
+```
+
+```text
+ course_id |     names
+-----------+----------------
+         1 | kim, lee, park
+         2 | choi, kim
+         3 | choi, kim, lee
+         4 | park
+(4 rows)
+```
+
+## 리포트 숫자가 맞지 않을 때 보는 순서
+
+두 리포트의 숫자가 다르다는 문의를 받으면, 두 쿼리를 나란히 놓고 집계 하나하나의 분모와 분자를 확인한다. 이 글의 내용은 이 순서로 확인하면 된다.
+
+먼저 같은 조건에서 `count(*)`, `count(컬럼)`, `count(DISTINCT 키)`를 한 줄에 뽑는다. 셋이 다르면 NULL과 중복이 숫자를 바꾸고 있다. 평균이 다르면 NULL을 빼고 냈는지 0으로 채웠는지, 직접 나눴다면 정수 나눗셈인지 본다. `pg_typeof`로 타입을 찍어 보면 바로 드러난다.
+
+다음으로 사라진 그룹을 찾는다. 0이어야 할 그룹이 리포트에 없다면 `WHERE`가 그 그룹의 행을 모두 지웠거나, 그룹의 원본 테이블에서 출발하지 않은 것이다. 반대로 0이어야 할 그룹이 1로 나오면 `LEFT JOIN` 뒤에 `count(*)`를 쓴 것이다. 조건부 개수가 전체와 같으면 `count(CASE ... ELSE 0 END)`를 찾는다.
+
+마지막으로 `GROUP BY`의 기준이 사람이나 주문 같은 개체의 키인지, 이름 같은 속성인지 본다. 속성으로 묶은 쿼리는 지금 데이터에서 맞아도 같은 값이 둘 생기는 날 틀린다. 테스트 데이터에 동명이인, NULL, 빈 그룹을 일부러 넣어 두면 이런 쿼리를 리뷰 전에 걸러 낼 수 있다.
+
+## 집계 함수를 직접 만들어 보기
+
+NULL을 다루는 규칙을 손으로 짜 보면 오래 남는다. 숫자와 `null`이 섞인 배열을 받아 `[count(*), count(값), sum, avg]`를 돌려주는 함수를 완성해 보자. SQL처럼 `null`은 `count(*)`에만 세고 나머지에서는 건너뛴다. 값이 하나도 없으면 `sum`과 `avg`는 `null`이다. 테스트의 기대값은 같은 값을 PostgreSQL에서 집계한 결과와 맞췄다.
+
+<CodePlayground
+  caption="NULL을 건너뛰는 집계"
+  functionName="aggregate"
+  initialCode={`function aggregate(values) {
+  // [count(*), count(값), sum, avg]
+  return [0, 0, null, null];
+}`}
+  solution={`function aggregate(values) {
+  const nonNull = values.filter((v) => v !== null);   // count(*) 말고는 NULL을 건너뛴다
+  const countStar = values.length;
+  const count = nonNull.length;
+  const sum = count ? nonNull.reduce((a, b) => a + b, 0) : null;   // 값이 없으면 NULL
+  const avg = count ? sum / count : null;
+  return [countStar, count, sum, avg];
+}`}
+  tests={[
+    { label: "본문의 점수 아홉 개", args: [[90, 70, null, 85, null, 95, null, 60, null]], expected: [9, 5, 400, 80] },
+    { label: "빈 집합", args: [[]], expected: [0, 0, null, null] },
+    { label: "모두 NULL", args: [[null, null]], expected: [2, 0, null, null] },
+    { label: "정수 평균도 소수로", args: [[7, 2]], expected: [2, 2, 9, 4.5] },
+    { label: "0은 NULL이 아니다", args: [[0, null]], expected: [2, 1, 0, 0] },
+  ]}
+/>
+
+## 분모부터 확인한다
+
+집계 숫자가 틀리는 이유는 대부분 분모에 있다. `count(*)`를 뺀 집계는 NULL을 건너뛰니 무엇을 세는지 이름으로 드러내고, NULL을 0으로 칠지는 그 NULL의 뜻으로 정한다. 정수끼리 나누면 소수가 버려지고, 빈 집합의 `sum`은 0이 아니라 NULL이며, `LEFT JOIN` 뒤의 `count(*)`는 0을 1로 센다. 조건별로 셀 때 `WHERE`는 그룹까지 지우고 `FILTER`는 집계 하나만 고른다. 그리고 `GROUP BY`에는 속성이 아니라 키를 적는다. 조인이 행을 불려 집계를 부풀리는 경우는 [조인 실전 글](/posts/sql-joins-in-practice)에서 이어 본다.
+
+## 면접에서 나올 만한 질문
+
+### count(*), count(1), count(컬럼)은 어떻게 다른가요?
+
+`count(*)`와 `count(1)`은 둘 다 행 수를 세서 결과가 같다. `count(컬럼)`은 그 컬럼이 NULL이 아닌 행만 센다. 그래서 둘의 차이가 그 컬럼의 NULL 개수이고, 행 수를 셀 때는 의도가 드러나게 `count(*)`를 쓴다.
+
+### NULL이 있는 컬럼의 AVG는 어떻게 계산되나요? 0으로 채워야 하나요?
+
+`avg`는 NULL을 건너뛰고 NULL이 아닌 값의 합을 그 개수로 나눈다. 0으로 채울지는 NULL의 뜻으로 정한다. "아직 채점 전"이면 건너뛰는 게 맞고 "미응시는 0점"이 규칙이면 `coalesce(score, 0)`이 맞다. 리포트에는 어떤 정의인지 적어 둔다.
+
+### sum(score) / count(*)가 44.44가 아니라 44로 나왔습니다. 왜 그런가요?
+
+PostgreSQL에서 `sum(integer)`과 `count`는 `bigint`이고 정수끼리 나누면 소수점 아래를 버린다. 한쪽을 `::numeric`으로 바꾸거나 `100.0`처럼 소수 리터럴을 섞고, 평균이면 `numeric`을 돌려주는 `avg`를 쓴다. MySQL은 `/`가 항상 소수를 돌려줘서 옮길 때 차이가 난다.
+
+### 행이 하나도 없을 때 SUM과 COUNT는 무엇을 돌려주나요?
+
+`GROUP BY` 없이 집계하면 결과는 한 줄이고 `count`는 0, `sum`·`avg`·`max`는 NULL이다. 합계가 NULL이면 앱 계산에서 NULL이 퍼지니 `coalesce(sum(x), 0)`로 받는다. `GROUP BY`가 있으면 묶을 행이 없어서 줄 자체가 나오지 않는다.
+
+### LEFT JOIN 후 count(*)를 쓰면 무엇이 문제인가요?
+
+짝이 없는 왼쪽 행도 오른쪽을 NULL로 채운 한 줄로 남아서 `count(*)`가 0 대신 1을 센다. 오른쪽 테이블의 기본 키처럼 NOT NULL인 컬럼을 `count(e.id)`로 세면 0이 나온다. 그 개수를 분모로 쓰면 0으로 나누기가 생기니 `nullif(count(e.id), 0)`을 쓴다.
+
+### 조건별 집계에서 WHERE와 FILTER는 어떻게 다른가요?
+
+`WHERE`는 묶기 전에 행을 지워서 조건에 맞는 행이 없는 그룹은 결과에서 사라진다. `FILTER`는 그 집계 함수에 들어갈 행만 고르고 그룹은 남기니 0으로 나온다. 대신 `FILTER`는 모든 행을 읽으니, 숫자 하나만 필요하면 인덱스로 읽는 양을 줄이는 `WHERE`가 낫다.
+
+### GROUP BY에 없는 컬럼을 SELECT에 쓰면 왜 에러가 나고, PostgreSQL은 언제 허용하나요?
+
+묶은 뒤 한 줄은 한 묶음이라 묶지 않은 컬럼의 값이 하나로 정해지지 않기 때문이다. PostgreSQL은 묶은 컬럼이 그 테이블의 기본 키일 때만 같은 테이블의 다른 컬럼을 허용한다. 조인 상대의 키나 `UNIQUE NOT NULL` 컬럼으로 묶으면 인정하지 않는다. MySQL 8은 `ONLY_FULL_GROUP_BY`로 막되 종속을 더 넓게 알아본다.
+
+### 이름으로 GROUP BY하면 어떤 일이 생길 수 있나요?
+
+같은 이름의 다른 개체가 하나로 합쳐져 개수와 평균이 조용히 틀린다. 동명이인 kim 둘이 4건, 66.7점인 한 사람이 되는 식이다. 개체를 셀 때는 기본 키로 묶고, 보여 줄 이름은 함수 종속으로 함께 꺼낸다.

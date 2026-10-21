@@ -1,0 +1,388 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("layered-architecture");
+
+회원 가입 폼에 이미 있는 이메일을 대문자만 바꿔 넣었다. 브라우저 개발자 도구에 이런 응답이 찍혔다.
+
+```text
+HTTP/1.1 500 Internal Server Error
+content-type: application/json
+Content-Length: 78
+
+{"error":"duplicate key value violates unique constraint \"users_email_key\""}
+```
+
+사용자 잘못으로 생긴 일인데 서버 오류(500)가 났고, 응답 본문에는 DB 제약 이름이 그대로 실려 나왔다. 코드에는 컨트롤러, 서비스, 리포지토리 폴더가 다 있었다. 계층은 나눠 놓았지만, 계층 사이에서 해야 할 일 하나를 하지 않았다.
+
+이 글은 레이어드 아키텍처를 다룬다. 계층을 나누는 규칙, 계층과 티어의 차이, 에러와 트랜잭션을 어느 계층이 맡는지, 그리고 이 구조가 한계에 닿는 지점까지 본다. 계층을 어떤 단위 안에 둘지는 [모듈러 모놀리스 글](/posts/modular-monolith)에서, 한 덩어리 구조 자체는 [모놀리스 아키텍처 글](/posts/monolith-architecture)에서 다뤘다.
+
+## 위에서 아래로만 부른다
+
+레이어드 아키텍처는 코드를 역할별 층으로 쌓고, 위층이 바로 아래층만 부르게 하는 구조다. 웹 백엔드에서 흔한 모양은 네 층이다.
+
+- 프레젠테이션 계층: HTTP 요청을 해석하고 응답을 만든다. 컨트롤러, 라우트 핸들러가 여기 있다.
+- 비즈니스 계층: 업무 규칙을 검사하고 일의 순서를 정한다. 서비스라고 부르는 곳이다.
+- 퍼시스턴스 계층: 데이터를 읽고 쓰는 방법을 안다. 리포지토리, DAO가 여기 있다.
+- 데이터베이스: 실제 저장소다.
+
+규칙은 두 가지다. 의존은 위에서 아래로만 흐른다. 그리고 각 층은 자기 바로 아래층만 안다. 컨트롤러는 SQL을 모르고, 리포지토리는 HTTP 상태 코드를 모른다. 이렇게 하면 한 층을 바꿀 때 영향이 바로 위층에서 멈춘다. MySQL을 PostgreSQL로 바꾸면 퍼시스턴스 계층이, REST를 GraphQL로 바꾸면 프레젠테이션 계층이 바뀐다.
+
+아래 그림에서 다음을 누르면 가입 요청이 층을 차례로 내려갔다 올라오는 길이 보인다. 마지막 단계는 층을 건너뛰는 호출이다.
+
+<NetworkTopology
+  caption="가입 요청이 계층을 내려갔다 올라오는 길"
+  width={400}
+  height={280}
+  zones={[
+    { id: "zp", label: "presentation", x: 90, y: 14, w: 220, h: 56, tone: "edge" },
+    { id: "zb", label: "business", x: 90, y: 80, w: 220, h: 56, tone: "private" },
+    { id: "zr", label: "persistence", x: 90, y: 146, w: 220, h: 56, tone: "public" },
+  ]}
+  nodes={[
+    { id: "client", label: "client", x: 40, y: 42, icon: "client", w: 64 },
+    { id: "ctl", label: "controller", x: 200, y: 46, icon: "gateway", w: 100 },
+    { id: "svc", label: "userService", x: 200, y: 112, icon: "server", w: 110 },
+    { id: "repo", label: "userRepo", x: 200, y: 178, icon: "server", w: 100 },
+    { id: "db", label: "PostgreSQL", x: 200, y: 245, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "client", to: "ctl" },
+    { from: "ctl", to: "svc" },
+    { from: "svc", to: "repo" },
+    { from: "repo", to: "db" },
+    { from: "ctl", to: "repo", dashed: true },
+  ]}
+  steps={[
+    { path: ["client", "ctl"], packet: "POST /users", title: "프레젠테이션이 요청을 해석한다", detail: "본문을 파싱하고 형식을 확인한다. 이메일이 이미 있는지 같은 업무 판단은 하지 않는다." },
+    { path: ["ctl", "svc"], packet: "signUp()", title: "서비스가 업무 규칙을 본다", detail: "이메일 형식, 가입 가능 여부 같은 규칙을 검사하고, 필요하면 트랜잭션을 연다. HTTP는 모른다." },
+    { path: ["svc", "repo", "db"], packet: "INSERT", title: "리포지토리만 SQL을 안다", detail: "어느 테이블에 어떤 SQL을 보낼지, 드라이버 에러가 무슨 뜻인지는 이 층에서 끝낸다." },
+    { path: ["db", "repo", "svc", "ctl", "client"], packet: "201", title: "결과는 같은 길로 올라온다", detail: "층마다 자기 말로 바꿔서 올린다. 행은 사용자 객체로, 사용자 객체는 JSON으로." },
+    { path: ["ctl", "repo"], packet: "query()", blocked: true, title: "층을 건너뛰면 막는다", detail: "컨트롤러가 리포지토리를 바로 부르면 서비스에 있던 규칙을 건너뛴다. 닫힌 계층에서는 허용하지 않는다." },
+  ]}
+/>
+
+이 구조가 오래 기본값이었던 이유는 단순해서다. 처음 보는 사람도 "HTTP는 어디서, SQL은 어디서" 찾을지 바로 안다. 스프링의 `@Controller` / `@Service` / `@Repository`, NestJS의 컨트롤러와 프로바이더가 이 층을 그대로 따른다. 컨트롤러를 얇게 유지하는 이야기는 [MVC 패턴 글](/posts/mvc-pattern)이 더 자세히 다룬다.
+
+## 계층은 코드, 티어는 기계
+
+레이어드 아키텍처를 N-tier 아키텍처라고 부르는 글도 많은데, 엄밀히는 두 단어가 가리키는 게 다르다. 레이어(layer)는 코드를 논리적으로 나눈 것이고, 티어(tier)는 그 코드가 실제로 돌아가는 물리적인 위치다.
+
+네 계층을 서버 한 대, 프로세스 하나에 다 올릴 수 있다. 이건 4계층 1티어다. 흔히 말하는 3티어 구조는 브라우저(또는 웹 서버), 애플리케이션 서버, DB 서버가 서로 다른 기계에 있는 것이다. 이때 프레젠테이션·비즈니스·퍼시스턴스 계층은 보통 애플리케이션 서버 티어 하나에 함께 있다.
+
+<NetworkTopology
+  caption="3티어 구조. 티어 사이에는 네트워크가 있다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "pub", label: "public subnet", x: 100, y: 20, w: 110, h: 210, tone: "public" },
+    { id: "app", label: "private · app", x: 220, y: 20, w: 80, h: 210, tone: "private" },
+    { id: "data", label: "private · db", x: 310, y: 20, w: 80, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "b", label: "browser", sub: "tier 1", x: 45, y: 125, icon: "client", w: 74 },
+    { id: "web", label: "nginx", sub: "tier 1", x: 155, y: 125, icon: "lb", w: 80 },
+    { id: "ap", label: "app", sub: "tier 2", x: 260, y: 125, icon: "server", w: 66 },
+    { id: "db", label: "DB", sub: "tier 3", x: 350, y: 125, icon: "db", w: 60 },
+  ]}
+  links={[
+    { from: "b", to: "web", label: "HTTPS" },
+    { from: "web", to: "ap", label: "HTTP" },
+    { from: "ap", to: "db", label: "5432" },
+  ]}
+  steps={[
+    { path: ["b", "web"], packet: "POST", title: "첫 티어가 연결을 받는다", detail: "TLS를 풀고 정적 파일을 바로 내준다. 앱 서버는 인터넷에 직접 노출되지 않는다." },
+    { path: ["web", "ap"], packet: "proxy", highlight: ["app"], title: "앱 티어 안에 계층 셋이 산다", detail: "컨트롤러, 서비스, 리포지토리가 한 프로세스에서 함수 호출로 이어진다. 티어 하나에 계층 여럿이다." },
+    { path: ["ap", "db"], packet: "SQL", title: "티어를 건널 때마다 네트워크 왕복", detail: "같은 데이터센터라도 왕복이 쌓인다. 쿼리를 반복문에서 하나씩 보내면 이 왕복이 그대로 곱해진다." },
+    { path: ["b", "web", "ap", "db"], packet: "trace", title: "티어를 나누는 이유", detail: "티어마다 따로 늘리고, 방화벽으로 막을 수 있다. DB는 앱 서버에서만 접근하게 한다." },
+  ]}
+/>
+
+티어를 나누면 따로 확장하고 보안 경계를 세울 수 있지만, 경계마다 네트워크 왕복이 생긴다. 계층을 나누는 건 비용이 거의 없고, 티어를 나누는 건 지연과 운영 비용이 든다. 계층을 늘리라는 말과 서버를 늘리라는 말은 다른 이야기다. 티어 사이에서 반복문 쿼리가 왕복을 곱하는 모습은 [N+1 쿼리 글](/posts/n-plus-one-queries)에서 재현했다.
+
+## 에러는 층을 건널 때 번역한다
+
+처음 장면으로 돌아간다. Node 22와 PostgreSQL 16으로 같은 구조를 만들었다. 이메일 유니크 인덱스는 대소문자를 무시하게 `lower(email)`에 걸었다.
+
+```sql
+CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL, name text NOT NULL);
+CREATE UNIQUE INDEX users_email_key ON users (lower(email));
+```
+
+리포지토리가 드라이버 에러를 그대로 던지고, 컨트롤러는 모르는 에러를 500으로 돌려주며 `message`를 본문에 실었다. 같은 이메일로 두 번 가입했다.
+
+```bash
+curl -s -i -X POST localhost:8702/users -d '{"email":"kim@example.com","name":"kim"}'
+curl -s -i -X POST localhost:8702/users -d '{"email":"Kim@Example.com","name":"kim"}'
+```
+
+```text
+HTTP/1.1 201 Created
+content-type: application/json
+Content-Length: 34
+
+{"id":1,"email":"kim@example.com"}
+
+HTTP/1.1 500 Internal Server Error
+content-type: application/json
+Content-Length: 78
+
+{"error":"duplicate key value violates unique constraint \"users_email_key\""}
+```
+
+(응답 헤더 중 Date, Connection, Keep-Alive 줄은 뺐다.) 드라이버가 던진 에러 객체를 열어 보면 무엇이 새어 나갈 수 있는지 보인다.
+
+<UrlAnatomy
+  caption="pg 드라이버가 던진 에러 객체의 필드. 리포지토리 밖으로 나가면 안 되는 것들"
+  separator=""
+  joiner=" · "
+  params={[
+    { key: "code", value: "23505", display: "code: '23505'", title: "SQLSTATE 코드", description: "23505는 unique_violation이다. 23503(외래 키), 23514(CHECK)처럼 앞 두 자리 23이 무결성 제약 위반을 뜻한다. 번역할 때 기준으로 삼을 값이다." },
+    { key: "constraint", value: "users_email_key", display: "constraint: 'users_email_key'", title: "걸린 제약 이름", description: "어느 유니크 제약인지 알려 준다. 같은 23505라도 이메일 중복과 주문 번호 중복은 다른 업무 에러다." },
+    { key: "table", value: "users", display: "table: 'users'", title: "테이블 이름", description: "스키마 구조가 그대로 드러난다. 응답에 실리면 공격자에게 내부 구조를 알려 주는 셈이다." },
+    { key: "detail", value: "Key (lower(email))=…", display: "detail: 'Key (lower(email))=(kim@example.com) already exists.'", title: "충돌한 실제 값", description: "다른 사람의 데이터일 수 있다. 이 값을 응답에 실으면 어떤 이메일이 가입돼 있는지 확인하는 도구가 된다.", code: "{\n  code: '23505',\n  severity: 'ERROR',\n  schema: 'public',\n  table: 'users',\n  constraint: 'users_email_key',\n  detail: 'Key (lower(email))=(kim@example.com) already exists.'\n}" },
+  ]}
+/>
+
+고치는 방법은 층마다 자기 말로 바꿔 올리는 것이다. 리포지토리가 드라이버 에러를 업무 에러로 바꾸고, 컨트롤러가 업무 에러를 HTTP 상태 코드로 바꾼다. 서비스는 둘 다 모른 채 업무 에러만 다룬다.
+
+```ts
+// repository.ts: 드라이버 에러는 여기서 끝낸다
+export class EmailTakenError extends Error {}
+
+export const userRepository = {
+  async insert(email: string, name: string) {
+    try {
+      const { rows } = await pool.query(
+        "INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id, email",
+        [email, name],
+      );
+      return rows[0] as { id: number; email: string };
+    } catch (e: any) {
+      if (e.code === "23505") throw new EmailTakenError(email);
+      throw e;
+    }
+  },
+};
+```
+
+```ts
+// controller.ts: 업무 에러를 상태 코드로 바꾼다. 모르는 에러는 내용을 숨긴다
+} catch (e: any) {
+  if (e instanceof InvalidEmailError) { res.statusCode = 400; res.end(JSON.stringify({ error: "invalid_email" })); return; }
+  if (e instanceof EmailTakenError) { res.statusCode = 409; res.end(JSON.stringify({ error: "email_taken" })); return; }
+  res.statusCode = 500;
+  res.end(JSON.stringify({ error: "internal" }));
+}
+```
+
+번역을 넣고 같은 요청을 다시 보냈다.
+
+```text
+HTTP/1.1 201 Created
+content-type: application/json
+Content-Length: 34
+
+{"id":1,"email":"kim@example.com"}
+
+HTTP/1.1 409 Conflict
+content-type: application/json
+Content-Length: 23
+
+{"error":"email_taken"}
+```
+
+409 Conflict가 사용자 쪽 사정이라는 걸 정확히 알려 주고, DB 이야기는 사라졌다. 알림 시스템도 달라진다. 500 비율로 장애를 감지하고 있었다면, 이메일 중복이 500으로 잡히던 시절에는 가입이 몰리는 날마다 가짜 장애 알림이 울렸을 것이다. 아래 그림은 에러 하나가 층을 지나며 모양을 바꾸는 과정이다.
+
+<AlgoTrace
+  caption="같은 실패가 층을 지날 때마다 그 층의 말로 바뀐다"
+  memoryLabel="지금 들고 있는 에러"
+  cells={["DB", "pg 드라이버", "repository", "service", "controller", "client"]}
+  steps={[
+    { pointer: 0, memory: ["unique 위반"], caption: "DB가 유니크 인덱스 위반을 알린다." },
+    { pointer: 1, memory: ["DatabaseError 23505"], caption: "드라이버가 SQLSTATE와 제약 이름을 담은 에러 객체를 만든다." },
+    { pointer: 2, memory: ["EmailTakenError"], caption: "리포지토리가 23505와 제약 이름을 보고 업무 에러로 바꾼다. SQL 이야기는 여기서 끝난다." },
+    { pointer: 3, memory: ["EmailTakenError"], caption: "서비스는 그대로 올리거나, 업무상 다른 처리(추천 이메일 제안 등)를 한다. HTTP는 모른다." },
+    { pointer: 4, memory: ["409 email_taken"], caption: "컨트롤러가 업무 에러를 상태 코드와 안전한 본문으로 바꾼다." },
+    { pointer: 5, found: [5], memory: ["409 email_taken"], caption: "클라이언트는 이메일이 이미 쓰인다는 사실만 받는다. 제약 이름도 테이블 이름도 없다." },
+  ]}
+/>
+
+리포지토리 쪽 번역을 직접 짜 보자. 드라이버 에러 객체를 받아 업무 에러 이름을 돌려준다. 이메일 유니크 제약이면 `EmailTaken`, 다른 유니크 위반은 `Conflict`, 외래 키 위반(23503)은 `ReferenceMissing`, CHECK 위반(23514)은 `InvalidValue`, 나머지는 `Unknown`이다.
+
+<CodePlayground
+  caption="드라이버 에러를 업무 에러로 번역하기"
+  functionName="toDomainError"
+  initialCode={`// err: pg 드라이버가 던진 에러 객체 (code, constraint 등)
+function toDomainError(err) {
+  return "Unknown";
+}`}
+  solution={`function toDomainError(err) {
+  switch (err.code) {
+    case "23505": return err.constraint === "users_email_key" ? "EmailTaken" : "Conflict";
+    case "23503": return "ReferenceMissing";
+    case "23514": return "InvalidValue";
+    default: return "Unknown";
+  }
+}`}
+  tests={[
+    { label: "이메일 중복", args: [{ code: "23505", constraint: "users_email_key", detail: "Key (lower(email))=(kim@example.com) already exists." }], expected: "EmailTaken" },
+    { label: "다른 유니크 위반", args: [{ code: "23505", constraint: "orders_pkey" }], expected: "Conflict" },
+    { label: "외래 키 위반", args: [{ code: "23503", constraint: "coupons_user_id_fkey" }], expected: "ReferenceMissing" },
+    { label: "CHECK 위반", args: [{ code: "23514", constraint: "coupons_code_check" }], expected: "InvalidValue" },
+    { label: "쿼리 타임아웃", args: [{ code: "57014", message: "canceling statement due to statement timeout" }], expected: "Unknown" },
+    { label: "연결 실패", args: [{ message: "connect ECONNREFUSED 127.0.0.1:5432" }], expected: "Unknown" },
+  ]}
+/>
+
+마지막 두 경우가 `Unknown`인 데 이유가 있다. 타임아웃이나 연결 실패는 사용자 잘못이 아니라 진짜 서버 문제라서 500이 맞다. 모든 에러를 400대로 바꾸려 들면 이번엔 장애가 알림에서 사라진다.
+
+## 트랜잭션 경계는 서비스가 쥔다
+
+가입하면 환영 쿠폰도 함께 만든다고 해 보자. 사용자 저장과 쿠폰 저장은 둘 다 리포지토리 일이다. 그럼 트랜잭션은 누가 여는가. 쿠폰 코드에 8자 제한 CHECK를 걸고, 일부러 11자 코드(`WELCOME2026`)를 넣어 두 방식을 비교했다.
+
+```ts
+// 잘못된 예: 리포지토리 호출마다 풀에서 따로 실행된다(각각 자동 커밋)
+async function signUpNoTx(email: string) {
+  const id = await repo.insertUser(pool, email);
+  await repo.insertCoupon(pool, id, "WELCOME2026");
+}
+
+// 서비스 계층이 트랜잭션 경계를 쥔다
+async function signUpTx(email: string) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const id = await repo.insertUser(client, email);
+    await repo.insertCoupon(client, id, "WELCOME2026");
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+```
+
+`a@example.com`은 트랜잭션 없이, `b@example.com`은 트랜잭션으로 가입시키고 결과를 조회했다.
+
+```text
+no-tx: new row for relation "coupons" violates check constraint "coupons_code_check"
+tx: new row for relation "coupons" violates check constraint "coupons_code_check"
+┌─────────┬─────────────────┬─────────┐
+│ (index) │ email           │ coupons │
+├─────────┼─────────────────┼─────────┤
+│ 0       │ 'a@example.com' │ '0'     │
+└─────────┴─────────────────┴─────────┘
+```
+
+둘 다 같은 에러로 실패했다. 그런데 표에는 `a@example.com`만 남아 있다. 트랜잭션 없이 가입한 쪽은 회원은 생겼는데 쿠폰이 0개인 반쪽 상태다. 이 사용자가 다시 가입하려 하면 이메일 중복으로 막히고, 쿠폰은 영영 못 받는다. 트랜잭션으로 묶은 쪽은 회원까지 함께 사라져 처음부터 다시 할 수 있다.
+
+<SequenceDiagram
+  caption="서비스가 트랜잭션을 열고, 리포지토리들은 같은 연결을 받아 쓴다"
+  actors={[
+    { id: "svc", label: "userService" },
+    { id: "ur", label: "userRepo" },
+    { id: "cr", label: "couponRepo" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "svc", to: "db", label: "BEGIN", title: "서비스가 트랜잭션을 연다", detail: "풀에서 연결 하나를 빌려 BEGIN을 보낸다. 이 연결을 아래 리포지토리들에 넘긴다." },
+    { from: "svc", to: "ur", label: "insertUser(client)", title: "회원을 저장한다", detail: "같은 연결이라 아직 커밋되지 않은 상태로 들어간다. 다른 연결에서는 보이지 않는다." },
+    { from: "ur", to: "db", label: "INSERT users", title: "회원 행이 생긴다", detail: "id가 발급된다. 이 값은 쿠폰 저장에 쓰인다." },
+    { from: "cr", to: "db", label: "INSERT coupons", title: "쿠폰 저장이 CHECK에 걸린다", detail: "11자 코드가 8자 제한을 넘는다. 트랜잭션은 실패 상태가 된다." },
+    { from: "svc", to: "db", label: "ROLLBACK", title: "서비스가 전체를 되돌린다", detail: "회원 행도 함께 사라진다. 반쪽짜리 가입은 남지 않는다." },
+  ]}
+/>
+
+트랜잭션 경계가 서비스에 있는 이유는 "무엇과 무엇이 함께 성공해야 하는가"가 업무 규칙이기 때문이다. 리포지토리는 테이블 하나를 알 뿐 그 조합을 모른다. 스프링이라면 서비스 메서드의 `@Transactional`이 이 일을 한다. 같은 클래스 안에서 `this.method()`로 부르면 프록시를 거치지 않아 트랜잭션이 안 걸리는 함정도 유명하다.
+
+이 경계 안에서 하지 말아야 할 일도 있다. 트랜잭션을 연 채로 결제 API나 메일 서버를 부르면, 상대가 느린 만큼 DB 연결과 잠금을 붙잡는다. 외부 호출 몇 개가 느려지면 커넥션 풀이 마른다. 외부 호출은 커밋 뒤로 빼고, 꼭 함께 보장해야 하면 아웃박스로 넘긴다.
+
+## 닫힌 계층과 열린 계층
+
+바로 아래층만 부를 수 있는 층을 닫힌 계층이라고 한다. 앞의 그림에서 컨트롤러가 리포지토리를 바로 부르는 걸 막은 게 이것이다. 닫아 두면 서비스에 넣은 규칙(권한 확인, 감사 로그, 캐시 무효화)을 아무도 건너뛸 수 없다.
+
+모든 층을 닫으면 불편한 경우가 있다. 날짜 계산, 로깅, 암호화처럼 여러 층이 함께 쓰는 공통 기능이다. 이런 것들을 공유 계층으로 따로 두고 열린 계층으로 표시하면, 어느 층이든 건너뛰어 부를 수 있다. 열린 계층은 적을수록 좋고, 업무 규칙이 들어가면 안 된다.
+
+반대쪽 함정은 싱크홀 안티패턴이다. 요청이 층을 그냥 통과만 하는 경우를 말한다. 컨트롤러가 서비스를 부르고, 서비스는 아무 일도 하지 않고 리포지토리를 부르고, 리포지토리가 SQL 한 줄을 보낸다. 마크 리처즈는 『Software Architecture Patterns』에서 이런 통과 요청이 20% 정도면 자연스럽지만, 대부분이 그렇다면 계층 구조가 그 문제에 맞지 않는다는 신호로 봤다. 단순 조회가 대부분인 관리자 화면이라면 그 부분만 층을 열어 리포지토리나 읽기 전용 쿼리를 바로 쓰게 하는 것도 방법이다.
+
+## 의존이 DB를 향할 때 생기는 일
+
+전통적인 레이어드 구조에서 화살표는 모두 아래를 향한다. 비즈니스 계층이 퍼시스턴스 계층에 의존하고, 퍼시스턴스는 DB에 의존한다. 그래서 업무 규칙을 테스트하려면 리포지토리가, 리포지토리를 돌리려면 DB가 필요해진다. 가입 규칙 하나를 검사하는 테스트가 PostgreSQL 컨테이너를 띄워야 돌아간다.
+
+비즈니스 계층에 "저장소가 해 줘야 하는 일"을 인터페이스로 두고, 퍼시스턴스 계층이 그 인터페이스를 구현하게 하면 화살표 하나가 뒤집힌다. 의존성 역전이다.
+
+```ts
+// business/user-store.ts: 비즈니스 계층이 필요한 것을 선언한다
+export interface UserStore {
+  insert(email: string, name: string): Promise<{ id: number; email: string }>;
+}
+
+// business/user-service.ts: 구현이 아니라 인터페이스에 기댄다
+export function makeUserService(store: UserStore) {
+  return {
+    async signUp(email: string, name: string) {
+      if (!email.includes("@")) throw new InvalidEmailError(email);
+      return store.insert(email.trim(), name);
+    },
+  };
+}
+
+// persistence/pg-user-store.ts: 퍼시스턴스 계층이 비즈니스의 인터페이스를 구현한다
+export const pgUserStore: UserStore = { insert: (email, name) => userRepository.insert(email, name) };
+```
+
+<ConceptDiagram
+  caption="화살표 하나를 뒤집으면 업무 규칙이 DB를 모르게 된다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "s1", label: "service", sub: "전통적 계층", x: 90, y: 50, w: 120, h: 46 },
+    { id: "r1", label: "pg repository", x: 90, y: 180, w: 130, h: 46 },
+    { id: "s2", label: "service", sub: "UserStore 선언", x: 300, y: 50, w: 130, h: 46 },
+    { id: "r2", label: "pgUserStore", sub: "UserStore 구현", x: 300, y: 180, w: 130, h: 46 },
+  ]}
+  edges={[
+    { from: "s1", to: "r1", label: "의존" },
+    { from: "r2", to: "s2", label: "구현" },
+  ]}
+/>
+
+이제 서비스 테스트는 메모리 배열로 만든 가짜 `UserStore`로 돌아간다. 이 생각을 끝까지 밀고 가면, 업무 규칙을 한가운데 두고 HTTP와 DB를 모두 바깥 어댑터로 보는 구조가 된다. 그게 [헥사고날 아키텍처](/posts/hexagonal-architecture)와 [클린 아키텍처](/posts/clean-architecture)다. 레이어드 구조에서 이쪽으로 넘어가는 신호는 대개 테스트에서 먼저 온다. 업무 규칙 테스트마다 DB를 띄우고 있다면 화살표를 뒤집을 때다.
+
+## 프런트엔드에서 보는 같은 층
+
+브라우저 코드도 같은 층을 쌓는다. React 컴포넌트가 화면을 그리고, 커스텀 훅이 상태와 핸들러를 들고, API 모듈이 HTTP를 안다. 이 블로그 코드의 규칙도 그렇다. `{name}.view.tsx`는 마크업만, `{name}.ts` 컨테이너 훅은 상태와 핸들러를, `query/`는 TanStack Query 캐시를, `api/`는 axios 호출을 맡고, 컴포넌트에서 axios를 직접 부르지 않는다.
+
+컴포넌트 안에서 `fetch`를 바로 부르는 코드가 컨트롤러에서 SQL을 쓰는 코드와 같은 문제를 만든다. 응답 형식이 바뀌면 그 API를 쓰는 화면을 전부 찾아 고쳐야 하고, 캐시와 재시도 정책이 화면마다 달라진다. 서버 데이터를 한 층에 모으는 이유는 [클라이언트 데이터 캐시 글](/posts/client-data-cache)에서 이어진다.
+
+## 언제 이 구조로 충분한가
+
+레이어드 아키텍처는 "무엇을 어디에 두는가"에 대한 가장 단순한 답이다. HTTP는 위, SQL은 아래, 업무 규칙은 가운데. 층을 건널 때 에러와 데이터를 그 층의 말로 바꾸고, 트랜잭션은 업무 규칙이 있는 층이 연다. CRUD가 대부분이고 팀이 작다면 이것으로 충분하다. 통과만 하는 층이 대부분이 되면 층을 열거나 줄이고, 업무 규칙이 복잡해져 테스트가 DB에 묶이기 시작하면 의존 방향을 뒤집는다. 그리고 서비스가 커지면 계층보다 먼저 업무 단위로 자르고, 그 안에서 계층을 나눈다.
+
+## 면접에서 나올 만한 질문
+
+### 레이어드 아키텍처란 무엇이고 왜 쓰나요?
+
+코드를 프레젠테이션, 비즈니스, 퍼시스턴스 같은 역할별 층으로 쌓고 위층이 바로 아래층만 부르게 하는 구조다. 관심사가 분리돼 HTTP를 바꾸면 위층만, 저장소를 바꾸면 아래층만 고치면 되고, 처음 보는 사람도 코드 위치를 쉽게 찾는다. 단순한 CRUD 서비스에서 가장 비용이 낮은 구조다.
+
+### 레이어와 티어의 차이는 무엇인가요?
+
+레이어는 코드의 논리적 구분이고 티어는 물리적 배치다. 네 계층을 한 프로세스에 둘 수도 있고, 3티어 구조처럼 웹 서버, 앱 서버, DB 서버를 다른 기계에 둘 수도 있다. 계층을 나누는 건 비용이 거의 없지만 티어를 나누면 경계마다 네트워크 왕복과 운영 비용이 생기는 대신 따로 확장하고 보안 경계를 세울 수 있다.
+
+### DB 에러를 컨트롤러까지 그대로 올리면 무엇이 문제인가요?
+
+사용자 실수가 500으로 바뀌고, 제약 이름과 충돌 값 같은 내부 정보가 응답에 실린다. 충돌 값이 나가면 어떤 이메일이 가입돼 있는지 확인하는 수단이 될 수도 있다. 리포지토리가 SQLSTATE(예: 23505)를 업무 에러로, 컨트롤러가 업무 에러를 상태 코드(409)로 바꾸는 식으로 층마다 번역한다. 타임아웃처럼 진짜 서버 문제는 500으로 남겨 알림이 살아 있게 한다.
+
+### 트랜잭션은 어느 계층에서 시작해야 하나요?
+
+서비스 계층이다. 무엇과 무엇이 함께 성공해야 하는지는 업무 규칙이고, 리포지토리는 테이블 하나만 안다. 리포지토리마다 따로 커밋하면 회원은 생겼는데 쿠폰이 없는 반쪽 상태가 남는다. 트랜잭션 안에서 외부 API를 부르면 연결과 잠금을 오래 붙잡으니 외부 호출은 커밋 뒤로 뺀다.
+
+### 닫힌 계층과 열린 계층은 무엇이고, 싱크홀 안티패턴은 무엇인가요?
+
+닫힌 계층은 바로 아래층만 부를 수 있어 그 층의 규칙을 건너뛸 수 없게 한다. 로깅이나 날짜 계산 같은 공통 기능은 열린 공유 계층으로 둬서 어디서든 부를 수 있게 한다. 싱크홀은 요청이 아무 일도 하지 않는 층을 통과만 하는 상태로, 대부분의 요청이 그렇다면 층이 그 문제에 맞지 않는다는 신호다.
+
+### 레이어드 아키텍처의 한계는 무엇이고 어떻게 넘어가나요?
+
+의존이 아래로, 결국 DB로 향해서 업무 규칙 테스트가 DB에 묶이고 저장 방식이 업무 코드에 스며든다. 비즈니스 계층에 저장소 인터페이스를 두고 퍼시스턴스가 구현하게 해 의존을 뒤집으면 가짜 구현으로 테스트할 수 있다. 이를 끝까지 밀면 헥사고날이나 클린 아키텍처가 된다. 또 계층별 폴더는 기능이 많아지면 한 기능을 고치려고 모든 층을 오가야 해서, 큰 서비스는 업무 모듈로 먼저 나누고 그 안에서 계층을 둔다.

@@ -1,0 +1,414 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("monolith-architecture");
+
+월말 정산 날 오후, 관리자 한 명이 "매출 CSV 내려받기"를 눌렀다. 그 순간부터 2초 동안 쇼핑몰의 주문 목록 API가 전부 2초씩 걸렸다. 주문 코드는 한 줄도 바뀌지 않았고 DB도 한가했다. 리포트와 주문은 서로 아무 관계가 없는 기능인데, 같은 프로세스에 살고 있었다는 것 하나로 엮여 버렸다.
+
+이 글은 모놀리스를 "언젠가 쪼개야 할 레거시"로 보지 않는다. 대부분의 서비스는 모놀리스로 시작하고, 꽤 많은 서비스는 끝까지 모놀리스로 잘 산다. 그러려면 한 덩어리라서 생기는 장애가 어디서 오는지 알아야 한다. 왜 쪼개는지, 쪼개면 무엇을 치르는지는 [모놀리스에서 마이크로서비스로 가는 글](/posts/microservices)이 다루고, 코드 안에 경계를 세우는 법은 [모듈러 모놀리스 글](/posts/modular-monolith), 코드를 세로로 층층이 나누는 법은 [레이어드 아키텍처 글](/posts/layered-architecture)에서 이어 간다.
+
+## 하나로 빌드하고 하나로 배포한다
+
+모놀리식 아키텍처는 서비스의 모든 기능이 하나의 코드베이스에서 하나의 실행 파일(또는 이미지)로 빌드되고, 한 번에 배포되는 구조다. 주문, 재고, 결제, 회원, 리포트가 같은 프로세스 안에서 함수 호출로 대화하고, 보통 DB 하나를 같이 쓴다.
+
+여기서 "하나"가 가리키는 건 배포 단위다. 서버가 한 대라는 뜻이 아니다. 같은 이미지를 열 대에 띄워도 모놀리스다. 반대로 코드가 저장소 여러 개에 나뉘어 있어도 결국 하나로 묶여 함께 나간다면 모놀리스다.
+
+아래 그림에서 다음을 누르면 주문 요청 하나가 프로세스 안을 지나가는 길이 보인다. 모듈 사이를 오가는 화살표가 전부 같은 메모리 안의 함수 호출이라는 데 주목하면 된다.
+
+<NetworkTopology
+  caption="모놀리스 프로세스 하나 안에서 주문 요청이 지나가는 길"
+  width={400}
+  height={260}
+  zones={[{ id: "proc", label: "node 프로세스 (pid 1)", x: 100, y: 20, w: 200, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "user", label: "client", x: 45, y: 130, icon: "client", w: 70 },
+    { id: "http", label: "router", sub: "HTTP", x: 200, y: 60, icon: "gateway", w: 90 },
+    { id: "orders", label: "orders", x: 145, y: 140, icon: "server", w: 80 },
+    { id: "stock", label: "inventory", x: 255, y: 140, icon: "server", w: 86 },
+    { id: "pay", label: "payments", x: 200, y: 210, icon: "server", w: 86 },
+    { id: "db", label: "PostgreSQL", sub: "DB 하나", x: 355, y: 210, icon: "db", w: 84 },
+  ]}
+  links={[
+    { from: "user", to: "http" },
+    { from: "http", to: "orders" },
+    { from: "orders", to: "stock" },
+    { from: "orders", to: "pay" },
+    { from: "stock", to: "db" },
+    { from: "pay", to: "db" },
+  ]}
+  steps={[
+    { path: ["user", "http"], packet: "POST /orders", title: "요청이 프로세스로 들어온다", detail: "로드 밸런서 뒤에 같은 프로세스가 몇 개 있든, 요청 하나는 그중 한 프로세스가 처음부터 끝까지 맡는다." },
+    { path: ["http", "orders", "stock"], packet: "reserve()", title: "모듈끼리는 함수 호출이다", detail: "주문 모듈이 재고 모듈의 함수를 부른다. 직렬화도 네트워크도 없어서 마이크로초 단위로 끝나고, 타임아웃을 걱정할 일도 없다." },
+    { path: ["orders", "pay"], packet: "charge()", title: "결제도 같은 메모리 안에서", detail: "호출 스택 하나에 주문·재고·결제가 함께 올라가 있다. 디버거 하나로 끝까지 따라갈 수 있다." },
+    { path: ["stock", "db"], packet: "BEGIN … COMMIT", highlight: ["pay"], title: "DB 트랜잭션 하나로 묶는다", detail: "주문 저장과 재고 차감을 커넥션 하나, 트랜잭션 하나로 처리한다. 하나라도 실패하면 둘 다 없던 일이 된다." },
+  ]}
+/>
+
+이 구조가 기본값인 데는 이유가 있다. 서비스 초기에는 무엇이 핵심 기능이 될지, 어디가 경계가 될지 아직 모른다. 경계를 모르는 상태에서 서비스를 나누면 잘못 그은 선을 네트워크 너머로 고정해 버린다. 모놀리스에서는 함수 이름을 바꾸고 파일을 옮기는 정도로 선을 다시 그을 수 있다.
+
+## 트랜잭션 하나가 지켜 주는 것
+
+모놀리스가 공짜로 주는 것 가운데 가장 값비싼 건 DB 트랜잭션이다. 재고가 1개 남은 상품을 2개 주문하는 상황을 PostgreSQL 16에서 그대로 재현했다. 재고 테이블에는 수량이 음수가 될 수 없다는 CHECK 제약을 걸었다.
+
+```sql
+CREATE TABLE stock (product_id int PRIMARY KEY, qty int NOT NULL CHECK (qty >= 0));
+CREATE TABLE orders (id serial PRIMARY KEY, product_id int NOT NULL, qty int NOT NULL);
+INSERT INTO stock VALUES (10, 1);
+
+BEGIN;
+INSERT INTO orders (product_id, qty) VALUES (10, 2);   -- 주문 모듈이 저장
+UPDATE stock SET qty = qty - 2 WHERE product_id = 10;  -- 재고 모듈이 차감
+COMMIT;
+
+SELECT count(*) AS orders FROM orders;
+SELECT * FROM stock;
+```
+
+```text
+BEGIN
+INSERT 0 1
+ERROR:  new row for relation "stock" violates check constraint "stock_qty_check"
+DETAIL:  Failing row contains (10, -1).
+ROLLBACK
+ orders 
+--------
+      0
+(1 row)
+
+ product_id | qty 
+------------+-----
+         10 |   1
+(1 row)
+```
+
+`INSERT 0 1`로 주문은 분명히 들어갔다. 그런데 재고 차감이 제약에 걸리자 트랜잭션 전체가 실패했고, `COMMIT`은 `ROLLBACK`으로 바뀌었다. 주문 수는 0, 재고는 1 그대로다. 주문만 남고 재고는 안 줄어드는 반쪽짜리 상태가 생길 틈이 없다.
+
+같은 일을 서비스 두 개와 DB 두 개로 하면 이 보장이 사라진다. 그때는 실패한 쪽을 되돌리는 보상 절차를 직접 짜야 하고, 그 이야기는 [사가 패턴 글](/posts/saga-pattern)에 있다. 모놀리스를 떠날지 고민할 때, 이 트랜잭션을 몇 군데에서 기대고 있는지 세어 보면 쪼개는 비용이 대략 보인다.
+
+## 리포트 하나가 주문 API를 멈춘 이유
+
+처음 장면으로 돌아간다. 문제를 그대로 재현하려고 Node 22로 작은 모놀리스를 만들었다. `/orders`는 메모리의 목록을 돌려주고, `/report`는 600만 줄짜리 CSV를 만드는 셈 치고 문자열을 섞는 CPU 작업을 한다.
+
+```ts
+// server.ts (일부)
+const server = http.createServer(async (req, res) => {
+  if (req.url === "/orders") {
+    res.end(JSON.stringify(orders.list()));
+  } else if (req.url === "/report") {
+    const t = performance.now();
+    const sum = MODE === "worker" ? await buildReportInWorker(6_000_000) : buildReportSync(6_000_000);
+    res.end(`report done ${sum} in ${Math.round(performance.now() - t)}ms`);
+  }
+});
+```
+
+다른 프로세스에서 `/orders`를 100ms마다 부르고, 세 번째 즈음에 `/report`를 한 번 끼워 넣었다. 왼쪽은 측정을 시작한 뒤 응답이 도착한 시각, 오른쪽은 그 요청 하나가 걸린 시간이다.
+
+```text
+monolith pid=3239 mode=inline
+  215ms  /orders  215ms
+  298ms  /orders  5ms
+ 2365ms  /report  -> report done 829454915 in 1967ms
+ 2373ms  /orders  1977ms
+ 2374ms  /orders  1876ms
+ 2374ms  /orders  1776ms
+ 2375ms  /orders  1676ms
+ 2375ms  /orders  1575ms
+ 2378ms  /orders  1477ms
+ 2379ms  /orders  1376ms
+ 2379ms  /orders  1276ms
+ 2382ms  /orders  1176ms
+ 2382ms  /orders  1076ms
+```
+
+첫 줄의 215ms는 첫 연결과 JIT가 데워지는 시간이라 빼고 봐도 된다. 봐야 할 건 리포트가 시작된 뒤다. 그 뒤로 보낸 `/orders` 열 개가 전부 2365ms 근처에 한꺼번에 도착했다. 걸린 시간이 1977ms, 1876ms, 1776ms로 100ms씩 줄어드는 건 요청을 100ms 간격으로 보냈기 때문이다. 늦게 보낸 요청일수록 덜 기다렸을 뿐, 모두 리포트가 끝나기를 기다렸다.
+
+Node는 자바스크립트를 스레드 하나에서 돌린다. 동기 반복문이 2초 동안 그 스레드를 쥐고 있으면, 소켓에 도착한 요청은 커널 버퍼와 이벤트 큐에서 차례를 기다린다. 자세한 원리는 [이벤트 루프 글](/posts/event-loop)에 있다. 아래 그림은 그 2초 동안 큐가 어떻게 쌓였다가 한 번에 빠지는지 보여 준다.
+
+<AlgoTrace
+  caption="스레드 하나를 리포트가 쥐고 있는 동안 주문 요청이 쌓인다"
+  memoryLabel="대기 중인 요청"
+  cells={["0ms", "100", "200", "300", "400", "…", "2000", "2365"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "주문 요청이 들어오고 5ms 만에 끝난다. 큐는 비어 있다." },
+    { pointer: 2, memory: [], caption: "200ms에 /report가 들어와 동기 반복문을 시작한다. 스레드가 묶였다." },
+    { pointer: 3, memory: ["orders#3"], caption: "300ms에 온 주문 요청은 처리될 수 없어 기다린다." },
+    { pointer: 4, memory: ["orders#3", "orders#4"], caption: "100ms마다 하나씩 쌓인다. 주문 코드는 아무 잘못이 없다." },
+    { pointer: 6, memory: ["#3", "#4", "#5", "…", "#12"], caption: "2초 가까이 열 개가 쌓였다. 이 사이 헬스 체크가 왔다면 그것도 늦는다." },
+    { pointer: 7, found: [7], memory: [], caption: "리포트가 끝나는 순간 쌓인 요청이 수 ms 안에 한꺼번에 처리되어 나간다." },
+  ]}
+/>
+
+같은 코드를 리포트만 `worker_threads`로 옮겨 다시 돌렸다. 리포트 함수 본문은 그대로이고, 다른 스레드에서 돌린 뒤 결과만 메시지로 받는다.
+
+```ts
+function buildReportInWorker(rows: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL("./report-worker.ts", import.meta.url), { workerData: rows });
+    w.once("message", resolve);
+    w.once("error", reject);
+  });
+}
+```
+
+```text
+monolith pid=3492 mode=worker
+   83ms  /orders  83ms
+  171ms  /orders  3ms
+  276ms  /orders  6ms
+  374ms  /orders  2ms
+  476ms  /orders  3ms
+  576ms  /orders  2ms
+  678ms  /orders  3ms
+  779ms  /orders  3ms
+  882ms  /orders  3ms
+  982ms  /orders  2ms
+ 1082ms  /orders  1ms
+ 1183ms  /orders  1ms
+ 2212ms  /report  -> report done 829454915 in 1941ms
+```
+
+리포트는 여전히 1.9초쯤 걸린다. 달라진 건 그동안 주문 요청이 1~6ms에 끝난다는 것이다. 리포트가 빨라진 게 아니라 주문과 리포트가 같은 스레드를 다투지 않게 됐다.
+
+이건 Node만의 이야기가 아니다. 자바·스프링 모놀리스는 요청마다 스레드를 쓰니 한 요청이 다른 요청을 직접 막지는 않는다. 대신 스레드 풀과 DB 커넥션 풀을 나눠 쓴다. 느린 리포트 쿼리 스무 개가 커넥션 스무 개를 다 잡으면, 주문 요청은 커넥션을 기다리다 타임아웃이 난다. 공유하는 자원이 스레드 하나에서 풀로 바뀌었을 뿐 구조는 같다. 풀이 바닥나는 증상은 [커넥션 풀 글](/posts/connection-pool)에서 따로 다룬다.
+
+## 한 기능의 예외가 프로세스를 끝낸다
+
+공유하는 건 CPU만이 아니다. 프로세스의 수명도 함께 쓴다. 같은 서버에 쿠폰 API를 하나 더 붙였다. 쿠폰이 없을 때를 처리하지 않은 흔한 버그다.
+
+```ts
+} else if (req.url === "/coupon") {
+  // 비동기 콜백 안에서 던진 예외는 아무도 잡지 않는다
+  setTimeout(() => {
+    const coupon: any = undefined;
+    res.end(coupon.code);
+  }, 10);
+}
+```
+
+주문 목록을 부르고, 쿠폰을 한 번 부르고, 다시 주문 목록을 불렀다.
+
+```bash
+curl -sS http://127.0.0.1:8701/orders; echo
+curl -sS http://127.0.0.1:8701/coupon
+curl -sS http://127.0.0.1:8701/orders
+```
+
+```text
+[{"id":1,"total":32000},{"id":2,"total":18000}]
+curl: (52) Empty reply from server
+curl: (7) Failed to connect to 127.0.0.1 port 8701 after 0 ms: Couldn't connect to server
+```
+
+서버 로그에는 이렇게 남았다(경로는 줄였다).
+
+```text
+file:///.../mono/server.ts:40
+      res.end(coupon.code);
+                     ^
+
+TypeError: Cannot read properties of undefined (reading 'code')
+    at Timeout._onTimeout (file:///.../mono/server.ts:40:22)
+    at listOnTimeout (node:internal/timers:588:17)
+    at process.processTimers (node:internal/timers:523:7)
+
+Node.js v22.22.0
+```
+
+쿠폰 요청은 `(52) Empty reply`, 응답 없이 연결이 끊겼다. 그다음 주문 요청은 `(7) Couldn't connect`, 받아 줄 프로세스가 없어졌다. 쿠폰 코드의 버그 하나로 주문, 결제, 로그인이 모두 내려갔다.
+
+<SequenceDiagram
+  caption="쿠폰 코드의 예외 하나가 같은 프로세스의 모든 기능을 내린다"
+  actors={[
+    { id: "a", label: "쿠폰 사용자" },
+    { id: "p", label: "모놀리스" },
+    { id: "b", label: "주문 사용자" },
+    { id: "s", label: "systemd·k8s" },
+  ]}
+  steps={[
+    { from: "a", to: "p", label: "GET /coupon", title: "쿠폰 요청이 들어온다", detail: "핸들러가 타이머를 걸고 돌아간다. 아직은 아무 문제가 없다." },
+    { from: "p", to: "p", label: "TypeError", title: "타이머 콜백이 예외를 던진다", detail: "이 콜백을 감싼 try/catch가 없다. 처리되지 않은 예외는 프로세스를 끝낸다." },
+    { from: "p", to: "a", label: "(52) Empty reply", title: "쿠폰 사용자는 빈 응답을 받는다", detail: "응답을 쓰기 전에 프로세스가 사라져 연결만 끊긴다." },
+    { from: "b", to: "p", label: "GET /orders", title: "주문 사용자가 요청한다", detail: "주문 코드는 멀쩡하지만 받아 줄 프로세스가 없다. 연결 거부(ECONNREFUSED)가 난다." },
+    { from: "s", to: "p", label: "restart", title: "감시자가 다시 띄운다", detail: "재시작까지 몇 초는 모든 기능이 내려가 있다. 같은 요청이 또 오면 같은 일이 되풀이된다." },
+  ]}
+/>
+
+Node 15부터는 처리되지 않은 Promise 거부(unhandled rejection)도 기본값으로 프로세스를 끝낸다. `await` 빠진 비동기 호출 하나가 같은 일을 만든다. `process.on("uncaughtException")`로 삼키고 계속 돌리는 건 답이 아니다. 예외가 난 지점의 상태(열린 트랜잭션, 절반만 쓴 응답)가 어떤지 알 수 없기 때문에, Node 문서도 로그를 남기고 프로세스를 끝내라고 권한다.
+
+현실적인 방어는 세 겹이다. 비동기 경계마다 예외를 잡아 요청 단위 에러로 바꾸는 습관(Express 5는 `async` 핸들러의 거부를 에러 미들웨어로 넘겨 준다), 프로세스를 여러 개 띄워 하나가 죽어도 나머지가 받게 하는 것, 그리고 죽으면 바로 다시 띄우는 감시자(systemd, 쿠버네티스)다. 셋 다 있어야 "버그 하나에 몇 초 전면 장애"가 "버그 하나에 그 요청만 실패"로 줄어든다.
+
+메모리도 같다. 리포트 모듈이 결과를 캐시에 계속 쌓으면 힙이 한도에 닿아 프로세스가 죽고, 그때 내려가는 건 리포트가 아니라 서비스 전체다. 누수를 힙 스냅샷으로 찾는 법은 [자바스크립트 메모리 누수 글](/posts/js-memory-leak)에 있다.
+
+## 한 덩어리를 여러 개로 늘리는 법
+
+"모놀리스는 확장이 안 된다"는 말은 반만 맞다. 같은 이미지를 여러 개 띄우고 로드 밸런서 뒤에 두면 처리량은 거의 선형으로 늘어난다. 조건은 인스턴스가 상태를 들고 있지 않는 것이다. 로그인 세션을 프로세스 메모리에 두면 두 번째 요청이 다른 인스턴스로 갈 때 로그아웃된다. 세션은 Redis나 DB로, 업로드 파일은 오브젝트 스토리지로 뺀다. 이 조건은 [수평 확장 글](/posts/scaling-horizontal-vertical)에서 직접 재현했다.
+
+모놀리스다운 요령이 하나 더 있다. 코드는 하나로 두되 프로세스는 역할별로 띄우는 것이다. 같은 이미지에서 실행 명령만 바꿔, 웹 요청을 받는 프로세스와 큐에서 일을 꺼내 처리하는 프로세스를 따로 띄운다. 앞의 리포트 문제도 이렇게 풀 수 있다. 웹은 "리포트 만들어 줘"라는 작업만 큐에 넣고 바로 202를 돌려주고, 워커 프로세스가 꺼내서 만든다.
+
+<NetworkTopology
+  caption="같은 이미지를 역할별 프로세스로 띄운 모놀리스"
+  width={400}
+  height={260}
+  zones={[{ id: "app", label: "같은 이미지 shop:1.42", x: 110, y: 20, w: 170, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "lb", label: "LB", x: 45, y: 90, icon: "lb", w: 60 },
+    { id: "w1", label: "web #1", sub: "node web.js", x: 195, y: 60, icon: "server", w: 90 },
+    { id: "w2", label: "web #2", sub: "node web.js", x: 195, y: 130, icon: "server", w: 90 },
+    { id: "job", label: "worker", sub: "node worker.js", x: 195, y: 205, icon: "container", w: 100 },
+    { id: "redis", label: "Redis", sub: "session, queue", x: 345, y: 110, icon: "db", w: 90 },
+    { id: "db", label: "PostgreSQL", x: 345, y: 205, icon: "db", w: 90 },
+  ]}
+  links={[
+    { from: "lb", to: "w1" },
+    { from: "lb", to: "w2" },
+    { from: "w1", to: "redis" },
+    { from: "w2", to: "redis" },
+    { from: "redis", to: "job", dashed: true },
+    { from: "job", to: "db" },
+    { from: "w2", to: "db" },
+  ]}
+  steps={[
+    { path: ["lb", "w1"], packet: "GET /orders", title: "웹 프로세스는 짧은 요청만 받는다", detail: "인스턴스 어느 쪽으로 가도 된다. 세션이 Redis에 있으니 로그인이 유지된다." },
+    { path: ["lb", "w2", "redis"], packet: "report job", title: "무거운 일은 큐에 넣고 끝낸다", detail: "웹은 작업을 넣고 202 Accepted를 바로 돌려준다. 스레드를 오래 쥐지 않는다." },
+    { path: ["redis", "job", "db"], packet: "build CSV", title: "워커가 꺼내서 만든다", detail: "워커가 느려지거나 죽어도 웹 프로세스는 영향을 받지 않는다. 워커 수만 따로 늘릴 수 있다." },
+    { path: ["w2", "db"], packet: "SELECT", highlight: ["job"], title: "코드는 여전히 하나다", detail: "배포도 한 번이다. 프로세스 종류만 나눴을 뿐 함수 호출과 트랜잭션은 그대로 쓴다." },
+  ]}
+/>
+
+DB가 먼저 버거워지면 읽기 복제본과 캐시로 읽기를 덜어 낸다. 그 순서와 신호는 [서비스 규모별 DB 설계 글](/posts/db-architecture-by-scale)이 숫자와 함께 정리했다. 여기까지 와도 여전히 모놀리스다. 꽤 큰 트래픽까지 이 구성으로 버틸 수 있다.
+
+## 크면서 생기는 진짜 문제는 배포다
+
+확장은 돈으로 풀리는 편이다. 사람이 늘면서 생기는 문제는 그렇지 않다. 저장소 하나에 팀 다섯이 매일 커밋하면, 배포 한 번에 다섯 팀의 변경이 함께 실린다. 그중 하나가 장애를 내면 롤백은 다섯 팀의 변경을 전부 되돌린다.
+
+<SequenceDiagram
+  caption="한 팀의 변경이 다른 팀의 배포까지 되돌린다"
+  actors={[
+    { id: "t1", label: "결제 팀" },
+    { id: "t2", label: "검색 팀" },
+    { id: "ci", label: "CI" },
+    { id: "prod", label: "운영" },
+  ]}
+  steps={[
+    { from: "t1", to: "ci", label: "PR #812 merge", title: "결제 팀이 수수료 계산을 고친다", detail: "작은 변경이지만 빌드와 테스트는 저장소 전체를 대상으로 돈다." },
+    { from: "t2", to: "ci", label: "PR #815 merge", title: "검색 팀도 같은 날 머지한다", detail: "다음 배포에 두 팀의 변경이 함께 실린다." },
+    { from: "ci", to: "prod", label: "deploy v1.42", title: "이미지 하나로 나간다", detail: "모든 인스턴스가 v1.42로 바뀐다. 배포 단위가 하나라서 기능별로 따로 낼 수 없다." },
+    { from: "prod", to: "t1", label: "결제 오류율 ↑", title: "결제에서 장애가 난다", detail: "원인은 결제 팀 변경이다. 검색 팀 변경은 멀쩡하다." },
+    { from: "ci", to: "prod", label: "rollback v1.41", title: "통째로 되돌린다", detail: "검색 팀의 새 기능도 함께 사라진다. 다음 배포까지 두 팀 모두 기다린다." },
+  ]}
+/>
+
+여기에는 마이크로서비스 말고도 쓸 수 있는 장치가 있다. 기능 플래그로 배포와 출시를 떼어 내면, 문제가 생긴 기능만 플래그로 끄고 롤백은 하지 않아도 된다([기능 플래그 글](/posts/feature-flags)). 배포를 하루에 여러 번, 작게 하면 한 번에 실리는 변경이 줄어든다. 테스트가 40분 걸린다면 바뀐 모듈과 그 모듈에 기대는 모듈만 돌리는 영향 범위 테스트로 줄일 수 있다. Nx나 Turborepo의 `affected` 명령, Bazel이 하는 일이 이것이다.
+
+영향 범위 계산은 생각보다 간단하다. 모듈마다 "내가 기대는 모듈" 목록이 있을 때, 바뀐 모듈에서 출발해 화살표를 거꾸로 따라가면 된다. 아래 빈 함수를 채워 보자. 결과는 이름순으로 정렬해 돌려준다.
+
+<CodePlayground
+  caption="바뀐 모듈 때문에 다시 테스트해야 할 모듈 찾기"
+  functionName="affectedModules"
+  initialCode={`// deps: 모듈 이름 -> 그 모듈이 import하는 모듈 목록
+// changed 모듈과, 그 모듈에 직접·간접으로 기대는 모듈을 이름순으로 돌려준다
+function affectedModules(deps, changed) {
+  return [changed];
+}`}
+  solution={`function affectedModules(deps, changed) {
+  // 화살표를 뒤집는다: 누가 나를 쓰는가
+  const users = {};
+  for (const [mod, list] of Object.entries(deps)) {
+    for (const d of list) (users[d] ??= []).push(mod);
+  }
+  const seen = new Set([changed]);
+  const queue = [changed];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const u of users[cur] ?? []) {
+      if (!seen.has(u)) { seen.add(u); queue.push(u); }
+    }
+  }
+  return [...seen].sort();
+}`}
+  tests={[
+    { label: "users가 바뀌면", args: [{ orders: ["inventory", "payments", "users"], inventory: ["catalog"], payments: ["users"], catalog: [], users: [], report: ["orders"] }, "users"], expected: ["orders", "payments", "report", "users"] },
+    { label: "catalog가 바뀌면", args: [{ orders: ["inventory", "payments", "users"], inventory: ["catalog"], payments: ["users"], catalog: [], users: [], report: ["orders"] }, "catalog"], expected: ["catalog", "inventory", "orders", "report"] },
+    { label: "아무도 안 쓰는 report", args: [{ orders: ["inventory", "payments", "users"], inventory: ["catalog"], payments: ["users"], catalog: [], users: [], report: ["orders"] }, "report"], expected: ["report"] },
+    { label: "순환이 있어도 멈춘다", args: [{ a: ["b"], b: ["a"], c: [] }, "a"], expected: ["a", "b"] },
+  ]}
+/>
+
+마지막 테스트가 보여 주듯, 모듈 사이에 순환이 있으면 하나를 고쳐도 순환 안의 모두가 영향을 받는다. 순환이 많을수록 "바뀐 것만 테스트"가 "전부 테스트"와 같아진다.
+
+## 진흙 덩어리가 되는 과정
+
+모놀리스가 나쁜 평판을 얻는 건 대개 구조 자체보다 이 상태 때문이다. 브라이언 푸트와 조지프 요더가 1997년 글에서 "큰 진흙 덩어리(Big Ball of Mud)"라고 부른, 아무 모듈이나 아무 모듈을 부르는 상태다.
+
+처음엔 경계가 있었다. 그러다 마감 전날 주문 코드에서 회원 테이블을 직접 조회하는 한 줄이 들어간다. 재고 모듈이 주문 모듈의 내부 함수를 가져다 쓴다. 공용 `utils` 폴더가 모든 모듈에 기대는 함수로 가득 찬다. 한 줄씩 보면 다 합리적인 지름길이다.
+
+<ConceptDiagram
+  caption="지름길이 쌓이면 모든 모듈이 모든 모듈에 기댄다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "o", label: "orders", x: 80, y: 50, w: 90 },
+    { id: "i", label: "inventory", x: 320, y: 50, w: 100 },
+    { id: "p", label: "payments", x: 80, y: 200, w: 100 },
+    { id: "u", label: "users", x: 320, y: 200, w: 90 },
+    { id: "x", label: "utils", sub: "모두가 쓰고 모두를 쓴다", x: 200, y: 125, w: 150, h: 54 },
+  ]}
+  edges={[
+    { from: "o", to: "i", label: "내부 함수" },
+    { from: "i", to: "o", dashed: true },
+    { from: "p", to: "u", label: "테이블 직접" },
+    { from: "u", to: "o", dashed: true },
+    { from: "o", to: "x", arrow: "both" },
+    { from: "i", to: "x", arrow: "both" },
+    { from: "p", to: "x", arrow: "both" },
+    { from: "u", to: "x", arrow: "both" },
+  ]}
+/>
+
+이 상태의 증상은 운영에서 먼저 보인다. 결제 화면을 고쳤는데 관리자 페이지 테스트가 깨진다. 컬럼 하나 이름을 바꾸려는데 그 테이블을 읽는 곳이 열네 군데다. 신규 입사자가 "주문 코드가 어디까지인지" 물으면 아무도 선을 그어 주지 못한다.
+
+확인하는 방법은 감이 아니라 숫자다. 모듈 사이의 import를 세어 보면 된다. 자바스크립트라면 `madge --circular src`나 dependency-cruiser로 순환 의존을 뽑고, DB라면 테이블마다 그 테이블을 쓰는 모듈 수를 센다. 순환이 늘고 있다면 코드가 진흙이 되고 있다는 신호다. 경계를 다시 세우고 도구로 지키는 방법이 [모듈러 모놀리스 글](/posts/modular-monolith)의 주제다.
+
+## 쪼갰는데도 모놀리스인 경우
+
+진흙 덩어리를 피하려다 더 나쁜 곳에 도착하기도 한다. 서비스를 여러 개로 나눴는데 여전히 함께 배포해야 하는 상태, 분산 모놀리스다.
+
+이런 신호가 보이면 의심한다. 서비스 A를 배포하려면 B와 C도 같은 날 배포해야 한다. 여러 서비스가 같은 DB의 같은 테이블을 읽고 쓴다. 요청 하나가 서비스 다섯 개를 동기 호출로 줄줄이 거친다. 공용 라이브러리 버전을 올리면 모든 서비스를 다시 빌드해야 한다.
+
+이 상태는 모놀리스의 단점(함께 배포)과 마이크로서비스의 단점(네트워크 실패, 분산 디버깅)을 둘 다 가진다. 원인은 대개 경계를 업무가 아니라 기술 계층이나 테이블 기준으로 그은 데 있다. 그래서 순서가 중요하다. 한 프로세스 안에서 경계를 먼저 단단하게 만들고, 그 경계가 몇 달 동안 흔들리지 않는 걸 확인한 뒤 떼어 낸다. 실제로 떼어 내는 절차는 [마이크로서비스 분해 글](/posts/microservices-decomposition)이 이어서 다룬다.
+
+프런트엔드도 같은 고민을 한다. 거대한 React SPA 하나를 여러 팀이 같이 고치다 보면 같은 배포 병목이 생기고, 그 답으로 나온 게 [마이크로 프런트엔드](/posts/micro-frontends)다. 거기서도 공용 상태와 디자인 시스템 버전을 함께 올려야 한다면 분산 모놀리스가 된다.
+
+## 모놀리스를 오래 잘 쓰려면
+
+모놀리스는 배포 단위를 하나로 묶는 대신 트랜잭션, 함수 호출, 디버깅의 단순함을 얻는다. 대가는 CPU, 메모리, 프로세스 수명, 배포 일정을 모든 기능이 나눠 쓴다는 것이다. 그래서 무거운 일은 다른 스레드나 워커 프로세스로 빼고, 예외는 요청 단위에서 잡고, 인스턴스는 상태 없이 여러 개 띄우고, 모듈 사이의 의존은 숫자로 지켜본다. 이 네 가지가 지켜지는 동안에는 쪼갤 이유가 기술보다 조직에서 나온다. 팀이 서로의 배포를 기다리기 시작할 때가 다음 단계를 고민할 때다.
+
+## 면접에서 나올 만한 질문
+
+### 모놀리식 아키텍처가 무엇이고 장단점은 무엇인가요?
+
+모든 기능을 하나로 빌드하고 하나로 배포하는 구조다. 모듈 사이가 함수 호출이라 빠르고 실패하지 않으며, DB 트랜잭션 하나로 여러 기능의 데이터를 원자적으로 바꿀 수 있고, 디버깅과 운영이 단순하다. 대신 CPU·메모리·프로세스 수명을 모든 기능이 공유해서 한 기능의 문제가 전체로 번지고, 배포 단위가 하나라 팀이 늘면 배포가 병목이 된다.
+
+### 모놀리스는 확장이 안 되나요?
+
+된다. 인스턴스가 상태를 들고 있지 않으면 같은 이미지를 여러 개 띄워 로드 밸런서 뒤에 두는 수평 확장이 잘 된다. 세션과 파일을 밖으로 빼는 게 조건이다. 안 되는 건 기능별로 따로 늘리는 것인데, 이것도 같은 코드를 웹과 워커처럼 역할별 프로세스로 띄우면 상당 부분 해결된다.
+
+### 리포트 API가 느릴 때 왜 다른 API까지 느려지나요?
+
+같은 실행 자원을 나눠 쓰기 때문이다. Node라면 동기 CPU 작업이 이벤트 루프 스레드를 막아 그동안 들어온 모든 요청이 기다린다. 스레드 풀을 쓰는 서버라면 느린 요청이 스레드나 DB 커넥션 풀을 다 잡아서 다른 요청이 대기한다. 무거운 작업을 워커 스레드나 별도 워커 프로세스로 옮기고 큐로 넘기면 분리된다.
+
+### 처리되지 않은 예외가 나면 Node 모놀리스는 어떻게 되나요?
+
+프로세스가 종료되고, 그 프로세스가 맡던 모든 기능이 함께 내려간다. Node 15부터는 처리되지 않은 Promise 거부도 기본으로 종료된다. `uncaughtException`에서 삼키고 계속 돌리면 상태가 깨진 채로 동작할 수 있어 권장되지 않는다. 요청 단위로 예외를 잡고, 프로세스를 여러 개 띄우고, 감시자가 재시작하게 하는 세 겹으로 막는다.
+
+### 분산 모놀리스란 무엇이고 어떻게 알아보나요?
+
+서비스는 나뉘었는데 함께 배포해야 하는 상태다. 한 서비스 배포에 다른 서비스 배포가 따라붙고, 여러 서비스가 같은 테이블을 공유하고, 동기 호출 체인이 길다면 의심한다. 모놀리스의 함께 배포하는 문제와 마이크로서비스의 네트워크 문제를 모두 가진다. 경계를 업무와 데이터 소유권 기준으로 다시 긋는 것이 해법이다.
+
+### 모놀리스 테스트와 빌드가 너무 오래 걸리면 무엇부터 하나요?
+
+모듈 의존 그래프를 만들고 바뀐 모듈과 그 모듈에 기대는 모듈만 테스트하는 영향 범위 테스트를 도입한다. Nx, Turborepo, Bazel 같은 도구가 이 일을 한다. 다만 모듈 사이 순환이 많으면 영향 범위가 전체가 되니, 순환을 끊는 작업이 먼저다.
+
+### 언제 모놀리스를 떠나야 하나요?
+
+트래픽보다 조직 신호를 본다. 팀들이 서로의 배포를 기다리고, 한 팀의 롤백이 다른 팀의 기능을 되돌리고, 특정 기능만 전혀 다른 확장이나 기술 스택이 필요할 때다. 그 전에 기능 플래그, 잦은 작은 배포, 모듈 경계 강화로 버틸 수 있는지 먼저 본다. 떠날 때도 경계가 몇 달간 안정적인 모듈부터 하나씩 떼어 낸다.

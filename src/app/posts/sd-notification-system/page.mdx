@@ -1,0 +1,353 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-notification-system");
+
+이 시리즈에서 이 글의 자리: [㉑ 웹 크롤러 ②: 예의, 우선순위, 중복 거르기](/posts/sd-web-crawler-politeness-dedup)로 크롤러 장을 마쳤다. 이 글은 알림 시스템 장의 첫 글로, 푸시·SMS·이메일이 어떤 업체를 거쳐 사용자에게 닿는지와, 그걸 보내는 우리 쪽 부품을 설계한다. 같은 장의 다음 글 [㉓ 알림 시스템 ②: 잃지 않고 두 번 보내지 않기](/posts/sd-notification-reliability)에서 재시도, 중복 제거, 수신 설정, 모니터링을 다룬다. 그다음은 [㉔ 뉴스 피드 ①](/posts/sd-news-feed-publishing)이다.
+
+쇼핑몰의 주문 API에 기능을 하나 더한다고 해 보자. 주문이 끝나면 "배송이 시작됐다"는 푸시를 휴대폰마다 보내고, 문자와 메일도 한 통씩 보낸다. 가장 빠른 구현은 주문 API의 마지막 줄에 업체 API 호출 세 개를 붙이는 것이다. 테스트에서는 잘 돈다. 그런데 문자 업체가 잠깐 장애를 내자 주문이 실패하기 시작했고, 실패한 주문의 고객에게는 이미 "배송이 시작됐다"는 푸시가 가 있었다.
+
+면접 단골 질문 "알림 시스템을 설계하라"는 바로 이 상황을 일반화한 것이다. 이 글은 알림 한 통이 사용자 휴대폰에 닿기까지 누구를 거치는지부터 보고, 그 위에 우리 시스템을 하나씩 쌓는다.
+
+## 주문 API 안에서 바로 보내 보기
+
+로컬에 가짜 업체 서버를 띄웠다. 푸시는 80ms, 문자는 400ms, 메일은 250ms가 걸리게 했다. 실제 업체가 아니라 응답 시간만 흉내 낸 Node 서버다. 주문 API가 이 업체들을 차례로 부르게 하고, 사용자 한 명(휴대폰 두 대)에게 보냈다.
+
+```js
+async function placeOrderSync(user) {
+  const c = contacts[user];
+  for (const t of c.push) await send("push", t, "배송이 시작됐다"); // 기기마다
+  await send("sms", c.sms, "배송이 시작됐다");
+  await send("email", c.email, "배송이 시작됐다");
+}
+```
+
+```text
+[바로 보내기] 주문 응답까지 903ms
+[바로 보내기, SMS 장애] 570ms 뒤 주문 실패: sms 503 / 그때까지 나간 것 push:ios:tok-a, push:android:tok-b
+```
+
+문제가 세 가지 보인다. 주문 응답이 0.9초 늦어졌다. 업체 응답 시간이 그대로 고객이 기다리는 시간에 더해졌다. 두 번째 줄은 더 나쁘다. 문자 업체가 503을 돌려주자 주문 자체가 실패했는데, 푸시 두 개는 이미 나간 뒤다. 고객이 주문을 다시 누르면 푸시를 또 받는다. 마지막으로, 알림을 보내는 곳이 주문 API만이 아니다. 결제, 배송, 쿠폰, 마케팅 팀이 다 비슷한 코드를 각자 붙이면 업체 키와 재시도 로직이 서비스마다 흩어진다.
+
+해결의 방향은 분명하다. 주문 API는 "이 사람에게 이런 알림을 보내 달라"고 맡기기만 하고 바로 응답한다. 실제로 보내는 일은 다른 곳이 한다. 그 다른 곳을 설계하는 것이 이 글이다.
+
+## 알림 한 통이 거치는 바깥 업체
+
+우리 서버는 사용자 휴대폰에 직접 푸시를 보낼 수 없다. 휴대폰은 앱마다 서버와 연결을 열어 두지 않는다. 배터리가 버티지 못하기 때문이다. 대신 운영체제가 자기 회사 서버 하나와 연결을 유지하고, 모든 앱의 알림이 그 연결 하나로 들어온다. 그래서 채널마다 거쳐야 하는 업체가 정해져 있다.
+
+- iOS 푸시: 애플의 APNs(Apple Push Notification service). 우리 서버가 HTTP/2로 APNs에 보내면 APNs가 기기에 전달한다.
+- 안드로이드 푸시: 구글의 FCM(Firebase Cloud Messaging). HTTP v1 API로 보낸다. FCM은 iOS 기기(APNs를 대신 거쳐서)와 웹 브라우저로도 보낼 수 있어서, 푸시를 FCM 하나로 모으는 서비스도 많다.
+- SMS: 통신사와 연결된 문자 발송 업체. 건당 비용이 있다. 한국에서는 보내는 번호를 미리 등록해야 한다(발신번호 사전등록제).
+- 이메일: 대량 메일 발송 업체나 직접 운영하는 메일 서버. 스팸함에 빠지지 않게 하는 설정(SPF, DKIM, DMARC)은 [이메일 프로토콜 글](/posts/sd-email-protocols)에서 다룬다.
+
+푸시를 받으려면 먼저 기기가 자기 주소를 알려 줘야 한다. 이 주소를 디바이스 토큰이라고 한다. 앱이 설치되고 사용자가 알림을 허용하면, 운영체제가 APNs나 FCM에서 토큰을 받아 앱에 준다. 앱은 그 토큰을 우리 서버에 올린다. 아래 그림에서 다음을 누르면 토큰이 생기는 순간부터 알림이 닿는 순간까지 따라간다.
+
+<SequenceDiagram
+  caption="디바이스 토큰을 받고, 그 토큰으로 푸시를 보낸다"
+  actors={[
+    { id: "app", label: "앱 (아이폰)" },
+    { id: "apns", label: "APNs" },
+    { id: "api", label: "우리 서버" },
+  ]}
+  steps={[
+    { from: "app", to: "apns", label: "등록", title: "알림 허용 후 등록한다", detail: "사용자가 알림을 허용하면 앱이 운영체제를 통해 APNs에 등록한다." },
+    { from: "apns", to: "app", label: "디바이스 토큰", title: "기기 주소를 받는다", detail: "이 앱과 이 기기 조합을 가리키는 토큰이다. 앱을 다시 깔거나 기기를 복원하면 바뀔 수 있다." },
+    { from: "app", to: "api", label: "PUT /devices", title: "토큰을 우리 서버에 올린다", detail: "로그인한 사용자 번호와 함께 올린다. 앱이 켜질 때마다 올려서 바뀐 토큰을 따라간다.", payload: "{ platform: \"ios\", token: \"a1f0…e9\", app_version: \"5.2.0\" }" },
+    { from: "api", to: "apns", label: "POST /3/device/a1f0…", title: "보낼 때는 토큰을 주소로 쓴다", detail: "알림 본문과 함께 토큰을 경로에 넣어 APNs에 보낸다. 인증은 애플에서 받은 키로 만든 JWT로 한다." },
+    { from: "apns", to: "api", label: "200 / 410", title: "받았다는 뜻일 뿐이다", detail: "200은 APNs가 맡았다는 뜻이지 사용자가 봤다는 뜻이 아니다. 410은 그 토큰이 더는 쓸모없다는 뜻이다." },
+    { from: "apns", to: "app", label: "알림", title: "운영체제가 띄운다", detail: "기기가 꺼져 있으면 APNs가 잠시 들고 있다가 켜질 때 준다. 이때 앱마다 마지막 한 통만 남긴다." },
+  ]}
+/>
+
+마지막 단계가 중요하다. 푸시는 "최선을 다해 전달"하는 채널이다. APNs는 기기가 꺼져 있는 동안 앱마다 마지막 알림 하나만 보관한다. FCM은 기본으로 4주까지 보관하지만 보관 개수에 한도가 있다. 그러니 놓치면 안 되는 정보(주문 상태, 받은 메시지)는 알림에만 담지 말고 앱을 열었을 때 서버에서 다시 받아 오게 만든다. 알림은 "앱을 열어 보라"는 신호로 쓰는 것이다.
+
+APNs에 보내는 요청 하나를 뜯어 보면 이렇다. 조각을 눌러 보면 각 헤더가 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="APNs에 보내는 요청 하나 (HTTP/2)"
+  base="POST /3/device/a1f0…e9"
+  separator="  "
+  joiner="  "
+  params={[
+    { key: "authorization", display: "authorization: bearer eyJ…", title: "인증 토큰", description: "애플 개발자 계정에서 받은 .p8 키로 서명한 JWT다. 요청마다 만들지 않고 재사용하되, 애플 문서 기준으로 20분에서 60분 사이마다 새로 만든다. 인증서 방식도 있다.", required: true },
+    { key: "apns-topic", display: "apns-topic: com.shop.app", title: "보낼 앱", description: "앱의 번들 ID다. 토큰과 앱이 맞지 않으면 거절된다.", required: true },
+    { key: "apns-push-type", display: "apns-push-type: alert", title: "알림 종류", description: "화면에 띄우는 alert, 조용히 앱을 깨우는 background 등이 있다. 종류에 따라 지켜야 할 규칙이 다르다." },
+    { key: "apns-priority", display: "apns-priority: 10", title: "우선순위", description: "10은 바로 보내고, 5는 기기 전력 상태를 봐 가며 보낸다. 마케팅 알림은 5로 충분하다." },
+    { key: "apns-expiration", display: "apns-expiration: 1792710000", title: "유효 기한", description: "이 시각(유닉스 초)까지 못 주면 버린다. 0이면 한 번 시도하고 보관하지 않는다. 인증 번호처럼 늦으면 쓸모없는 알림은 짧게 준다." },
+    { key: "apns-collapse-id", display: "apns-collapse-id: order-1001", title: "덮어쓰기 묶음", description: "같은 값의 알림이 여러 번 가면 기기에는 마지막 것만 남는다. 주문 상태처럼 최신 값만 의미 있는 알림에 쓴다." },
+    { key: "body", display: "{\"aps\":{\"alert\":…}}", title: "본문", description: "JSON이고 크기는 4KB(4,096바이트)까지다. 긴 내용은 넣지 말고 앱이 열렸을 때 서버에서 가져오게 한다.", code: "{\"aps\":{\"alert\":{\"title\":\"배송 시작\",\"body\":\"주문 1001이 출발했다\"}},\"order_id\":1001}" },
+  ]}
+/>
+
+FCM도 모양은 비슷하다. `POST https://fcm.googleapis.com/v1/projects/{프로젝트}/messages:send`에 서비스 계정으로 받은 OAuth 액세스 토큰을 붙여 보내고, 본문 한도도 4KB다. 예전의 서버 키 방식(레거시 API)은 2023년에 지원 중단이 발표되고 2024년부터 순차적으로 꺼졌으니, 오래된 코드에 `fcm.googleapis.com/fcm/send`가 보이면 옮겨야 한다.
+
+## 연락처를 어디에 두나
+
+보낼 곳은 채널마다 다르다. 이메일과 전화번호는 사용자 한 명에 하나씩이니 사용자 테이블에 둔다. 디바이스 토큰은 다르다. 한 사람이 휴대폰, 태블릿, 웹 브라우저를 쓸 수 있으니 따로 테이블을 둔다. PostgreSQL 16으로 만들어 봤다.
+
+```sql
+CREATE TABLE users (
+  id         bigint PRIMARY KEY,
+  email      text,                       -- 이메일 알림용
+  phone      text,                       -- SMS용 (E.164 형식)
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE devices (
+  id           bigserial PRIMARY KEY,
+  user_id      bigint NOT NULL REFERENCES users(id),
+  platform     text NOT NULL CHECK (platform IN ('ios', 'android', 'web')),
+  token        text NOT NULL UNIQUE,     -- 같은 토큰이 두 줄로 생기지 않게
+  app_version  text,
+  last_seen_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ON devices (user_id);       -- "이 사용자의 기기들"을 빨리 찾는다
+```
+
+사용자 1은 아이폰과 안드로이드 폰을, 사용자 2는 웹 브라우저를 등록했다고 하자. 그런데 사용자 1이 안드로이드 폰을 사용자 2에게 넘겼고, 사용자 2가 그 폰에서 로그인했다. 앱은 켜질 때마다 토큰을 올리니 같은 토큰이 다른 사용자 번호로 올라온다.
+
+```sql
+-- 앱이 켜질 때마다 토큰을 올린다. 같은 토큰이면 주인과 시각만 고친다
+INSERT INTO devices (user_id, platform, token, app_version)
+VALUES (2, 'android', 'cK3x...Qz', '5.2.0')
+ON CONFLICT (token) DO UPDATE
+  SET user_id = EXCLUDED.user_id, app_version = EXCLUDED.app_version, last_seen_at = now();
+
+-- 사용자별로 보낼 기기
+SELECT u.id, d.platform, d.token, d.app_version
+FROM users u JOIN devices d ON d.user_id = u.id
+ORDER BY u.id, d.platform;
+```
+
+```text
+ id | platform |                   token                   | app_version 
+----+----------+-------------------------------------------+-------------
+  1 | ios      | a1f0...e9                                 | 5.2.0
+  2 | android  | cK3x...Qz                                 | 5.2.0
+  2 | web      | https://fcm.googleapis.com/fcm/send/dR... | 
+(3 rows)
+```
+
+안드로이드 폰이 사용자 2 밑으로 옮겨 갔다. `token`에 `UNIQUE`가 없었다면 같은 토큰이 두 사용자에게 걸려서, 사용자 1의 주문 알림이 사용자 2의 폰에 뜬다. 개인정보가 새는 사고다. 로그아웃할 때 그 기기의 토큰 줄을 지우는 것도 같은 이유로 챙긴다. 웹 푸시는 토큰이 브라우저 업체 주소 모양이다. 크롬 계열은 위처럼 FCM 주소가 나온다.
+
+토큰은 조용히 죽기도 한다. 앱을 지우면 그 토큰은 쓸모가 없어지는데, 우리 서버는 알 길이 없다. 보내 봤을 때 APNs가 410(`Unregistered`)을, FCM이 `UNREGISTERED`를 돌려주면 그때 지운다. 이 처리는 [㉓ 알림 시스템 ②](/posts/sd-notification-reliability)에서 다시 본다. `last_seen_at`이 몇 달씩 갱신되지 않은 토큰도 정리 대상이다.
+
+## 얼마나 보내야 하나
+
+이 글에서는 이런 조건을 잡는다. 푸시는 하루 2천만 건, 문자는 50만 건, 메일은 300만 건이다. iOS, 안드로이드, 웹을 모두 지원한다. 알림은 몇 초 안에 가면 되고, 사용자는 채널별로 알림을 끌 수 있다.
+
+하루 2천만 건이면 평균 초당 약 231건이다. 문자는 초당 6건, 메일은 35건 정도다. 평균만 보면 서버 한 대로 충분해 보인다. 알림은 평균이 의미가 없다. 마케팅 팀이 "오후 7시에 전체 회원 1천만 명에게 쿠폰 알림"을 예약하면, 10분 안에 보내야 한다고 할 때 초당 약 16,700건이 된다. 평균의 70배가 넘는다. 이 몰림을 받아 주는 구조가 필요하다. 규모 어림하는 법은 [⑩ 규모 추정](/posts/sd-capacity-estimation)에서 연습했다.
+
+## 첫 설계: 알림 서버 하나
+
+주문 API에서 떼어 낸 일을 알림 서버 하나에 모은다. 알림을 보내고 싶은 서비스(주문, 결제, 배송, 마케팅 예약 작업 같은 것을 통틀어 트리거 서비스라고 부른다)는 알림 서버의 API를 부르기만 한다. 알림 서버는 요청을 확인하고, 연락처를 찾고, 본문을 만들고, 업체에 보낸다. 업체 키와 보내는 코드가 한곳에 모였으니 처음보다는 낫다. 하지만 아래 그림처럼 금방 한계가 온다.
+
+<NetworkTopology
+  caption="알림 서버 하나가 모든 일을 할 때"
+  width={420}
+  height={260}
+  zones={[
+    { id: "ours", label: "우리 시스템", x: 10, y: 10, w: 270, h: 240, tone: "private" },
+    { id: "ext", label: "바깥 업체", x: 300, y: 10, w: 110, h: 240, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "order", label: "주문", x: 60, y: 60, icon: "server" },
+    { id: "mkt", label: "마케팅 예약", x: 60, y: 190, icon: "server" },
+    { id: "ns", label: "알림 서버", sub: "단 한 대", x: 190, y: 125, icon: "server" },
+    { id: "db", label: "DB·캐시", x: 190, y: 215, icon: "db" },
+    { id: "apns", label: "APNs·FCM", x: 355, y: 60, icon: "internet" },
+    { id: "sms", label: "SMS 업체", x: 355, y: 190, icon: "internet" },
+  ]}
+  links={[
+    { from: "order", to: "ns" },
+    { from: "mkt", to: "ns" },
+    { from: "ns", to: "db" },
+    { from: "ns", to: "apns" },
+    { from: "ns", to: "sms" },
+  ]}
+  steps={[
+    { path: ["order", "ns", "apns"], packet: "배송 시작", title: "평소에는 잘 돈다", detail: "주문 서비스가 요청하면 알림 서버가 연락처를 찾아 바로 업체에 보낸다." },
+    { path: ["mkt", "ns"], packet: "1천만 명", title: "예약 발송이 몰린다", detail: "마케팅 예약 작업이 한꺼번에 1천만 건을 넣는다. 서버 한 대가 모두 받아 처리해야 한다." },
+    { path: ["ns", "sms"], packet: "문자", blocked: true, title: "느린 업체가 전체를 붙잡는다", detail: "SMS 업체가 느려지면 그 호출을 기다리는 동안 푸시도 못 나간다. 같은 스레드와 연결을 나눠 쓰기 때문이다." },
+    { path: ["order", "ns"], packet: "배송 시작", blocked: true, title: "서버가 죽으면 전부 멈춘다", detail: "알림 서버가 하나뿐이라 이게 죽으면 모든 서비스의 알림이 멈춘다. 받다 만 요청도 사라진다." },
+  ]}
+/>
+
+정리하면 세 가지다. 서버가 하나라 죽으면 전체가 멈춘다(단일 장애점). 요청 받기, 본문 만들기, 업체에 보내기가 한 서버에 묶여서 따로 늘릴 수 없다. 그리고 가장 느린 업체가 나머지 채널의 발목을 잡는다.
+
+## 큐로 떼어 내고 채널마다 나눈다
+
+고친 설계는 세 가지를 바꾼다. 알림 서버를 여러 대로 늘리고 로드 밸런서 뒤에 둔다. 서버가 상태를 들고 있지 않게 DB와 캐시는 밖으로 뺀다. 그리고 알림 서버와 업체 사이에 메시지 큐를 둔다. 큐는 채널마다 하나씩이고, 큐마다 그 채널 전용 워커가 붙는다.
+
+<NetworkTopology
+  caption="알림 서버는 받아서 줄 세우고, 워커가 채널별로 보낸다"
+  width={440}
+  height={300}
+  zones={[
+    { id: "api", label: "알림 서버 (여러 대)", x: 10, y: 10, w: 130, h: 280, tone: "private" },
+    { id: "mq", label: "채널별 큐", x: 160, y: 10, w: 110, h: 280, tone: "neutral" },
+    { id: "ext", label: "바깥 업체", x: 340, y: 10, w: 90, h: 280, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "lb", label: "LB", x: 40, y: 150, icon: "lb" },
+    { id: "ns", label: "알림 서버", x: 105, y: 90, icon: "server" },
+    { id: "cache", label: "연락처·설정", sub: "DB+캐시", x: 105, y: 230, icon: "db" },
+    { id: "qp", label: "push 큐", x: 215, y: 60, icon: "server" },
+    { id: "qs", label: "sms 큐", x: 215, y: 150, icon: "server" },
+    { id: "qe", label: "email 큐", x: 215, y: 240, icon: "server" },
+    { id: "wp", label: "워커", x: 300, y: 60, icon: "container" },
+    { id: "ws", label: "워커", x: 300, y: 150, icon: "container" },
+    { id: "apns", label: "APNs·FCM", x: 385, y: 60, icon: "internet" },
+    { id: "sms", label: "SMS", x: 385, y: 150, icon: "internet" },
+  ]}
+  links={[
+    { from: "lb", to: "ns" },
+    { from: "ns", to: "cache" },
+    { from: "ns", to: "qp" },
+    { from: "ns", to: "qs" },
+    { from: "ns", to: "qe" },
+    { from: "qp", to: "wp" },
+    { from: "qs", to: "ws" },
+    { from: "wp", to: "apns" },
+    { from: "ws", to: "sms" },
+  ]}
+  steps={[
+    { path: ["lb", "ns"], packet: "POST /notify", title: "아무 알림 서버나 받는다", detail: "트리거 서비스의 요청을 로드 밸런서가 여러 알림 서버 중 하나에 준다." },
+    { path: ["ns", "cache"], packet: "user 1?", title: "연락처와 설정을 찾는다", detail: "기기 토큰, 전화번호, 메일 주소와 사용자가 끈 채널을 캐시에서 먼저 찾는다." },
+    { path: ["ns", "qp"], packet: "push×2", title: "채널별 큐에 넣고 바로 응답", detail: "기기 두 대 몫의 푸시를 push 큐에, 문자는 sms 큐에 넣는다. 트리거 서비스는 여기서 202를 받고 끝난다." },
+    { path: ["qp", "wp", "apns"], packet: "푸시", title: "푸시 워커가 꺼내 보낸다", detail: "워커는 자기 큐만 본다. 업체 응답을 기다리는 건 워커지 알림 서버가 아니다." },
+    { path: ["qs", "ws", "sms"], packet: "문자", blocked: true, title: "SMS가 막혀도", detail: "문자 업체 장애로 sms 큐만 쌓인다. push와 email 워커는 영향을 받지 않는다." },
+  ]}
+/>
+
+맨 처음의 가짜 업체로 이 구조를 돌려 봤다. 이번에는 주문 3건이 들어올 때 문자 업체가 처음부터 장애 상태다.
+
+```text
+[큐에 넣기, SMS 장애] 주문 3건 응답까지 0ms, 큐: push=6 sms=3 email=3
+    0.3s push=3 sms=3 email=2
+    0.6s push=0 sms=3 email=1
+    0.9s push=0 sms=3 email=0
+    1.2s push=0 sms=3 email=0
+  1.5초 뒤 큐: push=0 sms=3 email=0, 나간 것 push 6건 email 3건
+    1.5s push=0 sms=3 email=0
+    1.8s push=0 sms=2 email=0
+    2.1s push=0 sms=1 email=0
+    2.4s push=0 sms=1 email=0
+    2.7s push=0 sms=0 email=0
+  SMS 복구 1.6초 뒤 큐: push=0 sms=0 email=0, 나간 SMS 3건
+```
+
+주문 응답은 0ms(같은 프로세스 안의 배열에 넣었을 뿐이라서다. 실제 큐라면 수 밀리초다)로 끝났다. 문자 업체가 죽어 있는 동안에도 푸시 6건과 메일 3건은 1초 안에 다 나갔다. 문자 3건은 큐에서 기다리다가 업체가 돌아오자 1.2초 만에 빠졌다. 아래 그림은 같은 기록을 시간 순서로 다시 그린 것이다.
+
+<AlgoTrace
+  caption="SMS 업체 장애 동안의 큐 깊이 (실측)"
+  cells={["0s", "0.3s", "0.6s", "0.9s", "1.5s", "1.8s", "2.1s", "2.7s"]}
+  memoryLabel="큐에 남은 알림"
+  steps={[
+    { pointer: 0, memory: ["push 6", "sms 3", "email 3"], caption: "주문 3건이 들어왔다. 기기 2대 × 3건이라 푸시가 6건이다. 문자 업체는 이미 장애다." },
+    { pointer: 1, memory: ["push 3", "sms 3", "email 2"], caption: "푸시와 메일 워커는 각자 속도로 빼낸다. 문자 워커는 503을 받고 다시 줄에 남겨 둔다." },
+    { pointer: 3, memory: ["push 0", "sms 3", "email 0"], caption: "1초도 안 돼 푸시와 메일은 다 나갔다. 문자만 3건 남았다." },
+    { pointer: 4, memory: ["push 0", "sms 3", "email 0"], caption: "1.5초에 문자 업체가 돌아온다. 큐가 기억하고 있어서 잃은 건 없다." },
+    { pointer: 5, memory: ["push 0", "sms 2", "email 0"], caption: "문자 워커가 하나씩 빼낸다. 업체가 한 건에 0.4초씩 걸린다." },
+    { pointer: 7, found: [7], memory: [], caption: "2.7초에 모든 큐가 비었다. 장애 동안 들어온 알림이 순서대로 다 나갔다." },
+  ]}
+/>
+
+채널마다 큐를 나눈 덕분에 장애가 한 채널에 갇혔다. 큐 하나에 다 넣으면 문자 몫이 앞을 막고 있는 동안 뒤의 푸시도 못 나간다. 채널 말고도 나눌 기준이 있다. 인증 번호처럼 늦으면 쓸모없는 알림과 마케팅 알림을 같은 큐에 넣으면, 1천만 건짜리 쿠폰 발송 뒤에 인증 번호가 줄을 선다. 그래서 같은 채널 안에서도 급한 큐와 느긋한 큐를 나눈다.
+
+큐는 몰림을 받아 주는 완충재 역할도 한다. 1천만 건 예약 발송이 들어와도 알림 서버는 큐에 넣기만 하면 되고, 워커는 업체가 받아 줄 수 있는 속도로 빼낸다. 큐에 쌓인 양(큐 깊이)을 보고 워커 수를 늘리고 줄이면 된다. 큐가 어떻게 메시지를 잃지 않는지, 워커가 꺼낸 뒤 죽으면 어떻게 되는지는 [메시지 큐 기초](/posts/message-queue-basics)에 있고, 큐를 붙이는 전체 그림은 [⑦ 메시지 큐와 로깅, 자동화](/posts/sd-queue-logging-automation)에서 봤다.
+
+## 알림 서버가 요청 하나에 하는 일
+
+알림 서버의 API는 대략 이런 모양이다. 트리거 서비스는 본문을 직접 만들지 않고 템플릿 이름과 값만 넘긴다.
+
+```http
+POST /v1/notifications
+{
+  "request_id": "order-1001-shipped",
+  "user_id": 1,
+  "template": "order_shipped",
+  "params": { "order_id": 1001, "eta": "10월 23일" },
+  "channels": ["push", "sms", "email"]
+}
+```
+
+받은 뒤 하는 일은 이렇다. 먼저 누가 보냈는지 확인한다. 이 API는 사내 서비스만 부를 수 있어야 하니, 서비스마다 발급한 키(앱 키와 비밀 값)나 서비스 간 인증서(mTLS)로 확인한다. 아무나 부를 수 있으면 우리 이름으로 스팸을 보내는 통로가 된다. 그다음 요청을 검사한다. 템플릿이 있는지, 필요한 값이 다 왔는지, 전화번호와 메일 주소 모양이 맞는지 본다. 연락처와 사용자 설정을 캐시에서 찾고, 사용자가 끈 채널은 뺀다. 템플릿에 값을 채워 본문을 만들고, 보낼 곳마다 하나씩 작업을 만들어 채널별 큐에 넣는다. `request_id`는 같은 요청이 두 번 와도 한 번만 처리하려고 받는다. 이 부분과 템플릿, 설정은 다음 글에서 자세히 본다.
+
+보낼 곳을 고르는 부분을 직접 짜 보자. 사용자 정보와 요청 채널을 받아 실제로 보낼 대상 목록을 만든다. iOS는 APNs로, 나머지 기기(안드로이드와 웹)는 FCM으로 보낸다고 하자.
+
+<CodePlayground
+  caption="보낼 대상 고르기"
+  functionName="planTargets"
+  initialCode={`// user: { devices: [{ platform, token }], phone, email, optOut: [채널] }
+//   phone, email이 없으면 빈 문자열
+// channels: 이 알림이 쓰려는 채널 순서 (예: ["push", "sms", "email"])
+// 반환: "apns:토큰", "fcm:토큰", "sms:번호", "email:주소" 배열
+//   채널 순서대로, 기기는 등록 순서대로. 사용자가 끈 채널과 연락처가 없는 채널은 뺀다.
+function planTargets(user, channels) {
+  return [];
+}`}
+  solution={`function planTargets(user, channels) {
+  const out = [];
+  for (const ch of channels) {
+    if (user.optOut.includes(ch)) continue;
+    if (ch === "push") {
+      for (const d of user.devices) out.push((d.platform === "ios" ? "apns:" : "fcm:") + d.token);
+    } else if (ch === "sms" && user.phone) out.push("sms:" + user.phone);
+    else if (ch === "email" && user.email) out.push("email:" + user.email);
+  }
+  return out;
+}`}
+  tests={[
+    { args: [{ devices: [{ platform: "ios", token: "a1" }, { platform: "android", token: "b2" }], phone: "01012345678", email: "kim@example.com", optOut: [] }, ["push", "sms", "email"]], expected: ["apns:a1", "fcm:b2", "sms:01012345678", "email:kim@example.com"], label: "모든 채널" },
+    { args: [{ devices: [{ platform: "ios", token: "a1" }], phone: "01012345678", email: "kim@example.com", optOut: ["sms"] }, ["push", "sms", "email"]], expected: ["apns:a1", "email:kim@example.com"], label: "문자를 끈 사용자" },
+    { args: [{ devices: [], phone: "", email: "lee@example.com", optOut: [] }, ["push", "sms", "email"]], expected: ["email:lee@example.com"], label: "앱 없는 사용자" },
+    { args: [{ devices: [{ platform: "android", token: "c3" }], phone: "01099998888", email: "", optOut: ["push"] }, ["push", "sms"]], expected: ["sms:01099998888"], label: "푸시를 끈 사용자" },
+    { args: [{ devices: [{ platform: "web", token: "w9" }], phone: "", email: "", optOut: [] }, ["push"]], expected: ["fcm:w9"], label: "웹 푸시도 FCM으로" },
+  ]}
+/>
+
+## 워커는 업체와 씨름한다
+
+워커는 큐에서 작업을 꺼내 업체를 부르고, 응답에 따라 셋 중 하나를 한다. 성공하면 보냈다고 기록하고 큐에서 지운다. 잠깐의 실패(타임아웃, 429, 5xx)면 조금 뒤에 다시 시도한다. 고칠 수 없는 실패(죽은 토큰, 잘못된 번호)면 다시 보내지 않고, 원인이 된 데이터를 고친다. 이 셋을 가르는 기준과 재시도 간격은 다음 글의 주제다.
+
+워커를 채널마다 따로 두는 데는 이유가 하나 더 있다. 업체마다 보내는 방법이 다르다. APNs는 HTTP/2 연결 하나에 요청 여러 개를 동시에 실어 보낼 수 있어서, 연결을 오래 열어 두고 재사용해야 빠르다. 요청마다 연결을 새로 맺으면 TLS 핸드셰이크만으로 시간이 다 간다. 문자 업체는 초당 보낼 수 있는 건수를 계약으로 정해 두는 경우가 많아서, 워커가 그 속도를 넘지 않게 맞춰야 한다. 메일은 받는 쪽(지메일, 네이버 메일 같은 곳)이 한 발신자에게서 갑자기 많은 메일이 오면 스팸으로 의심하니, 새 발신 주소는 천천히 양을 늘린다.
+
+워커는 상태를 들고 있지 않으니 늘리기 쉽다. 큐 깊이와 "큐에 들어가서 나오기까지 걸린 시간"을 보고 워커 수를 조절한다. 다만 워커를 늘린다고 업체가 더 빨리 받아 주지는 않는다. 업체 한도에 닿은 뒤에는 워커를 늘려도 429만 늘어난다. 그때는 큐에 쌓이는 걸 받아들이고, 급한 알림이 먼저 나가게 큐를 나눠 두는 것이 답이다.
+
+## 다음에 읽을 글
+
+알림 시스템은 받는 쪽(알림 서버)과 보내는 쪽(워커) 사이에 채널별 큐를 둔 구조다. 트리거 서비스는 템플릿과 값만 넘기고 바로 돌아가고, 알림 서버는 인증, 검사, 연락처 조회, 본문 만들기를 하고 큐에 넣는다. 워커는 APNs, FCM, 문자, 메일 업체와 각자의 방식으로 씨름한다. 이 구조 위에서 알림을 하나도 잃지 않고, 두 번 보내지 않고, 사용자가 원치 않는 알림은 보내지 않는 법은 [㉓ 알림 시스템 ②: 잃지 않고 두 번 보내지 않기](/posts/sd-notification-reliability)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 알림 시스템의 전체 구조를 설명해 주세요.
+
+트리거 서비스가 알림 서버 API를 부르면, 알림 서버가 인증과 검사를 하고 연락처와 수신 설정을 조회해 본문을 만든다. 보낼 곳마다 작업을 만들어 채널별 메시지 큐에 넣고 바로 응답한다. 채널별 워커가 큐에서 꺼내 APNs, FCM, 문자 업체, 메일 업체에 보낸다. 알림 서버와 워커는 상태가 없어서 여러 대로 늘리고, 연락처와 설정은 DB와 캐시에 둔다.
+
+### 우리 서버가 휴대폰에 직접 푸시를 보내면 안 되나요?
+
+앱마다 서버와 연결을 유지하면 배터리가 버티지 못해서 운영체제가 허락하지 않는다. iOS는 APNs, 안드로이드는 FCM과의 연결 하나로 모든 앱의 알림을 받는다. 그래서 우리 서버는 디바이스 토큰을 주소로 써서 이 업체들에 보내고, 업체가 기기에 전달한다.
+
+### 디바이스 토큰은 어떻게 관리하나요?
+
+한 사용자가 여러 기기를 쓰니 사용자 테이블과 따로 기기 테이블을 두고, 토큰에 유니크 제약을 건다. 앱이 켜질 때마다 토큰을 올려 바뀐 토큰을 따라가고, 같은 토큰이 다른 사용자로 올라오면 주인을 바꾼다. 업체가 410이나 `UNREGISTERED`를 돌려주면 지우고, 오래 갱신되지 않은 토큰도 정리한다. 유니크 제약이 없으면 넘겨준 폰에 이전 주인의 알림이 뜨는 사고가 난다.
+
+### 왜 메시지 큐를 두나요? 알림 서버가 바로 보내면 안 되나요?
+
+업체 응답 시간과 장애가 요청한 서비스로 번지지 않게 하려는 것이다. 큐가 있으면 알림 서버는 넣고 바로 응답하고, 예약 발송처럼 한꺼번에 몰리는 양도 큐가 받아 워커가 업체 속도에 맞춰 빼낸다. 업체가 죽어 있는 동안 작업은 큐에 남아 있다가 복구되면 나간다.
+
+### 큐를 채널마다 나누는 이유는요?
+
+한 채널의 업체 장애나 느림이 다른 채널을 막지 않게 하려는 것이다. 큐 하나에 다 넣으면 문자 몫이 앞을 막는 동안 푸시도 못 나간다. 같은 이유로 인증 번호 같은 급한 알림과 마케팅 알림도 큐를 나눠서, 대량 발송 뒤에 급한 알림이 줄 서지 않게 한다.
+
+### 마케팅 발송으로 트래픽이 평소의 70배가 되면요?
+
+알림 서버는 큐에 넣기만 하니 몇 대만 늘려도 버티고, 쌓이는 건 큐가 받는다. 워커는 큐 깊이를 보고 늘리되, 업체 한도에 닿으면 더 늘려도 429만 늘어난다. 그래서 대량 발송은 느긋한 큐로 보내 급한 알림과 섞이지 않게 하고, 예약 시각을 몇 분에 걸쳐 나눠 업체 한도 안에서 흘려보낸다.
+
+### 알림 서버 하나가 요청을 받다가 죽으면요?
+
+알림 서버는 상태가 없어서 로드 밸런서가 다른 서버로 보낸다. 큐에 넣기 전에 죽었다면 트리거 서비스는 응답을 못 받았으니 다시 보내고, `request_id`로 이미 처리한 요청인지 확인해 두 번 보내지 않는다. 큐에 넣은 뒤라면 작업은 큐에 남아 있다.
+
+### APNs가 200을 주면 사용자가 알림을 본 건가요?
+
+아니다. 200은 APNs가 맡았다는 뜻일 뿐이다. 기기가 꺼져 있으면 APNs는 앱마다 마지막 알림 하나만 보관하고, 사용자가 알림을 꺼 두었을 수도 있다. 그래서 중요한 정보는 알림에만 의존하지 않고 앱을 열 때 서버에서 다시 받아 오게 하며, 실제로 열었는지는 앱이 따로 보고하는 이벤트로 잰다.

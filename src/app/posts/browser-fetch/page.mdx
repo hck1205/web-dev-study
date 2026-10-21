@@ -384,7 +384,7 @@ const res = await fetch(url, {
 });
 ```
 
-`AbortSignal.timeout`은 2022년, `AbortSignal.any`는 2023~2024년에 주요 브라우저에 들어왔다. 오래된 브라우저까지 지원해야 하면 `setTimeout`에서 `controller.abort()`를 부르는 방식으로 대신한다. 타임아웃은 응답 헤더가 올 때까지만이 아니라 본문을 다 읽을 때까지 유효하다는 점도 기억해 둔다. 큰 파일을 받는 요청에 짧은 타임아웃을 걸면 다운로드 도중에 끊긴다.
+`AbortSignal.timeout`은 2022년, `AbortSignal.any`는 2023~2024년에 주요 브라우저에 들어왔다. 오래된 브라우저까지 지원해야 하면 `setTimeout`에서 `controller.abort()`를 부르는 방식으로 대신한다. 타임아웃은 응답 헤더가 올 때까지만이 아니라 본문을 다 읽을 때까지 유효하다는 점도 기억해 둔다. 큰 파일을 받는 요청에 짧은 타임아웃을 걸면 다운로드 도중에 끊긴다. 신호를 받는 함수를 직접 만들고 서버까지 취소를 잇는 이야기는 [AbortController 글](/posts/abort-controller)에서 이어진다.
 
 ## 실패하면 다시 보낼까
 

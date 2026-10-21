@@ -1,0 +1,504 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("event-sourcing");
+
+고객센터에 문의가 왔다. "어제 오후 3시에 이체하려는데 잔액이 부족하다고 나왔어요. 그때 잔액이 정말 얼마였나요?" 계좌 테이블에는 지금 잔액 한 숫자만 있다. 옆에 `account_history`라는 이력 테이블이 있긴 한데, 몇 달 전 누군가 잔액을 고치는 배치를 돌리면서 이력은 남기지 않았다. 이력을 다 더해도 지금 잔액과 맞지 않는다. 어느 쪽이 맞는지 아무도 모른다.
+
+이력을 상태 옆에 따로 쓰면 언젠가 둘이 어긋난다. 쓰는 곳이 두 군데이고, 한쪽을 빠뜨려도 아무것도 막지 않기 때문이다. 이벤트 소싱(event sourcing)은 이 순서를 뒤집는다. 일어난 사건을 유일한 원본으로 저장하고, 현재 상태는 사건을 처음부터 접어서 얻는다. 이력이 곧 데이터라서 어긋날 수가 없다.
+
+기본 아이디어, 사건 테이블과 기본 키로 막는 동시 쓰기는 [이벤트 기반 아키텍처](/posts/event-driven-architecture)의 이벤트 소싱 절에서 짧게 봤다. 이 글은 그다음, 실제로 도메인을 이벤트 소싱으로 짤 때 정해야 하는 것들을 본다. 명령을 처리하는 함수의 모양, 지난 시점의 상태, 사건 이름 짓기, 사건이 10만 건 쌓였을 때, 사건의 형식이 바뀔 때, 개인정보 삭제 요청이 올 때다. 사건으로 화면용 읽기 모델을 만드는 쪽은 [CQRS](/posts/cqrs)에서 다룬다. 예제는 Node 22(TypeScript 타입 제거 실행)와 PGlite 0.2.17(PostgreSQL 16.4의 WebAssembly 빌드)에서 돌린 실제 출력이다.
+
+## 결정하는 함수와 접는 함수
+
+이벤트 소싱 도메인 코드는 함수 두 개로 정리된다. `evolve`는 지금 상태와 사건 하나를 받아 다음 상태를 돌려준다. `decide`는 지금 상태와 명령을 받아 일어날 사건 목록을 돌려주거나, 규칙에 어긋나면 거절한다. 둘 다 DB를 모르는 순수 함수다.
+
+```ts
+export type Event =
+  | { type: "AccountOpened"; owner: string }
+  | { type: "MoneyDeposited"; amount: number }
+  | { type: "MoneyWithdrawn"; amount: number };
+export type Command =
+  | { type: "Open"; owner: string }
+  | { type: "Deposit"; amount: number }
+  | { type: "Withdraw"; amount: number };
+export type State = { opened: boolean; balance: number };
+export const initial: State = { opened: false, balance: 0 };
+
+// 사건을 상태에 접는다. 규칙 검사는 하지 않는다. 이미 일어난 일이기 때문이다
+export function evolve(s: State, e: Event): State {
+  switch (e.type) {
+    case "AccountOpened": return { opened: true, balance: 0 };
+    case "MoneyDeposited": return { ...s, balance: s.balance + e.amount };
+    case "MoneyWithdrawn": return { ...s, balance: s.balance - e.amount };
+  }
+}
+
+// 명령을 보고 어떤 사건이 일어날지 정한다. 거절은 여기서만 한다
+export function decide(s: State, c: Command): Event[] {
+  switch (c.type) {
+    case "Open":
+      if (s.opened) throw new Error("already opened");
+      return [{ type: "AccountOpened", owner: c.owner }];
+    case "Deposit":
+      if (!s.opened) throw new Error("account not opened");
+      return [{ type: "MoneyDeposited", amount: c.amount }];
+    case "Withdraw":
+      if (s.balance < c.amount) throw new Error(`insufficient funds: balance ${s.balance}, want ${c.amount}`);
+      return [{ type: "MoneyWithdrawn", amount: c.amount }];
+  }
+}
+```
+
+`evolve`에 규칙 검사가 없다는 점이 중요하다. 사건은 과거에 이미 일어난 일이다. 오늘 규칙이 "출금 한도 100만 원"으로 바뀌었다고 해서, 작년에 200만 원을 출금한 사건을 다시 읽을 때 거절하면 상태를 복원할 수 없다. 규칙은 `decide`가 새 사건을 만들 때만 건다.
+
+이 모양은 React 코드에서 이미 본 적이 있다. `useReducer(reducer, initial)`의 `reducer(state, action)`이 `evolve`와 같은 시그니처이고, Redux DevTools가 액션을 처음부터 다시 흘려 "시간 여행"을 하는 것이 이벤트 소싱의 재생과 같은 원리다. 다른 점은 React의 액션은 메모리에서 사라지지만, 여기서는 사건이 DB에 영원히 남는다는 것이다. 리듀서가 왜 순수해야 하는지는 [순수 함수](/posts/js-pure-functions)에서 다룬다.
+
+## 명령 하나가 처리되는 길
+
+저장소는 사건 테이블 하나다. 스트림(대상 하나, 여기서는 계좌 하나)마다 버전이 1부터 빈틈없이 늘고, 테이블 전체에는 구독자가 따라 읽을 `global_position`이 있다.
+
+```sql
+CREATE TABLE events (
+  global_position bigserial PRIMARY KEY,   -- 모든 스트림을 통틀은 순서. 구독자가 따라 읽는다
+  stream_id   text  NOT NULL,              -- 'account-1001'
+  version     int   NOT NULL,              -- 이 스트림 안에서 몇 번째 사건인지
+  type        text  NOT NULL,
+  data        jsonb NOT NULL,
+  metadata    jsonb NOT NULL DEFAULT '{}', -- 누가, 왜, 어떤 요청에서
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (stream_id, version)              -- 같은 버전에 두 사건이 들어가지 못한다
+);
+```
+
+명령 처리기는 세 단계다. 스트림을 읽어 접고, `decide`로 사건을 고르고, 내가 읽은 버전 바로 뒤에 붙인다.
+
+```ts
+export async function handle(streamId: string, cmd: Command, tag = "") {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { state, version } = await load(streamId);   // 1. 읽고 접는다
+    const events = decide(state, cmd);                  // 2. 결정한다 (거절이면 여기서 throw)
+    try {
+      await append(streamId, version, events);          // 3. version + 1부터 붙인다
+      console.log(`${tag} attempt ${attempt}: appended v${version + 1} ${events[0].type}`);
+      return;
+    } catch (e: any) {
+      if (e.code !== "23505") throw e;                  // unique_violation만 다시 시도한다
+      console.log(`${tag} attempt ${attempt}: v${version + 1} already taken, reload`);
+    }
+  }
+}
+```
+
+아래 그림에서 다음을 누르면 출금 명령 하나가 이 세 단계를 지나는 과정이 나온다.
+
+<SequenceDiagram
+  caption="출금 명령 하나: 읽고, 결정하고, 버전 뒤에 붙인다"
+  actors={[
+    { id: "api", label: "API" },
+    { id: "h", label: "명령 처리기" },
+    { id: "store", label: "events" },
+    { id: "sub", label: "구독자" },
+  ]}
+  steps={[
+    { from: "api", to: "h", label: "Withdraw 12000", title: "출금 명령이 온다", detail: "계좌 account-1001에서 12000원을 빼 달라는 의도다." },
+    { from: "h", to: "store", label: "SELECT stream", title: "스트림을 읽는다", detail: "account-1001의 사건을 version 순으로 모두 가져온다. 지금은 두 건이다.", payload: "1 AccountOpened { owner: 'kim' }\n2 MoneyDeposited { amount: 50000 }" },
+    { from: "h", to: "h", label: "evolve × 2", title: "사건을 접어 상태를 만든다", detail: "잔액 50000, 버전 2다. 이 상태는 메모리에만 있고 저장하지 않는다." },
+    { from: "h", to: "h", label: "decide", title: "규칙을 검사하고 사건을 고른다", detail: "잔액이 충분하니 MoneyWithdrawn 하나를 만든다. 부족하면 여기서 거절하고 아무것도 쓰지 않는다." },
+    { from: "h", to: "store", label: "INSERT v3", title: "버전 3으로 붙인다", detail: "내가 본 버전이 2였으니 3번 자리에 쓴다. 그 사이 누가 3번을 먼저 썼다면 UNIQUE 제약에서 막힌다." },
+    { from: "store", to: "sub", label: "global_position", title: "구독자가 새 사건을 읽는다", detail: "읽기 모델, 알림, 다른 서비스가 global_position을 따라 새 사건을 가져간다." },
+  ]}
+/>
+
+계좌를 열고 입금, 출금, 입금을 차례로 넣은 뒤 지금 상태를 읽었다.
+
+```text
+now: { state: { opened: true, balance: 41000 }, version: 4 }
+```
+
+상태는 어디에도 저장돼 있지 않다. 50000 - 12000 + 3000 = 41000은 읽을 때마다 사건 넷을 접어서 나온 값이다.
+
+## 같은 버전을 두 요청이 노릴 때
+
+출금 요청 두 개가 거의 동시에 들어왔다. 둘 다 버전 4, 잔액 41000을 읽고, 둘 다 30000원 출금을 허락했다. 둘 다 5번 자리에 쓰려고 한다.
+
+```ts
+const a = await load("account-1001");
+const b = await load("account-1001");
+const ea = decide(a.state, { type: "Withdraw", amount: 30000 });
+const eb = decide(b.state, { type: "Withdraw", amount: 30000 });
+await append("account-1001", a.version, ea);
+console.log("A appended v" + (a.version + 1));
+try { await append("account-1001", b.version, eb); }
+catch (e: any) { console.log("B failed:", e.code, e.message); }
+// B는 다시 읽고 다시 결정한다
+try { await handle("account-1001", { type: "Withdraw", amount: 30000 }, "B retry"); }
+catch (e: any) { console.log("B retry rejected:", e.message); }
+```
+
+```text
+A appended v5
+B failed: 23505 duplicate key value violates unique constraint "events_stream_id_version_key"
+B retry rejected: insufficient funds: balance 11000, want 30000
+now: { state: { opened: true, balance: 11000 }, version: 5 }
+```
+
+A가 5번을 먼저 차지했고, B의 쓰기는 `UNIQUE (stream_id, version)`에 막혔다. B가 다시 읽으니 잔액은 11000이고, 이번에는 `decide`가 거절한다. 잔액이 음수가 되는 일이 행 잠금 없이 막혔다. 다시 시도할 때는 저장만 다시 하지 않고 `decide`부터 다시 한다. 상태가 바뀌었으니 판단도 다시 해야 한다.
+
+이 방식은 스트림 하나 안에서만 통한다. "고객 한 명의 모든 계좌 합계가 1억을 넘으면 안 된다"처럼 여러 스트림에 걸친 규칙은 버전 하나로 지킬 수 없다. 그런 규칙이 있다면 스트림의 경계를 다시 긋거나(고객 단위 스트림), 그 규칙을 사후에 확인하고 보정하는 흐름으로 받아들인다. 스트림을 얼마나 크게 잡을지가 이벤트 소싱 설계에서 가장 먼저 부딪히는 질문이다.
+
+## 지난 시점의 상태 다시 보기
+
+처음의 문의로 돌아가자. 어제 오후 3시의 잔액은 그 시각까지 기록된 사건만 접으면 나온다.
+
+```ts
+const { rows } = await db.query(
+  `SELECT version, type, data FROM events
+   WHERE stream_id = 'account-1001' AND recorded_at <= '2026-10-20 15:00+09'
+   ORDER BY version`);
+let past = initial;
+for (const r of rows) past = evolve(past, { type: r.type, ...r.data });
+console.log("at 15:00:", past, "until v" + rows.at(-1).version);
+```
+
+```text
+at 15:00: { opened: true, balance: 38000 } until v3
+```
+
+15시 5분의 3000원 입금은 빠지고 38000원이 나온다. 상태만 저장했다면 따로 이력 테이블을 믿거나 로그를 뒤져야 했을 질문이 쿼리 하나로 풀린다. 같은 방법으로 "그때 그 화면에 왜 그 값이 보였나"를 재현할 수 있어서, 버그 리포트를 받은 시점의 상태를 그대로 만들어 놓고 디버깅할 수 있다.
+
+여기서 시각은 두 가지를 구분해야 한다. `recorded_at`은 우리 시스템이 사건을 기록한 시각이고, 업무상 사건이 일어난 시각(카드 승인 시각처럼 외부에서 오는 시각)은 다를 수 있다. 늦게 도착한 사건이 있는 도메인이라면 둘을 따로 저장하고, 어느 시각 기준으로 물을지 정한다.
+
+## 사건에는 업무의 말로 이름을 붙인다
+
+사건 이름이 그 시스템이 남기는 기록의 전부다. `AccountUpdated { balance: 41000 }` 같은 사건은 이벤트 소싱을 하는 이유를 지운다. 무엇이 왜 바뀌었는지가 없고, 결과만 있다. 상태 테이블을 JSON으로 복사해 둔 것과 같다.
+
+사건은 업무에서 쓰는 말로, 과거형으로, 의도가 드러나게 짓는다. 같은 "잔액 감소"라도 `MoneyWithdrawn`(고객이 출금), `FeeCharged`(수수료 차감), `ChargebackApplied`(카드 차지백)는 다른 사건이다. 나중에 "지난달 수수료 합계"를 묻는 화면이 생겨도 사건이 이미 구분돼 있으니 프로젝터 하나로 답할 수 있다.
+
+저장된 사건 한 줄에 무엇이 들어가는지 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="events 테이블의 한 줄"
+  base="events"
+  separator=": "
+  joiner=" | "
+  params={[
+    { key: "global_position", value: "5", title: "전체 순서", description: "모든 스트림을 통틀은 번호다. 구독자는 마지막으로 읽은 위치를 기억하고 그 뒤를 읽는다. bigserial은 번호를 받은 순서와 커밋 순서가 달라 늦게 커밋된 사건을 건너뛸 수 있으니, 구독 방법은 아래 본문을 본다.", required: true },
+    { key: "stream_id", value: "account-1001", title: "어느 대상의 사건인가", description: "동시성 검사와 재생의 단위다. 이 경계가 곧 한 번에 지킬 수 있는 규칙의 범위다.", required: true },
+    { key: "version", value: "5", title: "스트림 안의 순서", description: "1부터 빈틈없이 는다. (stream_id, version)에 UNIQUE를 걸어 낙관적 동시성 검사를 DB가 하게 한다.", required: true },
+    { key: "type", value: "MoneyWithdrawn", title: "무슨 일이 있었나", description: "업무의 말로, 과거형으로 짓는다. 이름을 바꾸면 옛 사건을 못 읽으니 한번 정한 이름은 바꾸지 않는다.", required: true },
+    { key: "data", value: "{amount: 30000}", title: "사건의 내용", description: "그 사건을 이해하는 데 필요한 값만 담는다. 나중에 다시 읽을 때 다른 테이블의 현재 값을 참조하지 않아도 되게 한다." },
+    { key: "metadata", value: "{schemaVersion: 1, causationId, userId}", title: "사건에 대한 정보", description: "데이터 형식의 버전, 이 사건을 일으킨 명령이나 앞 사건의 ID, 요청한 사람. 형식이 바뀌었을 때와 장애를 추적할 때 쓴다." },
+  ]}
+/>
+
+`global_position`의 함정은 [트랜잭셔널 아웃박스](/posts/transactional-outbox)의 릴레이가 겪는 것과 같다. 번호를 먼저 받은 트랜잭션이 늦게 커밋하면, "마지막으로 읽은 번호 뒤만 읽는" 구독자는 그 사건을 영영 건너뛴다. 실제 재현과 `pg_snapshot_xmin`으로 막는 방법은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)의 "아웃박스를 id 순서로 읽으면 이벤트가 빠진다" 절에 있다. 이벤트 저장소 전용 제품(EventStoreDB 같은)은 커밋 순서대로 전역 위치를 매겨서 이 문제가 없다. PostgreSQL에 직접 만든다면 그 처리를 직접 해야 한다.
+
+## 10만 건을 매번 접을 수는 없다
+
+계좌 하나에 사건이 수십 개일 때는 매번 처음부터 접어도 된다. 가게 정산 계좌처럼 하루에 수백 건씩 쌓이는 스트림은 다르다. 사건 10만 건짜리 스트림을 만들고 읽는 시간을 쟀다(다섯 번 재서 중앙값).
+
+```text
+full: { state: { opened: true, balance: 43332500 }, version: 100000 }
+load 100000 events         median 716.8ms
+```
+
+명령 하나를 처리할 때마다 0.7초다. 그래서 일정 버전마다 접은 상태를 스냅숏(snapshot)으로 저장해 두고, 읽을 때는 스냅숏에서 출발해 그 뒤의 사건만 접는다.
+
+```sql
+CREATE TABLE snapshots (stream_id text PRIMARY KEY, version int NOT NULL, state jsonb NOT NULL);
+```
+
+```ts
+async function loadWithSnapshot(id: string) {
+  const snap = await db.query("SELECT version, state FROM snapshots WHERE stream_id = $1", [id]);
+  let state = snap.rows[0]?.state ?? initial;
+  let version = snap.rows[0]?.version ?? 0;
+  // 스냅숏 뒤의 사건만 읽어 접는다
+  const tail = await db.query(
+    "SELECT version, type, data FROM events WHERE stream_id = $1 AND version > $2 ORDER BY version",
+    [id, version]);
+  for (const r of tail.rows) { state = evolve(state, { type: r.type, ...r.data }); version = r.version; }
+  return { state, version, replayed: tail.rows.length };
+}
+```
+
+```text
+snap: {
+  state: { opened: true, balance: 43332500 },
+  version: 100000,
+  replayed: 500
+}
+snapshot + 500 events      median 7.6ms
+```
+
+99500번까지 접은 스냅숏에서 출발해 500건만 접으니 7.6ms다. 결과는 처음부터 접은 것과 같다. 아래 그림이 두 방식의 차이를 보여 준다.
+
+<AlgoTrace
+  caption="스냅숏에서 출발하면 뒤의 사건만 접는다"
+  cells={["v1", "…", "v99500", "v99501", "…", "v100000"]}
+  memoryLabel="접은 상태"
+  steps={[
+    { caption: "스냅숏이 없으면 v1부터 시작한다. 10만 번 evolve를 부른다.", memory: ["잔액 0", "v0"] },
+    { pointer: 2, found: [0, 1, 2], caption: "99500번까지 접은 상태를 저장해 둔 게 스냅숏이다. 이 상태를 한 번에 읽어 온다.", memory: ["스냅숏", "v99500"] },
+    { pointer: 3, found: [0, 1, 2], caption: "스냅숏 뒤의 첫 사건부터 접는다.", memory: ["스냅숏+1", "v99501"] },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], caption: "500건만 접고 끝났다. 처음부터 접은 결과와 같다.", memory: ["잔액 43332500", "v100000"] },
+  ]}
+/>
+
+스냅숏은 원본이 아니라 캐시다. 언제든 지워도 사건에서 다시 만들 수 있어야 한다. 그래서 `evolve`가 바뀌어 상태의 모양이 달라지면 옛 스냅숏을 버리고 다시 만든다. 스냅숏에 상태 모양의 버전을 같이 저장해 두고, 버전이 다르면 무시하고 처음부터 접게 하면 배포 때 실수가 없다.
+
+스냅숏을 쓰기 전에 스트림이 왜 이렇게 긴지 먼저 묻는다. 정산 계좌라면 "월말 마감"이 업무에 이미 있다. 달이 끝나면 `PeriodClosed { closingBalance }`를 쓰고 다음 달은 새 스트림에서 시작하면, 스냅숏 없이도 스트림이 한 달치로 짧게 유지된다. 업무에 있는 경계를 찾는 쪽이 스냅숏보다 단순하다.
+
+## 3년 전 형식의 사건을 오늘 코드로 읽기
+
+사건은 지우거나 고치지 않는다. 그런데 코드는 바뀐다. 처음에는 원화만 다뤄서 입금 사건이 `{ amount: 50000 }`이었다. 외화 계좌가 생기면서 `{ amount, currency }`가 됐고, 그다음에는 금액을 묶고 입금 경로를 넣어 `{ money: { value, currency }, channel }`이 됐다. 이벤트 저장소에는 세 형식이 섞여 있다. 오늘의 `evolve`는 셋을 모두 읽어야 한다.
+
+가장 흔한 방법은 업캐스팅(upcasting)이다. 읽을 때 옛 형식의 사건을 최신 형식으로 바꿔서 도메인 코드에 넘긴다. 변환은 "n에서 n+1로"만 적고, 최신 버전이 될 때까지 차례로 적용한다.
+
+```ts
+type Stored = { type: string; schemaVersion: number; data: any };
+
+const upcasters: Record<string, Record<number, (d: any) => any>> = {
+  MoneyDeposited: {
+    1: (d) => ({ ...d, currency: "KRW" }),   // v1 → v2: 그때는 원화뿐이었다
+    2: (d) => ({ money: { value: d.amount, currency: d.currency }, channel: "unknown" }), // v2 → v3
+  },
+};
+const latest: Record<string, number> = { MoneyDeposited: 3 };
+
+export function upcast(e: Stored): Stored {
+  let { schemaVersion, data } = e;
+  while (schemaVersion < (latest[e.type] ?? schemaVersion)) {
+    data = upcasters[e.type][schemaVersion](data);
+    schemaVersion += 1;
+  }
+  return { type: e.type, schemaVersion, data };
+}
+```
+
+```text
+v1 -> {"type":"MoneyDeposited","schemaVersion":3,"data":{"money":{"value":50000,"currency":"KRW"},"channel":"unknown"}}
+v2 -> {"type":"MoneyDeposited","schemaVersion":3,"data":{"money":{"value":120,"currency":"USD"},"channel":"unknown"}}
+v3 -> {"type":"MoneyDeposited","schemaVersion":3,"data":{"money":{"value":3000,"currency":"KRW"},"channel":"app"}}
+v1 -> {"type":"AccountOpened","schemaVersion":1,"data":{"owner":"kim"}}
+```
+
+v1 사건은 두 단계를 거쳐 v3가 됐다. 통화는 그 시절의 사실대로 `KRW`로, 입금 경로는 당시 기록이 없으니 `unknown`으로 채웠다. 없던 정보를 그럴듯하게 지어 넣지 않고 "모른다"로 남기는 게 원칙이다. 아래 그림이 변환 사슬이다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="저장된 형식은 그대로 두고, 읽을 때 한 단계씩 올린다"
+  nodes={[
+    { id: "v1", label: "v1", sub: "{ amount }", x: 70, y: 50, w: 110 },
+    { id: "v2", label: "v2", sub: "{ amount, currency }", x: 200, y: 50, w: 150 },
+    { id: "v3", label: "v3", sub: "{ money, channel }", x: 330, y: 50, w: 130 },
+    { id: "store", label: "이벤트 저장소", sub: "v1·v2·v3 섞여 있음", x: 110, y: 190, w: 160 },
+    { id: "dom", label: "evolve", sub: "v3만 안다", x: 310, y: 190, w: 110 },
+  ]}
+  edges={[
+    { from: "v1", to: "v2", label: "+KRW" },
+    { from: "v2", to: "v3", label: "묶기" },
+    { from: "store", to: "v1", dashed: true },
+    { from: "v3", to: "dom" },
+  ]}
+/>
+
+업캐스팅으로 안 되는 변경도 있다. 사건 하나를 둘로 쪼개거나, 잘못 설계된 사건 여러 개를 합쳐야 할 때다. 그럴 때는 스트림을 새 형식으로 복사하면서 변환하고(copy-and-transform), 다 옮긴 뒤 옛 스트림을 보관용으로 돌린다. 무겁고 위험하니 최후의 수단이다. 평소에는 필드를 추가만 하고, 이름 바꾸기나 삭제는 새 사건 타입을 만드는 쪽을 고른다. 이벤트 스키마를 호환되게 바꾸는 규칙은 [스키마 버전 관리](/posts/schema-versioning)에서 다룬다.
+
+직접 짜 보자. 입금 사건은 v3까지, 출금 사건은 v2까지 있다. 출금 v1 → v2는 입금과 같이 `currency: "KRW"`를 더한다. 변환이 없는 타입은 그대로 돌려준다.
+
+<CodePlayground
+  caption="옛 형식의 사건을 최신으로 올리기"
+  functionName="upcast"
+  initialCode={`function upcast(event) {
+  // event: { type, schemaVersion, data }
+  // MoneyDeposited v1 → v2: { ...data, currency: "KRW" }
+  // MoneyDeposited v2 → v3: { money: { value: amount, currency }, channel: "unknown" }
+  // MoneyWithdrawn v1 → v2: { ...data, currency: "KRW" }
+  // 변환이 없는 타입은 그대로 돌려준다
+  return event;
+}`}
+  solution={`function upcast(event) {
+  const steps = {
+    MoneyDeposited: {
+      1: (d) => ({ ...d, currency: "KRW" }),
+      2: (d) => ({ money: { value: d.amount, currency: d.currency }, channel: "unknown" }),
+    },
+    MoneyWithdrawn: {
+      1: (d) => ({ ...d, currency: "KRW" }),
+    },
+  };
+  const chain = steps[event.type] || {};
+  let { schemaVersion, data } = event;
+  while (chain[schemaVersion]) {
+    data = chain[schemaVersion](data);
+    schemaVersion += 1;
+  }
+  return { type: event.type, schemaVersion, data };
+}`}
+  tests={[
+    {
+      label: "입금 v1",
+      args: [{ type: "MoneyDeposited", schemaVersion: 1, data: { amount: 50000 } }],
+      expected: { type: "MoneyDeposited", schemaVersion: 3, data: { money: { value: 50000, currency: "KRW" }, channel: "unknown" } },
+    },
+    {
+      label: "입금 v2 (달러)",
+      args: [{ type: "MoneyDeposited", schemaVersion: 2, data: { amount: 120, currency: "USD" } }],
+      expected: { type: "MoneyDeposited", schemaVersion: 3, data: { money: { value: 120, currency: "USD" }, channel: "unknown" } },
+    },
+    {
+      label: "입금 v3는 그대로",
+      args: [{ type: "MoneyDeposited", schemaVersion: 3, data: { money: { value: 3000, currency: "KRW" }, channel: "app" } }],
+      expected: { type: "MoneyDeposited", schemaVersion: 3, data: { money: { value: 3000, currency: "KRW" }, channel: "app" } },
+    },
+    {
+      label: "출금 v1",
+      args: [{ type: "MoneyWithdrawn", schemaVersion: 1, data: { amount: 12000 } }],
+      expected: { type: "MoneyWithdrawn", schemaVersion: 2, data: { amount: 12000, currency: "KRW" } },
+    },
+    {
+      label: "변환 없는 타입",
+      args: [{ type: "AccountOpened", schemaVersion: 1, data: { owner: "kim" } }],
+      expected: { type: "AccountOpened", schemaVersion: 1, data: { owner: "kim" } },
+    },
+  ]}
+/>
+
+## 지울 수 없는 기록에서 개인정보를 지우는 법
+
+사건을 고치지 않는다는 원칙은 개인정보 삭제 요청(GDPR의 삭제권 같은)과 정면으로 부딪힌다. `AccountOpened`에 이름과 전화번호가 들어 있으면, 지우려면 사건을 고쳐야 한다.
+
+자주 쓰는 방법은 크립토 셰딩(crypto-shredding)이다. 개인정보는 사람마다 다른 키로 암호화해서 사건에 넣고, 키는 이벤트 저장소 밖(KMS나 별도 키 테이블)에 둔다. 삭제 요청이 오면 사건은 그대로 두고 그 사람의 키만 지운다. 암호문은 남지만 아무도 풀 수 없다.
+
+```ts
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+
+const keys = new Map<string, Buffer>();     // 실제로는 KMS나 별도 키 테이블
+const keyFor = (userId: string) => {
+  if (!keys.has(userId)) keys.set(userId, randomBytes(32));
+  return keys.get(userId)!;
+};
+
+function seal(userId: string, plain: string) {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", keyFor(userId), iv);
+  const body = Buffer.concat([c.update(plain, "utf8"), c.final()]);
+  return { kid: userId, iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), body: body.toString("base64") };
+}
+function open(p: ReturnType<typeof seal>) {
+  const key = keys.get(p.kid);
+  if (!key) return "[erased]";               // 키가 없으면 풀 방법이 없다
+  const d = createDecipheriv("aes-256-gcm", key, Buffer.from(p.iv, "base64"));
+  d.setAuthTag(Buffer.from(p.tag, "base64"));
+  return Buffer.concat([d.update(Buffer.from(p.body, "base64")), d.final()]).toString("utf8");
+}
+
+const events = [
+  { version: 1, type: "AccountOpened", data: { owner: seal("user-42", "김민지"), phone: seal("user-42", "010-1234-5678") } },
+  { version: 2, type: "MoneyDeposited", data: { amount: 50000 } },
+];
+console.log("stored :", JSON.stringify(events[0].data.owner));
+console.log("before :", open(events[0].data.owner), open(events[0].data.phone), events[1].data.amount);
+keys.delete("user-42");                       // 삭제 요청: 사건은 그대로 두고 키만 버린다
+console.log("after  :", open(events[0].data.owner), open(events[0].data.phone), events[1].data.amount);
+```
+
+```text
+stored : {"kid":"user-42","iv":"6HaWttjx+9oQOQ7U","tag":"fUriU+IpfdJx6hdMTSGHrw==","body":"XMzi4Iska1Hc"}
+before : 김민지 010-1234-5678 50000
+after  : [erased] [erased] 50000
+```
+
+키를 지운 뒤에도 사건은 그대로 읽히고, 금액처럼 개인정보가 아닌 값으로 잔액은 여전히 복원된다. 이름과 전화번호만 `[erased]`가 됐다.
+
+<Callout kind="warning">
+키를 지워도 이미 복호화된 사본은 남는다. 읽기 모델, 검색 색인, 로그, 백업, 다른 서비스로 보낸 이벤트에 평문이 들어 있다면 그것들도 따로 지워야 한다. 그래서 개인정보는 처음부터 사건에 넣지 않고 별도 저장소의 ID만 넣는 방법도 함께 검토한다. 법적으로 무엇이 "삭제"로 인정되는지는 서비스마다 법무 검토가 필요하다.
+</Callout>
+
+## 하나의 사건 흐름, 여러 개의 읽기 모델
+
+상태 테이블이 없으니 "잔액 1000만 원 이상인 계좌 목록" 같은 조회는 사건 저장소에 직접 할 수 없다. 사건을 구독해 화면마다 읽기 모델을 만든다. 같은 사건 흐름에서 여러 모델이 각자의 체크포인트로 따라 읽는다.
+
+<NetworkTopology
+  caption="하나의 사건 흐름에서 읽기 모델 여럿이 갈라진다"
+  width={400}
+  height={280}
+  zones={[{ id: "rm", label: "Read models", x: 215, y: 15, w: 175, h: 255, tone: "public" }]}
+  nodes={[
+    { id: "cmd", label: "Cmd handler", x: 80, y: 60, icon: "server", w: 110 },
+    { id: "es", label: "events", sub: "pos 1..N", x: 80, y: 170, icon: "db" },
+    { id: "bal", label: "balances", x: 300, y: 60, icon: "db" },
+    { id: "stmt", label: "statements", x: 300, y: 140, icon: "db", w: 104 },
+    { id: "fraud", label: "fraud v2", sub: "rebuilding", x: 300, y: 225, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "cmd", to: "es" },
+    { from: "es", to: "bal" },
+    { from: "es", to: "stmt" },
+    { from: "es", to: "fraud", dashed: true },
+  ]}
+  steps={[
+    { path: ["cmd", "es"], packet: "Withdrawn", title: "사건이 하나 쌓인다", detail: "명령 처리기는 사건 저장소에만 쓴다. 읽기 모델이 몇 개인지 모른다." },
+    { path: ["es", "bal"], packet: "pos 5", title: "잔액 목록이 따라 읽는다", detail: "계좌별 현재 잔액 테이블. 체크포인트를 5로 올린다." },
+    { path: ["es", "stmt"], packet: "pos 5", title: "거래 내역서도 따라 읽는다", detail: "같은 사건을 월별 내역서 모양으로 쌓는다. 자기만의 체크포인트가 있다." },
+    { path: ["es", "fraud"], packet: "pos 1", highlight: ["fraud"], title: "새 모델은 처음부터 다시 흘린다", detail: "이상 거래 탐지 v2를 새로 만들었다. 사건 1번부터 재생해서 과거 데이터까지 채운 뒤 따라잡는다. 기존 모델은 영향이 없다." },
+  ]}
+/>
+
+마지막 단계는 상태만 저장하는 시스템이 흉내 내기 어려운 부분이다. 새 질문이 생기면 과거의 모든 사건으로 답을 만들 수 있다. 상태만 저장했다면 새 화면을 만들어도 오늘부터의 데이터만 쌓인다. 대신 재생은 느리다. 사건이 수억 건이면 새 읽기 모델 하나 만드는 데 몇 시간이 걸리니, 재생 속도(초당 사건 수)를 미리 재 두고 배치 크기를 키우거나 스트림별로 나눠 병렬로 돌린다. 읽기 모델을 만들고 지연을 다루는 방법은 [CQRS](/posts/cqrs)에 있다.
+
+## 잘못 쌓인 사건은 고치지 않고 바로잡는 사건을 쓴다
+
+버그로 수수료가 두 번 빠졌다. 상태 테이블이라면 잔액을 고치면 끝이다. 이벤트 소싱에서는 `FeeCharged` 사건을 지우지 않고 `FeeRefunded { reason: "duplicate charge, incident 2026-10-20" }`를 새로 쓴다. 회계 장부에서 틀린 줄을 지우개로 지우지 않고 반대 분개를 하는 것과 같다. 이력이 그대로 남으니 "그때 고객 화면에 왜 잔액이 적게 보였나"에도 답할 수 있다.
+
+사건 저장소에 직접 `UPDATE`나 `DELETE`를 하고 싶은 순간이 온다. 하지 않는다. 이미 그 사건을 읽은 읽기 모델과 다른 서비스는 고쳐진 사실을 모르고, 스냅숏도 옛 값으로 남는다. DB 권한으로 막아 두는 것도 방법이다. 앱 계정에는 `events`에 `INSERT`와 `SELECT`만 준다.
+
+현장에서 "잔액이 이상하다"는 문의가 오면, 그 스트림을 처음부터 다시 접어 본 값과 읽기 모델의 값을 비교하는 것부터 한다. 둘이 다르면 프로젝션 문제이고, 둘이 같은데 고객 말과 다르면 사건 자체를 하나씩 읽는다. `metadata`의 `causationId`와 요청자를 따라가면 어떤 요청이 그 사건을 만들었는지 나온다. 이 추적이 가능하다는 것 자체가 이벤트 소싱을 고르는 이유가 되기도 한다.
+
+## 이벤트 소싱이 짐이 될 때
+
+이력이 업무의 중심이 아니면 얻는 게 적다. 회원 프로필, 게시글, 설정처럼 "지금 값"만 중요한 데이터에 이벤트 소싱을 걸면, 업캐스팅과 스냅숏과 읽기 모델이라는 비용만 남는다. 감사 기록이 필요하다면 상태 테이블에 변경 이력 테이블을 트리거로 붙이거나 CDC로 흘리는 편이 가볍다.
+
+조회가 많은 화면이 대부분인데 팀이 결과적 일관성을 다뤄 본 적이 없다면 위험하다. 모든 조회가 읽기 모델을 거치니 "방금 바꿨는데 안 보인다"가 서비스 전체에서 생긴다.
+
+그리고 시스템 전체를 이벤트 소싱으로 짤 필요는 없다. 원장, 포인트, 재고 이동, 주문 상태 변화처럼 이력이 곧 업무인 부분에만 쓰고 나머지는 평범한 테이블로 둔다. 직접 만들 수도 있고, PostgreSQL 위에 이벤트 저장소를 얹는 라이브러리(.NET의 Marten 같은)나 전용 저장소(EventStoreDB), 프레임워크(Java의 Axon)를 쓸 수도 있다. 어느 쪽이든 `decide`와 `evolve`의 모양, 스트림 경계, 사건 이름은 직접 정해야 한다.
+
+## 기록이 원본일 때 생기는 일
+
+이벤트 소싱은 일어난 일을 원본으로 저장하고 상태를 계산 결과로 돌린다. 그 덕에 과거 시점의 상태와 새 화면을 과거 데이터로 만들 수 있고, 이력과 상태가 어긋나지 않는다. 대신 긴 스트림은 스냅숏으로, 바뀌는 형식은 업캐스팅으로, 개인정보는 키 폐기로, 조회는 읽기 모델로 따로 풀어야 한다. 이력이 업무 그 자체인 곳에만 이 비용을 낸다.
+
+## 면접에서 나올 만한 질문
+
+### 이벤트 소싱이 무엇이고 일반적인 상태 저장과 무엇이 다른가요?
+
+상태를 덮어쓰지 않고 상태를 바꾼 사건을 차례로 저장하고, 현재 상태는 사건을 처음부터 접어서 얻는 방식이다. 상태 저장은 마지막 값만 남지만 이벤트 소싱은 무엇이 왜 바뀌었는지가 원본으로 남는다. 그래서 과거 시점의 상태를 다시 만들 수 있고, 이력 테이블을 따로 쓸 때처럼 이력과 상태가 어긋나는 일이 없다.
+
+### 두 요청이 같은 계좌에서 동시에 출금하면 어떻게 막나요?
+
+스트림의 버전으로 낙관적 동시성 검사를 한다. 각 요청은 읽은 버전 바로 다음 번호로 사건을 붙이고, (stream_id, version)의 유일 제약이 둘 중 하나를 막는다. 진 쪽은 저장만 다시 하는 게 아니라 스트림을 다시 읽고 decide부터 다시 해야 바뀐 잔액으로 판단한다.
+
+### 사건이 너무 많이 쌓이면 어떻게 하나요?
+
+일정 버전마다 접은 상태를 스냅숏으로 저장하고, 스냅숏 뒤의 사건만 접는다. 예제에서는 10만 건 재생이 717ms, 스냅숏에서 500건만 접으니 7.6ms였다. 스냅숏은 캐시라서 상태 모양이 바뀌면 버리고 다시 만든다. 그 전에 월말 마감처럼 업무에 있는 경계로 스트림을 짧게 끊을 수 있는지 먼저 본다.
+
+### 사건의 형식이 바뀌면 옛 사건은 어떻게 읽나요?
+
+읽을 때 옛 형식을 최신 형식으로 바꾸는 업캐스팅을 쓴다. 타입마다 n에서 n+1로 가는 변환만 적어 두고 최신 버전까지 차례로 적용하며, 당시 없던 정보는 지어내지 않고 unknown 같은 값으로 둔다. 사건을 쪼개거나 합쳐야 하는 큰 변경은 스트림을 변환하며 복사하는 방법을 쓰지만 위험해서 최후의 수단이다.
+
+### 사건을 지울 수 없는데 개인정보 삭제 요청은 어떻게 처리하나요?
+
+개인정보를 사람마다 다른 키로 암호화해 사건에 넣고, 삭제 요청이 오면 키를 지우는 크립토 셰딩을 쓴다. 사건은 그대로 읽히지만 그 필드만 복호화할 수 없게 된다. 읽기 모델, 로그, 백업처럼 이미 평문으로 퍼진 사본은 따로 지워야 하니, 개인정보는 아예 사건 밖에 두고 ID만 넣는 방법도 함께 검토한다.
+
+### 잘못 기록된 사건은 어떻게 고치나요?
+
+사건을 수정하거나 삭제하지 않고, 바로잡는 사건을 새로 쓴다. 수수료가 두 번 빠졌다면 FeeRefunded를 추가하는 식이다. 이미 그 사건을 읽은 읽기 모델과 다른 서비스, 스냅숏이 고쳐진 사실을 모르기 때문이고, 이력이 남아야 과거의 화면도 설명할 수 있다.
+
+### 이벤트 소싱과 이벤트 기반 아키텍처는 같은 건가요?
+
+다르다. 이벤트 기반 아키텍처는 서비스 사이에서 사건을 알리는 통신 방식이고, 이벤트 소싱은 한 서비스가 자기 상태를 저장하는 방식이다. 이벤트 소싱을 하는 서비스가 저장한 사건을 그대로 바깥에 내보낼 수도 있지만, 내부 사건의 형식이 외부 계약이 되어 바꾸기 어려워지니 보통은 외부용 사건을 따로 정한다.
+
+### 이벤트 소싱을 쓰지 말아야 할 곳은 어디인가요?
+
+지금 값만 중요하고 이력이 업무가 아닌 데이터다. 회원 프로필이나 설정에 걸면 스냅숏, 업캐스팅, 읽기 모델 같은 비용만 늘어난다. 감사 기록만 필요하면 트리거로 변경 이력을 남기거나 CDC로 흘리는 편이 가볍고, 이벤트 소싱은 원장이나 재고 이동처럼 이력이 곧 업무인 부분에만 부분적으로 쓴다.

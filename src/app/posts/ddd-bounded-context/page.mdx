@@ -1,0 +1,482 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ddd-bounded-context");
+
+정산 리포트의 매출이 판매 대시보드보다 매달 조금씩 크다. 원인을 따라가 보니 "취소"라는 단어였다. 판매 쪽 코드에서 취소는 결제 전에 장바구니 주문을 버리는 것이다. 정산 쪽 코드에서 취소는 결제 후 환불까지 끝난 거래다. 두 팀은 같은 `orders.status = 'CANCELLED'`를 보고 서로 다른 것을 셌다. 코드에는 버그가 없었다. 단어 하나가 두 뜻으로 쓰이고 있었을 뿐이다.
+
+도메인 주도 설계(Domain-Driven Design, DDD)는 이런 문제를 업무의 말에서부터 푼다. 에릭 에반스가 2003년 같은 이름의 책으로 정리했다. 이 글은 그중 가장 쓸모가 큰 두 가지를 다룬다. 말의 경계를 긋는 바운디드 컨텍스트(bounded context)와, 함께 지켜야 하는 규칙의 범위를 정하는 애그리거트(aggregate)다.
+
+이 경계를 서비스 단위로 쓰는 이야기는 [마이크로서비스 글](/posts/microservices)과 [마이크로서비스 분해 글](/posts/microservices-decomposition)에, 한 배포 안에서 모듈로 쓰는 이야기는 [모듈러 모놀리스 글](/posts/modular-monolith)에 있다. 여기서는 경계를 어떻게 찾고, 경계 안팎에서 무엇이 달라지는지를 본다. 예제는 Node 22(TypeScript 타입 지우기)와 PostgreSQL 16으로 돌렸다.
+
+## 한 단어가 한 뜻으로 쓰이는 울타리
+
+바운디드 컨텍스트는 어떤 모델과 그 모델의 단어들이 하나의 뜻으로 통하는 범위다. 범위 안에서 "취소"는 한 가지 뜻만 가진다. 범위 밖에서는 다른 뜻이어도 된다. 대신 경계를 넘을 때는 반드시 번역한다.
+
+처음 장면에 이 생각을 대 보면, 판매 컨텍스트의 "주문 취소"와 정산 컨텍스트의 "거래 취소"는 이름부터 다른 개념이다. 하나의 `status` 컬럼에 둘을 함께 담은 게 버그의 뿌리다. 판매는 `abandoned`, 정산은 `refunded`처럼 각자의 말로 이름을 붙이고, 판매에서 정산으로 넘어가는 지점에서 "결제가 끝난 주문이 환불됐다"는 사건으로 번역하면 두 리포트는 더 이상 같은 행을 다르게 세지 않는다.
+
+여기서 컨텍스트는 코드의 범위다. 저장소 하나, 모듈 하나, 서비스 하나가 될 수 있다. 한 팀이 여러 컨텍스트를 맡을 수는 있지만, 한 컨텍스트를 여러 팀이 나눠 맡으면 단어의 뜻이 다시 흔들리기 시작한다.
+
+## 코드에 그 말을 그대로 쓴다
+
+에반스는 한 컨텍스트 안에서 개발자와 업무 담당자가 같은 단어를 쓰고, 그 단어가 그대로 코드에 들어가야 한다고 했다. 이걸 유비쿼터스 언어(ubiquitous language)라고 부른다.
+
+말이 코드와 다르면 번역이 사람 머릿속에서 일어난다. 기획서에는 "출고 보류"인데 코드에는 `status = 3`이고, 회의에서는 "홀드"라고 부른다. 셋이 같은 뜻인지 매번 확인해야 하고, 누군가는 틀린다. 컨텍스트 안의 용어집을 짧게라도 적어 두고, 클래스와 함수 이름, 이벤트 이름을 그 용어로 짓는다.
+
+```ts
+// 말과 코드가 어긋난 모습
+if (order.status === 3 && order.flag2) { order.status = 5; }
+
+// 배송 컨텍스트의 말을 그대로 쓴 모습
+if (shipment.isOnHold() && shipment.addressVerified) { shipment.release(); }
+```
+
+용어가 바뀌면 코드 이름도 바꾼다. 업무에서 "보류"를 "검수 대기"로 부르기 시작했다면 그건 개념이 바뀌었다는 신호일 수 있다. 이름만 바꾸지 말고 규칙도 같이 바뀌었는지 묻는다.
+
+## 상품 하나, 모델 셋
+
+같은 상품 `p-100`(사무용 의자)이 컨텍스트마다 다르게 보인다. 카탈로그에게는 이름과 사진과 설명, 배송에게는 무게와 파손 위험, 정산에게는 과세 구분이다. 이걸 컬럼 80개짜리 `products` 테이블 하나로 공유하면, 배송 팀이 `fragile` 컬럼의 뜻을 바꿀 때 카탈로그 화면이 흔들린다.
+
+<ConceptDiagram
+  caption="같은 ID, 컨텍스트마다 다른 모델"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "id", label: "p-100", sub: "공유하는 건 ID뿐", x: 200, y: 125, w: 130, h: 46 },
+    { id: "cat", label: "Catalog", sub: "이름, 사진, 설명", x: 90, y: 40, w: 140, h: 46 },
+    { id: "ship", label: "Shipping", sub: "6200g, 파손 위험 없음", x: 300, y: 40, w: 160, h: 46 },
+    { id: "bill", label: "Billing", sub: "과세 상품", x: 200, y: 215, w: 130, h: 46 },
+  ]}
+  edges={[
+    { from: "cat", to: "id", label: "id" },
+    { from: "ship", to: "id", label: "id" },
+    { from: "bill", to: "id", label: "id" },
+  ]}
+/>
+
+컨텍스트마다 폴더를 나누고, 판매가 내보내는 주문 이벤트를 각자 자기 말로 바꿔 받게 짰다.
+
+```ts
+// sales/events.ts: 판매 컨텍스트가 바깥에 약속한 이벤트 모양
+export type OrderPlacedV1 = {
+  type: "OrderPlaced"; version: 1;
+  orderId: string; customerId: string; placedAt: string;
+  lines: { productId: string; qty: number; unitPrice: number }[];
+};
+
+// shipping/on-order-placed.ts: 여기서 '상품'은 무게와 파손 위험이다
+const parcels: Record<string, Parcel> = {
+  "p-100": { weightG: 6200, fragile: false },
+  "p-200": { weightG: 900, fragile: true },
+};
+export function toShipment(e: OrderPlacedV1): Shipment {
+  const items = e.lines.map((l) => ({ p: parcels[l.productId], qty: l.qty }));
+  return {
+    shipmentId: `shp-${e.orderId}`,
+    orderId: e.orderId,
+    totalWeightG: items.reduce((s, i) => s + i.p.weightG * i.qty, 0),
+    needsBubbleWrap: items.some((i) => i.p.fragile),
+  };
+}
+
+// billing/on-order-placed.ts: 여기서 '상품'은 과세 구분이다
+const taxType: Record<string, "TAXABLE" | "EXEMPT"> = { "p-100": "TAXABLE", "p-200": "EXEMPT" };
+export function toInvoice(e: OrderPlacedV1): Invoice {
+  let taxableGross = 0, exempt = 0;
+  for (const l of e.lines) {
+    const amount = l.qty * l.unitPrice;
+    if (taxType[l.productId] === "TAXABLE") taxableGross += amount; else exempt += amount;
+  }
+  const supplyAmount = Math.round(taxableGross / 1.1);   // 부가세 포함 금액에서 공급가액을 뺀다
+  return { invoiceNo: `INV-${e.placedAt.slice(0, 10)}-${e.orderId}`, orderId: e.orderId,
+           supplyAmount, vat: taxableGross - supplyAmount, exempt };
+}
+```
+
+의자 한 개(189,000원)와 면세인 종이 상자 두 개(개당 12,000원)를 주문한 이벤트 하나를 두 컨텍스트에 넣었다.
+
+```text
+shipping: {
+  shipmentId: 'shp-o-731',
+  orderId: 'o-731',
+  totalWeightG: 8000,
+  needsBubbleWrap: true
+}
+billing:  {
+  invoiceNo: 'INV-2026-10-21-o-731',
+  orderId: 'o-731',
+  supplyAmount: 171818,
+  vat: 17182,
+  exempt: 24000
+}
+```
+
+배송은 6200g + 900g × 2 = 8000g을 계산하고, 파손 위험이 있는 상자 때문에 완충재가 필요하다고 본다. 정산은 189,000원을 1.1로 나눠 공급가액 171,818원과 부가세 17,182원으로 가르고, 상자 24,000원은 면세로 따로 둔다. 어느 쪽도 상대의 모델을 import하지 않는다. 둘이 함께 아는 것은 판매가 약속한 이벤트 모양뿐이다.
+
+그 이벤트 모양 자체가 컨텍스트 사이의 계약이다. 아래 조각을 누르면 필드마다 누가 무엇에 쓰는지 나온다.
+
+<UrlAnatomy
+  caption="OrderPlacedV1에 담은 것과 담지 않은 것"
+  base="OrderPlaced"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "version", value: "1", title: "계약의 버전", description: "받는 쪽이 여럿이라 필드를 바꾸려면 V2를 함께 내보내는 기간이 필요하다. 버전이 없으면 언제 바뀌었는지도 모른다." },
+    { key: "orderId", value: "o-731", title: "판매 애그리거트의 ID", description: "배송과 정산은 이 ID로만 판매의 주문을 가리킨다. 주문 객체 전체를 공유하지 않는다." },
+    { key: "customerId", value: "c-42", title: "다른 컨텍스트의 ID", description: "고객 정보 자체는 담지 않았다. 배송지가 필요하면 배송 컨텍스트가 회원 쪽에서 받아 둔 자기 사본을 본다." },
+    { key: "lines", value: "[…]", title: "상품 ID, 수량, 단가", description: "단가는 주문 시점의 값이라 함께 싣는다. 무게나 과세 구분은 판매의 개념이 아니라서 싣지 않는다.", code: "{ productId: \"p-100\", qty: 1, unitPrice: 189000 }" },
+    { key: "placedAt", value: "2026-10-21T03:15:00Z", title: "사건이 일어난 시각", description: "받은 시각이 아니라 일어난 시각이다. 정산은 이 날짜로 전표 번호를 만든다. 늦게 도착해도 날짜가 흔들리지 않는다." },
+  ]}
+/>
+
+같은 계약에서 실제로 자주 터지는 장면이 하나 있다. 카탈로그에 막 등록된 `p-300`이 주문에 들어왔는데, 배송 컨텍스트는 아직 그 상품의 무게를 받지 못했다.
+
+```text
+TypeError: Cannot read properties of undefined (reading 'weightG')
+    at file:///.../shipping/on-order-placed.ts:18:50
+```
+
+번역하는 쪽이 "모르는 ID"를 다루지 않았기 때문이다. 컨텍스트 사이 데이터는 결국에는 맞춰지는 관계라서, 늦게 도착하는 정보를 전제로 짜야 한다. 이 경우엔 배송을 "무게 확인 필요" 상태로 만들고 상품 정보가 도착하면 다시 계산하거나, 처리하지 못한 이벤트를 따로 모아 다시 돌린다. 그 장치는 [데드 레터 큐 글](/posts/dead-letter-queue)에 있다.
+
+## 문제의 지도와 해법의 지도
+
+DDD에는 비슷해 보이는 말이 둘 있다. 하위 도메인(subdomain)은 업무 자체를 나눈 것이고, 바운디드 컨텍스트는 그 업무를 위해 만든 모델과 코드의 경계다. 앞의 것은 문제의 지도, 뒤의 것은 해법의 지도다. 둘이 1대1이면 깔끔하지만 늘 그렇지는 않다. 오래된 시스템 하나가 여러 하위 도메인을 품고 있는 경우가 흔하다.
+
+하위 도메인은 투자할 곳을 고르는 데 쓴다. 핵심(core) 하위 도메인은 회사가 남과 다르게 잘해야 하는 곳이다. 쇼핑몰이라면 추천이나 가격 정책일 수 있다. 여기에 가장 좋은 사람과 가장 세밀한 모델을 쓴다. 지원(supporting) 하위 도메인은 필요하지만 차별점은 아닌 곳으로, 직접 만들되 단순하게 간다. 일반(generic) 하위 도메인은 누구나 똑같이 필요한 것이다. 결제, 인증, 이메일 발송이 대표적이고, 대개 사서 쓰거나 외부 서비스를 붙인다.
+
+이 구분이 실무에서 바꾸는 건 설계의 무게다. 핵심이 아닌 곳에 애그리거트와 도메인 이벤트를 정교하게 쌓으면 비용만 든다. 인증 모듈을 직접 만들고 있다면 "이게 우리의 핵심인가"부터 묻는다.
+
+## 경계 사이에 놓는 관계
+
+컨텍스트가 여럿이면 서로 어떻게 맞물리는지도 정해야 한다. 에반스는 이 관계들에 이름을 붙였고, 그 관계를 그린 그림을 컨텍스트 맵(context map)이라고 부른다. 자주 쓰는 것만 추리면 이렇다.
+
+공유 커널(shared kernel)은 두 컨텍스트가 모델 일부를 함께 가진다. 돈 계산 같은 작은 타입이 대상이다. 함께 바꿔야 하니 두 팀이 긴밀할 때만 쓴다.
+
+고객과 공급자(customer-supplier)는 아래쪽(받는 쪽)의 요구를 위쪽(주는 쪽)이 계획에 반영해 주는 관계다. 판매가 공급자, 배송이 고객이라면 배송이 필요한 필드를 판매 팀에 요청할 수 있다.
+
+순응자(conformist)는 위쪽이 들어줄 생각이 없을 때 아래쪽이 그 모델을 그대로 받아 쓰는 관계다. 큰 택배사의 API에 맞추는 경우다.
+
+공개 호스트 서비스(open host service)와 공개 언어(published language)는 위쪽이 여러 소비자를 위해 잘 정의된 API나 이벤트 형식을 공개하는 방식이다. 위의 `OrderPlacedV1`이 공개 언어에 해당한다.
+
+부패 방지 계층(anti-corruption layer)은 위쪽 모델이 낡았거나 엉망일 때 아래쪽이 번역층을 세워 자기 모델을 지키는 방식이다. 구현 모양은 [어댑터 패턴 글](/posts/pattern-adapter)에서 다뤘다.
+
+아래 그림은 이 관계들이 한 시스템 안에서 어디에 놓이는지 보여 준다.
+
+<NetworkTopology
+  caption="컨텍스트 맵: 누가 누구의 말을 따르나"
+  width={400}
+  height={290}
+  zones={[
+    { id: "zin", label: "our contexts", x: 8, y: 20, w: 250, h: 260, tone: "private" },
+    { id: "zout", label: "outside", x: 268, y: 20, w: 124, h: 260, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "sales", label: "Sales", sub: "upstream", x: 70, y: 70, icon: "server", w: 84 },
+    { id: "ship", label: "Shipping", x: 200, y: 70, icon: "server", w: 90 },
+    { id: "bill", label: "Billing", x: 70, y: 200, icon: "server", w: 84 },
+    { id: "acl", label: "ACL", sub: "translator", x: 200, y: 200, icon: "gateway", w: 84 },
+    { id: "carrier", label: "Carrier API", x: 330, y: 70, icon: "internet", w: 96 },
+    { id: "erp", label: "old ERP", x: 330, y: 200, icon: "db", w: 84 },
+  ]}
+  links={[
+    { from: "sales", to: "ship", label: "PL" },
+    { from: "sales", to: "bill", label: "PL" },
+    { from: "ship", to: "carrier" },
+    { from: "bill", to: "acl" },
+    { from: "acl", to: "erp" },
+  ]}
+  steps={[
+    { path: ["sales", "ship"], packet: "OrderPlaced", title: "판매가 공개 언어로 알린다", detail: "판매는 OrderPlacedV1 형식을 약속하고 공개한다. 배송과 정산은 각자 그걸 자기 말로 바꿔 받는다." },
+    { path: ["sales", "bill"], packet: "OrderPlaced", title: "같은 이벤트, 다른 번역", detail: "정산은 같은 이벤트에서 과세 금액만 뽑는다. 판매는 정산이 무엇을 하는지 모른다." },
+    { path: ["ship", "carrier"], packet: "label", title: "택배사 API에는 순응한다", detail: "택배사가 우리 요구에 맞춰 줄 리 없으니 그 필드 이름과 상태 코드를 그대로 받아 쓴다. 이 결정은 의식적으로 내린다." },
+    { path: ["bill", "acl", "erp"], packet: "invoice", title: "낡은 ERP 앞에는 번역층", detail: "ERP의 필드와 코드값이 정산 모델 안으로 들어오지 않게 ACL이 양쪽을 바꾼다." },
+    { path: ["bill", "erp"], packet: "SQL", blocked: true, title: "ERP 테이블을 직접 읽으면 막는다", detail: "정산 코드가 ERP 테이블을 바로 조회하기 시작하면 ERP의 낡은 개념이 정산 모델로 새어 들어온다. 번역층을 거치게 한다." },
+  ]}
+/>
+
+컨텍스트 맵은 기술 그림이자 조직 그림이다. "위쪽 팀이 우리 요청을 들어주는가"가 관계를 정한다. 같은 API를 쓰더라도 협조적인 팀이면 고객과 공급자, 그렇지 않으면 순응자나 번역층이 된다.
+
+## 애그리거트: 한 번에 지켜야 하는 규칙의 크기
+
+컨텍스트가 큰 경계라면 애그리거트는 그 안의 작은 경계다. 함께 바뀌어야 하고, 바뀐 뒤에도 늘 참이어야 하는 규칙(불변식)을 공유하는 객체 묶음이다. 묶음에는 입구가 하나 있고, 이걸 애그리거트 루트라고 부른다.
+
+판매 컨텍스트의 주문을 예로 든다. 불변식은 "주문 합계는 100,000원을 넘지 않는다", "제출된 주문은 바꿀 수 없다"이다. 주문 줄(line)을 바꾸면 합계가 바뀌니, 줄과 주문은 한 애그리거트다. 바깥은 줄을 직접 고치지 못하고 반드시 주문에게 "줄을 추가해 달라"고 부탁한다. 그래야 주문이 매번 합계를 다시 확인할 수 있다.
+
+<ConceptDiagram
+  caption="루트로만 들어오고, 다른 애그리거트는 ID로 가리킨다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "root", label: "Order", sub: "root, 합계 ≤ 100000", x: 140, y: 60, w: 160, h: 46 },
+    { id: "l1", label: "OrderLine", sub: "CHAIR × 1", x: 80, y: 180, w: 120, h: 44 },
+    { id: "l2", label: "OrderLine", sub: "LAMP × 1", x: 210, y: 180, w: 120, h: 44 },
+    { id: "cust", label: "Customer", sub: "다른 애그리거트", x: 330, y: 60, w: 120, h: 46 },
+  ]}
+  edges={[
+    { from: "root", to: "l1", label: "소유" },
+    { from: "root", to: "l2", label: "소유" },
+    { from: "root", to: "cust", label: "customerId", dashed: true },
+  ]}
+/>
+
+본 버논(Vaughn Vernon)이 정리한 애그리거트 설계 규칙이 실무에서 그대로 쓰인다. 불변식을 지키는 데 필요한 만큼만 작게 만든다. 다른 애그리거트는 객체가 아니라 ID로 가리킨다. 트랜잭션 하나에서는 애그리거트 하나만 바꾼다. 여러 애그리거트에 걸친 일은 이벤트를 받아 따로 처리하고, 그 사이 잠깐 어긋나는 걸 받아들인다.
+
+애그리거트를 크게 잡고 싶은 유혹이 있다. "고객 아래에 주문 전체를 두면 고객 등급 계산이 쉽다" 같은 생각이다. 그러면 주문 하나를 고칠 때마다 고객 애그리거트 전체를 불러와야 하고, 같은 고객의 주문 두 건이 동시에 들어오면 서로를 기다리거나 충돌한다. 고객 등급은 주문 이벤트를 받아 나중에 계산해도 된다.
+
+## 두 요청이 같은 주문을 동시에 고칠 때
+
+애그리거트가 불변식을 지킨다는 건, 동시에 들어온 변경 사이에서도 지킨다는 뜻이다. PostgreSQL 16에서 그게 깨지는 장면을 만들었다. 주문 o1에는 이미 80,000원짜리 의자가 있다. 두 요청이 거의 동시에 들어와 각자 주문을 읽는다. A는 15,000원짜리, B는 18,000원짜리를 넣으려 한다. 둘 다 "80,000원에 더해도 100,000원 이하"라고 판단한다. 두 앱 인스턴스가 한 일을 순서대로 적으면 이렇다.
+
+```sql
+-- 요청 A, B가 같은 주문을 읽는다 (둘 다 total 80000, version 1을 본다)
+SELECT id, total, version FROM orders WHERE id = 'o1';
+-- 요청 B가 먼저 쓴다
+INSERT INTO order_lines VALUES ('o1', 'LAMP', 1, 18000);
+UPDATE orders SET total = 80000 + 18000 WHERE id = 'o1';
+-- 요청 A가 자기가 읽은 값으로 쓴다
+INSERT INTO order_lines VALUES ('o1', 'DESK-MAT', 1, 15000);
+UPDATE orders SET total = 80000 + 15000 WHERE id = 'o1';
+-- 저장된 합계와 실제 줄의 합
+SELECT o.total AS stored_total, sum(l.qty * l.price) AS real_total
+FROM orders o JOIN order_lines l ON l.order_id = o.id WHERE o.id = 'o1' GROUP BY o.total;
+```
+
+```text
+ stored_total | real_total
+--------------+------------
+        95000 |     113000
+(1 row)
+```
+
+두 가지가 동시에 깨졌다. 실제 합계 113,000원은 한도를 넘었고, 저장된 합계 95,000원은 B의 변경을 덮어써서 틀렸다. 각 요청의 검사는 옳았다. 둘이 같은 옛 상태를 보고 판단한 게 문제다.
+
+애그리거트 단위로 버전을 두고, 읽은 버전이 그대로일 때만 쓰게 바꾼다. 낙관적 잠금이다.
+
+```sql
+-- 요청 B: 애그리거트 하나를 트랜잭션 하나로 쓴다
+BEGIN;
+INSERT INTO order_lines VALUES ('o1', 'LAMP', 1, 18000);
+UPDATE orders SET total = 80000 + 18000, version = version + 1 WHERE id = 'o1' AND version = 1;
+COMMIT;
+-- 요청 A: 같은 조건으로 시도한다
+BEGIN;
+INSERT INTO order_lines VALUES ('o1', 'DESK-MAT', 1, 15000);
+UPDATE orders SET total = 80000 + 15000, version = version + 1 WHERE id = 'o1' AND version = 1;
+ROLLBACK;   -- 바뀐 행이 0이라 앱이 되돌린다
+```
+
+```text
+UPDATE 1
+COMMIT
+...
+UPDATE 0
+ROLLBACK
+ id | total | version
+----+-------+---------
+ o1 | 98000 |       2
+(1 row)
+```
+
+A의 `UPDATE 0`이 신호다. 앱은 트랜잭션을 되돌리고 주문을 다시 읽는다. 이번엔 합계가 98,000원이니 15,000원짜리는 한도를 넘어 거절된다. 정말 동시에 부딪히면 어떻게 되는지도 봤다. B가 트랜잭션 안에서 행을 바꾼 채 2초 동안 커밋하지 않게 해 두고, 0.5초 뒤에 A가 같은 UPDATE를 보냈다.
+
+```text
+UPDATE orders SET total = 95000, version = version + 1 WHERE id = 'o1' AND version = 1;
+UPDATE 0
+Time: 1519.664 ms (00:01.520)
+```
+
+A는 B의 행 잠금을 1.5초 기다렸다가, B가 커밋한 새 행에 `version = 1` 조건을 다시 대 보고 0건을 바꿨다. PostgreSQL의 기본 격리 수준(Read Committed)에서 UPDATE가 기다린 뒤 조건을 새 행으로 다시 확인하기 때문이다. 격리 수준에 따른 차이는 [트랜잭션 격리 수준 글](/posts/db-transaction-isolation)에 있다.
+
+<AlgoTrace
+  caption="버전 하나로 덮어쓰기를 막는 순서"
+  memoryLabel="orders.o1"
+  cells={["A 읽기", "B 읽기", "B 쓰기", "A 쓰기", "A 다시"]}
+  steps={[
+    { pointer: 0, memory: ["total 80000", "v1"], caption: "A가 읽는다. 80000원, 버전 1. 15000원을 더해도 된다고 본다." },
+    { pointer: 1, memory: ["total 80000", "v1"], caption: "B도 같은 상태를 읽는다. 18000원을 더해도 된다고 본다." },
+    { pointer: 2, found: [2], memory: ["total 98000", "v2"], caption: "B가 version = 1 조건으로 쓰고 버전을 2로 올린다. UPDATE 1." },
+    { pointer: 3, found: [2], memory: ["total 98000", "v2"], caption: "A도 version = 1 조건으로 쓰지만 이미 2다. UPDATE 0이라 되돌린다." },
+    { pointer: 4, found: [2, 4], memory: ["total 98000", "v2"], caption: "A가 다시 읽으면 98000원이다. 15000원을 더하면 한도를 넘으니 거절한다. 불변식이 지켜졌다." },
+  ]}
+/>
+
+이 방법은 애그리거트가 작을 때 잘 맞는다. 고객 아래 주문 전체를 한 애그리거트로 묶었다면 같은 고객의 무관한 주문 두 건도 서로 버전 충돌을 낸다. 충돌이 잦다면 잠금 방식보다 애그리거트 경계부터 의심한다. 비관적 잠금과의 비교는 [비관적 잠금 글](/posts/pessimistic-locking)에 있다.
+
+## 경계를 넘는 건 이벤트로
+
+트랜잭션 하나에 애그리거트 하나라면, 주문이 제출됐을 때 재고와 포인트는 어떻게 바뀌나. 주문 애그리거트가 바뀌면서 "주문이 제출됐다"는 도메인 이벤트를 남기고, 다른 애그리거트나 다른 컨텍스트가 그 이벤트를 받아 자기 트랜잭션으로 처리한다.
+
+<SequenceDiagram
+  caption="애그리거트 하나를 커밋하고, 나머지는 이벤트로"
+  actors={[
+    { id: "sales", label: "Sales" },
+    { id: "db", label: "sales DB" },
+    { id: "bus", label: "broker" },
+    { id: "ship", label: "Shipping" },
+  ]}
+  steps={[
+    { from: "sales", to: "sales", label: "submit()", title: "주문 애그리거트가 규칙을 확인한다", detail: "합계와 상태를 검사하고 SUBMITTED로 바꾼다. 이벤트 하나를 기록해 둔다." },
+    { from: "sales", to: "db", label: "COMMIT", title: "주문과 이벤트를 한 트랜잭션으로", detail: "주문 행과 아웃박스 행을 함께 커밋한다. 이 트랜잭션은 주문 하나만 바꾼다.", payload: "UPDATE orders ... version = version + 1\nINSERT INTO outbox (type, payload) ..." },
+    { from: "db", to: "bus", label: "OrderPlaced", title: "릴레이가 이벤트를 내보낸다", detail: "커밋된 이벤트만 나가므로, 주문이 롤백되면 이벤트도 나가지 않는다." },
+    { from: "bus", to: "ship", label: "OrderPlaced", title: "배송이 자기 말로 번역한다", detail: "toShipment로 무게와 포장을 계산해 자기 DB에 배송을 만든다. 판매와는 다른 트랜잭션이다." },
+    { from: "ship", to: "ship", label: "retry later", title: "모르는 상품이면 기다린다", detail: "p-300처럼 아직 모르는 ID면 확인 필요 상태로 두고, 상품 정보가 오면 다시 계산한다." },
+  ]}
+/>
+
+DB 커밋과 이벤트 발행을 함께 확실히 하는 아웃박스는 [트랜잭셔널 아웃박스 글](/posts/transactional-outbox)에서, 이벤트에 무엇을 실을지는 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture)에서 다룬다. 여기서 기억할 것은 경계를 넘는 순간 트랜잭션이 이벤트로 바뀐다는 것이고, 그 대가로 잠깐 어긋나는 상태를 설계에 넣어야 한다는 것이다.
+
+## 경계를 찾는 워크숍
+
+경계는 회의실에서 코드보다 먼저 찾는다. 알베르토 브란돌리니가 만든 이벤트 스토밍(Event Storming)이 흔히 쓰인다. 개발자와 업무 담당자가 벽에 붙인 긴 종이 앞에 서서, 업무에서 일어나는 사건을 과거형으로 포스트잇에 적어 시간 순서로 붙인다. "주문이 접수됐다", "결제가 승인됐다", "출고가 보류됐다" 같은 식이다.
+
+다 붙이고 나면 두 가지를 찾는다. 하나는 흐름이 크게 바뀌는 사건(pivotal event)이다. 그 앞뒤로 관심사와 담당자가 달라진다. 다른 하나는 말이 바뀌는 지점이다. 같은 대상을 앞쪽에서는 "주문", 뒤쪽에서는 "출고 건"이라고 부르기 시작하면 거기가 경계일 가능성이 크다.
+
+<AlgoTrace
+  caption="사건을 시간 순으로 붙이고 경계를 긋는다"
+  memoryLabel="찾은 컨텍스트"
+  cells={["장바구니 담김", "주문 접수됨", "결제 승인됨", "출고 지시됨", "배송 완료됨", "정산 확정됨"]}
+  steps={[
+    { memory: [], caption: "업무에서 일어나는 사건을 과거형으로 적어 시간 순서로 붙인다." },
+    { pointer: 2, found: [2], memory: [], caption: "결제 승인이 흐름을 가른다. 이 앞은 고객이 결정하는 시간, 뒤는 회사가 약속을 이행하는 시간이다." },
+    { pointer: 3, found: [2, 3], memory: ["Sales"], caption: "출고 지시부터는 같은 대상을 '출고 건'이라고 부른다. 말이 바뀌었으니 앞쪽을 판매 컨텍스트로 묶는다." },
+    { pointer: 4, found: [2, 3, 4], memory: ["Sales", "Shipping"], caption: "출고부터 배송 완료까지는 무게, 송장, 택배사 이야기만 나온다. 배송 컨텍스트다." },
+    { pointer: 5, found: [2, 3, 4, 5], memory: ["Sales", "Shipping", "Billing"], caption: "정산 확정은 회계 기간과 세금 이야기다. 판매의 '취소'와 정산의 '취소'가 다르다는 것도 여기서 드러난다." },
+  ]}
+/>
+
+워크숍 없이 코드에서 찾는 단서도 있다. 한 테이블의 컬럼이 그룹을 지어 서로 다른 팀만 쓰고 있다면, 함께 바뀌는 파일 묶음이 뚜렷하게 나뉜다면, 같은 클래스에 `if (type === ...)`가 팀마다 늘고 있다면 경계 후보다. 커밋 기록으로 함께 바뀌는 파일을 세는 방법은 [마이크로서비스 분해 글](/posts/microservices-decomposition)에서 직접 돌려 본다.
+
+## 경계를 잘못 그었을 때 보이는 것
+
+모든 팀이 쓰는 공용 모델이 생긴다. `common/models/Product.ts`에 모든 컨텍스트의 필드가 모이고, 누가 필드 하나를 바꾸면 리뷰어가 다섯 팀이다. 경계가 없는 것과 같다.
+
+컨텍스트를 서비스와 같은 말로 쓴다. 바운디드 컨텍스트는 모델의 경계이지 배포 단위가 아니다. 한 컨텍스트를 서비스 셋으로 쪼개면 같은 모델을 셋이 나눠 가지고, 그 셋은 늘 함께 배포된다. 반대로 여러 컨텍스트를 한 서비스 안의 모듈로 두는 건 아무 문제가 없다.
+
+애그리거트가 테이블 구조를 따라 커진다. 외래 키로 이어진 모든 것을 한 애그리거트로 묶으면, 저장 한 번에 수십 행을 불러오고 동시 요청이 버전 충돌로 줄줄이 실패한다. 불변식이 실제로 묶는 것만 묶는다.
+
+CRUD에 전술 패턴을 다 쓴다. 공지사항 게시판에 애그리거트, 도메인 이벤트, 리포지토리, 팩토리를 다 갖추면 코드는 늘고 얻는 건 없다. 바운디드 컨텍스트와 유비쿼터스 언어는 어디에나 쓸모가 있지만, 애그리거트 같은 세부 장치는 규칙이 복잡한 핵심 하위 도메인에 쓴다.
+
+## 화면 코드의 '상품' 타입
+
+프런트엔드에도 같은 일이 생긴다. 상품 상세 화면은 카탈로그 API를, 장바구니는 판매 API를, 배송 조회는 배송 API를 부른다. 이걸 전역 `Product` 타입 하나로 받으면, 필드 대부분이 옵셔널(`?`)이 되고 컴포넌트마다 "이 화면에서는 이 필드가 있겠지"라고 믿게 된다.
+
+```ts
+// 피하고 싶은 모양: 모든 화면이 공유하는 한 덩어리
+type Product = { id: string; name?: string; images?: string[]; weightG?: number; taxType?: string; price?: number };
+
+// 화면(기능) 폴더마다 자기 API의 모양을 둔다
+// features/catalog/types.ts
+type CatalogItem = { productId: string; name: string; images: string[] };
+// features/cart/types.ts
+type CartLine = { productId: string; qty: number; unitPrice: number };
+```
+
+공유하는 건 `productId` 하나면 된다. 이 블로그의 `features/{scope}` 폴더처럼 기능 단위로 폴더를 나눈 프런트엔드라면 그 폴더가 화면 쪽 컨텍스트 경계 역할을 한다.
+
+## 직접 지켜 보는 주문 애그리거트
+
+아래에서 주문 애그리거트의 불변식을 직접 짜 볼 수 있다. 명령을 순서대로 받아, 규칙을 어기는 명령은 상태를 바꾸지 않고 거절 목록에 남긴다.
+
+<CodePlayground
+  caption="주문 애그리거트의 불변식 지키기"
+  functionName="applyCommands"
+  initialCode={`// 빈 DRAFT 주문에 commands를 차례로 적용한다
+// { type: "add", sku, qty, price }  같은 sku면 수량을 합친다
+// { type: "remove", sku }
+// { type: "submit" }
+// 불변식 (어기면 상태를 바꾸지 않고 "인덱스:이유"를 rejected에 넣는다)
+// - 제출된 뒤에는 어떤 명령도 안 된다       -> SUBMITTED
+// - 더하는 수량은 1 이상, 합친 수량은 10 이하 -> BAD_QTY
+// - 합계는 100000 이하                       -> LIMIT
+// - 없는 줄은 지울 수 없다                   -> NO_LINE
+// - 빈 주문은 제출할 수 없다                 -> EMPTY
+// 반환: { status, total, lines: [[sku, qty], ...], rejected }
+function applyCommands(commands) {
+  return { status: "DRAFT", total: 0, lines: [], rejected: [] };
+}`}
+  solution={`function applyCommands(commands) {
+  const LIMIT = 100000;
+  let status = "DRAFT";
+  let lines = [];
+  const rejected = [];
+  const totalOf = (ls) => ls.reduce((s, l) => s + l.qty * l.price, 0);
+  commands.forEach((c, i) => {
+    const reject = (why) => rejected.push(i + ":" + why);
+    if (status === "SUBMITTED") return reject("SUBMITTED");
+    if (c.type === "add") {
+      const existing = lines.find((l) => l.sku === c.sku);
+      const qty = (existing ? existing.qty : 0) + c.qty;
+      if (c.qty < 1 || qty > 10) return reject("BAD_QTY");
+      const next = existing
+        ? lines.map((l) => (l.sku === c.sku ? { ...l, qty } : l))
+        : [...lines, { sku: c.sku, qty, price: c.price }];
+      if (totalOf(next) > LIMIT) return reject("LIMIT");
+      lines = next;
+    } else if (c.type === "remove") {
+      if (!lines.some((l) => l.sku === c.sku)) return reject("NO_LINE");
+      lines = lines.filter((l) => l.sku !== c.sku);
+    } else if (c.type === "submit") {
+      if (lines.length === 0) return reject("EMPTY");
+      status = "SUBMITTED";
+    }
+  });
+  return { status, total: totalOf(lines), lines: lines.map((l) => [l.sku, l.qty]), rejected };
+}`}
+  tests={[
+    {
+      label: "세 번째 줄이 한도를 넘는다",
+      args: [[{ type: "add", sku: "CHAIR", qty: 1, price: 80000 }, { type: "add", sku: "LAMP", qty: 1, price: 18000 }, { type: "add", sku: "MAT", qty: 1, price: 15000 }, { type: "submit" }]],
+      expected: { status: "SUBMITTED", total: 98000, lines: [["CHAIR", 1], ["LAMP", 1]], rejected: ["2:LIMIT"] },
+    },
+    {
+      label: "수량 합치기와 0개",
+      args: [[{ type: "add", sku: "PEN", qty: 6, price: 1000 }, { type: "add", sku: "PEN", qty: 5, price: 1000 }, { type: "add", sku: "PEN", qty: 4, price: 1000 }, { type: "add", sku: "CUP", qty: 0, price: 3000 }]],
+      expected: { status: "DRAFT", total: 10000, lines: [["PEN", 10]], rejected: ["1:BAD_QTY", "3:BAD_QTY"] },
+    },
+    {
+      label: "빈 제출, 없는 줄, 제출 뒤 변경",
+      args: [[{ type: "submit" }, { type: "remove", sku: "X" }, { type: "add", sku: "MUG", qty: 2, price: 12000 }, { type: "submit" }, { type: "add", sku: "MUG", qty: 1, price: 12000 }, { type: "remove", sku: "MUG" }]],
+      expected: { status: "SUBMITTED", total: 24000, lines: [["MUG", 2]], rejected: ["0:EMPTY", "1:NO_LINE", "4:SUBMITTED", "5:SUBMITTED"] },
+    },
+    {
+      label: "지운 뒤에는 다시 들어간다",
+      args: [[{ type: "add", sku: "A", qty: 1, price: 50000 }, { type: "add", sku: "B", qty: 1, price: 50000 }, { type: "remove", sku: "A" }, { type: "add", sku: "C", qty: 2, price: 25000 }]],
+      expected: { status: "DRAFT", total: 100000, lines: [["B", 1], ["C", 2]], rejected: [] },
+    },
+  ]}
+/>
+
+바운디드 컨텍스트는 단어의 뜻이 하나로 통하는 범위이고, 애그리거트는 규칙이 한 번에 지켜져야 하는 범위다. 큰 경계를 넘을 때는 번역하고, 작은 경계를 넘을 때는 이벤트로 넘긴다. 처음의 "취소" 버그는 두 경계 중 큰 쪽을 긋지 않아서 생긴 일이었다.
+
+## 면접에서 나올 만한 질문
+
+### 바운디드 컨텍스트가 무엇인가요?
+
+어떤 모델과 그 용어가 하나의 뜻으로 통하는 범위다. 같은 "상품"이라도 카탈로그에서는 이름과 사진, 배송에서는 무게, 정산에서는 과세 구분이다. 컨텍스트마다 자기 모델을 따로 두고, 경계를 넘을 때 ID와 공개된 이벤트 형식으로만 주고받으며 번역한다.
+
+### 유비쿼터스 언어는 왜 필요한가요?
+
+말과 코드가 다르면 번역이 사람 머릿속에서 일어나고 누군가는 틀리기 때문이다. 한 컨텍스트 안에서 업무 담당자와 개발자가 같은 단어를 쓰고, 그 단어가 클래스, 함수, 이벤트 이름에 그대로 들어가게 한다. 용어가 바뀌면 코드 이름도 바꾸고, 규칙이 함께 바뀌었는지 확인한다.
+
+### 하위 도메인과 바운디드 컨텍스트는 어떻게 다른가요?
+
+하위 도메인은 업무 자체를 나눈 문제 공간이고, 바운디드 컨텍스트는 그 문제를 풀려고 만든 모델과 코드의 경계다. 둘이 1대1이면 이상적이지만 낡은 시스템 하나가 여러 하위 도메인을 품는 경우가 많다. 하위 도메인은 핵심, 지원, 일반으로 나눠 어디에 설계 노력을 쓸지 고르는 데 쓴다.
+
+### 애그리거트는 어떻게 크기를 정하나요?
+
+함께 지켜야 하는 불변식이 묶는 만큼만 묶는다. 주문 합계 한도가 주문 줄에 걸려 있으면 주문과 줄은 한 애그리거트지만, 고객은 ID로만 가리키는 다른 애그리거트다. 트랜잭션 하나에서 애그리거트 하나만 바꾸고, 여러 애그리거트에 걸친 일은 이벤트로 넘겨 잠깐의 어긋남을 받아들인다.
+
+### 두 요청이 같은 애그리거트를 동시에 바꾸면 어떻게 하나요?
+
+애그리거트에 버전을 두고 읽은 버전이 그대로일 때만 쓰는 낙관적 잠금을 쓴다. PostgreSQL에서는 `UPDATE ... WHERE id = $1 AND version = $2`가 0건이면 다시 읽어 규칙을 다시 검사한다. 충돌이 잦다면 잠금 방식보다 애그리거트가 너무 크지 않은지 먼저 본다.
+
+### 컨텍스트 사이 관계에는 어떤 것이 있나요?
+
+모델 일부를 함께 가지는 공유 커널, 아래쪽 요구를 위쪽이 반영해 주는 고객과 공급자, 위쪽 모델을 그대로 따르는 순응자, 번역층으로 자기 모델을 지키는 부패 방지 계층, 여러 소비자를 위해 형식을 공개하는 공개 호스트 서비스와 공개 언어가 대표적이다. 어떤 관계인지는 기술보다 위쪽 팀이 요청을 들어주는지로 정해진다.
+
+### 바운디드 컨텍스트 하나가 곧 마이크로서비스 하나인가요?
+
+아니다. 컨텍스트는 모델의 경계이고 서비스는 배포 단위다. 여러 컨텍스트를 한 서비스 안의 모듈로 둬도 되고, 경계가 검증된 뒤 필요할 때 서비스로 떼어 낸다. 반대로 한 컨텍스트를 여러 서비스로 쪼개면 같은 모델을 나눠 가진 서비스들이 늘 함께 배포되는 분산 모놀리스가 되기 쉽다.
+
+### 경계는 어떻게 찾나요?
+
+이벤트 스토밍처럼 업무 사건을 시간 순으로 늘어놓고, 흐름이 크게 바뀌는 사건과 같은 대상을 부르는 말이 바뀌는 지점을 찾는다. 코드에서는 서로 다른 팀만 쓰는 컬럼 묶음, 함께 바뀌는 파일 묶음, 팀마다 늘어나는 타입 분기가 단서가 된다. 처음 그은 경계는 틀릴 수 있으니, 모듈로 먼저 나눠 검증하는 편이 안전하다.

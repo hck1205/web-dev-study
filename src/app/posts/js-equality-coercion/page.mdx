@@ -1,0 +1,379 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-equality-coercion");
+
+상품 목록 옆에 `<select>`를 두고, 고른 상품의 상세를 보여 주는 화면을 만들었다. 상품 데이터의 `id`는 숫자다. 그런데 무엇을 골라도 상세 영역이 비어 있다.
+
+```js
+const products = [{ id: 1, name: "키보드" }, { id: 2, name: "마우스" }];
+const selected = "2"; // <select>의 e.target.value는 항상 문자열이다
+console.log(products.find((p) => p.id === selected));
+console.log(products.find((p) => p.id == selected));
+console.log(products.find((p) => p.id === Number(selected)));
+```
+
+```text
+undefined
+{ id: 2, name: '마우스' }
+{ id: 2, name: '마우스' }
+```
+
+`===`로는 못 찾고 `==`로는 찾는다. 그렇다고 `==`로 바꾸면 끝일까. 그러면 `[] == false`가 `true`라는 사실도 같이 받아들여야 한다. 이 글은 자바스크립트의 세 가지 "같음"과 `==`가 값을 바꾸는 규칙을 명세 순서대로 따라간다. 객체를 비교할 때 참조를 본다는 이야기는 [원시값과 참조 글](/posts/js-primitive-vs-reference)에서, 참·거짓 판단과 `typeof`는 [truthy·falsy 글](/posts/js-truthy-falsy-typeof)에서 다룬다.
+
+## 자바스크립트에는 같음이 네 종류 있다
+
+명세는 "같다"를 판단하는 알고리즘을 네 개 정의한다. 연산자와 API마다 어느 것을 쓰는지가 다르다.
+
+- IsStrictlyEqual: `===`가 쓴다. 타입이 다르면 바로 `false`다.
+- IsLooselyEqual: `==`가 쓴다. 타입이 다르면 한쪽 또는 양쪽을 바꿔서 다시 비교한다.
+- SameValue: `Object.is`가 쓴다. `===`와 거의 같고 `NaN`, `-0`만 다르게 본다.
+- SameValueZero: `includes`, `Map`과 `Set`의 키가 쓴다. SameValue와 같은데 `0`과 `-0`을 같게 본다.
+
+아래 그림은 어느 코드가 어느 알고리즘으로 가는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="연산자와 API마다 다른 같음 알고리즘을 쓴다"
+  nodes={[
+    { id: "eq3", label: "===", sub: "switch case", x: 70, y: 40, w: 110 },
+    { id: "eq2", label: "==", sub: "타입을 바꾼다", x: 70, y: 120, w: 110 },
+    { id: "is", label: "Object.is", sub: "React 비교", x: 70, y: 200, w: 110 },
+    { id: "inc", label: "includes", sub: "Map·Set 키", x: 70, y: 260, w: 110 },
+    { id: "strict", label: "IsStrictlyEqual", x: 290, y: 40, w: 150 },
+    { id: "loose", label: "IsLooselyEqual", x: 290, y: 120, w: 150 },
+    { id: "same", label: "SameValue", x: 290, y: 200, w: 150 },
+    { id: "zero", label: "SameValueZero", x: 290, y: 260, w: 150 },
+  ]}
+  edges={[
+    { from: "eq3", to: "strict" },
+    { from: "eq2", to: "loose" },
+    { from: "is", to: "same" },
+    { from: "inc", to: "zero" },
+    { from: "loose", to: "strict", label: "타입이 같으면", dashed: true },
+  ]}
+/>
+
+네 가지는 대부분의 값에서 같은 답을 낸다. 답이 갈리는 값만 모으면 이렇다. Node 22에서 확인한 결과다.
+
+| 비교 | `===` | `==` | `Object.is` | `includes` |
+|---|---|---|---|---|
+| `NaN`과 `NaN` | false | false | true | true |
+| `0`과 `-0` | true | true | false | true |
+| `"1"`과 `1` | false | true | false | false |
+| `null`과 `undefined` | false | true | false | false |
+
+`switch`의 `case` 비교도 `===`다. `switch (selected) { case 2: ... }`에 문자열 `"2"`를 넣으면 어느 `case`에도 걸리지 않는다. `indexOf`와 `lastIndexOf`는 `===`를 쓰고 `includes`는 SameValueZero를 쓰는 탓에 `[NaN].indexOf(NaN)`은 `-1`, `[NaN].includes(NaN)`은 `true`로 답이 갈린다.
+
+## 느슨한 비교가 값을 바꾸는 순서
+
+`==`는 아무렇게나 바꾸는 게 아니라 정해진 순서가 있다. 명세의 IsLooselyEqual을 줄이면 이렇다.
+
+1. 두 값의 타입이 같으면 `===`로 비교한다.
+2. `null`과 `undefined`는 서로만 같다. 다른 어떤 값과도 같지 않다.
+3. 숫자와 문자열이면 문자열을 숫자로 바꾼다.
+4. 한쪽이 불리언이면 그 불리언을 숫자로 바꾼다(`true`는 1, `false`는 0).
+5. 한쪽이 객체이고 다른 쪽이 원시값이면 객체를 원시값으로 바꾼다(ToPrimitive).
+6. BigInt와 숫자는 수학적인 값으로 비교한다(`1n == 1`은 `true`).
+7. 바꾼 값으로 1부터 다시 비교한다. 어디에도 해당하지 않으면 `false`다.
+
+4번이 함정이다. 불리언은 "참인지"로 비교되지 않고 숫자 0이나 1로 바뀐다. 그래서 `"true" == true`는 `"true" == 1`이 되고, `"true"`를 숫자로 바꾸면 `NaN`이라 `false`다. 실제 결과를 보자.
+
+```js
+console.log(null == undefined, null == 0, undefined == 0);
+console.log("1" == 1, "" == 0, " \n" == 0);
+console.log(true == "1", true == "true", false == "false");
+console.log([] == false, [] == ![], [0] == false, [1, 2] == "1,2");
+console.log(NaN == NaN, 1n == 1, 1n === 1);
+```
+
+```text
+true false false
+true true true
+true false false
+true true true true
+false true false
+```
+
+`null == 0`이 `false`인 것은 2번 규칙 때문이다. `null`은 숫자로 바뀌지 않고 `undefined`하고만 같다. 공백과 줄바꿈뿐인 문자열은 숫자로 바꾸면 `0`이라 `" \n" == 0`은 `true`다.
+
+`[] == false`가 `true`가 되는 과정을 한 단계씩 따라가 보자. 다음을 누르면 규칙이 적용되는 순서대로 식이 바뀐다.
+
+<AlgoTrace
+  caption="[] == false가 true가 되기까지"
+  memoryLabel="지금 비교하는 식"
+  cells={["타입 같음?", "null?", "boolean", "object", "string↔num"]}
+  steps={[
+    { pointer: 0, memory: ["[] == false"], caption: "배열은 object, false는 boolean이다. 타입이 달라 바꾸기 시작한다." },
+    { pointer: 1, memory: ["[] == false"], caption: "둘 다 null이나 undefined가 아니다. 다음 규칙으로 간다." },
+    { pointer: 2, memory: ["[] == 0"], caption: "오른쪽이 불리언이라 숫자로 바꾼다. false는 0이 된다." },
+    { pointer: 3, memory: ["\"\" == 0"], caption: "왼쪽이 객체라 원시값으로 바꾼다. valueOf가 배열 자신을 돌려주니 toString을 써서 빈 문자열이 된다." },
+    { pointer: 4, memory: ["0 == 0"], caption: "문자열과 숫자라 문자열을 숫자로 바꾼다. 빈 문자열은 0이다." },
+    { pointer: 0, found: [0], memory: ["0 === 0", "true"], caption: "이제 타입이 같으니 ===로 비교한다. 결과는 true." },
+  ]}
+/>
+
+`[] == ![]`도 같다. `!`가 먼저 계산되는데, 배열은 객체라서 언제나 참이므로 `![]`는 `false`다. 그다음은 위 그림과 똑같이 흘러가 `true`가 된다. 같은 값이 자기 부정과 같다는 결과는 이상해 보여도 규칙대로 계산한 것이다.
+
+## 객체가 원시값으로 바뀌는 길
+
+5번 규칙의 ToPrimitive는 `==`뿐 아니라 `+`, 템플릿 리터럴, `<` 같은 비교에서도 쓰인다. 객체를 원시값으로 바꿀 때 엔진은 원하는 결과 종류를 힌트로 넘긴다. 힌트는 `"number"`, `"string"`, `"default"` 셋이다. 템플릿 리터럴과 `String(obj)`는 `"string"`, 단항 `+`와 `-`, `*` 같은 산술은 `"number"`, `==`와 이항 `+`는 `"default"`를 넘긴다.
+
+엔진은 이 순서로 바꿀 방법을 찾는다.
+
+<SequenceDiagram
+  caption="ToPrimitive는 Symbol.toPrimitive, valueOf, toString 순서로 찾는다"
+  actors={[
+    { id: "op", label: "연산자" },
+    { id: "obj", label: "객체" },
+    { id: "proto", label: "프로토타입" },
+  ]}
+  steps={[
+    { from: "op", to: "obj", label: "hint 전달", title: "힌트와 함께 바꿔 달라고 한다", detail: "== 라면 hint는 default다. 엔진은 객체에 Symbol.toPrimitive 메서드가 있는지 먼저 본다.", payload: "obj[Symbol.toPrimitive]?.(\"default\")" },
+    { from: "obj", to: "op", label: "있으면 그 값", title: "Symbol.toPrimitive가 있으면 그걸로 끝", detail: "돌려준 값이 원시값이면 그대로 쓴다. 객체를 돌려주면 TypeError다. Date와 Symbol이 기본으로 이 메서드를 가진다." },
+    { from: "op", to: "proto", label: "valueOf()", title: "없으면 valueOf부터", detail: "힌트가 number나 default면 valueOf를 먼저 부른다. 보통 객체와 배열의 valueOf는 자기 자신을 돌려줘서 원시값이 아니다." },
+    { from: "op", to: "proto", label: "toString()", title: "그다음 toString", detail: "원시값을 못 얻으면 toString을 부른다. 배열은 요소를 쉼표로 이은 문자열, 보통 객체는 [object Object]가 나온다.", payload: "[].toString()     // \"\"\n[1,2].toString()  // \"1,2\"\n({}).toString()   // \"[object Object]\"" },
+    { from: "proto", to: "op", label: "원시값", title: "원시값으로 비교를 이어 간다", detail: "string 힌트였다면 toString을 먼저, valueOf를 나중에 부른다. 둘 다 원시값을 못 주면 TypeError다." },
+  ]}
+/>
+
+직접 확인해 보면 힌트에 따라 다른 메서드가 불린다.
+
+```js
+const price = {
+  valueOf() { console.log("valueOf 호출"); return 1000; },
+  toString() { console.log("toString 호출"); return "1,000원"; },
+};
+console.log(price == 1000);
+console.log(`${price}`);
+console.log(price + 1);
+
+const money = {
+  [Symbol.toPrimitive](hint) {
+    console.log("hint:", hint);
+    return hint === "number" ? 1000 : "1,000원";
+  },
+};
+console.log(+money);
+console.log(`${money}`);
+console.log(money + "");
+```
+
+```text
+valueOf 호출
+true
+toString 호출
+1,000원
+valueOf 호출
+1001
+hint: number
+1000
+hint: string
+1,000원
+hint: default
+1,000원
+```
+
+`Date`는 예외다. `default` 힌트를 `string`처럼 다룬다. 그래서 `new Date(0) + 1`은 날짜 문자열 뒤에 `"1"`이 붙은 문자열이 되고, `new Date(0) - 1`은 밀리초 숫자다. Node 22에서 `typeof (d + 1)`은 `string`, `typeof (d - 1)`은 `number`였다. 날짜를 비교할 때 `d1 == d2`가 늘 `false`인 이유는 둘 다 객체라 1번 규칙에서 참조 비교로 끝나기 때문이다. 날짜는 `d1.getTime() === d2.getTime()`으로 비교한다.
+
+## 더하기만 다르게 행동한다
+
+산술 연산자 중 `+`만 문자열을 좋아한다. 두 쪽을 원시값으로 바꾼 뒤 어느 한쪽이라도 문자열이면 이어 붙이고, 아니면 숫자로 더한다. `-`, `*`, `/`는 무조건 숫자로 바꾼다. 그래서 같은 식 안에서도 연산자마다 결과 타입이 바뀐다. 아래 식을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption={`"5" * "2" + [] - true 는 9다`}
+  joiner=" "
+  separator=""
+  params={[
+    { key: "mul", display: "\"5\" * \"2\"", title: "곱하기는 숫자로 바꾼다", description: "* 는 두 쪽을 숫자로 바꾼다. 문자열 두 개가 숫자 10이 된다.", code: "\"5\" * \"2\"   // 10" },
+    { key: "plus", display: "+ []", title: "더하기는 문자열을 만든다", description: "빈 배열을 원시값으로 바꾸면 빈 문자열이다. 한쪽이 문자열이니 10도 문자열이 되어 이어 붙는다.", code: "10 + []       // \"10\"" },
+    { key: "minus", display: "- true", title: "빼기는 다시 숫자로", description: "- 는 숫자로 바꾼다. \"10\"은 10, true는 1이다.", code: "\"10\" - true  // 9" },
+  ]}
+/>
+
+```js
+console.log("5" * "2", "5" * "2" + [], "5" * "2" + [] - true);
+console.log([] + {}, 1 + "2", 1 - "2", "3" + 4 * "2");
+```
+
+```text
+10 10 9
+[object Object] 12 -1 38
+```
+
+두 번째 줄의 `"5" * "2" + []`는 문자열 `"10"`이라 출력이 따옴표 없이 `10`으로 보인다. 타입을 확인하지 않고 로그만 보면 숫자와 구분이 안 된다. `"3" + 4 * "2"`는 곱셈이 먼저라 `"3" + 8`이 되고 이어 붙어서 `"38"`이다.
+
+폼 입력 두 개를 더했더니 `"10" + "20"`이 `"1020"`이 되는 버그가 여기서 나온다. 입력값은 늘 문자열이니 계산하기 전에 숫자로 바꾼다. 바꾸는 방법마다 결과가 다르다.
+
+```js
+console.log(Number(""), Number(" 12 "), Number("12px"), parseInt("12px"));
+console.log(Number(null), Number(undefined), Number(true), Number([]));
+```
+
+```text
+0 12 NaN 12
+0 NaN 1 0
+```
+
+`Number`는 문자열 전체가 숫자여야 하고, 앞뒤 공백은 허용하며 빈 문자열을 `0`으로 본다. `parseInt`는 앞에서부터 읽을 수 있는 데까지 읽는다. 입력 검증이 목적이라면 `Number`가 더 엄격하지만 빈 칸이 `0`이 되는 걸 따로 막아야 한다. `parseInt`는 두 번째 인수로 진법(`parseInt(v, 10)`)을 적는 습관을 들인다.
+
+## 크다 작다도 타입을 바꾼다
+
+`<`, `>`, `<=`, `>=`도 값을 바꾼다. 두 쪽이 모두 문자열이면 사전 순(UTF-16 코드 단위 순)으로 비교하고, 하나라도 문자열이 아니면 숫자로 바꾼다.
+
+```js
+console.log("10" < "9", 10 < "9", "10" < 9);
+console.log(null >= 0, null > 0, null == 0, undefined >= 0);
+console.log(["10", "9", "1"].sort(), [10, 9, 1].sort(), [10, 9, 1].sort((a, b) => a - b));
+```
+
+```text
+true false false
+true false false false
+[ '1', '10', '9' ] [ 1, 10, 9 ] [ 1, 9, 10 ]
+```
+
+`"10" < "9"`가 `true`인 건 첫 글자 `"1"`이 `"9"`보다 앞이기 때문이다. API가 숫자를 문자열로 내려 주면(`"price": "10"`) 정렬과 범위 필터가 조용히 틀린다. 두 번째 줄은 더 이상하다. `null >= 0`은 `true`인데 `null > 0`도 `null == 0`도 `false`다. 관계 연산자는 `null`을 숫자 0으로 바꾸지만 `==`는 2번 규칙 때문에 바꾸지 않는다. `undefined`는 숫자로 바꾸면 `NaN`이라 어떤 비교도 `false`다.
+
+세 번째 줄의 `[10, 9, 1].sort()`는 숫자 배열인데도 `[1, 10, 9]`가 나온다. 비교 함수 없이 `sort`를 부르면 요소를 문자열로 바꿔 비교한다. 숫자 정렬에는 반드시 `(a, b) => a - b`를 넘긴다.
+
+## 값이 경계를 넘을 때마다 문자열이 된다
+
+처음의 `<select>` 버그는 한 번만 생기는 게 아니다. 값이 HTML, URL, JSON 같은 경계를 지날 때마다 타입이 바뀐다. 아래 그림에서 다음을 누르며 상품 id가 어디서 무슨 타입이 되는지 따라가 보자.
+
+<NetworkTopology
+  caption="경계를 지날 때마다 id의 타입이 바뀐다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "br", label: "browser", x: 10, y: 10, w: 180, h: 280, tone: "edge" },
+    { id: "srv", label: "server", x: 210, y: 10, w: 180, h: 280, tone: "private" },
+  ]}
+  nodes={[
+    { id: "sel", label: "select", sub: "value \"2\"", x: 100, y: 60, icon: "client", w: 110 },
+    { id: "state", label: "state", sub: "id: \"2\"", x: 100, y: 230, icon: "container", w: 110 },
+    { id: "api", label: "handler", sub: "query.id \"2\"", x: 300, y: 60, icon: "server", w: 120 },
+    { id: "db", label: "postgres", sub: "id int", x: 300, y: 230, icon: "db", w: 110 },
+  ]}
+  links={[
+    { from: "sel", to: "state" },
+    { from: "state", to: "api", label: "?id=2" },
+    { from: "api", to: "db" },
+  ]}
+  steps={[
+    { path: ["sel", "state"], packet: "\"2\"", title: "DOM 값은 문자열이다", detail: "option의 value에 숫자를 넣어도 e.target.value는 문자열로 나온다. input type=number도 value는 문자열이다.", payload: "e.target.value      // \"2\"\ne.target.valueAsNumber // type=number 입력이면 2" },
+    { path: ["state"], packet: "===", blocked: true, title: "숫자 id와 비교하면 못 찾는다", detail: "products의 id는 숫자 2다. 문자열 \"2\"와 ===로 비교하니 find가 undefined를 돌려준다." },
+    { path: ["state", "api"], packet: "?id=2", title: "URL에 실리면 문자열", detail: "쿼리스트링에는 타입이 없다. 서버 프레임워크가 꺼내 주는 값도 문자열이다." },
+    { path: ["api", "db"], packet: "$1", title: "DB 드라이버가 바꿔 준다", detail: "파라미터 바인딩으로 넘기면 PostgreSQL이 컬럼 타입에 맞춰 해석한다. 하지만 서버 코드 안의 비교는 여전히 문자열이다." },
+    { path: ["db", "api", "state"], packet: "{id:2}", highlight: ["state"], title: "JSON 응답은 다시 숫자", detail: "응답 JSON의 id는 숫자다. 경계를 지날 때마다 한 번씩 Number로 바꿔 두면 안쪽 코드는 ===만 쓰면 된다." },
+  ]}
+/>
+
+그래서 실무 규칙은 "경계에서 한 번 바꾸고 안쪽에서는 `===`"다. 폼 핸들러, 라우터의 파라미터 파싱, API 응답 검증(zod 같은 스키마 라이브러리)에서 타입을 맞춰 두면 안쪽 코드 곳곳에 `==`를 흩뿌릴 이유가 없다.
+
+TypeScript를 쓰면 이 버그를 컴파일 단계에서 잡는다. 처음 예제에서 `selected`를 `string`으로 선언하고 TypeScript 5.9로 검사하면 이렇게 나온다.
+
+```text
+t1.ts(3,22): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+```
+
+다만 `any`나 단언(`as`)으로 들어온 값은 이 검사를 빠져나간다. 외부에서 들어온 값은 타입 선언보다 런타임 검증이 먼저다.
+
+## NaN과 -0, 엄격한 비교의 구멍
+
+`===`도 완벽하지 않다. 구멍이 두 개 있다. `NaN`은 자기 자신과도 같지 않고, `0`과 `-0`은 구분하지 못한다.
+
+```js
+console.log(NaN === NaN, Object.is(NaN, NaN));
+console.log(0 === -0, Object.is(0, -0));
+console.log([NaN].indexOf(NaN), [NaN].includes(NaN));
+```
+
+```text
+false true
+true false
+-1 true
+```
+
+`NaN !== NaN`은 IEEE 754 부동소수점 표준이 정한 동작이라 다른 언어도 마찬가지다. 그래서 `x === NaN`으로 검사하면 언제나 `false`이고, `Number.isNaN(x)`를 써야 한다. `-0`은 `-1 * 0`이나 `Math.round(-0.4)` 같은 계산에서 생긴다. 화면에 찍으면 `0`으로 보이지만 `1 / -0`은 `-Infinity`다. 좌표나 방향을 다루는 코드가 아니면 신경 쓸 일이 드물다.
+
+`Map`과 `Set`은 SameValueZero라서 `NaN`을 키로 쓸 수 있고 `-0`과 `0`을 같은 키로 본다. `new Set([0, -0, NaN, NaN]).size`는 `2`다.
+
+React는 SameValue, 즉 `Object.is`로 비교한다. state가 `NaN`인데 다시 `NaN`을 넣으면 같은 값으로 보고 렌더링을 건너뛴다. `===`로 비교했다면 `NaN`끼리도 다르다고 판단했을 것이다. 의존성 배열도 `Object.is`라서 `useEffect(fn, [id])`의 `id`가 `"2"`에서 `2`로 바뀌면 값은 같아 보여도 이펙트가 다시 돈다. 반대로 `key`는 문자열로 바꿔서 쓰기 때문에 `key={2}`와 `key="2"`는 같은 키다. 리렌더링 판단 전체는 [React는 언제 다시 그리나](/posts/react-rerender)에 정리했다.
+
+## 느슨한 비교를 써도 되는 곳은 한 군데
+
+대부분의 스타일 가이드와 ESLint의 `eqeqeq` 규칙은 `===`만 쓰라고 한다. 예외로 널리 허용되는 패턴이 하나 있다. `null`과 `undefined`를 한꺼번에 검사하는 `x == null`이다.
+
+```js
+function label(name) {
+  if (name == null) return "이름 없음"; // null 또는 undefined
+  return name;
+}
+console.log(label(null), label(undefined), label(""), label(0));
+```
+
+```text
+이름 없음 이름 없음  0
+```
+
+2번 규칙 덕분에 `== null`은 `null`과 `undefined`에만 `true`이고, 빈 문자열이나 `0`은 통과시킨다. `!name`으로 쓰면 빈 문자열과 `0`까지 걸러져서 의도와 달라진다. ESLint에서는 `eqeqeq: ["error", "always", { "null": "ignore" }]`로 이 패턴만 허용할 수 있다. 팀에서 `==`를 아예 금지했다면 `x === null || x === undefined`로 쓰거나, 기본값을 넣는 경우라면 `??`를 쓴다. `??`와 `||`의 차이는 [옵셔널 체이닝과 ?? 글](/posts/js-optional-chaining-nullish)에서 다룬다.
+
+규칙을 직접 구현해 보면 순서가 머리에 남는다. 아래는 원시값(`null`, `undefined`, 불리언, 숫자, 문자열)만 받는 `==`다. 함수 안에서 `==`를 쓰지 않고 앞에서 본 순서대로 짜 보자.
+
+<CodePlayground
+  caption="== 를 규칙대로 직접 구현하기"
+  functionName="looseEqual"
+  initialCode={`function looseEqual(x, y) {\n  // == 를 쓰지 말고 규칙대로 구현한다\n  // 1. 타입이 같으면 ===\n  // 2. null, undefined는 서로만 같다\n  // 3. 불리언은 숫자로 바꾼다\n  // 4. 숫자와 문자열이면 문자열을 숫자로\n  return false;\n}`}
+  solution={`function looseEqual(x, y) {\n  // 1. 타입이 같으면 === 와 같다\n  if (typeof x === typeof y) return x === y;\n  // 2. null과 undefined는 서로만 같다\n  if (x === null || x === undefined || y === null || y === undefined) {\n    return (x === null || x === undefined) && (y === null || y === undefined);\n  }\n  // 3. 불리언은 먼저 숫자로 바꾼다\n  if (typeof x === "boolean") return looseEqual(Number(x), y);\n  if (typeof y === "boolean") return looseEqual(x, Number(y));\n  // 4. 숫자와 문자열이면 문자열을 숫자로 바꾼다\n  if (typeof x === "number" && typeof y === "string") return x === Number(y);\n  if (typeof x === "string" && typeof y === "number") return Number(x) === y;\n  return false;\n}`}
+  tests={[
+    { label: "null == undefined", args: [null, undefined], expected: true },
+    { label: "null == 0", args: [null, 0], expected: false },
+    { label: "\"1\" == 1", args: ["1", 1], expected: true },
+    { label: "\"\" == 0", args: ["", 0], expected: true },
+    { label: "true == \"1\"", args: [true, "1"], expected: true },
+    { label: "false == \"false\"", args: [false, "false"], expected: false },
+    { label: "NaN == NaN", args: [NaN, NaN], expected: false },
+    { label: "\" 12 \" == 12", args: [" 12 ", 12], expected: true },
+  ]}
+/>
+
+`false == "false"`가 왜 `false`인지 코드로 따라가 보면 불리언이 0으로 바뀐 뒤 `"false"`가 `NaN`이 되는 길이 보인다. 각 테스트의 기대값은 실제 `==` 결과와 같다는 것을 Node 22에서 확인했다.
+
+## 비교 하나에 담긴 결정
+
+`===`는 타입이 다르면 바로 거짓이고, `==`는 정해진 순서로 타입을 바꾼 뒤 다시 비교한다. 바꾸는 규칙은 null 짝짓기, 불리언은 숫자로, 문자열은 숫자로, 객체는 ToPrimitive로, 이렇게 몇 줄이다. 실무에서는 값이 들어오는 경계에서 타입을 한 번 맞추고 안쪽은 `===`로 비교한다. `== null` 하나만 예외로 두고, `NaN`은 `Number.isNaN`, 객체는 참조 비교라는 사실을 함께 기억한다.
+
+## 면접에서 나올 만한 질문
+
+### ==와 ===의 차이는
+
+`===`는 타입이 다르면 바로 `false`를 돌려주고, `==`는 정해진 규칙으로 타입을 맞춘 뒤 비교한다. 규칙은 `null`과 `undefined`끼리만 같고, 불리언과 문자열은 숫자로, 객체는 원시값으로 바꾸는 순서다. 예측이 어렵기 때문에 보통 `===`를 쓰고 `== null`만 예외로 둔다.
+
+### [] == false가 true인 이유를 단계별로 설명해 보라
+
+불리언 `false`가 먼저 숫자 0으로 바뀌어 `[] == 0`이 된다. 배열은 객체라서 ToPrimitive로 바뀌는데 `valueOf`가 배열 자신을 돌려주니 `toString`이 불려 빈 문자열이 된다. `"" == 0`에서 빈 문자열이 0으로 바뀌어 `0 === 0`, 즉 `true`다. 불리언은 참·거짓이 아니라 숫자 0과 1로 비교된다.
+
+### Object.is는 ===와 무엇이 다른가
+
+두 가지만 다르다. `Object.is(NaN, NaN)`은 `true`이고 `Object.is(0, -0)`은 `false`다. React가 state, props, 의존성 배열을 비교할 때 이 알고리즘(SameValue)을 쓴다. `includes`, `Map`, `Set`은 여기서 `0`과 `-0`만 같게 본 SameValueZero를 쓴다.
+
+### NaN인지 확인하려면 어떻게 하나
+
+`Number.isNaN(x)`를 쓴다. `NaN`은 자기 자신과도 같지 않아서 `x === NaN`은 항상 `false`다. 전역 `isNaN`은 인수를 먼저 숫자로 바꿔서 `isNaN("abc")`도 `true`가 되니 숫자인지 검사하는 용도로는 부정확하다. 배열에서 찾을 때는 `indexOf`가 아니라 `includes`가 `NaN`을 찾는다.
+
+### 객체를 == 로 비교하면 어떻게 되나
+
+두 쪽이 모두 객체면 타입이 같으므로 `===`처럼 참조를 비교한다. 내용이 같아도 다른 객체면 `false`다. 한쪽만 객체이고 다른 쪽이 원시값이면 객체를 ToPrimitive로 바꾸는데, 이때 `Symbol.toPrimitive`, `valueOf`, `toString` 순서로 메서드를 찾는다. `Date`는 기본 힌트를 문자열로 다루는 예외다.
+
+### 1 + "2"는 "12"인데 1 - "2"는 -1인 이유는
+
+이항 `+`는 두 쪽을 원시값으로 바꾼 뒤 하나라도 문자열이면 이어 붙이고, `-`는 무조건 숫자로 바꾸기 때문이다. 그래서 폼 입력 두 개를 바로 더하면 문자열이 이어 붙는다. 계산하기 전에 `Number`로 바꾸고, 빈 문자열이 0이 되는 경우를 따로 검사한다.
+
+### 숫자 배열을 sort()했더니 [1, 10, 9]가 나왔다. 왜인가
+
+비교 함수 없이 `sort`를 부르면 요소를 문자열로 바꿔 사전 순으로 비교한다. `"10"`은 첫 글자 `"1"`이 `"9"`보다 앞이라 먼저 온다. 숫자 정렬은 `sort((a, b) => a - b)`로 한다. API가 숫자를 문자열로 내려 줄 때 비교 연산자 `<`도 같은 문제를 일으킨다.
+
+### 실무에서 타입 변환 버그를 줄이는 방법은
+
+값이 들어오는 경계에서 한 번 타입을 맞추고 안쪽에서는 `===`만 쓴다. DOM 값, 쿼리스트링, 환경 변수는 모두 문자열이고 JSON은 숫자를 유지하므로, 폼 핸들러와 라우트 파서, 응답 검증 단계에서 변환한다. ESLint `eqeqeq`로 `==`를 막고 TypeScript로 서로 겹치지 않는 타입의 비교를 잡는다.

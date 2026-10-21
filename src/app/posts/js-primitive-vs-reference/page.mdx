@@ -1,0 +1,472 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-primitive-vs-reference");
+
+장바구니 화면에 쿠폰 미리보기를 붙였다. "10% 쿠폰을 쓰면 얼마"를 보여 주는 함수다. 계산만 하고 돌려줄 생각이었다.
+
+```js
+const cart = {
+  items: [
+    { name: "키보드", price: 50000, qty: 1 },
+    { name: "마우스", price: 20000, qty: 2 },
+  ],
+};
+
+function totalWithCoupon(c, rate) {
+  for (const item of c.items) {
+    item.price = item.price * (1 - rate); // 계산용으로 값을 바꿨을 뿐인데
+  }
+  return c.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+}
+
+console.log(totalWithCoupon(cart, 0.1));
+console.log(cart.items[0].price);
+console.log(totalWithCoupon(cart, 0.1));
+```
+
+Node 22에서 돌린 결과다.
+
+```text
+81000
+45000
+72900
+```
+
+미리보기를 한 번 열었을 뿐인데 장바구니의 키보드 가격이 45,000원이 됐다. 한 번 더 열면 할인이 또 들어가 72,900원이 나온다. 함수 안의 `c`는 매개변수니까 복사본일 거라고 생각했다면 여기서 틀린다. 이 글은 자바스크립트가 값을 넘기고 복사하는 규칙을 처음부터 따라간다. 같은 시리즈의 [비교 연산자 글](/posts/js-equality-coercion)과 [typeof·falsy 글](/posts/js-truthy-falsy-typeof)은 이 규칙 위에서 이어진다.
+
+## 원시값 일곱 가지, 나머지는 전부 객체
+
+자바스크립트의 값은 두 갈래다. 원시값(primitive)은 더 쪼갤 수 없는 단순한 값이고, 그 외는 전부 객체다. 원시값은 일곱 가지뿐이다.
+
+- `string`, `number`, `bigint`(ES2020), `boolean`
+- `undefined`, `null`
+- `symbol`(ES2015)
+
+배열, 함수, `Date`, `Map`, 정규식은 모두 객체다. 함수는 호출할 수 있는 객체이고 배열은 숫자 키와 `length`를 가진 객체다.
+
+원시값의 성질은 하나만 기억하면 된다. 바꿀 수 없다(immutable). 문자열의 한 글자를 바꾸려 해도 원래 문자열은 그대로이고, `toUpperCase()` 같은 메서드는 새 문자열을 만들어 돌려준다.
+
+```js
+let s = "hello";
+s[0] = "H";
+console.log(s);
+console.log(s.toUpperCase(), s);
+```
+
+```text
+hello
+HELLO hello
+```
+
+`s[0] = "H"`는 오류도 없이 조용히 무시됐다. strict 모드(모듈과 클래스 안은 자동으로 strict다)였다면 `TypeError`가 났을 것이다.
+
+그런데 원시값인 `"abc"`에 `.length`나 `.toUpperCase()`를 붙일 수 있는 건 왜일까. 속성을 읽는 순간 엔진이 임시 래퍼 객체(`String`)를 만들어 메서드를 빌려 주고 바로 버린다. 그래서 원시값에 속성을 붙여도 남지 않는다.
+
+```js
+const p = "abc";
+p.custom = 1;
+console.log(p.custom);              // undefined
+console.log(typeof "abc", typeof new String("abc"));
+```
+
+```text
+undefined
+string object
+```
+
+`new String("abc")`처럼 래퍼를 직접 만들면 진짜 객체가 생긴다. 이 객체는 비교와 참·거짓 판단에서 원시값과 다르게 움직이니 쓸 일이 없다.
+
+## 변수 칸에 들어 있는 것
+
+명세는 변수를 Environment Record(스코프마다 이름과 값을 묶어 두는 표)의 한 칸으로 설명한다. 칸에 들어가는 건 언제나 "값"이다. 다만 객체의 경우 그 값이 객체 자체가 아니라 객체를 가리키는 참조다. 객체 본체는 힙(엔진이 객체를 두는 메모리 영역)에 따로 있고, 칸에는 그 위치만 적혀 있다.
+
+아래 그림에서 왼쪽은 변수 칸, 오른쪽은 힙이다. `a`와 `b`는 숫자를 각자 들고 있고, `user`와 `alias`는 같은 객체 하나를 가리킨다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="원시값은 칸에 값이 있고, 객체는 칸에 위치만 있다"
+  nodes={[
+    { id: "a", label: "a", sub: "10", x: 70, y: 40, w: 100 },
+    { id: "b", label: "b", sub: "10", x: 70, y: 105, w: 100 },
+    { id: "user", label: "user", sub: "→ #1", x: 70, y: 170, w: 100 },
+    { id: "alias", label: "alias", sub: "→ #1", x: 70, y: 230, w: 100 },
+    { id: "obj", label: "#1 객체", sub: "{ name: 'lee' }", x: 300, y: 200, w: 150 },
+    { id: "heap", label: "힙", sub: "객체 본체가 사는 곳", x: 300, y: 70, w: 150 },
+  ]}
+  edges={[
+    { from: "user", to: "obj", label: "참조" },
+    { from: "alias", to: "obj", label: "참조" },
+    { from: "heap", to: "obj", dashed: true, arrow: "none" },
+  ]}
+/>
+
+"원시값은 스택에, 객체는 힙에 저장된다"는 설명을 자주 본다. 머릿속 모델로는 쓸 만하지만 엔진이 실제로 그렇게 하지는 않는다. V8은 작은 정수(Smi)만 칸에 직접 넣고, 소수점 숫자와 문자열은 힙에 둔다. Node 22에서 V8 내부 표현을 찍어 보면 차이가 보인다.
+
+```bash
+# 엔진 내부 함수 %DebugPrint를 쓰려면 플래그가 필요하다
+node --allow-natives-syntax -e '%DebugPrint(42); %DebugPrint(4.2); %DebugPrint("hi")'
+```
+
+```text
+DebugPrint: Smi: 0x2a (42)
+DebugPrint: 0x2ab01b59af61: [HeapNumber] in OldSpace
+ - value: 4.2
+DebugPrint: 0x2ab01b59adf9: [String] in OldSpace: #hi
+```
+
+(출력에서 각 값의 첫 줄과 `value`만 남겼다.) `42`는 `Smi`로 바로 들어 있고, `4.2`와 `"hi"`는 힙 주소(`0x...`)를 가진 객체다. 그런데도 원시값처럼 움직이는 건 바꿀 수 없기 때문이다. 두 변수가 같은 `"hi"`를 가리켜도 어느 쪽도 그 문자열을 고칠 수 없으니, 복사했는지 공유했는지 구분할 방법이 없다. 언어 차원에서 중요한 건 저장 위치가 아니라 "그 값을 고칠 수 있느냐"다.
+
+## 대입은 칸의 내용을 그대로 복사한다
+
+`=`의 규칙은 하나다. 오른쪽 칸에 든 것을 왼쪽 칸에 복사한다. 숫자가 들어 있으면 숫자가, 참조가 들어 있으면 참조가 복사된다. 참조를 복사하면 객체는 여전히 하나다.
+
+```js
+let a = 10;
+let b = a;
+b = 20;
+console.log(a, b);
+
+const user = { name: "kim" };
+const alias = user;
+alias.name = "lee";
+console.log(user.name, user === alias);
+```
+
+```text
+10 20
+lee true
+```
+
+다음을 누르며 칸의 변화를 따라가 보자. 위 칸은 실행 중인 줄이고, 아래 상자는 지금 칸들의 내용이다.
+
+<AlgoTrace
+  caption="참조를 복사해도 객체는 하나다"
+  memoryLabel="변수 칸 / 힙"
+  cells={["a = 10", "b = a", "b = 20", "user = {}", "alias = user", "alias.name"]}
+  steps={[
+    { pointer: 0, memory: ["a: 10"], caption: "a 칸에 숫자 10이 들어간다." },
+    { pointer: 1, memory: ["a: 10", "b: 10"], caption: "a 칸의 내용을 b 칸에 복사한다. 이제 둘은 남남이다." },
+    { pointer: 2, memory: ["a: 10", "b: 20"], caption: "b 칸만 바뀐다. a는 그대로 10이다." },
+    { pointer: 3, memory: ["a: 10", "b: 20", "#1 {name:kim}", "user: →#1"], caption: "힙에 객체 #1이 생기고 user 칸에는 그 위치가 들어간다." },
+    { pointer: 4, memory: ["a: 10", "b: 20", "#1 {name:kim}", "user: →#1", "alias: →#1"], caption: "alias에 복사되는 건 위치 #1이다. 객체는 새로 생기지 않는다." },
+    { pointer: 5, found: [3, 4, 5], memory: ["a: 10", "b: 20", "#1 {name:lee}", "user: →#1", "alias: →#1"], caption: "alias로 #1을 고치면 user로 봐도 바뀌어 있다. 같은 객체니까." },
+  ]}
+/>
+
+변수를 바꾸는 것(재할당)과 객체를 고치는 것(변경, mutation)을 나눠서 보면 헷갈릴 일이 줄어든다. `b = 20`은 칸을 바꾸는 재할당이고, `alias.name = "lee"`는 칸은 그대로 두고 칸이 가리키는 객체를 고치는 변경이다.
+
+## 함수에 넘길 때도 같은 규칙이다
+
+함수 호출은 매개변수라는 새 칸을 만들고 인수 값을 대입하는 일이다. 그러니 앞 절의 규칙이 그대로 적용된다. 객체를 넘기면 참조가 복사된다. 이 방식을 call by sharing(공유 전달)이라고 부른다. "자바스크립트는 객체를 참조로 전달한다"는 말은 반만 맞다. C++의 참조 전달이라면 함수 안에서 매개변수에 새 객체를 대입했을 때 바깥 변수도 바뀌어야 하는데, 자바스크립트는 그렇지 않다.
+
+```js
+function rename(u) { u.name = "lee"; }       // 객체를 고친다
+function replace(u) { u = { name: "park" }; } // 매개변수 칸만 바꾼다
+function bump(n) { n = n + 1; }               // 숫자 칸만 바꾼다
+
+const user = { name: "kim" };
+let count = 1;
+rename(user);  console.log(user.name);
+replace(user); console.log(user.name);
+bump(count);   console.log(count);
+```
+
+```text
+lee
+lee
+1
+```
+
+`replace`는 바깥의 `user`에 아무 영향도 주지 않았다. 함수 안에서 `u`라는 칸이 새 객체를 가리키게 됐을 뿐이다. 아래 그림은 `rename`과 `replace`가 무엇을 건드리는지 보여 준다.
+
+<SequenceDiagram
+  caption="매개변수는 참조의 복사본을 받는다"
+  actors={[
+    { id: "caller", label: "호출한 쪽" },
+    { id: "param", label: "매개변수 u" },
+    { id: "heap", label: "힙 #1" },
+  ]}
+  steps={[
+    { from: "caller", to: "param", label: "→#1 복사", title: "참조가 복사된다", detail: "rename(user)를 부르면 user 칸의 내용, 즉 위치 #1이 u 칸에 복사된다.", payload: "user: →#1\nu:    →#1" },
+    { from: "param", to: "heap", label: "name = lee", title: "u로 객체를 고친다", detail: "u.name = 'lee'는 #1 객체를 고친다. user도 #1을 가리키니 바깥에서도 바뀐 게 보인다." },
+    { from: "caller", to: "param", label: "→#1 복사", title: "replace도 처음은 같다", detail: "replace(user)를 부르면 u가 다시 #1을 받는다." },
+    { from: "param", to: "param", label: "u = {park}", title: "u 칸만 바뀐다", detail: "새 객체 #2를 만들어 u 칸에 넣는다. user 칸은 여전히 #1이다.", payload: "user: →#1  { name: 'lee' }\nu:    →#2  { name: 'park' }" },
+    { from: "heap", to: "caller", label: "#1 그대로", title: "바깥은 그대로다", detail: "함수가 끝나면 u 칸은 사라진다. #2는 아무도 가리키지 않으니 나중에 GC가 치운다." },
+  ]}
+/>
+
+처음의 쿠폰 버그도 이것이다. `totalWithCoupon(cart, 0.1)`에서 `c`는 `cart`와 같은 객체를 가리키고, `item`은 그 안의 상품 객체를 가리킨다. `item.price = ...`는 원본 상품을 고친다. 고치는 방법은 원본에 손대지 않고 계산하는 것이다.
+
+```js
+function totalWithCoupon(c, rate) {
+  return c.items.reduce((sum, i) => sum + i.price * (1 - rate) * i.qty, 0);
+}
+```
+
+값을 바꾼 새 목록이 필요하다면 `c.items.map((i) => ({ ...i, price: i.price * (1 - rate) }))`처럼 새 객체를 만든다. 이렇게 입력을 고치지 않는 함수가 [순수 함수](/posts/js-pure-functions)다. 스프레드로 만든 복사본이 어디까지 새것인지는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy) 글에서 따로 다룬다.
+
+## const는 객체를 얼리지 않는다
+
+`const`로 선언했는데 객체가 바뀐다는 질문도 같은 뿌리다. `const`가 막는 건 칸의 재할당이지, 칸이 가리키는 객체의 변경이 아니다([var·let·const 글](/posts/js-var-let-const) 참고). 객체 자체를 막으려면 `Object.freeze`를 쓴다. 그런데 이것도 한 층만 얼린다.
+
+```js
+const settings = Object.freeze({ theme: "dark", flags: { beta: false } });
+settings.theme = "light";     // 무시된다 (strict 모드면 TypeError)
+settings.flags.beta = true;   // 안쪽 객체는 얼지 않았다
+console.log(settings);
+```
+
+```text
+{ theme: 'dark', flags: { beta: true } }
+```
+
+`flags` 칸에 든 것도 참조다. 바깥 객체를 얼리면 `flags` 칸을 다른 참조로 바꿀 수는 없지만, 그 참조가 가리키는 안쪽 객체는 별개의 객체라서 그대로 열려 있다. strict 모드에서 얼린 객체를 고치려 하면 이런 오류가 난다.
+
+```text
+TypeError: Cannot assign to read only property 'a' of object '#<Object>'
+```
+
+`freeze`와 `seal`, 속성 설명자의 차이는 [객체 메서드 글](/posts/js-object-methods)에 정리했다.
+
+## 내용이 같아도 다른 객체다
+
+`===`로 객체를 비교하면 내용이 아니라 참조를 본다. 같은 위치를 가리키는지만 확인한다. 그래서 겉모습이 똑같은 객체도 서로 다르다.
+
+```js
+console.log([{ id: 1 }].includes({ id: 1 }));
+const set = new Set([{ id: 1 }, { id: 1 }]);
+console.log(set.size);
+const m = new Map();
+m.set({ id: 1 }, "a");
+console.log(m.get({ id: 1 }));
+```
+
+```text
+false
+2
+undefined
+```
+
+`includes`, `indexOf`, `Set`, `Map`의 키 모두 같은 규칙이다. 리터럴 `{ id: 1 }`을 쓸 때마다 새 객체가 생기니 찾을 수 없다. 실무에서는 객체 대신 id 같은 원시값을 키로 쓴다. `new Set(items.map((i) => i.id))`나 `items.some((i) => i.id === target.id)`처럼 비교 기준을 원시값으로 내린다. 비교 연산자가 타입을 어떻게 다루는지는 [==와 === 글](/posts/js-equality-coercion)에서 이어 간다.
+
+반대로 참조로 비교하는 성질은 빠르다는 장점이 있다. 객체가 아무리 커도 참조 비교는 주소 하나를 보는 일이다. React가 이 성질을 그대로 쓴다.
+
+## React가 화면을 바꾸지 않을 때
+
+할 일 목록에 항목을 추가했는데 화면이 그대로인 버그가 있다.
+
+```jsx
+function TodoList() {
+  const [todos, setTodos] = useState(["빨래"]);
+  const add = () => {
+    todos.push("설거지"); // 원본 배열을 고친다
+    setTodos(todos);      // 같은 참조를 다시 넣는다
+  };
+  // ...
+}
+```
+
+React는 `setTodos`에 들어온 값을 지금 값과 `Object.is`로 비교하고, 같으면 다시 그리지 않는다. `push`로 배열 내용은 바뀌었지만 참조는 그대로이니 "바뀐 게 없다"고 판단한다. 그 비교를 흉내 내 보면 이렇다.
+
+```js
+let state = { todos: ["빨래"] };
+function setState(next) {
+  if (Object.is(state, next)) { console.log("같은 참조, 건너뜀"); return; }
+  state = next;
+  console.log("다시 그림:", state.todos);
+}
+state.todos.push("설거지");
+setState(state);
+setState({ ...state, todos: [...state.todos, "청소"] });
+```
+
+```text
+같은 참조, 건너뜀
+다시 그림: [ '빨래', '설거지', '청소' ]
+```
+
+고치는 방법은 새 배열을 만들어 넘기는 것이다. 아래 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="새 참조를 만들어 넘기는 업데이트"
+  base="setTodos"
+  separator="("
+  joiner=" "
+  params={[
+    { key: "open", display: "[", title: "새 배열 리터럴", description: "대괄호를 열 때마다 힙에 새 배열이 생긴다. 이 배열의 참조는 지금 state와 다르니 React가 변경을 알아챈다.", required: true },
+    { key: "spread", display: "...todos,", title: "기존 항목 복사", description: "기존 배열의 요소를 새 배열에 차례로 넣는다. 요소가 객체라면 그 참조가 복사될 뿐이라 안쪽 객체는 공유된다." },
+    { key: "next", display: "next", title: "추가할 항목", description: "끝에 새 항목을 붙인다. 원본 todos는 손대지 않는다." },
+    { key: "close", display: "])", title: "원본은 그대로", description: "이전 렌더의 todos는 그대로 남는다. 이전 값과 새 값을 비교하는 memo, useEffect 의존성 비교가 이래서 제대로 일한다.", code: "setTodos((prev) => [...prev, next]);" },
+  ]}
+/>
+
+반대 방향의 실수도 있다. 렌더할 때마다 새 객체를 만들어 props나 의존성 배열에 넣으면, 내용이 같아도 매번 "바뀌었다"고 판단한다. `useEffect(() => { ... }, [{ page }])` 같은 코드는 렌더마다 이펙트가 다시 돈다. 같은 값이면 같은 참조를 유지하고, 바뀔 때만 새 참조를 만드는 것이 React 상태 관리의 기본 규칙이다. 리렌더링 조건은 [React는 언제 다시 그리나](/posts/react-rerender), 중첩된 상태를 불변으로 고치는 방법은 [불변 업데이트 글](/posts/js-immutability-react)에서 자세히 본다.
+
+## 현장에서 이 규칙을 만나는 증상
+
+참조 공유 버그는 증상이 엉뚱한 곳에서 나타난다. 고친 쪽이 아니라 같은 객체를 들고 있던 다른 쪽에서 값이 이상해진다. 자주 보이는 것들을 모았다.
+
+### 한 칸을 고쳤는데 모든 칸이 바뀐다
+
+2차원 배열을 `fill`로 초기화하면 생긴다.
+
+```js
+const grid = Array(3).fill([]);
+grid[0].push("x");
+console.log(grid);
+
+const grid2 = Array.from({ length: 3 }, () => []);
+grid2[0].push("x");
+console.log(grid2);
+```
+
+```text
+[ [ 'x' ], [ 'x' ], [ 'x' ] ]
+[ [ 'x' ], [], [] ]
+```
+
+`fill([])`은 인수 `[]`를 한 번만 평가해서 그 참조를 세 칸에 복사한다. `Array.from`의 두 번째 인수는 칸마다 함수를 불러 매번 새 배열을 만든다.
+
+<AlgoTrace
+  caption="fill은 같은 참조를 세 번 복사한다"
+  memoryLabel="힙"
+  cells={["grid[0]", "grid[1]", "grid[2]"]}
+  steps={[
+    { memory: ["#7 []"], caption: "fill([])의 인수가 먼저 한 번 평가돼 배열 #7 하나가 생긴다." },
+    { pointer: 0, memory: ["#7 []"], caption: "grid[0] 칸에 →#7을 넣는다." },
+    { pointer: 1, memory: ["#7 []"], caption: "grid[1]에도 같은 →#7이 들어간다. 새 배열이 아니다." },
+    { pointer: 2, memory: ["#7 []"], caption: "grid[2]도 →#7. 세 칸이 배열 하나를 나눠 쓴다." },
+    { pointer: 0, memory: ["#7 [x]"], caption: "grid[0].push('x')는 #7을 고친다." },
+    { found: [0, 1, 2], memory: ["#7 [x]"], caption: "그래서 세 칸 모두 [x]로 보인다." },
+  ]}
+/>
+
+### 서버에서 요청끼리 값이 섞인다
+
+Node 서버에서 모듈 최상단에 둔 객체는 프로세스가 살아 있는 동안 하나다. 모든 요청이 그 객체를 공유한다. 기본값 객체를 꺼내 고쳐 쓰면 앞 요청의 값이 다음 요청에 남는다.
+
+```js
+// 모듈 최상단에 둔 기본값 객체를 요청마다 꺼내 쓴다
+const DEFAULT_FILTER = { tags: [] };
+
+function buildFilter(tag) {
+  const filter = DEFAULT_FILTER; // 복사가 아니라 같은 객체를 가리킨다
+  filter.tags.push(tag);
+  return filter;
+}
+
+console.log(buildFilter("js").tags);    // 요청 1
+console.log(buildFilter("react").tags); // 요청 2
+```
+
+```text
+[ 'js' ]
+[ 'js', 'react' ]
+```
+
+로컬에서 한 번씩 테스트하면 멀쩡하고, 운영에서 요청이 쌓일수록 결과가 이상해진다. 다른 사용자의 필터가 섞여 보이면 개인정보 문제로 커질 수도 있다.
+
+<NetworkTopology
+  caption="모듈 스코프 객체는 모든 요청이 함께 쓴다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "proc", label: "node process", x: 150, y: 10, w: 240, h: 260, tone: "private" },
+  ]}
+  nodes={[
+    { id: "u1", label: "user A", sub: "tag=js", x: 60, y: 70, icon: "client", w: 90 },
+    { id: "u2", label: "user B", sub: "tag=react", x: 60, y: 210, icon: "client", w: 90 },
+    { id: "h", label: "handler", sub: "buildFilter", x: 240, y: 140, icon: "server", w: 110 },
+    { id: "obj", label: "DEFAULT", sub: "모듈 스코프", x: 330, y: 240, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "u1", to: "h" },
+    { from: "u2", to: "h" },
+    { from: "h", to: "obj" },
+  ]}
+  steps={[
+    { path: ["u1", "h", "obj"], packet: "js", title: "A의 요청이 객체를 고친다", detail: "filter는 DEFAULT_FILTER와 같은 객체다. tags에 js가 들어간다.", payload: "DEFAULT_FILTER.tags = ['js']" },
+    { path: ["obj", "h", "u1"], packet: "['js']", title: "A는 정상 결과를 받는다", detail: "첫 요청만 보면 아무 문제가 없다." },
+    { path: ["u2", "h", "obj"], packet: "react", highlight: ["obj"], title: "B도 같은 객체를 고친다", detail: "프로세스가 같으니 모듈 최상단 객체도 같다. A가 넣은 값이 아직 남아 있다.", payload: "DEFAULT_FILTER.tags = ['js', 'react']" },
+    { path: ["obj", "h", "u2"], packet: "2 tags", blocked: true, title: "B에게 A의 값이 섞인다", detail: "요청이 쌓일수록 tags가 계속 길어진다. 매 요청마다 새 객체를 만들어야 한다.", payload: "const filter = { tags: [] }; // 요청마다 새로" },
+  ]}
+/>
+
+고치는 방법은 기본값을 객체가 아니라 객체를 만드는 함수로 두는 것이다. `const defaultFilter = () => ({ tags: [] })`. 함수 기본 매개변수(`function f(opts = {})`)는 호출할 때마다 새로 평가되니 이 문제가 없다. 파이썬의 가변 기본 인수 함정과 다른 점이다.
+
+### 로그에 찍힌 값이 나중 값이다
+
+크롬 개발자 도구의 콘솔에서 `console.log(obj)`로 찍은 객체를 나중에 펼치면, 찍을 당시가 아니라 펼치는 시점의 내용을 보여 준다. 콘솔이 객체 참조를 들고 있다가 펼칠 때 읽기 때문이다. 찍은 직후 값이 바뀌는 코드를 디버깅할 때 이걸 모르면 "분명 로그에는 바뀐 값이 찍혔는데"라며 시간을 쓴다. 그 순간의 값을 남기려면 `console.log(JSON.stringify(obj))`나 `console.log(structuredClone(obj))`처럼 찍는 시점에 복사본을 만든다. Node의 `console.log`는 바로 문자열로 바꿔 찍으니 이 현상이 없다.
+
+### 정렬했더니 부모 데이터가 바뀌었다
+
+`Array.prototype.sort`와 `reverse`, `splice`는 원본 배열을 고친다. props로 받은 배열을 컴포넌트 안에서 `items.sort(...)` 하면 부모의 배열이 바뀐다. ES2023의 `toSorted`, `toReversed`, `toSpliced`, `with`는 새 배열을 돌려준다. 어느 메서드가 원본을 고치는지는 [배열 변경 메서드 글](/posts/js-array-mutation)에 표로 모아 두었다.
+
+## 복사할지 공유할지 고르는 기준
+
+공유가 늘 나쁜 건 아니다. 큰 객체를 매번 복사하면 메모리와 시간이 든다. 판단 기준은 "누가 이 객체를 고칠 수 있나"다.
+
+- 함수가 입력을 고치지 않는다면 공유해도 안전하다. 대부분의 계산 함수가 여기에 해당한다.
+- 입력을 고쳐야 한다면 함수 이름이나 문서에 드러낸다(`sortInPlace`, `mutateCart`). 아니면 복사본을 만들어 고치고 돌려준다.
+- 여러 곳이 같은 객체를 오래 들고 있는 상태(전역 스토어, 캐시, React state)는 고치지 않고 새 객체로 바꾼다. 변경 여부를 참조 비교 한 번으로 알 수 있다.
+
+복사본은 바꿀 부분만 새로 만들고 나머지는 공유하는 방식(구조 공유)이 기본이다. 스프레드 한 단계가 그것이다. 모든 단계를 통째로 복사하는 `structuredClone`은 정말 필요할 때만 쓴다. 객체가 크면 비용이 크고, 함수가 들어 있으면 `DataCloneError`가 나며, 클래스 인스턴스는 프로토타입을 잃고 평범한 객체가 된다.
+
+React의 `memo`가 props를 비교하는 방식이 바로 "한 단계만 보는 비교"다. 키를 하나씩 돌며 값을 `Object.is`로 비교한다. 직접 만들어 보면 원시값과 참조의 차이가 손에 잡힌다.
+
+<CodePlayground
+  caption="얕은 비교 shallowEqual 만들기"
+  functionName="shallowEqual"
+  initialCode={`function shallowEqual(a, b) {\n  // 1. a와 b가 Object.is로 같으면 true\n  // 2. 둘 중 하나라도 객체가 아니거나 null이면 false\n  // 3. 키 개수가 다르면 false\n  // 4. 각 키의 값을 Object.is로 비교\n  return false;\n}`}
+  solution={`function shallowEqual(a, b) {\n  if (Object.is(a, b)) return true;\n  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) {\n    return false;\n  }\n  const keysA = Object.keys(a);\n  const keysB = Object.keys(b);\n  if (keysA.length !== keysB.length) return false;\n  for (const key of keysA) {\n    if (!Object.hasOwn(b, key) || !Object.is(a[key], b[key])) return false;\n  }\n  return true;\n}`}
+  tests={[
+    { label: "원시값 같음", args: ["kim", "kim"], expected: true },
+    { label: "키와 값이 같은 객체", args: [{ id: 1, name: "kim" }, { id: 1, name: "kim" }], expected: true },
+    { label: "키 개수가 다르다", args: [{ id: 1 }, { id: 1, name: "kim" }], expected: false },
+    { label: "안쪽 배열은 서로 다른 참조", args: [{ tags: ["js"] }, { tags: ["js"] }], expected: false },
+    { label: "NaN끼리는 같다고 본다", args: [{ score: NaN }, { score: NaN }], expected: true },
+    { label: "null과 빈 객체", args: [null, {}], expected: false },
+    { label: "키 이름이 다르다", args: [{ a: 1 }, { b: 1 }], expected: false },
+  ]}
+/>
+
+네 번째 테스트가 이 글의 요점이다. `["js"]`와 `["js"]`는 내용이 같아도 다른 배열이라 얕은 비교는 다르다고 본다. 부모가 렌더할 때마다 `tags={["js"]}`를 새로 만들어 넘기면 `memo`로 감싼 자식도 매번 다시 그려지는 이유다.
+
+## 칸에 든 것만 복사된다
+
+변수 칸에는 늘 값이 들어 있고, 객체의 값은 참조다. 대입과 함수 호출은 그 칸의 내용을 복사할 뿐이라 객체는 새로 생기지 않는다. 재할당은 내 칸만 바꾸고, 변경은 같은 객체를 가리키는 모두에게 보인다. 이 두 동작을 구분하면 쿠폰 버그, `fill` 버그, React가 다시 그리지 않는 버그가 모두 한 가지 원인으로 보인다.
+
+## 면접에서 나올 만한 질문
+
+### 자바스크립트의 원시 타입을 모두 말해 보라
+
+`string`, `number`, `bigint`, `boolean`, `undefined`, `null`, `symbol` 일곱 가지다. 이 외의 값은 배열과 함수를 포함해 모두 객체다. 원시값은 바꿀 수 없고, 메서드를 부르는 순간에만 임시 래퍼 객체가 만들어진다.
+
+### 자바스크립트는 call by value인가, call by reference인가
+
+값으로 전달한다. 다만 객체의 값이 참조라서 참조가 복사되어 넘어가고, 이를 call by sharing이라고 부른다. 함수 안에서 매개변수로 객체를 고치면 바깥에서도 보이지만, 매개변수에 새 객체를 대입하면 바깥 변수는 바뀌지 않는다. 진짜 참조 전달이라면 후자도 바깥에 반영돼야 한다.
+
+### 원시값은 스택, 객체는 힙에 저장된다는 말은 맞나
+
+설명용 모델로는 쓸 만하지만 엔진 구현과는 다르다. V8은 작은 정수(Smi)만 바로 담고 소수점 숫자와 문자열은 힙에 둔다. 원시값이 값처럼 행동하는 이유는 저장 위치가 아니라 불변성이다. 아무도 고칠 수 없으니 공유해도 복사한 것과 구분되지 않는다.
+
+### const로 선언한 객체의 속성은 왜 바뀌나
+
+`const`는 변수 칸의 재할당을 막을 뿐 칸이 가리키는 객체의 변경은 막지 않는다. 객체를 막으려면 `Object.freeze`를 쓰는데, 이것도 한 단계만 얼린다. 안쪽 객체까지 막으려면 재귀적으로 얼리거나 애초에 고치지 않는 코드를 짜야 한다.
+
+### React에서 배열에 push하고 setState하면 왜 화면이 안 바뀌나
+
+React는 새 state를 이전 state와 `Object.is`로 비교하는데, `push`는 같은 배열을 고치니 참조가 그대로다. 그래서 바뀐 게 없다고 보고 렌더링을 건너뛴다. `[...prev, item]`처럼 새 배열을 만들어 넘겨야 한다. 원본을 고치면 이전 렌더의 값까지 바뀌어서 이전·이후 비교에 기대는 기능도 틀어진다.
+
+### Array(3).fill([])로 만든 2차원 배열은 왜 이상하게 동작하나
+
+`fill`의 인수는 한 번만 평가되고, 그 배열의 참조가 모든 칸에 복사된다. 세 칸이 같은 배열 하나를 가리키니 한 칸을 고치면 전부 바뀐다. `Array.from({ length: 3 }, () => [])`로 칸마다 새 배열을 만들어야 한다.
+
+### 객체 배열에서 includes로 객체를 찾지 못하는 이유는
+
+`includes`는 내용이 아니라 참조를 비교한다(SameValueZero). 리터럴 `{ id: 1 }`은 쓸 때마다 새 객체라서 배열 안의 객체와 참조가 다르다. id 같은 원시값으로 비교 기준을 내려서 `some((x) => x.id === id)`로 찾는다.
+
+### 얕은 비교로 충분하지 않은 경우는 언제고 어떻게 하나
+
+안쪽 객체를 고쳐 놓고 바깥 참조를 그대로 두면 얕은 비교는 변경을 놓친다. 그래서 불변 업데이트는 바뀐 경로의 객체를 모두 새로 만들어 바깥 참조까지 바뀌게 한다. 내용 전체를 비교하는 깊은 비교는 객체가 클수록 느려서 렌더링 경로에는 잘 쓰지 않는다. 비교를 깊게 하기보다 업데이트를 불변으로 하는 쪽이 일반적인 선택이다.

@@ -1,0 +1,389 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-notification-reliability");
+
+이 시리즈에서 이 글의 자리: [㉒ 알림 시스템 ①: 푸시, SMS, 이메일을 보내는 구조](/posts/sd-notification-system)에서 알림 서버, 채널별 큐, 워커로 이루어진 구조를 만들었다. 이 글은 같은 장의 두 번째 글로, 그 구조 위에서 알림을 잃지 않고, 두 번 보내지 않고, 원치 않는 알림은 보내지 않고, 잘 가고 있는지 지켜보는 법을 다룬다. 다음 글은 새 사례인 [㉔ 뉴스 피드 ①](/posts/sd-news-feed-publishing)이다.
+
+알림 시스템을 열어 두고 일주일쯤 지나면 고객센터에 반대 방향의 문의가 같이 쌓인다. 하나는 "배송 출발 알림을 못 받았다"이고, 다른 하나는 "같은 쿠폰 알림이 세 번 왔다"이다. 새벽 2시에 광고 알림을 받았다는 항의도 섞여 있다. 앞 글의 구조는 알림을 보내는 길만 만들었지, 그 길에서 무엇이 빠지고 무엇이 겹치는지는 다루지 않았다.
+
+이 글은 이 문의들을 하나씩 받아서 고친다. 두 가지 문제는 서로 당긴다. 잃지 않으려고 다시 보내면 겹치고, 겹치지 않으려고 덜 보내면 잃는다. 둘 사이 어디에 설지 정하는 것이 이 글의 줄거리다.
+
+## 알림이 사라지는 세 자리
+
+알림 하나가 사용자에게 닿기까지 사라질 수 있는 곳은 크게 세 곳이다. 아래 그림에서 다음을 누르면 차례로 짚는다.
+
+<NetworkTopology
+  caption="알림이 사라질 수 있는 곳"
+  width={440}
+  height={240}
+  zones={[
+    { id: "ours", label: "우리 시스템", x: 10, y: 10, w: 300, h: 220, tone: "private" },
+    { id: "ext", label: "바깥", x: 325, y: 10, w: 105, h: 220, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "order", label: "주문 서비스", x: 60, y: 60, icon: "server" },
+    { id: "db", label: "주문 DB", x: 60, y: 175, icon: "db" },
+    { id: "q", label: "push 큐", x: 170, y: 60, icon: "server" },
+    { id: "w", label: "워커", x: 260, y: 60, icon: "container" },
+    { id: "log", label: "알림 로그", x: 215, y: 175, icon: "db" },
+    { id: "apns", label: "APNs", x: 375, y: 60, icon: "internet" },
+    { id: "phone", label: "휴대폰", x: 375, y: 175, icon: "client" },
+  ]}
+  links={[
+    { from: "order", to: "db" },
+    { from: "order", to: "q" },
+    { from: "q", to: "w" },
+    { from: "w", to: "apns" },
+    { from: "apns", to: "phone" },
+    { from: "w", to: "log", dashed: true },
+    { from: "db", to: "log", dashed: true, label: "같은 트랜잭션" },
+  ]}
+  steps={[
+    { path: ["order", "db"], packet: "shipped", title: "주문 상태를 저장한다", detail: "주문을 '배송 시작'으로 바꾸고 커밋했다." },
+    { path: ["order", "q"], packet: "알림", blocked: true, title: "첫째 자리: 저장과 큐 사이", detail: "커밋 직후 서버가 죽으면 큐에 넣지 못한다. 주문은 바뀌었는데 알림은 어디에도 없다." },
+    { path: ["q", "w"], packet: "알림", blocked: true, title: "둘째 자리: 꺼낸 뒤", detail: "워커가 꺼내자마자 큐에서 지우고, 보내기 전에 죽으면 그 알림은 사라진다." },
+    { path: ["apns", "phone"], packet: "알림", blocked: true, title: "셋째 자리: 바깥", detail: "업체가 받았어도 기기가 오래 꺼져 있거나 사용자가 알림을 꺼 두면 닿지 않는다. 우리가 고칠 수 없는 곳이다." },
+    { path: ["db", "log"], packet: "pending", highlight: ["log"], title: "첫째 자리를 막는 법", detail: "주문 변경과 알림 기록을 같은 DB 트랜잭션에 쓴다. 둘 다 남거나 둘 다 안 남는다." },
+  ]}
+/>
+
+셋째 자리는 우리 손 밖이다. 앞 글에서 봤듯이 중요한 정보는 알림에만 담지 않고 앱을 열 때 다시 받아 오게 하는 것으로 대신한다. 우리가 막을 수 있는 건 앞의 두 자리다.
+
+첫째 자리는 "DB에 쓰기"와 "큐에 넣기"라는 두 군데 쓰기가 한 번에 일어나지 않아서 생긴다. 답은 큐에 넣기 전에 같은 DB에 알림 기록부터 남기는 것이다. 이 기록을 알림 로그라고 부르자. 주문 변경과 같은 트랜잭션에 넣으면 커밋 직후 서버가 죽어도 기록은 남는다. PostgreSQL 16으로 해 봤다.
+
+```sql
+CREATE TABLE notification_log (
+  id          text PRIMARY KEY,                -- 알림 id: 같은 알림은 한 줄만
+  user_id     bigint NOT NULL,
+  template    text NOT NULL,
+  params      jsonb NOT NULL,
+  status      text NOT NULL DEFAULT 'pending', -- pending → queued → sent / failed / dead
+  attempts    int NOT NULL DEFAULT 0,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- 주문 상태 변경과 알림 기록을 한 트랜잭션에
+BEGIN;
+UPDATE orders SET status = 'shipped' WHERE id = 1001;
+INSERT INTO notification_log (id, user_id, template, params)
+VALUES ('order-1001-shipped', 1, 'order_shipped', '{"order_id": 1001}');
+COMMIT;
+-- 여기서 서버가 죽어 큐에 넣지 못했다고 하자
+
+-- 같은 알림을 또 기록하려 하면 (주문 서비스의 재시도, 이벤트 중복)
+INSERT INTO notification_log (id, user_id, template, params)
+VALUES ('order-1001-shipped', 1, 'order_shipped', '{"order_id": 1001}')
+ON CONFLICT (id) DO NOTHING;
+
+-- 릴레이가 아직 큐에 안 넣은 알림을 찾는다 (여러 릴레이가 같은 줄을 잡지 않게)
+SELECT id, user_id, template, status FROM notification_log
+WHERE status = 'pending'
+ORDER BY created_at
+FOR UPDATE SKIP LOCKED
+LIMIT 100;
+```
+
+```text
+BEGIN
+UPDATE 1
+INSERT 0 1
+COMMIT
+INSERT 0 0
+         id         | user_id |   template    | status  
+--------------------+---------+---------------+---------
+ order-1001-shipped |       1 | order_shipped | pending
+(1 row)
+```
+
+`INSERT 0 0`이 눈여겨볼 줄이다. 같은 알림 id로 두 번째 기록을 시도했지만 기본 키가 막아서 한 줄도 들어가지 않았다. 알림 id를 `order-1001-shipped`처럼 "어떤 사건의 어떤 알림인지"로 지으면, 주문 서비스가 같은 요청을 몇 번 보내도 기록은 하나다. 무작위 UUID로 지으면 이 효과가 사라진다.
+
+마지막 쿼리는 서버가 죽어서 큐에 못 넣은 알림을 찾아 넣는 릴레이의 몫이다. 실제로는 트랜잭션 안에서 이 줄들을 잠그고 큐에 넣은 뒤 `status`를 `queued`로 바꾼다. 이 방식이 트랜잭셔널 아웃박스다. 릴레이를 언제 깨우고 여러 대를 어떻게 돌리는지는 [아웃박스 릴레이 운영](/posts/transactional-outbox)에 자세히 있다. 이 로그는 나중에 "이 사용자에게 그 알림이 갔나"라는 문의에 답하는 근거도 된다.
+
+둘째 자리는 큐가 막아 준다. 워커가 꺼낼 때 바로 지우지 않고, 보내기를 마친 뒤에 "처리했다"고 알려야 지우는 큐를 쓴다. 워커가 중간에 죽으면 정해진 시간 뒤 다른 워커에게 다시 간다. 이 동작은 [메시지 큐 기초](/posts/message-queue-basics)에서 직접 돌려 봤다.
+
+## 다시 보내는 순간 겹친다
+
+잃지 않으려고 만든 장치들은 모두 "확실하지 않으면 다시 보낸다"는 생각에 기대고 있다. 주문 서비스는 응답을 못 받으면 다시 요청하고, 릴레이는 큐에 넣었는지 확실하지 않으면 다시 넣고, 큐는 처리했다는 신호가 없으면 다시 준다. 이렇게 하면 "적어도 한 번"은 간다. 대신 두 번 이상 갈 수 있다. 이 원리는 [메시지 전달 보장](/posts/message-delivery-semantics)에서 다뤘다.
+
+그래서 워커가 알림 id로 한 번 더 거른다. 처음 보는 id일 때만 통과시키고, 그 사실을 일정 기간 기억한다. Redis의 `SET 키 값 NX EX 초`가 이 일에 맞다. `NX`는 키가 없을 때만 쓰라는 뜻이라, 두 워커가 동시에 같은 id를 받아도 한쪽만 성공한다.
+
+```js
+// 같은 알림 id를 처음 볼 때만 통과한다. 하루 동안 기억한다
+const ok = await redis.cmd("SET", `notif:seen:${job.id}`, "1", "NX", "EX", "86400");
+if (ok === null) return say(`${job.id} 중복이라 버림`);
+```
+
+얼마나 오래 기억할지는 "같은 알림이 얼마나 늦게 다시 올 수 있나"로 정한다. 큐의 재전달, 릴레이의 재시도, 주문 서비스의 재시도 중 가장 긴 것보다 넉넉히 잡는다. 하루면 대개 충분하다. 너무 짧으면 늦게 도착한 중복이 통과하고, 너무 길면 Redis 메모리가 찬다.
+
+그런데 이 장치로도 막을 수 없는 중복이 하나 있다. 업체가 알림을 받아 기기에 보냈는데, 그 응답이 우리 워커에 오기 전에 시간 제한이 끝나는 경우다.
+
+<SequenceDiagram
+  caption="업체는 보냈는데 응답이 늦으면 두 번 간다"
+  actors={[
+    { id: "w", label: "워커" },
+    { id: "p", label: "푸시 업체" },
+    { id: "d", label: "휴대폰" },
+  ]}
+  steps={[
+    { from: "w", to: "p", label: "n5 보내기", title: "1차 시도", detail: "워커가 업체에 보내고 800ms를 기다리기로 한다." },
+    { from: "p", to: "d", label: "알림", title: "업체는 이미 보냈다", detail: "업체는 요청을 받아 기기에 전달했다. 다만 응답을 늦게 보낸다." },
+    { from: "w", to: "w", label: "시간 초과", title: "워커는 실패로 안다", detail: "800ms가 지나도 응답이 없다. 워커 입장에서는 보냈는지 못 보냈는지 알 수 없다." },
+    { from: "w", to: "p", label: "n5 다시", title: "재시도", detail: "잃지 않는 쪽을 골랐으니 다시 보낸다. 중복 검사는 이미 통과한 알림이라 막지 않는다." },
+    { from: "p", to: "d", label: "알림", title: "기기에 두 번 간다", detail: "사용자는 같은 알림을 두 번 받는다. collapse id를 붙였다면 기기에는 마지막 하나만 남는다." },
+  ]}
+/>
+
+우리 쪽 중복 검사는 "같은 알림을 두 번 꺼내는 것"은 막지만 "한 번 꺼낸 알림을 업체에 두 번 보내는 것"은 못 막는다. 업체가 멱등성 키를 받아 주면 좋겠지만 APNs와 FCM은 우리가 원하는 방식의 요청 단위 중복 제거를 해 주지 않는다. 그래서 피해를 줄이는 쪽으로 간다. 같은 알림에 APNs의 `apns-collapse-id`(FCM은 `collapse_key`)를 붙이면 기기에 두 번 가도 알림 목록에는 하나만 남는다. 그리고 시간 제한을 업체의 보통 응답 시간보다 넉넉히 잡아서 이런 일 자체를 줄인다. "정확히 한 번"을 약속하지 않고 "드물게 겹칠 수 있다"를 받아들이는 것이 현실적인 답이다.
+
+## 워커가 실패를 가르는 법
+
+워커가 업체의 응답을 받으면 셋 중 하나로 나눈다. 다시 보내면 나아질 수 있는 실패(시간 초과, 429, 5xx)는 기다렸다 다시 보낸다. 다시 보내도 똑같을 실패(400 잘못된 요청, 403 인증 실패, 410 죽은 토큰)는 바로 멈춘다. 몇 번을 다시 보내도 안 되는 실패는 데드 레터 큐(DLQ)로 옮겨 사람이 보게 한다. 로컬에 가짜 푸시 업체를 띄우고 토큰마다 다른 행동을 하게 만든 뒤, 중복 검사에는 진짜 Redis(`redis-server`)를 써서 워커를 돌렸다.
+
+```js
+function classify(status) {
+  if (status === 200) return "ok";
+  if (status === 429 || status >= 500 || status === 0) return "retry"; // 0: 시간 초과, 연결 실패
+  return "permanent"; // 400, 403, 410 ...
+}
+// 다시 보낼 때: 0 ~ min(2000, 200 × 2^시도) 사이에서 무작위로 기다린다 (full jitter)
+// 단, Retry-After가 있으면 그보다 일찍 보내지 않는다. 4번 실패하면 DLQ로
+```
+
+```text
+   80ms  n1 1번째 시도 200 → 보냄
+   86ms  n2 1번째 시도 503 → 119ms 뒤 다시
+   90ms  n3 1번째 시도 429 → 1000ms 뒤 다시 (Retry-After)
+   92ms  n4 1번째 시도 410 Unregistered → 재시도 안 함, 토큰 삭제
+   93ms  n1 중복이라 버림
+  897ms  n5 1번째 시도 TimeoutError → 108ms 뒤 다시
+  904ms  n6 1번째 시도 503 → 197ms 뒤 다시
+  905ms  n7 토큰이 이미 지워져 건너뜀
+  908ms  n2 2번째 시도 503 → 269ms 뒤 다시
+ 1015ms  n5 2번째 시도 200 → 보냄
+ 1101ms  n3 2번째 시도 200 → 보냄
+ 1126ms  n6 2번째 시도 503 → 212ms 뒤 다시
+ 1189ms  n2 3번째 시도 200 → 보냄
+ 1354ms  n6 3번째 시도 503 → 696ms 뒤 다시
+ 2067ms  n6 4번째 시도 503 → 4번 실패, DLQ로
+알림 로그: {"n1":"sent","n2":"sent","n3":"sent","n4":"failed","n5":"sent","n6":"dead","n7":"skipped"}
+DLQ: ["n6"]  기기에 도착한 것: ["n1","n5","n5","n3","n2"]
+Redis TTL notif:seen:n1 = 86394
+```
+
+줄마다 다른 경우다. n2는 업체가 두 번 503을 준 뒤 세 번째에 성공했다. n3은 429와 함께 `Retry-After: 1`을 받아서, 지터로 뽑은 값보다 긴 1초를 기다렸다. n4는 410 `Unregistered`라 바로 멈추고 그 토큰을 기기 목록에서 지웠다. 그래서 같은 토큰으로 가는 n7은 업체를 부르지도 않고 건너뛰었다. 다섯째 줄의 n1은 프로듀서가 같은 알림을 한 번 더 넣은 것인데 Redis의 `SET NX`가 막았다. n5는 앞 절의 그림 그대로다. 첫 시도가 시간 초과였지만 업체는 이미 보냈고, 재시도로 또 보내서 "기기에 도착한 것"에 n5가 두 번 있다. n6은 업체가 계속 503이라 네 번 만에 DLQ로 갔다.
+
+워커가 하나라 n5의 시간 초과 800ms 동안 뒤의 작업이 기다린 것도 보인다(n6이 897ms 뒤에야 시작). 실제 워커는 동시에 여러 작업을 처리해서 느린 업체 하나가 줄 전체를 막지 않게 한다. n6이 기다린 시간을 따로 보면 이렇다.
+
+<AlgoTrace
+  caption="n6: 계속 503을 받으면 기다림이 커지다가 DLQ로 간다 (실측)"
+  cells={["1차", "2차", "3차", "4차", "DLQ"]}
+  memoryLabel="다음 시도까지 (상한 안에서 무작위)"
+  steps={[
+    { pointer: 0, memory: ["503", "0~200ms 중 197ms"], caption: "첫 시도가 503이다. 상한 200ms 안에서 무작위로 197ms를 뽑았다." },
+    { pointer: 1, memory: ["503", "0~400ms 중 212ms"], caption: "또 503이다. 상한이 두 배인 400ms가 됐다. 무작위라 이번 값은 지난번과 비슷하다." },
+    { pointer: 2, memory: ["503", "0~800ms 중 696ms"], caption: "세 번째도 503이다. 상한이 800ms로 늘었다." },
+    { pointer: 3, memory: ["503", "더 안 기다림"], caption: "네 번째도 실패했다. 정한 횟수를 다 썼다." },
+    { pointer: 4, found: [4], memory: ["DLQ: n6"], caption: "DLQ로 옮기고 로그 상태를 dead로 바꾼다. 같은 업체로 가는 다른 알림은 계속 흐른다." },
+  ]}
+/>
+
+무작위를 섞는 이유는 업체가 장애에서 돌아오는 순간 때문이다. 같은 순간 실패한 알림 수만 개가 똑같이 200ms, 400ms 뒤에 돌아오면 막 살아난 업체를 다시 쓰러뜨린다. 섞는 방법들의 차이는 [지수 백오프와 지터](/posts/exponential-backoff-jitter)에 있고, DLQ에 무엇을 남기고 고친 뒤 어떻게 되돌려 보내는지는 [데드 레터 큐](/posts/dead-letter-queue)에 있다.
+
+재시도에는 알림만의 사정이 하나 더 있다. 늦게 가면 쓸모없는 알림이 있다. 인증 번호는 3분이 지나면 무의미하고, "10분 뒤 마감" 알림은 마감 뒤에 가면 오히려 해롭다. 그래서 작업마다 유효 기한을 넣고, 워커는 다시 보내기 전에 기한을 확인한다. 기한이 지났으면 보내지 않고 `expired`로 기록한다. APNs에 보낼 때 `apns-expiration`을 같이 주면 업체도 늦은 알림을 버린다. 업체가 오래 죽어 있을 때 재시도가 쌓여 회복을 방해하지 않도록, 실패율이 높아지면 그 업체로의 호출을 잠시 끊는 [서킷 브레이커](/posts/circuit-breaker)를 워커 앞에 둔다. 재시도 전체의 양을 묶는 재시도 예산은 [재시도는 공짜가 아니다](/posts/retries)에서 다뤘다.
+
+알림 로그의 상태가 어떻게 바뀌는지 한 그림으로 모으면 이렇다.
+
+<ConceptDiagram
+  caption="알림 로그 한 줄의 상태"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "pending", label: "pending", sub: "DB에 기록됨", x: 60, y: 125 },
+    { id: "queued", label: "queued", sub: "5xx·429면 다시", x: 175, y: 125 },
+    { id: "sent", label: "sent", sub: "업체가 받음", x: 330, y: 40 },
+    { id: "failed", label: "failed", sub: "다시 안 보냄", x: 330, y: 125 },
+    { id: "dead", label: "dead", sub: "DLQ", x: 330, y: 210 },
+    { id: "expired", label: "expired", sub: "기한 지남", x: 175, y: 215 },
+  ]}
+  edges={[
+    { from: "pending", to: "queued", label: "릴레이" },
+    { from: "queued", to: "sent", label: "200" },
+    { from: "queued", to: "failed", label: "4xx" },
+    { from: "queued", to: "dead", label: "횟수 초과" },
+    { from: "queued", to: "expired", dashed: true },
+  ]}
+/>
+
+## 본문은 템플릿에서 만든다
+
+트리거 서비스는 본문을 직접 쓰지 않고 템플릿 이름과 값만 넘긴다고 했다. 이렇게 하면 문구를 바꿀 때 서비스를 배포하지 않아도 되고, 언어별 문구와 채널별 길이를 한곳에서 관리한다. 대신 템플릿과 값이 어긋나면 이상한 알림이 나간다. 직접 만든 아주 작은 템플릿 함수로 해 봤다.
+
+```js
+function render(tmpl, params) {
+  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+    if (!(k in params)) throw new Error(`값 없음: ${k}`); // 빠진 값은 보내지 않고 거절한다
+    return String(params[k]);
+  });
+}
+const T = { ko: "{{name}}님, 주문 {{order_id}}이 출발했다. 도착 예정 {{eta}}", en: "{{name}}, order {{order_id}} has shipped. ETA {{eta}}" };
+```
+
+```text
+김하나님, 주문 1001이 출발했다. 도착 예정 10/23
+Hana, order 1001 has shipped. ETA Oct 23
+거절: 값 없음: name
+검사 없이: undefined님, 주문 1001이 출발했다. 도착 예정 10/23
+```
+
+마지막 줄이 실제로 사용자에게 나가는 사고 모양이다. 값이 빠졌을 때 보내지 않고 거절해야 한다. 이 검사는 워커가 아니라 알림 서버가 요청을 받을 때 한다. 거기서 거절하면 요청한 서비스가 바로 오류를 받고 고칠 수 있다. 워커까지 가서 터지면 DLQ에 쌓일 뿐이다.
+
+템플릿에는 버전을 붙인다. 문구를 고친 뒤 큐에 남아 있던 옛 작업이 새 문구로 나가면, 새 문구가 기대하는 값이 옛 작업에는 없을 수 있다. 채널마다 길이 제한도 다르다. 푸시 본문은 4KB지만 화면에 보이는 건 두세 줄이다. 한국의 단문 문자는 보통 90바이트(한글 45자 정도)를 넘으면 장문으로 바뀌어 요금이 올라가니 채널별 템플릿을 따로 둔다. 이메일 템플릿에 사용자 이름 같은 값을 넣을 때는 HTML 이스케이프를 해야 한다. 이름 칸에 스크립트를 넣는 [XSS](/posts/xss)가 메일로 옮겨 오기 때문이다.
+
+## 사용자가 끄면 보내지 않는다
+
+사용자는 알림을 고를 수 있어야 한다. 채널(푸시, 문자, 메일) 단위로만 끄게 하면 사용자는 광고가 싫어서 푸시를 통째로 끄고, 그러면 배송 알림도 못 받는다. 그래서 채널과 종류를 함께 고르게 한다.
+
+```sql
+CREATE TABLE notification_settings (
+  user_id   bigint NOT NULL,
+  channel   text   NOT NULL,   -- push, sms, email
+  category  text   NOT NULL,   -- order, security, marketing ...
+  enabled   boolean NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, channel, category)
+);
+-- 줄이 없으면 종류별 기본값을 쓴다 (주문·보안은 켜짐, 마케팅은 동의한 사람만)
+```
+
+알림 서버는 큐에 넣기 전에 이 설정을 보고 끈 채널을 뺀다. 설정은 거의 모든 요청에서 읽고 바뀌는 일은 드무니 캐시에 둔다. 사용자가 끈 직후 캐시 때문에 한두 통 더 가는 일을 줄이려면, 설정을 바꿀 때 그 사용자의 캐시를 바로 지운다.
+
+광고성 알림에는 법이 붙는다. 한국에서는 정보통신망법이 광고성 정보를 보내려면 미리 동의를 받게 하고, 밤 9시부터 다음 날 아침 8시 사이에 보내려면 따로 동의를 받게 한다. 제목 앞에 "(광고)"를 붙이고 수신 거부 방법을 알리는 것도 의무다. 조항은 바뀔 수 있고 나라마다 다르니 서비스할 지역의 규정을 법무와 확인해야 하지만, 설계에서는 두 가지를 챙긴다. 동의 기록(언제, 어느 화면에서, 무엇에 동의했는지)을 남기고, "보내지 않는 시간대"를 사용자 시간대 기준으로 지킨다. 서버 시각으로 계산하면 해외에 있는 사용자는 새벽에 받는다. 보내지 않는 시간대에 걸린 마케팅 알림은 버리지 않고 허용 시각까지 미뤄서 큐에 다시 넣는다. 주문이나 보안 알림은 이 규칙에서 뺀다.
+
+## 한 사람에게 너무 많이 보내지 않기
+
+설정을 다 켜 둔 사용자도 하루에 마케팅 알림 열 통을 받으면 앱을 지운다. 팀마다 각자 캠페인을 돌리면 이런 일이 생긴다. 그래서 알림 서버가 사용자별로 보내는 양에 상한을 둔다. 예를 들어 마케팅은 하루 두 통까지만 보낸다. 인증 번호와 주문, 보안 알림은 상한에서 뺀다. 이걸 막으면 로그인을 못 하거나 사고를 놓친다.
+
+세는 방법은 API 요청 수 제한과 같다. 사용자 id와 종류를 키로 Redis에서 하루 창을 센다. 구현과 알고리즘 선택은 [⑫ 처리율 제한 장치 설계](/posts/sd-rate-limiter-design)와 [요청 수 제한을 API에 붙이기](/posts/rate-limiting-in-practice)에서 다뤘다. 상한에 걸린 알림은 조용히 버리지 않고 로그에 `capped`로 남긴다. 캠페인 담당자가 "왜 이만큼만 나갔나"를 물을 때 답이 된다.
+
+중복 거르기, 수신 거부, 사용자별 상한을 한 번에 적용하는 함수를 직접 짜 보자. 이벤트 목록을 순서대로 보며 보낼 알림 id만 고른다.
+
+<CodePlayground
+  caption="중복, 수신 거부, 마케팅 상한을 한 번에"
+  functionName="filterBatch"
+  initialCode={`// events: [{ id, user, kind }] 순서대로. kind는 "order", "otp", "marketing" 중 하나
+// marketingLimit: 사용자 한 명에게 이 묶음에서 보낼 마케팅 알림 최대 수
+// optedOut: 마케팅 수신을 거부한 사용자 id 배열
+// 규칙: 같은 id는 처음 것만 본다. 마케팅만 수신 거부와 상한을 적용한다.
+// 반환: 보낼 알림 id 배열 (원래 순서)
+function filterBatch(events, marketingLimit, optedOut) {
+  return [];
+}`}
+  solution={`function filterBatch(events, marketingLimit, optedOut) {
+  const seen = new Set();
+  const count = new Map();
+  const sent = [];
+  for (const e of events) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    if (e.kind === "marketing") {
+      if (optedOut.includes(e.user)) continue;
+      const n = count.get(e.user) || 0;
+      if (n >= marketingLimit) continue;
+      count.set(e.user, n + 1);
+    }
+    sent.push(e.id);
+  }
+  return sent;
+}`}
+  tests={[
+    { args: [[{ id: "a", user: 1, kind: "order" }, { id: "a", user: 1, kind: "order" }, { id: "b", user: 1, kind: "order" }], 2, []], expected: ["a", "b"], label: "같은 id는 한 번" },
+    { args: [[{ id: "m1", user: 1, kind: "marketing" }, { id: "m2", user: 1, kind: "marketing" }, { id: "m3", user: 1, kind: "marketing" }, { id: "m4", user: 2, kind: "marketing" }], 2, []], expected: ["m1", "m2", "m4"], label: "사용자별 상한 2" },
+    { args: [[{ id: "m1", user: 1, kind: "marketing" }, { id: "o1", user: 1, kind: "otp" }, { id: "m2", user: 2, kind: "marketing" }], 5, [1]], expected: ["o1", "m2"], label: "거부해도 인증 번호는 간다" },
+    { args: [[{ id: "m1", user: 1, kind: "marketing" }, { id: "m2", user: 1, kind: "marketing" }, { id: "o1", user: 1, kind: "otp" }, { id: "o2", user: 1, kind: "otp" }], 1, []], expected: ["m1", "o1", "o2"], label: "인증 번호는 상한 밖" },
+    { args: [[{ id: "m1", user: 3, kind: "marketing" }, { id: "m1", user: 3, kind: "marketing" }, { id: "m2", user: 3, kind: "marketing" }], 2, []], expected: ["m1", "m2"], label: "중복은 상한을 쓰지 않는다" },
+    { args: [[], 3, []], expected: [], label: "빈 묶음" },
+  ]}
+/>
+
+다섯째 테스트가 순서의 의미를 보여 준다. 상한이 2인데 m1이 두 번 들어왔다. 상한부터 세면 m1 두 번이 두 칸을 다 먹어서 m2가 막힌다. 중복을 먼저 거르면 m1은 한 칸만 쓰고 m2도 나간다.
+
+## 잘 가고 있는지 지켜보기
+
+알림은 조용히 망가진다. 앱 업데이트에서 토큰을 서버에 올리는 코드가 빠지면, 에러는 하나도 안 나는데 새로 설치한 사용자만 푸시를 못 받는다. 그래서 알림 한 통이 지나는 단계마다 이벤트를 남기고, 단계 사이의 비율을 본다.
+
+<NetworkTopology
+  caption="알림 한 통의 단계마다 이벤트를 남긴다"
+  width={440}
+  height={240}
+  zones={[
+    { id: "ours", label: "우리 시스템", x: 10, y: 10, w: 250, h: 220, tone: "private" },
+    { id: "user", label: "사용자 쪽", x: 275, y: 10, w: 155, h: 220, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "api", label: "알림 서버", x: 60, y: 60, icon: "server" },
+    { id: "w", label: "워커", x: 190, y: 60, icon: "container" },
+    { id: "ev", label: "이벤트 저장", sub: "분석·대시보드", x: 125, y: 180, icon: "db" },
+    { id: "prov", label: "업체", x: 330, y: 60, icon: "internet" },
+    { id: "app", label: "앱·메일함", x: 370, y: 180, icon: "client" },
+  ]}
+  links={[
+    { from: "api", to: "w" },
+    { from: "w", to: "prov" },
+    { from: "prov", to: "app" },
+    { from: "api", to: "ev", dashed: true },
+    { from: "w", to: "ev", dashed: true },
+    { from: "app", to: "ev", dashed: true },
+  ]}
+  steps={[
+    { path: ["api", "ev"], packet: "requested", title: "요청을 받았다", detail: "몇 건을 요청받았고 몇 건이 설정이나 상한에 걸려 빠졌는지 남긴다." },
+    { path: ["w", "ev"], packet: "sent", title: "업체가 받았다", detail: "업체 응답 코드와 걸린 시간을 남긴다. 410이 갑자기 늘면 토큰 등록이 망가졌다는 신호다." },
+    { path: ["prov", "app"], packet: "알림", title: "기기나 메일함에 닿는다", detail: "업체마다 전달 결과를 따로 알려 주기도 한다. 이메일은 반송과 스팸 신고를 웹훅으로 받는다." },
+    { path: ["app", "ev"], packet: "opened", title: "열었다", detail: "앱이 알림을 눌러 열렸을 때 직접 이벤트를 보낸다. 메일은 링크를 우리 주소로 한 번 거쳐 가게 해서 클릭을 잰다." },
+  ]}
+/>
+
+운영에서 늘 보는 숫자는 이런 것들이다. 채널별 큐 깊이와 큐에서 가장 오래된 작업의 나이(깊이는 작아도 나이가 늘면 워커가 멈춘 것이다), 요청부터 업체 수락까지 걸린 시간, 업체 응답 코드별 비율, DLQ에 쌓인 수, 그리고 요청 → 발송 → 열람의 비율이다. 증상과 짚을 곳을 몇 가지 짝지어 두면 이렇다.
+
+- 푸시 열람률이 하루아침에 반으로 떨어졌다: 업체 응답 중 410 비율을 본다. 앱 새 버전에서 토큰 등록이 깨졌을 가능성이 높다. 버전별로 토큰 갱신 시각(`last_seen_at`)을 나눠 보면 확인된다.
+- 인증 문자가 늦게 온다는 문의가 몰린다: sms 큐의 가장 오래된 작업 나이를 본다. 늘고 있으면 업체 초당 한도에 닿았거나, 마케팅 문자가 같은 큐를 쓰고 있다.
+- 메일이 갑자기 스팸함으로 간다: 반송률과 스팸 신고율을 본다. 업체들은 이 비율이 높은 발신자를 막는다.
+
+이메일 열람률은 믿을 만한 숫자가 아니다. 열람은 메일 안의 작은 이미지를 불러오는지로 재는데, 애플 메일은 2021년(iOS 15)부터 이미지를 미리 불러오는 개인정보 보호 기능을 넣어서 열지 않은 메일도 열린 것으로 잡힌다. 클릭이 더 믿을 만하다. 알림 받는 쪽의 숫자로 알람을 거는 법은 [알림 설계](/posts/alerting)에서, 지표 종류는 [지표 타입](/posts/metrics-types)에서 다뤘다.
+
+## 다음에 읽을 글
+
+알림을 잃지 않으려면 비즈니스 변경과 알림 기록을 한 트랜잭션에 쓰고, 큐는 처리한 뒤에 지우게 한다. 그러면 다시 보내는 일이 생기니 알림 id로 중복을 거르고, 그래도 남는 업체 쪽 중복은 collapse id로 줄인다. 워커는 실패를 다시 보낼 것과 멈출 것으로 나누고, 지터 섞인 백오프로 다시 보내다가 정한 횟수를 넘으면 DLQ로 옮긴다. 그 위에 템플릿 검사, 종류별 수신 설정, 보내지 않는 시간대, 사용자별 상한, 단계별 지표를 얹으면 알림 시스템 장이 끝난다. 다음 글 [㉔ 뉴스 피드 ①](/posts/sd-news-feed-publishing)에서는 글 하나를 수많은 팔로워의 피드에 나눠 넣는 문제를 다룬다. 알림의 큐와 워커가 거기서도 다시 나온다.
+
+## 면접에서 나올 만한 질문
+
+### 알림을 잃지 않으려면 어떻게 하나요?
+
+비즈니스 데이터 변경과 알림 기록을 같은 DB 트랜잭션에 쓰고, 릴레이가 그 기록을 큐에 넣는다. 커밋 직후 서버가 죽어도 기록이 남아 있어 나중에 큐로 간다. 큐는 워커가 보내기를 마친 뒤 처리 완료를 알려야 지우게 해서, 워커가 중간에 죽어도 다른 워커가 받는다. 업체가 받은 뒤 기기에 닿지 않는 경우는 우리가 막을 수 없으니 중요한 정보는 앱을 열 때 서버에서 다시 받게 한다.
+
+### 같은 알림이 두 번 가는 건 어떻게 막나요?
+
+재시도로 잃지 않는 구조라 중복은 반드시 생긴다. 알림 id를 사건 기준으로 지어서 DB 기본 키와 Redis의 `SET NX EX`로 처음 보는 id만 통과시킨다. 기억하는 기간은 가장 늦게 올 수 있는 재전달보다 넉넉히 잡는다. 업체에 보낸 뒤 응답이 늦어 재시도하는 중복은 못 막으니 collapse id로 기기에서 하나만 보이게 하고, 시간 제한을 넉넉히 잡아 빈도를 줄인다.
+
+### 업체가 실패를 돌려주면 모두 재시도하나요?
+
+아니다. 시간 초과, 429, 5xx처럼 다시 보내면 나아질 수 있는 것만 지수 백오프와 지터로 재시도하고, `Retry-After`가 있으면 그만큼 기다린다. 400이나 403, 410처럼 다시 보내도 같은 결과인 실패는 바로 멈추고 원인 데이터를 고친다. 410이면 그 토큰을 지워서 같은 토큰으로 가는 다음 알림이 업체를 부르지 않게 한다. 정한 횟수를 넘긴 알림은 DLQ로 옮긴다.
+
+### 업체가 30분 동안 죽어 있으면 어떻게 되나요?
+
+알림은 큐와 재시도 대기에 쌓이고, 다른 채널은 큐가 나뉘어 있어 영향을 받지 않는다. 재시도가 쌓여 업체 회복을 방해하지 않게 서킷 브레이커로 호출을 잠시 끊고, 재시도 횟수에 상한을 둔다. 인증 번호처럼 늦으면 쓸모없는 알림은 유효 기한이 지나면 보내지 않는다. 업체가 돌아오면 지터 덕에 쌓인 요청이 한꺼번에 몰리지 않는다. 업체를 둘 이상 계약해 두고 한쪽이 죽으면 다른 쪽으로 넘기는 것도 방법이다.
+
+### 사용자가 마케팅 알림만 끄게 하려면 설정을 어떻게 저장하나요?
+
+사용자, 채널, 종류를 키로 켜고 끈 값을 저장하고, 줄이 없으면 종류별 기본값을 쓴다. 채널 단위로만 끄게 하면 광고를 끄려다 배송 알림까지 끄게 된다. 알림 서버가 큐에 넣기 전에 확인하고, 설정은 캐시에 두되 바꿀 때 바로 지운다. 광고성 알림은 동의 기록을 남기고 사용자 시간대 기준으로 야간 발송 규칙을 지킨다.
+
+### 여러 팀이 캠페인을 돌려 한 사용자가 하루 열 통을 받으면요?
+
+알림 서버에서 사용자별, 종류별로 하루 상한을 센다. Redis에 사용자 id와 종류를 키로 창을 세는 방식이고, 인증 번호와 주문, 보안 알림은 상한에서 뺀다. 상한에 걸린 알림은 로그에 남겨 캠페인 담당자가 이유를 알 수 있게 한다. 중복을 먼저 거르고 상한을 세야 같은 알림이 상한 칸을 먹지 않는다.
+
+### 알림이 제대로 가고 있는지 어떻게 아나요?
+
+요청, 발송, 업체 응답, 열람 단계마다 이벤트를 남기고 단계 사이의 비율을 본다. 운영 지표로는 채널별 큐 깊이와 가장 오래된 작업의 나이, 업체 응답 코드 비율, 요청부터 발송까지 걸린 시간, DLQ 수를 본다. 410 비율이 갑자기 늘면 토큰 등록이 깨진 것이고, 큐 나이가 늘면 업체 한도나 워커 정지를 의심한다. 이메일 열람률은 애플 메일의 미리 불러오기 때문에 부풀려지니 클릭을 더 믿는다.
+
+### 알림 요청이 10배로 늘면 이 신뢰성 장치들 중 무엇이 먼저 부담을 받나요?
+
+알림 로그 DB의 쓰기와 중복 확인용 Redis가 먼저 커진다. 로그는 날짜로 파티션을 나눠 오래된 것을 통째로 지우고, 필요하면 사용자 id로 샤딩한다. 중복 확인 키는 기간이 정해져 있어서 양은 "하루 알림 수"에 비례하니 메모리를 미리 계산해 두고, Redis를 클러스터로 늘린다. 이벤트 저장은 실시간 경로에서 떼어 큐 뒤에서 묶어 쓴다.

@@ -1,0 +1,615 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("acid-transactions");
+
+주문 API 로그에 `Connection terminated unexpectedly`가 찍혔다. 앱은 커밋이 실패했다고 보고 500을 돌려줬고, 사용자는 결제 버튼을 한 번 더 눌렀다. 다음 날 보니 같은 주문이 두 건이다. DB 쪽 기록을 보면 첫 번째 주문도 멀쩡히 커밋돼 있다.
+
+트랜잭션은 ACID를 지킨다고 배운다. 틀린 말은 아닌데, 그 약속에는 범위가 있다. 연결 하나 안에서, DB에 적어 둔 규칙만큼, 커밋 응답이 앱에 도착했을 때까지다. 이 범위를 벗어난 곳에서 생기는 사고는 DB가 막아 주지 않는다.
+
+이 글은 네 글자의 뜻을 다시 외우기보다, 각 약속이 어디서 시작해 어디서 끝나는지를 직접 깨 보면서 확인한다. 기준은 Ubuntu 24.04와 PostgreSQL 16.15이고, 서버를 강제로 죽이는 실험은 다른 사람이 쓰지 않는 실습용 인스턴스(포트 5477)에서 했다.
+
+이 주제의 다른 글: 네 글자의 정의와 `BEGIN`·`SAVEPOINT`, 격리 수준과 MVCC는 [트랜잭션과 격리 수준](/posts/db-transaction-isolation)에, WAL·체크포인트·`fsync`의 내부와 `synchronous_commit` 성능 차이는 [PostgreSQL 내부 구조](/posts/postgres-architecture)에 있다. 여기서는 그 설명을 반복하지 않고 링크로 넘긴다.
+
+## 네 글자를 누가 지키나
+
+예제는 끝까지 두 테이블로 간다. 포인트를 써서 주문하면 `orders`에 한 줄이 들어가고 `points`에서 그만큼 빠진다.
+
+```sql
+CREATE TABLE points (user_id int PRIMARY KEY, balance int NOT NULL CHECK (balance >= 0));
+CREATE TABLE orders (
+  order_id   serial PRIMARY KEY,
+  user_id    int NOT NULL,
+  total      int NOT NULL CHECK (total > 0),
+  used_point int NOT NULL DEFAULT 0
+);
+INSERT INTO points VALUES (1, 5000), (2, 0);
+```
+
+ACID의 네 글자는 각각 다른 장치가 지킨다. 원자성(Atomicity, 전부 되거나 전부 안 되거나)은 WAL에 남는 커밋 기록 한 줄이, 일관성(Consistency, 규칙을 어기는 상태로 끝나지 않음)은 제약 조건과 앱 코드가, 격리성(Isolation, 동시에 돌아도 서로 방해하지 않음)은 MVCC와 잠금이, 지속성(Durability, 커밋된 건 사라지지 않음)은 `fsync`와 복제가 맡는다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="글자마다 지키는 장치가 다르다"
+  nodes={[
+    { id: "tx", label: "트랜잭션", sub: "BEGIN ~ COMMIT", x: 200, y: 36, w: 150 },
+    { id: "a", label: "A 원자성", sub: "커밋 기록 한 줄", x: 95, y: 128, w: 150 },
+    { id: "c", label: "C 일관성", sub: "제약 + 앱 코드", x: 305, y: 128, w: 150 },
+    { id: "i", label: "I 격리성", sub: "MVCC, 잠금", x: 95, y: 228, w: 150 },
+    { id: "d", label: "D 지속성", sub: "fsync, 복제", x: 305, y: 228, w: 150 },
+  ]}
+  edges={[
+    { from: "tx", to: "a" },
+    { from: "tx", to: "c" },
+    { from: "tx", to: "i" },
+    { from: "tx", to: "d" },
+    { from: "a", to: "d", label: "같은 WAL", dashed: true },
+  ]}
+/>
+
+C만 성격이 다르다. 나머지 셋은 DB가 혼자 지키는 성질이지만, "포인트는 음수가 될 수 없다" 같은 규칙은 누군가 정해서 DB에 적어 줘야 지켜진다. 적지 않은 규칙은 DB 입장에서 존재하지 않는다. 이 이야기는 뒤에서 다시 한다. 격리성은 [격리 수준 글](/posts/db-transaction-isolation)이 통째로 다루니, 이 글은 나머지 셋의 경계를 본다.
+
+## 커밋 기록이 없으면 없던 일이다
+
+트랜잭션을 열고 주문을 넣고 포인트를 뺀 다음, 커밋하기 전에 서버를 죽여 보자. 커밋 직전에 트랜잭션 번호와 WAL 위치를 찍어 두고, 다른 세션에서 `CHECKPOINT`를 불러 더러워진 페이지를 데이터 파일에 내려 보냈다. 커밋 안 된 변경이 디스크에 닿은 상태를 일부러 만든 것이다.
+
+```sql
+BEGIN;
+INSERT INTO orders (user_id, total, used_point) VALUES (1, 30000, 3000);
+UPDATE points SET balance = balance - 3000 WHERE user_id = 1;
+SELECT txid_current() AS xid, pg_current_wal_insert_lsn() AS lsn;
+SELECT pg_sleep(30);   -- 이 사이에 서버가 죽는다
+COMMIT;
+```
+
+```text
+BEGIN
+INSERT 0 1
+UPDATE 1
+ xid |    lsn
+-----+-----------
+ 734 | 0/1920B88
+(1 row)
+```
+
+```bash
+# 실습 인스턴스의 postmaster와 자식 프로세스를 PID로 골라 강제 종료한다
+PM=$(sudo head -1 /tmp/sd2-pg/data/postmaster.pid)
+sudo kill -9 $PM $(pgrep -P $PM)
+# 다시 띄운다
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctl -D /tmp/sd2-pg/data -l /tmp/sd2-pg/log -w start
+```
+
+```text
+2026-10-21 08:23:33.258 UTC [366] LOG:  database system was interrupted; last known up at 2026-10-21 08:23:20 UTC
+2026-10-21 08:23:33.317 UTC [366] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-21 08:23:33.318 UTC [366] LOG:  redo starts at 0/1920B88
+2026-10-21 08:23:33.318 UTC [366] LOG:  invalid record length at 0/1920C38: expected at least 24, got 0
+2026-10-21 08:23:33.319 UTC [366] LOG:  redo done at 0/1920BC0 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-10-21 08:23:33.327 UTC [363] LOG:  database system is ready to accept connections
+```
+
+복구 로그의 `redo starts`와 `redo done`이 WAL을 다시 읽은 구간이다. `invalid record length`는 고장이 아니라 "여기서 로그가 끝났다"는 표시다. 이제 데이터를 보자. `pageinspect` 확장으로 페이지 안의 행을 그대로 꺼내 봤다.
+
+```sql
+SELECT * FROM orders;
+SELECT * FROM points ORDER BY user_id;
+-- 페이지에 실제로 적혀 있는 행 (t_xmin: 이 행을 만든 트랜잭션)
+SELECT lp, t_xmin, t_xmax, t_ctid FROM heap_page_items(get_raw_page('orders', 0));
+SELECT pg_xact_status('734');
+```
+
+```text
+ order_id | user_id | total | used_point
+----------+---------+-------+------------
+(0 rows)
+
+ user_id | balance
+---------+---------
+       1 |    5000
+       2 |       0
+(2 rows)
+
+ lp | t_xmin | t_xmax | t_ctid
+----+--------+--------+--------
+  1 |    734 |      0 | (0,1)
+(1 row)
+
+ pg_xact_status
+----------------
+ aborted
+(1 row)
+```
+
+여기가 이 글에서 가장 중요한 장면이다. 주문 행은 데이터 파일에 물리적으로 있다(`lp 1`, `t_xmin 734`). 그런데 `SELECT`에는 안 보이고, 포인트도 5000 그대로다. 734번 트랜잭션의 상태가 `aborted`이기 때문이다. PostgreSQL은 롤백할 때 행을 지우러 다니지 않는다. 트랜잭션마다 커밋됐는지를 `pg_xact`라는 상태 기록에 두고, 행을 읽을 때 그 행을 만든 트랜잭션이 커밋됐는지를 보고 보일지 말지 정한다. 버려진 행은 나중에 VACUUM이 치운다([VACUUM 글](/posts/postgres-mvcc-vacuum)).
+
+그러니 원자성은 결국 "커밋 기록이 WAL에 있느냐" 한 가지로 정해진다. WAL을 직접 열어 보면 차이가 보인다. 위 트랜잭션(734)과, 같은 일을 하고 커밋한 트랜잭션(737)의 기록을 `pg_waldump`로 뽑았다.
+
+```bash
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_waldump -p /tmp/sd2-pg/data/pg_wal -s 0/1920000 -x 734
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_waldump -p /tmp/sd2-pg/data/pg_wal -s 0/1920C38 -x 737
+```
+
+```text
+rmgr: Heap        len (rec/tot):     71/    71, tx:        734, lsn: 0/01920A58, prev 0/019209F0, desc: INSERT+INIT off: 1, flags: 0x00, blkref #0: rel 1663/16384/16392 blk 0
+rmgr: Btree       len (rec/tot):     64/    64, tx:        734, lsn: 0/01920B00, prev 0/01920AA0, desc: INSERT_LEAF off: 1, blkref #0: rel 1663/16384/16398 blk 1
+rmgr: Heap        len (rec/tot):     72/    72, tx:        734, lsn: 0/01920B40, prev 0/01920B00, desc: HOT_UPDATE old_xmax: 734, old_off: 1, old_infobits: [], flags: 0x20, new_xmax: 0, new_off: 3, blkref #0: rel 1663/16384/16385 blk 0
+
+rmgr: Heap        len (rec/tot):     54/   166, tx:        737, lsn: 0/01975298, prev 0/01975230, desc: INSERT off: 2, flags: 0x00, blkref #0: rel 1663/16384/16392 blk 0 FPW
+rmgr: Btree       len (rec/tot):     53/   133, tx:        737, lsn: 0/01975340, prev 0/01975298, desc: INSERT_LEAF off: 2, blkref #0: rel 1663/16384/16398 blk 1 FPW
+rmgr: Heap        len (rec/tot):     65/   233, tx:        737, lsn: 0/019753C8, prev 0/01975340, desc: HOT_UPDATE old_xmax: 737, old_off: 1, old_infobits: [], flags: 0x00, new_xmax: 0, new_off: 4, blkref #0: rel 1663/16384/16385 blk 0 FPW
+rmgr: Transaction len (rec/tot):     34/    34, tx:        737, lsn: 0/019754F8, prev 0/019754B8, desc: COMMIT 2026-10-21 08:23:46.679065 UTC
+```
+
+(시퀀스, 인덱스 루트, 페이지 정리 기록 몇 줄은 뺐다.) 두 트랜잭션은 INSERT, 인덱스 삽입, UPDATE까지 똑같은 기록을 남겼다. 다른 건 737의 마지막 줄, 34바이트짜리 `COMMIT` 하나다. 한 줄을 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="pg_waldump 한 줄 읽기"
+  separator=""
+  joiner=", "
+  params={[
+    { key: "rmgr", display: "rmgr: Transaction", title: "어떤 종류의 기록인가", description: "리소스 매니저. Heap은 테이블 행, Btree는 인덱스, Transaction은 커밋·롤백 같은 트랜잭션 상태 기록이다." },
+    { key: "len", display: "len 34/34", title: "기록 크기", description: "앞은 기록 본체, 뒤는 페이지 통째 사본(FPW)까지 합친 크기다. 커밋 기록은 34바이트로 아주 작다." },
+    { key: "tx", display: "tx: 737", title: "트랜잭션 번호", description: "이 기록을 남긴 트랜잭션이다. txid_current()로 찍은 값과 같다." },
+    { key: "lsn", display: "lsn: 0/019754F8", title: "WAL 안의 위치", description: "로그 안의 바이트 주소다. 커밋 응답은 이 위치까지 디스크에 내려간 뒤에 나간다(synchronous_commit = on일 때)." },
+    { key: "desc", display: "desc: COMMIT", title: "이 한 줄이 원자성이다", description: "복구할 때 이 기록이 있으면 737의 모든 변경이 보이고, 없으면 734처럼 전부 aborted로 처리된다.", code: "COMMIT 2026-10-21 08:23:46.679065 UTC" },
+  ]}
+/>
+
+복구 과정을 순서대로 따라가면 아래와 같다. 다음을 누르면 기록을 한 줄씩 읽는다.
+
+<AlgoTrace
+  caption="복구는 WAL을 다시 읽고, 커밋 기록으로 보일지를 정한다"
+  cells={["734 INSERT", "734 UPDATE", "체크포인트", "737 INSERT", "737 UPDATE", "737 COMMIT"]}
+  memoryLabel="트랜잭션 상태"
+  steps={[
+    { pointer: 0, memory: ["734 진행 중"], caption: "734가 주문 행을 넣었다. 아직 커밋 전이다." },
+    { pointer: 1, memory: ["734 진행 중"], caption: "포인트를 뺐다. 새 버전의 행이 생겼을 뿐 옛 행도 남아 있다." },
+    { pointer: 2, memory: ["734 진행 중"], caption: "체크포인트가 페이지를 데이터 파일에 썼다. 커밋 안 된 행도 함께 디스크에 갔다." },
+    { pointer: 2, memory: ["734 aborted"], caption: "여기서 서버가 죽었다. 재시작 후 734의 커밋 기록이 없으니 aborted가 된다." },
+    { pointer: 5, memory: ["734 aborted", "737 committed"], caption: "737은 COMMIT 기록까지 있다. 이 한 줄이 737의 모든 변경을 살린다." },
+    { found: [5], memory: ["734 aborted", "737 committed"], caption: "읽을 때 행마다 만든 트랜잭션의 상태를 보고 보일지 정한다." },
+  ]}
+/>
+
+MySQL InnoDB는 방식이 다르다. 행을 제자리에서 고치고 옛 값을 undo 로그에 두기 때문에, 롤백하거나 복구할 때 undo 로그로 실제로 되돌리는 작업을 한다. 그래서 큰 트랜잭션을 롤백하면 그만큼 오래 걸린다. PostgreSQL은 롤백이 즉시 끝나는 대신 버려진 행이 남아 VACUUM의 일이 된다. 어느 쪽이든 커밋 기록이 기준인 것은 같다.
+
+같은 실험에서 하나 더 눈에 띈 게 있다. 크래시를 몇 번 겪은 뒤 다음 주문을 넣었더니 번호가 이렇게 나왔다.
+
+```text
+ order_id | user_id | total | used_point
+----------+---------+-------+------------
+        2 |       1 | 30000 |       3000
+       35 |       2 | 12000 |          0
+(2 rows)
+```
+
+1번은 aborted된 734가 가져갔고, 2 다음이 35다. 시퀀스(`serial`)는 트랜잭션 밖에서 움직인다. 롤백해도 한 번 받은 번호를 돌려주지 않고, WAL에 32개씩 미리 앞당겨 기록해 두기 때문에 크래시 뒤에는 수십 번이 건너뛴다. 원자성은 시퀀스에 적용되지 않는다. 주문 번호에 빈 번호가 없어야 하는 요구(세금계산서 일련번호 같은)라면 시퀀스로는 안 되고 별도 카운터 행을 잠가서 매겨야 한다.
+
+## 원자성은 연결 하나 안에서만 성립한다
+
+DB가 원자성을 지켜도 앱이 트랜잭션을 제대로 열지 않으면 소용없다. Node의 `pg` 라이브러리로 흔히 보는 실수를 재현했다. 커넥션 풀에 바로 `BEGIN`을 보내고, 이어서 `INSERT`, `ROLLBACK`을 보낸다.
+
+```js
+// 잘못된 코드: 세 문장이 풀에서 각각 아무 연결이나 집어 간다
+async function wrong(userId) {
+  await pool.query("BEGIN");
+  await pool.query("INSERT INTO orders (user_id, total) VALUES ($1, 1000)", [userId]);
+  await pool.query("ROLLBACK");
+}
+
+// 맞는 코드: 연결 하나를 빌려서 그 위에서만 BEGIN ~ COMMIT/ROLLBACK
+async function right(userId) {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("INSERT INTO orders (user_id, total) VALUES ($1, 1000)", [userId]);
+    await c.query("ROLLBACK");
+  } finally {
+    c.release();
+  }
+}
+```
+
+요청 여섯 개를 동시에 보내고, 롤백했으니 0건이어야 할 행을 셌다. 같은 스크립트를 다섯 번 돌렸다.
+
+```text
+wrong: rolled back 6, left behind = 2
+wrong: rolled back 6, left behind = 1
+wrong: rolled back 6, left behind = 1
+wrong: rolled back 6, left behind = 0
+wrong: rolled back 6, left behind = 1
+right: rolled back 6, left behind = 0
+```
+
+맞는 코드는 다섯 번 모두 0건이었다. 잘못된 코드는 결과가 매번 다르다. 그게 이 버그의 고약한 점이다. `BEGIN`이 A 연결에서 열리고 `INSERT`가 B 연결에서 자동 커밋되면, `ROLLBACK`은 엉뚱한 연결에 가서 아무것도 되돌리지 않는다. 동시 요청이 적은 개발 환경에서는 우연히 같은 연결을 계속 받아서 멀쩡해 보이고, 트래픽이 붙으면 반쯤 쓰인 데이터가 생긴다.
+
+트랜잭션은 연결(세션)에 붙은 상태다. 그래서 원자성의 단위는 "연결 하나 위의 `BEGIN`부터 `COMMIT`까지"다. ORM을 쓰면 `prisma.$transaction`, Spring의 `@Transactional`, Django의 `atomic`이 연결을 고정해 주는데, 그 안에서 다른 클라이언트나 다른 리포지토리 인스턴스로 쿼리를 보내면 같은 실수가 된다. PgBouncer를 transaction 모드로 쓰면 트랜잭션 사이에 서버 연결이 바뀌기 때문에, 트랜잭션 밖에서 `SET`이나 세션 단위 advisory lock에 기대는 코드도 같은 이유로 깨진다([연결 풀 글](/posts/sql-batch-timeout-pool)).
+
+## 데이터베이스 밖에서 한 일은 되돌려지지 않는다
+
+트랜잭션 안에서 결제 API를 부르는 코드를 생각해 보자. 결제가 승인된 뒤에 주문 `INSERT`가 제약 위반으로 실패하면, DB는 깔끔하게 롤백되지만 결제는 이미 끝났다. 메일 발송, 메시지 큐 발행, 캐시 갱신도 마찬가지다. 원자성은 DB가 기록하는 것에만 걸린다.
+
+<SequenceDiagram
+  caption="롤백은 DB 안의 일만 되돌린다"
+  actors={[
+    { id: "app", label: "주문 API" },
+    { id: "db", label: "PostgreSQL" },
+    { id: "pay", label: "결제사" },
+  ]}
+  steps={[
+    { from: "app", to: "db", label: "BEGIN", title: "트랜잭션을 연다", detail: "여기부터의 DB 변경은 커밋 전까지 아무에게도 보이지 않는다." },
+    { from: "app", to: "db", label: "UPDATE points", title: "포인트를 뺀다", detail: "행 잠금을 잡는다. 같은 사용자의 다른 요청은 이제 기다린다." },
+    { from: "app", to: "pay", label: "POST /charge", title: "결제사를 부른다", detail: "트랜잭션은 열린 채로 외부 응답을 기다린다. 이 동안 잠금도 계속 잡혀 있다." },
+    { from: "pay", to: "app", label: "200 승인", title: "돈이 빠져나갔다", detail: "결제사 쪽에서는 이미 끝난 일이다. DB 트랜잭션과는 아무 관계가 없다." },
+    { from: "app", to: "db", label: "INSERT orders", title: "주문 저장이 실패한다", detail: "total이 0이라 CHECK 위반이 났다고 하자. 트랜잭션은 중단 상태가 된다.", payload: "ERROR:  new row for relation \"orders\" violates check constraint \"orders_total_check\"" },
+    { from: "app", to: "db", label: "ROLLBACK", title: "DB는 원래대로", detail: "포인트는 돌아왔다. 결제는 돌아오지 않았다. 사용자는 돈만 내고 주문은 없다." },
+  ]}
+/>
+
+이 그림에는 문제가 두 개 겹쳐 있다. 하나는 되돌릴 수 없는 일을 트랜잭션 안에서 했다는 것이고, 다른 하나는 외부 호출을 기다리는 동안 잠금을 잡고 있었다는 것이다. 두 번째는 실제로 재 볼 수 있다. 첫 세션이 `UPDATE` 뒤에 6초 동안 외부 응답을 기다리는 사이, 같은 행을 고치려는 두 번째 세션이 들어왔다.
+
+```sql
+SELECT pid, state, wait_event_type AS wtype, wait_event,
+       now() - xact_start AS xact_age, left(query, 45) AS query
+FROM pg_stat_activity
+WHERE datname = 'sd2_acid' AND pid <> pg_backend_pid()
+ORDER BY xact_start;
+```
+
+```text
+ pid  |        state        | wtype  |  wait_event   |    xact_age     |                     query
+------+---------------------+--------+---------------+-----------------+-----------------------------------------------
+ 1738 | idle in transaction | Client | ClientRead    | 00:00:02.509978 | UPDATE points SET balance = balance + 500 WHE
+ 1745 | active              | Lock   | transactionid | 00:00:01.504613 | UPDATE points SET balance = balance + 100 WHE
+(2 rows)
+```
+
+`idle in transaction`이 범인이다. 쿼리는 끝났는데 트랜잭션이 열려 있고, DB는 앱(`ClientRead`)을 기다린다. 그 뒤의 1745는 `Lock / transactionid`로 1738의 트랜잭션이 끝나기를 기다린다. 외부 API가 느려지는 날, 이 줄이 수십 개로 늘어나고 커넥션 풀이 바닥난다. 안전장치로 `idle_in_transaction_session_timeout`을 걸어 두면 오래 놀고 있는 트랜잭션을 DB가 끊는다.
+
+```sql
+SET idle_in_transaction_session_timeout = '2s';
+BEGIN;
+UPDATE points SET balance = balance + 500 WHERE user_id = 2;
+-- 3초 동안 아무것도 보내지 않는다
+COMMIT;
+```
+
+```text
+FATAL:  terminating connection due to idle-in-transaction timeout
+server closed the connection unexpectedly
+```
+
+연결째 끊기고 트랜잭션은 롤백된다. 운영에서는 역할 단위로 `ALTER ROLE app SET idle_in_transaction_session_timeout = '30s'`처럼 넉넉하게 걸고, 이 오류가 로그에 보이면 코드가 트랜잭션 안에서 무언가를 기다린다는 신호로 읽는다.
+
+근본적인 해법은 순서를 바꾸는 것이다. 외부 호출은 트랜잭션 밖으로 빼고, "결제를 요청해야 한다"는 사실을 주문과 같은 트랜잭션에 행으로 남긴 뒤 별도 작업자가 보내게 한다. 이게 [트랜잭셔널 아웃박스](/posts/transactional-outbox)다. 여러 서비스의 변경을 하나로 묶어야 하면 [2단계 커밋](/posts/distributed-transactions-2pc)이나 보상 단계를 두는 [사가](/posts/saga-pattern)로 넘어가는데, 둘 다 ACID 하나를 여러 곳으로 늘리는 게 아니라 다른 약속으로 바꾸는 것이다.
+
+## 일관성은 적어 둔 규칙만큼 지켜진다
+
+"한 회의실은 같은 시간에 한 팀만 예약할 수 있다"는 규칙을 앱 코드로 지킨다고 하자. 겹치는 예약이 있는지 조회하고, 없으면 넣는다. 두 요청이 거의 동시에 오면 둘 다 "없다"를 보고 둘 다 넣는다. 격리 수준이 기본값인 READ COMMITTED라면 막을 방법이 없다.
+
+이 규칙을 DB에 적으면 이야기가 달라진다. PostgreSQL은 범위가 겹치지 않아야 한다는 규칙을 배제 제약(exclusion constraint)으로 적을 수 있다. 문법과 범위 타입은 [데이터 타입 글](/posts/postgres-data-types)에 있고, 여기서는 동시 요청에서 어떻게 동작하는지만 본다.
+
+```sql
+CREATE EXTENSION btree_gist;   -- 정수 = 비교를 GiST 인덱스에서 쓰려고
+CREATE TABLE room_bookings (
+  room_id int NOT NULL,
+  during  tstzrange NOT NULL,
+  EXCLUDE USING gist (room_id WITH =, during WITH &&)   -- 같은 방에서 시간이 겹치면 거부
+);
+```
+
+세션 A가 13:00~14:00 예약을 넣고 커밋하기 전에 3초 머무는 동안, 세션 B가 앱 방식대로 먼저 확인하고 13:30~14:30을 넣었다.
+
+```sql
+-- 세션 B
+SELECT count(*) FROM room_bookings
+WHERE room_id = 7 AND during && '[2026-10-22 13:30+09, 2026-10-22 14:30+09)';
+INSERT INTO room_bookings VALUES (7, '[2026-10-22 13:30+09, 2026-10-22 14:30+09)');
+```
+
+```text
+ count
+-------
+     0
+(1 row)
+
+Time: 1.900 ms
+ERROR:  conflicting key value violates exclusion constraint "room_bookings_room_id_during_excl"
+DETAIL:  Key (room_id, during)=(7, ["2026-10-22 04:30:00+00","2026-10-22 05:30:00+00")) conflicts with existing key (room_id, during)=(7, ["2026-10-22 04:00:00+00","2026-10-22 05:00:00+00")).
+Time: 1992.292 ms (00:01.992)
+```
+
+확인 쿼리는 0건을 돌려줬다. A가 아직 커밋 전이라 안 보였기 때문이다. 앱 코드만 믿었다면 여기서 겹치는 예약이 들어간다. 그런데 `INSERT`는 약 2초를 기다렸다가 거부됐다. 배제 제약의 인덱스가 아직 커밋 안 된 A의 행까지 알고 있어서, A가 끝날 때까지 기다린 뒤 판정한 것이다. `UNIQUE`도 같은 방식으로 기다렸다가 판정한다. 동시성 아래에서 규칙을 지키는 가장 확실한 방법은 그 규칙을 제약으로 적는 것이다.
+
+제약이 언제 검사되는지도 알아야 한다. 배너 순서를 한 칸씩 미루는 흔한 작업에서 이런 일이 생긴다.
+
+```sql
+CREATE TABLE banners (id int PRIMARY KEY, pos int NOT NULL UNIQUE);
+INSERT INTO banners VALUES (10, 1), (20, 2), (30, 3);
+UPDATE banners SET pos = pos + 1;
+```
+
+```text
+ERROR:  duplicate key value violates unique constraint "banners_pos_key"
+DETAIL:  Key (pos)=(2) already exists.
+```
+
+문장이 끝나면 1·2·3이 2·3·4가 돼서 아무 문제가 없는데도 실패한다. PostgreSQL의 일반 `UNIQUE`는 행을 하나 고칠 때마다 바로 검사하기 때문에, 첫 행이 2가 되는 순간 아직 남아 있는 2와 부딪힌다. 제약을 `DEFERRABLE`로 만들면 검사 시점을 문장 끝이나 커밋 시점으로 미룰 수 있다.
+
+```sql
+ALTER TABLE banners DROP CONSTRAINT banners_pos_key;
+ALTER TABLE banners ADD CONSTRAINT banners_pos_key UNIQUE (pos) DEFERRABLE INITIALLY IMMEDIATE;
+UPDATE banners SET pos = pos + 1;           -- 이제 문장 끝에서 검사한다
+
+BEGIN;
+SET CONSTRAINTS banners_pos_key DEFERRED;   -- 이 트랜잭션에서는 커밋할 때 검사한다
+UPDATE banners SET pos = 4 WHERE id = 10;   -- 잠시 4가 둘이 된다
+UPDATE banners SET pos = 2 WHERE id = 30;
+COMMIT;
+SELECT * FROM banners ORDER BY pos;
+```
+
+```text
+UPDATE 3
+BEGIN
+SET CONSTRAINTS
+UPDATE 1
+UPDATE 1
+COMMIT
+ id | pos
+----+-----
+ 30 |   2
+ 20 |   3
+ 10 |   4
+(3 rows)
+```
+
+트랜잭션 중간에는 규칙이 깨져 있어도 되고, 커밋하는 순간에만 지켜지면 된다. 이게 ACID의 C가 말하는 정확한 뜻이다. 반대로 커밋 시점에 규칙이 깨져 있으면 `COMMIT`이 실패한다.
+
+```sql
+BEGIN;
+SET CONSTRAINTS banners_pos_key DEFERRED;
+UPDATE banners SET pos = 3 WHERE id = 30;   -- 20번 배너가 이미 3이다
+COMMIT;
+```
+
+```text
+BEGIN
+SET CONSTRAINTS
+UPDATE 1
+ERROR:  duplicate key value violates unique constraint "banners_pos_key"
+DETAIL:  Key (pos)=(3) already exists.
+```
+
+마지막 `ERROR`는 `UPDATE`가 아니라 `COMMIT`에서 났다. 지연 제약을 쓰면 오류가 커밋 시점에 터지므로, 앱이 `COMMIT`의 실패를 꼭 처리해야 한다. MySQL InnoDB는 지연 제약을 지원하지 않고, 대신 `UNIQUE` 검사를 행 단위로 하되 `ORDER BY pos DESC`를 붙인 `UPDATE`로 순서를 맞춰 피하는 방식을 쓴다.
+
+하나 헷갈리기 쉬운 것: ACID의 C와 CAP의 C는 이름만 같다. ACID의 C는 "제약을 지킨 상태로 끝난다"이고, CAP의 C는 "복제본 어디서 읽어도 최신 값을 본다(선형화)"다. 후자는 [일관성 모델](/posts/consistency-models)과 [CAP 글](/posts/db-consistency-cap)의 주제다.
+
+## 커밋 응답과 디스크 사이
+
+지속성은 "커밋 응답을 받았으면 서버가 죽어도 남는다"는 약속이다. 이 약속은 `synchronous_commit` 하나로 크게 달라진다. 실습 인스턴스에서 `wal_writer_delay`를 최댓값인 10초로 늘려 틈을 넓힌 다음, `synchronous_commit = off`로 세 건을 커밋하고 곧바로 모든 프로세스를 죽였다. 기본값은 200ms라서 실제 틈은 이보다 훨씬 좁다.
+
+```sql
+SET synchronous_commit = off;
+INSERT INTO page_views (id) VALUES (1);
+INSERT INTO page_views (id) VALUES (2);
+INSERT INTO page_views (id) VALUES (3);
+SELECT pg_current_wal_insert_lsn() AS insert_lsn,
+       pg_current_wal_lsn()        AS write_lsn,
+       pg_current_wal_flush_lsn()  AS flush_lsn;
+```
+
+```text
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+ insert_lsn | write_lsn | flush_lsn
+------------+-----------+-----------
+ 0/1997980  | 0/1997710 | 0/1997710
+(1 row)
+```
+
+```text
+-- 재시작 후
+ rows_after_crash
+------------------
+                0
+(1 row)
+```
+
+세 건 모두 `INSERT 0 1`, 즉 커밋 성공 응답을 받았는데 재시작하니 0건이다. LSN 세 개를 보면 이유가 보인다. WAL은 `0/1997980`까지 만들어졌지만(insert), OS에 넘어간 건 `0/1997710`까지(write)였다. 그 사이 0x270바이트, 세 건의 커밋 기록이 PostgreSQL 공유 메모리의 WAL 버퍼에만 있다가 프로세스와 함께 사라졌다. 같은 실험을 `on`으로 하면 세 LSN이 모두 `0/19979F8`로 같았고, 재시작 뒤에도 3건이 남았다.
+
+실험을 처음 했을 때는 `off`인데도 다섯 건이 다 살아남았다. 그때는 psql이 끝나기를 기다렸다가 죽였는데, 그사이 WAL이 OS로 넘어갔기 때문이다. OS 페이지 캐시에 들어간 데이터는 PostgreSQL 프로세스가 죽어도 남고, OS가 죽거나 전원이 나갈 때 사라진다. 그래서 잃는 범위는 고장 종류에 따라 다르다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="커밋 기록이 디스크까지 가는 길, 그리고 응답이 나가는 지점"
+  zones={[
+    { id: "pg", label: "PostgreSQL 프로세스", x: 100, y: 12, w: 160, h: 112, tone: "private" },
+    { id: "os", label: "커널", x: 100, y: 136, w: 160, h: 106, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", x: 40, y: 68, icon: "client" },
+    { id: "be", label: "backend", x: 180, y: 50, icon: "server" },
+    { id: "buf", label: "WAL buffer", x: 180, y: 100, icon: "container" },
+    { id: "cache", label: "page cache", x: 180, y: 170, icon: "container" },
+    { id: "disk", label: "disk", sub: "pg_wal", x: 180, y: 222, icon: "db" },
+    { id: "rep", label: "standby", x: 340, y: 160, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "be" },
+    { from: "be", to: "buf" },
+    { from: "buf", to: "cache", label: "write" },
+    { from: "cache", to: "disk", label: "fsync" },
+    { from: "buf", to: "rep", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "be", "buf"], packet: "COMMIT", title: "커밋 기록이 버퍼에 들어간다", detail: "공유 메모리 안이다. 여기까지는 프로세스가 죽으면 사라진다." },
+    { path: ["buf"], packet: "off", highlight: ["buf", "app"], title: "off는 여기서 응답한다", detail: "walwriter가 곧 내려 줄 거라 믿고 바로 성공을 돌려준다. 실험에서 사라진 세 건이 이 상태였다." },
+    { path: ["buf", "cache"], packet: "write", title: "OS로 넘어간다", detail: "프로세스가 죽어도 남는다. 하지만 아직 메모리라서 전원이 나가면 사라진다." },
+    { path: ["cache", "disk"], packet: "fsync", title: "on은 디스크에 닿은 뒤 응답한다", detail: "기본값이다. 커밋 지연의 대부분이 이 fsync 대기다." },
+    { path: ["buf", "rep"], packet: "WAL", highlight: ["rep"], title: "다른 서버에도 남긴다", detail: "동기 복제를 켜면 standby가 받았다고 답할 때까지 응답을 미룬다. 기계 한 대가 통째로 사라져도 남는다." },
+  ]}
+/>
+
+정리하면 지속성에는 단계가 있다. `off`는 프로세스 크래시에도 최근 커밋을 잃을 수 있고, `local`과 `on`(복제 없이)은 디스크까지, 동기 복제와 함께 쓰는 `on`·`remote_apply`는 다른 서버까지 지킨다. `off`는 세션이나 트랜잭션 단위(`SET LOCAL synchronous_commit = off`)로 걸 수 있으니, 조회수처럼 잃어도 되는 쓰기에만 골라 쓴다. 잃는 건 최근 커밋이고, 데이터가 깨지지는 않는다. 반면 `fsync = off`는 DB 전체가 깨질 수 있는 설정이라 성격이 전혀 다르다([내부 구조 글](/posts/postgres-architecture)).
+
+`fsync`도 디스크가 정직할 때만 의미가 있다. 쓰기 캐시를 가진 디스크가 정전 보호 없이 "다 썼다"고 답하면 OS도 DB도 속는다. 서버용 SSD는 전원 손실 보호(PLP) 콘덴서가 있어서 이 문제를 막는다. 의심스러우면 `pg_test_fsync`로 초당 `fdatasync` 횟수를 재 본다. 회전 디스크인데 초당 수만 번이 나오면 어딘가에서 캐시가 거짓말을 하고 있다는 뜻이다. 서버 한 대가 통째로 사라지는 경우까지 견디려면 복제가 필요하고, 그건 [복제 글](/posts/db-replication-sharding)과 [고가용성 글](/posts/high-availability)에서 이어진다.
+
+## 응답을 받지 못한 커밋
+
+처음 장면으로 돌아가자. 앱과 DB 사이에 TCP 프록시를 하나 끼우고, 프록시가 `COMMIT`은 DB에 넘기되 그 응답은 버리고 연결을 끊게 만들었다. 실제로는 네트워크 단절, 로드 밸런서의 유휴 타임아웃, 앱 프로세스 재시작이 같은 일을 한다.
+
+```js
+// ambiguous.js 일부: 프록시가 COMMIT을 넘긴 뒤 응답 대신 연결을 끊는다
+client.on("data", (buf) => {
+  db.write(buf);
+  if (buf.includes("COMMIT")) cut = true;
+});
+db.on("data", (buf) => {
+  if (cut) { client.destroy(); return; }
+  client.write(buf);
+});
+```
+
+```text
+[app] 주문 넣음 order_id = 35
+[proxy] COMMIT을 DB에 넘겼다. 응답은 버리고 연결을 끊는다
+[app] 커밋 실패? Connection terminated unexpectedly
+[check] DB에 있는 주문: [{"order_id":35,"user_id":2,"total":12000}]
+```
+
+앱은 실패를 받았고 DB에는 주문이 있다. 앱이 알 수 있는 건 "모른다"뿐이다. `COMMIT`이 DB에 도착하기 전에 끊겼을 수도, 커밋된 뒤 응답만 사라졌을 수도 있다. 이 상태를 커밋 결과 불명이라고 부르자. ACID는 DB 안의 상태를 약속할 뿐, 그 결과가 앱에 전달된다는 것까지는 약속하지 않는다.
+
+<SequenceDiagram
+  caption="커밋은 됐는데 앱은 실패로 안다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "app", label: "주문 API" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "user", to: "app", label: "결제 버튼", title: "첫 요청", detail: "앱이 트랜잭션을 열고 주문을 넣는다." },
+    { from: "app", to: "db", label: "COMMIT", title: "커밋을 보낸다", detail: "DB는 WAL에 커밋 기록을 쓰고 디스크에 내린다. 이 순간 주문은 확정됐다." },
+    { from: "db", to: "app", label: "응답 유실", title: "응답이 사라진다", detail: "연결이 끊겨 앱은 COMMIT 응답 대신 오류를 받는다.", payload: "Connection terminated unexpectedly" },
+    { from: "app", to: "user", label: "500", title: "앱은 실패라고 답한다", detail: "앱이 아는 건 오류뿐이다. 실제로는 성공했다." },
+    { from: "user", to: "app", label: "다시 누름", title: "재시도", detail: "같은 요청이 다시 온다. 아무 장치가 없으면 주문이 두 건이 된다." },
+    { from: "app", to: "db", label: "ON CONFLICT", title: "같은 요청 번호면 넣지 않는다", detail: "요청마다 붙인 request_id가 UNIQUE라서 두 번째 INSERT는 아무것도 하지 않고 기존 주문을 돌려준다." },
+  ]}
+/>
+
+해법은 재시도해도 결과가 한 번만 반영되게 만드는 것, 즉 멱등성이다. 클라이언트가 요청마다 고유한 번호를 만들어 보내고, 그 번호에 `UNIQUE`를 건다.
+
+```sql
+ALTER TABLE orders ADD COLUMN request_id uuid UNIQUE;
+```
+
+```js
+const SQL = `INSERT INTO orders (user_id, total, request_id) VALUES ($1, $2, $3)
+             ON CONFLICT (request_id) DO NOTHING
+             RETURNING order_id`;
+async function placeOrder(db, req) {
+  const r = await db.query(SQL, [req.userId, req.total, req.requestId]);
+  if (r.rowCount === 1) return { orderId: r.rows[0].order_id, created: true };
+  const old = await db.query("SELECT order_id FROM orders WHERE request_id = $1", [req.requestId]);
+  return { orderId: old.rows[0].order_id, created: false };
+}
+```
+
+```text
+1st: {"orderId":36,"created":true}
+retry: {"orderId":36,"created":false}
+rows with that request_id: 1
+```
+
+같은 번호로 두 번 보내도 주문은 한 건이다. 요청 번호를 어디에 저장하고 얼마나 보관하는지, 응답까지 캐시하는 방법은 [멱등성 키 글](/posts/idempotency-key)에 있다. 멱등성 없이 재시도만 늘리면 오히려 결함을 퍼뜨리는데, 그 장면은 [내결함성 글](/posts/fault-tolerance)에서 볼 수 있다.
+
+번호를 둘 수 없는 상황이라면 트랜잭션 번호로 확인하는 방법도 있다. `COMMIT` 전에 `SELECT txid_current()`로 번호를 받아 두고, 연결이 끊기면 새 연결에서 `SELECT pg_xact_status('번호')`를 묻는다. 위 크래시 실험에서 본 것처럼 `committed`, `aborted`, `in progress` 중 하나가 돌아온다(PostgreSQL 10부터). 아주 오래된 번호는 상태 기록이 정리돼 NULL이 나올 수 있으니, 끊긴 직후에 바로 확인할 때만 쓴다.
+
+## 직접 짜 보기: 커밋된 것만 남기기
+
+복구가 하는 일을 작은 함수로 짜 보자. 체크포인트 시점의 상태 `snapshot`과, 그 뒤에 쌓인 로그 `log`를 받는다. 로그 한 줄은 `{ tx, op, key, value }`이고 `op`는 `"set"`, `"commit"`, `"abort"` 중 하나다. 커밋 기록이 있는 트랜잭션의 `set`만 순서대로 적용한 최종 상태를 돌려준다. 커밋 기록이 로그 뒤쪽에 나오더라도 그 트랜잭션의 앞선 `set`은 모두 살아야 한다.
+
+<CodePlayground
+  caption="커밋 기록으로 살릴 변경 고르기"
+  functionName="recover"
+  initialCode={`function recover(snapshot, log) {
+  // snapshot: { 키: 값 }, log: [{ tx, op, key, value }]
+  return { ...snapshot };
+}`}
+  solution={`function recover(snapshot, log) {
+  // 1) 로그 전체에서 커밋 기록이 있는 트랜잭션을 먼저 모은다
+  const committed = new Set();
+  for (const r of log) if (r.op === "commit") committed.add(r.tx);
+  // 2) 로그 순서대로, 커밋된 트랜잭션의 변경만 다시 적용한다
+  const state = { ...snapshot };
+  for (const r of log) {
+    if (r.op === "set" && committed.has(r.tx)) state[r.key] = r.value;
+  }
+  return state;
+}`}
+  tests={[
+    { label: "커밋된 변경은 남는다", args: [{ a: 5000 }, [{ tx: 1, op: "set", key: "a", value: 2000 }, { tx: 1, op: "commit" }]], expected: { a: 2000 } },
+    { label: "커밋 기록이 없으면 전부 버린다", args: [{ a: 5000, b: 0 }, [{ tx: 1, op: "set", key: "a", value: 2000 }, { tx: 1, op: "set", key: "b", value: 3000 }]], expected: { a: 5000, b: 0 } },
+    { label: "섞여 있어도 커밋된 쪽만", args: [{ a: 5000, b: 0 }, [{ tx: 1, op: "set", key: "a", value: 2000 }, { tx: 2, op: "set", key: "b", value: 700 }, { tx: 2, op: "commit" }, { tx: 1, op: "set", key: "b", value: 3700 }]], expected: { a: 5000, b: 700 } },
+    { label: "나중 커밋이 이긴다", args: [{ x: 1 }, [{ tx: 1, op: "set", key: "x", value: 2 }, { tx: 1, op: "commit" }, { tx: 2, op: "set", key: "x", value: 3 }, { tx: 2, op: "commit" }]], expected: { x: 3 } },
+    { label: "abort는 버린다", args: [{ x: 1 }, [{ tx: 1, op: "set", key: "x", value: 2 }, { tx: 1, op: "abort" }, { tx: 2, op: "set", key: "y", value: 9 }, { tx: 2, op: "commit" }]], expected: { x: 1, y: 9 } },
+    { label: "빈 로그", args: [{}, []], expected: {} },
+  ]}
+/>
+
+로그를 한 번만 훑으면서 바로 적용하면 세 번째 테스트에서 틀린다. 2번이 커밋되기 전에 1번의 변경을 만났을 때 1번이 커밋될지 아직 모르기 때문이다. 그래서 커밋 여부를 먼저 모으고 다시 훑는다. PostgreSQL은 이 두 번째 단계를 읽을 때마다 하는 셈이다. 복구 때는 모든 기록을 다시 적용하고, 보일지 말지는 행을 읽는 순간 `pg_xact`를 보고 정한다.
+
+## 트랜잭션이 의심될 때 보는 순서
+
+증상에서 출발해 어느 약속이 깨졌는지 좁히는 순서다.
+
+- 같은 주문이 두 건 생겼다: 커밋 결과 불명 뒤의 재시도를 먼저 의심한다. 앱 로그에서 첫 요청의 오류가 `COMMIT` 단계였는지 보고, DB에 두 주문의 생성 시각 차이가 재시도 간격과 맞는지 본다. 멱등성 키가 해법이다.
+- 반만 반영된 데이터가 있다: 트랜잭션이 정말 연결 하나에서 열렸는지 본다. `log_statement = 'all'`을 잠깐 켜거나 `pg_stat_activity`의 `pid`를 찍으면 `BEGIN`과 `INSERT`가 다른 `pid`에서 왔는지 보인다.
+- 잠금 대기가 쌓이고 풀이 마른다: `state = 'idle in transaction'`이면서 `xact_age`가 긴 세션을 찾는다. 그 `query` 열이 마지막으로 실행한 문장이라, 코드에서 그 문장 다음에 외부 호출이 있는지 본다.
+- 재시작 뒤 최근 데이터가 없다: `SHOW synchronous_commit; SHOW fsync;`를 확인하고, 역할이나 DB 단위로 `off`가 걸려 있지 않은지 `pg_db_role_setting`도 본다. 관리형 서비스라면 파라미터 그룹을 본다.
+- 번호가 건너뛰었다: 시퀀스는 원래 그렇다. 롤백, 크래시, 캐시(`CACHE` 옵션)로 빈 번호가 생긴다. 버그가 아니다.
+
+```sql
+-- 오래 열린 트랜잭션 찾기
+SELECT pid, usename, state, now() - xact_start AS xact_age, left(query, 60) AS last_query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND now() - xact_start > interval '30 seconds'
+ORDER BY xact_age DESC;
+```
+
+## 약속이 끝나는 곳을 아는 것
+
+원자성은 커밋 기록 한 줄로 정해지고, 연결 하나 안에서만 성립하며, DB 밖에서 한 일은 되돌리지 않는다. 일관성은 제약으로 적어 둔 규칙만 지킨다. 지속성은 `synchronous_commit`과 디스크, 복제가 정하는 단계가 있다. 그리고 커밋 응답이 앱에 도착하는 것까지는 아무도 약속하지 않는다. 이 경계 바깥은 멱등성, 아웃박스, 제약 조건 같은 장치로 앱이 직접 메운다. 격리성이 남았는데, 그건 [트랜잭션과 격리 수준](/posts/db-transaction-isolation)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### ACID를 각각 설명해 주세요.
+
+원자성은 트랜잭션의 변경이 전부 반영되거나 전부 취소된다는 것, 일관성은 트랜잭션이 끝났을 때 정해 둔 규칙(제약)이 지켜진다는 것, 격리성은 동시에 실행되는 트랜잭션이 서로의 중간 상태를 보지 않는다는 것, 지속성은 커밋된 변경은 장애가 나도 남는다는 것이다. 이 중 일관성만 DB 혼자 지킬 수 없고, 규칙을 제약으로 적어 주거나 앱이 지켜야 한다.
+
+### PostgreSQL은 원자성을 어떻게 보장하나요?
+
+변경을 먼저 WAL에 쓰고, 커밋할 때 커밋 기록을 WAL에 남긴다. 크래시 뒤에는 WAL을 다시 적용하고, 커밋 기록이 없는 트랜잭션은 aborted로 처리한다. 롤백할 때 행을 지우지 않고 트랜잭션 상태만 기록하므로, 버려진 행은 데이터 파일에 남아 있다가 VACUUM이 치운다. InnoDB는 undo 로그로 실제로 되돌린다는 점이 다르다.
+
+### `synchronous_commit = off`면 무엇을 잃나요?
+
+최근 커밋 몇 건을 잃을 수 있지만 DB가 깨지지는 않는다. 커밋 응답을 WAL `fsync` 전에 돌려주기 때문에, 응답 뒤 walwriter가 내려 주기 전(기본 설정에서 최대 수백 ms)에 서버가 죽으면 그 트랜잭션은 없던 일이 된다. 트랜잭션 단위로 걸 수 있어서 잃어도 되는 쓰기에만 쓴다. `fsync = off`는 DB 전체가 깨질 수 있어 전혀 다른 설정이다.
+
+### 커밋 요청 중에 연결이 끊기면 어떻게 하나요?
+
+커밋됐는지 모르는 상태이므로 그냥 다시 보내면 안 된다. 요청마다 고유 번호를 붙여 `UNIQUE`로 막고 재시도하는 멱등성이 기본 해법이다. 번호가 없다면 커밋 전에 `txid_current()`를 받아 두고 다시 연결해서 `pg_xact_status`로 확인할 수 있다.
+
+### 트랜잭션 안에서 외부 API를 호출하면 무엇이 문제인가요?
+
+두 가지다. 외부 호출은 롤백으로 되돌릴 수 없어서 DB와 외부 상태가 어긋날 수 있고, 응답을 기다리는 동안 행 잠금과 연결을 잡고 있어서 다른 요청이 줄을 선다. 외부 호출은 트랜잭션 밖으로 빼고, 보낼 일을 아웃박스 테이블에 같은 트랜잭션으로 남겨 따로 보내게 한다. `idle_in_transaction_session_timeout`은 안전장치로 건다.
+
+### 앱에서 중복 검사를 하는데도 중복 데이터가 생깁니다. 왜 그런가요?
+
+확인과 삽입 사이에 다른 트랜잭션이 끼어들 수 있기 때문이다. READ COMMITTED에서는 커밋 전인 다른 트랜잭션의 행이 확인 쿼리에 보이지 않는다. `UNIQUE`나 배제 제약으로 규칙을 DB에 적으면, 인덱스가 커밋 전인 행까지 알고 기다렸다가 거부하므로 동시성에서도 지켜진다.
+
+### ACID의 C와 CAP의 C는 같은 건가요?
+
+다르다. ACID의 C는 트랜잭션이 끝난 상태가 제약을 지킨다는 뜻이고, CAP의 C는 여러 복제본 중 어디서 읽어도 가장 최근 쓰기를 본다는 선형화 가능성이다. 하나는 규칙, 하나는 복제본 사이의 최신성이다.

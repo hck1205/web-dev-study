@@ -1,0 +1,476 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("microservices-decomposition");
+
+모놀리스에서 결제를 떼어 내기로 했다고 해 보자. 결제 팀이 따로 있고, 결제사 연동이 자주 바뀌고, 결제 장애가 주문 전체를 멈추는 일도 있었다. 계획은 간단해 보인다. `src/payments` 폴더를 새 저장소로 옮기고 HTTP API를 붙인다. 그런데 막상 시작하니 `payments` 테이블을 외래 키로 붙잡은 테이블이 둘, 그 테이블을 조인하는 관리자 리포트 뷰가 하나, 결제가 들어오면 도는 트리거가 하나 나온다. 그리고 지난 반년 동안 결제 코드를 고친 커밋의 상당수가 주문 코드도 함께 고쳤다.
+
+[마이크로서비스 글](/posts/microservices)에서 왜 쪼개는지, 쪼개면 무엇이 비싸지는지, 스트랭글러 피그로 경로를 하나씩 옮기는 큰 그림을 다뤘다. 이 글은 그다음 질문을 다룬다. 실제로 어디서 자를지 어떻게 정하는지, 코드와 데이터를 어떤 순서로 옮기는지, 옮기는 동안 무엇으로 확인하는지다. 경계를 업무 언어로 찾는 법은 [바운디드 컨텍스트 글](/posts/ddd-bounded-context)에, 떼어 내기 전에 모놀리스 안에서 경계를 검증하는 법은 [모듈러 모놀리스 글](/posts/modular-monolith)에 있다.
+
+실습은 Node 22와 PostgreSQL 16으로 했다. 새 결제 서비스의 DB는 같은 클러스터의 다른 스키마(`paysvc`)로 대신했다. 실제로는 다른 DB 서버다.
+
+## 커밋 기록이 말해 주는 경계
+
+폴더 구조는 우리가 원하는 경계를 보여 준다. 실제 경계는 함께 바뀌는 코드가 보여 준다. 두 파일이 늘 같은 커밋에서 바뀐다면, 서로 다른 서비스로 나누는 순간 그 변경은 두 저장소, 두 PR, 두 배포가 된다. 애덤 톤힐이 코드 분석 책에서 시간적 결합(temporal coupling)이라고 부른 것이고, 여기서는 변경 결합도라고 부르겠다.
+
+필요한 재료는 git 기록뿐이다.
+
+```bash
+# 최근 6개월, src 아래에서 커밋마다 바뀐 파일 목록을 뽑는다
+git log --since="6 months ago" --name-only --pretty=format:--%h -- src/ > history.txt
+```
+
+<UrlAnatomy
+  caption="변경 결합도의 재료를 뽑는 명령"
+  base="git log"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "since", display: "--since=\"6 months ago\"", title: "기간을 자른다", description: "너무 길면 이미 정리된 옛 결합이 섞이고, 너무 짧으면 표본이 적다. 팀 구조가 바뀐 시점 이후만 보는 것도 방법이다." },
+    { key: "name-only", display: "--name-only", title: "바뀐 파일 이름만", description: "diff 내용은 필요 없다. 어느 파일들이 같은 커밋에 있었는지만 센다." },
+    { key: "pretty", display: "--pretty=format:--%h", title: "커밋 구분선", description: "커밋마다 --짧은해시 한 줄을 찍어서 스크립트가 커밋 경계를 나눌 수 있게 한다." },
+    { key: "path", display: "-- src/", title: "볼 경로", description: "lock 파일, 문서, 설정처럼 늘 함께 바뀌는 파일을 빼야 결과가 흐려지지 않는다. 테스트 파일도 스크립트에서 걸러 낸다." },
+  ]}
+/>
+
+아래는 그 출력 형식을 흉내 내 만든 12개 커밋짜리 예시 기록이다. 이 기록에 돌린 스크립트와 결과는 실제다. 스크립트는 커밋마다 파일 쌍을 세고, 결합도는 "함께 바뀐 횟수 ÷ 둘 중 덜 바뀐 파일의 변경 횟수"로 계산한다.
+
+```js
+// cochange.mjs (일부)
+const commits = fs.readFileSync(process.argv[2], "utf8").split(/^--\w+$/m)
+  .map((b) => b.split("\n").filter((l) => l.startsWith("src/") && !l.endsWith(".test.ts")))
+  .filter((files) => files.length > 0);
+
+for (const files of commits) {
+  for (const f of files) changes.set(f, (changes.get(f) ?? 0) + 1);
+  for (let i = 0; i < files.length; i++)
+    for (let j = i + 1; j < files.length; j++) {
+      const key = [files[i], files[j]].sort().join(" + ");
+      pairs.set(key, (pairs.get(key) ?? 0) + 1);
+    }
+}
+```
+
+```bash
+node cochange.mjs history.txt
+```
+
+```text
+commits=12
+together  degree  pair
+       4     80%  orders/place-order.ts + payments/charge.ts
+       2     67%  orders/place-order.ts + payments/refund.ts
+cross-module commits: 5/12
+  5  orders + payments
+  1  orders + shared
+  1  payments + shared
+```
+
+읽는 법은 이렇다. `place-order.ts`가 바뀐 다섯 번 중 네 번은 `charge.ts`도 바뀌었다. 열두 커밋 중 다섯이 주문과 결제를 함께 건드렸다. 결제 폴더 안의 파일끼리는 오히려 두 번 이상 함께 바뀐 쌍이 없다. 지금 결제를 떼어 내면, 결제 변경의 대부분이 주문 서비스와 함께 배포해야 하는 변경이 된다.
+
+<AlgoTrace
+  caption="커밋을 하나씩 읽으며 함께 바뀐 쌍을 센다"
+  memoryLabel="orders + payments 쌍"
+  cells={["a1f3c09", "b72e410", "c0d9e21", "e19c6f0", "b3c1d55", "e5f2b88"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "charge.ts만 바뀌었다(테스트 파일은 뺐다). 쌍이 없다." },
+    { pointer: 1, memory: ["place+charge 1"], caption: "주문 접수와 결제 승인이 함께 바뀌었다. 첫 쌍이다." },
+    { pointer: 2, memory: ["place+charge 2", "place+refund 1"], caption: "세 파일이 함께 바뀌었다. 주문-결제 쌍이 두 개 생긴다." },
+    { pointer: 3, memory: ["place+charge 2", "place+refund 2"], caption: "주문 접수와 환불이 또 함께 바뀐다." },
+    { pointer: 4, memory: ["place+charge 3", "place+refund 2"], caption: "공용 money.ts까지 셋이 바뀌었다. 주문-결제가 세 번째다." },
+    { pointer: 5, found: [1, 2, 4, 5], memory: ["place+charge 4", "place+refund 2"], caption: "네 번째. 주문 접수가 바뀐 다섯 번 중 네 번을 결제와 함께 바뀌었다. 결합도 80%다." },
+  ]}
+/>
+
+이 숫자가 말하는 건 "떼어 내지 마라"가 아니다. 두 가지 중 하나를 고르라는 뜻이다. 결제와 주문 사이의 계약(어떤 값을 주고받는지)을 먼저 안정시키고 나서 떼어 내거나, 경계를 다른 곳에 긋는다. 예를 들어 주문 접수 코드가 결제 승인 세부까지 알고 있어서 함께 바뀐다면, 주문 쪽에는 "결제해 달라"만 남기고 나머지를 결제 모듈로 밀어 넣는 리팩터링이 먼저다. 그 리팩터링 뒤에 다시 세어 보면 된다.
+
+## DB가 말해 주는 경계
+
+코드보다 늦게 드러나고 더 끈질긴 게 데이터 결합이다. 떼어 낼 테이블을 누가 붙잡고 있는지는 PostgreSQL 카탈로그에 다 있다. 실습용 모놀리스 DB에 질의했다.
+
+```sql
+-- payments를 외래 키로 가리키는 테이블과, payments가 가리키는 테이블
+SELECT conrelid::regclass AS from_table, confrelid::regclass AS to_table, conname
+FROM pg_constraint
+WHERE contype = 'f' AND (confrelid = 'payments'::regclass OR conrelid = 'payments'::regclass)
+ORDER BY 1;
+```
+
+```text
+ from_table  | to_table |           conname
+-------------+----------+-----------------------------
+ payments    | orders   | payments_order_id_fkey
+ refunds     | payments | refunds_payment_id_fkey
+ settlements | payments | settlements_payment_id_fkey
+(3 rows)
+```
+
+```sql
+-- payments에 기대는 뷰와 트리거
+SELECT DISTINCT v.oid::regclass AS view_name
+FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class
+WHERE d.refobjid = 'payments'::regclass AND v.oid <> 'payments'::regclass;
+
+SELECT tgname, tgfoid::regproc AS fn FROM pg_trigger
+WHERE tgrelid = 'payments'::regclass AND NOT tgisinternal;
+```
+
+```text
+     view_name
+--------------------
+ admin_order_report
+(1 row)
+
+    tgname    |    fn
+--------------+----------
+ payments_vip | mark_vip
+(1 row)
+```
+
+<ConceptDiagram
+  caption="payments를 붙잡고 있는 것들"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "pay", label: "payments", sub: "떼어 낼 테이블", x: 200, y: 130, w: 130, h: 46 },
+    { id: "ord", label: "orders", x: 200, y: 30, w: 110, h: 40 },
+    { id: "ref", label: "refunds", sub: "FK", x: 70, y: 220, w: 110, h: 44 },
+    { id: "set", label: "settlements", sub: "FK", x: 330, y: 220, w: 120, h: 44 },
+    { id: "view", label: "report view", sub: "JOIN", x: 60, y: 90, w: 110, h: 44 },
+    { id: "trg", label: "trigger", sub: "mark_vip", x: 340, y: 90, w: 110, h: 44 },
+  ]}
+  edges={[
+    { from: "pay", to: "ord", label: "FK" },
+    { from: "ref", to: "pay" },
+    { from: "set", to: "pay" },
+    { from: "view", to: "pay", dashed: true },
+    { from: "trg", to: "pay", dashed: true },
+  ]}
+/>
+
+이 목록이 곧 할 일 목록이다. 환불과 정산은 결제의 일부로 함께 옮길지, 주문 쪽에 남기고 결제 ID만 들고 있게 할지 정해야 한다. 관리자 리포트 뷰는 서비스가 나뉘면 조인이 안 되니 다른 방법이 필요하다. 트리거는 가장 위험하다. 코드 검색에 안 걸리는 업무 규칙이 DB 안에 숨어 있다는 뜻이고, 옮긴 뒤 아무도 모르게 그 규칙이 사라진다.
+
+카탈로그로 안 보이는 결합도 있다. 애플리케이션 코드에서 `payments`를 문자열로 쓰는 SQL이다. 저장소 전체를 `grep -rn "payments" --include=*.ts`로 훑고, `pg_stat_statements` 확장을 켜 둔 DB라면 그 테이블을 쓰는 실제 쿼리 목록을 뽑아 비교한다.
+
+## 무엇부터 떼어 낼까
+
+후보가 여럿이면 두 축으로 줄을 세운다. 하나는 떼어 내서 얻는 것이다. 자주 바뀌는가, 다른 팀이 맡는가, 따로 늘려야 하는가, 장애를 격리해야 하는가. 다른 하나는 떼어 내는 비용이다. 변경 결합도가 높은가, 데이터 결합이 많은가, 강한 일관성이 필요한가.
+
+얻는 건 크고 비용은 작은 곳이 첫 후보다. 알림 발송, 검색 색인, 이미지 처리 같은 가장자리 기능이 자주 첫 번째가 된다. 다른 기능이 그걸 부르기만 하고, 그쪽이 다른 기능의 데이터를 거의 쓰지 않기 때문이다. 결제처럼 한가운데 있는 기능은 얻는 것도 크지만 비용도 크다. 첫 분해로 결제를 고르면 팀이 분해 자체를 배우는 동안 가장 위험한 곳을 만지게 된다.
+
+방향도 본다. 다른 기능이 많이 부르는 쪽(위쪽)을 떼어 내면 부르는 모든 곳이 네트워크 호출로 바뀐다. 다른 기능을 많이 부르는 쪽(아래쪽)을 떼어 내면 새 서비스가 모놀리스를 부르게 된다. 둘 다 가능하지만, 새 서비스가 모놀리스를 수시로 불러야 한다면 아직 경계가 덜 그어진 것이다.
+
+## 코드는 추상화 뒤에서 갈아 끼운다
+
+경로 단위로 옮기는 스트랭글러 피그는 HTTP 입구에서 잘 통한다. 그런데 결제 수수료 계산처럼 모놀리스 안쪽 깊은 곳에서 불리는 기능은 프록시로 가로챌 수 없다. 이럴 때 브랜치 바이 앱스트랙션(branch by abstraction)을 쓴다. 이름과 달리 git 브랜치를 만들지 않는다. 코드 안에 추상화(인터페이스)를 하나 세우고, 그 뒤에서 구현을 바꾼다.
+
+순서는 이렇다. 먼저 수수료 계산을 부르는 모든 곳이 `FeeCalculator` 인터페이스를 거치게 바꾼다. 이 단계는 동작이 바뀌지 않으니 바로 배포한다. 다음으로 그 인터페이스의 두 번째 구현으로 새 서비스 클라이언트를 만든다. 설정 하나로 어느 구현을 쓸지 고르게 하고, 새 구현으로 넘긴다. 마지막으로 옛 구현을 지운다. 내내 메인 브랜치에서 작업하고 매번 배포할 수 있다.
+
+<NetworkTopology
+  caption="추상화 하나를 세우고 그 뒤에서 구현을 바꾼다"
+  width={400}
+  height={270}
+  zones={[
+    { id: "zmono", label: "monolith", x: 8, y: 20, w: 250, h: 240, tone: "private" },
+    { id: "zsvc", label: "payment service", x: 268, y: 20, w: 124, h: 240, tone: "public" },
+  ]}
+  nodes={[
+    { id: "caller", label: "settle job", x: 70, y: 70, icon: "server", w: 90 },
+    { id: "abs", label: "FeeCalculator", sub: "interface", x: 160, y: 140, icon: "gateway", w: 110 },
+    { id: "legacy", label: "legacyFee", x: 70, y: 220, icon: "server", w: 90 },
+    { id: "client", label: "fee client", x: 200, y: 220, icon: "client", w: 90 },
+    { id: "svc", label: "fee API", x: 330, y: 140, icon: "server", w: 84 },
+    { id: "db", label: "paysvc DB", x: 330, y: 230, icon: "db", w: 90 },
+  ]}
+  links={[
+    { from: "caller", to: "abs" },
+    { from: "abs", to: "legacy" },
+    { from: "abs", to: "client" },
+    { from: "client", to: "svc" },
+    { from: "svc", to: "db" },
+  ]}
+  steps={[
+    { path: ["caller", "legacy"], packet: "fee()", title: "처음: 호출부가 구현을 직접 부른다", detail: "정산 배치가 수수료 계산 함수를 바로 import한다. 바꾸려면 호출부를 모두 고쳐야 한다." },
+    { path: ["caller", "abs", "legacy"], packet: "feeFor", title: "1단계: 추상화를 세운다", detail: "모든 호출부가 FeeCalculator를 거치게 바꾼다. 구현은 그대로라 동작이 같다. 이 상태로 배포한다." },
+    { path: ["caller", "abs", "client", "svc"], packet: "shadow", highlight: ["legacy"], title: "2단계: 새 구현을 함께 돌린다", detail: "옛 구현의 결과를 쓰면서 새 서비스에도 같은 요청을 보내 결과를 비교한다. 다음 절에서 실제로 돌린다." },
+    { path: ["caller", "abs", "client", "svc", "db"], packet: "feeFor", title: "3단계: 새 구현으로 넘긴다", detail: "설정 하나로 새 구현을 쓴다. 문제가 생기면 설정을 되돌리면 된다." },
+    { path: ["abs", "legacy"], packet: "삭제", blocked: true, title: "4단계: 옛 구현을 지운다", detail: "되돌릴 일이 없다고 확인되면 옛 구현과 설정 분기를 지운다. 지우지 않으면 죽은 분기가 쌓인다." },
+  ]}
+/>
+
+설정으로 구현을 고르는 부분은 [기능 플래그 글](/posts/feature-flags)에서 다룬 장치를 그대로 쓴다. 인터페이스를 어디에 두고 누가 구현하는지는 [헥사고날 아키텍처 글](/posts/hexagonal-architecture)의 포트와 같은 이야기다. 모놀리스가 이미 포트와 어댑터로 짜여 있다면 1단계가 끝나 있는 셈이다.
+
+## 옛것과 새것을 함께 돌려 본다
+
+새 구현이 옛 구현과 같은 답을 내는지는 테스트로 일부만 확인된다. 운영 데이터에는 테스트가 생각하지 못한 값이 있다. 그래서 일정 기간 둘을 함께 돌리고 결과를 비교한다. 병행 실행(parallel run)이다. 사용자에게는 옛 결과를 주고, 새 결과는 비교에만 쓴다. 새 쪽이 실패하거나 느려도 사용자는 모른다.
+
+```ts
+// parallel-run.ts
+const legacyFee: FeeCalculator = { feeFor: (id, amount) => ({ paymentId: id, fee: Math.round(amount * 0.029) }) };
+const serviceFee: FeeCalculator = { feeFor: (id, amount) => ({ paymentId: id, fee: Math.floor((amount * 29) / 1000) }) };
+
+function feeCalculator(mode: Mode, report: (d: object) => void): FeeCalculator {
+  if (mode === "legacy") return legacyFee;
+  if (mode === "service") return serviceFee;
+  return {
+    feeFor(id, amount) {
+      const old = legacyFee.feeFor(id, amount);         // 사용자에게는 옛 결과를 준다
+      try {
+        const neu = serviceFee.feeFor(id, amount);       // 새 결과는 비교만 한다
+        if (old.fee !== neu.fee) report({ id, amount, legacy: old.fee, service: neu.fee });
+      } catch (e) { report({ id, error: String(e) }); }  // 새 쪽이 실패해도 사용자는 모른다
+      return old;
+    },
+  };
+}
+```
+
+정해진 씨앗으로 만든 결제 금액 1000건을 넣었다. 새 서비스는 실제로는 원격이지만, 여기서는 같은 프로세스의 함수로 흉내 냈다.
+
+```bash
+node --experimental-strip-types parallel-run.ts
+FEE_MODE=service node --experimental-strip-types parallel-run.ts
+```
+
+```text
+mode=shadow payments=1000 served_fee_sum=313623
+mismatches=482
+  {"id":5,"amount":14400,"legacy":418,"service":417}
+  {"id":6,"amount":11500,"legacy":334,"service":333}
+  {"id":7,"amount":18300,"legacy":531,"service":530}
+mode=service payments=1000 served_fee_sum=313141
+mismatches=0
+```
+
+절반 가까운 482건이 1원씩 다르다. 14,400원의 2.9%는 417.6원인데, 옛 구현은 반올림해 418원, 새 구현은 버려서 417원을 냈다. 새 구현으로 바로 넘겼다면 수수료 합계가 313,623원에서 313,141원으로 482원 줄었을 것이다. 여기서 할 일은 새 코드를 옛 코드에 맞추는 게 아니라 "어느 쪽이 계약상 맞는가"를 정산 담당자에게 묻는 것이다. 옛 구현이 틀렸던 거라면 그 사실을 알리고 넘어가야 하고, 맞았던 거라면 새 구현을 고친다. 병행 실행은 이런 숨은 동작을 운영 데이터로 드러낸다.
+
+<SequenceDiagram
+  caption="병행 실행: 사용자는 옛 결과를 받고, 차이는 기록에 남는다"
+  actors={[
+    { id: "job", label: "settle job" },
+    { id: "abs", label: "FeeCalculator" },
+    { id: "old", label: "legacyFee" },
+    { id: "new", label: "fee API" },
+    { id: "log", label: "diff log" },
+  ]}
+  steps={[
+    { from: "job", to: "abs", label: "feeFor(5, 14400)", title: "정산이 수수료를 묻는다", detail: "호출부는 병행 실행 중인지 모른다." },
+    { from: "abs", to: "old", label: "round", title: "옛 구현을 먼저 부른다", detail: "418원. 이 값이 그대로 쓰인다." },
+    { from: "abs", to: "new", label: "floor", title: "새 구현에도 같은 요청을 보낸다", detail: "417원. 실제 시스템에서는 타임아웃을 짧게 걸어 정산을 늦추지 않게 한다." },
+    { from: "abs", to: "log", label: "418 ≠ 417", title: "다르면 기록만 한다", detail: "차이를 남기고 넘어간다. 새 쪽이 예외를 던져도 기록만 한다.", payload: "{\"id\":5,\"amount\":14400,\"legacy\":418,\"service\":417}" },
+    { from: "abs", to: "job", label: "418", title: "호출부는 옛 결과를 받는다", detail: "차이 기록이 0에 가까워지고 원인이 모두 설명되면 새 구현으로 넘긴다." },
+  ]}
+/>
+
+병행 실행에는 지켜야 할 조건이 있다. 비교하는 쪽은 부작용이 없어야 한다. 수수료 계산처럼 값을 돌려주는 일은 괜찮지만, "결제 승인"을 양쪽에서 실행하면 카드가 두 번 긁힌다. 쓰기가 있는 기능은 새 쪽을 드라이런 모드로 부르거나, 새 쪽 쓰기를 별도 저장소에 버리게 한다. 그리고 새 쪽 호출이 옛 경로를 느리게 하지 않게 비동기로 보내거나 짧은 타임아웃을 건다.
+
+## 공유 테이블을 가르는 순서
+
+코드보다 데이터가 어렵다. 결제 테이블을 새 서비스 DB로 옮기는 흔한 순서는 이렇다.
+
+첫째, 모놀리스 안에서 결합부터 끊는다. 앞에서 찾은 외래 키, 뷰, 트리거를 하나씩 정리한다. 리포트 뷰는 결제 모듈이 공개하는 조회 함수나 읽기 전용 뷰로 바꾸고, 트리거의 업무 규칙은 코드로 옮긴다. 다른 모듈은 결제 테이블을 직접 조인하지 않고 결제 모듈의 공개 API만 쓰게 한다. 이 단계는 아직 DB 하나다.
+
+둘째, 새 저장소를 만들고 기존 행을 복사한 뒤 변경을 계속 따라가게 한다. 새 쪽에는 `orders`를 가리키는 외래 키가 없다. 주문은 다른 서비스의 것이라 ID로만 가리킨다.
+
+```sql
+CREATE SCHEMA paysvc;
+CREATE TABLE paysvc.payments (
+  id int PRIMARY KEY,
+  order_id int NOT NULL,          -- 외래 키 없음: 주문은 다른 서비스의 것이라 ID로만 가리킨다
+  amount int NOT NULL, status text NOT NULL, approved_at timestamptz
+);
+INSERT INTO paysvc.payments SELECT id, order_id, amount, status, approved_at FROM public.payments;
+```
+
+복사 뒤에 생기는 변경은 CDC(변경 데이터 캡처)로 따라가는 게 정석이다. WAL에서 변경을 읽어 새 쪽에 적용하는 방식이라, 애플리케이션이 양쪽에 쓰지 않아도 된다. WAL을 읽는 방식과 그 함정은 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture)에 있다.
+
+셋째, 읽기를 새 쪽으로 옮긴다. 결제 조회가 새 서비스를 거치게 하고, 문제가 생기면 옛 쪽으로 되돌린다. 쓰기의 원본은 아직 옛 쪽이다.
+
+넷째, 쓰기의 원본을 새 쪽으로 넘긴다. 이 순간이 가장 위험하다. 짧게 쓰기를 멈추고 복제가 따라잡은 걸 확인한 뒤 넘기거나, 원본을 넘긴 뒤에는 반대 방향으로 복제해 아직 옛 테이블을 읽는 기능이 계속 돌게 한다.
+
+다섯째, 옛 테이블을 지운다. 지우기 전에 한동안 이름을 바꿔 두고 아무도 찾지 않는지 지켜보는 팀도 많다.
+
+## 두 저장소가 어긋났는지 확인하기
+
+옮기는 동안 가장 흔한 사고는 두 저장소가 조용히 어긋나는 것이다. 애플리케이션이 옛 쪽과 새 쪽에 차례로 쓰는 방식이 특히 위험하다. 첫 번째 쓰기가 성공하고 두 번째 쓰기 전에 프로세스가 죽으면, 둘 중 하나에만 데이터가 남는다. 그 장면을 실습 DB에 일부러 만들었다.
+
+```sql
+INSERT INTO public.payments VALUES (1001, 1001, 55000, 'APPROVED', now());  -- 옛 쪽만 성공, 새 쪽 쓰기 전에 프로세스가 죽었다
+UPDATE paysvc.payments SET status = 'REFUNDED' WHERE id = 17;            -- 새 쪽만 바뀌었다
+```
+
+<SequenceDiagram
+  caption="양쪽에 차례로 쓰다가 중간에 죽으면"
+  actors={[
+    { id: "app", label: "app" },
+    { id: "old", label: "old DB" },
+    { id: "new", label: "new DB" },
+    { id: "rec", label: "reconcile" },
+  ]}
+  steps={[
+    { from: "app", to: "old", label: "INSERT 1001", title: "옛 쪽에 먼저 쓴다", detail: "커밋까지 끝났다. 결제 1001이 생겼다." },
+    { from: "app", to: "app", label: "crash", title: "두 번째 쓰기 전에 죽는다", detail: "배포로 프로세스가 내려갔거나 OOM으로 죽었다. 재시도할 주체가 없다." },
+    { from: "app", to: "new", label: "UPDATE 17", title: "다른 요청은 새 쪽만 바꾼다", detail: "환불 기능이 이미 새 서비스로 옮겨져 새 쪽에만 썼다. 옛 쪽은 그 사실을 모른다." },
+    { from: "rec", to: "old", label: "SELECT", title: "대조 작업이 양쪽을 읽는다", detail: "id로 맞대 보고 한쪽에만 있거나 값이 다른 행을 찾는다." },
+    { from: "rec", to: "new", label: "SELECT", title: "어긋난 행을 보고한다", detail: "1001은 새 쪽에 없고, 17은 상태가 다르다. 사람이나 보정 작업이 원본 쪽 값으로 맞춘다.", payload: "17   | different      | APPROVED | REFUNDED\n1001 | missing in new | APPROVED |" },
+  ]}
+/>
+
+대조는 `FULL JOIN`으로 한다. 한쪽에만 있는 행과 값이 다른 행을 함께 잡는다.
+
+```sql
+SELECT coalesce(o.id, n.id) AS id,
+       CASE WHEN n.id IS NULL THEN 'missing in new'
+            WHEN o.id IS NULL THEN 'missing in old'
+            ELSE 'different' END AS problem,
+       o.status AS old_status, n.status AS new_status
+FROM public.payments o
+FULL JOIN paysvc.payments n ON n.id = o.id
+WHERE n.id IS NULL OR o.id IS NULL
+   OR (o.order_id, o.amount, o.status, o.approved_at) IS DISTINCT FROM (n.order_id, n.amount, n.status, n.approved_at)
+ORDER BY 1;
+```
+
+```text
+  id  |    problem     | old_status | new_status
+------+----------------+------------+------------
+   17 | different      | APPROVED   | REFUNDED
+ 1001 | missing in new | APPROVED   |
+(2 rows)
+```
+
+`IS DISTINCT FROM`을 쓴 이유는 NULL 때문이다. `approved_at`이 양쪽 다 NULL인 행을 `<>`로 비교하면 결과가 NULL이 되어 "다르다"로도 "같다"로도 잡히지 않는다.
+
+실제로는 두 저장소가 다른 서버에 있으니 이 조인을 한 쿼리로 못 한다. 행이 수천만 개면 전부 옮겨 와 비교하기도 어렵다. 그래서 id 구간별로 체크섬을 먼저 비교하고, 다른 구간만 행 단위로 내려가 본다. 양쪽 DB에서 같은 쿼리를 따로 돌려 결과만 비교하면 된다.
+
+```sql
+WITH o AS (SELECT id / 100 AS bucket, md5(string_agg(row(id, order_id, amount, status, approved_at)::text, ',' ORDER BY id)) AS h
+           FROM public.payments GROUP BY 1),
+     n AS (SELECT id / 100 AS bucket, md5(string_agg(row(id, order_id, amount, status, approved_at)::text, ',' ORDER BY id)) AS h
+           FROM paysvc.payments GROUP BY 1)
+SELECT coalesce(o.bucket, n.bucket) AS bucket, left(o.h, 8) AS old_hash, left(n.h, 8) AS new_hash
+FROM o FULL JOIN n USING (bucket)
+WHERE o.h IS DISTINCT FROM n.h ORDER BY 1;
+```
+
+```text
+ bucket | old_hash | new_hash
+--------+----------+----------
+      0 | 7bb719c6 | b630dbcf
+     10 | cf420702 | bc267f31
+(2 rows)
+```
+
+1001개 행 중 두 구간(0~99, 1000~1099)만 다르다고 나왔다. 그 두 구간만 행 단위로 비교하면 된다. 이 대조 작업은 이전 기간 내내 주기적으로 돌리고, 어긋난 건수를 지표로 남긴다. 0이 며칠 이어지는 것이 쓰기의 원본을 넘겨도 된다는 근거가 된다.
+
+양쪽에 차례로 쓰는 방식 자체를 피하는 게 가장 좋다. 한쪽에만 쓰고 CDC로 넘기거나, 쓰기와 함께 이벤트를 남기는 아웃박스를 쓴다. 그 장치는 [트랜잭셔널 아웃박스 글](/posts/transactional-outbox)에 있다.
+
+## 떼어 냈는데 더 느려졌을 때
+
+분해 직후 자주 듣는 말이 "주문 목록이 느려졌다"다. 모놀리스에서는 주문 50건과 결제 상태를 조인 한 번으로 가져왔는데, 이제 주문 서비스가 주문 50건을 읽고 결제 서비스에 50번 묻는다. DB 안에서 일어나던 N+1 문제가 네트워크 위로 올라온 것이다. 호출 한 번에 5ms만 걸려도 50번이면 250ms다.
+
+확인은 분산 추적으로 한다. 요청 하나의 추적에서 같은 서비스로 가는 짧은 호출이 줄지어 있으면 이 경우다. 고치는 방법은 두 가지다. 결제 서비스에 ID 목록을 받는 일괄 조회 API를 만들어 한 번에 묻거나, 주문 서비스가 결제 상태 이벤트를 받아 필요한 필드만 자기 DB에 사본으로 둔다. 추적을 읽는 법은 [분산 추적 글](/posts/distributed-tracing)에, 조인 없이 화면을 만드는 방법은 [마이크로서비스 글](/posts/microservices)의 데이터 절에 있다.
+
+## 분해가 잘 됐는지 숫자로 본다
+
+떼어 낸 뒤에도 경계가 맞는지는 계속 재야 한다. 경계가 틀렸다는 신호는 숫자로 나온다.
+
+함께 배포하는 비율이 첫 번째다. 배포 기록에서 30분 안에 두 서비스 이상이 함께 배포된 건이 얼마나 되는지 센다. 이 비율이 높으면 독립 배포라는 첫 번째 이득을 못 얻고 있는 것이고, 앞에서 본 변경 결합도를 서비스 저장소 단위로 다시 재 보면 원인이 나온다.
+
+요청 하나당 서비스 간 호출 수가 두 번째다. 화면 하나를 그리려고 서비스 사이를 열 번 넘게 오간다면 같은 개념을 여러 서비스가 나눠 가진 것이다.
+
+공유 라이브러리의 변경도 본다. 여러 서비스가 함께 쓰는 라이브러리에 도메인 모델(`Order`, `Payment` 타입)이 들어 있고, 그 라이브러리가 바뀔 때마다 모든 서비스가 다시 배포된다면 코드가 하나로 묶여 있는 것이다. 공유 라이브러리에는 로깅, 인증 클라이언트처럼 업무와 무관한 것만 둔다.
+
+이 숫자들이 계속 나쁘다면 [분산 모놀리스](/posts/monolith-architecture)가 된 것이다. 그럴 땐 두 서비스를 다시 합치는 것도 정당한 선택이다. 합친 뒤 모듈러 모놀리스로 경계를 다시 검증하고, 필요해지면 다시 떼어 낸다.
+
+## 되돌아갈 길을 남겨 둔다
+
+분해의 각 단계는 되돌릴 수 있어야 한다. 추상화 뒤의 구현 선택은 설정으로 되돌리고, 읽기 경로는 옛 쪽으로 다시 돌리고, 쓰기의 원본을 넘긴 뒤에도 한동안 옛 쪽으로 역복제를 유지한다. 옛 코드와 옛 테이블은 새 쪽이 충분히 오래 안정적인 걸 확인한 뒤에 지운다.
+
+처음의 결제 분리로 돌아가면, 순서는 이렇게 정리된다. 커밋 기록으로 주문과 결제의 변경 결합을 재고, 결합이 높으면 모놀리스 안에서 계약부터 정리한다. 카탈로그로 결제 테이블을 붙잡은 외래 키, 뷰, 트리거를 찾아 하나씩 끊는다. 코드는 추상화 뒤에서 병행 실행으로 비교한 뒤 넘기고, 데이터는 복사하고 따라가고 읽기를 옮기고 쓰기를 넘기는 순서로 옮기며, 그동안 대조 작업으로 어긋남을 센다. 어느 단계에서든 숫자가 나쁘면 한 단계 뒤로 돌아갈 수 있게 해 둔다.
+
+아래에서 변경 결합도를 세는 함수를 직접 짜 볼 수 있다.
+
+<CodePlayground
+  caption="함께 바뀐 파일 쌍 세기"
+  functionName="coChange"
+  initialCode={`// commits: 커밋마다 바뀐 파일 목록. 예) [["orders/place", "payments/charge"], ["users/profile"]]
+// minTogether: 이 횟수 이상 함께 바뀐 쌍만 남긴다
+// 반환: [[a, b, 횟수], ...]
+// - 한 쌍은 이름순으로 a < b
+// - 한 커밋에 같은 파일이 두 번 나와도 한 번으로 센다
+// - 횟수가 많은 순, 같으면 a, 그다음 b의 이름순
+function coChange(commits, minTogether) {
+  return [];
+}`}
+  solution={`function coChange(commits, minTogether) {
+  const counts = {};
+  for (const files of commits) {
+    const uniq = [...new Set(files)].sort();
+    for (let i = 0; i < uniq.length; i++)
+      for (let j = i + 1; j < uniq.length; j++) {
+        const key = uniq[i] + "|" + uniq[j];
+        counts[key] = (counts[key] || 0) + 1;
+      }
+  }
+  return Object.entries(counts)
+    .filter(([, n]) => n >= minTogether)
+    .map(([k, n]) => [...k.split("|"), n])
+    .sort((x, y) => y[2] - x[2] || x[0].localeCompare(y[0]) || x[1].localeCompare(y[1]));
+}`}
+  tests={[
+    {
+      label: "두 번 이상 함께 바뀐 쌍",
+      args: [[["payments/charge", "orders/place"], ["orders/place", "payments/charge", "payments/refund"], ["users/profile"], ["orders/place", "payments/refund"], ["payments/charge", "orders/place"]], 2],
+      expected: [["orders/place", "payments/charge", 3], ["orders/place", "payments/refund", 2]],
+    },
+    {
+      label: "한 번이라도 함께 바뀐 쌍",
+      args: [[["payments/charge", "orders/place"], ["orders/place", "payments/charge", "payments/refund"], ["users/profile"], ["orders/place", "payments/refund"], ["payments/charge", "orders/place"]], 1],
+      expected: [["orders/place", "payments/charge", 3], ["orders/place", "payments/refund", 2], ["payments/charge", "payments/refund", 1]],
+    },
+    {
+      label: "한 커밋 안의 중복 파일",
+      args: [[["a", "a", "b"], ["b", "a"]], 2],
+      expected: [["a", "b", 2]],
+    },
+    {
+      label: "쌍이 없는 기록",
+      args: [[["x"], ["y"]], 1],
+      expected: [],
+    },
+  ]}
+/>
+
+## 면접에서 나올 만한 질문
+
+### 모놀리스에서 서비스를 떼어 낼 때 경계는 어떻게 정하나요?
+
+업무 언어로 후보를 찾고, 실제 데이터로 검증한다. 바운디드 컨텍스트로 후보를 그은 뒤 git 기록에서 함께 바뀌는 파일을 세어 변경 결합도를 보고, DB 카탈로그에서 그 테이블을 붙잡은 외래 키, 뷰, 트리거를 찾는다. 결합이 높으면 떼어 내기 전에 모놀리스 안에서 계약부터 정리한다.
+
+### 무엇부터 떼어 내나요?
+
+떼어 내서 얻는 것은 크고 비용은 작은 곳부터다. 자주 바뀌거나 따로 늘려야 하면서, 다른 기능의 데이터를 거의 쓰지 않는 가장자리 기능이 첫 후보가 된다. 결제처럼 한가운데 있는 기능은 팀이 분해 과정에 익숙해진 뒤에 한다.
+
+### 브랜치 바이 앱스트랙션은 무엇인가요?
+
+코드 안에 인터페이스를 하나 세우고, 모든 호출부가 그걸 거치게 한 뒤 그 뒤에서 구현을 바꾸는 방법이다. 이름과 달리 git 브랜치를 쓰지 않고, 메인 브랜치에서 단계마다 배포한다. 프록시로 가로챌 수 없는 모놀리스 안쪽 기능을 옮길 때 스트랭글러 피그 대신 쓴다.
+
+### 병행 실행은 언제, 어떻게 쓰나요?
+
+새 구현이 운영 데이터에서도 옛 구현과 같은 답을 내는지 확인할 때 쓴다. 사용자에게는 옛 결과를 주고 새 결과는 비교해 차이만 기록하며, 차이가 0이 되거나 모든 차이의 원인이 설명되면 넘긴다. 결제 승인처럼 부작용이 있는 기능은 양쪽에서 실행하면 안 되니 드라이런이나 버리는 저장소를 쓴다.
+
+### 서비스 DB를 나눌 때 데이터는 어떤 순서로 옮기나요?
+
+모놀리스 안에서 외래 키, 뷰, 트리거 같은 결합을 먼저 끊고, 새 저장소에 복사한 뒤 CDC로 변경을 따라가게 한다. 그다음 읽기를 옮기고, 마지막에 쓰기의 원본을 넘긴다. 원본을 넘긴 뒤에도 한동안 역복제를 유지해 되돌릴 길을 남긴다.
+
+### 애플리케이션이 옛 DB와 새 DB에 차례로 쓰면 무엇이 문제인가요?
+
+두 쓰기 사이에 프로세스가 죽으면 한쪽에만 데이터가 남고, 아무도 모르게 어긋난다. 한쪽에만 쓰고 CDC나 아웃박스로 넘기는 게 안전하다. 어쩔 수 없이 쓴다면 id 구간별 체크섬과 `FULL JOIN` 대조 작업을 주기적으로 돌려 어긋난 건수를 지표로 본다.
+
+### 떼어 낸 뒤 응답이 느려졌다면 무엇을 보나요?
+
+분산 추적에서 같은 서비스로 가는 짧은 호출이 줄지어 있는지 본다. 조인 한 번이던 일이 서비스 호출 N번으로 바뀐 경우가 많다. 일괄 조회 API로 한 번에 묻거나, 이벤트로 필요한 필드만 사본으로 들고 있게 해서 고친다.
+
+### 분해가 잘못됐다는 신호는 무엇인가요?
+
+여러 서비스를 늘 함께 배포하는 비율이 높고, 요청 하나에 서비스 간 호출이 많고, 공유 라이브러리의 도메인 모델이 바뀔 때마다 모든 서비스가 다시 배포되는 경우다. 이런 상태가 이어지면 분산 모놀리스이고, 서비스를 다시 합쳐 모듈로 경계를 검증한 뒤 다시 떼어 내는 것도 선택지다.

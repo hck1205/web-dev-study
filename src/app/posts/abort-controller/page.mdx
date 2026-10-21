@@ -1,0 +1,586 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("abort-controller");
+
+사용자 상세 화면이다. 목록에서 1번, 2번, 3번 사용자를 빠르게 눌렀다. effect마다 `AbortController`를 만들고 정리 함수에서 `abort()`도 불렀다. 그런데 마지막 화면에는 3번이 아니라 1번 사용자가 떠 있다.
+
+```js
+useEffect(() => {
+  const controller = new AbortController();
+  (async () => {
+    const data = await getUser(id);          // 사내 SDK 함수
+    setUser(data);
+  })();
+  return () => controller.abort();
+}, [id]);
+```
+
+Playwright로 띄운 Chromium 141에서 React 19.3 개발 빌드(StrictMode)로 돌린 로그다. 1번은 400ms, 2번은 100ms, 3번은 250ms 걸리게 했다.
+
+```text
+15ms effect start id=1
+16ms cleanup id=1
+17ms effect start id=1
+51ms cleanup id=1
+51ms effect start id=2
+82ms cleanup id=2
+82ms effect start id=3
+152ms setUser id=2
+333ms setUser id=3
+416ms setUser id=1
+417ms setUser id=1
+final screen: showing user 1
+```
+
+정리 함수는 제때 돌았고 `abort()`도 불렸다. 그런데 `getUser`는 신호를 받지 않는 함수였다. 컨트롤러를 만들어 놓고 아무에게도 신호를 건네지 않았으니 취소는 아무 데도 닿지 않았다. 늦게 끝난 1번이 마지막에 `setUser`를 불러 화면을 덮었다.
+
+취소는 "abort를 부르면 알아서 멈추는 마법"이 아니다. 신호를 받은 쪽이 듣고 멈춰야 한다. 이 글은 그 약속이 어떻게 생겼는지, 어디까지 전달되고 어디서 끊기는지를 따라간다. 신호를 받는 함수를 직접 만들고, React effect와 서버까지 취소를 이어 보고, 리스너를 한꺼번에 떼는 데도 써 본다. 출력은 Chromium 141(헤드리스)과 Node 22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 응답이 보낸 순서대로 오지 않는 이유, `fetch`에 `signal`을 넘겨 지난 요청을 취소하는 기본 사용법, `AbortSignal.timeout`으로 타임아웃을 거는 법은 [fetch 제대로 쓰기](/posts/browser-fetch)에서 다뤘다. 여기서는 그 내용을 반복하지 않고 그 다음 질문, "취소를 어떻게 설계하나"에 답한다.
+
+## 컨트롤러는 누르는 쪽, 신호는 듣는 쪽
+
+`AbortController`는 둘로 나뉜다. 컨트롤러는 `abort()` 버튼을 가진 쪽이고, `controller.signal`은 그 버튼이 눌렸는지 알려 주는 쪽이다. 신호는 읽기 전용이라 받은 쪽이 스스로 취소할 수는 없다. 그래서 신호는 마음 놓고 여러 함수에 나눠 줄 수 있다.
+
+<ConceptDiagram
+  caption="버튼은 하나, 신호는 여러 곳에 나눠 준다. 듣는 쪽이 멈춰야 취소가 된다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "ctl", label: "AbortController", sub: "abort(reason)", x: 200, y: 30, w: 150 },
+    { id: "sig", label: "signal", sub: "aborted · reason", x: 200, y: 110, w: 130 },
+    { id: "fetch", label: "fetch", sub: "요청을 끊는다", x: 65, y: 200, w: 110 },
+    { id: "fn", label: "내 함수", sub: "직접 들어야 한다", x: 200, y: 200, w: 116 },
+    { id: "ev", label: "리스너들", sub: "한꺼번에 떨어진다", x: 335, y: 200, w: 116 },
+  ]}
+  edges={[
+    { from: "ctl", to: "sig", label: "abort 이벤트" },
+    { from: "sig", to: "fetch" },
+    { from: "sig", to: "fn", dashed: true },
+    { from: "sig", to: "ev" },
+  ]}
+/>
+
+신호의 규칙은 몇 가지뿐이다. Node 22에서 하나씩 확인했다.
+
+```js
+const c = new AbortController();
+const { signal } = c;
+signal.addEventListener("abort", () => console.log("listener 1, reason:", signal.reason.name, "-", signal.reason.message));
+signal.onabort = () => console.log("onabort");
+console.log("before:", signal.aborted, signal.reason);
+c.abort();
+c.abort(new Error("second"));                 // 두 번째 abort
+console.log("after:", signal.aborted, signal.reason instanceof DOMException);
+signal.addEventListener("abort", () => console.log("added after abort"));
+try { signal.throwIfAborted(); } catch (e) { console.log("throwIfAborted:", e.name); }
+```
+
+```text
+before: false undefined
+listener 1, reason: AbortError - This operation was aborted
+onabort
+after: true true
+throwIfAborted: AbortError
+```
+
+취소는 한 번뿐이다. 두 번째 `abort()`는 아무 일도 하지 않고 이유(`reason`)도 처음 것이 남는다. 이유를 주지 않으면 이름이 `AbortError`인 `DOMException`이 들어간다. 메시지는 환경마다 다르다. Node 22는 `This operation was aborted`, Chromium은 `signal is aborted without reason`이다.
+
+이미 취소된 신호에 나중에 단 리스너는 불리지 않는다. `added after abort`가 출력되지 않았다. 그래서 신호를 받는 함수는 리스너를 달기 전에 `signal.aborted`부터 확인해야 한다. `throwIfAborted()`가 그 일을 한 줄로 해 준다.
+
+## 신호를 합치는 표현을 뜯어본다
+
+실무에서는 취소할 이유가 여럿이다. 사용자가 다른 화면으로 갔거나, 너무 오래 걸렸거나, 페이지가 닫혔거나. `AbortSignal.any`는 여러 신호 중 하나라도 취소되면 취소되는 신호를 만든다. 아래 식을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="화면을 떠나거나, 사용자가 취소하거나, 5초가 지나면 끊긴다"
+  base="fetch(url, { signal: AbortSignal.any(["
+  separator=""
+  joiner=", "
+  params={[
+    { key: "route", display: "route.signal", title: "화면 수명 신호", description: "라우트가 바뀌면 abort한다. 그 화면에서 시작한 요청이 한꺼번에 끊긴다.", code: "route.abort(); // 화면을 떠날 때" },
+    { key: "user", display: "cancel.signal", title: "사용자 취소 신호", description: "취소 버튼에 연결한다. 이 요청 하나만 끊는다." },
+    { key: "timeout", display: "AbortSignal.timeout(5000)]) })", title: "시간 제한 신호, 그리고 합친 결과", description: "5초가 지나면 스스로 취소된다. reason의 이름이 TimeoutError라서 사용자 취소와 구분된다. any로 합친 신호는 먼저 취소된 신호의 reason을 물려받고, 나머지 입력 신호는 건드리지 않는다.", code: "e.name === \"TimeoutError\"" },
+  ]}
+/>
+
+먼저 취소된 쪽의 이유를 물려받는지 Node 22로 확인했다.
+
+```js
+const user = new AbortController();
+const combined = AbortSignal.any([user.signal, AbortSignal.timeout(100)]);
+combined.addEventListener("abort", () => console.log("any aborted by:", combined.reason.name));
+await new Promise((r) => setTimeout(r, 150));
+console.log("user.signal.aborted:", user.signal.aborted);
+const pre = AbortSignal.abort("already");
+console.log("AbortSignal.abort():", pre.aborted, pre.reason);
+```
+
+```text
+any aborted by: TimeoutError
+user.signal.aborted: false
+AbortSignal.abort(): true already
+```
+
+시간 제한이 먼저 걸려 합친 신호의 이유는 `TimeoutError`다. 사용자 신호는 그대로 살아 있다. 합친 신호가 취소돼도 입력 신호에는 영향이 없다. `AbortSignal.abort(reason)`은 처음부터 취소된 신호를 만든다. 테스트나 "이미 늦었다"를 표현할 때 쓴다. `AbortSignal.any`는 크롬 116, 파이어폭스 124, 사파리 17.4 무렵부터 들어왔고 Node는 20.3부터 있다. 오래된 환경을 지원해야 하면 아래 연습 문제처럼 직접 만든다.
+
+## 취소는 언제 어디까지 먹히나
+
+`fetch`가 신호를 받는다는 건 알지만, 요청의 어느 순간에 취소하느냐에 따라 결과가 다르다. Chromium에서 다섯 시점으로 나눠 취소하고, 서버 로그를 함께 봤다.
+
+```js
+const c0 = new AbortController(); c0.abort();
+try { await fetch("/slow?q=pre&ms=300", { signal: c0.signal }); } catch (e) { console.log("already aborted:", e.name, "-", e.message); }
+
+const c1 = new AbortController();
+setTimeout(() => c1.abort(), 100);
+try { await fetch("/slow?q=mid&ms=500", { signal: c1.signal }); } catch (e) { console.log("aborted in flight:", e.name, "-", e.message); }
+
+const c2 = new AbortController();
+const res = await fetch("/slow?q=after&ms=50", { signal: c2.signal });
+const data = await res.json();
+c2.abort();
+console.log("abort after body read: data still", JSON.stringify(data), "aborted=", c2.signal.aborted);
+
+const c3 = new AbortController();
+const res3 = await fetch("/slow?q=hdr&ms=50", { signal: c3.signal });
+c3.abort();
+try { await res3.json(); } catch (e) { console.log("abort between headers and body:", e.name); }
+
+const c5 = new AbortController();
+setTimeout(() => c5.abort(new Error("route changed")), 50);
+try { await fetch("/slow?q=custom&ms=500", { signal: c5.signal }); } catch (e) { console.log("custom reason:", e.name, "-", e.message, "| same object:", e === c5.signal.reason); }
+```
+
+```text
+[page] already aborted: AbortError - signal is aborted without reason
+[page] aborted in flight: AbortError - signal is aborted without reason
+[page] abort after body read: data still {"q":"after","ms":50} aborted= true
+[page] abort between headers and body: AbortError
+[page] custom reason: Error - route changed | same object: true
+[server] ?q=mid&ms=500 start
+[server] ?q=mid&ms=500 client closed after 101ms
+[server] ?q=after&ms=50 start
+[server] ?q=after&ms=50 finished 51ms
+[server] ?q=hdr&ms=50 start
+[server] ?q=hdr&ms=50 finished 51ms
+[server] ?q=custom&ms=500 start
+[server] ?q=custom&ms=500 client closed after 48ms
+[server] ?q=mid&ms=500 finished 501ms
+[server] ?q=custom&ms=500 finished 501ms
+```
+
+서버 로그에 `q=pre`가 없다. 이미 취소된 신호로 부른 `fetch`는 요청을 보내지도 않고 바로 reject된다. 요청 도중에 취소하면 서버는 연결이 끊긴 걸 알지만(`client closed after 101ms`), 이 서버는 하던 일을 계속해서 500ms에 끝까지 마쳤다. 응답 헤더를 받은 뒤 본문을 읽기 전에 취소하면 `res.json()`이 `AbortError`로 실패한다. 본문까지 다 읽은 뒤의 취소는 아무 영향이 없다.
+
+마지막 줄이 실무에서 자주 놓치는 부분이다. `abort(new Error("route changed"))`처럼 이유를 주면 `fetch`는 `AbortError`가 아니라 그 이유 객체를 그대로 던진다. `e.name === "AbortError"`로 취소를 걸러 내던 코드가 이 에러를 진짜 실패로 보고 에러 토스트를 띄운다. 이유를 줄 거면 판별도 `signal.aborted`로 한다.
+
+```js
+try {
+  await fetch(url, { signal });
+} catch (e) {
+  if (signal.aborted) return;   // 누가 어떤 이유로 취소했든 취소다
+  showError(e);
+}
+```
+
+아래 그림은 다섯 시점을 요청의 일생 위에 놓은 것이다.
+
+<AlgoTrace
+  caption="취소가 닿는 범위는 요청이 어디까지 갔느냐에 달렸다"
+  memoryLabel="이 시점에 abort하면"
+  cells={["보내기 전", "서버 처리 중", "헤더 받음", "본문 다 읽음", "setState 뒤"]}
+  steps={[
+    { caption: "요청 하나의 일생을 다섯 구간으로 나눴다." },
+    { pointer: 0, memory: ["요청을 아예 안 보낸다"], caption: "이미 취소된 신호면 fetch가 바로 reject한다. 서버 로그에 흔적도 없다." },
+    { pointer: 1, memory: ["연결을 끊는다", "서버는 계속할 수 있다"], caption: "브라우저는 기다리기를 그만둔다. 서버가 끊김을 듣지 않으면 일을 끝까지 한다." },
+    { pointer: 2, memory: ["본문 읽기가 실패한다"], caption: "res.json()이 AbortError로 reject된다." },
+    { pointer: 3, found: [3], memory: ["아무 일도 없다"], caption: "이미 받은 데이터는 그대로다. 이후 코드는 직접 signal.aborted를 봐야 멈춘다." },
+    { pointer: 4, found: [3, 4], memory: ["되돌릴 수 없다"], caption: "화면에 그린 뒤의 취소는 의미가 없다. 그래서 그리기 직전에 한 번 더 확인한다." },
+  ]}
+/>
+
+네 번째 구간이 처음 장면과 이어진다. `await`로 데이터를 받은 순간 취소는 더 이상 끼어들 틈이 없다. `fetch`든 SDK 함수든, 받은 뒤에 화면을 바꾸는 코드는 그 직전에 `signal.aborted`를 확인해야 한다.
+
+## 신호를 받는 함수를 직접 만든다
+
+내가 만든 함수도 취소를 지원하려면 세 가지를 지키면 된다. 시작할 때 이미 취소됐는지 보고, 도중에 abort 이벤트를 들으면 하던 일을 정리하고 `signal.reason`으로 reject하고, 정상으로 끝나면 단 리스너를 뗀다.
+
+```js
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();                         // 이미 취소됐으면 시작도 안 한다
+    const onAbort = () => { clearTimeout(t); reject(signal.reason); };
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);  // 끝났으면 리스너를 뗀다
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+```
+
+세 번째 규칙을 빼먹으면 어떻게 되는지 확인했다. 리스너를 떼지 않는 `sleepLeaky`와 위의 `sleep`을 페이지 수명 동안 살아 있는 신호 하나로 1000번씩 불렀다. Node 22의 `getEventListeners`로 신호에 남은 리스너 수를 셌다.
+
+```js
+import { getEventListeners } from "node:events";
+
+const page = new AbortController();   // 페이지가 살아 있는 동안 계속 쓰는 신호
+for (let i = 0; i < 1000; i++) await sleepLeaky(0, page.signal);
+console.log("leaky: abort listeners left =", getEventListeners(page.signal, "abort").length);
+
+const page2 = new AbortController();
+for (let i = 0; i < 1000; i++) await sleep(0, page2.signal);
+console.log("fixed: abort listeners left =", getEventListeners(page2.signal, "abort").length);
+
+const c = new AbortController();
+setTimeout(() => c.abort(), 30);
+const t0 = Date.now();
+try { await sleep(1000, c.signal); } catch (e) { console.log(`sleep canceled after ${Date.now() - t0}ms:`, e.name); }
+try { await sleep(1000, c.signal); } catch (e) { console.log(`second call on aborted signal:`, e.name, `${Date.now() - t0}ms`); }
+```
+
+```text
+leaky: abort listeners left = 1000
+fixed: abort listeners left = 0
+sleep canceled after 31ms: AbortError
+second call on aborted signal: AbortError 31ms
+```
+
+리스너를 떼지 않으면 끝난 작업의 클로저가 1000개 그대로 신호에 매달린다. 각 클로저가 잡고 있는 `resolve`, `reject`, 타이머 정보도 함께 남는다. 짧게 사는 신호라면 신호와 함께 사라지지만, 앱 전체 수명 동안 쓰는 신호에 매달리면 [메모리 누수](/posts/js-memory-leak)가 된다. 취소된 신호로 다시 부른 두 번째 호출은 기다리지 않고 바로 실패했다. `throwIfAborted()` 덕분이다.
+
+Node는 이미 많은 API가 `signal`을 받는다. `fetch`, `timers/promises`의 `setTimeout`, `events.once`, `fs.readFile`, `child_process.spawn`, `stream.pipeline`이 그렇다. 신호를 받는 API를 쓰면 위 규칙을 직접 짤 일이 줄어든다. 신호를 받지 않는 라이브러리를 감쌀 때만 직접 짠다.
+
+## React effect에서 취소가 닿지 않을 때
+
+처음 장면으로 돌아가자. 같은 화면을 세 가지로 짜서 비교했다. 신호를 `fetch`에 넘긴 경우(fetch), 신호를 받지 않는 함수를 그대로 쓴 경우(plain), 같은 함수를 쓰되 `setUser` 직전에 `signal.aborted`를 확인한 경우(checked)다.
+
+```js
+useEffect(() => {
+  const controller = new AbortController();
+  const { signal } = controller;
+  (async () => {
+    try {
+      const data = await getUserNoSignal(id);
+      if (signal.aborted) return;            // checked 모드에서만 있는 줄
+      setUser(data);
+    } catch (e) {
+      if (!signal.aborted) setError(e);
+    }
+  })();
+  return () => controller.abort();
+}, [id]);
+```
+
+fetch 모드는 전체 로그를, 나머지 두 모드는 결과가 갈리는 줄만 모았다.
+
+```text
+=== mode=fetch
+16ms effect start id=1
+18ms cleanup id=1
+19ms effect start id=1
+20ms aborted id=1
+52ms cleanup id=1
+53ms effect start id=2
+53ms aborted id=1
+84ms cleanup id=2
+84ms effect start id=3
+85ms aborted id=2
+571ms setUser id=3
+final screen: showing user 3
+=== mode=plain
+final screen: showing user 1
+=== mode=checked
+153ms drop stale id=2
+335ms setUser id=3
+417ms drop stale id=1
+419ms drop stale id=1
+final screen: showing user 3
+```
+
+fetch 모드는 지난 요청이 모두 `AbortError`로 끝나고 3번만 화면에 남는다. plain 모드는 처음 본 그대로 1번이 마지막에 덮는다. checked 모드는 요청 자체는 끝까지 돌지만 늦게 온 결과를 버린다. 화면은 맞고, 네트워크와 서버 자원은 아끼지 못한다.
+
+아래 그림은 plain 모드에서 무슨 일이 일어났는지 따라간다.
+
+<SequenceDiagram
+  caption="신호를 건네지 않으면 abort는 아무에게도 닿지 않는다"
+  actors={[
+    { id: "ui", label: "Profile" },
+    { id: "sdk", label: "getUser" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    { from: "ui", to: "sdk", label: "getUser(1)", title: "1번을 부른다", detail: "effect가 컨트롤러를 만들지만 getUser는 signal을 받지 않는다." },
+    { from: "sdk", to: "api", label: "GET /users/1", title: "1번 요청은 느리다", detail: "400ms가 걸린다." },
+    { from: "ui", to: "ui", label: "abort()", title: "2번, 3번으로 바뀐다", detail: "정리 함수가 abort를 부르지만, 이 신호를 듣는 사람이 없다." },
+    { from: "api", to: "ui", label: "user 3", title: "3번이 먼저 그려진다", detail: "333ms에 3번이 화면에 뜬다. 여기까지는 맞다." },
+    { from: "api", to: "ui", label: "user 1", title: "늦은 1번이 덮는다", detail: "416ms에 1번 결과가 setUser를 부른다. 컴포넌트는 3번을 보고 있는데 화면은 1번이 된다." },
+  ]}
+/>
+
+로그에서 하나 더 볼 것이 있다. 첫 화면에서 `effect start id=1`, `cleanup id=1`, `effect start id=1`이 연달아 찍혔다. React 18부터 StrictMode의 개발 빌드는 effect를 한 번 실행하고, 정리하고, 다시 실행한다. 서버 로그에도 `q=1` 요청이 두 번 들어왔고 첫 번째는 4ms 만에 끊겼다.
+
+```text
+[server] ?q=1&ms=400 start
+[server] ?q=1&ms=400 start
+[server] ?q=1&ms=400 client closed after 4ms
+```
+
+개발 중에 네트워크 탭에서 요청이 두 번 나가고 하나가 `(canceled)`로 보이는 이유가 이것이다. 버그가 아니라 정리 함수가 제대로 짜였는지 확인하려는 장치이고, 프로덕션 빌드에서는 한 번만 실행된다. 이걸 막으려고 `useRef` 플래그로 두 번째 실행을 건너뛰면 정리 함수를 시험하는 의미가 사라진다.
+
+effect 안에서 `ignore` 플래그를 쓰는 방식은 [async/await 글](/posts/js-async-await)에서 봤다. `AbortController`는 그 플래그 역할(`signal.aborted`)에 요청을 실제로 끊는 일까지 한다. TanStack Query 같은 데이터 라이브러리는 `queryFn`에 `signal`을 넘겨준다. 그 신호를 `fetch`에 넘기기만 하면 쿼리 키가 바뀌거나 컴포넌트가 사라질 때 라이브러리가 취소한다. 이 블로그의 데이터 레이어 규칙(`query/` 안에서 api 함수를 감싼다)대로라면 api 함수가 `signal`을 받아 axios에 넘기면 된다. 캐시와 중복 요청 이야기는 [화면 데이터 캐시](/posts/client-data-cache)에 있다.
+
+## 서버까지 취소를 이어 준다
+
+브라우저가 요청을 끊어도 서버는 계속 일한다는 걸 위에서 봤다. 사용자가 이미 떠난 보고서를 서버가 끝까지 만들고 있으면 DB와 CPU를 헛되이 쓴다. Node 서버라면 응답의 `close` 이벤트로 끊김을 듣고, 그 순간 자기 작업에 넘긴 신호를 취소하면 된다.
+
+```js
+import http from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
+
+const server = http.createServer(async (req, res) => {
+  const ac = new AbortController();
+  res.on("close", () => { if (!res.writableFinished) ac.abort(new Error("client disconnected")); });
+  const t0 = Date.now();
+  try {
+    for (const step of ["query orders", "query users", "build report"]) {
+      await sleep(200, undefined, { signal: ac.signal });   // DB 쿼리 대신
+      console.log(`[server] ${Date.now() - t0}ms ${step} done`);
+    }
+    res.end("report");
+  } catch (e) {
+    console.log(`[server] ${Date.now() - t0}ms stopped: ${e.name} (${ac.signal.reason.message})`);
+  }
+});
+// 클라이언트: await fetch(url, { signal: AbortSignal.timeout(300) })
+```
+
+`close` 처리가 없을 때와 있을 때를 차례로 돌렸다.
+
+```text
+[server] 201ms query orders done
+[client] TimeoutError: The operation was aborted due to timeout
+[server] 402ms query users done
+[server] 602ms build report done
+```
+
+```text
+[server] 201ms query orders done
+[client] TimeoutError: The operation was aborted due to timeout
+[server] 294ms stopped: AbortError (client disconnected)
+```
+
+`res.writableFinished`를 확인하는 이유는 정상적으로 응답을 다 보낸 뒤에도 `close`가 오기 때문이다. `timers/promises`의 `sleep`은 취소되면 `reason`이 아니라 `AbortError`를 던지고, 원래 이유는 `ac.signal.reason`에 남는다. 아래 그림에서 다음을 누르면 취소가 홉마다 전달되는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={220}
+  caption="끊김을 듣고 신호로 넘겨야 서버 안쪽 작업까지 멈춘다"
+  zones={[
+    { id: "be", label: "서버", x: 120, y: 20, w: 270, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "br", label: "브라우저", sub: "timeout 300ms", x: 60, y: 110, icon: "client", w: 100 },
+    { id: "api", label: "Node API", sub: "res close", x: 200, y: 110, icon: "server", w: 100 },
+    { id: "db", label: "DB 쿼리", sub: "signal", x: 330, y: 70, icon: "db", w: 96 },
+    { id: "rpt", label: "보고서 생성", sub: "signal", x: 330, y: 160, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "br", to: "api" },
+    { from: "api", to: "db" },
+    { from: "api", to: "rpt" },
+  ]}
+  steps={[
+    { path: ["br", "api", "db"], packet: "GET /report", title: "요청이 들어온다", detail: "API가 컨트롤러를 만들고 그 신호를 DB 쿼리에 넘긴다." },
+    { path: ["br", "api"], packet: "FIN", blocked: true, title: "300ms에 브라우저가 끊는다", detail: "AbortSignal.timeout이 걸려 브라우저가 연결을 닫는다. 브라우저 쪽은 TimeoutError다." },
+    { path: ["api", "db"], packet: "abort()", blocked: true, title: "close를 듣고 신호를 취소한다", detail: "res의 close 이벤트에서 writableFinished가 false면 ac.abort()를 부른다. 진행 중이던 대기가 AbortError로 끝난다." },
+    { path: ["api", "rpt"], packet: "abort()", blocked: true, title: "다음 단계는 시작도 안 한다", detail: "같은 신호를 받은 보고서 생성은 throwIfAborted에서 멈춘다. 294ms에 모든 작업이 끝났다." },
+  ]}
+/>
+
+DB까지 진짜로 멈추려면 드라이버가 취소를 지원해야 한다. PostgreSQL은 진행 중인 쿼리를 다른 연결에서 취소하는 기능이 있고, 드라이버마다 이를 신호에 연결하는 방법이 다르다. 연결이 끊겨도 서버는 자기 일을 다 하는 경우가 많으니, 오래 걸리는 쿼리는 `statement_timeout` 같은 서버 쪽 제한을 함께 둔다. Nginx를 앞에 두면 클라이언트가 먼저 끊은 요청은 접근 로그에 상태 코드 499로 남는다. 499가 늘면 응답이 느려서 사용자나 프런트엔드 타임아웃이 먼저 끊고 있다는 신호다.
+
+## 리스너 여러 개를 한 번에 뗀다
+
+`addEventListener`도 `signal` 옵션을 받는다. 신호가 취소되면 그 신호로 단 리스너가 모두 떨어진다. 드래그처럼 여러 대상에 여러 이벤트를 다는 코드에서 특히 편하다. `removeEventListener`는 같은 함수 참조와 같은 `capture` 값을 넘겨야 떨어지는데, 신호를 쓰면 그 짝을 맞출 일이 없다.
+
+```js
+function setupDrag(el) {
+  const controller = new AbortController();
+  const { signal } = controller;
+  el.addEventListener("pointerdown", () => console.log("pointerdown"), { signal });
+  window.addEventListener("pointermove", () => console.log("pointermove"), { signal, passive: true });
+  window.addEventListener("keydown", (e) => console.log("keydown " + e.key), { signal });
+  document.addEventListener("visibilitychange", () => console.log("visibility"), { signal });
+  return () => controller.abort();          // 떼는 함수는 이것 하나
+}
+const teardown = setupDrag(button);
+window.addEventListener("keydown", () => console.log("never added"), { signal: AbortSignal.abort() });
+```
+
+Chromium에서 마우스를 움직이고, 버튼을 누르고, 키를 누른 뒤 `teardown()`을 부르고 같은 일을 반복했다. 마지막 줄은 개발자 도구 프로토콜로 `window`에 남은 리스너를 센 것이다.
+
+```text
+--- before teardown
+pointermove
+pointermove
+pointermove
+pointerdown
+keydown a
+--- after teardown
+window listeners left: (none)
+```
+
+`teardown()` 뒤에는 아무것도 찍히지 않고 `window`에 남은 리스너도 없다. 이미 취소된 신호로 단 `never added` 리스너는 처음부터 달리지 않았다. React effect라면 정리 함수에서 `controller.abort()` 한 줄로 끝난다. 전파 단계와 `passive` 같은 다른 옵션은 [이벤트 전파](/posts/event-propagation)에서 다뤘다.
+
+## 현장에서 취소 문제를 만나는 순간
+
+에러 수집기에 `AbortError: signal is aborted without reason`이 쌓인다. 취소를 에러로 보고하고 있다. 전송하기 전에 `signal.aborted`이거나 `e.name === "AbortError"`인 건 거른다. 직접 이유를 넘기는 코드가 있다면 이름 비교만으로는 못 거르니 `signal.aborted`를 본다.
+
+개발 서버에서만 요청이 두 번 나가고 하나가 canceled다. StrictMode의 effect 이중 실행이다. 프로덕션 빌드에서 한 번만 나가는지 확인하고 넘어간다.
+
+`abort()`를 불렀는데도 옛 데이터가 화면을 덮는다. 신호를 실제 요청 함수까지 넘겼는지 따라가 본다. SDK나 래퍼 함수 하나가 `signal`을 받지 않으면 거기서 끊긴다. 고칠 수 없으면 화면을 바꾸기 직전에 `signal.aborted`를 확인한다.
+
+Nginx 로그에 499가 늘고 백엔드 CPU는 높다. 클라이언트가 떠난 요청을 서버가 끝까지 처리하고 있다. 응답 `close`나 프레임워크의 요청 취소 신호를 작업에 넘기고, DB 쿼리에는 시간 제한을 둔다.
+
+오래 쓰는 탭에서 메모리가 조금씩 는다. 앱 수명 신호 하나에 abort 리스너를 달고 떼지 않는 함수가 있는지 본다. 힙 스냅샷에서 `AbortSignal`을 잡고 있는 클로저 수가 늘고 있으면 이것이다.
+
+## 신호를 직접 만들어 본다
+
+`AbortController`가 없는 환경이라고 치고 최소한의 컨트롤러를 만들어 보자. `createController()`는 `{ signal, abort }`를 돌려준다. `signal`에는 `aborted`, `reason`, `addEventListener(type, fn)`, `removeEventListener(type, fn)`가 있다. 앞에서 확인한 규칙을 지킨다.
+
+- `abort(reason)`은 처음 한 번만 동작한다. 이유가 없으면 `"AbortError"`를 쓴다.
+- 리스너는 등록한 순서대로 이유를 받아 불린다. 취소된 뒤 단 리스너는 불리지 않는다.
+- `anySignal(signals)`는 하나라도 취소되면 그 이유로 취소되는 신호를 돌려준다. 이미 취소된 신호가 섞여 있으면 바로 취소된 신호를 돌려준다.
+
+아래 `simulate`는 채점용이니 고치지 않는다. 테스트의 기대값은 같은 동작을 진짜 `AbortController`와 `AbortSignal.any`로 돌려서 얻었다.
+
+<CodePlayground
+  caption="최소 AbortController와 any"
+  functionName="simulate"
+  initialCode={`function createController() {
+  const signal = {
+    aborted: false,
+    reason: null,
+    addEventListener(type, fn) {},
+    removeEventListener(type, fn) {},
+  };
+  function abort(reason) {}
+  return { signal, abort };
+}
+
+function anySignal(signals) {
+  return createController().signal;
+}
+
+// 아래는 채점용이다. 고치지 않는다
+function simulate(ops) {
+  const signals = {}, controllers = {}, fns = {}, log = [];
+  for (const [op, name, arg] of ops) {
+    if (op === "new") { const c = createController(); controllers[name] = c; signals[name] = c.signal; }
+    if (op === "listen") { fns[arg] = (reason) => log.push(arg + ":" + reason); signals[name].addEventListener("abort", fns[arg]); }
+    if (op === "unlisten") signals[name].removeEventListener("abort", fns[arg]);
+    if (op === "abort") (arg === null ? controllers[name].abort() : controllers[name].abort(arg));
+    if (op === "any") signals[name] = anySignal(arg.map((n) => signals[n]));
+    if (op === "state") log.push(name + "=" + signals[name].aborted + "/" + (signals[name].aborted ? signals[name].reason : "none"));
+  }
+  return log;
+}`}
+  solution={`function createController() {
+  const listeners = [];
+  const signal = {
+    aborted: false,
+    reason: null,
+    addEventListener(type, fn) {
+      if (type !== "abort" || signal.aborted) return; // 이미 취소됐으면 부르지 않는다
+      if (!listeners.includes(fn)) listeners.push(fn);
+    },
+    removeEventListener(type, fn) {
+      const i = listeners.indexOf(fn);
+      if (i >= 0) listeners.splice(i, 1);
+    },
+  };
+  function abort(reason = "AbortError") {
+    if (signal.aborted) return;                       // 두 번째부터는 아무 일도 없다
+    signal.aborted = true;
+    signal.reason = reason;
+    for (const fn of listeners.splice(0)) fn(reason); // 한 번 부르고 모두 뗀다
+  }
+  return { signal, abort };
+}
+
+function anySignal(signals) {
+  const { signal, abort } = createController();
+  const done = signals.find((s) => s.aborted);
+  if (done) {
+    abort(done.reason);
+    return signal;
+  }
+  for (const s of signals) s.addEventListener("abort", () => abort(s.reason));
+  return signal;
+}
+
+// 아래는 채점용이다. 고치지 않는다
+function simulate(ops) {
+  const signals = {}, controllers = {}, fns = {}, log = [];
+  for (const [op, name, arg] of ops) {
+    if (op === "new") { const c = createController(); controllers[name] = c; signals[name] = c.signal; }
+    if (op === "listen") { fns[arg] = (reason) => log.push(arg + ":" + reason); signals[name].addEventListener("abort", fns[arg]); }
+    if (op === "unlisten") signals[name].removeEventListener("abort", fns[arg]);
+    if (op === "abort") (arg === null ? controllers[name].abort() : controllers[name].abort(arg));
+    if (op === "any") signals[name] = anySignal(arg.map((n) => signals[n]));
+    if (op === "state") log.push(name + "=" + signals[name].aborted + "/" + (signals[name].aborted ? signals[name].reason : "none"));
+  }
+  return log;
+}`}
+  tests={[
+    { args: [[["new","a",null],["listen","a","x"],["listen","a","y"],["abort","a","stop"]]], expected: ["x:stop","y:stop"], label: "listener는 등록 순서대로" },
+    { args: [[["new","a",null],["listen","a","x"],["abort","a",null],["state","a",null]]], expected: ["x:AbortError","a=true/AbortError"], label: "이유가 없으면 AbortError" },
+    { args: [[["new","a",null],["listen","a","x"],["abort","a","first"],["abort","a","second"],["state","a",null]]], expected: ["x:first","a=true/first"], label: "두 번 abort해도 한 번만" },
+    { args: [[["new","a",null],["abort","a","gone"],["listen","a","late"],["state","a",null]]], expected: ["a=true/gone"], label: "취소된 뒤 단 listener는 불리지 않는다" },
+    { args: [[["new","a",null],["listen","a","x"],["listen","a","y"],["unlisten","a","x"],["abort","a","stop"]]], expected: ["y:stop"], label: "뗀 listener는 불리지 않는다" },
+    { args: [[["new","a",null],["state","a",null]]], expected: ["a=false/none"], label: "취소 전 상태" },
+    { args: [[["new","user",null],["new","timer",null],["any","both",["user","timer"]],["listen","both","req"],["abort","timer","TimeoutError"],["abort","user","click"],["state","both",null],["state","user",null]]], expected: ["req:TimeoutError","both=true/TimeoutError","user=true/click"], label: "any는 먼저 취소된 쪽의 이유" },
+    { args: [[["new","user",null],["abort","user","left"],["new","timer",null],["any","both",["user","timer"]],["state","both",null]]], expected: ["both=true/left"], label: "이미 취소된 신호를 any에 넣으면" },
+    { args: [[["new","user",null],["new","timer",null],["any","both",["user","timer"]],["state","both",null],["abort","user","click"],["state","both",null],["state","timer",null]]], expected: ["both=false/none","both=true/click","timer=false/none"], label: "하나가 취소돼도 다른 입력은 그대로" },
+  ]}
+/>
+
+`anySignal`에서 이미 취소된 신호를 먼저 찾는 이유는 앞에서 본 규칙 때문이다. 취소된 신호에 단 리스너는 불리지 않으니, 확인 없이 리스너만 달면 합친 신호가 영영 취소되지 않는다. 진짜 `AbortSignal.any`는 여기에 더해 입력 신호가 합친 신호를 약하게 참조하게 해서, 합친 신호를 아무도 쓰지 않으면 쓰레기로 치울 수 있게 한다. 위 풀이처럼 리스너로 묶으면 오래 사는 입력 신호가 합친 신호를 계속 붙잡는다.
+
+## 다시 사용자 상세 화면으로
+
+처음 화면에 1번 사용자가 남은 건 `abort()`가 신호를 받는 사람 없이 허공에 울렸기 때문이다. 취소는 버튼(컨트롤러)과 신호를 나눠 주는 약속이고, 신호를 받은 함수가 시작 전에 확인하고, 도중에 듣고, 끝나면 리스너를 떼야 성립한다. 신호를 끝까지 넘길 수 없으면 화면을 바꾸기 직전에 `signal.aborted`를 본다. 서버도 마찬가지로 끊김을 들어 자기 작업에 신호를 넘겨야 헛일을 멈춘다.
+
+## 면접에서 나올 만한 질문
+
+### AbortController와 AbortSignal은 왜 나뉘어 있나요?
+
+취소할 권한과 취소를 듣는 권한을 나누려는 것이다. 컨트롤러만 `abort()`를 부를 수 있고, 신호는 읽기 전용이라 여러 함수에 나눠 줘도 받은 쪽이 멋대로 취소할 수 없다. 그래서 하나의 신호를 fetch, 타이머, 리스너에 함께 넘겨 한 번에 멈출 수 있다.
+
+### abort()를 부르면 진행 중인 비동기 작업이 무조건 멈추나요?
+
+아니다. 신호를 받아서 듣는 작업만 멈춘다. 신호를 받지 않는 함수나, 이미 `await`로 결과를 받은 뒤의 코드는 그대로 진행한다. 그래서 신호를 끝까지 넘기고, 넘길 수 없으면 상태를 바꾸기 직전에 `signal.aborted`를 확인한다.
+
+### 이미 취소된 신호를 fetch에 넘기면 어떻게 되나요?
+
+요청을 보내지 않고 바로 reject된다. 실험에서 서버 로그에 그 요청이 아예 없었다. 마찬가지로 이미 취소된 신호에 단 abort 리스너는 불리지 않으니, 신호를 받는 함수는 시작할 때 `throwIfAborted()`로 먼저 확인해야 한다.
+
+### abort에 이유를 넘기면 무엇이 달라지나요?
+
+`fetch`가 `AbortError` 대신 그 이유 객체를 그대로 던진다. `e.name === "AbortError"`로 취소를 거르는 코드는 이 에러를 실패로 오해한다. 이유를 쓸 거면 취소 판별을 `signal.aborted`로 한다. `AbortSignal.timeout`은 이유가 `TimeoutError`라서 시간 초과와 사용자 취소를 나눌 수 있다.
+
+### React StrictMode에서 요청이 두 번 나가는 건 버그인가요?
+
+버그가 아니다. React 18부터 개발 모드의 StrictMode는 effect를 실행, 정리, 재실행해서 정리 함수가 제대로 짜였는지 드러낸다. 정리 함수에서 abort하면 첫 요청은 취소되고 두 번째만 쓰인다. 프로덕션에서는 한 번만 실행되니 ref로 두 번째를 막지 않는다.
+
+### 브라우저가 요청을 취소하면 서버 작업도 취소되나요?
+
+자동으로는 아니다. 서버는 연결이 끊긴 걸 알 수 있을 뿐이고, 그 사실을 듣고 자기 작업에 취소를 넘기지 않으면 끝까지 처리한다. Node라면 응답의 `close` 이벤트에서 `writableFinished`가 false일 때 컨트롤러를 abort하고, 그 신호를 DB 호출과 하위 요청에 넘긴다. 결제처럼 부수 효과가 있는 요청은 취소됐다고 처리가 안 된 것이 아니니 결과를 따로 확인한다.
+
+### 취소를 지원하는 함수를 직접 만들 때 지킬 것은 무엇인가요?
+
+시작할 때 이미 취소됐는지 확인하고, 도중에 abort 이벤트를 들으면 자원을 정리하고 `signal.reason`으로 reject하고, 정상으로 끝나면 단 리스너를 뗀다. 마지막을 빼먹으면 오래 사는 신호에 끝난 작업의 클로저가 쌓여 메모리가 샌다. 실험에서는 1000번 호출에 리스너 1000개가 남았다.
+
+### addEventListener의 signal 옵션은 언제 쓰나요?
+
+여러 대상에 여러 리스너를 달고 한꺼번에 뗄 때 쓴다. `removeEventListener`는 같은 함수 참조와 같은 capture 값을 맞춰야 하는데, 신호를 쓰면 `abort()` 한 번으로 모두 떨어진다. React effect의 정리 함수, 드래그처럼 시작과 끝이 있는 상호작용에 잘 맞는다.

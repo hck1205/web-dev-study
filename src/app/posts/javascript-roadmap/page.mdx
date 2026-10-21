@@ -1,0 +1,431 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("javascript-roadmap");
+
+"JavaScript 개념"이라는 이미지 열두 장을 저장해 뒀다. 변수와 스코프, 데이터 타입, 함수 두 장, 배열, 객체와 구조 분해, 복사와 불변성, 최신 문법, this와 프로토타입, 비동기, 자바스크립트가 실행되는 방식, 브라우저와 DOM과 이벤트. 장마다 용어가 빼곡하고 귀퉁이에 "React와의 연결"이라는 상자가 붙어 있다.
+
+용어를 따로따로 외우면 금방 흐려진다. 실제 버그는 한 장에서만 나오지 않아서다. 아래 코드는 장바구니 화면에서 흔히 보는 줄을 모은 것이다.
+
+```js
+const cart = { items: [{ name: "pen", price: 1000 }], coupon: null };
+const draft = { ...cart };
+draft.items.push({ name: "ink", price: 500 });
+console.log("1", cart.items.length);
+console.log("2", cart.coupon?.rate ?? 0, cart.coupon?.rate || "none");
+console.log("3", [10, 1, 2].sort());
+console.log("4", typeof cart.coupon, "5" == 5);
+const total = { sum: 0, add(p) { this.sum += p; } };
+const add = total.add;
+try { cart.items.forEach(i => add(i.price)); } catch (e) { console.log("5", e.constructor.name + ":", e.message); }
+for (var i = 0; i < 3; i++) setTimeout(() => console.log("6 timer", i));
+Promise.resolve().then(() => console.log("7 then"));
+console.log("8 sync end");
+```
+
+Node 22에서 ES 모듈(`.mjs`)로 돌린 결과다.
+
+```text
+1 2
+2 0 none
+3 [ 1, 10, 2 ]
+4 object true
+5 TypeError: Cannot read properties of undefined (reading 'sum')
+8 sync end
+7 then
+6 timer 3
+6 timer 3
+6 timer 3
+```
+
+사본에 넣은 물건이 원본 장바구니에도 들어갔고(복사), 정렬은 10을 1 뒤에 뒀고(배열), `null`의 `typeof`는 `"object"`이고(타입), 꺼낸 메서드에서 `this`가 사라졌고(this와 strict 모드), 타이머는 셋 다 3을 찍었고(변수), 출력 순서는 코드 순서와 다르다(실행 방식). 열 줄 남짓에 여섯 장이 들어 있다.
+
+이 블로그에는 그 열두 장을 채운 자바스크립트 글이 마흔 편 넘게 있다. 이 글은 새 개념을 설명하지 않는다. 이미지의 순서를 그대로 따라가며 글마다 "어떤 질문에 답하는 글인지"를 한두 문장으로 적었고, 버그 증상에서 어느 글을 먼저 펼지 길을 놓았다. 이 블로그의 다른 학습 지도로는 [쿠버네티스 로드맵](/posts/k8s-learning-roadmap)과 [네트워킹 학습 지도](/posts/networking-essentials-map)가 있다.
+
+## 클릭 한 번이 열두 장을 지나간다
+
+장 순서대로 읽기 전에, 그 장들이 한 번의 동작에서 어디에 놓이는지 본다. 아래 그림은 "장바구니에 담기" 버튼을 한 번 눌렀을 때 코드가 지나는 자리다. 다음을 누르면 한 홉씩 움직이고, 홉마다 그 자리를 다룬 장이 나온다.
+
+<NetworkTopology
+  caption="버튼 하나를 누르면 브라우저, 함수, 객체, 비동기, 런타임을 차례로 지난다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "browser", label: "브라우저", x: 8, y: 8, w: 384, h: 96, tone: "edge" },
+    { id: "lang", label: "언어", x: 8, y: 112, w: 384, h: 96, tone: "private" },
+    { id: "rt", label: "런타임", x: 8, y: 216, w: 384, h: 76, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "btn", label: "button", sub: "click", x: 70, y: 60, icon: "client", w: 96 },
+    { id: "dom", label: "DOM 갱신", sub: "리플로", x: 200, y: 60, icon: "switch", w: 100 },
+    { id: "api", label: "fetch", sub: "서버", x: 330, y: 60, icon: "internet", w: 96 },
+    { id: "fn", label: "핸들러", sub: "클로저 · this", x: 70, y: 160, icon: "container", w: 104 },
+    { id: "state", label: "새 상태", sub: "복사 · 불변", x: 200, y: 160, icon: "db", w: 100 },
+    { id: "await", label: "await", sub: "Promise", x: 330, y: 160, icon: "gateway", w: 96 },
+    { id: "loop", label: "이벤트 루프", sub: "큐 · 스택", x: 200, y: 256, icon: "router", w: 112 },
+  ]}
+  links={[
+    { from: "btn", to: "fn" },
+    { from: "fn", to: "state" },
+    { from: "fn", to: "await" },
+    { from: "await", to: "api" },
+    { from: "api", to: "loop" },
+    { from: "loop", to: "await" },
+    { from: "state", to: "dom" },
+  ]}
+  steps={[
+    { path: ["btn", "fn"], packet: "click", title: "12장: 이벤트가 핸들러를 부른다", detail: "클릭은 캡처와 버블을 거쳐 리스너에 닿는다. 목록이면 부모 하나가 받는다(이벤트 위임)." },
+    { path: ["fn"], title: "3·4·9장: 핸들러는 함수다", detail: "핸들러가 기억하는 변수는 클로저가, this는 부르는 방식이 정한다. 화살표 함수냐 메서드냐에 따라 달라진다." },
+    { path: ["fn", "state"], packet: "{...cart}", title: "5~8장: 새 상태를 만든다", detail: "배열과 객체를 고치지 않고 사본을 만든다. 얕은 복사가 어디까지 따로인지 알아야 원본이 안 바뀐다." },
+    { path: ["fn", "await", "api"], packet: "POST /cart", title: "10장: 서버에 저장한다", detail: "await에서 함수가 빠져나가고, 응답이 오면 이어서 실행된다. 실패와 취소도 여기서 다룬다." },
+    { path: ["api", "loop", "await"], packet: "200 OK", title: "11장: 응답은 큐를 거쳐 돌아온다", detail: "응답 처리는 마이크로태스크로 줄을 서고, 콜 스택이 비면 실행된다." },
+    { path: ["state", "dom"], packet: "render", title: "12장: 화면이 바뀐다", detail: "바뀐 상태가 DOM에 반영된다. 바꾼 직후 크기를 읽으면 강제 레이아웃이 생긴다." },
+  ]}
+/>
+
+## 장끼리 기대는 순서
+
+열두 장은 아무 순서로 읽어도 되는 목록이 아니다. 뒤의 장이 앞의 장을 전제로 한다. 클로저는 스코프를 알아야 읽히고, 불변 업데이트는 참조와 얕은 복사를 알아야 읽히고, async/await는 Promise를 알아야 읽힌다. 아래 그림은 장 사이의 의존을 묶어서 그린 것이다. 화살표 방향이 "이걸 알아야 저게 읽힌다"다.
+
+<ConceptDiagram
+  caption="앞 장을 알면 뒤 장이 짧아진다"
+  width={400}
+  height={270}
+  nodes={[
+    { id: "basic", label: "1·2 변수·타입", sub: "스코프 · 참조", x: 80, y: 35, w: 128 },
+    { id: "func", label: "3·4 함수", sub: "클로저 · 순수", x: 220, y: 35, w: 112 },
+    { id: "obj", label: "5~8 객체·배열", sub: "복사 · 문법", x: 80, y: 130, w: 128 },
+    { id: "oop", label: "9 this·OOP", sub: "프로토타입", x: 330, y: 130, w: 112 },
+    { id: "async", label: "10 비동기", sub: "Promise", x: 220, y: 130, w: 100 },
+    { id: "rt", label: "11 실행 방식", sub: "스택 · 루프", x: 220, y: 230, w: 120 },
+    { id: "web", label: "12 브라우저", sub: "DOM · 이벤트", x: 80, y: 230, w: 120 },
+  ]}
+  edges={[
+    { from: "basic", to: "func" },
+    { from: "basic", to: "obj" },
+    { from: "func", to: "oop" },
+    { from: "func", to: "async" },
+    { from: "async", to: "rt" },
+    { from: "obj", to: "web", dashed: true },
+    { from: "rt", to: "web" },
+  ]}
+/>
+
+처음 공부한다면 1장부터 차례로 읽는다. 이미 실무에서 쓰고 있다면 각 장에서 처음 장면(버그)만 훑어보고, 낯선 장면이 나오는 장부터 읽어도 된다. 모든 글이 실제로 겪는 버그 하나로 시작하고 `## 면접에서 나올 만한 질문`으로 끝나니, 면접을 앞두고 있다면 마지막 섹션만 이어 읽는 것도 방법이다.
+
+## 01 변수와 스코프
+
+[var, let, const](/posts/js-var-let-const)는 "반복문의 `setTimeout`이 왜 모두 3을 찍나"에 답한다. 변수 상자가 함수마다 생기는지 반복마다 생기는지가 갈림길이고, `const`가 막는 건 재할당이지 값의 변경이 아니라는 것까지 짚는다.
+
+[스코프와 렉시컬 스코프](/posts/js-scope-lexical)는 "이 이름을 엔진이 어디서 찾나"에 답한다. 함수를 쓴 자리가 바깥 스코프를 정한다는 규칙과 환경 레코드를 따라가고, React 컴포넌트 안에 컴포넌트를 정의하면 왜 상태가 날아가는지도 본다.
+
+[호이스팅과 TDZ](/posts/js-hoisting-tdz)는 "선언보다 먼저 쓰면 왜 어떤 건 `undefined`이고 어떤 건 에러인가"에 답한다. 함수 선언을 `const` 화살표 함수로 바꿨을 때, 순환 import에서 `Cannot access before initialization`이 나는 이유가 여기 있다.
+
+## 02 데이터 타입
+
+[원시값과 참조](/posts/js-primitive-vs-reference)는 "함수에 객체를 넘기면 무엇이 복사되나"에 답한다. 위 장바구니 1번 줄처럼 사본을 고쳤는데 원본이 바뀌는 버그의 뿌리이고, 뒤의 복사와 불변성 장 전체가 이 글을 전제로 한다.
+
+[==와 ===, 타입 변환](/posts/js-equality-coercion)은 "`select`에서 고른 `"5"`로 id `5`인 상품을 왜 못 찾나"에 답한다. 느슨한 비교가 값을 바꾸는 순서와 `NaN`, `-0` 같은 예외를 다룬다.
+
+[truthy·falsy와 typeof](/posts/js-truthy-falsy-typeof)는 "`typeof`로 객체인지 확인했는데 왜 `null`에서 터지나"에 답한다. falsy 여덟 개, `null`과 `undefined`가 생기는 자리, React 화면에 찍히는 `0`까지 따라간다.
+
+## 03 함수 1: 만들고 넘기고 기억하기
+
+[함수를 만드는 방법](/posts/js-function-forms)은 "`function`을 화살표 함수로 바꾸면 무엇이 깨지나"에 답한다. 문법마다 `this`, `arguments`, `new`가 어떻게 다른지 정리한다.
+
+[일급 함수와 콜백](/posts/js-first-class-callbacks)은 "함수를 값으로 넘길 때 받는 쪽은 무엇을 보나"에 답한다. 래퍼로 감싼 Express 에러 처리기가 왜 불리지 않는지(`fn.length`), 메서드를 넘길 때 사라지는 `this`를 다룬다.
+
+[클로저](/posts/js-closures)는 "React 타이머가 왜 1에서 멈추나"에 답한다. 클로저는 값이 아니라 변수를 잡는다는 것, 오래된 클로저를 업데이터 함수와 의존성으로 고치는 장면이 이 글의 중심이다.
+
+## 04 함수 2: 조합과 재사용
+
+[IIFE와 모듈 패턴](/posts/js-iife-module-pattern)은 "모듈 시스템이 없던 시절 파일마다 스코프를 어떻게 만들었나"에 답한다. 번들러 출력과 UMD를 읽을 때, effect 안에서 async 함수를 바로 부를 때 다시 만난다.
+
+[커링과 부분 적용](/posts/js-currying-partial)은 "인자를 지금 받고 실행은 나중에 하려면"에 답한다. 범용 `curry`가 깨지는 경우와, React 핸들러를 커링으로 만들면 `memo`가 깨지는 이유를 본다.
+
+[순수 함수와 부수 효과](/posts/js-pure-functions)는 "같은 입력에 같은 결과가 왜 테스트와 캐시와 React 렌더링의 전제인가"에 답한다. 숨은 입력과 숨은 출력을 찾아 바깥으로 모으는 법을 다룬다.
+
+[메모이제이션](/posts/js-memoization)은 "기억해 둔 답이 언제 틀린 답을 빠르게 내나"에 답한다. 캐시 키 설계, 버리지 않는 캐시의 누수, 칸 하나짜리 캐시인 `useMemo`까지 간다.
+
+## 05 배열
+
+[map, filter, reduce, flatMap](/posts/js-array-transform)은 "빈 장바구니에서 `reduce`가 왜 터지나"에 답한다. 메서드마다 무엇을 돌려주는지, `map(parseInt)`와 빈 배열의 `every` 같은 함정을 정리한다.
+
+[배열을 고치는 메서드와 사본을 주는 메서드](/posts/js-array-mutation)는 "`push` 후 `setItems`를 불렀는데 화면이 왜 안 바뀌나", 그리고 위 3번 줄의 `sort`가 왜 10을 1 뒤에 두나에 답한다. ES2023의 `toSorted`와 `with`가 여기 있다.
+
+## 06 객체와 구조 분해
+
+[객체 메서드](/posts/js-object-methods)는 "`Object.keys`가 서버가 보낸 키 순서를 왜 바꾸나"에 답한다. 속성 설명자, getter와 setter, `freeze`와 `seal`의 차이를 실행 결과로 본다.
+
+[구조 분해](/posts/js-destructuring)는 "옵션을 안 넘기거나 `null`을 넘기면 왜 터지나"에 답한다. 기본값이 `undefined`에만 반응한다는 규칙과, props 기본값 `{}`가 만드는 무한 effect를 다룬다.
+
+[전개와 나머지 문법](/posts/js-spread-rest)은 "`Math.max(...prices)`가 왜 13만 개에서 스택을 넘기나"에 답한다. 같은 점 세 개가 자리마다 반대로 동작하는 것과, `reduce` 안의 전개가 n²이 되는 비용을 본다.
+
+## 07 복사와 불변성
+
+[얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)는 "편집 폼에서 취소했는데 왜 원본이 바뀌나"에 답한다. 위 1번 줄의 `{ ...cart }`가 몇 층까지 새로 만드는지, `structuredClone`이 무엇을 바꾸는지 잰다.
+
+[React 상태를 불변으로 바꾸기](/posts/js-immutability-react)는 "바깥만 새로 만들었더니 `memo` 자식이 왜 옛 값을 보이나"에 답한다. 바뀐 길만 새로 만드는 구조 공유와 Immer의 동작을 따라간다.
+
+## 08 최신 문법
+
+[템플릿 리터럴과 태그된 템플릿](/posts/js-template-literals)은 "`${user}`가 왜 `[object Object]`로 찍히나", 그리고 태그 함수로 SQL 인젝션과 XSS를 어떻게 막나에 답한다.
+
+[옵셔널 체이닝과 ??](/posts/js-optional-chaining-nullish)는 "`shipping: null` 하나에 왜 화면이 하얘지나"에 답한다. 위 2번 줄처럼 `??`와 `||`가 갈리는 값이 무엇인지가 이 글의 중심이다.
+
+[단락 평가](/posts/js-short-circuit)는 "`&&`로 렌더링했더니 화면에 왜 `0`이 찍히나"에 답한다. `&&`와 `||`가 불리언이 아니라 피연산자를 그대로 돌려준다는 규칙을 따라간다.
+
+[ES 모듈](/posts/js-es-modules)은 "같은 카운터가 ESM에서는 2, CommonJS에서는 0인 이유"에 답한다. 라이브 바인딩, 평가 순서, Node 22의 `require(esm)`까지 다룬다.
+
+이 장의 문법은 한 줄에 겹쳐 나오는 일이 많다. 아래 식을 조각별로 눌러 보면 각 조각이 어느 글의 규칙인지 나온다.
+
+<UrlAnatomy
+  caption="한 줄에 구조 분해, 기본값, 옵셔널 체이닝, ??가 함께 있다"
+  base="const "
+  separator=""
+  joiner=" "
+  params={[
+    { key: "pattern", display: "{ items", title: "구조 분해 패턴", description: "오른쪽 객체에서 items 속성을 꺼낸다. 오른쪽이 null이나 undefined면 TypeError다. 구조 분해 글.", code: "const { items } = null; // TypeError" },
+    { key: "default", display: "= [] }", title: "기본값", description: "꺼낸 값이 undefined일 때만 []를 쓴다. null이면 null이 그대로 들어간다. 구조 분해 글.", code: "{ data: { items: null } } → null" },
+    { key: "eq", display: "= res?.data", title: "옵셔널 체이닝", description: "res가 null이나 undefined면 오류 없이 undefined가 된다. 체인의 나머지는 건너뛴다. 옵셔널 체이닝 글." },
+    { key: "nullish", display: "?? {};", title: "null 병합", description: "왼쪽이 null이나 undefined면 {}를 쓴다. 그래서 구조 분해가 터지지 않는다. ||였다면 0이나 빈 문자열도 갈아 끼웠을 것이다." },
+  ]}
+/>
+
+다섯 가지 응답을 넣고 Node 22에서 돌린 결과다.
+
+```text
+undefined → []
+{"data":null} → []
+{"data":{}} → []
+{"data":{"items":null}} → null
+{"data":{"items":[1]}} → [1]
+```
+
+네 번째 줄이 함정이다. 서버가 `items: null`을 보내면 기본값이 끼어들지 않아 `items.map`에서 터진다. 기본값은 `undefined`에만 반응한다.
+
+## 09 this, 프로토타입, 객체 지향
+
+[this 바인딩](/posts/js-this-binding)은 "메서드를 변수에 담거나 `setTimeout`에 넘기면 왜 터지나"에 답한다. 위 5번 줄의 `TypeError`가 정확히 이 장면이고, `this`가 함수가 아니라 호출에 붙는다는 네 가지 규칙을 따라간다.
+
+[call, apply, bind](/posts/js-call-apply-bind)는 "`bind`를 두 번 부르면 왜 리스너가 안 떨어지나"에 답한다. 바운드 함수의 정체와 `apply`의 인자 수 한계를 본다.
+
+[프로토타입 체인](/posts/js-prototype-chain)은 "`constructor`라는 단어에서 단어 세기 함수가 왜 깨지나"에 답한다. 읽기는 체인을 올라가고 쓰기는 제자리에 만든다는 규칙, 프로토타입 오염 공격을 다룬다.
+
+[클래스와 상속](/posts/js-classes)은 "부모 생성자에서 부른 메서드가 왜 하위 클래스 필드를 `undefined`로 보나"에 답한다. 생성 순서, `#private`와 TypeScript `private`의 차이를 본다.
+
+[strict 모드](/posts/js-strict-mode)는 "오타 하나로 전역 변수가 생기고 합계가 0이 되는 이유"에 답한다. 위 5번 줄이 `undefined`의 `sum`을 읽다 터진 것도 ES 모듈이 늘 strict 모드라서다. 느슨한 모드였다면 전역 객체에 `sum`이 조용히 생겼다.
+
+## 10 비동기
+
+[콜백 지옥](/posts/js-callback-hell)은 "들여쓰기보다 무서운 게 뭔가"에 답한다. 응답을 두 번 보내는 서버 버그로 제어의 역전을 보고, `util.promisify`로 옮기는 법을 다룬다.
+
+[Promise](/posts/js-promises)는 "`then`이 돌려주는 건 무엇이고 에러는 어디로 흐르나"에 답한다. 상태가 한 번만 정해진다는 규칙, 처리되지 않은 거부가 Node와 브라우저에서 어떻게 다뤄지는지를 본다.
+
+[async/await](/posts/js-async-await)는 "`forEach` 안의 `await`가 왜 기다리지 않나"에 답한다. 차례대로와 동시 실행, 동시성 제한, effect 안에서 쓰는 법이 이어진다.
+
+[Promise.all, allSettled, race, any](/posts/js-promise-combinators)는 "위젯 하나의 실패가 왜 대시보드 전체를 죽이나"에 답한다. 네 함수가 각각 어떤 질문에 답하는지와, `race` 타임아웃이 아무것도 멈추지 않는 이유를 본다.
+
+## 11 자바스크립트가 실행되는 방식
+
+[실행 컨텍스트와 콜 스택](/posts/js-execution-context)은 "함수를 부를 때마다 엔진이 무엇을 쌓고, 왜 넘치나"에 답한다. 스택 오버플로를 힙으로 옮겨 고치는 법과 `await` 너머의 스택 트레이스 읽기가 있다.
+
+[이벤트 루프](/posts/event-loop)는 "스택이 하나뿐인데 기다리는 일은 누가 하나, 화면은 언제 그려지나"에 답한다. 위 출력에서 `8 sync end`가 `7 then`보다, `7 then`이 `6 timer`보다 먼저인 이유가 여기 있고, 긴 작업이 INP를 망치는 모습과 Node의 단계도 다룬다.
+
+[마이크로태스크와 매크로태스크](/posts/js-microtask-macrotask)는 이벤트 루프 글의 다음 편으로, "복잡한 출력 순서 퍼즐을 어떻게 틀리지 않고 푸나"에 답한다. 대기열을 장부로 적어 가며 `then` 체인과 `await`를 푼다.
+
+[타이머는 왜 늦게 울리나](/posts/js-timers-accuracy)는 "`setTimeout(fn, 1000)`이 왜 1초 뒤가 아닌가"에 답한다. 4ms 규칙, 백그라운드 탭 스로틀링, `requestAnimationFrame`을 실측으로 본다.
+
+[가비지 컬렉션](/posts/garbage-collection)은 "엔진은 무엇을 쓰레기로 보고, 치우는 동안 왜 멈추나"에 답한다. V8의 세대별 GC 로그와, 컨테이너 메모리 한도에서 로그 없이 죽는 경우까지 간다.
+
+[메모리 누수 찾기](/posts/js-memory-leak)는 "오래 켜 둔 탭이 왜 점점 무거워지나"에 답한다. 떼지 않은 리스너, 문서에서 떨어진 DOM, 끝없이 자라는 캐시를 힙 스냅샷으로 찾는 순서가 있다.
+
+## 12 브라우저, DOM, 이벤트
+
+[DOM 기초](/posts/dom-basics)는 "DOM을 바꾸는 것보다 무엇이 더 비싸나"에 답한다. 살아 있는 목록과 찍어 둔 목록, 바꾼 직후 크기를 읽을 때 생기는 강제 레이아웃을 횟수로 확인한다.
+
+[이벤트 전파](/posts/event-propagation)는 "클릭 하나가 어디로 내려갔다 올라오나, `stopPropagation`과 `preventDefault`는 각각 무엇을 막나"에 답한다.
+
+[이벤트 위임](/posts/event-delegation)은 "나중에 붙은 버튼은 왜 클릭이 안 먹나"에 답한다. 부모 하나가 받는 구조와, React가 이미 루트에서 그렇게 하고 있다는 것을 본다.
+
+[디바운스와 스로틀](/posts/debounce-throttle)은 "입력마다 요청이 나가는 검색창을 어떻게 진정시키나"에 답한다. React에서 디바운스가 망가지는 이유와, 디바운스로 풀리지 않는 응답 순서 문제를 짚는다.
+
+[fetch 제대로 쓰기](/posts/browser-fetch)는 "500이 왔는데 `fetch`는 왜 성공하나"에 답한다. 한 번만 읽히는 본문, 늦게 온 응답이 화면을 덮는 경쟁, 재시도를 다룬다.
+
+[AbortController로 취소 설계하기](/posts/abort-controller)는 fetch 글의 다음 편으로, "`abort()`를 불렀는데 왜 옛 응답이 화면을 덮나"에 답한다. 신호를 받는 함수 만들기, React effect의 취소, 서버까지 취소를 잇는 법을 본다.
+
+[브라우저 저장소](/posts/browser-storage)는 "`localStorage`에 넣은 `false`가 왜 참이 되나, 토큰은 어디에 두나"에 답한다. 동기 API의 멈춤, `storage` 이벤트, 출처 범위, XSS가 읽어 가는 것을 비교한다.
+
+[CORS](/posts/cors)는 "서버는 응답했는데 브라우저가 왜 막나"에 답한다. 같은 출처 정책, preflight, credentials를 정리한다. 저장소 글의 출처 개념과 같은 규칙이다.
+
+## React에서 다시 만나는 자리
+
+이미지마다 붙은 "React와의 연결" 상자를 모으면 하나의 흐름이 된다. 버튼을 눌러 상태를 바꾸고 다시 그리는 동안 앞의 장들이 차례로 나온다. 아래 그림에서 다음을 누르면 단계마다 관련 글이 나온다.
+
+<SequenceDiagram
+  caption="React 업데이트 한 번에 함수, 복사, 비동기, 이벤트 장이 모두 나온다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "handler", label: "핸들러" },
+    { id: "react", label: "React" },
+    { id: "effect", label: "effect" },
+  ]}
+  steps={[
+    { from: "user", to: "handler", label: "onClick", title: "루트에서 받은 클릭", detail: "React는 루트 하나에서 이벤트를 받아 핸들러를 부른다. 이벤트 위임, 이벤트 전파 글." },
+    { from: "handler", to: "react", label: "setItems(next)", title: "새 배열로 상태를 바꾼다", detail: "push로 고치면 참조가 같아 다시 그리지 않는다. toSorted나 전개로 사본을 준다. 배열 메서드, 불변 업데이트 글." },
+    { from: "handler", to: "handler", label: "count 읽기", title: "핸들러가 잡은 값은 그 렌더의 값", detail: "같은 핸들러 안에서 바로 읽은 count는 옛 값이다. 클로저 글." },
+    { from: "react", to: "react", label: "렌더", title: "JSX가 값을 그린다", detail: "&&로 조건을 걸면 0이 찍힐 수 있다. 단락 평가 글." },
+    { from: "react", to: "effect", label: "의존성 변경", title: "effect가 다시 돈다", detail: "props 기본값 {}나 ?? []가 매번 새 참조면 effect가 계속 돈다. 구조 분해, 옵셔널 체이닝 글." },
+    { from: "effect", to: "effect", label: "fetch + abort", title: "정리 함수가 지난 요청을 끊는다", detail: "신호를 끝까지 넘겨야 늦은 응답이 화면을 덮지 않는다. AbortController, async/await 글." },
+  ]}
+/>
+
+React 자체의 렌더링 규칙은 [리렌더링 글](/posts/react-rerender)에, 서버 데이터를 화면에 캐시하는 법은 [화면 데이터 캐시](/posts/client-data-cache)에 있다. 위 그림의 장들은 그 글들이 깔고 있는 언어 쪽 바닥이다.
+
+## 이 증상이면 이 글부터
+
+일하다 만난 증상에서 거꾸로 찾아갈 때 쓰는 길이다. 아래 그림은 자주 보는 증상을 차례로 짚으며 먼저 펼 글을 옆 칸에 쌓는다.
+
+<AlgoTrace
+  caption="증상 하나에 첫 글 하나"
+  memoryLabel="먼저 펼 글"
+  cells={["모두 3", "원본이 바뀜", "화면 그대로", "this 없음", "순서 뒤죽박죽", "옛 응답", "점점 무거움"]}
+  steps={[
+    { caption: "증상 문장 일곱 개를 차례로 본다." },
+    { pointer: 0, memory: ["var, let, const"], caption: "반복문의 타이머가 모두 마지막 값을 찍는다. 반복마다 새 상자가 생기는지부터 본다." },
+    { pointer: 1, memory: ["var, let, const", "얕은 복사"], caption: "사본을 고쳤는데 원본이 바뀐다. 몇 층까지 새로 만들었는지 본다." },
+    { pointer: 2, memory: ["var, let, const", "얕은 복사", "배열 변경 메서드"], caption: "상태를 바꿨는데 화면이 그대로다. 같은 배열을 고쳐서 참조가 같다." },
+    { pointer: 3, memory: ["var, let, const", "얕은 복사", "배열 변경 메서드", "this 바인딩"], caption: "reading 'sum' of undefined. 메서드가 점 없이 불렸다." },
+    { pointer: 4, memory: ["var, let, const", "얕은 복사", "배열 변경 메서드", "this 바인딩", "마이크로태스크"], caption: "then과 setTimeout의 순서가 예상과 다르다. 대기열을 장부로 적어 본다." },
+    { pointer: 5, memory: ["var, let, const", "얕은 복사", "배열 변경 메서드", "this 바인딩", "마이크로태스크", "AbortController"], caption: "탭을 빨리 바꾸면 옛 데이터가 남는다. 신호가 끝까지 갔는지 본다." },
+    { pointer: 6, found: [6], memory: ["var, let, const", "얕은 복사", "배열 변경 메서드", "this 바인딩", "마이크로태스크", "AbortController", "메모리 누수"], caption: "오래 켜 둔 탭이 무거워진다. 힙 스냅샷 두 장을 비교한다." },
+  ]}
+/>
+
+그림에 다 못 넣은 증상은 문장으로 둔다.
+
+`Cannot access 'x' before initialization`이 난다. [호이스팅과 TDZ](/posts/js-hoisting-tdz)를 펴고, import 순환이 있는지 본다.
+
+id로 찾는데 분명히 있는 항목이 안 나온다. 문자열 `"5"`와 숫자 `5`를 비교하고 있지 않은지 [타입 변환 글](/posts/js-equality-coercion)에서 확인한다.
+
+`Cannot read properties of null`로 화면이 하얘진다. 어느 단계에서 `null`이 생겼는지 [옵셔널 체이닝 글](/posts/js-optional-chaining-nullish)을 보되, 물음표로 덮기 전에 그 `null`이 정상인지부터 따진다.
+
+목록에 `0`이 찍힌다. [단락 평가](/posts/js-short-circuit)다.
+
+`forEach` 안에서 `await`했는데 다음 줄이 먼저 돈다. [async/await](/posts/js-async-await)다.
+
+`Maximum call stack size exceeded`가 난다. 재귀 깊이인지 큰 배열 전개인지 [실행 컨텍스트 글](/posts/js-execution-context)과 [전개 문법 글](/posts/js-spread-rest)에서 가린다.
+
+클릭이 안 먹는 버튼이 있다. 나중에 붙은 요소면 [이벤트 위임](/posts/event-delegation), 다른 요소가 막고 있으면 [이벤트 전파](/posts/event-propagation)다.
+
+입력이 버벅인다. 입력마다 무거운 일을 하면 [디바운스와 스로틀](/posts/debounce-throttle), 저장할 때마다 멈추면 [브라우저 저장소](/posts/browser-storage)의 동기 API 부분을 본다.
+
+`fetch`가 500인데 `catch`로 안 간다. [fetch 제대로 쓰기](/posts/browser-fetch)다. 콘솔에 `Access-Control-Allow-Origin`이 보이면 [CORS](/posts/cors)다.
+
+## 증상 문장에서 첫 글 고르기
+
+위 길을 코드로 옮겨 보자. 증상 문장을 받아 먼저 펼 글의 slug를 돌려주는 함수다. 규칙 표 `RULES`는 주어져 있다. 문장을 소문자로 바꾼 뒤, 규칙마다 `words` 중 몇 개가 문장에 들어 있는지 센다. 가장 많이 맞은 규칙의 slug를 돌려주고, 같으면 표에서 위에 있는 규칙을 고른다. 하나도 안 맞으면 이 글(`"javascript-roadmap"`)을 돌려준다.
+
+<CodePlayground
+  caption="증상 문장으로 첫 글 고르기"
+  functionName="routeSymptom"
+  initialCode={`const RULES = [
+  { slug: "js-var-let-const", words: ["var", "모두 3", "반복문"] },
+  { slug: "js-hoisting-tdz", words: ["before initialization", "tdz", "호이스팅"] },
+  { slug: "js-equality-coercion", words: ["==", "문자열 id", "타입 변환"] },
+  { slug: "js-closures", words: ["옛 값", "stale", "멈춘 타이머"] },
+  { slug: "js-array-mutation", words: ["push", "sort", "화면이 안 바뀐다"] },
+  { slug: "js-shallow-deep-copy", words: ["원본이 바뀐다", "복사", "structuredclone"] },
+  { slug: "js-optional-chaining-nullish", words: ["cannot read properties", "null", "?."] },
+  { slug: "js-short-circuit", words: ["0이 찍힌다", "&&"] },
+  { slug: "js-this-binding", words: ["this", "undefined (reading"] },
+  { slug: "js-async-await", words: ["await", "foreach", "기다리지 않는다"] },
+  { slug: "js-microtask-macrotask", words: ["출력 순서", "then", "settimeout 0"] },
+  { slug: "js-memory-leak", words: ["메모리", "점점 느려진다", "힙"] },
+  { slug: "browser-fetch", words: ["fetch", "500", "res.ok"] },
+  { slug: "abort-controller", words: ["abort", "취소", "늦은 응답"] },
+  { slug: "browser-storage", words: ["localstorage", "새로고침", "quotaexceedederror"] },
+  { slug: "cors", words: ["cors", "access-control-allow-origin", "preflight"] },
+];
+
+function routeSymptom(text) {
+  // 가장 많이 맞은 규칙의 slug. 동점이면 위쪽 규칙, 0개면 "javascript-roadmap"
+  return "javascript-roadmap";
+}`}
+  solution={`const RULES = [
+  { slug: "js-var-let-const", words: ["var", "모두 3", "반복문"] },
+  { slug: "js-hoisting-tdz", words: ["before initialization", "tdz", "호이스팅"] },
+  { slug: "js-equality-coercion", words: ["==", "문자열 id", "타입 변환"] },
+  { slug: "js-closures", words: ["옛 값", "stale", "멈춘 타이머"] },
+  { slug: "js-array-mutation", words: ["push", "sort", "화면이 안 바뀐다"] },
+  { slug: "js-shallow-deep-copy", words: ["원본이 바뀐다", "복사", "structuredclone"] },
+  { slug: "js-optional-chaining-nullish", words: ["cannot read properties", "null", "?."] },
+  { slug: "js-short-circuit", words: ["0이 찍힌다", "&&"] },
+  { slug: "js-this-binding", words: ["this", "undefined (reading"] },
+  { slug: "js-async-await", words: ["await", "foreach", "기다리지 않는다"] },
+  { slug: "js-microtask-macrotask", words: ["출력 순서", "then", "settimeout 0"] },
+  { slug: "js-memory-leak", words: ["메모리", "점점 느려진다", "힙"] },
+  { slug: "browser-fetch", words: ["fetch", "500", "res.ok"] },
+  { slug: "abort-controller", words: ["abort", "취소", "늦은 응답"] },
+  { slug: "browser-storage", words: ["localstorage", "새로고침", "quotaexceedederror"] },
+  { slug: "cors", words: ["cors", "access-control-allow-origin", "preflight"] },
+];
+
+function routeSymptom(text) {
+  const t = text.toLowerCase();
+  let best = "javascript-roadmap";
+  let bestScore = 0;
+  for (const rule of RULES) {
+    const score = rule.words.filter((w) => t.includes(w)).length;
+    if (score > bestScore) {   // 크다일 때만 바꾸니 동점이면 위쪽 규칙이 남는다
+      best = rule.slug;
+      bestScore = score;
+    }
+  }
+  return best;
+}`}
+  tests={[
+    { args: ["반복문 안의 setTimeout이 모두 3을 찍는다"], expected: "js-var-let-const", label: "모두 3" },
+    { args: ["Cannot read properties of undefined (reading 'sum') — this가 사라졌다"], expected: "js-this-binding", label: "두 규칙이 겹치면 더 많이 맞은 쪽" },
+    { args: ["push 하고 setItems를 불렀는데 화면이 안 바뀐다"], expected: "js-array-mutation", label: "화면이 안 바뀐다" },
+    { args: ["fetch가 500인데도 catch로 안 간다. res.ok를 안 봤다"], expected: "browser-fetch", label: "500인데 성공" },
+    { args: ["탭을 빨리 바꾸면 늦은 응답이 화면을 덮는다. abort를 불렀는데도"], expected: "abort-controller", label: "늦은 응답" },
+    { args: ["새로고침하니 localStorage에 넣은 false가 true가 됐다"], expected: "browser-storage", label: "대소문자 무시" },
+    { args: ["콘솔에 Access-Control-Allow-Origin 에러, preflight가 실패"], expected: "cors", label: "CORS" },
+    { args: ["then과 setTimeout 0의 출력 순서가 헷갈린다"], expected: "js-microtask-macrotask", label: "출력 순서" },
+    { args: ["await 뒤에 fetch 결과가 비어 있다"], expected: "js-async-await", label: "동점이면 위쪽 규칙" },
+    { args: ["화면이 이상하다"], expected: "javascript-roadmap", label: "맞는 규칙이 없으면 이 글" },
+    { args: ["주문 목록에 0이 찍힌다"], expected: "js-short-circuit", label: "0이 찍힌다" },
+  ]}
+/>
+
+두 번째 테스트가 이 방식의 쓸모를 보여 준다. `Cannot read properties`만 보면 옵셔널 체이닝 글로 가지만, 같은 문장에 `this`와 `undefined (reading`이 함께 있으면 this 바인딩 쪽이 더 많이 맞는다. 에러 메시지 한 줄보다 그 앞뒤 맥락이 원인을 더 잘 가리킨다. 실제로 증상을 볼 때도 메시지만 검색하지 말고, 그 직전에 무엇을 바꿨는지를 함께 본다.
+
+## 다 읽지 않아도 된다
+
+처음 장면의 열 줄짜리 코드에 여섯 장이 들어 있었던 것처럼, 자바스크립트 버그는 대개 두세 장의 규칙이 겹친 자리에서 난다. 그래서 이 지도는 순서대로 읽는 길과 증상에서 거꾸로 찾는 길을 함께 놓았다. 각 글의 첫 장면을 보고 "이건 이미 안다"면 넘어가고, 낯설면 그 글부터 읽는다. 읽고 나서 처음 코드의 출력 열 줄을 다시 보고, 줄마다 이유를 자기 말로 설명할 수 있으면 이 지도가 할 일은 끝났다.
+
+## 면접에서 나올 만한 질문
+
+### 위 장바구니 코드에서 출력 순서가 8, 7, 6인 이유를 설명해 보라
+
+동기 코드가 먼저 끝까지 돌고, 그다음 마이크로태스크 큐, 그다음 태스크 큐 순서로 실행되기 때문이다. `console.log("8 sync end")`는 동기 코드라 먼저 찍힌다. `then` 콜백은 마이크로태스크라서 콜 스택이 비자마자 실행되고, `setTimeout` 콜백은 태스크라서 그 뒤에 하나씩 실행된다. 자세한 순서는 이벤트 루프 글과 마이크로태스크 글에 있다.
+
+### 왜 타이머 세 개가 모두 3을 찍나요? 어떻게 고치나요?
+
+`var`는 함수 단위로 변수 하나만 만들어서, 세 콜백이 같은 `i`를 잡고 있다가 반복이 끝난 뒤의 값 3을 읽는다. `let`으로 바꾸면 반복마다 새 바인딩이 생겨 0, 1, 2가 찍힌다. 클로저가 값이 아니라 변수를 잡는다는 규칙과 함께 설명하면 꼬리 질문까지 이어진다.
+
+### `{ ...cart }`로 복사했는데 왜 원본 items가 바뀌었나요?
+
+객체 전개는 얕은 복사라서 바깥 객체만 새로 만들고, 안쪽 `items` 배열은 같은 참조를 공유한다. 사본의 `items`에 `push`하면 원본의 `items`도 같은 배열이라 함께 바뀐다. React에서는 바뀌는 길을 따라 배열까지 새로 만들어야 하고, 정말 독립된 사본이 필요하면 `structuredClone`을 쓴다.
+
+### 메서드를 변수에 담아 부르면 왜 this가 undefined인가요?
+
+`this`는 함수를 정의한 자리가 아니라 부르는 방식이 정하기 때문이다. `total.add()`처럼 점으로 부르면 `total`이 `this`지만, `add()`처럼 점 없이 부르면 기본 바인딩이 적용되고, strict 모드(ES 모듈과 클래스는 항상 strict)에서는 `undefined`가 된다. `bind`로 묶거나 화살표 함수로 감싸서 고친다.
+
+### 자바스크립트를 처음 배우는 사람에게 어떤 순서를 권하나요?
+
+변수와 스코프, 타입과 참조로 바닥을 깔고, 함수와 클로저, 객체와 배열과 복사, this와 프로토타입, 비동기, 실행 방식, 브라우저 순으로 권한다. 클로저는 스코프를, 불변 업데이트는 참조를, async/await는 Promise를 전제로 하기 때문이다. 이미 실무에서 쓰는 사람이라면 증상에서 거꾸로 들어가는 편이 빠르다.
+
+### React를 잘 쓰려면 자바스크립트의 어느 부분이 특히 중요한가요?
+
+참조와 얕은 복사, 클로저, 단락 평가, 비동기 취소다. React는 상태를 참조로 비교하니 배열과 객체를 사본으로 바꿔야 다시 그리고, 핸들러와 effect는 그 렌더의 값을 클로저로 잡는다. `&&` 렌더링은 `0`을 찍을 수 있고, effect의 요청은 정리 함수에서 취소해야 늦은 응답이 화면을 덮지 않는다.

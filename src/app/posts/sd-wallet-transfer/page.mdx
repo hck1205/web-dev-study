@@ -1,0 +1,533 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-wallet-transfer");
+
+이 시리즈에서 이 글의 자리: 앞 글 [결제 시스템 설계 ②](/posts/sd-payment-reliability)에서 재시도와 멱등성, 대사로 결제를 믿을 만하게 만들었다. [결제 시스템 설계 ①](/posts/sd-payment-flow)에서 잠깐 나온 지갑을 이제 따로 설계한다. 이 글은 서로 다른 DB에 있는 두 지갑 사이에서 돈을 옮기는 일을 맡는다. 같은 장의 다음 글 [디지털 지갑 설계 ②](/posts/sd-wallet-event-sourcing)는 모든 잔액 변화를 사건으로 남겨 나중에 증명하고 되살리는 방법을 다루고, 그다음은 [증권 거래소 설계 ①](/posts/sd-stock-exchange-order-book)이다.
+
+앱에서 친구에게 3만 원을 보냈다. 내 잔액은 3만 원 줄었는데 친구 잔액은 그대로다. 고객센터에 물으니 "시스템 점검 중 일시적인 오류"라고 한다. 다음 날 아침 정산 담당자가 전체 잔액을 더해 보니 어제보다 3만 원이 적다. 돈이 어디로도 가지 않고 사라졌다.
+
+면접 문제 "디지털 지갑을 설계하라"는 겉보기엔 숫자 두 개를 고치는 문제다. 한 사람 잔액을 빼고, 다른 사람 잔액을 더한다. 어려워지는 건 두 잔액이 서로 다른 DB에 있을 때다. 이 글에서는 그 상황을 PostgreSQL 16에서 직접 만들어 돈이 사라지는 모습을 보고, 막는 방법 세 가지(2PC, TC/C, 사가)를 같은 지갑으로 돌려 본다.
+
+## 지갑 하나, 테이블 하나일 때
+
+처음에는 작게 시작한다. 사용자 몇만 명, DB 한 대, 테이블 하나다.
+
+```sql
+CREATE TABLE wallets (
+  user_id text   PRIMARY KEY,
+  balance bigint NOT NULL CHECK (balance >= 0)  -- 원 단위 정수. 음수가 될 수 없다
+);
+INSERT INTO wallets VALUES ('alice', 50000), ('dave', 10000);
+```
+
+돈은 `bigint` 원 단위 정수로 둔다. `0.1 + 0.2`가 `0.30000000000000004`가 되는 부동소수점은 돈에 쓰지 않는다. API로 주고받을 때도 금액은 정수나 문자열로 보낸다. JSON 숫자는 받는 쪽 언어에 따라 큰 값이 잘릴 수 있어서다.
+
+송금은 트랜잭션 하나면 끝난다.
+
+```sql
+BEGIN;
+UPDATE wallets SET balance = balance - 30000 WHERE user_id = 'alice';  -- 잔액이 모자라면 CHECK가 막는다
+UPDATE wallets SET balance = balance + 30000 WHERE user_id = 'dave';
+COMMIT;  -- 둘 다 되거나, 둘 다 안 되거나
+```
+
+DB 한 대 안에서는 원자성이 지켜진다. 중간에 서버가 죽어도 커밋 기록이 없으면 두 UPDATE 모두 없던 일이 된다. 이 보장이 어디까지 미치는지는 [ACID 글](/posts/acid-transactions)에서 자세히 봤다. 같은 요청이 재시도로 두 번 오는 문제는 요청마다 `transaction_id`를 붙이고 그 키로 중복을 거르는 [멱등성 키](/posts/idempotency-key)가 막는다.
+
+```text
+POST /v1/wallet/transfers
+{ "transaction_id": "7c1f-…", "from": "alice", "to": "dave", "amount": "30000", "currency": "KRW" }
+```
+
+## 초당 2만 건이면 DB 한 대로 모자란다
+
+서비스가 커져서 피크 때 초당 2만 건의 송금이 들어온다고 하자. 송금 하나는 잔액 두 줄을 고친다. 그러니 DB가 받는 쓰기는 초당 4만 건이다.
+
+PostgreSQL 한 대가 이런 송금을 초당 몇 건까지 처리하는지는 장비와 설정에 따라 크게 다르다. 여기서는 어림으로 한 대가 잔액 쓰기를 초당 2,000건쯤 버틴다고 두고, 여유를 30% 남겨 70%까지만 쓴다고 하자. 그러면 4만 ÷ (2,000 × 0.7) ≈ 28.6이니 29대가 필요하다. 한 대의 처리량을 10배 올리면 3대로 줄어든다. 다음 글에서 한 노드의 처리량을 끌어올리는 방법을 보는 이유가 이것이다.
+
+아래에서 직접 계산해 본다. 결과는 늘 올림이다. 28.6대는 없다.
+
+<CodePlayground
+  caption="송금 처리량에 필요한 DB 수"
+  functionName="walletNodes"
+  initialCode={`// tps: 초당 송금 수, legs: 송금 하나가 고치는 잔액 줄 수
+// perNodeTps: DB 한 대가 버티는 초당 쓰기, headroom: 쓸 비율 (0.7이면 70%)
+function walletNodes(tps, legs, perNodeTps, headroom) {
+  return 0;
+}`}
+  solution={`function walletNodes(tps, legs, perNodeTps, headroom) {
+  const writes = tps * legs;                 // 초당 잔액 쓰기
+  const usable = perNodeTps * headroom;      // 한 대가 실제로 맡을 양
+  return Math.ceil(writes / usable);         // 남는 건 한 대 더
+}`}
+  tests={[
+    { args: [20000, 2, 2000, 0.7], expected: 29, label: "초당 2만 건, 한 대 2천" },
+    { args: [1000000, 2, 2000, 0.7], expected: 1429, label: "초당 100만 건" },
+    { args: [1000000, 2, 20000, 0.7], expected: 143, label: "한 대를 10배 빠르게" },
+    { args: [7000, 2, 2000, 0.7], expected: 10, label: "딱 나누어떨어질 때" },
+    { args: [500, 2, 2000, 0.7], expected: 1, label: "작은 서비스" },
+  ]}
+/>
+
+DB를 여러 대로 나누는 것을 샤딩이라고 하고, 각 조각을 샤드라고 부른다. 어느 사용자가 어느 샤드에 사는지는 사용자 id를 해시해서 샤드 수로 나눈 나머지로 정한다. 키를 고르는 법과 다시 나누는 법은 [샤딩 입문](/posts/sd-sharding-intro)에 있다. 실습에서는 md5의 앞 4바이트를 샤드 수 2로 나눴다.
+
+```js
+// md5 앞 4바이트를 정수로 읽어 샤드 수로 나눈다
+const shardOf = (id, n) => crypto.createHash("md5").update(id).digest().readUInt32BE(0) % n;
+```
+
+```text
+alice 0
+bob 0
+carol 0
+dave 1
+erin 1
+frank 0
+```
+
+alice는 샤드 A(0번), dave는 샤드 B(1번)에 산다. 이제 alice가 dave에게 보내는 송금은 DB 두 대를 건드린다. 아래 그림에서 다음을 누르면 요청이 지나는 길을 따라간다.
+
+<NetworkTopology
+  caption="송금 하나가 샤드 두 개를 건드린다"
+  width={440}
+  height={250}
+  zones={[
+    { id: "user", label: "사용자", x: 10, y: 10, w: 90, h: 230, tone: "edge" },
+    { id: "svc", label: "지갑 서비스", x: 115, y: 10, w: 180, h: 230, tone: "private" },
+    { id: "data", label: "샤드", x: 310, y: 10, w: 120, h: 230, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱", x: 55, y: 125, icon: "client" },
+    { id: "gw", label: "게이트웨이", x: 160, y: 125, icon: "gateway" },
+    { id: "w1", label: "지갑 서버 1", x: 250, y: 70, icon: "server" },
+    { id: "w2", label: "지갑 서버 2", x: 250, y: 180, icon: "server" },
+    { id: "a", label: "샤드 A", sub: "alice", x: 370, y: 70, icon: "db" },
+    { id: "b", label: "샤드 B", sub: "dave", x: 370, y: 180, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "gw" },
+    { from: "gw", to: "w1" },
+    { from: "gw", to: "w2" },
+    { from: "w1", to: "a" },
+    { from: "w1", to: "b" },
+    { from: "w2", to: "a" },
+    { from: "w2", to: "b" },
+  ]}
+  steps={[
+    { path: ["app", "gw", "w1"], packet: "POST", title: "송금 요청이 들어온다", detail: "지갑 서버는 상태를 들고 있지 않다. 아무 서버나 받아도 된다.", payload: "from=alice to=dave amount=30000" },
+    { path: ["w1"], highlight: ["a", "b"], title: "샤드를 찾는다", detail: "alice는 해시가 0이라 샤드 A, dave는 1이라 샤드 B다. 두 줄이 다른 DB에 있다." },
+    { path: ["w1", "a"], packet: "-30000", title: "A에서 뺀다", detail: "샤드 A의 트랜잭션은 alice 줄만 안다. 커밋하면 A 쪽 일은 끝난다." },
+    { path: ["w1", "b"], packet: "+30000", title: "B에 더한다", detail: "샤드 B는 A에서 무슨 일이 있었는지 모른다. 두 커밋을 묶어 주는 것이 아무것도 없다." },
+  ]}
+/>
+
+## 커밋 두 번 사이에서 돈이 사라진다
+
+조율 없이 샤드마다 따로 커밋하면 무엇이 깨지는지 직접 봤다. 공용 클러스터에 `c13_shard_a`, `c13_shard_b` 두 DB를 만들고, 맡겨 둔 돈을 표시하는 `hold` 칸도 미리 넣었다(뒤에서 쓴다). alice 5만 원, dave 1만 원, 해지된 계좌 erin 0원으로 시작한다. 총액은 6만 원이다.
+
+```js
+// 조율 없이: 각 샤드에서 따로 커밋한다
+await a.query("UPDATE wallets SET balance = balance - $1 WHERE user_id = $2", [amount, from]);
+if (crashAfterDebit) throw new Error("지갑 서비스 프로세스가 여기서 죽었다");
+await b.query("UPDATE wallets SET balance = balance + $1 WHERE user_id = $2", [amount, to]);
+```
+
+```text
+[시작] A:alice=50000  B:dave=10000  B:erin=0  | 총액 60000
+1) 빼고 나서 넣기 전에 죽는다
+  A: alice -30000 커밋
+  오류: 지갑 서비스 프로세스가 여기서 죽었다
+[결과] A:alice=20000  B:dave=10000  B:erin=0  | 총액 30000
+```
+
+첫 장면의 3만 원이 이렇게 사라졌다. 샤드 A는 자기 일을 잘했다. 문제는 A의 커밋과 B의 커밋 사이에 프로세스가 죽을 틈이 있다는 것이다. 배포로 서버가 재시작되거나, 메모리가 모자라 프로세스가 강제 종료되거나, B로 가는 네트워크가 끊기면 이 틈에 걸린다.
+
+순서를 바꿔서 먼저 더하고 나중에 빼면 어떨까. 이번엔 alice가 가진 것보다 많은 6만 원을 보냈다.
+
+```text
+2) 넣고 나서 빼기 (alice 잔액보다 큰 60000원)
+  B: dave +60000 커밋
+  오류: new row for relation "wallets" violates check constraint "wallets_balance_check"
+[결과] A:alice=50000  B:dave=70000  B:erin=0  | 총액 120000
+```
+
+더 나쁘다. 돈이 6만 원 생겼다. dave는 그 돈을 바로 쓸 수 있다. 빼기 전에 더하면 잔액 확인을 건너뛴 셈이 된다. 그래서 어떤 방법을 쓰든 원칙 하나는 같다. 빼는 쪽을 먼저 하고, 더하는 쪽을 나중에 한다. 빼기가 끝나고 더하기 전의 상태는 돈이 "잠시 어디에도 없는" 상태라서 아무도 그 돈을 쓸 수 없다. 반대 순서의 중간 상태에서는 아직 빠지지 않은 돈을 받는 쪽이 쓸 수 있다.
+
+<SequenceDiagram
+  caption="조율 없는 송금: 두 커밋 사이에서 죽는다"
+  actors={[
+    { id: "svc", label: "지갑 서비스" },
+    { id: "a", label: "샤드 A" },
+    { id: "b", label: "샤드 B" },
+  ]}
+  steps={[
+    { from: "svc", to: "a", label: "alice -30000", title: "A에서 뺀다", detail: "로컬 트랜잭션 하나다." },
+    { from: "a", to: "svc", label: "COMMIT", title: "A가 커밋한다", detail: "이제 A의 변경은 되돌릴 수 없다. 디스크에 남았다." },
+    { from: "svc", to: "svc", label: "프로세스 종료", title: "서비스가 죽는다", detail: "배포, 강제 종료, 네트워크 끊김 무엇이든 된다. 아직 B에는 아무 말도 안 했다." },
+    { from: "b", to: "b", label: "dave 10000", title: "B는 아무것도 모른다", detail: "dave 잔액은 그대로다. 전체 합이 3만 원 줄었다." },
+  ]}
+/>
+
+## 2PC: 둘 다 준비시키고 한 번에 커밋한다
+
+가장 먼저 떠오르는 해법은 두 DB가 "커밋할 준비가 됐다"고 답할 때까지 기다렸다가 둘 다 커밋하게 하는 것이다. 이것이 2단계 커밋(2PC)이다. 동작 원리, 코디네이터가 결정 직전에 죽을 때의 블로킹, 복구 절차는 [2PC 글](/posts/distributed-transactions-2pc)에서 PostgreSQL 두 대로 자세히 다뤘다. 여기서는 지갑에 붙였을 때 무엇을 치르는지만 본다.
+
+PostgreSQL은 `PREPARE TRANSACTION`을 기본으로 꺼 두고(`max_prepared_transactions = 0`), 이 설정은 재시작이 필요하다. 공용 클러스터는 건드리지 않고 실습용 인스턴스를 따로 띄워(포트 17001, `max_prepared_transactions = 10`) 그 안에 DB 두 개를 만들었다. 한 인스턴스 안이지만 두 DB는 서로의 트랜잭션을 모른다. 샤드 두 대를 흉내 내기에 충분하다.
+
+```js
+// 1단계: 양쪽에서 일을 하고 준비만 한다
+await a.query("BEGIN");
+await a.query("UPDATE wallets SET balance = balance - 30000 WHERE user_id='alice'");
+await a.query("PREPARE TRANSACTION 't-0001-a'");   // 커밋은 안 했지만 디스크에 남겨 둔다
+await b.query("BEGIN");
+await b.query("UPDATE wallets SET balance = balance + 30000 WHERE user_id='dave'");
+await b.query("PREPARE TRANSACTION 't-0001-b'");
+// 준비된 사이에 alice의 다른 송금이 들어온다 (lock_timeout 2초)
+// 2단계: 둘 다 준비됐으니 커밋한다
+await a.query("COMMIT PREPARED 't-0001-a'");
+await b.query("COMMIT PREPARED 't-0001-b'");
+```
+
+```text
+준비된 트랜잭션(A): [
+  { gid: 't-0001-a', database: 'c13_2pc_a' },
+  { gid: 't-0001-b', database: 'c13_2pc_b' }
+]
+다른 송금: 2002ms 기다린 뒤 canceling statement due to lock timeout
+커밋 후: [ { user_id: 'alice', balance: '20000' } ] [ { user_id: 'dave', balance: '40000' } ]
+```
+
+`pg_prepared_xacts`는 인스턴스 전체를 보여서 두 DB의 준비된 트랜잭션이 함께 나왔다. 둘째 줄이 지갑에서 아픈 대목이다. 준비된 트랜잭션은 커밋될 때까지 alice 줄의 잠금을 쥐고 있다. 그동안 alice가 보내는 다른 송금은 줄을 서서 기다린다. 코디네이터가 2단계 직전에 죽으면 이 잠금은 누군가 결정을 내려 줄 때까지 풀리지 않는다.
+
+비용도 쟀다. 같은 연결로 이체 300건을 각자 커밋으로 한 번, 2PC로 한 번 돌렸다.
+
+```text
+각자 커밋(조율 없음): 300건 307ms, 건당 1.02ms
+2PC: 300건 765ms, 건당 2.55ms
+```
+
+이 머신, 로컬 연결 기준으로 2.5배쯤 느렸다. 왕복이 늘고 준비할 때도 디스크에 한 번 더 써야 해서다. 다른 장비에서는 숫자가 다르겠지만 왕복과 디스크 쓰기가 늘어난다는 사실은 같다. 2PC는 모든 참여자가 같은 프로토콜(PostgreSQL의 PREPARE, XA 같은)을 지원해야 한다는 조건도 있다. 샤드 대신 Redis나 외부 회사 API가 끼면 쓸 수 없다.
+
+<SequenceDiagram
+  caption="2PC로 송금할 때: 준비한 동안 alice 줄이 잠겨 있다"
+  actors={[
+    { id: "c", label: "코디네이터" },
+    { id: "a", label: "샤드 A" },
+    { id: "b", label: "샤드 B" },
+    { id: "o", label: "다른 송금" },
+  ]}
+  steps={[
+    { from: "c", to: "a", label: "PREPARE", title: "A를 준비시킨다", detail: "alice -30000을 하고 커밋은 미룬다. 줄 잠금은 그대로 남는다." },
+    { from: "c", to: "b", label: "PREPARE", title: "B를 준비시킨다", detail: "dave +30000. B도 커밋할 수 있다고 약속한다." },
+    { from: "o", to: "a", label: "alice -1000", title: "다른 송금이 끼어든다", detail: "같은 alice 줄을 고치려다 잠금에 막혀 기다린다." },
+    { from: "a", to: "o", label: "lock timeout", title: "2초 뒤 포기한다", detail: "준비 상태가 길어질수록 이렇게 실패하는 요청이 쌓인다." },
+    { from: "c", to: "a", label: "COMMIT PREPARED", title: "결정을 알린다", detail: "둘 다 준비됐으니 커밋한다." },
+    { from: "c", to: "b", label: "COMMIT PREPARED", title: "B도 커밋한다", detail: "이제 잠금이 풀리고 총액은 그대로 6만 원이다." },
+  ]}
+/>
+
+## Try-Confirm-Cancel: 먼저 묶어 두고 나중에 확정한다
+
+TC/C(Try-Confirm/Cancel)는 2PC와 모양이 비슷하지만 DB가 아니라 앱이 두 단계를 만든다. 각 단계가 로컬 트랜잭션 하나로 바로 커밋된다는 점이 다르다. 잠금을 길게 쥐지 않는다.
+
+- Try: 각 참여자가 할 일을 준비한다. 보내는 쪽은 돈을 `balance`에서 빼서 `hold`(묶어 둔 돈)로 옮긴다. 받는 쪽은 계좌를 쓸 수 있는지만 확인한다. 둘 다 바로 커밋한다.
+- Confirm: 모든 Try가 성공했으면 보내는 쪽은 `hold`를 비우고, 받는 쪽은 `balance`를 더한다.
+- Cancel: 하나라도 실패했으면 보내는 쪽은 `hold`를 `balance`로 되돌린다.
+
+카드 결제의 "승인"과 "매입"을 떠올리면 비슷하다. 승인 때 한도를 잡아 두고, 매입 때 실제로 가져간다.
+
+코디네이터는 거래마다 지금 어느 단계인지를 자기 DB(`c13_coord`)의 단계 상태 테이블에 적는다. 참여자 쪽에는 거래별로 어느 단계까지 했는지를 적는 `tcc_branch` 테이블이 있다. 이 표 덕분에 같은 단계가 두 번 와도 한 번만 반영된다.
+
+```sql
+-- 코디네이터: 거래 하나에 한 줄
+CREATE TABLE tcc_tx (
+  tx_id text PRIMARY KEY, from_user text, to_user text, amount bigint,
+  state text NOT NULL,                       -- TRYING → CONFIRMING → CONFIRMED / CANCELLING → CANCELLED
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- 각 샤드: 이 거래에서 내가 어디까지 했나
+CREATE TABLE tcc_branch (tx_id text PRIMARY KEY, phase text NOT NULL);  -- TRIED / CONFIRMED / CANCELLED
+```
+
+보내는 쪽 Try는 한 트랜잭션 안에서 단계 기록과 돈 옮기기를 같이 한다.
+
+```js
+await c.query("BEGIN");
+const ins = await c.query(
+  "INSERT INTO tcc_branch VALUES ($1,'TRIED') ON CONFLICT (tx_id) DO NOTHING RETURNING tx_id", [tx]);
+if (ins.rowCount === 0) { /* 이미 기록이 있다: 아래 '취소가 먼저 도착하면'에서 다룬다 */ }
+const w = (await c.query("SELECT balance, status FROM wallets WHERE user_id=$1 FOR UPDATE", [user])).rows[0];
+if (Number(w.balance) < amount) { await c.query("ROLLBACK"); return "실패(잔액 부족)"; }
+await c.query("UPDATE wallets SET balance = balance - $1, hold = hold + $1 WHERE user_id=$2", [amount, user]);
+await c.query("COMMIT");
+```
+
+성공하는 송금과 해지된 계좌(erin)로 보내 실패하는 송금을 돌렸다.
+
+```text
+[시작] A:alice=50000  B:dave=10000  B:erin=0  | 총액 60000
+  Try shard_a alice: OK
+  Try shard_b dave: OK
+[Try 뒤] A:alice=20000(hold 30000)  B:dave=10000  B:erin=0  | 총액 60000
+  Confirm shard_a alice: OK
+  Confirm shard_b dave: OK
+[끝] A:alice=20000  B:dave=40000  B:erin=0  | 총액 60000
+```
+
+```text
+  Try shard_a alice: OK
+  Try shard_b erin: 실패(계좌 사용 불가)
+[Try 뒤] A:alice=20000(hold 30000)  B:dave=10000  B:erin=0  | 총액 60000
+  Cancel shard_a alice: OK
+  Cancel shard_b erin: 빈 취소(표식만 남김)
+[끝] A:alice=50000  B:dave=10000  B:erin=0  | 총액 60000
+```
+
+총액 칸은 `balance + hold`를 더한 값이라 처음부터 끝까지 6만 원이다. 그런데 Try 뒤에 "쓸 수 있는 돈"만 더하면 3만 원이다. 3만 원이 잠시 `hold`에 묶여 있다. 이 상태는 거래가 진행 중일 때 늘 보인다. 괜찮은 이유는 앞에서 본 원칙 덕분이다. 빼는 쪽만 Try에서 움직이고 받는 쪽은 Confirm에서 받는다. 묶인 돈은 아무도 쓸 수 없다.
+
+아래 그림은 alice → dave 송금에서 세 칸이 어떻게 바뀌는지 보여 준다.
+
+<AlgoTrace
+  caption="TC/C 송금 중 잔액 세 칸의 변화"
+  cells={["시작", "Try A", "Try B", "Confirm A", "Confirm B"]}
+  memoryLabel="잔액"
+  steps={[
+    { caption: "alice 5만, dave 1만. 묶인 돈은 없다.", memory: ["alice 50000", "hold 0", "dave 10000"] },
+    { pointer: 1, caption: "A의 Try: 3만 원을 balance에서 hold로 옮기고 커밋한다.", memory: ["alice 20000", "hold 30000", "dave 10000"] },
+    { pointer: 2, found: [1], caption: "B의 Try: dave 계좌가 살아 있는지만 본다. 돈은 그대로다.", memory: ["alice 20000", "hold 30000", "dave 10000"] },
+    { pointer: 3, found: [1, 2], caption: "둘 다 OK라 확정한다. A는 hold를 비운다.", memory: ["alice 20000", "hold 0", "dave 10000"] },
+    { pointer: 4, found: [1, 2, 3, 4], caption: "B가 3만 원을 더한다. 총액은 내내 6만 원이었다.", memory: ["alice 20000", "hold 0", "dave 40000"] },
+  ]}
+/>
+
+Try에서 받는 쪽에 돈을 미리 넣으면 안 되는 이유도 같은 원리다. 미리 넣었다가 Cancel해야 하는데 그 사이 dave가 돈을 써 버렸다면 되돌릴 방법이 없다. 그래서 Try의 선택지는 사실상 하나다. 빼는 쪽은 묶고, 받는 쪽은 확인만 한다.
+
+## 코디네이터가 Try 도중에 죽으면
+
+이번엔 A의 Try가 끝난 직후 코디네이터를 죽였다. 단계 상태 테이블에는 `TRYING`이 남았다.
+
+```sql
+-- 끝나지 않은 채 오래 머문 거래 찾기
+SELECT tx_id, state, amount, date_trunc('second', now() - updated_at) AS stuck_for
+FROM tcc_tx
+WHERE state NOT IN ('CONFIRMED', 'CANCELLED')
+  AND updated_at < now() - interval '2 seconds';
+```
+
+```text
+ tx_id | state  | amount | stuck_for 
+-------+--------+--------+-----------
+ tx-3  | TRYING |  30000 | 00:00:03
+(1 row)
+```
+
+이 쿼리는 실무에서 대시보드와 알림에 그대로 건다. 몇 초 기준은 서비스에 맞게 정한다. 복구 작업은 이 목록을 읽고 규칙대로 마무리한다. `TRYING`에서 멈췄다면 어떤 Try가 성공했는지 확실히 모르니 취소한다. `CONFIRMING`이 적혀 있다면 결정이 이미 내려진 것이니 끝까지 확정한다.
+
+```text
+  Try shard_a alice: OK
+  (코디네이터가 여기서 죽었다)
+[죽은 직후] A:alice=20000(hold 30000)  B:dave=10000  B:erin=0  | 총액 60000
+복구 작업이 돈다
+  복구: tx-3 상태 TRYING
+  Cancel shard_a alice: OK
+  Cancel shard_b dave: 빈 취소(표식만 남김)
+[복구 뒤] A:alice=50000  B:dave=10000  B:erin=0  | 총액 60000
+```
+
+코디네이터는 Confirm이나 Cancel을 보내기 전에 그 결정을 먼저 상태 테이블에 적는다. 이 순서가 바뀌면 복구 작업이 결정을 모른 채 반대 결정을 내릴 수 있다. 한 번 Confirm으로 정했으면 Confirm이 실패해도 Cancel로 바꾸지 않는다. 받는 쪽 샤드가 잠시 죽었다면 살아날 때까지 Confirm을 다시 보낸다. 그래서 Confirm과 Cancel은 여러 번 와도 결과가 같아야 한다.
+
+```text
+Confirm이 한 번 더 온다(재시도)
+  Confirm shard_b dave: 변화 없음(이미 확정)
+[끝] A:alice=20000  B:dave=40000  B:erin=0  | 총액 60000
+```
+
+`tcc_branch`의 `phase='TRIED'`인 줄만 `CONFIRMED`로 바꾸는 조건부 UPDATE가 이 일을 한다. 바뀐 줄이 없으면 이미 처리된 것이니 돈을 건드리지 않는다.
+
+## 취소가 Try보다 먼저 도착하면
+
+TC/C에서 가장 놓치기 쉬운 경우다. 코디네이터가 A에 Try를 보냈는데 네트워크에서 늦어진다. 코디네이터는 시간 초과로 실패라고 보고 Cancel을 보낸다. Cancel이 먼저 도착하고, 늦은 Try가 그 뒤에 도착한다.
+
+Cancel을 받은 샤드는 이 거래의 기록이 없다. 되돌릴 게 없으니 아무것도 안 하면 될 것 같다. 그렇게 했을 때의 결과다.
+
+```text
+표식 없음. Try가 네트워크에서 늦어져 Cancel이 먼저 도착한다
+  Cancel shard_a alice: 빈 취소(아무것도 안 함)
+  늦은 Try shard_a alice: OK
+[끝] A:alice=20000(hold 30000)  B:dave=10000  B:erin=0  | 총액 60000
+```
+
+3만 원이 `hold`에 묶인 채로 남았다. 코디네이터는 이 거래를 이미 취소로 끝냈으니 다시는 Confirm도 Cancel도 보내지 않는다. 돈이 영영 묶인다. 이렇게 늦게 와서 걸려 있는 Try를 흔히 "매달린 Try"라고 부른다.
+
+고치는 방법은 빈 취소에도 표식을 남기는 것이다. 기록이 없는 거래에 Cancel이 오면 `CANCELLED` 줄을 넣어 둔다. 나중에 Try가 오면 `INSERT … ON CONFLICT DO NOTHING`이 아무것도 넣지 못하고, 기존 줄이 `CANCELLED`인 걸 보고 거절한다.
+
+```text
+표식 있음. Try가 네트워크에서 늦어져 Cancel이 먼저 도착한다
+  Cancel shard_a alice: 빈 취소(표식만 남김)
+  늦은 Try shard_a alice: 거절(이미 취소된 거래)
+[끝] A:alice=50000  B:dave=10000  B:erin=0  | 총액 60000
+```
+
+<SequenceDiagram
+  caption="빈 취소에 표식을 남겨 늦은 Try를 막는다"
+  actors={[
+    { id: "c", label: "코디네이터" },
+    { id: "net", label: "네트워크" },
+    { id: "a", label: "샤드 A" },
+  ]}
+  steps={[
+    { from: "c", to: "net", label: "Try tx-5", title: "Try를 보낸다", detail: "패킷이 어딘가에서 늦어진다." },
+    { from: "c", to: "c", label: "시간 초과", title: "실패로 판단한다", detail: "응답이 없으니 거래를 취소하기로 하고 상태 테이블에 적는다." },
+    { from: "c", to: "a", label: "Cancel tx-5", title: "Cancel이 먼저 도착한다", detail: "A에는 tx-5 기록이 없다. 되돌릴 것은 없지만 CANCELLED 줄을 남긴다." },
+    { from: "net", to: "a", label: "Try tx-5", title: "늦은 Try가 도착한다", detail: "INSERT가 충돌하고 기존 줄이 CANCELLED다. 돈을 묶지 않고 거절한다." },
+    { from: "a", to: "c", label: "거절", title: "alice 돈은 그대로다", detail: "표식이 없었다면 3만 원이 hold에 영영 묶였다." },
+  ]}
+/>
+
+같은 이유로 Cancel이 두 번 오거나 Confirm 뒤에 Cancel이 와도 무시하도록 만든다. 그래서 TC/C의 각 단계는 세 가지를 지켜야 한다. 여러 번 와도 한 번만 반영되고(멱등), 기록이 없을 때의 Cancel을 성공으로 받으며(빈 취소), 취소된 거래의 Try는 거절한다(매달림 방지).
+
+## 사가: 차례로 하고, 실패하면 반대로 되돌린다
+
+[사가](/posts/saga-pattern)는 단계를 순서대로 실행하고, 중간에 실패하면 이미 끝난 단계를 거꾸로 되돌리는 보상 단계를 실행한다. 지갑 송금이라면 단계는 두 개다. 1단계 alice에서 출금, 2단계 dave에게 입금. 1단계의 보상은 "출금 취소", 즉 alice에게 같은 금액을 다시 넣는 것이다.
+
+TC/C와 달리 `hold` 같은 묶어 두는 칸이 없다. 1단계에서 alice 잔액이 진짜로 줄어든다. 보상도 진짜 입금이다. 거래 내역에는 출금과 출금 취소가 두 줄로 남는다.
+
+```js
+for (const s of steps) {                     // 출금 → 입금 순서
+  const r = await step(s.db, tx, s.user, s.delta, s.name);
+  if (r !== "OK") {
+    for (const d of done.reverse()) if (d.comp) await step(d.db, tx, d.user, d.comp.delta, d.comp.name);
+    return;                                  // 보상까지 마치고 끝
+  }
+  done.push(s);
+}
+```
+
+```text
+2) alice → erin(해지된 계좌) 10000
+  출금 alice -10000: OK
+[출금 뒤] A:alice=10000  B:dave=40000  B:erin=0  | 총액 50000
+  입금 erin +10000: 실패(계좌 사용 불가)
+  보상: 출금 취소 alice +10000: OK
+[끝] A:alice=20000  B:dave=40000  B:erin=0  | 총액 60000
+```
+
+샤드 A의 거래 내역과 코디네이터의 사가 기록은 이렇게 남았다.
+
+```text
+s-1 출금 -30000
+s-2 출금 -10000
+s-2 출금 취소 10000
+```
+
+```text
+s-2 | 출금 시작
+s-2 | 출금 완료
+s-2 | 입금 시작
+s-2 | 입금 실패, 보상 시작
+s-2 | 출금 취소 완료
+s-2 | 끝(보상됨)
+```
+
+alice가 앱을 열면 "출금 1만 원", "출금 취소 1만 원" 두 줄을 본다. TC/C였다면 묶였다 풀린 것이라 내역에 남기지 않아도 된다. 어느 쪽이 나은지는 서비스가 정한다. 다만 사가의 중간 상태(출금 뒤 총액 5만 원)도 TC/C처럼 빼는 쪽이 먼저라서 돈이 생기지는 않는다.
+
+각 단계는 `history` 테이블의 `(tx_id, step)` 기본 키로 한 번만 반영된다. 오케스트레이터가 보상 도중에 죽었다가 다시 같은 보상을 보내도 두 번 입금되지 않는다. 오케스트레이션과 코레오그래피 중 무엇을 고를지, 상태 변경과 메시지 발행을 함께 묶는 아웃박스는 [사가 글](/posts/saga-pattern)에 있다. 지갑처럼 순서와 상태 추적이 중요한 곳에서는 지휘자가 순서를 쥐는 오케스트레이션이 다루기 쉽다.
+
+<NetworkTopology
+  caption="사가 송금: 입금이 실패하면 출금을 되돌린다"
+  width={440}
+  height={230}
+  zones={[
+    { id: "orch", label: "오케스트레이터", x: 10, y: 10, w: 150, h: 210, tone: "private" },
+    { id: "shards", label: "샤드", x: 200, y: 10, w: 230, h: 210, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "o", label: "사가 실행기", x: 85, y: 80, icon: "server" },
+    { id: "log", label: "사가 기록", x: 85, y: 170, icon: "db" },
+    { id: "a", label: "샤드 A", sub: "alice", x: 300, y: 60, icon: "db" },
+    { id: "b", label: "샤드 B", sub: "erin", x: 300, y: 170, icon: "db" },
+  ]}
+  links={[
+    { from: "o", to: "log" },
+    { from: "o", to: "a" },
+    { from: "o", to: "b" },
+  ]}
+  steps={[
+    { path: ["o", "log"], packet: "시작", title: "시작을 적는다", detail: "어디까지 했는지 기록해 두어야 죽었다 살아나도 이어 간다." },
+    { path: ["o", "a"], packet: "-10000", title: "1단계 출금", detail: "alice 잔액이 진짜로 줄고 커밋된다." },
+    { path: ["o", "b"], packet: "+10000", blocked: true, title: "2단계 입금 실패", detail: "erin 계좌가 해지돼 있다. 되돌릴 차례다." },
+    { path: ["o", "log"], packet: "보상", title: "보상 시작을 적는다", detail: "보상 중에 죽어도 기록을 보고 다시 보낸다." },
+    { path: ["o", "a"], packet: "+10000", title: "출금 취소", detail: "alice에게 같은 금액을 다시 넣는다. 새 트랜잭션이다." },
+  ]}
+/>
+
+## 무엇을 고르나
+
+세 방법을 같은 지갑에 붙여 보니 차이가 분명했다.
+
+| | 2PC | TC/C | 사가 |
+|---|---|---|---|
+| 첫 단계 뒤 상태 | 커밋 전, 잠금 쥠 | 커밋됨, 돈은 hold에 묶임 | 커밋됨, 돈이 실제로 빠짐 |
+| 실패 처리 | DB가 롤백 | Cancel이 hold를 풀어 줌 | 보상 단계가 반대로 입금 |
+| 잠금 시간 | 두 단계 내내 | 각 단계의 짧은 트랜잭션 | 각 단계의 짧은 트랜잭션 |
+| 참여자 조건 | 같은 2PC 프로토콜 지원 | 트랜잭션만 있으면 됨 | 트랜잭션만 있으면 됨 |
+| 단계 순서 | 동시에 준비 가능 | Try를 동시에 보낼 수 있음 | 차례대로 |
+| 복잡도가 사는 곳 | DB와 코디네이터 | 앱 코드(세 단계 × 참여자) | 앱 코드(단계와 보상) |
+
+2PC는 앱 코드가 가장 단순하지만 잠금을 오래 쥐고 모든 참여자가 같은 프로토콜을 알아야 한다. 송금량이 적고 샤드가 모두 같은 DB라면 괜찮은 선택이다. TC/C는 Try를 여러 참여자에게 동시에 보낼 수 있어 지연이 짧고, 묶인 돈(`hold`)이 눈에 보이는 상태로 남아 사용자에게 "처리 중"을 보여 주기 좋다. 대신 참여자마다 세 동작을 짜야 하고, 빈 취소와 매달린 Try를 직접 막아야 한다. 사가는 단계가 많고 외부 시스템이 끼는 긴 흐름(충전 → 수수료 → 포인트 적립)에 잘 맞는다. 참여자가 2개뿐이고 지연이 중요한 송금이라면 TC/C 쪽으로 기우는 경우가 많다.
+
+어느 방법을 골라도 빠지면 안 되는 게 하나 있다. 총액 검사다. 모든 샤드의 `balance + hold`를 더해 들어온 돈과 나간 돈의 기록과 맞춰 본다. 실습 중 Try 뒤 상태에서 샤드 A만 보면 이렇다.
+
+```sql
+SELECT sum(balance) AS available, sum(hold) AS held, sum(balance + hold) AS total FROM wallets;
+```
+
+```text
+ available | held  | total 
+-----------+-------+-------
+     20000 | 30000 | 50000
+(1 row)
+```
+
+`held`가 시간이 지나도 0으로 돌아오지 않으면 끝나지 않은 거래가 있다는 뜻이다. 앞의 "오래 머문 거래" 쿼리로 어떤 거래인지 찾는다. 외부 결제사와의 대사는 [결제 시스템 설계 ②](/posts/sd-payment-reliability)에서 다뤘다.
+
+현장에서 자주 보는 실수도 적어 둔다. 하나는 시간 초과를 실패로 보고 바로 Cancel하면서 빈 취소 표식을 남기지 않는 것이다. 위에서 본 묶인 돈이 이렇게 생긴다. 둘째는 Confirm이 실패했다고 Cancel로 돌아서는 것이다. 받는 쪽만 입금된 상태에서 보내는 쪽 hold가 풀리면 돈이 생긴다. 셋째는 단계 상태를 코디네이터 메모리에만 두는 것이다. 재시작하면 무엇이 진행 중이었는지 아무도 모른다.
+
+## 같은 지갑을 다음 글에서 다시 쌓는다
+
+샤드가 갈린 두 지갑 사이의 송금은 커밋 두 번 사이의 틈 때문에 깨진다. 2PC는 그 틈을 DB의 준비 상태로 메우고 잠금으로 비용을 치른다. TC/C는 돈을 먼저 묶어 두고 확정하거나 풀며, 빈 취소와 늦은 Try를 직접 막아야 한다. 사가는 차례로 실행하고 실패하면 반대 동작으로 되돌린다. 셋 모두 빼는 쪽을 먼저 하고, 단계 기록을 남기고, 단계를 멱등하게 만든다.
+
+이 글의 지갑은 잔액 칸 하나를 덮어쓴다. 그러면 "지난달 15일 오후 3시에 alice 잔액은 얼마였나", "코드를 바꾼 뒤에도 잔액 계산이 같은가"에 답하기 어렵다. [디지털 지갑 설계 ②](/posts/sd-wallet-event-sourcing)에서는 잔액 대신 잔액을 바꾼 사건을 저장하고, 그 기록을 다시 재생해 상태를 똑같이 되살린다.
+
+## 면접에서 나올 만한 질문
+
+### 두 사용자의 잔액이 다른 샤드에 있으면 무엇이 문제인가요?
+
+트랜잭션 하나로 두 줄을 묶을 수 없다. 각 샤드가 따로 커밋하면 두 커밋 사이에 프로세스가 죽을 수 있고, 그러면 한쪽만 바뀐다. 실험에서 출금 커밋 직후 서비스를 죽이자 총액이 6만 원에서 3만 원으로 줄었다. 순서를 바꿔 입금부터 하면 잔액 확인을 건너뛰어 돈이 생긴다.
+
+### 왜 출금을 먼저 하고 입금을 나중에 하나요?
+
+중간 상태가 안전해서다. 출금만 된 상태에서는 돈이 잠시 어디에도 없어서 아무도 쓸 수 없고, 나중에 보상하거나 확정하면 된다. 입금이 먼저 되면 받는 사람이 아직 빠지지 않은 돈을 써 버릴 수 있고, 그 뒤 출금이 실패하면 되돌릴 방법이 없다. TC/C의 Try가 받는 쪽에서 돈을 건드리지 않는 이유도 같다.
+
+### 2PC를 지갑에 쓰면 어떤 비용이 드나요?
+
+준비 단계부터 커밋까지 관련 줄의 잠금을 쥐고 있어 같은 계좌의 다른 송금이 기다린다. 실험에서 준비 상태인 동안 alice의 다른 송금이 2초 뒤 lock timeout으로 실패했다. 왕복과 디스크 쓰기도 늘어서 같은 조건에서 건당 시간이 2.5배쯤 됐다. 코디네이터가 결정 직전에 죽으면 잠금이 결정이 날 때까지 풀리지 않는 블로킹 문제도 있다.
+
+### TC/C와 2PC는 무엇이 다른가요?
+
+2PC는 DB가 커밋을 미뤄 두는 트랜잭션 하나이고, TC/C는 앱이 만든 단계마다 따로 커밋되는 로컬 트랜잭션들이다. TC/C의 Try는 돈을 hold로 옮기고 바로 커밋하니 잠금이 짧고, 참여자가 2PC 프로토콜을 몰라도 된다. 대신 Confirm과 Cancel이라는 업무 동작을 참여자마다 짜야 하고, 실패 처리도 앱이 책임진다.
+
+### TC/C에서 Cancel이 Try보다 먼저 도착하면 어떻게 되나요?
+
+아무것도 안 하면 늦게 도착한 Try가 돈을 묶고, 코디네이터는 이미 거래를 끝냈으니 그 돈이 영영 묶인다. 그래서 기록이 없는 거래에 Cancel이 오면 성공으로 응답하되 CANCELLED 표식을 남긴다. 늦은 Try는 그 표식을 보고 거절한다. 실험에서 표식이 없을 때 3만 원이 hold에 남았고, 표식을 남기자 잔액이 그대로였다.
+
+### 코디네이터가 도중에 죽으면 어떻게 복구하나요?
+
+거래마다 단계 상태를 코디네이터 DB에 적어 두고, 복구 작업이 끝나지 않은 거래를 찾아 마무리한다. TRYING에서 멈췄으면 어느 Try가 됐는지 모르니 취소하고, CONFIRMING이 적혀 있으면 확정을 끝까지 다시 보낸다. 이게 되려면 결정을 보내기 전에 먼저 적어야 하고, 각 단계가 여러 번 와도 한 번만 반영돼야 한다.
+
+### TC/C와 사가 중 무엇을 고르나요?
+
+참여자가 적고 지연이 중요하면 TC/C, 단계가 길고 외부 시스템이 끼면 사가가 낫다. TC/C는 Try를 동시에 보낼 수 있고 묶인 돈이 상태로 보여 "처리 중"을 표현하기 쉽다. 사가는 단계를 차례로 실행해 더 느리지만 참여자에게 출금과 입금 같은 보통의 동작과 보상만 있으면 된다. 사가는 사용자 내역에 출금과 출금 취소가 둘 다 남는다는 점도 고려한다.
+
+### 송금량이 10배가 되면 어디부터 손보나요?
+
+먼저 샤드 수를 계산해 늘리고, 같은 샤드에 사는 사용자끼리의 송금은 로컬 트랜잭션 하나로 끝내는 지름길을 둔다. 다음은 한 노드의 처리량을 올리는 것이다. 잔액을 덮어쓰는 대신 사건을 로컬 디스크에 이어 쓰는 방식이 그 방향인데, 다음 글에서 다룬다. 코디네이터도 상태가 DB에 있으니 여러 대로 늘릴 수 있고, 거래 id로 나눠 맡긴다.

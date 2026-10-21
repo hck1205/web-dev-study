@@ -1,0 +1,657 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-object-methods");
+
+카페 주문 화면에 "오늘 많이 팔린 메뉴"를 띄우는 코드가 있었다. 서버는 판매량 순서대로 메뉴를 담은 객체를 보낸다. 라떼가 120잔으로 1등이고, 시즌 메뉴는 메뉴 번호를 키로 쓴다.
+
+```js
+// 서버가 판매량 순으로 보낸 순위
+const ranking = JSON.parse('{"latte":120,"3001":95,"americano":80,"1002":60,"-5":10,"2.5":7}');
+console.log(Object.keys(ranking));
+```
+
+```text
+[ '1002', '3001', 'latte', 'americano', '-5', '2.5' ]
+```
+
+화면에는 60잔 팔린 1002번이 1등으로 올라왔다. JSON 문자열의 순서는 맞았는데 `Object.keys`가 돌려준 순서가 다르다. 버그가 아니라 명세에 적힌 규칙이다. 이 글은 이 규칙에서 시작해 객체의 속성을 꺼내고(`keys`, `values`, `entries`), 속성마다 붙은 스위치(속성 설명자)를 보고, 객체를 잠그는 세 단계(`preventExtensions`, `seal`, `freeze`)와 getter·setter까지 간다. 기준은 Node 22다.
+
+원시값과 객체가 메모리에서 어떻게 다른지는 [원시값과 참조값](/posts/js-primitive-vs-reference)에, 객체를 펼쳐 복사하는 문법은 [전개와 나머지](/posts/js-spread-rest)에 있다. 여기서는 그 위에서 객체 자체를 다루는 내장 함수를 본다.
+
+## 숫자처럼 생긴 키가 먼저 선다
+
+객체의 자기 속성 키 순서는 ES2015부터 명세가 정한다(`OrdinaryOwnPropertyKeys`). 세 묶음으로 나뉜다.
+
+1. 배열 인덱스처럼 생긴 키(`"0"`, `"10"`, `"3001"`처럼 0 이상 2³²−2 이하의 정수를 그대로 쓴 문자열)를 숫자 오름차순으로
+2. 나머지 문자열 키를 만들어진 순서대로
+3. 심볼 키를 만들어진 순서대로
+
+`"-5"`와 `"2.5"`는 숫자처럼 보이지만 배열 인덱스가 아니라서 두 번째 묶음에 들어간다. 아래 그림에서 다음을 누르면 키가 하나씩 들어올 때 결과 순서가 어떻게 정해지는지 본다.
+
+<AlgoTrace
+  caption="키가 들어온 순서와 Object.keys가 돌려주는 순서"
+  memoryLabel="Object.keys 결과"
+  cells={["latte", "3001", "americano", "1002", "-5", "2.5"]}
+  steps={[
+    { pointer: 0, memory: ["latte"], caption: "latte는 일반 문자열 키다. 문자열 묶음의 첫 자리에 선다." },
+    { pointer: 1, memory: ["3001", "latte"], caption: "3001은 정수 인덱스 키다. 정수 묶음은 문자열보다 앞에 선다." },
+    { pointer: 2, memory: ["3001", "latte", "americano"], caption: "americano는 문자열 묶음 끝에 붙는다. 들어온 순서를 지킨다." },
+    { pointer: 3, memory: ["1002", "3001", "latte", "americano"], caption: "1002도 정수 키다. 정수끼리는 크기순이라 3001 앞에 끼어든다." },
+    { pointer: 4, memory: ["1002", "3001", "latte", "americano", "-5"], caption: "-5는 음수라 배열 인덱스가 아니다. 문자열 취급이다." },
+    { pointer: 5, memory: ["1002", "3001", "latte", "americano", "-5", "2.5"], caption: "2.5도 정수가 아니라 문자열 묶음 끝에 선다." },
+    { found: [1, 3], memory: ["1002", "3001", "latte", "americano", "-5", "2.5"], caption: "판매 순위가 무너진 이유는 정수 키 두 개가 앞으로 정렬돼서다." },
+  ]}
+/>
+
+심볼까지 섞으면 세 묶음이 다 보인다.
+
+```js
+const sym = Symbol("meta");
+const o = { b: 1, 10: "x", a: 2, 2: "y", [sym]: 3 };
+console.log(Reflect.ownKeys(o));
+```
+
+```text
+[ '2', '10', 'b', 'a', Symbol(meta) ]
+```
+
+그러니 순서가 뜻을 갖는 데이터는 객체 키 순서에 맡기면 안 된다. 순위라면 `[{ id: "latte", sold: 120 }, ...]` 같은 배열로 받는다. 키-값 구조가 필요하고 넣은 순서도 지켜야 하면 `Map`을 쓴다. `Map`은 키가 숫자처럼 생겨도 넣은 순서 그대로 돈다.
+
+```js
+const m = new Map([["3001", 95], ["1002", 60]]);
+console.log([...m.keys()]);
+```
+
+```text
+[ '3001', '1002' ]
+```
+
+`JSON.parse`는 문자열을 읽는 순서대로 속성을 만들지만, 만든 결과는 결국 일반 객체라 같은 규칙을 따른다. 서버 쪽 언어에서 순서가 보장되는 딕셔너리로 만들어 보냈더라도 브라우저에 들어오는 순간 다시 정렬된다.
+
+## 꺼내는 함수마다 보는 속성이 다르다
+
+키를 꺼내는 방법은 여럿이고, 저마다 다른 속성을 본다. 갈림길은 두 가지다. 자기 속성(own)만 보나 프로토타입에서 물려받은 것도 보나, 그리고 열거 가능(enumerable)한 것만 보나다. 실험용 객체를 하나 만들었다.
+
+```js
+const base = { inherited: "from proto" };
+const product = Object.create(base);   // base를 프로토타입으로 삼는다
+product.name = "latte";
+product.price = 4500;
+product[Symbol("id")] = 7;
+Object.defineProperty(product, "cost", { value: 1800, enumerable: false }); // 원가는 숨긴다
+
+console.log("keys      ", Object.keys(product));
+console.log("values    ", Object.values(product));
+console.log("entries   ", Object.entries(product));
+const forIn = []; for (const k in product) forIn.push(k);
+console.log("for...in  ", forIn);
+console.log("ownNames  ", Object.getOwnPropertyNames(product));
+console.log("ownKeys   ", Reflect.ownKeys(product));
+console.log("JSON      ", JSON.stringify(product));
+```
+
+```text
+keys       [ 'name', 'price' ]
+values     [ 'latte', 4500 ]
+entries    [ [ 'name', 'latte' ], [ 'price', 4500 ] ]
+for...in   [ 'name', 'price', 'inherited' ]
+ownNames   [ 'name', 'price', 'cost' ]
+ownKeys    [ 'name', 'price', 'cost', Symbol(id) ]
+JSON       {"name":"latte","price":4500}
+```
+
+`Object.keys`, `values`, `entries`, 그리고 `JSON.stringify`는 같은 기준이다. 자기 속성이면서 열거 가능하고 문자열 키인 것만 본다. `for...in`만 프로토타입을 따라 올라가서 `inherited`를 더 가져온다. 숨긴 `cost`와 심볼은 `getOwnPropertyNames`, `Reflect.ownKeys`처럼 이름부터 "own"을 강조하는 함수만 찾는다. 아래 그림의 점이 각 함수가 닿는 속성으로 흐른다.
+
+<ConceptDiagram
+  caption="같은 객체라도 함수마다 닿는 속성이 다르다"
+  width={420}
+  height={280}
+  nodes={[
+    { id: "keys", label: "Object.keys", sub: "entries, JSON도", x: 80, y: 50, w: 130 },
+    { id: "forin", label: "for...in", sub: "상속까지", x: 80, y: 140, w: 130 },
+    { id: "own", label: "Reflect.ownKeys", sub: "자기 속성 전부", x: 80, y: 230, w: 130 },
+    { id: "enum", label: "name, price", sub: "자기, 열거 가능", x: 320, y: 40, w: 140 },
+    { id: "inh", label: "inherited", sub: "프로토타입", x: 320, y: 105, w: 140 },
+    { id: "hidden", label: "cost", sub: "열거 불가", x: 320, y: 170, w: 140 },
+    { id: "sym", label: "Symbol(id)", sub: "심볼 키", x: 320, y: 235, w: 140 },
+  ]}
+  edges={[
+    { from: "keys", to: "enum" },
+    { from: "forin", to: "enum" },
+    { from: "forin", to: "inh", dashed: true },
+    { from: "own", to: "enum" },
+    { from: "own", to: "hidden" },
+    { from: "own", to: "sym" },
+  ]}
+/>
+
+`for...in`이 프로토타입까지 본다는 점은 지금은 거의 사고를 내지 않는다. 내장 메서드는 모두 열거 불가로 정의돼 있어서 `toString` 같은 것이 끼어들지 않기 때문이다. 문제는 누군가 `Object.prototype.foo = ...`처럼 프로토타입에 열거 가능한 속성을 직접 붙였을 때다. 그러면 모든 객체의 `for...in`에 `foo`가 나타난다. 오래된 라이브러리가 이런 짓을 하던 시절의 습관이 `for...in` 안에서 `hasOwnProperty`를 검사하는 코드다. 요즘은 처음부터 `Object.keys`나 `Object.entries`를 돌리는 편이 단순하다. 프로토타입이 무엇인지는 [프로토타입 체인](/posts/js-prototype-chain)에서 본다.
+
+### 속성이 있는지 묻는 세 가지 방법
+
+`"key" in obj`는 프로토타입까지 보고, `Object.hasOwn(obj, "key")`는 자기 속성만 본다. 열거 가능 여부는 따지지 않는다.
+
+```js
+console.log("in        ", "inherited" in product, "hasOwn", Object.hasOwn(product, "inherited"), Object.hasOwn(product, "cost"));
+```
+
+```text
+in         true hasOwn false true
+```
+
+세 번째 방법인 `obj.hasOwnProperty("key")`는 이제 쓰지 않는 편이 낫다. 이 메서드는 `Object.prototype`에서 빌려 오는 것이라, 프로토타입이 없는 객체나 키 이름이 `hasOwnProperty`인 객체에서 깨진다.
+
+```js
+const dict = Object.create(null);   // 프로토타입이 없는 사전
+dict.x = 1;
+try { dict.hasOwnProperty("x"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+console.log("hasOwn on null-proto", Object.hasOwn(dict, "x"));
+
+const tricky = JSON.parse('{"hasOwnProperty": 1, "a": 2}'); // 사용자 입력이 키가 됐다
+try { tricky.hasOwnProperty("a"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+TypeError: dict.hasOwnProperty is not a function
+hasOwn on null-proto true
+TypeError: tricky.hasOwnProperty is not a function
+```
+
+`Object.hasOwn`은 ES2022에 들어왔고 Node 16.9, 크롬 93, 사파리 15.4부터 쓸 수 있다. 프로토타입이 없는 객체는 생각보다 자주 만난다. `Object.groupBy`의 결과가 그렇고, 사용자 입력을 키로 쓰는 사전을 `Object.create(null)`로 만드는 코드도 흔하다. `__proto__` 같은 키로 프로토타입을 오염시키는 공격을 피하려고 일부러 그렇게 만든다.
+
+## entries로 풀었다가 fromEntries로 묶는다
+
+배열에는 `map`, `filter`가 있는데 객체에는 없다. 그래서 객체를 `[키, 값]` 쌍의 배열로 풀고, 배열 메서드로 가공한 다음, 다시 객체로 묶는 흐름을 자주 쓴다. 메뉴 가격표에서 4500원 이상만 골라 10% 할인한 가격표를 만들어 보자.
+
+```js
+const prices = { latte: 4500, americano: 4000, mocha: 5200 };
+const discounted = Object.fromEntries(
+  Object.entries(prices)                              // [["latte", 4500], ...]
+    .filter(([, price]) => price >= 4500)             // 값만 보고 거른다
+    .map(([name, price]) => [name, Math.round(price * 0.9)]) // 쌍을 새 쌍으로
+);
+console.log(discounted);
+```
+
+```text
+{ latte: 4050, mocha: 4680 }
+```
+
+<AlgoTrace
+  caption="Object.entries → filter → map → Object.fromEntries"
+  memoryLabel="새로 묶이는 객체"
+  cells={["latte: 4500", "americano: 4000", "mocha: 5200"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "entries가 객체를 키-값 쌍 세 개로 푼다. 원본 prices는 그대로다." },
+    { pointer: 0, memory: ["latte: 4050"], caption: "latte는 4500원이라 통과한다. 0.9를 곱해 4050이 된다." },
+    { pointer: 1, memory: ["latte: 4050"], caption: "americano는 4000원이라 filter에서 빠진다." },
+    { pointer: 2, memory: ["latte: 4050", "mocha: 4680"], caption: "mocha는 5200원, 할인하면 4680이다." },
+    { found: [0, 2], memory: ["latte: 4050", "mocha: 4680"], caption: "fromEntries가 남은 쌍으로 새 객체를 만든다." },
+  ]}
+/>
+
+`Object.fromEntries`는 `[키, 값]`을 내놓는 이터러블이면 무엇이든 받는다. `Object.fromEntries(new URLSearchParams("page=2&sort=price"))`는 `{ page: '2', sort: 'price' }`가 되고, `Map`도 바로 객체가 된다. 쿼리 문자열을 이렇게 바꾸면 값은 모두 문자열이고, 같은 키가 여러 번 오면 마지막 값만 남는다(`page=2&page=3`이면 `'3'`).
+
+배열을 기준값으로 묶어 객체로 만드는 `Object.groupBy`(ES2024)는 [배열 변환 메서드](/posts/js-array-transform)에서 다룬다. 그 결과가 프로토타입 없는 객체여서 앞의 `hasOwn` 이야기와 이어진다.
+
+## 속성 하나에 스위치가 네 개 붙어 있다
+
+`product.name = "latte"`로 만든 속성은 값만 있는 것처럼 보이지만, 엔진 안에서는 속성마다 설정이 몇 개 더 붙어 있다. 이 묶음을 속성 설명자(property descriptor)라고 부르고 `Object.getOwnPropertyDescriptor`로 볼 수 있다.
+
+```js
+const user = { name: "kim" };
+console.log(Object.getOwnPropertyDescriptor(user, "name"));
+```
+
+```text
+{ value: 'kim', writable: true, enumerable: true, configurable: true }
+```
+
+아래 조각을 하나씩 눌러 각 스위치가 무엇을 막는지 보자.
+
+<UrlAnatomy
+  caption="데이터 속성의 설명자"
+  base='Object.defineProperty(user, "id",'
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "value", value: "42", display: "value: 42", title: "value", description: "속성에 든 값이다. 읽으면 이 값이 나온다.", required: true },
+    { key: "writable", value: "false", display: "writable: false", title: "writable", description: "false면 대입으로 값을 바꿀 수 없다. sloppy 모드에서는 조용히 무시되고, strict 모드에서는 TypeError가 난다." },
+    { key: "enumerable", value: "false", display: "enumerable: false", title: "enumerable", description: "false면 Object.keys, for...in, 전개, JSON.stringify에서 빠진다. 속성은 그대로 있고 직접 읽으면 값이 나온다." },
+    { key: "configurable", value: "false", display: "configurable: false }", title: "configurable", description: "false면 delete로 지울 수 없고, 설명자를 다시 바꿀 수도 없다. 한 번 false로 만들면 되돌릴 방법이 없다.", code: "TypeError: Cannot redefine property: id" },
+  ]}
+/>
+
+`defineProperty`에서 가장 흔한 실수는 기본값이다. 대입으로 만든 속성은 세 스위치가 모두 `true`지만, `defineProperty`로 만들면서 적지 않은 스위치는 모두 `false`가 된다.
+
+```js
+Object.defineProperty(user, "id", { value: 42 });          // 값만 적었다
+console.log(Object.getOwnPropertyDescriptor(user, "id"));
+user.id = 7;                                               // 조용히 무시된다
+console.log(user.id, Object.keys(user), JSON.stringify(user));
+try { Object.defineProperty(user, "id", { value: 8 }); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+delete user.id;
+console.log("after delete", user.id);
+```
+
+```text
+{ value: 42, writable: false, enumerable: false, configurable: false }
+42 [ 'name' ] {"name":"kim"}
+TypeError: Cannot redefine property: id
+after delete 42
+```
+
+값 하나만 넣었는데 읽기 전용에, 목록에서 숨고, 지울 수도 없는 속성이 됐다. 대입과 `delete`는 에러 없이 무시됐다. 같은 코드를 ES 모듈(`.mjs`)처럼 strict 모드에서 돌리면 그 자리에서 터진다.
+
+```text
+TypeError: Cannot assign to read only property 'id' of object '#<Object>'
+TypeError: Cannot delete property 'id' of #<Object>
+```
+
+조용히 무시되는 쪽이 더 위험하다. 값이 안 바뀌었는데 아무 신호도 없으니 한참 뒤의 엉뚱한 곳에서 증상이 나온다. 번들러가 만드는 ES 모듈 코드와 클래스 본문은 자동으로 strict 모드라서 요즘 프런트엔드 코드는 대부분 바로 에러를 본다. 오래된 스크립트 태그 코드나 Node의 CommonJS 파일은 sloppy 모드일 수 있다. strict 모드의 다른 차이는 [strict 모드](/posts/js-strict-mode)에 모아 두었다.
+
+`enumerable: false`는 숨기기에 쓴다. 객체에 내부용 값을 붙이되 직렬화나 복사에는 끼지 않게 하고 싶을 때다. 클래스의 메서드가 `for...in`에 나오지 않는 것도 프로토타입에 열거 불가로 정의되기 때문이다.
+
+## 읽고 쓸 때 함수를 부르는 속성
+
+설명자에는 `value`·`writable` 대신 `get`·`set`을 가진 종류도 있다. 이런 속성을 접근자 속성(accessor property)이라고 한다. 읽으면 `get` 함수가, 대입하면 `set` 함수가 불린다. 장바구니 합계처럼 다른 값에서 계산되는 값에 쓴다.
+
+```js
+const cart = {
+  items: [{ price: 4500, qty: 2 }, { price: 5200, qty: 1 }],
+  get total() {
+    return this.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+  },
+};
+console.log(cart.total);
+cart.items.push({ price: 4000, qty: 1 });
+console.log(cart.total);                    // 읽을 때마다 다시 계산한다
+console.log(Object.getOwnPropertyDescriptor(cart, "total"));
+console.log(JSON.stringify(cart));          // 직렬화할 때 getter가 불려 값이 박힌다
+cart.total = 0;                             // setter가 없으니 무시된다
+console.log("after assign", cart.total);
+```
+
+```text
+14200
+18200
+{
+  get: [Function: get total],
+  set: undefined,
+  enumerable: true,
+  configurable: true
+}
+{"items":[{"price":4500,"qty":2},{"price":5200,"qty":1},{"price":4000,"qty":1}],"total":18200}
+after assign 18200
+```
+
+합계를 따로 저장하지 않으니 항목과 어긋날 일이 없다. 대신 읽을 때마다 계산한다. `JSON.stringify`가 getter를 불러 그 순간의 값을 결과에 넣었다는 점도 보자. 서버로 보낸 JSON에 계산 값이 같이 실리는데, 받는 쪽에서는 이게 계산된 값인지 알 수 없다.
+
+setter는 값이 들어오는 길목을 지키는 데 쓴다. 잔액에 음수나 소수가 들어오지 못하게 막는 예다. 아래 그림에서 다음을 누르면 값이 setter를 거쳐 저장 칸에 들어가고, getter를 거쳐 나오는 흐름을 본다.
+
+```js
+const account = {
+  _balance: 0,
+  get balance() { return this._balance; },
+  set balance(v) {
+    if (!Number.isInteger(v) || v < 0) throw new RangeError(`잘못된 잔액: ${v}`);
+    this._balance = v;
+  },
+};
+account.balance = 1000;
+console.log(account.balance);
+try { account.balance = -5; } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+1000
+RangeError: 잘못된 잔액: -5
+```
+
+<SequenceDiagram
+  caption="account.balance에 쓰고 읽을 때 일어나는 일"
+  actors={[
+    { id: "code", label: "호출하는 코드" },
+    { id: "set", label: "set balance" },
+    { id: "slot", label: "_balance" },
+    { id: "get", label: "get balance" },
+  ]}
+  steps={[
+    { from: "code", to: "set", label: "balance = 1000", title: "대입이 setter를 부른다", detail: "account에 balance라는 접근자 속성이 있으니 값을 저장하지 않고 set 함수에 1000을 넘긴다." },
+    { from: "set", to: "set", label: "정수, 0 이상?", title: "들어온 값을 검사한다", detail: "정수이고 음수가 아니라서 통과한다." },
+    { from: "set", to: "slot", label: "_balance = 1000", title: "실제 칸에 저장한다", detail: "값은 이름이 다른 _balance에 들어간다. 같은 이름에 대입하면 setter가 자기를 다시 부른다." },
+    { from: "code", to: "get", label: "account.balance", title: "읽기는 getter를 부른다", detail: "속성을 읽으면 get 함수가 실행되고 그 반환값이 읽은 값이 된다." },
+    { from: "get", to: "slot", label: "읽기", title: "저장 칸에서 꺼낸다", detail: "_balance의 1000을 돌려준다." },
+    { from: "code", to: "set", label: "balance = -5", title: "잘못된 값이 들어온다", detail: "같은 길로 setter에 -5가 들어간다." },
+    { from: "set", to: "code", label: "RangeError", title: "저장하기 전에 막는다", detail: "검사에서 걸려 예외를 던진다. _balance는 1000 그대로다." },
+  ]}
+/>
+
+그림의 세 번째 단계 설명이 setter의 대표적인 실수다. setter 안에서 자기 이름에 대입하면 그 대입이 또 setter를 부른다.
+
+```js
+const broken = { set name(v) { this.name = v; } };
+try { broken.name = "kim"; } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+RangeError: Maximum call stack size exceeded
+```
+
+`_balance` 같은 밑줄 이름은 관례일 뿐이라 바깥에서 얼마든지 고칠 수 있다. 진짜로 감춰야 하면 클래스의 `#private` 필드를 쓴다([클래스](/posts/js-classes) 참고). private 필드는 `Object.keys`에도 `JSON.stringify`에도 나오지 않는다.
+
+```js
+class Order { #secret = 1; constructor() { this.id = 1; } get label() { return "o" + this.id; } }
+console.log(JSON.stringify(new Order()), Object.keys(new Order()));
+```
+
+```text
+{"id":1} [ 'id' ]
+```
+
+클래스의 getter인 `label`도 빠졌다. 클래스에 쓴 getter는 인스턴스가 아니라 프로토타입에 정의되니 자기 속성만 보는 함수와 JSON에 잡히지 않는다. 객체 리터럴에 쓴 `cart.total`이 JSON에 실린 것과 반대다.
+
+### 한 번만 계산하고 값으로 바꿔 두기
+
+무거운 계산을 처음 읽을 때 한 번만 하고 싶을 때 쓰는 패턴이 있다. getter 안에서 자기 자신을 같은 이름의 데이터 속성으로 다시 정의한다.
+
+```js
+let calls = 0;
+const config = {
+  get parsed() {
+    calls++;
+    const value = { theme: "dark" }; // 무거운 계산이라고 치자
+    Object.defineProperty(this, "parsed", { value, enumerable: true });
+    return value;
+  },
+};
+config.parsed; config.parsed; config.parsed;
+console.log("calls:", calls, Object.getOwnPropertyDescriptor(config, "parsed"));
+```
+
+```text
+calls: 1 {
+  value: { theme: 'dark' },
+  writable: false,
+  enumerable: true,
+  configurable: true
+}
+```
+
+세 번 읽었는데 계산은 한 번이다. 결과를 보면 `writable`은 적지 않아서 `false`가 됐고, `configurable`은 원래 속성의 `true`가 남았다. 기존 속성을 다시 정의할 때는 적지 않은 스위치가 이전 값을 유지하고, 접근자에서 데이터 속성으로 바뀔 때 새로 생기는 `writable`만 기본값 `false`를 받는다. 결과를 나중에 바꿀 일이 있으면 `writable: true`를 직접 적는다.
+
+## 잠금은 세 단계다
+
+객체 전체를 잠그는 함수는 세 개이고, 뒤로 갈수록 많이 막는다. `Object.preventExtensions`는 새 속성 추가만 막는다. `Object.seal`은 거기에 더해 모든 속성을 `configurable: false`로 만들어 삭제와 재정의를 막는다. `Object.freeze`는 모든 데이터 속성을 `writable: false`로까지 만들어 값 변경도 막는다. 동작마다 새 객체를 만들어 strict 모드에서 시험했다.
+
+```js
+// 모듈 파일은 strict 모드라서 막힌 동작이 TypeError를 던진다
+const ops = {
+  add: (o) => { o.size = "L"; },
+  change: (o) => { o.price = 5000; },
+  delete: (o) => { delete o.price; },
+  redefine: (o) => { Object.defineProperty(o, "price", { enumerable: false }); },
+};
+for (const [label, lock] of [["plain", (o) => o], ["preventExtensions", Object.preventExtensions], ["seal", Object.seal], ["freeze", Object.freeze]]) {
+  const row = Object.entries(ops).map(([name, op]) => {
+    const o = lock({ price: 4500 }); // 동작마다 새 객체로 시험한다
+    try { op(o); return `${name}:ok`; } catch { return `${name}:X`; }
+  });
+  console.log(label.padEnd(18), row.join("  "));
+}
+```
+
+```text
+plain              add:ok  change:ok  delete:ok  redefine:ok
+preventExtensions  add:X  change:ok  delete:ok  redefine:ok
+seal               add:X  change:ok  delete:X  redefine:X
+freeze             add:X  change:X  delete:X  redefine:X
+```
+
+아래 그림은 같은 결과를 단계별로 보여 준다. 초록으로 남는 칸이 그 단계에서 아직 허용되는 동작이다.
+
+<AlgoTrace
+  caption="잠금 단계가 올라갈수록 허용되는 동작이 줄어든다"
+  memoryLabel="막힌 동작"
+  cells={["추가", "값 변경", "삭제", "재정의"]}
+  steps={[
+    { found: [0, 1, 2, 3], memory: [], caption: "보통 객체는 네 동작이 모두 된다." },
+    { pointer: 0, found: [1, 2, 3], memory: ["추가"], caption: "preventExtensions는 새 속성 추가만 막는다. 있는 속성은 지울 수도 있다." },
+    { pointer: 2, found: [1], memory: ["추가", "삭제", "재정의"], caption: "seal은 모든 속성을 configurable: false로 만든다. 값만 바꿀 수 있다." },
+    { pointer: 1, found: [], memory: ["추가", "삭제", "재정의", "값 변경"], caption: "freeze는 writable까지 false로 만든다. 이 객체의 속성은 더는 바뀌지 않는다." },
+  ]}
+/>
+
+설명자를 보면 차이가 그대로 드러난다.
+
+```js
+console.log(Object.getOwnPropertyDescriptor(Object.seal({ a: 1 }), "a"));
+console.log(Object.getOwnPropertyDescriptor(Object.freeze({ a: 1 }), "a"));
+const f = Object.freeze({ a: 1 });
+console.log(Object.isFrozen(f), Object.isSealed(f), Object.isExtensible(f));
+```
+
+```text
+{ value: 1, writable: true, enumerable: true, configurable: false }
+{ value: 1, writable: false, enumerable: true, configurable: false }
+true true false
+```
+
+세 함수 모두 되돌리는 방법이 없다. 얼린 객체를 다시 녹일 수는 없고, 바꾸려면 사본을 만든다.
+
+### 얼려도 바뀌는 것들
+
+`freeze`는 속성 칸을 얼릴 뿐, 칸이 가리키는 안쪽 객체까지 얼리지는 않는다. 이 얕음은 [원시값과 참조값](/posts/js-primitive-vs-reference)에서 본 그대로다. 여기서는 그 밖에 얼려도 막히지 않는 것들을 보자.
+
+```js
+const list = Object.freeze([1, 2]);
+try { list.push(3); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+try { list.sort(); console.log("sort ok"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+console.log(list.toReversed(), list.map((x) => x * 2));   // 사본을 만드는 메서드는 된다
+
+const m = Object.freeze(new Map()); m.set("a", 1); console.log("frozen map size", m.size);
+const d = Object.freeze(new Date(0)); d.setFullYear(2030); console.log(d.getFullYear());
+try { Object.freeze(new Uint8Array(2)); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+TypeError: Cannot add property 2, object is not extensible
+TypeError: Cannot assign to read only property '0' of object '[object Array]'
+[ 2, 1 ] [ 2, 4 ]
+frozen map size 1
+2030
+TypeError: Cannot freeze array buffer views with elements
+```
+
+배열은 얼리면 `push`, `sort`처럼 원본을 고치는 메서드가 모두 막힌다. `sort`는 strict 모드가 아닌 코드에서 불러도 TypeError다. 메서드 안에서 실패를 에러로 처리하도록 명세가 정해 두었기 때문이다. 반면 `Map`, `Set`, `Date`는 데이터를 속성이 아니라 내부 슬롯에 들고 있어서 얼려도 `set`, `setFullYear`가 그대로 동작한다. 요소가 있는 TypedArray는 얼리는 것 자체가 에러다.
+
+## React 개발 모드는 props를 얼려 둔다
+
+React 코드에서 이 함수들을 직접 부를 일은 많지 않지만, React가 대신 부르는 곳이 있다. 개발 빌드는 JSX가 만든 요소 객체와 `props`를 `Object.freeze`로 얼린다. 컴포넌트가 받은 props를 고치는 실수를 일찍 잡으려는 장치다. React 19로 확인했다.
+
+```js
+import { createElement } from "react";
+function Badge(props) { return null; }
+const el = createElement(Badge, { label: "new", style: { color: "red" } });
+console.log(Object.isFrozen(el), Object.isFrozen(el.props), Object.isFrozen(el.props.style));
+try { el.props.label = "sale"; } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+el.props.style.color = "blue";   // 안쪽 객체는 얼지 않았다
+console.log(el.props.style);
+```
+
+개발 빌드(`NODE_ENV=development`)에서 돌린 결과다.
+
+```text
+true true false
+TypeError: Cannot assign to read only property 'label' of object '#<Object>'
+{ color: 'blue' }
+```
+
+같은 코드를 프로덕션 빌드(`NODE_ENV=production`)로 돌리면 이렇다.
+
+```text
+false false false
+{ color: 'blue' }
+```
+
+두 가지가 보인다. 이것도 한 층만 얼린다. `props.style.color`를 고치는 코드는 개발 모드에서도 아무 소리 없이 통과한다. 그리고 프로덕션 빌드는 얼리지 않는다. 개발 중에 `Cannot assign to read only property`를 봤다면 props를 고치는 코드가 있다는 뜻이니 에러를 끄지 말고 고칠 곳을 찾는다. 반대로 "로컬에서는 에러가 나는데 배포본에서는 조용하다"는 증상도 이 차이에서 나온다.
+
+상태 라이브러리 Immer도 만들어 낸 상태를 기본으로 깊게 얼린다. 상태를 고치지 않고 새로 만드는 이유와 그 방법은 [불변 업데이트](/posts/js-immutability-react)에서 이어진다.
+
+`Object.entries`는 React에서 객체를 목록으로 그릴 때 자주 쓴다. 이때 앞에서 본 키 순서 규칙이 그대로 화면 순서가 된다.
+
+```jsx
+{Object.entries(stockByMenuId).map(([id, count]) => (
+  <li key={id}>{id}: {count}</li>
+))}
+```
+
+메뉴 id가 숫자 문자열이면 화면은 id 오름차순으로 그려진다. 원하는 순서가 따로 있다면 배열로 정렬해서 그린다.
+
+## TypeScript가 Object.keys를 string[]로 두는 이유
+
+TypeScript를 쓰면 이런 에러를 한 번은 만난다.
+
+```ts
+interface Price { latte: number; mocha: number }
+const prices: Price = { latte: 4500, mocha: 5200 };
+for (const key of Object.keys(prices)) {
+  console.log(prices[key]);
+}
+```
+
+```text
+om9.ts(4,15): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type 'Price'.
+  No index signature with a parameter of type 'string' was found on type 'Price'.
+```
+
+`Object.keys(prices)`의 타입이 `("latte" | "mocha")[]`가 아니라 `string[]`이라서다. TypeScript 5.9로 확인했다. 실수가 아니라 의도한 설계다. TypeScript는 구조로 타입을 맞추기 때문에 `Price` 타입 변수에 키가 더 많은 객체가 들어올 수 있다. 런타임에서는 그 키도 나온다.
+
+```js
+const fromApi = { latte: 4500, mocha: 5200, updatedAt: "2026-10-22" };
+const prices = fromApi; // TS에서도 Price 타입에 대입할 수 있다
+let sum = 0;
+for (const k of Object.keys(prices)) sum += prices[k];
+console.log(sum);
+```
+
+```text
+97002026-10-22
+```
+
+합계가 숫자 덧셈 중간에 문자열을 만나 이어 붙여졌다. `Object.keys`가 `keyof Price`를 돌려준다고 거짓말을 했다면 타입 검사는 통과하고 이 버그가 런타임에 나왔을 것이다. 키를 확실히 아는 경우라면 `(Object.keys(prices) as (keyof Price)[])`로 단언할 수 있지만, 그 확신은 개발자가 지는 것이다. 키 목록이 고정이면 `const MENU = ["latte", "mocha"] as const`처럼 배열을 따로 두고 그걸 돌리는 편이 안전하다.
+
+같은 맥락에서 `Readonly<T>`와 `as const`는 컴파일할 때만 대입을 막는다. 런타임 객체는 그대로 열려 있다. 반대로 `Object.freeze`는 런타임에 막고, 반환 타입도 `Readonly<T>`라 타입 검사에서도 막힌다.
+
+```ts
+const settings = { theme: "dark" } as const;
+settings.theme = "light";
+```
+
+```text
+om9.ts(7,10): error TS2540: Cannot assign to 'theme' because it is a read-only property.
+```
+
+JSON으로 들어온 값이나 `any`를 거친 값에는 타입 보호가 닿지 않으니, 정말 바뀌면 안 되는 설정 객체라면 둘을 같이 쓴다.
+
+## 이런 증상이면 이 함수부터 의심한다
+
+객체 메서드 때문에 생기는 버그는 증상이 비슷하게 반복된다.
+
+화면 순서가 서버가 준 순서와 다르면 키가 숫자 문자열인지 본다. 개발자 도구 콘솔에서 `Object.keys(data)`를 찍어 보면 바로 보인다. 순서에 뜻이 있으면 배열이나 `Map`으로 바꾼다.
+
+서버로 보낸 JSON에 필드가 빠져 있으면 그 필드가 열거 불가인지, 심볼 키인지, 클래스 getter인지 본다. `Object.getOwnPropertyDescriptor(obj, "field")`가 `undefined`면 자기 속성이 아니고, `enumerable: false`면 숨겨진 것이다. 클래스 인스턴스는 `toJSON` 메서드를 두면 직렬화 모양을 직접 정할 수 있다.
+
+`x.hasOwnProperty is not a function`이 나면 프로토타입 없는 객체다. `Object.groupBy` 결과나 `Object.create(null)`로 만든 사전, 혹은 사용자 입력이 키가 된 객체다. `Object.hasOwn`으로 바꾼다.
+
+값을 대입했는데 바뀌지 않고 에러도 없으면 sloppy 모드에서 얼린 객체나 `writable: false` 속성을 고친 것이다. 파일 맨 위에 `"use strict"`를 넣거나 모듈로 바꿔 에러로 드러나게 한 뒤 스택을 따라간다.
+
+개발 모드에서만 `Cannot assign to read only property`가 나면 React가 얼린 props나 Immer가 얼린 상태를 고치는 코드다. 에러가 가리키는 줄이 바로 고칠 곳이다.
+
+## deepFreeze를 직접 만들어 보기
+
+`freeze`가 한 층만 얼리니, 테스트나 개발 모드에서 상태를 통째로 얼려 두고 싶을 때는 깊게 얼리는 함수를 만든다. 아래 코드는 지금 한 층만 얼린다. 모든 테스트가 통과하도록 고쳐 보자. 앞에서 본 것들이 함정으로 숨어 있다. 얼릴 수 없는 객체, 부르면 안 되는 getter, 그리고 바깥만 얼어 있는 객체다.
+
+<CodePlayground
+  caption="deepFreeze 만들기"
+  functionName="check"
+  initialCode={`// 지금은 한 층만 얼린다. 안쪽 객체와 배열까지 얼리도록 고쳐 보자.
+function deepFreeze(value) {
+  return Object.freeze(value);
+}
+
+// 아래는 고치지 않는다
+function check(name) {
+  if (name === "nested") { const o = deepFreeze({ a: { b: { c: 1 } } }); try { o.a.b.c = 2; } catch {} return [Object.isFrozen(o.a.b), o.a.b.c]; }
+  if (name === "array") { const o = deepFreeze({ tags: [{ name: "sale" }] }); return [Object.isFrozen(o.tags), Object.isFrozen(o.tags[0])]; }
+  if (name === "same") { const o = { a: 1 }; return [deepFreeze(o) === o, deepFreeze("latte")]; }
+  if (name === "cycle") { const node = { child: {} }; node.child.parent = node; deepFreeze(node); return Object.isFrozen(node.child); }
+  if (name === "frozen-outside") { const inner = { x: 1 }; deepFreeze(Object.freeze({ inner })); return Object.isFrozen(inner); }
+  if (name === "getter") { let calls = 0; deepFreeze({ get heavy() { calls++; return {}; } }); return calls; }
+  if (name === "typed-array") { const o = deepFreeze({ pixels: new Uint8Array(4), meta: { w: 2 } }); return Object.isFrozen(o.meta); }
+}`}
+  solution={`function deepFreeze(value, seen = new WeakSet()) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
+  // 이미 들른 객체는 건너뛴다. isFrozen으로 거르면 바깥만 얼어 있는 객체의 안쪽을 놓친다
+  if (seen.has(value)) return value;
+  seen.add(value);
+  // 요소가 있는 TypedArray는 freeze가 TypeError를 던진다
+  if (ArrayBuffer.isView(value)) return value;
+  for (const key of Reflect.ownKeys(value)) {
+    const desc = Object.getOwnPropertyDescriptor(value, key);
+    // getter를 부르지 않도록 값 속성만 따라 들어간다
+    if ("value" in desc) deepFreeze(desc.value, seen);
+  }
+  return Object.freeze(value);
+}
+
+// 아래는 고치지 않는다
+function check(name) {
+  if (name === "nested") { const o = deepFreeze({ a: { b: { c: 1 } } }); try { o.a.b.c = 2; } catch {} return [Object.isFrozen(o.a.b), o.a.b.c]; }
+  if (name === "array") { const o = deepFreeze({ tags: [{ name: "sale" }] }); return [Object.isFrozen(o.tags), Object.isFrozen(o.tags[0])]; }
+  if (name === "same") { const o = { a: 1 }; return [deepFreeze(o) === o, deepFreeze("latte")]; }
+  if (name === "cycle") { const node = { child: {} }; node.child.parent = node; deepFreeze(node); return Object.isFrozen(node.child); }
+  if (name === "frozen-outside") { const inner = { x: 1 }; deepFreeze(Object.freeze({ inner })); return Object.isFrozen(inner); }
+  if (name === "getter") { let calls = 0; deepFreeze({ get heavy() { calls++; return {}; } }); return calls; }
+  if (name === "typed-array") { const o = deepFreeze({ pixels: new Uint8Array(4), meta: { w: 2 } }); return Object.isFrozen(o.meta); }
+}`}
+  tests={[{"args":["nested"],"expected":[true,1],"label":"중첩 객체"},{"args":["array"],"expected":[true,true],"label":"배열 안 객체"},{"args":["same"],"expected":[true,"latte"],"label":"받은 값을 그대로 돌려준다"},{"args":["cycle"],"expected":true,"label":"순환 참조"},{"args":["frozen-outside"],"expected":true,"label":"바깥만 얼어 있을 때"},{"args":["getter"],"expected":0,"label":"getter는 부르지 않는다"},{"args":["typed-array"],"expected":true,"label":"TypedArray가 섞였을 때"}]}
+/>
+
+`Object.isFrozen`으로 "이미 얼었으면 건너뛴다"고 짜기 쉬운데, 그러면 바깥만 얼고 안쪽은 열린 객체를 놓친다. 들른 객체를 `WeakSet`에 기억해 두면 순환 참조와 그 경우가 같이 풀린다. getter는 `obj[key]`로 읽는 순간 실행되니 설명자를 꺼내 값 속성만 따라 들어간다.
+
+객체의 속성은 키 순서 규칙, 자기 속성인지와 열거 가능한지라는 두 갈림길, 그리고 설명자 스위치 네 개로 움직인다. `keys`·`entries`·`JSON`이 무엇을 빼먹는지, `defineProperty`의 기본값이 왜 `false`인지, `freeze`가 어디까지 얼리는지를 이 틀 위에서 설명할 수 있으면 된다. 얼린 객체를 바꾸고 싶을 때 쓰는 복사는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 본다.
+
+## 면접에서 나올 만한 질문
+
+### Object.keys와 for...in은 무엇이 다른가?
+
+`Object.keys`는 자기 속성 중 열거 가능한 문자열 키만 배열로 돌려준다. `for...in`은 같은 조건에 프로토타입 체인에서 물려받은 열거 가능한 속성까지 돈다. 그래서 `for...in`에서는 `Object.hasOwn`으로 걸러야 안전하고, 요즘은 처음부터 `Object.keys`나 `Object.entries`를 돌리는 편이 단순하다. 둘 다 심볼 키와 열거 불가 속성은 보지 않는다.
+
+### 객체의 키 순서는 보장되나?
+
+ES2015부터 자기 속성 키 순서는 명세가 정한다. 배열 인덱스 모양의 정수 키가 오름차순으로 먼저, 다음에 문자열 키가 만들어진 순서대로, 마지막에 심볼 키가 온다. 그래서 `"3001"`, `"1002"` 같은 숫자 문자열 키는 넣은 순서와 상관없이 정렬된다. 순서가 뜻을 갖는 데이터는 배열이나 `Map`에 담는다.
+
+### freeze, seal, preventExtensions의 차이는?
+
+`preventExtensions`는 속성 추가만 막는다. `seal`은 추가와 함께 모든 속성을 `configurable: false`로 만들어 삭제와 재정의를 막고, 값 변경은 허용한다. `freeze`는 `writable: false`까지 더해 값 변경도 막는다. 셋 다 되돌릴 수 없고, 한 층만 적용되며, 막힌 동작은 sloppy 모드에서 조용히 무시되고 strict 모드에서 TypeError가 난다.
+
+### Object.freeze로 얼린 객체는 정말 안 바뀌나?
+
+그 객체의 속성 칸만 얼고, 칸이 가리키는 안쪽 객체는 그대로 열려 있다. `Map`, `Set`, `Date`처럼 데이터를 내부 슬롯에 두는 객체는 얼려도 `set`, `setFullYear`가 동작한다. 깊게 얼리려면 재귀로 돌아야 하는데, 순환 참조와 바깥만 얼어 있는 객체 때문에 `isFrozen` 검사 대신 들른 객체를 기억해 두는 방식이 맞다.
+
+### Object.defineProperty로 속성을 만들 때 주의할 점은?
+
+적지 않은 스위치가 모두 `false`가 된다. `{ value: 42 }`만 넘기면 읽기 전용이고, 목록과 JSON에서 빠지고, 지울 수도 다시 정의할 수도 없는 속성이 된다. 대입으로 만든 속성은 셋 다 `true`라서 차이가 크다. 보통 속성처럼 쓰려면 `writable`, `enumerable`, `configurable`을 직접 적는다.
+
+### getter와 setter는 언제 쓰고, 무엇을 조심하나?
+
+getter는 다른 값에서 계산되는 값을 저장하지 않고 읽을 때 계산하려고 쓰고, setter는 들어오는 값을 검사하거나 변환하려고 쓴다. setter 안에서 같은 이름에 대입하면 자기 자신을 다시 불러 스택이 넘치니 다른 이름의 칸에 저장한다. 또 객체 리터럴의 getter는 `JSON.stringify`와 전개에서 불려 그 순간의 값으로 박히고, 클래스의 getter는 프로토타입에 있어서 JSON에서 빠진다.
+
+### TypeScript에서 Object.keys의 반환 타입이 keyof T가 아닌 이유는?
+
+TypeScript는 구조로 타입을 맞추니 `T` 타입 변수에 키가 더 많은 객체가 들어올 수 있고, 런타임의 `Object.keys`는 그 키도 돌려준다. `keyof T[]`라고 하면 그 여분의 키를 타입이 숨기게 된다. 그래서 `string[]`로 두고, 키를 확실히 아는 경우에만 단언하거나 키 목록을 따로 상수 배열로 둔다.
+
+### Readonly 타입과 Object.freeze는 어떻게 다른가?
+
+`Readonly<T>`와 `as const`는 컴파일할 때만 대입을 막고 런타임 객체는 그대로 열려 있다. `Object.freeze`는 런타임에 막고 반환 타입도 `Readonly<T>`라 타입 검사에서도 걸린다. JSON이나 `any`를 거친 값에는 타입 보호가 닿지 않으니, 정말 바뀌면 안 되는 객체는 런타임 잠금을 같이 쓴다.

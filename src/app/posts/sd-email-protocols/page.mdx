@@ -1,0 +1,403 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-email-protocols");
+
+이 시리즈에서 이 글의 자리: 앞 장 [㊼ 호텔 예약 시스템 설계 ②](/posts/sd-hotel-inventory-scaling)로 호텔 예약을 마쳤다. 이 글부터 두 편은 Gmail 같은 이메일 서비스를 설계한다. 이 글은 메일이 서버 사이를 오가는 규칙(SMTP, IMAP, POP3, DNS의 MX)과 스팸함에 가지 않게 하는 발신자 인증(SPF, DKIM, DMARC)을 다룬다. 같은 장의 다음 글 [㊾ 이메일 서비스 설계 ②](/posts/sd-email-storage-search)가 메일과 첨부 파일을 어디에 저장하고 어떻게 검색할지를 다루고, 그다음은 [㊿ 객체 저장소 설계 ①](/posts/sd-object-storage-architecture)이다.
+
+회원 가입 인증 메일이 일부 사용자에게만 오지 않는다는 문의가 들어온다. 우리 서버 로그에는 "발송 성공"이 찍혀 있다. 어떤 사용자는 스팸함에서 찾았고, 어떤 사용자는 어디에도 없다. 웹 서버에서 메일 라이브러리로 `send()`를 부르는 것까지는 쉬웠는데, 그 뒤에 무슨 일이 일어나는지는 잘 모른다.
+
+이메일 서비스 설계 문제는 여기서 출발한다. 메일은 우리 서버 안에서 끝나지 않는다. 다른 회사의 서버와, 수십 년 전에 정해진 규칙으로 대화해야 한다. 이 글에서는 그 대화를 로컬에서 직접 해 본다. 장난감 DNS 서버와 받기만 하는 작은 SMTP 서버를 Node 22로 만들어 띄우고, 실제 메일은 한 통도 바깥으로 보내지 않았다.
+
+## 메일 한 통이 지나는 길
+
+alice@example.com이 bob@example.net에게 메일을 보낸다고 하자. 두 사람은 서로 다른 회사의 메일 서비스를 쓴다. 등장인물에 이름을 붙여 두면 뒤가 편하다. 사람이 쓰는 메일 프로그램(앱, 웹 메일)을 MUA(Mail User Agent), 서버 사이에서 메일을 넘겨주는 프로그램을 MTA(Mail Transfer Agent)라고 부른다.
+
+<NetworkTopology
+  caption="example.com의 alice가 example.net의 bob에게 보낼 때"
+  width={440}
+  height={260}
+  zones={[
+    { id: "a", label: "example.com", x: 10, y: 10, w: 150, h: 240, tone: "private" },
+    { id: "net", label: "인터넷", x: 170, y: 10, w: 100, h: 240, tone: "edge" },
+    { id: "b", label: "example.net", x: 280, y: 10, w: 150, h: 240, tone: "public" },
+  ]}
+  nodes={[
+    { id: "alice", label: "alice 앱", x: 60, y: 60, icon: "client" },
+    { id: "out", label: "보내는 MTA", x: 85, y: 180, icon: "server" },
+    { id: "dns", label: "DNS", x: 220, y: 60, icon: "dns" },
+    { id: "mx", label: "받는 MTA (MX)", x: 330, y: 180, icon: "server" },
+    { id: "box", label: "메일함", x: 395, y: 110, icon: "db" },
+    { id: "bob", label: "bob 앱", x: 345, y: 50, icon: "client" },
+  ]}
+  links={[
+    { from: "alice", to: "out", label: "587" },
+    { from: "out", to: "dns" },
+    { from: "out", to: "mx", label: "25" },
+    { from: "mx", to: "box" },
+    { from: "box", to: "bob", label: "993" },
+  ]}
+  steps={[
+    { path: ["alice", "out"], packet: "SMTP", title: "앱이 자기 회사 서버에 맡긴다", detail: "alice의 앱은 로그인한 뒤 587번 포트로 메일을 넘긴다. 이 단계를 제출(submission)이라고 한다." },
+    { path: ["out", "dns"], packet: "MX?", title: "받는 서버를 DNS에 묻는다", detail: "주소의 @ 뒤 example.net의 MX 레코드를 조회한다. 메일을 받는 서버의 이름이 돌아온다.", payload: "example.net. MX 10 mx1.example.net.\nexample.net. MX 20 mx2.example.net." },
+    { path: ["out", "mx"], packet: "SMTP", title: "서버끼리 SMTP로 넘긴다", detail: "보내는 MTA가 받는 MTA의 25번 포트에 접속해 메일을 넘긴다. 받는 쪽은 여기서 발신자가 진짜인지 검사한다." },
+    { path: ["mx", "box"], packet: "저장", title: "bob의 메일함에 넣는다", detail: "받는 MTA가 스팸 검사를 거쳐 메일함 저장소에 기록한다. 보내는 쪽의 일은 여기서 끝난다." },
+    { path: ["box", "bob"], packet: "IMAP", title: "bob이 꺼내 읽는다", detail: "bob의 앱은 IMAP(993)이나 웹 메일의 HTTP API로 메일함을 읽는다. 보내는 규칙과 읽는 규칙은 서로 다르다." },
+  ]}
+/>
+
+보내는 쪽은 SMTP(Simple Mail Transfer Protocol) 하나로 끝난다. 앱이 자기 서버에 맡길 때도, 서버끼리 넘길 때도 SMTP다. 꺼내 읽는 쪽은 별개의 규칙인 IMAP이나 POP3, 또는 웹 메일의 HTTP API를 쓴다. 우편으로 치면 SMTP는 우체국끼리 우편물을 넘기는 방식이고, IMAP은 내 우편함을 여는 방식이다.
+
+포트도 역할마다 다르다. 서버끼리는 25번, 사용자가 로그인해서 메일을 맡길 때는 587번(STARTTLS로 암호화를 시작)이나 465번(처음부터 TLS)을 쓴다. 클라우드 서버에서 바깥 25번 포트로 나가는 연결은 막혀 있는 경우가 많다. 스팸 발송 창구가 되는 걸 막으려는 것이라, 서비스에서 메일을 보낼 때는 메일 발송 업체의 587번에 맡기는 구성이 흔하다.
+
+## 받는 서버는 DNS의 MX가 알려 준다
+
+보내는 MTA는 bob@example.net의 `example.net` 부분으로 받는 서버를 찾는다. DNS에는 IP 주소를 적는 A 레코드 말고도 "이 도메인의 메일은 이 서버가 받는다"를 적는 MX 레코드가 있다. DNS가 이름을 찾아가는 과정 자체는 [DNS는 어떻게 이름을 IP로 바꾸나](/posts/dns)에서 다뤘다.
+
+이 실험 환경에서는 바깥 DNS 조회가 되지 않았다(`gmail.com`의 MX를 물어도 NXDOMAIN이 돌아왔다). 그래서 정해 둔 이름 몇 개에만 답하는 장난감 DNS 서버를 Node의 `dgram`으로 만들어 127.0.0.1:17353에 띄우고, 거기에 `dig`로 물었다. 아래 출력은 그 로컬 서버의 실제 응답이다.
+
+```bash
+# 17353번 포트의 로컬 DNS 서버에 example.net의 MX를 묻는다
+dig @127.0.0.1 -p 17353 example.net MX
+```
+
+```text
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40406
+;; flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 0
+;; WARNING: recursion requested but not available
+
+;; QUESTION SECTION:
+;example.net.			IN	MX
+
+;; ANSWER SECTION:
+example.net.		300	IN	MX	10 mx1.example.net.
+example.net.		300	IN	MX	20 mx2.example.net.
+```
+
+`ANSWER SECTION`의 숫자 10, 20이 우선순위다. 작은 쪽을 먼저 시도하고, 연결이 안 되면 다음으로 간다. 같은 숫자가 여럿이면 그중에서 고르게 나눠 보낸다. 300은 이 답을 300초 동안 캐시해도 된다는 TTL이다. 실험에서는 일부러 `mx1`을 꺼진 주소(127.0.0.2)로, `mx2`를 수신 서버가 있는 127.0.0.1로 적어 두었다. 보내는 쪽 프로그램은 이렇게 움직였다.
+
+```text
+# example.net MX: 10 mx1.example.net, 20 mx2.example.net
+# mx1.example.net (127.0.0.2)에 연결
+# mx1.example.net 연결 실패: ECONNREFUSED → 다음 MX
+# mx2.example.net (127.0.0.1)에 연결
+```
+
+MX가 하나도 없으면 규칙상 그 도메인의 A 레코드로 보낸다. 메일을 받지 않는 도메인이라면 이 동작이 엉뚱한 웹 서버로 메일을 보내게 하니, 받지 않는다고 분명히 적는 "null MX"(`MX 0 .`)를 둔다.
+
+## SMTP 대화 한 번
+
+연결이 되면 두 서버는 한 줄씩 명령과 응답을 주고받는다. 받는 쪽은 명령마다 세 자리 숫자로 답한다. 받기만 하는 작은 SMTP 서버를 Node의 `net` 모듈로 만들어 127.0.0.1:17325에 띄우고, 보내는 쪽 프로그램으로 대화했다. 받는 서버는 메일을 어디에도 넘기지 않고 파일로만 남긴다. 받는 사람 셋 중 bob은 있고, nobody는 없고, busy는 잠시 받을 수 없는 상태로 만들어 두었다. 긴 줄은 프로그램이 72자에서 잘라 찍었다.
+
+```text
+S: 220 mx2.example.net ESMTP toy-sink
+C: EHLO mail.example.com
+S: 250-mx2.example.net
+S: 250-SIZE 26214400
+S: 250 8BITMIME
+C: MAIL FROM:<alice@example.com>
+S: 250 2.1.0 Ok
+C: RCPT TO:<bob@example.net>
+S: 250 2.1.5 Ok
+C: RCPT TO:<nobody@example.net>
+S: 550 5.1.1 <nobody@example.net>: Recipient address rejected: User unknown
+C: RCPT TO:<busy@example.net>
+S: 451 4.3.0 Mailbox temporarily unavailable, try again later
+C: DATA
+S: 354 End data with <CR><LF>.<CR><LF>
+C: DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=s…
+C: From: Alice <alice@example.com>
+C: To: Bob <bob@example.net>
+C: Subject: December meeting notes
+C: Date: Wed, 21 Oct 2026 11:00:00 +0000
+C: Message-ID: <a1b2c3@mail.example.com>
+C: MIME-Version: 1.0
+C: Content-Type: text/plain; charset=utf-8
+C: Content-Transfer-Encoding: 8bit
+C: 
+C: 회의 자료를 첨부 링크로 보낸다.
+C: 
+C: .
+S: 250 2.0.0 Ok: queued as Q0001
+C: QUIT
+S: 221 2.0.0 Bye
+```
+
+한 단계씩 따라가 보자.
+
+<SequenceDiagram
+  caption="SMTP: 봉투를 먼저 주고, 편지를 나중에 준다"
+  actors={[
+    { id: "c", label: "보내는 MTA" },
+    { id: "s", label: "받는 MTA" },
+  ]}
+  steps={[
+    { from: "s", to: "c", label: "220", title: "받는 쪽이 먼저 인사한다", detail: "연결하자마자 받는 서버가 자기 이름을 밝힌다." },
+    { from: "c", to: "s", label: "EHLO", title: "보내는 쪽이 이름을 댄다", detail: "받는 쪽은 할 수 있는 일을 줄줄이 답한다. SIZE는 받을 수 있는 최대 크기다.", payload: "250-SIZE 26214400\n250 8BITMIME" },
+    { from: "c", to: "s", label: "MAIL FROM", title: "봉투의 보내는 사람", detail: "반송 메일이 돌아갈 주소다. 화면에 보이는 From과 다를 수 있다." },
+    { from: "c", to: "s", label: "RCPT TO ×3", title: "봉투의 받는 사람", detail: "받는 사람마다 따로 답한다. bob은 250, nobody는 550(영구 실패), busy는 451(잠시 실패)이다." },
+    { from: "c", to: "s", label: "DATA", title: "편지 본문을 보낸다", detail: "헤더와 본문을 보내고, 점 하나만 있는 줄로 끝을 알린다. 여기서 받는 쪽이 발신자 인증을 검사한다." },
+    { from: "s", to: "c", label: "250 queued", title: "받았다고 답한다", detail: "이 순간부터 메일의 책임은 받는 쪽으로 넘어간다." },
+  ]}
+/>
+
+이 대화에서 가장 중요한 구분은 봉투와 편지다. `MAIL FROM`과 `RCPT TO`는 봉투에 적힌 주소다. 서버는 이것만 보고 배달한다. `DATA` 뒤의 `From:`, `To:` 헤더는 편지지에 적힌 주소다. 사용자의 메일 앱은 이쪽을 화면에 보여 준다. 숨은 참조(Bcc)가 가능한 이유도 여기 있다. 봉투의 `RCPT TO`에는 넣고 편지의 헤더에는 쓰지 않으면 된다. 반대로 말하면, 봉투와 편지에 아무 주소나 적을 수 있다. 뒤에서 이 틈을 막는다.
+
+응답 숫자의 첫 자리가 보내는 쪽의 다음 행동을 정한다. 2는 성공, 3은 계속 보내라는 뜻, 4는 잠시 실패, 5는 영구 실패다. busy가 받은 451은 "나중에 다시 오라"는 뜻이라 보내는 쪽은 큐에 넣고 몇 분, 몇 시간 간격으로 다시 시도한다. Postfix는 기본 5일 동안 다시 시도한 뒤 포기하고 발신자에게 반송 메일을 보낸다. nobody가 받은 550은 다시 보내도 같다. 즉시 반송한다. 처음 보는 발신자에게 일부러 4xx를 주고 정말 다시 오는지 보는 그레이리스팅이라는 스팸 대책도 있다. 대충 만든 스팸 발송기는 다시 시도하지 않기 때문이다. 그래서 4xx와 5xx를 같은 "실패"로 처리하는 발송 코드는 정상 메일을 버린다.
+
+## 첨부 파일은 글자로 바뀌어 실린다
+
+SMTP는 원래 7비트 글자를 주고받는 규칙이었다. 이미지나 PDF 같은 바이너리를 실으려면 글자로 바꿔야 한다. 그래서 첨부 파일은 대개 Base64로 바꿔 MIME 형식의 한 부분으로 넣는다. Base64는 3바이트를 4글자로 바꾸고, 메일에서는 76글자마다 줄을 바꾼다. 1MiB짜리 파일로 재 봤다.
+
+```js
+const b = Buffer.alloc(1048576, 7);                 // 1MiB 바이너리
+const s = b.toString("base64");
+const wrapped = s.match(/.{1,76}/g).join("\r\n");   // 메일 본문처럼 76자마다 줄바꿈
+console.log(b.length, s.length, wrapped.length, (wrapped.length / b.length).toFixed(3));
+```
+
+```text
+1048576 1398104 1434896 1.368
+```
+
+줄바꿈까지 합치면 37% 커진다. 메일 서버가 받는 크기 한도를 25MiB로 두면 그 한도는 인코딩된 메시지에 걸리니, 원본 파일은 18MiB 정도가 한계다. Gmail이 큰 파일을 드라이브 링크로 바꿔 보내는 것도 이 때문이다. Base64의 원리는 [Base64 인코딩](/posts/base64)에서 다뤘다. 첨부 파일을 받은 뒤 어디에 저장하는지는 [다음 글](/posts/sd-email-storage-search)의 몫이다.
+
+## 꺼내 읽기: POP3, IMAP, 그리고 HTTP
+
+메일함에 들어온 메일을 꺼내는 규칙은 두 가지가 오래 쓰였다. POP3(110, TLS는 995)는 메일을 내 기기로 내려받는다. 기본 동작은 내려받은 뒤 서버에서 지우는 것이라, 회사 PC로 받은 메일을 휴대폰에서는 볼 수 없다(설정으로 서버에 남길 수는 있다). IMAP(143, TLS는 993)은 메일을 서버에 두고, 기기는 서버의 상태를 비춘다. 휴대폰에서 읽음 표시를 하면 노트북에서도 읽음이 된다. 폴더도 서버에 있다.
+
+<SequenceDiagram
+  caption="IMAP: 메일과 상태는 서버에 있고 기기는 비춰 볼 뿐이다"
+  actors={[
+    { id: "phone", label: "휴대폰" },
+    { id: "srv", label: "IMAP 서버" },
+    { id: "laptop", label: "노트북" },
+  ]}
+  steps={[
+    { from: "phone", to: "srv", label: "SELECT INBOX", title: "휴대폰이 받은편지함을 연다", detail: "새 메일 3통이 있다는 답을 받는다." },
+    { from: "phone", to: "srv", label: "FETCH 3", title: "한 통을 읽는다", detail: "본문을 가져오면 서버에 \\Seen 표시가 붙는다." },
+    { from: "laptop", to: "srv", label: "SELECT INBOX", title: "노트북이 같은 함을 연다", detail: "메일은 그대로 서버에 있다. POP3였다면 휴대폰이 이미 가져가 지웠을 수 있다." },
+    { from: "srv", to: "laptop", label: "\\Seen", title: "읽음 상태가 이어진다", detail: "노트북에도 그 메일이 읽음으로 보인다. 상태의 원본이 서버 하나라서 가능하다." },
+  ]}
+/>
+
+웹 메일과 모바일 앱은 이 둘 대신 서비스가 정한 HTTP API를 쓰는 경우가 많다. `GET /v1/folders/{id}/messages`처럼 폴더별 목록을 페이지로 받고, 새 메일은 WebSocket 같은 연결로 밀어 받는다. HTTP를 쓰면 검색, 대화 묶기, 라벨 같은 기능을 마음대로 붙이기 쉽다. 대신 IMAP과 SMTP 제출을 계속 지원해야 Outlook이나 iOS 메일 같은 다른 앱이 붙을 수 있다. 면접에서 "클라이언트와는 어떤 규칙으로 통신하나"를 물으면, 자체 앱은 HTTP로, 바깥 앱과 다른 메일 서버와는 IMAP과 SMTP로 이야기한다고 나눠 답하면 된다. 실시간으로 밀어 주는 방식의 비교는 [실시간 통신](/posts/realtime-communication)에 있다.
+
+## 아무나 남의 주소를 적을 수 있다
+
+SMTP 대화에서 봤듯이 `MAIL FROM`과 `From:`은 보내는 쪽이 적고 싶은 대로 적는다. 프로토콜 자체에는 "이 서버가 정말 example.com을 대신해 보내도 되나"를 확인하는 장치가 없다. 피싱 메일이 은행 주소로 오는 이유다. 그래서 DNS에 세 가지를 적어 받는 쪽이 검사하게 한다. 세 장치는 각자 다른 질문에 답한다.
+
+SPF(Sender Policy Framework)는 "이 IP가 이 도메인의 메일을 보내도 되나"에 답한다. 도메인 주인이 TXT 레코드에 허락한 IP 목록을 적는다. 받는 서버는 접속한 IP와 봉투의 `MAIL FROM` 도메인을 대조한다.
+
+```bash
+dig @127.0.0.1 -p 17353 +noall +answer example.com TXT
+```
+
+```text
+example.com.		300	IN	TXT	"v=spf1 ip4:127.0.0.1 -all"
+```
+
+`ip4:127.0.0.1`에서 오면 통과, 그 밖의 모든 곳(`-all`)은 실패라는 뜻이다. `-` 대신 `~`면 실패가 아니라 "의심"(softfail)으로, `?`면 판단하지 않음(neutral)으로 처리하라는 뜻이다. SPF의 약점은 봉투 주소만 본다는 것이다. 메일이 전달(forward)되면 IP가 바뀌어 실패하고, 공격자가 봉투에는 자기 도메인을, 화면의 `From:`에는 은행 주소를 적으면 SPF는 공격자 도메인 기준으로 통과한다.
+
+DKIM(DomainKeys Identified Mail)은 "이 메일이 보낸 뒤 바뀌지 않았나, 누가 서명했나"에 답한다. 보내는 서버가 정해진 헤더와 본문의 해시를 개인 키로 서명해 `DKIM-Signature` 헤더로 붙인다. 공개 키는 DNS의 `선택자._domainkey.도메인` TXT 레코드에 둔다. 실험에서 붙인 서명을 조각으로 나눠 보자. 실험이라 키를 1024비트로 짧게 만들었다. 실제로는 2048비트를 쓴다.
+
+<UrlAnatomy
+  caption="DKIM-Signature 헤더 읽기 (실험에서 붙인 값)"
+  base="DKIM-Signature: "
+  separator=""
+  joiner="; "
+  params={[
+    { key: "v", value: "1", title: "버전", description: "DKIM 서명 형식의 버전이다. 지금은 1만 있다.", required: true },
+    { key: "a", value: "rsa-sha256", title: "알고리즘", description: "SHA-256으로 해시하고 RSA 개인 키로 서명했다.", required: true },
+    { key: "c", value: "relaxed/relaxed", title: "정규화 방식", description: "헤더/본문을 비교하기 전에 공백과 대소문자 차이를 얼마나 너그럽게 맞출지 정한다. relaxed는 중간 서버가 공백을 손대도 통과하게 한다." },
+    { key: "d", value: "example.com", title: "서명한 도메인", description: "DMARC가 From 도메인과 맞는지 비교하는 값이다.", required: true },
+    { key: "s", value: "sel1", title: "선택자", description: "공개 키를 찾을 위치다. sel1._domainkey.example.com의 TXT를 조회한다. 선택자를 바꿔 키를 교체한다.", required: true },
+    { key: "h", value: "from:to:subject:date:message-id", title: "서명에 넣은 헤더", description: "이 헤더들이 바뀌면 서명이 깨진다. from은 반드시 넣는다.", required: true },
+    { key: "bh", value: "vTE5/viF…", title: "본문 해시", description: "정규화한 본문의 SHA-256을 Base64로 적었다. 본문이 한 글자라도 바뀌면 이 값이 달라진다.", code: "bh=vTE5/viFZgkokUaktsTHHG1M2kV0CGaSBYqxnfzsbk0=", required: true },
+    { key: "b", value: "Tlxaw73P…", title: "서명", description: "위의 헤더들과 이 서명 헤더 자신(b= 값만 빈 채로)을 개인 키로 서명한 값이다. 받는 쪽은 DNS의 공개 키로 확인한다.", required: true },
+  ]}
+/>
+
+DMARC(Domain-based Message Authentication, Reporting and Conformance)는 "화면에 보이는 `From:`의 도메인과 맞는가, 맞지 않으면 어떻게 하나"에 답한다. SPF나 DKIM 중 하나라도 통과했고 그 도메인이 `From:`의 도메인과 일치하면(정렬, alignment) 통과다. 실패했을 때 할 일을 도메인 주인이 정한다.
+
+```bash
+dig @127.0.0.1 -p 17353 +noall +answer _dmarc.example.com TXT
+```
+
+```text
+_dmarc.example.com.	300	IN	TXT	"v=DMARC1; p=reject; rua=mailto:dmarc-reports@example.com"
+```
+
+`p=reject`는 거절, `p=quarantine`은 스팸함, `p=none`은 아무것도 하지 말고 보고만 하라는 뜻이다. `rua`는 받는 서버들이 하루 단위 통계 보고서를 보낼 주소다. 처음 도입할 때는 `p=none`으로 보고서를 받아 우리 도메인으로 메일을 보내는 곳(마케팅 툴, 고객센터 솔루션 등)을 모두 찾아 SPF와 DKIM을 맞춘 뒤 `quarantine`, `reject`로 올린다. 바로 `reject`로 시작하면 빠뜨린 정상 발송처의 메일이 모두 거절된다.
+
+받는 서버가 이 셋을 어떤 순서로 보는지 따라가 보자.
+
+<AlgoTrace
+  caption="받는 서버의 판정: 공격자가 alice를 사칭했을 때 (실측)"
+  cells={["접속 IP", "SPF", "DKIM", "DMARC", "판정"]}
+  memoryLabel="지금까지 알게 된 것"
+  steps={[
+    { pointer: 0, memory: ["IP 127.0.0.3", "MAIL FROM example.com"], caption: "example.com이 허락하지 않은 주소에서 접속했다. 봉투에는 alice@example.com을 적었다." },
+    { pointer: 1, memory: ["IP 127.0.0.3", "spf=fail"], caption: "example.com의 SPF는 127.0.0.1만 허락한다. 실패다." },
+    { pointer: 2, memory: ["spf=fail", "dkim=none"], caption: "공격자는 example.com의 개인 키가 없으니 서명을 붙이지 못했다." },
+    { pointer: 3, memory: ["spf=fail", "dkim=none", "dmarc=fail"], caption: "From 도메인 example.com과 정렬되어 통과한 것이 하나도 없다." },
+    { pointer: 4, found: [4], memory: ["p=reject", "550 5.7.1"], caption: "example.com이 정한 정책대로 DATA 뒤에 거절한다. 메일은 bob의 메일함에 들어가지 않는다." },
+  ]}
+/>
+
+이 판정을 받는 서버에 직접 넣었다. 받는 서버는 판정 결과를 `Authentication-Results` 헤더 모양으로 찍게 했다. 검사기는 SPF는 `ip4`와 `all`만, DKIM은 relaxed 정규화를 단순하게 줄여 구현한 것이다. 원리를 보기에는 충분하지만 실제 규칙 전체는 아니다.
+
+그리고 세 경우를 차례로 보냈다. 첫째는 example.com이 허락한 IP에서 서명을 붙여 보낸 정상 메일, 둘째는 127.0.0.3에서 서명 없이 alice@example.com이라고 적은 사칭, 셋째는 서명한 뒤 중간에서 본문 끝에 광고 한 줄이 붙은 메일이다. 받는 서버의 판정 줄과 보내는 쪽이 받은 마지막 응답을 순서대로 모았다.
+
+```text
+  [수신 서버 판정] mx2.example.net; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass (p=reject) header.from=example.com
+S: 250 2.0.0 Ok: queued as Q0001
+  [수신 서버 판정] mx2.example.net; spf=fail smtp.mailfrom=example.com; dkim=none; dmarc=fail (p=reject) header.from=example.com
+S: 550 5.7.1 Rejected by DMARC policy
+  [수신 서버 판정] mx2.example.net; spf=pass smtp.mailfrom=example.com; dkim=fail (body hash did not verify) header.d=example.com; dmarc=pass (p=reject) header.from=example.com
+S: 250 2.0.0 Ok: queued as Q0002
+```
+
+세 번째가 흥미롭다. 본문이 바뀌어 DKIM은 깨졌지만 SPF가 통과했고 그 도메인이 `From:`과 같아서 DMARC는 통과했다. DMARC는 둘 중 하나만 맞으면 된다. 반대로 메일링 리스트가 메일을 다시 보내면 IP가 바뀌어 SPF가 깨지는데, 이때 리스트가 제목에 `[공지]`를 붙이면 DKIM까지 깨져서 정상 메일이 거절된다. 이런 전달 경로를 위해 중간 서버가 원래의 인증 결과를 서명해 넘기는 ARC라는 장치가 따로 있다.
+
+SPF 판정의 가장 단순한 부분을 직접 짜 보자. `ip4` 범위와 `all`만 다룬다.
+
+<CodePlayground
+  caption="SPF 레코드로 접속 IP 판정하기 (ip4와 all만)"
+  functionName="spfCheck"
+  initialCode={`// record: "v=spf1 ip4:198.51.100.0/24 ~all" 같은 문자열
+// ip: 접속한 IPv4 주소
+// 앞에서부터 차례로 보고 처음 맞는 항목의 결과를 돌려준다
+//  접두어  없음 또는 + → "pass", - → "fail", ~ → "softfail", ? → "neutral"
+//  ip4:주소 또는 ip4:주소/비트 → 그 범위에 ip가 들면 맞음
+//  all → 늘 맞음
+// 아무것도 맞지 않으면 "neutral"
+function spfCheck(record, ip) {
+  return "neutral";
+}`}
+  solution={`function spfCheck(record, ip) {
+  const toInt = (a) => a.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+  const results = { "+": "pass", "-": "fail", "~": "softfail", "?": "neutral" };
+  for (const term of record.split(" ").slice(1)) {
+    const q = "+-~?".includes(term[0]) ? term[0] : "+";
+    const mech = "+-~?".includes(term[0]) ? term.slice(1) : term;
+    if (mech === "all") return results[q];
+    if (mech.startsWith("ip4:")) {
+      const [net, bits = "32"] = mech.slice(4).split("/");
+      const size = 2 ** (32 - Number(bits));
+      if (Math.floor(toInt(ip) / size) === Math.floor(toInt(net) / size)) return results[q];
+    }
+  }
+  return "neutral";
+}`}
+  tests={[
+    { label: "허락한 IP", args: ["v=spf1 ip4:127.0.0.1 -all", "127.0.0.1"], expected: "pass" },
+    { label: "허락 안 한 IP", args: ["v=spf1 ip4:127.0.0.1 -all", "127.0.0.3"], expected: "fail" },
+    { label: "/24 범위 안", args: ["v=spf1 ip4:198.51.100.0/24 ~all", "198.51.100.77"], expected: "pass" },
+    { label: "범위 밖 + ~all", args: ["v=spf1 ip4:198.51.100.0/24 ~all", "198.51.101.1"], expected: "softfail" },
+    { label: "앞의 -ip4가 먼저", args: ["v=spf1 -ip4:203.0.113.9 ip4:203.0.113.0/24 -all", "203.0.113.9"], expected: "fail" },
+    { label: "all이 없으면", args: ["v=spf1 ip4:10.0.0.0/8", "192.0.2.1"], expected: "neutral" },
+  ]}
+/>
+
+실제 SPF에는 `include:`(다른 도메인의 목록을 가져옴), `a`, `mx` 같은 항목이 더 있고, DNS 조회를 10번까지만 허락한다. 마케팅 툴, CRM, 고객센터 솔루션의 `include:`를 계속 붙이다 보면 이 한도를 넘어 `permerror`가 나고, 그러면 SPF가 없는 것처럼 취급된다. SPF 레코드는 도메인에 하나만 있어야 한다는 것도 자주 틀린다. 담당자가 따로 하나를 더 추가하면 둘 다 무효가 된다.
+
+## 스팸함으로 가지 않으려면
+
+인증을 다 맞춰도 스팸함으로 갈 수 있다. 큰 메일 서비스는 인증 결과에 더해 보내는 IP와 도메인의 평판을 본다. 평판은 그 IP에서 온 메일을 사용자들이 얼마나 스팸으로 신고했는지, 없는 주소로 얼마나 보냈는지, 갑자기 양이 늘었는지 같은 기록으로 쌓인다.
+
+새 IP로 첫날부터 수십만 통을 보내면 평판이 없는 IP가 갑자기 몰아 보내는 모양이라 거절되거나 스팸함으로 간다. 그래서 하루 몇백 통에서 시작해 몇 주에 걸쳐 양을 늘린다. 이것을 IP 웜업이라고 한다. 가입 인증, 비밀번호 재설정 같은 거래성 메일과 마케팅 메일은 다른 IP(가능하면 다른 하위 도메인)로 나눈다. 마케팅 메일의 신고가 쌓여도 인증 메일까지 막히지 않게 하려는 것이다. 공유 IP를 쓰는 발송 업체라면 같은 IP를 쓰는 다른 고객의 평판도 함께 진다.
+
+반송을 처리하지 않는 것도 평판을 깎는다. 550 같은 영구 실패를 받은 주소는 발송 목록에서 빼야 한다. 없는 주소로 계속 보내면 "주소 목록을 관리하지 않는 발신자"로 보인다. 사용자가 스팸 신고를 하면 일부 메일 서비스는 그 사실을 발신자에게 알려 주는 피드백 루프를 제공한다. 신고한 사용자에게는 더 보내지 않는다.
+
+큰 메일 서비스의 요구도 강해지고 있다. Gmail과 Yahoo는 2024년 2월부터 하루 5,000통 이상 보내는 발신자에게 SPF, DKIM, DMARC를 모두 갖추고, 마케팅 메일에 한 번 클릭으로 구독을 끊는 방법(`List-Unsubscribe` 헤더)을 넣고, 스팸 신고율을 0.3% 아래로 유지하라고 밝혔다. 세부 기준은 바뀔 수 있으니 발송 전에 각 서비스의 발신자 안내를 확인한다.
+
+## 서비스로 키우면: 보내는 쪽의 줄
+
+여기까지는 메일 한 통의 이야기였다. 사용자 수억 명의 메일 서비스라면 하루 수십억 통을 보낸다. 웹 메일에서 "보내기"를 누른 요청이 SMTP 연결이 끝날 때까지 기다리게 둘 수는 없다. 받는 서버가 느리거나 451로 미루면 몇 시간이 걸릴 수 있다. 그래서 보내기 요청은 큐에 넣고 바로 답하고, SMTP로 내보내는 일은 뒤의 작업자들이 맡는다.
+
+<NetworkTopology
+  caption="보내기 버튼부터 받는 서버까지"
+  width={440}
+  height={260}
+  zones={[
+    { id: "front", label: "앞단", x: 10, y: 10, w: 140, h: 240, tone: "edge" },
+    { id: "core", label: "발송 파이프라인", x: 160, y: 10, w: 270, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "web", label: "웹 메일", x: 45, y: 125, icon: "client" },
+    { id: "api", label: "메일 API", x: 115, y: 125, icon: "server" },
+    { id: "q", label: "발송 큐", x: 215, y: 70, icon: "server" },
+    { id: "err", label: "오류 큐", x: 215, y: 200, icon: "server" },
+    { id: "w", label: "SMTP 작업자", x: 300, y: 70, icon: "container" },
+    { id: "sent", label: "보낸편지함", x: 300, y: 200, icon: "db" },
+    { id: "mx", label: "상대 MX", x: 390, y: 70, icon: "internet" },
+  ]}
+  links={[
+    { from: "web", to: "api" },
+    { from: "api", to: "q" },
+    { from: "api", to: "err", dashed: true },
+    { from: "api", to: "sent" },
+    { from: "q", to: "w" },
+    { from: "w", to: "mx" },
+  ]}
+  steps={[
+    { path: ["web", "api"], packet: "POST", title: "보내기 요청", detail: "API가 크기, 받는 사람 수, 사용자별 발송 한도를 확인한다. 한도를 넘으면 여기서 막는다." },
+    { path: ["api", "sent"], packet: "저장", title: "보낸편지함에 먼저 기록", detail: "사용자 화면에는 바로 '보냄'으로 보인다. 첨부 파일은 저장소에 두고 참조만 넘긴다." },
+    { path: ["api", "q"], packet: "작업", title: "발송 큐에 넣고 바로 답한다", detail: "받는 도메인이 우리 서비스면 SMTP를 거치지 않고 상대 메일함에 바로 넣을 수도 있다." },
+    { path: ["q", "w", "mx"], packet: "SMTP", title: "작업자가 MX를 찾아 보낸다", detail: "스팸, 바이러스 검사 뒤 DKIM 서명을 붙이고 받는 서버와 SMTP로 대화한다." },
+    { path: ["w", "mx"], packet: "451", blocked: true, title: "잠시 실패는 다시 큐로", detail: "받는 서버가 451을 주면 시간을 늘려 가며 다시 시도한다. 550이면 다시 보내지 않고 반송 메일을 만든다." },
+    { path: ["api", "err"], packet: "실패", title: "검증에 실패한 요청", detail: "형식이 틀린 주소나 너무 큰 메일은 오류 큐로 보내 사용자에게 알린다." },
+  ]}
+/>
+
+이 구조에서 가장 먼저 지켜볼 숫자는 발송 큐의 길이다. 큐가 계속 길어지면 둘 중 하나다. 작업자가 모자라거나, 특정 받는 도메인이 느려지거나 우리를 막고 있다. 둘을 구분하려면 큐 길이를 받는 도메인별로 나눠 본다. 한 도메인만 쌓인다면 그 도메인으로 가는 동시 연결 수를 줄이고 기다린다. 다른 도메인의 메일까지 같이 묶이지 않도록 받는 도메인별로 큐를 나누기도 한다. 재시도 간격과 데드 레터 처리는 [알림 시스템 ②](/posts/sd-notification-reliability)에서 다룬 원리 그대로다.
+
+받는 쪽도 비슷하게 생겼다. SMTP 서버 앞에 로드 밸런서를 두고, SMTP 서버는 받기 정책(없는 사용자, 너무 큰 메일, 인증 실패)만 빠르게 판정한 뒤 큐에 넣는다. 스팸 판정, 첨부 파일 분리, 저장, 접속 중인 사용자에게 새 메일 알림은 뒤의 작업자가 한다. 받는 사람이 접속해 있지 않으면 다음에 앱을 열 때 HTTP API로 가져간다.
+
+## 메일이 안 간다는 문의가 오면
+
+처음의 문의로 돌아가자. "발송 성공"이 찍혔다는 건 대개 우리 서버가 발송 업체나 우리 MTA에 메일을 넘겼다는 뜻일 뿐이다. 그 뒤를 확인하는 순서는 이렇다.
+
+첫째, 우리 발송 로그에서 그 메일의 마지막 SMTP 응답을 찾는다. 5xx면 거절 사유가 응답 문구에 있다(`5.1.1`은 없는 주소, `5.7.x`는 정책·인증 문제). 4xx면 아직 재시도 중이다. 응답이 250이면 상대 서버는 받았다. 그다음부터는 상대 서버 안의 일(스팸함, 필터)이다.
+
+둘째, 스팸함에서 찾은 사용자에게 원본 보기(헤더 보기)를 부탁해 `Authentication-Results` 헤더를 읽는다. 위 실험의 출력과 같은 모양으로 `spf=`, `dkim=`, `dmarc=`가 적혀 있다. 하나라도 `fail`이면 그 장치의 설정부터 본다.
+
+셋째, DNS 설정을 확인한다. `dig +short example.com TXT`로 SPF가 하나만 있는지, `dig +short 선택자._domainkey.example.com TXT`로 공개 키가 발행되어 있는지, `dig +short _dmarc.example.com TXT`로 정책이 무엇인지 본다. 보내는 IP의 역방향 DNS(PTR)가 그 IP의 정방향 이름과 맞지 않으면 그것만으로 거절하는 서버도 있다.
+
+흔한 실수는 셋이다. 새로 도입한 마케팅 툴을 SPF와 DKIM에 넣지 않아 DMARC `reject`에 걸리는 것, 인증 메일과 마케팅 메일을 같은 IP로 보내 인증 메일까지 스팸함에 가는 것, 반송 처리를 하지 않아 없는 주소로 계속 보내는 것이다.
+
+## 다음 글에서 메일을 저장한다
+
+메일은 서버끼리 SMTP로 넘기고, 받는 서버는 DNS의 MX로 찾는다. 봉투(`MAIL FROM`, `RCPT TO`)와 편지(`From:`, `To:`)는 따로 적히고, 그 틈을 SPF(IP), DKIM(서명), DMARC(From 도메인과의 정렬과 정책)가 나눠 막는다. 사용자는 IMAP이나 HTTP API로 서버에 있는 메일함을 읽는다. 응답의 첫 숫자가 4면 다시, 5면 그만이다.
+
+[㊾ 이메일 서비스 설계 ②](/posts/sd-email-storage-search)에서는 받은 메일이 들어가는 곳을 설계한다. 사용자 10억 명의 메일함을 어떤 DB에 어떻게 나눠 담는지, 25MB 첨부 파일은 어디에 두는지, 그리고 내 메일함 안에서 단어를 검색하는 색인을 어떻게 만드는지다.
+
+## 면접에서 나올 만한 질문
+
+### SMTP, POP3, IMAP은 각각 무엇을 하나요?
+
+SMTP는 보내는 규칙이다. 앱이 자기 메일 서버에 맡길 때와 서버끼리 넘길 때 모두 쓴다. POP3와 IMAP은 메일함에서 꺼내 읽는 규칙인데, POP3는 기본적으로 기기로 내려받고 서버에서 지우고, IMAP은 메일과 읽음 상태, 폴더를 서버에 두고 여러 기기가 같은 상태를 본다. 요즘 웹 메일과 자체 앱은 HTTP API를 쓰고, IMAP과 SMTP는 바깥 앱과 다른 서버를 위해 지원한다.
+
+### 보내는 서버는 받는 서버를 어떻게 찾나요?
+
+받는 주소의 도메인으로 DNS의 MX 레코드를 조회한다. MX에는 우선순위와 서버 이름이 있어서 숫자가 작은 서버부터 시도하고, 연결이 안 되면 다음 서버로 간다. 실험에서도 첫 MX가 연결을 거부하자 두 번째 MX로 넘어가 전달했다. MX가 없으면 A 레코드로 보내니, 메일을 받지 않는 도메인은 null MX를 적어 둔다.
+
+### SMTP 응답의 4xx와 5xx는 어떻게 다르게 처리하나요?
+
+4xx는 잠시 실패라 큐에 다시 넣고 간격을 늘려 가며 재시도한다. 5xx는 영구 실패라 다시 보내지 않고 반송 메일을 만들며, 그 주소는 발송 목록에서 뺀다. 둘을 같이 처리하면 그레이리스팅 같은 정상적인 4xx에 걸린 메일을 버리거나, 없는 주소로 계속 보내 평판을 깎는다.
+
+### SPF, DKIM, DMARC는 각각 무엇을 막나요?
+
+SPF는 접속한 IP가 봉투의 `MAIL FROM` 도메인이 허락한 곳인지 본다. DKIM은 서명으로 메일이 보낸 뒤 바뀌지 않았고 어느 도메인이 서명했는지 증명한다. DMARC는 둘 중 하나라도 통과하고 그 도메인이 화면의 `From:` 도메인과 일치하는지 보고, 실패하면 도메인 주인이 정한 정책(none, quarantine, reject)을 따르게 한다. SPF와 DKIM만으로는 화면에 보이는 From 사칭을 막지 못해서 DMARC가 필요하다.
+
+### DKIM 서명이 깨졌는데 DMARC가 통과할 수 있나요?
+
+있다. DMARC는 SPF와 DKIM 중 하나만 정렬되어 통과하면 된다. 실험에서 서명한 뒤 본문 끝에 한 줄이 붙자 DKIM은 본문 해시 불일치로 실패했지만, 허락된 IP에서 보냈고 봉투 도메인이 From과 같아서 DMARC는 통과했다. 반대로 메일이 전달되면 SPF가 깨지는데, 그때 본문까지 바뀌면 둘 다 깨져서 정상 메일이 거절될 수 있다.
+
+### 새 서비스에서 대량 메일을 보내기 시작할 때 무엇을 조심하나요?
+
+인증 세 가지를 갖추고, DMARC는 `p=none`으로 시작해 보고서로 발송처를 모두 맞춘 뒤 올린다. 새 IP는 적은 양에서 시작해 몇 주에 걸쳐 늘리고, 거래성 메일과 마케팅 메일은 IP나 하위 도메인을 나눈다. 반송과 스팸 신고는 바로 목록에 반영하고, 마케팅 메일에는 한 번에 구독을 끊는 방법을 넣는다.
+
+### 발송량이 10배로 늘면 어디가 먼저 막히나요?
+
+SMTP 작업자 수와 받는 도메인 쪽 한도다. 작업자는 큐 뒤에 있으니 늘리기 쉽지만, 큰 메일 서비스는 한 발신 IP에서 오는 동시 연결과 속도를 제한해서 우리를 4xx로 늦춘다. 그래서 큐 길이를 받는 도메인별로 보고, 도메인별로 동시 연결과 속도를 조절하며, 발신 IP를 여러 개로 나눠 각각 평판을 쌓는다.

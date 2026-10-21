@@ -1,0 +1,696 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-joins-in-practice");
+
+강의별 리포트를 만들었다. 수강생 수, 매출, 평균 평점을 한 줄에 놓고 싶어서 필요한 테이블을 모두 `LEFT JOIN`으로 붙였다.
+
+```sql
+SELECT c.title, count(e.id) AS students, sum(p.amount) AS revenue, round(avg(r.rating), 2) AS rating
+FROM courses c
+LEFT JOIN enrollments e ON e.course_id = c.id
+LEFT JOIN payments p    ON p.enrollment_id = e.id
+LEFT JOIN reviews r     ON r.course_id = c.id
+GROUP BY c.id
+ORDER BY c.id;
+```
+
+```text
+      title      | students | revenue | rating
+-----------------+----------+---------+--------
+ SQL 기초        |        6 |  120000 |   4.50
+ PostgreSQL 튜닝 |        6 |  360000 |   4.00
+ React 입문      |        4 |  100000 |   4.00
+ Docker 실전     |        2 |   70000 | (null)
+ 100% 실습 Git   |        0 |  (null) | (null)
+(5 rows)
+```
+
+SQL 기초를 들은 사람은 셋인데 6명이라고 나온다. 매출 합계는 65만 원인데 실제로 결제된 돈은 41만 원이다. 평점은 맞다. 에러도 경고도 없다. 조인이 행을 몇 배로 불렸고, 평균은 불어난 비율이 같아서 우연히 살아남았다.
+
+이 글은 PostgreSQL 16에서 조인이 결과를 조용히 바꾸는 경우를 다룬다. 행이 곱해지는 문제, `WHERE` 한 줄이 `LEFT JOIN`을 `INNER JOIN`으로 바꾸는 문제, 짝이 없는 행을 찾는 안티 조인, 두 테이블을 맞춰 보는 `FULL JOIN`, 자기 자신과의 조인이다. 조인 종류의 정의와 ON·WHERE의 기본 차이, Nested Loop·Hash·Merge 세 가지 처리 방법은 [SQLD 조인 글](/posts/sqld-joins)에 있으니 반복하지 않는다. 여기서는 실행 계획으로 PostgreSQL이 실제로 무엇을 했는지를 본다.
+
+데이터는 [SELECT의 논리적 처리 순서](/posts/sql-logical-order), [WHERE 연산자](/posts/sql-filtering-operators), [집계 함정](/posts/sql-aggregation-pitfalls) 글에서 쓴 강의 사이트를 그대로 이어 쓴다. 서브쿼리로 같은 일을 하는 방법은 [서브쿼리 글](/posts/sql-subqueries-exists-lateral)에서 이어진다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고 출력은 모두 실제로 돌린 결과다. MySQL 8과의 차이는 문서로 확인해 적었다.
+
+## 결제와 후기를 더한 강의 사이트
+
+앞 글들의 `students`(5명), `courses`(5개), `enrollments`(9건)에 테이블 두 개를 더한다. 결제는 할부가 있어서 수강 한 건에 두 줄이 생기기도 하고, 환불은 음수로 들어간다. 후기는 수강생이 강의에 남긴 평점이다.
+
+```sql
+CREATE TABLE payments (
+  id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  enrollment_id integer REFERENCES enrollments (id),   -- 연결이 끊긴 결제는 NULL
+  amount        integer NOT NULL,                      -- 환불은 음수
+  paid_at       timestamptz NOT NULL
+);
+
+CREATE TABLE reviews (
+  id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  student_id integer NOT NULL REFERENCES students (id),
+  course_id  integer NOT NULL REFERENCES courses (id),
+  rating     integer NOT NULL CHECK (rating BETWEEN 1 AND 5)
+);
+
+INSERT INTO payments (enrollment_id, amount, paid_at) VALUES
+  (1,  30000, '2026-09-28 10:01+09'),
+  (2,  45000, '2026-10-01 00:01+09'),   -- 2회 할부
+  (2,  45000, '2026-11-01 00:01+09'),
+  (3,  30000, '2026-10-05 13:21+09'),
+  (4,  50000, '2026-10-12 09:01+09'),
+  (5,  50000, '2026-10-15 08:01+09'),
+  (6,  90000, '2026-10-20 21:01+09'),
+  (8,  35000, '2026-10-31 23:59:40+09'), -- 2회 할부
+  (8,  35000, '2026-11-30 23:59:40+09'),
+  (9,  50000, '2026-11-01 00:01+09'),
+  (9, -50000, '2026-11-02 10:00+09'),   -- 환불
+  (NULL, 20000, '2026-11-03 12:00+09'); -- 수강 기록과 연결이 끊긴 결제
+
+INSERT INTO reviews (student_id, course_id, rating) VALUES
+  (1, 1, 5), (2, 1, 4),
+  (1, 2, 3), (4, 2, 5),
+  (2, 3, 4);
+```
+
+7번 수강(park의 SQL 기초)은 아직 결제가 없고, 12번 결제는 어느 수강에도 붙어 있지 않다. 일부러 넣은 어긋남이다. 관계를 그림으로 보면 리포트가 왜 틀렸는지 절반은 보인다.
+
+<ConceptDiagram
+  caption="강의 하나에 자식 테이블이 두 갈래로 붙어 있다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "courses", label: "courses", sub: "강의 1행", x: 70, y: 120, w: 100 },
+    { id: "enr", label: "enrollments", sub: "강의당 N행", x: 220, y: 55, w: 120 },
+    { id: "pay", label: "payments", sub: "수강당 M행", x: 340, y: 150, w: 100 },
+    { id: "rev", label: "reviews", sub: "강의당 K행", x: 220, y: 200, w: 110 },
+  ]}
+  edges={[
+    { from: "courses", to: "enr", label: "1 : N" },
+    { from: "enr", to: "pay", label: "1 : M" },
+    { from: "courses", to: "rev", label: "1 : K" },
+    { from: "pay", to: "rev", label: "서로 모름 → 곱", dashed: true, arrow: "both" },
+  ]}
+/>
+
+## 행이 곱해지는 자리를 숫자로 찾는다
+
+조인을 하나씩 더하면서 행 수를 세 보면 어디서 불어나는지 바로 나온다.
+
+```sql
+SELECT count(*) FROM courses c LEFT JOIN enrollments e ON e.course_id = c.id;          -- 10
+SELECT count(*) FROM courses c LEFT JOIN enrollments e ON e.course_id = c.id
+  LEFT JOIN payments p ON p.enrollment_id = e.id;                                      -- 13
+SELECT count(*) FROM courses c LEFT JOIN enrollments e ON e.course_id = c.id
+  LEFT JOIN payments p ON p.enrollment_id = e.id LEFT JOIN reviews r ON r.course_id = c.id;  -- 19
+```
+
+강의 5개에 수강 9건을 붙이면 10줄이다(수강생 없는 Git 강의가 NULL로 한 줄). 결제를 붙이면 할부 세 건만큼 늘어 13줄, 후기를 붙이면 19줄이 된다. 후기는 수강이 아니라 강의에 붙어 있어서, 강의의 수강·결제 줄마다 그 강의의 후기 수만큼 복제된다. SQL 기초 강의만 펼쳐 본다.
+
+```sql
+SELECT e.id AS e_id, s.name, p.amount, r.rating, rs.name AS reviewer
+FROM courses c
+JOIN enrollments e ON e.course_id = c.id
+JOIN students s ON s.id = e.student_id
+LEFT JOIN payments p ON p.enrollment_id = e.id
+LEFT JOIN reviews r ON r.course_id = c.id
+LEFT JOIN students rs ON rs.id = r.student_id
+WHERE c.id = 1 ORDER BY e.id, rs.name;
+```
+
+```text
+ e_id | name | amount | rating | reviewer
+------+------+--------+--------+----------
+    1 | kim  |  30000 |      5 | kim
+    1 | kim  |  30000 |      4 | lee
+    3 | lee  |  30000 |      5 | kim
+    3 | lee  |  30000 |      4 | lee
+    7 | park | (null) |      5 | kim
+    7 | park | (null) |      4 | lee
+(6 rows)
+```
+
+수강 세 건이 후기 두 건과 모두 짝을 지어 여섯 줄이 됐다. `count(e.id)`는 6, `sum(p.amount)`는 30000이 네 번 더해져 12만이다. 평균 평점은 5와 4가 똑같이 세 번씩 들어가서 4.5로 맞게 나왔다. 평균이 맞는다고 조인이 맞는 게 아니다. 아래 그림에서 다음을 누르면 SQL 기초 한 줄이 여섯 줄로 늘어나는 과정이 보인다.
+
+<AlgoTrace
+  caption="SQL 기초 강의 한 줄이 조인을 지나며 늘어난다"
+  cells={["SQL 기초", "수강 1", "수강 3", "수강 7", "후기 kim", "후기 lee"]}
+  memoryLabel="조인 결과 행"
+  steps={[
+    { pointer: 0, memory: ["c1"], caption: "강의 한 줄에서 출발한다." },
+    { pointer: 1, memory: ["c1·e1"], caption: "수강 1과 짝을 짓는다. 1 : N 조인이라 강의 줄이 수강 수만큼 생긴다." },
+    { pointer: 2, memory: ["c1·e1", "c1·e3"], caption: "수강 3도 짝이다. 아직은 수강 한 건이 한 줄이라 개수가 맞다." },
+    { pointer: 3, memory: ["c1·e1", "c1·e3", "c1·e7"], caption: "수강 7은 결제가 없어 amount가 NULL인 채로 남는다. 여기까지 세 줄." },
+    { pointer: 4, memory: ["e1·kim", "e3·kim", "e7·kim"], caption: "후기를 붙인다. 후기는 강의에 붙어 있어서 수강 세 줄 모두가 kim의 후기와 짝이 된다." },
+    { pointer: 5, found: [1, 2, 3], memory: ["e1·kim", "e3·kim", "e7·kim", "e1·lee", "e3·lee", "e7·lee"], caption: "lee의 후기와도 세 줄이 다시 생긴다. 3 × 2 = 6줄. count와 sum이 두 배가 된다." },
+  ]}
+/>
+
+영어로는 이 모양을 fan-out이라고 부르기도 한다. 한 부모에 서로 관계없는 자식 테이블 둘을 함께 붙이면 결과는 두 자식 수의 곱이 된다. 1 : N 조인 하나만으로도, N 쪽에 중복이 있으면 같은 일이 일어난다. 결제가 그랬다. 수강 한 건에 결제가 하나라고 가정하고 조인했는데 할부가 있었다.
+
+조인 키가 정말 "한 줄"을 가리키는지는 쿼리 한 번으로 확인한다.
+
+```sql
+SELECT enrollment_id, count(*)
+FROM payments
+GROUP BY enrollment_id
+HAVING count(*) > 1
+ORDER BY 1;
+```
+
+```text
+ enrollment_id | count
+---------------+-------
+             2 |     2
+             8 |     2
+             9 |     2
+(3 rows)
+```
+
+결과가 한 줄이라도 나오면 그 조인은 행을 불린다. 조인 상대의 조인 컬럼에 기본 키나 `UNIQUE` 제약이 걸려 있으면 이 걱정을 하지 않아도 된다. 제약이 곧 보증이다.
+
+## 묶고 나서 붙인다
+
+고치는 방법은 하나다. 자식 테이블마다 부모 키 기준으로 먼저 집계해서 "부모 하나당 한 줄"로 만든 뒤 붙인다. 그러면 붙이는 쪽이 항상 1이라 곱이 생기지 않는다.
+
+```sql
+WITH e_agg AS (                       -- 강의별 수강생 수
+  SELECT e.course_id, count(*) AS students
+  FROM enrollments e GROUP BY e.course_id
+), p_agg AS (                         -- 강의별 결제 합계
+  SELECT e.course_id, sum(p.amount) AS revenue
+  FROM payments p JOIN enrollments e ON e.id = p.enrollment_id
+  GROUP BY e.course_id
+), r_agg AS (                         -- 강의별 평균 평점
+  SELECT course_id, round(avg(rating), 2) AS rating
+  FROM reviews GROUP BY course_id
+)
+SELECT c.title,
+       coalesce(ea.students, 0) AS students,
+       coalesce(pa.revenue, 0)  AS revenue,
+       ra.rating
+FROM courses c
+LEFT JOIN e_agg ea ON ea.course_id = c.id
+LEFT JOIN p_agg pa ON pa.course_id = c.id
+LEFT JOIN r_agg ra ON ra.course_id = c.id
+ORDER BY c.id;
+```
+
+```text
+      title      | students | revenue | rating
+-----------------+----------+---------+--------
+ SQL 기초        |        3 |   60000 |   4.50
+ PostgreSQL 튜닝 |        2 |  180000 |   4.00
+ React 입문      |        3 |  100000 |   4.00
+ Docker 실전     |        1 |   70000 | (null)
+ 100% 실습 Git   |        0 |       0 | (null)
+(5 rows)
+```
+
+매출을 모두 더하면 41만 원으로 결제 테이블과 맞는다. React 입문이 10만 원인 건 환불(-50000)이 반영됐기 때문이다. 아래 그림은 조인을 더할 때마다 강의별 행 수가 어떻게 변하는지 막대로 보여 준다. 마지막 단계가 위 쿼리다.
+
+<GeometryMorph
+  caption="강의별 행 수: 조인을 더할수록 늘고, 먼저 묶으면 한 줄로 돌아온다"
+  width={400}
+  height={230}
+  shapes={[
+    { id: "c1", tone: "series1" }, { id: "c2", tone: "series1" }, { id: "c3", tone: "series1" },
+    { id: "c4", tone: "series1" }, { id: "c5", tone: "series1" }, { id: "base", tone: "muted" },
+  ]}
+  steps={[
+    {
+      title: "수강을 붙였다",
+      detail: "강의마다 수강 건수만큼 줄이 생긴다. 수강생이 없는 Git도 NULL 한 줄이다. 합계 10줄.",
+      shapes: {
+        c1: [[30, 136], [80, 136], [80, 190], [30, 190]], c2: [[100, 154], [150, 154], [150, 190], [100, 190]], c3: [[170, 136], [220, 136], [220, 190], [170, 190]],
+        c4: [[240, 172], [290, 172], [290, 190], [240, 190]], c5: [[310, 172], [360, 172], [360, 190], [310, 190]], base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 55, y: 126, text: "3", tone: "text", size: "sm" }, { x: 125, y: 144, text: "2", tone: "text", size: "sm" }, { x: 195, y: 126, text: "3", tone: "text", size: "sm" },
+        { x: 265, y: 162, text: "1", tone: "text", size: "sm" }, { x: 335, y: 162, text: "1", tone: "text", size: "sm" }, { x: 55, y: 212, text: "SQL", tone: "text", size: "sm" },
+        { x: 125, y: 212, text: "PG", tone: "text", size: "sm" }, { x: 195, y: 212, text: "React", tone: "text", size: "sm" }, { x: 265, y: 212, text: "Docker", tone: "text", size: "sm" },
+        { x: 335, y: 212, text: "Git", tone: "text", size: "sm" },
+      ],
+    },
+    {
+      title: "결제를 붙였다",
+      detail: "할부와 환불이 있는 수강이 두 줄이 된다. PG 튜닝 3줄, React 4줄, Docker 2줄. 합계 13줄.",
+      shapes: {
+        c1: [[30, 136], [80, 136], [80, 190], [30, 190]], c2: [[100, 136], [150, 136], [150, 190], [100, 190]], c3: [[170, 118], [220, 118], [220, 190], [170, 190]],
+        c4: [[240, 154], [290, 154], [290, 190], [240, 190]], c5: [[310, 172], [360, 172], [360, 190], [310, 190]], base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 55, y: 126, text: "3", tone: "text", size: "sm" }, { x: 125, y: 126, text: "3", tone: "accent", size: "sm" }, { x: 195, y: 108, text: "4", tone: "accent", size: "sm" },
+        { x: 265, y: 144, text: "2", tone: "accent", size: "sm" }, { x: 335, y: 162, text: "1", tone: "text", size: "sm" }, { x: 55, y: 212, text: "SQL", tone: "text", size: "sm" },
+        { x: 125, y: 212, text: "PG", tone: "text", size: "sm" }, { x: 195, y: 212, text: "React", tone: "text", size: "sm" }, { x: 265, y: 212, text: "Docker", tone: "text", size: "sm" },
+        { x: 335, y: 212, text: "Git", tone: "text", size: "sm" },
+      ],
+      focus: ["c2", "c3", "c4"],
+    },
+    {
+      title: "후기를 붙였다",
+      detail: "후기가 둘인 강의는 줄이 두 배가 된다. SQL과 PG가 6줄. 후기가 없는 강의는 LEFT JOIN이라 그대로다. 합계 19줄.",
+      shapes: {
+        c1: [[30, 82], [80, 82], [80, 190], [30, 190]], c2: [[100, 82], [150, 82], [150, 190], [100, 190]], c3: [[170, 118], [220, 118], [220, 190], [170, 190]],
+        c4: [[240, 154], [290, 154], [290, 190], [240, 190]], c5: [[310, 172], [360, 172], [360, 190], [310, 190]], base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 55, y: 72, text: "6", tone: "accent", size: "sm" }, { x: 125, y: 72, text: "6", tone: "accent", size: "sm" }, { x: 195, y: 108, text: "4", tone: "text", size: "sm" },
+        { x: 265, y: 144, text: "2", tone: "text", size: "sm" }, { x: 335, y: 162, text: "1", tone: "text", size: "sm" }, { x: 55, y: 212, text: "SQL", tone: "text", size: "sm" },
+        { x: 125, y: 212, text: "PG", tone: "text", size: "sm" }, { x: 195, y: 212, text: "React", tone: "text", size: "sm" }, { x: 265, y: 212, text: "Docker", tone: "text", size: "sm" },
+        { x: 335, y: 212, text: "Git", tone: "text", size: "sm" },
+      ],
+      focus: ["c1", "c2"],
+    },
+    {
+      title: "먼저 묶고 붙였다",
+      detail: "자식마다 강의별로 한 줄을 만든 뒤 붙이면 모든 강의가 한 줄이다. 곱할 것이 없다.",
+      shapes: {
+        c1: [[30, 172], [80, 172], [80, 190], [30, 190]], c2: [[100, 172], [150, 172], [150, 190], [100, 190]], c3: [[170, 172], [220, 172], [220, 190], [170, 190]],
+        c4: [[240, 172], [290, 172], [290, 190], [240, 190]], c5: [[310, 172], [360, 172], [360, 190], [310, 190]], base: [[20, 190], [380, 190], [380, 193], [20, 193]],
+      },
+      labels: [
+        { x: 55, y: 162, text: "1", tone: "accent", size: "sm" }, { x: 125, y: 162, text: "1", tone: "accent", size: "sm" }, { x: 195, y: 162, text: "1", tone: "accent", size: "sm" },
+        { x: 265, y: 162, text: "1", tone: "accent", size: "sm" }, { x: 335, y: 162, text: "1", tone: "accent", size: "sm" }, { x: 55, y: 212, text: "SQL", tone: "text", size: "sm" },
+        { x: 125, y: 212, text: "PG", tone: "text", size: "sm" }, { x: 195, y: 212, text: "React", tone: "text", size: "sm" }, { x: 265, y: 212, text: "Docker", tone: "text", size: "sm" },
+        { x: 335, y: 212, text: "Git", tone: "text", size: "sm" },
+      ],
+      focus: ["c1", "c2", "c3", "c4", "c5"],
+    },
+  ]}
+/>
+
+급하게 고칠 때 `count(DISTINCT e.id)`를 쓰는 경우가 많다. 개수는 그걸로 맞출 수 있다. 같은 생각으로 `sum(DISTINCT p.amount)`를 쓰면 더 크게 틀린다.
+
+```sql
+SELECT c.title, count(DISTINCT e.id) AS students, sum(DISTINCT p.amount) AS revenue_wrong
+FROM courses c
+LEFT JOIN enrollments e ON e.course_id = c.id
+LEFT JOIN payments p    ON p.enrollment_id = e.id
+LEFT JOIN reviews r     ON r.course_id = c.id
+GROUP BY c.id ORDER BY c.id;
+```
+
+```text
+      title      | students | revenue_wrong
+-----------------+----------+---------------
+ SQL 기초        |        3 |         30000
+ PostgreSQL 튜닝 |        2 |        135000
+ React 입문      |        3 |             0
+ Docker 실전     |        1 |         35000
+ 100% 실습 Git   |        0 |        (null)
+(5 rows)
+```
+
+`DISTINCT`는 행이 아니라 값의 중복을 지운다. kim과 lee가 각각 낸 30000원이 같은 값이라 하나로 합쳐졌고, React는 50000과 -50000만 남아 0이 됐다. 금액은 서로 다른 결제가 같은 값을 가질 수 있어서 `DISTINCT`로 중복을 걷어 낼 수 없다. 개수는 키를 세니까 `DISTINCT`가 통하고, 합계는 통하지 않는다. 그래서 둘을 섞어 쓰면 리뷰에서 찾기 어려운 버그가 된다. 먼저 묶고 붙이는 쪽이 의도도 분명하다. 강의 줄마다 서브쿼리를 붙이는 방법도 있는데, 그건 [서브쿼리 글](/posts/sql-subqueries-exists-lateral)에서 비교한다.
+
+## WHERE 한 줄이 LEFT JOIN을 지운다
+
+이번엔 반대 방향 문제다. "환불한 수강은 빼고, 수강생마다 수강 목록을 보여 달라. 수강이 없는 사람도 나와야 한다." 그래서 `LEFT JOIN`을 쓰고 `WHERE`로 환불을 뺐다.
+
+```sql
+SELECT s.name, e.course_id, e.status
+FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+WHERE e.status <> 'refunded'
+ORDER BY s.id, e.course_id;
+```
+
+```text
+ name | course_id |  status
+------+-----------+-----------
+ kim  |         1 | completed
+ kim  |         2 | completed
+ kim  |         3 | active
+ lee  |         1 | active
+ lee  |         3 | completed
+ park |         1 | active
+ park |         4 | completed
+ choi |         2 | completed
+(8 rows)
+```
+
+jung이 없다. jung의 줄은 `LEFT JOIN`이 만들었지만 `e.status`가 NULL이고, `NULL <> 'refunded'`는 참이 아니라 "알 수 없음"이라 `WHERE`에서 떨어졌다. 조건을 `ON`으로 옮기면 jung이 돌아온다.
+
+```sql
+SELECT s.name, e.course_id, e.status
+FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id AND e.status <> 'refunded'
+ORDER BY s.id, e.course_id;
+```
+
+```text
+ name | course_id |  status
+------+-----------+-----------
+ kim  |         1 | completed
+ kim  |         2 | completed
+ kim  |         3 | active
+ lee  |         1 | active
+ lee  |         3 | completed
+ park |         1 | active
+ park |         4 | completed
+ choi |         2 | completed
+ jung |    (null) | (null)
+(9 rows)
+```
+
+여기까지는 [SQLD 조인 글](/posts/sqld-joins)에서도 다룬 내용이다. PostgreSQL에서 더 볼 것은 실행 계획이다. 두 쿼리의 계획을 나란히 놓는다.
+
+```sql
+EXPLAIN (COSTS OFF)
+SELECT s.name, e.course_id FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+WHERE e.status <> 'refunded';
+
+EXPLAIN (COSTS OFF)
+SELECT s.name, e.course_id FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id AND e.status <> 'refunded';
+```
+
+```text
+                  QUERY PLAN
+----------------------------------------------
+ Hash Join
+   Hash Cond: (e.student_id = s.id)
+   ->  Seq Scan on enrollments e
+         Filter: (status <> 'refunded'::text)
+   ->  Hash
+         ->  Seq Scan on students s
+(6 rows)
+
+                  QUERY PLAN
+----------------------------------------------
+ Hash Right Join
+   Hash Cond: (e.student_id = s.id)
+   ->  Seq Scan on enrollments e
+         Filter: (status <> 'refunded'::text)
+   ->  Hash
+         ->  Seq Scan on students s
+(6 rows)
+```
+
+첫 계획 맨 위가 그냥 `Hash Join`이다. 쿼리에는 `LEFT JOIN`이라고 썼는데 플래너가 `INNER JOIN`으로 바꿨다. PostgreSQL은 `WHERE` 조건이 NULL을 만나면 참이 될 수 없는 식(strict한 식)이고 그 식이 오른쪽 컬럼을 쓰면, 왼쪽만 남는 줄은 어차피 걸러진다고 보고 바깥 조인을 안쪽 조인으로 줄인다. 결과가 같으니 정당한 최적화다. 쿼리를 쓴 사람이 기대한 것과 다를 뿐이다. 그래서 "LEFT JOIN을 썼는데 짝 없는 행이 안 나온다"는 문의를 받으면, `EXPLAIN`의 맨 위 노드가 `Left Join`인지부터 본다. 그냥 `Join`이면 `WHERE`의 어느 조건이 오른쪽 컬럼을 건드리는지 찾으면 된다.
+
+둘째 계획의 `Hash Right Join`은 쿼리를 `RIGHT JOIN`으로 바꿨다는 뜻이 아니다. 작은 `students`로 해시 표를 만들고 `enrollments`를 훑으며 맞춰 보느라, 계획상의 오른쪽(해시 쪽)이 보존되는 쪽이 됐을 뿐이다. 결과는 `LEFT JOIN` 그대로다. 아래 그림에서 다음을 누르면 jung의 줄이 어디서 사라지는지 보인다.
+
+<NetworkTopology
+  caption="jung의 줄은 LEFT JOIN을 지나 WHERE에서 사라진다"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "s", label: "students", sub: "5명", x: 50, y: 60, icon: "db", w: 80 },
+    { id: "e", label: "enrollments", sub: "9건", x: 50, y: 170, icon: "db", w: 86 },
+    { id: "join", label: "LEFT JOIN", x: 165, y: 115, w: 84 },
+    { id: "where", label: "WHERE", sub: "status <> ...", x: 270, y: 60, w: 84 },
+    { id: "on", label: "ON 조건", sub: "AND status <> ...", x: 270, y: 170, w: 96 },
+    { id: "out", label: "결과", x: 360, y: 115, icon: "client", w: 60 },
+  ]}
+  links={[
+    { from: "s", to: "join" }, { from: "e", to: "join" }, { from: "join", to: "where" },
+    { from: "where", to: "out" }, { from: "join", to: "on", dashed: true }, { from: "on", to: "out", dashed: true },
+  ]}
+  steps={[
+    { path: ["s", "join"], packet: "jung", title: "짝이 없는 jung", detail: "jung은 수강 기록이 없다. LEFT JOIN은 jung을 버리지 않고 오른쪽을 모두 NULL로 채운 줄을 만든다." },
+    { path: ["s", "join", "where"], packet: "jung", blocked: true, title: "WHERE에서 떨어진다", detail: "e.status가 NULL이라 NULL <> 'refunded'는 알 수 없음이다. WHERE는 참인 줄만 남긴다.", payload: "Hash Join   -- Left가 사라졌다" },
+    { path: ["s", "join", "on", "out"], packet: "jung", title: "조건을 ON으로 옮긴다", detail: "ON은 짝을 고르는 조건이다. 짝이 없을 뿐 jung의 줄은 남는다.", payload: "Hash Right Join   -- 바깥 조인 유지" },
+    { path: ["e", "join", "on"], packet: "환불", blocked: true, title: "환불 수강은 짝에서 빠진다", detail: "choi의 환불 기록은 ON 조건을 못 넘어 짝이 되지 못한다. choi는 다른 수강이 있어 그 줄로 나온다." },
+  ]}
+/>
+
+`WHERE`에 꼭 둬야 하는 조건이라면 NULL인 경우를 명시한다. `WHERE e.status <> 'refunded' OR e.id IS NULL`처럼 쓰면 짝이 없는 줄이 살아난다. 다만 "짝은 있었는데 전부 환불이라 걸러진 사람"(이 데이터에는 없다)은 여전히 사라진다. `ON`과 `WHERE`의 의미가 다르다는 걸 기억하면 어느 쪽을 원하는지 정할 수 있다. 짝을 고르는 조건은 `ON`, 결과에서 줄을 지우는 조건은 `WHERE`다. 세 테이블 이상을 이을 때도 같다. `a LEFT JOIN b ... JOIN c ON c.x = b.x`처럼 뒤에 `INNER JOIN`을 하나 붙이면 `b`가 NULL인 줄이 거기서 떨어져서 앞의 `LEFT JOIN`이 무의미해진다.
+
+## 짝이 없는 행을 찾는 세 가지 모양
+
+"한 번도 수강하지 않은 수강생"처럼 짝이 없는 행을 찾는 조인을 안티 조인(anti join)이라고 한다. SQL에는 `ANTI JOIN`이라는 문법이 없어서 보통 셋 중 하나로 쓴다.
+
+```sql
+-- 1. LEFT JOIN 후 오른쪽이 NULL인 줄만
+SELECT s.name FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+WHERE e.student_id IS NULL;
+
+-- 2. NOT EXISTS
+SELECT s.name FROM students s
+WHERE NOT EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = s.id);
+
+-- 3. NOT IN (NULL에 약하다)
+SELECT s.name FROM students s
+WHERE s.id NOT IN (SELECT student_id FROM enrollments);
+```
+
+셋 다 jung 한 명이 나온다. 3번은 서브쿼리 결과에 NULL이 하나라도 섞이면 결과가 통째로 사라진다. 그 이유는 [WHERE 연산자 글](/posts/sql-filtering-operators)에, 실행 계획이 망가지는 모습은 [서브쿼리 글](/posts/sql-subqueries-exists-lateral)에 있다. 여기서는 1번을 쓸 때의 실수 하나만 본다. NULL을 확인할 컬럼을 잘못 고르는 것이다.
+
+```sql
+SELECT s.name FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+WHERE e.score IS NULL
+ORDER BY s.id;
+```
+
+```text
+ name
+------
+ kim
+ lee
+ park
+ choi
+ jung
+(5 rows)
+```
+
+다섯 명이 다 나왔다. `score`는 채점 전이면 원래 NULL인 컬럼이라, "짝이 없어서 NULL"과 "짝은 있는데 값이 NULL"을 구분하지 못한다. `IS NULL`은 오른쪽 테이블에서 NULL이 될 수 없는 컬럼에 건다. 기본 키나, `ON`에 쓴 조인 컬럼이다.
+
+둘 중 어느 걸 고르느냐가 PostgreSQL 16에서는 계획까지 바꾼다. 수강생 10만 명, 수강 30만 건짜리 큰 테이블을 만들었다. 수강생 중 3만 986명은 수강 기록이 없다.
+
+```sql
+SELECT setseed(0.42);   -- 같은 난수가 나오게 고정한다
+CREATE TABLE students_big AS
+SELECT g AS id, 'user' || g AS name, (ARRAY['seoul','busan','daegu',NULL])[1 + g % 4] AS city
+FROM generate_series(1, 100000) g;
+ALTER TABLE students_big ADD PRIMARY KEY (id);
+
+CREATE TABLE enrollments_big AS
+SELECT g AS id, (1 + floor(random() * 70000))::int AS student_id,   -- 7만 명 안에서만 고른다
+       (1 + g % 5) AS course_id,
+       (ARRAY['completed','active','refunded'])[1 + g % 3] AS status,
+       CASE WHEN g % 3 = 0 THEN (50 + floor(random() * 51))::int END AS score,
+       timestamptz '2026-09-01 00:00+09' + (g % 90) * interval '1 day' AS enrolled_at
+FROM generate_series(1, 300000) g;
+ALTER TABLE enrollments_big ADD PRIMARY KEY (id);
+CREATE INDEX ON enrollments_big (student_id);
+VACUUM ANALYZE students_big;
+VACUUM ANALYZE enrollments_big;
+```
+
+`e.id IS NULL`(기본 키)과 `e.student_id IS NULL`(조인 컬럼)로 각각 세어 본다. 결과는 둘 다 30986이다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM students_big s
+LEFT JOIN enrollments_big e ON e.student_id = s.id
+WHERE e.id IS NULL;
+```
+
+```text
+ Aggregate (actual time=140.621..143.487 rows=1 loops=1)
+   ->  Gather (actual time=124.272..141.007 rows=30986 loops=1)
+         Workers Planned: 1
+         Workers Launched: 1
+         ->  Parallel Hash Right Join (actual time=121.188..126.021 rows=15493 loops=2)
+               Hash Cond: (e.student_id = s.id)
+               Filter: (e.id IS NULL)
+               Rows Removed by Filter: 150000
+               ->  Parallel Seq Scan on enrollments_big e (actual time=0.010..21.329 rows=150000 loops=2)
+               ->  Parallel Hash (actual time=25.642..25.644 rows=50000 loops=2)
+                     Buckets: 131072  Batches: 1  Memory Usage: 4992kB
+                     ->  Parallel Index Only Scan using students_big_pkey on students_big s (actual time=0.028..7.507 rows=50000 loops=2)
+                           Heap Fetches: 0
+ Planning Time: 1.265 ms
+ Execution Time: 143.544 ms
+```
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM students_big s
+LEFT JOIN enrollments_big e ON e.student_id = s.id
+WHERE e.student_id IS NULL;
+```
+
+```text
+ Finalize Aggregate (actual time=134.104..138.233 rows=1 loops=1)
+   ->  Gather (actual time=121.241..138.215 rows=2 loops=1)
+         Workers Planned: 1
+         Workers Launched: 1
+         ->  Partial Aggregate (actual time=119.830..119.836 rows=1 loops=2)
+               ->  Parallel Hash Right Anti Join (actual time=114.456..118.673 rows=15493 loops=2)
+                     Hash Cond: (e.student_id = s.id)
+                     ->  Parallel Seq Scan on enrollments_big e (actual time=0.015..18.561 rows=150000 loops=2)
+                     ->  Parallel Hash (actual time=25.337..25.338 rows=50000 loops=2)
+                           Buckets: 131072  Batches: 1  Memory Usage: 4992kB
+                           ->  Parallel Index Only Scan using students_big_pkey on students_big s (actual time=0.049..9.504 rows=50000 loops=2)
+                                 Heap Fetches: 0
+ Planning Time: 0.280 ms
+ Execution Time: 138.294 ms
+```
+
+첫 계획은 30만 건과 짝을 모두 맞춘 다음 `Filter: (e.id IS NULL)`로 `Rows Removed by Filter: 150000`(작업자 하나당)을 버린다. 둘째는 `Anti Join` 노드가 직접 짝 없는 행만 내보낸다. PostgreSQL 16의 플래너는 `IS NULL`이 걸린 컬럼이 조인 조건에 쓰인 컬럼일 때만 "이건 안티 조인이다"라고 알아본다. `e.id`가 NOT NULL이라는 제약은 이 판단에 쓰지 않았다. `NOT EXISTS`로 쓴 2번도 같은 `Parallel Hash Right Anti Join`이 나왔고 112ms였다. 이 크기에서는 시간 차이가 크지 않지만, 짝이 많은 테이블일수록 버릴 줄을 만드는 비용이 커진다. 안티 조인은 `NOT EXISTS`로 쓰는 게 뜻도 분명하고 계획도 안정적이다.
+
+`Right Anti Join`은 PostgreSQL 16에서 새로 생긴 노드다. 해시 표를 작은 쪽(`students_big`)으로 만들고, 큰 쪽을 훑으며 짝을 찾은 학생에 표시를 해 둔 뒤, 끝에 표시가 없는 학생만 내보낸다. 15까지는 안티 조인의 해시 표를 늘 "찾을 대상" 쪽, 여기서는 30만 건 쪽에 만들어야 했다. 아래 그림에서 다음을 누르면 이 순서가 보인다.
+
+<SequenceDiagram
+  caption="Hash Right Anti Join: 작은 쪽으로 표를 만들고 표시 안 된 행을 내보낸다"
+  actors={[
+    { id: "s", label: "students" }, { id: "h", label: "해시 표" },
+    { id: "e", label: "enrollments" }, { id: "out", label: "결과" },
+  ]}
+  steps={[
+    { from: "s", to: "h", label: "10만 명 적재", title: "작은 쪽으로 표를 만든다", detail: "학생 id로 해시 표를 만든다. 칸마다 짝을 찾았는지 적는 표시가 하나 붙는다.", payload: "Parallel Hash  Buckets: 131072" },
+    { from: "e", to: "h", label: "student_id 조회", title: "큰 쪽을 한 번 훑는다", detail: "수강 30만 건을 차례로 읽으며 student_id로 표를 찾는다. 찾은 학생에 표시만 하고 줄은 내보내지 않는다." },
+    { from: "h", to: "h", label: "표시", title: "짝 찾은 학생에 표시", detail: "같은 학생이 여러 번 나와도 표시는 한 번이면 된다. 6만 9014명에 표시가 붙는다." },
+    { from: "h", to: "out", label: "표시 없는 학생", title: "끝에 표를 훑는다", detail: "표시가 없는 학생이 짝 없는 행이다. 30986명이 나온다.", payload: "Parallel Hash Right Anti Join  rows=15493 loops=2" },
+  ]}
+/>
+
+MySQL 8도 8.0.17부터 `NOT EXISTS`와 `NOT IN` 서브쿼리를 안티 조인으로 바꿔 실행한다. 어느 DB든 같은 뜻의 쿼리가 같은 계획이 된다고 믿지 말고 `EXPLAIN`으로 확인한다.
+
+## 결제와 수강 기록 맞춰 보기
+
+정산 담당자가 "결제는 있는데 수강 등록이 없는 건, 수강은 있는데 결제가 없는 건을 한 번에 보여 달라"고 한다. 양쪽 다 짝 없는 행이 필요하니 `FULL JOIN`이다.
+
+```sql
+SELECT e.id AS enrollment, e.status, p.id AS payment, p.amount
+FROM enrollments e
+FULL JOIN payments p ON p.enrollment_id = e.id
+WHERE e.id IS NULL OR p.id IS NULL
+ORDER BY e.id, p.id;
+```
+
+```text
+ enrollment | status | payment | amount
+------------+--------+---------+--------
+          7 | active |  (null) | (null)
+     (null) | (null) |      12 |  20000
+(2 rows)
+```
+
+7번 수강은 결제가 없고, 12번 결제는 수강이 없다. 대사(reconciliation)라고 부르는 이런 작업이 `FULL JOIN`의 거의 유일한 실무 용도다. 키가 NULL인 결제는 어떤 수강과도 같지 않으니(NULL = 7은 알 수 없음) 짝이 되지 못하고 혼자 남는다. 조인 키의 NULL은 언제나 짝이 없다.
+
+`FULL JOIN`에는 PostgreSQL만의 제약이 있다. 결제 시각이 수강 시각부터 1분 안인지로 짝을 지어 보려 했다.
+
+```sql
+SELECT * FROM enrollments e
+FULL JOIN payments p ON p.paid_at BETWEEN e.enrolled_at AND e.enrolled_at + interval '1 minute';
+```
+
+```text
+ERROR:  FULL JOIN is only supported with merge-joinable or hash-joinable join conditions
+```
+
+PostgreSQL은 `FULL JOIN`을 Hash Join이나 Merge Join으로만 실행할 수 있어서, 조건에 등호(`=`)가 하나는 있어야 한다. 범위 조건만 있는 `FULL JOIN`은 막힌다. `p.enrollment_id = e.id AND p.paid_at < e.enrolled_at + interval '1 day'`처럼 등호와 범위를 함께 쓰면 돌아간다. 등호를 넣을 수 없으면 `LEFT JOIN` 결과에 "오른쪽에만 있는 행"을 `NOT EXISTS`로 찾아 `UNION ALL`로 붙인다. MySQL 8은 `FULL JOIN` 자체가 없어서 늘 이 방법을 쓴다.
+
+## 같은 테이블을 두 번 읽는 조인
+
+"같은 강의를 들은 수강생 짝"을 뽑는다. `enrollments`를 두 번 쓰는 셀프 조인이다.
+
+```sql
+SELECT a.name AS student_a, b.name AS student_b, c.title
+FROM enrollments ea
+JOIN enrollments eb ON eb.course_id = ea.course_id
+                   AND eb.student_id > ea.student_id   -- 자기 자신과 뒤집힌 짝을 뺀다
+JOIN students a ON a.id = ea.student_id
+JOIN students b ON b.id = eb.student_id
+JOIN courses c  ON c.id = ea.course_id
+ORDER BY c.id, a.name, b.name;
+```
+
+```text
+ student_a | student_b |      title
+-----------+-----------+-----------------
+ kim       | lee       | SQL 기초
+ kim       | park      | SQL 기초
+ lee       | park      | SQL 기초
+ kim       | choi      | PostgreSQL 튜닝
+ kim       | choi      | React 입문
+ kim       | lee       | React 입문
+ lee       | choi      | React 입문
+(7 rows)
+```
+
+`eb.student_id > ea.student_id`가 중요하다. `course_id`만 같게 하면 23줄이 나온다. 자기 자신과의 짝(kim-kim)이 9줄 섞이고, 남은 14줄도 (kim, lee)와 (lee, kim)이 따로 나와 같은 짝이 두 번이다. `<>`로 바꾸면 자기 자신만 빠지고 14줄이 된다. `>`(또는 `<`)를 써야 짝 하나가 한 줄이다. 강의당 수강생이 n명이면 짝은 n(n-1)/2개라서, 수강생 천 명짜리 강의에서는 49만 9500줄이 나온다. 셀프 조인은 결과 크기를 먼저 계산해 보고 쓴다.
+
+`CROSS JOIN`도 같은 계산이 필요하다. "수강생마다 아직 안 들은 강의"는 `students CROSS JOIN courses`로 가능한 조합 25개를 만들고 실제 수강을 `NOT EXISTS`로 빼면 되지만, 학생 10만 명 × 강의 500개면 조합이 5천만 개다. 양쪽이 작을 때만 쓴다.
+
+같은 도시 사람끼리 짝을 지을 때는 NULL이 또 문제다. `s1.city = s2.city`는 도시가 NULL인 park을 누구와도 짝 짓지 않는다. NULL끼리도 같다고 보고 싶으면 `IS NOT DISTINCT FROM`을 쓴다. 다만 이 연산자로는 Hash Join을 못 쓴다. 큰 테이블에서 계획을 보면 `Nested Loop`과 `Join Filter: (NOT (s1.city IS DISTINCT FROM s2.city))`가 나온다. 큰 테이블끼리라면 `coalesce(city, '')`처럼 NULL을 값으로 바꾼 식으로 맞추는 편이 낫다.
+
+## 리포트 숫자가 이상할 때 조인부터 의심하는 순서
+
+조인이 들어간 리포트의 숫자가 의심스러우면 이 순서로 본다.
+
+첫째, 결과 행 수를 기준 테이블 행 수와 비교한다. "강의별 리포트"인데 조인 직후 행 수가 강의 수보다 많다면(집계 전), 어느 조인이 늘렸는지 조인을 하나씩 빼며 `count(*)`를 찍는다. 늘린 조인을 찾으면 그 상대 테이블의 조인 키에 `GROUP BY ... HAVING count(*) > 1`을 돌려 본다.
+
+둘째, 합계를 원본과 맞춘다. 리포트의 `sum` 총합과 원본 테이블의 `sum`을 비교한다. 리포트 쪽이 크면 행 곱하기, 작으면 `INNER JOIN`이나 `WHERE`가 행을 지웠거나 조인 키가 NULL인 행이 빠진 것이다. 이 글의 데이터라면 리포트 65만 원, 연결된 결제 41만 원, 전체 결제 43만 원이다. 마지막 2만 원이 연결이 끊긴 결제다.
+
+셋째, `LEFT JOIN`인데 짝 없는 행이 안 보이면 `EXPLAIN`의 조인 노드 이름을 본다. `Left`나 `Right`가 빠졌으면 `WHERE`가 바깥 조인을 지웠다.
+
+넷째, 개수에 `DISTINCT`가 붙어 있으면 왜 붙였는지 묻는다. 행 곱하기를 가리려고 붙인 `DISTINCT`라면 같은 쿼리의 `sum`은 거의 틀려 있다.
+
+## 조인을 손으로 짜 보기
+
+조인이 행을 어떻게 불리고 NULL을 어떻게 다루는지 직접 구현해 본다. 왼쪽 행마다 키가 같은 오른쪽 행을 모두 찾아 `[왼쪽 id, 오른쪽 id]` 쌍을 만들고, 짝이 없으면 `[왼쪽 id, null]`을 하나 만든다. SQL처럼 키가 `null`이면 무엇과도 같지 않다. 결과는 왼쪽 순서대로, 같은 왼쪽 안에서는 오른쪽 순서대로 낸다. 테스트의 기대값은 같은 데이터를 PostgreSQL에서 `LEFT JOIN`한 결과와 맞췄다.
+
+<CodePlayground
+  caption="LEFT JOIN 구현하기"
+  functionName="leftJoin"
+  initialCode={`function leftJoin(left, right, leftKey, rightKey) {
+  // [[왼쪽 id, 오른쪽 id 또는 null], ...]
+  return [];
+}`}
+  solution={`function leftJoin(left, right, leftKey, rightKey) {
+  const out = [];
+  for (const l of left) {
+    const k = l[leftKey];
+    // NULL은 무엇과도 같지 않다
+    const matches = k === null ? [] : right.filter((r) => r[rightKey] === k);
+    if (matches.length === 0) out.push([l.id, null]);   // 짝이 없어도 왼쪽은 남는다
+    for (const r of matches) out.push([l.id, r.id]);    // 짝이 여럿이면 줄도 여럿
+  }
+  return out;
+}`}
+  tests={[
+    { label: "할부 결제는 줄을 늘린다", args: [[{ id: 1 }, { id: 2 }, { id: 7 }], [{ id: 1, enrollment_id: 1 }, { id: 2, enrollment_id: 2 }, { id: 3, enrollment_id: 2 }], "id", "enrollment_id"], expected: [[1, 1], [2, 2], [2, 3], [7, null]] },
+    { label: "왼쪽 키가 NULL", args: [[{ id: 12, enrollment_id: null }], [{ id: 1 }], "enrollment_id", "id"], expected: [[12, null]] },
+    { label: "오른쪽이 비었다", args: [[{ id: 5 }], [], "id", "student_id"], expected: [[5, null]] },
+    { label: "NULL끼리도 짝이 아니다", args: [[{ id: 3, city: null }], [{ id: 9, city: null }], "city", "city"], expected: [[3, null]] },
+  ]}
+/>
+
+## 행 수를 먼저 센다
+
+조인은 행을 지우거나 불린다. 지우는 쪽은 `INNER JOIN`, 오른쪽 컬럼을 건드리는 `WHERE`, NULL 키이고, 불리는 쪽은 짝이 여럿인 조인과 서로 모르는 자식 테이블 둘을 함께 붙인 조인이다. 그래서 조인을 더할 때마다 행 수를 세어 보고, 자식 테이블은 부모 키로 먼저 묶은 뒤 붙이고, `LEFT JOIN`을 썼으면 실행 계획에 `Left`가 남아 있는지 확인한다. 짝이 없는 행은 `NOT EXISTS`로 찾는다. 조인 대신 서브쿼리로 쓰면 무엇이 달라지는지는 [서브쿼리 글](/posts/sql-subqueries-exists-lateral)에서 이어 본다.
+
+## 면접에서 나올 만한 질문
+
+### INNER, LEFT, FULL, CROSS JOIN은 각각 언제 쓰나요?
+
+`INNER`는 양쪽에 짝이 있는 행만, `LEFT`는 왼쪽 행을 모두 남기고 짝이 없으면 오른쪽을 NULL로 채운다. `FULL`은 양쪽 모두 남겨서 두 테이블을 맞춰 보는 대사 작업에 쓰고, `CROSS`는 모든 조합이 필요할 때 쓴다. `RIGHT JOIN`은 테이블 순서를 바꾼 `LEFT JOIN`이라 보통 `LEFT`로 통일한다.
+
+### 조인 후 SUM이 실제보다 크게 나옵니다. 원인과 해결책은요?
+
+조인 상대에 같은 키가 여러 줄 있거나, 한 부모에 서로 관계없는 자식 테이블 둘을 함께 붙여 행이 곱해진 것이다. 조인 키에 `GROUP BY ... HAVING count(*) > 1`을 돌리면 찾을 수 있다. 자식 테이블마다 부모 키로 먼저 집계한 뒤 붙이면 붙는 쪽이 항상 한 줄이라 곱이 생기지 않는다.
+
+### 그럼 count(DISTINCT)나 sum(DISTINCT)로 고치면 되지 않나요?
+
+개수는 키를 세니까 `count(DISTINCT 키)`로 맞출 수 있지만, `sum(DISTINCT 금액)`은 값이 같은 서로 다른 결제를 하나로 합쳐 더 크게 틀린다. 이 글의 데이터에서는 30000원 결제 두 건이 하나가 됐고, 결제와 환불이 0으로 남았다. 곱해진 행을 `DISTINCT`로 가리지 말고 먼저 묶어서 없앤다.
+
+### LEFT JOIN을 썼는데 짝 없는 행이 결과에 안 나옵니다. 왜 그런가요?
+
+`WHERE`에 오른쪽 테이블 컬럼 조건이 있으면 짝 없는 줄의 NULL이 그 조건에서 떨어진다. PostgreSQL은 이걸 알아보고 실행 계획에서 아예 `INNER JOIN`으로 바꾸니, `EXPLAIN` 맨 위 노드에 `Left`가 있는지 보면 확인된다. 짝을 고르는 조건이라면 `ON`으로 옮긴다.
+
+### 안티 조인은 어떻게 쓰고, LEFT JOIN ... IS NULL에서 주의할 점은요?
+
+`NOT EXISTS`나 `LEFT JOIN` 뒤 오른쪽이 NULL인 줄만 남기는 방법으로 쓴다. `IS NULL`은 원래 NULL일 수 있는 컬럼에 걸면 "짝이 없음"과 "값이 NULL"을 구분하지 못해 틀린 결과가 나온다. PostgreSQL 16에서는 조인 컬럼에 걸어야 플래너가 안티 조인으로 바꾸고, 기본 키에 걸면 조인 후 필터로 버린다. 뜻이 분명한 `NOT EXISTS`가 가장 안전하다.
+
+### PostgreSQL에서 FULL JOIN이 에러를 내는 경우가 있나요?
+
+조건에 등호가 하나도 없으면 `FULL JOIN is only supported with merge-joinable or hash-joinable join conditions` 에러가 난다. PostgreSQL이 `FULL JOIN`을 Hash Join과 Merge Join으로만 실행하기 때문이다. 등호 조건을 함께 쓰거나, `LEFT JOIN`과 오른쪽에만 있는 행을 `UNION ALL`로 붙인다.
+
+### 셀프 조인으로 짝을 만들 때 흔한 실수는요?
+
+같은 키만으로 조인하면 자기 자신과의 짝과 (a, b), (b, a)가 모두 나온다. `a.id < b.id`처럼 한 방향으로만 짝을 지으면 짝 하나가 한 줄이 된다. 결과가 그룹당 n(n-1)/2줄이라 그룹이 크면 폭발하니 크기를 먼저 계산한다.

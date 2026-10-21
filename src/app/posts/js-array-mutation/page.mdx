@@ -1,0 +1,487 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-array-mutation");
+
+할 일 목록에 "추가" 버튼을 만들었다. 버튼을 누르면 배열에 하나를 넣고 상태를 갱신한다.
+
+```jsx
+const [items, setItems] = useState(["a", "b", "c"]);
+
+const add = (value) => {
+  items.push(value); // 배열에 넣고
+  setItems(items); // 상태를 갱신한다
+};
+```
+
+눌러도 화면은 그대로다. 콘솔로 찍어 보면 `items`에는 분명히 새 항목이 들어 있다. 더 이상한 건 그다음이다. 다른 버튼을 눌러 상태가 바뀌면 그동안 안 보이던 항목이 한꺼번에 나타난다. 실제로 React 19.1 프로덕션 빌드를 크로미움에서 돌려서 버튼을 차례로 눌러 봤다(`mut`은 위 코드, `copy`는 `setItems([...items, value])`).
+
+```text
+처음         renders=1  화면=a,b,c      상태=a,b,c
+mut +d     renders=1  화면=a,b,c      상태=a,b,c,d
+copy +e    renders=2  화면=a,b,c,d,e  상태=a,b,c,d,e
+mut +f     renders=3  화면=a,b,c,d,e  상태=a,b,c,d,e,f
+mut +g     renders=3  화면=a,b,c,d,e  상태=a,b,c,d,e,f,g
+```
+
+`d`는 넣은 순간이 아니라 `e`를 넣을 때 같이 나타났다. `f`를 넣을 때는 컴포넌트 함수가 한 번 더 돌았는데도(renders=3) 화면은 그대로다. 원인은 `push`가 원본 배열을 고친다는 것, 그리고 React가 "같은 배열인가"만 본다는 것이다. 이 글은 배열 메서드를 원본을 고치는 쪽과 사본을 주는 쪽으로 나누고, `sort`의 함정과 ES2023의 `toSorted`, `with`, 그리고 React 상태에서 무엇을 써야 하는지 따라간다.
+
+값을 바꿔 새 배열을 만드는 `map`, `filter`, `reduce` 같은 메서드는 [배열을 바꾸고 고르고 접는 메서드](/posts/js-array-transform)에서 먼저 다뤘다.
+
+## 원본을 고치는 메서드는 아홉 개다
+
+배열 메서드 대부분은 원본을 그대로 두고 새 값을 돌려준다. 원본을 직접 고치는 건 아홉 개뿐이다. 이것만 외워 두면 나머지는 안전하다고 봐도 된다. 각각 무엇을 돌려주는지, 원본을 두고 싶을 때 무엇으로 바꾸는지 같이 정리했다.
+
+| 원본을 고치는 메서드 | 돌려주는 값 | 원본을 두는 대안 |
+|---|---|---|
+| `push(x)` | 새 길이 | `[...arr, x]`, `concat` |
+| `pop()` | 뺀 원소 | `arr.slice(0, -1)` |
+| `unshift(x)` | 새 길이 | `[x, ...arr]` |
+| `shift()` | 뺀 원소 | `arr.slice(1)` |
+| `splice(i, n, ...)` | 지운 원소 배열 | `toSpliced` (ES2023) |
+| `sort(fn)` | 원본 배열 자신 | `toSorted` (ES2023) |
+| `reverse()` | 원본 배열 자신 | `toReversed` (ES2023) |
+| `fill(v)` | 원본 배열 자신 | `Array.from`, `map` |
+| `copyWithin(...)` | 원본 배열 자신 | 거의 쓸 일이 없다 |
+
+돌려주는 값을 눈여겨보자. `push`가 새 배열을 돌려준다고 생각하고 `const next = arr.push(x)`라고 쓰면 `next`에는 숫자가 들어간다.
+
+```js
+const arr = [1, 2, 3];
+console.log(arr.push(4), arr);
+console.log(arr.pop(), arr.shift(), arr.unshift(0), arr);
+
+const s = ["a", "b", "c", "d"];
+console.log(s.splice(1, 2, "x", "y", "z"), s);
+```
+
+```text
+4 [ 1, 2, 3, 4 ]
+4 1 3 [ 0, 2, 3 ]
+[ 'b', 'c' ] [ 'a', 'x', 'y', 'z', 'd' ]
+```
+
+`splice`는 인자 순서 때문에 한 번 더 헷갈린다. 아래 조각을 눌러 보면 각 자리가 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="splice 호출 한 줄을 조각으로 읽기"
+  base="s.splice"
+  separator="("
+  joiner=", "
+  params={[
+    { key: "start", display: "1", title: "start: 시작 위치", description: "여기서부터 지운다. 음수면 뒤에서 센다(-1은 마지막). 길이보다 크면 끝에 붙인다.", required: true },
+    { key: "count", display: "2", title: "deleteCount: 지울 개수", description: "생략하면 start부터 끝까지 지운다. 0이면 아무것도 안 지우고 끼워 넣기만 한다." },
+    { key: "items", display: "\"x\", \"y\", \"z\")", title: "넣을 원소들", description: "지운 자리에 차례로 넣는다. 지운 개수와 달라도 된다. 뒤쪽 원소들은 그만큼 밀리거나 당겨진다." },
+    { key: "ret", display: "→ [\"b\", \"c\"]", title: "돌려주는 값", description: "지운 원소들의 배열이다. 결과 배열이 아니다. 결과는 원본 s에 반영된다." },
+  ]}
+/>
+
+## sort가 돌려준 배열은 원본이다
+
+`sort`가 가장 많은 사고를 낸다. 정렬된 값을 돌려주니 새 배열을 만드는 것처럼 보이지만, 돌려주는 건 원본 배열 그 자체다.
+
+```js
+const items = [{ id: 3, name: "c" }, { id: 1, name: "a" }, { id: 2, name: "b" }];
+const sorted = items.sort((a, b) => a.id - b.id);
+console.log(sorted === items, items.map((i) => i.id));
+```
+
+```text
+true [ 1, 2, 3 ]
+```
+
+`sorted`와 `items`는 같은 배열을 가리키는 두 이름이다. 변수에는 배열이 통째로 들어 있는 게 아니라 배열이 있는 곳을 가리키는 참조가 들어 있다. 아래 그림이 그 관계다. 어느 이름으로 고치든 같은 배열이 바뀐다.
+
+<ConceptDiagram
+  width={400}
+  height={230}
+  caption="sort는 원본을 정렬하고 그 원본의 참조를 돌려준다. toSorted만 새 배열을 만든다."
+  nodes={[
+    { id: "items", label: "items", x: 70, y: 50, w: 100 },
+    { id: "sorted", label: "sorted", sub: "items.sort()", x: 70, y: 130, w: 110 },
+    { id: "arr", label: "배열 #1", sub: "[1, 2, 3] 정렬됨", x: 290, y: 90, w: 150 },
+    { id: "copy", label: "copy", sub: "items.toSorted()", x: 70, y: 205, w: 120 },
+    { id: "arr2", label: "배열 #2", sub: "새로 만든 사본", x: 290, y: 195, w: 150 },
+  ]}
+  edges={[
+    { from: "items", to: "arr" },
+    { from: "sorted", to: "arr", label: "같은 참조" },
+    { from: "copy", to: "arr2" },
+  ]}
+/>
+
+참조와 값의 차이는 [원시값과 참조값](/posts/js-primitive-vs-reference)에서 따로 다룬다. 여기서 기억할 건 하나다. `sort`, `reverse`, `fill`, `copyWithin`은 원본을 돌려주니 결과를 새 변수에 담아도 사본이 아니다.
+
+## 숫자를 정렬했더니 100이 25보다 앞선다
+
+비교 함수 없이 `sort()`를 부르면 원소를 문자열로 바꿔서 UTF-16 코드 단위 순서로 비교한다. 숫자 배열이어도 그렇다.
+
+```js
+console.log([10, 9, 1, 100, 25].sort());
+console.log([10, 9, 1, 100, 25].sort((a, b) => a - b));
+console.log([10, 9, 1, 100, 25].sort((a, b) => b - a));
+console.log(["b", undefined, "a", "C"].sort());
+```
+
+```text
+[ 1, 10, 100, 25, 9 ]
+[ 1, 9, 10, 25, 100 ]
+[ 100, 25, 10, 9, 1 ]
+[ 'C', 'a', 'b', undefined ]
+```
+
+아래 그림에서 다음을 누르면 기본 정렬이 숫자를 어떻게 비교하는지 본다. 사전에서 단어를 찾는 순서와 같다.
+
+<AlgoTrace
+  caption="기본 sort는 문자열로 바꿔 앞 글자부터 비교한다."
+  memoryLabel="정렬 결과"
+  cells={["\"10\"", "\"9\"", "\"1\"", "\"100\"", "\"25\""]}
+  steps={[
+    { memory: [], caption: "비교 함수가 없으니 모든 원소를 문자열로 바꾼다. 10은 \"10\"이 된다." },
+    { pointer: 2, memory: ["\"1\""], caption: "첫 글자 '1'(코드 49)이 가장 작다. \"1\"은 \"10\"의 앞부분이라 더 짧은 쪽이 먼저다." },
+    { pointer: 0, memory: ["\"1\"", "\"10\""], caption: "\"10\"과 \"100\"도 앞부분이 같다. 짧은 \"10\"이 먼저다." },
+    { pointer: 3, memory: ["\"1\"", "\"10\"", "\"100\""], caption: "첫 글자가 '1'인 묶음이 끝났다. 100이 25보다 앞에 있다." },
+    { pointer: 4, memory: ["\"1\"", "\"10\"", "\"100\"", "\"25\""], caption: "'2'(코드 50)가 다음이다." },
+    { pointer: 1, found: [0, 1, 2, 3, 4], memory: ["1", "10", "100", "25", "9"], caption: "'9'(코드 57)가 마지막이다. 숫자로 보면 엉망인 순서가 나온다." },
+  ]}
+/>
+
+대문자 `C`가 소문자 `a`보다 앞에 온 것도 같은 이유다. 대문자 코드(65~90)가 소문자(97~122)보다 작다. `undefined`는 비교 함수를 부르지 않고 항상 맨 뒤로 보낸다(명세가 그렇게 정했다).
+
+### 비교 함수의 약속
+
+비교 함수 `(a, b)`는 `a`가 앞이면 음수, `b`가 앞이면 양수, 같으면 0을 돌려줘야 한다. 숫자라면 `a - b`가 오름차순, `b - a`가 내림차순이다. 여기서 자주 하는 실수가 참거짓을 돌려주는 것이다.
+
+```js
+const nums = [5, 1, 4, 2, 3, 9, 7, 8, 6, 0, 11, 15, 13, 12, 14];
+console.log(nums.slice().sort((a, b) => a > b));
+console.log(nums.slice().sort((a, b) => (a > b ? 1 : a < b ? -1 : 0)));
+```
+
+```text
+[
+   5,  1,  4, 2,  3,  9,
+   7,  8,  6, 0, 11, 15,
+  13, 12, 14
+]
+[
+   0,  1,  2, 3,  4,  5,
+   6,  7,  8, 9, 11, 12,
+  13, 14, 15
+]
+```
+
+`a > b`는 `true`(1) 아니면 `false`(0)다. 음수를 한 번도 돌려주지 않으니 정렬기는 "a가 앞이어야 한다"는 신호를 받지 못한다. Node 22(V8)에서는 하나도 움직이지 않았다. 엔진과 배열 길이에 따라 결과가 달라지니(예전 V8은 길이에 따라 다른 알고리즘을 썼다), 작은 테스트 데이터에서 우연히 맞게 나오다가 운영 데이터에서 틀리는 일이 생긴다. 비교 함수는 반드시 세 가지 값을 돌려준다.
+
+ES2019부터 `sort`는 안정 정렬(stable)이 명세로 정해졌다. 비교 결과가 0인 두 원소는 원래 순서를 지킨다. 그래서 "날짜순으로 정렬한 다음 상태별로 다시 정렬하면, 같은 상태 안에서는 날짜순이 유지된다"를 믿어도 된다. 크롬 70, Node 11 이전 V8은 길이가 10을 넘으면 불안정했다.
+
+### 한글과 영어가 섞인 이름
+
+```js
+const names = ["사과", "Banana", "가지", "apple"];
+console.log(names.slice().sort());
+console.log(names.slice().sort((a, b) => a.localeCompare(b)));
+console.log(names.slice().sort(new Intl.Collator("ko").compare));
+console.log(["item10", "item9", "item1"].sort(new Intl.Collator("ko", { numeric: true }).compare));
+```
+
+```text
+[ 'Banana', 'apple', '가지', '사과' ]
+[ 'apple', 'Banana', '가지', '사과' ]
+[ '가지', '사과', 'apple', 'Banana' ]
+[ 'item1', 'item9', 'item10' ]
+```
+
+기본 정렬은 대문자가 먼저라 `Banana`가 `apple` 앞이다. `localeCompare`는 대소문자를 사람이 기대하는 대로 섞는다. `Intl.Collator("ko")`는 한국어 규칙대로 한글을 영어보다 앞에 둔다. `numeric: true`를 주면 `item9`가 `item10` 앞에 온다. 파일 이름이나 버전 목록을 정렬할 때 쓴다. 정렬할 원소가 많으면 `localeCompare`를 매번 부르는 것보다 `Collator`를 한 번 만들어 `compare`를 넘기는 쪽이 빠르다.
+
+## 사본을 돌려주는 ES2023 메서드
+
+원본을 두고 정렬하려면 예전에는 `[...arr].sort()`나 `arr.slice().sort()`처럼 먼저 복사해야 했다. ES2023에 원본을 고치지 않는 짝 메서드 네 개가 들어왔다. 크롬 110, 사파리 16, 파이어폭스 115, Node 20 이후에서 쓸 수 있다.
+
+```js
+const scores = [30, 10, 20];
+const asc = scores.toSorted((a, b) => a - b);
+console.log(asc, scores, asc === scores);
+console.log(scores.toReversed(), scores.toSpliced(1, 1, 99), scores.with(-1, 0), scores);
+
+try {
+  scores.with(5, 1);
+} catch (e) {
+  console.log(`${e.name}: ${e.message}`);
+}
+```
+
+```text
+[ 10, 20, 30 ] [ 30, 10, 20 ] false
+[ 20, 10, 30 ] [ 30, 99, 20 ] [ 30, 10, 0 ] [ 30, 10, 20 ]
+RangeError: Invalid index : 5
+```
+
+`toSorted`, `toReversed`, `toSpliced`는 이름 그대로 짝 메서드의 사본 버전이다. `toSpliced`는 `splice`와 달리 지운 원소가 아니라 결과 배열을 돌려준다. `with(i, v)`는 `arr[i] = v`의 사본 버전이다. 음수 인덱스를 받고, 범위를 벗어나면 조용히 늘리는 대신 `RangeError`를 던진다. 대괄호 대입은 `arr[5] = 1`로 빈 칸을 만들면서 길이를 늘려 버리는 것과 대조적이다.
+
+사본이라고 해서 원소까지 새로 만드는 건 아니다. 바깥 배열만 새로 만들고 안의 객체는 원본과 같은 객체를 담는다.
+
+```js
+const todos = [{ id: 1, done: false }, { id: 2, done: false }];
+const copy = todos.toSorted((a, b) => b.id - a.id);
+copy[0].done = true; // 사본의 첫 원소를 고쳤는데
+console.log(todos);
+```
+
+```text
+[ { id: 1, done: false }, { id: 2, done: true } ]
+```
+
+원본의 2번 할 일도 바뀌었다. 얕은 복사라서다. 안쪽까지 복사하는 방법과 그 비용은 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 다룬다.
+
+TypeScript에서 `toSorted`가 없다는 에러가 나면 `tsconfig`의 `lib`에 `ES2023`이 빠진 것이다. 런타임이 지원해도 타입 정의가 없으면 컴파일이 안 된다. 반대로 `lib`만 올리고 옛 브라우저를 지원해야 한다면 core-js 같은 폴리필이 필요하다.
+
+## React는 같은 배열이면 다시 그리지 않는다
+
+맨 앞의 버그로 돌아가자. `setItems(next)`를 부르면 React는 지금 상태와 `next`를 `Object.is`로 비교한다. 같으면 "바뀐 게 없다"고 보고 렌더링을 건너뛴다. 내용을 한 칸씩 비교하지 않는다. 원소가 10만 개인 배열이어도 참조 하나만 비교하니 빠르다. 대신 원본을 고친 뒤 같은 배열을 넘기면 React는 변화를 알 수 없다.
+
+아래 그림에서 다음을 누르면 `push` 후 같은 배열을 넘겼을 때와 새 배열을 넘겼을 때를 차례로 본다.
+
+<SequenceDiagram
+  caption="React는 참조만 비교한다. 원본을 고친 배열은 '같은 배열'이다."
+  actors={[
+    { id: "handler", label: "클릭 핸들러" },
+    { id: "react", label: "React" },
+    { id: "comp", label: "컴포넌트" },
+    { id: "dom", label: "화면" },
+  ]}
+  steps={[
+    { from: "handler", to: "handler", label: "items.push(d)", title: "원본에 넣는다", detail: "items 배열 자체가 [a, b, c, d]로 바뀐다. 참조는 그대로다." },
+    { from: "handler", to: "react", label: "setItems(items)", title: "같은 참조를 넘긴다", detail: "React는 지금 상태와 새 값을 Object.is로 비교한다.", payload: "Object.is(prev, next) // true" },
+    { from: "react", to: "react", label: "건너뜀", title: "바뀐 게 없다고 본다", detail: "렌더링을 예약하지 않는다. 화면은 a,b,c 그대로다. 상태 배열 안에는 d가 숨어 있다." },
+    { from: "handler", to: "react", label: "setItems([...items, e])", title: "새 배열을 넘긴다", detail: "참조가 다르니 바뀐 것으로 보고 렌더링을 예약한다." },
+    { from: "react", to: "comp", label: "렌더", title: "컴포넌트를 다시 부른다", detail: "새 배열 [a, b, c, d, e]로 JSX를 만든다. 숨어 있던 d도 함께 그려진다." },
+    { from: "comp", to: "dom", label: "커밋", title: "화면이 바뀐다", detail: "d와 e가 한꺼번에 나타난다. 사용자는 d가 늦게 뜬 것으로 본다.", payload: "화면=a,b,c,d,e" },
+  ]}
+/>
+
+로그의 `mut +f` 줄이 renders=3인데 화면이 그대로인 것도 짚어 둘 만하다. React는 같은 값인지 미리 확인할 수 없는 상황(이미 다른 업데이트가 처리 중이던 컴포넌트 등)에서는 일단 컴포넌트 함수를 부르고, 상태가 같다는 걸 확인한 뒤 자식 반영을 버린다. 공식 문서도 "React가 건너뛰기 전에 컴포넌트를 부를 수 있다"고 적고 있다. 그래서 "렌더 함수 안의 `console.log`는 찍혔는데 화면이 안 바뀐다"는 증상이 나온다. 렌더 로그만 보고 상태가 제대로 갔다고 판단하면 안 된다.
+
+고치는 방법은 원본을 고치지 않고 새 배열을 만드는 것이다. 자주 쓰는 모양을 모았다.
+
+```js
+setItems((prev) => [...prev, newItem]); // 추가
+setItems((prev) => prev.filter((t) => t.id !== id)); // 삭제
+setItems((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))); // 하나 고치기
+setItems((prev) => prev.toSpliced(index, 0, newItem)); // 중간에 끼워 넣기
+setItems((prev) => prev.toSorted((a, b) => a.title.localeCompare(b.title))); // 정렬
+setItems((prev) => prev.with(index, edited)); // 한 칸 바꾸기
+```
+
+하나 고치기에서 `{ ...t, done: !t.done }`으로 원소 객체도 새로 만든 데 주목하자. 배열만 새로 만들고 `t.done = true`로 원소를 고치면, 그 원소를 props로 받는 `React.memo` 자식은 같은 객체를 받으니 다시 그려지지 않는다. 바뀐 경로 위의 객체는 전부 새로 만든다. 중첩이 깊어지면 이 작업이 번거로워지는데, 그 해법(Immer 같은 도구)은 [React 상태를 불변으로 다루기](/posts/js-immutability-react)에서 다룬다. `...` 문법 자체는 [전개와 나머지 문법](/posts/js-spread-rest)에 정리했다.
+
+## 렌더링 중에 sort를 부르면
+
+원본을 고치는 메서드는 상태 갱신 말고도 사고를 낸다. 자식 컴포넌트가 받은 목록을 정렬해서 보여 주는 코드다.
+
+```jsx
+function RankingTable({ players }) {
+  const ranked = players.sort((a, b) => b.score - a.score); // props를 직접 정렬한다
+  return ranked.map((p) => <Row key={p.id} player={p} />);
+}
+```
+
+`players`는 부모의 상태 배열이다. 이 자식이 렌더링될 때마다 부모 상태가 정렬된다. 같은 배열을 "가입 순"으로 보여 주던 옆 컴포넌트는 다음 렌더링 때 갑자기 점수 순으로 바뀐다. 무엇이 바꿨는지 추적하기도 어렵다. 바꾼 코드가 전혀 다른 컴포넌트에 있기 때문이다.
+
+렌더링은 순수해야 한다. 같은 입력이면 같은 출력을 내고, 바깥을 바꾸지 않아야 한다. React의 StrictMode가 개발 모드에서 컴포넌트를 두 번 부르는 이유가 이런 부수 효과를 드러내기 위해서다. 고치는 방법은 `players.toSorted(...)`로 사본을 정렬하는 것이다. 목록이 크고 다른 이유로 자주 렌더링된다면 `useMemo`로 감싼다. 순수 함수가 무엇이고 왜 중요한지는 [순수 함수와 부수 효과](/posts/js-pure-functions)에서 본다.
+
+## 큐로 쓴 배열이 느려지는 순간
+
+원본을 고치는 메서드에는 성능 함정도 있다. `shift`와 `unshift`는 맨 앞을 빼거나 넣기 때문에 나머지 원소를 전부 한 칸씩 옮긴다. 원소가 n개면 n번 옮긴다. 배열을 큐(먼저 넣은 것을 먼저 빼는 대기열)로 쓰면서 `shift`를 반복하면 전체가 n의 제곱이 된다.
+
+원소 10만 개로 쟀다(Node 22).
+
+```js
+function bench(name, fn) {
+  const t = performance.now();
+  const r = fn();
+  console.log(`${name.padEnd(14)} ${(performance.now() - t).toFixed(1)}ms`, r);
+}
+const N = 100_000;
+const make = () => Array.from({ length: N }, (_, i) => i);
+
+// shift로 앞에서 하나씩 뺀다
+bench("shift queue", () => { const q = make(); let s = 0; while (q.length) s += q.shift(); return s; });
+// 지우지 않고 읽을 위치(head)만 옮긴다
+bench("index queue", () => { const q = make(); let s = 0; for (let h = 0; h < q.length; h++) s += q[h]; return s; });
+// 맨 앞에 넣기
+bench("unshift", () => { const a = []; for (let i = 0; i < N; i++) a.unshift(i); return a.length; });
+// 뒤에 쌓고 한 번 뒤집기
+bench("push+reverse", () => { const a = []; for (let i = 0; i < N; i++) a.push(i); a.reverse(); return a.length; });
+```
+
+```text
+shift queue    945.0ms 4999950000
+index queue    9.6ms 4999950000
+unshift        903.3ms 100000
+push+reverse   4.3ms 100000
+```
+
+길이를 바꿔 가며 `shift`만 다시 쟀다.
+
+```text
+1000 0.22ms
+10000 1.03ms
+50000 240.16ms
+```
+
+1만 개까지는 거의 공짜인데 5만 개에서 갑자기 수백 ms로 뛴다. V8은 배열 앞부분을 잘라 내는 최적화(left-trimming)로 원소를 옮기지 않고 넘어갈 때가 있는데, 배열이 일정 크기를 넘으면 이 최적화를 못 쓰고 실제로 원소를 옮기는 것으로 보인다. 정확한 경계는 엔진 버전마다 다르니 숫자로 확인하는 게 낫다. 테스트 데이터에서는 문제가 없다가 운영에서 작업 대기열이 쌓인 날 갑자기 느려지는 패턴이다.
+
+아래 그림은 두 방식의 차이다. 위쪽 칸이 배열이고, 오른쪽 상자는 한 번 꺼낼 때 하는 일이다.
+
+<AlgoTrace
+  caption="shift는 꺼낼 때마다 나머지를 당긴다. head 방식은 읽을 위치만 옮긴다."
+  memoryLabel="꺼낼 때 하는 일"
+  cells={["j1", "j2", "j3", "j4", "j5"]}
+  steps={[
+    { pointer: 0, memory: ["shift: j1 꺼냄", "j2~j5를 한 칸씩 당김 (4번)"], caption: "shift는 j1을 꺼내고 뒤의 네 개를 앞으로 옮긴다." },
+    { pointer: 0, memory: ["shift: j2 꺼냄", "j3~j5를 당김 (3번)"], caption: "다시 0번 칸이 맨 앞이다. 또 나머지를 옮긴다. n개면 합쳐서 n²/2번 옮긴다." },
+    { pointer: 0, found: [0], memory: ["head = 0", "j1 읽고 head = 1"], caption: "head 방식은 지우지 않는다. 0번을 읽고 head를 1로 올린다." },
+    { pointer: 1, found: [0, 1], memory: ["head = 1", "j2 읽고 head = 2"], caption: "옮기는 원소가 없다. 꺼내기 한 번이 상수 시간이다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["head = 5", "다 읽으면 배열을 비운다"], caption: "다 읽은 앞부분은 가끔 한꺼번에 잘라 메모리를 돌려준다." },
+  ]}
+/>
+
+맨 앞에 넣는 일이 많으면 `push`로 쌓은 뒤 마지막에 한 번 `reverse`한다. 큐가 계속 길게 유지되는 서비스라면 링 버퍼나 연결 리스트로 만든 큐 구현을 쓴다.
+
+## 원본을 고치는 실수를 도구에 맡기기
+
+사람이 매번 조심하는 건 한계가 있다. TypeScript에서는 바뀌면 안 되는 배열에 `readonly`를 붙이면 원본을 고치는 메서드가 타입에서 사라진다.
+
+```ts
+type Todo = { id: number; done: boolean };
+
+function sortTodos(todos: readonly Todo[]) {
+  todos.sort((a, b) => a.id - b.id); // 컴파일 에러
+  return todos.toSorted((a, b) => a.id - b.id); // 통과
+}
+
+const t: ReadonlyArray<number> = [1, 2];
+t.push(3); // 컴파일 에러
+```
+
+```text
+ro.ts(3,9): error TS2339: Property 'sort' does not exist on type 'readonly Todo[]'.
+ro.ts(3,15): error TS7006: Parameter 'a' implicitly has an 'any' type.
+ro.ts(3,18): error TS7006: Parameter 'b' implicitly has an 'any' type.
+ro.ts(7,3): error TS2339: Property 'push' does not exist on type 'readonly number[]'.
+```
+
+props 타입이나 상태 타입에 `readonly`를 쓰면 렌더링 중 `sort` 같은 실수가 컴파일 단계에서 잡힌다. 타입 검사는 실행에는 영향이 없으니, 런타임에서도 막고 싶으면 개발 모드에서만 `Object.freeze`를 건다.
+
+```js
+const frozen = Object.freeze([1, 2, 3]);
+try { frozen.push(4); } catch (e) { console.log(`${e.name}: ${e.message}`); }
+try { frozen.sort((a, b) => b - a); } catch (e) { console.log(`${e.name}: ${e.message}`); }
+console.log(frozen.toSorted((a, b) => b - a));
+```
+
+```text
+TypeError: Cannot add property 3, object is not extensible
+TypeError: Cannot assign to read only property '0' of object '[object Array]'
+[ 3, 2, 1 ]
+```
+
+얼린 배열을 고치려 하면 바로 에러가 나서 어디서 고쳤는지 스택으로 알 수 있다. 사본 메서드는 그대로 동작한다. `Object.freeze`는 바깥 한 겹만 얼린다는 점, `seal`과 무엇이 다른지는 [객체 메서드](/posts/js-object-methods)에서 본다. 이 에러들은 엄격 모드에서만 던져지고 느슨한 모드에서는 대입이 조용히 무시된다. 모듈과 클래스 코드는 항상 엄격 모드다.
+
+## 할 일 리듀서를 원본을 고치지 않고 만들기
+
+`useReducer`에 넘길 리듀서를 만들어 보자. 리듀서는 이전 상태와 액션을 받아 다음 상태를 돌려준다. 이전 상태를 고치면 안 된다. 테스트용 `replay` 함수는 액션을 차례로 적용하면서 모든 중간 상태를 모아 돌려준다. 리듀서가 원본을 고치면 앞쪽 상태까지 함께 바뀌어 테스트가 깨진다.
+
+<CodePlayground
+  caption="원본을 고치지 않는 할 일 리듀서"
+  functionName="replay"
+  initialCode={`function reducer(todos, action) {
+  switch (action.type) {
+    case "add": // { id, title }을 끝에 추가 (done: false)
+      return todos;
+    case "toggle": // id가 같은 할 일의 done을 뒤집기
+      return todos;
+    case "remove": // id가 같은 할 일 지우기
+      return todos;
+    case "sort": // title 가나다순
+      return todos;
+    default:
+      return todos;
+  }
+}
+
+// 고치지 않는다: 액션을 차례로 적용하며 모든 상태를 모은다
+function replay(initial, actions) {
+  const states = [initial];
+  for (const action of actions) states.push(reducer(states.at(-1), action));
+  return states;
+}`}
+  solution={`function reducer(todos, action) {
+  switch (action.type) {
+    case "add":
+      return [...todos, { id: action.id, title: action.title, done: false }];
+    case "toggle":
+      return todos.map((t) => (t.id === action.id ? { ...t, done: !t.done } : t));
+    case "remove":
+      return todos.filter((t) => t.id !== action.id);
+    case "sort":
+      return todos.toSorted((a, b) => a.title.localeCompare(b.title));
+    default:
+      return todos;
+  }
+}
+
+function replay(initial, actions) {
+  const states = [initial];
+  for (const action of actions) states.push(reducer(states.at(-1), action));
+  return states;
+}`}
+  tests={[
+    { args: [[{ id: 1, title: "빨래", done: false }], [{ type: "add", id: 2, title: "청소" }]], expected: [[{ id: 1, title: "빨래", done: false }], [{ id: 1, title: "빨래", done: false }, { id: 2, title: "청소", done: false }]], label: "add는 이전 상태를 두고" },
+    { args: [[{ id: 1, title: "빨래", done: false }], [{ type: "toggle", id: 1 }]], expected: [[{ id: 1, title: "빨래", done: false }], [{ id: 1, title: "빨래", done: true }]], label: "toggle은 원소도 새로" },
+    { args: [[{ id: 1, title: "빨래", done: false }, { id: 2, title: "청소", done: true }], [{ type: "remove", id: 1 }]], expected: [[{ id: 1, title: "빨래", done: false }, { id: 2, title: "청소", done: true }], [{ id: 2, title: "청소", done: true }]], label: "remove" },
+    { args: [[{ id: 1, title: "청소", done: false }, { id: 2, title: "빨래", done: false }], [{ type: "sort" }]], expected: [[{ id: 1, title: "청소", done: false }, { id: 2, title: "빨래", done: false }], [{ id: 2, title: "빨래", done: false }, { id: 1, title: "청소", done: false }]], label: "sort는 사본을" },
+    { args: [[], [{ type: "add", id: 1, title: "장보기" }, { type: "toggle", id: 1 }, { type: "remove", id: 1 }]], expected: [[], [{ id: 1, title: "장보기", done: false }], [{ id: 1, title: "장보기", done: true }], []], label: "세 액션 연속" },
+    { args: [[{ id: 1, title: "빨래", done: false }], [{ type: "unknown" }]], expected: [[{ id: 1, title: "빨래", done: false }], [{ id: 1, title: "빨래", done: false }]], label: "모르는 액션은 그대로" },
+  ]}
+/>
+
+`push`로 추가하고 `t.done = !t.done`으로 뒤집는 버전을 넣어 보면 "add"와 "세 액션 연속" 테스트에서 첫 상태까지 바뀐 결과가 나온다. 맨 앞의 할 일 목록 버그를 테스트로 재현한 셈이다.
+
+## 고치는 쪽인지 먼저 본다
+
+배열 메서드를 쓸 때 먼저 물어볼 건 "이게 원본을 고치나"다. `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin` 아홉 개가 고치는 쪽이고, `sort`와 `reverse`는 원본을 돌려주니 새 변수에 담아도 사본이 아니다. 상태나 props처럼 남과 함께 쓰는 배열에는 `toSorted`, `toSpliced`, `with`, 전개 문법으로 새 배열을 만든다. React는 참조만 비교하니 원본을 고치면 화면이 안 바뀌거나 엉뚱한 때에 바뀐다.
+
+## 면접에서 나올 만한 질문
+
+### 배열을 직접 고치는 메서드에는 무엇이 있나?
+
+`push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin`이다. 나머지 대부분(`map`, `filter`, `slice`, `concat`, `toSorted` 등)은 새 배열이나 값을 돌려준다. `sort`와 `reverse`는 정렬된 배열을 돌려주지만 그건 원본 자신이라서 결과를 다른 변수에 담아도 원본이 바뀌어 있다.
+
+### `[10, 9, 1, 100, 25].sort()`의 결과가 이상한 이유는?
+
+비교 함수가 없으면 원소를 문자열로 바꿔 UTF-16 코드 단위 순서로 비교하기 때문이다. 그래서 `[1, 10, 100, 25, 9]`가 나온다. 숫자는 `(a, b) => a - b`를 넘기고, 사람 이름처럼 언어 규칙이 필요하면 `Intl.Collator`의 `compare`를 넘긴다.
+
+### 비교 함수에서 `a > b`를 돌려주면 안 되는 이유는?
+
+비교 함수는 음수, 0, 양수 세 가지로 순서를 알려야 하는데 불리언은 1과 0만 된다. 음수가 없으니 정렬 알고리즘이 일관된 순서를 얻지 못하고, 결과가 엔진과 배열 길이에 따라 달라진다. Node 22에서는 배열이 전혀 정렬되지 않았다. 작은 데이터에서 우연히 맞아 보여도 운영에서 틀릴 수 있다.
+
+### toSorted와 `[...arr].sort()`는 무엇이 다른가?
+
+결과는 같다. 둘 다 바깥 배열만 새로 만드는 얕은 복사이고 안의 객체는 공유한다. `toSorted`는 ES2023 메서드라 의도가 이름에 드러나고 체인 중간에 쓰기 좋다. 대신 크롬 110, 사파리 16, Node 20 이전 환경에서는 폴리필이 필요하고, TypeScript는 `lib`에 ES2023이 있어야 한다.
+
+### React에서 `items.push(x); setItems(items)`가 화면을 바꾸지 못하는 이유는?
+
+React는 이전 상태와 새 상태를 `Object.is`로 비교해서 같으면 렌더링을 건너뛴다. `push`는 같은 배열을 고치니 참조가 그대로라 바뀐 게 없다고 판단한다. 숨어 있던 변경은 다른 이유로 렌더링될 때 한꺼번에 나타난다. `[...items, x]`처럼 새 배열을 넘겨야 한다.
+
+### 그렇다면 React는 왜 배열 내용을 깊게 비교하지 않나?
+
+깊은 비교는 원소 수와 중첩 깊이에 비례해 비싸고, 상태 갱신마다 그 비용을 치러야 한다. 참조 비교는 크기와 상관없이 한 번이면 끝난다. 대신 "바꿀 때는 새로 만든다"는 약속을 개발자가 지키는 구조다. 이 약속 덕에 `memo`, `useMemo`의 의존성 비교도 참조 비교로 싸게 할 수 있다.
+
+### 배열을 큐로 쓸 때 shift가 문제가 되는 이유는?
+
+`shift`는 맨 앞을 빼고 나머지를 한 칸씩 당겨서 원소 수에 비례하는 시간이 든다. 큐를 다 비울 때까지 반복하면 n의 제곱이다. Node 22에서 1만 개는 1ms였지만 10만 개는 900ms를 넘었다. 읽을 위치만 옮기는 head 인덱스 방식이나 링 버퍼로 바꾼다.
+
+### 원본을 고치는 실수를 코드 리뷰 말고 어떻게 막나?
+
+TypeScript에서 props와 상태 타입을 `readonly T[]`로 선언하면 `push`, `sort` 같은 메서드가 타입에서 빠져 컴파일 에러가 난다. 런타임에서는 개발 모드에서 `Object.freeze`로 얼려 두면 고치는 순간 TypeError가 나서 위치를 바로 찾는다. React StrictMode의 이중 렌더링도 렌더 중 부수 효과를 드러내 준다.

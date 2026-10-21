@@ -1,0 +1,444 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-immutability-react");
+
+설정 화면에 "이메일 알림" 체크박스가 있다. 누르면 상태는 분명 바뀌는데 체크 표시가 그대로다. 부모 컴포넌트에 찍어 둔 값은 `true`인데, 그 아래 알림 패널은 여전히 `off`를 보여 준다. 코드는 이랬다.
+
+```jsx
+const NotificationPanel = memo(function NotificationPanel({ settings }) {
+  return <span>email:{settings.notifications.email ? "on" : "off"}</span>;
+});
+
+function Profile() {
+  const [user, setUser] = useState({
+    name: "kim",
+    settings: { theme: "dark", notifications: { email: false, push: true } },
+  });
+  const toggle = () => {
+    user.settings.notifications.email = !user.settings.notifications.email; // 안쪽을 직접 고친다
+    setUser({ ...user });                                                  // 바깥만 새로
+  };
+  return <p>data:{String(user.settings.notifications.email)} / <NotificationPanel settings={user.settings} /></p>;
+}
+```
+
+React 19와 jsdom으로 띄워서 `toggle`을 한 번 부르고 화면 글자를 읽었다. 아래 `copy-path`는 뒤에서 고친 버전이다.
+
+```text
+mutate    data:true / email:off
+copy-path data:true / email:on
+```
+
+`setUser({ ...user })`로 새 객체를 넘겼으니 "원본을 고치고 같은 객체를 넘기면 안 된다"는 규칙은 지킨 것처럼 보인다. 그런데도 화면 한쪽이 옛 값에 머문다. 이 글은 이 버그에서 출발해 중첩된 상태를 불변으로 바꾸는 방법, 바뀐 길만 새로 만드는 구조 공유, 그리고 그 일을 대신해 주는 Immer가 안에서 하는 일을 본다.
+
+배열 상태를 `push`하고 같은 배열을 넘기는 더 기본적인 실수는 [배열을 고치는 메서드](/posts/js-array-mutation)에, 사본이 몇 층까지 따로인지는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에, React가 다시 그릴지 정하는 규칙 전반은 [React는 언제 다시 그리나](/posts/react-rerender)에 있다.
+
+## 바깥만 새로 만들면 안쪽 컴포넌트가 놓친다
+
+React는 상태가 바뀌었는지를 내용이 아니라 참조로 판단한다. `setUser(next)`를 부르면 지금 값과 `Object.is`로 비교하고, `memo`로 감싼 컴포넌트는 props 하나하나를 같은 방식으로 비교한다. 이 두 번의 비교가 위 버그의 전부다. 아래 그림에서 다음을 누르며 따라가 보자.
+
+<SequenceDiagram
+  caption="바깥만 새로 만든 업데이트가 memo 자식에서 멈추는 과정"
+  actors={[
+    { id: "handler", label: "toggle" },
+    { id: "react", label: "React" },
+    { id: "profile", label: "Profile" },
+    { id: "panel", label: "Panel (memo)" },
+  ]}
+  steps={[
+    { from: "handler", to: "handler", label: "email = true", title: "안쪽 객체를 직접 고친다", detail: "user.settings.notifications 객체의 email 칸이 바뀐다. 이 객체는 지금 화면에 그려진 상태의 일부다." },
+    { from: "handler", to: "react", label: "setUser({ ...user })", title: "바깥만 새로 만든 객체를 넘긴다", detail: "user만 새 객체고, settings 칸에는 예전과 같은 settings 참조가 들어 있다." },
+    { from: "react", to: "profile", label: "Object.is → 다름", title: "Profile을 다시 그린다", detail: "user의 참조가 바뀌었으니 Profile을 다시 렌더링한다. 그래서 data:true가 찍힌다." },
+    { from: "profile", to: "panel", label: "settings 같은 참조", title: "memo가 props를 비교한다", detail: "이전 settings와 새 settings가 같은 객체다. 안쪽 email이 바뀌었는지는 보지 않는다." },
+    { from: "panel", to: "panel", label: "렌더 건너뜀", title: "패널은 예전 화면에 머문다", detail: "바뀐 게 없다고 판단해 다시 그리지 않는다. 화면에는 email:off가 남는다." },
+  ]}
+/>
+
+`memo`가 없었다면 이 버그는 숨어 있었을 것이다. 부모가 다시 그리면 자식도 따라 그려지니 우연히 맞는 값이 나온다. 그러다 누군가 성능을 위해 `memo`를 붙이거나 [React Compiler](/posts/react-rerender)가 자동으로 메모이제이션을 넣는 순간 드러난다. Compiler는 props와 상태가 불변이라는 가정 위에서 결과를 재사용하니, 안쪽을 직접 고치는 코드는 같은 방식으로 깨진다. `useEffect(..., [user.settings])`, `useMemo(..., [user.settings])`도 같은 이유로 바뀐 것을 놓친다.
+
+규칙을 정확히 쓰면 이렇다. 상태 안의 어떤 값이 바뀌면, 그 값에서 루트까지 가는 길에 있는 객체는 모두 새 객체여야 한다. 위 코드는 루트(`user`)만 새로 만들고 중간의 `settings`와 `notifications`는 옛 객체를 고쳐 썼다.
+
+## 바뀐 길만 새로 만든다
+
+`email` 하나를 바꾸려면 `notifications`, `settings`, `user` 세 객체를 새로 만들어야 한다. 반대로 그 길에 없는 `orders`나 `name`은 건드리지 않고 옛 것을 그대로 쓴다. 이렇게 바뀐 경로만 새로 만들고 나머지는 이전 상태와 같이 쓰는 방식을 구조 공유(structural sharing)라고 한다.
+
+<AlgoTrace
+  caption="email을 바꿀 때 새로 만드는 객체와 같이 쓰는 객체"
+  memoryLabel="새로 만든 객체"
+  cells={["user", "settings", "notifications", "orders", "name"]}
+  steps={[
+    { pointer: 2, memory: [], caption: "바꿀 값은 notifications 안의 email이다. 여기서 루트까지 거슬러 올라간다." },
+    { pointer: 2, found: [2], memory: ["notifications'"], caption: "notifications를 펼쳐 복사하고 email만 true로 바꾼다." },
+    { pointer: 1, found: [1, 2], memory: ["notifications'", "settings'"], caption: "settings도 새로 만들고 notifications 칸에 새 객체를 넣는다. theme은 그대로 옮겨 온다." },
+    { pointer: 0, found: [0, 1, 2], memory: ["notifications'", "settings'", "user'"], caption: "마지막으로 user를 새로 만든다. 루트까지 길이 모두 새것이 됐다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["notifications'", "settings'", "user'"], caption: "orders는 길 밖에 있다. 이전 상태의 배열을 그대로 쓴다. 이걸 렌더하는 memo 컴포넌트는 건너뛴다." },
+  ]}
+/>
+
+코드로 쓰면 바꾸는 깊이만큼 전개가 중첩된다. 아래 조각을 눌러 각 층이 무엇을 하는지 보자.
+
+<UrlAnatomy
+  caption="세 층 아래 값 하나를 바꾸는 업데이트"
+  base="setUser({"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "u", display: "...user,", title: "1층: user 복사", description: "name, orders 같은 나머지 칸을 옛 값 그대로 옮긴다. orders 배열은 같은 참조라 이걸 받는 자식은 다시 그리지 않는다.", required: true },
+    { key: "s", display: "settings: { ...user.settings,", title: "2층: settings 복사", description: "settings 칸에 새 객체를 넣는다. theme은 옛 값 그대로다. 이제 Panel이 받는 settings 참조가 바뀐다." },
+    { key: "n", display: "notifications: { ...user.settings.notifications,", title: "3층: notifications 복사", description: "push 같은 형제 값을 옮겨 온다. 이 줄을 빠뜨리면 push가 사라진다." },
+    { key: "v", display: "email: !user.settings.notifications.email } } })", title: "바꿀 값", description: "마지막으로 email만 덮어쓴다. 뒤에 쓴 키가 앞의 값을 이긴다.", code: "copy-path data:true / email:on" },
+  ]}
+/>
+
+맞는 코드지만 읽기 괴롭다. 그리고 실수하기 쉽다. 중간의 `...user.settings.notifications`를 빠뜨리면 `push`가 조용히 사라지고, 경로 중 하나를 `user.settings`가 아니라 다른 변수에서 가져오면 옛 값이 섞인다. 이 반복 작업을 다루는 방법이 세 가지 있다. 헬퍼 함수를 만들거나, 상태 모양을 평평하게 바꾸거나, Immer를 쓴다.
+
+배열 안의 원소를 바꿀 때도 같은 원리다. 바뀌는 원소만 새 객체로 만들고 나머지는 그대로 둔다.
+
+```js
+// id가 2인 할 일만 완료로 바꾼다
+setTodos((prev) => prev.map((t) => (t.id === 2 ? { ...t, done: true } : t)));
+// 몇 번째인지 알면 ES2023의 with로 한 칸만 바꾼 사본을 만든다
+setTodos((prev) => prev.with(index, { ...prev[index], done: true }));
+```
+
+`map`에서 `t.done = true; return t;`처럼 원소를 고친 뒤 돌려주는 실수가 흔하다. 배열은 새것이지만 원소는 옛 객체를 고친 것이라 처음 버그와 같은 일이 원소 단위로 일어난다.
+
+## 업데이트 함수가 두 번 불리는 이유
+
+불변 업데이트를 어긴 코드는 개발 모드의 StrictMode에서 다르게 동작하기도 한다. 장바구니에 항목을 추가하는 코드를 두 가지로 쓰고, 버튼 하나가 추가를 두 번 하도록 했다.
+
+```jsx
+const add = () => setItems((prev) => {
+  if (mode === "mutate") { prev.push("mocha"); return [...prev]; } // prev를 고친다
+  return [...prev, "mocha"];
+});
+// 핸들러 안에서 add(); add();
+```
+
+```text
+normal     mutate latte,mocha,mocha
+normal     pure   latte,mocha,mocha
+StrictMode mutate latte,mocha,mocha,mocha
+StrictMode pure   latte,mocha,mocha
+```
+
+StrictMode에서 `prev`를 고친 버전만 mocha가 하나 더 들어갔다. React는 개발 모드의 StrictMode에서 업데이트 함수를 두 번 불러 결과가 같은지 드러내게 한다. 순수한 함수라면 두 번 불러도 결과가 같고, `prev`를 고치는 함수는 두 번째 호출이 이미 고쳐진 `prev`를 받는다.
+
+<AlgoTrace
+  caption="StrictMode가 prev를 고치는 업데이트 함수를 다시 부를 때"
+  memoryLabel="prev 배열의 내용"
+  cells={["첫 add()", "둘째 add() 1회", "둘째 add() 2회"]}
+  steps={[
+    { memory: ["latte"], caption: "처음 상태는 latte 하나다." },
+    { pointer: 0, memory: ["latte", "mocha"], caption: "첫 번째 add가 처리된다. 이 실험에서 첫 업데이트는 한 번만 계산됐다." },
+    { pointer: 1, memory: ["latte", "mocha", "mocha"], caption: "두 번째 add는 렌더 중에 처리된다. prev에 push해서 mocha가 둘이 된다." },
+    { pointer: 2, found: [2], memory: ["latte", "mocha", "mocha", "mocha"], caption: "StrictMode가 같은 prev로 한 번 더 부른다. prev는 이미 고쳐졌으니 mocha가 또 들어간다." },
+    { memory: ["latte", "mocha", "mocha"], caption: "새 배열을 만드는 버전은 prev를 건드리지 않으니 몇 번 불러도 같은 결과가 나온다." },
+  ]}
+/>
+
+mocha가 네 개가 아니라 세 개인 이유는 React 내부 사정이다. 이 실험(React 19)에서 큐가 비어 있을 때 들어온 첫 업데이트는 렌더 전에 미리 한 번 계산됐고, 두 번째 업데이트만 렌더 중에 처리되며 두 번 불렸다. 몇 번 불리는지에 기대는 코드를 쓰지 말라는 뜻이다. 개발 중에 "목록에 항목이 두 개씩 들어간다"는 증상이 보이면 StrictMode를 끄지 말고 업데이트 함수와 리듀서가 `prev`나 `state`를 고치는지 본다. 프로덕션에서는 한 번만 불리니 버그가 사라진 것처럼 보이지만 원인은 그대로 남아 있다. 순수 함수가 무엇인지는 [순수 함수와 부수 효과](/posts/js-pure-functions)에서 다룬다.
+
+반대로 함수 안에서 막 만든 객체를 고치는 것은 괜찮다. `const next = []; for (...) next.push(...); return next;`는 아무도 아직 보지 않은 배열을 채우는 일이라 불변성을 깨지 않는다. 지켜야 하는 건 이미 상태로 공개된 객체다.
+
+## 상태를 평평하게 펴면 경로가 짧아진다
+
+전개가 깊어지는 근본 원인은 상태 모양이다. 서버 응답처럼 글 안에 댓글, 댓글 안에 작성자를 넣어 두면, 작성자 이름 하나를 바꿀 때 모든 글과 댓글을 훑으며 경로를 새로 만들어야 한다. 같은 사용자가 여러 곳에 복사돼 있으니 하나만 고치고 나머지를 빠뜨리는 버그도 생긴다. DB에서 같은 데이터를 한곳에만 두는 정규화와 같은 생각을 상태에 적용하면, 종류별로 id를 키로 하는 사전을 두고 서로 id로 가리키게 된다.
+
+```js
+// 중첩된 모양: 글 안에 댓글, 댓글 안에 작성자
+const nested = {
+  posts: [
+    { id: "p1", comments: [{ id: "c1", text: "좋아요", author: { id: "u1", name: "kim" } }] },
+    { id: "p2", comments: [{ id: "c2", text: "질문", author: { id: "u1", name: "kim" } }] },
+  ],
+};
+// 사용자 이름을 바꾸려면 모든 글과 댓글을 훑어야 한다
+const renamed = {
+  ...nested,
+  posts: nested.posts.map((p) => ({
+    ...p,
+    comments: p.comments.map((c) =>
+      c.author.id === "u1" ? { ...c, author: { ...c.author, name: "lee" } } : c),
+  })),
+};
+console.log(renamed.posts.map((p) => p.comments[0].author.name));
+
+// 평평한 모양: 종류별 사전과 id 참조
+const flat = {
+  users: { u1: { id: "u1", name: "kim" } },
+  comments: { c1: { id: "c1", text: "좋아요", authorId: "u1" }, c2: { id: "c2", text: "질문", authorId: "u1" } },
+  posts: { p1: { id: "p1", commentIds: ["c1"] }, p2: { id: "p2", commentIds: ["c2"] } },
+};
+const renamedFlat = { ...flat, users: { ...flat.users, u1: { ...flat.users.u1, name: "lee" } } };
+console.log(renamedFlat.comments.c1 === flat.comments.c1, renamedFlat.posts === flat.posts);
+const authorOf = (state, cid) => state.users[state.comments[cid].authorId].name;
+console.log(authorOf(renamedFlat, "c1"), authorOf(renamedFlat, "c2"));
+```
+
+```text
+[ 'lee', 'lee' ]
+true true
+lee lee
+```
+
+<ConceptDiagram
+  caption="평평한 상태: 종류별 사전과 id로 가리키는 관계"
+  width={420}
+  height={230}
+  nodes={[
+    { id: "p1", label: "posts.p1", sub: "commentIds: c1", x: 80, y: 50, w: 130 },
+    { id: "p2", label: "posts.p2", sub: "commentIds: c2", x: 80, y: 170, w: 130 },
+    { id: "c1", label: "comments.c1", sub: "authorId: u1", x: 230, y: 50, w: 120 },
+    { id: "c2", label: "comments.c2", sub: "authorId: u1", x: 230, y: 170, w: 120 },
+    { id: "u1", label: "users.u1", sub: "name: lee", x: 360, y: 110, w: 100 },
+  ]}
+  edges={[
+    { from: "p1", to: "c1", label: "id" },
+    { from: "p2", to: "c2", label: "id" },
+    { from: "c1", to: "u1" },
+    { from: "c2", to: "u1" },
+  ]}
+/>
+
+사용자는 `users.u1` 한 곳에만 있고, 댓글은 id로 가리키기만 한다. 평평한 모양에서는 이름을 바꿀 때 `users` 경로 세 층만 새로 만든다. 댓글과 글은 하나도 건드리지 않아서 그것들을 그리는 컴포넌트는 다시 그릴 이유가 없다. 대신 화면에 그릴 때 id로 찾아 조립하는 코드가 필요하다. 그래서 모든 상태를 평평하게 펼 필요는 없다. 같은 엔터티가 여러 곳에 나타나거나, 목록 안의 항목을 자주 따로 고치거나, 중첩이 세 층을 넘어가면 그때 고려한다. Redux Toolkit의 `createEntityAdapter`가 이 모양(`ids`와 `entities`)을 만들어 준다. 서버에서 받은 데이터라면 애초에 [TanStack Query 같은 서버 상태 캐시](/posts/client-data-cache)에 맡기고, 클라이언트 상태에는 화면 고유의 값만 두는 것이 더 나은 경우가 많다.
+
+## Immer는 초안을 고치게 해 준다
+
+Immer는 "고치는 것처럼 쓰면 불변 업데이트를 만들어 주는" 라이브러리다. `produce(base, recipe)`를 부르면 recipe에 초안(draft)을 넘겨주고, recipe가 초안을 마음껏 고치면 그 결과를 반영한 새 상태를 돌려준다. Immer 11로 확인했다.
+
+```js
+import { produce } from "immer";
+const user = {
+  name: "kim",
+  settings: { theme: "dark", notifications: { email: false, push: true } },
+  orders: [{ id: 1 }, { id: 2 }],
+};
+const next = produce(user, (draft) => {
+  draft.settings.notifications.email = true; // 초안은 그냥 고친다
+});
+console.log("원본 email:", user.settings.notifications.email, "/ 새 email:", next.settings.notifications.email);
+console.log("user 새로?          ", next !== user);
+console.log("settings 새로?      ", next.settings !== user.settings);
+console.log("notifications 새로? ", next.settings.notifications !== user.settings.notifications);
+console.log("orders 같이 씀?     ", next.orders === user.orders);
+console.log("얼었나?", Object.isFrozen(next), Object.isFrozen(next.settings.notifications), Object.isFrozen(next.orders));
+const same = produce(next, (draft) => { draft.name = "kim"; });
+console.log("값이 같으면 같은 참조:", same === next);
+```
+
+```text
+원본 email: false / 새 email: true
+user 새로?           true
+settings 새로?       true
+notifications 새로?  true
+orders 같이 씀?      true
+얼었나? true true true
+값이 같으면 같은 참조: true
+```
+
+손으로 쓴 세 층 전개와 결과가 같다. 바뀐 길의 세 객체만 새것이고 `orders`는 같이 쓴다. 같은 값을 다시 넣으면 원본 참조를 그대로 돌려줘서 React가 렌더를 건너뛸 수 있다. 결과는 기본으로 얼어 있어서 나중에 누가 고치려 하면 바로 에러가 난다.
+
+### 초안은 Proxy다
+
+Immer가 어떻게 "고친 곳"을 아는지는 `Proxy`에 있다. 초안은 원본을 감싼 `Proxy`라서, 읽기와 쓰기가 모두 Immer를 거친다. 처음 쓰기가 일어난 객체만 그때 얕게 복사하고(copy-on-write), 그 부모들에 "아래가 바뀌었다"는 표시를 남긴다. recipe가 끝나면 표시가 있는 객체만 새로 조립하고, 표시 없는 가지는 원본 참조를 그대로 넣는다. 아래 그림에서 다음을 누르면 순서대로 본다.
+
+<SequenceDiagram
+  caption="produce 안에서 일어나는 일"
+  actors={[
+    { id: "recipe", label: "recipe" },
+    { id: "draft", label: "초안 Proxy" },
+    { id: "base", label: "원본 상태" },
+    { id: "result", label: "새 상태" },
+  ]}
+  steps={[
+    { from: "recipe", to: "draft", label: "draft.settings", title: "읽기를 가로챈다", detail: "settings를 읽으면 Immer가 원본의 settings를 감싼 초안을 그때 만들어 돌려준다. 아직 아무것도 복사하지 않는다." },
+    { from: "draft", to: "base", label: "원본 값 읽기", title: "읽기는 원본을 본다", detail: "고치지 않은 초안은 원본 객체를 그대로 비춘다." },
+    { from: "recipe", to: "draft", label: "email = true", title: "쓰기를 가로챈다", detail: "notifications 초안에 처음 쓰기가 들어왔다. 이 순간 notifications를 얕게 복사하고 사본에 쓴다." },
+    { from: "draft", to: "draft", label: "부모에 표시", title: "길을 따라 표시한다", detail: "settings와 user 초안에 아래가 바뀌었다고 표시하고, 그 둘도 얕게 복사한다." },
+    { from: "draft", to: "result", label: "finalize", title: "표시된 길만 새로 조립한다", detail: "표시 있는 객체는 사본으로, 표시 없는 orders는 원본 참조로 채워 새 상태를 만든다. 그리고 얼린다." },
+    { from: "draft", to: "draft", label: "revoke", title: "초안은 폐기된다", detail: "produce가 끝나면 Proxy를 무효로 만든다. 이후 초안을 만지면 TypeError가 난다." },
+  ]}
+/>
+
+이 구조 덕분에 Immer는 상태 크기가 아니라 고친 경로에 비례해 일한다. 다만 공짜는 아니다. 할 일 1만 개 중 하나를 바꾸는 업데이트를 방법마다 새 상태로 9번씩 돌려 중앙값을 쟀다.
+
+```js
+const make = () => ({ todos: Array.from({ length: 10_000 }, (_, i) => ({ id: i, title: "할 일 " + i, done: false })) });
+function bench(name, fn) {
+  const times = [];
+  for (let i = 0; i < 9; i++) { const s = make(); const t = performance.now(); fn(s); times.push(performance.now() - t); }
+  times.sort((a, b) => a - b);
+  console.log(name.padEnd(28), "중앙값", times[4].toFixed(3), "ms");
+}
+bench("spread + map", (s) => ({ ...s, todos: s.todos.map((t) => (t.id === 5000 ? { ...t, done: true } : t)) }));
+bench("spread + with (ES2023)", (s) => ({ ...s, todos: s.todos.with(5000, { ...s.todos[5000], done: true }) }));
+bench("immer produce", (s) => produce(s, (d) => { d.todos[5000].done = true; }));
+setAutoFreeze(false);
+bench("immer produce (freeze 끔)", (s) => produce(s, (d) => { d.todos[5000].done = true; }));
+```
+
+```text
+spread + map                 중앙값 0.143 ms
+spread + with (ES2023)       중앙값 0.018 ms
+immer produce                중앙값 4.863 ms
+immer produce (freeze 끔)     중앙값 0.063 ms
+```
+
+손으로 쓴 전개가 가장 빠르다. Immer는 얼리기를 끄면 전개와 비슷한 수준인데, 켜 두면(기본값) 처음 보는 상태 1만 개 객체를 통째로 얼리느라 수 ms가 든다. 다시 돌렸을 때는 7~10ms가 나와서 이 숫자는 실행마다 흔들렸다. 같은 상태로 `produce`를 이어서 부르면 비용이 첫 호출에 몰린다.
+
+```js
+setAutoFreeze(process.argv[2] === "on");
+let s = { todos: Array.from({ length: 10_000 }, (_, i) => ({ id: i, title: "할 일 " + i, done: false })) };
+const out = [];
+for (let round = 1; round <= 4; round++) {
+  const t = performance.now();
+  s = produce(s, (d) => { d.todos[round * 100].done = true; }); // 앞의 결과를 이어서 고친다
+  out.push((performance.now() - t).toFixed(2));
+}
+console.log("autoFreeze", process.argv[2], out.join(" / "), "ms");
+```
+
+```text
+autoFreeze on 30.77 / 1.26 / 7.19 / 1.55 ms
+autoFreeze off 1.20 / 0.15 / 0.10 / 0.18 ms
+```
+
+네 번 연속 부른 시간이다. 첫 호출이 가장 비싸고 이후는 1~7ms로 내려왔다. 사용자 입력 한 번에 몇 ms는 대부분 문제가 되지 않지만, 큰 상태를 초당 수십 번 바꾸는 코드라면 직접 재 보고 고른다. 얼리기는 실수를 잡아 주는 안전장치라서, 끄더라도 개발 모드에서는 켜 두는 편이 낫다.
+
+React에서는 `produce`에 recipe만 넘기는 커리 형태가 업데이트 함수 자리에 그대로 들어간다.
+
+```js
+setUser(produce((draft) => {
+  draft.settings.notifications.email = !draft.settings.notifications.email;
+}));
+```
+
+`use-immer` 패키지의 `useImmer`, `useImmerReducer`가 이 형태를 감싼 훅이고, Redux Toolkit의 `createSlice` 리듀서도 안에서 Immer를 쓴다. 그래서 RTK 리듀서 안의 `state.items.push(x)`는 원본을 고치는 코드가 아니다.
+
+## Immer를 쓰다 만나는 에러들
+
+Immer는 편하지만 규칙 몇 가지를 어기면 에러로 알려 준다. 실제 메시지와 함께 모았다.
+
+```js
+const user = { name: "kim", settings: { theme: "dark" }, orders: [{ id: 1 }] };
+const next = produce(user, (d) => { d.settings.theme = "light"; });
+console.log("원본 orders도 얼었나?", Object.isFrozen(user.orders), "원본 user?", Object.isFrozen(user));
+try { user.orders.push({ id: 2 }); } catch (e) { console.log(e.name + ": " + e.message); }
+
+try { produce({ a: 1 }, (d) => { d.a = 2; return { a: 3 }; }); } catch (e) { console.log(e.message); }
+let leaked;
+produce({ a: { b: 1 } }, (d) => { leaked = d.a; });
+try { console.log(leaked.b); } catch (e) { console.log(e.name + ": " + e.message); }
+try { produce({ m: new Map() }, (d) => { d.m.set("x", 1); }); } catch (e) { console.log(e.message); }
+```
+
+```text
+원본 orders도 얼었나? true 원본 user? false
+TypeError: Cannot add property 1, object is not extensible
+[Immer] An immer producer returned a new value *and* modified its draft. Either return a new value *or* modify the draft.
+TypeError: Cannot perform 'get' on a proxy that has been revoked
+[Immer] The plugin for 'MapSet' has not been loaded into Immer. To enable the plugin, import and call `enableMapSet()` when initializing your application.
+```
+
+첫 줄이 가장 의외다. 새 상태를 얼리는 과정에서 같이 쓰는 가지인 `orders`도 얼린다. 그 배열은 원본 `user`의 것이기도 하니 원본 쪽에서 `push`하던 코드가 갑자기 터진다. Immer를 도입한 뒤 "관계없는 코드에서 not extensible 에러가 난다"면 Immer 바깥에서 상태를 고치던 코드가 드러난 것이다. 그 코드를 고치는 게 맞다.
+
+나머지 셋은 규칙 그대로다. 초안을 고치거나 새 값을 반환하거나 둘 중 하나만 한다. 화살표 함수의 한 줄 본문 `(d) => d.items.push(x)`는 `push`의 반환값(길이)을 돌려주니 `{ }`로 감싸 반환값을 없앤다. 초안은 `produce`가 끝나면 폐기되니 `setTimeout`이나 `await` 뒤에서 쓰면 안 된다. 비동기 작업은 끝난 뒤 새로 `produce`를 부른다. 중간 상태를 로그로 보거나 다른 곳에 넘기려면 `current(draft)`로 일반 객체를 꺼낸다. `Map`과 `Set`은 앱 시작 때 `enableMapSet()`을 한 번 불러야 다룰 수 있다.
+
+## 불변으로 다룰지 고르는 기준
+
+불변 업데이트는 React 때문에 생긴 규칙이 아니다. "이전 값과 지금 값을 둘 다 갖고 있다"는 성질에서 나오는 이점이 여럿이다. 참조 하나만 비교해서 바뀌었는지 알 수 있으니 `memo`와 셀렉터가 싸게 동작한다. 이전 상태가 그대로 남으니 되돌리기, 시간 여행 디버깅, 낙관적 업데이트의 롤백이 상태를 보관하는 것만으로 된다. 상태를 여러 곳이 나눠 봐도 누가 몰래 고칠 걱정이 없다.
+
+비용은 할당이다. 바뀐 경로의 객체를 매번 새로 만드니 가비지 컬렉터가 할 일이 늘어난다. 보통 화면 상태에서는 문제가 되지 않고, 수만 개 항목을 초당 여러 번 바꾸는 시뮬레이션이나 캔버스 렌더링 루프라면 React 상태 밖에서 가변 구조를 쓰는 편이 맞다. Immutable.js처럼 처음부터 공유 구조로 설계된 영속 자료 구조도 있지만, 일반 객체와 오갈 때 변환 비용이 들고 API를 새로 익혀야 해서 요즘 React 코드에서는 일반 객체에 Immer나 직접 전개를 쓰는 쪽이 흔하다.
+
+현장에서 이 문제를 만나는 증상은 몇 가지로 모인다. 상태는 바뀌었는데 일부 컴포넌트만 옛 값을 보이면 그 컴포넌트가 받는 prop의 참조가 그대로인지 본다. React DevTools 설정에서 프로파일링할 때 렌더 이유를 기록하도록 켜 두거나, 의심되는 곳에서 `prev.settings === next.settings`를 찍어 보면 된다. `useEffect`가 값이 바뀌었는데 돌지 않을 때도 같다. 개발 모드에서만 항목이 두 번 들어가면 업데이트 함수가 `prev`를 고치는지 본다. 고치는 코드를 미리 막으려면 리듀서 테스트에서 입력 상태를 [deepFreeze](/posts/js-object-methods)로 얼려 두면 원본을 고치는 순간 테스트가 실패한다.
+
+## 경로 업데이트 함수 직접 만들기
+
+세 층 전개를 매번 쓰지 않으려면 경로를 받아 그 길만 새로 만드는 함수를 만들 수 있다. lodash/fp의 `set`, Ramda의 `assocPath`가 같은 일을 한다. 아래 코드는 지금 원본을 고친 뒤 바깥만 복사한다. 처음 버그와 같은 코드다. 모든 테스트가 통과하도록 고쳐 보자.
+
+<CodePlayground
+  caption="경로를 따라 새로 만드는 setIn"
+  functionName="check"
+  initialCode={`// path를 따라가 값을 바꾼 새 객체를 돌려준다. 원본은 고치지 않고, 바뀌지 않은 가지는 원본과 같이 쓴다.
+// 지금은 원본을 고친 뒤 바깥만 복사한다. 테스트가 모두 통과하도록 고쳐 보자.
+function setIn(obj, path, value) {
+  let cur = obj;
+  for (let i = 0; i < path.length - 1; i++) cur = cur[path[i]];
+  cur[path[path.length - 1]] = value;
+  return { ...obj };
+}
+
+// 아래는 고치지 않는다
+function check(name) {
+  const o = { a: { b: 1 }, c: { d: 2 }, todos: [{ done: false }, { done: false }] };
+  if (name === "value") return setIn(o, ["a", "b"], 5).a;
+  if (name === "original") { setIn(o, ["a", "b"], 5); return o.a.b; }
+  if (name === "sharing") { const r = setIn(o, ["a", "b"], 5); return [r !== o, r.a !== o.a, r.c === o.c, r.todos === o.todos]; }
+  if (name === "array") { const r = setIn(o, ["todos", 1, "done"], true); return [Array.isArray(r.todos), r.todos[1].done, r.todos[0] === o.todos[0], o.todos[1].done]; }
+  if (name === "same") return setIn(o, ["a", "b"], 1) === o;
+  if (name === "missing") return setIn({}, ["profile", "name"], "kim");
+}`}
+  solution={`function setIn(obj, path, value) {
+  if (path.length === 0) return value;
+  const [key, ...rest] = path;
+  const current = obj == null ? undefined : obj[key];
+  const nextChild = setIn(current, rest, value);
+  // 아래에서 바뀐 게 없으면 원본을 그대로 돌려준다. 참조가 그대로여야 React가 건너뛴다
+  if (obj != null && Object.is(nextChild, current)) return obj;
+  // 이 층만 얕게 복사하고 바뀐 칸 하나만 갈아 끼운다
+  const copy = Array.isArray(obj) ? [...obj] : { ...obj };
+  copy[key] = nextChild;
+  return copy;
+}
+
+// 아래는 고치지 않는다
+function check(name) {
+  const o = { a: { b: 1 }, c: { d: 2 }, todos: [{ done: false }, { done: false }] };
+  if (name === "value") return setIn(o, ["a", "b"], 5).a;
+  if (name === "original") { setIn(o, ["a", "b"], 5); return o.a.b; }
+  if (name === "sharing") { const r = setIn(o, ["a", "b"], 5); return [r !== o, r.a !== o.a, r.c === o.c, r.todos === o.todos]; }
+  if (name === "array") { const r = setIn(o, ["todos", 1, "done"], true); return [Array.isArray(r.todos), r.todos[1].done, r.todos[0] === o.todos[0], o.todos[1].done]; }
+  if (name === "same") return setIn(o, ["a", "b"], 1) === o;
+  if (name === "missing") return setIn({}, ["profile", "name"], "kim");
+}`}
+  tests={[{"args":["value"],"expected":{"b":5},"label":"값이 바뀐다"},{"args":["original"],"expected":1,"label":"원본은 그대로다"},{"args":["sharing"],"expected":[true,true,true,true],"label":"바뀐 길만 새로, 나머지는 같이"},{"args":["array"],"expected":[true,true,true,false],"label":"배열은 배열로 복사한다"},{"args":["same"],"expected":true,"label":"같은 값이면 원본을 돌려준다"},{"args":["missing"],"expected":{"profile":{"name":"kim"}},"label":"없는 경로는 만든다"}]}
+/>
+
+재귀로 경로 끝까지 내려가 값을 바꾸고, 올라오면서 층마다 얕은 복사를 하나씩 만든다. 그 층에서 바뀐 칸 하나만 갈아 끼우니 나머지 칸은 원본과 같은 참조로 남는다. 아래에서 아무것도 바뀌지 않았으면 원본을 그대로 돌려줘야 React가 렌더를 건너뛸 수 있다. Immer의 결과가 손으로 쓴 전개와 같은 모양인 것도 이 함수와 같은 일을 하기 때문이다.
+
+처음 체크박스로 돌아가면, 고칠 곳은 바뀐 값에서 루트까지의 길이었다. 그 길의 객체를 모두 새로 만들고 나머지는 같이 쓰면, 참조만 비교하는 React와 `memo`가 무엇이 바뀌었는지 정확히 안다. 전개로 직접 쓰든, 상태를 평평하게 펴서 길을 줄이든, Immer에 맡기든 만들어지는 모양은 같다.
+
+## 면접에서 나올 만한 질문
+
+### React에서 상태를 불변으로 다뤄야 하는 이유는?
+
+React와 `memo`, 의존성 배열이 바뀌었는지를 내용이 아니라 `Object.is` 참조 비교로 판단하기 때문이다. 원본을 고치면 참조가 그대로라 바뀐 것을 놓치고, 바깥만 새로 만들면 안쪽 객체를 받는 `memo` 자식이 놓친다. 참조 비교는 깊은 비교보다 싸고, 이전 상태가 남으니 되돌리기와 롤백도 쉬워진다. React Compiler도 이 가정 위에서 메모이제이션한다.
+
+### 중첩된 객체의 값 하나를 바꾸려면 어떻게 하나?
+
+바뀐 값에서 루트까지의 경로에 있는 객체를 모두 새로 만들고, 경로 밖의 가지는 그대로 둔다. `{ ...user, settings: { ...user.settings, notifications: { ...n, email: true } } }`처럼 층마다 전개한다. 깊이가 깊으면 경로 업데이트 헬퍼, 상태 정규화, Immer 중 하나로 반복을 줄인다.
+
+### 구조 공유란 무엇인가?
+
+새 상태를 만들 때 바뀐 경로의 객체만 새로 만들고 나머지는 이전 상태의 객체를 그대로 가리키는 방식이다. 전부 복사하는 것보다 메모리와 시간이 적게 들고, 바뀌지 않은 가지는 참조가 같아서 그걸 그리는 컴포넌트가 렌더를 건너뛸 수 있다. 전부 깊게 복사하면 원본은 지켜도 이 정보가 사라져 모든 `memo`가 다시 그린다.
+
+### Immer는 어떻게 동작하나?
+
+recipe에 원본을 감싼 `Proxy` 초안을 넘기고, 읽기와 쓰기를 가로챈다. 처음 쓰기가 일어난 객체만 얕게 복사하고 부모에 바뀌었다는 표시를 남긴다. recipe가 끝나면 표시된 경로만 새로 조립하고 나머지는 원본 참조를 넣은 뒤 결과를 얼리고 초안을 폐기한다. 바뀐 것이 없으면 원본을 그대로 돌려준다.
+
+### Immer를 쓸 때 주의할 점은?
+
+초안을 고치거나 새 값을 반환하거나 하나만 해야 하고, 한 줄 화살표 함수가 `push`의 반환값을 돌려주는 실수를 조심한다. 초안은 `produce`가 끝나면 폐기되니 비동기 콜백에서 쓰면 `Cannot perform 'get' on a proxy that has been revoked`가 난다. `Map`과 `Set`은 `enableMapSet()`이 필요하고, 결과를 얼리면서 원본과 같이 쓰는 가지도 얼리니 Immer 밖에서 그 객체를 고치던 코드가 터진다.
+
+### StrictMode에서 상태가 두 번 추가되는 버그는 왜 생기나?
+
+StrictMode는 개발 모드에서 업데이트 함수와 리듀서를 두 번 불러 순수하지 않은 함수를 드러낸다. 업데이트 함수가 `prev.push(x)`처럼 `prev`를 고치면 두 번째 호출이 이미 고쳐진 `prev`를 받아 항목이 더 들어간다. 순수 함수라면 몇 번 불러도 결과가 같다. StrictMode를 끄지 말고 `[...prev, x]`처럼 새 값을 만들어 돌려주게 고친다.
+
+### 상태 정규화는 언제 하나?
+
+같은 엔터티가 여러 곳에 복사돼 있거나, 목록 안의 항목을 자주 따로 고치거나, 중첩이 깊어 경로가 길 때 한다. 종류별로 id를 키로 하는 사전을 두고 id로 서로 가리키면, 한 항목을 바꿀 때 짧은 경로만 새로 만들고 나머지 컴포넌트는 다시 그리지 않는다. 대신 그릴 때 id로 조립하는 코드가 필요하니 단순한 상태까지 펼 필요는 없다.
+
+### 불변 업데이트의 비용은 무엇이고, 직접 고쳐도 되는 경우는?
+
+바뀐 경로마다 새 객체를 할당하니 가비지 컬렉션 부담이 늘고, Immer는 Proxy와 얼리기 비용이 더 든다. 화면 상태에서는 대부분 무시할 만하지만 아주 큰 데이터를 초당 여러 번 바꾸면 재 보고 고른다. 함수 안에서 막 만든, 아직 아무도 보지 않은 객체나 배열은 고쳐도 불변성을 깨지 않는다. 지켜야 하는 건 이미 상태로 공개된 객체다.

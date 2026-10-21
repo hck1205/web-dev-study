@@ -1,0 +1,481 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-closures");
+
+1초마다 숫자가 하나씩 오르는 타이머 컴포넌트를 만들었다. 화면에는 0이 1로 바뀌고 거기서 멈춘다. 에러도 없다.
+
+```js
+function Timer() {
+  const [count, setCount] = useState(0);
+  console.log(`render count=${count}`);
+  useEffect(() => {
+    const id = setInterval(() => {
+      console.log(`tick: count=${count}`);
+      setCount(count + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
+```
+
+크로미움에서 React 19.3으로 3.5초 돌린 로그다.
+
+```text
+render count=0
+tick: count=0
+render count=1
+tick: count=0
+render count=1
+tick: count=0
+```
+
+화면의 `count`는 1인데, 타이머 콜백은 매번 `count=0`을 본다. 그래서 매번 `setCount(1)`만 한다. 두 번째 틱 뒤에 `render count=1`이 한 번 더 찍힌 건 같은 값을 넣었을 때 React가 바로 멈추지 않고 한 번 더 렌더링한 뒤 멈추는 경우가 있어서이고, 세 번째 틱부터는 렌더링도 없다. 이 콜백은 왜 옛날 값을 보고 있을까. 답은 클로저에 있다. 이 글은 클로저가 무엇을 기억하는지, 엔진이 그걸 어떻게 들고 있는지, 그래서 어디서 버그가 나는지를 따라간다. 출력은 Node.js 22와 크로미움에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 함수를 만드는 문법은 [함수 선언문, 표현식, 화살표 함수](/posts/js-function-forms)에서, 함수를 값으로 넘기는 이야기는 [일급 함수와 콜백](/posts/js-first-class-callbacks)에서 다룬다. 어떤 변수가 어느 스코프에 속하는지의 규칙은 [스코프와 렉시컬 스코프](/posts/js-scope-lexical)가 먼저다.
+
+## 함수는 태어난 자리를 기억한다
+
+카운터를 만드는 함수로 시작한다.
+
+```js
+function makeCounter() {
+  let count = 0;
+  return {
+    increment() { count += 1; return count; },
+    get() { return count; },
+  };
+}
+const a = makeCounter();
+const b = makeCounter();
+a.increment();
+a.increment();
+console.log(a.get(), b.get());
+console.log(a.count);
+```
+
+```text
+2 0
+undefined
+```
+
+`makeCounter`는 이미 실행을 끝내고 반환했다. 보통이라면 그 안의 `count`는 사라져야 한다. 그런데 `a.increment`는 여전히 `count`를 읽고 바꾼다. 게다가 `a`와 `b`는 서로 다른 `count`를 갖고 있고, 바깥에서는 `a.count`로 닿을 수 없다.
+
+이렇게 함수가 자기가 만들어진 자리의 변수에 계속 접근할 수 있는 것을 클로저라고 한다. 정확히는 함수와, 그 함수가 만들어질 때의 주변 환경을 묶은 것이다. 자바스크립트에서는 모든 함수가 이 성질을 가진다. 특별한 문법이 아니라 함수가 원래 그렇게 동작한다.
+
+## 호출이 끝나도 상자는 남는다
+
+원리는 [스코프와 렉시컬 스코프](/posts/js-scope-lexical)에서 명세 용어로 따라갔다. 줄이면 이렇다. 함수를 호출하면 그 호출의 변수를 담는 Environment Record가 생기고, 함수 객체는 만들어질 때의 Record를 `[[Environment]]` 슬롯에 저장해 두었다가 호출될 때 그것을 바깥 스코프로 잇는다. 여기서는 그 결과로 생기는 두 가지, 호출마다 따로 생기는 상자와 그 상자의 수명을 본다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="호출마다 새 상자가 생기고, 함수는 자기가 태어난 상자를 가리킨다"
+  nodes={[
+    { id: "global", label: "전역 Record", sub: "makeCounter, a, b", x: 200, y: 35, w: 170 },
+    { id: "envA", label: "호출 1의 Record", sub: "count: 2", x: 100, y: 135, w: 150 },
+    { id: "envB", label: "호출 2의 Record", sub: "count: 0", x: 300, y: 135, w: 150 },
+    { id: "incA", label: "a.increment", sub: "[[Environment]]", x: 100, y: 235, w: 140 },
+    { id: "incB", label: "b.increment", sub: "[[Environment]]", x: 300, y: 235, w: 140 },
+  ]}
+  edges={[
+    { from: "envA", to: "global", label: "OuterEnv" },
+    { from: "envB", to: "global", label: "OuterEnv" },
+    { from: "incA", to: "envA" },
+    { from: "incB", to: "envB" },
+  ]}
+/>
+
+`makeCounter()`를 두 번 부르면 상자도 두 개 생긴다. `a.increment`는 첫 번째 상자를, `b.increment`는 두 번째 상자를 가리킨다. 그래서 둘의 `count`가 따로 논다. 호출이 끝났는데도 상자가 사라지지 않는 이유는 가비지 컬렉터의 기준이 "끝났느냐"가 아니라 "닿을 수 있느냐"라서다. `a`가 살아 있는 한 `a.increment`가 살아 있고, 그 함수가 가리키는 상자도 살아 있다. 이 기준은 [가비지 컬렉션](/posts/garbage-collection)에서 자세히 다룬다.
+
+아래 그림에서 다음을 누르면 상자가 생기고 값이 바뀌는 순서를 볼 수 있다.
+
+<AlgoTrace
+  caption="makeCounter를 두 번 부르면 count가 두 개다"
+  memoryLabel="살아 있는 Record"
+  cells={["a = make()", "b = make()", "a.increment()", "a.increment()", "b.get()"]}
+  steps={[
+    { pointer: 0, memory: ["호출1 count=0"], caption: "첫 호출이 상자를 만들고, 그 상자를 기억하는 함수 둘을 돌려준다." },
+    { pointer: 1, memory: ["호출1 count=0", "호출2 count=0"], caption: "두 번째 호출은 새 상자를 만든다. 첫 상자와 상관없다." },
+    { pointer: 2, memory: ["호출1 count=1", "호출2 count=0"], caption: "a.increment는 호출1의 상자에서 count를 찾아 바꾼다." },
+    { pointer: 3, memory: ["호출1 count=2", "호출2 count=0"], caption: "같은 상자를 또 바꾼다. 값이 이어서 쌓인다." },
+    { pointer: 4, found: [4], memory: ["호출1 count=2", "호출2 count=0"], caption: "b.get은 호출2의 상자를 본다. 0이다." },
+  ]}
+/>
+
+## 값이 아니라 변수를 잡는다
+
+클로저가 기억하는 건 만들어질 때의 값을 찍어 둔 사진이 아니다. 변수 자체, 즉 그 상자의 칸에 대한 연결이다. 그래서 나중에 값이 바뀌면 클로저도 바뀐 값을 본다.
+
+```js
+let price = 1000;
+const show = () => `가격: ${price}`;
+price = 2000;
+console.log(show());
+
+function makeLogger() {
+  let level = "info";
+  const log = (msg) => console.log(`[${level}] ${msg}`);
+  const setLevel = (next) => { level = next; };
+  return { log, setLevel };
+}
+const logger = makeLogger();
+logger.log("시작");
+logger.setLevel("debug");
+logger.log("자세히");
+```
+
+```text
+가격: 2000
+[info] 시작
+[debug] 자세히
+```
+
+`show`를 만들 때 `price`는 1000이었지만, 부를 때 2000을 읽었다. `log`와 `setLevel`은 같은 상자의 `level`을 함께 쓴다. 한쪽이 바꾸면 다른 쪽이 본다.
+
+그러면 처음 타이머는 왜 옛날 값을 봤을까. 클로저가 값을 복사해 둔 게 아니라면, 누군가 `count`를 바꿨을 때 타이머도 새 값을 봐야 한다. 뒤에서 보겠지만 React에서는 아무도 그 `count`를 바꾸지 않는다. 렌더링마다 새 `count`가 새 상자에 생길 뿐이다.
+
+## 반복문 안에서 만든 함수
+
+같은 원리로 유명한 반복문 퍼즐도 풀린다.
+
+```js
+var fns = [];
+for (var i = 0; i < 3; i++) fns.push(() => i);
+console.log(fns.map((f) => f()));
+
+const fns2 = [];
+for (let j = 0; j < 3; j++) fns2.push(() => j);
+console.log(fns2.map((f) => f()));
+```
+
+```text
+[ 3, 3, 3 ]
+[ 0, 1, 2 ]
+```
+
+`var i`는 함수 스코프에 칸이 하나뿐이라 세 함수가 같은 칸을 잡고, 부를 때는 반복이 끝나 3이다. `let j`는 반복마다 새 칸이 생겨서 함수마다 다른 칸을 잡는다. 반복마다 환경이 어떻게 만들어지는지는 [var, let, const](/posts/js-var-let-const)에서 그림으로 따라갔다. 여기서 가져갈 건 "같은 칸을 잡은 클로저는 같은 값을 본다"는 것 하나다.
+
+## 엔진이 실제로 남기는 것
+
+명세는 상자 전체가 남는다고 설명하지만, V8은 파싱할 때 안쪽 함수가 어떤 바깥 변수를 쓰는지 미리 보고 그 변수만 힙의 Context 객체에 둔다. 아무도 잡지 않는 지역 변수는 호출이 끝나면 버려진다. 바이트코드에서 이 차이가 어떻게 보이는지는 [스코프와 렉시컬 스코프](/posts/js-scope-lexical)에서 확인했다.
+
+이 최적화에는 함정이 하나 있다. 한 스코프 안의 클로저들은 Context 하나를 같이 쓴다. 클로저 하나만 큰 데이터를 써도, 같은 스코프의 다른 클로저가 살아 있으면 그 데이터가 함께 남는다. 이 현상을 힙 크기로 재 본 결과는 [메모리 누수](/posts/js-memory-leak)에 있다.
+
+클로저가 무엇을 잡고 있는지는 크롬 개발자 도구에서 직접 볼 수 있다. 클로저 안에 중단점을 걸면 Scope 패널의 Closure 항목에 이 함수가 실제로 잡은 변수가 나온다. 콘솔에서 `console.dir(a.increment)`로 펼쳐도 `[[Scopes]]` 아래에 같은 게 보인다. 오래된 값 버그를 의심할 때 가장 먼저 해 볼 일이라서, 뒤에서 다시 쓴다.
+
+## 클로저로 만드는 것들
+
+클로저의 쓰임은 대부분 "상태를 함수 안에 숨겨 둔다"로 모인다.
+
+숨긴 상태는 밖에서 바꿀 수 없다. `makeCounter`의 `count`는 `increment`를 거치지 않고는 바꿀 방법이 없다. 모듈 시스템이 없던 시절 라이브러리들은 즉시 실행 함수 안에 상태를 숨기고 공개할 함수만 반환했다. 이 방식은 [IIFE와 모듈 패턴](/posts/js-iife-module-pattern)에서 다룬다.
+
+설정을 미리 받아 둔 함수를 찍어 낼 수도 있다.
+
+```js
+function makeTaxCalculator(rate) {
+  return (price) => Math.round(price * (1 + rate));
+}
+const withVat = makeTaxCalculator(0.1);
+const withJpTax = makeTaxCalculator(0.08);
+console.log(withVat(10000), withJpTax(10000));
+```
+
+```text
+11000 10800
+```
+
+이 생각을 일반화한 게 [커링과 부분 적용](/posts/js-currying-partial)이다.
+
+호출 사이에 기억이 필요한 래퍼도 클로저다. 한 번만 실행되는 함수를 만들어 보자.
+
+```js
+function once(fn) {
+  let done = false;
+  let result;
+  return function (...args) {
+    if (!done) {
+      done = true;
+      result = fn.apply(this, args);
+    }
+    return result;
+  };
+}
+const init = once(() => { console.log("초기화 실행"); return 42; });
+console.log(init(), init(), init());
+```
+
+```text
+초기화 실행
+42 42 42
+```
+
+`done`과 `result`는 `once`가 돌려준 함수만 아는 비밀 상태다. 계산 결과를 기억하는 캐시는 [메모이제이션](/posts/js-memoization)에서, 마지막 호출의 타이머를 기억해 두는 [디바운스와 스로틀](/posts/debounce-throttle)도 같은 구조다. 이벤트 리스너가 등록 시점의 데이터를 들고 있다가 나중에 쓰는 것도 클로저다.
+
+### 클래스의 private 필드와 비교하면
+
+ES2022부터는 클래스에 `#count` 같은 private 필드가 있다. 숨기는 목적은 같은데 비용이 다르다.
+
+```js
+class Counter {
+  #count = 0;
+  increment() { this.#count += 1; return this.#count; }
+  get() { return this.#count; }
+}
+const a = makeCounter(), b = makeCounter();
+const c = new Counter(), d = new Counter();
+console.log("closure:", a.increment === b.increment);
+console.log("class:  ", c.increment === d.increment);
+
+function measure(label, make) {
+  global.gc();
+  const before = process.memoryUsage().heapUsed;
+  const keep = Array.from({ length: 100_000 }, make);
+  global.gc();
+  const mb = (process.memoryUsage().heapUsed - before) / 1024 / 1024;
+  console.log(`${label} 10만 개: ${mb.toFixed(1)}MB`);
+  return keep.length;
+}
+measure("closure", makeCounter);
+measure("class  ", () => new Counter());
+// node --expose-gc 로 실행
+```
+
+```text
+closure: false
+class:   true
+closure 10만 개: 19.1MB
+class   10만 개: 3.8MB
+```
+
+클로저 방식은 카운터마다 `increment`와 `get` 함수 객체를 새로 만든다. 클래스는 메서드가 프로토타입에 하나만 있고 인스턴스마다 필드만 갖는다. 같은 개수를 만들면 메모리가 다섯 배쯤 차이 났다. 화면에 몇 개 띄울 객체라면 상관없고, 수만 개를 만드는 객체라면 클래스가 낫다. 반대로 클로저는 `this`에 기대지 않아서 메서드를 콜백으로 떼어 넘겨도 깨지지 않는다. 클래스의 다른 기능은 [클래스와 상속](/posts/js-classes)에서 다룬다.
+
+## React 컴포넌트에서 오래된 값을 보는 이유
+
+이제 처음 타이머로 돌아간다. 함수 컴포넌트는 렌더링할 때마다 호출되는 함수다. 호출마다 새 Environment Record가 생기고, 그 안에 그 렌더링의 `count`가 `const`로 생긴다. 클릭 핸들러가 자기 렌더링의 값을 보는 기본 장면은 [var, let, const](/posts/js-var-let-const)에서 다뤘다. 여기서는 그 함수가 오래 살아남을 때 생기는 문제를 본다. 렌더링 1의 `count`는 0이고, 렌더링 2의 `count`는 1이다. 서로 다른 칸이다. 그리고 `const`라서 누구도 그 칸을 바꾸지 않는다.
+
+`useEffect(..., [])`는 첫 렌더링 뒤에 한 번만 effect를 실행한다. 그때 만든 interval 콜백은 렌더링 1의 상자를 잡는다. 이후 렌더링이 몇 번 일어나든 이 콜백은 렌더링 1의 `count`, 즉 0을 본다. 클로저가 값을 복사해서가 아니라, 처음부터 다른 칸을 보고 있어서다.
+
+<AlgoTrace
+  caption="렌더링마다 count 칸이 새로 생기고, 콜백은 첫 칸만 본다"
+  memoryLabel="렌더링별 count"
+  cells={["렌더 1", "tick 1", "렌더 2", "tick 2", "tick 3"]}
+  steps={[
+    { pointer: 0, memory: ["렌더1 count=0 ← 콜백"], caption: "첫 렌더링. effect가 돌며 interval 콜백이 이 상자를 잡는다." },
+    { pointer: 1, memory: ["렌더1 count=0 ← 콜백"], caption: "콜백이 렌더1의 count 0을 읽고 setCount(1)을 부른다." },
+    { pointer: 2, memory: ["렌더1 count=0 ← 콜백", "렌더2 count=1"], caption: "새 렌더링은 새 상자를 만든다. 화면은 1이다. effect는 다시 돌지 않는다." },
+    { pointer: 3, memory: ["렌더1 count=0 ← 콜백", "렌더2 count=1"], caption: "콜백은 여전히 렌더1을 본다. 또 setCount(1)이다." },
+    { pointer: 4, found: [4], memory: ["렌더1 count=0 ← 콜백", "렌더2 count=1"], caption: "값이 같으니 React가 렌더링을 건너뛴다. 숫자가 멈춘다." },
+  ]}
+/>
+
+<SequenceDiagram
+  caption="한 번 등록한 interval은 첫 렌더링의 count만 안다"
+  actors={[
+    { id: "react", label: "React" },
+    { id: "render", label: "Timer 함수" },
+    { id: "timer", label: "interval 콜백" },
+  ]}
+  steps={[
+    { from: "react", to: "render", label: "렌더 1", title: "첫 렌더링", detail: "Timer가 호출되고 count=0인 상자가 생긴다." },
+    { from: "render", to: "timer", label: "setInterval", title: "effect가 콜백을 만든다", detail: "의존성이 []라 이번 한 번만 실행된다. 콜백은 렌더1의 상자를 잡는다.", payload: "count = 0 (렌더1)" },
+    { from: "timer", to: "react", label: "setCount(0 + 1)", title: "첫 틱", detail: "렌더1의 count를 읽어 1을 넣는다." },
+    { from: "react", to: "render", label: "렌더 2", title: "다시 렌더링한다", detail: "새 상자에 count=1이 생긴다. 의존성이 그대로라 effect는 건너뛴다." },
+    { from: "timer", to: "react", label: "setCount(0 + 1)", title: "두 번째 틱", detail: "콜백은 바뀌지 않았다. 여전히 0을 읽어 1을 넣는다.", payload: "tick: count=0" },
+    { from: "react", to: "react", label: "변화 없음", title: "숫자가 멈춘다", detail: "이미 1이라 바뀐 게 없다. 이후 틱도 같다." },
+  ]}
+/>
+
+이 현상을 흔히 stale closure, 오래된 클로저라고 부른다. 원인이 "클로저가 바뀌지 않았다"이니 고치는 방법도 세 갈래다.
+
+첫째, 콜백이 `count`를 읽지 않게 만든다. setter에 함수를 넘기면 React가 최신 값을 넣어 준다. 이 경우 가장 깔끔하다.
+
+```js
+function Timer() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount((c) => c + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  console.log(`A render count=${count}`);
+  return <p>{count}</p>;
+}
+```
+
+<UrlAnatomy
+  caption="고친 effect를 조각으로 읽기"
+  base="useEffect("
+  separator=""
+  joiner=" "
+  params={[
+    { key: "effect", display: "() => {", title: "effect 함수", description: "첫 렌더링 뒤에 한 번 불린다. 이 함수와 안의 콜백이 렌더링 1의 상자를 잡는다." },
+    { key: "interval", display: "setInterval(() => setCount((c) => c + 1), 1000);", title: "count를 읽지 않는 콜백", description: "바깥의 count를 쓰지 않는다. 이전 값은 React가 업데이터 함수의 인자 c로 넣어 준다. 잡고 있는 상자가 오래돼도 상관없다.", required: true },
+    { key: "cleanup", display: "return () => clearInterval(id);", title: "정리 함수", description: "컴포넌트가 사라질 때 interval을 멈춘다. id도 클로저로 기억한다. 이게 없으면 화면을 떠나도 타이머가 돈다." },
+    { key: "deps", display: "}, [])", title: "의존성 배열", description: "비어 있으니 effect를 다시 만들지 않는다. 콜백이 렌더링 값을 읽지 않으니 비워 둬도 안전하다." },
+  ]}
+/>
+
+```text
+A render count=0
+A render count=1
+A render count=2
+A render count=3
+```
+
+둘째, 의존성 배열에 `count`를 넣어서 렌더링마다 새 클로저를 만든다.
+
+```js
+useEffect(() => {
+  console.log(`interval 시작 (count=${count})`);
+  const id = setInterval(() => setCount(count + 1), 1000);
+  return () => { console.log(`interval 정리 (count=${count})`); clearInterval(id); };
+}, [count]);
+```
+
+```text
+interval 시작 (count=0)
+interval 정리 (count=0)
+interval 시작 (count=1)
+interval 정리 (count=1)
+interval 시작 (count=2)
+interval 정리 (count=2)
+interval 시작 (count=3)
+```
+
+숫자는 오른다. 대신 매초 interval을 지우고 다시 건다. 타이머라면 견딜 만하지만, effect가 웹소켓 연결이나 구독이라면 값이 바뀔 때마다 연결을 끊고 다시 붙는 셈이다.
+
+셋째, 다시 만들 필요는 없는데 최신 값을 읽어야 하는 경우다. 연결은 유지하면서 콜백 안에서 최신 props를 쓰고 싶을 때다. React 19.2부터 정식으로 들어온 `useEffectEvent`가 이 경우를 위한 것이다. 이 훅으로 감싼 함수는 항상 최신 렌더링의 값을 본다.
+
+```js
+function Timer({ step }) {
+  const [count, setCount] = useState(0);
+  const onTick = useEffectEvent(() => {
+    console.log(`tick: count=${count}, step=${step}`);
+    setCount(count + step);
+  });
+  useEffect(() => {
+    const id = setInterval(() => onTick(), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
+// <Timer step={2} />로 렌더링
+```
+
+```text
+tick: count=0, step=2
+tick: count=2, step=2
+tick: count=4, step=2
+```
+
+effect는 한 번만 돌았는데 `count`는 매번 최신이다. `useEffectEvent`가 없던 시절에는 `useRef`에 최신 값을 담아 두고 콜백에서 `ref.current`를 읽었다. ref는 렌더링 사이에 같은 객체라서, 콜백이 오래된 상자를 잡고 있어도 그 안의 `ref`가 가리키는 객체는 같다.
+
+어느 쪽을 고를지는 이렇게 정한다. 이전 상태로 다음 상태를 계산하면 업데이터 함수. 그 값이 바뀔 때 effect가 다시 돌아야 맞으면 의존성 배열. 값은 최신이어야 하지만 effect가 다시 돌면 안 되면 `useEffectEvent`(또는 ref).
+
+### 의존성 배열을 비우고 경고를 끄는 실수
+
+`eslint-plugin-react-hooks`의 `exhaustive-deps` 규칙은 effect 안에서 쓰는 렌더링 값이 의존성에 빠지면 경고한다. 처음 타이머 코드에서도 `count`가 빠졌다고 알려 준다. 이 경고를 `// eslint-disable-next-line`으로 끄는 것이 오래된 클로저 버그의 가장 흔한 출발점이다. 경고가 귀찮다면 대개 effect가 렌더링 값을 너무 많이 읽고 있다는 신호다. 경고를 끄기 전에 위 세 갈래 중 하나로 바꿀 수 있는지 본다.
+
+같은 문제가 `useCallback`과 `useMemo`에도 있다. 의존성에서 값을 빼면 함수가 첫 렌더링의 값을 계속 쓴다. 이 둘을 언제 쓸지는 [React는 언제 다시 그리나](/posts/react-rerender)와 [메모이제이션](/posts/js-memoization)에서 다룬다.
+
+## 현장에서 오래된 값을 찾는 순서
+
+증상은 대개 이런 모양이다. 버튼을 눌렀는데 저장된 값이 한 박자 전 값이다. 검색어를 바꿨는데 요청은 이전 검색어로 간다. 타이머나 구독 콜백 안에서만 값이 멈춰 있다. 렌더링된 화면은 맞는데 콜백 안의 값만 틀렸다면 거의 확실히 오래된 클로저다.
+
+1. 값이 틀린 콜백이 언제 만들어졌는지 찾는다. effect 안인지, `useCallback` 안인지, 컴포넌트 밖 모듈 변수에 저장해 둔 함수인지.
+2. 그 콜백에 중단점을 걸고 Scope 패널의 Closure를 본다. 거기 보이는 값이 화면과 다르면 확정이다.
+3. 콜백을 만든 effect나 `useCallback`의 의존성 배열을 본다. 콜백이 읽는 렌더링 값 중 빠진 게 있는지 확인한다.
+4. 앞의 세 갈래 중 하나로 고친다. 의존성을 추가했다면 effect가 너무 자주 도는지 로그로 확인한다.
+
+React 밖에서도 같다. 모듈 최상위에서 한 번 `addEventListener`로 등록한 핸들러가 그때의 설정 객체를 잡고 있으면, 나중에 설정 변수에 새 객체를 대입해도 핸들러는 옛 객체를 본다. 반대로 설정 변수를 바꾸는 게 아니라 같은 객체의 속성을 바꾸면 핸들러도 바뀐 값을 본다. 무엇을 잡았는지, 그 칸이 바뀌는지를 구분하면 같은 원리로 풀린다.
+
+## 연습: 숨긴 상태를 가진 카운터
+
+`createCounter`를 채워 보자. 값은 객체 속성이 아니라 클로저 안에 숨겨야 하고, 카운터 두 개가 서로의 값에 영향을 주면 안 된다. 마지막 테스트가 객체 속성에 값을 둔 풀이를 걸러 낸다.
+
+<CodePlayground
+  caption="createCounter: 클로저로 상태 숨기기"
+  functionName="run"
+  initialCode={`function createCounter(start) {
+  // inc, dec, get, reset 네 함수를 가진 객체를 돌려준다.
+  // 현재 값은 객체 속성이 아니라 클로저 안에 숨긴다.
+  // inc와 dec는 바뀐 값을, reset은 start로 되돌린 값을 돌려준다.
+  return {};
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// ops 예: ["a.inc", "b.get"]. 카운터 a와 b는 같은 start로 따로 만든다.
+function run(start, ops) {
+  const counters = { a: createCounter(start), b: createCounter(start) };
+  return ops.map((op) => {
+    const [name, action] = op.split(".");
+    if (action === "keys") return Object.keys(counters[name]).sort().join(",");
+    return counters[name][action]();
+  });
+}`}
+  solution={`function createCounter(start) {
+  let count = start;
+  return {
+    inc() { count += 1; return count; },
+    dec() { count -= 1; return count; },
+    get() { return count; },
+    reset() { count = start; return count; },
+  };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+// ops 예: ["a.inc", "b.get"]. 카운터 a와 b는 같은 start로 따로 만든다.
+function run(start, ops) {
+  const counters = { a: createCounter(start), b: createCounter(start) };
+  return ops.map((op) => {
+    const [name, action] = op.split(".");
+    if (action === "keys") return Object.keys(counters[name]).sort().join(",");
+    return counters[name][action]();
+  });
+}`}
+  tests={[
+    { args: [0, ["a.inc", "a.inc", "a.get"]], expected: [1, 2, 2], label: "올리고 읽기" },
+    { args: [5, ["a.dec", "a.reset", "a.get"]], expected: [4, 5, 5], label: "reset은 start로 돌아간다" },
+    { args: [0, ["a.inc", "a.inc", "b.get", "b.inc"]], expected: [1, 2, 0, 1], label: "a와 b는 따로 센다" },
+    { args: [10, ["a.inc", "b.dec", "a.get", "b.get"]], expected: [11, 9, 11, 9], label: "서로 섞어도 따로" },
+    { args: [0, ["a.inc", "a.keys"]], expected: [1, "dec,get,inc,reset"], label: "count는 밖에서 안 보인다" },
+  ]}
+/>
+
+## 멈춘 타이머가 알려 준 것
+
+처음 타이머는 클로저가 고장 나서 멈춘 게 아니었다. 클로저는 정확히 자기가 태어난 렌더링 1의 `count`를 보고 있었다. 렌더링마다 새 `count`가 생긴다는 걸 놓쳤을 뿐이다. 클로저를 한 문장으로 줄이면 "함수는 만들어진 자리의 변수 칸을 계속 가리킨다"다. 어느 칸을 가리키는지, 그 칸이 바뀌는지만 따라가면 상태 숨기기, 반복문 퍼즐, 메모리 누수, 오래된 값 버그가 모두 같은 그림으로 설명된다.
+
+## 면접에서 나올 만한 질문
+
+### 클로저란 무엇인가요?
+
+함수가 자기가 만들어진 자리의 변수에, 그 자리의 실행이 끝난 뒤에도 접근할 수 있는 것이다. 함수 객체는 만들어질 때의 Environment Record를 `[[Environment]]` 슬롯에 저장하고, 호출할 때 그 Record를 바깥 스코프로 삼는다. 자바스크립트의 모든 함수가 이렇게 동작한다.
+
+### 클로저는 값을 복사해 두나요, 변수를 참조하나요?
+
+변수를 참조한다. 클로저를 만든 뒤 그 변수에 새 값을 대입하면 클로저도 새 값을 본다. 같은 스코프에서 만든 클로저들은 같은 변수를 공유해서 한쪽이 바꾸면 다른 쪽이 본다. React의 오래된 값 문제도 복사 때문이 아니라 렌더링마다 다른 변수가 생기기 때문이다.
+
+### for 문에서 var와 let으로 만든 클로저의 결과가 다른 이유는요?
+
+`var`는 함수 스코프에 변수가 하나뿐이라 모든 클로저가 같은 칸을 잡고, 반복이 끝난 뒤의 값을 본다. `let`은 명세가 반복마다 새 Environment Record를 만들고 이전 값을 복사해 넣기 때문에 클로저마다 다른 칸을 잡는다. 그래서 `[3, 3, 3]`과 `[0, 1, 2]`로 갈린다.
+
+### 클로저는 어디에 쓰나요?
+
+상태를 숨기는 데 쓴다. 모듈 패턴의 private 상태, 설정을 미리 받아 둔 함수 팩토리, `once`나 메모이제이션처럼 호출 사이에 기억이 필요한 래퍼, 디바운스의 타이머 id가 모두 클로저다. 이벤트 핸들러가 등록할 때의 데이터를 나중에 쓰는 것도 같다.
+
+### 클로저는 메모리 누수를 일으키나요?
+
+클로저 자체가 누수는 아니지만, 살아 있는 클로저가 잡은 변수는 수거되지 않는다. 떼지 않은 이벤트 리스너나 전역 캐시에 넣은 콜백이 큰 데이터를 잡으면 계속 남는다. V8에서는 같은 스코프의 클로저들이 Context를 공유해서, 큰 데이터를 쓰지 않는 클로저도 그것을 붙잡을 수 있다. 필요한 값만 꺼내 두고, 리스너는 정리한다.
+
+### React에서 stale closure는 왜 생기고 어떻게 고치나요?
+
+함수 컴포넌트는 렌더링마다 호출되어 그때마다 새 state 변수가 생기는데, 의존성 배열 때문에 다시 만들어지지 않은 effect나 `useCallback`의 함수는 예전 렌더링의 변수를 계속 본다. 이전 상태로 계산하면 `setCount((c) => c + 1)` 같은 업데이터 함수를 쓰고, 값이 바뀔 때 effect가 다시 돌아야 하면 의존성에 넣는다. effect는 그대로 두고 최신 값만 읽어야 하면 `useEffectEvent`나 ref를 쓴다.
+
+### 클로저로 private 상태를 만드는 것과 클래스의 #private 필드는 무엇이 다른가요?
+
+둘 다 밖에서 상태에 닿지 못하게 한다. 클로저 방식은 인스턴스마다 메서드 함수를 새로 만들어 메모리를 더 쓰고(10만 개 기준 약 19MB 대 4MB로 측정됐다), 대신 `this`에 기대지 않아 메서드를 떼어 넘겨도 안전하다. 클래스는 메서드를 프로토타입에서 공유하고 상속과 `instanceof`를 쓸 수 있다.
+
+### 오래된 클로저 버그를 디버깅할 때 무엇부터 보나요?
+
+화면은 맞는데 콜백 안의 값만 틀렸는지 먼저 확인한다. 그 콜백에 중단점을 걸고 크롬 개발자 도구 Scope 패널의 Closure 값을 화면 값과 비교한다. 다르면 그 콜백을 만든 effect나 `useCallback`의 의존성 배열에서 빠진 값을 찾고, `exhaustive-deps` 경고를 꺼 둔 곳이 없는지 본다.

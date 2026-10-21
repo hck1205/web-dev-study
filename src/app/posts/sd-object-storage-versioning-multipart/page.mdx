@@ -1,0 +1,424 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-object-storage-versioning-multipart");
+
+이 시리즈에서 이 글의 자리: [객체 저장소 설계 ①](/posts/sd-object-storage-architecture)에서 본문과 이름표를 나눴고, [객체 저장소 설계 ②](/posts/sd-object-storage-durability)에서 디스크가 죽거나 비트가 뒤집혀도 데이터를 지키는 법을 계산했다. 이 글은 객체 저장소 장의 마지막이다. 사람이 덮어쓴 객체를 되돌리는 버전 관리, 큰 파일을 조각으로 받는 멀티파트 업로드, 그리고 그 둘이 남기는 쓰레기를 치우는 가비지 컬렉션을 만든다. 다음 사례는 [리더보드 설계 ①: Redis 정렬 집합](/posts/sd-leaderboard-sorted-set)이다.
+
+금요일 저녁, 배포 스크립트가 `docs` 버킷의 `report.pdf`를 빈 파일로 덮어썼다. 디스크는 멀쩡하고, 세 벌 복제도 이레이저 코딩도 제 할 일을 했다. 빈 파일을 아주 안전하게 세 벌로 저장했다. ②편 끝에서 말한 대로, 복제는 디스크 고장을 막을 뿐 사람의 실수는 막지 못한다. 옛 `report.pdf`를 되찾으려면 덮어쓰기가 옛 본문을 지우지 않아야 한다.
+
+## 덮어쓰면 옛 본문은 어디로 가나
+
+①편의 장부를 다시 보자. `(bucket_name, object_name)`이 기본 키였고, 같은 이름으로 다시 올리면 `INSERT OR REPLACE`로 행의 `object_id`를 새 값으로 바꿨다. 객체는 고칠 수 없으니 새 본문은 새 상자에 들어가고, 장부의 화살표만 새 상자로 옮긴다. 옛 상자는 창고에 그대로 남는다. 다만 아무도 그 상자 번호를 모른다.
+
+그러니 옛 본문은 사실 아직 디스크에 있다. 장부에서 옛 화살표를 지우지 않고 남겨 두기만 하면 되돌릴 수 있다. 이게 버전 관리의 전부다. 행을 바꾸지 않고, 버전마다 행을 하나씩 쌓는다.
+
+```sql
+-- 버전 관리를 켠 버킷의 장부: 키가 (버킷, 이름, 버전)이 된다
+CREATE TABLE object_version (
+  bucket_name      text    NOT NULL,
+  object_name      text    NOT NULL,
+  version_id       text    NOT NULL,   -- 시간순으로 정렬되는 ID
+  object_id        uuid,               -- 창고의 상자 번호. 삭제 마커면 NULL
+  is_delete_marker boolean NOT NULL DEFAULT false,
+  PRIMARY KEY (bucket_name, object_name, version_id)
+);
+```
+
+"최신 버전"은 따로 적지 않는다. 같은 이름의 행 중 `version_id`가 가장 큰 것이 최신이다. 그러려면 version_id가 만든 순서대로 정렬되어야 한다. 무작위 UUIDv4는 정렬하면 순서가 뒤죽박죽이고, UUIDv1(Cassandra의 TIMEUUID)은 시각이 들어 있지만 문자열 앞쪽이 시각의 낮은 자리라서 그냥 문자열로 정렬하면 시간순이 아니다. Cassandra는 TIMEUUID를 시각 기준으로 비교하는 규칙을 따로 둔다. 문자열 그대로 정렬하고 싶으면 시각이 맨 앞에 오는 UUIDv7이나 Snowflake 같은 ID가 편하다. 여러 서버에서 시간순 ID를 만드는 법은 [고유 ID 생성기 설계](/posts/sd-unique-id-generator)에서 다뤘다.
+
+## 지우기도 새 버전 하나다
+
+버전 관리를 켜면 지우기의 뜻도 바뀐다. 버전을 지정하지 않은 DELETE는 아무것도 지우지 않는다. 대신 "여기서부터 지워진 상태"라는 표시를 새 버전으로 하나 쌓는다. 이 표시를 삭제 마커(delete marker)라고 한다. 본문이 없는, 이름표만 있는 버전이다.
+
+GET은 최신 버전을 본다. 최신이 삭제 마커면 404를 돌려준다. 객체가 사라진 것처럼 보이지만 옛 버전은 모두 남아 있다. 버전 ID를 지정하면 그 버전을 직접 읽는다. 삭제 마커 자체를 지정해 GET하면 읽을 본문이 없으니 S3는 405 Method Not Allowed로 답한다. 실수로 지운 객체를 되살리려면 삭제 마커를 버전 ID로 지정해 지우면 된다. 그러면 그 아래 버전이 다시 최신이 된다.
+
+아래 그림은 `report.pdf`에 버전이 쌓이고 GET이 어느 버전을 집는지 보여 준다.
+
+<AlgoTrace
+  caption="report.pdf의 버전 더미에서 GET이 집는 것"
+  cells={["v1 obj-aaa", "v2 obj-bbb", "v3 삭제 마커"]}
+  memoryLabel="GET 결과"
+  steps={[
+    { pointer: 0, memory: ["200 obj-aaa"], caption: "처음 올린 v1이 유일한 버전이다. GET은 v1을 준다." },
+    { pointer: 1, memory: ["200 obj-bbb"], caption: "같은 이름으로 다시 올리면 v2가 위에 쌓인다. v1은 그대로 남는다." },
+    { pointer: 2, memory: ["404 삭제 마커"], caption: "버전 없이 DELETE하면 삭제 마커 v3가 쌓인다. 최신이 마커라 GET은 404다." },
+    { pointer: 0, found: [0], memory: ["404 삭제 마커", "?versionId=v1 → 200"], caption: "버전을 지정하면 마커 아래의 v1도 그대로 읽힌다." },
+    { pointer: 1, found: [1], memory: ["200 obj-bbb"], caption: "v3 마커를 버전 ID로 지우면 v2가 다시 최신이 된다. 되살리기 끝." },
+  ]}
+/>
+
+SQLite로 직접 만들어 돌려 봤다. 시각은 실험이라 고정된 값에서 1ms씩 흐르게 했고, 버전 ID는 그 시각을 36진수로 쓴 뒤 일련번호를 붙였다. 자릿수가 같으니 문자열로 정렬해도 시간순이다.
+
+```js
+// versioning.mjs (발췌)
+function del(bucket, name, versionId) {
+  if (versionId) {                                    // 특정 버전을 영구 삭제
+    db.prepare("DELETE FROM object_version WHERE bucket=? AND name=? AND version_id=?").run(bucket, name, versionId);
+    return `deleted ${versionId}`;
+  }
+  const v = newVersionId();                           // 버전 없이 지우면 삭제 마커를 새 버전으로 쌓는다
+  db.prepare("INSERT INTO object_version VALUES (?,?,?,NULL,1)").run(bucket, name, v);
+  return `delete marker ${v}`;
+}
+function get(bucket, name, versionId) {
+  const row = versionId
+    ? db.prepare("SELECT * FROM object_version WHERE bucket=? AND name=? AND version_id=?").get(bucket, name, versionId)
+    : db.prepare("SELECT * FROM object_version WHERE bucket=? AND name=? ORDER BY version_id DESC LIMIT 1").get(bucket, name);
+  if (!row) return "404 NoSuchKey";
+  if (row.is_delete_marker) return versionId ? "405 MethodNotAllowed (delete marker)" : "404 (x-amz-delete-marker: true)";
+  return `200 ${row.object_id} (version ${row.version_id})`;
+}
+```
+
+```text
+PUT  x2           -> mubbs7i8-0000 mubbs7i9-0001
+GET               -> 200 obj-bbb (version mubbs7i9-0001)
+DELETE            -> delete marker mubbs7ia-0002
+GET               -> 404 (x-amz-delete-marker: true)
+GET ?versionId=v1 -> 200 obj-aaa (version mubbs7i8-0000)
+GET ?versionId=mk -> 405 MethodNotAllowed (delete marker)
+versions          -> [
+  'mubbs7ia-0002 DELETE-MARKER',
+  'mubbs7i9-0001 obj-bbb',
+  'mubbs7i8-0000 obj-aaa'
+]
+DELETE ?versionId=mk -> deleted mubbs7ia-0002
+GET               -> 200 obj-bbb (version mubbs7i9-0001)
+```
+
+DELETE 뒤에 GET은 404였지만 버전 목록에는 세 줄이 모두 있다. 마커를 지우자 v2가 다시 보인다. 금요일의 `report.pdf`라면 빈 파일 버전의 아래 버전을 지정해 읽거나, 그 버전을 다시 복사해 올려서 최신으로 만든다.
+
+이 규칙을 직접 짜 보자. 버전 목록(최신이 앞)과 요청한 버전 ID(없으면 `null`)를 받아 응답을 돌려준다.
+
+<CodePlayground
+  caption="버전 더미에서 GET 응답 고르기"
+  functionName="resolveGet"
+  initialCode={`function resolveGet(versions, versionId) {
+  // versions: [{ id, marker }] 최신이 0번. marker가 true면 삭제 마커
+  // versionId: 지정한 버전 ID, 없으면 null
+  // 돌려줄 값: "200 <id>" | "404" | "405"
+  return "404";
+}`}
+  solution={`function resolveGet(versions, versionId) {
+  if (versionId) {
+    const v = versions.find((x) => x.id === versionId);
+    if (!v) return "404";                 // 없는 버전
+    return v.marker ? "405" : "200 " + v.id; // 마커를 직접 읽으면 405
+  }
+  if (versions.length === 0) return "404";
+  return versions[0].marker ? "404" : "200 " + versions[0].id; // 최신만 본다
+}`}
+  tests={[
+    { args: [[{ id: "v2", marker: false }, { id: "v1", marker: false }], null], expected: "200 v2", label: "최신을 준다" },
+    { args: [[{ id: "v3", marker: true }, { id: "v2", marker: false }, { id: "v1", marker: false }], null], expected: "404", label: "최신이 삭제 마커" },
+    { args: [[{ id: "v3", marker: true }, { id: "v2", marker: false }, { id: "v1", marker: false }], "v1"], expected: "200 v1", label: "마커 아래 버전 지정" },
+    { args: [[{ id: "v3", marker: true }, { id: "v2", marker: false }, { id: "v1", marker: false }], "v3"], expected: "405", label: "마커를 직접 지정" },
+    { args: [[{ id: "v3", marker: true }, { id: "v2", marker: false }, { id: "v1", marker: false }], "v9"], expected: "404", label: "없는 버전" },
+    { args: [[], null], expected: "404", label: "버전이 하나도 없다" },
+    { args: [[{ id: "v5", marker: false }, { id: "v3", marker: true }, { id: "v2", marker: false }], null], expected: "200 v5", label: "마커 위에 다시 올렸다" },
+  ]}
+/>
+
+## 버전이 쌓이면 요금도 쌓인다
+
+버전 관리에는 바로 보이지 않는 비용이 있다. 옛 버전도 본문 전체를 차지한다. 1GB 로그 파일을 매일 덮어쓰면 한 달 뒤 객체는 하나로 보이는데 30GB 요금이 나간다. 삭제 마커만 남고 아래 버전이 모두 정리된 "만료된 삭제 마커"도 목록 조회를 느리게 한다.
+
+그래서 수명 주기 규칙을 같이 건다. "최신이 아닌 버전은 30일 뒤 지운다, 단 최근 세 개는 남긴다" 같은 규칙이다. S3라면 버킷에 이런 설정을 붙인다.
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "cleanup",
+      "Filter": { "Prefix": "" },
+      "Status": "Enabled",
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30, "NewerNoncurrentVersions": 3 },
+      "Expiration": { "ExpiredObjectDeleteMarker": true },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}
+```
+
+```bash
+# lifecycle.json을 photos 버킷에 적용한다 (AWS CLI v2)
+aws s3api put-bucket-lifecycle-configuration --bucket photos \
+  --lifecycle-configuration file://lifecycle.json
+# 적용된 규칙을 다시 읽어 확인한다
+aws s3api get-bucket-lifecycle-configuration --bucket photos
+```
+
+마지막 줄의 `AbortIncompleteMultipartUpload`는 아래 멀티파트 업로드에서 다시 나온다. S3의 버전 관리는 한 번 켜면 끌 수 없고 "일시 중지"만 된다. 중지하면 새로 올리는 객체는 `null`이라는 버전 ID를 받고 이전 버전들은 그대로 남는다. 랜섬웨어처럼 권한을 가진 누군가가 일부러 모든 버전을 지우는 경우까지 막으려면 버전 관리 위에 Object Lock을 건다. 이 둘의 조합은 [백업 전략](/posts/backup-strategy)에서 다뤘다.
+
+## 5GB 파일은 한 번에 받지 않는다
+
+이제 큰 파일 쪽이다. 5GB 동영상을 PUT 한 번으로 받으면 세 가지가 아프다. 99%에서 연결이 끊기면 처음부터 다시 받아야 하고, 회선 하나로만 보내니 느리고, 서버는 그 5GB가 다 올 때까지 연결 하나를 붙잡고 있다. 그래서 파일을 조각(part)으로 나눠 따로따로 받는 멀티파트 업로드를 쓴다.
+
+클라이언트 쪽에서 끊긴 조각만 다시 보내는 이야기는 [동영상 서비스 설계 ①](/posts/sd-video-upload-transcoding)에서 실험했다. 여기서는 저장소 쪽, 받은 조각을 어디에 두고 어떻게 하나의 객체로 만들며 무엇을 검사하는지를 본다. 아래 그림이 한 번의 멀티파트 업로드 전체다.
+
+<SequenceDiagram
+  caption="멀티파트 업로드: 시작, 조각들, 마무리"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "api", label: "API" },
+    { id: "data", label: "데이터 저장소" },
+    { id: "meta", label: "메타데이터" },
+  ]}
+  steps={[
+    { from: "c", to: "api", label: "POST ?uploads", title: "업로드를 연다", detail: "어느 키로 올릴지 알리고 업로드 ID를 받는다. 장부에 진행 중 업로드 한 줄이 생긴다.", payload: "uploadId = 726765ea72a7" },
+    { from: "c", to: "data", label: "PUT part 1", title: "조각을 따로 올린다", detail: "조각마다 번호를 붙여 올린다. 순서도, 동시에 몇 개를 올릴지도 클라이언트 마음이다." },
+    { from: "data", to: "c", label: "ETag b64b…", title: "조각 지문을 돌려준다", detail: "조각 내용의 MD5를 ETag로 돌려준다. 클라이언트는 번호와 ETag를 적어 둔다." },
+    { from: "c", to: "api", label: "POST ?uploadId", title: "마무리를 청한다", detail: "쓸 조각의 번호와 ETag 목록을 오름차순으로 보낸다.", payload: "<Part><PartNumber>1</PartNumber><ETag>\"b64b…\"</ETag></Part> …" },
+    { from: "api", to: "api", label: "검사", title: "목록을 검사한다", detail: "번호가 오름차순인지, ETag가 받은 조각과 같은지, 마지막을 뺀 조각이 5MiB 이상인지 본다." },
+    { from: "api", to: "meta", label: "object 행", title: "객체가 보이기 시작한다", detail: "조각들을 하나의 객체로 장부에 적는다. 이때부터 GET이 된다. 쓰지 않은 조각은 쓰레기가 된다." },
+  ]}
+/>
+
+S3 기준으로 조각은 1번부터 10,000번까지 쓸 수 있고, 마지막 조각을 뺀 나머지는 5MiB 이상이어야 한다. 그래서 조각 수 한도와 파일 크기로 조각 크기를 정한다. 100GB 파일을 10,000개 안에 담으려면 조각 하나가 적어도 10MB(1천만 바이트)는 되어야 한다.
+
+## 조각 ETag와 합친 ETag
+
+조각을 받는 쪽을 직접 만들었다. 11MiB 파일을 5MiB, 5MiB, 1MiB로 나눠 올리고, 마무리 요청을 일부러 틀리게도 보내 봤다.
+
+```js
+// multipart.mjs (발췌): 조각 저장과 마무리 검사
+function uploadPart(id, n, buf) {
+  const file = `./mp/parts/${id}.${n}`;
+  fs.writeFileSync(file, buf);                                 // 같은 번호를 다시 올리면 덮어쓴다
+  const etag = md5(buf).toString("hex");
+  uploads.get(id).parts.set(n, { file, etag, size: buf.length });
+  return etag;
+}
+function complete(id, list) {
+  const up = uploads.get(id);
+  if (!up) return "404 NoSuchUpload";
+  for (let i = 0; i < list.length; i++) {
+    const { n, etag } = list[i];
+    if (i > 0 && n <= list[i - 1].n) return "400 InvalidPartOrder";
+    const p = up.parts.get(n);
+    if (!p || p.etag !== etag) return `400 InvalidPart (part ${n})`;
+    if (i < list.length - 1 && p.size < MIN_PART) return `400 EntityTooSmall (part ${n} = ${p.size} bytes)`;
+  }
+  const out = `./mp/${up.key}`;
+  for (const { n } of list) fs.appendFileSync(out, fs.readFileSync(up.parts.get(n).file));  // 이어 붙인다
+  const combined = md5(Buffer.concat(list.map(({ etag }) => Buffer.from(etag, "hex")))).toString("hex") + "-" + list.length;
+  for (const p of up.parts.values()) fs.rmSync(p.file);        // 쓴 조각과 안 쓴 조각 모두 정리
+  uploads.delete(id);
+  return { status: 200, etag: combined, size: fs.statSync(out).size };
+}
+```
+
+```text
+initiate        -> uploadId 726765ea72a7
+parts           -> {
+  e1: 'b64b3adffdbc075acedb0b9d286fa24a',
+  e2: 'd4fc1e3b5b02f1ec48244b89bd3bc411',
+  e3: '474b857ff30e52f87e5319d3018efaa8'
+}
+complete 2,1,3  -> 400 InvalidPartOrder
+complete bad tag-> 400 InvalidPart (part 2)
+complete 1,2,3  -> {
+  status: 200,
+  etag: '1d2d2d5610184094f8e878f6e031891a-3',
+  size: 11534336
+}
+md5 of whole    -> ec697c36855001c90a46cdcf5508a17f (합친 ETag와 다르다)
+left parts      -> 0
+complete 1MiB x2-> 400 EntityTooSmall (part 1 = 1048576 bytes)
+```
+
+순서가 뒤섞인 목록과 ETag가 틀린 목록은 거절됐다. ETag를 확인하는 이유는 같은 번호의 조각이 두 번 올라왔을 때 클라이언트가 생각하는 그 조각이 정말 서버에 남은 조각인지 맞춰 보기 위해서다. 1MiB 조각 둘로 마무리하려 하자 첫 조각이 5MiB보다 작아서 거절됐다. 크기가 11,534,336바이트, 정확히 11MiB인 객체가 만들어졌고 남은 조각 파일은 0개다.
+
+합친 ETag `1d2d…-3`은 파일 전체의 MD5(`ec69…`)와 다르다. 조각 MD5 세 개를 16바이트씩 이어 붙인 48바이트의 MD5에 조각 수 `-3`을 붙인 값이다. 저장소는 조각을 받을 때 이미 조각 MD5를 계산했으니, 5GB 전체를 처음부터 다시 읽지 않고 48바이트만 해시하면 된다. 셸에서 같은 공식을 다시 계산해 확인했다.
+
+```bash
+split -b 5M original.bin part.                    # 5MiB씩 자른다: part.aa, part.ab, part.ac
+for f in part.*; do md5sum $f; done               # 조각 ETag와 같은지 본다
+# 조각 MD5(hex)를 바이트로 되돌려 이어 붙이고 다시 MD5
+for f in part.*; do md5sum $f | cut -d' ' -f1; done \
+  | python3 -c "import sys,binascii;sys.stdout.buffer.write(b''.join(binascii.unhexlify(l.strip()) for l in sys.stdin))" \
+  | md5sum
+md5sum original.bin                               # 전체 MD5는 다르다
+```
+
+```text
+b64b3adffdbc075acedb0b9d286fa24a  part.aa
+d4fc1e3b5b02f1ec48244b89bd3bc411  part.ab
+474b857ff30e52f87e5319d3018efaa8  part.ac
+1d2d2d5610184094f8e878f6e031891a  -
+ec697c36855001c90a46cdcf5508a17f  original.bin
+```
+
+<UrlAnatomy
+  caption="멀티파트 객체의 ETag 읽기"
+  base="ETag: "
+  separator=""
+  joiner=""
+  params={[
+    { key: "hash", display: "\"1d2d2d5610184094f8e878f6e031891a", title: "조각 MD5들의 MD5", description: "조각 MD5 세 개(각 16바이트)를 이어 붙인 48바이트를 다시 MD5한 값이다. 파일 전체의 MD5가 아니다.", code: "md5(md5(p1) ‖ md5(p2) ‖ md5(p3))", required: true },
+    { key: "count", display: "-3\"", title: "조각 수", description: "대시 뒤 숫자가 조각 수다. 이 숫자가 있으면 멀티파트로 올라온 객체다." },
+  ]}
+/>
+
+여기서 실무 실수가 하나 나온다. 내려받은 파일의 MD5를 계산해서 ETag와 비교해 무결성을 검사하는 스크립트가 있다. 작은 파일은 통과하는데 큰 파일만 늘 "손상"으로 나온다. 큰 파일은 SDK가 자동으로 멀티파트로 올렸기 때문이다. 같은 파일도 조각 크기를 다르게 올리면 ETag가 달라진다. 이 계산 방식은 S3 공식 문서가 약속하는 값이 아니고, KMS 키로 암호화한 객체는 단일 PUT이어도 ETag가 MD5가 아니다. 무결성 검사는 ETag 대신 ②편에서 본 추가 체크섬(`x-amz-checksum-*`)으로 하는 편이 안전하다.
+
+## 조각을 이어 붙일까, 목록만 적을까
+
+위 실험은 마무리 때 조각을 한 파일로 이어 붙였다. 5GB면 5GB를 다시 읽고 쓰는 일이라 마무리가 몇 분 걸릴 수 있다. 다른 방법은 조각을 그대로 두고, 객체의 장부에 "이 객체는 조각 1, 2, 3을 이 순서로 이은 것"이라는 목록(매니페스트)만 적는 것이다. 마무리는 장부 한 줄을 쓰는 것으로 끝나 즉시 끝난다. 대신 GET이 조각 수만큼 위치를 찾아 읽어야 하고, 조각이 데이터 노드 여러 대에 흩어져 있을 수 있다. 큰 객체는 어차피 범위 요청(Range)으로 나눠 읽는 경우가 많아서 매니페스트 방식이 흔하다. 어느 쪽이든 조각들은 ②편의 복제나 이레이저 코딩으로 이미 보호되고 있다.
+
+## 끝나지 않은 업로드가 남기는 것
+
+클라이언트가 조각 37개를 올리고 앱이 지워졌다고 하자. 마무리 요청은 영영 오지 않는다. 조각 37개는 아무 객체에도 속하지 않은 채 디스크를 차지한다. 사용자의 객체 목록에는 보이지 않으니 아무도 모르는데, S3라면 그 조각들의 저장 요금이 계속 나간다. 이런 고아 조각은 앞의 수명 주기 규칙 `AbortIncompleteMultipartUpload`로 시작한 지 며칠 지난 업로드를 자동으로 취소해 치운다. 진행 중인 업로드는 따로 조회해야 보인다.
+
+```bash
+# 끝나지 않은 멀티파트 업로드를 본다 (일반 객체 목록에는 나오지 않는다)
+aws s3api list-multipart-uploads --bucket photos
+# 특정 업로드를 취소하면 그 조각들이 지워진다
+aws s3api abort-multipart-upload --bucket photos --key video.bin --upload-id <업로드 ID>
+```
+
+버킷의 객체 수는 그대로인데 저장 용량 지표만 계속 늘어난다면 이 두 가지를 먼저 본다. 끝나지 않은 업로드와 최신이 아닌 버전이다.
+
+## 쓰레기는 여러 군데서 생긴다
+
+이제 저장소 쪽의 청소를 정리한다. 장부에서는 사라졌는데 창고에는 남은 본문이 쓰레기다. 이 시리즈에서 만난 것만 해도 이렇다.
+
+- 지연 삭제: 지우기 요청은 장부에서 행을 지우거나 표시만 하고 바로 응답한다. 본문은 나중에 치운다.
+- 덮어쓰기: 버전 관리를 끈 버킷에서 같은 이름으로 다시 올리면 옛 본문이 버려진다.
+- 실패한 올리기: ①편에서 본문을 먼저 쓰고 장부를 나중에 쓰기로 했으니, 그 사이에 죽으면 본문만 남는다.
+- 고아 조각: 취소되거나 버려진 멀티파트 업로드의 조각들.
+- 만료된 옛 버전: 수명 주기 규칙이 지우라고 한 버전들.
+- 손상된 사본: ②편의 체크섬 검사에서 틀린 것으로 나와 다른 곳에 다시 만든 뒤 남은 원래 자리.
+
+본문은 볼륨 파일 중간에 박혀 있으니 "지운다"는 건 그 자리를 비워 두는 것뿐이다. 볼륨에 구멍이 쌓이면 실제 공간을 돌려받으려고 컴팩션(compaction)을 한다. 살아 있는 객체만 새 볼륨으로 복사하고, 위치표를 새 자리로 고치고, 옛 볼륨을 통째로 지운다.
+
+<NetworkTopology
+  caption="가비지 컬렉터가 치우는 순서"
+  width={420}
+  height={280}
+  zones={[{ id: "node", label: "데이터 노드", x: 170, y: 100, w: 240, h: 165, tone: "private" }]}
+  nodes={[
+    { id: "gc", label: "GC 작업자", x: 60, y: 140, icon: "server" },
+    { id: "meta", label: "메타데이터", x: 260, y: 45, icon: "db" },
+    { id: "map", label: "위치표", sub: "SQLite", x: 230, y: 160, icon: "db" },
+    { id: "v1", label: "vol-0001", sub: "구멍 50%", x: 350, y: 140, icon: "db" },
+    { id: "v2", label: "vol-0002", sub: "새 볼륨", x: 350, y: 225, icon: "db" },
+  ]}
+  links={[
+    { from: "gc", to: "meta" },
+    { from: "gc", to: "map" },
+    { from: "map", to: "v1" },
+    { from: "v1", to: "v2" },
+  ]}
+  steps={[
+    { path: ["gc", "meta"], packet: "scan", title: "버릴 것을 찾는다", detail: "만료된 버전, 7일 넘은 미완료 업로드를 찾아 상태를 바꾼다. 트랜잭션 하나로 한다." },
+    { path: ["gc", "map"], packet: "mark", title: "위치표에 표시한다", detail: "해당 object_id를 deleted로 표시한다. 본문은 아직 그대로다." },
+    { path: ["map", "v1"], packet: "check", highlight: ["v1"], title: "볼륨의 구멍 비율을 본다", detail: "vol-0001의 절반이 지운 객체다. 정한 기준을 넘으면 컴팩션한다." },
+    { path: ["v1", "v2"], packet: "copy", title: "살아 있는 것만 옮긴다", detail: "a, c, f만 vol-0002로 복사하고 디스크에 확실히 쓴다(fsync)." },
+    { path: ["gc", "map"], packet: "commit", highlight: ["v2"], title: "위치를 한 번에 바꾼다", detail: "새 오프셋으로 고치고 지운 행을 없애는 일을 트랜잭션 하나로 한다. 그다음 vol-0001을 지운다." },
+  ]}
+/>
+
+## 컴팩션을 직접 돌려 본다
+
+10KiB 객체 여섯 개(a~f)를 볼륨 하나에 쓰고, b와 d는 사용자가 지웠다고 표시했다. 업로드 두 건도 만들었다. u1은 10일 전에 시작해 버려졌고 조각이 객체 e다. u2는 오늘 시작해 진행 중이고 조각이 f다. 유예 기간은 7일로 잡았다.
+
+```js
+// gc.mjs (발췌)
+// 버려진 업로드: 유예 기간이 지난 것만 aborted로 바꾸고, 그 조각을 지울 대상으로 표시한다
+db.exec("BEGIN");
+const stale = db.prepare("SELECT upload_id FROM upload WHERE state='in-progress' AND started_day <= ?").all(TODAY - GRACE_DAYS);
+for (const { upload_id } of stale) {
+  db.prepare("UPDATE upload SET state='aborted' WHERE upload_id=?").run(upload_id);
+  db.prepare("UPDATE object_mapping SET deleted=1 WHERE object_id IN (SELECT object_id FROM part WHERE upload_id=?)").run(upload_id);
+  db.prepare("DELETE FROM part WHERE upload_id=?").run(upload_id);
+}
+db.exec("COMMIT");
+
+// 컴팩션: 살아 있는 객체만 새 볼륨으로 복사한 뒤, 위치 변경과 삭제를 트랜잭션 하나로 적는다
+for (const m of live) { /* vol-0001에서 읽어 vol-0002 끝에 붙이고 새 오프셋을 moves에 담는다 */ }
+const nfd = fs.openSync("./gc/vol-0002.dat", "r+"); fs.fsyncSync(nfd); fs.closeSync(nfd);
+db.exec("BEGIN");
+for (const [id, o] of moves) db.prepare("UPDATE object_mapping SET file='vol-0002.dat', file_offset=? WHERE object_id=?").run(o, id);
+db.exec("DELETE FROM object_mapping WHERE file='vol-0001.dat' AND deleted=1");
+db.exec("COMMIT");
+fs.rmSync("./gc/vol-0001.dat");
+```
+
+```text
+aborted uploads  -> [ 'u1' ]  (u2는 유예 기간 안이라 그대로)
+before           -> a@vol-0001.dat:0 b@vol-0001.dat:10240(del) c@vol-0001.dat:20480 d@vol-0001.dat:30720(del) e@vol-0001.dat:40960(del) f@vol-0001.dat:51200
+vol-0001.dat     -> 61440 bytes
+after            -> a@vol-0002.dat:0 c@vol-0002.dat:10240 f@vol-0002.dat:20480
+vol-0002.dat     -> 30720 bytes
+```
+
+버려진 u1의 조각 e만 지울 대상이 됐고, 진행 중인 u2의 조각 f는 살아남았다. 컴팩션 뒤 볼륨은 61,440바이트에서 30,720바이트로 절반이 됐고, a, c, f는 새 볼륨에서 빈틈없이 붙은 새 오프셋을 받았다. 같은 과정을 그림으로 따라가 보자.
+
+<AlgoTrace
+  caption="vol-0001을 훑으며 살아 있는 객체만 vol-0002로 옮긴다"
+  cells={["a", "b del", "c", "d del", "e 고아", "f 진행 중"]}
+  memoryLabel="vol-0002"
+  steps={[
+    { pointer: 0, memory: ["a @0"], caption: "a는 살아 있다. 새 볼륨 맨 앞에 복사한다." },
+    { pointer: 1, memory: ["a @0"], caption: "b는 사용자가 지웠다. 건너뛴다." },
+    { pointer: 2, memory: ["a @0", "c @10240"], caption: "c를 a 바로 뒤에 붙인다. 원래 오프셋 20480이 10240으로 당겨진다." },
+    { pointer: 3, memory: ["a @0", "c @10240"], caption: "d도 지운 객체다. 건너뛴다." },
+    { pointer: 4, memory: ["a @0", "c @10240"], caption: "e는 10일 전에 버려진 업로드의 조각이다. 유예 기간이 지나 함께 버린다." },
+    { pointer: 5, found: [0, 2, 5], memory: ["a @0", "c @10240", "f @20480"], caption: "f는 오늘 시작한 업로드의 조각이라 살린다. 위치표를 한 번에 바꾸고 vol-0001을 지운다." },
+  ]}
+/>
+
+## 청소하다 살아 있는 것을 버리지 않으려면
+
+가비지 컬렉션에서 가장 나쁜 실수는 쓰레기를 늦게 치우는 게 아니라 살아 있는 것을 버리는 것이다. 늦게 치우면 돈이 들고, 잘못 버리면 데이터를 잃는다. 그래서 몇 가지 안전장치를 둔다.
+
+첫째, 유예 기간. 위 실험의 u2처럼 지금 올라오고 있는 업로드의 조각을 고아로 보면 안 된다. "시작한 지 7일이 지난 미완료 업로드"처럼 시간 기준을 둔다. 실패한 올리기의 본문도 같다. ①편의 순서 때문에 장부를 쓰기 직전의 본문은 잠깐 아무도 가리키지 않는다. 창고에는 있는데 장부에 없는 본문을 찾는 검사는 만든 지 충분히 오래된 것만 대상으로 한다.
+
+둘째, 상태 전이를 트랜잭션으로. 클라이언트가 마무리 요청을 보내는 순간 GC가 같은 업로드를 취소하면, 마무리는 성공했다고 답했는데 조각은 지워지는 일이 생긴다. 업로드 상태를 "진행 중 → 완료"와 "진행 중 → 취소" 중 하나로만 바꿀 수 있게 하고, 둘 다 `WHERE state='in-progress'` 조건이 붙은 UPDATE로 처리한다. 먼저 바꾼 쪽만 이기고, 진 쪽은 바뀐 행이 0개라는 걸 보고 물러난다.
+
+셋째, 옛 볼륨은 늦게 지운다. 컴팩션 직전에 위치표를 읽은 GET은 옛 볼륨의 옛 오프셋으로 읽으러 간다. 위치표를 바꾸자마자 옛 파일을 지우면 그 GET이 실패한다. 진행 중인 읽기가 끝날 만큼 기다렸다 지운다.
+
+넷째, 모든 사본에서 지운다. 세 벌 복제라면 사본 셋에서, 8+4 이레이저 코딩이라면 조각을 가진 열두 노드 모두에서 지워야 공간이 돌아온다. 한 곳이라도 빠뜨리면 그 노드에만 쓰레기가 남는다.
+
+컴팩션 기준도 정해야 한다. 구멍이 조금만 생겨도 컴팩션하면 살아 있는 데이터를 계속 다시 쓰느라 디스크가 바쁘다. 너무 늦게 하면 공간이 낭비된다. 볼륨의 지운 비율이 정한 값(예: 절반)을 넘을 때만 하고, 작은 볼륨 여러 개를 합쳐 하나로 만들어 파일 수도 줄인다. [키-값 저장소 설계 ④](/posts/sd-kv-store-write-read-path)에서 SSTable을 합치던 컴팩션과 같은 고민이다.
+
+## 다음에 읽을 글
+
+객체 저장소 세 편을 마쳤다. ①에서 본문과 장부를 나누고 볼륨 파일에 이어 썼고, ②에서 복제와 이레이저 코딩, 체크섬으로 디스크의 고장과 거짓말을 견뎠다. 이 글에서는 장부에 버전을 쌓아 사람의 실수를 되돌리고, 큰 파일을 조각으로 받아 합치고, 그 과정의 쓰레기를 안전하게 치웠다. 다음 사례는 전혀 다른 문제다. [리더보드 설계 ①: Redis 정렬 집합](/posts/sd-leaderboard-sorted-set)에서 수백만 명의 점수를 실시간으로 순위 매긴다.
+
+지울 수 없는 사본으로 랜섬웨어까지 막는 쪽은 [백업 전략](/posts/backup-strategy)으로, 클라이언트가 조각을 이어 올리는 쪽은 [동영상 서비스 설계 ①](/posts/sd-video-upload-transcoding)으로 가면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 객체 버전 관리는 어떻게 구현하나요?
+
+장부의 키를 (버킷, 이름)에서 (버킷, 이름, 버전 ID)로 바꾸고, 올릴 때마다 행을 덮어쓰지 않고 새로 쌓는다. 버전 ID는 시간순으로 정렬되는 값을 써서 가장 큰 것이 최신이 되게 한다. 본문은 원래 고칠 수 없으니 새 버전은 새 object_id를 받고, 옛 본문은 지우지 않고 남긴다.
+
+### 버전 관리를 켠 버킷에서 DELETE하면 무슨 일이 일어나나요?
+
+본문을 지우지 않고 삭제 마커라는 빈 버전을 하나 쌓는다. 최신이 마커라서 GET은 404가 되지만, 버전 ID를 지정하면 옛 버전을 읽을 수 있다. 마커를 버전 ID로 지정해 지우면 바로 아래 버전이 다시 최신이 되어 되살아난다. 특정 버전을 영구 삭제하려면 그 버전 ID를 지정해 DELETE한다.
+
+### 버전이 계속 쌓이면 어떻게 하나요?
+
+옛 버전도 전체 크기만큼 저장 공간을 쓰니 수명 주기 규칙으로 정리한다. 최신이 아닌 버전을 며칠 뒤 지우되 최근 몇 개는 남기고, 아래 버전이 다 사라진 삭제 마커도 지운다. 객체 수는 그대로인데 용량만 늘어나면 옛 버전과 끝나지 않은 멀티파트 업로드를 먼저 의심한다.
+
+### 멀티파트 업로드는 왜 쓰고 어떻게 동작하나요?
+
+큰 파일을 한 번에 받으면 끊길 때 처음부터 다시 받아야 하고 회선 하나로만 보내서 느리다. 업로드를 열어 ID를 받고, 조각을 번호와 함께 따로 올려 조각마다 ETag를 받고, 번호와 ETag 목록으로 마무리한다. 저장소는 목록이 오름차순인지, ETag가 맞는지, 마지막을 뺀 조각이 최소 크기 이상인지 검사한 뒤 객체를 장부에 적는다.
+
+### 멀티파트로 올린 객체의 ETag는 왜 파일 MD5와 다른가요?
+
+조각 MD5들을 이어 붙인 값의 MD5에 조각 수를 붙인 값이라서다. 저장소가 이미 계산한 조각 MD5만으로 만들 수 있어 수 GB를 다시 읽지 않아도 된다. 그래서 같은 파일도 조각 크기가 다르면 ETag가 달라진다. 무결성 검사는 ETag 대신 CRC32C나 SHA-256 같은 별도 체크섬으로 한다.
+
+### 업로드가 끝나지 않고 버려지면 어떻게 되나요?
+
+조각들은 어떤 객체에도 속하지 않은 채 공간을 차지한다. 시작한 지 정해진 기간(예: 7일)이 지난 미완료 업로드를 취소하는 규칙을 두고, 취소되면 가비지 컬렉터가 조각을 지운다. 기간을 두는 이유는 지금 올라오고 있는 업로드를 실수로 지우지 않기 위해서다.
+
+### 가비지 컬렉션이 살아 있는 데이터를 지우지 않게 하려면요?
+
+시간 기준의 유예 기간을 두고, 업로드의 완료와 취소를 조건부 UPDATE로 하나만 이기게 하고, 컴팩션 뒤 옛 볼륨은 진행 중인 읽기가 끝난 뒤 지운다. 새 볼륨을 fsync한 다음에야 위치표를 트랜잭션 하나로 바꾸니, 중간에 죽어도 옛 위치표와 옛 볼륨이 남아 데이터를 잃지 않는다.
+
+### 컴팩션은 언제 하나요?
+
+볼륨에서 지운 객체의 비율이 기준을 넘을 때 한다. 너무 자주 하면 살아 있는 데이터를 계속 다시 써서 디스크 입출력을 낭비하고, 너무 늦으면 공간을 낭비한다. 사용자 트래픽이 적은 시간에 속도를 제한해서 돌리고, 작은 볼륨들은 합쳐서 파일 수도 줄인다.

@@ -1,0 +1,519 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-execution-context");
+
+댓글 화면을 만들었다. 서버는 답글을 "답글의 답글" 식으로 한 줄로 이어 붙인 구조로 준다. 각 댓글이 다음 답글 하나를 `reply`에 들고 있는 모양이다. id만 모으는 함수는 재귀로 짰다.
+
+```js
+function collectIds(node) {
+  if (!node) return [];
+  return [node.id, ...collectIds(node.reply)];
+}
+
+// 테스트용: 댓글 n개를 한 줄로 이어 붙인다
+function makeThread(n) {
+  let head = null;
+  for (let i = n; i >= 1; i--) head = { id: i, reply: head };
+  return head;
+}
+
+console.log(collectIds(makeThread(1000)).length);
+try {
+  console.log(collectIds(makeThread(20000)).length);
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+```
+
+```text
+1000
+RangeError: Maximum call stack size exceeded
+```
+
+1,000개일 때는 멀쩡하고 2만 개에서 죽는다. 메모리가 모자란 것도 아니다. 2만 개짜리 배열쯤은 아무 문제 없이 만든다. 모자란 건 함수 호출을 쌓아 두는 공간, 콜 스택이다. 이 글은 함수를 부를 때 엔진이 무엇을 만들어 쌓는지(실행 컨텍스트), 그 더미가 어떻게 넘치는지, 넘치지 않게 고치는 방법과 운영에서 스택 정보를 읽는 법을 본다.
+
+이 주제의 다른 글: [이벤트 루프](/posts/event-loop) · [마이크로태스크와 매크로태스크](/posts/js-microtask-macrotask) · [타이머는 왜 늦게 울리나](/posts/js-timers-accuracy). 이름을 찾는 규칙은 [스코프와 렉시컬 스코프](/posts/js-scope-lexical), 선언이 미리 등록되는 과정은 [호이스팅과 TDZ](/posts/js-hoisting-tdz)에서 자세히 다뤘다.
+
+## 함수를 부를 때마다 작업 공간이 하나 생긴다
+
+함수를 실행하려면 엔진은 몇 가지를 알아야 한다. 이 함수의 지역 변수는 무엇이고 지금 값은 얼마인가. 여기 없는 이름은 어디서 찾나. `this`는 무엇인가. 끝나면 어디로 돌아가나. 이 정보를 한데 묶은 것을 명세는 실행 컨텍스트(execution context)라고 부른다. 함수를 한 번 부를 때마다 새 실행 컨텍스트가 하나 생긴다. 같은 함수를 열 번 부르면 열 개가 생긴다.
+
+종류는 셋이다. 스크립트나 모듈이 처음 돌 때의 전역(모듈) 컨텍스트, 함수를 부를 때의 함수 컨텍스트, `eval` 안의 코드를 돌릴 때의 eval 컨텍스트다. 실무에서 신경 쓰는 건 앞의 둘이다.
+
+명세(ECMAScript)에서 실행 컨텍스트가 들고 있는 것 중 중요한 것만 추리면 아래 그림과 같다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="함수 컨텍스트 하나가 들고 있는 것. 점이 흐르는 방향이 이름을 찾아가는 방향이다."
+  nodes={[
+    { id: "ctx", label: "실행 컨텍스트", sub: "order(3) 호출", x: 200, y: 40, w: 150 },
+    { id: "lex", label: "LexicalEnv", sub: "let·const·함수", x: 85, y: 130, w: 130 },
+    { id: "var", label: "VariableEnv", sub: "var", x: 315, y: 130, w: 130 },
+    { id: "rec", label: "환경 레코드", sub: "qty, price, calc", x: 200, y: 210, w: 150 },
+    { id: "outer", label: "바깥 환경", sub: "[[OuterEnv]]", x: 85, y: 270, w: 130 },
+    { id: "this", label: "this 값", sub: "함수 레코드 안", x: 315, y: 270, w: 130 },
+  ]}
+  edges={[
+    { from: "ctx", to: "lex" },
+    { from: "ctx", to: "var" },
+    { from: "lex", to: "rec" },
+    { from: "var", to: "rec", dashed: true },
+    { from: "rec", to: "outer", label: "없으면" },
+    { from: "rec", to: "this", label: "바인딩" },
+  ]}
+/>
+
+- 환경 레코드(Environment Record): 이 범위에서 선언된 이름과 값의 표다. 함수 컨텍스트라면 매개변수, 지역 변수, 안에서 선언한 함수가 여기 들어간다.
+- LexicalEnvironment, VariableEnvironment: 이름을 찾을 때 어느 환경 레코드부터 볼지 가리키는 두 개의 포인터다. 함수에 막 들어섰을 때는 보통 같은 레코드를 가리키고, `let`·`const` 블록에 들어가면 LexicalEnvironment만 새 블록 레코드로 옮겨 간다. `var`가 블록을 무시하는 이유가 이 구분이다.
+- `[[OuterEnv]]`: 환경 레코드마다 바깥 레코드를 가리키는 링크가 있다. 여기 없는 이름은 이 링크를 따라 바깥으로 찾는다. 이 사슬이 스코프 체인이다.
+- `this`: 함수 환경 레코드가 `this` 값을 함께 들고 있다. 화살표 함수는 자기 `this`를 갖지 않아서 바깥 레코드의 것을 쓴다.
+
+여기서 하나만 기억하면 된다. 실행 컨텍스트는 호출마다 새로 생기고, 그 안의 환경 레코드는 함수가 어디서 쓰였는지(렉시컬 위치)에 따라 바깥과 연결된다. 실행 컨텍스트가 "언제"를 맡고 환경 레코드의 사슬이 "어디서 찾나"를 맡는다.
+
+## 만들어질 때 한 번, 실행할 때 한 번
+
+함수 컨텍스트는 두 단계로 일한다. 먼저 환경을 만든다. 코드를 한 줄도 실행하기 전에 함수 본문을 훑어 선언된 이름을 전부 레코드에 등록한다. 그다음 위에서부터 한 줄씩 실행하며 값을 채운다.
+
+```js
+function order(qty) {
+  console.log(typeof price, typeof calc, typeof qty);
+  var price = 1200;
+  function calc() {
+    return price * qty;
+  }
+  return calc();
+}
+console.log(order(3));
+console.log(order(2));
+```
+
+```text
+undefined function number
+3600
+undefined function number
+2400
+```
+
+첫 줄에서 `price`는 아직 대입 전인데 에러가 나지 않고 `undefined`다. `calc`는 벌써 함수다. 만드는 단계에서 `var`는 `undefined`로, 함수 선언은 함수 객체로 미리 채워 두기 때문이다. `let`·`const`는 이름만 등록하고 초기화하지 않아서 그 전에 읽으면 에러가 난다. 이 차이는 [호이스팅과 TDZ](/posts/js-hoisting-tdz)에서 자세히 봤다.
+
+또 하나 보이는 게 있다. `order(3)`과 `order(2)`는 같은 함수인데 `price`, `qty`, `calc`가 서로 섞이지 않는다. 호출마다 레코드를 새로 만들기 때문이다. 아래 그림에서 다음을 눌러 `order(3)` 한 번의 일생을 따라가 보자.
+
+<SequenceDiagram
+  caption="order(3) 한 번이 만들어지고, 실행되고, 사라지는 과정"
+  actors={[
+    { id: "caller", label: "호출한 쪽" },
+    { id: "engine", label: "엔진" },
+    { id: "rec", label: "환경 레코드" },
+  ]}
+  steps={[
+    { from: "caller", to: "engine", label: "order(3)", title: "호출이 들어온다", detail: "엔진이 새 실행 컨텍스트를 만들고 콜 스택 맨 위에 올린다. 돌아갈 자리(호출한 줄)도 함께 기억한다." },
+    { from: "engine", to: "rec", label: "선언 등록", title: "만드는 단계: 이름부터 적는다", detail: "매개변수 qty에 3을 넣고, var price는 undefined로, 함수 선언 calc는 함수 객체로 등록한다. calc는 지금 이 레코드를 바깥 환경으로 기억한다.", payload: "qty: 3\nprice: undefined\ncalc: ƒ calc" },
+    { from: "engine", to: "engine", label: "this 결정", title: "this를 정한다", detail: "그냥 order(3)으로 불렀으니 엄격 모드면 undefined, 아니면 전역 객체다. 화살표 함수라면 이 단계가 없다." },
+    { from: "engine", to: "rec", label: "price = 1200", title: "실행 단계: 한 줄씩 값을 채운다", detail: "console.log를 지나 대입 줄에서 price가 1200이 된다.", payload: "qty: 3\nprice: 1200\ncalc: ƒ calc" },
+    { from: "engine", to: "engine", label: "calc() push", title: "안에서 또 부르면 위에 쌓인다", detail: "calc 호출은 새 컨텍스트를 하나 더 만든다. calc의 레코드는 비어 있지만 바깥 링크가 order의 레코드라서 price와 qty를 찾는다." },
+    { from: "engine", to: "caller", label: "3600 반환", title: "끝나면 스택에서 내려온다", detail: "calc, order 순으로 컨텍스트가 스택에서 빠진다. 레코드를 아무도 잡고 있지 않으면 나중에 GC가 치운다. 잡고 있으면(클로저) 남는다." },
+  ]}
+/>
+
+마지막 단계가 [클로저](/posts/js-closures)와 이어지는 지점이다. 콜 스택에서 내려오는 건 실행 컨텍스트이고, 환경 레코드는 누가 참조하는 한 힙에 남는다. `calc`를 반환해서 밖에서 들고 있었다면 `order`가 끝난 뒤에도 `price`와 `qty`가 살아 있었을 것이다.
+
+## 콜 스택은 컨텍스트를 쌓는 접시 더미다
+
+함수 안에서 함수를 부르면 새 컨텍스트가 지금 것 위에 올라간다. 안쪽 함수가 끝나야 바깥 함수가 이어서 돈다. 이 더미가 콜 스택이고, 엔진은 늘 맨 위 컨텍스트 하나만 실행한다. 이 글에서 쓰는 비유는 접시 더미 하나다. 맨 위에만 올리고 맨 위에서만 뺀다.
+
+재귀는 같은 함수의 컨텍스트를 여러 장 쌓는다. 배열 합을 재귀로 구하는 예를 보자.
+
+```js
+function total(items) {
+  if (items.length === 0) return 0;
+  const [first, ...rest] = items;
+  return first + total(rest);
+}
+console.log(total([3, 5, 2]));
+```
+
+```text
+10
+```
+
+아래 그림에서 칸은 이번 호출이 받은 배열의 첫 값이고, 아래 상자는 콜 스택이다. 왼쪽이 바닥, 오른쪽이 맨 위다.
+
+<AlgoTrace
+  caption="재귀는 끝날 때까지 접시를 계속 쌓는다"
+  memoryLabel="콜 스택 (오른쪽이 맨 위)"
+  cells={["3", "5", "2", "[]"]}
+  steps={[
+    { pointer: 0, memory: ["전역"], caption: "스크립트가 전역 컨텍스트 위에서 돈다." },
+    { pointer: 0, memory: ["전역", "total [3,5,2]"], caption: "total([3,5,2])를 부른다. first는 3이고 total([5,2])의 결과를 기다린다." },
+    { pointer: 1, memory: ["전역", "total [3,5,2]", "total [5,2]"], caption: "같은 함수지만 컨텍스트는 새것이다. 이번 first는 5다." },
+    { pointer: 2, memory: ["전역", "total [3,5,2]", "total [5,2]", "total [2]"], caption: "first는 2. 또 한 장 쌓인다." },
+    { pointer: 3, memory: ["전역", "total [3,5,2]", "total [5,2]", "total [2]", "total []"], caption: "빈 배열이라 0을 돌려준다. 여기가 가장 깊다." },
+    { pointer: 2, memory: ["전역", "total [3,5,2]", "total [5,2]", "total [2]"], caption: "맨 위가 빠지고 2 + 0 = 2를 돌려준다." },
+    { pointer: 1, memory: ["전역", "total [3,5,2]", "total [5,2]"], caption: "5 + 2 = 7. 한 장 더 빠진다." },
+    { pointer: 0, found: [0, 1, 2], memory: ["전역"], caption: "3 + 7 = 10. total 컨텍스트가 모두 빠졌다." },
+  ]}
+/>
+
+깊이는 입력 길이와 같다. 처음 버그의 `collectIds`도 똑같다. 댓글 2만 개면 컨텍스트 2만 장을 쌓아야 하는데, 스택에 정해진 크기가 있어서 그 전에 넘친다.
+
+## 몇 장까지 쌓이나
+
+콜 스택은 무한하지 않다. V8은 스택 크기를 바이트로 제한한다. 몇 번 호출할 수 있는지는 한 장(스택 프레임)이 얼마나 큰지에 달렸다. Node.js 22에서 지역 변수가 없는 함수와 10개 있는 함수를 끝까지 재귀시켜 봤다.
+
+```js
+let depth = 0;
+function small() { depth++; small(); }
+try { small(); } catch (e) {}
+console.log("지역 변수 없음:", depth);
+
+depth = 0;
+function big() {
+  depth++;
+  const a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8, i = 9, j = 10;
+  big();
+  return a + b + c + d + e + f + g + h + i + j;
+}
+try { big(); } catch (e) {}
+console.log("지역 변수 10개:", depth);
+```
+
+```text
+지역 변수 없음: 12556
+지역 변수 10개: 6278
+```
+
+`node --stack-size=2000`으로 한도를 올리면 이렇게 바뀐다.
+
+```text
+지역 변수 없음: 25561
+지역 변수 10개: 12780
+```
+
+숫자 자체는 외울 필요가 없다. 엔진 버전, JIT가 함수를 최적화했는지, 운영체제의 스레드 스택 크기에 따라 달라진다. 크롬, 파이어폭스, 사파리도 저마다 다르다. 기억할 건 두 가지다. 한도는 "호출 수"가 아니라 "바이트"라서 프레임이 클수록 빨리 넘친다. 그리고 수천~수만 단계가 대략적인 천장이다. 사용자가 보낸 데이터의 깊이만큼 재귀하는 코드는 언젠가 이 천장에 닿는다.
+
+`--stack-size`를 올리는 건 답이 아니다. V8이 생각하는 크기만 바뀌고 운영체제가 준 실제 스레드 스택은 그대로라서, 너무 크게 잡으면 `RangeError` 대신 프로세스가 세그멘테이션 폴트로 죽을 수 있다. 브라우저에서는 바꿀 방법도 없다.
+
+## 넘치는 곳은 재귀만이 아니다
+
+내가 재귀를 쓰지 않았는데도 넘치는 경우가 있다. 가장 흔한 건 세터가 자기 자신을 부르는 실수다.
+
+```js
+class User {
+  constructor(name) {
+    this.name = name;
+  }
+  set name(v) {
+    this.name = v.trim(); // 세터 안에서 다시 세터를 부른다
+  }
+}
+new User(" kim ");
+```
+
+```text
+/app/user.js:6
+    this.name = v.trim(); // 세터 안에서 다시 세터를 부른다
+              ^
+
+RangeError: Maximum call stack size exceeded
+    at set name (/app/user.js:6:15)
+    at set name (/app/user.js:6:15)
+    at set name (/app/user.js:6:15)
+    at set name (/app/user.js:6:15)
+```
+
+(경로는 `/app`으로 줄였고, 반복되는 줄은 일부만 옮겼다.) 스택 트레이스에 같은 줄이 끝없이 반복되면 무한 재귀다. 값은 `this._name`이나 `#name` 같은 다른 이름에 저장해야 한다. `toString`, `valueOf`, `toJSON` 안에서 자기 자신을 문자열로 바꾸는 코드, `Proxy`의 `get` 트랩 안에서 같은 프록시를 읽는 코드도 같은 모양으로 넘친다.
+
+내장 함수도 안쪽은 재귀인 경우가 있다. 배열을 10만 단계로 중첩해 Node.js 22에 넣어 봤다.
+
+```js
+const n = 100000;
+const text = "[".repeat(n) + "]".repeat(n); // 10만 단계로 중첩된 배열
+const v = JSON.parse(text);
+console.log("parse 성공");
+try { JSON.stringify(v); } catch (e) { console.log("stringify", e.constructor.name + ": " + e.message); }
+try { structuredClone(v); } catch (e) { console.log("clone", e.constructor.name + ": " + e.message); }
+```
+
+```text
+parse 성공
+stringify RangeError: Maximum call stack size exceeded
+clone RangeError: Maximum call stack size exceeded
+```
+
+`JSON.parse`는 버텼지만 `JSON.stringify`와 `structuredClone`은 넘쳤다. 서버라면 이게 보안 문제가 된다. 요청 본문에 아주 깊게 중첩된 JSON을 보내면 그걸 다시 직렬화하거나 재귀로 검증하는 코드에서 예외가 터진다. 요청 크기 제한과 함께 중첩 깊이 제한을 두는 이유다.
+
+## 스택 트레이스는 콜 스택의 사진이다
+
+`Error` 객체를 만드는 순간 엔진은 그때의 콜 스택을 찍어 `stack` 속성에 남긴다. 위에서부터 읽으면 "어디서 터졌나", 아래로 내려가면 "누가 불렀나"다.
+
+```js
+function a() { b(); }
+function b() { c(); }
+function c() { console.log(new Error("여기").stack); }
+a();
+```
+
+```text
+Error: 여기
+    at c (/app/trace.js:3:28)
+    at b (/app/trace.js:2:16)
+    at a (/app/trace.js:1:16)
+    at Object.<anonymous> (/app/trace.js:4:1)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+```
+
+한 줄을 조각내 보면 읽을 곳이 분명해진다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="스택 트레이스 한 줄 읽기"
+  base="at"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "async", display: "async", title: "await 너머에서 이어 붙인 줄", description: "이 프레임은 지금 스택에 실제로 있지 않다. await로 멈췄다가 돌아온 함수라서 V8이 기록을 이어 붙였다는 표시다. 아래 비동기 절에서 다시 본다." },
+    { key: "fn", display: "loadPage", title: "함수 이름", description: "익명 함수면 비어 있거나 <anonymous>로 나온다. 화살표 함수도 변수에 담으면 그 변수 이름이 붙으니, 이름 있는 함수로 쓰면 트레이스가 읽기 쉬워진다.", required: true },
+    { key: "file", display: "(/app/page.js", title: "파일", description: "번들된 코드라면 번들 파일 경로가 나온다. 소스맵이 있어야 원래 파일로 바꿔 읽을 수 있다." },
+    { key: "pos", display: ":6:3)", title: "줄과 열", description: "몇 번째 줄, 몇 번째 글자에서 다음 함수를 불렀는지(맨 위 줄이면 에러가 난 자리)다. 압축된 번들은 줄이 1이고 열이 수만인 경우가 많다.", required: true },
+  ]}
+/>
+
+트레이스가 10줄에서 끊긴 것도 눈여겨볼 만하다. V8은 기본으로 프레임 10개까지만 기록한다. 이 값이 `Error.stackTraceLimit`이다.
+
+```js
+function down(n) { if (n === 0) throw new Error("바닥"); down(n - 1); }
+try { down(30); } catch (e) { console.log(e.stack.split("\n").length - 1, "줄"); }
+Error.stackTraceLimit = 50;
+try { down(30); } catch (e) { console.log(e.stack.split("\n").length - 1, "줄"); }
+```
+
+```text
+10 줄
+40 줄
+```
+
+운영에서 에러 수집 도구에 올라온 트레이스가 프레임워크 내부 함수 10줄로만 차 있고 내 코드가 안 보인다면 이 한도 때문이다. Node.js는 `node --stack-trace-limit=40`처럼 실행 옵션으로도 올릴 수 있다. 크게 올리면 에러를 만들 때마다 스택을 더 많이 걷느라 비용이 커지니, 에러가 자주 나는 경로가 있다면 수십 정도에서 멈춘다.
+
+## await 너머의 스택
+
+비동기 코드에서는 사진에 찍히지 않는 부분이 생긴다. `await`에서 함수가 멈추면 그 실행 컨텍스트는 콜 스택에서 내려온다. 지역 변수와 "어디까지 실행했는지"는 따로 보관해 두고, 기다리던 값이 오면 마이크로태스크로 다시 스택에 올라온다. 그때의 스택 바닥에는 원래 부른 쪽이 없다.
+
+<SequenceDiagram
+  caption="await에서 컨텍스트가 스택을 비우고, 나중에 다른 스택 위에서 이어진다"
+  actors={[
+    { id: "stack", label: "콜 스택" },
+    { id: "saved", label: "보관함" },
+    { id: "micro", label: "마이크로태스크" },
+  ]}
+  steps={[
+    { from: "stack", to: "stack", label: "두 함수 호출", title: "처음에는 평범하게 쌓인다", detail: "loadPage가 loadUser를 부른다. 스택에는 전역, loadPage, loadUser가 있다." },
+    { from: "stack", to: "saved", label: "await null", title: "await에서 멈춘 함수는 내려온다", detail: "loadUser의 지역 변수와 다음에 실행할 위치를 보관하고 컨텍스트를 스택에서 뺀다. loadPage도 loadUser의 Promise를 await하며 같은 식으로 내려온다." },
+    { from: "stack", to: "stack", label: "스택 비움", title: "다른 코드가 돈다", detail: "스크립트의 나머지가 끝나고 스택이 빈다. 이 사이에 타이머나 다른 이벤트가 끼어들 수 있다." },
+    { from: "micro", to: "stack", label: "loadUser 재개", title: "새 스택 위에서 이어진다", detail: "마이크로태스크가 loadUser를 다시 올린다. 이 순간 스택에는 loadUser뿐이다. 여기서 throw하면 실제 스택에는 loadPage가 없다." },
+    { from: "saved", to: "stack", label: "at async loadPage", title: "V8이 기다리던 쪽을 이어 붙인다", detail: "V8은 loadUser의 Promise를 누가 await하고 있는지 따라가서 트레이스에 at async loadPage를 덧붙인다. 실제 스택이 아니라 기록을 이어 붙인 것이다." },
+  ]}
+/>
+
+실제 출력을 보면 이렇다.
+
+```js
+async function loadUser() {
+  await null;
+  throw new Error("user 없음");
+}
+async function loadPage() {
+  await loadUser();
+}
+loadPage().catch((e) => console.log(e.stack));
+
+setTimeout(function onTimer() {
+  console.log(new Error("타이머 안").stack);
+}, 0);
+```
+
+```text
+Error: user 없음
+    at loadUser (/app/page.js:3:9)
+    at async loadPage (/app/page.js:6:3)
+Error: 타이머 안
+    at Timeout.onTimer [as _onTimeout] (/app/page.js:11:15)
+    at listOnTimeout (node:internal/timers:588:17)
+    at process.processTimers (node:internal/timers:523:7)
+```
+
+`await`로 이어진 체인은 V8이 `at async`로 복원해 준다(Node.js 12부터 기본으로 켜진 기능이다). 하지만 `setTimeout` 콜백이나 이벤트 리스너는 누가 예약했는지 기록하지 않는다. 트레이스 바닥이 `processTimers`로 끝나는 이유다. 그리고 `then`으로 이은 체인이나 `await` 없이 Promise를 돌려주기만 하는 함수는 복원 대상이 아니다. 운영 트레이스에서 "누가 불렀나"가 보이지 않으면 이 경계를 의심한다. 크롬 개발자 도구는 디버깅 중에 타이머와 이벤트의 예약 지점까지 이어 붙여 보여 주지만, 이건 개발자 도구가 열려 있을 때만 켜지는 기록이다.
+
+## 깊이를 스택에서 빼내는 방법
+
+다시 댓글 2만 개로 돌아가자. 고치는 방법은 깊이를 콜 스택 대신 다른 곳에 맡기는 것이다.
+
+### 반복문으로 바꾼다
+
+한 줄로 이어진 구조는 재귀가 필요 없다.
+
+```js
+function collectIds(node) {
+  const ids = [];
+  for (let cur = node; cur; cur = cur.reply) ids.push(cur.id);
+  return ids;
+}
+```
+
+### 스택을 직접 들고 간다
+
+트리는 갈래가 있어서 반복문 하나로는 안 된다. 그때는 콜 스택이 하던 일을 배열로 직접 한다. 배열은 힙에 있으니 메모리가 허락하는 만큼 깊어질 수 있다. 아래 그림은 댓글 트리를 앞에서부터(전위 순회) 펼치는 과정이다. 칸은 댓글이고 아래 상자가 직접 관리하는 스택이다.
+
+```js
+function preorder(root) {
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const n = stack.pop();
+    out.push(n.id);
+    // 앞 답글이 먼저 나오게 거꾸로 넣는다
+    for (let i = n.replies.length - 1; i >= 0; i--) stack.push(n.replies[i]);
+  }
+  return out;
+}
+```
+
+<AlgoTrace
+  caption="1 아래에 2, 3이 있고 2 아래에 4가 있는 트리. 결과는 1 2 4 3"
+  memoryLabel="내가 관리하는 스택 (오른쪽이 맨 위)"
+  cells={["1", "2", "4", "3"]}
+  steps={[
+    { memory: ["1"], caption: "루트 하나를 넣고 시작한다." },
+    { pointer: 0, found: [0], memory: ["3", "2"], caption: "1을 꺼내 기록하고 답글 3, 2를 거꾸로 넣는다. 2가 맨 위다." },
+    { pointer: 1, found: [0, 1], memory: ["3", "4"], caption: "2를 꺼내 기록하고 답글 4를 넣는다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["3"], caption: "4는 답글이 없다. 기록만 한다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: [], caption: "3을 꺼내 기록한다. 스택이 비면 끝이다." },
+  ]}
+/>
+
+Node.js 22에서 한 줄로 10만 단계 중첩된 트리를 넣어도 `100000`개를 그대로 돌려준다. 재귀 버전이었다면 1만 단계 근처에서 죽었을 입력이다.
+
+### 트램펄린
+
+코드 모양을 재귀 그대로 두고 싶을 때 쓰는 기법이다. 함수가 자기 자신을 부르는 대신 "다음에 부를 함수"를 돌려주고, 바깥 반복문이 그걸 계속 실행한다. 매번 한 장만 쌓였다가 빠지니 깊어지지 않는다.
+
+```js
+function trampoline(fn) {
+  return (...args) => {
+    let r = fn(...args);
+    while (typeof r === "function") r = r();
+    return r;
+  };
+}
+const sumIds = trampoline(function go(node, acc = 0) {
+  if (!node) return acc;
+  return () => go(node.reply, acc + node.id);
+});
+console.log(sumIds(makeThread(100000)));
+```
+
+```text
+5000050000
+```
+
+돌려줄 값이 함수일 수 있는 경우엔 쓸 수 없고, 호출마다 화살표 함수를 하나씩 만드는 비용이 있다. 실무에서는 반복문이나 명시적 스택이 더 흔하다.
+
+### 꼬리 호출 최적화는 기대하지 않는다
+
+ES2015 명세에는 꼬리 위치의 호출(`return f(x)`처럼 호출 뒤에 할 일이 없는 호출)은 스택을 쌓지 않는다는 규칙(proper tail calls)이 있다. 하지만 이걸 구현한 주요 엔진은 사파리의 JavaScriptCore뿐이다. V8(크롬, Node.js)과 파이어폭스는 구현하지 않았다. 디버깅할 때 스택 트레이스에서 프레임이 사라지는 문제 등이 이유였다. 그러니 "꼬리 재귀로 바꾸면 괜찮다"는 자바스크립트에서는 사파리에서만 맞는 말이다.
+
+어느 방법을 고를지는 이렇게 정한다. 입력의 깊이를 내가 통제할 수 있고 수백 단계를 넘지 않는다면(폴더 깊이, 메뉴 트리) 재귀가 가장 읽기 쉽다. 사용자나 외부 시스템이 보낸 데이터라 깊이가 정해지지 않았다면 명시적 스택으로 바꾸거나 깊이 제한을 걸어 일찍 거절한다.
+
+## React에서 콜 스택을 만나는 자리
+
+컴포넌트도 함수라서 렌더링할 때마다 실행 컨텍스트가 생긴다. 다만 컴포넌트 트리가 깊다고 그만큼 콜 스택이 깊어지지는 않는다. React 16에서 들어온 Fiber 구조는 렌더 단계에서 트리를 함수 재귀 대신 반복 루프로 돈다. 자식 컴포넌트는 부모 함수 안에서 불리는 게 아니라 루프가 다음 차례에 부른다. 댓글 컴포넌트가 자기 자신을 자식으로 그리는 재귀 컴포넌트도 그래서 꽤 깊어도 버틴다. 렌더 안에서 내가 직접 부르는 재귀 유틸(트리를 펼치는 함수)은 여전히 스택을 쓴다.
+
+자주 헷갈리는 에러 두 개는 스택 오버플로가 아니다.
+
+- `Too many re-renders`: 렌더하는 도중에 `setState`를 불러 다시 렌더하는 일이 25번을 넘으면 React가 멈춘다. `onClick={setOpen(true)}`처럼 핸들러 자리에서 함수를 바로 호출했을 때 흔히 난다.
+- `Maximum update depth exceeded`: 커밋 뒤 effect나 `componentDidUpdate`에서 상태를 바꾸고, 그게 다시 effect를 부르는 고리가 50번을 넘으면 난다. 의존성 배열에 매번 새로 만들어지는 객체를 넣었을 때가 단골이다.
+
+두 숫자(25, 50)는 React 19의 `react-dom` 소스에 있는 상수 `RE_RENDER_LIMIT`, `NESTED_UPDATE_LIMIT`이다. 엔진의 스택 한도가 아니라 React가 무한 루프를 일찍 끊으려고 센 횟수다. 그래서 에러 메시지도 `RangeError`가 아니라 React가 던지는 일반 `Error`다. 진짜 `RangeError: Maximum call stack size exceeded`가 React 앱에서 났다면, 내 재귀 유틸이나 세터, 서로를 부르는 두 함수부터 본다.
+
+## 현장에서 스택 오버플로를 좁히는 순서
+
+증상은 대개 둘 중 하나다. 특정 데이터를 열 때만 페이지가 하얗게 죽거나, 특정 요청에서만 서버가 500을 낸다. 이렇게 좁힌다.
+
+1. 트레이스에서 반복되는 프레임을 찾는다. 같은 함수 한 줄이 반복되면 무한 재귀다(세터, `toJSON`). 두세 함수가 번갈아 반복되면 서로를 부르는 고리다.
+2. 반복이 끝없이 이어지는 게 아니라 입력 크기와 비례한다면 무한 재귀가 아니라 깊은 입력이다. 그 데이터의 깊이를 재 본다.
+3. 트레이스가 10줄이라 시작점이 안 보이면 `Error.stackTraceLimit`을 잠시 올려서 재현한다.
+4. 재현 테스트를 깊은 입력(1만, 10만 단계)으로 만든다. 1,000 정도로는 통과해 버리니 고친 뒤에도 같은 테스트로 확인한다.
+
+`try`/`catch`로 `RangeError`를 잡을 수는 있다. 그러나 잡은 자리가 이미 한도 근처라서, `catch` 안에서 로깅 함수를 부르다 다시 넘치는 일이 있다. 잡아서 넘기는 건 응급처치이고 고치는 건 깊이를 줄이는 쪽이다.
+
+## 연습: 댓글 트리를 스택 없이 펼치기
+
+재귀 없이 댓글 트리를 전위 순회해서 id 배열을 돌려주자. 트리 노드는 `id`와 `replies` 배열을 가진다. 재귀로 짜면 테스트는 통과하겠지만 깊은 실제 데이터에서 다시 넘친다. 배열 하나를 스택으로 써서 반복문으로 풀어 보자. 답글 순서가 앞에서부터 나오게 하는 게 작은 함정이다.
+
+<CodePlayground
+  caption="댓글 트리 전위 순회"
+  functionName="preorder"
+  initialCode={`function preorder(root) {
+  const out = [];
+  // 재귀를 쓰지 말고, 배열 하나를 스택으로 써서 채워 보자.
+  return out;
+}`}
+  solution={`function preorder(root) {
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const n = stack.pop();
+    out.push(n.id);
+    for (let i = n.replies.length - 1; i >= 0; i--) stack.push(n.replies[i]);
+  }
+  return out;
+}`}
+  tests={[
+    { label: "답글 없음", args: [{ id: 1, replies: [] }], expected: [1] },
+    { label: "1 → (2 → 4), 3", args: [{ id: 1, replies: [{ id: 2, replies: [{ id: 4, replies: [] }] }, { id: 3, replies: [] }] }], expected: [1, 2, 4, 3] },
+    { label: "넓은 트리", args: [{ id: 10, replies: [{ id: 11, replies: [] }, { id: 12, replies: [{ id: 13, replies: [] }, { id: 14, replies: [] }] }, { id: 15, replies: [] }] }], expected: [10, 11, 12, 13, 14, 15] },
+    { label: "한 줄로 깊게", args: [{ id: 1, replies: [{ id: 2, replies: [{ id: 3, replies: [{ id: 4, replies: [{ id: 5, replies: [] }] }] }] }] }], expected: [1, 2, 3, 4, 5] },
+  ]}
+/>
+
+## 다시 댓글 2만 개로
+
+`collectIds`가 죽은 건 메모리가 아니라 콜 스택 때문이었다. 호출 하나가 실행 컨텍스트 한 장이고, 재귀는 입력 깊이만큼 장을 쌓는다. 스택은 바이트 단위로 정해진 크기라 수천~수만 장에서 넘친다. 깊이가 정해지지 않은 데이터라면 깊이를 콜 스택이 아니라 힙의 배열에 맡긴다. 같은 콜 스택이 비어야 다음 일이 돈다는 규칙은 [이벤트 루프](/posts/event-loop)와 [마이크로태스크와 매크로태스크](/posts/js-microtask-macrotask)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 실행 컨텍스트가 무엇인가요?
+
+코드를 실행하는 데 필요한 정보를 묶은 단위다. 어떤 이름이 어떤 값인지 담은 환경 레코드, 바깥 환경으로 가는 링크, `this` 값, 실행 중인 위치를 들고 있다. 전역 코드가 시작할 때 하나, 함수를 부를 때마다 하나씩 새로 만들어져 콜 스택에 쌓인다.
+
+### 실행 컨텍스트가 만들어지는 과정은 어떻게 되나요?
+
+두 단계다. 만드는 단계에서 본문을 훑어 선언을 환경 레코드에 등록한다. `var`는 `undefined`로, 함수 선언은 함수 객체로 채우고, `let`·`const`는 초기화하지 않은 채 둔다. 그다음 실행 단계에서 한 줄씩 돌며 값을 대입한다. 호이스팅과 TDZ는 이 첫 단계에서 생기는 현상이다.
+
+### 콜 스택과 힙은 무엇이 다른가요?
+
+콜 스택은 지금 실행 중인 함수 호출의 순서를 쌓는 곳이고 크기가 정해져 있다. 객체, 배열, 클로저가 잡고 있는 환경 레코드는 힙에 있고 GC가 관리한다. 그래서 함수가 끝나 컨텍스트가 스택에서 빠져도 누군가 참조하는 환경 레코드는 힙에 남는다. 이게 클로저가 동작하는 이유다.
+
+### Maximum call stack size exceeded는 왜 나고, 어떻게 고치나요?
+
+콜 스택에 쌓인 프레임이 엔진의 한도를 넘었다는 뜻이다. 무한 재귀(자기 자신을 부르는 세터, 서로 부르는 함수)이거나, 끝은 있지만 입력이 너무 깊은 재귀다. 무한 재귀는 종료 조건을 고치고, 깊은 입력은 반복문이나 직접 관리하는 스택 배열로 바꾸거나 깊이 제한을 둔다.
+
+### 꼬리 재귀로 바꾸면 스택 오버플로를 피할 수 있나요?
+
+자바스크립트에서는 보장되지 않는다. ES2015 명세에 proper tail calls가 있지만 사파리만 구현했고 V8과 파이어폭스는 구현하지 않았다. 크롬과 Node.js에서는 꼬리 재귀도 똑같이 프레임을 쌓으니 반복문이나 트램펄린으로 바꿔야 한다.
+
+### 콜 스택 한도는 몇인가요? 늘릴 수 있나요?
+
+호출 횟수가 아니라 바이트 단위 한도라서 프레임 크기에 따라 다르다. Node.js 22에서 빈 재귀 함수는 약 1만 2천 단계, 지역 변수가 많은 함수는 그 절반 정도에서 넘쳤다. Node.js는 `--stack-size`로 바꿀 수 있지만 실제 스레드 스택은 그대로라 크게 올리면 프로세스가 죽을 수 있고, 브라우저는 바꿀 수 없다. 한도를 늘리기보다 깊이를 줄이는 게 맞다.
+
+### await 다음에서 에러가 나면 스택 트레이스는 어떻게 보이나요?
+
+`await`에서 멈춘 함수는 콜 스택에서 내려왔다가 마이크로태스크로 다시 올라오기 때문에 실제 스택에는 원래 호출자가 없다. V8은 Promise를 누가 기다리는지 따라가 `at async 함수명` 줄을 이어 붙여 준다. 다만 `setTimeout` 콜백이나 이벤트 리스너는 예약한 자리가 기록되지 않아서 트레이스가 타이머 내부 함수에서 끝난다.
+
+### React의 Maximum update depth exceeded도 스택 오버플로인가요?
+
+아니다. React가 커밋 뒤 effect에서 상태를 바꾸고 다시 effect가 도는 고리를 50번까지 세다가 넘으면 직접 던지는 에러다. 렌더 도중 `setState`를 반복하면 25번에서 `Too many re-renders`를 던진다. 엔진의 콜 스택과는 상관이 없고, 의존성 배열이나 핸들러 자리의 함수 호출을 고쳐야 한다.

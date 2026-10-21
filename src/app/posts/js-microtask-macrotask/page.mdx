@@ -1,0 +1,495 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-microtask-macrotask");
+
+실패하면 1초 쉬고 다시 시도하는 `retry` 함수를 만들고 테스트를 짰다. 실제로 1초씩 기다리면 테스트가 느려지니 가짜 타이머로 시간을 앞으로 돌린다. Node.js 22에 들어 있는 `node:test`의 mock timers를 썼다(22에서는 아직 실험 기능이라 경고가 한 줄 찍힌다).
+
+```js
+import { test, mock } from "node:test";
+import assert from "node:assert/strict";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function retry(fn, times, delay) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= times) throw e;
+      await sleep(delay);
+    }
+  }
+}
+
+test("두 번 실패하고 세 번째에 성공한다", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  const fn = async () => {
+    calls++;
+    if (calls < 3) throw new Error("일시 장애");
+    return "ok";
+  };
+  retry(fn, 3, 1000);
+  mock.timers.tick(1000);
+  mock.timers.tick(1000);
+  assert.equal(calls, 3);
+  mock.timers.reset();
+});
+```
+
+```text
+not ok 1 - 두 번 실패하고 세 번째에 성공한다
+  ...
+  error: |-
+    Expected values to be strictly equal:
+
+    1 !== 3
+```
+
+시간을 2초나 돌렸는데 `fn`은 한 번만 불렸다. 코드는 맞다. 실제 시간으로 돌리면 세 번 불린다. 틀린 건 테스트가 상상한 "순서"다. 첫 실패를 `catch`로 받아 `sleep`을 부르는 일은 마이크로태스크에서 일어나는데, 테스트는 동기 코드 안에서 그걸 기다리지 않고 바로 시계를 돌렸다. 시계를 돌리는 순간 예약된 타이머가 아직 하나도 없었다.
+
+[이벤트 루프](/posts/event-loop) 글에서 "태스크 하나, 마이크로태스크 전부, 렌더링"이라는 규칙과 기본 퍼즐을 봤다. 이 글은 그 규칙을 손으로 굴리는 법을 다룬다. 대기열에 무엇이 어떤 순서로 들어가는지 장부를 적어 가며 퍼즐을 풀고, 그 장부가 테스트, 에러 처리, React 업데이트에서 어떻게 쓰이는지 본다.
+
+이 주제의 다른 글: [실행 컨텍스트와 콜 스택](/posts/js-execution-context) · [타이머는 왜 늦게 울리나](/posts/js-timers-accuracy) · [Promise](/posts/js-promises) · [async/await](/posts/js-async-await)
+
+## 매크로태스크라는 말은 명세에 없다
+
+용어부터 정리하자. 흔히 매크로태스크(macrotask)라고 부르는 것을 HTML 명세는 그냥 태스크(task)라고 부른다. 매크로태스크는 마이크로태스크와 대비하려고 개발자들이 붙인 별명이다. 그리고 태스크 큐는 하나가 아니다. 타이머, 사용자 입력, 네트워크, `postMessage`처럼 태스크 소스(task source)마다 큐가 따로 있고, 브라우저가 다음에 어느 큐에서 꺼낼지 고른다.
+
+마이크로태스크 쪽은 이름이 두 개다. ECMAScript 명세는 Promise 반응을 잡(job)이라 부르고 "호스트가 정한 큐에 넣으라"고만 적는다(HostEnqueuePromiseJob). 브라우저(HTML 명세)와 Node.js는 이 잡을 마이크로태스크 큐에 넣는다. 그래서 `then` 콜백이 마이크로태스크라는 건 자바스크립트 언어 자체가 아니라 실행 환경이 정한 것이다. 실무에서 차이가 날 일은 거의 없지만 면접에서 "job queue와 microtask queue는 같은가"라는 꼬리 질문이 나오면 이렇게 답하면 된다.
+
+어떤 API가 어느 줄에 서는지 한 장으로 모으면 아래와 같다. 점이 흐르는 방향이 콜백이 이동하는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="콜백이 서는 줄. 위쪽 줄일수록 먼저 비워진다."
+  nodes={[
+    { id: "tick", label: "nextTick 큐", sub: "Node.js 전용", x: 95, y: 40, w: 140 },
+    { id: "micro", label: "마이크로태스크", sub: "then·await", x: 95, y: 120, w: 140 },
+    { id: "task", label: "태스크 큐들", sub: "타이머·입력·메시지", x: 95, y: 200, w: 140 },
+    { id: "render", label: "렌더링 기회", sub: "rAF·layout·paint", x: 95, y: 270, w: 140 },
+    { id: "srcm", label: "queueMicrotask", sub: "MutationObserver", x: 300, y: 120, w: 140 },
+    { id: "srct", label: "setTimeout", sub: "postMessage·클릭", x: 300, y: 200, w: 140 },
+  ]}
+  edges={[
+    { from: "srcm", to: "micro" },
+    { from: "srct", to: "task" },
+    { from: "tick", to: "micro", label: "먼저" },
+    { from: "micro", to: "task", label: "다 비우고" },
+    { from: "task", to: "render", label: "가끔", dashed: true },
+  ]}
+/>
+
+- 마이크로태스크: Promise의 `then`/`catch`/`finally`, `await` 다음 부분, `queueMicrotask`, `MutationObserver` 콜백.
+- 태스크: `setTimeout`/`setInterval`, `MessageChannel`과 `postMessage`, 사용자 입력 이벤트, 네트워크 응답 이벤트, Node.js의 `setImmediate`와 I/O 콜백.
+- `requestAnimationFrame`은 둘 다 아니다. 렌더링 단계 안에서, 화면을 그리기 직전에 돈다.
+- Node.js의 `process.nextTick`은 마이크로태스크보다도 앞서는 별도 큐다. 이건 [이벤트 루프](/posts/event-loop#nexttick은-promise보다-먼저다)에서 봤다.
+
+같은 종류 안에서는 넣은 순서대로 나온다. 하지만 서로 다른 태스크 소스끼리는 순서를 약속하지 않는다. 크롬 141에서 같은 순간에 네 가지를 예약해 여덟 번 돌려 봤다.
+
+```js
+const out = [];
+setTimeout(() => out.push("timeout"), 0);
+const ch = new MessageChannel();
+ch.port1.onmessage = () => out.push("message");
+ch.port2.postMessage(null);
+requestAnimationFrame(() => out.push("rAF"));
+queueMicrotask(() => out.push("micro"));
+setTimeout(() => console.log(out.join(" ")), 100);
+```
+
+```text
+micro timeout message rAF
+```
+
+여덟 번 모두 같은 결과였지만 `timeout`과 `message` 사이의 순서는 명세가 보장하지 않는다. 브라우저가 바쁘거나 우선순위 정책이 바뀌면 달라질 수 있다. 마이크로태스크가 맨 앞이라는 것만 보장된다.
+
+## 장부를 적으며 푸는 법
+
+퍼즐을 감으로 풀면 틀린다. 칸 세 개짜리 장부를 적으면 기계적으로 풀린다. 콜 스택에서 지금 도는 것, 마이크로태스크 큐, 태스크 큐다. 규칙은 넷이다.
+
+1. 동기 코드는 스택에서 바로 실행한다.
+2. `then`은 앞의 Promise가 이미 정해졌으면 콜백을 마이크로태스크 큐 뒤에 넣는다. 아직이면 Promise에 걸어 두었다가 정해지는 순간 넣는다.
+3. 스택이 비면 마이크로태스크 큐 맨 앞에서 하나 꺼내 실행한다. 실행하면서 새로 넣은 건 큐 맨 뒤로 간다. 큐가 빌 때까지 반복한다.
+4. 그다음에야 태스크 하나를 꺼낸다.
+
+규칙 2가 함정이다. `then`을 이어 붙인 체인은 한 번에 큐에 들어가지 않는다. 첫 콜백만 들어가고, 두 번째 콜백은 첫 콜백이 끝나 그 결과 Promise가 정해질 때 들어간다. 그래서 체인 두 개는 번갈아 실행된다.
+
+```js
+const out = [];
+Promise.resolve()
+  .then(() => out.push("a1"))
+  .then(() => out.push("a2"))
+  .then(() => out.push("a3"));
+Promise.resolve()
+  .then(() => out.push("b1"))
+  .then(() => out.push("b2"));
+setTimeout(() => console.log(out.join(" ")), 0);
+```
+
+```text
+a1 b1 a2 b2 a3
+```
+
+아래 그림에서 다음을 누르며 장부를 따라가 보자. 칸은 등록된 콜백이고, 아래 상자는 마이크로태스크 큐다.
+
+<AlgoTrace
+  caption="체인은 한 칸씩만 큐에 들어가서 서로 번갈아 돈다"
+  memoryLabel="마이크로태스크 큐 (왼쪽이 맨 앞)"
+  cells={["a1", "a2", "a3", "b1", "b2"]}
+  steps={[
+    { memory: ["a1", "b1"], caption: "동기 코드가 끝났다. 체인마다 첫 콜백만 큐에 있다. a2, b2는 아직 앞 Promise에 걸려 있을 뿐이다." },
+    { pointer: 0, found: [0], memory: ["b1", "a2"], caption: "a1을 꺼내 실행한다. a1의 결과 Promise가 정해지면서 a2가 큐 맨 뒤에 선다." },
+    { pointer: 3, found: [0, 3], memory: ["a2", "b2"], caption: "b1 차례다. 끝나면서 b2가 뒤에 선다." },
+    { pointer: 1, found: [0, 3, 1], memory: ["b2", "a3"], caption: "a2를 실행하고 a3을 넣는다." },
+    { pointer: 4, found: [0, 3, 1, 4], memory: ["a3"], caption: "b2를 실행한다. b 체인은 끝났다." },
+    { pointer: 2, found: [0, 3, 1, 4, 2], memory: [], caption: "a3을 실행하고 큐가 빈다. 이제야 태스크(setTimeout)가 돈다." },
+  ]}
+/>
+
+"체인 a가 먼저 시작했으니 a가 다 끝나고 b"라고 답하면 틀린다. 체인의 각 고리는 한 틱(마이크로태스크 하나)을 쓰고, 큐는 공정하게 줄을 세운다.
+
+콜백 안에서 새 Promise를 만들면 그것도 같은 줄에 선다.
+
+```js
+const out = [];
+Promise.resolve()
+  .then(() => {
+    out.push("a1");
+    Promise.resolve().then(() => out.push("inner"));
+  })
+  .then(() => out.push("a2"));
+Promise.resolve().then(() => out.push("b1")).then(() => out.push("b2"));
+setTimeout(() => console.log(out.join(" ")), 0);
+```
+
+```text
+a1 b1 inner a2 b2
+```
+
+`a1`이 실행되는 동안 `inner`가 먼저 큐에 들어가고, `a1`이 끝나면서 `a2`가 그 뒤에 들어간다. 큐는 `b1, inner, a2` 순서가 된다. 안쪽 Promise를 `return`하지 않았으니 `a2`는 `inner`를 기다리지 않는다는 것도 함께 보인다.
+
+## await 하나는 한 틱이다
+
+`async` 함수도 같은 장부로 푼다. `await` 앞까지는 동기로 돌고, `await` 뒷부분은 기다리는 값이 정해지면 마이크로태스크로 들어간다. Promise가 아닌 값(`null`, 숫자)을 `await`해도 한 틱은 쉰다.
+
+```js
+const out = [];
+async function slow() {
+  out.push("s1");
+  await null;
+  out.push("s2");
+  await null;
+  out.push("s3");
+}
+async function fast() {
+  out.push("f1");
+  await null;
+  out.push("f2");
+}
+slow();
+fast();
+Promise.resolve().then(() => out.push("p"));
+out.push("sync");
+setTimeout(() => console.log(out.join(" ")), 0);
+```
+
+```text
+s1 f1 sync s2 f2 p s3
+```
+
+<AlgoTrace
+  caption="await로 쪼개진 조각들이 then 콜백과 같은 줄에 선다"
+  memoryLabel="마이크로태스크 큐 (왼쪽이 맨 앞)"
+  cells={["s1", "f1", "sync", "s2", "f2", "p", "s3"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["slow 재개"], caption: "slow()를 부르면 s1까지 바로 돈다. await null에서 멈추고 나머지가 큐에 선다." },
+    { pointer: 1, found: [0, 1], memory: ["slow 재개", "fast 재개"], caption: "fast()도 f1까지 돌고 멈춘다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["slow 재개", "fast 재개", "p"], caption: "then 콜백 p가 줄 끝에 서고, sync가 찍히며 동기 코드가 끝난다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["fast 재개", "p", "slow 재개"], caption: "slow가 s2를 찍고 두 번째 await에서 또 멈춘다. 이번엔 맨 뒤로 간다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["p", "slow 재개"], caption: "fast가 f2를 찍고 끝난다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["slow 재개"], caption: "p가 찍힌다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: [], caption: "마지막으로 s3. await가 많은 함수일수록 줄을 여러 번 다시 선다." },
+  ]}
+/>
+
+여기서 실무 감각 하나를 얻는다. `await`가 많은 함수는 그만큼 다른 마이크로태스크에 자리를 내준다. 그래서 두 `async` 흐름이 같은 변수를 읽고 쓰면, `await` 개수만 바뀌어도 순서가 바뀐다. 리팩터링으로 `await` 하나를 지웠더니 동작이 달라졌다면 이 경우다. 순서가 중요한 일은 틱 수에 기대지 말고 한쪽이 다른 쪽을 명시적으로 `await`하게 짠다.
+
+이미 이행된 Promise를 `then` 콜백에서 `return`하면 틱이 두 번 더 든다는 규칙도 있다. 그건 [Promise 글의 resolve에 Promise를 넘기는 절](/posts/js-promises#resolve에-promise를-넘기면-늦어진다)에서 봤고, 아래 연습 문제에서 직접 굴려 본다.
+
+## 처음 테스트는 장부의 어디서 어긋났나
+
+다시 `retry` 테스트로 가자. 테스트 함수 본문은 하나의 동기 덩어리다. 장부를 적으면 이렇게 흐른다.
+
+<SequenceDiagram
+  caption="테스트가 시계를 돌릴 때 타이머는 아직 예약 전이었다"
+  actors={[
+    { id: "test", label: "테스트 본문" },
+    { id: "retry", label: "retry" },
+    { id: "clock", label: "가짜 시계" },
+  ]}
+  steps={[
+    { from: "test", to: "retry", label: "retry(fn)", title: "retry를 부른다", detail: "retry가 fn()을 부르고 calls가 1이 된다. fn은 async라서 거부된 Promise를 돌려준다. await에서 retry가 멈춘다. catch 처리는 마이크로태스크로 예약됐다." },
+    { from: "test", to: "clock", label: "tick(1000)", title: "시계를 1초 돌린다", detail: "테스트는 아직 동기 코드 안이다. 마이크로태스크는 한 번도 돌지 않았다. 가짜 시계에 예약된 타이머가 없으니 아무 일도 없다." },
+    { from: "test", to: "clock", label: "tick(1000)", title: "한 번 더 돌린다", detail: "여전히 예약된 타이머가 없다." },
+    { from: "test", to: "test", label: "calls === 3?", title: "단언이 실패한다", detail: "calls는 1이다. 테스트 함수가 동기로 끝나 버렸다.", payload: "1 !== 3" },
+    { from: "retry", to: "clock", label: "setTimeout 1000", title: "그제야 catch가 돈다", detail: "테스트 본문이 끝나 스택이 비자 마이크로태스크가 돌고 sleep이 타이머를 예약한다. 이미 늦었다." },
+  ]}
+/>
+
+고치는 방법은 시계를 돌리기 전에 마이크로태스크를 비우는 것이다. 가짜로 만들지 않은 진짜 태스크 하나를 기다리면 된다. 태스크가 돌기 전에는 마이크로태스크가 전부 비워진다는 규칙 3, 4를 그대로 이용한다.
+
+```js
+// 가짜로 만들지 않은 setImmediate는 진짜 태스크다.
+// 이걸 기다리면 그 전에 쌓인 마이크로태스크가 전부 비워진다.
+const flush = () => new Promise((r) => setImmediate(r));
+
+test("두 번 실패하고 세 번째에 성공한다", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  const fn = async () => {
+    calls++;
+    if (calls < 3) throw new Error("일시 장애");
+    return "ok";
+  };
+  const result = retry(fn, 3, 1000);
+  await flush(); // 첫 실패 처리 → 타이머 예약까지
+  mock.timers.tick(1000);
+  await flush();
+  mock.timers.tick(1000);
+  assert.equal(await result, "ok");
+  assert.equal(calls, 3);
+  mock.timers.reset();
+});
+```
+
+```text
+ok 1 - 두 번 실패하고 세 번째에 성공한다
+```
+
+`await Promise.resolve()` 한 번으로 비우려는 코드를 자주 본다. 우연히 통과할 수는 있다. 하지만 기다려야 할 틱 수는 `retry` 안의 `await` 개수에 달려 있어서, 구현이 조금만 바뀌어도 다시 깨진다. 태스크 하나를 기다리는 쪽이 튼튼하다. Jest(29.5부터)와 Vitest에는 이 일을 대신 하는 `advanceTimersByTimeAsync`가 있다. 시간을 돌리는 사이사이 마이크로태스크를 비워 준다. 가짜 타이머 테스트가 이유 없이 실패하면 동기 `tick`/`advanceTimersByTime`을 비동기 버전으로 바꿔 보는 게 첫 번째 확인이다.
+
+반대 방향의 함정도 있다. `setImmediate`까지 가짜로 바꾸는 설정(Jest의 기본 가짜 타이머가 그렇다)에서는 위의 `flush`가 시계를 돌리기 전까지 끝나지 않는다. 어떤 API를 가짜로 바꿨는지 먼저 확인한다.
+
+## Node.js 11에서 바뀐 순서
+
+Node.js에서 같은 시각에 만료된 타이머 두 개가 각자 마이크로태스크를 예약하면 어떻게 될까.
+
+```js
+setTimeout(() => {
+  console.log("t1");
+  Promise.resolve().then(() => console.log("p1"));
+}, 0);
+setTimeout(() => {
+  console.log("t2");
+  Promise.resolve().then(() => console.log("p2"));
+}, 0);
+```
+
+```text
+t1
+p1
+t2
+p2
+```
+
+Node.js 22의 결과는 브라우저와 같다. 타이머 콜백 하나가 끝날 때마다 마이크로태스크를 비운다. 하지만 Node.js 10까지는 `t1 t2 p1 p2`가 나왔다. 타이머 단계에서 만료된 콜백을 몰아서 다 돌린 뒤에야 마이크로태스크를 비웠기 때문이다. Node.js 11에서 브라우저와 맞추려고 바뀌었다.
+
+<SequenceDiagram
+  caption="Node.js 11부터는 타이머 콜백 하나마다 마이크로태스크를 비운다"
+  actors={[
+    { id: "timers", label: "타이머 단계" },
+    { id: "js", label: "콜 스택" },
+    { id: "micro", label: "마이크로태스크" },
+  ]}
+  steps={[
+    { from: "timers", to: "js", label: "t1 콜백", title: "만료된 첫 타이머를 부른다", detail: "t1을 찍고 p1을 마이크로태스크 큐에 넣는다." },
+    { from: "js", to: "micro", label: "p1 비우기", title: "콜백 하나가 끝나면 바로 비운다", detail: "Node.js 11 이상의 동작이다. p1이 여기서 찍힌다. 10 이하에서는 이 단계가 없었다." },
+    { from: "timers", to: "js", label: "t2 콜백", title: "다음 타이머로 간다", detail: "t2를 찍고 p2를 넣는다." },
+    { from: "js", to: "micro", label: "p2 비우기", title: "다시 비운다", detail: "결과는 t1 p1 t2 p2. 브라우저와 같다." },
+  ]}
+/>
+
+지금 이 차이를 만날 일은 오래된 Node.js를 쓰는 레거시 서비스 정도다. 다만 "Node.js와 브라우저의 이벤트 루프는 다르다"는 말을 들으면 무엇이 같고 무엇이 다른지 짚을 수 있어야 한다. 마이크로태스크를 비우는 시점은 이제 같다. 다른 건 태스크 쪽의 구조다. Node.js는 타이머, I/O 폴링, `setImmediate`(check), close 콜백 단계를 차례로 돈다. Node.js 22에서 같은 순간에 여러 종류를 예약하면 이렇게 나왔다.
+
+```js
+const out = [];
+setTimeout(() => out.push("timeout"), 0);
+setImmediate(() => out.push("immediate"));
+const ch = new MessageChannel();
+ch.port1.onmessage = () => { out.push("message"); ch.port1.close(); };
+ch.port2.postMessage(null);
+process.nextTick(() => out.push("nextTick"));
+queueMicrotask(() => out.push("micro"));
+setTimeout(() => console.log(out.join(" ")), 50);
+```
+
+```text
+nextTick micro timeout message immediate
+```
+
+`nextTick`과 `micro`의 순서는 보장된다. 나머지 셋은 이 환경에서 다섯 번 모두 같았지만, 메인 모듈에서 `setTimeout(0)`과 `setImmediate` 중 무엇이 먼저인지는 Node.js 문서도 정해지지 않는다고 적어 둔다.
+
+## 마이크로태스크에서 던진 에러는 어디로 가나
+
+같은 마이크로태스크라도 무엇으로 만들었느냐에 따라 에러가 가는 곳이 다르다. 크롬 141에서 확인했다.
+
+```js
+window.addEventListener("error", (e) => console.log("error 이벤트:", e.message));
+window.addEventListener("unhandledrejection", (e) => console.log("unhandledrejection:", e.reason.message));
+
+queueMicrotask(() => { throw new Error("A"); });
+queueMicrotask(() => console.log("다음 마이크로태스크는 돈다"));
+Promise.resolve().then(() => { throw new Error("B"); });
+```
+
+```text
+error 이벤트: Uncaught Error: A
+다음 마이크로태스크는 돈다
+unhandledrejection: B
+```
+
+`queueMicrotask` 콜백에서 던진 에러는 잡히지 않은 예외로 바로 보고된다(`error` 이벤트). `then` 콜백에서 던진 에러는 예외가 아니라 그 `then`이 돌려준 Promise의 거부가 되고, 아무도 처리하지 않으면 마이크로태스크를 다 비운 뒤에 `unhandledrejection`으로 보고된다. 그리고 한 마이크로태스크가 던져도 큐의 나머지는 계속 돈다.
+
+Node.js에서는 결과가 훨씬 무겁다. `queueMicrotask`의 예외는 `uncaughtException`이 되어 기본으로 프로세스를 끝낸다. 처리되지 않은 거부도 Node.js 15부터 기본으로 프로세스를 끝낸다([Promise 글](/posts/js-promises#아무도-받지-않은-거부) 참고). 라이브러리를 만들며 콜백을 "나중에" 부르려고 `queueMicrotask`를 쓸 때, 사용자 콜백을 `try`/`catch` 없이 부르면 사용자의 실수가 서버를 내린다.
+
+## DOM 변경은 마이크로태스크로 묶인다
+
+`MutationObserver`가 마이크로태스크를 쓰는 이유를 보면 마이크로태스크가 왜 있는지 감이 온다. DOM을 세 번 바꿨을 때 콜백이 세 번 불리면 낭비이고, 다음 태스크까지 미루면 그 사이에 화면이 그려져 버린다. 마이크로태스크는 "지금 하는 일이 끝나자마자, 그러나 렌더링보다는 먼저"라는 자리다.
+
+```js
+const box = document.getElementById("box");
+new MutationObserver((records) => console.log("observer 호출, 기록", records.length, "개"))
+  .observe(box, { childList: true, attributes: true });
+box.setAttribute("data-a", "1");
+box.append("x");
+box.setAttribute("data-b", "2");
+Promise.resolve().then(() => console.log("then"));
+console.log("동기 코드 끝");
+```
+
+```text
+동기 코드 끝
+observer 호출, 기록 3 개
+then
+```
+
+<AlgoTrace
+  caption="변경 세 번이 기록 하나의 묶음이 되어 마이크로태스크 한 번으로 전달된다"
+  memoryLabel="observer가 모아 둔 기록"
+  cells={["data-a", "append", "data-b", "observer", "then"]}
+  steps={[
+    { pointer: 0, memory: ["attributes"], caption: "첫 변경이 생기면 기록을 쌓고 observer 알림을 마이크로태스크로 한 번 예약한다." },
+    { pointer: 1, memory: ["attributes", "childList"], caption: "두 번째 변경은 기록만 더한다. 알림은 이미 예약돼 있다." },
+    { pointer: 2, memory: ["attributes", "childList", "attributes"], caption: "세 번째도 기록만 더한다." },
+    { pointer: 3, found: [3], memory: [], caption: "동기 코드가 끝나면 observer가 기록 3개를 한 번에 받는다. 알림이 then보다 먼저 예약됐으니 먼저 돈다." },
+    { pointer: 4, found: [3, 4], memory: [], caption: "then이 돈다. 화면은 이 모든 일이 끝난 뒤에 그려진다." },
+  ]}
+/>
+
+이 "모았다가 한 번에, 그러나 그리기 전에"는 프레임워크들이 업데이트를 묶는 방식과 같은 생각이다.
+
+## React가 업데이트를 묶는 자리
+
+React 18부터는 이벤트 핸들러든 `setTimeout`이든 `await` 뒤든 `setState`를 여러 번 부르면 한 번만 렌더링한다(자동 배칭). 무엇이 언제 묶이는지는 [리렌더링 글](/posts/react-rerender#여러-번-바꿔도-렌더링은-한-번)에서 봤다. 여기서는 그게 어느 큐를 쓰는지만 본다.
+
+React 19의 `react-dom` 소스를 보면 `setState`가 불렸을 때 바로 렌더링하지 않고 `queueMicrotask`로 "루트 일정 정리"를 예약한다. 그래서 같은 동기 코드 안에서 부른 `setState`는 몇 번이든 그 마이크로태스크 하나에서 함께 처리된다. 그 마이크로태스크에서 클릭 같은 이산 이벤트의 업데이트는 바로 렌더링하고, 덜 급한 업데이트는 React의 스케줄러에 넘긴다. 스케줄러는 브라우저에서 `MessageChannel`로 태스크를 만들어 5ms 단위로 일을 끊는다.
+
+장부로 보면 이렇게 정리된다. `setState` 다음 줄에서 DOM을 읽으면 아직 옛 화면이다. 렌더링은 내 코드가 끝난 뒤의 마이크로태스크나 다음 태스크에서 일어나기 때문이다. 핸들러 중간에 `await`가 있으면, 그 앞에서 부른 `setState`가 잡아 둔 React 마이크로태스크가 `await` 뒷부분보다 먼저 줄에 서 있다. 그래서 `await` 앞뒤의 업데이트는 서로 다른 묶음이 된다. 꼭 그 자리에서 DOM에 반영해야 한다면(스크롤 위치를 재야 할 때 등) `flushSync`로 감싼다. 렌더링 비용을 바로 치르는 거라 꼭 필요한 곳에만 쓴다.
+
+## 순서 버그를 현장에서 좁히는 법
+
+순서 문제의 증상은 대개 "가끔"이다. 테스트가 가끔 실패한다, 상태가 가끔 옛값으로 덮인다, 로그 순서가 환경마다 다르다. 이렇게 좁힌다.
+
+- 같은 종류 안의 순서인지 다른 종류 사이의 순서인지 본다. 마이크로태스크끼리, 같은 타이머끼리의 순서는 보장된다. `setTimeout`과 `MessageChannel`, `setTimeout(0)`과 `setImmediate`처럼 서로 다른 태스크 소스 사이의 순서에 기대고 있다면 그게 원인이다.
+- 틱 수에 기대고 있지 않은지 본다. "`await` 두 번이면 저쪽보다 늦다" 같은 가정이 있으면, 한쪽 구현이 바뀔 때 깨진다. 기다려야 할 대상을 직접 `await`하게 바꾼다.
+- 테스트라면 가짜 타이머 설정을 본다. 무엇을 가짜로 바꿨는지, 시계를 돌리는 함수가 마이크로태스크를 비워 주는 비동기 버전인지 확인한다.
+- 크롬 개발자 도구 Performance 패널에서 한 태스크 아래에 "Run Microtasks"가 길게 붙어 있으면 마이크로태스크가 쌓여 태스크를 늘리고 있다는 뜻이다. `await`를 수천 번 도는 반복문이 흔한 원인이다.
+
+## 연습: 체인 여러 개의 출력 순서
+
+`Promise.resolve()`에서 시작하는 `then` 체인 여러 개를 동시에 만들었을 때의 출력 순서를 계산하는 함수를 짜 보자. `chains`는 체인마다 콜백 이름을 담은 배열이다. 이름이 `~`로 시작하면 그 콜백은 이미 이행된 Promise(`Promise.resolve()`)를 `return`한다. 그러면 다음 고리는 틱 두 번을 더 기다린 뒤에 큐에 선다. 출력에는 `~`를 뗀 이름을 넣는다.
+
+테스트의 기대값은 같은 체인을 Node.js 22에서 실제로 만들어 돌린 결과다.
+
+<CodePlayground
+  caption="then 체인 끼워 넣기"
+  functionName="interleave"
+  initialCode={`function interleave(chains) {
+  const out = [];
+  // 마이크로태스크 큐를 배열로 흉내 내 보자.
+  // 체인마다 첫 콜백만 처음에 큐에 있다.
+  return out;
+}`}
+  solution={`function interleave(chains) {
+  const out = [];
+  const queue = [];
+  chains.forEach((chain) => {
+    if (chain.length) queue.push({ chain, i: 0, wait: 0 });
+  });
+  while (queue.length) {
+    const job = queue.shift();
+    if (job.wait > 0) {
+      // Promise를 풀어내는 데 드는 틱: 한 번 쉬고 다시 줄을 선다
+      job.wait--;
+      queue.push(job);
+      continue;
+    }
+    const label = job.chain[job.i];
+    out.push(label.replace("~", ""));
+    job.i++;
+    if (job.i < job.chain.length) {
+      job.wait = label.startsWith("~") ? 2 : 0;
+      queue.push(job);
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "a 3개, b 2개", args: [[["a1", "a2", "a3"], ["b1", "b2"]]], expected: ["a1", "b1", "a2", "b2", "a3"] },
+    { label: "체인 셋", args: [[["a1", "a2"], ["b1", "b2"], ["c1"]]], expected: ["a1", "b1", "c1", "a2", "b2"] },
+    { label: "a1이 Promise를 돌려준다", args: [[["~a1", "a2"], ["b1", "b2", "b3", "b4"]]], expected: ["a1", "b1", "b2", "b3", "a2", "b4"] },
+    { label: "가운데 고리가 Promise", args: [[["a1", "~a2", "a3"], ["b1", "b2", "b3", "b4", "b5"]]], expected: ["a1", "b1", "a2", "b2", "b3", "b4", "a3", "b5"] },
+    { label: "둘 다 Promise", args: [[["~x", "y"], ["~m", "n"]]], expected: ["x", "m", "y", "n"] },
+    { label: "빈 체인", args: [[[], ["b1"]]], expected: ["b1"] },
+  ]}
+/>
+
+## 다시 retry 테스트로
+
+테스트가 틀린 건 시간을 몰라서가 아니라 순서를 몰라서였다. 동기 코드가 다 끝나야 마이크로태스크가 돌고, 마이크로태스크가 다 비워져야 다음 태스크가 돈다. 체인의 고리 하나, `await` 하나가 각각 한 틱이고 큐는 공정하게 줄을 세운다. 이 장부만 적을 줄 알면 퍼즐도, 가짜 타이머 테스트도, React의 배칭도 같은 그림으로 읽힌다. 시간 쪽 이야기, 즉 타이머가 정해진 시각보다 늦게 울리는 이유는 [타이머는 왜 늦게 울리나](/posts/js-timers-accuracy)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 마이크로태스크와 매크로태스크는 무엇이 다른가요?
+
+태스크(흔히 매크로태스크)는 이벤트 루프가 한 번에 하나씩 꺼내는 일이고, 마이크로태스크는 콜 스택이 빌 때마다 큐가 빌 때까지 전부 실행하는 일이다. `setTimeout`, 입력 이벤트, `postMessage`는 태스크이고, Promise 콜백, `await` 뒷부분, `queueMicrotask`, `MutationObserver`는 마이크로태스크다. 그래서 같은 시점에 예약하면 마이크로태스크가 항상 먼저 돈다.
+
+### then 체인 두 개를 동시에 만들면 왜 번갈아 실행되나요?
+
+체인의 다음 콜백은 앞 콜백이 끝나 그 결과 Promise가 정해질 때 비로소 큐에 들어가기 때문이다. 처음에는 체인마다 첫 콜백만 큐에 있고, 하나가 끝날 때마다 다음 고리가 큐 맨 뒤에 선다. 그래서 a1 b1 a2 b2처럼 한 칸씩 엇갈린다.
+
+### await null처럼 Promise가 아닌 값을 await해도 비동기인가요?
+
+그렇다. 값은 `Promise.resolve`로 감싸지고 함수의 나머지는 마이크로태스크로 예약된다. 그래서 `await null`도 한 틱을 쉬고, 그 사이에 이미 큐에 있던 다른 마이크로태스크가 먼저 돈다. 다만 태스크를 거치지 않으니 렌더링이나 입력에 메인 스레드를 양보하는 효과는 없다.
+
+### 가짜 타이머로 시간을 돌렸는데 콜백이 안 불립니다. 왜 그런가요?
+
+타이머를 예약하는 코드가 `await`나 `then` 뒤, 즉 마이크로태스크에 있는데 테스트가 동기 코드 안에서 바로 시계를 돌렸기 때문이다. 시계를 돌리는 순간에는 아직 타이머가 예약되지 않았다. 시계를 돌리기 전에 진짜 태스크 하나를 기다려 마이크로태스크를 비우거나, `advanceTimersByTimeAsync` 같은 비동기 버전을 쓴다.
+
+### queueMicrotask에서 던진 에러와 then에서 던진 에러는 어떻게 다른가요?
+
+`queueMicrotask`의 에러는 잡히지 않은 예외로 바로 보고된다. 브라우저는 `error` 이벤트, Node.js는 `uncaughtException`이고 Node.js에서는 기본으로 프로세스가 끝난다. `then`에서 던진 에러는 그 `then`이 돌려준 Promise의 거부가 되고, 처리하는 쪽이 없으면 `unhandledrejection`으로 보고된다. 둘 다 큐의 나머지 마이크로태스크는 계속 실행된다.
+
+### ECMAScript의 job queue와 HTML의 microtask queue는 같은 건가요?
+
+같은 일을 서로 다른 명세가 부르는 이름이다. ECMAScript는 Promise 반응을 job으로 만들어 호스트에게 넣어 달라고만 하고, 브라우저와 Node.js가 그걸 마이크로태스크 큐에 넣는다. 그래서 Promise 콜백이 언제 도는지는 실행 환경의 이벤트 루프가 정한다.
+
+### Node.js와 브라우저의 이벤트 루프 순서는 어떻게 다른가요?
+
+마이크로태스크를 비우는 시점은 Node.js 11부터 브라우저와 같아서, 타이머 콜백 하나가 끝날 때마다 비운다. 다른 점은 Node.js에 `process.nextTick` 큐가 마이크로태스크보다 앞에 있고, 태스크 쪽이 타이머, I/O, `setImmediate` 같은 단계로 나뉜다는 것이다. 메인 모듈에서 `setTimeout(0)`과 `setImmediate`의 순서는 정해지지 않지만 I/O 콜백 안에서는 `setImmediate`가 먼저다.
+
+### React에서 setState 직후 DOM을 읽으면 왜 옛값인가요?
+
+`setState`는 바로 렌더링하지 않고 업데이트를 모아 두었다가 마이크로태스크나 스케줄러 태스크에서 한 번에 처리하기 때문이다. React 19 소스 기준으로 `setState`는 `queueMicrotask`로 일정을 잡고, 급하지 않은 업데이트는 `MessageChannel` 태스크로 넘긴다. 그 자리에서 DOM 반영이 꼭 필요하면 `flushSync`를 쓰고, 보통은 effect에서 읽는다.

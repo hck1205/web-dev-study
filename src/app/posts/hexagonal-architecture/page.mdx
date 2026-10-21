@@ -1,0 +1,652 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("hexagonal-architecture");
+
+결제사를 바꾸기로 했다고 해 보자. 수수료가 더 싼 곳으로 옮기는 단순한 결정인데, 코드를 열어 보니 주문 서비스 곳곳에서 기존 결제사 SDK를 직접 부르고 있다. 금액 필드 이름도, 거절 코드도, 에러 클래스도 그 SDK의 것이다. 업무 규칙을 테스트하려면 결제사 샌드박스 키가 있어야 하고, 샌드박스가 느린 날은 CI가 같이 느려진다. 결제사를 바꾸는 일이 주문 로직을 다시 짜는 일이 되어 버린다.
+
+헥사고날 아키텍처(hexagonal architecture)는 이런 상황을 막으려는 구조다. 다른 이름은 포트와 어댑터(ports and adapters)이고, 이쪽이 내용을 더 잘 말해 준다. 이 글은 [레이어드 아키텍처](/posts/layered-architecture)에서 의존 방향을 한 번 뒤집은 다음 단계를 이어 간다. 비슷한 생각을 동심원으로 정리한 [클린 아키텍처](/posts/clean-architecture)는 따로 다룬다.
+
+예제는 Node 22와 TypeScript로 짰다. `node --experimental-strip-types`로 타입만 지우고 바로 실행했고, 저장소 어댑터에는 Node 22에 들어 있는 `node:sqlite`를 썼다.
+
+## 결제사를 바꾸려는데 업무 코드가 SDK를 안다
+
+SDK를 쓴 게 잘못은 아니다. 업무 규칙이 SDK의 모양을 알고 있는 게 문제다. 이런 코드다.
+
+```ts
+// 업무 규칙 안에 결제사의 말이 섞여 있다
+import { PspClient, PspDeclinedError } from "some-psp-sdk";
+
+export async function placeOrder(body: any) {
+  const total = body.items.reduce((s: number, i: any) => s + i.qty * i.unitPrice, 0);
+  try {
+    const r = await new PspClient(process.env.PSP_KEY!).payments.create({ amount_krw: total, card: body.card });
+    await db.query("INSERT INTO orders ... VALUES ($1, 'PAID', $2)", [r.payment_key, total]);
+  } catch (e) {
+    if (e instanceof PspDeclinedError) { /* ... */ }
+    throw e;
+  }
+}
+```
+
+이 함수에는 "합계를 내고, 결제가 되면 PAID로 남긴다"는 업무 규칙과 "그 결제사는 금액을 `amount_krw`로 받고 거절하면 `PspDeclinedError`를 던진다"는 기술 사실이 한데 엉켜 있다. 결제사를 바꾸면 기술 사실만 바뀌어야 하는데, 둘이 같은 함수에 있으니 업무 규칙까지 다시 손대고 다시 검증해야 한다.
+
+## 안쪽과 바깥쪽 사이에 구멍을 낸다
+
+앨리스터 코번(Alistair Cockburn)이 2005년 무렵 정리한 이 구조는 시스템을 안쪽과 바깥쪽으로만 나눈다. 안쪽은 애플리케이션 코어, 즉 업무 규칙이다. 바깥쪽은 HTTP, CLI, DB, 결제사, 메시지 브로커, 그리고 테스트 코드다. 안쪽은 바깥쪽을 이름으로도 모른다.
+
+둘이 만나는 지점이 포트다. 포트는 코어가 정한 인터페이스이고, 코어의 말로 쓰여 있다. "주문을 저장해 달라", "이 금액을 결제해 달라" 같은 식이다. 어댑터는 포트 한쪽 끝에 꽂혀서 바깥 기술의 말을 코어의 말로 바꾸는 코드다. 같은 포트에 어댑터를 여러 개 만들 수 있고, 실행할 때 하나를 고른다.
+
+육각형이라는 모양에는 의미가 없다. 코번이 그림을 그릴 때 포트 여러 개를 둘레에 붙이기 좋아서 고른 도형이다. 여섯이라는 숫자를 맞출 필요는 없다.
+
+아래 그림에서 다음을 누르면 요청 하나가 들어와서 코어를 거쳐 바깥으로 나가는 길을 따라간다. 마지막 단계는 코어가 바깥을 직접 부르려 할 때다.
+
+<NetworkTopology
+  caption="요청은 어댑터를 지나 포트로 들어오고, 포트를 지나 어댑터로 나간다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "zin", label: "driving", x: 8, y: 20, w: 100, h: 270, tone: "edge" },
+    { id: "zcore", label: "core", x: 118, y: 20, w: 164, h: 270, tone: "private" },
+    { id: "zout", label: "driven", x: 292, y: 20, w: 100, h: 270, tone: "public" },
+  ]}
+  nodes={[
+    { id: "http", label: "HTTP", sub: "adapter", x: 58, y: 75, icon: "client", w: 80 },
+    { id: "cli", label: "CLI", sub: "adapter", x: 58, y: 155, icon: "client", w: 80 },
+    { id: "test", label: "test", sub: "adapter", x: 58, y: 235, icon: "client", w: 80 },
+    { id: "port", label: "PlaceOrder", sub: "port in", x: 200, y: 75, icon: "gateway", w: 104 },
+    { id: "uc", label: "use case", sub: "rules", x: 200, y: 155, icon: "server", w: 96 },
+    { id: "pay", label: "Payment", sub: "port out", x: 200, y: 235, icon: "gateway", w: 96 },
+    { id: "psp", label: "PSP HTTP", sub: "adapter", x: 342, y: 120, icon: "internet", w: 86 },
+    { id: "sql", label: "sqlite", sub: "adapter", x: 342, y: 235, icon: "db", w: 80 },
+  ]}
+  links={[
+    { from: "http", to: "port" },
+    { from: "cli", to: "port" },
+    { from: "test", to: "port" },
+    { from: "port", to: "uc" },
+    { from: "uc", to: "pay" },
+    { from: "pay", to: "psp" },
+    { from: "uc", to: "sql", dashed: true },
+  ]}
+  steps={[
+    { path: ["http", "port"], packet: "POST", title: "HTTP 어댑터가 요청을 명령으로 바꾼다", detail: "JSON 본문을 PlaceOrderCommand로 바꿔 들어오는 포트를 부른다. 상태 코드와 헤더는 이 어댑터만 안다." },
+    { path: ["port", "uc"], packet: "cmd", title: "코어가 업무 규칙을 돈다", detail: "합계를 내고 빈 주문을 거른다. 여기에는 HTTP도 SQL도 없다." },
+    { path: ["uc", "pay", "psp"], packet: "charge", title: "나가는 포트로 결제를 부탁한다", detail: "코어는 PaymentGateway.charge만 안다. 어느 결제사인지, 필드 이름이 무엇인지는 어댑터 안에 있다." },
+    { path: ["cli", "port"], packet: "cmd", title: "CLI도 같은 포트로 들어온다", detail: "관리자가 터미널에서 주문을 넣을 때도 같은 유스케이스를 탄다. 업무 규칙이 두 군데로 복사되지 않는다." },
+    { path: ["test", "port", "uc"], packet: "cmd", title: "테스트도 그냥 어댑터 하나다", detail: "테스트 코드가 명령을 넣고 결과를 본다. 바깥쪽에 서 있기는 HTTP 어댑터와 마찬가지다." },
+    { path: ["uc", "sql"], packet: "import", blocked: true, title: "코어가 DB를 직접 부르면 막는다", detail: "코어가 sqlite 모듈을 import하는 순간 바깥을 알게 된다. 저장은 OrderRepository 포트를 거쳐야 한다." },
+  ]}
+/>
+
+## 들어오는 쪽과 나가는 쪽은 주인이 다르다
+
+포트는 두 종류다. 구분하는 기준은 누가 대화를 시작하느냐다.
+
+들어오는 포트(driving port, primary port)는 바깥이 코어를 부를 때 쓰는 입구다. 유스케이스 인터페이스가 여기에 해당한다. HTTP 컨트롤러, CLI 명령, 메시지 컨슈머, 테스트가 이 포트를 부르는 어댑터다. 이쪽 어댑터는 코어를 직접 import해서 호출한다. 바깥이 안을 아는 건 괜찮다.
+
+나가는 포트(driven port, secondary port)는 코어가 바깥에 일을 시킬 때 쓰는 출구다. 저장소, 결제, 메일 발송, 시계, ID 생성기가 여기에 해당한다. 의존이 뒤집히는 건 이쪽이다. 인터페이스는 코어 안에 있고, 구현은 바깥 어댑터에 있다. 코어가 "나는 이런 저장소가 필요하다"고 선언하면 어댑터가 그 선언에 맞춰 구현한다. 그래서 의존 화살표가 실행 흐름과 반대로 바깥에서 안으로 향한다.
+
+<ConceptDiagram
+  caption="화살표는 모두 코어 쪽을 향한다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "http", label: "HTTP adapter", x: 70, y: 50, w: 120, h: 44 },
+    { id: "port", label: "PlaceOrder", sub: "core 안", x: 200, y: 120, w: 120, h: 46 },
+    { id: "repo", label: "OrderRepository", sub: "core 안", x: 330, y: 50, w: 130, h: 46 },
+    { id: "pg", label: "sqlite adapter", x: 330, y: 200, w: 120, h: 44 },
+    { id: "fake", label: "memory adapter", x: 70, y: 200, w: 124, h: 44 },
+  ]}
+  edges={[
+    { from: "http", to: "port", label: "호출" },
+    { from: "pg", to: "repo", label: "구현" },
+    { from: "fake", to: "repo", label: "구현", dashed: true },
+  ]}
+/>
+
+나가는 포트의 인터페이스를 어디에 두느냐가 이 구조의 전부라고 해도 과장이 아니다. 인터페이스를 DB 어댑터 패키지 쪽에 두면 코어가 그 패키지를 import해야 하니 다시 바깥에 묶인다. 인터페이스는 그걸 필요로 하는 쪽, 즉 코어가 가진다.
+
+## 주문 접수를 포트와 어댑터로 나눠 보기
+
+처음의 `placeOrder`를 이 구조로 나눠 본다. 먼저 코어의 포트다. 모든 이름이 주문과 결제의 말이다.
+
+```ts
+// src/core/ports.ts
+import type { Order, OrderLine } from "./order.ts";
+
+// 들어오는 포트
+export type PlaceOrderCommand = { lines: OrderLine[]; cardToken: string };
+export type PlaceOrderResult =
+  | { ok: true; orderId: string; total: number }
+  | { ok: false; orderId: string; reason: string };
+export interface PlaceOrder {
+  execute(cmd: PlaceOrderCommand): Promise<PlaceOrderResult>;
+}
+
+// 나가는 포트
+export interface OrderRepository {
+  save(order: Order): Promise<void>;
+  findById(id: string): Promise<Order | null>;
+}
+export type ChargeResult = { ok: true; txId: string } | { ok: false; reason: string };
+export interface PaymentGateway {
+  charge(orderId: string, amount: number, cardToken: string): Promise<ChargeResult>;
+}
+export interface IdGenerator {
+  next(): string;
+}
+```
+
+유스케이스는 포트만 받는다. 무엇이 꽂힐지는 모른다.
+
+```ts
+// src/core/place-order.ts
+export function makePlaceOrder(deps: {
+  orders: OrderRepository;
+  payments: PaymentGateway;
+  ids: IdGenerator;
+}): PlaceOrder {
+  return {
+    async execute(cmd) {
+      const id = deps.ids.next();
+      const total = totalOf(cmd.lines);                 // 빈 주문, 0개 이하 수량이면 던진다
+      const charge = await deps.payments.charge(id, total, cmd.cardToken);
+      const order: Order = charge.ok
+        ? { id, lines: cmd.lines, total, status: "PAID", paymentTxId: charge.txId }
+        : { id, lines: cmd.lines, total, status: "PAYMENT_FAILED" };
+      await deps.orders.save(order);
+      return charge.ok ? { ok: true, orderId: id, total } : { ok: false, orderId: id, reason: charge.reason };
+    },
+  };
+}
+```
+
+결제사의 말은 어댑터 하나에 모인다. 금액 필드 이름, 멱등 키 헤더, 상태 코드의 뜻이 여기에만 있다.
+
+```ts
+// src/adapters/http-payment-gateway.ts
+export function httpPaymentGateway(baseUrl: string): PaymentGateway {
+  return {
+    async charge(orderId, amount, cardToken) {
+      const res = await fetch(`${baseUrl}/v1/payments`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": orderId },
+        body: JSON.stringify({ merchant_uid: orderId, amount_krw: amount, card: cardToken }),
+        signal: AbortSignal.timeout(3000),
+      });
+      const body = await res.json();
+      if (res.status === 200) return { ok: true, txId: body.payment_key };
+      if (res.status === 402) return { ok: false, reason: `DECLINED:${body.code}` };
+      throw new Error(`PAYMENT_UPSTREAM_${res.status}`);
+    },
+  };
+}
+```
+
+포트 시그니처 한 줄에도 결정이 여럿 들어 있다. 아래 조각을 눌러 보면 각 부분이 왜 그 모양인지 나온다.
+
+<UrlAnatomy
+  caption="PaymentGateway.charge 한 줄 뜯어보기"
+  base="charge"
+  separator="("
+  joiner=", "
+  params={[
+    { key: "orderId", display: "orderId", title: "주문 ID를 넘긴다", description: "어댑터는 이 값을 결제사의 멱등 키로 쓴다. 같은 주문을 두 번 결제하지 않게 하는 장치를 코어가 몰라도 된다." },
+    { key: "amount", display: "amount", title: "원 단위 정수", description: "코어의 금액 단위를 정해 둔다. 결제사가 amount_krw든 cents든, 바꾸는 일은 어댑터 몫이다." },
+    { key: "cardToken", display: "cardToken): ", title: "카드 번호가 아니라 토큰", description: "코어는 카드 번호를 만지지 않는다. 결제창이 준 토큰만 지나가게 해서 민감 정보가 업무 코드로 들어오지 않는다." },
+    { key: "result", display: "Promise<ChargeResult>", title: "거절은 값, 장애는 예외", description: "카드 거절은 업무상 흔한 결과라 ok:false 값으로 돌려준다. 결제사가 죽은 건 업무 결과가 아니라 예외로 올린다.", code: "{ ok: true, txId } | { ok: false, reason }" },
+  ]}
+/>
+
+## 어댑터는 조립하는 곳에서만 고른다
+
+어떤 어댑터를 꽂을지는 프로그램 시작점 한 곳에서 정한다. 이 자리를 조립하는 곳(composition root)이라고 부른다. 의존성 주입 컨테이너가 없어도 함수 인자로 넘기면 충분하다.
+
+```ts
+// src/main.ts
+const local = process.env.APP_ENV === "local";
+let n = 0;
+const placeOrder = makePlaceOrder({
+  orders: local ? memoryOrderRepository() : sqliteOrderRepository("orders.db"),
+  payments: local ? fakePaymentGateway(["tok_declined"]).gateway : httpPaymentGateway(process.env.PG_URL!),
+  ids: { next: () => `ord_${String(++n).padStart(4, "0")}` },
+});
+httpServer(placeOrder).listen(Number(process.env.PORT ?? 3000));
+```
+
+같은 코어를 두 가지로 조립해 띄웠다. 3000번은 SQLite와 결제사 흉내 서버(4000번)에, 3001번은 메모리 저장소와 가짜 결제에 꽂았다.
+
+```bash
+# 진짜에 가까운 조립
+PG_URL=http://127.0.0.1:4000 PORT=3000 node --experimental-strip-types src/main.ts
+# 로컬 개발용 조립
+APP_ENV=local PORT=3001 node --experimental-strip-types src/main.ts
+
+# 두 곳에 같은 요청을 보낸다
+curl -s -w ' %{http_code}\n' -X POST localhost:3000/orders \
+  -d '{"items":[{"sku":"MUG","qty":2,"unitPrice":12000}],"card":"tok_ok"}'
+```
+
+```text
+orders api on :3000 (sqlite+http)
+orders api on :3001 (memory+fake)
+```
+
+```text
+# :3000 (sqlite + 결제사 HTTP)
+{"ok":true,"orderId":"ord_0001","total":24000} 201
+{"ok":false,"orderId":"ord_0002","reason":"DECLINED:INSUFFICIENT_FUNDS"} 402
+{"error":"EMPTY_ORDER"} 400
+# :3001 (memory + fake)
+{"ok":true,"orderId":"ord_0001","total":24000} 201
+{"ok":false,"orderId":"ord_0002","reason":"DECLINED:FAKE"} 402
+{"error":"EMPTY_ORDER"} 400
+```
+
+응답 모양과 상태 코드가 같다. 다른 건 거절 사유 문자열뿐인데, 그건 어댑터가 만든 값이라 다른 게 맞다. 결제사 흉내 서버의 로그에는 어댑터가 바꿔 보낸 필드가 찍혔다. 코어의 `orderId`가 `idempotency-key` 헤더로, `amount`가 `amount_krw`로 바뀌어 나갔다.
+
+```text
+[psp] POST /v1/payments idem=ord_0001 amount_krw=24000
+[psp] POST /v1/payments idem=ord_0002 amount_krw=12000
+```
+
+결제사를 바꾸는 일은 이제 `PaymentGateway`를 구현하는 파일 하나를 새로 쓰고 조립하는 곳의 한 줄을 고치는 일이다. 코어 코드는 diff에 나오지 않는다.
+
+## 가짜 어댑터로 도는 업무 규칙 테스트
+
+테스트는 바깥에 서 있는 또 하나의 어댑터다. 가짜 결제 어댑터는 정해 둔 토큰이면 거절하고, 받은 호출을 배열에 남긴다. 목(mock) 라이브러리 없이 객체 하나로 된다.
+
+```ts
+// test/place-order.test.ts
+function setup(decline: string[] = []) {
+  const orders = memoryOrderRepository();
+  const pay = fakePaymentGateway(decline);
+  let n = 0;
+  const placeOrder = makePlaceOrder({ orders, payments: pay.gateway, ids: { next: () => `o${++n}` } });
+  return { orders, pay, placeOrder };
+}
+
+test("빈 주문이면 결제를 부르지 않는다", async () => {
+  const { pay, placeOrder } = setup();
+  await assert.rejects(placeOrder.execute({ lines: [], cardToken: "t" }), /EMPTY_ORDER/);
+  assert.equal(pay.calls.length, 0);
+});
+```
+
+아래 그림은 첫 번째 테스트 하나가 지나가는 순서다. 네트워크도 파일도 없이 함수 호출만 오간다.
+
+<SequenceDiagram
+  caption="가짜 어댑터를 꽂은 테스트 한 번"
+  actors={[
+    { id: "t", label: "test" },
+    { id: "uc", label: "PlaceOrder" },
+    { id: "pay", label: "fake pay" },
+    { id: "repo", label: "memory repo" },
+  ]}
+  steps={[
+    { from: "t", to: "uc", label: "execute(cmd)", title: "테스트가 명령을 넣는다", detail: "머그 두 개, 개당 12000원. 테스트는 HTTP 어댑터와 같은 자리에서 들어오는 포트를 부른다." },
+    { from: "uc", to: "uc", label: "totalOf", title: "코어가 합계를 낸다", detail: "24000원. 이 계산은 어떤 어댑터가 꽂혀도 똑같다." },
+    { from: "uc", to: "pay", label: "charge(o1, 24000)", title: "나가는 포트를 부른다", detail: "가짜는 호출을 calls 배열에 남기고 성공을 돌려준다.", payload: "calls = [{ orderId: \"o1\", amount: 24000 }]" },
+    { from: "uc", to: "repo", label: "save(PAID)", title: "주문을 저장한다", detail: "메모리 저장소는 Map에 넣는다." },
+    { from: "uc", to: "t", label: "{ ok: true }", title: "테스트가 결과와 기록을 본다", detail: "결과 값, 저장된 상태, 결제 호출 기록 세 가지를 확인한다." },
+  ]}
+/>
+
+```bash
+node --experimental-strip-types --test --test-reporter=spec test/place-order.test.ts
+```
+
+```text
+✔ 결제가 되면 PAID로 저장한다 (7.940863ms)
+✔ 거절되면 PAYMENT_FAILED로 남긴다 (0.344073ms)
+✔ 빈 주문이면 결제를 부르지 않는다 (1.271214ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 301.171477
+```
+
+테스트 하나가 수 밀리초다. 전체 300ms는 대부분 Node가 뜨는 시간이다. 결제사 샌드박스가 느린 날에도 이 테스트는 그대로 빠르다. 그 대신 결제사와 진짜로 맞물리는지는 이 테스트가 보장하지 않는다. 그 몫은 다음 절의 계약 테스트와, 소수의 통합 테스트가 맡는다.
+
+## 두 구현에 같은 계약 테스트를 돌린다
+
+가짜 어댑터에는 함정이 있다. 가짜가 진짜와 다르게 동작할 수 있다. 그러면 테스트는 통과하는데 운영에서 깨진다. 막는 방법은 포트의 약속을 테스트 묶음으로 써 두고, 모든 구현에 똑같이 돌리는 것이다. 어댑터 패턴 쪽에서 본 계약 테스트 이야기는 [어댑터 패턴 글](/posts/pattern-adapter)에 있고, 여기서는 저장소 포트에 실제로 적용해 본다.
+
+```ts
+// test/order-repository.contract.test.ts
+function orderRepositoryContract(name: string, make: () => OrderRepository) {
+  describe(`OrderRepository 계약: ${name}`, () => {
+    test("저장한 주문을 그대로 읽는다", async () => { /* ... */ });
+    test("없는 id는 null", async () => { /* ... */ });
+    test("저장한 뒤 원본 객체를 고쳐도 저장된 값은 그대로다", async () => {
+      const repo = make();
+      const o = sample();
+      await repo.save(o);
+      o.status = "PAYMENT_FAILED";
+      assert.equal((await repo.findById("o1"))?.status, "PAID");
+    });
+  });
+}
+
+orderRepositoryContract("memory", memoryOrderRepository);
+orderRepositoryContract("sqlite", () => sqliteOrderRepository());
+```
+
+처음 짠 메모리 저장소는 받은 객체를 Map에 그대로 넣었다. 돌려 보면 SQLite는 통과하고 메모리만 실패한다.
+
+```text
+▶ OrderRepository 계약: memory
+  ✔ 저장한 주문을 그대로 읽는다 (2.029323ms)
+  ✔ 없는 id는 null (0.222822ms)
+  ✖ 저장한 뒤 원본 객체를 고쳐도 저장된 값은 그대로다 (1.177876ms)
+✖ OrderRepository 계약: memory (4.945389ms)
+▶ OrderRepository 계약: sqlite
+  ✔ 저장한 주문을 그대로 읽는다 (4.885196ms)
+  ✔ 없는 id는 null (0.580174ms)
+  ✔ 저장한 뒤 원본 객체를 고쳐도 저장된 값은 그대로다 (0.364854ms)
+✔ OrderRepository 계약: sqlite (6.265245ms)
+```
+
+```text
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'PAYMENT_FAILED'
+  - 'PAID'
+```
+
+DB는 값을 복사해서 저장하니 원본을 고쳐도 영향이 없다. 메모리 저장소는 같은 객체를 공유하니 코어가 저장 뒤에 객체를 고치면 저장된 값도 바뀐다. 이 차이를 모르고 메모리 저장소로만 테스트하면 "save를 다시 안 불렀는데 상태가 바뀌어 있는" 코드가 테스트를 통과하고, 운영에서는 변경이 사라진다. 저장할 때와 꺼낼 때 `structuredClone`으로 복사하게 고치면 여섯 개가 모두 통과한다. 복사가 무엇을 지키는지는 [얕은 복사와 깊은 복사 글](/posts/js-shallow-deep-copy)에 따로 있다.
+
+<AlgoTrace
+  caption="같은 계약을 두 구현에 돌려 본 결과"
+  memoryLabel="결과"
+  cells={["그대로 읽기", "없으면 null", "원본 고쳐도 유지"]}
+  steps={[
+    { pointer: 0, memory: ["memory ✔", "sqlite ✔"], caption: "저장한 것을 읽는다. 둘 다 같은 값을 돌려준다." },
+    { pointer: 1, found: [0], memory: ["memory ✔", "sqlite ✔"], caption: "없는 id를 묻는다. 둘 다 null이다." },
+    { pointer: 2, found: [0, 1], memory: ["memory ✖", "sqlite ✔"], caption: "저장 뒤 원본을 고친다. 메모리 저장소는 같은 객체를 쥐고 있어서 값이 따라 바뀐다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["memory ✔", "sqlite ✔"], caption: "넣을 때와 꺼낼 때 복사하게 고친다. 이제 가짜가 진짜와 같은 약속을 지킨다." },
+  ]}
+/>
+
+## 바깥의 실패를 포트의 말로 바꾼다
+
+결제사 흉내 서버를 내린 채 요청을 보내 봤다.
+
+```text
+{"error":"fetch failed"} 502
+```
+
+`fetch failed`는 Node의 `fetch`가 연결에 실패할 때 던지는 `TypeError`의 메시지다. 이 문자열이 HTTP 어댑터까지 그대로 올라와 응답에 찍혔다. 어댑터가 결제사의 성공과 거절은 번역했지만 전송 실패는 번역하지 않은 것이다. 이대로 두면 코어나 HTTP 어댑터가 "fetch failed라는 메시지면 재시도" 같은 판단을 하게 되고, 결제 어댑터를 gRPC로 바꾸는 순간 그 판단이 조용히 깨진다.
+
+포트에 실패의 종류도 정해 둔다. 어떤 결제사를 꽂든 "결제를 지금 못 한다"는 에러 하나로 오게 한다.
+
+```ts
+// src/core/ports.ts
+export class PaymentUnavailable extends Error {
+  constructor() { super("PAYMENT_UNAVAILABLE"); }
+}
+
+// src/adapters/http-payment-gateway.ts
+let res: Response;
+try {
+  res = await fetch(`${baseUrl}/v1/payments`, { /* ... */ signal: AbortSignal.timeout(3000) });
+} catch {
+  throw new PaymentUnavailable();   // 연결 실패, 타임아웃을 포트의 말로 바꾼다
+}
+// ...
+if (res.status === 200) return { ok: true, txId: body.payment_key };
+if (res.status === 402) return { ok: false, reason: `DECLINED:${body.code}` };
+throw new PaymentUnavailable();
+```
+
+HTTP 어댑터는 이 에러를 503으로 바꾼다. 같은 조건에서 다시 보내면 이렇게 나온다.
+
+```text
+{"error":"PAYMENT_UNAVAILABLE"} 503
+```
+
+<SequenceDiagram
+  caption="전송 실패가 각 경계에서 번역되는 순서"
+  actors={[
+    { id: "web", label: "HTTP adapter" },
+    { id: "uc", label: "core" },
+    { id: "ad", label: "PSP adapter" },
+    { id: "psp", label: "PSP" },
+  ]}
+  steps={[
+    { from: "web", to: "uc", label: "execute", title: "요청이 들어온다", detail: "HTTP 어댑터가 명령을 만들어 코어를 부른다." },
+    { from: "uc", to: "ad", label: "charge", title: "코어가 결제를 부탁한다", detail: "포트 메서드 하나를 부를 뿐이다." },
+    { from: "ad", to: "psp", label: "POST /v1/payments", title: "어댑터가 결제사를 부른다", detail: "결제사가 내려가 있어 연결이 거부된다. fetch가 TypeError를 던진다." },
+    { from: "ad", to: "uc", label: "PaymentUnavailable", title: "어댑터가 포트의 에러로 바꾼다", detail: "fetch failed라는 문자열은 어댑터 밖으로 나가지 않는다." },
+    { from: "uc", to: "web", label: "throw", title: "코어는 손대지 않고 올린다", detail: "지금 결제를 못 한다는 사실은 업무 규칙이 바꿀 일이 아니다." },
+    { from: "web", to: "web", label: "503", title: "HTTP 어댑터가 상태 코드로 바꾼다", detail: "PAYMENT_UNAVAILABLE이면 503. 클라이언트는 잠시 뒤 다시 시도할 수 있다는 걸 안다." },
+  ]}
+/>
+
+나머지 재시도, 타임아웃, 차단기 같은 장치도 결제 어댑터 안이나 그 바로 바깥에 둔다. 업무 규칙이 결제사의 네트워크 사정을 알 이유가 없다. 어떻게 걸지는 [장애가 번지지 않게 막는 패턴 글](/posts/resilience-patterns)에 있다.
+
+## 트랜잭션은 어느 쪽 일인가
+
+여기서 자주 막힌다. "주문 저장과 재고 차감을 한 트랜잭션으로" 하고 싶은데, 코어는 DB를 모른다. 그렇다고 유스케이스가 `pool.connect()`를 부르면 다시 DB에 묶인다.
+
+흔히 쓰는 답은 트랜잭션 자체를 나가는 포트로 두는 것이다. 코어는 "이 일들을 한 단위로 해 달라"고만 말하고, 어댑터가 그 안에서 BEGIN과 COMMIT을 한다.
+
+```ts
+// 코어: 한 단위로 묶일 저장소들을 받는 포트
+export interface UnitOfWork {
+  run<T>(work: (repos: { orders: OrderRepository; stock: StockRepository }) => Promise<T>): Promise<T>;
+}
+
+// 유스케이스는 묶음의 범위만 정한다
+await deps.uow.run(async ({ orders, stock }) => {
+  await stock.decrease(cmd.lines);
+  await orders.save(order);
+});
+
+// PostgreSQL 어댑터: 같은 클라이언트로 저장소를 만들어 넘긴다
+export function pgUnitOfWork(pool: Pool): UnitOfWork {
+  return {
+    async run(work) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await work({ orders: pgOrders(client), stock: pgStock(client) });
+        await client.query("COMMIT");
+        return result;
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+```
+
+메모리 어댑터는 `work`를 그냥 부르고, 실패하면 복사해 둔 상태로 되돌리면 된다. 주의할 점이 하나 있다. 결제 같은 외부 호출을 `run` 안에 넣으면 결제사가 느린 동안 DB 트랜잭션과 커넥션이 잡혀 있는다. 외부 호출은 트랜잭션 밖에서 하고, 결과를 저장하는 일만 안에 넣는다. 위 예제의 유스케이스가 결제를 먼저 하고 저장을 나중에 하는 것도 그래서다. 트랜잭션을 어느 층이 여는지에 대한 기본은 [레이어드 아키텍처 글](/posts/layered-architecture)에서 다뤘다.
+
+## 포트가 새는 모습들
+
+구조를 갖춰도 포트로 바깥이 새어 들어오면 효과가 없다. 실제로 자주 보이는 모습은 이렇다.
+
+포트 이름이나 타입이 기술을 말한다. `saveToPostgres`, `findByQuery(sql: string)`, `Promise<QueryResult>`를 돌려주는 저장소는 이름만 포트다. 메서드 이름은 업무의 말(`findPendingOlderThan`)로 짓고, 돌려주는 값은 코어의 타입으로 한다.
+
+ORM 엔티티를 그대로 코어 모델로 쓴다. 데코레이터가 붙은 클래스는 ORM 패키지를 import하고, 지연 로딩 프록시 때문에 코어 안에서 쿼리가 몰래 나간다. 작은 서비스라면 감수할 수도 있지만, 그 순간부터 코어 테스트가 ORM 설정을 필요로 한다. 도메인 모델과 저장 모델을 나누고 어댑터에서 바꾼다. 위의 SQLite 어댑터가 `lines_json` 컬럼을 `lines` 배열로 바꾸는 부분이 그 일이다.
+
+어댑터에 업무 규칙이 들어간다. 컨트롤러에서 "VIP면 배송비 무료"를 계산하면 CLI로 들어온 주문은 배송비를 낸다. 들어오는 어댑터는 모양만 바꾸고, 판단은 코어에서 한다.
+
+클래스마다 인터페이스를 만든다. 포트는 바깥 경계에만 필요하다. 코어 안의 계산 함수까지 인터페이스로 감싸면 파일만 늘고 얻는 게 없다. 바꿔 끼울 일이 있거나 테스트에서 떼어 내야 하는 곳만 포트로 둔다.
+
+시간과 무작위를 코어에서 직접 쓴다. `Date.now()`, `crypto.randomUUID()`도 바깥 세계다. 위 예제가 ID 생성기를 포트로 받은 이유다. 그래야 "주문 ID가 o1"이라고 테스트에서 단정할 수 있다.
+
+## 프런트엔드에도 포트가 있다
+
+React 앱에도 같은 경계가 있다. 컴포넌트와 훅이 `fetch`나 axios를 직접 부르면, 화면 로직을 테스트할 때마다 네트워크를 흉내 내야 한다. 백엔드 응답의 필드 이름이 바뀌면 컴포넌트 여러 개를 고쳐야 한다.
+
+```ts
+// 앱이 바라는 모양: 포트
+export interface OrderApi {
+  place(lines: OrderLine[]): Promise<{ orderId: string; total: number }>;
+}
+
+// 실제 어댑터: 서버 응답의 모양을 앱의 모양으로 바꾼다
+export const httpOrderApi: OrderApi = {
+  async place(lines) {
+    const res = await fetch("/api/orders", { method: "POST", body: JSON.stringify({ items: lines }) });
+    if (!res.ok) throw new Error(`ORDER_${res.status}`);
+    const body = await res.json();
+    return { orderId: body.order_id, total: body.total_amount };
+  },
+};
+
+// 조립: Provider로 꽂고, 테스트에서는 가짜를 꽂는다
+const OrderApiContext = createContext<OrderApi>(httpOrderApi);
+export const useOrderApi = () => useContext(OrderApiContext);
+```
+
+테스트나 스토리북에서는 Provider에 가짜 객체를 넣는다. 네트워크 계층에서 요청을 가로채는 MSW 같은 도구도 결국 같은 자리에 가짜 어댑터를 꽂는 방법이고, 이쪽은 `fetch` 호출까지 진짜로 지나가게 한다는 차이가 있다. 서버 데이터를 캐시하는 라이브러리를 쓰면 `queryFn`이 이 포트를 부르게 하면 된다. 캐시 쪽 이야기는 [클라이언트 데이터 캐시 글](/posts/client-data-cache)에 있다.
+
+## 이 구조가 값을 하는 곳, 아닌 곳
+
+비용은 분명하다. 파일과 인터페이스가 늘고, 처음 보는 사람은 호출을 따라가려면 조립하는 곳을 먼저 찾아야 한다. 저장 모델과 도메인 모델을 나누면 필드 하나를 추가할 때 고칠 곳이 두세 군데 늘어난다.
+
+값을 하는 곳은 바깥과 맞닿는 면이 많고 자주 바뀌는 시스템이다. 결제사, 배송사, 알림 채널처럼 갈아 끼울 대상이 있거나, 같은 업무 규칙을 HTTP와 메시지 컨슈머와 배치가 함께 써야 하거나, 업무 규칙 자체가 복잡해서 빠른 테스트가 많이 필요한 경우다.
+
+값을 못 하는 곳은 업무 규칙이 거의 없는 CRUD다. 요청을 받아 검증하고 테이블에 넣고 돌려주는 게 전부라면, 포트와 어댑터는 같은 필드를 세 번 옮겨 적는 일이 된다. 이럴 때는 [레이어드 구조](/posts/layered-architecture)로 충분하고, 외부 시스템 하나만 포트로 빼는 식으로 부분만 써도 된다.
+
+헥사고날은 결국 "업무 규칙이 무엇을 모르게 할 것인가"를 정하는 구조다. 나가는 포트의 인터페이스를 코어가 가지고, 바깥의 말은 어댑터에서 번역하고, 어댑터는 시작점 한 곳에서 꽂는다. 이 셋이 지켜지면 결제사를 바꾸는 일은 파일 하나를 추가하는 일이 된다.
+
+아래에서 직접 코어를 짜 볼 수 있다. 가짜 어댑터는 이미 꽂혀 있고, 포트만 써서 주문 접수 규칙을 완성하면 된다.
+
+<CodePlayground
+  caption="포트만 보고 주문 접수 규칙 짜기"
+  functionName="run"
+  initialCode={`// ports.inventory.reserve(sku, qty) -> true/false
+// ports.inventory.release(sku, qty)
+// ports.payments.charge(amount) -> { ok: true } 또는 { ok: false }
+// ports.orders.save({ status, total })
+//
+// 규칙
+// 1. 줄이 없으면 아무 포트도 부르지 않고 { ok: false, reason: "EMPTY" }
+// 2. 줄마다 재고를 잡는다. 하나라도 실패하면 이미 잡은 것을 잡은 반대 순서로 풀고
+//    { ok: false, reason: "OUT_OF_STOCK" } (결제, 저장 없음)
+// 3. 합계를 결제한다. 거절되면 잡은 재고를 반대 순서로 풀고 PAYMENT_FAILED로 저장,
+//    { ok: false, reason: "DECLINED" }
+// 4. 성공하면 PAID로 저장하고 { ok: true, total }
+function placeOrder(ports, lines) {
+  return { ok: false, reason: "TODO" };
+}
+
+// 바꾸지 않는 부분: 시나리오(데이터)로 가짜 어댑터를 만들어 꽂는다
+function run(scenario) {
+  const log = [];
+  const ports = {
+    inventory: {
+      reserve(sku, qty) { log.push("reserve " + sku + " " + qty); return (scenario.stock[sku] || 0) >= qty; },
+      release(sku, qty) { log.push("release " + sku + " " + qty); },
+    },
+    payments: {
+      charge(amount) { log.push("charge " + amount); return scenario.declined ? { ok: false } : { ok: true }; },
+    },
+    orders: { save(order) { log.push("save " + order.status + " " + order.total); } },
+  };
+  return { result: placeOrder(ports, scenario.lines), log };
+}`}
+  solution={`function placeOrder(ports, lines) {
+  if (lines.length === 0) return { ok: false, reason: "EMPTY" };
+  const reserved = [];
+  for (const l of lines) {
+    if (!ports.inventory.reserve(l.sku, l.qty)) {
+      for (const r of reserved.reverse()) ports.inventory.release(r.sku, r.qty);
+      return { ok: false, reason: "OUT_OF_STOCK" };
+    }
+    reserved.push(l);
+  }
+  const total = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
+  const charge = ports.payments.charge(total);
+  if (!charge.ok) {
+    for (const r of reserved.reverse()) ports.inventory.release(r.sku, r.qty);
+    ports.orders.save({ status: "PAYMENT_FAILED", total });
+    return { ok: false, reason: "DECLINED" };
+  }
+  ports.orders.save({ status: "PAID", total });
+  return { ok: true, total };
+}
+
+function run(scenario) {
+  const log = [];
+  const ports = {
+    inventory: {
+      reserve(sku, qty) { log.push("reserve " + sku + " " + qty); return (scenario.stock[sku] || 0) >= qty; },
+      release(sku, qty) { log.push("release " + sku + " " + qty); },
+    },
+    payments: {
+      charge(amount) { log.push("charge " + amount); return scenario.declined ? { ok: false } : { ok: true }; },
+    },
+    orders: { save(order) { log.push("save " + order.status + " " + order.total); } },
+  };
+  return { result: placeOrder(ports, scenario.lines), log };
+}`}
+  tests={[
+    {
+      label: "정상 주문",
+      args: [{ stock: { MUG: 5 }, declined: false, lines: [{ sku: "MUG", qty: 2, unitPrice: 12000 }] }],
+      expected: { result: { ok: true, total: 24000 }, log: ["reserve MUG 2", "charge 24000", "save PAID 24000"] },
+    },
+    {
+      label: "두 번째 줄 재고 부족",
+      args: [{ stock: { MUG: 5, PEN: 0 }, declined: false, lines: [{ sku: "MUG", qty: 2, unitPrice: 12000 }, { sku: "PEN", qty: 1, unitPrice: 1500 }] }],
+      expected: { result: { ok: false, reason: "OUT_OF_STOCK" }, log: ["reserve MUG 2", "reserve PEN 1", "release MUG 2"] },
+    },
+    {
+      label: "결제 거절",
+      args: [{ stock: { MUG: 5, PEN: 9 }, declined: true, lines: [{ sku: "MUG", qty: 1, unitPrice: 12000 }, { sku: "PEN", qty: 3, unitPrice: 1500 }] }],
+      expected: { result: { ok: false, reason: "DECLINED" }, log: ["reserve MUG 1", "reserve PEN 3", "charge 16500", "release PEN 3", "release MUG 1", "save PAYMENT_FAILED 16500"] },
+    },
+    {
+      label: "빈 주문",
+      args: [{ stock: {}, declined: false, lines: [] }],
+      expected: { result: { ok: false, reason: "EMPTY" }, log: [] },
+    },
+  ]}
+/>
+
+## 면접에서 나올 만한 질문
+
+### 헥사고날 아키텍처를 한 문장으로 설명해 주세요.
+
+업무 규칙을 가운데 두고, 바깥과는 코어가 정의한 인터페이스인 포트로만 만나게 하는 구조다. HTTP, DB, 외부 API, 테스트는 모두 포트에 꽂히는 어댑터이고, 어떤 어댑터를 쓸지는 시작점에서 고른다. 그래서 바깥 기술을 바꿔도 코어는 바뀌지 않는다.
+
+### 들어오는 포트와 나가는 포트는 어떻게 다른가요?
+
+누가 대화를 시작하느냐로 나뉜다. 들어오는 포트는 바깥이 코어를 부르는 유스케이스 인터페이스이고, 컨트롤러나 컨슈머가 직접 호출한다. 나가는 포트는 코어가 바깥에 일을 시키는 인터페이스이고, 코어 안에 선언되며 바깥 어댑터가 구현한다. 의존이 뒤집히는 건 나가는 쪽이다.
+
+### 레이어드 아키텍처와 무엇이 다른가요?
+
+레이어드는 위에서 아래로 의존하니 업무 계층이 퍼시스턴스 계층을 안다. 헥사고날은 위아래 대신 안팎만 있고, 퍼시스턴스도 HTTP와 똑같이 바깥 어댑터라서 업무 규칙이 DB를 모른다. 레이어드에 의존성 역전을 적용해 끝까지 밀면 헥사고날에 가까워진다.
+
+### 가짜 어댑터로 테스트하면 실제 DB 버그는 어떻게 잡나요?
+
+포트의 약속을 계약 테스트로 써서 가짜와 진짜 구현에 똑같이 돌린다. 그러면 가짜가 진짜와 다르게 동작하는 순간 테스트가 실패한다. 메모리 저장소가 객체를 복사하지 않아 저장 뒤 변경이 따라 바뀌는 문제가 대표적이다. 그 위에 진짜 DB로 도는 통합 테스트를 소수만 둔다.
+
+### 트랜잭션은 어디서 시작하나요? 코어가 DB를 모르는데요.
+
+트랜잭션을 유닛 오브 워크 같은 나가는 포트로 둔다. 유스케이스는 어디부터 어디까지 한 단위인지만 정하고, 어댑터가 BEGIN과 COMMIT, 같은 커넥션 공유를 맡는다. 외부 결제 같은 느린 호출은 그 단위 밖에서 해서 커넥션을 오래 잡지 않게 한다.
+
+### 외부 API가 타임아웃 나면 그 에러는 어디서 처리하나요?
+
+어댑터가 전송 계층의 에러를 포트가 약속한 에러로 번역한다. 예를 들어 `fetch failed`나 타임아웃을 `PaymentUnavailable` 하나로 바꾸고, 들어오는 HTTP 어댑터가 그걸 503으로 바꾼다. 번역하지 않으면 바깥 라이브러리의 메시지에 기대는 판단이 코어나 컨트롤러에 생기고, 어댑터를 바꿀 때 조용히 깨진다.
+
+### 모든 서비스에 이 구조를 쓰는 게 좋은가요?
+
+아니다. 업무 규칙이 적은 CRUD에서는 같은 데이터를 여러 모델로 옮겨 적는 비용만 남는다. 갈아 끼울 외부 시스템이 많거나, 같은 규칙을 여러 입구가 쓰거나, 규칙이 복잡해 빠른 테스트가 많이 필요할 때 값을 한다. 필요한 경계만 포트로 빼는 부분 적용도 충분히 쓸 만하다.
+
+### 클래스마다 인터페이스를 만들어야 하나요?
+
+필요 없다. 포트는 코어와 바깥의 경계에만 둔다. 코어 안의 계산 함수나 값 객체까지 인터페이스로 감싸면 파일과 간접 호출만 늘어난다. 바꿔 끼울 일이 있거나 테스트에서 떼어 내야 하는 바깥 의존, 그리고 시간과 무작위 같은 숨은 바깥 세계만 포트로 받는다.

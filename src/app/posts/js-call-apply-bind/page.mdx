@@ -1,0 +1,457 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-call-apply-bind");
+
+모달을 열 때 `keydown` 리스너를 달고, 닫을 때 뗐다. 그런데 모달을 두 번 열었다 닫은 뒤 Escape를 한 번 누르니 닫기 처리가 두 번 돈다. 분명히 `removeEventListener`를 불렀다.
+
+```js
+class Modal {
+  constructor(el) { this.el = el; this.closed = 0; }
+  onKey(e) { if (e.key === "Escape") this.closed += 1; }
+  open() { document.addEventListener("keydown", this.onKey.bind(this)); }
+  close() { document.removeEventListener("keydown", this.onKey.bind(this)); }
+}
+const m = new Modal(document.body);
+m.open(); m.close();
+m.open(); m.close();
+document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+console.log("bind 두 번: Escape 한 번에 closed =", m.closed);
+```
+
+크로미움에서 돌린 결과다.
+
+```text
+bind 두 번: Escape 한 번에 closed = 2
+```
+
+모달을 닫은 상태인데도 리스너 두 개가 살아 있다. `bind`는 부를 때마다 새 함수를 만든다. `open`에서 단 함수와 `close`에서 떼려는 함수는 생김새만 같은 다른 객체라서, `removeEventListener`는 지울 대상을 찾지 못하고 조용히 아무 일도 안 한다.
+
+`this`는 호출 방식으로 정해진다. 그 규칙은 [this 바인딩](/posts/js-this-binding)에서 봤다. 이 글은 호출하는 쪽이 `this`를 직접 정하는 세 메서드 `call`, `apply`, `bind`가 정확히 무엇을 하는지, 그리고 그 차이 때문에 생기는 버그를 따라간다. 출력은 Node.js 22와 크로미움(React 19.3)에서 실제로 돌린 결과다.
+
+## 세 메서드는 같은 일을 다른 때에 한다
+
+셋 다 "이 함수를 이 `this`로 부른다"는 일을 한다. 차이는 인자를 넘기는 모양과, 지금 부르느냐 나중에 부르느냐다.
+
+```js
+function greet(greeting, mark) {
+  return `${greeting}, ${this.name}${mark}`;
+}
+const kim = { name: "kim" };
+console.log(greet.call(kim, "안녕", "!"));
+console.log(greet.apply(kim, ["안녕", "?"]));
+const args = ["hi", "."];
+console.log(greet.call(kim, ...args));
+console.log(Reflect.apply(greet, kim, args));
+const hiKim = greet.bind(kim, "hello");
+console.log(hiKim("~"));
+```
+
+```text
+안녕, kim!
+안녕, kim?
+hi, kim.
+hi, kim.
+hello, kim~
+```
+
+`call`은 인자를 쉼표로 하나씩, `apply`는 배열(정확히는 `length`가 있는 유사 배열) 하나로 받는다. 둘 다 그 자리에서 바로 부르고 결과를 돌려준다. `bind`는 부르지 않는다. `this`와 앞쪽 인자를 붙여 둔 새 함수를 돌려주고, 실제 호출은 나중에 그 함수를 부를 때 일어난다. `Reflect.apply`는 `apply`와 같은 일을 하는 ES2015 함수 버전이다.
+
+호출식 하나를 조각으로 나눠 보면 각 자리의 역할이 보인다.
+
+<UrlAnatomy
+  caption="greet.call(kim, 인자들) 한 줄을 나누면"
+  separator=""
+  joiner=""
+  params={[
+    { key: "fn", display: "greet", title: "부를 함수", description: "call은 Function.prototype에 있는 메서드다. 그래서 모든 함수가 call, apply, bind를 갖는다.", required: true },
+    { key: "m", display: ".call(", title: "메서드 선택", description: "call은 지금 바로 부른다. apply도 바로 부르고, bind는 새 함수만 돌려준다." },
+    { key: "this", display: "kim", title: "this로 쓸 값", description: "첫 인자가 함수 안의 this가 된다. 엄격 모드면 그대로, 느슨한 모드면 null·undefined는 globalThis로, 원시값은 래퍼 객체로 바뀐다.", required: true },
+    { key: "args", display: ", \"안녕\", \"!\")", title: "나머지 인자", description: "call은 쉼표로 하나씩, apply는 배열 하나로 받는다. 함수 안에서는 greeting과 mark로 들어간다." },
+  ]}
+/>
+
+## 배열을 펼쳐 넘기던 apply
+
+`apply`가 많이 쓰이던 이유는 배열을 인자 목록으로 펼칠 방법이 없어서였다. 대표적인 예가 `Math.max.apply(null, nums)`다. `Math.max`는 `this`를 쓰지 않으니 첫 인자는 아무거나 넣었다. ES2015의 전개 문법(`Math.max(...nums)`)이 생긴 뒤로는 이 용도로 `apply`를 쓸 일이 거의 없다.
+
+다만 둘 다 같은 한계가 있다. 배열의 원소 수만큼 인자를 스택에 올리기 때문에 배열이 크면 터진다. Node.js 22 기본 설정에서 크기를 바꿔 가며 돌렸다.
+
+```js
+for (const n of [100_000, 120_000, 125_000, 130_000, 1_000_000]) {
+  const nums = Array.from({ length: n }, (_, i) => i);
+  let r1, r2;
+  try { r1 = Math.max.apply(null, nums); } catch (e) { r1 = e.constructor.name + ": " + e.message; }
+  try { r2 = Math.max(...nums); } catch (e) { r2 = e.constructor.name + ": " + e.message; }
+  console.log(n, "| apply:", r1, "| spread:", r2);
+}
+const nums = Array.from({ length: 1_000_000 }, (_, i) => i);
+console.log("reduce:", nums.reduce((a, b) => (a > b ? a : b), -Infinity));
+```
+
+```text
+100000 | apply: 99999 | spread: 99999
+120000 | apply: 119999 | spread: 119999
+125000 | apply: 124999 | spread: 124999
+130000 | apply: RangeError: Maximum call stack size exceeded | spread: RangeError: Maximum call stack size exceeded
+1000000 | apply: RangeError: Maximum call stack size exceeded | spread: RangeError: Maximum call stack size exceeded
+reduce: 999999
+```
+
+이 환경에서는 12만 5천 개와 13만 개 사이에서 깨졌다. 정확한 경계는 엔진, 스택 크기, 그 시점의 호출 깊이에 따라 달라서 숫자를 외울 필요는 없다. 개발 데이터에선 잘 돌다가 운영 데이터가 커지는 날 터진다는 점이 위험하다. 크기를 모르는 배열은 `reduce`나 반복문으로 처리한다. `arr.push(...other)`도 같은 이유로 큰 배열에서 깨진다.
+
+## 남의 메서드를 빌려 쓰기
+
+`call`의 다른 쓰임은 어떤 객체의 메서드를 다른 객체에 대고 부르는 것이다. 메서드가 `this`의 모양만 맞으면 동작하도록 만들어져 있기 때문에 가능하다.
+
+```js
+const dict = Object.create(null);
+dict.apple = 1;
+try { dict.hasOwnProperty("apple"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+console.log(Object.prototype.hasOwnProperty.call(dict, "apple"));
+console.log(Object.hasOwn(dict, "apple"));
+const payload = JSON.parse('{"hasOwnProperty": 1, "id": 7}');
+try { payload.hasOwnProperty("id"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+console.log(Object.hasOwn(payload, "id"));
+```
+
+```text
+TypeError: dict.hasOwnProperty is not a function
+true
+true
+TypeError: payload.hasOwnProperty is not a function
+true
+```
+
+`Object.create(null)`로 만든 객체는 프로토타입이 없어서 `hasOwnProperty`를 물려받지 못한다. 바깥에서 받은 JSON은 `hasOwnProperty`라는 키로 메서드를 가려 버릴 수 있다. 그래서 오래된 코드는 `Object.prototype.hasOwnProperty.call(obj, key)`로 원본 메서드를 빌려 썼다. ES2022부터는 `Object.hasOwn`이 같은 일을 한다. 프로토타입이 없는 객체가 왜 필요한지는 [프로토타입 체인](/posts/js-prototype-chain)에 있다.
+
+유사 배열에 배열 메서드를 빌리는 것도 같은 원리다.
+
+```js
+const word = "héllo";
+console.log(Array.prototype.map.call(word, (ch) => ch.toUpperCase()).join("-"));
+const nodeListLike = { 0: "a", 1: "b", length: 2 };
+console.log(Array.prototype.slice.call(nodeListLike), Array.from(nodeListLike));
+console.log(Object.prototype.toString.call([]), Object.prototype.toString.call(null), Object.prototype.toString.call(new Date(0)));
+```
+
+```text
+H-É-L-L-O
+[ 'a', 'b' ] [ 'a', 'b' ]
+[object Array] [object Null] [object Date]
+```
+
+배열 메서드는 `this`에서 `length`와 숫자 키만 읽는다. 그래서 문자열이나 `{ 0: "a", length: 2 }`에도 돌아간다. 지금은 `Array.from`이 더 읽기 쉽다. `Object.prototype.toString.call(x)`은 `typeof`가 `"object"`로 뭉뚱그리는 값들을 구분할 때 아직도 쓰인다.
+
+빌려 쓰기를 한 단계 더 밀면 `call` 자체를 `bind`하는 모양이 나온다. Node.js 내부 코드가 이렇게 원본 메서드를 미리 붙잡아 둔다.
+
+```js
+const hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
+console.log(hasOwn({ a: 1 }, "a"), hasOwn(Object.create(null), "a"));
+const slice = Function.prototype.call.bind(Array.prototype.slice);
+console.log(slice("abc", 1));
+Array.prototype.slice = function () { return "hijacked"; };
+console.log("after patch:", [1, 2, 3].slice(1), slice([1, 2, 3], 1));
+```
+
+```text
+true false
+[ 'b', 'c' ]
+after patch: hijacked [ 2, 3 ]
+```
+
+`call`의 `this`를 `slice`로 묶었으니 `slice(x, 1)`은 `Array.prototype.slice.call(x, 1)`과 같다. 누군가 나중에 `Array.prototype.slice`를 바꿔도 미리 붙잡은 원본은 그대로다. 서드파티 스크립트가 많은 페이지에서 내 코드가 내장 메서드 변조에 휘둘리지 않게 할 때 쓰는 방법이다.
+
+## bind가 돌려주는 함수의 정체
+
+`bind`가 만든 함수는 평범한 함수가 아니다. 명세에서는 bound function exotic object라고 부르고, 원래 함수의 코드를 갖지 않는다. 대신 슬롯 세 개만 있다. 원래 함수(`[[BoundTargetFunction]]`), 묶은 this(`[[BoundThis]]`), 미리 채운 인자(`[[BoundArguments]]`)다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="bind가 만든 함수는 슬롯 세 개만 가진 껍데기다 (대상 함수, 묶은 this, 미리 채운 인자)"
+  nodes={[
+    { id: "bound", label: "hiKim", sub: "bound greet", x: 200, y: 40, w: 140 },
+    { id: "target", label: "대상 함수", sub: "greet", x: 85, y: 140, w: 130 },
+    { id: "this", label: "묶은 this", sub: "kim", x: 320, y: 140, w: 130 },
+    { id: "args", label: "미리 채운 인자", sub: "[\"hello\"]", x: 200, y: 225, w: 150 },
+  ]}
+  edges={[
+    { from: "bound", to: "target" },
+    { from: "bound", to: "this" },
+    { from: "bound", to: "args" },
+  ]}
+/>
+
+이 껍데기를 부르면 엔진은 묶은 인자 뒤에 새 인자를 이어 붙이고, 묶은 `this`로 원래 함수를 부른다. 아래 그림에서 `hiKim("~")` 호출이 어떻게 풀리는지 볼 수 있다.
+
+<AlgoTrace
+  caption='hiKim("~")을 부르면 일어나는 일'
+  memoryLabel="원래 함수에 넘길 것"
+  cells={["hiKim(\"~\")", "묶은 this", "묶은 인자", "새 인자", "greet 호출"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "껍데기 함수가 불린다. 이 함수에는 실행할 코드가 없다." },
+    { pointer: 1, memory: ["this=kim"], caption: "묶어 둔 this를 꺼낸다. 호출한 쪽이 준 this는 쓰지 않는다." },
+    { pointer: 2, memory: ["this=kim", "\"hello\""], caption: "미리 채운 인자를 앞에 둔다." },
+    { pointer: 3, memory: ["this=kim", "\"hello\"", "\"~\""], caption: "지금 받은 인자를 그 뒤에 붙인다." },
+    { pointer: 4, found: [4], memory: ["this=kim", "\"hello\"", "\"~\""], caption: "원래 함수 greet를 이 this와 인자로 부른다. 결과는 hello, kim~ 이다." },
+  ]}
+/>
+
+그래서 겉으로 보이는 성질도 원래 함수와 조금 다르다.
+
+```js
+console.log("name:", hiKim.name, "length:", greet.length, "->", hiKim.length);
+console.log("prototype:", hiKim.prototype, "typeof:", typeof hiKim);
+console.log("same?", greet.bind(kim) === greet.bind(kim));
+```
+
+```text
+name: bound greet length: 2 -> 1
+prototype: undefined typeof: function
+same? false
+```
+
+이름 앞에 `bound `가 붙고, `length`는 미리 채운 인자 수만큼 줄어든다. 스택 트레이스와 React 개발자 도구에서 `bound handleClick` 같은 이름이 보이면 `bind`를 거친 함수다. `prototype` 속성은 없다. 그리고 `bind`는 부를 때마다 새 객체를 만든다. 같은 인자로 두 번 불러도 `===`로 같지 않다. 처음 모달 버그의 원인이 이 마지막 줄이다.
+
+## 한 번 묶으면 다시 묶이지 않는다
+
+`bind`로 만든 함수에 다시 `bind`나 `call`을 써도 `this`는 바뀌지 않는다.
+
+```js
+const again = hiKim.bind({ name: "lee" }, "?");
+console.log("double bind:", again());
+const arrow = () => this;
+console.log("arrow.call:", arrow.call(kim));
+```
+
+```text
+double bind: hello, kim?
+arrow.call: undefined
+```
+
+`again`은 `hiKim`을 감싼 껍데기다. `again`을 부르면 `{ name: "lee" }`를 this로 `hiKim`을 부르는데, `hiKim`은 받은 this를 버리고 자기가 묶은 `kim`으로 `greet`를 부른다. 결국 가장 안쪽 `bind`가 이긴다. 다만 인자는 쌓인다. `"hello"` 다음에 `"?"`가 붙었다.
+
+<AlgoTrace
+  caption="bind를 두 번 하면 안쪽이 이긴다"
+  memoryLabel="this / 인자"
+  cells={["again()", "hiKim", "greet"]}
+  steps={[
+    { pointer: 0, memory: ["this=lee", "\"?\""], caption: "바깥 껍데기는 lee와 \"?\"를 들고 안쪽 껍데기를 부른다." },
+    { pointer: 1, memory: ["this=kim", "\"hello\"", "\"?\""], caption: "안쪽 껍데기는 받은 this(lee)를 버리고 kim으로 바꾼다. 인자는 자기 것을 앞에 붙인다." },
+    { pointer: 2, found: [2], memory: ["this=kim", "\"hello\"", "\"?\""], caption: "greet는 kim으로 불린다. 결과는 hello, kim? 이다." },
+  ]}
+/>
+
+화살표 함수는 애초에 자기 `this`가 없어서 `call`, `apply`, `bind`의 첫 인자를 그냥 무시한다. 인자를 미리 채우는 용도로는 화살표 함수에도 `bind`를 쓸 수 있다. 반대로 `new`는 `bind`보다 강하다. `bind`한 생성자를 `new`로 부르면 묶은 `this`는 무시되고 새 객체가 만들어진다. 이 우선순위는 [this 바인딩](/posts/js-this-binding#규칙끼리-부딪히면)에서 실행 결과와 함께 봤다.
+
+## 인자를 미리 채우는 bind
+
+`bind`의 두 번째 인자부터는 미리 채울 인자다. `this`를 쓰지 않는 함수라면 첫 인자에 `null`을 넣고 부분 적용 용도로만 쓸 수 있다.
+
+```js
+function fetchJson(baseUrl, path) { return `${baseUrl}${path}`; }
+const api = fetchJson.bind(null, "https://api.example.com");
+console.log(api("/users"));
+```
+
+```text
+https://api.example.com/users
+```
+
+같은 일을 화살표 함수로 쓰면 `const api = (path) => fetchJson("https://api.example.com", path)`다. 화살표 쪽이 매개변수 이름이 보여서 읽기 쉽고, 타입스크립트도 타입을 더 잘 추론한다. `bind`는 앞에서부터만 채울 수 있다는 제약도 있다. 부분 적용과 커링의 차이는 [커링과 부분 적용](/posts/js-currying-partial)에서 다룬다.
+
+## 떼지 못한 리스너를 고치는 세 가지
+
+처음 모달로 돌아간다. `removeEventListener`는 함수를 참조로 비교한다. 달 때와 뗄 때 같은 함수 객체를 넘겨야 한다.
+
+<SequenceDiagram
+  caption="bind를 두 번 부르면 서로 다른 리스너가 된다"
+  actors={[
+    { id: "modal", label: "Modal" },
+    { id: "doc", label: "document" },
+    { id: "list", label: "리스너 목록" },
+  ]}
+  steps={[
+    { from: "modal", to: "doc", label: "add(f1)", title: "열 때 새 함수 f1", detail: "onKey.bind(this)가 f1을 만들고 그것을 단다." },
+    { from: "doc", to: "list", label: "[f1]", title: "목록에 f1이 들어간다", detail: "document는 f1을 기억한다." },
+    { from: "modal", to: "doc", label: "remove(f2)", title: "닫을 때 또 새 함수 f2", detail: "bind를 다시 불러 f2가 생겼다. f1과는 다른 객체다." },
+    { from: "doc", to: "list", label: "f2 없음", title: "지울 것이 없다", detail: "목록에서 f2를 찾지 못한다. 에러도 경고도 없이 끝난다.", payload: "f1 === f2 // false" },
+    { from: "doc", to: "modal", label: "Escape → f1", title: "닫힌 모달이 반응한다", detail: "남아 있는 f1이 불린다. 열고 닫은 횟수만큼 리스너가 쌓인다." },
+  ]}
+/>
+
+고치는 방법은 셋이다. 생성자에서 한 번만 묶어 두고 그 참조를 계속 쓰거나, 클래스 필드에 화살표 함수를 두거나, `AbortController`의 `signal`로 뗀다.
+
+```js
+class Modal2 {
+  constructor() { this.closed = 0; this.onKey = this.onKey.bind(this); }
+  onKey(e) { if (e.key === "Escape") this.closed += 1; }
+  open() { document.addEventListener("keydown", this.onKey); }
+  close() { document.removeEventListener("keydown", this.onKey); }
+}
+const m2 = new Modal2();
+m2.open(); m2.close();
+m2.open(); m2.close();
+document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+console.log("한 번 묶은 참조: closed =", m2.closed);
+
+const ac = new AbortController();
+const m3 = new Modal2();
+document.addEventListener("keydown", m3.onKey, { signal: ac.signal });
+ac.abort();
+document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+console.log("signal로 떼기: closed =", m3.closed);
+```
+
+```text
+한 번 묶은 참조: closed = 0
+signal로 떼기: closed = 0
+```
+
+`this.onKey = this.onKey.bind(this)`는 프로토타입의 메서드를 묶은 버전으로 인스턴스에 덮어쓴다. 이후 `this.onKey`는 늘 같은 객체다. `signal` 방식은 함수 참조를 아예 들고 다닐 필요가 없어서, 리스너를 여러 개 달고 한꺼번에 떼야 할 때 편하다. `AbortController`의 다른 쓰임은 [AbortController](/posts/abort-controller) 글에 있다.
+
+떼지 못한 리스너는 에러를 내지 않아서 증상으로만 드러난다. 같은 동작이 두 번, 세 번 돌거나, 화면을 오갈수록 메모리가 늘어난다. 크롬 개발자 도구 콘솔에서 `getEventListeners(document)`를 부르면 지금 달린 리스너 목록이 나온다. 같은 이름(`bound onKey`)이 여러 개면 이 버그다. 메모리 쪽 추적은 [메모리 누수](/posts/js-memory-leak) 글을 본다.
+
+## React에서 bind를 쓰는 자리
+
+React 클래스 컴포넌트에서 `render` 안에 `this.pick.bind(this)`를 쓰면 렌더링마다 새 함수가 만들어진다. `memo`로 감싼 자식은 props를 참조로 비교하니 매번 다시 그려진다. 크로미움에서 부모를 여섯 번 렌더링하고 자식 렌더 횟수를 셌다.
+
+```js
+const Row = React.memo(function Row({ onPick, kind }) { counts[kind] += 1; return h("li", null, kind); });
+class List extends React.Component {
+  constructor(p) { super(p); this.state = { tick: 0 }; this.pickOnce = this.pick.bind(this); }
+  pick() {}
+  render() {
+    return h("ul", null,
+      h(Row, { kind: "inRender", onPick: this.pick.bind(this) }),
+      h(Row, { kind: "once", onPick: this.pickOnce }));
+  }
+}
+```
+
+```text
+부모 렌더 6번 뒤 Row 렌더 수: {"inRender":6,"once":1}
+```
+
+생성자에서 한 번 묶은 쪽은 처음 한 번만 그려졌다. 함수 컴포넌트에서는 `bind` 대신 `useCallback`이 같은 역할을 한다. 어느 쪽이든 자식이 `memo`가 아니면 이 차이는 의미가 없으니, 측정해 보고 필요한 곳에만 쓴다. 자세한 기준은 [React 리렌더링](/posts/react-rerender)과 [메모이제이션](/posts/js-memoization)에 있다.
+
+`useEffect` 안에서 리스너를 달 때도 처음 모달과 같은 실수가 나온다. 정리 함수에서 `removeEventListener("resize", handler.bind(obj))`처럼 다시 `bind`하면 떼어지지 않는다. effect 안에서 함수를 한 번 만들어 변수에 담고, 달 때와 뗄 때 그 변수를 쓴다.
+
+## 연습: bind 직접 만들기
+
+`myBind(fn, thisArg, ...preset)`를 만들어 본다. 조건은 실제 `bind`와 같다.
+
+- 돌려준 함수를 부르면 `thisArg`를 `this`로, `preset` 뒤에 새 인자를 붙여 `fn`을 부른다.
+- 돌려준 함수를 `call`로 부르거나 다른 객체의 메서드로 붙여도 `this`는 바뀌지 않는다.
+- 돌려준 함수를 `new`로 부르면 묶은 `this`를 무시하고 `fn`의 새 인스턴스를 만든다. `new.target`을 써 보자.
+
+<CodePlayground
+  caption="myBind: bind 흉내 내기"
+  functionName="run"
+  initialCode={`function myBind(fn, thisArg, ...preset) {
+  return function bound(...later) {
+    // 여기를 채운다
+  };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(scenario) {
+  function who() { return this && this.name; }
+  function add(a, b, c) { return a + b + c; }
+  function Box(v) { this.v = v; }
+  if (scenario === "this") return myBind(who, { name: "kim" })();
+  if (scenario === "partial") return myBind(add, null, 1, 2)(3);
+  if (scenario === "call") return myBind(who, { name: "kim" }).call({ name: "lee" });
+  if (scenario === "method") {
+    const obj = { name: "obj", f: myBind(who, { name: "kim" }) };
+    return obj.f();
+  }
+  if (scenario === "new") {
+    const B = myBind(Box, { ignored: true }, 7);
+    const b = new B();
+    return [b.v, b instanceof Box, b.ignored === undefined];
+  }
+  if (scenario === "fresh") {
+    const o = { name: "x" };
+    return myBind(who, o) === myBind(who, o);
+  }
+}`}
+  solution={`function myBind(fn, thisArg, ...preset) {
+  return function bound(...later) {
+    const args = [...preset, ...later];
+    if (new.target) return new fn(...args);
+    return fn.apply(thisArg, args);
+  };
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(scenario) {
+  function who() { return this && this.name; }
+  function add(a, b, c) { return a + b + c; }
+  function Box(v) { this.v = v; }
+  if (scenario === "this") return myBind(who, { name: "kim" })();
+  if (scenario === "partial") return myBind(add, null, 1, 2)(3);
+  if (scenario === "call") return myBind(who, { name: "kim" }).call({ name: "lee" });
+  if (scenario === "method") {
+    const obj = { name: "obj", f: myBind(who, { name: "kim" }) };
+    return obj.f();
+  }
+  if (scenario === "new") {
+    const B = myBind(Box, { ignored: true }, 7);
+    const b = new B();
+    return [b.v, b instanceof Box, b.ignored === undefined];
+  }
+  if (scenario === "fresh") {
+    const o = { name: "x" };
+    return myBind(who, o) === myBind(who, o);
+  }
+}`}
+  tests={[
+    { args: ["this"], expected: "kim", label: "묶은 this로 부른다" },
+    { args: ["partial"], expected: 6, label: "미리 채운 인자 뒤에 새 인자" },
+    { args: ["call"], expected: "kim", label: "call로 다른 this를 줘도 그대로" },
+    { args: ["method"], expected: "kim", label: "메서드로 붙여도 그대로" },
+    { args: ["new"], expected: [7, true, true], label: "new는 묶은 this를 무시한다" },
+    { args: ["fresh"], expected: false, label: "부를 때마다 새 함수" },
+  ]}
+/>
+
+`new.target`은 함수가 `new`로 불렸을 때만 값이 있다. 그때 `new fn(...args)`로 원래 생성자를 부르면 프로토타입 연결도 `fn.prototype`으로 맞게 된다. 실제 `bind`는 여기에 `name`과 `length`를 고치는 일까지 하지만, 동작의 뼈대는 이 다섯 줄이다.
+
+## 같은 참조를 들고 있는가
+
+처음 모달은 `bind`가 매번 새 함수를 만든다는 한 가지 사실을 놓쳐서 생겼다. `call`과 `apply`는 지금 부르고, `bind`는 새 함수를 만들어 나중에 부르게 한다. 그리고 그 새 함수는 묶은 `this`를 끝까지 놓지 않는다. 리스너를 떼거나, `memo`된 자식에 넘기거나, 의존성 배열에 넣는 것처럼 참조가 중요한 자리에서는 `bind`를 어디서 몇 번 부르는지부터 본다.
+
+## 면접에서 나올 만한 질문
+
+### call, apply, bind의 차이는 무엇인가요?
+
+셋 다 함수의 `this`를 정해서 부르게 한다. `call`은 인자를 하나씩, `apply`는 배열 하나로 받고 둘 다 즉시 실행한다. `bind`는 실행하지 않고 `this`와 앞쪽 인자를 붙인 새 함수를 돌려준다. 지금 부르면 `call`/`apply`, 콜백으로 넘길 함수가 필요하면 `bind`다.
+
+### 요즘 apply를 쓸 일이 있나요?
+
+배열을 인자로 펼치는 용도는 전개 문법이 대신해서 거의 없다. 남은 쓰임은 `this`와 인자 배열을 함께 넘겨야 하는 래퍼, 예를 들어 데코레이터나 로깅 래퍼에서 `fn.apply(this, args)`로 원래 호출을 그대로 전달할 때다. `Reflect.apply`로 써도 된다. 전개든 `apply`든 아주 큰 배열에서는 스택 한계로 `RangeError`가 나니 그런 경우는 반복문을 쓴다.
+
+### bind를 두 번 하면 this는 어떻게 되나요?
+
+처음 `bind`한 값이 유지된다. 바깥 바운드 함수가 넘긴 `this`를 안쪽 바운드 함수가 버리고 자기가 묶은 값으로 원래 함수를 부르기 때문이다. 인자는 버려지지 않고 안쪽 것 뒤에 바깥 것이 이어 붙는다. `call`이나 메서드 호출로도 바뀌지 않고, `new`로 부를 때만 묶은 `this`가 무시된다.
+
+### bind로 만든 함수는 원래 함수와 무엇이 다른가요?
+
+명세상 bound function exotic object로, 코드 대신 원래 함수, 묶은 `this`, 미리 채운 인자를 슬롯에 들고 있다. `name`은 `bound 원래이름`, `length`는 채운 인자 수만큼 줄고, `prototype` 속성이 없다. 부를 때마다 새 객체가 만들어져 같은 인자로 두 번 `bind`해도 `===`로 다르다.
+
+### removeEventListener가 동작하지 않는 흔한 이유는 무엇인가요?
+
+달 때와 뗄 때 다른 함수 객체를 넘긴 경우가 가장 흔하다. `bind`나 인라인 화살표 함수는 부를 때마다 새 함수를 만들어서 목록에서 찾지 못하고, 에러 없이 무시된다. `capture` 옵션 값이 다를 때도 다른 리스너로 본다. 묶은 함수를 한 번 만들어 저장해 쓰거나 `AbortController`의 `signal`로 뗀다.
+
+### Object.prototype.hasOwnProperty.call(obj, key)는 왜 그렇게 길게 쓰나요?
+
+`obj.hasOwnProperty`가 없거나 가려졌을 수 있어서다. `Object.create(null)`로 만든 객체는 그 메서드를 물려받지 않고, 바깥 JSON은 같은 이름의 키로 메서드를 덮을 수 있다. 원본 메서드를 빌려 `obj`를 `this`로 부르면 안전하다. ES2022부터는 `Object.hasOwn(obj, key)`가 같은 일을 한다.
+
+### 화살표 함수에 call이나 bind를 쓰면 어떻게 되나요?
+
+`this`는 바뀌지 않는다. 화살표 함수는 자기 `this`가 없어서 첫 인자를 무시하고 정의할 때 바깥의 `this`를 쓴다. 인자는 정상적으로 전달되므로 `bind`로 인자를 미리 채우는 건 가능하다.
+
+### 클래스 컴포넌트의 render에서 bind하면 무엇이 문제인가요?
+
+렌더링마다 새 함수가 만들어져 `memo`나 `PureComponent` 자식의 props 비교가 매번 실패한다. 실제로 부모를 여섯 번 렌더링하니 render에서 `bind`한 자식은 여섯 번, 생성자에서 한 번 묶은 자식은 한 번만 그려졌다. 생성자에서 묶거나 클래스 필드 화살표 함수를 쓰고, 함수 컴포넌트라면 `useCallback`으로 참조를 유지한다.

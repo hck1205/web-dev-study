@@ -1,0 +1,511 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-window-functions-pg");
+
+매출 대시보드에 "최근 7일 합계" 칸이 있다. 날짜별 매출 옆에 윈도우 함수로 앞 6행과 지금 행을 더해 넣었다. 그런데 10월 12일의 최근 7일 합계가 15만 5천 원으로 나온다. 10월 6일부터 12일까지 결제는 12일 하루 5만 원뿐이다. 결제가 없는 날은 행이 없으니, "앞 6행"은 앞 6일이 아니라 9월 28일까지 거슬러 올라간 6건이었다.
+
+윈도우 함수의 기본기(`OVER` 안의 세 조각, `RANK`·`DENSE_RANK`·`ROW_NUMBER`가 동점에서 갈리는 모습, 기본 프레임이 동점을 한꺼번에 더하는 문제, `LAG`·`LEAD`)는 [SQLD 윈도우 함수 글](/posts/sqld-window-functions)에서 Oracle 문법과 함께 다뤘다. 이 글은 그 다음, PostgreSQL에서 실제 리포트를 만들 때 부딪히는 것들을 본다. 날짜 간격으로 자르는 `RANGE` 프레임, 동점 묶음 단위로 세는 `GROUPS`, 지금 행을 빼는 `EXCLUDE`, 같은 창을 이름으로 다시 쓰는 `WINDOW` 절, 그리고 실행 계획에서 윈도우 함수가 무엇을 하는지다. PostgreSQL 15에 들어온 `Run Condition` 덕분에 그룹별 상위 N개가 얼마나 빨라지는지, 동점에서 `ROW_NUMBER`가 실행 계획에 따라 다른 행을 고르는 모습도 재현한다.
+
+데이터는 [SELECT의 논리적 처리 순서](/posts/sql-logical-order)부터 이어 온 강의 사이트(`students`, `courses`, `enrollments`)와 [조인 실전 글](/posts/sql-joins-in-practice#결제와-후기를-더한-강의-사이트)에서 더한 `payments`(할부·환불이 있는 결제 12건)다. 윈도우 함수가 `WHERE`보다 늦게 계산되는 이유는 [논리 순서 글](/posts/sql-logical-order#윈도-함수는-having보다-늦다)에 있다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고 출력은 모두 실제로 돌린 결과다. MySQL 8과의 차이는 문서로 확인해 짧게 적는다.
+
+## 최근 7일 합계가 7일 치가 아니었다
+
+결제를 날짜별로 묶고, 두 가지 방법으로 최근 7일을 더한다.
+
+```sql
+WITH daily AS (
+  SELECT paid_at::date AS day, sum(amount) AS revenue   -- 세션 시간대(Asia/Seoul) 기준 날짜
+  FROM payments GROUP BY 1
+)
+SELECT day, revenue,
+       sum(revenue) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rows_7,
+       sum(revenue) OVER (ORDER BY day RANGE BETWEEN interval '6 days' PRECEDING AND CURRENT ROW) AS range_7d
+FROM daily ORDER BY day;
+```
+
+```text
+    day     | revenue | rows_7 | range_7d
+------------+---------+--------+----------
+ 2026-09-28 |   30000 |  30000 |    30000
+ 2026-10-01 |   45000 |  75000 |    75000
+ 2026-10-05 |   30000 | 105000 |    75000
+ 2026-10-12 |   50000 | 155000 |    50000
+ 2026-10-15 |   50000 | 205000 |   100000
+ 2026-10-20 |   90000 | 295000 |   140000
+ 2026-10-31 |   35000 | 330000 |    35000
+ 2026-11-01 |   95000 | 395000 |   130000
+ 2026-11-02 |  -50000 | 300000 |    80000
+ 2026-11-03 |   20000 | 290000 |   100000
+ 2026-11-30 |   35000 | 275000 |    35000
+(11 rows)
+```
+
+`ROWS`는 행 개수로 센다. `6 PRECEDING`은 "앞 6행"이라서 결제가 드문드문한 데이터에서는 몇 주 전 매출까지 끌어온다. `RANGE`는 `ORDER BY` 값의 차이로 센다. `interval '6 days' PRECEDING`은 "지금 날짜에서 6일 전까지"라서 행이 있든 없든 달력 기준 7일이다. 11월 30일은 앞 6일에 결제가 없어서 자기 자신만 남았다. 아래 그림에서 다음을 누르면 10월 12일과 11월 1일에 두 방식이 어디까지 더하는지 보인다.
+
+<AlgoTrace
+  caption="ROWS는 행을 세고, RANGE는 날짜 차이를 잰다"
+  cells={["9/28", "10/1", "10/5", "10/12", "10/15", "10/20", "10/31", "11/1", "11/2", "11/3", "11/30"]}
+  memoryLabel="더한 날"
+  steps={[
+    { pointer: 3, caption: "10월 12일 행에서 최근 7일을 구한다. 실제 7일은 10월 6일부터 12일까지다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["9/28", "10/1", "10/5", "10/12"], caption: "ROWS 6 PRECEDING: 앞 6행을 찾지만 행이 셋뿐이라 9월 28일까지 다 더한다. 155000." },
+    { pointer: 3, found: [3], memory: ["10/12"], caption: "RANGE interval '6 days': 10월 6일 이후인 행만 더한다. 10월 12일 하나, 50000." },
+    { pointer: 7, found: [1, 2, 3, 4, 5, 6, 7], memory: ["10/1", "10/5", "10/12", "10/15", "10/20", "10/31", "11/1"], caption: "11월 1일, ROWS: 앞 6행이 10월 1일까지 간다. 395000." },
+    { pointer: 7, found: [6, 7], memory: ["10/31", "11/1"], caption: "11월 1일, RANGE: 10월 26일 이후는 10월 31일과 11월 1일이다. 130000." },
+  ]}
+/>
+
+`ROWS`로 맞추려면 빈 날을 0으로 채운 다음 7행을 더해야 한다. `generate_series`로 날짜를 만들어 붙이는 방법은 [리포트 쿼리 글](/posts/postgres-reporting-sql#주문이-없는-날도-0으로-채우는-리포트)에 있다. 그래프를 그릴 거라면 어차피 빈 날이 필요하니 그 방법이 낫고, 합계 숫자만 필요하면 `RANGE`가 짧다.
+
+`RANGE`에 `interval` 같은 오프셋을 쓰는 기능과 뒤에 나올 `GROUPS`, `EXCLUDE`는 PostgreSQL 11부터 된다. 그 전에는 `RANGE`가 `UNBOUNDED`와 `CURRENT ROW`만 받았다. MySQL 8은 `RANGE`에 `INTERVAL`을 쓸 수 있지만 `GROUPS`와 `EXCLUDE`는 지원하지 않는다.
+
+## 행으로 셀지, 값으로 셀지, 동점 묶음으로 셀지
+
+프레임 단위는 셋이다. 차이는 같은 값을 가진 행(동점, 문서에서는 peer라고 부른다)이 있을 때 드러난다. 수강 신청 아홉 건 중 10월 31일에 두 건이 있다. "하루 전까지"와 "한 칸 전까지"를 세 단위로 센다.
+
+```sql
+SELECT id, enrolled_at::date AS day,
+       count(*) OVER (ORDER BY enrolled_at::date ROWS   BETWEEN 1 PRECEDING AND CURRENT ROW) AS rows_1,
+       count(*) OVER (ORDER BY enrolled_at::date RANGE  BETWEEN interval '1 day' PRECEDING AND CURRENT ROW) AS range_1d,
+       count(*) OVER (ORDER BY enrolled_at::date GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) AS groups_1
+FROM enrollments ORDER BY enrolled_at;
+```
+
+```text
+ id |    day     | rows_1 | range_1d | groups_1
+----+------------+--------+----------+----------
+  1 | 2026-09-28 |      1 |        1 |        1
+  2 | 2026-10-01 |      2 |        1 |        2
+  3 | 2026-10-05 |      2 |        1 |        2
+  4 | 2026-10-12 |      2 |        1 |        2
+  5 | 2026-10-15 |      2 |        1 |        2
+  6 | 2026-10-20 |      2 |        1 |        2
+  7 | 2026-10-31 |      2 |        2 |        3
+  8 | 2026-10-31 |      2 |        2 |        3
+  9 | 2026-11-01 |      2 |        3 |        3
+(9 rows)
+```
+
+7번 행을 보자. `ROWS`는 바로 앞 행(6번)과 자기 자신이라 2다. 같은 날인 8번은 뒤에 있어서 빠졌다. `RANGE`는 10월 30일부터 31일까지라서 7번과 8번이 들어가 2다. `GROUPS`는 "같은 날짜 묶음 하나 전까지"라서 10월 20일 묶음과 10월 31일 묶음, 3이다. 아래 그림에서 다음을 누르면 세 단위의 창이 같은 행 위에서 어떻게 늘고 줄어드는지 보인다.
+
+<GeometryMorph
+  caption="같은 행에서도 프레임 단위에 따라 창이 달라진다"
+  width={400}
+  height={170}
+  shapes={[
+    { id: "c0", tone: "muted" }, { id: "c1", tone: "muted" }, { id: "c2", tone: "muted" },
+    { id: "c3", tone: "muted" }, { id: "c4", tone: "muted" }, { id: "c5", tone: "muted" },
+    { id: "c6", tone: "muted" }, { id: "c7", tone: "muted" }, { id: "c8", tone: "muted" },
+    { id: "cur", tone: "series1" },
+    { id: "frame", tone: "outline" },
+  ]}
+  steps={[
+    {
+      title: "7번 행, ROWS 1 PRECEDING",
+      detail: "바로 앞 행 하나와 지금 행. 같은 날인 8번은 뒤에 있어 빠진다. count = 2.",
+      shapes: {
+        c0: [[10, 70], [46, 70], [46, 106], [10, 106]], c1: [[52, 70], [88, 70], [88, 106], [52, 106]], c2: [[94, 70], [130, 70], [130, 106], [94, 106]],
+        c3: [[136, 70], [172, 70], [172, 106], [136, 106]], c4: [[178, 70], [214, 70], [214, 106], [178, 106]], c5: [[220, 70], [256, 70], [256, 106], [220, 106]],
+        c6: [[262, 70], [298, 70], [298, 106], [262, 106]], c7: [[304, 70], [340, 70], [340, 106], [304, 106]], c8: [[346, 70], [382, 70], [382, 106], [346, 106]],
+        cur: [[262, 50], [298, 50], [298, 58], [262, 58]],
+        frame: [[216, 64], [302, 64], [302, 112], [216, 112]],
+      },
+      labels: [{ x: 200, y: 30, text: "ROWS: count = 2", size: "md", tone: "text" }],
+      focus: ["frame"],
+    },
+    {
+      title: "7번 행, RANGE 1 day",
+      detail: "10월 30일부터 31일까지. 같은 날인 8번이 들어오고 10월 20일은 빠진다. count = 2.",
+      shapes: {
+        c0: [[10, 70], [46, 70], [46, 106], [10, 106]], c1: [[52, 70], [88, 70], [88, 106], [52, 106]], c2: [[94, 70], [130, 70], [130, 106], [94, 106]],
+        c3: [[136, 70], [172, 70], [172, 106], [136, 106]], c4: [[178, 70], [214, 70], [214, 106], [178, 106]], c5: [[220, 70], [256, 70], [256, 106], [220, 106]],
+        c6: [[262, 70], [298, 70], [298, 106], [262, 106]], c7: [[304, 70], [340, 70], [340, 106], [304, 106]], c8: [[346, 70], [382, 70], [382, 106], [346, 106]],
+        cur: [[262, 50], [298, 50], [298, 58], [262, 58]],
+        frame: [[258, 64], [344, 64], [344, 112], [258, 112]],
+      },
+      labels: [{ x: 200, y: 30, text: "RANGE: count = 2", size: "md", tone: "text" }],
+      focus: ["frame"],
+    },
+    {
+      title: "7번 행, GROUPS 1 PRECEDING",
+      detail: "날짜 묶음 단위로 하나 전까지. 10월 20일 묶음과 10월 31일 묶음 전체. count = 3.",
+      shapes: {
+        c0: [[10, 70], [46, 70], [46, 106], [10, 106]], c1: [[52, 70], [88, 70], [88, 106], [52, 106]], c2: [[94, 70], [130, 70], [130, 106], [94, 106]],
+        c3: [[136, 70], [172, 70], [172, 106], [136, 106]], c4: [[178, 70], [214, 70], [214, 106], [178, 106]], c5: [[220, 70], [256, 70], [256, 106], [220, 106]],
+        c6: [[262, 70], [298, 70], [298, 106], [262, 106]], c7: [[304, 70], [340, 70], [340, 106], [304, 106]], c8: [[346, 70], [382, 70], [382, 106], [346, 106]],
+        cur: [[262, 50], [298, 50], [298, 58], [262, 58]],
+        frame: [[216, 64], [344, 64], [344, 112], [216, 112]],
+      },
+      labels: [{ x: 200, y: 30, text: "GROUPS: count = 3", size: "md", tone: "text" }],
+      focus: ["frame"],
+    },
+    {
+      title: "9번 행(11/1), RANGE 1 day",
+      detail: "10월 31일부터 11월 1일까지. 10월 31일 두 건과 자기 자신. count = 3.",
+      shapes: {
+        c0: [[10, 70], [46, 70], [46, 106], [10, 106]], c1: [[52, 70], [88, 70], [88, 106], [52, 106]], c2: [[94, 70], [130, 70], [130, 106], [94, 106]],
+        c3: [[136, 70], [172, 70], [172, 106], [136, 106]], c4: [[178, 70], [214, 70], [214, 106], [178, 106]], c5: [[220, 70], [256, 70], [256, 106], [220, 106]],
+        c6: [[262, 70], [298, 70], [298, 106], [262, 106]], c7: [[304, 70], [340, 70], [340, 106], [304, 106]], c8: [[346, 70], [382, 70], [382, 106], [346, 106]],
+        cur: [[346, 50], [382, 50], [382, 58], [346, 58]],
+        frame: [[258, 64], [386, 64], [386, 112], [258, 112]],
+      },
+      labels: [{ x: 200, y: 30, text: "RANGE: count = 3", size: "md", tone: "text" }],
+      focus: ["frame", "cur"],
+    },
+  ]}
+/>
+
+어느 단위를 고를지는 질문이 정한다. "최근 N일"처럼 값의 거리를 묻는다면 `RANGE`, "직전 N건"처럼 행 개수를 묻는다면 `ROWS`, "직전 N개 날짜(또는 점수대)"처럼 서로 다른 값의 개수를 묻는다면 `GROUPS`다. `ROWS`는 동점 행의 순서가 결과를 바꾸므로 `ORDER BY`에 `id` 같은 고유한 컬럼을 덧붙여 순서를 고정한다. 오프셋을 쓰는 `RANGE`는 `ORDER BY`가 컬럼 하나여야 하고, 그 타입에 맞는 간격(날짜·시각에는 `interval`, 숫자에는 숫자)을 준다.
+
+아래 조각을 누르면 프레임 절 한 줄의 각 부분이 나온다.
+
+<UrlAnatomy
+  caption="프레임 절을 조각으로 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "fn", display: "sum(revenue) OVER (", title: "무엇을 계산하나", description: "집계 함수에 OVER가 붙으면 행을 접지 않고 행마다 값을 붙인다. 프레임은 sum, avg, count, first_value 같은 함수에 적용된다. row_number, rank는 프레임을 무시한다.", required: true },
+    { key: "order", display: "ORDER BY day", title: "줄 세우는 기준", description: "RANGE에 오프셋을 쓰려면 ORDER BY가 컬럼 하나여야 한다. ROWS라면 고유한 컬럼까지 적어 순서를 고정한다.", required: true },
+    { key: "unit", display: "RANGE", title: "세는 단위", description: "ROWS는 행 개수, RANGE는 ORDER BY 값의 차이, GROUPS는 같은 값끼리 묶은 덩어리 개수다. 생략하면 RANGE다." },
+    { key: "start", display: "BETWEEN interval '6 days' PRECEDING", title: "창의 시작", description: "지금 값에서 6일 전까지. UNBOUNDED PRECEDING이면 파티션의 처음부터다.", code: "ROWS   BETWEEN 6 PRECEDING ...      -- 앞 6행\nGROUPS BETWEEN 1 PRECEDING ...      -- 앞 묶음 하나" },
+    { key: "end", display: "AND CURRENT ROW", title: "창의 끝", description: "RANGE와 GROUPS에서 CURRENT ROW는 지금 행과 동점인 행 전체를 뜻한다. ROWS에서는 지금 행 하나다." },
+    { key: "exclude", display: "EXCLUDE CURRENT ROW )", title: "창에서 뺄 것", description: "CURRENT ROW는 지금 행만, GROUP은 지금 행과 동점 전체, TIES는 동점 중 지금 행이 아닌 것만 뺀다. 기본은 NO OTHERS(빼지 않음)다." },
+  ]}
+/>
+
+## 나를 뺀 평균과 이름 붙인 창
+
+강의 화면에 "다른 수강생 평균 점수"를 보여 달라는 요청이 왔다. 강의 평균에는 내 점수가 섞여 있다. `EXCLUDE CURRENT ROW`로 파티션 전체에서 지금 행만 뺀다.
+
+```sql
+SELECT e.id, e.course_id, s.name, e.score,
+       round(avg(e.score) OVER (PARTITION BY e.course_id), 1) AS course_avg,
+       round(avg(e.score) OVER (PARTITION BY e.course_id
+                                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                                EXCLUDE CURRENT ROW), 1) AS others_avg
+FROM enrollments e JOIN students s ON s.id = e.student_id
+WHERE e.score IS NOT NULL
+ORDER BY e.course_id, e.id;
+```
+
+```text
+ id | course_id | name | score | course_avg | others_avg
+----+-----------+------+-------+------------+------------
+  1 |         1 | kim  |    90 |       90.0 |     (null)
+  2 |         2 | kim  |    70 |       82.5 |       95.0
+  6 |         2 | choi |    95 |       82.5 |       70.0
+  4 |         3 | lee  |    85 |       85.0 |     (null)
+  8 |         4 | park |    60 |       60.0 |     (null)
+(5 rows)
+```
+
+채점된 사람이 혼자인 강의는 비교할 사람이 없어 NULL이다. 화면에서는 "비교할 수강생이 아직 없다"로 보여 주면 된다. `EXCLUDE`는 프레임 절의 일부라 프레임을 명시해야 쓸 수 있다. 그래서 "파티션 전체"를 `UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`으로 적었다.
+
+같은 창을 여러 함수가 쓰면 `OVER (...)`를 매번 복사하게 된다. 하나만 고치고 하나를 빠뜨리면 숫자가 서로 다른 기준으로 계산된다. `WINDOW` 절로 창에 이름을 붙이고 `OVER w`로 부른다. 집계 함수 뒤의 `FILTER`도 윈도우 함수에 그대로 붙는다.
+
+```sql
+SELECT e.student_id, e.id, e.status, e.enrolled_at::date AS day,
+       count(*)                                       OVER w AS taken,
+       count(*) FILTER (WHERE e.status = 'completed') OVER w AS completed,
+       sum(c.price)                                   OVER w AS list_total
+FROM enrollments e JOIN courses c ON c.id = e.course_id
+WHERE e.student_id IN (1, 4)
+WINDOW w AS (PARTITION BY e.student_id ORDER BY e.enrolled_at)   -- 창 정의는 한 번만
+ORDER BY e.student_id, e.enrolled_at;
+```
+
+```text
+ student_id | id |  status   |    day     | taken | completed | list_total
+------------+----+-----------+------------+-------+-----------+------------
+          1 |  1 | completed | 2026-09-28 |     1 |         1 |      30000
+          1 |  2 | completed | 2026-10-01 |     2 |         2 |     120000
+          1 |  5 | active    | 2026-10-15 |     3 |         2 |     170000
+          4 |  6 | completed | 2026-10-20 |     1 |         1 |      90000
+          4 |  9 | refunded  | 2026-11-01 |     2 |         1 |     140000
+(5 rows)
+```
+
+`completed`는 끝낸 수강만 누적해서 센다. `FILTER`는 PostgreSQL 9.4부터 되는 표준 문법이지만 MySQL 8에는 없어서 `sum(CASE WHEN ... THEN 1 ELSE 0 END) OVER w`로 쓴다(`CASE`로 하는 조건부 집계는 [CASE WHEN 글](/posts/sql-case-when#조건마다-따로-더하기)에 있다). `WINDOW` 절은 MySQL 8도 지원한다.
+
+## 창마다 정렬이 하나씩 붙는다
+
+윈도우 함수를 실행 계획으로 보면 `WindowAgg`라는 노드가 나온다. `WindowAgg`는 입력이 파티션과 `ORDER BY` 순서로 정렬되어 들어온다고 가정하고, 위에서부터 한 줄씩 읽으며 값을 붙인다. 정렬은 그 아래 `Sort` 노드의 몫이다. 창 정의가 다르면 정렬 순서가 달라서 `Sort`와 `WindowAgg`가 한 쌍씩 더 생긴다.
+
+```sql
+EXPLAIN (COSTS OFF)
+SELECT e.id,
+       row_number() OVER (PARTITION BY e.student_id ORDER BY e.enrolled_at) AS n,
+       sum(e.score) OVER (PARTITION BY e.student_id ORDER BY e.enrolled_at) AS s,   -- 위와 같은 창
+       rank()       OVER (PARTITION BY e.course_id ORDER BY e.score DESC) AS r      -- 다른 창
+FROM enrollments e;
+```
+
+```text
+ WindowAgg
+   ->  Sort
+         Sort Key: student_id, enrolled_at
+         ->  WindowAgg
+               ->  Sort
+                     Sort Key: course_id, score DESC
+                     ->  Seq Scan on enrollments e
+```
+
+같은 창을 쓰는 `row_number`와 `sum`은 `WindowAgg` 하나에서 함께 계산됐다. `rank`는 다른 창이라 정렬을 한 번 더 했다. 아홉 행이면 아무 일도 아니지만, 30만 행에서는 정렬이 쿼리 시간의 대부분이 된다. 30만 건짜리 수강 기록을 만든다.
+
+```sql
+SELECT setseed(0.3);                         -- 같은 난수가 나오게 고정
+CREATE TABLE enrollments_big AS
+SELECT i AS id,
+       1 + floor(random() * 20000)::int AS student_id,   -- 수강생 2만 명
+       1 + floor(random() * 6)::int     AS course_id,
+       floor(random() * 101)::int       AS score,        -- 0~100점, 동점이 많다
+       timestamptz '2025-11-01 00:00+09' + random() * interval '365 days' AS enrolled_at
+FROM generate_series(1, 300000) AS i;
+ALTER TABLE enrollments_big ADD PRIMARY KEY (id);
+VACUUM ANALYZE enrollments_big;
+```
+
+## 그룹별 상위 N개는 15부터 일찍 멈춘다
+
+수강생마다 점수가 높은 수강 세 건을 뽑는다. 윈도우 함수는 `WHERE`에 못 쓰니 서브쿼리로 감싸고 바깥에서 거른다. 거르는 조건을 `rn <= 3`과 `rn IN (1, 2, 3)` 두 가지로 써 본다. 뜻은 같다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT * FROM (
+  SELECT student_id, id, score,
+         row_number() OVER (PARTITION BY student_id ORDER BY score DESC, id) AS rn
+  FROM enrollments_big
+) t WHERE rn <= 3;
+```
+
+```text
+ WindowAgg (actual time=134.252..210.139 rows=60000 loops=1)
+   Run Condition: (row_number() OVER (?) <= 3)
+   ->  Sort (actual time=134.217..173.483 rows=300000 loops=1)
+         Sort Key: enrollments_big.student_id, enrollments_big.score DESC, enrollments_big.id
+         Sort Method: external merge  Disk: 6488kB
+         ->  Seq Scan on enrollments_big (actual time=0.010..32.008 rows=300000 loops=1)
+ Execution Time: 213.469 ms
+```
+
+`rn IN (1, 2, 3)`으로 쓰면 계획이 이렇다.
+
+```text
+ Subquery Scan on t (actual time=116.000..263.782 rows=60000 loops=1)
+   Filter: (t.rn = ANY ('{1,2,3}'::bigint[]))
+   Rows Removed by Filter: 240000
+   ->  WindowAgg (actual time=115.994..231.000 rows=300000 loops=1)
+         ->  Sort (actual time=115.985..160.644 rows=300000 loops=1)
+               Sort Key: enrollments_big.student_id, enrollments_big.score DESC, enrollments_big.id
+               Sort Method: external merge  Disk: 6488kB
+               ->  Seq Scan on enrollments_big (actual time=0.005..26.244 rows=300000 loops=1)
+ Execution Time: 266.831 ms
+```
+
+첫 계획의 `Run Condition` 줄이 PostgreSQL 15에 들어온 최적화다. `row_number`는 파티션 안에서 1, 2, 3, 4로 커지기만 한다. 그러니 4가 된 순간 그 파티션의 남은 행은 조건을 만족할 수 없다. `WindowAgg`가 이 사실을 알고 그 파티션의 남은 행을 결과로 내보내지 않는다. `WindowAgg`가 낸 행이 6만(2만 명 × 3)이고, 바깥 `Filter`가 없다. `IN`은 플래너가 "값이 커지기만 하니 이후는 다 거짓"이라고 판단할 수 없는 모양이라 30만 행을 다 만들고 24만 행을 버렸다. 이 최적화는 `<`, `<=` 같은 비교에 걸리고(`rn = 1`은 `Run Condition: ... <= 1`과 바깥 `Filter`로 나뉜다) `row_number`, `rank`, `dense_rank`, `count`처럼 값이 한 방향으로만 움직이는 함수에서 된다.
+
+다만 두 계획 모두 30만 행을 정렬하는 데 대부분의 시간을 썼다. `Sort Method: external merge Disk`는 정렬이 `work_mem`(기본 4MB)을 넘어 디스크에 썼다는 뜻이다. `work_mem`을 32MB로 올리면 `quicksort Memory: 24007kB`로 바뀌는데, 이 크기에서는 여러 번 재도 실행 시간이 160~200ms 사이로 거의 같았다. 정렬을 없애는 쪽이 효과가 크다. 창의 정렬 순서와 같은 인덱스를 만든다.
+
+```sql
+CREATE INDEX enrollments_big_student_score_idx ON enrollments_big (student_id, score DESC, id);
+```
+
+```text
+ WindowAgg (actual time=0.048..117.042 rows=60000 loops=1)
+   Run Condition: (row_number() OVER (?) <= 3)
+   ->  Index Only Scan using enrollments_big_student_score_idx on enrollments_big (actual time=0.037..57.396 rows=300000 loops=1)
+         Heap Fetches: 0
+ Execution Time: 120.345 ms
+```
+
+`Sort`가 사라지고 인덱스가 이미 정렬된 순서로 행을 넘긴다. 213ms가 120ms가 됐다. 2만 명 전체가 아니라 한 화면에 보일 20명만 필요하다면 `WHERE student_id BETWEEN 1 AND 20`을 안쪽에 넣는다. 그러면 333행만 읽고 0.15ms에 끝난다.
+
+파티션이 없는 전체 상위 N개라면 효과가 더 크다. `PARTITION BY` 없이 `ORDER BY score DESC, id`로 줄 세우고 같은 순서의 인덱스가 있으면, 4번째 행에서 조건이 거짓이 되는 순간 `WindowAgg`가 아예 멈춘다.
+
+```text
+-- WHERE rn <= 3
+ WindowAgg (actual time=0.027..0.031 rows=3 loops=1)
+   Run Condition: (row_number() OVER (?) <= 3)
+   ->  Index Scan using enrollments_big_score_idx on enrollments_big (actual time=0.020..0.022 rows=4 loops=1)
+ Execution Time: 0.074 ms
+
+-- WHERE rn IN (1, 2, 3)
+ Subquery Scan on t (actual time=0.011..275.836 rows=3 loops=1)
+   Filter: (t.rn = ANY ('{1,2,3}'::bigint[]))
+   Rows Removed by Filter: 299997
+   ->  WindowAgg (actual time=0.008..241.922 rows=300000 loops=1)
+         ->  Index Scan using enrollments_big_score_idx on enrollments_big (actual time=0.006..163.851 rows=300000 loops=1)
+ Execution Time: 275.855 ms
+```
+
+인덱스는 `(score DESC, id)`로 따로 만들어 쟀다. 0.074ms와 276ms, 조건을 쓰는 모양 하나로 3700배가 갈렸다. 아래 그림에서 다음을 누르면 `Run Condition`이 어느 행에서 멈추는지 보인다.
+
+<SequenceDiagram
+  caption="Run Condition은 조건이 다시 참이 될 수 없는 순간 멈춘다"
+  actors={[
+    { id: "idx", label: "Index Scan" },
+    { id: "win", label: "WindowAgg" },
+    { id: "out", label: "결과" },
+  ]}
+  steps={[
+    { from: "idx", to: "win", label: "100점, id 작은 순", title: "정렬된 행이 들어온다", detail: "인덱스가 score DESC, id 순서로 행을 넘긴다. 정렬 노드가 필요 없다." },
+    { from: "win", to: "out", label: "rn 1, 2, 3", title: "조건이 참인 동안 내보낸다", detail: "row_number가 1, 2, 3인 행은 rn <= 3을 만족해 결과로 나간다." },
+    { from: "idx", to: "win", label: "4번째 행", title: "한 행을 더 읽는다", detail: "조건이 거짓이 되는 것을 확인하려면 4번째 행이 필요하다. Index Scan의 rows=4가 이것이다." },
+    { from: "win", to: "win", label: "rn 4 > 3", title: "더 볼 필요가 없다", detail: "row_number는 줄어들지 않으니 이후 행은 모두 거짓이다. WindowAgg가 읽기를 멈춘다.", payload: "Run Condition: (row_number() OVER (?) <= 3)" },
+    { from: "win", to: "out", label: "3행, 0.074ms", title: "IN으로 쓰면 끝까지 간다", detail: "rn IN (1, 2, 3)은 이 판단을 못 해서 30만 행에 번호를 다 붙이고 바깥 Filter가 299997행을 버린다. 276ms." },
+  ]}
+/>
+
+그룹별 상위 N개를 `LATERAL`과 인덱스로 푸는 방법도 있다. 그룹 수가 적고 그룹마다 행이 아주 많으면 `LATERAL`이 그룹마다 N행만 읽어서 더 빠르다. 그 비교는 [리포트 쿼리 글](/posts/postgres-reporting-sql#사용자마다-최근-주문-세-건)과 [서브쿼리 글](/posts/sql-subqueries-exists-lateral#from-안에서-바깥을-보는-lateral)에 있다. 그룹 수가 많고 그룹마다 행이 몇 개 안 되면 지금처럼 한 번 훑는 윈도우 함수가 낫다.
+
+## 동점에서 ROW_NUMBER는 아무나 고른다
+
+"수강생마다 최고 점수 수강 한 건"을 뽑는데 `ORDER BY score DESC`만 쓰면, 같은 최고점이 둘 이상인 수강생은 어느 행이 1번이 될지 정해져 있지 않다. 정해져 있지 않다는 게 어떤 뜻인지 실제로 본다. 같은 쿼리를 인덱스가 있는 상태와 인덱스를 끈 상태(`SET enable_indexscan = off` 등)에서 돌려 결과를 임시 테이블 두 개에 담고 비교한다.
+
+```sql
+-- pick_a: 인덱스 순서로 읽은 결과, pick_b: Seq Scan + Sort로 읽은 결과
+-- 둘 다 같은 쿼리다
+SELECT student_id, id FROM (
+  SELECT student_id, id, row_number() OVER (PARTITION BY student_id ORDER BY score DESC) AS rn
+  FROM enrollments_big) t WHERE rn = 1;
+
+SELECT count(*) AS students, count(*) FILTER (WHERE a.id <> b.id) AS different
+FROM pick_a a JOIN pick_b b USING (student_id);
+```
+
+```text
+ students | different
+----------+-----------
+    20000 |       713
+(1 row)
+```
+
+2만 명 중 713명이 실행 계획에 따라 다른 수강 기록을 받았다. 점수는 같고 `id`만 다르다.
+
+```text
+ student_id | with_index | with_sort | s1 | s2
+------------+------------+-----------+----+----
+         44 |     120171 |    125000 | 95 | 95
+         61 |      56638 |     86553 | 98 | 98
+         65 |     124993 |    281707 | 90 | 90
+(3 rows)
+```
+
+개발 DB에서는 늘 같은 행이 나와서 테스트를 통과하고, 운영에서 통계가 바뀌어 계획이 달라지는 날 결과가 바뀐다. 중복 제거에 쓴다면 지워지는 행이 바뀐다. `ROW_NUMBER`로 하나를 고를 때는 `ORDER BY score DESC, id`처럼 끝에 고유한 컬럼을 붙여 순서를 완전히 정한다. 동점자를 모두 보여 주는 게 맞는 요구라면 `RANK`를 쓴다. 이 선택은 [SQLD 윈도우 함수 글](/posts/sqld-window-functions#동점자가-있을-때-세-순위-함수)의 세 순위 함수 차이와 같은 이야기다.
+
+## 리포트 쿼리가 느릴 때 계획에서 보는 곳
+
+윈도우 함수가 들어간 쿼리가 느리다는 제보를 받으면 계획에서 몇 군데만 보면 된다. 아래 그림에서 다음을 누르면 30만 행 쿼리의 계획을 아래에서 위로 따라간다.
+
+<NetworkTopology
+  caption="윈도우 함수 쿼리는 정렬을 줄이는 쪽으로 고친다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "heap", label: "Seq Scan", sub: "30만 행", x: 60, y: 60, icon: "db", w: 90 },
+    { id: "sort", label: "Sort", sub: "Disk 6488kB", x: 200, y: 60, w: 100 },
+    { id: "idx", label: "Index Scan", sub: "이미 정렬됨", x: 60, y: 175, icon: "db", w: 100 },
+    { id: "win", label: "WindowAgg", sub: "Run Condition", x: 200, y: 175, w: 110 },
+    { id: "out", label: "결과", sub: "6만 행", x: 340, y: 175, icon: "client", w: 80 },
+  ]}
+  links={[
+    { from: "heap", to: "sort" },
+    { from: "sort", to: "win" },
+    { from: "idx", to: "win", dashed: true },
+    { from: "win", to: "out" },
+  ]}
+  steps={[
+    { path: ["heap", "sort"], packet: "30만 행", highlight: ["sort"], title: "정렬부터 본다", detail: "Sort Key가 창의 PARTITION BY와 ORDER BY 순서다. Sort Method에 Disk가 보이면 work_mem을 넘은 것이다.", payload: "Sort Method: external merge  Disk: 6488kB" },
+    { path: ["sort", "win"], packet: "정렬된 행", title: "창이 몇 개인지 센다", detail: "WindowAgg와 Sort가 여러 쌍이면 창 정의가 다르다는 뜻이다. 같은 창으로 합칠 수 있는지 본다." },
+    { path: ["win", "out"], packet: "6만 행", highlight: ["win"], title: "Run Condition이 있나", detail: "상위 N개인데 Run Condition 대신 바깥 Filter와 Rows Removed가 크면 조건을 rn <= N 모양으로 바꾼다." },
+    { path: ["idx", "win", "out"], packet: "정렬 없이", highlight: ["idx"], title: "정렬을 인덱스로 옮긴다", detail: "창의 정렬 순서와 같은 인덱스가 있으면 Sort가 사라진다. 213ms가 120ms가 됐다." },
+    { path: ["idx", "win"], packet: "WHERE 먼저", title: "읽는 범위를 줄인다", detail: "화면에 필요한 그룹만 안쪽 WHERE로 거르면 인덱스가 그 범위만 읽는다. 20명이면 0.15ms다." },
+  ]}
+/>
+
+그림 밖에서 하나 더 있다. 윈도우 함수 결과로 거르는 조건을 서브쿼리 바깥에 썼는데 실제로는 안쪽 `WHERE`에 넣어도 되는 조건(특정 수강생, 특정 기간)이라면 안으로 옮긴다. 플래너는 `PARTITION BY` 컬럼에 대한 조건만 안으로 밀어 넣을 수 있고, 다른 컬럼 조건은 윈도우 함수의 결과를 바꿀 수 있어서 밀어 넣지 않는다.
+
+## 이동 합계를 직접 계산해 보기
+
+`RANGE BETWEEN interval 'n days' PRECEDING AND CURRENT ROW`를 자바스크립트로 짜 본다. 날짜(`YYYY-MM-DD`) 순으로 정렬된 `{ day, amount }` 목록과 일수 `days`를 받아서, 행마다 "지금 날짜에서 `days - 1`일 전부터 지금 날짜까지"의 합을 같은 길이의 배열로 돌려준다. `RANGE`의 `CURRENT ROW`는 같은 날짜의 행을 모두 포함하니, 같은 날에 뒤에 있는 행도 더해야 한다. 첫 테스트는 본문의 일별 매출에 `range_7d` 결과를 그대로 옮긴 것이다.
+
+<CodePlayground
+  caption="RANGE 프레임으로 최근 N일 합계"
+  functionName="rollingSum"
+  initialCode={`function rollingSum(rows, days) {
+  // rows: [{ day: "2026-10-01", amount: 45000 }, ...] (날짜 오름차순)
+  return [];
+}`}
+  solution={`function rollingSum(rows, days) {
+  const toDay = (s) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 86400000;
+  const d = rows.map((r) => toDay(r.day));
+  return rows.map((_, i) => {
+    let sum = 0;
+    for (let j = 0; j < rows.length; j++) {
+      // 시작: 지금 날짜 - (days - 1), 끝: 지금 날짜 (동점 포함)
+      if (d[j] >= d[i] - (days - 1) && d[j] <= d[i]) sum += rows[j].amount;
+    }
+    return sum;
+  });
+}`}
+  tests={[
+    {
+      label: "본문의 일별 매출, 7일",
+      args: [
+        [
+          { day: "2026-09-28", amount: 30000 }, { day: "2026-10-01", amount: 45000 }, { day: "2026-10-05", amount: 30000 },
+          { day: "2026-10-12", amount: 50000 }, { day: "2026-10-15", amount: 50000 }, { day: "2026-10-20", amount: 90000 },
+          { day: "2026-10-31", amount: 35000 }, { day: "2026-11-01", amount: 95000 }, { day: "2026-11-02", amount: -50000 },
+          { day: "2026-11-03", amount: 20000 }, { day: "2026-11-30", amount: 35000 },
+        ],
+        7,
+      ],
+      expected: [30000, 75000, 75000, 50000, 100000, 140000, 35000, 130000, 80000, 100000, 35000],
+    },
+    {
+      label: "같은 날 두 건 (동점 포함)",
+      args: [[{ day: "2026-10-31", amount: 1 }, { day: "2026-10-31", amount: 2 }, { day: "2026-11-01", amount: 4 }], 1],
+      expected: [3, 3, 4],
+    },
+    {
+      label: "월을 넘기는 2일",
+      args: [[{ day: "2026-10-31", amount: 1 }, { day: "2026-10-31", amount: 2 }, { day: "2026-11-01", amount: 4 }], 2],
+      expected: [3, 3, 7],
+    },
+    { label: "빈 입력", args: [[], 7], expected: [] },
+  ]}
+/>
+
+## 정렬 한 번 위에 얹는 계산
+
+윈도우 함수는 정렬된 행을 한 줄씩 읽으며 프레임 안의 값을 계산하는 `WindowAgg`다. 프레임은 무엇을 세는지에 따라 고른다. 행 개수면 `ROWS`, 값의 거리면 `RANGE`, 서로 다른 값의 개수면 `GROUPS`이고, 데이터에 빈 날이 있으면 `ROWS`가 조용히 틀린다. 성능은 정렬이 정한다. 창 정의를 맞춰 정렬 횟수를 줄이고, 같은 순서의 인덱스로 정렬을 없애고, 상위 N개는 `rn <= N` 모양으로 써서 PostgreSQL 15 이상의 `Run Condition`을 받는다. `ROW_NUMBER`로 하나를 고를 때는 순서를 끝까지 정한다. 재귀로 만든 결과에 이 계산을 얹는 법은 [재귀 CTE 글](/posts/sql-cte-recursive)에, 이 패턴들을 면접 문제로 묶은 것은 [SQL 면접 문제 글](/posts/sql-interview-problems)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### ROWS와 RANGE 프레임은 어떻게 다른가요?
+
+`ROWS`는 행 개수로, `RANGE`는 `ORDER BY` 값의 차이로 창을 정합니다. 결제가 없는 날은 행이 없으니 `ROWS BETWEEN 6 PRECEDING`은 최근 7건이고, `RANGE BETWEEN interval '6 days' PRECEDING`은 달력 기준 최근 7일입니다. 동점 행이 있으면 `RANGE`의 `CURRENT ROW`는 동점 전체를 포함하고 `ROWS`는 지금 행 하나만 포함합니다.
+
+### GROUPS 프레임은 언제 쓰나요?
+
+같은 값끼리 묶은 덩어리 개수로 창을 정할 때 씁니다. "직전 두 개 날짜의 수강 신청"처럼 서로 다른 값의 개수를 물을 때 맞고, PostgreSQL 11부터 됩니다. MySQL 8은 `GROUPS`와 `EXCLUDE`를 지원하지 않습니다.
+
+### 윈도우 함수 쿼리가 느립니다. 실행 계획에서 무엇을 보나요?
+
+`WindowAgg` 아래의 `Sort`부터 봅니다. 창 정의가 다르면 정렬이 여러 번 붙으니 같은 창으로 합칠 수 있는지 보고, 창의 `PARTITION BY`와 `ORDER BY` 순서와 같은 인덱스를 만들면 정렬이 사라집니다. `Sort Method`에 `Disk`가 보이면 `work_mem`을 넘은 것인데, 정렬 자체를 없애는 쪽이 보통 효과가 큽니다.
+
+### 그룹별 상위 N개를 윈도우 함수로 구할 때 주의할 점은요?
+
+윈도우 함수는 `WHERE`에 못 쓰니 서브쿼리로 감싸고 바깥에서 `rn <= N`으로 거릅니다. PostgreSQL 15부터는 이 모양을 `Run Condition`으로 바꿔서 조건이 거짓이 된 뒤의 행을 만들지 않고, 파티션이 없으면 아예 읽기를 멈춥니다. `rn IN (1, 2, 3)`처럼 쓰면 이 최적화를 못 받아 전체에 번호를 붙인 뒤 버립니다. 그룹 수가 적고 그룹마다 행이 많으면 `LATERAL`과 인덱스가 더 빠를 수 있습니다.
+
+### ROW_NUMBER로 중복을 제거했는데 실행할 때마다 지워지는 행이 다를 수 있나요?
+
+있습니다. `ORDER BY`에 동점이 있으면 어느 행이 1번이 될지 정해져 있지 않아서 실행 계획이 바뀌면 결과도 바뀝니다. 실제로 30만 행에서 인덱스를 끄고 같은 쿼리를 돌리자 2만 명 중 713명이 다른 행을 받았습니다. `ORDER BY` 끝에 기본 키처럼 고유한 컬럼을 붙여 순서를 완전히 정합니다.
+
+### "나를 뺀 평균"은 어떻게 구하나요?
+
+프레임을 파티션 전체(`ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`)로 잡고 `EXCLUDE CURRENT ROW`를 붙입니다. `EXCLUDE`는 프레임 절의 일부라서 프레임을 적어야 쓸 수 있습니다. 동점 행까지 빼려면 `EXCLUDE GROUP`, 동점 중 자기 자신만 남기려면 `EXCLUDE TIES`를 씁니다.
+
+### 같은 OVER 절을 여러 번 쓰면 어떻게 정리하나요?
+
+`WINDOW w AS (PARTITION BY ... ORDER BY ...)`로 이름을 붙이고 각 함수에서 `OVER w`로 부릅니다. 복사한 정의 중 하나만 고쳐서 숫자가 서로 다른 기준으로 계산되는 실수를 막고, 같은 창이니 정렬도 한 번만 합니다. 집계 함수의 `FILTER (WHERE ...)`도 `OVER w` 앞에 그대로 붙일 수 있습니다.

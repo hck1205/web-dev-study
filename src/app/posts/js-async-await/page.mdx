@@ -1,0 +1,465 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-async-await");
+
+장바구니 항목을 한꺼번에 저장하는 함수를 짰다. 항목마다 `await save(item)`을 하고, 다 끝나면 "모두 저장했다"를 찍는다.
+
+```js
+async function saveAll(items) {
+  items.forEach(async (item) => {
+    await save(item);
+  });
+  console.log("모두 저장했다");
+}
+saveAll([3, 1, 2]); // save(n)은 n × 100ms 걸린다
+```
+
+```text
+  0ms 모두 저장했다
+100ms saved 1
+200ms saved 2
+301ms saved 3
+```
+
+"모두 저장했다"가 0ms에, 아무것도 저장되기 전에 찍혔다. 이 함수를 `await saveAll(...)` 한 뒤 바로 페이지를 이동하면 저장 요청이 날아가는 중에 화면이 바뀐다. 저장 하나가 실패해도 `saveAll`을 부른 쪽은 모른다. `await`를 분명히 썼는데 왜 기다리지 않았을까.
+
+`async`/`await`는 [Promise](/posts/js-promises)를 동기 코드처럼 읽히게 쓰는 문법이다. 읽기는 쉬워졌지만, 실제로 일어나는 일은 여전히 Promise와 마이크로태스크다. 이 글은 `await`에서 함수가 어떻게 멈췄다가 돌아오는지에서 출발해, 위 버그처럼 그 사실을 잊었을 때 생기는 문제들을 본다.
+
+이 주제의 다른 글: [콜백 지옥](/posts/js-callback-hell) · [Promise](/posts/js-promises) · [Promise 조합 함수](/posts/js-promise-combinators)
+
+## async 함수는 부르는 즉시 Promise를 준다
+
+`async`를 붙인 함수는 무엇을 `return`하든 Promise를 돌려준다. 값을 돌려주면 그 값으로 이행되는 Promise가 되고, 안에서 던지면 거부되는 Promise가 된다. 함수 본문은 호출하는 순간 동기로 실행되기 시작해서 첫 `await`를 만날 때까지 그대로 달린다.
+
+```js
+async function load() {
+  console.log("2. load: await 앞");
+  const v = await 1;
+  console.log("4. load: await 뒤", v);
+  return "끝";
+}
+console.log("1. 호출 전");
+const p = load();
+console.log("3. 호출 직후:", p);
+p.then((v) => console.log("5. then:", v));
+```
+
+```text
+1. 호출 전
+2. load: await 앞
+3. 호출 직후: Promise { <pending> }
+4. load: await 뒤 1
+5. then: 끝
+```
+
+`await` 앞의 `2`는 호출과 함께 바로 찍힌다. `await`에서 `load`는 잠시 빠져나오고, 호출한 쪽은 pending 상태의 Promise를 받아 다음 줄(`3`)로 간다. 동기 코드가 다 끝나 콜 스택이 비면 그때 `load`가 멈췄던 자리에서 다시 시작한다.
+
+<AlgoTrace
+  caption="await에서 함수는 스택에서 내려가고, 실행 문맥은 따로 보관된다"
+  memoryLabel="콜 스택 (왼쪽이 바닥)"
+  cells={["log 1", "load()", "log 2", "await 1", "log 3", "then 등록", "재개: log 4", "return", "log 5"]}
+  steps={[
+    { pointer: 0, memory: ["main"], caption: "스크립트가 시작된다." },
+    { pointer: 1, memory: ["main", "load"], caption: "load를 부르면 본문이 동기로 실행되기 시작한다." },
+    { pointer: 2, memory: ["main", "load"], caption: "await 앞까지는 보통 함수와 똑같다." },
+    { pointer: 3, memory: ["main"], caption: "await에서 load의 실행 문맥이 스택에서 빠져 보관된다. 호출한 쪽은 pending Promise를 받는다." },
+    { pointer: 4, memory: ["main"], caption: "호출한 쪽이 계속 달린다. load는 아직 끝나지 않았다." },
+    { pointer: 5, memory: [], caption: "then을 붙이고 스크립트가 끝난다. 스택이 비었다." },
+    { pointer: 6, memory: ["load"], caption: "마이크로태스크로 load의 문맥이 스택에 다시 올라간다. 지역 변수 v도 그대로 있다." },
+    { pointer: 7, memory: [], caption: "return '끝'으로 load가 돌려준 Promise가 이행된다." },
+    { pointer: 8, found: [8], memory: ["then 콜백"], caption: "그 Promise에 붙은 then이 다음 마이크로태스크로 실행된다." },
+  ]}
+/>
+
+명세로 보면 `await v`는 `v`를 `Promise.resolve(v)`처럼 Promise로 만들고, 거기에 "이 실행 문맥을 이어서 돌려라"라는 핸들러를 붙인 뒤 현재 실행 문맥을 스택에서 떼어 낸다. 함수의 지역 변수와 실행 위치는 그 문맥에 보관된다. 그래서 `await` 뒤에도 변수가 살아 있다. 스레드가 멈추는 게 아니라 함수 하나가 잠시 빠지는 것이다. 이 재개가 마이크로태스크로 들어간다는 점과 그로 인한 출력 순서 퍼즐은 [이벤트 루프](/posts/event-loop) 글에서 자세히 다뤘다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="async 함수, 그 함수가 돌려주는 Promise, 재개를 맡는 마이크로태스크"
+  nodes={[
+    { id: "fn", label: "async 함수", sub: "실행 문맥 보관", x: 90, y: 50, w: 130 },
+    { id: "ret", label: "반환 Promise", sub: "return·throw로 확정", x: 310, y: 50, w: 150 },
+    { id: "aw", label: "await한 값", sub: "Promise로 감쌈", x: 90, y: 200, w: 130 },
+    { id: "mq", label: "마이크로태스크", sub: "재개 예약", x: 310, y: 200, w: 140 },
+  ]}
+  edges={[
+    { from: "fn", to: "ret", label: "즉시 반환" },
+    { from: "fn", to: "aw", label: "멈춤" },
+    { from: "aw", to: "mq", label: "확정되면" },
+    { from: "mq", to: "fn", label: "이어서 실행" },
+  ]}
+/>
+
+이 그림이 처음 버그를 그대로 설명한다. `forEach`에 넘긴 `async` 화살표 함수도 부르는 즉시 Promise를 돌려준다. 그런데 `forEach`는 콜백의 반환값을 버린다. 세 Promise는 아무도 기다리지 않는다.
+
+## forEach는 반환값을 버린다
+
+아래 그림에서 `saveAll` 쪽 흐름과 저장 요청의 흐름을 비교해 보자.
+
+<SequenceDiagram
+  caption="forEach 안의 await는 그 콜백만 멈출 뿐, saveAll은 기다리지 않는다"
+  actors={[
+    { id: "caller", label: "saveAll" },
+    { id: "fe", label: "forEach" },
+    { id: "cb", label: "async 콜백" },
+    { id: "api", label: "저장 API" },
+  ]}
+  steps={[
+    { from: "caller", to: "fe", label: "items.forEach", title: "반복을 맡긴다", detail: "forEach는 각 항목에 콜백을 부르고 반환값은 쓰지 않는다." },
+    { from: "fe", to: "cb", label: "cb(3), cb(1), cb(2)", title: "콜백 세 번", detail: "async 콜백은 await에서 바로 Promise를 돌려주고 빠진다. forEach는 그 Promise를 버리고 다음 항목으로 간다." },
+    { from: "cb", to: "api", label: "save × 3", title: "요청 세 개가 동시에 출발", detail: "의도와 달리 차례대로가 아니라 한꺼번에 시작된다." },
+    { from: "caller", to: "caller", label: "log 모두 저장", title: "0ms: 거짓 완료", detail: "forEach가 끝났으니 다음 줄이 실행된다. 아무것도 저장되지 않았다." },
+    { from: "api", to: "cb", label: "saved 1, 2, 3", title: "나중에 하나씩 끝난다", detail: "100ms, 200ms, 300ms에 끝난다. 실패하면 그 거부는 아무도 받지 않는다." },
+  ]}
+/>
+
+고치는 방법은 두 가지이고, 무엇을 원하는지에 따라 고른다. 차례대로 저장해야 하면 `for...of` 안에서 `await`한다. 순서가 상관없고 빨리 끝내고 싶으면 `map`으로 Promise 배열을 만들어 `Promise.all`로 기다린다.
+
+```js
+async function sequential(items) {
+  for (const item of items) await save(item);
+  console.log("for...of 끝");
+}
+async function parallel(items) {
+  await Promise.all(items.map((item) => save(item)));
+  console.log("Promise.all 끝");
+}
+```
+
+```text
+300ms saved 3
+410ms saved 1
+610ms saved 2
+610ms for...of 끝
+---
+100ms saved 1
+200ms saved 2
+300ms saved 3
+300ms Promise.all 끝
+```
+
+둘 다 "끝"이 진짜 끝에 찍힌다. 차이는 시간이다. 차례대로는 300 + 100 + 200으로 약 600ms, 한꺼번에는 가장 긴 300ms다. `map`, `filter`, `reduce`, `some`도 `forEach`처럼 콜백이 돌려준 Promise를 기다리지 않는다. `filter(async …)`는 모든 Promise 객체가 truthy라서 아무것도 걸러 내지 못한다.
+
+## 하나씩 기다릴까, 한꺼번에 보낼까
+
+`for` 안의 `await`는 앞 요청이 끝나야 다음 요청을 보낸다. 서로 상관없는 요청 30개를 이렇게 보내면 응답 시간의 합만큼 기다린다. 화면이 느리다는 신고를 받고 개발자 도구의 Network 탭을 열어 보면 요청 막대가 계단처럼 하나씩 이어져 있다. 이게 요청 워터폴이다.
+
+<AlgoTrace
+  caption="for 안의 await: 요청이 끝나야 다음 요청을 보낸다 (300·100·200ms)"
+  memoryLabel="진행 중인 요청"
+  cells={["save 3", "save 1", "save 2"]}
+  steps={[
+    { pointer: 0, memory: ["3 (300ms)"], caption: "0ms: 첫 요청만 보낸다." },
+    { pointer: 0, found: [0], memory: [], caption: "300ms: 첫 요청이 끝나야 루프가 다음으로 간다." },
+    { pointer: 1, found: [0], memory: ["1 (100ms)"], caption: "300ms: 두 번째 요청을 보낸다." },
+    { pointer: 2, found: [0, 1], memory: ["2 (200ms)"], caption: "400ms: 세 번째 요청을 보낸다." },
+    { pointer: 2, found: [0, 1, 2], memory: [], caption: "600ms: 끝. 합만큼 걸렸다." },
+  ]}
+/>
+
+그렇다고 무조건 한꺼번에 보내는 게 답은 아니다. 차례대로 해야 하는 경우가 있다. 앞 결과가 다음 요청의 입력이면 당연히 기다려야 한다. 같은 행을 고치는 요청 여러 개를 동시에 보내면 순서가 꼬일 수 있다. 그리고 1만 개를 한꺼번에 보내면 HTTP/1.1에서는 브라우저가 도메인당 연결 수 제한(크롬 계열은 6개)에 걸려 줄을 세우고, 서버는 레이트 리밋에 걸려 429를 돌려주고, Node.js는 파일을 동시에 너무 많이 열어 `EMFILE`로 실패한다.
+
+그래서 실무에서는 동시에 몇 개까지만 보내는 동시성 제한을 자주 쓴다. 일꾼 N개가 남은 일감을 하나씩 가져가는 방식으로 짜면 짧다.
+
+```js
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;               // 다음 일감 번호를 가져간다
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+const r = await mapLimit([300, 100, 200, 100, 300], 2, job); // job(d)는 d ms 뒤에 d를 돌려준다
+```
+
+```text
+600ms limit 2: [ 300, 100, 200, 100, 300 ]
+```
+
+`next++`를 여러 일꾼이 같이 써도 안전한 이유는 자바스크립트가 한 스레드에서 돌고, `const i = next++`와 `await` 사이에 다른 코드가 끼어들 수 없기 때문이다. 결과는 끝난 순서가 아니라 `results[i]`로 원래 자리에 넣었다.
+
+<AlgoTrace
+  caption="일꾼 2개: 손이 빈 일꾼이 다음 일감을 가져간다"
+  memoryLabel="일꾼이 들고 있는 일"
+  cells={["300", "100", "200", "100", "300"]}
+  steps={[
+    { pointer: 1, memory: ["A: 300", "B: 100"], caption: "0ms: 두 일꾼이 첫 두 일감을 가져간다." },
+    { pointer: 2, found: [1], memory: ["A: 300", "B: 200"], caption: "100ms: B가 끝나고 바로 세 번째를 가져간다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["A: 100", "B: 300"], caption: "300ms: A와 B가 동시에 끝난다. A가 넷째, B가 다섯째를 가져간다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["B: 300"], caption: "400ms: A는 더 가져갈 게 없어 끝난다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: [], caption: "600ms: B까지 끝나 전체가 끝난다. 차례대로였다면 1000ms다." },
+  ]}
+/>
+
+직접 짜는 대신 `p-limit` 같은 작은 라이브러리를 쓰는 경우도 많다. 여러 Promise를 기다리는 표준 함수 네 가지(`all`, `allSettled`, `race`, `any`)의 차이는 [Promise 조합 함수](/posts/js-promise-combinators)에서 다룬다.
+
+## 미리 시작해 둔 Promise가 먼저 실패하면
+
+워터폴을 피하려고 요청 두 개를 먼저 시작해 두고 차례로 `await`하는 코드가 있다. 겉보기엔 깔끔한데 함정이 있다.
+
+```js
+const getUser = () => new Promise((r) => setTimeout(() => r({ id: 1 }), 200));
+const getPosts = () => new Promise((_, rej) => setTimeout(() => rej(new Error("posts 500")), 50));
+
+async function loadPage() {
+  const userP = getUser();   // 둘 다 먼저 시작해 두고
+  const postsP = getPosts();
+  try {
+    const user = await userP;   // 200ms 기다리는 동안
+    const posts = await postsP; // postsP는 50ms에 이미 거부됐다
+    return { user, posts };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+loadPage().then((r) => console.log("결과:", r));
+```
+
+```text
+/app/a5.js:2
+const getPosts = () => new Promise((_, rej) => setTimeout(() => rej(new Error("posts 500")), 50));
+                                                                    ^
+
+Error: posts 500
+    at Timeout._onTimeout (/app/a5.js:2:69)
+    at listOnTimeout (node:internal/timers:588:17)
+    at process.processTimers (node:internal/timers:523:7)
+
+Node.js v22.22.0
+```
+
+`try/catch`가 있는데도 프로세스가 죽었다(Node.js 22, 경로는 `/app`으로 줄였다). "결과"는 찍히지 않는다.
+
+<SequenceDiagram
+  caption="거부된 순간 그 Promise를 기다리는 코드가 아직 없다"
+  actors={[
+    { id: "fn", label: "loadPage" },
+    { id: "u", label: "userP 200ms" },
+    { id: "p", label: "postsP 50ms" },
+    { id: "rt", label: "Node.js" },
+  ]}
+  steps={[
+    { from: "fn", to: "u", label: "시작", title: "두 요청을 먼저 시작", detail: "여기까지는 의도대로다. 두 요청이 동시에 돈다." },
+    { from: "fn", to: "p", label: "시작", title: "postsP에는 핸들러가 없다", detail: "아직 아무도 postsP에 then이나 await를 붙이지 않았다." },
+    { from: "fn", to: "u", label: "await userP", title: "userP를 기다린다", detail: "loadPage는 여기서 멈춘다. await postsP 줄에는 아직 도달하지 않았다." },
+    { from: "p", to: "rt", label: "50ms: reject", title: "postsP가 먼저 거부된다", detail: "핸들러가 하나도 없는 Promise가 거부됐다. 마이크로태스크가 비어도 아무도 붙지 않는다." },
+    { from: "rt", to: "rt", label: "unhandled", title: "처리되지 않은 거부로 종료", detail: "Node 15부터 기본 동작은 프로세스 종료다. 150ms 뒤에 붙을 예정이던 await는 기회가 없다." },
+  ]}
+/>
+
+`try/catch`는 `await` 지점에서만 거부를 받는다. 거부가 일어난 시점에 그 Promise를 아무도 기다리고 있지 않으면 런타임은 "버려진 거부"로 판단한다. 브라우저라면 죽지는 않지만 콘솔에 `Uncaught (in promise)`가 찍히고 에러 수집기에 엉뚱한 에러가 쌓인다. 동시에 시작한 Promise는 처음부터 함께 기다린다.
+
+```js
+const [user, posts] = await Promise.all([getUser(), getPosts()]);
+```
+
+이 한 줄에는 문법 요소가 여럿 겹쳐 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  base="const"
+  separator=" "
+  joiner=" "
+  caption="병렬로 시작하고 함께 기다리는 한 줄"
+  params={[
+    { key: "destructure", display: "[user, posts]", title: "배열 구조 분해", description: "Promise.all의 결과는 입력과 같은 순서의 배열이다. 끝난 순서와 상관없이 user가 첫 자리다." },
+    { key: "eq", display: "=", title: "대입", description: "await가 끝나야 대입이 일어난다. 실패하면 대입 없이 바로 catch로 간다." },
+    { key: "await", display: "await", title: "여기서 멈춘다", description: "Promise.all이 돌려준 Promise 하나만 기다린다. 두 요청 중 하나라도 거부되면 그 즉시 이 줄에서 예외가 난다.", required: true },
+    { key: "all", display: "Promise.all([", title: "모두 기다리는 Promise", description: "배열의 모든 Promise에 처음부터 핸들러를 붙인다. 그래서 어느 쪽이 먼저 실패해도 버려진 거부가 생기지 않는다." },
+    { key: "calls", display: "getUser(), getPosts()])", title: "호출이 시작이다", description: "괄호를 붙여 부르는 순간 요청이 출발한다. 둘 다 Promise.all에 들어가기 전에 이미 동시에 시작됐다." },
+  ]}
+/>
+
+## return과 return await는 try 안에서 다르다
+
+`async` 함수에서 `return promise`와 `return await promise`는 대부분 같은 결과를 낸다. `try` 블록 안에서만 다르다.
+
+```js
+async function withoutAwait() {
+  try {
+    return fail(); // 10ms 뒤 거부되는 Promise
+  } catch (e) {
+    return "fallback";
+  }
+}
+async function withAwait() {
+  try {
+    return await fail();
+  } catch (e) {
+    return "fallback";
+  }
+}
+```
+
+```text
+return: 거부됨 DB timeout
+return await: fallback
+```
+
+`return fail()`은 Promise를 그대로 바깥으로 넘기고 함수를 끝낸다. 거부는 함수가 `try`를 빠져나간 뒤에 일어나니 `catch`가 받을 수 없다. `return await`는 `try` 안에서 결과를 기다리므로 거부가 `catch`로 간다. 한때 "`return await`는 쓸데없다"는 린트 규칙(`no-return-await`)이 널리 쓰였는데, ESLint는 v8.46에서 이 규칙을 폐기했다. 지금은 `typescript-eslint`의 `return-await` 규칙이 `try` 안에서는 오히려 `await`를 요구하는 설정을 기본으로 둔다.
+
+`return await`에는 덤이 하나 더 있다. 에러 스택에 그 함수가 남는다. Node.js(V8)는 `await`로 이어진 호출을 따라가 비동기 스택 트레이스를 만들어 주는데, `then`으로 넘기면 그 연결이 끊긴다.
+
+```js
+async function queryDb() {
+  await wait(10);
+  throw new Error("connection reset");
+}
+async function findOrder(id) {
+  return await queryDb(); // 아래 두 번째 출력은 이 줄을 queryDb().then((r) => r)로 바꾼 것
+}
+async function handler() {
+  await findOrder(7);
+}
+handler().catch((e) => console.log(e.stack));
+```
+
+```text
+Error: connection reset
+    at queryDb (/app/a7.js:4:9)
+    at async findOrder (/app/a7.js:7:10)
+    at async handler (/app/a7.js:10:3)
+```
+
+```text
+Error: connection reset
+    at queryDb (/app/a7b.js:4:9)
+    at async handler (/app/a7b.js:10:3)
+```
+
+장애 로그에서 "어떤 API가 이 쿼리를 불렀나"를 찾을 때 `at async findOrder` 한 줄이 있고 없고는 크다. 운영 로그의 스택이 자꾸 Node.js 내부 함수에서 끊긴다면, 중간에 `then`이나 콜백으로 넘어가는 지점이 있는지부터 본다.
+
+## 최상위 await는 모듈 로딩을 멈춘다
+
+ES2022부터 ES 모듈의 최상위에서 `async` 함수 없이 `await`를 쓸 수 있다. 설정 파일을 읽고 내보내는 모듈을 생각해 보자.
+
+```js
+// config.mjs
+console.log("config: 읽기 시작");
+export const config = await new Promise((r) => setTimeout(() => r({ port: 8080 }), 300));
+console.log("config: 준비됨");
+
+// main.mjs
+import { config } from "./config.mjs";
+console.log("main: 시작", config);
+```
+
+```text
+config: 읽기 시작
+config: 준비됨
+main: 시작 { port: 8080 }
+```
+
+`main.mjs`는 `config.mjs`의 최상위 `await`가 끝날 때까지 실행되지 않는다. 편하지만, 그 모듈을 가져다 쓰는 모든 모듈이 그만큼 늦게 시작한다는 뜻이다. 브라우저 번들에서 공용 모듈에 최상위 `await`로 네트워크 요청을 걸면 앱 전체의 시작이 그 요청에 묶인다. CommonJS 파일에서는 쓸 수 없다.
+
+```text
+SyntaxError: await is only valid in async functions and the top level bodies of modules
+```
+
+`.cjs`나 `"type": "module"`이 없는 패키지의 `.js`에서 이 에러가 나면 모듈 형식부터 확인한다. CJS와 ESM의 차이는 [ES 모듈](/posts/js-es-modules) 글에 있다.
+
+## React effect에는 async를 바로 넘기지 않는다
+
+`useEffect`에 넘기는 함수는 아무것도 돌려주지 않거나 cleanup 함수를 돌려줘야 한다. `async` 함수는 항상 Promise를 돌려주니 바로 넘기면 React가 그 Promise를 cleanup으로 착각한다. 개발 모드에서는 경고가 나고, cleanup은 동작하지 않는다. 안에서 `async` 함수를 만들어 부른다.
+
+```jsx
+useEffect(() => {
+  let ignore = false;
+  async function load() {
+    try {
+      const res = await fetch(`/api/orders?page=${page}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!ignore) setOrders(data);
+    } catch (err) {
+      if (!ignore) setError(err);
+    }
+  }
+  load();
+  return () => { ignore = true; }; // page가 바뀌면 이전 응답은 버린다
+}, [page]);
+```
+
+`ignore`가 없으면 1페이지 응답이 2페이지 응답보다 늦게 왔을 때 화면에 1페이지가 남는다. `await`가 코드를 위에서 아래로 읽히게 만들어서 "그 사이에 세상이 바뀌었을 수 있다"는 사실을 잊기 쉽다. `await` 한 줄마다 다른 렌더링이 끼어들 수 있다. 요청 자체를 끊으려면 [AbortController](/posts/abort-controller)를 쓴다. 이런 로직을 컴포넌트마다 반복하기 싫어서 TanStack Query 같은 도구를 쓴다. 그 배경은 [클라이언트 데이터 캐시](/posts/client-data-cache) 글에 있다.
+
+이벤트 핸들러는 `async`로 써도 된다. `onClick={async () => { ... }}`의 반환 Promise는 React가 쓰지 않는다. 대신 그 안의 실패는 에러 바운더리로 가지 않으니 `try/catch`로 직접 보여 줘야 한다.
+
+## 직접 해 보기: 동시성을 제한하면 몇 ms 걸리나
+
+`mapLimit`이 실제로 얼마나 걸릴지 계산하는 함수를 짜 보자. 실제로 기다리지 않고 규칙만으로 계산한다. 일꾼 `limit`명이 있고, 손이 빈 일꾼이 남은 일감을 앞에서부터 하나씩 가져간다. 동시에 비면 앞 번호 일꾼이 먼저 가져간다. 전부 끝나는 시각을 돌려준다.
+
+테스트의 기대값은 같은 입력으로 진짜 `setTimeout`을 써서 `mapLimit`을 돌려 잰 시간과 같다(실측은 1~3ms 늦게 나왔다).
+
+<CodePlayground
+  caption="mapLimit이 걸리는 시간 계산하기"
+  functionName="poolTime"
+  initialCode={`function poolTime(durations, limit) {
+  // durations: 일감마다 걸리는 ms, limit: 동시에 돌릴 수 있는 개수
+  // 전체가 끝나는 시각(ms)을 돌려준다
+  return 0;
+}`}
+  solution={`function poolTime(durations, limit) {
+  // 일꾼마다 손이 비는 시각
+  const free = new Array(Math.min(limit, durations.length)).fill(0);
+  for (const d of durations) {
+    const i = free.indexOf(Math.min(...free)); // 가장 먼저 비는 일꾼
+    free[i] += d;
+  }
+  return free.length ? Math.max(...free) : 0;
+}`}
+  tests={[
+    { label: "limit 1은 차례대로", args: [[300, 100, 200], 1], expected: 600 },
+    { label: "limit이 충분하면 가장 긴 것", args: [[300, 100, 200], 3], expected: 300 },
+    { label: "본문의 예", args: [[300, 100, 200, 100, 300], 2], expected: 600 },
+    { label: "일감이 없으면 0", args: [[], 2], expected: 0 },
+    { label: "같은 길이 넷을 둘씩", args: [[100, 100, 100, 100], 2], expected: 200 },
+    { label: "긴 일감 하나가 끝을 정한다", args: [[500, 100, 100, 100, 100], 2], expected: 500 },
+    { label: "limit이 일감보다 많아도", args: [[200, 200, 200], 5], expected: 200 },
+  ]}
+/>
+
+여섯 번째 테스트처럼 긴 일감 하나가 전체 시간을 정하는 경우가 많다. 동시성을 아무리 늘려도 가장 긴 요청보다 빨라질 수는 없다. 그래서 느린 화면을 고칠 때는 동시성보다 가장 긴 요청을 먼저 본다.
+
+## 처음 코드로 돌아가면
+
+`forEach(async …)`가 기다리지 않은 건 `async` 함수가 부르는 즉시 Promise를 돌려주고, `forEach`가 그 Promise를 버렸기 때문이다. `await`는 함수 하나를 잠시 스택에서 빼낼 뿐 그 바깥을 멈추지 않는다. 기다리고 싶은 Promise가 있으면 누군가 그걸 받아서 `await`하거나 `Promise.all`에 넣어야 한다. 여기까지 오면 "언제 시작하고, 누가 기다리고, 실패는 누가 받나"를 코드에서 짚을 수 있다. 여러 Promise를 기다리는 방식의 차이는 [Promise 조합 함수](/posts/js-promise-combinators)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### async/await는 Promise와 어떤 관계인가요?
+
+Promise 위에 얹은 문법이다. `async` 함수는 항상 Promise를 돌려주고, `return`은 이행, `throw`는 거부가 된다. `await`는 Promise가 확정될 때까지 그 함수의 실행만 멈췄다가 마이크로태스크로 이어서 실행한다. 그래서 Promise 체인으로 쓸 수 있는 건 모두 `async`/`await`로 쓸 수 있고, 반대도 된다.
+
+### await를 만나면 스레드가 멈추나요?
+
+멈추지 않는다. `await`는 현재 함수의 실행 문맥을 스택에서 떼어 보관하고, 호출한 쪽에 Promise를 돌려준 뒤 다른 코드를 계속 실행한다. 기다리던 Promise가 확정되면 보관했던 문맥이 마이크로태스크로 다시 스택에 올라간다. 다만 이미 확정된 Promise를 아주 많이 `await`하면 마이크로태스크만 이어져 렌더링이 밀릴 수 있다.
+
+### forEach 안에서 await를 쓰면 왜 기다리지 않나요?
+
+`forEach`는 콜백의 반환값을 버리기 때문이다. `async` 콜백은 첫 `await`에서 Promise를 돌려주고 빠지는데, `forEach`는 그걸 기다리지 않고 다음 항목으로 넘어가 끝난다. 차례대로 하려면 `for...of` 안에서 `await`하고, 한꺼번에 하려면 `map`으로 Promise 배열을 만들어 `Promise.all`로 기다린다.
+
+### 여러 요청을 차례대로 보내는 것과 동시에 보내는 것은 언제 고르나요?
+
+앞 결과가 다음 요청의 입력이거나 순서가 중요한 쓰기라면 차례대로 보낸다. 서로 독립적인 읽기라면 동시에 보내야 전체 시간이 합이 아니라 가장 긴 요청 시간이 된다. 개수가 많으면 서버 레이트 리밋, 브라우저 연결 수, 파일 핸들 같은 한도에 걸리므로 동시에 N개까지만 보내는 제한을 둔다.
+
+### 두 Promise를 먼저 시작해 두고 차례로 await하면 어떤 문제가 있나요?
+
+뒤에서 기다릴 Promise가 먼저 거부되면 그 시점에 핸들러가 없어서 처리되지 않은 거부가 된다. Node.js 15 이상에서는 `try/catch`가 있어도 프로세스가 종료되고, 브라우저에서는 콘솔과 에러 수집기에 잡히지 않은 에러가 쌓인다. 동시에 시작한 Promise는 `Promise.all`이나 `allSettled`로 처음부터 함께 기다려야 한다.
+
+### return await는 쓸모없는 코드인가요?
+
+`try` 블록 안에서는 쓸모가 있다. `return promise`는 함수가 `try`를 빠져나간 뒤에 거부되므로 `catch`가 받지 못하지만, `return await`는 `try` 안에서 기다리므로 받는다. 또 비동기 스택 트레이스에 그 함수 프레임이 남아 장애 분석이 쉬워진다. 그래서 ESLint의 `no-return-await`는 폐기됐고, 지금은 `try` 안에서 `await`를 요구하는 규칙을 쓰는 편이다.
+
+### useEffect에 async 함수를 바로 넘기면 안 되는 이유는?
+
+effect 함수의 반환값은 cleanup 함수여야 하는데 `async` 함수는 항상 Promise를 돌려주기 때문이다. React는 개발 모드에서 경고하고 cleanup은 동작하지 않는다. effect 안에서 `async` 함수를 선언해 부르고, cleanup에서 무시 플래그를 세우거나 AbortController로 요청을 취소해 늦게 온 응답이 최신 상태를 덮지 않게 한다.
+
+### 최상위 await를 쓸 때 주의할 점은?
+
+ES 모듈에서만 쓸 수 있고, 그 모듈을 import하는 모든 모듈이 `await`가 끝날 때까지 실행되지 않는다. 공용 모듈에서 네트워크 요청을 최상위 `await`로 기다리면 앱 전체 시작이 그 요청에 묶인다. CommonJS에서는 문법 에러가 나므로 모듈 형식을 먼저 확인한다.

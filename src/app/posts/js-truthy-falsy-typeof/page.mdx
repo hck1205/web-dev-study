@@ -1,0 +1,413 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-truthy-falsy-typeof");
+
+API 응답을 받아 목록 개수를 보여 주는 함수가 있다. 응답이 없을 때를 대비해 `typeof`로 객체인지 먼저 확인했다.
+
+```js
+function renderItems(data) {
+  if (typeof data === "object") {
+    return data.items.length + "개";
+  }
+  return "데이터 없음";
+}
+console.log(renderItems({ items: [1, 2] }));
+console.log(renderItems(undefined));
+console.log(renderItems(null));
+```
+
+Node 22에서 돌리면 세 번째 호출에서 멈춘다.
+
+```text
+2개
+데이터 없음
+TypeError: Cannot read properties of null (reading 'items')
+```
+
+(스택 줄은 뺐다.)
+
+`undefined`는 걸러졌는데 `null`은 통과했다. `typeof null`이 `"object"`이기 때문이다. 이 글은 이런 작은 판단들을 다룬다. 값이 참으로 취급되는지 거짓으로 취급되는지, `typeof`가 무엇을 돌려주는지, `null`과 `undefined`와 `NaN`이 어디서 생기는지다. 값 자체의 종류는 [원시값과 참조 글](/posts/js-primitive-vs-reference)에서, 비교 연산자가 타입을 바꾸는 규칙은 [==와 === 글](/posts/js-equality-coercion)에서 먼저 다뤘다.
+
+## 거짓으로 취급되는 값은 여덟 개뿐이다
+
+`if`, `while`, `!`, `&&`, `||`, 삼항 연산자는 조건에 들어온 값을 불리언으로 바꾼다. 명세에서는 이 변환을 ToBoolean이라고 부른다. 규칙은 단순하다. 아래 여덟 값만 `false`가 되고, 나머지는 전부 `true`다.
+
+- `false`
+- `0`, `-0`, `0n`(BigInt 0)
+- `""`(빈 문자열)
+- `null`, `undefined`
+- `NaN`
+
+이 여덟 개를 falsy, 나머지를 truthy라고 부른다. 객체는 내용과 상관없이 언제나 truthy다. 빈 배열, 빈 객체, 심지어 `false`를 감싼 `new Boolean(false)`도 객체라서 참이다.
+
+```js
+const cases = [
+  ["false", false], ["0", 0], ["-0", -0], ["0n", 0n], ['""', ""],
+  ["null", null], ["undefined", undefined], ["NaN", NaN],
+  ['"0"', "0"], ['"false"', "false"], ['" "', " "], ["[]", []], ["{}", {}],
+  ["() => {}", () => {}], ["new Boolean(false)", new Boolean(false)], ["-1", -1], ["Infinity", Infinity],
+];
+for (const [label, v] of cases) console.log(label.padEnd(20), Boolean(v));
+```
+
+```text
+false                false
+0                    false
+-0                   false
+0n                   false
+""                   false
+null                 false
+undefined            false
+NaN                  false
+"0"                  true
+"false"              true
+" "                  true
+[]                   true
+{}                   true
+() => {}             true
+new Boolean(false)   true
+-1                   true
+Infinity             true
+```
+
+`"0"`과 `"false"`, 공백 하나짜리 문자열은 내용이 아니라 "비어 있지 않은 문자열"이라서 참이다. 아래 그림에서 다음을 누르며 각 값이 `if (v)`를 통과하는지 보자. 통과한 칸에 표시가 남는다.
+
+<AlgoTrace
+  caption="if (v) 를 통과하는 값만 표시가 남는다"
+  memoryLabel="if (v) 통과"
+  cells={["0", "\"0\"", "\"\"", "[]", "null", "NaN", "{}", "-1"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "숫자 0은 falsy다. 개수가 0인 경우가 여기서 걸린다." },
+    { pointer: 1, found: [1], memory: ["\"0\""], caption: "문자열 \"0\"은 빈 문자열이 아니니 truthy다." },
+    { pointer: 2, found: [1], memory: ["\"0\""], caption: "빈 문자열은 falsy다. 입력칸을 비운 상태다." },
+    { pointer: 3, found: [1, 3], memory: ["\"0\"", "[]"], caption: "빈 배열도 객체라서 truthy다. 목록이 비었는지는 length로 본다." },
+    { pointer: 4, found: [1, 3], memory: ["\"0\"", "[]"], caption: "null은 falsy다." },
+    { pointer: 5, found: [1, 3], memory: ["\"0\"", "[]"], caption: "NaN도 falsy다. 계산이 실패한 숫자가 조용히 거짓이 된다." },
+    { pointer: 6, found: [1, 3, 6], memory: ["\"0\"", "[]", "{}"], caption: "빈 객체도 truthy다." },
+    { pointer: 7, found: [1, 3, 6, 7], memory: ["\"0\"", "[]", "{}", "-1"], caption: "0이 아닌 숫자는 음수여도 truthy다. indexOf의 -1이 참이 되는 이유다." },
+  ]}
+/>
+
+브라우저에는 특이한 예외가 하나 더 있다. `document.all`은 객체인데도 falsy이고 `typeof`가 `"undefined"`다. 아주 옛날 IE 전용 코드(`if (document.all) { ... }`)가 다른 브라우저에서 엉뚱하게 돌지 않도록 명세 부록(Annex B)에 남겨 둔 호환 장치다. 새 코드에서 마주칠 일은 없지만 "객체는 전부 truthy"라는 규칙에 예외가 하나 있다는 것만 알아 두면 된다.
+
+## if 하나에 숨은 버그들
+
+falsy 규칙이 실제로 문제를 일으키는 곳은 "값이 없음"을 검사하려고 `if (!x)`를 쓰는 자리다. 값이 없는 것과 값이 0이거나 빈 문자열인 것은 다르다.
+
+### 0이 없는 값으로 취급된다
+
+```js
+const res = { discount: 0, title: "" };
+console.log(res.discount || 10, res.discount ?? 10);
+console.log(res.title || "제목 없음", res.title ?? "제목 없음");
+```
+
+```text
+10 0
+제목 없음 
+```
+
+할인율이 0인 상품에 기본값 10%가 들어갔다. `||`는 왼쪽이 falsy면 오른쪽을 고르니 `0`도 "없음"으로 본다. `??`(ES2020)는 왼쪽이 `null`이나 `undefined`일 때만 오른쪽을 고른다. 빈 제목을 "제목 없음"으로 보여 주고 싶다면 `||`가 맞고, 서버가 준 빈 문자열을 그대로 존중해야 한다면 `??`가 맞다. 어느 쪽인지는 데이터의 의미가 정한다. 두 연산자의 차이는 [옵셔널 체이닝과 ?? 글](/posts/js-optional-chaining-nullish)과 [단락 평가 글](/posts/js-short-circuit)에서 자세히 다룬다.
+
+### indexOf의 결과를 조건에 넣는다
+
+`if (list.indexOf(x))`는 첫 번째 칸(인덱스 0)에 있을 때 거짓이 되고, 없을 때(-1) 참이 된다. 정확히 반대로 동작한다. `includes`를 쓰거나 `!== -1`로 비교한다.
+
+### 폼 값의 "0"과 숫자 0
+
+입력칸에 0을 넣으면 값은 문자열 `"0"`이라 truthy다. 그런데 `Number`로 바꾼 다음에 `if (!qty)`로 검사하면 이번엔 거짓이 된다. 같은 입력이 변환 전후로 다르게 판단된다. "비어 있음"은 빈 문자열로, "0"은 숫자로 바꾼 뒤 범위로 따로 검사한다.
+
+## React에서 0이 화면에 찍힌다
+
+React에서 조건부 렌더링을 `&&`로 쓰면 falsy 규칙이 화면에 드러난다. React 19.3에서 서버 렌더링으로 마크업을 뽑아 보면 이렇다.
+
+```jsx
+const Cart = ({ items }) => <div>{items.length && <ul>...</ul>}</div>;
+const Safe = ({ items }) => <div>{items.length > 0 && <ul>...</ul>}</div>;
+```
+
+```text
+<div>0</div>
+<div></div>
+```
+
+`items.length && ...`는 길이가 0이면 왼쪽 값 `0`을 그대로 돌려준다. React는 `false`, `null`, `undefined`, `true`는 그리지 않지만 숫자 `0`은 그린다. 그래서 장바구니가 비었을 때 화면 구석에 `0`이 남는다. React Native에서는 문자열을 `<Text>` 밖에 그릴 수 없어 이 `0` 때문에 오류가 나기도 한다. 조건은 `items.length > 0`이나 `Boolean(items.length)`처럼 불리언으로 만든다.
+
+같은 실험에서 `<div>{null}{undefined}{false}{true}{""}{NaN}</div>`는 `<div>NaN</div>`이 됐다. `NaN`도 숫자라서 그려진다. 계산이 실패해 `NaN`이 된 값을 `&&` 조건에 쓰면 화면에 `NaN`이 찍히는 이유다. 단락 평가가 어떤 값을 돌려주는지는 [단락 평가 글](/posts/js-short-circuit)에서 이어 간다.
+
+## typeof가 돌려주는 여덟 가지
+
+`typeof`는 값의 종류를 문자열로 돌려준다. 돌려줄 수 있는 문자열은 여덟 개다. `"undefined"`, `"boolean"`, `"number"`, `"bigint"`, `"string"`, `"symbol"`, `"object"`, `"function"`. 원시 타입 일곱 개에서 `null`이 빠지고 `"object"`와 `"function"`이 들어간 모양이다. 여러 값을 넣어 보면 어디서 구분이 뭉개지는지 보인다. 오른쪽은 비교를 위해 함께 찍은 `Object.prototype.toString.call(v)`의 결과다.
+
+```js
+const values = [undefined, null, true, 42, NaN, 10n, "hi", Symbol("id"),
+  {}, [], () => {}, class A {}, new Date(0), /a/, new Map()];
+for (const v of values) {
+  console.log(String(typeof v).padEnd(10), Object.prototype.toString.call(v));
+}
+```
+
+```text
+undefined  [object Undefined]
+object     [object Null]
+boolean    [object Boolean]
+number     [object Number]
+number     [object Number]
+bigint     [object BigInt]
+string     [object String]
+symbol     [object Symbol]
+object     [object Object]
+object     [object Array]
+function   [object Function]
+function   [object Function]
+object     [object Date]
+object     [object RegExp]
+object     [object Map]
+```
+
+세 군데가 헷갈린다.
+
+- `typeof null`은 `"object"`다. 처음 구현에서 값의 종류를 하위 비트 태그로 구분했는데, 객체의 태그가 0이었고 `null`은 널 포인터(모든 비트가 0)라서 객체로 읽혔다. ES2015 때 `"null"`을 돌려주게 고치자는 제안이 있었지만 기존 웹 페이지가 깨진다는 이유로 받아들여지지 않았다.
+- `typeof NaN`은 `"number"`다. `NaN`은 "숫자가 아님"이라는 이름과 달리 숫자 타입의 특별한 값이다.
+- 배열, 날짜, 정규식, `Map`은 모두 `"object"`다. 클래스는 함수라서 `"function"`이다.
+
+`typeof`에는 장점도 있다. 선언하지 않은 변수에 써도 `ReferenceError`가 나지 않고 `"undefined"`를 돌려준다. 그래서 `typeof window === "undefined"`로 서버(Node)인지 브라우저인지 가리는 코드가 흔하다. 단, `let`·`const`로 선언했지만 아직 선언 줄에 도달하지 않은 변수(TDZ)에 쓰면 오류가 난다.
+
+```js
+console.log(typeof notDeclared);
+try { typeof later; let later = 1; } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+undefined
+ReferenceError: Cannot access 'later' before initialization
+```
+
+TDZ가 왜 생기는지는 [호이스팅과 TDZ 글](/posts/js-hoisting-tdz)에서 다룬다.
+
+## 종류를 정확히 가려내는 조합
+
+처음의 버그로 돌아가자. "진짜 객체인지" 확인하려면 `typeof` 하나로는 부족하다. 필요한 조건을 하나씩 붙여야 한다. 아래 식을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="평범한 객체인지 확인하는 조건"
+  joiner=" && "
+  separator=""
+  params={[
+    { key: "typeof", display: "typeof v === \"object\"", title: "객체 계열인지", description: "원시값과 함수를 걸러 낸다. 하지만 null, 배열, Date도 여기를 통과한다.", required: true },
+    { key: "null", display: "v !== null", title: "null을 따로 뺀다", description: "typeof null이 \"object\"라서 반드시 필요하다. 처음 예제의 TypeError가 이 조건이 없어서 났다.", required: true },
+    { key: "array", display: "!Array.isArray(v)", title: "배열을 뺀다", description: "배열도 typeof로는 object다. Array.isArray는 다른 iframe이나 vm에서 만든 배열도 정확히 알아본다.", code: "Array.isArray(vm.runInNewContext(\"[1, 2]\")) // true\nvm.runInNewContext(\"[1, 2]\") instanceof Array // false" },
+  ]}
+/>
+
+마지막 조각의 `instanceof` 차이는 Node의 `vm`으로 다른 실행 환경(realm)에서 배열을 만들어 보면 확인된다.
+
+```js
+const vm = require("node:vm");
+const other = vm.runInNewContext("[1, 2]");
+console.log(other instanceof Array, Array.isArray(other));
+```
+
+```text
+false true
+```
+
+`instanceof`는 프로토타입 체인에 지금 환경의 `Array.prototype`이 있는지 보는데, 다른 realm의 배열은 그 realm의 `Array.prototype`을 가진다. 브라우저에서 iframe이나 `postMessage`로 받은 값을 다룰 때 같은 문제가 생긴다. 프로토타입 체인이 어떻게 생겼는지는 [프로토타입 체인 글](/posts/js-prototype-chain)에서 따라간다.
+
+상황별로 고르는 도구를 정리하면 이렇다.
+
+| 알고 싶은 것 | 쓸 것 | 피할 것 |
+|---|---|---|
+| null인지 | `v === null` | `typeof v === "object"` |
+| null 또는 undefined인지 | `v == null`, `v ?? 기본값` | `!v` (0과 ""도 걸린다) |
+| 배열인지 | `Array.isArray(v)` | `typeof`, realm을 넘나들 때의 `instanceof` |
+| NaN인지 | `Number.isNaN(v)` | `v === NaN`, 전역 `isNaN` |
+| 함수인지 | `typeof v === "function"` | |
+| 내장 객체의 종류 | `Object.prototype.toString.call(v)` | |
+
+TypeScript를 쓰면 이 조건들이 타입 좁히기(narrowing)로 이어진다. `data`를 `unknown`으로 받으면 `if (typeof data === "object")` 안에서 TypeScript는 `data`를 `object | null`로 좁힌다. 처음 예제를 그대로 옮겨 `strict`로 검사하면 TypeScript 5.9가 이렇게 알려 준다.
+
+```text
+t2.ts(3,12): error TS18047: 'data' is possibly 'null'.
+t2.ts(3,17): error TS2339: Property 'items' does not exist on type 'object'.
+```
+
+첫 줄이 바로 처음의 런타임 오류다. 응답 타입을 `any`로 받으면 이 검사가 모두 꺼진다는 것도 함께 기억해 둔다.
+
+## null과 undefined는 어디서 오나
+
+둘 다 "값이 없음"이지만 생기는 곳이 다르다. `undefined`는 대부분 언어가 자동으로 넣는 값이고, `null`은 누군가 일부러 넣은 값이다. 아래 그림은 각 값이 어디서 흘러 들어오는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="undefined는 언어가 넣고, null은 사람이 넣는다"
+  nodes={[
+    { id: "prop", label: "없는 속성", sub: "user.age", x: 75, y: 35, w: 120 },
+    { id: "arg", label: "빠진 인수", sub: "greet()", x: 75, y: 95, w: 120 },
+    { id: "ret", label: "return 없음", sub: "noReturn()", x: 75, y: 155, w: 120 },
+    { id: "decl", label: "초기화 안 함", sub: "let x;", x: 75, y: 215, w: 120 },
+    { id: "undef", label: "undefined", x: 220, y: 125, w: 100 },
+    { id: "null", label: "null", x: 330, y: 125, w: 80 },
+    { id: "json", label: "JSON null", sub: "API 응답", x: 330, y: 35, w: 110 },
+    { id: "dom", label: "못 찾은 요소", sub: "querySelector", x: 330, y: 215, w: 120 },
+  ]}
+  edges={[
+    { from: "prop", to: "undef" },
+    { from: "arg", to: "undef" },
+    { from: "ret", to: "undef" },
+    { from: "decl", to: "undef" },
+    { from: "json", to: "null" },
+    { from: "dom", to: "null" },
+  ]}
+/>
+
+```js
+const user = { name: "kim" };
+function greet(name) { return name; }
+function noReturn() {}
+let x;
+console.log(user.age, greet(), noReturn(), [1, 2][5], x);
+```
+
+```text
+undefined undefined undefined undefined undefined
+```
+
+이 차이가 실무에서 드러나는 곳이 두 군데 있다.
+
+첫째, 함수의 기본 매개변수는 `undefined`일 때만 적용된다. `null`을 넘기면 기본값이 들어가지 않는다.
+
+```js
+function page(size = 20) { return size; }
+console.log(page(undefined), page(null), page(0));
+```
+
+```text
+20 null 0
+```
+
+API가 "값 없음"을 `null`로 보내는데 클라이언트가 기본 매개변수로 처리하면, 기본값 대신 `null`이 그대로 흘러가 계산을 망친다. 구조 분해의 기본값(`const { size = 20 } = opts`)도 같은 규칙이다.
+
+둘째, `JSON.stringify`는 `undefined`인 속성을 지운다.
+
+```js
+console.log(JSON.stringify({ a: undefined, b: null, c: NaN }));
+```
+
+```text
+{"b":null,"c":null}
+```
+
+`PATCH` 요청에서 "이 필드를 비워 달라"를 표현하려면 `null`을 보내야 한다. `undefined`로 두면 속성이 아예 빠져서 서버는 "건드리지 않음"으로 해석한다. `NaN`은 `null`로 바뀌어 전송된다. 아래 그림은 프로필 수정 요청 하나가 직렬화되어 서버에 닿기까지 세 필드가 각각 어떻게 되는지 보여 준다.
+
+<SequenceDiagram
+  caption="JSON을 지나면 undefined는 사라지고 NaN은 null이 된다"
+  actors={[
+    { id: "form", label: "수정 폼" },
+    { id: "json", label: "JSON.stringify" },
+    { id: "api", label: "PATCH API" },
+  ]}
+  steps={[
+    { from: "form", to: "json", label: "body 객체", title: "세 필드를 담아 보낸다", detail: "별명은 지우려고 null, 소개는 안 건드렸으니 undefined, 나이는 입력을 숫자로 바꾸다 NaN이 됐다.", payload: "{ nickname: null, bio: undefined, age: NaN }" },
+    { from: "json", to: "json", label: "직렬화", title: "JSON에는 undefined와 NaN이 없다", detail: "undefined인 속성은 통째로 빠지고 NaN은 null로 바뀐다. 이 단계에서 오류는 나지 않는다.", payload: "{\"nickname\":null,\"age\":null}" },
+    { from: "json", to: "api", label: "요청 본문", title: "서버가 받은 모습", detail: "bio는 키가 없으니 그대로 둔다. nickname은 null이니 비운다. 여기까지는 의도대로다." },
+    { from: "api", to: "api", label: "age = null", title: "실패한 계산이 '비움'으로 바뀐다", detail: "서버는 age도 null이라 사용자가 나이를 지웠다고 해석한다. 원인은 클라이언트의 NaN인데 서버 로그에는 정상 요청으로 남는다." },
+  ]}
+/>
+
+그래서 숫자 필드는 보내기 전에 `Number.isFinite`로 검사하고, 실패하면 요청을 보내지 않는다. 서버도 스키마 검증에서 "이 필드는 null을 허용하는가"를 따로 정해 둔다.
+
+팀 규칙으로는 "응답과 상태에서 값 없음은 `null`, `undefined`는 아직 정하지 않았거나 선택 속성"처럼 하나로 정해 두는 편이 낫다. TypeScript에서는 `name?: string`(없을 수 있음)과 `name: string | null`(있지만 비어 있을 수 있음)으로 둘을 구분해 적는다.
+
+## NaN은 조용히 퍼진다
+
+`NaN`은 오류를 던지지 않는다. 계산이 실패하면 `NaN`이 나오고, `NaN`이 섞인 계산은 다시 `NaN`이 된다. 그래서 문제는 처음 생긴 곳이 아니라 한참 뒤에 화면이나 DB에서 발견된다. 장바구니 합계에서 상품 하나의 가격이 `"2,000"` 같은 문자열로 들어온 경우를 보자.
+
+```js
+const cart = [{ price: 1000 }, { price: "2,000" }, { price: 500 }];
+const total = cart.reduce((sum, i) => sum + Number(i.price), 0);
+console.log(total, total > 0, total < 0, total === total);
+console.log(Number.isNaN(total), isNaN("abc"), Number.isNaN("abc"));
+console.log(typeof NaN, NaN === NaN);
+```
+
+```text
+NaN false false false
+true true false
+number false
+```
+
+<AlgoTrace
+  caption="한 칸의 NaN이 합계 전체를 NaN으로 만든다"
+  memoryLabel="누적 합계 sum"
+  cells={["1000", "\"2,000\"", "500"]}
+  steps={[
+    { memory: ["0"], caption: "reduce가 초깃값 0에서 시작한다." },
+    { pointer: 0, found: [0], memory: ["1000"], caption: "Number(1000)은 1000. 합계는 1000이다." },
+    { pointer: 1, memory: ["NaN"], caption: "Number(\"2,000\")은 쉼표 때문에 NaN이다. 1000 + NaN은 NaN이다." },
+    { pointer: 2, memory: ["NaN"], caption: "NaN + 500도 NaN이다. 한 번 들어온 NaN은 빠지지 않는다." },
+    { memory: ["NaN", "> 0 false", "< 0 false"], caption: "결과는 NaN. 0보다 크지도 작지도 않아서 범위 검사도 모두 통과하지 못한다." },
+  ]}
+/>
+
+`total > 0`과 `total < 0`이 모두 `false`라서 `if (total < 0) throw ...` 같은 방어 코드도 그냥 지나친다. 확인할 때는 `Number.isNaN`을 쓴다. 전역 `isNaN`은 인수를 먼저 숫자로 바꾸기 때문에 `isNaN("abc")`가 `true`다. "이 값이 숫자 NaN인가"가 아니라 "숫자로 바꾸면 NaN인가"를 묻는 함수다. 유한한 숫자인지까지 보려면 `Number.isFinite(v)`가 `NaN`과 `Infinity`를 한 번에 거른다.
+
+`NaN`을 만나면 거꾸로 따라가며 처음 생긴 곳을 찾는다. 보통 `Number()`, `parseInt`, 산술 연산에 문자열·`undefined`가 들어간 곳이다. 없는 속성을 읽어 `undefined`가 된 값에 숫자를 더하면 `NaN`이 되는 경우가 가장 흔하다. 외부 입력을 숫자로 바꾸는 곳에 `Number.isFinite` 검사를 두면 `NaN`이 안쪽으로 들어오지 못한다.
+
+## 검사 하나가 어디까지 거르는지
+
+`typeof`와 truthy 판단은 둘 다 값을 크게 묶어서 본다. `typeof`는 `null`과 배열을 객체로 묶고, falsy 판단은 `0`과 빈 문자열을 "없음"과 묶는다. 그래서 무엇을 거르고 싶은지를 먼저 정하고 그에 맞는 검사를 고른다. 아래 함수는 `typeof`가 뭉개는 세 가지(`null`, 배열, `NaN`)를 따로 구분해 돌려준다. `typeof` 결과에서 시작해 직접 고쳐 보자.
+
+<CodePlayground
+  caption="typeof를 보완한 typeOf 만들기"
+  functionName="typeOf"
+  initialCode={`function typeOf(value) {\n  // null이면 "null", 배열이면 "array", NaN이면 "nan"\n  // 나머지는 typeof 결과를 그대로 돌려준다\n  return typeof value;\n}`}
+  solution={`function typeOf(value) {\n  if (value === null) return "null";\n  if (Array.isArray(value)) return "array";\n  if (Number.isNaN(value)) return "nan";\n  return typeof value;\n}`}
+  tests={[
+    { label: "null", args: [null], expected: "null" },
+    { label: "[1, 2]", args: [[1, 2]], expected: "array" },
+    { label: "NaN", args: [NaN], expected: "nan" },
+    { label: "0", args: [0], expected: "number" },
+    { label: "빈 문자열", args: [""], expected: "string" },
+    { label: "undefined", args: [undefined], expected: "undefined" },
+    { label: "{ a: 1 }", args: [{ a: 1 }], expected: "object" },
+    { label: "10n", args: [10n], expected: "bigint" },
+  ]}
+/>
+
+처음 코드의 `typeof` 그대로 돌리면 앞의 세 테스트가 실패한다. `Number.isNaN` 대신 전역 `isNaN`을 써 보면 차이가 드러난다. `undefined`와 `{ a: 1 }`은 숫자로 바꾸면 `NaN`이라 `"nan"`으로 잘못 분류되고, `10n`은 BigInt를 숫자로 바꿀 수 없어 `TypeError: Cannot convert a BigInt value to a number`가 난다.
+
+## 면접에서 나올 만한 질문
+
+### falsy 값을 모두 말해 보라
+
+`false`, `0`, `-0`, `0n`, `""`, `null`, `undefined`, `NaN` 여덟 개다. 이 외에는 전부 truthy이고, 객체는 빈 배열이나 빈 객체라도 truthy다. 브라우저의 `document.all`만 호환성 때문에 객체인데 falsy인 예외다.
+
+### typeof null이 "object"인 이유는
+
+첫 구현에서 값의 종류를 태그 비트로 구분했는데 객체 태그가 0이었고, `null`은 모든 비트가 0인 널 포인터라서 객체로 읽혔다. 이후 고치자는 제안이 있었지만 기존 웹 코드를 깨뜨린다는 이유로 그대로 남았다. 그래서 `null` 검사는 `v === null`로 따로 하고, 객체인지 볼 때는 `typeof v === "object" && v !== null`로 쓴다.
+
+### 배열인지 확인하는 가장 좋은 방법은
+
+`Array.isArray`다. `typeof`는 배열에도 `"object"`를 돌려주고, `instanceof Array`는 iframe이나 다른 realm에서 만든 배열에서 `false`가 나온다. `Array.isArray`는 realm과 상관없이 정확하다.
+
+### null과 undefined는 어떻게 다르고, 어떻게 구분해서 쓰나
+
+`undefined`는 초기화하지 않은 변수, 없는 속성, 빠진 인수처럼 언어가 자동으로 넣는 값이고, `null`은 "비어 있음"을 사람이 일부러 넣는 값이다. 기본 매개변수는 `undefined`에만 적용되고, `JSON.stringify`는 `undefined` 속성을 지우지만 `null`은 남긴다. 그래서 API에서 "값을 비운다"는 의도는 `null`로 표현한다.
+
+### isNaN과 Number.isNaN의 차이는
+
+전역 `isNaN`은 인수를 숫자로 바꾼 다음 `NaN`인지 보기 때문에 `isNaN("abc")`가 `true`다. `Number.isNaN`은 값이 정말 숫자 `NaN`일 때만 `true`다. `NaN`은 자기 자신과도 같지 않아서 `=== NaN`으로는 검사할 수 없다.
+
+### React에서 `{count && <List />}`가 문제가 되는 이유는
+
+`&&`는 왼쪽이 falsy면 왼쪽 값을 그대로 돌려주는데, `count`가 0이면 숫자 0이 돌아온다. React는 `false`, `null`, `undefined`는 그리지 않지만 숫자 0은 그대로 그려서 화면에 `0`이 남는다. `count > 0 && ...`처럼 조건을 불리언으로 만들거나 삼항 연산자를 쓴다.
+
+### typeof로 선언하지 않은 변수를 검사하면 어떻게 되나
+
+`ReferenceError` 없이 `"undefined"`를 돌려준다. 그래서 `typeof window === "undefined"`로 실행 환경을 가리는 코드가 가능하다. 다만 `let`·`const`로 선언했는데 아직 선언 줄에 도달하지 않은 TDZ 상태의 변수에 쓰면 `ReferenceError`가 난다.
+
+### 값이 있는지 검사할 때 if (!x)를 쓰면 생기는 문제는
+
+`0`, 빈 문자열, `NaN`까지 "값 없음"으로 걸러 낸다. 수량 0, 할인율 0, 일부러 비운 제목 같은 정상 값이 기본값으로 바뀌는 버그가 생긴다. `null`과 `undefined`만 거르려면 `x == null`이나 `??`를 쓰고, 각 값의 의미에 맞는 검사를 따로 한다.

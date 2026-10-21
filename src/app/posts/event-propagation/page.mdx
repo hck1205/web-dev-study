@@ -1,0 +1,440 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("event-propagation");
+
+드롭다운 메뉴를 만들었다. 버튼을 누르면 메뉴를 열고, 메뉴 바깥을 누르면 닫히게 `document`에 클릭 리스너를 단다. 흔히 보는 코드다.
+
+```js
+function closeOnOutside(e) {
+  console.log("document listener, target =", e.target.id);
+  dropdown.hidden = true;
+  document.removeEventListener("click", closeOnOutside);
+}
+open.addEventListener("click", () => {
+  dropdown.hidden = false;
+  console.log("opened");
+  document.addEventListener("click", closeOnOutside);
+});
+```
+
+버튼을 눌렀다. Playwright로 띄운 Chromium 141에서 찍힌 로그다.
+
+```text
+opened
+document listener, target = open
+hidden after click: true
+```
+
+메뉴가 열리자마자 닫혔다. 바깥을 누른 적이 없는데 `document`의 리스너가 불렸고, 그 이벤트의 `target`은 방금 누른 버튼이다. 버튼에서 일어난 클릭 하나가 버튼에서 끝나지 않고 `document`까지 올라갔고, 올라가는 도중에 막 등록한 리스너까지 만난 것이다.
+
+이 글은 이벤트 하나가 DOM 트리의 어디를 어떤 순서로 지나가는지, 그 길을 멈추거나 바꾸는 방법, 그리고 스크롤 성능과 React에서 이 규칙이 어떻게 드러나는지를 따라간다. 출력은 모두 Chromium 141(헤드리스)에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 이벤트가 지나가는 트리 자체는 [DOM 기초](/posts/dom-basics)에서 봤다. 이 글의 전파 규칙을 이용해 리스너를 하나로 줄이는 방법은 [이벤트 위임](/posts/event-delegation)에서, 스크롤처럼 자주 오는 이벤트를 덜 처리하는 방법은 [디바운스와 스로틀](/posts/debounce-throttle)에서 다룬다.
+
+## 클릭 하나가 내려갔다가 올라온다
+
+버튼을 누르면 브라우저는 클릭 이벤트 객체를 하나 만들고, 이 이벤트가 지나갈 길(event path)을 먼저 정한다. 눌린 요소에서 부모를 따라 `window`까지 올라가는 줄이다. 이 줄은 디스패치를 시작할 때 한 번 정해지고, 그 뒤로 DOM을 바꿔도 다시 계산하지 않는다.
+
+그다음 이 길을 두 번 지난다. 먼저 `window`에서 눌린 요소 쪽으로 내려가는 캡처 단계, 눌린 요소에 닿는 타깃 단계, 그리고 다시 `window`로 올라가는 버블 단계다. 아래 그림에서 다음을 누르면 순서가 보인다.
+
+<SequenceDiagram
+  caption="버튼 클릭 하나가 지나가는 길"
+  actors={[
+    { id: "win", label: "window" },
+    { id: "body", label: "body" },
+    { id: "card", label: "div#card" },
+    { id: "btn", label: "button" },
+  ]}
+  steps={[
+    { from: "win", to: "body", label: "캡처", title: "위에서부터 내려간다", detail: "capture: true로 등록한 리스너만 이 단계에서 불린다. eventPhase는 1이다." },
+    { from: "body", to: "card", label: "캡처", title: "부모를 차례로 지난다", detail: "목적지까지 가는 길에 있는 조상들이 먼저 이벤트를 본다. 여기서 막으면 버튼까지 가지 않는다." },
+    { from: "card", to: "btn", label: "타깃", title: "눌린 요소에 닿는다", detail: "eventPhase는 2다. 캡처 리스너가 먼저, 일반 리스너가 나중에 불린다." },
+    { from: "btn", to: "card", label: "버블", title: "다시 올라간다", detail: "capture 옵션 없이 등록한 리스너가 불린다. eventPhase는 3이다." },
+    { from: "card", to: "win", label: "버블", title: "window까지 올라간다", detail: "document와 window의 리스너가 마지막에 불린다. 처음 드롭다운 버그가 여기서 났다." },
+  ]}
+/>
+
+실제로 모든 단계에 캡처와 버블 리스너를 하나씩 달고 버튼을 눌렀다.
+
+```js
+for (const node of [window, document, document.documentElement, document.body, outer, inner, btn]) {
+  node.addEventListener("click", e => log.push(`capture ${nm(e.currentTarget)} phase=${e.eventPhase}`), true);
+  node.addEventListener("click", e => log.push(`bubble  ${nm(e.currentTarget)} phase=${e.eventPhase}`));
+}
+btn.addEventListener("click", e => console.log("path:", e.composedPath().map(nm).join(" > ")));
+```
+
+```text
+path: btn > inner > outer > body > html > document > window
+capture window phase=1
+capture document phase=1
+capture html phase=1
+capture body phase=1
+capture outer phase=1
+capture inner phase=1
+capture btn phase=2
+bubble  btn phase=2
+bubble  inner phase=3
+bubble  outer phase=3
+bubble  body phase=3
+bubble  html phase=3
+bubble  document phase=3
+bubble  window phase=3
+```
+
+`composedPath()`가 정해 둔 길을 그대로 보여 준다. 타깃인 `btn`에서는 두 리스너가 모두 `eventPhase=2`로 불리는데, 캡처로 등록한 쪽이 먼저다. 예전에는 타깃에서 등록 순서대로 불렀는데, 크롬 계열은 89 버전부터 명세를 따라 캡처 리스너를 먼저 부른다. 오래된 글에서 "타깃에서는 등록 순서대로"라는 설명을 보면 이 변화 전 이야기다.
+
+이제 처음 버그를 다시 보자. 버튼의 리스너가 `document`에 새 리스너를 붙였다. 길은 이미 정해져 있지만 각 지점의 리스너 목록은 이벤트가 그 지점에 닿을 때 읽는다. 버블 단계에서 `document`에 닿았을 때는 새 리스너가 이미 목록에 있으니 불린다. 그리고 그 리스너가 메뉴를 닫는다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="버튼의 리스너가 document에 리스너를 붙이는 사이, 같은 클릭이 아직 올라가는 중이다"
+  nodes={[
+    { id: "doc", label: "document", x: 200, y: 30, w: 100 },
+    { id: "body", label: "body", x: 200, y: 95, w: 80 },
+    { id: "menu", label: "div.menu", x: 200, y: 160, w: 96 },
+    { id: "open", label: "button#open", x: 110, y: 225, w: 120 },
+    { id: "dd", label: "ul#dropdown", x: 290, y: 225, w: 120 },
+  ]}
+  links={[
+    { from: "doc", to: "body" },
+    { from: "body", to: "menu" },
+    { from: "menu", to: "open" },
+    { from: "menu", to: "dd" },
+  ]}
+  steps={[
+    { path: ["open"], packet: "click", title: "버튼에서 클릭이 일어난다", detail: "타깃 단계다. 버튼의 리스너가 메뉴를 열고 document에 바깥 클릭 리스너를 붙인다." },
+    { path: ["open", "menu", "body"], packet: "click", highlight: ["dd"], title: "같은 클릭이 계속 올라간다", detail: "메뉴는 열렸다. 하지만 이 클릭의 버블 단계는 아직 끝나지 않았다." },
+    { path: ["body", "doc"], packet: "click", blocked: true, title: "document에서 새 리스너를 만난다", detail: "방금 붙인 리스너가 이 클릭을 바깥 클릭으로 알고 메뉴를 닫는다. target은 여전히 button#open이다." },
+  ]}
+/>
+
+고치는 방법은 바깥 클릭 리스너에서 "이 클릭이 메뉴 안에서 났는지" 확인하는 것이다. `menu.contains(e.target)`이면 무시한다. 리스너를 붙이는 시점을 `setTimeout`으로 미루는 방법도 쓰이지만, 의도가 코드에 드러나지 않아 다음 사람이 지우기 쉽다. 아래 React 절에서 이 버그가 `useEffect` 안에서도 그대로 난다는 걸 보게 된다.
+
+## target과 currentTarget
+
+리스너 안에서 "어디서 일어났나"와 "지금 누가 듣고 있나"는 다른 값이다. 하트 아이콘이 든 좋아요 버튼에서 아이콘을 눌렀다.
+
+```html
+<div id="card"><button id="like"><span id="icon">♥</span> 좋아요</button></div>
+```
+
+```js
+card.addEventListener("click", e => {
+  console.log("target:", e.target.id, "currentTarget:", e.currentTarget.id, "this:", this === window ? "window" : "?");
+  setTimeout(() => console.log("later currentTarget:", e.currentTarget));
+});
+card.addEventListener("click", function (e) { console.log("fn this:", this.id); });
+```
+
+```text
+target: icon currentTarget: card this: window
+fn this: card
+later currentTarget: null
+```
+
+`target`은 실제로 눌린 가장 안쪽 요소라 `span#icon`이고, `currentTarget`은 리스너가 달린 `div#card`다. 일반 함수로 등록하면 `this`도 `currentTarget`이지만, 화살표 함수는 바깥의 `this`를 쓰니 그렇지 않다. 그리고 `currentTarget`은 디스패치가 끝나면 `null`로 비워진다. 비동기 코드에서 꺼내 쓰려면 리스너 안에서 미리 변수에 담아 둔다.
+
+## 막는 방법은 세 가지이고 막는 대상이 다르다
+
+`stopPropagation()`은 길을 막는다. 지금 지점에 달린 나머지 리스너는 다 불리고, 다음 지점으로는 가지 않는다. `stopImmediatePropagation()`은 같은 지점의 나머지 리스너까지 막는다. `preventDefault()`는 길과 상관없이 브라우저의 기본 동작(링크 이동, 폼 제출, 체크박스 토글, 스크롤)을 막는다.
+
+```js
+// 1) stopPropagation
+like.addEventListener("click", e => { L.push("like-1"); e.stopPropagation(); });
+like.addEventListener("click", () => L.push("like-2"));
+card.addEventListener("click", () => L.push("card"));
+// 2) 같은 구성에서 like-1만 stopImmediatePropagation으로 바꾼 것
+// 3) preventDefault
+link.addEventListener("click", e => { e.preventDefault(); L.push("prevented, defaultPrevented=" + e.defaultPrevented); });
+document.addEventListener("click", e => { if (e.target === link) L.push("document still got it"); });
+```
+
+```text
+like-1, like-2
+like-1
+prevented, defaultPrevented=true | document still got it url: /
+```
+
+아래 그림에서 칸은 이벤트가 차례로 만나는 리스너다. 다음을 누르며 두 메서드가 어디서 끊는지 비교해 보자.
+
+<AlgoTrace
+  caption="stopPropagation과 stopImmediatePropagation이 끊는 자리"
+  memoryLabel="불린 리스너"
+  cells={["like-1", "like-2", "card", "body", "document"]}
+  steps={[
+    { pointer: 0, memory: ["like-1"], caption: "like-1이 stopPropagation을 부른다. 멈춰야 한다는 표시만 남는다." },
+    { pointer: 1, memory: ["like-1", "like-2"], caption: "같은 button에 달린 like-2는 그래도 불린다. 지점 안의 리스너는 끝까지 돈다." },
+    { pointer: 2, found: [0, 1], memory: ["like-1", "like-2"], caption: "다음 지점인 card로 가지 않는다. card, body, document는 이 클릭을 모른다." },
+    { pointer: 0, memory: ["like-1"], caption: "이번엔 like-1이 stopImmediatePropagation을 부른다." },
+    { pointer: 1, found: [0], memory: ["like-1"], caption: "like-2도 불리지 않는다. 같은 지점의 나머지 리스너까지 끊는다." },
+  ]}
+/>
+
+세 번째 출력이 중요하다. `preventDefault()`를 불러도 이벤트는 `document`까지 올라간다. 링크 이동만 멈췄다(`url: /`). 반대로 `stopPropagation()`은 기본 동작을 막지 않는다. 링크에서 전파만 막으면 이동은 그대로 일어난다. 둘을 같은 것으로 알고 쓰는 실수가 흔하다. `onclick` 속성 핸들러에서 `return false`를 하면 `preventDefault()`와 같고, jQuery 핸들러의 `return false`는 둘 다 한다. 이 차이도 헷갈림의 원인이다.
+
+`stopPropagation()`은 가능하면 쓰지 않는다. 위의 `card`, `body`, `document` 리스너는 각자 이유가 있어 달린 것인데 버튼 하나가 전부 귀를 막아 버린다. 분석 스크립트의 클릭 수집, 바깥 클릭으로 닫히는 다른 메뉴, [이벤트 위임](/posts/event-delegation)으로 만든 핸들러가 한꺼번에 조용히 망가진다. 상위에서 "이 클릭은 내가 처리할 게 아니다"를 판단하게 하는 편이 낫다. `e.target.closest(...)`로 확인하거나, `e.defaultPrevented`를 보고 이미 처리된 이벤트는 건너뛴다.
+
+## 거품을 타지 않는 이벤트
+
+모든 이벤트가 올라가는 건 아니다. 입력창에 포커스를 주고, 스크롤 상자를 굴리고, 마우스를 올린 뒤 이벤트마다 `e.bubbles`를 찍고, 부모 요소까지 도착했는지 확인했다.
+
+```text
+G bubbles: {"mouseover":true,"mouseenter":false,"focus":false,"focusin":true,"scroll":false,"blur":false,"focusout":true}
+G reached parent: mouseover, focusin, focusout
+```
+
+`focus`와 `blur`는 올라가지 않고, 짝이 되는 `focusin`과 `focusout`은 올라간다. `mouseenter`와 `mouseleave`는 올라가지 않고 `mouseover`와 `mouseout`은 올라간다. 요소의 `scroll`도 올라가지 않는다(문서 전체의 스크롤은 `document`에서 일어나 `window`로 간다). 이미지의 `load`와 `error`도 그 요소에서 끝난다.
+
+올라가지 않을 뿐 캡처 단계는 지난다. 그래서 부모에서 `focus`를 받고 싶으면 `addEventListener("focus", fn, true)`처럼 캡처로 등록하는 방법도 된다. 다만 읽는 사람이 이유를 알기 어려우니, 같은 일을 하는 버블 이벤트(`focusin`)가 있으면 그걸 쓴다.
+
+`composedPath()`가 보여 주는 길은 Shadow DOM을 만나면 한 번 더 복잡해진다. 웹 컴포넌트 안에서 난 클릭은 바깥에서 보면 `target`이 컴포넌트 자신으로 바뀌어 보인다(retargeting). 안쪽 구조를 숨기기 위해서다. `composed: false`인 이벤트는 아예 그림자 경계를 넘지 않는다.
+
+## passive 리스너가 스크롤을 지킨다
+
+스크롤과 이벤트 리스너 사이에는 성가신 관계가 있다. `wheel`이나 `touchmove` 리스너는 `preventDefault()`로 스크롤을 막을 수 있다. 그러니 리스너가 있으면 브라우저는 스크롤을 시작하기 전에 리스너가 끝나기를 기다려야 한다. 메인 스레드가 다른 일로 바쁘면 손가락을 움직여도 화면이 따라오지 않는다.
+
+`passive: true`는 "이 리스너는 `preventDefault()`를 부르지 않는다"는 약속이다. 브라우저는 기다리지 않고 스크롤을 바로 시작하고, 리스너는 나중에 따로 돈다. 약속을 어기고 `preventDefault()`를 부르면 무시된다. 크롬 계열은 `window`, `document`, `body`에 단 `touchstart`, `touchmove`(56부터), `wheel`(73부터) 리스너를 따로 지정하지 않아도 passive로 취급한다. 실제로 확인했다.
+
+```js
+document.addEventListener("wheel", e => {
+  if (e.target.closest("#box")) return;
+  e.preventDefault();
+  console.log("document wheel: defaultPrevented =", e.defaultPrevented);
+});
+box.addEventListener("wheel", e => {
+  e.preventDefault();
+  console.log("box wheel: defaultPrevented =", e.defaultPrevented);
+}, { once: true });
+```
+
+```text
+Unable to preventDefault inside passive event listener due to target being treated as passive. See https://www.chromestatus.com/feature/6662647093133312
+document wheel: defaultPrevented = false
+scrollY 300 box.scrollTop 0
+box wheel: defaultPrevented = true
+scrollY 0 box.scrollTop 0
+```
+
+`document`에 단 리스너의 `preventDefault()`는 경고와 함께 무시되고 페이지가 300px 내려갔다. 일반 요소 `#box`에 단 리스너는 passive가 아니라서 스크롤을 막았다. 지도나 캔버스처럼 정말로 스크롤을 가로채야 하면 그 요소에 `{ passive: false }`를 명시해서 단다. 그런 경우가 아니라면 CSS의 `touch-action`이나 `overscroll-behavior`로 같은 일을 하는 편이 리스너 없이 끝나서 더 낫다.
+
+`addEventListener`의 세 번째 인자에는 이 밖에도 옵션이 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="addEventListener의 옵션 객체"
+  base={"el.addEventListener(\"wheel\", onWheel, "}
+  separator="{ "
+  joiner=", "
+  params={[
+    { key: "capture", value: "false", display: "capture: false", title: "capture", description: "true면 캡처 단계에서 불린다. 지울 때 removeEventListener에도 같은 값을 줘야 지워진다. 리스너를 구분하는 기준이 함수와 이 값 둘이다." },
+    { key: "passive", value: "true", display: "passive: true", title: "passive", description: "preventDefault를 부르지 않겠다는 약속. 브라우저가 스크롤을 기다리지 않는다. 불러도 무시되고 콘솔에 경고가 남는다." },
+    { key: "once", value: "true", display: "once: true", title: "once", description: "한 번 불린 뒤 저절로 지워진다. 첫 상호작용에만 하는 일(오디오 잠금 해제 등)에 맞다." },
+    { key: "signal", display: "signal }", title: "signal", description: "AbortController의 signal. abort()를 부르면 이 signal로 단 리스너가 한꺼번에 지워진다. 함수 참조를 들고 다닐 필요가 없다." },
+  ]}
+/>
+
+리스너를 지우는 쪽에서 실수가 잦다. 직접 돌려 봤다.
+
+```js
+const onClick = () => L.push("still here");
+b1.addEventListener("click", onClick, true);
+b1.removeEventListener("click", onClick);          // capture 빠짐
+b1.click();
+b1.removeEventListener("click", onClick, true);
+b1.click();
+const obj = { n: "obj", h() { L.push("bound " + this.n); } };
+b1.addEventListener("click", obj.h.bind(obj));
+b1.removeEventListener("click", obj.h.bind(obj));
+b1.click();
+
+const ctrl = new AbortController();
+b2.addEventListener("click", () => L.push("once"), { once: true });
+b2.addEventListener("click", () => L.push("signal"), { signal: ctrl.signal });
+b2.addEventListener("click", () => L.push("plain"));
+b2.click(); ctrl.abort(); b2.click();
+```
+
+```text
+still here, bound obj
+once, signal, plain, plain
+```
+
+`capture: true`로 단 리스너를 `capture` 없이 지우면 안 지워진다. `bind`는 부를 때마다 새 함수를 만드니 지울 때 넘긴 함수는 등록한 함수가 아니다. 둘 다 에러 없이 조용히 실패한다. 지워지지 않은 리스너가 쌓이면 화면을 떠난 뒤에도 객체가 살아남는 [메모리 누수](/posts/js-memory-leak)가 된다. `signal`을 쓰면 함수 참조를 맞출 필요가 없어서 이 실수가 사라진다.
+
+## React가 이벤트를 받는 자리
+
+React는 컴포넌트의 `onClick`마다 DOM 리스너를 달지 않는다. React 17부터는 `createRoot`에 넘긴 루트 컨테이너에 이벤트 종류별로 리스너를 하나씩 달고, 거기서 받은 네이티브 이벤트로 컴포넌트 트리를 따라 핸들러를 직접 부른다. 16까지는 이 자리가 `document`였다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="네이티브 이벤트는 DOM 길을 따라가고, React 핸들러는 루트에서 한꺼번에 불린다"
+  nodes={[
+    { id: "btn", label: "button", sub: "네이티브 리스너", x: 80, y: 40, w: 130 },
+    { id: "root", label: "div#root", sub: "React 리스너", x: 80, y: 130, w: 130 },
+    { id: "doc", label: "document", sub: "네이티브 리스너", x: 80, y: 215, w: 130 },
+    { id: "rbtn", label: "<button onClick>", x: 300, y: 70, w: 150 },
+    { id: "rdiv", label: "<div onClick>", x: 300, y: 170, w: 150 },
+  ]}
+  edges={[
+    { from: "btn", to: "root", label: "버블" },
+    { from: "root", to: "doc", label: "버블" },
+    { from: "root", to: "rbtn", label: "디스패치" },
+    { from: "rbtn", to: "rdiv", label: "합성 버블" },
+  ]}
+/>
+
+그래서 네이티브 리스너와 React 핸들러를 섞으면 순서가 직관과 다르다. React 19.3에서 버튼에 `ref`로 네이티브 리스너를 달고, 부모 `div`에 `onClick`과 `onClickCapture`를, `document`와 루트에 네이티브 리스너를 달았다. 두 번째 실행에서는 버튼의 React 핸들러가 `e.stopPropagation()`을 부른다.
+
+```text
+R1 react div capture → native button → native root (added before render) → react button → react div → native document
+R2 stopPropagation react div capture → native button → native root (added before render) → react button
+```
+
+<AlgoTrace
+  caption="React 핸들러와 네이티브 리스너가 불리는 실제 순서"
+  memoryLabel="이벤트가 있는 곳"
+  cells={["div capture", "native button", "native root", "react button", "react div", "native document"]}
+  steps={[
+    { pointer: 0, memory: ["root (캡처 단계)"], caption: "onClickCapture는 루트의 캡처 리스너가 처리한다. 네이티브 캡처 단계에서 가장 먼저 불린다." },
+    { pointer: 1, memory: ["button (타깃)"], caption: "버튼에 직접 단 네이티브 리스너가 불린다. React의 onClick은 아직이다." },
+    { pointer: 2, memory: ["root (버블)"], caption: "루트에 먼저 달린 네이티브 리스너가 불리고" },
+    { pointer: 3, memory: ["root (버블)"], caption: "React의 루트 리스너가 컴포넌트 트리를 따라 button의 onClick을 부른다." },
+    { pointer: 4, memory: ["root (버블)"], caption: "React 안의 버블로 div의 onClick이 불린다. 실제 DOM 위치는 계속 루트다." },
+    { pointer: 5, found: [5], memory: ["document"], caption: "React가 끝난 뒤에야 document로 올라간다. React에서 stopPropagation을 부르면 여기서 끊긴다." },
+  ]}
+/>
+
+React 핸들러의 `e.stopPropagation()`은 React 안의 전파를 막고, 네이티브 이벤트의 전파도 함께 막는다. 이벤트가 이미 루트까지 와 있으니 막히는 건 그 위의 `document`와 `window`뿐이다. 버튼에 직접 단 네이티브 리스너는 React 핸들러보다 먼저 불렸으니 막을 수 없다.
+
+처음의 드롭다운 버그는 React에서도 난다. 메뉴가 열려 있을 때만 `document` 리스너를 다는, 정석처럼 보이는 코드다.
+
+```js
+React.useEffect(() => {
+  if (!open) return;
+  const onDoc = () => setOpen(false);
+  document.addEventListener("click", onDoc);
+  return () => document.removeEventListener("click", onDoc);
+}, [open]);
+```
+
+```text
+R3 button: open -> effect: add document listener -> document click → close | open: false
+```
+
+`useEffect`는 그린 다음에 돈다고 알고 있으면 이상해 보인다. React는 클릭 같은 이산 입력으로 생긴 업데이트를 동기로 처리하고, 그 렌더링의 effect도 이벤트가 끝나기 전에 실행한다. 그래서 effect가 단 리스너가 같은 클릭의 버블 단계에서 `document`에 닿는다. 리스너에서 `if (boxRef.current.contains(e.target)) return;`을 넣으면 고쳐진다.
+
+```text
+R4 button: open -> effect: add document listener -> document click inside → ignore | open: true
+R5 document click outside → close | open: false
+```
+
+## 클릭이 안 먹을 때 보는 순서
+
+"버튼을 눌러도 아무 일이 없다"는 제보가 오면 리스너 코드를 보기 전에 클릭이 어디에 닿았는지부터 본다. 아래는 투명한 토스트 레이어가 화면 전체를 덮고 있는 페이지다.
+
+```js
+document.addEventListener("click", e => console.log("clicked:", e.target.className || e.target.id));
+const r = save.getBoundingClientRect();
+const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+console.log("elementFromPoint:", el.tagName.toLowerCase() + "." + el.className);
+```
+
+```text
+clicked: toast-layer
+elementFromPoint: div.toast-layer
+```
+
+클릭의 `target`이 저장 버튼이 아니라 `opacity: 0`인 레이어다. 레이어에 `pointer-events: none`을 주자 `saved`가 찍히고 `target`이 `save`로 돌아왔다. 확인은 이 순서로 한다.
+
+1. `document`에 캡처 리스너로 `e.target`을 찍거나 `elementFromPoint`로 그 자리에 무엇이 있는지 본다. 투명 오버레이, `z-index`, `pointer-events`가 흔한 원인이다.
+2. Chrome 개발자 도구 Elements 패널의 Event Listeners 탭에서 요소와 조상에 달린 리스너를 본다. Console에서는 `getEventListeners($0)`로 같은 정보를 객체로 받는다(개발자 도구 콘솔에서만 되는 함수다).
+3. 길 중간의 누군가가 `stopPropagation()`을 부르는지 본다. 위임 핸들러만 안 불린다면 대개 이것이다.
+4. 버튼이 `disabled`면 클릭 이벤트 자체가 디스패치되지 않는다. 폼 안의 버튼이면 `type`이 기본값 `submit`이라 페이지가 다시 로드되는지도 본다.
+
+스크롤이 버벅인다면 Performance 패널에서 스크롤 중의 긴 작업을 찾고, 콘솔의 passive 경고와 `{ passive: false }`로 단 리스너가 있는지 본다. 리스너 자체가 무거우면 [디바운스와 스로틀](/posts/debounce-throttle)이나 `IntersectionObserver`로 처리 횟수를 줄인다. 무거운 리스너가 입력 반응을 얼마나 늦추는지는 [Core Web Vitals](/posts/core-web-vitals)의 INP 항목과 이어진다.
+
+## 직접 만들어 보는 디스패치 순서
+
+경로와 리스너 목록을 받아서 리스너가 불리는 순서를 돌려주는 함수를 만들어 보자. `path`는 `window`부터 타깃까지 위에서 아래로의 이름 배열이고, 마지막이 타깃이다. 리스너는 `{ node, capture, name }`이고 `stop: true`면 그 리스너가 `stopPropagation()`을 부른다. 테스트의 기대값은 같은 구성을 Chromium에서 실제 DOM 리스너로 만들어 돌린 결과와 맞춰 봤다.
+
+<CodePlayground
+  caption="캡처, 타깃, 버블 순서 흉내 내기"
+  functionName="dispatchOrder"
+  initialCode={`function dispatchOrder(path, listeners) {
+  const order = [];
+  // 1) 캡처: path를 위에서 아래로 (타깃 포함), capture 리스너만
+  // 2) 버블: path를 아래에서 위로 (타깃부터), capture가 아닌 리스너만
+  // stop이 불리면 그 지점의 나머지는 돌고, 다음 지점부터 멈춘다
+  return order;
+}`}
+  solution={`function dispatchOrder(path, listeners) {
+  const order = [];
+  let stopped = false;
+  const run = (node, capture) => {
+    for (const l of listeners) {
+      if (l.node === node && l.capture === capture) {
+        order.push(l.name);
+        if (l.stop) stopped = true;
+      }
+    }
+  };
+  for (const node of path) {
+    if (stopped) return order;
+    run(node, true);
+  }
+  for (const node of [...path].reverse()) {
+    if (stopped) return order;
+    run(node, false);
+  }
+  return order;
+}`}
+  tests={[
+    { label: "기본 순서", args: [["window", "body", "card", "btn"], [{ node: "card", capture: false, name: "card" }, { node: "btn", capture: false, name: "btn" }, { node: "window", capture: true, name: "win-cap" }, { node: "body", capture: false, name: "body" }, { node: "card", capture: true, name: "card-cap" }]], expected: ["win-cap", "card-cap", "btn", "card", "body"] },
+    { label: "타깃은 캡처 먼저", args: [["window", "card", "btn"], [{ node: "btn", capture: false, name: "btn-bubble" }, { node: "btn", capture: true, name: "btn-cap" }]], expected: ["btn-cap", "btn-bubble"] },
+    { label: "버블 중 stop", args: [["window", "body", "card", "btn"], [{ node: "btn", capture: false, name: "btn", stop: true }, { node: "btn", capture: false, name: "btn-2" }, { node: "card", capture: false, name: "card" }]], expected: ["btn", "btn-2"] },
+    { label: "캡처 중 stop", args: [["window", "body", "card", "btn"], [{ node: "body", capture: true, name: "body-cap", stop: true }, { node: "body", capture: true, name: "body-cap-2" }, { node: "btn", capture: false, name: "btn" }]], expected: ["body-cap", "body-cap-2"] },
+    { label: "타깃 캡처에서 stop", args: [["window", "card", "btn"], [{ node: "btn", capture: true, name: "btn-cap", stop: true }, { node: "btn", capture: false, name: "btn-bubble" }, { node: "card", capture: false, name: "card" }]], expected: ["btn-cap"] },
+  ]}
+/>
+
+마지막 테스트가 재미있다. 타깃의 캡처 리스너에서 전파를 막으면 같은 타깃의 일반 리스너도 불리지 않는다. 타깃에서의 캡처와 버블이 같은 지점이 아니라 두 번의 별도 방문이기 때문이다.
+
+## 다시 드롭다운으로
+
+메뉴가 열리자마자 닫힌 건 클릭 하나가 버튼에서 끝나지 않고 `document`까지 올라가서다. 이벤트는 정해진 길을 캡처로 내려가 버블로 올라오고, 각 지점의 리스너는 그 지점에 닿을 때 읽힌다. 막을 때는 길을 막는지(`stopPropagation`) 기본 동작을 막는지(`preventDefault`) 구분하고, 길을 막기보다 위쪽에서 `target`을 보고 판단하는 쪽을 고른다. 이 규칙을 일부러 이용하는 방법이 [이벤트 위임](/posts/event-delegation)이다.
+
+## 면접에서 나올 만한 질문
+
+### 이벤트 버블링과 캡처링을 설명해 주세요
+
+이벤트는 디스패치될 때 타깃에서 `window`까지의 길을 정하고, 위에서 타깃으로 내려가는 캡처 단계, 타깃 단계, 다시 올라가는 버블 단계를 거친다. 기본으로 단 리스너는 버블 단계에서, `capture: true`로 단 리스너는 캡처 단계에서 불린다. 그래서 자식의 클릭을 부모가 받을 수 있다.
+
+### event.target과 event.currentTarget의 차이는 무엇인가요?
+
+`target`은 이벤트가 실제로 일어난 가장 안쪽 요소이고, `currentTarget`은 지금 실행 중인 리스너가 달린 요소다. 버튼 안의 아이콘을 누르면 버튼에 단 리스너에서 `target`은 아이콘, `currentTarget`은 버튼이다. `currentTarget`은 디스패치가 끝나면 `null`이 되니 비동기 코드에서 쓰려면 미리 담아 둔다.
+
+### stopPropagation과 preventDefault는 어떻게 다른가요?
+
+`stopPropagation`은 다음 지점으로 전파되는 것을 막고, `preventDefault`는 링크 이동이나 폼 제출 같은 기본 동작을 막는다. 서로 영향이 없어서 `preventDefault`를 불러도 이벤트는 위로 올라가고, `stopPropagation`만 부르면 링크는 이동한다. 같은 지점의 나머지 리스너까지 막으려면 `stopImmediatePropagation`을 쓴다.
+
+### stopPropagation을 남발하면 어떤 문제가 생기나요?
+
+위쪽에서 같은 이벤트를 기다리는 모든 코드가 조용히 망가진다. 바깥 클릭으로 닫히는 메뉴, 이벤트 위임 핸들러, 분석 스크립트가 대표적이다. 전파를 막기보다 위쪽에서 `e.target.closest`나 `e.defaultPrevented`로 처리할 이벤트인지 판단하게 하는 편이 낫다.
+
+### 버블링되지 않는 이벤트는 무엇이 있고 어떻게 받나요?
+
+`focus`, `blur`, `mouseenter`, `mouseleave`, 요소의 `scroll`, 이미지의 `load`와 `error`가 올라가지 않는다. 부모에서 받으려면 올라가는 짝인 `focusin`, `focusout`, `mouseover`, `mouseout`을 쓰거나, 캡처 단계는 지나가므로 `capture: true`로 등록한다.
+
+### passive 리스너는 왜 필요한가요?
+
+`wheel`이나 `touchmove` 리스너는 `preventDefault`로 스크롤을 막을 수 있어서, 브라우저가 스크롤 전에 리스너가 끝나기를 기다려야 한다. `passive: true`는 막지 않겠다는 약속이라 브라우저가 기다리지 않고 바로 스크롤한다. 크롬 계열은 `window`, `document`, `body`의 터치와 휠 리스너를 기본으로 passive로 취급해서, 거기서 `preventDefault`를 부르면 경고와 함께 무시된다.
+
+### 버튼 클릭 핸들러에서 document에 단 리스너가 같은 클릭에 바로 불리는 이유는 무엇인가요?
+
+이벤트의 길은 디스패치 시작 때 정해지지만 각 지점의 리스너 목록은 이벤트가 그 지점에 닿을 때 읽는다. 버블 단계에서 `document`에 닿을 때는 방금 단 리스너가 이미 목록에 있으니 불린다. React에서는 클릭으로 생긴 업데이트의 `useEffect`도 이벤트가 끝나기 전에 실행되어 같은 일이 난다. 리스너에서 `contains(e.target)`로 안쪽 클릭을 걸러 고친다.
+
+### React의 이벤트 처리는 네이티브 이벤트와 어떻게 다른가요?
+
+React 17부터는 루트 컨테이너에 이벤트 종류별 리스너를 하나씩 달고 거기서 컴포넌트 핸들러를 부른다. 그래서 요소에 직접 단 네이티브 리스너가 React의 `onClick`보다 먼저 불리고, `document`의 리스너는 React 핸들러가 다 끝난 뒤에 불린다. React 핸들러에서 `stopPropagation`을 부르면 `document`로 가는 것은 막지만, 이미 지나간 안쪽 네이티브 리스너는 막을 수 없다.

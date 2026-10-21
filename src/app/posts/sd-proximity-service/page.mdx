@@ -1,0 +1,446 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-proximity-service");
+
+이 시리즈에서 이 글의 자리: 앞 글은 [㉞ 파일 동기화 ②: 충돌과 알림](/posts/sd-file-sync-conflicts)이고, 다음 글은 [㊱ 주변 친구 설계](/posts/sd-nearby-friends)다. 위치를 다루는 장은 이 글에서 시작해 [㊲ 지도 서비스 ①](/posts/sd-maps-tiles-routing), [㊳ 지도 서비스 ②](/posts/sd-maps-location-eta)로 이어진다. 칸을 나누는 알고리즘 자체는 [지오해시](/posts/geohash)와 [쿼드트리](/posts/quadtree) 글에 있고, 여기서는 그 위에 서비스를 세운다.
+
+지도 앱에서 "내 주변 식당"을 누르면 1초 안에 반경 500m 안의 가게가 가까운 순서로 뜬다. 면접에서는 "주변 가게 검색 서비스를 설계하라"로 나오는 문제다. 이 글은 서버 한 대에 테이블 하나로 시작해서, 무엇이 먼저 깨지는지 보고 한 단계씩 고친다. 숫자는 이 글에서 정한 가상의 서비스 기준이다.
+
+## 반경 500m 식당을 테이블 하나로 찾으면
+
+가장 단순한 버전은 가게마다 위도와 경도를 적은 테이블 하나다. 위도(latitude)는 적도에서 남북으로 얼마나 떨어졌는지, 경도(longitude)는 기준 자오선에서 동서로 얼마나 떨어졌는지를 나타내는 각도다.
+
+```sql
+-- 가게 테이블: 이름과 좌표만 둔다
+CREATE TABLE businesses (
+  id   bigint PRIMARY KEY,
+  name text NOT NULL,
+  lat  double precision NOT NULL,
+  lng  double precision NOT NULL
+);
+
+-- 내 위치(37.4979, 127.0276) 주변을 위도·경도 범위로 자른다
+SELECT id, name
+FROM businesses
+WHERE lat BETWEEN 37.4979 - 0.00449 AND 37.4979 + 0.00449
+  AND lng BETWEEN 127.0276 - 0.00566 AND 127.0276 + 0.00566;
+```
+
+0.00449도와 0.00566도는 500m를 각도로 바꾼 값이다. 위도 1도는 어디서나 약 111km지만, 경도 1도는 북쪽으로 갈수록 짧아진다. 서울 위도에서는 약 88km라서 같은 500m가 경도로는 더 큰 각도가 된다. 이 쿼리는 원이 아니라 네모를 자르니, 마지막에 실제 거리로 한 번 더 걸러야 한다.
+
+가게가 몇천 곳이면 이걸로 충분하다. 문제는 가게가 늘어날 때 생긴다.
+
+## 위도 인덱스와 경도 인덱스는 따로 논다
+
+인덱스는 값을 정렬해 둔 목차다. `lat`에 인덱스를 걸면 "위도가 이 범위인 행"은 빨리 찾는다. 그런데 그 행들은 지구를 가로로 한 바퀴 두른 띠 전체다. `lng` 인덱스도 마찬가지로 세로 띠를 준다. 둘 다 걸어도 DB는 띠 두 개를 각각 읽고 겹치는 부분을 찾아야 한다. 서울 크기 상자에 가게 20만 곳을 무작위로 뿌리고, 각 띠에 몇 곳이 걸리는지 세 봤다.
+
+```js
+// prox1.js: 위도 인덱스, 경도 인덱스를 따로 걸면 각각 얼마나 넓은 띠를 읽나
+const N = 200_000;                                   // 서울 상자 안 가게 20만 곳
+const biz = Array.from({ length: N }, (_, i) => ({ id: i + 1, lat: 37.43 + rand() * 0.27, lng: 126.80 + rand() * 0.38 }));
+const me = { lat: 37.4979, lng: 127.0276 }, R = 500; // 강남역 근처, 반경 500m
+const dLat = R / 111320, dLng = R / (111320 * Math.cos(me.lat * Math.PI / 180));
+const latBand = biz.filter((b) => Math.abs(b.lat - me.lat) <= dLat);
+const lngBand = biz.filter((b) => Math.abs(b.lng - me.lng) <= dLng);
+const box = latBand.filter((b) => Math.abs(b.lng - me.lng) <= dLng);
+const circle = box.filter((b) => haversine(me.lat, me.lng, b.lat, b.lng) <= R);
+```
+
+```text
+dLat=0.00449°  dLng=0.00566°
+latitude band rows : 6611
+longitude band rows: 6018
+both (box)         : 189
+inside 500m circle : 149
+```
+
+원 안에 든 가게는 149곳인데, 한쪽 인덱스만 쓰면 6천 곳 넘게 읽는다. 40배를 더 읽는 셈이다. 가게가 2억 곳인 전 세계 서비스라면 띠 하나가 수십만 행이 된다. B-tree 같은 보통의 인덱스는 한 줄로 늘어선 값에 강하다. 2차원 범위는 그대로는 못 다룬다.
+
+그래서 2차원 좌표를 1차원 값으로 접는 공간 색인을 쓴다. 지도를 칸으로 나누고 칸마다 번호를 붙이면, "이 칸에 든 가게"는 번호 하나로 찾을 수 있다. 칸을 어떻게 나누느냐에 따라 지오해시, 쿼드트리, S2 같은 이름이 붙는다.
+
+## 요구 사항과 숫자부터
+
+설계하기 전에 범위를 정한다. 이 글에서 정한 가상의 서비스는 이렇다.
+
+- 위치와 반경(기본 500m, 최대 20km)을 주면 그 안의 가게를 가까운 순으로 준다.
+- 가게 상세(이름, 주소, 사진, 영업시간)를 볼 수 있다.
+- 사장님은 가게를 등록·수정·삭제한다. 바뀐 내용은 다음 날 검색에 반영돼도 된다.
+- 하루 사용자(DAU) 2,000만 명, 한 명이 하루 6번 검색, 가게 500만 곳.
+
+마지막 줄로 부하를 어림한다. 하루 검색은 2,000만 × 6 = 1억 2,000만 번이다. 하루는 86,400초니까 평균 약 1,389 QPS(초당 요청 수)다. 점심·저녁에 몰리는 걸 평균의 3배로 잡으면 약 4,167 QPS다. 쓰기는 사장님이 가게 정보를 고칠 때뿐이라 읽기에 비하면 거의 없다. 이 서비스는 읽기가 압도적으로 많은 서비스다.
+
+아래에서 직접 계산해 볼 수 있다. 세 번째 값은 칸 색인 테이블의 크기다. 행 하나가 칸 번호와 가게 ID라서 40바이트 정도로 잡는다.
+
+<CodePlayground
+  caption="주변 검색의 QPS와 색인 크기 어림하기"
+  functionName="estimate"
+  initialCode={`// dau: 하루 사용자 수, searchesPerDay: 한 명이 하루 검색하는 횟수
+// peakFactor: 붐비는 시간이 평균의 몇 배인지
+// businesses: 가게 수, bytesPerRow: 색인 행 하나의 크기(바이트)
+// 반환: [평균 QPS, 최대 QPS, 색인 크기(MB, 1MB = 1,000,000바이트)] 모두 반올림한 정수
+function estimate(dau, searchesPerDay, peakFactor, businesses, bytesPerRow) {
+  return [0, 0, 0];
+}`}
+  solution={`function estimate(dau, searchesPerDay, peakFactor, businesses, bytesPerRow) {
+  const avg = (dau * searchesPerDay) / 86400;
+  return [
+    Math.round(avg),
+    Math.round(avg * peakFactor), // 반올림 전 평균에 곱한다
+    Math.round((businesses * bytesPerRow) / 1e6),
+  ];
+}`}
+  tests={[
+    { label: "이 글의 서비스", args: [20000000, 6, 3, 5000000, 40], expected: [1389, 4167, 200] },
+    { label: "전 세계 규모", args: [100000000, 5, 2, 200000000, 40], expected: [5787, 11574, 8000] },
+    { label: "작은 도시 앱", args: [1000000, 10, 5, 300000, 40], expected: [116, 579, 12] },
+  ]}
+/>
+
+색인이 200MB라는 숫자를 기억해 두자. 뒤에서 "색인 테이블을 샤딩해야 하나"를 정할 때 다시 쓴다. 전 세계 규모로 키워도 8GB라서 메모리 넉넉한 서버 한 대에 들어간다. 이런 어림 계산법은 [⑩ 용량 추정](/posts/sd-capacity-estimation)에서 자세히 다뤘다.
+
+## 검색 API와 두 서비스
+
+API는 둘로 나뉜다. 위치로 찾는 검색과, 가게 하나를 다루는 CRUD다.
+
+<UrlAnatomy
+  caption="주변 검색 요청 하나를 나눠 읽기"
+  base="GET https://api.example.com/v1/search/nearby"
+  params={[
+    { key: "lat", value: "37.4979", title: "위도", description: "내 위치의 위도. 소수점 다섯째 자리가 약 1m다. 그보다 길게 보내도 GPS 오차 때문에 의미가 없다.", required: true },
+    { key: "lng", value: "127.0276", title: "경도", description: "내 위치의 경도. 서버는 위도와 경도로 칸 번호를 계산한다.", required: true },
+    { key: "radius", value: "500", title: "반경(m)", description: "없으면 500m. 너무 큰 값은 서버가 상한(예: 20km)으로 자른다. 반경이 칸 길이를 정한다." },
+    { key: "category", value: "food", title: "분류", description: "식당, 카페 같은 필터. 칸에서 후보를 모은 뒤 거른다." },
+    { key: "cursor", value: "c_149", title: "다음 페이지", description: "가까운 순으로 20개씩 준다. 다음 페이지는 앞 페이지 마지막의 거리와 ID로 이어 받는다." },
+  ]}
+/>
+
+가게 CRUD는 평범하다. `GET /v1/businesses/:id`로 상세를 읽고, `POST`, `PUT`, `DELETE`로 사장님이 고친다. 응답에는 상세 정보 전체가 아니라 목록에 필요한 이름, 거리, 대표 사진 정도만 담는다. 사용자가 하나를 누르면 그때 상세를 부른다.
+
+두 API는 성격이 정반대라서 서비스를 나눈다. 검색을 맡는 쪽을 위치 기반 서비스(LBS, Location-Based Service)라고 부른다. LBS는 쓰기가 없고, 요청마다 독립적이다. 서버가 요청 사이에 기억하는 상태가 없다는 뜻에서 무상태(stateless)라고 한다. 무상태 서버는 붐비면 대수만 늘리면 된다. 이 성질은 [③ 로드 밸런서와 무상태 웹 계층](/posts/sd-load-balancer-stateless)에서 봤다. 가게 서비스는 읽기도 있지만 쓰기를 받는 유일한 곳이다.
+
+<NetworkTopology
+  caption="검색은 LBS로, 가게 CRUD는 가게 서비스로"
+  width={400}
+  height={260}
+  zones={[
+    { id: "app", label: "서비스", x: 120, y: 15, w: 130, h: 230, tone: "private" },
+    { id: "data", label: "DB 클러스터", x: 270, y: 15, w: 120, h: 230, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 40, y: 80, icon: "client" },
+    { id: "owner", label: "사장님", x: 40, y: 200, icon: "client" },
+    { id: "lb", label: "LB", x: 95, y: 140, icon: "lb" },
+    { id: "lbs", label: "LBS", sub: "읽기 전용", x: 185, y: 70, icon: "server" },
+    { id: "biz", label: "가게 서비스", x: 185, y: 200, icon: "server" },
+    { id: "replica", label: "복제본", x: 330, y: 70, icon: "db" },
+    { id: "primary", label: "주 DB", x: 330, y: 200, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "lb" },
+    { from: "owner", to: "lb" },
+    { from: "lb", to: "lbs" },
+    { from: "lb", to: "biz" },
+    { from: "lbs", to: "replica" },
+    { from: "biz", to: "replica" },
+    { from: "biz", to: "primary" },
+    { from: "primary", to: "replica", dashed: true, label: "복제" },
+  ]}
+  steps={[
+    { path: ["user", "lb", "lbs", "replica"], packet: "nearby", title: "검색은 LBS로", detail: "주변 검색은 LBS가 받는다. 복제본에서 읽기만 한다." },
+    { path: ["user", "lb", "biz", "replica"], packet: "GET 상세", title: "상세 보기", detail: "가게 하나의 상세는 가게 서비스가 복제본에서 읽는다." },
+    { path: ["owner", "lb", "biz", "primary"], packet: "PUT", title: "쓰기는 주 DB로", detail: "사장님이 영업시간을 고치면 가게 서비스가 주 DB에 쓴다." },
+    { path: ["primary", "replica"], packet: "복제", title: "복제본은 조금 늦다", detail: "주 DB의 변경이 복제본에 닿기까지 짧은 지연이 있다. 이 서비스에선 괜찮다." },
+    { path: ["lbs"], highlight: ["lbs"], title: "LBS만 늘린다", detail: "검색이 몰리면 LBS 대수만 늘린다. 쓰기 경로는 건드리지 않는다." },
+  ]}
+/>
+
+DB는 주 DB 하나와 복제본 여럿으로 둔다. 쓰기는 주 DB가 받고, 읽기는 복제본들이 나눠 받는다. 복제본은 주 DB를 몇십 밀리초에서 몇 초 늦게 따라온다. 그 사이 검색에는 옛 영업시간이 보일 수 있다. 다음 날 반영해도 된다고 정했으니 이 늦음은 문제가 안 된다. 복제의 기본은 [④ DB 복제 입문](/posts/sd-db-replication-intro)에 있다.
+
+DB 종류는 관계형으로 충분하다. 가게 정보는 구조가 정해져 있고, 읽기가 많으며, 복제본으로 읽기를 늘리는 방법이 잘 알려져 있다. PostgreSQL이라면 PostGIS 확장의 GiST 색인처럼 공간 색인을 DB 안에서 바로 쓰는 길도 있다.
+
+## 칸 색인은 무엇으로 고를까
+
+공간 색인 후보는 크게 셋이다. 내부 동작은 각 글에 미루고, 이 서비스 관점에서 무엇이 다른지만 본다.
+
+[지오해시](/posts/geohash)는 지도를 반씩 접어 칸마다 문자열 번호를 붙인다. 번호가 그냥 문자열이라 보통의 B-tree 인덱스나 Redis 키로 바로 쓸 수 있다. 가게 하나를 고치면 그 가게의 행 하나만 바뀐다. 대신 칸 크기가 글자 수로 고정돼 있어서, 강남처럼 붐비는 칸과 시골의 텅 빈 칸이 같은 크기다.
+
+[쿼드트리](/posts/quadtree)는 꽉 찬 칸만 넷으로 쪼갠다. 붐비는 곳은 칸이 작고 한적한 곳은 크다. "가장 가까운 10곳"처럼 개수로 묻는 질문에 잘 맞는다. 보통 서버 메모리에 트리를 올려 두는데, 서버가 뜰 때 가게 전체를 읽어 트리를 만드는 시간이 걸린다. 가게 수가 억 단위면 몇 분이 걸릴 수 있어서, 배포할 때 서버를 한꺼번에 내리면 검색이 멈춘다. 일부씩 바꿔 끼워야 한다.
+
+S2는 구를 정육면체에 감싸 펼친 뒤 힐베르트 곡선으로 칸에 번호를 붙인다. 칸 크기를 여러 단계로 섞어 임의 모양의 구역을 덮을 수 있어서, 배달 구역처럼 다각형 구역을 다루는 지오펜스(가상의 울타리)에 강하다. 다만 직접 구현하기는 어렵고 라이브러리에 기댄다. S2와 H3의 차이는 지오해시 글의 마지막 부분에서 다뤘다.
+
+반경 검색이 주 기능이고 가게 정보가 하루 한 번 바뀌는 이 서비스에는 지오해시가 무난하다. 구현이 쉽고, 칸 번호를 캐시 키로 쓰기 좋다. 이 글은 지오해시로 간다. 붐비는 정도가 지역마다 크게 다르고 "가까운 k곳"이 주 질문이라면 쿼드트리 쪽으로 기운다.
+
+## 아홉 칸에서 후보를 모아 거리로 거른다
+
+지오해시로 찾는 과정은 셋이다. 내 위치의 칸 번호를 구한다. 그 칸과 둘레의 이웃 8칸, 모두 9칸에 든 가게를 후보로 모은다. 후보마다 실제 거리를 재서 반경 밖을 버리고 가까운 순으로 정렬한다.
+
+왜 이웃까지 볼까. 내가 칸의 가장자리에 서 있으면 반경 원이 옆 칸으로 넘친다. 내 칸만 보면 바로 옆 가게를 놓친다. 아래 그림에서 단계를 넘기면 내 칸만 볼 때와 9칸을 볼 때 무엇이 달라지는지 보인다.
+
+<VectorSpace
+  caption="내 칸만 보면 놓치고, 9칸을 보면 후보가 늘어난다"
+  width={400}
+  height={260}
+  groups={[
+    { id: "own", label: "내 칸" },
+    { id: "nb", label: "이웃 8칸" },
+    { id: "out", label: "9칸 밖" },
+  ]}
+  points={[
+    { id: "cafe", label: "카페", x: 215, y: 140, group: "own" },
+    { id: "soup", label: "국밥", x: 180, y: 115, group: "own", labelAt: "left" },
+    { id: "snack", label: "분식", x: 262, y: 150, group: "nb" },
+    { id: "sushi", label: "초밥", x: 190, y: 75, group: "nb" },
+    { id: "burger", label: "버거", x: 150, y: 170, group: "nb", labelAt: "left" },
+    { id: "bread", label: "빵집", x: 310, y: 60, group: "nb" },
+    { id: "pizza", label: "피자", x: 90, y: 120, group: "nb", labelAt: "left" },
+    { id: "chicken", label: "치킨", x: 240, y: 205, group: "nb" },
+    { id: "noodle", label: "냉면", x: 365, y: 235, group: "out", labelAt: "left" },
+    { id: "pork", label: "족발", x: 30, y: 30, group: "out" },
+  ]}
+  query={{ label: "나", x: 200, y: 130, labelAt: "left" }}
+  steps={[
+    { caption: "가게 열 곳이 흩어져 있다. 색은 내 위치의 칸, 둘레 8칸, 그 밖을 나타낸다." },
+    { caption: "내 위치는 내 칸의 가장자리 근처다.", query: true },
+    { caption: "반경 500m 원을 그린다. 원이 이웃 칸으로 넘친다.", query: true, radius: 70 },
+    { caption: "내 칸만 보면 카페와 국밥 두 곳뿐이다. 원 안의 분식, 초밥, 버거를 놓친다.", query: true, radius: 70, neighbors: ["cafe", "soup"] },
+    { caption: "9칸을 모두 보면 후보가 여덟 곳이다. 칸 밖의 냉면과 족발은 아예 읽지 않는다.", query: true, radius: 70, neighbors: ["cafe", "soup", "snack", "sushi", "burger", "bread", "pizza", "chicken"] },
+    { caption: "후보마다 실제 거리를 재서 원 밖의 빵집, 피자, 치킨을 버린다. 다섯 곳이 남는다.", query: true, radius: 70, neighbors: ["cafe", "soup", "snack", "sushi", "burger"] },
+    { caption: "가까운 순으로 줄 세워 돌려준다: 카페, 국밥, 초밥, 분식, 버거.", query: true, radius: 70, path: ["cafe", "soup", "sushi", "snack", "burger"] },
+  ]}
+/>
+
+같은 일을 가게 20만 곳에 실제로 돌려 봤다. `encode`, `neighbors`, `haversine`은 지오해시 글의 방식대로 직접 짠 작은 함수다. 하버사인(haversine) 공식은 지구를 구로 보고 두 좌표 사이의 대원 거리를 구한다.
+
+```js
+// prox2.js 일부: 지오해시 칸 + 이웃 8칸으로 반경 검색하기
+const LEN = 6, index = new Map();            // 색인: 칸 번호 → 그 칸의 가게들
+for (const b of biz) { const h = encode(b.lat, b.lng, LEN); if (!index.has(h)) index.set(h, []); index.get(h).push(b); }
+
+const myCell = encode(me.lat, me.lng, LEN);
+const own = (index.get(myCell) || []).filter((b) => haversine(me.lat, me.lng, b.lat, b.lng) <= R);
+let candidates = [];
+for (const c of neighbors(myCell)) candidates = candidates.concat(index.get(c) || []);
+const hits = candidates
+  .map((b) => ({ ...b, d: haversine(me.lat, me.lng, b.lat, b.lng) }))
+  .filter((b) => b.d <= R)
+  .sort((a, b) => a.d - b.d);
+const brute = biz.filter((b) => haversine(me.lat, me.lng, b.lat, b.lng) <= R).length;  // 정답 확인용
+```
+
+```text
+cells in index: 1836, my cell: wydm6d, cell ≈ 969m × 611m
+  wydm67: 145 rows
+  wydm6e: 119 rows
+  wydm6g: 100 rows
+  wydm66: 98 rows
+  wydm6d: 113 rows
+  wydm6f: 121 rows
+  wydm63: 123 rows
+  wydm69: 106 rows
+  wydm6c: 125 rows
+own cell only : 90 within 500m
+9 cells       : 1050 candidates -> 149 within 500m
+brute force   : 149 within 500m (scanned 200000)
+nearest 5:
+  #97997  37m  cell wydm6d
+  #144854  96m  cell wydm6d
+  #38856  111m  cell wydm6d
+  #8223  114m  cell wydm6d
+  #187821  124m  cell wydm6d
+```
+
+볼 줄은 세 개다. 내 칸만 보면 90곳이라 59곳을 놓친다. 9칸을 보면 후보 1,050곳에서 149곳이 남고, 20만 곳을 다 잰 정답과 같다. 앞에서 위도 띠 하나만 써도 6,611곳을 읽던 것과 비교하면 읽는 양이 6분의 1로 준다.
+
+## 칸 길이는 반경으로 정한다
+
+위 결과에서 6글자 칸은 서울 위도에서 가로 약 969m, 세로 약 611m였다. 9칸이 반경을 빠짐없이 덮으려면, 내가 칸 어디에 있든 원이 이웃 칸 너머로 나가지 않아야 한다. 원은 내 칸 경계에서 최대 반경만큼 넘친다. 그러니 칸의 짧은 변이 반경보다 길면 이웃 한 줄 안에 원이 다 들어간다. 611m는 500m보다 기니 6글자면 된다.
+
+반경이 2km면 6글자 칸으로는 이웃 한 줄을 넘어간다. 한 글자 줄여 5글자로 가면 칸이 대략 가로 3.9km, 세로 4.9km가 된다. 짧은 변이 2km보다 기니 다시 9칸으로 덮인다. 그래서 서버는 반경별 글자 수 표를 들고 있다가 요청의 반경으로 길이를 고른다. 칸 크기를 글자 수별로 정리한 표는 지오해시 글에 있다.
+
+길이를 하나만 쓰면 안 되니 색인 테이블에는 같은 가게를 길이별로 여러 행 넣거나, 가장 긴 6글자만 저장하고 짧은 칸은 접두사로 찾는다. 지오해시는 짧은 칸의 번호가 긴 칸의 접두사라서 `geohash LIKE 'wydm6%'`처럼 B-tree로 찾을 수 있다.
+
+```sql
+-- 칸 색인 테이블: 가게 하나가 한 행. 칸과 가게 ID를 묶어 기본 키로 쓴다
+CREATE TABLE geo_index (
+  geohash     varchar(6) NOT NULL,
+  business_id bigint     NOT NULL,
+  PRIMARY KEY (geohash, business_id)
+);
+
+-- 6글자 칸 9개를 한 번에 읽는다
+SELECT business_id FROM geo_index
+WHERE geohash IN ('wydm67','wydm6e','wydm6g','wydm66','wydm6d','wydm6f','wydm63','wydm69','wydm6c');
+
+-- 반경이 커서 5글자 칸을 쓸 땐 접두사로 읽는다. varchar_pattern_ops 색인이나 C 콜레이션이어야 B-tree를 탄다
+SELECT business_id FROM geo_index WHERE geohash LIKE 'wydm6%';
+```
+
+칸 하나에 가게 ID 목록을 배열로 한 행에 담는 방식도 떠올릴 수 있다. 그러면 가게 하나를 추가할 때 그 칸의 긴 배열 전체를 고쳐 써야 하고, 같은 칸에 동시에 쓰면 잠금을 기다린다. 가게 하나를 한 행으로 두면 추가와 삭제가 행 하나로 끝난다.
+
+## 색인 테이블은 작아서 나누지 않는다
+
+데이터가 커지면 샤딩(데이터를 여러 DB에 나눠 담기)을 떠올린다. 두 테이블은 사정이 다르다.
+
+가게 테이블은 사진 주소, 영업시간, 설명까지 담아 한 행이 1KB쯤 된다. 500만 곳이면 5GB, 전 세계 2억 곳이면 200GB다. 언젠가 한 대를 넘을 수 있으니 가게 ID로 샤딩할 수 있다. ID로 나누면 고르게 퍼지고, 상세 조회는 늘 ID 하나로 오니 샤드 하나만 찾아간다. 샤딩 기초는 [⑧ 샤딩 입문](/posts/sd-sharding-intro)에 있다.
+
+칸 색인은 앞의 계산대로 200MB, 커져도 몇 GB다. 메모리에 다 올라가는 크기를 굳이 나누면 얻는 것보다 잃는 게 많다. 칸 번호로 나누면 강남 칸이 든 샤드에 검색이 몰리고, 9칸이 서로 다른 샤드에 걸치면 한 검색이 여러 샤드를 돌아야 한다. 대신 복제본을 늘려 읽기를 나눈다. 읽기 부하는 복제본으로, 데이터 크기는 샤딩으로 푸는 것이다.
+
+## 좌표 대신 칸 번호를 캐시 키로
+
+QPS가 수천이면 DB 앞에 캐시를 둔다. 처음 떠오르는 캐시 키는 요청 좌표 그대로다. 그런데 GPS는 가만히 서 있어도 몇 미터씩 흔들리고, 사람은 걷는다. 같은 자리에서 세 번 검색해도 좌표가 매번 달라서 캐시가 한 번도 맞지 않는다. 칸 번호를 키로 쓰면 몇 미터 흔들려도 같은 칸에 떨어진다.
+
+캐시는 두 종류로 둔다. 칸 번호를 키로 그 칸의 가게 목록을 담는 캐시, 가게 ID를 키로 상세를 담는 캐시다. Redis를 비표준 포트 6397에 띄우고 가게 20만 곳을 넣어 봤다. 아래 클라이언트는 라이브러리 없이 RESP 명령을 보내는 50줄짜리다.
+
+```js
+// prox3.js 일부: 지오해시 칸을 캐시 키로 쓰기 (Redis 7.0, 포트 6397)
+jobs.push(r.cmd("SADD", `geo6:${encode(lat, lng, 6)}`, i));                        // 칸 → 가게 ID 목록
+jobs.push(r.cmd("HSET", `biz:${i}`, "name", `가게${i}`, "lat", lat.toFixed(6), "lng", lng.toFixed(6)));  // 가게 상세
+
+// 검색 한 번: 9칸의 ID를 한꺼번에 받고, 후보 상세를 한꺼번에 받는다
+const lists = await Promise.all(neighbors(encode(me.lat, me.lng, 6)).map((c) => r.cmd("SMEMBERS", `geo6:${c}`)));
+const rows = await Promise.all(lists.flat().map((id) => r.cmd("HMGET", `biz:${id}`, "name", "lat", "lng")));
+```
+
+```text
+keys: 201836, memory added: 27.4 MiB
+one cell set: 568 bytes, one business hash: 112 bytes
+coord key 37.497912,127.027611  ->  geohash key geo6:wydm6d
+coord key 37.497951,127.027566  ->  geohash key geo6:wydm6d
+coord key 37.497880,127.027650  ->  geohash key geo6:wydm6d
+9 SMEMBERS: 1050 ids in 1.1 ms
+1050 HMGET: 11.6 ms -> 149 within 500m, nearest 가게97997 37m
+one cell JSON: 3640 bytes
+9 GET with coords: 1050 candidates -> 149 within 500m, details for 20 in 1.9 ms
+```
+
+세 번의 흔들린 좌표는 키가 셋이지만 칸은 모두 `wydm6d`다. 가게 20만 곳을 다 넣어도 27MiB라서 캐시 한 대에 넉넉하다. 칸 하나의 집합이 568바이트로 작은 건, 정수만 512개 이하로 든 집합을 Redis가 intset이라는 압축 형태로 담기 때문이다.
+
+시간 줄을 보면 칸 9개를 읽는 데는 1ms, 후보 1,050곳의 상세를 읽는 데 11ms가 걸렸다. 같은 컨테이너 안의 루프백에서 잰 값이라 돌릴 때마다 조금씩 다르지만, 비율은 비슷했다. 거리를 재려고 상세를 다 읽은 게 낭비다. 칸 캐시의 값에 ID와 함께 좌표를 넣어 두면 9칸만 읽고 거리를 잰 뒤, 첫 페이지 20곳의 상세만 읽으면 된다. 마지막 줄이 그렇게 한 결과로, 2ms 안에 끝났다. 칸 값은 3.6KB로 커지지만 보내는 명령이 1,059개에서 29개로 준다.
+
+<AlgoTrace
+  caption="검색 한 번이 칸 캐시를 읽는 순서"
+  cells={["wydm67", "wydm6e", "wydm6g", "wydm66", "wydm6d", "wydm6f", "wydm63", "wydm69", "wydm6c"]}
+  memoryLabel="모은 후보"
+  steps={[
+    { caption: "반경 500m라 6글자 칸을 쓴다. 내 칸 wydm6d와 이웃 8칸, 9개 키를 정한다.", pointer: 4 },
+    { caption: "9개 GET을 한 번에 보낸다. 줄줄이 기다리지 않아서 왕복 한 번 시간에 끝난다.", pointer: 0, memory: ["67: 145"] },
+    { caption: "가운데 줄 칸들이 차례로 돌아온다.", pointer: 4, memory: ["67: 145", "6e: 119", "6g: 100", "66: 98", "6d: 113"] },
+    { caption: "wydm63은 캐시에 없다. 이 칸만 DB 복제본에서 읽어 채워 넣는다.", pointer: 6, memory: ["67: 145", "6e: 119", "6g: 100", "66: 98", "6d: 113", "6f: 121", "63: DB→123"] },
+    { caption: "9칸이 다 모였다. 후보는 1,050곳이다.", pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: ["후보 1,050"] },
+    { caption: "좌표로 거리를 재서 149곳만 남기고, 가까운 20곳의 상세만 따로 읽는다.", found: [4], memory: ["반경 안 149", "상세 20"] },
+  ]}
+/>
+
+캐시가 비어 있는 칸은 그 칸만 DB에서 채운다. 이렇게 필요할 때 채우는 방식을 캐시 어사이드라고 한다. 다른 선택지와 비교는 [캐시 전략](/posts/caching-strategies)에 있다.
+
+## 가게 정보가 바뀌면 다음 날 반영한다
+
+사장님이 가게를 옮기거나 새로 열면 칸 색인과 캐시가 바뀌어야 한다. 요구 사항에서 다음 날 반영이면 된다고 정했으니, 바뀐 것을 모아 밤에 한꺼번에 처리한다.
+
+<SequenceDiagram
+  caption="가게 이전이 검색에 반영되기까지"
+  actors={[
+    { id: "owner", label: "사장님" },
+    { id: "biz", label: "가게 서비스" },
+    { id: "db", label: "주 DB" },
+    { id: "job", label: "야간 작업" },
+    { id: "cache", label: "캐시" },
+  ]}
+  steps={[
+    { from: "owner", to: "biz", label: "PUT 새 주소", title: "주소를 고친다", detail: "사장님이 가게를 동쪽 옆 칸 거리로 옮겼다고 고친다." },
+    { from: "biz", to: "db", label: "UPDATE", title: "가게 테이블만 고친다", detail: "새 좌표를 쓰고, 바뀐 가게 목록에 ID를 남긴다. 칸 색인은 아직 그대로다.", payload: "UPDATE businesses SET lat=37.4985, lng=127.0362 WHERE id=97997;" },
+    { from: "job", to: "db", label: "바뀐 가게 읽기", title: "밤에 모아서", detail: "새벽에 하루 동안 바뀐 가게를 읽어 새 칸 번호를 계산한다." },
+    { from: "job", to: "db", label: "칸 색인 갱신", title: "옛 칸에서 빼고 새 칸에 넣는다", detail: "한 트랜잭션에서 옛 행을 지우고 새 행을 넣는다.", payload: "DELETE FROM geo_index WHERE business_id=97997;\nINSERT INTO geo_index VALUES ('wydm6f', 97997);" },
+    { from: "job", to: "cache", label: "DEL 두 칸", title: "두 칸의 캐시를 지운다", detail: "옛 칸과 새 칸의 캐시 키를 지운다. 다음 검색이 DB에서 새로 채운다." },
+  ]}
+/>
+
+캐시를 고쳐 쓰지 않고 지우는 이유가 있다. 지우면 다음 읽기가 DB의 최신 값으로 채운다. 고쳐 쓰려면 캐시 안의 목록을 읽고 바꿔 쓰는 사이에 다른 갱신이 끼어들 수 있다. 지우는 쪽이 단순하고 틀릴 일이 적다. 자세한 함정은 [캐시 무효화](/posts/cache-invalidation)에 있다.
+
+폐업처럼 바로 내려야 하는 변경도 있다. 그런 건 밤을 기다리지 않고, 가게 서비스가 상세 캐시를 바로 지우고 검색 결과에서 "폐업" 표시가 된 가게를 거르게 한다. 하루 지연을 허용한다고 해서 모든 변경을 하루 늦출 필요는 없다.
+
+## 결과가 비거나 너무 많을 때
+
+시골에서 반경 500m를 검색하면 아무것도 안 나올 수 있다. 빈 화면을 주는 대신 반경을 넓혀 다시 찾는다. 6글자에서 비면 5글자로, 그래도 비면 4글자로 칸을 키운다. 몇 단계까지 넓혔는지 응답에 담아 앱이 "2km 안의 결과"라고 보여 주게 한다.
+
+반대로 강남 한복판에서 반경 20km를 주면 후보가 수십만 곳이 된다. 그래서 반경에 상한을 두고, 결과도 한 번에 다 주지 않고 20개씩 나눠 준다. 다음 페이지는 오프셋보다 커서가 낫다. "앞 페이지 마지막 가게의 거리와 ID보다 뒤"로 이어 받으면, 그 사이 가게가 추가돼도 같은 가게가 두 번 나오지 않는다.
+
+거리 말고 다른 기준을 섞기도 한다. 평점이나 지금 영업 중인지로 순위를 매기려면, 칸에서 후보를 넉넉히 모은 뒤 LBS 안에서 점수를 매겨 정렬한다. 칸 색인은 후보를 좁히는 일만 하고, 순위는 그 뒤의 일이다.
+
+## 여러 리전에 두고, 위치를 조심해서 다룬다
+
+사용자가 여러 나라에 있으면 LBS와 캐시를 리전마다 둔다. 한국 사용자는 서울 리전으로, 일본 사용자는 도쿄 리전으로 간다. 지연이 줄고, 한 리전이 죽어도 다른 리전이 받는다. DNS로 가까운 리전을 고르는 방법은 [⑥ 여러 데이터센터](/posts/sd-multi-datacenter)에서 봤다.
+
+<NetworkTopology
+  caption="최종 검색 경로: 칸 캐시에서 후보, 상세 캐시에서 첫 페이지"
+  width={400}
+  height={260}
+  zones={[
+    { id: "region", label: "서울 리전", x: 75, y: 10, w: 315, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 35, y: 130, icon: "client" },
+    { id: "lb", label: "LB", x: 110, y: 130, icon: "lb" },
+    { id: "lbs", label: "LBS", x: 190, y: 130, icon: "server" },
+    { id: "geo", label: "칸 캐시", sub: "geo6:*", x: 300, y: 50, icon: "db" },
+    { id: "bizc", label: "상세 캐시", sub: "biz:*", x: 300, y: 130, icon: "db" },
+    { id: "replica", label: "DB 복제본", x: 300, y: 215, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "lb" },
+    { from: "lb", to: "lbs" },
+    { from: "lbs", to: "geo" },
+    { from: "lbs", to: "bizc" },
+    { from: "lbs", to: "replica" },
+    { from: "geo", to: "replica", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "lb", "lbs"], packet: "500m", title: "요청이 LBS로", detail: "좌표와 반경을 받은 LBS가 반경에 맞는 칸 길이를 고른다." },
+    { path: ["lbs", "geo"], packet: "9 GET", title: "칸 9개를 한 번에", detail: "내 칸과 이웃 8칸의 후보를 한 번에 읽는다. 값에 좌표가 있어 바로 거리를 잰다." },
+    { path: ["lbs", "replica"], packet: "1칸 miss", title: "빈 칸만 DB로", detail: "캐시에 없는 칸 하나만 복제본에서 읽어 채운다." },
+    { path: ["lbs", "bizc"], packet: "20 HMGET", title: "첫 페이지만 상세", detail: "가까운 20곳의 상세만 읽는다. 나머지는 다음 페이지 때 읽는다." },
+    { path: ["lbs", "lb", "user"], packet: "20곳", title: "응답", detail: "거리순 20곳과 다음 페이지 커서를 돌려준다." },
+  ]}
+/>
+
+위치 정보는 민감하다. 검색 요청의 좌표만 모아도 그 사람이 어디 사는지, 어디서 일하는지 드러난다. 검색 로그에는 좌표 대신 칸 번호처럼 뭉갠 값만 남기고, 보관 기간을 정한다. 나라마다 규정이 다르다. 유럽의 GDPR은 위치를 개인정보로 다루고, 한국은 위치정보법이 따로 있다. 어떤 데이터를 어느 리전 밖으로 내보내도 되는지도 그 규정에 따라 정한다.
+
+## 다음 글
+
+주변 검색은 "가게가 거의 움직이지 않는다"는 사실 위에 서 있다. 그래서 칸 색인을 밤에 고치고, 칸 캐시를 오래 둘 수 있었다. 2차원 범위를 1차원 칸 번호로 바꿔 9칸만 읽고, 그 번호를 캐시 키로 다시 썼다. 색인은 작아서 나누지 않고 복제본으로 읽기를 받았다.
+
+다음 글 [㊱ 주변 친구 설계](/posts/sd-nearby-friends)는 이 전제를 뒤집는다. 찾는 대상이 가게가 아니라 걸어 다니는 친구라서 위치가 30초마다 바뀐다. 밤에 고치는 색인으로는 안 되고, 바뀔 때마다 친구에게 밀어 줘야 한다.
+
+## 면접에서 나올 만한 질문
+
+### 위도와 경도에 각각 인덱스를 걸면 안 되나요?
+
+걸어도 느리다. 인덱스 하나는 지구를 두른 띠 하나를 줄 뿐이라서, 두 띠를 각각 읽고 겹치는 부분을 찾아야 한다. 가게 20만 곳으로 재 보니 원 안에 149곳인데 위도 띠 하나에만 6,611곳이 걸렸다. 2차원 좌표를 칸 번호 하나로 접는 공간 색인을 써야 한 번에 좁힌다.
+
+### 지오해시와 쿼드트리 중 무엇을 고르나요?
+
+반경 검색이 주 기능이고 데이터가 자주 안 바뀌면 지오해시를 고른다. 칸 번호가 문자열이라 DB 인덱스와 캐시 키로 바로 쓰고, 가게 하나를 고치면 행 하나만 바뀐다. 지역마다 밀도가 크게 다르거나 "가장 가까운 k곳"이 주 질문이면 쿼드트리가 낫다. 대신 메모리에 트리를 올리느라 서버 기동이 느려서 배포를 나눠 해야 한다.
+
+### 왜 이웃 8칸까지 보나요?
+
+칸 가장자리에 서 있으면 반경 원이 옆 칸으로 넘치기 때문이다. 내 칸만 보면 바로 옆 가게를 놓친다. 실제로 돌려 보니 내 칸만 볼 때 149곳 중 90곳만 찾았다. 칸의 짧은 변이 반경보다 길도록 칸 길이를 고르면 9칸이 원을 빠짐없이 덮는다.
+
+### 트래픽이 10배가 되면 어디부터 늘리나요?
+
+LBS는 무상태라 대수만 늘린다. 칸 캐시와 상세 캐시는 읽기 전용에 가까우니 복제본을 늘리고, DB도 복제본을 더 붙인다. 칸 색인은 몇 GB 안이라 샤딩하지 않는다. 쓰기 경로는 그대로라 영향이 없다.
+
+### 칸 색인 테이블도 샤딩해야 하나요?
+
+보통은 아니다. 가게 500만 곳이면 200MB, 2억 곳이어도 수 GB라 한 대에 들어간다. 칸 번호로 나누면 붐비는 칸이 든 샤드에 검색이 몰리고, 9칸이 여러 샤드에 걸쳐 한 요청이 여러 곳을 돈다. 크기가 아니라 읽기 부하가 문제라서 복제본으로 푼다. 가게 상세 테이블은 커질 수 있으니 가게 ID로 샤딩한다.
+
+### 캐시 키를 요청 좌표로 하면 왜 안 되나요?
+
+GPS가 몇 미터씩 흔들리고 사람이 움직여서 같은 자리의 검색도 좌표가 매번 달라지기 때문이다. 좌표가 키면 캐시가 거의 맞지 않는다. 칸 번호를 키로 쓰면 몇 미터 흔들려도 같은 칸에 떨어진다. 칸 값에 좌표를 함께 넣어 두면 거리 계산까지 캐시 안에서 끝난다.
+
+### 캐시 서버가 죽으면 어떻게 되나요?
+
+검색이 DB 복제본으로 쏟아진다. 평소 캐시가 받던 수천 QPS가 그대로 내려가면 복제본이 못 버틸 수 있다. 캐시를 복제본과 함께 여러 대로 두고, 캐시가 빈 칸을 채울 때 같은 칸은 한 요청만 DB에 가게 묶는다. LBS 메모리에 몇 초짜리 로컬 캐시를 한 겹 더 두면 충격이 줄어든다.
+
+### 가게가 옮기면 검색에 언제 반영되나요?
+
+이 설계에서는 다음 날이다. 가게 테이블은 바로 고치고, 밤에 바뀐 가게를 모아 칸 색인에서 옛 칸을 빼고 새 칸에 넣은 뒤 두 칸의 캐시를 지운다. 폐업처럼 바로 내려야 하는 변경은 상세 캐시를 즉시 지우고 검색 단계에서 거른다. 실시간 반영이 필요하면 변경 이벤트를 큐로 받아 바로 색인을 고치는 쪽으로 간다.

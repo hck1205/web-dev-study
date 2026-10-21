@@ -1,0 +1,397 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("animation-performance");
+
+사이드 메뉴가 열릴 때 데스크톱에서는 매끄러운데, 오래된 안드로이드 폰에서는 뚝뚝 끊긴다. 코드를 열어 보면 메뉴의 `left`를 −280px에서 0으로 바꾸는 transition이다. 같은 거리를 `transform: translateX()`로 옮기도록 한 줄 바꾸면 그 폰에서도 부드러워진다. 움직이는 거리도 시간도 같은데 왜 이렇게 다를까.
+
+답은 브라우저가 한 프레임을 그리는 과정에 있다. 어떤 속성은 바꾸면 위치 계산부터 다시 하고, 어떤 속성은 이미 그려 둔 그림을 옮기기만 한다. 이 글은 그 차이를 크로미움 141(Playwright, 이 컨테이너에는 GPU가 없다)에서 직접 재서 보여 준다. 끝에서는 움직임 자체가 불편한 사람들을 위한 설정과 접근성 기준을 다룬다.
+
+같은 시리즈로 [애니메이션 패턴](/posts/animation-patterns), [스프링 애니메이션](/posts/spring-animation), [View Transitions와 FLIP](/posts/view-transitions-shared-element)이 있다. 브라우저가 HTML을 화면으로 바꾸는 전체 흐름은 [google.com을 치면 일어나는 일](/posts/what-happens-google-com)에, rAF가 이벤트 루프의 어디에서 도는지는 [이벤트 루프](/posts/event-loop)에 있다.
+
+## 한 프레임에 쓸 수 있는 시간
+
+60Hz 화면은 1초에 60번 새 그림을 원한다. 한 프레임에 1000 / 60 ≈ 16.7ms다. 120Hz 화면이면 8.3ms로 절반이 된다. 이 안에 자바스크립트, 스타일 계산, 레이아웃, 페인트, 합성을 다 끝내야 다음 화면 갱신에 맞출 수 있다. 실제로는 브라우저 자신의 일도 있어서 우리 코드에 쓸 수 있는 시간은 이보다 짧다.
+
+빈 페이지에서 `requestAnimationFrame` 콜백 사이의 간격을 2초 동안 모으면 정확히 그 숫자가 나온다. 메인 스레드를 120ms씩 붙잡는 작업을 500ms마다 끼워 넣으면 어떻게 되는지도 같이 쟀다.
+
+```text
+평소: 프레임 121개, p50 16.7ms, p95 16.7ms, 최대 16.8ms, 25ms 넘은 프레임 0개
+120ms짜리 작업을 500ms마다: 프레임 105개, p50 16.7ms, p95 16.8ms, 최대 116.7ms, 25ms 넘은 프레임 3개
+```
+
+평소에는 모든 프레임이 16.7ms 간격이다. 긴 작업이 끼면 그 순간 한 번에 116.7ms가 비고, 2초 동안 프레임 16개가 사라졌다. 그런데 중앙값은 그대로 16.7ms다. 평균이나 중앙값만 보면 멀쩡해 보이고, 사용자가 느끼는 끊김은 최댓값과 긴 프레임 개수에서 드러난다.
+
+모은 간격에서 이 세 숫자를 뽑는 함수를 직접 써 보자. 예산의 1.5배를 넘긴 간격을 긴 프레임으로 센다.
+
+<CodePlayground
+  caption="rAF 간격에서 중앙값, 최댓값, 긴 프레임 수 뽑기"
+  functionName="jankStats"
+  initialCode={`function jankStats(gaps, hz) {
+  // gaps: requestAnimationFrame 콜백 사이의 간격(ms) 배열
+  // hz: 화면 주사율. 한 프레임 예산은 1000 / hz
+  // p50: 오름차순 정렬한 배열의 Math.floor(길이 * 0.5) 번째 값
+  // max: 가장 큰 간격
+  // long: 예산 * 1.5 보다 큰 간격의 개수
+  // 반환: [p50, max, long]
+  return [0, 0, 0];
+}`}
+  solution={`function jankStats(gaps, hz) {
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const budget = 1000 / hz;
+  const p50 = sorted[Math.floor(sorted.length * 0.5)];
+  const max = sorted[sorted.length - 1];
+  const long = gaps.filter((g) => g > budget * 1.5).length;
+  return [p50, max, long];
+}`}
+  tests={[
+    { label: "매끄러운 60Hz", args: [[16.7, 16.7, 16.7], 60], expected: [16.7, 16.7, 0] },
+    { label: "긴 작업 한 번 낀 60Hz", args: [[16.7, 16.7, 16.6, 116.7, 16.8], 60], expected: [16.7, 116.7, 1] },
+    { label: "120Hz에서 한 프레임 놓침", args: [[8.3, 8.4, 16.7, 8.3], 120], expected: [8.4, 16.7, 1] },
+    { label: "60Hz라면 같은 16.7은 정상", args: [[8.3, 8.4, 16.7, 8.3], 60], expected: [8.4, 16.7, 0] },
+  ]}
+/>
+
+마지막 두 테스트가 같은 간격 배열이라는 점을 보자. 16.7ms 간격은 60Hz 화면에서는 정상이지만 120Hz 화면에서는 한 프레임을 놓친 것이다. 기기의 주사율을 모른 채 "16.7ms면 괜찮다"고 판단하면 고주사율 폰의 끊김을 놓친다.
+
+한 프레임 안에서 일어나는 단계를 따라가 보자. 무엇을 바꿨느냐에 따라 건너뛰는 단계가 달라진다.
+
+<AlgoTrace
+  caption="속성을 바꾼 뒤 한 프레임에서 거치는 단계"
+  memoryLabel="이번 프레임에 한 일"
+  cells={["JS", "Style", "Layout", "Paint", "Composite"]}
+  steps={[
+    { pointer: 0, memory: ["left 바꿈"], caption: "자바스크립트나 CSS 애니메이션이 left를 바꿨다." },
+    { pointer: 1, memory: ["left 바꿈", "스타일 계산"], caption: "어떤 규칙이 어떤 요소에 걸리는지 다시 계산한다." },
+    { pointer: 2, memory: ["left 바꿈", "스타일 계산", "레이아웃"], caption: "left는 위치라서 상자 크기와 자리를 다시 잰다. 주변 요소까지 다시 잴 수 있다." },
+    { pointer: 3, memory: ["left 바꿈", "스타일 계산", "레이아웃", "페인트"], caption: "바뀐 자리에 맞춰 그리기 명령을 다시 만든다." },
+    { pointer: 4, memory: ["left 바꿈", "스타일 계산", "레이아웃", "페인트", "합성"], caption: "그려 둔 층들을 겹쳐 화면에 낸다. 다섯 단계를 다 거쳤다." },
+    { pointer: 0, memory: ["transform 바꿈"], caption: "이번엔 transform을 바꿨다. 합성 단계에서 돌릴 수 있는 애니메이션이면 이 일은 합성 스레드가 맡는다." },
+    { pointer: 4, found: [4], memory: ["transform 바꿈", "합성"], caption: "레이아웃도 페인트도 다시 하지 않는다. 이미 그린 층을 옮겨 겹치기만 한다." },
+  ]}
+/>
+
+## 속성마다 깨우는 단계가 다르다
+
+말로만 들으면 와닿지 않으니 재 봤다. 40×40 상자 400개를 1초마다 오가게 하고, 움직이는 속성만 바꿔 가며 2초 동안 성능 트레이스를 떴다. 트레이스는 개발자 도구 Performance 패널이 쓰는 것과 같은 데이터다. Playwright에서 CDP(크롬 개발자 도구 프로토콜)로 직접 켜고 끌 수 있다.
+
+```js
+const { chromium } = require("playwright-core");
+
+// 상자 400개가 1초마다 오가는 페이지. prop에 따라 움직이는 속성만 다르다
+const KEYFRAMES = {
+  transform: "from{transform:translateX(0)}to{transform:translateX(30px)}",
+  left: "from{left:0}to{left:30px}",
+  width: "from{width:40px}to{width:70px}",
+  background: "from{background:#4f46e5}to{background:#eb6834}",
+};
+const html = (prop) => `<style>
+  .wrap{display:flex;flex-wrap:wrap;gap:4px}
+  .box{position:relative;width:40px;height:40px;background:#4f46e5;animation:a 1s ease-in-out infinite alternate}
+  @keyframes a{${KEYFRAMES[prop]}}
+</style><div class="wrap">${'<div class="box"></div>'.repeat(400)}</div>`;
+
+async function measure(browser, prop) {
+  const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+  await page.setContent(html(prop));
+  await page.waitForTimeout(300);
+  const cdp = await page.context().newCDPSession(page);
+
+  // 2초 동안 트레이스를 떠서 메인 스레드의 Layout / 스타일 계산 / Paint 이벤트를 센다
+  const events = [];
+  cdp.on("Tracing.dataCollected", (e) => events.push(...e.value));
+  const done = new Promise((r) => cdp.once("Tracing.tracingComplete", r));
+  await cdp.send("Tracing.start", { categories: "devtools.timeline,disabled-by-default-devtools.timeline", transferMode: "ReportEvents" });
+  await page.waitForTimeout(2000);
+  await cdp.send("Tracing.end");
+  await done;
+  const stat = (name) => {
+    const list = events.filter((e) => e.name === name && e.ph === "X");
+    return `${list.length}회 ${(list.reduce((s, e) => s + e.dur, 0) / 1000).toFixed(0)}ms`;
+  };
+  console.log(prop.padEnd(10), "Layout", stat("Layout"), "| Style", stat("UpdateLayoutTree"), "| Paint", stat("Paint"));
+  await page.close();
+}
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" });
+  for (const prop of Object.keys(KEYFRAMES)) await measure(browser, prop);
+  await browser.close();
+})();
+```
+
+```text
+transform  Layout 0회 0ms | Style 0회 0ms | Paint 0회 0ms
+left       Layout 119회 78ms | Style 119회 298ms | Paint 47002회 548ms
+width      Layout 120회 157ms | Style 120회 275ms | Paint 42066회 403ms
+background Layout 0회 0ms | Style 120회 569ms | Paint 48120회 475ms
+```
+
+`transform`은 2초 동안 메인 스레드에서 레이아웃도, 스타일 계산도, 페인트도 한 번도 일어나지 않았다. `left`와 `width`는 거의 매 프레임(2초에 약 120번) 레이아웃을 다시 했고, 페인트 이벤트는 상자마다 찍혀서 4만 개가 넘는다. `background`는 레이아웃은 건너뛰지만 색이 바뀌니 매 프레임 다시 그린다. 이 표의 시간을 프레임 수로 나누면 프레임 하나에 쓴 메인 스레드 시간이 나온다.
+
+<GeometryMorph
+  caption="프레임 하나에 메인 스레드가 쓴 평균 시간 (상자 400개, 이 컨테이너 기준). 테두리 상자가 한 프레임 예산이다."
+  width={400}
+  height={200}
+  shapes={[{ id: "budget", tone: "outline" }, { id: "style", tone: "series1" }, { id: "layout", tone: "series2" }, { id: "paint", tone: "series3" }]}
+  steps={[
+    {
+      title: "transform: 0ms",
+      detail: "메인 스레드는 아무 일도 하지 않는다. 움직임은 합성 단계에서 끝난다.",
+      shapes: { budget: [[40, 70], [374, 70], [374, 130], [40, 130]], style: [[40, 80], [41, 80], [41, 120], [40, 120]], layout: [[41, 80], [42, 80], [42, 120], [41, 120]], paint: [[42, 80], [43, 80], [43, 120], [42, 120]] },
+      labels: [{ x: 207, y: 55, text: "60Hz 예산 16.7ms", size: "sm" }, { x: 120, y: 155, text: "거의 0", tone: "series1", size: "sm" }],
+      focus: ["budget"],
+    },
+    {
+      title: "left: 약 7.8ms",
+      detail: "스타일 2.5ms, 레이아웃 0.7ms, 페인트 4.6ms. 예산의 절반 가까이를 위치를 다시 재고 그리는 데 쓴다.",
+      shapes: { budget: [[40, 70], [374, 70], [374, 130], [40, 130]], style: [[40, 80], [90, 80], [90, 120], [40, 120]], layout: [[90, 80], [103, 80], [103, 120], [90, 120]], paint: [[103, 80], [195, 80], [195, 120], [103, 120]] },
+      labels: [{ x: 207, y: 55, text: "60Hz 예산 16.7ms", size: "sm" }, { x: 65, y: 155, text: "style", tone: "series1", size: "sm" }, { x: 150, y: 155, text: "paint", tone: "series3", size: "sm" }],
+      focus: ["style", "layout", "paint"],
+    },
+    {
+      title: "width: 약 7.0ms",
+      detail: "레이아웃이 1.3ms로 left보다 두 배쯤 무겁다. 크기가 바뀌면 줄바꿈과 이웃 상자의 자리까지 다시 잰다.",
+      shapes: { budget: [[40, 70], [374, 70], [374, 130], [40, 130]], style: [[40, 80], [86, 80], [86, 120], [40, 120]], layout: [[86, 80], [112, 80], [112, 120], [86, 120]], paint: [[112, 80], [179, 80], [179, 120], [112, 120]] },
+      labels: [{ x: 207, y: 55, text: "60Hz 예산 16.7ms", size: "sm" }, { x: 99, y: 155, text: "layout", tone: "series2", size: "sm" }],
+      focus: ["layout"],
+    },
+    {
+      title: "background: 약 8.7ms",
+      detail: "레이아웃은 없지만 스타일 4.7ms, 페인트 4.0ms. 색도 매 프레임 다시 그려야 하는 속성이다.",
+      shapes: { budget: [[40, 70], [374, 70], [374, 130], [40, 130]], style: [[40, 80], [135, 80], [135, 120], [40, 120]], layout: [[135, 80], [135, 80], [135, 120], [135, 120]], paint: [[135, 80], [214, 80], [214, 120], [135, 120]] },
+      labels: [{ x: 207, y: 55, text: "60Hz 예산 16.7ms", size: "sm" }, { x: 175, y: 155, text: "paint", tone: "series3", size: "sm" }],
+      focus: ["style", "paint"],
+    },
+    {
+      title: "120Hz 화면이라면",
+      detail: "예산이 8.3ms로 줄어든다. background 애니메이션 하나만으로 예산을 넘는다. 자바스크립트가 할 일은 아직 하나도 넣지 않았다.",
+      shapes: { budget: [[40, 70], [206, 70], [206, 130], [40, 130]], style: [[40, 80], [135, 80], [135, 120], [40, 120]], layout: [[135, 80], [135, 80], [135, 120], [135, 120]], paint: [[135, 80], [214, 80], [214, 120], [135, 120]] },
+      labels: [{ x: 123, y: 55, text: "120Hz 예산 8.3ms", size: "sm" }, { x: 214, y: 155, text: "넘침", tone: "accent", size: "sm" }],
+      focus: ["budget", "paint"],
+    },
+  ]}
+/>
+
+숫자는 이 컨테이너의 CPU와 소프트웨어 렌더링 기준이라 실제 폰에서는 다르다. 비율과 방향만 가져가면 된다. 속성을 단계별로 묶으면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={230}
+  caption="바꾸는 속성이 어느 단계부터 다시 하게 만드는지"
+  nodes={[
+    { id: "geo", label: "left · top · width", sub: "margin · padding · font-size", x: 95, y: 40, w: 170 },
+    { id: "paintp", label: "color · background", sub: "box-shadow · border-color", x: 300, y: 40, w: 170 },
+    { id: "comp", label: "transform · opacity", sub: "합성에서 끝난다", x: 200, y: 195, w: 170 },
+    { id: "layout", label: "Layout부터", x: 95, y: 120, w: 110 },
+    { id: "paint", label: "Paint부터", x: 300, y: 120, w: 110 },
+  ]}
+  edges={[
+    { from: "geo", to: "layout" },
+    { from: "layout", to: "paint", label: "다음 단계" },
+    { from: "paintp", to: "paint" },
+    { from: "paint", to: "comp", label: "합성" },
+  ]}
+/>
+
+## 합성 단계에서 끝나는 애니메이션
+
+`transform`과 `opacity`가 싼 이유는 합성(compositing) 단계에 있다. 브라우저는 페이지를 여러 층(레이어)으로 나눠 그려 두고, 마지막에 그 층들을 겹쳐 화면을 만든다. 층을 옮기거나 돌리거나 투명도를 바꾸는 일은 그림을 다시 그리지 않고 겹치는 방식만 바꾸면 된다. 크롬 계열에서는 이 겹치기를 메인 스레드와 별도인 합성 스레드(compositor thread)가 한다.
+
+<NetworkTopology
+  caption="left 애니메이션과 transform 애니메이션이 지나는 길"
+  width={400}
+  height={250}
+  zones={[
+    { id: "renderer", label: "렌더러 프로세스", x: 10, y: 20, w: 260, h: 210, tone: "private" },
+    { id: "gpu", label: "GPU", x: 285, y: 20, w: 105, h: 210, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "main", label: "메인 스레드", sub: "JS·스타일·레이아웃·페인트", x: 90, y: 80, icon: "server", w: 130 },
+    { id: "comp", label: "합성 스레드", sub: "층 겹치기", x: 140, y: 180, icon: "switch" },
+    { id: "screen", label: "화면", x: 337, y: 130, icon: "client" },
+  ]}
+  links={[
+    { from: "main", to: "comp" },
+    { from: "comp", to: "screen" },
+  ]}
+  steps={[
+    { path: ["main", "comp", "screen"], packet: "left", title: "left는 매 프레임 메인 스레드를 지난다", detail: "스타일, 레이아웃, 페인트를 다시 하고 나서야 합성 스레드로 넘어간다. 메인 스레드가 바쁘면 이 프레임이 늦는다." },
+    { path: ["main"], packet: "긴 작업", blocked: true, title: "메인 스레드가 120ms 막히면", detail: "그동안 left 애니메이션은 다음 값을 계산하지 못해 멈춘다. 끝나면 한 번에 건너뛴다." },
+    { path: ["main", "comp"], packet: "애니메이션 넘김", title: "transform은 처음에 한 번만 넘긴다", detail: "시작할 때 메인 스레드가 키프레임과 시간 정보를 합성 스레드에 넘긴다." },
+    { path: ["comp", "screen"], packet: "transform", title: "그 뒤는 합성 스레드가 혼자 돌린다", detail: "매 프레임 층의 위치만 바꿔 겹친다. 메인 스레드가 막혀 있어도 움직임은 이어진다." },
+  ]}
+/>
+
+어떤 애니메이션이 합성 스레드로 넘어갔는지는 트레이스의 `Animation` 이벤트에 남는다. 상자 하나에 속성별로 무한 반복 애니메이션을 걸고, 트레이스를 먼저 켠 뒤 페이지를 열어 시작 순간을 잡았다. 이벤트 중 `compositeFailed` 필드가 있는 첫 번째 것의 `data`를 찍은 결과다.
+
+```text
+transform  {"compositeFailed":0}
+opacity    {"compositeFailed":0}
+left       {"compositeFailed":8224,"unsupportedProperties":["left"]}
+background {"compositeFailed":8192,"unsupportedProperties":["background-color"]}
+filter     {"compositeFailed":4096}
+```
+
+`compositeFailed`가 0이면 합성 스레드에서 돈다. `left`와 `background`(정확히는 `background-color`)는 합성할 수 없는 속성이라 실패 비트와 함께 속성 이름이 찍혔다. 개발자 도구 Performance 패널에서 애니메이션 막대를 누르면 같은 내용이 합성되지 않은 이유로 나온다. `filter: blur()`는 이 환경에서 합성되지 못했는데(실패 비트 4096), 속성 이름은 찍히지 않았다. 브라우저와 기기에 따라 필터는 합성되기도 하니 직접 확인하는 편이 낫다.
+
+속성 이름이 나오면 그 효과를 `transform`이나 `opacity`로 바꿀 수 있는지부터 고민한다. 색이 바뀌는 효과라면 두 색의 층을 겹쳐 두고 위층의 `opacity`만 바꾸는 식이다.
+
+여기서 [애니메이션 패턴](/posts/animation-patterns)의 장식 둘을 다시 보면 비용이 다르다. Tilt는 `transform`만 바꾸지만, Gooey는 SVG 필터를 매 프레임 다시 그린다.
+
+<MotionDemo
+  caption="Tilt는 transform만, Gooey는 매 프레임 필터를 다시 그린다. 보기엔 둘 다 가볍다."
+  patterns={["tilt", "gooey"]}
+/>
+
+자바스크립트로 움직일 때도 같은 원리다. `requestAnimationFrame`에서 매 프레임 `el.style.transform`을 바꾸면 레이아웃과 페인트는 피하지만 값 계산은 메인 스레드가 한다. 메인 스레드가 막히면 같이 멈춘다. 같은 움직임을 Web Animations API의 `el.animate()`나 CSS 애니메이션으로 선언하면 브라우저가 합성 스레드에 넘길 수 있다. 스프링처럼 매 프레임 계산이 필요한 움직임은 [스프링 애니메이션](/posts/spring-animation)의 `linear()` 방식으로 미리 값을 뽑아 선언형으로 바꾸는 방법도 있다. 매 프레임 크기를 읽고 쓰다가 레이아웃을 수백 번 하는 레이아웃 스래싱은 [Core Web Vitals](/posts/core-web-vitals)에서 다뤘다.
+
+## will-change는 층을 미리 만든다
+
+`will-change: transform`은 "이 요소의 transform이 곧 바뀐다"고 브라우저에 미리 알리는 속성이다. 브라우저는 이 요소를 처음부터 별도 층으로 올려 둔다. 애니메이션이 시작되는 순간 층을 새로 만들며 생기는 첫 프레임 끊김을 줄인다.
+
+공짜는 아니다. 층마다 그림을 따로 들고 있어야 해서 메모리를 쓴다. 상자 400개에 `will-change`를 걸고 CDP의 `LayerTree`로 층 수를 셌다.
+
+```text
+없음                       레이어 4개, 내용을 그리는 레이어 2개, 픽셀 합 854,400 (×4바이트 ≈ 3.26MB)
+will-change: transform   레이어 404개, 내용을 그리는 레이어 402개, 픽셀 합 1,494,400 (×4바이트 ≈ 5.70MB)
+will-change: opacity     레이어 404개, 내용을 그리는 레이어 402개, 픽셀 합 1,494,400 (×4바이트 ≈ 5.70MB)
+will-change: left        레이어 4개, 내용을 그리는 레이어 2개, 픽셀 합 854,400 (×4바이트 ≈ 3.26MB)
+```
+
+층이 4개에서 404개로 늘었다. 픽셀 합에 4바이트를 곱한 값은 층 크기로 어림한 숫자일 뿐이고, 실제 GPU 메모리는 타일 단위 관리 때문에 다르다. 그래도 방향은 분명하다. 상자가 작아서 이 정도지, 화면만 한 카드 수십 장에 걸면 저사양 폰에서 메모리 부족으로 탭이 다시 로드되기도 한다. `will-change: left`는 층을 만들지 않았다. 합성으로 돌릴 수 없는 속성은 미리 알려 줘도 할 수 있는 게 없다.
+
+그래서 이렇게 쓴다. 곧 움직일 요소에만, 움직이기 직전에 걸고, 끝나면 뗀다. 모든 카드에 CSS로 고정해 두는 건 흔한 실수다.
+
+```js
+menu.addEventListener("pointerenter", () => (panel.style.willChange = "transform")); // 곧 열릴 것 같을 때
+panel.addEventListener("transitionend", () => (panel.style.willChange = "auto"));     // 끝나면 층을 돌려준다
+```
+
+## 끊김을 재는 방법
+
+눈으로 "좀 끊기는 것 같다"에서 멈추지 말고 잰다. 개발자 도구에서 먼저 볼 것은 셋이다. Performance 패널에서 4배나 6배 CPU 감속을 걸고 기록하면 프레임 막대가 빨갛게 표시되고, 그 아래 메인 스레드에 보라색 Layout과 초록색 Paint가 매 프레임 찍히는지 보인다. Rendering 탭의 Paint flashing을 켜면 다시 그리는 영역이 초록색으로 깜빡인다. `transform` 애니메이션이라면 깜빡이지 않아야 한다. Layers 패널이나 Layer borders로 층이 몇 개 생겼는지 본다.
+
+같은 일을 자동화하려면 앞에서 쓴 두 가지 방법이 있다. 트레이스를 떠서 Layout, Paint 이벤트 수를 세는 방법과, 페이지 안에서 `requestAnimationFrame` 간격을 모으는 방법이다. rAF 간격은 메인 스레드가 프레임을 놓쳤는지 보여 주지만, 합성 스레드에서만 도는 애니메이션의 부드러움은 보여 주지 못한다. 메인 스레드가 막혀도 합성 애니메이션은 계속 돌 수 있기 때문이다. 그래서 둘을 같이 본다. 회귀 테스트로 쓰려면 숫자의 절댓값보다 "transform 애니메이션 중 Layout 0회"처럼 있어선 안 되는 이벤트를 검사하는 편이 기계마다 덜 흔들린다.
+
+## 움직임이 불편한 사람들
+
+여기까지는 기계가 버거운 이야기였다면, 이번엔 사람이 버거운 이야기다. 귀 안쪽의 전정기관은 몸의 움직임과 균형을 느낀다. 전정 장애가 있는 사람은 화면 속 큰 움직임, 특히 화면 전체가 미끄러지거나 확대되거나 배경이 다른 속도로 움직이는 패럴랙스를 보면 어지럼, 메스꺼움, 두통을 겪는다. 편두통이나 멀미가 잦은 사람도 비슷하다.
+
+운영체제는 이런 사람을 위한 설정을 둔다. macOS와 iOS의 손쉬운 사용에 있는 "동작 줄이기", 윈도우의 접근성 시각 효과에 있는 "애니메이션 효과" 끄기, 안드로이드의 "애니메이션 삭제"다. 브라우저는 이 설정을 `prefers-reduced-motion` 미디어 쿼리로 넘겨준다.
+
+<SequenceDiagram
+  caption="운영체제 설정이 화면의 움직임까지 닿는 길"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "os", label: "운영체제" },
+    { id: "browser", label: "브라우저" },
+    { id: "page", label: "내 페이지" },
+  ]}
+  steps={[
+    { from: "user", to: "os", label: "동작 줄이기 켬", title: "설정을 켠다", detail: "시스템 전체의 확대·슬라이드 효과가 줄어든다." },
+    { from: "os", to: "browser", label: "설정 전달", title: "브라우저가 읽는다", detail: "prefers-reduced-motion 미디어 쿼리가 reduce로 바뀐다. 페이지를 새로 고치지 않아도 바로 바뀐다." },
+    { from: "browser", to: "page", label: "@media 적용", title: "CSS가 반응한다", detail: "미디어 쿼리 안에 둔 규칙이 적용된다. 아무것도 적지 않았다면 아무 일도 없다." },
+    { from: "browser", to: "page", label: "change 이벤트", title: "자바스크립트도 반응한다", detail: "matchMedia의 change 이벤트로 스프링, 자동 재생, 스크롤 효과를 끈다." },
+    { from: "page", to: "user", label: "이동 없이 투명도만", title: "줄어든 움직임을 본다", detail: "위치 이동과 확대는 빠지고, 필요한 상태 변화는 짧은 페이드로 남는다." },
+  ]}
+/>
+
+`reduce`는 "움직임 없음"이 아니라 "줄여 달라"는 뜻이다. 모든 애니메이션을 지우면 상태가 바뀐 걸 알아채기 어려워지기도 한다. 위치 이동, 확대, 회전, 패럴랙스는 빼고, 상태 변화는 짧은 투명도 변화로 바꾸는 편이 낫다. Playwright로 설정을 흉내 내서 바뀌는지 확인했다.
+
+```js
+const html = `<style>
+  .card { animation: slide 600ms ease-out; }
+  @keyframes slide { from { transform: translateY(40px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .card { animation: fade 200ms ease-out; } /* 이동은 빼고 투명도만 남긴다 */
+  }
+  @keyframes fade { from { opacity: 0; } }
+</style><div class="card">카드</div>`;
+
+for (const reducedMotion of ["no-preference", "reduce"]) {
+  const page = await browser.newPage();
+  await page.emulateMedia({ reducedMotion }); // 운영체제의 움직임 줄이기 설정을 흉내 낸다
+  await page.setContent(html);
+  console.log(reducedMotion.padEnd(14), await page.evaluate(() => ({
+    matches: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    running: document.getAnimations().map((a) => `${a.animationName} ${a.effect.getTiming().duration}ms`),
+  })));
+}
+```
+
+```text
+no-preference  { matches: false, running: [ 'slide 600ms' ] }
+reduce         { matches: true, running: [ 'fade 200ms' ] }
+```
+
+자바스크립트로 움직이는 것은 CSS 미디어 쿼리가 막아 주지 않는다. 스프링 라이브러리, 자동으로 넘어가는 캐러셀, 스크롤에 붙인 효과는 직접 설정을 읽어야 한다. React라면 설정이 바뀌는 순간도 따라가게 `useSyncExternalStore`로 읽는다.
+
+```ts
+import { useSyncExternalStore } from "react";
+
+const QUERY = "(prefers-reduced-motion: reduce)";
+
+export function usePrefersReducedMotion() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia(QUERY);
+      mq.addEventListener("change", onChange); // 설정을 바꾸면 새로 고침 없이 반영된다
+      return () => mq.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(QUERY).matches,
+    () => false, // 서버에서는 알 수 없다. 첫 화면에 큰 움직임을 두지 않는 쪽으로 설계한다
+  );
+}
+```
+
+이 블로그의 데모 컴포넌트들도 같은 식이다. 설정이 켜져 있으면 애니메이션을 즉시 끝난 상태로 보여 주고, 반복 데모는 시계를 멈추고 마지막 장면을 그린다. 그래서 그림은 끝난 모습만으로도 의미가 통하게 만든다.
+
+### 접근성 기준에서 보는 움직임
+
+WCAG에는 움직임과 관련된 기준이 셋 있다.
+
+- 2.3.3 상호작용으로 생기는 애니메이션(Animation from Interactions, AAA, WCAG 2.1에서 추가): 사용자의 동작으로 생기는 움직임 애니메이션은 꼭 필요한 경우가 아니면 끌 수 있어야 한다. `prefers-reduced-motion`을 존중하는 것이 가장 흔한 충족 방법이다.
+- 2.2.2 일시정지, 정지, 숨기기(A): 저절로 시작해 5초 넘게 움직이고 다른 내용과 함께 보이는 것은 멈출 수 있어야 한다. 자동 캐러셀과 marquee가 여기 걸린다.
+- 2.3.1 세 번 번쩍임(A): 1초에 세 번 넘게 번쩍이면 안 된다. 광과민성 발작과 관련된 기준이다.
+
+2.3.3은 AAA라서 법적 의무로 묶이는 경우는 드물다. 그래도 지키는 비용이 미디어 쿼리 몇 줄이라 안 할 이유가 거의 없다.
+
+## 현장에서 버벅임을 좁히는 순서
+
+"애니메이션이 끊긴다"는 제보를 받으면 이 순서로 본다. 먼저 재현 조건을 고정한다. 개발자 도구에서 CPU 4배 감속을 걸고, 제보한 기기에 가까운 화면 크기로 맞춘다. 데스크톱 기본 성능으로는 대부분 재현되지 않는다.
+
+다음은 Performance 기록에서 움직이는 동안 메인 스레드를 본다. 매 프레임 Layout과 Paint가 찍히면 움직이는 속성이 문제다. 애니메이션 막대의 "합성되지 않은 이유"를 확인하고 `left`, `top`, `width`, `height`, `margin`을 `transform`으로, 색이나 그림자 변화를 `opacity`로 바꾼다. Layout이 아니라 긴 Script 블록이 프레임을 덮고 있으면 애니메이션이 아니라 그 순간 도는 자바스크립트가 문제다. 스크롤이나 입력 핸들러에서 무거운 일을 하는지, React라면 애니메이션 중에 큰 트리가 다시 렌더링되는지 본다.
+
+메인 스레드는 한가한데 끊기면 합성 쪽을 의심한다. 층이 수백 개거나(`will-change` 남발), 큰 영역에 `filter`나 `backdrop-filter`가 걸려 매 프레임 비싼 효과를 계산하는 경우다. Layers 패널에서 층 수와 메모리를 보고, 필요 없는 `will-change`를 걷어 낸다.
+
+고친 뒤에는 같은 조건으로 다시 기록해서 Layout, Paint가 사라졌는지, 긴 프레임 개수가 줄었는지 숫자로 확인한다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 left 대신 transform으로 움직이라고 하나요?
+
+`left`는 위치 속성이라 바꿀 때마다 스타일 계산, 레이아웃, 페인트를 다시 한다. `transform`은 이미 그려 둔 층을 옮기기만 해서 합성 단계에서 끝나고, 크롬 계열에서는 메인 스레드와 별도인 합성 스레드가 돌린다. 크로미움에서 상자 400개로 재 보면 2초 동안 `left`는 레이아웃 119회와 페인트 이벤트 4만 7천 개가 생겼고 `transform`은 0이었다.
+
+### 한 프레임의 예산은 얼마이고, 그 안에서 무슨 일이 일어나나요?
+
+60Hz면 약 16.7ms, 120Hz면 약 8.3ms다. 그 안에 자바스크립트, 스타일 계산, 레이아웃, 페인트, 합성이 끝나야 하고 브라우저 자신의 일도 있어서 실제로 쓸 수 있는 시간은 더 짧다. 이 예산을 넘기면 그 프레임은 다음 화면 갱신으로 밀리고 사용자는 끊김을 본다.
+
+### will-change는 언제 쓰고 무엇을 조심하나요?
+
+곧 `transform`이나 `opacity`가 바뀔 요소를 미리 별도 층으로 올려 시작 순간의 끊김을 줄일 때 쓴다. 층마다 메모리를 쓰니 움직이기 직전에 걸고 끝나면 `auto`로 되돌린다. 상자 400개에 걸어 보면 층이 4개에서 404개로 늘었고, 합성할 수 없는 `left`에 걸면 층이 생기지 않아 효과도 없었다.
+
+### 애니메이션이 합성 스레드에서 도는지 어떻게 확인하나요?
+
+개발자 도구 Performance 패널에서 애니메이션을 누르면 합성되지 않은 이유가 나온다. 같은 정보가 트레이스의 `Animation` 이벤트에 `compositeFailed`와 `unsupportedProperties`로 남아서 CDP로 자동 검사할 수 있다. Rendering 탭의 Paint flashing으로 움직이는 동안 다시 그리는 영역이 있는지 보는 방법도 있다.
+
+### requestAnimationFrame으로 프레임 시간을 재면 애니메이션 품질을 다 알 수 있나요?
+
+메인 스레드가 프레임을 놓쳤는지는 알 수 있지만 전부는 아니다. 합성 스레드에서만 도는 애니메이션은 메인 스레드가 막혀도 움직일 수 있어서 rAF 간격과 실제 부드러움이 다를 수 있다. 그리고 중앙값은 멀쩡하게 나오기 쉬우니 최댓값과 긴 프레임 개수를 본다. 120ms 작업을 끼워도 중앙값은 16.7ms였지만 최대 간격은 116.7ms였다.
+
+### prefers-reduced-motion을 켠 사용자에게는 어떻게 대응하나요?
+
+위치 이동, 확대, 회전, 패럴랙스처럼 몸이 움직인다고 느끼게 하는 효과를 빼고, 필요한 상태 변화는 짧은 투명도 변화로 바꾼다. CSS는 미디어 쿼리로, 자바스크립트로 움직이는 스프링이나 자동 캐러셀은 `matchMedia`로 직접 읽어서 끈다. 목표는 모든 애니메이션을 지우는 게 아니라 줄이는 것이다.
+
+### 관련된 WCAG 기준은 무엇인가요?
+
+2.3.3 Animation from Interactions(AAA)는 상호작용으로 생기는 움직임을 끌 수 있게 하라는 기준이다. 2.2.2 Pause, Stop, Hide(A)는 저절로 5초 넘게 움직이는 것을 멈출 수 있게 하라는 기준이고 자동 캐러셀과 marquee가 해당한다. 2.3.1(A)은 1초에 세 번 넘게 번쩍이지 말라는 기준이다.
