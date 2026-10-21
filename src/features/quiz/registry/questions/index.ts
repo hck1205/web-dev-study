@@ -3,6 +3,7 @@ import { ALERTING } from "./alerting";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
+import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTOSCALING } from "./autoscaling";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
@@ -105,6 +106,8 @@ import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
 import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
+import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
+import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -140,6 +143,7 @@ import { K8S_ARCHITECTURE } from "./k8s-architecture";
 import { K8S_AUDIT_LOGGING } from "./k8s-audit-logging";
 import { K8S_BATCH_KUEUE } from "./k8s-batch-kueue";
 import { K8S_CERTIFICATES_PKI } from "./k8s-certificates-pki";
+import { K8S_CERTIFICATIONS } from "./k8s-certifications";
 import { K8S_CLUSTER_UPGRADE } from "./k8s-cluster-upgrade";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
@@ -159,6 +163,7 @@ import { K8S_IN_PLACE_RESIZE } from "./k8s-in-place-resize";
 import { K8S_JOB_CRONJOB } from "./k8s-job-cronjob";
 import { K8S_KUBE_PROXY_MODES } from "./k8s-kube-proxy-modes";
 import { K8S_LABELS_SELECTORS } from "./k8s-labels-selectors";
+import { K8S_LEARNING_ROADMAP } from "./k8s-learning-roadmap";
 import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
 import { K8S_NODE_AUTOSCALING_KARPENTER } from "./k8s-node-autoscaling-karpenter";
@@ -274,6 +279,7 @@ import { POSTGRES_REPORTING_SQL } from "./postgres-reporting-sql";
 import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
 import { POSTMORTEMS } from "./postmortems";
 import { PRODUCTION_INCIDENTS } from "./production-incidents";
+import { PROMETHEUS_BASICS } from "./prometheus-basics";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
@@ -372,6 +378,7 @@ export const QUESTION_SETS = [
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
+  ARGOCD_BASICS,
   AUTOSCALING,
   BACKPRESSURE,
   BACKUP_STRATEGY,
@@ -474,6 +481,8 @@ export const QUESTION_SETS = [
   GIT_TROUBLESHOOTING,
   GIT_UNDO,
   GITHUB_ACTIONS_DOCKER_ECR,
+  GITOPS_ARGOCD_VS_FLUX,
+  GRAFANA_DASHBOARDS,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,
@@ -509,6 +518,7 @@ export const QUESTION_SETS = [
   K8S_AUDIT_LOGGING,
   K8S_BATCH_KUEUE,
   K8S_CERTIFICATES_PKI,
+  K8S_CERTIFICATIONS,
   K8S_CLUSTER_UPGRADE,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
@@ -528,6 +538,7 @@ export const QUESTION_SETS = [
   K8S_JOB_CRONJOB,
   K8S_KUBE_PROXY_MODES,
   K8S_LABELS_SELECTORS,
+  K8S_LEARNING_ROADMAP,
   K8S_NAMESPACE,
   K8S_NETWORK_POLICY,
   K8S_NODE_AUTOSCALING_KARPENTER,
@@ -643,6 +654,7 @@ export const QUESTION_SETS = [
   POSTGRES_ROLES_SECURITY,
   POSTMORTEMS,
   PRODUCTION_INCIDENTS,
+  PROMETHEUS_BASICS,
   PROXY_REVERSE_PROXY,
   PUB_SUB,
   PYTHAGOREAN_THEOREM,

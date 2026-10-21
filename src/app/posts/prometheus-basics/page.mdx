@@ -1,0 +1,655 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("prometheus-basics");
+
+새 서비스를 쿠버네티스에 올리고 `/metrics`도 열었다. 그런데 Grafana에는 아무것도 안 나온다. Prometheus의 Targets 화면에도 그 서비스가 없다. 옆 팀 서비스는 잘 잡히는데 우리 것만 빠졌다. 한참 뒤에 찾은 원인은 ServiceMonitor에 라벨 하나(`release: kube-prometheus-stack`)가 없던 것이었다.
+
+이런 일은 Prometheus가 "어떤 대상을 어떻게 찾아서, 어떤 이름표를 붙여, 어디에 저장하는지"를 모르고 쓰면 반복된다. 이 글은 그 안쪽을 본다. 대상을 찾는 서비스 디스커버리와 이름표를 고치는 relabeling, 쿠버네티스에서 ServiceMonitor가 설정 파일로 바뀌는 과정, 받은 숫자가 WAL과 블록으로 쌓이고 지워지는 TSDB, 그리고 Prometheus 한 대를 넘어설 때 쓰는 federation, remote_write, Thanos와 Mimir까지다.
+
+출력은 Prometheus 3.5.0을 직접 띄워 받았다. 쿠버네티스 쪽은 kwok 실습 클러스터(Kubernetes 1.30)에 Pod를 만들어 서비스 디스커버리를 붙였고, ServiceMonitor는 prometheus-operator v0.86.1을 소스에서 빌드해 클러스터 밖에서 돌려 실제로 생성된 설정을 꺼냈다. kwok의 Pod는 실제로 실행되지 않아서 그 대상의 scrape는 실패한다. 그 실패도 그대로 실었다.
+
+이 주제의 다른 글: [모니터링 기본](/posts/monitoring-basics)(무엇을 잴지, pull 방식과 `up`, Pushgateway), [지표 타입](/posts/metrics-types)(카운터·히스토그램과 `rate`, `histogram_quantile`이 계산하는 방식), [알림 설계](/posts/alerting)(규칙의 `for`, Alertmanager). 여기서는 그 글들에서 다룬 내용을 다시 설명하지 않는다.
+
+## 대상 찾기부터 저장까지 다섯 단계
+
+Prometheus 한 프로세스 안에서 숫자 하나가 지나는 길은 이렇다.
+
+1. 서비스 디스커버리가 대상 후보 목록과 메타데이터 라벨(`__meta_*`)을 만든다.
+2. `relabel_configs`가 후보를 거르고 주소와 라벨을 고친다. 여기서 살아남은 것이 scrape 대상이다.
+3. scrape가 `/metrics`를 읽어 시계열 샘플로 바꾸고, `metric_relabel_configs`가 샘플 단위로 한 번 더 고친다.
+4. 샘플은 메모리의 head 블록에 들어가고, 동시에 디스크의 WAL에 먼저 적힌다.
+5. head가 쌓이면 2시간 단위 블록으로 잘려 디스크에 내려가고, 블록끼리 합쳐지다가 보존 기간이 지나면 통째로 지워진다.
+
+아래 그림에서 다음을 누르면 이 다섯 단계가 차례로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={340}
+  caption="Prometheus 안에서 샘플 하나가 지나는 길"
+  zones={[
+    { id: "k8s", label: "cluster", x: 8, y: 8, w: 150, h: 324, tone: "public" },
+    { id: "prom", label: "prometheus", x: 172, y: 8, w: 220, h: 324, tone: "private" },
+  ]}
+  nodes={[
+    { id: "api", label: "API server", sub: "watch pods", x: 84, y: 60, icon: "router" },
+    { id: "pod", label: "shop-api", sub: "10.0.1.3:8080", x: 84, y: 200, icon: "container", w: 112 },
+    { id: "sd", label: "discovery", sub: "__meta_*", x: 282, y: 60, icon: "dns" },
+    { id: "rl", label: "relabel", sub: "keep·replace", x: 282, y: 130, icon: "firewall" },
+    { id: "sc", label: "scraper", sub: "every 5s", x: 282, y: 200, icon: "server" },
+    { id: "wal", label: "head + WAL", sub: "memory·disk", x: 282, y: 270, icon: "db", w: 112 },
+  ]}
+  links={[
+    { from: "sd", to: "api" },
+    { from: "sd", to: "rl" },
+    { from: "rl", to: "sc" },
+    { from: "sc", to: "pod" },
+    { from: "sc", to: "wal" },
+  ]}
+  steps={[
+    { path: ["sd", "api", "sd"], packet: "watch", title: "후보를 찾는다", detail: "kubernetes_sd가 API 서버를 watch해서 Pod마다 후보를 하나 만든다. Pod 이름, IP, 라벨, 어노테이션이 __meta_ 라벨로 붙는다." },
+    { path: ["sd", "rl"], packet: "31 lbl", title: "relabel로 거르고 고친다", detail: "어노테이션이 없는 Pod는 keep 규칙에서 떨어지고, 남은 후보는 주소와 라벨이 바뀐다. __로 시작하는 라벨은 이 단계가 끝나면 사라진다." },
+    { path: ["rl", "sc", "pod"], packet: "GET", title: "scrape한다", detail: "scrape_interval마다 HTTP GET을 보낸다. 실패하면 up=0과 lastError가 남는다." , payload: "Get \"http://10.0.1.3:8080/metrics\": context deadline exceeded" },
+    { path: ["sc", "wal"], packet: "append", title: "WAL에 먼저 쓰고 head에 넣는다", detail: "프로세스가 죽어도 WAL을 다시 읽어 head를 복구한다. 2시간 분량이 차면 head가 블록으로 잘려 내려간다." },
+  ]}
+/>
+
+이 구분을 알면 "왜 안 잡히나"를 단계로 나눠 볼 수 있다. Targets 화면에 아예 없으면 1·2단계(디스커버리나 relabel에서 떨어짐), 있는데 `down`이면 3단계(네트워크, 경로, 포트), 대상은 `up`인데 쿼리에 안 나오면 3단계의 `metric_relabel_configs`나 쿼리의 라벨 문제다.
+
+## 쿠버네티스에서 대상을 찾는 법
+
+`kubernetes_sd_configs`의 `role`이 무엇을 후보로 만들지 정한다.
+
+- `pod`: Pod마다(정확히는 컨테이너 포트마다) 후보 하나.
+- `endpoints`, `endpointslice`: Service 뒤의 엔드포인트마다 후보 하나. Service 라벨과 Pod 정보가 함께 붙는다.
+- `service`: Service마다 하나. 블랙박스 탐침처럼 Service 주소 자체를 때릴 때 쓴다.
+- `node`: 노드마다 하나. kubelet과 cAdvisor 지표를 읽을 때 쓴다.
+- `ingress`: Ingress의 호스트마다 하나.
+
+실습에서는 `pod` 역할에 Pod 어노테이션(`prometheus.io/scrape: "true"`)을 보고 거르는 흔한 방식을 썼다.
+
+```yaml
+scrape_configs:
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [shop]
+    relabel_configs:
+      # 1) 어노테이션이 true인 Pod만 남긴다
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      # 2) Pod IP와 어노테이션 포트로 주소를 바꾼다
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        regex: (.+);(.+)
+        replacement: $1:$2
+        target_label: __address__
+      # 3) 경로 어노테이션을 scrape 경로로
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        regex: (.+)
+        target_label: __metrics_path__
+      # 4) 남길 라벨만 옮긴다
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+```
+
+어노테이션이 붙은 `shop-api` Pod 셋과 붙지 않은 `shop-batch` Pod 둘을 만들고 `/api/v1/targets`를 읽었다.
+
+```bash
+# 살아남은 대상과 떨어진 대상의 수
+curl -s 127.0.0.1:29090/api/v1/targets | jq -r '.data.activeTargets[] | [.labels.job, .scrapeUrl, .health, .labels.pod] | @tsv'
+curl -s 127.0.0.1:29090/api/v1/targets | jq '.data.droppedTargetCounts'
+```
+
+```text
+kubernetes-pods	http://10.0.0.3:8080/metrics	down	shop-api-7fff6cf7db-5nrzk
+kubernetes-pods	http://10.0.1.4:8080/metrics	down	shop-api-7fff6cf7db-6bvst
+kubernetes-pods	http://10.0.0.1:8080/metrics	down	shop-api-7fff6cf7db-5hjmj
+shop	http://127.0.0.1:29101/metrics	up
+shop	http://127.0.0.1:29102/metrics	up
+{"kubernetes-pods":2,"shop":0}
+```
+
+배치 Pod 둘은 `droppedTargetCounts`에만 숫자로 남았다. Targets 화면에서 "내 서비스가 없다"면 이 숫자와 Service Discovery 화면(떨어진 대상의 원래 라벨을 보여 준다)을 먼저 본다. kwok Pod의 IP는 실제로 닿지 않아서 `down`이고, 오류는 `context deadline exceeded`였다. 실제 클러스터에서 같은 오류가 나면 NetworkPolicy가 Prometheus의 접근을 막고 있거나, 앱이 `127.0.0.1`에만 바인딩한 경우가 많다.
+
+(위 목록은 Pod를 몇 번 늘렸다 줄인 뒤에 받아서 Pod 이름이 섞여 있다.) Pod를 3개에서 5개로 늘리자 1초 만에 대상도 5개가 됐다. 디스커버리는 API 서버를 watch하므로 Pod가 생기고 사라지는 것을 바로 따라간다.
+
+```text
+05:05:42  (scale 3 → 5)
+05:05:43 5
+```
+
+## relabel은 라벨 묶음을 한 줄씩 고친다
+
+relabeling이 어렵게 느껴지는 건 입력이 눈에 안 보이기 때문이다. 디스커버리가 만든 후보 하나에는 실습 기준으로 31개 라벨이 붙어 있었다.
+
+```text
+__address__ = 10.0.1.3:8080
+__meta_kubernetes_namespace = shop
+__meta_kubernetes_pod_annotation_prometheus_io_path = /metrics
+__meta_kubernetes_pod_annotation_prometheus_io_port = 8080
+__meta_kubernetes_pod_annotation_prometheus_io_scrape = true
+__meta_kubernetes_pod_container_image = shop-api:1.4.2
+__meta_kubernetes_pod_container_port_name = http-metrics
+__meta_kubernetes_pod_controller_kind = ReplicaSet
+__meta_kubernetes_pod_ip = 10.0.1.3
+__meta_kubernetes_pod_label_app = shop-api
+__meta_kubernetes_pod_name = shop-api-7fff6cf7db-7tt8d
+__meta_kubernetes_pod_node_name = node-000001
+__meta_kubernetes_pod_phase = Running
+__meta_kubernetes_pod_ready = true
+__metrics_path__ = /metrics
+__scheme__ = http
+__scrape_interval__ = 5s
+job = kubernetes-pods
+(31개 중 일부)
+```
+
+규칙을 다 거친 뒤 남은 것은 다섯 개다.
+
+```text
+{"app": "shop-api", "instance": "10.0.1.3:8080", "job": "kubernetes-pods", "namespace": "shop", "pod": "shop-api-7fff6cf7db-7tt8d"}
+```
+
+규칙 하나는 "`source_labels`의 값을 `;`로 이어 붙이고, `regex`에 통째로 맞으면 `action`을 한다"가 전부다. regex는 앞뒤가 자동으로 고정된다(`^...$`). 그래서 `regex: "true"`는 `"True"`에 맞지 않는다. 어노테이션 값의 대소문자 하나로 대상이 빠지는 이유다. 아래 그림은 같은 후보에 규칙을 한 줄씩 적용하는 과정이다.
+
+<AlgoTrace
+  caption="shop-api Pod 하나가 relabel 규칙을 지나는 동안"
+  cells={["keep", "address", "path", "namespace", "pod", "app", "cleanup"]}
+  memoryLabel="바뀐 라벨"
+  steps={[
+    { pointer: 0, memory: ["31개 __meta_*"], caption: "scrape 어노테이션 값이 true와 통째로 맞는다. keep이라 살아남는다. shop-batch는 값이 없어서 여기서 떨어진다." },
+    { pointer: 1, memory: ["__address__=10.0.1.3:8080"], caption: "Pod IP와 포트 어노테이션을 ;로 이어 (.+);(.+)에 맞추고 $1:$2로 주소를 만든다." },
+    { pointer: 2, memory: ["__address__=10.0.1.3:8080", "__metrics_path__=/metrics"], caption: "경로 어노테이션이 있으면 scrape 경로를 바꾼다. regex (.+)는 값이 비었을 때 아무것도 안 하게 막는다." },
+    { pointer: 3, memory: ["…", "namespace=shop"], caption: "action을 안 적으면 replace다. 값을 그대로 새 라벨로 옮긴다." },
+    { pointer: 4, memory: ["…", "namespace=shop", "pod=shop-api-…-7tt8d"], caption: "Pod 이름을 옮긴다. Pod마다 값이 달라 시계열 수가 Pod 수만큼 늘어난다." },
+    { pointer: 5, memory: ["…", "pod=shop-api-…-7tt8d", "app=shop-api"], caption: "앱 라벨을 옮긴다. 쿼리에서 app으로 묶을 수 있게 된다." },
+    { pointer: 6, found: [6], memory: ["app", "instance", "job", "namespace", "pod"], caption: "__로 시작하는 라벨이 모두 지워지고, instance가 없으면 __address__ 값으로 채운다. 다섯 개가 남았다." },
+  ]}
+/>
+
+같은 규칙을 직접 돌려 볼 수 있다. 아래 함수는 relabel의 핵심(값 잇기, 고정된 regex, keep·drop·replace, `$1` 치환, 마무리 정리)만 옮긴 것이다. 첫 번째 테스트의 입력과 기대값은 실습의 실제 라벨이다.
+
+<CodePlayground
+  caption="relabel 규칙 적용하기"
+  functionName="relabel"
+  initialCode={`function relabel(labels, rules) {
+  // rules: [{ source_labels, regex = "(.*)", action = "replace", replacement = "$1", target_label, separator = ";" }]
+  // keep에 안 맞거나 drop에 맞으면 null
+  // 끝나면 instance가 없을 때 __address__로 채우고, "__"로 시작하는 라벨을 지운 뒤
+  // 라벨 이름 순으로 정렬한 객체를 돌려준다
+  return labels;
+}`}
+  solution={`function relabel(labels, rules) {
+  const l = { ...labels };
+  for (const r of rules) {
+    const sep = r.separator ?? ";";
+    const value = (r.source_labels ?? []).map((n) => l[n] ?? "").join(sep);
+    const re = new RegExp(\`^(?:\${r.regex ?? "(.*)"})$\`);
+    const m = re.exec(value);
+    const action = r.action ?? "replace";
+    if (action === "keep" && !m) return null;
+    if (action === "drop" && m) return null;
+    if (action === "replace" && m) {
+      const out = (r.replacement ?? "$1").replace(/\\$(\\d+)/g, (_, i) => m[Number(i)] ?? "");
+      if (out === "") delete l[r.target_label]; else l[r.target_label] = out;
+    }
+  }
+  if (!("instance" in l)) l.instance = l.__address__;
+  return Object.fromEntries(Object.entries(l).filter(([k]) => !k.startsWith("__")).sort(([a], [b]) => (a < b ? -1 : 1)));
+}`}
+  tests={[
+    {
+      label: "shop-api Pod (실습 라벨)",
+      args: [
+        { __address__: "10.0.1.3:8080", job: "kubernetes-pods", __meta_kubernetes_namespace: "shop", __meta_kubernetes_pod_name: "shop-api-7fff6cf7db-7tt8d", __meta_kubernetes_pod_ip: "10.0.1.3", __meta_kubernetes_pod_label_app: "shop-api", __meta_kubernetes_pod_annotation_prometheus_io_scrape: "true", __meta_kubernetes_pod_annotation_prometheus_io_port: "8080" },
+        [
+          { source_labels: ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"], action: "keep", regex: "true" },
+          { source_labels: ["__meta_kubernetes_pod_ip", "__meta_kubernetes_pod_annotation_prometheus_io_port"], regex: "(.+);(.+)", replacement: "$1:$2", target_label: "__address__" },
+          { source_labels: ["__meta_kubernetes_namespace"], target_label: "namespace" },
+          { source_labels: ["__meta_kubernetes_pod_name"], target_label: "pod" },
+          { source_labels: ["__meta_kubernetes_pod_label_app"], target_label: "app" },
+        ],
+      ],
+      expected: { app: "shop-api", instance: "10.0.1.3:8080", job: "kubernetes-pods", namespace: "shop", pod: "shop-api-7fff6cf7db-7tt8d" },
+    },
+    {
+      label: "어노테이션 없는 배치 Pod는 떨어진다",
+      args: [
+        { __address__: "10.0.1.1", job: "kubernetes-pods", __meta_kubernetes_pod_label_app: "shop-batch" },
+        [{ source_labels: ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"], action: "keep", regex: "true" }],
+      ],
+      expected: null,
+    },
+    {
+      label: "\"True\"는 \"true\"에 맞지 않는다",
+      args: [
+        { __address__: "10.0.1.3:8080", job: "kubernetes-pods", __meta_kubernetes_pod_annotation_prometheus_io_scrape: "True" },
+        [{ source_labels: ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"], action: "keep", regex: "true" }],
+      ],
+      expected: null,
+    },
+    {
+      label: "캡처 그룹으로 일부만 뽑기",
+      args: [
+        { __address__: "10.0.0.9:9100", job: "node", __meta_kubernetes_node_name: "node-000001" },
+        [{ source_labels: ["__meta_kubernetes_node_name"], regex: "node-(.*)", replacement: "n$1", target_label: "node" }],
+      ],
+      expected: { instance: "10.0.0.9:9100", job: "node", node: "n000001" },
+    },
+  ]}
+/>
+
+`relabel_configs`와 `metric_relabel_configs`는 같은 문법인데 시점이 다르다. 앞의 것은 scrape하기 전, 대상마다 한 번 돈다. 뒤의 것은 scrape한 뒤, 샘플마다 돈다. 필요 없는 지표를 버릴 때는 `metric_relabel_configs`에 `drop`을 쓴다. 이미 받아 온 것을 버리는 거라 네트워크와 파싱 비용은 그대로지만, 저장되는 시계열은 줄어든다. 라벨 하나가 시계열 수를 얼마나 늘리는지는 [지표 타입 글](/posts/metrics-types#레이블-하나가-scrape를-서른-배로)에서 재 봤다.
+
+## ServiceMonitor는 설정 파일을 만드는 재료다
+
+쿠버네티스에서는 위 같은 `scrape_configs`를 손으로 쓰지 않는 경우가 많다. kube-prometheus-stack(Helm 차트)이 prometheus-operator, Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics와 기본 규칙을 한 번에 깔고, 각 팀은 ServiceMonitor 같은 커스텀 리소스만 쓴다. operator가 그걸 읽어 진짜 설정 파일을 만든다.
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: main
+  namespace: monitoring
+spec:
+  serviceMonitorSelector:
+    matchLabels:
+      release: kube-prometheus-stack   # 이 라벨이 있는 ServiceMonitor만 고른다
+  serviceMonitorNamespaceSelector: {}  # 모든 네임스페이스에서
+  retention: 15d
+  retentionSize: 40GB
+  scrapeInterval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shop-api
+  namespace: shop
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: shop-api           # 이 라벨의 Service를 찾는다
+  endpoints:
+    - port: http-metrics      # Service 포트 이름 (번호가 아니다)
+      path: /metrics
+      interval: 15s
+```
+
+실습에서는 같은 모양의 ServiceMonitor를 하나 더(`shop-batch`, `release` 라벨 없음) 만들었다. operator가 만든 Secret `prometheus-main`을 풀어 보면 이렇다.
+
+```bash
+# operator가 생성한 Prometheus 설정 (gzip으로 들어 있다)
+kubectl -n monitoring get secret prometheus-main -o jsonpath='{.data.prometheus\.yaml\.gz}' | base64 -d | gunzip
+```
+
+```text
+global:
+  scrape_interval: 30s
+  external_labels:
+    prometheus: monitoring/main
+    prometheus_replica: $(POD_NAME)
+  evaluation_interval: 30s
+scrape_configs:
+- job_name: serviceMonitor/shop/shop-api/0
+  honor_labels: false
+  kubernetes_sd_configs:
+  - role: endpoints
+    namespaces:
+      names:
+      - shop
+  scrape_interval: 15s
+  metrics_path: /metrics
+  relabel_configs:
+  - source_labels:
+    - job
+    target_label: __tmp_prometheus_job_name
+  - action: keep
+    source_labels:
+    - __meta_kubernetes_service_label_app
+    - __meta_kubernetes_service_labelpresent_app
+    regex: (shop-api);true
+  - action: keep
+    source_labels:
+    - __meta_kubernetes_endpoint_port_name
+    regex: http-metrics
+  ...
+  - source_labels:
+    - __meta_kubernetes_service_name
+    target_label: job
+    replacement: ${1}
+  - target_label: endpoint
+    replacement: http-metrics
+```
+
+(82줄 중 일부)
+
+`shop-batch`는 설정에 아예 없다. 오류도 경고도 없이 조용히 빠진다. 처음 장면의 원인이 이것이다. ServiceMonitor가 설정에 들어가려면 두 단계를 통과해야 한다. Prometheus 리소스의 `serviceMonitorSelector`가 ServiceMonitor를 고르고, ServiceMonitor의 `selector`가 Service를 고른다. 그리고 `endpoints.port`는 Service의 포트 이름과 같아야 한다. 생성된 설정을 보면 셋 다 relabel 규칙(`keep`)으로 바뀐다는 것을 알 수 있다.
+
+생성된 job 이름도 읽을 줄 알아 두면 좋다.
+
+<UrlAnatomy
+  caption="operator가 만든 job_name"
+  separator=""
+  joiner=""
+  params={[
+    { key: "kind", display: "serviceMonitor", title: "만든 재료", description: "ServiceMonitor에서 왔다. PodMonitor면 podMonitor, Probe면 probe가 앞에 붙는다." },
+    { key: "s1", display: "/", title: "구분자", description: "" },
+    { key: "ns", display: "shop", title: "네임스페이스", description: "ServiceMonitor가 있는 네임스페이스다." },
+    { key: "s2", display: "/", title: "구분자", description: "" },
+    { key: "name", display: "shop-api", title: "ServiceMonitor 이름", description: "Targets 화면에서 이 이름으로 묶여 보인다. 실제 시계열의 job 라벨은 relabel로 Service 이름이 된다." },
+    { key: "s3", display: "/", title: "구분자", description: "" },
+    { key: "idx", display: "0", title: "endpoints 순번", description: "endpoints 배열의 몇 번째 항목인지다. 포트를 둘 적으면 /0, /1 두 job이 생긴다." },
+  ]}
+/>
+
+ServiceMonitor가 설정 파일이 되어 Prometheus에 반영되기까지의 순서는 이렇다.
+
+<SequenceDiagram
+  caption="ServiceMonitor 한 장이 scrape 대상이 되기까지"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "op", label: "operator" },
+    { id: "sec", label: "Secret" },
+    { id: "rel", label: "config-reloader" },
+    { id: "prom", label: "Prometheus" },
+  ]}
+  steps={[
+    { from: "dev", to: "op", label: "apply ServiceMonitor", title: "재료를 넣는다", detail: "operator는 ServiceMonitor, PodMonitor, PrometheusRule을 watch한다. 셀렉터에 안 맞는 것은 이 단계에서 버린다." },
+    { from: "op", to: "sec", label: "prometheus.yaml.gz", title: "설정 파일을 생성한다", detail: "모든 ServiceMonitor를 합쳐 scrape_configs를 만들고 Secret에 gzip으로 넣는다." },
+    { from: "rel", to: "sec", label: "watch mount", title: "바뀐 파일을 알아챈다", detail: "Prometheus Pod 안의 사이드카가 마운트된 Secret이 바뀐 것을 본다. kubelet이 Secret을 갱신하는 데 수십 초 걸릴 수 있다." },
+    { from: "rel", to: "prom", label: "POST /-/reload", title: "다시 읽게 한다", detail: "환경 변수($(POD_NAME))를 채운 설정을 쓰고 reload를 보낸다. 재시작이 아니라 TSDB는 그대로다." },
+    { from: "prom", to: "prom", label: "new targets", title: "새 대상을 scrape한다", detail: "디스커버리와 relabel을 다시 돌려 대상이 생긴다. Targets 화면에서 serviceMonitor/shop/shop-api/0으로 보인다." },
+  ]}
+/>
+
+ServiceMonitor가 안 잡힐 때 보는 순서를 정리하면 이렇다.
+
+```bash
+# 1) Prometheus가 어떤 라벨의 ServiceMonitor를 고르는지
+kubectl -n monitoring get prometheus main -o jsonpath='{.spec.serviceMonitorSelector}{"\n"}'
+# 2) 내 ServiceMonitor에 그 라벨이 있는지
+kubectl -n shop get servicemonitor shop-api --show-labels
+# 3) ServiceMonitor 셀렉터가 Service를 고르는지, 포트 이름이 맞는지
+kubectl -n shop get svc -l app=shop-api -o jsonpath='{.items[*].spec.ports[*].name}{"\n"}'
+# 4) 생성된 설정에 job이 들어갔는지
+kubectl -n monitoring get secret prometheus-main -o jsonpath='{.data.prometheus\.yaml\.gz}' | base64 -d | gunzip | grep job_name
+```
+
+kube-prometheus-stack은 기본으로 Helm 릴리스 이름을 `release` 라벨로 요구한다. 모든 ServiceMonitor를 받게 하려면 차트 값 `prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues: false`를 준다. 다른 네임스페이스의 ServiceMonitor를 고르려면 `serviceMonitorNamespaceSelector`도 맞아야 한다. 그리고 Prometheus의 ServiceAccount가 그 네임스페이스의 Endpoints·Pod를 읽을 RBAC가 있어야 한다. RBAC가 없으면 디스커버리 단계에서 조용히 비고, Prometheus 로그에 `forbidden`이 남는다.
+
+## TSDB는 2시간 단위로 잘라 쌓는다
+
+Prometheus의 저장소(TSDB)는 디스크에 이렇게 생겼다.
+
+```bash
+# 띄운 지 2분 된 Prometheus의 데이터 디렉터리
+find data -maxdepth 2 | sort
+ls -la data/wal
+```
+
+```text
+data
+data/chunks_head
+data/lock
+data/queries.active
+data/wal
+data/wal/00000000
+-rw-r--r-- 1 root root 20322 Oct 21 05:07 00000000
+```
+
+아직 블록이 없다. 최근 데이터는 메모리의 head에 있고, 디스크에는 WAL(write-ahead log, 미리 적어 두는 기록)만 있다. 샘플은 head에 들어가기 전에 WAL에 먼저 적힌다. 프로세스가 죽었다 뜨면 WAL을 처음부터 다시 읽어 head를 복구한다.
+
+```text
+level=INFO source=head.go:752 msg="Replaying WAL, this may take a while" component=tsdb
+level=INFO source=head.go:825 msg="WAL segment loaded" component=tsdb segment=0 maxSegment=1 duration=2.409911ms
+level=INFO source=head.go:825 msg="WAL segment loaded" component=tsdb segment=1 maxSegment=1 duration=630.296µs
+level=INFO source=head.go:862 msg="WAL replay completed" component=tsdb checkpoint_replay_duration=21.92µs wal_replay_duration=3.211991ms ...
+level=INFO source=main.go:1312 msg="TSDB started"
+```
+
+실습의 WAL은 20KB라 3ms에 끝났다. 시계열이 수백만 개인 운영 Prometheus는 이 단계가 몇 분씩 걸린다. 그동안 Prometheus는 scrape도 쿼리도 못 한다. 그래서 재시작 직후 대시보드가 비고, readiness 프로브가 늦게 통과하고, 너무 짧은 liveness 프로브가 재생 도중에 컨테이너를 죽여 무한 재시작에 빠지는 사고가 난다. 메모리 한도(OOMKilled)로 죽은 Prometheus가 다시 뜨다가 같은 이유로 또 죽는 것도 흔한 장면이다.
+
+head가 약 3시간 분량이 되면 앞의 2시간을 잘라 블록으로 내린다. 블록이 어떻게 생겼는지 보려고 6시간 분량을 OpenMetrics 파일로 만들어 백필했다.
+
+```bash
+# 과거 데이터를 블록으로 만들고 목록을 본다
+promtool tsdb create-blocks-from openmetrics backfill.om ./bf
+promtool tsdb list -r ./bf
+```
+
+```text
+BLOCK ULID                  MIN TIME                       MAX TIME                       DURATION      NUM SAMPLES  NUM CHUNKS   NUM SERIES   SIZE
+01M5EDQ5E59A2X6NKJXFJV1XWY  2026-10-20 22:00:00 +0000 UTC  2026-10-20 23:59:45 +0000 UTC  1h59m45.001s  2880         24           6            5KiB570B
+01M5EDQ5Z3BPM65C92RCR1HM5W  2026-10-21 00:00:00 +0000 UTC  2026-10-21 01:59:45 +0000 UTC  1h59m45.001s  2880         24           6            5KiB714B
+01M5EDQ604GTJKKES588WRVQZJ  2026-10-21 02:00:00 +0000 UTC  2026-10-21 03:59:45 +0000 UTC  1h59m45.001s  2880         24           6            5KiB792B
+```
+
+6시간이 2시간짜리 블록 셋이 됐다. 블록 하나는 디렉터리 하나다.
+
+```text
+drwxr-xr-x 2 root root 4096 Oct 21 05:07 chunks
+-rw-r--r-- 1 root root  837 Oct 21 05:07 index
+-rw-r--r-- 1 root root  270 Oct 21 05:07 meta.json
+-rw-r--r-- 1 root root    9 Oct 21 05:07 tombstones
+```
+
+`chunks/`에 압축된 샘플이, `index`에 "이 라벨 조합은 어느 시계열이고 어느 청크에 있나"가, `tombstones`에 삭제 표시가 들어 있다. 블록은 한 번 쓰면 바뀌지 않는다. 시간이 지나면 작은 블록 여러 개를 큰 블록으로 합치는 compaction이 돈다(기본 최대 크기는 보존 기간의 10%와 31일 중 작은 쪽). `meta.json`의 `compaction.level`이 몇 번 합쳐졌는지를 적는다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="샘플이 메모리에서 디스크 블록으로 내려가는 길"
+  nodes={[
+    { id: "sc", label: "scrape", sub: "샘플", x: 70, y: 40, w: 110 },
+    { id: "wal", label: "WAL", sub: "128MB 세그먼트", x: 70, y: 130, w: 130 },
+    { id: "head", label: "head", sub: "메모리, 최근 ~3h", x: 230, y: 40, w: 150 },
+    { id: "b2", label: "2h 블록", sub: "level 1", x: 230, y: 130, w: 120 },
+    { id: "big", label: "큰 블록", sub: "compaction", x: 230, y: 215, w: 120 },
+    { id: "del", label: "삭제", sub: "보존 기간 지남", x: 350, y: 215, w: 90 },
+  ]}
+  edges={[
+    { from: "sc", to: "wal", label: "먼저 기록" },
+    { from: "sc", to: "head" },
+    { from: "head", to: "b2", label: "2h씩 자름" },
+    { from: "b2", to: "big", label: "합침" },
+    { from: "big", to: "del", dashed: true },
+    { from: "wal", to: "head", dashed: true, label: "재시작 시 재생" },
+  ]}
+/>
+
+보존은 블록 단위로 지운다. `--storage.tsdb.retention.time`(기본 15d)이 지난 블록, 또는 `--storage.tsdb.retention.size`를 넘긴 만큼의 오래된 블록이 통째로 사라진다. 그래서 15일로 설정해도 디스크에는 15일보다 조금 더 남아 있을 수 있다. size 한도에는 블록뿐 아니라 WAL과 head 청크도 들어간다. 디스크 용량 꽉 차게 size를 잡으면 WAL이 자랄 자리가 없어서, 볼륨의 80~90% 정도로 잡는 게 보통이다. 지금 설정은 API로 확인한다.
+
+```bash
+# 보존 설정과 head의 시계열 수, 시계열이 가장 많은 지표
+curl -s 127.0.0.1:29090/api/v1/status/runtimeinfo | jq '.data.storageRetention'
+curl -s 127.0.0.1:29090/api/v1/status/tsdb | jq -c '.data.headStats, [.data.seriesCountByMetricName[:3][] | [.name, .value]]'
+```
+
+```text
+"15d"
+{"numSeries":57,"numLabelPairs":35,"chunkCount":57,"minTime":1792559114013,"maxTime":1792559584022}
+[["http_request_duration_seconds_bucket",12],["scrape_series_added",7],["scrape_samples_scraped",7]]
+```
+
+`seriesCountByMetricName`가 카디널리티 문제를 찾는 첫 화면이다. 블록 단위로 더 자세히 보려면 `promtool tsdb analyze`를 쓴다. 어떤 라벨이 시계열을 가장 많이 만드는지, 어떤 라벨이 계속 새 값으로 바뀌며(churn) 시계열을 생겼다 사라지게 하는지가 나온다. Pod 이름처럼 배포마다 바뀌는 라벨이 churn의 단골이다.
+
+TSDB를 쓰면서 자주 하는 실수가 있다. NFS 같은 네트워크 파일 시스템에 데이터를 두면 안 된다(공식 문서도 POSIX 호환이 아닌 파일 시스템을 지원하지 않는다고 적는다). 한 데이터 디렉터리를 Prometheus 두 개가 같이 쓰면 안 된다(`lock` 파일이 막는다). 오래 보관하려고 보존 기간을 1년으로 늘리면 쿼리 한 번이 블록 수백 개를 열어 메모리가 터진다. 오래 보관은 다음 절의 방법으로 푼다.
+
+## 한 대를 넘어설 때: federation, remote_write, Thanos, Mimir
+
+Prometheus 한 대는 한 클러스터 정도를 맡는다. 클러스터가 여럿이 되거나, 몇 달 치를 보관해야 하거나, Prometheus 한 대가 죽어도 대시보드가 살아 있어야 하면 바깥으로 넓혀야 한다.
+
+federation은 위쪽 Prometheus가 아래쪽 Prometheus의 `/federate`를 scrape하는 방식이다. 고른 시계열의 현재 값만 가져온다.
+
+```bash
+# 아래쪽 Prometheus에서 요청 지표만 가져가 본다
+curl -sG 127.0.0.1:29090/federate --data-urlencode 'match[]=http_requests_total{job="shop"}'
+```
+
+```text
+# TYPE http_requests_total untyped
+http_requests_total{instance="127.0.0.1:29101",job="shop",route="/api/orders",status="200",cluster="r13-lab"} 2900 1792559175186
+http_requests_total{instance="127.0.0.1:29101",job="shop",route="/api/orders",status="500",cluster="r13-lab"} 58 1792559175186
+http_requests_total{instance="127.0.0.1:29102",job="shop",route="/api/orders",status="200",cluster="r13-lab"} 2977 1792559179022
+http_requests_total{instance="127.0.0.1:29102",job="shop",route="/api/orders",status="500",cluster="r13-lab"} 59 1792559179022
+```
+
+`external_labels`로 준 `cluster="r13-lab"`이 붙어 나간다. 여러 Prometheus의 데이터를 한곳에 모을 때 출처를 가르는 라벨이라 꼭 달아 둔다. federation은 간단하지만 위쪽 Prometheus가 scrape 주기마다 큰 응답을 받아야 해서, 원본 시계열 전부가 아니라 기록 규칙으로 줄인 집계 지표만 올리는 데 쓴다.
+
+remote_write는 반대로 아래쪽이 밀어 보낸다. 실습에서는 Prometheus 하나를 `--web.enable-remote-write-receiver`로 받는 쪽으로 띄우고, 원래 Prometheus에 이 설정을 넣었다.
+
+```yaml
+remote_write:
+  - url: http://127.0.0.1:29190/api/v1/write
+    write_relabel_configs:
+      # 중앙에는 요청 지표와 up만 보낸다
+      - source_labels: [__name__]
+        regex: "http_requests_total|up"
+        action: keep
+    queue_config:
+      capacity: 10000
+      max_shards: 50
+      max_samples_per_send: 2000
+```
+
+remote_write는 scrape 결과를 따로 받지 않고 WAL을 꼬리 읽기(tail)해서 보낸다. 설정을 바꾼 직후 로그에 그 흔적이 남았다.
+
+```text
+level=INFO source=watcher.go:523 msg="Done replaying WAL" component=remote remote_name=1d97e4 url=http://127.0.0.1:29190/api/v1/write duration=281.01432ms
+```
+
+받는 쪽을 25초 동안 죽여 봤다.
+
+```text
+prometheus_remote_storage_highest_timestamp_in_seconds 1.792559309e+09
+prometheus_remote_storage_queue_highest_sent_timestamp_seconds{...} 1.79255928e+09
+prometheus_remote_storage_samples_failed_total{...} 0
+prometheus_remote_storage_samples_pending{...} 59
+prometheus_remote_storage_samples_retried_total{...} 110
+```
+
+```text
+level=WARN source=queue_manager.go:2027 msg="Failed to send batch, retrying" component=remote remote_name=1d97e4 url=http://127.0.0.1:29190/api/v1/write err="Post \"http://127.0.0.1:29190/api/v1/write\": dial tcp 127.0.0.1:29190: ..."
+```
+
+`failed`가 아니라 `retried`가 늘었다. 연결 실패 같은 복구 가능한 오류는 버리지 않고 재시도한다. 위 두 타임스탬프의 차이(1792559309 − 1792559280 = 29초)가 "중앙이 얼마나 뒤처졌나"다. 받는 쪽을 다시 띄우자 두 값이 같아지고 pending이 1로 떨어졌다. 이 차이에 알림을 거는 것이 remote_write 운영의 기본이다. 재시도는 WAL에 남아 있는 동안만 가능하다. WAL은 head가 잘릴 때 함께 정리되므로, 몇 시간 넘게 받는 쪽이 죽어 있으면 그 사이 데이터는 중앙에 영영 못 간다.
+
+아래 그림에서 다음을 누르면 두 방식이 데이터를 옮기는 방향과, 받는 쪽이 죽었을 때의 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="federation은 위에서 당기고, remote_write는 아래에서 민다"
+  zones={[
+    { id: "a", label: "cluster A", x: 8, y: 8, w: 180, h: 140, tone: "private" },
+    { id: "b", label: "cluster B", x: 8, y: 170, w: 180, h: 140, tone: "private" },
+    { id: "c", label: "central", x: 212, y: 8, w: 180, h: 302, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "pa", label: "prom-a", sub: "cluster=a", x: 98, y: 80, icon: "db" },
+    { id: "pb", label: "prom-b", sub: "agent mode", x: 98, y: 240, icon: "db" },
+    { id: "fed", label: "global prom", sub: "/federate", x: 302, y: 80, icon: "db", w: 112 },
+    { id: "rw", label: "Mimir", sub: "/api/v1/push", x: 302, y: 240, icon: "db" },
+    { id: "obj", label: "object store", sub: "S3", x: 302, y: 160, icon: "server", w: 112 },
+  ]}
+  links={[
+    { from: "fed", to: "pa" },
+    { from: "pb", to: "rw" },
+    { from: "rw", to: "obj" },
+  ]}
+  steps={[
+    { path: ["fed", "pa", "fed"], packet: "GET", title: "federation: 위에서 가져간다", detail: "global Prometheus가 match[]로 고른 시계열의 현재 값을 scrape한다. 집계 지표 몇 개를 올리는 용도다." },
+    { path: ["pb", "rw"], packet: "WAL", title: "remote_write: 아래에서 보낸다", detail: "WAL을 꼬리 읽기해서 묶음으로 보낸다. 로컬 저장이 필요 없으면 agent 모드로 scrape와 전송만 한다." },
+    { path: ["pb", "rw"], packet: "retry", blocked: true, title: "받는 쪽이 죽으면 재시도", detail: "retried가 늘고 보낸 시각이 멈춘다. WAL이 정리되기 전에 돌아오면 밀린 것을 다 보낸다." },
+    { path: ["rw", "obj"], packet: "block", title: "오래 보관은 객체 저장소에", detail: "Mimir와 Thanos는 2시간 블록을 S3 같은 객체 저장소에 올려 몇 달 치를 싸게 보관하고, 쿼리 때 여러 곳을 합친다." },
+  ]}
+/>
+
+오래 보관과 여러 클러스터 합치기를 해 주는 도구가 Thanos와 Mimir다. 둘 다 Prometheus의 블록 형식을 그대로 객체 저장소에 둔다는 점은 같고, 데이터를 받는 방식이 다르다.
+
+- Thanos: 각 Prometheus 옆에 sidecar를 붙여 다 만들어진 2시간 블록을 객체 저장소에 올린다. 쿼리는 Thanos Query가 sidecar(최근 2시간)와 Store Gateway(객체 저장소의 과거)를 함께 묻고, 같은 데이터를 가진 복제본 둘은 `prometheus_replica` 같은 라벨로 중복을 지운다. Prometheus를 그대로 두고 덧붙이는 구조라 도입이 점진적이다. Receive 컴포넌트로 remote_write를 받을 수도 있다.
+- Mimir: remote_write로 받는 쪽부터 시작하는 수평 확장형 저장소다. 테넌트(조직)마다 데이터를 나누고 한도를 건다. 각 클러스터의 Prometheus는 agent 모드로 scrape와 전송만 하면 된다. 컴포넌트가 많아 운영 부담이 크지만, 중앙 플랫폼팀이 여러 팀에 지표 저장을 서비스로 줄 때 맞다.
+
+실무의 선택 순서는 대개 이렇다. 클러스터 하나, 보관 15일이면 Prometheus 한 대(필요하면 같은 설정 두 대로 HA)로 충분하다. 클러스터가 여럿이 되면 집계만 federation으로 올리거나 Thanos sidecar를 붙인다. 테넌트를 나누고 몇 달 치를 보관해야 하면 Mimir 같은 중앙 저장소로 remote_write한다. 시계열 데이터베이스 전반의 설계는 [시계열 DB 글](/posts/db-type-time-series)에 있다.
+
+## PromQL은 세 줄만 손에 익히면 된다
+
+PromQL을 깊게 다루는 건 이 글의 몫이 아니다. 대신 어떤 대시보드든 들어가는 세 줄을 실습 데이터로 돌려 본다.
+
+```bash
+# 상태 코드별 초당 요청 수 (인스턴스 둘을 합친다)
+promtool query instant http://127.0.0.1:29090 'sum by (status) (rate(http_requests_total{job="shop"}[1m]))'
+# 오류 비율
+promtool query instant http://127.0.0.1:29090 'sum(rate(http_requests_total{job="shop",status="500"}[1m])) / sum(rate(http_requests_total{job="shop"}[1m]))'
+# p95 지연 (버킷을 le로 묶어 합친 뒤 계산)
+promtool query instant http://127.0.0.1:29090 'histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="shop"}[1m])))'
+```
+
+```text
+{status="200"} => 40 @[1792559172.036]
+{status="500"} => 0.7999999999999999 @[1792559172.036]
+{} => 0.0196078431372549 @[1792559172.09]
+{} => 0.4273584905660376 @[1792559172.159]
+```
+
+실습 앱은 인스턴스마다 초당 200을 20개, 500을 0.4개 세도록 만들었다. 둘을 합치니 40과 0.8이고, 오류 비율은 0.8 / 40.8 ≈ 1.96%다. 순서가 중요하다. `rate`를 먼저 하고 `sum`을 나중에 한다. 카운터를 먼저 더하면 인스턴스 하나가 재시작할 때 리셋을 알아볼 수 없다. `histogram_quantile`에는 `le` 라벨을 남긴 채 합친 버킷을 넣는다. `le`를 빼고 합치면 계산할 재료가 사라진다. 각 함수가 안에서 무엇을 하는지는 [지표 타입 글](/posts/metrics-types#rate는-카운터를-어떻게-읽나)에서 숫자로 확인했다.
+
+자주 하는 실수 하나만 더. `rate`의 범위(`[1m]`)는 scrape 간격의 최소 4배 정도로 잡는다. 간격이 30초인데 `[1m]`이면 범위 안에 샘플이 두 개뿐이라, 한 번만 놓쳐도 값이 비거나 튄다. Grafana에서는 `$__rate_interval`을 쓰면 이 계산을 대신 해 준다. 그 이야기는 [Grafana 대시보드](/posts/grafana-dashboards)에서 이어 간다.
+
+## 현장에서 Prometheus가 아플 때
+
+증상별로 보는 곳을 정리한다.
+
+- 대상이 Targets 화면에 없다: `droppedTargetCounts`와 Service Discovery 화면 → ServiceMonitor 셀렉터와 라벨 → 생성된 설정의 `job_name` → Prometheus의 RBAC.
+- 대상이 `down`이다: `lastError`를 본다. `connection refused`는 포트·바인딩, `context deadline exceeded`는 NetworkPolicy·방화벽·느린 `/metrics`, `server returned HTTP status 401 Unauthorized`는 인증 문제다.
+- 메모리가 계속 오르다 OOMKilled: `/api/v1/status/tsdb`의 시계열 수와 `seriesCountByMetricName`. 배포 때마다 바뀌는 라벨이나 사용자 ID, URL 경로가 라벨에 들어갔는지 본다. 고칠 때는 앱에서 라벨을 빼는 게 먼저고, 급하면 `metric_relabel_configs`로 그 지표를 버린다.
+- 재시작 후 몇 분째 응답이 없다: 로그의 `Replaying WAL` 진행. 프로브의 초기 지연과 실패 허용을 그 시간보다 길게 잡는다.
+- 중앙 저장소의 그래프가 늦다: `highest_timestamp_in_seconds − queue_highest_sent_timestamp_seconds`와 `samples_pending`, `shards`. 받는 쪽이 느리면 shard가 최대까지 늘어난다.
+- 디스크가 찬다: `retention.size`를 볼륨보다 작게, WAL이 자랄 자리를 남긴다.
+
+Prometheus가 자기 지표(`prometheus_*`)를 내놓으니, 위의 대부분은 Prometheus가 자기 자신을 scrape하게 해 두면 그래프로 볼 수 있다. 실습에서 remote_write 지연을 `curl /metrics`로만 봐야 했던 것도 자기 scrape job을 빼먹어서였다.
+
+## 찾고, 고치고, 쌓고, 넘긴다
+
+Prometheus는 대상을 찾고(서비스 디스커버리), 이름표를 고치고(relabel), 읽어 와서 WAL과 head에 쌓고, 2시간마다 블록으로 내려 보존 기간이 지나면 통째로 버린다. 쿠버네티스에서는 ServiceMonitor가 이 설정을 만드는 재료이고, 라벨 하나가 빠지면 대상이 조용히 사라진다. 한 대를 넘어서면 federation으로 집계를 올리거나, remote_write로 Thanos·Mimir 같은 중앙 저장소에 보낸다. 모은 숫자를 어떻게 보여 줄지는 [Grafana 대시보드](/posts/grafana-dashboards)에서, 그 숫자로 사람을 언제 깨울지는 [알림 설계](/posts/alerting)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### relabel_configs와 metric_relabel_configs는 무엇이 다른가요?
+
+relabel_configs는 scrape하기 전에 대상마다 돌아서, 대상을 거르고 주소와 대상 라벨을 바꿉니다. metric_relabel_configs는 scrape한 뒤 샘플마다 돌아서, 필요 없는 지표나 라벨을 저장 전에 버립니다. 뒤의 것은 이미 받아 온 데이터를 버리는 거라 전송 비용은 그대로지만 저장되는 시계열 수는 줄어듭니다.
+
+### ServiceMonitor를 만들었는데 Prometheus가 대상을 잡지 않습니다. 어디부터 보나요?
+
+Prometheus 리소스의 serviceMonitorSelector가 그 ServiceMonitor의 라벨을 고르는지부터 봅니다. kube-prometheus-stack은 기본으로 release 라벨을 요구해서, 라벨이 없으면 오류 없이 생성된 설정에서 빠집니다. 그다음 ServiceMonitor의 selector가 Service를 고르는지, endpoints.port가 Service 포트 이름과 같은지, Prometheus SA에 그 네임스페이스를 읽을 RBAC가 있는지를 차례로 봅니다.
+
+### Prometheus의 WAL은 왜 있고, 운영에서 어떤 문제를 만드나요?
+
+최근 데이터는 메모리의 head에 있기 때문에, 프로세스가 죽어도 잃지 않도록 샘플을 WAL에 먼저 적습니다. 재시작하면 WAL을 처음부터 다시 읽어 head를 복구하는데, 시계열이 많으면 이 재생이 몇 분 걸리고 그동안 scrape도 쿼리도 멈춥니다. 그래서 짧은 liveness 프로브가 재생 중에 컨테이너를 죽이지 않게 하고, remote_write는 이 WAL을 꼬리 읽기하므로 WAL이 정리되기 전까지만 재전송할 수 있다는 점도 함께 기억합니다.
+
+### 보존 기간을 15일로 두면 정확히 15일 뒤에 지워지나요?
+
+아닙니다. 보존은 2시간 이상 단위의 블록을 통째로 지우는 방식이라, 블록의 끝이 기간을 넘겨야 지워집니다. 그래서 디스크에는 설정보다 조금 더 남습니다. retention.size를 함께 쓰면 오래된 블록부터 지우는데, 이 크기에는 WAL과 head 청크도 포함되므로 볼륨보다 여유 있게 잡습니다.
+
+### 카디널리티 문제는 어떻게 찾고 고치나요?
+
+`/api/v1/status/tsdb`의 seriesCountByMetricName이나 promtool tsdb analyze로 시계열을 많이 만드는 지표와 라벨, 값이 자주 바뀌는 라벨을 찾습니다. 사용자 ID, 전체 URL, Pod 이름 같은 값이 라벨에 들어간 경우가 대부분입니다. 근본 해결은 앱에서 그 라벨을 빼는 것이고, 급할 때는 metric_relabel_configs로 해당 지표나 라벨을 저장 전에 버립니다.
+
+### federation과 remote_write는 언제 무엇을 쓰나요?
+
+federation은 위쪽 Prometheus가 아래쪽의 /federate를 scrape해서 현재 값을 가져오는 방식이라, 기록 규칙으로 줄인 집계 지표 몇 개를 올리는 데 맞습니다. 원본 시계열을 모두 모으거나 오래 보관하려면 remote_write로 중앙 저장소에 밀어 보냅니다. remote_write는 받는 쪽이 느리거나 죽으면 재시도하므로, 보낸 시각과 최신 시각의 차이에 알림을 걸어 둡니다.
+
+### Thanos와 Mimir는 어떻게 다른가요?
+
+둘 다 Prometheus 블록을 객체 저장소에 두고 여러 Prometheus의 데이터를 합쳐 묻게 해 줍니다. Thanos는 기존 Prometheus 옆에 sidecar를 붙여 블록을 올리고 Query가 최근과 과거를 합치는 방식이라 점진적으로 도입하기 좋습니다. Mimir는 remote_write를 받는 수평 확장형 저장소로 테넌트 분리와 한도가 강점이고, 그만큼 운영할 컴포넌트가 많습니다.
+
+### Prometheus를 고가용성으로 운영하려면 어떻게 하나요?
+
+같은 설정의 Prometheus 두 대가 같은 대상을 각자 scrape하게 두는 게 기본입니다. 두 대의 데이터는 미세하게 다르므로 쿼리 쪽(Thanos Query, Mimir)에서 replica 라벨로 중복을 지우고, 알림은 두 대가 모두 Alertmanager로 보내 Alertmanager가 묶어서 한 번만 전합니다. 디스크를 공유해 한 TSDB를 두 대가 쓰는 방식은 lock 때문에 안 되고 지원되지도 않습니다.
