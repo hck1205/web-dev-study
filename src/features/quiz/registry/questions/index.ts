@@ -34,6 +34,7 @@ import { COUNT_MIN_SKETCH } from "./count-min-sketch";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
+import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
@@ -60,6 +61,7 @@ import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
+import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -159,12 +161,14 @@ import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LEADER_ELECTION } from "./leader-election";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
+import { LINUX_NAMESPACES_CGROUPS } from "./linux-namespaces-cgroups";
 import { LINUX_PROCESSES_SIGNALS } from "./linux-processes-signals";
 import { LINUX_SYSTEMD_SYSTEMCTL } from "./linux-systemd-systemctl";
 import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
 import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
+import { LOCAL_K8S_KIND_MINIKUBE } from "./local-k8s-kind-minikube";
 import { LONG_POLLING } from "./long-polling";
 import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
@@ -320,6 +324,7 @@ import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 import { XSS } from "./xss";
+import { YAML_FOR_K8S } from "./yaml-for-k8s";
 import { ZERO_DOWNTIME_MIGRATIONS } from "./zero-downtime-migrations";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
@@ -361,6 +366,7 @@ export const QUESTION_SETS = [
   CRDT,
   CRON_JOBS,
   CSRF,
+  CURL_FOR_DEBUGGING,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
@@ -387,6 +393,7 @@ export const QUESTION_SETS = [
   DEADLOCKS,
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
+  DEVOPS_NETWORKING_ROADMAP,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -486,12 +493,14 @@ export const QUESTION_SETS = [
   LEADER_ELECTION,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
+  LINUX_NAMESPACES_CGROUPS,
   LINUX_PROCESSES_SIGNALS,
   LINUX_SYSTEMD_SYSTEMCTL,
   LOAD_BALANCER_BASICS,
   LOAD_BALANCING_ALGORITHMS,
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
+  LOCAL_K8S_KIND_MINIKUBE,
   LONG_POLLING,
   LOSSY_COUNTING,
   MERKLE_TREE,
@@ -647,6 +656,7 @@ export const QUESTION_SETS = [
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
   XSS,
+  YAML_FOR_K8S,
   ZERO_DOWNTIME_MIGRATIONS,
   ZERO_TRUST_ARCHITECTURE,
 ];
