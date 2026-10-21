@@ -131,8 +131,11 @@ import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
+import { K8S_ADMISSION_CONTROL } from "./k8s-admission-control";
 import { K8S_API_OBJECTS } from "./k8s-api-objects";
 import { K8S_ARCHITECTURE } from "./k8s-architecture";
+import { K8S_AUDIT_LOGGING } from "./k8s-audit-logging";
+import { K8S_CERTIFICATES_PKI } from "./k8s-certificates-pki";
 import { K8S_CLUSTER_UPGRADE } from "./k8s-cluster-upgrade";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
@@ -489,8 +492,11 @@ export const QUESTION_SETS = [
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
+  K8S_ADMISSION_CONTROL,
   K8S_API_OBJECTS,
   K8S_ARCHITECTURE,
+  K8S_AUDIT_LOGGING,
+  K8S_CERTIFICATES_PKI,
   K8S_CLUSTER_UPGRADE,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,

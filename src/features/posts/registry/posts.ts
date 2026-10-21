@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-certificates-pki",
+    title: "쿠버네티스 인증서: 1년 뒤 아침에 멈추는 클러스터",
+    summary: "클러스터·etcd·front-proxy CA와 연결마다 따로 있는 인증서를 kubeadm이 만든 파일로 직접 읽고, check-expiration과 renew, 만료된 인증서가 내는 오류, kubelet이 CSR로 스스로 갱신하는 흐름과 사람에게 인증서를 발급하고 회수하지 못하는 문제까지 다룬다.",
+    topic: "programming/server-infra/kubernetes/operations",
+    tags: ["Kubernetes", "Security", "TLS", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["kubeadm certs", "check-expiration", "CertificateSigningRequest", "front-proxy", "certSANs"],
+  },
+  {
+    slug: "k8s-audit-logging",
+    title: "쿠버네티스 감사 로그: 누가 지웠는지 답하는 기록",
+    summary: "감사 정책의 네 가지 수준과 단계, 위에서부터 처음 맞는 규칙을 고르는 방식, 파일과 웹훅 백엔드를 보고, 실제 로그에서 jq로 삭제한 사람을 찾는다. RequestResponse가 Secret 값을 남기는 문제와 아무것도 안 해도 쌓이는 로그 양도 직접 잰다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Observability", "DevOps"],
+    date: "2026-10-22",
+    keywords: ["쿠버네티스 감사 로그", "audit-policy-file", "omitStages", "impersonatedUser"],
+  },
+  {
+    slug: "k8s-admission-control",
+    title: "어드미션 컨트롤: etcd에 저장되기 직전의 관문",
+    summary: "인증과 인가를 지난 쓰기 요청이 변경과 검증 단계를 거쳐 저장되는 순서를 따라가고, CEL로 거는 ValidatingAdmissionPolicy와 MutatingAdmissionPolicy, 외부 서버를 부르는 웹훅의 failurePolicy·타임아웃이 만드는 장애, Kyverno와 OPA Gatekeeper의 선택 기준을 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["ValidatingAdmissionPolicy", "MutatingAdmissionPolicy", "어드미션 웹훅", "failurePolicy", "OPA Gatekeeper"],
+  },
+  {
     slug: "velero-backup",
     title: "Velero: 네임스페이스 단위로 뜨고 다른 이름으로 되살리기",
     summary: "etcd 스냅숏과 달리 API로 객체를 묶어 두는 Velero의 BackupStorageLocation, 스케줄과 TTL, 백업 훅, 클라우드 스냅숏·CSI 데이터 이동·파일 시스템 백업의 차이, 네임스페이스를 바꾼 복원과 다른 클러스터로의 재해 복구를 다룬다.",

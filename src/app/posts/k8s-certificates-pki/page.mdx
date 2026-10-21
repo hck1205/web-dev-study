@@ -1,0 +1,626 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-certificates-pki");
+
+kubeadm으로 클러스터를 세우고 1년 동안 잘 썼다. 어느 날 아침 kubectl이 이런 말을 한다.
+
+```text
+error: You must be logged in to the server (Unauthorized)
+```
+
+어제까지 되던 kubeconfig다. 비밀번호를 바꾼 사람도 없다. 조금 뒤에는 컨트롤러가 멈추고, 새 Pod가 스케줄되지 않는다. 설치할 때 kubeadm이 만든 인증서 대부분이 정확히 1년짜리였고, 그 1년이 오늘 끝났다. 클러스터 업그레이드를 1년 넘게 안 한 클러스터에서 실제로 자주 일어나는 장애다.
+
+이 글은 쿠버네티스 안에 인증서가 왜 이렇게 많은지, 어떤 CA가 어떤 인증서에 서명하고 각 인증서가 어느 연결에 쓰이는지 정리한다. kubeadm이 만든 파일을 openssl로 직접 읽고, `kubeadm certs check-expiration`과 `renew`를 실제로 돌리고, 만료된 인증서가 내는 오류를 재현한다. kubelet이 스스로 인증서를 갱신하는 CSR 흐름과 사람에게 인증서를 발급하는 법까지 본다.
+
+실습 환경은 둘이다. 인증서 파일은 kubeadm 1.37.0의 `init phase certs`를 가짜 루트 디렉터리(`--rootfs`)에 돌려 만들었다. 클러스터를 실제로 띄우지는 않고 kubeadm이 만드는 PKI만 그대로 얻은 것이다. CSR 승인과 만료 인증서 접속은 [kwok 실습 클러스터](/posts/local-k8s-kind-minikube)(Kubernetes 1.37.0)에서 확인했다. TLS 자체(인증서 체인, 핸드셰이크)는 [HTTPS와 TLS 글](/posts/https-tls)에서, 내부 CA를 운영하고 교체하는 일반론은 [전송 구간 암호화 글](/posts/encryption-in-transit)에서 다룬다.
+
+## 클러스터 안의 연결은 모두 서로를 확인한다
+
+쿠버네티스 구성 요소는 API 서버를 가운데 두고 서로 HTTPS로 이야기한다([쿠버네티스 구조 글](/posts/k8s-architecture)). 그리고 거의 모든 연결이 mTLS다. 서버가 인증서를 보여 줄 뿐 아니라 클라이언트도 인증서를 내민다. API 서버 입장에서 클라이언트 인증서는 신분증이다. 인증서의 CN(Common Name)이 사용자 이름, O(Organization)가 그룹이 된다. 아래 그림에서 다음을 누르면 연결을 하나씩 짚는다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="컨트롤 플레인 노드 하나에서 오가는 TLS 연결들"
+  zones={[
+    { id: "cp", label: "컨트롤 플레인 노드 cp-1", x: 6, y: 6, w: 388, h: 200, tone: "private" },
+    { id: "wk", label: "워커 노드", x: 6, y: 222, w: 388, h: 102, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "kubectl", label: "kubectl", sub: "admin.conf", x: 70, y: 60, icon: "client" },
+    { id: "api", label: "apiserver", sub: ":6443", x: 200, y: 110, icon: "server" },
+    { id: "etcd", label: "etcd", sub: ":2379", x: 330, y: 60, icon: "db" },
+    { id: "cm", label: "ctrl-manager", sub: "kubeconfig", x: 80, y: 170, icon: "server", w: 120 },
+    { id: "agg", label: "metrics API", sub: "aggregated", x: 330, y: 170, icon: "gateway", w: 112 },
+    { id: "kubelet", label: "kubelet", sub: ":10250", x: 200, y: 275, icon: "container" },
+  ]}
+  links={[
+    { from: "kubectl", to: "api" },
+    { from: "api", to: "etcd" },
+    { from: "cm", to: "api" },
+    { from: "api", to: "agg" },
+    { from: "api", to: "kubelet" },
+  ]}
+  steps={[
+    { path: ["kubectl", "api"], packet: "mTLS", title: "사람이 API 서버로", detail: "API 서버는 apiserver.crt를 보여 주고, kubectl은 admin.conf에 박힌 클라이언트 인증서를 낸다. CN=kubernetes-admin, O=kubeadm:cluster-admins가 사용자와 그룹이 된다." },
+    { path: ["cm", "api"], packet: "mTLS", title: "컨트롤러와 스케줄러도 사용자다", detail: "controller-manager.conf의 인증서는 CN=system:kube-controller-manager다. RBAC의 system: 역할이 이 이름에 묶여 있다." },
+    { path: ["api", "etcd"], packet: "mTLS", highlight: ["etcd"], title: "API 서버가 etcd로", detail: "이때는 API 서버가 클라이언트다. apiserver-etcd-client 인증서를 내고, etcd는 etcd/server 인증서를 보여 준다. 둘 다 별도의 etcd CA가 서명한다." },
+    { path: ["api", "kubelet"], packet: "logs", title: "API 서버가 kubelet으로", detail: "kubectl logs·exec는 API 서버가 kubelet의 10250 포트로 중계한다. API 서버는 apiserver-kubelet-client 인증서를 낸다." },
+    { path: ["kubelet", "api"], packet: "mTLS", title: "kubelet이 API 서버로", detail: "kubelet은 CN=system:node:노드이름, O=system:nodes 인증서로 접속한다. 이 인증서는 kubelet이 CSR로 스스로 갱신한다." },
+    { path: ["api", "agg"], packet: "proxy", highlight: ["agg"], title: "API 서버가 확장 API로", detail: "metrics-server 같은 aggregated API로 요청을 넘길 때는 front-proxy-client 인증서를 쓴다. 확장 API는 front-proxy CA로 이 인증서를 확인하고, 헤더에 담긴 원래 사용자를 믿는다." },
+  ]}
+/>
+
+연결마다 인증서가 따로 있는 이유는 권한을 나누기 위해서다. 인증서 하나가 새도 그 연결의 권한만 잃는다. 예를 들어 front-proxy-client 인증서로는 API 서버에 관리자로 접속할 수 없다. 서명한 CA가 다르기 때문이다.
+
+## CA 세 개와 인증서 열 개
+
+kubeadm이 만드는 파일을 실제로 만들어 봤다. 컨트롤 플레인 주소와 추가 SAN을 적은 설정 파일을 주고 `init phase certs all`만 돌렸다.
+
+```bash
+# 가짜 루트(pki-lab/root) 안의 /etc/kubernetes/pki에 kubeadm PKI를 만든다
+kubeadm init phase certs all --rootfs "$PWD/pki-lab/root" --config /kubeadm.yaml
+
+# admin.conf 같은 kubeconfig도 만든다
+kubeadm init phase kubeconfig all --rootfs "$PWD/pki-lab/root" --config /kubeadm.yaml
+```
+
+```text
+[certs] Using certificateDir folder "/etc/kubernetes/pki"
+[certs] Generating "ca" certificate and key
+[certs] Generating "apiserver" certificate and key
+[certs] apiserver serving cert is signed for DNS names [cp-1 k8s-api.example.internal kubernetes kubernetes.default kubernetes.default.svc kubernetes.default.svc.cluster.local] and IPs [10.96.0.1 10.0.0.10 10.0.0.100]
+[certs] Generating "apiserver-kubelet-client" certificate and key
+[certs] Generating "front-proxy-ca" certificate and key
+[certs] Generating "front-proxy-client" certificate and key
+[certs] Generating "etcd/ca" certificate and key
+[certs] Generating "etcd/server" certificate and key
+[certs] etcd/server serving cert is signed for DNS names [cp-1 localhost] and IPs [10.0.0.10 127.0.0.1 ::1]
+[certs] Generating "etcd/peer" certificate and key
+[certs] etcd/peer serving cert is signed for DNS names [cp-1 localhost] and IPs [10.0.0.10 127.0.0.1 ::1]
+[certs] Generating "etcd/healthcheck-client" certificate and key
+[certs] Generating "apiserver-etcd-client" certificate and key
+[certs] Generating "sa" key and public key
+```
+
+CA가 셋이다. 클러스터 CA(`ca`), etcd CA(`etcd/ca`), front-proxy CA(`front-proxy-ca`). 각 인증서의 주체와 용도를 openssl로 뽑았다.
+
+```bash
+# 인증서마다 주체(subject)와 확장 키 용도(EKU)를 한 줄로 본다
+cd /etc/kubernetes/pki
+for f in ca apiserver apiserver-kubelet-client apiserver-etcd-client front-proxy-ca front-proxy-client \
+         etcd/ca etcd/server etcd/peer etcd/healthcheck-client; do
+  printf "%-26s %-38s %s\n" "$f" "$(openssl x509 -in $f.crt -noout -subject | sed 's/subject=//')" \
+    "$(openssl x509 -in $f.crt -noout -ext extendedKeyUsage 2>/dev/null | tail -1 | sed 's/TLS Web //g;s/ Authentication//g;s/^ *//')"
+done
+```
+
+```text
+ca                         CN = kubernetes                        
+apiserver                  CN = kube-apiserver                    Server
+apiserver-kubelet-client   CN = kube-apiserver-kubelet-client     Client
+apiserver-etcd-client      CN = kube-apiserver-etcd-client        Client
+front-proxy-ca             CN = front-proxy-ca                    
+front-proxy-client         CN = front-proxy-client                Client
+etcd/ca                    CN = etcd-ca                           
+etcd/server                CN = cp-1                              Server, Client
+etcd/peer                  CN = cp-1                              Server, Client
+etcd/healthcheck-client    CN = kube-etcd-healthcheck-client      Client
+```
+
+kubeconfig 파일에 박힌 클라이언트 인증서도 `client-certificate-data`를 base64로 풀어 같은 식으로 읽었다.
+
+```text
+admin.conf           O = kubeadm:cluster-admins, CN = kubernetes-admin
+super-admin.conf     O = system:masters, CN = kubernetes-super-admin
+controller-manager.conf CN = system:kube-controller-manager
+scheduler.conf       CN = system:kube-scheduler
+kubelet.conf         O = system:nodes, CN = system:node:cp-1
+```
+
+`admin.conf`와 `super-admin.conf`가 나뉜 것을 눈여겨본다. `system:masters` 그룹은 RBAC을 거치지 않고 모든 권한을 받는 특별한 그룹이라 RoleBinding을 지워도 권한을 뺏을 수 없다. 그래서 요즘 kubeadm은 평소 쓰는 `admin.conf`에 `kubeadm:cluster-admins` 그룹(RBAC으로 cluster-admin에 묶인 그룹)을 주고, `system:masters`는 비상용 `super-admin.conf`에만 둔다. RBAC 쪽 이야기는 [RBAC 글](/posts/k8s-rbac)에 있다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="CA 셋이 각자 다른 연결의 인증서에 서명한다"
+  nodes={[
+    { id: "ca", label: "ca", sub: "클러스터 CA, 10년", x: 80, y: 40, w: 130 },
+    { id: "eca", label: "etcd/ca", sub: "etcd 전용, 10년", x: 220, y: 40, w: 130 },
+    { id: "fca", label: "front-proxy-ca", sub: "확장 API용, 10년", x: 360, y: 40, w: 140 },
+    { id: "api", label: "apiserver", sub: "서버, 1년", x: 70, y: 150, w: 110 },
+    { id: "kcl", label: "kubeconfig들", sub: "admin·cm·scheduler", x: 80, y: 250, w: 140 },
+    { id: "akc", label: "apiserver-kubelet", sub: "클라이언트, 1년", x: 205, y: 150, w: 130 },
+    { id: "ets", label: "etcd server·peer", sub: "서버+클라이언트", x: 225, y: 250, w: 130 },
+    { id: "aec", label: "apiserver-etcd", sub: "클라이언트, 1년", x: 355, y: 150, w: 120 },
+    { id: "fpc", label: "front-proxy-client", sub: "클라이언트, 1년", x: 365, y: 250, w: 130 },
+  ]}
+  edges={[
+    { from: "ca", to: "api", label: "서명" },
+    { from: "ca", to: "kcl" },
+    { from: "ca", to: "akc" },
+    { from: "eca", to: "aec" },
+    { from: "eca", to: "ets", label: "서명" },
+    { from: "fca", to: "fpc", label: "서명" },
+  ]}
+/>
+
+CA가 다르면 서로의 인증서를 믿지 않는다. 직접 확인해 보면 etcd 서버 인증서는 클러스터 CA로 검증되지 않는다.
+
+```bash
+# 클러스터 CA로 apiserver와 etcd 서버 인증서를 검증한다
+openssl verify -CAfile ca.crt apiserver.crt
+openssl verify -CAfile ca.crt etcd/server.crt
+
+# etcd CA로 etcd 서버 인증서를 검증한다
+openssl verify -CAfile etcd/ca.crt etcd/server.crt
+```
+
+```text
+apiserver.crt: OK
+CN = cp-1
+error 20 at 0 depth lookup: unable to get local issuer certificate
+error etcd/server.crt: verification failed
+etcd/server.crt: OK
+```
+
+etcd CA를 따로 두는 이유가 여기 있다. 클러스터 CA로 서명한 아무 클라이언트 인증서(예를 들어 개발자에게 발급한 인증서)로 etcd에 직접 붙을 수 있다면 RBAC을 통째로 건너뛰게 된다. etcd에는 모든 Secret이 들어 있다([Secret 글](/posts/k8s-secret)). 목록 맨 끝의 `sa.key`, `sa.pub`은 인증서가 아니라 ServiceAccount 토큰을 서명하는 키 쌍이다. 이 키의 역할은 [ServiceAccount 토큰 글](/posts/k8s-serviceaccount-tokens)에서 다룬다.
+
+## 인증서 한 장 읽기
+
+API 서버의 서버 인증서를 열어 본다. 필요한 칸만 뽑았다.
+
+```bash
+# apiserver 인증서의 주체, 발급자, 유효 기간, 확장 필드를 본다
+openssl x509 -in apiserver.crt -noout -subject -issuer -dates \
+  -ext subjectAltName,keyUsage,extendedKeyUsage,basicConstraints
+```
+
+```text
+subject=CN = kube-apiserver
+issuer=CN = kubernetes
+notBefore=Oct 21 01:26:49 2026 GMT
+notAfter=Oct 21 01:31:49 2027 GMT
+X509v3 Key Usage: critical
+    Digital Signature, Key Encipherment
+X509v3 Extended Key Usage: 
+    TLS Web Server Authentication
+X509v3 Basic Constraints: critical
+    CA:FALSE
+X509v3 Subject Alternative Name: 
+    DNS:cp-1, DNS:k8s-api.example.internal, DNS:kubernetes, DNS:kubernetes.default, DNS:kubernetes.default.svc, DNS:kubernetes.default.svc.cluster.local, IP Address:10.96.0.1, IP Address:10.0.0.10, IP Address:10.0.0.100
+```
+
+각 칸이 무엇을 뜻하는지 아래에서 조각을 눌러 본다.
+
+<UrlAnatomy
+  caption="apiserver.crt의 주요 칸"
+  base="x509"
+  separator=" "
+  joiner=" · "
+  params={[
+    { key: "issuer", display: "issuer=kubernetes", title: "누가 서명했나", description: "클러스터 CA(ca.crt)의 CN이 kubernetes다. 클라이언트는 이 CA를 믿기 때문에 이 인증서를 믿는다. kubeconfig의 certificate-authority-data가 바로 이 CA다." },
+    { key: "notBefore", display: "notBefore 01:26:49", title: "언제부터", description: "kubeadm이 파일을 만든 시각(01:31:49)보다 5분 앞이다. 노드 사이 시계가 조금 어긋나도 '아직 유효하지 않음' 오류가 나지 않게 일부러 당긴다." },
+    { key: "notAfter", display: "notAfter 2027-10-21", title: "언제까지", description: "정확히 1년 뒤다. kubeadm의 certificateValidityPeriod 기본값이 8760h다. 이 날짜가 지나면 모든 클라이언트가 접속을 거부한다.", required: true },
+    { key: "eku", display: "EKU=Server", title: "어디에 쓰나", description: "TLS Web Server Authentication만 있다. 이 인증서로 클라이언트 행세를 할 수는 없다. 반대로 클라이언트 인증서는 Client만 가진다." },
+    { key: "san", display: "SAN=DNS·IP 9개", title: "어떤 이름으로 접속해도 되나", description: "클라이언트는 접속한 주소가 이 목록에 있어야 인증서를 받아들인다. 10.96.0.1은 서비스 CIDR의 첫 주소로, Pod 안에서 kubernetes.default Service로 들어올 때 쓰인다. 10.0.0.100은 certSANs로 더한 로드 밸런서 IP다.", required: true },
+  ]}
+/>
+
+SAN은 실무에서 가장 자주 사고가 나는 칸이다. 나중에 API 서버 앞에 로드 밸런서를 붙이거나 새 DNS 이름을 만들면, 그 주소가 SAN에 없어서 접속이 거절된다. kwok 클러스터에 SAN에 없는 루프백 주소 `127.0.0.2`로 접속해 봤다.
+
+```bash
+# SAN에 없는 주소로 API 서버에 접속한다
+kubectl get ns --server=https://127.0.0.2:32752
+```
+
+```text
+Unable to connect to the server: tls: failed to verify certificate: x509: certificate is valid for 127.0.0.1, ::1, 192.0.2.2, 10.111.0.1, not 127.0.0.2
+```
+
+오류가 친절하게 "이 인증서는 어떤 주소에만 유효하다"고 알려 준다. 고치는 길은 `--insecure-skip-tls-verify`가 아니다. kubeadm이라면 ClusterConfiguration의 `apiServer.certSANs`에 주소를 더하고 apiserver 인증서를 다시 만든다. 기존 `apiserver.crt`와 `apiserver.key`를 옮겨 두고 `kubeadm init phase certs apiserver --config ...`를 돌리면 새 SAN으로 만들어진다. 그 뒤 API 서버를 다시 띄운다.
+
+## kwok은 인증서 한 장으로 다 한다
+
+비교 삼아 kwok이 만든 PKI를 열어 봤다. kwok은 빨리 뜨는 테스트용이라 구조가 아주 단순하다.
+
+```bash
+# kwok 클러스터의 PKI 디렉터리
+ls /root/.kwok/clusters/r9-sec/pki
+
+# 관리자 인증서 하나를 읽는다
+openssl x509 -in admin.crt -noout -subject -issuer -dates -ext subjectAltName,extendedKeyUsage
+```
+
+```text
+admin.crt
+admin.key
+ca.crt
+ca.key
+subject=O = system:masters, CN = kwok-admin
+issuer=CN = kwok-ca
+notBefore=Oct 20 01:02:11 2026 GMT
+notAfter=Sep 27 01:02:11 2126 GMT
+X509v3 Extended Key Usage: 
+    Any Extended Key Usage, TLS Web Server Authentication, TLS Web Client Authentication
+X509v3 Subject Alternative Name: 
+    DNS:kubernetes, DNS:kubernetes.default, DNS:kubernetes.default.svc, DNS:kubernetes.default.svc.cluster.local, DNS:localhost, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1, IP Address:192.0.2.2
+```
+
+인증서가 한 장이고 유효 기간이 100년이다. 서버용이면서 클라이언트용이고, 주체는 `system:masters`다. kwok의 API 서버 설정을 보면 이 한 장이 서버 인증서(`--tls-cert-file`), 확장 API 프록시용(`--proxy-client-cert-file`), ServiceAccount 서명 키(`--service-account-key-file`)로 모두 쓰이고 etcd는 평문 HTTP다. 몇 초 만에 뜨고 버리는 실습용이라 괜찮은 구성이다. 운영 클러스터에서 이렇게 하면 인증서 하나가 새는 순간 모든 연결이 뚫리고, 그 인증서를 쓰는 사람에게서 권한을 뺏을 방법도 없다. 앞 절에서 kubeadm이 인증서를 열 개로 나눈 이유가 이 반대편에 있다.
+
+## 만료일을 미리 보는 명령
+
+kubeadm 클러스터라면 만료일은 명령 하나로 본다.
+
+```bash
+# 컨트롤 플레인 노드에서 인증서 만료일을 본다
+sudo kubeadm certs check-expiration
+```
+
+```text
+CERTIFICATE                EXPIRES                  RESIDUAL TIME   CERTIFICATE AUTHORITY   EXTERNALLY MANAGED
+admin.conf                 Oct 21, 2027 01:31 UTC   364d            ca                      no      
+apiserver                  Oct 21, 2027 01:31 UTC   364d            ca                      no      
+apiserver-etcd-client      Oct 21, 2027 01:31 UTC   364d            etcd-ca                 no      
+apiserver-kubelet-client   Oct 21, 2027 01:31 UTC   364d            ca                      no      
+controller-manager.conf    Oct 21, 2027 01:31 UTC   364d            ca                      no      
+etcd-healthcheck-client    Oct 21, 2027 01:31 UTC   364d            etcd-ca                 no      
+etcd-peer                  Oct 21, 2027 01:31 UTC   364d            etcd-ca                 no      
+etcd-server                Oct 21, 2027 01:31 UTC   364d            etcd-ca                 no      
+front-proxy-client         Oct 21, 2027 01:31 UTC   364d            front-proxy-ca          no      
+scheduler.conf             Oct 21, 2027 01:31 UTC   364d            ca                      no      
+super-admin.conf           Oct 21, 2027 01:31 UTC   364d            ca                      no      
+
+CERTIFICATE AUTHORITY   EXPIRES                  RESIDUAL TIME   EXTERNALLY MANAGED
+ca                      Oct 18, 2036 01:31 UTC   9y              no      
+etcd-ca                 Oct 18, 2036 01:31 UTC   9y              no      
+front-proxy-ca          Oct 18, 2036 01:31 UTC   9y              no      
+```
+
+일반 인증서는 1년, CA는 10년이다. 목록에 `kubelet.conf`가 없는 것도 본다. kubelet의 클라이언트 인증서는 kubelet이 스스로 갱신하기 때문에 kubeadm이 관리하지 않는다(뒤에서 다룬다). `EXTERNALLY MANAGED`가 yes면 CA 키 없이 외부 CA가 서명한 구성이라 kubeadm이 갱신해 주지 않는다.
+
+`RESIDUAL TIME`은 남은 시간을 사람이 읽기 좋게 줄인 값이다. 막 만든 인증서가 365d가 아니라 364d로 나오고, 10년짜리 CA가 9y로 나오는 데는 규칙이 있다. kubectl의 AGE 열과 같은 함수(apimachinery의 `HumanDuration`)라서, 2분 미만은 초, 10분 미만은 분과 초, 3시간 미만은 분, 8시간 미만은 시와 분, 이틀 미만은 시, 8일 미만은 일과 시, 2년 미만은 일, 8년 미만은 년과 일, 그 위는 년만 쓴다. 남은 시간이 -1초보다 작으면 `<invalid>`다. 아래에서 이 함수를 만들어 볼 수 있다. 테스트의 기댓값은 Go의 실제 함수로 돌린 결과다.
+
+<CodePlayground
+  caption="RESIDUAL TIME 만들기: 남은 초를 kubeadm처럼 줄여 쓰기"
+  functionName="humanDuration"
+  initialCode={`function humanDuration(seconds) {
+  // seconds: 남은 시간(초, 정수). 음수면 이미 지났다
+  // < -1 → "<invalid>", -1 → "0s", 120 미만 → "45s"
+  // 분 < 10 → "2m58s" (초가 0이면 "2m"), 분 < 180 → "25m"
+  // 시 < 8 → "5h7m" (분이 0이면 "5h"), 시 < 48 → "30h"
+  // 시 < 24*8 → "2d2h" (시가 0이면 "2d"), 시 < 24*365*2 → "364d"
+  // 시 < 24*365*8 → "2y70d" (일이 0이면 "2y"), 그 위 → "9y"
+  return "";
+}`}
+  solution={`function humanDuration(seconds) {
+  if (seconds < -1) return "<invalid>";
+  if (seconds < 0) return "0s";
+  if (seconds < 120) return seconds + "s";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 10) {
+    const s = seconds % 60;
+    return s === 0 ? minutes + "m" : minutes + "m" + s + "s";
+  }
+  if (minutes < 180) return minutes + "m";
+  const hours = Math.floor(seconds / 3600);
+  if (hours < 8) {
+    const m = minutes % 60;
+    return m === 0 ? hours + "h" : hours + "h" + m + "m";
+  }
+  if (hours < 48) return hours + "h";
+  const days = Math.floor(hours / 24);
+  if (hours < 24 * 8) {
+    const h = hours % 24;
+    return h === 0 ? days + "d" : days + "d" + h + "h";
+  }
+  if (hours < 24 * 365 * 2) return days + "d";
+  const years = Math.floor(days / 365);
+  if (hours < 24 * 365 * 8) {
+    const dy = days % 365;
+    return dy === 0 ? years + "y" : years + "y" + dy + "d";
+  }
+  return years + "y";
+}`}
+  tests={[
+    { label: "5초 전에 만료", args: [-5], expected: "<invalid>" },
+    { label: "1초 차이는 봐준다", args: [-1], expected: "0s" },
+    { label: "119초", args: [119], expected: "119s" },
+    { label: "178초", args: [178], expected: "2m58s" },
+    { label: "25분", args: [1500], expected: "25m" },
+    { label: "5시간 7분", args: [18420], expected: "5h7m" },
+    { label: "50시간", args: [180000], expected: "2d2h" },
+    { label: "1년에서 1시간 모자람", args: [31532400], expected: "364d" },
+    { label: "800일", args: [69120000], expected: "2y70d" },
+    { label: "3647일 (10년짜리 CA)", args: [315100800], expected: "9y" },
+  ]}
+/>
+
+명령을 기억해 두는 것보다 중요한 것은 이 값을 누군가 주기적으로 보게 만드는 일이다. Prometheus를 쓴다면 API 서버의 `apiserver_client_certificate_expiration_seconds`(접속한 클라이언트 인증서의 남은 시간 분포)나 노드의 인증서 파일을 읽는 익스포터로 "30일 안에 만료" 알림을 건다.
+
+## 1년 뒤 아침에 일어나는 일
+
+갱신하지 않은 kubeadm 클러스터의 1년 차 아침을 시간순으로 따라간다. 각 단계의 오류 문장은 아래에서 따로 재현한 실제 출력이다.
+
+<AlgoTrace
+  caption="인증서가 만료되는 날, 증상이 번지는 순서"
+  memoryLabel="멈춘 것"
+  cells={["D-30", "D-0 01:31", "+1분", "+수 분", "+수 시간", "복구"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "만료 30일 전. 알림이 없으니 아무도 모른다. check-expiration은 '30d'를 보여 주고 있었다." },
+    { pointer: 1, memory: ["kubectl"], caption: "admin.conf 인증서가 만료됐다. kubectl은 Unauthorized만 받는다. 이유는 API 서버 로그에만 있다." },
+    { pointer: 2, memory: ["kubectl", "controller-mgr", "scheduler"], caption: "같은 날 만든 controller-manager.conf, scheduler.conf도 만료됐다. 컨트롤러와 스케줄러가 API 서버에 붙지 못한다." },
+    { pointer: 3, memory: ["kubectl", "controller-mgr", "scheduler", "etcd 연결"], caption: "apiserver-etcd-client도 만료라 API 서버가 etcd와 통신하지 못한다. 서버 인증서 apiserver.crt도 만료라 모든 클라이언트가 x509 오류를 낸다." },
+    { pointer: 4, memory: ["새 Pod 없음", "롤아웃 멈춤", "HPA 멈춤"], caption: "이미 떠 있는 Pod는 계속 돈다. kubelet이 컨테이너를 붙잡고 있기 때문이다. 하지만 새 Pod, 배포, 스케일링, 장애 Pod 교체가 모두 멈춘다." },
+    { pointer: 5, found: [5], memory: ["renew all", "static Pod 재시작", "admin.conf 교체"], caption: "kubeadm certs renew all로 갱신하고 컨트롤 플레인 static Pod를 다시 띄운다. 새 admin.conf를 사용자에게 다시 나눠 준다." },
+  ]}
+/>
+
+사람의 클라이언트 인증서가 만료되면 어떻게 보이는지 kwok 클러스터에서 재현했다. 클러스터 CA로 서명하되 유효 기간이 어제 끝난 `minsu`의 인증서를 만들어 kubeconfig에 넣었다.
+
+```bash
+# 어제 만료된 인증서인지 확인한다 (0초 뒤에도 유효한가)
+openssl x509 -in old-minsu.crt -noout -dates
+openssl x509 -in old-minsu.crt -noout -checkend 0; echo "exit=$?"
+
+# 이 인증서로 API를 부른다
+kubectl --kubeconfig old.kubeconfig get pods -n shop
+```
+
+```text
+notBefore=Oct 20 01:33:20 2025 GMT
+notAfter=Oct 20 01:33:20 2026 GMT
+Certificate will expire
+exit=1
+error: You must be logged in to the server (Unauthorized)
+```
+
+클라이언트는 `Unauthorized` 한 줄만 받는다. 토큰이 틀렸을 때와 똑같은 문장이라 인증서 만료라고 떠올리기 어렵다. 진짜 이유는 API 서버 로그에 있다.
+
+```text
+E1021 01:33:20.327278   30153 authentication.go:76] "Unable to authenticate the request" err="verifying certificate SN=175295915353536816886361057825159928814920416988, SKID=, AKID= failed: x509: certificate has expired or is not yet valid: current time 2026-10-21T01:33:20Z is after 2026-10-20T01:33..."
+```
+
+반대로 서버 인증서가 만료되면 클라이언트 쪽에서 바로 보인다. 같은 CA로 서명한, 어제 만료된 서버 인증서를 단 HTTPS 서버를 띄우고 kubectl로 붙었다.
+
+```text
+Unable to connect to the server: tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-10-21T01:33:30Z is after 2026-10-20T01:33:29Z
+```
+
+```bash
+# 원격 서버 인증서의 만료를 openssl로 바로 확인한다
+echo | openssl s_client -connect 127.0.0.1:19645 -CAfile ca.crt 2>/dev/null | grep 'Verify return code'
+```
+
+```text
+Verify return code: 10 (certificate has expired)
+```
+
+"Unauthorized인데 어제까지 됐다"면 클라이언트 인증서 만료를, "x509: certificate has expired"면 서버 인증서 만료를 먼저 의심한다. 둘 다 노드의 시계가 틀어졌을 때도 나니 `date`로 시각도 확인한다.
+
+## 갱신하기
+
+kubeadm은 클러스터 버전을 올릴 때(`kubeadm upgrade apply`, 기본값 `--certificate-renewal=true`) 인증서도 함께 갱신한다. 1년 안에 한 번이라도 마이너 버전 업그레이드를 하면 만료를 만나지 않는다. 쿠버네티스 마이너 버전의 지원 기간이 대략 1년 남짓이니, 지원 기간을 따라 업그레이드하는 클러스터는 자연스럽게 피해 간다. 업그레이드 절차는 [클러스터 업그레이드 글](/posts/k8s-cluster-upgrade)에서 다룬다.
+
+업그레이드 없이 갱신만 하려면 `kubeadm certs renew`를 쓴다. 갱신 동작을 보려고 `certificateValidityPeriod: 3m0s`로 3분짜리 인증서를 만들고 만료되기를 기다렸다.
+
+```bash
+# 3분짜리 인증서가 지난 뒤 만료일을 본다
+sudo kubeadm certs check-expiration | head -4
+```
+
+```text
+CERTIFICATE                EXPIRES                  RESIDUAL TIME   CERTIFICATE AUTHORITY   EXTERNALLY MANAGED
+admin.conf                 Oct 21, 2026 01:36 UTC   <invalid>       ca                      no      
+apiserver                  Oct 21, 2026 01:36 UTC   <invalid>       ca                      no      
+apiserver-etcd-client      Oct 21, 2026 01:36 UTC   <invalid>       etcd-ca                 no      
+```
+
+```bash
+# CA로 모든 인증서를 다시 서명한다 (CA는 그대로)
+sudo kubeadm certs renew all
+```
+
+```text
+certificate embedded in the kubeconfig file for the admin to use and for kubeadm itself renewed
+certificate for serving the Kubernetes API renewed
+certificate the apiserver uses to access etcd renewed
+certificate for the API server to connect to kubelet renewed
+certificate embedded in the kubeconfig file for the controller manager to use renewed
+certificate for liveness probes to healthcheck etcd renewed
+certificate for etcd nodes to communicate with each other renewed
+certificate for serving etcd renewed
+certificate for the front proxy client renewed
+certificate embedded in the kubeconfig file for the scheduler manager to use renewed
+certificate embedded in the kubeconfig file for the super-admin renewed
+
+Done renewing certificates. You must restart the kube-apiserver, kube-controller-manager, kube-scheduler and etcd, so that they can use the new certificates.
+```
+
+마지막 문장을 놓치면 안 된다. 파일만 바뀌었고, 이미 떠 있는 프로세스는 옛 인증서를 메모리에 들고 있다. kubeadm의 컨트롤 플레인은 kubelet이 `/etc/kubernetes/manifests`의 static Pod로 띄운다. 컨트롤 플레인 노드에서 다음 순서로 다시 띄운다.
+
+```bash
+# static Pod 매니페스트를 잠깐 치워 kubelet이 컨테이너를 내리게 한다
+sudo mkdir -p /etc/kubernetes/manifests-off
+sudo mv /etc/kubernetes/manifests/*.yaml /etc/kubernetes/manifests-off/
+sleep 20
+
+# 되돌려 놓으면 새 인증서로 다시 뜬다
+sudo mv /etc/kubernetes/manifests-off/*.yaml /etc/kubernetes/manifests/
+
+# 내 kubeconfig도 새 admin.conf로 바꾼다
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+kubectl get nodes
+```
+
+위 블록은 kubeadm 문서의 절차를 따른 예시다. 실습에서는 컨트롤 플레인을 띄우지 않았으니 이 부분 출력은 없다.
+
+<Callout kind="warning" title="컨트롤 플레인이 여러 대면 한 대씩">
+위 절차는 그 노드의 API 서버와 etcd를 잠깐 내린다. 컨트롤 플레인이 3대라면 노드마다 `renew all`과 재시작을 한 대씩 하고, 한 대가 다시 Ready가 되고 etcd 멤버가 건강한지(`etcdctl endpoint health`) 본 다음 넘어간다. 세 대를 한꺼번에 내리면 etcd 쿼럼이 깨진다. 시작 전에 `/etc/kubernetes/pki` 전체와 etcd 스냅숏을 백업해 두면([etcd 백업 글](/posts/k8s-etcd-backup)) 문제가 생겼을 때 옛 파일로 되돌릴 수 있다.
+</Callout>
+
+CA는 10년이라 갱신 명령이 손대지 않는다. CA를 바꾸는 일은 모든 kubeconfig, 모든 노드의 kubelet, ServiceAccount 토큰을 쓰는 모든 Pod가 새 CA를 믿게 만드는 일이라 훨씬 크다. 옛 CA와 새 CA를 함께 믿는 기간을 두고 옮긴다. 이 "겹쳐서 믿기" 순서는 [전송 구간 암호화 글](/posts/encryption-in-transit)에 있다. 1년 주기가 너무 짧다면 kubeadm v1beta4 설정의 `certificateValidityPeriod`로 늘릴 수 있지만, 긴 인증서는 새면 오래 유효하다. 기간을 늘리기보다 자동 갱신과 알림을 갖추는 쪽이 낫다.
+
+## kubelet은 스스로 갱신한다
+
+`check-expiration` 목록에 kubelet이 없던 이유가 이것이다. kubelet은 클라이언트 인증서가 만료되기 전에 새 키를 만들고, CertificateSigningRequest(CSR) 객체로 API 서버에 서명을 요청한다. kubeadm이 만드는 kubelet 설정에는 `rotateCertificates: true`가 기본으로 들어간다. 아래는 그 흐름이다.
+
+<SequenceDiagram
+  caption="kubelet 클라이언트 인증서가 바뀌는 과정"
+  actors={[
+    { id: "kubelet", label: "kubelet" },
+    { id: "api", label: "API 서버" },
+    { id: "approver", label: "csrapproving" },
+    { id: "signer", label: "csrsigning" },
+  ]}
+  steps={[
+    { from: "kubelet", to: "kubelet", label: "새 키 생성", title: "만료가 가까워지면", detail: "유효 기간의 70~90% 사이 어느 시점에 새 개인 키를 만든다. 키는 노드 밖으로 나가지 않는다." },
+    { from: "kubelet", to: "api", label: "create CSR", title: "서명을 요청한다", detail: "지금 인증서(system:node:node-1)로 접속해 CSR을 만든다. signerName은 kube-apiserver-client-kubelet이다.", payload: "CN=system:node:node-1, O=system:nodes" },
+    { from: "approver", to: "api", label: "SubjectAccessReview", title: "자기 노드 것이 맞나", detail: "요청한 사람이 CSR 안의 노드와 같은지, selfnodeclient 권한이 있는지 묻는다. 맞으면 자동으로 승인한다." },
+    { from: "signer", to: "api", label: "status.certificate", title: "CA 키로 서명한다", detail: "컨트롤러 매니저의 서명 컨트롤러가 클러스터 CA로 서명해 CSR의 status에 넣는다. 유효 기간은 --cluster-signing-duration을 따른다." },
+    { from: "api", to: "kubelet", label: "watch", title: "받아서 갈아 끼운다", detail: "kubelet이 새 인증서를 받아 kubelet-client-current.pem 링크를 바꾼다. 재시작 없이 다음 연결부터 새 인증서를 쓴다." },
+  ]}
+/>
+
+kwok에는 진짜 kubelet이 없으니 kubelet이 하는 요청을 직접 흉내 냈다. 클러스터 CA로 `system:node:node-1` 인증서를 만들어 그 노드로 행세하고, kubeadm처럼 `system:nodes` 그룹에 selfnodeclient 역할을 묶은 다음, 새 키로 만든 CSR을 보냈다. 컨트롤러 매니저에는 서명용 CA(`--cluster-signing-cert-file`, `--cluster-signing-key-file`)와 `--cluster-signing-duration=720h`를 줬다.
+
+```bash
+# kubeadm이 하듯 노드가 자기 인증서를 갱신할 수 있게 묶는다
+kubectl create clusterrolebinding node-autorenew \
+  --clusterrole=system:certificates.k8s.io:certificatesigningrequests:selfnodeclient --group=system:nodes
+
+# node-1의 인증서로 접속해 새 키의 CSR을 낸다
+kubectl --kubeconfig node1.kubeconfig create -f node1-csr.yaml
+
+# CSR 상태와 승인 이유를 본다
+kubectl get csr
+kubectl get csr csr-fj4cn -o jsonpath='{range .status.conditions[*]}{.type}{"  "}{.reason}{"  "}{.message}{"\n"}{end}'
+```
+
+```text
+clusterrolebinding.rbac.authorization.k8s.io/node-autorenew created
+certificatesigningrequest.certificates.k8s.io/csr-fj4cn created
+NAME        AGE   SIGNERNAME                                    REQUESTOR            REQUESTEDDURATION   CONDITION
+csr-fj4cn   3s    kubernetes.io/kube-apiserver-client-kubelet   system:node:node-1   <none>              Approved,Issued
+Approved  AutoApproved  Auto approving self kubelet client certificate after SubjectAccessReview.
+```
+
+사람이 손대지 않았는데 3초 만에 승인되고 발급됐다. 받은 인증서는 30일짜리였다(`notAfter=Nov 20 01:33:03 2026 GMT`). 이 자동 갱신이 멈추는 경우가 있다. 노드가 오래 꺼져 있다가 인증서가 이미 만료된 뒤 켜지면, 만료된 인증서로는 CSR을 낼 수 없으니 부트스트랩 토큰으로 다시 합류시켜야 한다.
+
+kubelet의 서버 인증서(10250 포트에서 보여 주는 것)는 사정이 다르다. 기본값으로는 kubelet이 스스로 만든 자체 서명 인증서를 쓰고, API 서버는 kubelet 서버 인증서를 검증하지 않는다. metrics-server를 설치할 때 `--kubelet-insecure-tls`를 붙이라는 안내가 흔한 이유다. 제대로 하려면 kubelet 설정에 `serverTLSBootstrap: true`를 켜서 `kubernetes.io/kubelet-serving` 서명자로 CSR을 내게 한다. 이 CSR은 컨트롤러 매니저가 자동 승인하지 않는다. 노드 이름과 IP를 SAN에 넣어 달라는 요청이라, 그 노드가 정말 그 IP를 가졌는지 확인할 방법이 없기 때문이다. 사람이나 별도 승인 도구가 승인하지 않으면 `kubectl get csr`에 Pending이 쌓이고, `kubectl logs`가 kubelet과 TLS 연결을 맺지 못해 실패한다.
+
+## 사람에게 인증서 발급하기
+
+새로 온 개발자 jiwoo에게 클러스터 접근 권한을 준다고 하자. 개인 키는 jiwoo가 자기 노트북에서 만들고, CSR만 클러스터에 올린다. 키가 사람 손을 떠나지 않는 게 이 방식의 장점이다.
+
+```bash
+# jiwoo가 자기 키와 CSR을 만든다 (CN이 사용자 이름, O가 그룹)
+openssl req -newkey rsa:2048 -nodes -keyout jiwoo.key -out jiwoo.csr -subj "/CN=jiwoo/O=dev"
+
+# 관리자가 CSR 객체를 만든다. 유효 기간은 하루
+cat <<EOF | kubectl apply -f -
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: jiwoo
+spec:
+  request: $(base64 -w0 jiwoo.csr)
+  signerName: kubernetes.io/kube-apiserver-client
+  expirationSeconds: 86400
+  usages: ["client auth"]
+EOF
+
+# 승인하고 발급된 인증서를 꺼낸다
+kubectl certificate approve jiwoo
+kubectl get csr jiwoo
+kubectl get csr jiwoo -o jsonpath='{.status.certificate}' | base64 -d > jiwoo.crt
+openssl x509 -in jiwoo.crt -noout -subject -dates
+```
+
+```text
+certificatesigningrequest.certificates.k8s.io/jiwoo created
+certificatesigningrequest.certificates.k8s.io/jiwoo approved
+NAME    AGE   SIGNERNAME                            REQUESTOR    REQUESTEDDURATION   CONDITION
+jiwoo   2s    kubernetes.io/kube-apiserver-client   kwok-admin   24h                 Approved,Issued
+subject=O = dev, CN = jiwoo
+notBefore=Oct 21 01:32:40 2026 GMT
+notAfter=Oct 22 01:32:40 2026 GMT
+```
+
+인증서로는 "누구인지"만 정해진다. jiwoo로 접속해 Pod 목록을 보면 `pods is forbidden: User "jiwoo" cannot list resource "pods"`가 나온다. 할 수 있는 일은 RBAC으로 따로 준다([RBAC 글](/posts/k8s-rbac)). 자기 kubeconfig에 인증서를 넣는 법은 [kubeconfig 글](/posts/kubeconfig-contexts)에 있다.
+
+여기서 두 가지 함정을 확인했다. 첫째, `system:masters` 그룹을 달라는 CSR은 내장 어드미션 플러그인(CertificateSubjectRestriction)이 아예 받지 않는다. 승인 실수로 RBAC 위의 권한이 나가는 것을 막는다.
+
+```text
+Error from server (Forbidden): error when creating "STDIN": certificatesigningrequests.certificates.k8s.io "sneaky" is forbidden: use of kubernetes.io/kube-apiserver-client signer with system:masters group is not allowed
+```
+
+둘째, 쿠버네티스에는 클라이언트 인증서를 폐기(revoke)하는 기능이 없다. CSR 객체를 지워도 이미 받은 인증서는 계속 유효하다.
+
+```bash
+# CSR을 지운 뒤에도 jiwoo의 인증서로 로그인이 되는지 본다
+kubectl delete csr jiwoo
+kubectl --kubeconfig jiwoo.kubeconfig auth whoami
+```
+
+```text
+certificatesigningrequest.certificates.k8s.io "jiwoo" deleted
+ATTRIBUTE                                           VALUE
+Username                                            jiwoo
+Groups                                              [dev system:authenticated]
+```
+
+퇴사자의 인증서가 1년짜리라면 1년 동안 신분은 유효하다. 할 수 있는 일은 그 이름과 그룹에 묶인 RBAC을 지우는 것뿐이고, 그룹 단위로 권한을 줬다면 그룹 전체 바인딩을 손봐야 한다. 그래서 사람에게 주는 인증서는 `expirationSeconds`로 짧게 주거나, 처음부터 OIDC 같은 외부 인증으로 사람을 로그인시키고 인증서는 구성 요소에만 쓰는 구성이 권장된다. 관리형 클러스터(EKS의 IAM, GKE의 Google 계정)가 사람 인증을 인증서로 하지 않는 이유이기도 하다.
+
+## Pod에 인증서를 나눠 주는 새 API
+
+1.37.0 클러스터의 `certificates.k8s.io` 그룹에는 CSR 말고도 두 리소스가 v1으로 올라와 있다.
+
+```bash
+# 인증서 관련 API 리소스를 본다
+kubectl api-resources --api-group=certificates.k8s.io
+```
+
+```text
+NAME                         SHORTNAMES   APIVERSION               NAMESPACED   KIND
+certificatesigningrequests   csr          certificates.k8s.io/v1   false        CertificateSigningRequest
+clustertrustbundles                       certificates.k8s.io/v1   false        ClusterTrustBundle
+podcertificaterequests                    certificates.k8s.io/v1   true         PodCertificateRequest
+```
+
+ClusterTrustBundle은 "이 서명자의 CA 묶음"을 클러스터 전체에 공개하는 객체로, Pod가 투영 볼륨으로 CA 번들을 받아 쓸 수 있게 한다. PodCertificateRequest는 kubelet이 Pod 대신 키를 만들고 인증서를 받아 볼륨으로 넣어 주는 흐름이다. 1.34.1 바이너리에서는 두 기능이 각각 베타(기본 꺼짐)와 알파였고, 1.37.0에서는 기능 게이트 목록에서 빠지고 v1 API가 보인다. 실제로 Pod에 인증서를 넣는 것까지는 kubelet이 없는 kwok에서 확인하지 못했다. 서비스 간 mTLS 인증서를 cert-manager나 서비스 메시 없이 쿠버네티스 기본 기능으로 나눠 주는 방향이라, 쓰려는 버전의 문서를 확인하고 지켜볼 만하다.
+
+## 1년짜리 신분증 열 장
+
+쿠버네티스 PKI는 CA 셋(클러스터, etcd, front-proxy)과 연결마다 따로 있는 인증서로 이루어진다. 클라이언트 인증서의 CN과 O가 곧 사용자와 그룹이고, SAN이 서버에 접속해도 되는 이름이다. kubeadm 인증서는 1년, CA는 10년이다. 업그레이드를 1년 넘게 미루면 어느 날 아침 kubectl은 Unauthorized, 컨트롤러는 x509 오류를 내며 멈춘다. `check-expiration`을 알림으로 바꿔 두고, `renew all` 뒤에는 컨트롤 플레인을 한 대씩 다시 띄운다. kubelet은 CSR로 스스로 갱신하고, 사람에게 준 인증서는 폐기할 수 없으니 짧게 준다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스는 왜 CA를 여러 개 쓰나
+
+연결마다 신뢰 범위를 나누기 위해서다. 클러스터 CA가 서명한 인증서는 API 서버가 사용자로 받아들이는데, etcd까지 같은 CA를 믿으면 개발자에게 준 인증서로 etcd에 직접 붙어 RBAC을 건너뛸 수 있다. 그래서 etcd는 전용 CA를 쓰고, aggregated API로 사용자 정보를 전달하는 front-proxy도 따로 CA를 둔다. 인증서 하나가 새도 그 연결의 권한만 잃게 된다.
+
+### API 서버는 클라이언트 인증서에서 사용자를 어떻게 알아내나
+
+인증서의 CN을 사용자 이름, O를 그룹으로 쓴다. kubelet은 CN=system:node:노드이름, O=system:nodes이고, 컨트롤러 매니저는 CN=system:kube-controller-manager다. 인증서는 신분만 정하고 권한은 RBAC이 준다. 다만 O=system:masters는 RBAC을 거치지 않고 모든 권한을 받아서, kubeadm은 평소용 admin.conf에는 kubeadm:cluster-admins 그룹을 쓰고 system:masters는 super-admin.conf에만 둔다.
+
+### kubeadm 클러스터의 인증서가 만료되면 무슨 일이 생기고 어떻게 고치나
+
+kubectl은 Unauthorized, 컨트롤러 매니저와 스케줄러는 API 서버에 붙지 못하고, API 서버는 etcd와 통신하지 못한다. 떠 있는 Pod는 돌지만 새 Pod, 배포, 스케일링이 멈춘다. `kubeadm certs renew all`로 갱신한 뒤 컨트롤 플레인 static Pod를 다시 띄우고 새 admin.conf를 배포한다. 컨트롤 플레인이 여러 대면 etcd 쿼럼을 지키도록 한 대씩 한다.
+
+### 인증서 만료를 어떻게 예방하나
+
+1년 안에 kubeadm upgrade를 하면 기본값으로 인증서가 함께 갱신된다. 별도로 `kubeadm certs check-expiration`을 주기적으로 돌리거나, 인증서 만료 메트릭으로 30일 전 알림을 건다. 유효 기간을 늘리는 설정도 있지만 새면 오래 유효하니, 기간보다 자동 갱신과 알림을 우선한다.
+
+### kubelet 인증서는 누가 갱신하나
+
+kubelet이 스스로 한다. rotateCertificates가 켜져 있으면 만료 전에 새 키를 만들고 CSR을 내고, 컨트롤러 매니저의 csrapproving 컨트롤러가 SubjectAccessReview로 자기 노드의 요청인지 확인해 자동 승인하며, csrsigning 컨트롤러가 클러스터 CA로 서명한다. 노드가 오래 꺼져 인증서가 이미 만료됐다면 부트스트랩부터 다시 해야 한다. kubelet 서버 인증서는 serverTLSBootstrap을 켜야 CSR로 받고, 이 CSR은 자동 승인되지 않는다.
+
+### 사람에게 준 클라이언트 인증서를 회수할 수 있나
+
+없다. 쿠버네티스는 클라이언트 인증서 폐기 목록을 확인하지 않아서, CSR 객체를 지워도 발급된 인증서는 만료일까지 유효하다. 할 수 있는 것은 그 사용자와 그룹에 묶인 RBAC을 지우는 것과, 최악의 경우 CA를 교체하는 것이다. 그래서 사람에게는 expirationSeconds로 짧은 인증서를 주거나 OIDC 같은 외부 인증을 쓴다.
+
+### 로드 밸런서를 붙인 뒤 kubectl이 x509 오류를 낸다. 왜인가
+
+접속한 주소가 API 서버 인증서의 SAN에 없기 때문이다. 오류 문장이 `certificate is valid for ..., not 주소`로 유효한 이름을 알려 준다. kubeadm이면 ClusterConfiguration의 certSANs에 주소를 더하고 apiserver 인증서를 다시 만든 뒤 API 서버를 재시작한다. --insecure-skip-tls-verify로 넘기면 중간자 공격을 막는 검증을 꺼 버리는 것이라 해결이 아니다.

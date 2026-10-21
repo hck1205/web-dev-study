@@ -2,6 +2,83 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-certificates-pki": {
+    "links": [
+      "local-k8s-kind-minikube",
+      "https-tls",
+      "encryption-in-transit",
+      "k8s-architecture",
+      "k8s-rbac",
+      "k8s-secret",
+      "k8s-serviceaccount-tokens",
+      "k8s-cluster-upgrade",
+      "k8s-etcd-backup",
+      "kubeconfig-contexts"
+    ],
+    "mentions": [
+      "k8s-hpa",
+      "kubectl-essentials",
+      "kubernetes-ingress",
+      "service-mesh",
+      "what-happens-google-com",
+      "layer-ip-addressing",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "dns"
+    ]
+  },
+  "k8s-audit-logging": {
+    "links": [
+      "local-k8s-kind-minikube",
+      "k8s-rbac",
+      "k8s-admission-control",
+      "structured-logging",
+      "k8s-secret",
+      "encryption-at-rest",
+      "k8s-pod-security-admission"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "kubernetes-ingress",
+      "k8s-pod-basics",
+      "iptables-nat",
+      "k8s-configmap",
+      "docker-container-basics",
+      "k8s-architecture",
+      "osi-in-practice",
+      "http-status-codes",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "webhooks"
+    ]
+  },
+  "k8s-admission-control": {
+    "links": [
+      "local-k8s-kind-minikube",
+      "k8s-rbac",
+      "k8s-pod-security-admission",
+      "k8s-audit-logging",
+      "kubectl-apply-ssa",
+      "webhooks",
+      "k8s-certificates-pki"
+    ],
+    "mentions": [
+      "k8s-pod-disruption-budget",
+      "k8s-network-policy",
+      "k8s-pod-resources",
+      "kubernetes-ingress",
+      "k8s-cluster-upgrade",
+      "k8s-pod-basics",
+      "terraform-basics",
+      "k8s-configmap",
+      "docker-container-basics",
+      "gateway",
+      "k8s-deploy-pipeline-eks",
+      "k8s-architecture",
+      "what-happens-google-com",
+      "db-type-key-value"
+    ]
+  },
   "velero-backup": {
     "links": [
       "k8s-etcd-backup",
@@ -73,6 +150,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress",
       "iptables-nat",
       "k8s-configmap",
+      "k8s-admission-control",
       "cron-jobs",
       "k8s-coredns",
       "helm-basics",
@@ -208,6 +286,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types"
     ],
     "mentions": [
+      "k8s-admission-control",
       "https-tls",
       "helm-basics",
       "service-mesh",
@@ -292,6 +371,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cloud-cost-optimization"
     ],
     "mentions": [
+      "k8s-admission-control",
       "k8s-pod-basics",
       "k8s-architecture",
       "helm-basics",
@@ -333,7 +413,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-namespace",
       "k8s-security-context",
       "k8s-rbac",
-      "k8s-serviceaccount-tokens"
+      "k8s-serviceaccount-tokens",
+      "k8s-admission-control",
+      "k8s-audit-logging"
     ],
     "mentions": [
       "k8s-statefulset",
@@ -389,7 +471,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-serviceaccount-tokens",
       "k8s-security-context",
       "k8s-pod-security-admission",
+      "k8s-certificates-pki",
+      "k8s-audit-logging",
       "iam-basics",
+      "k8s-admission-control",
       "eks-cluster-basics"
     ],
     "mentions": [
@@ -452,6 +537,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-configmap",
+      "k8s-admission-control",
       "local-k8s-kind-minikube",
       "db-type-key-value",
       "k8s-hpa",
@@ -495,6 +581,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-labels-selectors"
     ],
     "mentions": [
+      "k8s-admission-control",
       "k8s-pod-disruption-budget",
       "k8s-in-place-resize",
       "k8s-architecture",
@@ -2178,6 +2265,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-visitor"
     ],
     "mentions": [
+      "k8s-admission-control",
       "mongodb-document-model"
     ]
   },
@@ -6108,6 +6196,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "docker-container-basics",
       "https-tls",
+      "k8s-admission-control",
       "k8s-pod-lifecycle",
       "service-mesh",
       "http-status-codes",
