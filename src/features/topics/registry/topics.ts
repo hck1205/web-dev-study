@@ -12,13 +12,17 @@ export const TOPICS: Topic[] = [
         id: "ai",
         label: "AI",
         description: "머신러닝, LLM, 에이전트",
-        children: [{ id: "rag", label: "RAG", description: "검색 증강 생성: 기본 RAG, 검색 품질, GraphRAG, 에이전틱 RAG" }],
+        children: [
+          { id: "claude-code", label: "Claude Code", description: "CLAUDE.md, 설정, 슬래시 커맨드, 스킬, 서브에이전트, 훅, MCP" },
+          { id: "rag", label: "RAG", description: "검색 증강 생성: 기본 RAG, 검색 품질, GraphRAG, 에이전틱 RAG" },
+        ],
       },
       {
         id: "algorithms",
         label: "Algorithms",
         description: "문제 풀이와 해설, 자료구조",
         children: [
+          { id: "data-structures", label: "Data Structures", description: "배열, 연결 리스트, 스택·큐·덱, 해시맵, 트리, 힙, 트라이, 그래프, 유니온 파인드" },
           { id: "system-design", label: "For System Design", description: "블룸 필터, HyperLogLog, 지오해시, 쿼드트리, 머클 트리, Raft, OT·CRDT 등 대규모 시스템의 알고리즘" },
         ],
       },
