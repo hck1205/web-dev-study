@@ -138,8 +138,11 @@ import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
 import { JS_CALLBACK_HELL } from "./js-callback-hell";
+import { JS_CLOSURES } from "./js-closures";
 import { JS_DESTRUCTURING } from "./js-destructuring";
 import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
+import { JS_FIRST_CLASS_CALLBACKS } from "./js-first-class-callbacks";
+import { JS_FUNCTION_FORMS } from "./js-function-forms";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
@@ -338,10 +341,13 @@ import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SLI_SLO } from "./sli-slo";
+import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_FILTERING_OPERATORS } from "./sql-filtering-operators";
 import { SQL_INJECTION } from "./sql-injection";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
@@ -531,8 +537,11 @@ export const QUESTION_SETS = [
   JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
   JS_CALLBACK_HELL,
+  JS_CLOSURES,
   JS_DESTRUCTURING,
   JS_EQUALITY_COERCION,
+  JS_FIRST_CLASS_CALLBACKS,
+  JS_FUNCTION_FORMS,
   JS_HOISTING_TDZ,
   JS_MEMORY_LEAK,
   JS_PRIMITIVE_VS_REFERENCE,
@@ -731,10 +740,13 @@ export const QUESTION_SETS = [
   SERVICE_DISCOVERY,
   SERVICE_MESH,
   SLI_SLO,
+  SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
+  SQL_FILTERING_OPERATORS,
   SQL_INJECTION,
   SQL_INSERT_UPDATE_DELETE,
+  SQL_LOGICAL_ORDER,
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,

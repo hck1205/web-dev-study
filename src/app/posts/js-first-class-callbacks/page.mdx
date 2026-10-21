@@ -1,0 +1,497 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-first-class-callbacks");
+
+Express 서버의 미들웨어마다 로그를 남기려고 작은 래퍼를 만들었다. 함수를 받아서 로그를 찍고 원래 함수를 부르는, 몇 줄짜리 함수다. 에러 처리기에도 똑같이 씌웠다.
+
+```js
+const express = require("express");
+
+function withLogging(fn) {
+  return (...args) => {
+    console.log(`→ ${fn.name}`);
+    return fn(...args);
+  };
+}
+
+function handleError(err, req, res, next) {
+  res.status(500).json({ message: "잠시 후 다시 시도해 주세요" });
+}
+
+const app = express();
+app.get("/orders", (req, res) => { throw new Error("DB timeout"); });
+app.use(withLogging(handleError));
+
+const server = app.listen(0, async () => {
+  const res = await fetch(`http://localhost:${server.address().port}/orders`);
+  console.log(res.status, res.headers.get("content-type"));
+  console.log((await res.text()).replace(/\s+/g, " "));
+  console.log("handleError.length:", handleError.length, "/ 감싼 함수:", withLogging(handleError).length);
+  server.close();
+});
+```
+
+```text
+500 text/html; charset=utf-8
+<!DOCTYPE html> <html lang="en"> <head> <meta charset="utf-8"> <title>Error</title> </head> <body> <pre>Internal Server Error</pre> </body> </html> 
+handleError.length: 4 / 감싼 함수: 0
+```
+
+Express 4.22와 5.3에서 똑같이 나온 결과다. 클라이언트가 받기로 한 JSON 대신 Express 기본 에러 페이지가 나갔다. `→ handleError` 로그도 한 줄 없다. 래퍼가 아예 불리지 않았다. 원인은 마지막 줄에 있다. Express는 함수의 `length`, 즉 매개변수 개수가 4인 미들웨어만 에러 처리기로 본다. 래퍼는 `(...args)`라서 `length`가 0이다.
+
+함수를 값처럼 주고받을 수 있다는 건 자바스크립트의 큰 장점이다. 그런데 함수는 숫자 같은 단순한 값이 아니라 이름, 매개변수 개수, `this`를 가진 객체이고, 받는 쪽은 그중 무엇이든 볼 수 있다. 이 글은 함수를 넘기고, 받고, 감쌀 때 무엇이 따라가고 무엇이 떨어지는지 정리한다. 출력은 Node.js 22와 크로미움(React 19.3)에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 함수를 만드는 문법은 [함수 선언문, 표현식, 화살표 함수](/posts/js-function-forms)에서, 넘긴 함수가 바깥 변수를 기억하는 원리는 [클로저](/posts/js-closures)에서 다룬다. 비동기 콜백의 문제(제어의 역전, 놓치는 예외, 중첩)는 [콜백 지옥](/posts/js-callback-hell)이 따로 다룬다.
+
+## 함수를 값처럼 다룬다는 말
+
+자바스크립트에서 함수는 일급 함수다. 숫자나 문자열 같은 다른 값과 똑같이 다룰 수 있다는 뜻이다. 변수에 담고, 객체와 배열에 넣고, 인자로 넘기고, 반환할 수 있다.
+
+```js
+function shout(text) { return text.toUpperCase() + "!"; }
+const say = shout;                       // 변수에 담는다
+const actions = { greet: shout };        // 객체 속성에 담는다
+const list = [shout, (t) => t + "?"];    // 배열에 담는다
+function twice(fn, v) { return fn(fn(v)); }   // 인자로 받는다
+function makeSuffix(s) { return (t) => t + s; } // 반환한다
+
+console.log(say("hi"), actions.greet("yo"), list[1]("왜"));
+console.log(twice(makeSuffix("~"), "음"));
+shout.calls = 0;
+console.log(typeof shout, shout instanceof Object, shout.length, Object.keys(shout));
+```
+
+```text
+HI! YO! 왜?
+음~~
+function true 1 [ 'calls' ]
+```
+
+마지막 줄이 이 성질의 바탕이다. 함수는 호출할 수 있는 객체다. `length`, `name` 같은 속성이 있고, 속성을 더 붙일 수도 있다. `say = shout`는 함수를 복사하는 게 아니라 같은 함수 객체를 가리키는 이름을 하나 더 만드는 것이다. 객체를 대입할 때와 같은 규칙이고, 이건 [원시값과 참조](/posts/js-primitive-vs-reference)에서 다룬다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="이름 넷이 함수 객체 하나를 가리킨다"
+  nodes={[
+    { id: "fn", label: "함수 객체", sub: "name, length, calls", x: 200, y: 125, w: 150 },
+    { id: "shout", label: "shout", sub: "선언한 이름", x: 70, y: 40, w: 100 },
+    { id: "say", label: "say", sub: "변수", x: 330, y: 40, w: 90 },
+    { id: "obj", label: "actions.greet", sub: "객체 속성", x: 85, y: 215, w: 130 },
+    { id: "arr", label: "list[0]", sub: "배열 칸", x: 315, y: 215, w: 100 },
+  ]}
+  edges={[
+    { from: "shout", to: "fn" },
+    { from: "say", to: "fn" },
+    { from: "obj", to: "fn" },
+    { from: "arr", to: "fn" },
+  ]}
+/>
+
+함수를 인자로 받거나 함수를 반환하는 함수를 고차 함수라고 하고, 인자로 넘겨져 나중에 불리는 함수를 콜백 함수라고 한다. `map`, `addEventListener`, `setTimeout`, Express의 `app.use`가 모두 고차 함수고, 거기 넘기는 함수가 콜백이다. 위의 `twice`는 함수를 받는 고차 함수, `makeSuffix`는 함수를 돌려주는 고차 함수다.
+
+## 받는 쪽은 함수의 무엇을 보나
+
+받는 쪽이 함수를 부르기만 할 것 같지만, 실제로는 함수 객체의 여러 부분을 본다.
+
+- 인자 개수(`length`). Express는 4개면 에러 미들웨어, 아니면 일반 미들웨어로 나눈다. Mocha 같은 테스트 도구는 테스트 함수가 `done`을 받는지(`length`가 1 이상인지)로 콜백 방식 테스트를 가린다.
+- 이름(`name`). 스택 트레이스, React 개발자 도구의 컴포넌트 이름, 로그에 쓰인다.
+- 반환값. `map`은 쓰고, `forEach`는 버린다. `sort`는 음수, 0, 양수를 기대한다.
+- 같은 객체인지. `removeEventListener`, React의 의존성 배열과 `memo`는 함수를 참조로 비교한다.
+
+받는 쪽이 콜백을 언제, 몇 번, 어떤 인자로 부르는지도 받는 쪽이 정한다. `map`이 콜백에 인자를 세 개 넘겨서 `["10", "10", "10"].map(parseInt)`가 `[10, NaN, 2]`가 되는 퍼즐은 [map, filter, reduce](/posts/js-array-transform)에서, `forEach`가 async 콜백의 Promise를 버리는 문제는 [async/await](/posts/js-async-await)에서, 같은 API가 콜백을 어떨 때는 바로 어떨 때는 나중에 부르면 생기는 순서 버그는 [콜백 지옥](/posts/js-callback-hell)에서 다룬다. 이 글은 함수 객체 쪽, 즉 넘기는 함수가 무엇을 들고 가는지에 집중한다.
+
+처음 버그를 그림으로 따라가 보자. 아래 그림에서 다음을 누르면 에러가 Express 라우터 안에서 어디로 흘러가는지 보인다.
+
+<SequenceDiagram
+  caption="length가 0인 래퍼는 에러 처리기 목록에서 빠진다"
+  actors={[
+    { id: "route", label: "GET /orders" },
+    { id: "router", label: "Express 라우터" },
+    { id: "wrap", label: "래퍼 (length 0)" },
+    { id: "final", label: "기본 처리기" },
+  ]}
+  steps={[
+    { from: "route", to: "router", label: "throw Error", title: "라우트에서 에러가 난다", detail: "Express가 에러를 잡아 다음 에러 처리기를 찾기 시작한다." },
+    { from: "router", to: "wrap", label: "length === 4 ?", title: "인자 개수를 본다", detail: "에러가 있을 때는 인자가 넷인 미들웨어만 부른다. 래퍼는 0이다.", payload: "fn.length → 0" },
+    { from: "router", to: "router", label: "건너뜀", title: "일반 미들웨어로 취급한다", detail: "에러 상황에서 일반 미들웨어는 부르지 않고 지나간다. 로그도 안 찍힌다." },
+    { from: "router", to: "final", label: "남은 처리기 없음", title: "끝까지 못 찾는다", detail: "등록된 에러 처리기가 없다고 보고 Express 기본 처리기에 넘긴다." },
+    { from: "final", to: "route", label: "500 HTML", title: "기본 에러 페이지", detail: "JSON 대신 HTML 에러 페이지가 나간다.", payload: "<pre>Internal Server Error</pre>" },
+  ]}
+/>
+
+## 함수를 감싸는 함수
+
+`withLogging`처럼 함수를 받아서 기능을 덧붙인 새 함수를 돌려주는 고차 함수는 아주 흔하다. 로깅, 실행 시간 재기, 재시도, 캐싱, 권한 검사를 원래 함수를 고치지 않고 붙일 수 있다. 이 방식은 객체 버전으로 보면 [데코레이터 패턴](/posts/pattern-decorator)이고, 계산 결과를 기억하는 래퍼는 [메모이제이션](/posts/js-memoization), 인자를 미리 받아 두는 래퍼는 [커링과 부분 적용](/posts/js-currying-partial)에서 다룬다.
+
+실행 시간을 재는 래퍼로 감싸면 무엇이 바뀌는지 보자.
+
+```js
+function withTiming(fn) {
+  return function timed(...args) {
+    const start = performance.now();
+    try {
+      return fn.apply(this, args);
+    } finally {
+      const ms = performance.now() - start;
+      console.log(`${fn.name} ${ms >= 5 ? "느림" : "빠름"}`);
+    }
+  };
+}
+function slowSum(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s; }
+const timedSum = withTiming(slowSum);
+console.log(timedSum(10));
+console.log(timedSum(50_000_000));
+console.log(timedSum.name, timedSum.length);
+```
+
+```text
+slowSum 빠름
+45
+slowSum 느림
+1249999975000000
+timed 0
+```
+
+반환값은 그대로 전달됐다. `try/finally`라서 원래 함수가 던져도 시간은 찍히고 에러는 그대로 위로 올라간다. 그런데 이름은 `timed`, `length`는 0이 됐다. 겉보기에는 같은 일을 하는 함수지만, 함수 객체로서는 전혀 다른 함수다.
+
+<SequenceDiagram
+  caption="부르는 쪽은 래퍼만 안다"
+  actors={[
+    { id: "caller", label: "부르는 쪽" },
+    { id: "timed", label: "timed (래퍼)" },
+    { id: "orig", label: "slowSum" },
+  ]}
+  steps={[
+    { from: "caller", to: "timed", label: "timedSum(10)", title: "래퍼를 부른다", detail: "부르는 쪽 손에 있는 건 timed다. name도 length도 timed의 것이다." },
+    { from: "timed", to: "timed", label: "start = now()", title: "앞에서 할 일", detail: "원래 함수를 부르기 전에 시간을 잰다." },
+    { from: "timed", to: "orig", label: "fn.apply(this, args)", title: "원래 함수에 넘긴다", detail: "받은 this와 인자를 그대로 넘긴다. fn은 클로저로 기억하고 있다." },
+    { from: "orig", to: "timed", label: "45", title: "결과가 돌아온다", detail: "원래 함수는 래퍼가 있는 줄 모른다." },
+    { from: "timed", to: "caller", label: "45", title: "뒤에서 할 일을 하고 돌려준다", detail: "finally에서 로그를 찍고 결과를 그대로 넘긴다.", payload: "slowSum 빠름" },
+  ]}
+/>
+
+래퍼가 원래 함수를 계속 기억하는 건 [클로저](/posts/js-closures) 덕분이다. 래퍼를 만들 때마다 `fn`을 담은 새 환경이 생긴다.
+
+## 감쌀 때 잃어버리는 것들
+
+래퍼를 쓸 때 놓치기 쉬운 것을 순서대로 짚는다.
+
+`this`. 처음의 `withLogging`은 화살표 함수 안에서 `fn(...args)`로 불렀다. 이렇게 부르면 원래 함수의 `this`는 `undefined`다. 메서드를 감싸면 바로 깨진다. 래퍼를 일반 함수로 만들고 `fn.apply(this, args)`로 넘겨야 래퍼가 받은 `this`가 원래 함수로 간다.
+
+반환값. `return`을 빼먹으면 래퍼는 항상 `undefined`를 돌려준다. async 함수를 감쌌다면 Promise를 돌려줘야 부르는 쪽이 `await`할 수 있다. 래퍼 안에서 `await` 없이 `try/catch`를 쓰면 원래 함수가 돌려준 Promise의 거부는 잡히지 않는다.
+
+`name`과 `length`. 처음 버그가 이것이다. 함수를 보고 판단하는 라이브러리 앞에서는 래퍼가 다르게 취급된다. `name`과 `length`는 쓰기 불가 속성이라 대입으로는 안 바뀌고, `Object.defineProperty`로 바꿔야 한다.
+
+붙어 있던 속성. 원래 함수에 `fn.displayName`이나 `fn.calls` 같은 속성을 붙여 두었다면 래퍼에는 없다.
+
+고친 래퍼로 다시 돌려 보자.
+
+```js
+function withLogging(fn) {
+  const wrapped = function (...args) {
+    console.log(`→ ${fn.name}`);
+    return fn.apply(this, args);
+  };
+  Object.defineProperty(wrapped, "length", { value: fn.length });
+  Object.defineProperty(wrapped, "name", { value: `logged(${fn.name})` });
+  return wrapped;
+}
+// 서버 코드는 같고, 응답 상태와 본문, 래퍼의 name과 length를 찍었다.
+```
+
+```text
+→ handleError
+500 {"message":"잠시 후 다시 시도해 주세요"}
+logged(handleError) 4
+```
+
+이제 래퍼가 불리고 JSON이 나간다. 이름에 `logged(...)`를 넣어 두면 스택 트레이스에서 래퍼 겹이 보여서 디버깅도 쉽다. 아래 그림에서 조각을 눌러 보면 각 줄이 무엇을 지키는지 볼 수 있다.
+
+<UrlAnatomy
+  caption="원래 함수의 모습을 지키는 래퍼"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "fn", display: "function (...args) {", title: "일반 함수로 만든다", description: "화살표 함수는 자기 this가 없어서 받은 this를 넘길 수 없다. 래퍼는 일반 함수로 만든다.", required: true },
+    { key: "apply", display: "return fn.apply(this, args);", title: "this, 인자, 반환값을 그대로", description: "받은 this와 인자를 원래 함수에 넘기고, 결과를 그대로 돌려준다. return을 빼면 항상 undefined가 나간다.", required: true },
+    { key: "length", display: "defineProperty(length)", title: "인자 개수를 맞춘다", description: "Express 에러 미들웨어처럼 length를 보는 코드가 있다. 대입으로는 안 바뀌어서 defineProperty를 쓴다.", code: "Object.defineProperty(wrapped, \"length\", { value: fn.length });" },
+    { key: "name", display: "defineProperty(name) }", title: "이름을 남긴다", description: "로그와 스택 트레이스에서 어떤 함수를 감쌌는지 보이게 한다." },
+  ]}
+/>
+
+TypeScript의 데코레이터나 lodash의 `_.memoize`, `_.debounce`도 함수를 감싼다. 이런 래퍼가 `length`를 지켜 주는지는 라이브러리마다 다르니, `length`나 `name`에 기대는 코드 앞에 래퍼를 둘 때는 한 번 찍어 보고 쓴다.
+
+## 넘기는 순간 사라지는 this
+
+래퍼만의 문제가 아니다. 메서드를 그냥 콜백으로 넘겨도 객체와의 연결이 끊긴다.
+
+```js
+class Counter {
+  count = 0;
+  increment() { this.count += 1; return this.count; }
+}
+const c = new Counter();
+const fn = c.increment;
+try { fn(); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+console.log([1, 2].map(() => c.increment()));
+console.log([1].map(c.increment.bind(c)));
+```
+
+```text
+TypeError: Cannot read properties of undefined (reading 'count')
+[ 1, 2 ]
+[ 3 ]
+```
+
+`c.increment`라고 쓰는 순간 꺼내는 건 함수 객체 하나다. `c`는 따라가지 않는다. `this`는 함수에 붙어 있는 게 아니라 부를 때 `c.increment()`처럼 점 앞에 무엇이 있느냐로 정해지기 때문이다. 받는 쪽이 `fn()`처럼 그냥 부르면 `this`는 `undefined`다(클래스 본문은 strict 모드다). `addEventListener("click", this.onClick)`이나 `setTimeout(obj.save, 1000)`에서 같은 일이 생긴다. 화살표 함수로 감싸서 `c.increment()` 형태로 부르게 하거나, `bind`로 `this`를 묶은 새 함수를 넘긴다. 규칙 전체는 [this 바인딩](/posts/js-this-binding)과 [call, apply, bind](/posts/js-call-apply-bind)에 있다.
+
+반대 방향의 실수도 흔하다. 함수를 넘겨야 할 자리에 함수를 호출한 결과를 넘기는 것이다.
+
+```js
+setTimeout(save(), 1000);          // save가 지금 실행되고, 반환값 undefined가 넘어간다
+setTimeout(save, 1000);            // save를 넘긴다
+setTimeout(() => save(id), 1000);  // 인자가 필요하면 감싼다
+```
+
+크로미움에서 `setTimeout(undefined, 10)`을 돌려 보면 에러 없이 타이머 id만 돌려준다. 브라우저는 함수가 아닌 값을 문자열로 바꿔 코드로 실행하려 하고, `"undefined"`라는 코드는 아무 일도 하지 않기 때문이다. Node.js 22는 `TypeError`를 던진다(`The "callback" argument must be of type function. Received undefined`). 같은 코드가 서버에서는 터지고 브라우저에서는 조용히 실패하는 셈이다.
+
+## 모양이 같아도 다른 함수
+
+함수는 객체라서 같은지 비교할 때 내용이 아니라 참조를 본다. 소스 코드가 글자 하나까지 같아도 따로 만든 함수는 다른 함수다. 이벤트 리스너를 떼어 낼 때 이 성질이 드러난다.
+
+```js
+const target = new EventTarget();
+let calls = 0;
+
+target.addEventListener("resize", () => { calls += 1; });
+target.removeEventListener("resize", () => { calls += 1; }); // 다른 함수다
+
+const onResize = () => { calls += 1; };
+target.addEventListener("resize", onResize);
+target.addEventListener("resize", onResize);              // 같은 함수는 한 번만 붙는다
+
+target.dispatchEvent(new Event("resize"));
+console.log("호출 수:", calls);
+
+target.removeEventListener("resize", onResize);
+calls = 0;
+target.dispatchEvent(new Event("resize"));
+console.log("onResize를 뗀 뒤:", calls);
+
+const controller = new AbortController();
+target.addEventListener("resize", () => { calls += 1; }, { signal: controller.signal });
+controller.abort();
+calls = 0;
+target.dispatchEvent(new Event("resize"));
+console.log("abort 뒤:", calls);
+```
+
+```text
+호출 수: 2
+onResize를 뗀 뒤: 1
+abort 뒤: 1
+```
+
+<AlgoTrace
+  caption="리스너 목록은 함수 객체의 참조로 관리된다"
+  memoryLabel="resize 리스너 목록"
+  cells={["add(익명A)", "remove(익명B)", "add(onResize) ×2", "remove(onResize)", "add+abort"]}
+  steps={[
+    { pointer: 0, memory: ["익명A"], caption: "익명 함수 A가 붙는다." },
+    { pointer: 1, memory: ["익명A"], caption: "B는 모양만 같은 새 함수다. 목록에 없으니 아무것도 안 뗀다." },
+    { pointer: 2, memory: ["익명A", "onResize"], caption: "같은 참조는 한 번만 들어간다. 이벤트 한 번에 2번 불린다." },
+    { pointer: 3, memory: ["익명A"], caption: "같은 참조로 떼니 onResize만 빠진다. 1번 불린다." },
+    { pointer: 4, found: [4], memory: ["익명A"], caption: "signal로 붙인 함수는 abort()로 빠진다. A는 끝까지 남는다." },
+  ]}
+/>
+
+처음 붙인 익명 함수는 끝까지 떨어지지 않았다. 떼어 낼 방법이 없다. 참조를 어디에도 저장해 두지 않았기 때문이다. `signal` 옵션은 크롬 90, 파이어폭스 86, 사파리 15 무렵부터 지원하고, 리스너 여러 개를 한 번에 정리할 때 편하다.
+
+SPA에서 화면을 오가면서 이런 리스너가 남으면 같은 이벤트가 두세 번씩 처리되고, 콜백이 잡고 있는 데이터까지 메모리에 남는다. 확인은 크롬 개발자 도구 Elements 패널의 Event Listeners 탭이나 콘솔의 `getEventListeners(window)`로 한다. 찾고 고치는 순서는 [메모리 누수](/posts/js-memory-leak)에서 다룬다.
+
+## React에서 함수를 넘기는 자리
+
+React 코드는 함수를 넘기는 일로 가득하다. 자식이 부모에게 알릴 때 `onChange` 같은 콜백 props를 받고, `useEffect`에 effect 함수를 넘기고, `useState`의 setter에 함수를 넘긴다. 이 글에서 본 성질이 그대로 나타난다.
+
+참조 비교부터 보자. JSX 안에서 `onClick={() => remove(item.id)}`처럼 쓰면 렌더링마다 새 함수 객체가 생긴다. 모양은 같아도 앞의 리스너 예제처럼 다른 함수다. 대부분은 문제가 없지만, `memo`로 감싼 자식에 넘기면 props가 매번 달라 보여서 `memo`가 듣지 않고, `useEffect`의 의존성에 넣으면 effect가 매 렌더링 다시 돈다. 언제 `useCallback`으로 고정할지는 [React는 언제 다시 그리나](/posts/react-rerender)에서 다룬다. effect 안에서 `addEventListener`를 했다면 정리 함수에서 같은 함수 객체로 떼야 한다. effect 안에 함수를 정의하고 정리 함수에서 그 이름으로 떼면 짝이 맞는다.
+
+```js
+useEffect(() => {
+  const onResize = () => setWidth(window.innerWidth);
+  window.addEventListener("resize", onResize);
+  return () => window.removeEventListener("resize", onResize);
+}, []);
+```
+
+setter에 함수를 넘기는 것은 값과 함수가 어떻게 다른지 보여 준다.
+
+```js
+function Likes() {
+  const [a, setA] = useState(0);
+  const [b, setB] = useState(0);
+  const addThreeWithValue = () => { setA(a + 1); setA(a + 1); setA(a + 1); };
+  const addThreeWithUpdater = () => { setB((n) => n + 1); setB((n) => n + 1); setB((n) => n + 1); };
+  console.log(`render a=${a} b=${b}`);
+  return (
+    <>
+      <button onClick={addThreeWithValue}>a</button>
+      <button onClick={addThreeWithUpdater}>b</button>
+    </>
+  );
+}
+```
+
+```text
+render a=0 b=0
+render a=1 b=0
+render a=1 b=3
+```
+
+버튼 a, b를 차례로 눌렀다. `setA(a + 1)`은 지금 렌더링의 `a`인 0에 1을 더한 값 1을 세 번 넣는다. `setB((n) => n + 1)`은 "이전 값을 받아 1을 더하라"는 함수를 넘긴다. React는 이 함수들을 줄 세워 두었다가 다음 렌더링에서 앞 결과를 다음 함수에 넘기며 차례로 부른다.
+
+<AlgoTrace
+  caption="업데이터 함수는 줄을 섰다가 앞 결과를 이어받는다"
+  memoryLabel="b의 업데이트 큐"
+  cells={["setB(n => n+1)", "setB(n => n+1)", "setB(n => n+1)", "다음 렌더링"]}
+  steps={[
+    { pointer: 0, memory: ["n => n+1"], caption: "값이 아니라 함수를 큐에 넣는다. 아직 계산하지 않는다." },
+    { pointer: 1, memory: ["n => n+1", "n => n+1"], caption: "두 번째 함수가 뒤에 선다." },
+    { pointer: 2, memory: ["n => n+1", "n => n+1", "n => n+1"], caption: "세 번째도 선다. 핸들러가 끝난다." },
+    { pointer: 3, memory: ["0 → 1", "1 → 2", "2 → 3"], caption: "렌더링할 때 0부터 차례로 넘기며 부른다." },
+    { pointer: 3, found: [3], memory: ["b = 3"], caption: "결과는 3이다. 값을 넘긴 a는 1이었다." },
+  ]}
+/>
+
+값을 넘기면 계산은 내가 지금 하고, 함수를 넘기면 계산을 받는 쪽이 알맞은 때에 한다. 이 차이가 [클로저](/posts/js-closures)의 오래된 값 문제를 푸는 열쇠이기도 하다. 함수를 props로 넘겨서 렌더링할 내용을 부모가 정하게 하는 render props나 `children`에 함수를 넘기는 패턴도 같은 생각이다. 무엇을 그릴지라는 동작을 값처럼 넘긴다.
+
+## 연습: 재시도 래퍼 만들기
+
+감싸는 함수를 직접 만들어 보자. `withRetry(fn, times)`는 `fn`이 던지면 최대 `times`번까지 다시 부르는 함수를 돌려준다. 앞에서 짚은 것들, 즉 `this`와 인자, 반환값, `name`, `length`를 모두 지켜야 테스트를 통과한다. 아래쪽 `run`은 테스트용으로, 처음 몇 번 실패하는 함수를 만들어 넘긴다.
+
+<CodePlayground
+  caption="withRetry: 감싸도 원래 함수처럼 보이게"
+  functionName="run"
+  initialCode={`function withRetry(fn, times) {
+  // fn을 감싼 함수를 돌려준다.
+  // 감싼 함수는 fn이 던지면 최대 times번까지 다시 부르고,
+  // 끝내 실패하면 마지막 에러를 던진다.
+  // this와 인자를 그대로 넘기고, name은 "retry(원래 이름)", length는 원래 값으로 맞춘다.
+  return fn;
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(kind, failFirst, times) {
+  if (kind === "flaky") {
+    let calls = 0;
+    const flaky = (x) => {
+      calls += 1;
+      if (calls <= failFirst) throw new Error("fail " + calls);
+      return x * 2;
+    };
+    try {
+      return { result: withRetry(flaky, times)(21), calls };
+    } catch (e) {
+      return { error: e.message, calls };
+    }
+  }
+  if (kind === "this") {
+    const cart = { base: 10, add(x) { return this.base + x; } };
+    cart.safeAdd = withRetry(cart.add, times);
+    return cart.safeAdd(5);
+  }
+  if (kind === "meta") {
+    const wrapped = withRetry(function save(order, options) {}, times);
+    return [wrapped.name, wrapped.length];
+  }
+}`}
+  solution={`function withRetry(fn, times) {
+  const wrapped = function (...args) {
+    let lastError;
+    for (let i = 0; i < times; i++) {
+      try {
+        return fn.apply(this, args);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  };
+  Object.defineProperty(wrapped, "name", { value: "retry(" + fn.name + ")" });
+  Object.defineProperty(wrapped, "length", { value: fn.length });
+  return wrapped;
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(kind, failFirst, times) {
+  if (kind === "flaky") {
+    let calls = 0;
+    const flaky = (x) => {
+      calls += 1;
+      if (calls <= failFirst) throw new Error("fail " + calls);
+      return x * 2;
+    };
+    try {
+      return { result: withRetry(flaky, times)(21), calls };
+    } catch (e) {
+      return { error: e.message, calls };
+    }
+  }
+  if (kind === "this") {
+    const cart = { base: 10, add(x) { return this.base + x; } };
+    cart.safeAdd = withRetry(cart.add, times);
+    return cart.safeAdd(5);
+  }
+  if (kind === "meta") {
+    const wrapped = withRetry(function save(order, options) {}, times);
+    return [wrapped.name, wrapped.length];
+  }
+}`}
+  tests={[
+    { args: ["flaky", 0, 3], expected: { result: 42, calls: 1 }, label: "한 번에 성공" },
+    { args: ["flaky", 2, 3], expected: { result: 42, calls: 3 }, label: "두 번 실패하고 세 번째에 성공" },
+    { args: ["flaky", 5, 3], expected: { error: "fail 3", calls: 3 }, label: "끝내 실패하면 마지막 에러" },
+    { args: ["this", 0, 2], expected: 15, label: "메서드로 써도 this가 유지된다" },
+    { args: ["meta", 0, 2], expected: ["retry(save)", 2], label: "name과 length를 맞춘다" },
+  ]}
+/>
+
+실제 서비스의 재시도는 비동기 요청을 다루고, 간격을 두고 다시 보내며, 다시 보내도 안전한 요청인지 따져야 한다. 그 이야기는 [재시도](/posts/retries)에 있다.
+
+## 다시 에러 처리기로
+
+처음 버그는 래퍼가 원래 함수의 일을 대신하면서 원래 함수의 모습(`length`)까지는 대신하지 못해서 생겼다. 함수를 값으로 넘길 때는 받는 쪽이 그 함수의 무엇을 보는지 생각한다. 부르기만 하는지, 인자 개수나 이름을 보는지, 참조로 비교하는지, 어떤 `this`로 부르는지. 이 질문에 답이 서면 Express의 에러 처리기, 사라진 `this`, 떨어지지 않는 리스너, React의 의존성 배열이 모두 같은 종류의 문제로 보인다. 다음 글 [클로저](/posts/js-closures)에서는 넘겨진 함수가 자기가 태어난 자리의 변수를 어떻게 들고 다니는지 본다.
+
+## 면접에서 나올 만한 질문
+
+### 일급 함수란 무엇인가요?
+
+함수를 다른 값과 똑같이 다룰 수 있다는 뜻이다. 변수에 담고, 객체나 배열에 넣고, 인자로 넘기고, 반환할 수 있다. 자바스크립트에서 함수는 호출할 수 있는 객체라서 `name`, `length` 같은 속성을 갖고, 대입하면 복사가 아니라 같은 함수 객체를 가리킨다.
+
+### 고차 함수와 콜백의 관계를 설명해 주세요.
+
+고차 함수는 함수를 인자로 받거나 함수를 반환하는 함수이고, 콜백은 그렇게 넘겨져 나중에 불리는 함수다. `map`은 고차 함수, `map`에 넘긴 함수가 콜백이다. 고차 함수는 틀을 갖고 콜백이 할 일을 정해서, 같은 틀을 여러 동작에 재사용할 수 있다. 함수를 받아 함수를 돌려주는 래퍼도 고차 함수다.
+
+### 함수를 감싸는 래퍼를 만들 때 주의할 점은요?
+
+원래 함수처럼 보이고 동작해야 한다. 받은 `this`와 인자를 `fn.apply(this, args)`로 넘기고 반환값(async면 Promise)을 그대로 돌려준다. `name`과 `length`는 래퍼의 것으로 바뀌므로, Express 에러 미들웨어처럼 `length`를 보는 코드 앞에서는 `Object.defineProperty`로 맞춘다. 화살표 함수로 래퍼를 만들면 `this`를 넘길 수 없다.
+
+### Express 에러 미들웨어를 래퍼로 감쌌더니 불리지 않는 이유는요?
+
+Express는 함수의 `length`가 4인 미들웨어만 에러 처리기로 본다. `(...args) => ...` 같은 래퍼는 나머지 매개변수라 `length`가 0이어서 일반 미들웨어로 취급되고, 에러 상황에서는 건너뛴다. 결국 기본 처리기가 HTML 에러 페이지를 보낸다. 래퍼의 매개변수를 넷으로 쓰거나 `length`를 원래 값으로 맞춘다.
+
+### 메서드를 콜백으로 넘기면 this가 사라지는 이유와 해결책은요?
+
+`obj.method`라고 쓰면 함수 객체만 꺼내지고 `obj`는 따라가지 않는다. `this`는 함수에 붙어 있지 않고 부르는 방식으로 정해지는데, 받는 쪽이 그냥 `fn()`으로 부르면 strict 모드에서 `undefined`가 된다. 화살표 함수로 감싸 `() => obj.method()`로 넘기거나 `obj.method.bind(obj)`로 묶은 새 함수를 넘긴다.
+
+### removeEventListener가 리스너를 떼지 못하는 흔한 이유는요?
+
+등록할 때와 다른 함수 객체를 넘겼기 때문이다. 함수는 참조로 비교해서, 인라인 화살표 함수는 모양이 같아도 매번 새 객체라 짝이 맞지 않는다. 함수를 변수에 담아 같은 참조로 떼거나, `addEventListener`의 `signal` 옵션에 `AbortController`의 signal을 넘기고 `abort()`로 한꺼번에 뗀다.
+
+### setState에 값을 넘길 때와 함수를 넘길 때는 무엇이 다른가요?
+
+값을 넘기면 지금 렌더링의 변수로 계산한 결과가 들어가서, 한 핸들러에서 `setCount(count + 1)`을 세 번 불러도 1만 오른다. 함수를 넘기면 React가 업데이터를 큐에 쌓았다가 이전 결과를 다음 함수에 넘기며 차례로 불러 3이 오른다. 이전 상태로 다음 상태를 계산할 때는 함수를 넘기고, 이 방식은 effect 안 콜백이 오래된 값을 읽는 문제도 피한다.
+
+### 렌더링마다 새로 만드는 인라인 함수는 성능 문제인가요?
+
+대부분은 아니다. 함수를 만드는 비용은 작다. 문제가 되는 건 참조가 매번 바뀐다는 점이 쓰이는 곳, 즉 `memo`로 감싼 자식의 props나 `useEffect`, `useMemo`의 의존성에 넣을 때다. 그때만 `useCallback`으로 참조를 고정하고, 그 밖에는 읽기 쉬운 인라인 함수가 낫다.

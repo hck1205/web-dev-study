@@ -1,0 +1,686 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-logical-order");
+
+월별 수강 신청 수를 뽑으려고 이렇게 썼다.
+
+```sql
+SELECT date_trunc('month', enrolled_at) AS enrolled_at, count(*)
+FROM enrollments
+GROUP BY enrolled_at
+ORDER BY enrolled_at;
+```
+
+석 달 치 데이터라 세 줄이 나와야 하는데 아홉 줄이 나온다. 10월이 일곱 번 찍히고 count는 전부 1이다. 에러는 없다. 별칭을 바꿔 `AS month`로 쓰고 `GROUP BY month`로 고치면 세 줄이 나온다. 이름 하나 바꿨을 뿐인데 결과가 달라진다.
+
+이 글은 이런 일이 왜 생기는지를 PostgreSQL이 `SELECT` 한 문장을 읽는 순서로 설명한다. FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT라는 기본 순서와 `WHERE`에서 별칭이 안 되는 이유는 [SELECT와 NULL 글](/posts/sql-select-where-null)에, 집계와 `HAVING`의 기초는 [SQLD 집계 글](/posts/sqld-group-by-having)에 있다. 여기서는 그 순서 사이사이에 끼어 있는 단계(집계 계산, 윈도 함수, `DISTINCT`)와, 그 단계가 만드는 이상한 에러와 조용한 버그를 하나씩 본다. 같은 데이터로 이어지는 글이 둘 더 있다. 조건 연산자는 [WHERE 연산자 글](/posts/sql-filtering-operators), 집계 숫자가 틀리는 경우는 [집계 함정 글](/posts/sql-aggregation-pitfalls)이다.
+
+기준은 Ubuntu 24.04의 PostgreSQL 16.15다. 아래 출력은 모두 이 환경에서 실제로 돌린 결과이고, psql에서 `\pset null '(null)'`을 켠 상태다. MySQL 8과 다른 점은 그때그때 짧게 적는다. MySQL은 직접 돌려 보지 않고 문서로 확인했다.
+
+## 수강생 다섯, 강의 다섯, 수강 기록 아홉
+
+작은 온라인 강의 사이트를 만든다. 세 글이 이 데이터를 같이 쓴다. DB 시간대는 `Asia/Seoul`로 맞춰 둔다(`ALTER DATABASE ... SET timezone TO 'Asia/Seoul'`).
+
+```sql
+CREATE TABLE students (
+  id    integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name  text NOT NULL,
+  city  text                                  -- 모르면 NULL
+);
+
+CREATE TABLE courses (
+  id       integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  title    text    NOT NULL,
+  category text    NOT NULL,
+  price    integer NOT NULL
+);
+
+CREATE TABLE enrollments (
+  id          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  student_id  integer NOT NULL REFERENCES students (id),
+  course_id   integer NOT NULL REFERENCES courses (id),
+  status      text    NOT NULL,               -- active, completed, refunded
+  score       integer,                         -- 아직 채점 전이면 NULL
+  enrolled_at timestamptz NOT NULL
+);
+
+INSERT INTO students (name, city) VALUES
+  ('kim', 'seoul'), ('lee', 'busan'), ('park', NULL), ('choi', 'seoul'), ('jung', 'daegu');
+
+INSERT INTO courses (title, category, price) VALUES
+  ('SQL 기초', 'db', 30000), ('PostgreSQL 튜닝', 'db', 90000), ('React 입문', 'frontend', 50000),
+  ('Docker 실전', 'infra', 70000), ('100% 실습 Git', 'infra', 20000);
+
+INSERT INTO enrollments (student_id, course_id, status, score, enrolled_at) VALUES
+  (1, 1, 'completed', 90,   '2026-09-28 10:00+09'),
+  (1, 2, 'completed', 70,   '2026-10-01 00:00+09'),
+  (2, 1, 'active',    NULL, '2026-10-05 13:20+09'),
+  (2, 3, 'completed', 85,   '2026-10-12 09:00+09'),
+  (1, 3, 'active',    NULL, '2026-10-15 08:00+09'),
+  (4, 2, 'completed', 95,   '2026-10-20 21:00+09'),
+  (3, 1, 'active',    NULL, '2026-10-31 18:30+09'),
+  (3, 4, 'completed', 60,   '2026-10-31 23:59:30+09'),
+  (4, 3, 'refunded',  NULL, '2026-11-01 00:00+09');
+```
+
+수강 기록에 이름을 붙여 보면 이렇다. jung은 아직 아무것도 듣지 않았다.
+
+```sql
+SELECT e.id, s.name, e.status, e.score
+FROM enrollments e JOIN students s ON s.id = e.student_id
+ORDER BY e.id;
+```
+
+```text
+ id | name |  status   | score
+----+------+-----------+--------
+  1 | kim  | completed |     90
+  2 | kim  | completed |     70
+  3 | lee  | active    | (null)
+  4 | lee  | completed |     85
+  5 | kim  | active    | (null)
+  6 | choi | completed |     95
+  7 | park | active    | (null)
+  8 | park | completed |     60
+  9 | choi | refunded  | (null)
+(9 rows)
+```
+
+## 한 문장이 여덟 단계를 지난다
+
+"완강한 강의의 평균 점수가 80점 이상인 수강생 중 상위 두 명"을 구한다. 절이 거의 다 들어간 문장이다.
+
+```sql
+SELECT s.name, round(avg(e.score), 1) AS avg_score
+FROM enrollments e
+JOIN students s ON s.id = e.student_id
+WHERE e.status = 'completed'
+GROUP BY s.name
+HAVING avg(e.score) >= 80
+ORDER BY avg_score DESC
+LIMIT 2;
+```
+
+```text
+ name | avg_score
+------+-----------
+ choi |      95.0
+ lee  |      85.0
+(2 rows)
+```
+
+PostgreSQL 문서(SELECT 명령의 Description)는 이 문장을 처리하는 순서를 이렇게 적는다. FROM의 테이블을 읽고 붙인다 → WHERE로 행을 거른다 → GROUP BY로 묶고 집계를 계산한다 → HAVING으로 묶음을 거른다 → SELECT 목록을 계산한다(윈도 함수는 여기서) → DISTINCT로 겹친 행을 뺀다 → UNION 같은 집합 연산 → ORDER BY로 정렬 → LIMIT·OFFSET으로 자른다. 기초 글의 일곱 단계 사이에 집계 계산, 윈도 함수, `DISTINCT`가 끼어 있다는 점이 이 글의 출발점이다. 아래 문장의 조각을 눌러 보면 각 절이 몇 번째인지 나온다.
+
+<UrlAnatomy
+  caption="적는 순서와 처리 순서. 번호가 처리 순서다"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "select", display: "SELECT s.name, round(avg(e.score), 1) AS avg_score", title: "⑤ 보여 줄 값 만들기", description: "맨 앞에 적지만 다섯 번째다. avg(e.score) 자체는 ③에서 이미 계산돼 있고, 여기서는 그 값을 round로 다듬고 avg_score라는 이름을 붙인다. 윈도 함수도 이 단계에서 계산된다.", required: true },
+    { key: "from", display: "FROM enrollments e JOIN students s ON ...", title: "① 테이블 읽고 붙이기", description: "가장 먼저 한다. 수강 기록 아홉 줄에 이름을 붙인다. 테이블 별칭 e, s는 여기서 생겨서 뒤의 모든 절이 쓴다.", required: true },
+    { key: "where", display: "WHERE e.status = 'completed'", title: "② 행 거르기", description: "묶기 전, 한 줄씩 본다. 다섯 줄이 남는다. 집계도 별칭도 아직 없어서 둘 다 여기서는 못 쓴다." },
+    { key: "group", display: "GROUP BY s.name", title: "③ 묶고 집계 계산", description: "이름이 같은 줄을 한 묶음으로 만들고, 묶음마다 avg(e.score) 같은 집계를 계산한다. 이 뒤로는 한 줄이 한 묶음이다." },
+    { key: "having", display: "HAVING avg(e.score) >= 80", title: "④ 묶음 거르기", description: "③에서 계산한 평균으로 묶음을 거른다. SELECT보다 먼저라서 avg_score라는 이름은 아직 없다. 그래서 식을 다시 적었다." },
+    { key: "order", display: "ORDER BY avg_score DESC", title: "⑦ 정렬", description: "SELECT(⑤)와 DISTINCT(⑥)가 끝난 뒤라 SELECT에서 붙인 이름을 쓸 수 있다." },
+    { key: "limit", display: "LIMIT 2", title: "⑧ 자르기", description: "정렬된 결과에서 앞의 두 줄만 남긴다. 맨 마지막이다." },
+  ]}
+/>
+
+단계마다 남는 행을 따라가 보자. 아래 그림에서 다음을 누르면 아홉 줄이 두 줄이 되는 과정이 나온다.
+
+<AlgoTrace
+  caption="아홉 줄이 단계를 지나며 두 줄이 된다"
+  memoryLabel="중간 결과"
+  cells={["kim 완료 90", "kim 완료 70", "lee 수강 -", "lee 완료 85", "kim 수강 -", "choi 완료 95", "park 수강 -", "park 완료 60", "choi 환불 -"]}
+  steps={[
+    { memory: [], caption: "① FROM과 JOIN. 수강 기록 아홉 줄에 이름이 붙었다. 아직 아무것도 버리지 않았다." },
+    { found: [0, 1, 3, 5, 7], memory: [], caption: "② WHERE status = 'completed'. 한 줄씩 보고 완료한 다섯 줄만 남긴다." },
+    { found: [0, 1, 3, 5, 7], memory: ["kim: 90, 70", "lee: 85", "choi: 95", "park: 60"], caption: "③ GROUP BY s.name. 이름별로 네 묶음이 생긴다. 이제부터 한 줄은 한 사람이다." },
+    { found: [0, 1, 3, 5, 7], memory: ["kim 80", "lee 85", "choi 95", "park 60"], caption: "③ 집계. 묶음마다 avg(score)를 계산한다. HAVING보다 먼저 끝나 있어야 HAVING이 이 값을 쓴다." },
+    { found: [0, 1, 3, 5], memory: ["kim 80", "lee 85", "choi 95"], caption: "④ HAVING avg >= 80. park 묶음이 빠진다. 행이 아니라 묶음을 거른다." },
+    { found: [0, 1, 3, 5], memory: ["kim 80.0", "lee 85.0", "choi 95.0"], caption: "⑤ SELECT. round로 다듬고 avg_score라는 이름을 붙인다. 이름은 여기서 처음 생긴다." },
+    { found: [0, 1, 3, 5], memory: ["choi 95.0", "lee 85.0", "kim 80.0"], caption: "⑦ ORDER BY avg_score DESC. 방금 생긴 이름으로 정렬한다." },
+    { found: [3, 5], memory: ["choi 95.0", "lee 85.0"], caption: "⑧ LIMIT 2. 앞의 두 줄만 남는다. 처음 아홉 줄 중 결과에 기여한 건 두 줄이다." },
+  ]}
+/>
+
+이 순서는 "DB가 실제로 이 순서대로 일한다"는 뜻이 아니다. 결과가 이 순서로 계산한 것과 같아야 한다는 약속이다. 실제 실행은 플래너가 바꾼다. 이 차이는 뒤의 [실행 계획 섹션](#논리-순서와-실제-실행은-다르다)에서 본다. 이름이 어디서 보이고, 무엇이 언제 계산되는지는 이 약속만으로 정해진다.
+
+## 별칭은 SELECT를 지나야 생긴다
+
+`avg_score`는 ⑤에서 생긴다. 그러니 그보다 앞인 `WHERE`(②)와 `HAVING`(④)에서는 없다. `HAVING`에서 써 보면 `WHERE`와 같은 에러가 난다.
+
+```sql
+SELECT student_id, count(*) AS done
+FROM enrollments
+GROUP BY student_id
+HAVING done >= 2;
+```
+
+```text
+ERROR:  column "done" does not exist
+LINE 1: ... done FROM enrollments GROUP BY student_id HAVING done >= 2;
+                                                             ^
+```
+
+`ORDER BY`는 ⑦이니 쓸 수 있다고 배웠다. 그런데 `ORDER BY -done`처럼 식 안에 넣으면 똑같이 `column "done" does not exist`가 난다.
+
+PostgreSQL 문서의 규칙이 이렇다. `ORDER BY`에서 출력 컬럼 이름은 그 이름 하나만 단독으로 쓸 때만 알아본다. `-done`이나 `done * 2`처럼 식 안에 들어가면 그 이름을 입력 테이블의 컬럼에서 찾고, 없으니 에러다. 식으로 정렬하려면 `ORDER BY count(*) DESC`처럼 원래 식을 쓰거나 `DESC`를 붙인다.
+
+`GROUP BY`는 ③으로 `SELECT`보다 앞인데, 앞에서 본 것처럼 `GROUP BY month`는 됐다. 표준 SQL은 이걸 허용하지 않는다. PostgreSQL이 편의로 `GROUP BY`에서 출력 컬럼 이름과 위치 번호(`GROUP BY 1`)를 받아 주는 것이다. 순서 원칙에서 벗어난 예외라서, 다음 섹션의 함정이 여기서 생긴다.
+
+어떤 절에서 별칭이 보이는지 그림으로 모으면 이렇다. 점선은 PostgreSQL만의 예외다.
+
+<ConceptDiagram
+  caption="SELECT 별칭이 보이는 곳과 안 보이는 곳"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "alias", label: "SELECT 별칭", sub: "⑤에서 생김", x: 200, y: 130, w: 120 },
+    { id: "where", label: "WHERE", sub: "② 안 보임", x: 70, y: 45 },
+    { id: "having", label: "HAVING", sub: "④ 안 보임", x: 330, y: 45 },
+    { id: "group", label: "GROUP BY", sub: "③ PG 확장", x: 70, y: 215 },
+    { id: "order", label: "ORDER BY", sub: "⑦ 단독일 때", x: 330, y: 215 },
+  ]}
+  edges={[
+    { from: "alias", to: "order", label: "보인다" },
+    { from: "alias", to: "group", label: "예외", dashed: true },
+    { from: "where", to: "alias", label: "먼저 실행", arrow: "none", dashed: true },
+    { from: "having", to: "alias", label: "먼저 실행", arrow: "none", dashed: true },
+  ]}
+/>
+
+MySQL 8은 여기서 더 너그럽다. `GROUP BY`, `HAVING`, `ORDER BY`에서 모두 별칭을 받는다(`WHERE`는 MySQL도 안 된다). 그래서 MySQL에서 돌던 `HAVING done >= 2`가 PostgreSQL로 옮기면 깨진다. 이식할 쿼리라면 `HAVING`에는 식을 그대로 적어 두는 쪽이 안전하다.
+
+## 같은 이름이면 GROUP BY는 원래 컬럼을 고른다
+
+이제 처음의 아홉 줄을 설명할 수 있다. 별칭을 원래 컬럼과 같은 `enrolled_at`으로 지었다. `GROUP BY enrolled_at`의 `enrolled_at`은 두 가지로 읽힌다. 테이블의 원래 컬럼(입력 컬럼)일 수도 있고, `date_trunc`로 만든 출력 컬럼일 수도 있다.
+
+PostgreSQL 문서는 이 경우를 정해 두었다. 이름이 겹치면 `GROUP BY`는 입력 컬럼으로 읽는다. 그래서 잘리기 전의 시각, 초까지 다른 아홉 개의 값으로 묶였다. 묶음이 아홉 개니 count는 모두 1이고, 화면에는 그걸 다시 월로 자른 값이 보이니 10월이 일곱 번 찍힌다. `SELECT`의 `date_trunc('month', enrolled_at)`는 묶은 컬럼으로 계산한 식이라 문법상 문제도 없다. 에러가 나지 않는 이유다.
+
+```text
+      enrolled_at       | count
+------------------------+-------
+ 2026-09-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     1
+ 2026-11-01 00:00:00+09 |     1
+(9 rows)
+```
+
+`ORDER BY`는 반대로 고른다. 이름이 겹치면 출력 컬럼으로 읽는다. 같은 문장 안에서 같은 이름이 절마다 다른 것을 가리킬 수 있다는 뜻이다. 실제로 `SELECT name, -id AS id FROM students ORDER BY id`를 돌리면 원래 id 순서(kim부터)가 아니라 바뀐 값 기준으로 jung(-5)부터 kim(-1)까지 나온다.
+
+고치는 방법은 셋이다. 별칭을 원래 컬럼과 다르게 짓는다(`AS month`). 위치 번호로 묶는다(`GROUP BY 1`). 식을 그대로 적는다(`GROUP BY date_trunc('month', enrolled_at)`). 위치 번호는 `SELECT` 목록이 바뀌면 조용히 다른 컬럼으로 묶이니 오래 살 쿼리에는 첫째나 셋째가 낫다.
+
+```sql
+SELECT date_trunc('month', enrolled_at) AS month, count(*)
+FROM enrollments
+GROUP BY month
+ORDER BY month;
+```
+
+```text
+         month          | count
+------------------------+-------
+ 2026-09-01 00:00:00+09 |     1
+ 2026-10-01 00:00:00+09 |     7
+ 2026-11-01 00:00:00+09 |     1
+(3 rows)
+```
+
+리포트 숫자가 "묶음마다 1"로 고르게 나오면 이 함정을 먼저 의심한다. 묶음 수가 원본 행 수와 같다는 건 아무것도 묶이지 않았다는 신호다. `SELECT count(*) FROM (원래 쿼리) t`와 원본 행 수를 나란히 놓아 보면 바로 보인다.
+
+## 윈도 함수는 HAVING보다 늦다
+
+수강생마다 가장 최근 수강 한 건만 보려고 `row_number()`를 붙이고 `WHERE`로 거른다.
+
+```sql
+SELECT id, student_id,
+       row_number() OVER (PARTITION BY student_id ORDER BY enrolled_at DESC) AS rn
+FROM enrollments
+WHERE rn = 1;
+```
+
+```text
+ERROR:  column "rn" does not exist
+LINE 1: ...ER BY enrolled_at DESC) AS rn FROM enrollments WHERE rn = 1;
+                                                                ^
+```
+
+별칭이 없다는 에러는 앞에서 본 그대로다. 그럼 식을 직접 `WHERE`에 넣으면 될까.
+
+```sql
+SELECT id, student_id
+FROM enrollments
+WHERE row_number() OVER (PARTITION BY student_id ORDER BY enrolled_at DESC) = 1;
+```
+
+```text
+ERROR:  window functions are not allowed in WHERE
+LINE 1: SELECT id, student_id FROM enrollments WHERE row_number() OV...
+                                                     ^
+```
+
+윈도 함수는 ⑤에서 계산된다. `WHERE`, `GROUP BY`, `HAVING`이 모두 끝나고 남은 행을 보고 번호를 매기는 것이라, 그 앞 단계에서는 값이 존재할 수가 없다. 집계 함수를 `WHERE`에 넣으면 `aggregate functions are not allowed in WHERE`가 나오는 것과 같은 이유다. 거꾸로, 윈도 함수가 집계보다 늦으니 집계 결과에 순위를 매기는 건 된다. `GROUP BY student_id`와 함께 `rank() OVER (ORDER BY count(*) DESC)`를 쓰면 3건인 1번이 1위, 2건인 나머지 셋이 공동 2위로 나온다.
+
+윈도 결과로 거르려면 한 단계 바깥으로 감싼다. 서브쿼리 안에서 ⑤까지 끝내 두면, 바깥 쿼리의 ①이 그 결과를 테이블처럼 읽고 ②에서 거른다. CTE(`WITH`)로 써도 같다.
+
+```sql
+SELECT id, student_id, enrolled_at
+FROM (
+  SELECT id, student_id, enrolled_at,
+         row_number() OVER (PARTITION BY student_id ORDER BY enrolled_at DESC) AS rn
+  FROM enrollments
+) t
+WHERE rn = 1
+ORDER BY student_id;
+```
+
+```text
+ id | student_id |      enrolled_at
+----+------------+------------------------
+  5 |          1 | 2026-10-15 08:00:00+09
+  4 |          2 | 2026-10-12 09:00:00+09
+  8 |          3 | 2026-10-31 23:59:30+09
+  9 |          4 | 2026-11-01 00:00:00+09
+(4 rows)
+```
+
+Snowflake, BigQuery, DuckDB 같은 일부 DB에는 윈도 결과를 바로 거르는 `QUALIFY` 절이 있다. PostgreSQL 16과 MySQL 8에는 없다. 윈도 함수 자체(프레임, 순위 함수의 차이)는 [PostgreSQL 윈도 함수 글](/posts/sql-window-functions-pg)에서 다룬다.
+
+아래 그림은 지금까지의 에러를 한 길 위에 놓은 것이다. 행이 단계를 차례로 지나는데, 아직 생기지 않은 이름을 앞 단계에서 찾으면 거기서 막힌다.
+
+<NetworkTopology
+  caption="이름을 찾는 단계가 이름이 생기는 단계보다 앞이면 막힌다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "from", label: "① FROM", x: 55, y: 60, w: 80 },
+    { id: "where", label: "② WHERE", x: 150, y: 60, w: 80 },
+    { id: "group", label: "③ GROUP", x: 245, y: 60, w: 80 },
+    { id: "having", label: "④ HAVING", x: 340, y: 60, w: 80 },
+    { id: "select", label: "⑤ SELECT", x: 340, y: 185, w: 80 },
+    { id: "distinct", label: "⑥ DISTINCT", x: 245, y: 185, w: 80 },
+    { id: "order", label: "⑦ ORDER", x: 150, y: 185, w: 80 },
+    { id: "limit", label: "⑧ LIMIT", x: 55, y: 185, w: 80 },
+  ]}
+  links={[
+    { from: "from", to: "where" },
+    { from: "where", to: "group" },
+    { from: "group", to: "having" },
+    { from: "having", to: "select" },
+    { from: "select", to: "distinct" },
+    { from: "distinct", to: "order" },
+    { from: "order", to: "limit" },
+  ]}
+  steps={[
+    { path: ["from", "where", "group", "having", "select", "distinct", "order", "limit"], packet: "rows", title: "행이 지나는 길", detail: "행은 이 순서로 단계를 지난다. 단계마다 행이 줄거나, 묶이거나, 값이 붙는다." },
+    { path: ["from", "where"], packet: "done", blocked: true, highlight: ["select"], title: "WHERE에서 별칭 찾기", detail: "done은 ⑤ SELECT에서 생긴다. ②에서는 아직 없어서 column does not exist가 난다." },
+    { path: ["from", "where", "group", "having"], packet: "done", blocked: true, highlight: ["select"], title: "HAVING에서 별칭 찾기", detail: "HAVING도 SELECT보다 앞이다. MySQL은 받아 주지만 PostgreSQL은 막는다." },
+    { path: ["from", "where"], packet: "rn", blocked: true, highlight: ["select"], title: "WHERE에서 윈도 함수", detail: "윈도 함수는 ⑤에서 계산된다. WHERE에 넣으면 window functions are not allowed in WHERE." },
+    { path: ["from", "where", "group", "having", "select", "distinct", "order"], packet: "done", title: "ORDER BY에서 별칭 찾기", detail: "⑦은 ⑤ 뒤라 done이 있다. 단, 이름 하나만 단독으로 쓸 때만이다." },
+    { path: ["from", "where", "group", "having", "select", "distinct", "order"], packet: "at", blocked: true, highlight: ["distinct"], title: "DISTINCT 뒤에서 버린 컬럼", detail: "⑥에서 SELECT에 없는 컬럼은 이미 사라졌다. 그 컬럼으로 정렬하려 하면 막힌다. 다음 섹션의 에러다." },
+  ]}
+/>
+
+## DISTINCT는 정렬보다 먼저 겹친 걸 뺀다
+
+최근에 수강한 순서로 수강생 번호를 중복 없이 뽑으려 했다.
+
+```sql
+SELECT DISTINCT student_id FROM enrollments ORDER BY enrolled_at DESC;
+```
+
+```text
+ERROR:  for SELECT DISTINCT, ORDER BY expressions must appear in select list
+LINE 1: ...ECT DISTINCT student_id FROM enrollments ORDER BY enrolled_a...
+                                                             ^
+```
+
+`DISTINCT`(⑥)가 `ORDER BY`(⑦)보다 먼저다. ⑥이 끝나면 남는 건 `student_id` 하나짜리 행 네 개다. 1번 수강생은 수강 시각이 세 개였는데 그중 어느 시각으로 정렬할지 정할 수가 없다. 그래서 PostgreSQL은 `SELECT DISTINCT`에서 `ORDER BY`가 `SELECT` 목록에 있는 것만 쓰도록 막는다. MySQL 8도 이 경우를 에러로 막는다.
+
+"어느 시각으로"를 정해 주면 풀린다. 최근 순이라면 수강생마다 가장 늦은 시각이다. `DISTINCT`가 아니라 `GROUP BY`와 `max`로 쓴다.
+
+```sql
+SELECT student_id, max(enrolled_at) AS last_at
+FROM enrollments
+GROUP BY student_id
+ORDER BY last_at DESC;
+```
+
+```text
+ student_id |        last_at
+------------+------------------------
+          4 | 2026-11-01 00:00:00+09
+          3 | 2026-10-31 23:59:30+09
+          1 | 2026-10-15 08:00:00+09
+          2 | 2026-10-12 09:00:00+09
+(4 rows)
+```
+
+PostgreSQL에는 `DISTINCT ON`도 있다. 이건 ⑥과 ⑦이 손을 잡는 문법이다. 먼저 `ORDER BY`로 정렬해 두고, 괄호 안 값이 같은 행 중 첫 줄만 남긴다. 그래서 `ORDER BY`의 앞부분이 `DISTINCT ON`의 식과 같아야 한다.
+
+`DISTINCT ON (student_id)`에 `ORDER BY enrolled_at DESC`만 주면 `SELECT DISTINCT ON expressions must match initial ORDER BY expressions` 에러가 난다. `ORDER BY student_id, enrolled_at DESC`로 쓰면 앞의 윈도 함수 서브쿼리와 같은 네 줄이 나온다. 쓰는 법과 성능은 [PostgreSQL 리포트 쿼리 글](/posts/postgres-reporting-sql)에 있다. 결과를 최근 순으로 다시 보고 싶으면 이걸 서브쿼리로 감싸 바깥에서 한 번 더 정렬한다.
+
+## LIMIT은 맨 끝이고, 동점은 정해 주지 않으면 운이다
+
+수강 건수가 많은 수강생 두 명을 뽑는다.
+
+```sql
+SELECT student_id, count(*) AS cnt
+FROM enrollments
+GROUP BY student_id
+ORDER BY cnt DESC
+LIMIT 2;
+```
+
+```text
+ student_id | cnt
+------------+-----
+          1 |   3
+          3 |   2
+(2 rows)
+```
+
+2등 자리에 3번이 나왔다. 그런데 2, 3, 4번은 모두 2건이다. 3번이 뽑힌 이유는 없다. 정렬 기준이 같은 행끼리의 순서는 SQL이 정해 주지 않고, 지금은 해시 집계가 내놓은 순서가 우연히 그랬을 뿐이다. 데이터가 바뀌거나 실행 계획이 바뀌면 2번이나 4번이 나올 수 있다. 아래 그림에서 다음을 누르면 동점이 있을 때 `LIMIT`이 무엇을 자르는지 볼 수 있다.
+
+<AlgoTrace
+  caption="LIMIT 2는 동점 중 하나를 아무렇게나 고른다"
+  memoryLabel="결과"
+  cells={["1번 3건", "3번 2건", "4번 2건", "2번 2건"]}
+  steps={[
+    { memory: [], caption: "ORDER BY cnt DESC가 끝난 상태. 2, 3, 4번은 모두 2건이라 셋 사이의 순서는 정해지지 않았다." },
+    { pointer: 0, found: [0], memory: ["1번 3건"], caption: "LIMIT 2의 첫 줄. 1번은 혼자 3건이라 확실하다." },
+    { pointer: 1, found: [0, 1], memory: ["1번 3건", "3번 2건"], caption: "둘째 줄. 동점 셋 중 지금 맨 앞에 있는 3번이 들어간다. 다음 실행에서도 3번이라는 보장은 없다." },
+    { found: [0, 1, 2, 3], memory: ["1번", "3번", "4번", "2번"], caption: "WITH TIES. 마지막 줄과 정렬 값이 같은 행을 모두 함께 가져온다. 2건인 셋이 다 들어온다." },
+    { pointer: 3, found: [0, 3], memory: ["1번 3건", "2번 2건"], caption: "ORDER BY cnt DESC, student_id. 동점이면 번호 순으로 정해 주니 언제 돌려도 1번, 2번이다." },
+  ]}
+/>
+
+동점을 다루는 방법은 두 가지다. 하나는 정렬 기준 끝에 유일한 값을 붙여 순서를 완전히 정하는 것이다.
+
+```sql
+SELECT student_id, count(*) AS cnt
+FROM enrollments
+GROUP BY student_id
+ORDER BY cnt DESC, student_id
+LIMIT 2;
+```
+
+```text
+ student_id | cnt
+------------+-----
+          1 |   3
+          2 |   2
+(2 rows)
+```
+
+다른 하나는 동점을 모두 받는 것이다. PostgreSQL 13부터 표준 문법 `FETCH FIRST n ROWS WITH TIES`를 쓸 수 있다. "상위 2명"이 아니라 "2등까지 모두"가 필요한 시상 같은 경우에 맞다.
+
+```sql
+SELECT student_id, count(*) AS cnt
+FROM enrollments
+GROUP BY student_id
+ORDER BY cnt DESC
+FETCH FIRST 2 ROWS WITH TIES;
+```
+
+```text
+ student_id | cnt
+------------+-----
+          1 |   3
+          3 |   2
+          4 |   2
+          2 |   2
+(4 rows)
+```
+
+`WITH TIES`는 무엇이 동점인지 알아야 하니 `ORDER BY` 없이 쓰면 `WITH TIES cannot be specified without ORDER BY clause` 에러가 난다. MySQL 8에는 이 문법이 없어서 `RANK()`로 순위를 매긴 뒤 감싸서 거른다.
+
+페이지를 나눌 때 이 문제가 커진다. `OFFSET`으로 페이지를 넘기면 페이지마다 쿼리를 따로 실행하니, 동점 행의 순서가 실행마다 달라지면 같은 행이 두 페이지에 나오거나 어느 페이지에도 안 나온다. 목록 API의 `ORDER BY`에는 항상 마지막에 기본 키를 붙인다. 뒤 페이지로 갈수록 느려지는 `OFFSET` 자체의 문제는 [쿼리 고쳐 쓰기 글](/posts/sql-query-rewrite)의 키셋 페이지네이션에서 다룬다.
+
+## 집계는 CASE보다 먼저 끝난다
+
+순서 이야기의 마지막은 "조건으로 막았는데 왜 에러가 나나"다. 점수가 0인 기록이 생기는 상황을 트랜잭션 안에서 만들고, 기록이 100건을 넘을 때만 점수 역수 합을 보려고 했다. 지금은 9건이니 `CASE`가 거짓이 되어 NULL이 나와야 한다.
+
+```sql
+BEGIN;
+UPDATE enrollments SET score = 0 WHERE id = 8;
+SELECT CASE WHEN count(*) > 100 THEN sum(100 / score) END AS ratio
+FROM enrollments;
+ROLLBACK;
+```
+
+```text
+UPDATE 1
+ERROR:  division by zero
+```
+
+`CASE`는 조건이 거짓이면 `THEN` 쪽을 계산하지 않는다. 그런데 `sum(100 / score)`는 `CASE`가 계산되는 ⑤보다 훨씬 앞인 ③에서, 행을 묶으면서 이미 계산된다. `CASE`가 조건을 보는 시점에는 집계가 끝나 있고, 0으로 나누는 에러는 그때 이미 났다. PostgreSQL 문서도 같은 예를 들며 `CASE`가 집계 안의 식을 막지 못한다고 적어 둔다. 0이 섞일 수 있는 나눗셈은 집계 안에서 막는다.
+
+```sql
+SELECT CASE WHEN count(*) > 100 THEN sum(100 / nullif(score, 0)) END AS ratio
+FROM enrollments;   -- 위 트랜잭션 안에서 실행
+```
+
+```text
+ ratio
+--------
+ (null)
+(1 row)
+```
+
+비슷한 오해가 `WHERE`의 `AND`다. `WHERE score <> 0 AND 100 / score > 1`처럼 앞 조건으로 뒤 조건을 지키려는 코드는 프로그래밍 언어의 단락 평가를 기대한다. PostgreSQL 문서는 식의 하위 항목이 계산되는 순서를 정해 두지 않았다고 적는다. 플래너가 비용을 보고 조건 순서를 바꿀 수 있다는 뜻이다. 이 데이터에서는 에러 없이 돌았지만, 그건 보장이 아니다. 순서가 꼭 필요하면 `CASE WHEN score <> 0 THEN 100 / score > 1 END`처럼 `CASE`로 감싸거나 `nullif`를 쓴다.
+
+## 논리 순서와 실제 실행은 다르다
+
+여기까지의 순서는 의미를 정하는 약속이다. 실제로는 플래너가 같은 결과를 더 싸게 내는 방법을 고른다. 앞 섹션까지 쓴 9줄짜리 테이블로는 차이가 안 보이니, 같은 모양의 20만 줄짜리 `enrollments_big`을 만들어 본다.
+
+```sql
+CREATE TABLE enrollments_big AS
+SELECT g AS id,
+       1 + (g % 20000) AS student_id,                     -- 수강생 2만 명
+       1 + (g % 5) AS course_id,
+       (ARRAY['active','completed','completed','refunded'])[1 + g % 4] AS status,
+       CASE WHEN g % 3 = 0 THEN NULL ELSE 40 + (g * 7) % 61 END AS score,
+       timestamptz '2026-01-01 00:00+09' + g * interval '137 seconds' AS enrolled_at
+FROM generate_series(1, 200000) g;
+ALTER TABLE enrollments_big ADD PRIMARY KEY (id);
+CREATE INDEX ON enrollments_big (enrolled_at);
+CREATE INDEX ON enrollments_big (student_id);
+ANALYZE enrollments_big;
+SET max_parallel_workers_per_gather = 0;   -- 계획을 읽기 쉽게 병렬 실행을 끈다
+```
+
+논리 순서대로라면 `ORDER BY ... LIMIT 5`는 20만 줄을 다 정렬한 뒤 다섯 줄을 남긴다. 실제 계획은 다르다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, student_id, enrolled_at FROM enrollments_big
+ORDER BY enrolled_at DESC LIMIT 5;
+```
+
+```text
+                                                                               QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..0.59 rows=5 width=16) (actual time=0.035..0.038 rows=5 loops=1)
+   ->  Index Scan Backward using enrollments_big_enrolled_at_idx on enrollments_big  (cost=0.42..6807.42 rows=200000 width=16) (actual time=0.034..0.036 rows=5 loops=1)
+ Planning Time: 0.394 ms
+ Execution Time: 0.057 ms
+(4 rows)
+```
+
+`Index Scan Backward` 줄의 `actual ... rows=5`를 본다. `enrolled_at` 인덱스는 이미 정렬돼 있으니 뒤에서부터 다섯 줄만 읽고 멈췄다. ⑦ 정렬과 ⑧ 자르기가 ① 읽기 안으로 녹아 들어간 셈이다. 인덱스가 없는 `score`로 정렬하면 이렇게 된다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, student_id, enrolled_at FROM enrollments_big
+ORDER BY score DESC NULLS LAST LIMIT 5;
+```
+
+```text
+                                                             QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=6921.93..6921.94 rows=5 width=20) (actual time=46.828..46.831 rows=5 loops=1)
+   ->  Sort  (cost=6921.93..7421.93 rows=200000 width=20) (actual time=46.827..46.828 rows=5 loops=1)
+         Sort Key: score DESC NULLS LAST
+         Sort Method: top-N heapsort  Memory: 25kB
+         ->  Seq Scan on enrollments_big  (cost=0.00..3600.00 rows=200000 width=20) (actual time=0.016..25.788 rows=200000 loops=1)
+ Planning Time: 0.044 ms
+ Execution Time: 46.854 ms
+(7 rows)
+```
+
+이번에는 `Seq Scan`이 `rows=200000`을 다 읽었다. 그래도 전부 정렬하지는 않았다. `Sort Method: top-N heapsort`는 `LIMIT`을 알고 상위 다섯 개만 힙에 유지하며 훑었다는 뜻이고, 메모리는 25kB였다. 0.057ms와 46.8ms, 결과는 같은 다섯 줄이다.
+
+`HAVING`도 마찬가지다. 집계가 없는 조건을 `HAVING`에 쓰면 논리적으로는 묶은 뒤에 거르지만, 플래너는 그 조건을 `WHERE`로 내려서 읽을 때부터 거른다.
+
+```sql
+EXPLAIN (COSTS OFF)
+SELECT student_id, count(*) FROM enrollments_big
+GROUP BY student_id
+HAVING student_id <= 100;
+```
+
+```text
+                           QUERY PLAN
+-----------------------------------------------------------------
+ HashAggregate
+   Group Key: student_id
+   ->  Bitmap Heap Scan on enrollments_big
+         Recheck Cond: (student_id <= 100)
+         ->  Bitmap Index Scan on enrollments_big_student_id_idx
+               Index Cond: (student_id <= 100)
+(6 rows)
+```
+
+`HAVING`에 쓴 조건이 `Index Cond`에 들어가 있다. 같은 조건을 `WHERE`에 써도 계획이 한 글자도 다르지 않았다. 그래도 사람이 읽는 쿼리로는 `WHERE`에 쓰는 게 맞다. 묶기 전에 거르는 조건과 묶은 뒤에 거르는 조건이 문장에서 구분되기 때문이다. 다른 DB가 이 최적화를 똑같이 해 준다는 보장도 없다.
+
+이 과정을 순서대로 놓으면 아래와 같다. 이름을 찾지 못하는 에러는 행을 한 줄도 읽기 전, 분석 단계에서 이미 난다는 점도 같이 보자.
+
+<SequenceDiagram
+  caption="논리 순서로 해석하고, 플래너가 실행 방법을 바꾼다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "parser", label: "파서·분석기" },
+    { id: "planner", label: "플래너" },
+    { id: "exec", label: "실행기" },
+  ]}
+  steps={[
+    { from: "app", to: "parser", label: "SQL 문자열", title: "문장을 받는다", detail: "문법을 확인하고 이름을 해석한다. 별칭이 어느 절에서 보이는지, GROUP BY의 이름이 입력 컬럼인지가 여기서 정해진다.", payload: "ORDER BY enrolled_at DESC LIMIT 5" },
+    { from: "parser", to: "app", label: "ERROR", title: "이름 에러는 여기서 난다", detail: "column does not exist, window functions are not allowed in WHERE는 행을 하나도 읽기 전에 나온다. 데이터 양과 상관없다." },
+    { from: "parser", to: "planner", label: "쿼리 트리", title: "의미가 정해진 트리", detail: "논리 순서대로 무엇을 계산할지가 정해진 상태다. 어떻게 계산할지는 아직 모른다." },
+    { from: "planner", to: "planner", label: "HAVING → WHERE", title: "조건을 앞으로 당긴다", detail: "집계가 없는 HAVING 조건은 WHERE로 내린다. 묶기 전에 행이 줄어든다." },
+    { from: "planner", to: "planner", label: "인덱스 역방향", title: "정렬을 인덱스로 대신한다", detail: "ORDER BY와 같은 순서의 인덱스가 있으면 정렬을 건너뛰고, LIMIT만큼만 읽게 만든다." },
+    { from: "planner", to: "exec", label: "실행 계획", title: "계획을 넘긴다", detail: "Limit 아래 Index Scan Backward. 논리 순서와 모양은 다르지만 결과는 같다." },
+    { from: "exec", to: "app", label: "5 rows", title: "다섯 줄만 읽고 끝", detail: "20만 줄 중 다섯 줄만 읽었다. actual rows=5가 그 증거다.", payload: "Execution Time: 0.057 ms" },
+  ]}
+/>
+
+현장에서 이걸 아는 효과는 두 가지다. 쿼리가 느릴 때 "정렬이 맨 뒤니까 어쩔 수 없다"고 넘기지 않고 `ORDER BY ... LIMIT`에 맞는 인덱스가 있는지 본다. 그리고 결과가 이상할 때는 실행 계획이 아니라 논리 순서로 따진다. 플래너는 결과를 바꾸지 않으니, 결과가 틀렸다면 문장의 의미가 틀린 것이다.
+
+## 에러 메시지에서 단계를 거꾸로 짚기
+
+PostgreSQL이 순서 때문에 내는 에러는 몇 가지로 정해져 있다. 메시지를 보면 어느 단계에서 무엇을 찾다 실패했는지 바로 보인다.
+
+| 메시지 | 무엇을 어디서 찾았나 | 고치는 방법 |
+|---|---|---|
+| `column "x" does not exist` (x가 별칭) | ②·④에서, 또는 ⑦의 식 안에서 ⑤의 이름 | 식을 다시 쓰거나 서브쿼리로 감싼다 |
+| `aggregate functions are not allowed in WHERE` | ②에서 ③의 집계 | 조건을 `HAVING`으로 옮긴다 |
+| `window functions are not allowed in WHERE` | ②에서 ⑤의 윈도 결과 | 서브쿼리·CTE로 감싸고 바깥에서 거른다 |
+| `column "x" must appear in the GROUP BY clause ...` | ⑤에서 ③이 버린 개별 값 | 묶음 기준에 넣거나 집계로 감싼다 |
+| `for SELECT DISTINCT, ORDER BY expressions must appear in select list` | ⑦에서 ⑥이 버린 컬럼 | `GROUP BY`와 `max`·`min`으로 바꾼다 |
+
+에러가 안 나는 쪽이 더 위험하다. 묶음마다 1이 나오는 리포트(입력 컬럼과 같은 별칭), 실행할 때마다 바뀌는 상위 N개(동점), 막았다고 생각한 0으로 나누기(집계 안의 식)는 테스트 데이터가 작을 때 잘 드러나지 않는다. 리뷰할 때 별칭 이름이 원래 컬럼과 같은지, `LIMIT` 앞의 `ORDER BY`가 행 하나를 딱 가리키는지를 먼저 본다. 셋째 줄의 `GROUP BY` 규칙과 PostgreSQL이 기본 키로 묶었을 때 봐주는 경우는 [집계 함정 글](/posts/sql-aggregation-pitfalls)에서 다룬다.
+
+## 단계를 직접 밟아 보기
+
+처음 쿼리를 배열로 직접 계산해 보면 순서가 손에 남는다. `rows`는 이름이 붙은 수강 기록이다. 완료한 기록만 남기고, 이름별로 묶어 평균 점수를 구하고(NULL은 빼고, 값이 없으면 `null`), 평균이 `minAvg` 이상인 묶음만 남기고, 평균을 소수 첫째 자리로 반올림한 `[이름, 평균]`을 만들고, 평균 내림차순·이름 오름차순으로 정렬해 앞의 `n`개를 돌려준다. 자바스크립트에서는 `null >= 0`이 `true`가 되니 조심한다. SQL에서 NULL과의 비교는 참이 아니다.
+
+<CodePlayground
+  caption="SELECT를 단계별로 계산하기"
+  functionName="topScorers"
+  initialCode={`function topScorers(rows, minAvg, n) {
+  // ② WHERE status = 'completed'
+  // ③ GROUP BY name, avg(score)
+  // ④ HAVING avg(score) >= minAvg
+  // ⑤ SELECT [name, round(avg, 1)]
+  // ⑦ ORDER BY avg DESC, name
+  // ⑧ LIMIT n
+  return [];
+}`}
+  solution={`function topScorers(rows, minAvg, n) {
+  // ② WHERE: 완료한 수강만 남긴다
+  const filtered = rows.filter((r) => r.status === "completed");
+  // ③ GROUP BY name
+  const groups = new Map();
+  for (const r of filtered) {
+    if (!groups.has(r.name)) groups.set(r.name, []);
+    groups.get(r.name).push(r);
+  }
+  // ③ 집계: avg는 NULL을 빼고 계산하고, 값이 하나도 없으면 NULL
+  const grouped = [...groups].map(([name, rs]) => {
+    const scores = rs.map((r) => r.score).filter((s) => s !== null);
+    const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    return { name, avg };
+  });
+  // ④ HAVING: NULL과의 비교는 참이 아니다
+  const having = grouped.filter((g) => g.avg !== null && g.avg >= minAvg);
+  // ⑤ SELECT
+  const selected = having.map((g) => [g.name, Math.round(g.avg * 10) / 10]);
+  // ⑦ ORDER BY avg DESC, name ASC
+  selected.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  // ⑧ LIMIT
+  return selected.slice(0, n);
+}`}
+  tests={[
+    { label: "본문 쿼리 (80점, 2명)", args: [[{ name: "kim", status: "completed", score: 90 }, { name: "kim", status: "completed", score: 70 }, { name: "lee", status: "active", score: null }, { name: "lee", status: "completed", score: 85 }, { name: "kim", status: "active", score: null }, { name: "choi", status: "completed", score: 95 }, { name: "park", status: "active", score: null }, { name: "park", status: "completed", score: 60 }, { name: "choi", status: "refunded", score: null }], 80, 2], expected: [["choi", 95], ["lee", 85]] },
+    { label: "조건 없이 모두", args: [[{ name: "kim", status: "completed", score: 90 }, { name: "kim", status: "completed", score: 70 }, { name: "lee", status: "completed", score: 85 }, { name: "choi", status: "completed", score: 95 }, { name: "park", status: "completed", score: 60 }], 0, 10], expected: [["choi", 95], ["lee", 85], ["kim", 80], ["park", 60]] },
+    { label: "점수가 모두 NULL인 묶음", args: [[{ name: "park", status: "completed", score: 60 }, { name: "jung", status: "completed", score: null }], 0, 10], expected: [["park", 60]] },
+    { label: "동점은 이름 순", args: [[{ name: "b", status: "completed", score: 80 }, { name: "a", status: "completed", score: 80 }, { name: "c", status: "completed", score: 81 }, { name: "c", status: "completed", score: 80 }], 0, 3], expected: [["c", 80.5], ["a", 80], ["b", 80]] },
+    { label: "아무도 못 넘을 때", args: [[{ name: "kim", status: "completed", score: 90 }], 100, 5], expected: [] },
+  ]}
+/>
+
+## 순서를 알면 에러가 설명된다
+
+`SELECT`는 FROM → WHERE → GROUP BY와 집계 → HAVING → SELECT와 윈도 함수 → DISTINCT → ORDER BY → LIMIT 순서로 의미가 정해진다. 어떤 이름이 어느 절에서 보이는지, 무엇이 언제 계산되는지가 모두 이 순서에서 나온다. 별칭이 `HAVING`에서 안 보이고, 윈도 함수를 `WHERE`에 못 쓰고, `DISTINCT` 뒤에 버린 컬럼으로 정렬하지 못하고, `CASE`가 집계 안의 나눗셈을 막지 못하는 것이 다 같은 이유다. 실제 실행은 플래너가 순서를 바꿔 더 싸게 하지만 결과는 바꾸지 않는다. 다음 글 [WHERE 연산자 글](/posts/sql-filtering-operators)에서는 ② 단계의 조건 하나하나가 왜 생각보다 많이 또는 적게 거르는지를 본다.
+
+## 면접에서 나올 만한 질문
+
+### SELECT 문은 어떤 순서로 처리되나요?
+
+FROM과 JOIN → WHERE → GROUP BY와 집계 계산 → HAVING → SELECT 목록(윈도 함수 포함) → DISTINCT → ORDER BY → LIMIT·OFFSET 순서로 의미가 정해진다. 적는 순서와 다르다. 이 순서 때문에 `WHERE`와 `HAVING`에서는 `SELECT`의 별칭을 못 쓰고 `ORDER BY`에서는 쓸 수 있다.
+
+### WHERE에서는 별칭을 못 쓰는데 ORDER BY에서는 되는 이유는요? 식 안에서는요?
+
+별칭은 SELECT 단계에서 생기고, `WHERE`는 그보다 앞이고 `ORDER BY`는 뒤라서다. 다만 PostgreSQL은 `ORDER BY`에서 별칭을 이름 하나로 단독으로 쓸 때만 알아보고, `-done`처럼 식 안에 넣으면 입력 컬럼에서 찾다가 에러를 낸다. 이때는 원래 식을 쓰거나 `DESC`를 쓴다.
+
+### 별칭을 원래 컬럼 이름과 같게 지으면 어떤 문제가 생기나요?
+
+PostgreSQL은 이름이 겹치면 `GROUP BY`는 입력 컬럼으로, `ORDER BY`는 출력 컬럼으로 읽는다. 그래서 `date_trunc('month', enrolled_at) AS enrolled_at`으로 만들고 `GROUP BY enrolled_at`을 쓰면 월이 아니라 원래 시각으로 묶여서 묶음마다 1인 결과가 에러 없이 나온다. 별칭을 다르게 짓거나 식을 그대로 묶는다.
+
+### 윈도 함수 결과로 행을 거르려면 어떻게 하나요?
+
+서브쿼리나 CTE로 한 번 감싸고 바깥 쿼리의 `WHERE`에서 거른다. 윈도 함수는 `WHERE`, `GROUP BY`, `HAVING`이 끝난 뒤 SELECT 단계에서 계산되니 같은 쿼리의 `WHERE`에서는 쓸 수 없다. Snowflake나 BigQuery의 `QUALIFY`가 이걸 한 문장으로 해 주지만 PostgreSQL 16과 MySQL 8에는 없다.
+
+### SELECT DISTINCT에서 SELECT에 없는 컬럼으로 정렬하면 왜 에러가 나나요?
+
+`DISTINCT`가 `ORDER BY`보다 먼저 겹친 행을 합치기 때문이다. 합쳐진 한 줄에 원래 값이 여러 개였다면 어느 값으로 정렬할지 정할 수 없다. "가장 최근 값으로" 같은 기준을 `GROUP BY`와 `max`로 정해 주거나 `DISTINCT ON`을 쓴다.
+
+### ORDER BY 없이 LIMIT을 쓰거나, 정렬 기준에 동점이 있으면 어떻게 되나요?
+
+어느 행이 나올지 보장되지 않는다. 지금은 우연히 같은 행이 나와도 데이터나 실행 계획이 바뀌면 달라지고, `OFFSET` 페이지네이션에서는 같은 행이 두 페이지에 나오거나 빠질 수 있다. 정렬 끝에 기본 키 같은 유일한 컬럼을 붙이거나, 동점을 다 받으려면 PostgreSQL 13부터 되는 `FETCH FIRST n ROWS WITH TIES`를 쓴다.
+
+### 논리적 처리 순서대로 DB가 실제로 실행하나요?
+
+아니다. 순서는 결과의 의미를 정하는 약속이고, 플래너는 같은 결과를 내는 더 싼 방법을 고른다. `ORDER BY ... LIMIT`은 같은 순서의 인덱스가 있으면 정렬 없이 앞의 몇 줄만 읽고, 집계 없는 `HAVING` 조건은 `WHERE`로 내려 읽을 때부터 거른다. `EXPLAIN ANALYZE`의 `actual rows`로 확인한다.
+
+### CASE로 조건을 걸었는데 집계 안에서 0으로 나누기 에러가 났습니다. 왜 그런가요?
+
+집계는 SELECT 단계의 `CASE`보다 앞인 묶기 단계에서 이미 계산되기 때문이다. `CASE`가 조건을 볼 때는 `sum(100 / score)`가 끝나 있다. 집계 안에서 `nullif(score, 0)`이나 `FILTER`로 막아야 하고, `WHERE`의 `AND`도 계산 순서가 보장되지 않으니 순서가 필요하면 `CASE`로 감싼다.

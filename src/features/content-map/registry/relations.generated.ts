@@ -2,9 +2,90 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "js-closures": {
+    "links": [
+      "js-function-forms",
+      "js-first-class-callbacks",
+      "js-scope-lexical",
+      "garbage-collection",
+      "js-var-let-const",
+      "js-memory-leak",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
+  "js-first-class-callbacks": {
+    "links": [
+      "js-function-forms",
+      "js-closures",
+      "js-callback-hell",
+      "js-primitive-vs-reference",
+      "js-array-transform",
+      "js-async-await",
+      "pattern-decorator",
+      "js-memory-leak",
+      "react-rerender",
+      "retries"
+    ],
+    "mentions": [
+      "js-spread-rest"
+    ]
+  },
+  "js-function-forms": {
+    "links": [
+      "js-first-class-callbacks",
+      "js-closures",
+      "js-hoisting-tdz",
+      "js-spread-rest",
+      "js-destructuring"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof"
+    ]
+  },
+  "sql-aggregation-pitfalls": {
+    "links": [
+      "sql-logical-order",
+      "sql-filtering-operators",
+      "sqld-group-by-having"
+    ],
+    "mentions": [
+      "db-modeling-normalization"
+    ]
+  },
+  "sql-filtering-operators": {
+    "links": [
+      "sql-logical-order",
+      "sql-aggregation-pitfalls",
+      "sql-select-where-null",
+      "db-index-pitfalls",
+      "sql-injection",
+      "postgres-jsonb-search"
+    ],
+    "mentions": [
+      "db-index",
+      "db-index-design"
+    ]
+  },
+  "sql-logical-order": {
+    "links": [
+      "sql-select-where-null",
+      "sqld-group-by-having",
+      "sql-filtering-operators",
+      "sql-aggregation-pitfalls",
+      "postgres-reporting-sql",
+      "sql-query-rewrite"
+    ],
+    "mentions": [
+      "db-sharding",
+      "db-type-columnar-olap",
+      "postgres-getting-started"
+    ]
+  },
   "js-spread-rest": {
     "links": [
       "js-destructuring",
+      "js-function-forms",
       "js-array-mutation"
     ],
     "mentions": []
@@ -38,6 +119,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pattern-iterator",
+      "js-function-forms",
       "js-truthy-falsy-typeof"
     ]
   },
@@ -68,6 +150,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "js-function-forms",
       "js-truthy-falsy-typeof",
       "js-destructuring"
     ]
@@ -83,6 +166,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rendering-strategies",
+      "js-function-forms",
       "http-status-codes"
     ]
   },
@@ -91,12 +175,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-promises",
       "js-async-await",
       "js-promise-combinators",
+      "js-first-class-callbacks",
       "event-loop",
       "saga-pattern"
     ],
     "mentions": [
       "json-crud-http",
-      "message-delivery-semantics"
+      "message-delivery-semantics",
+      "js-function-forms"
     ]
   },
   "layered-architecture": {
@@ -158,6 +244,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-scope-lexical"
     ],
     "mentions": [
+      "js-function-forms",
       "code-splitting"
     ]
   },
@@ -165,19 +252,25 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-var-let-const",
       "js-hoisting-tdz",
+      "js-closures",
       "js-memory-leak",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "js-function-forms"
+    ]
   },
   "js-var-let-const": {
     "links": [
       "js-scope-lexical",
       "js-hoisting-tdz",
+      "js-closures",
       "js-primitive-vs-reference",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "js-function-forms"
+    ]
   },
   "js-truthy-falsy-typeof": {
     "links": [
@@ -1576,6 +1669,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "k8s-architecture",
       "packet-capture-tcpdump",
+      "sql-aggregation-pitfalls",
       "osi-in-practice",
       "layer-ip-routing-icmp"
     ]
@@ -2727,6 +2821,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pythagorean-theorem",
+      "sql-filtering-operators",
       "db-modeling-normalization"
     ]
   },
@@ -2736,7 +2831,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ray-casting"
     ],
     "mentions": [
-      "db-type-key-value"
+      "db-type-key-value",
+      "sql-filtering-operators"
     ]
   },
   "geohash": {
@@ -3004,7 +3100,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-admission-control",
-      "mongodb-document-model"
+      "mongodb-document-model",
+      "js-closures"
     ]
   },
   "pattern-visitor": {
@@ -3040,6 +3137,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "ab-testing",
       "redis-basics",
+      "js-closures",
       "token-login"
     ]
   },
@@ -3210,7 +3308,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "operational-transform",
       "redis-basics",
       "microservices",
-      "crdt"
+      "crdt",
+      "js-closures"
     ]
   },
   "pattern-chain-of-responsibility": {
@@ -3843,6 +3942,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "js-first-class-callbacks",
       "resilience-patterns",
       "http-methods"
     ]
@@ -4013,6 +4113,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "js-function-forms",
       "http-status-codes",
       "structured-logging"
     ]
@@ -4288,7 +4389,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "loading-patterns",
-      "sql-batch-timeout-pool"
+      "sql-batch-timeout-pool",
+      "js-closures"
     ]
   },
   "distributed-lock": {
@@ -4859,7 +4961,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "streaming-ssr-suspense",
-      "rendering-strategies"
+      "rendering-strategies",
+      "js-closures"
     ]
   },
   "react-server-components": {
@@ -6036,7 +6139,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
-      "sqld-group-by-having"
+      "sqld-group-by-having",
+      "js-closures"
     ]
   },
   "sql-basics": {
@@ -6411,6 +6515,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "sql-filtering-operators",
       "event-loop"
     ]
   },
@@ -6745,8 +6850,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "js-function-forms",
       "garbage-collection",
       "event-loop",
+      "js-closures",
       "layer-mtu-fragmentation",
       "dns"
     ]
@@ -6854,6 +6961,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "core-web-vitals",
+      "js-function-forms",
       "js-primitive-vs-reference"
     ]
   },
