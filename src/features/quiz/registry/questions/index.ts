@@ -410,6 +410,7 @@ import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { SSRF } from "./ssrf";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
+import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
 import { TAIL_LATENCY } from "./tail-latency";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
@@ -854,6 +855,7 @@ export const QUESTION_SETS = [
   SSRF,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
+  SYSTEM_DESIGN_CONCEPTS_MAP,
   TAIL_LATENCY,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,

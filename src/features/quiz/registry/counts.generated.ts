@@ -413,6 +413,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "ssrf": 7,
   "streaming-ssr-suspense": 6,
   "structured-logging": 7,
+  "system-design-concepts-map": 6,
   "tail-latency": 7,
   "tcp-connection-lifecycle": 6,
   "tcp-reliability-congestion": 6,

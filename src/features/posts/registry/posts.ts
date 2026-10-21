@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "system-design-concepts-map",
+    title: "시스템 설계 25가지 개념 지도: 공부 순서와 읽을 글",
+    summary: "Scalability부터 Authorization까지 시스템 설계 25가지 개념을 주문 요청 하나 위에 놓고 재는 말, 앞단, 데이터, 일관성, 비동기, 서비스 경계, 보안의 일곱 묶음으로 공부 순서를 정한다. 개념마다 답하는 질문과 그 자리에 두는 이유, 읽을 글을 잇고, 면접 질문별로 펼칠 글을 정리한다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Architecture", "Backend", "Distributed Systems", "Database"],
+    date: "2026-10-22",
+    keywords: ["시스템 설계 개념 지도", "시스템 설계 공부 순서"],
+  },
+  {
     slug: "js-timers-accuracy",
     title: "타이머는 왜 늦게 울리나: setTimeout, 스로틀링, requestAnimationFrame",
     summary: "setTimeout의 지연이 하한일 뿐인 이유, 중첩 4ms 규칙과 32비트 넘침, 백그라운드 탭 스로틀링을 실측과 함께 본다. 카운트다운과 애니메이션을 끝나는 시각과 타임스탬프로 계산하는 법도 다룬다.",
