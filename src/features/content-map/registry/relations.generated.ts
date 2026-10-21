@@ -2,6 +2,156 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "postmortems": {
+    "links": [
+      "production-incidents",
+      "on-call",
+      "chaos-engineering",
+      "structured-logging",
+      "error-budgets"
+    ],
+    "mentions": [
+      "health-checks",
+      "osi-in-practice",
+      "sli-slo"
+    ]
+  },
+  "on-call": {
+    "links": [
+      "alerting",
+      "sli-slo",
+      "error-budgets",
+      "production-incidents",
+      "postmortems",
+      "chaos-engineering"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "webhooks"
+    ]
+  },
+  "production-incidents": {
+    "links": [
+      "chaos-engineering",
+      "on-call",
+      "postmortems",
+      "alerting",
+      "sli-slo",
+      "timeouts",
+      "error-budgets",
+      "health-checks"
+    ],
+    "mentions": [
+      "backpressure",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "http-status-codes",
+      "connection-pool"
+    ]
+  },
+  "chaos-engineering": {
+    "links": [
+      "production-incidents",
+      "postmortems",
+      "on-call",
+      "resilience-patterns",
+      "circuit-breaker",
+      "sli-slo",
+      "retries",
+      "timeouts"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "docker-container-basics",
+      "iptables-basics",
+      "tail-latency",
+      "network-config-cicd",
+      "vpc-basics",
+      "eks-cluster-basics"
+    ]
+  },
+  "multi-region": {
+    "links": [
+      "disaster-recovery",
+      "failover",
+      "backup-strategy",
+      "eventual-consistency",
+      "crdt",
+      "cdn-edge-anycast",
+      "latency-bandwidth-throughput",
+      "clock-skew",
+      "db-sharding",
+      "consistent-hashing"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-type-key-value",
+      "db-replication-sharding",
+      "distributed-tracing",
+      "osi-in-practice",
+      "redis-basics",
+      "postgres-architecture",
+      "dns"
+    ]
+  },
+  "failover": {
+    "links": [
+      "disaster-recovery",
+      "multi-region",
+      "db-replication-sharding",
+      "network-partitions",
+      "leader-election",
+      "load-balancer-basics",
+      "connection-pool",
+      "exponential-backoff-jitter",
+      "backup-strategy"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "browser-fetch",
+      "rest-api-design",
+      "distributed-lock",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "postgres-architecture",
+      "db-type-key-value",
+      "vpc-basics",
+      "layer-link-ethernet-arp",
+      "dns"
+    ]
+  },
+  "backup-strategy": {
+    "links": [
+      "disaster-recovery",
+      "failover",
+      "postgres-operations",
+      "encryption-at-rest",
+      "multi-region"
+    ],
+    "mentions": [
+      "postgres-architecture",
+      "on-call"
+    ]
+  },
+  "disaster-recovery": {
+    "links": [
+      "backup-strategy",
+      "failover",
+      "multi-region",
+      "postgres-operations",
+      "chaos-engineering"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "docker-container-basics",
+      "db-replication-sharding",
+      "osi-in-practice",
+      "postgres-architecture",
+      "dns",
+      "on-call"
+    ]
+  },
   "jwt-key-rotation": {
     "links": [
       "token-login",
@@ -64,7 +214,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "error-budgets": {
     "links": [
       "sli-slo",
-      "alerting"
+      "alerting",
+      "postmortems"
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
@@ -76,7 +227,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "alerting",
       "error-budgets",
       "monitoring-basics",
-      "metrics-types"
+      "metrics-types",
+      "failover"
     ],
     "mentions": [
       "osi-in-practice",
@@ -90,6 +242,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sli-slo",
       "error-budgets",
       "health-checks",
+      "on-call",
       "network-monitoring"
     ],
     "mentions": [
@@ -260,7 +413,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "encryption-in-transit",
       "sql-injection",
       "iam-basics",
-      "secrets-management"
+      "secrets-management",
+      "backup-strategy"
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
@@ -351,7 +505,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sli-slo",
       "error-budgets",
       "canary-release",
-      "blue-green-deployment"
+      "blue-green-deployment",
+      "production-incidents",
+      "postmortems"
     ],
     "mentions": [
       "git-undo",
@@ -938,6 +1094,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ports-and-sockets",
       "http-status-codes",
       "layer-ip-routing-icmp",
+      "disaster-recovery",
       "udp-and-quic",
       "dns"
     ]
@@ -1032,6 +1189,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-inverted-index",
       "db-type-wide-column",
       "browser-fetch",
+      "failover",
       "mongodb-document-model",
       "security-groups-nacl",
       "postgres-architecture",
@@ -1619,6 +1777,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "failover",
       "network-partitions",
       "rolling-deployment",
       "kafka-basics",
@@ -2103,6 +2262,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "retries",
       "exponential-backoff-jitter",
       "nginx-reverse-proxy",
+      "chaos-engineering",
       "sql-batch-timeout-pool"
     ],
     "mentions": [
@@ -3333,7 +3493,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tail-latency",
       "redis-basics",
       "grpc",
-      "layer-ip-routing-icmp"
+      "layer-ip-routing-icmp",
+      "disaster-recovery"
     ]
   },
   "udp-and-quic": {
@@ -3757,6 +3918,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-files-permissions",
       "db-type-relational",
       "postgres-getting-started",
+      "disaster-recovery",
       "sql-query-rewrite",
       "sql-basics"
     ]
@@ -4098,7 +4260,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding",
       "db-index",
       "sql-query-tuning",
-      "caching-strategies"
+      "caching-strategies",
+      "failover"
     ],
     "mentions": [
       "db-consistency-cap",
@@ -4106,6 +4269,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scaling-horizontal-vertical",
       "sql-batch-timeout-pool",
       "db-type-key-value",
+      "disaster-recovery",
       "postgres-architecture",
       "dns"
     ]
@@ -4851,7 +5015,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "js-memory-leak",
       "kafka-basics",
-      "http-methods"
+      "http-methods",
+      "on-call"
     ]
   },
   "resilience-patterns": {

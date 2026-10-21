@@ -1,0 +1,428 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("disaster-recovery");
+
+DB 서버의 디스크가 통째로 사라졌다고 하자. 다행히 매일 밤 뜬 백업이 있고, WAL도 다른 곳에 모으고 있었다. 그런데 회의실에서 바로 두 가지 질문이 나온다. "몇 분어치 주문을 잃었나?", "언제 다시 주문을 받을 수 있나?" 백업이 있다는 사실만으로는 둘 다 답할 수 없다.
+
+이 글은 그 두 질문에 숫자로 답하는 법을 다룬다. 잃어도 되는 데이터의 양이 RPO(Recovery Point Objective), 멈춰 있어도 되는 시간이 RTO(Recovery Time Objective)다. 직접 PostgreSQL 클러스터 하나를 만들어 0.2초마다 주문을 넣다가 데이터 디렉터리를 지워 버리고, 실제로 몇 건을 잃었는지, 복원에 몇 초가 걸렸는지 잰다. 그다음 그 숫자를 줄이려면 무엇을 얼마나 사야 하는지, 즉 재해 복구(DR, Disaster Recovery) 구성의 네 단계와 비용을 본다.
+
+이 주제의 다른 글: 백업을 몇 벌, 어디에, 얼마나 두는지는 [백업 전략](/posts/backup-strategy), 살아 있는 복제본으로 넘기는 과정은 [장애 조치](/posts/failover), 리전 두 곳 이상을 함께 쓰는 설계는 [멀티 리전](/posts/multi-region)에서 다룬다. PITR(시점 복구)의 설정 하나하나는 [PostgreSQL 운영](/posts/postgres-operations) 글에 있으니 여기서는 숫자를 재는 데 집중한다.
+
+실습 환경은 Ubuntu 24.04, PostgreSQL 16.15다. 공용 클러스터는 건드리지 않고 `initdb`로 만든 실험용 클러스터를 따로 띄웠다.
+
+## 디스크가 사라진 날 잃은 39건
+
+먼저 사고를 그대로 만든다. 클러스터 하나를 띄우고 WAL 보관을 켠다. `archive_timeout = 15s`는 쓰기가 적어도 15초마다 WAL 파일을 넘겨 보관하라는 뜻이다.
+
+```bash
+# 실험용 클러스터 (포트 55181, 공용 클러스터와 무관)
+sudo -u postgres /usr/lib/postgresql/16/bin/initdb -D /var/tmp/v18pg/a -U postgres --auth=trust
+
+# 보관 설정을 덧붙인다
+cat <<'C' | sudo tee -a /var/tmp/v18pg/a/postgresql.conf
+port = 55181
+wal_level = replica
+archive_mode = on
+archive_command = 'test ! -f /var/tmp/v18pg/archive/%f && cp %p /var/tmp/v18pg/archive/%f'
+archive_timeout = 15s
+C
+
+# 띄우고, 테이블을 만들고, 베이스 백업을 뜬다
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/v18pg/a -l /var/tmp/v18pg/a.log -w start
+psql -h 127.0.0.1 -p 55181 -U postgres -c "CREATE TABLE orders (id bigserial PRIMARY KEY, amount int, created_at timestamptz DEFAULT clock_timestamp())"
+sudo -u postgres pg_basebackup -h 127.0.0.1 -p 55181 -U postgres -D /var/tmp/v18pg/base -Xstream -c fast
+```
+
+이제 0.2초마다 주문을 하나씩 넣고, 클라이언트가 성공 응답을 받은 주문 번호와 시각을 파일에 남긴다. 40초 뒤 서버를 `kill -9`로 죽이고 데이터 디렉터리를 지운다. 디스크가 날아간 상황이다.
+
+```bash
+# 0.2초마다 주문 하나, 커밋된 id와 시각을 기록
+for i in $(seq 1 250); do
+  psql -h 127.0.0.1 -p 55181 -U postgres -XqAtc \
+    "INSERT INTO orders(amount) VALUES ($i) RETURNING id, to_char(created_at,'HH24:MI:SS.MS')"
+  sleep 0.2
+done > writer.log &
+
+sleep 40
+echo "crash at $(date +%T.%3N)"
+sudo kill -9 $(sudo head -1 /var/tmp/v18pg/a/postmaster.pid)   # 서버가 죽고
+sudo rm -rf /var/tmp/v18pg/a                                    # 디스크도 사라졌다
+
+tail -1 writer.log                                              # 클라이언트가 마지막으로 성공한 주문
+ls -l --time-style=+%T.%3N /var/tmp/v18pg/archive               # 바깥에 나가 있던 WAL
+```
+
+```text
+crash at 20:31:28.580
+153|20:31:28.418
+-rw------- 1 postgres postgres 16777216 20:30:48.242 000000010000000000000001
+-rw------- 1 postgres postgres 16777216 20:30:48.402 000000010000000000000002
+-rw------- 1 postgres postgres      338 20:30:48.412 000000010000000000000002.00000028.backup
+-rw------- 1 postgres postgres 16777216 20:31:03.354 000000010000000000000003
+-rw------- 1 postgres postgres 16777216 20:31:18.398 000000010000000000000004
+```
+
+클라이언트는 153번 주문까지 성공 응답을 받았다. 보관소에 마지막으로 도착한 WAL은 20:31:18.398의 파일이고, 사고는 그로부터 10초 뒤에 났다. 베이스 백업과 보관된 WAL로 되살려 본다.
+
+```bash
+# 백업을 새 디렉터리로 복사하고, 보관소에서 WAL을 가져오게 한다
+sudo cp -a /var/tmp/v18pg/base /var/tmp/v18pg/a2
+echo "archive_mode = 'off'" | sudo tee -a /var/tmp/v18pg/a2/postgresql.auto.conf
+echo "restore_command = 'cp /var/tmp/v18pg/archive/%f %p'" | sudo tee -a /var/tmp/v18pg/a2/postgresql.auto.conf
+sudo -u postgres touch /var/tmp/v18pg/a2/recovery.signal      # 복구 모드로 시작하라는 표시
+sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctl -D /var/tmp/v18pg/a2 -l /var/tmp/v18pg/a2.log -w start
+
+psql -h 127.0.0.1 -p 55181 -U postgres -XAc "SELECT count(*), max(id), max(created_at)::time(3) FROM orders"
+```
+
+```text
+LOG:  restored log file "000000010000000000000004" from archive
+LOG:  redo done at 0/4002AF8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.08 s
+LOG:  last completed transaction was at log time 2026-10-20 20:31:18.30096+00
+LOG:  selected new timeline ID: 2
+LOG:  database system is ready to accept connections
+count|max|max
+114|114|20:31:18.301
+(1 row)
+```
+
+114건이 돌아왔다. 클라이언트에게 "주문 완료"라고 답한 153건 중 39건, 시간으로 20:31:18.301부터 20:31:28.418까지 약 10.1초가 사라졌다. 이 실험에서 RPO의 실측값이 10.1초다. 15초로 잡은 `archive_timeout`보다 작은 건 사고가 마침 다음 보관 5초 전에 났기 때문이다. 최악이라면 15초에 가깝게 잃는다.
+
+아래 그림에서 다음을 누르면 WAL이 바깥으로 나간 시점과 사고 시점 사이에 무엇이 남는지 보인다.
+
+<AlgoTrace
+  caption="바깥에 나가지 못한 WAL이 잃는 양이다"
+  memoryLabel="보관소에 있는 것"
+  cells={["base", "seg 02", "seg 03", "seg 04", "쓰는 중", "사고"]}
+  steps={[
+    { pointer: 0, memory: ["베이스 백업"], caption: "20:30:48에 베이스 백업을 떴다. 이 시점까지는 언제든 되살릴 수 있다." },
+    { pointer: 2, found: [0, 1], memory: ["베이스 백업", "seg 02", "seg 03"], caption: "15초마다 WAL 파일이 넘어가 보관소로 복사된다. 20:31:03까지의 주문이 바깥에 있다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["베이스 백업", "seg 02", "seg 03", "seg 04"], caption: "20:31:18에 seg 04가 보관됐다. 여기까지 114건이다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["베이스 백업", "seg 02", "seg 03", "seg 04"], caption: "다음 10초 동안 39건이 커밋됐다. 이 기록은 아직 서버 디스크의 pg_wal 안에만 있다." },
+    { pointer: 5, found: [0, 1, 2, 3], memory: ["베이스 백업", "seg 02", "seg 03", "seg 04"], caption: "디스크가 사라졌다. 쓰는 중이던 WAL 파일도 함께 사라졌고, 그 39건은 어디에도 없다." },
+  ]}
+/>
+
+## 얼마나 잃고 얼마나 멈추나
+
+RPO와 RTO는 둘 다 사고 순간을 기준으로 잰다. RPO는 사고 순간에서 과거 쪽으로, 마지막으로 안전한 곳에 기록된 시점까지의 거리다. RTO는 사고 순간에서 미래 쪽으로, 서비스가 다시 정상으로 돌아올 때까지의 거리다. 위 실험이라면 RPO는 10.1초였고, RTO는 사고를 알아채고 복원을 시작해 쓰기를 다시 받을 때까지다.
+
+둘 다 이름에 목표(Objective)가 붙어 있다. "결제는 1분 이상 잃으면 안 되고 30분 안에 돌아와야 한다"처럼 사업 쪽과 미리 정해 두는 약속이다. 장애가 난 뒤 실제로 잰 값은 RPA, RTA(Actual)처럼 따로 부르기도 한다. 목표가 있어야 그 목표를 지키는 구성과 비용이 정해진다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="사고 순간을 가운데 두고 두 방향으로 잰다"
+  nodes={[
+    { id: "last", label: "마지막 안전 기록", sub: "보관된 WAL·복제본", x: 80, y: 50, w: 140 },
+    { id: "crash", label: "사고", sub: "20:31:28", x: 200, y: 130, w: 100 },
+    { id: "back", label: "서비스 복귀", sub: "쓰기 재개", x: 320, y: 50, w: 120 },
+    { id: "rpo", label: "RPO", sub: "잃는 데이터", x: 80, y: 210, w: 110 },
+    { id: "rto", label: "RTO", sub: "멈춘 시간", x: 320, y: 210, w: 110 },
+  ]}
+  edges={[
+    { from: "last", to: "crash", label: "과거 쪽" },
+    { from: "crash", to: "back", label: "미래 쪽" },
+    { from: "rpo", to: "last", dashed: true },
+    { from: "rto", to: "back", dashed: true },
+  ]}
+/>
+
+RPO는 "데이터를 얼마나 자주, 얼마나 빨리 바깥으로 내보내나"가 정한다. RTO는 "사고를 얼마나 빨리 알아채고, 되살리는 단계가 몇 개고, 각각 얼마나 걸리나"가 정한다. 둘은 서로 다른 장치로 줄인다. 백업을 더 자주 떠도 RTO는 그대로일 수 있고, 대기 서버를 둬도 RPO는 그대로일 수 있다.
+
+## 마지막으로 바깥에 나간 기록이 RPO를 정한다
+
+같은 실험을 `archive_timeout = 60s`로 바꿔서 한 번 더 했다. 이번에는 30초 동안 117건을 넣고 사고를 냈다.
+
+```bash
+# 보관된 WAL만으로 복원한 결과
+psql -h 127.0.0.1 -p 55181 -U postgres -XAc "SELECT count(*), max(created_at)::time(3) AS last_order FROM orders"
+```
+
+```text
+count|last_order
+0|
+(1 row)
+```
+
+0건이다. 30초 동안 쓴 WAL이 16MB를 채우지 못했고 60초도 지나지 않아서, 그 파일은 한 번도 보관소로 나가지 못했다. 쓰기가 적은 서비스일수록 WAL 파일이 늦게 차니 `archive_timeout`이 곧 최악의 RPO다. 반대로 쓰기가 많으면 파일이 금방 찬다. pgbench로 8개 연결을 60초 돌렸을 때 WAL이 880MB 쌓였다. 초당 14.7MB, 16MB 파일 하나가 1.1초 만에 찬다. 이때는 `archive_timeout`이 거의 의미가 없다.
+
+이 틈을 메우는 방법은 WAL을 파일이 다 찰 때까지 기다리지 않고 바이트 단위로 바로 받아 두는 것이다. 다른 서버에서 `pg_receivewal`을 띄워 두면 복제 프로토콜로 WAL을 실시간으로 받는다.
+
+```bash
+# 다른 서버(여기서는 다른 디렉터리)에서 WAL을 실시간으로 받는다
+sudo -u postgres pg_receivewal -h 127.0.0.1 -p 55181 -U postgres -D /var/tmp/v18pg/stream --synchronous -n &
+
+# 사고 뒤: 받던 중인 파일은 .partial로 남는다
+ls -l --time-style=+%T /var/tmp/v18pg/stream
+```
+
+```text
+-rw------- 1 postgres postgres 16777216 20:33:08 000000010000000000000003.partial
+```
+
+```bash
+# .partial의 꼬리표를 떼서 보관된 WAL과 합치고 복원한다
+cp archive/0* merged/ && cp stream/000000010000000000000003.partial merged/000000010000000000000003
+# restore_command = 'cp /var/tmp/v18pg/merged/%f %p' 로 복원한 뒤
+psql -h 127.0.0.1 -p 55181 -U postgres -XAc "SELECT count(*), max(created_at)::time(3) AS last_order FROM orders"
+```
+
+```text
+count|last_order
+117|20:33:08.497
+(1 row)
+LOG:  last completed transaction was at log time 2026-10-20 20:33:08.497672+00
+```
+
+117건이 모두 돌아왔다. 클라이언트가 마지막으로 성공 응답을 받은 주문이 20:33:08.497이었으니 이 실험에서는 하나도 잃지 않았다. 다만 `pg_receivewal`은 커밋을 기다려 주지 않는다. 프라이머리는 커밋을 끝내고 응답한 뒤 WAL을 보내니, 운이 나쁘면 마지막 몇 밀리초는 여전히 잃는다. 0을 보장하려면 커밋이 다른 곳의 기록을 기다리게 하는 동기 복제가 필요하고, 그 대가는 [장애 조치](/posts/failover)와 [멀티 리전](/posts/multi-region) 글에서 잰다.
+
+세 경우의 최악 RPO를 직접 계산해 보자. 베이스 백업만 있으면 백업 주기가, WAL 보관이면 파일이 넘어가는 간격과 옮기는 시간이, 실시간 수신이면 그 지연이 RPO다.
+
+<CodePlayground
+  caption="백업 구성으로 최악의 RPO(초) 계산하기"
+  functionName="worstCaseRpo"
+  initialCode={`// plan.mode: "backup" | "archive" | "stream"
+// backup : backupEveryH (베이스 백업 주기, 시간)
+// archive: archiveTimeoutS (0이면 꺼짐), walMBps (초당 WAL 양), shipDelayS (보관소로 옮기는 시간)
+// stream : lagS (실시간 수신 지연)
+// WAL 파일 하나는 16MB다. 결과는 소수 첫째 자리까지 반올림한 초.
+function worstCaseRpo(plan) {
+  return 0;
+}`}
+  solution={`function worstCaseRpo(plan) {
+  const round = (x) => Math.round(x * 10) / 10;
+  if (plan.mode === "backup") return round(plan.backupEveryH * 3600);
+  if (plan.mode === "stream") return round(plan.lagS);
+  // archive: 파일이 다 차거나 archive_timeout이 되는 것 중 먼저 오는 쪽
+  const fill = 16 / plan.walMBps;
+  const switchEvery = plan.archiveTimeoutS > 0 ? Math.min(plan.archiveTimeoutS, fill) : fill;
+  return round(switchEvery + plan.shipDelayS);
+}`}
+  tests={[
+    { label: "매일 밤 백업만", args: [{ mode: "backup", backupEveryH: 24 }], expected: 86400 },
+    { label: "쓰기 적음, timeout 60s", args: [{ mode: "archive", archiveTimeoutS: 60, walMBps: 0.05, shipDelayS: 2 }], expected: 62 },
+    { label: "쓰기 적음, timeout 꺼짐", args: [{ mode: "archive", archiveTimeoutS: 0, walMBps: 0.05, shipDelayS: 2 }], expected: 322 },
+    { label: "쓰기 많음, 파일이 먼저 참", args: [{ mode: "archive", archiveTimeoutS: 60, walMBps: 0.8, shipDelayS: 1 }], expected: 21 },
+    { label: "실시간 수신", args: [{ mode: "stream", lagS: 0.4 }], expected: 0.4 },
+  ]}
+/>
+
+세 번째 경우가 흔한 실수다. `archive_timeout`을 기본값(0, 꺼짐)으로 두면 한가한 밤에는 WAL 파일 하나가 차는 데 몇 분, 어떤 서비스는 몇 시간이 걸린다. 그동안의 데이터는 서버 디스크에만 있다. 그렇다고 너무 작게(몇 초) 잡으면 거의 빈 16MB 파일이 계속 쌓여 보관소 용량을 먹는다. 보통 1분 안팎에서 정하고, 더 줄여야 하면 실시간 수신이나 복제를 쓴다.
+
+## RTO는 복원 단계를 더한 값이다
+
+RTO는 한 숫자가 아니라 여러 단계의 합이다. 아래 그림에서 다음을 누르면 디스크를 잃은 순간부터 다시 주문을 받기까지의 단계가 차례로 보인다.
+
+<SequenceDiagram
+  caption="사고에서 복귀까지: 각 단계가 RTO에 더해진다"
+  actors={[
+    { id: "mon", label: "모니터링" },
+    { id: "op", label: "당번" },
+    { id: "store", label: "백업 저장소" },
+    { id: "new", label: "새 DB 서버" },
+    { id: "app", label: "앱" },
+  ]}
+  steps={[
+    { from: "mon", to: "op", label: "알림", title: "알아채기", detail: "헬스 체크가 몇 번 연속 실패해야 알림이 간다. 사람이 일어나 노트북을 여는 시간까지 더하면 보통 몇 분이다." },
+    { from: "op", to: "op", label: "판단", title: "되살릴지 기다릴지 정하기", detail: "잠깐 끊긴 건지 정말 사라진 건지 확인한다. 복원은 데이터를 잃는 결정이라 사람이 판단하는 경우가 많다." },
+    { from: "op", to: "new", label: "서버 준비", title: "복원할 자리 만들기", detail: "같은 사양의 서버와 디스크를 마련한다. 미리 만들어 둔 템플릿이나 IaC가 없으면 이 단계가 가장 길다." },
+    { from: "store", to: "new", label: "베이스 백업", title: "베이스 백업 내려받기", detail: "실험에서는 488MB를 4.8초에 복사했다. 네트워크로 객체 저장소에서 받으면 대역폭이 상한이 된다." },
+    { from: "store", to: "new", label: "WAL 재생", title: "WAL 다시 실행하기", detail: "베이스 백업 이후의 쓰기를 처음부터 다시 실행한다. 백업이 오래될수록 길어진다.", payload: "redo done at 0/38000060 ... elapsed: 9.51 s" },
+    { from: "op", to: "new", label: "검증", title: "데이터 확인", detail: "주요 테이블의 행 수와 마지막 주문 시각을 본다. 이걸 건너뛰면 엉뚱한 시점으로 열 수 있다." },
+    { from: "app", to: "new", label: "연결 전환", title: "앱이 새 서버를 보게 하기", detail: "DNS나 설정을 바꾸고 앱을 재시작한다. DNS TTL이 길면 여기서 또 몇 분이 간다." },
+  ]}
+/>
+
+이 중 재생 시간은 직접 재 볼 수 있다. pgbench 30배 규모 데이터(베이스 백업 488MB)를 만들고 백업을 뜬 뒤, 8개 연결로 60초 동안 13만 건 넘게 쓰게 했다. 그다음 같은 방식으로 복원했다.
+
+```bash
+TIMEFORMAT='%R s'
+time sudo cp -a /var/tmp/v18pg/base /var/tmp/v18pg/a2     # 베이스 백업 복사
+# recovery.signal, restore_command를 넣고 띄운 뒤 로그에서 재생 시간을 본다
+grep -E "redo starts|redo done|ready to accept connections" /var/tmp/v18pg/a2.log
+```
+
+```text
+4.832 s
+20:34:56 LOG:  redo starts at 0/19000028
+20:35:05 LOG:  redo done at 0/38000060 system usage: CPU: user: 1.73 s, system: 1.46 s, elapsed: 9.51 s
+20:35:06 LOG:  database system is ready to accept connections
+```
+
+재생 로그의 한 줄에 RTO 계산에 필요한 숫자가 다 들어 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="redo done 한 줄 읽기"
+  base="LOG:  redo done"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "at 0/38000060", title: "어디까지 재생했나", description: "마지막으로 재생한 WAL 위치(LSN)다. 시작 위치 0/19000028과의 차이가 재생한 양이다. 0x38000060 - 0x19000028은 약 496MB다." },
+    { key: "user: 1.73 s", title: "CPU 시간", description: "재생은 프로세스 하나(startup)가 한다. 이 값이 elapsed에 가깝다면 CPU 한 코어가 병목이다." },
+    { key: "system: 1.46 s", title: "커널 시간", description: "파일 읽기와 쓰기에 쓴 시간이다. 실제 디스크가 느리면 이 값보다 I/O 대기가 길어진다." },
+    { key: "elapsed: 9.51 s", title: "걸린 시간", description: "60초 동안 쌓인 쓰기를 9.51초에 다시 실행했다. 백업 이후 쌓인 WAL에 비례하니, 이 비율로 최악의 재생 시간을 추정한다.", required: true },
+  ]}
+/>
+
+60초 분량의 쓰기를 9.51초에 재생했다. 같은 부하가 계속된다고 치면 백업 뒤 1시간이 지난 시점의 사고는 재생만 약 9.5분, 6시간이면 57분, 24시간이면 3시간 48분이다. 베이스 백업을 하루 한 번 뜨면 최악의 경우 그날 하루치 WAL을 다 재생해야 한다는 뜻이다. 복사 속도도 같은 식으로 본다. 이 실험의 로컬 복사는 초당 약 101MB였고, 1TB라면 약 173분이다. 이 숫자들은 로컬 SSD와 페이지 캐시 위에서 잰 값이라 실제 객체 저장소에서 내려받으면 더 느리다. 그래서 자기 환경에서 한 번은 직접 재 봐야 한다.
+
+RTO를 줄이는 방향은 단계마다 다르다. 재생을 줄이려면 베이스 백업을 더 자주 뜬다. 복사를 줄이려면 증분 백업이나 디스크 스냅숏을 쓴다. 서버 준비와 복사를 아예 없애려면 이미 데이터를 받고 있는 대기 서버를 둔다. 이게 다음 절의 DR 단계다.
+
+## 네 단계의 DR 구성
+
+"다른 곳에 무엇을 얼마나 미리 켜 두나"에 따라 DR 구성을 보통 네 단계로 나눈다. 아래로 갈수록 RPO와 RTO가 줄고 비용이 늘어난다. AWS의 DR 백서가 쓰는 이름이 널리 쓰여서 그대로 옮겼다.
+
+| 단계 | 대기 쪽에 있는 것 | RPO (대략) | RTO (대략) | 비용 |
+|---|---|---|---|---|
+| 백업 후 복원 | 백업과 WAL만 | 백업 주기 ~ 수 분 | 수 시간 | 저장 비용만 |
+| 파일럿 라이트 | DB 복제본은 켜 둠, 앱 서버는 꺼 둠 | 수 초 ~ 수 분 | 수십 분 | DB 한 벌 |
+| 웜 스탠바이 | 전체가 작은 규모로 켜져 있음 | 수 초 | 수 분 | 작은 운영 환경 한 벌 |
+| 액티브-액티브 | 양쪽이 모두 트래픽을 받음 | 0 ~ 수 초 | 거의 0 | 운영 환경 두 벌 이상 |
+
+아래 그림은 백업 후 복원 단계에서 리전 A가 통째로 사라졌을 때의 경로다. 다음을 누르면 평소의 백업 흐름과 사고 뒤의 복원 흐름이 차례로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="백업 후 복원: 대기 리전에는 백업만 있다"
+  zones={[
+    { id: "ra", label: "리전 A (운영)", x: 8, y: 8, w: 186, h: 200, tone: "private" },
+    { id: "rb", label: "리전 B (대기)", x: 206, y: 8, w: 186, h: 314, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", x: 100, y: 64, icon: "server" },
+    { id: "db", label: "primary", sub: "PostgreSQL", x: 100, y: 150, icon: "db" },
+    { id: "bk", label: "backup", sub: "base + WAL", x: 300, y: 64, icon: "lock" },
+    { id: "ndb", label: "new DB", sub: "복원 중", x: 300, y: 160, icon: "db" },
+    { id: "napp", label: "new app", x: 300, y: 270, icon: "server" },
+  ]}
+  links={[
+    { from: "app", to: "db" },
+    { from: "db", to: "bk", label: "WAL" },
+    { from: "bk", to: "ndb", dashed: true },
+    { from: "ndb", to: "napp", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "db"], packet: "INSERT", title: "평소에는 리전 A만 일한다", detail: "앱과 DB가 모두 리전 A에 있다. 리전 B에는 켜진 서버가 하나도 없다." },
+    { path: ["db", "bk"], packet: "WAL", title: "WAL과 백업만 건너간다", detail: "WAL 파일과 베이스 백업이 리전 B의 저장소로 복사된다. 마지막 복사 이후의 쓰기가 RPO다." },
+    { path: ["app", "db"], packet: "?", blocked: true, highlight: ["ra"], title: "리전 A가 사라진다", detail: "앱도 DB도 응답하지 않는다. 리전 B에는 데이터를 받아 줄 서버가 아직 없다." },
+    { path: ["bk", "ndb"], packet: "restore", title: "DB 서버를 새로 만들고 복원한다", detail: "서버를 띄우고, 백업을 받고, WAL을 재생한다. 앞에서 잰 복사와 재생 시간이 여기 들어간다." },
+    { path: ["bk", "ndb", "napp"], packet: "open", title: "앱을 띄우고 연결을 바꾼다", detail: "앱 서버를 새로 띄우고 DNS를 리전 B로 돌린다. 여기까지가 RTO이고, 몇 시간이 걸리기도 한다." },
+  ]}
+/>
+
+웜 스탠바이는 리전 B에 작은 규모의 운영 환경을 계속 켜 둔다. DB는 스트리밍 복제로 몇 초 안의 데이터를 갖고 있고, 앱 서버도 한두 대 떠 있다. 사고가 나면 복제본을 승격하고, 앱 서버 수를 늘리고, 트래픽을 돌린다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="웜 스탠바이: 작게 켜 둔 대기 환경을 키운다"
+  zones={[
+    { id: "ra", label: "리전 A (운영)", x: 8, y: 66, w: 186, h: 226, tone: "private" },
+    { id: "rb", label: "리전 B (대기)", x: 206, y: 66, w: 186, h: 226, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "dns", label: "DNS", sub: "TTL 60s", x: 200, y: 30, icon: "dns" },
+    { id: "a1", label: "app x6", x: 100, y: 130, icon: "server" },
+    { id: "pa", label: "primary", x: 100, y: 240, icon: "db" },
+    { id: "b1", label: "app x1→6", x: 300, y: 130, icon: "server" },
+    { id: "sb", label: "replica", sub: "async", x: 300, y: 240, icon: "db" },
+  ]}
+  links={[
+    { from: "dns", to: "a1" },
+    { from: "dns", to: "b1", dashed: true },
+    { from: "a1", to: "pa" },
+    { from: "b1", to: "sb" },
+    { from: "pa", to: "sb", label: "WAL" },
+  ]}
+  steps={[
+    { path: ["dns", "a1", "pa"], packet: "GET", title: "평소 트래픽은 리전 A로", detail: "DNS가 리전 A의 로드 밸런서를 가리킨다. 리전 B의 앱 서버 한 대는 요청을 받지 않고 대기한다." },
+    { path: ["pa", "sb"], packet: "WAL", title: "복제본은 몇 초 뒤를 따라온다", detail: "비동기 복제라 커밋을 기다리지 않는다. 사고 때 잃는 건 아직 건너가지 못한 몇 초다." },
+    { path: ["dns", "a1"], packet: "?", blocked: true, highlight: ["ra"], title: "리전 A가 응답하지 않는다", detail: "헬스 체크가 연속으로 실패한다. 당번이 리전 장애로 판단한다." },
+    { path: ["sb"], highlight: ["b1"], packet: "promote", title: "복제본을 승격하고 앱을 늘린다", detail: "복제본이 프라이머리가 되고, 앱 서버 수를 1대에서 6대로 늘린다. 미리 켜 둔 덕에 서버 준비와 복원 단계가 없다." },
+    { path: ["dns", "b1", "sb"], packet: "GET", title: "DNS를 리전 B로 돌린다", detail: "TTL 60초가 지나면 대부분의 클라이언트가 리전 B로 온다. 여기까지 보통 몇 분이다." },
+  ]}
+/>
+
+파일럿 라이트는 그 중간이다. 가장 오래 걸리는 데이터 복원을 없애려고 DB 복제본만 켜 두고, 앱 서버는 이미지와 설정만 준비해 둔다. 이름처럼 보일러의 작은 불씨만 켜 두는 셈이다. 액티브-액티브는 양쪽 리전이 모두 평소에도 트래픽을 받는다. 리전 하나가 사라지면 나머지가 그 몫을 받는다. 대신 양쪽에서 같은 데이터에 쓰기가 들어올 때의 충돌을 풀어야 한다. 이 이야기는 [멀티 리전](/posts/multi-region) 글에서 이어 간다.
+
+## 비용과 RTO를 함께 놓고 고르기
+
+어느 단계를 고를지는 "한 시간 멈추면 얼마를 잃나"와 "한 단계 올리면 한 달에 얼마가 드나"를 나란히 놓고 정한다. 아래 숫자는 설명을 위한 가정이다. 주문 서비스가 시간당 3천만 원의 매출을 내고, 리전 전체 장애는 1년에 한 번쯤 난다고 하자.
+
+```text
+가정: 시간당 매출 3,000만 원, 리전 장애 연 1회
+
+단계            예상 RTO   장애 1회 손실   연간 추가 비용(가정)
+백업 후 복원     4시간       1억 2,000만 원    1,200만 원  (저장소)
+파일럿 라이트    40분          2,000만 원    6,000만 원  (DB 한 벌)
+웜 스탠바이      10분            500만 원  1억 5,000만 원 (작은 환경)
+액티브-액티브     1분 미만         50만 원  4억 원 이상 (두 벌 + 충돌 처리)
+```
+
+이 가정이라면 파일럿 라이트까지는 남는 장사다. 웜 스탠바이로 올리면 연 9천만 원을 더 내고 1,500만 원을 아낀다. 그런데 매출 손실만 있는 게 아니다. 결제처럼 멈추면 신뢰를 잃는 서비스, 규제로 복구 시간이 정해진 서비스(금융권은 감독 규정으로 핵심 시스템의 목표 복구 시간을 두는 경우가 많다)는 계산이 달라진다. 반대로 사내 리포트 시스템은 하루 멈춰도 괜찮을 수 있다.
+
+그래서 서비스 전체에 한 단계를 고르지 않는다. 결제와 주문은 웜 스탠바이, 상품 검색은 파일럿 라이트, 추천과 리포트는 백업 후 복원처럼 서비스마다 등급을 나눈다. 다만 의존 관계를 같이 봐야 한다. 주문 서비스를 10분 안에 살려도 로그인 서비스가 4시간 뒤에 살아나면 실제 RTO는 4시간이다. 등급표를 만들 때 각 서비스가 무엇에 기대는지 같이 적는다.
+
+## DR 훈련: 문서대로 되살아나는지
+
+DR 계획은 실제로 해 보기 전까지는 가설이다. 사고 당일에야 처음 복원해 보면 문서에 빠진 단계, 만료된 권한, 아무도 모르는 비밀번호를 그때 발견한다. 그래서 정해진 날에 일부러 해 본다. 흔히 게임 데이(game day)라고 부른다.
+
+훈련의 깊이는 단계적으로 올린다.
+
+- 문서 읽기 훈련: 당번 두세 명이 런북을 처음부터 읽으며 "이 명령을 어디서 치나", "이 비밀번호는 어디 있나"를 짚는다. 30분이면 되는데 빠진 단계가 꽤 나온다.
+- 복원 훈련: 실제 백업을 별도 계정이나 리전에 복원해 띄우고, 행 수와 최근 데이터를 확인한다. 걸린 시간을 단계별로 기록해 RTO 목표와 비교한다.
+- 전환 훈련: 트래픽 일부나 전부를 실제로 대기 쪽으로 돌린다. 가장 위험하지만 DNS, 인증서, 방화벽, 연결 풀처럼 복원 훈련에서는 드러나지 않는 문제가 여기서 나온다.
+
+기록은 단계마다 남긴다. "알림 3분, 판단 7분, 서버 준비 22분, 복원 31분, 검증 6분, 전환 4분, 합계 73분"처럼 남겨야 다음에 어느 단계를 줄일지 보인다. 훈련 자체가 장애가 되지 않게, 전환 훈련은 사용자 트래픽이 적은 시간에 하고 되돌리는 절차를 먼저 써 둔다. 실패를 일부러 넣어 보는 실험 전반은 [카오스 엔지니어링](/posts/chaos-engineering)에서 다룬다.
+
+## 훈련에서 자주 터지는 것들
+
+실제 훈련에서 자주 나오는 실패는 기술보다 "사라진 리전 안에 있던 것"이다.
+
+증상은 "복원을 시작하려는데 백업 파일을 못 연다"로 나온다. 백업을 암호화한 키가 사라진 리전의 키 관리 서비스에만 있었던 경우다. AWS KMS 키는 기본적으로 리전마다 따로라서, 다른 리전에서 쓰려면 멀티 리전 키를 쓰거나 대기 리전 키로 다시 암호화해 복사해야 한다. 확인은 간단하다. 대기 리전에서 백업 하나를 실제로 내려받아 풀어 본다.
+
+"새 서버는 떴는데 앱 이미지를 못 받는다"도 흔하다. 컨테이너 레지스트리가 운영 리전에만 있었다. 레지스트리 복제를 켜 두거나 대기 리전에 이미지를 미리 밀어 둔다. 같은 종류로, 비밀 값(DB 비밀번호, API 키)이 운영 리전의 비밀 저장소에만 있는 경우도 있다.
+
+"복제본을 승격했는데 앱이 계속 옛 주소로 붙는다"는 DNS TTL이 길거나, 앱이 DNS 결과를 프로세스 안에 오래 들고 있는 경우다. 연결 풀이 옛 연결을 붙잡고 있어도 같은 증상이 난다. 이건 [장애 조치](/posts/failover) 글에서 직접 잰다.
+
+"객체 저장소 복제를 켰는데 대기 쪽에 옛 파일이 없다"는 S3 복제 규칙의 성질 때문이다. 복제는 규칙을 켠 뒤에 새로 올라온 객체만 옮긴다. 이미 있던 객체는 S3 Batch Replication 같은 작업을 따로 돌려야 한다.
+
+마지막으로, 복원 절차가 사라진 리전의 무언가를 부르는 경우가 있다. 배포 파이프라인이 운영 리전의 서버에서 돌거나, 런북이 운영 리전의 위키에만 있거나, 접속용 배스천 서버가 운영 리전에 있는 식이다. 훈련 때 "운영 리전의 모든 것을 못 쓴다"고 가정하고 해 보면 바로 드러난다.
+
+## 두 질문에 숫자로 답하기
+
+처음 회의실의 두 질문으로 돌아가면, 몇 분어치를 잃었는지는 마지막으로 바깥에 나간 기록이 정하고, 언제 돌아오는지는 알아채기부터 전환까지 각 단계의 합이 정한다. 실험에서는 `archive_timeout` 15초가 10.1초의 손실로, 60초 분량의 쓰기가 9.51초의 재생으로 나타났다. 목표를 먼저 정하고, 그 목표에 맞는 DR 단계를 서비스마다 고르고, 훈련으로 실제 숫자를 재서 목표와 맞춰 보는 것이 재해 복구의 전부다.
+
+이 주제의 다른 글: [백업 전략](/posts/backup-strategy), [장애 조치](/posts/failover), [멀티 리전](/posts/multi-region).
+
+## 면접에서 나올 만한 질문
+
+### RPO와 RTO의 차이는 무엇인가요?
+
+RPO는 잃어도 되는 데이터의 양, RTO는 멈춰 있어도 되는 시간이다. 둘 다 사고 순간을 기준으로, RPO는 마지막으로 안전하게 기록된 시점까지 과거 쪽으로, RTO는 서비스 복귀까지 미래 쪽으로 잰다. RPO는 데이터를 얼마나 자주 바깥으로 내보내느냐로, RTO는 감지·판단·복원·전환 단계의 길이로 줄인다.
+
+### WAL 보관을 켜 두면 RPO가 0인가요?
+
+아니다. 아직 보관소로 나가지 못한 WAL 파일 안의 커밋은 서버 디스크와 함께 사라진다. 쓰기가 적으면 파일이 늦게 차서 `archive_timeout`이 최악의 RPO가 되고, 이 값이 꺼져 있으면 몇 분에서 몇 시간이 될 수 있다. 실험에서 `archive_timeout` 60초 설정으로 30초 동안 쓴 117건을 모두 잃었고, `pg_receivewal`로 실시간 수신을 더하자 모두 살아났다.
+
+### RTO를 줄이려면 무엇부터 하나요?
+
+먼저 단계별로 시간을 재서 가장 긴 단계를 찾는다. 서버 준비가 길면 IaC나 미리 켜 둔 대기 환경으로, 복사가 길면 증분 백업이나 스냅숏으로, WAL 재생이 길면 베이스 백업 주기를 줄여서 해결한다. 실험에서 60초 쓰기를 재생하는 데 9.51초가 걸렸으니, 하루 한 번 백업이면 최악으로 하루치를 재생해야 한다.
+
+### 파일럿 라이트와 웜 스탠바이는 어떻게 다른가요?
+
+둘 다 대기 리전에 DB 복제본을 켜 둔다는 점은 같다. 파일럿 라이트는 앱 서버를 꺼 두고 이미지만 준비해 두니 사고 때 앱 서버를 새로 띄우는 시간이 든다. 웜 스탠바이는 앱까지 작은 규모로 켜 두어서 승격하고 늘리기만 하면 되고, 그만큼 RTO가 짧고 평소 비용이 크다.
+
+### 모든 서비스를 액티브-액티브로 하면 되지 않나요?
+
+비용과 복잡도가 감당이 안 된다. 운영 환경을 두 벌 이상 상시 돌려야 하고, 양쪽에서 같은 데이터에 쓰기가 들어오는 충돌을 풀어야 한다. 서비스마다 멈췄을 때의 손실이 다르니 결제·주문처럼 손실이 큰 곳만 높은 등급을 주고 나머지는 낮춘다. 다만 높은 등급 서비스가 기대는 서비스도 같은 등급이어야 실제 RTO가 지켜진다.
+
+### DR 훈련에서 자주 발견되는 문제는 무엇인가요?
+
+사라진 리전 안에만 있던 것들이다. 백업을 연 키가 그 리전의 KMS에만 있거나, 컨테이너 이미지와 비밀 값이 그 리전에만 있거나, 런북과 배스천 서버가 그 리전에 있는 경우다. 또 DNS TTL과 앱의 DNS 캐시 때문에 전환이 늦어지는 문제도 전환 훈련에서야 드러난다. 훈련은 "운영 리전의 모든 것을 못 쓴다"는 가정으로 한다.
+
+### 복제본이 있으면 백업은 필요 없지 않나요?
+
+필요하다. 복제는 실수도 그대로 복제한다. WHERE 없는 `DELETE`나 랜섬웨어의 암호화는 몇 밀리초 만에 복제본에도 반영된다. 복제본은 하드웨어나 리전 장애의 RTO를 줄이고, 백업과 WAL 보관은 과거 시점으로 돌아가는 수단이라 서로 다른 사고를 막는다.

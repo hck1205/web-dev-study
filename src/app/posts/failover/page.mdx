@@ -1,0 +1,386 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("failover");
+
+DB 프라이머리가 죽었다. 스탠바이가 있었고, 자동 장애 조치 스크립트도 있었다. 그래서 장애 보고서에는 "자동으로 넘어감"이라고 적혔다. 그런데 고객 센터에는 "주문 완료 문자를 받았는데 주문 내역에 없다"는 문의가 하나 들어왔고, 그 10초 남짓 동안 결제 버튼은 에러를 냈다. 자동으로 넘어갔다는 말과 사용자가 겪은 일 사이에 무엇이 있었는지 숫자로 보자.
+
+장애 조치(failover)는 죽은 주 서버의 역할을 살아 있는 대기 서버가 이어받게 하는 일이다. 이 글은 PostgreSQL 16 프라이머리와 스트리밍 스탠바이를 네트워크 네임스페이스에 띄우고, 50ms마다 주문을 넣는 클라이언트를 돌리다가 프라이머리를 죽인다. 그리고 쓰기가 멈춘 시간을 감지, 승격, 연결 전환 토막으로 나눠 재고, 응답까지 받은 주문이 사라지는 장면과, 옛 프라이머리가 살아 있을 때 클라이언트가 엉뚱한 쪽에 쓰는 장면을 본다.
+
+이 주제의 다른 글: 사고 전체의 목표 숫자(RPO, RTO)는 [재해 복구](/posts/disaster-recovery), 대기 서버를 다른 리전에 둘 때의 지연은 [멀티 리전](/posts/multi-region)에서 다룬다. 스탠바이를 붙이는 법과 `pg_promote`는 [복제와 복제 지연](/posts/db-replication-sharding), 네트워크만 끊겼을 때 두 프라이머리가 생기는 과정은 [네트워크 분할](/posts/network-partitions), 임대와 펜싱 토큰은 [리더 선출](/posts/leader-election)에 있다. 로드 밸런서의 VIP 이중화(VRRP)는 [로드 밸런서 기본](/posts/load-balancer-basics)을 참고한다.
+
+## 주문이 9.6초 동안 멈췄다
+
+실험 구성은 이렇다. 프라이머리는 네임스페이스 `v18p`, 스탠바이는 `v18s`에 있고, 클라이언트는 기본 네임스페이스에서 둘 다에 닿는다. 복제 경로에는 Node로 짠 작은 지연 프록시를 끼워 한쪽 200ms씩 늦췄다. 이 컨테이너 커널에는 `tc netem`이 없어서 대신 쓴 방법이다. 복제가 0.4초 뒤처지게 만들어 비동기 복제의 손실이 눈에 보이게 하려는 것이다.
+
+```bash
+# 복제 상태: 비동기, 약 0.4초 뒤처져 있다
+psql -h 10.18.1.2 -U postgres -XAc "select client_addr, state, sync_state, write_lag, replay_lag from pg_stat_replication"
+```
+
+```text
+client_addr|state|sync_state|write_lag|replay_lag
+10.18.2.2|streaming|async|00:00:00.403898|00:00:00.403898
+(1 row)
+```
+
+클라이언트는 libpq의 다중 호스트 연결 문자열로 두 서버를 다 적고, 쓰기 가능한 쪽에만 붙게 했다(`target_session_attrs=read-write`). 장애 감지는 [네트워크 분할](/posts/network-partitions) 글의 것과 같은 순진한 스크립트다. 1초마다 묻고 세 번 연속 답이 없으면 승격한다.
+
+```bash
+# writer.sh: 50ms마다 주문 하나, 두 서버 중 쓰기 가능한 쪽에
+URI="host=10.18.1.2,10.18.3.2 user=postgres connect_timeout=1 target_session_attrs=read-write"
+while true; do
+  out=$(psql "$URI" -XqAtc "INSERT INTO orders(amount) VALUES (1) RETURNING id, inet_server_addr()" 2>&1) \
+    && echo "$(date +%T.%3N) ok $out" || echo "$(date +%T.%3N) fail"
+  sleep 0.05
+done
+
+# detector.sh: 1초마다 묻고 3번 연속 실패하면 스탠바이 승격
+fails=0
+while true; do
+  pg_isready -h 10.18.1.2 -t 1 -q && fails=0 || { fails=$((fails+1)); echo "$(date +%T.%3N) primary no answer ($fails/3)"; }
+  if [ $fails -ge 3 ]; then
+    echo "$(date +%T.%3N) promote standby"
+    psql -h 10.18.3.2 -U postgres -XAtc "SELECT pg_promote(wait => true)"
+    echo "$(date +%T.%3N) promoted"; exit
+  fi
+  sleep 1
+done
+```
+
+두 스크립트를 띄워 두고 프라이머리 쪽 링크를 내리고 프로세스를 죽였다. 서버가 전원째 꺼진 상황이다.
+
+```bash
+echo "$(date +%T.%3N) primary host dies"
+sudo ip netns exec v18p ip link set v18pc down      # 클라이언트 쪽 링크
+sudo ip netns exec v18p ip link set v18ps down      # 복제 쪽 링크
+sudo kill -9 $(sudo head -1 /var/tmp/v18pg/p/postmaster.pid)
+```
+
+```text
+20:38:12.709 primary host dies
+```
+
+```text
+# detector.sh
+20:38:15.432 primary no answer (1/3)
+20:38:18.484 primary no answer (2/3)
+20:38:21.528 primary no answer (3/3)
+20:38:21.531 promote standby
+t
+20:38:21.687 promoted
+
+# writer.sh
+20:38:12.531 ok 41|10.18.1.2
+20:38:12.647 ok 42|10.18.1.2
+20:38:14.798 fail
+20:38:15.856 fail
+20:38:17.967 fail
+20:38:19.031 fail
+20:38:21.156 fail
+20:38:22.231 ok 67|10.18.3.2
+```
+
+마지막 성공(12.647)부터 다음 성공(22.231)까지 9.584초 동안 주문을 받지 못했다. 그리고 새 프라이머리에서 주문을 세어 보면 한 건이 없다.
+
+```bash
+# 옛 프라이머리에서 성공 응답을 받은 마지막 번호는 42
+psql -h 10.18.3.2 -U postgres -XAc "select max(id) filter (where id <= 42) as max_old_id, count(*) filter (where id <= 42) as rows_old, pg_is_in_recovery() from orders"
+```
+
+```text
+max_old_id|rows_old|pg_is_in_recovery
+41|41|f
+(1 row)
+```
+
+42번 주문은 클라이언트에게 "성공"이라고 답했는데 새 프라이머리에는 없다. 처음 장면의 "주문 완료 문자를 받았는데 내역에 없다"가 이것이다. 그리고 그다음 주문 번호는 43이 아니라 67이다. 이 두 가지는 뒤에서 하나씩 본다. 아래 그림에서 다음을 누르면 실험의 흐름이 경로 위에 보인다.
+
+<NetworkTopology
+  width={400}
+  height={310}
+  caption="실험 구성: 프라이머리가 사라지고 스탠바이가 이어받는다"
+  zones={[
+    { id: "zp", label: "v18p", x: 8, y: 120, w: 184, h: 90, tone: "private" },
+    { id: "zs", label: "v18s", x: 208, y: 120, w: 184, h: 90, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "cl", label: "writer", sub: "50ms마다", x: 110, y: 40, icon: "client" },
+    { id: "det", label: "detector", sub: "1초마다", x: 290, y: 40, icon: "client" },
+    { id: "p", label: "primary", sub: "10.18.1.2", x: 100, y: 170, icon: "db" },
+    { id: "s", label: "standby", sub: "10.18.3.2", x: 300, y: 170, icon: "db" },
+    { id: "px", label: "delay 200ms", x: 200, y: 268, icon: "router", w: 120 },
+  ]}
+  links={[
+    { from: "cl", to: "p" },
+    { from: "cl", to: "s", dashed: true },
+    { from: "det", to: "p", dashed: true },
+    { from: "p", to: "px", label: "WAL" },
+    { from: "px", to: "s" },
+  ]}
+  steps={[
+    { path: ["cl", "p"], packet: "INSERT", title: "평소에는 프라이머리가 받는다", detail: "다중 호스트 문자열의 첫 서버가 쓰기 가능하니 writer는 늘 프라이머리에 붙는다." },
+    { path: ["p", "px", "s"], packet: "WAL", title: "WAL은 0.4초 늦게 도착한다", detail: "비동기 복제라 프라이머리는 스탠바이를 기다리지 않고 커밋을 끝낸다. 42번 주문은 이 길 위에 있었다." },
+    { path: ["cl", "p"], packet: "?", blocked: true, highlight: ["zp"], title: "프라이머리가 사라진다", detail: "링크가 내려가고 프로세스가 죽었다. 길 위의 WAL도 함께 사라진다." },
+    { path: ["det", "p"], packet: "ping", blocked: true, title: "세 번 묻고 세 번 답이 없다", detail: "detector가 15.4초, 18.5초, 21.5초에 실패를 센다. 사고 뒤 8.8초가 지났다." },
+    { path: ["det", "s"], packet: "promote", title: "스탠바이를 승격한다", detail: "pg_promote가 0.156초 만에 끝났다. 이제 10.18.3.2가 쓰기를 받는다." },
+    { path: ["cl", "s"], packet: "INSERT", title: "writer가 새 프라이머리를 찾는다", detail: "첫 서버 연결이 실패하자 libpq가 다음 서버로 넘어가 쓰기 가능 여부를 확인하고 붙는다. 0.544초 뒤 첫 성공이 나왔다." },
+  ]}
+/>
+
+## 멈춘 시간은 세 토막이다
+
+9.584초를 쪼개면 이렇다.
+
+```text
+감지   20:38:12.709 사고  →  21.531 승격 시작     8.822 s
+승격   21.531           →  21.687 승격 완료     0.156 s
+전환   21.687           →  22.231 첫 성공       0.544 s
+(사고 직전 마지막 성공 12.647부터 재면 9.584 s)
+```
+
+승격은 0.2초도 안 걸렸다. 시간의 92%가 감지에 들어갔다. 실제 운영에서도 대개 그렇다. 승격 자체는 빠르고, "정말 죽었나"를 확신하는 데 시간이 든다. 아래 그림은 같은 타임라인을 주체별로 나눠 본 것이다.
+
+<SequenceDiagram
+  caption="실측 타임라인: 대부분은 기다리는 시간이다"
+  actors={[
+    { id: "w", label: "writer" },
+    { id: "p", label: "primary" },
+    { id: "d", label: "detector" },
+    { id: "s", label: "standby" },
+  ]}
+  steps={[
+    { from: "w", to: "p", label: "ok 42", title: "12.647 마지막 성공", detail: "42번 주문이 커밋되고 응답이 왔다. 이 WAL은 아직 스탠바이로 가는 중이다." },
+    { from: "p", to: "p", label: "down", title: "12.709 프라이머리가 사라진다", detail: "이 순간부터 writer는 연결 시간 초과를 계속 겪는다." },
+    { from: "d", to: "p", label: "1/3 … 3/3", title: "15.4 ~ 21.5 세 번의 실패", detail: "한 번 묻는 데 시간 초과까지 기다리고 1초 쉰다. 그래서 실패 하나가 약 3초씩 걸렸다." },
+    { from: "d", to: "s", label: "pg_promote", title: "21.531 승격 요청", detail: "스탠바이가 받은 WAL을 끝까지 재생하고 새 타임라인 2를 시작한다.", payload: "LOG:  received promote request\nLOG:  selected new timeline ID: 2" },
+    { from: "w", to: "s", label: "ok 67", title: "22.231 첫 성공", detail: "다음 주문 번호는 43이 아니라 67이다. 시퀀스가 WAL에 미리 기록해 둔 값부터 이어 가기 때문이다." },
+  ]}
+/>
+
+## 감지: 빨리 알아채면 잘못 알아챈다
+
+감지 시간을 줄이는 손잡이는 묻는 간격, 한 번 기다리는 시간, 몇 번 실패해야 죽었다고 볼지다. 다 줄이면 몇 초 안에 넘어간다. 대신 프라이머리가 잠깐 바빴던 것(체크포인트로 디스크가 밀렸거나, 네트워크가 1초 흔들렸거나)을 죽음으로 오해한다. 오해해서 넘기면 멀쩡한 프라이머리를 버리고, 그동안의 쓰기를 잃고, 경우에 따라 두 프라이머리를 만든다. [네트워크 분할](/posts/network-partitions) 글에서 보듯 "응답이 없다"는 사실만으로는 죽음과 느림과 끊김을 구별할 수 없다.
+
+그래서 감지는 보통 이렇게 보강한다. 한 곳에서만 묻지 않고 여러 위치(다른 존의 감시자 셋)에서 물어 과반이 실패해야 죽었다고 본다. 단순 TCP 연결이 아니라 실제 쿼리나 쓰기를 해 본다. 그리고 넘긴 뒤 일정 시간은 다시 넘기지 않게 막아 왔다 갔다 하는 것(flapping)을 막는다.
+
+토막별 시간을 더해 최악의 멈춤 시간을 계산해 보자. 감지는 "실패 횟수 × (간격 + 시간 초과)", 전환은 방식에 따라 다르다.
+
+<CodePlayground
+  caption="장애 조치로 쓰기가 멈추는 최악의 시간(초)"
+  functionName="failoverBudget"
+  initialCode={`// p.failures, p.intervalS, p.timeoutS : 감지 (실패 횟수, 묻는 간격, 한 번 기다리는 시간)
+// p.promoteS                          : 승격에 걸리는 시간
+// p.switchBy: "multihost" | "dns" | "vip"
+//   multihost: 클라이언트가 다음 서버로 넘어가는 시간 p.retryS
+//   dns      : DNS TTL p.dnsTtlS + 재시도 p.retryS
+//   vip      : VIP를 옮기고 알리는 시간 p.garpS
+// 감지 = failures * (intervalS + timeoutS). 결과는 소수 첫째 자리 반올림.
+function failoverBudget(p) {
+  return 0;
+}`}
+  solution={`function failoverBudget(p) {
+  const detect = p.failures * (p.intervalS + p.timeoutS);
+  const sw = p.switchBy === "dns" ? p.dnsTtlS + p.retryS
+    : p.switchBy === "vip" ? p.garpS
+    : p.retryS;
+  return Math.round((detect + p.promoteS + sw) * 10) / 10;
+}`}
+  tests={[
+    { label: "이 글의 실험", args: [{ failures: 3, intervalS: 1, timeoutS: 2, promoteS: 0.2, switchBy: "multihost", retryS: 0.5 }], expected: 9.7 },
+    { label: "DNS TTL 300초", args: [{ failures: 3, intervalS: 10, timeoutS: 5, promoteS: 1, switchBy: "dns", dnsTtlS: 300, retryS: 1 }], expected: 347 },
+    { label: "DNS TTL 30초", args: [{ failures: 3, intervalS: 10, timeoutS: 5, promoteS: 1, switchBy: "dns", dnsTtlS: 30, retryS: 1 }], expected: 77 },
+    { label: "같은 L2의 VIP", args: [{ failures: 3, intervalS: 1, timeoutS: 1, promoteS: 0.5, switchBy: "vip", garpS: 0.1 }], expected: 6.6 },
+  ]}
+/>
+
+첫 번째 계산값 9.7초가 실측 9.584초와 거의 같다. 두 번째는 흔한 설정이다. DNS 레코드 TTL을 기본처럼 300초로 두면 감지와 승격을 아무리 빨리 해도 클라이언트의 절반 이상이 몇 분 동안 옛 주소를 본다.
+
+## 비동기 복제는 응답한 주문을 잃는다
+
+42번이 사라진 이유는 커밋 순서에 있다. 비동기 복제에서 프라이머리는 자기 디스크에 WAL을 쓰고 바로 클라이언트에게 성공을 돌려준다. 스탠바이로 보내는 건 그다음이다. 아래 그림에서 다음을 누르면 42번이 어디에 있다가 사라지는지 보인다.
+
+<AlgoTrace
+  caption="42번 주문의 WAL은 어디에 있었나"
+  memoryLabel="스탠바이가 받은 것"
+  cells={["40 커밋", "41 커밋", "42 커밋", "42 응답", "전송 중", "사고"]}
+  steps={[
+    { pointer: 1, found: [0], memory: ["~40"], caption: "스탠바이는 0.4초 뒤처져 따라온다. 40번까지 받았다." },
+    { pointer: 2, found: [0, 1], memory: ["~40", "41"], caption: "프라이머리가 42번의 WAL을 자기 디스크에 쓴다. 스탠바이는 41번을 막 받았다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["~40", "41"], caption: "프라이머리가 클라이언트에게 성공을 돌려준다. 비동기라 스탠바이를 기다리지 않는다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["~40", "41"], caption: "42번의 WAL이 복제 경로 위를 가고 있다. 200ms 남았다." },
+    { pointer: 5, found: [0, 1, 2, 3], memory: ["~40", "41"], caption: "프라이머리가 사라졌다. 경로 위의 42번도 함께 사라졌다. 승격된 스탠바이는 41번까지만 안다." },
+  ]}
+/>
+
+같은 실험을 동기 복제로 다시 했다. `synchronous_standby_names = '*'`로 바꾸면 프라이머리는 스탠바이가 WAL을 디스크에 썼다는 답을 받은 뒤에야 커밋을 끝낸다.
+
+```bash
+psql -h 10.18.1.2 -U postgres -XAc "ALTER SYSTEM SET synchronous_standby_names = '*'" -c "SELECT pg_reload_conf()"
+psql -h 10.18.1.2 -U postgres -XAc "select state, sync_state from pg_stat_replication"
+```
+
+```text
+state|sync_state
+streaming|sync
+(1 row)
+```
+
+```text
+# writer.sh (동기 복제)
+20:39:05.975 ok 15|10.18.1.2
+20:39:08.105 fail
+...
+20:39:15.509 ok 34|10.18.3.2
+
+# 새 프라이머리에서: 성공 응답을 받은 마지막 번호 15까지
+rows_old|max
+15|15
+```
+
+이번에는 응답받은 주문이 하나도 사라지지 않았다. 대신 주문 하나에 걸리는 시간이 달라졌다. 같은 200ms 경로에서 `\timing`으로 잰 INSERT 한 건이다.
+
+```text
+INSERT 0 1
+Time: 404.907 ms      -- synchronous_commit = on (기본값)
+INSERT 0 1
+Time: 1.174 ms        -- synchronous_commit = local
+```
+
+커밋마다 왕복 한 번(400ms)을 기다린다. 사고 전 약 5.5초 동안 비동기 실험에서는 42건, 동기 실험에서는 15건이 들어간 차이가 여기서 나왔다. 동기 복제에는 함정이 하나 더 있다. 동기 스탠바이가 하나뿐인데 그 스탠바이가 죽으면 프라이머리는 커밋을 영원히 기다린다. 쓰기가 멈춘다. 그래서 동기 복제는 스탠바이를 둘 이상 두고 `ANY 1 (s1, s2)`처럼 그중 하나만 답하면 되게 하거나, Patroni의 `synchronous_mode`처럼 동기 스탠바이가 사라지면 관리 도구가 설정을 바꿔 주게 한다. 리전 사이에 동기 복제를 걸 때의 지연은 [멀티 리전](/posts/multi-region) 글에서 잰다.
+
+주문 번호가 42에서 67로 뛴 것도 장애 조치의 흔적이다. PostgreSQL 시퀀스는 매번 WAL을 쓰지 않으려고 32개 앞의 값을 미리 기록해 둔다. 스탠바이는 그 기록만 받았으니 승격 뒤 그 값부터 이어 간다. 번호가 비는 건 정상이고 데이터 손실이 아니다. 하지만 "주문 번호가 연속"이라고 가정한 코드나 정산 검사는 장애 조치 뒤에 거짓 경보를 낸다.
+
+## 옛 프라이머리가 살아 있으면
+
+실험에서는 옛 프라이머리를 확실히 죽였다. 그런데 실제 장애에서는 "죽었다고 판단한" 프라이머리가 살아 있는 경우가 많다. 이번에는 프라이머리를 그대로 둔 채 스탠바이만 승격하고 두 서버와 다중 호스트 클라이언트를 확인했다.
+
+```bash
+for h in 10.18.1.2 10.18.3.2; do
+  psql -h $h -U postgres -XAtc "select inet_server_addr(), pg_is_in_recovery(), pg_walfile_name(pg_current_wal_lsn())"
+done
+# 다중 호스트 클라이언트는 어디에 붙나
+psql "host=10.18.1.2,10.18.3.2 user=postgres target_session_attrs=read-write" -XAtc "select inet_server_addr()"
+```
+
+```text
+10.18.1.2|f|000000010000000000000003
+10.18.3.2|f|000000020000000000000003
+10.18.1.2
+```
+
+둘 다 `pg_is_in_recovery = f`, 쓰기를 받는다. WAL 파일 이름 앞자리로 타임라인 1과 2가 갈린 게 보인다. 그리고 클라이언트는 옛 프라이머리(목록의 첫 서버)에 붙었다. `target_session_attrs=read-write`는 "쓰기 가능한 첫 서버"를 고를 뿐, 어느 쪽이 진짜인지는 모른다. 이렇게 두 프라이머리가 각자 쓰기를 받는 상태가 스플릿 브레인이다.
+
+그래서 승격 전에 옛 프라이머리를 확실히 끊는다. 이걸 펜싱(fencing)이라고 한다. 가장 확실한 형태가 STONITH(Shoot The Other Node In The Head)다. 전원 관리 장치(IPMI)나 클라우드 API로 옛 서버를 강제로 끈다. 그보다 약한 방법으로 옛 서버의 네트워크를 끊거나(보안 그룹 변경), 스토리지 접근을 막거나, 리더 키 갱신에 실패한 노드가 스스로 내려가게 하는 방법이 있다. 스스로 내려가는 방식은 노드가 멈춰 있는 동안에는 아무것도 못 하니, Patroni는 리눅스 watchdog 장치를 써서 갱신이 멈춘 노드를 커널이 재부팅하게 할 수 있다. 저장소 쪽에서 오래된 리더의 쓰기를 거절하는 펜싱 토큰은 [리더 선출](/posts/leader-election) 글에 자세히 있다.
+
+<Callout kind="warning">
+펜싱 없이 자동 승격만 켜 두는 것이 가장 위험한 설정이다. 감지가 틀리는 순간 두 프라이머리가 생기고, 갈라진 쓰기는 PostgreSQL 복제로 합칠 방법이 없다. 이미 갈라졌다면 한쪽을 정하고, 버릴 쪽에서 갈라진 뒤 들어온 데이터를 먼저 덤프해 따로 보관한 다음 `pg_rewind`로 되감아 스탠바이로 붙인다.
+</Callout>
+
+## 클라이언트를 새 프라이머리로 데려가는 길
+
+승격이 끝나도 클라이언트가 옛 주소를 보면 소용없다. 길은 크게 넷이다. 아래 그림에서 다음을 누르면 각 방식으로 요청이 새 프라이머리에 닿는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="새 프라이머리를 찾아가는 네 가지 길"
+  zones={[
+    { id: "db", label: "DB 서버", x: 8, y: 220, w: 384, h: 92, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", sub: "커넥션 풀", x: 200, y: 30, icon: "client" },
+    { id: "dns", label: "DNS", sub: "db.internal", x: 64, y: 130, icon: "dns" },
+    { id: "vip", label: "VIP", sub: "10.0.0.10", x: 200, y: 130, icon: "router" },
+    { id: "hap", label: "HAProxy", sub: "/primary", x: 336, y: 130, icon: "lb" },
+    { id: "old", label: "old primary", sub: "10.0.0.11", x: 110, y: 266, icon: "db", w: 116 },
+    { id: "new", label: "new primary", sub: "10.0.0.12", x: 290, y: 266, icon: "db", w: 116 },
+  ]}
+  links={[
+    { from: "app", to: "dns" },
+    { from: "app", to: "vip" },
+    { from: "app", to: "hap" },
+    { from: "dns", to: "new", dashed: true },
+    { from: "vip", to: "new" },
+    { from: "hap", to: "new" },
+    { from: "vip", to: "old", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "dns", "old"], packet: "A?", blocked: true, title: "DNS: TTL만큼 옛 주소를 본다", detail: "레코드를 바꿔도 리졸버와 앱 안의 캐시가 TTL 동안 옛 IP를 돌려준다. JVM처럼 DNS 결과를 프로세스 안에 따로 들고 있는 런타임도 있다." },
+    { path: ["app", "dns", "new"], packet: "A", title: "TTL이 지나면 새 주소로", detail: "TTL을 30~60초로 짧게 두고, 앱이 연결 실패 때 다시 조회하게 해야 한다. 이미 맺은 연결은 DNS와 상관없이 옛 서버를 붙잡고 있다." },
+    { path: ["app", "vip", "new"], packet: "GARP", title: "VIP: 주소는 그대로, 주인이 바뀐다", detail: "새 프라이머리가 VIP를 가져가고 GARP로 알린다. 같은 L2 망에서만 되고, 클라우드 VPC에서는 ARP 대신 보조 IP를 API로 옮기거나 로드 밸런서를 쓴다." },
+    { path: ["app", "hap", "new"], packet: "check", title: "프록시: 헬스 체크가 주인을 고른다", detail: "HAProxy가 각 서버의 Patroni REST API(/primary)를 묻고 200을 주는 서버로만 보낸다. 앱은 프록시 주소 하나만 안다." },
+    { path: ["app", "new"], packet: "retry", title: "클라이언트: 목록을 돌며 재시도", detail: "libpq 다중 호스트와 target_session_attrs=read-write처럼 드라이버가 직접 고른다. 옛 프라이머리가 살아 있으면 그쪽을 고를 수 있으니 펜싱이 전제다." },
+  ]}
+/>
+
+어느 길이든 공통으로 챙길 것이 커넥션 풀이다. 풀은 이미 맺은 연결을 재사용하니, 옛 프라이머리로 맺은 연결이 반쯤 열린 채 남아 있으면 요청이 거기서 시간 초과될 때까지 멈춘다. 풀에 연결 검증(쿼리 전 확인이나 주기적 검사)과 짧은 소켓 시간 초과를 두고, 승격 뒤 남은 연결을 비우게 한다. TCP keepalive만 믿으면 리눅스 기본값으로 2시간 넘게 죽은 연결을 못 알아챈다. 풀 설정은 [커넥션 풀](/posts/connection-pool) 글에 있다.
+
+또 하나는 연결 폭주다. 승격 직후 모든 앱 서버의 풀이 동시에 새 프라이머리로 연결을 연다. 앱 서버 50대에 풀 20개면 1000개다. `max_connections`에 걸리거나 인증 처리만으로 CPU가 오른다. 재연결에 [지수 백오프와 지터](/posts/exponential-backoff-jitter)를 섞고, 가능하면 PgBouncer 같은 풀러를 앞에 둔다.
+
+## Patroni는 이 토막들을 어떻게 맡나
+
+손으로 짠 감지 스크립트 대신 운영에서는 Patroni 같은 도구를 쓴다. Patroni는 DB 서버마다 옆에서 돌며 etcd나 Consul 같은 합의 저장소에 리더 키를 둔다. 리더는 키를 주기적으로 갱신하고, 갱신이 멈춰 키가 만료되면 남은 노드 중 조건을 만족하는 쪽이 키를 잡고 승격한다. 감지를 "한 감시자의 판단"이 아니라 "합의 저장소의 임대 만료"로 바꾼 것이다. 핵심 설정을 눌러 보자(값은 Patroni 기본값).
+
+<UrlAnatomy
+  caption="Patroni의 장애 조치 설정"
+  base="patroni.yml › bootstrap.dcs"
+  separator=" : "
+  joiner=" · "
+  params={[
+    { key: "ttl", value: "30", title: "리더 키의 수명(초)", description: "리더가 이 시간 안에 키를 갱신하지 못하면 키가 사라지고 장애 조치가 시작된다. 사실상 감지 시간의 상한이다.", required: true },
+    { key: "loop_wait", value: "10", title: "점검 주기(초)", description: "각 노드가 상태를 보고 키를 갱신하는 간격이다. 키 만료 뒤 다른 노드가 알아채는 데도 최대 이만큼 더 걸린다." },
+    { key: "retry_timeout", value: "10", title: "저장소·DB 재시도(초)", description: "합의 저장소나 PostgreSQL 연결이 이 시간 동안 실패하면 리더는 스스로 내려간다. loop_wait + 2 × retry_timeout ≤ ttl을 지키라고 문서가 권한다." },
+    { key: "maximum_lag_on_failover", value: "1048576", title: "너무 뒤처진 스탠바이는 제외(바이트)", description: "프라이머리보다 1MB 넘게 뒤처진 스탠바이는 승격 후보에서 빠진다. 많이 잃는 승격보다 멈추는 쪽을 고르는 값이다." },
+    { key: "synchronous_mode", value: "false", title: "동기 복제 관리", description: "true면 Patroni가 동기 스탠바이를 정하고, 동기 스탠바이만 승격 후보가 된다. 응답한 커밋을 잃지 않는 대신 지연이 늘어난다." },
+  ]}
+/>
+
+기본값이라면 프라이머리가 죽고 키가 만료되기까지 최대 30초, 다른 노드가 알아채기까지 최대 10초가 더 걸린다. 내 스크립트의 8.8초보다 느리다. 일부러 느리게 잡은 것이다. 잠깐의 흔들림에는 넘어가지 않는 쪽을 기본으로 고른 셈이다.
+
+Patroni는 승격 말고도 몇 가지를 더 맡는다. 옛 프라이머리가 돌아오면 `pg_rewind`로 갈라진 부분을 되감아 스탠바이로 붙이고(`use_pg_rewind`), REST API로 각 노드의 역할을 알려 HAProxy가 프라이머리를 고르게 한다. 계획된 작업에는 장애 조치 대신 `patronictl switchover`를 쓴다. 프라이머리를 깨끗이 내리고 스탠바이가 다 따라온 뒤 넘기니 잃는 데이터가 없다. 이 전환을 정기적으로 해 보는 것이 가장 싼 장애 조치 훈련이다.
+
+## 장애 조치가 오히려 장애가 되는 순간
+
+"프라이머리가 하루에 몇 번씩 바뀐다"는 감지가 너무 예민하거나 합의 저장소가 불안한 경우다. etcd 디스크가 느려 리더 키 갱신이 늦으면 멀쩡한 프라이머리가 내려간다. Patroni 로그에서 갱신 실패 시각과 etcd의 지연 지표를 맞춰 보고, `ttl`을 늘리거나 etcd를 빠른 디스크로 옮긴다.
+
+"장애 조치는 됐는데 주문 일부가 사라졌다"는 비동기 복제의 지연만큼 잃은 것이다. 사고 직전의 `pg_stat_replication.replay_lag`나 `pg_wal_lsn_diff`로 지연을 평소에 지표로 남겨 둬야 "얼마나 잃었나"에 답할 수 있다. 옛 프라이머리의 디스크가 살아 있다면 아직 넘어가지 못한 WAL을 거기서 꺼내 확인할 수 있으니 바로 지우지 않는다.
+
+"새 프라이머리로 넘어갔는데 몇 분 동안 에러가 이어진다"는 클라이언트 쪽 문제다. DNS TTL, 앱의 DNS 캐시, 풀에 남은 옛 연결을 차례로 본다. 앱 서버 하나에서 `ss -tnp | grep 5432`로 아직 옛 IP에 붙은 연결이 있는지 보면 바로 드러난다.
+
+"스탠바이가 승격 후보에서 빠져 아무도 승격되지 않았다"는 `maximum_lag_on_failover`에 걸린 경우다. 의도한 동작이지만, 스탠바이가 평소에도 많이 뒤처진다는 신호이니 복제 경로의 대역폭과 스탠바이의 재생 속도를 본다.
+
+## 넘어갔다는 말의 내용
+
+"자동으로 넘어갔다"에는 세 가지 숫자가 숨어 있다. 얼마 동안 멈췄나(실험에서는 9.584초, 그중 8.8초가 감지), 무엇을 잃었나(비동기 복제에서 응답까지 받은 42번 주문), 그리고 넘어간 뒤 정말 한 곳만 쓰고 있나(펜싱). 감지는 빠를수록 오해가 늘고, 잃지 않으려면 커밋마다 기다려야 하고, 클라이언트는 DNS·VIP·프록시·드라이버 중 하나로 데려가야 한다. 이 셋을 정한 뒤에야 장애 조치가 실제로 서비스를 지킨다.
+
+이 주제의 다른 글: [재해 복구](/posts/disaster-recovery), [백업 전략](/posts/backup-strategy), [멀티 리전](/posts/multi-region).
+
+## 면접에서 나올 만한 질문
+
+### 장애 조치 시간은 무엇으로 이루어지나요?
+
+감지, 승격, 클라이언트 전환 세 토막이다. 실험에서는 9.584초 중 감지가 8.8초, 승격이 0.16초, 전환이 0.54초였다. 승격 자체는 빠르고 "정말 죽었나"를 확신하는 데 대부분의 시간이 들며, DNS로 전환하면 TTL이 그 위에 더해진다.
+
+### 감지 시간을 1초로 줄이면 안 되나요?
+
+줄일 수는 있지만 오탐이 늘어난다. 응답이 없다는 사실만으로는 죽음, 느림, 네트워크 흔들림을 구별할 수 없어서, 체크포인트나 순간적인 지연에도 멀쩡한 프라이머리를 버리게 된다. 그래서 여러 위치에서 과반으로 판단하고, 실제 쿼리로 확인하고, 넘긴 뒤 일정 시간은 다시 넘기지 않게 막는다.
+
+### 비동기 복제에서 장애 조치를 하면 무엇을 잃나요?
+
+클라이언트가 성공 응답까지 받았지만 아직 스탠바이로 가지 못한 커밋을 잃는다. 비동기 복제는 프라이머리가 자기 디스크에 쓰고 바로 응답하기 때문이다. 실험에서 복제가 0.4초 뒤처진 상태로 프라이머리를 죽이자 응답받은 42번 주문이 새 프라이머리에 없었다. 동기 복제로 바꾸면 잃지 않았지만 커밋마다 왕복 시간(400ms)을 기다렸다.
+
+### 스플릿 브레인은 왜 생기고 어떻게 막나요?
+
+옛 프라이머리가 죽지 않았는데 죽은 것으로 판단하고 스탠바이를 승격하면 두 서버가 모두 쓰기를 받는다. 실험에서 옛 프라이머리를 살려 둔 채 승격하자 둘 다 `pg_is_in_recovery = f`였고, 다중 호스트 클라이언트는 목록의 첫 서버인 옛 프라이머리에 붙었다. 승격 전에 STONITH, 네트워크 차단, watchdog 재부팅 같은 펜싱으로 옛 프라이머리를 확실히 끊어 막는다.
+
+### DNS, VIP, 프록시 중 클라이언트 전환은 무엇으로 하나요?
+
+환경에 따라 고른다. DNS는 어디서나 되지만 TTL과 앱 내부 캐시만큼 늦다. VIP는 빠르지만 같은 L2 망에서만 되고 클라우드에서는 API로 IP를 옮겨야 한다. HAProxy 같은 프록시는 Patroni의 헬스 체크로 프라이머리를 고르고 앱은 주소 하나만 알면 되지만 프록시 자체를 이중화해야 한다. 어느 쪽이든 커넥션 풀의 옛 연결을 비우는 처리가 필요하다.
+
+### Patroni의 ttl, loop_wait, retry_timeout은 어떤 관계인가요?
+
+ttl은 리더 키의 수명이고, loop_wait는 노드가 점검하고 키를 갱신하는 주기, retry_timeout은 저장소나 DB 연결 실패를 견디는 시간이다. 리더가 일시적인 재시도 중에 키를 잃지 않도록 loop_wait + 2 × retry_timeout이 ttl 이하가 되게 잡는다. 기본값 30/10/10이면 장애 감지에 최대 수십 초가 걸리는데, 오탐을 줄이려는 선택이다.
+
+### 장애 조치 뒤 주문 번호가 건너뛰는 건 문제인가요?
+
+데이터 손실은 아니다. PostgreSQL 시퀀스는 WAL 기록을 줄이려고 32개 앞의 값을 미리 기록하고, 승격된 스탠바이는 그 값부터 이어 간다. 실험에서도 42 다음이 67이었다. 다만 번호가 연속이라고 가정하는 정산 검사나 코드는 거짓 경보를 내니, 시퀀스 값은 유일성만 믿는다.

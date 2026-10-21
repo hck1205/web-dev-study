@@ -5,6 +5,7 @@ import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
 import { AUTOSCALING } from "./autoscaling";
 import { BACKPRESSURE } from "./backpressure";
+import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
@@ -16,6 +17,7 @@ import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
+import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
@@ -55,6 +57,7 @@ import { DB_TYPES_OVERVIEW } from "./db-types-overview";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
+import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
 import { DISTRIBUTED_TRANSACTIONS_2PC } from "./distributed-transactions-2pc";
@@ -74,6 +77,7 @@ import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
+import { FAILOVER } from "./failover";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
@@ -166,6 +170,7 @@ import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
+import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
@@ -180,6 +185,7 @@ import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
+import { ON_CALL } from "./on-call";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
@@ -221,6 +227,8 @@ import { POSTGRES_MVCC_VACUUM } from "./postgres-mvcc-vacuum";
 import { POSTGRES_OPERATIONS } from "./postgres-operations";
 import { POSTGRES_REPORTING_SQL } from "./postgres-reporting-sql";
 import { POSTGRES_ROLES_SECURITY } from "./postgres-roles-security";
+import { POSTMORTEMS } from "./postmortems";
+import { PRODUCTION_INCIDENTS } from "./production-incidents";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
@@ -317,6 +325,7 @@ export const QUESTION_SETS = [
   API_VERSIONING,
   AUTOSCALING,
   BACKPRESSURE,
+  BACKUP_STRATEGY,
   BASE64,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
@@ -328,6 +337,7 @@ export const QUESTION_SETS = [
   CACHING_STRATEGIES,
   CANARY_RELEASE,
   CDN_EDGE_ANYCAST,
+  CHAOS_ENGINEERING,
   CI_CD_BASICS,
   CIRCUIT_BREAKER,
   CLIENT_DATA_CACHE,
@@ -367,6 +377,7 @@ export const QUESTION_SETS = [
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
   DESIGN_PATTERNS_OVERVIEW,
+  DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
   DISTRIBUTED_TRANSACTIONS_2PC,
@@ -386,6 +397,7 @@ export const QUESTION_SETS = [
   EVENT_LOOP,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
+  FAILOVER,
   FEATURE_FLAGS,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
@@ -478,6 +490,7 @@ export const QUESTION_SETS = [
   MICROSERVICES,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
+  MULTI_REGION,
   MVC_PATTERN,
   N_PLUS_ONE_QUERIES,
   NETWORK_CONFIG_CICD,
@@ -492,6 +505,7 @@ export const QUESTION_SETS = [
   NGINX_REVERSE_PROXY,
   OAUTH,
   OBSERVABILITY_BASICS,
+  ON_CALL,
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
@@ -533,6 +547,8 @@ export const QUESTION_SETS = [
   POSTGRES_OPERATIONS,
   POSTGRES_REPORTING_SQL,
   POSTGRES_ROLES_SECURITY,
+  POSTMORTEMS,
+  PRODUCTION_INCIDENTS,
   PROXY_REVERSE_PROXY,
   PUB_SUB,
   PYTHAGOREAN_THEOREM,

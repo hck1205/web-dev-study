@@ -301,6 +301,8 @@ fetch("http://127.0.0.1:18701/drip", { signal: AbortSignal.timeout(3000) })
 | HikariCP | `connectionTimeout` | 30초 | 풀에서 연결을 빌리기까지 |
 | PostgreSQL | `statement_timeout` | 0(무한) | 쿼리 하나 |
 
+Node `http.request`의 `req.setTimeout()`은 소켓이 연결된 뒤에야 시계를 켜서 연결 단계를 재지 않는데, 패킷 손실을 넣어 이 차이를 드러낸 실험은 [카오스 엔지니어링](/posts/chaos-engineering)에 있다.
+
 Node HTTP 서버의 값은 직접 찍어 확인했다.
 
 ```text

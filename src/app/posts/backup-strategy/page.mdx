@@ -1,0 +1,421 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("backup-strategy");
+
+랜섬웨어가 DB 서버를 암호화했다. 침착하게 백업 디렉터리를 열었더니 거기 있던 파일도 전부 `.locked`로 바뀌어 있다. 백업 디스크가 같은 서버에 마운트돼 있었고, 서버의 root 권한을 얻은 공격자에게는 그 디스크도 그냥 폴더 하나였다. 백업은 매일 성공했다는 알림이 왔지만, 이 사고 앞에서는 없는 것과 같았다.
+
+백업은 파일을 복사하는 일이 아니라 "어떤 사고에서 무엇으로 되살릴지"를 미리 정하는 일이다. 이 글은 몇 벌을 어디에 두나(3-2-1), 매번 전부 뜰지 바뀐 것만 뜰지(전체·증분·차등), 얼마나 오래 둘지(보관 기간), 공격자가 지우지 못하게 하는 법(불변 백업), 그리고 백업이 정말 살아나는지 증명하는 법(복원 테스트)을 직접 해 보며 정한다.
+
+이 주제의 다른 글: 사고 때 몇 분어치를 잃고 얼마 만에 돌아오는지 숫자로 재는 [재해 복구](/posts/disaster-recovery), 살아 있는 복제본으로 넘기는 [장애 조치](/posts/failover). PostgreSQL의 `pg_dump`, `pg_basebackup`, WAL 보관, 시각을 목표로 한 PITR 설정은 [PostgreSQL 운영](/posts/postgres-operations)에 자세히 있으니 여기서는 반복하지 않는다. 쿠버네티스라면 클러스터 상태는 [etcd 백업](/posts/k8s-etcd-backup), 네임스페이스와 볼륨은 [Velero 백업](/posts/velero-backup)에서 이어 본다.
+
+실습 환경은 Ubuntu 24.04, PostgreSQL 16.15, GNU tar 1.35다. PostgreSQL은 `initdb`로 만든 실험용 클러스터만 썼다.
+
+## 백업이 있었는데도 못 살린 이유
+
+못 살린 사고를 모아 보면 원인이 몇 가지로 모인다.
+
+같은 곳에 있었다. 백업이 원본과 같은 디스크, 같은 서버, 같은 계정, 같은 리전에 있으면 그 단위가 통째로 사라지는 사고에서 함께 사라진다. 처음 장면의 랜섬웨어가 이 경우다.
+
+실수까지 복사했다. 복제나 동기화는 백업이 아니다. `rsync --delete`로 매시간 맞춰 두는 사본은 원본에서 지운 파일을 한 시간 안에 사본에서도 지운다. DB 복제본도 WHERE 없는 `DELETE`를 몇 밀리초 만에 그대로 따라 한다.
+
+너무 일찍 지웠다. 7일만 보관하는데 데이터가 잘못된 걸 열흘 뒤에 알았다면 돌아갈 곳이 없다. 조용히 데이터를 망가뜨리는 버그는 생각보다 늦게 발견된다.
+
+복원이 안 됐다. 백업 작업은 성공했다고 했지만 파일이 깨져 있었거나, 필요한 WAL 하나가 빠져 있었거나, 복원 절차를 아는 사람이 없었다.
+
+아래 절들은 이 네 가지를 하나씩 막는다.
+
+## 세 벌, 두 매체, 한 곳은 밖
+
+가장 오래된 규칙이 3-2-1이다. 데이터를 세 벌(원본 포함) 두고, 그중 두 벌은 서로 다른 종류의 저장 매체에, 한 벌은 다른 장소에 둔다. 매체가 다르면 같은 원인(같은 펌웨어 버그, 같은 스토리지 장애)으로 함께 죽지 않고, 장소가 다르면 화재나 리전 장애에 함께 죽지 않는다.
+
+랜섬웨어가 흔해지면서 3-2-1-1-0으로 늘려 말하기도 한다. 하나 더한 1은 한 벌을 지울 수 없게(불변) 또는 네트워크에서 떼어(오프라인) 두라는 뜻이고, 0은 복원 테스트에서 오류가 0이어야 한다는 뜻이다. 클라우드에서는 매체를 "서비스와 계정"으로 바꿔 읽는다. 같은 계정의 같은 버킷에 두 벌을 두는 건 한 벌과 비슷하다.
+
+아래 그림에서 다음을 누르면 원본에서 세 벌이 만들어지는 경로가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="3-2-1-1: 원본, 가까운 사본, 먼 곳의 지울 수 없는 사본"
+  zones={[
+    { id: "prod", label: "운영 계정 · 리전 A", x: 8, y: 8, w: 384, h: 140, tone: "private" },
+    { id: "bk", label: "백업 계정 · 리전 B", x: 8, y: 170, w: 384, h: 140, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "db", label: "primary", sub: "원본 (1벌)", x: 90, y: 76, icon: "db" },
+    { id: "snap", label: "disk snap", sub: "빠른 복원 (2벌)", x: 290, y: 76, icon: "server", w: 116 },
+    { id: "obj", label: "object lock", sub: "불변 (3벌)", x: 290, y: 246, icon: "lock", w: 116 },
+    { id: "test", label: "restore test", sub: "매주 복원", x: 90, y: 246, icon: "server", w: 116 },
+  ]}
+  links={[
+    { from: "db", to: "snap", label: "매시간" },
+    { from: "db", to: "obj", label: "base + WAL" },
+    { from: "obj", to: "test", dashed: true },
+  ]}
+  steps={[
+    { path: ["db", "snap"], packet: "snap", title: "가까운 사본은 빨리 살리기 위해", detail: "같은 리전의 디스크 스냅숏이다. 실수로 지운 테이블을 몇 분 안에 살릴 때 쓴다. 리전이나 계정이 사라지면 함께 사라진다." },
+    { path: ["db", "obj"], packet: "WAL", title: "먼 사본은 다른 계정·리전에", detail: "베이스 백업과 WAL을 백업 전용 계정의 다른 리전 버킷으로 보낸다. 운영 계정의 관리자 권한으로는 이 계정에 들어갈 수 없다." },
+    { path: ["obj"], packet: "lock", title: "보관 기간 동안 못 지우게 잠근다", detail: "객체 잠금(Object Lock)을 걸어 정한 기간 동안 누구도 덮어쓰거나 지울 수 없게 한다. 이게 3-2-1-1의 마지막 1이다." },
+    { path: ["obj", "test"], packet: "restore", title: "0은 복원해 봐야 나온다", detail: "매주 먼 사본에서 실제로 복원해 띄우고 행 수를 확인한다. 오류가 0이어야 그 백업을 믿는다." },
+  ]}
+/>
+
+스냅숏과 원격 백업은 역할이 다르다. 스냅숏은 같은 스토리지 위에 바뀐 블록만 따로 적는 방식이라 몇 초 만에 뜨고 빨리 살린다. 대신 원본 볼륨이나 계정과 운명을 같이한다. 원격 백업은 느리지만 다른 곳에 있다. 둘 중 하나를 고르는 게 아니라 둘 다 둔다.
+
+## 전체, 증분, 차등
+
+매번 전부 뜨면(전체 백업) 단순하지만 크고 오래 걸린다. 그래서 바뀐 것만 뜬다. 기준을 어디로 잡느냐에 따라 두 가지로 나뉜다. 증분 백업은 "직전 백업 이후" 바뀐 것을, 차등 백업은 "마지막 전체 백업 이후" 바뀐 것을 뜬다. GNU tar의 `--listed-incremental`로 둘 다 만들어 보자. 10MB 파일 열 개로 시작해서 화요일에 두 개, 수요일에 하나를 바꾼다.
+
+```bash
+mkdir -p /var/tmp/v18pg/tarinc/data && cd /var/tmp/v18pg/tarinc
+for i in $(seq 1 10); do head -c 10M /dev/urandom > data/file$i; done   # 10MB 파일 10개
+
+# 월요일: 전체 백업. snap.full에 "무엇을 언제 떴는지" 목록이 남는다
+tar --listed-incremental=snap.full -czf mon-full.tgz data
+
+# 화요일: file1, file2가 바뀐다
+head -c 10M /dev/urandom > data/file1; head -c 10M /dev/urandom > data/file2
+cp snap.full snap.inc;  tar --listed-incremental=snap.inc  -czf tue-inc.tgz  data   # 증분: 목록을 이어 간다
+cp snap.full snap.diff; tar --listed-incremental=snap.diff -czf tue-diff.tgz data   # 차등: 매번 전체의 목록에서 시작
+
+# 수요일: file3이 바뀐다
+head -c 10M /dev/urandom > data/file3
+tar --listed-incremental=snap.inc -czf wed-inc.tgz data
+cp snap.full snap.diff; tar --listed-incremental=snap.diff -czf wed-diff.tgz data
+
+ls -l --block-size=M *.tgz | awk '{print $5, $9}'
+tar -tzf wed-inc.tgz; tar -tzf wed-diff.tgz     # 수요일 두 백업에 든 파일
+```
+
+```text
+101M mon-full.tgz
+21M tue-diff.tgz
+21M tue-inc.tgz
+31M wed-diff.tgz
+11M wed-inc.tgz
+data/
+data/file3
+data/
+data/file1
+data/file2
+data/file3
+```
+
+수요일 증분은 그날 바뀐 file3 하나(11MB)만, 수요일 차등은 월요일 이후 바뀐 셋(31MB)을 다 담았다. 차등은 날이 갈수록 커지고 증분은 그날 바뀐 만큼만 크다. 대신 복원할 때 필요한 파일 수가 반대가 된다. 아래 그림에서 다음을 누르면 수요일 상태로 되살릴 때 필요한 백업이 보인다.
+
+<AlgoTrace
+  caption="수요일 상태로 복원하려면 무엇이 필요한가"
+  memoryLabel="복원에 필요한 백업"
+  cells={["월 전체", "화 증분", "수 증분", "화 차등", "수 차등"]}
+  steps={[
+    { pointer: 0, memory: ["월 전체"], caption: "어느 방식이든 시작은 전체 백업이다. 101MB를 먼저 푼다." },
+    { pointer: 1, found: [0], memory: ["월 전체", "화 증분"], caption: "증분 방식: 화요일 증분을 얹는다. file1, file2가 바뀐다." },
+    { pointer: 2, found: [0, 1], memory: ["월 전체", "화 증분", "수 증분"], caption: "수요일 증분까지 얹어야 끝난다. 사슬의 고리 하나라도 깨지면 그 뒤로는 못 간다." },
+    { pointer: 4, found: [0], memory: ["월 전체", "수 차등"], caption: "차등 방식: 전체 위에 수요일 차등 하나만 얹으면 된다. 화요일 차등은 필요 없다." },
+    { pointer: 4, found: [0, 4], memory: ["증분: 3개 · 11MB 추가", "차등: 2개 · 31MB 추가"], caption: "증분은 저장이 작고 복원 사슬이 길다. 차등은 저장이 크고 사슬이 짧다." },
+  ]}
+/>
+
+현장에서는 둘을 섞는다. 일요일에 전체, 평일에 차등, 몇 시간마다 증분처럼 짠다. 증분 사슬이 길어지면 고리 하나가 깨졌을 때 그 뒤가 전부 쓸모없어지고 복원도 느려진다. 그래서 사슬 길이를 일주일 안팎으로 끊는다.
+
+PostgreSQL에 대입하면 WAL 보관이 가장 촘촘한 증분 사슬이다. 베이스 백업 하나에 WAL 파일 수천 개가 이어진다. pgBackRest는 베이스 백업 자체를 전체(`--type=full`), 차등(`diff`), 증분(`incr`)으로 나눠 뜰 수 있고, PostgreSQL 17부터는 `pg_basebackup --incremental`과 `pg_combinebackup`이 기본 도구에 들어왔다. 16에는 이 기능이 없다. 논리 백업(`pg_dump`)은 원리상 늘 전체 백업이라 큰 DB의 주 백업으로는 맞지 않고, 테이블 하나를 꺼내거나 버전을 건너 옮길 때 보조로 쓴다.
+
+## 실수 직전에 이름을 붙여 둔다
+
+PITR(시점 복구)은 베이스 백업 위에 WAL을 원하는 지점까지만 재생하는 방법이다. 시각을 목표로 하는 방법은 운영 글에서 했으니, 여기서는 위험한 작업 직전에 이름을 찍어 두고 그 이름으로 돌아가 본다. 시각은 "몇 시 몇 분 몇 초였더라"를 로그에서 찾아야 하지만, 이름은 찍어 둔 그 자리다.
+
+```bash
+# 실험용 클러스터(55181)에 상품 5000개, 그리고 베이스 백업
+psql -h 127.0.0.1 -p 55181 -U postgres -c "CREATE TABLE products (id int PRIMARY KEY, name text, price int)"
+psql -h 127.0.0.1 -p 55181 -U postgres -c "INSERT INTO products SELECT g, 'item-'||g, 1000 + g*10 FROM generate_series(1,5000) g"
+sudo -u postgres pg_basebackup -h 127.0.0.1 -p 55181 -U postgres -D /var/tmp/v18pg/base -Xstream -c fast --label=nightly
+```
+
+```sql
+UPDATE products SET price = price + 500 WHERE id <= 100;   -- 정상 작업
+SELECT pg_create_restore_point('before-price-batch');       -- 위험한 배치 직전에 이름을 찍는다
+UPDATE products SET price = 0;                               -- 실수: WHERE가 빠졌다
+SELECT pg_switch_wal();                                      -- 마지막 WAL까지 보관되게
+```
+
+```text
+UPDATE 100
+ pg_create_restore_point
+-------------------------
+ 0/300D768
+(1 row)
+
+UPDATE 5000
+```
+
+복원은 운영 서버를 건드리지 않고 옆 포트(55182)에 띄운다. 이번에는 확인을 위해 멈추지 않고 바로 승격하도록 `recovery_target_action = 'promote'`를 줬다.
+
+```bash
+sudo cp -a /var/tmp/v18pg/base /var/tmp/v18pg/r1
+cat <<'C' | sudo tee -a /var/tmp/v18pg/r1/postgresql.auto.conf
+archive_mode = 'off'
+restore_command = 'cp /var/tmp/v18pg/archive/%f %p'
+recovery_target_name = 'before-price-batch'
+recovery_target_action = 'promote'
+C
+sudo -u postgres touch /var/tmp/v18pg/r1/recovery.signal
+sudo -u postgres pg_ctl -D /var/tmp/v18pg/r1 -l /var/tmp/v18pg/r1.log -o '-p 55182' -w start
+```
+
+```text
+LOG:  starting point-in-time recovery to "before-price-batch"
+LOG:  restored log file "000000010000000000000002" from archive
+LOG:  redo starts at 0/2000028
+LOG:  restored log file "000000010000000000000003" from archive
+LOG:  consistent recovery state reached at 0/2000100
+LOG:  recovery stopping at restore point "before-price-batch", time 2026-10-20 20:35:25.685607+00
+LOG:  redo done at 0/300D700 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.03 s
+LOG:  selected new timeline ID: 2
+LOG:  archive recovery complete
+LOG:  database system is ready to accept connections
+```
+
+```sql
+-- 복원본(55182)과 운영(55181)을 비교한다
+SELECT count(*) FILTER (WHERE price = 0) AS zero,
+       count(*) FILTER (WHERE id <= 100 AND price = 1500 + id*10) AS raised,
+       pg_is_in_recovery()
+FROM products;
+```
+
+```text
+-- 복원본 55182
+zero|raised|pg_is_in_recovery
+0|100|f
+
+-- 운영 55181 (가격이 0인 상품 수만 셌다)
+zero
+5000
+```
+
+복원본에는 가격이 0인 상품이 하나도 없고, 이름을 찍기 전의 정상 작업(100개 인상)은 살아 있다. 이제 복원본에서 `products`만 떠서 운영에 되돌리면 된다. 복원 설정의 각 줄은 이렇게 읽는다.
+
+<UrlAnatomy
+  caption="이름으로 돌아가는 복구 설정"
+  base="postgresql.auto.conf"
+  separator=" : "
+  joiner=" · "
+  params={[
+    { key: "restore_command", value: "cp …/archive/%f %p", title: "WAL을 어디서 가져오나", description: "%f는 필요한 WAL 파일 이름, %p는 놓을 경로다. 실제로는 pgBackRest archive-get이나 객체 저장소에서 받는 명령을 쓴다.", required: true },
+    { key: "recovery_target_name", value: "before-price-batch", title: "어디서 멈추나", description: "pg_create_restore_point로 찍은 이름이다. 같은 이름을 두 번 찍으면 처음 것에서 멈추니 이름에 날짜를 넣는다. 시각(recovery_target_time), 트랜잭션 번호(xid), LSN도 목표가 될 수 있다." },
+    { key: "recovery_target_action", value: "promote", title: "멈춘 뒤 무엇을 하나", description: "기본값 pause는 읽기 전용으로 멈춰 확인할 시간을 준다. promote는 바로 승격, shutdown은 꺼 둔다. 사람이 확인할 거라면 pause가 안전하다." },
+    { key: "archive_mode", value: "off", title: "복원본은 보관을 끈다", description: "백업 안의 설정은 원본의 archive_command를 그대로 가지고 있다. 켜 둔 채 띄우면 복원본의 WAL이 원본 보관소에 섞인다." },
+  ]}
+/>
+
+마이그레이션이나 대량 배치 앞에 `pg_create_restore_point`를 넣는 습관은 비용이 거의 없다. WAL에 기록 하나가 남을 뿐이다. 관리형 서비스를 쓴다면 RDS의 PITR이 같은 원리로 동작하지만, 복원은 늘 새 인스턴스로 만들어진다. 운영 인스턴스를 덮어쓰는 버튼은 없다.
+
+## 얼마나 오래 두나
+
+보관 기간은 "데이터가 망가진 걸 가장 늦게 알아채는 경우"에 맞춘다. 결제 금액이 조금씩 틀리게 저장되는 버그는 월말 정산에서야 드러날 수 있다. 그렇다고 매일의 백업을 1년씩 두면 저장 비용이 감당이 안 된다. 그래서 오래된 것일수록 듬성듬성 남긴다. 흔히 GFS(Grandfather-Father-Son)라고 부르는 방식이다. 최근 7일은 매일, 그 전 4주는 주마다 하나, 그 전 1년은 달마다 하나를 남긴다.
+
+규칙대로 남길 백업을 계산해 보자. 매일 하나씩 1번부터 `today`번까지 떴고, 7의 배수 날이 주간 백업, 28의 배수 날이 월간 백업이라고 하자.
+
+<CodePlayground
+  caption="GFS 보관 규칙으로 남길 백업 고르기"
+  functionName="keptBackups"
+  initialCode={`// today: 오늘 백업 번호 (1번부터 매일 하나씩)
+// policy: { daily, weekly, monthly } 각각 몇 개를 남길지
+//   daily  : 최근 백업 daily개
+//   weekly : 7의 배수 날 중 최근 weekly개
+//   monthly: 28의 배수 날 중 최근 monthly개
+// 남길 번호를 오름차순으로, 중복 없이 돌려준다
+function keptBackups(today, policy) {
+  return [];
+}`}
+  solution={`function keptBackups(today, policy) {
+  const keep = new Set();
+  const pick = (n, ok) => {
+    let c = 0;
+    for (let d = today; d >= 1 && c < n; d--) if (ok(d)) { keep.add(d); c++; }
+  };
+  pick(policy.daily, () => true);
+  pick(policy.weekly, (d) => d % 7 === 0);
+  pick(policy.monthly, (d) => d % 28 === 0);
+  return [...keep].sort((a, b) => a - b);
+}`}
+  tests={[
+    { label: "10일째, 3/2/1", args: [10, { daily: 3, weekly: 2, monthly: 1 }], expected: [7, 8, 9, 10] },
+    { label: "60일째, 7/4/3", args: [60, { daily: 7, weekly: 4, monthly: 3 }], expected: [28, 35, 42, 49, 54, 55, 56, 57, 58, 59, 60] },
+    { label: "5일째, 아직 모자람", args: [5, { daily: 7, weekly: 4, monthly: 3 }], expected: [1, 2, 3, 4, 5] },
+    { label: "100일째, 주간 없음", args: [100, { daily: 2, weekly: 0, monthly: 2 }], expected: [56, 84, 99, 100] },
+  ]}
+/>
+
+60일째에 남는 건 11개다. 날마다 하나씩 60개를 두는 것보다 훨씬 적지만, 7주 전 시점까지 돌아갈 수 있다. 다만 듬성듬성한 구간에서는 그 백업 시점으로만 돌아갈 수 있다. 아무 시점으로나 돌아가려면 그 구간의 WAL도 함께 남겨야 한다.
+
+WAL을 지울 때 가장 흔한 실수가 여기서 나온다. 가장 오래 남긴 베이스 백업이 필요로 하는 WAL보다 앞의 것만 지워야 한다. `pg_archivecleanup`에 그 백업의 `.backup` 파일 이름을 주면 그보다 앞의 WAL만 고른다. `-n`은 지우지 않고 목록만 보여 준다.
+
+```bash
+# 가장 오래 남길 베이스 백업이 시작된 WAL보다 앞의 파일만 (먼저 -n으로 확인)
+sudo -u postgres pg_archivecleanup -n /var/tmp/v18pg/archive 000000010000000000000002.00000028.backup
+```
+
+```text
+/var/tmp/v18pg/archive/000000010000000000000001
+```
+
+보관 기간이 지난 백업을 지우는 스크립트가 최신 전체 백업까지 지우는 사고도 있다. 보관 개수를 "0개 이상"으로 짜 놓고 백업이 며칠 실패하면, 정리 작업은 계속 돌아 오래된 것부터 지우다 결국 전부 지운다. 정리 작업은 "성공한 최신 전체 백업이 N개 미만이면 아무것도 지우지 않는다"는 조건을 먼저 검사한다.
+
+## 랜섬웨어는 백업부터 노린다
+
+공격자는 암호화하기 전에 백업을 먼저 찾아 지운다. 그래야 몸값을 받는다. 그래서 백업의 마지막 한 벌은 "공격자가 운영 서버의 root를 가져도" 지울 수 없어야 한다.
+
+리눅스의 불변 속성(`chattr +i`)부터 해 보자. 파일 시스템 수준에서 쓰기와 삭제를 막는다.
+
+```bash
+# root 셸에서: 백업 파일에 불변 속성을 건다
+chattr +i vault/000000010000000000000002 && lsattr vault/
+rm -f vault/000000010000000000000002                  # 지우기 시도
+echo encrypted > vault/000000010000000000000002       # 덮어쓰기 시도
+```
+
+```text
+----i---------e------- vault/000000010000000000000002
+rm: cannot remove 'vault/000000010000000000000002': Operation not permitted
+/bin/bash: line 1: vault/000000010000000000000002: Operation not permitted
+```
+
+root도 못 지운다. 그런데 한 줄만 더 치면 된다.
+
+```bash
+# 같은 root 셸에서 속성을 풀고 지운다
+chattr -i vault/000000010000000000000002 && rm vault/000000010000000000000002 && echo "after chattr -i: removed"
+```
+
+```text
+after chattr -i: removed
+```
+
+같은 서버의 root는 속성을 풀 수 있다. 같은 권한 안에 있는 잠금은 실수를 막을 뿐 공격은 못 막는다. 공격을 막는 불변성은 잠금을 푸는 열쇠가 공격자 손이 닿지 않는 곳에 있어야 한다. 아래 그림에서 다음을 누르면 공격자가 어디까지 가고 어디서 막히는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="운영 계정을 뺏겨도 백업 계정의 잠긴 사본은 남는다"
+  zones={[
+    { id: "prod", label: "운영 계정", x: 8, y: 8, w: 384, h: 136, tone: "private" },
+    { id: "bk", label: "백업 계정 (따로 로그인)", x: 8, y: 166, w: 384, h: 146, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "atk", label: "attacker", sub: "root 탈취", x: 80, y: 74, icon: "client" },
+    { id: "db", label: "DB server", sub: "암호화됨", x: 210, y: 74, icon: "db" },
+    { id: "nas", label: "local bak", sub: "같은 서버", x: 330, y: 74, icon: "server", w: 100 },
+    { id: "push", label: "uploader", sub: "쓰기만", x: 110, y: 240, icon: "gateway" },
+    { id: "obj", label: "bucket", sub: "Object Lock", x: 290, y: 240, icon: "lock" },
+  ]}
+  links={[
+    { from: "atk", to: "db" },
+    { from: "db", to: "nas" },
+    { from: "db", to: "push", label: "PutObject" },
+    { from: "push", to: "obj" },
+  ]}
+  steps={[
+    { path: ["atk", "db"], packet: "root", title: "운영 서버를 뺏긴다", detail: "공격자가 DB 서버의 root를 얻었다. 이 서버가 할 수 있는 일은 공격자도 다 할 수 있다." },
+    { path: ["atk", "db", "nas"], packet: "rm -rf", title: "가까운 백업은 함께 사라진다", detail: "같은 서버에 마운트된 백업 디스크는 폴더 하나일 뿐이다. chattr도 root가 풀 수 있다." },
+    { path: ["atk", "db", "push", "obj"], packet: "DELETE", blocked: true, title: "잠긴 사본은 못 지운다", detail: "운영 쪽 자격 증명은 백업 버킷에 올리기만 할 수 있다. 지우기 권한이 없고, 있어도 보관 기간이 끝나기 전에는 잠금이 막는다." },
+    { path: ["obj"], packet: "restore", title: "다른 계정에서 되살린다", detail: "백업 계정에 따로 로그인해 잠긴 사본으로 새 환경을 만든다. 운영 계정은 오염됐다고 보고 쓰지 않는다." },
+  ]}
+/>
+
+S3 Object Lock에는 두 모드가 있다. 거버넌스 모드는 `s3:BypassGovernanceRetention` 권한을 가진 사용자가 잠금을 우회할 수 있다. 컴플라이언스 모드는 보관 기간이 끝날 때까지 계정의 루트 사용자도 지우거나 기간을 줄일 수 없다. 랜섬웨어 대비라면 컴플라이언스 모드가 맞다. 대신 잘못 걸면 그 기간 내내 저장 비용을 내야 하니, 처음에는 짧은 기간으로 시험한다. 아래는 잠금이 걸린 객체 버전을 지우려 할 때 CLI가 돌려주는 형식이다(예시, 이 컨테이너에는 AWS 계정이 없어 직접 돌려 보지 못했다).
+
+```bash
+# 특정 버전을 지우려 하면 잠금이 막는다
+aws s3api delete-object --bucket shop-db-backup --key base/20261020.tar --version-id 3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY
+```
+
+```text
+An error occurred (AccessDenied) when calling the DeleteObject operation: Access Denied
+```
+
+함께 챙길 것이 있다. 올리는 쪽은 "쓰기만" 하게 한다(밀어 넣기 방식). 아니면 백업 서버가 운영 DB에서 끌어오게 해서(당겨 오기 방식) 운영 서버에는 백업 저장소의 자격 증명이 아예 없게 한다. 백업 자체는 운영과 다른 키로 암호화한다. 이 부분은 [저장 데이터 암호화](/posts/encryption-at-rest)에서 다룬다. 그리고 오프라인 사본(테이프, 떼어 둔 디스크)은 느리지만 네트워크로는 닿을 방법이 없다는 장점이 여전히 있다.
+
+## 복원해 보지 않은 백업은 기대일 뿐이다
+
+백업 파일이 깨졌는지는 복원하기 전에도 어느 정도 알 수 있다. `pg_basebackup`이 만든 `backup_manifest`에는 파일마다 체크섬이 들어 있다. 백업 사본의 한 바이트를 일부러 바꾸고 검사해 봤다.
+
+```bash
+# 원본 백업과, 한 바이트를 바꾼 사본을 각각 검사한다
+sudo -u postgres pg_verifybackup /var/tmp/v18pg/base
+sudo cp -a /var/tmp/v18pg/base /var/tmp/v18pg/base-copy
+printf 'X' | sudo dd of=/var/tmp/v18pg/base-copy/base/5/16389 bs=1 seek=100 conv=notrunc
+sudo -u postgres pg_verifybackup /var/tmp/v18pg/base-copy; echo "rc=$?"
+```
+
+```text
+backup successfully verified
+pg_verifybackup: error: checksum mismatch for file "base/5/16389"
+rc=1
+```
+
+`pg_verifybackup`은 파일이 빠졌거나 바뀐 것을 잡고, 백업에 필요한 WAL이 다 있는지도 본다. 하지만 원래 DB에 이미 들어 있던 잘못된 데이터, 보관소에서 나중에 빠진 WAL 파일, 복원 절차의 오류는 잡지 못한다. 그래서 정기적으로 진짜 복원을 한다. 아래 그림은 매주 도는 복원 테스트 작업의 흐름이다.
+
+<SequenceDiagram
+  caption="매주 도는 복원 테스트"
+  actors={[
+    { id: "cron", label: "스케줄러" },
+    { id: "bk", label: "백업 저장소" },
+    { id: "tmp", label: "임시 DB" },
+    { id: "mon", label: "모니터링" },
+  ]}
+  steps={[
+    { from: "cron", to: "bk", label: "최신 백업", title: "가장 최근 백업을 고른다", detail: "어제 성공했다는 그 백업이다. 고르는 기준이 운영 복원 때와 같아야 의미가 있다." },
+    { from: "bk", to: "tmp", label: "base + WAL", title: "격리된 곳에 복원한다", detail: "운영과 네트워크가 끊긴 계정이나 서브넷에 띄운다. 복원본이 운영 DB에 붙거나 운영 보관소에 WAL을 쓰지 않게 한다." },
+    { from: "cron", to: "tmp", label: "검사 SQL", title: "데이터를 확인한다", detail: "주요 테이블의 행 수가 전날과 비슷한지, 가장 최근 주문 시각이 백업 시각과 가까운지, amcheck로 인덱스가 멀쩡한지 본다.", payload: "SELECT count(*), max(created_at) FROM orders;" },
+    { from: "cron", to: "mon", label: "결과·소요 시간", title: "숫자를 남긴다", detail: "성공 여부와 함께 복사·재생에 걸린 시간을 지표로 보낸다. 이 시간이 RTO 목표를 넘기 시작하면 백업 주기를 손본다." },
+    { from: "cron", to: "tmp", label: "삭제", title: "임시 DB를 지운다", detail: "복원본에도 운영 데이터가 들어 있으니 바로 지운다. 남겨 두면 그 자체가 유출 경로가 된다." },
+  ]}
+/>
+
+알림은 실패만이 아니라 "오래 성공하지 않음"에 건다. 마지막 성공 백업이 26시간 이상 지났다, 마지막으로 보관된 WAL이 `archive_timeout`의 몇 배 이상 오래됐다(`pg_stat_archiver.last_archived_time`), 마지막 복원 테스트 성공이 8일 넘었다 같은 식이다. 작업이 아예 안 돌면 실패 알림도 오지 않기 때문이다.
+
+## 백업이 조용히 망가지는 순간
+
+"백업은 매일 성공인데 파일 크기가 0이다"는 스크립트가 파이프 중간의 실패를 삼킨 경우다. `pg_dump db | gzip > file` 같은 줄은 `pg_dump`가 실패해도 `gzip`이 성공하면 성공으로 끝난다. 셸 스크립트에 `set -o pipefail`을 넣고, 결과 파일 크기가 전날의 절반 아래로 떨어지면 알린다.
+
+"DB 디스크가 차오른다"는 `archive_command`가 실패하고 있다는 신호인 경우가 많다. 보관에 실패한 WAL은 지워지지 않고 `pg_wal`에 쌓인다. `pg_stat_archiver`의 `failed_count`와 `last_failed_wal`을 본다. 원인은 보관소 권한, 가득 찬 저장소, 만료된 자격 증명이 흔하다.
+
+"복원은 됐는데 3일 전 데이터다"는 중간 WAL 하나가 빠진 경우다. 복원 로그에 `could not open file "…": No such file or directory`나 사슬이 끊긴 지점에서 재생이 끝났다는 줄이 남는다. 정리 작업이 너무 많이 지웠거나, 보관 중 한 파일만 업로드에 실패했을 수 있다. 복원 테스트에서 "마지막 주문 시각"을 확인해야 하는 이유다.
+
+"백업은 있는데 아무도 복원 명령을 모른다"는 기술 문제가 아니다. 런북에 명령을 그대로 붙여 두고, 분기마다 다른 사람이 그 런북만 보고 복원해 본다.
+
+## 정리: 사고마다 다른 사본
+
+같은 서버의 사본은 실수로 지운 파일을 빨리 살리고, 다른 계정·리전의 사본은 서버와 리전과 계정이 사라지는 사고를 견디고, 지울 수 없는 사본은 공격자를 견디고, 보관 기간은 늦게 발견되는 손상을 견딘다. 어떤 사고를 막을지 정하면 몇 벌을 어디에 둘지는 따라 나온다. 그리고 그 모든 사본은 복원해 본 적이 있을 때만 백업이다.
+
+이 주제의 다른 글: [재해 복구](/posts/disaster-recovery), [장애 조치](/posts/failover), [멀티 리전](/posts/multi-region).
+
+## 면접에서 나올 만한 질문
+
+### 3-2-1 백업 규칙을 설명해 주세요.
+
+데이터를 원본 포함 세 벌 두고, 두 벌은 서로 다른 매체에, 한 벌은 다른 장소에 두라는 규칙이다. 같은 원인으로 함께 죽는 일을 막기 위해서다. 요즘은 한 벌을 불변이나 오프라인으로 두고, 복원 테스트 오류를 0으로 유지하라는 뜻을 더해 3-2-1-1-0이라고도 한다. 클라우드에서는 같은 계정 안의 두 벌을 사실상 한 벌로 본다.
+
+### 증분 백업과 차등 백업의 차이는 무엇인가요?
+
+증분은 직전 백업 이후, 차등은 마지막 전체 백업 이후 바뀐 것을 뜬다. 증분은 한 번 뜨는 양이 작지만 복원할 때 전체부터 마지막 증분까지 사슬을 모두 적용해야 하고, 중간 하나가 깨지면 그 뒤가 쓸모없어진다. 차등은 날이 갈수록 커지지만 전체 하나와 차등 하나면 복원된다. 실험에서 수요일 증분은 11MB, 차등은 31MB였다.
+
+### 복제본이 있는데 백업이 왜 따로 필요한가요?
+
+복제는 실수와 공격도 그대로 복제하기 때문이다. WHERE 없는 DELETE나 랜섬웨어의 암호화는 복제본에도 바로 반영된다. 백업은 과거 시점의 사본이라 그 이전으로 돌아갈 수 있다. 복제는 하드웨어 장애의 복구 시간을 줄이고, 백업은 데이터 손상에서 되돌리는 수단이다.
+
+### PITR에서 시각 대신 복원 지점 이름을 쓰면 무엇이 좋은가요?
+
+위험한 작업 직전의 정확한 위치를 미리 찍어 둘 수 있다. 시각을 목표로 하면 사고 시각을 로그에서 찾아야 하고 초 단위로 어긋날 수 있다. `pg_create_restore_point`는 WAL에 기록 하나만 남기니 비용이 거의 없어서, 마이그레이션이나 대량 배치 앞에 넣어 두는 습관으로 쓴다. 같은 이름이 여러 번 있으면 처음 것에서 멈추니 이름에 날짜를 넣는다.
+
+### 랜섬웨어로부터 백업을 지키려면 어떻게 하나요?
+
+운영 환경의 root나 관리자 권한을 뺏겨도 지울 수 없는 사본을 하나 둔다. 같은 서버의 `chattr +i`는 root가 풀 수 있어서 부족하고, 다른 계정의 버킷에 컴플라이언스 모드 Object Lock을 걸어야 보관 기간 동안 누구도 지우지 못한다. 운영 쪽 자격 증명은 쓰기만 가능하게 하거나 백업 서버가 끌어오게 하고, 백업은 별도 키로 암호화한다.
+
+### 백업이 정상인지 어떻게 확인하나요?
+
+정기적으로 실제로 복원해 본다. `pg_verifybackup` 같은 체크섬 검사는 파일 손상을 잡지만 빠진 WAL이나 절차 오류는 못 잡는다. 매주 격리된 곳에 최신 백업을 복원해 행 수와 마지막 데이터 시각을 확인하고, 걸린 시간을 RTO 목표와 비교한다. 알림은 실패뿐 아니라 "마지막 성공이 너무 오래됨"에도 건다.
+
+### 보관 기간은 어떻게 정하나요?
+
+데이터 손상을 가장 늦게 알아챌 수 있는 기간에 맞춘다. 매일의 백업을 오래 두면 비싸니 최근은 촘촘히, 오래된 것은 듬성듬성 남기는 GFS 방식을 많이 쓴다. 정리 작업은 가장 오래 남긴 베이스 백업이 필요로 하는 WAL을 지우지 않게 하고, 성공한 최신 백업이 기준 개수보다 적으면 아무것도 지우지 않게 막는다.
