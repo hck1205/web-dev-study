@@ -2,6 +2,121 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "networking-essentials-map": {
+    "links": [
+      "what-happens-google-com",
+      "devops-networking-roadmap",
+      "ipv6-basics",
+      "layer-ip-addressing",
+      "dhcp",
+      "dns",
+      "hosts-file",
+      "layer-link-ethernet-arp",
+      "vlan-basics",
+      "router-vs-switch",
+      "layer-ip-routing-icmp",
+      "iptables-nat",
+      "nat-traversal",
+      "iptables-basics",
+      "security-groups-nacl",
+      "ports-and-sockets",
+      "tcp-connection-lifecycle",
+      "tcp-reliability-congestion",
+      "udp-and-quic",
+      "https-tls",
+      "http-message",
+      "http-methods",
+      "http-status-codes",
+      "http-versions",
+      "vpn-ipsec-wireguard",
+      "network-layers-overview",
+      "packet-encapsulation",
+      "osi-in-practice",
+      "network-troubleshooting-by-layer",
+      "packet-capture-tcpdump"
+    ],
+    "mentions": [
+      "vpc-subnets-route-tables",
+      "layer-mtu-fragmentation"
+    ]
+  },
+  "packet-encapsulation": {
+    "links": [
+      "network-layers-overview",
+      "packet-capture-tcpdump",
+      "https-tls",
+      "layer-mtu-fragmentation",
+      "sdn-vxlan-overlay",
+      "vpn-ipsec-wireguard",
+      "ipv6-basics",
+      "udp-and-quic",
+      "networking-essentials-map"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "layer-link-ethernet-arp",
+      "vlan-basics",
+      "http-versions",
+      "tcp-reliability-congestion",
+      "layer-ip-routing-icmp",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "nat-traversal": {
+    "links": [
+      "iptables-nat",
+      "udp-and-quic",
+      "vpc-subnets-route-tables",
+      "router-vs-switch"
+    ],
+    "mentions": [
+      "iptables-basics",
+      "security-groups-nacl",
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "router-vs-switch": {
+    "links": [
+      "layer-link-ethernet-arp",
+      "layer-ip-routing-icmp",
+      "vlan-basics",
+      "sdn-vxlan-overlay",
+      "iptables-nat",
+      "docker-network-drivers",
+      "vpc-subnets-route-tables",
+      "nat-traversal"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "packet-capture-tcpdump",
+      "dhcp",
+      "ipv6-basics",
+      "vpc-basics",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "dhcp": {
+    "links": [
+      "layer-ip-addressing",
+      "layer-link-ethernet-arp",
+      "packet-capture-tcpdump",
+      "vpn-ipsec-wireguard",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "rendering-csr-spa",
+      "layer-ip-routing-icmp",
+      "local-custom-domain",
+      "router-vs-switch",
+      "connection-pool",
+      "vlan-basics",
+      "vpc-basics",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
   "microservices-decomposition": {
     "links": [
       "microservices",
@@ -2026,6 +2141,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "http-status-codes",
       "resilience-patterns",
+      "dhcp",
       "cilium-ebpf",
       "on-call"
     ]
@@ -3364,7 +3480,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "ports-and-sockets",
       "local-custom-domain",
+      "dhcp",
       "layer-ip-routing-icmp",
+      "packet-encapsulation",
       "udp-and-quic",
       "dns"
     ]
@@ -4038,6 +4156,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-service-types",
       "iptables-basics",
+      "packet-encapsulation",
       "k8s-architecture",
       "packet-capture-tcpdump",
       "kubernetes-ingress",
@@ -4130,6 +4249,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "failover",
       "network-partitions",
+      "dhcp",
       "rolling-deployment",
       "kafka-basics",
       "high-availability",
@@ -4385,6 +4505,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-link-ethernet-arp",
       "vpn-ipsec-wireguard",
       "security-groups-nacl",
+      "dhcp",
       "layer-ip-routing-icmp",
       "vpc-basics",
       "udp-and-quic",
@@ -4765,6 +4886,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "docker-container-basics",
       "https-tls",
+      "packet-encapsulation",
       "kafka-basics",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
@@ -4785,6 +4907,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "service-mesh",
       "http-versions",
+      "nat-traversal",
       "cookie-session-login",
       "grpc",
       "caching-strategies"
@@ -4984,6 +5107,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "ipv6-basics",
       "layer-ip-routing-icmp",
+      "router-vs-switch",
       "udp-and-quic"
     ]
   },
@@ -5013,6 +5137,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "packet-capture-tcpdump",
+      "router-vs-switch",
+      "dhcp",
       "layer-ip-routing-icmp",
       "udp-and-quic",
       "dns"
@@ -5029,7 +5155,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "packet-capture-tcpdump",
+      "nat-traversal",
       "security-groups-nacl",
+      "dhcp",
       "udp-and-quic",
       "dns"
     ]
@@ -5093,6 +5221,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "http-status-codes",
       "health-checks",
+      "nat-traversal",
       "osi-in-practice",
       "redis-basics",
       "ipv6-basics"
@@ -5138,6 +5267,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "vpc-subnets-route-tables",
       "ports-and-sockets",
+      "dhcp",
       "layer-ip-routing-icmp",
       "postgres-getting-started",
       "udp-and-quic",
@@ -5202,6 +5332,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ssrf",
       "layer-link-ethernet-arp",
       "what-happens-google-com",
+      "dhcp",
       "high-availability",
       "eks-cluster-basics",
       "dns"
@@ -5999,6 +6130,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ddos-protection",
       "sdn-vxlan-overlay",
       "security-groups-nacl",
+      "dhcp",
       "network-monitoring",
       "ipv6-basics",
       "layer-ip-routing-icmp"
@@ -6043,6 +6175,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "packet-encapsulation",
       "packet-capture-tcpdump",
       "http-versions",
       "what-happens-google-com",
@@ -6076,6 +6209,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "iptables-basics",
       "vpc-peering-transit-privatelink",
+      "router-vs-switch",
       "http-versions",
       "security-groups-nacl",
       "vlan-basics",
@@ -6098,6 +6232,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "vpc-peering-transit-privatelink",
       "docker-container-basics",
+      "router-vs-switch",
       "what-happens-google-com",
       "load-balancer-basics",
       "vpc-basics"
@@ -6120,8 +6255,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "k8s-cni-pod-network",
       "ssrf",
+      "nat-traversal",
       "security-groups-nacl",
       "vpc-basics",
+      "dhcp",
       "eks-cluster-basics",
       "dns"
     ]
@@ -6140,6 +6277,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-link-ethernet-arp",
       "iptables-nat",
       "security-groups-nacl",
+      "dhcp",
       "ipv6-basics",
       "udp-and-quic"
     ]
@@ -6219,7 +6357,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "raft-consensus",
       "distributed-transactions-2pc",
       "scaling-horizontal-vertical",
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "packet-encapsulation"
     ]
   },
   "db-type-embedded": {
@@ -6930,6 +7069,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-addressing",
       "http-status-codes",
       "what-happens-google-com",
+      "dhcp",
       "ipv6-basics",
       "udp-and-quic",
       "dns"
@@ -7115,6 +7255,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "https-tls"
     ],
     "mentions": [
+      "packet-encapsulation",
       "upper-layers-session-presentation-app",
       "http-versions",
       "what-happens-google-com"
@@ -7162,7 +7303,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "iptables-nat": {
     "links": [
       "iptables-basics",
-      "kubernetes-ingress"
+      "kubernetes-ingress",
+      "nat-traversal"
     ],
     "mentions": [
       "k8s-kube-proxy-modes",
@@ -7175,6 +7317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
+      "dhcp",
       "grpc",
       "ipv6-basics",
       "udp-and-quic",

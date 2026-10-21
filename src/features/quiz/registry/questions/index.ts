@@ -71,6 +71,7 @@ import { DEADLOCKS } from "./deadlocks";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
+import { DHCP } from "./dhcp";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -266,12 +267,14 @@ import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
+import { NAT_TRAVERSAL } from "./nat-traversal";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
 import { NETWORK_FLOW_LOGS } from "./network-flow-logs";
 import { NETWORK_LAYERS_OVERVIEW } from "./network-layers-overview";
 import { NETWORK_MONITORING } from "./network-monitoring";
 import { NETWORK_PARTITIONS } from "./network-partitions";
 import { NETWORK_TROUBLESHOOTING_BY_LAYER } from "./network-troubleshooting-by-layer";
+import { NETWORKING_ESSENTIALS_MAP } from "./networking-essentials-map";
 import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-rendering";
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
@@ -283,6 +286,7 @@ import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
+import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -350,6 +354,7 @@ import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { ROLLBACK_STRATEGY } from "./rollback-strategy";
 import { ROLLING_DEPLOYMENT } from "./rolling-deployment";
+import { ROUTER_VS_SWITCH } from "./router-vs-switch";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
@@ -496,6 +501,7 @@ export const QUESTION_SETS = [
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
+  DHCP,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -691,12 +697,14 @@ export const QUESTION_SETS = [
   MULTI_REGION,
   MVC_PATTERN,
   N_PLUS_ONE_QUERIES,
+  NAT_TRAVERSAL,
   NETWORK_CONFIG_CICD,
   NETWORK_FLOW_LOGS,
   NETWORK_LAYERS_OVERVIEW,
   NETWORK_MONITORING,
   NETWORK_PARTITIONS,
   NETWORK_TROUBLESHOOTING_BY_LAYER,
+  NETWORKING_ESSENTIALS_MAP,
   NEXTJS_STATIC_DYNAMIC_RENDERING,
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
@@ -708,6 +716,7 @@ export const QUESTION_SETS = [
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
+  PACKET_ENCAPSULATION,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -775,6 +784,7 @@ export const QUESTION_SETS = [
   RETRIES,
   ROLLBACK_STRATEGY,
   ROLLING_DEPLOYMENT,
+  ROUTER_VS_SWITCH,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,

@@ -1,0 +1,483 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nat-traversal");
+
+화상 통화 기능을 붙였다. 사무실 와이파이끼리는 잘 된다. 그런데 한쪽이 휴대폰 LTE로 들어오면 연결 중 표시만 돌다가 끝난다. 브라우저 콘솔에는 `iceConnectionState: failed`. 서버 로그에는 아무 오류가 없다. 서버를 거치지 않고 두 브라우저가 직접 이야기하려다 실패한 것이라 서버가 알 길이 없다.
+
+두 기기 모두 NAT 뒤에 있다. 사설 주소를 가진 기기는 밖으로 나가는 연결은 자유롭게 만들지만, 밖에서 먼저 걸어오는 연결은 받지 못한다. 둘 다 그렇다면 누가 먼저 걸어야 할까. 이 글은 이 문제를 푸는 기술, NAT traversal을 다룬다. NAT 장비가 주소를 바꾸고 기억하는 방식이 몇 가지로 갈리는지, STUN으로 내 바깥 주소를 알아내고 UDP 홀 펀칭으로 직접 길을 뚫는 법, 그게 안 될 때 TURN이 대신 나르는 법, 이 모두를 엮는 ICE, 그리고 CGNAT과 포트 고갈까지 실제 네임스페이스 실습으로 본다.
+
+리눅스에서 NAT를 직접 설정하는 법(SNAT, DNAT, MASQUERADE, conntrack, 헤어핀 NAT)은 이 주제의 다른 글 [iptables NAT와 포트 포워딩](/posts/iptables-nat)에서 다뤘다. 여기서는 그 규칙들이 NAT 뒤의 두 기기에게 어떤 벽이 되는지, 그 벽을 어떻게 넘는지에 집중한다. 기준 OS는 Ubuntu 24.04다. NAT 장비는 iptables MASQUERADE를 건 네트워크 네임스페이스로, 인터넷은 브리지 하나로 흉내 냈고 공인 주소 자리에는 문서용 대역 `203.0.113.0/24`를 썼다. STUN 서버는 `stund` 0.97(RFC 3489 방식의 분류 도구가 들어 있다), TURN 서버는 coturn이다. 출력은 모두 실제로 받은 것이고, 브라우저 SDP만 형식에 맞춘 예시라고 따로 밝혔다.
+
+## NAT가 먼저 걸어오는 연결을 막는 이유
+
+NAT 장비는 안에서 밖으로 나가는 패킷의 출발지를 자기 공인 주소와 포트로 바꾸고, 그 바꿈을 표에 적어 둔다. 답이 돌아오면 표를 보고 원래 기기에게 돌려준다. 이 글에서는 이 표를 "방명록"이라고 부르겠다. 안에서 누가 누구에게 나갔는지 적힌 방명록에 있는 상대만 들어올 수 있다.
+
+실습 NAT 장비의 방명록(conntrack)을 보면 이렇게 생겼다.
+
+```bash
+# NAT 장비의 UDP 변환 기록
+sudo conntrack -L -p udp
+```
+
+```text
+udp      17 118 src=10.0.0.2 dst=203.0.113.10 sport=40000 dport=3478 src=203.0.113.10 dst=203.0.113.1 sport=3478 dport=40000 [ASSURED] mark=0 use=1
+```
+
+앞쪽 네 칸이 안에서 나간 원래 모습(`10.0.0.2:40000 → 203.0.113.10:3478`), 뒤쪽 네 칸이 돌아올 답의 모습(`203.0.113.10:3478 → 203.0.113.1:40000`)이다. 내부 기기 `10.0.0.2:40000`이 바깥에서는 `203.0.113.1:40000`으로 보인다. 이 공인 주소와 포트 한 쌍을 매핑이라고 부른다. 118은 이 줄이 지워지기까지 남은 초다.
+
+밖에서 먼저 온 패킷은 방명록에 맞는 줄이 없으니 어느 내부 기기에게 줄지 모른다. 그래서 NAT 뒤의 기기는 서버가 될 수 없다. 포트 포워딩으로 줄을 미리 적어 두면 되지만, 휴대폰과 브라우저가 그때그때 공유기 설정을 바꿀 수는 없다. 두 기기가 서로 직접 이야기하려면, 둘 다 "먼저 나가는" 패킷을 보내서 서로의 방명록에 상대를 적어 넣어야 한다. 이게 NAT traversal의 출발점이다.
+
+## 매핑과 필터링, 두 가지로 성격이 갈린다
+
+NAT 장비마다 방명록을 쓰는 규칙이 다르다. 두 질문으로 가른다.
+
+- 매핑: 같은 내부 주소·포트에서 다른 목적지로 나가면, 바깥 포트가 같은가 다른가
+- 필터링: 매핑이 생긴 뒤, 그 공인 포트로 누가 들어올 수 있나. 아무나, 내가 보냈던 IP면, 내가 보냈던 IP와 포트만
+
+예전 RFC 3489는 이걸 네 가지 이름으로 불렀고, 지금 쓰는 RFC 4787은 두 축으로 나눠 부른다.
+
+| 예전 이름 | 매핑 | 필터링 | 홀 펀칭 |
+|---|---|---|---|
+| Full cone | 목적지와 무관(EIM) | 아무나 | 쉽다 |
+| Restricted cone | 목적지와 무관 | 보냈던 IP | 된다 |
+| Port restricted cone | 목적지와 무관 | 보냈던 IP와 포트 | 된다 |
+| Symmetric | 목적지마다 다름 | 보냈던 IP와 포트 | 상대도 symmetric이거나 port restricted면 거의 안 된다 |
+
+`stund`는 IP 두 개, 포트 두 개를 가진 STUN 서버다. 클라이언트가 "다른 IP에서 답해 달라", "다른 포트에서 답해 달라"라고 요청하고, 그 답이 NAT를 넘어오는지로 성격을 가린다. 기본 MASQUERADE 규칙 뒤에서 돌려 봤다.
+
+```bash
+# NAT 장비: 나가는 패킷의 출발지를 wan 주소로 바꾼다
+sudo iptables -t nat -A POSTROUTING -o wan -j MASQUERADE
+# 내부 기기: 40000번 포트에서 STUN 서버에 NAT 성격을 묻는다
+stun 203.0.113.10 -v -p 40000
+```
+
+```text
+MappedAddress = 203.0.113.1:40000
+SourceAddress = 203.0.113.10:3478
+ChangedAddress = 203.0.113.11:3479
+...
+MappedAddress = 203.0.113.1:40000
+SourceAddress = 203.0.113.11:3479
+...
+test I = 1
+test II = 0
+test III = 0
+test I(2) = 1
+is nat  = 1
+mapped IP same = 1
+hairpin = 0
+preserver port = 1
+Primary: Independent Mapping, Port Dependent Filter, preserves ports, no hairpin	
+Return value is 0x000017
+```
+
+서버의 첫 IP(`.10`)에 물었을 때도, 둘째 IP(`.11`)에 물었을 때도 바깥 주소가 `203.0.113.1:40000`으로 같다(`mapped IP same = 1`). 목적지와 무관한 매핑이다. 리눅스 MASQUERADE는 비어 있으면 원래 포트를 그대로 쓰는 것도 보인다(`preserves ports`). 대신 test II(다른 IP에서 답하기)와 test III(다른 포트에서 답하기)가 0이다. 답이 NAT에서 막혔다. NAT 장비에서 찍은 캡처에 그 장면이 있다.
+
+```text
+08:13:51.188479 lan   In  IP 10.0.0.2.40001 > 203.0.113.10.3478: UDP, length 28
+08:13:51.188502 wan   Out IP 203.0.113.1.40001 > 203.0.113.10.3478: UDP, length 28
+08:13:51.188802 wan   In  IP 203.0.113.11.3478 > 203.0.113.1.40001: UDP, length 88
+08:13:51.198628 lan   In  IP 10.0.0.2.40001 > 203.0.113.10.3478: UDP, length 28
+```
+
+`.10`에 보낸 요청의 답이 `.11`에서 왔다. wan으로 들어왔지만 lan으로 나가는 줄이 없다. 방명록에 `.11`이 없어서다. 결과는 port restricted cone, RFC 4787 말로는 "목적지와 무관한 매핑, 주소와 포트에 따른 필터링"이다. 리눅스 conntrack이 기본으로 이렇게 동작하고, 많은 가정용 공유기도 리눅스 위에서 돈다.
+
+규칙에 `--random-fully`를 붙이면 매핑이 목적지마다 달라진다.
+
+```bash
+# 포트를 목적지마다 무작위로 고른다 (쿠버네티스 kube-proxy도 이 옵션을 쓴다)
+sudo iptables -t nat -R POSTROUTING 1 -o wan -j MASQUERADE --random-fully
+```
+
+```text
+MappedAddress = 203.0.113.1:45170
+XorMappedAddress = 203.0.113.1:45170
+MappedAddress = 203.0.113.1:31287
+XorMappedAddress = 203.0.113.1:31287
+...
+mapped IP same = 0
+hairpin = 0
+preserver port = 0
+Primary: Dependent Mapping, random port, no hairpin	
+Return value is 0x000018
+```
+
+같은 내부 포트 40000인데 `.10`에게는 45170, `.11`에게는 31287로 보였다. symmetric NAT다. 이 차이가 뒤에서 홀 펀칭의 성패를 가른다. 반대쪽 끝도 만들어 봤다. MASQUERADE는 그대로 두고 `40000:40001`을 내부 기기로 고정 포워딩(DNAT)하니 결과가 `Independent Mapping, Independent Filter`, 곧 full cone이 됐다. 포트 포워딩은 그 포트에 한해 아무나 들어오게 여는 일이다.
+
+아래 그림에서 다음을 누르면 stund 테스트가 무엇을 묻고 어디서 막히는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="STUN 서버 IP 두 개로 NAT의 성격을 가린다"
+  zones={[
+    { id: "home", label: "집 10.0.0.0/24", x: 6, y: 6, w: 140, h: 268, tone: "private" },
+    { id: "net", label: "인터넷 203.0.113.0/24", x: 154, y: 6, w: 240, h: 268, tone: "public" },
+  ]}
+  nodes={[
+    { id: "c", label: "client", sub: "10.0.0.2:40000", x: 76, y: 70, icon: "client", w: 120 },
+    { id: "nat", label: "NAT", sub: "203.0.113.1", x: 76, y: 200, icon: "router" },
+    { id: "s1", label: "STUN .10", sub: ":3478", x: 320, y: 70, icon: "server" },
+    { id: "s2", label: "STUN .11", sub: ":3479", x: 320, y: 200, icon: "server" },
+  ]}
+  links={[
+    { from: "c", to: "nat" },
+    { from: "nat", to: "s1" },
+    { from: "nat", to: "s2" },
+  ]}
+  steps={[
+    { path: ["c", "nat", "s1"], packet: "Binding", title: "바깥에서 내가 어떻게 보이나", detail: "STUN Binding 요청을 보낸다. NAT가 출발지를 203.0.113.1:40000으로 바꾸고 방명록에 .10:3478을 적는다." },
+    { path: ["s1", "nat", "c"], packet: "Mapped", title: "서버가 본 주소를 돌려준다", detail: "답에 들어 있는 MappedAddress가 내 공인 주소와 포트다. 방명록에 있는 상대라서 통과한다.", payload: "MappedAddress = 203.0.113.1:40000" },
+    { path: ["s2", "nat"], packet: "test II", blocked: true, title: "다른 IP에서 답하면 막힌다", detail: "요청은 .10에 했는데 답이 .11에서 왔다. 방명록에 .11이 없어 NAT가 넘겨주지 않는다. test II = 0." },
+    { path: ["c", "nat", "s2"], packet: "Binding", title: ".11에게도 직접 물어본다", detail: "이번엔 .11에게 보낸다. 기본 MASQUERADE는 같은 40000을 썼다. 목적지와 무관한 매핑이다.", payload: "mapped IP same = 1" },
+    { path: ["c", "nat", "s2"], packet: ":31287", highlight: ["s1"], title: "--random-fully면 포트가 달라진다", detail: ".10에게는 45170, .11에게는 31287로 보였다. 목적지마다 매핑이 다른 symmetric NAT다." },
+  ]}
+/>
+
+## STUN으로 내 바깥 주소를 알아낸다
+
+직접 연결하려면 상대에게 "나는 바깥에서 `203.0.113.1:40000`으로 보인다"를 알려 줘야 한다. 그런데 기기는 자기 공인 주소를 모른다. 인터페이스에는 `10.0.0.2`뿐이다. STUN(Session Traversal Utilities for NAT, 지금 규격은 RFC 8489)은 이 질문 하나만 하는 프로토콜이다. 클라이언트가 공인 서버에 Binding 요청을 보내면, 서버는 패킷의 출발지(NAT가 바꾼 뒤의 주소)를 그대로 답에 담아 준다.
+
+위 출력에 `MappedAddress`와 `XorMappedAddress`가 둘 다 있다. 같은 값인데 뒤쪽은 주소를 고정값(매직 쿠키)과 XOR해서 실은 것이다. 패킷 안의 IP 주소를 고쳐 쓰는 오래된 공유기(ALG)가 STUN 답 속 주소까지 "친절하게" 사설 주소로 바꿔 버리는 일이 있어서, 알아보지 못하게 섞어 보내는 것이다. 지금 클라이언트는 XOR 쪽을 쓴다.
+
+STUN은 가볍다. 요청과 답이 UDP 패킷 하나씩이고 서버는 상태를 거의 들고 있지 않는다. 그래서 공개 STUN 서버가 여럿 있고, 많은 WebRTC 예제가 그중 하나를 기본값으로 넣는다. 다만 STUN은 주소를 알려 줄 뿐 길을 뚫어 주지는 않는다.
+
+## 동시에 보내서 길을 뚫는다
+
+두 기기가 서로의 공인 주소를 알면 길을 뚫을 수 있다. 두 집을 만들었다. A는 NAT-A(`203.0.113.1`) 뒤의 `10.0.0.2:40000`, B는 NAT-B(`203.0.113.2`) 뒤의 `10.1.0.2:50000`이다. 둘 다 기본 MASQUERADE다. 랑데부 서버(`203.0.113.10:9999`)는 두 피어가 보낸 패킷의 출발지를 서로에게 알려 주는 일만 하는 파이썬 스크립트다. 이 역할을 WebRTC에서는 시그널링 서버가 한다.
+
+```python
+# 피어: 랑데부 서버에 등록 → 상대 공인 주소를 받아 → 서로 동시에 보낸다
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("0.0.0.0", lport))
+s.sendto(name.encode(), ("203.0.113.10", 9999))
+ip, port = s.recvfrom(1500)[0].decode().split(":")
+for i in range(6):
+    s.sendto(f"hello from {name} #{i}".encode(), (ip, int(port)))
+    # 0.5초 동안 상대 패킷을 기다린다
+```
+
+처음 돌렸을 때는 둘 다 `received 0/6`이었다. NAT-A의 방명록을 보니 원인이 있었다.
+
+```text
+udp      17 20 src=10.0.0.2 dst=203.0.113.2 sport=40000 dport=50000 [UNREPLIED] src=203.0.113.2 dst=203.0.113.1 sport=50000 dport=10825 mark=0 use=1
+udp      17 20 src=203.0.113.2 dst=203.0.113.1 sport=50000 dport=40000 [UNREPLIED] src=203.0.113.1 dst=203.0.113.2 sport=40000 dport=50000 mark=0 use=1
+```
+
+두 번째 줄이 먼저 생겼다. B의 패킷이 A가 보내기도 전에 NAT-A에 도착했고, 리눅스는 이걸 NAT-A 자신에게 온 새 연결로 받아 방명록에 적었다. 그 뒤 A가 같은 상대에게 보내자 같은 짝이 이미 있으니 충돌을 피하려고 포트를 40000이 아닌 10825로 바꿨다(첫 줄 끝의 `dport=10825`). B가 알고 있는 A의 주소는 40000인데 A는 10825로 나간다. 길이 엇갈렸다.
+
+집 공유기는 보통 밖에서 먼저 온 새 연결을 버린다. 버려진 패킷은 방명록에 남지 않는다. 두 NAT에 그 규칙을 넣고 다시 돌렸다.
+
+```bash
+# NAT 장비 자신에게 밖에서 먼저 오는 새 연결을 버린다(가정용 공유기의 기본 동작)
+sudo iptables -A INPUT -i wan -m conntrack --ctstate NEW -j DROP
+```
+
+```text
+register A from 203.0.113.1:40000
+register B from 203.0.113.2:50000
+[A] peer public addr = 203.0.113.2:50000
+[A] recv 'hello from B #0' from 203.0.113.2:50000
+...
+[A] received 6/6
+[B] peer public addr = 203.0.113.1:40000
+[B] #0 no reply
+[B] recv 'hello from A #1' from 203.0.113.1:40000
+...
+[B] received 5/6
+```
+
+뚫렸다. A가 처음 보낸 `#0`은 NAT-B에서 버려졌다. B가 아직 A에게 보내지 않아서 NAT-B 방명록에 A가 없었기 때문이다. 하지만 그 패킷이 나가면서 NAT-A의 방명록에는 B가 적혔다. 곧이어 B가 보낸 패킷은 NAT-A를 통과하고, NAT-B의 방명록에도 A가 적힌다. 그 뒤로는 양쪽 다 통한다. 두 NAT의 마지막 방명록에는 `[UNREPLIED]`가 사라진 줄이 하나씩 남았다.
+
+```text
+== NAT-A
+udp      17 25 src=10.0.0.2 dst=203.0.113.2 sport=40000 dport=50000 src=203.0.113.2 dst=203.0.113.1 sport=50000 dport=40000 mark=0 use=1
+== NAT-B
+udp      17 25 src=10.1.0.2 dst=203.0.113.1 sport=50000 dport=40000 src=203.0.113.1 dst=203.0.113.2 sport=40000 dport=50000 mark=0 use=1
+```
+
+이번에는 NAT-B만 `--random-fully`(symmetric)로 바꿨다.
+
+```text
+register B from 203.0.113.2:1871
+register A from 203.0.113.1:40000
+[A] received 0/6
+[B] received 0/6
+== NAT-A
+udp      17 27 src=10.0.0.2 dst=203.0.113.2 sport=40000 dport=1871 [UNREPLIED] src=203.0.113.2 dst=203.0.113.1 sport=1871 dport=40000 mark=0 use=1
+== NAT-B
+udp      17 27 src=10.1.0.2 dst=203.0.113.1 sport=50000 dport=40000 [UNREPLIED] src=203.0.113.1 dst=203.0.113.2 sport=40000 dport=41775 mark=0 use=1
+```
+
+랑데부 서버가 본 B의 바깥 포트는 1871이다. 그런데 B가 A에게 보낼 때 NAT-B는 새 포트 41775를 골랐다. A는 1871로 보내니 NAT-B에서 버려지고, B의 패킷은 41775에서 오니 1871만 적힌 NAT-A 방명록에서 버려진다. symmetric NAT에서는 STUN 서버에게 보인 주소가 다른 상대에게는 쓸모가 없다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="UDP 홀 펀칭: 서로 먼저 보내서 방명록에 이름을 적는다"
+  zones={[
+    { id: "za", label: "A의 집", x: 6, y: 6, w: 120, h: 200, tone: "private" },
+    { id: "zb", label: "B의 집", x: 274, y: 6, w: 120, h: 200, tone: "private" },
+    { id: "net", label: "인터넷", x: 134, y: 6, w: 132, h: 288, tone: "public" },
+  ]}
+  nodes={[
+    { id: "a", label: "A", sub: "10.0.0.2", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "na", label: "NAT-A", sub: ".1:40000", x: 66, y: 160, icon: "router", w: 96 },
+    { id: "nb", label: "NAT-B", sub: ".2:50000", x: 334, y: 160, icon: "router", w: 96 },
+    { id: "b", label: "B", sub: "10.1.0.2", x: 334, y: 60, icon: "client", w: 96 },
+    { id: "r", label: "rendezvous", sub: ".10:9999", x: 200, y: 250, icon: "server", w: 112 },
+  ]}
+  links={[
+    { from: "a", to: "na" },
+    { from: "b", to: "nb" },
+    { from: "na", to: "r" },
+    { from: "nb", to: "r" },
+    { from: "na", to: "nb", dashed: true },
+  ]}
+  steps={[
+    { path: ["a", "na", "r"], packet: "register", title: "A가 랑데부 서버에 등록한다", detail: "서버는 출발지 203.0.113.1:40000을 기억한다. NAT-A의 방명록에는 서버가 적힌다." },
+    { path: ["b", "nb", "r"], packet: "register", title: "B도 등록한다", detail: "서버는 B를 203.0.113.2:50000으로 본다. 두 주소를 서로에게 알려 준다." },
+    { path: ["a", "na", "nb"], packet: "#0", blocked: true, title: "A의 첫 패킷은 NAT-B에서 버려진다", detail: "NAT-B 방명록에 A가 없다. 하지만 나가는 길에 NAT-A 방명록에는 B가 적혔다." },
+    { path: ["b", "nb", "na", "a"], packet: "#0", title: "B의 패킷은 NAT-A를 통과한다", detail: "NAT-A는 방금 B에게 보낸 기록이 있어 들여보낸다. 이 패킷이 나가면서 NAT-B 방명록에도 A가 적힌다." },
+    { path: ["a", "na", "nb", "b"], packet: "#1", title: "이제 양쪽 다 열렸다", detail: "A의 #1부터는 B에게 닿는다. A는 6/6, B는 5/6을 받았다." },
+    { path: ["b", "nb", "na"], packet: ":41775", blocked: true, title: "NAT-B가 symmetric이면", detail: "서버에게는 1871로 보였는데 A에게는 41775로 나간다. A의 방명록에는 1871만 있어 버려진다. 이때는 TURN이 필요하다." },
+  ]}
+/>
+
+TCP로도 홀 펀칭을 할 수 있지만(양쪽이 동시에 SYN을 보내는 simultaneous open) NAT와 방화벽이 SYN을 다루는 방식이 제각각이라 성공률이 UDP보다 낮다. 그래서 P2P와 WebRTC는 거의 UDP를 쓴다. UDP 방명록은 금방 지워진다는 점도 기억해 둔다. 리눅스는 답이 없는 UDP 줄을 30초(`nf_conntrack_udp_timeout`), 답이 오간 줄을 120초(`nf_conntrack_udp_timeout_stream`) 뒤에 지운다. RFC 4787은 UDP 매핑을 2분보다 빨리 지우지 말라고(권장은 5분) 하지만 장비마다 다르다. 뚫은 길을 유지하려면 몇 초에서 수십 초마다 작은 패킷을 보내야 하고, WebRTC는 STUN 요청을 주기적으로 보내 이 일을 겸한다. UDP 매핑이 짧은 이유는 [UDP와 QUIC 글](/posts/udp-and-quic)에서도 짚었다.
+
+## 길이 안 뚫리면 TURN이 대신 나른다
+
+symmetric NAT를 넘지 못하거나, 회사 방화벽이 UDP를 아예 막으면 직접 연결은 포기한다. TURN(Traversal Using Relays around NAT, RFC 8656) 서버가 중계한다. 클라이언트가 TURN 서버에 "내 대신 공인 포트 하나를 열어 달라"(Allocate)고 하면, 서버가 자기 주소의 포트(relay 주소)를 하나 내준다. 상대는 그 relay 주소로 보내고, TURN 서버가 클라이언트에게 전달한다. 클라이언트가 먼저 TURN 서버에 나가는 연결을 만들었으니 NAT는 문제가 되지 않는다.
+
+symmetric NAT 뒤의 B에서 coturn에 붙어 봤다. `turnutils_uclient`는 coturn에 딸린 시험용 클라이언트이고, 상대(`203.0.113.11:3480`)에는 받은 것을 그대로 돌려주는 `turnutils_peer`를 띄웠다.
+
+```bash
+# TURN 서버: 장기 자격 증명(사용자 alice) 하나로 띄운다
+sudo turnserver -n -v --listening-ip=203.0.113.10 --relay-ip=203.0.113.10 \
+  --lt-cred-mech --user=alice:secret --realm=lab.example --no-tls --no-dtls
+# B(symmetric NAT 뒤): TURN으로 relay 주소를 받아 상대에게 메시지 5개씩 보낸다
+turnutils_uclient -u alice -w secret -e 203.0.113.11 -r 3480 -n 5 -m 1 -l 100 203.0.113.10
+```
+
+```text
+4: : start_mclient: tot_send_msgs=10, tot_recv_msgs=10
+4: : start_mclient: tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000
+4: : Total transmit time is 5
+4: : Total lost packets 0 (0.000000%), total send dropped 0 (0.000000%)
+4: : Average round trip delay 0.800000 ms; min = 0 ms, max = 8 ms
+```
+
+홀 펀칭이 0/6이던 바로 그 NAT 뒤에서 보낸 메시지 10개가 모두 돌아왔다. 서버 로그에는 흐름이 남는다.
+
+```text
+2: : session 001000000000000001: realm <lab.example> user <>: incoming packet message processed, error 401: Unauthorized
+2: : session 001000000000000001: new, realm=<lab.example>, username=<alice>, lifetime=777
+2: : session 001000000000000001: realm <lab.example> user <alice>: incoming packet ALLOCATE processed, success
+2: : session 001000000000000001: realm <lab.example> user <alice>: incoming packet REFRESH processed, success
+2: : session 001000000000000001: peer 203.0.113.11:3481 lifetime updated: 600
+2: : session 001000000000000001: realm <lab.example> user <alice>: incoming packet CHANNEL_BIND processed, success
+```
+
+아래 그림은 이 로그를 순서대로 그린 것이다.
+
+<SequenceDiagram
+  caption="TURN: 401로 시작해 relay 주소를 받고 채널로 나른다"
+  actors={[
+    { id: "b", label: "B (NAT 뒤)" },
+    { id: "t", label: "TURN 서버" },
+    { id: "p", label: "상대" },
+  ]}
+  steps={[
+    { from: "b", to: "t", label: "Allocate (자격 없음)", title: "먼저 그냥 요청한다", detail: "처음 Allocate에는 자격 증명이 없다. 서버는 realm과 nonce를 담아 거절한다.", payload: "error 401: Unauthorized" },
+    { from: "b", to: "t", label: "Allocate + 서명", title: "자격 증명으로 다시 요청한다", detail: "사용자 이름, realm, nonce와 비밀번호로 만든 MESSAGE-INTEGRITY를 붙인다. 서버가 relay 주소 하나를 내준다.", payload: "ALLOCATE processed, success" },
+    { from: "b", to: "t", label: "ChannelBind 상대", title: "누구에게 보낼지 등록한다", detail: "상대 주소에 권한을 주고 짧은 채널 번호를 붙인다. 이후 데이터는 4바이트 헤더만 붙여 보낸다.", payload: "peer 203.0.113.11:3481 lifetime updated: 600" },
+    { from: "b", to: "t", label: "ChannelData", title: "B가 데이터를 TURN에 보낸다", detail: "B에게는 TURN 서버가 유일한 상대라 NAT 방명록 문제가 없다." },
+    { from: "t", to: "p", label: "relay 주소에서 전달", title: "서버가 relay 주소로 상대에게 넘긴다", detail: "상대 눈에는 TURN 서버의 relay 주소가 보낸 패킷이다. 등록하지 않은 주소에서 오는 패킷은 서버가 버린다." },
+    { from: "p", to: "t", label: "응답", title: "답도 같은 길로 돌아온다", detail: "상대가 relay 주소로 답하면 서버가 채널에 실어 B에게 보낸다. 10개 보내고 10개 받았다." },
+  ]}
+/>
+
+TURN은 언제나 되는 대신 비싸다. 모든 미디어가 서버를 지나므로 서버 대역폭이 그대로 비용이고, 두 사람이 옆자리에 있어도 TURN 서버가 먼 지역이면 지연이 늘어난다. 그래서 TURN은 마지막 수단으로 두고, 지역마다 서버를 둔다. 회사 방화벽처럼 UDP가 막힌 곳을 위해 TCP나 TLS 443번으로도 열어 두는 게 보통이다. TURN 자격 증명은 클라이언트 코드에 박아 두지 말고, 서버가 사용자마다 짧은 수명의 임시 비밀번호를 만들어 내려 준다(coturn의 `use-auth-secret` 방식). 고정 비밀번호를 앱에 넣으면 누구나 그 TURN 서버를 공짜 중계기로 쓸 수 있다. 같은 이유로 relay가 사설망(예: 클라우드 메타데이터 주소나 내부 서버)으로 나가지 못하게 `denied-peer-ip`를 설정한다. 실습에서 쓴 `--allow-loopback-peers` 같은 옵션은 coturn이 직접 "운영에서 쓰지 말라"는 경고를 찍는다.
+
+## ICE는 후보를 모아 되는 길을 고른다
+
+실제 앱은 어떤 NAT 뒤에 있을지 모른다. ICE(Interactive Connectivity Establishment, RFC 8445)는 가능한 길을 전부 후보로 모은 뒤 실제로 두드려 보고 되는 것 중 가장 좋은 걸 고른다. 후보는 세 종류다.
+
+- host: 인터페이스에 붙은 주소 그대로(`10.0.0.2:40000`). 같은 LAN이면 이걸로 붙는다
+- srflx(server reflexive): STUN으로 알아낸 바깥 주소(`203.0.113.1:40000`). 홀 펀칭용
+- relay: TURN이 내준 주소. 마지막 수단
+
+브라우저의 SDP에는 후보가 이런 줄로 실린다. 아래는 실습 주소에 맞춰 쓴 예시이고, 형식은 실제 SDP 그대로다.
+
+```text
+a=candidate:1 1 udp 2130706431 10.0.0.2 40000 typ host
+a=candidate:2 1 udp 1694498815 203.0.113.1 40000 typ srflx raddr 10.0.0.2 rport 40000
+a=candidate:3 1 udp 16777215 203.0.113.10 49160 typ relay raddr 203.0.113.1 rport 40000
+```
+
+srflx 줄을 조각으로 나눴다. 누르면 칸마다 뜻이 나온다.
+
+<UrlAnatomy
+  caption="ICE 후보 한 줄 (예시)"
+  base="a=candidate:"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "foundation", display: "2", title: "foundation", description: "같은 종류, 같은 기반 주소, 같은 STUN 서버에서 나온 후보끼리 같은 값을 갖는다. 비슷한 후보를 묶어 검사 순서를 정할 때 쓴다." },
+    { key: "component", display: "1", title: "component", description: "1은 RTP. 예전에는 RTCP가 2번으로 따로 있었지만 지금은 대부분 한 포트에 묶는다(rtcp-mux)." },
+    { key: "transport", display: "udp", title: "전송 프로토콜", description: "udp가 기본이다. TURN over TCP나 TCP 후보는 tcp로 나오고 tcptype이 붙는다." },
+    { key: "priority", display: "1694498815", title: "우선순위", description: "종류 선호도 × 2^24 + 지역 선호도 × 2^8 + (256 − component). srflx(100), 지역 선호도 65535, component 1이면 1694498815다. 높을수록 먼저 쓴다." },
+    { key: "addr", display: "203.0.113.1 40000", title: "후보 주소와 포트", description: "STUN 서버가 알려 준 바깥 주소다. 상대는 여기로 연결 검사를 보낸다." },
+    { key: "typ", display: "typ srflx", title: "후보 종류", description: "host, srflx, prflx(검사 도중 새로 알게 된 주소), relay 중 하나." },
+    { key: "raddr", display: "raddr 10.0.0.2 rport 40000", title: "기반 주소", description: "이 후보가 어느 내부 주소에서 나왔는지. 사설 주소가 드러나서, 브라우저는 개인 정보 보호를 위해 host 후보를 mDNS 이름(무작위.local)으로 감추기도 한다." },
+  ]}
+/>
+
+우선순위 공식은 단순하다. host가 가장 높고(126), relay가 가장 낮다(0). 같은 조건이면 직접 연결을 먼저, 중계를 마지막에 쓰라는 뜻이다. 공식을 직접 짜 보자.
+
+<CodePlayground
+  caption="ICE 후보 우선순위 계산"
+  functionName="icePriority"
+  initialCode={`// type: "host" | "prflx" | "srflx" | "relay"
+// 종류 선호도: host 126, prflx 110, srflx 100, relay 0
+// priority = 종류 × 2^24 + localPref × 2^8 + (256 - component)
+function icePriority(type, localPref, component) {
+  return 0;
+}`}
+  solution={`function icePriority(type, localPref, component) {
+  const typePref = { host: 126, prflx: 110, srflx: 100, relay: 0 }[type];
+  return typePref * 2 ** 24 + localPref * 2 ** 8 + (256 - component);
+}`}
+  tests={[
+    { args: ["host", 65535, 1], expected: 2130706431, label: "host 후보" },
+    { args: ["srflx", 65535, 1], expected: 1694498815, label: "srflx 후보" },
+    { args: ["relay", 65535, 1], expected: 16777215, label: "relay 후보" },
+    { args: ["host", 65535, 2], expected: 2130706430, label: "RTCP(component 2)" },
+    { args: ["prflx", 32767, 1], expected: 1853882367, label: "prflx, 지역 선호도 절반" },
+    { args: ["relay", 0, 1], expected: 255, label: "가장 낮은 값" },
+  ]}
+/>
+
+두 쪽이 후보를 시그널링 서버로 주고받으면, 내 후보와 상대 후보를 짝지어 우선순위 순으로 연결 검사(STUN Binding)를 보낸다. 이 검사가 곧 홀 펀칭이다. 양쪽이 서로의 srflx로 동시에 보내니 앞에서 본 것처럼 방명록이 채워진다. 되는 짝 중 가장 좋은 것을 골라(nominate) 미디어를 싣는다. 후보가 모일 때까지 기다리지 않고 생기는 대로 보내는 방식을 Trickle ICE라 하고, 연결 시간이 짧아져서 지금 브라우저는 대부분 이렇게 한다.
+
+브라우저 쪽 코드에서는 이 모든 게 설정 몇 줄이다.
+
+```js
+// STUN은 바깥 주소 알아내기용, TURN은 마지막 수단. 자격 증명은 서버가 발급한 임시 값
+const pc = new RTCPeerConnection({
+  iceServers: [
+    { urls: "stun:stun.example.com:3478" },
+    { urls: ["turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:443?transport=tcp"],
+      username: "1729500000:alice", credential: "임시-비밀번호" },
+  ],
+});
+pc.onicecandidate = (e) => e.candidate && signaling.send(e.candidate); // 생기는 대로 보낸다
+pc.oniceconnectionstatechange = () => console.log(pc.iceConnectionState);
+```
+
+## 주소 하나를 수천 명이 나눌 때
+
+IPv4 주소가 모자라자 통신사도 NAT를 하기 시작했다. 집 공유기가 한 번, 통신사 장비가 또 한 번 바꾼다. CGNAT(Carrier-Grade NAT)이다. 통신사 안쪽 구간에는 RFC 6598이 이 용도로 떼어 둔 `100.64.0.0/10`을 쓴다. 공유기 관리 화면의 WAN 주소가 `100.64.x.x`~`100.127.x.x`이거나, WAN 주소와 STUN 서버가 알려 준 주소가 다르면 CGNAT 뒤에 있는 것이다. 휴대폰 데이터망은 대부분 이 구조다.
+
+CGNAT은 traversal을 더 어렵게 만든다. 공인 포트를 여러 가입자가 나눠 쓰니 포트 포워딩을 할 수 없다. 장비에 따라 매핑이 symmetric에 가깝고 매핑 유지 시간도 짧을 수 있다. 처음 장면에서 LTE 쪽이 실패한 것도 이런 이유일 가능성이 크다. 주소 하나를 여럿이 쓰니, 서버에서 IP로 사용자를 막으면 같은 CGNAT 뒤의 다른 사람까지 막힌다. 수사 기관이 사용자를 특정하려 해도 IP만으로는 안 되고 포트와 시각까지 필요해서, 통신사는 가입자마다 포트 묶음을 미리 나눠 주고(port block allocation) 기록을 남기는 방식을 쓴다.
+
+NAT 하나가 바꿀 수 있는 연결 수에는 한계가 있다. 같은 상대 IP와 포트로 가는 연결은 NAT의 공인 포트로만 구별되기 때문이다. 실습 NAT의 포트 범위를 일부러 두 개로 줄이고, 내부에서 같은 서버(`203.0.113.10:7`)로 세 개의 UDP 흐름을 열었다.
+
+```bash
+# 일부러 공인 포트를 두 개로 제한한다
+sudo iptables -t nat -R POSTROUTING 1 -o wan -p udp -j MASQUERADE --to-ports 61000-61001
+```
+
+```text
+udp      17 28 src=10.0.0.2 dst=203.0.113.10 sport=41002 dport=7 [UNREPLIED] src=203.0.113.10 dst=203.0.113.1 sport=7 dport=61001 mark=0 use=1
+udp      17 28 src=10.0.0.2 dst=203.0.113.10 sport=41001 dport=7 [UNREPLIED] src=203.0.113.10 dst=203.0.113.1 sport=7 dport=61000 mark=0 use=1
+```
+
+```bash
+# conntrack 통계: 표에 넣지 못해 버린 패킷 수
+sudo conntrack -S
+```
+
+```text
+cpu=1   	found=5 invalid=0 insert=0 insert_failed=1 drop=1 early_drop=0 error=0 search_restart=0 clash_resolve=0 chaintoolong=0 
+```
+
+세 번째 흐름(출발 포트 41003)은 방명록에 들어가지 못했다. `insert_failed=1 drop=1`. 서버 쪽 캡처에도 패킷 두 개만 도착했다. 앱 입장에서는 오류 없이 패킷이 사라진다. 그런데 같은 41003에서 다른 서버(`203.0.113.11:7`)로 보내자 61000을 다시 받았다.
+
+```text
+udp      17 29 src=10.0.0.2 dst=203.0.113.11 sport=41003 dport=7 [UNREPLIED] src=203.0.113.11 dst=203.0.113.1 sport=7 dport=61000 mark=0 use=1
+```
+
+공인 포트는 상대 주소·포트가 다르면 겹쳐 써도 구별이 된다. 그래서 포트 고갈은 "한 상대에게 연결이 몰릴 때" 터진다. 클라우드의 NAT 게이트웨이에서 외부 API 하나로 연결을 수만 개 여는 배치가 갑자기 타임아웃을 내는 장면이 이것이다. 그 이야기는 [VPC 서브넷과 라우트 테이블 글](/posts/vpc-subnets-route-tables)에서 다뤘다. 연결을 재사용(keep-alive, 커넥션 풀)하고, 상대가 하나라면 NAT 공인 IP를 늘리는 게 대책이다.
+
+아래 그림은 같은 실습을 방명록 칸으로 펼친 것이다.
+
+<AlgoTrace
+  caption="공인 포트 두 개로 흐름 세 개를 받으면"
+  memoryLabel="NAT 방명록 (공인 포트 ← 내부)"
+  cells={["61000", "61001"]}
+  steps={[
+    { memory: [], caption: "공인 포트는 61000과 61001 두 개뿐이다. 방명록은 비어 있다." },
+    { pointer: 0, memory: ["61000 ← :41001 → .10:7"], caption: "첫 흐름(41001 → .10:7)이 61000을 받는다." },
+    { pointer: 1, memory: ["61000 ← :41001 → .10:7", "61001 ← :41002 → .10:7"], caption: "둘째 흐름이 61001을 받는다. 같은 상대(.10:7)라 이제 남은 포트가 없다." },
+    { found: [], memory: ["61000 ← :41001 → .10:7", "61001 ← :41002 → .10:7", "insert_failed=1"], caption: "셋째 흐름(41003 → .10:7)은 넣을 자리가 없다. 오류 없이 버려졌다. drop=1." },
+    { pointer: 0, found: [0], memory: ["61000 ← :41001 → .10:7", "61001 ← :41002 → .10:7", "61000 ← :41003 → .11:7"], caption: "상대가 .11:7이면 61000을 겹쳐 쓸 수 있다. 짝 다섯 개가 다르면 구별되기 때문이다." },
+  ]}
+/>
+
+## 연결이 안 될 때 어디서부터 보나
+
+P2P 연결 실패는 서버 로그에 남지 않으니 클라이언트와 TURN 서버 쪽에서 증거를 모은다.
+
+크롬 계열 브라우저라면 `chrome://webrtc-internals`가 첫 번째 도구다. 모인 후보 목록에 srflx가 하나도 없으면 STUN 서버에 닿지 못한 것(UDP 3478이 막혔거나 주소가 틀렸다)이다. relay가 없으면 TURN 자격 증명이나 TURN 서버 접근이 문제다. 후보는 다 있는데 모든 짝이 `failed`면 양쪽 NAT 성격 때문에 홀 펀칭이 안 되는 것이고, 이때 relay 후보가 없으면 그대로 실패한다. 처음 장면의 흔한 원인이 "STUN만 넣고 TURN을 안 넣었다"이다.
+
+후보 줄의 IP를 보면 환경도 짐작된다. host 후보가 `100.64.0.0/10` 안이거나, srflx 주소가 공유기 WAN 주소와 다르면 CGNAT이다. srflx 포트가 STUN 서버마다 다르게 나오면 symmetric NAT다.
+
+TURN 서버에서는 접속 자체를 확인한다.
+
+```bash
+# TURN 서버까지 UDP 3478로 닿는지, 인증과 relay가 되는지 coturn 시험 클라이언트로 확인
+turnutils_uclient -u alice -w secret -e 203.0.113.11 -r 3480 -n 5 -m 1 -l 100 203.0.113.10
+# 서버에서 Allocate와 ChannelBind가 성공하는지 로그를 본다(파일 위치는 log-file 설정을 따른다)
+grep -E 'ALLOCATE|CHANNEL_BIND|401' turn.log
+```
+
+흔한 실수는 이렇다. 클라우드 VM에 TURN을 올리고 relay 포트 범위(coturn 기본 49152~65535 UDP)를 보안 그룹에서 안 연다. 공인 IP가 NAT로 붙는 클라우드에서 `external-ip`를 안 줘서 서버가 사설 주소를 relay 주소로 알려 준다. 자격 증명을 앱에 고정해 남이 중계기로 쓴다. 401이 매번 찍히는 건 정상이다. 첫 Allocate는 늘 401로 시작해서 nonce를 받아 오기 때문이다.
+
+설계 단계에서 고를 것은 하나다. 연결이 반드시 돼야 하는 서비스(화상 회의, 원격 지원)는 TURN을 처음부터 넣고 비용을 잡는다. 실패해도 서버 중계로 넘어가면 되는 서비스(파일 공유, 게임 매치)는 직접 연결을 시도하고 실패하면 자체 서버 경로로 내린다. 둘 다 아니면 P2P를 버리고 처음부터 서버를 거치는 구조(SFU 같은 미디어 서버)가 더 단순할 수 있다.
+
+## NAT를 넘는다는 것
+
+NAT는 방명록에 있는 상대만 들여보낸다. 그래서 NAT 뒤의 두 기기는 STUN으로 자기 바깥 주소를 알아내고, 시그널링으로 서로에게 알린 뒤, 동시에 보내서 서로의 방명록에 이름을 적는다. 매핑이 목적지마다 바뀌는 symmetric NAT나 UDP를 막는 방화벽 앞에서는 이 방법이 통하지 않고, TURN이 중계한다. ICE는 이 길들을 후보로 모아 우선순위대로 시험해 되는 것 중 가장 좋은 길을 고른다. NAT 장비를 직접 설정하는 쪽 이야기는 [iptables NAT 글](/posts/iptables-nat)에, 라우터와 스위치가 패킷을 다루는 기본은 [라우터와 스위치 글](/posts/router-vs-switch)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### NAT 뒤의 두 기기는 왜 서로 직접 연결하기 어렵나요?
+
+NAT는 안에서 밖으로 나간 기록(conntrack 같은 변환 표)에 있는 상대의 패킷만 안으로 넘기기 때문이다. 밖에서 먼저 온 패킷은 어느 내부 기기에게 줄지 모르니 버린다. 두 기기가 모두 NAT 뒤라면 누가 먼저 보내도 상대 NAT에서 막힌다. 그래서 양쪽이 서로의 공인 주소를 알아내 동시에 보내는 홀 펀칭이나, 공인 서버가 중계하는 TURN이 필요하다.
+
+### Full cone, restricted cone, symmetric NAT의 차이는 무엇인가요?
+
+매핑과 필터링 두 가지로 가른다. cone 계열은 같은 내부 포트면 목적지와 무관하게 같은 공인 포트를 쓰고(endpoint-independent mapping), 필터링이 아무나(full), 보냈던 IP(restricted), 보냈던 IP와 포트(port restricted)로 갈린다. symmetric은 목적지마다 다른 공인 포트를 쓴다. 실습에서 리눅스 기본 MASQUERADE는 port restricted cone, `--random-fully`를 붙이면 symmetric으로 나왔다.
+
+### STUN은 무엇을 해 주고, 무엇을 못 하나요?
+
+STUN은 공인 서버가 요청 패킷의 출발지, 곧 NAT가 바꾼 뒤의 공인 주소와 포트를 알려 주는 프로토콜이다. 그 주소를 상대에게 알려야 홀 펀칭을 할 수 있다. 하지만 길을 뚫거나 데이터를 나르지는 않는다. symmetric NAT에서는 STUN 서버에게 보인 포트와 상대에게 쓰는 포트가 달라서 알아낸 주소가 쓸모없어진다.
+
+### UDP 홀 펀칭은 어떻게 동작하나요?
+
+두 피어가 시그널링 서버로 서로의 공인 주소를 알아낸 뒤 동시에 상대에게 UDP를 보낸다. 내가 보낸 첫 패킷은 상대 NAT에서 버려질 수 있지만, 나가면서 내 NAT에 상대가 기록된다. 상대가 보낸 패킷은 그 기록 덕분에 내 NAT를 통과하고, 그 순간 상대 NAT에도 내가 기록되어 양방향이 열린다. 실습에서 A의 첫 패킷 하나만 버려지고 그 뒤로는 양쪽 다 통했다. 뚫린 길은 UDP 매핑 시간이 짧으니 주기적으로 패킷을 보내 유지한다.
+
+### TURN은 언제 필요하고 무엇이 부담인가요?
+
+symmetric NAT끼리처럼 홀 펀칭이 안 되거나, UDP 자체가 막힌 망에서 필요하다. 클라이언트가 TURN 서버에 relay 주소를 할당받고, 모든 데이터가 서버를 거쳐 오간다. 언제나 되는 대신 모든 미디어가 서버 대역폭을 쓰니 비용이 크고, 서버 위치에 따라 지연이 는다. 자격 증명을 고정하면 남이 중계기로 악용하니 짧은 수명의 임시 자격 증명을 쓰고, relay가 내부 주소로 나가지 못하게 막는다.
+
+### ICE는 여러 경로 중 무엇을 어떻게 고르나요?
+
+host, srflx(STUN으로 알아낸 주소), relay(TURN 주소) 후보를 모으고 종류 선호도(host 126, srflx 100, relay 0)가 들어간 공식으로 우선순위를 매긴다. 양쪽 후보를 짝지어 우선순위 순으로 STUN 연결 검사를 보내고, 되는 짝 중 가장 좋은 것을 골라 쓴다. 그래서 같은 LAN이면 host로, NAT 사이면 srflx로, 안 되면 relay로 자연스럽게 내려간다. 후보를 생기는 대로 보내는 Trickle ICE로 연결 시간을 줄인다.
+
+### 같은 NAT 뒤에서 외부 API 하나로 요청이 몰릴 때 간헐적으로 타임아웃이 나는 이유는?
+
+같은 상대 IP와 포트로 가는 연결은 NAT의 공인 포트로만 구별되니, 한 상대에게 동시에 열 수 있는 연결 수가 공인 포트 수로 묶인다. 포트가 바닥나면 새 연결은 변환 표에 들어가지 못하고 오류 없이 버려진다. 실습에서는 `conntrack -S`의 `insert_failed`와 `drop`으로 보였다. 커넥션 재사용으로 연결 수를 줄이거나, NAT 공인 IP를 늘리거나, 유휴 타임아웃을 조정한다.

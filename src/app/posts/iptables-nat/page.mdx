@@ -625,7 +625,7 @@ conntrack v1.4.8 (conntrack-tools): 1 flow entries have been deleted.
 
 ## 주소를 바꾸고 기억하는 일
 
-NAT는 경계에서 주소를 바꿔 쓰는 일이고, 바꾼 내용을 conntrack이 기억해서 응답을 되돌린다. 나가는 쪽은 POSTROUTING의 SNAT·MASQUERADE, 들어오는 쪽은 PREROUTING의 DNAT이며, 통과 여부는 따로 filter의 FORWARD가 정한다. filter는 바뀐 뒤의 주소를 보고, nat은 첫 패킷만 본다는 두 가지를 기억하면 포트 포워딩이 안 되는 이유, Docker 포트가 ufw를 무시하는 이유, 쿠버네티스가 연결 단위로 분산하는 이유가 모두 같은 그림에서 나온다.
+NAT는 경계에서 주소를 바꿔 쓰는 일이고, 바꾼 내용을 conntrack이 기억해서 응답을 되돌린다. 나가는 쪽은 POSTROUTING의 SNAT·MASQUERADE, 들어오는 쪽은 PREROUTING의 DNAT이며, 통과 여부는 따로 filter의 FORWARD가 정한다. filter는 바뀐 뒤의 주소를 보고, nat은 첫 패킷만 본다는 두 가지를 기억하면 포트 포워딩이 안 되는 이유, Docker 포트가 ufw를 무시하는 이유, 쿠버네티스가 연결 단위로 분산하는 이유가 모두 같은 그림에서 나온다. 이 기억 방식이 NAT 뒤의 두 기기가 직접 연결하는 데 어떤 벽이 되고 STUN, 홀 펀칭, TURN으로 어떻게 넘는지는 [NAT traversal 글](/posts/nat-traversal)에서 이어진다.
 
 ## 면접에서 나올 만한 질문
 

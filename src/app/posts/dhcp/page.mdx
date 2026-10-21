@@ -1,0 +1,554 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("dhcp");
+
+월요일 아침, 층 전체 PC가 인터넷이 안 된다는 연락이 온다. 케이블도 스위치도 멀쩡하다. 문제가 생긴 PC에서 `ip addr`를 쳐 보니 주소가 평소의 `192.168.50.x`가 아니라 `10.66.0.59`다. 게이트웨이도 처음 보는 `10.66.0.1`이다. 한참 뒤에 원인이 나온다. 누가 회의실에 집에서 쓰던 공유기를 가져와 LAN 포트를 벽 단자에 꽂아 두었다.
+
+공유기 하나가 층 전체의 주소를 바꿀 수 있는 건 DHCP(Dynamic Host Configuration Protocol)가 "먼저 대답한 쪽을 믿는" 구조이기 때문이다. 이 글은 기기가 처음 망에 붙었을 때 주소를 얻어 오는 네 번의 메시지, 빌린 주소를 연장하고 반납하는 시계, 라우터 너머의 서버에 닿게 해 주는 릴레이, 고정 예약과 주소 고갈, 그리고 처음 장면 같은 가짜 DHCP 서버까지 실제 패킷으로 따라간다.
+
+기준 OS는 Ubuntu 24.04다. 서버는 dnsmasq 2.91, 클라이언트는 isc-dhcp-client 4.4.3(`dhclient`)을 썼다. Ubuntu 24.04 서버는 기본으로 netplan과 systemd-networkd의 내장 DHCP 클라이언트를 쓰고 `dhclient`는 따로 설치해야 하지만, 메시지 하나하나를 화면에 찍어 주는 게 `dhclient -v`라서 실습에는 이쪽을 골랐다. 모든 출력은 네트워크 네임스페이스로 만든 작은 LAN(리눅스 브리지를 스위치로 썼다)에서 실제로 받은 것이다. 주소와 MAC이 망 안에서 어떻게 쓰이는지는 [IP 주소와 서브넷](/posts/layer-ip-addressing), [데이터 링크 계층](/posts/layer-link-ethernet-arp) 글을 먼저 보면 편하다.
+
+## 주소가 없는데 어떻게 주소를 묻나
+
+IP 망에서 말을 걸려면 내 주소, 서브넷 마스크, 기본 게이트웨이, DNS 서버 네 가지가 필요하다. 예전에는 사람이 기기마다 손으로 넣었다. 기기가 수십 대면 버틸 만하지만 노트북과 휴대폰이 하루에도 몇 번씩 들어왔다 나가는 망에서는 불가능하다. 같은 주소를 두 사람이 넣는 실수도 막을 수 없다.
+
+DHCP는 이 일을 서버 한 대에 맡긴다. 서버는 나눠 줄 주소 범위(풀)를 들고 있다가, 새 기기가 오면 비어 있는 주소 하나를 정해진 기간 동안 빌려준다. 빌려준다는 말이 중요하다. 이 글에서는 DHCP를 도서관 대출로 생각하겠다. 주소는 책이고, 서버는 대출 창구고, 임대(lease)는 반납 기한이 있는 대출이다. 연장하지 않으면 책은 창구로 돌아가 다른 사람에게 간다.
+
+문제는 첫 질문이다. 주소가 없는 기기는 누구에게, 어떤 주소로 물어야 할까. DHCP 서버의 주소도 모른다. 그래서 첫 메시지는 이렇게 생겼다.
+
+- 보내는 주소는 `0.0.0.0`(아직 없음), 받는 주소는 `255.255.255.255`(이 망의 모두)
+- UDP를 쓰고, 클라이언트는 68번, 서버는 67번 포트를 쓴다
+- 이더넷 목적지는 `ff:ff:ff:ff:ff:ff` 브로드캐스트라서 스위치가 모든 포트로 뿌린다
+
+클라이언트 포트까지 68번으로 고정한 이유가 있다. 서버가 대답을 브로드캐스트로 돌려줄 때도 있는데, 임의의 포트를 쓰면 같은 망의 다른 기기 프로그램이 엉뚱한 패킷을 받는다. 68번은 DHCP 클라이언트만 듣는 자리다. DHCP는 1985년의 BOOTP를 넓힌 것이라 패킷 모양과 포트 번호를 BOOTP에서 그대로 물려받았다. tcpdump가 DHCP 패킷에 `BOOTP/DHCP`라고 붙이는 이유다.
+
+## 네 번 주고받으면 주소가 생긴다
+
+실습 망에 dnsmasq를 띄웠다. `192.168.50.100`~`192.168.50.150`을 2분짜리 임대로 나눠 주는 설정이다. 임대를 짧게 잡은 건 연장과 만료를 몇 분 안에 보려고 해서다.
+
+```bash
+# dnsmasq 설정: DNS는 끄고(port=0) DHCP만 쓴다
+cat dnsmasq.conf
+```
+
+```text
+port=0
+interface=eth0
+bind-interfaces
+dhcp-range=192.168.50.100,192.168.50.150,255.255.255.0,2m
+dhcp-option=option:router,192.168.50.1
+dhcp-option=option:dns-server,192.168.50.1
+dhcp-host=02:00:00:00:00:20,192.168.50.20,printer
+dhcp-authoritative
+log-dhcp
+```
+
+클라이언트 네임스페이스에서 `dhclient`를 돌렸다. `-v`를 주면 주고받는 메시지가 한 줄씩 찍힌다.
+
+```bash
+# 클라이언트 쪽: eth0에서 주소를 받아 온다. -v는 메시지를 화면에 찍는다
+sudo dhclient -v eth0
+```
+
+```text
+Listening on LPF/eth0/02:00:00:00:00:10
+Sending on   LPF/eth0/02:00:00:00:00:10
+Sending on   Socket/fallback
+DHCPDISCOVER on eth0 to 255.255.255.255 port 67 interval 3 (xid=0xcb316654)
+DHCPOFFER of 192.168.50.109 from 192.168.50.1
+DHCPREQUEST for 192.168.50.109 on eth0 to 255.255.255.255 port 67 (xid=0x546631cb)
+DHCPACK of 192.168.50.109 from 192.168.50.1 (xid=0xcb316654)
+bound to 192.168.50.109 -- renewal in 53 seconds.
+```
+
+DISCOVER, OFFER, REQUEST, ACK. 머리글자를 따서 DORA라고 부른다. REQUEST 줄의 xid가 `0x546631cb`로 바이트 순서가 뒤집혀 보이는데, dhclient 4.4가 이 줄만 다르게 찍는 것이다. 아래 tcpdump에서 보면 네 패킷 모두 같은 `xid 0xcb316654`를 달고 있다. xid는 클라이언트가 정한 거래 번호이고, 여러 기기가 동시에 주소를 받을 때 어느 대답이 내 것인지 가르는 표다.
+
+아래 그림에서 다음을 누르면 네 메시지가 순서대로 오간다. 각 단계의 값은 실습에서 찍힌 그대로다.
+
+<SequenceDiagram
+  caption="DORA: 주소 하나를 빌리는 네 번의 메시지"
+  actors={[
+    { id: "c", label: "노트북" },
+    { id: "s", label: "DHCP 서버" },
+  ]}
+  steps={[
+    { from: "c", to: "s", label: "DISCOVER (브로드캐스트)", title: "주소 줄 사람 있나요", detail: "아직 주소가 없어 0.0.0.0에서 255.255.255.255로 보낸다. 자기 MAC과 거래 번호 xid, 받고 싶은 옵션 목록을 싣는다.", payload: "0.0.0.0.68 > 255.255.255.255.67\nxid 0xcb316654\nDHCP-Message (53): Discover" },
+    { from: "s", to: "s", label: "빈 주소 고르기", title: "서버가 빈 주소를 고른다", detail: "풀에서 비어 있는 주소를 하나 고른다. dnsmasq는 그 주소로 ping을 먼저 보내 누가 손으로 쓰고 있지 않은지 확인한다. 그래서 OFFER가 3초 늦게 나갔다." },
+    { from: "s", to: "c", label: "OFFER 192.168.50.109", title: "이 주소 어때요", detail: "Your-IP에 제안하는 주소를 넣고 임대 시간, 게이트웨이, DNS를 옵션으로 붙인다. 아직 약속은 아니다.", payload: "Your-IP 192.168.50.109\nServer-ID 192.168.50.1\nLease-Time 120, RN 60, RB 105" },
+    { from: "c", to: "s", label: "REQUEST (브로드캐스트)", title: "그 주소로 할게요", detail: "고른 서버의 ID와 원하는 주소를 담아 다시 브로드캐스트한다. OFFER를 보낸 다른 서버들도 이걸 듣고 자기 제안이 뽑히지 않았음을 안다.", payload: "Server-ID (54): 192.168.50.1\nRequested-IP (50): 192.168.50.109" },
+    { from: "s", to: "c", label: "ACK", title: "확정", detail: "서버가 임대 기록을 남기고 확인을 보낸다. 클라이언트는 이제야 주소와 기본 경로를 인터페이스에 붙인다.", payload: "DHCP-Message (53): ACK\nLease-Time (51): 120" },
+  ]}
+/>
+
+서버 쪽에서 `tcpdump -vv`로 찍은 패킷을 보자. 옵션 목록이 길어서 첫 패킷과 마지막 패킷만 옮긴다.
+
+```bash
+# 서버 쪽: DHCP 포트 두 개만 거르고, -e로 MAC, -vv로 옵션까지 본다
+sudo tcpdump -i eth0 -n -e -vv port 67 or port 68
+```
+
+```text
+07:52:31.154277 02:00:00:00:00:10 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x10, ttl 128, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300, xid 0xcb316654, Flags [none] (0x0000)
+	  Client-Ethernet-Address 02:00:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    Hostname (12), length 2: "vm"
+	    Parameter-Request (55), length 13: 
+	      Subnet-Mask (1), BR (28), Time-Zone (2), Default-Gateway (3)
+	      Domain-Name (15), Domain-Name-Server (6), Unknown (119), Hostname (12)
+	      Netbios-Name-Server (44), Netbios-Scope (47), MTU (26), Classless-Static-Route (121)
+	      NTP (42)
+...
+07:52:34.160256 fe:49:06:5a:26:ea > 02:00:00:00:00:10, ethertype IPv4 (0x0800), length 342: (tos 0xc0, ttl 64, id 60927, offset 0, flags [none], proto UDP (17), length 328)
+    192.168.50.1.67 > 192.168.50.109.68: [bad udp cksum 0xe704 -> 0xafb0!] BOOTP/DHCP, Reply, length 300, xid 0xcb316654, Flags [none] (0x0000)
+	  Your-IP 192.168.50.109
+	  Server-IP 192.168.50.1
+	  Client-Ethernet-Address 02:00:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Server-ID (54), length 4: 192.168.50.1
+	    Lease-Time (51), length 4: 120
+	    RN (58), length 4: 60
+	    RB (59), length 4: 105
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    BR (28), length 4: 192.168.50.255
+	    Hostname (12), length 2: "vm"
+	    Domain-Name-Server (6), length 4: 192.168.50.1
+	    Default-Gateway (3), length 4: 192.168.50.1
+```
+
+볼 곳이 몇 군데 있다. DISCOVER는 `0.0.0.0.68 > 255.255.255.255.67`이고 이더넷 목적지가 `ff:ff:ff:ff:ff:ff`다. DISCOVER가 31초에, OFFER가 34초에 나갔다. 3초는 dnsmasq가 주소를 내주기 전에 ping으로 빈 자리인지 확인한 시간이다(`no-ping`으로 끌 수 있다). 서버 대답의 `bad udp cksum`은 veth의 체크섬 오프로드 때문에 캡처 시점에 체크섬이 아직 채워지지 않은 것이고, 받는 쪽에서는 문제가 없다. [tcpdump 글](/posts/packet-capture-tcpdump)에서 이 표시를 읽는 법을 다뤘다.
+
+DISCOVER는 브로드캐스트라서 스위치에 붙은 모든 기기가 받는다. 아래 구성도에서 다음을 누르면 같은 LAN의 프린터와 PC까지 DISCOVER가 닿는 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="DISCOVER는 모두에게, 대답은 그 기기에게"
+  zones={[{ id: "lan", label: "LAN 192.168.50.0/24", x: 6, y: 6, w: 388, h: 236, tone: "private" }]}
+  nodes={[
+    { id: "c", label: "laptop", sub: "0.0.0.0", x: 80, y: 70, icon: "client" },
+    { id: "sw", label: "switch", x: 200, y: 130, icon: "switch" },
+    { id: "s", label: "dnsmasq", sub: "192.168.50.1", x: 320, y: 70, icon: "server" },
+    { id: "p", label: "printer", sub: "192.168.50.20", x: 80, y: 200, icon: "server" },
+    { id: "pc", label: "pc", sub: "192.168.50.110", x: 320, y: 200, icon: "client" },
+  ]}
+  links={[
+    { from: "c", to: "sw" },
+    { from: "s", to: "sw" },
+    { from: "p", to: "sw" },
+    { from: "pc", to: "sw" },
+  ]}
+  steps={[
+    { path: ["c", "sw", "s"], packet: "DISCOVER", highlight: ["p", "pc"], title: "브로드캐스트는 모든 포트로 간다", detail: "스위치는 목적지 ff:ff:ff:ff:ff:ff를 보고 모든 포트로 내보낸다. 프린터와 PC도 받지만 67번 포트를 듣지 않으니 버린다.", payload: "02:00:00:00:00:10 > ff:ff:ff:ff:ff:ff\n0.0.0.0.68 > 255.255.255.255.67" },
+    { path: ["s", "sw", "c"], packet: "OFFER", title: "서버는 그 MAC에게만 답한다", detail: "dnsmasq는 OFFER를 노트북 MAC으로 보냈다. 클라이언트가 브로드캐스트 플래그를 켜면 대답도 브로드캐스트로 나간다.", payload: "fe:49:06:5a:26:ea > 02:00:00:00:00:10\n192.168.50.1.67 > 192.168.50.109.68" },
+    { path: ["c", "sw", "s"], packet: "REQUEST", highlight: ["p", "pc"], title: "고른 서버를 모두에게 알린다", detail: "REQUEST도 브로드캐스트다. 서버가 여럿이면 뽑히지 않은 서버는 잡아 둔 주소를 풀로 돌린다." },
+    { path: ["s", "sw", "c"], packet: "ACK", title: "확정되고 나서야 주소를 쓴다", detail: "ACK를 받은 뒤 클라이언트가 192.168.50.109/24와 기본 경로를 붙인다. 이때부터는 평범한 유니캐스트로 말한다." },
+  ]}
+/>
+
+ACK를 받은 뒤 클라이언트의 인터페이스다.
+
+```bash
+# 받은 주소와 남은 임대 시간, 기본 경로 확인
+ip -4 addr show eth0
+ip route
+```
+
+```text
+6: eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netns n1-sw
+    inet 192.168.50.109/24 scope global dynamic eth0
+       valid_lft 120sec preferred_lft 120sec
+default via 192.168.50.1 dev eth0 
+192.168.50.0/24 dev eth0 proto kernel scope link src 192.168.50.109 
+```
+
+`dynamic`과 `valid_lft 120sec`이 이 주소가 빌린 주소라는 표시다. 손으로 넣은 주소는 `valid_lft forever`로 나온다. 서버 쪽 임대 기록은 한 줄짜리 파일이다.
+
+```text
+1792569274 02:00:00:00:00:10 192.168.50.109 vm *
+```
+
+맨 앞이 만료 시각(유닉스 시간), 다음이 MAC, 빌려준 주소, 호스트 이름, 클라이언트 ID(없으면 `*`)다. dnsmasq를 재시작해도 이 파일을 읽어 같은 기기에 같은 주소를 다시 준다.
+
+## 한 패킷에 실린 칸들
+
+DHCP 패킷은 BOOTP 시절의 고정 칸 뒤에 옵션이 이어 붙는 구조다. 위 ACK를 조각으로 나눴다. 누르면 칸마다 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="DHCPACK 한 장을 칸으로 나누기"
+  separator=""
+  joiner=" | "
+  params={[
+    { key: "ciaddr", display: "ciaddr 0.0.0.0", title: "Client-IP: 클라이언트가 이미 가진 주소", description: "처음 받을 때는 0이다. 임대를 연장할 때는 지금 쓰는 주소가 들어간다. 연장 패킷에서 이 칸이 채워지는 걸 아래에서 본다." },
+    { key: "yiaddr", display: "yiaddr .109", title: "Your-IP: 서버가 주는 주소", description: "OFFER와 ACK에서 서버가 채운다. tcpdump에는 Your-IP 192.168.50.109로 찍혔다." },
+    { key: "giaddr", display: "giaddr 0", title: "Gateway-IP: 릴레이가 적는 칸", description: "같은 LAN에 서버가 있으면 0이다. 라우터 너머에서 릴레이가 넘겨줄 때 릴레이가 클라이언트 쪽 인터페이스 주소를 적고, 서버는 이걸 보고 어느 풀에서 줄지 고른다." },
+    { key: "chaddr", display: "chaddr 02:..:10", title: "Client-Ethernet-Address", description: "클라이언트 MAC. 서버가 고정 예약을 찾거나 대답을 유니캐스트로 보낼 때 쓴다. IP 헤더가 아니라 DHCP 본문 안에 들어 있어서 릴레이를 지나도 남는다." },
+    { key: "53", display: "53=ACK", title: "옵션 53: 메시지 종류", description: "1 Discover, 2 Offer, 3 Request, 4 Decline, 5 ACK, 6 NAK, 7 Release, 8 Inform. BOOTP와 DHCP를 가르는 옵션이다." },
+    { key: "51", display: "51=120 58=60 59=105", title: "옵션 51·58·59: 임대와 두 개의 시계", description: "51은 임대 시간, 58(T1)은 연장을 시작할 시각, 59(T2)는 아무 서버에게나 묻기 시작할 시각이다. 서버가 안 주면 클라이언트는 임대의 50%, 87.5%를 쓴다." },
+    { key: "3", display: "3=gw 6=dns", title: "옵션 3·6: 게이트웨이와 DNS", description: "기본 경로와 DNS 서버 주소. 옵션 121(classless static route)이 오면 RFC 3442에 따라 클라이언트는 옵션 3을 무시하고 121의 경로를 쓴다." },
+  ]}
+/>
+
+옵션 121은 따로 기억해 둘 만하다. 서버가 기본 게이트웨이 말고 "이 대역은 이 라우터로" 같은 경로를 클라이언트 라우팅 테이블에 직접 넣을 수 있다. 편리한 만큼 위험하다. 2024년에 공개된 TunnelVision(CVE-2024-3661)은 가짜 DHCP 서버가 옵션 121로 VPN 터널 주소보다 더 구체적인 경로를 넣어 VPN을 켠 상태의 트래픽을 터널 밖으로 빼돌리는 공격이었다. VPN 쪽 이야기는 [VPN 글](/posts/vpn-ipsec-wireguard)에 있다.
+
+## 반납 기한과 두 개의 시계
+
+빌린 주소에는 기한이 있다. 클라이언트는 기한이 끝나기 전에 연장을 시도하고, 시도는 두 단계로 나뉜다.
+
+- T1(기본 임대의 50%)이 되면 주소를 준 그 서버에게 유니캐스트로 "연장해 주세요"라고 묻는다. RENEWING 상태다.
+- T2(기본 87.5%)까지 대답이 없으면 그 서버가 죽었다고 보고, 망의 아무 서버에게나 브로드캐스트로 묻는다. REBINDING 상태다.
+- 임대 시간이 다 차면 주소를 내려놓고 처음 DISCOVER부터 다시 한다.
+
+실습에서 임대 2분짜리를 받은 뒤 그냥 두었다. `renewal in 53 seconds`라는 말대로 1분쯤 지나 연장 요청이 나갔다(dhclient는 연장 시각을 T1보다 조금 이르게, 받을 때마다 다른 값으로 잡았다. 실습에서는 53초, 57초, 58초였다).
+
+```text
+07:53:27.965944 02:00:00:00:00:10 > fe:49:06:5a:26:ea, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 49286, offset 0, flags [DF], proto UDP (17), length 328)
+    192.168.50.109.68 > 192.168.50.1.67: [bad udp cksum 0xe704 -> 0xa4f7!] BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300, xid 0xcb316654, Flags [none] (0x0000)
+	  Client-IP 192.168.50.109
+	  Client-Ethernet-Address 02:00:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    Hostname (12), length 2: "vm"
+```
+
+처음 REQUEST와 비교하면 세 가지가 다르다. 보내는 주소가 `0.0.0.0`이 아니라 지금 쓰는 `192.168.50.109`다. 받는 주소가 브로드캐스트가 아니라 서버 주소다. 그리고 `Client-IP` 칸이 채워져 있고, 대신 Server-ID와 Requested-IP 옵션이 없다. 서버는 이 모양을 보고 새 대출이 아니라 연장이라는 걸 안다.
+
+이번에는 서버(dnsmasq)를 끄고 클라이언트 쪽에서 캡처를 걸었다. 마지막 ACK는 07:55:43이었다.
+
+```bash
+# 서버 프로세스를 PID로 끈 뒤, 클라이언트 쪽에서 DHCP 패킷만 지켜본다
+sudo kill 4099
+sudo tcpdump -i eth0 -n port 67 or port 68
+```
+
+```text
+07:56:27.553677 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:56:30.260619 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:56:35.353963 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:56:40.105833 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:56:49.761731 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:56:56.183189 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:57:13.113491 IP 192.168.50.109.68 > 192.168.50.1.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:57:29.785688 IP 192.168.50.109.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:57:38.697694 IP 192.168.50.109.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:57:44.396010 IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+```
+
+시계가 그대로 보인다. 07:56:27부터 07:57:13까지는 원래 서버 `192.168.50.1`에게만 유니캐스트로 계속 묻는다. 07:57:29, 마지막 ACK에서 106초쯤 지난 T2 시점부터 목적지가 `255.255.255.255`로 바뀐다. 07:57:43에 120초가 다 차자 주소를 내려놓았고, 바로 다음 패킷의 출발지가 `0.0.0.0`이다. 처음부터 다시 DISCOVER를 하는 것이다(tcpdump 한 줄 요약에서는 DISCOVER도 `Request from`으로 찍힌다. BOOTP 칸 이름이라 그렇다).
+
+아래 그림은 같은 시간을 칸으로 펼친 것이다. 다음을 누르면 임대 상태가 바뀌는 순간과 그때 패킷이 어디로 가는지 나온다.
+
+<AlgoTrace
+  caption="임대 120초 동안 클라이언트 상태가 바뀌는 순간"
+  memoryLabel="클라이언트 상태"
+  cells={["0s ACK", "60s T1", "105s T2", "120s 만료"]}
+  steps={[
+    { pointer: 0, memory: ["BOUND"], caption: "ACK를 받았다. 주소를 붙이고 T1까지는 아무것도 하지 않는다." },
+    { pointer: 1, memory: ["BOUND", "RENEWING"], caption: "T1이다. 주소를 준 서버에게만 유니캐스트로 연장을 묻는다. 대답이 오면 시계가 0으로 돌아간다." },
+    { pointer: 1, memory: ["BOUND", "RENEWING"], caption: "실습에서는 서버를 꺼 두어 대답이 없었다. 간격을 바꿔 가며 같은 서버에게 일곱 번 물었다." },
+    { pointer: 2, memory: ["BOUND", "RENEWING", "REBINDING"], caption: "T2다. 그 서버는 죽었다고 보고 브로드캐스트로 아무 서버에게나 묻는다. 다른 서버가 같은 주소를 이어 줄 수 있다." },
+    { pointer: 3, found: [3], memory: ["INIT"], caption: "임대가 끝났다. 주소를 떼고 0.0.0.0에서 DISCOVER부터 다시 한다. 이 순간 열려 있던 연결은 모두 끊긴다." },
+  ]}
+/>
+
+임대 길이는 연결이 끊기는 시점과 서버 부하를 함께 정한다. 서버가 잠깐 죽어도 클라이언트는 임대가 남은 동안 주소를 계속 쓴다. 24시간 임대라면 DHCP 서버가 몇 시간 꺼져 있어도 이미 붙어 있는 기기는 아무 일 없다. 대신 기기가 떠난 뒤에도 주소가 하루 동안 묶인다. 손님이 계속 바뀌는 카페 Wi-Fi는 1시간 안팎, 사무실은 8시간에서 하루, 서버망은 더 길게 잡는 식으로 고른다.
+
+남은 시간과 T1, T2로 지금 상태를 맞히는 함수를 짜 보자. 서버가 T1, T2를 주지 않으면(`null`) 50%, 87.5% 기본값을 쓴다.
+
+<CodePlayground
+  caption="임대 상태 맞히기"
+  functionName="leaseState"
+  initialCode={`// lease: 임대 시간(초), elapsed: ACK 이후 지난 시간(초)
+// t1, t2: 서버가 준 값(초). 없으면 null → 기본값 50%, 87.5%
+// 반환: "BOUND" | "RENEWING" | "REBINDING" | "EXPIRED"
+function leaseState(lease, elapsed, t1, t2) {
+  return "BOUND";
+}`}
+  solution={`function leaseState(lease, elapsed, t1, t2) {
+  const renewAt = t1 ?? lease * 0.5;
+  const rebindAt = t2 ?? lease * 0.875;
+  if (elapsed >= lease) return "EXPIRED";
+  if (elapsed >= rebindAt) return "REBINDING";
+  if (elapsed >= renewAt) return "RENEWING";
+  return "BOUND";
+}`}
+  tests={[
+    { args: [120, 30, null, null], expected: "BOUND", label: "2분 임대, 30초" },
+    { args: [120, 60, null, null], expected: "RENEWING", label: "2분 임대, 정확히 T1" },
+    { args: [120, 104, null, null], expected: "RENEWING", label: "T2 직전" },
+    { args: [120, 105, null, null], expected: "REBINDING", label: "정확히 T2" },
+    { args: [120, 120, null, null], expected: "EXPIRED", label: "만료" },
+    { args: [86400, 80000, null, null], expected: "REBINDING", label: "하루 임대, 80000초" },
+    { args: [3600, 1000, 600, null], expected: "RENEWING", label: "서버가 T1=600을 준 경우" },
+    { args: [3600, 3300, 600, 3000], expected: "REBINDING", label: "T1, T2 모두 서버 값" },
+  ]}
+/>
+
+주소를 다 쓰면 돌려줄 수도 있다. `dhclient -r`은 DHCPRELEASE를 보낸다.
+
+```bash
+# 빌린 주소를 서버에 반납한다(이후 이 인터페이스는 주소가 없다)
+sudo dhclient -r -v eth0
+```
+
+```text
+DHCPRELEASE of 192.168.50.20 on eth0 to 192.168.50.1 port 67 (xid=0xa97e48b)
+```
+
+노트북 덮개를 닫거나 Wi-Fi를 끌 때 대부분의 기기는 반납하지 않고 그냥 사라진다. 그래서 서버 입장에서 주소가 풀로 돌아오는 건 대개 반납이 아니라 만료 덕분이다.
+
+## 라우터를 넘지 못하는 브로드캐스트
+
+DISCOVER는 브로드캐스트라서 라우터를 넘지 못한다. 라우터는 `255.255.255.255`를 다른 망으로 넘기지 않는다. 그렇다고 층마다, VLAN마다 DHCP 서버를 한 대씩 둘 수는 없다. 그래서 라우터(또는 L3 스위치)가 대신 전해 주는 릴레이 에이전트를 둔다. 시스코 장비의 `ip helper-address`가 이 설정이다.
+
+실습에서 `10.20.0.0/24` 망을 하나 더 만들고, 두 망 사이 라우터에서 dnsmasq를 릴레이 모드로 띄웠다.
+
+```bash
+# 라우터 쪽: 10.20.0.1 인터페이스로 들어온 DHCP를 192.168.50.1 서버로 넘긴다
+sudo dnsmasq --port=0 --dhcp-relay=10.20.0.1,192.168.50.1 --log-dhcp
+```
+
+서버 쪽에서 본 DISCOVER다.
+
+```text
+07:58:35.886649 IP (tos 0xc0, ttl 64, id 56657, offset 0, flags [none], proto UDP (17), length 328)
+    10.20.0.1.67 > 192.168.50.1.67: [bad udp cksum 0xfe03 -> 0xa5ce!] BOOTP/DHCP, Request from 02:00:00:00:00:30, length 300, hops 1, xid 0xb8434c4d, Flags [none] (0x0000)
+	  Gateway-IP 10.20.0.1
+	  Client-Ethernet-Address 02:00:00:00:00:30
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    Hostname (12), length 2: "vm"
+```
+
+브로드캐스트가 유니캐스트로 바뀌었다. 출발지는 릴레이의 `10.20.0.1.67`, 목적지는 서버 `192.168.50.1.67`이다. `hops 1`은 릴레이 하나를 지났다는 뜻이고, `Gateway-IP 10.20.0.1`이 앞에서 본 giaddr 칸이다. 서버는 이 값을 보고 "10.20.0.0/24 풀에서 줘야 한다"를 정하고, 대답도 이 주소로 돌려보낸다. 그래서 서버에는 `10.20.0.0/24`로 가는 경로가 있어야 한다. 이 경로가 없으면 서버는 OFFER를 만들고도 보내지 못한다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="릴레이가 브로드캐스트를 유니캐스트로 바꿔 넘긴다"
+  zones={[
+    { id: "z2", label: "2층 10.20.0.0/24", x: 6, y: 6, w: 180, h: 150, tone: "edge" },
+    { id: "z1", label: "서버망 192.168.50.0/24", x: 6, y: 170, w: 388, h: 124, tone: "private" },
+  ]}
+  nodes={[
+    { id: "c", label: "laptop", sub: "02:..:00:30", x: 96, y: 60, icon: "client" },
+    { id: "r", label: "relay", sub: "10.20.0.1", x: 300, y: 110, icon: "router" },
+    { id: "sw", label: "switch", x: 300, y: 230, icon: "switch" },
+    { id: "s", label: "dnsmasq", sub: "192.168.50.1", x: 96, y: 230, icon: "server" },
+  ]}
+  links={[
+    { from: "c", to: "r" },
+    { from: "r", to: "sw", label: ".50.2" },
+    { from: "sw", to: "s" },
+  ]}
+  steps={[
+    { path: ["c", "r"], packet: "DISCOVER", title: "2층에서 브로드캐스트", detail: "노트북은 서버가 어디 있는지 모른다. 늘 하던 대로 0.0.0.0에서 255.255.255.255로 보낸다. 라우터는 이걸 다른 망으로 넘기지 않는다." },
+    { path: ["r", "sw", "s"], packet: "giaddr", title: "릴레이가 칸을 채워 서버에게", detail: "릴레이가 giaddr에 10.20.0.1을 적고 hops를 1 올린 뒤 서버에게 유니캐스트로 보낸다.", payload: "10.20.0.1.67 > 192.168.50.1.67\nhops 1, Gateway-IP 10.20.0.1" },
+    { path: ["s"], highlight: ["z2"], title: "giaddr로 풀을 고른다", detail: "서버는 giaddr가 속한 10.20.0.0/24 풀에서 10.20.0.141을 고른다. 이 망의 게이트웨이 옵션도 그 풀에 맞춰야 한다." },
+    { path: ["s", "sw", "r"], packet: "OFFER", title: "대답은 릴레이에게", detail: "서버는 giaddr 주소로 OFFER를 보낸다. 서버에 10.20.0.0/24로 가는 경로가 없으면 여기서 멈춘다." },
+    { path: ["r", "c"], packet: "OFFER", title: "릴레이가 2층에 다시 내려놓는다", detail: "릴레이가 chaddr의 MAC으로 노트북에게 전한다. 그래서 dhclient는 OFFER가 10.20.0.1에서 왔다고 찍는다.", payload: "DHCPOFFER of 10.20.0.141 from 10.20.0.1" },
+  ]}
+/>
+
+이 실습에서 실제로 한 번 틀렸다. 처음 설정은 게이트웨이 옵션을 `192.168.50.1` 하나로만 두었는데, 2층 노트북도 그 값을 받았다.
+
+```text
+	    BR (28), length 4: 10.20.0.255
+	    Domain-Name-Server (6), length 4: 192.168.50.1
+	    Default-Gateway (3), length 4: 192.168.50.1
+```
+
+```bash
+# 2층 노트북의 경로: 주소는 받았는데 기본 경로가 없다
+ip route
+```
+
+```text
+10.20.0.0/24 dev eth0 proto kernel scope link src 10.20.0.141 
+```
+
+`10.20.0.141/24`인 기기에게 게이트웨이 `192.168.50.1`은 같은 망이 아니라 닿을 수 없다. 기본 경로를 넣지 못했고, 같은 층 밖으로는 아무 데도 못 간다. "주소는 받았는데 인터넷이 안 된다"의 흔한 원인이다. 풀마다 태그를 붙여 게이트웨이를 따로 주면 고쳐진다.
+
+```text
+dhcp-range=set:floor2,10.20.0.100,10.20.0.150,255.255.255.0,2m
+dhcp-option=tag:floor2,option:router,10.20.0.1
+```
+
+```text
+default via 10.20.0.1 dev eth0 
+10.20.0.0/24 dev eth0 proto kernel scope link src 10.20.0.141 
+```
+
+큰 망의 릴레이는 옵션 82(Relay Agent Information)도 붙인다. 어느 스위치의 몇 번 포트에서 온 요청인지(circuit-id, remote-id)를 적어서, 서버가 포트 단위로 주소를 정하거나 기록을 남길 수 있게 한다.
+
+클라우드에서는 이 그림이 보이지 않는다. AWS VPC 같은 곳에서는 인스턴스가 DHCP로 주소를 받긴 하지만 대답하는 쪽은 클라우드의 가상 네트워크이고, 사용자는 DNS 서버나 도메인 이름 같은 옵션만 "DHCP 옵션 세트"로 고른다. 주소 자체는 ENI에 이미 정해져 있다. 쿠버네티스 Pod는 DHCP를 쓰지 않고 CNI의 IPAM이 노드별 대역에서 주소를 나눠 준다. 그 이야기는 [CNI와 Pod 네트워크 글](/posts/k8s-cni-pod-network)에 있다.
+
+## 같은 주소를 계속 주고 싶을 때
+
+프린터, NAS, 사무실 서버처럼 주소가 바뀌면 곤란한 기기가 있다. 방법은 둘이다. 기기에 주소를 손으로 넣거나, DHCP 서버에 "이 MAC에는 늘 이 주소"를 예약해 두는 것이다. 처음 설정의 이 줄이 예약이다.
+
+```text
+dhcp-host=02:00:00:00:00:20,192.168.50.20,printer
+```
+
+MAC을 `02:00:00:00:00:20`으로 바꾼 클라이언트로 다시 받아 봤다.
+
+```text
+DHCPDISCOVER on eth0 to 255.255.255.255 port 67 interval 3 (xid=0x2244c11c)
+DHCPOFFER of 192.168.50.20 from 192.168.50.1
+DHCPREQUEST for 192.168.50.20 on eth0 to 255.255.255.255 port 67 (xid=0x1cc14422)
+DHCPACK of 192.168.50.20 from 192.168.50.1 (xid=0x2244c11c)
+bound to 192.168.50.20 -- renewal in 53 seconds.
+```
+
+`192.168.50.20`은 동적 풀(`.100`~`.150`) 밖이다. 예약 주소를 풀 밖에 두면 다른 기기에게 실수로 나갈 일이 없다. 손으로 넣는 것과 비교하면, 예약은 주소 관리가 서버 한 곳에 모이고 DNS·게이트웨이를 바꿀 때 기기를 일일이 만지지 않아도 된다. 대신 DHCP 서버가 멈춘 상태에서 기기가 재부팅하면 주소를 못 받는다. 라우터, DHCP 서버 자신, DNS 서버처럼 다른 기기가 기대는 장비는 손으로 넣는 쪽이 안전하다.
+
+예약이 "안 먹는" 경우가 꽤 있다. 셋 다 서버가 기기를 무엇으로 알아보는지와 관련 있다.
+
+- 휴대폰과 노트북의 무작위 MAC. iOS 14, 안드로이드 10부터 Wi-Fi마다 다른 MAC을 쓰는 기능이 기본으로 켜져 있다. MAC으로 예약했다면 그 망에서 이 기능을 꺼야 한다.
+- 클라이언트 ID(옵션 61). 서버는 MAC보다 클라이언트 ID가 있으면 그걸 먼저 본다. Ubuntu의 systemd-networkd는 기본으로 MAC이 아니라 DUID 기반 ID를 보낸다. 서버 설치 이미지를 똑같이 복제했더니 VM 여러 대가 같은 ID를 보내서 같은 주소를 두고 다투는 일이 이래서 생긴다. netplan에 `dhcp-identifier: mac`을 주면 MAC으로 바뀐다.
+- 이미 다른 기기가 그 주소를 동적으로 빌려 쓰는 중. 예약을 풀 안에 넣었을 때 생긴다.
+
+```yaml
+# /etc/netplan/50-cloud-init.yaml 의 일부: DHCP 클라이언트 ID를 MAC으로 보낸다
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      dhcp-identifier: mac
+```
+
+## 빌려줄 주소가 바닥나면
+
+풀이 다 나가면 새 기기는 주소를 못 받는다. 실습에서 2층 풀을 주소 하나(`10.20.0.141`)로 줄이고, 그 주소를 빌린 기기가 반납하지 않은 상태에서 MAC이 다른 기기로 요청했다.
+
+```text
+Oct 21 07:59:14 dnsmasq-dhcp[10198]: 2190088768 DHCPDISCOVER(eth0) 02:00:00:00:00:31 no address available
+Oct 21 07:59:22 dnsmasq-dhcp[10198]: 2190088768 DHCPDISCOVER(eth0) 02:00:00:00:00:31 no address available
+```
+
+서버는 OFFER를 보내지 않는다. 클라이언트 입장에서는 아무 대답이 없다. 이때 윈도우와 macOS는 `169.254.0.0/16`에서 스스로 주소를 골라 붙인다(링크 로컬, APIPA라고도 부른다). 같은 망의 다른 169.254 기기와는 말할 수 있지만 게이트웨이가 없어 밖으로는 못 나간다. 사용자가 "IP가 169.254로 잡혀요"라고 하면 거의 항상 DHCP 대답을 못 받은 것이다.
+
+풀이 바닥나는 이유는 대개 셋이다. 기기 수보다 풀이 작거나, 임대가 너무 길어서 떠난 기기의 주소가 오래 묶이거나, 누군가 MAC을 바꿔 가며 DISCOVER를 쏟아붓는 경우다. 마지막은 DHCP 고갈 공격(starvation)이라 부르고, 풀을 다 먹은 뒤 가짜 서버를 띄우는 다음 공격의 준비 단계로 쓰인다. 그래서 풀 사용률을 지표로 남기고, 예를 들어 80%를 넘으면 알림이 오게 해 두면 바닥나기 전에 풀을 늘리거나 임대를 줄일 수 있다.
+
+## 먼저 대답한 서버가 이긴다
+
+DHCP에는 서버를 확인하는 장치가 없다. 클라이언트는 OFFER가 여럿 오면 보통 먼저 온 것을 고른다. 처음 장면을 재현했다. 같은 LAN에 `10.66.0.0/24`를 나눠 주는 dnsmasq를 하나 더 띄우고(가짜 서버, ping 확인을 끈 `no-ping`), 진짜 서버도 그대로 두었다.
+
+```text
+07:58:02.506118 02:00:00:00:00:10 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:58:02.506904 02:00:00:00:66:66 > 02:00:00:00:00:10, ethertype IPv4 (0x0800), length 342: 10.66.0.1.67 > 10.66.0.59.68: BOOTP/DHCP, Reply, length 300
+07:58:02.507109 02:00:00:00:00:10 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:00:00:00:00:10, length 300
+07:58:02.509095 02:00:00:00:66:66 > 02:00:00:00:00:10, ethertype IPv4 (0x0800), length 342: 10.66.0.1.67 > 10.66.0.59.68: BOOTP/DHCP, Reply, length 300
+07:58:05.513567 fe:49:06:5a:26:ea > 02:00:00:00:00:10, ethertype IPv4 (0x0800), length 342: 192.168.50.1.67 > 192.168.50.109.68: BOOTP/DHCP, Reply, length 300
+07:58:05.513956 fe:49:06:5a:26:ea > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 192.168.50.1.67 > 255.255.255.255.68: BOOTP/DHCP, Reply, length 300
+```
+
+```text
+eth0@if4         UP             10.66.0.59/24 
+default via 10.66.0.1 dev eth0 
+```
+
+가짜 서버(`02:00:00:00:66:66`)는 1ms 안에 OFFER를 보냈고, 3ms 만에 DORA가 끝났다. 진짜 서버의 OFFER는 ping 확인 때문에 3초 뒤에야 도착했다. 클라이언트는 이미 `10.66.0.59`를 붙인 뒤다. 진짜 서버 로그를 보면 마지막 브로드캐스트 대답은 NAK였다.
+
+```text
+Oct 21 07:58:05 dnsmasq-dhcp[9594]: 811511906 DHCPREQUEST(eth0) 10.66.0.59 02:00:00:00:00:10 
+Oct 21 07:58:05 dnsmasq-dhcp[9594]: 811511906 DHCPNAK(eth0) 10.66.0.59 02:00:00:00:00:10 wrong server-ID
+```
+
+진짜 서버도 REQUEST를 들었고, 자기 것이 아닌 서버 ID를 보고 거절했다. 하지만 클라이언트는 이미 BOUND 상태라 이 NAK를 무시했다. 이제 이 기기의 게이트웨이와 DNS는 가짜 서버가 정한 `10.66.0.1`이다. 집 공유기라면 인터넷이 그 공유기 쪽 회선으로 나가거나 아예 끊긴다. 악의를 가진 서버라면 모든 트래픽과 DNS 질의가 공격자를 거친다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="가짜 서버가 먼저 답하면 게이트웨이까지 바뀐다"
+  zones={[{ id: "lan", label: "LAN", x: 6, y: 6, w: 388, h: 236, tone: "neutral" }]}
+  nodes={[
+    { id: "c", label: "laptop", sub: "0.0.0.0", x: 80, y: 70, icon: "client" },
+    { id: "sw", label: "switch", sub: "snooping", x: 200, y: 140, icon: "switch" },
+    { id: "s", label: "dnsmasq", sub: "192.168.50.1", x: 320, y: 70, icon: "server" },
+    { id: "rogue", label: "home router", sub: "10.66.0.1", x: 200, y: 215, icon: "router", w: 112 },
+  ]}
+  links={[
+    { from: "c", to: "sw" },
+    { from: "s", to: "sw", label: "trusted" },
+    { from: "rogue", to: "sw", label: "untrusted" },
+  ]}
+  steps={[
+    { path: ["c", "sw", "s"], packet: "DISCOVER", highlight: ["rogue"], title: "DISCOVER는 둘 다 받는다", detail: "브로드캐스트라 진짜 서버와 회의실 공유기 모두에게 닿는다." },
+    { path: ["rogue", "sw", "c"], packet: "OFFER", title: "공유기가 1ms 만에 답한다", detail: "가짜 서버는 ping 확인 없이 바로 10.66.0.59를 준다. 클라이언트는 먼저 온 OFFER를 고른다.", payload: "10.66.0.1.67 > 10.66.0.59.68\nDefault-Gateway 10.66.0.1" },
+    { path: ["s", "sw", "c"], packet: "NAK", title: "진짜 서버의 대답은 늦었다", detail: "3초 뒤 진짜 OFFER와 NAK가 오지만 클라이언트는 이미 주소를 붙였다. 게이트웨이도 DNS도 가짜 쪽이다." },
+    { path: ["rogue", "sw"], packet: "OFFER", blocked: true, title: "DHCP 스누핑을 켜면", detail: "스위치가 untrusted 포트에서 들어오는 서버 메시지(OFFER, ACK)를 버린다. 진짜 서버가 붙은 포트만 trusted로 둔다." },
+    { path: ["s", "sw", "c"], packet: "OFFER", title: "진짜 서버만 남는다", detail: "스누핑은 누가 어느 포트에서 어떤 주소를 받았는지 표로 남긴다. 동적 ARP 검사와 IP 소스 가드가 이 표로 위조 ARP와 위조 출발지 주소도 막는다." },
+  ]}
+/>
+
+막는 방법은 스위치에 있다. 관리형 스위치의 DHCP 스누핑은 포트를 trusted와 untrusted로 나누고, untrusted 포트로 들어오는 OFFER·ACK 같은 서버 메시지를 버린다. 스누핑이 만드는 "MAC, IP, 포트, VLAN" 표는 동적 ARP 검사(DAI)와 IP 소스 가드가 함께 쓴다. 스누핑을 켤 때는 업링크 포트와 DHCP 서버 포트를 trusted로 두는 걸 잊으면 안 된다. 잊으면 진짜 서버의 대답까지 버려져 층 전체가 169.254가 된다. 클라우드 VPC는 사용자가 띄운 DHCP 서버의 대답이 다른 인스턴스에 닿지 않게 처음부터 막아 두어서 이 문제가 거의 없다.
+
+가짜 서버가 있는지 확인하려면 DISCOVER를 하나 보내고 몇 초 동안 OFFER가 몇 군데서 오는지 보면 된다. 위 캡처처럼 `Reply`의 출발 MAC과 Server-ID가 둘 이상이면 서버가 둘이다.
+
+## 주소가 이상할 때 보는 순서
+
+"인터넷이 안 된다"가 DHCP 문제인지는 주소 모양에서 대개 갈린다.
+
+```bash
+# 1. 주소 모양 확인: dynamic이면 DHCP로 받은 것, valid_lft는 남은 임대 시간
+ip -4 addr show eth0
+# 2. 게이트웨이가 내 대역 안에 있는지
+ip route
+# 3. DHCP 대화를 직접 본다(다른 터미널에서 클라이언트를 다시 돌리며)
+sudo tcpdump -i eth0 -n -e -vv port 67 or port 68
+```
+
+증상별로 정리하면 이렇다.
+
+- 주소가 `169.254.x.x`거나 아예 없다. DISCOVER에 아무도 답하지 않았다. 캡처에서 DISCOVER만 반복되면 서버가 죽었거나, 릴레이 설정이 빠졌거나(다른 VLAN), 스누핑이 진짜 서버 포트를 untrusted로 두었거나, 풀이 바닥났다(`no address available`).
+- 주소가 낯선 대역이다. 처음 장면이다. 캡처의 Server-ID로 범인을 찾고, 스위치의 MAC 표에서 그 MAC이 어느 포트에 있는지 본다.
+- 주소는 맞는데 밖으로 못 나간다. `ip route`에 default가 없거나 게이트웨이가 내 대역 밖이다. 릴레이 너머 풀의 게이트웨이 옵션을 확인한다.
+- 재부팅하면 주소가 바뀐다. 예약이 MAC 기준인데 클라이언트가 다른 ID를 보내고 있다. 서버 임대 파일의 클라이언트 ID 열과 비교한다.
+- 갑자기 같은 주소를 두 기기가 쓴다. 누가 풀 안의 주소를 손으로 넣었다. dnsmasq의 ping 확인이나 클라이언트의 ARP 검사가 이걸 잡으면 클라이언트는 DHCPDECLINE을 보내고 다른 주소를 다시 받는다.
+
+Ubuntu 서버에서 systemd-networkd를 쓴다면 `networkctl status eth0`와 `journalctl -u systemd-networkd`에 DHCP 임대 정보와 실패 기록이 남는다. 클라이언트를 다시 돌리겠다고 원격 서버에서 `dhclient -r`부터 치면 주소가 반납되는 순간 SSH가 끊긴다. 원격에서는 콘솔 접근을 확보한 뒤에 하거나 `networkctl renew eth0`처럼 주소를 놓지 않고 갱신만 하는 명령을 쓴다.
+
+서버를 고를 때는 작은 망이면 dnsmasq(DNS 캐시와 함께), 큰 망이면 Kea를 많이 쓴다. 오래 쓰이던 ISC DHCP 서버(`isc-dhcp-server`)는 2022년에 유지보수가 끝났고, ISC가 후속으로 내놓은 것이 Kea다. 서버를 두 대 두려면 Kea의 HA 모드처럼 임대 기록을 서로 맞추는 방식을 쓰거나, 풀을 반씩 나눠 각자 주는 단순한 방식(분할 범위)을 쓴다. 두 서버가 같은 풀을 기록 공유 없이 나눠 주면 같은 주소가 두 번 나간다.
+
+## 회의실 공유기로 돌아가면
+
+DHCP는 주소가 없는 기기가 브로드캐스트로 묻고, 서버가 주소를 기한부로 빌려주는 약속이다. 네 번의 메시지로 빌리고, T1에는 준 서버에게, T2에는 아무 서버에게 연장을 묻고, 기한이 끝나면 처음부터 다시 한다. 라우터 너머로는 릴레이가 giaddr을 적어 넘긴다. 그리고 누가 대답하든 믿기 때문에, 회의실에 꽂힌 공유기 하나가 층 전체의 게이트웨이를 바꿀 수 있었다. 막는 일은 DHCP 자체가 아니라 스위치의 스누핑이 맡는다.
+
+## 면접에서 나올 만한 질문
+
+### DHCP로 주소를 받는 과정을 설명해 주세요
+
+DISCOVER, OFFER, REQUEST, ACK 네 단계다. 주소가 없는 클라이언트가 0.0.0.0에서 255.255.255.255로 UDP 67번에 DISCOVER를 브로드캐스트하면, 서버가 빈 주소와 임대 시간, 게이트웨이, DNS를 OFFER로 제안한다. 클라이언트는 고른 서버의 ID를 담아 REQUEST를 다시 브로드캐스트하고, 서버가 ACK로 확정하면 그때 주소를 붙인다. 서버와 클라이언트 포트가 67, 68로 고정된 것은 BOOTP에서 물려받았고, 브로드캐스트 대답을 엉뚱한 프로그램이 받지 않게 하려는 것이다.
+
+### REQUEST는 왜 유니캐스트가 아니라 브로드캐스트로 보내나요?
+
+서버가 여럿일 때 뽑히지 않은 서버에게도 알리기 위해서다. 여러 서버가 OFFER를 보냈다면 각자 주소를 잡아 두고 있는데, REQUEST에 담긴 Server-ID를 보고 자기 제안이 선택되지 않았음을 알아 그 주소를 풀로 돌린다. 또 클라이언트는 아직 주소가 확정되지 않아 0.0.0.0에서 보내는 상태이기도 하다.
+
+### 임대 기간 중간에 서버가 죽으면 클라이언트는 어떻게 되나요?
+
+임대가 남은 동안은 주소를 계속 쓴다. T1(기본 50%)에는 주소를 준 서버에게 유니캐스트로 연장을 묻고, T2(기본 87.5%)까지 대답이 없으면 아무 서버에게나 브로드캐스트로 묻는다. 그래도 대답이 없으면 임대가 끝나는 순간 주소를 떼고 DISCOVER부터 다시 하며, 이때 열려 있던 연결이 끊긴다. 그래서 임대를 길게 잡을수록 서버 장애에 오래 버티지만 떠난 기기의 주소가 오래 묶인다.
+
+### 라우터 너머에 있는 DHCP 서버는 어떻게 주소를 주나요?
+
+라우터나 L3 스위치의 릴레이 에이전트가 브로드캐스트를 받아 서버에게 유니캐스트로 넘긴다. 릴레이는 giaddr 칸에 클라이언트 쪽 인터페이스 주소를 적고, 서버는 giaddr가 속한 대역의 풀에서 주소를 고른 뒤 대답도 그 주소로 보낸다. 그래서 서버에 그 대역으로 가는 경로가 있어야 하고, 풀마다 게이트웨이 옵션을 그 대역에 맞게 따로 줘야 한다. 하나로 두면 주소는 받았는데 기본 경로가 없는 기기가 생긴다.
+
+### 사용자 PC 주소가 169.254로 시작한다면 무엇을 의심하나요?
+
+DHCP 대답을 하나도 받지 못했다는 신호다. 윈도우와 macOS는 대답이 없으면 링크 로컬 대역에서 스스로 주소를 붙인다. 서버 장애, 다른 VLAN에 릴레이 설정 누락, 풀 고갈, DHCP 스누핑이 진짜 서버 포트를 untrusted로 둔 경우를 차례로 보고, 클라이언트 쪽 tcpdump에서 DISCOVER만 반복되는지 확인한다.
+
+### 가짜 DHCP 서버는 어떤 위험이 있고 어떻게 막나요?
+
+클라이언트는 먼저 온 OFFER를 고르기 때문에 가짜 서버가 게이트웨이와 DNS를 자기 주소로 바꿔 트래픽을 가로챌 수 있다. 옵션 121로 경로를 넣어 VPN을 우회시키는 공격(TunnelVision)도 있었다. 막는 건 스위치의 DHCP 스누핑이다. 서버가 있는 포트와 업링크만 trusted로 두고 나머지 포트에서 오는 서버 메시지를 버리며, 그 바인딩 표로 동적 ARP 검사와 IP 소스 가드까지 건다.
+
+### 고정 예약을 걸었는데 다른 주소가 나온다면 왜일까요?
+
+서버가 기기를 알아보는 기준이 예약 기준과 다를 때다. 클라이언트가 옵션 61로 클라이언트 ID를 보내면 서버는 MAC보다 이걸 먼저 보는데, systemd-networkd는 기본으로 DUID 기반 ID를 보낸다. 휴대폰과 노트북의 Wi-Fi 무작위 MAC도 원인이다. netplan의 `dhcp-identifier: mac`이나 기기의 무작위 MAC 끄기로 맞추고, 예약 주소는 동적 풀 밖에 둔다.
