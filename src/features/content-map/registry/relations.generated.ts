@@ -2,6 +2,124 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "waf": {
+    "links": [
+      "ids-ips",
+      "rate-limiting-in-practice",
+      "iptables-basics",
+      "security-groups-nacl",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "html-form-http",
+      "what-happens-google-com",
+      "https-tls",
+      "vpc-basics",
+      "db-modeling-normalization",
+      "dns"
+    ]
+  },
+  "encryption-in-transit": {
+    "links": [
+      "https-tls",
+      "encryption-at-rest",
+      "zero-trust-architecture",
+      "service-mesh",
+      "kubernetes-ingress"
+    ],
+    "mentions": [
+      "nginx-basics",
+      "nginx-reverse-proxy",
+      "k8s-configmap",
+      "packet-capture-tcpdump",
+      "linux-processes-signals",
+      "kafka-basics",
+      "redis-basics",
+      "what-happens-google-com",
+      "vpc-basics",
+      "layer-link-ethernet-arp",
+      "dns"
+    ]
+  },
+  "encryption-at-rest": {
+    "links": [
+      "encryption-in-transit"
+    ],
+    "mentions": [
+      "postgres-mvcc-vacuum",
+      "linux-files-permissions",
+      "optimistic-locking",
+      "vpc-basics",
+      "db-modeling-normalization"
+    ]
+  },
+  "rolling-deployment": {
+    "links": [
+      "k8s-deployment",
+      "blue-green-deployment",
+      "canary-release",
+      "load-balancer-basics",
+      "idempotency-key",
+      "api-versioning",
+      "zero-downtime-migrations",
+      "k8s-pod-probes",
+      "ansible-network-automation"
+    ],
+    "mentions": [
+      "retries",
+      "docker-container-basics",
+      "autoscaling",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "sql-query-rewrite"
+    ]
+  },
+  "canary-release": {
+    "links": [
+      "blue-green-deployment",
+      "rolling-deployment",
+      "feature-flags",
+      "ab-testing",
+      "load-balancing-algorithms",
+      "kubernetes-ingress",
+      "gateway",
+      "service-mesh",
+      "k8s-deployment",
+      "zero-downtime-migrations",
+      "rollback-strategy"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "docker-container-basics",
+      "js-memory-leak",
+      "sql-batch-timeout-pool",
+      "http-status-codes"
+    ]
+  },
+  "blue-green-deployment": {
+    "links": [
+      "canary-release",
+      "rolling-deployment",
+      "ci-cd-basics",
+      "k8s-deployment",
+      "zero-downtime-migrations",
+      "rollback-strategy",
+      "feature-flags"
+    ],
+    "mentions": [
+      "iptables-nat",
+      "docker-container-basics",
+      "realtime-communication",
+      "proxy-reverse-proxy",
+      "autoscaling",
+      "linux-processes-signals",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "cookie-session-login",
+      "grpc",
+      "dns"
+    ]
+  },
   "rollback-strategy": {
     "links": [
       "k8s-deployment",
@@ -12,7 +130,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "feature-flags",
       "zero-downtime-migrations",
       "db-migration-tools",
-      "dead-letter-queue"
+      "dead-letter-queue",
+      "canary-release",
+      "blue-green-deployment"
     ],
     "mentions": [
       "git-undo",
@@ -26,7 +146,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ab-testing",
       "ci-cd-basics",
-      "rollback-strategy"
+      "rollback-strategy",
+      "canary-release"
     ],
     "mentions": [
       "observability-basics",
@@ -57,6 +178,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rollback-strategy",
       "k8s-configmap",
       "k8s-secret",
+      "canary-release",
+      "blue-green-deployment",
       "git-branching-strategy"
     ],
     "mentions": [
@@ -233,6 +356,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "k8s-pod-probes",
       "k8s-deploy-pipeline-eks",
+      "rolling-deployment",
       "sql-basics"
     ]
   },
@@ -1082,6 +1206,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-systemd-systemctl"
     ],
     "mentions": [
+      "blue-green-deployment",
       "k8s-pod-basics",
       "k8s-pod-resources",
       "docker-container-basics",
@@ -1128,6 +1253,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "proxy-reverse-proxy",
+      "waf",
       "vpc-subnets-route-tables",
       "layer-ip-addressing",
       "what-happens-google-com",
@@ -1259,6 +1385,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "network-partitions",
+      "rolling-deployment",
       "kafka-basics",
       "db-type-key-value",
       "dns"
@@ -1333,6 +1460,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
+      "canary-release",
       "k8s-service-types",
       "k8s-pv-pvc",
       "kubernetes-ingress",
@@ -1621,6 +1749,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "grpc",
       "cron-jobs",
       "kubernetes-ingress",
+      "encryption-at-rest",
       "linux-files-permissions",
       "github-actions-docker-ecr",
       "eks-cluster-basics"
@@ -1763,10 +1892,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-mvcc-vacuum",
       "db-migration-tools",
       "db-architecture-by-scale",
+      "encryption-in-transit",
       "https-tls",
       "autoscaling",
       "latency-bandwidth-throughput",
       "db-replication-sharding",
+      "rolling-deployment",
       "backpressure",
       "postgres-getting-started",
       "vpc-basics"
@@ -1859,6 +1990,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "layer-link-ethernet-arp",
       "http-versions",
+      "rolling-deployment",
       "security-groups-nacl",
       "redis-basics",
       "client-data-cache",
@@ -1964,6 +2096,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-cluster"
     ],
     "mentions": [
+      "rolling-deployment",
       "osi-in-practice",
       "db-type-wide-column",
       "vpc-basics",
@@ -2576,6 +2709,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "encryption-in-transit",
       "postgres-operations",
       "security-groups-nacl",
       "sql-batch-timeout-pool",
@@ -2782,6 +2916,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-versions",
       "security-groups-nacl",
       "what-happens-google-com",
+      "encryption-in-transit",
       "grpc",
       "layer-ip-routing-icmp",
       "udp-and-quic"
@@ -3792,6 +3927,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-https-performance"
     ],
     "mentions": [
+      "blue-green-deployment",
       "linux-systemd-systemctl",
       "realtime-communication",
       "proxy-reverse-proxy",
@@ -3816,6 +3952,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "retries",
+      "rolling-deployment",
       "tcp-connection-lifecycle",
       "browser-fetch",
       "load-balancer-basics",
@@ -4176,6 +4313,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks",
       "service-mesh",
       "http-versions",
+      "encryption-in-transit",
       "udp-and-quic",
       "http-methods"
     ]
@@ -4539,6 +4677,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rate-limiting-in-practice",
+      "canary-release",
       "k8s-network-policy",
       "osi-in-practice",
       "docker-container-basics",

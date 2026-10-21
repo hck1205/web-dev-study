@@ -1,0 +1,595 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("encryption-in-transit");
+
+보안 점검에서 이런 지적을 받는다. "외부는 HTTPS인데 로드 밸런서 뒤 내부 구간이 HTTP입니다." 처음 들으면 의아하다. 내부망은 우리 VPC 안이고 밖에서 들어올 수 없는데 왜 암호화해야 하나. 그런데 트래픽이 지나가는 길 위의 서버 하나, 예를 들어 여러 Pod가 함께 도는 쿠버네티스 노드 하나가 뚫리면, 거기서 `tcpdump` 한 줄로 내부 API의 인증 헤더가 그대로 보인다.
+
+전송 구간 암호화(encryption in transit)는 네트워크를 지나가는 데이터를 암호화하는 것이다. TLS가 무엇을 보장하고 핸드셰이크가 어떻게 흘러가는지는 [HTTPS와 TLS](/posts/https-tls) 글에서 다뤘으니 여기서는 반복하지 않는다. 이 글은 그다음 질문을 본다. 바깥 연결 하나가 아니라 내부의 모든 구간을 암호화하려면 무엇이 필요한가. 서비스끼리 서로를 확인하는 mTLS를 내부 CA로 직접 만들어 돌려 보고, 인증서가 없을 때 어떤 오류가 나는지, TLS를 중간에서 끝냈다가 다시 암호화할 때 무엇을 빠뜨리는지, 수백 장의 인증서를 어떻게 자동으로 갈아 끼우는지까지 간다. 디스크와 DB에 놓인 데이터는 [저장 데이터 암호화](/posts/encryption-at-rest)에서 따로 다룬다.
+
+## 내부 구간이 평문이면 생기는 일
+
+먼저 내부 HTTP가 실제로 어떻게 보이는지 확인했다. 같은 요청을 평문 HTTP 서버(8080)와 TLS 서버(8443)에 보내고 루프백에서 잡았다. 실습 환경은 Ubuntu 24.04, OpenSSL 3.0.13, Node 22, nginx다.
+
+```bash
+# 평문 HTTP 요청을 잡는다 (-A: 내용을 ASCII로 출력)
+sudo tcpdump -i lo -nn -A -s 0 'tcp port 8080 and tcp[tcpflags] & tcp-push != 0'
+
+# 다른 터미널에서 내부 API를 부른다
+curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.c2VjcmV0' http://127.0.0.1:8080/charge
+```
+
+```text
+20:32:00.874772 IP 127.0.0.1.38074 > 127.0.0.1.8080: Flags [P.], seq 3493249230:3493249366, ack 4037372024, win 64, options [nop,nop,TS val 2592327478 ecr 3889626088], length 136: HTTP: GET /charge HTTP/1.1
+...6....GET /charge HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.c2VjcmV0
+```
+
+토큰이 그대로 찍힌다. 같은 요청을 TLS로 보내고 파일로 떠서 `Bearer`를 찾으면 패킷 17개 중 0개가 나온다. 첫 데이터 패킷은 `16 03 01`(TLS Handshake 레코드)로 시작한다.
+
+```text
+	0x0030:  30bf f256 1603 0102 0001 0001 fc03 0394  0..V............
+```
+
+아래 그림은 요청 하나가 사용자에게서 DB까지 가는 길이다. 다음을 누르면 구간마다 무엇이 보이는지 나온다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="바깥 구간만 암호화하면 VPC 안의 서버 하나가 전부를 본다"
+  zones={[
+    { id: "vpc", label: "VPC 10.0.0.0/16", x: 8, y: 92, w: 384, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "browser", x: 80, y: 40, icon: "client" },
+    { id: "lb", label: "ALB", sub: "TLS 종료", x: 290, y: 40, icon: "lb" },
+    { id: "app", label: "orders", sub: "10.0.1.10", x: 290, y: 150, icon: "server" },
+    { id: "pay", label: "payments", sub: "10.0.1.20", x: 290, y: 245, icon: "server" },
+    { id: "db", label: "postgres", sub: "10.0.2.30", x: 90, y: 245, icon: "db" },
+    { id: "bad", label: "node-3", sub: "뚫린 노드", x: 90, y: 150, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "lb", label: "TLS" },
+    { from: "lb", to: "app", label: "HTTP" },
+    { from: "app", to: "pay", label: "HTTP" },
+    { from: "app", to: "db", label: "TCP" },
+    { from: "bad", to: "app", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "lb"], packet: "TLS", title: "바깥 구간은 암호화된다", detail: "브라우저와 로드 밸런서 사이는 공개 인증서로 TLS를 맺는다. 자물쇠가 뜨는 구간은 여기까지다." },
+    { path: ["lb", "app", "pay"], packet: "GET", title: "안쪽은 평문 HTTP", detail: "로드 밸런서가 복호화한 요청을 그대로 넘기고, 서비스끼리도 HTTP로 부른다. 토큰, 카드 정보가 평문으로 흐른다." },
+    { path: ["bad", "app"], packet: "sniff", highlight: ["vpc"], title: "길 위의 장비 하나가 엿본다", detail: "orders Pod가 도는 노드를 장악하면 그 노드를 지나는 모든 Pod 트래픽을 읽는다. 온프레미스 L2망이라면 ARP 스푸핑으로, 클라우드라면 트래픽 미러링 권한을 얻어 끌어올 수도 있다. VPC는 다른 고객과의 격리를 해 줄 뿐, 내 망 안에서 장악된 장비까지 막지는 않는다." },
+    { path: ["app", "db"], packet: "Query", title: "DB 연결도 확인해야 한다", detail: "드라이버 기본값이 TLS를 시도만 하고 실패하면 평문으로 붙는 경우가 많다. 아래에서 PostgreSQL로 확인한다." },
+  ]}
+/>
+
+"내부망은 안전하다"는 가정을 버리고 모든 연결에서 상대를 확인하자는 생각이 [제로 트러스트](/posts/zero-trust-architecture)다. 전송 구간 암호화는 그 원칙이 네트워크에서 구현되는 모습이다. 규정도 같은 방향이다. PCI DSS는 카드 데이터가 공중망을 지날 때 강한 암호화를 요구하고, 많은 회사가 내부 구간까지 같은 기준으로 맞춘다.
+
+## DB 드라이버의 "암호화됨"은 확인이 아니다
+
+내부 암호화에서 가장 흔하게 빠지는 곳이 DB 연결이다. PostgreSQL의 libpq는 `sslmode`로 동작을 정한다. 기본값 `prefer`는 TLS를 먼저 시도하고, 서버가 거절하면 평문으로 붙는다. 테스트용 계정으로 모드마다 실제로 무엇이 됐는지 `pg_stat_ssl`로 확인했다.
+
+```bash
+# disable: 평문 / prefer(기본값): 되면 TLS / require: TLS 필수
+for m in disable prefer require; do
+  psql "host=127.0.0.1 dbname=postgres user=v16a_user sslmode=$m" \
+    -c 'SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid();'
+done
+```
+
+```text
+ ssl | version | cipher 
+-----+---------+--------
+ f   |         | 
+(1 row)
+
+ ssl | version |         cipher         
+-----+---------+------------------------
+ t   | TLSv1.3 | TLS_AES_256_GCM_SHA384
+(1 row)
+
+ ssl | version |         cipher         
+-----+---------+------------------------
+ t   | TLSv1.3 | TLS_AES_256_GCM_SHA384
+(1 row)
+```
+
+`require`가 성공한 걸 다시 보자. 클라이언트에 루트 인증서를 하나도 주지 않았는데 연결됐다. `require`는 "암호화는 하라"일 뿐 "상대가 진짜 DB인지 확인하라"가 아니다. 중간에서 DB인 척하는 서버가 있으면 그 서버와 아주 안전하게 암호화된 대화를 한다. 서버 인증서까지 검사하는 건 `verify-ca`(체인만), `verify-full`(체인과 호스트 이름)이다.
+
+```bash
+# 루트 인증서 없이 verify-full을 요구하면
+psql "host=127.0.0.1 dbname=postgres sslmode=verify-full" -c 'select 1'
+
+# 루트는 줬지만 접속 주소가 인증서의 이름과 다르면
+psql "host=127.0.0.1 dbname=postgres sslmode=verify-full sslrootcert=/etc/ssl/certs/ssl-cert-snakeoil.pem" -c 'select 1'
+```
+
+```text
+psql: error: connection to server at "127.0.0.1", port 5432 failed: root certificate file "/var/lib/postgresql/.postgresql/root.crt" does not exist
+Either provide the file, use the system's trusted roots with sslrootcert=system, or change sslmode to disable server certificate verification.
+psql: error: connection to server at "127.0.0.1", port 5432 failed: server certificate for "localhost" (and 1 other name) does not match host name "127.0.0.1"
+```
+
+운영에서는 RDS 같은 관리형 DB가 주는 CA 번들을 `sslrootcert`로 주고 `sslmode=verify-full`로 붙는다. 서버 쪽에서는 `pg_hba.conf`의 `host`를 `hostssl`로 바꿔 평문 연결 자체를 받지 않게 한다(RDS는 `rds.force_ssl` 파라미터). 그래야 클라이언트 설정을 잘못해도 평문으로 떨어지지 않는다. 같은 함정이 Redis(`rediss://`인데 인증서 검사를 끈 클라이언트), Kafka, 그리고 HTTP 클라이언트의 `rejectUnauthorized: false`나 `verify=False`에 있다. 개발 중에 오류를 없애려고 끈 검사가 운영까지 따라가는 일이 흔하다.
+
+## 내부 CA를 만들고 서비스에 신분증을 준다
+
+서버 인증서 검사로 "상대가 진짜 payments인가"는 확인된다. 반대 방향, "payments를 부른 게 정말 orders인가"를 연결 단계에서 확인하려면 클라이언트도 인증서를 내야 한다. 이게 mTLS다. 원리는 [HTTPS와 TLS](/posts/https-tls#서버끼리도-서로-확인한다-mtls)에서 봤으니 여기서는 직접 만든다. 공개 CA는 내부 이름(`payments.internal`)이나 서비스 신원(`spiffe://...`)에 인증서를 주지 않으므로 내부 CA가 필요하다.
+
+```bash
+# 내부 루트 CA (실습용 1년. 운영에서는 루트를 오프라인에 두고 중간 CA로 발급한다)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout ca.key -out ca.pem -days 365 -subj "/O=shop-internal/CN=shop-internal-ca"
+
+# payments 서버 인증서: DNS 이름과 serverAuth 용도
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout payments.key -out payments.csr -subj "/CN=payments.internal"
+printf "subjectAltName=DNS:payments.internal,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n" > payments.ext
+openssl x509 -req -in payments.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -out payments.pem -days 30 -extfile payments.ext
+
+# orders 클라이언트 인증서: 서비스 신원(URI)과 clientAuth 용도, 하루짜리
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout orders.key -out orders.csr -subj "/CN=orders"
+printf "subjectAltName=URI:spiffe://shop/ns/prod/sa/orders\nextendedKeyUsage=clientAuth\n" > orders.ext
+openssl x509 -req -in orders.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -out orders.pem -days 1 -extfile orders.ext
+
+# 확인
+openssl x509 -in orders.pem -noout -subject -issuer -dates -ext subjectAltName,extendedKeyUsage
+openssl verify -CAfile ca.pem payments.pem orders.pem
+```
+
+```text
+subject=CN = orders
+issuer=O = shop-internal, CN = shop-internal-ca
+notBefore=Oct 20 20:30:04 2026 GMT
+notAfter=Oct 21 20:30:04 2026 GMT
+X509v3 Subject Alternative Name: 
+    URI:spiffe://shop/ns/prod/sa/orders
+X509v3 Extended Key Usage: 
+    TLS Web Client Authentication
+payments.pem: OK
+orders.pem: OK
+```
+
+클라이언트 인증서에서 서버가 실제로 보는 필드는 몇 개 안 된다. 조각을 누르면 각 필드를 어떻게 쓰는지 나온다.
+
+<UrlAnatomy
+  caption="orders 서비스의 클라이언트 인증서"
+  base="orders.pem"
+  separator=" : "
+  joiner=" | "
+  params={[
+    { key: "issuer", value: "shop-internal-ca", title: "누가 서명했나", description: "서버의 ca 설정에 이 CA가 있어야 한다. 이 CA가 서명한 인증서는 모두 신분증으로 인정되므로, 같은 CA를 외부용과 섞어 쓰지 않는다.", required: true },
+    { key: "SAN", value: "URI:spiffe://shop/ns/prod/sa/orders", display: "URI:spiffe://…/orders", title: "서비스 신원", description: "서버가 \"누가 불렀나\"를 판단하는 값이다. CN은 오래된 관례라 이름 검사에는 SAN을 쓴다. 서비스 메시는 이 자리에 SPIFFE ID를 넣는다.", required: true },
+    { key: "EKU", value: "clientAuth", title: "용도", description: "클라이언트 인증용이라는 표시다. serverAuth만 있는 인증서를 클라이언트 인증서로 내밀면 검증에서 거절된다." },
+    { key: "notAfter", value: "+1d", title: "만료", description: "하루짜리다. 폐기 목록(CRL)이나 OCSP를 운영하는 대신 짧게 만들어 자주 바꾸는 쪽을 택했다. 그만큼 자동 갱신이 필수가 된다.", required: true },
+  ]}
+/>
+
+이제 payments 서버를 Node로 띄운다. 핵심은 `requestCert`와 `rejectUnauthorized` 두 옵션이고, 인증서가 맞더라도 신원별 허용 목록을 따로 본다.
+
+```js
+import https from "node:https";
+import fs from "node:fs";
+
+const read = (f) => fs.readFileSync(new URL(f, import.meta.url));
+const ALLOWED = new Set(["spiffe://shop/ns/prod/sa/orders"]);
+
+const server = https.createServer(
+  {
+    key: read("./payments.key"),
+    cert: read("./payments.pem"),
+    ca: read("./ca.pem"),            // 이 CA가 발급한 클라이언트 인증서만 믿는다
+    requestCert: true,               // CertificateRequest를 보낸다
+    rejectUnauthorized: true,        // 검증에 실패하면 핸드셰이크에서 끊는다
+    minVersion: "TLSv1.3",
+  },
+  (req, res) => {
+    const peer = req.socket.getPeerCertificate();
+    const id = (peer.subjectaltname || "").replace(/^URI:/, "");
+    if (!ALLOWED.has(id)) {          // 신원은 확인됐다. 이 API를 불러도 되나?
+      res.writeHead(403).end(`forbidden: ${id}\n`);
+      return;
+    }
+    res.end(`hello ${id} (serial ${peer.serialNumber})\n`);
+  },
+);
+server.on("tlsClientError", (err) => console.log("[payments] tlsClientError:", err.code || err.message));
+server.listen(8443, "127.0.0.1");
+```
+
+## 인증서가 없을 때 실제로 나는 오류
+
+같은 서버에 네 가지 클라이언트로 붙어 봤다. 제대로 된 인증서, 인증서 없음, 다른 CA가 서명한 같은 이름의 인증서(공격자가 스스로 만든 것), 만료된 인증서다.
+
+```bash
+# --resolve로 이름을 127.0.0.1에 묶는다. 서버 인증서 검사는 내부 CA로
+for c in "" "--cert rogue.pem --key rogue.key" "--cert expired.pem --key orders.key" "--cert orders.pem --key orders.key"; do
+  echo "== curl $c"
+  curl -sS --cacert ca.pem --resolve payments.internal:8443:127.0.0.1 $c https://payments.internal:8443/charge
+done
+```
+
+```text
+== curl 
+curl: (56) OpenSSL SSL_read: OpenSSL/3.0.13: error:0A00045C:SSL routines::tlsv13 alert certificate required, errno 0
+== curl --cert rogue.pem --key rogue.key
+curl: (56) Recv failure: Connection reset by peer
+== curl --cert expired.pem --key orders.key
+curl: (56) Recv failure: Connection reset by peer
+== curl --cert orders.pem --key orders.key
+hello spiffe://shop/ns/prod/sa/orders (serial 3E28B9AEA3A1CC0BB511CFF0706D1C20066DBDC3)
+```
+
+인증서가 없으면 서버가 TLS 1.3의 `certificate_required` 경고(alert 116)를 보내서 이유가 분명하다. 서버 로그에는 `ERR_SSL_PEER_DID_NOT_RETURN_A_CERTIFICATE`가 찍혔다. 그런데 다른 CA와 만료된 인증서는 둘 다 `Connection reset by peer`뿐이고, 서버 로그도 `ECONNRESET`이었다. 이유가 어디에도 남지 않는다. 장애 대응 중에 이걸 만나면 방화벽이나 로드 밸런서를 먼저 의심하게 된다.
+
+curl의 오류 번호도 눈여겨볼 만하다. 35가 아니라 56(받기 실패)이다. TLS 1.3에서는 클라이언트가 자기 인증서를 보낸 뒤 서버의 판정을 기다리지 않고 핸드셰이크를 끝낸다. 서버가 거절하는 시점에 클라이언트는 이미 요청을 보내고 응답을 읽는 중이다. 그래서 TLS 1.3의 mTLS 실패는 "연결은 됐는데 첫 읽기에서 끊김"으로 보인다.
+
+<SequenceDiagram
+  caption="TLS 1.3 mTLS에서 클라이언트 인증서가 거절되는 순서"
+  actors={[
+    { id: "orders", label: "orders" },
+    { id: "pay", label: "payments" },
+  ]}
+  steps={[
+    { from: "orders", to: "pay", label: "ClientHello", title: "연결을 시작한다", detail: "여기까지는 보통 TLS와 같다." },
+    { from: "pay", to: "orders", label: "+CertificateRequest", title: "서버가 인증서를 요구한다", detail: "requestCert: true가 이 메시지를 만든다. 서버 인증서와 Finished도 함께 온다." },
+    { from: "orders", to: "pay", label: "{Cert}{Finished}", title: "클라이언트는 보내고 바로 끝낸다", detail: "클라이언트 입장에서 핸드셰이크는 여기서 끝났다. 곧바로 HTTP 요청을 암호화해 보낸다.", payload: "GET /charge HTTP/1.1" },
+    { from: "pay", to: "pay", label: "검증", title: "서버가 뒤늦게 인증서를 검사한다", detail: "체인, 만료, 용도를 본다. 실패하면 이 연결을 버린다." },
+    { from: "pay", to: "orders", label: "alert / RST", title: "클라이언트는 읽다가 끊긴다", detail: "인증서가 없으면 certificate_required 경고가 오지만, Node는 체인 오류일 때 이유 없이 소켓을 닫았다. 그래서 curl은 35가 아닌 56을 낸다.", payload: "curl: (56) Recv failure: Connection reset by peer" },
+  ]}
+/>
+
+이유를 남기고 싶으면 핸드셰이크는 통과시키고 앱에서 판정하는 방법이 있다. `rejectUnauthorized: false`로 두고 요청마다 `socket.authorized`와 `authorizationError`를 본다. 판정을 앱이 빼먹으면 아무나 들어오니 모든 요청 경로의 맨 앞에 둔다.
+
+```js
+// 8444: 핸드셰이크는 끝내고 앱에서 판정한다
+(req, res) => {
+  const s = req.socket;
+  if (!s.authorized) {
+    console.log("[payments:8444] rejected:", s.authorizationError);
+    res.writeHead(401).end(`client cert rejected: ${s.authorizationError}\n`);
+    return;
+  }
+  res.end("ok\n");
+}
+```
+
+```text
+== curl 
+client cert rejected: UNABLE_TO_GET_ISSUER_CERT
+== curl --cert rogue.pem --key rogue.key
+client cert rejected: UNABLE_TO_VERIFY_LEAF_SIGNATURE
+== curl --cert expired.pem --key orders.key
+client cert rejected: CERT_HAS_EXPIRED
+== curl --cert orders.pem --key orders.key
+ok
+```
+
+이제 이유가 보인다. 다만 첫 줄은 오해하기 좋다. 인증서를 아예 안 보냈는데 Node는 `UNABLE_TO_GET_ISSUER_CERT`라고 답한다. "발급자를 못 찾았다"를 보고 CA 번들을 고치러 가면 시간을 버린다. 이 코드가 나오면 먼저 클라이언트가 인증서를 보냈는지(`getPeerCertificate()`가 빈 객체인지)부터 본다. nginx는 같은 상황에서 핸드셰이크를 끝낸 뒤 HTTP `400 No required SSL certificate was sent`로 답한다. 서버 구현마다 실패가 보이는 방식이 다르다는 걸 알고 있으면 증상에서 원인을 빨리 좁힌다.
+
+## 인증은 통과했는데 403이 나는 이유
+
+mTLS가 확인해 주는 건 "누구인가"까지다. 그다음 "이 API를 불러도 되나"는 별도 판단이다. 이걸 섞으면 같은 CA가 발급한 모든 서비스가 결제 API를 부를 수 있게 된다. 아래 그림은 같은 내부 CA의 인증서를 가진 서비스 셋이 payments를 부르는 장면이다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="같은 CA를 믿어도 부를 수 있는 서비스는 따로 정한다"
+  zones={[
+    { id: "mesh", label: "같은 내부 CA", x: 8, y: 30, w: 384, h: 160, tone: "private" },
+  ]}
+  nodes={[
+    { id: "orders", label: "orders", sub: "sa/orders", x: 80, y: 80, icon: "container" },
+    { id: "edge", label: "edge-gw", sub: "sa/edge-gw", x: 80, y: 150, icon: "gateway" },
+    { id: "pay", label: "payments", sub: ":8443", x: 300, y: 115, icon: "lock" },
+    { id: "rogue", label: "rogue pod", sub: "own CA", x: 300, y: 240, icon: "container" },
+  ]}
+  links={[
+    { from: "orders", to: "pay" },
+    { from: "edge", to: "pay" },
+    { from: "rogue", to: "pay", dashed: true },
+  ]}
+  steps={[
+    { path: ["orders", "pay"], packet: "mTLS", title: "인증과 인가 모두 통과", detail: "CA 체인이 맞고 SAN의 신원이 허용 목록에 있다.", payload: "200 hello spiffe://shop/ns/prod/sa/orders" },
+    { path: ["rogue", "pay"], packet: "mTLS", blocked: true, title: "다른 CA의 인증서는 핸드셰이크에서 끊긴다", detail: "CN을 orders로 똑같이 적어도 서명한 CA가 다르면 체인 검증에서 떨어진다.", payload: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" },
+    { path: ["edge", "pay"], packet: "mTLS", blocked: true, highlight: ["mesh"], title: "신원은 맞지만 권한이 없다", detail: "edge-gw의 인증서는 진짜다. 그래서 핸드셰이크는 성공한다. 허용 목록에 없으니 앱이 403으로 거절한다.", payload: "403 forbidden: spiffe://shop/ns/prod/sa/edge-gw" },
+  ]}
+/>
+
+세 번째 결과는 아래 nginx 실습에서 실제로 나왔다. 서비스 메시에서는 이 허용 목록을 Istio의 `AuthorizationPolicy` 같은 정책으로 둔다. 신원을 SPIFFE ID로 정하는 방식과 메시가 사이드카에 인증서를 배포하는 과정은 [서비스 메시](/posts/service-mesh) 글에 있다.
+
+## 중간에서 풀고 다시 잠그기
+
+로드 밸런서나 게이트웨이는 HTTP를 봐야 경로별로 나누고 헤더를 고칠 수 있다. 그래서 TLS를 거기서 한 번 끝낸다(termination). 그 뒤 백엔드까지를 어떻게 할지가 세 갈래다. 평문으로 넘기기(edge termination), 다시 TLS로 감싸기(re-encryption), 풀지 않고 TCP로 넘기기(passthrough). 이 글의 주제인 "내부도 암호화"는 앞의 둘 중 re-encryption이다. passthrough는 개인 키를 백엔드만 가진다는 장점이 있지만 경로 라우팅과 WAF를 못 쓴다.
+
+re-encryption에는 함정이 하나 있다. 다시 맺는 TLS에서 백엔드 인증서를 검사하지 않는 설정이 많다. nginx의 `proxy_ssl_verify`는 기본값이 `off`다. `proxy_pass https://`로 바꾸는 것만으로는 암호화만 되고 상대 확인은 안 된다. 실습에서는 nginx가 바깥 인증서로 TLS를 끝내고, 내부 CA로 payments를 검사하며, 자기 클라이언트 인증서(edge-gw)를 내밀도록 했다.
+
+```nginx
+server {
+  listen 127.0.0.1:9443 ssl;
+  server_name shop.example.test;
+  ssl_certificate     front.pem;              # 바깥에 보이는 인증서
+  ssl_certificate_key front.key;
+
+  location /pay/ {
+    proxy_pass https://127.0.0.1:8443/;       # 뒤로 다시 TLS
+    proxy_ssl_server_name on;                  # 백엔드에 SNI를 보낸다
+    proxy_ssl_name payments.internal;          # 이 이름으로 인증서를 검사한다
+    proxy_ssl_verify on;                       # 기본값 off
+    proxy_ssl_trusted_certificate ca.pem;      # 내부 CA
+    proxy_ssl_certificate     edge.pem;        # 백엔드에 내밀 내 인증서 (mTLS)
+    proxy_ssl_certificate_key edge.key;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+설정 줄을 하나씩 누르면 빠뜨렸을 때 무슨 일이 생기는지 나온다.
+
+<UrlAnatomy
+  caption="nginx가 백엔드로 다시 TLS를 맺을 때 필요한 지시어"
+  base="location /pay/"
+  separator=" { "
+  joiner="; "
+  params={[
+    { key: "proxy_pass", value: "https://…", title: "다시 암호화", description: "https로 바꾸면 백엔드 구간도 TLS가 된다. 여기까지만 하면 암호화는 되지만 상대가 누구든 붙는다.", required: true },
+    { key: "proxy_ssl_server_name", value: "on", title: "SNI 보내기", description: "기본값 off. 백엔드가 이름별로 인증서를 고르는 서버(인그레스, 클라우드 LB)면 SNI가 없을 때 엉뚱한 기본 인증서가 온다." },
+    { key: "proxy_ssl_name", value: "payments.internal", title: "검사할 이름", description: "기본값은 proxy_pass의 호스트다. IP로 proxy_pass하면 IP를 이름으로 검사하니, 인증서의 DNS 이름을 여기에 적는다." },
+    { key: "proxy_ssl_verify", value: "on", title: "인증서 검사", description: "기본값 off. 끄면 중간에서 백엔드인 척하는 서버도 받아들인다. 켜면 trusted_certificate가 꼭 있어야 한다.", required: true },
+    { key: "proxy_ssl_certificate", value: "edge.pem", title: "내 클라이언트 인증서", description: "백엔드가 mTLS를 요구하면 필요하다. 빠뜨리면 백엔드가 certificate_required로 끊고 nginx는 502를 낸다." },
+  ]}
+/>
+
+세 가지 location으로 실제로 불러 봤다. 정상 설정, 검사할 이름을 `payments.svc`로 잘못 적은 것, 클라이언트 인증서를 빠뜨린 것이다.
+
+```bash
+for p in pay pay-wrongname pay-nocert; do
+  echo "== /$p/charge"
+  curl -sS --cacert front.pem --resolve shop.example.test:9443:127.0.0.1 \
+    -o - -w '%{http_code}\n' https://shop.example.test:9443/$p/charge | tail -3
+done
+```
+
+```text
+== /pay/charge
+forbidden: spiffe://shop/ns/prod/sa/edge-gw
+403
+== /pay-wrongname/charge
+</body>
+</html>
+502
+== /pay-nocert/charge
+</body>
+</html>
+502
+```
+
+```text
+2026/10/20 20:31:28 [error] 9316#9316: *3 upstream SSL certificate does not match "payments.svc" while SSL handshaking to upstream, client: 127.0.0.1, server: shop.example.test, request: "GET /pay-wrongname/charge HTTP/1.1", upstream: "https://127.0.0.1:8443/charge", host: "shop.example.test:9443"
+2026/10/20 20:31:28 [crit] 9316#9316: *5 SSL_read() failed (SSL: error:0A00045C:SSL routines::tlsv13 alert certificate required:SSL alert number 116) while reading response header from upstream, client: 127.0.0.1, server: shop.example.test, request: "GET /pay-nocert/charge HTTP/1.1", upstream: "https://127.0.0.1:8443/charge", host: "shop.example.test:9443"
+```
+
+첫 번째 403은 앞 절의 그림 그대로다. 체인은 통과했고 edge-gw가 허용 목록에 없어서 앱이 거절했다. 두 502는 앱 로그에 아무것도 남지 않는다. 요청이 앱까지 가지 못했기 때문이다. 이럴 때 볼 곳은 프록시의 error 로그다. `while SSL handshaking to upstream`은 백엔드와의 TLS에서, `while reading response header from upstream`은 핸드셰이크 직후 첫 읽기에서 끊겼다는 뜻이다. 두 번째가 앞에서 본 TLS 1.3 mTLS의 "늦은 거절"이다.
+
+<SequenceDiagram
+  caption="re-encryption: 프록시는 바깥에선 서버, 안쪽에선 클라이언트다"
+  actors={[
+    { id: "user", label: "브라우저" },
+    { id: "ngx", label: "nginx" },
+    { id: "pay", label: "payments" },
+  ]}
+  steps={[
+    { from: "user", to: "ngx", label: "TLS (front.pem)", title: "바깥 TLS를 끝낸다", detail: "공개 인증서로 브라우저와 TLS를 맺고 HTTP 요청을 꺼낸다. 여기서 경로를 보고 /pay/로 보낼지 정한다." },
+    { from: "ngx", to: "pay", label: "ClientHello SNI", title: "백엔드로 새 TLS를 연다", detail: "proxy_ssl_server_name on이면 SNI에 payments.internal을 넣는다. 바깥 연결과는 키도 세션도 다른 별개의 TLS다." },
+    { from: "pay", to: "ngx", label: "Cert + CertReq", title: "백엔드 인증서를 검사한다", detail: "내부 CA 체인과 proxy_ssl_name을 맞춰 본다. 이름이 다르면 여기서 끊고 502를 낸다.", payload: "upstream SSL certificate does not match \"payments.svc\"" },
+    { from: "ngx", to: "pay", label: "edge.pem", title: "프록시가 자기 신분을 낸다", detail: "브라우저 사용자의 신원이 아니라 프록시의 신원이다. 사용자가 누구인지는 헤더나 토큰으로 따로 넘긴다." },
+    { from: "pay", to: "ngx", label: "403", title: "백엔드가 인가를 판단한다", detail: "edge-gw는 진짜지만 결제 API를 부를 권한이 없다. 인증과 인가가 따로 움직인다." },
+  ]}
+/>
+
+마지막 단계에서 하나 더 짚을 것이 있다. 백엔드가 보는 클라이언트 인증서는 프록시의 것이다. 바깥 사용자의 클라이언트 인증서를 백엔드까지 알리고 싶으면 프록시가 검증한 결과를 헤더(`X-Client-Cert` 같은 것)로 넘기는데, 이 헤더는 외부 요청에서 들어온 같은 이름의 헤더를 반드시 지우고 다시 써야 한다. 안 그러면 누구나 헤더 하나로 신원을 위조한다.
+
+## 인증서를 사람이 갈아 끼우지 않는다
+
+내부 구간을 모두 TLS로 바꾸면 인증서가 서비스 수만큼 생긴다. 만료 하나가 장애 하나다. 그래서 짧게 발급하고 자동으로 갱신한다. 공개 인증서도 같은 방향이다. CA/브라우저 포럼은 공개 TLS 인증서의 최대 수명을 2026년 3월부터 200일, 2027년 3월부터 100일, 2029년 3월부터 47일로 줄이기로 했다. 사람이 달력을 보고 바꾸는 방식은 곧 불가능해진다.
+
+쿠버네티스에서는 cert-manager가 이 일을 맡는다. `Certificate` 리소스에 원하는 인증서를 적어 두면 만료 전에 알아서 다시 발급해 Secret을 바꾼다.
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: payments-tls
+  namespace: prod
+spec:
+  secretName: payments-tls        # 결과가 들어갈 Secret (tls.crt, tls.key, ca.crt)
+  duration: 720h                  # 30일짜리
+  renewBefore: 240h               # 만료 10일 전에 갱신. 없으면 수명의 1/3 전
+  dnsNames:
+    - payments.prod.svc.cluster.local
+  usages: ["server auth", "client auth"]
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always        # 갱신 때 키도 새로 만든다
+  issuerRef:
+    kind: ClusterIssuer
+    name: internal-ca             # 내부 CA, Vault, ACME 등
+```
+
+`rotationPolicy`는 cert-manager 1.18부터 기본값이 `Always`고, 그 전 버전은 `Never`(키를 계속 재사용)였다. 버전을 올리지 않은 클러스터라면 명시해 두는 게 안전하다. 인그레스에 붙이는 공개 인증서를 cert-manager로 받는 방법은 [Kubernetes Ingress](/posts/kubernetes-ingress)에서 다뤘고, 여기서는 내부 인증서의 갱신 흐름을 본다.
+
+<SequenceDiagram
+  caption="갱신 시점부터 새 인증서가 연결에 쓰이기까지"
+  actors={[
+    { id: "cm", label: "cert-manager" },
+    { id: "ca", label: "Issuer(CA)" },
+    { id: "sec", label: "Secret" },
+    { id: "app", label: "payments" },
+  ]}
+  steps={[
+    { from: "cm", to: "cm", label: "renewBefore 도달", title: "갱신할 때가 됐다", detail: "Certificate의 notAfter에서 renewBefore를 뺀 시각이 지났다. 새 키를 만들고 CertificateRequest를 낸다." },
+    { from: "cm", to: "ca", label: "CSR", title: "CA에 서명을 받는다", detail: "ClusterIssuer가 가리키는 CA(내부 CA Secret, Vault, AWS Private CA 등)가 서명한다. 실패하면 이벤트와 Certificate의 Ready 조건에 이유가 남는다." },
+    { from: "cm", to: "sec", label: "update", title: "Secret을 바꾼다", detail: "tls.crt와 tls.key가 새 값으로 바뀐다. 여기까지는 아무 연결도 영향을 받지 않는다." },
+    { from: "sec", to: "app", label: "볼륨 갱신", title: "kubelet이 파일을 바꿔 준다", detail: "Secret을 볼륨으로 마운트했다면 kubelet이 잠시 뒤 파일을 바꾼다. subPath로 마운트했거나 환경 변수로 넣었다면 바뀌지 않는다." },
+    { from: "app", to: "app", label: "reload", title: "앱이 다시 읽어야 끝난다", detail: "대부분의 서버는 시작할 때 한 번 읽는다. 파일 감시나 신호로 다시 읽게 하거나, 재시작해야 새 인증서가 쓰인다." },
+  ]}
+/>
+
+마지막 단계를 빠뜨리는 일이 가장 흔하다. cert-manager는 정상적으로 갱신했고 Secret도 바뀌었는데, 앱은 30일 전에 읽은 인증서를 들고 있다가 만료 시각에 모든 연결이 `CERT_HAS_EXPIRED`로 실패한다. Node에서는 `setSecureContext`로 서버를 끄지 않고 바꿀 수 있다. SIGHUP을 받으면 다시 읽게 해서 확인했다.
+
+```js
+const load = () => ({
+  key: fs.readFileSync("./live/tls.key"), cert: fs.readFileSync("./live/tls.crt"),
+  ca: fs.readFileSync("./ca.pem"), requestCert: true, rejectUnauthorized: true,
+});
+const server = https.createServer(load(), (req, res) => res.end("ok\n"));
+process.on("SIGHUP", () => {
+  server.setSecureContext(load());   // 이미 맺은 연결은 그대로, 새 연결부터 새 인증서
+  console.log(`[pid ${process.pid}] reloaded certificate`);
+});
+```
+
+```bash
+# 지금 서버가 내미는 인증서의 일련번호와 만료
+echo | openssl s_client -connect 127.0.0.1:8445 -servername payments.internal \
+  -CAfile ca.pem -cert orders.pem -key orders.key 2>/dev/null | openssl x509 -noout -serial -enddate
+
+# 새 인증서를 임시 파일로 쓰고 mv로 바꾼다 (반쯤 쓴 파일을 읽지 않게)
+cp new.key live/tls.key.tmp && cp new.pem live/tls.crt.tmp
+mv live/tls.key.tmp live/tls.key && mv live/tls.crt.tmp live/tls.crt
+kill -HUP <pid>
+
+# 다시 확인하고, 프로세스가 그대로인지 본다
+ps -o pid,etime,cmd -p <pid>
+```
+
+```text
+serial=3E28B9AEA3A1CC0BB511CFF0706D1C20066DBDC2
+notAfter=Nov 19 20:30:04 2026 GMT
+[pid 9461] reloaded certificate
+serial=3E28B9AEA3A1CC0BB511CFF0706D1C20066DBDC6
+notAfter=Nov 19 20:31:41 2026 GMT
+  PID     ELAPSED CMD
+ 9461       00:10 node server3.mjs
+```
+
+같은 PID 9461이 새 일련번호(`...DC6`)를 내민다. nginx는 `nginx -s reload`, Envoy는 SDS로 같은 일을 한다. [서비스 메시](/posts/service-mesh)는 이 과정 전체를 사이드카가 대신해서 앱이 인증서 파일을 아예 모르게 만든다.
+
+### 언제 갱신하면 CA가 멈춰도 버티나
+
+갱신 시점은 "CA나 cert-manager가 얼마나 오래 멈춰도 장애가 안 나는가"를 정한다. 수명이 30일이고 만료 10일 전에 갱신하면, 갱신이 실패해도 10일 안에만 고치면 된다. 수명 24시간짜리 메시 인증서라면 그 여유가 몇 시간뿐이다. 짧은 수명은 유출 피해를 줄이지만 발급 시스템을 핵심 인프라로 만든다.
+
+아래 함수는 수명과 `renewBefore`(시간 단위)로 갱신 시각과 장애 여유를 계산한다. `renewBefore`를 주지 않으면 cert-manager 기본값처럼 수명의 1/3로 본다.
+
+<CodePlayground
+  caption="갱신 시각과 발급 장애를 버틸 수 있는 시간"
+  functionName="renewPlan"
+  initialCode={`function renewPlan(durationH, renewBeforeH) {
+  // 반환: [발급 후 몇 시간 뒤 갱신하나, 갱신이 실패해도 만료까지 남는 시간]
+  return [0, 0];
+}`}
+  solution={`function renewPlan(durationH, renewBeforeH) {
+  const before = renewBeforeH ?? durationH / 3;
+  return [durationH - before, before];
+}`}
+  tests={[
+    { label: "90일, 기본값", args: [2160], expected: [1440, 720] },
+    { label: "30일, 10일 전", args: [720, 240], expected: [480, 240] },
+    { label: "24시간, 기본값", args: [24], expected: [16, 8] },
+    { label: "24시간, 절반", args: [24, 12], expected: [12, 12] },
+  ]}
+/>
+
+90일 인증서를 기본값으로 쓰면 60일째에 갱신하고 30일의 여유가 있다. 24시간 인증서면 16시간째에 갱신하고 여유는 8시간이다. 갱신 실패를 알리는 경보는 이 여유보다 훨씬 짧은 간격으로 울려야 의미가 있다. 만료 임박은 이렇게 확인한다.
+
+```bash
+# 24시간 안에 만료되나? (만료되면 종료 코드 1)
+openssl x509 -in orders.pem -noout -checkend 86400; echo rc=$?
+
+# 7일 안에 만료되나?
+openssl x509 -in payments.pem -noout -checkend $((7*86400)); echo rc=$?
+```
+
+```text
+Certificate will expire
+rc=1
+Certificate will not expire
+rc=0
+```
+
+운영에서는 파일이 아니라 "지금 서버가 실제로 내미는 인증서"를 재야 한다. 위의 리로드 누락처럼 파일은 새것인데 프로세스는 옛것을 쓰는 경우가 있어서다. blackbox exporter의 `probe_ssl_earliest_cert_expiry`나 cert-manager의 `certmanager_certificate_expiration_timestamp_seconds` 지표에 경보를 건다.
+
+## CA를 바꿀 때는 겹쳐서 믿는다
+
+리프 인증서 교체보다 어려운 게 CA 교체다. 모든 클라이언트와 서버가 "어떤 CA를 믿는지"를 들고 있기 때문이다. 새 CA로 바로 바꾸면 아직 옛 CA 번들을 가진 쪽과 새 인증서를 가진 쪽이 서로를 거절한다. 그래서 신뢰 번들에 두 CA를 겹쳐 넣는 기간을 둔다.
+
+<AlgoTrace
+  caption="CA 교체: 번들을 먼저 넓히고, 발급을 옮기고, 마지막에 좁힌다"
+  memoryLabel="신뢰 번들"
+  cells={["orders", "payments", "users", "edge-gw"]}
+  steps={[
+    { memory: ["CA-old"], caption: "모든 서비스가 CA-old로 발급받았고, CA-old만 믿는다." },
+    { memory: ["CA-old", "CA-new"], caption: "먼저 번들에 CA-new를 더해 모든 곳에 배포한다. 아직 아무도 CA-new 인증서를 쓰지 않으니 영향이 없다." },
+    { pointer: 0, memory: ["CA-old", "CA-new"], caption: "번들이 전부 퍼진 걸 확인한 뒤 발급자를 CA-new로 바꾼다. orders가 갱신되며 CA-new 인증서를 받는다." },
+    { pointer: 2, found: [0, 1], memory: ["CA-old", "CA-new"], caption: "서비스마다 다음 갱신 때 차례로 옮겨 간다. 두 CA가 섞여 있어도 모두 두 CA를 믿으니 연결이 끊기지 않는다." },
+    { found: [0, 1, 2, 3], memory: ["CA-old", "CA-new"], caption: "모든 리프가 CA-new로 바뀌었다. 옛 인증서의 최대 수명만큼 기다려 남은 것이 없음을 확인한다." },
+    { found: [0, 1, 2, 3], memory: ["CA-new"], caption: "마지막에 번들에서 CA-old를 뺀다. 순서를 거꾸로 하면 이 단계에서 대규모 장애가 난다." },
+  ]}
+/>
+
+쿠버네티스에서는 trust-manager가 이 번들을 ConfigMap으로 네임스페이스마다 배포한다. 수동으로 하든 도구로 하든 순서는 같다. 번들 확장, 발급 전환, 번들 축소. 각 단계 사이에 "모든 곳에 퍼졌다"는 확인이 들어간다.
+
+## 현장에서 TLS 오류를 좁히는 순서
+
+내부 TLS를 켜고 나면 장애의 모양이 바뀐다. 앱 로그에 아무것도 없는 502, 간헐적인 `Connection reset`, 특정 시각에 한꺼번에 터지는 실패가 생긴다. 볼 순서는 대체로 이렇다.
+
+1. 어느 구간에서 끊겼나. 프록시 error 로그의 `while SSL handshaking to upstream`인지, 앱 로그에 요청이 찍혔는지로 바깥 TLS, 안쪽 TLS, 앱을 구분한다.
+2. 상대가 실제로 내미는 인증서. `openssl s_client -connect host:port -servername 이름 -showcerts`로 체인, 이름, 만료를 직접 본다. 파일이 아니라 접속해서 본다.
+3. 이름. 클라이언트가 검사하는 이름(SNI, `proxy_ssl_name`, `sslmode=verify-full`의 host)과 인증서 SAN이 맞는지 본다. IP로 접속하면서 DNS 이름 인증서를 받는 경우가 흔하다.
+4. 신뢰 번들. 클라이언트가 믿는 CA 목록에 발급 CA가 있는지 본다. CA 교체 중이라면 번들이 모든 곳에 퍼졌는지 본다.
+5. 클라이언트 인증서. mTLS라면 클라이언트가 인증서를 보냈는지, 용도(EKU)가 clientAuth인지 본다. 서버 구현마다 "안 보냄"이 다른 오류로 보인다는 걸 기억한다.
+6. 시각. 인증서가 아직 유효하지 않거나(`notBefore`가 미래) 만료된 것은 서버나 클라이언트의 시계가 틀어졌을 때도 생긴다. `timedatectl`로 NTP 동기화를 확인한다.
+
+<Callout kind="warning" title="오류를 없애려고 검사를 끄지 않는다">
+`curl -k`, `rejectUnauthorized: false`, `verify=False`, `sslmode=require`, `proxy_ssl_verify off`는 모두 "암호화는 하되 상대는 확인하지 않는다"는 설정이다. 원인을 좁히는 동안 잠깐 쓰는 건 괜찮지만 커밋에 남기면 중간자 공격을 그대로 받아들이는 연결이 된다. 끈 곳은 `grep -rn "rejectUnauthorized: false\|verify=False\|InsecureSkipVerify"`로 찾아 검사를 되살리고, 필요한 CA 번들을 제대로 넣는다.
+</Callout>
+
+## 내부도 바깥처럼
+
+전송 구간 암호화를 내부까지 넓히면 질문이 "암호화했나"에서 "상대를 확인했나"로 바뀐다. DB 드라이버의 `require`, nginx의 `proxy_ssl_verify off`처럼 암호화만 하고 확인은 안 하는 설정이 기본값인 곳이 많다. mTLS는 양쪽이 서로를 확인하게 하지만 인가는 따로 정해야 하고, 인증서가 많아지는 순간 자동 발급과 리로드, CA 교체 순서가 운영의 중심이 된다. 이 일을 앱에서 떼어 내는 방법이 [서비스 메시](/posts/service-mesh)고, 이 모든 걸 "위치가 아니라 신원으로 믿는다"는 원칙으로 묶은 것이 [제로 트러스트](/posts/zero-trust-architecture)다.
+
+## 면접에서 나올 만한 질문
+
+### 내부망인데 왜 TLS를 써야 하나요?
+
+트래픽이 지나는 노드나 프록시 하나가 뚫리면 거기서 서비스 사이의 트래픽을 그대로 읽을 수 있기 때문이다. 실습에서도 평문 HTTP는 tcpdump 한 줄에 인증 헤더가 보였고, TLS로 바꾸자 사라졌다. 내부라는 위치를 믿지 않고 연결마다 상대를 확인하는 제로 트러스트의 기본 조건이고, 카드·개인정보 규정도 이를 요구하는 경우가 많다.
+
+### PostgreSQL에서 sslmode=require면 충분한가요?
+
+아니다. require는 암호화만 하고 서버 인증서를 검사하지 않는다. 실습에서 루트 인증서 없이도 연결이 됐다. 중간에서 DB인 척하는 상대를 막으려면 CA 번들을 주고 verify-full로 체인과 호스트 이름까지 검사하고, 서버 쪽에서는 hostssl로 평문 연결을 받지 않게 한다.
+
+### mTLS에서 클라이언트 인증서가 없으면 어떤 오류가 나나요?
+
+TLS 1.3에서는 서버가 certificate_required 경고를 보내고, 클라이언트는 핸드셰이크가 끝난 줄 알고 요청을 보낸 뒤 첫 읽기에서 실패한다. 그래서 curl은 35가 아니라 56을 낸다. 체인 오류일 때 Node 서버는 이유 없이 연결을 닫아 Connection reset으로만 보였고, 앱에서 판정하게 바꿨을 때 인증서 미제출이 UNABLE_TO_GET_ISSUER_CERT로 나왔다. 구현마다 표현이 달라서 클라이언트가 인증서를 보냈는지부터 확인한다.
+
+### mTLS를 쓰면 인가는 필요 없나요?
+
+필요하다. mTLS는 상대가 누구인지만 확인한다. 같은 CA가 발급한 인증서를 가진 서비스는 모두 핸드셰이크를 통과하므로, 어떤 신원이 어떤 API를 부를 수 있는지는 허용 목록이나 AuthorizationPolicy 같은 정책으로 따로 정한다. 실습에서 진짜 인증서를 가진 edge-gw가 403을 받은 게 그 경우다.
+
+### 로드 밸런서에서 TLS를 끝내고 백엔드로 다시 암호화할 때 주의할 점은요?
+
+백엔드 인증서를 실제로 검사하는지 확인한다. nginx의 proxy_ssl_verify는 기본값이 off라 https로 바꾸기만 하면 암호화만 되고 상대 확인은 안 된다. 검사를 켜면 SNI와 검사할 이름(proxy_ssl_name)을 맞춰야 하고, 틀리면 앱 로그에는 없고 프록시 error 로그에만 남는 502가 난다. 백엔드가 보는 클라이언트 신원은 프록시의 것이라는 점도 기억한다.
+
+### 인증서 자동 갱신을 넣었는데 만료 장애가 났습니다. 어디를 보나요?
+
+갱신 자체보다 "앱이 새 인증서를 다시 읽었나"를 먼저 본다. cert-manager가 Secret을 바꿔도 subPath 마운트나 환경 변수면 파일이 안 바뀌고, 파일이 바뀌어도 시작할 때 한 번만 읽는 서버는 옛 인증서를 계속 쓴다. 파일이 아니라 접속해서 실제로 내미는 인증서의 만료를 재는 지표에 경보를 걸어야 이런 경우를 잡는다.
+
+### 인증서 수명을 짧게 하면 무엇이 좋고 무엇이 나빠지나요?
+
+유출된 키가 쓸모 있는 기간이 줄고, 폐기 목록이나 OCSP 없이도 자연히 만료되게 만들 수 있다. 대신 발급 시스템이 멈추면 버틸 수 있는 시간이 갱신 여유(renewBefore)만큼으로 줄어든다. 24시간 인증서를 기본값으로 갱신하면 여유가 8시간이라, CA와 발급 컨트롤러를 핵심 인프라로 운영해야 한다.
+
+### 내부 CA를 교체하려면 어떤 순서로 하나요?
+
+신뢰 번들을 먼저 넓히고, 발급을 옮기고, 마지막에 좁힌다. 새 CA를 번들에 더해 모든 곳에 배포한 뒤 발급자를 새 CA로 바꾸고, 리프가 모두 새 CA로 바뀐 것을 확인한 다음 옛 CA를 번들에서 뺀다. 순서를 바꾸면 옛 번들을 가진 쪽과 새 인증서를 가진 쪽이 서로를 거절해 대규모 장애가 난다.

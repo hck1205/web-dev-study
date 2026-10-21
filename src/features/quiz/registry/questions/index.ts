@@ -8,9 +8,11 @@ import { BASE64 } from "./base64";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BLOOM_FILTER } from "./bloom-filter";
+import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { BUILD_CACHING } from "./build-caching";
 import { CACHING_STRATEGIES } from "./caching-strategies";
+import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
@@ -61,6 +63,8 @@ import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
+import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
+import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
@@ -234,6 +238,7 @@ import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { ROLLBACK_STRATEGY } from "./rollback-strategy";
+import { ROLLING_DEPLOYMENT } from "./rolling-deployment";
 import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
@@ -281,6 +286,7 @@ import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
+import { WAF } from "./waf";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -299,9 +305,11 @@ export const QUESTION_SETS = [
   BATCH_PROCESSING,
   BIG_O_NOTATION,
   BLOOM_FILTER,
+  BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
   BUILD_CACHING,
   CACHING_STRATEGIES,
+  CANARY_RELEASE,
   CDN_EDGE_ANYCAST,
   CI_CD_BASICS,
   CIRCUIT_BREAKER,
@@ -352,6 +360,8 @@ export const QUESTION_SETS = [
   DOCKERFILE_IMAGE_LAYERS,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
+  ENCRYPTION_AT_REST,
+  ENCRYPTION_IN_TRANSIT,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
   EVENTUAL_CONSISTENCY,
@@ -525,6 +535,7 @@ export const QUESTION_SETS = [
   REST_API_DESIGN,
   RETRIES,
   ROLLBACK_STRATEGY,
+  ROLLING_DEPLOYMENT,
   RSYNC_ALGORITHM,
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
@@ -572,6 +583,7 @@ export const QUESTION_SETS = [
   VPC_PEERING_TRANSIT_PRIVATELINK,
   VPC_SUBNETS_ROUTE_TABLES,
   VPN_IPSEC_WIREGUARD,
+  WAF,
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
