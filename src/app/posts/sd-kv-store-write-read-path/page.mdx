@@ -1,0 +1,402 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-kv-store-write-read-path");
+
+이 시리즈에서 이 글의 자리: 앞 글 [⑮ 죽은 노드 알아채기와 대신 받아 두기](/posts/sd-kv-store-failure-handling)까지 노드 여러 대 사이의 일을 다뤘다. 이 글은 키-값 저장소 편의 마지막으로, 노드 한 대 안에서 쓰기와 읽기가 지나가는 길을 만든다. 다음 글은 [⑰ 고유 ID 생성기](/posts/sd-unique-id-generator)이고, 같은 장의 앞 글은 [⑬ 링으로 나누고 쿼럼으로 복제하기](/posts/sd-kv-store-partition-replication)와 [⑭ 동시에 고친 값과 벡터 시계](/posts/sd-kv-store-versioning)다.
+
+코디네이터가 노드 D에게 `put("cart:alice", ...)`를 보냈다. D는 "저장했다"고 답해야 한다. 첫 글에서는 D 안에 `Map` 하나만 두었다. 그 상태로 D가 재시작되면 답했던 쓰기가 모두 사라진다. 쿼럼으로 세 대에 썼으니 괜찮다고 할 수도 있지만, 같은 랙의 전원이 나가 세 대가 함께 재시작되면 아무것도 남지 않는다. "저장했다"는 말은 디스크에 닿았다는 뜻이어야 한다.
+
+그렇다고 쓰기마다 디스크 파일을 고치면 느리다. 이 글은 빠르면서도 재시작에 살아남는 구조를 한 단계씩 만들고, 실제로 80줄짜리 작은 저장소를 짜서 돌려 본다. 이 구조는 Cassandra, RocksDB, LevelDB, ScyllaDB가 공통으로 쓰는 LSM 트리(Log-Structured Merge tree)다. Cassandra의 테이블 설계와 컴팩션 전략 쪽 이야기는 [와이드 컬럼 DB 글](/posts/db-type-wide-column)에 있으니, 여기서는 쓰기 하나가 "성공"을 받기까지와 읽기 하나가 값을 찾기까지에 집중한다.
+
+## 파일 가운데를 고치는 쓰기는 느리다
+
+키를 정렬된 파일 하나에 두고, 쓰기가 오면 그 키의 자리를 찾아 고친다고 해 보자. 관계형 DB의 B-tree 인덱스가 대략 이렇게 한다. 읽기는 좋다. 정렬돼 있으니 이분 탐색으로 바로 찾는다. 쓰기는 일이 많다. 키마다 자리가 디스크 곳곳에 흩어져 있어서, 쓰기 하나가 디스크의 임의 위치를 읽고 고쳐 쓰는 일이 된다. 하드디스크에서 임의 위치로 헤드를 옮기는 데 수 ms가 걸리고, SSD도 작은 임의 쓰기는 순차 쓰기보다 비싸다. 인덱스 쪽 사정은 [DB 인덱스 글](/posts/db-index)에서 볼 수 있다.
+
+반대로 파일 끝에 덧붙이기만 하면 어디에 쓸지 찾을 필요가 없다. 디스크가 가장 잘하는 일이 순서대로 쓰기다. LSM 트리는 이 성질을 끝까지 밀어붙인 구조다. 디스크에는 덧붙이기만 하고, 정렬은 메모리에서 한다.
+
+## 먼저 로그 끝에 한 줄 적는다
+
+쓰기가 오면 가장 먼저 커밋 로그(commit log)라는 파일 끝에 그 쓰기를 한 줄로 덧붙인다. 로그는 정렬되지 않은 일기장이다. 나중에 무언가 잘못되면 이 일기장을 처음부터 다시 읽어 상태를 되살린다. 관계형 DB의 WAL(Write-Ahead Log)과 같은 생각이다.
+
+여기서 놓치기 쉬운 것이 있다. `write()`를 호출했다고 디스크에 닿은 게 아니다. 운영체제는 쓰기를 메모리의 페이지 캐시에 모아 두었다가 나중에 디스크로 보낸다. 그 사이 전원이 나가면 사라진다. 디스크에 정말 닿았는지 확인하려면 `fsync()`를 불러 기다려야 한다. 그런데 이게 비싸다. 같은 줄 2,000개를 세 방식으로 써 봤다.
+
+```js
+// fsync-bench.js: 쓰기 2000개를 (a) 매번 fsync (b) 100개마다 fsync (c) fsync 없이
+for (const [name, every] of [["매번 fsync", 1], ["100개마다 fsync", 100], ["fsync 없음", 0]]) {
+  const fd = fs.openSync(file, "a");
+  const t0 = process.hrtime.bigint();
+  for (let i = 1; i <= 2000; i++) {
+    fs.writeSync(fd, line);
+    if (every && i % every === 0) fs.fsyncSync(fd);
+  }
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  console.log(`${name.padEnd(12)} ${ms.toFixed(1).padStart(8)} ms  (쓰기 하나당 ${(ms * 1000 / 2000).toFixed(1)} µs)`);
+}
+```
+
+```text
+매번 fsync       2108.1 ms  (쓰기 하나당 1054.1 µs)
+100개마다 fsync     18.4 ms  (쓰기 하나당 9.2 µs)
+fsync 없음          1.9 ms  (쓰기 하나당 1.0 µs)
+```
+
+이 숫자는 내가 돌린 클라우드 VM의 가상 디스크(ext4) 기준이고, 두 번째 실행에서는 100개마다 fsync가 41.0ms로 나왔다. 디스크마다 크게 다르다. 그래도 크기의 차이는 분명하다. 쓰기마다 fsync하면 한 번에 1ms 정도라서, 한 줄씩 기다리면 초당 1,000개 정도가 한계다. 100개를 모아 한 번에 fsync하면 쓰기 하나당 10~20µs로 수십 배 빨라진다.
+
+그래서 저장소들은 여러 쓰기를 모아 한 번에 fsync한다. 이걸 그룹 커밋(group commit)이라고 부른다. 동시에 들어온 쓰기들이 같은 fsync 한 번을 함께 기다리고, 끝나면 모두에게 성공을 답한다. 지연은 조금 늘지만 처리량이 크게 는다.
+
+Cassandra는 한 발 더 나가 기본값이 `commitlog_sync: periodic`이다. 쓰기는 로그 파일에 쓰기만 하고 바로 성공을 답하고, fsync는 `commitlog_sync_period`(기본 10초)마다 한 번 한다. 노드 한 대의 전원이 갑자기 나가면 마지막 최대 10초 동안 답한 쓰기를 그 노드에서 잃을 수 있다는 뜻이다. 이렇게 해도 되는 이유는 복제다. 같은 쓰기가 다른 두 대에도 있으니, 세 대가 같은 10초 안에 함께 전원을 잃지 않는 한 데이터는 남는다. 한 대의 디스크 대신 여러 대의 복제로 안전을 사는 선택이다. 노드 한 대 단위로도 잃으면 안 되는 환경이라면 `batch`나 `group` 모드로 바꿔 fsync를 기다린 뒤 답하게 한다.
+
+## 메모리에서는 정렬해 둔다: 멤테이블
+
+로그에 적은 다음에는 같은 쓰기를 메모리의 멤테이블(memtable)에 넣는다. 멤테이블은 키 순서로 정렬된 상태를 유지하는 메모리 구조다. Cassandra와 LevelDB, RocksDB는 기본으로 스킵 리스트(skip list)를 쓴다. 같은 키가 또 오면 멤테이블 안에서 새 값으로 바꾼다. 여기까지 하면 클라이언트에게 성공을 답한다.
+
+읽기가 오면 멤테이블을 먼저 본다. 방금 쓴 값은 거의 다 여기 있다. 멤테이블이 정렬돼 있어야 하는 이유는 다음 단계 때문이다.
+
+## 가득 차면 정렬된 파일로 내린다: SSTable
+
+멤테이블은 메모리라서 무한히 키울 수 없다. 정해 둔 크기에 닿으면 통째로 디스크에 파일로 내린다. 이걸 flush라고 하고, 그 파일을 SSTable(Sorted String Table)이라고 부른다. 멤테이블이 이미 정렬돼 있으니 처음부터 끝까지 순서대로 쓰기만 하면 정렬된 파일이 된다. 역시 덧붙이기다.
+
+SSTable에는 세 가지 성질이 있다.
+
+- 한 번 쓰면 다시 고치지 않는다. 같은 키의 새 값은 나중 파일에 들어간다.
+- 키 순서로 정렬돼 있어서, 몇 개 키마다 "이 키는 파일의 몇 번째 바이트부터"라는 성긴 색인만 들고 있으면 원하는 위치로 바로 뛴다.
+- 파일마다 블룸 필터(bloom filter)가 붙어 있다. 이 파일에 그 키가 "확실히 없다"를 파일을 열지 않고 알려 준다.
+
+flush가 끝나면 그 멤테이블에 해당하는 커밋 로그 부분은 지워도 된다. 이미 SSTable에 안전하게 있기 때문이다. 커밋 로그는 "아직 SSTable이 되지 못한 쓰기"만 들고 있는 셈이다. 아래 그림에서 다음을 누르면 쓰기 하나가 지나가는 길이 보인다.
+
+<NetworkTopology
+  caption="쓰기 하나가 성공을 받기까지"
+  width={420}
+  height={260}
+  zones={[
+    { id: "mem", label: "메모리", x: 140, y: 20, w: 130, h: 220, tone: "edge" },
+    { id: "disk", label: "디스크", x: 285, y: 20, w: 125, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "co", label: "코디네이터", x: 60, y: 130, icon: "gateway" },
+    { id: "node", label: "노드 D", x: 205, y: 60, icon: "server" },
+    { id: "mt", label: "멤테이블", sub: "정렬", x: 205, y: 190, icon: "container" },
+    { id: "log", label: "커밋 로그", sub: "덧붙이기", x: 348, y: 60, icon: "db" },
+    { id: "sst", label: "SSTable", sub: "불변", x: 348, y: 190, icon: "db" },
+  ]}
+  links={[
+    { from: "co", to: "node" },
+    { from: "node", to: "log" },
+    { from: "node", to: "mt" },
+    { from: "mt", to: "sst", dashed: true },
+  ]}
+  steps={[
+    { path: ["co", "node"], packet: "put", title: "쓰기가 도착한다", detail: "코디네이터가 cart:alice 쓰기를 D에 보낸다." },
+    { path: ["node", "log"], packet: "append", title: "로그 끝에 한 줄", detail: "어디에 쓸지 찾지 않고 파일 끝에 덧붙인다. 그룹 커밋이면 다른 쓰기와 함께 fsync를 기다린다." },
+    { path: ["node", "mt"], packet: "insert", title: "멤테이블에 넣는다", detail: "키 순서를 유지하는 메모리 구조에 넣는다. 같은 키면 새 값으로 바뀐다." },
+    { path: ["node", "co"], packet: "ack", title: "여기서 성공을 답한다", detail: "디스크의 데이터 파일은 아직 건드리지 않았다. 재시작되면 로그로 되살린다." },
+    { path: ["mt", "sst"], packet: "flush", title: "가득 차면 파일로", detail: "멤테이블을 정렬된 순서 그대로 SSTable로 내리고, 그만큼의 커밋 로그를 지운다." },
+  ]}
+/>
+
+## 직접 만든 작은 LSM
+
+말로만 하면 감이 덜 온다. Node로 커밋 로그, 멤테이블, SSTable, 블룸 필터를 모두 넣은 저장소를 짰다. 멤테이블은 키 4개가 차면 내리고, SSTable은 JSON 파일 하나, 블룸 필터는 64비트에 해시 3개다. 실제 저장소와 크기만 다를 뿐 흐름은 같다.
+
+```js
+// minilsm.js (발췌)
+put(key, value) {                          // value === null 이면 삭제(툼스톤)
+  fs.writeSync(this.log, JSON.stringify([key, value]) + "\n");
+  fs.fsyncSync(this.log);                  // 디스크에 닿은 뒤에야 성공을 돌려준다
+  this.mem.set(key, value);
+  if (this.mem.size >= this.memLimit) this.flush();
+}
+flush() {
+  const rows = [...this.mem].sort(([a], [b]) => (a < b ? -1 : 1));
+  const bloom = new Array(BITS).fill(0);
+  for (const [k] of rows) for (const i of hashes(k)) bloom[i] = 1;
+  const name = `sst-${String(this.tables.length + 1).padStart(4, "0")}.json`;
+  fs.writeFileSync(path.join(this.dir, name), JSON.stringify({ bloom: bloom.join(""), rows }));
+  this.tables.push(name);
+  this.mem.clear();
+  // 내려간 쓰기는 커밋 로그에서 지워도 된다: 로그 파일을 비운다
+}
+get(key) {
+  if (this.mem.has(key)) return { value: this.mem.get(key), from: "memtable" };
+  for (const name of [...this.tables].reverse()) {           // 새 파일부터
+    const file = path.join(this.dir, name);
+    const meta = this.bloomOf(file);
+    if (!hashes(key).every((i) => meta[i] === "1")) { this.stats.skippedByBloom++; continue; }
+    this.stats.opened++;
+    // 파일을 열어 정렬된 rows에서 이분 탐색, 찾으면 바로 돌려준다
+  }
+  return { value: null, from: "없음" };
+}
+// 생성자: commit.log가 있으면 한 줄씩 읽어 멤테이블에 다시 넣는다
+```
+
+쓰기 10개를 넣었다. 중간에 `k03`을 한 번 고치고, `k07`은 지웠다.
+
+```js
+// lsm-run.js (발췌)
+const writes = [["k03","a"],["k07","b"],["k01","c"],["k05","d"],["k03","a2"],
+                ["k09","e"],["k02","f"],["k07",null],["k04","g"],["k06","h"]];
+for (const [k, v] of writes) db.put(k, v);
+```
+
+```text
+1) 쓰기 10개 (멤테이블 4개마다 flush)
+  [flush] sst-0001.json  키 k01,k03,k05,k07
+  [flush] sst-0002.json  키 k02,k03,k07,k09
+  디스크: commit.log sst-0001.json sst-0002.json
+  commit.log에 남은 줄: 2
+```
+
+넣은 순서는 k03, k07, k01, k05였는데 첫 SSTable에는 k01, k03, k05, k07로 정렬돼 들어갔다. 두 번째 파일에도 k03과 k07이 또 있다. 고친 값과 지운 표시가 새 파일에 따로 들어간 것이다. 첫 파일은 그대로다. 마지막 두 쓰기 k04, k06은 아직 멤테이블에 있고, 그래서 커밋 로그에 두 줄이 남아 있다.
+
+## 읽기는 새것부터 뒤진다
+
+같은 키의 값이 멤테이블과 여러 SSTable에 흩어져 있을 수 있다. 그래서 읽기는 가장 새로운 곳부터 본다. 멤테이블, 그다음 가장 최근 SSTable, 그다음 그 전 파일 순서다. 처음 만난 값이 최신이다. 지운 표시를 만나면 거기서 "없음"으로 끝낸다. 오래된 파일에 옛 값이 있어도 내려가지 않는다.
+
+```text
+2) 읽기
+  get k06 → h (memtable) 연 파일 0, 블룸으로 건너뜀 0
+  get k03 → a2 (sst-0002.json) 연 파일 1, 블룸으로 건너뜀 0
+  get k07 → 없음 (sst-0002.json) 연 파일 1, 블룸으로 건너뜀 0
+  get k01 → c (sst-0001.json) 연 파일 1, 블룸으로 건너뜀 1
+  get k08 → 없음 (없음) 연 파일 0, 블룸으로 건너뜀 2
+```
+
+다섯 줄이 각각 다른 경우다. k06은 멤테이블에서 끝났다. k03은 새 파일에서 a2를 찾고, 옛 파일의 a는 보지도 않았다. k07은 새 파일의 툼스톤을 만나 옛 파일의 b까지 내려가지 않고 "없음"이 됐다. k01은 새 파일의 블룸 필터가 "없다"고 해서 열지 않고 건너뛰었다. 마지막 k08이 블룸 필터가 가장 빛나는 경우다. 어디에도 없는 키를 찾는데 파일을 하나도 열지 않았다.
+
+<AlgoTrace
+  caption="get k01: 새것부터 보고, 블룸 필터가 없다면 열지 않는다"
+  memoryLabel="읽기가 한 일"
+  cells={["멤테이블", "sst-0002 블룸", "sst-0002", "sst-0001 블룸", "sst-0001"]}
+  steps={[
+    { pointer: 0, memory: ["멤테이블: k04, k06"], caption: "멤테이블부터 본다. 메모리라 싸다. k01은 없다." },
+    { pointer: 1, memory: ["멤테이블: 없음", "sst-0002 블룸: 확실히 없음"], caption: "가장 새 파일의 블룸 필터에 묻는다. 비트 셋 중 하나가 0이다. 확실히 없으니 파일을 열지 않는다." },
+    { pointer: 3, memory: ["멤테이블: 없음", "sst-0002 블룸: 확실히 없음", "sst-0001 블룸: 있을지도"], caption: "다음 파일의 블룸 필터는 비트가 모두 1이다. 있을 수도 있다는 뜻이라 열어 본다." },
+    { pointer: 4, found: [4], memory: ["sst-0001 열기", "이분 탐색 → k01=c"], caption: "정렬된 파일에서 이분 탐색으로 k01=c를 찾는다. 연 파일은 하나뿐이다." },
+  ]}
+/>
+
+블룸 필터는 "없다"는 확실하고 "있다"는 가끔 틀린다. 틀리면 쓸데없이 파일 하나를 열 뿐이고 잘못된 값을 돌려주지는 않는다. 비트 수와 해시 개수로 틀리는 비율을 고르는 법은 [블룸 필터 글](/posts/bloom-filter)에서 계산했다. Cassandra는 테이블마다 `bloom_filter_fp_chance`로 정하고, 기본 컴팩션 방식에서 0.01이다.
+
+<NetworkTopology
+  caption="읽기 하나가 값을 찾기까지"
+  width={420}
+  height={250}
+  zones={[
+    { id: "mem", label: "메모리", x: 140, y: 20, w: 120, h: 215, tone: "edge" },
+    { id: "disk", label: "디스크", x: 275, y: 20, w: 135, h: 215, tone: "private" },
+  ]}
+  nodes={[
+    { id: "co", label: "코디네이터", x: 60, y: 125, icon: "gateway" },
+    { id: "mt", label: "멤테이블", x: 200, y: 60, icon: "container" },
+    { id: "bf", label: "블룸 필터", sub: "파일마다", x: 200, y: 190, icon: "firewall" },
+    { id: "s2", label: "sst-0002", sub: "새 파일", x: 342, y: 60, icon: "db" },
+    { id: "s1", label: "sst-0001", sub: "옛 파일", x: 342, y: 190, icon: "db" },
+  ]}
+  links={[
+    { from: "co", to: "mt" },
+    { from: "co", to: "bf" },
+    { from: "bf", to: "s2", dashed: true },
+    { from: "bf", to: "s1" },
+  ]}
+  steps={[
+    { path: ["co", "mt"], packet: "get", title: "멤테이블 먼저", detail: "방금 쓴 값은 대부분 여기서 끝난다. k01은 없다." },
+    { path: ["co", "bf"], packet: "k01?", title: "블룸 필터에 묻는다", detail: "블룸 필터는 메모리에 올려 둔다. 파일을 열기 전에 묻는다." },
+    { path: ["bf", "s2"], packet: "skip", blocked: true, title: "새 파일은 건너뛴다", detail: "sst-0002의 필터가 확실히 없다고 했다. 디스크를 읽지 않는다." },
+    { path: ["bf", "s1"], packet: "open", title: "옛 파일만 연다", detail: "sst-0001은 있을지도 모른다. 성긴 색인으로 위치를 찾아 그 부분만 읽는다." },
+    { path: ["s1", "co"], packet: "c", title: "값을 돌려준다", detail: "k01=c를 찾았다. 디스크 읽기는 한 번이었다." },
+  ]}
+/>
+
+직접 짜 보자. 멤테이블과 SSTable 목록(새것이 앞)을 받아 값을 찾고, 연 파일 수를 함께 돌려준다. 블룸 필터는 "통과하는 키 목록"으로 단순하게 표현했다. 목록에 없는 키는 확실히 없고, 목록에 있어도 파일 안에는 없을 수 있다(거짓 양성).
+
+<CodePlayground
+  caption="LSM 읽기 경로 짜 보기"
+  functionName="lsmGet"
+  initialCode={`function lsmGet(memtable, sstables, key) {
+  // memtable: { 키: 값 }  값이 null이면 툼스톤(지움)
+  // sstables: 새 파일이 앞. [{ maybe: [블룸 필터를 통과하는 키들], rows: [[키, 값], ...] }]
+  // 반환: [값 또는 null, 연 파일 수]
+  // 멤테이블에서 찾으면 연 파일은 0, 툼스톤을 만나면 그 자리에서 null로 끝낸다
+  return [null, 0];
+}`}
+  solution={`function lsmGet(memtable, sstables, key) {
+  if (key in memtable) return [memtable[key], 0];   // 툼스톤(null)이어도 여기서 끝
+  let opened = 0;
+  for (const t of sstables) {                        // 새 파일부터
+    if (!t.maybe.includes(key)) continue;            // 블룸 필터가 확실히 없다고 했다
+    opened++;
+    const row = t.rows.find(([k]) => k === key);
+    if (row) return [row[1], opened];                // 처음 만난 값(또는 툼스톤)이 최신
+  }
+  return [null, opened];
+}`}
+  tests={[
+    { label: "멤테이블에 있다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k06"], expected: ["h", 0] },
+    { label: "새 파일의 값이 이긴다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k03"], expected: ["a2", 1] },
+    { label: "툼스톤이 옛 값을 가린다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k07"], expected: [null, 1] },
+    { label: "블룸 필터가 새 파일을 건너뛴다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k01"], expected: ["c", 1] },
+    { label: "거짓 양성이면 하나 더 연다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k05"], expected: ["d", 2] },
+    { label: "어디에도 없다", args: [{ k06: "h", k04: "g" }, [{ maybe: ["k02", "k03", "k07", "k09", "k05"], rows: [["k02", "f"], ["k03", "a2"], ["k07", null], ["k09", "e"]] }, { maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k08"], expected: [null, 0] },
+    { label: "멤테이블의 툼스톤", args: [{ k07: null }, [{ maybe: ["k01", "k03", "k05", "k07"], rows: [["k01", "c"], ["k03", "a"], ["k05", "d"], ["k07", "b"]] }], "k07"], expected: [null, 0] },
+  ]}
+/>
+
+다섯째 테스트가 거짓 양성이다. 새 파일의 블룸 필터가 k05를 통과시켰지만 그 파일에는 k05가 없다. 파일 하나를 헛되이 열고 옛 파일에서 찾았다. 마지막 테스트는 흔한 실수를 잡는다. 멤테이블 값이 `null`이라고 "없으니 다음으로" 넘어가면, 옛 파일의 지워진 값 b가 되살아난다.
+
+## 프로세스가 죽어도 로그가 남는다
+
+이번에는 진짜로 죽여 봤다. 다른 프로세스가 같은 디렉터리를 열어 k10을 쓰고, 성공을 받은 직후 스스로 SIGKILL을 보낸다. SIGKILL은 프로세스가 정리할 틈 없이 바로 끝내는 신호라서, 멤테이블을 내릴 기회가 없다.
+
+```js
+// crash.js
+const db = new MiniLSM(__dirname + "/lsm/data");
+db.put("k10", "x");
+console.log("  [crash.js] k10 쓰기 성공 응답 후 SIGKILL");
+process.kill(process.pid, "SIGKILL");
+```
+
+```text
+3) 다른 프로세스가 같은 디렉터리를 열어 k10을 쓰고 SIGKILL로 죽는다
+  [복구] 커밋 로그 2줄 재생 → 멤테이블 2개
+  [crash.js] k10 쓰기 성공 응답 후 SIGKILL
+  자식 프로세스 종료 신호: SIGKILL
+  다시 연다
+  [복구] 커밋 로그 3줄 재생 → 멤테이블 3개
+  get k06 → h  get k10 → x
+```
+
+첫 줄은 죽을 프로세스가 열면서 앞서 남은 로그 두 줄(k04, k06)을 되살린 것이다. 그 위에 k10을 쓰고 죽었다. 다시 열면 로그가 세 줄이 되어 있고, 셋 다 멤테이블로 돌아왔다. k10은 SSTable에 한 번도 들어간 적이 없는데 살아남았다. fsync가 끝난 뒤에 성공을 답했기 때문이다.
+
+<SequenceDiagram
+  caption="재시작할 때 커밋 로그로 멤테이블을 되살린다"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "p", label: "노드 프로세스" },
+    { id: "log", label: "커밋 로그" },
+    { id: "mt", label: "멤테이블" },
+  ]}
+  steps={[
+    { from: "c", to: "p", label: "put k10=x", title: "쓰기가 온다", detail: "멤테이블에는 이미 k04, k06이 있다." },
+    { from: "p", to: "log", label: "append + fsync", title: "로그에 적고 기다린다", detail: "디스크에 닿을 때까지 기다린 뒤에야 다음으로 간다." },
+    { from: "p", to: "c", label: "OK", title: "성공을 답한다", detail: "멤테이블에도 넣었다. 아직 SSTable은 아니다." },
+    { from: "p", to: "p", label: "SIGKILL", title: "프로세스가 죽는다", detail: "메모리의 멤테이블은 통째로 사라진다. flush는 일어나지 않았다." },
+    { from: "log", to: "p", label: "3줄 읽기", title: "다시 켜면 로그부터 읽는다", detail: "커밋 로그에는 SSTable이 되지 못한 쓰기 세 줄이 남아 있다." },
+    { from: "p", to: "mt", label: "k04, k06, k10", title: "멤테이블을 되살린다", detail: "로그를 처음부터 다시 적용하면 죽기 직전 상태가 된다. k10이 살아 있다." },
+  ]}
+/>
+
+로그를 너무 오래 쌓아 두면 재시작이 느려진다. 다시 읽을 줄이 많기 때문이다. 그래서 멤테이블 크기와 커밋 로그 전체 크기에 상한을 두고, 로그가 커지면 가장 오래된 멤테이블부터 강제로 내린다. Cassandra라면 `commitlog_total_space`가 이 상한이다.
+
+## 파일이 쌓이면 합친다
+
+flush가 계속되면 SSTable이 쌓인다. 파일이 많으면 블룸 필터가 있어도 "있을지도"가 늘고, 같은 키의 옛 값과 툼스톤이 디스크를 차지한다. 그래서 백그라운드에서 여러 파일을 읽어 하나로 다시 쓴다. 이게 컴팩션(compaction)이다. 정렬된 파일들을 합치는 일이라 병합 정렬의 합치기 단계와 같다. 같은 키는 가장 새 값만 남기고, 충분히 오래된 툼스톤은 버린다.
+
+```text
+4) 컴팩션
+  [compact] SSTable 2개 → 1개, 키 6개 중 툼스톤 1개를 버림
+  get k03 → a2 연 파일 1
+  get k07 → 없음 연 파일 0
+  디스크: commit.log sst-0001.json
+```
+
+컴팩션 뒤 k03의 옛 값 a는 사라졌고, k07은 툼스톤까지 버려져 블룸 필터 단계에서 바로 "없음"이 됐다. 다만 이 장난감은 노드 한 대라서 툼스톤을 바로 버렸다. 복제본이 있는 저장소에서 너무 일찍 버리면 삭제를 못 받은 다른 복제본의 옛 값이 되살아난다. 그 기한(gc_grace_seconds)과 repair의 관계는 [⑮ 장애 처리](/posts/sd-kv-store-failure-handling)에서 봤다.
+
+컴팩션에는 정답이 없다. 세 가지 비용을 서로 맞바꾼다.
+
+| 비용 | 뜻 | 줄이려면 |
+|---|---|---|
+| 쓰기 증폭 | 쓰기 1바이트가 디스크에 실제로 몇 바이트로 쓰이나 | 덜 자주, 크게 합친다 |
+| 읽기 증폭 | 읽기 하나가 파일 몇 개를 보나 | 자주 합쳐 파일 수를 줄인다 |
+| 공간 증폭 | 실제 데이터보다 디스크를 얼마나 더 쓰나 | 옛 값과 툼스톤을 빨리 버린다 |
+
+비슷한 크기의 파일이 몇 개 모이면 합치는 크기 단계 방식(Cassandra의 STCS)은 쓰기가 싸고 읽기와 공간이 비싸다. 키 범위가 겹치지 않게 층층이 정리하는 레벨 방식(LCS, RocksDB의 기본)은 읽기가 싸고 쓰기가 비싸다. 시계열처럼 시간 순서로 쌓이고 오래된 것이 통째로 만료되는 데이터에는 시간 창 방식(TWCS)이 맞다. 각 방식의 동작과 컴팩션을 직접 짜 보는 연습은 [와이드 컬럼 DB 글](/posts/db-type-wide-column)에 있다.
+
+## 읽기가 느려졌다는 신고가 오면
+
+LSM 저장소에서 읽기 지연이 서서히 오르면 대개 읽기 하나가 여는 파일이 늘어난 것이다. 쓰기 속도를 컴팩션이 못 따라가 SSTable이 쌓이고 있다는 뜻이다. Cassandra라면 이렇게 확인한다.
+
+```bash
+# 테이블별 SSTable 수, 블룸 필터 거짓 양성 비율, 툼스톤 수
+nodetool tablestats shop.carts
+
+# 읽기 하나가 SSTable을 몇 개 봤는지의 분포 (SSTables 열)
+nodetool tablehistograms shop carts
+
+# 밀린 컴팩션 작업 수 (pending tasks)
+nodetool compactionstats
+```
+
+`tablehistograms`의 SSTables 열에서 p99가 한두 개가 아니라 열 개를 넘으면 읽기 증폭이 커진 것이다. `compactionstats`의 밀린 작업이 계속 늘면 컴팩션이 쓰기를 못 따라가고 있다. 이때 흔히 하는 실수는 컴팩션을 멈추거나 처리량 제한(`compaction_throughput`)을 낮게 둔 채 방치하는 것이다. 디스크 여유가 있다면 제한을 올리고, 읽기가 많은 테이블이면 레벨 방식으로 바꾸는 걸 검토한다. 블룸 필터 거짓 양성 비율이 설정값보다 크게 높으면 필터 메모리가 부족하거나 설정이 바뀐 것이다.
+
+또 하나 자주 보이는 증상은 디스크가 갑자기 찬다는 것이다. 큰 컴팩션은 합칠 파일과 새 파일을 잠깐 함께 들고 있어서, 크기 단계 방식에서는 테이블 크기만큼의 여유가 필요할 수 있다. [⑬ 첫 글](/posts/sd-kv-store-partition-replication)의 서버 수 계산에서 디스크를 절반만 채운다고 잡은 이유가 이것이다.
+
+## 네 편을 한 장에 모으면
+
+키-값 저장소 편을 마쳤다. 처음의 `Map` 하나에서 시작해 여기까지 왔다.
+
+<ConceptDiagram
+  caption="키-값 저장소 네 편이 만든 것"
+  width={400}
+  height={320}
+  nodes={[
+    { id: "api", label: "get / put", sub: "클라이언트", x: 200, y: 30, w: 120 },
+    { id: "co", label: "코디네이터", sub: "아무 노드나", x: 200, y: 95, w: 130 },
+    { id: "ring", label: "⑬ 링과 N, W, R", sub: "어디에 몇 벌", x: 80, y: 170, w: 140 },
+    { id: "ver", label: "⑭ 벡터 시계", sub: "동시 쓰기", x: 320, y: 170, w: 130 },
+    { id: "fail", label: "⑮ 가십, 힌트", sub: "죽은 노드", x: 80, y: 250, w: 140 },
+    { id: "path", label: "⑯ 로그와 SSTable", sub: "한 대 안쪽", x: 320, y: 250, w: 150 },
+    { id: "ae", label: "머클 트리 repair", x: 200, y: 300, w: 140, h: 32 },
+  ]}
+  edges={[
+    { from: "api", to: "co" },
+    { from: "co", to: "ring" },
+    { from: "co", to: "ver" },
+    { from: "ring", to: "fail" },
+    { from: "ring", to: "path" },
+    { from: "fail", to: "ae", dashed: true },
+    { from: "ver", to: "path", dashed: true },
+  ]}
+/>
+
+모든 노드가 같은 일을 하고, 중앙에서 링을 관리하는 서버가 없다. 키는 링으로 나뉘어 서로 다른 N대에 복제되고, 코디네이터는 W개와 R개의 응답만 기다린다. 동시 쓰기는 벡터 시계로 가려 형제로 남기고, 노드의 생사는 가십으로 퍼지며, 잠깐 죽은 노드 몫은 힌트로, 오래 죽은 노드는 머클 트리 비교로 채운다. 그리고 노드 한 대 안에서는 로그에 덧붙이고 메모리에서 정렬한 뒤 불변 파일로 내린다.
+
+## 다음에 읽을 글
+
+다음 글 [⑰ 고유 ID 생성기](/posts/sd-unique-id-generator)에서는 여러 서버가 서로 묻지 않고도 겹치지 않는 ID를 만드는 법을 설계한다. 이 장에서 본 "서버 시계를 믿을 수 없다"는 문제가 다시 나온다.
+
+블룸 필터의 계산은 [블룸 필터](/posts/bloom-filter), 컴팩션 전략과 테이블 설계는 [와이드 컬럼 DB](/posts/db-type-wide-column), 키-값 제품들의 비교는 [키-값 저장소](/posts/db-type-key-value)로 가면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 쓰기는 어떤 순서로 처리되나요?
+
+커밋 로그 끝에 덧붙이고, 메모리의 정렬된 멤테이블에 넣은 뒤 성공을 답한다. 멤테이블이 차면 정렬된 불변 파일인 SSTable로 내리고, 그만큼의 커밋 로그를 지운다. 디스크에는 덧붙이기만 하니 임의 위치를 고치는 B-tree보다 쓰기가 빠르다.
+
+### 커밋 로그는 왜 필요한가요? 멤테이블만 있으면 안 되나요?
+
+멤테이블은 메모리라서 프로세스가 죽으면 사라진다. 커밋 로그에 먼저 적어 두면 재시작할 때 처음부터 다시 적용해 멤테이블을 되살린다. 실험에서 SIGKILL로 죽인 프로세스가 성공을 답한 k10이 재시작 뒤에도 남아 있었다. 단, fsync를 기다린 뒤 답해야 전원 장애에도 남는다.
+
+### 쓰기마다 fsync하면 느리지 않나요?
+
+느리다. 측정한 VM에서는 fsync 한 번에 1ms 정도라 쓰기마다 기다리면 초당 1,000개 정도가 한계였다. 그래서 여러 쓰기를 모아 한 번에 fsync하는 그룹 커밋을 쓴다. Cassandra 기본값은 더 나가서 쓰기는 바로 답하고 10초마다 fsync하는데, 한 대가 잃는 몇 초치를 다른 복제본이 덮는다는 계산이다.
+
+### 읽기는 어떻게 값을 찾나요?
+
+멤테이블부터 보고, 없으면 SSTable을 새 파일부터 차례로 본다. 처음 만난 값이 최신이고, 툼스톤을 만나면 거기서 없음으로 끝낸다. 파일마다 블룸 필터에 먼저 물어 확실히 없는 파일은 열지 않고, 열 파일은 성긴 색인으로 위치를 찾아 그 부분만 읽는다.
+
+### 블룸 필터가 틀리면 잘못된 값을 돌려주나요?
+
+아니다. 블룸 필터는 없는 키를 있다고 할 수는 있어도, 있는 키를 없다고 하지는 않는다. 틀리는 경우는 파일을 하나 쓸데없이 열고 그 안에서 못 찾는 것뿐이다. 그래서 거짓 양성 비율은 정확성이 아니라 읽기 비용을 정한다.
+
+### 컴팩션은 왜 하고, 방식은 어떻게 고르나요?
+
+SSTable이 쌓이면 읽기 하나가 여는 파일이 늘고 옛 값과 툼스톤이 디스크를 차지해서, 여러 파일을 합쳐 최신 값만 남긴다. 크기 단계 방식은 쓰기가 싸고 읽기와 공간이 비싸며, 레벨 방식은 그 반대다. 쓰기가 많으면 앞쪽, 읽기가 많으면 뒤쪽, 시간 순으로 만료되는 데이터면 시간 창 방식을 고른다.
+
+### 읽기가 점점 느려지면 무엇부터 보나요?
+
+읽기 하나가 보는 SSTable 수를 본다. Cassandra라면 tablehistograms의 SSTables 열과 compactionstats의 밀린 작업 수다. 파일 수가 늘고 밀린 작업도 늘면 컴팩션이 쓰기를 못 따라가는 것이니 처리량 제한을 풀거나 컴팩션 방식을 바꾼다. 툼스톤이 많은 테이블이면 지우는 패턴부터 다시 본다.
+
+### 노드 디스크가 갑자기 찼습니다. 왜 그럴까요?
+
+큰 컴팩션이 도는 중일 가능성이 크다. 합치는 동안 원래 파일과 새 파일을 함께 들고 있어서 크기 단계 방식에서는 테이블 크기만큼 여유가 필요할 수 있다. 툼스톤과 옛 값이 정리되지 않고 쌓인 경우도 있다. 그래서 용량을 계산할 때 디스크를 절반에서 70% 정도까지만 채운다고 잡는다.

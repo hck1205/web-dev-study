@@ -373,6 +373,25 @@ import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
+import { SD_CACHE_AND_CDN_TIER } from "./sd-cache-and-cdn-tier";
+import { SD_CAPACITY_ESTIMATION } from "./sd-capacity-estimation";
+import { SD_DB_REPLICATION_INTRO } from "./sd-db-replication-intro";
+import { SD_INTERVIEW_FRAMEWORK } from "./sd-interview-framework";
+import { SD_KV_STORE_FAILURE_HANDLING } from "./sd-kv-store-failure-handling";
+import { SD_KV_STORE_PARTITION_REPLICATION } from "./sd-kv-store-partition-replication";
+import { SD_KV_STORE_VERSIONING } from "./sd-kv-store-versioning";
+import { SD_KV_STORE_WRITE_READ_PATH } from "./sd-kv-store-write-read-path";
+import { SD_LATENCY_NUMBERS } from "./sd-latency-numbers";
+import { SD_LOAD_BALANCER_STATELESS } from "./sd-load-balancer-stateless";
+import { SD_MULTI_DATACENTER } from "./sd-multi-datacenter";
+import { SD_QUEUE_LOGGING_AUTOMATION } from "./sd-queue-logging-automation";
+import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
+import { SD_SHARDING_INTRO } from "./sd-sharding-intro";
+import { SD_SPLIT_WEB_AND_DB } from "./sd-split-web-and-db";
+import { SD_START_SINGLE_SERVER } from "./sd-start-single-server";
+import { SD_UNIQUE_ID_GENERATOR } from "./sd-unique-id-generator";
+import { SD_URL_SHORTENER_API_REDIRECT } from "./sd-url-shortener-api-redirect";
+import { SD_URL_SHORTENER_KEY_GENERATION } from "./sd-url-shortener-key-generation";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
@@ -826,6 +845,25 @@ export const QUESTION_SETS = [
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
+  SD_CACHE_AND_CDN_TIER,
+  SD_CAPACITY_ESTIMATION,
+  SD_DB_REPLICATION_INTRO,
+  SD_INTERVIEW_FRAMEWORK,
+  SD_KV_STORE_FAILURE_HANDLING,
+  SD_KV_STORE_PARTITION_REPLICATION,
+  SD_KV_STORE_VERSIONING,
+  SD_KV_STORE_WRITE_READ_PATH,
+  SD_LATENCY_NUMBERS,
+  SD_LOAD_BALANCER_STATELESS,
+  SD_MULTI_DATACENTER,
+  SD_QUEUE_LOGGING_AUTOMATION,
+  SD_RATE_LIMITER_DESIGN,
+  SD_SHARDING_INTRO,
+  SD_SPLIT_WEB_AND_DB,
+  SD_START_SINGLE_SERVER,
+  SD_UNIQUE_ID_GENERATOR,
+  SD_URL_SHORTENER_API_REDIRECT,
+  SD_URL_SHORTENER_KEY_GENERATION,
   SDN_VXLAN_OVERLAY,
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,

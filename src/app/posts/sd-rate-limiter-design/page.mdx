@@ -1,0 +1,449 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-rate-limiter-design");
+
+이 시리즈에서 이 글의 자리: 설계 사례의 첫 글이다. 앞의 [⑪ 설계 면접 진행법](/posts/sd-interview-framework)에서 정리한 네 토막(범위, 큰 그림, 깊이, 마무리)을 처음으로 처음부터 끝까지 따라간다. 숫자는 [⑩ 용량 어림하기](/posts/sd-capacity-estimation)의 맛집 리뷰 앱 규모를 그대로 쓴다. 다음 사례는 [키-값 저장소: 나누고 복제하기](/posts/sd-kv-store-partition-replication)다. 알고리즘 하나하나의 동작은 [요청 수 제한 알고리즘](/posts/rate-limiting-algorithms)에, 운영에서 붙일 때의 헤더와 장애 대응은 [요청 수 제한을 API에 붙이기](/posts/rate-limiting-in-practice)에 있다. 이 글은 그 둘 사이에서 "처음 설계한다면 어떤 순서로 무엇을 정하나"를 다룬다.
+
+어느 날 아침 맛집 리뷰 앱의 한 식당에 별점 1점짜리 리뷰가 1분 동안 3,000개 달렸다. 계정 하나가 스크립트로 리뷰 작성 API를 쉬지 않고 부른 것이다. 같은 날 로그인 API에는 한 IP에서 비밀번호를 수만 번 바꿔 넣는 요청이 들어왔다.
+
+둘 다 API가 고장 난 것은 아니다. API는 시킨 대로 일했다. 빠진 것은 "한 사람이 정해진 시간에 몇 번까지 부를 수 있나"를 세고, 넘으면 거절하는 장치다. 이것을 요청 수 제한기(rate limiter)라고 부른다. 시스템 설계 면접에서 "처리율 제한기를 설계하라"는 문제로 자주 나온다.
+
+## 무엇을 막을지부터 묻는다
+
+첫 토막은 질문이다. 요청 수 제한기라는 말만으로는 무엇을 만들지 정해지지 않는다. 맛집 앱이라면 이렇게 묻고 답을 정한다.
+
+- 무엇을 기준으로 세나? 로그인은 IP, 리뷰 작성은 사용자 id, 외부 파트너 API는 API 키로 센다. 기준이 여러 개다.
+- 규칙은 몇 개이고 자주 바뀌나? 처음엔 서너 개지만, 운영하면서 계속 추가하고 숫자를 고친다. 배포 없이 바꾸고 싶다.
+- 어디에서 막나? 클라이언트가 아니라 서버 쪽에서 막는다.
+- 서버는 몇 대인가? API 서버가 여러 대이고 오토스케일링으로 대수가 바뀐다.
+- 얼마나 정확해야 하나? 리뷰 1분 10개 한도가 가끔 11개가 되는 건 괜찮다. 대신 요청 하나에 붙는 지연은 1ms 안쪽이어야 한다.
+- 제한기가 고장 나면? 리뷰와 조회는 통과시키고, 로그인과 문자 인증은 막는다.
+- 거절당한 사람에게는? 거절했다는 것과 언제 다시 시도하면 되는지 알려 준다.
+
+마지막 두 질문은 처음엔 떠올리기 어렵지만 면접에서 반드시 따라 나온다. 미리 물어 두면 깊이 토막에서 할 말이 생긴다.
+
+숫자도 어림한다. 맛집 앱의 피크 API 요청은 초당 약 4,200건이었다. 요청마다 제한기가 카운터를 한 번 확인하니 카운터 저장소도 초당 4,200번 불린다. 카운터 하나의 메모리는 Redis에서 직접 쟀다. 사용자 10만 명이 1분짜리 카운터를 하나씩 가진 상태를 만들고 메모리 증가분을 봤다.
+
+```bash
+# 키 10만 개를 수명 120초로 넣고 used_memory 차이를 본다
+node mem.js
+```
+
+```text
+키 100,000개, 메모리 증가 11.1MiB, 키 하나에 약 117바이트
+키 이름 예: rl:user0:29876209
+```
+
+키 하나에 약 117바이트다. 피크 1분 동안 요청을 보내는 사용자가 50만 명이고 규칙 두 개에 걸린다고 해도 키 100만 개, 약 117MB다. Redis 한 대의 메모리로 충분하다. 초당 4,200번의 명령도 Redis 한 대에는 가벼운 양이다. 처음 설계에서 카운터 저장소를 여러 대로 나눌 이유는 없다.
+
+## 문지기를 어디에 세울까
+
+큰 그림에서 먼저 정할 것은 제한기의 위치다. 후보는 세 곳이다. 아래 그림에서 다음을 누르면 같은 공격 요청이 각 위치에서 어떻게 되는지 보인다.
+
+<NetworkTopology
+  caption="제한기를 둘 수 있는 세 곳"
+  width={420}
+  height={250}
+  zones={[{ id: "dc", label: "데이터 센터", x: 120, y: 15, w: 290, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "bot", label: "스크립트", x: 45, y: 60, icon: "client" },
+    { id: "app", label: "정상 앱", x: 45, y: 180, icon: "client" },
+    { id: "gw", label: "게이트웨이", x: 185, y: 120, icon: "gateway" },
+    { id: "api", label: "API 서버", x: 290, y: 120, icon: "server" },
+    { id: "redis", label: "Redis", x: 370, y: 45, icon: "db" },
+    { id: "db", label: "DB", x: 370, y: 195, icon: "db" },
+  ]}
+  links={[
+    { from: "bot", to: "gw" },
+    { from: "app", to: "gw" },
+    { from: "gw", to: "api" },
+    { from: "gw", to: "redis", dashed: true },
+    { from: "api", to: "redis", dashed: true },
+    { from: "api", to: "db" },
+  ]}
+  steps={[
+    { path: ["app"], highlight: ["app"], title: "클라이언트에서 막기", detail: "앱이 버튼을 잠깐 막는 건 사용자 경험엔 좋다. 하지만 스크립트는 앱을 거치지 않으니 보안 장치가 못 된다." },
+    { path: ["bot", "gw", "api", "db"], packet: "POST", title: "아무 데서도 안 막으면", detail: "3,000개가 DB까지 그대로 들어간다." },
+    { path: ["bot", "gw", "api"], packet: "POST", blocked: true, highlight: ["redis"], title: "API 서버 안에서 막기", detail: "미들웨어가 Redis 카운터를 보고 거절한다. 사용자 id, 리뷰 개수처럼 업무 정보를 써서 셀 수 있다." },
+    { path: ["bot", "gw"], packet: "POST", blocked: true, highlight: ["redis"], title: "게이트웨이에서 막기", detail: "서비스가 여럿이면 입구 한 곳에서 공통 규칙을 건다. 거절이 빨라 뒤쪽 서버가 일을 하지 않는다." },
+    { path: ["app", "gw", "api", "db"], packet: "POST", title: "정상 요청은 지나간다", detail: "한도 안의 요청은 카운터를 한 번 올리고 그대로 간다. 붙는 지연은 Redis 왕복 한 번이다." },
+  ]}
+/>
+
+어느 쪽이 정답이라기보다 무엇을 기준으로 세느냐로 고른다. IP와 API 키처럼 요청 머리만 보고 셀 수 있는 규칙은 게이트웨이나 [리버스 프록시](/posts/gateway)에서 거는 편이 싸다. "한 사용자가 한 식당에 하루 리뷰 1개" 같은 규칙은 로그인한 사용자와 식당 id를 알아야 하니 API 서버의 미들웨어에서 건다. 실제로는 둘을 같이 쓴다. 입구에서 IP 단위로 거칠게 막고, 안쪽에서 사용자 단위로 세밀하게 막는다.
+
+이미 쓰는 게이트웨이나 CDN에 요청 제한 기능이 있으면 그걸 먼저 본다. 직접 만들 부분이 줄어든다. 다만 nginx의 `limit_req`처럼 서버마다 자기 메모리에서 세는 기능은 nginx가 여러 대면 한도가 대수만큼 늘어난다는 점을 확인해야 한다.
+
+## 규칙은 코드 밖에 둔다
+
+규칙은 계속 바뀐다. 공격이 들어오면 당장 숫자를 줄여야 하고, 파트너가 늘어나면 키별 한도를 따로 줘야 한다. 그래서 규칙은 코드에 박지 않고 설정으로 뺀다. 맛집 앱의 규칙을 이런 모양으로 적었다.
+
+```yaml
+# 이름, 무엇으로 셀지, 창 길이 동안 몇 번까지
+- name: login
+  match: POST /login
+  key: ip
+  limit: 5
+  window: 60s
+  on_failure: closed   # 제한기가 고장 나면 막는다
+- name: review-write
+  match: POST /reviews
+  key: user
+  limit: 10
+  window: 60s
+  on_failure: open     # 고장 나면 통과시킨다
+- name: partner-api
+  match: /partner/*
+  key: api_key
+  limit: 1000
+  window: 60s
+  on_failure: open
+```
+
+이 파일은 저장소나 설정 DB에 두고, 각 API 서버의 미들웨어가 메모리에 읽어 둔다. 요청마다 규칙을 다시 읽지 않는다. 바뀐 규칙은 몇십 초마다 다시 읽거나, 바뀔 때 알림을 받아 갱신한다. 규칙 저장소가 잠깐 죽어도 서버는 마지막으로 읽은 규칙으로 계속 일한다.
+
+이제 큰 그림이 정해졌다. 요청이 들어오면 미들웨어가 메모리의 규칙에서 맞는 것을 찾고, Redis에 카운터를 올리고, 결과에 따라 보내거나 거절한다.
+
+<NetworkTopology
+  caption="큰 그림: 규칙은 서버 메모리에, 카운터는 Redis에"
+  width={420}
+  height={260}
+  zones={[{ id: "dc", label: "데이터 센터", x: 110, y: 15, w: 300, h: 235, tone: "private" }]}
+  nodes={[
+    { id: "u", label: "사용자", x: 45, y: 130, icon: "client" },
+    { id: "mw", label: "미들웨어", x: 185, y: 130, icon: "firewall" },
+    { id: "rules", label: "규칙 저장소", x: 185, y: 45, icon: "server" },
+    { id: "redis", label: "Redis 카운터", x: 330, y: 45, icon: "db" },
+    { id: "api", label: "리뷰 API", x: 330, y: 130, icon: "server" },
+    { id: "db", label: "DB", x: 330, y: 215, icon: "db" },
+  ]}
+  links={[
+    { from: "u", to: "mw" },
+    { from: "rules", to: "mw", dashed: true },
+    { from: "mw", to: "redis" },
+    { from: "mw", to: "api" },
+    { from: "api", to: "db" },
+  ]}
+  steps={[
+    { path: ["rules", "mw"], packet: "rules", title: "규칙을 미리 읽어 둔다", detail: "서버가 뜰 때와 주기적으로 읽는다. 요청마다 읽지 않는다." },
+    { path: ["u", "mw"], packet: "POST", title: "요청이 들어온다", detail: "POST /reviews에 맞는 규칙은 review-write다. 사용자 id로 1분 10개까지다." },
+    { path: ["mw", "redis", "mw"], packet: "INCR", title: "카운터를 하나 올린다", detail: "올린 뒤의 값을 받아 한도와 비교한다. 이 왕복 한 번이 제한기가 더하는 지연이다." },
+    { path: ["mw", "api", "db"], packet: "POST", title: "한도 안이면 보낸다", detail: "리뷰 API는 제한기가 있는지 모른다. 늘 하던 일을 한다." },
+    { path: ["u", "mw"], packet: "429", blocked: true, title: "넘으면 여기서 돌려보낸다", detail: "429와 Retry-After를 돌려준다. API 서버와 DB는 이 요청을 보지 못한다." },
+  ]}
+/>
+
+## 서버 세 대가 따로 세면
+
+깊이 토막에서 가장 먼저 팔 곳은 "여러 서버가 같은 카운터를 어떻게 세나"다. 직관적인 방법 세 가지를 같은 조건에서 돌려 봤다. 앱 서버 세 대(Redis 연결 세 개)가 같은 사용자의 요청 30개를 동시에 받고, 한도는 1분에 10개다.
+
+① 서버마다 자기 메모리의 `Map`으로 센다. ② Redis에서 `GET`으로 읽고 앱에서 1을 더해 `SET`으로 쓴다. ③ Redis의 `INCR`로 Redis가 직접 1을 더하게 한다. 수명은 같은 `MULTI` 안에서 `EXPIRE ... NX`로 처음 한 번만 건다(`EXPIRE`의 `NX` 옵션은 Redis 7.0부터 있다).
+
+```js
+// ③만 옮겨 적었다. 창 번호를 키에 넣어 1분마다 새 카운터가 생긴다
+async function incr(i, user) {
+  const k = `rl:${user}:${Math.floor(Date.now() / 1000 / 60)}`;
+  const [[, n]] = await servers[i].multi().incr(k).expire(k, 60, "NX").exec();
+  return n <= LIMIT;
+}
+```
+
+```bash
+# 세 방식을 차례로 돌린다 (세 번 실행)
+node race.js
+```
+
+```text
+① 서버별 메모리              30개 중 통과 30 (한도 10)
+② GET 후 SET            30개 중 통과 30 (한도 10)
+③ INCR + EXPIRE NX     30개 중 통과 10 (한도 10)
+남은 수명(초): 60  카운터: 30
+```
+
+세 번 모두 같은 결과였다. ①은 서버마다 10개씩 받아 30개가 통과했다. 서버가 세 대면 한도가 세 배가 된다. 이 함정은 [운영 글](/posts/rate-limiting-in-practice)에서 따로 다뤘다.
+
+②는 Redis 하나에 모아서 셌는데도 30개가 다 통과했다. 아래 그림이 그 이유다. 읽기와 쓰기 사이가 비어 있어서 그사이에 다른 서버가 같은 값을 읽는다.
+
+<SequenceDiagram
+  caption="GET 후 SET: 두 서버가 같은 숫자를 읽는다"
+  actors={[
+    { id: "a", label: "서버 A" },
+    { id: "r", label: "Redis" },
+    { id: "b", label: "서버 B" },
+  ]}
+  steps={[
+    { from: "a", to: "r", label: "GET → 9", title: "A가 9를 읽는다", detail: "한도 10보다 작으니 통과시키기로 한다." },
+    { from: "b", to: "r", label: "GET → 9", title: "A가 쓰기 전에 B도 읽는다", detail: "B도 9를 읽고 통과시키기로 한다." },
+    { from: "a", to: "r", label: "SET 10", title: "A가 10을 쓴다", detail: "9에 1을 더한 값이다." },
+    { from: "b", to: "r", label: "SET 10", title: "B도 10을 쓴다", detail: "B가 계산한 것도 9에 1을 더한 10이다. 요청 두 개가 통과했는데 카운터는 하나만 올랐다." },
+    { from: "a", to: "r", label: "INCR", title: "INCR로 바꾸면", detail: "더하기를 Redis가 한다. Redis는 명령을 하나씩 차례로 처리하니 두 INCR은 10과 11을 받는다." },
+    { from: "r", to: "b", label: "11", title: "11을 받은 쪽이 거절한다", detail: "읽고 더하고 쓰는 일이 명령 하나 안에서 끝나서 틈이 없다." },
+  ]}
+/>
+
+이런 틈을 [경쟁 상태](/posts/race-conditions)라고 부른다. 고치는 방법은 틈 자체를 없애는 것이다. 카운터처럼 더하기 하나로 끝나는 일은 `INCR`이면 된다. 토큰 버킷처럼 읽고 계산하고 쓰는 일이 여러 줄이면 Lua 스크립트로 묶어 Redis 안에서 한 번에 돌린다. 그 스크립트는 [알고리즘 글](/posts/rate-limiting-algorithms)에서 직접 돌려 봤다.
+
+③의 마지막 줄을 보면 카운터가 30이다. 거절된 요청도 `INCR`은 했기 때문이다. 고정 창에서는 문제가 없다. 거절된 사람은 어차피 창이 끝날 때까지 막혀 있고, 창이 끝나면 키가 사라진다.
+
+## INCR과 수명 사이의 틈
+
+틈은 하나 더 있다. `INCR`과 `EXPIRE`를 따로 보내는 코드에서 그 사이에 서버가 죽거나 네트워크가 끊기면 어떻게 될까. `INCR`만 하고 멈춘 상태를 그대로 만들어 봤다.
+
+```bash
+# INCR만 보내고 EXPIRE는 보내지 못한 상태를 흉내 낸다
+redis-cli -p 16391 < ttl.txt
+```
+
+```text
+(integer) 1
+(integer) -1
+(integer) 56
+```
+
+둘째 줄의 `TTL`이 `-1`이다. 수명이 없는 키라는 뜻이다. 이 키는 영원히 남아서, 창 번호를 키에 넣지 않는 구현이라면 이 사용자는 한도에 닿는 순간부터 영원히 막힌다. 창 번호를 넣는 구현이라도 키가 지워지지 않고 계속 쌓여 메모리를 채운다. 셋째 줄 `MEMORY USAGE`가 알려 주는 값은 56바이트지만, 위에서 잰 것처럼 실제로는 키 하나에 100바이트 남짓이 든다.
+
+그래서 둘을 떼어 놓지 않는다. 위의 ③처럼 `MULTI`로 묶거나, Lua 스크립트 안에서 함께 하거나, 요청마다 `EXPIRE ... NX`를 같이 보내 수명이 없으면 그때라도 걸리게 한다.
+
+## 창이 열리고 닫히는 시점
+
+창을 어떻게 나눌지도 정해야 한다. ③은 시계 기준으로 매분 0초에 창을 나눴다. 이번에는 첫 요청이 들어올 때 창이 열리고 수명이 끝나면 닫히는 방식을 썼다. 키에 창 번호를 넣지 않고 `EXPIRE ... NX`로 첫 요청 때만 수명을 걸면 된다. 남은 수명이 곧 다음 창까지 남은 시간이라 클라이언트에게 알려 주기도 쉽다. 한도 2, 창 60초로 사용자 u42의 요청을 따라가 보자.
+
+<AlgoTrace
+  caption="첫 요청에 열리는 60초 창, 한도 2"
+  cells={["0초", "10초", "20초", "50초", "61초", "62초"]}
+  memoryLabel="Redis의 rl:u42"
+  steps={[
+    { pointer: 0, found: [0], memory: ["값 1", "수명 60초"], caption: "키가 없으니 INCR이 1을 만들고, 이때 처음으로 수명 60초가 걸린다. 통과." },
+    { pointer: 1, found: [0, 1], memory: ["값 2", "수명 50초"], caption: "2가 됐다. 한도 안이라 통과. 수명은 다시 걸리지 않는다." },
+    { pointer: 2, found: [0, 1], memory: ["값 3", "수명 40초"], caption: "3은 한도를 넘는다. 거절하고 40초 뒤에 다시 오라고 알려 준다." },
+    { pointer: 3, found: [0, 1], memory: ["값 4", "수명 10초"], caption: "아직 같은 창이다. 계속 거절된다." },
+    { pointer: 4, found: [0, 1, 4], memory: ["값 1", "수명 60초"], caption: "60초에 키가 사라졌다. 61초 요청이 새 창을 연다. 통과." },
+    { pointer: 5, found: [0, 1, 4, 5], memory: ["값 2", "수명 59초"], caption: "새 창의 두 번째라 통과한다." },
+  ]}
+/>
+
+이 방식도 고정 창이라서, 창 끝 직전과 새 창 시작 직후에 몰아 보내면 짧은 시간에 한도의 두 배가 통과한다. 그게 문제가 되는 규칙이라면 슬라이딩 윈도 카운터나 토큰 버킷을 쓴다. 알고리즘을 고르는 기준은 "순간 몰림을 얼마나 봐줄지"와 "메모리를 얼마나 쓸지"다. 다섯 가지를 같은 요청 기록으로 비교한 것은 [알고리즘 글](/posts/rate-limiting-algorithms)에 있다. 첫 설계에서는 고정 창이나 토큰 버킷으로 시작하는 경우가 많다. 이해하기 쉽고 키 하나에 값 한두 개만 두면 된다.
+
+## 거절할 때 알려 줄 것
+
+거절도 응답이다. 클라이언트가 무엇을 할지 알 수 있어야 한다. 위의 첫 요청 기준 창으로 작은 API 서버를 만들고 리뷰 작성 한도를 1분에 2개로 걸었다. 2초 간격으로 세 번 보낸 결과다(Date, Connection 같은 머리는 지웠다).
+
+```js
+// server.js의 핵심: 카운터를 올리고, 수명을 처음 한 번만 걸고, 남은 수명을 함께 읽는다
+const key = `rl:${req.url}:${who}`;
+const [[, count], , [, ttl]] = await redis.multi().incr(key).expire(key, rule.window, "NX").ttl(key).exec();
+return { ok: count <= rule.limit, remaining: Math.max(0, rule.limit - count), retryAfter: ttl };
+```
+
+```bash
+# 같은 사용자로 리뷰 작성을 세 번 보낸다
+curl -s -i -X POST -H "X-User-Id: u42" http://127.0.0.1:18391/reviews
+```
+
+```text
+HTTP/1.1 201 Created
+X-RateLimit-Remaining: 1
+Content-Type: application/json
+
+{"ok":true}
+HTTP/1.1 201 Created
+X-RateLimit-Remaining: 0
+Content-Type: application/json
+
+{"ok":true}
+HTTP/1.1 429 Too Many Requests
+X-RateLimit-Remaining: 0
+Retry-After: 56
+Content-Type: application/json
+
+{"error":"too_many_requests"}
+```
+
+세 번째는 `429 Too Many Requests`와 `Retry-After: 56`이다. 첫 요청 뒤 4초가 지났으니 창이 닫히기까지 56초 남았다. 다른 사용자 u7로 보낸 요청은 같은 순간에도 `201`이 나왔다. 키가 사용자마다 따로 있어서다. 남은 횟수를 알려 주는 머리는 `X-RateLimit-Remaining`처럼 서비스마다 이름이 다르고, 이를 표준으로 맞추려는 `RateLimit` 머리 초안도 있다. 어떤 머리를 줄지, 클라이언트가 이 값을 받아 어떻게 기다려야 하는지는 [운영 글](/posts/rate-limiting-in-practice)에서 자세히 다룬다.
+
+거절을 조용히 하는 경우도 있다. 스팸 계정에게 429를 주면 한도를 알아내 그 바로 아래로 보내도록 고친다. 그래서 일부 서비스는 의심스러운 요청을 거절하지 않고 받은 척한 뒤 버리거나, 큐에 넣어 천천히 처리한다. 어느 쪽이든 규칙마다 정할 일이다.
+
+## Redis가 멈추면 요청도 멈춘다
+
+마무리에 꺼낼 약점 중 가장 중요한 것은 카운터 저장소가 새 장애 지점이 됐다는 사실이다. 위의 서버를 그대로 두고 Redis만 멈춘 뒤 리뷰 작성을 보내 봤다.
+
+```bash
+# Redis를 멈춘 상태에서 3초 제한으로 요청한다
+curl -sS -i --max-time 3 -X POST -H "X-User-Id: u42" http://127.0.0.1:18391/reviews
+```
+
+```text
+curl: (28) Operation timed out after 3002 milliseconds with 0 bytes received
+```
+
+응답이 아예 오지 않는다. 이 서버가 쓴 Redis 클라이언트(ioredis)는 기본값으로 연결이 끊긴 동안 명령을 대기열에 쌓아 두고 다시 연결되면 보낸다. 그래서 제한기가 Redis를 기다리고, 요청은 그 뒤에서 멈춘다. 리뷰 작성 API가 고장 난 게 아닌데 제한기 때문에 서비스 전체가 멈춘 셈이다.
+
+대기열을 끄고 명령마다 50ms 제한을 둔 뒤, 실패하면 통과시키게 고쳤다.
+
+```js
+const redis = new Redis({ port: 16391, enableOfflineQueue: false, commandTimeout: 50, maxRetriesPerRequest: 0 });
+// ...
+try {
+  r = await rateLimit(req);
+} catch (e) {
+  console.log(`rate limiter skipped: ${e.message}`); // 기록을 남겨 알람을 건다
+  r = { ok: true };                                   // 고장 나면 통과 (fail open)
+}
+```
+
+```text
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{"ok":true}
+```
+
+```text
+rate limiter skipped: Stream isn't writeable and enableOfflineQueue options is false
+```
+
+첫 블록이 응답, 둘째가 서버 로그다. 이제 Redis가 멈춰도 리뷰는 써진다. 대신 그동안은 제한이 없다. 로그인처럼 제한이 곧 보안인 규칙은 반대로 막아야 하니, 처음에 규칙 파일에 `on_failure`를 둔 이유가 이것이다. 일부러 Redis를 멈춰 열기와 막기를 비교하는 실험은 [운영 글](/posts/rate-limiting-in-practice)에 있다.
+
+<Callout kind="warning">
+제한기를 붙인 뒤에는 Redis를 일부러 멈춰 보는 시험을 꼭 한다. 클라이언트 라이브러리의 기본값이 "다시 연결될 때까지 기다림"인 경우가 많아서, 보호하려고 붙인 장치가 장애를 서비스 전체로 퍼뜨린다. 시험은 운영이 아닌 환경에서 하고, 끝나면 Redis를 다시 띄워 카운터가 정상으로 쌓이는지 확인한다.
+</Callout>
+
+## 데이터 센터가 여러 곳이면
+
+[⑥ 데이터 센터 여러 곳](/posts/sd-multi-datacenter)처럼 서울과 버지니아에 서버가 있으면 카운터를 어디에 둘지가 다시 문제가 된다. 아래 그림에서 다음을 누르면 세 가지 선택이 차례로 보인다.
+
+<NetworkTopology
+  caption="두 지역에서 카운터를 세는 세 가지 방법"
+  width={420}
+  height={250}
+  zones={[
+    { id: "kr", label: "서울", x: 10, y: 15, w: 190, h: 220, tone: "private" },
+    { id: "us", label: "버지니아", x: 220, y: 15, w: 190, h: 220, tone: "public" },
+  ]}
+  nodes={[
+    { id: "ukr", label: "서울 사용자", x: 60, y: 60, icon: "client" },
+    { id: "akr", label: "API 서울", x: 60, y: 170, icon: "server" },
+    { id: "rkr", label: "Redis 서울", x: 155, y: 120, icon: "db" },
+    { id: "rus", label: "Redis 버지니아", x: 265, y: 120, icon: "db" },
+    { id: "aus", label: "API 버지니아", x: 360, y: 170, icon: "server" },
+    { id: "uus", label: "뉴욕 사용자", x: 360, y: 60, icon: "client" },
+  ]}
+  links={[
+    { from: "ukr", to: "akr" },
+    { from: "akr", to: "rkr" },
+    { from: "uus", to: "aus" },
+    { from: "aus", to: "rus" },
+    { from: "rkr", to: "rus", dashed: true },
+    { from: "akr", to: "rus", dashed: true },
+  ]}
+  steps={[
+    { path: ["ukr", "akr", "rkr"], packet: "INCR", highlight: ["rus"], title: "지역마다 따로 센다", detail: "가장 단순하다. 지연도 짧다. 한 사람이 두 지역을 오가면 한도가 두 배가 되지만, 보통 사용자는 가까운 한 지역에만 붙는다." },
+    { path: ["ukr", "akr", "rus"], packet: "INCR", title: "한 곳에서만 센다", detail: "정확하지만 서울 요청마다 바다를 건너 180ms를 기다린다. 1ms 안쪽이라는 요구를 못 지킨다." },
+    { path: ["rkr", "rus"], packet: "+120", title: "따로 세고 나중에 맞춘다", detail: "지역 카운터를 몇 초마다 서로 보내 합친다. 그 몇 초 동안은 한도를 조금 넘을 수 있다." },
+  ]}
+/>
+
+맛집 앱은 "가끔 11개가 되는 건 괜찮다"고 답했으니 첫째로 충분하다. 한 사용자를 늘 같은 지역으로 보내도록 라우팅하면 두 배가 되는 경우도 거의 없다. 파트너 API처럼 계약된 한도를 지역 상관없이 지켜야 하면 셋째를 고르고, 넘을 수 있는 양(지역 수 × 동기화 간격 동안의 요청)을 계약 숫자 안에 녹인다.
+
+## 마무리에서 꺼낼 것들
+
+마지막 토막에서 면접관이 묻기 전에 꺼낼 만한 것들이다.
+
+지켜볼 지표가 있어야 한다. 규칙별로 통과 수와 거절 수, 제한기의 Redis 호출 지연, 실패해서 건너뛴 수를 센다. 정상 사용자가 갑자기 많이 거절되면 한도가 너무 낮은 것이고, 거절이 하나도 없는데 공격이 계속 들어오면 키를 잘못 고른 것이다. 처음 배포할 때는 거절하지 않고 셀 수만 세는 기간을 두면 숫자를 안전하게 고를 수 있다.
+
+10배가 되면 Redis 한 대가 초당 4만 번 넘게 받는다. 같은 서버 안에서 잰 `INCR`이 초당 7만 번 남짓이었으니([⑪ 설계 면접 진행법](/posts/sd-interview-framework)에서 쟀다), 여유가 줄어든다. 키를 사용자 id로 나눠 [Redis Cluster](/posts/redis-cluster)에 흩거나, 서버마다 작은 로컬 카운터를 두고 Redis에서 몇 개씩 미리 받아 쓰는 방식으로 왕복을 줄인다. 앞쪽은 운영이 복잡해지고, 뒤쪽은 정확도가 조금 떨어진다.
+
+제한기는 모든 공격을 막지 못한다. 수많은 IP에서 조금씩 보내는 공격은 IP 단위 한도 아래로 들어온다. 그런 트래픽은 [DDoS 방어](/posts/ddos-protection)나 [WAF](/posts/waf) 같은 앞단 장치와 함께 막는다.
+
+## 직접 짜 보기
+
+첫 요청에 창이 열리는 고정 창 제한기를 메모리에서 짜 보자. `requests`는 시간 순서대로 정렬된 `[사용자, 초]` 목록이다. 사용자마다 창은 첫 요청 시각에 열려 `windowSec`초 뒤에 닫힌다(시작 시각 + `windowSec`가 되는 순간 이미 닫혀 있다). 창이 닫힌 뒤 오는 요청은 새 창을 연다. 거절된 요청도 센다. 요청마다 통과 여부를 담은 배열을 돌려준다.
+
+<CodePlayground
+  caption="사용자별 고정 창 제한기"
+  functionName="allowRequests"
+  initialCode={`function allowRequests(requests, limit, windowSec) {
+  // requests: [["u42", 0], ["u42", 10], ...] 시간 순
+  const result = [];
+  return result;
+}`}
+  solution={`function allowRequests(requests, limit, windowSec) {
+  const windows = new Map(); // 사용자 -> { start, count }
+  const result = [];
+  for (const [user, t] of requests) {
+    let w = windows.get(user);
+    if (!w || t >= w.start + windowSec) {
+      w = { start: t, count: 0 };
+      windows.set(user, w);
+    }
+    w.count += 1;
+    result.push(w.count <= limit);
+  }
+  return result;
+}`}
+  tests={[
+    {
+      label: "그림의 u42: 한도 2, 창 60초",
+      args: [[["u42", 0], ["u42", 10], ["u42", 20], ["u42", 50], ["u42", 61], ["u42", 62]], 2, 60],
+      expected: [true, true, false, false, true, true],
+    },
+    {
+      label: "사용자 둘이 섞여 들어올 때",
+      args: [[["a", 0], ["b", 1], ["a", 2], ["a", 3], ["b", 4]], 2, 60],
+      expected: [true, true, true, false, true],
+    },
+    {
+      label: "창 경계에 몰아 보내기",
+      args: [[["u", 0], ["u", 59], ["u", 60], ["u", 61]], 2, 60],
+      expected: [true, true, true, true],
+    },
+    {
+      label: "정확히 60초째는 새 창",
+      args: [[["u", 0], ["u", 1], ["u", 2], ["u", 60]], 2, 60],
+      expected: [true, true, false, true],
+    },
+    { label: "요청이 없으면", args: [[], 2, 60], expected: [] },
+  ]}
+/>
+
+세 번째 줄이 고정 창의 약점이다. 한도는 60초에 2개인데 59초에서 61초 사이 3초 동안 3개가 통과했다. 이걸 막고 싶어지는 순간이 슬라이딩 윈도나 토큰 버킷으로 넘어갈 때다.
+
+## 다음에 읽을 글
+
+이 글로 기초 편과 첫 사례가 끝났다. 다음 사례 [키-값 저장소: 나누고 복제하기](/posts/sd-kv-store-partition-replication)는 이 글에서 카운터를 맡긴 Redis 같은 저장소를 직접 설계한다. 데이터를 여러 서버에 나누고, 복제본 몇 개에 쓰고 읽을지를 정한다. 제한기를 더 깊이 보려면 알고리즘 비교는 [요청 수 제한 알고리즘](/posts/rate-limiting-algorithms), 헤더와 장애 대응과 배포 순서는 [요청 수 제한을 API에 붙이기](/posts/rate-limiting-in-practice)로 가면 된다.
+
+정리하면, 요청 수 제한기 설계는 무엇으로 셀지와 고장 나면 어떻게 할지를 먼저 묻고, 규칙은 서버 메모리에 카운터는 공유 저장소에 두고, 카운터를 올리는 일을 `INCR`이나 Lua처럼 틈이 없는 명령 하나로 하는 것에서 시작한다. 그다음 거절할 때 알려 줄 것, 저장소가 멈췄을 때의 동작, 지역이 여럿일 때의 정확도를 차례로 정한다.
+
+## 면접에서 나올 만한 질문
+
+### 요청 수 제한기는 어디에 두나요?
+
+서버 쪽에 둔다. 클라이언트에서 막는 건 스크립트가 우회하니 보안 장치가 되지 못한다. IP나 API 키처럼 요청 머리만으로 셀 수 있는 규칙은 게이트웨이나 리버스 프록시에서, 사용자 id나 업무 정보가 필요한 규칙은 API 서버의 미들웨어에서 건다. 둘을 함께 쓰는 경우가 많다.
+
+### 서버가 여러 대일 때 카운터는 어떻게 세나요?
+
+Redis 같은 공유 저장소 하나에 모아 센다. 서버마다 메모리에서 세면 한도가 서버 대수만큼 늘어난다. 그리고 읽고 더하고 쓰기를 따로 하면 그 틈에 다른 서버가 끼어들어 한도를 넘기니, `INCR`처럼 원자적인 명령 하나로 올리거나 여러 단계는 Lua 스크립트로 묶는다.
+
+### INCR과 EXPIRE를 따로 보내면 무엇이 문제인가요?
+
+둘 사이에 서버가 죽으면 수명 없는 키가 남는다. 창 번호를 키에 넣지 않는 구현이면 그 사용자는 영원히 막히고, 넣는 구현이라도 키가 지워지지 않아 메모리가 쌓인다. `MULTI`나 Lua로 묶거나 요청마다 `EXPIRE ... NX`를 함께 보낸다.
+
+### 카운터 저장소인 Redis가 죽으면 어떻게 되나요?
+
+미리 정한 대로 통과시키거나 막는다. 일반 API는 통과시켜서 제한기 장애가 서비스 장애로 번지지 않게 하고, 로그인이나 문자 발송처럼 제한이 보안이나 비용인 곳은 막는다. 이때 클라이언트 라이브러리가 끊긴 동안 명령을 쌓아 두고 기다리는 기본값이면 요청 전체가 멈추니, 대기열을 끄고 짧은 타임아웃을 건다.
+
+### 트래픽이 10배가 되면 무엇을 바꾸나요?
+
+카운터 저장소의 초당 명령 수가 먼저 한도에 다가간다. 키를 사용자 id로 나눠 여러 Redis에 흩거나, 서버마다 로컬 카운터를 두고 Redis에서 몇 개씩 미리 받아 써서 왕복을 줄인다. 앞은 운영 복잡도가, 뒤는 정확도가 대가다. 메모리는 키 하나에 100바이트 남짓이라 대부분 먼저 문제가 되지 않는다.
+
+### 데이터 센터가 여러 곳이면 한도를 어떻게 지키나요?
+
+정확도를 얼마나 양보할 수 있는지로 고른다. 지역마다 따로 세면 빠르고 단순하지만 지역을 오가는 사용자는 한도가 늘어난다. 한 곳에서만 세면 정확하지만 먼 지역의 요청마다 대륙 왕복이 붙는다. 따로 세고 몇 초마다 합치는 방법은 그 사이에 조금 넘는 것을 받아들이는 타협이다.
+
+### 거절된 클라이언트에게는 무엇을 돌려주나요?
+
+`429 Too Many Requests`와 언제 다시 시도하면 되는지 알려 주는 `Retry-After`를 준다. 남은 횟수를 머리로 함께 주면 클라이언트가 미리 속도를 줄일 수 있다. 다만 스팸이나 공격에 한도를 정확히 알려 주면 그 바로 아래로 맞춰 보내니, 그런 규칙은 거절 대신 받은 척하고 버리는 방법도 쓴다.
+
+### 고정 창 말고 다른 알고리즘은 언제 쓰나요?
+
+창 경계에 몰아 보내면 짧은 시간에 한도의 두 배가 통과하는 게 문제가 될 때다. 그럴 땐 두 창을 섞어 어림하는 슬라이딩 윈도 카운터나 몰림을 정해진 만큼만 봐주는 토큰 버킷을 쓴다. 정확하게 세려면 요청 시각을 다 적는 슬라이딩 로그도 있지만 메모리를 많이 쓴다.
