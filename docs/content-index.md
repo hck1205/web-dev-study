@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 509편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 513편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -242,7 +242,7 @@
 - 소제목: 확인하고 넣으면 둘 다 통과한다 / 키 한 줄에 담는 것 / 선점하고, 작업하고, 응답을 적는다 / 키 하나가 거치는 상태 / 처리 도중에 서버가 죽으면 / 트랜잭션 하나로 묶으면 기다리게 된다 / 바깥 결제사를 부르는 단계가 끼면 / 어떤 응답을 저장할지 / 키는 누가, 언제 만드나 / 키 말고도 중복을 막는 방법 / 운영에서 이런 증상을 보면 / 키 저장소가 정확해야 재시도가 안전하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, http-methods, rest-api-design, distributed-lock, sql-batch-timeout-pool, message-delivery-semantics
 - 키워드 백링크 →: postgres-advanced-sql, service-mesh, redis-basics, http-status-codes, db-modeling-normalization
-- 이 글로 오는 글 ←: acid-transactions, batch-processing, circuit-breaker, cron-jobs, curl-for-debugging, dead-letter-queue, distributed-lock, distributed-transactions-2pc, js-promise-combinators, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, pattern-builder, pattern-command, pattern-decorator, pattern-facade, race-conditions, rate-limiting-in-practice, resilience-patterns, retries, rolling-deployment, saga-pattern, sd-ad-click-exactly-once, sd-chat-message-storage, sd-hotel-double-booking, sd-load-balancer-stateless, sd-multi-datacenter, sd-news-feed-publishing, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: acid-transactions, batch-processing, circuit-breaker, cron-jobs, curl-for-debugging, dead-letter-queue, distributed-lock, distributed-transactions-2pc, js-promise-combinators, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, pattern-builder, pattern-command, pattern-decorator, pattern-facade, race-conditions, rate-limiting-in-practice, resilience-patterns, retries, rolling-deployment, saga-pattern, sd-ad-click-exactly-once, sd-chat-message-storage, sd-hotel-double-booking, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-multi-datacenter, sd-news-feed-publishing, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, transactional-outbox, webhooks
 
 #### `rate-limiting-in-practice` — 요청 수 제한을 API에 붙이기: 키, 429, 장애 대응
 
@@ -264,7 +264,7 @@
 - 소제목: 묻지 않아도 알려 주는 HTTP 요청 / 누가 보냈는지 서명으로 확인한다 / 받는 쪽 서버를 직접 띄워 공격해 본다 / 처리를 끝내고 응답하면 세 번 처리된다 / 순서는 보장되지 않는다 / 보내는 쪽이 되면 SSRF를 막는다 / 웹훅이 이상할 때 보는 순서 / 받는 쪽은 의심하고, 보내는 쪽은 조심한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: retries, idempotency-key, realtime-communication, clock-skew, timeouts, message-queue-basics, dead-letter-queue, ssrf, exponential-backoff-jitter
 - 키워드 백링크 →: postgres-advanced-sql, resilience-patterns, layer-ip-addressing, what-happens-google-com, ipv6-basics, vpc-basics, http-methods, dns
-- 이 글로 오는 글 ←: alerting, api-versioning, argocd-basics, cold-starts, cron-jobs, ddos-protection, eks-cluster-basics, gitops-argocd-vs-flux, http-versions, https-tls, k8s-admission-control, k8s-audit-logging, k8s-batch-kueue, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-security-admission, k8s-rbac, k8s-serviceaccount-tokens, kubectl-apply-ssa, kubernetes-ingress, on-call, postgres-jsonb-search, sd-metrics-collection, sd-metrics-storage-alerting, sd-notification-reliability, serverless-limits, sql-interview-problems, ssrf, transactional-outbox, vpn-ipsec-wireguard, what-happens-google-com
+- 이 글로 오는 글 ←: alerting, api-versioning, argocd-basics, cold-starts, cron-jobs, ddos-protection, eks-cluster-basics, gitops-argocd-vs-flux, http-versions, https-tls, k8s-admission-control, k8s-audit-logging, k8s-batch-kueue, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-security-admission, k8s-rbac, k8s-serviceaccount-tokens, kubectl-apply-ssa, kubernetes-ingress, on-call, postgres-jsonb-search, sd-metrics-collection, sd-metrics-storage-alerting, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-limits, sql-interview-problems, ssrf, transactional-outbox, vpn-ipsec-wireguard, what-happens-google-com
 
 ### Programming › Backend › Architecture (`programming/backend/architecture`)
 
@@ -386,8 +386,8 @@
 - 길이: 495줄
 - 소제목: 두 군데에 쓰는 순간 어디서든 끊긴다 / 릴레이가 언제 깨어나나 / 릴레이를 둘 띄우면 순서가 바뀐다 / 주문마다 맨 앞 사건만 보낸다 / 계속 실패하는 사건 하나 / 아웃박스 테이블 청소 / 브로커가 아닌 곳으로 보내는 아웃박스 / 아웃박스 말고 고를 수 있는 것 / 브라우저에도 아웃박스가 있다 / 아웃박스가 밀린다는 알림이 왔을 때 / 릴레이까지가 아웃박스다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-architecture-by-scale, saga-pattern, event-driven-architecture, message-delivery-semantics, postgres-functions-triggers, dead-letter-queue, idempotency-key, distributed-transactions-2pc, client-data-cache
-- 키워드 백링크 →: pessimistic-locking, postgres-reporting-sql, microservices, browser-storage, db-index-design, resilience-patterns, kafka-basics, db-replication-sharding, http-methods, webhooks
-- 이 글로 오는 글 ←: acid-transactions, cqrs, db-architecture-by-scale, db-sharding, ddd-bounded-context, elasticsearch-inverted-index, event-sourcing, message-delivery-semantics, message-queue-basics, microservices, microservices-decomposition, modular-monolith, sd-hotel-inventory-scaling, sd-notification-reliability, serverless-architecture, system-design-concepts-map
+- 키워드 백링크 →: pessimistic-locking, postgres-reporting-sql, microservices, browser-storage, sd-payment-flow, db-index-design, resilience-patterns, kafka-basics, db-replication-sharding, http-methods, webhooks
+- 이 글로 오는 글 ←: acid-transactions, cqrs, db-architecture-by-scale, db-sharding, ddd-bounded-context, elasticsearch-inverted-index, event-sourcing, message-delivery-semantics, message-queue-basics, microservices, microservices-decomposition, modular-monolith, sd-hotel-inventory-scaling, sd-leaderboard-sorted-set, sd-notification-reliability, sd-payment-flow, serverless-architecture, system-design-concepts-map
 
 ### Programming › Backend › Auth (`programming/backend/auth`)
 
@@ -445,7 +445,7 @@
 - 소제목: 같은 실패가 끝없이 돌아온다 / 몇 번 시도하고 포기할지 / 바로 포기할 실패, 기다려 볼 실패 / Redis Streams로 만드는 DLQ / DLQ에 무엇을 같이 남기나 / 알람은 DLQ에 하나라도 있으면 / 고친 뒤 되돌려 보내기 / DLQ를 두고도 메시지를 잃는 경우 / 큐에서 빠진 메시지는 누군가 봐야 한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, pub-sub, retries, exponential-backoff-jitter, rabbitmq-basics, kafka-basics, structured-logging, alerting, idempotency-key, message-delivery-semantics
 - 키워드 백링크 →: resilience-patterns, redis-basics, sd-email-protocols, http-methods
-- 이 글로 오는 글 ←: ddd-bounded-context, event-driven-architecture, message-delivery-semantics, message-queue-basics, pattern-command, pub-sub, rabbitmq-basics, rollback-strategy, saga-pattern, schema-versioning, sd-notification-reliability, sd-queue-logging-automation, serverless-architecture, serverless-limits, system-design-concepts-map, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: ddd-bounded-context, event-driven-architecture, message-delivery-semantics, message-queue-basics, pattern-command, pub-sub, rabbitmq-basics, rollback-strategy, saga-pattern, schema-versioning, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, serverless-architecture, serverless-limits, system-design-concepts-map, transactional-outbox, webhooks
 
 #### `kafka-basics` — Kafka 기초: 파티션, 오프셋, 소비자 그룹, 복제와 acks
 
@@ -467,7 +467,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: transactional-outbox, js-pure-functions, db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, long-polling, message-queue-basics, rabbitmq-basics, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, transactional-outbox
+- 이 글로 오는 글 ←: cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, long-polling, message-queue-basics, rabbitmq-basics, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, transactional-outbox
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -804,7 +804,7 @@
 - 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 언제 다음 단계로 넘어가나 / 복제는 읽기를 나누고, 늦을 수 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-partitioning, db-sharding, db-index, sql-query-tuning, caching-strategies, failover
 - 키워드 백링크 →: db-consistency-cap, prometheus-basics, db-architecture-by-scale, sd-start-single-server, sd-mq-storage-partitions, scaling-horizontal-vertical, sql-batch-timeout-pool, db-type-key-value, disaster-recovery, postgres-architecture, dns
-- 이 글로 오는 글 ←: acid-transactions, autoscaling, cache-invalidation, caching-strategies, connection-pool, consistency-models, cqrs, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, monolith-architecture, multi-region, network-partitions, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, saga-pattern, scaling-horizontal-vertical, sd-db-replication-intro, sd-mq-replication, sd-object-storage-architecture, sd-start-single-server, sd-url-shortener-api-redirect, sql-case-when, sql-vs-nosql, system-design-concepts-map, transactional-outbox, zero-downtime-migrations
+- 이 글로 오는 글 ←: acid-transactions, autoscaling, cache-invalidation, caching-strategies, connection-pool, consistency-models, cqrs, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, monolith-architecture, multi-region, network-partitions, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, saga-pattern, scaling-horizontal-vertical, sd-db-replication-intro, sd-mq-replication, sd-object-storage-architecture, sd-payment-reliability, sd-start-single-server, sd-url-shortener-api-redirect, sql-case-when, sql-vs-nosql, system-design-concepts-map, transactional-outbox, zero-downtime-migrations
 
 #### `db-sharding` — 샤딩: 데이터를 서버 여러 대에 나눠 담기
 
@@ -903,7 +903,7 @@
 - 소제목: 열쇠 하나로 상자 하나 / 메모리에 두느냐, 디스크에 두느냐 / 키를 해시해서 파티션을 고른다 / 파티션 키와 정렬 키 / DynamoDB에서 알아 둘 숫자와 설정 / etcd: 작지만 틀리면 안 되는 값 / 키-값 저장소가 맞는 곳과 아닌 곳 / 관계형 DB 옆에 두는 법 / 단순한 모델, 서로 다른 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, postgres-jsonb-search, redis-basics, redis-memory-eviction, redis-persistence-ha, db-type-embedded, db-type-relational, db-type-newsql, db-consistency-cap, caching-strategies, db-type-wide-column
 - 키워드 백링크 →: raft-consensus, sd-mq-storage-partitions, leader-election, dns
-- 이 글로 오는 글 ←: cilium-ebpf, cloud-cost-optimization, consistency-models, db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, external-secrets, failover, fault-tolerance, geohash, helm-values-secrets, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-configmap, k8s-controllers-reconcile, k8s-crd, k8s-etcd-backup, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-security-admission, k8s-project-structure, k8s-rbac, k8s-secret, k8s-serviceaccount-tokens, k8s-statefulset, kubectl-apply-ssa, kubectl-essentials, leader-election, local-k8s-kind-minikube, merkle-tree, multi-region, network-flow-logs, network-partitions, optimistic-locking, quadtree, raft-consensus, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-kv-store-partition-replication, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-load-balancer-stateless, sd-metrics-collection, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-storage-partitions, sd-nearby-friends, sd-sharding-intro, sd-split-web-and-db, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-wallet-event-sourcing, sd-web-crawler-politeness-dedup, secrets-management, serverless-architecture, serverless-limits, service-discovery, sql-vs-nosql, system-design-concepts-map, terraform-basics, velero-backup, vpc-subnets-route-tables, yaml-for-k8s
+- 이 글로 오는 글 ←: cilium-ebpf, cloud-cost-optimization, consistency-models, db-architecture-by-scale, db-consistency-cap, db-replication-sharding, db-sharding, db-type-newsql, db-type-relational, db-type-wide-column, db-types-overview, distributed-lock, eks-cluster-basics, eventual-consistency, external-secrets, failover, fault-tolerance, geohash, helm-values-secrets, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-configmap, k8s-controllers-reconcile, k8s-crd, k8s-etcd-backup, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-security-admission, k8s-project-structure, k8s-rbac, k8s-secret, k8s-serviceaccount-tokens, k8s-statefulset, kubectl-apply-ssa, kubectl-essentials, leader-election, local-k8s-kind-minikube, merkle-tree, multi-region, network-flow-logs, network-partitions, optimistic-locking, quadtree, raft-consensus, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-kv-store-partition-replication, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-leaderboard-scaling, sd-load-balancer-stateless, sd-metrics-collection, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-storage-partitions, sd-nearby-friends, sd-sharding-intro, sd-split-web-and-db, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-wallet-event-sourcing, sd-web-crawler-politeness-dedup, secrets-management, serverless-architecture, serverless-limits, service-discovery, sql-vs-nosql, system-design-concepts-map, terraform-basics, velero-backup, vpc-subnets-route-tables, yaml-for-k8s
 
 #### `db-type-newsql` — 분산 SQL(NewSQL): SQL을 지키며 수평 확장
 
@@ -947,7 +947,7 @@
 - 소제목: 쓰기가 한 대를 넘을 때 / 테이블보다 쿼리를 먼저 정한다 / 파티션 키는 노드를, 클러스터링 키는 순서를 / 쓰기는 덧붙이기만 한다 / 파일을 합쳐 읽기를 되찾는 컴팩션 / 몇 대가 대답해야 성공인가 / 지우는 것도 쓰기다 / Cassandra가 힘들어하는 질문 / 어디에 쓰이나 / 관계형 DB와 나눠 맡기 / 쓰기를 싸게 하고, 질문을 고정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-key-value, db-type-columnar-olap, db-replication-sharding, db-consistency-cap, db-type-time-series, db-type-graph
 - 키워드 백링크 →: sd-start-single-server, db-sharding, db-type-relational, sd-mq-storage-partitions, bloom-filter, db-index-pitfalls, sd-kv-store-write-read-path, db-partitioning, dns
-- 이 글로 오는 글 ←: bloom-filter, consistency-models, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, geohash, k8s-service-types, k8s-statefulset, kafka-basics, merkle-tree, multi-region, network-partitions, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-interview-framework, sd-kv-store-failure-handling, sd-kv-store-partition-replication, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-maps-location-eta, sd-metrics-storage-alerting, sd-nearby-friends, sd-object-storage-versioning-multipart, sd-split-web-and-db, sd-wallet-event-sourcing, sql-vs-nosql
+- 이 글로 오는 글 ←: bloom-filter, consistency-models, consistent-hashing, crdt, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-embedded, db-type-graph, db-type-key-value, db-type-newsql, db-type-relational, db-types-overview, eventual-consistency, geohash, k8s-service-types, k8s-statefulset, kafka-basics, merkle-tree, multi-region, network-partitions, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-interview-framework, sd-kv-store-failure-handling, sd-kv-store-partition-replication, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-leaderboard-scaling, sd-maps-location-eta, sd-metrics-storage-alerting, sd-nearby-friends, sd-object-storage-versioning-multipart, sd-split-web-and-db, sd-wallet-event-sourcing, sql-vs-nosql
 
 #### `db-types-overview` — DB 종류 한눈에: 데이터 모양과 읽는 방식으로 고르기
 
@@ -1093,8 +1093,8 @@
 - 길이: 881줄
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies
-- 키워드 백링크 →: redis-cluster, distributed-lock, sd-start-single-server, pub-sub, db-type-relational, kafka-basics, db-transaction-isolation, acid-transactions, dns
-- 이 글로 오는 글 ←: batch-processing, bloom-filter, blue-green-deployment, cache-invalidation, caching-strategies, circuit-breaker, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, cookie-session-login, count-min-sketch, cqrs, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, js-memoization, k8s-service-types, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, monolith-architecture, multi-region, n-plus-one-queries, network-partitions, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, service-discovery, sql-vs-nosql, system-design-concepts-map, tcp-reliability-congestion, vpc-subnets-route-tables, websocket-deep-dive
+- 키워드 백링크 →: redis-cluster, distributed-lock, sd-leaderboard-sorted-set, sd-start-single-server, pub-sub, db-type-relational, kafka-basics, db-transaction-isolation, acid-transactions, dns
+- 이 글로 오는 글 ←: batch-processing, bloom-filter, blue-green-deployment, cache-invalidation, caching-strategies, circuit-breaker, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, cookie-session-login, count-min-sketch, cqrs, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, js-memoization, k8s-service-types, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, monolith-architecture, multi-region, n-plus-one-queries, network-partitions, nginx-reverse-proxy, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, service-discovery, sql-vs-nosql, system-design-concepts-map, tcp-reliability-congestion, vpc-subnets-route-tables, websocket-deep-dive
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -1105,7 +1105,7 @@
 - 소제목: Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 현장에서 노드 하나가 죽었을 때 / 데이터를 나누는 대가 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-replication-sentinel, redis-basics
 - 키워드 백링크 →: vpc-basics
-- 이 글로 오는 글 ←: caching-strategies, consistent-hashing, db-sharding, distributed-lock, geohash, pub-sub, rate-limiting-algorithms, redis-basics, redis-persistence-ha, redis-replication-sentinel, sd-cache-and-cdn-tier, sd-nearby-friends, sd-rate-limiter-design, sd-sharding-intro
+- 이 글로 오는 글 ←: caching-strategies, consistent-hashing, db-sharding, distributed-lock, geohash, pub-sub, rate-limiting-algorithms, redis-basics, redis-persistence-ha, redis-replication-sentinel, sd-cache-and-cdn-tier, sd-leaderboard-scaling, sd-nearby-friends, sd-rate-limiter-design, sd-sharding-intro
 
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
@@ -1115,7 +1115,7 @@
 - 길이: 752줄
 - 소제목: 키 하나가 실제로 차지하는 크기 / 작은 컬렉션은 압축된 모양으로 산다 / INFO memory를 한 줄씩 읽기 / 어떤 키가 메모리를 먹고 있나 / maxmemory를 정하지 않으면 생기는 일 / 가득 찼을 때 지울 키를 고르는 정책 / LRU를 정확하게 하지 않는 이유 / LFU 카운터는 로그로 오르고 시간이 지나면 내려간다 / 만료된 키가 바로 사라지지 않는 이유 / 단편화와 activedefrag / 리눅스 쪽에서 챙길 설정 / 서버 메모리의 몇 퍼센트를 maxmemory로 줄까 / 가득 차기 전에 정해 둘 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-basics, caching-strategies, redis-persistence-ha
-- 키워드 백링크 →: layer-mtu-fragmentation, dns
+- 키워드 백링크 →: sd-leaderboard-sorted-set, layer-mtu-fragmentation, dns
 - 이 글로 오는 글 ←: caching-strategies, count-min-sketch, db-type-key-value, js-memory-leak, message-queue-basics, redis-basics, redis-persistence-ha, redis-replication-sentinel, sd-cache-and-cdn-tier
 
 #### `redis-persistence-ha` — Redis 영속성: RDB, AOF, 백업과 복원
@@ -1127,7 +1127,7 @@
 - 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-replication-sentinel, redis-cluster, redis-basics, redis-memory-eviction
 - 키워드 백링크 →: sd-start-single-server, dns
-- 이 글로 오는 글 ←: caching-strategies, db-type-key-value, docker-compose, message-queue-basics, redis-basics, redis-memory-eviction, redis-replication-sentinel
+- 이 글로 오는 글 ←: caching-strategies, db-type-key-value, docker-compose, message-queue-basics, redis-basics, redis-memory-eviction, redis-replication-sentinel, sd-leaderboard-sorted-set
 
 #### `redis-replication-sentinel` — Redis 복제와 Sentinel: 비동기 복제와 자동 장애 조치
 
@@ -1393,7 +1393,7 @@
 - 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index, api-pagination-sorting, n-plus-one-queries, sql-batch-timeout-pool
 - 키워드 백링크 →: rest-api-design, loading-patterns, db-index-design, sql-subqueries-exists-lateral, sql-joins-in-practice, pattern-proxy, postgres-architecture, db-transaction-isolation
-- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sd-latency-numbers, sd-load-balancer-stateless, sd-news-feed-retrieval, sd-split-web-and-db, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning, sql-subqueries-exists-lateral
+- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sd-latency-numbers, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-news-feed-retrieval, sd-split-web-and-db, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning, sql-subqueries-exists-lateral
 
 #### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
 
@@ -1627,7 +1627,7 @@
 - 길이: 497줄
 - 소제목: 내 일이 아니면 다음 처리기로 넘긴다 / 배열 하나와 반복문 하나로 충분하다 / 줄의 순서가 곧 규칙이다 / 모두 거쳐 가는 사슬, 미들웨어 / next를 잊거나 두 번 부르면 / 브라우저에서 위로 올라가는 사슬 / 등록 순서와 실행 순서가 다른 곳 / 데코레이터, 커맨드와 헷갈릴 때 / compose 직접 만들기 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-decorator, pattern-command, pattern-observer, pattern-composite
-- 키워드 백링크 →: event-delegation, http-status-codes
+- 키워드 백링크 →: sd-payment-flow, event-delegation, http-status-codes
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-composite, pattern-decorator, pattern-strategy
 
 #### `pattern-command` — 커맨드 패턴: 요청을 값으로 만들면 되돌릴 수 있다
@@ -2008,7 +2008,7 @@
 - 길이: 449줄
 - 소제목: 네 함수가 답하는 질문 / 하나가 실패하면 all은 바로 포기한다 / 부분 실패를 받아들이는 allSettled / race로 건 타임아웃은 아무것도 멈추지 않는다 / any는 첫 성공을 기다린다 / 빈 배열을 넣으면 생기는 일 / 한꺼번에 너무 많이 넣을 때 / Promise.all을 직접 만들어 보면 / 대시보드는 결국 어떻게 고쳤나 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-callback-hell, js-promises, js-async-await, idempotency-key, client-data-cache, abort-controller, timeouts
-- 키워드 백링크 →: browser-fetch, streaming-ssr-suspense, rendering-strategies, event-loop, js-destructuring
+- 키워드 백링크 →: browser-fetch, streaming-ssr-suspense, rendering-strategies, sd-payment-flow, event-loop, js-destructuring
 - 이 글로 오는 글 ←: javascript-roadmap, js-array-transform, js-async-await, js-callback-hell, js-promises
 
 #### `js-promises` — Promise: 상태, then 체인, 에러 전파
@@ -2310,7 +2310,7 @@
 - 소제목: for 문이 하던 일에 이름을 붙였다 / 콜백은 인자를 세 개 받는다 / 누산기를 따라가 본다 / 답이 나오면 멈추는 메서드 / 중첩을 펴는 flat, 펴면서 바꾸는 flatMap / 빈 칸이 있는 배열 / 콜백 안의 await는 기다려 주지 않는다 / 체인이 길어지면 배열도 늘어난다 / React 컴포넌트에서 이 메서드들이 하는 일 / flat을 직접 만들어 보기 / 다시 장바구니로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, js-equality-coercion, js-promise-combinators, react-rerender, js-memoization, js-short-circuit, js-immutability-react, js-spread-rest
 - 키워드 백링크 →: pattern-iterator, js-function-forms, js-truthy-falsy-typeof, js-pure-functions
-- 이 글로 오는 글 ←: javascript-roadmap, js-array-mutation, js-first-class-callbacks, js-object-methods, js-short-circuit
+- 이 글로 오는 글 ←: javascript-roadmap, js-array-mutation, js-first-class-callbacks, js-object-methods, js-short-circuit, sd-leaderboard-scaling
 
 #### `js-destructuring` — 구조 분해: 패턴 한 줄이 하는 일
 
@@ -2864,7 +2864,7 @@
 - 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 프록시는 멱등성을 보고 재시도를 고른다 / 다시 메일 링크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes, nginx-reverse-proxy
 - 키워드 백링크 →: json-crud-http, elasticsearch-inverted-index, gateway, csrf, js-pure-functions, client-data-cache, what-happens-google-com
-- 이 글로 오는 글 ←: acid-transactions, ansible-network-automation, batch-processing, browser-fetch, cqrs, crdt, csrf, curl-for-debugging, dead-letter-queue, distributed-lock, fault-tolerance, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, iac-basics, idempotency-key, js-pure-functions, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, microservices, networking-essentials-map, nginx-reverse-proxy, pattern-builder, pattern-decorator, race-conditions, resilience-patterns, rest-api-design, retries, sd-ad-click-exactly-once, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-news-feed-publishing, sd-notification-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, service-mesh, sql-interview-problems, system-design-concepts-map, tail-latency, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: acid-transactions, ansible-network-automation, batch-processing, browser-fetch, cqrs, crdt, csrf, curl-for-debugging, dead-letter-queue, distributed-lock, fault-tolerance, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, iac-basics, idempotency-key, js-pure-functions, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, microservices, networking-essentials-map, nginx-reverse-proxy, pattern-builder, pattern-decorator, race-conditions, resilience-patterns, rest-api-design, retries, sd-ad-click-exactly-once, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-news-feed-publishing, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, service-mesh, sql-interview-problems, system-design-concepts-map, tail-latency, transactional-outbox, webhooks
 
 #### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
 
@@ -3491,7 +3491,7 @@
 - 길이: 398줄
 - 소제목: 롤백할까, 고쳐서 내보낼까 / 되돌릴 수 있는 것과 없는 것 / 롤백했더니 DB가 맞지 않는다 / down 마이그레이션이 지우는 것 / 큐에 남은 새 형식의 메시지 / 쿠버네티스에서 되돌리기 / 사람보다 먼저 되돌리게 하기 / 되돌리기가 실패하는 자리 / 되돌릴 수 있게 만드는 것이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-deployment, k8s-deploy-pipeline-eks, helm-release-lifecycle, ci-cd-basics, build-caching, feature-flags, zero-downtime-migrations, db-migration-tools, dead-letter-queue, sli-slo, error-budgets, canary-release, blue-green-deployment, production-incidents, postmortems
-- 키워드 백링크 →: k8s-statefulset, git-undo, k8s-daemonset, k8s-configmap, postgres-operations, redis-basics, cookie-session-login, local-k8s-kind-minikube
+- 키워드 백링크 →: k8s-statefulset, git-undo, k8s-daemonset, k8s-configmap, sd-payment-flow, postgres-operations, redis-basics, cookie-session-login, local-k8s-kind-minikube
 - 이 글로 오는 글 ←: argocd-basics, blue-green-deployment, build-caching, canary-release, ci-cd-basics, feature-flags, gitops-argocd-vs-flux, helm-release-lifecycle, iac-basics, k8s-cluster-upgrade, k8s-statefulset
 
 #### `rolling-deployment` — 롤링 배포: 빼고, 기다리고, 확인하고, 넣는다
@@ -4673,7 +4673,7 @@
 - 소제목: 네 글자를 누가 지키나 / 커밋 기록이 없으면 없던 일이다 / 원자성은 연결 하나 안에서만 성립한다 / 데이터베이스 밖에서 한 일은 되돌려지지 않는다 / 일관성은 적어 둔 규칙만큼 지켜진다 / 커밋 응답과 디스크 사이 / 응답을 받지 못한 커밋 / 직접 짜 보기: 커밋된 것만 남기기 / 트랜잭션이 의심될 때 보는 순서 / 약속이 끝나는 곳을 아는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-transaction-isolation, postgres-architecture, postgres-mvcc-vacuum, sql-batch-timeout-pool, transactional-outbox, distributed-transactions-2pc, saga-pattern, postgres-data-types, consistency-models, db-consistency-cap, db-replication-sharding, high-availability, idempotency-key, fault-tolerance
 - 키워드 백링크 →: pessimistic-locking, postgres-advanced-sql, db-architecture-by-scale, sd-start-single-server, resilience-patterns, postgres-getting-started, http-methods
-- 이 글로 오는 글 ←: db-consistency-cap, db-transaction-isolation, db-type-columnar-olap, db-type-newsql, db-type-relational, distributed-transactions-2pc, microservices, postgres-architecture, rate-limiting-in-practice, redis-basics, saga-pattern, sd-hotel-inventory-scaling, sd-wallet-transfer, sql-vs-nosql, system-design-concepts-map, thread-safety
+- 이 글로 오는 글 ←: db-consistency-cap, db-transaction-isolation, db-type-columnar-olap, db-type-newsql, db-type-relational, distributed-transactions-2pc, microservices, postgres-architecture, rate-limiting-in-practice, redis-basics, saga-pattern, sd-hotel-inventory-scaling, sd-payment-flow, sd-wallet-transfer, sql-vs-nosql, system-design-concepts-map, thread-safety
 
 #### `authn-vs-authz` — 인증과 인가: 누구냐와 해도 되냐는 다른 질문이다
 
@@ -4794,7 +4794,7 @@
 - 소제목: 커밋 두 번 사이에 생기는 틈 / 먼저 묻고, 모두 된다고 하면 그때 커밋한다 / PostgreSQL 두 대로 직접 해 보기 / 한 곳이 아니라고 답하면 / 결정 직전에 코디네이터가 죽으면 / 결정을 먼저 적어 두는 코디네이터 / XA는 이 약속을 표준으로 만든 것 / 3PC가 블로킹을 풀지 못하는 이유 / 마이크로서비스가 2PC를 피하는 이유 / 준비된 채 버려진 트랜잭션을 만났을 때 / 2PC가 남기는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices, saga-pattern, db-type-newsql, raft-consensus, idempotency-key, leader-election
 - 키워드 백링크 →: zero-downtime-migrations, network-partitions, kafka-basics, db-types-overview, postgres-getting-started, acid-transactions
-- 이 글로 오는 글 ←: acid-transactions, db-locking-deadlock, db-sharding, db-type-newsql, leader-election, microservices, mongodb-document-model, postgres-mvcc-vacuum, saga-pattern, sd-hotel-inventory-scaling, sd-sharding-intro, sd-wallet-transfer, transactional-outbox
+- 이 글로 오는 글 ←: acid-transactions, db-locking-deadlock, db-sharding, db-type-newsql, leader-election, microservices, mongodb-document-model, postgres-mvcc-vacuum, saga-pattern, sd-hotel-inventory-scaling, sd-payment-flow, sd-payment-reliability, sd-sharding-intro, sd-wallet-transfer, transactional-outbox
 
 #### `edge-caching` — 엣지 캐싱: 캐시 키, 상한 사본, 히트율, 그리고 개인화
 
@@ -4838,7 +4838,7 @@
 - 소제목: 두 배씩 늘리고 상한에서 멈춘다 / 같은 순간 실패하면 같은 순간 돌아온다 / 무작위를 섞는 세 가지 방법 / 클라이언트 천 개로 재 본다 / 서버가 기다릴 시간을 알려 줄 때: Retry-After / 재시도 말고도 같은 시각에 몰리는 것들 / 지터와 Retry-After를 함께 다루는 재시도 함수 / 값 고르기와 흔한 실수 / 빗살 모양 그래프를 만났을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, retries, timeouts, rate-limiting-in-practice, caching-strategies
 - 키워드 백링크 →: k8s-pod-lifecycle, client-data-cache, k8s-architecture, sd-split-web-and-db, redis-basics, dns
-- 이 글로 오는 글 ←: caching-strategies, dead-letter-queue, deadlocks, failover, fault-tolerance, k8s-controllers-reconcile, long-polling, message-queue-basics, resilience-patterns, retries, sd-hotel-double-booking, sd-notification-reliability, sd-web-crawler-politeness-dedup, tail-latency, timeouts, webhooks, websocket-deep-dive
+- 이 글로 오는 글 ←: caching-strategies, dead-letter-queue, deadlocks, failover, fault-tolerance, k8s-controllers-reconcile, long-polling, message-queue-basics, resilience-patterns, retries, sd-hotel-double-booking, sd-notification-reliability, sd-payment-reliability, sd-web-crawler-politeness-dedup, tail-latency, timeouts, webhooks, websocket-deep-dive
 
 #### `fault-tolerance` — 내결함성: 결함을 가리고, 빨리 멈추게 하고, 작은 칸에 가둔다
 
@@ -4926,7 +4926,7 @@
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: timeouts, retries, exponential-backoff-jitter, idempotency-key, circuit-breaker, gateway
 - 키워드 백링크 →: client-data-cache, tail-latency, service-mesh, latency-bandwidth-throughput, backpressure, osi-in-practice, sql-batch-timeout-pool, grpc, http-methods
-- 이 글로 오는 글 ←: acid-transactions, argocd-basics, batch-processing, browser-fetch, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, exponential-backoff-jitter, fault-tolerance, gateway, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, sd-hotel-inventory-scaling, sd-notification-reliability, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: acid-transactions, argocd-basics, batch-processing, browser-fetch, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, exponential-backoff-jitter, fault-tolerance, gateway, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, sd-hotel-inventory-scaling, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, webhooks
 
 #### `retries` — 재시도는 공짜가 아니다: 무엇을, 몇 번, 어디서 다시 보내나
 
@@ -4948,7 +4948,7 @@
 - 소제목: 되돌리지 않고 반대로 한다 / 단계는 세 종류로 나뉜다 / 지휘하는 쪽이 순서를 쥐는 오케스트레이션 / 보상 도중에 오케스트레이터가 죽으면 / 지휘자 없이 이벤트로 잇는 코레오그래피 / 중간 상태가 남에게 보인다 / 상태를 바꾸고 알리는 일을 한 번에: 아웃박스 / 워크플로 엔진에 맡길 때 / 사가가 꼬였을 때 현장에서 보는 것 / 사가가 약속하는 것과 하지 않는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices, distributed-transactions-2pc, event-driven-architecture, optimistic-locking, message-delivery-semantics, idempotency-key
 - 키워드 백링크 →: serverless-architecture, postgres-advanced-sql, db-architecture-by-scale, db-type-columnar-olap, db-locking-deadlock, distributed-tracing, kafka-basics, db-transaction-isolation, db-replication-sharding, acid-transactions, dead-letter-queue
-- 이 글로 오는 글 ←: acid-transactions, db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, js-callback-hell, js-pure-functions, microservices, monolith-architecture, pattern-command, pattern-mediator, sd-hotel-inventory-scaling, sd-sharding-intro, sd-wallet-transfer, serverless-architecture, system-design-concepts-map, transactional-outbox
+- 이 글로 오는 글 ←: acid-transactions, db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, js-callback-hell, js-pure-functions, microservices, monolith-architecture, pattern-command, pattern-mediator, sd-hotel-inventory-scaling, sd-payment-flow, sd-payment-reliability, sd-sharding-intro, sd-wallet-transfer, serverless-architecture, system-design-concepts-map, transactional-outbox
 
 #### `scaling-horizontal-vertical` — 수평 확장과 수직 확장: 더 큰 서버냐, 더 많은 서버냐
 
@@ -5059,7 +5059,7 @@
 - 소제목: 읽기는 많고 쓰기는 적다 / 복제본은 주 DB의 기록을 따라 쓴다 / 세 대로 복제를 걸어 보기 / 웹 앱이 읽을 곳과 쓸 곳을 고른다 / 방금 쓴 리뷰가 안 보인다 / 주 DB가 죽으면 누가 이어받나 / 장애 조치를 사람이 하면 늦다 / 복제는 백업이 아니다 / 복제본은 몇 대가 필요할까 / 현장에서 복제를 의심하는 순간 / 이어서 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-load-balancer-stateless, sd-cache-and-cdn-tier, sd-start-single-server, sd-split-web-and-db, sd-multi-datacenter, sd-queue-logging-automation, sd-sharding-intro, db-replication-sharding, sd-capacity-estimation, eventual-consistency, db-consistency-cap, failover, redis-replication-sentinel, backup-strategy
 - 키워드 백링크 →: db-architecture-by-scale, leader-election, postgres-operations, redis-basics, postgres-architecture
-- 이 글로 오는 글 ←: postgres-jsonb-search, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-file-sync-block-upload, sd-hotel-double-booking, sd-load-balancer-stateless, sd-multi-datacenter, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-api-redirect
+- 이 글로 오는 글 ←: postgres-jsonb-search, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-file-sync-block-upload, sd-hotel-double-booking, sd-load-balancer-stateless, sd-multi-datacenter, sd-object-storage-architecture, sd-payment-reliability, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-api-redirect
 
 #### `sd-interview-framework` — 수백만 사용자로 키우기 ⑪: 설계 면접 45분을 네 토막으로 나누기
 
@@ -5125,7 +5125,7 @@
 - 소제목: 복제본을 늘려도 쓰기는 줄지 않는다 / 같은 테이블을 네 DB에 나눠 담기 / 샤딩 키를 고르는 두 가지 기준 / 샤딩 키가 없는 질문은 모든 샤드에 묻는다 / 샤드를 넘는 조인 대신 반정규화 / 샤드를 늘리는 일: 리샤딩 / 유명한 식당 하나가 샤드 하나를 태운다 / 샤드마다 번호가 겹치지 않게 / 샤딩 전에 먼저 해 볼 것 / 다음 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-queue-logging-automation, sd-latency-numbers, sd-start-single-server, sd-split-web-and-db, sd-load-balancer-stateless, sd-db-replication-intro, sd-cache-and-cdn-tier, sd-multi-datacenter, db-sharding, cqrs, db-keys-denormalization, distributed-transactions-2pc, saga-pattern, consistent-hashing, redis-cluster, caching-strategies, sd-unique-id-generator, db-partitioning, db-types-overview
 - 키워드 백링크 →: db-type-key-value, postgres-data-types, sd-news-feed-publishing, db-type-newsql, scaling-horizontal-vertical, redis-basics, microservices, db-modeling-normalization
-- 이 글로 오는 글 ←: db-sharding, mongodb-document-model, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-db-replication-intro, sd-file-sync-block-upload, sd-hotel-inventory-scaling, sd-kv-store-partition-replication, sd-latency-numbers, sd-load-balancer-stateless, sd-metrics-collection, sd-multi-datacenter, sd-news-feed-publishing, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-split-web-and-db, sd-start-single-server, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-wallet-transfer, sql-vs-nosql
+- 이 글로 오는 글 ←: db-sharding, mongodb-document-model, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-db-replication-intro, sd-file-sync-block-upload, sd-hotel-inventory-scaling, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-load-balancer-stateless, sd-metrics-collection, sd-multi-datacenter, sd-news-feed-publishing, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-split-web-and-db, sd-start-single-server, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-wallet-transfer, sql-vs-nosql
 
 #### `sd-split-web-and-db` — 수백만 사용자로 키우기 ②: 웹 서버와 DB 나누기
 
@@ -5147,7 +5147,7 @@
 - 소제목: 주소를 치면 어디로 가나 / 실제로 요청을 보내 보면 / 웹과 앱은 받는 모양이 다르다 / 한 대에 다 있으면 편한 것들 / 가장 먼저 무너지는 곳 1: 무거운 요청 하나 / 가장 먼저 무너지는 곳 2: 서버가 꺼지는 순간 / 가장 먼저 무너지는 곳 3: 디스크 한 장에 모든 데이터 / 한 대로 얼마나 버틸까 계산해 보기 / 처음부터 크게 만들면 안 되나 / 현장에서 한 대짜리 서버가 아플 때 / 이어서 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-split-web-and-db, sd-load-balancer-stateless, sd-db-replication-intro, sd-cache-and-cdn-tier, sd-multi-datacenter, sd-queue-logging-automation, sd-sharding-intro, dns, api-versioning, sd-capacity-estimation, event-loop, backup-strategy
 - 키워드 백링크 →: sd-interview-framework, high-availability, sd-object-storage-architecture, db-replication-sharding
-- 이 글로 오는 글 ←: acid-transactions, caching-strategies, cloud-cost-optimization, consistent-hashing, cron-jobs, curl-for-debugging, db-partitioning, db-replication-sharding, db-sharding, db-type-embedded, db-type-graph, db-type-newsql, db-type-time-series, db-type-wide-column, dhcp, disaster-recovery, health-checks, http-status-codes, layered-architecture, linux-grep-awk-sed, load-balancer-basics, mongodb-document-model, network-troubleshooting-by-layer, osi-in-practice, percentile-latency, postgres-roles-security, race-conditions, rate-limiting-in-practice, redis-basics, redis-persistence-ha, rolling-deployment, router-vs-switch, scaling-horizontal-vertical, sd-autocomplete-trie, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-db-replication-intro, sd-email-storage-search, sd-file-sync-block-upload, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-load-balancer-stateless, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-storage-partitions, sd-multi-datacenter, sd-news-feed-publishing, sd-notification-system, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-stock-exchange-low-latency, sd-url-shortener-api-redirect, sd-video-upload-transcoding, sd-web-crawler-architecture, tail-latency, token-login, traffic-shaping-qos
+- 이 글로 오는 글 ←: acid-transactions, caching-strategies, cloud-cost-optimization, consistent-hashing, cron-jobs, curl-for-debugging, db-partitioning, db-replication-sharding, db-sharding, db-type-embedded, db-type-graph, db-type-newsql, db-type-time-series, db-type-wide-column, dhcp, disaster-recovery, health-checks, http-status-codes, layered-architecture, linux-grep-awk-sed, load-balancer-basics, mongodb-document-model, network-troubleshooting-by-layer, osi-in-practice, percentile-latency, postgres-roles-security, race-conditions, rate-limiting-in-practice, redis-basics, redis-persistence-ha, rolling-deployment, router-vs-switch, scaling-horizontal-vertical, sd-autocomplete-trie, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-db-replication-intro, sd-email-storage-search, sd-file-sync-block-upload, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-storage-partitions, sd-multi-datacenter, sd-news-feed-publishing, sd-notification-system, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-stock-exchange-low-latency, sd-url-shortener-api-redirect, sd-video-upload-transcoding, sd-web-crawler-architecture, tail-latency, token-login, traffic-shaping-qos
 
 ### Programming › System Design › 설계 사례 (`programming/system-design/case-studies`)
 
@@ -5158,7 +5158,7 @@
 - 키워드: 카파 아키텍처, 람다 아키텍처
 - 길이: 376줄
 - 소제목: 노드 하나가 죽었다 살아나면 / 같은 클릭이 두 번 오는 길은 둘이다 / 클릭마다 번호를 붙여 거른다 / 오프셋을 언제 저장하나 / 결과와 책갈피를 한 곳에 둔다 / 더하지 말고 덮어쓰면 / 메모리에 있던 칸은 스냅샷으로 지킨다 / 하루가 끝나면 원본으로 다시 센다 / 다시 계산하는 길을 하나로 둔다 / 광고 하나에 클릭이 몰리면 / 집계가 맞는지 지켜보는 숫자 / 다음에 읽을 글 / 면접에서 나올 만한 질문
-- 직접 링크 →: sd-ad-click-stream-windows, sd-hotel-double-booking, message-delivery-semantics, idempotency-key, kafka-basics, bloom-filter, batch-processing, hyperloglog
+- 직접 링크 →: sd-ad-click-stream-windows, sd-hotel-double-booking, message-delivery-semantics, idempotency-key, kafka-basics, bloom-filter, batch-processing, hyperloglog, sd-payment-reliability
 - 키워드 백링크 →: db-type-embedded, postgres-architecture, http-methods
 - 이 글로 오는 글 ←: sd-ad-click-stream-windows, sd-hotel-double-booking
 
@@ -5335,8 +5335,30 @@
 - 길이: 403줄
 - 소제목: 파일 가운데를 고치는 쓰기는 느리다 / 먼저 로그 끝에 한 줄 적는다 / 메모리에서는 정렬해 둔다: 멤테이블 / 가득 차면 정렬된 파일로 내린다: SSTable / 직접 만든 작은 LSM / 읽기는 새것부터 뒤진다 / 프로세스가 죽어도 로그가 남는다 / 파일이 쌓이면 합친다 / 읽기가 느려졌다는 신고가 오면 / 네 편을 한 장에 모으면 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-kv-store-failure-handling, sd-unique-id-generator, sd-kv-store-partition-replication, sd-kv-store-versioning, db-type-wide-column, db-index, bloom-filter, db-type-key-value
-- 키워드 백링크 →: db-type-embedded, db-type-relational, merkle-tree, clock-skew, db-index-pitfalls
+- 키워드 백링크 →: db-type-embedded, sd-leaderboard-sorted-set, db-type-relational, merkle-tree, clock-skew, db-index-pitfalls
 - 이 글로 오는 글 ←: bloom-filter, db-type-wide-column, sd-email-storage-search, sd-kv-store-failure-handling, sd-kv-store-partition-replication, sd-kv-store-versioning, sd-maps-location-eta, sd-object-storage-versioning-multipart, sd-unique-id-generator, sd-wallet-event-sourcing
+
+#### `sd-leaderboard-scaling` — 게임 리더보드 설계 ②: 샤드로 나누기, 동점 깨기, 다시 만들기
+
+- 요약: 순위표 키 하나는 Redis Cluster가 나눠 주지 않는다. 점수 구간 샤드와 해시 샤드의 스캐터-개더를 Redis 네 대로 비교하고, 합성 점수로 동점을 깨고, 원본에서 순위표를 다시 만든다.
+- 태그: System Design, Redis, Scalability, Distributed Systems, Backend
+- 키워드: 점수 구간 샤딩, 스캐터-개더, 동점 깨기, 백분위 순위
+- 길이: 400줄
+- 소제목: 키 하나는 나눠지지 않는다 / 점수 구간으로 나누기 / 점수가 경계를 넘을 때 / 사용자 ID로 나누기 / 나눈 대가를 재 본다 / 먼저 도달한 사람이 위에 서게 / Redis 없이 NoSQL로 만든다면 / 다 잃었을 때 다시 만들기 / 나눈 뒤에 생기는 문의 / 샤드 결과를 직접 합쳐 보기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
+- 직접 링크 →: sd-leaderboard-sorted-set, sd-payment-flow, redis-cluster, sd-sharding-intro, sd-news-feed-retrieval
+- 키워드 백링크 →: db-type-wide-column, db-type-key-value, js-array-transform, sd-start-single-server, sd-mq-storage-partitions, redis-basics
+- 이 글로 오는 글 ←: sd-leaderboard-sorted-set, sd-payment-flow
+
+#### `sd-leaderboard-sorted-set` — 게임 리더보드 설계 ①: Redis 정렬된 셋으로 상위 10명과 내 순위 구하기
+
+- 요약: 테이블로 순위를 구하면 내 앞사람을 하나씩 세야 해서 하위권일수록 느려진다. Redis 정렬된 셋으로 옮겨 100만 명에서 상위 10명, 내 순위, 공동 순위, 중복 반영 막기를 직접 재 본다.
+- 태그: System Design, Redis, Backend
+- 키워드: 게임 리더보드, 스킵 리스트, 주변 순위
+- 길이: 496줄
+- 소제목: 테이블 하나로 만든 순위표 / 내 순위는 내 위에 몇 명이 있는지 세는 일 / 요구 사항을 숫자로 적는다 / 점수는 게임 서버만 올린다 / 정렬된 셋이 늘 줄 서 있는 이유 / 명령 네 개로 끝나는 순위표 / 0부터 세는 순위와 공동 순위 / 한 번에 다 꺼내면 모두가 멈춘다 / 화면에 이름을 붙이는 쪽 / 같은 판 결과가 두 번 오면 / 달이 바뀌고 Redis가 죽을 때 / 순위가 이상하다는 문의가 오면 / 숫자를 직접 어림해 보기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
+- 직접 링크 →: sd-object-storage-versioning-multipart, sd-leaderboard-scaling, sd-payment-flow, redis-basics, sd-news-feed-retrieval, idempotency-key, transactional-outbox, redis-persistence-ha
+- 키워드 백링크 →: sd-start-single-server, sql-query-rewrite
+- 이 글로 오는 글 ←: redis-basics, redis-memory-eviction, sd-kv-store-write-read-path, sd-leaderboard-scaling, sd-object-storage-architecture, sd-object-storage-durability, sd-object-storage-versioning-multipart
 
 #### `sd-maps-location-eta` — 지도 서비스 설계 ②: 위치를 모으고 도착 시간을 고치기
 
@@ -5413,7 +5435,7 @@
 - 소제목: 테이블 하나로 큐를 만들면 / 만들 것의 크기를 먼저 정한다 / 지우지 않고 뒤에 붙이기만 한다 / 메시지 한 건이 디스크에 놓이는 모양 / 파일 하나가 끝없이 커지면 / 오프셋 7번을 찾아가는 길 / 디스크는 느리다는 말이 반만 맞는 이유 / 한 파일로는 못 받는 양 / 파티션 수는 나중에 바꾸기 어렵다 / 몇 대, 몇 파티션이 필요한지 세어 본다 / 현장에서 이 구조가 드러나는 순간 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-maps-location-eta, sd-mq-consumer-groups, sd-mq-replication, sd-queue-logging-automation, kafka-basics, message-queue-basics, pub-sub, consistent-hashing, sd-capacity-estimation, rabbitmq-basics
 - 키워드 백링크 →: db-type-key-value, sd-start-single-server
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-partitioning, db-replication-sharding, db-type-key-value, db-type-wide-column, db-types-overview, geohash, kafka-basics, lossy-counting, message-queue-basics, postgres-architecture, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-maps-location-eta, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-replication, sd-nearby-friends, sd-stock-exchange-low-latency, sql-vs-nosql
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-partitioning, db-replication-sharding, db-type-key-value, db-type-wide-column, db-types-overview, geohash, kafka-basics, lossy-counting, message-queue-basics, postgres-architecture, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-leaderboard-scaling, sd-maps-location-eta, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-replication, sd-nearby-friends, sd-stock-exchange-low-latency, sql-vs-nosql
 
 #### `sd-nearby-friends` — 주변 친구 설계: 움직이는 위치를 친구에게 밀어 주기
 
@@ -5446,7 +5468,7 @@
 - 소제목: ID 20개가 화면이 되기까지 / 캐시를 바뀌는 속도로 나눈다 / 하나씩 물으면 왕복이 스물한 번 / 피드 하나가 쓰는 메모리 / 스크롤하는 동안 새 글이 들어오면 / Redis 점수에 64비트 ID를 넣으면 / 500개 너머로 내려가면 / 맨 위로 당겨 새 글을 볼 때 / 피드가 이상하다는 문의가 오면 / 커서로 페이지 넘기기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-news-feed-publishing, sd-chat-connections, caching-strategies, sd-latency-numbers, api-pagination-sorting, realtime-communication, long-polling
 - 키워드 백링크 →: db-sharding, redis-basics, pub-sub, sql-query-rewrite
-- 이 글로 오는 글 ←: sd-chat-connections, sd-news-feed-publishing
+- 이 글로 오는 글 ←: sd-chat-connections, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-news-feed-publishing
 
 #### `sd-notification-reliability` — 알림 시스템 설계 ②: 잃지 않고 두 번 보내지 않기
 
@@ -5477,7 +5499,7 @@
 - 키워드: 객체 저장소, 메타데이터 저장소, 데이터 라우팅 서비스, 볼륨 파일
 - 길이: 477줄
 - 소제목: 웹 서버 디스크에 사진을 쌓으면 / 블록, 파일, 객체는 쌓는 층이 다르다 / 버킷, 객체, 키 / 무엇을 얼마나 담을지 숫자로 정한다 / 본문과 이름표를 따로 둔다 / 사진 한 장을 올리는 길 / 창고 안을 들여다보면 / 사진 한 장을 파일 하나로 두면 / 큰 파일에 이어 쓰고 위치를 적는다 / 장부는 무엇을 담고 어떻게 나누나 / 폴더 안 보기가 느려지는 이유 / 장애가 나면 어디부터 보나 / 다음에 읽을 글 / 면접에서 나올 만한 질문
-- 직접 링크 →: sd-email-storage-search, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-load-balancer-stateless, raft-consensus, consistent-hashing, sd-kv-store-partition-replication, sd-db-replication-intro, sd-sharding-intro, sd-video-upload-transcoding, sd-file-sync-block-upload
+- 직접 링크 →: sd-email-storage-search, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-leaderboard-sorted-set, sd-load-balancer-stateless, raft-consensus, consistent-hashing, sd-kv-store-partition-replication, sd-db-replication-intro, sd-sharding-intro, sd-video-upload-transcoding, sd-file-sync-block-upload
 - 키워드 백링크 →: js-memory-leak, sd-start-single-server, db-type-embedded, db-type-relational, db-replication-sharding
 - 이 글로 오는 글 ←: backup-strategy, disaster-recovery, external-secrets, git-internals-basics, k8s-learning-roadmap, prometheus-basics, scaling-horizontal-vertical, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, sd-email-protocols, sd-email-storage-search, sd-kv-store-partition-replication, sd-load-balancer-stateless, sd-maps-tiles-routing, sd-metrics-storage-alerting, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-start-single-server, sd-web-crawler-architecture
 
@@ -5488,7 +5510,7 @@
 - 키워드: 이레이저 코딩, 리드-솔로몬, 비트 부패, 장애 도메인, 스크럽
 - 길이: 391줄
 - 소제목: 세 벌을 두면 몇 개의 9가 나오나 / 같은 랙에 세 벌을 두면 / 몇 벌이 확인해야 성공인가 / 세 벌은 비싸다 / 둘을 잃어도 되살리려면 / 조각을 AZ에 나눠 두면 / 무엇을 고를지 숫자로 비교한다 / 디스크가 조용히 틀린 값을 줄 때 / 어떤 체크섬을 쓰나 / 현장에서 내구성이 깨지는 순간 / 다음에 읽을 글 / 면접에서 나올 만한 질문
-- 직접 링크 →: sd-object-storage-architecture, sd-object-storage-versioning-multipart, sd-kv-store-partition-replication, sd-file-sync-block-upload, encryption-at-rest, backup-strategy, merkle-tree
+- 직접 링크 →: sd-object-storage-architecture, sd-object-storage-versioning-multipart, sd-leaderboard-sorted-set, sd-kv-store-partition-replication, sd-file-sync-block-upload, encryption-at-rest, backup-strategy, merkle-tree
 - 키워드 백링크 →: tail-latency, vpc-basics
 - 이 글로 오는 글 ←: sd-object-storage-architecture, sd-object-storage-versioning-multipart
 
@@ -5499,9 +5521,31 @@
 - 키워드: 삭제 마커, 합친 ETag, 고아 조각, 볼륨 컴팩션
 - 길이: 425줄
 - 소제목: 덮어쓰면 옛 본문은 어디로 가나 / 지우기도 새 버전 하나다 / 버전이 쌓이면 요금도 쌓인다 / 5GB 파일은 한 번에 받지 않는다 / 조각 ETag와 합친 ETag / 조각을 이어 붙일까, 목록만 적을까 / 끝나지 않은 업로드가 남기는 것 / 쓰레기는 여러 군데서 생긴다 / 컴팩션을 직접 돌려 본다 / 청소하다 살아 있는 것을 버리지 않으려면 / 다음에 읽을 글 / 면접에서 나올 만한 질문
-- 직접 링크 →: sd-object-storage-architecture, sd-object-storage-durability, sd-unique-id-generator, backup-strategy, sd-video-upload-transcoding, sd-kv-store-write-read-path
+- 직접 링크 →: sd-object-storage-architecture, sd-object-storage-durability, sd-leaderboard-sorted-set, sd-unique-id-generator, backup-strategy, sd-video-upload-transcoding, sd-kv-store-write-read-path
 - 키워드 백링크 →: db-sharding, db-type-wide-column, js-memory-leak, db-type-embedded, http-caching-cdn
-- 이 글로 오는 글 ←: sd-object-storage-architecture, sd-object-storage-durability
+- 이 글로 오는 글 ←: sd-leaderboard-sorted-set, sd-object-storage-architecture, sd-object-storage-durability
+
+#### `sd-payment-flow` — 결제 시스템 설계 ①: 돈이 움직이는 길과 복식부기 원장
+
+- 요약: 카드 번호는 결제 대행사의 결제 화면이 받고, 결과는 웹훅으로 확정한다. 금액을 정수로 적고, 모든 돈의 움직임을 합이 0인 복식부기 거래로 PostgreSQL 원장에 남긴다.
+- 태그: System Design, Backend, PostgreSQL, Transaction
+- 키워드: 결제 대행사, 복식부기, 호스티드 결제 페이지, 페이아웃
+- 길이: 471줄
+- 소제목: 돈은 누구에게서 누구에게 가나 / 카드 번호를 만지지 않는 결제 페이지 / 결제 하나를 두 개의 표로 / 금액은 정수로 적는다 / 돈은 생기지도 사라지지도 않는다 / 하루가 지나 돈이 실제로 움직일 때 / 지갑은 원장에서 나온 숫자다 / 결제 서비스 안의 역할 나누기 / 결제가 몇 시간 걸릴 때 / 결제 문의가 들어오면 / 할인 금액을 판매자별로 나누기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
+- 직접 링크 →: sd-leaderboard-scaling, sd-payment-reliability, sd-wallet-transfer, webhooks, acid-transactions, distributed-transactions-2pc, saga-pattern, transactional-outbox
+- 키워드 백링크 →: resilience-patterns, http-methods
+- 이 글로 오는 글 ←: js-promise-combinators, pattern-chain-of-responsibility, rollback-strategy, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-payment-reliability, sd-wallet-transfer, transactional-outbox
+
+#### `sd-payment-reliability` — 결제 시스템 설계 ②: 재시도, 웹훅, 대사로 한 번만 청구하기
+
+- 요약: 시간 초과는 실패가 아니라 모르는 상태다. 가짜 PSP로 이중 청구, 중복·위조·분실 웹훅을 재현해 멱등성 키, 상태 규칙, 스위퍼로 막고, 정산 파일과 원장을 대사해 남은 어긋남을 잡는다.
+- 태그: System Design, Backend, Transaction, Distributed Systems
+- 키워드: 결제 대사, 정산 파일, 이중 청구
+- 길이: 403줄
+- 소제목: 시간 초과는 실패가 아니다 / 같은 키로 다시 보내면 PSP가 알아본다 / 다시 보낼 실패, 멈출 실패, 모르는 실패 / 한 번만 청구하려면 구간마다 거른다 / 웹훅은 두 번 오고, 가짜가 오고, 안 온다 / 오래 멈춘 결제를 직접 물어본다 / 우리 기록과 PSP 기록을 맞춰 본다 / 어긋난 줄을 처리하는 순서 / 결제 DB의 복제와 읽기 / 결제에서 빠뜨리기 쉬운 보안 / 결제 장애가 났을 때 보는 순서 / 대사를 직접 짜 보기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
+- 직접 링크 →: sd-payment-flow, sd-wallet-transfer, idempotency-key, exponential-backoff-jitter, dead-letter-queue, message-delivery-semantics, webhooks, sd-db-replication-intro, distributed-transactions-2pc, saga-pattern
+- 키워드 백링크 →: db-replication-sharding, resilience-patterns, http-methods
+- 이 글로 오는 글 ←: sd-ad-click-exactly-once, sd-payment-flow, sd-wallet-transfer
 
 #### `sd-proximity-service` — 주변 검색 설계: 반경 안의 가게를 칸으로 찾기
 
@@ -5619,9 +5663,9 @@
 - 키워드: TC/C, Try-Confirm-Cancel, 빈 취소, 매달린 Try
 - 길이: 534줄
 - 소제목: 지갑 하나, 테이블 하나일 때 / 초당 2만 건이면 DB 한 대로 모자란다 / 커밋 두 번 사이에서 돈이 사라진다 / 2PC: 둘 다 준비시키고 한 번에 커밋한다 / Try-Confirm-Cancel: 먼저 묶어 두고 나중에 확정한다 / 코디네이터가 Try 도중에 죽으면 / 취소가 Try보다 먼저 도착하면 / 사가: 차례로 하고, 실패하면 반대로 되돌린다 / 무엇을 고르나 / 같은 지갑을 다음 글에서 다시 쌓는다 / 면접에서 나올 만한 질문
-- 직접 링크 →: sd-wallet-event-sourcing, sd-stock-exchange-order-book, acid-transactions, idempotency-key, sd-sharding-intro, distributed-transactions-2pc, saga-pattern
+- 직접 링크 →: sd-payment-reliability, sd-payment-flow, sd-wallet-event-sourcing, sd-stock-exchange-order-book, acid-transactions, idempotency-key, sd-sharding-intro, distributed-transactions-2pc, saga-pattern
 - 키워드 백링크 →: event-driven-architecture, redis-basics, http-methods
-- 이 글로 오는 글 ←: sd-wallet-event-sourcing
+- 이 글로 오는 글 ←: sd-payment-flow, sd-payment-reliability, sd-wallet-event-sourcing
 
 #### `sd-web-crawler-architecture` — 웹 크롤러 설계 ①: 시드에서 프런티어까지, 한 바퀴 도는 구조
 
@@ -5763,9 +5807,12 @@
 - 검색어 자동완성 → `sd-autocomplete-trie`
 - 게이트웨이 엔드포인트 → `vpc-subnets-route-tables`
 - 게임 데이 → `chaos-engineering`
+- 게임 리더보드 → `sd-leaderboard-sorted-set`
 - 격리 수준 → `db-transaction-isolation`
 - 결정적 상태 기계 → `sd-wallet-event-sourcing`
 - 결정적 재생 → `sd-stock-exchange-low-latency`
+- 결제 대사 → `sd-payment-reliability`
+- 결제 대행사 → `sd-payment-flow`
 - 경쟁 상태 → `race-conditions`
 - 경쟁하는 컨슈머 → `message-queue-basics`
 - 계층형 쿼리 → `sqld-top-n-hierarchical-pivot`
@@ -5876,6 +5923,7 @@
 - 동적 비밀 → `secrets-management`
 - 동적 스코프 → `js-scope-lexical`
 - 동적 import → `code-splitting`
+- 동점 깨기 → `sd-leaderboard-scaling`
 - 동점 처리 열 → `api-pagination-sorting`
 - 되돌리기 스택 → `pattern-command`
 - 두 번째로 큰 값 → `sql-interview-problems`
@@ -5982,6 +6030,7 @@
 - 배치 INSERT → `sql-batch-timeout-pool`
 - 배포 파이프라인 → `k8s-deploy-pipeline-eks`
 - 백그라운드 탭 스로틀링 → `js-timers-accuracy`
+- 백분위 순위 → `sd-leaderboard-scaling`
 - 백프레셔 → `backpressure`
 - 백필 → `zero-downtime-migrations`
 - 버전 벡터 → `sd-kv-store-versioning`
@@ -6001,6 +6050,7 @@
 - 보안 그룹 → `security-groups-nacl`
 - 보편 확장성 법칙 → `scaling-horizontal-vertical`
 - 복사 깊이 → `js-shallow-deep-copy`
+- 복식부기 → `sd-payment-flow`
 - 복원 테스트 → `backup-strategy`
 - 복제 슬롯 → `db-replication-sharding`
 - 복제 지연 → `db-replication-sharding`
@@ -6112,6 +6162,7 @@
 - 스레드 안전 → `thread-safety`
 - 스칼라 서브쿼리 → `sqld-correlated-subquery`
 - 스캐빈지 → `garbage-collection`
+- 스캐터-개더 → `sd-leaderboard-scaling`
 - 스케줄링 프레임워크 → `k8s-api-aggregation-schedulers`
 - 스켈레톤 UI → `loading-patterns`
 - 스코프 체인 → `js-scope-lexical`
@@ -6119,6 +6170,7 @@
 - 스크럽 → `sd-object-storage-durability`
 - 스키마 레지스트리 → `schema-versioning`
 - 스키마 온 리드 → `sql-vs-nosql`
+- 스킵 리스트 → `sd-leaderboard-sorted-set`
 - 스태거 애니메이션 → `animation-patterns`
 - 스택 오버플로 → `js-execution-context`
 - 스테이징 영역 → `git-staging-area`
@@ -6246,6 +6298,7 @@
 - 이중 쓰기 → `transactional-outbox`
 - 이중 예약 → `sd-hotel-double-booking`
 - 이중 제출 쿠키 → `csrf`
+- 이중 청구 → `sd-payment-reliability`
 - 이터레이터 패턴 → `pattern-iterator`
 - 이터레이터 헬퍼 → `pattern-iterator`
 - 익스체인지 → `rabbitmq-basics`
@@ -6314,6 +6367,7 @@
 - 전이 테이블 → `postgres-functions-triggers`
 - 전체 재동기화 → `sd-file-sync-conflicts`
 - 전파 지연 → `latency-bandwidth-throughput`
+- 점수 구간 샤딩 → `sd-leaderboard-scaling`
 - 점프 해시 → `consistent-hashing`
 - 접근자 속성 → `js-object-methods`
 - 접두사 샤딩 → `sd-autocomplete-data-pipeline`
@@ -6321,6 +6375,7 @@
 - 접속 위치 표 → `sd-chat-connections`
 - 접속 URI → `postgres-connections-pg-hba`
 - 정규화 → `db-modeling-normalization`
+- 정산 파일 → `sd-payment-reliability`
 - 정상 상태 가설 → `chaos-engineering`
 - 정수 나눗셈 → `sql-aggregation-pitfalls`
 - 정적 렌더링 → `nextjs-static-dynamic-rendering`
@@ -6333,6 +6388,7 @@
 - 좀비 프로세스 → `linux-processes-signals`
 - 주 DB → `sd-db-replication-intro`
 - 주변 검색 → `sd-proximity-service`
+- 주변 순위 → `sd-leaderboard-sorted-set`
 - 주변 친구 → `sd-nearby-friends`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
@@ -6484,6 +6540,7 @@
 - 팬아웃 증폭 → `tail-latency`
 - 퍼블릭 서브넷 → `vpc-subnets-route-tables`
 - 퍼사드 패턴 → `pattern-facade`
+- 페이아웃 → `sd-payment-flow`
 - 펜싱 토큰 → `distributed-lock`
 - 포스트모템 → `postmortems`
 - 포워드 프록시 → `proxy-reverse-proxy`
@@ -6550,6 +6607,7 @@
 - 형제 버전 → `sd-kv-store-versioning`
 - 형태소 분석기 → `elasticsearch-inverted-index`
 - 호가창 → `sd-stock-exchange-order-book`
+- 호스티드 결제 페이지 → `sd-payment-flow`
 - 호이스팅 → `js-hoisting-tdz`
 - 혼잡 제어 → `tcp-reliability-congestion`
 - 혼합 팬아웃 → `sd-news-feed-publishing`
@@ -7641,9 +7699,9 @@
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (29%: 연산자, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (29%: 붙이는, 행을, sqld, 시험, 포인트)
-- `sqld-null-functions` ↔ `sqld-single-row-functions` (28%: 글에서, 사원, 테이블, sqld, 시험, 포인트, oracle)
 - `javascript-roadmap` ↔ `k8s-learning-roadmap` (27%: 01, 02, 03, 04, 05, 06, 07, 증상이면)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
+- `sqld-null-functions` ↔ `sqld-single-row-functions` (27%: 글에서, 사원, 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `server-sent-events` ↔ `long-polling` (26%: 붙잡는, 장애를, 만났을, 가장, nginx, 깊게, 재연결)
@@ -7658,29 +7716,37 @@
 - `sqld-set-operators` ↔ `sqld-top-n-hierarchical-pivot` (24%: 행을, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-group-by-having` (24%: 행을, sqld, 시험, 포인트)
 - `sd-sharding-intro` ↔ `db-sharding` (23%: 늘려도, 담기, 샤딩, 키를, 샤드를, 샤드)
-- `sql-joins-in-practice` ↔ `sql-aggregation-pitfalls` (23%: 행이, 숫자로, left, 지운다, 행을, 리포트, 숫자가, 센다)
 - `csrf` ↔ `cookie-session-login` (23%: 붙는다는, 것의, 대가, 붙는, 정리, cookie, csrf)
+- `sql-joins-in-practice` ↔ `sql-aggregation-pitfalls` (23%: 행이, 숫자로, left, 지운다, 행을, 리포트, 숫자가, 센다)
 - `sd-db-replication-intro` ↔ `db-replication-sharding` (22%: 복제본은, 대로, 방금, 보인다, 죽으면, 이어받나, 복제는, 나누기)
-- `redis-cluster` ↔ `db-sharding` (22%: 키를, 데이터를, 나누는, 해시)
-- `ansible-network-automation` ↔ `git-ignore-config` (21%: diff, 설정, 파일은, 전체를)
+- `redis-cluster` ↔ `db-sharding` (21%: 키를, 데이터를, 나누는, 해시)
 - `sqld-correlated-subquery` ↔ `sqld-type-conversion` (21%: 예제, sqld, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-rollup-cube-grouping-sets` (21%: 적는다, sqld, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-group-by-having` (21%: sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-joins` (21%: sqld, 시험, 포인트, oracle)
 - `animation-patterns` ↔ `loading-patterns` (21%: 누른, ux, frontend, accessibility, 이름을, 알면, 부탁이)
 - `sd-news-feed-retrieval` ↔ `sd-news-feed-publishing` (20%: 피드, 글이, 넣으면, 글을, 문의가, 오면, 뉴스)
+- `ansible-network-automation` ↔ `git-ignore-config` (20%: diff, 설정, 파일은, 전체를)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
 - `sd-capacity-estimation` ↔ `sd-latency-numbers` (19%: 계산해, 자주, 실수, 수백만, 사용자로, 키우기)
 - `sql-aggregation-pitfalls` ↔ `sqld-group-by-having` (19%: 세는, 행이, 행을, group, 집계, by)
 - `count-min-sketch` ↔ `lossy-counting` (19%: lossy, 데이터로, 세는, data, structure, probabilistic)
+- `failover` ↔ `redis-replication-sentinel` (19%: 비동기, 복제는, 장애, 조치)
+- `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `sd-interview-framework` ↔ `sd-db-replication-intro` (19%: 곳을, 수백만, 사용자로, 키우기, 나누기)
-- `sql-vs-nosql` ↔ `db-types-overview` (19%: 주문을, 모양으로, 질문, 먼저다, nosql)
-- `sqld-null-functions` ↔ `sqld-top-n-hierarchical-pivot` (19%: 따라, 행을, sqld, 시험, 포인트)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `sd-payment-reliability` ↔ `sd-payment-flow`
+- `sd-payment-reliability` ↔ `sd-wallet-transfer`
+- `sd-payment-flow` ↔ `sd-leaderboard-scaling`
+- `sd-payment-flow` ↔ `sd-wallet-transfer`
+- `sd-payment-flow` ↔ `transactional-outbox`
+- `sd-leaderboard-scaling` ↔ `sd-leaderboard-sorted-set`
+- `sd-leaderboard-sorted-set` ↔ `sd-object-storage-versioning-multipart`
+- `sd-leaderboard-sorted-set` ↔ `redis-basics`
 - `sd-stock-exchange-low-latency` ↔ `sd-stock-exchange-order-book`
 - `sd-stock-exchange-low-latency` ↔ `sd-wallet-event-sourcing`
 - `sd-stock-exchange-order-book` ↔ `sd-wallet-event-sourcing`

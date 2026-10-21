@@ -2,6 +2,74 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-payment-reliability": {
+    "links": [
+      "sd-payment-flow",
+      "sd-wallet-transfer",
+      "idempotency-key",
+      "exponential-backoff-jitter",
+      "dead-letter-queue",
+      "message-delivery-semantics",
+      "webhooks",
+      "sd-db-replication-intro",
+      "distributed-transactions-2pc",
+      "saga-pattern"
+    ],
+    "mentions": [
+      "db-replication-sharding",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "sd-payment-flow": {
+    "links": [
+      "sd-leaderboard-scaling",
+      "sd-payment-reliability",
+      "sd-wallet-transfer",
+      "webhooks",
+      "acid-transactions",
+      "distributed-transactions-2pc",
+      "saga-pattern",
+      "transactional-outbox"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "sd-leaderboard-scaling": {
+    "links": [
+      "sd-leaderboard-sorted-set",
+      "sd-payment-flow",
+      "redis-cluster",
+      "sd-sharding-intro",
+      "sd-news-feed-retrieval"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-type-key-value",
+      "js-array-transform",
+      "sd-start-single-server",
+      "sd-mq-storage-partitions",
+      "redis-basics"
+    ]
+  },
+  "sd-leaderboard-sorted-set": {
+    "links": [
+      "sd-object-storage-versioning-multipart",
+      "sd-leaderboard-scaling",
+      "sd-payment-flow",
+      "redis-basics",
+      "sd-news-feed-retrieval",
+      "idempotency-key",
+      "transactional-outbox",
+      "redis-persistence-ha"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "sql-query-rewrite"
+    ]
+  },
   "sd-stock-exchange-low-latency": {
     "links": [
       "sd-stock-exchange-order-book",
@@ -51,6 +119,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "sd-wallet-transfer": {
     "links": [
+      "sd-payment-reliability",
+      "sd-payment-flow",
       "sd-wallet-event-sourcing",
       "sd-stock-exchange-order-book",
       "acid-transactions",
@@ -160,7 +230,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "bloom-filter",
       "batch-processing",
-      "hyperloglog"
+      "hyperloglog",
+      "sd-payment-reliability"
     ],
     "mentions": [
       "db-type-embedded",
@@ -243,6 +314,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-object-storage-architecture",
       "sd-object-storage-durability",
+      "sd-leaderboard-sorted-set",
       "sd-unique-id-generator",
       "backup-strategy",
       "sd-video-upload-transcoding",
@@ -260,6 +332,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-object-storage-architecture",
       "sd-object-storage-versioning-multipart",
+      "sd-leaderboard-sorted-set",
       "sd-kv-store-partition-replication",
       "sd-file-sync-block-upload",
       "encryption-at-rest",
@@ -276,6 +349,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-email-storage-search",
       "sd-object-storage-durability",
       "sd-object-storage-versioning-multipart",
+      "sd-leaderboard-sorted-set",
       "sd-load-balancer-stateless",
       "raft-consensus",
       "consistent-hashing",
@@ -890,6 +964,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-embedded",
+      "sd-leaderboard-sorted-set",
       "db-type-relational",
       "merkle-tree",
       "clock-skew",
@@ -2138,6 +2213,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-reporting-sql",
       "microservices",
       "browser-storage",
+      "sd-payment-flow",
       "db-index-design",
       "resilience-patterns",
       "kafka-basics",
@@ -2431,6 +2507,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "streaming-ssr-suspense",
       "rendering-strategies",
+      "sd-payment-flow",
       "event-loop",
       "js-destructuring"
     ]
@@ -4681,6 +4758,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-undo",
       "k8s-daemonset",
       "k8s-configmap",
+      "sd-payment-flow",
       "postgres-operations",
       "redis-basics",
       "cookie-session-login",
@@ -5715,6 +5793,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "sd-payment-flow",
       "event-delegation",
       "http-status-codes"
     ]
@@ -8890,6 +8969,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "sd-leaderboard-sorted-set",
       "layer-mtu-fragmentation",
       "dns"
     ]
@@ -8942,6 +9022,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "redis-cluster",
       "distributed-lock",
+      "sd-leaderboard-sorted-set",
       "sd-start-single-server",
       "pub-sub",
       "db-type-relational",

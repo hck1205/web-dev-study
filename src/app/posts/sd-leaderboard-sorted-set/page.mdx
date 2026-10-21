@@ -1,0 +1,495 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-leaderboard-sorted-set");
+
+이 시리즈에서 이 글의 자리: 앞 글 [객체 저장소 설계 ③: 버전, 멀티파트 업로드, 가비지 컬렉션](/posts/sd-object-storage-versioning-multipart)으로 저장소 이야기가 끝났다. 이 글부터 두 편은 면접의 "실시간 게임 리더보드를 설계해 보세요"를 다룬다. 이 글은 서버 한 대 규모에서 상위 10명과 내 순위를 빠르게 구하는 법, 다음 글 [게임 리더보드 설계 ②: 샤드로 나누기, 동점 깨기, 다시 만들기](/posts/sd-leaderboard-scaling)는 사용자가 열 배로 늘었을 때를 맡는다. 그다음 사례는 [결제 시스템 설계 ①](/posts/sd-payment-flow)이다.
+
+모바일 대전 게임에 월간 토너먼트를 붙였다. 한 판 이기면 1점이다. 로비 화면에는 이번 달 상위 10명과 "내 순위 358,304위"가 뜨고, 내 위아래 네 명씩도 보인다. 처음엔 테이블 하나로 만들었다. 사용자가 늘자 로비 화면이 뜨는 데 1초 넘게 걸린다는 문의가 들어온다. 이상하게도 랭킹 상위권 사용자는 빠르고, 막 시작한 사용자만 느리다.
+
+이 글은 그 이유에서 시작해 Redis의 정렬된 셋으로 옮기는 데까지 간다. 예제는 PostgreSQL 16과 Redis 7.0을 로컬에 띄워 사용자 100만 명으로 직접 쟀다.
+
+## 테이블 하나로 만든 순위표
+
+가장 단순한 모양은 이렇다. 달마다 한 줄씩, 사용자별 점수를 둔다.
+
+```sql
+CREATE TABLE leaderboard (
+  month   date   NOT NULL,          -- 토너먼트가 열린 달
+  user_id bigint NOT NULL,
+  score   int    NOT NULL DEFAULT 0, -- 이긴 판 수
+  PRIMARY KEY (month, user_id)
+);
+
+-- 한 판 이기면
+UPDATE leaderboard SET score = score + 1
+WHERE month = '2026-10-01' AND user_id = 42;
+```
+
+사용자 100만 명을 넣었다. 점수는 대부분 낮고 소수만 높은 모양(평균 40판쯤)으로 만들었다. 상위 10명부터 보자. `score`에 인덱스가 없으면 100만 줄을 다 읽고 정렬한다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT user_id, score FROM leaderboard
+WHERE month = '2026-10-01' ORDER BY score DESC LIMIT 10;
+```
+
+```text
+ Limit (actual time=89.110..93.111 rows=10 loops=1)
+   ->  Gather Merge (actual time=89.107..93.105 rows=10 loops=1)
+         ->  Sort (actual time=85.999..86.001 rows=9 loops=3)
+               Sort Key: score DESC
+               Sort Method: top-N heapsort  Memory: 25kB
+               ->  Parallel Seq Scan on leaderboard (actual time=0.036..50.397 rows=333333 loops=3)
+ Execution Time: 93.184 ms
+```
+
+`Parallel Seq Scan`이 프로세스 세 개로 33만 줄씩 읽었다. `(month, score DESC)` 인덱스를 만들면 바뀐다.
+
+```sql
+CREATE INDEX leaderboard_month_score ON leaderboard (month, score DESC);
+```
+
+```text
+ Limit (actual time=0.045..0.070 rows=10 loops=1)
+   ->  Index Scan using leaderboard_month_score on leaderboard (actual time=0.044..0.068 rows=10 loops=1)
+         Index Cond: (month = '2026-10-01'::date)
+ Execution Time: 0.084 ms
+```
+
+93ms가 0.08ms가 됐다. 인덱스는 이미 점수순으로 정렬돼 있으니 앞에서 10개만 읽으면 끝난다. 상위 10명은 이걸로 해결이다.
+
+## 내 순위는 내 위에 몇 명이 있는지 세는 일
+
+문제는 내 순위다. 순위는 "나보다 점수가 높은 사람 수 + 1"이다. SQL로 그대로 쓰면 이렇다.
+
+```sql
+SELECT count(*) + 1 AS rank FROM leaderboard
+WHERE month = '2026-10-01'
+  AND score > (SELECT score FROM leaderboard
+               WHERE month = '2026-10-01' AND user_id = 293);
+```
+
+상위권인 사용자 293(200점, 6,487위)과 0점인 사용자 42(975,341위)로 같은 쿼리를 돌렸다. 인덱스는 위에서 만든 그대로다.
+
+```text
+-- user 293, 6,487위
+->  Parallel Index Only Scan using leaderboard_month_score on leaderboard (actual time=0.018..0.174 rows=2162 loops=3)
+ Execution Time: 10.045 ms
+
+-- user 42, 975,341위
+->  Parallel Index Only Scan using leaderboard_month_score on leaderboard (actual time=0.035..26.911 rows=325113 loops=3)
+ Execution Time: 50.961 ms
+```
+
+봐야 할 곳은 `rows`다. 6,487위는 인덱스에서 6,486줄(2,162 × 3)을 셌고, 975,341위는 97만 줄을 셌다. B-트리 인덱스는 "이 점수가 어디서 시작하는지"는 빨리 찾지만 "그 앞에 몇 개가 있는지"는 하나씩 세어야 안다. 그래서 순위가 낮을수록 느리다. 처음의 이상한 증상, 막 시작한 사용자만 느린 이유가 이것이다. 이 테이블이 2,500만 줄이 되면 하위권 한 명의 순위 조회가 2,500만 줄을 센다.
+
+게다가 점수가 바뀔 때마다 `score` 인덱스도 고쳐야 한다. 초당 수천 번 점수를 올리면서 같은 인덱스로 수천 번 세는 일은 DB 한 대가 감당하기 버겁다. 앞에 몇 명이 있는지를 미리 알고 있는 자료구조가 필요하다.
+
+## 요구 사항을 숫자로 적는다
+
+설계를 고르기 전에 면접에서처럼 범위부터 정한다.
+
+- 화면: 상위 10명, 내 순위와 점수, 내 위아래 네 명씩.
+- 점수: 이기면 1점. 점수가 같으면 같은 순위로 보여 준다. 동점을 깨는 규칙은 다음 글에서 다룬다.
+- 기간: 달마다 새 토너먼트. 지난달 순위표는 보관만 한다.
+- 실시간: 판이 끝나면 바로 순위에 반영된다. 몇 분 뒤에 한꺼번에 계산하는 방식은 안 된다.
+- 규모: 하루 활성 사용자(DAU) 300만 명, 한 달 활성 사용자(MAU) 1,500만 명, 한 사람이 하루 평균 8판.
+
+점수 쓰기는 하루 300만 × 8 = 2,400만 번, 초당으로 나누면 평균 278번이다. 저녁 시간에 몰리는 걸 다섯 배로 잡으면 초당 1,390번이다. 읽기는 로비를 열 때마다 생기니 쓰기와 비슷하거나 조금 많다. 저장할 사람은 한 달 1,500만 명이다. 이 숫자들은 글 끝의 연습에서 직접 계산해 볼 수 있다.
+
+## 점수는 게임 서버만 올린다
+
+누가 점수를 올리는지부터 정한다. 앱이 "나 이겼어"라고 리더보드 서버에 직접 알리면 편하지만, 앱과 서버 사이에 프록시를 끼운 사용자가 요청을 얼마든지 고쳐 보낼 수 있다. 그래서 판의 결과는 그 판을 실제로 돌린 게임 서버가 판정하고, 리더보드 서비스의 쓰기 API는 내부망의 게임 서버만 부를 수 있게 막는다.
+
+<NetworkTopology
+  caption="점수가 올라가는 길과 막힌 길"
+  width={420}
+  height={280}
+  zones={[
+    { id: "internal", label: "내부망", x: 140, y: 15, w: 270, h: 255, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "게임 앱", x: 55, y: 70, icon: "client" },
+    { id: "cheat", label: "조작된 앱", x: 55, y: 210, icon: "client" },
+    { id: "game", label: "게임 서버", x: 200, y: 70, icon: "server" },
+    { id: "gw", label: "게이트웨이", x: 200, y: 210, icon: "gateway" },
+    { id: "lb", label: "리더보드", x: 320, y: 140, icon: "server" },
+    { id: "redis", label: "Redis", sub: "정렬된 셋", x: 320, y: 240, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "game" },
+    { from: "game", to: "lb" },
+    { from: "lb", to: "redis" },
+    { from: "cheat", to: "gw" },
+    { from: "gw", to: "lb", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "game"], packet: "판 진행", title: "앱은 게임만 한다", detail: "입력만 서버로 보낸다. 승패는 서버가 판정한다." },
+    { path: ["game", "lb"], packet: "+1 user:42", title: "게임 서버가 결과를 알린다", detail: "판이 끝나면 게임 서버가 내부 API로 이긴 사람에게 1점을 준다.", payload: "POST /internal/scores\n{ \"matchId\": 9001, \"userId\": 42, \"points\": 1 }" },
+    { path: ["lb", "redis"], packet: "ZINCRBY", title: "정렬된 셋에 더한다", detail: "리더보드 서비스가 이번 달 키에 점수를 더한다." },
+    { path: ["cheat", "gw", "lb"], packet: "+9999", blocked: true, title: "앱이 직접 올리려 하면", detail: "바깥에서 들어온 요청은 게이트웨이에서 내부 쓰기 API로 가는 길이 없다. 읽기 API만 열려 있다." },
+  ]}
+/>
+
+게임 로직이 서버에서 도는 게임이라면 앱은 점수 이야기를 아예 하지 않는다. 판정을 앱에 맡기는 게임이라면 이 구조만으로 조작을 다 막지는 못하고, 판 기록을 검증하는 별도 장치가 필요하다. 여기서는 서버가 판정하는 게임으로 둔다.
+
+API는 세 개면 된다.
+
+```text
+POST /internal/scores                       게임 서버 전용. matchId, userId, points
+GET  /v1/leaderboards/2026-10/top?limit=10  상위 10명
+GET  /v1/leaderboards/2026-10/users/42      내 순위와 점수, 위아래 네 명
+```
+
+## 정렬된 셋이 늘 줄 서 있는 이유
+
+Redis의 정렬된 셋(sorted set)은 멤버마다 점수를 하나씩 붙여 두고, 항상 점수순으로 정렬된 상태를 유지하는 자료형이다. 기본 명령은 [Redis 기초](/posts/redis-basics)에서 봤다. 여기서는 순위 조회가 왜 빠른지가 중요하다.
+
+정렬된 셋은 안에 두 가지를 함께 갖고 있다. 멤버에서 점수로 바로 가는 해시 테이블, 그리고 점수순으로 줄 세운 스킵 리스트다. 스킵 리스트는 정렬된 연결 리스트 위에 듬성듬성한 지름길 층을 몇 개 더 얹은 구조다. 새 노드를 넣을 때 동전을 던지듯 층을 정하는데, Redis는 한 층 더 올라갈 확률을 1/4로 둔다. 위층일수록 노드가 적어서 멀리 건너뛸 수 있다.
+
+<ConceptDiagram
+  caption="정렬된 셋 하나에 들어 있는 두 구조"
+  width={420}
+  height={230}
+  nodes={[
+    { id: "cmd", label: "ZINCRBY", sub: "user:42 +1", x: 210, y: 35 },
+    { id: "hash", label: "해시 테이블", sub: "멤버 → 점수", x: 90, y: 125 },
+    { id: "skip", label: "스킵 리스트", sub: "점수순, 칸 수 기록", x: 330, y: 125 },
+    { id: "rank", label: "ZREVRANK", sub: "몇 번째인가", x: 330, y: 205 },
+    { id: "score", label: "ZSCORE", sub: "몇 점인가", x: 90, y: 205 },
+  ]}
+  edges={[
+    { from: "cmd", to: "hash", label: "옛 점수 찾기" },
+    { from: "cmd", to: "skip", label: "자리 옮기기" },
+    { from: "hash", to: "skip", dashed: true, arrow: "both" },
+    { from: "skip", to: "rank" },
+    { from: "hash", to: "score" },
+  ]}
+/>
+
+순위가 빠른 비밀은 지름길마다 적어 둔 숫자에 있다. Redis 스킵 리스트는 각 화살표가 맨 아래층에서 몇 칸을 건너뛰는지(span)를 기록한다. 어떤 멤버를 찾아 내려가면서 지나온 화살표의 칸 수를 더하면 그게 곧 순위다. 앞에 있는 사람을 하나씩 셀 필요가 없다.
+
+<AlgoTrace
+  caption="점수 47을 찾으며 순위를 더해 가기 (맨 아래층)"
+  cells={["3", "8", "12", "19", "25", "31", "40", "47", "52", "60"]}
+  memoryLabel="지나온 화살표 (칸 수)"
+  steps={[
+    { pointer: 0, memory: [], caption: "맨 위층에서 출발한다. 이 층에는 3과 25, 60만 있다." },
+    { pointer: 4, memory: ["3→25 (4칸)"], caption: "25는 47보다 작으니 건너뛴다. 이 화살표는 4칸짜리다." },
+    { pointer: 4, memory: ["3→25 (4칸)"], caption: "다음 위층 노드 60은 47보다 크다. 한 층 내려간다." },
+    { pointer: 6, memory: ["3→25 (4칸)", "25→40 (2칸)"], caption: "중간층에서 40까지 건너뛴다. 2칸이다." },
+    { pointer: 7, found: [7], memory: ["3→25 (4칸)", "25→40 (2칸)", "40→47 (1칸)"], caption: "맨 아래층에서 한 칸 가서 47을 찾았다. 4+2+1 = 7이니 0부터 세어 7번째다." },
+  ]}
+/>
+
+노드 열 개에서는 차이가 작지만, 100만 개에서도 층이 열 개 남짓이라 찾는 데 수십 걸음이면 된다. 그래서 점수 갱신(`ZINCRBY`)과 순위 조회(`ZREVRANK`)가 모두 O(log N), 범위 조회(`ZREVRANGE`)는 시작 위치를 찾는 O(log N)에 꺼낼 개수 M을 더한 O(log N + M)이다. B-트리 인덱스로 "앞에 몇 개"를 셀 때의 O(N)과 여기서 갈린다.
+
+## 명령 네 개로 끝나는 순위표
+
+같은 100만 명을 정렬된 셋 하나에 넣었다. 키는 `lb:2026-10`, 멤버는 `user:0000042` 같은 사용자 ID다.
+
+```bash
+redis-cli -p 17121 ZINCRBY lb:2026-10 1 user:0000042       # 한 판 이겼다
+redis-cli -p 17121 ZREVRANGE lb:2026-10 0 9 WITHSCORES     # 상위 10명
+redis-cli -p 17121 ZREVRANK lb:2026-10 user:0000042        # 내 순위 (0부터)
+redis-cli -p 17121 ZREVRANGE lb:2026-10 358299 358307 WITHSCORES  # 내 위아래 네 명
+```
+
+상위 10명은 점수가 큰 쪽부터 꺼내야 하니 `REV`가 붙은 명령을 쓴다. Redis 6.2부터는 `ZRANGE lb:2026-10 0 9 REV WITHSCORES`로 같은 일을 할 수 있다.
+
+```text
+127.0.0.1:17121> ZREVRANGE lb:2026-10 0 9 WITHSCORES
+ 1) "user:0059980"
+ 2) "590"
+ 3) "user:0969985"
+ 4) "578"
+ 5) "user:0084333"
+ 6) "567"
+...
+19) "user:0178842"
+20) "492"
+```
+
+`ZREVRANGE`의 인자를 조각으로 나눠 보면 이렇다.
+
+<UrlAnatomy
+  caption="상위 10명 명령 읽기"
+  base="ZREVRANGE"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "key", display: "lb:2026-10", title: "이번 달 순위표", description: "달마다 새 키를 쓴다. 다음 달이 되면 앱은 lb:2026-11을 읽고, 지난 키는 보관한 뒤 지운다.", required: true },
+    { key: "start", display: "0", title: "시작 위치", description: "0부터 센다. 0은 1등이다. 음수는 뒤에서부터 센다.", required: true },
+    { key: "stop", display: "9", title: "끝 위치 (포함)", description: "끝도 포함한다. 0부터 9까지 10명이다. 0 -1이라고 쓰면 전부다. 이건 아래에서 볼 이유로 절대 쓰지 않는다.", required: true },
+    { key: "WITHSCORES", title: "점수도 함께", description: "멤버와 점수가 번갈아 온다. 빼면 멤버만 온다." },
+  ]}
+/>
+
+내 위아래를 보여 주려면 먼저 내 순위를 알고, 그 앞뒤를 범위로 꺼낸다.
+
+```text
+127.0.0.1:17121> ZREVRANK lb:2026-10 user:0000042
+(integer) 358303
+127.0.0.1:17121> ZREVRANGE lb:2026-10 358299 358307 WITHSCORES
+ 1) "user:0000561"
+ 2) "41"
+...
+ 9) "user:0000042"
+10) "41"
+11) "user:0999813"
+12) "40"
+...
+```
+
+두 번 왕복하는 게 싫으면 두 명령을 Lua 스크립트 하나로 묶는다. 반대로 순위가 0에 가까우면 시작 위치가 음수가 되지 않게 0으로 자르는 처리를 잊기 쉽다.
+
+로컬에서 명령마다 1만 번씩 돌려 쟀다. 앞 열은 클라이언트가 보낸 뒤 답을 받기까지의 왕복 시간, 뒤의 `usec_per_call`은 `INFO commandstats`로 본 서버 안의 처리 시간이다.
+
+```text
+ZINCRBY lb 1 <user>                 101 µs/round trip
+ZREVRANGE lb 0 9 WITHSCORES          78 µs/round trip
+ZREVRANK lb <user>                   62 µs/round trip
+ZREVRANGE lb 500000 500008           64 µs/round trip
+ZSCORE lb <user>                     52 µs/round trip
+  server zrevrange: calls=20000 usec_per_call=3.79
+  server zrevrank: calls=10000 usec_per_call=9.06
+  server zincrby: calls=10000 usec_per_call=21.02
+  server zscore: calls=10000 usec_per_call=2.62
+```
+
+서버 안에서는 가장 비싼 `ZINCRBY`도 21µs다. 50만 번째부터 꺼내는 것도 1등부터 꺼내는 것과 시간이 비슷하다. 이 숫자로 단순히 나누면 한 대가 초당 수만 번의 쓰기를 받는다. 우리 피크 1,390번은 한참 아래다. 메모리는 100만 명에 104.7MiB, 멤버당 110바이트였다. MAU 1,500만 명이면 약 1.6GiB라 한 대에 넉넉히 들어간다.
+
+## 0부터 세는 순위와 공동 순위
+
+`ZREVRANK`가 준 358303은 0부터 센 값이라 화면에는 1을 더해 358,304위로 보여 줘야 한다. 흔한 실수다. 더 까다로운 건 동점이다. 이 사용자는 41점인데, 100만 명 중 41점인 사람이 몇 명인지 세 봤다.
+
+```text
+127.0.0.1:17121> ZCOUNT lb:2026-10 41 41
+(integer) 8809
+127.0.0.1:17121> ZCOUNT lb:2026-10 (41 +inf
+(integer) 349495
+```
+
+41점이 8,809명이다. 판 수로 점수를 매기면 동점이 아주 많다. 그런데 `ZREVRANK`는 동점끼리도 서로 다른 순위를 준다. 점수가 같으면 멤버 이름의 사전순으로 줄을 세우고, `REV`는 그 순서도 뒤집기 때문이다. 다섯 명으로 확인했다.
+
+```text
+127.0.0.1:17121> ZADD lb:demo 30 amy 30 bob 30 cat 25 dan 40 eve
+(integer) 5
+127.0.0.1:17121> ZREVRANGE lb:demo 0 -1 WITHSCORES
+ 1) "eve"
+ 2) "40"
+ 3) "cat"
+ 4) "30"
+ 5) "bob"
+ 6) "30"
+ 7) "amy"
+ 8) "30"
+ 9) "dan"
+10) "25"
+127.0.0.1:17121> ZREVRANK lb:demo cat
+(integer) 1
+127.0.0.1:17121> ZREVRANK lb:demo amy
+(integer) 3
+```
+
+같은 30점인데 cat은 2위, amy는 4위다. 이름이 a로 시작한다는 이유만으로 밀렸다. 100만 명 데이터에서도 `user:0000042`는 41점 8,809명 중 ID가 가장 작아서 그 무리의 맨 끝에 섰다. 349,495 + 8,809 − 1 = 358,303이 바로 `ZREVRANK` 값이다.
+
+<AlgoTrace
+  caption="ZREVRANK와 공동 순위가 다른 이유"
+  cells={["eve 40", "cat 30", "bob 30", "amy 30", "dan 25"]}
+  memoryLabel="amy의 순위"
+  steps={[
+    { pointer: 3, memory: [], caption: "amy는 30점이다. 같은 30점이 셋 있다." },
+    { pointer: 1, memory: [], caption: "동점은 이름 사전순, REV라서 거꾸로 선다. cat, bob, amy 순이다." },
+    { pointer: 3, found: [3], memory: ["ZREVRANK = 3 → 4위"], caption: "ZREVRANK는 줄의 위치를 그대로 준다. 0부터 세어 3, 화면에는 4위다." },
+    { pointer: 0, found: [0], memory: ["ZREVRANK = 3 → 4위", "ZCOUNT (30 +inf = 1"], caption: "30점보다 큰 사람만 센다. 여는 괄호는 30 자체는 빼라는 뜻이다. eve 한 명이다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["ZREVRANK = 3 → 4위", "ZCOUNT (30 +inf = 1", "공동 2위"], caption: "1명 + 1 = 공동 2위. 점수가 같으면 같은 순위라는 요구에 맞는 쪽은 이것이다." },
+  ]}
+/>
+
+그래서 "점수가 같으면 같은 순위"라는 요구라면 순위는 `ZREVRANK`가 아니라 `ZCOUNT key (내점수 +inf`에 1을 더해 구한다. 위의 사용자는 공동 349,496위가 된다. `ZCOUNT`도 스킵 리스트의 칸 수로 계산해서 O(log N)이다. 내 점수는 `ZSCORE`로 먼저 알아야 하니 왕복이 하나 늘지만, Redis 7.2부터는 `ZREVRANK key member WITHSCORE`로 순위와 점수를 한 번에 받을 수 있다. 이 글에서 쓴 7.0에는 그 옵션이 없다.
+
+반대로 "먼저 그 점수에 도달한 사람이 위"처럼 동점을 깨야 한다면 점수 하나에 시각을 함께 담는 방법이 있다. 실수 정밀도 때문에 조심할 게 많아서 [다음 글](/posts/sd-leaderboard-scaling)에서 따로 다룬다.
+
+## 한 번에 다 꺼내면 모두가 멈춘다
+
+순위표 전체를 내려받아 엑셀로 보고 싶다는 요청이 오면 `ZREVRANGE lb:2026-10 0 -1`을 떠올리기 쉽다. 100만 명으로 해 봤다. 다른 클라이언트가 5ms마다 `ZREVRANK`를 보내는 중에 전체 조회를 한 번 끼워 넣었다.
+
+```text
+127.0.0.1:17121> SLOWLOG GET 1
+1) 1) (integer) 16
+   2) (integer) 1792580871
+   3) (integer) 771931
+   4) 1) "ZREVRANGE"
+      2) "lb:2026-10"
+      3) "0"
+      4) "-1"
+      5) "WITHSCORES"
+   5) "127.0.0.1:48154"
+   6) ""
+```
+
+```text
+ZREVRANK calls from another client: 157
+p50 0.24 ms, max 619.5 ms
+```
+
+`SLOWLOG`의 세 번째 값이 서버 안에서 걸린 시간(µs)이다. 0.77초다. 몇 번 재 보니 0.58~0.77초 사이였다. 다른 클라이언트를 붙여 둔 실험에서는 그동안 다른 클라이언트의 `ZREVRANK`가 최대 619ms를 기다렸다. 평소 0.24ms짜리 요청이다. Redis는 명령을 한 줄로 세워 하나씩 처리하기 때문에 긴 명령 하나가 모두를 세운다. 이 원리는 [Redis 기초](/posts/redis-basics)에서 자세히 봤다. 로비를 연 사용자 모두가 0.6초씩 멈춘 셈이다.
+
+전체가 필요하면 Redis가 아니라 원본 DB에서 뽑는다. Redis에서 꼭 읽어야 한다면 `ZREVRANGE key 0 999`, `1000 1999`처럼 1,000개씩 나눠 읽는다. `ZREVRANGE`는 시작 위치를 O(log N)에 찾으니 깊은 곳을 나눠 읽어도 느려지지 않는다.
+
+## 화면에 이름을 붙이는 쪽
+
+정렬된 셋에는 사용자 ID와 점수만 있다. 화면에 닉네임과 프로필 사진을 붙여야 한다. 상위 10명은 모두가 보는 데이터라 결과를 몇 초 캐시해도 된다.
+
+<NetworkTopology
+  caption="로비 화면 하나가 만들어지는 길"
+  width={420}
+  height={270}
+  zones={[
+    { id: "svc", label: "리더보드 서비스", x: 105, y: 15, w: 305, h: 245, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "게임 앱", x: 45, y: 135, icon: "client" },
+    { id: "lb", label: "리더보드", x: 175, y: 135, icon: "server" },
+    { id: "top", label: "상위 10 캐시", sub: "5초", x: 320, y: 45, icon: "db", w: 100 },
+    { id: "z", label: "정렬된 셋", sub: "lb:2026-10", x: 320, y: 135, icon: "db" },
+    { id: "prof", label: "프로필 캐시", sub: "닉네임·사진", x: 320, y: 225, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "app", to: "lb" },
+    { from: "lb", to: "top" },
+    { from: "lb", to: "z" },
+    { from: "lb", to: "prof" },
+  ]}
+  steps={[
+    { path: ["app", "lb"], packet: "GET /top", title: "로비를 연다", detail: "상위 10명과 내 순위를 함께 달라고 한다." },
+    { path: ["lb", "top"], packet: "GET", title: "상위 10명은 캐시부터", detail: "5초 안에 누가 만들어 둔 결과가 있으면 그대로 쓴다. 모두가 같은 걸 보니 적중률이 높다." },
+    { path: ["lb", "z"], packet: "ZREVRANK", title: "내 순위는 매번 계산", detail: "사람마다 다르니 캐시하지 않는다. 점수와 위아래 범위도 여기서 가져온다." },
+    { path: ["lb", "prof"], packet: "MGET", title: "이름을 한 번에 붙인다", detail: "화면에 나올 19명의 프로필을 한 번에 가져온다. 하나씩 물으면 왕복이 19번이다." },
+    { path: ["lb", "app"], packet: "200", title: "화면을 돌려준다", detail: "상위 10명, 내 순위, 위아래 네 명이 이름과 함께 간다." },
+  ]}
+/>
+
+ID 목록을 받아 이름을 붙이는 과정과 하나씩 물을 때 생기는 N+1 문제는 [뉴스 피드 설계 ②](/posts/sd-news-feed-retrieval)에서 실제로 재 봤다. 여기서도 같은 규칙을 따른다. 상위 10명 캐시가 5초 늦어도 괜찮은지는 요구 사항에 달렸다. "실시간"이라고 했으니 판이 끝난 본인에게는 캐시를 건너뛰고 바로 계산한 결과를 보여 주는 식으로 섞는다.
+
+## 같은 판 결과가 두 번 오면
+
+게임 서버는 리더보드 서비스의 응답을 못 받으면 다시 보낸다. 그런데 `ZINCRBY`는 같은 요청을 두 번 받으면 두 번 더한다. 첫 요청이 실제로는 처리됐는데 응답만 늦었다면 한 판 이기고 2점을 받는다. 그래서 판 ID로 "이미 반영했는지"를 함께 기록하고, 확인과 더하기를 Lua 스크립트 하나로 묶어 그 사이에 다른 명령이 끼지 못하게 한다.
+
+```lua
+-- once.lua: KEYS[1] 순위표, KEYS[2] 반영 기록, ARGV[1] 점수, ARGV[2] 사용자
+if redis.call('SET', KEYS[2], 1, 'NX', 'EX', 2678400) then
+  return redis.call('ZINCRBY', KEYS[1], ARGV[1], ARGV[2])
+end
+return false
+```
+
+```text
+$ redis-cli EVAL "$(cat once.lua)" 2 lb:2026-10 applied:match:9001:user:0000042 1 user:0000042
+"42"
+$ redis-cli EVAL "$(cat once.lua)" 2 lb:2026-10 applied:match:9001:user:0000042 1 user:0000042
+(nil)
+$ redis-cli ZSCORE lb:2026-10 user:0000042
+"42"
+```
+
+같은 판 9001을 두 번 보냈지만 점수는 41에서 42로 한 번만 올랐다. 기록 키는 토너먼트가 끝날 때까지(31일, 2,678,400초) 둔다. 이렇게 요청에 고유한 ID를 붙여 중복을 거르는 방법 전반은 [멱등성 키](/posts/idempotency-key)에 있다.
+
+판 결과는 Redis에만 두지 않는다. 원본은 DB의 판 기록 테이블이고, Redis는 그걸 빠르게 줄 세운 사본이다. 순서는 이렇게 잡는다.
+
+<SequenceDiagram
+  caption="판 하나가 끝나고 순위에 반영되기까지"
+  actors={[
+    { id: "game", label: "게임 서버" },
+    { id: "lb", label: "리더보드" },
+    { id: "db", label: "DB" },
+    { id: "redis", label: "Redis" },
+  ]}
+  steps={[
+    { from: "game", to: "lb", label: "POST scores", title: "결과를 알린다", detail: "판 ID 9001, 이긴 사람 42, 1점.", payload: "{ \"matchId\": 9001, \"userId\": 42, \"points\": 1 }" },
+    { from: "lb", to: "db", label: "INSERT match", title: "판 기록을 먼저 남긴다", detail: "판 ID에 유니크 제약을 걸어 같은 판이 두 번 들어가지 않게 한다. 이게 원본이다." },
+    { from: "lb", to: "redis", label: "EVAL once.lua", title: "순위표에 반영한다", detail: "판 ID로 한 번만 더한다. 실패하면 재시도해도 안전하다." },
+    { from: "lb", to: "game", label: "200", title: "응답한다", detail: "응답이 사라져 게임 서버가 다시 보내도 DB와 Redis 모두 중복을 거른다." },
+    { from: "lb", to: "redis", label: "재처리", title: "Redis 반영이 실패했다면", detail: "DB에는 있고 Redis에는 없는 판을 나중에 다시 반영한다. DB 기록을 기준으로 따라잡는다." },
+  ]}
+/>
+
+DB에 쓰고 Redis에 쓰는 두 단계 사이에서 서버가 죽으면 DB에만 남는다. 그 틈을 메우는 일반적인 방법은 같은 트랜잭션에 "보낼 일"을 함께 적어 두는 [트랜잭셔널 아웃박스](/posts/transactional-outbox)다. 판 기록에 "순위 반영 완료" 표시를 두고 반영 안 된 줄을 주기적으로 다시 밀어 넣는 것도 같은 생각이다.
+
+## 달이 바뀌고 Redis가 죽을 때
+
+달이 바뀌면 앱은 새 키 `lb:2026-11`을 읽기 시작한다. 지난달 키는 최종 순위를 DB에 옮겨 적은 뒤 지운다. 키 이름에 달을 넣었으니 바꾸는 작업이 따로 없다. 다만 자정 무렵 끝난 판이 어느 달에 들어가는지는 판이 끝난 시각 기준으로 정해 둬야 한다. 서버 시각으로 정하면 서버마다 시계가 조금씩 달라 경계에서 갈린다.
+
+Redis가 죽으면 순위표가 메모리와 함께 사라진다. 복제본을 하나 두고, 디스크에도 남긴다. 복제와 자동 장애 조치, RDB와 AOF의 차이는 [Redis 영속성과 고가용성](/posts/redis-persistence-ha)에 있다. 그래도 복제본까지 잃으면 DB의 판 기록으로 순위표를 다시 만든다. 100만 명을 다시 넣는 데 얼마나 걸리는지는 다음 글에서 재 본다. 쓰기가 많은 Redis는 스냅숏을 뜰 때 바뀐 메모리 페이지가 복사되어 일시적으로 메모리를 더 쓰므로, 데이터 크기보다 넉넉하게(흔히 두 배 가까이) 잡는다.
+
+## 순위가 이상하다는 문의가 오면
+
+- 한 판 이겼는데 2점이 올랐다. 게임 서버의 재시도 로그와 리더보드 서비스의 요청 로그에서 같은 판 ID가 두 번 들어왔는지 본다. 판 ID 중복 검사가 없으면 응답 지연 때마다 생긴다.
+- 점수가 같은 친구보다 내 순위가 낮다. `ZREVRANK`를 그대로 보여 주고 있는지 본다. 동점은 이름순으로 갈린다. 공동 순위가 요구라면 `ZCOUNT`로 바꾼다.
+- 로비가 가끔 0.5초씩 멈춘다. `SLOWLOG GET`에서 `ZREVRANGE ... 0 -1`이나 큰 범위 조회가 있는지 본다. 운영 도구나 배치가 범인인 경우가 많다.
+- 1등이 1위가 아니라 0위로 나온다. 0부터 세는 순위에 1을 더하지 않았다.
+- 새 달이 시작됐는데 지난달 점수가 보인다. 키 이름을 서버 시각으로 만들면서 서버마다 시간대 설정이 다른지 본다.
+
+## 숫자를 직접 어림해 보기
+
+요구 사항 절의 계산을 함수로 만들어 보자. 하루 활성 사용자 `dau`, 한 사람의 하루 판 수 `gamesPerDay`, 피크 배수 `peakFactor`, 한 달 활성 사용자 `mau`, 멤버 하나의 메모리 `bytesPerMember`를 받아 평균 쓰기 QPS(`writeQps`, 반올림), 피크 쓰기 QPS(`writeQps × peakFactor`), 정렬된 셋의 메모리(`memoryMiB`, MiB로 반올림)를 돌려준다. 멤버당 110바이트는 위에서 잰 값이다.
+
+<CodePlayground
+  caption="리더보드 규모 어림"
+  functionName="estimateLeaderboard"
+  initialCode={`function estimateLeaderboard(dau, gamesPerDay, peakFactor, mau, bytesPerMember) {
+  // 하루는 86,400초, 1MiB는 1024 * 1024바이트
+  return { writeQps: 0, peakWriteQps: 0, memoryMiB: 0 };
+}`}
+  solution={`function estimateLeaderboard(dau, gamesPerDay, peakFactor, mau, bytesPerMember) {
+  const writeQps = Math.round((dau * gamesPerDay) / 86400);
+  const peakWriteQps = writeQps * peakFactor;
+  const memoryMiB = Math.round((mau * bytesPerMember) / 1024 / 1024);
+  return { writeQps, peakWriteQps, memoryMiB };
+}`}
+  tests={[
+    { args: [3000000, 8, 5, 15000000, 110], expected: { writeQps: 278, peakWriteQps: 1390, memoryMiB: 1574 }, label: "이 글의 게임" },
+    { args: [30000000, 8, 5, 150000000, 110], expected: { writeQps: 2778, peakWriteQps: 13890, memoryMiB: 15736 }, label: "열 배로 커지면" },
+    { args: [100000, 20, 3, 400000, 110], expected: { writeQps: 23, peakWriteQps: 69, memoryMiB: 42 }, label: "작은 게임" },
+    { args: [86400, 1, 10, 1000000, 128], expected: { writeQps: 1, peakWriteQps: 10, memoryMiB: 122 }, label: "하루 한 판" },
+  ]}
+/>
+
+두 번째 테스트가 다음 글의 출발점이다. 사용자가 열 배가 되면 메모리가 15GiB를 넘는다. 한 대에 못 넣을 크기는 아니지만, 쓰기와 스냅숏, 복제까지 생각하면 슬슬 나눌 방법을 찾아야 한다.
+
+## 다음에 읽을 글
+
+정리하면 이렇다. 테이블로 순위를 구하면 내 앞의 사람을 하나씩 세야 해서 하위권일수록 느리다. Redis의 정렬된 셋은 스킵 리스트의 칸 수 덕분에 점수 갱신, 순위, 범위 조회가 모두 O(log N)이고, 100만 명에서도 서버 안에서 수 µs~수십 µs다. 순위는 0부터 세고, 동점은 이름순으로 갈리니 공동 순위가 필요하면 `ZCOUNT`를 쓴다. 전체 조회 한 번이 모두를 세우니 범위를 나눠 읽는다. 원본은 DB의 판 기록이고, 같은 판이 두 번 반영되지 않게 판 ID로 거른다.
+
+다음 글 [게임 리더보드 설계 ②](/posts/sd-leaderboard-scaling)에서는 사용자가 열 배, 백 배가 됐을 때 순위표를 여러 Redis로 나누는 두 방법을 직접 비교하고, 먼저 도달한 사람이 위에 서도록 동점을 깨고, Redis를 잃었을 때 다시 만드는 시간을 잰다.
+
+## 면접에서 나올 만한 질문
+
+### 리더보드를 관계형 DB로만 만들면 무엇이 문제인가요?
+
+상위 10명은 점수 인덱스로 빨리 꺼내지만, 특정 사용자의 순위는 그보다 점수가 높은 사람을 세야 해서 순위가 낮을수록 느려진다. 100만 명에서 97만 등의 순위를 구하는 데 인덱스로 97만 줄을 셌다. 점수가 바뀔 때마다 그 인덱스도 고쳐야 해서 쓰기가 많은 리더보드에서는 부담이 겹친다.
+
+### Redis 정렬된 셋에서 순위 조회가 빠른 이유는요?
+
+정렬된 셋은 멤버에서 점수로 가는 해시 테이블과 점수순으로 줄 세운 스킵 리스트를 함께 갖는다. 스킵 리스트의 각 지름길에는 몇 칸을 건너뛰는지 적혀 있어서, 멤버를 찾아 내려가며 지나온 칸 수를 더하면 순위가 된다. 그래서 순위 조회와 점수 갱신이 O(log N)이고, 앞사람을 하나씩 셀 필요가 없다.
+
+### 점수가 같은 사용자는 순위가 어떻게 나오나요?
+
+`ZREVRANK`는 동점이어도 서로 다른 순위를 준다. 같은 점수는 멤버 이름 사전순으로 서고 `REV`가 그 순서를 뒤집기 때문에, 이름 때문에 순위가 갈린다. 같은 점수를 같은 순위로 보여 줘야 하면 내 점수보다 큰 사람 수를 `ZCOUNT key (점수 +inf`로 세어 1을 더한다.
+
+### 게임 앱이 점수를 직접 올리면 안 되는 이유는요?
+
+앱과 서버 사이의 요청은 사용자가 프록시로 얼마든지 바꿀 수 있어서 점수를 조작할 수 있다. 승패는 판을 실제로 돌린 게임 서버가 판정하고, 점수 쓰기 API는 내부망의 게임 서버만 부를 수 있게 막는다. 앱에는 읽기 API만 연다.
+
+### 게임 서버가 같은 결과를 두 번 보내면 어떻게 되나요?
+
+`ZINCRBY`는 멱등하지 않아서 그대로 두면 한 판에 2점이 오른다. 판 ID로 "이미 반영함" 기록을 `SET NX`로 남기고, 그 확인과 `ZINCRBY`를 Lua 스크립트 하나로 묶어 원자적으로 처리한다. DB의 판 기록 테이블에도 판 ID 유니크 제약을 건다.
+
+### Redis가 죽으면 순위표는 어떻게 되나요?
+
+복제본으로 장애 조치를 하고, AOF나 RDB로 디스크에도 남겨 대부분의 장애를 넘긴다. 그래도 데이터를 잃으면 원본인 DB의 판 기록을 사용자별로 합쳐 정렬된 셋을 다시 만든다. 그래서 Redis는 원본이 아니라 빠르게 줄 세운 사본으로 설계한다.
+
+### 사용자가 열 배로 늘면 무엇부터 보나요?
+
+메모리와 쓰기 QPS, 그리고 큰 범위 조회 같은 긴 명령이다. 이 글의 숫자로 MAU 1억 5천만이면 정렬된 셋이 15GiB를 넘고 피크 쓰기가 초당 1만 4천 번 가까이 된다. 한 대로 버틸 수는 있어도 스냅숏과 복제 여유가 줄어서, 점수 범위나 해시로 샤드를 나누는 방안을 검토한다. 두 방식의 차이는 다음 글에서 다룬다.

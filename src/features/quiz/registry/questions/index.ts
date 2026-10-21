@@ -398,6 +398,8 @@ import { SD_KV_STORE_PARTITION_REPLICATION } from "./sd-kv-store-partition-repli
 import { SD_KV_STORE_VERSIONING } from "./sd-kv-store-versioning";
 import { SD_KV_STORE_WRITE_READ_PATH } from "./sd-kv-store-write-read-path";
 import { SD_LATENCY_NUMBERS } from "./sd-latency-numbers";
+import { SD_LEADERBOARD_SCALING } from "./sd-leaderboard-scaling";
+import { SD_LEADERBOARD_SORTED_SET } from "./sd-leaderboard-sorted-set";
 import { SD_LOAD_BALANCER_STATELESS } from "./sd-load-balancer-stateless";
 import { SD_MAPS_LOCATION_ETA } from "./sd-maps-location-eta";
 import { SD_MAPS_TILES_ROUTING } from "./sd-maps-tiles-routing";
@@ -415,6 +417,8 @@ import { SD_NOTIFICATION_SYSTEM } from "./sd-notification-system";
 import { SD_OBJECT_STORAGE_ARCHITECTURE } from "./sd-object-storage-architecture";
 import { SD_OBJECT_STORAGE_DURABILITY } from "./sd-object-storage-durability";
 import { SD_OBJECT_STORAGE_VERSIONING_MULTIPART } from "./sd-object-storage-versioning-multipart";
+import { SD_PAYMENT_FLOW } from "./sd-payment-flow";
+import { SD_PAYMENT_RELIABILITY } from "./sd-payment-reliability";
 import { SD_PROXIMITY_SERVICE } from "./sd-proximity-service";
 import { SD_QUEUE_LOGGING_AUTOMATION } from "./sd-queue-logging-automation";
 import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
@@ -910,6 +914,8 @@ export const QUESTION_SETS = [
   SD_KV_STORE_VERSIONING,
   SD_KV_STORE_WRITE_READ_PATH,
   SD_LATENCY_NUMBERS,
+  SD_LEADERBOARD_SCALING,
+  SD_LEADERBOARD_SORTED_SET,
   SD_LOAD_BALANCER_STATELESS,
   SD_MAPS_LOCATION_ETA,
   SD_MAPS_TILES_ROUTING,
@@ -927,6 +933,8 @@ export const QUESTION_SETS = [
   SD_OBJECT_STORAGE_ARCHITECTURE,
   SD_OBJECT_STORAGE_DURABILITY,
   SD_OBJECT_STORAGE_VERSIONING_MULTIPART,
+  SD_PAYMENT_FLOW,
+  SD_PAYMENT_RELIABILITY,
   SD_PROXIMITY_SERVICE,
   SD_QUEUE_LOGGING_AUTOMATION,
   SD_RATE_LIMITER_DESIGN,

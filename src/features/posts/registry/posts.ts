@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sd-payment-reliability",
+    title: "결제 시스템 설계 ②: 재시도, 웹훅, 대사로 한 번만 청구하기",
+    summary: "시간 초과는 실패가 아니라 모르는 상태다. 가짜 PSP로 이중 청구, 중복·위조·분실 웹훅을 재현해 멱등성 키, 상태 규칙, 스위퍼로 막고, 정산 파일과 원장을 대사해 남은 어긋남을 잡는다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Backend", "Transaction", "Distributed Systems"],
+    date: "2026-10-22",
+    keywords: ["결제 대사", "정산 파일", "이중 청구"],
+  },
+  {
+    slug: "sd-payment-flow",
+    title: "결제 시스템 설계 ①: 돈이 움직이는 길과 복식부기 원장",
+    summary: "카드 번호는 결제 대행사의 결제 화면이 받고, 결과는 웹훅으로 확정한다. 금액을 정수로 적고, 모든 돈의 움직임을 합이 0인 복식부기 거래로 PostgreSQL 원장에 남긴다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Backend", "PostgreSQL", "Transaction"],
+    date: "2026-10-22",
+    keywords: ["결제 대행사", "복식부기", "호스티드 결제 페이지", "페이아웃"],
+  },
+  {
+    slug: "sd-leaderboard-scaling",
+    title: "게임 리더보드 설계 ②: 샤드로 나누기, 동점 깨기, 다시 만들기",
+    summary: "순위표 키 하나는 Redis Cluster가 나눠 주지 않는다. 점수 구간 샤드와 해시 샤드의 스캐터-개더를 Redis 네 대로 비교하고, 합성 점수로 동점을 깨고, 원본에서 순위표를 다시 만든다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Redis", "Scalability", "Distributed Systems", "Backend"],
+    date: "2026-10-22",
+    keywords: ["점수 구간 샤딩", "스캐터-개더", "동점 깨기", "백분위 순위"],
+  },
+  {
+    slug: "sd-leaderboard-sorted-set",
+    title: "게임 리더보드 설계 ①: Redis 정렬된 셋으로 상위 10명과 내 순위 구하기",
+    summary: "테이블로 순위를 구하면 내 앞사람을 하나씩 세야 해서 하위권일수록 느려진다. Redis 정렬된 셋으로 옮겨 100만 명에서 상위 10명, 내 순위, 공동 순위, 중복 반영 막기를 직접 재 본다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Redis", "Backend"],
+    date: "2026-10-22",
+    keywords: ["게임 리더보드", "스킵 리스트", "주변 순위"],
+  },
+  {
     slug: "sd-stock-exchange-low-latency",
     title: "증권 거래소 설계 ②: 시퀀서와 단일 스레드 루프, 결정적 재생",
     summary: "도착 순서만 달라도 체결 결과가 바뀌고, 주 엔진이 죽으면 호가창을 똑같이 되살려야 한다. 시퀀서와 일지로 결정적 재생과 대기 엔진 인계, 순번 빈자리 재전송을 직접 돌려 보고, 링 버퍼와 postMessage의 지연, GC 멈춤, /dev/shm 일지, 멀티캐스트 시장 데이터를 다룬다.",
