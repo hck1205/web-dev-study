@@ -1,0 +1,366 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("api-scaling-ladder");
+
+"백엔드 API는 이렇게 확장된다"는 그림이 자주 돈다. 사용자 1K는 Express나 Fastify 한 대, 10K는 Redis와 커넥션 풀(PgBouncer), 50K는 여러 대와 로드 밸런서(Nginx), 100K는 읽기 복제본과 인덱스 튜닝, 500K는 비동기 큐(BullMQ, Kafka), 1M 이상은 분산 게이트웨이와 DB 샤딩. 순서는 대체로 맞다. 그런데 이 그림을 보고 "우리 MAU가 5만이니 로드 밸런서를 붙일 때"라고 정하면 틀리기 쉽다. 그림 속 숫자가 어떤 사용자인지, 요청 하나가 얼마나 무거운지에 따라 같은 5만이 서버 반 대가 되기도 하고 스무 대가 되기도 한다.
+
+이 글은 그 사다리의 칸마다 "다음 칸으로 넘어가라"는 신호가 무엇인지, 무엇을 재면 그 신호가 보이는지, 넘어가면 어떤 새 장애가 생기는지를 정리한다. 각 칸의 자세한 원리는 따로 쓴 글로 넘긴다. 서버 한 대에서 샤딩까지 같은 서비스를 키워 가는 이야기는 [수백만 사용자로 키우기 ①](/posts/sd-start-single-server)부터 [⑧ 샤딩 입문](/posts/sd-sharding-intro)까지의 시리즈에 있고, DB 쪽 단계는 [서비스 규모별 DB 설계](/posts/db-architecture-by-scale)에 있다. 큐 칸은 [BullMQ 작업 큐](/posts/bullmq-job-queue)에서 깊게 다룬다. 측정은 4코어 리눅스 한 대에서 Node.js 22, Fastify 5.12, PostgreSQL 16으로 했고, 부하 생성기도 같은 기계에서 돌았으니 숫자는 비교용으로만 본다.
+
+## 그림 속 1K는 어떤 사용자인가
+
+"사용자 1만"에는 적어도 세 가지 뜻이 있다. 하루에 한 번이라도 들어오는 사람(DAU)이 1만인지, 지금 이 순간 앱을 켜 두고 있는 사람(동시 사용자)이 1만인지, 초당 요청(RPS)이 1만인지에 따라 서버 대수가 백 배씩 차이 난다.
+
+DAU 10만에 한 사람이 하루 30번 요청하면 하루 300만 요청이다. 86,400초로 나누면 평균 35 RPS다. 이 계산과 피크 배율은 [용량 어림](/posts/sd-capacity-estimation)에 자세히 있다. 동시 사용자로 보면 이야기가 다르다. 동시 사용자가 화면 하나를 보는 데 평균 10초를 쓰고, 화면 하나가 API 3개를 부르고, 응답이 0.2초 걸린다면 초당 요청은 리틀의 법칙([지연과 처리량](/posts/latency-bandwidth-throughput))으로 이렇게 나온다.
+
+<UrlAnatomy
+  caption="동시 사용자 1만을 서버 대수로 바꾸는 한 줄"
+  separator=""
+  joiner="  "
+  params={[
+    { key: "users", display: "10,000명", title: "동시 사용자", description: "지금 앱을 켜 두고 있는 사람 수다. DAU가 아니다. DAU 10만에 하루 평균 10분을 쓰고 활동이 16시간에 몰리면 평균 동시 사용자는 약 1,042명, 피크가 그 3배면 약 3,125명이다.", required: true },
+    { key: "calls", display: "× 3 API", title: "화면당 API 호출", description: "화면 하나를 그리는 데 부르는 API 수다. 목록, 배지, 추천을 따로 부르면 화면 하나가 요청 셋이 된다." },
+    { key: "think", display: "÷ (10s + 0.2s)", title: "생각 시간과 응답 시간", description: "사용자가 화면을 보고 다음 동작을 하기까지 걸리는 시간에 응답 시간을 더한다. 한 사람이 이 시간마다 요청 묶음을 하나씩 보낸다." },
+    { key: "rps", display: "≈ 2,941 RPS", title: "초당 요청", description: "10,000 × 3 ÷ 10.2. 서버가 받아야 할 양이다. 같은 1만이라도 DAU면 평균 3.5 RPS에 불과하다." },
+    { key: "node", display: "÷ 280/대", title: "한 대가 안전하게 받는 양", description: "부하 테스트로 잰 한 대의 한계(여기서는 400 RPS)의 70%다. 한계까지 채우면 아래에서 보듯 지연이 먼저 무너진다." },
+    { key: "nodes", display: "= 11대", title: "필요한 대수", description: "올림해서 11대. 장애로 한 대가 빠져도 버티려면 하나를 더 둔다." },
+  ]}
+/>
+
+같은 숫자라도 가정을 바꾸면 결과가 크게 움직인다. 아래 함수를 완성해 직접 바꿔 보자. 동시 사용자, 화면당 API 수, 생각 시간, 응답 시간, 한 대의 한계 RPS를 받아 초당 요청(반올림)과 필요한 대수(한계의 70%로 나눠 올림)를 돌려준다.
+
+<CodePlayground
+  caption="동시 사용자에서 RPS와 서버 대수로"
+  functionName="estimate"
+  initialCode={`function estimate(users, callsPerScreen, thinkSec, respSec, nodeRps) {
+  // 1) 한 사람이 (thinkSec + respSec)마다 callsPerScreen개를 보낸다
+  // 2) rps는 반올림, nodes는 nodeRps의 70%로 나눠 올림
+  return { rps: 0, nodes: 0 };
+}`}
+  solution={`function estimate(users, callsPerScreen, thinkSec, respSec, nodeRps) {
+  const rps = Math.round((users * callsPerScreen) / (thinkSec + respSec));
+  const nodes = Math.ceil(rps / (nodeRps * 0.7));
+  return { rps, nodes };
+}`}
+  tests={[
+    { label: "동시 1천명", args: [1000, 3, 10, 0.2, 400], expected: { rps: 294, nodes: 2 } },
+    { label: "동시 1만명", args: [10000, 3, 10, 0.2, 400], expected: { rps: 2941, nodes: 11 } },
+    { label: "생각 시간 30초", args: [10000, 3, 30, 0.2, 400], expected: { rps: 993, nodes: 4 } },
+    { label: "응답이 2초로 느려지면", args: [10000, 3, 10, 2, 400], expected: { rps: 2500, nodes: 9 } },
+    { label: "동시 5만명, 화면당 5개", args: [50000, 5, 10, 0.3, 400], expected: { rps: 24272, nodes: 87 } },
+    { label: "동시 100명", args: [100, 1, 5, 0, 400], expected: { rps: 20, nodes: 1 } },
+  ]}
+/>
+
+네 번째 테스트가 흥미롭다. 응답이 2초로 느려지면 RPS가 오히려 줄어든다. 사용자가 응답을 기다리느라 다음 요청을 늦게 보내기 때문이다. 그래서 "요청 수 그래프가 내려갔다"가 좋은 소식이 아닐 수 있다. 서버가 느려져서 사용자가 덜 보내는 것일 수도 있다. 사다리의 칸은 사용자 수가 아니라 이 RPS와 요청 하나의 무게로 고른다.
+
+## 한 대가 버티는 양은 요청 하나의 무게가 정한다
+
+그림의 첫 칸은 "1K, 한 대"다. 한 대가 실제로 얼마나 받는지는 요청이 무엇을 하느냐에 달렸다. Fastify 프로세스 하나에 아무것도 안 하는 `/hello`와, JSON 조립과 검증을 흉내 내 CPU를 2ms 쓰는 `/orders`를 두고 연결 50개로 10초씩 두드렸다.
+
+```js
+// server.mjs: CPU_MS 환경 변수만큼 요청마다 CPU를 쓴다
+const app = Fastify();
+app.get("/hello", async () => ({ ok: true }));
+app.get("/orders", async () => {
+  const end = performance.now() + cpuMs; // JSON 조립·검증 같은 CPU 일을 흉내 낸다
+  while (performance.now() < end) {}
+  return { items: 20 };
+});
+await app.listen({ port: 18310, host: "127.0.0.1" });
+```
+
+```bash
+CPU_MS=2 node server.mjs &
+node bench.mjs http://127.0.0.1:18310/hello 50    # autocannon 8, 연결 50개, 10초
+node bench.mjs http://127.0.0.1:18310/orders 50
+```
+
+```text
+/hello c=50  rps=14478  p50=2ms  p99=17ms  max=195ms  errors=0 non2xx=0
+/orders c=50  rps=425  p50=109ms  p99=208ms  max=1008ms  errors=0 non2xx=0
+```
+
+요청 하나에 CPU 2ms가 붙자 초당 1만 4천에서 425로 떨어졌다. 자바스크립트는 한 스레드에서 돌아서 한 프로세스는 1초에 2ms짜리 일을 500개 넘게 할 수 없다. 그래서 "Express 한 대로 1K"는 요청이 가벼울 때 이야기다. 정렬, 템플릿 렌더링, 큰 JSON 직렬화, 동기 암호화처럼 요청마다 CPU를 쓰는 코드가 있으면 첫 칸의 천장이 생각보다 낮다. 4코어 서버라도 Node 프로세스 하나면 코어 하나만 쓴다. 같은 서버에서 `cluster`로 프로세스 둘을 띄우고(`server.mjs`에 `cluster.fork()` 분기를 넣었다) 아래에서 쓰는 열린 부하를 걸면 이렇다.
+
+```bash
+WORKERS=2 CPU_MS=2 node server.mjs &
+for r in 460 700 800 900; do node openload.mjs http://127.0.0.1:18310/orders $r 8; done
+```
+
+```text
+== WORKERS=2
+rate= 460/s  p50=    3.2ms  p99=    7.1ms  errors=0
+rate= 700/s  p50=    4.0ms  p99=   16.0ms  errors=0
+rate= 800/s  p50=    4.6ms  p99=   44.9ms  errors=0
+rate= 900/s  p50=    9.1ms  p99=   48.6ms  errors=0
+```
+
+한 프로세스가 무너지던 460/s를 둘이 가볍게 받고 900/s 근처까지 간다. 서버를 늘리기 전에 이 기계의 코어부터 다 쓰는 게 먼저다. 프로세스, 워커 스레드, 클러스터를 고르는 법은 [Node.js 서버 런타임](/posts/nodejs-server-runtime)에 있다.
+
+## 지연은 CPU 100%보다 먼저 무너진다
+
+사다리를 오를 시점을 "CPU 100%"로 잡으면 늦다. 위의 `/orders` 서버(프로세스 하나)에 응답을 기다리지 않고 일정한 간격으로 요청을 보내는 열린 부하를 걸고, 속도를 올려 가며 지연을 쟀다. 지연은 요청을 보냈어야 할 시각부터 재서, 밀린 요청의 대기 시간까지 넣었다(이렇게 재야 하는 이유는 [백분위 지연](/posts/percentile-latency)의 coordinated omission에 있다).
+
+```bash
+for r in 100 200 300 350 400 430 460; do node openload.mjs http://127.0.0.1:18310/orders $r 8; done
+node openload.mjs http://127.0.0.1:18310/orders 500 8
+```
+
+```text
+rate= 100/s  p50=    3.8ms  p99=    9.0ms  errors=0
+rate= 200/s  p50=    3.6ms  p99=    9.2ms  errors=0
+rate= 300/s  p50=    3.4ms  p99=   31.8ms  errors=0
+rate= 350/s  p50=    3.4ms  p99=   16.0ms  errors=0
+rate= 400/s  p50=    3.5ms  p99=   21.7ms  errors=0
+rate= 430/s  p50=    8.6ms  p99=   38.4ms  errors=0
+rate= 460/s  p50=   73.4ms  p99=  249.5ms  errors=0
+rate= 500/s  p50=  211.2ms  p99= 5823.0ms  errors=0
+```
+
+<AlgoTrace
+  caption="처리 한계 근처에서 지연이 무릎처럼 꺾인다"
+  memoryLabel="그 속도에서 잰 p50 · p99"
+  cells={["100/s", "200/s", "300/s", "400/s", "430/s", "460/s", "500/s"]}
+  steps={[
+    { pointer: 0, memory: ["p50 3.8ms", "p99 9.0ms"], caption: "한계의 4분의 1. 요청이 오면 바로 처리된다." },
+    { pointer: 2, memory: ["p50 3.4ms", "p99 31.8ms"], caption: "가끔 요청 둘이 겹쳐 꼬리가 조금 길어진다. 중간값은 그대로다." },
+    { pointer: 3, memory: ["p50 3.5ms", "p99 21.7ms"], caption: "한계에 가까운데도 아직 괜찮아 보인다. 여기서 안심하기 쉽다." },
+    { pointer: 4, memory: ["p50 8.6ms", "p99 38.4ms"], caption: "중간값이 처음으로 오른다. 줄이 생기기 시작했다는 신호다." },
+    { pointer: 5, memory: ["p50 73.4ms", "p99 249.5ms"], caption: "들어오는 양이 처리량을 넘었다. 줄이 계속 길어진다." },
+    { pointer: 6, found: [6], memory: ["p50 211.2ms", "p99 5823.0ms"], caption: "p99가 6초다. 에러는 0인데 사용자는 이미 떠났다." },
+  ]}
+/>
+
+430/s에서 460/s로 7% 늘렸을 뿐인데 중간값이 8배 넘게 뛰었다. 들어오는 속도가 처리 속도를 넘는 순간부터 줄은 시간에 비례해 길어지기 때문이다. 에러는 끝까지 0이었다. 에러율만 보는 알람으로는 이 장애를 못 잡는다. 같은 실험을 하며 이벤트 루프가 얼마나 늦게 깨어나는지(50ms 타이머의 지연)와 CPU를 5초 창마다 찍었다.
+
+```text
+cpu=  1%  loop lag max=26.1ms
+cpu= 44%  loop lag max=6.6ms
+cpu= 49%  loop lag max=7.4ms
+cpu= 78%  loop lag max=33.4ms
+cpu= 84%  loop lag max=68.5ms
+cpu= 87%  loop lag max=48.7ms
+cpu= 93%  loop lag max=132.7ms
+```
+
+첫 줄은 부하를 걸기 전 서버가 막 뜬 시점이고, 대략 둘째·셋째 줄이 200/s, 넷째·다섯째가 380/s, 마지막 두 줄이 460/s 구간이다. 한 코어 기준 CPU가 80%대에 들어서자 이벤트 루프 지연이 수십 ms로 뛰고, 그때 p99도 같이 올랐다. Node 서버에서 첫 칸을 벗어날 신호는 이 셋이다. p99가 평소의 몇 배로 오르고, 프로세스 CPU가 한 코어의 70~80%를 넘고, 이벤트 루프 지연이 수십 ms로 올라간다. 이 실험의 무릎은 이 기계에서 430~460/s였고, 같은 코드라도 다른 프로세스가 함께 돌 때는 400/s에서 무너지기도 했다. 그래서 한 대의 한계는 운영과 같은 조건에서 직접 재고, 그 70% 정도를 계획에 쓴다.
+
+## 사다리 여섯 칸을 한 그림으로
+
+아래 그림은 사다리 끝까지 올랐을 때의 구성이다. 다음을 누르면 칸마다 새로 생긴 길이 하나씩 그려진다.
+
+<NetworkTopology
+  caption="칸마다 하나씩 붙은 구성 요소"
+  width={420}
+  height={330}
+  zones={[
+    { id: "edge", label: "진입", x: 70, y: 20, w: 128, h: 300, tone: "edge" },
+    { id: "app", label: "API", x: 204, y: 20, w: 70, h: 300, tone: "public" },
+    { id: "data", label: "데이터", x: 280, y: 20, w: 134, h: 300, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Clients", x: 36, y: 165, icon: "client", w: 60 },
+    { id: "gw", label: "Gateway", x: 102, y: 165, icon: "gateway", w: 60 },
+    { id: "lb", label: "Nginx", x: 166, y: 165, icon: "lb", w: 56 },
+    { id: "app1", label: "API 1", x: 239, y: 105, icon: "server", w: 60 },
+    { id: "app2", label: "API 2", x: 239, y: 225, icon: "server", w: 60 },
+    { id: "redis", label: "Redis", x: 315, y: 55, icon: "db", w: 60 },
+    { id: "pgb", label: "PgBouncer", x: 315, y: 150, icon: "switch", w: 62 },
+    { id: "queue", label: "Queue", x: 315, y: 275, icon: "db", w: 60 },
+    { id: "primary", label: "Primary", x: 384, y: 85, icon: "db", w: 56 },
+    { id: "replica", label: "Replica", x: 384, y: 160, icon: "db", w: 56 },
+    { id: "shard2", label: "Shard 2", x: 384, y: 230, icon: "db", w: 56 },
+    { id: "worker", label: "Worker", x: 384, y: 295, icon: "container", w: 56 },
+  ]}
+  links={[
+    { from: "client", to: "gw" },
+    { from: "gw", to: "lb" },
+    { from: "lb", to: "app1" },
+    { from: "lb", to: "app2" },
+    { from: "app1", to: "redis" },
+    { from: "app1", to: "pgb" },
+    { from: "app2", to: "pgb" },
+    { from: "pgb", to: "primary" },
+    { from: "pgb", to: "replica", dashed: true },
+    { from: "pgb", to: "shard2" },
+    { from: "app2", to: "queue" },
+    { from: "queue", to: "worker" },
+  ]}
+  steps={[
+    { path: ["app1"], title: "1K: 프로세스 하나", detail: "API와 DB가 한 대에 있어도 된다. 이 칸에서 할 일은 느린 쿼리와 무거운 코드부터 찾는 것이다." },
+    { path: ["app1", "pgb", "primary"], highlight: ["redis"], packet: "SQL", title: "10K: 풀과 캐시", detail: "연결을 풀로 나눠 쓰고, 자주 읽는 값은 Redis에 둔다. DB가 받는 연결 수와 쿼리 수가 준다." },
+    { path: ["client", "gw", "lb", "app2"], highlight: ["app1"], packet: "GET", title: "50K: 여러 대와 LB", detail: "상태를 밖으로 뺀 API를 여러 대 두고 Nginx가 나눈다. 한 대가 죽어도 서비스는 산다." },
+    { path: ["app1", "pgb", "replica"], packet: "SELECT", title: "100K: 읽기는 복제본으로", detail: "인덱스를 먼저 고친 뒤에도 읽기가 주 DB를 누르면 복제본으로 보낸다. 방금 쓴 값이 안 보이는 지연이 생긴다." },
+    { path: ["app2", "queue", "worker"], packet: "job", title: "500K: 요청 밖으로", detail: "메일, PDF, 외부 API처럼 기다릴 필요 없는 일은 큐에 넣고 워커가 처리한다. 몰린 요청은 큐가 받아 둔다." },
+    { path: ["client", "gw", "lb", "app2", "pgb", "shard2"], packet: "POST", title: "1M+: 게이트웨이와 샤딩", detail: "인증과 요청 제한을 입구에서 하고, 주 DB 한 대가 감당 못 하는 쓰기는 키로 나눠 여러 DB에 담는다." },
+  ]}
+/>
+
+칸마다 무엇이 신호이고 무엇이 새로 아픈지를 이어서 본다.
+
+## 연결이 먼저 바닥난다
+
+10K 칸의 신호는 CPU가 아니라 연결이다. Node 프로세스마다 DB 풀을 10개씩 열고 프로세스를 늘리다 보면 PostgreSQL `max_connections`(기본 100)에 먼저 닿는다. 증상은 `sorry, too many clients already` 에러, 또는 풀에서 연결을 빌리려고 기다리는 시간이 늘면서 API 지연이 오르는 것이다. 이때 DB CPU는 한가할 때가 많다. 확인할 곳은 `pg_stat_activity`의 상태별 연결 수, 앱 쪽 풀의 대기 수와 대기 시간이다.
+
+바꾸는 것은 두 가지다. 연결은 앱마다 크게 여는 대신 PgBouncer 같은 풀러로 모아 DB에는 적은 수만 연다. 같은 값을 자꾸 읽는 쿼리(인기 목록, 설정, 세션)는 Redis에 캐시한다. 새로 생기는 장애도 둘이다. PgBouncer의 transaction 모드에서는 `SET`, advisory lock, prepared statement가 예상대로 동작하지 않는다. 캐시는 만료되는 순간 같은 키에 요청이 몰려 DB를 다시 누르거나(캐시 스탬피드), 옛 값을 보여 준다. 풀 크기 계산과 PgBouncer가 깨뜨리는 것은 [커넥션 풀](/posts/connection-pool)에, 캐시를 언제 넣고 지울지는 [캐시 전략](/posts/caching-strategies)과 [캐시 계층과 CDN](/posts/sd-cache-and-cdn-tier)에 있다.
+
+## 한 대로는 배포조차 못 할 때
+
+50K 칸으로 넘어가는 신호는 둘 중 하나다. 쿼리와 코드를 손본 뒤에도 피크 시간 CPU가 모든 코어에서 70%를 넘거나, 한 대라서 배포와 장애 때 서비스가 멈춘다. 뒤의 신호는 트래픽과 상관없이 온다. 사용자가 적어도 "배포 중 30초 다운"을 못 참는 서비스면 이 칸이 먼저 필요하다.
+
+바꾸는 것은 API를 무상태로 만들고(세션과 업로드 파일을 Redis와 객체 저장소로) 여러 대 앞에 로드 밸런서를 두는 것이다. 새 장애는 로그인이 한 번씩 풀리는 숨은 상태, 헬스 체크가 죽은 서버를 빼기까지의 502, 드레이닝 없이 배포할 때 끊기는 요청이다. 그리고 앞 칸의 문제가 곱해진다. API를 10대로 늘리면 DB 연결도 10배가 되니, 풀 칸을 건너뛰고 이 칸에 오면 바로 연결이 바닥난다. 무상태 서버 만들기는 [로드 밸런서와 무상태 웹 서버](/posts/sd-load-balancer-stateless)에, 헬스 체크와 드레이닝은 [로드 밸런서 기본](/posts/load-balancer-basics)에, Nginx 설정은 [Nginx 리버스 프록시](/posts/nginx-reverse-proxy)에 있다. 몇 대까지는 서버를 키우는 편이 나은지는 [수평 확장과 수직 확장](/posts/scaling-horizontal-vertical)에서 따졌다.
+
+## 복제본보다 인덱스가 먼저다
+
+100K 칸의 그림은 "읽기 복제본과 인덱스 튜닝" 순서지만 실제로는 인덱스가 먼저다. 주 DB CPU가 높고 대부분이 읽기일 때, 복제본을 붙이면 같은 비효율을 두 대가 나눠 할 뿐이다. 주문 50만 건 테이블에서 한 사용자의 최근 주문 20건을 읽는 쿼리를 인덱스 전후로 봤다.
+
+```sql
+-- 사용자 5만 명에게 흩어진 주문 50만 건
+CREATE TABLE orders (
+  id bigserial PRIMARY KEY,
+  user_id int NOT NULL,
+  status text NOT NULL,
+  total int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO orders (user_id, status, total, created_at)
+SELECT (random() * 50000)::int, (ARRAY['paid', 'shipped', 'done'])[1 + (i % 3)],
+       (random() * 100000)::int, now() - (i || ' seconds')::interval
+FROM generate_series(1, 500000) i;
+ANALYZE orders;
+```
+
+```sql
+-- 한 사용자의 최근 주문 20건
+EXPLAIN ANALYZE
+SELECT id, total, created_at FROM orders
+WHERE user_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+```text
+ Limit  (cost=7281.25..7282.42 rows=10 width=20) (actual time=27.360..29.801 rows=8 loops=1)
+   ->  Gather Merge  (cost=7281.25..7282.42 rows=10 width=20) (actual time=27.356..29.795 rows=8 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Sort  (cost=6281.22..6281.24 rows=5 width=20) (actual time=16.915..16.917 rows=3 loops=3)
+               Sort Key: created_at DESC
+               ->  Parallel Seq Scan on orders  (cost=0.00..6281.17 rows=5 width=20) (actual time=6.143..16.857 rows=3 loops=3)
+                     Filter: (user_id = 4242)
+                     Rows Removed by Filter: 166664
+ Execution Time: 29.836 ms
+```
+
+```sql
+CREATE INDEX orders_user_created_idx ON orders (user_id, created_at DESC);
+```
+
+```text
+ Limit  (cost=47.03..47.06 rows=11 width=20) (actual time=0.058..0.060 rows=8 loops=1)
+   ->  Sort  (cost=47.03..47.06 rows=11 width=20) (actual time=0.058..0.058 rows=8 loops=1)
+         Sort Key: created_at DESC
+         ->  Bitmap Heap Scan on orders  (cost=4.51..46.84 rows=11 width=20) (actual time=0.034..0.049 rows=8 loops=1)
+               Recheck Cond: (user_id = 4242)
+               ->  Bitmap Index Scan on orders_user_created_idx  (cost=0.00..4.50 rows=11 width=0) (actual time=0.026..0.026 rows=8 loops=1)
+                     Index Cond: (user_id = 4242)
+ Execution Time: 0.079 ms
+```
+
+(출력에서 정렬 메모리, Heap Blocks, 계획 시간 줄은 뺐다.) 앞의 계획은 `Parallel Seq Scan`으로 워커 셋이 50만 줄을 다 훑으며 줄 하나 남기고 16만 6천여 줄씩 버렸다(`Rows Removed by Filter`). 인덱스를 만들자 `Bitmap Index Scan`으로 8줄만 읽고 30ms가 0.08ms로 줄었다. 이 쿼리가 초당 수백 번 돈다면 복제본 몇 대 몫이다. 인덱스를 고르고 망가뜨리지 않는 법은 [인덱스](/posts/db-index)와 [인덱스 설계](/posts/db-index-design)에 있다.
+
+인덱스와 캐시를 다 하고도 읽기가 주 DB를 누를 때 복제본을 둔다. 새 장애는 복제 지연이다. 방금 쓴 리뷰가 목록에 안 보이고, 결제 직후 주문 상태가 이전 값으로 나온다. 그래서 "방금 쓴 사용자의 읽기는 잠시 주 DB로" 같은 규칙이 필요하고, 복제 지연을 지표로 걸어 몇 초를 넘으면 그 복제본을 읽기에서 뺀다. 복제의 원리와 지연은 [DB 복제로 읽기 나누기](/posts/sd-db-replication-intro)와 [복제와 복제 지연](/posts/db-replication-sharding)에 있다.
+
+## 요청 안에서 기다리는 일을 뺀다
+
+500K 칸의 신호는 p99를 이루는 시간의 대부분이 사용자가 기다릴 필요 없는 일일 때다. 주문 API의 p99가 2초인데 그중 1.5초가 영수증 메일과 외부 정산 API 호출이라면, 서버를 늘려도 p99는 그대로다. 또 하나의 신호는 순간적인 몰림이다. 이벤트 시작 1분에 평소의 20배가 몰리는 서비스는 그 1분을 위해 서버를 20배 둘 수 없으니, 바로 하지 않아도 되는 일은 큐에 쌓았다가 워커가 제 속도로 처리하게 한다.
+
+이 칸은 순서상 다섯 번째지만 꼭 그만큼 커져야 필요한 것은 아니다. 사용자 1K짜리 서비스라도 PDF를 만들거나 메일을 보내면 첫날부터 큐가 맞다. 무엇을 쓸지는 일의 성격이 정한다. 한 서비스 안의 "할 일"(재시도, 지연, 크론이 필요한 작업)은 [BullMQ](/posts/bullmq-job-queue) 같은 작업 큐로, 여러 서비스가 같은 사건을 각자 읽어야 하면 [Kafka](/posts/kafka-basics)로 보낸다. 새 장애는 큐 깊이다. 넣는 속도가 처리 속도를 넘으면 줄이 길어지고, 사용자는 "주문은 됐는데 메일이 30분째 안 온다"를 겪는다. 같은 작업이 두 번 처리되는 일, 끝까지 실패하는 작업도 생긴다. 큐 깊이와 가장 오래 기다린 작업의 나이를 지표로 두고, 늘기만 하면 워커를 늘린다. 이 지점의 기본기는 [메시지 큐 기초](/posts/message-queue-basics)와 [백프레셔](/posts/backpressure)에 있다.
+
+## 쓰기와 입구가 한계에 닿을 때
+
+마지막 칸의 둘은 서로 다른 신호로 온다. DB 샤딩의 신호는 쓰기다. 복제본은 읽기만 나눠 주니, 주 DB 한 대의 쓰기 CPU나 WAL 쓰기 속도가 한계에 닿거나, 테이블 하나가 수 TB가 되어 백업 복원과 인덱스 재작성에 반나절이 걸리면 키로 나눌 때가 됐다. 그 전에 할 수 있는 것이 많다. 쓰기를 묶어서 보내고, 오래된 데이터를 파티셔닝으로 떼어 내고, 한 서비스의 테이블을 별도 DB로 옮기는 것이다. 샤딩을 하면 샤드를 넘는 조인, 키 없는 검색의 scatter-gather, 유명한 키 하나가 샤드 하나를 태우는 문제, 리샤딩이 새로 생긴다. [샤딩 입문](/posts/sd-sharding-intro)과 [샤딩](/posts/db-sharding)에 있다.
+
+게이트웨이의 신호는 트래픽보다 구조다. 서비스가 여럿으로 나뉘어 인증, 요청 수 제한, 라우팅, 버전 관리가 서비스마다 중복되고, 클라이언트가 서비스 여러 개의 주소를 알아야 할 때 입구를 하나로 모은다. 지역이 여럿이면 입구도 여러 곳에 둔다(그림의 "분산 게이트웨이"). 새 장애는 게이트웨이 자체가 모든 요청의 단일 장애점이 된다는 것, 그리고 타임아웃과 재시도가 게이트웨이와 서비스 두 겹으로 쌓이는 것이다. 입구 쪽 구성 요소의 구분은 [리버스 프록시, 로드 밸런서, API 게이트웨이](/posts/reverse-proxy-lb-api-gateway)와 [게이트웨이](/posts/gateway)에, 입구에서 요청 수를 제한하는 법은 [요청 수 제한을 API에 붙이기](/posts/rate-limiting-in-practice)에, 지역을 나누는 일은 [데이터 센터를 여러 곳에](/posts/sd-multi-datacenter)에 있다.
+
+<ConceptDiagram
+  caption="칸을 옮기게 만드는 신호. 순서는 병목이 정한다"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "one", label: "프로세스 하나", sub: "Express·Fastify", x: 95, y: 45, w: 130 },
+    { id: "pool", label: "풀과 캐시", sub: "PgBouncer·Redis", x: 95, y: 150, w: 130 },
+    { id: "lb", label: "여러 대와 LB", sub: "Nginx", x: 95, y: 255, w: 130 },
+    { id: "read", label: "인덱스와 복제본", sub: "읽기 나누기", x: 305, y: 255, w: 130 },
+    { id: "queue", label: "비동기 큐", sub: "BullMQ·Kafka", x: 305, y: 150, w: 130 },
+    { id: "shard", label: "게이트웨이·샤딩", sub: "쓰기·입구 나누기", x: 305, y: 45, w: 130 },
+  ]}
+  edges={[
+    { from: "one", to: "pool", label: "연결 고갈" },
+    { from: "pool", to: "lb", label: "CPU 70%·배포" },
+    { from: "lb", to: "read", label: "읽기 쏠림" },
+    { from: "read", to: "queue", label: "느린 부수 작업" },
+    { from: "queue", to: "shard", label: "쓰기 한계" },
+    { from: "one", to: "queue", label: "PDF·메일", dashed: true },
+  ]}
+/>
+
+## 사다리를 순서대로 오르지 않아도 된다
+
+그림의 순서는 "흔히 이 순서로 아프다"는 경험칙이다. 서비스마다 먼저 아픈 곳이 다르다. 읽기가 거의 없고 쓰기만 많은 로그 수집 서비스는 복제본 칸을 건너뛰고 큐와 파티셔닝으로 간다. PDF와 메일이 많은 서비스는 첫 칸부터 큐가 있다. 반대로 사용자 수가 100K를 넘어도 요청이 가볍고 캐시가 잘 맞으면 서버 두 대와 DB 한 대로 오래 간다.
+
+사다리에서 자주 하는 실수도 그래서 생긴다. 첫째, 사용자 수만 보고 칸을 고른다. 위에서 본 것처럼 DAU와 동시 사용자는 백 배 차이 나고, 요청 하나의 CPU 2ms가 한 대의 한계를 30분의 1 아래로 떨어뜨린다. 둘째, 아래 칸을 건너뛴다. 인덱스 없이 복제본을 붙이고, 풀 없이 서버를 늘리고, 측정 없이 샤딩을 한다. 셋째, 칸을 오른 뒤 새 장애를 볼 지표를 같이 두지 않는다. 복제본을 붙이면 복제 지연을, 큐를 넣으면 큐 깊이를, 게이트웨이를 넣으면 그 자체의 지연과 에러를 지표에 넣어야 한다. 넷째, 한계를 재지 않고 짐작한다. 위 실험처럼 같은 코드도 기계와 함께 도는 프로세스에 따라 무릎이 400/s와 460/s로 달랐다.
+
+## p99가 오르면 어디부터 보나
+
+"요즘 API가 느리다"는 말을 들으면 요청이 지나는 길을 입구부터 따라가며 어디서 줄이 생겼는지 찾는다. 자원마다 사용률, 포화(기다리는 줄), 에러를 본다.
+
+<AlgoTrace
+  caption="입구에서 저장소까지, 줄이 생긴 곳을 찾는다"
+  memoryLabel="본 것"
+  cells={["LB", "API CPU", "루프 지연", "DB 풀", "DB", "복제 지연", "큐 깊이"]}
+  steps={[
+    { pointer: 0, memory: ["LB p99 = API p99"], caption: "LB가 잰 지연과 API가 잰 지연이 같다. 입구는 아니다." },
+    { pointer: 1, memory: ["LB p99 = API p99", "CPU 45%"], caption: "API 프로세스 CPU는 한가하다. 계산이 병목은 아니다." },
+    { pointer: 2, memory: ["LB p99 = API p99", "CPU 45%", "lag 5ms"], caption: "이벤트 루프도 제때 깨어난다. 동기 코드가 막는 것도 아니다." },
+    { pointer: 3, found: [3], memory: ["CPU 45%", "lag 5ms", "풀 대기 380ms"], caption: "풀에서 연결을 빌리는 데 380ms를 기다린다. 여기가 줄이다." },
+    { pointer: 4, memory: ["풀 대기 380ms", "DB CPU 30%", "active 10/10"], caption: "DB는 한가한데 연결 10개가 모두 바쁘다. 느린 쿼리 하나가 연결을 오래 쥐고 있다." },
+    { pointer: 4, found: [3, 4], memory: ["풀 대기 380ms", "Seq Scan 1건"], caption: "그 쿼리의 계획이 Seq Scan이다. 서버를 늘릴 게 아니라 인덱스를 고칠 차례다." },
+  ]}
+/>
+
+위 그림의 숫자는 흐름을 보여 주려고 정한 예다. 실제로 볼 곳은 이렇다. 입구는 로드 밸런서나 Nginx 액세스 로그의 요청 시간과 upstream 응답 시간 차이, API는 프로세스 CPU와 이벤트 루프 지연(위 실험처럼 타이머가 늦게 깨어나는 시간), DB 풀은 대기 수와 대기 시간, DB는 `pg_stat_activity`의 active 연결 수와 느린 쿼리 로그, 복제본은 복제 지연, 큐는 대기 작업 수와 가장 오래 기다린 작업의 나이다. 이 지표들을 평소에 모아 두는 법은 [모니터링 기초](/posts/monitoring-basics)에, 자동으로 대수를 늘리는 기준은 [오토스케일링](/posts/autoscaling)에 있다.
+
+한 군데서 줄을 찾으면 그 칸만 오른다. 풀에서 막혔으면 풀과 쿼리를, CPU가 막혔으면 코어와 대수를, 쓰기가 막혔으면 큐와 파티셔닝을 본다. 고친 뒤에는 같은 부하로 다시 재서 무릎이 오른쪽으로 옮겨 갔는지 확인한다.
+
+## 칸은 숫자가 아니라 줄이 정한다
+
+그림의 1K, 10K, 100K는 대략의 감을 주는 숫자다. 다음 칸으로 넘어갈 때를 정하는 건 지금 줄이 생긴 자원이다. 사용자 수는 가정을 적어 RPS로 바꾸고, 한 대의 한계는 직접 재서 그 70%로 계획하고, p99와 포화 지표가 무릎에 닿기 전에 그 자원만 늘린다. 칸을 오를 때마다 새로 생기는 장애(연결 고갈, 502, 복제 지연, 큐 깊이, 핫 샤드)를 볼 지표를 같이 둔다. 각 칸의 자세한 길은 [시스템 디자인 공부 순서](/posts/system-design-study-path)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 사용자 10만 명이면 서버가 몇 대 필요한가요?
+
+그 숫자만으로는 답할 수 없고, 가정을 먼저 묻는다. DAU인지 동시 사용자인지, 화면 하나가 API를 몇 번 부르는지, 생각 시간과 요청 하나의 처리 비용이 얼마인지에 따라 RPS가 백 배씩 달라진다. RPS를 구한 뒤 부하 테스트로 잰 한 대의 한계의 70% 정도로 나눠 대수를 잡고, 한 대가 빠져도 버티게 하나를 더한다.
+
+### CPU가 70%인데 응답 시간이 갑자기 나빠졌습니다. 왜 그럴까요?
+
+처리 한계 근처에서는 도착이 조금만 몰려도 줄이 생기고, 들어오는 양이 처리량을 넘으면 줄이 계속 길어지기 때문이다. 그래서 지연은 CPU 100%보다 먼저 무릎처럼 꺾인다. Node라면 프로세스 하나가 코어 하나만 쓰니 서버 전체 CPU가 낮아 보여도 그 코어는 꽉 찼을 수 있고, 이벤트 루프 지연을 같이 봐야 한다.
+
+### 언제 수평 확장으로 넘어가나요?
+
+코드와 쿼리를 고치고 한 기계의 코어를 다 쓴 뒤에도 피크 CPU가 70%를 넘을 때, 또는 한 대라서 배포와 장애 때 서비스가 멈출 때다. 넘어가기 전에 세션 같은 상태를 밖으로 빼야 하고, 대수가 늘어난 만큼 DB 연결도 늘어나니 풀러를 먼저 둔다.
+
+### 읽기가 많아 DB가 힘듭니다. 캐시와 읽기 복제본 중 무엇을 먼저 하나요?
+
+둘 다 하기 전에 느린 쿼리의 실행 계획부터 본다. Seq Scan을 인덱스로 바꾸면 복제본 몇 대 몫이 줄어든다. 그다음 같은 값을 반복해 읽는 쿼리는 캐시, 다양한 쿼리가 고르게 많은 경우는 복제본이 맞다. 복제본을 붙이면 방금 쓴 값이 안 보이는 복제 지연을 다룰 규칙과 지표가 필요하다.
+
+### 비동기 큐를 넣으면 새로 생기는 문제는 무엇인가요?
+
+결과를 바로 알 수 없고, 큐가 밀리면 일이 늦게 처리되며, 같은 작업이 두 번 처리되거나 끝까지 실패하는 작업이 생긴다. 그래서 큐 깊이와 가장 오래 기다린 작업의 나이를 지표로 두고, 처리 함수를 멱등하게 만들고, 실패한 작업을 따로 모아 본다. 큐는 몰림을 받아 줄 뿐 처리량을 늘려 주지는 않는다.
+
+### 샤딩은 언제 하나요? 그 전에 해 볼 것은요?
+
+복제본으로 나눌 수 없는 쓰기가 주 DB 한 대의 한계에 닿거나, 데이터가 너무 커져 백업 복원과 스키마 변경이 감당되지 않을 때다. 그 전에 쿼리와 인덱스 정리, 쓰기 묶음, 오래된 데이터 파티셔닝, 서비스별 DB 분리, 더 큰 기계를 먼저 본다. 샤딩은 샤드 키 선택, 샤드를 넘는 질의, 리샤딩이라는 비용을 영구히 남긴다.
+
+### API 게이트웨이는 왜 두고, 무엇을 조심하나요?
+
+서비스가 여럿일 때 인증, 요청 수 제한, 라우팅, 버전 관리를 입구 한곳에서 하려고 둔다. 대신 모든 요청이 지나가니 게이트웨이가 단일 장애점이 되지 않게 여러 대로 두고, 게이트웨이와 서비스의 타임아웃과 재시도가 두 겹으로 쌓이지 않게 맞춘다. 서비스가 하나뿐이면 Nginx나 로드 밸런서로 충분할 때가 많다.

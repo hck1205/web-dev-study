@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "api-scaling-ladder",
+    title: "API 확장 사다리: 1K에서 1M까지, 칸을 옮기라는 신호",
+    summary: "한 대, 풀과 캐시, 여러 대와 로드 밸런서, 인덱스와 복제본, 비동기 큐, 게이트웨이와 샤딩으로 오르는 사다리를 칸마다 넘어갈 신호와 새로 생기는 장애로 정리한다. 사용자 수를 가정과 함께 RPS로 바꾸고, Fastify 한 대의 한계와 지연이 무릎처럼 꺾이는 지점을 직접 잰다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Scalability", "Performance", "Backend", "Node.js"],
+    date: "2026-10-24",
+    keywords: ["API 확장 사다리", "동시 사용자 수", "지연 무릎"],
+  },
+  {
+    slug: "bullmq-job-queue",
+    title: "BullMQ 작업 큐: 재시도, 지연, 멈춘 작업, 두 번 실행되는 이유",
+    summary: "Redis 위에 작업 큐를 세우는 BullMQ를 직접 돌려 concurrency와 CPU 작업, 지수 백오프, 우선순위와 jobId 중복 방지, 요청 수 제한, 잡 스케줄러를 확인한다. 락이 만료돼 같은 작업이 두 번 실행되는 장면, 안전한 종료, 끝난 작업이 먹는 Redis 메모리, 큐가 밀릴 때 보는 순서까지 따라간다.",
+    topic: "programming/backend/messaging",
+    tags: ["Messaging", "Redis", "Node.js", "Backend", "Troubleshooting"],
+    date: "2026-10-24",
+    keywords: ["BullMQ", "stalled job", "lockDuration", "removeOnComplete"],
+  },
+  {
     slug: "data-structures-overview",
     title: "자료구조 한눈에 고르기: 면접 단골 13개 지도",
     summary: "배열부터 유니온 파인드까지 13개 자료구조를 필요한 연산에서 출발해 고르는 법을 정리한다. 연산별 비용표, 문제 문장에 숨은 신호, 여러 구조가 함께 일하는 LRU와 다익스트라, 대표 문제 짝짓기를 담았다.",

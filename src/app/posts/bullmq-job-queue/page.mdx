@@ -1,0 +1,680 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("bullmq-job-queue");
+
+주문이 끝나면 영수증 PDF를 만들어 메일로 보낸다. API 안에서 하던 이 일을 BullMQ 큐로 빼자 주문 응답은 빨라졌다. 그런데 몇 주 뒤, 품목이 수백 개인 주문에서만 영수증이 두 통씩 간다는 문의가 들어왔다. 워커 로그에는 에러다운 에러가 없고 `Missing lock for job 1. moveToFinished` 한 줄만 남아 있었다.
+
+BullMQ는 Redis 위에 작업 큐를 만들어 주는 Node.js 라이브러리다. 작업을 넣는 쪽(`Queue`)과 꺼내 처리하는 쪽(`Worker`)만 알면 바로 쓸 수 있을 만큼 쉽다. 하지만 재시도, 지연, 우선순위, 중복 방지, 워커가 죽었을 때 작업을 되찾는 장치가 모두 Redis 키 몇 개와 시계 하나로 돌아간다. 그 시계를 모르고 쓰면 위의 두 통짜리 영수증이 나온다. 이 글은 그 장치들을 하나씩 직접 돌려 보며 따라간다. 기준은 BullMQ 6.3.11, ioredis 5.11.1, Redis 7.0.15, Node.js 22다.
+
+큐 자체의 개념(ack, 가시성 타임아웃, 최소 한 번 전달)은 [메시지 큐 기초](/posts/message-queue-basics)에, 끝까지 실패한 작업을 다루는 법은 [데드 레터 큐](/posts/dead-letter-queue)에 있다. 이 큐가 서비스 규모의 어느 단계에서 등장하는지는 [API 확장 사다리](/posts/api-scaling-ladder)에서 이어서 본다.
+
+## Redis 안에 큐를 세우는 라이브러리
+
+설치부터 하나 걸린다. BullMQ 6부터는 Redis 클라이언트가 선택 의존성(optional peer dependency)으로 바뀌어서, `bullmq`만 설치하고 연결 옵션을 넘기면 이렇게 멈춘다.
+
+```bash
+npm install bullmq@6.3.11
+node basic.mjs
+```
+
+```text
+Error: BullMQ could not load the optional 'ioredis' package. Install it with `npm install ioredis`, or provide a different Redis client instance (e.g. node-redis) via the connection option.
+```
+
+5.x에서는 ioredis가 함께 설치됐다. 6으로 올리면서 이 에러를 만나면 `npm install ioredis`를 하거나, 이미 만든 클라이언트 인스턴스를 `connection`에 넘긴다.
+
+작업을 넣고 처리하는 최소 코드는 이렇다. 썸네일 여섯 장을 만드는 작업을 넣고, 한 장에 500ms 걸리는 워커로 처리한다.
+
+```js
+import { Queue, Worker } from "bullmq";
+const connection = { host: "127.0.0.1", port: 18300 };
+const conc = Number(process.argv[2] ?? 1);
+const queue = new Queue("thumb", { connection });
+await queue.obliterate({ force: true }); // 이전 실행의 흔적을 지운다
+const t0 = Date.now();
+const ms = () => String(Date.now() - t0).padStart(5);
+
+for (let i = 1; i <= 6; i++) {
+  const job = await queue.add("resize", { photoId: i });
+  if (i === 1) console.log(`${ms()}ms added job id=${job.id} name=${job.name}`);
+}
+console.log(await queue.getJobCounts("wait", "active", "completed"));
+
+const worker = new Worker(
+  "thumb",
+  async (job) => {
+    await new Promise((r) => setTimeout(r, 500)); // 이미지 서버를 기다리는 시간
+    return { ok: job.data.photoId };
+  },
+  { connection, concurrency: conc },
+);
+let done = 0;
+worker.on("completed", async (job) => {
+  console.log(`${ms()}ms completed ${job.id}`);
+  if (++done === 6) {
+    console.log(`concurrency=${conc} total ${Date.now() - t0}ms`);
+    await worker.close();
+    await queue.close();
+  }
+});
+```
+
+```bash
+node basic.mjs 1   # 워커 하나가 한 번에 하나씩
+node basic.mjs 3   # 같은 워커가 한 번에 셋씩
+```
+
+```text
+    5ms added job id=1 name=resize
+{ wait: 6, active: 0, completed: 0 }
+  527ms completed 1
+ 1030ms completed 2
+ 1532ms completed 3
+ 2035ms completed 4
+ 2537ms completed 5
+ 3039ms completed 6
+concurrency=1 total 3039ms
+```
+
+```text
+    4ms added job id=1 name=resize
+{ wait: 6, active: 0, completed: 0 }
+  524ms completed 1
+  524ms completed 2
+  525ms completed 3
+ 1028ms completed 4
+ 1028ms completed 5
+ 1029ms completed 6
+concurrency=3 total 1030ms
+```
+
+`concurrency: 3`이면 프로세스 하나가 작업 셋을 동시에 쥐고 기다린다. 여섯 개가 3초에서 1초로 줄었다. 작업을 넣는 API 서버와 처리하는 워커는 같은 Redis만 보면 되니, 워커를 다른 프로세스나 다른 서버로 떼어 내도 코드가 바뀌지 않는다. 아래 그림에서 다음을 누르면 주문 하나가 API에서 Redis를 거쳐 워커로 간다.
+
+<NetworkTopology
+  caption="API는 Redis에 작업을 넣고 응답한다. 워커는 따로 꺼내 처리한다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "req", label: "요청 경로", x: 8, y: 20, w: 150, h: 230, tone: "public" },
+    { id: "store", label: "Redis 7", x: 166, y: 20, w: 96, h: 230, tone: "private" },
+    { id: "bg", label: "워커 프로세스", x: 270, y: 20, w: 122, h: 230, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "Browser", x: 83, y: 70, icon: "client" },
+    { id: "api", label: "Order API", x: 83, y: 190, icon: "server" },
+    { id: "redis", label: "bull:receipt", sub: "wait list", x: 214, y: 130, icon: "db", w: 88 },
+    { id: "w1", label: "worker 1", x: 331, y: 80, icon: "container" },
+    { id: "w2", label: "worker 2", x: 331, y: 190, icon: "container" },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "redis" },
+    { from: "redis", to: "w1" },
+    { from: "redis", to: "w2" },
+  ]}
+  steps={[
+    { path: ["user", "api"], packet: "POST", title: "주문이 들어온다", detail: "API는 주문 행을 저장한다. 사용자가 기다려야 하는 일은 여기까지다." },
+    { path: ["api", "redis"], packet: "add", title: "작업 한 건을 넣는다", detail: "Lua 스크립트 하나로 작업 해시를 만들고 wait 리스트에 id를 붙인다.", payload: '{"orderId":5001}' },
+    { path: ["api", "user"], packet: "201", title: "바로 응답한다", detail: "PDF가 아직 없어도 주문은 끝났다. PDF가 오래 걸려도 응답 시간은 같다." },
+    { path: ["redis", "w1"], packet: "job 1", title: "워커가 가져간다", detail: "worker 1이 wait에서 active로 옮기며 락을 건다. 다른 워커는 이 작업을 받지 못한다." },
+    { path: ["w1", "redis"], packet: "done", title: "결과를 적는다", detail: "처리가 끝나면 active에서 빼서 completed로 옮기고 반환값을 해시에 적는다." },
+  ]}
+/>
+
+## 작업 한 건이 Redis에 남기는 것
+
+BullMQ의 큐는 Redis 키 여러 개로 된 상태 기계다. 작업 네 개를 넣고(하나는 우선순위, 하나는 지연), 하나는 성공시키고, 하나는 실패시키고, 하나를 처리하는 도중에 키를 훑어봤다.
+
+```bash
+# 작업 해시(bull:mail:1 같은 숫자 키)를 빼고 큐의 키와 자료형을 본다
+for k in $(redis-cli -p 18300 --scan --pattern 'bull:mail:*' | grep -v -E 'bull:mail:[0-9]+$' | sort); do
+  printf "%-24s %-7s\n" "$k" "$(redis-cli -p 18300 type $k)"
+done
+redis-cli -p 18300 pttl bull:mail:2:lock   # 처리 중인 2번 작업의 락이 몇 ms 남았나
+```
+
+```text
+bull:mail:2:lock         string
+bull:mail:active         list
+bull:mail:completed      zset
+bull:mail:delayed        zset
+bull:mail:events         stream
+bull:mail:failed         zset
+bull:mail:id             string
+bull:mail:marker         zset
+bull:mail:meta           hash
+bull:mail:pc             string
+bull:mail:stalled-check  string
+28683
+```
+
+`wait`(바로 꺼낼 작업, 리스트)와 `prioritized`(우선순위 있는 작업, 정렬 집합)는 이 순간 비어 있어서 키가 없다. Redis는 빈 리스트를 지운다. 작업 하나는 `bull:mail:1` 같은 해시에 담긴다. 앞에서 처리를 마친 썸네일 작업(`bull:thumb:1`)의 해시에는 `name`, `data`, `opts`, `processedOn`, `finishedOn`, `returnvalue`(`{"ok":1}`) 같은 필드가 있고, `ats`는 시작한 횟수(attemptsStarted), `atm`은 끝난 시도 횟수(attemptsMade)다. 둘 다 1이었다. 키 사이를 옮기는 일은 모두 Lua 스크립트 한 번으로 한다. Redis는 스크립트를 실행하는 동안 다른 명령을 끼워 넣지 않으니, "wait에서 빼서 active에 넣고 락을 건다" 같은 여러 단계가 한 덩어리로 일어난다. 워커 둘이 같은 작업을 동시에 꺼내는 일이 이 단계에서는 생기지 않는 이유다.
+
+<ConceptDiagram
+  caption="작업 id는 상태에 따라 이 키들 사이를 옮겨 다닌다"
+  width={400}
+  height={290}
+  nodes={[
+    { id: "delayed", label: "delayed", sub: "zset · 실행 시각", x: 75, y: 50, w: 120 },
+    { id: "wait", label: "wait", sub: "list · 들어온 순서", x: 75, y: 145, w: 120 },
+    { id: "prio", label: "prioritized", sub: "zset · 숫자 작을수록", x: 75, y: 240, w: 120 },
+    { id: "active", label: "active", sub: "list + :lock", x: 220, y: 145, w: 100 },
+    { id: "done", label: "completed", sub: "zset", x: 335, y: 80, w: 100 },
+    { id: "failed", label: "failed", sub: "zset", x: 335, y: 215, w: 100 },
+  ]}
+  edges={[
+    { from: "delayed", to: "wait", label: "시각 도래" },
+    { from: "wait", to: "active", label: "가져감" },
+    { from: "prio", to: "active" },
+    { from: "active", to: "done", label: "성공" },
+    { from: "active", to: "failed", label: "시도 소진" },
+    { from: "active", to: "delayed", label: "재시도", dashed: true },
+  ]}
+/>
+
+`events`는 Redis Streams다. `completed`, `failed`, `stalled` 같은 일이 생길 때마다 한 줄씩 붙고, 다른 프로세스가 `QueueEvents`로 구독한다. API 서버가 "이 작업 끝났나"를 알고 싶을 때 쓰는 길이다.
+
+## concurrency는 기다리는 일에만 듣는다
+
+처음 예제에서 `concurrency: 3`이 세 배 빨랐던 건 작업이 `setTimeout`으로 기다리기만 했기 때문이다. Node.js는 자바스크립트를 스레드 하나에서 돌린다([이벤트 루프](/posts/event-loop)). 기다리는 동안 다른 작업을 진행할 수는 있어도, CPU를 쓰는 계산 두 개를 동시에 하지는 못한다. 작업마다 300ms씩 CPU를 붙잡는 해시 계산으로 바꿔 봤다.
+
+```js
+// inline: 워커 프로세스 안에서 직접 계산
+const processor = async (job) => {
+  const end = Date.now() + 300;
+  while (Date.now() < end) {} // 300ms 동안 CPU를 붙잡는다
+  return job.data.n;
+};
+// sandbox: 같은 함수를 파일로 빼서 경로를 넘기면 자식 프로세스에서 돈다
+const sandboxed = fileURLToPath(new URL("./busy-processor.cjs", import.meta.url));
+
+new Worker("cpu", mode === "sandbox" ? sandboxed : processor, { connection, concurrency: 3 });
+```
+
+```text
+inline: 6 jobs x 300ms CPU, concurrency 3 -> 1817ms
+sandbox: 6 jobs x 300ms CPU, concurrency 3 -> 775ms
+```
+
+같은 `concurrency: 3`인데 인라인은 6 × 300ms를 그대로 다 썼다. 처리 함수 대신 파일 경로를 넘기면 BullMQ가 샌드박스 프로세스(자식 프로세스, `useWorkerThreads: true`면 워커 스레드)에서 돌려서 코어 4개를 나눠 쓴다. 775ms에는 자식 프로세스를 띄우는 시간도 들어 있다. 고르는 기준은 단순하다. 외부 API, DB, S3를 기다리는 작업이면 `concurrency`를 올린다. PDF 렌더링, 이미지 변환, 압축처럼 CPU를 쓰는 작업이면 샌드박스로 돌리거나 워커 프로세스 수를 코어 수에 맞춘다. 이 구분이 왜 락과도 이어지는지는 아래 "살아 있는데 죽었다고 본다"에서 다시 나온다. Node 안에서 스레드와 프로세스를 나누는 방법은 [Node.js 서버 런타임](/posts/nodejs-server-runtime)에 따로 정리했다.
+
+## 실패한 작업은 언제 다시 오나
+
+메일 서버가 `421 try again later`를 돌려주면 잠시 뒤에 다시 보내면 된다. 주소 형식이 틀렸다면 몇 번을 다시 해도 소용없다. BullMQ에서는 앞의 경우를 `attempts`와 `backoff`로, 뒤의 경우를 `UnrecoverableError`로 표현한다.
+
+```js
+import { Queue, Worker, UnrecoverableError } from "bullmq";
+
+const opts = { attempts: 4, backoff: { type: "exponential", delay: 1000 } };
+await queue.add("welcome", { to: "a@example.com" }, opts);
+await queue.add("welcome", { to: "not-an-email" }, opts);
+
+new Worker("mail", async (job) => {
+  if (job.data.to === "not-an-email") throw new UnrecoverableError("invalid address");
+  if (job.attemptsMade < 3) throw new Error("SMTP 421 try again later"); // 세 번은 일부러 실패
+  return "sent";
+}, { connection });
+```
+
+```text
+   14ms start job 1 attemptsMade=0 to=a@example.com
+   16ms failed job 1: SMTP 421 try again later (attemptsMade=1)
+   17ms start job 2 attemptsMade=0 to=not-an-email
+   18ms failed job 2: invalid address (attemptsMade=1)
+ 1052ms start job 1 attemptsMade=1 to=a@example.com
+ 1053ms failed job 1: SMTP 421 try again later (attemptsMade=2)
+ 3061ms start job 1 attemptsMade=2 to=a@example.com
+ 3063ms failed job 1: SMTP 421 try again later (attemptsMade=3)
+ 7084ms start job 1 attemptsMade=3 to=a@example.com
+ 7085ms completed job 1 -> sent
+{ wait: 0, delayed: 0, completed: 1, failed: 1 }
+job 2 failedReason: invalid address | attemptsMade: 1
+```
+
+1번 작업의 재시도 간격이 약 1초, 2초, 4초다. `exponential`은 `delay × 2^(attemptsMade − 1)`만큼 기다린다. `attempts: 4`는 재시도 횟수가 아니라 처음 시도를 포함한 전체 횟수다. 2번 작업은 `UnrecoverableError`를 던지자 시도가 남아 있어도 바로 `failed`로 갔다.
+
+로그에서 하나 더 볼 것이 있다. `failed` 이벤트가 1번 작업에서 세 번 찍혔다. 이 이벤트는 "최종 실패"가 아니라 "이번 시도 실패"마다 온다. 여기에 "영수증 발송 실패" 알림을 걸면 결국 성공한 작업에도 알림이 세 번 간다. 최종 실패만 보려면 핸들러에서 `job.attemptsMade >= job.opts.attempts`를 확인하거나, 알람은 `failed` 집합의 크기로 건다.
+
+<AlgoTrace
+  caption="1번 작업이 거친 상태. 재시도 대기는 delayed에서 한다"
+  memoryLabel="attemptsMade · 다음 시도까지"
+  cells={["wait", "active", "delayed", "completed", "failed"]}
+  steps={[
+    { pointer: 0, memory: ["0"], caption: "add로 들어와 wait 끝에 선다." },
+    { pointer: 1, memory: ["0"], caption: "워커가 가져간다. 락이 걸리고 시도가 시작된다." },
+    { pointer: 2, memory: ["1", "1000ms"], caption: "421로 실패했다. 시도가 남아 1초 뒤 시각으로 delayed에 들어간다." },
+    { pointer: 1, memory: ["1"], caption: "시각이 되자 wait를 거쳐 다시 active가 된다." },
+    { pointer: 2, memory: ["2", "2000ms"], caption: "또 실패했다. 이번엔 2초를 기다린다." },
+    { pointer: 2, memory: ["3", "4000ms"], caption: "세 번째 실패 뒤엔 4초다. 간격이 두 배씩 는다." },
+    { pointer: 3, found: [3], memory: ["3"], caption: "네 번째 시도에서 성공해 completed로 간다." },
+    { pointer: 4, found: [4], memory: ["1"], caption: "2번 작업은 UnrecoverableError로 첫 시도에서 바로 failed가 됐다." },
+  ]}
+/>
+
+워커 수천 개가 같은 순간 실패하면 같은 박자로 돌아온다. `backoff`에 `jitter: 0.5`처럼 비율을 주면 대기 시간에 무작위를 섞는다. 왜 섞어야 하는지와 어떤 방식이 있는지는 [지수 백오프와 지터](/posts/exponential-backoff-jitter)에서 숫자로 비교했다. 마지막 시도까지 실패한 작업은 `failed`에 남는다. 이걸 사람이 보고 고친 뒤 되돌리는 흐름은 [데드 레터 큐](/posts/dead-letter-queue)의 redrive와 같고, BullMQ에서는 `job.retry()`로 다시 `wait`에 넣는다.
+
+## 넣은 순서대로 나오지 않는 작업
+
+`delay`는 정한 시간이 지난 뒤에 꺼내게 하고, `priority`는 앞줄로 끼워 넣는다. 영수증 둘, 환불(우선순위 1), 리포트(우선순위 10), 1.5초 지연 리마인더, 결제 캡처를 차례로 넣고 워커를 띄웠다.
+
+```js
+await queue.add("receipt", { orderId: 101 });
+await queue.add("receipt", { orderId: 102 });
+await queue.add("refund", { orderId: 103 }, { priority: 1 });
+await queue.add("report", { orderId: 104 }, { priority: 10 });
+await queue.add("remind", { orderId: 105 }, { delay: 1500 });
+await queue.add("charge", { orderId: 106 }, { jobId: "charge-106" });
+console.log(await queue.getJobCounts("wait", "prioritized", "delayed"));
+```
+
+```text
+{ wait: 3, prioritized: 2, delayed: 1 }
+   10ms receipt order=101 prio=0
+   12ms receipt order=102 prio=0
+   12ms charge order=106 prio=0
+   13ms refund order=103 prio=1
+   13ms report order=104 prio=10
+ 1599ms remind order=105 prio=0
+```
+
+우선순위 1인 환불이 맨 앞에 올 것 같지만, 실제로는 우선순위를 주지 않은 작업 셋이 먼저 나갔다. BullMQ에서 우선순위 0은 "가장 높음"이 아니라 "우선순위 없음"이고, 우선순위 없는 작업이 `wait` 리스트에서 먼저 나간다. 우선순위를 준 작업끼리만 숫자가 작은 쪽이 앞선다(범위는 0부터 2,097,151). 그래서 급한 작업을 앞세우려면 모든 작업에 우선순위를 주거나, 급한 작업을 다른 큐로 빼서 워커를 따로 붙인다. 운영에서는 후자가 덜 헷갈린다. 우선순위는 정렬 집합을 쓰니 넣고 꺼낼 때 O(log n)이 붙고, BullMQ 문서도 필요할 때만 쓰라고 적어 둔다.
+
+아래 플레이그라운드에서 이 규칙을 직접 구현해 볼 수 있다. 작업 목록과 현재 시각을 받아 다음에 꺼낼 작업의 id를 돌려준다. 아직 시각이 안 된 지연 작업은 건너뛰고, 우선순위 없는 작업을 들어온 순서대로 먼저, 그다음 우선순위가 작은 순서로 고른다. 실제 BullMQ의 동작을 단순하게 줄인 모형이다.
+
+<CodePlayground
+  caption="다음에 꺼낼 작업 고르기"
+  functionName="pickNext"
+  initialCode={`function pickNext(jobs, now) {
+  // jobs: { id, addedAt, priority?, runAt? }
+  // runAt이 now보다 뒤면 아직 꺼낼 수 없다
+  // 꺼낼 작업이 없으면 null
+  return null;
+}`}
+  solution={`function pickNext(jobs, now) {
+  const ready = jobs.filter((j) => (j.runAt ?? 0) <= now);
+  if (ready.length === 0) return null;
+  const plain = ready.filter((j) => !j.priority).sort((a, b) => a.addedAt - b.addedAt);
+  if (plain.length > 0) return plain[0].id;
+  ready.sort((a, b) => a.priority - b.priority || a.addedAt - b.addedAt);
+  return ready[0].id;
+}`}
+  tests={[
+    { label: "먼저 들어온 것부터", args: [[{ id: "a", addedAt: 1 }, { id: "b", addedAt: 2 }], 10], expected: "a" },
+    { label: "우선순위 없는 작업이 먼저", args: [[{ id: "refund", priority: 1, addedAt: 1 }, { id: "receipt", addedAt: 5 }], 10], expected: "receipt" },
+    { label: "숫자가 작은 우선순위가 먼저", args: [[{ id: "report", priority: 10, addedAt: 1 }, { id: "refund", priority: 1, addedAt: 2 }], 10], expected: "refund" },
+    { label: "같은 우선순위는 들어온 순서", args: [[{ id: "m", priority: 3, addedAt: 4 }, { id: "n", priority: 3, addedAt: 2 }], 10], expected: "n" },
+    { label: "시각이 안 된 지연 작업은 건너뛴다", args: [[{ id: "remind", runAt: 20, addedAt: 1 }, { id: "report", priority: 5, addedAt: 2 }], 10], expected: "report" },
+    { label: "꺼낼 것이 없으면 null", args: [[{ id: "remind", runAt: 20, addedAt: 1 }], 10], expected: null },
+    { label: "시각이 되면 지연 작업도 꺼낸다", args: [[{ id: "remind", runAt: 20, addedAt: 1 }, { id: "report", priority: 5, addedAt: 2 }], 20], expected: "remind" },
+  ]}
+/>
+
+`lifo: true`를 주면 리스트의 반대쪽에 넣어 다음 차례로 만든다. 새로 들어온 것이 더 중요한 작업(예: 사용자가 방금 연 화면의 미리보기)에 쓰지만, 계속 새 작업이 들어오면 오래된 작업이 영영 밀릴 수 있다.
+
+## 같은 작업을 두 번 넣지 않게
+
+결제 웹훅이 재전송되면 같은 "캡처" 작업이 두 번 들어온다. BullMQ에서 가장 쉬운 방어는 `jobId`를 직접 정하는 것이다. 같은 id의 작업이 이미 있으면 새로 넣지 않는다. 처음 시도한 id는 `charge:106`이었는데, 넣자마자 이렇게 멈췄다.
+
+```text
+Error: Custom Id cannot contain :
+```
+
+Redis 키를 `bull:{큐}:{id}`처럼 콜론으로 잇기 때문에 사용자 id에 콜론을 막아 둔 것이다. `charge-106`으로 바꾸자 위 출력처럼 두 번 넣어도 id가 같은 작업 하나만 남았다(`same jobId twice -> charge-106 charge-106`). 그런데 이 방어는 그 id의 작업 해시가 Redis에 남아 있는 동안만 통한다.
+
+```js
+// 1) 끝난 작업을 남겨 두면: 두 번째 add는 무시된다
+await queue.add("capture", { orderId: 7 }, { jobId: "capture-7" });
+await queue.add("capture", { orderId: 7 }, { jobId: "capture-7" });
+// 2) 끝나자마자 지우면: id가 비어서 다시 들어간다
+await queue.add("capture", { orderId: 8 }, { jobId: "capture-8", removeOnComplete: true });
+await queue.add("capture", { orderId: 8 }, { jobId: "capture-8", removeOnComplete: true });
+// 3) deduplication: 정한 시간 동안만 같은 id를 막는다
+await queue.add("sync", { user: 1 }, { deduplication: { id: "sync-user-1", ttl: 1000 } });
+```
+
+```text
+run 1: capture-7
+kept completed job, runs = 1
+run 2: capture-8
+run 3: capture-8
+removed on complete, runs = 3
+run 4: 5
+dedup ids: 5 5
+after ttl: 7
+run 5: 7
+total runs = 5
+```
+
+`capture-8`은 두 번 실행됐다. 메모리를 아끼려고 `removeOnComplete: true`를 켜는 순간 `jobId` 중복 방지는 "처리 중이거나 대기 중인 동안"으로 좁아진다. `deduplication`은 같은 id를 `ttl` 동안만 막고, 지나면 새 작업(id 7)을 받는다. 짧은 시간에 몰리는 같은 요청(사용자 동기화를 연달아 누르기)을 하나로 줄이는 데 맞다.
+
+어느 쪽이든 큐 쪽 중복 방지는 넣는 순간만 지킨다. 아래에서 보듯 같은 작업이 워커에서 두 번 실행되는 길은 따로 있다. 그래서 결제, 포인트, 메일처럼 두 번 하면 안 되는 일은 처리 함수 안에서도 "이미 했나"를 DB로 확인한다. 유니크 제약으로 키를 먼저 잡는 방법은 [멱등성 키 구현](/posts/idempotency-key)에 있다.
+
+## 외부 API 한도에 맞춰 꺼내기
+
+문자 발송 업체가 초당 2건까지만 받는다고 하자. 워커마다 `setTimeout`으로 속도를 늦추면 워커를 늘리는 순간 한도를 넘는다. BullMQ의 `limiter`는 큐 단위로 센다.
+
+```js
+// 워커 세 개가 모두 max 2 / 1000ms로 뜬다
+for (const name of ["w1", "w2", "w3"]) {
+  new Worker("sms", async (job) => console.log(`${name} sms ${job.data.n}`), {
+    connection,
+    limiter: { max: 2, duration: 1000 },
+  });
+}
+```
+
+```text
+   21ms w3 sms 1
+   22ms w2 sms 2
+ 1020ms w2 sms 3
+ 1021ms w1 sms 4
+ 2024ms w2 sms 5
+ 2025ms w1 sms 6
+```
+
+워커가 셋이어도 1초에 2건이다. 한도 카운터가 Redis에 있어서 워커들이 같은 값을 보기 때문이다. 워커 하나에 `concurrency: 5`를 줘도 결과는 같았다(0초에 1·2, 1초에 3·4, 2초에 5·6, 3초에 7).
+
+<AlgoTrace
+  caption="limiter max 2 / 1000ms. 워커 수와 상관없이 창마다 두 건"
+  memoryLabel="이 창에서 보낸 문자"
+  cells={["0s", "1s", "2s", "3s"]}
+  steps={[
+    { pointer: 0, memory: ["sms 1", "sms 2"], caption: "첫 1초 창에 두 건이 나가고 카운터가 2가 된다." },
+    { pointer: 0, memory: ["sms 1", "sms 2"], caption: "남은 다섯 건은 wait에 그대로 있다. 워커는 창이 끝날 때까지 꺼내지 않는다." },
+    { pointer: 1, memory: ["sms 3", "sms 4"], caption: "창이 바뀌자 카운터가 비고 두 건을 더 꺼낸다." },
+    { pointer: 2, memory: ["sms 5", "sms 6"], caption: "같은 박자로 두 건." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["sms 7"], caption: "마지막 한 건. 일곱 건에 3초가 걸렸다." },
+  ]}
+/>
+
+업체가 `429`와 `Retry-After`를 돌려주는 경우도 있다. 그때는 처리 함수 안에서 `await queue.rateLimit(ms)`로 큐 전체를 그만큼 쉬게 하고 `Worker.RateLimitError()`를 던져 작업을 대기열로 돌려보낸다. 시도 횟수를 깎지 않고 기다리게 하는 방법이다. 요청 수 제한 알고리즘 자체는 [요청 수 제한 알고리즘](/posts/rate-limiting-algorithms)에 있다.
+
+## 정해진 시각마다 도는 작업
+
+매일 새벽 3시 정산, 1분마다 동기화 같은 작업은 잡 스케줄러로 만든다. 예전에는 `queue.add`에 `repeat` 옵션을 줘서 만들었지만, 5.16부터 `upsertJobScheduler`가 이 역할을 맡았고 옛 방식은 권장하지 않는다. 이름 그대로 "있으면 고치고 없으면 만든다"라서, API 서버 세 대가 부팅할 때마다 같은 코드를 실행해도 스케줄러는 하나다.
+
+```js
+// 서버 세 대가 부팅하면서 같은 스케줄러를 등록하는 상황
+for (let i = 0; i < 3; i++) {
+  await queue.upsertJobScheduler("daily-sales", { every: 1000 }, { name: "sales", data: { kind: "daily" } });
+}
+await queue.upsertJobScheduler("nightly", { pattern: "0 3 * * *", tz: "Asia/Seoul" }, { name: "cleanup" });
+for (const s of await queue.getJobSchedulers())
+  console.log(s.key, s.every ?? s.pattern, s.tz ?? "-", "next", new Date(s.next).toISOString());
+```
+
+```text
+nightly 0 3 * * * Asia/Seoul next 2026-10-22T18:00:00.000Z
+daily-sales 1000 - next 2026-10-21T19:23:45.926Z
+   10ms sales id=repeat:daily-sales:1792610625926
+ 1039ms sales id=repeat:daily-sales:1792610626926
+ 2055ms sales id=repeat:daily-sales:1792610627926
+ 3059ms sales id=repeat:daily-sales:1792610628926
+{ delayed: 2, wait: 0, completed: 4 }
+```
+
+세 번 등록했는데 `daily-sales`는 1초에 하나씩만 돌았다. 스케줄러는 다음 회차를 지연 작업 하나로 만들어 두고, 그 작업이 꺼내질 때 그다음 회차를 또 만든다. 작업 id에 회차 시각이 들어가니 같은 회차가 두 번 생기지 않는다. `nightly`의 `next`가 UTC 18시인 것은 서울 03시이기 때문이다. `tz`를 빼면 워커 서버의 시간대를 따른다. 레플리카가 여러 대여도 회차당 한 번만 도니 OS cron보다 편하다. cron 표현식의 함정과 서머타임 문제는 [크론 잡](/posts/cron-jobs)에 정리했다. 스케줄러는 Redis에 남아 있으니, 코드에서 지운 스케줄은 `removeJobScheduler`로 직접 지워야 계속 돌지 않는다.
+
+## 워커가 죽으면 락이 풀릴 때까지 기다린다
+
+워커가 작업을 가져가면 `bull:{큐}:{id}:lock` 키에 자기 토큰을 적는다. 이 락은 `lockDuration`(기본 30초) 뒤에 만료되고, 살아 있는 워커는 그 절반마다 연장한다. 다른 워커들은 `stalledInterval`(기본 30초)마다 "active에 있는데 락이 없는 작업"을 찾아 `wait`로 되돌린다. 이것이 멈춘 작업(stalled job) 검사다. [메시지 큐 기초](/posts/message-queue-basics)의 가시성 타임아웃을 락 연장으로 구현한 셈이다.
+
+빨리 보려고 `lockDuration: 3000`, `stalledInterval: 1000`으로 줄이고, 2초짜리 작업을 잡은 워커 A를 0.7초 만에 `kill -9`로 죽인 뒤 같은 코드로 워커 B를 띄웠다.
+
+```js
+new Worker("receipt", async (job) => {
+  console.log(`[${name}] start job ${job.id} attemptsStarted=${job.attemptsStarted}`);
+  await new Promise((r) => setTimeout(r, 2000));
+  console.log(`[${name}] done job ${job.id}`);
+}, { connection, lockDuration: 3000, stalledInterval: 1000 });
+```
+
+
+```text
+766ms kill -9 A
+  406ms [A] start job 1 attemptsStarted=1
+ 5247ms [B] stalled event: job 1 back to wait
+ 5249ms [B] start job 1 attemptsStarted=2
+ 7249ms [B] done job 1
+```
+
+<SequenceDiagram
+  caption="락이 만료된 뒤 다음 검사에서 작업을 되찾는다"
+  actors={[
+    { id: "a", label: "워커 A" },
+    { id: "r", label: "Redis" },
+    { id: "b", label: "워커 B" },
+  ]}
+  steps={[
+    { from: "a", to: "r", label: "moveToActive", title: "A가 작업을 가져간다", detail: "wait에서 active로 옮기고 3초짜리 락을 건다.", payload: "bull:receipt:1:lock  PX 3000" },
+    { from: "a", to: "a", label: "kill -9", title: "A가 사라진다", detail: "처리 도중 강제 종료됐다. 락을 연장할 프로세스가 없다." },
+    { from: "b", to: "r", label: "stalled 검사", title: "B가 active를 훑는다", detail: "1초마다 active의 작업을 후보로 적는다. 아직 락이 살아 있으면 건드리지 않는다." },
+    { from: "r", to: "r", label: "lock 만료", title: "락이 사라진다", detail: "마지막 연장에서 3초가 지나자 락 키가 만료된다." },
+    { from: "b", to: "r", label: "wait로 되돌림", title: "락 없는 후보를 되돌린다", detail: "후보였는데 락이 없으니 멈춘 작업으로 보고 wait 끝에 다시 넣는다. stalled 이벤트가 나간다." },
+    { from: "r", to: "b", label: "job 1 (2회째)", title: "B가 처음부터 다시 한다", detail: "attemptsStarted가 2가 됐다. A가 하던 진행 상황은 없다. 처음부터 다시 한다." },
+  ]}
+/>
+
+A가 죽고 약 4.5초 뒤에 B가 작업을 넘겨받았다. 락이 만료되기까지 3초, 그 뒤 검사 주기를 한두 번 기다린 시간이다. 기본값이면 30초 락에 30초 검사라 최대 1분 가까이 작업이 멈춰 있을 수 있다. 짧게 줄이면 빨리 되찾지만, 아래에서 보듯 살아 있는 워커를 죽었다고 오해할 위험이 커진다.
+
+되찾는 횟수에도 상한이 있다. `maxStalledCount`(기본 1)를 넘게 멈추면 작업은 실패로 끝난다. 작업이 워커를 죽이는 경우(메모리 폭발, 네이티브 모듈 크래시)에 워커가 계속 같은 작업을 받아 죽는 고리를 끊기 위해서다. `maxStalledCount: 0`으로 같은 실험을 하면 이렇게 끝난다.
+
+```text
+  282ms [A] start job 1 attemptsStarted=1
+ 4001ms [B] stalled event: job 1 back to wait
+ 4005ms [B] failed job 1: job stalled more than allowable limit
+```
+
+## 살아 있는데 죽었다고 본다
+
+처음 장면으로 돌아가자. 품목이 수백 개인 영수증은 PDF를 그리는 데 CPU를 몇 초씩 쓴다. 그 사이 이벤트 루프가 막히면 락 연장 타이머도 돌지 못한다. 워커는 멀쩡히 일하고 있는데 Redis에서 보면 락이 만료된 작업이다. `lockDuration: 2000`인 워커 A에 6초 동안 CPU를 붙잡는 작업을 주고, 옆에 평범한 워커 B를 띄웠다.
+
+```text
+  407ms [A] start job 1 attemptsStarted=1
+ 6407ms [A] finished work for job 1
+ 6411ms [A] error: Missing lock for job 1. moveToFinished
+ 6414ms [A] error: Missing lock for job 1. moveToFinished
+---
+ 2868ms [B] stalled: job 1
+ 2869ms [B] start job 1 attemptsStarted=2
+ 3370ms [B] finished work for job 1
+ 3373ms [B] completed 1
+```
+
+```bash
+redis-cli -p 18300 HMGET bull:receipt:1 returnvalue ats
+```
+
+```text
+"B"
+2
+```
+
+작업 하나가 두 번 실행됐다. B가 2.9초에 작업을 되찾아 먼저 끝냈고, A는 6.4초에 일을 다 마친 뒤 결과를 적으려다 락이 없다는 에러를 받았다. A가 그 사이 메일을 보냈다면 메일은 이미 나갔다. 영수증이 두 통 간 이유가 이것이다. 로그에 남는 건 처음 봤던 그 한 줄뿐이다.
+
+<SequenceDiagram
+  caption="이벤트 루프가 막히면 락을 연장하지 못한다"
+  actors={[
+    { id: "a", label: "워커 A" },
+    { id: "r", label: "Redis" },
+    { id: "b", label: "워커 B" },
+  ]}
+  steps={[
+    { from: "a", to: "r", label: "lock 2s", title: "A가 큰 영수증을 잡는다", detail: "락은 2초, 연장은 1초마다 하기로 돼 있다." },
+    { from: "a", to: "a", label: "CPU 6초", title: "PDF를 그리느라 루프가 멈춘다", detail: "연장 타이머 콜백이 실행될 틈이 없다. A는 살아 있다." },
+    { from: "b", to: "r", label: "stalled 검사", title: "락이 만료된 작업을 찾는다", detail: "B가 보기엔 주인 없는 작업이다. wait로 되돌린다." },
+    { from: "r", to: "b", label: "job 1", title: "B가 같은 작업을 처리한다", detail: "B는 0.5초 만에 끝내고 completed로 옮긴다. 반환값은 B다." },
+    { from: "a", to: "r", label: "moveToFinished", title: "A가 뒤늦게 결과를 적는다", detail: "락 토큰이 없으니 거절된다. 그 사이 A가 한 부수 효과는 되돌릴 수 없다.", payload: "Missing lock for job 1. moveToFinished" },
+  ]}
+/>
+
+고치는 순서는 이렇다. 먼저 CPU를 쓰는 처리를 샌드박스 프로세스로 옮긴다. 자식 프로세스가 계산하는 동안 부모의 이벤트 루프는 락을 연장한다. 그게 어렵다면 일을 잘게 나눠 사이사이 `await`로 루프에 틈을 주거나, `lockDuration`을 가장 오래 걸리는 작업보다 넉넉하게 늘린다. 다만 늘린 만큼 진짜로 죽은 워커의 작업을 늦게 되찾는다. 마지막으로, 어떤 설정으로도 두 번 실행을 0으로 만들 수는 없으니 메일 발송 기록을 DB에 남겨 처리 함수가 같은 주문에 두 번 보내지 않게 한다. 로그에서 `Missing lock`이나 `stalled` 이벤트가 보이면 이 길을 의심하면 된다. 락이 시간을 빌리는 것이라는 같은 문제는 [분산 락](/posts/distributed-lock)에서도 펜싱 토큰으로 다룬다.
+
+## 배포할 때 하던 일을 마치고 내려가기
+
+배포는 워커에 SIGTERM을 보내는 일이다. Node는 SIGTERM에 핸들러가 없으면 즉시 종료한다. 2초짜리 작업을 처리하던 워커에 0.8초 만에 SIGTERM을 보내 봤다.
+
+```js
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM: stop taking new jobs, wait for active ones");
+  await worker.close(); // 새 작업을 받지 않고, 처리 중인 작업이 끝날 때까지 기다린다
+  console.log("worker closed, exit");
+  process.exit(0);
+});
+```
+
+```text
+== plain
+   75ms start job 1
+exit code 143
+{ wait: 0, active: 1, completed: 0 }
+== graceful
+  107ms start job 1
+  481ms SIGTERM: stop taking new jobs, wait for active ones
+ 2110ms done job 1
+ 2114ms worker closed, exit
+exit code 0
+{ wait: 0, active: 0, completed: 1 }
+```
+
+핸들러가 없으면 작업이 `active`에 남는다. 락이 만료되고 다른 워커가 되찾을 때까지(기본값이면 최대 1분 가까이) 아무도 처리하지 않고, 되찾으면 처음부터 다시 한다. `worker.close()`는 새 작업을 받지 않고 처리 중인 작업을 기다린다. 쿠버네티스라면 `terminationGracePeriodSeconds`(기본 30초)를 가장 긴 작업보다 길게 잡아야 기다리는 도중 SIGKILL을 맞지 않는다. 종료 순서는 [파드 생명주기](/posts/k8s-pod-lifecycle)에 있다. 10분짜리 영상 변환처럼 그 시간 안에 끝낼 수 없는 작업은 중간 진행을 저장해 두고 다시 시작할 때 이어서 하게 만든다.
+
+## 끝난 작업이 Redis 메모리를 먹는다
+
+BullMQ는 기본으로 끝난 작업을 `completed`와 `failed`에 남겨 둔다. 이메일 작업 2만 건을 처리하고 Redis 메모리를 쟀다.
+
+```js
+const opts = keep === "all" ? {} : { removeOnComplete: { count: Number(keep) } };
+// 2만 건을 1000건씩 addBulk로 넣고, concurrency 50 워커로 모두 처리한 뒤 INFO memory를 읽는다
+```
+
+```text
+before: 2.32M keys: 0
+after 20000 jobs (keep=all): 10.65M keys: 20005 { completed: 20000 }
+before: 2.32M keys: 0
+after 20000 jobs (keep=1000): 3.19M keys: 1005 { completed: 1000 }
+```
+
+작업 하나에 400바이트 남짓이다(`MEMORY USAGE`로 잰 작은 메일 작업 해시는 280바이트였다). 하루 100만 건이면 지우지 않는 한 하루에 400MB 넘게 는다. `removeOnComplete`와 `removeOnFail`에 `{ count }`나 `{ age }`(초)를 주면 작업이 끝날 때마다 오래된 것을 지운다. 타이머로 지우는 게 아니라 다른 작업이 끝날 때 함께 지우니, 작업이 끊기면 그대로 남아 있다. 실패한 작업은 원인을 봐야 하니 성공보다 넉넉히(예: 7일) 둔다.
+
+<UrlAnatomy
+  caption="운영에서 쓰는 작업 옵션 한 줄"
+  base={`queue.add("receipt", data, {`}
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "jobId", value: "receipt-5001", display: "jobId: \"receipt-5001\"", title: "작업 id", description: "같은 id가 Redis에 남아 있는 동안 중복 add를 막는다. 콜론은 쓸 수 없다. 작업을 지우면 다시 들어갈 수 있다." },
+    { key: "attempts", value: "5", display: "attempts: 5", title: "전체 시도 횟수", description: "처음 시도를 포함한다. 기본값은 1이라 지정하지 않으면 재시도하지 않는다.", required: true },
+    { key: "backoff", value: "exponential", display: "backoff: { type: \"exponential\", delay: 2000, jitter: 0.5 }", title: "재시도 간격", description: "2초, 4초, 8초로 늘린다. jitter는 대기 시간에 섞을 무작위 비율이다." },
+    { key: "removeOnComplete", value: "count", display: "removeOnComplete: { count: 1000 }", title: "성공한 작업 보관", description: "최근 1000건만 남긴다. 기본은 전부 남겨서 Redis 메모리가 계속 는다.", required: true },
+    { key: "removeOnFail", value: "age", display: "removeOnFail: { age: 604800 }", title: "실패한 작업 보관", description: "초 단위다. 원인을 보고 다시 돌릴 수 있게 성공보다 오래 둔다." },
+  ]}
+/>
+
+Redis 쪽에서도 챙길 것이 둘 있다. 첫째, 축출 정책은 `noeviction`이어야 한다. 캐시처럼 `allkeys-lru`로 두면 메모리가 찰 때 Redis가 작업 해시나 락을 아무렇게나 지운다. BullMQ는 연결할 때 이를 검사해서 경고한다.
+
+```bash
+redis-cli -p 18300 config set maxmemory-policy allkeys-lru
+node evict.mjs
+```
+
+```text
+IMPORTANT! Eviction policy is allkeys-lru. It should be "noeviction"
+```
+
+캐시와 같은 Redis를 쓰고 있다면 큐용 Redis를 따로 둔다. 축출 정책은 [Redis 메모리가 가득 차면](/posts/redis-memory-eviction)에 자세히 있다. 둘째, Redis가 재시작하면 메모리에만 있던 작업은 사라진다. 잃으면 안 되는 작업이면 AOF를 켜고(`appendfsync everysec`면 최대 1초 정도를 잃을 수 있다) 복제본과 장애 조치를 둔다. 설정은 [Redis 영속성과 고가용성](/posts/redis-persistence-ha)에 있다. Redis Cluster에서는 한 큐의 키가 같은 슬롯에 있어야 Lua 스크립트가 돌기 때문에 `prefix: "{bull}"`처럼 해시 태그를 준다([Redis Cluster](/posts/redis-cluster)).
+
+## 큐가 밀린다는 알람을 받았을 때
+
+"영수증이 안 온다"는 문의가 오면 상태별 개수부터 본다. 코드로는 `queue.getJobCounts()`, 셸에서는 키를 직접 센다. 500건을 넣고 200ms짜리 작업을 `concurrency: 4`로 처리하는 중에 2초 간격으로 두 번 찍었다.
+
+```bash
+Q=bull:receipt
+redis-cli -p 18300 LLEN  $Q:wait       # 꺼내기를 기다리는 작업
+redis-cli -p 18300 LLEN  $Q:active     # 처리 중
+redis-cli -p 18300 ZCARD $Q:delayed    # 재시도 대기 또는 지연
+redis-cli -p 18300 ZCARD $Q:failed     # 최종 실패
+redis-cli -p 18300 ZCARD $Q:completed  # 끝난 것 (남겨 둔 만큼)
+```
+
+```text
+wait      452
+active    4
+delayed   0
+failed    7
+completed 37
+
+wait      412
+active    4
+delayed   0
+failed    12
+completed 72
+```
+
+2초 동안 `wait`이 40 줄었다. 초당 20건이 빠지니 남은 412건은 20초 남짓이면 빈다. 그래프에서 볼 것도 이 기울기다. `wait`이 줄고 있으면 밀렸을 뿐이고 기다리면 된다. 늘고만 있으면 처리량이 들어오는 양보다 적으니 워커를 늘린다(이때 DB 연결 수가 워커 수 × 풀 크기로 같이 는다는 것을 잊지 않는다, [커넥션 풀](/posts/connection-pool)). `wait`은 있는데 `active`가 0이면 워커가 떠 있지 않거나 Redis에 붙지 못한 것이다. `delayed`만 커지면 재시도가 쌓이는 중이니 실패 원인을 본다.
+
+```bash
+ID=$(redis-cli -p 18300 ZREVRANGE bull:receipt:failed 0 0)   # 가장 최근 실패
+redis-cli -p 18300 HMGET bull:receipt:$ID failedReason atm
+```
+
+```text
+S3 PutObject timeout after 5000ms
+1
+```
+
+실패 원인이 한 가지로 몰려 있으면 그 의존성(여기서는 S3)을 본다. 로그에 `stalled`나 `Missing lock`이 반복되면 앞에서 본 CPU 블로킹이나 너무 짧은 `lockDuration`을 의심한다. 매일 보는 지표로는 상태별 개수, 가장 오래 기다린 작업의 나이(`wait` 맨 앞 작업의 `timestamp`), 분당 완료·실패 수를 둔다. 큐 길이를 보고 워커를 늘리는 자동화는 쿠버네티스라면 HPA에 외부 지표를 붙이는 방식이 흔하다([HPA](/posts/k8s-hpa)).
+
+## Kafka나 RabbitMQ 대신 BullMQ를 고를 때
+
+BullMQ는 "Node 서비스가 이미 Redis를 쓰고 있고, 할 일 목록이 필요하다"에 가장 잘 맞는다. 재시도, 지연, 반복, 우선순위, 진행률, 부모-자식 작업(FlowProducer)이 라이브러리 안에 다 있어서, 같은 것을 Kafka나 RabbitMQ 위에 만들려면 꽤 많은 코드를 써야 한다.
+
+| | BullMQ | RabbitMQ | Kafka |
+|---|---|---|---|
+| 모델 | Redis 위의 작업 큐 | 브로커가 라우팅하는 메시지 큐 | 보관되는 이벤트 로그 |
+| 처리 후 | 작업 상태가 바뀐다(남기거나 지운다) | ack하면 지운다 | 지우지 않고 오프셋만 옮긴다 |
+| 재시도·지연·크론 | 내장 | 데드 레터·TTL·플러그인으로 조립 | 직접 만든다(재시도 토픽 등) |
+| 여러 곳이 같은 메시지를 받기 | 맞지 않다(큐마다 따로 넣는다) | 익스체인지로 여러 큐에 | 소비자 그룹마다 따로 읽는다 |
+| 지난 메시지 다시 읽기 | 안 된다 | 안 된다 | 오프셋을 되감는다 |
+| 언어 | Node 중심(Python·Elixir·PHP 포트가 있다) | 언어 무관 | 언어 무관 |
+| 내구성의 기준 | Redis 영속성 설정 | 쿼럼 큐 복제 | 파티션 복제와 acks |
+
+작업이 "누가 한 번 처리하면 끝나는 일"이고 초당 수천 건 정도라면 BullMQ로 충분하다. 같은 사건을 결제, 포인트, 분석이 각자 받아야 하거나, 며칠 전 이벤트를 다시 흘려야 하거나, 초당 수만 건 이상을 오래 보관해야 하면 [Kafka](/posts/kafka-basics)가 맞다. 여러 언어의 서비스가 섞여 있고 라우팅 규칙이 복잡하면 [RabbitMQ](/posts/rabbitmq-basics)를 본다. 둘을 함께 쓰는 경우도 흔하다. 서비스 사이의 사건은 Kafka로 흘리고, 한 서비스 안에서 그 사건을 받아 처리할 "할 일"은 BullMQ에 넣는다.
+
+## Redis 위의 상태 기계를 믿는 법
+
+BullMQ의 작업은 Redis 키 사이를 Lua 스크립트로 옮겨 다니는 상태 기계이고, 워커가 살아 있다는 증거는 락 하나뿐이다. 그래서 락을 연장하지 못하는 순간(프로세스가 죽었거나 이벤트 루프가 막혔거나) 같은 작업이 두 번 실행될 수 있다. CPU 작업은 샌드박스로, 종료는 `worker.close()`로, 메모리는 `removeOnComplete`로, Redis는 `noeviction`과 AOF로 챙기고, 두 번 하면 안 되는 일은 처리 함수 안에서 막는다. 이 큐가 서비스 규모의 어느 지점에서 필요해지는지는 [API 확장 사다리](/posts/api-scaling-ladder)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### BullMQ는 어떻게 동작하나요?
+
+Redis 위에 작업 큐를 만드는 Node.js 라이브러리다. 작업은 해시 하나에 담기고, id가 wait, prioritized, delayed, active, completed, failed 같은 리스트와 정렬 집합 사이를 옮겨 다닌다. 옮기는 일은 모두 Lua 스크립트로 해서 여러 단계가 원자적으로 일어나고, 처리 중인 작업에는 워커가 주기적으로 연장하는 락이 걸린다. 이벤트는 Redis Streams로 내보낸다.
+
+### concurrency를 10으로 올렸는데 처리량이 그대로입니다. 왜 그럴까요?
+
+작업이 CPU를 쓰는 일이라서일 가능성이 크다. concurrency는 한 프로세스 안에서 작업 여러 개를 동시에 기다리게 할 뿐이고, 자바스크립트는 스레드 하나에서 돈다. I/O를 기다리는 작업에는 효과가 있지만 계산 작업은 순서대로 처리된다. 샌드박스 프로세서로 돌리거나 워커 프로세스를 코어 수만큼 띄운다.
+
+### 멈춘 작업(stalled job)은 무엇이고 어떻게 처리되나요?
+
+active에 있는데 락이 만료된 작업이다. 워커가 죽었거나 이벤트 루프가 막혀 락을 연장하지 못하면 생긴다. 다른 워커가 stalledInterval마다 검사해서 wait로 되돌리고, maxStalledCount를 넘으면 실패로 끝낸다. 되돌린 작업은 처음부터 다시 실행되니, 원래 워커가 살아 있었다면 같은 작업이 두 번 실행된다.
+
+### 같은 작업이 두 번 실행되지 않게 하려면요?
+
+큐 쪽에서는 jobId나 deduplication으로 중복 add를 막는다. 하지만 jobId는 작업 해시가 남아 있는 동안만 통하고, 락 만료로 인한 재실행은 막지 못한다. 그래서 처리 함수가 멱등해야 한다. 주문 id 같은 업무 키로 DB에 처리 기록을 남기고 유니크 제약으로 두 번째 실행을 거른다.
+
+### 재시도는 어떻게 설정하나요? 주의할 점은요?
+
+attempts와 backoff를 준다. attempts는 첫 시도를 포함한 횟수이고, exponential이면 delay × 2^(시도−1)만큼 기다리며, jitter로 무작위를 섞는다. 다시 해도 소용없는 실패는 UnrecoverableError로 바로 실패시킨다. failed 이벤트는 시도마다 오니 최종 실패 알림은 남은 시도 수를 확인하고 보낸다.
+
+### 배포할 때 처리 중이던 작업은 어떻게 되나요?
+
+SIGTERM 핸들러에서 worker.close()를 부르면 새 작업을 받지 않고 처리 중인 작업이 끝나길 기다린 뒤 내려간다. 핸들러가 없으면 작업이 active에 남아 락이 만료될 때까지 멈춰 있다가 다른 워커가 처음부터 다시 한다. 쿠버네티스에서는 terminationGracePeriodSeconds를 가장 긴 작업보다 길게 잡는다.
+
+### Redis 메모리가 계속 늘어납니다. 무엇을 보나요?
+
+먼저 completed와 failed 개수를 본다. 기본 설정은 끝난 작업을 모두 남기므로 removeOnComplete와 removeOnFail에 count나 age를 준다. 그다음 축출 정책이 noeviction인지 확인한다. 캐시처럼 LRU로 두면 메모리가 찼을 때 작업이나 락이 지워져 작업이 사라지거나 두 번 실행된다.
+
+### BullMQ와 Kafka 중 무엇을 고르나요?
+
+한 번 처리하면 끝나는 백그라운드 작업이고 재시도, 지연, 크론이 필요하면 BullMQ가 간단하다. 같은 이벤트를 여러 서비스가 각자 읽거나, 지난 이벤트를 다시 읽거나, 아주 많은 양을 오래 보관해야 하면 Kafka가 맞다. 둘을 함께 써서 서비스 사이 사건은 Kafka로, 서비스 안의 할 일은 BullMQ로 나누기도 한다.

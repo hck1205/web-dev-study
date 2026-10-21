@@ -488,7 +488,7 @@ psql -h 127.0.0.1 -U v2mq -d v2mq_demo -f explain.sql
 
 `Index Cond`로 보이는 5줄만 읽고 정렬했다. 38ms에서 0.2ms가 됐다. 처리가 끝난 행을 지우지 않고 `status = 'done'`으로 남기는 설계라면 `WHERE status = 'ready'` 같은 부분 인덱스를 쓴다.
 
-Redis 리스트나 스트림은 처리량이 훨씬 높고 지연이 짧다. 대신 영속성은 설정에 달려 있다. AOF를 `everysec`로 두면 장애 때 마지막 1초 안쪽의 메시지를 잃을 수 있다([Redis 영속성](/posts/redis-persistence-ha)). 메모리가 차면 `maxmemory-policy`에 따라 큐 키가 축출될 수도 있으니, 큐를 담는 Redis에는 `noeviction`을 쓴다([Redis 메모리](/posts/redis-memory-eviction)).
+Redis 리스트나 스트림은 처리량이 훨씬 높고 지연이 짧다. 대신 영속성은 설정에 달려 있다. AOF를 `everysec`로 두면 장애 때 마지막 1초 안쪽의 메시지를 잃을 수 있다([Redis 영속성](/posts/redis-persistence-ha)). 메모리가 차면 `maxmemory-policy`에 따라 큐 키가 축출될 수도 있으니, 큐를 담는 Redis에는 `noeviction`을 쓴다([Redis 메모리](/posts/redis-memory-eviction)). Node에서 이 위에 재시도, 지연, 락까지 얹은 라이브러리가 BullMQ이고, 동작은 [BullMQ 작업 큐](/posts/bullmq-job-queue)에서 따로 따라갔다.
 
 SQS 같은 관리형 큐는 운영할 서버가 없고, 가시성 타임아웃·재전달·데드 레터 큐가 기본으로 있다. 표준 큐는 순서를 보장하지 않고 드물게 중복을 준다. FIFO 큐는 그룹별 순서와 5분 안의 중복 제거(`MessageDeduplicationId`)를 주는 대신 처리량 상한이 낮다. 메시지를 오래 보관하며 여러 번 다시 읽어야 하거나(재처리, 새 서비스가 과거 이벤트부터 읽기) 처리량이 매우 크면 Kafka 같은 로그가 맞고, 라우팅 규칙이 복잡하면 RabbitMQ가 맞다. 둘의 차이는 각 글에서 다룬다.
 

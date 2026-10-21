@@ -2,6 +2,80 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-scaling-ladder": {
+    "links": [
+      "sd-start-single-server",
+      "sd-sharding-intro",
+      "db-architecture-by-scale",
+      "bullmq-job-queue",
+      "sd-capacity-estimation",
+      "latency-bandwidth-throughput",
+      "nodejs-server-runtime",
+      "percentile-latency",
+      "connection-pool",
+      "caching-strategies",
+      "sd-cache-and-cdn-tier",
+      "sd-load-balancer-stateless",
+      "load-balancer-basics",
+      "nginx-reverse-proxy",
+      "scaling-horizontal-vertical",
+      "db-index",
+      "db-index-design",
+      "sd-db-replication-intro",
+      "db-replication-sharding",
+      "kafka-basics",
+      "message-queue-basics",
+      "backpressure",
+      "db-sharding",
+      "reverse-proxy-lb-api-gateway",
+      "gateway",
+      "rate-limiting-in-practice",
+      "sd-multi-datacenter",
+      "monitoring-basics",
+      "autoscaling",
+      "system-design-study-path"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "http-caching-cdn",
+      "sd-object-storage-architecture",
+      "event-loop",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "db-partitioning",
+      "mongodb-document-model"
+    ]
+  },
+  "bullmq-job-queue": {
+    "links": [
+      "message-queue-basics",
+      "dead-letter-queue",
+      "api-scaling-ladder",
+      "event-loop",
+      "nodejs-server-runtime",
+      "exponential-backoff-jitter",
+      "idempotency-key",
+      "rate-limiting-algorithms",
+      "cron-jobs",
+      "distributed-lock",
+      "k8s-pod-lifecycle",
+      "redis-memory-eviction",
+      "redis-persistence-ha",
+      "redis-cluster",
+      "connection-pool",
+      "k8s-hpa",
+      "kafka-basics",
+      "rabbitmq-basics"
+    ],
+    "mentions": [
+      "pub-sub",
+      "js-pure-functions",
+      "redis-basics",
+      "dns",
+      "webhooks"
+    ]
+  },
   "data-structures-overview": {
     "links": [
       "big-o-notation",
@@ -1728,6 +1802,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "geohash"
     ],
     "mentions": [
+      "api-scaling-ladder",
       "sd-mq-storage-partitions",
       "kafka-basics",
       "redis-basics",
@@ -7103,6 +7178,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "operational-transform",
+      "bullmq-job-queue",
       "redis-basics",
       "microservices",
       "cqrs",
@@ -7845,7 +7921,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices",
       "postgres-mvcc-vacuum",
       "redis-persistence-ha",
-      "redis-memory-eviction"
+      "redis-memory-eviction",
+      "bullmq-job-queue"
     ],
     "mentions": [
       "transactional-outbox",

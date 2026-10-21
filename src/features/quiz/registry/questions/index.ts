@@ -8,6 +8,7 @@ import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
+import { API_SCALING_LADDER } from "./api-scaling-ladder";
 import { API_STYLES_OVERVIEW } from "./api-styles-overview";
 import { API_VERSIONING } from "./api-versioning";
 import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview";
@@ -25,6 +26,7 @@ import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
+import { BULLMQ_JOB_QUEUE } from "./bullmq-job-queue";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
 import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
@@ -582,6 +584,7 @@ export const QUESTION_SETS = [
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
+  API_SCALING_LADDER,
   API_STYLES_OVERVIEW,
   API_VERSIONING,
   ARCHITECTURE_PATTERNS_OVERVIEW,
@@ -599,6 +602,7 @@ export const QUESTION_SETS = [
   BROWSER_FETCH,
   BROWSER_STORAGE,
   BUILD_CACHING,
+  BULLMQ_JOB_QUEUE,
   CACHE_INVALIDATION,
   CACHE_WRITE_POLICIES,
   CACHING_CONCEPTS_MAP,
