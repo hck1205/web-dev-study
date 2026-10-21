@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "rag-retrieval-quality",
+    title: "RAG 검색 품질, 감으로 고치지 않고 재 보기",
+    summary: "질문 18개로 정답지를 만들어 recall@k, MRR, nDCG를 직접 계산하고 벡터, BM25, RRF 하이브리드를 비교했다. 청크 크기 실험, 리랭킹, 쿼리 재작성과 HyDE, 권한 필터, CI 회귀 테스트까지 숫자로 따라간다.",
+    topic: "programming/ai/rag",
+    tags: ["AI", "RAG", "Search", "LLM"],
+    date: "2026-10-23",
+    keywords: ["recall@k", "RRF", "하이브리드 검색", "리랭킹", "HyDE"],
+  },
+  {
+    slug: "rag-classic-pipeline",
+    title: "기본 RAG, 질문 하나가 답이 되기까지",
+    summary: "사내 위키 20편으로 RAG를 직접 만들어 문서를 자르고 벡터로 넣는 색인부터 top-k 검색, 프롬프트 조립과 출처까지 따라갔다. 잘린 청크, 낡은 문서, 멀티홉 질문, 문서에 심긴 프롬프트 인젝션처럼 실제로 틀리는 장면도 출력으로 확인한다.",
+    topic: "programming/ai/rag",
+    tags: ["AI", "RAG", "LLM", "Search", "Embedding"],
+    date: "2026-10-23",
+    keywords: ["RAG", "청크 겹침", "간접 프롬프트 인젝션", "Lost in the Middle"],
+  },
+  {
     slug: "caching-concepts-map",
     title: "캐시 개념 지도: 히트부터 핫 키까지 12가지",
     summary: "상품 페이지 하나를 따라가며 히트와 미스, TTL과 상한 데이터, LRU 축출, cache-aside, 쓰기 방식, 무효화, CDN, 스탬피드, 핫 키를 배우는 순서대로 잇는다. 증상에서 개념과 해결책을 거꾸로 찾는 표와 깊게 다룬 글로 가는 길도 함께 둔다.",
@@ -4720,7 +4738,7 @@ const ENTRIES: Post[] = [
     topic: "programming/database",
     tags: ["VectorDB", "Embedding", "AI", "Search"],
     date: "2026-10-15",
-    keywords: ["벡터 DB", "임베딩", "HNSW", "RAG"],
+    keywords: ["벡터 DB", "임베딩", "HNSW"],
   },
 ];
 

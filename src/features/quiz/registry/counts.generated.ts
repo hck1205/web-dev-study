@@ -357,6 +357,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "rabbitmq-basics": 7,
   "race-conditions": 6,
   "raft-consensus": 7,
+  "rag-classic-pipeline": 7,
+  "rag-retrieval-quality": 7,
   "rate-limiting-algorithms": 6,
   "rate-limiting-in-practice": 6,
   "ray-casting": 7,

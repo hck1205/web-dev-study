@@ -2,6 +2,28 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rag-retrieval-quality": {
+    "links": [
+      "rag-classic-pipeline",
+      "vector-db",
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "db-index-design",
+      "kafka-basics",
+      "db-modeling-normalization",
+      "on-call"
+    ]
+  },
+  "rag-classic-pipeline": {
+    "links": [
+      "vector-db",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "kafka-basics"
+    ]
+  },
   "caching-concepts-map": {
     "links": [
       "sd-cache-and-cdn-tier",
@@ -2036,6 +2058,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "what-happens-google-com",
       "devops-networking-roadmap",
+      "packet-encapsulation",
       "ipv6-basics",
       "layer-ip-addressing",
       "dhcp",
@@ -2047,6 +2070,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "layer-ip-routing-icmp",
       "iptables-nat",
       "nat-traversal",
+      "proxy-reverse-proxy",
+      "cdn-edge-anycast",
+      "http-caching-cdn",
+      "load-balancer-basics",
+      "load-balancing-algorithms",
+      "nginx-reverse-proxy",
+      "reverse-proxy-lb-api-gateway",
       "iptables-basics",
       "security-groups-nacl",
       "ports-and-sockets",
@@ -2058,9 +2088,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-methods",
       "http-status-codes",
       "http-versions",
+      "websocket-deep-dive",
+      "realtime-communication",
       "vpn-ipsec-wireguard",
+      "latency-bandwidth-throughput",
       "network-layers-overview",
-      "packet-encapsulation",
       "osi-in-practice",
       "network-troubleshooting-by-layer",
       "packet-capture-tcpdump"
@@ -9819,6 +9851,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "rag-retrieval-quality",
       "mongodb-document-model",
       "loading-patterns",
       "transactional-outbox",
@@ -10097,8 +10130,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "vector-db": {
     "links": [],
     "mentions": [
+      "rag-retrieval-quality",
       "pythagorean-theorem",
       "db-index-design",
+      "rag-classic-pipeline",
       "db-modeling-normalization"
     ]
   }

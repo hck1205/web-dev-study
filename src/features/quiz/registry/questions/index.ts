@@ -354,6 +354,8 @@ import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
 import { RACE_CONDITIONS } from "./race-conditions";
 import { RAFT_CONSENSUS } from "./raft-consensus";
+import { RAG_CLASSIC_PIPELINE } from "./rag-classic-pipeline";
+import { RAG_RETRIEVAL_QUALITY } from "./rag-retrieval-quality";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
 import { RAY_CASTING } from "./ray-casting";
@@ -876,6 +878,8 @@ export const QUESTION_SETS = [
   RABBITMQ_BASICS,
   RACE_CONDITIONS,
   RAFT_CONSENSUS,
+  RAG_CLASSIC_PIPELINE,
+  RAG_RETRIEVAL_QUALITY,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
   RAY_CASTING,
