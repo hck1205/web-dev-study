@@ -1,0 +1,690 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-crd");
+
+DB 백업 설정을 ConfigMap에 모아 두고 있었다. `retentionDays: "14"` 같은 줄을 적으면 크론잡이 읽어서 그만큼 보관한다. 어느 날 누군가 `retentionDay: "14"`라고 s 하나를 빼고 적었다. ConfigMap은 아무 키나 받으니 저장은 잘 됐고, 크론잡은 키를 못 찾아 기본값 7일로 돌았다. 2주치가 있어야 할 백업이 1주치만 남은 걸 안 건 복구가 필요해진 날이었다.
+
+문제는 ConfigMap이 내용을 모른다는 데 있다. 문자열 맵일 뿐이라 오타도, 범위를 벗어난 숫자도, 바꾸면 안 되는 값의 변경도 그대로 받는다. CustomResourceDefinition(CRD)은 이 자리에 진짜 API 종류를 만든다. `Backup`이라는 kind를 등록하면 API 서버가 스키마로 필드를 검사하고, 모르는 필드는 잘라 내고, 기본값을 채우고, 필드 사이 규칙까지 따진다. Deployment를 다루듯 `kubectl get backups`가 되고 RBAC, watch, 감사 로그도 그대로 붙는다.
+
+이 글은 kwok로 띄운 실습 클러스터(kube-apiserver v1.37.0, kubectl v1.37.0)에서 `Backup` CRD를 만들어 가며 스키마, 구조적 스키마와 pruning, CEL 규칙, status 서브리소스, 출력 칸, 버전 변환 웹훅, 저장 버전 옮기기를 차례로 본다. 출력은 모두 이 클러스터에서 실제로 받은 것이다.
+
+이 주제의 다른 글: 오브젝트의 공통 칸(spec, status, generation, finalizer)은 [API 오브젝트](/posts/k8s-api-objects), CRD에 붙는 컨트롤러가 도는 방식은 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)에 있다. 이 `Backup`을 실제로 CronJob으로 바꾸는 오퍼레이터는 [오퍼레이터 글](/posts/k8s-operators)에서 만든다.
+
+## ConfigMap에 적어 둔 설정은 아무도 검사하지 않는다
+
+쿠버네티스 API를 넓히는 방법은 두 가지다. CRD로 새 종류를 선언하면 기존 API 서버가 저장과 검사를 다 해 준다. 아니면 API 서버를 따로 하나 만들어 앞에 붙인다(API 집계, [API 집계와 스케줄러 글](/posts/k8s-api-aggregation-schedulers)). 대부분은 CRD로 충분하다. 저장소가 etcd여도 되고, 요청마다 별난 계산을 할 필요가 없다면 말이다.
+
+CRD를 등록하면 무엇이 생기는지 아래 그림에 모았다. 점이 흐르는 방향이 요청이 가는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="CRD는 데이터가 아니라 API 서버에 주는 설명서다. 설명서가 등록되면 그 종류의 객체를 받을 경로가 열린다"
+  nodes={[
+    { id: "crd", label: "CRD", sub: "backups.ops…", x: 80, y: 50, w: 120 },
+    { id: "api", label: "kube-apiserver", sub: "apiextensions", x: 260, y: 50, w: 140 },
+    { id: "path", label: "/apis/ops…/v1", sub: "새 REST 경로", x: 260, y: 150, w: 140 },
+    { id: "cr", label: "Backup", sub: "orders-db", x: 80, y: 150, w: 120 },
+    { id: "etcd", label: "etcd", sub: "/registry/ops…", x: 260, y: 250, w: 140 },
+    { id: "ctrl", label: "컨트롤러", sub: "watch", x: 80, y: 250, w: 120 },
+  ]}
+  edges={[
+    { from: "crd", to: "api", label: "등록" },
+    { from: "api", to: "path", label: "연다" },
+    { from: "cr", to: "path", label: "POST" },
+    { from: "path", to: "etcd", label: "검사 후 저장" },
+    { from: "ctrl", to: "path", label: "watch", dashed: true },
+  ]}
+/>
+
+CRD만으로는 아무 일도 일어나지 않는다는 점을 먼저 짚어 둔다. `Backup`을 만들면 etcd에 문서가 저장될 뿐이다. 그 문서를 보고 CronJob을 만드는 것은 컨트롤러가 할 일이다. CRD는 "이런 모양의 문서를 받아 달라"는 약속까지만 맡는다.
+
+## CRD 하나가 API 서버에 경로를 연다
+
+`Backup` CRD의 앞부분이다. 스키마는 다음 절에서 본다.
+
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backups.ops.example.com      # <plural>.<group> 이어야 한다
+spec:
+  group: ops.example.com
+  scope: Namespaced
+  names:
+    kind: Backup
+    plural: backups
+    singular: backup
+    shortNames: [bk]
+  versions:
+    - name: v1
+      served: true      # 이 버전으로 요청을 받는다
+      storage: true     # etcd에는 이 버전으로 저장한다 (딱 하나만 true)
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema: ...
+```
+
+이름은 아무렇게나 지을 수 없다. `metadata.name`이 `plural.group`과 정확히 같아야 하고, 그룹은 도메인처럼 점이 들어간 이름을 쓴다. `k8s.io`나 `kubernetes.io`로 끝나는 그룹은 쿠버네티스 프로젝트가 승인한 API에만 쓰게 되어 있다(`api-approved.kubernetes.io` 어노테이션이 없으면 거절된다). 회사 도메인을 그룹으로 쓰는 이유가 이것이다.
+
+```bash
+# CRD를 올리고, 이름이 받아들여지고 경로가 열릴 때까지 기다린다
+kubectl apply -f backup-crd.yaml
+kubectl wait --for=condition=Established crd/backups.ops.example.com
+# CRD 목록과 새로 생긴 리소스 종류를 본다
+kubectl get crd backups.ops.example.com
+kubectl api-resources --api-group=ops.example.com
+```
+
+```text
+customresourcedefinition.apiextensions.k8s.io/backups.ops.example.com created
+customresourcedefinition.apiextensions.k8s.io/backups.ops.example.com condition met
+NAME                      SCOPE        VERSIONS      CREATED AT
+backups.ops.example.com   Namespaced   v1(storage)   2026-10-21T01:12:29Z
+NAME      SHORTNAMES   APIVERSION           NAMESPACED   KIND
+backups   bk           ops.example.com/v1   true         Backup
+```
+
+`condition met`이 중요하다. CRD는 두 조건을 거친다. 이름이 다른 CRD와 겹치지 않는지 보는 `NamesAccepted`, 그리고 경로가 실제로 열렸다는 `Established`다. 그 사이 아주 잠깐은 CRD가 있어도 그 종류로 요청을 보내면 실패한다. 아래 그림에서 다음을 누르면 CRD를 올린 뒤 첫 `Backup`이 저장되기까지를 따라간다.
+
+<SequenceDiagram
+  caption="CRD를 올리면 API 서버 안의 apiextensions가 이름을 확인하고 새 경로를 연다"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "ext", label: "apiextensions" },
+    { id: "etcd", label: "etcd" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "POST CRD", title: "CRD를 보낸다", detail: "CRD도 그냥 API 오브젝트다. apiextensions.k8s.io/v1 그룹으로 저장된다." },
+    { from: "api", to: "etcd", label: "저장", title: "설명서가 저장된다", detail: "이 순간엔 아직 /apis/ops.example.com 경로가 없다." },
+    { from: "ext", to: "ext", label: "NamesAccepted", title: "이름이 겹치지 않는지 본다", detail: "plural, singular, shortNames, kind가 다른 CRD와 겹치면 이 조건이 False가 되고 경로가 열리지 않는다." },
+    { from: "ext", to: "api", label: "Established", title: "경로를 연다", detail: "스키마를 읽어 검사기와 저장소를 만들고, 디스커버리 문서에 새 그룹을 올린다. kubectl은 디스커버리를 다시 받아야 bk를 안다." },
+    { from: "user", to: "api", label: "POST Backup", title: "첫 Backup을 보낸다", detail: "/apis/ops.example.com/v1/namespaces/shop/backups로 간다. 스키마 검사를 지나야 저장된다.", payload: "POST /apis/ops.example.com/v1/namespaces/shop/backups" },
+    { from: "api", to: "etcd", label: "저장", title: "문서가 etcd에 들어간다", detail: "키는 /registry/ops.example.com/backups/shop/orders-db다. 값은 저장 버전(v1) 모양의 JSON이다." },
+  ]}
+/>
+
+CRD와 그 CR을 한 파일에 같이 넣고 처음 `apply`하면 이 틈에 걸린다. kubectl이 파일을 읽을 때 아직 `Gadget`이라는 종류를 모르기 때문이다.
+
+```text
+customresourcedefinition.apiextensions.k8s.io/gadgets.ops.example.com created
+error: resource mapping not found for name: "g1" namespace: "shop" from "both.yaml": no matches for kind "Gadget" in version "ops.example.com/v1"
+ensure CRDs are installed first
+```
+
+같은 명령을 한 번 더 치면 성공한다. 배포 파이프라인에서는 CRD를 먼저 올리고 `kubectl wait --for=condition=Established`로 기다린 다음 CR을 올리게 단계를 나눈다. Helm이 CRD를 `crds/` 폴더에 따로 두는 것도 같은 이유인데, 대신 업그레이드 때 CRD를 고치지 않는다는 다른 함정이 있다([Helm 릴리스 글](/posts/helm-release-lifecycle)).
+
+## 스키마 한 장 읽기
+
+`openAPIV3Schema`가 CRD의 몸통이다. OpenAPI v3 스키마의 부분 집합에 쿠버네티스 확장(`x-kubernetes-*`)을 더한 모양이다. `Backup`의 spec 부분은 이렇다.
+
+```yaml
+schema:
+  openAPIV3Schema:
+    type: object
+    properties:
+      spec:
+        type: object
+        required: [database, schedule]
+        properties:
+          database:
+            type: string
+            minLength: 1
+          schedule:
+            type: string
+            pattern: '^(\S+\s+){4}\S+$'   # 칸 다섯 개짜리 크론 식
+          retentionDays:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 7
+          suspend:
+            type: boolean
+            default: false
+          storageClass:
+            type: string
+            enum: [standard, archive]
+            default: standard
+```
+
+`database`와 `schedule`만 적은 Backup을 올리고 다시 읽어 봤다.
+
+```bash
+# 필수 칸 두 개만 적은 Backup을 만든다
+kubectl apply -f orders-db.yaml
+# 저장된 spec을 그대로 본다
+kubectl get backup orders-db -n shop -o jsonpath='{.spec}'
+```
+
+```text
+backup.ops.example.com/orders-db created
+{"database":"orders","retentionDays":7,"schedule":"0 3 * * *","storageClass":"standard","suspend":false}
+```
+
+적지 않은 세 칸이 채워져 있다. 기본값은 요청을 받을 때, 그리고 etcd에서 읽어 올 때도 채운다. 그래서 나중에 스키마에 `default`를 새로 넣으면 예전에 저장된 객체도 읽는 순간 그 값을 가진 것처럼 보인다. 단, 읽을 때 채운 값은 객체를 다시 쓰기 전까지 etcd에는 없다.
+
+틀린 값을 넣으면 한 번에 다 알려 준다.
+
+```text
+The Backup "bad" is invalid: 
+* spec.database: Invalid value: "": spec.database in body should be at least 1 chars long
+* spec.schedule: Invalid value: "every day": spec.schedule in body should match '^(\S+\s+){4}\S+$'
+* spec.storageClass: Unsupported value: "cold": supported values: "standard", "archive"
+* <nil>: Invalid value: null: some validation rules were not checked because the object was invalid; correct the existing errors to complete validation
+```
+
+마지막 줄이 눈에 띈다. 스키마 검사에서 이미 틀린 객체에는 다음 절의 CEL 규칙을 돌리지 않는다. 고치고 다시 보내면 그제야 CEL 규칙에서 또 걸릴 수 있다는 뜻이다.
+
+`kubectl explain backup.spec`도 이 스키마로 답한다. 다만 `description`을 적지 않으면 칸마다 `<no description>`으로 나온다. 팀 사람들이 explain으로 필드를 찾게 하려면 칸마다 한 줄씩 적어 둔다. kubebuilder 같은 도구는 Go 구조체의 주석을 그대로 description으로 옮긴다.
+
+## 모든 칸에 type이 있어야 한다, 구조적 스키마
+
+`apiextensions.k8s.io/v1` CRD는 스키마가 구조적(structural)이어야 받아들여진다. 규칙을 줄이면 이렇다. 루트와 모든 `properties`, `items`에 `type`이 있어야 하고(`x-kubernetes-int-or-string`이나 `x-kubernetes-preserve-unknown-fields` 같은 예외는 있다), `anyOf`나 `oneOf` 안에서 새 필드를 정의하거나 type을 바꿀 수 없다. spec에서 `type: object`를 빼먹은 CRD를 올리면 이렇게 거절된다.
+
+```text
+The CustomResourceDefinition "widgets.ops.example.com" is invalid: spec.validation.openAPIV3Schema.properties[spec].type: Required value: must not be empty for specified object fields
+```
+
+까다롭게 구는 이유가 있다. API 서버는 이 스키마 하나로 세 가지를 한다. 어떤 필드가 있어야 하는지 알아야 모르는 필드를 잘라 낼 수 있고(pruning), 어디에 무슨 타입이 오는지 알아야 기본값을 넣을 수 있고, 서버 쪽 apply가 필드마다 주인을 기록할 수 있다([kubectl apply 글](/posts/kubectl-apply-ssa)). 스키마가 "아마 객체겠지"로 남아 있으면 셋 다 못 한다. 옛 `apiextensions.k8s.io/v1beta1`은 이걸 강제하지 않았고, 1.22에서 그 버전이 사라지면서 스키마 없는 CRD도 함께 막혔다.
+
+## 모르는 필드는 잘려 나간다
+
+처음 장면의 오타를 Backup에 그대로 넣어 봤다. kubectl은 기본으로 서버에 엄격한 필드 검사(`fieldValidation=Strict`)를 요청한다.
+
+```bash
+# 기본: 모르는 필드가 있으면 거절한다
+kubectl apply -f typo.yaml
+# 검사를 끄면 받아들이되, 모르는 필드는 잘라 낸다
+kubectl apply -f typo.yaml --validate=false
+kubectl get bk typo -n shop -o jsonpath='{.spec}'
+# 경고만 받고 진행한다
+kubectl apply -f typo.yaml --validate=warn
+```
+
+```text
+Error from server (BadRequest): error when creating "typo.yaml": Backup in version "v1" cannot be handled as a Backup: strict decoding error: unknown field "spec.retentionDay"
+backup.ops.example.com/typo created
+{"database":"users","retentionDays":7,"schedule":"0 4 * * *","storageClass":"standard","suspend":false}
+Warning: unknown field "spec.retentionDay"
+backup.ops.example.com/typo configured
+```
+
+검사를 끄고 저장한 객체에 `retentionDay`는 없다. API 서버가 스키마에 없는 칸을 버렸기 때문이다. 이걸 pruning이라고 한다. 결과적으로 오타는 여전히 7일로 이어졌지만, 적어도 엄격 모드에서는 저장 단계에서 막힌다. 오타가 조용히 남아 다른 도구를 속이는 일도 없다. 저장된 문서에는 스키마가 아는 칸만 있다.
+
+아래 그림은 API 서버가 들어온 객체를 스키마와 나란히 놓고 칸마다 남길지 버릴지 정하는 모습이다.
+
+<AlgoTrace
+  caption="들어온 칸을 하나씩 스키마에서 찾는다. 없는 칸은 버리고, 있으면 그 아래로 내려간다"
+  cells={["spec", "database", "retentionDay", "hooks[0]", "cmd", "timeout", "extra"]}
+  memoryLabel="잘린 칸"
+  steps={[
+    { pointer: 0, caption: "spec은 스키마에 있다. 그 안의 properties로 내려간다." },
+    { pointer: 1, found: [1], caption: "database는 string으로 정의돼 있다. 남긴다." },
+    { pointer: 2, memory: ["spec.retentionDay"], caption: "retentionDay는 없다. 엄격 모드면 여기서 거절, 아니면 버린다." },
+    { pointer: 3, found: [1], memory: ["spec.retentionDay"], caption: "hooks는 배열이다. 원소마다 items 스키마를 대고 본다." },
+    { pointer: 4, found: [1, 4], memory: ["spec.retentionDay"], caption: "cmd는 items 안에 있다. 남긴다." },
+    { pointer: 5, found: [1, 4], memory: ["spec.retentionDay", "hooks[0].timeout"], caption: "timeout은 items에 없다. 배열 안에서도 똑같이 잘린다." },
+    { pointer: 6, found: [1, 4, 6], memory: ["spec.retentionDay", "hooks[0].timeout"], caption: "extra는 preserve-unknown-fields라 그 아래는 보지 않고 통째로 남긴다." },
+  ]}
+/>
+
+`x-kubernetes-preserve-unknown-fields: true`는 그 칸 아래로는 pruning을 끄는 표시다. 플러그인 설정처럼 모양을 미리 정할 수 없는 칸에 쓴다. 대신 그 아래는 아무 검사도 받지 않으니 처음 장면의 ConfigMap과 같은 처지가 된다. 스키마를 다 적기 귀찮다고 spec 전체에 이걸 거는 CRD가 꽤 있는데, CRD를 쓰는 이유를 절반쯤 버리는 셈이다.
+
+직접 짜 보면 규칙이 손에 익는다. 아래는 pruning을 흉내 내는 함수다. `properties`에 있는 칸은 그 아래로 내려가고, 배열은 `items`로, 값이 자유로운 맵은 `additionalProperties`로, `x-kubernetes-preserve-unknown-fields`면 그대로 둔다. 실제 API 서버는 루트의 `apiVersion`, `kind`, `metadata`를 따로 다루지만 여기서는 생략했다.
+
+<CodePlayground
+  caption="스키마로 모르는 칸 잘라 내기"
+  functionName="prune"
+  initialCode={`function prune(schema, value, path = "") {
+  // value에서 schema에 없는 칸을 지우고,
+  // 지운 칸의 경로를 removed에 모은다
+  return { value, removed: [] };
+}`}
+  solution={`function prune(schema, value, path = "") {
+  if (Array.isArray(value)) {
+    if (!schema.items) return { value, removed: [] };
+    const removed = [];
+    const out = value.map((v, i) => {
+      const r = prune(schema.items, v, path + "[" + i + "]");
+      removed.push(...r.removed);
+      return r.value;
+    });
+    return { value: out, removed };
+  }
+  if (value === null || typeof value !== "object") return { value, removed: [] };
+  if (schema["x-kubernetes-preserve-unknown-fields"] && !schema.properties) return { value, removed: [] };
+  const props = schema.properties ?? {};
+  const out = {};
+  const removed = [];
+  for (const [k, v] of Object.entries(value)) {
+    const p = path ? path + "." + k : k;
+    if (props[k]) {
+      const r = prune(props[k], v, p);
+      out[k] = r.value;
+      removed.push(...r.removed);
+    } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      const r = prune(schema.additionalProperties, v, p);
+      out[k] = r.value;
+      removed.push(...r.removed);
+    } else if (schema["x-kubernetes-preserve-unknown-fields"]) {
+      out[k] = v;
+    } else {
+      removed.push(p);
+    }
+  }
+  return { value: out, removed };
+}`}
+  tests={[
+    { label: "오타 칸", args: [{ type: "object", properties: { spec: { type: "object", properties: { database: { type: "string" }, retentionDays: { type: "integer" } } } } }, { spec: { database: "orders", retentionDay: 14 } }], expected: { value: { spec: { database: "orders" } }, removed: ["spec.retentionDay"] } },
+    { label: "preserve-unknown", args: [{ type: "object", properties: { spec: { type: "object", properties: { database: { type: "string" }, extra: { type: "object", "x-kubernetes-preserve-unknown-fields": true } } } } }, { spec: { database: "orders", extra: { anything: { goes: 1 } } } }], expected: { value: { spec: { database: "orders", extra: { anything: { goes: 1 } } } }, removed: [] } },
+    { label: "배열 원소 안", args: [{ type: "object", properties: { spec: { type: "object", properties: { hooks: { type: "array", items: { type: "object", properties: { cmd: { type: "string" } } } } } } } }, { spec: { hooks: [{ cmd: "vacuum", timeout: 30 }, { cmd: "analyze" }] } }], expected: { value: { spec: { hooks: [{ cmd: "vacuum" }, { cmd: "analyze" }] } }, removed: ["spec.hooks[0].timeout"] } },
+    { label: "자유 맵과 최상위 칸", args: [{ type: "object", properties: { spec: { type: "object", properties: { labels: { type: "object", additionalProperties: { type: "string" } } } } } }, { spec: { labels: { team: "pay", tier: "db" } }, notes: { x: 1 } }], expected: { value: { spec: { labels: { team: "pay", tier: "db" } } }, removed: ["notes"] } },
+  ]}
+/>
+
+## 필드 사이 규칙은 CEL로
+
+스키마는 칸 하나씩만 본다. "standard 저장소는 30일까지, archive만 그 이상"처럼 칸 둘을 엮은 규칙이나 "database는 만든 뒤에 바꿀 수 없다" 같은 규칙은 못 적는다. 예전에는 이걸 하려고 검증 웹훅 서버를 따로 띄웠다. 지금은 `x-kubernetes-validations`에 CEL 식을 적으면 API 서버가 직접 평가한다. CEL(Common Expression Language)은 구글이 만든 작은 식 언어로, 반복문이 없고 실행 비용을 미리 셀 수 있게 설계됐다. 이 기능은 1.25에 beta로 기본 켜졌고 1.29에 GA가 됐다.
+
+```yaml
+spec:
+  type: object
+  x-kubernetes-validations:
+    - rule: "self.storageClass == 'archive' || self.retentionDays <= 30"
+      message: "standard 저장소는 retentionDays를 30일까지만 둔다"
+      fieldPath: .retentionDays
+    - rule: "self.database == oldSelf.database"
+      message: "database는 바꿀 수 없다. 새 Backup을 만든다"
+```
+
+`self`는 규칙이 붙은 칸(여기서는 spec)이고, `oldSelf`는 수정 전의 같은 칸이다. `oldSelf`를 쓰는 규칙을 전이 규칙(transition rule)이라고 부르는데, 비교할 이전 값이 없는 생성 때는 평가하지 않는다. 실제로 걸어 봤다.
+
+```bash
+# 90일 + standard: 첫 규칙에 걸린다
+kubectl apply -f long.yaml
+# 같은 90일이라도 archive면 통과한다
+kubectl apply -f long2.yaml
+# 만든 뒤 database를 바꾸려 하면 두 번째 규칙에 걸린다
+kubectl patch bk orders-db -n shop --type=merge -p '{"spec":{"database":"orders-v2"}}'
+```
+
+```text
+The Backup "long" is invalid: spec.retentionDays: Invalid value: standard 저장소는 retentionDays를 30일까지만 둔다
+backup.ops.example.com/long created
+The Backup "orders-db" is invalid: spec: Invalid value: database는 바꿀 수 없다. 새 Backup을 만든다
+```
+
+첫 오류의 위치가 `spec`이 아니라 `spec.retentionDays`인 것은 `fieldPath`를 적어서다. 화면에 폼을 띄우는 도구가 이 경로로 어느 칸이 틀렸는지 표시한다. 그 밖에 `messageExpression`으로 값이 들어간 메시지를 만들 수 있고, `reason`으로 오류 종류(FieldValueInvalid, FieldValueForbidden 등)를 고를 수 있다.
+
+오류 한 줄을 조각내 보면 어떤 칸이 어디서 왔는지 보인다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="검사 오류 한 줄 읽기"
+  base='The Backup "long" is invalid:'
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "kind", display: "Backup \"long\"", title: "종류와 이름", description: "CRD의 names.kind와 metadata.name이다. 어떤 객체가 거절됐는지 먼저 본다." },
+    { key: "path", display: "spec.retentionDays:", title: "틀린 위치", description: "규칙의 fieldPath가 있으면 그 경로, 없으면 규칙이 붙은 칸(spec)이 나온다. 스키마 검사 오류는 늘 정확한 칸을 가리킨다." },
+    { key: "type", display: "Invalid value:", title: "오류 종류", description: "reason을 적지 않으면 FieldValueInvalid가 된다. Required, Forbidden, Unsupported, Too long 같은 말이 이 자리에 온다." },
+    { key: "msg", display: "standard 저장소는 …", title: "규칙의 message", description: "CEL 규칙의 message나 messageExpression 결과다. 규칙을 만든 사람이 쓰는 말이니 고칠 방법까지 적어 두면 좋다." },
+  ]}
+/>
+
+CEL에도 한계가 있다. API 서버는 CRD를 받을 때 규칙마다 최악의 실행 비용을 미리 어림한다. 길이 제한 없는 배열과 문자열에 반복 함수를 걸면 이 어림이 터진다. 상한 없는 `tags` 배열에 `self.tags.all(t, t.matches('^[a-z]+$'))`를 걸고, 스키마에 없는 칸을 쓰는 `self.size > 0`을 함께 넣어 봤다. 잘못 쓴 필드 이름도 이 단계에서 잡힌다.
+
+```text
+The CustomResourceDefinition "gadgets.ops.example.com" is invalid: 
+* spec.validation.openAPIV3Schema.properties[spec].x-kubernetes-validations[0].rule: Forbidden: estimated rule cost exceeds budget by factor of more than 100x (try simplifying the rule, or adding maxItems, maxProperties, and maxLength where arrays, maps, and strings are declared)
+* spec.validation.openAPIV3Schema.properties[spec].x-kubernetes-validations[1].rule: Invalid value: {"Rule":"self.size > 0","Message":"","MessageExpression":"","Reason":null,"FieldPath":"","OptionalOldSelf":null}: compilation failed: ERROR: <input>:1:5: undefined field 'size'
+ | self.size > 0
+ | ....^
+```
+
+오류가 권하는 대로 `maxItems: 20`과 `maxLength: 63`을 붙이니 같은 규칙이 통과했다. 규칙을 쓰려면 배열과 문자열에 상한을 두는 습관이 필요하다. 상한은 그 자체로 쓸모도 있다. 태그 10만 개짜리 객체가 etcd를 채우는 일을 막는다.
+
+규칙을 나중에 더 엄격하게 바꾸는 경우도 생각해야 한다. 이미 저장된 객체가 새 규칙을 어기면, 그 객체의 다른 칸(라벨 하나)만 바꿔도 수정이 거절될까? 1.30부터 기본으로 켜진 검증 래칫(validation ratcheting)이 이 문제를 다룬다. 수정 요청에서 바뀌지 않은 칸은 새 규칙을 어겨도 통과시킨다(1.33에 GA). 그보다 옛 버전 클러스터라면 규칙을 조이기 전에 기존 객체부터 고쳐 둬야 한다.
+
+## 요청 하나가 거치는 순서
+
+지금까지 본 단계가 한 요청 안에서 어떤 순서로 도는지 모아 보면 왜 그런 결과가 나왔는지 설명된다. 아래 그림에서 다음을 누르면 `kubectl apply` 한 번이 etcd에 닿기까지를 따라간다.
+
+<SequenceDiagram
+  caption="CR 하나가 저장되기까지. 잘라 내고, 채우고, 바꿀 기회를 준 뒤 검사한다"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "adm", label: "admission" },
+    { id: "etcd", label: "etcd" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "PATCH/POST", title: "요청이 들어온다", detail: "fieldValidation=Strict가 쿼리에 붙어 온다. kubectl의 기본값이다.", payload: "?fieldManager=kubectl-client-side-apply&fieldValidation=Strict" },
+    { from: "api", to: "api", label: "decode·prune", title: "디코딩하며 모르는 칸을 본다", detail: "Strict면 모르는 칸에서 400으로 끝난다. Warn이나 Ignore면 잘라 내고 계속 간다." },
+    { from: "api", to: "api", label: "default", title: "기본값을 채운다", detail: "스키마의 default를 넣는다. 그래서 다음 단계의 웹훅과 규칙은 채워진 값을 본다." },
+    { from: "api", to: "adm", label: "mutating", title: "바꾸는 admission", detail: "MutatingAdmissionPolicy나 웹훅이 값을 더 바꿀 수 있다." },
+    { from: "api", to: "api", label: "schema·CEL", title: "스키마와 CEL로 검사한다", detail: "타입, 범위, pattern을 먼저 보고, 통과하면 x-kubernetes-validations를 평가한다." },
+    { from: "api", to: "adm", label: "validating", title: "검사하는 admission", detail: "ValidatingAdmissionPolicy나 웹훅이 마지막으로 본다. 정책이 여러 CRD에 걸치는 규칙이면 이쪽이 맞다." },
+    { from: "api", to: "etcd", label: "저장", title: "저장 버전으로 바꿔 쓴다", detail: "요청 버전과 저장 버전이 다르면 여기서 변환이 한 번 더 일어난다." },
+  ]}
+/>
+
+CEL 규칙과 admission 정책 중 무엇을 고를지는 범위로 정한다. 한 객체 안에서 끝나는 규칙(칸 사이 관계, 불변 칸)은 CRD의 CEL에 둔다. CRD를 설치하면 규칙이 함께 따라가니 빠뜨릴 일이 없다. 네임스페이스마다 다른 규칙, 다른 객체를 봐야 하는 규칙, 조직 정책은 admission 쪽에 둔다([admission 제어 글](/posts/k8s-admission-control)).
+
+## status는 따로 쓰는 문, 서브리소스
+
+`subresources.status: {}`를 켜면 `/status`라는 별도 경로가 생기고 규칙이 둘 생긴다. 본 경로로 보낸 status 변경은 무시되고, `/status`로 보낸 spec 변경도 무시된다. 그리고 spec이 바뀔 때만 `metadata.generation`이 오른다.
+
+```bash
+# 본 경로로 status를 바꿔 본다
+kubectl patch bk orders-db -n shop --type=merge -p '{"status":{"phase":"Ready"}}'
+kubectl get bk orders-db -n shop -o jsonpath='gen={.metadata.generation} rv={.metadata.resourceVersion} status={.status}'
+# /status 경로로 바꾼다
+kubectl patch bk orders-db -n shop --subresource=status --type=merge \
+  -p '{"status":{"phase":"Ready","lastSuccessfulTime":"2026-10-21T03:00:12Z","observedGeneration":1}}'
+kubectl get bk orders-db -n shop -o jsonpath='gen={.metadata.generation} rv={.metadata.resourceVersion} status={.status}'
+# spec을 바꾸면 generation만 오른다
+kubectl patch bk orders-db -n shop --type=merge -p '{"spec":{"retentionDays":14}}'
+kubectl get bk orders-db -n shop -o jsonpath='gen={.metadata.generation} observed={.status.observedGeneration}'
+```
+
+```text
+backup.ops.example.com/orders-db patched (no change)
+gen=1 rv=361 status=
+backup.ops.example.com/orders-db patched
+gen=1 rv=391 status={"lastSuccessfulTime":"2026-10-21T03:00:12Z","observedGeneration":1,"phase":"Ready"}
+backup.ops.example.com/orders-db patched
+gen=2 observed=1
+```
+
+첫 patch는 `(no change)`다. 오류도 없이 조용히 버려졌다. 컨트롤러를 처음 짤 때 status가 안 써진다고 한참 헤매는 이유가 이것이다. status를 켠 CRD라면 컨트롤러는 반드시 `/status`로 써야 한다. 반대로 사용자가 status를 손으로 꾸미는 것도 막힌다. RBAC에서 `backups`와 `backups/status`가 다른 리소스라, 사용자에게는 앞의 것만, 컨트롤러에게는 둘 다 준다.
+
+마지막 줄의 `gen=2 observed=1`이 컨트롤러가 아직 새 spec을 보지 못했다는 신호다. 컨트롤러가 reconcile을 마치고 `observedGeneration`을 2로 올리면 "새 설정이 반영됐다"고 말할 수 있다([API 오브젝트 글](/posts/k8s-api-objects)의 generation 절).
+
+status에도 스키마는 적용된다. `lastSuccessfulTime`에 `"yesterday"`를 넣으면 `must be of type date-time`으로 거절된다.
+
+같은 방식으로 `subresources.scale`을 켜면 `/scale` 경로가 생겨 `kubectl scale`과 HPA가 이 CR의 replicas를 다룰 수 있다. replicas가 어느 칸에 있는지 `specReplicasPath`로 알려 주면 된다.
+
+## kubectl get에 보일 칸 고르기
+
+기본 `kubectl get`은 NAME과 AGE만 보여 준다. `additionalPrinterColumns`로 칸을 고른다.
+
+```yaml
+additionalPrinterColumns:
+  - name: Database
+    type: string
+    jsonPath: .spec.database
+  - name: Last
+    type: date          # date면 경과 시간으로 보여 준다
+    jsonPath: .status.lastSuccessfulTime
+  # Schedule(.spec.schedule), Phase(.status.phase), Age(.metadata.creationTimestamp)도 같은 모양
+```
+
+```text
+NAME        DATABASE   SCHEDULE    PHASE   LAST        AGE
+long        audit      0 5 * * 0                       9s
+orders-db   orders     0 3 * * *   Ready   <invalid>   20s
+typo        users      0 4 * * *                       20s
+```
+
+`LAST`가 `<invalid>`다. 방금 넣은 시각 `03:00:12Z`가 지금(01시대)보다 미래라서 경과 시간을 못 그린 것이다. 시계가 어긋난 컨트롤러가 status를 쓰면 이렇게 보인다. 과거 시각으로 다시 쓰자 정상으로 나왔다.
+
+```text
+NAME        DATABASE   SCHEDULE    PHASE   LAST    AGE
+orders-db   orders     0 3 * * *   Ready   7h13m   30s
+```
+
+칸에 `priority: 1`을 주면 기본 출력에서 빠지고 `-o wide`에서만 보인다. 그리고 `additionalPrinterColumns`를 하나라도 적으면 기본 AGE 칸이 사라지니 위처럼 직접 넣어야 한다. 칸은 서버가 계산해 테이블로 내려주므로(`Accept: application/json;as=Table`) kubectl 버전과 상관없이 같은 칸이 나온다.
+
+## 버전을 두 개 두면
+
+CRD를 처음 `v1alpha1`로 냈다가 필드 이름을 고친 `v1`을 내는 일은 흔하다. 이 실습에서도 옛 버전은 `db`, `cron`, `retention: "14d"`를 썼고, v1은 `database`, `schedule`, `retentionDays: 14`를 쓴다고 해 보자. 한 CRD에 두 버전을 함께 두면 둘 다 요청을 받을 수 있다(`served: true`). 그런데 저장은 하나(`storage: true`)로만 한다. 그러니 요청 버전과 저장 버전 사이에 누군가 변환을 해야 한다.
+
+변환 방식(`spec.conversion.strategy`)의 기본값은 `None`이다. apiVersion 글자만 바꾸고 내용은 그대로 둔다. 필드 이름이 다르면 무슨 일이 생기는지 바로 해 봤다.
+
+```bash
+# v1alpha1 모양으로 Backup을 만든다 (저장 버전은 v1, 변환은 None)
+kubectl apply -f alpha.yaml
+# 같은 객체를 v1으로, v1alpha1로 읽는다
+kubectl get backups.v1.ops.example.com legacy -n shop -o jsonpath='{.apiVersion} {.spec}'
+kubectl get backups.v1alpha1.ops.example.com legacy -n shop -o jsonpath='{.apiVersion} {.spec}'
+```
+
+```text
+Warning: ops.example.com/v1alpha1 Backup은 곧 사라진다. v1을 쓴다
+backup.ops.example.com/legacy created
+ops.example.com/v1 {"retentionDays":7,"storageClass":"standard","suspend":false}
+Warning: ops.example.com/v1alpha1 Backup은 곧 사라진다. v1을 쓴다
+ops.example.com/v1alpha1 {}
+```
+
+데이터가 통째로 사라졌다. v1alpha1로 받은 `db`, `cron`, `retention`은 v1으로 저장되는 순간 v1 스키마에 없는 칸이라 잘려 나갔다. 남은 건 기본값뿐이다. 필수 칸(`database`)이 비었는데도 저장이 된 것도 눈여겨볼 만하다. 검사는 요청 버전(v1alpha1)의 스키마로 했기 때문이다. 경고 문구는 `deprecated: true`와 `deprecationWarning`을 적어 둔 덕에 나온다. 옛 버전을 쓰는 사람에게 미리 알리는 장치다([alpha, beta, GA 글](/posts/k8s-feature-maturity)).
+
+필드 모양이 다르면 변환 웹훅이 필요하다. API 서버가 `ConversionReview`를 HTTPS로 보내면, 웹훅이 객체를 원하는 버전 모양으로 바꿔 돌려준다. Node로 40줄짜리 웹훅을 만들었다.
+
+```js
+// Backup v1alpha1 <-> v1 변환 웹훅. API 서버가 ConversionReview를 POST한다
+const toV1 = (o) => {
+  const { db, cron, retention, ...rest } = o.spec ?? {};
+  return { ...o, apiVersion: "ops.example.com/v1",
+    spec: { ...rest, database: db, schedule: cron,
+      ...(retention ? { retentionDays: Number(retention.replace("d", "")) } : {}) } };
+};
+const toAlpha = (o) => {
+  const { database, schedule, retentionDays, ...rest } = o.spec ?? {};
+  return { ...o, apiVersion: "ops.example.com/v1alpha1",
+    spec: { ...rest, db: database, cron: schedule,
+      ...(retentionDays ? { retention: `${retentionDays}d` } : {}) } };
+};
+
+https.createServer({ key, cert }, (req, res) => {
+  // ... 본문을 다 읽은 뒤
+  const { uid, desiredAPIVersion, objects } = JSON.parse(body).request;
+  const converted = objects.map((o) => (desiredAPIVersion.endsWith("/v1") ? toV1(o) : toAlpha(o)));
+  res.end(JSON.stringify({ apiVersion: "apiextensions.k8s.io/v1", kind: "ConversionReview",
+    response: { uid, result: { status: "Success" }, convertedObjects: converted } }));
+}).listen(9443, "127.0.0.1");
+```
+
+CRD에는 웹훅 주소와 그 인증서를 믿을 CA를 적는다. 실습은 API 서버가 같은 호스트의 프로세스라 URL로 적었고, 클러스터 안이라면 `service: {namespace, name, path}`로 적는다.
+
+```yaml
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions: ["v1"]
+      clientConfig:
+        url: https://127.0.0.1:9443/convert
+        caBundle: LS0tLS1CRUdJTi...   # 웹훅 인증서를 서명한 CA (base64)
+```
+
+같은 v1alpha1 파일을 다시 올렸다.
+
+```text
+ops.example.com/v1 {"database":"payments","retentionDays":14,"schedule":"30 2 * * *","storageClass":"standard","suspend":false}
+ops.example.com/v1alpha1 {"cron":"30 2 * * *","db":"payments","retention":"14d"}
+```
+
+웹훅 로그에는 생각보다 많은 호출이 찍혔다.
+
+```text
+01:14:10 typo(v1) -> v1alpha1
+01:14:10 orders-db(v1) -> v1alpha1
+01:14:10 legacy(v1alpha1) -> v1
+01:14:10 long(v1) -> v1alpha1
+01:14:10 legacy(v1) -> v1alpha1
+01:14:10 legacy(v1) -> v1alpha1
+01:14:10 legacy(v1) -> v1alpha1
+```
+
+저장할 때 한 번(`legacy(v1alpha1) -> v1`)이 전부가 아니다. v1alpha1로 읽고 watch하는 쪽이 있으면 API 서버는 v1으로 저장된 객체를 꺼낼 때마다 변환을 부른다. 웹훅은 저장 경로뿐 아니라 읽기 경로에도 서 있다. 아래 그림에서 다음을 누르면 웹훅이 멈췄을 때 무엇이 막히는지까지 이어서 본다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="변환 웹훅은 저장할 때도, 다른 버전으로 읽을 때도 불린다. 멈추면 그 버전의 읽기가 깨진다"
+  zones={[
+    { id: "cp", label: "control plane", x: 6, y: 6, w: 388, h: 140, tone: "private" },
+    { id: "wh", label: "webhook", x: 6, y: 158, w: 190, h: 96, tone: "edge" },
+    { id: "st", label: "storage", x: 206, y: 158, w: 188, h: 96, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "user", label: "kubectl", sub: "v1alpha1", x: 70, y: 70, icon: "client", w: 100 },
+    { id: "api", label: "apiserver", sub: "v1.37.0", x: 230, y: 70, icon: "server", w: 112 },
+    { id: "ctrl", label: "controller", sub: "v1 watch", x: 340, y: 118, icon: "gateway", w: 96 },
+    { id: "conv", label: "convert", sub: ":9443", x: 100, y: 210, icon: "lock", w: 104 },
+    { id: "etcd", label: "etcd", sub: "v1 JSON", x: 300, y: 210, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "conv", label: "Review" },
+    { from: "api", to: "etcd" },
+    { from: "ctrl", to: "api", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "api"], packet: "alpha", title: "옛 버전으로 보낸다", detail: "v1alpha1 모양의 Backup이 들어온다. 스키마 검사는 v1alpha1 스키마로 한다." },
+    { path: ["api", "conv"], packet: "Review", title: "저장 버전으로 바꿔 달라고 한다", detail: "desiredAPIVersion이 ops.example.com/v1인 ConversionReview를 보낸다. 기본 제한 시간은 30초다.", payload: "{\"request\":{\"desiredAPIVersion\":\"ops.example.com/v1\",\"objects\":[...]}}" },
+    { path: ["api", "etcd"], packet: "v1", title: "v1으로 저장한다", detail: "웹훅이 돌려준 v1 모양을 v1 스키마로 한 번 더 자른 뒤 etcd에 쓴다." },
+    { path: ["ctrl", "api", "etcd"], packet: "v1", title: "v1으로 읽는 쪽은 변환이 없다", detail: "저장 버전과 요청 버전이 같으면 웹훅을 부르지 않는다. 웹훅이 죽어도 v1 목록은 나온다." },
+    { path: ["user", "api", "conv"], packet: "GET", blocked: true, title: "웹훅이 멈추면", detail: "v1alpha1로 읽으려면 변환이 필요한데 연결이 거부된다. 목록 전체가 StorageReadError로 실패한다.", payload: "dial tcp 127.0.0.1:9443: connect: connection refused" },
+  ]}
+/>
+
+웹훅 프로세스를 죽이고 실제로 읽어 봤다. v1 목록은 그대로 나왔고, v1alpha1 목록과 v1alpha1 쓰기는 실패했다.
+
+```text
+Error from server (StorageReadError): failed to read one or more backups.ops.example.com from the storage: StorageError: corrupt object, Code: 7, Key: /registry/ops.example.com/backups/shop/legacy, ResourceVersion: 0, AdditionalErrorMsg: object not decodable revision=491: conversion webhook for ops.example.com/v1, Kind=Backup failed: Post "https://127.0.0.1:9443/convert?timeout=30s": dial tcp 127.0.0.1:9443: connect: connection refused (and 3 more)
+```
+
+`corrupt object`라는 말에 놀랄 필요는 없다. etcd 데이터가 깨진 게 아니라 변환을 못 했다는 뜻이다. 현장에서 이 메시지가 나오면 데이터보다 웹훅 Pod, 그 Service의 엔드포인트, 인증서 만료를 먼저 본다. 변환 웹훅은 오퍼레이터와 같은 Pod에 들어 있는 경우가 많아서, 오퍼레이터를 지웠는데 CRD만 남으면 옛 버전으로 읽는 모든 도구(ArgoCD, 백업 도구)가 함께 멈춘다.
+
+변환 함수는 왕복해도 정보가 사라지지 않게 짜야 한다. 위 결과에서 v1alpha1로 읽은 객체에는 `storageClass`, `suspend`가 없다. v1alpha1 스키마에 그 칸이 없어서다. 이 객체를 v1alpha1로 받아 고쳐서 다시 보내면 v1에서는 그 칸이 기본값으로 돌아간다. 실제 프로젝트들은 새 버전에만 있는 칸을 옛 버전의 어노테이션에 숨겨 두었다가 되살리는 식으로 이 손실을 막는다.
+
+## 저장 버전 옮기기, storedVersions
+
+`storage: true`를 v1alpha1에서 v1으로 옮겨도 etcd에 이미 있는 객체는 그대로다. 다시 쓰이기 전까지 옛 모양으로 남는다. CRD의 `status.storedVersions`가 "etcd 어딘가에 이 버전으로 저장된 객체가 있을 수 있다"는 목록이다. 저장 버전을 잠깐 v1alpha1로 바꿔 객체 하나(`legacy2`)를 만들고 다시 v1으로 돌린 뒤, etcd를 직접 들여다봤다.
+
+```bash
+# CRD가 기억하는 저장 버전 목록
+kubectl get crd backups.ops.example.com -o jsonpath='{.status.storedVersions}'
+# etcd의 실제 값 앞부분 (실습 클러스터라 etcd에 바로 붙을 수 있다)
+etcdctl --endpoints=http://127.0.0.1:32747 get /registry/ops.example.com/backups/shop/legacy2 --print-value-only | head -c 70
+```
+
+```text
+["v1","v1alpha1"]
+{"apiVersion":"ops.example.com/v1alpha1","kind":"Backup","metadata":{"
+```
+
+이 상태에서 v1alpha1을 CRD에서 지우려 하면 API 서버가 막는다.
+
+```text
+The CustomResourceDefinition "backups.ops.example.com" is invalid: status.storedVersions[1]: Invalid value: "v1alpha1": missing from spec.versions; v1alpha1 was previously a storage version, and must remain in spec.versions until a storage migration ensures no data remains persisted in v1alpha1 and removes v1alpha1 from status.storedVersions
+```
+
+옮기는 방법은 단순하다. 모든 객체를 한 번씩 읽어서 그대로 다시 쓰면 API 서버가 현재 저장 버전으로 다시 저장한다. 1.37 클러스터에는 이걸 해 주는 내장 API `storagemigration.k8s.io/v1`의 `StorageVersionMigration`이 있다. 이 실습 클러스터에서는 만들어 두니 1분 넘게 `Running` 상태에서 진행되지 않아서, 같은 일을 손으로 했다.
+
+```bash
+# 모든 Backup을 읽어서 그대로 다시 쓴다 (저장 버전 v1으로 다시 저장된다)
+kubectl get backups.v1.ops.example.com -A -o json | kubectl replace -f -
+# etcd 값이 바뀌었는지 본다
+etcdctl --endpoints=http://127.0.0.1:32747 get /registry/ops.example.com/backups/shop/legacy2 --print-value-only | head -c 70
+# 더는 v1alpha1로 저장된 객체가 없다고 CRD에 적는다
+kubectl patch crd backups.ops.example.com --subresource=status --type=json \
+  -p '[{"op":"replace","path":"/status/storedVersions","value":["v1"]}]'
+# 이제 v1alpha1을 뺀 CRD가 받아들여진다
+kubectl apply -f drop-alpha.yaml
+```
+
+```text
+backup.ops.example.com/legacy replaced
+backup.ops.example.com/legacy2 replaced
+backup.ops.example.com/long replaced
+backup.ops.example.com/orders-db replaced
+backup.ops.example.com/typo replaced
+{"apiVersion":"ops.example.com/v1","kind":"Backup","metadata":{"
+customresourcedefinition.apiextensions.k8s.io/backups.ops.example.com patched
+customresourcedefinition.apiextensions.k8s.io/backups.ops.example.com configured
+NAME                      SCOPE        VERSIONS      CREATED AT
+backups.ops.example.com   Namespaced   v1(storage)   2026-10-21T01:12:29Z
+```
+
+순서가 중요하다. storedVersions를 먼저 고치고 옛 버전을 지우면 etcd에 남은 v1alpha1 객체는 읽을 방법이 없어진다. 객체가 많으면 `replace` 도중 다른 쓰기와 부딪혀 409가 날 수 있으니, 실패한 객체만 다시 돌린다. 옛 버전 하나를 없애는 일은 "새 버전 추가 → 저장 버전 전환 → 객체 다시 쓰기 → storedVersions 정리 → served: false로 몇 릴리스 두기 → 삭제" 순서로 여러 릴리스에 걸쳐 진행한다.
+
+## CRD를 지우면 CR도 모두 사라진다
+
+<Callout kind="warning" title="kubectl delete crd는 그 종류의 객체를 전부 지운다">
+CRD를 지우면 API 서버가 그 종류의 모든 객체를 모든 네임스페이스에서 지운 뒤에 CRD를 지운다. 되돌릴 방법이 없다. 지우기 전에 `kubectl get <plural> -A -o yaml > backup.yaml`로 받아 두고, CRD를 다시 만든 뒤 그 파일로 되살린다. 오퍼레이터 차트를 `helm uninstall`할 때 CRD가 함께 지워지는지(대부분 `crds/`에 두어 지우지 않는다) 미리 확인한다.
+</Callout>
+
+```bash
+# 지우기 전에 몇 개인지, 그리고 받아 둔다
+kubectl get bk -A --no-headers | wc -l
+kubectl get bk -n shop -o yaml > backups-before-delete.yaml
+# CRD를 지운다
+kubectl delete crd backups.ops.example.com
+kubectl get bk -A
+# CRD를 다시 만들어도 객체는 돌아오지 않는다
+kubectl apply -f backup-crd.yaml && kubectl get bk -A
+```
+
+```text
+5
+customresourcedefinition.apiextensions.k8s.io "backups.ops.example.com" deleted
+Error from server (NotFound): Unable to list "ops.example.com/v1, Resource=backups": the server could not find the requested resource (get backups.ops.example.com)
+No resources found
+```
+
+이 정리는 CRD에 자동으로 붙는 finalizer `customresourcecleanup.apiextensions.k8s.io`가 맡는다. CR 중 하나가 자기 finalizer(오퍼레이터가 단 것) 때문에 안 지워지면 CRD도 `Terminating`에 멈춘다. 오퍼레이터를 먼저 지워 버려 아무도 그 finalizer를 떼지 못할 때 흔히 생긴다. 그래서 정리는 CR → 오퍼레이터 → CRD 순서로 한다.
+
+## 현장에서 CRD 때문에 막히는 순간
+
+`no matches for kind "X" in version "..."`는 CRD가 아직 없거나 Established 전이거나, 버전 이름이 다르다. `kubectl get crd <이름> -o jsonpath='{.spec.versions[*].name}'`로 그 버전이 `served: true`인지 본다. 운영 도구가 옛 alpha 버전으로 매니페스트를 가지고 있는 경우가 많다.
+
+`strict decoding error: unknown field`는 오타이거나, 매니페스트가 CRD보다 새 버전 기준으로 쓰였다. 오퍼레이터 차트를 올렸는데 CRD는 `crds/` 폴더라 그대로라면 새 필드를 모르는 옛 스키마가 막는다. 이때 `--validate=false`로 밀어 넣으면 그 필드는 조용히 잘려 나간다. 증상만 사라지고 설정은 안 먹는다.
+
+큰 CRD를 `kubectl apply`하면 `metadata.annotations: Too long: may not be more than 262144 bytes`가 난다. 클라이언트 쪽 apply가 CRD 전체를 `last-applied-configuration` 어노테이션에 넣으려다 256KiB를 넘긴 것이다. 실습에서 설명이 긴 CRD로 그대로 재현됐고, `kubectl apply --server-side`로 바꾸니 `serverside-applied`로 통과했다. 큰 오퍼레이터 CRD는 처음부터 서버 쪽 apply로 다룬다.
+
+목록이 `StorageReadError ... conversion webhook ... failed`로 깨지면 변환 웹훅이다. 웹훅 Service의 엔드포인트가 비었는지, 인증서가 만료되거나 `caBundle`과 맞지 않는지(`x509: certificate signed by unknown authority`) 본다. cert-manager의 CA 주입(`cert-manager.io/inject-ca-from` 어노테이션)이 이 일을 자동화한다.
+
+CR 하나를 지웠는데 `Terminating`에서 멈추면 `metadata.finalizers`를 본다. 그 finalizer를 뗄 오퍼레이터가 살아 있는지가 먼저다. finalizer를 손으로 지우는 건 마지막 수단이다. 오퍼레이터가 정리하려던 클러스터 밖 자원(버킷, DB 사용자)이 그대로 남는다.
+
+## 설명서를 잘 쓰면 API 서버가 일을 대신한다
+
+CRD는 API 서버에게 주는 설명서다. 구조적 스키마로 모양을 정해 두면 API 서버가 모르는 칸을 잘라 내고 기본값을 채운다. CEL로 칸 사이 규칙과 불변 칸을 적으면 웹훅 없이도 틀린 값이 저장 단계에서 막힌다. status 서브리소스는 사용자와 컨트롤러가 쓰는 칸을 나눈다. 버전을 둘 이상 두는 순간부터는 변환과 저장 버전이라는 운영 문제가 생기니, 처음 낼 때 v1alpha1로 오래 끌지 않는 것도 방법이다. 다음은 이 설명서를 읽고 실제로 일하는 쪽, [오퍼레이터](/posts/k8s-operators)다.
+
+## 면접에서 나올 만한 질문
+
+### CRD와 ConfigMap에 설정을 두는 것은 무엇이 다른가요?
+
+CRD는 API 서버가 내용을 이해하고 검사하는 새 리소스 종류이고, ConfigMap은 검사 없는 문자열 맵이다. CRD는 스키마로 타입과 범위를 검사하고, 모르는 필드를 잘라 내고, 기본값을 채우고, CEL로 필드 사이 규칙을 강제한다. 그 위에 RBAC, watch, status 서브리소스, kubectl 출력 칸이 일반 리소스와 똑같이 붙는다. 오타가 저장되느냐 거절되느냐가 가장 큰 차이다.
+
+### 구조적 스키마는 왜 필요한가요?
+
+API 서버가 스키마 하나로 pruning, 기본값 채우기, 서버 쪽 apply의 필드 주인 기록을 하기 때문이다. 모든 칸에 type이 있어야 어떤 칸이 존재하는지, 어디에 기본값을 넣을지 정할 수 있다. apiextensions v1에서는 구조적이지 않은 스키마의 CRD를 아예 받지 않는다.
+
+### 모르는 필드를 넣으면 어떻게 되나요?
+
+kubectl 기본값인 Strict 필드 검사에서는 `strict decoding error: unknown field`로 거절된다. `--validate=warn`이나 `false`면 저장은 되지만 그 칸은 pruning으로 잘려 나간다. 오타가 조용히 사라져 설정이 안 먹는 경우가 생기니 검사를 끄고 밀어 넣는 건 피한다. 모양을 정할 수 없는 칸만 `x-kubernetes-preserve-unknown-fields`로 연다.
+
+### CEL 검증 규칙과 검증 웹훅 중 무엇을 고르나요?
+
+한 객체 안에서 끝나는 규칙이면 CRD의 CEL 규칙을 먼저 쓴다. 웹훅 서버가 없으니 가용성과 인증서 관리 부담이 없고, CRD와 함께 배포된다. 다른 객체를 조회해야 하거나 외부 시스템을 봐야 하는 규칙은 웹훅이, 네임스페이스나 조직 단위 정책은 ValidatingAdmissionPolicy가 맞다. CEL은 비용을 미리 어림하니 배열과 문자열에 maxItems, maxLength를 둔다.
+
+### status 서브리소스를 켜면 무엇이 달라지나요?
+
+`/status` 경로가 따로 생겨서 본 경로로 보낸 status 변경은 무시되고 `/status`로 보낸 spec 변경도 무시된다. spec이 바뀔 때만 generation이 올라서, 컨트롤러가 observedGeneration과 비교해 반영 여부를 알릴 수 있다. RBAC도 `backups`와 `backups/status`로 나뉘어 사용자와 컨트롤러 권한을 따로 준다. 컨트롤러가 본 경로로 status를 쓰면 `(no change)`로 조용히 버려지는 게 흔한 실수다.
+
+### 버전을 v1alpha1에서 v1으로 올릴 때 무엇을 챙기나요?
+
+필드 모양이 바뀌면 변환 웹훅이 있어야 한다. 기본 None 전략은 apiVersion만 바꿔서, 이름이 바뀐 필드는 저장 순간 잘려 나간다. 웹훅은 저장뿐 아니라 다른 버전으로 읽을 때도 불리니 가용성과 인증서를 오퍼레이터만큼 챙긴다. 저장 버전을 바꾼 뒤에는 객체를 다시 써서 옮기고 storedVersions에서 옛 버전을 지워야 그 버전을 CRD에서 뺄 수 있다.
+
+### 변환 웹훅이 죽으면 어떤 증상이 나오나요?
+
+저장 버전과 다른 버전으로 읽고 쓰는 요청이 `StorageReadError`나 `conversion webhook ... failed`로 실패한다. 저장 버전으로 읽는 쪽은 변환이 없어서 멀쩡하기 때문에 일부 도구만 깨진 것처럼 보인다. 웹훅 Pod와 Service 엔드포인트, 인증서 만료, caBundle 불일치를 차례로 본다.
+
+### CRD를 지우면 어떻게 되나요?
+
+그 종류의 모든 CR이 모든 네임스페이스에서 지워진 뒤 CRD가 지워지고, 되돌릴 수 없다. CR에 오퍼레이터의 finalizer가 남아 있으면 CRD 삭제도 Terminating에 멈춘다. 그래서 지우기 전에 CR을 YAML로 받아 두고, 정리는 CR, 오퍼레이터, CRD 순서로 한다.

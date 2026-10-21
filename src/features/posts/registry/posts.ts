@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-api-aggregation-schedulers",
+    title: "API 집계와 커스텀 스케줄러: 쿠버네티스를 넓히는 두 자리",
+    summary: "APIService로 API 서버 앞에 별도 서버를 붙이는 집계 API와, 스케줄링 프레임워크·프로필·두 번째 스케줄러로 배치 방식을 바꾸는 법, 그리고 워커를 묶어 배치하는 gang scheduling을 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "API", "Security", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["APIService", "API 집계", "gang scheduling", "스케줄링 프레임워크", "schedulerName"],
+  },
+  {
+    slug: "k8s-cri-cni-csi",
+    title: "CRI, CNI, CSI: kubelet이 일을 맡기는 세 인터페이스",
+    summary: "kubelet이 컨테이너, 네트워크, 디스크를 직접 다루지 않고 플러그인에 맡기는 세 인터페이스를 containerd와 crictl, CNI 체인, CSI 드라이버와 사이드카로 직접 돌려 보며, 고장 나면 어디에 흔적이 남는지 본다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "Linux", "Container", "Network", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["Container Runtime Interface", "crictl", "dockershim", "CSI 드라이버", "external-provisioner"],
+  },
+  {
+    slug: "k8s-operators",
+    title: "오퍼레이터: 운영 절차를 컨트롤러로 옮기기",
+    summary: "CRD와 컨트롤러에 운영 지식을 담은 오퍼레이터를 능력 단계, 만드는 도구, finalizer와 status 조건으로 나눠 보고, Backup을 CronJob으로 바꾸는 작은 Node 오퍼레이터를 직접 돌려 본다. 오퍼레이터를 만들지 말아야 할 때도 짚는다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "Node.js", "Distributed Systems"],
+    date: "2026-10-22",
+    keywords: ["오퍼레이터 패턴", "kubebuilder", "Operator SDK", "kopf"],
+  },
+  {
+    slug: "k8s-crd",
+    title: "CRD 깊게: 스키마, CEL 검증, status, 버전 변환",
+    summary: "CustomResourceDefinition으로 새 API 종류를 만들 때 API 서버가 스키마로 잘라 내고 채우고 검사하는 순서를 따라가고, CEL 규칙, status 서브리소스, 출력 칸, 변환 웹훅과 저장 버전 옮기기까지 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/platform",
+    tags: ["Kubernetes", "DevOps", "API", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["CustomResourceDefinition", "x-kubernetes-validations", "변환 웹훅", "storedVersions"],
+  },
+  {
     slug: "k8s-certificates-pki",
     title: "쿠버네티스 인증서: 1년 뒤 아침에 멈추는 클러스터",
     summary: "클러스터·etcd·front-proxy CA와 연결마다 따로 있는 인증서를 kubeadm이 만든 파일로 직접 읽고, check-expiration과 renew, 만료된 인증서가 내는 오류, kubelet이 CSR로 스스로 갱신하는 흐름과 사람에게 인증서를 발급하고 회수하지 못하는 문제까지 다룬다.",

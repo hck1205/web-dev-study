@@ -2,6 +2,111 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-api-aggregation-schedulers": {
+    "links": [
+      "k8s-crd",
+      "k8s-operators",
+      "k8s-pod-scheduling",
+      "k8s-hpa",
+      "k8s-namespace",
+      "k8s-feature-maturity"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-certificates-pki",
+      "kubectl-apply-ssa",
+      "k8s-configmap",
+      "docker-container-basics",
+      "cron-jobs",
+      "leader-election",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "eks-cluster-basics"
+    ]
+  },
+  "k8s-cri-cni-csi": {
+    "links": [
+      "k8s-cni-pod-network",
+      "k8s-pv-pvc",
+      "k8s-pod-resources",
+      "eks-cluster-basics",
+      "k8s-crd",
+      "k8s-api-aggregation-schedulers"
+    ],
+    "mentions": [
+      "k8s-secret",
+      "k8s-storageclass-snapshots",
+      "k8s-architecture",
+      "docker-container-basics",
+      "k8s-statefulset",
+      "k8s-pod-basics",
+      "docker-network-volume",
+      "iptables-nat",
+      "k8s-daemonset",
+      "k8s-api-objects",
+      "k8s-pod-multicontainer",
+      "dockerfile-image-layers",
+      "iptables-basics",
+      "sdn-vxlan-overlay",
+      "osi-in-practice",
+      "local-k8s-kind-minikube",
+      "grpc"
+    ]
+  },
+  "k8s-operators": {
+    "links": [
+      "k8s-controllers-reconcile",
+      "k8s-crd",
+      "k8s-api-objects",
+      "kubectl-apply-ssa",
+      "k8s-namespace",
+      "k8s-rbac",
+      "k8s-api-aggregation-schedulers"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "kubernetes-ingress",
+      "k8s-pod-basics",
+      "helm-dependencies-oci-gitops",
+      "k8s-deploy-pipeline-eks",
+      "ansible-network-automation",
+      "cron-jobs",
+      "helm-basics",
+      "postgres-operations",
+      "k8s-labels-selectors",
+      "kafka-basics",
+      "leader-election",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "dns",
+      "on-call",
+      "webhooks"
+    ]
+  },
+  "k8s-crd": {
+    "links": [
+      "k8s-api-objects",
+      "k8s-controllers-reconcile",
+      "k8s-operators",
+      "k8s-api-aggregation-schedulers",
+      "helm-release-lifecycle",
+      "kubectl-apply-ssa",
+      "k8s-admission-control",
+      "k8s-feature-maturity"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "kubernetes-ingress",
+      "k8s-configmap",
+      "k8s-deploy-pipeline-eks",
+      "cron-jobs",
+      "what-happens-google-com",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "webhooks"
+    ]
+  },
   "k8s-certificates-pki": {
     "links": [
       "local-k8s-kind-minikube",
@@ -95,6 +200,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "k8s-pod-multicontainer",
       "docker-container-basics",
+      "k8s-cri-cni-csi",
       "k8s-service-types",
       "k8s-architecture",
       "kubernetes-ingress",
@@ -150,6 +256,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress",
       "iptables-nat",
       "k8s-configmap",
+      "k8s-cri-cni-csi",
       "k8s-admission-control",
       "cron-jobs",
       "k8s-coredns",
@@ -237,6 +344,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-coredns",
       "k8s-node-maintenance",
       "k8s-pod-disruption-budget",
+      "k8s-operators",
       "k8s-pod-troubleshooting",
       "k8s-daemonset",
       "k8s-job-cronjob"
@@ -265,6 +373,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "backup-strategy"
     ],
     "mentions": [
+      "k8s-cri-cni-csi",
       "gateway",
       "k8s-statefulset",
       "k8s-pod-scheduling",
@@ -424,6 +533,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "terraform-basics",
       "docker-container-basics",
+      "k8s-cri-cni-csi",
       "local-k8s-kind-minikube",
       "db-type-key-value",
       "eks-cluster-basics",
@@ -589,6 +699,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-network-policy",
       "k8s-service-types",
       "k8s-statefulset",
+      "k8s-api-aggregation-schedulers",
       "k8s-pod-basics",
       "k8s-daemonset",
       "k8s-deploy-pipeline-eks",
@@ -606,6 +717,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "k8s-api-objects",
       "k8s-labels-selectors",
+      "k8s-crd",
+      "k8s-operators",
       "exponential-backoff-jitter",
       "kubectl-apply-ssa",
       "leader-election"
@@ -651,7 +764,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-feature-maturity",
       "kubectl-apply-ssa",
       "k8s-namespace",
-      "optimistic-locking"
+      "optimistic-locking",
+      "k8s-crd"
     ],
     "mentions": [
       "k8s-network-policy",
@@ -766,6 +880,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics",
       "iptables-nat",
       "helm-dependencies-oci-gitops",
+      "k8s-cri-cni-csi",
       "helm-basics",
       "db-type-embedded",
       "iac-basics",
@@ -840,6 +955,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "k8s-cri-cni-csi",
       "iptables-basics",
       "k8s-security-context",
       "k8s-architecture",
@@ -2344,6 +2460,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-undo",
       "k8s-architecture",
       "helm-basics",
+      "k8s-cri-cni-csi",
       "security-groups-nacl",
       "local-k8s-kind-minikube",
       "vpc-basics",
@@ -2374,6 +2491,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-storageclass-snapshots",
       "vpc-subnets-route-tables",
       "docker-container-basics",
+      "k8s-cri-cni-csi",
       "dependency-hell",
       "db-type-key-value",
       "layer-ip-routing-icmp",
@@ -2528,6 +2646,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics",
       "k8s-configmap",
       "base64",
+      "k8s-cri-cni-csi",
       "ipv6-basics",
       "k8s-architecture",
       "helm-basics",
@@ -2856,6 +2975,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-architecture",
       "k8s-statefulset",
+      "k8s-api-aggregation-schedulers",
       "k8s-pod-basics",
       "cron-jobs",
       "helm-basics",
@@ -2909,6 +3029,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-modules-tfvars",
       "kubernetes-ingress",
       "k8s-statefulset",
+      "k8s-api-aggregation-schedulers",
       "k8s-cluster-upgrade",
       "iptables-nat",
       "k8s-api-objects",
@@ -3181,6 +3302,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-storageclass-snapshots",
       "k8s-statefulset",
       "k8s-daemonset",
+      "k8s-cri-cni-csi",
       "k8s-architecture",
       "cloud-cost-optimization",
       "k8s-node-maintenance",
@@ -3202,6 +3324,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "kubectl-apply-ssa",
+      "k8s-cri-cni-csi",
       "grpc",
       "k8s-architecture",
       "cron-jobs",
@@ -3240,6 +3363,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-abstract-factory"
     ],
     "mentions": [
+      "k8s-cri-cni-csi",
       "observability-basics",
       "k8s-architecture",
       "sql-batch-timeout-pool",
@@ -3887,6 +4011,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "k8s-crd",
       "k8s-statefulset",
       "k8s-pod-basics",
       "service-mesh",
@@ -3964,6 +4089,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubectl-essentials",
       "k8s-cni-pod-network",
       "k8s-architecture",
+      "k8s-cri-cni-csi",
       "local-k8s-kind-minikube",
       "dns"
     ]

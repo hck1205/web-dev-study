@@ -132,6 +132,7 @@ import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
 import { K8S_ADMISSION_CONTROL } from "./k8s-admission-control";
+import { K8S_API_AGGREGATION_SCHEDULERS } from "./k8s-api-aggregation-schedulers";
 import { K8S_API_OBJECTS } from "./k8s-api-objects";
 import { K8S_ARCHITECTURE } from "./k8s-architecture";
 import { K8S_AUDIT_LOGGING } from "./k8s-audit-logging";
@@ -141,6 +142,8 @@ import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_CONTROLLERS_RECONCILE } from "./k8s-controllers-reconcile";
 import { K8S_COREDNS } from "./k8s-coredns";
+import { K8S_CRD } from "./k8s-crd";
+import { K8S_CRI_CNI_CSI } from "./k8s-cri-cni-csi";
 import { K8S_DAEMONSET } from "./k8s-daemonset";
 import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
@@ -156,6 +159,7 @@ import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
 import { K8S_NODE_AUTOSCALING_KARPENTER } from "./k8s-node-autoscaling-karpenter";
 import { K8S_NODE_MAINTENANCE } from "./k8s-node-maintenance";
+import { K8S_OPERATORS } from "./k8s-operators";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
 import { K8S_POD_DISRUPTION_BUDGET } from "./k8s-pod-disruption-budget";
 import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
@@ -493,6 +497,7 @@ export const QUESTION_SETS = [
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
   K8S_ADMISSION_CONTROL,
+  K8S_API_AGGREGATION_SCHEDULERS,
   K8S_API_OBJECTS,
   K8S_ARCHITECTURE,
   K8S_AUDIT_LOGGING,
@@ -502,6 +507,8 @@ export const QUESTION_SETS = [
   K8S_CONFIGMAP,
   K8S_CONTROLLERS_RECONCILE,
   K8S_COREDNS,
+  K8S_CRD,
+  K8S_CRI_CNI_CSI,
   K8S_DAEMONSET,
   K8S_DEPLOY_PIPELINE_EKS,
   K8S_DEPLOYMENT,
@@ -517,6 +524,7 @@ export const QUESTION_SETS = [
   K8S_NETWORK_POLICY,
   K8S_NODE_AUTOSCALING_KARPENTER,
   K8S_NODE_MAINTENANCE,
+  K8S_OPERATORS,
   K8S_POD_BASICS,
   K8S_POD_DISRUPTION_BUDGET,
   K8S_POD_LIFECYCLE,

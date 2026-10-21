@@ -1,0 +1,549 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-api-aggregation-schedulers");
+
+`kubectl top pods`가 되는 클러스터에서 `kubectl get crd | grep metrics`를 쳐 보면 아무것도 안 나온다. `metrics.k8s.io`는 CRD가 아닌데도 `kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods`에 답이 온다. 답하는 쪽은 kube-apiserver가 아니라 metrics-server라는 별도 서버다. API 서버가 그 경로의 요청만 metrics-server로 넘겨 준다. 이게 API 집계(aggregation)다.
+
+같은 클러스터에서 학습 작업 두 개를 동시에 띄웠더니 둘 다 워커 몇 개만 뜨고 나머지는 Pending에 멈췄다. 각자 자리를 반씩 차지하고 서로를 기다린다. 기본 스케줄러는 Pod를 한 번에 하나씩 보니 "다 같이 뜨거나 아예 안 뜨거나"를 모른다. 이럴 때 스케줄러를 바꾸거나 넓힌다.
+
+둘은 다른 이야기 같지만 같은 질문에서 나온다. 쿠버네티스의 내장 동작이 모자랄 때 어디를 어떻게 넓히나. 이 글은 kwok 실습 클러스터(Kubernetes v1.37.0) 두 개에서 직접 만든 집계 API 서버를 붙여 보고, 두 번째 스케줄러를 띄워 배치 방식을 바꿔 보고, 1.37의 beta 기능(GenericWorkload)으로 묶음 배치(gang scheduling)를 확인한다. 출력은 모두 이 클러스터에서 받았다.
+
+이 주제의 다른 글: 새 리소스 종류를 만드는 다른 방법은 [CRD](/posts/k8s-crd), 그 종류에 붙는 [오퍼레이터](/posts/k8s-operators), 기본 스케줄러의 필터와 점수, taint, affinity는 [Pod 스케줄링](/posts/k8s-pod-scheduling) 글에 있다. 배치 작업의 대기열과 할당량은 [Kueue 글](/posts/k8s-batch-kueue)로 이어진다.
+
+## API 서버 앞에 다른 API 서버를 붙인다
+
+kube-apiserver 안에는 사실 세 서버가 사슬처럼 들어 있다. 맨 앞의 kube-aggregator, 내장 리소스를 맡는 본 서버, CRD를 맡는 apiextensions 서버다. 요청이 들어오면 aggregator가 경로의 그룹과 버전을 보고 누가 답할지 고른다. 이 선택표가 APIService 객체다.
+
+```bash
+# 등록된 그룹·버전과 누가 답하는지 본다
+kubectl get apiservices
+```
+
+```text
+NAME                              SERVICE                      AVAILABLE   AGE
+v1.                               Local                        True        11s
+v1.admissionregistration.k8s.io   Local                        True        11s
+v1.apiextensions.k8s.io           Local                        True        11s
+v1.apps                           Local                        True        11s
+...
+v1.resource.k8s.io                Local                        True        11s
+v1.scheduling.k8s.io              Local                        True        11s
+v1.storage.k8s.io                 Local                        True        11s
+v1.storagemigration.k8s.io        Local                        True        11s
+v1beta1.metrics.k8s.io            kube-system/metrics-server   True        11s
+v2.autoscaling                    Local                        True        11s
+```
+
+SERVICE 칸이 `Local`이면 kube-apiserver 안에서 답한다. CRD를 만들어도 그 그룹은 `Local`로 등록된다. `v1beta1.metrics.k8s.io`만 Service를 가리킨다. 이 그룹의 요청은 `kube-system/metrics-server`로 넘어간다. HPA와 `kubectl top`이 metrics-server를 직접 부르지 않고 표준 API 경로로 묻는 이유가 이 구조다([HPA 글](/posts/k8s-hpa)).
+
+CRD와 집계 API는 둘 다 새 API 그룹을 만든다. 고르는 기준은 데이터가 어디 있느냐다. etcd에 저장하는 평범한 문서면 CRD가 훨씬 쉽다. 저장, 검사, watch, RBAC를 API 서버가 다 해 준다. 집계 API는 값이 etcd가 아니라 다른 곳에서 오거나(metrics-server의 메모리), 요청마다 계산해야 하거나, 저장소를 직접 고르고 싶거나, `/exec`나 `/log` 같은 특수한 하위 리소스가 필요할 때 쓴다. 대신 서버를 직접 만들고 운영해야 한다. 디스커버리, 버전, 인증 위임, 가용성이 전부 내 몫이다.
+
+## 직접 만든 집계 API 서버
+
+[오퍼레이터 글](/posts/k8s-operators)의 `Backup`마다 CronJob이 잘 붙었는지 한눈에 보는 `BackupReport`를 집계 API로 만들어 봤다. 저장하지 않는다. 요청이 올 때마다 Backup과 CronJob을 읽어 그 자리에서 계산한다. CRD로는 만들 수 없는 모양이다.
+
+서버는 Node 60줄 남짓이다. 디스커버리 경로 셋과 리소스 경로 둘만 답한다.
+
+```js
+// 집계 API 서버: insights.ops.example.com/v1alpha1 backupreports
+const resources = { kind: "APIResourceList", apiVersion: "v1", groupVersion: GV,
+  resources: [{ name: "backupreports", singularName: "backupreport", namespaced: true,
+                kind: "BackupReport", verbs: ["get", "list"], shortNames: ["bkr"] }] };
+
+https.createServer({ key, cert, requestCert: true, rejectUnauthorized: false }, async (req, res) => {
+  const peer = req.socket.getPeerCertificate()?.subject?.CN ?? "-";
+  console.log(`${t()} ${req.method} ${url.pathname} cert=${peer} user=${req.headers["x-remote-user"] ?? "-"} groups=${req.headers["x-remote-group"] ?? "-"}`);
+  if (url.pathname === "/apis") return send(res, 200, { kind: "APIGroupList", apiVersion: "v1", groups: [group] });
+  if (url.pathname === "/apis/insights.ops.example.com") return send(res, 200, group);
+  if (url.pathname === `/apis/${GV}`) return send(res, 200, resources);
+  if (p[3] === "namespaces" && p[5] === "backupreports") {
+    const items = await reports(p[4]);             // Backup과 CronJob을 읽어 계산한다
+    const asTable = (req.headers.accept ?? "").includes("as=Table");
+    return send(res, 200, asTable ? table(items) : { kind: "BackupReportList", apiVersion: GV, metadata: {}, items });
+  }
+  // ...
+}).listen(18443, "127.0.0.1");
+```
+
+`as=Table`은 `kubectl get`이 보내는 Accept 헤더다. 칸을 정한 Table을 돌려주면 kubectl이 그대로 그린다. API 서버에 등록하는 쪽은 Service와 APIService 둘이다. 실습은 API 서버가 같은 호스트의 프로세스라 kwok가 metrics-server에 쓰는 방식 그대로 ExternalName Service로 `localhost`를 가리켰다. 클러스터 안에서는 서버 Pod를 고르는 보통 Service를 쓴다.
+
+```yaml
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.insights.ops.example.com   # <version>.<group>
+spec:
+  group: insights.ops.example.com
+  version: v1alpha1
+  service:
+    name: insights-api
+    namespace: kube-system
+    port: 18443
+  caBundle: LS0tLS1CRUdJTi...   # 서버 인증서를 서명한 CA
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+```
+
+칸마다 하는 일이 있다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="APIService 한 장이 정하는 것"
+  base="APIService v1alpha1.insights.ops.example.com"
+  separator=" { "
+  joiner=" · "
+  params={[
+    { key: "group", value: "insights.ops.example.com", title: "넘겨받을 그룹", description: "이 그룹·버전으로 오는 모든 요청이 아래 Service로 간다. 이미 Local로 있는 그룹(apps 등)을 가로챌 수는 없다.", required: true },
+    { key: "service", value: "kube-system/insights-api:18443", title: "어디로 넘길까", description: "API 서버는 이 Service의 엔드포인트(또는 ExternalName)로 직접 연결한다. Service가 없거나 엔드포인트가 비면 Available이 False가 된다.", required: true },
+    { key: "caBundle", value: "LS0t…", title: "누구를 믿을까", description: "서버 인증서는 <service>.<namespace>.svc 이름으로 검증한다. 실습 인증서의 SAN도 insights-api.kube-system.svc로 만들었다. insecureSkipTLSVerify: true는 실습에서만 쓴다." },
+    { key: "groupPriorityMinimum", value: "1000", title: "그룹 정렬 순서", description: "디스커버리 목록에서 그룹이 놓이는 순서다. 같은 리소스 이름(예: 짧은 이름)이 여러 그룹에 있으면 앞 그룹이 이긴다." },
+    { key: "versionPriority", value: "15", title: "버전 정렬 순서", description: "같은 그룹에 버전이 여럿이면 이 값이 큰 버전이 먼저 온다. kubectl이 버전을 적지 않은 요청에 쓸 버전이 된다." },
+  ]}
+/>
+
+등록하고 나면 kubectl에서는 CRD와 구별이 안 된다.
+
+```bash
+# 등록하고 상태를 본다
+kubectl apply -f apiservice.yaml
+kubectl get apiservice v1alpha1.insights.ops.example.com
+# 일반 리소스처럼 쓴다
+kubectl api-resources --api-group=insights.ops.example.com
+kubectl get bkr -n shop
+```
+
+```text
+NAME                                SERVICE                    AVAILABLE   AGE
+v1alpha1.insights.ops.example.com   kube-system/insights-api   True        3s
+NAME            SHORTNAMES   APIVERSION                          NAMESPACED   KIND
+backupreports   bkr          insights.ops.example.com/v1alpha1   true         BackupReport
+NAME        DATABASE   CRONJOB            READY   LAST SCHEDULE
+orders-db   orders     backup-orders-db   True    <none>
+users-db    users      backup-users-db    True    <none>
+```
+
+## 인증은 API 서버가 하고, 서버는 헤더를 믿는다
+
+집계 서버의 로그를 보면 요청이 누구에게서 왔는지 드러난다. 등록 직후에는 aggregator가 스스로 상태를 확인하는 요청이 몰려 왔다.
+
+```text
+01:49:08 GET /apis/insights.ops.example.com/v1alpha1 cert=kwok-admin user=system:kube-aggregator groups=system:masters
+01:49:08 GET /openapi/v2 cert=kwok-admin user=system:aggregator groups=-
+01:49:09 GET /apis cert=kwok-admin user=system:kube-aggregator groups=system:masters
+01:49:09 GET /openapi/v3 cert=kwok-admin user=system:aggregator groups=-
+```
+
+`/apis/<group>/<version>`은 살아 있는지 보는 확인, `/apis`는 디스커버리, `/openapi/v2`와 `v3`는 kubectl explain과 서버 쪽 apply가 쓸 스키마를 모으는 요청이다. 그다음 사용자 요청이 왔다. 관리자와, 권한이 없는 사용자 jane, 권한을 준 뒤의 jane 순서다.
+
+```bash
+# 권한 없는 사용자로 흉내 낸다
+kubectl get bkr -n shop --as=jane
+# 읽기 권한을 주고 다시
+kubectl create role bkr-reader -n shop --verb=get,list --resource=backupreports.insights.ops.example.com
+kubectl create rolebinding jane-bkr -n shop --role=bkr-reader --user=jane
+kubectl get bkr -n shop --as=jane --as-group=dev-team
+```
+
+```text
+Error from server (Forbidden): backupreports.insights.ops.example.com is forbidden: User "jane" cannot list resource "backupreports" in API group "insights.ops.example.com" in the namespace "shop"
+role.rbac.authorization.k8s.io/bkr-reader created
+rolebinding.rbac.authorization.k8s.io/jane-bkr created
+NAME        DATABASE   CRONJOB            READY   LAST SCHEDULE
+orders-db   orders     backup-orders-db   True    <none>
+users-db    users      backup-users-db    True    <none>
+```
+
+집계 서버의 로그에는 그중 두 줄만 찍혔다.
+
+```text
+01:49:19 GET /apis/insights.ops.example.com/v1alpha1/namespaces/shop/backupreports cert=kwok-admin user=kwok-admin groups=system:masters, system:authenticated
+01:49:19 GET /apis/insights.ops.example.com/v1alpha1/namespaces/shop/backupreports cert=kwok-admin user=jane groups=dev-team, system:authenticated
+```
+
+거절된 첫 jane 요청은 집계 서버에 오지도 않았다. kube-apiserver가 먼저 사용자를 인증하고 RBAC로 인가한 다음, 통과한 요청만 넘긴다. 넘길 때는 자기 클라이언트 인증서(front-proxy 인증서, 여기서는 `kwok-admin`)로 TLS 연결을 맺고, 원래 사용자를 `X-Remote-User`, `X-Remote-Group` 헤더에 적는다. 아래 그림에서 다음을 누르면 jane의 요청이 지나는 길을 따라간다.
+
+<SequenceDiagram
+  caption="집계 서버는 사용자를 직접 인증하지 않는다. API 서버가 확인한 이름을 헤더로 받는다"
+  actors={[
+    { id: "user", label: "kubectl (jane)" },
+    { id: "api", label: "kube-apiserver" },
+    { id: "agg", label: "insights-api" },
+    { id: "kapi", label: "본 API" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "GET bkr", title: "jane이 요청한다", detail: "자기 인증서나 토큰으로 kube-apiserver에 붙는다. 집계 서버의 주소는 모른다." },
+    { from: "api", to: "api", label: "authn·authz", title: "API 서버가 인증하고 인가한다", detail: "RBAC에 권한이 없으면 여기서 403으로 끝난다. 집계 서버에는 아무것도 가지 않는다." },
+    { from: "api", to: "agg", label: "proxy", title: "front-proxy 인증서로 넘긴다", detail: "TLS 클라이언트 인증서는 API 서버의 것이고, 원래 사용자는 헤더에 적는다.", payload: "X-Remote-User: jane\nX-Remote-Group: dev-team\nX-Remote-Group: system:authenticated" },
+    { from: "agg", to: "agg", label: "헤더 검증", title: "헤더를 믿어도 되는지 본다", detail: "클라이언트 인증서가 extension-apiserver-authentication ConfigMap의 requestheader CA로 서명됐을 때만 헤더를 믿는다. 아니면 누구나 헤더를 꾸며 보낼 수 있다." },
+    { from: "agg", to: "kapi", label: "list Backup", title: "필요한 데이터를 읽는다", detail: "집계 서버가 본 API를 읽는다. 사용자 권한으로 읽게 하려면 SubjectAccessReview로 한 번 더 묻거나 Impersonation을 쓴다." },
+    { from: "agg", to: "user", label: "Table", title: "답을 돌려준다", detail: "API 서버를 거쳐 kubectl에 Table로 간다." },
+  ]}
+/>
+
+헤더 검증 단계가 보안의 핵심이다. 실습 서버는 인증서 CN만 찍고 검증하지 않았다(`rejectUnauthorized: false`). 진짜 서버라면 `kube-system/extension-apiserver-authentication` ConfigMap의 `requestheader-client-ca-file`로 클라이언트 인증서를 검증하고, `requestheader-allowed-names`에 있는 이름일 때만 헤더를 믿는다. k8s.io/apiserver 라이브러리로 서버를 만들면 이 과정이 들어 있다. 그래서 집계 서버를 손으로 짜는 일은 드물고, 대부분 이 라이브러리(또는 apiserver-builder 계열 도구)를 쓴다. 실습 클러스터는 kwok 설정상 requestheader CA를 따로 두지 않아 이 ConfigMap에 `client-ca-file`만 있었다.
+
+## 집계 서버가 죽으면
+
+서버 프로세스를 멈추고 30초쯤 기다렸다.
+
+```bash
+kubectl get apiservice v1alpha1.insights.ops.example.com
+kubectl get apiservice v1alpha1.insights.ops.example.com -o jsonpath='{.status.conditions[0].reason}: {.status.conditions[0].message}'
+kubectl get bkr -n shop
+```
+
+```text
+NAME                                SERVICE                    AVAILABLE                      AGE
+v1alpha1.insights.ops.example.com   kube-system/insights-api   False (FailedDiscoveryCheck)   52s
+FailedDiscoveryCheck: failing or missing response from https://localhost:18443/apis/insights.ops.example.com/v1alpha1: Get "https://localhost:18443/apis/insights.ops.example.com/v1alpha1": dial tcp 127.0.0.1:18443: connect: connection refused
+Error from server (ServiceUnavailable): the server is currently unable to handle the request (get backupreports.insights.ops.example.com)
+```
+
+AVAILABLE 칸의 사유가 어디를 볼지 알려 준다. `FailedDiscoveryCheck`는 서버에 닿았지만 답이 없거나 틀렸다, `MissingEndpoints`는 Service에 엔드포인트가 없다(Pod가 Ready가 아니다), `ServiceNotFound`는 Service가 없다는 뜻이다. 인증서 문제면 메시지에 `x509:`가 붙는다.
+
+예전 kubectl은 이 상태에서 `kubectl api-resources`나 `kubectl get`의 디스커버리 단계마다 `unable to retrieve the complete list of server APIs`를 쏟아냈다. 1.37 클러스터와 kubectl에서는 이 그룹만 조용히 빠졌다. 집계된 디스커버리 문서를 직접 받아 보면 이유가 보인다.
+
+```bash
+# 집계된 디스커버리(v2)로 /apis를 받아 두 그룹만 추린다
+curl -s -H 'Accept: application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList' http://127.0.0.1:18311/apis
+```
+
+```text
+{"name": "insights.ops.example.com", "versions": [{"version": "v1alpha1", "freshness": "Stale", "resources": 0}]}
+{"name": "metrics.k8s.io", "versions": [{"version": "v1beta1", "freshness": "Current", "resources": 2}]}
+```
+
+API 서버가 그룹마다 `freshness`를 적어 두고, 클라이언트는 `Stale`인 그룹을 건너뛴다. 조용해졌다고 문제가 없어진 건 아니다. 네임스페이스를 지울 때 네임스페이스 컨트롤러는 모든 그룹의 리소스를 지워야 하는데, 이 그룹을 못 읽으니 네임스페이스가 `Terminating`에 멈춘다. 그 재현과 해결은 [네임스페이스 글](/posts/k8s-namespace)에 있다. 집계 서버를 지울 때는 APIService부터 지운다. 서버만 지우고 APIService를 남기는 게 가장 흔한 사고다.
+
+아래 그림은 요청이 aggregator에서 갈라지는 모습과, 서버가 죽었을 때 어디서 막히는지다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="aggregator가 그룹을 보고 요청을 나눈다. Local이 아니면 Service로 넘긴다"
+  zones={[
+    { id: "kas", label: "kube-apiserver", x: 6, y: 6, w: 388, h: 160, tone: "private" },
+    { id: "ext", label: "extension", x: 6, y: 178, w: 388, h: 96, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "kubectl", sub: "jane", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "agg", label: "aggregator", sub: "APIService", x: 200, y: 60, icon: "gateway", w: 104 },
+    { id: "core", label: "core·CRD", sub: "Local", x: 334, y: 60, icon: "server", w: 96 },
+    { id: "rbac", label: "RBAC", sub: "authz", x: 200, y: 130, icon: "lock", w: 104 },
+    { id: "ms", label: "metrics", sub: "server", x: 100, y: 230, icon: "server", w: 96 },
+    { id: "ins", label: "insights", sub: ":18443", x: 300, y: 230, icon: "server", w: 96 },
+  ]}
+  links={[
+    { from: "user", to: "agg" },
+    { from: "agg", to: "core" },
+    { from: "agg", to: "rbac", dashed: true },
+    { from: "agg", to: "ms" },
+    { from: "agg", to: "ins" },
+  ]}
+  steps={[
+    { path: ["user", "agg", "core"], packet: "pods", title: "내장 그룹은 안에서 답한다", detail: "/api/v1/pods나 CRD 그룹은 APIService가 Local이라 kube-apiserver 안의 서버가 처리한다." },
+    { path: ["user", "agg", "rbac"], packet: "bkr", blocked: true, title: "권한이 없으면 넘기지 않는다", detail: "인증과 RBAC는 넘기기 전에 끝난다. jane의 첫 요청은 여기서 403이 됐다." },
+    { path: ["user", "agg", "ins"], packet: "bkr", title: "권한이 있으면 Service로 넘긴다", detail: "front-proxy 인증서로 연결하고 X-Remote-User: jane을 붙인다." },
+    { path: ["agg", "ms"], packet: "check", title: "aggregator가 계속 살아 있는지 본다", detail: "APIService마다 /apis/<group>/<version>을 주기적으로 불러 Available 조건을 고친다." },
+    { path: ["user", "agg", "ins"], packet: "bkr", blocked: true, title: "서버가 죽으면 503", detail: "Available이 False(FailedDiscoveryCheck)가 되고 요청은 ServiceUnavailable로 끝난다. 디스커버리에서는 Stale로 표시된다.", payload: "the server is currently unable to handle the request" },
+  ]}
+/>
+
+metrics-server도 같은 처지다. kwok의 가짜 노드는 사용량을 보고하지 않아 `kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes`가 빈 목록(`{"kind":"NodeMetricsList",...,"items":[]}`)을 돌려줬고 `kubectl top nodes`는 `error: metrics not available yet`이었다. APIService가 True여도 서버가 가진 데이터가 없으면 이렇게 보인다. 현장에서 `kubectl top`이 안 될 때는 APIService의 AVAILABLE부터, 그다음 metrics-server 로그에서 kubelet을 긁다 난 오류(`x509`, `no route to host`)를 본다.
+
+## 스케줄러는 플러그인을 차례로 부른다
+
+이제 스케줄러다. kube-scheduler는 하나의 큰 함수가 아니라 확장 지점(extension point)마다 플러그인을 부르는 틀(scheduling framework)이다. 기본 스케줄러의 필터와 점수가 무엇을 보는지는 [Pod 스케줄링](/posts/k8s-pod-scheduling) 글에 있다. 여기서는 그 틀의 어디에 끼어들 수 있는지를 본다. 아래 그림에서 다음을 누르면 Pod 하나가 큐에 들어와 노드에 묶이기까지 거치는 지점을 차례로 짚는다.
+
+<AlgoTrace
+  caption="스케줄링 사이클(위 일곱 칸)은 한 번에 Pod 하나씩, 바인딩 사이클(뒤 세 칸)은 따로 돈다"
+  cells={["PreEnqueue", "QueueSort", "PreFilter", "Filter", "PostFilter", "Score", "Reserve", "Permit", "PreBind", "Bind"]}
+  memoryLabel="이 지점의 예"
+  steps={[
+    { pointer: 0, memory: ["SchedulingGates"], caption: "PreEnqueue: 큐에 넣을지부터 정한다. schedulingGates가 남은 Pod는 여기서 기다린다." },
+    { pointer: 1, memory: ["PrioritySort"], caption: "QueueSort: 큐에서 누구를 먼저 꺼낼지. 기본은 우선순위가 높은 Pod부터다." },
+    { pointer: 2, memory: ["NodeResourcesFit"], caption: "PreFilter: Pod의 요청량처럼 노드마다 다시 계산할 필요 없는 값을 미리 계산해 둔다." },
+    { pointer: 3, memory: ["NodeResourcesFit", "TaintToleration"], caption: "Filter: 노드마다 들어갈 수 있는지 본다. 하나라도 거절하면 그 노드는 빠진다." },
+    { pointer: 4, memory: ["DefaultPreemption"], caption: "PostFilter: 들어갈 노드가 하나도 없을 때만 돈다. 낮은 우선순위 Pod를 밀어낼 수 있는지 본다." },
+    { pointer: 5, found: [5], memory: ["NodeResourcesFit", "ImageLocality"], caption: "Score: 남은 노드에 0~100점을 주고 가중합으로 고른다. 배치 성향은 여기서 바뀐다." },
+    { pointer: 6, memory: ["VolumeBinding"], caption: "Reserve: 고른 노드의 자원을 스케줄러 캐시에서 미리 잡아 둔다. 다음 Pod가 같은 자리를 세지 않게." },
+    { pointer: 7, found: [5, 7], memory: ["coscheduling"], caption: "Permit: 바인딩을 허락, 거절, 또는 기다리게 한다. 묶음 배치 플러그인이 여기서 동료를 기다린다." },
+    { pointer: 8, memory: ["VolumeBinding"], caption: "PreBind: 바인딩 전에 할 일. PV를 실제로 묶는다." },
+    { pointer: 9, found: [5, 7, 9], memory: ["DefaultBinder"], caption: "Bind: API 서버에 Binding을 써서 spec.nodeName을 정한다. 그다음은 kubelet의 일이다." },
+  ]}
+/>
+
+이 틀에 손대는 방법은 가벼운 것부터 넷이다. 기본 스케줄러의 설정(KubeSchedulerConfiguration)으로 플러그인을 켜고 끄고 인자를 바꾸는 것, 같은 스케줄러에 프로필을 여러 개 두는 것, 플러그인을 직접 짜서 스케줄러와 함께 빌드하는 것(kubernetes-sigs/scheduler-plugins가 이 방식이다), 그리고 HTTP로 필터와 점수를 묻는 extender다. extender는 매 Pod마다 HTTP 왕복이 생기고 캐시를 공유하지 못해 지금은 새로 쓰지 않는 편이다.
+
+## 두 번째 스케줄러로 배치 성향 바꾸기
+
+기본 점수(NodeResourcesFit의 LeastAllocated)는 덜 찬 노드에 점수를 더 준다. 웹 서비스에는 맞다. 한 노드가 죽어도 피해가 적다. 배치 작업에는 반대가 나을 수 있다. 꽉 채운 노드와 텅 빈 노드로 나눠야 노드 오토스케일러가 빈 노드를 내린다. 이 성향만 바꾼 스케줄러를 하나 더 띄웠다. 같은 v1.37.0 kube-scheduler 바이너리에 설정만 다르다.
+
+```yaml
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+leaderElection:
+  leaderElect: false          # 실습이라 하나만 띄운다. 운영에서는 true와 고유한 resourceName
+profiles:
+  - schedulerName: bin-packer
+    pluginConfig:
+      - name: NodeResourcesFit
+        args:
+          scoringStrategy:
+            type: MostAllocated      # 이미 많이 찬 노드에 점수를 더 준다
+            resources:
+              - name: cpu
+                weight: 1
+              - name: memory
+                weight: 1
+    plugins:
+      score:
+        disabled:
+          - name: NodeResourcesBalancedAllocation   # 고르게 쓰라는 점수는 끈다
+          - name: PodTopologySpread
+```
+
+```bash
+# 두 번째 스케줄러를 띄운다 (기본 스케줄러와 포트가 겹치지 않게)
+kube-scheduler --config=bin-packer.yaml --secure-port=18259 &
+# CPU 4코어 노드 둘에 500m짜리 Pod를 스케줄러마다 넷씩
+kubectl apply -f pods.yaml
+kubectl get pods -n batch -o custom-columns=NAME:.metadata.name,SCHEDULER:.spec.schedulerName,NODE:.spec.nodeName
+kubectl get events -n batch --field-selector reason=Scheduled -o custom-columns=FROM:.reportingComponent,SOURCE:.source.component,MESSAGE:.message
+```
+
+```text
+NAME        SCHEDULER           NODE
+bin-1       bin-packer          kw-node-1
+bin-2       bin-packer          kw-node-1
+bin-3       bin-packer          kw-node-1
+bin-4       bin-packer          kw-node-1
+default-1   default-scheduler   kw-node-1
+default-2   default-scheduler   kw-node-2
+default-3   default-scheduler   kw-node-1
+default-4   default-scheduler   kw-node-2
+FROM                SOURCE   MESSAGE
+bin-packer          <none>   Successfully assigned batch/bin-1 to kw-node-1
+...
+default-scheduler   <none>   Successfully assigned batch/default-1 to kw-node-1
+```
+
+기본 스케줄러는 번갈아 나눴고 bin-packer는 한 노드에 몰았다. Scheduled 이벤트의 출처가 스케줄러 이름(정확히는 프로필의 schedulerName)이라, Pod가 누구 손으로 배치됐는지 이벤트로 확인할 수 있다. 두 점수 방식을 숫자로 따져 보자. 아래 함수는 Filter로 안 들어가는 노드를 빼고, 남은 노드에 CPU와 메모리 점수의 평균을 준다.
+
+<CodePlayground
+  caption="LeastAllocated와 MostAllocated로 노드 고르기"
+  functionName="pickNode"
+  initialCode={`function pickNode(strategy, nodes, pod) {
+  // nodes: [{ name, cpuCap, cpuUsed, memCap, memUsed }] (m, Mi 단위)
+  // pod: { cpu, mem }
+  // 1) 넣었을 때 용량을 넘는 노드는 뺀다
+  // 2) LeastAllocated: (cap - used) * 100 / cap
+  //    MostAllocated: used * 100 / cap  (used에는 이 Pod를 더한 값)
+  // 3) CPU와 메모리 점수 평균을 내림한 값이 가장 큰 노드
+  // 결과: { name, score } 또는 null
+  return null;
+}`}
+  solution={`function pickNode(strategy, nodes, pod) {
+  let best = null;
+  for (const n of nodes) {
+    const cpu = n.cpuUsed + pod.cpu;
+    const mem = n.memUsed + pod.mem;
+    if (cpu > n.cpuCap || mem > n.memCap) continue;
+    const part = (used, cap) =>
+      strategy === "MostAllocated" ? (used * 100) / cap : ((cap - used) * 100) / cap;
+    const score = Math.floor((part(cpu, n.cpuCap) + part(mem, n.memCap)) / 2);
+    if (!best || score > best.score) best = { name: n.name, score };
+  }
+  return best;
+}`}
+  tests={[
+    { label: "덜 찬 노드로", args: ["LeastAllocated", [{ name: "kw-node-1", cpuCap: 4000, cpuUsed: 3000, memCap: 16384, memUsed: 4096 }, { name: "kw-node-2", cpuCap: 4000, cpuUsed: 1000, memCap: 16384, memUsed: 2048 }], { cpu: 500, mem: 512 }], expected: { name: "kw-node-2", score: 73 } },
+    { label: "많이 찬 노드로", args: ["MostAllocated", [{ name: "kw-node-1", cpuCap: 4000, cpuUsed: 3000, memCap: 16384, memUsed: 4096 }, { name: "kw-node-2", cpuCap: 4000, cpuUsed: 1000, memCap: 16384, memUsed: 2048 }], { cpu: 500, mem: 512 }], expected: { name: "kw-node-1", score: 57 } },
+    { label: "안 들어가면 빠진다", args: ["MostAllocated", [{ name: "kw-node-1", cpuCap: 4000, cpuUsed: 3000, memCap: 16384, memUsed: 4096 }, { name: "kw-node-2", cpuCap: 4000, cpuUsed: 1000, memCap: 16384, memUsed: 2048 }], { cpu: 1500, mem: 512 }], expected: { name: "kw-node-2", score: 39 } },
+    { label: "어디에도 없다", args: ["LeastAllocated", [{ name: "kw-node-1", cpuCap: 4000, cpuUsed: 3000, memCap: 16384, memUsed: 4096 }, { name: "kw-node-2", cpuCap: 4000, cpuUsed: 1000, memCap: 16384, memUsed: 2048 }], { cpu: 3500, mem: 512 }], expected: null },
+  ]}
+/>
+
+실제 스케줄러는 여기에 다른 점수 플러그인 값을 가중합하고, 동점이면 무작위로 고른다. 그래도 성향은 이 한 줄의 공식에서 정해진다.
+
+스케줄러를 둘 띄우는 방식에는 함정이 있다. 두 스케줄러는 서로의 캐시를 모른다. 같은 노드의 마지막 2코어를 동시에 각자 자기 Pod에게 주면, 둘 다 바인딩은 성공하고 늦게 도착한 Pod를 kubelet이 `OutOfcpu`로 거절한다(Pod가 Failed가 된다). 그래서 성향만 다르면 스케줄러를 하나 더 띄우지 말고, 기본 스케줄러 설정에 프로필을 하나 더 넣는다. 프로필은 한 프로세스 안에서 캐시와 큐를 공유하니 이런 경합이 없다. 관리형 클러스터(EKS, GKE)는 기본 스케줄러 설정을 못 바꾸는 경우가 많아, 그때만 별도 스케줄러를 노드 그룹을 나눠 띄운다.
+
+없는 스케줄러 이름을 적으면 더 조용한 문제가 생긴다.
+
+```bash
+# 아무도 맡지 않은 schedulerName
+kubectl run lost -n batch --image=busybox:1.37 --overrides='{"spec":{"schedulerName":"gang-scheduler"}}'
+kubectl get pod lost -n batch
+kubectl describe pod lost -n batch | sed -n '/^Events/,$p'
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE
+lost   0/1     Pending   0          11s
+Events:                      <none>
+```
+
+이벤트가 하나도 없다. 기본 스케줄러는 자기 이름이 아닌 Pod를 아예 보지 않고, `gang-scheduler`는 존재하지 않는다. FailedScheduling조차 없는 Pending은 schedulerName부터 본다. 스케줄러 Deployment를 지웠거나, 이름에 오타가 있거나, 리더 선출에 실패해 아무도 일하지 않는 경우다.
+
+## 다 같이 뜨거나 아예 안 뜨거나
+
+처음 장면을 재현했다. CPU 4코어 노드 둘, 즉 2코어짜리 워커가 넷 들어가는 클러스터에 워커 셋이 필요한 학습 작업 A와 B를 번갈아 만들었다.
+
+```text
+NAME   NODE        STATUS
+a-w1   kw-node-1   Running
+a-w2   kw-node-1   Running
+a-w3   <none>      Pending
+b-w1   kw-node-2   Running
+b-w2   kw-node-2   Running
+b-w3   <none>      Pending
+```
+
+```text
+FailedScheduling   0/2 nodes are available: 2 Insufficient cpu. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.
+```
+
+두 작업 모두 워커 둘로는 학습을 시작할 수 없다(분산 학습은 보통 모든 워커가 모여야 첫 단계를 돈다). 그런데 둘 다 자리를 쥐고 놓지 않으니 영원히 기다린다. GPU 노드라면 비싼 GPU 넷이 아무것도 안 하며 묶여 있는 셈이다. 스케줄러가 Pod를 하나씩 보는 한 이걸 피할 수 없다. 필요한 건 "이 셋은 한 묶음"이라는 정보다.
+
+이 묶음 배치를 gang scheduling이라고 부른다. 오랫동안 쿠버네티스 밖의 스케줄러(Volcano, YuniKorn)나 scheduler-plugins의 coscheduling 플러그인으로 했다. coscheduling은 PodGroup CRD에 최소 개수를 적고, Permit 단계에서 같은 그룹의 Pod가 최소 개수만큼 자리를 얻을 때까지 바인딩을 붙잡아 두는 방식이다. 시간 안에 못 모이면 잡아 둔 자리를 모두 풀어 다른 작업에게 준다.
+
+1.37 kube-scheduler에는 이게 내장 기능으로 들어와 있다. 이 클러스터의 바이너리 도움말에서 `GenericWorkload=true|false (BETA - default=false)`를 확인했다. beta이지만 기본으로 꺼져 있어서, 실습 클러스터를 하나 더(`r11-gang`) 기능을 켜고 `scheduling.k8s.io/v1beta1`을 연 채로 만들었다. 기능의 단계와 API의 단계가 따로 노는 모습은 [alpha, beta, GA 글](/posts/k8s-feature-maturity)에서 본 그대로다.
+
+```bash
+# 기능 게이트를 켜고 v1beta1 API를 연 클러스터
+kwokctl create cluster --name r11-gang --runtime binary \
+  --kube-feature-gates=GenericWorkload=true --kube-runtime-config=scheduling.k8s.io/v1beta1=true
+kubectl api-resources --api-group=scheduling.k8s.io
+```
+
+```text
+NAME              SHORTNAMES   APIVERSION                  NAMESPACED   KIND
+podgroups                      scheduling.k8s.io/v1beta1   true         PodGroup
+priorityclasses   pc           scheduling.k8s.io/v1        false        PriorityClass
+workloads                      scheduling.k8s.io/v1beta1   true         Workload
+```
+
+PodGroup에 최소 개수를 적고, Pod의 `spec.schedulingGroup.podGroupName`으로 그룹을 가리킨다. Workload는 여러 PodGroup의 틀을 묶는 상위 객체인데 여기서는 PodGroup만 썼다. 이 API는 beta라 필드 이름이 바뀔 수 있다. 아래는 이 클러스터의 `kubectl explain`이 알려 준 모양이다.
+
+```yaml
+apiVersion: scheduling.k8s.io/v1beta1
+kind: PodGroup
+metadata:
+  name: train-a
+  namespace: train
+spec:
+  schedulingPolicy:
+    gang:
+      minCount: 3        # 셋이 다 자리를 얻을 때만 묶어서 배치한다
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: a-w1
+  namespace: train
+spec:
+  schedulingGroup:
+    podGroupName: train-a
+  containers:
+    - name: worker
+      image: busybox:1.37
+      resources:
+        requests: {cpu: "2"}
+```
+
+같은 순서로 번갈아 만들었다.
+
+```text
+NAME   GROUP     NODE        STATUS
+a-w1   train-a   kw-node-1   Running
+a-w2   train-a   kw-node-2   Running
+a-w3   train-a   kw-node-1   Running
+b-w1   train-b   <none>      Pending
+b-w2   train-b   <none>      Pending
+b-w3   train-b   <none>      Pending
+NAME      POLICY   WORKLOAD   STATUS          AGE
+train-a   Gang     <none>     Scheduled       15s
+train-b   Gang     <none>     Unschedulable   15s
+```
+
+A는 셋이 다 떴고 B는 하나도 뜨지 않았다. B의 Pod 이벤트와 PodGroup 상태가 이유를 적는다.
+
+```text
+FailedScheduling   pod group is unschedulable, minCount (3) cannot be satisfied: 1 scheduled, 1 remaining, pod group preemption: No preemption victims found for incoming preemptor
+```
+
+B가 자리를 쥐지 않으니 남은 2코어는 다른 Pod가 쓸 수 있다. A의 워커를 지우자(학습이 끝난 상황) 10초 안에 B 셋이 모두 배치됐고 `train-b`의 상태는 `Scheduled`가 됐다. 아래 그림에서 다음을 누르면 두 경우를 이어서 본다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="워커 넷이 들어가는 클러스터에 셋씩 필요한 작업 둘. 묶음이 없으면 둘 다 멈춘다"
+  zones={[
+    { id: "n1", label: "kw-node-1 4 CPU", x: 6, y: 90, w: 190, h: 150, tone: "private" },
+    { id: "n2", label: "kw-node-2 4 CPU", x: 204, y: 90, w: 190, h: 150, tone: "private" },
+  ]}
+  nodes={[
+    { id: "sch", label: "scheduler", sub: "v1.37.0", x: 200, y: 40, icon: "gateway", w: 112 },
+    { id: "s1", label: "slot 1", sub: "2 CPU", x: 101, y: 140, icon: "container", w: 96 },
+    { id: "s2", label: "slot 2", sub: "2 CPU", x: 101, y: 200, icon: "container", w: 96 },
+    { id: "s3", label: "slot 3", sub: "2 CPU", x: 299, y: 140, icon: "container", w: 96 },
+    { id: "s4", label: "slot 4", sub: "2 CPU", x: 299, y: 200, icon: "container", w: 96 },
+  ]}
+  links={[
+    { from: "sch", to: "s1" },
+    { from: "sch", to: "s3" },
+    { from: "s1", to: "s2", dashed: true },
+    { from: "s3", to: "s4", dashed: true },
+  ]}
+  steps={[
+    { path: ["sch", "s1"], packet: "a-w1", title: "묶음 없이: A가 먼저 하나", detail: "스케줄러는 Pod를 하나씩 본다. a-w1은 덜 찬 노드로 간다." },
+    { path: ["sch", "s3"], packet: "b-w1", title: "B도 하나", detail: "번갈아 들어온 b-w1이 다른 노드로 간다." },
+    { path: ["s2", "s4"], packet: "w2", highlight: ["s2", "s4"], title: "두 번째 워커들이 남은 자리를 채운다", detail: "자리 넷이 A 둘, B 둘로 찼다." },
+    { path: ["sch"], packet: "w3", blocked: true, title: "세 번째는 둘 다 못 들어간다", detail: "A도 B도 시작하지 못한 채 자리를 쥐고 기다린다. 서로 풀어 주지 않는다.", payload: "0/2 nodes are available: 2 Insufficient cpu." },
+    { path: ["sch", "s1"], packet: "A×3", highlight: ["s2", "s3"], title: "PodGroup minCount 3: A를 통째로", detail: "A의 셋이 모두 들어갈 자리가 있을 때만 셋을 함께 배치한다." },
+    { path: ["sch"], packet: "B×3", blocked: true, highlight: ["s4"], title: "B는 하나도 잡지 않는다", detail: "셋이 들어갈 자리가 없으니 B는 아무 자리도 쥐지 않고 기다린다. A가 끝나면 B가 통째로 들어간다.", payload: "minCount (3) cannot be satisfied" },
+  ]}
+/>
+
+묶음 배치는 "어떻게 배치하나"까지만 푼다. 여러 팀의 작업이 몰릴 때 누가 먼저, 얼마나 쓰나는 다른 문제다. 그건 작업을 큐에 세우고 할당량만큼만 들여보내는 Kueue가 맡고, 워커 무리 여러 종류(드라이버 하나, 워커 여덟)를 한 단위로 만들고 다시 띄우는 일은 Job을 묶는 JobSet이 맡는다. 셋을 함께 쓰는 그림은 [Kueue 글](/posts/k8s-batch-kueue)에 있다.
+
+## 넓히기 전에 묻는 것들
+
+API를 넓히고 싶으면 먼저 CRD로 되는지 본다. 저장해 두는 문서라면 거의 늘 된다. 집계 API는 데이터가 etcd 밖에 있거나 요청마다 계산해야 할 때만 고른다. 고른다면 k8s.io/apiserver 라이브러리로 만들어 인증 위임을 제대로 하고, 서버를 지울 때는 APIService부터 지운다.
+
+스케줄러를 바꾸고 싶으면 먼저 설정으로 되는지 본다. 점수 성향, 플러그인 켜고 끄기는 프로필 하나로 된다. 별도 스케줄러는 기본 스케줄러 설정을 바꿀 수 없을 때, 노드를 나눠서만 쓴다. 묶음 배치가 필요하면 쓰는 버전에서 내장 기능의 단계를 확인한다. 1.37에서는 beta이지만 기본 꺼짐이었다. 켤 수 없는 환경이면 scheduler-plugins의 coscheduling이나 Volcano 같은 외부 스케줄러를 쓴다.
+
+현장에서 증상별로 보는 곳은 이렇다. `kubectl top`이나 HPA가 `unknown`이면 `kubectl get apiservices`의 AVAILABLE 사유를 본다. 네임스페이스가 Terminating에 멈추면 False인 APIService가 있는지 본다. Pod가 Pending인데 이벤트가 하나도 없으면 schedulerName이다. Pod가 바인딩된 뒤 `OutOfcpu`로 Failed가 되면 스케줄러가 둘 이상 같은 노드를 쓰고 있는지 본다. 분산 작업이 일부 워커만 뜬 채 멈추면 묶음 배치가 없다는 뜻이다.
+
+## 면접에서 나올 만한 질문
+
+### API 집계와 CRD는 어떻게 다르고 언제 무엇을 쓰나요?
+
+둘 다 새 API 그룹을 만들지만, CRD는 kube-apiserver가 etcd에 저장하고 검사까지 해 주고, 집계 API는 APIService로 등록한 별도 서버에 요청을 넘긴다. 저장해 두는 설정 문서라면 CRD가 맞다. 값이 etcd 밖에 있거나(metrics-server의 메모리) 요청마다 계산해야 하거나 특수한 하위 리소스가 필요할 때 집계 API를 쓴다. 집계 API는 서버의 가용성, 디스커버리, 인증 위임을 직접 책임진다.
+
+### 집계 API 서버는 요청한 사용자를 어떻게 아나요?
+
+kube-apiserver가 먼저 사용자를 인증하고 RBAC로 인가한 뒤, 자기 front-proxy 클라이언트 인증서로 연결하고 원래 사용자를 X-Remote-User, X-Remote-Group 헤더에 담아 넘긴다. 집계 서버는 그 인증서가 extension-apiserver-authentication ConfigMap의 requestheader CA로 서명됐는지 확인한 뒤에만 헤더를 믿는다. 실습에서도 권한 없는 요청은 집계 서버에 오지 않았다.
+
+### APIService가 False(FailedDiscoveryCheck)이면 어떤 일이 생기나요?
+
+그 그룹의 요청이 ServiceUnavailable(503)로 실패하고, 디스커버리에서는 Stale로 표시된다. 더 큰 문제는 네임스페이스 삭제다. 네임스페이스 컨트롤러가 그 그룹의 리소스를 확인하지 못해 Terminating에 멈춘다. 사유가 MissingEndpoints면 서버 Pod, ServiceNotFound면 Service, x509면 caBundle을 본다. 서버를 없앤 거라면 APIService를 지운다.
+
+### 스케줄링 프레임워크의 확장 지점을 설명해 주세요.
+
+스케줄링 사이클은 PreEnqueue, QueueSort, PreFilter, Filter, PostFilter, PreScore, Score, NormalizeScore, Reserve, Permit 순서로 Pod 하나씩 돌고, 바인딩 사이클은 PreBind, Bind, PostBind로 따로 돈다. Filter는 노드를 거르고, Score는 남은 노드에 점수를 주고, PostFilter는 자리가 없을 때 선점을 시도한다. Permit은 바인딩을 기다리게 할 수 있어 묶음 배치 플러그인이 여기서 동료 Pod를 기다린다.
+
+### 커스텀 스케줄러는 어떻게 만들고, 무엇을 조심하나요?
+
+가장 가벼운 방법은 KubeSchedulerConfiguration으로 플러그인 설정을 바꾸거나 프로필을 추가하는 것이고, Pod는 spec.schedulerName으로 프로필을 고른다. 플러그인을 직접 짜서 스케줄러와 함께 빌드할 수도 있다. 별도 스케줄러 프로세스를 띄우면 서로 캐시를 몰라 같은 자원을 동시에 줄 수 있고, 늦은 Pod가 kubelet에서 OutOfcpu로 실패한다. 그래서 가능하면 한 스케줄러의 프로필로 해결한다.
+
+### Pod가 Pending인데 이벤트가 하나도 없습니다. 왜일까요?
+
+그 Pod를 맡는 스케줄러가 없을 가능성이 크다. 기본 스케줄러는 자기 이름이 아닌 schedulerName의 Pod를 보지 않아서 FailedScheduling 이벤트도 남기지 않는다. schedulerName의 오타, 커스텀 스케줄러 Deployment의 부재, 리더 선출 실패를 차례로 본다.
+
+### gang scheduling은 왜 필요하고 어떻게 동작하나요?
+
+분산 학습처럼 모든 워커가 모여야 시작하는 작업은 일부만 배치되면 자원만 쥐고 아무 일도 못 한다. 작업 둘이 자리를 반씩 나눠 쥐면 서로 기다리며 멈춘다. gang scheduling은 그룹의 최소 개수만큼 자리가 날 때만 함께 배치하고, 아니면 아무 자리도 잡지 않는다. scheduler-plugins의 coscheduling은 Permit에서 기다리는 방식이고, 1.37에서는 GenericWorkload 기능(beta, 기본 꺼짐)으로 PodGroup의 gang 정책을 쓸 수 있었다.
+
+### gang scheduling, JobSet, Kueue는 각각 무엇을 맡나요?
+
+gang scheduling은 한 작업의 Pod들을 묶어서 배치할지 말지를 정한다. JobSet은 역할이 다른 Job 여러 개(드라이버, 워커)를 한 단위로 만들고 실패하면 함께 다시 띄운다. Kueue는 작업을 큐에 세우고 팀별 할당량만큼만 클러스터에 들여보낸다. 배치 플랫폼은 보통 셋을 함께 쓴다.
