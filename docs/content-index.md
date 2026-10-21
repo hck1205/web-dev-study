@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 515편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 516편 · 토픽 82개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -236,7 +236,7 @@
 #### `idempotency-key` — 멱등성 키 구현: 동시 중복과 죽은 요청까지
 
 - 요약: 멱등성 키를 확인부터 하면 동시에 온 중복이 둘 다 통과한다. 유니크 제약으로 키를 선점하고, 작업과 응답 기록을 한 트랜잭션으로 묶고, 처리 중 죽은 요청을 넘겨받는 저장소를 PostgreSQL로 직접 만들어 본다.
-- 태그: API, HTTP, PostgreSQL, Distributed Systems, Backend
+- 태그: tesla, API, HTTP, PostgreSQL, Distributed Systems, Backend · 회사: tesla
 - 키워드: Idempotent-Replayed, 키 선점, 멱등성 키 저장소
 - 길이: 481줄
 - 소제목: 확인하고 넣으면 둘 다 통과한다 / 키 한 줄에 담는 것 / 선점하고, 작업하고, 응답을 적는다 / 키 하나가 거치는 상태 / 처리 도중에 서버가 죽으면 / 트랜잭션 하나로 묶으면 기다리게 된다 / 바깥 결제사를 부르는 단계가 끼면 / 어떤 응답을 저장할지 / 키는 누가, 언제 만드나 / 키 말고도 중복을 막는 방법 / 운영에서 이런 증상을 보면 / 키 저장소가 정확해야 재시도가 안전하다 / 면접에서 나올 만한 질문
@@ -258,7 +258,7 @@
 #### `webhooks` — 웹훅: 남이 내 서버를 부를 때 지켜야 할 것
 
 - 요약: HMAC 서명과 타임스탬프로 위조와 재전송을 막고, 저장 후 바로 응답해 중복 처리를 피하고, 순서가 뒤바뀐 이벤트를 다루는 법을 받는 쪽과 보내는 쪽(SSRF) 모두에서 실제 서버로 확인한다.
-- 태그: Backend, API, HTTP, Security, Resilience
+- 태그: tesla, Backend, API, HTTP, Security, Resilience · 회사: tesla
 - 키워드: 웹훅, 웹훅 서명, 재전송 공격
 - 길이: 391줄
 - 소제목: 묻지 않아도 알려 주는 HTTP 요청 / 누가 보냈는지 서명으로 확인한다 / 받는 쪽 서버를 직접 띄워 공격해 본다 / 처리를 끝내고 응답하면 세 번 처리된다 / 순서는 보장되지 않는다 / 보내는 쪽이 되면 SSRF를 막는다 / 웹훅이 이상할 때 보는 순서 / 받는 쪽은 의심하고, 보내는 쪽은 조심한다 / 면접에서 나올 만한 질문
@@ -347,7 +347,7 @@
 #### `microservices-decomposition` — 마이크로서비스 분해: 어디서 자르고, 코드와 데이터를 어떤 순서로 옮기나
 
 - 요약: 커밋 기록으로 함께 바뀌는 파일을 세고 DB 카탈로그로 테이블을 붙잡은 외래 키·뷰·트리거를 찾아 자를 곳을 정한다. 추상화 뒤에서 구현을 바꾸고 병행 실행으로 결과를 비교한 뒤, 공유 테이블을 옮기며 FULL JOIN과 구간 체크섬으로 두 저장소를 대조한다.
-- 태그: Architecture, MSA, System Design, PostgreSQL, Node.js
+- 태그: tesla, Architecture, MSA, System Design, PostgreSQL, Node.js · 회사: tesla
 - 키워드: 변경 결합도, 브랜치 바이 앱스트랙션, 병행 실행, 데이터 대조
 - 길이: 477줄
 - 소제목: 커밋 기록이 말해 주는 경계 / DB가 말해 주는 경계 / 무엇부터 떼어 낼까 / 코드는 추상화 뒤에서 갈아 끼운다 / 옛것과 새것을 함께 돌려 본다 / 공유 테이블을 가르는 순서 / 두 저장소가 어긋났는지 확인하기 / 떼어 냈는데 더 느려졌을 때 / 분해가 잘 됐는지 숫자로 본다 / 되돌아갈 길을 남겨 둔다 / 면접에서 나올 만한 질문
@@ -391,7 +391,7 @@
 #### `transactional-outbox` — 아웃박스 릴레이 운영: 깨우기, 순서, 실패, 청소
 
 - 요약: 아웃박스의 원리 다음 단계로 릴레이를 운영할 때 고를 것들을 본다. NOTIFY로 깨우기, 주문마다 맨 앞 사건만 보내 순서 지키기, 실패하는 사건, 파티션 청소, 외부 API로 보내기를 다룬다.
-- 태그: Architecture, Messaging, Backend, PostgreSQL, Transaction
+- 태그: tesla, Architecture, Messaging, Backend, PostgreSQL, Transaction · 회사: tesla
 - 키워드: 아웃박스 릴레이, 이중 쓰기
 - 길이: 495줄
 - 소제목: 두 군데에 쓰는 순간 어디서든 끊긴다 / 릴레이가 언제 깨어나나 / 릴레이를 둘 띄우면 순서가 바뀐다 / 주문마다 맨 앞 사건만 보낸다 / 계속 실패하는 사건 하나 / 아웃박스 테이블 청소 / 브로커가 아닌 곳으로 보내는 아웃박스 / 아웃박스 말고 고를 수 있는 것 / 브라우저에도 아웃박스가 있다 / 아웃박스가 밀린다는 알림이 왔을 때 / 릴레이까지가 아웃박스다 / 면접에서 나올 만한 질문
@@ -449,7 +449,7 @@
 #### `dead-letter-queue` — 데드 레터 큐: 독이 든 메시지, 재시도 상한, 되돌려 보내기
 
 - 요약: 끝없이 돌아오는 실패 메시지를 재시도 상한과 실패 분류로 격리하고, DLQ에 무엇을 남길지, 알람을 언제 울릴지, 고친 뒤 중복 없이 되돌려 보내는 법을 PostgreSQL과 Redis Streams로 직접 확인한다.
-- 태그: Messaging, Backend, PostgreSQL, Redis, Troubleshooting
+- 태그: tesla, Messaging, Backend, PostgreSQL, Redis, Troubleshooting · 회사: tesla
 - 키워드: 데드 레터 큐, DLQ, 독이 든 메시지, maxReceiveCount, redrive
 - 길이: 509줄
 - 소제목: 같은 실패가 끝없이 돌아온다 / 몇 번 시도하고 포기할지 / 바로 포기할 실패, 기다려 볼 실패 / Redis Streams로 만드는 DLQ / DLQ에 무엇을 같이 남기나 / 알람은 DLQ에 하나라도 있으면 / 고친 뒤 되돌려 보내기 / DLQ를 두고도 메시지를 잃는 경우 / 큐에서 빠진 메시지는 누군가 봐야 한다 / 면접에서 나올 만한 질문
@@ -460,7 +460,7 @@
 #### `kafka-basics` — Kafka 기초: 파티션, 오프셋, 소비자 그룹, 복제와 acks
 
 - 요약: 컨슈머를 늘려도 랙이 줄지 않는 이유에서 시작해 파티션과 키별 순서, 오프셋 커밋, 리밸런싱, 랙 읽는 법, min.insync.replicas와 acks, 보관 기간과 컴팩션을 브로커 세 대의 실제 출력으로 따라간다.
-- 태그: Messaging, Backend, Distributed Systems, Troubleshooting
+- 태그: tesla, Messaging, Backend, Distributed Systems, Troubleshooting · 회사: tesla
 - 키워드: Kafka, 컨슈머 랙, 리밸런싱, min.insync.replicas, 로그 컴팩션
 - 길이: 519줄
 - 소제목: 토픽은 파티션 여러 개로 된 로그다 / 키가 파티션을 정하고, 순서는 파티션 안에서만 지킨다 / 오프셋은 컨슈머가 남기는 책갈피다 / 소비자 그룹과 리밸런싱 / 랙은 남은 일의 양이다 / 리더 하나에 팔로워 둘, 그리고 acks / 얼마나 오래 둘까: 보관 기간과 컴팩션 / 랙 알람이 울렸을 때 보는 순서 / Kafka가 맞지 않는 곳 / 파티션 수가 병렬성의 상한이다 / 면접에서 나올 만한 질문
@@ -471,7 +471,7 @@
 #### `message-delivery-semantics` — 메시지 전달 보장: 최대 한 번, 최소 한 번, 정확히 한 번은 어디까지
 
 - 요약: 확인이 사라지면 보낸 쪽은 다시 보낼 수밖에 없어서, 정확히 한 번은 구간마다 받는 쪽이 중복을 알아봐서 만든다. 멱등 프로듀서의 시퀀스, Kafka 트랜잭션과 펜싱, 인박스 테이블과 중복 기록 보관 기간을 실제로 돌려 본다.
-- 태그: Messaging, Backend, Distributed Systems, PostgreSQL, Transaction
+- 태그: tesla, Messaging, Backend, Distributed Systems, PostgreSQL, Transaction · 회사: tesla
 - 키워드: 정확히 한 번, 멱등 프로듀서, 인박스 테이블, 트랜잭셔널 프로듀서
 - 길이: 449줄
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
@@ -482,7 +482,7 @@
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
 - 요약: 메시지를 꺼낸 뒤 처리 전에 죽으면 사라지는 큐를 고쳐 가며 ack와 가시성 타임아웃, 최소 한 번 전달에서 생기는 중복, 워커를 늘리면 깨지는 순서, 큐 깊이로 읽는 처리 상태를 Redis와 PostgreSQL로 직접 돌려 본다.
-- 태그: Messaging, Backend, Redis, PostgreSQL, Distributed Systems
+- 태그: tesla, Messaging, Backend, Redis, PostgreSQL, Distributed Systems · 회사: tesla
 - 키워드: 가시성 타임아웃, 경쟁하는 컨슈머, 큐 깊이, BLMOVE
 - 길이: 540줄
 - 소제목: 요청 안에서 끝내지 않아도 되는 일 / 꺼낸 순간 사라지는 큐 / 처리했다고 말해야 지운다 / 가시성 타임아웃: 죽은 워커의 몫을 되찾는 시계 / 같은 메시지를 두 번 받는 건 정상이다 / 실패를 알리는 nack / 경쟁하는 컨슈머 / 워커를 늘리면 순서가 깨진다 / 큐 깊이 그래프를 읽는 법 / 큐를 무엇으로 만드나 / 메시지가 사라지거나 쌓일 때 보는 순서 / 잃지 않는 것과 두 번 하지 않는 것 / 면접에서 나올 만한 질문
@@ -504,7 +504,7 @@
 #### `rabbitmq-basics` — RabbitMQ 기초: 익스체인지와 바인딩, ack와 prefetch, 쿼럼 큐
 
 - 요약: RabbitMQ는 큐가 아니라 익스체인지로 보내고 바인딩이 큐를 고른다. 익스체인지 네 종류, 갈 곳 없는 메시지, 발행 확인, prefetch, 쿼럼 큐의 배달 한도와 데드 레터 익스체인지를 실제 출력으로 확인한다.
-- 태그: Messaging, Backend, Troubleshooting, Distributed Systems
+- 태그: tesla, Messaging, Backend, Troubleshooting, Distributed Systems · 회사: tesla
 - 키워드: RabbitMQ, 익스체인지, 쿼럼 큐, 데드 레터 익스체인지
 - 길이: 459줄
 - 소제목: 큐가 아니라 익스체인지로 보낸다 / 익스체인지 네 종류 / 갈 곳 없는 메시지를 잡는 법 / 브로커가 받았는지 확인하는 발행 확인 / ack와 prefetch: 컨슈머가 몇 개를 쥐고 있나 / 클래식 큐와 쿼럼 큐 / 실패한 메시지를 보내는 데드 레터 익스체인지 / 큐가 쌓이거나 비었을 때 보는 순서 / Kafka와 무엇이 다른가 / 익스체인지가 정하고, ack가 지우고, 쿼럼이 지킨다 / 면접에서 나올 만한 질문
@@ -830,7 +830,7 @@
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
 
 - 요약: LIKE 검색이 느린 이유에서 출발해 분석기, 역색인, BM25 점수, refresh와 세그먼트, 샤드 구성을 따라간다. 쇼핑몰 검색에서 부딪히는 동의어·오타·패싯·깊은 페이지와 DB 동기화도 다룬다.
-- 태그: coupang, Elasticsearch, Search, Database · 회사: coupang
+- 태그: coupang, tesla, Elasticsearch, Search, Database · 회사: coupang, tesla
 - 키워드: Elasticsearch, 역색인, BM25, 형태소 분석기, search_after
 - 길이: 485줄
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 클러스터가 yellow나 red로 바뀌면 / 다시 찾아보기로 / 면접에서 나올 만한 질문
@@ -1036,7 +1036,7 @@
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 현장에서 relation does not exist를 만나는 순간 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-connections-pg-hba, sql-basics, postgres-data-types, postgres-roles-security
 - 키워드 백링크 →: db-migration-tools, db-type-relational
-- 이 글로 오는 글 ←: acid-transactions, connection-pool, db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, distributed-transactions-2pc, network-partitions, optimistic-locking, pessimistic-locking, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-connections-pg-hba, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-reporting-sql, postgres-roles-security, sd-hotel-double-booking, security-groups-nacl, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-logical-order, sql-select-where-null, sqld-null-functions, sqld-single-row-functions, timeouts
+- 이 글로 오는 글 ←: acid-transactions, connection-pool, db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, distributed-transactions-2pc, network-partitions, optimistic-locking, pessimistic-locking, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-connections-pg-hba, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-reporting-sql, postgres-roles-security, sd-hotel-double-booking, security-groups-nacl, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-logical-order, sql-select-where-null, sql-study-path, sqld-null-functions, sqld-single-row-functions, timeouts
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -1098,7 +1098,7 @@
 #### `redis-basics` — Redis는 왜 빠른가: 메모리, 단일 스레드, 자료구조
 
 - 요약: Redis가 빠른 이유와 느린 명령 하나가 서버 전체를 멈추는 이유는 같은 곳에 있다. 메모리와 단일 스레드 이벤트 루프 구조를 보고, Ubuntu에 설치해 자료구조별 명령을 직접 실행해 본다.
-- 태그: Redis, Database, NoSQL, Cache, Performance
+- 태그: tesla, Redis, Database, NoSQL, Cache, Performance · 회사: tesla
 - 키워드: Redis, Memcached, I/O 다중화, 분산 락
 - 길이: 881줄
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
@@ -1109,7 +1109,7 @@
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
 - 요약: 데이터가 한 서버 메모리를 넘어서는 순간에서 시작해 키가 16384개 슬롯으로 나뉘는 규칙과 해시 태그, MOVED와 ASK, 구성 고르는 기준을 보고, 레플리카 없는 클러스터의 노드 하나를 죽여 CLUSTERDOWN이 나는 과정을 확인한다.
-- 태그: Redis, Database, Distributed Systems
+- 태그: tesla, Redis, Database, Distributed Systems · 회사: tesla
 - 키워드: Redis Cluster, 해시 슬롯, MOVED
 - 길이: 358줄
 - 소제목: Cluster는 키를 16384개 슬롯으로 나눈다 / MOVED와 ASK / 단일 서버부터 관리형 서비스까지 / 현장에서 노드 하나가 죽었을 때 / 데이터를 나누는 대가 / 면접에서 나올 만한 질문
@@ -1120,7 +1120,7 @@
 #### `redis-memory-eviction` — Redis 메모리가 가득 차면: maxmemory와 축출 정책
 
 - 요약: maxmemory를 정하지 않으면 OOM 킬러에게 죽고, 기본 noeviction이면 가득 찬 순간 쓰기가 실패한다. INFO memory를 읽는 법부터 축출 정책 고르기, 근사 LRU와 LFU의 동작, 만료와 단편화, 리눅스 설정과 여유 메모리 계산까지 정리한다.
-- 태그: Redis, Database, Cache, Performance, Linux
+- 태그: tesla, Redis, Database, Cache, Performance, Linux · 회사: tesla
 - 키워드: maxmemory, 축출 정책, allkeys-lru, 메모리 단편화
 - 길이: 752줄
 - 소제목: 키 하나가 실제로 차지하는 크기 / 작은 컬렉션은 압축된 모양으로 산다 / INFO memory를 한 줄씩 읽기 / 어떤 키가 메모리를 먹고 있나 / maxmemory를 정하지 않으면 생기는 일 / 가득 찼을 때 지울 키를 고르는 정책 / LRU를 정확하게 하지 않는 이유 / LFU 카운터는 로그로 오르고 시간이 지나면 내려간다 / 만료된 키가 바로 사라지지 않는 이유 / 단편화와 activedefrag / 리눅스 쪽에서 챙길 설정 / 서버 메모리의 몇 퍼센트를 maxmemory로 줄까 / 가득 차기 전에 정해 둘 것 / 면접에서 나올 만한 질문
@@ -1131,7 +1131,7 @@
 #### `redis-persistence-ha` — Redis 영속성: RDB, AOF, 백업과 복원
 
 - 요약: 재부팅 한 번에 세션이 사라진 서버에서 시작해 RDB와 AOF가 각각 무엇을 지키고 무엇을 잃는지, fork와 copy-on-write, AOF 재작성, 둘을 함께 켤 때를 직접 돌려 보고, 백업 파일로 정말 복원되는지 확인하는 법까지 정리한다.
-- 태그: Redis, Database, Linux
+- 태그: tesla, Redis, Database, Linux · 회사: tesla
 - 키워드: RDB 스냅샷, AOF, appendfsync
 - 길이: 415줄
 - 소제목: 재시작하면 무엇을 읽어 오나 / RDB는 특정 순간의 사진이다 / fork와 copy-on-write / AOF는 쓰기 명령을 한 줄씩 적는다 / AOF가 커지면 다시 쓴다 / RDB와 AOF를 함께 켜면 / 백업은 복원해 봐야 백업이다 / 무엇을 잃어도 되는지부터 정한다 / 면접에서 나올 만한 질문
@@ -1166,7 +1166,7 @@
 #### `db-index` — 인덱스: 책 뒤의 찾아보기
 
 - 요약: 주문 100만 건에서 느려진 조회를 PostgreSQL 16의 실행 계획으로 따라가며 B-tree 인덱스가 어떻게 찾는지, Index Scan·Bitmap Heap Scan·Index Only Scan이 언제 갈리는지, MySQL InnoDB의 클러스터드 인덱스는 무엇이 다른지 본다. 현장에서 인덱스가 필요한 테이블을 찾는 순서도 정리한다.
-- 태그: Database, SQL, PostgreSQL, Index, Performance
+- 태그: tesla, Database, SQL, PostgreSQL, Index, Performance · 회사: tesla
 - 키워드: Index Only Scan, B-tree 인덱스, Bitmap Heap Scan, 클러스터드 인덱스
 - 길이: 615줄
 - 소제목: 실험에 쓸 작은 쇼핑몰 / 100만 줄을 처음부터 끝까지 읽는 계획 / 찾아보기를 하나 만들면 / B-tree는 세 번 만에 잎에 닿는다 / 같은 인덱스를 읽는 네 가지 방법 / MySQL 8은 표 자체가 인덱스다 / 현장에서 인덱스가 필요한 곳을 찾는 순서 / 찾아보기는 정렬된 사본이다 / 면접에서 나올 만한 질문
@@ -1243,7 +1243,7 @@
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
 - 요약: 마지막 재고 1개를 두 사람이 동시에 사서 재고가 -1이 되는 장면을 두 세션으로 재현하고, ACID와 다섯 가지 동시성 현상, 격리 수준이 실제로 무엇을 막는지, MVCC가 버전을 어떻게 고르는지를 PostgreSQL과 MySQL을 나란히 놓고 본다.
-- 태그: Database, SQL, PostgreSQL, SQLD, Transaction, Concurrency
+- 태그: tesla, Database, SQL, PostgreSQL, SQLD, Transaction, Concurrency · 회사: tesla
 - 키워드: 격리 수준, MVCC, 갱신 손실, 쓰기 왜곡
 - 길이: 679줄
 - 소제목: 마지막 1개를 둘이 샀다 / 트랜잭션이 약속하는 네 가지 / BEGIN, COMMIT, ROLLBACK, SAVEPOINT / 동시에 고치면 생기는 다섯 가지 일 / 격리 수준 네 단계와 실제 동작 / 버전을 남겨서 읽기와 쓰기를 떼어 놓기 (MVCC) / MySQL InnoDB는 어떻게 다른가 / SQLD에서 묻는 트랜잭션과 격리 수준 / 격리 수준은 무엇을 허용하느냐의 문제다 / 면접에서 나올 만한 질문
@@ -1293,7 +1293,7 @@
 - 소제목: 아홉 줄, 점수 다섯 개 / 같은 아홉 줄을 세는 방법이 셋이다 / 평균이 둘로 갈라진 이유 / 행이 하나도 없을 때 / LEFT JOIN 뒤의 `count(*)`는 0을 세지 못한다 / 조건별로 세면 WHERE와 FILTER가 다른 행을 지운다 / ELSE 0을 붙인 count는 전부를 센다 / WHERE에 쓸지 HAVING에 쓸지는 숫자로 정한다 / GROUP BY에는 무엇을 적어야 하나 / NULL도 한 묶음이 되고, 이어 붙이기는 순서를 적어야 한다 / 리포트 숫자가 맞지 않을 때 보는 순서 / 집계 함수를 직접 만들어 보기 / 분모부터 확인한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-filtering-operators, sqld-group-by-having, sql-joins-in-practice, sql-case-when
 - 키워드 백링크 →: db-modeling-normalization
-- 이 글로 오는 글 ←: linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order
+- 이 글로 오는 글 ←: linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path
 
 #### `sql-basics` — SQL 기본 명령어: 테이블과 제약 조건 만들기
 
@@ -1304,7 +1304,7 @@
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / 현장에서 테이블 정의를 다시 꺼내 보는 순간 / 테이블 모양이 곧 규칙이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-select-where-null, sql-insert-update-delete, db-index, db-index-pitfalls, sqld-data-modeling
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-index-pitfalls, db-locking-deadlock, db-migration-tools, db-transaction-isolation, db-type-newsql, db-type-relational, layered-architecture, optimistic-locking, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-getting-started, postgres-operations, sd-hotel-double-booking, sql-injection, sql-insert-update-delete, sql-select-where-null, sql-views-materialized, sqld-data-modeling, sqld-entity-attribute-relationship, zero-downtime-migrations
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-index, db-index-pitfalls, db-locking-deadlock, db-migration-tools, db-transaction-isolation, db-type-newsql, db-type-relational, layered-architecture, optimistic-locking, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-getting-started, postgres-operations, sd-hotel-double-booking, sql-injection, sql-insert-update-delete, sql-select-where-null, sql-study-path, sql-views-materialized, sqld-data-modeling, sqld-entity-attribute-relationship, zero-downtime-migrations
 
 #### `sql-batch-timeout-pool` — 쿼리 밖의 비용: 쓰기 묶기, 시간 한도, 커넥션 풀
 
@@ -1315,7 +1315,7 @@
 - 소제목: 한 줄씩 넣지 말고 묶어서 넣는다 / 오래 열린 트랜잭션은 청소를 막는다 / 끝나지 않는 쿼리에 한도를 건다 / 연결은 풀로 나눠 쓴다 / 쿼리 바깥에서 새는 시간 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, sql-query-rewrite, db-index, sql-insert-update-delete, connection-pool
 - 키워드 백링크 →: pessimistic-locking, postgres-mvcc-vacuum, db-architecture-by-scale, postgres-getting-started
-- 이 글로 오는 글 ←: acid-transactions, autoscaling, backpressure, batch-processing, blue-green-deployment, canary-release, circuit-breaker, connection-pool, db-architecture-by-scale, db-locking-deadlock, db-replication-sharding, deadlocks, design-patterns-overview, dns, eventual-consistency, failover, garbage-collection, idempotency-key, iptables-nat, latency-bandwidth-throughput, layered-architecture, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, nat-traversal, network-partitions, pattern-abstract-factory, pattern-bridge, pattern-singleton, percentile-latency, pessimistic-locking, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, production-incidents, race-conditions, resilience-patterns, rolling-deployment, scaling-horizontal-vertical, sd-load-balancer-stateless, sd-split-web-and-db, secrets-management, service-discovery, sql-interview-problems, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle, timeouts
+- 이 글로 오는 글 ←: acid-transactions, autoscaling, backpressure, batch-processing, blue-green-deployment, canary-release, circuit-breaker, connection-pool, db-architecture-by-scale, db-locking-deadlock, db-replication-sharding, deadlocks, design-patterns-overview, dns, eventual-consistency, failover, garbage-collection, idempotency-key, iptables-nat, latency-bandwidth-throughput, layered-architecture, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, nat-traversal, network-partitions, pattern-abstract-factory, pattern-bridge, pattern-singleton, percentile-latency, pessimistic-locking, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, production-incidents, race-conditions, resilience-patterns, rolling-deployment, scaling-horizontal-vertical, sd-load-balancer-stateless, sd-split-web-and-db, secrets-management, service-discovery, sql-interview-problems, sql-query-rewrite, sql-query-tuning, sql-study-path, tcp-connection-lifecycle, timeouts
 
 #### `sql-case-when` — CASE WHEN 제대로 쓰기: 조건 순서, 타입, 조건부 집계와 피벗
 
@@ -1326,7 +1326,7 @@
 - 소제목: 위에서 아래로, 처음 맞는 곳에서 멈춘다 / THEN마다 타입이 같아야 한다 / 실행되지 않을 ELSE가 에러를 낸다 / 조건마다 따로 더하기 / 행을 열로 돌리기 / ORDER BY와 UPDATE 안의 CASE / WHERE 안의 CASE는 인덱스를 막는다 / CASE를 리뷰할 때 보는 것 / 피벗을 직접 만들어 보기 / 순서와 타입을 먼저 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sqld-null-functions, sqld-top-n-hierarchical-pivot, sql-joins-in-practice, sql-subqueries-exists-lateral
 - 키워드 백링크 →: sqld-group-by-having, sql-filtering-operators, db-replication-sharding
-- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-cte-recursive, sql-subqueries-exists-lateral, sql-window-functions-pg, sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-cte-recursive, sql-study-path, sql-subqueries-exists-lateral, sql-window-functions-pg, sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot
 
 #### `sql-cte-recursive` — 재귀 CTE 실전: 작업 테이블, 여러 길로 닿는 그래프, 고리와 CYCLE 절
 
@@ -1337,7 +1337,7 @@
 - 소제목: 선수 강의는 몇 단계일지 모른다 / WITH 하나는 이름 붙인 중간 결과다 / 재귀 CTE는 새 행이 없을 때까지 같은 쿼리를 돈다 / 두 길로 닿은 강의는 두 번 나온다 / 고리 하나가 쿼리를 끝나지 않게 한다 / 재귀 쪽에 쓸 수 없는 문법 / 거꾸로 따라가기와 이미 들은 강의 빼기 / 20만 개 트리에서 반복마다 읽는 양 / 트리를 저장하는 다른 방법 / 재귀를 손으로 돌려 보기 / 멈추는 조건은 데이터가 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-top-n-hierarchical-pivot, postgres-advanced-sql, sql-logical-order, sql-case-when, sql-joins-in-practice, sql-window-functions-pg, sql-views-materialized
 - 키워드 백링크 →: sqld-set-operators, js-closures
-- 이 글로 오는 글 ←: sql-interview-problems, sql-views-materialized, sql-window-functions-pg, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: sql-interview-problems, sql-study-path, sql-views-materialized, sql-window-functions-pg, sqld-top-n-hierarchical-pivot
 
 #### `sql-filtering-operators` — WHERE 연산자의 함정: NOT IN과 NULL, BETWEEN과 시간대, LIKE와 인덱스
 
@@ -1348,7 +1348,7 @@
 - 소제목: 이 글에서 거르는 행들 / 목록에 NULL 하나가 섞이면 / 10월은 31일 0시에 끝난다 / 같은 쿼리, 다른 시간대 / 날짜로 잘라 비교하면 인덱스를 못 쓴다 / LIKE가 특별하게 읽는 두 글자 / 앞이 열린 검색과 인덱스 / 검색 조건을 리뷰할 때 보는 것 / LIKE를 직접 구현해 보기 / 경계와 특수 문자를 의심한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sql-select-where-null, sql-subqueries-exists-lateral, db-index-pitfalls, sql-injection, postgres-jsonb-search
 - 키워드 백링크 →: db-index, db-index-design
-- 이 글로 오는 글 ←: big-o-notation, quadtree, ray-casting, sql-aggregation-pitfalls, sql-case-when, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-subqueries-exists-lateral
+- 이 글로 오는 글 ←: big-o-notation, quadtree, ray-casting, sql-aggregation-pitfalls, sql-case-when, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path, sql-subqueries-exists-lateral
 
 #### `sql-insert-update-delete` — 행 넣고 고치고 지우기: UPSERT, 트랜잭션, TRUNCATE
 
@@ -1359,7 +1359,7 @@
 - 소제목: 이어서 쓰는 작은 쇼핑몰 / 행 넣기와 있으면 고치기 / 고치고 지우기 전에 BEGIN부터 / COMMIT, ROLLBACK, SAVEPOINT로 묶고 되돌리기 / DELETE, TRUNCATE, DROP은 지우는 범위가 다르다 / 열어 둔 트랜잭션이 다른 요청을 붙잡을 때 / Oracle과 SQL Server에서는 이렇게 다르다 / 바꾸기 전에 되돌릴 길부터 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, sql-select-where-null, db-transaction-isolation
 - 키워드 백링크 →: postgres-advanced-sql, postgres-operations, postgres-getting-started
-- 이 글로 오는 글 ←: cqrs, db-type-embedded, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-select-where-null
+- 이 글로 오는 글 ←: cqrs, db-type-embedded, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-select-where-null, sql-study-path
 
 #### `sql-interview-problems` — SQL 면접 문제: 두 번째로 큰 값, 그룹별 상위 N, 중복 제거, 누적 합계, 연속 구간
 
@@ -1370,7 +1370,7 @@
 - 소제목: 문제를 풀 데이터 / 두 번째로 비싼 가격 / 카테고리마다 비싼 강의 두 개 / 같은 결제가 두 번 들어갔다 / 수강생별 누적 결제액 / 연속 출석 구간 찾기 / 3일 이상 연속으로 나온 사람 / 문제를 받으면 먼저 묻는 것 / 연속 출석을 코드로 풀어 보기 / 도구는 몇 개뿐이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sql-subqueries-exists-lateral, sql-window-functions-pg, sqld-window-functions, sql-cte-recursive, idempotency-key, postgres-advanced-sql, sql-batch-timeout-pool, sql-filtering-operators, sql-views-materialized
 - 키워드 백링크 →: postgres-data-types, sqld-correlated-subquery, sqld-group-by-having, resilience-patterns, http-methods, webhooks
-- 이 글로 오는 글 ←: sql-window-functions-pg
+- 이 글로 오는 글 ←: sql-study-path, sql-window-functions-pg
 
 #### `sql-joins-in-practice` — 조인 실전: 행이 곱해지는 조인, WHERE가 지운 LEFT JOIN, 안티 조인
 
@@ -1381,7 +1381,7 @@
 - 소제목: 결제와 후기를 더한 강의 사이트 / 행이 곱해지는 자리를 숫자로 찾는다 / 묶고 나서 붙인다 / WHERE 한 줄이 LEFT JOIN을 지운다 / 짝이 없는 행을 찾는 세 가지 모양 / 결제와 수강 기록 맞춰 보기 / 같은 테이블을 두 번 읽는 조인 / 리포트 숫자가 이상할 때 조인부터 의심하는 순서 / 조인을 손으로 짜 보기 / 행 수를 먼저 센다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-joins, sql-logical-order, sql-filtering-operators, sql-aggregation-pitfalls, sql-subqueries-exists-lateral
 - 키워드 백링크 →: sql-query-tuning
-- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-cte-recursive, sql-query-rewrite, sql-subqueries-exists-lateral, sql-window-functions-pg, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-cte-recursive, sql-query-rewrite, sql-study-path, sql-subqueries-exists-lateral, sql-window-functions-pg, sqld-subquery-set-operators
 
 #### `sql-logical-order` — SELECT의 논리적 처리 순서: 별칭, 윈도 함수, DISTINCT, LIMIT
 
@@ -1392,7 +1392,7 @@
 - 소제목: 수강생 다섯, 강의 다섯, 수강 기록 아홉 / 한 문장이 여덟 단계를 지난다 / 별칭은 SELECT를 지나야 생긴다 / 같은 이름이면 GROUP BY는 원래 컬럼을 고른다 / 윈도 함수는 HAVING보다 늦다 / DISTINCT는 정렬보다 먼저 겹친 걸 뺀다 / LIMIT은 맨 끝이고, 동점은 정해 주지 않으면 운이다 / 집계는 CASE보다 먼저 끝난다 / 논리 순서와 실제 실행은 다르다 / 에러 메시지에서 단계를 거꾸로 짚기 / 단계를 직접 밟아 보기 / 순서를 알면 에러가 설명된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-select-where-null, sqld-group-by-having, sql-filtering-operators, sql-aggregation-pitfalls, sql-window-functions-pg, postgres-reporting-sql, sql-query-rewrite
 - 키워드 백링크 →: db-sharding, db-type-columnar-olap, js-short-circuit, postgres-getting-started
-- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-cte-recursive, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-subqueries-exists-lateral, sql-views-materialized, sql-window-functions-pg
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-cte-recursive, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-study-path, sql-subqueries-exists-lateral, sql-views-materialized, sql-window-functions-pg
 
 #### `sql-query-rewrite` — 쿼리 고쳐 쓰기: sargable 조건, 키셋 페이지네이션, N+1
 
@@ -1403,7 +1403,7 @@
 - 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index, api-pagination-sorting, n-plus-one-queries, sql-batch-timeout-pool
 - 키워드 백링크 →: rest-api-design, loading-patterns, db-index-design, sql-subqueries-exists-lateral, sql-joins-in-practice, pattern-proxy, postgres-architecture, db-transaction-isolation
-- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sd-latency-numbers, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-news-feed-retrieval, sd-split-web-and-db, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning, sql-subqueries-exists-lateral
+- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sd-latency-numbers, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-news-feed-retrieval, sd-split-web-and-db, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning, sql-study-path, sql-subqueries-exists-lateral
 
 #### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
 
@@ -1413,7 +1413,7 @@
 - 길이: 364줄
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 찾았으면 고칠 차례 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-rewrite, sql-batch-timeout-pool, db-index
-- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-replication-sharding, db-type-relational, n-plus-one-queries, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, sql-batch-timeout-pool, sql-joins-in-practice, sql-query-rewrite, sql-select-where-null, sqld-joins
+- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-replication-sharding, db-type-relational, n-plus-one-queries, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, sql-batch-timeout-pool, sql-joins-in-practice, sql-query-rewrite, sql-select-where-null, sql-study-path, sqld-joins
 
 #### `sql-select-where-null` — SELECT와 NULL: 원하는 행만 골라 읽기
 
@@ -1424,7 +1424,17 @@
 - 소제목: 회원 넷, 상품 셋, 주문 다섯 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 리포트 숫자가 안 맞을 때 먼저 보는 것 / 모름을 모름으로 다루기 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, sql-query-tuning, sql-insert-update-delete
 - 키워드 백링크 →: db-index, sqld-group-by-having, postgres-getting-started
-- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-filtering-operators, sql-insert-update-delete, sql-logical-order, sql-subqueries-exists-lateral, sqld-null-functions, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-filtering-operators, sql-insert-update-delete, sql-logical-order, sql-study-path, sql-subqueries-exists-lateral, sqld-null-functions, sqld-subquery-set-operators
+
+#### `sql-study-path` — SQL 공부 순서: 쿼리 하나를 여섯 단계로 키우며 보는 SELECT부터 윈도 함수까지
+
+- 요약: 회원 넷, 주문 일곱으로 쿼리 하나를 SELECT, WHERE, GROUP BY, JOIN, 서브쿼리, 윈도 함수 순서로 키운다. 갈래마다 자주 틀리는 자리를 실제 psql 출력으로 짚고 자세한 글로 넘긴다.
+- 태그: SQL, PostgreSQL, Database
+- 키워드: SQL 학습 순서, SQL 로드맵
+- 길이: 449줄
+- 소제목: 여섯 갈래를 배우는 순서 / 회원 넷, 주문 일곱 / 첫 단계는 그냥 읽는다 / 결제된 10월 주문만 남기기 / 회원마다 한 줄로 묶기 / 이름을 붙이면 choi가 돌아온다 / 평균보다 많이 산 회원만 / 줄은 그대로 두고 순위를 붙인다 / 완성된 쿼리를 조각으로 읽기 / 줄 수가 바뀌는 자리 / 여섯 갈래 다음에 이어 볼 글 / 같은 질문을 코드로 풀어 보기 / 한 단계씩 얹으면 읽힌다 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-basics, sql-select-where-null, sql-filtering-operators, sqld-null-functions, sql-aggregation-pitfalls, sqld-group-by-having, sqld-rollup-cube-grouping-sets, sql-joins-in-practice, sqld-joins, sqld-set-operators, sql-subqueries-exists-lateral, sqld-subquery-set-operators, sqld-correlated-subquery, sql-cte-recursive, sql-window-functions-pg, sqld-window-functions, sqld-top-n-hierarchical-pivot, sql-logical-order, sql-interview-problems, sql-case-when, sql-views-materialized, sql-insert-update-delete, sql-query-tuning, sql-query-rewrite, sql-batch-timeout-pool, sql-injection
+- 키워드 백링크 →: postgres-getting-started
 
 #### `sql-subqueries-exists-lateral` — 서브쿼리가 실행되는 방식: 스칼라, EXISTS, NOT IN, LATERAL
 
@@ -1435,7 +1445,7 @@
 - 소제목: 값 하나 자리에는 값 하나만 / 한 번만 도는 서브쿼리, 행마다 도는 서브쿼리 / IN과 EXISTS는 조인이 된다 / NOT IN은 메모리 설정에 따라 계획이 바뀐다 / 서브쿼리가 어떤 계획이 되는지 한눈에 / FROM 안에서 바깥을 보는 LATERAL / 느린 서브쿼리를 만나면 보는 것 / NOT IN을 직접 계산해 보기 / 계획의 이름을 읽는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-correlated-subquery, sql-filtering-operators, sql-joins-in-practice, sql-logical-order, sql-query-rewrite, postgres-reporting-sql, sql-case-when
 - 키워드 백링크 →: sql-select-where-null, db-type-relational
-- 이 글로 오는 글 ←: sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-query-rewrite, sql-window-functions-pg, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-query-rewrite, sql-study-path, sql-window-functions-pg, sqld-subquery-set-operators
 
 #### `sql-views-materialized` — 뷰와 머티리얼라이즈드 뷰: 의존성, WITH CHECK OPTION, security_barrier, REFRESH 잠금
 
@@ -1446,7 +1456,7 @@
 - 소제목: 뷰는 조회할 때 원래 쿼리로 펼쳐진다 / SELECT *는 만든 날의 컬럼 목록으로 굳는다 / 뷰를 지나 쓰기와 WITH CHECK OPTION / 뷰로 숨긴 행이 함수로 새어 나간다 / 결과를 저장하는 머티리얼라이즈드 뷰 / REFRESH가 잡는 잠금을 직접 본다 / CONCURRENTLY는 공짜가 아니다 / 뷰, 머티리얼라이즈드 뷰, 요약 테이블 고르기 / 바뀐 행만 고치는 비교를 짜 보기 / 이름은 같아도 저장하는 것이 다르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-reporting-sql, sql-logical-order, postgres-functions-triggers, postgres-roles-security, sql-window-functions-pg, caching-strategies, sql-cte-recursive
 - 키워드 백링크 →: sqld-correlated-subquery, json-crud-http, zero-downtime-migrations, postgres-mvcc-vacuum, sqld-group-by-having, sqld-window-functions, sql-basics
-- 이 글로 오는 글 ←: sql-cte-recursive, sql-interview-problems
+- 이 글로 오는 글 ←: sql-cte-recursive, sql-interview-problems, sql-study-path
 
 #### `sql-window-functions-pg` — PostgreSQL 윈도우 함수 실전: RANGE·GROUPS 프레임, Run Condition, 정렬 비용
 
@@ -1457,7 +1467,7 @@
 - 소제목: 최근 7일 합계가 7일 치가 아니었다 / 행으로 셀지, 값으로 셀지, 동점 묶음으로 셀지 / 나를 뺀 평균과 이름 붙인 창 / 창마다 정렬이 하나씩 붙는다 / 그룹별 상위 N개는 15부터 일찍 멈춘다 / 동점에서 ROW_NUMBER는 아무나 고른다 / 리포트 쿼리가 느릴 때 계획에서 보는 곳 / 이동 합계를 직접 계산해 보기 / 정렬 한 번 위에 얹는 계산 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-window-functions, sql-logical-order, sql-joins-in-practice, postgres-reporting-sql, sql-case-when, sql-subqueries-exists-lateral, sql-cte-recursive, sql-interview-problems
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: sql-cte-recursive, sql-interview-problems, sql-logical-order, sql-views-materialized, sqld-window-functions
+- 이 글로 오는 글 ←: sql-cte-recursive, sql-interview-problems, sql-logical-order, sql-study-path, sql-views-materialized, sqld-window-functions
 
 #### `zero-downtime-migrations` — 무중단 스키마 변경: ALTER TABLE의 잠금과 재작성을 재 보기
 
@@ -1481,7 +1491,7 @@
 - 소제목: 예제 데이터 / 바깥 행마다 다시 도는 상관 서브쿼리 / SELECT 절에는 값 하나만 들어간다 / 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다 / 현장에서 상관 서브쿼리가 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, db-index, sqld-window-functions
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: sql-interview-problems, sql-subqueries-exists-lateral, sql-views-materialized, sqld-set-operators, sqld-subquery-set-operators, sqld-window-functions
+- 이 글로 오는 글 ←: sql-interview-problems, sql-study-path, sql-subqueries-exists-lateral, sql-views-materialized, sqld-set-operators, sqld-subquery-set-operators, sqld-window-functions
 
 #### `sqld-data-modeling` — SQLD 데이터 모델링: 개념·논리·물리와 3단계 스키마
 
@@ -1514,7 +1524,7 @@
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
 - 키워드 백링크 →: sqld-null-functions
-- 이 글로 오는 글 ←: db-type-time-series, postgres-reporting-sql, sd-autocomplete-data-pipeline, sql-aggregation-pitfalls, sql-case-when, sql-interview-problems, sql-logical-order, sql-select-where-null, sql-views-materialized, sql-window-functions-pg, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-reporting-sql, sd-autocomplete-data-pipeline, sql-aggregation-pitfalls, sql-case-when, sql-interview-problems, sql-logical-order, sql-select-where-null, sql-study-path, sql-views-materialized, sql-window-functions-pg, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -1525,7 +1535,7 @@
 - 소제목: 조인은 짝을 찾는 일이다 / 범위로 짝을 찾는 Non-EQUI JOIN / ANSI 문법으로 쓰는 INNER JOIN / 짝이 없는 행을 살리는 OUTER JOIN / Oracle 전통 문법의 OUTER JOIN 표기 / 모든 조합을 만드는 CROSS JOIN / 자기 자신과 붙이는 SELF JOIN / 세 테이블을 붙이기 / DB가 짝을 찾는 세 가지 방법 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-group-by-having, sql-query-tuning
 - 키워드 백링크 →: sqld-top-n-hierarchical-pivot
-- 이 글로 오는 글 ←: sql-joins-in-practice, sqld-group-by-having, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: sql-joins-in-practice, sql-study-path, sqld-group-by-having, sqld-subquery-set-operators
 
 #### `sqld-null-functions` — SQLD NULL 다루기: NVL, COALESCE, CASE와 DECODE
 
@@ -1536,7 +1546,7 @@
 - 소제목: 이 글에서 쓸 사원 테이블 / 지급액이 빈칸이 된 이유 / NULL은 값이 아니라 빈칸이다 / NULL을 다른 값으로 바꾸는 함수 / 조건에 따라 값을 고르는 CASE와 DECODE / 현장에서 NULL이 바뀐 행을 숨기는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-type-conversion, sqld-subquery-set-operators, sqld-group-by-having, sql-select-where-null
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: sql-case-when, sqld-group-by-having, sqld-rollup-cube-grouping-sets, sqld-single-row-functions
+- 이 글로 오는 글 ←: sql-case-when, sql-study-path, sqld-group-by-having, sqld-rollup-cube-grouping-sets, sqld-single-row-functions
 
 #### `sqld-rollup-cube-grouping-sets` — SQLD ROLLUP, CUBE, GROUPING SETS
 
@@ -1547,7 +1557,7 @@
 - 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
 - 키워드 백링크 →: json-crud-http, postgres-reporting-sql, sql-case-when, sqld-null-functions
-- 이 글로 오는 글 ←: sqld-window-functions
+- 이 글로 오는 글 ←: sql-study-path, sqld-window-functions
 
 #### `sqld-set-operators` — SQLD 집합 연산자: UNION, INTERSECT, MINUS
 
@@ -1558,7 +1568,7 @@
 - 소제목: 예제 데이터 / 결과를 위아래로 붙이는 집합 연산자 / 집합 연산자의 규칙 / 현장에서 UNION이 행을 지우고 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-correlated-subquery, sqld-single-row-functions
 - 키워드 백링크 →: js-pure-functions
-- 이 글로 오는 글 ←: sql-cte-recursive, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: sql-cte-recursive, sql-study-path, sqld-subquery-set-operators
 
 #### `sqld-single-row-functions` — SQLD 단일행 함수: 문자, 숫자, 날짜
 
@@ -1580,7 +1590,7 @@
 - 소제목: 예제로 쓸 EMP와 DEPT / 쿼리를 넣을 수 있는 세 자리 / 몇 줄이 돌아오느냐로 연산자가 바뀐다 / ANY와 ALL은 최솟값과 최댓값으로 바꿔 읽는다 / EXISTS는 있는지만 본다 / NOT IN에 NULL이 하나 섞이면 / 현장에서 NOT IN이 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-correlated-subquery, sqld-set-operators, sqld-single-row-functions, sqld-joins
 - 키워드 백링크 →: sqld-group-by-having, sql-subqueries-exists-lateral, sql-joins-in-practice, sql-select-where-null
-- 이 글로 오는 글 ←: sql-subqueries-exists-lateral, sqld-correlated-subquery, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: sql-study-path, sql-subqueries-exists-lateral, sqld-correlated-subquery, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-top-n-hierarchical-pivot` — SQLD Top-N, 계층형 쿼리, PIVOT
 
@@ -1591,7 +1601,7 @@
 - 소제목: ROWNUM은 정렬보다 먼저 붙는다 / 동점자까지 보여 주는 WITH TIES / 상사를 따라 내려가는 계층형 쿼리 / 계층형 쿼리가 주는 가상 컬럼 / WHERE에 거는 조건과 CONNECT BY에 거는 조건 / PostgreSQL과 SQL Server는 재귀 CTE로 쓴다 / 행을 열로 돌리는 PIVOT / 열을 행으로 되돌리는 UNPIVOT / 패턴으로 찾는 정규 표현식 함수 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-window-functions
 - 키워드 백링크 →: db-index, sqld-group-by-having, sql-cte-recursive, sql-case-when, js-closures
-- 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sql-case-when, sql-cte-recursive, sqld-joins, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sql-case-when, sql-cte-recursive, sql-study-path, sqld-joins, sqld-window-functions
 
 #### `sqld-type-conversion` — SQLD 형 변환: TO_CHAR 형식과 암시적 형 변환
 
@@ -1612,7 +1622,7 @@
 - 소제목: OVER 괄호 안의 세 조각 / 동점자가 있을 때 세 순위 함수 / 행을 접지 않는 집계 / 기본 프레임은 동점을 한꺼번에 더한다 / FIRST_VALUE는 되는데 LAST_VALUE는 이상하다 / 앞 행과 뒤 행을 가져오는 LAG와 LEAD / 비율과 분위를 내는 함수 / 윈도우 함수는 WHERE에 못 쓴다 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, sql-window-functions-pg, sqld-top-n-hierarchical-pivot, sqld-rollup-cube-grouping-sets
 - 키워드 백링크 →: sqld-group-by-having, sqld-correlated-subquery
-- 이 글로 오는 글 ←: db-type-embedded, postgres-reporting-sql, sql-interview-problems, sql-views-materialized, sql-window-functions-pg, sqld-correlated-subquery, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: db-type-embedded, postgres-reporting-sql, sql-interview-problems, sql-study-path, sql-views-materialized, sql-window-functions-pg, sqld-correlated-subquery, sqld-top-n-hierarchical-pivot
 
 ### Programming › Design Patterns (`programming/design-patterns`)
 
@@ -2664,7 +2674,7 @@
 #### `network-troubleshooting-by-layer` — 계층별로 장애 좁히기: 아래에서 위로
 
 - 요약: 접속이 안 된다는 한 줄을 curl -v로 좁힌 뒤 링크, 경로, 이웃, 경로 끝, 이름, 포트, TLS, HTTP 순서로 확인한다. 칸마다 칠 명령과 출력에서 볼 곳, 흔한 오해를 실제 출력으로 정리한다.
-- 태그: Network, Linux, Troubleshooting, TCP/IP
+- 태그: tesla, Network, Linux, Troubleshooting, TCP/IP · 회사: tesla
 - 키워드: 장애 좁히기, mtr, tracepath, openssl s_client
 - 길이: 696줄
 - 소제목: 명령을 어디서 치는지부터 정한다 / 먼저 curl 한 번으로 어디서 멈췄는지 본다 / 링크가 살아 있는지 / 내 주소와 나갈 길 / 다음 칸의 MAC을 얻었는지 / 목적지까지 닿는지 / 이름이 맞는 주소로 풀리는지 / 포트가 열려 있는지 / TLS가 맺어지는지 / HTTP가 기대한 답을 주는지 / 갈림길을 한 장으로 / 확인하다가 흔히 하는 실수 / 처음 실패한 칸이 답이다 / 면접에서 나올 만한 질문
@@ -3368,7 +3378,7 @@
 - 소제목: 작은 쇼핑몰 테이블로 시작한다 / 이어 붙인 문자열은 코드가 된다 / UNION으로 다른 데이터를 끌어낸다 / 화면에 아무것도 안 떠도 시간으로 캔다 / 파라미터 바인딩이 코드와 데이터를 가른다 / 바인딩으로 못 막는 자리, 식별자 / 최소 권한으로 피해를 가둔다 / 실제로 SQL 주입을 만나는 순간 / 면접에서 나올 만한 질문
 - 직접 링크 →: xss, sql-basics, postgres-roles-security
 - 키워드 백링크 →: upper-layers-session-presentation-app
-- 이 글로 오는 글 ←: ddos-protection, encryption-at-rest, js-equality-coercion, postgres-roles-security, sql-filtering-operators, waf, xss
+- 이 글로 오는 글 ←: ddos-protection, encryption-at-rest, js-equality-coercion, postgres-roles-security, sql-filtering-operators, sql-study-path, waf, xss
 
 #### `ssrf` — SSRF: 서버를 시켜 내부 주소를 부르게 하는 공격
 
@@ -3452,7 +3462,7 @@
 #### `ci-cd-basics` — CI/CD의 뼈대: 지속적 통합, 전달, 배포와 한 번 빌드한 아티팩트
 
 - 요약: 스테이징에서 확인한 커밋을 운영에서 다시 빌드했다가 다른 프로그램이 나간 일에서 출발해, 지속적 통합·전달·배포의 차이, 한 번 빌드해 digest로 승격하는 흐름, 머지 큐, 플레이키 테스트, DORA 지표를 act로 로컬에서 돌린 파이프라인과 함께 정리한다.
-- 태그: CI/CD, DevOps, Git, Troubleshooting
+- 태그: tesla, CI/CD, DevOps, Git, Troubleshooting · 회사: tesla
 - 키워드: 지속적 통합, 지속적 전달, DORA 지표, 플레이키 테스트
 - 길이: 447줄
 - 소제목: 세 단어가 가리키는 범위 / 커밋 하나가 운영까지 가는 길 / 한 번만 빌드하고 승격한다 / 환경은 무엇을 확인하려고 두나 / 합치는 주기가 파이프라인을 정한다 / 가끔 실패하는 테스트 / 파이프라인의 속도를 재는 네 가지 숫자 / 파이프라인이 느려지는 자리 / 배포가 깨졌을 때 파이프라인에서 먼저 볼 것 / 같은 커밋이 아니라 같은 파일 / 면접에서 나올 만한 질문
@@ -3463,7 +3473,7 @@
 #### `feature-flags` — 피처 플래그 운영: 평가 규칙, 설정 배달, OpenFeature, 정리까지
 
 - 요약: 킬 스위치를 내렸는데 서버 일부만 늦게 따라온 장면에서 시작해, 규칙 평가 순서, 폴링과 스트리밍으로 설정이 닿는 길, 플래그 서비스 장애 때의 기본값, 클라이언트 평가의 노출 문제, OpenFeature, 조합 테스트와 오래된 플래그 정리를 다룬다.
-- 태그: Feature Flag, CI/CD, DevOps, Resilience
+- 태그: tesla, Feature Flag, CI/CD, DevOps, Resilience · 회사: tesla
 - 키워드: OpenFeature, 플래그 평가, 타기팅 규칙
 - 길이: 418줄
 - 소제목: 네 종류의 플래그는 운영 방식이 다르다 / 규칙은 위에서부터 하나씩 / 설정은 어떻게 서버에 닿나 / 플래그 서비스가 죽으면 / 서버에서 평가할까, 브라우저에서 평가할까 / 벤더에 묶이지 않게 OpenFeature / 플래그가 늘면 테스트할 조합이 폭발한다 / 플래그를 바꾸는 것도 운영 변경이다 / 다 켠 플래그를 지우는 일 / 스위치 하나 뒤에 있는 시스템 / 면접에서 나올 만한 질문
@@ -3496,7 +3506,7 @@
 #### `rollback-strategy` — 롤백 전략: 되돌릴 수 있는 것과 없는 것, 자동 롤백
 
 - 요약: rollout undo로 코드는 돌아왔는데 컬럼 이름이 바뀐 DB 때문에 다시 실패한 일에서 출발해, 롤백과 롤 포워드 판단, 스키마·메시지·부작용처럼 되돌릴 수 없는 것, down 마이그레이션의 위험, burn rate 기준 자동 롤백을 실습과 함께 정리한다.
-- 태그: CI/CD, Kubernetes, PostgreSQL, Resilience, DevOps
+- 태그: tesla, CI/CD, Kubernetes, PostgreSQL, Resilience, DevOps · 회사: tesla
 - 키워드: 롤 포워드, 자동 롤백
 - 길이: 398줄
 - 소제목: 롤백할까, 고쳐서 내보낼까 / 되돌릴 수 있는 것과 없는 것 / 롤백했더니 DB가 맞지 않는다 / down 마이그레이션이 지우는 것 / 큐에 남은 새 형식의 메시지 / 쿠버네티스에서 되돌리기 / 사람보다 먼저 되돌리게 하기 / 되돌리기가 실패하는 자리 / 되돌릴 수 있게 만드는 것이 먼저다 / 면접에서 나올 만한 질문
@@ -3647,7 +3657,7 @@
 #### `iac-basics` — IaC 기본 개념: 선언형, state, 불변 인프라와 조정 루프
 
 - 요약: 손으로 고친 서버가 서로 달라지는 문제에서 출발해 명령형 스크립트와 선언형 수렴의 차이, 멱등성, state가 필요한 이유, 도구가 읽지 못하는 것은 관리하지 못한다는 한계, 가변과 불변 인프라, 한 번 맞추는 도구와 계속 맞추는 조정 루프를 직접 확인한다. Terraform, Pulumi, CloudFormation, Ansible을 고르는 기준도 정리한다.
-- 태그: IaC, Terraform, DevOps, GitOps, Linux
+- 태그: tesla, IaC, Terraform, DevOps, GitOps, Linux · 회사: tesla
 - 키워드: 선언형 인프라, 불변 인프라, 조정 루프, 구성 드리프트, Pulumi
 - 길이: 570줄
 - 소제목: 손으로 만든 서버는 서로 조금씩 다르다 / 스크립트도 코드인데 무엇이 다른가 / 원하는 모습을 적고 차이만 메운다 / 차이를 계산하려면 기억이 필요하다 / 도구가 읽지 못하는 것은 관리하지 못한다 / 고쳐 쓸까, 새로 갈아 끼울까 / 한 번 맞추는 도구와 계속 맞추는 도구 / 도구를 고르는 기준 / 코드로 바꾸면 리뷰할 수 있다 / IaC가 오히려 사고를 키우는 순간 / 같은 결과를 몇 번이고 만들 수 있게 / 면접에서 나올 만한 질문
@@ -3658,7 +3668,7 @@
 #### `terraform-basics` — Terraform 기본: plan, apply, state와 잠금
 
 - 요약: 콘솔에서 연 규칙을 아무도 설명하지 못하는 상황에서 출발해 프로바이더와 리소스, plan이 비교하는 세 가지, 교체를 뜻하는 기호, state 파일에 든 것과 git에 넣지 않는 이유, drift, state 명령, 원격 백엔드와 잠금, force-unlock의 위험을 실제 출력으로 따라간다.
-- 태그: Terraform, IaC, DevOps, AWS
+- 태그: tesla, Terraform, IaC, DevOps, AWS · 회사: tesla
 - 키워드: Terraform, terraform plan, state 파일, force-unlock
 - 길이: 665줄
 - 소제목: 콘솔 대신 코드로 적는 이유 / 프로바이더와 리소스 / plan은 세 가지를 맞대 본다 / 기호 하나가 다운타임을 말한다 / state 파일 안에 든 것 / state를 git에 넣지 않는 이유 / 콘솔에서 고친 것은 drift가 된다 / state를 손보는 명령 / 원격 백엔드로 옮기기 / 두 사람이 동시에 apply하면 / force-unlock을 치기 전에 / 현장에서 state 때문에 막히는 순간 / 기억은 state가, 판단은 plan이 / 면접에서 나올 만한 질문
@@ -4442,7 +4452,7 @@
 #### `alerting` — 알림 설계: 증상에 걸고, 묶고, 누르고, 런북을 단다
 
 - 요약: 사람을 깨울 알림과 대시보드에 둘 숫자를 가르는 기준을 세우고, Prometheus 규칙의 for가 창과 더해져 울리는 시점을 promtool로 재 본다. Alertmanager의 묶기, 누르기, 잠재우기와 페이지·티켓 라우팅, 알림 피로를 세는 법까지 실제 출력으로 따라간다.
-- 태그: Observability, DevOps, Troubleshooting, Linux
+- 태그: tesla, Observability, DevOps, Troubleshooting, Linux · 회사: tesla
 - 키워드: Alertmanager, inhibit_rules, keep_firing_for, 알림 피로, runbook_url
 - 길이: 593줄
 - 소제목: 알림 하나가 사람을 깨우는 값 / 증상에 걸고 원인은 대시보드로 / 알림 규칙 한 줄씩 읽기 / for는 조건이 버텨야 하는 시간이다 / Prometheus가 울리고 Alertmanager가 전한다 / 묶고, 누르고, 잠재운다 / 페이지와 티켓을 가르는 기준 / 알림 피로는 세어 보면 보인다 / 런북 링크가 없는 알림은 반쪽이다 / 알림이 울리지 않는 장애 / 다시 새벽 세 시로 / 면접에서 나올 만한 질문
@@ -4453,7 +4463,7 @@
 #### `distributed-tracing` — 분산 추적: 요청 하나를 서비스 셋에 걸쳐 따라가기
 
 - 요약: Node.js 서비스 셋에 OpenTelemetry를 붙이고 Jaeger에 모인 trace에서 느린 구간을 찾아 고친다. traceparent 헤더로 문맥을 잇는 법, 전파가 조용히 끊기는 자리, 헤드와 꼬리 샘플링의 차이, 로그와 trace를 trace_id로 잇는 법까지 다룬다.
-- 태그: Observability, Distributed Systems, MSA, Node.js, PostgreSQL, Performance
+- 태그: tesla, Observability, Distributed Systems, MSA, Node.js, PostgreSQL, Performance · 회사: tesla
 - 키워드: 분산 추적, traceparent, 꼬리 샘플링, W3C Trace Context
 - 길이: 617줄
 - 소제목: trace는 나무, span은 가지 하나 / traceparent 한 줄 뜯어보기 / 세 서비스에 OpenTelemetry 붙이기 / 폭포 그림에서 느린 칸 찾기 / 병렬로 바꿔도 느린 칸은 그대로였다 / 헤더가 한 번 끊기면 추적도 끊긴다 / 다 저장할 수 없어서 고른다 / 로그와 trace를 trace_id로 잇는다 / 추적을 들일 때 정할 것 / 다시 주문 버튼으로 / 면접에서 나올 만한 질문
@@ -4475,7 +4485,7 @@
 #### `grafana-dashboards` — Grafana 대시보드: 데이터 소스, 변수, 코드로 관리하기, 알림
 
 - 요약: 덮어써서 사라진 대시보드와 All을 고르면 비는 패널에서 출발해 패널 쿼리가 지나는 길, $__interval과 $__rate_interval, 변수 치환과 =~, API·프로비저닝·Foundation SDK로 대시보드를 코드로 두는 법, Grafana 알림과 Alertmanager의 차이, Loki·Tempo로 건너가는 연결을 Grafana 12.2로 직접 확인한다.
-- 태그: Observability, DevOps, Troubleshooting, Performance
+- 태그: tesla, Observability, DevOps, Troubleshooting, Performance · 회사: tesla
 - 키워드: $__rate_interval, 대시보드 프로비저닝, Foundation SDK, grafonnet, Grafana 알림
 - 길이: 499줄
 - 소제목: 패널 한 칸이 그려지기까지 / $__interval과 $__rate_interval / 변수는 쿼리 문자열을 바꾸는 치환이다 / 질문 하나에 패널 하나를 화면에 옮기기 / 대시보드를 코드로 두는 세 가지 방법 / Grafana 알림과 Alertmanager / 지표에서 로그와 trace로 건너가기 / 대시보드가 말을 안 들을 때 / 그리는 도구, 묻는 쪽, 답하는 쪽 / 면접에서 나올 만한 질문
@@ -4541,7 +4551,7 @@
 #### `observability-basics` — 관측 가능성: 대시보드가 답하지 못하는 질문에 답하기
 
 - 요약: 미리 정한 질문에 답하는 모니터링과 처음 보는 질문에 답하는 관측 가능성의 차이를, 쿠폰 주문만 느린 장면으로 따라간다. 지표·로그·trace가 각자 잘하는 일과 비용, exemplar와 trace_id로 셋을 잇는 법, 레이블로 둘 것과 필드로 둘 것, OpenTelemetry와 Collector가 맡는 역할까지 다룬다.
-- 태그: Observability, DevOps, Distributed Systems, Node.js, Performance
+- 태그: tesla, Observability, DevOps, Distributed Systems, Node.js, Performance · 회사: tesla
 - 키워드: 관측 가능성, OpenTelemetry, exemplar, OTel Collector
 - 길이: 454줄
 - 소제목: 아는 질문과 모르는 질문 / 세 가지 신호는 서로 다른 질문에 답한다 / 쿠폰 하나가 p99를 끌어올렸다 / 지표의 튄 점에서 trace와 로그로 건너가기 / 무엇이든 레이블로 만들 수는 없다 / OpenTelemetry는 계측과 저장소 사이의 약속 / 어디서부터 들일까 / "가끔 느리다"는 문의를 받았을 때 / 다시 쿠폰 문의 앞에서 / 면접에서 나올 만한 질문
@@ -4552,7 +4562,7 @@
 #### `prometheus-basics` — Prometheus 내부 구조: 서비스 디스커버리, relabel, ServiceMonitor, TSDB, remote_write
 
 - 요약: ServiceMonitor 라벨 하나로 대상이 조용히 빠지는 장면에서 출발해 쿠버네티스 서비스 디스커버리와 relabel 규칙, operator가 만드는 설정, WAL과 2시간 블록·보존, federation과 remote_write, Thanos와 Mimir까지 Prometheus 3.5로 직접 확인한다.
-- 태그: Observability, Kubernetes, DevOps, Troubleshooting, Performance
+- 태그: tesla, Observability, Kubernetes, DevOps, Troubleshooting, Performance · 회사: tesla
 - 키워드: relabel_configs, ServiceMonitor, kube-prometheus-stack, remote_write, Thanos
 - 길이: 656줄
 - 소제목: 대상 찾기부터 저장까지 다섯 단계 / 쿠버네티스에서 대상을 찾는 법 / relabel은 라벨 묶음을 한 줄씩 고친다 / ServiceMonitor는 설정 파일을 만드는 재료다 / TSDB는 2시간 단위로 잘라 쌓는다 / 한 대를 넘어설 때: federation, remote_write, Thanos, Mimir / PromQL은 세 줄만 손에 익히면 된다 / 현장에서 Prometheus가 아플 때 / 찾고, 고치고, 쌓고, 넘긴다 / 면접에서 나올 만한 질문
@@ -4563,7 +4573,7 @@
 #### `sli-slo` — SLI와 SLO: 사용자가 겪은 일을 숫자 하나로
 
 - 요약: nginx 로그에서 가용성과 지연 SLI를 직접 계산해 서버 안에서 잰 숫자와 비교하고, 문턱 안 비율로 재는 지연 SLI, 아홉별 허용 장애 시간, 28일 굴러가는 창, SLA와 SLO의 차이를 정리한다.
-- 태그: Observability, DevOps, Nginx, Performance
+- 태그: tesla, Observability, DevOps, Nginx, Performance · 회사: tesla
 - 키워드: SLI, SLO, 지연 SLI, 굴러가는 창
 - 길이: 367줄
 - 소제목: 사용자가 겪은 일을 비율 하나로 / 좋은 요청과 유효한 요청을 정한다 / 어디서 재느냐가 숫자를 바꾼다 / 평균은 느린 사용자를 숨긴다 / 목표는 100%가 아니다 / 며칠 동안 재나: 굴러가는 창과 달력 월 / SLA는 바깥과의 약속, SLO는 안쪽의 목표 / SLO는 한 장의 문서로 남긴다 / SLO가 사용자와 어긋나는 순간 / 다시 99.57% 앞에서 / 면접에서 나올 만한 질문
@@ -4574,7 +4584,7 @@
 #### `structured-logging` — 구조화 로그: JSON 한 줄로 남기고 묻기
 
 - 요약: 로그를 문장이 아니라 필드가 있는 JSON 한 줄로 남기고, pino로 레벨·trace_id·개인정보 가리기를 다룬다. redact를 해 뒀는데 URL로 이메일이 샌 사례, 오류는 지키고 나머지만 trace_id로 고르는 샘플링, 갑자기 죽을 때 사라지는 버퍼, jq와 Loki LogQL로 묻는 법까지 따라간다.
-- 태그: Observability, Node.js, Security, DevOps, Troubleshooting
+- 태그: tesla, Observability, Node.js, Security, DevOps, Troubleshooting · 회사: tesla
 - 키워드: 구조화 로그, LogQL, pino, 로그 샘플링
 - 길이: 468줄
 - 소제목: 한 줄에 담을 것 / 레벨은 누가 깨어나야 하는지로 정한다 / 요청 하나에서 나온 줄을 모두 찾는다 / 개인정보는 남기기 전에 가린다 / 다 남길 수 없을 때 고르는 법 / 로그가 저장소까지 가는 길 / jq와 LogQL로 묻기 / 로그를 다듬을 때 자주 하는 실수 / 처음 그 줄을 다시 쓰면 / 면접에서 나올 만한 질문
@@ -4653,7 +4663,7 @@
 #### `postmortems` — 포스트모템: 비난 없이 쓰고, 닫히는 후속 조치로 끝낸다
 
 - 요약: 장애 뒤에 무엇을 남기고 어떻게 바꿀지 정하는 문서와 과정이다. 비난 없는 문장, 로그로 뽑는 타임라인, 다섯 번의 왜가 놓치는 가지와 기여 요인, 담당자와 날짜가 있는 후속 조치, 템플릿 한 장을 다룬다.
-- 태그: SRE, DevOps, Troubleshooting
+- 태그: tesla, SRE, DevOps, Troubleshooting · 회사: tesla
 - 키워드: 포스트모템, 비난 없는 포스트모템, 기여 요인, 다섯 번의 왜
 - 길이: 400줄
 - 소제목: 포스트모템이 남겨야 하는 것 / 누구도 탓하지 않는다는 말의 실제 뜻 / 언제 쓰고 언제까지 쓰나 / 타임라인은 로그에서 뽑는다 / 다섯 번의 왜가 놓치는 가지 / 기여 요인으로 다시 보기 / 닫히는 후속 조치와 안 닫히는 후속 조치 / 템플릿 한 장 / 초안을 기계로 먼저 걸러 본다 / 검토 회의에서 하는 일 / 후속 조치가 닫혔는지 세어 보기 / 포스트모템이 형식만 남는 순간 / 다시 석 달 뒤의 그 장애로 / 면접에서 나올 만한 질문
@@ -4664,7 +4674,7 @@
 #### `production-incidents` — 프로덕션 장애 대응: 감지, 분류, 완화, 해결
 
 - 요약: 알림이 울린 순간부터 종료까지의 순서를 재현한 장애의 실제 로그로 따라간다. 등급, 지휘자와 역할, 원인보다 먼저 하는 완화, 상황 공유 간격, 로그로 만든 타임라인을 다룬다.
-- 태그: SRE, DevOps, Troubleshooting, Observability, Node.js
+- 태그: tesla, SRE, DevOps, Troubleshooting, Observability, Node.js · 회사: tesla
 - 키워드: 장애 지휘자, 장애 등급, 장애 선언
 - 길이: 373줄
 - 소제목: 장애 하나가 지나가는 네 단계 / 재현한 장애: 재고 서비스가 느려지자 상품 API가 멈췄다 / 분류: 얼마나 나쁜지 정하고 지휘자를 세운다 / 역할을 나누면 손이 덜 겹친다 / 원인보다 완화가 먼저다 / 해결과 종료 선언 / 로그에서 타임라인을 만든다 / 상황 공유는 정해진 간격으로, 다음 시각을 적어서 / 장애 대응에서 흔히 하는 실수 / 타임라인에서 숫자 뽑기 / 서버 숫자가 멀쩡하던 그 알림으로 / 면접에서 나올 만한 질문
@@ -4732,7 +4742,7 @@
 #### `circuit-breaker` — 서킷 브레이커 안쪽: 창, 느린 호출, 반열림, 그리고 재시도와의 순서
 
 - 요약: 서킷 브레이커가 무엇을 세고 언제 판정하는지 직접 짠 상태 기계를 망가지는 서버 앞에 세워 따라간다. 건수 창과 시간 창, 느린 호출 비율, 반열림 시험 수, 의존성별 배치, 아웃라이어 감지·재시도와의 관계를 Resilience4j와 opossum 기본값과 함께 본다.
-- 태그: Resilience, Distributed Systems, System Design, Node.js
+- 태그: tesla, Resilience, Distributed Systems, System Design, Node.js · 회사: tesla
 - 키워드: 반열림, 느린 호출 비율, 아웃라이어 감지, 건수 기반 창
 - 길이: 536줄
 - 소제목: 세 상태와 두 개의 질문 / 몇 건 중의 실패율인가: 건수 창과 시간 창 / 실패보다 느림을 먼저 센다 / 반열림에서는 몇 개를 보내 보나 / 일부러 망가지는 서버 앞에 세워 보기 / 브레이커는 의존성마다 따로 둔다 / 헬스 체크, 아웃라이어 감지와 무엇이 다른가 / 재시도와 타임아웃 사이 어디에 끼우나 / 폴백은 무엇을 돌려주나 / 열린 회로를 현장에서 알아채는 법 / 상태 기계를 직접 짜 보기 / 숫자를 고르기 전에 트래픽부터 본다 / 면접에서 나올 만한 질문
@@ -4886,7 +4896,7 @@
 #### `microservices` — 모놀리스에서 마이크로서비스로
 
 - 요약: 서비스를 쪼개면 독립 배포와 팀 자율성을 얻는 대신 네트워크 호출, 분산 트랜잭션, 데이터 소유권 문제가 생긴다. 바운디드 컨텍스트로 경계를 긋는 법, 동기와 비동기 통신, 사가와 아웃박스, 모듈러 모놀리스와 스트랭글러 피그 이전까지 다룬다.
-- 태그: coupang, MSA, Distributed Systems, System Design · 회사: coupang
+- 태그: coupang, tesla, MSA, Distributed Systems, System Design · 회사: coupang, tesla
 - 키워드: 마이크로서비스, 모놀리스, 사가 패턴, 트랜잭셔널 아웃박스, 스트랭글러 피그
 - 길이: 390줄
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼갠 뒤 처음 받는 장애 문의 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
@@ -4952,7 +4962,7 @@
 #### `saga-pattern` — 사가 패턴 안쪽: 보상, 피벗, 재시작, 그리고 아웃박스
 
 - 요약: 사가는 단계마다 로컬 트랜잭션을 커밋하고 실패하면 반대 작업으로 상쇄한다. DB 세 개를 서비스 셋으로 두고 Node로 짠 오케스트레이터를 보상 도중에 죽여 보며 멱등한 보상, 피벗 단계 배치, 코레오그래피와의 차이, 의미상 잠금, 아웃박스 릴레이의 중복까지 따라간다.
-- 태그: System Design, Distributed Systems, MSA, Transaction, PostgreSQL, Node.js
+- 태그: tesla, System Design, Distributed Systems, MSA, Transaction, PostgreSQL, Node.js · 회사: tesla
 - 키워드: 보상 트랜잭션, 피벗 단계, 의미상 잠금
 - 길이: 437줄
 - 소제목: 되돌리지 않고 반대로 한다 / 단계는 세 종류로 나뉜다 / 지휘하는 쪽이 순서를 쥐는 오케스트레이션 / 보상 도중에 오케스트레이터가 죽으면 / 지휘자 없이 이벤트로 잇는 코레오그래피 / 중간 상태가 남에게 보인다 / 상태를 바꾸고 알리는 일을 한 번에: 아웃박스 / 워크플로 엔진에 맡길 때 / 사가가 꼬였을 때 현장에서 보는 것 / 사가가 약속하는 것과 하지 않는 것 / 면접에서 나올 만한 질문
@@ -7522,7 +7532,9 @@
 - split_clients → `canary-release`
 - SPOF → `high-availability`
 - Spring Modulith → `modular-monolith`
+- SQL 로드맵 → `sql-study-path`
 - SQL 주입 → `sql-injection`
+- SQL 학습 순서 → `sql-study-path`
 - SQL vs NoSQL → `sql-vs-nosql`
 - SQLite → `db-type-embedded`
 - SQLSTATE → `sql-basics`
@@ -7721,7 +7733,7 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (33%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 이름을, 스칼라)
+- `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (30%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 스칼라)
 - `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (29%: 연산자, 느려지는, sqld, 시험, 포인트)
@@ -7733,7 +7745,7 @@
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `server-sent-events` ↔ `long-polling` (26%: 붙잡는, 장애를, 만났을, 가장, nginx, 깊게, 재연결)
 - `animation-performance` ↔ `animation-patterns` (25%: 애니메이션, 움직임이, ux, frontend, animation, accessibility, 주기)
-- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (24%: 서브쿼리, 느려지는, sqld, 시험, 포인트)
+- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (25%: 서브쿼리, 느려지는, sqld, 시험, 포인트)
 - `db-index-pitfalls` ↔ `db-index-design` (24%: 100만, 인덱스, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (24%: 100만, 인덱스, 인덱스가, 인덱스를, index)
 - `sqld-set-operators` ↔ `sqld-null-functions` (24%: 행을, sqld, 시험, 포인트)
@@ -7751,7 +7763,6 @@
 - `sqld-type-conversion` ↔ `sqld-rollup-cube-grouping-sets` (21%: 적는다, sqld, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-group-by-having` (21%: sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-joins` (21%: sqld, 시험, 포인트, oracle)
-- `animation-patterns` ↔ `loading-patterns` (21%: 누른, ux, frontend, accessibility, 이름을, 알면, 부탁이)
 - `sd-news-feed-retrieval` ↔ `sd-news-feed-publishing` (20%: 피드, 글이, 넣으면, 글을, 문의가, 오면, 뉴스)
 - `ansible-network-automation` ↔ `git-ignore-config` (20%: diff, 설정, 파일은, 전체를)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
@@ -7761,6 +7772,7 @@
 - `failover` ↔ `redis-replication-sentinel` (19%: 비동기, 복제는, 장애, 조치)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `sd-interview-framework` ↔ `sd-db-replication-intro` (19%: 곳을, 수백만, 사용자로, 키우기, 나누기)
+- `sd-interview-framework` ↔ `sd-split-web-and-db` (19%: 나눈다, 수백만, 사용자로, 키우기, 나누기)
 
 ## 서로 이어진 글
 

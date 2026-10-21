@@ -465,6 +465,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "sql-query-rewrite": 5,
   "sql-query-tuning": 5,
   "sql-select-where-null": 6,
+  "sql-study-path": 5,
   "sql-subqueries-exists-lateral": 7,
   "sql-views-materialized": 6,
   "sql-vs-nosql": 6,

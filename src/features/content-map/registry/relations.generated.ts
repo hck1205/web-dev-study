@@ -2,6 +2,39 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sql-study-path": {
+    "links": [
+      "sql-basics",
+      "sql-select-where-null",
+      "sql-filtering-operators",
+      "sqld-null-functions",
+      "sql-aggregation-pitfalls",
+      "sqld-group-by-having",
+      "sqld-rollup-cube-grouping-sets",
+      "sql-joins-in-practice",
+      "sqld-joins",
+      "sqld-set-operators",
+      "sql-subqueries-exists-lateral",
+      "sqld-subquery-set-operators",
+      "sqld-correlated-subquery",
+      "sql-cte-recursive",
+      "sql-window-functions-pg",
+      "sqld-window-functions",
+      "sqld-top-n-hierarchical-pivot",
+      "sql-logical-order",
+      "sql-interview-problems",
+      "sql-case-when",
+      "sql-views-materialized",
+      "sql-insert-update-delete",
+      "sql-query-tuning",
+      "sql-query-rewrite",
+      "sql-batch-timeout-pool",
+      "sql-injection"
+    ],
+    "mentions": [
+      "postgres-getting-started"
+    ]
+  },
   "architecture-patterns-overview": {
     "links": [
       "monolith-architecture",

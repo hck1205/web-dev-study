@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sql-study-path",
+    title: "SQL 공부 순서: 쿼리 하나를 여섯 단계로 키우며 보는 SELECT부터 윈도 함수까지",
+    summary: "회원 넷, 주문 일곱으로 쿼리 하나를 SELECT, WHERE, GROUP BY, JOIN, 서브쿼리, 윈도 함수 순서로 키운다. 갈래마다 자주 틀리는 자리를 실제 psql 출력으로 짚고 자세한 글로 넘긴다.",
+    topic: "programming/database/sql",
+    tags: ["SQL", "PostgreSQL", "Database"],
+    date: "2026-10-23",
+    keywords: ["SQL 학습 순서", "SQL 로드맵"],
+  },
+  {
     slug: "architecture-patterns-overview",
     title: "백엔드 아키텍처 패턴 고르기: 배포, 코드, 데이터 세 축으로 나눠 보기",
     summary: "모놀리스, 헥사고날, CQRS 같은 패턴은 배포 구조, 코드 구조, 데이터 흐름이라는 서로 다른 질문에 답한다. 축을 나눠 패턴이 어떻게 겹치는지 보고, 팀 수·배포 대기·함께 바뀌는 비율·부하 편차로 다음 단계를 고르는 기준과 분산 모놀리스, CQRS 남용 같은 실수를 정리한다.",
@@ -849,6 +858,7 @@ const ENTRIES: Post[] = [
     tags: ["Architecture", "MSA", "System Design", "PostgreSQL", "Node.js"],
     date: "2026-10-22",
     keywords: ["변경 결합도", "브랜치 바이 앱스트랙션", "병행 실행", "데이터 대조"],
+    companies: ["tesla"],
   },
   {
     slug: "ddd-bounded-context",
@@ -1029,6 +1039,7 @@ const ENTRIES: Post[] = [
     tags: ["Architecture", "Messaging", "Backend", "PostgreSQL", "Transaction"],
     date: "2026-10-22",
     keywords: ["아웃박스 릴레이", "이중 쓰기"],
+    companies: ["tesla"],
   },
   {
     slug: "event-sourcing",
@@ -1317,6 +1328,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "DevOps", "Troubleshooting", "Performance"],
     date: "2026-10-22",
     keywords: ["$__rate_interval", "대시보드 프로비저닝", "Foundation SDK", "grafonnet", "Grafana 알림"],
+    companies: ["tesla"],
   },
   {
     slug: "prometheus-basics",
@@ -1326,6 +1338,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "Kubernetes", "DevOps", "Troubleshooting", "Performance"],
     date: "2026-10-22",
     keywords: ["relabel_configs", "ServiceMonitor", "kube-prometheus-stack", "remote_write", "Thanos"],
+    companies: ["tesla"],
   },
   {
     slug: "gitops-argocd-vs-flux",
@@ -1731,6 +1744,7 @@ const ENTRIES: Post[] = [
     tags: ["IaC", "Terraform", "DevOps", "GitOps", "Linux"],
     date: "2026-10-21",
     keywords: ["선언형 인프라", "불변 인프라", "조정 루프", "구성 드리프트", "Pulumi"],
+    companies: ["tesla"],
   },
   {
     slug: "dependency-hell",
@@ -1794,6 +1808,7 @@ const ENTRIES: Post[] = [
     tags: ["SRE", "DevOps", "Troubleshooting"],
     date: "2026-10-21",
     keywords: ["포스트모템", "비난 없는 포스트모템", "기여 요인", "다섯 번의 왜"],
+    companies: ["tesla"],
   },
   {
     slug: "on-call",
@@ -1812,6 +1827,7 @@ const ENTRIES: Post[] = [
     tags: ["SRE", "DevOps", "Troubleshooting", "Observability", "Node.js"],
     date: "2026-10-21",
     keywords: ["장애 지휘자", "장애 등급", "장애 선언"],
+    companies: ["tesla"],
   },
   {
     slug: "chaos-engineering",
@@ -1911,6 +1927,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "DevOps", "Nginx", "Performance"],
     date: "2026-10-21",
     keywords: ["SLI", "SLO", "지연 SLI", "굴러가는 창"],
+    companies: ["tesla"],
   },
   {
     slug: "alerting",
@@ -1920,6 +1937,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "DevOps", "Troubleshooting", "Linux"],
     date: "2026-10-21",
     keywords: ["Alertmanager", "inhibit_rules", "keep_firing_for", "알림 피로", "runbook_url"],
+    companies: ["tesla"],
   },
   {
     slug: "cache-invalidation",
@@ -2055,6 +2073,7 @@ const ENTRIES: Post[] = [
     tags: ["CI/CD", "Kubernetes", "PostgreSQL", "Resilience", "DevOps"],
     date: "2026-10-21",
     keywords: ["롤 포워드", "자동 롤백"],
+    companies: ["tesla"],
   },
   {
     slug: "feature-flags",
@@ -2064,6 +2083,7 @@ const ENTRIES: Post[] = [
     tags: ["Feature Flag", "CI/CD", "DevOps", "Resilience"],
     date: "2026-10-21",
     keywords: ["OpenFeature", "플래그 평가", "타기팅 규칙"],
+    companies: ["tesla"],
   },
   {
     slug: "build-caching",
@@ -2082,6 +2102,7 @@ const ENTRIES: Post[] = [
     tags: ["CI/CD", "DevOps", "Git", "Troubleshooting"],
     date: "2026-10-21",
     keywords: ["지속적 통합", "지속적 전달", "DORA 지표", "플레이키 테스트"],
+    companies: ["tesla"],
   },
   {
     slug: "structured-logging",
@@ -2091,6 +2112,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "Node.js", "Security", "DevOps", "Troubleshooting"],
     date: "2026-10-21",
     keywords: ["구조화 로그", "LogQL", "pino", "로그 샘플링"],
+    companies: ["tesla"],
   },
   {
     slug: "metrics-types",
@@ -2118,6 +2140,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "DevOps", "Distributed Systems", "Node.js", "Performance"],
     date: "2026-10-21",
     keywords: ["관측 가능성", "OpenTelemetry", "exemplar", "OTel Collector"],
+    companies: ["tesla"],
   },
   {
     slug: "scaling-horizontal-vertical",
@@ -2298,6 +2321,7 @@ const ENTRIES: Post[] = [
     tags: ["Backend", "API", "HTTP", "Security", "Resilience"],
     date: "2026-10-21",
     keywords: ["웹훅", "웹훅 서명", "재전송 공격"],
+    companies: ["tesla"],
   },
   {
     slug: "cron-jobs",
@@ -2343,6 +2367,7 @@ const ENTRIES: Post[] = [
     tags: ["Observability", "Distributed Systems", "MSA", "Node.js", "PostgreSQL", "Performance"],
     date: "2026-10-20",
     keywords: ["분산 추적", "traceparent", "꼬리 샘플링", "W3C Trace Context"],
+    companies: ["tesla"],
   },
   {
     slug: "network-flow-logs",
@@ -2631,6 +2656,7 @@ const ENTRIES: Post[] = [
     tags: ["Terraform", "IaC", "DevOps", "AWS"],
     date: "2026-10-21",
     keywords: ["Terraform", "terraform plan", "state 파일", "force-unlock"],
+    companies: ["tesla"],
   },
   {
     slug: "linux-grep-awk-sed",
@@ -2712,6 +2738,7 @@ const ENTRIES: Post[] = [
     tags: ["Messaging", "Backend", "Distributed Systems", "PostgreSQL", "Transaction"],
     date: "2026-10-20",
     keywords: ["정확히 한 번", "멱등 프로듀서", "인박스 테이블", "트랜잭셔널 프로듀서"],
+    companies: ["tesla"],
   },
   {
     slug: "rabbitmq-basics",
@@ -2721,6 +2748,7 @@ const ENTRIES: Post[] = [
     tags: ["Messaging", "Backend", "Troubleshooting", "Distributed Systems"],
     date: "2026-10-20",
     keywords: ["RabbitMQ", "익스체인지", "쿼럼 큐", "데드 레터 익스체인지"],
+    companies: ["tesla"],
   },
   {
     slug: "kafka-basics",
@@ -2730,6 +2758,7 @@ const ENTRIES: Post[] = [
     tags: ["Messaging", "Backend", "Distributed Systems", "Troubleshooting"],
     date: "2026-10-20",
     keywords: ["Kafka", "컨슈머 랙", "리밸런싱", "min.insync.replicas", "로그 컴팩션"],
+    companies: ["tesla"],
   },
   {
     slug: "event-driven-architecture",
@@ -2757,6 +2786,7 @@ const ENTRIES: Post[] = [
     tags: ["System Design", "Distributed Systems", "MSA", "Transaction", "PostgreSQL", "Node.js"],
     date: "2026-10-21",
     keywords: ["보상 트랜잭션", "피벗 단계", "의미상 잠금"],
+    companies: ["tesla"],
   },
   {
     slug: "distributed-transactions-2pc",
@@ -2883,6 +2913,7 @@ const ENTRIES: Post[] = [
     tags: ["Messaging", "Backend", "PostgreSQL", "Redis", "Troubleshooting"],
     date: "2026-10-21",
     keywords: ["데드 레터 큐", "DLQ", "독이 든 메시지", "maxReceiveCount", "redrive"],
+    companies: ["tesla"],
   },
   {
     slug: "pub-sub",
@@ -2901,6 +2932,7 @@ const ENTRIES: Post[] = [
     tags: ["Messaging", "Backend", "Redis", "PostgreSQL", "Distributed Systems"],
     date: "2026-10-21",
     keywords: ["가시성 타임아웃", "경쟁하는 컨슈머", "큐 깊이", "BLMOVE"],
+    companies: ["tesla"],
   },
   {
     slug: "k8s-pv-pvc",
@@ -3009,6 +3041,7 @@ const ENTRIES: Post[] = [
     tags: ["Resilience", "Distributed Systems", "System Design", "Node.js"],
     date: "2026-10-20",
     keywords: ["반열림", "느린 호출 비율", "아웃라이어 감지", "건수 기반 창"],
+    companies: ["tesla"],
   },
   {
     slug: "traffic-shaping-qos",
@@ -3180,6 +3213,7 @@ const ENTRIES: Post[] = [
     tags: ["API", "HTTP", "PostgreSQL", "Distributed Systems", "Backend"],
     date: "2026-10-20",
     keywords: ["Idempotent-Replayed", "키 선점", "멱등성 키 저장소"],
+    companies: ["tesla"],
   },
   {
     slug: "rate-limiting-in-practice",
@@ -3459,6 +3493,7 @@ const ENTRIES: Post[] = [
     tags: ["Redis", "Database", "Distributed Systems"],
     date: "2026-10-16",
     keywords: ["Redis Cluster", "해시 슬롯", "MOVED"],
+    companies: ["tesla"],
   },
   {
     slug: "redis-replication-sentinel",
@@ -3576,6 +3611,7 @@ const ENTRIES: Post[] = [
     tags: ["Network", "Linux", "Troubleshooting", "TCP/IP"],
     date: "2026-10-18",
     keywords: ["장애 좁히기", "mtr", "tracepath", "openssl s_client"],
+    companies: ["tesla"],
   },
   {
     slug: "osi-in-practice",
@@ -4116,6 +4152,7 @@ const ENTRIES: Post[] = [
     tags: ["Database", "SQL", "PostgreSQL", "SQLD", "Transaction", "Concurrency"],
     date: "2026-10-17",
     keywords: ["격리 수준", "MVCC", "갱신 손실", "쓰기 왜곡"],
+    companies: ["tesla"],
   },
   {
     slug: "db-replication-sharding",
@@ -4143,6 +4180,7 @@ const ENTRIES: Post[] = [
     tags: ["Database", "SQL", "PostgreSQL", "Index", "Performance"],
     date: "2026-10-17",
     keywords: ["Index Only Scan", "B-tree 인덱스", "Bitmap Heap Scan", "클러스터드 인덱스"],
+    companies: ["tesla"],
   },
   {
     slug: "sql-query-tuning",
@@ -4188,6 +4226,7 @@ const ENTRIES: Post[] = [
     tags: ["Redis", "Database", "Cache", "Performance", "Linux"],
     date: "2026-10-16",
     keywords: ["maxmemory", "축출 정책", "allkeys-lru", "메모리 단편화"],
+    companies: ["tesla"],
   },
   {
     slug: "redis-persistence-ha",
@@ -4197,6 +4236,7 @@ const ENTRIES: Post[] = [
     tags: ["Redis", "Database", "Linux"],
     date: "2026-10-16",
     keywords: ["RDB 스냅샷", "AOF", "appendfsync"],
+    companies: ["tesla"],
   },
   {
     slug: "proxy-reverse-proxy",
@@ -4215,6 +4255,7 @@ const ENTRIES: Post[] = [
     tags: ["Redis", "Database", "NoSQL", "Cache", "Performance"],
     date: "2026-10-16",
     keywords: ["Redis", "Memcached", "I/O 다중화", "분산 락"],
+    companies: ["tesla"],
   },
   {
     slug: "caching-strategies",
@@ -4493,7 +4534,7 @@ const ENTRIES: Post[] = [
     tags: ["Elasticsearch", "Search", "Database"],
     date: "2026-10-16",
     keywords: ["Elasticsearch", "역색인", "BM25", "형태소 분석기", "search_after"],
-    companies: ["coupang"],
+    companies: ["coupang", "tesla"],
   },
   {
     slug: "mongodb-document-model",
@@ -4533,7 +4574,7 @@ const ENTRIES: Post[] = [
     tags: ["MSA", "Distributed Systems", "System Design"],
     date: "2026-10-16",
     keywords: ["마이크로서비스", "모놀리스", "사가 패턴", "트랜잭셔널 아웃박스", "스트랭글러 피그"],
-    companies: ["coupang"],
+    companies: ["coupang", "tesla"],
   },
   {
     slug: "resilience-patterns",

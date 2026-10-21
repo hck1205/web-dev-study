@@ -462,6 +462,7 @@ import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQL_STUDY_PATH } from "./sql-study-path";
 import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
 import { SQL_VIEWS_MATERIALIZED } from "./sql-views-materialized";
 import { SQL_VS_NOSQL } from "./sql-vs-nosql";
@@ -980,6 +981,7 @@ export const QUESTION_SETS = [
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
+  SQL_STUDY_PATH,
   SQL_SUBQUERIES_EXISTS_LATERAL,
   SQL_VIEWS_MATERIALIZED,
   SQL_VS_NOSQL,
