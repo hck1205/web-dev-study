@@ -1,0 +1,450 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("traffic-shaping-qos");
+
+밤 11시에 사무실 NAS가 클라우드로 백업을 올리기 시작하면, 같은 회선으로 붙어 있던 SSH 세션이 글자 하나 칠 때마다 반 박자씩 늦는다. 회선 사용률 그래프는 꽉 찬 100%로 평평하다. 회선이 꽉 찼으니 느린 게 당연해 보이지만, SSH가 쓰는 대역폭은 몇 KB/s도 안 된다. 느려진 건 대역폭이 아니라 줄이다.
+
+병목 구간에서는 누군가 기다리거나 버려진다. 그 순서와 몫을 정하는 일이 트래픽 셰이핑과 QoS다. 이 글은 리눅스 `tc`로 그 줄을 직접 만들어 보며 셰이핑과 폴리싱의 차이, 큐 길이가 지연이 되는 bufferbloat, HTB로 몫을 나누는 법, DSCP 표시, 들어오는 트래픽을 다루는 법을 측정값과 함께 본다. 지연·대역폭·처리량이라는 숫자 자체는 [지연, 대역폭, 처리량 글](/posts/latency-bandwidth-throughput)에서 정리했다. 요청 수를 세서 거절하는 API 레벨의 제한은 [속도 제한 알고리즘 글](/posts/rate-limiting-algorithms)이 다루고, 이 글은 패킷과 바이트 레벨을 다룬다.
+
+실험은 Ubuntu 24.04 컨테이너에서 network namespace로 클라이언트 — 중간 라우터 — 서버를 잇고, 중간 라우터의 클라이언트 쪽 문(`vcm`)을 병목으로 삼았다. 이 컨테이너의 커널에는 `netem`, `fq_codel`, `cake`, `police` 같은 모듈이 빠져 있어서, 지연은 중간에서 패킷을 잡아 두는 작은 TUN 프로그램으로 만들었고, 폴리싱은 iptables `hashlimit`로 대신했다. 이 두 가지가 아닌 출력은 모두 커널의 `tbf`, `htb`, `ifb`로 찍었다.
+
+## 병목에서는 누군가 기다리거나 버려진다
+
+패킷이 들어오는 속도가 나가는 속도보다 빠른 곳이 병목이다. 1Gbps 사무실 망에서 100Mbps 인터넷 회선으로 나가는 라우터, 10Gbps 서버에서 1Gbps 업링크로 나가는 스위치 포트가 그렇다. 넘치는 패킷은 둘 중 하나를 겪는다. 줄을 서서 기다리거나(큐), 버려진다(드롭).
+
+셰이핑(shaping)은 정한 속도를 넘는 패킷을 줄 세워 두었다가 속도에 맞춰 내보낸다. 폴리싱(policing)은 넘는 패킷을 그 자리에서 버린다. 둘 다 "초당 얼마까지"를 지키게 만들지만, 넘친 패킷이 기다리느냐 사라지느냐가 다르다. 아래 그림에서 다음을 누르면 같은 몰림이 두 방식에서 어떻게 처리되는지 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={236}
+  caption="같은 몰림을 셰이퍼는 줄 세우고, 폴리서는 버린다"
+  zones={[
+    { id: "edge", label: "병목 (10Mbps)", x: 130, y: 6, w: 140, h: 222, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "src", label: "backup", sub: "1Gbps로 보냄", x: 60, y: 118, icon: "server", w: 100 },
+    { id: "shaper", label: "shaper", sub: "큐 + 토큰", x: 200, y: 66, icon: "router" },
+    { id: "policer", label: "policer", sub: "토큰만", x: 200, y: 176, icon: "firewall" },
+    { id: "dst", label: "remote", sub: "클라우드", x: 340, y: 118, icon: "internet", w: 100 },
+  ]}
+  links={[
+    { from: "src", to: "shaper" },
+    { from: "src", to: "policer" },
+    { from: "shaper", to: "dst" },
+    { from: "policer", to: "dst" },
+  ]}
+  steps={[
+    { path: ["src", "shaper"], packet: "burst", title: "몰림이 셰이퍼에 닿는다", detail: "보내는 쪽은 1Gbps로 한꺼번에 쏟아낸다. 셰이퍼는 토큰이 있는 만큼만 바로 내보내고 나머지는 큐에 넣는다." },
+    { path: ["shaper", "dst"], packet: "10Mbps", highlight: ["shaper"], title: "큐에서 속도를 맞춰 나간다", detail: "토큰이 쌓이는 속도대로 하나씩 꺼낸다. 패킷은 늦게 도착할 뿐 거의 사라지지 않는다. 대가는 큐에서 기다린 시간, 곧 지연이다." },
+    { path: ["src", "policer"], packet: "burst", blocked: true, title: "폴리서는 넘친 만큼 버린다", detail: "토큰이 없는 패킷은 기다리지 않고 바로 버려진다. 지연은 늘지 않지만 손실이 생긴다." },
+    { path: ["dst", "policer", "src"], packet: "dupACK", title: "TCP가 손실을 알아챈다", detail: "받는 쪽이 빠진 번호를 알려 오면 보내는 쪽은 다시 보내고 혼잡 창을 줄인다. 버려진 만큼 회선을 두 번 쓴다." },
+    { path: ["src", "policer", "dst"], packet: "retx", title: "다시 보내고, 또 넘치고", detail: "창을 줄였다가 다시 키우다 또 넘치는 일이 반복된다. 같은 평균 속도라도 폴리싱 쪽이 재전송이 훨씬 많다." },
+  ]}
+/>
+
+## 셰이핑은 기다리게 하고, 폴리싱은 버린다
+
+같은 10Mbps 한도를 두 방식으로 걸고, 왕복 50ms 길에서 서버가 클라이언트로 10초 동안 보내게 했다. 혼잡 제어는 리눅스 기본인 CUBIC으로 고정했다.
+
+```bash
+# 폴리싱: 중간 라우터에서 클라이언트로 가는 TCP가 약 10Mbps(1250kb/s)를 넘으면 버린다
+sudo iptables -A FORWARD -o vcm -p tcp -m hashlimit --hashlimit-name pol \
+  --hashlimit-mode dstip --hashlimit-above 1250kb/s --hashlimit-burst 1250kb -j DROP
+
+# 셰이핑: 같은 문에 tbf로 10Mbps, 큐는 최대 50ms 분량
+sudo tc qdisc replace dev vcm root tbf rate 10mbit burst 32kb latency 50ms
+
+# 클라이언트에서 받기
+iperf3 -c 10.10.2.2 -t 10 -R -C cubic
+```
+
+```text
+== RTT50 policed cubic
+[  5]   0.00-10.05  sec  16.8 MBytes  14.0 Mbits/sec  2131             sender
+[  5]   0.00-10.00  sec  12.8 MBytes  10.7 Mbits/sec                  receiver
+== RTT50 shaped tbf cubic
+[  5]   0.00-10.05  sec  12.0 MBytes  10.0 Mbits/sec   76             sender
+[  5]   0.00-10.00  sec  11.2 MBytes  9.44 Mbits/sec                  receiver
+```
+
+받은 양(receiver)은 비슷하다. 폴리싱 쪽이 조금 더 많은 건 hashlimit의 버스트를 1초 분량(iptables가 요구하는 최솟값)으로 둬서 처음에 한 번 더 받았기 때문이다. 차이는 보낸 양에 있다. 폴리싱에서 보내는 쪽은 16.8MB를 보냈고 그중 4MB, 약 24%가 버려져 다시 보내졌다(재전송 2131번). 셰이핑은 재전송 76번으로 보낸 만큼 거의 다 도착했다. 폴리서 앞쪽 구간은 버려질 패킷까지 실어 나르느라 4분의 1을 낭비한 셈이다.
+
+TCP 입장에서 보면 이렇다. 셰이퍼의 큐는 왕복 시간을 늘려서 "천천히 보내라"는 신호를 부드럽게 준다. 폴리서는 손실로만 신호를 주니 혼잡 창이 톱니처럼 늘었다 줄기를 반복한다. 버스트가 작은 폴리서일수록, 왕복 시간이 길수록 이 톱니가 심해져서 실제 처리량이 한도보다 한참 낮아진다.
+
+그런데도 폴리싱이 쓰이는 이유가 있다. 큐를 둘 메모리와 시간이 필요 없고, 받은 패킷에도 바로 적용할 수 있다. 통신사가 계약 속도를 넘는 트래픽을 들어오는 쪽에서 잘라 내는 것, 클라우드 인스턴스가 정해진 대역폭이나 초당 패킷 수를 넘으면 버리는 것이 폴리싱이다. AWS의 ENA 드라이버에서는 이 드롭이 `ethtool -S`의 카운터로 보인다.
+
+```bash
+# AWS EC2(ENA)에서 인스턴스 한도를 넘어 버려진 패킷 수
+ethtool -S eth0 | grep -E 'allowance_exceeded'
+```
+
+이 카운터(`bw_out_allowance_exceeded`, `pps_allowance_exceeded` 등)가 오르고 있다면 앱이나 OS가 아니라 인스턴스 한도에서 잘리고 있다는 뜻이다. 보내는 쪽에서 미리 셰이핑해 그 한도 안쪽으로 맞추면 재전송 낭비를 줄일 수 있다.
+
+## tbf 한 줄 읽기
+
+`tbf`(Token Bucket Filter)는 리눅스에서 가장 단순한 셰이퍼다. 토큰이 정한 속도로 양동이에 쌓이고, 패킷은 자기 크기만큼 토큰을 써야 나갈 수 있다. 양동이 크기만큼은 한꺼번에 나갈 수 있고(버스트), 토큰이 모자라면 큐에서 기다린다. 버킷 개념 자체는 [속도 제한 알고리즘 글](/posts/rate-limiting-algorithms)의 토큰 버킷과 같다. 다른 점은 단위가 요청이 아니라 바이트이고, 넘친 패킷이 거절되지 않고 큐에서 기다린다는 것이다. 명령 한 줄의 조각을 눌러 보면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="tbf를 거는 명령 한 줄"
+  base="tc qdisc replace dev vcm root tbf"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "rate", value: "10mbit", display: "rate 10mbit", title: "토큰이 쌓이는 속도", description: "평균적으로 나갈 수 있는 속도다. tc에서 mbit은 초당 100만 비트, mbps는 초당 100만 바이트라 헷갈리기 쉽다. 10mbps라고 쓰면 80Mbps가 된다.", required: true },
+    { key: "burst", value: "32kb", display: "burst 32kb", title: "양동이 크기", description: "토큰을 최대 이만큼 모아 둘 수 있어서, 한가하다가 몰리면 이만큼은 속도 제한 없이 나간다. tc에서 kb는 1024바이트다. 너무 작으면 높은 속도를 내지 못하니, 대략 rate ÷ 타이머 주파수(HZ)보다 크게 둔다.", required: true },
+    { key: "latency", value: "50ms", display: "latency 50ms", title: "큐에서 기다릴 수 있는 최대 시간", description: "이만큼 기다려도 못 나갈 패킷은 받지 않고 버린다. tc는 이 값을 바이트 한도(limit)로 바꿔 넣는다. 대신 limit 95268처럼 바이트로 직접 쓸 수도 있다. 큐를 얼마나 깊게 둘지가 지연을 정한다." },
+  ]}
+/>
+
+tc가 `latency`를 큐 한도로 바꾸는 식은 대략 "속도 × 기다릴 시간 + 버스트"다. 아래 함수로 바이트 한도를 계산하게 만들어 보자. rate는 Mbit/s, latency는 ms, burst는 바이트다. 1Mbit은 1000000비트다.
+
+<CodePlayground
+  caption="tbf의 latency를 큐 한도(바이트)로 바꾸기"
+  functionName="tbfLimitBytes"
+  initialCode={`function tbfLimitBytes(rateMbit, latencyMs, burstBytes) {
+  // 초당 바이트 × 기다릴 시간(초) + 버스트, 정수로 반올림
+  return 0;
+}`}
+  solution={`function tbfLimitBytes(rateMbit, latencyMs, burstBytes) {
+  const bytesPerSec = (rateMbit * 1e6) / 8;
+  return Math.round((bytesPerSec * latencyMs) / 1000) + burstBytes;
+}`}
+  tests={[
+    { args: [10, 50, 32768], expected: 95268, label: "실험의 10mbit, 50ms, 32kb" },
+    { args: [10, 400, 32768], expected: 532768, label: "큐를 400ms로 깊게" },
+    { args: [100, 20, 65536], expected: 315536, label: "100mbit, 20ms, 64kb" },
+    { args: [1, 100, 1600], expected: 14100, label: "1mbit, 100ms, 1600B" },
+  ]}
+/>
+
+토큰과 큐가 실제로 어떻게 움직이는지 1ms 단위로 따라가 보면 이렇다. 1ms마다 토큰이 1250바이트(10Mbps) 쌓이고, 1500바이트 패킷 여섯 개가 한꺼번에 도착한다. 버스트는 3000바이트로 작게 잡았다.
+
+<AlgoTrace
+  caption="tbf: 토큰이 있으면 나가고, 없으면 큐에서 기다린다 (1ms마다 토큰 +1250B)"
+  memoryLabel="토큰 · 큐"
+  cells={["p1", "p2", "p3", "p4", "p5", "p6"]}
+  steps={[
+    { memory: ["토큰 3000", "큐 비어 있음"], caption: "한가한 동안 토큰이 양동이 크기 3000바이트까지 찼다." },
+    { pointer: 1, found: [0, 1], memory: ["토큰 0", "큐 p3 p4 p5 p6"], caption: "0ms: 여섯 개가 몰려왔다. 모아 둔 토큰으로 p1, p2는 바로 나간다. 버스트 덕분이다." },
+    { pointer: 2, memory: ["토큰 1250", "큐 p3 p4 p5 p6"], caption: "1ms: 토큰 1250. 1500바이트짜리 p3에는 아직 모자라 기다린다." },
+    { pointer: 2, found: [2], memory: ["토큰 1000", "큐 p4 p5 p6"], caption: "2ms: 토큰 2500이 되어 p3가 나간다. 남은 토큰 1000." },
+    { pointer: 3, found: [3], memory: ["토큰 750", "큐 p5 p6"], caption: "3ms: 2250이 되어 p4가 나간다. 토큰이 쌓이는 속도만큼만 하나씩 빠진다." },
+    { pointer: 5, found: [4, 5], memory: ["토큰 250", "큐 비어 있음"], caption: "4ms에 p5, 5ms에 p6이 나갔다. p6은 큐에서 5ms를 기다렸다. 큐에 패킷이 더 있었다면 하나당 약 1.2ms(1500바이트 ÷ 10Mbps)씩 더 기다렸을 것이다." },
+  ]}
+/>
+
+걸어 둔 qdisc의 상태는 `tc -s`로 본다. 실험 중에 찍은 출력이다.
+
+```bash
+# qdisc 통계: 보낸 양, 버린 수, 한도에 걸린 횟수, 지금 큐에 쌓인 양
+tc -s qdisc show dev vcm
+```
+
+```text
+qdisc tbf 8006: root refcnt 5 rate 10Mbit burst 32Kb lat 50ms 
+ Sent 12668984 bytes 8382 pkt (dropped 73, overlimits 24710 requeues 0) 
+ backlog 24224b 16p requeues 0
+```
+
+`dropped`는 큐가 넘쳐 버린 패킷, `overlimits`는 토큰이 모자라 기다리게 한 횟수, `backlog`는 지금 큐에 있는 양이다. backlog 24224바이트는 10Mbps에서 약 19ms 분량이다. 이 숫자 하나로 지금 이 문을 지나는 패킷이 얼마나 기다리는지 알 수 있다.
+
+## 큐가 깊으면 지연이 된다
+
+셰이핑의 대가가 지연이라고 했다. 그 지연이 얼마나 커질 수 있는지 재 봤다. 병목을 10Mbps로 두고 큐 깊이(`latency`)만 400ms와 20ms로 바꿔, 서버가 CUBIC으로 내려보내는 동안 같은 길로 ping을 보냈다.
+
+```bash
+# 큐 깊이를 바꿔 가며, 다운로드 전과 중의 ping
+sudo tc qdisc replace dev vcm root tbf rate 10mbit burst 32kb latency 400ms
+ping -c 5 -i 0.2 -q 10.10.2.2                  # 한가할 때
+iperf3 -c 10.10.2.2 -t 8 -R -C cubic &         # 내려받기 시작
+sleep 2; ping -c 20 -i 0.2 -q 10.10.2.2        # 내려받는 중
+```
+
+```text
+== tbf rate 10mbit latency 400ms
+idle: rtt min/avg/max/mdev = 2.545/2.731/3.093/0.202 ms
+load: rtt min/avg/max/mdev = 148.441/193.673/207.630/16.152 ms, pipe 2
+[  5]   0.00-8.00   sec  9.12 MBytes  9.57 Mbits/sec                  receiver
+== tbf rate 10mbit latency 20ms
+idle: rtt min/avg/max/mdev = 2.581/2.635/2.737/0.060 ms
+load: rtt min/avg/max/mdev = 32.190/40.554/47.215/4.295 ms
+[  5]   0.00-8.00   sec  9.12 MBytes  9.57 Mbits/sec                  receiver
+```
+
+두 경우 모두 다운로드 속도는 9.57Mbps로 같다. 그런데 ping은 큐가 깊을 때 2.7ms에서 194ms로, 70배가 됐다. 큐를 20ms로 얕게 두자 41ms로 줄었다. 큐가 깊다고 더 빨리 받는 게 아니라, 그 큐에 같이 선 다른 모든 패킷이 늦어질 뿐이다. 이걸 bufferbloat라고 부른다. CUBIC 같은 손실 기반 혼잡 제어는 패킷이 버려질 때까지 창을 키우니, 큐가 깊으면 그 큐를 끝까지 채운다.
+
+같은 400ms 큐에서 혼잡 제어만 BBR로 바꾸면 이렇다.
+
+```text
+== tbf rate 10mbit latency 400ms (bbr)
+load: rtt min/avg/max/mdev = 14.668/16.388/18.101/0.828 ms
+[  5]   0.00-8.00   sec  9.12 MBytes  9.57 Mbits/sec                  receiver
+```
+
+BBR은 병목 대역폭과 최소 왕복 시간을 재서 그 곱만큼만 띄우니 큐를 거의 채우지 않는다. 같은 속도에 ping 16ms다. 다만 보내는 쪽의 혼잡 제어는 내가 고를 수 없는 경우가 많다(남의 서버, 사용자 단말). 그래서 병목을 가진 쪽에서 큐를 관리하는 방법이 필요하다. 아래 그림이 집이나 작은 사무실에서 흔히 일어나는 장면이다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="업로드가 라우터 큐를 채우면, 작은 화상회의 패킷도 그 뒤에 선다"
+  zones={[
+    { id: "lan", label: "사무실 LAN 1Gbps", x: 8, y: 2, w: 384, h: 86, tone: "private" },
+  ]}
+  nodes={[
+    { id: "nas", label: "NAS", sub: "백업 업로드", x: 80, y: 58, icon: "db" },
+    { id: "pc", label: "laptop", sub: "화상회의", x: 320, y: 58, icon: "client" },
+    { id: "rt", label: "edge router", sub: "업로드 10Mbps", x: 200, y: 140, icon: "router", w: 124 },
+    { id: "inet", label: "Internet", x: 200, y: 214, icon: "internet" },
+  ]}
+  links={[
+    { from: "nas", to: "rt" },
+    { from: "pc", to: "rt" },
+    { from: "rt", to: "inet" },
+  ]}
+  steps={[
+    { path: ["nas", "rt"], packet: "bulk", highlight: ["rt"], title: "백업이 큐를 채운다", detail: "NAS는 1Gbps로 보내는데 나가는 문은 10Mbps다. 라우터의 큐가 수백 KB까지 찬다." },
+    { path: ["pc", "rt"], packet: "voice", highlight: ["rt"], title: "작은 패킷도 줄 끝에 선다", detail: "200바이트짜리 음성 패킷이지만 앞에 쌓인 백업 패킷이 다 나갈 때까지 기다린다. 큐 250KB면 10Mbps에서 200ms다." },
+    { path: ["rt", "inet"], packet: "voice", title: "200ms 늦게 나간다", detail: "대역폭은 남는데 지연만 늘었다. 화상회의 소리가 끊기고 SSH가 반 박자씩 늦는 이유다." },
+    { path: ["pc", "rt", "inet"], packet: "voice", highlight: ["rt"], title: "큐를 나누면 바로 나간다", detail: "음성과 백업을 다른 큐에 두고 번갈아 꺼내거나(fq_codel), 음성 쪽에 우선순위를 주면(HTB prio) 음성은 백업 줄을 건너뛴다." },
+  ]}
+/>
+
+이 문제를 푸는 표준적인 방법은 AQM(능동 큐 관리)이다. CoDel은 패킷이 큐에서 기다린 시간을 직접 재서, 기다림이 목표(기본 5ms)를 한동안(기본 100ms) 넘으면 조금씩 버려 보내는 쪽이 창을 줄이게 만든다. fq_codel은 여기에 흐름별 큐를 더해서, 큰 흐름과 작은 흐름을 따로 줄 세우고 번갈아 꺼낸다. 작은 흐름은 큰 흐름 뒤에 서지 않는다. CAKE는 셰이퍼와 fq_codel, 회선 오버헤드 계산을 하나로 묶은 qdisc다. 최근 Ubuntu는 기본 qdisc가 fq_codel로 설정돼 있는 경우가 많다(`sysctl net.core.default_qdisc`로 확인한다).
+
+```bash
+# 지금 기본 qdisc와 인터페이스에 걸린 qdisc 확인
+sysctl net.core.default_qdisc
+tc qdisc show dev eth0
+# 병목 속도보다 조금 낮게 셰이핑하고 그 아래에 fq_codel을 두기
+sudo tc qdisc replace dev eth0 root handle 1: htb default 10
+sudo tc class add dev eth0 parent 1: classid 1:10 htb rate 9mbit
+sudo tc qdisc add dev eth0 parent 1:10 fq_codel
+# CAKE 한 줄로 같은 일을 하기 (리눅스 4.19 이상, sch_cake 모듈 필요)
+sudo tc qdisc replace dev eth0 root cake bandwidth 9mbit
+```
+
+이 실습 커널에는 `fq_codel`과 `cake` 모듈이 없어 위 명령의 결과는 찍지 못했다. 대신 아래 HTB 실험에서 큐를 나누는 효과 자체는 확인했다. 셰이핑 속도를 실제 회선(10Mbps)보다 조금 낮게(9Mbps) 잡는 이유가 있다. 내 장비의 속도가 회선보다 빠르면 큐는 내 장비가 아니라 통신사 모뎀에 생기고, 그 큐는 내가 관리할 수 없다. 병목을 내 쪽으로 끌어와야 줄의 순서를 정할 수 있다.
+
+## 몫을 나누는 HTB
+
+`tbf`는 한 줄짜리 셰이퍼라서 "누구에게 얼마"를 정하지 못한다. HTB(Hierarchical Token Bucket)는 클래스를 트리로 만들고, 클래스마다 보장 속도(`rate`)와 빌려 쓸 수 있는 최대 속도(`ceil`), 남는 대역폭을 먼저 가져갈 순서(`prio`)를 준다. 실험에 쓴 트리는 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="HTB 트리: 부모의 10Mbps를 자식들이 보장받고, 남으면 빌린다"
+  nodes={[
+    { id: "root", label: "1:1 root", sub: "rate 10mbit", x: 200, y: 40, w: 150, h: 46 },
+    { id: "c10", label: "1:10 ICMP", sub: "rate 1 · prio 0", x: 70, y: 150, w: 120, h: 50 },
+    { id: "c20", label: "1:20 port 5201", sub: "rate 6 · prio 1", x: 200, y: 150, w: 130, h: 50 },
+    { id: "c30", label: "1:30 기본", sub: "rate 3 · prio 2", x: 330, y: 150, w: 120, h: 50 },
+    { id: "ceil", label: "모두 ceil 10mbit", sub: "남으면 빌려 쓴다", x: 200, y: 240, w: 170, h: 44 },
+  ]}
+  edges={[
+    { from: "root", to: "c10" },
+    { from: "root", to: "c20" },
+    { from: "root", to: "c30" },
+    { from: "c10", to: "ceil", dashed: true, arrow: "none" },
+    { from: "c20", to: "ceil", dashed: true, arrow: "none" },
+    { from: "c30", to: "ceil", dashed: true, arrow: "none" },
+  ]}
+/>
+
+```bash
+# 중간 라우터의 클라이언트 쪽 문에 HTB 트리를 건다
+sudo tc qdisc add dev vcm root handle 1: htb default 30
+sudo tc class add dev vcm parent 1: classid 1:1 htb rate 10mbit ceil 10mbit
+sudo tc class add dev vcm parent 1:1 classid 1:10 htb rate 1mbit ceil 10mbit prio 0
+sudo tc class add dev vcm parent 1:1 classid 1:20 htb rate 6mbit ceil 10mbit prio 1
+sudo tc class add dev vcm parent 1:1 classid 1:30 htb rate 3mbit ceil 10mbit prio 2
+# 분류: ICMP는 1:10, 출발지 포트 5201은 1:20, 나머지는 default 1:30
+sudo tc filter add dev vcm parent 1: protocol ip prio 1 u32 match ip protocol 1 0xff flowid 1:10
+sudo tc filter add dev vcm parent 1: protocol ip prio 2 u32 match ip sport 5201 0xffff flowid 1:20
+sudo tc filter add dev vcm parent 1: protocol ip prio 3 u32 match ip sport 5202 0xffff flowid 1:30
+```
+
+먼저 1:30(보장 3Mbps)에 해당하는 흐름 하나만 보냈다.
+
+```text
+== 5202 alone
+[  5]   0.00-8.00   sec  9.00 MBytes  9.44 Mbits/sec                  receiver
+```
+
+보장은 3Mbps지만 다른 클래스가 놀고 있으니 ceil까지 빌려 9.44Mbps를 썼다. 이게 HTB가 단순한 고정 분할과 다른 점이다. 노는 몫을 버리지 않는다. 이번엔 두 흐름을 동시에 보내고, 그사이 ping을 보냈다.
+
+```text
+== both
+ping(class 1:10): rtt min/avg/max/mdev = 2.259/2.830/3.413/0.341 ms
+a.out:[  5]   0.00-10.00  sec  7.88 MBytes  6.61 Mbits/sec                  receiver
+b.out:[  5]   0.00-10.00  sec  3.38 MBytes  2.83 Mbits/sec                  receiver
+```
+
+두 흐름이 6.61과 2.83으로 나뉘었다. 보장 6과 3에, ICMP가 거의 쓰지 않아 남은 1Mbps 남짓이 prio 숫자가 작은 1:20 쪽으로 더 갔다. HTB는 남는 대역폭을 prio가 높은(숫자가 작은) 클래스에 먼저 준다. 그리고 회선이 꽉 찬 상태에서도 ping은 2.8ms였다. ICMP가 자기 클래스의 큐에 따로 서 있어서 다운로드 패킷 뒤에서 기다리지 않았다.
+
+ICMP 분류 필터를 지워서 ping이 기본 클래스 1:30, 곧 다운로드 하나와 같은 큐에 서게 하고 똑같이 돌렸다.
+
+```bash
+# ICMP 필터(prio 1)를 지운다. 이제 ping은 default 1:30으로 간다
+sudo tc filter del dev vcm parent 1: prio 1
+```
+
+```text
+ping(default 1:30): rtt min/avg/max/mdev = 258.451/327.777/393.342/43.172 ms, pipe 2
+a.out:[  5]   0.00-10.00  sec  7.88 MBytes  6.61 Mbits/sec                  receiver
+b.out:[  5]   0.00-10.00  sec  3.38 MBytes  2.83 Mbits/sec                  receiver
+```
+
+처리량은 그대로인데 ping이 328ms가 됐다. 같은 큐에 선 다운로드가 큐를 가득 채웠기 때문이다. HTB 클래스 아래의 기본 큐는 장치의 txqueuelen(여기선 1000패킷)만큼 받는 FIFO라서, 3Mbps로 빠지는 큐에서는 몇백 ms가 금방 찬다. 클래스를 나누는 것과 클래스 안에서 큐를 얕게 두는 것(fq_codel이나 작은 `pfifo limit`)을 함께 해야 하는 이유다.
+
+클래스별로 얼마나 나갔는지는 `tc -s class`로 본다.
+
+```text
+class htb 1:10 parent 1:1 prio 0 rate 1Mbit ceil 10Mbit burst 1600b cburst 1600b 
+ Sent 1470 bytes 15 pkt (dropped 0, overlimits 0 requeues 0) 
+class htb 1:20 parent 1:1 prio 1 rate 6Mbit ceil 10Mbit burst 1600b cburst 1600b 
+ Sent 9784198 bytes 6485 pkt (dropped 0, overlimits 1161 requeues 0) 
+class htb 1:30 parent 1:1 prio 2 rate 3Mbit ceil 10Mbit burst 1600b cburst 1600b 
+ Sent 15948300 bytes 10577 pkt (dropped 0, overlimits 7712 requeues 0) 
+```
+
+HTB를 걸 때 가장 흔한 실수는 `default`를 빠뜨리는 것이다. `htb default` 없이 만들면 어느 필터에도 걸리지 않은 패킷은 클래스를 거치지 않고 속도 제한 없이 바로 나간다(`direct_packets_stat`이 늘어난다). 셰이핑을 걸었는데 아무 변화가 없으면 이것부터 본다.
+
+## 패킷에 표시를 붙이는 DSCP
+
+포트 번호로 나누는 건 내 서버에서는 쉽지만, 라우터 여러 대를 지나면 매번 포트를 보고 분류하기 번거롭다. 그래서 IP 헤더에 "이 패킷은 어떤 종류다"라는 표시를 붙인다. IP 헤더의 옛 ToS 바이트 앞 6비트가 DSCP다. 음성처럼 지연에 민감한 트래픽은 EF(46), 화상은 AF41(34), 백업 같은 낮은 우선순위는 CS1(8) 같은 값을 쓰는 게 관례다.
+
+서버에서 응답에 EF 표시를 붙이고 중간 라우터에서 캡처했다.
+
+```bash
+# 서버: 출발지 포트 8080으로 나가는 TCP에 DSCP EF 표시
+sudo iptables -t mangle -A OUTPUT -p tcp --sport 8080 -j DSCP --set-dscp-class EF
+# 중간 라우터: 지나가는 패킷의 ToS 바이트 보기
+sudo tcpdump -n -v -c 2 -i vcm 'tcp src port 8080'
+```
+
+```text
+13:56:16.173417 IP (tos 0xb8, ttl 62, id 0, offset 0, flags [DF], proto TCP (6), length 60)
+    10.10.2.2.8080 > 10.10.1.2.37900: Flags [S.], cksum 0x02b6 (correct), seq 2722725974, ack 1178224375, win 65160, options [mss 1460,sackOK,TS val 1078883629 ecr 1435681050,nop,wscale 10], length 0
+```
+
+`tos 0xb8`이 EF다. 46을 2비트 왼쪽으로 민 값(46 × 4 = 184 = 0xb8)이고, 아래 2비트는 혼잡 알림(ECN)용이라 비어 있다. 라우터에서는 이 값을 보고 클래스를 고른다. u32 필터의 `dsfield`가 ToS 바이트를 본다.
+
+```bash
+# ToS 바이트의 위 6비트가 EF(0xb8)인 패킷을 1:10으로
+sudo tc filter add dev vcm parent 1: protocol ip prio 4 u32 match ip dsfield 0xb8 0xfc flowid 1:10
+```
+
+이 필터를 넣고 EF가 붙은 10KB 응답 세 번을 받자 1:10 클래스에 36패킷, 33732바이트가 잡혔다.
+
+```text
+class htb 1:10 parent 1:1 prio 0 rate 1Mbit ceil 10Mbit burst 1600b cburst 1600b 
+ Sent 33732 bytes 36 pkt (dropped 0, overlimits 24 requeues 0) 
+```
+
+DSCP에는 분명한 한계가 있다. 표시는 누구나 붙일 수 있어서, 내가 관리하지 않는 망은 그 값을 믿지 않는다. 공용 인터넷과 대부분의 클라우드 망은 DSCP를 무시하거나 0으로 지운다(bleaching). 사내망, 통신사와 계약한 전용 회선, 무선 공유기(Wi-Fi의 WMM이 DSCP를 보고 큐를 고르는 제품이 많다)처럼 경계 안에서만 쓸모가 있다. 그 경계의 입구에서는 바깥에서 온 표시를 지우고 내가 다시 붙이는 게 원칙이다. 그러지 않으면 아무 트래픽이나 EF를 달고 들어와 우선순위를 가로챈다.
+
+## 들어오는 트래픽은 줄 세울 수 없다
+
+qdisc는 나가는 문에 거는 것이다. 이미 회선을 타고 도착한 패킷은 회선을 다 쓴 뒤라 줄을 세워 봐야 회선 쪽 사정은 바뀌지 않는다. 그래서 들어오는 쪽에서는 버리거나(폴리싱), 받은 패킷을 가상 장치 `ifb`로 돌려서 그 장치의 나가는 문에서 셰이핑하는 방법을 쓴다. 셰이핑이 회선 혼잡을 직접 풀지는 못해도, TCP가 늘어난 지연과 손실을 보고 보내는 속도를 줄이니 결과적으로 들어오는 양이 조절된다.
+
+<NetworkTopology
+  width={400}
+  height={226}
+  caption="들어오는 패킷을 ifb로 돌려, 그 장치의 나가는 문에서 셰이핑한다"
+  zones={[
+    { id: "host", label: "클라이언트 호스트", x: 8, y: 84, w: 384, h: 134, tone: "private" },
+  ]}
+  nodes={[
+    { id: "inet", label: "server", sub: "10.10.2.2", x: 200, y: 32, icon: "server" },
+    { id: "eth", label: "vc ingress", sub: "mirred", x: 80, y: 136, icon: "switch" },
+    { id: "ifb", label: "ifb0", sub: "tbf 5mbit", x: 320, y: 136, icon: "gateway" },
+    { id: "app", label: "iperf3", sub: "소켓", x: 200, y: 190, icon: "client" },
+  ]}
+  links={[
+    { from: "inet", to: "eth" },
+    { from: "eth", to: "ifb", label: "redirect" },
+    { from: "ifb", to: "app" },
+  ]}
+  steps={[
+    { path: ["inet", "eth"], packet: "data", title: "패킷이 도착한다", detail: "회선은 이미 지났다. 여기서 할 수 있는 건 버리거나 늦추는 것뿐이다." },
+    { path: ["eth", "ifb"], packet: "data", title: "ingress에서 ifb로 돌린다", detail: "ingress qdisc의 필터가 mirred 동작으로 패킷을 ifb0의 나가는 문으로 넘긴다.", payload: "action mirred egress redirect dev ifb0" },
+    { path: ["ifb", "app"], packet: "5Mbps", highlight: ["ifb"], title: "ifb0에서 셰이핑한 뒤 올려 보낸다", detail: "tbf가 5Mbps로 줄 세운다. 늦어진 ACK를 본 서버의 TCP가 속도를 낮춰 맞춘다." },
+  ]}
+/>
+
+```bash
+# 클라이언트에서: vc로 들어오는 패킷을 ifb0로 돌리고 ifb0에서 5Mbps로 셰이핑
+sudo ip link add ifb0 type ifb && sudo ip link set ifb0 up
+sudo tc qdisc add dev vc handle ffff: ingress
+sudo tc filter add dev vc parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+sudo tc qdisc add dev ifb0 root tbf rate 5mbit burst 32kb latency 50ms
+iperf3 -c 10.10.2.2 -t 6 -R -C cubic
+```
+
+```text
+[  5]   0.00-6.00   sec  3.62 MBytes  5.06 Mbits/sec   18             sender
+[  5]   0.00-6.00   sec  3.38 MBytes  4.72 Mbits/sec                  receiver
+```
+
+다운로드가 5Mbps 근처로 묶였다. 이 방식은 내 쪽 회선이 병목이 아닐 때, 예를 들어 서버 한 대가 한 클라이언트에서 받는 업로드 속도를 줄이고 싶을 때 쓸모가 있다. 하지만 집 회선의 다운로드 bufferbloat처럼 큐가 통신사 장비에 생기는 경우에는, 들어오는 쪽을 회선보다 조금 낮게 셰이핑해 그 큐를 비게 만드는 게 할 수 있는 최선이다.
+
+## 현장에서 셰이핑을 꺼내는 순간
+
+서버 운영에서 tc를 직접 만지는 일은 생각보다 드물고, 대신 같은 생각이 여러 모양으로 나온다.
+
+큰 전송이 다른 트래픽을 밀어낼 때는 앱이나 도구 수준에서 먼저 속도를 묶는다. `rsync --bwlimit=20M`, `aws s3 cp`의 `max_bandwidth` 설정, `pg_basebackup --max-rate`, `scp -l`이 모두 보내는 쪽 셰이핑이다. 쿠버네티스에서는 CNI의 bandwidth 플러그인이 Pod 주석 `kubernetes.io/egress-bandwidth: 10M`을 보고 Pod의 veth에 tbf를 건다. 플러그인이 CNI 설정 체인에 들어 있어야 동작한다.
+
+"가끔 지연이 튄다"는 문의에는 병목의 큐부터 본다. 리눅스 라우터나 게이트웨이라면 `tc -s qdisc`의 `backlog`와 `dropped`, 클라우드라면 인스턴스의 대역폭 한도 카운터를 본다. 회선 사용률 그래프가 평평하게 꽉 찬 구간과 지연이 튄 시각이 겹치면 bufferbloat이고, 사용률은 낮은데 드롭 카운터가 오른다면 짧은 순간의 몰림(마이크로버스트)이 작은 큐를 넘치게 한 것이다. 1분 평균 그래프에서는 마이크로버스트가 보이지 않는다는 점도 기억해 둔다.
+
+```bash
+# 1초마다 qdisc 통계를 보며 backlog와 dropped가 언제 오르는지 본다
+watch -n 1 'tc -s qdisc show dev eth0'
+# 열린 TCP 연결의 RTT와 재전송이 늘었는지
+ss -tni | grep -E 'rtt|retrans' | head
+```
+
+설정할 때 자주 하는 실수는 이렇다.
+
+- 단위 혼동. tc의 `mbit`은 비트, `mbps`는 바이트다.
+- 셰이핑 속도를 회선과 같게 잡는다. 큐가 내 장비가 아니라 앞 장비에 생겨서 효과가 없다. 실제 병목보다 5~10% 낮게 잡는다.
+- `htb default`를 빠뜨려 분류되지 않은 트래픽이 제한 없이 나간다.
+- 높은 속도에 작은 `burst`를 준다. 1Gbps에서 burst가 몇 KB면 타이머 해상도 때문에 목표 속도를 못 낸다.
+- 큐를 깊게 둘수록 안전하다고 생각한다. 처리량은 그대로고 지연만 는다.
+
+<Callout kind="warning">
+원격 서버에서 SSH가 지나는 인터페이스에 셰이핑을 걸 때는, 숫자를 잘못 넣으면(`rate 10kbit`처럼) 그 순간부터 접속이 거의 멈춰 되돌릴 수 없게 된다. 먼저 `sudo systemd-run --on-active=5min tc qdisc del dev eth0 root`처럼 일정 시간 뒤 규칙을 지우는 예약을 걸어 두고 바꾼다. 문제없으면 예약을 취소한다(`systemctl list-timers`로 이름을 찾아 `systemctl stop`). tc 설정은 재부팅하면 사라지니, 영구로 쓰려면 netplan이나 systemd 유닛에 넣고, 되돌릴 때는 `sudo tc qdisc del dev eth0 root`로 기본 qdisc로 돌아간다.
+</Callout>
+
+## 줄의 순서를 정하는 일
+
+병목에서 넘친 패킷은 기다리거나 버려진다. 셰이핑은 기다리게 하는 대신 지연을 만들고, 폴리싱은 지연 대신 재전송 낭비를 만든다. 큐가 깊으면 처리량은 그대로인데 같은 줄의 모든 패킷이 늦어지고, 그래서 큐를 얕게 두고(AQM), 흐름이나 클래스로 나눠(fq_codel, HTB), 급한 패킷이 큰 전송 뒤에 서지 않게 만든다. 이 모든 건 병목이 내 손 안에 있을 때만 통하니, 먼저 병목을 내 쪽으로 끌어오는 것부터 시작한다.
+
+## 면접에서 나올 만한 질문
+
+### 트래픽 셰이핑과 폴리싱은 무엇이 다른가요?
+
+둘 다 정한 속도를 지키게 하지만, 셰이핑은 넘친 패킷을 큐에 넣었다가 속도에 맞춰 내보내고 폴리싱은 그 자리에서 버린다. 셰이핑은 손실 대신 지연을 만들어 TCP가 부드럽게 속도를 맞추고, 폴리싱은 지연이 없지만 재전송이 많다. 실험에서 같은 10Mbps 한도에 폴리싱은 보낸 양의 약 24%가 버려졌고, 셰이핑은 재전송이 76번에 그쳤다. 들어오는 트래픽이나 큐를 둘 수 없는 장비에서는 폴리싱을 쓴다.
+
+### bufferbloat은 무엇이고 어떻게 해결하나요?
+
+병목의 큐가 지나치게 깊어서, 큰 전송이 큐를 채우는 동안 같은 줄의 다른 패킷이 모두 오래 기다리는 현상이다. 실험에서 10Mbps 병목의 큐를 400ms로 두자 다운로드 속도는 같은데 ping이 2.7ms에서 194ms가 됐다. 큐를 얕게 두고, 기다린 시간을 보고 버리는 AQM(CoDel)과 흐름별 큐(fq_codel, CAKE)를 쓰며, 셰이핑 속도를 실제 회선보다 조금 낮게 잡아 큐가 내 장비에 생기게 한다.
+
+### HTB의 rate, ceil, prio는 각각 무엇인가요?
+
+rate는 그 클래스에 보장하는 속도, ceil은 다른 클래스가 남긴 대역폭을 빌려 최대로 쓸 수 있는 속도, prio는 남는 대역폭을 먼저 가져갈 순서다. 혼자 있을 때 보장 3Mbps 클래스가 ceil까지 빌려 9.4Mbps를 썼고, 둘이 함께일 때는 보장대로 6과 3에 남은 몫이 prio가 높은 쪽으로 더 갔다. default 클래스를 지정하지 않으면 분류되지 않은 트래픽이 제한 없이 나가니 꼭 넣는다.
+
+### 회선이 꽉 찼는데 SSH나 화상회의만 지키려면 어떻게 하나요?
+
+병목을 내 장비로 끌어오도록 회선보다 조금 낮게 셰이핑하고, 그 아래에서 작은 대화형 트래픽을 따로 줄 세운다. HTB로 해당 트래픽에 높은 prio의 클래스를 주거나, fq_codel로 흐름별 큐를 둬서 큰 전송 뒤에 서지 않게 한다. 실험에서 ICMP를 별도 클래스에 두면 회선이 꽉 찬 중에도 ping이 2.8ms였고, 다운로드와 같은 큐에 두면 328ms였다.
+
+### DSCP는 무엇이고 인터넷에서도 통하나요?
+
+IP 헤더의 ToS 바이트 앞 6비트로, 패킷의 종류를 표시해 라우터가 클래스를 고르게 하는 값이다. EF(46)는 음성처럼 지연에 민감한 트래픽에 쓰고 ToS 바이트로는 0xb8이다. 하지만 누구나 붙일 수 있는 값이라 관리하지 않는 망은 믿지 않고, 공용 인터넷과 대부분의 클라우드 망에서는 무시되거나 지워진다. 사내망이나 계약한 회선처럼 경계 안에서만 쓰고, 경계 입구에서는 바깥 표시를 지우고 다시 붙인다.
+
+### 들어오는 트래픽도 셰이핑할 수 있나요?
+
+qdisc는 나가는 문에서 동작하므로 들어오는 쪽은 직접 줄 세울 수 없다. ingress에서 폴리싱으로 버리거나, mirred로 ifb 장치에 돌려 그 장치의 나가는 문에서 셰이핑한다. 이미 회선을 지난 뒤라 회선 혼잡을 직접 풀지는 못하지만, 늘어난 지연과 손실을 본 보내는 쪽 TCP가 속도를 줄여 결과적으로 들어오는 양이 맞춰진다. 실험에서 ifb에 5Mbps를 걸자 다운로드가 4.7Mbps로 묶였다.
+
+### 클라우드 서버에서 가끔 패킷이 사라지는데 OS 지표는 깨끗합니다. 무엇을 의심하나요?
+
+인스턴스의 대역폭이나 초당 패킷 수 한도에서 일어나는 폴리싱을 의심한다. AWS ENA라면 `ethtool -S`의 `bw_out_allowance_exceeded`, `pps_allowance_exceeded` 같은 카운터로 확인한다. 1분 평균 그래프에서는 짧은 몰림이 보이지 않으니 한도 아래로 보여도 넘칠 수 있다. 보내는 쪽에서 미리 셰이핑하거나 더 큰 인스턴스를 쓴다.

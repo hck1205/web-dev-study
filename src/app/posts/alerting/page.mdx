@@ -1,0 +1,592 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("alerting");
+
+새벽 세 시에 휴대폰이 울렸다고 하자. 메시지는 "api-2 CPU 85%". 노트북을 열고 대시보드를 보니 오류율은 0%, 응답 시간도 평소와 같다. 배치 작업이 잠깐 CPU를 쓴 것이다. 할 일이 없으니 다시 잔다. 이런 밤이 일주일에 세 번쯤 되면, 정말로 결제가 실패하는 밤에 울린 알림도 "또 그거겠지" 하고 넘기게 된다.
+
+알림은 만들기는 쉽고 버리기는 어렵다. 한 번 걸어 둔 규칙은 "혹시 몰라서" 남고, 쌓인 알림은 결국 아무도 안 읽는 소음이 된다. 이 글은 사람을 깨울 알림과 대시보드에 둘 숫자를 가르는 기준, Prometheus 알림 규칙의 `for`가 실제로 어떻게 동작하는지, Alertmanager가 알림을 묶고 누르고 잠재우는 방식을 직접 띄운 Prometheus와 Alertmanager의 출력으로 따라간다.
+
+이 주제의 다른 글: 무엇을 지켜볼지 정하는 [모니터링 기본](/posts/monitoring-basics), 사용자 기준 목표를 세우는 [SLI와 SLO](/posts/sli-slo), 그 목표로 알림을 거는 [에러 예산](/posts/error-budgets), 서버가 스스로 상태를 알리는 [헬스 체크 설계](/posts/health-checks). 알림이 울린 뒤 사람이 움직이는 방식은 [온콜](/posts/on-call)에서 다룬다.
+
+실습 환경은 Ubuntu 24.04, Prometheus 3.5.0, Alertmanager 0.28.1, Node.js 22다. 지표를 내는 API 서버 셋과 알림을 받아 찍는 웹훅 서버를 Node로 직접 만들어 띄웠다.
+
+## 알림 하나가 사람을 깨우는 값
+
+알림이 왜 따로 필요한지부터 보자. 대시보드는 누가 보고 있을 때만 쓸모가 있다. 밤에도, 주말에도 보고 있을 수는 없으니 "지금 사람이 봐야 한다"는 순간에만 사람을 불러오는 장치가 필요하다. 그게 알림이다.
+
+그러니 알림 하나는 사람의 주의를 꺼내 쓰는 일이다. 잠을 깨우고, 하던 일을 끊는다. 쓸 만한 알림인지 보려면 세 가지를 물으면 된다.
+
+첫째, 지금 사용자가 피해를 보고 있거나 곧 보게 되나. 둘째, 사람이 무언가를 해야 하나. 자동으로 복구되는 일이면 사람을 부를 이유가 없다. 셋째, 지금 당장 해야 하나. 내일 아침에 해도 되는 일이면 깨울 일이 아니다.
+
+셋 다 "예"여야 사람을 깨우는 페이지(page)가 된다. 첫째와 둘째만 맞으면 업무 시간에 처리할 티켓(ticket)으로 보낸다. 사람이 할 일이 없으면 알림이 아니라 대시보드나 로그에 둔다. 구글 SRE 책의 모니터링 장도 같은 말을 한다. 페이지는 긴급하고, 사람이 행동할 수 있고, 사용자에게 보이는 문제여야 한다.
+
+## 증상에 걸고 원인은 대시보드로
+
+처음 장면의 CPU 85%는 원인(cause)에 건 알림이다. CPU가 높으면 느려질 수도 있다는 추측에 기댄다. 반대로 "오류율 5% 초과", "p99 응답 1초 초과"는 증상(symptom)에 건 알림이다. 사용자가 실제로 겪는 일을 잰다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="원인은 여러 갈래지만 사용자가 겪는 증상은 몇 개뿐이다"
+  nodes={[
+    { id: "cpu", label: "CPU 포화", x: 70, y: 40, w: 110 },
+    { id: "db", label: "DB 연결 고갈", x: 200, y: 40, w: 120 },
+    { id: "dep", label: "외부 API 지연", x: 330, y: 40, w: 120 },
+    { id: "gc", label: "GC 멈춤", x: 70, y: 120, w: 110 },
+    { id: "cfg", label: "잘못된 설정 배포", x: 330, y: 120, w: 130 },
+    { id: "err", label: "오류율 상승", sub: "페이지", x: 120, y: 225, w: 130 },
+    { id: "lat", label: "응답 지연", sub: "페이지", x: 290, y: 225, w: 130 },
+  ]}
+  edges={[
+    { from: "cpu", to: "lat", dashed: true },
+    { from: "db", to: "err" },
+    { from: "db", to: "lat" },
+    { from: "dep", to: "lat" },
+    { from: "gc", to: "lat", dashed: true },
+    { from: "cfg", to: "err" },
+  ]}
+/>
+
+원인은 끝없이 많고 계속 새로 생긴다. 원인마다 알림을 걸면 규칙이 수백 개가 되고, 처음 보는 원인에는 여전히 알림이 없다. 증상은 몇 개뿐이다. 요청이 실패하거나, 느리거나, 데이터가 틀리거나. 증상에 걸면 원인을 몰라도 알림이 울린다. 원인은 알림을 받은 뒤 대시보드에서 찾는다. 점선처럼 원인이 늘 증상으로 이어지지도 않는다. CPU 85%에서도 사용자는 멀쩡할 수 있다.
+
+예외도 있다. 아직 증상은 없지만 곧 확실히 증상이 되는 원인은 미리 거는 편이 낫다. 디스크가 지금 속도로 4시간 뒤에 꽉 찬다, 인증서가 7일 뒤에 만료된다 같은 것이다. 이때도 기준은 같다. 사람이 미리 손쓸 수 있고, 안 하면 사용자가 다친다.
+
+```yaml
+# 증상이 오기 전에 거는 몇 안 되는 원인 알림
+- alert: DiskWillFillIn4h
+  expr: predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs"}[6h], 4 * 3600) < 0
+  for: 30m
+  labels: { severity: page }
+```
+
+증상을 어디서 재느냐도 중요하다. 서버 안에서 잰 오류율은 서버까지 도착한 요청만 센다. 로드 밸런서가 연결 자체를 못 하면 서버 지표에는 아무것도 안 남는다. 그래서 가능하면 사용자에 가장 가까운 곳, 로드 밸런서나 바깥에서 두드리는 검사(blackbox)에서 잰 숫자에 페이지를 건다. 바깥에서 두드리는 방법은 [네트워크 모니터링](/posts/network-monitoring)에 있다.
+
+## 알림 규칙 한 줄씩 읽기
+
+Prometheus 알림 규칙은 PromQL 식 하나에 이름과 꼬리표를 붙인 것이다. 실습에 쓴 규칙 파일이다.
+
+```yaml
+# rules.yml
+groups:
+  - name: api
+    rules:
+      - alert: ApiHighErrorRate          # 증상: 사용자가 실패를 보고 있다
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[30s]))
+            / sum by (job) (rate(http_requests_total[30s])) > 0.05
+        for: 10s
+        labels:
+          severity: page
+        annotations:
+          summary: "api 오류율 {{ $value | humanizePercentage }}"
+          runbook_url: "https://wiki.example.com/runbooks/api-high-error-rate"
+      - alert: ApiInstanceDown           # 원인: 인스턴스 하나가 응답하지 않는다
+        expr: up{job="api"} == 0
+        for: 10s
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.instance }} scrape 실패"
+          runbook_url: "https://wiki.example.com/runbooks/api-instance-down"
+      - alert: ApiAllDown                # 증상: 받을 인스턴스가 하나도 없다
+        expr: sum by (job) (up{job="api"}) == 0
+        for: 10s
+        labels:
+          severity: page
+        annotations:
+          summary: "api 인스턴스가 모두 응답하지 않는다"
+          runbook_url: "https://wiki.example.com/runbooks/api-all-down"
+```
+
+실습이라 창과 `for`를 초 단위로 줄였다. 실제 서비스에서는 보통 `rate(...[5m])`, `for: 5m` 근처에서 시작한다. 규칙 하나를 조각으로 나눠 보면 이렇다.
+
+<UrlAnatomy
+  caption="알림 규칙 하나의 조각들"
+  base="- alert: ApiHighErrorRate"
+  separator="  "
+  joiner="  "
+  params={[
+    { key: "expr", value: "5xx / 전체 > 0.05", title: "조건식", description: "결과가 한 줄이라도 나오면 그 줄마다 알림이 하나씩 생긴다. 비교 연산자가 거르는 역할을 하니, 값이 0.05 이하인 시계열은 결과에서 빠지고 알림도 없다.", required: true },
+    { key: "for", value: "5m", title: "버텨야 하는 시간", description: "조건이 평가마다 연속으로 참이어야 하는 시간. 이 시간 동안은 pending이고, 다 채우면 firing이 되어 Alertmanager로 간다. 한 번이라도 거짓이면 처음부터 다시 센다." },
+    { key: "labels", value: "severity: page", title: "라우팅에 쓰는 꼬리표", description: "식의 결과 레이블에 더해진다. Alertmanager는 이 레이블로 어디에 보낼지, 무엇과 묶을지 정한다. 값이 바뀌는 숫자를 레이블에 넣으면 알림이 매번 새것이 되니 넣지 않는다." },
+    { key: "summary", value: "{{ $value }}", title: "사람이 읽을 한 줄", description: "annotations는 라우팅에 쓰지 않는 설명이다. 현재 값, 어느 인스턴스인지처럼 받는 사람이 바로 상황을 알 수 있는 내용을 템플릿으로 채운다." },
+    { key: "runbook_url", value: "https://…", title: "무엇을 할지 적어 둔 곳", description: "알림을 받은 사람이 가장 먼저 여는 링크. 이 알림이 무슨 뜻이고, 무엇을 확인하고, 어떻게 완화하는지 적어 둔 문서다." },
+  ]}
+/>
+
+규칙을 올리기 전에는 문법부터 검사한다. CI에 넣어 두면 오타로 규칙 그룹 전체가 안 읽히는 사고를 막는다.
+
+```bash
+# 규칙 파일 문법과 PromQL을 검사한다
+promtool check rules rules.yml
+# Alertmanager 설정을 검사한다
+amtool check-config alertmanager.yml
+```
+
+```text
+Checking rules.yml
+  SUCCESS: 3 rules found
+
+Checking 'alertmanager.yml'  SUCCESS
+Found:
+ - global config
+ - route
+ - 1 inhibit rules
+ - 2 receivers
+ - 0 templates
+```
+
+## for는 조건이 버텨야 하는 시간이다
+
+`for`가 없으면 조건이 한 번 참이 되는 순간 바로 울린다. 오류율이 15초 동안 6%로 튀었다가 돌아오면 그때마다 사람이 깬다. `for: 5m`은 "5분 내내 참이었을 때만"이라는 뜻이다. 그 사이 상태를 pending이라고 부른다.
+
+<AlgoTrace
+  caption="for 3분, 1분마다 평가: 연속으로 참이어야 firing이 된다"
+  memoryLabel="알림 상태"
+  cells={["6%", "7%", "3%", "6%", "8%", "7%", "9%", "2%"]}
+  steps={[
+    { pointer: 0, memory: ["pending 0분"], caption: "조건이 처음 참이 됐다. 바로 울리지 않고 pending으로 시작 시각을 적어 둔다." },
+    { pointer: 1, memory: ["pending 1분"], caption: "다음 평가도 참이다. 아직 3분이 안 됐다." },
+    { pointer: 2, memory: ["inactive"], caption: "한 번 거짓이 됐다. pending이 버려지고 처음부터 다시 센다. 짧게 튄 오류는 여기서 걸러진다." },
+    { pointer: 3, memory: ["pending 0분"], caption: "다시 참이다. 시작 시각을 새로 적는다." },
+    { pointer: 4, memory: ["pending 1분"], caption: "계속 참이다." },
+    { pointer: 5, memory: ["pending 2분"], caption: "계속 참이다." },
+    { pointer: 6, found: [3, 4, 5, 6], memory: ["firing"], caption: "3분을 버텼다. 이제 firing이 되어 Alertmanager로 보낸다." },
+    { pointer: 7, memory: ["inactive", "resolved 전송"], caption: "조건이 거짓이 되자 바로 풀린다. Alertmanager에는 해결됐다는 소식이 간다." },
+  ]}
+/>
+
+여기서 흔히 놓치는 게 있다. 알림이 울리기까지 걸리는 시간은 `for`만이 아니다. `rate(...[5m])`의 창도 시간을 먹는다. 이걸 `promtool test rules`로 확인했다. 운영용으로 창을 5분, `for`를 5분으로 잡은 규칙에, 10분까지 오류가 없다가 그 뒤로 9% 남짓 실패하는 입력을 넣었다. 처음에는 "10분부터 실패했으니 15분이면 울리겠지" 하고 17분에 firing을 기대하는 테스트를 썼다.
+
+```yaml
+# rules-prod.test.yml (일부)
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      # 성공은 분당 600건씩 계속 는다
+      - series: 'http_requests_total{job="api", code="200"}'
+        values: '0+600x40'
+      # 실패는 10분까지 0, 그 뒤로 분당 60건
+      - series: 'http_requests_total{job="api", code="500"}'
+        values: '0x10 60+60x30'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ApiHighErrorRate
+        exp_alerts:
+          - exp_labels: { job: api, severity: page }
+```
+
+```bash
+# 규칙 단위 테스트를 돌린다
+promtool test rules rules-prod.test.yml
+```
+
+```text
+  FAILED:
+    alertname: ApiHighErrorRate, time: 17m, 
+        exp:[
+            0:
+              Labels:{alertname="ApiHighErrorRate", job="api", severity="page"}
+              Annotations:{runbook_url="https://wiki.example.com/runbooks/api-high-error-rate", summary="api 오류율 9.091%"}
+            ], 
+        got:[]
+```
+
+17분에는 아직 울리지 않았다. 식의 값을 보려고 `promql_expr_test`에 일부러 틀린 기댓값(0)을 넣어 돌리면, 실패 메시지에 실제 값이 찍힌다.
+
+```text
+    expr: "sum(rate(http_requests_total{code=\"500\"}[5m])) / sum(rate(http_requests_total[5m]))", time: 12m,
+        exp: {} 0E+00
+        got: {} 3.8461538461538464E-02
+    expr: "sum(rate(http_requests_total{code=\"500\"}[5m])) / sum(rate(http_requests_total[5m]))", time: 13m,
+        exp: {} 0E+00
+        got: {} 5.660377358490567E-02
+```
+
+5분 창 안에 실패가 없던 시간이 섞여 있어서, 실패가 시작된 지 3분이 지난 13분에야 비율이 5%를 넘는다. 거기서 `for` 5분을 더 버텨 18분에 울린다. 테스트를 18분으로 고치니 통과했다.
+
+```text
+  SUCCESS
+```
+
+울리기까지 걸리는 시간은 대략 "창이 문턱을 넘을 때까지의 시간 + `for`"다. 실패율이 문턱보다 훨씬 높으면 창이 금방 넘으니 `for`에 가까워지고, 문턱 근처면 창 길이만큼 더 늦어진다. 창도 길고 `for`도 길면 장애가 난 지 10분 넘게 조용할 수 있다. 창이 이미 평균을 내서 튀는 값을 걸러 주니, `for`는 창보다 짧거나 같게 두는 경우가 많다.
+
+반대 방향도 있다. 조건이 문턱 근처에서 오르내리면 알림이 울렸다 풀렸다를 반복한다(flapping). 풀릴 때마다 해결 메시지가, 다시 참이 될 때마다 새 페이지가 간다. Prometheus 2.42부터는 `keep_firing_for`로 조건이 거짓이 된 뒤에도 정한 시간만큼 firing을 유지할 수 있다. 아래에서 평가값 목록, 문턱, `for`와 `keep_firing_for`(평가 횟수 단위)를 받아 페이지가 몇 번 나가는지 세 보자.
+
+<CodePlayground
+  caption="for와 keep_firing_for에 따라 페이지가 몇 번 나가나"
+  functionName="countPages"
+  initialCode={`function countPages(values, threshold, forSteps, keepSteps) {
+  // values[i]는 i번째 평가 때의 값, threshold를 넘으면 조건이 참
+  // 참이 forSteps번 평가 동안 이어지면 firing (forSteps 0이면 바로)
+  // firing 중 거짓이 돼도 keepSteps번 평가까지는 firing 유지
+  // inactive나 pending에서 firing으로 바뀐 횟수를 돌려준다
+  return 0;
+}`}
+  solution={`function countPages(values, threshold, forSteps, keepSteps) {
+  let state = "inactive";
+  let activeAt = -1;
+  let lastTrue = -1;
+  let pages = 0;
+  for (let i = 0; i < values.length; i++) {
+    const cond = values[i] > threshold;
+    if (cond) {
+      if (state === "inactive") { state = "pending"; activeAt = i; }
+      lastTrue = i;
+      if (state === "pending" && i - activeAt >= forSteps) { state = "firing"; pages++; }
+    } else if (state === "firing" && i - lastTrue <= keepSteps) {
+      // keep_firing_for 동안은 그대로 firing
+    } else {
+      state = "inactive";
+    }
+  }
+  return pages;
+}`}
+  tests={[
+    { args: [[0.06, 0.04, 0.06, 0.04, 0.06, 0.04, 0.06, 0.04], 0.05, 0, 0], expected: 4, label: "for 없이 오르내림" },
+    { args: [[0.06, 0.04, 0.06, 0.04, 0.06, 0.04, 0.06, 0.04], 0.05, 2, 0], expected: 0, label: "for 2번이면 걸러짐" },
+    { args: [[0.06, 0.04, 0.06, 0.04, 0.06, 0.04, 0.06, 0.04], 0.05, 0, 2], expected: 1, label: "keep 2번이면 한 번만" },
+    { args: [[0.01, 0.08, 0.08, 0.08, 0.08, 0.01], 0.05, 2, 0], expected: 1, label: "이어진 장애" },
+    { args: [[0.08, 0.08, 0.08, 0.01, 0.01, 0.01, 0.08, 0.08, 0.08], 0.05, 1, 1], expected: 2, label: "3번 쉬면 두 번 울림" },
+    { args: [[0.08, 0.08, 0.08, 0.01, 0.01, 0.01, 0.08, 0.08, 0.08], 0.05, 1, 3], expected: 1, label: "keep 3번이면 이어짐" },
+  ]}
+/>
+
+`for`는 짧은 튐을, `keep_firing_for`는 잦은 풀림을 막는다. 둘 다 늘릴수록 조용해지지만 그만큼 늦게 알고 늦게 풀린다. 어느 쪽 비용이 큰지는 서비스마다 다르다.
+
+## Prometheus가 울리고 Alertmanager가 전한다
+
+Prometheus는 규칙을 평가해 firing인 알림을 Alertmanager로 보내기만 한다. 누구에게, 어떤 묶음으로, 몇 번 보낼지는 Alertmanager가 정한다. 둘을 나눈 덕에 Prometheus가 여러 대여도 알림을 한곳에서 묶고 중복을 지울 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="지표가 수집되어 사람에게 닿기까지"
+  zones={[
+    { id: "svc", label: "api 서버 3대", x: 8, y: 8, w: 384, h: 88, tone: "private" },
+    { id: "mon", label: "모니터링", x: 8, y: 112, w: 384, h: 112, tone: "edge" },
+    { id: "ppl", label: "받는 쪽", x: 8, y: 246, w: 384, h: 76, tone: "public" },
+  ]}
+  nodes={[
+    { id: "a1", label: "api-1", sub: ":19101", x: 70, y: 62, icon: "server", w: 100 },
+    { id: "a2", label: "api-2", sub: ":19102", x: 200, y: 62, icon: "server", w: 100 },
+    { id: "a3", label: "api-3", sub: ":19103", x: 330, y: 62, icon: "server", w: 100 },
+    { id: "prom", label: "Prometheus", sub: "rules 평가", x: 100, y: 176, icon: "db", w: 120 },
+    { id: "am", label: "Alertmanager", sub: "묶기·라우팅", x: 300, y: 176, icon: "gateway", w: 124 },
+    { id: "pg", label: "pager", sub: "사람 깨움", x: 100, y: 288, icon: "client" },
+    { id: "tk", label: "ticket", sub: "업무 시간", x: 300, y: 288, icon: "client" },
+  ]}
+  links={[
+    { from: "prom", to: "a1", label: "scrape" },
+    { from: "prom", to: "a2" },
+    { from: "prom", to: "a3" },
+    { from: "prom", to: "am", label: "firing" },
+    { from: "am", to: "pg" },
+    { from: "am", to: "tk" },
+  ]}
+  steps={[
+    { path: ["prom", "a2"], packet: "GET", title: "2초마다 긁는다", detail: "Prometheus가 각 서버의 /metrics를 가져와 시계열에 쌓는다. 응답이 없으면 그 타깃의 up이 0이 된다." },
+    { path: ["prom"], packet: "eval", title: "규칙을 평가한다", detail: "evaluation_interval마다 모든 규칙의 식을 계산한다. 참이면 pending, for를 채우면 firing이 된다." },
+    { path: ["prom", "am"], packet: "alert", title: "firing을 넘긴다", detail: "firing인 알림을 Alertmanager API로 보낸다. 풀릴 때까지 1분마다 다시 보내서 살아 있다고 알린다.", payload: "alertname=ApiHighErrorRate job=api severity=page" },
+    { path: ["prom", "am", "pg"], packet: "page", title: "라우트를 따라 사람에게", detail: "severity가 page라서 pager 수신자로 간다. group_wait 동안 같은 묶음에 들어올 알림을 기다렸다가 한 번에 보낸다." },
+    { path: ["prom", "am", "tk"], packet: "ticket", title: "급하지 않은 것은 티켓으로", detail: "severity가 ticket이면 기본 라우트를 따라 티켓 수신자로 간다. 사람을 깨우지 않고 내일 처리할 일로 남는다." },
+  ]}
+/>
+
+실습에서 세 서버 모두 30%의 요청을 실패하게 바꾸고 2초마다 Prometheus의 알림 상태를 찍었다. 웹훅 서버는 받은 알림을 한 줄로 찍는다.
+
+```bash
+# 세 서버에 실패율 30%를 넣는다
+curl -s "127.0.0.1:19101/admin/fail?r=0.3" "127.0.0.1:19102/admin/fail?r=0.3" "127.0.0.1:19103/admin/fail?r=0.3"
+# 2초마다 /api/v1/alerts의 상태를 찍고, 바뀐 줄만 남긴다
+bash watch.sh 16 | uniq -f1
+```
+
+```text
+inject 20:15:48
+20:15:48 -
+20:15:56 ApiHighErrorRate=pending
+20:16:07 ApiHighErrorRate=firing
+20:16:10 /pager firing group={"alertname":"ApiHighErrorRate","job":"api"} n=1 ApiHighErrorRate(firing)
+```
+
+실패를 넣은 뒤 8초 만에 pending이 됐다. 30초 창의 비율이 5%를 넘는 데 걸린 시간이다. 다시 `for` 10초를 채워 firing, 3초 뒤 pager로 갔다. 사람에게 닿은 내용은 `amtool`로도 볼 수 있다.
+
+```bash
+# Alertmanager가 들고 있는 알림 목록
+amtool --alertmanager.url=http://127.0.0.1:19093 alert query
+```
+
+```text
+Alertname         Starts At                Summary         State   
+ApiHighErrorRate  2026-10-20 20:16:05 UTC  api 오류율 15.95%  active  
+```
+
+요약의 15.95%는 30% 실패를 넣었는데 반쯤으로 보인다. 30초 창 안에 실패를 넣기 전 시간이 섞여 있어서다. 템플릿의 `$value`는 그 순간의 식 값이라, 알림 문구의 숫자를 그대로 믿지 말고 그래프를 열어 봐야 한다.
+
+실패율을 0으로 되돌리니 27초쯤 뒤에 풀렸다.
+
+```text
+20:14:50 ApiHighErrorRate=firing
+20:15:17 -
+20:15:16 /pager resolved group={"alertname":"ApiHighErrorRate","job":"api"} n=1 ApiHighErrorRate(resolved)
+```
+
+풀리는 것도 창 때문에 늦다. 30초 창 안에 실패가 남아 있는 동안은 계속 5%를 넘는다.
+
+## 묶고, 누르고, 잠재운다
+
+서버 50대가 같은 DB를 쓰는데 DB가 죽으면 "인스턴스 오류" 알림이 50개 뜬다. 50번 울리는 휴대폰은 한 번 울리는 것보다 정보가 많지 않다. Alertmanager는 이걸 세 가지로 줄인다.
+
+묶기(grouping)는 `group_by`에 적은 레이블이 같은 알림을 한 메시지로 보낸다. 시간은 세 값으로 조절한다.
+
+<SequenceDiagram
+  caption="group_wait, group_interval, repeat_interval이 보내는 시점을 정한다"
+  actors={[
+    { id: "p", label: "Prometheus" },
+    { id: "a", label: "Alertmanager" },
+    { id: "r", label: "수신자" },
+  ]}
+  steps={[
+    { from: "p", to: "a", label: "InstanceDown@102", title: "첫 알림이 들어온다", detail: "이 묶음(alertname, job)의 첫 알림이다. 바로 보내지 않고 group_wait 동안 기다린다." },
+    { from: "p", to: "a", label: "InstanceDown@103", title: "기다리는 사이 하나 더", detail: "같은 묶음에 들어갈 알림이 group_wait 안에 왔다. 같은 메시지에 담긴다." },
+    { from: "a", to: "r", label: "알림 2개, 1통", title: "group_wait가 끝나면 보낸다", detail: "두 알림이 한 통의 메시지로 간다. 기본값은 30초다.", payload: "group={alertname=ApiInstanceDown, job=api} n=2" },
+    { from: "p", to: "a", label: "InstanceDown@101", title: "묶음이 바뀌었다", detail: "이미 보낸 묶음에 알림이 늘었다. 바로 보내지 않고 group_interval(기본 5분)이 지나야 갱신된 묶음을 보낸다." },
+    { from: "a", to: "r", label: "다시 알림", title: "바뀐 게 없어도 다시", detail: "아무 변화 없이 계속 firing이면 repeat_interval(기본 4시간)마다 다시 보낸다. 잊히지 않게 하는 장치다." },
+  ]}
+/>
+
+누르기(inhibition)는 어떤 알림이 울리는 동안 다른 알림을 보내지 않는다. 실습 설정은 "api가 통째로 죽었다"(`ApiAllDown`)가 울리면 같은 `job`의 인스턴스 알림과 오류율 알림을 누른다.
+
+```yaml
+# alertmanager.yml
+route:
+  receiver: ticket
+  group_by: [alertname, job]
+  group_wait: 5s
+  group_interval: 10s
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="page"]
+      receiver: pager
+receivers:
+  - name: pager
+    webhook_configs: [{ url: "http://127.0.0.1:19095/pager" }]
+  - name: ticket
+    webhook_configs: [{ url: "http://127.0.0.1:19095/ticket" }]
+inhibit_rules:
+  - source_matchers: [alertname="ApiAllDown"]
+    target_matchers: [alertname=~"ApiInstanceDown|ApiHighErrorRate"]
+    equal: [job]
+```
+
+서버 둘을 먼저 죽이고, 25초 뒤 마지막 하나를 죽였다.
+
+```text
+kill 19102 19103 20:17:35
+20:17:39 ApiInstanceDown@19102=pending ApiInstanceDown@19103=pending
+20:17:47 ApiInstanceDown@19102=firing ApiInstanceDown@19103=firing
+kill 19101 20:18:00
+20:18:02 ApiAllDown=pending ApiInstanceDown@19101=pending ApiInstanceDown@19102=firing ApiInstanceDown@19103=firing
+20:18:12 ApiAllDown=firing ApiInstanceDown@19101=firing ApiInstanceDown@19102=firing ApiInstanceDown@19103=firing
+```
+
+Prometheus 쪽에서는 알림 네 개가 모두 firing이다. 웹훅이 받은 메시지는 두 통뿐이다.
+
+```text
+20:17:52 /ticket firing group={"alertname":"ApiInstanceDown","job":"api"} n=2 ApiInstanceDown@19102(firing) ApiInstanceDown@19103(firing)
+20:18:16 /pager firing group={"alertname":"ApiAllDown","job":"api"} n=1 ApiAllDown(firing)
+```
+
+첫 줄은 묶기다. 인스턴스 둘의 알림이 티켓 한 통에 담겼다. 둘째 줄 뒤로 `ApiInstanceDown@19101` 소식은 오지 않았다. 눌렸기 때문이다.
+
+```bash
+# 눌리거나 잠재워진 알림까지 본다
+amtool --alertmanager.url=http://127.0.0.1:19093 alert query --inhibited
+```
+
+```text
+Alertname        Starts At                Summary                    State       
+ApiInstanceDown  2026-10-20 20:17:47 UTC  127.0.0.1:19103 scrape 실패  suppressed  
+ApiInstanceDown  2026-10-20 20:17:47 UTC  127.0.0.1:19102 scrape 실패  suppressed  
+ApiInstanceDown  2026-10-20 20:18:11 UTC  127.0.0.1:19101 scrape 실패  suppressed  
+```
+
+`equal: [job]`을 빠뜨리면 api가 죽었을 때 다른 서비스의 알림까지 눌린다. 누르기는 원인 알림이 증상 알림을 덮는 방향으로만 쓰고, 범위를 레이블로 좁혀 둔다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="같은 알림 네 개가 Alertmanager를 지나며 두 통이 된다"
+  zones={[
+    { id: "am", label: "Alertmanager", x: 108, y: 16, w: 184, h: 268, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "src", label: "Prometheus", sub: "firing x4", x: 54, y: 150, icon: "db", w: 92 },
+    { id: "grp", label: "group_by", sub: "alertname,job", x: 200, y: 66, icon: "switch", w: 140 },
+    { id: "inh", label: "inhibit", sub: "AllDown 우선", x: 200, y: 150, icon: "firewall", w: 140 },
+    { id: "sil", label: "silence", sub: "수동 음소거", x: 200, y: 234, icon: "lock", w: 140 },
+    { id: "tk", label: "ticket", x: 346, y: 100, icon: "client", w: 84 },
+    { id: "pg", label: "pager", x: 346, y: 200, icon: "client", w: 84 },
+  ]}
+  links={[
+    { from: "src", to: "grp" },
+    { from: "grp", to: "inh" },
+    { from: "inh", to: "sil" },
+    { from: "grp", to: "tk" },
+    { from: "sil", to: "pg" },
+  ]}
+  steps={[
+    { path: ["src", "grp", "tk"], packet: "x2", title: "둘을 한 통으로", detail: "19102와 19103의 InstanceDown은 alertname과 job이 같아 한 묶음이다. 티켓 한 통에 두 알림이 담겼다." },
+    { path: ["src", "grp", "inh"], packet: "@101", blocked: true, title: "원인 알림이 눌린다", detail: "19101까지 죽자 ApiAllDown이 울렸다. 같은 job의 InstanceDown은 inhibit 규칙에 걸려 suppressed가 된다." },
+    { path: ["src", "grp", "inh", "sil", "pg"], packet: "AllDown", title: "증상 하나만 사람에게", detail: "ApiAllDown은 누를 규칙도, 잠재울 silence도 없어 pager로 간다. 사람은 메시지 한 통으로 상황을 안다." },
+    { path: ["src", "grp", "inh", "sil"], packet: "AllDown", blocked: true, highlight: ["sil"], title: "점검 중에는 잠재운다", detail: "배포나 점검처럼 미리 아는 일에는 silence를 건다. 정해진 시간 동안 맞는 알림을 보내지 않는다." },
+  ]}
+/>
+
+잠재우기(silence)는 사람이 직접 건다. 레이블 조건과 끝나는 시각을 정한다.
+
+```bash
+# 30분 동안 api의 ApiAllDown을 잠재운다
+amtool --alertmanager.url=http://127.0.0.1:19093 silence add alertname=ApiAllDown job=api \
+  --duration=30m --author=oncall --comment="api 배포 중 점검"
+# 걸린 silence 목록
+amtool --alertmanager.url=http://127.0.0.1:19093 silence query
+```
+
+```text
+31ffc824-7454-4b1c-ac6a-537e9c6308c1
+ID                                    Matchers                          Ends At                  Created By  Comment      
+31ffc824-7454-4b1c-ac6a-537e9c6308c1  alertname="ApiAllDown" job="api"  2026-10-20 20:48:51 UTC  oncall      api 배포 중 점검  
+```
+
+silence는 끝나는 시각이 있어야 한다. "일단 꺼 두자"고 일주일짜리 silence를 걸고 잊으면, 그 사이 진짜 장애가 조용히 지나간다. 점검이 끝나면 `amtool silence expire <ID>`로 바로 푼다.
+
+## 페이지와 티켓을 가르는 기준
+
+라우팅은 레이블로 한다. 실습에서는 `severity`가 `page`면 pager, 아니면 기본 수신자인 ticket으로 갔다. 라우팅 트리는 `amtool`로 그려 보고, 특정 레이블이 어디로 가는지 미리 시험할 수 있다.
+
+```bash
+# 라우팅 트리를 그린다
+amtool config routes show --config.file=alertmanager.yml
+# 이 레이블을 가진 알림이 어느 수신자로 가나
+amtool config routes test --config.file=alertmanager.yml severity=page alertname=ApiHighErrorRate
+# pager로 가야 하는데 아니면 실패로 끝난다 (CI에서 쓰기 좋다)
+amtool config routes test --config.file=alertmanager.yml --verify.receivers=pager severity=ticket alertname=ApiInstanceDown
+```
+
+```text
+Routing tree:
+.
+└── default-route  receiver: ticket
+    └── {severity="page"}  receiver: pager
+
+pager
+ticket
+WARNING: Expected receivers did not match resolved receivers.
+```
+
+마지막 명령은 종료 코드 1로 끝났다. 라우팅 설정을 바꾸는 PR에 "결제 알림은 반드시 pager로 간다" 같은 테스트를 넣어 두면, 누군가 라우트 순서를 바꿔 중요한 알림이 티켓으로 새는 일을 막는다.
+
+등급을 몇 개로 나눌지는 팀마다 다르지만, 받는 사람이 하는 행동으로 나누면 헷갈리지 않는다. 지금 일어나서 손을 써야 하면 page, 이번 주 안에 고치면 되면 ticket, 사람이 할 일이 없으면 알림이 아니라 대시보드다. "warning"이라는 이름으로 채널에 쏟아지는 알림은 대개 세 번째에 속하는데 두 번째인 척하고 있다. 아무도 처리하지 않는 채널은 없는 것과 같다.
+
+## 알림 피로는 세어 보면 보인다
+
+알림이 많아지면 사람은 알림을 걸러 읽기 시작한다. 이걸 알림 피로(alert fatigue)라고 한다. 무서운 건 걸러 읽는 판단이 대부분 맞다는 점이다. 열에 아홉은 정말 아무 일도 아니니까. 그래서 남은 하나를 놓친다.
+
+감으로 줄이지 말고 센다. Prometheus는 울린 알림을 `ALERTS`라는 시계열로 남긴다. 지난 일주일 동안 알림 이름별로 firing이었던 평가 횟수를 세면 어디가 시끄러운지 바로 보인다.
+
+```promql
+# 지난 7일 동안 알림별로 firing이었던 평가 횟수 (많은 순)
+sort_desc(sum by (alertname) (count_over_time(ALERTS{alertstate="firing"}[7d])))
+```
+
+숫자를 뽑았으면 페이지 하나하나에 "이걸 받고 무엇을 했나"를 붙인다. 아무것도 안 했으면 지우거나 티켓으로 내린다. 같은 걸 매번 손으로 했으면 자동화한다. 이 검토를 온콜 교대 때마다 하면 알림 수가 늘기만 하는 흐름이 끊긴다. 구글 SRE 책의 온콜 장은 12시간 교대 한 번에 사건 두 건 정도를 상한으로 잡는다. 그보다 많으면 사람이 사건마다 원인을 따지고 후속 조치를 할 시간이 없다. 온콜을 어떻게 나누고 넘기는지는 [온콜](/posts/on-call)에 있다.
+
+알림을 줄이는 다른 길은 알림의 기준을 사용자에 맞추는 것이다. "오류율 5%"는 트래픽이 적은 새벽에는 요청 20개 중 하나만 실패해도 넘는다. 이런 문턱 대신 "이번 달 허용한 실패를 얼마나 빨리 쓰고 있나"를 보면 시끄러운 짧은 튐과 조용히 오래 가는 문제를 같은 잣대로 잴 수 있다. 이 방식은 [에러 예산 글](/posts/error-budgets)에서 PromQL로 직접 만든다.
+
+## 런북 링크가 없는 알림은 반쪽이다
+
+새벽 세 시의 사람은 똑똑하지 않다. 알림 이름만 보고 무엇을 해야 할지 떠올리기 어렵다. 그래서 알림마다 `runbook_url`로 문서를 단다. 런북에는 대략 이런 것이 들어간다.
+
+이 알림이 무슨 뜻인지, 사용자에게 어떤 영향이 있는지를 한두 문장으로. 확인할 그래프와 쿼리를 링크로. 자주 있던 원인과 각각의 완화 방법(롤백, 트래픽 빼기, 스케일 아웃)을 명령어와 함께. 그래도 안 되면 누구를 부르는지.
+
+런북은 길 필요가 없다. 중요한 건 알림과 함께 바뀌는 것이다. 알림 규칙과 런북을 같은 저장소에 두고, 규칙에 `runbook_url`이 빠지면 CI에서 막는 팀도 많다. 런북에 "재시작한다"만 적혀 있고 매번 그것만 한다면, 그 알림은 사람이 아니라 자동 복구가 받아야 한다. 사람에게 남겨 둘 알림은 판단이 필요한 것이다.
+
+## 알림이 울리지 않는 장애
+
+알림은 시끄러운 것만큼 조용한 것도 문제다. 실제로 장애가 났는데 알림이 없었다면, 대개 아래 중 하나다.
+
+데이터가 없으면 알림도 없다. `sum(up{job="api"}) == 0`은 타깃이 있고 응답하지 않을 때만 참이다. 서비스 디스커버리에서 타깃이 통째로 사라지면 `up` 시계열 자체가 없어지고, 식의 결과도 비어서 조용하다. `absent()`는 반대로 결과가 비었을 때 1을 돌려준다. promtool로 두 규칙을 같은 입력에 돌렸다.
+
+```yaml
+# absent.yml
+- alert: ApiAllDown
+  expr: sum by (job) (up{job="api"}) == 0
+  for: 2m
+- alert: ApiTargetsMissing
+  expr: absent(up{job="api"})
+  for: 2m
+```
+
+```yaml
+# absent.test.yml (일부): 5분까지 수집되다가 타깃이 사라졌다
+input_series:
+  - series: 'up{job="api", instance="10.0.1.11:8080"}'
+    values: '1x5 stale'
+alert_rule_test:
+  - eval_time: 10m
+    alertname: ApiAllDown
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: ApiTargetsMissing
+    exp_alerts:
+      - exp_labels: { job: api }
+```
+
+```text
+  SUCCESS
+```
+
+10분 시점에 `ApiAllDown`은 조용하고 `ApiTargetsMissing`만 울렸다. `absent()`는 식에 적힌 등호 조건(`job="api"`)을 결과 레이블로 붙여 준다는 것도 테스트로 확인됐다.
+
+알림 경로 자체가 죽어도 조용하다. Alertmanager가 죽었거나, 웹훅 토큰이 만료됐거나, Prometheus의 규칙 파일이 문법 오류로 안 읽혔을 때다. 그래서 항상 울리는 알림(`expr: vector(1)`)을 하나 두고, 이 알림이 바깥 감시 서비스에 주기적으로 닿지 않으면 그쪽이 사람을 부르게 한다. 흔히 Watchdog이나 dead man's switch라고 부른다. Alertmanager 자체도 한 대면 같이 죽으니, 운영에서는 `--cluster.peer`로 두세 대를 묶고 Prometheus가 모두에게 보내게 한다. 서로 중복을 지워 한 통만 나간다.
+
+그 밖에 자주 보는 실수가 몇 있다. `group_by`에서 `job` 같은 레이블을 빠뜨려 서로 다른 서비스 알림이 한 통에 섞이는 경우, 반대로 `instance`까지 넣어 묶기가 사실상 꺼지는 경우가 있다. 레이블에 현재 값이나 요청 ID처럼 바뀌는 값을 넣으면 평가마다 새 알림이 되어 pending만 반복하다 영영 firing이 안 된다. 평균 응답 시간에 건 알림은 일부 사용자의 큰 지연을 숨긴다. 분위수나, 문턱보다 빠른 요청의 비율을 쓰는 이유는 [SLI와 SLO 글](/posts/sli-slo)에 있다.
+
+마지막으로, 새 규칙은 일부러 한 번 울려 본다. 이 글의 실습에서도 처음 쓴 테스트가 틀렸다. 문턱을 넘는 입력을 넣은 promtool 테스트를 CI에 두고, 스테이징에서 실제로 장애를 만들어 알림이 사람에게 닿는지 본다.
+
+## 다시 새벽 세 시로
+
+CPU 85% 알림은 지우거나 대시보드로 보낸다. 그 자리에 사용자가 보는 오류율과 지연에 페이지를 걸고, 문턱이 넘은 채 버텨야 울리게 `for`를 둔다. 알림은 Alertmanager에서 서비스 단위로 묶고, 큰 장애가 작은 알림을 덮게 누르고, 급하지 않은 것은 티켓으로 보낸다. 모든 페이지에는 런북을 달고, 교대마다 "받고 무엇을 했나"를 센다. 다음 글 [SLI와 SLO](/posts/sli-slo)에서는 "사용자가 피해를 본다"를 숫자 하나로 정의하는 법을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 증상 기반 알림과 원인 기반 알림은 무엇이 다른가요
+
+증상 알림은 사용자가 겪는 실패와 지연을 재고, 원인 알림은 CPU나 연결 수처럼 문제가 될 수도 있는 내부 상태를 잰다. 페이지는 증상에 거는 게 기본이다. 원인은 끝없이 많고 늘 증상으로 이어지지도 않아서, 원인마다 걸면 시끄럽고 처음 보는 원인은 놓친다. 디스크가 몇 시간 안에 차거나 인증서가 곧 만료되는 것처럼 곧 확실히 증상이 되는 원인만 예외로 둔다.
+
+### Prometheus 알림 규칙의 for는 무엇을 하나요
+
+조건이 평가마다 연속으로 참이어야 하는 시간이다. 그동안 알림은 pending이고, 다 채우면 firing이 되어 Alertmanager로 간다. 중간에 한 번이라도 거짓이면 처음부터 다시 센다. 짧게 튀는 값으로 사람을 깨우지 않으려고 쓴다.
+
+### 오류가 시작된 뒤 알림이 울리기까지 왜 for보다 오래 걸리나요
+
+`rate(...[5m])` 같은 창이 평균을 내기 때문이다. 창 안에 정상이던 시간이 섞여 있어서 비율이 문턱을 넘기까지 시간이 걸리고, 그 뒤에 `for`를 또 채운다. promtool 테스트에서 창 5분, `for` 5분인 규칙은 10분에 시작된 9% 실패에 18분에야 울렸다. 그래서 창과 `for`를 모두 길게 잡지 않고, 실제 지연은 단위 테스트로 확인한다.
+
+### Alertmanager의 grouping과 inhibition은 각각 언제 쓰나요
+
+grouping은 같은 원인으로 한꺼번에 뜬 알림을 한 메시지로 묶는다. `group_by`의 레이블이 같은 알림을 `group_wait` 동안 모아 보낸다. inhibition은 큰 알림이 울리는 동안 그 결과로 생긴 작은 알림을 보내지 않는다. 서비스 전체 다운이 인스턴스별 알림을 덮는 식이고, `equal`로 같은 서비스에만 적용되게 범위를 좁혀야 한다.
+
+### 알림 피로를 어떻게 줄이나요
+
+먼저 센다. `ALERTS` 시계열로 알림별 발생 횟수를 뽑고, 페이지마다 받은 사람이 무엇을 했는지 붙인다. 아무것도 안 한 알림은 지우거나 티켓으로 내리고, 매번 같은 조치를 했다면 자동화한다. 고정 문턱 대신 에러 예산 소진 속도로 알림을 걸면 트래픽이 적을 때의 거짓 알림도 준다.
+
+### 장애가 났는데 알림이 오지 않았다면 무엇을 의심하나요
+
+데이터가 사라져 식이 빈 결과를 낸 경우를 먼저 본다. 타깃이 서비스 디스커버리에서 빠지면 `up == 0`은 조용하니 `absent()`가 필요하다. 그다음은 알림 경로다. 규칙 파일이 안 읽혔는지, Alertmanager가 살아 있는지, 수신자 설정이 맞는지 확인하고, 이걸 상시 감시하려고 항상 울리는 Watchdog 알림을 바깥에서 받는다.
+
+### 페이지와 티켓은 어떤 기준으로 나누나요
+
+받는 사람이 할 행동으로 나눈다. 지금 사용자가 피해를 보고 있고 사람이 당장 손을 써야 하면 페이지, 행동은 필요하지만 업무 시간에 해도 되면 티켓이다. 할 일이 없으면 알림이 아니라 대시보드다. 이 기준을 `severity` 같은 레이블로 표현하고 Alertmanager 라우트로 보내며, 라우팅은 `amtool config routes test`로 CI에서 검증한다.

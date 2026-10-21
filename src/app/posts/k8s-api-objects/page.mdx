@@ -1,0 +1,678 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-api-objects");
+
+Deployment 매니페스트를 스무 줄 남짓 써서 `kubectl apply`를 했다. 확인하려고 `kubectl get deploy web -o yaml`을 치면 여든 줄 가까이 돌아온다. 쓴 적 없는 `uid`, `resourceVersion`, `generation`이 붙어 있고, `strategy`와 `terminationGracePeriodSeconds` 같은 값이 채워져 있고, 맨 아래에는 `status`라는 덩어리가 통째로 생겼다. 며칠 뒤에는 반대 일이 생긴다. `kubectl delete`가 "deleted"라고 답했는데 객체가 사라지지 않는다.
+
+둘 다 쿠버네티스 API 오브젝트가 어떻게 생겼는지 알면 풀린다. 이 글은 매니페스트의 다섯 칸(apiVersion, kind, metadata, spec, status)이 각각 누구의 것인지, API 그룹과 버전이 URL로 어떻게 이어지는지, `resourceVersion`과 `generation`이 무엇을 세는지, 그리고 ownerReferences와 finalizer가 삭제를 어떻게 바꾸는지를 본다. 출력은 kwok로 띄운 실습 클러스터(Kubernetes 1.30)에서 받았다. API 서버, etcd, 컨트롤러 매니저는 진짜이고 노드와 컨테이너만 흉내 낸다.
+
+이 주제의 다른 글: 이 오브젝트를 누가 읽고 고치는지는 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile), 오브젝트를 고르는 라벨은 [라벨과 셀렉터](/posts/k8s-labels-selectors), `v1beta1` 같은 버전 이름이 언제 사라지는지는 [기능 성숙도와 API 폐기](/posts/k8s-feature-maturity)에서 이어진다.
+
+## 매니페스트의 다섯 칸
+
+쿠버네티스에 올리는 모든 것은 같은 모양의 문서다. Pod도, Service도, Node도, 직접 만든 CRD도 그렇다. 아래 그림에서 칸을 하나씩 눌러 보면 각자 무엇을 맡는지 나온다.
+
+<UrlAnatomy
+  caption="모든 API 오브젝트는 이 다섯 칸으로 이루어진다"
+  base="Deployment"
+  separator=" { "
+  joiner=" · "
+  params={[
+    { key: "apiVersion", value: "apps/v1", title: "apiVersion: 그룹과 버전", description: "이 문서를 어느 API 그룹의 어느 버전 규칙으로 읽을지 정한다. apps가 그룹, v1이 버전이다. 그룹이 없는 v1은 core 그룹이다.", code: "apiVersion: apps/v1", required: true },
+    { key: "kind", value: "Deployment", title: "kind: 무엇인가", description: "그룹 안에서 어떤 종류의 오브젝트인지 적는다. 그룹·버전·종류를 합친 것을 GVK라고 부른다.", code: "kind: Deployment", required: true },
+    { key: "metadata", value: "name, labels", title: "metadata: 이름표", description: "이름, 네임스페이스, 라벨, 어노테이션처럼 모든 종류가 같은 모양으로 가지는 칸이다. uid, resourceVersion, generation은 서버가 채운다.", code: "metadata:\n  name: web\n  namespace: shop\n  labels: { app: web }", required: true },
+    { key: "spec", value: "원하는 상태", title: "spec: 내가 원하는 것", description: "사용자가 쓰는 칸이다. replicas 3, 이미지 nginx:1.27처럼 이렇게 되어 있으면 좋겠다는 상태를 적는다.", code: "spec:\n  replicas: 2\n  template: ..." },
+    { key: "status", value: "지금 상태", title: "status: 지금 실제로 어떤가", description: "컨트롤러가 쓰는 칸이다. 지금 준비된 Pod 수, 조건, 마지막으로 본 generation이 들어간다. 매니페스트에 쓰지 않는다.", code: "status:\n  readyReplicas: 2\n  observedGeneration: 1" },
+  ]}
+/>
+
+이 구분이 쿠버네티스 동작의 뼈대다. 사용자는 spec에 원하는 상태를 적고, 컨트롤러는 실제 세계를 보고 status를 적으면서 둘의 차이를 줄인다. 이 루프 자체는 [컨트롤러 글](/posts/k8s-controllers-reconcile)에서 따로 본다. 여기서는 문서 쪽을 본다.
+
+ConfigMap이나 Secret처럼 spec 없이 `data`만 있는 종류도 있고, Event처럼 status가 없는 종류도 있다. 그래도 apiVersion, kind, metadata 세 칸은 예외가 없다.
+
+## 스무 줄을 보냈는데 여든 줄이 돌아온다
+
+처음 이야기로 돌아가 보자. 아래 매니페스트를 apply하고 그대로 읽어 왔다.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: shop
+  labels:
+    app: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+```
+
+```bash
+# 서버가 저장한 모습을 본다. managedFields는 길어서 숨긴다
+kubectl get deploy web -n shop -o yaml --show-managed-fields=false
+```
+
+```text
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"labels":{"app":"web"},"name":"web","namespace":"shop"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"metadata":{"labels":{"app":"web"}},"spec":{"containers":[{"image":"nginx:1.27","name":"web"}]}}}}
+  creationTimestamp: "2026-10-21T00:28:10Z"
+  generation: 1
+  labels:
+    app: web
+  name: web
+  namespace: shop
+  resourceVersion: "321"
+  uid: e2a2c837-bda8-4f69-9a2b-6ee71e14ad24
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: web
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    ...
+      containers:
+      - image: nginx:1.27
+        imagePullPolicy: IfNotPresent
+        name: web
+        ...
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+status:
+  availableReplicas: 2
+  conditions:
+  ...
+  observedGeneration: 1
+  readyReplicas: 2
+  replicas: 2
+  updatedReplicas: 2
+```
+
+늘어난 줄은 세 군데서 왔다. 첫째, API 서버가 저장할 때 붙인 메타데이터다. `uid`는 이 객체의 평생 고유한 번호이고, 같은 이름으로 지웠다가 다시 만들면 바뀐다. `resourceVersion`과 `generation`은 아래에서 따로 본다. 둘째, 기본값이다. `strategy`, `revisionHistoryLimit: 10`, `imagePullPolicy: IfNotPresent`는 적지 않은 필드에 API 서버가 기본값을 채운 것이다. 셋째, `status`와 `deployment.kubernetes.io/revision` 어노테이션은 Deployment 컨트롤러가 나중에 써 넣었다.
+
+`last-applied-configuration`은 kubectl이 "지난번에 내가 보낸 것"을 기억해 두는 어노테이션이다. 다음 apply 때 무엇을 지웠는지 계산하는 데 쓴다. 이 방식과 서버 쪽 apply의 차이는 [kubectl apply와 SSA](/posts/kubectl-apply-ssa)에서 다룬다.
+
+여기서 실수가 하나 나온다. 이 출력을 그대로 파일로 저장해 저장소에 넣는 것이다. `uid`, `resourceVersion`, `status`까지 같이 들어간다. 다른 클러스터에 apply하면 `uid`가 맞지 않고, 같은 클러스터에서도 `resourceVersion`이 낡아 충돌이 난다(아래 409 절). 저장소에 넣는 매니페스트는 내가 원하는 것(spec과 이름, 라벨)만 남긴다.
+
+## apiVersion은 그룹과 버전이다
+
+`apps/v1`의 `apps`는 API 그룹이다. 쿠버네티스는 처음에 모든 종류를 한 묶음(core)에 넣었다가, 종류가 늘자 관심사별 그룹으로 나눴다. Deployment·ReplicaSet은 `apps`, Job·CronJob은 `batch`, Ingress·NetworkPolicy는 `networking.k8s.io`에 있다. core 그룹은 이름이 비어 있어서 `apiVersion: v1`이라고만 쓴다. 클러스터가 지금 내주는 그룹과 버전은 이렇게 본다.
+
+```bash
+# 서버가 지원하는 그룹/버전 목록
+kubectl api-versions
+```
+
+```text
+admissionregistration.k8s.io/v1
+apiextensions.k8s.io/v1
+apps/v1
+...
+autoscaling/v1
+autoscaling/v2
+batch/v1
+...
+flowcontrol.apiserver.k8s.io/v1
+flowcontrol.apiserver.k8s.io/v1beta3
+networking.k8s.io/v1
+...
+v1
+```
+
+`autoscaling`은 v1과 v2를 동시에 내준다. 버전은 같은 객체를 보는 서로 다른 창이다. 객체가 두 개 있는 게 아니다. HPA 하나를 만들고 두 버전으로 읽어 봤다.
+
+```bash
+# 같은 HPA를 v2와 v1 경로로 각각 읽는다
+kubectl autoscale deploy web -n shop --min=2 --max=5 --cpu-percent=70
+kubectl get --raw /apis/autoscaling/v2/namespaces/shop/horizontalpodautoscalers/web | jq -c '[.apiVersion, .metadata.uid, .spec.metrics]'
+kubectl get --raw /apis/autoscaling/v1/namespaces/shop/horizontalpodautoscalers/web | jq -c '[.apiVersion, .metadata.uid, .spec.targetCPUUtilizationPercentage]'
+```
+
+```text
+horizontalpodautoscaler.autoscaling/web autoscaled
+["autoscaling/v2","fa9f5605-a936-4ee8-b2df-66b3c06dd8c4",[{"type":"Resource","resource":{"name":"cpu","target":{"type":"Utilization","averageUtilization":70}}}]]
+["autoscaling/v1","fa9f5605-a936-4ee8-b2df-66b3c06dd8c4",70]
+```
+
+`uid`가 같다. etcd에는 한 벌만 저장돼 있고(저장 버전이라고 부른다), API 서버가 요청한 버전의 모양으로 변환해서 돌려준다. v2의 `metrics` 배열이 v1에서는 `targetCPUUtilizationPercentage` 숫자 하나로 보인다. 그래서 버전을 옮기는 일은 "새 객체를 만드는 것"이 아니라 "매니페스트를 새 모양으로 다시 쓰는 것"이다. 옛 버전이 언제 사라지는지는 [기능 성숙도 글](/posts/k8s-feature-maturity)에서 본다.
+
+<ConceptDiagram
+  width={440}
+  height={280}
+  caption="etcd에는 한 벌만 있고, 버전은 같은 객체를 보는 창이다"
+  nodes={[
+    { id: "etcd", label: "etcd", sub: "저장 버전 한 벌", x: 220, y: 240, w: 140 },
+    { id: "api", label: "API 서버", sub: "변환", x: 220, y: 140, w: 140 },
+    { id: "v1", label: "autoscaling/v1", sub: "CPU % 하나", x: 90, y: 40, w: 150 },
+    { id: "v2", label: "autoscaling/v2", sub: "metrics 배열", x: 350, y: 40, w: 150 },
+  ]}
+  edges={[
+    { from: "etcd", to: "api", label: "읽기" },
+    { from: "api", to: "v1", label: "v1 모양" },
+    { from: "api", to: "v2", label: "v2 모양" },
+  ]}
+/>
+
+## 오브젝트 하나는 URL 하나다
+
+kubectl은 HTTP 클라이언트다. `kubectl get deploy web -n shop`은 아래 요청 하나로 바뀐다. `-v=6`을 주면 실제 요청 줄이 보인다.
+
+```bash
+# kubectl이 보낸 요청을 본다
+kubectl get deploy web -n shop -v=6 2>&1 | grep GET
+```
+
+```text
+I1021 00:43:39.824383   24467 round_trippers.go:553] GET https://127.0.0.1:32764/apis/apps/v1/namespaces/shop/deployments/web 200 OK in 6 milliseconds
+```
+
+경로는 규칙대로 만들어진다. core 그룹은 `/api/v1`, 이름 있는 그룹은 `/apis/{그룹}/{버전}`으로 시작하고, 네임스페이스가 있는 종류면 `/namespaces/{ns}`가 붙고, 종류의 복수형 소문자(리소스 이름)와 객체 이름이 이어진다.
+
+<UrlAnatomy
+  caption="kubectl get deploy web -n shop 이 부르는 경로"
+  base="https://127.0.0.1:32764"
+  separator=""
+  joiner=""
+  params={[
+    { key: "/apis", display: "/apis", title: "이름 있는 그룹", description: "core 그룹이면 /api, 그 밖의 그룹이면 /apis로 시작한다. Pod는 /api/v1/..., Deployment는 /apis/apps/v1/...이다." },
+    { key: "/apps/v1", display: "/apps/v1", title: "그룹과 버전", description: "apiVersion 칸의 apps/v1이 그대로 들어간다. 여기를 바꾸면 같은 객체를 다른 버전 모양으로 받는다." },
+    { key: "/namespaces/shop", display: "/namespaces/shop", title: "네임스페이스", description: "네임스페이스에 속하는 종류만 붙는다. Node나 ClusterRole 같은 클러스터 단위 종류는 이 조각이 없다." },
+    { key: "/deployments", display: "/deployments", title: "리소스 이름", description: "kind(Deployment)가 아니라 복수형 소문자 리소스 이름(deployments)이 들어간다. 여기서 끝나면 목록(list)이다." },
+    { key: "/web", display: "/web", title: "객체 이름", description: "metadata.name이다. 뒤에 /status나 /scale이 붙으면 그 객체의 하위 리소스를 가리킨다." },
+  ]}
+/>
+
+`kubectl get --raw`로 이 경로를 직접 부를 수 있다. 위로 거슬러 올라가면 API 서버가 무엇을 내주는지 스스로 설명하는 디스커버리 문서가 나온다.
+
+```bash
+# core 그룹의 버전 목록
+kubectl get --raw /api
+# apps/v1 그룹이 내주는 리소스와 동사 (deployments 줄만)
+kubectl get --raw /apis/apps/v1 | jq -r '.resources[] | select(.name|startswith("deployments")) | "\(.name) \(.verbs|join(","))"'
+```
+
+```text
+{"kind":"APIVersions","versions":["v1"],"serverAddressByClientCIDRs":[{"clientCIDR":"0.0.0.0/0","serverAddress":"192.0.2.2:32764"}]}
+deployments create,delete,deletecollection,get,list,patch,update,watch
+deployments/scale get,patch,update
+deployments/status get,patch,update
+```
+
+동사(verbs)가 RBAC 규칙에 그대로 쓰는 말이다. `deployments/scale`과 `deployments/status`는 하위 리소스로, 따로 권한을 줄 수 있다. HPA는 `scale`만 고치고, 컨트롤러는 `status`만 고친다.
+
+요청 하나가 API 서버 안에서 거치는 길은 이렇다. 아래 그림에서 다음을 누르면 apply 요청이 etcd까지 갔다가 응답이 돌아오고, 마지막에 잘못된 요청이 어디서 막히는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="kubectl apply 한 번이 API 서버 안에서 지나는 단계"
+  zones={[
+    { id: "cp", label: "control plane", x: 120, y: 10, w: 272, h: 280, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "HTTPS", x: 56, y: 150, icon: "client", w: 92 },
+    { id: "auth", label: "authn·authz", sub: "누구, 권한", x: 196, y: 60, icon: "lock", w: 112 },
+    { id: "adm", label: "admission", sub: "기본값·검증", x: 326, y: 60, icon: "firewall", w: 112 },
+    { id: "api", label: "apiserver", sub: "스키마 검증", x: 326, y: 160, icon: "server", w: 112 },
+    { id: "etcd", label: "etcd", sub: "/registry/...", x: 326, y: 250, icon: "db", w: 112 },
+    { id: "kcm", label: "controllers", sub: "watch", x: 196, y: 250, icon: "gateway", w: 112 },
+  ]}
+  links={[
+    { from: "cli", to: "auth" },
+    { from: "auth", to: "adm" },
+    { from: "adm", to: "api" },
+    { from: "api", to: "etcd" },
+    { from: "etcd", to: "kcm", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "auth"], packet: "PATCH", title: "누가, 무엇을 하려는지 본다", detail: "인증서나 토큰으로 사용자를 알아내고, RBAC으로 그 사용자가 shop 네임스페이스의 deployments에 patch할 수 있는지 본다.", payload: "PATCH /apis/apps/v1/namespaces/shop/deployments/web" },
+    { path: ["auth", "adm", "api"], packet: "PATCH", title: "기본값을 채우고 검사한다", detail: "변경 어드미션이 기본값과 사이드카 같은 것을 끼워 넣고, 스키마 검증과 검증 어드미션을 통과해야 저장한다." },
+    { path: ["api", "etcd"], packet: "rv 437", title: "etcd에 쓰고 번호를 받는다", detail: "저장에 성공하면 etcd가 새 revision을 매긴다. 이 번호가 응답의 resourceVersion이 된다." },
+    { path: ["etcd", "kcm"], packet: "MODIFIED", title: "지켜보던 컨트롤러가 깨어난다", detail: "API 서버는 이 변화를 watch 중인 컨트롤러에 이벤트로 흘려보낸다. Deployment 컨트롤러가 새 spec을 보고 일을 시작한다." },
+    { path: ["cli", "auth", "adm", "api"], packet: "replica", blocked: true, title: "모르는 필드는 여기서 막힌다", detail: "replicas를 replica로 잘못 쓰면 strict 검증에 걸려 400이 돌아온다. etcd에는 아무것도 쓰이지 않는다.", payload: "strict decoding error: unknown field \"spec.replica\"" },
+  ]}
+/>
+
+아래에서 경로 규칙을 직접 코드로 만들어 볼 수 있다. 마지막 테스트처럼 Namespace 객체 자신은 `/namespaces/shop`이 리소스 경로가 된다는 점이 재미있다.
+
+<CodePlayground
+  caption="apiVersion과 리소스 이름으로 REST 경로 만들기"
+  functionName="apiPath"
+  initialCode={`function apiPath(apiVersion, resource, namespace, name) {
+  // core 그룹(v1)은 /api/v1, 나머지는 /apis/{group}/{version}
+  // namespace가 있으면 /namespaces/{ns}를 붙인다
+  // name이 없으면 목록 경로다
+  return "";
+}`}
+  solution={`function apiPath(apiVersion, resource, namespace, name) {
+  const base = apiVersion.includes("/") ? \`/apis/\${apiVersion}\` : \`/api/\${apiVersion}\`;
+  const ns = namespace ? \`/namespaces/\${namespace}\` : "";
+  const tail = name ? \`/\${name}\` : "";
+  return \`\${base}\${ns}/\${resource}\${tail}\`;
+}`}
+  tests={[
+    { args: ["v1", "pods", "shop", "api-1"], expected: "/api/v1/namespaces/shop/pods/api-1", label: "core 그룹 Pod" },
+    { args: ["apps/v1", "deployments", "shop", "web"], expected: "/apis/apps/v1/namespaces/shop/deployments/web", label: "apps 그룹" },
+    { args: ["apps/v1", "deployments", "shop", null], expected: "/apis/apps/v1/namespaces/shop/deployments", label: "목록" },
+    { args: ["v1", "nodes", null, "node-a"], expected: "/api/v1/nodes/node-a", label: "클러스터 단위" },
+    { args: ["rbac.authorization.k8s.io/v1", "clusterroles", null, null], expected: "/apis/rbac.authorization.k8s.io/v1/clusterroles", label: "점이 있는 그룹" },
+    { args: ["v1", "namespaces", null, "shop"], expected: "/api/v1/namespaces/shop", label: "Namespace 자신" },
+  ]}
+/>
+
+## 필드 이름은 explain에 물어본다
+
+필드가 정확히 무엇인지, 기본값이 무엇인지는 블로그보다 클러스터에 묻는 게 빠르다. `kubectl explain`은 지금 연결된 API 서버의 스키마(OpenAPI)를 읽으니 버전에 맞는 답이 나온다.
+
+```bash
+# Deployment의 selector 필드 설명
+kubectl explain deployment.spec.selector
+# 하위 필드를 트리로 다 보고 싶으면 --recursive
+kubectl explain deployment.spec.strategy --recursive
+```
+
+```text
+GROUP:      apps
+KIND:       Deployment
+VERSION:    v1
+
+FIELD: selector <LabelSelector>
+...
+    A label selector is a label query over a set of resources. The result of
+    matchLabels and matchExpressions are ANDed. An empty label selector matches
+    all objects. A null label selector matches no objects.
+...
+```
+
+"An empty label selector matches all objects"라는 줄은 [라벨과 셀렉터 글](/posts/k8s-labels-selectors)에서 다시 나온다. 종류 목록과 짧은 이름, 네임스페이스 여부는 `kubectl api-resources`가 알려 주고, 클러스터 단위 리소스가 왜 권한에서 중요한지는 [네임스페이스 글](/posts/k8s-namespace)에 정리해 두었다.
+
+## spec은 사용자가, status는 컨트롤러가
+
+두 칸은 쓰는 주인이 다르다. 그래서 대부분의 종류는 status를 하위 리소스(`/status`)로 떼어 놓았다. 본체 경로로 보낸 status 변경은 조용히 무시된다.
+
+```bash
+# 본체 경로로 status를 고쳐 본다
+kubectl patch deploy web -n shop --type=merge -p '{"status":{"readyReplicas":99}}'
+kubectl get deploy web -n shop -o jsonpath='{.status.readyReplicas}{"\n"}'
+```
+
+```text
+deployment.apps/web patched (no change)
+3
+```
+
+에러가 아니라 "no change"로 끝나서 실수를 알아채기 어렵다. 반대로 `/status` 경로로는 spec을 고칠 수 없다. 이렇게 나눠 둔 덕분에 권한도 나뉜다. 사람에게는 spec만, 컨트롤러에게는 status만 고칠 권한을 준다. 둘이 같은 객체를 동시에 써도 서로의 칸을 덮어쓰지 않는다. kubectl 1.24에 들어온 `--subresource=status` 옵션으로 status를 직접 고칠 수 있지만, 컨트롤러가 곧바로 다시 덮어쓰니 디버깅 말고는 쓸 일이 없다.
+
+## generation과 observedGeneration
+
+`metadata.generation`은 spec이 바뀔 때만 1씩 올라가는 숫자다. 라벨이나 status가 바뀌면 오르지 않는다. 컨트롤러는 일을 마칠 때 자기가 처리한 generation을 `status.observedGeneration`에 적는다. 두 숫자를 같이 보면 "내 변경을 컨트롤러가 봤나"를 알 수 있다.
+
+```bash
+# 세 칸만 뽑아 보는 출력 형식을 정해 두고
+f='-o=custom-columns=GEN:.metadata.generation,OBSERVED:.status.observedGeneration,RV:.metadata.resourceVersion'
+kubectl get deploy web -n shop "$f"
+# 라벨만 바꾼다. spec이 아니다
+kubectl label deploy web -n shop team=checkout && kubectl get deploy web -n shop "$f"
+# replicas를 바꾼다. spec이다
+kubectl scale deploy web -n shop --replicas=3 && kubectl get deploy web -n shop "$f"
+```
+
+```text
+GEN   OBSERVED   RV
+1     1          321
+deployment.apps/web labeled
+GEN   OBSERVED   RV
+1     1          338
+deployment.apps/web scaled
+GEN   OBSERVED   RV
+2     2          353
+```
+
+라벨을 바꾸자 RV(resourceVersion)는 321에서 338로 바뀌었지만 GEN은 1 그대로다. replicas를 바꾸자 GEN이 2가 됐다. 컨트롤러가 너무 빨라서 OBSERVED가 따라가는 순간은 이 출력으로는 안 보인다. watch를 걸어 두고 이미지를 바꾸면 잡힌다.
+
+```bash
+# 한 창에서 지켜보고, 다른 창에서 이미지를 바꾼다
+kubectl get deploy web -n shop -w -o=custom-columns=GEN:.metadata.generation,OBSERVED:.status.observedGeneration,RV:.metadata.resourceVersion,UPDATED:.status.updatedReplicas,AVAIL:.status.availableReplicas
+kubectl set image deploy/web -n shop web=nginx:1.28
+```
+
+```text
+GEN   OBSERVED   RV    UPDATED   AVAIL
+2     2          353   3         3
+3     2          372   3         3
+3     2          376   3         3
+3     3          383   <none>    3
+3     3          385   1         3
+3     3          388   1         4
+3     3          406   2         3
+3     3          426   3         3
+```
+
+두 번째 줄이 그 순간이다. GEN은 3인데 OBSERVED는 아직 2다. 이 동안의 status는 옛 spec 기준이라 믿으면 안 된다. 그 뒤로 RV는 계속 오르지만 GEN은 3에 머문다. status만 바뀌고 있기 때문이다.
+
+<AlgoTrace
+  caption="spec 변경, 라벨 변경, status 변경이 두 숫자를 어떻게 움직이나"
+  memoryLabel="generation / observed / rv"
+  cells={["apply", "label", "scale", "set image", "컨트롤러", "status"]}
+  steps={[
+    { pointer: 0, memory: ["gen 1", "obs 1", "rv 321"], caption: "처음 만들면 generation이 1이다. 컨트롤러가 곧 observedGeneration 1을 적는다." },
+    { pointer: 1, memory: ["gen 1", "obs 1", "rv 338"], caption: "라벨은 metadata다. resourceVersion만 바뀌고 generation은 그대로다." },
+    { pointer: 2, memory: ["gen 2", "obs 2", "rv 353"], caption: "replicas는 spec이다. generation이 오르고, 컨트롤러가 바로 따라왔다." },
+    { pointer: 3, memory: ["gen 3", "obs 2", "rv 372"], caption: "이미지를 바꾼 직후다. 컨트롤러가 아직 못 봤다. 지금 status는 옛 spec 기준이다." },
+    { pointer: 4, found: [3], memory: ["gen 3", "obs 3", "rv 383"], caption: "컨트롤러가 새 spec을 받아 처리했다. 두 숫자가 같아졌다." },
+    { pointer: 5, found: [3, 4], memory: ["gen 3", "obs 3", "rv 426"], caption: "롤링 업데이트가 진행되며 status만 계속 바뀐다. resourceVersion만 오른다." },
+  ]}
+/>
+
+이게 실무에서 쓰이는 곳이 있다. 배포 스크립트가 apply 직후 status를 읽어 "replicas 3/3, 성공"이라고 판단하면, 그건 옛 spec의 결과를 본 것일 수 있다. `kubectl rollout status`는 그래서 observedGeneration이 generation에 닿을 때까지 먼저 기다린다. 직접 만든 스크립트나 CI에서 상태를 볼 때도 같은 조건을 넣는다. ArgoCD도 Deployment의 상태를 판단할 때 이 비교를 먼저 한다.
+
+## resourceVersion은 낙관적 잠금의 버전 번호다
+
+`resourceVersion`은 객체가 바뀔 때마다 바뀌는 문자열이다. 실제로는 etcd의 revision 번호라 숫자처럼 보이지만, 클라이언트는 크기를 비교하지 말고 같은지만 보라는 것이 API 규칙이다. 이 값의 쓰임은 동시 수정 막기다. 읽은 버전을 실어서 덮어쓰면, 그 사이에 누가 고쳤을 때 서버가 거절한다.
+
+```bash
+# 객체를 파일로 받아 두고
+kubectl get deploy web -n shop -o yaml > old.yaml
+# 그 사이 다른 사람이 replicas를 바꿨다
+kubectl scale deploy web -n shop --replicas=4
+# 낡은 파일의 replicas를 5로 고쳐 통째로 덮어쓴다
+sed -i 's/replicas: 3$/replicas: 5/' old.yaml
+grep -m1 resourceVersion old.yaml
+kubectl replace -f old.yaml
+```
+
+```text
+deployment.apps/web scaled
+  resourceVersion: "437"
+Error from server (Conflict): error when replacing "old.yaml": Operation cannot be fulfilled on deployments.apps "web": the object has been modified; please apply your changes to the latest version and try again
+```
+
+HTTP로 보면 409다. kubectl proxy를 띄워 curl로 ConfigMap을 낡은 버전으로 덮어쓰면 응답 본문이 그대로 보인다.
+
+```bash
+# kubectl proxy가 인증을 대신 해 준다 (로컬 실습용)
+kubectl proxy --port=18093 &
+curl -s -X PUT localhost:18093/api/v1/namespaces/shop/configmaps/flags \
+  -H 'Content-Type: application/json' \
+  -d '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"flags","resourceVersion":"1"},"data":{"beta":"on"}}' \
+  -w '\nHTTP %{http_code}\n'
+```
+
+```text
+{
+  "kind": "Status",
+  "apiVersion": "v1",
+  "metadata": {},
+  "status": "Failure",
+  "message": "Operation cannot be fulfilled on configmaps \"flags\": the object has been modified; please apply your changes to the latest version and try again",
+  "reason": "Conflict",
+  "details": {
+    "name": "flags",
+    "kind": "configmaps"
+  },
+  "code": 409
+}
+HTTP 409
+```
+
+DB에서 버전 컬럼으로 하는 [낙관적 잠금](/posts/optimistic-locking)과 같은 원리다. 잠금 없이 일단 쓰고, 버전이 다르면 다시 읽어서 다시 시도한다. `kubectl apply`와 `kubectl patch`는 대부분 resourceVersion을 싣지 않고 바꿀 필드만 보내서 이 충돌을 잘 만나지 않는다. 컨트롤러는 자주 만난다. 컨트롤러가 409를 어떻게 다루는지는 [컨트롤러 글](/posts/k8s-controllers-reconcile)에서 실제로 돌려 본다.
+
+resourceVersion에는 다른 쓰임도 있다. 목록을 받은 시점의 resourceVersion부터 watch를 걸면 그 뒤의 변화만 빠짐없이 받는다. 이 list-then-watch가 모든 컨트롤러의 출발점이다.
+
+## 누가 누구를 만들었나, ownerReferences
+
+Deployment는 ReplicaSet을, ReplicaSet은 Pod를 만든다. 만든 쪽은 자식의 `metadata.ownerReferences`에 자기 이름과 uid를 적는다.
+
+```bash
+# ReplicaSet과 Pod의 주인을 본다
+kubectl get rs,pods -n shop -o custom-columns='KIND:.kind,NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind,OWNER_NAME:.metadata.ownerReferences[0].name'
+# ReplicaSet에 적힌 주인 정보 전체
+kubectl get rs -n shop -o jsonpath='{.items[0].metadata.ownerReferences}' | jq
+```
+
+```text
+KIND         NAME                   OWNER        OWNER_NAME
+ReplicaSet   web-7b64654bb6         Deployment   web
+Pod          web-7b64654bb6-h4w4m   ReplicaSet   web-7b64654bb6
+Pod          web-7b64654bb6-h928r   ReplicaSet   web-7b64654bb6
+Pod          web-7b64654bb6-pcsjx   ReplicaSet   web-7b64654bb6
+[
+  {
+    "apiVersion": "apps/v1",
+    "blockOwnerDeletion": true,
+    "controller": true,
+    "kind": "Deployment",
+    "name": "web",
+    "uid": "e2a2c837-bda8-4f69-9a2b-6ee71e14ad24"
+  }
+]
+```
+
+주인은 이름이 아니라 `uid`로 가리킨다. 같은 이름의 Deployment를 지웠다 다시 만들면 uid가 다르니 다른 주인이다. `controller: true`는 "이 자식을 관리하는 컨트롤러는 나 하나"라는 표시다. 주인은 여럿일 수 있어도 controller는 하나만 될 수 있다. 다른 컨트롤러가 이 Pod를 셀렉터로 보더라도 이미 controller가 있으면 손대지 않는다. 주인은 같은 네임스페이스에 있거나 클러스터 단위 객체여야 한다. 다른 네임스페이스의 객체를 주인으로 적을 수는 없고, 클러스터 단위 객체는 클러스터 단위 주인만 가질 수 있다.
+
+## 주인을 지우면 자식은
+
+주인을 지우면 자식을 어떻게 할지 세 가지로 고를 수 있다. 이 일을 하는 것은 컨트롤러 매니저 안의 가비지 컬렉터다. 객체들의 ownerReferences로 그래프를 만들어 두고, 주인이 사라진 자식을 찾아 지운다.
+
+- `--cascade=background`(기본값): 주인을 바로 지우고, 가비지 컬렉터가 뒤에서 자식을 지운다.
+- `--cascade=foreground`: 자식이 먼저 다 지워질 때까지 주인이 남아 있는다.
+- `--cascade=orphan`: 주인만 지우고 자식은 남긴다. 자식의 ownerReferences에서 주인만 빠진다.
+
+orphan은 실무에서 Deployment를 지우되 떠 있는 Pod는 건드리지 않고 싶을 때 쓴다. 해 보면 재미있는 일이 생긴다.
+
+```bash
+# 주인만 지운다. ReplicaSet과 Pod는 남는다
+kubectl delete deploy web -n shop --cascade=orphan
+kubectl get rs -n shop -o custom-columns=NAME:.metadata.name,OWNERS:.metadata.ownerReferences
+# 같은 매니페스트를 다시 apply한다
+kubectl apply -f web.yaml
+kubectl get rs -n shop -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,OWNER:.metadata.ownerReferences[0].name,OWNER_UID:.metadata.ownerReferences[0].uid
+```
+
+```text
+deployment.apps "web" deleted
+NAME             OWNERS
+web-68f449b5c9   <none>
+web-7b64654bb6   <none>
+deployment.apps/web created
+NAME             REPLICAS   OWNER   OWNER_UID
+web-68f449b5c9   0          web     d8ff1133-205d-4282-8056-ccfae83f1404
+web-7b64654bb6   2          web     d8ff1133-205d-4282-8056-ccfae83f1404
+```
+
+새 Deployment(uid `d8ff1133...`)가 주인 없는 ReplicaSet 둘을 셀렉터로 찾아 입양했다. 그리고 매니페스트의 이미지(nginx:1.27)와 템플릿이 같은 옛 ReplicaSet `7b64654bb6`을 2로 올리고, 1.28로 떠 있던 `68f449b5c9`를 0으로 내렸다. 주인 없는 자식은 셀렉터가 맞는 새 주인에게 붙는다. 이게 편할 때도 있고 사고일 때도 있다. 엉뚱한 Deployment가 남의 ReplicaSet을 입양하는 사고는 [라벨과 셀렉터 글](/posts/k8s-labels-selectors)에서 재현한다.
+
+foreground 삭제는 순서가 눈에 보인다. 아래 그림에서 다음을 누르면 주인이 자식을 기다리는 과정이 나온다.
+
+<SequenceDiagram
+  caption="foreground 삭제: 자식이 먼저 사라져야 주인이 사라진다"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "gc", label: "가비지 컬렉터" },
+    { id: "child", label: "자식 객체" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "DELETE (Foreground)", title: "지우라고 한다", detail: "API 서버는 바로 지우지 않는다. deletionTimestamp를 찍고 finalizers에 foregroundDeletion을 넣는다.", payload: "propagationPolicy: Foreground" },
+    { from: "api", to: "gc", label: "watch: 삭제 중", title: "가비지 컬렉터가 알아챈다", detail: "삭제 중인 주인을 보고 그래프에서 blockOwnerDeletion: true인 자식을 찾는다." },
+    { from: "gc", to: "child", label: "DELETE", title: "자식부터 지운다", detail: "자식도 지운다. 자식에 다른 finalizer가 있으면 그게 풀릴 때까지 자식이 남고, 주인도 같이 기다린다." },
+    { from: "child", to: "gc", label: "사라짐", title: "자식이 다 사라졌다", detail: "blockOwnerDeletion인 자식이 하나도 안 남으면 다음으로 간다." },
+    { from: "gc", to: "api", label: "finalizer 제거", title: "주인을 놓아준다", detail: "주인의 foregroundDeletion finalizer를 뗀다. finalizer가 비면 API 서버가 주인을 etcd에서 지운다." },
+  ]}
+/>
+
+실제로 자식에 아무도 처리하지 않는 finalizer를 달아 두고 주인을 foreground로 지워 봤다.
+
+```bash
+# parent와, parent를 주인으로 둔 child를 만든다 (child에는 finalizer)
+kubectl delete cm parent -n shop --cascade=foreground --wait=false
+kubectl get cm -n shop -o custom-columns=NAME:.metadata.name,DELETING:.metadata.deletionTimestamp,FINALIZERS:.metadata.finalizers
+```
+
+```text
+configmap "parent" deleted
+NAME               DELETING               FINALIZERS
+child              2026-10-21T00:29:54Z   [example.com/hold]
+kube-root-ca.crt   <none>                 <none>
+parent             2026-10-21T00:29:54Z   [foregroundDeletion]
+```
+
+kubectl은 "deleted"라고 했지만 둘 다 남아 있다. 둘 다 `deletionTimestamp`가 찍혔고, 주인은 `foregroundDeletion`, 자식은 `example.com/hold` 때문에 기다린다. child의 finalizer를 떼자 3초 안에 둘 다 사라졌다.
+
+## finalizer가 삭제를 붙잡는다
+
+finalizer는 "지우기 전에 내가 할 일이 있으니 기다려라"라는 표시다. `metadata.finalizers`에 이름이 하나라도 있으면 DELETE 요청은 객체를 지우지 않고 `deletionTimestamp`만 찍는다. finalizer를 단 주인(보통 컨트롤러)이 그걸 보고 바깥 정리(클라우드 디스크 삭제, DNS 레코드 정리 등)를 마친 뒤 자기 이름을 뺀다. 목록이 비면 그때 사라진다. 아래 그림은 이 과정이 어디서 멈추는지 보여 준다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="finalizer가 붙은 객체의 삭제는 주인 컨트롤러를 한 바퀴 돌아야 끝난다"
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "DELETE", x: 60, y: 50, icon: "client", w: 96 },
+    { id: "api", label: "apiserver", sub: "삭제 중 표시", x: 200, y: 50, icon: "server", w: 110 },
+    { id: "etcd", label: "etcd", sub: "객체 남아 있음", x: 340, y: 50, icon: "db", w: 104 },
+    { id: "ctl", label: "주인 컨트롤러", sub: "finalizer 주인", x: 200, y: 150, icon: "gateway", w: 124 },
+    { id: "ext", label: "외부 자원", sub: "디스크, DNS", x: 200, y: 230, icon: "internet", w: 110 },
+  ]}
+  links={[
+    { from: "cli", to: "api" },
+    { from: "api", to: "etcd" },
+    { from: "api", to: "ctl", dashed: true },
+    { from: "ctl", to: "ext" },
+  ]}
+  steps={[
+    { path: ["cli", "api", "etcd"], packet: "DELETE", title: "지우지 않고 표시만 한다", detail: "finalizers가 비어 있지 않으니 deletionTimestamp만 찍어 저장한다. kubectl은 deleted라고 답한다.", payload: "deletionTimestamp: 2026-10-21T00:29:18Z\nfinalizers: [example.com/cleanup-dns]" },
+    { path: ["api", "ctl"], packet: "watch", title: "주인 컨트롤러가 본다", detail: "삭제 중 표시가 붙은 객체를 watch로 받는다. 정리해야 할 바깥 자원이 있는지 확인한다." },
+    { path: ["ctl", "ext"], packet: "cleanup", title: "바깥 정리를 한다", detail: "클라우드 API로 디스크나 DNS 레코드를 지운다. 실패하면 재시도한다. 그동안 객체는 계속 남는다." },
+    { path: ["ctl", "api", "etcd"], packet: "PATCH", title: "자기 이름을 뺀다", detail: "정리가 끝나면 finalizers에서 자기 이름을 지운다. 목록이 비는 순간 API 서버가 객체를 진짜로 지운다." },
+    { path: ["api", "ctl"], packet: "watch", blocked: true, title: "주인이 없으면 영원히 남는다", detail: "컨트롤러를 먼저 지웠거나 죽어 있으면 아무도 이름을 빼 주지 않는다. Terminating에서 멈추는 객체의 대부분이 이 경우다." },
+  ]}
+/>
+
+직접 해 보면 규칙 몇 가지가 보인다.
+
+```bash
+# ConfigMap에 finalizer를 달고 지운다
+kubectl patch cm flags -n shop --type=merge -p '{"metadata":{"finalizers":["example.com/cleanup-dns"]}}'
+kubectl delete cm flags -n shop --wait=false
+kubectl get cm flags -n shop -o jsonpath='{.metadata.deletionTimestamp}{"  "}{.metadata.finalizers}{"\n"}'
+# 삭제 중에도 내용은 고칠 수 있다
+kubectl patch cm flags -n shop --type=merge -p '{"data":{"beta":"on"}}'
+# 삭제 중에는 finalizer를 새로 더할 수 없다
+kubectl patch cm flags -n shop --type=merge -p '{"metadata":{"finalizers":["example.com/cleanup-dns","example.com/another"]}}'
+# finalizer를 빼면 바로 사라진다
+kubectl patch cm flags -n shop --type=json -p '[{"op":"remove","path":"/metadata/finalizers/0"}]'
+kubectl get cm flags -n shop
+```
+
+```text
+configmap/flags patched
+configmap "flags" deleted
+2026-10-21T00:29:18Z  ["example.com/cleanup-dns"]
+configmap/flags patched
+The ConfigMap "flags" is invalid: metadata.finalizers: Forbidden: no new finalizers can be added if the object is being deleted, found new finalizers []string{"example.com/another"}
+configmap/flags patched
+Error from server (NotFound): configmaps "flags" not found
+```
+
+`deletionTimestamp`는 한번 찍히면 되돌릴 수 없다. "지우기 취소"는 없다. 쿠버네티스가 기본으로 다는 finalizer도 있다. PVC를 만들면 `kubernetes.io/pvc-protection`이 붙어서, 그 PVC를 쓰는 Pod가 있는 동안은 지워도 Terminating으로 남는다. 데이터가 붙어 있는 디스크를 실수로 날리지 않게 하는 장치다. PV에는 `kubernetes.io/pv-protection`이 붙는다.
+
+```bash
+# 방금 만든 PVC에 붙은 finalizer
+kubectl get pvc data -n shop -o jsonpath='{.metadata.finalizers}{"\n"}'
+```
+
+```text
+["kubernetes.io/pvc-protection"]
+```
+
+네임스페이스가 Terminating에서 멈출 때 안에 남은 finalizer를 찾는 방법은 [네임스페이스 글](/posts/k8s-namespace)에 conditions 읽는 법까지 정리해 두었다.
+
+<Callout kind="warning" title="finalizer를 손으로 떼기 전에">
+`kubectl patch ... -p '{"metadata":{"finalizers":null}}'`는 객체를 즉시 사라지게 한다. 그 finalizer가 지키던 바깥 정리(로드 밸런서, 클라우드 디스크, DNS 레코드)는 실행되지 않고 남는다. 먼저 finalizer 이름으로 주인 컨트롤러를 찾아 되살리는 것이 순서다. 정말 주인이 없을 때만, 바깥 자원을 손으로 정리했거나 정리할 게 없다는 걸 확인하고 뗀다. 뗀 뒤에는 되돌릴 방법이 없으니 객체를 `kubectl get -o yaml`로 먼저 백업해 둔다.
+</Callout>
+
+## 매니페스트를 보낼 때 자주 만나는 에러
+
+이 구조를 알면 에러 메시지가 바로 읽힌다. 실습에서 일부러 낸 것들이다.
+
+```bash
+# replicas를 replica로 잘못 썼다
+kubectl apply -f typo.yaml
+# 오래된 블로그에서 복사한 apiVersion
+kubectl apply -f old-api.yaml
+```
+
+```text
+Error from server (BadRequest): error when creating "typo.yaml": Deployment in version "v1" cannot be handled as a Deployment: strict decoding error: unknown field "spec.replica"
+error: resource mapping not found for name: "web" namespace: "shop" from "old-api.yaml": no matches for kind "Deployment" in version "extensions/v1beta1"
+ensure CRDs are installed first
+```
+
+첫 번째는 서버 쪽 strict 필드 검증이다(1.27부터 GA, kubectl 기본값 `--validate=strict`). 모르는 필드가 있으면 거절한다. `--validate=false`를 주면 통과는 하지만 그 필드는 조용히 버려진다. 들여쓰기를 한 칸 잘못해 필드가 엉뚱한 곳에 들어간 경우도 같은 에러로 잡힌다. 그러니 이 에러를 끄지 말고 고친다.
+
+두 번째는 그룹·버전·종류(GVK)를 서버가 모른다는 뜻이다. `extensions/v1beta1`의 Deployment는 1.16에서 사라졌다. 메시지가 "CRD를 먼저 설치하라"고 안내하는 건 kubectl이 그 GVK를 디스커버리에서 못 찾았기 때문이다. 진짜 CRD 문제일 때도 같은 메시지가 나온다. CRD를 설치하는 차트와 그 CR을 같은 apply로 보내면 CRD가 등록되기 전에 CR이 먼저 가서 이 에러가 나는 일이 흔하다. CRD 자체는 [CRD 글](/posts/k8s-crd)에서 다룬다.
+
+정리해 두면 증상별로 볼 곳이 정해진다.
+
+- `unknown field`: 오타나 들여쓰기. `kubectl explain`으로 필드 경로를 확인한다.
+- `no matches for kind`: apiVersion이 사라졌거나 CRD가 아직 없다. `kubectl api-resources | grep -i 종류`로 지금 버전을 본다.
+- `Conflict ... has been modified`: 낡은 resourceVersion을 실었다. 다시 읽고 고친다. 저장소의 매니페스트에 resourceVersion이 들어가 있지 않은지 본다.
+- `field is immutable`: 만든 뒤 못 바꾸는 필드다. Deployment selector, Service clusterIP, Job template 같은 것. 지우고 다시 만들어야 한다.
+- 지웠는데 남아 있다: `deletionTimestamp`와 `finalizers`를 본다.
+- 바꿨는데 반영이 안 된다: `generation`과 `observedGeneration`을 비교한다. 같은데도 그대로면 컨트롤러 로그와 이벤트를 본다.
+
+## 문서 하나에 담긴 약속
+
+API 오브젝트는 다섯 칸짜리 문서다. apiVersion과 kind가 그 문서를 읽을 규칙과 URL을 정하고, metadata가 이름표와 함께 서버가 매기는 번호(uid, resourceVersion, generation)를 담고, spec은 사람이, status는 컨트롤러가 쓴다. resourceVersion은 동시 수정을 막는 버전 번호이고, generation과 observedGeneration은 내 변경이 처리됐는지를 알려 준다. ownerReferences는 지울 때 무엇이 따라 사라질지, finalizer는 언제 사라질지를 정한다. 이 문서를 지켜보고 고치는 쪽은 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 오브젝트의 spec과 status는 어떻게 다른가요?
+
+spec은 사용자가 원하는 상태를, status는 컨트롤러가 관찰한 실제 상태를 적는 칸이다. 대부분의 종류는 status를 `/status` 하위 리소스로 분리해서, 본체 경로로 status를 고치면 무시되고 권한도 따로 준다. 컨트롤러는 둘의 차이를 줄이는 방향으로 움직이고, 처리한 spec의 generation을 `status.observedGeneration`에 적는다.
+
+### apiVersion의 apps/v1에서 apps와 v1은 각각 무엇인가요?
+
+apps는 API 그룹, v1은 그 그룹의 버전이다. core 그룹은 이름이 없어 `v1`이라고만 쓰고 REST 경로가 `/api/v1`, 나머지는 `/apis/{그룹}/{버전}`이다. 한 그룹이 여러 버전을 동시에 내줄 수 있는데, etcd에는 저장 버전으로 한 벌만 있고 API 서버가 요청 버전으로 변환해 준다. 그래서 같은 HPA를 autoscaling/v1과 v2로 읽어도 uid가 같다.
+
+### resourceVersion과 generation은 무엇이 다른가요?
+
+resourceVersion은 객체의 어떤 부분이든 바뀌면 바뀌는 값으로 etcd revision에서 나오고, 동시 수정을 막는 낙관적 잠금과 watch의 시작점으로 쓴다. generation은 spec이 바뀔 때만 오르는 정수다. 라벨이나 status만 바뀌면 resourceVersion은 바뀌어도 generation은 그대로다. 배포 확인 스크립트는 generation과 observedGeneration이 같아진 뒤에 status를 믿어야 한다.
+
+### 409 Conflict는 언제 나고 어떻게 다루나요?
+
+읽은 시점의 resourceVersion을 실어 update했는데 그 사이 다른 쓰기가 있었을 때 난다. 다시 읽어서 최신 객체에 내 변경을 다시 얹고 재시도하는 게 정석이다. kubectl apply나 patch는 보통 바꿀 필드만 보내고 resourceVersion을 싣지 않아 잘 만나지 않지만, get한 YAML을 고쳐 replace하거나 컨트롤러가 update할 때는 흔하다.
+
+### Deployment를 지우면 Pod가 왜 같이 지워지나요? 남기려면?
+
+ReplicaSet과 Pod의 ownerReferences에 주인이 uid로 적혀 있어서, 컨트롤러 매니저의 가비지 컬렉터가 주인이 사라진 자식을 찾아 지운다. 기본은 background라 주인이 먼저 사라지고 자식이 뒤에 지워진다. foreground는 자식이 다 지워질 때까지 주인이 남고, orphan은 자식을 남긴다. orphan으로 남긴 ReplicaSet은 셀렉터가 맞는 새 Deployment가 입양하니 다시 만들 때 템플릿 차이에 주의한다.
+
+### 삭제했는데 Terminating에서 멈춘 객체는 어떻게 보나요?
+
+`metadata.deletionTimestamp`가 찍혀 있고 `metadata.finalizers`가 비어 있지 않은 상태다. finalizer 이름으로 그 주인 컨트롤러가 살아 있는지 먼저 보고, 살려서 정리하게 하는 게 순서다. 주인이 영영 없을 때만 바깥 자원을 손으로 정리한 뒤 patch로 finalizer를 뗀다. 무작정 떼면 클라우드 디스크나 로드 밸런서가 고아로 남는다.
+
+### finalizer와 ownerReferences는 어떻게 함께 움직이나요?
+
+ownerReferences는 무엇을 함께 지울지, finalizer는 언제 지울지를 정한다. foreground 삭제는 주인에 foregroundDeletion finalizer를 달아, blockOwnerDeletion인 자식이 모두 사라질 때까지 주인을 붙잡는다. 그래서 자식 하나에 걸린 finalizer가 주인 삭제까지 멈출 수 있다. 삭제 중인 객체에는 새 finalizer를 더할 수 없고, deletionTimestamp는 되돌릴 수 없다.

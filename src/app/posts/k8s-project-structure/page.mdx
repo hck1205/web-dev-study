@@ -1,0 +1,747 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-project-structure");
+
+"EKS에 앱 올리는 프로젝트 구조"라는 그림 한 장이 자주 돈다. 맨 위에 `.github/workflows`, 그 아래 `app`, `k8s`, `terraform`, `scripts`가 있고 `k8s` 안에는 리소스 종류마다 폴더가 하나씩 있다. 그대로 따라 만들면 일단 돌아간다. 그런데 몇 주 뒤 보안 점검에서 `k8s/secret/secret.yaml`이 git 기록에 남아 있다는 지적을 받고, 스테이징 환경을 하나 더 만들려니 `k8s` 폴더를 통째로 복사해야 한다.
+
+이 글은 그 구조를 직접 만들어 보고 파일마다 무엇이 들어가는지, 누가 그 파일을 읽는지를 따라간다. 파일은 최소한의 실제 내용으로 채우고 검사기로 확인했다. 매니페스트는 kwok로 띄운 실습 클러스터(Kubernetes 1.30)와 kubeconform으로, Terraform은 1.16.6의 `terraform validate`로, Dockerfile은 hadolint 2.12.0으로, 셸 스크립트는 shellcheck로 봤다. 그 다음에 이 구조에서 고쳐야 할 곳을 짚는다. 비밀 값을 git에 두는 문제, 환경이 늘어날 때의 선택지, 앱 코드와 배포 설정을 한 저장소에 둘지 나눌지다.
+
+각 리소스 자체는 따로 깊게 다룬 글이 있다. 여기서는 구조와 연결만 보고 해당 글로 넘긴다. 이 저장소의 파일이 실제로 어떤 순서로 실행돼 EKS에 앱이 뜨는지는 [push에서 EKS까지 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)에서 이어진다.
+
+## 트리 한 장을 위에서부터
+
+그림의 구조를 실제로 만들고 `tree`로 찍으면 이렇다.
+
+```bash
+# 숨김 파일까지, .git과 .terraform은 빼고 트리를 찍는다
+tree -a -I '.git|.terraform' --charset=utf-8 --noreport .
+```
+
+```text
+.
+├── .github
+│   └── workflows
+│       └── ci-cd.yml
+├── .gitignore
+├── README.md
+├── app
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── src
+│       └── main
+│           ├── java
+│           │   └── com
+│           │       └── example
+│           │           └── shop
+│           │               └── ShopApplication.java
+│           └── resources
+│               └── application.properties
+├── k8s
+│   ├── config
+│   │   └── configmap.yaml
+│   ├── deployment
+│   │   └── deployment.yaml
+│   ├── hpa
+│   │   └── hpa.yaml
+│   ├── ingress
+│   │   └── ingress.yaml
+│   ├── namespace
+│   │   └── namespace.yaml
+│   ├── pv
+│   │   └── pv.yaml
+│   ├── pvc
+│   │   └── pvc.yaml
+│   ├── secret
+│   │   └── secret.yaml
+│   └── service
+│       └── service.yaml
+├── scripts
+│   ├── cleanup.sh
+│   └── deploy.sh
+└── terraform
+    ├── .terraform.lock.hcl
+    ├── main.tf
+    ├── modules
+    │   ├── eks
+    │   │   └── main.tf
+    │   └── vpc
+    │       └── main.tf
+    ├── outputs.tf
+    ├── terraform.tfvars
+    └── variables.tf
+```
+
+폴더를 나누는 기준은 "누가 이 파일을 읽느냐"다. 사람마다, 도구마다 보는 폴더가 다르고, 바뀌는 속도도 다르다. 앱 코드는 하루에 몇 번 바뀌고, 매니페스트는 일주일에 몇 번, VPC는 1년에 몇 번 바뀐다. 아래 그림의 점이 각 도구가 어느 폴더를 읽는지 보여 준다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="폴더마다 읽는 도구가 다르고, 바뀌는 속도도 다르다"
+  nodes={[
+    { id: "gha", label: "GitHub Actions", sub: ".github/workflows", x: 210, y: 36, w: 160 },
+    { id: "app", label: "app/", sub: "docker build", x: 70, y: 140, w: 110 },
+    { id: "k8s", label: "k8s/", sub: "kubectl apply", x: 210, y: 140, w: 110 },
+    { id: "tf", label: "terraform/", sub: "terraform apply", x: 350, y: 140, w: 120 },
+    { id: "img", label: "ECR 이미지", sub: "매일", x: 70, y: 250, w: 110 },
+    { id: "obj", label: "클러스터 리소스", sub: "매주", x: 210, y: 250, w: 130 },
+    { id: "infra", label: "VPC · EKS", sub: "매년", x: 350, y: 250, w: 110 },
+  ]}
+  edges={[
+    { from: "gha", to: "app" },
+    { from: "gha", to: "k8s" },
+    { from: "gha", to: "tf", dashed: true },
+    { from: "app", to: "img" },
+    { from: "k8s", to: "obj" },
+    { from: "tf", to: "infra" },
+  ]}
+/>
+
+`terraform/`으로 가는 선을 점선으로 그린 이유가 있다. 그림의 원래 흐름은 푸시할 때마다 Terraform까지 도는 것처럼 그려져 있지만, 실무에서는 인프라 변경을 앱 배포와 같은 파이프라인에 묶지 않는 경우가 많다. VPC를 잘못 건드리면 앱 하나가 아니라 클러스터 전체가 내려간다. 보통 `terraform plan` 결과를 PR에 붙여 사람이 본 뒤에 따로 apply한다.
+
+## app: 이미지를 만드는 재료
+
+`app/`은 Docker가 읽는다. `Dockerfile`과 빌드에 필요한 소스만 둔다. 그림의 구조에는 어색한 곳이 둘 있다.
+
+첫째, Java 앱인데 `requirements.txt`가 있다. 이건 Python 의존성 목록이다. 그림을 그린 사람이 Python 템플릿과 Java 템플릿을 섞은 흔적으로 보인다. Java라면 그 자리에 `pom.xml`과 `mvnw`(Maven) 또는 `build.gradle`(Gradle)이 있어야 한다. 의존성 파일이 없으면 Dockerfile이 의존성을 먼저 받아 캐시해 두는 단계를 만들 수 없다.
+
+둘째, 그림에 따라서는 `application.properties`가 `src/main` 바로 아래에 그려져 있다. Spring Boot는 클래스패스 루트에서 이 파일을 찾고, Maven과 Gradle은 `src/main/resources`의 내용을 클래스패스 루트로 복사한다. `src/main`에 두면 jar에 들어가지 않는다. 위 트리는 `resources` 아래로 옮겼다.
+
+`application.properties`에는 환경마다 달라지는 값을 적지 않는다. 자리만 만들고 값은 환경 변수로 받는다.
+
+```properties
+server.port=8080
+spring.datasource.url=jdbc:postgresql://${DB_HOST}:${DB_PORT}/shop
+spring.datasource.username=shop
+spring.datasource.password=${DB_PASSWORD}
+management.endpoint.health.probes.enabled=true
+server.shutdown=graceful
+```
+
+`DB_HOST`는 ConfigMap이, `DB_PASSWORD`는 Secret이 채운다. 이미지 하나를 개발과 운영에서 그대로 쓰려면 이렇게 값을 바깥에 둬야 한다. `probes.enabled`는 `/actuator/health/readiness` 주소를 열어 readinessProbe가 쓸 수 있게 한다.
+
+Dockerfile은 멀티 스테이지로 쓴다. 빌드 도구가 든 이미지에서 jar를 만들고, 실행 이미지에는 JRE와 jar만 옮긴다.
+
+```dockerfile
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+RUN mvn -B dependency:go-offline
+COPY src ./src
+RUN mvn -B package -DskipTests
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /src/target/*.jar app.jar
+USER 10001
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+```
+
+`USER 10001`은 뒤에 나올 네임스페이스의 Pod Security 설정(`restricted`)과 짝이다. root로 도는 이미지는 그 네임스페이스에 뜨지 않는다. 레이어와 캐시가 왜 이 순서인지는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에서 다뤘다.
+
+hadolint는 Dockerfile의 흔한 실수를 잡는 검사기다. 위 파일은 아무것도 출력하지 않고 통과했다. 비교로 흔히 보는 모양의 파일을 넣어 봤다.
+
+```bash
+# hadolint 바이너리를 받아 검사한다 (Docker가 있으면 docker run --rm -i hadolint/hadolint < Dockerfile)
+curl -sSL -o hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+chmod +x hadolint
+./hadolint --no-color Dockerfile.bad
+```
+
+```text
+Dockerfile.bad:1 DL3007 warning: Using latest is prone to errors if the image will ever update. Pin the version explicitly to a release tag
+Dockerfile.bad:2 DL3015 info: Avoid additional packages by specifying `--no-install-recommends`
+Dockerfile.bad:2 DL3008 warning: Pin versions in apt get install. Instead of `apt-get install <package>` use `apt-get install <package>=<version>`
+Dockerfile.bad:2 DL3009 info: Delete the apt-get lists after installing something
+Dockerfile.bad:3 DL3020 error: Use COPY instead of ADD for files and folders
+Dockerfile.bad:4 DL3000 error: Use absolute WORKDIR
+Dockerfile.bad:5 DL3025 warning: Use arguments JSON notation for CMD and ENTRYPOINT arguments
+```
+
+마지막 줄의 DL3025가 쿠버네티스에서 특히 중요하다. `CMD java -jar ...`처럼 셸 형식으로 쓰면 PID 1이 셸이 되고, Pod를 내릴 때 보내는 SIGTERM이 java까지 전달되지 않아 30초를 꽉 채우고 강제 종료된다.
+
+## k8s: 리소스 종류마다 폴더 하나
+
+`k8s/`는 kubectl이 읽는다. 그림은 리소스 종류마다 폴더를 나눴다. 파일마다 최소한으로 채운 내용과, 깊게 다룬 글을 함께 적는다.
+
+`namespace/namespace.yaml`은 앱이 들어갈 칸을 만든다. 라벨 한 줄로 이 칸의 Pod 보안 수준을 정한다. 칸과 그 위에 거는 정책은 [네임스페이스](/posts/k8s-namespace)에 있다.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+```
+
+`deployment/deployment.yaml`이 가장 길다. 이미지, 포트, 설정 주입, 리소스, 프로브, 보안 설정, 볼륨이 다 여기에 모인다. 다른 폴더의 파일은 대부분 이 파일과 이름으로 이어진다.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop-api
+  template:
+    metadata:
+      labels:
+        app: shop-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api:3f9c2ab
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: shop-api-config
+            - secretRef:
+                name: shop-api-secret
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: uploads
+              mountPath: /data/uploads
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: shop-uploads
+```
+
+`envFrom`의 두 이름이 `config/`와 `secret/`의 리소스를 가리키고, `claimName`이 `pvc/`를 가리킨다. `requests.cpu`가 없으면 `hpa/`의 HPA가 CPU 비율을 계산하지 못한다. 롤링 업데이트의 숫자는 [Deployment와 롤링 업데이트](/posts/k8s-deployment), 설정이 언제 Pod에 닿는지는 [ConfigMap](/posts/k8s-configmap), HPA 공식은 [HPA](/posts/k8s-hpa)에서 본다.
+
+`service/service.yaml`은 셀렉터 `app: shop-api`로 Pod를 묶어 고정 주소를 준다. `ingress/ingress.yaml`은 그 Service 앞에 바깥 입구를 연다. EKS에서는 AWS Load Balancer Controller가 `ingressClassName: alb`를 보고 ALB를 만든다.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop-api
+  namespace: shop
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  ingressClassName: alb
+  rules:
+    - host: api.shop.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: shop-api
+                port:
+                  number: 80
+```
+
+`pv/`와 `pvc/`는 업로드 파일을 Pod보다 오래 두는 디스크다. 여기서는 여러 Pod가 함께 쓰도록 EFS를 미리 만든 PV에 묶었다. EBS처럼 동적으로 만드는 디스크라면 PV 파일은 필요 없고 StorageClass와 PVC만 있으면 된다. 그림이 PV와 PVC를 둘 다 넣은 건 정적 프로비저닝을 가정한 것이다. 차이는 [PV와 PVC](/posts/k8s-pv-pvc)에 있다.
+
+아래 그림은 이 파일들이 요청 하나의 길 위에서 어디에 서는지 보여 준다. 다음을 누르면 요청이 들어가고, 각 단계에서 어느 파일이 일하는지 강조된다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="ingress.yaml에서 deployment.yaml까지, 요청 하나가 지나는 파일들"
+  zones={[
+    { id: "ns", label: "namespace: shop", x: 8, y: 100, w: 384, h: 222, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", sub: "api.shop", x: 80, y: 40, icon: "client" },
+    { id: "alb", label: "ALB", sub: "ingress.yaml", x: 260, y: 40, icon: "lb" },
+    { id: "svc", label: "Service", sub: "service.yaml", x: 260, y: 150, icon: "switch" },
+    { id: "pod", label: "Pod", sub: "deployment", x: 260, y: 220, icon: "container" },
+    { id: "cfg", label: "ConfigMap", sub: "config/", x: 80, y: 150, icon: "server" },
+    { id: "sec", label: "Secret", sub: "secret/", x: 80, y: 220, icon: "lock" },
+    { id: "pvc", label: "PVC", sub: "pvc/ → pv/", x: 260, y: 286, icon: "db" },
+    { id: "hpa", label: "HPA", sub: "hpa/", x: 80, y: 286, icon: "router" },
+  ]}
+  links={[
+    { from: "user", to: "alb" },
+    { from: "alb", to: "svc" },
+    { from: "svc", to: "pod" },
+    { from: "cfg", to: "pod", dashed: true },
+    { from: "sec", to: "pod", dashed: true },
+    { from: "pod", to: "pvc" },
+    { from: "hpa", to: "pod", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "alb"], packet: "GET /", title: "Ingress가 만든 ALB로 들어온다", detail: "호스트 이름과 경로 규칙은 ingress.yaml에 있다. ALB는 컨트롤러가 이 파일을 보고 만들었다." },
+    { path: ["alb", "svc", "pod"], packet: "GET /", title: "Service를 거쳐 Pod에 닿는다", detail: "target-type: ip라서 ALB가 Pod IP로 바로 보낸다. Service는 대상 목록을 알려 주는 역할을 한다." },
+    { path: ["pod"], highlight: ["cfg", "sec"], title: "설정은 뜰 때 이미 들어와 있다", detail: "envFrom으로 받은 환경 변수는 컨테이너가 뜰 때 한 번 읽힌다. 값을 바꿔도 다시 뜨기 전에는 그대로다." },
+    { path: ["pod", "pvc"], packet: "write", title: "업로드 파일은 PVC에 쓴다", detail: "Pod가 다시 떠도 파일은 PV 쪽 디스크에 남는다." },
+    { path: ["hpa", "pod"], packet: "+1", title: "HPA가 Pod 수를 고친다", detail: "CPU가 requests의 70%를 넘으면 replicas를 늘린다. deployment.yaml의 replicas: 2는 처음 한 번만 의미가 있다." },
+  ]}
+/>
+
+## kubectl apply의 순서는 파일 이름순이다
+
+폴더를 다 만들었으면 한 번에 올리고 싶어진다. `-R`로 폴더 전체를 넘기면 된다. 실습 클러스터에 처음 올린 결과다.
+
+```bash
+# k8s/ 아래를 재귀적으로 모두 적용한다
+kubectl apply -R -f k8s/
+```
+
+```text
+namespace/shop created
+persistentvolume/shop-uploads-pv created
+persistentvolumeclaim/shop-uploads created
+secret/shop-api-secret created
+service/shop-api created
+Error from server (NotFound): error when creating "k8s/config/configmap.yaml": namespaces "shop" not found
+Error from server (NotFound): error when creating "k8s/deployment/deployment.yaml": namespaces "shop" not found
+Error from server (NotFound): error when creating "k8s/hpa/hpa.yaml": namespaces "shop" not found
+Error from server (NotFound): error when creating "k8s/ingress/ingress.yaml": namespaces "shop" not found
+```
+
+kubectl은 폴더를 이름순(config, deployment, hpa, ingress, namespace, ...)으로 읽는다. `config`가 `namespace`보다 먼저라서 네임스페이스가 생기기 전에 ConfigMap을 만들려다 실패했다. 출력 순서가 뒤섞인 건 kubectl이 성공과 실패를 따로 모아 찍기 때문이다. 같은 명령을 한 번 더 치면 이번에는 네임스페이스가 있으니 모두 통과한다.
+
+```text
+configmap/shop-api-config created
+deployment.apps/shop-api created
+horizontalpodautoscaler.autoscaling/shop-api created
+ingress.networking.k8s.io/shop-api created
+namespace/shop unchanged
+persistentvolume/shop-uploads-pv unchanged
+persistentvolumeclaim/shop-uploads unchanged
+secret/shop-api-secret unchanged
+service/shop-api unchanged
+```
+
+"두 번 치면 된다"는 운영 스크립트에 넣을 수 없는 규칙이다. 순서가 중요한 리소스는 따로 먼저 올리거나, 순서를 알아서 정해 주는 도구를 쓴다. Helm은 리소스 종류마다 설치 순서를 정해 두고 Namespace, ConfigMap, Secret 같은 것을 먼저 만든다. 아래 그림은 같은 아홉 개 파일을 이름순과 종류순으로 올릴 때의 차이다.
+
+<AlgoTrace
+  caption="이름순으로 읽으면 namespace가 다섯 번째다"
+  memoryLabel="클러스터에 생긴 것"
+  cells={["config", "deployment", "hpa", "ingress", "namespace", "pv", "pvc", "secret", "service"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "config가 먼저 온다. shop 네임스페이스가 아직 없어서 NotFound로 실패한다." },
+    { pointer: 3, memory: [], caption: "deployment, hpa, ingress도 같은 이유로 실패한다. 모두 namespace: shop에 들어가는 리소스다." },
+    { pointer: 4, found: [4], memory: ["ns/shop"], caption: "다섯 번째에서야 네임스페이스가 생긴다." },
+    { pointer: 8, found: [4, 5, 6, 7, 8], memory: ["ns/shop", "pv", "pvc", "secret", "svc"], caption: "뒤에 오는 것들은 성공한다. 첫 실행이 반쯤 성공한 채로 끝났다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: ["ns/shop", "cm", "secret", "pv", "pvc", "svc", "deploy", "hpa", "ing"], caption: "종류순(Namespace → 설정 → 저장소 → Service → 워크로드 → 입구)으로 정렬하면 한 번에 끝난다." },
+  ]}
+/>
+
+종류순으로 정렬하는 함수를 직접 만들어 본다. 목록에 없는 종류(CRD로 만든 리소스 등)는 맨 뒤로 보내고, 같은 종류끼리는 원래 순서를 지킨다.
+
+<CodePlayground
+  caption="리소스를 적용 순서대로 정렬하기"
+  functionName="applyOrder"
+  initialCode={`const ORDER = ["Namespace", "ConfigMap", "Secret", "PersistentVolume",
+  "PersistentVolumeClaim", "Service", "Deployment", "HorizontalPodAutoscaler", "Ingress"];
+
+// resources: [{ kind, name }] → 적용할 순서대로 name 배열을 돌려준다
+function applyOrder(resources) {
+  return resources.map((r) => r.name);
+}`}
+  solution={`const ORDER = ["Namespace", "ConfigMap", "Secret", "PersistentVolume",
+  "PersistentVolumeClaim", "Service", "Deployment", "HorizontalPodAutoscaler", "Ingress"];
+
+function applyOrder(resources) {
+  const rank = (kind) => {
+    const i = ORDER.indexOf(kind);
+    return i === -1 ? ORDER.length : i;
+  };
+  return resources
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => rank(a.r.kind) - rank(b.r.kind) || a.i - b.i)
+    .map((x) => x.r.name);
+}`}
+  tests={[
+    { label: "네임스페이스가 맨 앞", args: [[{ kind: "ConfigMap", name: "shop-api-config" }, { kind: "Deployment", name: "shop-api" }, { kind: "Namespace", name: "shop" }, { kind: "Secret", name: "shop-api-secret" }]], expected: ["shop", "shop-api-config", "shop-api-secret", "shop-api"] },
+    { label: "PV가 PVC보다 먼저", args: [[{ kind: "Ingress", name: "shop-api" }, { kind: "Service", name: "shop-api" }, { kind: "PersistentVolumeClaim", name: "shop-uploads" }, { kind: "PersistentVolume", name: "shop-uploads-pv" }]], expected: ["shop-uploads-pv", "shop-uploads", "shop-api", "shop-api"] },
+    { label: "모르는 종류는 맨 뒤", args: [[{ kind: "ExternalSecret", name: "db" }, { kind: "HorizontalPodAutoscaler", name: "shop-api" }, { kind: "Namespace", name: "shop" }]], expected: ["shop", "shop-api", "db"] },
+    { label: "같은 종류는 원래 순서", args: [[{ kind: "Service", name: "b" }, { kind: "Service", name: "a" }]], expected: ["b", "a"] },
+  ]}
+/>
+
+## 클라이언트 검사만 믿으면 안 된다
+
+올리기 전에 검사하는 방법은 셋이다. 결과가 서로 다르다는 게 함정이다.
+
+`kubectl apply --dry-run=client`는 kubectl 안에서만 확인한다. 위 첫 실행과 같은 파일을 넣었는데 모두 `created (dry run)`이 나왔다. 네임스페이스 순서 문제를 잡지 못한다. 필드 이름 오타도 못 잡는다. `replicas`를 `replica`로 잘못 쓴 Deployment를 넣어 봤다.
+
+```bash
+# 클라이언트 검사, 서버 검사 순서로 같은 파일을 넣는다
+kubectl apply -f bad-k8s/typo.yaml --dry-run=client
+kubectl apply -f bad-k8s/typo.yaml --dry-run=server
+```
+
+```text
+deployment.apps/shop-api-typo created (dry run)
+Error from server (BadRequest): error when creating "bad-k8s/typo.yaml": Deployment in version "v1" cannot be handled as a Deployment: strict decoding error: unknown field "spec.replica"
+```
+
+클라이언트 검사는 통과했고, 서버 검사가 모르는 필드를 잡았다. 서버 검사는 API 서버가 저장 직전까지 모든 검사를 하고 저장만 안 하는 방식이라 가장 정확하다. 대신 클러스터에 접속할 수 있어야 한다.
+
+PR 단계처럼 클러스터 없이 검사하고 싶으면 kubeconform을 쓴다. 쿠버네티스 버전별 JSON 스키마로 파일을 검사한다. 같은 오타와, 1.26에서 사라진 `autoscaling/v2beta2`를 쓴 HPA를 넣었다.
+
+```bash
+# Go로 설치하고, 운영 클러스터 버전의 스키마로 엄격하게 검사한다
+go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+kubeconform -strict -summary -kubernetes-version 1.33.0 k8s/
+kubeconform -strict -summary -kubernetes-version 1.33.0 bad-k8s/
+```
+
+```text
+Summary: 9 resources found in 9 files - Valid: 9, Invalid: 0, Errors: 0, Skipped: 0
+bad-k8s/hpa.yaml - HorizontalPodAutoscaler shop-api failed validation: could not find schema for HorizontalPodAutoscaler
+bad-k8s/deployment.yaml - Deployment shop-api is invalid: problem validating schema. Check JSON formatting: jsonschema validation failed with 'https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.33.0-standalone-strict/deployment-apps-v1.json#' - at '/spec/template/spec/containers/0/ports/0/containerPort': got string, want integer - at '/spec': additional properties 'replica' not allowed
+Summary: 2 resources found in 2 files - Valid: 0, Invalid: 1, Errors: 1, Skipped: 0
+```
+
+본래 파일 아홉 개는 모두 통과했다. 틀린 파일에서는 문자열로 쓴 포트(`"8080"`), 모르는 필드, 그 버전에 없는 API를 잡았다. 순서 문제는 kubeconform도 모른다. 파일 하나하나만 보기 때문이다. 그래서 PR에서는 kubeconform, 배포 직전에는 서버 dry-run을 거는 조합을 많이 쓴다. CRD로 만든 리소스는 스키마가 없어서 `-ignore-missing-schemas`를 주거나 CRD 스키마를 따로 넣어 줘야 한다.
+
+## secret.yaml을 git에 두면 비밀이 아니다
+
+이 구조에서 가장 먼저 고칠 곳이다. Secret 매니페스트의 `data`는 base64로 적는데, base64는 암호가 아니라 표기 방식이다.
+
+```bash
+# secret.yaml의 값을 그대로 풀어 본다
+echo -n czNjcjN0LXBhc3N3b3Jk | base64 -d; echo
+```
+
+```text
+s3cr3t-password
+```
+
+저장소를 읽을 수 있는 사람은 모두 운영 DB 비밀번호를 안다. 나중에 파일을 지워도 git 기록에 남고, 포크와 CI 캐시에도 남는다. 한 번 올라갔다면 기록을 지우는 것보다 비밀번호를 바꾸는 게 먼저다. 기록에서 지우는 방법과 푸시 전에 막는 방법은 [git에 올린 비밀 지우기](/posts/git-large-files-secrets)에 있다.
+
+<Callout kind="warning" title="이미 푸시했다면 값부터 바꾼다">
+git 기록을 다시 쓰고 강제로 푸시해도 이미 누군가 받아 간 복사본과 포크, CI 캐시에는 남는다. DB 비밀번호나 API 키를 먼저 교체하고, 그 다음에 기록을 정리한다. 기록을 다시 쓰면 다른 사람들의 로컬 브랜치가 어긋나므로 팀에 알리고 진행한다.
+</Callout>
+
+대안은 "git에는 무엇을 두느냐"로 갈린다.
+
+- 아무것도 두지 않는다. 비밀 값은 AWS Secrets Manager 같은 외부 저장소에 두고, External Secrets Operator가 클러스터 안에 Secret을 만들어 준다. git에는 "어느 저장소의 어느 키를 가져와라"라는 ExternalSecret 매니페스트만 남는다. 값 교체가 외부 저장소 한 곳에서 끝난다.
+- 암호화해서 둔다. Sealed Secrets는 클러스터의 공개 키로 암호화한 SealedSecret을 git에 두고, 클러스터 안의 컨트롤러만 풀 수 있다. SOPS는 KMS 키로 파일의 값만 암호화한다. git만 보고도 어떤 키가 있는지 알 수 있고 리뷰가 된다.
+- 파일로 마운트하는 CSI 드라이버(Secrets Store CSI Driver)는 Secret 오브젝트 없이 외부 저장소 값을 Pod의 파일로 바로 꽂는다.
+
+EKS라면 External Secrets Operator와 Secrets Manager 조합이 흔하다. 노드나 Pod에 IAM 권한을 주는 방식(IRSA, Pod Identity)과 잘 맞는다. 클러스터 안 Secret 자체를 지키는 법(etcd 암호화, RBAC)은 [Secret](/posts/k8s-secret), Helm에서 값과 비밀을 나누는 법은 [values와 비밀 값](/posts/helm-values-secrets)에 있다. 어느 쪽을 고르든 `k8s/secret/` 폴더는 비우거나 ExternalSecret만 두고, `.gitignore`로 평문 Secret 파일이 다시 들어오지 못하게 막는다.
+
+## terraform: 클러스터와 네트워크를 만드는 코드
+
+`terraform/`은 앱이 올라갈 땅을 만든다. 루트에는 파일이 넷이고 역할이 나뉜다.
+
+- `main.tf`는 프로바이더, state를 둘 백엔드, 모듈 호출을 적는다.
+- `variables.tf`는 바꿀 수 있는 값의 이름과 타입, 기본값을 선언한다.
+- `terraform.tfvars`는 이 환경의 실제 값을 넣는다. `terraform plan`이 자동으로 읽는다.
+- `outputs.tf`는 만든 뒤에 알려 줄 값(클러스터 이름, 엔드포인트, kubeconfig 명령)을 적는다.
+
+`modules/vpc`와 `modules/eks`는 묶음 단위다. 루트는 두 모듈을 부르고, VPC 모듈의 출력(프라이빗 서브넷 ID)을 EKS 모듈의 입력으로 넘긴다.
+
+```hcl
+module "vpc" {
+  source       = "./modules/vpc"
+  name         = var.cluster_name
+  cidr         = var.vpc_cidr
+  azs          = var.azs
+  cluster_name = var.cluster_name
+}
+
+module "eks" {
+  source             = "./modules/eks"
+  cluster_name       = var.cluster_name
+  kubernetes_version = var.kubernetes_version
+  subnet_ids         = module.vpc.private_subnet_ids
+  node_instance_type = var.node_instance_type
+  admin_principal    = var.admin_principal
+}
+```
+
+VPC 모듈은 AZ 두 곳에 퍼블릭과 프라이빗 서브넷을 하나씩, IGW와 NAT 게이트웨이, 라우팅 테이블을 만든다. 퍼블릭 서브넷에는 `kubernetes.io/role/elb = 1` 태그를, 프라이빗에는 `kubernetes.io/role/internal-elb = 1`을 붙인다. 앞에서 본 Ingress가 ALB를 어느 서브넷에 만들지 이 태그로 찾는다. 태그가 없으면 ALB가 안 생기고 컨트롤러 로그에 서브넷을 찾지 못했다는 오류가 남는다. EKS 모듈은 클러스터, 노드 그룹, 두 IAM 역할, 그리고 관리자 접근 항목(access entry)을 만든다. 모듈을 나누는 기준과 tfvars를 환경별로 쓰는 법은 [Terraform 모듈과 tfvars](/posts/terraform-modules-tfvars), 클러스터 리소스 하나하나는 [EKS 클러스터 기본](/posts/eks-cluster-basics)에서 다룬다.
+
+아래 그림은 두 모듈이 만드는 망 위에서 트래픽이 다니는 길이다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="modules/vpc가 칸을 만들고, modules/eks가 그 안에 노드를 놓는다"
+  zones={[
+    { id: "vpc", label: "VPC 10.0.0.0/16", x: 6, y: 64, w: 388, h: 248, tone: "neutral" },
+    { id: "pub", label: "public 10.0.0.0/24", x: 14, y: 110, w: 182, h: 90, tone: "public" },
+    { id: "priv", label: "private 10.0.10.0/24", x: 204, y: 110, w: 182, h: 194, tone: "private" },
+  ]}
+  nodes={[
+    { id: "inet", label: "Internet", x: 104, y: 30, icon: "internet" },
+    { id: "ecr", label: "ECR", sub: "shop-api", x: 300, y: 30, icon: "db" },
+    { id: "alb", label: "ALB", sub: "role/elb", x: 70, y: 160, icon: "lb" },
+    { id: "nat", label: "NAT GW", sub: "EIP", x: 160, y: 250, icon: "gateway", w: 70 },
+    { id: "node1", label: "node", sub: "10.0.10.21", x: 300, y: 160, icon: "server" },
+    { id: "node2", label: "node", sub: "10.0.11.37", x: 300, y: 250, icon: "server" },
+  ]}
+  links={[
+    { from: "inet", to: "alb" },
+    { from: "alb", to: "node1" },
+    { from: "alb", to: "node2" },
+    { from: "node2", to: "nat" },
+    { from: "nat", to: "inet" },
+    { from: "inet", to: "ecr" },
+  ]}
+  steps={[
+    { path: ["inet", "alb", "node1"], packet: "HTTPS", title: "들어오는 길은 ALB를 거친다", detail: "ALB는 elb 태그가 붙은 퍼블릭 서브넷에 생긴다. 노드는 프라이빗 서브넷에 있어 밖에서 바로 닿지 않는다." },
+    { path: ["node2", "nat", "inet", "ecr"], packet: "pull", title: "나가는 길은 NAT를 거친다", detail: "노드가 ECR에서 이미지를 받을 때 프라이빗 라우팅 테이블의 0.0.0.0/0 → NAT 경로를 탄다." },
+    { path: ["node2", "ecr"], packet: "pull", blocked: true, highlight: ["nat"], title: "NAT가 없으면 이미지를 못 받는다", detail: "NAT 게이트웨이나 ECR용 VPC 엔드포인트가 없으면 노드가 바깥에 닿지 못해 노드 그룹 생성부터 실패한다." },
+  ]}
+/>
+
+그림처럼 NAT 게이트웨이가 하나면 그 AZ가 죽을 때 다른 AZ 노드도 바깥으로 못 나간다. 운영에서는 AZ마다 하나씩 두는 대신 비용이 그만큼 는다. 이 구조를 검사하는 데는 AWS 계정이 필요 없다.
+
+```bash
+# 백엔드 연결 없이 프로바이더만 받는다
+terraform -chdir=terraform init -backend=false
+# 형식과 문법, 모듈 사이 입출력 타입을 확인한다
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform validate
+```
+
+```text
+Success! The configuration is valid.
+```
+
+`validate`는 문법과 참조만 본다. 서브넷 CIDR이 겹치는지, 그 리전에 그 인스턴스 타입이 있는지는 `plan`과 `apply`에서야 드러난다.
+
+state를 어디에 두는지는 `main.tf`의 `backend` 블록에 적는다. 아래 한 줄 한 줄이 state 파일이 사는 곳이다.
+
+<UrlAnatomy
+  caption='backend "s3" 블록을 조각으로 읽는다'
+  base="backend s3"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "bucket", value: "shop-tfstate-123456789012", title: "state를 둘 S3 버킷", description: "버전 관리를 켜 둔 버킷을 쓴다. state가 깨졌을 때 이전 버전으로 되돌릴 수 있다. 이 버킷 자체는 Terraform 밖에서 먼저 만든다." },
+    { key: "key", value: "prod/terraform.tfstate", title: "버킷 안의 경로", description: "환경마다 경로를 다르게 해서 state를 나눈다. 같은 key를 두 환경이 쓰면 한쪽 apply가 다른 쪽 리소스를 지우려 든다." },
+    { key: "region", value: "ap-northeast-2", title: "버킷이 있는 리전", description: "리소스를 만드는 리전과 달라도 된다." },
+    { key: "use_lockfile", value: "true", title: "S3 잠금 파일", description: "Terraform 1.10부터 DynamoDB 테이블 없이 S3에 잠금 파일을 만들어 동시 apply를 막는다. 그 전 버전은 dynamodb_table을 쓴다." },
+  ]}
+/>
+
+state에는 리소스의 모든 속성이 평문으로 들어간다. RDS를 만들었다면 그 비밀번호도 들어 있다. 그래서 state는 git이 아니라 접근을 제한한 원격 백엔드에 둔다. 동작 원리는 [Terraform 기본](/posts/terraform-basics)에 있다.
+
+## .gitignore가 막아야 하는 것
+
+그림의 `.gitignore`는 한 줄짜리로 넘어가기 쉽지만, 이 구조에서는 사고를 막는 마지막 줄이다.
+
+```text
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*.auto.tfvars
+secrets.tfvars
+
+# Kubernetes 비밀 값 원본
+k8s/secret/*.yaml
+!k8s/secret/README.md
+
+# 앱 빌드 결과
+app/target/
+*.class
+.env
+```
+
+무엇이 어떤 규칙에 걸리는지는 `git check-ignore -v`로 확인한다.
+
+```bash
+# 각 파일이 .gitignore의 몇 번째 줄에 걸리는지 본다
+git check-ignore -v k8s/secret/secret.yaml terraform/terraform.tfstate terraform/.terraform/x
+```
+
+```text
+.gitignore:14:k8s/secret/*.yaml	k8s/secret/secret.yaml
+.gitignore:3:*.tfstate	terraform/terraform.tfstate
+.gitignore:2:.terraform/	terraform/.terraform/x
+```
+
+줄마다 이유가 있다. `.terraform/`은 받은 프로바이더 바이너리라 수백 MB이고 다시 받으면 된다. `*.tfstate`는 앞에서 본 대로 비밀 값이 든다. `*.tfplan`은 plan을 저장한 파일인데 바뀔 값이 평문으로 들어 있다. `*.tfvars` 전체를 막는 템플릿도 흔한데, 그러면 환경 값을 리뷰할 수 없다. 비밀이 없는 `terraform.tfvars`는 커밋하고, 비밀이 든 값은 `secrets.tfvars`나 `*.auto.tfvars`로 나눠 막는 편이 낫다. 비밀은 애초에 tfvars가 아니라 `TF_VAR_` 환경 변수나 Secrets Manager에서 읽는 게 가장 좋다.
+
+반대로 막으면 안 되는 파일도 있다. `.terraform.lock.hcl`은 프로바이더 버전과 해시를 고정하는 파일이라 커밋한다. 이걸 무시하면 사람마다 다른 프로바이더 버전으로 plan을 돌린다. 이미 추적 중인 파일은 `.gitignore`에 적어도 계속 추적된다는 점도 기억한다. `git rm --cached`로 추적을 끊어야 한다. 규칙의 문법과 함정은 [.gitignore와 git 설정](/posts/git-ignore-config)에 있다.
+
+## scripts: 손으로 치던 명령을 모은 곳
+
+`deploy.sh`와 `cleanup.sh`는 사람과 CI가 같은 순서로 배포하고 정리하게 해 준다. 구조 관점에서 짚을 것은 두 가지다.
+
+첫째, 스크립트는 지금 kubectl이 어느 클러스터를 보고 있는지 확인하고 시작해야 한다. 개발 클러스터에 붙은 노트북에서 운영 정리 스크립트를 돌리는 사고가 여기서 난다. 둘째, `cleanup.sh`가 `terraform destroy`를 부른다면 클러스터 이름을 한 번 더 입력받는 장치를 둔다.
+
+```bash
+#!/usr/bin/env bash
+# 사용법: ./scripts/cleanup.sh shop-prod   (클러스터 이름을 한 번 더 쳐서 확인)
+set -euo pipefail
+
+CLUSTER="${1:?cluster name required}"
+read -r -p "type '$CLUSTER' to destroy everything: " answer
+[[ "$answer" == "$CLUSTER" ]] || { echo "aborted"; exit 1; }
+
+# Ingress가 만든 ALB를 먼저 지워야 VPC 삭제가 막히지 않는다
+kubectl delete ingress --all -n shop --wait=true
+kubectl delete namespace shop --wait=true
+
+terraform -chdir=terraform destroy
+```
+
+순서에도 이유가 있다. ALB는 Terraform이 아니라 클러스터 안의 컨트롤러가 만들었다. Terraform은 그 존재를 모른다. Ingress를 지우지 않고 destroy하면 ALB와 보안 그룹이 서브넷을 붙잡고 있어서 VPC 삭제가 `DependencyViolation`으로 몇십 분 돌다 실패한다. 두 스크립트의 위험과 실패 사례는 [push에서 EKS까지 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)에서 자세히 본다.
+
+## 환경이 늘어날 때: 복사, Kustomize, Helm
+
+스테이징을 만들어야 한다. 가장 쉬운 방법은 `k8s/`를 `k8s-staging/`으로 복사하는 것이다. 처음엔 이미지 태그와 replicas만 다르다. 석 달 뒤에는 운영에만 추가한 프로브, 스테이징에만 고친 리소스 값이 섞여 두 폴더가 어디서 달라졌는지 아무도 모른다.
+
+Kustomize는 공통 매니페스트(base)를 두고 환경별 차이만 덧씌우는(overlay) 방식이다. kubectl에 들어 있어 따로 설치할 것이 없다.
+
+<ConceptDiagram
+  width={420}
+  height={250}
+  caption="base는 한 벌, 환경별 폴더에는 다른 점만 적는다"
+  nodes={[
+    { id: "base", label: "base/", sub: "deployment · service", x: 210, y: 50, w: 170 },
+    { id: "dev", label: "overlays/dev", sub: "replicas 1 · c40b9e1", x: 100, y: 190, w: 160 },
+    { id: "prod", label: "overlays/prod", sub: "replicas 3 · 3f9c2ab", x: 320, y: 190, w: 160 },
+  ]}
+  edges={[
+    { from: "base", to: "dev" },
+    { from: "base", to: "prod" },
+  ]}
+/>
+
+운영 overlay는 이렇게 생겼다.
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shop
+resources:
+  - ../../base
+images:
+  - name: shop-api
+    newName: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api
+    newTag: 3f9c2ab
+replicas:
+  - name: shop-api
+    count: 3
+```
+
+두 환경의 결과를 렌더링해서 비교하면 다른 곳만 나온다.
+
+```bash
+# 두 overlay를 렌더링해 차이만 본다
+diff <(kubectl kustomize overlays/dev) <(kubectl kustomize overlays/prod)
+```
+
+```text
+5c5
+<   namespace: shop-dev
+---
+>   namespace: shop
+18c18
+<   namespace: shop-dev
+---
+>   namespace: shop
+20c20
+<   replicas: 1
+---
+>   replicas: 3
+35c35
+<         image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api:c40b9e1
+---
+>         image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api:3f9c2ab
+```
+
+환경 차이가 이렇게 눈에 보이는 게 복사보다 나은 점이다. CI가 이미지 태그를 바꿀 때도 `kustomize edit set image`로 overlay의 한 줄만 고친다.
+
+Helm은 템플릿에 값을 꽂는 방식이다. 조건문과 반복이 되니 표현력이 크고, 패키지로 묶어 버전을 붙여 배포할 수 있다. 대신 템플릿 문법을 읽어야 해서 단순한 앱에는 무겁다. 고르는 기준은 대략 이렇다. 내 앱 하나를 환경 두세 개에 올리면 Kustomize, 같은 앱을 여러 팀이 설정만 바꿔 설치하거나 외부에 배포하면 Helm. 둘을 섞어 Helm으로 렌더링한 결과에 Kustomize로 덧씌우는 팀도 있다. Helm은 [Helm은 무엇을 풀어 주나](/posts/helm-basics)부터, 두 도구의 차이는 [차트 배포 흐름](/posts/helm-dependencies-oci-gitops)에 있다. 리소스 종류마다 폴더를 나눈 그림의 구조는 어느 쪽으로 가든 `base/` 한 폴더에 파일을 모으는 쪽으로 바뀐다. 리소스가 서너 개면 폴더를 나누는 것보다 한 폴더에 `deployment.yaml`, `service.yaml`을 두는 편이 찾기 쉽다.
+
+## 앱과 배포 설정을 한 저장소에 둘까
+
+그림은 앱 코드, 매니페스트, Terraform을 한 저장소에 다 넣었다. 작은 팀이 서비스 하나를 운영할 때는 이게 편하다. PR 하나로 코드와 매니페스트를 같이 바꾸고, 리뷰도 한 번이다.
+
+서비스가 늘고 ArgoCD 같은 GitOps 도구를 쓰기 시작하면 배포 설정만 담은 저장소를 따로 두는 쪽으로 간다. 이유는 셋이다. 앱 저장소의 커밋마다 배포 도구가 반응하지 않게 하려고, 배포 이력을 앱 커밋과 섞지 않으려고, 그리고 운영 매니페스트를 고칠 권한을 앱 개발자 전체가 아닌 사람에게만 주려고. 아래 그림에서 다음을 누르면 두 저장소 사이에서 이미지 태그가 어떻게 넘어가는지 보인다.
+
+<SequenceDiagram
+  caption="앱 저장소는 이미지를 굽고, 배포 저장소의 태그 한 줄만 바꾼다"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "app", label: "앱 저장소 CI" },
+    { id: "ops", label: "배포 저장소" },
+    { id: "argo", label: "ArgoCD" },
+  ]}
+  steps={[
+    { from: "dev", to: "app", label: "merge", title: "앱 코드를 합친다", detail: "앱 저장소에는 app/과 Dockerfile, 워크플로만 있다." },
+    { from: "app", to: "app", label: "build · push", title: "이미지를 굽는다", detail: "커밋 SHA 태그로 ECR에 올린다. 여기까지는 같은 저장소 구조와 같다." },
+    { from: "app", to: "ops", label: "PR: newTag", title: "배포 저장소에 태그를 바꾸는 PR을 연다", detail: "overlays/prod의 newTag 한 줄만 바뀐 PR이다. 운영은 이 PR을 사람이 승인해야 반영된다.", payload: "-    newTag: 3f9c2ab\n+    newTag: 5cf44af" },
+    { from: "argo", to: "ops", label: "poll", title: "ArgoCD가 저장소를 본다", detail: "클러스터 안의 ArgoCD가 배포 저장소를 주기적으로 읽는다. CI는 클러스터 자격 증명을 들고 있지 않다." },
+    { from: "argo", to: "argo", label: "sync", title: "차이를 클러스터에 맞춘다", detail: "git과 클러스터가 다르면 git 쪽으로 맞춘다. 되돌리기는 그 PR을 되돌리는 것이다." },
+  ]}
+/>
+
+나누면 비용도 생긴다. 앱 변경과 설정 변경이 같이 가야 할 때(새 환경 변수를 읽는 코드) PR이 두 저장소로 쪼개지고 순서를 맞춰야 한다. 한 저장소에서 시작하고, 서비스가 서너 개를 넘거나 GitOps를 들이는 시점에 배포 저장소를 떼어 내는 게 무난하다. Terraform은 보통 그보다 먼저 떼어 낸다. 앱 개발자가 VPC를 바꿀 일은 거의 없고, state 접근 권한도 좁혀야 하기 때문이다.
+
+## 처음 받은 저장소는 이 순서로 읽는다
+
+이런 구조의 저장소를 처음 받으면 다음 순서로 본다.
+
+1. `.github/workflows/`부터 연다. 무엇이 언제 어디로 배포되는지 가장 짧게 적힌 곳이다. 여기서 `kubectl apply`를 부르는지, 배포 저장소에 PR을 여는지 갈린다.
+2. `k8s/`에서 `deployment.yaml`의 `image`, `envFrom`, `resources`를 본다. 다른 파일들은 대부분 여기서 이름으로 이어진다.
+3. `k8s/secret/`에 평문 Secret이 있는지, `git log -- k8s/secret`으로 기록에 남았는지 본다.
+4. `terraform/main.tf`의 `backend` 블록에서 state가 어디 있는지 확인한다. 로컬 state면 누군가의 노트북에만 운영 인프라의 기록이 있다는 뜻이다.
+5. `scripts/`의 스크립트가 컨텍스트를 확인하는지, destroy 앞에 확인 장치가 있는지 본다.
+
+폴더 구조 그림은 "어떤 파일들이 필요한가"를 보여 주는 데는 좋다. 하지만 그대로 운영하면 비밀 값이 git에 들어가고, 적용 순서가 이름순에 맡겨지고, 환경을 늘릴 때 복사가 시작된다. 이 세 곳을 External Secrets나 Sealed Secrets, 종류순 적용이나 Kustomize, 그리고 `.gitignore`로 막아 두면 같은 구조가 훨씬 오래 버틴다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 매니페스트에 Secret을 넣어 git에 커밋하면 왜 문제인가?
+
+Secret의 data는 base64로 인코딩만 돼 있어서 저장소를 읽을 수 있는 사람은 누구나 원래 값을 본다. 지워도 git 기록과 포크, CI 캐시에 남는다. External Secrets Operator로 외부 저장소에서 가져오거나, Sealed Secrets와 SOPS로 암호화한 형태만 git에 둔다. 이미 올라갔다면 기록 정리보다 값 교체가 먼저다.
+
+### kubectl apply -R -f k8s/를 처음 실행했는데 일부가 namespaces not found로 실패했다. 왜인가?
+
+kubectl은 폴더와 파일을 이름순으로 읽어서, config나 deployment가 namespace보다 먼저 적용되기 때문이다. 같은 명령을 다시 치면 통과하지만 운영 절차로 쓸 수 없다. 네임스페이스와 CRD처럼 먼저 있어야 하는 것을 따로 먼저 적용하거나, 종류별 설치 순서를 아는 Helm 같은 도구를 쓴다.
+
+### --dry-run=client와 --dry-run=server는 무엇이 다른가?
+
+client는 kubectl 안에서만 확인해서 모르는 필드나 없는 네임스페이스를 놓친다. server는 API 서버가 기본값 채우기, 스키마 검사, 어드미션까지 다 하고 저장만 하지 않아서 실제 적용 결과와 가장 가깝다. 클러스터 없이 PR에서 검사할 때는 kubeconform처럼 버전별 스키마로 검사하는 도구를 쓴다.
+
+### .gitignore에 terraform.tfstate를 넣는 이유와, 넣으면 안 되는 Terraform 파일은?
+
+state에는 리소스 속성이 평문으로 들어 있어 DB 비밀번호 같은 값이 그대로 남기 때문이다. state는 접근을 제한한 원격 백엔드에 둔다. 반대로 `.terraform.lock.hcl`은 프로바이더 버전과 해시를 고정하는 파일이라 커밋해야 한다. 이걸 빼면 사람마다 다른 프로바이더로 plan이 돈다.
+
+### 환경별 매니페스트를 복사해서 관리하는 것과 Kustomize overlay의 차이는?
+
+복사하면 시간이 지나며 두 폴더가 어디서 달라졌는지 알 수 없게 된다. Kustomize는 공통 base 한 벌과 환경별 차이만 적은 overlay로 나눠서, 렌더링 결과를 diff하면 다른 점만 보인다. 이미지 태그 변경도 overlay의 한 줄 수정으로 끝난다. 템플릿 로직과 패키지 배포가 필요하면 Helm을 고른다.
+
+### 앱 코드와 배포 매니페스트를 한 저장소에 둘지 나눌지 어떻게 정하나?
+
+서비스가 적고 팀이 작으면 한 저장소가 PR과 리뷰가 한 번이라 편하다. GitOps 도구를 쓰거나 서비스가 늘면 배포 저장소를 떼어 내서, 앱 커밋마다 배포 도구가 반응하지 않게 하고 운영 설정 권한을 좁힌다. 대신 코드와 설정이 함께 바뀌어야 하는 변경은 PR이 두 개로 쪼개져 순서를 맞춰야 한다.
+
+### cleanup.sh에서 terraform destroy 전에 Ingress를 먼저 지우는 이유는?
+
+ALB는 클러스터 안의 로드 밸런서 컨트롤러가 Ingress를 보고 만든 것이라 Terraform state에 없다. 그대로 destroy하면 ALB와 보안 그룹이 서브넷을 붙잡고 있어 VPC 삭제가 의존성 오류로 실패한다. 클러스터가 만든 클라우드 리소스를 먼저 지우고, 그 다음에 Terraform이 만든 것을 지운다.

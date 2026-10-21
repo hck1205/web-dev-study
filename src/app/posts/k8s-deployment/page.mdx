@@ -1,0 +1,592 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-deployment");
+
+배포를 걸어 놓고 `kubectl get pods`를 보면 이름 가운데가 다른 Pod 두 무리가 섞여 있다. `web-7d599ff9fb-...`가 셋, `web-86549bdb9f-...`가 둘. 그 사이에 들어온 요청은 어떤 건 옛 버전이, 어떤 건 새 버전이 받는다. 몇십 초 뒤에는 새 무리만 남는다. 이 몇십 초 동안 무슨 일이 일어나는지 알아야 배포 중에 502가 튈 때, 배포가 끝나지 않을 때, 급하게 되돌려야 할 때 손이 먼저 나간다.
+
+이 글은 Deployment가 롤링 업데이트를 하는 방식을 숫자로 따라간다. maxSurge와 maxUnavailable이 매 순간 Pod 수를 어떻게 정하는지, 리비전마다 ReplicaSet이 따로 있는 이유, rollout 명령으로 지켜보고 멈추고 되돌리는 법, Recreate와 minReadySeconds, progressDeadlineSeconds까지 본다. Pod를 직접 만들지 않고 컨트롤러에 맡기는 이유와 ReplicaSet이 Pod 수를 맞추는 원리는 [Pod 기본](/posts/k8s-pod-basics)에서 다뤘다. 출력은 kwok로 띄운 실습 클러스터(Kubernetes 1.30)에서 받았다. Deployment와 ReplicaSet 컨트롤러는 진짜이고, Pod가 Ready가 되기까지 걸리는 시간만 4~8초로 흉내 냈다.
+
+## 이름 가운데가 다른 Pod 두 무리
+
+Deployment는 Pod를 직접 만들지 않는다. Pod 템플릿을 들고 있다가 ReplicaSet을 만들고, ReplicaSet이 Pod를 만든다. 아래 그림의 점이 누가 누구를 만드는지 보여 준다.
+
+<ConceptDiagram
+  width={440}
+  height={290}
+  caption="리비전마다 ReplicaSet이 하나씩 있고, Deployment는 그 사이에서 숫자만 옮긴다"
+  nodes={[
+    { id: "dep", label: "Deployment web", sub: "replicas 4", x: 220, y: 40, w: 150 },
+    { id: "rs1", label: "RS 7d599ff9fb", sub: "nginx:1.26 · 0개", x: 110, y: 140, w: 150 },
+    { id: "rs2", label: "RS 86549bdb9f", sub: "nginx:1.27 · 4개", x: 330, y: 140, w: 150 },
+    { id: "p1", label: "Pod", sub: "...-7c87d", x: 270, y: 245, w: 90 },
+    { id: "p2", label: "Pod", sub: "...-bkncq", x: 390, y: 245, w: 90 },
+  ]}
+  edges={[
+    { from: "dep", to: "rs1", label: "옛 리비전", dashed: true },
+    { from: "dep", to: "rs2", label: "지금 리비전" },
+    { from: "rs2", to: "p1" },
+    { from: "rs2", to: "p2" },
+  ]}
+/>
+
+이름 가운데 열 글자 정도가 `pod-template-hash`다. Pod 템플릿을 해시한 값이라, 템플릿이 같으면 같은 해시, 다르면 다른 해시가 나온다. Deployment는 이 해시를 ReplicaSet 이름과 셀렉터, Pod 라벨에 넣는다.
+
+```bash
+# 리비전별 ReplicaSet과 각자의 이미지, 셀렉터를 본다
+kubectl -n shop get rs -o wide
+```
+
+```text
+NAME             DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES         SELECTOR
+web-687476ccb8   4         4         4       33s   web          nginx:1.27.3   app=web,pod-template-hash=687476ccb8
+web-7d599ff9fb   0         0         0       96s   web          nginx:1.26     app=web,pod-template-hash=7d599ff9fb
+web-86549bdb9f   0         0         0       81s   web          nginx:1.27     app=web,pod-template-hash=86549bdb9f
+```
+
+Deployment의 셀렉터는 `app=web` 하나인데, 각 ReplicaSet은 거기에 해시를 하나 더 붙인 셀렉터를 쓴다. 그래서 ReplicaSet 셋이 같은 `app=web` Pod를 두고 서로 자기 것이라고 다투지 않는다. Service는 `app=web`만 보니 두 무리 모두에 트래픽을 보낸다. 배포 중에 옛 버전과 새 버전이 함께 요청을 받는 이유다.
+
+리비전마다 ReplicaSet을 따로 두는 데는 이유가 있다. 롤링 업데이트는 "새 템플릿의 Pod를 몇 개, 옛 템플릿의 Pod를 몇 개"를 동시에 유지해야 한다. ReplicaSet 하나는 템플릿 하나만 알고 그 수를 맞추는 일만 한다. 그러니 두 템플릿의 수를 따로 조절하려면 ReplicaSet 둘이 필요하고, Deployment는 그 둘의 `replicas` 숫자를 조금씩 옮기는 일만 하면 된다. 옛 ReplicaSet을 0개로 남겨 두면 되돌릴 때도 그 숫자만 다시 올리면 된다. 템플릿을 어디서 다시 가져올 필요가 없다.
+
+## 템플릿이 바뀌어야 새 리비전이 생긴다
+
+새 ReplicaSet이 생기는 조건은 하나다. `spec.template`이 바뀌는 것. 이미지, 환경 변수, 리소스, 라벨, 어노테이션 무엇이든 템플릿 안이면 새 해시가 나오고 롤링 업데이트가 시작된다. 반대로 템플릿 밖을 바꾸면 리비전이 생기지 않는다.
+
+```bash
+# replicas만 바꾼다. 템플릿 밖이다
+kubectl -n shop scale deploy/web --replicas=6
+kubectl -n shop get rs -l app=web
+```
+
+```text
+deployment.apps/web scaled
+NAME             DESIRED   CURRENT   READY   AGE
+web-687476ccb8   0         0         0       2m39s
+web-7d599ff9fb   0         0         0       3m42s
+web-86549bdb9f   6         6         4       3m27s
+```
+
+지금 ReplicaSet의 수만 6으로 늘었다. `strategy`, `minReadySeconds`, `revisionHistoryLimit`를 바꿀 때도 마찬가지다.
+
+이 규칙에서 흔한 실수가 나온다. 이미지 태그를 `latest`나 `main`처럼 고정된 이름으로 쓰면, 레지스트리에 새 이미지를 올려도 템플릿 문자열은 그대로라 아무 일도 안 일어난다. 그래서 태그에 커밋 SHA나 버전을 넣거나 다이제스트(`@sha256:...`)로 고정한다. 정말 같은 템플릿으로 Pod만 갈아 끼우고 싶다면 `kubectl rollout restart`를 쓴다. 이 명령은 템플릿에 시각을 적은 어노테이션 하나를 넣어서 템플릿을 바꾼다.
+
+```bash
+# 템플릿에 무엇이 들어갔는지 본다
+kubectl -n shop rollout restart deploy/cart
+kubectl -n shop get deploy cart -o jsonpath='{.spec.template.metadata.annotations}{"\n"}'
+```
+
+```text
+deployment.apps/cart restarted
+{"kubectl.kubernetes.io/restartedAt":"2026-10-20T13:58:56Z","pod-ready.stage.kwok.x-k8s.io/delay":"4s","pod-ready.stage.kwok.x-k8s.io/jitter-delay":"4s"}
+```
+
+`restartedAt` 말고 뒤의 두 줄은 이 실습 클러스터에서 Ready까지 걸리는 시간을 늘리려고 넣은 것이다. ConfigMap 내용이 바뀌어도 Pod가 다시 뜨지 않는 문제도 같은 이유다. ConfigMap은 템플릿 밖에 있다. 해결법은 [ConfigMap](/posts/k8s-configmap) 글과 Helm의 체크섬 어노테이션을 다룬 [차트 템플릿](/posts/helm-chart-templates) 글에 있다.
+
+## maxSurge와 maxUnavailable이 정하는 두 줄
+
+롤링 업데이트의 속도와 안전은 숫자 두 개가 정한다.
+
+```yaml
+spec:
+  replicas: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%        # replicas보다 이만큼까지 더 띄울 수 있다 (기본 25%)
+      maxUnavailable: 25%  # replicas보다 이만큼까지 덜 준비돼 있어도 된다 (기본 25%)
+```
+
+두 숫자는 매 순간 지켜야 할 선 두 개로 바뀐다. 위쪽 선은 "전체 Pod 수는 replicas + maxSurge를 넘지 않는다", 아래쪽 선은 "쓸 수 있는(Available) Pod 수는 replicas − maxUnavailable 아래로 내려가지 않는다"이다. 퍼센트는 반올림 방향이 다르다. maxSurge는 올림, maxUnavailable은 내림이다. 둘 다 Pod를 더 적게 위험에 빠뜨리는 쪽으로 반올림하는 셈이다. replicas 10에 25%면 maxSurge는 2.5를 올려 3, maxUnavailable은 2.5를 내려 2. 위쪽 선은 13개, 아래쪽 선은 8개다.
+
+실제로 10개짜리 Deployment의 이미지를 바꾸고 1초 뒤에 봤다.
+
+```bash
+# 이미지를 바꾸고 바로 ReplicaSet과 Deployment 상태를 본다
+kubectl -n shop set image deploy/feed feed=nginx:1.27
+kubectl -n shop get rs -l app=feed
+kubectl -n shop get deploy feed
+```
+
+```text
+deployment.apps/feed image updated
+NAME              DESIRED   CURRENT   READY   AGE
+feed-5b6584b45d   8         8         8       12s
+feed-679f8b98d5   5         5         0       2s
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+feed   8/10    5            8           12s
+```
+
+전체 13개(옛 8 + 새 5)로 위쪽 선에 딱 붙었고, 준비된 것은 옛 8개로 아래쪽 선에 딱 붙었다. 컨트롤러가 이 상태에 이른 순서는 Deployment의 이벤트에 그대로 남는다.
+
+```bash
+# Deployment가 ReplicaSet 숫자를 옮긴 순서
+kubectl -n shop describe deploy feed | sed -n '/Events/,$p'
+```
+
+```text
+Events:
+  Type    Reason             Age               From                   Message
+  ----    ------             ----              ----                   -------
+  Normal  ScalingReplicaSet  31s               deployment-controller  Scaled up replica set feed-5b6584b45d to 10
+  Normal  ScalingReplicaSet  21s               deployment-controller  Scaled up replica set feed-679f8b98d5 to 3
+  Normal  ScalingReplicaSet  21s               deployment-controller  Scaled down replica set feed-5b6584b45d to 8 from 10
+  Normal  ScalingReplicaSet  21s               deployment-controller  Scaled up replica set feed-679f8b98d5 to 5 from 3
+  Normal  ScalingReplicaSet  14s               deployment-controller  Scaled down replica set feed-5b6584b45d to 7 from 8
+  Normal  ScalingReplicaSet  14s               deployment-controller  Scaled up replica set feed-679f8b98d5 to 6 from 5
+  Normal  ScalingReplicaSet  13s               deployment-controller  Scaled down replica set feed-5b6584b45d to 6 from 7
+  Normal  ScalingReplicaSet  13s               deployment-controller  Scaled up replica set feed-679f8b98d5 to 7 from 6
+  Normal  ScalingReplicaSet  13s               deployment-controller  Scaled down replica set feed-5b6584b45d to 5 from 6
+  Normal  ScalingReplicaSet  5s (x8 over 13s)  deployment-controller  (combined from similar events): Scaled down replica set feed-5b6584b45d to 0 from 1
+```
+
+처음 세 줄이 규칙을 그대로 보여 준다. 먼저 maxSurge만큼(3) 새것을 늘리고, 아래쪽 선까지(8) 옛것을 줄이고, 줄인 만큼 다시 새것을 늘린다(5). 그다음부터는 새 Pod가 Ready가 될 때마다 옛것을 줄이고 새것을 늘리는 일을 반복한다. 비슷한 이벤트가 많으면 마지막 줄처럼 묶여서 나온다. 4개짜리로 줄여서 한 단계씩 보자. 아래 그림에서 다음을 누르면 된다.
+
+<AlgoTrace
+  caption="replicas 4, maxSurge 25%(1), maxUnavailable 25%(1)"
+  memoryLabel="두 선과 지금 상태"
+  cells={["v1", "v1", "v1", "v1", "v2", "v2", "v2", "v2"]}
+  steps={[
+    { found: [0, 1, 2, 3], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 4 · v2 0"], caption: "옛 버전 넷이 모두 준비돼 있다. 이미지를 바꿨다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 4 · v2 1"], caption: "위쪽 선까지 여유가 하나 있다. 새 Pod를 하나 만든다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 3 · v2 1"], caption: "아래쪽 선이 3이니 옛것을 하나 줄여도 된다. 줄인다." },
+    { pointer: 5, found: [0, 1, 2], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 3 · v2 2"], caption: "전체가 4가 됐으니 위쪽 선까지 다시 하나 여유가 생겼다. 새 Pod를 하나 더 만든다." },
+    { found: [0, 1, 2, 4, 5], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 3 · v2 2 (Ready)"], caption: "새 Pod 둘이 Ready가 됐다. 이제 준비된 것이 다섯이다." },
+    { pointer: 1, found: [0, 4, 5], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 1 · v2 2"], caption: "준비된 새 Pod 둘 덕분에 옛것을 둘 더 줄여도 아래쪽 선 3을 지킨다." },
+    { pointer: 7, found: [0, 4, 5], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 1 · v2 4"], caption: "줄인 만큼 새 Pod를 둘 더 만든다. 전체 다섯이다." },
+    { found: [4, 5, 6, 7], memory: ["전체 ≤ 5", "Available ≥ 3", "v1 0 · v2 4"], caption: "새 Pod가 모두 Ready가 되면 마지막 옛 Pod를 지운다. 끝났다." },
+  ]}
+/>
+
+실제 4개짜리 Deployment에서는 새 Pod가 하나씩 Ready가 되니 같은 흐름이 한 칸씩 잘게 찍혔다(새 1 → 옛 3 → 새 2 → 옛 2 → 새 3 → 옛 1 → 새 4 → 옛 0). 두 숫자를 바꿔 가며 직접 계산해 볼 수 있다. 새로 만든 Pod는 다음 단계 전에 모두 Ready가 된다고 단순하게 치고, 한 단계가 끝날 때마다 "옛/새" Pod 수를 남긴다.
+
+<CodePlayground
+  caption="롤링 업데이트 단계 계산"
+  functionName="rollingSteps"
+  initialCode={`function rollingSteps(replicas, maxSurge, maxUnavailable) {
+  // 숫자는 그대로, "25%" 같은 문자열은 replicas에 곱한다
+  // maxSurge는 올림, maxUnavailable은 내림. 둘 다 0이면 maxUnavailable을 1로 본다
+  // 한 단계: 위쪽 선까지 새 Pod를 늘리고, 아래쪽 선까지 옛 Pod를 줄이기를 더 바뀌지 않을 때까지 반복
+  // 단계가 끝나면 "옛/새"를 기록하고, 새 Pod가 모두 Ready가 된다
+  return [];
+}`}
+  solution={`function rollingSteps(replicas, maxSurge, maxUnavailable) {
+  const resolve = (v, up) => {
+    if (typeof v === "number") return v;
+    const x = (parseFloat(v) / 100) * replicas;
+    return up ? Math.ceil(x) : Math.floor(x);
+  };
+  const surge = resolve(maxSurge, true);
+  let unavailable = resolve(maxUnavailable, false);
+  if (surge === 0 && unavailable === 0) unavailable = 1;
+  const maxTotal = replicas + surge;
+  const minAvailable = replicas - unavailable;
+  let oldPods = replicas, newPods = 0, newReady = 0;
+  const out = [];
+  while (!(oldPods === 0 && newPods === replicas)) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const up = Math.min(maxTotal - (oldPods + newPods), replicas - newPods);
+      if (up > 0) { newPods += up; changed = true; }
+      const floor = Math.max(0, minAvailable - newReady);
+      if (oldPods > floor) { oldPods = floor; changed = true; }
+    }
+    out.push(oldPods + "/" + newPods);
+    newReady = newPods;
+  }
+  return out;
+}`}
+  tests={[
+    { args: [4, "25%", "25%"], expected: ["3/2", "1/4", "0/4"], label: "4개, 기본값" },
+    { args: [10, "25%", "25%"], expected: ["8/5", "3/10", "0/10"], label: "10개, 기본값" },
+    { args: [4, 1, 0], expected: ["4/1", "3/2", "2/3", "1/4", "0/4"], label: "하나 더 띄우고 하나 빼기" },
+    { args: [4, 0, 1], expected: ["3/1", "2/2", "1/3", "0/4"], label: "더 띄우지 않기" },
+    { args: [1, "25%", "25%"], expected: ["1/1", "0/1"], label: "1개면 올림 덕에 surge 1" },
+    { args: [3, 0, "100%"], expected: ["0/3"], label: "다 내리고 다 올리기" },
+  ]}
+/>
+
+마지막 경우는 사실상 한꺼번에 내렸다가 올리는 것이다. 다섯 번째는 replicas 1에서 기본값이 어떻게 동작하는지 보여 준다. maxUnavailable 25%는 0으로 내림되니 옛 Pod를 먼저 죽이지 않고, maxSurge가 1로 올림되니 새 Pod를 하나 더 띄운다. 둘 다 0으로 두는 것은 막혀 있다. 그러면 아무것도 움직일 수 없기 때문이다.
+
+```text
+The Deployment "cart" is invalid: spec.strategy.rollingUpdate.maxUnavailable: Invalid value: intstr.IntOrString{Type:0, IntVal:0, StrVal:""}: may not be 0 when `maxSurge` is 0
+```
+
+## 더 띄울 것인가, 잠깐 덜 쓸 것인가
+
+두 숫자를 고르는 건 결국 무엇을 아낄지의 문제다. 아래 그림은 maxSurge 1, maxUnavailable 0일 때 Service 뒤의 Pod가 바뀌는 모습이다. 다음을 누르면 요청이 어디로 가는지 따라간다.
+
+<NetworkTopology
+  caption="maxSurge 1, maxUnavailable 0: 새 Pod가 준비돼야 옛 Pod를 뺀다"
+  width={400}
+  height={250}
+  zones={[{ id: "rs", label: "Service app=web 뒤", x: 150, y: 10, w: 242, h: 230, tone: "private" }]}
+  nodes={[
+    { id: "client", label: "Ingress", sub: "요청", x: 62, y: 125, icon: "gateway" },
+    { id: "o1", label: "v1 Pod", sub: "Ready", x: 216, y: 60, icon: "container", w: 100 },
+    { id: "o2", label: "v1 Pod", sub: "Ready", x: 216, y: 125, icon: "container", w: 100 },
+    { id: "o3", label: "v1 Pod", sub: "Ready", x: 216, y: 190, icon: "container", w: 100 },
+    { id: "n1", label: "v2 Pod", sub: "준비 중", x: 336, y: 125, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "client", to: "o1" },
+    { from: "client", to: "o2" },
+    { from: "client", to: "o3" },
+    { from: "client", to: "n1", dashed: true },
+  ]}
+  steps={[
+    { path: ["client", "o1"], packet: "GET", highlight: ["n1"], title: "새 Pod를 하나 더 띄운다", detail: "replicas 3에 maxSurge 1이라 네 번째 Pod가 생긴다. 아직 Ready가 아니라 엔드포인트에 없으니 요청은 v1 셋이 받는다." },
+    { path: ["client", "n1"], packet: "GET", title: "Ready가 되면 요청을 받는다", detail: "readiness를 통과하면 EndpointSlice에 들어간다. 이 순간에는 v1 셋과 v2 하나가 함께 받는다." },
+    { path: ["o1"], highlight: ["n1"], title: "그다음에 옛 Pod 하나를 뺀다", detail: "준비된 Pod가 넷이 됐으니 하나를 줄여도 3을 지킨다. 빠지는 Pod는 엔드포인트에서 먼저 빠지고 SIGTERM을 받는다." },
+    { path: ["client", "o3"], packet: "GET", title: "이 과정을 셋 다 바뀔 때까지 반복한다", detail: "어느 순간에도 준비된 Pod는 3개 아래로 내려가지 않는다. 대신 늘 하나만큼 노드 자원이 더 필요하다." },
+  ]}
+/>
+
+`maxSurge: 1, maxUnavailable: 0`은 용량을 지킨다. 배포 내내 준비된 Pod가 replicas 아래로 내려가지 않으니 트래픽이 많은 서비스에 맞는다. 대신 한 번에 하나씩이라 Pod가 많으면 느리고, 노드에 Pod 하나만큼 여유가 있어야 한다. 노드가 꽉 차 있으면 새 Pod가 Pending에 걸리고 배포가 그 자리에서 멈춘다. ResourceQuota가 빠듯한 네임스페이스에서는 더 띄운 Pod가 한도를 넘어 아예 만들어지지 않는다([requests와 limits](/posts/k8s-pod-resources)에서 본 FailedCreate다).
+
+`maxSurge: 0, maxUnavailable: 1`은 자원을 지킨다. 더 띄우지 않으니 노드나 쿼터에 여유가 없어도 배포가 된다. 대신 배포하는 동안 용량이 하나만큼 줄어든다. GPU 노드처럼 남는 자리가 비싼 곳에서 쓴다.
+
+기본값 25%/25%는 둘의 중간이다. Pod가 많을수록 한 번에 여럿을 바꿔 빠르다. 실무에서는 트래픽을 받는 서비스는 `maxUnavailable: 0`을 두고 maxSurge를 Pod 수에 맞춰(예: 25%) 속도를 조절하는 경우가 많다.
+
+어느 쪽이든 배포 중에 요청이 끊기지 않으려면 두 가지가 더 맞아야 한다. 새 Pod는 readiness가 정직해야 하고, 옛 Pod는 엔드포인트에서 빠지는 동안 들어오는 요청을 처리할 시간이 있어야 한다. 앞의 것은 [프로브](/posts/k8s-pod-probes), 뒤의 것은 preStop과 종료 순서를 다룬 [Pod의 일생](/posts/k8s-pod-lifecycle)에 있다. 롤링 업데이트 숫자를 아무리 잘 골라도 이 둘이 틀리면 502가 튄다.
+
+## 한꺼번에 내리고 올리는 Recreate
+
+두 버전이 동시에 떠 있으면 안 되는 앱도 있다. ReadWriteOnce 볼륨을 붙인 앱은 새 Pod가 다른 노드에 뜨면 볼륨을 붙이지 못하고, 옛 버전과 새 버전이 서로 다른 DB 스키마를 기대하거나, 같은 큐를 서로 다른 형식으로 읽으면 섞이는 순간 데이터가 망가진다. 이럴 때 Recreate를 쓴다.
+
+```yaml
+spec:
+  strategy:
+    type: Recreate   # rollingUpdate 항목을 두면 거절된다
+```
+
+```bash
+# 이미지를 바꾸고 1초 뒤 Pod를 본다
+kubectl -n shop set image deploy/legacy web=nginx:1.27
+kubectl -n shop get pods -l app=legacy
+```
+
+```text
+deployment.apps/legacy image updated
+NAME                      READY   STATUS        RESTARTS   AGE
+legacy-59d87c6647-4zdsj   1/1     Terminating   0          8s
+legacy-59d87c6647-7zqn4   1/1     Terminating   0          8s
+legacy-59d87c6647-ps6c7   1/1     Terminating   0          8s
+legacy-59d87c6647-rhrmc   1/1     Terminating   0          8s
+```
+
+```text
+Events:
+  Type    Reason             Age   From                   Message
+  ----    ------             ----  ----                   -------
+  Normal  ScalingReplicaSet  31s   deployment-controller  Scaled up replica set legacy-59d87c6647 to 4
+  Normal  ScalingReplicaSet  24s   deployment-controller  Scaled down replica set legacy-59d87c6647 to 0 from 4
+  Normal  ScalingReplicaSet  8s    deployment-controller  Scaled up replica set legacy-5658658fd4 to 4
+```
+
+옛것을 0으로 줄이고(24초 전), 옛 Pod가 완전히 사라질 때까지 기다린 뒤에야 새것을 4로 올렸다(8초 전). 그 사이 16초 동안은 받을 Pod가 하나도 없다. Recreate는 다운타임을 받아들이는 대신 두 버전이 절대 섞이지 않는다는 보장을 산다. 앞의 계산기에서 `maxSurge: 0, maxUnavailable: 100%`가 비슷해 보이지만, 그쪽은 옛 Pod가 Terminating인 동안에도 새 Pod를 만들기 때문에(1.30 기준. Terminating Pod를 세지 않는다) 잠깐 섞일 수 있다. 섞이면 안 된다면 Recreate다.
+
+## Ready와 Available 사이, minReadySeconds
+
+`kubectl get deploy`에는 READY와 AVAILABLE이 따로 있다. 보통은 같아서 구분할 일이 없는데, `minReadySeconds`를 주면 벌어진다.
+
+```yaml
+spec:
+  replicas: 3
+  minReadySeconds: 10   # Ready가 된 뒤 10초를 버텨야 Available로 친다
+```
+
+```bash
+# 만들고 3초마다 Deployment를 본다
+kubectl apply -f search.yaml
+for i in 1 2 3 4 5 6; do sleep 3; kubectl -n shop get deploy search --no-headers; done
+```
+
+```text
+deployment.apps/search created
+search   0/3   3     0     3s
+search   3/3   3     0     6s
+search   3/3   3     0     9s
+search   3/3   3     0     12s
+search   3/3   3     3     15s
+search   3/3   3     3     18s
+```
+
+셋 다 6초쯤 Ready가 됐는데 AVAILABLE은 15초쯤에야 3이 됐다. 롤링 업데이트의 아래쪽 선이 세는 것은 Ready가 아니라 Available이다. 그래서 minReadySeconds를 주면 새 Pod가 뜬 뒤 그 시간만큼 지켜본 다음에야 옛 Pod를 줄인다. 뜨자마자 몇 초 뒤에 죽는 버전, 첫 요청 몇 개를 받고 메모리가 터지는 버전이 전체로 퍼지기 전에 걸린다. 배포가 그만큼 느려지는 게 비용이다. readiness probe는 지금 받을 수 있는지만 보고, minReadySeconds는 "잠깐이라도 버티는지"를 하나 더 보는 셈이다.
+
+## 끝나지 않는 배포와 progressDeadlineSeconds
+
+새 Pod가 Ready가 되지 못하면 롤링 업데이트는 그 자리에서 기다린다. 얼마나 기다릴지가 `progressDeadlineSeconds`(기본 600초)다. 위 search Deployment는 30초로 두고, 새 버전 Pod가 Ready가 되지 않게 만들었다.
+
+```bash
+# 마감 시간이 지난 뒤 배포 상태와 조건을 본다
+kubectl -n shop rollout status deploy/search --timeout=5s; echo "exit=$?"
+kubectl -n shop get deploy search -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+error: deployment "search" exceeded its progress deadline
+exit=1
+Available=True MinimumReplicasAvailable: Deployment has minimum availability.
+Progressing=False ProgressDeadlineExceeded: ReplicaSet "search-64c99d7d4b" has timed out progressing.
+```
+
+Available은 True다. 옛 Pod가 다 살아 있어서 서비스는 멀쩡하다. Progressing만 False가 되고 `rollout status`가 0이 아닌 코드로 끝난다. 쿠버네티스는 여기서 아무것도 되돌리지 않는다. 마감은 "실패했다고 표시하는 시각"일 뿐이다. 그래서 CI는 배포 명령 뒤에 꼭 `kubectl rollout status --timeout`을 붙여 이 실패를 잡고, 되돌리기는 사람이나 도구가 한다. 새 Pod가 왜 Ready가 아닌지 이벤트를 읽는 법은 [프로브](/posts/k8s-pod-probes) 글에서 다뤘다. Pending이라면 [스케줄링](/posts/k8s-pod-scheduling), CrashLoopBackOff라면 [Pod 문제 해결](/posts/k8s-pod-troubleshooting)로 간다.
+
+마감은 마지막으로 진전이 있던 시점부터 센다. 새 Pod 하나가 Ready가 될 때마다 시계가 다시 돈다. 그래서 Pod가 아주 많고 하나하나가 느리게 뜨는 Deployment라도 계속 나아가고 있으면 실패로 표시되지 않는다. 반대로 maxSurge: 1인데 노드에 자리가 없어 첫 Pod부터 Pending이라면 정확히 마감 시간 뒤에 실패한다.
+
+## 리비전 기록과 되돌리기
+
+리비전 번호는 ReplicaSet의 `deployment.kubernetes.io/revision` 어노테이션에 붙어 있다.
+
+```bash
+# 리비전 목록과 각 ReplicaSet의 리비전 번호
+kubectl -n shop rollout history deploy/web
+kubectl -n shop get rs -l app=web -o custom-columns=NAME:.metadata.name,REVISION:.metadata.annotations.deployment\\.kubernetes\\.io/revision,DESIRED:.spec.replicas,IMAGE:.spec.template.spec.containers[0].image
+```
+
+```text
+deployment.apps/web 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         nginx 1.27로 올림
+3         maxUnavailable 0으로 1.27.3 배포
+
+NAME             REVISION   DESIRED   IMAGE
+web-687476ccb8   3          4         nginx:1.27.3
+web-7d599ff9fb   1          0         nginx:1.26
+web-86549bdb9f   2          0         nginx:1.27
+```
+
+CHANGE-CAUSE는 Deployment의 `kubernetes.io/change-cause` 어노테이션을 그 시점의 ReplicaSet에 복사한 값이다. 예전에는 `--record` 플래그가 명령줄을 자동으로 적었는데, 이 플래그는 폐기 예정이 됐다. 지금은 배포할 때 직접 어노테이션을 단다. 직접 달 때 함정이 있다. 어노테이션은 지우지 않으면 계속 남는다. 다음에 어노테이션을 안 고치고 배포하면 이전 사유가 새 리비전에 그대로 복사된다. 아래 5번이 그 예다.
+
+이제 되돌려 보자. `rollout undo`는 직전 리비전의 템플릿을 꺼내 지금 템플릿으로 덮어쓴다.
+
+<SequenceDiagram
+  caption="rollout undo는 옛 ReplicaSet을 다시 키운다"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "dep", label: "Deployment" },
+    { id: "old", label: "RS 리비전 2" },
+    { id: "cur", label: "RS 리비전 3" },
+  ]}
+  steps={[
+    { from: "user", to: "dep", label: "rollout undo", title: "직전 리비전을 고른다", detail: "--to-revision이 없으면 바로 전 리비전 2다. kubectl이 그 ReplicaSet의 템플릿을 읽어 Deployment 템플릿에 덮어쓴다." },
+    { from: "dep", to: "dep", label: "hash 86549bdb9f", title: "해시가 이미 있다", detail: "덮어쓴 템플릿의 해시는 리비전 2 ReplicaSet과 같다. 새 ReplicaSet을 만들지 않고 그것을 다시 쓴다." },
+    { from: "dep", to: "old", label: "scale up", title: "평소처럼 롤링 업데이트를 한다", detail: "되돌리기도 롤링 업데이트다. maxSurge와 maxUnavailable을 그대로 지킨다." },
+    { from: "dep", to: "cur", label: "scale down", title: "지금 버전을 줄인다", detail: "리비전 3 ReplicaSet은 0개로 남는다. 다시 앞으로 갈 때 쓸 수 있다." },
+    { from: "dep", to: "old", label: "revision 4", title: "번호는 새로 붙는다", detail: "되살린 ReplicaSet의 리비전이 2에서 4로 바뀐다. 기록에서 2는 사라진다." },
+  ]}
+/>
+
+```bash
+# 직전 리비전으로 되돌리고 기록과 ReplicaSet을 다시 본다
+kubectl -n shop rollout undo deploy/web
+kubectl -n shop rollout history deploy/web
+kubectl -n shop get rs -l app=web -o custom-columns=NAME:.metadata.name,REVISION:.metadata.annotations.deployment\\.kubernetes\\.io/revision,DESIRED:.spec.replicas,IMAGE:.spec.template.spec.containers[0].image
+```
+
+```text
+deployment.apps/web rolled back
+deployment.apps/web 
+REVISION  CHANGE-CAUSE
+1         <none>
+3         maxUnavailable 0으로 1.27.3 배포
+4         nginx 1.27로 올림
+
+NAME             REVISION   DESIRED   IMAGE
+web-687476ccb8   3          0         nginx:1.27.3
+web-7d599ff9fb   1          0         nginx:1.26
+web-86549bdb9f   4          4         nginx:1.27
+```
+
+같은 `web-86549bdb9f`가 리비전 2에서 4로 번호만 바뀌었다. `rollout undo`를 한 번 더 치면 직전인 3으로 가니, 연달아 치면 두 버전 사이를 오갈 뿐 더 옛날로 가지 않는다. 특정 시점으로 가려면 `--to-revision=1`처럼 번호를 준다. 이어서 replicas를 6으로 늘리고 다른 것을 바꿔 배포했더니, change-cause를 고치지 않아 리비전 5에도 "nginx 1.27로 올림"이 붙었다.
+
+```text
+REVISION  CHANGE-CAUSE
+1         <none>
+3         maxUnavailable 0으로 1.27.3 배포
+4         nginx 1.27로 올림
+5         nginx 1.27로 올림
+```
+
+옛 ReplicaSet은 `revisionHistoryLimit`(기본 10)개까지만 남는다. 2로 줄이면 0개짜리 옛 ReplicaSet이 바로 정리된다.
+
+```bash
+# 보관할 옛 리비전 수를 2로 줄인다
+kubectl -n shop patch deploy web -p '{"spec":{"revisionHistoryLimit":2}}'
+kubectl -n shop get rs -l app=web
+```
+
+```text
+deployment.apps/web patched
+NAME             DESIRED   CURRENT   READY   AGE
+web-687476ccb8   0         0         0       4m16s
+web-757948595d   6         6         6       91s
+web-86549bdb9f   0         0         0       5m4s
+```
+
+리비전 1(`7d599ff9fb`)이 사라졌다. 이제 1로는 되돌릴 수 없다. 0으로 두면 되돌릴 곳이 아예 없어진다. 너무 크게 두면 ReplicaSet이 쌓여 `kubectl get rs`가 지저분해지고 API 서버의 객체 수가 늘어난다. 기본값 10이 무난하다.
+
+GitOps로 배포한다면 `rollout undo`는 임시방편이다. 클러스터의 템플릿만 되돌렸을 뿐 git에는 새 버전이 남아 있어서, 자동 동기화와 self-heal을 켠 ArgoCD라면 곧바로 다시 새 버전으로 덮는다. git에서 되돌리는 것이 진짜 되돌리기다. Helm으로 배포했다면 `helm rollback`을 쓰는 편이 릴리스 기록과 맞는다. [Helm 업그레이드와 롤백](/posts/helm-release-lifecycle)에서 다뤘다.
+
+## 여러 군데를 고칠 때 pause와 resume
+
+이미지, 리소스, 환경 변수를 따로따로 바꾸면 바꿀 때마다 롤링 업데이트가 한 번씩 돈다. 세 번 다 끝까지 가기도 하고, 앞 배포가 도는 중에 다음 변경이 덮어쓰기도 한다. 멈춰 두고 몰아서 바꾸면 한 번만 돈다.
+
+```bash
+# 배포를 멈추고 세 가지를 바꾼다
+kubectl -n shop rollout pause deploy/cart
+kubectl -n shop set image deploy/cart cart=nginx:1.27.4
+kubectl -n shop set resources deploy/cart -c cart --requests=cpu=200m,memory=256Mi
+kubectl -n shop set env deploy/cart LOG_LEVEL=info
+kubectl -n shop get rs -l app=cart
+kubectl -n shop get deploy cart -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+```
+
+```text
+deployment.apps/cart paused
+deployment.apps/cart image updated
+deployment.apps/cart resource requirements updated
+deployment.apps/cart env updated
+NAME              DESIRED   CURRENT   READY   AGE
+cart-699f577c77   4         4         4       2m47s
+cart-768df9f76b   0         0         0       3m
+Available=True MinimumReplicasAvailable
+Progressing=Unknown DeploymentPaused
+```
+
+```bash
+# 다시 풀면 한 번에 반영된다
+kubectl -n shop rollout resume deploy/cart
+kubectl -n shop get rs -l app=cart
+```
+
+```text
+deployment.apps/cart resumed
+NAME              DESIRED   CURRENT   READY   AGE
+cart-699f577c77   0         0         0       3m14s
+cart-768df9f76b   0         0         0       3m27s
+cart-76fc6fdd64   4         4         4       27s
+```
+
+세 번 바꿨는데 새 ReplicaSet은 `76fc6fdd64` 하나다. 멈춰 둔 동안은 마감 시간도 세지 않는다. 멈춘 채로 잊어버리는 게 흔한 실수다. 그 뒤로 CI가 이미지를 바꿔도 아무 일도 일어나지 않는데, `kubectl apply`는 성공으로 끝나니 알아차리기 어렵다. 배포가 반영되지 않으면 `kubectl get deploy -o yaml`에서 `spec.paused: true`부터 본다. 롤링 업데이트 도중에 pause를 걸면 그 비율 그대로 멈추니, 새 버전 Pod 몇 개만 띄워 두고 지켜보는 간이 카나리로도 쓴다.
+
+## 배포 중에 replicas를 바꾸면
+
+배포가 도는 중에 HPA나 사람이 replicas를 바꾸면 어떻게 될까. 늘어난 수는 옛 ReplicaSet과 새 ReplicaSet에 지금 크기의 비율대로 나뉜다. 앞의 search Deployment가 옛 3, 새 1(Ready가 안 되는 중)인 상태에서 6으로 늘렸다.
+
+```bash
+# 배포 도중에 replicas를 3에서 6으로 늘린다
+kubectl -n shop scale deploy/search --replicas=6
+kubectl -n shop get rs -l app=search
+```
+
+```text
+deployment.apps/search scaled
+NAME                DESIRED   CURRENT   READY   AGE
+search-64c99d7d4b   2         2         0       47s
+search-7779898bb5   5         5         3       71s
+```
+
+maxSurge 1이니 위쪽 선은 7이다. 지금 4개에서 3개를 더할 수 있고, 그 3개를 3:1 비율에 가깝게 옛것에 2, 새것에 1 나눴다. 새 버전만 늘리면 아직 검증 안 된 버전에 부하가 몰리고, 옛 버전만 늘리면 배포가 뒤로 밀리니 비율대로 나누는 것이다. 이 상태에서 `rollout undo`를 했더니 옛 ReplicaSet이 6까지 올라가고 새것은 0이 되며 끝났다.
+
+같은 이유로 HPA를 쓰는 Deployment는 매니페스트에 `replicas`를 적지 않는다. 적어 두면 `kubectl apply`를 할 때마다 HPA가 늘려 놓은 수가 매니페스트 값으로 돌아간다. 자세한 건 [HPA](/posts/k8s-hpa) 글에서 본다.
+
+## 셀렉터는 바꿀 수 없다
+
+`spec.selector`는 만든 뒤에 바꿀 수 없다(apps/v1부터).
+
+```bash
+# 셀렉터에 라벨을 하나 더 넣어 본다
+kubectl -n shop patch deploy web --type=merge -p '{"spec":{"selector":{"matchLabels":{"app":"web","tier":"front"}},"template":{"metadata":{"labels":{"app":"web","tier":"front"}}}}}'
+```
+
+```text
+The Deployment "web" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{"app":"web", "tier":"front"}, MatchExpressions:[]v1.LabelSelectorRequirement(nil)}: field is immutable
+```
+
+셀렉터가 바뀌면 지금 떠 있는 ReplicaSet과 Pod가 이 Deployment 소속인지 아닌지가 흔들리고, 옛 Pod가 주인 없이 남거나 엉뚱한 Pod를 지울 수 있다. 그래서 아예 막아 둔다. 셀렉터에는 앱 이름처럼 절대 안 바뀌는 라벨만 넣고, 버전 같은 라벨은 템플릿 라벨에만 넣는다. 꼭 바꿔야 할 때 `--cascade=orphan`으로 Deployment만 지우고 다시 만드는 순서, Helm 업그레이드가 이 오류로 반쯤 적용되는 함정은 [Helm 업그레이드와 롤백](/posts/helm-release-lifecycle)에 실제로 재현해 두었다.
+
+## 배포가 이상할 때 보는 순서
+
+현장에서 "배포했는데 이상하다"는 말은 대부분 셋 중 하나다. 끝나지 않는다, 끝났는데 반영이 안 됐다, 배포하는 동안 에러가 튄다.
+
+끝나지 않으면 `kubectl rollout status`의 메시지부터 읽는다. "1 out of 4 new replicas have been updated"에서 멈췄다면 새 Pod가 Ready가 안 된 것이다. `kubectl get rs`로 새 ReplicaSet의 DESIRED와 CURRENT를 본다. CURRENT가 DESIRED보다 작으면 Pod가 만들어지지도 않은 것이라 ReplicaSet의 이벤트(쿼터 초과, Pod Security 거절)를 보고, 같으면 Pod 쪽(Pending, CrashLoopBackOff, readiness 실패)을 본다. "old replicas are pending termination"에서 오래 멈췄다면 옛 Pod가 종료 유예 시간 동안 안 죽고 있는 것이다.
+
+반영이 안 됐으면 템플릿이 정말 바뀌었는지 본다. 같은 태그를 다시 밀었거나, `spec.paused`가 true거나, GitOps 도구가 되돌려 놓았을 수 있다. `kubectl get rs`에 새 ReplicaSet이 없다면 템플릿이 그대로라는 뜻이다.
+
+배포 중에만 에러가 튄다면 롤링 업데이트 자체보다 그 끝단이 문제다. 새 Pod가 너무 일찍 Ready가 되거나(readiness가 너그럽다), 옛 Pod가 너무 일찍 죽는다(preStop이 없다). 옛 버전과 새 버전이 함께 떠 있는 동안 API나 DB 스키마가 서로 맞지 않는 경우도 있다. 롤링 업데이트는 두 버전이 섞이는 시간을 전제로 하니, DB 변경은 "컬럼 추가 → 새 코드 배포 → 옛 컬럼 정리"처럼 두 버전이 모두 견디는 단계로 나눈다.
+
+PodDisruptionBudget을 걸었으니 배포 중에도 안전하다고 생각하기 쉽다. PDB는 노드 drain 같은 자발적 축출(eviction)에만 적용되고, Deployment가 옛 ReplicaSet을 줄이는 것은 막지 않는다. 배포 중의 여유는 maxUnavailable이 정한다.
+
+롤링 업데이트로 부족하면 다른 방식을 쓴다. 블루그린은 새 버전을 옆에 다 띄워 두고 Service의 셀렉터를 한 번에 바꾼다. Deployment 두 개(`web-blue`, `web-green`)와 Service 하나로 만들 수 있다. 아래 그림에서 다음을 누르면 전환과 되돌리기가 보인다.
+
+<NetworkTopology
+  caption="블루그린: Deployment 둘, Service 셀렉터 하나"
+  width={400}
+  height={240}
+  zones={[
+    { id: "blue", label: "web-blue (v1)", x: 150, y: 10, w: 116, h: 220, tone: "private" },
+    { id: "green", label: "web-green (v2)", x: 276, y: 10, w: 116, h: 220, tone: "public" },
+  ]}
+  nodes={[
+    { id: "svc", label: "Service web", sub: "version=?", x: 66, y: 120, icon: "lb", w: 116 },
+    { id: "b1", label: "v1 Pod", x: 208, y: 80, icon: "container", w: 96 },
+    { id: "b2", label: "v1 Pod", x: 208, y: 165, icon: "container", w: 96 },
+    { id: "g1", label: "v2 Pod", x: 334, y: 80, icon: "container", w: 96 },
+    { id: "g2", label: "v2 Pod", x: 334, y: 165, icon: "container", w: 96 },
+  ]}
+  links={[
+    { from: "svc", to: "b1" },
+    { from: "svc", to: "b2" },
+    { from: "svc", to: "g1", dashed: true },
+    { from: "svc", to: "g2", dashed: true },
+  ]}
+  steps={[
+    { path: ["svc", "b1"], packet: "GET", title: "지금은 blue가 받는다", detail: "Service 셀렉터가 version=blue라 v1 Pod만 엔드포인트에 있다." },
+    { path: ["g1"], highlight: ["green", "g2"], title: "green을 옆에 다 띄운다", detail: "v2 Deployment를 replicas 그대로 띄운다. 아직 트래픽은 없으니 내부 주소로 미리 확인한다. 자원은 이 순간 두 배다." },
+    { path: ["svc", "g1"], packet: "GET", highlight: ["g2"], title: "셀렉터를 한 번에 바꾼다", detail: "version=green으로 바꾸면 엔드포인트가 통째로 바뀐다. 두 버전이 섞여 요청을 받는 시간이 거의 없다." },
+    { path: ["svc", "b2"], packet: "GET", highlight: ["blue"], title: "되돌리기도 셀렉터 한 줄이다", detail: "문제가 보이면 blue로 다시 바꾼다. blue를 지우기 전까지는 몇 초면 돌아간다." },
+  ]}
+/>
+
+섞이는 시간이 없고 되돌리기가 빠르지만, 전환하는 동안 두 배의 자원이 들고 이미 맺어진 연결은 옛 Pod에 남는다. 카나리는 새 버전에 트래픽의 5%, 25%처럼 비율을 정해 보내며 지표를 본다. Deployment만으로는 비율을 Pod 수로밖에 못 나누니, Argo Rollouts나 Flagger 같은 도구, [Gateway API](/posts/gateway)의 가중치 라우팅이나 서비스 메시와 함께 쓴다.
+
+## 숫자 두 개와 ReplicaSet 두 개
+
+Deployment는 리비전마다 ReplicaSet을 하나씩 두고, maxSurge가 정한 위쪽 선과 maxUnavailable이 정한 아래쪽 선 사이에서 두 ReplicaSet의 숫자를 옮긴다. 새 Pod가 Available이 되어야 옛 Pod를 줄이니 readiness와 minReadySeconds가 브레이크 역할을 하고, 마감을 넘기면 실패로 표시만 한다. 되돌리기는 옛 ReplicaSet을 다시 키우는 롤링 업데이트이고, 리비전 번호는 새로 붙는다. 다음 글 [HPA](/posts/k8s-hpa)에서는 이 Deployment의 replicas를 부하에 따라 자동으로 바꾼다.
+
+## 면접에서 나올 만한 질문
+
+### Deployment와 ReplicaSet은 어떤 관계인가요?
+
+ReplicaSet은 템플릿 하나로 정해진 수의 Pod를 유지하는 일만 한다. Deployment는 템플릿이 바뀔 때마다 새 ReplicaSet을 만들고, 옛 ReplicaSet과 새 ReplicaSet의 replicas를 조금씩 옮겨 롤링 업데이트를 한다. ReplicaSet을 리비전마다 남겨 두기 때문에 되돌릴 때 옛 ReplicaSet을 다시 키우기만 하면 된다.
+
+### maxSurge와 maxUnavailable은 어떻게 동작하나요?
+
+maxSurge는 전체 Pod 수가 replicas보다 얼마나 많아도 되는지, maxUnavailable은 Available Pod가 replicas보다 얼마나 적어도 되는지를 정한다. 퍼센트는 maxSurge는 올림, maxUnavailable은 내림으로 계산해서 replicas 10에 25%면 위쪽 13개, 아래쪽 8개다. 둘 다 0일 수는 없다. 트래픽을 받는 서비스는 maxUnavailable 0으로 용량을 지키고, 자원이 빠듯하면 maxSurge 0으로 자원을 지킨다.
+
+### 배포 중에 요청이 끊기는 이유는 무엇이고 어떻게 막나요?
+
+새 Pod가 실제로 준비되기 전에 Ready가 되거나, 옛 Pod가 엔드포인트에서 빠지기 전에 종료되기 때문인 경우가 대부분이다. readiness probe를 정직하게 만들고, preStop에 짧은 sleep을 두어 엔드포인트 제거가 퍼질 시간을 주고, 앱이 SIGTERM에서 처리 중인 요청을 마치고 끝나게 한다. 여기에 maxUnavailable 0을 더하면 배포 중에도 용량이 줄지 않는다.
+
+### Recreate는 언제 쓰나요?
+
+두 버전이 동시에 떠 있으면 안 될 때 쓴다. ReadWriteOnce 볼륨을 한 Pod만 붙일 수 있거나, 옛 버전과 새 버전이 호환되지 않는 데이터 형식을 쓰는 경우다. 옛 Pod가 모두 사라진 뒤에 새 Pod를 만들기 때문에 그 사이 다운타임이 생긴다.
+
+### rollout undo를 하면 내부에서 무슨 일이 일어나나요?
+
+직전(또는 지정한) 리비전 ReplicaSet의 템플릿을 Deployment 템플릿에 덮어쓴다. 해시가 같으니 새 ReplicaSet을 만들지 않고 그 옛 ReplicaSet을 롤링 업데이트로 다시 키운다. 되살린 ReplicaSet은 새 리비전 번호를 받고, 옛 번호는 기록에서 사라진다. GitOps 환경이라면 git을 되돌리지 않는 한 다음 동기화 때 다시 덮인다.
+
+### 새 버전 Pod가 계속 Ready가 안 되면 Deployment는 어떻게 되나요?
+
+maxUnavailable 안에서 옛 Pod를 유지한 채 기다린다. progressDeadlineSeconds(기본 600초) 동안 진전이 없으면 Progressing 조건이 False, ProgressDeadlineExceeded가 되고 `rollout status`가 실패로 끝난다. 자동으로 되돌리지는 않으니 CI가 이 실패를 잡아 사람이나 도구가 undo한다.
+
+### minReadySeconds는 readiness probe와 무엇이 다른가요?
+
+readiness는 지금 요청을 받을 수 있는지를 보고, minReadySeconds는 Ready가 된 뒤 그 시간 동안 계속 Ready를 유지해야 Available로 친다. 롤링 업데이트는 Available을 기준으로 옛 Pod를 줄이므로, 뜨자마자 몇 초 뒤에 죽는 버전이 퍼지는 걸 막는다. 대신 배포가 그만큼 느려진다.
+
+### PodDisruptionBudget이 있으면 롤링 업데이트 중 가용성이 보장되나요?
+
+아니다. PDB는 노드 drain 같은 eviction API를 거치는 자발적 중단에만 적용된다. Deployment 컨트롤러가 옛 ReplicaSet을 줄이는 것은 PDB를 보지 않는다. 배포 중의 가용성은 maxUnavailable과 readiness가 정한다.

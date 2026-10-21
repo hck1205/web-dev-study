@@ -9,7 +9,7 @@ export const Article = styled.div`
   color: ${color.text};
   /* 한글은 단어 단위로 줄바꿈하고, 너무 긴 토큰만 강제로 끊는다 */
   word-break: keep-all;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 
   ${media.tablet} {
     font-size: 1.125rem;

@@ -1,0 +1,493 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("network-config-cicd");
+
+금요일 저녁, 장애 대응 중에 누군가 콘솔에서 퍼블릭 라우트 테이블의 경로 하나를 지웠다. 장애는 다른 원인이었고 그 변경은 잊혔다. 월요일 오전, 아무 상관 없는 태그 변경 PR이 apply되면서 Terraform이 그 경로를 되살렸다. 그 사이 사흘 동안 코드와 실제는 달랐고, 아무도 몰랐다. 반대 상황도 있다. 노트북에서 각자 `terraform apply`를 치다 보니 리뷰 없이 보안 그룹이 열렸고, 누가 언제 바꿨는지는 CloudTrail을 뒤져야 나온다.
+
+네트워크 설정을 코드로 만들었다면([Terraform](/posts/terraform-network-iac), [Ansible](/posts/ansible-network-automation)) 다음은 그 코드가 실제에 닿는 길을 하나로 만드는 일이다. 변경은 PR로만 들어오고, 기계가 문법과 정책을 검사하고, 사람은 plan을 보고 승인하고, 적용은 파이프라인만 한다. 그리고 코드 밖에서 생긴 변화를 정기적으로 찾아낸다. 이 글은 GitHub Actions로 그 흐름을 짠다. 워크플로 문법, OIDC, environment 같은 기본은 [GitHub Actions로 ECR에 이미지 올리기](/posts/github-actions-docker-ecr)에서 다뤘으니 여기서는 네트워크 변경에 필요한 부분만 본다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.6(AWS 프로바이더 6.69.1, 모의 AWS 서버 moto), ansible-core 2.21.5, actionlint 1.7.12, ansible-lint 26.10.1, yamllint 1.38.0, conftest 0.56.0으로 했다. 워크플로 파일은 actionlint로 검사까지 했지만 실제 GitHub에서 돌리지는 않았다. 리소스 ID는 모의 서버가 만든 값이다.
+
+## 네트워크 설정의 원본은 git 하나
+
+GitOps는 "git에 있는 것이 정답이고, 실제는 그것을 따라간다"는 운영 방식이다. 쿠버네티스에서는 ArgoCD 같은 도구가 클러스터 안에서 git을 지켜보다 끌어오는(pull) 방식이 흔하다([밀어 넣는 배포와 끌어오는 배포](/posts/k8s-deploy-pipeline-eks)). 네트워크 장비와 클라우드 네트워크는 그런 상주 에이전트가 없어서 대개 CI가 밀어 넣는(push) 방식이다. 그래서 push 방식이 놓치는 것, 즉 git 밖에서 생긴 변화를 따로 찾는 장치가 필요하다.
+
+<ConceptDiagram
+  caption="변경은 PR로 들어가고, 코드 밖의 변화도 결국 PR로 돌아온다"
+  width={400}
+  height={270}
+  nodes={[
+    { id: "git", label: "git main", sub: "유일한 원본", x: 200, y: 34, w: 120 },
+    { id: "pr", label: "PR", sub: "리뷰·승인", x: 60, y: 130, w: 96 },
+    { id: "ci", label: "CI", sub: "lint·plan·정책", x: 200, y: 130, w: 112 },
+    { id: "net", label: "실제 네트워크", sub: "VPC·장비·서버", x: 200, y: 232, w: 132 },
+    { id: "drift", label: "drift 감지", sub: "매일 refresh", x: 340, y: 130, w: 104 },
+  ]}
+  edges={[
+    { from: "pr", to: "git", label: "merge" },
+    { from: "git", to: "ci" },
+    { from: "ci", to: "net", label: "apply" },
+    { from: "net", to: "drift", dashed: true },
+    { from: "drift", to: "pr", label: "이슈 → PR", dashed: true },
+  ]}
+/>
+
+이 그림이 성립하려면 조건이 하나 있다. 사람이 운영 네트워크에 쓰기 권한을 갖지 않는 것이다. 콘솔과 노트북의 쓰기 권한이 살아 있는 한 git은 원본이 아니라 원본의 사본 중 하나일 뿐이다. 장애 때 쓰는 비상 권한(break-glass)은 남겨 두되, 쓴 뒤에는 그 변경을 PR로 옮기는 것까지 절차에 넣는다.
+
+저장소는 이렇게 나눴다.
+
+```text
+network-config/
+├── .github/workflows/
+│   ├── network-pr.yml       # PR: lint → plan → 정책 → plan을 댓글로
+│   ├── network-apply.yml    # main: plan → 승인 → 같은 plan을 apply
+│   └── network-drift.yml    # 평일 아침: refresh-only로 drift 찾기
+├── terraform/network/       # VPC, 서브넷, 라우트, 보안 그룹
+├── ansible/                 # 인벤토리, group_vars, 플레이북, 템플릿
+├── policy/network.rego      # plan JSON에 거는 팀 규칙
+└── scripts/change-window.sh # 변경 가능 시간 확인
+```
+
+## PR이 올라오면 기계가 먼저 본다
+
+리뷰어가 사람이 볼 것에 집중하려면 기계가 볼 수 있는 것은 기계가 먼저 걸러야 한다. PR 워크플로의 첫 잡은 문법과 형식 검사다.
+
+```bash
+# PR 잡에서 도는 검사들을 로컬에서 그대로 돌린다
+terraform fmt -check -diff -recursive terraform/     # 형식이 다르면 exit 3
+terraform -chdir=terraform/network validate          # 참조·속성 이름 검사 (API 호출 없음)
+yamllint ansible/                                     # YAML 문법과 형식
+ansible-lint ansible/                                 # Ansible 관례와 멱등성 냄새
+actionlint .github/workflows/*.yml                    # 워크플로 자체
+```
+
+`terraform fmt -check`는 형식이 다르면 파일 이름과 diff를 찍고 exit 3으로 끝난다.
+
+```text
+sg.tf
+--- old/sg.tf
++++ new/sg.tf
+@@ -12,7 +12,7 @@
+   security_group_id = aws_security_group.alb.id
+   cidr_ipv4         = "0.0.0.0/0"
+   ip_protocol       = "tcp"
+-  from_port   = 443
++  from_port         = 443
+   to_port           = 443
+```
+
+`validate`는 클라우드에 묻지 않고 코드만으로 잡을 수 있는 실수를 찾는다. 속성 이름 오타가 대표적이다.
+
+```text
+Error: Unsupported argument
+
+  on sg.tf line 14, in resource "aws_vpc_security_group_ingress_rule" "alb_https":
+  14:   ip_protocl        = "tcp"
+
+An argument named "ip_protocl" is not expected here. Did you mean
+"ip_protocol"?
+```
+
+ansible-lint는 처음 붙이면 시끄럽다. [앞 글](/posts/ansible-network-automation)의 플레이북에 그대로 돌렸더니 12건이 나왔다.
+
+```text
+# Rule Violation Summary
+
+  8 name profile:moderate tags:idiom
+  3 no-changed-when profile:moderate tags:command-shell,idempotency
+  1 no-handler profile:moderate tags:idiom
+
+Failed: 12 failure(s), 0 warning(s) in 7 files processed of 9 encountered. Last profile that met the validation criteria was 'basic'. Rating: 1/5 star
+```
+
+8건은 "작업 이름은 대문자로 시작하라"는 규칙(`name[casing]`)이 한글 이름에 걸린 것이라 `.ansible-lint`의 `skip_list`로 껐다. `no-changed-when` 3건은 진짜 문제다. `command` 작업이 언제 changed인지 알려 주지 않으면 RECAP의 changed가 의미를 잃는다. `changed_when`을 달고, block 안에서 바로 적용해야 해서 일부러 핸들러로 미루지 않은 작업 하나에는 `# noqa: no-handler`로 이유를 적었다. 그 뒤 결과는 `Passed: 0 failure(s), 0 warning(s) in 8 files processed`였다. 규칙을 끄는 것도 PR로 리뷰받는 설정 파일에 남긴다.
+
+워크플로 자체도 코드라서 틀린다. actionlint는 잡 출력 이름 오타와, 워크플로 안 셸 스크립트를 shellcheck로 검사한 결과를 같이 알려 준다.
+
+```text
+network-apply.yml:34:9: shellcheck reported issue in this script: SC2086:info:7:65: Double quote to prevent globbing and word splitting [shellcheck]
+   |
+34 |         run: |
+   |         ^~~~
+network-apply.yml:51:9: property "chaged" is not defined in object type {changed: string} [expression]
+   |
+51 |     if: needs.plan.outputs.chaged == 'true'
+   |         ^~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+두 번째 오류가 무섭다. 이 오타는 YAML로는 멀쩡해서 GitHub에서도 에러 없이 돈다. `needs.plan.outputs.chaged`는 빈 값이라 조건이 늘 거짓이 되고, apply 잡이 조용히 건너뛰어진다. "머지했는데 아무 일도 안 일어난다"는 증상으로 나타난다.
+
+## plan은 한 번 만들고 그대로 apply한다
+
+리뷰어가 승인한 것과 실제로 적용되는 것이 같아야 한다. 그래서 plan을 파일로 저장해 두고 apply는 그 파일만 받는다. CI의 plan 명령에는 옵션이 여럿 붙는다.
+
+<UrlAnatomy
+  caption="CI에서 쓰는 plan 명령 한 줄"
+  base="terraform plan"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "-input", value: "false", display: "-input=false", title: "물어보지 않는다", description: "변수 값이 비면 사람에게 입력을 기다리는 대신 바로 실패한다. CI가 입력을 기다리며 멈춰 있는 일을 막는다.", required: true },
+    { key: "-lock-timeout", value: "5m", display: "-lock-timeout=5m", title: "잠금을 기다린다", description: "다른 실행이 state 잠금을 잡고 있으면 바로 실패하지 않고 5분까지 기다린다. 잠금 자체는 Terraform 기본에서 다뤘다." },
+    { key: "-detailed-exitcode", display: "-detailed-exitcode", title: "바뀔 게 있는지 종료 코드로", description: "0은 변경 없음, 1은 오류, 2는 변경 있음이다. apply 잡을 띄울지, drift 알림을 보낼지를 이 숫자로 가른다." },
+    { key: "-out", value: "tfplan", display: "-out=tfplan", title: "계획을 파일로 남긴다", description: "apply가 이 파일을 받으면 새로 계산하지 않고 이 계획만 실행한다. 리뷰한 plan과 적용되는 변경이 같아진다.", required: true },
+  ]}
+/>
+
+저장한 plan은 state가 그 사이 바뀌면 거부된다. PR-101의 plan을 만들어 둔 뒤 다른 변경이 먼저 apply되면 이렇게 나온다.
+
+```bash
+# PR-101의 plan을 저장해 두고, 다른 변경이 먼저 apply된 뒤 그 plan을 적용해 본다
+terraform plan -input=false -out=pr-101.tfplan     # Plan: 1 to add, 0 to change, 0 to destroy.
+terraform apply -input=false -auto-approve          # (다른 PR) Resources: 0 added, 1 changed, 0 destroyed.
+terraform apply -input=false pr-101.tfplan
+```
+
+```text
+Error: Saved plan is stale
+
+The given plan file can no longer be applied because the state was changed by
+another operation after the plan was created.
+```
+
+이 에러가 안전장치다. 리뷰어가 본 plan은 "그때의 state 기준"이었으니, state가 바뀌었다면 plan을 다시 만들어 다시 봐야 한다. 이 흐름을 처음부터 끝까지 따라가 보자.
+
+<SequenceDiagram
+  caption="PR에서 apply까지, 리뷰한 plan이 그대로 적용되는 길"
+  actors={[
+    { id: "dev", label: "작성자" },
+    { id: "gh", label: "GitHub" },
+    { id: "ci", label: "CI 러너" },
+    { id: "rev", label: "승인자" },
+    { id: "aws", label: "AWS" },
+  ]}
+  steps={[
+    { from: "dev", to: "gh", label: "PR", title: "변경을 PR로 올린다", detail: "terraform/network나 ansible/ 아래가 바뀌면 network-pr 워크플로가 돈다." },
+    { from: "gh", to: "ci", label: "lint", title: "기계가 먼저 거른다", detail: "fmt, validate, yamllint, ansible-lint가 실패하면 plan까지 가지 않는다." },
+    { from: "ci", to: "aws", label: "plan (읽기)", title: "읽기 전용 역할로 plan", detail: "OIDC로 읽기만 되는 역할을 빌려 refresh와 plan을 한다. PR 코드가 무엇을 하든 쓸 수 없다.", payload: "Plan: 1 to add, 0 to change, 0 to destroy." },
+    { from: "ci", to: "gh", label: "댓글", title: "plan과 정책 결과를 PR에 단다", detail: "conftest가 실패하면 체크가 빨갛게 된다. plan 전문은 댓글이나 잡 요약에 남긴다." },
+    { from: "rev", to: "gh", label: "approve·merge", title: "사람은 plan을 보고 승인한다", detail: "destroy 숫자, 교체, 길을 바꾸는 속성을 본다. 코드 diff만 보고 승인하지 않는다." },
+    { from: "gh", to: "ci", label: "main plan", title: "main에서 다시 plan해 파일로 남긴다", detail: "머지 사이에 다른 변경이 들어왔을 수 있으니 main 기준으로 다시 계산하고 tfplan을 아티팩트로 올린다." },
+    { from: "rev", to: "ci", label: "environment 승인", title: "운영 환경 앞에서 한 번 더", detail: "apply 잡은 network-production 환경에 묶여 있어 지정된 사람이 승인해야 시작한다. 변경 창도 여기서 확인한다." },
+    { from: "ci", to: "aws", label: "apply tfplan", title: "쓰기 역할로 그 파일만 적용한다", detail: "쓰기 권한은 이 잡에서만 빌린다. state가 그 사이 바뀌었으면 Saved plan is stale로 멈춘다.", payload: "Apply complete! Resources: 1 added, 0 changed, 0 destroyed." },
+  ]}
+/>
+
+apply 워크플로의 핵심 부분이다. plan 잡이 `-detailed-exitcode`로 변경 여부를 출력하고, 변경이 있을 때만 apply 잡이 같은 파일을 받아 적용한다.
+
+```yaml
+concurrency:
+  group: network-prod      # 운영 네트워크 apply는 한 번에 하나만
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+    steps:
+      # checkout, OIDC(읽기 역할), setup-terraform(terraform_wrapper: false) 생략
+      - id: plan
+        working-directory: terraform/network
+        run: |
+          terraform init -input=false
+          set +e
+          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          [ "$code" -eq 1 ] && exit 1
+          echo "changed=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          terraform show -no-color tfplan >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: { name: tfplan, path: terraform/network/tfplan, retention-days: 1 }
+
+  apply:
+    needs: plan
+    if: needs.plan.outputs.changed == 'true'
+    environment: network-production   # 승인자가 요약의 plan을 보고 승인한다
+    steps:
+      - run: ./scripts/change-window.sh
+      - uses: actions/download-artifact@v4
+        with: { name: tfplan, path: terraform/network }
+      # OIDC(쓰기 역할) 생략
+      - working-directory: terraform/network
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -lock-timeout=5m tfplan
+```
+
+`set +e`가 필요한 이유는 GitHub Actions의 bash가 `-e`로 돌아서 exit 2(변경 있음)를 실패로 보고 스텝을 멈추기 때문이다. `terraform_wrapper: false`도 같은 이유다. setup-terraform의 래퍼는 출력을 가로채 스텝 출력으로 바꾸는데, 종료 코드를 직접 다룰 때는 끄는 편이 헷갈리지 않는다. plan 파일에는 변수 값과 리소스 속성이 그대로 들어 있으니 아티팩트 보존 기간은 짧게 둔다.
+
+PR에서 만든 plan을 머지 뒤에 그대로 쓰지 않고 main에서 다시 만드는 데는 이유가 있다. PR 브랜치는 main보다 뒤처져 있을 수 있고, 두 PR이 각자 plan을 만든 뒤 차례로 머지되면 PR의 plan은 둘 다 맞지 않는다. 반대 방식으로 Atlantis처럼 "PR 안에서 apply하고 성공하면 머지"하는 흐름도 있다. 머지된 코드와 실제가 늘 같다는 장점이 있지만, PR을 잠그는 장치가 있어야 두 PR이 서로의 apply를 덮지 않는다.
+
+## 권한은 plan과 apply를 나눈다
+
+PR에서 도는 plan은 PR 작성자가 쓴 코드를 실행하는 일이다. Terraform의 `external` 데이터 소스나 직접 만든 프로바이더는 plan 중에도 임의의 프로그램을 돌릴 수 있다. 그래서 PR의 plan에는 읽기 전용 역할만 준다. 쓰기 역할은 main 브랜치의 apply 잡, 그것도 `network-production` 환경에 묶인 잡에서만 빌릴 수 있게 OIDC 신뢰 정책의 `sub` 조건에 `repo:org/network-config:environment:network-production`을 적는다(조건 쓰는 법은 [OIDC 신뢰 정책](/posts/github-actions-docker-ecr)에 있다). state 버킷도 읽기 역할에는 읽기만 허용한다. plan도 state 잠금을 거는데, 잠금 테이블이나 잠금 파일에 쓰기가 필요한 경우가 있어 그 부분만 열어 준다.
+
+Ansible 쪽은 러너의 위치가 문제다. GitHub가 제공하는 러너는 인터넷에 있어서 사내망의 스위치나 프라이빗 서브넷의 서버에 SSH로 닿지 않는다. 네트워크 안에 셀프 호스티드 러너를 두고, 그 러너에는 `--check`만 도는 PR용 계정과 실제 적용용 계정을 나눈다. 러너 자체가 네트워크 전체에 닿는 강력한 기계라서, 공개 저장소의 PR이 그 러너에서 돌지 않게 막는 것도 잊지 않는다.
+
+## 언제 바꿀지도 코드로 정한다
+
+네트워크 변경은 트래픽이 적고 사람이 깨어 있는 시간에 한다. 금요일 오후와 대형 행사 기간은 피한다. 이 약속을 위키에만 두면 바쁜 날 깨진다. apply 잡의 첫 스텝이 시간을 확인하게 했다.
+
+```bash
+#!/usr/bin/env bash
+# scripts/change-window.sh: 운영 네트워크 변경은 월~목 10:00~15:59 KST에만, 동결일에는 하지 않는다
+set -euo pipefail
+now_day=$(TZ=Asia/Seoul date +%u)      # 1=월 ... 7=일
+now_hm=$(TZ=Asia/Seoul date +%H%M)
+today=$(TZ=Asia/Seoul date +%F)
+if grep -qx "$today" "$(dirname "$0")/freeze-dates.txt" 2>/dev/null; then
+  echo "change freeze: $today"; exit 1
+fi
+if (( now_day > 4 )) || (( 10#$now_hm < 1000 || 10#$now_hm >= 1600 )); then
+  echo "outside change window: $(TZ=Asia/Seoul date '+%a %H:%M KST')"; exit 1
+fi
+echo "in change window: $(TZ=Asia/Seoul date '+%a %H:%M KST')"
+```
+
+러너의 시계는 UTC라서 `TZ=Asia/Seoul`을 명시한다. `10#`은 `0930` 같은 값을 8진수로 읽지 않게 하는 장치다. 시계를 바꿔 가며(faketime) 돌린 결과다.
+
+```text
+in change window: Wed 11:00 KST
+outside change window: Fri 11:00 KST
+change freeze: 2026-10-21
+```
+
+같은 판단을 함수로 짜 보면 시간대를 바꾸는 부분에서 자주 틀린다는 것을 알게 된다. UTC 시각을 받아 KST로 옮긴 뒤 요일과 시간을 본다.
+
+<CodePlayground
+  caption="UTC 시각이 변경 가능 시간인지 판단하기"
+  functionName="inChangeWindow"
+  initialCode={`// isoUtc: "2026-10-20T01:00:00Z" 같은 UTC 시각
+// freezeDates: 변경 동결일 목록 (KST 날짜, "YYYY-MM-DD")
+// 월~목 10:00~15:59 KST이고 동결일이 아니면 true
+function inChangeWindow(isoUtc, freezeDates) {
+  return false;
+}`}
+  solution={`function inChangeWindow(isoUtc, freezeDates) {
+  const kst = new Date(Date.parse(isoUtc) + 9 * 60 * 60 * 1000);
+  const day = kst.getUTCDay(); // 0=일 ... 6=토
+  const minutes = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  const date = kst.toISOString().slice(0, 10);
+  if (freezeDates.includes(date)) return false;
+  if (day < 1 || day > 4) return false;
+  return minutes >= 10 * 60 && minutes < 16 * 60;
+}`}
+  tests={[
+    { label: "화 10:00 KST", args: ["2026-10-20T01:00:00Z", []], expected: true },
+    { label: "화 16:00 KST는 끝", args: ["2026-10-20T07:00:00Z", []], expected: false },
+    { label: "금 11:00 KST", args: ["2026-10-23T02:00:00Z", []], expected: false },
+    { label: "월 09:30 KST", args: ["2026-10-19T00:30:00Z", []], expected: false },
+    { label: "수 15:59 KST", args: ["2026-10-21T06:59:00Z", []], expected: true },
+    { label: "동결일", args: ["2026-10-21T02:00:00Z", ["2026-10-21"]], expected: false },
+    { label: "UTC 수요일 밤은 KST 목 01:00", args: ["2026-10-21T16:00:00Z", []], expected: false },
+  ]}
+/>
+
+마지막 테스트처럼 UTC로는 수요일 오후 4시인데 KST로는 목요일 새벽 1시다. UTC 요일로 판단하면 이 시각을 업무 시간으로 착각한다. 긴급 변경은 이 스텝을 건너뛰는 별도 경로(수동 실행 + 추가 승인)로 두고, 그 경로를 쓴 기록이 남게 한다.
+
+## 한 번에 다 바꾸지 않는다
+
+변경이 틀렸을 때 피해가 미치는 범위를 폭발 반경이라 부른다. 파이프라인 설계에서 줄일 수 있는 폭발 반경은 두 가지다. 한 번의 apply가 건드릴 수 있는 범위, 그리고 한 번에 바뀌는 장비나 환경의 수다.
+
+첫째는 state를 나누는 문제다. VPC, 서브넷, 라우트 같은 핵심 네트워크와 서비스별 보안 그룹을 한 state에 두면, 서비스 팀의 보안 그룹 PR이 plan 단계에서 핵심 네트워크까지 refresh하고, 잘못된 코드 한 줄이 VPC 전체를 건드릴 수 있다. 자주 바뀌고 범위가 좁은 것은 따로 떼어 둔다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="state를 나누면 잘못된 apply가 닿는 범위가 줄어든다"
+  zones={[
+    { id: "core", label: "state: core-network", x: 8, y: 40, w: 186, h: 200, tone: "private" },
+    { id: "svc", label: "state: svc-sg", x: 206, y: 40, w: 186, h: 200, tone: "public" },
+  ]}
+  nodes={[
+    { id: "vpc", label: "VPC", sub: "10.20.0.0/16", x: 100, y: 96, icon: "router" },
+    { id: "rt", label: "route tables", x: 100, y: 152, icon: "router", w: 120 },
+    { id: "nat", label: "NAT GW", x: 100, y: 208, icon: "gateway" },
+    { id: "ci", label: "CI apply", x: 300, y: 96, icon: "server" },
+    { id: "sga", label: "sg-payment", x: 300, y: 152, icon: "firewall", w: 112 },
+    { id: "sgb", label: "sg-search", x: 300, y: 208, icon: "firewall", w: 112 },
+  ]}
+  links={[
+    { from: "vpc", to: "rt" },
+    { from: "rt", to: "nat" },
+    { from: "ci", to: "sga" },
+    { from: "ci", to: "sgb" },
+    { from: "sga", to: "vpc", dashed: true },
+  ]}
+  steps={[
+    { path: ["ci", "sga"], packet: "apply", highlight: ["svc"], title: "서비스 PR은 자기 state만 바꾼다", detail: "결제팀의 보안 그룹 변경은 svc-sg state 안에서만 plan하고 apply한다.", payload: "Plan: 1 to add, 0 to change, 0 to destroy." },
+    { path: ["ci", "vpc"], packet: "apply", blocked: true, highlight: ["core"], title: "핵심 네트워크에는 손이 닿지 않는다", detail: "VPC와 라우트는 다른 state에 있고, 이 파이프라인의 역할은 그 state를 쓸 권한도 없다. 잘못된 코드가 있어도 여기서 멈춘다." },
+    { path: ["sga", "vpc"], highlight: ["core"], title: "필요한 값은 읽기만 한다", detail: "VPC ID와 서브넷 ID는 core-network state의 output을 terraform_remote_state나 SSM 파라미터로 읽는다.", payload: "data.terraform_remote_state.core.outputs.vpc_id" },
+  ]}
+/>
+
+나누는 데도 값이 든다. state 사이에 값을 넘기는 연결이 생기고, 한 변경이 두 state에 걸치면 순서를 지켜 두 번 apply해야 한다. 같이 바뀌는 것끼리 묶고, 바뀌는 속도와 담당 팀이 다르면 나눈다.
+
+둘째는 단계적 배포다. 환경은 dev → staging → production 순서로, 같은 커밋을 차례로 적용하고 앞 단계의 확인이 끝나야 다음으로 간다. 장비가 여러 사이트에 있으면 한 사이트(카나리)부터 바꾼다. Ansible에서는 인벤토리에 `canary` 그룹을 두고 `--limit canary`로 먼저 돌린 뒤, 확인이 끝나면 `--limit 'edge:!canary'`로 나머지를, 그 안에서도 `serial`로 나눠 민다([한 대씩 바꾸고 틀리면 멈추기](/posts/ansible-network-automation)).
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="카나리 사이트에서 막히면 다음 사이트로 가지 않는다"
+  zones={[
+    { id: "can", label: "canary (판교)", x: 8, y: 104, w: 120, h: 136, tone: "edge" },
+    { id: "sa", label: "site A (가산)", x: 140, y: 104, w: 120, h: 136, tone: "neutral" },
+    { id: "sb", label: "site B (부산)", x: 272, y: 104, w: 120, h: 136, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "run", label: "runner", sub: "self-hosted", x: 200, y: 40, icon: "server" },
+    { id: "c1", label: "edge-c1", x: 68, y: 160, icon: "switch" },
+    { id: "a1", label: "edge-a1", x: 200, y: 160, icon: "switch" },
+    { id: "b1", label: "edge-b1", x: 332, y: 160, icon: "switch" },
+    { id: "mon", label: "monitor", x: 68, y: 214, icon: "server", w: 96 },
+  ]}
+  links={[
+    { from: "run", to: "c1" },
+    { from: "run", to: "a1" },
+    { from: "run", to: "b1" },
+    { from: "c1", to: "mon", dashed: true },
+  ]}
+  steps={[
+    { path: ["run", "c1"], packet: "ACL v42", highlight: ["can"], title: "카나리 사이트 한 곳에 먼저", detail: "트래픽이 가장 적은 사이트의 장비에 새 ACL을 적용한다.", payload: "ansible-playbook acl.yml --limit canary" },
+    { path: ["c1", "mon"], packet: "metrics", highlight: ["can"], title: "지표로 확인한다", detail: "드롭 카운터, 세션 수, 오류율을 정해 둔 시간 동안 본다. 사람이 아니라 기준값으로 판단하게 만든다." },
+    { path: ["run", "a1"], packet: "ACL v42", highlight: ["sa"], title: "괜찮으면 다음 사이트", detail: "같은 커밋, 같은 플레이북을 범위만 넓혀 다시 돌린다.", payload: "--limit 'edge:!canary' (serial: 1)" },
+    { path: ["run", "b1"], packet: "ACL v42", blocked: true, highlight: ["sb"], title: "변경 창이 닫히면 멈춘다", detail: "16시가 넘으면 change-window 스텝이 실패한다. 나머지 사이트는 다음 날 같은 커밋으로 이어 간다.", payload: "outside change window: Tue 16:02 KST" },
+  ]}
+/>
+
+## 코드 밖에서 바뀐 것 찾기
+
+이제 처음 장면의 사흘을 줄일 차례다. drift 감지는 apply 없이 "지금 실제가 state와 같은가"만 묻는 것이다. Terraform에서는 `plan -refresh-only -detailed-exitcode`가 그 일을 한다. 실습에서 콘솔 대신 SDK로 퍼블릭 라우트 테이블의 `0.0.0.0/0` 경로를 지우고 돌렸다.
+
+```bash
+# 실제를 다시 읽어 state와 비교만 한다 (아무것도 바꾸지 않는다)
+terraform plan -refresh-only -detailed-exitcode -input=false -no-color
+echo "exit=$?"
+```
+
+```text
+Note: Objects have changed outside of Terraform
+
+Terraform detected the following changes made outside of Terraform since the
+last "terraform apply" which may have affected this plan:
+
+  # aws_route_table.public has changed
+  ~ resource "aws_route_table" "public" {
+        id               = "rtb-690f2338fac4984e3"
+      ~ route            = [
+          - {
+              - cidr_block                 = "0.0.0.0/0"
+              - gateway_id                 = "igw-6ca2ab4e2c51191cf"
+                # (12 unchanged attributes hidden)
+            },
+        ]
+        tags             = {}
+        # (6 unchanged attributes hidden)
+    }
+
+This is a refresh-only plan, so Terraform will not take any actions to undo
+these.
+...
+exit=2
+```
+
+exit 2가 "코드 밖에서 바뀌었다"는 신호다. 같은 상태에서 일반 plan을 돌리면 `~ route = [ + { cidr_block = "0.0.0.0/0" ... } ]`, 즉 경로를 되살리겠다는 `Plan: 0 to add, 1 to change, 0 to destroy.`가 나온다. 처음 장면에서 월요일의 태그 PR이 한 일이 이것이다. drift를 모른 채 다른 PR을 apply하면 그 PR의 plan에 drift 되돌리기가 섞여 들어간다. 리뷰어가 "태그 PR에 왜 라우트 변경이 있지?"를 물었다면 막을 수 있었다.
+
+drift 워크플로는 평일 아침마다 이 명령을 돌리고 종료 코드로 행동을 가른다. 아래 그림은 한 주 동안의 결과를 따라간다.
+
+<AlgoTrace
+  caption="종료 코드 하나로 drift 대응이 갈린다"
+  memoryLabel="열린 drift 이슈"
+  cells={["월 0", "화 0", "수 2", "목 2", "금 0", "월 1"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "exit 0: 코드와 실제가 같다. 아무것도 하지 않는다." },
+    { pointer: 1, memory: [], caption: "화요일도 0이다. 알림이 없어야 알림이 왔을 때 사람들이 본다." },
+    { pointer: 2, memory: ["#311 route 0.0.0.0/0 삭제"], caption: "exit 2: refresh-only 출력을 본문으로 이슈를 만든다. 누가 왜 바꿨는지 CloudTrail로 찾는다." },
+    { pointer: 3, memory: ["#311 route 0.0.0.0/0 삭제"], caption: "같은 drift가 남아 있으면 새 이슈 대신 기존 이슈에 댓글을 단다. 하루에 이슈가 쌓이면 아무도 안 본다." },
+    { pointer: 4, found: [4], memory: [], caption: "되살리는 PR(일반 plan의 apply)이 머지되어 다시 0. 이슈를 닫는다." },
+    { pointer: 5, memory: ["워크플로 실패"], caption: "exit 1은 drift가 아니라 오류다. 자격 증명 만료나 잠금 같은 것이라 다른 담당에게 알린다." },
+  ]}
+/>
+
+drift를 찾은 뒤 할 일은 두 가지 중 하나다. 바뀐 것이 맞으면(장애 대응으로 연 규칙을 유지해야 하면) 코드를 실제에 맞추는 PR을 올린다. 틀렸으면 코드대로 되돌리는 apply를 한다. 어느 쪽이든 PR로 남긴다. `apply -refresh-only`로 state만 실제에 맞추는 것은 코드를 고치지 않는 한 다음 plan이 다시 되돌리려 하므로 해결이 아니다([drift와 state](/posts/terraform-basics)).
+
+Ansible에는 state가 없으니 `--check`로 돌려 changed가 나오는 호스트를 drift로 본다. web2의 커널 값을 손으로 바꿔 두고 돌렸다.
+
+```bash
+#!/usr/bin/env bash
+# drift-ansible.sh: 바꾸지 않고(--check) 돌려서 changed가 있는 호스트를 drift로 본다
+set -o pipefail
+out=$(ansible-playbook site.yml --check --diff 2>&1) || { echo "$out"; exit 1; }
+drifted=$(echo "$out" | awk '/^PLAY RECAP/{r=1;next} r && /changed=[1-9]/{print $1}')
+if [ -n "$drifted" ]; then
+  echo "drift: $drifted"
+  echo "$out" | grep -E '^(changed|---|\+\+\+|[-+] )' | head -20
+  exit 2
+fi
+echo "no drift"
+```
+
+```text
+net.core.somaxconn = 4096
+drift: web2
+changed: [web2] => (item={'key': 'net.core.somaxconn', 'value': 8192})
+exit=2
+```
+
+(첫 줄은 drift를 만들려고 친 `sysctl -w`의 출력이다.) 이 방식은 플레이북이 멱등해야 성립한다. 평소에도 changed가 몇 개씩 뜨는 플레이북이면 drift와 소음을 구별할 수 없다. 앞 글에서 `command` 작업에 `changed_when`을 달아 두라고 한 이유가 여기서 돌아온다. 또 Ansible은 플레이북에 적은 것만 본다. 누가 새 iptables 규칙을 추가한 것은 모듈 방식으로는 drift로 나오지 않고, 파일 전체를 관리할 때만 나온다.
+
+## 되돌리기는 git revert부터
+
+잘못된 네트워크 변경이 운영에 나갔을 때 되돌리는 기본 경로는 그 커밋을 `git revert`한 PR이다. revert PR도 같은 파이프라인을 타서 plan이 나오고, 리뷰어는 "원래대로 돌아가는 plan"이 맞는지 본다. state 파일을 이전 버전으로 바꿔 끼우는 것은 되돌리기가 아니다. state는 실제의 기록이라, 실제를 그대로 둔 채 기록만 옛날로 돌리면 둘이 어긋난다.
+
+revert가 정확히 원래대로 돌려놓지 못하는 경우를 미리 알아 둔다.
+
+- 지운 리소스를 되살리면 새 ID로 생긴다. 지워진 보안 그룹을 revert로 되살려도 ID가 다르니 그 ID를 직접 적어 둔 다른 곳(다른 state, 장비 설정, 문서)은 따라오지 않는다.
+- 교체(`-/+`)가 들어간 변경은 revert도 교체다. 처음 변경 때 생긴 연결 끊김이 revert 때 한 번 더 생긴다.
+- Ansible의 모듈 방식은 코드에서 지운다고 서버에서 지워지지 않는다. 추가한 규칙을 되돌리려면 `state: absent`를 적은 커밋이 필요하다. 그래서 운영 플레이북에는 앞 글의 `block`/`rescue`처럼 "실행 중에 확인하고 그 자리에서 되돌리는" 장치를 같이 둔다.
+
+급할 때는 revert PR의 리뷰와 변경 창을 기다릴 수 없다. 그때 쓰는 비상 경로를 미리 만들어 둔다. 수동 실행(`workflow_dispatch`)으로만 도는 롤백 워크플로에 "직전 성공 커밋으로 apply"를 넣고, 승인자를 두 명으로 하고, 실행 기록이 남게 한다. 콘솔로 직접 고쳤다면 다음 날 drift 이슈가 그 사실을 알려 주니, 그 이슈를 닫는 PR까지가 비상 대응의 끝이다.
+
+## 현장에서 파이프라인이 막히는 순간
+
+- apply 잡이 `Error acquiring the state lock`으로 실패한다: 앞의 실행이 죽으면서 잠금을 남겼거나, 누가 노트북에서 apply 중이다. 잠금 정보의 Who와 Created를 보고, 살아 있는 실행이 없을 때만 `force-unlock`한다. concurrency 그룹이 같은 저장소 안의 겹침만 막는다는 점도 기억한다.
+- 머지했는데 apply 잡이 건너뛰어졌다: `if:` 조건의 출력 이름 오타이거나, plan 스텝이 exit 2를 실패로 처리해 출력이 비었다. actionlint와 `set +e`를 확인한다.
+- `Saved plan is stale`이 자주 난다: plan과 apply 사이가 길거나 머지가 몰린다. 다시 plan하면 되지만, 반복되면 apply를 머지 순서대로 직렬화하는 설계(concurrency, 머지 큐)를 본다.
+- PR의 plan과 main의 plan이 다르다: PR 브랜치가 뒤처졌거나 그 사이 drift가 생겼다. 차이가 있으면 main의 plan을 다시 리뷰한다. 승인자가 environment 승인 화면에서 잡 요약의 plan을 보게 하는 이유다.
+- drift 이슈가 매일 쌓이는데 아무도 안 본다: 다른 도구나 AWS가 스스로 바꾸는 속성(자동 태그, 기본값)이 매번 걸린다. 그 속성은 `lifecycle { ignore_changes = [...] }`로 빼고, 남는 drift는 한 이슈로 모은다.
+- Ansible 잡이 장비에 접속하지 못한다: 러너가 네트워크 밖에 있다. 셀프 호스티드 러너의 위치와 장비 쪽 관리 ACL이 러너 주소를 허용하는지 본다.
+
+## 사람은 plan을 보고, 기계는 나머지를 본다
+
+네트워크 설정의 CI/CD는 변경이 실제에 닿는 길을 하나로 만들고 그 길에 검사를 세우는 일이다. 문법과 형식, 워크플로 오타는 lint가, 위험한 변경은 정책이, 시간은 변경 창 스크립트가 거르고, 사람은 저장된 plan을 보고 승인한다. apply는 승인된 그 파일만 실행하고, state가 바뀌었으면 멈춘다. 권한은 plan과 apply를 나누고, 폭발 반경은 state 분리와 단계적 배포로 줄인다. 마지막으로 매일 아침 refresh-only와 `--check`로 git 밖에서 생긴 변화를 찾아 PR로 되돌린다. 그래야 git이 정말 원본으로 남는다.
+
+## 면접에서 나올 만한 질문
+
+### 네트워크 설정에 GitOps를 적용한다는 것은 무엇을 뜻하나요?
+
+git의 main이 유일한 원본이고, 실제 네트워크는 파이프라인을 통해서만 그것을 따라간다는 뜻이다. 변경은 PR로 들어와 lint, plan, 정책 검사를 거치고 사람이 plan을 승인한 뒤 CI가 적용한다. 쿠버네티스처럼 상주 에이전트가 끌어오는 방식이 어려워 대개 CI가 밀어 넣으므로, git 밖의 변경을 찾는 drift 감지를 함께 둔다. 사람의 쓰기 권한을 비상용으로만 남겨야 성립한다.
+
+### PR에서 본 plan과 실제로 apply되는 변경이 같다는 것을 어떻게 보장하나요?
+
+plan을 `-out`으로 파일에 저장하고 apply는 그 파일만 받게 한다. 그 사이 state가 바뀌면 Terraform이 `Saved plan is stale`로 거부하니 다시 plan하고 다시 본다. 다만 PR 브랜치의 plan은 main과 다를 수 있어서 머지 뒤 main에서 다시 plan하고, 승인자가 environment 승인 단계에서 그 plan을 보게 한다. PR 안에서 apply한 뒤 머지하는 방식도 있는데 그때는 PR 잠금이 필요하다.
+
+### terraform plan의 -detailed-exitcode는 왜 쓰나요?
+
+변경 여부를 종료 코드로 받으려고 쓴다. 0은 변경 없음, 1은 오류, 2는 변경 있음이라 apply 잡을 띄울지, drift 알림을 보낼지를 숫자로 가를 수 있다. CI의 셸은 보통 `-e`로 돌아 2를 실패로 보므로 `set +e`로 받아서 처리하고, 1과 2를 구분하지 않으면 오류를 drift로 착각한다.
+
+### PR에서 도는 plan에 쓰기 권한을 주면 안 되는 이유는요?
+
+plan도 PR 작성자의 코드를 실행하기 때문이다. external 데이터 소스나 프로바이더는 plan 중에 임의의 명령을 돌릴 수 있어서, 쓰기 권한이 있으면 리뷰 전에 인프라를 바꿀 수 있다. 그래서 PR의 plan은 읽기 전용 역할로, 쓰기 역할은 main의 apply 잡과 보호된 environment에서만 빌리게 OIDC의 sub 조건으로 묶는다.
+
+### drift는 어떻게 감지하고, 찾으면 어떻게 하나요?
+
+Terraform은 `plan -refresh-only -detailed-exitcode`를 정기적으로 돌려 exit 2면 코드 밖의 변경이 있다고 본다. Ansible은 `--check`로 돌려 changed가 나오는 호스트를 drift로 보는데, 플레이북이 멱등해야 소음과 구별된다. 찾으면 바뀐 것이 맞는지 판단해 코드를 실제에 맞추는 PR을 올리거나, 코드대로 되돌리는 apply를 한다. drift를 모른 채 다른 PR을 apply하면 그 PR의 plan에 되돌리기가 섞여 들어간다.
+
+### 네트워크 변경의 폭발 반경은 어떻게 줄이나요?
+
+한 번의 apply가 닿는 범위와 한 번에 바뀌는 대상 수를 줄인다. 핵심 네트워크와 서비스별 보안 그룹을 다른 state로 나누고 파이프라인 역할도 state별로 나눈다. 배포는 dev, staging, production 순서로, 장비는 카나리 사이트부터 `serial`로 나눠 밀고 지표로 확인한 뒤 넓힌다. state를 나누면 값 전달과 적용 순서라는 비용이 생기므로 같이 바뀌는 것끼리 묶는다.
+
+### 잘못된 네트워크 변경이 나갔을 때 되돌리는 방법은요?
+
+기본은 그 커밋을 `git revert`한 PR을 같은 파이프라인으로 적용하는 것이다. state 파일을 이전 버전으로 바꾸는 것은 실제와 기록을 어긋나게 할 뿐이다. 지운 리소스는 새 ID로 되살아나고 교체가 든 변경은 revert에서도 끊김이 생긴다는 한계를 알아 둔다. 급할 때를 위해 승인자를 둔 수동 롤백 워크플로를 미리 만들고, 콘솔로 직접 고쳤다면 drift 이슈를 닫는 PR까지 마친다.

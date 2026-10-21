@@ -1,0 +1,398 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-flyweight");
+
+전국 매장을 지도에 찍는 화면이 있다. 매장은 20만 개이고, 서버는 매장마다 위치와 함께 마커 스타일을 통째로 내려준다. 카테고리 이름, 색, 크기, 그리고 아이콘 SVG 문자열이다. 개발 PC에서는 잘 돌았는데, 저사양 안드로이드 폰에서는 지도를 몇 번 움직이면 탭이 통째로 다시 로드된다. 메모리를 재 보니 마커 배열 하나가 87MB를 쥐고 있었다.
+
+그런데 카테고리는 다섯 개뿐이다. 카페 마커 4만 개가 똑같은 아이콘 문자열을 4만 벌 들고 있다. 이번 글은 이런 중복을 한 벌로 줄이는 플라이웨이트(Flyweight) 패턴이다. 이름은 권투의 가장 가벼운 체급에서 왔다. 디자인 패턴 전체 지도는 [디자인 패턴 개요](/posts/design-patterns-overview)에 있다.
+
+## 마커마다 같은 아이콘을 들고 있었다
+
+서버 응답의 마커 하나는 이렇게 생겼다.
+
+```json
+{
+  "id": 1042,
+  "lat": 37.5042,
+  "lng": 127.0001,
+  "style": {
+    "category": "cafe",
+    "color": "#6b4f3a",
+    "size": 32,
+    "iconSvg": "<svg viewBox=\"0 0 24 24\"><path d=\"M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 ...\"/></svg>"
+  }
+}
+```
+
+`JSON.parse`는 이 응답을 읽으면서 마커마다 새 `style` 객체와 새 문자열을 만든다. 내용이 같아도 따로 만든 문자열이라 메모리를 따로 차지한다. 코드에 `"cafe"`를 직접 썼다면 엔진이 같은 문자열 하나를 같이 쓰지만, 네트워크에서 읽은 값은 그렇지 않다. 20만 개가 각자 수백 바이트짜리 SVG를 한 벌씩 들고 있으니 87MB가 나온다.
+
+## 바뀌지 않는 것과 바뀌는 것을 가른다
+
+플라이웨이트는 객체의 상태를 둘로 나누는 데서 시작한다. GoF는 이것을 고유 상태(intrinsic state)와 외부 상태(extrinsic state)라고 부른다. 고유 상태는 여러 객체가 똑같이 갖고 상황에 따라 바뀌지 않는 부분이다. 외부 상태는 객체마다 다르거나 상황에 따라 바뀌는 부분이다. 아래 그림에서 마커의 필드를 하나씩 눌러 어느 쪽인지 보자.
+
+<UrlAnatomy
+  caption="마커 하나의 필드를 고유 상태와 외부 상태로 나누면"
+  base="marker = {"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "id", display: "id", title: "외부 상태: 마커마다 다르다", description: "매장 id는 마커마다 고유하다. 공유할 수 없으니 마커 객체에 그대로 둔다.", required: true },
+    { key: "pos", display: "lat, lng", title: "외부 상태: 위치", description: "같은 카테고리라도 위치는 다르다. 그릴 때 화면 좌표로 바꿔 플라이웨이트에 넘긴다.", required: true },
+    { key: "selected", display: "selected", title: "외부 상태: 상황에 따라 바뀐다", description: "사용자가 누른 마커만 크게 그린다. 이 값을 공유 객체에 넣으면 모두가 함께 커진다. 뒤에서 실제로 그렇게 된다." },
+    { key: "style", display: "style: { category, color, size, icon }", title: "고유 상태: 카테고리가 같으면 똑같다", description: "카페 4만 개의 스타일은 한 글자도 다르지 않다. 이 부분을 한 벌만 만들어 4만 개가 같이 가리키게 한다. 이게 플라이웨이트다.", code: "markers[0].style === markers[5].style // true: 같은 객체", required: true },
+  ]}
+/>
+
+나눈 뒤의 구조는 이렇다. 마커는 외부 상태와 스타일을 가리키는 참조 하나만 들고, 스타일은 공장(factory)이 카테고리별로 한 벌씩 만들어 보관한다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="마커 20만 개가 스타일 다섯 개를 나눠 가리킨다"
+  nodes={[
+    { id: "m1", label: "Marker #1", sub: "id, lat, lng", x: 70, y: 40, w: 120 },
+    { id: "m2", label: "Marker #6", sub: "id, lat, lng", x: 70, y: 125, w: 120 },
+    { id: "m3", label: "Marker #2", sub: "id, lat, lng", x: 70, y: 210, w: 120 },
+    { id: "cafe", label: "cafe style", sub: "frozen", x: 230, y: 80, w: 110 },
+    { id: "bank", label: "bank style", sub: "frozen", x: 230, y: 200, w: 110 },
+    { id: "factory", label: "StyleFactory", sub: "Map<category>", x: 345, y: 140, w: 110 },
+  ]}
+  edges={[
+    { from: "m1", to: "cafe", label: "style" },
+    { from: "m2", to: "cafe", label: "style" },
+    { from: "m3", to: "bank", label: "style" },
+    { from: "factory", to: "cafe", dashed: true },
+    { from: "factory", to: "bank", dashed: true },
+  ]}
+/>
+
+## 공장이 같은 것을 한 번만 만든다
+
+공유가 저절로 일어나지는 않는다. 누군가는 "카페 스타일은 이미 있으니 그걸 줘라"를 판단해야 하고, 그 일을 플라이웨이트 팩토리가 한다. 키로 찾아보고 없을 때만 만든다.
+
+```ts
+type Category = "cafe" | "restaurant" | "pharmacy" | "bank" | "gas";
+
+// 고유 상태(intrinsic): 카테고리가 같으면 모든 마커가 같다. 바뀌지 않는다
+type MarkerStyle = Readonly<{ category: Category; color: string; size: number; icon: Path2D }>;
+
+// 외부 상태(extrinsic): 마커마다 다르다. 플라이웨이트 밖에 둔다
+interface Marker {
+  readonly id: number;
+  readonly lat: number;
+  readonly lng: number;
+  readonly style: MarkerStyle;
+}
+
+const PALETTE: Record<Category, string> = {
+  cafe: "#6b4f3a", restaurant: "#c2410c", pharmacy: "#15803d", bank: "#1d4ed8", gas: "#7c3aed",
+};
+
+class MarkerStyleFactory {
+  readonly #pool = new Map<Category, MarkerStyle>();
+
+  get(category: Category, iconPath: () => string): MarkerStyle {
+    let style = this.#pool.get(category);
+    if (!style) {
+      style = Object.freeze({ category, color: PALETTE[category], size: 32, icon: new Path2D(iconPath()) });
+      this.#pool.set(category, style);
+    }
+    return style;
+  }
+
+  get size() {
+    return this.#pool.size;
+  }
+}
+
+type RawMarker = { id: number; lat: number; lng: number; style: { category: Category; iconSvgPath: string } };
+
+function toMarkers(raw: RawMarker[], styles: MarkerStyleFactory): Marker[] {
+  return raw.map((m) => ({ id: m.id, lat: m.lat, lng: m.lng, style: styles.get(m.style.category, () => m.style.iconSvgPath) }));
+}
+```
+
+`Path2D`는 SVG 경로 문자열을 캔버스가 바로 그릴 수 있는 객체로 바꾼 것이다. 이걸 만드는 비용도 카테고리마다 한 번만 치른다. 아래 그림은 응답의 마커들이 차례로 공장을 지날 때 풀이 어떻게 채워지는지 보여 준다.
+
+<AlgoTrace
+  caption="처음 보는 카테고리만 새로 만들고, 나머지는 풀에서 꺼낸다"
+  memoryLabel="스타일 풀"
+  cells={["cafe", "bank", "cafe", "cafe", "gas", "bank", "cafe"]}
+  steps={[
+    { pointer: 0, memory: ["cafe"], caption: "첫 카페 마커다. 풀에 없으니 스타일을 만들고 얼려서 넣는다." },
+    { pointer: 1, found: [0], memory: ["cafe", "bank"], caption: "은행은 처음이다. 하나 더 만든다. 지금까지 생성 2번." },
+    { pointer: 2, found: [0, 1, 2], memory: ["cafe", "bank"], caption: "카페다. 풀에 있으니 만들지 않고 같은 객체를 준다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["cafe", "bank"], caption: "또 카페다. 마커는 늘었지만 스타일은 그대로 둘이다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["cafe", "bank", "gas"], caption: "주유소는 처음이라 세 번째로 만든다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: ["cafe", "bank", "gas"], caption: "마커 7개에 스타일 3개. 20만 개가 와도 풀은 카테고리 수인 5에서 멈춘다." },
+  ]}
+/>
+
+그릴 때는 외부 상태를 인자로 넘긴다. 플라이웨이트는 자기가 어디에 그려지는지, 선택됐는지 모른다. 그 정보는 부르는 쪽이 들고 있다가 그때그때 준다.
+
+<SequenceDiagram
+  caption="공유 객체에는 외부 상태를 저장하지 않고, 쓸 때마다 넘긴다"
+  actors={[
+    { id: "map", label: "MapView" },
+    { id: "factory", label: "StyleFactory" },
+    { id: "style", label: "cafe style" },
+  ]}
+  steps={[
+    { from: "map", to: "factory", label: "get(\"cafe\")", title: "마커를 만들 때 스타일을 달라고 한다", detail: "MapView는 스타일을 직접 만들지 않는다. 공장에 카테고리만 말한다." },
+    { from: "factory", to: "factory", label: "miss → new", title: "처음이라 만든다", detail: "풀에 없으니 스타일을 만들고 Object.freeze로 얼린 뒤 풀에 넣는다.", payload: "pool: { cafe → MarkerStyle#1 }" },
+    { from: "factory", to: "map", label: "MarkerStyle#1", title: "같은 참조를 돌려준다", detail: "다음 카페 마커 4만 개도 이 참조를 받는다." },
+    { from: "map", to: "factory", label: "get(\"cafe\")", title: "다음 카페 마커", detail: "이번에는 풀에 있다. 아무것도 새로 만들지 않는다." },
+    { from: "factory", to: "map", label: "MarkerStyle#1", title: "같은 객체다", detail: "참조 비교를 해도 true다. 메모리에는 스타일이 한 벌뿐이다." },
+    { from: "map", to: "style", label: "draw(x, y, selected)", title: "그릴 때 외부 상태를 넘긴다", detail: "위치와 선택 여부는 마커마다 다르니 인자로 준다. 스타일 객체는 읽기만 한다.", payload: "drawMarker(ctx, 120, 340, style, true) // 이 마커만 1.5배" },
+  ]}
+/>
+
+```ts
+// 그릴 때 위치와 선택 여부(외부 상태)를 넘긴다. 스타일 객체는 건드리지 않는다
+function drawMarker(ctx: CanvasRenderingContext2D, x: number, y: number, style: MarkerStyle, selected: boolean) {
+  const scale = selected ? 1.5 : 1;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale((style.size / 24) * scale, (style.size / 24) * scale);
+  ctx.fillStyle = style.color;
+  ctx.fill(style.icon);
+  ctx.restore();
+}
+```
+
+## 줄어든 메모리를 재 본다
+
+정말 줄었는지는 재 봐야 안다. Node.js 22에서 처음 장면과 같은 모양의 응답(마커 20만 개, 카테고리 5개, 마커마다 아이콘 SVG 포함)을 만들고, 파싱한 결과를 그대로 둔 경우와 공장을 거쳐 스타일을 공유한 경우를 비교했다. 마커 배열이 붙잡고 있는 힙 크기만 보려고 GC를 강제로 돌린 뒤, 배열이 있을 때와 버린 뒤의 `heapUsed` 차이를 쟀다.
+
+```bash
+# --expose-gc는 global.gc()를 쓸 수 있게 한다. 측정용으로만 쓴다
+node --expose-gc mem.cjs copied
+node --expose-gc mem.cjs shared
+```
+
+```text
+copied markers=200000 retained=87.0 MB
+shared markers=200000 retained=18.3 MB
+```
+
+87MB가 18.3MB로 줄었다. 남은 18MB는 마커 객체 20만 개 자체, 즉 id와 좌표와 참조 하나를 담은 껍데기다. 스타일 다섯 벌은 숫자에 거의 잡히지 않는다.
+
+비교를 하나 더 했다. 코드 안에서 스타일을 정의해 두고 마커마다 `{ ...style }`로 복사한 경우다.
+
+```text
+spread retained=25.9 MB
+shared retained=15.3 MB
+```
+
+이번에는 차이가 훨씬 작다. 복사된 건 객체 껍데기뿐이고, 안의 문자열은 코드에 적힌 같은 문자열을 엔진이 함께 쓰기 때문이다. 플라이웨이트로 얻는 양은 중복이 어디서 오는지에 따라 크게 달라진다. 네트워크나 파일에서 읽은 데이터가 가장 효과가 크다. 그러니 적용하기 전에 힙 스냅샷부터 찍는다. 크롬 개발자 도구의 Memory 탭에서 스냅샷을 찍고 Retained Size로 정렬하면 무엇이 메모리를 쥐고 있는지 보인다. 스냅샷 읽는 법은 [메모리 누수 글](/posts/js-memory-leak)에 있다.
+
+남은 18MB도 줄이고 싶다면 그건 플라이웨이트가 아니라 데이터 배치의 문제다. 마커를 객체로 두지 않고 `Float64Array` 같은 타입 배열에 열 단위로 담으면(id, 위도, 경도, 카테고리 번호를 각각 배열 하나에) 같은 20만 개가 4.0MB였다. 카테고리 번호로 스타일 배열을 찾아가는 방식이라, 객체 참조 대신 정수 하나가 플라이웨이트를 가리키는 셈이다. 대신 코드가 객체를 다루듯 자연스럽지는 않다.
+
+## 하나를 고쳤더니 전부 바뀌었다
+
+플라이웨이트에서 가장 흔한 사고는 공유 객체를 고치는 것이다. 클릭한 마커만 크게 보여 주려고 이렇게 쓰면 어떻게 될까.
+
+```js
+const markers = [1, 2, 3].map((id) => ({ id, style: styleFor("cafe") }));
+
+// 클릭한 마커만 크게 보이게 하려다
+markers[0].style.size = 48;
+console.log(markers.map((m) => `#${m.id} size=${m.style.size}`).join(", "));
+```
+
+```text
+#1 size=48, #2 size=48, #3 size=48
+```
+
+카페 마커 4만 개가 한꺼번에 커진다. 공유했으니 당연한 결과지만, 코드만 보면 `markers[0]`만 고친 것처럼 읽혀서 리뷰에서 놓치기 쉽다. 선택 여부는 외부 상태라서 처음부터 마커 쪽이나 그리는 함수의 인자에 있어야 했다.
+
+막는 방법은 공유 객체를 얼리는 것이다. 앞의 공장이 `Object.freeze`를 부른 이유다. strict mode(ES 모듈과 클래스 본문은 기본이 strict다)에서는 얼린 객체에 쓰려는 순간 에러가 난다.
+
+```text
+TypeError: Cannot assign to read only property 'size' of object '#<Object>'
+```
+
+조용히 모두를 바꾸는 대신 바로 터지니 개발 중에 잡힌다. `Object.freeze`는 얕게만 얼리니 안에 객체가 더 있다면 그것도 얼려야 하고, TypeScript의 `Readonly`는 컴파일 시점에만 막는다. 둘을 같이 쓰면 편집기와 실행 양쪽에서 막힌다.
+
+## 풀이 끝없이 자랄 때
+
+카테고리는 다섯 개라서 풀도 다섯에서 멈췄다. 키가 사용자 입력이나 데이터에서 오면 사정이 다르다. 예를 들어 스타일 키를 `${category}:${color}:${size}`로 만들었는데 관리자가 매장마다 색을 따로 정할 수 있다면, 풀은 매장 수만큼 커지고 아무것도 공유하지 못한다. 그러면서 풀은 모든 스타일을 영원히 붙잡고 있으니 메모리 누수가 된다.
+
+먼저 할 일은 키의 개수를 세 보는 것이다. 공장에 `size`를 두고 운영 환경에서 한 번 찍어 보면 된다. 키 수가 객체 수에 가깝다면 플라이웨이트를 쓸 자리가 아니다. 키 수가 많지만 대부분이 금방 안 쓰이게 된다면, 아무도 쓰지 않는 플라이웨이트는 GC가 가져가게 둔다.
+
+```ts
+// 키가 끝없이 늘 수 있을 때: 아무도 안 쓰는 플라이웨이트는 GC가 가져가게 둔다
+class WeakPool<V extends object> {
+  readonly #refs = new Map<string, WeakRef<V>>();
+  readonly #registry = new FinalizationRegistry<string>((key) => {
+    if (this.#refs.get(key)?.deref() === undefined) this.#refs.delete(key);
+  });
+
+  get(key: string, create: () => V): V {
+    const alive = this.#refs.get(key)?.deref();
+    if (alive) return alive;
+    const value = create();
+    this.#refs.set(key, new WeakRef(value));
+    this.#registry.register(value, key);
+    return value;
+  }
+
+  get size() { return this.#refs.size; }
+}
+```
+
+스타일 1만 개를 만들어 쥐고 있다가 놓은 뒤 GC를 돌려 봤다.
+
+```text
+in use: 10000
+after release + gc: 0
+```
+
+다만 `FinalizationRegistry`의 콜백이 언제 불릴지는 명세가 보장하지 않는다. 이 실험에서는 GC를 강제로 돌려서 바로 비었지만, 실제로는 한참 뒤에 불리거나 안 불릴 수도 있다. 정리를 확실히 해야 한다면 크기 제한이 있는 LRU를 쓰는 편이 예측하기 쉽다.
+
+## 엔진과 언어 안의 플라이웨이트
+
+이 패턴은 직접 짜기보다 이미 쓰고 있는 경우가 더 많다.
+
+자바의 `Integer.valueOf`는 -128부터 127까지의 `Integer` 객체를 미리 만들어 두고 같은 것을 준다. 오토박싱이 `valueOf`를 쓰니 작은 숫자는 같은 객체가 된다. OpenJDK 21에서 돌려 보면 이렇다.
+
+```java
+Integer a = 127, b = 127;
+Integer c = 128, d = 128;
+System.out.println("127 == 127 : " + (a == b));
+System.out.println("128 == 128 : " + (c == d));
+System.out.println("128 equals : " + c.equals(d));
+String s1 = new String("cafe"), s2 = "cafe";
+System.out.println("intern     : " + (s1.intern() == s2));
+```
+
+```text
+127 == 127 : true
+128 == 128 : false
+128 equals : true
+intern     : true
+```
+
+면접 단골 문제다. `==`가 127까지는 맞다가 128부터 틀리는 이유가 이 캐시다. 플라이웨이트는 같은 객체를 줄 수도 있다는 최적화일 뿐이니, 값 비교는 `equals`로 한다. 마지막 줄의 `String.intern()`도 같은 내용의 문자열을 문자열 풀 안의 한 객체로 모은다. 이런 걸 인터닝(interning)이라고 부르는데, 값 객체에 대한 플라이웨이트다.
+
+Go는 1.23부터 표준 라이브러리에 `unique` 패키지가 있다. `unique.Make(v)`가 같은 값에 같은 핸들을 주고, 핸들끼리는 포인터 비교만으로 같은지 알 수 있다. Go 1.24에서 다른 메모리에서 만든 같은 문자열로 확인하면 `unique.Make("cafe") == unique.Make(string([]byte("cafe")))`가 `true`다.
+
+자바스크립트 엔진 안에도 있다. V8은 같은 순서로 같은 속성을 가진 객체들이 하나의 숨은 클래스(hidden class, V8 용어로 Map)를 같이 쓰게 한다. 속성 이름과 위치 정보를 객체마다 들고 있지 않고 공유하는 것이다. 객체마다 속성을 다른 순서로 추가하면 숨은 클래스가 갈라져 이 공유가 깨진다. 그래픽에서는 three.js의 `InstancedMesh`가 지오메트리와 재질 하나를 두고 인스턴스마다 변환 행렬만 따로 넘긴다. 나무 1만 그루를 그리면서 메시는 하나다. Git이 같은 내용의 파일을 blob 객체 하나로 저장하는 것도 같은 생각이다([Git 객체 글](/posts/git-internals-basics)).
+
+## 캐시와 무엇이 다른가
+
+공장 안의 `Map`만 보면 캐시와 똑같다. 차이는 무엇을 아끼고, 꺼낸 것이 무엇이냐다.
+
+캐시는 계산이나 조회를 다시 하지 않으려고 결과를 저장한다. 꺼낸 값을 고쳐도 다음에 다시 계산하면 그만이고, 언제든 버려도 정확성에는 문제가 없다. 성능만 나빠진다. 플라이웨이트는 같은 상태를 가진 객체가 여럿 생기지 않게 하려고 한 벌만 둔다. 꺼낸 객체를 여러 곳이 동시에 가리키니 절대 고치면 안 되고, 객체가 바뀌지 않는다는 성질이 패턴의 전제다. 캐싱 전략 일반은 [캐싱 전략 글](/posts/caching-strategies)에서 다뤘다.
+
+[싱글턴](/posts/pattern-singleton)과도 비교된다. 싱글턴은 클래스당 하나, 플라이웨이트는 키당 하나다. 공장이 카테고리마다 싱글턴을 하나씩 관리한다고 생각해도 된다. 반대 방향의 패턴은 [프로토타입](/posts/pattern-prototype)이다. 프로토타입은 복사해서 각자 고치게 하고, 플라이웨이트는 복사하지 않고 같이 쓴다. 둘의 차이는 그 글의 면접 질문에서 따로 짚었다.
+
+## 직접 만드는 스타일 공장
+
+`createFactory(make)`를 완성해 보자. 돌려주는 객체의 `get(key)`는 그 키로 처음 부를 때만 `make(key)`를 부르고, 만든 객체를 얼려서 보관한다. 같은 키에는 늘 같은 객체를 준다. `size()`는 지금까지 만든 개수다.
+
+<CodePlayground
+  caption="키마다 한 번만 만들고 얼려 두는 공장"
+  functionName="scenario"
+  initialCode={`function createFactory(make) {
+  return {
+    get(key) {
+      return make(key);
+    },
+    size() {
+      return 0;
+    },
+  };
+}
+
+// 아래는 고치지 않는다. keys 순서대로 스타일을 받아 결과를 센다.
+function scenario(keys) {
+  let created = 0;
+  const factory = createFactory((key) => {
+    created++;
+    return { category: key, size: 32 };
+  });
+  const got = keys.map((k) => factory.get(k));
+  const sameForSameKey = keys.every((k, i) => got[i] === factory.get(k));
+  let mutationBlocked = true;
+  if (got.length > 0) {
+    try { got[0].size = 48; } catch (e) {} // 얼린 객체면 무시되거나 에러가 난다
+    mutationBlocked = factory.get(keys[0]).size === 32;
+  }
+  return { created, poolSize: factory.size(), sameForSameKey, mutationBlocked };
+}`}
+  solution={`function createFactory(make) {
+  const pool = new Map();
+  return {
+    get(key) {
+      if (!pool.has(key)) pool.set(key, Object.freeze(make(key)));
+      return pool.get(key);
+    },
+    size() {
+      return pool.size;
+    },
+  };
+}
+
+function scenario(keys) {
+  let created = 0;
+  const factory = createFactory((key) => {
+    created++;
+    return { category: key, size: 32 };
+  });
+  const got = keys.map((k) => factory.get(k));
+  const sameForSameKey = keys.every((k, i) => got[i] === factory.get(k));
+  let mutationBlocked = true;
+  if (got.length > 0) {
+    try { got[0].size = 48; } catch (e) {} // 얼린 객체면 무시되거나 에러가 난다
+    mutationBlocked = factory.get(keys[0]).size === 32;
+  }
+  return { created, poolSize: factory.size(), sameForSameKey, mutationBlocked };
+}`}
+  tests={[
+    { args: [["cafe", "bank", "cafe", "cafe", "gas", "bank", "cafe"]], expected: { created: 3, poolSize: 3, sameForSameKey: true, mutationBlocked: true }, label: "마커 7개에 스타일 3개" },
+    { args: [["cafe"]], expected: { created: 1, poolSize: 1, sameForSameKey: true, mutationBlocked: true }, label: "하나만" },
+    { args: [["a", "b", "c", "d"]], expected: { created: 4, poolSize: 4, sameForSameKey: true, mutationBlocked: true }, label: "모두 다르면 공유할 것이 없다" },
+    { args: [[]], expected: { created: 0, poolSize: 0, sameForSameKey: true, mutationBlocked: true }, label: "부르지 않으면 만들지 않는다" },
+  ]}
+/>
+
+세 번째 테스트가 키 개수 이야기다. 키가 모두 다르면 공장은 아무것도 아끼지 못하고 풀만 커진다. 그리고 풀은 만들었는데 얼리지 않으면 `mutationBlocked`가 실패한다. 첫 번째 객체를 고친 것이 같은 키로 받은 모든 곳에 퍼지기 때문이다.
+
+## 플라이웨이트가 필요 없는 경우
+
+객체가 수천 개 수준이면 대개 필요 없다. 이 패턴이 값을 하는 건 객체가 아주 많고, 그중 상당 부분이 같은 상태를 들고 있고, 그 상태가 바뀌지 않을 때다. 셋 중 하나라도 빠지면 복잡해진 코드만 남는다. 외부 상태를 매번 인자로 넘겨야 하니 함수 시그니처가 길어지고, "이 객체는 고치면 안 된다"는 규칙을 모두가 알아야 한다.
+
+서버 응답을 바꿀 수 있다면 그게 더 근본적인 해결이다. 마커마다 스타일을 보내지 말고 `styles` 사전을 한 번, 마커에는 `styleId`만 보내면 전송량도 줄고 클라이언트의 중복도 처음부터 생기지 않는다. 플라이웨이트는 바꿀 수 없는 데이터를 받았을 때 클라이언트에서 같은 일을 하는 방법이기도 하다.
+
+플라이웨이트는 "바뀌지 않는 같은 부분을 한 벌만 두고 모두가 가리키게 한다"로 정리된다. 상태를 고유 상태와 외부 상태로 나누는 것이 설계의 전부이고, 나머지는 공장이 키로 찾아 주는 일이다. 공유 객체는 얼려 두고, 키 개수와 메모리는 적용하기 전과 후에 직접 잰다.
+
+## 면접에서 나올 만한 질문
+
+### 플라이웨이트 패턴은 무엇이고 언제 쓰나요?
+
+같은 상태를 가진 객체가 아주 많을 때, 그 공통 부분을 한 벌만 만들어 여러 객체가 공유하게 해서 메모리를 줄이는 패턴이다. 지도 마커 수십만 개가 카테고리별 스타일 몇 개를 나눠 쓰는 경우, 문서 편집기의 글자 모양, 게임의 나무와 총알 같은 경우에 쓴다. 객체 수가 적거나 공통 부분이 작으면 얻는 것보다 복잡도가 크다.
+
+### 고유 상태와 외부 상태는 무엇인가요?
+
+고유 상태는 여러 객체가 똑같이 갖고 바뀌지 않아 공유할 수 있는 부분이고, 외부 상태는 객체마다 다르거나 상황에 따라 바뀌는 부분이다. 마커라면 아이콘과 색이 고유 상태, 위치와 선택 여부가 외부 상태다. 외부 상태는 플라이웨이트 안에 저장하지 않고 쓸 때마다 인자로 넘긴다.
+
+### 공유하는 플라이웨이트 객체를 수정하면 어떻게 되나요?
+
+그 객체를 가리키는 모든 곳이 함께 바뀐다. 마커 하나만 크게 하려고 공유 스타일의 size를 바꾸면 같은 카테고리 마커가 전부 커진다. 그래서 플라이웨이트는 불변이어야 하고, 자바스크립트에서는 Object.freeze로 얼려 strict mode에서 쓰기 시도가 바로 TypeError를 내게 한다. TypeScript의 Readonly를 함께 쓰면 컴파일 단계에서도 막힌다.
+
+### 자바에서 Integer 127끼리는 ==가 true인데 128은 false인 이유는요?
+
+Integer.valueOf가 -128부터 127까지의 객체를 캐시해 두고 같은 객체를 돌려주기 때문이다. 오토박싱이 valueOf를 쓰니 그 범위의 값은 같은 객체라 참조 비교가 true가 되고, 범위 밖은 매번 새 객체라 false가 된다. 플라이웨이트는 같은 객체일 수도 있다는 최적화일 뿐이니 값 비교는 equals로 해야 한다.
+
+### 플라이웨이트와 캐시는 무엇이 다른가요?
+
+캐시는 계산이나 조회를 반복하지 않으려고 결과를 저장하고, 버려도 다시 계산하면 되니 정확성에 영향이 없다. 플라이웨이트는 같은 상태의 객체가 여러 벌 생기지 않게 한 벌을 공유하는 것이 목적이고, 여러 곳이 같은 객체를 동시에 가리키니 불변이 전제다. 구현은 둘 다 키로 찾는 맵이라 비슷해 보인다.
+
+### 플라이웨이트 팩토리의 풀이 계속 커진다면 어떻게 하나요?
+
+먼저 키 개수가 객체 수에 가깝지 않은지 본다. 그렇다면 공유할 것이 없는데 풀만 모든 객체를 붙잡고 있는 메모리 누수이니 키 설계를 다시 한다. 키가 많지만 대부분 금방 안 쓰이게 된다면 WeakRef와 FinalizationRegistry로 아무도 쓰지 않는 항목을 GC가 가져가게 하거나, 정리 시점을 예측할 수 있는 크기 제한 LRU를 쓴다.
+
+### 메모리 절감 효과는 어떻게 확인하나요?
+
+적용 전후로 같은 데이터를 두고 잰다. Node.js에서는 --expose-gc로 GC를 강제로 돌린 뒤 process.memoryUsage().heapUsed 차이를 보고, 브라우저에서는 개발자 도구의 힙 스냅샷을 Retained Size로 정렬해 무엇이 메모리를 쥐고 있는지 본다. 코드에 적힌 문자열은 엔진이 이미 공유하는 경우가 많아서, 네트워크에서 읽은 데이터인지 코드에서 만든 데이터인지에 따라 효과가 크게 다르다.

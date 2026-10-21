@@ -1,0 +1,414 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("raft-consensus");
+
+etcd 세 대 중 두 대가 멈췄다. 남은 한 대는 방금 전까지 리더였고 프로세스도 멀쩡하다. 그런데 이 멤버에 값을 쓰면 5초를 기다리다 실패한다.
+
+```text
+$ etcdctl --endpoints=127.0.0.1:25381 --command-timeout=5s put /config/price 120
+Error: context deadline exceeded
+```
+
+로그에는 이런 줄이 남아 있다. `stepped down to follower since quorum is not active`. 리더가 스스로 물러났다. 고장이 아니라 설계대로 동작한 것이다. 혼자서는 쓰기를 확정할 수 없게 만드는 규칙, 그게 이 글에서 볼 Raft 합의 알고리즘의 핵심이다.
+
+이 글은 etcd 3.4.30 세 대를 사설 포트로 띄워 놓고, 쓰기 하나가 로그에 적히고 커밋되기까지, 뒤처진 멤버의 로그를 고치는 과정, 아무나 리더가 될 수 없게 하는 투표 규칙, 고립된 멤버가 임기를 부풀려 클러스터를 흔드는 현상과 Pre-Vote, 멤버를 바꾸는 방법을 실제 로그로 따라간다. 실습 환경은 Ubuntu 24.04다.
+
+이 주제의 다른 글: 리더가 왜 하나여야 하는지, 임대 기반 선출과 펜싱, etcd 리더를 죽였을 때 새 리더가 뽑히는 기본 흐름은 [리더 선출](/posts/leader-election)에서 다뤘다. 여기서는 선출 이후, 리더가 로그를 어떻게 복제하고 그 로그가 왜 안전한지에 집중한다. 분산 SQL이 키 구간마다 Raft를 돌리는 모습은 [분산 SQL 글](/posts/db-type-newsql)에 있다.
+
+## 같은 순서의 기록을 여러 대에 남기는 일
+
+etcd, Consul, CockroachDB, TiKV, Kafka의 KRaft 모드는 모두 같은 문제를 푼다. 여러 대가 같은 명령을 같은 순서로 실행하게 만드는 것이다. 명령 목록(로그)이 같고 각 서버가 그 로그를 처음부터 차례로 실행하는 결정적인 상태 기계라면, 모든 서버의 상태가 같아진다. 이걸 복제 상태 기계(replicated state machine)라고 한다. 어려운 부분은 서버가 죽고, 메시지가 늦거나 사라지고, 네트워크가 갈라지는 중에도 "몇 번째 명령이 무엇인가"에 모두가 같은 답을 내는 일이고, 이게 합의(consensus)다.
+
+오래된 정답은 Paxos였다. 정확하지만 이해하기도, 실제 시스템으로 옮기기도 어렵기로 유명했다. 디에고 온가로와 존 아우스터하우트가 2014년 발표한 Raft는 같은 보장을 이해하기 쉬운 형태로 다시 짰다. 문제를 세 개로 나눈 것이 비결이다. 리더 선출, 로그 복제, 그리고 안전성(어떤 경우에도 커밋된 기록이 사라지거나 바뀌지 않는다). 리더 선출은 [리더 선출 글](/posts/leader-election)에서 봤으니, 이 글은 나머지 둘을 본다.
+
+<ConceptDiagram
+  caption="클라이언트 명령이 리더의 로그를 거쳐 모든 상태 기계에 같은 순서로 들어간다"
+  width={420}
+  height={280}
+  nodes={[
+    { id: "c", label: "client", sub: "put price 120", x: 210, y: 35, w: 140 },
+    { id: "l", label: "leader log", sub: "… 9:put 10:put", x: 210, y: 115, w: 150 },
+    { id: "f1", label: "follower log", sub: "같은 순서로 복사", x: 90, y: 190, w: 150 },
+    { id: "f2", label: "follower log", sub: "같은 순서로 복사", x: 330, y: 190, w: 150 },
+    { id: "sm", label: "상태 기계", sub: "커밋된 것만 실행", x: 210, y: 255, w: 150 },
+  ]}
+  edges={[
+    { from: "c", to: "l", label: "제안" },
+    { from: "l", to: "f1", label: "AppendEntries" },
+    { from: "l", to: "f2", label: "AppendEntries" },
+    { from: "f1", to: "sm", dashed: true },
+    { from: "f2", to: "sm", dashed: true },
+    { from: "l", to: "sm", label: "과반이면 커밋" },
+  ]}
+/>
+
+Raft에서 시간은 임기(term)로 잰다. 임기는 1, 2, 3으로 커지는 번호고, 임기마다 리더는 많아야 하나다. 서버들은 메시지마다 자기 임기를 싣고, 자기보다 큰 임기를 보면 즉시 그 임기로 올라가며 팔로워가 된다. 작은 임기의 메시지는 무시한다. 그래서 임기는 "누가 더 최신 정보를 아는가"를 비교하는 논리적 시계 역할을 한다. 로그의 각 항목도 "몇 번째(index)"와 "어느 임기에 만들어졌나(term)"를 함께 가진다. 이 두 숫자 쌍이 이 글 전체에서 계속 나온다.
+
+## 쓰기 하나가 커밋되기까지
+
+모든 쓰기는 리더가 받는다. 팔로워에 쓰기가 오면 리더에게 넘긴다. 리더는 명령을 자기 로그 끝에 붙이고, AppendEntries 메시지로 팔로워들에게 보낸다. 이 메시지에는 새 항목과 함께 "바로 앞 항목의 번호와 임기"(prevLogIndex, prevLogTerm)와 리더가 아는 커밋 번호(leaderCommit)가 실린다.
+
+<SequenceDiagram
+  caption="put 하나: 로그에 붙이고, 과반이 받으면 커밋하고, 그다음 실행한다"
+  actors={[
+    { id: "c", label: "client" },
+    { id: "l", label: "e1 (leader)" },
+    { id: "f1", label: "e2" },
+    { id: "f2", label: "e3" },
+  ]}
+  steps={[
+    { from: "c", to: "l", label: "put /config/price 100", title: "리더가 명령을 받는다", detail: "리더 e1의 로그는 8번까지 있다. 새 명령을 9번, 임기 2로 붙인다. 아직 실행하지 않는다." },
+    { from: "l", to: "f1", label: "AppendEntries", title: "팔로워에게 보낸다", detail: "바로 앞 항목이 8번이고 임기 2였다는 정보를 같이 보낸다. 받는 쪽은 자기 8번 항목의 임기가 2인지 확인한다.", payload: "term=2 prevLogIndex=8 prevLogTerm=2\nentries=[9: put /config/price 100]\nleaderCommit=8" },
+    { from: "l", to: "f2", label: "AppendEntries", title: "다른 팔로워에게도 보낸다", detail: "보내는 건 동시에 하고, 응답을 기다리는 것도 병렬이다." },
+    { from: "f1", to: "l", label: "success, match=9", title: "디스크에 쓰고 답한다", detail: "e2는 항목을 WAL에 쓰고 fsync한 뒤에 성공을 답한다. 리더 자신과 e2, 셋 중 둘이 9번을 가졌다." },
+    { from: "l", to: "l", label: "commitIndex = 9", title: "과반이니 커밋한다", detail: "과반이 디스크에 가진 항목은 이후 어떤 리더가 나와도 사라지지 않는다. 이 순간 9번이 커밋된다. e3의 답은 기다리지 않는다." },
+    { from: "l", to: "c", label: "OK", title: "실행하고 답한다", detail: "리더가 9번을 상태 기계에 적용하고 클라이언트에 성공을 돌려준다.", payload: "RAFT INDEX 9 · RAFT APPLIED INDEX 9" },
+    { from: "l", to: "f2", label: "다음 메시지에 leaderCommit=9", title: "팔로워도 커밋을 알게 된다", detail: "다음 AppendEntries나 하트비트에 실린 leaderCommit을 보고 팔로워들도 9번까지 적용한다." },
+  ]}
+/>
+
+실제로 쓰고 상태를 봤다. 처음 띄운 클러스터는 선거와 멤버 정보 등록으로 8번까지 로그가 차 있었다.
+
+```bash
+export ETCDCTL_API=3 E="--endpoints=127.0.0.1:25381,127.0.0.1:25382,127.0.0.1:25383"
+etcdctl $E put /config/price 100                 # 쓰기 하나
+etcdctl $E endpoint status -w table              # 멤버마다 임기와 로그 번호
+etcdctl $E get /config/price -w json             # 응답 헤더에 임기가 실린다
+```
+
+```text
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+|    ENDPOINT     |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+| 127.0.0.1:25381 | a53f122b8fd33c6a |  3.4.30 |   20 kB |      true |      false |         2 |          9 |                  9 |        |
+| 127.0.0.1:25382 | 355e066bbef972bf |  3.4.30 |   20 kB |     false |      false |         2 |          9 |                  9 |        |
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |   20 kB |     false |      false |         2 |          9 |                  9 |        |
++-----------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+{"header":{"cluster_id":8921812861536140532,"member_id":11907255918096759914,"revision":2,"raft_term":2},"kvs":[{"key":"L2NvbmZpZy9wcmljZQ==","create_revision":2,"mod_revision":2,"version":1,"value":"MTAw"}],"count":1}
+```
+
+`RAFT INDEX`는 이 멤버 로그의 마지막 번호, `RAFT APPLIED INDEX`는 상태 기계에 적용까지 끝난 번호다. 8에서 9로 하나 올랐다. `revision`은 etcd의 키-값 저장소가 매기는 버전으로, Raft 로그 번호와는 다른 숫자다. 로그에는 키-값 변경 말고도 멤버 정보, 리더의 빈 항목 같은 것이 들어가서 둘이 따로 간다.
+
+리더가 팔로워마다 어디까지 보냈는지는 두 숫자로 기억한다. 다음에 보낼 번호(nextIndex)와 확실히 일치한다고 확인된 번호(matchIndex)다. 커밋 번호는 matchIndex들의 과반이 넘은 곳에서 정해진다. 아래 그림은 리더 로그 칸 위에서 그 숫자들이 바뀌는 모습이다.
+
+<AlgoTrace
+  caption="matchIndex의 과반이 넘은 자리가 커밋 번호가 된다 (멤버 3대)"
+  memoryLabel="matchIndex [e1 e2 e3] · commit"
+  cells={["1:t1", "2:t1", "3:t1", "4:t2", "5:t2", "6:t2"]}
+  steps={[
+    { pointer: 2, found: [0, 1, 2], memory: ["[3 3 3]", "commit=3"], caption: "임기 1에 세 항목이 모두에게 복제되어 커밋됐다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["[4 3 3]", "commit=3"], caption: "임기 2의 리더 e1이 4번을 붙였다. 아직 자기만 가졌다." },
+    { pointer: 4, found: [0, 1, 2], memory: ["[5 3 3]", "commit=3"], caption: "5번도 붙였다. 팔로워에게 보내는 중이다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["[5 5 3]", "commit=5"], caption: "e2가 5번까지 받았다고 답했다. 셋 중 둘이 5번 이상을 가졌으니 5번까지 커밋이다. e3은 기다리지 않는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: ["[6 5 4]", "commit=5"], caption: "6번을 붙였고, 느린 e3은 이제 4번까지 받았다. 과반이 넘은 자리는 여전히 5다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["[6 5 6]", "commit=6"], caption: "e3이 6번을 받자 e1과 e3, 과반이 6번을 가졌다. 6번도 커밋된다. 어느 둘이 과반이 되든 상관없다." },
+  ]}
+/>
+
+## 과반이면 왜 충분한가
+
+커밋 조건이 "전부"가 아니라 "과반"인 이유는 두 과반이 반드시 겹치기 때문이다. 세 대 중 둘, 다섯 대 중 셋을 어떻게 고르든 다른 과반과 적어도 한 대를 공유한다. 커밋된 항목은 과반이 가지고 있고, 새 리더도 과반의 표를 얻어야 하니, 투표한 과반 안에는 그 항목을 가진 멤버가 적어도 하나 있다. 뒤에서 볼 투표 규칙이 이 한 대를 이용해 커밋된 기록을 지킨다.
+
+과반 규칙에서 운영에 필요한 숫자가 바로 나온다. 세 대는 한 대, 다섯 대는 두 대가 죽어도 쓰기를 받는다. 네 대는 과반이 셋이라 견디는 수가 세 대와 같은 한 대뿐이고, 쓰기마다 기다릴 대상만 늘어난다. 그래서 짝수로 두지 않는다. 일곱 대 이상은 견디는 수는 늘지만 쓰기 지연과 리더의 복제 부담이 커져서, etcd는 보통 세 대나 다섯 대를 권한다.
+
+지연도 과반이 정한다. 리더는 가장 느린 팔로워가 아니라 과반을 채우는 팔로워까지만 기다린다. 다섯 대가 서울 둘, 도쿄 둘, 버지니아 하나에 있고 리더가 서울이면, 도쿄 하나의 응답으로 과반(셋)이 채워져 버지니아를 기다리지 않는다. 반대로 과반 안에 먼 곳이 끼면 모든 쓰기가 그 왕복만큼 느려진다. 그리고 응답 전에 디스크 fsync가 끝나야 하니, 디스크가 느린 멤버가 과반 안에 있으면 그것도 쓰기 지연이 된다.
+
+맨 처음 장면이 이 규칙의 결과다. 두 대가 멈추자 남은 리더는 과반의 응답을 받을 수 없으니 커밋을 할 수 없다. etcd 리더는 선출 타임아웃 동안 과반과 연락이 안 되면 스스로 물러나는 CheckQuorum도 켜 두고 있어서, 로그에 그 줄이 남았다.
+
+```text
+raft2026/10/20 19:34:03 WARN: a53f122b8fd33c6a stepped down to follower since quorum is not active
+raft2026/10/20 19:34:03 INFO: a53f122b8fd33c6a became follower at term 2
+```
+
+```bash
+etcdctl --endpoints=127.0.0.1:25381 --command-timeout=5s get /config/price   # 기본: 선형화 읽기
+etcdctl --endpoints=127.0.0.1:25381 get /config/price --consistency=s       # 이 멤버가 가진 값을 그대로
+```
+
+```text
+Error: context deadline exceeded
+/config/price
+100
+```
+
+읽기도 기본으로는 실패했다. etcd의 기본 읽기는 선형화(linearizable) 읽기다. 방금 커밋된 쓰기를 반드시 보게 하려고, 리더가 아직 리더인지 과반에 확인한 뒤(ReadIndex) 답한다. 과반이 없으니 확인할 수 없다. `--consistency=s`(serializable)는 이 확인을 건너뛰고 그 멤버의 값을 바로 준다. 이 실험에서는 맞는 값이지만, 고립된 멤버는 다른 쪽에서 이미 바뀐 값을 모르고 옛 값을 줄 수 있다. 오래된 값이어도 되는 조회에만 쓴다. 일관성 수준 사이의 맞바꿈은 [CAP 글](/posts/db-consistency-cap)에 있다.
+
+## 어긋난 팔로워의 로그를 고친다
+
+AppendEntries의 prevLogIndex와 prevLogTerm에는 목적이 있다. 팔로워는 자기 로그의 prevLogIndex 자리에 prevLogTerm인 항목이 있을 때만 새 항목을 받는다. 없으면 거절한다. 이 검사 하나로 Raft는 강한 성질을 얻는다. 두 로그에 번호와 임기가 같은 항목이 있으면, 그 항목까지의 로그 전체가 같다(로그 일치 성질). 새 항목을 받을 때마다 바로 앞이 같다는 걸 확인했으니, 귀납적으로 처음까지 같다.
+
+거절을 받은 리더는 그 팔로워의 nextIndex를 하나씩 줄여 다시 보낸다. 언젠가 둘이 같은 지점을 만나고, 팔로워는 그 뒤의 항목 중 리더와 다른 것을 지우고 리더의 것으로 덮는다. 리더는 자기 로그를 절대 지우거나 고치지 않는다. 고치는 쪽은 항상 팔로워다.
+
+<AlgoTrace
+  caption="옛 리더였던 팔로워의 로그를 새 리더 기준으로 고친다"
+  memoryLabel="리더 로그 · 이번 AppendEntries"
+  cells={["1:t1", "2:t1", "3:t2", "4:t2", "5:t2", "6:t2"]}
+  steps={[
+    { memory: ["리더(t3): 1:t1 2:t1 3:t2 4:t3 5:t3", "팔로워: 1:t1 2:t1 3:t2 4:t2 5:t2 6:t2"], caption: "칸은 팔로워의 로그다. 임기 2의 리더였을 때 4~6번을 붙였지만 과반에 복제하지 못하고 죽었다. 새 리더는 임기 3에 4, 5번을 만들었다." },
+    { pointer: 4, memory: ["prev=(5, t3), entries=[]", "팔로워 5번은 t2 → 거절"], caption: "리더가 nextIndex=6부터 보내 본다. 5번 자리의 임기가 3이어야 하는데 팔로워는 2다. 거절한다." },
+    { pointer: 3, memory: ["prev=(4, t3), entries=[5:t3]", "팔로워 4번은 t2 → 거절"], caption: "nextIndex를 5로 줄여 다시 보낸다. 4번 자리도 임기가 다르다. 또 거절한다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["prev=(3, t2), entries=[4:t3 5:t3]", "팔로워 3번도 t2 → 일치"], caption: "nextIndex=4. 3번 자리의 임기가 2로 같다. 로그 일치 성질 덕분에 1~3번 전체가 같다는 것도 확인됐다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: ["4:t2 5:t2 6:t2 지움", "4:t3 5:t3 붙임"], caption: "팔로워는 충돌한 4번부터 뒤를 모두 지우고 리더의 항목을 붙인다. 지운 4~6번은 커밋된 적이 없는 항목이라 지워도 안전하다." },
+  ]}
+/>
+
+하나씩 줄이는 방식은 단순하지만 수천 항목이 어긋나면 왕복도 수천 번이다. etcd의 Raft 구현은 거절할 때 "내 마지막 번호는 여기"라는 힌트를 실어 리더가 한 번에 건너뛰게 한다.
+
+멤버 하나를 죽여 둔 채 100개를 쓰고 다시 살렸다. 살아난 멤버의 시작 로그와 이후 상태다.
+
+```bash
+kill -9 <e3의 PID>                                                       # 팔로워 하나를 죽인다
+for i in $(seq 1 100); do etcdctl --endpoints=127.0.0.1:25381 put /orders/$i v$i >/dev/null; done
+etcd --name e3 ...                                                       # 같은 데이터 디렉터리로 다시 띄운다
+etcdctl $E endpoint status -w table
+```
+
+```text
+etcdserver: restarting member ce9a14d03230b1fc in cluster 7bd0a5871c5f7cf4 at commit index 8
+raft2026/10/20 19:33:03 INFO: newRaft ce9a14d03230b1fc [peers: [], term: 2, commit: 8, applied: 0, lastindex: 9, lastterm: 2]
+raft2026/10/20 19:33:03 INFO: raft.node: ce9a14d03230b1fc elected leader a53f122b8fd33c6a at term 2
+
+| 127.0.0.1:25381 | a53f122b8fd33c6a |  3.4.30 |   37 kB |      true |      false |         2 |        110 |                110 |        |
+| 127.0.0.1:25382 | 355e066bbef972bf |  3.4.30 |   37 kB |     false |      false |         2 |        110 |                110 |        |
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |   29 kB |     false |      false |         2 |        110 |                110 |        |
+```
+
+e3은 디스크에 있던 로그(마지막 9번, 커밋은 8번까지 알고 있음)에서 시작했고, 리더가 10번부터 보낸 AppendEntries로 1초도 안 걸려 110번까지 따라왔다. 쓰기 100개는 109번까지였고, 110번은 다시 살아난 e3이 자기 정보를 클러스터에 등록한 항목이다.
+
+## 너무 뒤처지면 로그 대신 스냅숏을 보낸다
+
+로그는 무한히 쌓을 수 없다. etcd는 커밋된 항목이 `--snapshot-count`(3.4 기본 100,000)만큼 쌓이면 상태 기계 전체의 스냅숏을 저장하고, 앞쪽 로그를 잘라낸다. 다만 느린 팔로워가 따라올 수 있게 최근 5,000개 항목은 남긴다. 잘린 부분이 필요한 팔로워에게는 로그 대신 스냅숏을 통째로 보낸다(InstallSnapshot).
+
+실험에서는 `--snapshot-count=200`으로 줄이고, e3을 죽인 채 6,000개를 썼다.
+
+```text
+# 리더 e1
+etcdserver: compacted raft log at 1030
+rafthttp: start to send database snapshot [index: 6110, to ce9a14d03230b1fc, size 1.1 MB]...
+rafthttp: database snapshot [index: 6110, to: ce9a14d03230b1fc] sent out successfully
+
+# 다시 띄운 e3
+etcdserver: restarting member ce9a14d03230b1fc in cluster 7bd0a5871c5f7cf4 at commit index 109
+rafthttp: successfully received and saved database snapshot [index: 6110, from: a53f122b8fd33c6a, raft message size: 9.4 kB, db size: 1.1 MB, took: 9.034103ms]
+raft2026/10/20 19:33:43 INFO: ce9a14d03230b1fc [commit: 6110, lastindex: 6110, lastterm: 2] restored snapshot [index: 6110, term: 2]
+etcdserver: finished applying incoming snapshot at index 6110
+```
+
+e3에게 필요한 건 111번부터인데, 리더는 1030번 앞을 이미 잘라냈다. 그래서 6110번 시점의 DB 파일(1.1MB)을 보냈고, e3은 로그를 하나씩 받는 대신 스냅숏으로 건너뛰었다. 데이터가 수 GB인 클러스터에서 이 일이 반복되면 문제가 된다. 스냅숏을 보내는 동안 디스크와 네트워크가 바빠 하트비트가 늦고, 그사이 또 뒤처져 다시 스냅숏을 받는 고리에 빠질 수 있다. 오래 내려가 있던 멤버를 한꺼번에 여러 대 올리지 않는 이유다.
+
+## 아무나 리더가 될 수는 없다
+
+로그를 고치는 쪽이 항상 팔로워라면, 커밋된 항목이 없는 멤버가 리더가 되는 순간 그 항목이 다른 멤버들에서 지워진다. Raft는 투표 단계에서 이걸 막는다. 후보는 RequestVote에 자기 로그의 마지막 항목(lastLogIndex, lastLogTerm)을 싣고, 투표하는 쪽은 후보의 로그가 자기 것보다 최신이 아니면 거절한다. 최신의 기준은 마지막 항목의 임기가 더 큰 쪽, 임기가 같으면 로그가 더 긴 쪽이다. 커밋된 항목은 과반이 가지고 있으니, 그 항목이 없는 후보는 과반의 표를 모을 수 없다.
+
+이 규칙이 실제로 작동하는 장면이 실험에 남았다. 혼자 남았던 e1은 다른 두 대가 멈춘 동안 선거를 계속 열어 임기를 18까지 올렸다. 그사이 깨어난 e3이 임기 3의 리더가 되어 6112번에 빈 항목을 하나 붙였다. 다시 연락이 닿은 e1은 임기는 훨씬 크지만 그 항목이 없다.
+
+```text
+[e3] ce9a14d03230b1fc [logterm: 3, index: 6112, vote: 0] rejected MsgVote from a53f122b8fd33c6a [logterm: 2, index: 6111] at term 21
+[e2] 355e066bbef972bf [logterm: 3, index: 6112, vote: 0] rejected MsgVote from a53f122b8fd33c6a [logterm: 2, index: 6111] at term 21
+```
+
+이 한 줄에 투표 규칙이 다 들어 있다.
+
+<UrlAnatomy
+  caption="투표 거절 로그 한 줄 읽기"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "voter", value: "ce9a14d03230b1fc", display: "ce9a14d03230b1fc", title: "투표하는 멤버 (e3)", description: "임기 21의 표를 달라는 요청을 받은 쪽이다." },
+    { key: "mine", value: "[logterm: 3, index: 6112, vote: 0]", display: "[logterm: 3, index: 6112, vote: 0]", title: "내 로그의 마지막 항목", description: "마지막 항목은 6112번, 임기 3에 만들어졌다. vote: 0은 이번 임기에 아직 아무에게도 투표하지 않았다는 뜻이다.", required: true },
+    { key: "verdict", value: "rejected MsgVote", display: "rejected MsgVote", title: "거절", description: "표가 남아 있는데도 거절했다. 이유는 오직 로그 비교다." },
+    { key: "cand", value: "[logterm: 2, index: 6111]", display: "from a53f… [logterm: 2, index: 6111]", title: "후보의 로그 마지막 항목", description: "후보 e1의 마지막 항목은 임기 2다. 임기 3인 내 것보다 오래됐으니 이 후보는 내가 가진 기록을 모를 수 있다.", required: true },
+    { key: "term", value: "at term 21", display: "at term 21", title: "후보의 임기는 상관없다", description: "후보의 임기는 21로 훨씬 크다. 임기를 따라 올라가긴 하지만, 표는 로그가 최신인 후보에게만 준다." },
+  ]}
+/>
+
+새 리더가 임기를 시작하자마자 빈 항목을 붙이는 데도 이유가 있다. 리더는 이전 임기에 만들어진 항목을 "과반이 가졌다"는 이유만으로 커밋하지 않는다. Raft 논문의 그림 8이 보여 주는 함정 때문이다. 이전 임기 항목이 과반에 복제됐더라도, 그 항목을 모르는 다른 후보가 더 높은 임기의 항목을 가지고 있으면 리더가 될 수 있고, 그러면 그 항목은 덮인다. 그래서 리더는 자기 임기의 항목이 과반에 복제됐을 때만 커밋 번호를 올리고, 그 앞의 항목은 함께 커밋된 것으로 본다. 새 리더의 빈 항목은 이 커밋을 바로 일으키려는 장치다. 리더가 바뀔 때마다 `RAFT INDEX`가 하나 오르는 것이 그 흔적이다.
+
+```text
+# 리더 e2(임기 23)를 kill -9 하기 전과 3초 뒤
+| 127.0.0.1:25381 | a53f122b8fd33c6a |  3.4.30 |  1.1 MB |     false |      false |        23 |       6114 |               6114 |        |
+| 127.0.0.1:25382 | 355e066bbef972bf |  3.4.30 |  1.1 MB |      true |      false |        23 |       6114 |               6114 |        |
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |  1.1 MB |     false |      false |        23 |       6114 |               6114 |        |
+
+| 127.0.0.1:25381 | a53f122b8fd33c6a |  3.4.30 |  1.1 MB |     false |      false |        25 |       6115 |               6115 |        |
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |  1.1 MB |      true |      false |        25 |       6115 |               6115 |        |
+```
+
+임기가 24가 아니라 25인 것은 표가 갈렸기 때문이다. 남은 두 대가 거의 동시에 임기 24 후보가 되어 각자 자기에게 투표했고(`has received 1 MsgVoteResp votes and 1 vote rejections`), 무작위 타임아웃이 먼저 끝난 e3이 임기 25에서 이겼다. 로그 번호 6115가 새 리더의 빈 항목이다.
+
+커밋 번호를 정하는 규칙을 코드로 써 보면 이 조건이 한 줄로 들어간다. `logTerms[i]`는 i+1번 항목의 임기, `matchIndex`는 리더 자신을 포함한 멤버별로 확인된 번호다.
+
+<CodePlayground
+  caption="리더의 커밋 번호 계산"
+  functionName="commitIndex"
+  initialCode={`// logTerms[i] = (i+1)번 항목의 임기
+// matchIndex = 멤버마다 리더와 일치한다고 확인된 마지막 번호 (리더 자신 포함)
+// 과반이 가진 가장 큰 번호 N을 찾되, N번 항목이 현재 임기일 때만 커밋한다
+function commitIndex(logTerms, matchIndex, currentTerm, commit) {
+  return commit;
+}`}
+  solution={`function commitIndex(logTerms, matchIndex, currentTerm, commit) {
+  const sorted = [...matchIndex].sort((a, b) => b - a);
+  const majority = Math.floor(matchIndex.length / 2) + 1;
+  const n = sorted[majority - 1];          // 과반이 이 번호 이상을 가졌다
+  for (let N = n; N > commit; N--) {
+    if (logTerms[N - 1] === currentTerm) return N;  // 현재 임기 항목만 세어서 커밋
+  }
+  return commit;                           // 그 앞 항목은 함께 커밋된다
+}`}
+  tests={[
+    { label: "3대, 둘이 3번까지", args: [[1, 1, 1], [3, 3, 1], 1, 0], expected: 3 },
+    { label: "3대, 과반 자리가 3번", args: [[1, 1, 2, 2, 2], [5, 3, 2], 2, 2], expected: 3 },
+    { label: "5대, 과반이 옛 임기 항목만 가짐", args: [[1, 2, 4], [3, 2, 2, 1, 1], 4, 1], expected: 1 },
+    { label: "5대, 현재 임기 항목이 과반에", args: [[1, 2, 4], [3, 3, 3, 1, 1], 4, 1], expected: 3 },
+    { label: "4대는 셋이 필요", args: [[1, 1, 1, 1], [4, 4, 2, 2], 1, 0], expected: 2 },
+    { label: "리더만 가짐", args: [[1, 1, 1, 1, 1], [5, 1, 1], 1, 0], expected: 1 },
+  ]}
+/>
+
+세 번째 테스트가 그림 8의 상황이다. 2번 항목(임기 2)은 다섯 대 중 셋이 가졌지만 지금 임기는 4라서 커밋하지 않는다. 네 번째 테스트에서 임기 4의 3번 항목이 과반에 닿는 순간, 2번도 같이 커밋된다.
+
+## 고립된 멤버가 임기를 부풀린다
+
+앞의 실험에서 이상한 일이 하나 있었다. e3이 임기 3의 리더가 되자마자 물러났다. 혼자 고립돼 있던 e1이 선거를 열 때마다 임기를 올려 18까지 가 있었고, 다시 연결되자 그 큰 임기가 담긴 메시지를 받은 멀쩡한 리더가 규칙대로 팔로워로 내려간 것이다.
+
+```text
+[e1] a53f122b8fd33c6a became candidate at term 18
+[e3] ce9a14d03230b1fc became leader at term 3
+[e3] ce9a14d03230b1fc [term: 3] received a MsgAppResp message with higher term from a53f122b8fd33c6a [term: 19]
+[e3] ce9a14d03230b1fc became follower at term 19
+...
+[e2] 355e066bbef972bf became leader at term 23
+```
+
+e1은 로그가 뒤처져서 리더가 될 수도 없는데, 임기만으로 클러스터를 몇 초 동안 리더 없는 상태로 만들었다. 네트워크가 들쭉날쭉한 멤버 하나가 이 일을 반복하면 클러스터 전체가 계속 선거만 한다. 이걸 막는 것이 Pre-Vote다. 선거를 열기 전에 임기를 올리지 않은 채 "지금 선거하면 표를 줄 건가"를 먼저 묻고, 과반이 그렇다고 할 때만 진짜 선거를 연다. 다른 멤버들은 리더에게서 최근에 소식을 들었다면 사전 투표를 거절한다. 고립된 멤버는 과반의 동의를 못 얻으니 임기가 오르지 않는다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="고립된 멤버: Pre-Vote가 없으면 임기만 부풀려 돌아와 리더를 끌어내린다"
+  zones={[
+    { id: "maj", label: "majority side", x: 175, y: 20, w: 210, h: 255, tone: "private" },
+    { id: "iso", label: "isolated", x: 15, y: 20, w: 140, h: 255, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "e1", label: "e1", sub: "term 2→18", x: 85, y: 150, icon: "server", w: 100 },
+    { id: "e3", label: "e3", sub: "leader t3", x: 280, y: 85, icon: "server", w: 110 },
+    { id: "e2", label: "e2", sub: "follower t3", x: 280, y: 215, icon: "server", w: 110 },
+  ]}
+  links={[
+    { from: "e1", to: "e3", dashed: true },
+    { from: "e1", to: "e2", dashed: true },
+    { from: "e3", to: "e2" },
+  ]}
+  steps={[
+    { path: ["e1", "e3"], packet: "Vote t5", blocked: true, highlight: ["iso"], title: "고립된 e1이 선거를 연다", detail: "답이 오지 않으니 타임아웃마다 임기를 올리며 다시 연다. 실험에서는 20초 남짓 만에 임기 18이 됐다." },
+    { path: ["e3", "e2"], packet: "append", highlight: ["maj"], title: "나머지는 정상이다", detail: "e3이 임기 3의 리더로 쓰기를 받고 있다. 로그는 e1보다 앞서 있다." },
+    { path: ["e1", "e3"], packet: "t19", title: "연결이 돌아온다", detail: "e1의 메시지에 임기 19가 실려 있다. 더 큰 임기를 본 e3은 규칙대로 팔로워가 된다.", payload: "ce9a14d03230b1fc became follower at term 19" },
+    { path: ["e1", "e2"], packet: "Vote t21", blocked: true, title: "e1은 이길 수 없다", detail: "로그가 뒤처져 표를 못 받는다. 리더가 없는 몇 초 동안 쓰기가 멈춘 뒤, 임기 23에서 e2가 리더가 된다.", payload: "rejected MsgVote from a53f… [logterm: 2, index: 6111] at term 21" },
+    { path: ["e1", "e3"], packet: "PreVote", blocked: true, highlight: ["iso"], title: "Pre-Vote를 켜면", detail: "임기를 올리지 않고 사전 투표만 묻는다. 과반이 거절하니 임기는 그대로고, 돌아와도 리더를 흔들지 않는다.", payload: "became pre-candidate at term 26" },
+  ]}
+/>
+
+같은 실험을 `--pre-vote=true`로 다시 했다. 15초 동안 e1 혼자 사전 투표를 15번 시도했지만 임기는 26에서 움직이지 않았고, 다시 연결된 뒤에도 리더는 그대로였다.
+
+```text
+raft2026/10/20 19:35:29 INFO: a53f122b8fd33c6a is starting a new election at term 26
+raft2026/10/20 19:35:29 INFO: a53f122b8fd33c6a became pre-candidate at term 26
+raft2026/10/20 19:35:29 INFO: a53f122b8fd33c6a received MsgPreVoteResp from a53f122b8fd33c6a at term 26
+
+| 127.0.0.1:25381 | a53f122b8fd33c6a |  3.4.30 |  1.1 MB |     false |      false |        26 |       6119 |               6119 |        |
+| 127.0.0.1:25382 | 355e066bbef972bf |  3.4.30 |  1.1 MB |     false |      false |        26 |       6119 |               6119 |        |
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |  1.1 MB |      true |      false |        26 |       6119 |               6119 |        |
+```
+
+etcd 3.4의 `--pre-vote` 기본값은 `false`이고, 3.5부터 `true`로 바뀌었다. 3.4 이하를 쓰고 있다면 켜 두는 편이 낫다.
+
+## 멤버를 바꾸는 일
+
+멤버 구성도 로그에 들어가는 항목이다. 문제는 바꾸는 도중에 옛 구성의 과반과 새 구성의 과반이 겹치지 않을 수 있다는 점이다. 세 대에서 다섯 대로 한 번에 바꾸면, 옛 구성 기준으로 둘, 새 구성 기준으로 셋이 서로 다른 리더를 뽑는 순간이 생길 수 있다. Raft 논문은 두 구성 모두의 과반을 요구하는 중간 단계(joint consensus)로 이걸 푼다. 더 단순한 방법은 한 번에 한 대씩만 바꾸는 것이다. 한 대 차이 나는 두 구성의 과반은 반드시 겹친다. etcd는 이 방식을 쓴다.
+
+새 멤버를 바로 투표권자로 넣으면 또 다른 문제가 있다. 세 대에 빈 멤버 하나를 넣는 순간 과반이 셋으로 늘어나는데, 새 멤버는 로그를 따라오느라 한동안 응답을 못 한다. 그사이 기존 멤버 하나만 죽어도 쓰기가 멈춘다. etcd 3.4부터는 투표하지 않는 학습자(learner)로 먼저 넣고, 로그를 다 따라온 뒤에 승격한다.
+
+```bash
+etcdctl $E member add e4 --learner --peer-urls=http://127.0.0.1:25484   # 투표권 없이 추가
+etcd --name e4 --initial-cluster-state existing ...                       # 새 멤버를 띄운다
+etcdctl $E,127.0.0.1:25384 endpoint status -w table
+etcdctl --endpoints=127.0.0.1:25384 get /config/price                     # 학습자는 요청을 받지 않는다
+etcdctl $E member promote 4bac4ffa8e330b2c                                # 따라왔으면 투표권자로
+```
+
+```text
+Member 4bac4ffa8e330b2c added to cluster 7bd0a5871c5f7cf4
+
+| 127.0.0.1:25383 | ce9a14d03230b1fc |  3.4.30 |  1.1 MB |      true |      false |        26 |       6121 |               6121 |        |
+| 127.0.0.1:25384 | 4bac4ffa8e330b2c |  3.4.30 |  1.1 MB |     false |       true |        26 |       6121 |               6121 |        |
+
+Error: etcdserver: rpc not supported for learner
+Member 4bac4ffa8e330b2c promoted in cluster 7bd0a5871c5f7cf4
+```
+
+`IS LEARNER`가 `true`인 동안 e4는 과반 계산에 들어가지 않는다. 로그 번호가 다른 멤버와 같아진 걸 보고 승격했다. 승격은 아직 따라오지 못한 학습자에게는 거절된다.
+
+<Callout kind="warning" title="죽은 멤버를 교체할 때 순서">
+세 대 중 한 대가 죽었을 때 새 멤버를 먼저 추가하면 구성이 네 대가 되어 과반이 셋으로 늘어난다. 살아 있는 건 둘과 아직 따라오지 못한 새 멤버라서, 이 상태에서 하나만 더 흔들려도 쓰기가 멈춘다. 죽은 멤버를 `etcdctl member remove`로 먼저 빼서 두 대 구성(과반 둘)으로 만든 다음 새 멤버를 학습자로 추가한다. 잘못 추가했다면 시작하지 않은 새 멤버를 `member remove`로 바로 빼면 원래 구성으로 돌아간다.
+</Callout>
+
+## 리더가 자꾸 바뀌거나 쓰기가 느릴 때
+
+etcd나 쿠버네티스 컨트롤 플레인에서 Raft 문제는 보통 "리더가 자주 바뀐다", "쓰기가 가끔 수백 ms씩 걸린다"로 나타난다. 원인은 대부분 디스크와 네트워크다. 리더의 하트비트(기본 100ms)가 선출 타임아웃(기본 1000ms) 안에 도착하지 못하면 팔로워가 선거를 연다. fsync가 느려 리더가 하트비트를 제때 못 보내도 같은 일이 생긴다.
+
+```bash
+curl -s http://127.0.0.1:25381/metrics | grep -E '^etcd_server_(leader_changes_seen_total|has_leader|proposals_(committed|applied|failed)_total|proposals_pending)|^etcd_disk_wal_fsync_duration_seconds_(sum|count)'
+```
+
+```text
+etcd_disk_wal_fsync_duration_seconds_sum 0.021617753
+etcd_disk_wal_fsync_duration_seconds_count 23
+etcd_server_has_leader 1
+etcd_server_leader_changes_seen_total 1
+etcd_server_proposals_applied_total 6147
+etcd_server_proposals_committed_total 6147
+etcd_server_proposals_failed_total 0
+etcd_server_proposals_pending 0
+```
+
+- `leader_changes_seen_total`가 꾸준히 오르면 선거가 반복되고 있다. 로그에서 `lost leader`, `is starting a new election`이 나온 시각과 디스크 지연, 네트워크 지연이 튄 시각을 맞춰 본다.
+- WAL fsync 지연은 히스토그램이다. etcd 문서는 99번째 백분위가 10ms 안쪽이길 권한다. 위 출력은 이 컨테이너에서 fsync 23번에 합 21.6ms, 평균 1ms 정도였다. 다른 프로세스와 디스크를 나눠 쓰는 VM에서는 이 숫자가 수십 ms로 튀고, 그게 리더 교체로 이어진다. etcd에는 전용 SSD를 준다.
+- `proposals_committed_total`과 `proposals_applied_total`의 차이가 계속 벌어지면 커밋은 됐는데 적용이 밀리는 것이다. 큰 범위 조회나 거대한 트랜잭션이 적용을 막는 경우가 많고, 로그에 `apply request took too long`이 찍힌다.
+- `endpoint status`에서 한 멤버의 `RAFT INDEX`만 계속 작으면 그 멤버가 뒤처지고 있다. 앞의 스냅숏 고리에 빠졌는지 로그에서 `sending database snapshot`을 찾아본다.
+- 멤버 사이 왕복이 길면(리전을 넘는 배치) 선출 타임아웃을 왕복 시간의 10배 정도로, 하트비트는 왕복 시간 근처로 늘린다(`--heartbeat-interval`, `--election-timeout`, 단위 ms). 짧게 잡으면 일시적인 지연에도 선거가 열리고, 길게 잡으면 리더가 정말 죽었을 때 그만큼 쓰기가 멈춘다.
+
+## 과반이 기억하는 것만 기록이 된다
+
+Raft는 리더 하나가 로그 순서를 정하고, 과반이 디스크에 가진 항목만 커밋하며, 로그가 최신인 후보에게만 표를 줘서 커밋된 항목이 다음 리더에게 반드시 이어지게 한다. 팔로워의 로그는 prevLogIndex와 prevLogTerm 검사로 어긋난 지점을 찾아 리더 것으로 덮고, 너무 뒤처지면 스냅숏으로 건너뛴다. 그래서 과반을 잃으면 리더가 살아 있어도 쓰기를 멈추는 게 정상이고, 운영에서 볼 것은 그 과반을 흔드는 디스크 지연, 네트워크 지연, 멤버 교체 순서다.
+
+## 면접에서 나올 만한 질문
+
+### Raft에서 쓰기는 언제 커밋되나요?
+
+리더가 자기 로그에 붙인 항목을 과반의 멤버가 디스크에 썼다고 답했을 때다. 리더는 자기 임기의 항목이 과반에 복제되면 커밋 번호를 올리고, 상태 기계에 적용한 뒤 클라이언트에 답한다. 팔로워는 다음 AppendEntries에 실린 leaderCommit을 보고 적용한다. 모든 멤버를 기다리지 않으니 느린 멤버 하나가 쓰기를 막지 않는다.
+
+### 왜 과반인가요? 4대로 구성하면 안 되나요?
+
+두 과반은 반드시 한 대 이상 겹쳐서, 커밋된 항목을 가진 멤버가 다음 선거의 투표자 안에 꼭 들어가기 때문이다. 4대는 과반이 3이라 견디는 장애 수가 3대와 같은 1대인데 기다릴 대상만 늘어난다. 그래서 3대나 5대로 둔다. 과반을 잃으면 리더가 살아 있어도 쓰기와 선형화 읽기가 멈춘다.
+
+### 팔로워 로그가 리더와 다르면 어떻게 맞추나요?
+
+AppendEntries에 바로 앞 항목의 번호와 임기를 실어 보내고, 팔로워는 그 자리에 같은 임기의 항목이 있을 때만 받는다. 거절되면 리더가 nextIndex를 줄여 다시 보내며 일치 지점을 찾고, 팔로워는 그 뒤의 충돌 항목을 지우고 리더의 것으로 덮는다. 같은 번호와 임기를 가진 항목이 있으면 그 앞이 모두 같다는 로그 일치 성질 덕분에 일치 지점 하나만 찾으면 된다. 리더가 이미 잘라낸 구간이 필요하면 스냅숏을 보낸다.
+
+### 커밋된 항목이 새 리더 선출 후에 사라지지 않는다는 걸 어떻게 보장하나요?
+
+투표 규칙이 보장한다. 투표자는 후보의 마지막 로그 항목이 자기 것보다 최신(임기가 크거나, 같으면 더 긺)일 때만 표를 준다. 커밋된 항목은 과반이 갖고 있으니, 그 항목이 없는 후보는 과반의 표를 모을 수 없다. 실험에서도 임기 21로 훨씬 큰 후보가 마지막 항목의 임기가 낮아 두 멤버 모두에게 거절당했다.
+
+### 리더가 이전 임기의 항목을 과반 복제만으로 커밋하지 않는 이유는요?
+
+이전 임기 항목이 과반에 있어도, 그 항목을 모르지만 더 높은 임기의 항목을 가진 후보가 리더가 되어 덮어쓸 수 있기 때문이다(Raft 논문 그림 8). 그래서 리더는 자기 임기의 항목이 과반에 닿을 때만 커밋 번호를 올리고, 앞의 항목은 함께 커밋된다. 새 리더가 임기를 시작하며 빈 항목을 붙이는 것도 이 커밋을 빨리 일으키려는 것이고, 리더가 바뀔 때 RAFT INDEX가 하나 오르는 이유다.
+
+### Pre-Vote는 무엇을 막나요?
+
+고립된 멤버가 선거를 반복하며 임기만 올렸다가 돌아와서, 더 큰 임기로 멀쩡한 리더를 끌어내리는 일을 막는다. 임기를 올리기 전에 사전 투표로 과반의 동의를 먼저 구하고, 다른 멤버는 리더와 최근에 연락했다면 거절한다. 실험에서 Pre-Vote 없이 고립됐던 멤버는 임기를 18까지 올려 리더를 물러나게 했고, 켠 뒤에는 15번 시도해도 임기가 그대로였다. etcd는 3.5부터 기본으로 켠다.
+
+### etcd에 새 멤버를 넣을 때 learner로 넣는 이유는요?
+
+빈 멤버를 투표권자로 바로 넣으면 과반 크기가 커지는데 새 멤버는 로그를 따라오느라 응답하지 못해, 기존 멤버 하나만 흔들려도 쓰기가 멈출 수 있다. 학습자는 로그는 받지만 과반 계산에 들어가지 않아서 따라오는 동안 위험이 없고, 다 따라온 뒤 승격한다. 구성 변경은 한 번에 한 대씩 해야 옛 구성과 새 구성의 과반이 겹친다.

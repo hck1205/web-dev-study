@@ -1,0 +1,611 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("docker-network-drivers");
+
+사내망에 있는 장비가 컨테이너에 직접 붙어야 해서 macvlan 네트워크를 만들었다. 컨테이너가 `192.168.10.20`이라는 사내망 IP를 받았고, 옆자리 PC에서는 ping이 잘 된다. 그런데 정작 그 컨테이너를 띄운 호스트에서만 ping이 안 된다. 방화벽 규칙은 하나도 건드리지 않았다.
+
+이 증상은 macvlan이 커널에서 어떤 장치인지 알면 바로 풀린다. Docker 네트워크 드라이버는 결국 "컨테이너의 네트워크 네임스페이스를 어떤 리눅스 장치로 바깥과 이어 주느냐"의 차이다. 이 글은 bridge, host, none, container 모드, macvlan·ipvlan, overlay를 하나씩 커널 장치와 iptables 규칙으로 뜯어보고, 언제 무엇을 고르는지 정리한다.
+
+이 주제의 다른 글: 사용자 정의 브리지의 내장 DNS, `-p`가 만드는 DNAT, 볼륨은 [Docker 네트워크와 볼륨](/posts/docker-network-volume)에서 다뤘다. Docker가 nat 테이블에 넣는 규칙과 ufw 문제는 [iptables NAT 글](/posts/iptables-nat)에, VXLAN 캡슐화 자체는 [SDN과 VXLAN 오버레이](/posts/sdn-vxlan-overlay)에 있다. 여기서는 그 위에서 드라이버마다 무엇이 다른지만 본다.
+
+기준은 Ubuntu 24.04 LTS(22.04도 같다)의 Docker Engine 27이다. 실습 환경에는 Docker가 없어서 네트워크 네임스페이스, veth, 리눅스 브리지, macvlan 장치로 Docker가 만드는 것과 같은 구성을 손으로 만들고, Docker 27이 넣는 iptables 규칙을 그대로 옮겨 넣었다. ip, iptables, curl, conntrack 출력은 그 실습에서 나온 실제 출력이다. `docker` 명령의 출력은 형식을 맞춘 예시이고, 그렇게 표시했다.
+
+## 드라이버는 네임스페이스를 꾸미는 방식이다
+
+컨테이너 하나는 리눅스 네트워크 네임스페이스 하나를 받는다. 장치 목록, 라우팅 표, iptables 규칙, 포트 번호 공간을 따로 갖는 칸막이다([컨테이너 기초](/posts/docker-container-basics)에서 본 namespace다). 드라이버가 정하는 건 두 가지뿐이다. 칸막이를 새로 만들지, 만든다면 무엇으로 바깥과 이을지.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="드라이버마다 컨테이너 네임스페이스를 바깥과 잇는 장치가 다르다. host와 container 모드는 네임스페이스를 새로 만들지 않는다."
+  nodes={[
+    { id: "hostns", label: "호스트 netns", sub: "eth0, 라우팅, iptables", x: 220, y: 40, w: 170 },
+    { id: "bridge", label: "bridge", sub: "veth + 리눅스 브리지", x: 80, y: 140, w: 140 },
+    { id: "host", label: "host", sub: "새 netns 없음", x: 220, y: 140, w: 110 },
+    { id: "mac", label: "macvlan·ipvlan", sub: "parent의 자식 장치", x: 365, y: 140, w: 140 },
+    { id: "none", label: "none", sub: "lo만", x: 60, y: 250, w: 90 },
+    { id: "ctr", label: "container:X", sub: "X의 netns 공유", x: 190, y: 250, w: 130 },
+    { id: "ov", label: "overlay", sub: "브리지 + VXLAN", x: 345, y: 250, w: 130 },
+  ]}
+  edges={[
+    { from: "bridge", to: "hostns", label: "라우팅·NAT" },
+    { from: "host", to: "hostns", label: "그대로 씀", arrow: "both" },
+    { from: "mac", to: "hostns", label: "netfilter 우회", dashed: true },
+    { from: "ov", to: "bridge", label: "gwbridge로 나감" },
+    { from: "ctr", to: "host", label: "남의 칸 빌림", dashed: true, arrow: "none" },
+  ]}
+/>
+
+bridge는 컨테이너마다 veth 쌍을 만들어 한쪽은 컨테이너 안 `eth0`로, 다른 쪽은 호스트의 브리지에 꽂는다. 바깥으로 나가는 패킷은 호스트의 라우팅과 iptables를 지난다. host는 칸막이를 만들지 않는다. macvlan과 ipvlan은 호스트의 실제 랜카드(parent)에 자식 장치를 만들어 컨테이너 안으로 옮긴다. 이 장치의 패킷은 호스트의 라우팅과 iptables를 거치지 않고 parent로 바로 나간다. 처음 장면의 답이 이 차이에 숨어 있다. overlay는 bridge에 VXLAN 터널을 덧붙여 여러 호스트를 한 망으로 묶는다.
+
+## bridge를 손으로 다시 만든다
+
+`docker run`을 하면 Docker는 다음 순서로 일한다. 네임스페이스를 만들고, veth 쌍을 만들어 한쪽을 네임스페이스로 옮기고, 이름을 `eth0`로 바꾸고, IPAM이 고른 주소와 기본 경로를 넣고, 호스트 쪽 끝을 `docker0`에 꽂는다. 똑같이 해 보면 이렇다.
+
+```bash
+# 컨테이너 대신 쓸 네트워크 네임스페이스 c1을 만든다
+sudo ip netns add c1
+
+# veth 쌍을 만들고 한쪽을 c1 안으로 옮기면서 이름을 eth0로 정한다
+sudo ip link add vethc1 type veth peer name eth0 netns c1
+
+# 호스트 쪽 끝을 docker0 브리지에 꽂고 올린다
+sudo ip link set vethc1 master docker0 up
+
+# 컨테이너 쪽에 주소와 기본 경로(게이트웨이 = docker0 주소)를 넣는다
+sudo ip -n c1 addr add 172.17.0.2/16 dev eth0
+sudo ip -n c1 link set eth0 up
+sudo ip -n c1 route add default via 172.17.0.1
+```
+
+컨테이너 안에서 보면 `docker run --rm busybox ip addr`로 봤던 모양 그대로다.
+
+```bash
+# c1 안의 장치와 경로
+sudo ip -n c1 -4 addr
+sudo ip -n c1 route
+```
+
+```text
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: eth0@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netns n4h
+    inet 172.17.0.2/16 scope global eth0
+       valid_lft forever preferred_lft forever
+default via 172.17.0.1 dev eth0 
+172.17.0.0/16 dev eth0 proto kernel scope link src 172.17.0.2 
+```
+
+`eth0@if5`는 짝이 상대편 5번 인터페이스라는 뜻이고, `link-netns n4h`는 그 짝이 실습에서 호스트 역할을 한 네임스페이스에 있다는 뜻이다. 호스트 쪽에서는 브리지에 꽂힌 포트 목록으로 확인한다.
+
+```bash
+# 브리지에 꽂힌 포트와 상태
+bridge link show
+```
+
+```text
+5: vethn4c1@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master docker0 state forwarding priority 32 cost 2 
+6: vethn4c2@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master docker0 state forwarding priority 32 cost 2 
+7: vethn4c3@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-3c5e8f0a1b2d state forwarding priority 32 cost 2 
+```
+
+c1, c2는 `docker0`(172.17.0.0/16)에, c3는 사용자 정의 브리지 `br-3c5e8f0a1b2d`(172.18.0.0/16)에 꽂았다. 이제 Docker 27이 이 구성에서 만드는 filter 테이블 규칙을 그대로 넣는다. nat 테이블 쪽(MASQUERADE와 `-p`의 DNAT)은 [iptables NAT 글](/posts/iptables-nat#docker가-만드는-규칙)에서 읽었으니, 여기서는 네트워크끼리 서로 막는 부분을 본다.
+
+```text
+-P FORWARD DROP
+-A FORWARD -j DOCKER-USER
+-A FORWARD -j DOCKER-ISOLATION-STAGE-1
+-A FORWARD -o br-3c5e8f0a1b2d -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -o br-3c5e8f0a1b2d -j DOCKER
+-A FORWARD -i br-3c5e8f0a1b2d ! -o br-3c5e8f0a1b2d -j ACCEPT
+-A FORWARD -i br-3c5e8f0a1b2d -o br-3c5e8f0a1b2d -j ACCEPT
+-A FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -o docker0 -j DOCKER
+-A FORWARD -i docker0 ! -o docker0 -j ACCEPT
+-A FORWARD -i docker0 -o docker0 -j ACCEPT
+-A DOCKER-ISOLATION-STAGE-1 -i br-3c5e8f0a1b2d ! -o br-3c5e8f0a1b2d -j DOCKER-ISOLATION-STAGE-2
+-A DOCKER-ISOLATION-STAGE-1 -i docker0 ! -o docker0 -j DOCKER-ISOLATION-STAGE-2
+-A DOCKER-ISOLATION-STAGE-1 -j RETURN
+-A DOCKER-ISOLATION-STAGE-2 -o br-3c5e8f0a1b2d -j DROP
+-A DOCKER-ISOLATION-STAGE-2 -o docker0 -j DROP
+-A DOCKER-ISOLATION-STAGE-2 -j RETURN
+-A DOCKER-USER -j RETURN
+```
+
+네트워크 하나마다 네 줄이 생긴다. 나가는 연결의 응답은 들여보내고(`ESTABLISHED`), 새로 들어오는 연결은 게시한 포트만 `DOCKER` 체인에서 허용하고, 브리지에서 나가는 건 허용하고, 같은 브리지 안끼리도 허용한다. 격리는 두 단계로 걸린다. 1단계는 "어떤 Docker 브리지에서 나와서 그 브리지가 아닌 곳으로 가는" 패킷을 2단계로 보내고, 2단계는 그 패킷의 목적지가 "다른 Docker 브리지"면 버린다. 인터넷(`eth0`)으로 가는 패킷은 2단계의 어느 DROP에도 걸리지 않고 돌아온다.
+
+아래 그림에서 다음을 누르면 c1이 보내는 세 가지 패킷이 각각 어디까지 가는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={400}
+  caption="bridge 드라이버: 같은 브리지 안은 스위칭, 바깥은 MASQUERADE, 다른 브리지는 FORWARD에서 막힌다"
+  zones={[
+    { id: "host", label: "호스트 203.0.113.10", x: 6, y: 86, w: 388, h: 300, tone: "private" },
+  ]}
+  nodes={[
+    { id: "inet", label: "internet", sub: "203.0.113.1", x: 200, y: 38, icon: "internet" },
+    { id: "kernel", label: "netfilter", sub: "FORWARD · NAT", x: 200, y: 145, icon: "firewall", w: 120 },
+    { id: "docker0", label: "docker0", sub: "172.17.0.1", x: 118, y: 232, icon: "switch" },
+    { id: "br", label: "br-3c5e", sub: "172.18.0.1", x: 300, y: 232, icon: "switch" },
+    { id: "c1", label: "c1", sub: "172.17.0.2", x: 66, y: 330, icon: "container" },
+    { id: "c2", label: "c2", sub: "172.17.0.3", x: 182, y: 330, icon: "container" },
+    { id: "c3", label: "c3", sub: "172.18.0.2", x: 310, y: 330, icon: "container" },
+  ]}
+  links={[
+    { from: "inet", to: "kernel", label: "eth0" },
+    { from: "kernel", to: "docker0" },
+    { from: "kernel", to: "br" },
+    { from: "docker0", to: "c1", label: "veth" },
+    { from: "docker0", to: "c2", label: "veth" },
+    { from: "br", to: "c3", label: "veth" },
+  ]}
+  steps={[
+    { path: ["c1", "docker0", "c2"], packet: "GET", title: "같은 브리지는 스위치처럼 넘긴다", detail: "목적지가 같은 서브넷이라 게이트웨이를 거치지 않는다. 브리지가 MAC을 보고 c2의 veth로 보낸다. 주소는 하나도 바뀌지 않는다.", payload: "hello from c2, you are 172.17.0.2" },
+    { path: ["c1", "docker0", "kernel", "inet"], packet: "SYN", title: "바깥으로 갈 때 출발지가 호스트로 바뀐다", detail: "기본 경로로 docker0에 넘기면 호스트가 라우팅한다. FORWARD의 '-i docker0 ! -o docker0' 줄이 허용하고, POSTROUTING의 MASQUERADE가 출발지를 eth0 주소로 바꾼다.", payload: "src 172.17.0.2:41568 → 203.0.113.10:41568" },
+    { path: ["inet", "kernel", "docker0", "c1"], packet: "SYN-ACK", title: "응답은 conntrack이 되돌린다", detail: "응답의 목적지 203.0.113.10:41568을 conntrack 기록대로 172.17.0.2로 되돌린다. FORWARD에서는 '-o docker0 ... ESTABLISHED' 줄이 통과시킨다." },
+    { path: ["c1", "docker0", "kernel"], packet: "SYN", blocked: true, highlight: ["br"], title: "다른 브리지로 가는 길은 막힌다", detail: "172.18.0.2는 다른 서브넷이라 호스트가 라우팅해야 한다. 라우팅 결과 나가는 곳이 br-3c5e라서 ISOLATION-STAGE-2의 '-o br-3c5e… -j DROP'에 걸린다." },
+  ]}
+/>
+
+실습에서 세 경우를 차례로 두드려 본 결과다. 서버는 받은 연결의 출발지 주소를 돌려준다.
+
+```bash
+# c1에서 인터넷 쪽 서버, 같은 브리지의 c2, 다른 브리지의 c3로 HTTP 요청
+sudo ip netns exec c1 curl -s http://203.0.113.1/
+sudo ip netns exec c1 curl -s -m 3 http://172.17.0.3/
+sudo ip netns exec c1 curl -s -m 3 http://172.18.0.2/; echo "exit=$?"
+
+# 2단계 격리 체인의 카운터
+sudo iptables -L DOCKER-ISOLATION-STAGE-2 -n -v
+```
+
+```text
+hello from internet, you are 203.0.113.10
+hello from c2, you are 172.17.0.2
+exit=28
+Chain DOCKER-ISOLATION-STAGE-2 (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    3   180 DROP       0    --  *      br-3c5e8f0a1b2d  0.0.0.0/0            0.0.0.0/0           
+    0     0 DROP       0    --  *      docker0  0.0.0.0/0            0.0.0.0/0           
+    6   394 RETURN     0    --  *      *       0.0.0.0/0            0.0.0.0/0           
+```
+
+인터넷 쪽 서버는 출발지를 `203.0.113.10`(호스트)으로 봤고, c2는 `172.17.0.2`(c1 그대로)로 봤다. c3로 간 요청은 curl의 28번 종료 코드(시간 초과)로 끝났다. 거절이 아니라 버림이라서다. 첫 줄 DROP의 카운터 3은 SYN 한 번과 재전송 두 번이다. conntrack에서는 MASQUERADE 기록을 직접 볼 수 있다.
+
+```bash
+# c1이 인터넷 서버로 연 연결의 conntrack 항목
+sudo conntrack -L -p tcp --dport 80 --src 172.17.0.2
+```
+
+```text
+tcp      6 119 TIME_WAIT src=172.17.0.2 dst=203.0.113.1 sport=41568 dport=80 src=203.0.113.1 dst=203.0.113.10 sport=80 dport=41568 [ASSURED] mark=0 use=1
+```
+
+앞쪽 네 값은 c1이 보낸 그대로, 뒤쪽 네 값은 응답이 돌아올 모양이다. 응답의 목적지가 `203.0.113.10`인 것이 출발지를 바꿨다는 증거다.
+
+### 같은 브리지 안을 막는 icc=false와 br_netfilter
+
+`dockerd`에 `"icc": false`를 주면 기본 브리지 안의 컨테이너끼리도 막힌다. 바뀌는 건 마지막 줄 하나다. `-A FORWARD -i docker0 -o docker0 -j ACCEPT`가 `DROP`이 된다. 그런데 이상하다. 같은 브리지 안의 통신은 L2 스위칭이라 IP 계층의 FORWARD 체인을 지나지 않아야 한다.
+
+이 규칙이 동작하는 건 `br_netfilter` 커널 모듈 덕분이다. 이 모듈이 켜져 있고 `net.bridge.bridge-nf-call-iptables`가 1이면, 브리지를 지나는 IPv4 프레임도 iptables의 FORWARD를 거친다. 실습에서 같은 DROP 규칙을 두고 이 값만 바꿔 봤다.
+
+```bash
+# icc=false가 바꾸는 줄: 같은 브리지 안 통신을 DROP
+sudo iptables -R FORWARD 10 -i docker0 -o docker0 -j DROP
+sudo ip netns exec c1 curl -s -m 3 http://172.17.0.3/; echo "exit=$?"
+
+# 브리지 트래픽을 iptables로 보내지 않게 하면?
+sudo sysctl net.bridge.bridge-nf-call-iptables=0
+sudo ip netns exec c1 curl -s -m 3 http://172.17.0.3/; echo "exit=$?"
+
+# 실습 뒤 원래대로
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+```
+
+```text
+exit=28
+net.bridge.bridge-nf-call-iptables = 0
+hello from c2, you are 172.17.0.2
+exit=0
+```
+
+값이 0이면 DROP 규칙이 있어도 c2에 닿는다. 쿠버네티스 설치 문서가 노드 준비 단계에서 `br_netfilter`를 올리고 이 값을 1로 맞추라고 하는 이유도 같다. 브리지로 이어진 Pod끼리의 트래픽이 kube-proxy 규칙을 타야 하기 때문이다.
+
+### 버전마다 달라지는 규칙
+
+규칙의 모양은 Docker 버전에 따라 꽤 바뀐다. 위 출력은 Docker 27까지의 구성이다. 28.0부터는 FORWARD에서 `DOCKER-FORWARD` 같은 체인으로 한 번 더 나눠 점프하도록 정리됐고, 사용 중인 버전에서는 `sudo iptables -S`로 직접 보는 수밖에 없다. 체인 이름은 달라도 "응답 허용, 게시 포트만 허용, 브리지 사이 DROP"이라는 뼈대는 같다. 29부터는 iptables 대신 nftables에 직접 규칙을 쓰는 방식을 실험 기능으로 고를 수 있다.
+
+28.0에서 생긴 변화 중 하나는 꼭 알아 둘 만하다. 예전 구성에서는 같은 L2 망에 있는 이웃 서버가 컨테이너 대역으로 가는 경로만 알면, 게시한 포트에 컨테이너 IP로 바로 닿을 수 있었다. `-p 127.0.0.1:8080:80`으로 루프백에만 열었다고 믿었는데도 그렇다. 실습에서 이웃 서버에 `172.17.0.0/16 via 203.0.113.10` 경로를 넣고 두드려 봤다.
+
+```bash
+# 이웃 서버(203.0.113.1)에서: 호스트의 8080은 루프백에만 게시했으니 닫혀 있다
+curl -s -m 2 http://203.0.113.10:8080/; echo "exit=$?"
+
+# 그런데 컨테이너 IP와 컨테이너 포트로 직접 두드리면?
+curl -s -m 2 http://172.17.0.3/; echo "exit=$?"
+```
+
+```text
+exit=7
+hello from c2, you are 203.0.113.1
+exit=0
+```
+
+호스트의 8080은 연결 거절(종료 코드 7)인데, 컨테이너 IP로는 열렸다. 게시할 때 생기는 `-A DOCKER -d 172.17.0.3/32 ! -i docker0 -o docker0 -p tcp --dport 80 -j ACCEPT` 줄이 DNAT을 거쳤는지 따지지 않기 때문이다. 28.0은 raw 테이블에 "브리지가 아닌 곳에서 컨테이너 IP로 바로 온 패킷은 버린다"는 규칙을 넣어 이 길을 막는다. 같은 모양의 규칙을 넣으면 실습에서도 막힌다.
+
+```bash
+# 브리지 밖에서 컨테이너 IP로 곧장 온 패킷을 conntrack 전에 버린다
+sudo iptables -t raw -A PREROUTING -d 172.17.0.3/32 ! -i docker0 -j DROP
+
+# 이웃 서버에서 다시 두드린 뒤(시간 초과로 끝난다) 카운터를 본다
+sudo iptables -t raw -L PREROUTING -n -v
+```
+
+```text
+Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+    2   120 DROP       0    --  !docker0 *       0.0.0.0/0            172.17.0.3
+```
+
+27 이하를 쓰고 있고 같은 L2에 신뢰할 수 없는 장비가 있다면, 이 규칙을 `DOCKER-USER`나 raw 테이블에 직접 넣거나 Docker를 올리는 게 답이다. 클라우드 VPC처럼 다른 서버가 컨테이너 대역으로 가는 경로를 모르는 환경에서는 애초에 이 길이 생기지 않는다.
+
+## host, none, container 모드
+
+host 드라이버는 네임스페이스를 만들지 않는다. 컨테이너 프로세스가 호스트의 네트워크를 그대로 쓰니 veth도, 브리지도, NAT도 없다. 패킷 하나당 브리지와 conntrack을 지나는 비용이 사라져서 패킷 수가 아주 많은 프로그램(DNS 서버, 로드 밸런서, 모니터링 에이전트)에 쓴다. 대가는 포트 공간을 호스트와 나눠 쓴다는 것이다. 같은 포트를 쓰는 컨테이너를 둘 띄우면 두 번째는 바로 죽는다.
+
+```bash
+# host 모드 컨테이너 둘이 같은 8080을 열려고 하면 (실습: 같은 netns에서 서버 두 개)
+python3 srv.py 8080 a &
+python3 srv.py 8080 b
+sudo ss -ltnp 'sport = :8080'
+```
+
+```text
+OSError: [Errno 98] Address already in use
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5            0.0.0.0:8080      0.0.0.0:*    users:(("python3",pid=11046,fd=3))
+```
+
+컨테이너 로그에 `Address already in use`가 찍히고 재시작을 반복한다면, host 모드 컨테이너가 서로 또는 호스트 프로세스와 포트를 다투는 중이다. `-p`는 host 모드에서 의미가 없어서 Docker가 `WARNING: Published ports are discarded when using host network mode` 경고만 찍고 무시한다. 컨테이너 안에서 `iptables`를 만지면 호스트 규칙이 바뀐다는 것도 기억해 둔다. 격리가 없다.
+
+none은 네임스페이스만 만들고 아무것도 잇지 않는다. 막 만든 네임스페이스는 이렇다.
+
+```bash
+# 아무것도 잇지 않은 새 네임스페이스
+sudo ip netns add lonely
+sudo ip -n lonely addr
+```
+
+```text
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+```
+
+Docker는 여기에 `lo`만 올려 준다. 네트워크가 필요 없는 일괄 작업이나, 신뢰할 수 없는 코드를 돌리는 샌드박스에 쓴다. 나중에 직접 장치를 넣어 주는 도구(CNI 플러그인을 손으로 부르는 경우)의 출발점이기도 하다.
+
+container 모드(`--network container:db`)는 새 네임스페이스를 만들지 않고 이미 있는 컨테이너의 것을 빌린다. 두 컨테이너가 같은 `lo`를 보니 `127.0.0.1`로 서로 닿는다. 실습에서 c1 안에 `127.0.0.1:9000`으로만 듣는 서버를 띄우고 같은 네임스페이스와 c2에서 두드려 봤다.
+
+```bash
+# 같은 네임스페이스의 다른 프로세스 → localhost로 닿는다
+sudo ip netns exec c1 curl -s http://127.0.0.1:9000/
+
+# 다른 컨테이너 c2 → c1의 IP로 두드려도 루프백에만 묶인 서버엔 닿지 않는다
+sudo ip netns exec c2 curl -s -m 2 http://172.17.0.2:9000/; echo "exit=$?"
+```
+
+```text
+hello from c1-local, you are 127.0.0.1
+exit=7
+```
+
+쿠버네티스 Pod가 바로 이 모드로 만들어진다. pause 컨테이너가 네임스페이스를 잡고, 앱 컨테이너들이 거기에 붙는다. 그 이야기는 [Pod 글](/posts/k8s-pod-basics)에 있다. 디버깅에도 쓸모가 있다. 셸도 없는 distroless 컨테이너의 네트워크를 볼 때 `docker run --rm -it --network container:app nicolaka/netshoot`로 같은 네임스페이스에 도구 컨테이너를 붙이면, 앱이 보는 그대로의 장치와 경로를 볼 수 있다.
+
+## macvlan: 컨테이너가 LAN에 직접 선다
+
+macvlan은 랜카드 하나(parent)에 MAC 주소가 다른 자식 장치를 여러 개 만드는 커널 기능이다. 자식은 각자 자기 MAC과 IP로 LAN에 나타나서, 스위치와 다른 장비가 보기에는 서버가 여러 대 꽂힌 것처럼 보인다. NAT도 브리지도 없다. 레거시 장비가 컨테이너 IP로 직접 붙어야 하거나, DHCP·멀티캐스트처럼 L2에 서야 하는 프로그램에 쓴다.
+
+Docker에서는 네트워크를 만들 때 parent와 사용할 대역을 알려 준다. 아래 명령의 조각을 눌러 보면 각 옵션이 무엇을 정하는지 나온다.
+
+<UrlAnatomy
+  caption="macvlan 네트워크를 만드는 명령"
+  base="docker network create -d macvlan"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "subnet", display: "--subnet=192.168.10.0/24", title: "LAN의 실제 대역", description: "컨테이너가 설 망의 대역이다. Docker가 지어내는 대역이 아니라 사내망 그대로를 적는다.", required: true },
+    { key: "gw", display: "--gateway=192.168.10.1", title: "LAN의 실제 라우터", description: "컨테이너의 기본 경로가 된다. 호스트가 아니라 LAN 라우터로 바로 나간다. 그래서 호스트의 iptables MASQUERADE를 지나지 않는다." },
+    { key: "range", display: "--ip-range=192.168.10.192/27", title: "Docker가 나눠 줄 구간", description: "Docker의 IPAM은 DHCP 서버와 대화하지 않는다. 사내 DHCP가 같은 주소를 다른 PC에 주지 않도록, DHCP 범위 밖의 구간을 따로 잘라 준다. 주소 충돌이 macvlan에서 가장 흔한 사고다." },
+    { key: "aux", display: "--aux-address=shim=192.168.10.30", title: "컨테이너에 주지 말 주소", description: "호스트용 shim 인터페이스에 쓸 주소를 예약해 둔다. 뒤에서 호스트가 컨테이너에 닿게 만들 때 쓴다." },
+    { key: "parent", display: "-o parent=eth1", title: "자식 장치를 만들 랜카드", description: "eth1.10처럼 점과 숫자를 붙이면 Docker가 VLAN 10 하위 인터페이스를 만들어 그 위에 자식을 단다. 트렁크 포트에 VLAN별 네트워크를 나눌 때 쓴다.", required: true },
+    { key: "name", display: "lan", title: "네트워크 이름", description: "docker run --network lan --ip 192.168.10.200처럼 붙이고, 고정 IP를 줄 수 있다.", required: true },
+  ]}
+/>
+
+Docker가 컨테이너를 붙이며 하는 일을 손으로 하면 두 줄이다. parent에 자식을 만들어 컨테이너 네임스페이스로 옮긴다.
+
+```bash
+# eth1에 bridge 모드 macvlan 자식을 만든다
+sudo ip link add mv1 link eth1 type macvlan mode bridge
+
+# 컨테이너 네임스페이스로 옮기고 이름을 eth0로, 주소를 LAN 대역으로
+sudo ip link set mv1 netns mvc1
+sudo ip -n mvc1 link set mv1 name eth0
+sudo ip -n mvc1 addr add 192.168.10.20/24 dev eth0
+sudo ip -n mvc1 link set eth0 up
+
+# 장치 종류 확인 (-d: 세부 정보)
+sudo ip -n mvc1 -d link show eth0
+```
+
+```text
+9: eth0@if8: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 36:f1:99:18:82:65 brd ff:ff:ff:ff:ff:ff link-netns n4h promiscuity 0  allmulti 0 minmtu 68 maxmtu 65535 
+    macvlan mode bridge bcqueuelen 1000 usedbcqueuelen 1000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 
+```
+
+`macvlan mode bridge`이고 MAC이 parent(`9a:09:3b:2f:13:6e`)와 다른 `36:f1:99:18:82:65`다. `@if8`이 가리키는 8번이 호스트의 `eth1`이다. LAN의 PC에서 ping을 보내면 바로 닿는다. 그리고 처음 장면이 그대로 재현된다.
+
+```bash
+# 호스트에서 자기 macvlan 컨테이너로 ping
+ping -c 3 -W 1 192.168.10.20
+ip neigh show 192.168.10.20
+```
+
+```text
+PING 192.168.10.20 (192.168.10.20) 56(84) bytes of data.
+
+--- 192.168.10.20 ping statistics ---
+3 packets transmitted, 0 received, 100% packet loss, time 2040ms
+
+192.168.10.20 dev eth1 FAILED 
+```
+
+ARP부터 실패했다(`FAILED`). 리눅스 macvlan은 parent와 자식 사이의 트래픽을 일부러 잇지 않는다. 호스트가 `eth1`로 내보낸 프레임은 바깥 스위치로만 나가고, 스위치는 그 프레임을 들어온 포트로 되돌려 보내지 않는다(같은 포트로 되돌려 보내는 건 VEPA 모드와 그걸 지원하는 스위치의 일이다). 반대 방향도 같다. bridge 모드가 잇는 건 같은 parent 아래의 자식끼리뿐이다.
+
+그래서 해법도 "호스트에 자식을 하나 더 만든다"이다. 호스트용 macvlan 자식(shim)을 만들어 주소를 주고, 컨테이너 주소로 가는 경로를 그쪽으로 돌린다. 형제끼리는 bridge 모드가 이어 주니 닿는다.
+
+```bash
+# 호스트에 shim 자식을 만들고, 예약해 둔 192.168.10.30을 준다
+sudo ip link add mv-shim link eth1 type macvlan mode bridge
+sudo ip addr add 192.168.10.30/32 dev mv-shim
+sudo ip link set mv-shim up
+
+# 컨테이너 주소(또는 --ip-range 전체)로 가는 경로를 shim으로
+sudo ip route add 192.168.10.20/32 dev mv-shim
+
+# 확인
+ip route get 192.168.10.20
+ping -c 2 -W 1 192.168.10.20
+```
+
+```text
+192.168.10.20 dev mv-shim src 192.168.10.30 uid 0 
+    cache 
+PING 192.168.10.20 (192.168.10.20) 56(84) bytes of data.
+64 bytes from 192.168.10.20: icmp_seq=1 ttl=64 time=0.499 ms
+64 bytes from 192.168.10.20: icmp_seq=2 ttl=64 time=0.047 ms
+
+--- 192.168.10.20 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1006ms
+rtt min/avg/max/mdev = 0.047/0.273/0.499/0.226 ms
+```
+
+`ip route get`이 `dev mv-shim src 192.168.10.30`을 가리키고 ping이 돌아온다. 이 설정은 재부팅하면 사라지니 netplan이나 systemd-networkd 설정으로 옮겨 둔다. 되돌리려면 `sudo ip link del mv-shim` 한 줄이면 경로도 같이 지워진다.
+
+<NetworkTopology
+  width={400}
+  height={360}
+  caption="macvlan: LAN에서는 독립 장비, 호스트에서는 닿지 않는 장비"
+  zones={[
+    { id: "lan", label: "LAN 192.168.10.0/24", x: 6, y: 6, w: 388, h: 348, tone: "neutral" },
+    { id: "hostz", label: "호스트", x: 24, y: 124, w: 352, h: 216, tone: "private" },
+  ]}
+  nodes={[
+    { id: "pc", label: "PC", sub: "192.168.10.50", x: 80, y: 66, icon: "client" },
+    { id: "sw", label: "switch", sub: "사내 스위치", x: 230, y: 66, icon: "switch" },
+    { id: "eth1", label: "eth1", sub: "192.168.10.10", x: 110, y: 186, icon: "server" },
+    { id: "mv1", label: "mv1", sub: "192.168.10.20", x: 290, y: 186, icon: "container" },
+    { id: "shim", label: "mv-shim", sub: "192.168.10.30", x: 110, y: 292, icon: "gateway" },
+  ]}
+  links={[
+    { from: "pc", to: "sw" },
+    { from: "sw", to: "eth1", label: "parent" },
+    { from: "eth1", to: "mv1", label: "자식", dashed: true },
+    { from: "shim", to: "mv1", label: "형제" },
+    { from: "eth1", to: "shim", dashed: true },
+  ]}
+  steps={[
+    { path: ["pc", "sw", "eth1", "mv1"], packet: "ICMP", title: "LAN에서는 독립 장비로 보인다", detail: "스위치는 mv1의 MAC을 eth1이 꽂힌 포트 뒤에서 배운다. parent가 프레임의 목적지 MAC을 보고 자식 mv1로 넘긴다.", payload: "64 bytes from 192.168.10.20: icmp_seq=1 ttl=64" },
+    { path: ["eth1", "mv1"], packet: "ARP", blocked: true, title: "호스트에서 자식으로는 길이 없다", detail: "호스트가 eth1로 보낸 프레임은 바깥으로만 나간다. 스위치는 들어온 포트로 되돌려 보내지 않는다. ARP가 FAILED로 남는다." },
+    { path: ["shim", "mv1"], packet: "ICMP", highlight: ["hostz"], title: "형제 자식끼리는 닿는다", detail: "호스트에 같은 parent의 자식을 하나 더 만들고, 컨테이너로 가는 경로를 그쪽으로 돌렸다. bridge 모드는 형제끼리를 parent 안에서 바로 잇는다." },
+  ]}
+/>
+
+### macvlan을 쓰기 전에 확인할 것
+
+자식마다 MAC이 하나씩 늘어나니, 그 MAC을 받아 주지 않는 곳에서는 동작하지 않는다. 포트당 학습할 MAC 수를 제한하는 스위치(포트 보안)는 새 MAC을 막는다. VMware vSwitch는 promiscuous mode나 forged transmits를 허용해야 VM 안의 macvlan이 산다. 대부분의 퍼블릭 클라우드 VPC는 인스턴스에 할당한 MAC과 IP가 아닌 프레임을 버리기 때문에 macvlan이 사실상 안 된다. 클라우드에서 컨테이너에 VPC IP를 주는 일은 클라우드 전용 플러그인(AWS VPC CNI처럼 보조 IP를 붙이는 방식)이 한다.
+
+호스트의 iptables를 지나지 않는다는 점도 양날이다. NAT가 없어 빠르지만, 호스트에서 거는 방화벽 규칙이 이 컨테이너를 보호하지 못한다. 막아야 하면 LAN 쪽 방화벽이나 컨테이너 안에서 막는다.
+
+### MAC을 늘릴 수 없을 때 ipvlan
+
+ipvlan은 macvlan과 비슷하지만 자식들이 parent와 같은 MAC을 쓰고 IP만 다르다. 스위치가 보기에는 MAC 하나 뒤에 IP가 여럿 있는 것이라 MAC 수 제한에 걸리지 않는다. L2 모드는 macvlan처럼 같은 대역에 서고, L3 모드는 parent가 라우터처럼 동작해서 브로드캐스트와 ARP가 없다. 대신 L3 모드는 바깥 라우터가 컨테이너 대역으로 가는 경로를 알아야 한다. 호스트에서 자식에 닿지 않는 문제는 ipvlan에도 똑같이 있다. 이 실습 커널은 ipvlan 모듈이 없어서 `Error: Unknown device type.`이 났다. Ubuntu 기본 커널은 두 모듈 모두 들어 있다.
+
+## overlay: 호스트를 넘는 브리지
+
+overlay 드라이버는 여러 Docker 호스트의 컨테이너를 같은 L2 망에 놓는다. Docker Swarm 모드를 켜야 쓸 수 있고, 일반 컨테이너도 붙이려면 `--attachable`로 만든다. 캡슐화 원리(바깥 UDP 헤더 50바이트, VNI, VTEP)는 [VXLAN 글](/posts/sdn-vxlan-overlay)에서 실제 캡처로 봤으니, 여기서는 Docker가 그걸 어떻게 배치하는지만 본다.
+
+```bash
+# 매니저에서 overlay 네트워크를 만들고, 일반 컨테이너도 붙일 수 있게 한다
+docker network create -d overlay --attachable --subnet 10.0.1.0/24 appov
+
+# 만든 네트워크 확인
+docker network ls --filter driver=overlay
+```
+
+```text
+NETWORK ID     NAME      DRIVER    SCOPE
+x7k2m9q4r1t8   appov     overlay   swarm
+q3w8e5r2t9y6   ingress   overlay   swarm
+```
+
+예시 출력이다. `SCOPE`가 `local`이 아니라 `swarm`이다. 네트워크 정의가 Swarm 클러스터 전체에 공유된다는 뜻이다. `ingress`는 Swarm이 처음부터 만들어 두는 overlay로, 서비스의 게시 포트를 어느 노드로 받아도 해당 서비스의 컨테이너로 보내는 라우팅 메시(IPVS 사용)가 쓴다.
+
+호스트 안에서 overlay 네트워크 하나는 숨은 네임스페이스 하나다. Docker는 `/var/run/docker/netns/` 아래에 `1-x7k2m9q4r1` 같은 이름으로 네임스페이스를 만들고, 그 안에 `br0` 브리지와 `vxlan0` 장치를 둔다. 컨테이너의 `eth0`는 veth로 이 `br0`에 꽂힌다. 컨테이너는 인터페이스를 하나 더 받는다. 바깥 인터넷으로 나갈 때 쓰는 `eth1`이고, 호스트의 `docker_gwbridge`라는 평범한 bridge 네트워크에 꽂혀 MASQUERADE로 나간다. overlay는 컨테이너끼리, gwbridge는 바깥과의 통신을 맡는 셈이다.
+
+VXLAN에는 "이 MAC은 어느 호스트 뒤에 있나"를 아는 방법이 필요하다. Docker는 모르는 목적지로 뿌려 보고 배우는 방식을 쓰지 않는다. 노드끼리 gossip 프로토콜로 컨테이너의 IP, MAC, 호스트 주소를 미리 나눠 갖고, 각 호스트가 그걸 `vxlan0`의 FDB와 이웃(ARP) 표에 정적으로 넣는다. 아래 그림이 그 순서다.
+
+<SequenceDiagram
+  caption="overlay 네트워크에서 다른 호스트의 컨테이너에 처음 닿기까지"
+  actors={[
+    { id: "a", label: "호스트 A" },
+    { id: "ca", label: "컨테이너 a1" },
+    { id: "b", label: "호스트 B" },
+    { id: "cb", label: "컨테이너 b1" },
+  ]}
+  steps={[
+    { from: "b", to: "cb", label: "eth0 생성", title: "B에 컨테이너가 붙는다", detail: "B의 dockerd가 overlay 네임스페이스의 br0에 b1을 꽂고 10.0.1.5를 준다.", payload: "b1 10.0.1.5 02:42:0a:00:01:05" },
+    { from: "b", to: "a", label: "gossip :7946", title: "위치를 이웃 노드에 알린다", detail: "이 네트워크를 쓰는 노드들에 'b1의 IP·MAC은 호스트 B 뒤에 있다'를 퍼뜨린다. TCP·UDP 7946을 쓴다." },
+    { from: "a", to: "a", label: "FDB·ARP 기록", title: "A가 표를 미리 채운다", detail: "A는 vxlan0의 FDB에 'b1 MAC → 호스트 B', 이웃 표에 '10.0.1.5 → b1 MAC'을 정적으로 넣는다. 모르는 목적지에 뿌려 볼 필요가 없다.", payload: "bridge fdb: 02:42:0a:00:01:05 dst 192.168.1.12\nip neigh: 10.0.1.5 lladdr 02:42:0a:00:01:05 PERMANENT" },
+    { from: "ca", to: "a", label: "ping 10.0.1.5", title: "a1이 b1을 부른다", detail: "a1의 ARP는 vxlan0이 이웃 표를 보고 그 자리에서 답한다. 언더레이에 ARP가 나가지 않는다." },
+    { from: "a", to: "b", label: "UDP 4789", title: "감싸서 B로 보낸다", detail: "FDB가 가리키는 호스트 B로 VXLAN 패킷을 보낸다. 언더레이 방화벽에서 UDP 4789가 막혀 있으면 여기서 사라진다." },
+    { from: "b", to: "cb", label: "풀어서 전달", title: "B가 풀어 b1에 넣는다", detail: "VNI로 어느 overlay 네트워크인지 고르고, 그 네임스페이스의 br0을 지나 b1에 닿는다." },
+  ]}
+/>
+
+그래서 overlay가 동작하려면 호스트 사이에 세 가지가 열려 있어야 한다. 클러스터 관리용 TCP 2377(매니저), 노드끼리의 gossip인 TCP·UDP 7946, 데이터가 다니는 UDP 4789다. 클라우드 보안 그룹에서 4789만 빠뜨리면 서비스는 배포되고 `docker service ls`도 멀쩡한데, 다른 노드의 컨테이너로 가는 요청만 시간 초과가 난다. 7946이 막히면 노드가 서로의 컨테이너 위치를 몰라서 같은 증상이 나온다.
+
+두 가지 더 챙길 것이 있다. 하나는 MTU다. overlay 위의 컨테이너 MTU는 1450이 되고, 언더레이 MTU가 1500보다 작은 환경(일부 VPN, 클라우드)이면 `--opt com.docker.network.driver.mtu=`로 더 낮춰야 큰 응답만 멈추는 문제를 피한다. 원인은 [MTU 글](/posts/layer-mtu-fragmentation)에서 다룬다. 다른 하나는 암호화다. `--opt encrypted`를 주면 노드 사이 VXLAN 트래픽을 IPsec ESP로 감싼다. 그러면 방화벽에서 IP 프로토콜 50(ESP)도 열어야 하고, 암호화 비용과 헤더만큼 처리량이 준다.
+
+쿠버네티스는 이 자리를 Docker overlay가 아니라 CNI 플러그인으로 채운다. 노드마다 Pod 대역을 나누고 노드 사이를 경로나 VXLAN으로 잇는 방식은 [CNI 글](/posts/k8s-cni-pod-network)에서 손으로 만들어 본다.
+
+## 기본 대역이 사내망과 겹칠 때
+
+드라이버 이야기에서 현장 사고가 가장 많이 나는 곳은 의외로 기본 bridge다. Docker는 새 bridge 네트워크마다 기본 주소 풀에서 겹치지 않는 대역을 하나씩 꺼낸다. 기본 풀은 `172.17.0.0/16`부터 `172.31.0.0/16`까지의 /16들과 `192.168.0.0/16`을 /20으로 자른 것이다. Compose 프로젝트를 띄울 때마다 네트워크가 하나씩 생기니, 몇 개만 띄워도 172.18, 172.19, 172.20이 차례로 잡힌다.
+
+문제는 사내망이나 VPN이 같은 대역을 쓸 때다. 브리지를 만들면 호스트 라우팅 표에 그 대역이 직결 경로로 들어가고, 그 대역의 사내 서버로 가는 패킷이 VPN 대신 브리지로 빠진다.
+
+```bash
+# 사내 서버 172.18.5.20으로 가는 패킷이 어디로 나가는지
+ip route get 172.18.5.20
+```
+
+```text
+172.18.5.20 dev br-3c5e8f0a1b2d src 172.18.0.1 uid 0 
+    cache
+```
+
+VPN 경로가 `172.16.0.0/12`처럼 더 넓게 잡혀 있으면, 더 구체적인 브리지의 /16이 이긴다. 증상은 "Docker를 켜면 사내 위키만 안 열린다", "docker compose up 한 뒤로 특정 서버에 SSH가 안 된다" 같은 모양이다. 경로가 어디로 나가는지는 `ip route get`으로, 어느 네트워크가 그 대역을 잡았는지는 `docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}' $(docker network ls -q)`로 찾는다.
+
+고치는 방법은 Docker가 꺼내 쓸 풀을 사내망이 안 쓰는 대역으로 정하는 것이다.
+
+```bash
+# /etc/docker/daemon.json — 기본 브리지 주소와 새 네트워크용 풀을 바꾼다
+sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+{
+  "bip": "10.200.0.1/24",
+  "default-address-pools": [
+    { "base": "10.201.0.0/16", "size": 24 }
+  ]
+}
+JSON
+
+# 설정을 읽게 다시 시작한다 (떠 있던 컨테이너가 모두 재시작된다)
+sudo systemctl restart docker
+```
+
+이미 만들어진 네트워크는 바뀌지 않으니 `docker compose down` 후 다시 올려야 새 풀에서 대역을 받는다. 되돌리려면 daemon.json에서 두 항목을 지우고 다시 시작한다. 풀을 /24로 잘게 나누면 한 호스트에 만들 수 있는 네트워크 수도 함께 정해진다. `10.201.0.0/16`을 /24로 자르면 256개다.
+
+Docker가 대역을 고르는 방식을 직접 짜 보자. 풀을 순서대로 보면서, 크기만큼 잘라 이미 쓰이는 대역과 겹치지 않는 첫 조각을 고른다.
+
+<CodePlayground
+  caption="새 bridge 네트워크는 어느 대역을 받나"
+  functionName="pickSubnet"
+  initialCode={`// pools: [{ base: "172.17.0.0/16", size: 16 }, ...] (Docker의 default-address-pools 순서)
+// used: 이미 쓰이는 대역 목록 (다른 네트워크, 호스트 라우팅 표의 사내망 경로)
+// 반환: 겹치지 않는 첫 대역 "a.b.c.d/size", 없으면 null
+function pickSubnet(pools, used) {
+  return null;
+}`}
+  solution={`function pickSubnet(pools, used) {
+  const toInt = (ip) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
+  const toIp = (n) => [24, 16, 8, 0].map((s) => Math.floor(n / 2 ** s) % 256).join(".");
+  const range = (cidr) => {
+    const [ip, len] = cidr.split("/");
+    const size = 2 ** (32 - Number(len));
+    const start = Math.floor(toInt(ip) / size) * size;
+    return [start, start + size - 1];
+  };
+  const taken = used.map(range);
+  for (const { base, size } of pools) {
+    const [start, end] = range(base);
+    const step = 2 ** (32 - size);
+    for (let s = start; s + step - 1 <= end; s += step) {
+      const e = s + step - 1;
+      if (taken.every(([a, b]) => e < a || s > b)) return \`\${toIp(s)}/\${size}\`;
+    }
+  }
+  return null;
+}`}
+  tests={[
+    { label: "아무것도 없으면 첫 풀", args: [[{ base: "172.17.0.0/16", size: 16 }, { base: "172.18.0.0/16", size: 16 }, { base: "172.19.0.0/16", size: 16 }, { base: "192.168.0.0/16", size: 20 }], []], expected: "172.17.0.0/16" },
+    { label: "docker0가 172.17을 쓰면 다음", args: [[{ base: "172.17.0.0/16", size: 16 }, { base: "172.18.0.0/16", size: 16 }, { base: "172.19.0.0/16", size: 16 }, { base: "192.168.0.0/16", size: 20 }], ["172.17.0.0/16"]], expected: "172.18.0.0/16" },
+    { label: "VPN이 172.16.0.0/12를 잡으면", args: [[{ base: "172.17.0.0/16", size: 16 }, { base: "172.18.0.0/16", size: 16 }, { base: "172.19.0.0/16", size: 16 }, { base: "192.168.0.0/16", size: 20 }], ["172.16.0.0/12"]], expected: "192.168.0.0/20" },
+    { label: "집 공유기 대역도 피한다", args: [[{ base: "172.17.0.0/16", size: 16 }, { base: "172.18.0.0/16", size: 16 }, { base: "172.19.0.0/16", size: 16 }, { base: "192.168.0.0/16", size: 20 }], ["172.16.0.0/12", "192.168.0.0/24"]], expected: "192.168.16.0/20" },
+    { label: "/24로 자른 풀", args: [[{ base: "10.200.0.0/16", size: 24 }], ["10.200.0.0/23"]], expected: "10.200.2.0/24" },
+    { label: "풀이 바닥나면 null", args: [[{ base: "10.200.0.0/24", size: 24 }], ["10.0.0.0/8"]], expected: null },
+  ]}
+/>
+
+풀이 바닥나면 Docker는 `could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network` 에러를 낸다. 안 쓰는 네트워크가 쌓인 경우가 대부분이라 `docker network prune`으로 정리하면 풀린다.
+
+## 무엇을 고르나
+
+대부분은 고민할 것이 없다. 한 호스트에서 여러 컨테이너를 엮으면 사용자 정의 bridge다. 이름으로 찾고, 네트워크 단위로 격리되고, 게시한 포트만 바깥에 열린다. 나머지는 이 기본값이 맞지 않는 이유가 분명할 때 고른다.
+
+- 패킷 수가 아주 많아 브리지와 conntrack 비용이 눈에 보이거나, 호스트의 모든 인터페이스를 봐야 하는 에이전트라면 host. 격리와 포트 공간을 포기한다.
+- 레거시 장비가 컨테이너 IP로 직접 붙어야 하거나 L2 브로드캐스트가 필요하면 macvlan. 스위치나 하이퍼바이저가 MAC을 늘리는 걸 막으면 ipvlan. 둘 다 호스트와의 통신에 shim이 필요하고 클라우드 VPC에서는 쓰기 어렵다.
+- 여러 호스트를 Swarm으로 묶으면 overlay. 쿠버네티스라면 CNI의 몫이다.
+- 네트워크가 필요 없거나 막아야 하면 none, 다른 컨테이너의 시선으로 디버깅하려면 container 모드.
+
+현장에서 증상으로 거꾸로 찾아갈 때는 이렇게 본다. 같은 호스트의 컨테이너끼리 시간 초과면 서로 다른 네트워크인지(`docker inspect -f '{{json .NetworkSettings.Networks}}'`)와 `icc` 설정을 본다. 바깥으로 안 나가면 MASQUERADE 줄과 `ip_forward`를 본다. macvlan 컨테이너가 호스트에서만 안 되면 shim을, LAN에서도 안 되면 스위치 포트 보안과 IP 충돌(`arping`)을 본다. overlay에서 다른 노드로만 안 되면 4789와 7946, 그리고 MTU를 본다.
+
+## 장치 하나로 갈리는 성격
+
+드라이버는 컨테이너 네임스페이스와 바깥을 무엇으로 잇느냐의 선택이다. bridge는 veth와 브리지 위에 iptables로 NAT와 격리를 얹고, host와 container 모드는 네임스페이스를 공유해 격리를 내려놓고, macvlan·ipvlan은 parent의 자식으로 LAN에 바로 서서 호스트의 netfilter를 건너뛰고, overlay는 브리지에 VXLAN을 이어 호스트를 넘는다. 어느 드라이버에서 문제가 나든 `ip link`, `bridge link`, `ip route get`, `iptables -S` 네 가지로 그 장치를 따라가면 패킷이 멈춘 곳이 나온다. 같은 구성을 쿠버네티스가 노드 여러 대로 늘린 모습은 [CNI 글](/posts/k8s-cni-pod-network)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### bridge 네트워크의 컨테이너가 인터넷에 나가는 과정을 설명해 주세요.
+
+컨테이너의 기본 경로가 브리지 주소(예: 172.17.0.1)라서 패킷이 veth를 타고 호스트의 브리지로 온다. 호스트는 `ip_forward`로 이 패킷을 라우팅하고, FORWARD 체인의 Docker 규칙이 허용한 뒤 POSTROUTING의 MASQUERADE가 출발지를 호스트의 바깥 주소로 바꾼다. 응답은 conntrack이 기억한 대로 컨테이너 주소로 되돌려진다.
+
+### 서로 다른 사용자 정의 브리지의 컨테이너끼리는 왜 통신이 안 되나요?
+
+두 브리지 사이는 L2로 이어져 있지 않아서 호스트가 라우팅해야 하는데, 그 길목인 FORWARD에 Docker가 격리 규칙을 넣어 두기 때문이다. Docker 27까지는 ISOLATION-STAGE-1이 Docker 브리지에서 나와 다른 곳으로 가는 패킷을 고르고, STAGE-2가 목적지가 다른 Docker 브리지면 DROP한다. 그래서 거절이 아니라 시간 초과로 보인다. 둘을 이어야 하면 한 컨테이너를 두 네트워크에 모두 붙인다.
+
+### icc=false는 같은 브리지 안의 L2 통신을 어떻게 막나요?
+
+`br_netfilter` 모듈과 `net.bridge.bridge-nf-call-iptables=1` 덕분에 브리지를 지나는 IPv4 프레임도 iptables FORWARD를 거친다. icc=false는 거기에 `-i docker0 -o docker0 -j DROP`을 넣는다. 이 sysctl이 0이면 규칙이 있어도 막히지 않는다. 쿠버네티스 노드 준비에서 같은 값을 1로 맞추는 이유와 같다.
+
+### host 네트워크 모드는 언제 쓰고 무엇을 잃나요?
+
+veth, 브리지, NAT, conntrack을 거치지 않아 패킷 처리 비용이 적고 호스트의 인터페이스를 그대로 볼 수 있어서, 패킷이 많은 프록시나 DNS, 노드 모니터링 에이전트에 쓴다. 대신 네트워크 격리가 사라지고 포트 공간을 호스트와 나눠 써서 같은 포트의 컨테이너를 둘 띄울 수 없으며 `-p`는 무시된다.
+
+### macvlan 컨테이너에 호스트에서만 접근이 안 되는 이유와 해결법은요?
+
+리눅스 macvlan은 parent 인터페이스와 그 자식 사이의 통신을 잇지 않는다. 호스트가 parent로 보낸 프레임은 바깥 스위치로만 나가고 스위치는 같은 포트로 되돌려 보내지 않아서 ARP부터 실패한다. 호스트에 같은 parent의 macvlan 자식(shim)을 하나 더 만들어 주소를 주고 컨테이너 대역으로 가는 경로를 그쪽으로 돌리면, 형제 자식끼리는 bridge 모드가 이어 주니 닿는다.
+
+### macvlan과 ipvlan은 어떻게 고르나요?
+
+macvlan은 자식마다 MAC이 달라 LAN에서 독립 장비처럼 보이고, ipvlan은 parent의 MAC을 함께 쓰고 IP만 다르다. 스위치 포트 보안이나 하이퍼바이저가 MAC 개수를 제한하면 ipvlan을 쓰고, L3 모드는 브로드캐스트 없이 라우팅으로 동작하지만 바깥 라우터에 경로가 필요하다. 클라우드 VPC는 할당되지 않은 MAC·IP를 버려서 둘 다 쓰기 어렵고, 그때는 클라우드 전용 CNI가 맡는다.
+
+### overlay 네트워크에서 다른 노드의 컨테이너로만 연결이 안 됩니다. 무엇을 보나요?
+
+노드 사이 방화벽에서 데이터 경로인 UDP 4789, 컨테이너 위치를 나누는 gossip인 TCP·UDP 7946, 매니저의 TCP 2377이 열려 있는지 본다. 암호화 overlay라면 ESP(IP 프로토콜 50)도 필요하다. 작은 요청은 되는데 큰 응답만 멈추면 VXLAN 헤더만큼 줄어든 MTU 문제라 언더레이 MTU에 맞춰 네트워크 MTU를 낮춘다.
+
+### 포트를 127.0.0.1에만 게시했는데 이웃 서버에서 컨테이너에 접속됐습니다. 어떻게 가능한가요?
+
+게시 때 생기는 FORWARD 쪽 허용 규칙은 목적지가 컨테이너 IP와 포트인지만 보고, 패킷이 DNAT을 거쳐 왔는지는 따지지 않는다. 그래서 같은 L2의 이웃이 컨테이너 대역 경로를 호스트로 잡으면 컨테이너 IP로 바로 들어온다. Docker 28.0부터는 raw 테이블에서 브리지가 아닌 인터페이스로 컨테이너 IP에 곧장 온 패킷을 버려 막는다. 이전 버전이면 같은 규칙을 직접 넣거나 업그레이드한다.

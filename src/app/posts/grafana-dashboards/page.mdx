@@ -1,0 +1,498 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("grafana-dashboards");
+
+장애 회고에서 "그때 보던 대시보드가 어디 갔냐"는 말이 나왔다. 누군가 UI에서 패널을 고치다 저장했고, 다른 사람이 옛 버전을 열어 둔 채 다시 저장해서 덮였다. 다른 팀 대시보드는 열 때마다 20초씩 걸렸다. 인스턴스 변수에서 "All"을 고르면 패널이 전부 "No data"가 됐다. 같은 Grafana인데 팀마다 겪는 문제가 다르다.
+
+이 글은 Grafana 대시보드를 "패널 한 칸이 그려지기까지 무슨 일이 일어나는지"부터 따라간다. 데이터 소스와 쿼리 간격(`$__interval`, `$__rate_interval`), 변수가 쿼리로 바뀌는 방식, 대시보드를 코드로 관리하는 세 가지 방법(API, 프로비저닝, SDK), Grafana 알림과 Alertmanager의 차이, Loki·Tempo로 건너가는 연결까지 다룬다.
+
+출력은 Grafana 12.2.0을 직접 띄워 받았다. dl.grafana.com에 닿지 않아서 Docker Hub의 `grafana/grafana:12.2.0` 이미지 레이어에서 바이너리를 꺼내 실행했고, 데이터 소스는 [Prometheus 내부 구조](/posts/prometheus-basics)에서 띄운 Prometheus 3.5.0이다. 실습 앱은 초당 200 응답 40개, 500 응답 0.8개를 내도록 만들었다.
+
+이 주제의 다른 글: [모니터링 기본](/posts/monitoring-basics)(무엇을 잴지, 질문 하나에 패널 하나라는 설계), [지표 타입](/posts/metrics-types)(rate와 히스토그램이 숫자를 만드는 방식), [알림 설계](/posts/alerting)(증상에 거는 알림과 Alertmanager의 묶기·누르기).
+
+## 패널 한 칸이 그려지기까지
+
+Grafana는 데이터를 저장하지 않는다. 패널을 열 때마다 데이터 소스에 쿼리를 보내고, 받은 결과를 그린다. 그래서 "대시보드가 느리다"는 대개 "데이터 소스 쿼리가 느리다"이고, "No data"는 대개 "쿼리 결과가 비었다"다.
+
+데이터 소스를 붙이는 방법은 둘이다. UI에서 추가하거나, 프로비저닝 파일로 Grafana가 뜰 때 읽게 한다. 운영에서는 파일 쪽을 쓴다.
+
+```yaml
+# provisioning/datasources/prom.yaml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prom-main          # 대시보드 JSON이 이 값을 가리킨다. 환경마다 같게 둔다
+    type: prometheus
+    access: proxy           # 브라우저가 아니라 Grafana 서버가 대신 묻는다
+    url: http://127.0.0.1:29090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s      # Prometheus의 scrape_interval과 맞춘다
+```
+
+```bash
+# 프로비저닝된 데이터 소스 확인
+curl -s -u admin:$GF_PW 127.0.0.1:29300/api/datasources | jq -c '.[] | {uid,name,type,url,access,isDefault,jsonData}'
+```
+
+```text
+{"uid":"prom-main","name":"Prometheus","type":"prometheus","url":"http://127.0.0.1:29090","access":"proxy","isDefault":true,"jsonData":{"timeInterval":"5s"}}
+```
+
+`uid`를 정해 두는 게 중요하다. 대시보드 JSON의 패널은 데이터 소스를 이름이 아니라 uid로 가리킨다. uid를 지정하지 않으면 Grafana가 무작위로 만들어서, 스테이징에서 만든 대시보드를 운영에 옮기면 모든 패널이 "데이터 소스를 찾을 수 없다"가 된다. `access: proxy`는 Grafana 서버가 대신 쿼리하는 방식이다. 브라우저가 Prometheus에 직접 닿을 필요가 없고 인증 정보도 브라우저에 내려가지 않는다. 예전의 `direct`(브라우저 직접 접근) 방식은 이제 쓰지 않는다.
+
+패널 하나가 그려지는 길은 이렇다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="패널 쿼리는 Grafana 서버를 거쳐 데이터 소스로 간다"
+  zones={[
+    { id: "user", label: "browser", x: 8, y: 8, w: 120, h: 284, tone: "edge" },
+    { id: "gf", label: "grafana", x: 140, y: 8, w: 120, h: 284, tone: "private" },
+    { id: "ds", label: "data sources", x: 272, y: 8, w: 120, h: 284, tone: "public" },
+  ]}
+  nodes={[
+    { id: "br", label: "dashboard", sub: "3 panels", x: 68, y: 150, icon: "client" },
+    { id: "gs", label: "grafana", sub: "/api/ds/query", x: 200, y: 150, icon: "server" },
+    { id: "pr", label: "Prometheus", sub: ":29090", x: 332, y: 70, icon: "db" },
+    { id: "lk", label: "Loki", sub: "logs", x: 332, y: 150, icon: "db" },
+    { id: "tp", label: "Tempo", sub: "traces", x: 332, y: 230, icon: "db" },
+  ]}
+  links={[
+    { from: "br", to: "gs" },
+    { from: "gs", to: "pr" },
+    { from: "gs", to: "lk" },
+    { from: "gs", to: "tp" },
+  ]}
+  steps={[
+    { path: ["br", "gs"], packet: "POST", title: "패널마다 쿼리를 보낸다", detail: "브라우저는 시간 범위, 패널 폭으로 계산한 intervalMs, maxDataPoints를 함께 보낸다. 변수 값은 이미 쿼리 안에 들어가 있다." },
+    { path: ["gs", "pr"], packet: "range", title: "Grafana가 대신 묻는다", detail: "$__rate_interval 같은 매크로를 실제 값으로 바꾸고 Prometheus의 query_range를 부른다. 인증 정보는 서버에만 있다.", payload: "Expr: sum by (status) (rate(http_requests_total{job=\"shop\"}[20s]))\nStep: 15s" },
+    { path: ["pr", "gs", "br"], packet: "frames", title: "결과를 데이터 프레임으로 돌려준다", detail: "데이터 소스가 무엇이든 같은 모양(시간 열과 값 열)으로 바꿔 브라우저에 준다. 패널은 이 프레임만 보고 그린다." },
+    { path: ["gs", "lk"], packet: "logs", title: "다른 데이터 소스도 같은 길", detail: "로그 패널은 Loki에, trace 패널은 Tempo에 같은 방식으로 묻는다. 한 대시보드에 섞어 둘 수 있다." },
+  ]}
+/>
+
+Grafana의 쿼리 API를 직접 불러 보면 매크로가 무엇으로 바뀌는지 보인다.
+
+```bash
+# 패널 하나가 보내는 것과 같은 쿼리를 직접 보낸다
+curl -s -u admin:$GF_PW -X POST 127.0.0.1:29300/api/ds/query -H 'Content-Type: application/json' -d '{
+  "from": "now-5m", "to": "now",
+  "queries": [{ "refId": "A", "datasource": { "uid": "prom-main" },
+    "expr": "sum by (status) (rate(http_requests_total{job=\"shop\"}[$__rate_interval]))",
+    "range": true, "intervalMs": 15000, "maxDataPoints": 20 }]
+}' | jq -c '.results.A.frames[] | {labels: .schema.fields[1].labels, points: (.data.values[0]|length), last: .data.values[1][-1], query: .schema.meta.executedQueryString}'
+```
+
+```text
+{"labels":{"status":"200"},"points":21,"last":40,"query":"Expr: sum by (status) (rate(http_requests_total{job=\"shop\"}[20s]))\nStep: 15s"}
+{"labels":{"status":"500"},"points":21,"last":0.8,"query":null}
+```
+
+`$__rate_interval`이 `20s`로 바뀌었다. 같은 쿼리를 `intervalMs`만 바꿔 보냈다. 아래는 두 응답의 `executedQueryString`만 한 줄씩 옮긴 것이다.
+
+```text
+intervalMs=2000   →  Expr: sum(rate(http_requests_total{job="shop"}[20s]))     Step: 2s
+intervalMs=60000  →  Expr: sum(rate(http_requests_total{job="shop"}[1m5s]))    Step: 1m0s
+```
+
+## $__interval과 $__rate_interval
+
+`$__interval`은 "패널의 한 점이 몇 초를 대표하나"다. 시간 범위를 패널이 그릴 수 있는 점 수로 나눠 정한다. 1시간을 폭 1200픽셀 패널에 그리면 대략 3초, 7일을 그리면 몇 분이 된다. 데이터 소스의 최소 간격(`timeInterval`)보다 작아지지는 않는다.
+
+`rate()`의 범위를 `$__interval`로 쓰면 함정이 있다. 줌인해서 `$__interval`이 scrape 간격보다 작아지면 범위 안에 샘플이 하나뿐이라 `rate`가 값을 못 낸다. 그래프가 끊기거나 비는 이유다. `$__rate_interval`은 이걸 막으려고 Grafana가 만든 값이다. 규칙은 `max($__interval + scrape 간격, scrape 간격 × 4)`다. 위 실습에서 scrape 간격이 5초일 때 `intervalMs` 15초는 max(20, 20) = 20초, 60초는 max(65, 20) = 65초(`1m5s`)였다. 데이터 소스의 `timeInterval`을 실제 scrape 간격과 다르게 적으면 이 계산이 틀어진다. 30초마다 scrape하는데 기본값(15초)을 두면 `$__rate_interval`이 60초가 되어 범위 안에 샘플이 둘뿐인 경우가 생긴다.
+
+직접 계산해 보면 감이 온다. 결과는 Grafana가 쿼리에 넣는 형식(`20s`, `1m5s`)으로 돌려준다. 앞의 두 테스트는 위 실습에서 Grafana가 실제로 만든 값이다.
+
+<CodePlayground
+  caption="$__rate_interval 계산하기"
+  functionName="rateInterval"
+  initialCode={`function rateInterval(intervalMs, scrapeMs) {
+  // max(interval + scrape, 4 * scrape)를 "1h1m", "1m5s", "20s" 꼴로
+  return "";
+}`}
+  solution={`function rateInterval(intervalMs, scrapeMs) {
+  const ms = Math.max(intervalMs + scrapeMs, 4 * scrapeMs);
+  let s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  return (h ? h + "h" : "") + (m ? m + "m" : "") + (s || (!h && !m) ? s + "s" : "");
+}`}
+  tests={[
+    { label: "interval 15s, scrape 5s (실습)", args: [15000, 5000], expected: "20s" },
+    { label: "interval 60s, scrape 5s (실습)", args: [60000, 5000], expected: "1m5s" },
+    { label: "줌인해서 interval 2s", args: [2000, 5000], expected: "20s" },
+    { label: "scrape 30s면 최소 2분", args: [15000, 30000], expected: "2m" },
+    { label: "7일 범위처럼 interval이 클 때", args: [3600000, 60000], expected: "1h1m" },
+  ]}
+/>
+
+실무 규칙으로 줄이면 이렇다. `rate`, `increase`, `irate`의 범위에는 `$__rate_interval`을 쓴다. 쿼리 옵션의 Min interval은 scrape 간격보다 작게 두지 않는다. 한 대시보드 안에서 같은 지표의 범위를 패널마다 다르게(`[1m]`과 `[10m]`) 쓰지 않는다. `rate`가 범위 안의 샘플로 무엇을 계산하는지는 [지표 타입 글](/posts/metrics-types#rate는-카운터를-어떻게-읽나)에 있다.
+
+## 변수는 쿼리 문자열을 바꾸는 치환이다
+
+변수(템플릿)는 대시보드 위쪽의 드롭다운이다. 고른 값이 쿼리 문자열 안의 `$instance`를 바꾼다. 값 목록도 쿼리로 가져온다.
+
+```json
+{
+  "name": "instance",
+  "type": "query",
+  "datasource": { "type": "prometheus", "uid": "prom-main" },
+  "query": { "query": "label_values(http_requests_total{job=\"shop\"}, instance)", "refId": "v" },
+  "refresh": 2,
+  "includeAll": true,
+  "multi": true
+}
+```
+
+`label_values`는 Grafana가 Prometheus의 라벨 값 API로 바꿔 부른다. 같은 걸 데이터 소스 프록시로 직접 불렀다.
+
+```bash
+# 변수 드롭다운에 들어갈 값 목록
+curl -s -u admin:$GF_PW "127.0.0.1:29300/api/datasources/uid/prom-main/resources/api/v1/label/instance/values?match[]=http_requests_total%7Bjob%3D%22shop%22%7D"
+```
+
+```text
+{"status":"success","data":["127.0.0.1:29101","127.0.0.1:29102"]}
+```
+
+여러 값을 고를 수 있게(`multi`) 하면 Prometheus 데이터 소스는 고른 값들을 정규식 대안으로 이어 붙인다. "All"을 고르면 모든 값을 이어 붙이거나, `allValue`를 정해 두었으면 그 값(`.*` 등)이 들어간다. 그래서 쿼리에서는 `=`가 아니라 `=~`를 써야 한다.
+
+```text
+instance="$instance"   →  instance="(127\\.0\\.0\\.1:29101|127\\.0\\.0\\.1:29102)"    # 이 이름의 인스턴스는 없다 → No data
+instance=~"$instance"  →  instance=~"(127\\.0\\.0\\.1:29101|127\\.0\\.0\\.1:29102)"   # 둘 다 맞는다
+```
+
+값 안의 점(`.`)은 정규식에서 "아무 글자"라서 Grafana가 이스케이프해서 넣는다.
+
+처음 장면의 "All을 고르면 No data"가 바로 이것이다. `=~` 쪽 쿼리로 오류 비율을 받아 봤다(시각, 값).
+
+```text
+[[1792559790378],[0.019607843137254905]]
+```
+
+0.8 / 40.8 ≈ 1.96%로, Prometheus에서 직접 계산한 값과 같다.
+
+변수를 쓸 때 정할 것이 몇 가지 더 있다.
+
+- `refresh`: 1이면 대시보드를 열 때, 2이면 시간 범위를 바꿀 때마다 값 목록을 다시 가져온다. Pod 이름처럼 자주 바뀌는 값은 2로 둔다. 그 대신 값 목록 쿼리가 무거우면 대시보드 여는 시간이 그만큼 늘어난다.
+- 변수끼리 잇기: `namespace`를 고르면 `pod` 목록이 그 네임스페이스로 좁혀지게 `label_values(kube_pod_info{namespace=~"$namespace"}, pod)`처럼 쓴다. 순서대로 다시 계산된다.
+- 값이 수천 개인 라벨(사용자 ID, URL)을 변수로 만들지 않는다. 드롭다운도 느리고, All을 고르면 수천 개짜리 정규식이 쿼리에 들어간다.
+- 데이터 소스 자체를 변수로(`type: datasource`) 만들면 같은 대시보드로 클러스터 여럿을 오갈 수 있다. 대시보드를 클러스터마다 복사하지 않아도 된다.
+
+변수 값과 시간 범위는 URL에 그대로 실린다. 장애 중에 "이 화면"을 공유할 때 URL을 그대로 넘기면 된다.
+
+<UrlAnatomy
+  caption="대시보드 URL 한 줄"
+  base="https://grafana.example.com/d/shop-red/shop-api-red"
+  params={[
+    { key: "orgId", value: "1", title: "조직", description: "Grafana 안의 조직(테넌트) 번호다. 다른 조직 사용자는 이 링크를 열 수 없다." },
+    { key: "from", value: "now-1h", title: "시작 시각", description: "상대 시각이면 링크를 여는 순간 기준으로 다시 계산된다. 장애 시점을 공유하려면 절대 시각(밀리초)을 쓴다. 시간 선택기의 '공유' 메뉴가 바꿔 준다." },
+    { key: "to", value: "now", title: "끝 시각", description: "now면 계속 움직이는 화면이다." },
+    { key: "var-instance", value: "127.0.0.1:29101", title: "변수 값", description: "var-<이름> 꼴이다. 같은 키를 여러 번 쓰면 multi 변수에 여러 값이 들어간다. All은 $__all이다." },
+    { key: "refresh", value: "30s", title: "자동 새로 고침", description: "열어 둔 사람마다 30초마다 패널 수만큼 쿼리를 보낸다. 큰 화면에 띄워 두는 대시보드는 이 값이 데이터 소스 부하를 정한다." },
+  ]}
+/>
+
+## 질문 하나에 패널 하나를 화면에 옮기기
+
+대시보드를 질문의 계층으로 나누고, 패널 제목을 질문으로 쓰는 설계는 [모니터링 기본](/posts/monitoring-basics#대시보드는-질문-하나에-패널-하나)에서 다뤘다. 여기서는 그 설계를 Grafana 화면에서 구현할 때 고르는 것들만 짚는다.
+
+실습 대시보드의 패널 셋은 각각 질문 하나에 답한다.
+
+| 질문 | 패널 종류 | 단위 | 이유 |
+|---|---|---|---|
+| 지금 실패하는 요청 비율은? | Stat | `percentunit` | 지금 값 하나와 색(임계값)만 있으면 된다 |
+| 초당 요청은 얼마나 들어오나? | Time series | `reqps` | 추세와 상태 코드별 비교가 필요하다 |
+| 느린 사용자는 얼마나 기다리나? (p95) | Time series | `s` | 시간에 따른 변화를 본다. 분포 전체는 Heatmap |
+
+패널 종류를 고르는 기준은 "보는 사람이 무엇을 비교하나"다. 지금 값 하나면 Stat, 시간에 따른 변화면 Time series, 분포의 모양이면 Heatmap(히스토그램 버킷을 그대로), 항목끼리 순위면 Bar gauge나 Table이다. 원형 그래프는 거의 쓸 일이 없다.
+
+몇 가지는 습관으로 들인다.
+
+- 단위를 꼭 정한다. `percentunit`은 0.0196을 1.96%로, `s`는 0.43을 430ms로 보여 준다. 단위가 없으면 사람마다 다르게 읽는다.
+- 임계값 색은 알림 기준과 같게 둔다. 알림은 1%에 울리는데 패널은 5%에서 빨개지면 장애 중에 화면이 거짓말을 한다.
+- 범례는 `legendFormat`으로 짧게(`{{status}}`). 기본값은 라벨 전체라 범례가 패널보다 커진다.
+- 행(row)으로 접어 둔다. 처음 열 때 보이는 패널만 쿼리하므로 접힌 행은 비용이 없다.
+- 패널 수는 화면 하나에 들어올 만큼. 패널 40개짜리 대시보드는 열 때마다 쿼리 40개(변수가 있으면 더)를 보낸다. 처음 장면의 "20초 걸리는 대시보드"는 대개 이 경우다. 무거운 패널은 Prometheus 기록 규칙으로 미리 계산해 두고 그 결과를 그린다.
+
+## 대시보드를 코드로 두는 세 가지 방법
+
+대시보드의 본체는 JSON 한 덩어리다. UI에서 고친 것도 결국 이 JSON이 바뀌는 것이다. 처음 장면의 "덮어써서 사라진 대시보드"를 막으려면 이 JSON을 git에 두고, 바꾸는 길을 하나로 정한다.
+
+### HTTP API로 올린다
+
+```bash
+# 대시보드 JSON을 올린다 (dashboard, folderUid, message, overwrite)
+curl -s -u admin:$GF_PW -X POST 127.0.0.1:29300/api/dashboards/db -H 'Content-Type: application/json' -d @shop-red.json
+# 같은 파일을 한 번 더 올린다 (overwrite: false)
+curl -s -u admin:$GF_PW -o /dev/null -w "%{http_code}\n" -X POST 127.0.0.1:29300/api/dashboards/db -H 'Content-Type: application/json' -d @shop-red.json
+```
+
+```text
+{"folderUid":"","id":2,"slug":"shop-api-c2b7-red","status":"success","uid":"shop-red","url":"/d/shop-red/shop-api-c2b7-red","version":1}
+{"message":"The dashboard has been changed by someone else","status":"version-mismatch"}
+412
+```
+
+두 번째 요청이 412로 거절됐다. Grafana는 대시보드마다 `version`을 세고, 올리는 JSON의 version이 서버의 것과 다르면 저장을 막는다. 다른 사람이 그사이 저장했으면 덮어쓰지 않게 하는 낙관적 잠금이다. UI에서 "다른 사람이 바꿨다"는 경고가 뜨는 것도 같은 원리다. CI에서 올릴 때는 git이 원본이니 `"overwrite": true`로 덮어쓰는 게 보통이다. 저장할 때마다 버전이 남아서 `/api/dashboards/uid/<uid>/versions`로 이력을 보고 되돌릴 수 있다. 낙관적 잠금 자체는 [낙관적 락](/posts/optimistic-locking)에서 DB로 다뤘다.
+
+### 프로비저닝 파일로 읽게 한다
+
+Grafana가 디렉터리를 주기적으로 읽어 대시보드를 만들게 할 수도 있다.
+
+```yaml
+# provisioning/dashboards/files.yaml
+apiVersion: 1
+providers:
+  - name: from-git
+    folder: Shop
+    type: file
+    allowUiUpdates: false        # UI에서 저장하지 못하게 한다
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards
+```
+
+이 디렉터리에 JSON을 넣자 10초 안에 `Shop` 폴더에 나타났다. 이 대시보드를 API로 저장하려 하면 거절된다.
+
+```text
+{"provisioned":true,"provisionedExternalId":"shop-red.json","canSave":true,"folderTitle":"Shop","version":1}
+{"message":"Cannot save provisioned dashboard"}
+400
+```
+
+프로비저닝된 대시보드는 파일이 원본이라 UI나 API로 바꿀 수 없다. UI에서 고치고 싶으면 JSON을 내보내 파일에 반영하는 흐름이 된다. kube-prometheus-stack의 Grafana는 이 방식에 사이드카를 하나 더 붙였다. `grafana_dashboard: "1"` 라벨이 붙은 ConfigMap을 찾아 이 디렉터리에 파일로 써 준다. 그래서 각 팀은 자기 네임스페이스에 ConfigMap 하나를 GitOps로 배포하면 대시보드가 생긴다. GitOps 배포 흐름은 [ArgoCD 기본](/posts/argocd-basics)에 있다.
+
+### SDK로 생성한다
+
+JSON을 손으로 쓰면 패널 20개짜리 대시보드가 2,000줄이 된다. 같은 RED 패널을 서비스마다 반복하려면 코드로 만드는 게 낫다. 예전에는 Jsonnet 라이브러리인 grafonnet을 많이 썼고, 요즘은 Grafana가 만든 Foundation SDK(TypeScript, Go, Python 등)가 있다. npm의 `@grafana/grafana-foundation-sdk`(11.6용 빌드)로 만들어 봤다.
+
+```javascript
+const { DashboardBuilder, QueryVariableBuilder } = require("@grafana/grafana-foundation-sdk/dashboard");
+const { DataqueryBuilder } = require("@grafana/grafana-foundation-sdk/prometheus");
+const timeseries = require("@grafana/grafana-foundation-sdk/timeseries");
+const stat = require("@grafana/grafana-foundation-sdk/stat");
+
+const ds = { type: "prometheus", uid: "prom-main" };
+const sel = 'job="shop",instance=~"$instance"';
+const q = (expr, legend) => new DataqueryBuilder().expr(expr).legendFormat(legend ?? "__auto");
+
+const dashboard = new DashboardBuilder("Shop API RED (sdk)")
+  .uid("shop-red-sdk")
+  .tags(["shop", "red", "generated"])
+  .refresh("30s")
+  .time({ from: "now-1h", to: "now" })
+  .withVariable(
+    new QueryVariableBuilder("instance")
+      .datasource(ds)
+      .query(`label_values(http_requests_total{job="shop"}, instance)`)
+      .multi(true)
+      .includeAll(true),
+  )
+  .withPanel(
+    new stat.PanelBuilder()
+      .title("지금 실패하는 요청 비율은?")
+      .datasource(ds)
+      .unit("percentunit")
+      .withTarget(q(`sum(rate(http_requests_total{${sel},status=~"5.."}[$__rate_interval])) / sum(rate(http_requests_total{${sel}}[$__rate_interval]))`))
+      .gridPos({ x: 0, y: 0, w: 8, h: 6 }),
+  )
+  .withPanel(
+    new timeseries.PanelBuilder()
+      .title("초당 요청은 얼마나 들어오나?")
+      .datasource(ds)
+      .unit("reqps")
+      .withTarget(q(`sum by (status) (rate(http_requests_total{${sel}}[$__rate_interval]))`, "{{status}}"))
+      .gridPos({ x: 8, y: 0, w: 16, h: 6 }),
+  )
+  .build();
+
+console.log(JSON.stringify(dashboard, null, 2));
+```
+
+```bash
+# JSON을 만들고 그대로 API에 올린다
+node sdk-dash.js > sdk-dash.json
+jq '{dashboard: ., overwrite: true, message: "generated by sdk-dash.js"}' sdk-dash.json | curl -s -u admin:$GF_PW -X POST 127.0.0.1:29300/api/dashboards/db -H 'Content-Type: application/json' -d @-
+```
+
+```text
+{"folderUid":"","id":4,"slug":"shop-api-red-sdk","status":"success","uid":"shop-red-sdk","url":"/d/shop-red-sdk/shop-api-red-sdk","version":1}
+```
+
+코드 40줄 남짓이 JSON 100줄이 됐다. 생성된 JSON에는 코드에 적지 않은 기본값(`schemaVersion: 41`, `editable: true`, 변수의 `auto_min: "10s"` 등)이 채워져 있다. 서비스 목록을 배열로 두고 반복문을 돌리면 서비스 30개의 대시보드가 같은 모양으로 나온다. 바꾼 결과는 PR에서 코드 diff로 검토한다.
+
+아래 그림은 세 방법이 git에서 Grafana까지 가는 길이다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="git에 둔 대시보드가 Grafana에 닿는 세 가지 길"
+  zones={[
+    { id: "repo", label: "git", x: 8, y: 8, w: 384, h: 72, tone: "edge" },
+    { id: "k8s", label: "cluster", x: 8, y: 96, w: 384, h: 216, tone: "private" },
+  ]}
+  nodes={[
+    { id: "code", label: "dashboards/", sub: "JSON · SDK code", x: 200, y: 46, icon: "server", w: 130 },
+    { id: "ci", label: "CI job", sub: "node build", x: 70, y: 150, icon: "container" },
+    { id: "cm", label: "ConfigMap", sub: "grafana_dashboard", x: 330, y: 150, icon: "server", w: 120 },
+    { id: "side", label: "sidecar", sub: "writes files", x: 330, y: 260, icon: "container" },
+    { id: "gf", label: "Grafana", sub: "/api/dashboards", x: 140, y: 260, icon: "server" },
+  ]}
+  links={[
+    { from: "ci", to: "code" },
+    { from: "ci", to: "gf" },
+    { from: "code", to: "cm" },
+    { from: "cm", to: "side" },
+    { from: "side", to: "gf" },
+  ]}
+  steps={[
+    { path: ["ci", "code"], packet: "build", title: "SDK 코드로 JSON을 만든다", detail: "CI가 저장소를 받아 node sdk-dash.js처럼 JSON을 생성한다. 같은 코드로 서비스 수만큼 찍어 낼 수 있다." },
+    { path: ["ci", "gf"], packet: "POST", title: "API로 올린다", detail: "overwrite: true로 git의 내용을 원본으로 삼는다. 서비스 계정 토큰은 대시보드 쓰기 권한만 준다." },
+    { path: ["code", "cm", "side"], packet: "sync", title: "GitOps로 ConfigMap을 배포한다", detail: "ArgoCD나 Flux가 JSON을 담은 ConfigMap을 배포하면 사이드카가 그 라벨을 보고 파일로 쓴다." },
+    { path: ["side", "gf"], packet: "file", title: "프로비저닝으로 읽는다", detail: "Grafana가 디렉터리를 주기적으로 읽어 반영한다. UI에서 저장하면 Cannot save provisioned dashboard로 막힌다." },
+  ]}
+/>
+
+Terraform의 Grafana 프로바이더(`grafana_dashboard` 리소스)로 관리하는 팀도 있다. 데이터 소스, 폴더, 권한, 알림까지 한 곳에서 다루고 싶을 때 맞다. 어느 길이든 하나만 고른다. API로도 올리고 UI에서도 고치면 처음 장면이 다시 생긴다. 탐색용으로 UI에서 만든 대시보드는 개인 폴더에 두고, 팀이 쓰는 대시보드는 코드에서만 바꾼다.
+
+## Grafana 알림과 Alertmanager
+
+Grafana에도 알림 기능이 있다. 대시보드와 같은 화면에서 규칙을 만들 수 있어서 편하지만, Prometheus 규칙과 Alertmanager로 하는 방식과 구조가 다르다. 실습 Prometheus를 대상으로 Grafana 알림 규칙을 API로 만들었다.
+
+```json
+{
+  "title": "Shop API 오류 비율 1% 초과",
+  "ruleGroup": "shop-api",
+  "folderUID": "dg1v84duoaz28c",
+  "condition": "C",
+  "for": "1m",
+  "labels": { "severity": "page", "team": "shop" },
+  "annotations": { "summary": "5xx 비율이 1%를 넘었다", "runbook_url": "https://wiki.example.com/runbooks/shop-5xx" },
+  "data": [
+    { "refId": "A", "datasourceUid": "prom-main", "relativeTimeRange": { "from": 300, "to": 0 },
+      "model": { "refId": "A", "expr": "sum(rate(http_requests_total{job=\"shop\",status=~\"5..\"}[1m])) / sum(rate(http_requests_total{job=\"shop\"}[1m]))", "instant": true } },
+    { "refId": "C", "datasourceUid": "__expr__",
+      "model": { "refId": "C", "type": "threshold", "expression": "A", "conditions": [{ "evaluator": { "type": "gt", "params": [0.01] } }] } }
+  ]
+}
+```
+
+```bash
+# 규칙을 만들고, 몇 분 뒤 상태를 본다
+curl -s -u admin:$GF_PW -X POST 127.0.0.1:29300/api/v1/provisioning/alert-rules -H 'Content-Type: application/json' -d @rule.json | jq -c '{uid, title, for, ruleGroup}'
+curl -s -u admin:$GF_PW 127.0.0.1:29300/api/prometheus/grafana/api/v1/rules | jq -c '.data.groups[].rules[] | {name, state, alerts: [.alerts[] | {state, value, activeAt}]}'
+```
+
+```text
+{"uid":"eg1v8912h3q4gb","title":"Shop API 오류 비율 1% 초과","for":"1m","ruleGroup":"shop-api"}
+{"name":"Shop API 오류 비율 1% 초과","state":"pending","alerts":[{"state":"Pending","value":"1e+00","activeAt":"2026-10-21T05:16:50Z"}]}
+{"name":"Shop API 오류 비율 1% 초과","state":"firing","alerts":[{"state":"Alerting","value":"1e+00","activeAt":"2026-10-21T05:17:50Z"}]}
+```
+
+```text
+{"labels":{"__alert_rule_uid__":"eg1v8912h3q4gb","alertname":"Shop API 오류 비율 1% 초과","grafana_folder":"Shop","severity":"page","team":"shop"},"status":"active","receivers":["grafana-default-email"],"startsAt":"2026-10-21T05:17:50.000Z"}
+```
+
+`value`가 `1e+00`인 점을 눈여겨본다. Grafana 알림은 쿼리(A)와 조건 식(C)을 나누고, 상태 값으로는 조건의 결과(참이면 1)를 보여 준다. 알림 메시지에 실제 오류 비율을 넣으려면 템플릿에서 `$values.A`를 써야 한다. 규칙 그룹의 평가 간격이 60초라 `for: 1m`을 넘기는 데 평가 두 번(05:16:50 Pending → 05:17:50 Alerting)이 들었다. 아래 그림은 한 규칙이 상태를 옮겨 가는 과정이다.
+
+<AlgoTrace
+  caption="Grafana 알림 규칙 하나의 상태 변화"
+  cells={["eval 1", "eval 2", "eval 3", "notify"]}
+  memoryLabel="A · C · state"
+  steps={[
+    { pointer: 0, memory: ["A=0.0196", "C=1", "Pending"], caption: "05:16:50 첫 평가. 오류 비율이 1%를 넘어 조건이 참이 됐다. for가 1분이라 아직 Pending이다." },
+    { pointer: 1, found: [1], memory: ["A=0.0196", "C=1", "Alerting"], caption: "05:17:50 두 번째 평가. 조건이 1분 넘게 유지돼 Alerting(firing)이 됐다." },
+    { pointer: 3, memory: ["receiver", "grafana-default-email"], caption: "Grafana 안의 Alertmanager가 알림 정책에 따라 연락 지점으로 보낸다. 실습은 기본 연락 지점이다." },
+    { pointer: 2, memory: ["A=0.004", "C=0", "Normal"], caption: "오류 비율이 내려가면 다음 평가에서 Normal로 돌아가고 해결 알림이 나간다." },
+  ]}
+/>
+
+받는 쪽이 `grafana-default-email`인 것도 알려 준다. Grafana 안에 Alertmanager가 하나 들어 있고, 알림 정책과 연락 지점(contact point)이 Alertmanager의 route와 receiver에 해당한다. 외부 Alertmanager로 보내도록 바꿀 수도 있다.
+
+둘을 고르는 기준은 이렇다.
+
+- 데이터 소스가 여럿이면 Grafana 알림이 편하다. Loki 로그 수, CloudWatch 지표, SQL 쿼리 결과에 같은 방식으로 규칙을 건다. Prometheus 규칙은 Prometheus 데이터에만 건다.
+- 평가 위치가 다르다. Prometheus 규칙은 Prometheus가 직접 평가하니 Grafana가 죽어도 울린다. Grafana 알림은 Grafana가 데이터 소스에 쿼리해서 평가하니 Grafana가 죽으면 알림도 멈추고, Grafana를 여러 대 띄우면 HA 설정이 따로 필요하다. 사람을 깨우는 핵심 알림을 어디에 둘지는 이 차이로 정한다.
+- 코드로 관리하는 방식이 다르다. Prometheus 규칙은 YAML 파일(쿠버네티스에서는 PrometheusRule)로 `promtool test rules`로 시험할 수 있다. Grafana 알림은 API, 프로비저닝 파일, Terraform으로 관리한다.
+- 한 조직에서 둘을 섞으면 같은 증상에 알림이 두 번 온다. 어느 쪽이 페이지를 담당할지 정해 둔다.
+
+`for`, 묶기, 누르기, 페이지와 티켓을 나누는 기준은 [알림 설계](/posts/alerting)에서 자세히 다뤘다.
+
+## 지표에서 로그와 trace로 건너가기
+
+대시보드는 "어디가 이상한가"까지 보여 준다. "왜"를 보려면 그 시각의 로그와 요청 하나의 trace로 넘어가야 한다. Grafana에서 이 건너가기는 데이터 소스 설정으로 만든다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="Prometheus, Loki, Tempo를 잇는 세 가지 연결"
+  nodes={[
+    { id: "prom", label: "Prometheus", sub: "p95 튐", x: 80, y: 50, w: 130 },
+    { id: "loki", label: "Loki", sub: "에러 로그", x: 320, y: 50, w: 120 },
+    { id: "tempo", label: "Tempo", sub: "trace 하나", x: 200, y: 200, w: 120 },
+  ]}
+  edges={[
+    { from: "prom", to: "tempo", label: "exemplar trace_id" },
+    { from: "loki", to: "tempo", label: "derived field" },
+    { from: "tempo", to: "loki", label: "trace to logs", dashed: true },
+    { from: "prom", to: "loki", label: "같은 라벨·시간", dashed: true },
+  ]}
+/>
+
+- 지표 → trace: Prometheus 데이터 소스의 exemplar 설정에서 `trace_id` 라벨을 Tempo 데이터 소스와 잇는다. 히스토그램 패널에 점으로 찍힌 exemplar를 누르면 그 요청의 trace가 열린다.
+- 로그 → trace: Loki 데이터 소스의 파생 필드(derived field)에 `trace_id=(\w+)` 같은 정규식을 주면 로그 줄의 trace ID가 Tempo 링크가 된다.
+- trace → 로그: Tempo 데이터 소스의 "trace to logs"가 span의 서비스 이름과 시간 범위로 Loki 쿼리를 만들어 준다.
+- 지표 → 로그: 같은 라벨 이름(`namespace`, `pod`, `app`)을 지표와 로그에 쓰면 Explore에서 쿼리를 바꿔 끼우기만 하면 된다. 라벨 이름이 데이터 소스마다 다르면 이 연결이 끊긴다.
+
+이 연결이 왜 필요한지, exemplar가 무엇인지는 [관측 가능성](/posts/observability-basics)에, 로그에 trace ID를 남기는 법은 [구조화 로그](/posts/structured-logging)에, trace 자체는 [분산 추적](/posts/distributed-tracing)에 있다.
+
+## 대시보드가 말을 안 들을 때
+
+현장에서 자주 만나는 증상과 보는 순서를 정리한다.
+
+"No data"가 뜬다. 패널 메뉴의 Inspect → Query로 Grafana가 실제로 보낸 쿼리를 본다. 변수가 펼쳐진 모습(`=` 와 `=~`), 시간 범위, 데이터 소스 uid를 확인한다. 그 쿼리를 Explore나 Prometheus에 그대로 넣어 결과가 있는지 본다. 결과가 있는데 안 보이면 패널의 변환(transform)이나 필드 오버라이드가 값을 숨기고 있다.
+
+그래프가 띄엄띄엄 끊긴다. `rate`의 범위가 `$__interval`이거나 고정값이 scrape 간격보다 짧은 경우다. `$__rate_interval`로 바꾸고 데이터 소스의 `timeInterval`을 실제 scrape 간격과 맞춘다.
+
+대시보드가 느리다. Inspect → Query의 실행 시간으로 무거운 패널을 찾는다. 시간 범위가 길수록 Prometheus가 읽는 블록이 늘어난다. 범위 기본값을 줄이고, 무거운 식은 기록 규칙으로 옮기고, 접히는 행에 넣는다. 자동 새로 고침이 5초인 대시보드를 수십 명이 열어 두면 그것만으로 Prometheus가 바빠진다.
+
+환경을 옮겼더니 패널이 다 깨졌다. 데이터 소스 uid가 환경마다 다르다. 프로비저닝 파일로 uid를 고정하거나, 데이터 소스 변수를 쓴다.
+
+누가 바꿨는지 모르겠다. 버전 이력(`/versions`)으로 비교하고 되돌린다. 다음부터는 팀 대시보드를 코드로만 바꾸고, 프로비저닝이나 권한으로 UI 저장을 막는다.
+
+## 그리는 도구, 묻는 쪽, 답하는 쪽
+
+Grafana는 저장하지 않고 묻는다. 패널마다 데이터 소스에 쿼리를 보내고, 그때 시간 범위와 패널 폭으로 `$__interval`을, scrape 간격까지 더해 `$__rate_interval`을 정한다. 변수는 쿼리 문자열을 바꾸는 치환이라 여러 값을 고르면 `=~`가 필요하다. 대시보드는 JSON이고, API·프로비저닝·SDK 중 한 길로만 바꿔야 덮어쓰는 사고가 없다. 알림은 Grafana에서도 걸 수 있지만, 누가 평가하고 누가 전하는지가 Prometheus·Alertmanager와 다르다. 모은 숫자를 어떻게 쌓는지는 [Prometheus 내부 구조](/posts/prometheus-basics)에서 이어서 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### Grafana의 $__interval과 $__rate_interval은 어떻게 다른가요?
+
+$__interval은 시간 범위를 패널이 그릴 점 수로 나눈 값으로, 한 점이 몇 초를 대표하는지입니다. $__rate_interval은 rate 범위로 쓰라고 만든 값으로 max($__interval + scrape 간격, scrape 간격 × 4)입니다. 줌인해서 $__interval이 scrape 간격보다 작아져도 범위 안에 샘플이 충분히 들어가서 rate가 비지 않습니다. 이 계산에 데이터 소스의 scrape 간격 설정이 쓰이므로 실제 값과 맞춰 둡니다.
+
+### 다중 선택 변수에서 All을 고르면 No data가 나오는 이유는요?
+
+여러 값을 고르면 Prometheus 데이터 소스가 값을 `(a|b)` 같은 정규식 대안으로 이어 붙이는데, 쿼리에서 `=`로 비교하면 그런 이름의 라벨 값을 찾게 되기 때문입니다. `=~`로 바꾸면 해결됩니다. 패널의 Inspect → Query에서 펼쳐진 쿼리를 보면 바로 확인할 수 있습니다.
+
+### 대시보드를 코드로 관리하는 방법에는 무엇이 있나요?
+
+HTTP API로 JSON을 올리는 방법, 프로비저닝 디렉터리에 파일을 두고 Grafana가 읽게 하는 방법, grafonnet이나 Foundation SDK로 JSON을 생성하는 방법이 있고, Terraform 프로바이더도 씁니다. API는 version으로 낙관적 잠금을 해서 다른 사람이 먼저 저장했으면 412로 막고, 프로비저닝된 대시보드는 UI·API 저장이 막힙니다. 어느 방법이든 바꾸는 길을 하나로 정해야 덮어쓰기 사고가 없습니다.
+
+### 데이터 소스 uid를 고정해야 하는 이유는요?
+
+대시보드 JSON의 패널이 데이터 소스를 uid로 가리키기 때문입니다. uid를 지정하지 않으면 환경마다 무작위로 생겨서, 다른 환경으로 옮긴 대시보드의 패널이 데이터 소스를 찾지 못합니다. 프로비저닝 파일로 uid를 고정하거나 데이터 소스 변수를 씁니다.
+
+### Grafana 알림과 Prometheus·Alertmanager 알림은 언제 무엇을 쓰나요?
+
+Prometheus 규칙은 Prometheus가 직접 평가하므로 Grafana와 상관없이 울리고, 규칙 파일을 promtool로 시험할 수 있어 사람을 깨우는 핵심 알림에 맞습니다. Grafana 알림은 Loki, CloudWatch, SQL처럼 여러 데이터 소스에 같은 방식으로 규칙을 걸 수 있는 게 장점이지만, Grafana가 쿼리해서 평가하므로 Grafana 가용성에 묶입니다. 둘을 섞을 때는 같은 증상에 알림이 두 번 가지 않게 담당을 나눕니다.
+
+### 대시보드가 느릴 때 어디부터 보나요?
+
+Inspect → Query로 패널별 실행 시간을 보고 무거운 쿼리를 찾습니다. 패널 수와 변수 수만큼 쿼리가 나가고, 시간 범위가 길수록 데이터 소스가 읽는 양이 늘어납니다. 무거운 식은 기록 규칙으로 미리 계산하고, 덜 보는 패널은 접히는 행에 넣고, 자동 새로 고침 간격을 늘립니다.
+
+### 지표에서 trace나 로그로 넘어가게 하려면 무엇을 설정하나요?
+
+Prometheus 데이터 소스의 exemplar 설정으로 trace_id를 Tempo와 잇고, Loki 데이터 소스의 derived field로 로그 줄의 trace ID를 링크로 만들고, Tempo의 trace to logs로 span에서 로그 쿼리를 엽니다. 지표와 로그의 라벨 이름을 같게 맞춰 두는 것도 중요합니다. 그래야 같은 namespace, pod로 쿼리를 바꿔 끼울 수 있습니다.

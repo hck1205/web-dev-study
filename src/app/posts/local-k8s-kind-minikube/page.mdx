@@ -1,0 +1,410 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("local-k8s-kind-minikube");
+
+쿠버네티스를 처음 공부하려는데 클라우드 클러스터는 시간당 돈이 나간다. 내 노트북에 클러스터를 띄우는 도구를 찾아보면 kind, minikube, k3d, kwok이 한꺼번에 나온다. 넷 다 "로컬 쿠버네티스"라고 소개하는데, 실제로 띄우는 것은 서로 꽤 다르다. 하나는 도커 컨테이너를 노드로 쓰고, 하나는 VM을 띄우고, 하나는 가벼운 배포판을 넣고, 하나는 노드도 컨테이너도 없이 API 서버만 띄운다.
+
+이 글은 넷이 각각 무엇을 띄우는지, 무엇은 진짜이고 무엇은 흉내인지, 그래서 어떤 일에 무엇을 고르는지 정리한다. 로컬 클러스터에서 안 되는 것들(LoadBalancer, 실제 CNI, 노드 장애)과 그 우회법도 함께 본다.
+
+실습 머신에는 Docker가 없다. 그래서 kwok만 `kwokctl` 0.6.1로 실제로 띄워 출력을 받았고(서버는 kube-apiserver 1.30.4, 클라이언트는 kubectl 1.31.4), kind, minikube, k3d의 출력은 실제 형식대로 적은 예시다. 예시에는 그렇다고 따로 적었다.
+
+## 넷이 띄우는 것은 서로 다르다
+
+쿠버네티스 클러스터는 컨트롤 플레인(API 서버, etcd, 스케줄러, 컨트롤러 매니저)과 노드(kubelet, 컨테이너 런타임, kube-proxy, CNI)로 나뉜다. 구성 요소마다 하는 일은 [쿠버네티스 아키텍처](/posts/k8s-architecture)에 있다. 로컬 도구들의 차이는 이 중 무엇을 진짜로 띄우고, 노드를 무엇으로 만드느냐다.
+
+- kind(Kubernetes IN Docker): 도커 컨테이너 하나를 노드 하나로 쓴다. 그 컨테이너 안에 systemd, containerd, kubelet이 돌고, Pod는 그 안의 containerd가 띄운다. 쿠버네티스 프로젝트가 자기 테스트(e2e)를 돌리려고 만든 도구라 kubeadm으로 만든 표준 클러스터와 가장 가깝다.
+- minikube: 기본으로 VM 하나(또는 드라이버에 따라 도커 컨테이너 하나)에 단일 노드 클러스터를 띄운다. 대시보드, ingress, metrics-server 같은 애드온을 명령 하나로 켜는 등 학습과 앱 개발 편의 기능이 많다.
+- k3d: Rancher의 경량 배포판 k3s를 도커 컨테이너에 넣는다. k3s는 etcd 대신 SQLite를 기본으로 쓰고 바이너리 하나에 구성 요소를 묶어서 가볍다. Traefik 인그레스와 내장 LoadBalancer(ServiceLB)가 기본으로 들어 있다.
+- kwok(Kubernetes WithOut Kubelet): 진짜 API 서버, etcd, 스케줄러, 컨트롤러 매니저를 띄우고, 노드와 Pod 상태는 kwok-controller가 흉내 낸다. kubelet도 컨테이너도 없다.
+
+아래 그림은 넷을 "어디까지 진짜인가"로 놓은 것이다. 위로 갈수록 운영 클러스터와 닮고 무겁다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="네 도구가 진짜로 띄우는 범위. kwok은 컨트롤 플레인만, 나머지는 노드와 컨테이너까지 띄운다."
+  nodes={[
+    { id: "cp", label: "컨트롤 플레인", sub: "apiserver · etcd · 스케줄러", x: 200, y: 40, w: 200 },
+    { id: "kwok", label: "kwok", sub: "노드·Pod는 흉내", x: 70, y: 130, w: 110 },
+    { id: "kind", label: "kind", sub: "컨테이너 = 노드", x: 200, y: 130, w: 110 },
+    { id: "k3d", label: "k3d", sub: "k3s in Docker", x: 330, y: 130, w: 110 },
+    { id: "mk", label: "minikube", sub: "VM 또는 컨테이너", x: 265, y: 215, w: 130 },
+    { id: "node", label: "kubelet · containerd", sub: "진짜 컨테이너 실행", x: 200, y: 295, w: 190 },
+  ]}
+  edges={[
+    { from: "kwok", to: "cp", label: "진짜" },
+    { from: "kind", to: "cp" },
+    { from: "k3d", to: "cp" },
+    { from: "kind", to: "node" },
+    { from: "k3d", to: "node" },
+    { from: "mk", to: "node" },
+    { from: "kwok", to: "node", dashed: true, label: "없음" },
+  ]}
+/>
+
+## kwok은 2초 만에 클러스터를 띄운다
+
+kwok은 Docker 없이도 돈다. `--runtime binary`를 주면 kube-apiserver, etcd 같은 바이너리를 내려받아 호스트 프로세스로 띄운다(처음 한 번만 받는다). 기본 kubeconfig를 건드리지 않으려고 `--kubeconfig`로 파일을 따로 줬다.
+
+```bash
+# 바이너리 런타임으로 클러스터를 만들고, kubeconfig는 별도 파일에 쓴다
+kwokctl create cluster --name r2-demo --runtime binary --kubeconfig ./r2-demo.kubeconfig
+export KUBECONFIG=$PWD/r2-demo.kubeconfig
+
+# 클러스터 구성 요소와 각 프로세스의 메모리(RSS)
+kwokctl get components --name r2-demo
+ps -eo pid,rss,comm,args | grep r2-demo | grep -v grep | awk '{printf "%s %s MiB %s\n",$1,int($2/1024),$3}'
+```
+
+```text
+Cluster is creating cluster=r2-demo
+Cluster is created elapsed=0.5s cluster=r2-demo
+Cluster is starting cluster=r2-demo
+Cluster is started elapsed=1.5s cluster=r2-demo
+You can now use your cluster with:
+
+	kubectl cluster-info --context kwok-r2-demo
+
+Thanks for using kwok!
+etcd
+kube-apiserver
+kube-controller-manager
+kube-scheduler
+kwok-controller
+31239 42 MiB etcd
+31240 234 MiB kube-apiserver
+31245 94 MiB kube-controller
+31246 54 MiB kube-scheduler
+31247 40 MiB kwok-controller
+```
+
+2초가 안 걸렸고, 다섯 프로세스를 합쳐 460MiB쯤이다. kubelet이 목록에 없다. 노드는 따로 만든다.
+
+```bash
+# 가짜 노드 3개를 만들고 본다
+kwokctl scale node --replicas 3 --name r2-demo
+kubectl get nodes -o wide
+```
+
+```text
+NAME          STATUS   ROLES   AGE   VERSION       INTERNAL-IP   EXTERNAL-IP   OS-IMAGE    KERNEL-VERSION   CONTAINER-RUNTIME
+node-000000   Ready    agent   2s    kwok-v0.6.1   <none>        <none>        <unknown>   kwok-v0.6.1      kwok-v0.6.1
+node-000001   Ready    agent   2s    kwok-v0.6.1   <none>        <none>        <unknown>   kwok-v0.6.1      kwok-v0.6.1
+node-000002   Ready    agent   2s    kwok-v0.6.1   <none>        <none>        <unknown>   kwok-v0.6.1      kwok-v0.6.1
+```
+
+VERSION과 KERNEL-VERSION, CONTAINER-RUNTIME이 전부 `kwok-v0.6.1`이다. 진짜 kubelet이 보고한 값이 아니라 kwok-controller가 Node 객체에 써 넣은 값이라는 표시다. 노드마다 CPU 32, 메모리 256Gi, Pod 110개라는 넉넉한 용량이 기본으로 잡혀 있다(`kubectl describe node`의 Capacity).
+
+## Running인데 아무것도 돌지 않는다
+
+Deployment를 만들면 겉보기엔 정상 클러스터와 똑같다.
+
+```bash
+# nginx 3개짜리 Deployment와 LoadBalancer Service
+kubectl create deployment web --image=nginx:1.27 --replicas=3
+kubectl expose deployment web --port=80 --type=LoadBalancer
+kubectl get pods -o wide
+kubectl get svc web
+kubectl get endpointslices -l kubernetes.io/service-name=web
+```
+
+```text
+NAME                   READY   STATUS    RESTARTS   AGE   IP         NODE          NOMINATED NODE   READINESS GATES
+web-7b86f8987b-kw48k   1/1     Running   0          4s    10.0.2.1   node-000002   <none>           <none>
+web-7b86f8987b-nf9n8   1/1     Running   0          4s    10.0.0.1   node-000000   <none>           <none>
+web-7b86f8987b-q8n5r   1/1     Running   0          4s    10.0.1.1   node-000001   <none>           <none>
+NAME   TYPE           CLUSTER-IP   EXTERNAL-IP   PORT(S)        AGE
+web    LoadBalancer   10.0.0.209   <pending>     80:30967/TCP   4s
+NAME        ADDRESSTYPE   PORTS   ENDPOINTS                    AGE
+web-9mdk8   IPv4          80      10.0.2.1,10.0.0.1,10.0.1.1   5s
+```
+
+스케줄러가 진짜라서 Pod가 노드 셋에 고르게 퍼졌고, EndpointSlice 컨트롤러도 진짜라서 Pod IP가 엔드포인트로 들어갔다. 그런데 이 Pod 안에서 nginx는 돌지 않는다. 아래 그림에서 단계를 넘기면 누가 무엇을 했는지 보인다.
+
+<SequenceDiagram
+  caption="kwok에서 Pod가 Running이 되기까지. kubelet 자리에 kwok-controller가 있다."
+  actors={[
+    { id: "u", label: "kubectl" },
+    { id: "a", label: "API 서버" },
+    { id: "s", label: "스케줄러" },
+    { id: "k", label: "kwok-ctrl" },
+  ]}
+  steps={[
+    { from: "u", to: "a", label: "create deploy", title: "Deployment를 만든다", detail: "진짜 API 서버가 받아 진짜 etcd에 저장한다. 검증, 어드미션, RBAC도 진짜다." },
+    { from: "a", to: "a", label: "RS → Pod 3개", title: "컨트롤러 매니저가 Pod를 만든다", detail: "Deployment 컨트롤러가 ReplicaSet을, ReplicaSet 컨트롤러가 Pod 3개를 만든다. 아직 nodeName이 비어 있다." },
+    { from: "s", to: "a", label: "bind", title: "스케줄러가 노드를 고른다", detail: "requests, taint, affinity, 분산 제약을 진짜로 계산한다. Pending과 FailedScheduling 이벤트도 진짜다.", payload: "Successfully assigned default/web-… to node-000002" },
+    { from: "k", to: "a", label: "status: Running", title: "kwok이 상태를 써 넣는다", detail: "kubelet 대신 kwok-controller가 Pod IP를 붙이고 컨테이너 상태를 Running, Ready로 고친다. 이미지는 받지도 않는다." },
+    { from: "u", to: "a", label: "logs / exec", title: "안을 보려 하면 실패한다", detail: "로그와 exec, port-forward는 kubelet이 처리하는 기능이라 전부 오류가 난다." },
+  ]}
+/>
+
+확인해 보면 이렇다. 존재하지 않는 이미지로 띄운 Pod까지 Running이 된다.
+
+```bash
+# 로그, exec, port-forward를 시도한다
+kubectl logs web-7b86f8987b-kw48k
+kubectl exec web-7b86f8987b-kw48k -- ls
+kubectl port-forward svc/web 18888:80 & sleep 2; curl -sS http://127.0.0.1:18888/
+
+# 없는 레지스트리의 이미지
+kubectl run ghost --image=registry.invalid/does-not-exist:0.0; sleep 3; kubectl get pod ghost
+
+# 노드에 kube-proxy가 만드는 NAT 규칙이 있는지
+sudo iptables -t nat -S | grep -c KUBE
+```
+
+```text
+Error from server (BadRequest): no logs found for container "nginx" in pod "default/web-7b86f8987b-kw48k"
+error: Internal error occurred: Internal error occurred: error executing command in container: no exec found for container "nginx" in pod "default/web-7b86f8987b-kw48k"
+Forwarding from 127.0.0.1:18888 -> 80
+Handling connection for 18888
+E1021 00:47:54.084969   31888 portforward.go:413] "Unhandled Error" err="an error occurred forwarding 18888 -> 80: error forwarding port 80 to pod web-7b86f8987b-kw48k/default, uid : no forward found for port 80 in pod \"default/web-7b86f8987b-kw48k\""
+error: lost connection to pod
+curl: (52) Empty reply from server
+NAME    READY   STATUS    RESTARTS   AGE
+ghost   1/1     Running   0          3s
+0
+```
+
+Pod IP `10.0.2.1`은 어느 인터페이스에도 없고, kube-proxy가 없어서 ClusterIP로 가는 규칙도 0줄이다. kwok에는 데이터 플레인이 통째로 없다. 그래서 kwok에서 성공했다고 앱이 동작한다는 뜻은 아니다. 대신 매니페스트가 API 서버를 통과하는지, 스케줄러가 어디에 놓는지, 컨트롤러와 오퍼레이터가 객체를 어떻게 바꾸는지는 진짜로 확인할 수 있다. Pod 상태 변화(실패, 재시작 같은)를 시험하고 싶으면 kwok의 Stage 설정으로 "이 라벨의 Pod는 10초 뒤 Failed"처럼 흉내를 정의한다.
+
+## 노드 100개, Pod 1000개를 1분 안에
+
+kwok이 빛나는 곳은 규모다. 컨테이너가 없으니 노드 하나의 비용이 Node 객체 하나다.
+
+```bash
+# 노드를 100개로 늘리는 데 걸린 시간
+s=$(date +%s.%N); kwokctl scale node --replicas 100 --name r2-demo >/dev/null 2>&1
+echo "scale to 100 nodes: $(echo "$(date +%s.%N) - $s" | bc) s"
+
+# Pod 1000개를 만들고 모두 Available이 될 때까지 잰다 (1초마다 확인)
+kubectl create deployment load --image=nginx:1.27 --replicas=1000 >/dev/null; s=$(date +%s.%N)
+until [ "$(kubectl get deploy load -o jsonpath='{.status.availableReplicas}')" = "1000" ]; do sleep 1; done
+echo "1000 pods available: $(echo "$(date +%s.%N) - $s" | bc) s"
+
+# 노드별 Pod 수의 최솟값과 최댓값, 그리고 클러스터 전체 메모리
+kubectl get pods -l app=load -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort | uniq -c | sort -n | awk 'NR==1{print "min per node:",$1} END{print "max per node:",$1}'
+ps -eo rss,args | grep r2-demo | grep -v grep | awk '{s+=$1} END {print "total RSS MiB:", int(s/1024)}'
+```
+
+```text
+scale to 100 nodes: .875366478 s
+1000 pods available: 50.558748664 s
+min per node: 10
+max per node: 10
+total RSS MiB: 648
+```
+
+노드 100개는 1초가 안 걸렸고, Pod 1000개가 노드마다 정확히 10개씩 퍼졌다. 기본 스케줄러의 점수 계산이 고르게 펴는 쪽으로 동작한다는 걸 그대로 보여 준다. 메모리는 460MiB에서 648MiB로 늘었을 뿐이다. kind로 노드 100개를 띄우려면 도커 컨테이너 100개 안에서 kubelet과 containerd가 각자 돌아야 하니 노트북으로는 어렵다.
+
+Pod 1000개에 50초가 걸린 이유도 계산해 볼 수 있다. 컨트롤러 매니저는 API 서버에 초당 요청 수 한도(`--kube-api-qps`, 기본 20)와 순간 허용량(`--kube-api-burst`, 기본 30)을 두고 요청한다. Pod 생성 요청이 한도에 묶이면 처음 30개는 바로 나가고 나머지는 초당 20개씩 나간다.
+
+<CodePlayground
+  caption="QPS 한도에 묶인 컨트롤러가 Pod n개를 만드는 데 걸리는 시간"
+  functionName="createSeconds"
+  initialCode={`function createSeconds(n, qps, burst) {
+  // burst개는 바로 나가고, 나머지는 초당 qps개씩 나간다
+  // n이 burst 이하면 0
+  return 0;
+}`}
+  solution={`function createSeconds(n, qps, burst) {
+  return Math.max(0, (n - burst) / qps);
+}`}
+  tests={[
+    { label: "1000개, 기본값 20/30", args: [1000, 20, 30], expected: 48.5 },
+    { label: "30개는 burst 안", args: [30, 20, 30], expected: 0 },
+    { label: "5000개", args: [5000, 20, 30], expected: 248.5 },
+    { label: "QPS 100, burst 200", args: [1000, 100, 200], expected: 8 },
+  ]}
+/>
+
+계산값 48.5초에 Available을 확인하는 루프의 1초 간격과 kwok이 상태를 고치는 시간이 붙어 실측 50.6초가 나왔다. 운영 클러스터에서 대규모 배포가 생각보다 느릴 때 같은 한도가 원인인 경우가 있다. 이런 성질은 kwok으로 노트북에서 재현하고 숫자를 바꿔 볼 수 있다.
+
+## kind는 컨테이너를 노드로 쓴다
+
+컨테이너가 진짜로 돌아야 하는 일, 예를 들어 이미지를 빌드해서 띄워 보고 Service로 호출하고 로그를 보는 일에는 kind가 기본 선택이다. 노드 구성은 설정 파일로 정한다.
+
+```yaml
+# kind-config.yaml: 컨트롤 플레인 1, 워커 2, 호스트 8080을 노드의 30080(NodePort)에 연결
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+  - role: worker
+  - role: worker
+```
+
+```bash
+# 클러스터 생성, 노드 확인 (노드는 도커 컨테이너다)
+kind create cluster --name dev --config kind-config.yaml
+kubectl get nodes
+docker ps --format '{{.Names}}\t{{.Image}}'
+```
+
+아래는 실제 형식대로 적은 예시다(원래 출력의 줄 끝 이모지는 뺐고, 버전 숫자는 형식을 보이려는 값이다).
+
+```text
+Creating cluster "dev" ...
+ ✓ Ensuring node image (kindest/node:v1.31.0)
+ ✓ Preparing nodes
+ ✓ Writing configuration
+ ✓ Starting control-plane
+ ✓ Installing CNI
+ ✓ Installing StorageClass
+ ✓ Joining worker nodes
+Set kubectl context to "kind-dev"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-dev
+
+NAME                STATUS   ROLES           AGE   VERSION
+dev-control-plane   Ready    control-plane   52s   v1.31.0
+dev-worker          Ready    <none>          31s   v1.31.0
+dev-worker2         Ready    <none>          31s   v1.31.0
+dev-control-plane	kindest/node:v1.31.0
+dev-worker	kindest/node:v1.31.0
+dev-worker2	kindest/node:v1.31.0
+```
+
+컨텍스트 이름이 `kind-<클러스터 이름>`이다. minikube는 `minikube`, k3d는 `k3d-<이름>`, kwok은 `kwok-<이름>`으로 만든다. 여러 도구를 섞어 쓰면 kubeconfig에 컨텍스트가 쌓이고, 도구가 클러스터를 만들 때마다 현재 컨텍스트를 자기 것으로 바꾼다. 운영 클러스터 컨텍스트가 같은 파일에 있으면 엉뚱한 곳에 apply하는 사고가 여기서 난다. 로컬 실습은 위 kwok 예처럼 kubeconfig 파일을 따로 두는 편이 안전하다. 컨텍스트 다루는 법은 [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts)에 있다.
+
+kind 노드 안의 containerd는 내 도커와 이미지 저장소가 다르다. 로컬에서 빌드한 이미지는 노드에 넣어 줘야 한다. 이걸 빠뜨리면 Pod가 레지스트리에서 받으려다 `ErrImagePull`이 난다.
+
+```bash
+# 로컬 이미지를 클러스터 노드에 넣는다 (도구마다 명령이 다르다)
+kind load docker-image shop-api:dev --name dev
+minikube image load shop-api:dev
+k3d image import shop-api:dev -c dev
+
+# 그리고 태그가 latest가 아니면 imagePullPolicy 기본값이 IfNotPresent라 노드의 이미지를 쓴다
+```
+
+`:latest` 태그는 기본 `imagePullPolicy`가 `Always`라서 노드에 넣어 둔 이미지를 두고 레지스트리로 받으러 간다. 로컬 이미지는 `:dev`처럼 다른 태그를 쓰거나 정책을 `IfNotPresent`로 적는다.
+
+## 로컬 클러스터에서 안 되는 것들
+
+로컬 클러스터는 클라우드가 대신 해 주던 것들이 비어 있다. 가장 먼저 부딪히는 건 LoadBalancer다. 클라우드에서는 클라우드 컨트롤러가 로드 밸런서를 만들어 EXTERNAL-IP를 채워 주는데, 로컬에는 그 컨트롤러가 없어서 kwok 실습처럼 `<pending>`에 머문다. 아래 그림은 kind에서 바깥 요청이 Pod까지 가는 길이다.
+
+<NetworkTopology
+  width={400}
+  height={350}
+  caption="kind 클러스터로 들어가는 길. 포트 매핑한 NodePort는 닿고, LoadBalancer는 주인이 없다."
+  zones={[
+    { id: "host", label: "내 노트북", x: 6, y: 20, w: 388, h: 316, tone: "neutral" },
+    { id: "docker", label: "도커 브리지 kind", x: 100, y: 110, w: 286, h: 216, tone: "private" },
+  ]}
+  nodes={[
+    { id: "br", label: "브라우저", sub: "localhost:8080", x: 60, y: 70, icon: "client", w: 100 },
+    { id: "cp", label: "control-plane", sub: "172.18.0.2", x: 175, y: 175, icon: "server", w: 120 },
+    { id: "w1", label: "worker", sub: "172.18.0.3", x: 310, y: 175, icon: "server", w: 110 },
+    { id: "pod", label: "web Pod", sub: "10.244.1.5", x: 310, y: 280, icon: "container", w: 110 },
+    { id: "lb", label: "LoadBalancer", sub: "EXTERNAL-IP ?", x: 270, y: 60, icon: "lb", w: 120 },
+  ]}
+  links={[
+    { from: "br", to: "cp", label: "8080→30080" },
+    { from: "cp", to: "w1", label: "kindnet" },
+    { from: "w1", to: "pod" },
+    { from: "br", to: "lb", dashed: true },
+  ]}
+  steps={[
+    { path: ["br", "cp"], packet: ":8080", title: "포트 매핑이 노드 컨테이너로 넘긴다", detail: "extraPortMappings가 호스트 8080을 control-plane 컨테이너의 30080으로 잇는다. 클러스터를 만들 때만 정할 수 있다." },
+    { path: ["br", "cp", "w1", "pod"], packet: "GET", title: "NodePort가 Pod로 보낸다", detail: "노드의 kube-proxy 규칙이 30080을 Service 뒤 Pod로 DNAT한다. Pod가 다른 노드에 있어도 kindnet이 노드 사이를 잇는다." },
+    { path: ["br", "lb"], packet: "GET", blocked: true, title: "LoadBalancer는 만들어 줄 주인이 없다", detail: "클라우드 컨트롤러가 없어서 EXTERNAL-IP가 pending이다. kind는 cloud-provider-kind나 MetalLB, minikube는 minikube tunnel, k3d는 내장 ServiceLB로 채운다." },
+    { path: ["w1"], highlight: ["docker"], title: "macOS·Windows에서는 한 겹 더 있다", detail: "도커가 VM 안에서 돌아서 172.18.0.x 주소는 호스트에서 바로 닿지 않는다. 포트 매핑이나 port-forward를 쓴다." },
+  ]}
+/>
+
+LoadBalancer 말고도 비는 곳이 있다. 도구마다 정리하면 이렇다.
+
+| | kind | minikube | k3d | kwok |
+|---|---|---|---|---|
+| 노드 | 도커 컨테이너 | VM 또는 컨테이너 | 도커 컨테이너(k3s) | 가짜 Node 객체 |
+| 멀티 노드 | 설정 파일 | `--nodes` | `--agents` | 수천 개도 가능 |
+| 기본 CNI | kindnet | 드라이버별 기본(bridge 등) | flannel | 없음 |
+| LoadBalancer | cloud-provider-kind·MetalLB | `minikube tunnel` | 내장 ServiceLB | pending |
+| 인그레스 | 직접 설치 | 애드온 | Traefik 기본 | 객체만 |
+| 생성 시간 | 수십 초 | 수십 초~분 | 수십 초 | 1~2초 |
+
+CNI는 NetworkPolicy를 시험할 때 중요하다. 정책을 실제로 지키는 건 CNI 플러그인이라, 정책을 지원하지 않는 CNI 위에서는 거부 정책을 만들어도 트래픽이 그대로 통과한다. kind라면 `networking.disableDefaultCNI: true`로 기본 CNI를 끄고 Calico나 Cilium을 설치하고, minikube라면 `--cni=calico`를 준다. k3s는 flannel에 정책 컨트롤러를 따로 넣어 기본으로 정책을 지킨다. kwok에서는 정책 객체가 만들어지기만 한다. 정책의 동작 자체는 [NetworkPolicy](/posts/k8s-network-policy)와 [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)에 있다.
+
+그 밖에 로컬에서 재현하기 어려운 것들이 있다. 노드가 실제로 죽거나 네트워크가 갈라지는 장애, 노드마다 다른 커널과 하드웨어, 클라우드 IAM과 연동한 ServiceAccount, 실제 디스크를 붙이는 CSI 드라이버, 수백 노드의 실제 성능이다. kind 노드 컨테이너를 `docker stop`으로 멈추면 노드 장애 흉내는 낼 수 있지만, 모든 노드가 같은 호스트 커널과 디스크를 쓴다는 점은 바꿀 수 없다. kind 노드 안의 Pod도 결국 호스트의 cgroup 아래에 있어서, 노드마다 메모리를 따로 제한하지 않으면 한 노드의 Pod가 노트북 전체 메모리를 다툰다([네임스페이스와 cgroup](/posts/linux-namespaces-cgroups)).
+
+## 일에 맞춰 고른다
+
+정답 하나가 있다기보다 "무엇이 진짜여야 하나"로 고른다. 아래 그림은 질문을 하나씩 던져 후보를 좁혀 가는 순서다.
+
+<AlgoTrace
+  caption="로컬 클러스터 고르기. 진짜여야 하는 것이 늘어날수록 무거운 도구로 간다."
+  cells={["컨테이너 실행?", "노드 수백 개?", "CI에서?", "애드온·GUI?", "가볍게?"]}
+  memoryLabel="남은 후보"
+  steps={[
+    { pointer: 0, memory: ["kind", "minikube", "k3d", "kwok"], caption: "앱이 실제로 돌아야 하나? 매니페스트 검증, 스케줄러, 컨트롤러 개발만이면 kwok으로 충분하다." },
+    { pointer: 1, memory: ["kwok"], found: [1], caption: "노드 수백·수천 개에서 스케줄링이나 오퍼레이터를 시험하려면 kwok 말고는 노트북에서 할 방법이 없다." },
+    { pointer: 2, memory: ["kind", "k3d"], caption: "컨테이너가 돌아야 하고 CI에서 매번 새로 띄운다면 도커 하나로 도는 kind나 k3d. kind가 업스트림 쿠버네티스와 가장 같다." },
+    { pointer: 3, memory: ["minikube"], caption: "처음 배우면서 대시보드, ingress, metrics-server를 명령 하나로 켜고 싶다면 minikube가 편하다." },
+    { pointer: 4, memory: ["k3d"], found: [4], caption: "노트북 자원이 빠듯하고 LoadBalancer와 인그레스가 바로 필요하면 k3d. 단 k3s는 SQLite, Traefik처럼 운영 클러스터와 다른 기본값이 있다." },
+  ]}
+/>
+
+몇 가지 상황을 예로 들면 이렇다. Helm 차트나 Kustomize 결과가 API 서버를 통과하는지 PR마다 확인하는 CI 단계라면 kwok이 몇 초 만에 끝낸다. 컨테이너를 띄우지 않으니 이미지가 없어도 된다. 같은 CI에서 앱을 실제로 띄워 통합 테스트까지 돌린다면 kind다. 오퍼레이터를 만들면서 노드 500개 클러스터에서 재조정 루프가 API 서버를 얼마나 두드리는지 보고 싶다면 kwok이다. 쿠버네티스를 처음 만지는 동료에게 권한다면 minikube가 막히는 곳이 적다.
+
+어느 쪽을 쓰든 로컬과 운영의 차이를 적어 둔다. 로컬에서 통과한 매니페스트가 운영에서 막히는 대표적인 경우는 운영에만 있는 어드미션 정책(Pod Security, 사내 정책), 운영의 StorageClass 이름, LoadBalancer와 인그레스 클래스 이름, 리소스 쿼터다. 이 값들은 Kustomize 오버레이나 Helm values로 환경마다 나눈다. 그리고 로컬 클러스터의 쿠버네티스 버전을 운영과 맞춘다. kind는 `--image kindest/node:v<버전>`, minikube는 `--kubernetes-version`, kwok은 `--kube-apiserver-binary`나 설정으로 고른다. 버전에 따라 기본으로 켜진 기능이 달라서([기능 성숙도](/posts/k8s-feature-maturity)) 버전을 안 맞추면 로컬에서만 되는 기능을 쓰게 된다.
+
+## 다 쓰고 나면 지운다
+
+로컬 클러스터는 생각보다 자원을 오래 붙잡는다. kind 클러스터 하나는 노드 컨테이너가 떠 있는 동안 메모리를 계속 쓰고, 노트북을 재부팅해도 도커가 다시 띄운다.
+
+```bash
+# 도구별로 클러스터 목록을 보고 지운다
+kwokctl get clusters
+kwokctl delete cluster --name r2-demo --kubeconfig ./r2-demo.kubeconfig
+kind get clusters && kind delete cluster --name dev
+minikube profile list && minikube delete
+k3d cluster list && k3d cluster delete dev
+```
+
+```text
+Cluster is stopping cluster=r2-demo
+Cluster is stopped elapsed=9ms cluster=r2-demo
+Cluster is deleting cluster=r2-demo
+Cluster is deleted elapsed=18ms cluster=r2-demo
+```
+
+(위 출력은 kwok 부분만 실제다.) 지운 뒤에도 kubeconfig에 컨텍스트가 남는 도구가 있다. `kubectl config get-contexts`로 보고 `kubectl config delete-context`로 정리한다. 남은 컨텍스트가 현재 컨텍스트로 잡혀 있으면 다음 kubectl 명령이 `connection refused`로 실패한다.
+
+## 진짜여야 하는 것만큼 무겁게
+
+kind는 도커 컨테이너를 노드로 써서 업스트림 쿠버네티스와 가장 비슷하고, minikube는 애드온과 편의 기능이 많고, k3d는 가벼운 k3s에 LoadBalancer와 인그레스를 기본으로 준다. kwok은 컨트롤 플레인만 진짜로 띄우고 노드와 Pod 상태를 흉내 내서, 컨테이너 없이 수천 노드 규모의 스케줄링과 컨트롤러 동작을 몇 초 만에 시험한다. 어느 도구든 LoadBalancer, 실제 노드 장애, 클라우드 연동은 비어 있으니 그 차이를 알고 쓴다. 클러스터를 띄웠다면 다음은 [kubectl 기본기](/posts/kubectl-essentials)다.
+
+## 면접에서 나올 만한 질문
+
+### kind와 minikube는 무엇이 다른가요?
+
+kind는 도커 컨테이너 하나를 노드 하나로 쓰고 kubeadm으로 표준 클러스터를 만들어서, 업스트림 쿠버네티스 테스트와 CI에 많이 쓴다. minikube는 기본으로 VM이나 컨테이너 하나에 단일 노드 클러스터를 띄우고 애드온, 대시보드, tunnel 같은 개발 편의 기능을 많이 준다. 멀티 노드는 둘 다 되지만 kind가 설정 파일로 더 자연스럽다.
+
+### kwok은 무엇이고 언제 쓰나요?
+
+kwok은 kubelet 없이 진짜 API 서버, etcd, 스케줄러, 컨트롤러 매니저만 띄우고 노드와 Pod 상태를 kwok-controller가 흉내 내는 도구다. 컨테이너가 돌지 않으니 로그, exec, 네트워크는 안 되지만 노드 수천 개를 몇 초 만에 만든다. 스케줄링 정책, 오퍼레이터와 컨트롤러 개발, 매니페스트가 API 서버를 통과하는지 보는 CI에 쓴다.
+
+### 로컬 클러스터에서 LoadBalancer Service가 계속 pending입니다. 왜 그런가요?
+
+EXTERNAL-IP는 클라우드 컨트롤러가 실제 로드 밸런서를 만들고 채워 주는데, 로컬에는 그 컨트롤러가 없다. kind는 cloud-provider-kind나 MetalLB, minikube는 minikube tunnel을 쓰고, k3d는 k3s의 내장 ServiceLB가 채워 준다. 당장 확인만 하려면 NodePort와 포트 매핑이나 kubectl port-forward를 쓴다.
+
+### kind에 로컬에서 빌드한 이미지로 Pod를 띄웠더니 ErrImagePull이 납니다.
+
+kind 노드 안의 containerd는 내 도커와 이미지 저장소가 달라서, 로컬 이미지를 `kind load docker-image`로 넣어 줘야 한다. 넣었는데도 받으러 간다면 태그가 latest라 imagePullPolicy 기본값이 Always인 경우다. 다른 태그를 쓰거나 IfNotPresent를 명시한다.
+
+### 로컬에서 NetworkPolicy를 만들었는데 트래픽이 막히지 않습니다.
+
+정책을 실제로 지키는 건 CNI 플러그인이라, 정책을 지원하지 않는 CNI 위에서는 객체만 만들어지고 아무 일도 일어나지 않는다. kind라면 기본 CNI를 끄고 Calico나 Cilium을 설치하고, minikube라면 `--cni` 옵션으로 정책을 지원하는 CNI를 고른다. kwok에는 데이터 플레인이 없어서 정책 동작을 시험할 수 없다.
+
+### 로컬 클러스터로 운영을 대신 검증할 때 무엇을 조심하나요?
+
+쿠버네티스 버전을 운영과 맞추고, 운영에만 있는 어드미션 정책, StorageClass, 인그레스 클래스, 리소스 쿼터는 따로 맞춰야 한다. 노드 장애, 클라우드 IAM, 실제 디스크와 네트워크 성능은 로컬에서 재현되지 않는다. 그리고 kubeconfig에 로컬과 운영 컨텍스트가 섞이면 엉뚱한 클러스터에 적용하는 사고가 나니 파일을 나눈다.
+
+### kwok에서 Pod 1000개를 만드는 데 50초가 걸렸습니다. 무엇이 병목인가요?
+
+컨트롤러 매니저가 API 서버에 거는 요청 한도(기본 QPS 20, burst 30)다. 처음 30개 뒤로는 초당 20개씩 Pod를 만들어서 1000개면 약 48.5초가 걸린다. 운영 클러스터의 대규모 배포가 느릴 때도 같은 한도를 의심할 수 있고, kwok으로 값을 바꿔 가며 재현해 볼 수 있다.

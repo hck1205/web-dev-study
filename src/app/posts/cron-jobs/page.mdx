@@ -1,0 +1,649 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cron-jobs");
+
+"매일 0시에 쿠폰 만료 안내 메일을 보낸다"는 작업을 걸었다. 다음 날 메일은 오전 9시에 나갔다. 서버 시계가 UTC였기 때문이다. 고쳐 놓고 한 달 뒤, 트래픽이 늘어 API 서버를 세 대로 늘렸다. 그날부터 사용자들이 같은 메일을 세 통씩 받았다. 앱 안에 넣어 둔 스케줄러가 서버마다 하나씩 돌고 있었다.
+
+정해진 시각에 무언가를 실행하는 일은 한 줄이면 걸린다. 어려운 건 "정해진 시각"이 어느 나라 시각인지, "한 번"이 정말 한 번인지, 안 돌았을 때 누가 알아채는지다. 이 글은 그 세 가지를 따라간다. cron 표현식의 함정, 시간대와 서머타임, 겹치는 실행과 `flock`, 여러 대에서 한 번만 돌리기, 쿠버네티스 CronJob 설정, 그리고 안 돈 것을 알아채는 방법까지 다룬다.
+
+예시는 Ubuntu 24.04의 Debian 계열 cron(3.0pl1)과 쿠버네티스 1.30 기준이다. 쿠버네티스 출력은 kwok으로 띄운 실제 API 서버와 컨트롤러에서 받았다. 큰 데이터를 나눠 처리하는 배치 자체의 설계는 [배치 처리](/posts/batch-processing)에서 다뤘으니 여기서는 "언제, 몇 번 실행되느냐"에만 집중한다.
+
+## 다섯 칸이 정하는 시각
+
+cron은 1970년대 유닉스에서 온 스케줄러다. 데몬이 매분 깨어나 등록된 줄을 하나씩 보고, 지금 시각과 맞는 줄의 명령을 실행한다. 한 줄은 시각을 정하는 다섯 칸과 명령으로 이루어진다. 아래 조각을 하나씩 눌러 보면 각 칸이 무엇을 정하는지 나온다.
+
+<UrlAnatomy
+  caption="평일 9시부터 18시까지 15분마다 정산 스크립트를 돌리는 crontab 한 줄"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "min", display: "*/15", title: "분 (0–59)", description: "*/15는 0, 15, 30, 45분이다. 0부터 시작해 15씩 건너뛴다. 시작점이 시간마다 0으로 돌아간다는 점이 뒤에서 함정이 된다." },
+    { key: "hour", display: "9-18", title: "시 (0–23)", description: "9시부터 18시까지. 18:45도 포함된다. 끝 시각에 정확히 멈추고 싶다면 9-17로 쓰고 18:00을 따로 건다." },
+    { key: "dom", display: "*", title: "일 (1–31)", description: "모든 날. 31을 적으면 31일이 없는 달에는 아예 돌지 않는다." },
+    { key: "mon", display: "*", title: "월 (1–12)", description: "모든 달. jan, feb 같은 이름도 받는다." },
+    { key: "dow", display: "1-5", title: "요일 (0–7)", description: "월요일부터 금요일. 0과 7이 둘 다 일요일이다. 일 칸과 요일 칸을 둘 다 제한하면 AND가 아니라 OR로 계산된다." },
+    { key: "cmd", display: "/usr/local/bin/settle.sh", title: "실행할 명령", description: "/bin/sh로 실행된다. 로그인 셸이 아니므로 PATH가 짧고 .bashrc를 읽지 않는다. %는 줄바꿈으로 바뀐다.", code: "SHELL=/bin/sh\nPATH=/usr/bin:/bin   # cron이 정하는 기본값" },
+  ]}
+/>
+
+칸에 쓸 수 있는 문법은 네 가지다. `*`(전부), `,`(목록: `1,15`), `-`(범위: `9-18`), `/`(간격: `*/15`, `0-30/10`). `@daily`, `@reboot` 같은 줄임말도 있다. 초 단위 칸은 없다. Spring의 `@Scheduled(cron = ...)`나 Quartz는 맨 앞에 초 칸을 하나 더 받는 여섯 칸 문법이라, 같은 문자열을 crontab에 옮겨 붙이면 칸이 하나씩 밀린다.
+
+## 나눠 떨어지지 않는 간격
+
+"7분마다"를 `*/7`로 쓰면 7분마다 돌지 않는다. `/`는 "0부터 7씩 건너뛴 분 목록"을 만들 뿐이고, 그 목록은 매 시간 똑같이 반복된다. node의 `cron-parser`로 다음 실행 시각을 뽑아 봤다.
+
+```bash
+# cron-parser 4.9로 다음 실행 시각 네 개씩 뽑기 (UTC 기준)
+node cron1.mjs
+```
+
+```text
+*/7 * * * *      -> 2026-10-21 09:49, 2026-10-21 09:56, 2026-10-21 10:00, 2026-10-21 10:07
+*/25 * * * *     -> 2026-10-21 09:25, 2026-10-21 09:50, 2026-10-21 10:00, 2026-10-21 10:25
+0 0 */2 * *      -> 2026-10-29 00:00, 2026-10-31 00:00, 2026-11-01 00:00, 2026-11-03 00:00
+0 0 31 * *       -> 2026-10-31 00:00, 2026-12-31 00:00, 2027-01-31 00:00
+0 9 1-7 * 1      -> 2026-11-01 09:00, 2026-11-02 09:00, 2026-11-03 09:00, 2026-11-04 09:00, 2026-11-05 09:00, 2026-11-06 09:00
+0 9 * * 1        -> 2026-11-02 09:00, 2026-11-09 09:00, 2026-11-16 09:00
+```
+
+첫 줄에서 9시 56분 다음이 10시 0분이다. 간격이 4분으로 줄었다. `*/25`는 25분 간격 뒤에 10분 간격이 끼어든다. "이틀마다"인 `*/2`도 같은 일이 날짜에서 일어난다. 10월 31일 다음 11월 1일, 이틀 연속 돈다. 아래 그림에서 한 시간이 넘어가는 순간을 따라가 본다.
+
+<AlgoTrace
+  caption="*/7은 '7분마다'가 아니라 '분 값이 7의 배수일 때'다"
+  memoryLabel="지난 실행과의 간격"
+  cells={[":42", ":49", ":56", ":00", ":07", ":14"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["-"], caption: "9시 42분. 42는 7의 배수라 돈다." },
+    { pointer: 1, found: [0, 1], memory: ["7분"], caption: "49분. 7분 간격이다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["7분", "7분"], caption: "56분. 여기까지는 기대한 대로다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["7분", "7분", "4분"], caption: "다음 7의 배수는 63분이 아니라 다음 시간의 0분이다. 간격이 4분으로 줄었다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["7분", "7분", "4분", "7분"], caption: "다시 7분 간격으로 돌아간다. 60을 나누지 못하는 간격은 매 시간 이렇게 어긋난다." },
+  ]}
+/>
+
+60을 나누는 간격(1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)만 정확하다. 7분마다가 정말 필요하면 cron이 아니라 "지난 실행 + 7분"을 계산하는 스케줄러가 맞다. systemd timer의 `OnUnitActiveSec=7min`이 그렇게 동작한다.
+
+다섯째 줄이 더 위험하다. "매달 첫째 월요일 9시"를 `0 9 1-7 * 1`로 쓰면 1일부터 7일까지 매일, 그리고 모든 월요일에 돈다. crontab 매뉴얼에 이렇게 적혀 있다.
+
+```text
+Note: The day of a command's execution can be specified by two
+fields — day of month, and day of week.  If both fields are
+restricted (i.e., aren't *), the command will be run when
+either field matches the current time.
+```
+
+일 칸과 요일 칸을 둘 다 제한하면 OR다. 첫째 월요일은 요일 칸만 `1`로 두고 스크립트 안에서 날짜를 검사한다. `[ "$(date +\%d)" -le 07 ] && run.sh`처럼 쓴다. 여기서 `%` 앞의 역슬래시도 필요하다. crontab의 명령 부분에서 `%`는 줄바꿈으로 바뀌고 그 뒤는 표준 입력으로 넘어간다. `date +%F`를 그대로 쓰면 명령이 `date +`에서 잘린다.
+
+명령이 도는 환경도 다르다. cron은 `PATH=/usr/bin:/bin`만 주고 `.bashrc`나 `.profile`을 읽지 않는다. 터미널에서는 잘 되던 스크립트가 cron에서만 실패하는 이유가 대부분 이것이다. 같은 환경을 만들어 실행해 봤다.
+
+```bash
+# 로그인 셸에서는 node가 보인다
+echo "로그인 셸: $(command -v node)"
+# cron과 같은 최소 환경으로 실행한다
+env -i SHELL=/bin/sh HOME=/root LOGNAME=root PATH=/usr/bin:/bin /bin/sh -c 'echo "PATH=$PATH"; node -v'
+echo "exit=$?"
+```
+
+```text
+로그인 셸: /opt/node22/bin/node
+PATH=/usr/bin:/bin
+/bin/sh: 1: node: not found
+exit=127
+```
+
+종료 코드 127은 "명령을 못 찾았다"다. crontab에서는 명령을 절대 경로로 쓰거나 맨 위에 `PATH=`를 직접 적는다. cron이 이 실패를 알리는 방법은 `MAILTO`로 메일을 보내는 것인데, 메일 서버가 없는 요즘 서버에서는 출력이 그냥 사라진다. 명령 끝에 `>> /var/log/settle.log 2>&1`을 붙여 두지 않으면 실패한 흔적조차 없다.
+
+직접 계산해 보면 규칙이 손에 붙는다. 아래 함수는 cron 한 줄과 시각을 받아 그 분에 실행되는지 돌려준다. 일·요일 칸의 OR 규칙까지 맞춰 보자.
+
+<CodePlayground
+  caption="cron 표현식이 이 시각에 맞는가"
+  functionName="cronMatches"
+  initialCode={`// t = { month, day, weekday(0=일요일), hour, minute }
+function cronMatches(expr, t) {
+  const [mi, h, dom, mon, dow] = expr.trim().split(/\\s+/);
+  // 각 칸에서 *, 목록(,), 범위(-), 간격(/)을 처리한다
+  // 일(dom)과 요일(dow)이 둘 다 *로 시작하지 않으면 OR로 계산한다
+  return false;
+}`}
+  solution={`function cronMatches(expr, t) {
+  const [mi, h, dom, mon, dow] = expr.trim().split(/\\s+/);
+  const field = (f, v, lo, hi) => f.split(",").some((part) => {
+    const [range, stepStr] = part.split("/");
+    const step = stepStr ? Number(stepStr) : 1;
+    let a, b;
+    if (range === "*") { a = lo; b = hi; }
+    else if (range.includes("-")) { [a, b] = range.split("-").map(Number); }
+    else { a = Number(range); b = stepStr ? hi : a; }
+    return v >= a && v <= b && (v - a) % step === 0;
+  });
+  const minOk = field(mi, t.minute, 0, 59);
+  const hourOk = field(h, t.hour, 0, 23);
+  const monOk = field(mon, t.month, 1, 12);
+  const domOk = field(dom, t.day, 1, 31);
+  // 0과 7이 둘 다 일요일이다
+  const dowOk = field(dow, t.weekday, 0, 7) || (t.weekday === 0 && field(dow, 7, 0, 7));
+  const dayOk = dom.startsWith("*") || dow.startsWith("*") ? domOk && dowOk : domOk || dowOk;
+  return minOk && hourOk && monOk && dayOk;
+}`}
+  tests={[
+    { label: "평일 9:45 (수)", args: ["*/15 9-18 * * 1-5", { month: 10, day: 21, weekday: 3, hour: 9, minute: 45 }], expected: true },
+    { label: "토요일 9:45", args: ["*/15 9-18 * * 1-5", { month: 10, day: 24, weekday: 6, hour: 9, minute: 45 }], expected: false },
+    { label: "*/7 at 10:00", args: ["*/7 * * * *", { month: 10, day: 21, weekday: 3, hour: 10, minute: 0 }], expected: true },
+    { label: "*/7 at 9:59", args: ["*/7 * * * *", { month: 10, day: 21, weekday: 3, hour: 9, minute: 59 }], expected: false },
+    { label: "1-7일 OR 월요일: 11/5(목)", args: ["0 9 1-7 * 1", { month: 11, day: 5, weekday: 4, hour: 9, minute: 0 }], expected: true },
+    { label: "1-7일 OR 월요일: 11/9(월)", args: ["0 9 1-7 * 1", { month: 11, day: 9, weekday: 1, hour: 9, minute: 0 }], expected: true },
+    { label: "1-7일 OR 월요일: 11/10(화)", args: ["0 9 1-7 * 1", { month: 11, day: 10, weekday: 2, hour: 9, minute: 0 }], expected: false },
+    { label: "요일 7도 일요일", args: ["0 0 * * 7", { month: 11, day: 1, weekday: 0, hour: 0, minute: 0 }], expected: true },
+  ]}
+/>
+
+## 서버 시계는 어느 나라 시간인가
+
+cron은 데몬이 떠 있는 시스템의 시간대로 칸을 계산한다. 클라우드 이미지와 컨테이너는 대부분 UTC로 설정되어 있으니 `0 0 * * *`는 한국 시각 오전 9시다. 맨 앞의 쿠폰 메일이 이렇게 9시에 나갔다.
+
+자주 하는 실수는 crontab에 `TZ=Asia/Seoul`을 적고 고쳤다고 믿는 것이다. Debian·Ubuntu의 cron 매뉴얼은 이렇게 말한다.
+
+```text
+Even if a user specifies the TZ environment variable in his crontab
+this will affect only the commands executed in the crontab, not the
+execution of the crontab tasks themselves.
+```
+
+`TZ=`는 실행되는 명령의 환경 변수일 뿐 스케줄 계산에는 안 쓰인다. RHEL 계열이 쓰는 cronie는 `CRON_TZ=Asia/Seoul`로 줄마다 시간대를 정할 수 있지만 Debian cron은 이걸 모른다. 서버 전체 시간대를 바꾸는(`timedatectl set-timezone`) 방법은 로그 시각까지 바뀌니 권하지 않는다. 서버는 UTC로 두고 cron 칸을 UTC로 환산해 적은 뒤 옆에 주석으로 한국 시각을 남기는 쪽이 오래 간다.
+
+쿠버네티스 CronJob은 1.27부터 `spec.timeZone` 필드가 정식 기능이다. 없으면 kube-controller-manager의 시간대(보통 UTC)를 쓴다. 예전처럼 schedule 문자열에 `CRON_TZ=`를 넣으면 API 서버가 거절한다. kwok 클러스터(쿠버네티스 1.30.4)에 넣어 봤다.
+
+```bash
+# schedule 안에 CRON_TZ를 넣은 CronJob을 적용한다
+kubectl apply -f cj-tz.yaml
+```
+
+```text
+The CronJob "tz-in-schedule" is invalid: spec.schedule: Invalid value: "CRON_TZ=Asia/Seoul 0 3 * * *": cannot use TZ or CRON_TZ in schedule, use timeZone field instead
+```
+
+## 서머타임에는 두 번 돌거나 건너뛴다
+
+한국은 서머타임이 없지만 미국·유럽 사용자를 상대하거나 그쪽 리전 시간대로 스케줄을 잡으면 1년에 두 번 문제가 생긴다. 봄에는 새벽 2시에서 3시로 시계가 건너뛰어 2시 30분이 존재하지 않는다. 가을에는 1시대가 두 번 지나간다. 같은 "1시 30분"이 서로 다른 두 순간이다.
+
+```bash
+# 2026-11-01, 뉴욕에서 1시 30분이 두 번 있다
+for e in 1793511000 1793514600; do TZ=America/New_York date -d @$e '+%F %T %Z (%z)'; done
+```
+
+```text
+2026-11-01 01:30:00 EDT (-0400)
+2026-11-01 01:30:00 EST (-0500)
+```
+
+스케줄러가 이 두 순간을 어떻게 다루는지는 구현마다 다르다. `cron-parser`에 뉴욕 시간대를 주고 전환일 앞뒤의 실행 시각을 뽑았다.
+
+```bash
+# 봄(3/8)과 가을(11/1) 전환일 앞뒤의 실행 시각
+node dst.mjs
+```
+
+```text
+# 30 2 * * *  (tz=America/New_York)
+  2026-03-07 07:30 UTC = 2026-03-07 2:30:00 GMT−5
+  2026-03-08 07:30 UTC = 2026-03-08 3:30:00 GMT−4
+  2026-03-09 06:30 UTC = 2026-03-09 2:30:00 GMT−4
+# 30 1 * * *  (tz=America/New_York)
+  2026-10-31 05:30 UTC = 2026-10-31 1:30:00 GMT−4
+  2026-11-01 05:30 UTC = 2026-11-01 1:30:00 GMT−4
+  2026-11-02 06:30 UTC = 2026-11-02 1:30:00 GMT−5
+# 0 * * * *  (tz=America/New_York)
+  2026-11-01 05:00 UTC = 2026-11-01 1:00:00 GMT−4
+  2026-11-01 06:00 UTC = 2026-11-01 1:00:00 GMT−5
+  2026-11-01 07:00 UTC = 2026-11-01 2:00:00 GMT−5
+  2026-11-01 08:00 UTC = 2026-11-01 3:00:00 GMT−5
+```
+
+이 라이브러리는 없는 2시 30분을 3시 30분으로 밀어서 한 번 돌리고, 두 번 오는 1시 30분은 처음 것만 돌린다. 그런데 매시 정각 작업은 1시를 두 번 돈다. 하루에 23번 도는 날과 25번 도는 날이 생기는 것이다. Debian cron도 비슷한 규칙을 둔다. 매뉴얼에 따르면 3시간 미만으로 시계가 앞으로 가면 건너뛴 시간대의 작업을 바로 이어서 실행하고, 뒤로 가면 반복되는 시간대의 작업을 다시 돌리지 않는다. 단 시나 분 칸이 `*`인 작업은 이 보정을 받지 않는다. 다른 스케줄러는 건너뛴 작업을 아예 버리기도 한다.
+
+결국 정답은 스케줄러가 아니라 작업 쪽에 있다. 서머타임이 있는 시간대로 스케줄을 잡지 않거나(UTC로 계산), 하루에 한 번이어야 하는 작업이면 "오늘 날짜로 이미 돌았는가"를 작업이 직접 확인하게 만든다. 뒤에서 볼 실행 기록 테이블이 그 역할을 한다.
+
+## 앞 실행이 안 끝났는데 다음 실행이 온다
+
+cron은 앞 실행이 끝났는지 묻지 않는다. 15분마다 도는 정산이 데이터가 몰린 날 20분 걸리면, 두 번째 실행이 첫 번째와 같은 데이터를 동시에 집계한다. 2초마다 깨우는 스케줄러와 5초 걸리는 작업으로 줄여서 재현했다.
+
+```bash
+# settle.sh: 시작과 끝 시각을 찍고 5초 잔다
+# 2초마다 하나씩 띄운다 (cron이 매 주기 새 프로세스를 띄우는 것과 같다)
+for i in 1 2 3; do ./settle.sh >> out1.log & sleep 2; done; wait
+cat out1.log
+```
+
+```text
+19:24:57 start pid=30382
+19:24:59 start pid=30418
+19:25:01 start pid=30460
+19:25:02 end   pid=30382
+19:25:04 end   pid=30418
+19:25:06 end   pid=30460
+```
+
+19:25:01에는 세 개가 동시에 돌고 있다. 이걸 막는 가장 간단한 도구가 `flock`이다. 파일 하나에 커널 잠금(advisory lock)을 걸고, 잠금을 얻은 경우에만 명령을 실행한다. 아래 그림에서 두 번째 실행이 어떻게 비켜 가는지 본다.
+
+<SequenceDiagram
+  caption="flock -n은 잠금을 못 얻으면 기다리지 않고 바로 빠진다"
+  actors={[
+    { id: "cron", label: "cron" },
+    { id: "r1", label: "실행 1" },
+    { id: "lock", label: "settle.lock" },
+    { id: "r2", label: "실행 2" },
+  ]}
+  steps={[
+    { from: "cron", to: "r1", label: "09:00 실행", title: "첫 실행이 뜬다", detail: "cron이 flock -n /run/lock/settle.lock settle.sh를 실행한다." },
+    { from: "r1", to: "lock", label: "flock(LOCK_EX|LOCK_NB)", title: "잠금을 얻는다", detail: "아무도 쥐고 있지 않으니 바로 얻는다. 이제 settle.sh가 돈다.", payload: "fd 3 -> /run/lock/settle.lock (exclusive)" },
+    { from: "cron", to: "r2", label: "09:15 실행", title: "다음 주기가 온다", detail: "첫 실행은 데이터가 많아 아직 돌고 있다. cron은 그걸 모르고 새 프로세스를 띄운다." },
+    { from: "r2", to: "lock", label: "flock -n", title: "잠금이 이미 잡혀 있다", detail: "-n이라 기다리지 않는다. 명령을 실행하지 않고 종료 코드 1로 끝난다.", payload: "exit=1 (-E 75로 바꿀 수 있다)" },
+    { from: "r1", to: "lock", label: "종료 → fd 닫힘", title: "끝나면 잠금이 풀린다", detail: "프로세스가 끝나 파일 디스크립터가 닫히면 커널이 잠금을 푼다. kill -9로 죽어도 마찬가지다." },
+  ]}
+/>
+
+같은 실험을 `flock -n`으로 감쌌다.
+
+```bash
+# 잠금 파일은 재부팅 때 비워지는 /run/lock 아래에 둔다
+for i in 1 2 3; do
+  flock -n /run/lock/v5-settle.lock ./settle.sh >> out2.log || echo "skip" >> out2.log &
+  sleep 2
+done; wait
+```
+
+```text
+19:25:06 start pid=30526
+skip
+skip
+19:25:11 end   pid=30526
+```
+
+종료 코드도 확인해 둔다. 잠금을 못 얻으면 기본은 1이다. 작업 자체가 1로 실패한 것과 구분이 안 되니 `-E`로 다른 값을 준다. 기다렸다가 실행하고 싶으면 `-w 초`를 쓴다.
+
+```bash
+L=/run/lock/v5-settle.lock
+flock -n $L ./settle.sh &       # 첫 실행이 잠금을 쥔다
+sleep 1
+flock -n $L ./settle.sh; echo "exit=$?"         # 기본 종료 코드
+flock -n -E 75 $L ./settle.sh; echo "exit=$?"   # 잠금 실패를 75로 구분
+flock -w 10 $L ./settle.sh; echo "exit=$?"      # 최대 10초 기다렸다가 실행
+```
+
+```text
+19:25:42 start pid=31196
+exit=1
+exit=75
+19:25:47 end   pid=31196
+19:25:47 start pid=31225
+19:25:52 end   pid=31225
+exit=0
+```
+
+`-w 10`을 준 세 번째 실행은 첫 실행이 끝난 19:25:47에 바로 시작했다. 겹치지는 않지만 밀린다. 매번 늦게 끝나는 작업에 `-w`를 쓰면 대기열이 계속 길어지니, 주기 작업에는 보통 `-n`(이번 차례는 건너뛴다)이 맞다.
+
+PID 파일로 같은 일을 하는 스크립트도 많다. 시작할 때 PID를 파일에 쓰고, 파일이 있으면 실행하지 않는 방식이다. 작업이 `kill -9`나 OOM으로 죽으면 파일이 남아 다음 실행이 영원히 막히고, PID가 재사용되면 엉뚱한 프로세스를 살아 있는 작업으로 착각한다. `flock`은 잠금이 열린 파일 디스크립터에 붙어 있어서 프로세스가 어떻게 죽든 커널이 풀어 준다. 잠금을 쥔 자식 프로세스를 `kill -9`로 죽여 봤다.
+
+```bash
+# flock이 sleep 300을 띄운 상태에서 자식 sleep을 강제로 죽인다
+bash crash.sh
+```
+
+```text
+  PID  PPID CMD
+31182 31180 sleep 300
+  PID CMD
+31180 flock -n /run/lock/v5-settle.lock sleep 300
+다음 실행은 잠금을 얻었다
+exit=0
+```
+
+한 가지는 조심한다. 잠금은 파일 디스크립터를 물려받은 자식 프로세스에도 남는다. 작업이 백그라운드 프로세스를 띄우고 끝나면 그 프로세스가 살아 있는 동안 잠금도 계속 잡혀 있다. 그리고 `flock`은 한 서버 안에서만 통한다. 서버가 여러 대면 다른 방법이 필요하다.
+
+## 레플리카가 셋이면 메일도 세 통
+
+앱 코드 안에 `node-cron`, Spring `@Scheduled`, `setInterval` 같은 스케줄러를 넣으면 프로세스마다 하나씩 돈다. 개발할 때는 한 대라 문제가 안 보이다가, 운영에서 레플리카를 세 개로 늘린 순간 같은 작업이 세 번 돈다. 오토스케일링이 걸려 있으면 실행 횟수가 트래픽에 따라 바뀐다.
+
+PostgreSQL 16에서 세 레플리카가 같은 9시 슬롯에 동시에 깨어나는 장면을 `psql` 세 개로 재현했다.
+
+```sql
+-- 각 레플리카가 동시에 실행한다 (sent_by만 다르다)
+INSERT INTO coupon_mails(user_id, sent_by) SELECT 42, 'api-7d9f-a';
+```
+
+```text
+ user_id |  sent_by   
+---------+------------
+      42 | api-7d9f-c
+      42 | api-7d9f-b
+      42 | api-7d9f-a
+(3 rows)
+```
+
+고치는 방법은 "이번 회차를 누가 맡았는지"를 한 곳에 적고, 먼저 적은 쪽만 실행하는 것이다. 작업 이름과 예정 시각을 기본 키로 하는 실행 기록 테이블을 둔다.
+
+```sql
+CREATE TABLE job_runs (
+  job_name      text,
+  scheduled_for timestamptz,   -- 실제 시작 시각이 아니라 "몇 시 회차인가"
+  claimed_by    text,
+  claimed_at    timestamptz DEFAULT now(),
+  PRIMARY KEY (job_name, scheduled_for)
+);
+
+-- 회차를 선점한 경우에만 메일을 넣는다. 이미 누가 적었으면 0행
+WITH c AS (
+  INSERT INTO job_runs(job_name, scheduled_for, claimed_by)
+  VALUES ('coupon-mail', '2026-10-21 09:00+09', 'api-7d9f-a')
+  ON CONFLICT DO NOTHING
+  RETURNING claimed_by
+)
+INSERT INTO coupon_mails(user_id, sent_by)
+SELECT 42, claimed_by FROM c;
+```
+
+세 레플리카가 동시에 이 문장을 실행한 결과다.
+
+```text
+api-7d9f-c: sent
+api-7d9f-b: skip
+api-7d9f-a: skip
+  job_name   |     scheduled_for      | claimed_by 
+-------------+------------------------+------------
+ coupon-mail | 2026-10-21 09:00:00+09 | api-7d9f-c
+(1 row)
+```
+
+기본 키 충돌은 DB가 한 줄씩 판정하니 셋 중 정확히 하나만 이긴다. 키가 "실행한 시각"이 아니라 "예정된 회차"라는 점이 중요하다. 레플리카마다 시계가 몇백 밀리초 달라도, 한 대가 30초 늦게 깨어나도 같은 회차를 가리킨다. 서머타임 때문에 1시 30분이 두 번 와도 날짜 단위 회차를 키로 두면 두 번째는 막힌다. 아래 그림에서 세 레플리카가 경쟁하는 과정을 본다.
+
+<NetworkTopology
+  caption="세 레플리카가 같은 회차를 두고 경쟁하고, 기본 키가 한 명만 통과시킨다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "k8s", label: "Deployment api (3)", x: 8, y: 20, w: 160, h: 230, tone: "private" },
+    { id: "dbz", label: "PostgreSQL", x: 232, y: 60, w: 160, h: 150, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "a", label: "api-a", sub: "09:00:00.12", x: 88, y: 70, icon: "container" },
+    { id: "b", label: "api-b", sub: "09:00:00.31", x: 88, y: 140, icon: "container" },
+    { id: "c", label: "api-c", sub: "09:00:00.05", x: 88, y: 210, icon: "container" },
+    { id: "runs", label: "job_runs", sub: "PK(job,slot)", x: 312, y: 105, icon: "lock", w: 120 },
+    { id: "mail", label: "coupon_mails", sub: "1 row", x: 312, y: 170, icon: "db", w: 120 },
+  ]}
+  links={[
+    { from: "a", to: "runs" },
+    { from: "b", to: "runs" },
+    { from: "c", to: "runs" },
+    { from: "runs", to: "mail", dashed: true },
+  ]}
+  steps={[
+    { path: ["c"], highlight: ["a", "b"], title: "세 레플리카가 9시에 깨어난다", detail: "앱 안의 스케줄러가 레플리카마다 하나씩 돈다. 깨어나는 시각은 수백 밀리초씩 다르다." },
+    { path: ["c", "runs"], packet: "claim", title: "가장 먼저 온 c가 회차를 적는다", detail: "INSERT ... ON CONFLICT DO NOTHING RETURNING. 한 행이 돌아왔으니 c가 이번 회차의 주인이다.", payload: "('coupon-mail', '2026-10-21 09:00+09', 'api-7d9f-c')" },
+    { path: ["a", "runs"], packet: "claim", blocked: true, title: "a는 0행을 받는다", detail: "같은 기본 키가 이미 있다. 에러 없이 0행이 오고, a는 이번 회차를 건너뛴다." },
+    { path: ["b", "runs"], packet: "claim", blocked: true, title: "b도 마찬가지다", detail: "300ms 늦게 깨어났어도 같은 회차를 가리키니 막힌다. 시계가 조금 달라도 키가 같다는 게 핵심이다." },
+    { path: ["c", "runs", "mail"], packet: "send", title: "c만 메일을 넣는다", detail: "선점과 메일 등록을 한 문장(한 트랜잭션)으로 묶었으니 '선점만 하고 메일은 안 들어간' 상태가 남지 않는다." },
+  ]}
+/>
+
+다른 방법도 있다. `pg_try_advisory_lock`은 작업이 도는 동안만 잠금을 쥐어 겹침을 막는다. 다만 잠금은 실행이 끝나면 풀리므로, 한 대가 끝낸 뒤 늦게 깨어난 다른 레플리카가 잠금을 얻어 같은 회차를 또 돌릴 수 있다. "동시에 둘이 돌지 않게"와 "회차당 한 번만"은 다른 요구다. 전자는 잠금, 후자는 회차 기록이 맞다. 잠금 서버를 따로 둘 때의 함정(잠금 만료, 펜싱 토큰)은 [분산 락](/posts/distributed-lock)에서, 한 대를 대표로 뽑아 그 대만 스케줄러를 돌리는 방식은 [리더 선출](/posts/leader-election)에서 다룬다. 가장 단순한 해법은 스케줄러를 앱에서 빼내 한 곳에서만 돌리는 것이다. 쿠버네티스라면 CronJob이 그 자리다.
+
+## 쿠버네티스 CronJob의 설정들
+
+CronJob은 정해진 시각마다 Job을 만들고, Job이 Pod를 만든다. 스케줄을 계산하는 쪽은 kube-controller-manager 안의 CronJob 컨트롤러 하나라서, 앱 레플리카 수와 상관없이 회차마다 Job이 하나 만들어진다.
+
+<ConceptDiagram
+  caption="CronJob이 회차마다 Job을 만들고, Job이 Pod를 만들고 재시도를 맡는다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "ctl", label: "CronJob 컨트롤러", sub: "kube-controller-manager", x: 200, y: 30, w: 190 },
+    { id: "cj", label: "CronJob", sub: "schedule, timeZone", x: 80, y: 110, w: 130 },
+    { id: "job", label: "Job", sub: "이름-회차(분)", x: 270, y: 110, w: 130 },
+    { id: "pod", label: "Pod", sub: "restartPolicy: Never", x: 270, y: 195, w: 150 },
+    { id: "hist", label: "기록", sub: "historyLimit", x: 80, y: 195, w: 130 },
+  ]}
+  edges={[
+    { from: "ctl", to: "cj", label: "읽는다" },
+    { from: "ctl", to: "job", label: "회차마다 생성" },
+    { from: "job", to: "pod", label: "backoffLimit" },
+    { from: "cj", to: "hist", dashed: true },
+    { from: "hist", to: "job", dashed: true, label: "오래된 것 삭제" },
+  ]}
+/>
+
+이 글에서 쓴 매니페스트는 이렇다. 각 필드가 앞에서 본 문제 하나씩에 대응한다.
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: settle-forbid            # 52자 이하. 뒤에 회차 번호 11자가 붙는다
+spec:
+  schedule: "*/1 * * * *"
+  timeZone: "Asia/Seoul"         # 1.27+ 정식. 없으면 컨트롤러 시간대(보통 UTC)
+  concurrencyPolicy: Forbid      # 앞 Job이 돌고 있으면 이번 회차를 건너뛴다
+  startingDeadlineSeconds: 120   # 예정 시각에서 120초가 지나면 늦게라도 시작하지 않는다
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0            # 실패해도 Pod를 다시 만들지 않는다
+      activeDeadlineSeconds: 3000
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: settle
+            image: busybox:1.36
+            command: ["sh", "-c", "sleep 600"]
+```
+
+먼저 잘못 쓴 매니페스트를 넣어 API 서버가 무엇을 막는지 봤다. 여섯 칸 스케줄, 약어 시간대, 없는 정책 이름, Pod 재시작 정책을 일부러 틀렸다.
+
+```bash
+kubectl apply -f cj-bad.yaml
+```
+
+```text
+The CronJob "bad" is invalid: 
+* spec.schedule: Invalid value: "0 3 * * * *": expected exactly 5 fields, found 6: [0 3 * * * *]
+* spec.timeZone: Invalid value: "KST": unknown time zone KST
+* spec.concurrencyPolicy: Unsupported value: "Skip": supported values: "Allow", "Forbid", "Replace"
+* spec.jobTemplate.spec.template.spec.restartPolicy: Required value: valid values: "OnFailure", "Never"
+```
+
+`KST`는 시간대 데이터베이스 이름이 아니라서 거절된다. `Asia/Seoul`처럼 지역 이름을 쓴다. Spring 식 여섯 칸도 여기서 걸린다.
+
+`concurrencyPolicy` 세 값을 비교하려고 같은 스케줄(매분)로 CronJob 세 개를 만들었다. Job이 끝나지 않게 Pod가 뜰 노드가 없는 `nodeSelector`를 줬다. 2분 뒤의 상태다.
+
+```bash
+kubectl get cronjobs
+kubectl get jobs
+```
+
+```text
+NAME             SCHEDULE      TIMEZONE     SUSPEND   ACTIVE   LAST SCHEDULE   AGE
+settle-allow     */1 * * * *   Asia/Seoul   False     2        24s             114s
+settle-forbid    */1 * * * *   Asia/Seoul   False     1        84s             114s
+settle-replace   */1 * * * *   Asia/Seoul   False     1        24s             114s
+NAME                      STATUS    COMPLETIONS   DURATION   AGE
+settle-allow-29875407     Running   0/1           84s        84s
+settle-allow-29875408     Running   0/1           24s        24s
+settle-forbid-29875407    Running   0/1           84s        84s
+settle-replace-29875408   Running   0/1           24s        24s
+```
+
+이벤트가 세 정책의 차이를 그대로 보여 준다.
+
+```bash
+kubectl get events --field-selector involvedObject.kind=CronJob --sort-by=.lastTimestamp
+```
+
+```text
+25s         Normal   SuccessfulCreate   cronjob/settle-allow     Created job settle-allow-29875408
+25s         Normal   JobAlreadyActive   cronjob/settle-forbid    Not starting job because prior execution is running and concurrency policy is Forbid
+25s         Normal   SuccessfulDelete   cronjob/settle-replace   Deleted job settle-replace-29875407
+25s         Normal   SuccessfulCreate   cronjob/settle-replace   Created job settle-replace-29875408
+```
+
+`Allow`(기본값)는 Job이 두 개 겹쳐 돈다. cron과 같다. `Forbid`는 이번 회차를 건너뛰었다. `Replace`는 돌고 있던 Job을 지우고 새로 만들었다. Replace는 앞 실행이 하던 일을 중간에 끊으므로, 끊겨도 괜찮은 작업(최신 상태만 의미 있는 캐시 갱신 같은)에만 쓴다. 정산처럼 겹치면 안 되는 작업은 Forbid다.
+
+Job 이름 끝의 `29875408`은 예정 시각을 유닉스 분으로 적은 값이다. 29875408 × 60 = 1792524480초, 즉 2026-10-20 19:28:00 UTC다. 같은 회차에는 같은 이름이 나오니 컨트롤러가 재시작돼도 같은 Job을 두 번 만들지 못한다. 앞에서 만든 실행 기록 테이블과 같은 아이디어다.
+
+`startingDeadlineSeconds`는 "늦게라도 시작해도 되는 시간"이다. Forbid로 건너뛴 직후 돌던 Job을 지워 봤다.
+
+```bash
+kubectl delete job settle-forbid-29875407
+kubectl get events --field-selector involvedObject.name=settle-forbid --sort-by=.lastTimestamp
+```
+
+```text
+40s         Normal   JobAlreadyActive   cronjob/settle-forbid   Not starting job because prior execution is running and concurrency policy is Forbid
+8s          Normal   MissingJob         cronjob/settle-forbid   Active job went missing: settle-forbid-29875407
+8s          Normal   SuccessfulCreate   cronjob/settle-forbid   Created job settle-forbid-29875408
+```
+
+19:28 회차를 건너뛰었던 컨트롤러가 앞 Job이 사라지자 32초 늦게 19:28 회차(`29875408`)를 만들었다. 예정 시각에서 120초 안이었기 때문이다. 이 값을 비워 두면 기한 없이 따라잡으려 하고, 컨트롤러가 오래 멈췄다 돌아오면 놓친 회차를 세다가 100개를 넘으면 시작을 포기하고 경고를 남긴다(공식 문서 기준). 매분 도는 작업이라면 100분만 멈춰도 그렇게 된다. 주기보다 짧은 값을 주면 "늦은 회차는 버리고 다음 회차를 기다린다"가 된다.
+
+나머지 설정도 짚어 둔다.
+
+- `backoffLimit`은 Job 안에서 Pod를 다시 만드는 횟수다(기본 6). 결제나 메일처럼 두 번 하면 안 되는 작업은 0으로 두고, 재시도는 작업이 멱등할 때만 켠다.
+- `activeDeadlineSeconds`는 Job 전체의 최대 실행 시간이다. 없으면 멈춘 Job이 Forbid와 만나 이후 모든 회차를 막는다.
+- `successfulJobsHistoryLimit`(기본 3)과 `failedJobsHistoryLimit`(기본 1)은 남겨 둘 Job 수다. 실패 기록을 0으로 두면 원인을 볼 로그가 사라진다.
+- `suspend: true`로 일시 정지할 수 있다. 정지 중에 지나간 회차는 다시 켰을 때 `startingDeadlineSeconds` 안이면 실행된다.
+
+쿠버네티스 문서도 CronJob이 회차당 Job을 "대략 한 번" 만든다고 적는다. 드물게 두 번 만들거나 한 번도 만들지 않을 수 있으니 작업이 멱등해야 한다는 말이다. 스케줄러가 아무리 좋아도 마지막 방어선은 작업 자신이다.
+
+리눅스 서버 한 대에서 돌린다면 cron 대신 systemd timer도 좋은 선택이다. 실행 기록이 journal에 남고, 같은 서비스가 돌고 있으면 다시 시작하지 않으니 겹침이 기본으로 막힌다. `Persistent=true`는 서버가 꺼져 있던 동안 놓친 회차를 부팅 뒤 한 번 실행하고, `RandomizedDelaySec=`은 여러 서버가 같은 순간 몰리지 않게 시작을 흩뜨린다. 유닛 파일 작성은 [systemd와 systemctl](/posts/linux-systemd-systemctl)의 timer 부분에 있다.
+
+## 두 번 돌아도 괜찮은 작업
+
+지금까지 본 장치는 모두 "한 번만 실행되게" 하려는 시도였다. 그런데 스케줄러는 실패한 작업을 다시 돌리고, 사람은 재시작 버튼을 누르고, CronJob은 드물게 두 번 만든다. 그래서 설계 목표를 "정확히 한 번 실행"이 아니라 "여러 번 실행돼도 결과가 한 번"으로 잡는다.
+
+- 처리 범위를 실행 시각이 아니라 회차로 정한다. "지금부터 24시간 전까지"가 아니라 "2026-10-20 하루"처럼 회차에서 계산하면 늦게 돌든 다시 돌든 같은 범위를 본다.
+- 결과를 덮어쓰기(upsert)로 쓴다. 더하기(`total = total + x`)는 두 번 돌면 두 배가 된다.
+- 바깥으로 나가는 동작(메일, 결제, 웹훅)은 회차와 대상으로 만든 키를 붙여 한 번만 나가게 한다. 키를 선점하는 방법은 [멱등성 키](/posts/idempotency-key)에서 자세히 다뤘다.
+- 오래 걸리는 작업은 체크포인트를 남겨 죽은 자리에서 이어 간다. [배치 처리](/posts/batch-processing)의 체크포인트 설계를 그대로 쓴다.
+
+## 안 돈 것을 알아채는 법
+
+실패한 작업은 에러 로그라도 남긴다. 무서운 건 아예 안 돈 작업이다. crontab 줄이 배포 중에 지워졌거나, CronJob이 suspend된 채로 남았거나, Forbid가 멈춘 Job 하나 때문에 일주일째 회차를 건너뛰고 있으면 에러가 하나도 없다. 에러를 기다리는 모니터링으로는 "아무 일도 안 일어남"을 잡을 수 없다.
+
+그래서 반대로 한다. 작업이 성공할 때마다 감시 서버에 "살아 있다"는 신호(ping)를 보내고, 감시 서버는 기한 안에 신호가 안 오면 알린다. 손을 떼면 멈추는 기차의 장치에서 이름을 따 dead man's switch라고 부른다. 아래 그림에서 신호가 끊기는 순간을 본다.
+
+<NetworkTopology
+  caption="작업이 끝날 때 ping을 보내고, 감시 서버는 신호가 끊기면 알린다"
+  width={400}
+  height={240}
+  zones={[
+    { id: "prod", label: "운영 클러스터", x: 8, y: 20, w: 170, h: 210, tone: "private" },
+    { id: "mon", label: "감시 (별도 환경)", x: 214, y: 20, w: 178, h: 210, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "cj", label: "CronJob", sub: "03:00 daily", x: 93, y: 75, icon: "gateway" },
+    { id: "job", label: "settle Pod", sub: "exit 0", x: 93, y: 170, icon: "container" },
+    { id: "dms", label: "heartbeat", sub: "24h + 30m", x: 303, y: 75, icon: "server" },
+    { id: "pager", label: "on-call", sub: "Slack·전화", x: 303, y: 170, icon: "client" },
+  ]}
+  links={[
+    { from: "cj", to: "job" },
+    { from: "job", to: "dms", label: "ping" },
+    { from: "dms", to: "pager", dashed: true },
+  ]}
+  steps={[
+    { path: ["cj", "job"], packet: "run", title: "작업이 돈다", detail: "3시에 CronJob이 Pod를 만든다." },
+    { path: ["job", "dms"], packet: "ping", title: "끝까지 성공하면 ping을 보낸다", detail: "마지막 줄에서 보낸다. 시작할 때 보내면 중간에 죽은 것을 놓친다.", payload: "curl -fsS -m 10 --retry 3 https://hb.example/ping/nightly-settle" },
+    { path: ["dms"], title: "감시 서버가 시계를 다시 맞춘다", detail: "다음 기한은 지금부터 주기(24시간) + 여유(30분)다." },
+    { path: ["cj"], blocked: true, title: "다음 날, 작업이 안 돈다", detail: "suspend가 켜져 있었다. 에러도 로그도 없다." },
+    { path: ["dms", "pager"], packet: "ALERT", title: "기한이 지나 알림이 간다", detail: "신호가 오지 않은 것 자체가 알림 조건이다. 감시 서버가 운영과 다른 곳에 있어야 운영 전체가 죽었을 때도 울린다." },
+  ]}
+/>
+
+주기 6초, 여유 2초로 줄인 감시 서버를 node로 만들어 돌렸다.
+
+```bash
+node dms.js > dms.log &                                   # 감시 서버
+curl -s -m 5 --retry 3 http://127.0.0.1:8099/ping/nightly-settle   # 첫 회차 성공
+sleep 5; curl -s http://127.0.0.1:8099/ping/nightly-settle         # 두 번째 회차 성공
+sleep 10                                                   # 세 번째 회차가 오지 않는다
+curl -s http://127.0.0.1:8099/ping/nightly-settle/fail    # 실패는 바로 알린다
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8099/ping/nightly-setle   # 오타
+cat dms.log
+```
+
+```text
+OK
+OK
+fail recorded
+404
+19:27:07 listening :8099
+19:27:08 nightly-settle ping
+19:27:13 nightly-settle ping
+19:27:21 ALERT nightly-settle: 마지막 ping 8초 전, 기한 6+2초 초과
+19:27:23 nightly-settle 실패 신호 -> 바로 알림
+```
+
+마지막 ping(19:27:13)에서 8초가 지난 19:27:21에 알림이 났다. 오타 난 체크 이름에 404가 돌아온 것도 봐 둔다. ping을 보내는 쪽에서 `curl -f`를 쓰지 않으면 404를 성공으로 넘기고, 감시 서버는 기다리다 엉뚱한 알림을 낸다.
+
+직접 만들지 않아도 된다. Healthchecks.io, Cronitor 같은 서비스가 이 일을 하고, Prometheus를 쓴다면 작업 끝에 Pushgateway로 마지막 성공 시각을 밀어 넣고 `time() - job_last_success_timestamp_seconds > 90000` 같은 조건으로 알린다. kube-state-metrics를 설치했다면 CronJob의 마지막 성공 시각과 마지막 예정 시각도 지표로 나온다. 여유 시간은 작업의 평소 실행 시간 분포를 보고 정한다. 너무 짧으면 데이터가 많은 날마다 울리고, 너무 길면 장애를 늦게 안다.
+
+## 새벽 배치가 안 돌았다는 연락을 받으면
+
+"어제 정산이 안 됐다"는 말은 원인이 넓다. 스케줄러가 깨우지 않았는지, 깨웠는데 시작을 못 했는지, 시작했는데 실패했는지를 차례로 나눈다.
+
+쿠버네티스라면 CronJob부터 본다.
+
+```bash
+# LAST SCHEDULE이 예상 시각인지, SUSPEND와 ACTIVE는 어떤지
+kubectl get cronjob settle -n batch
+# 컨트롤러가 건너뛴 이유가 이벤트에 남는다 (JobAlreadyActive, TooManyMissedTimes 등)
+kubectl get events -n batch --field-selector involvedObject.name=settle
+# 남아 있는 Job과 그 Pod의 종료 상태
+kubectl get jobs -n batch -l app=settle
+kubectl describe job settle-29875408 -n batch
+```
+
+- `LAST SCHEDULE`이 며칠 전이고 `ACTIVE`가 1이면 멈춘 Job 하나가 Forbid로 모든 회차를 막고 있는 것이다. `activeDeadlineSeconds`가 없었다는 뜻이다.
+- `LAST SCHEDULE`은 맞는데 Job이 없으면 history limit 때문에 지워졌거나 Pod가 `Pending`에서 못 떴다(이미지, 리소스, 노드 선택). `describe`의 Events를 본다.
+- 9시간 어긋나 있으면 `timeZone`이 비어 UTC로 계산된 것이다.
+
+리눅스 cron이라면 데몬이 실행 기록을 남겼는지 본다. Ubuntu는 `/var/log/syslog`나 `journalctl -u cron`에 `CRON[1234]: (root) CMD (...)` 줄이 남는다. 이 줄이 있으면 cron은 할 일을 했다. 그다음은 명령의 출력이고, 리다이렉션을 걸지 않았다면 사라졌으니 앞에서 본 `env -i`로 같은 환경을 만들어 직접 실행해 본다. 이 줄조차 없으면 crontab 문법 오류(마지막 줄 개행 누락도 포함), 파일 권한, 서버 시간대를 의심한다.
+
+## 시각보다 회차를 믿는다
+
+cron 한 줄은 "언제"만 정한다. 그 시각이 어느 시간대인지, 앞 실행과 겹치는지, 여러 대에서 몇 번 도는지, 안 돌면 누가 아는지는 따로 정해야 한다. 기억할 것은 회차다. 작업을 "몇 시에 시작됐나"가 아니라 "몇 시 회차인가"로 식별하면, 늦게 돌든 두 번 돌든 서머타임이 끼든 같은 결과를 낼 수 있다. 그리고 신호가 안 오는 것 자체를 알림으로 삼는다.
+
+## 면접에서 나올 만한 질문
+
+### cron 표현식 `*/7 * * * *`는 정말 7분마다 실행되나요?
+
+아니다. `/`는 0부터 7씩 건너뛴 분 목록(0, 7, …, 56)을 만들고 그 목록이 매시간 반복된다. 그래서 56분 다음 실행은 다음 시간의 0분이고 그 사이 간격은 4분이다. 60을 나누는 간격만 일정하고, 정확한 간격이 필요하면 마지막 실행 기준으로 다음 시각을 계산하는 스케줄러를 쓴다.
+
+### 일 칸과 요일 칸을 둘 다 지정하면 어떻게 되나요?
+
+둘 다 `*`가 아니면 AND가 아니라 OR로 계산된다. `0 9 1-7 * 1`은 첫째 월요일이 아니라 1~7일 매일과 모든 월요일에 돈다. 첫째 월요일은 요일만 지정하고 스크립트 안에서 날짜가 7 이하인지 검사한다.
+
+### 서버가 여러 대일 때 스케줄 작업이 한 번만 돌게 하려면 어떻게 하나요?
+
+스케줄러를 앱에서 빼서 한 곳(쿠버네티스 CronJob, 전용 스케줄러)에서 돌리는 게 먼저다. 앱 안에 둬야 한다면 작업 이름과 예정 회차를 기본 키로 하는 테이블에 먼저 INSERT하고 성공한 쪽만 실행한다. 잠금(advisory lock, 분산 락)은 동시에 도는 것만 막고 끝난 뒤 늦게 깨어난 서버의 재실행은 못 막으니 "회차당 한 번"에는 회차 기록이 맞다.
+
+### CronJob의 concurrencyPolicy 세 값은 언제 쓰나요?
+
+Allow는 기본값으로 앞 Job이 돌아도 새 Job을 만든다. Forbid는 이번 회차를 건너뛰고, Replace는 돌던 Job을 지우고 새로 만든다. 겹치면 데이터가 꼬이는 정산은 Forbid, 최신 결과만 의미 있는 작업은 Replace를 쓴다. Forbid를 쓸 때는 activeDeadlineSeconds를 함께 둬야 멈춘 Job 하나가 이후 회차를 모두 막지 않는다.
+
+### startingDeadlineSeconds는 무엇이고 왜 설정하나요?
+
+예정 시각이 지난 뒤 늦게라도 시작해도 되는 한도다. Forbid로 밀렸거나 컨트롤러가 잠시 멈췄을 때 이 안이면 놓친 회차를 실행하고, 지나면 버린다. 비워 두면 오래 멈췄다 돌아왔을 때 놓친 회차가 100개를 넘어 시작 자체를 포기할 수 있다. 주기보다 짧게 잡으면 "늦은 회차는 버리고 다음을 기다린다"가 된다.
+
+### 서머타임이 있는 시간대로 스케줄을 잡으면 어떤 문제가 생기나요?
+
+봄에는 없는 시각이 생기고 가을에는 같은 시각이 두 번 온다. 구현에 따라 건너뛴 작업을 바로 실행하거나 버리고, 매시 작업은 하루 23번 또는 25번 돈다. 스케줄은 UTC로 잡고, 하루 한 번이어야 하는 작업은 날짜 회차로 이미 돌았는지 작업이 직접 확인하게 만든다.
+
+### 크론 작업이 안 돈 것은 어떻게 알아채나요?
+
+에러 로그는 실행된 작업만 남기므로 안 돈 작업은 잡지 못한다. 작업이 성공적으로 끝날 때마다 감시 서버에 신호를 보내고, 주기와 여유 시간 안에 신호가 없으면 알리는 dead man's switch를 둔다. 신호는 작업 마지막에 보내고, 감시 서버는 운영 환경과 다른 곳에 둔다.
+
+### flock이 PID 파일보다 나은 이유는요?
+
+flock은 열린 파일 디스크립터에 커널 잠금을 거는 방식이라 프로세스가 kill -9나 OOM으로 죽어도 커널이 잠금을 풀어 준다. PID 파일은 비정상 종료 때 파일이 남아 다음 실행을 계속 막거나, PID 재사용으로 엉뚱한 프로세스를 작업으로 착각한다. 다만 flock은 한 서버 안에서만 통하고, 잠금 fd를 물려받은 자식 프로세스가 살아 있으면 잠금도 유지된다.

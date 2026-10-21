@@ -1,0 +1,621 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cilium-ebpf");
+
+Cilium으로 바꾼 클러스터의 노드에서 습관처럼 `iptables-save | grep KUBE-SVC`를 쳤다. 아무것도 안 나온다. kube-proxy Pod도 없다. 그런데 Service는 잘 된다. ClusterIP로 보낸 요청이 Pod에 닿으려면 어디선가 주소가 바뀌어야 하는데, 그 일을 하는 규칙이 보이지 않는다. 장애가 나면 무엇을 들여다봐야 할지부터 막막해진다.
+
+규칙은 eBPF 프로그램과 맵의 형태로 커널 안에 있다. 이 글은 eBPF가 무엇인지(검증기, 맵, 훅)를 작은 프로그램을 직접 커널에 올려 보며 확인하고, 그 위에서 Cilium이 kube-proxy를 대신하는 방식, IP 대신 identity로 정책을 거는 방식, Hubble로 흐름을 보는 방법까지 이어 간다.
+
+이 주제의 다른 글과 나눈 범위가 있다. kube-proxy의 iptables·nftables 모드가 규칙을 어떻게 쓰는지와 conntrack 문제는 [kube-proxy 모드 글](/posts/k8s-kube-proxy-modes)에, 표준 NetworkPolicy의 규칙과 한계는 [NetworkPolicy 글](/posts/k8s-network-policy)에, 사이드카 프록시와 mTLS는 [서비스 메시 글](/posts/service-mesh)에 있다. 여기서는 그 설명을 반복하지 않고 eBPF가 같은 일을 다르게 푸는 지점만 본다.
+
+실습 환경은 Ubuntu 24.04 사용자 공간(clang 18.1.3, Ubuntu `linux-tools-6.8.0-147` 패키지의 bpftool v7.4.0)과 리눅스 6.18 커널이다. 네트워크 네임스페이스 두 개를 veth로 잇고 그 사이에 프로그램을 걸었다. Cilium 자체는 실제 노드가 없어 띄우지 못했다. Cilium 명령의 출력은 Cilium v1.20.3 문서에 실린 것을 옮기고 예시로 표시했다.
+
+## 커널에 작은 프로그램을 끼워 넣는다
+
+패킷 처리를 바꾸고 싶을 때 예전에는 두 길밖에 없었다. 커널이 이미 가진 기능(iptables, tc 큐 규칙)을 조합하거나, 커널 모듈을 짜서 넣는 것이다. 앞의 것은 규칙이 수만 개가 되면 느리고 표현이 제한된다. 뒤의 것은 버그 하나가 커널 전체를 죽인다.
+
+eBPF는 그 사이의 길이다. 커널이 정해 둔 길목(훅)에 작은 프로그램을 끼워 넣는데, 넣기 전에 커널의 검증기(verifier)가 그 프로그램이 커널을 망가뜨릴 수 없는지 증명한다. 통과한 프로그램은 JIT 컴파일러가 기계어로 바꿔서 거의 네이티브 속도로 돈다. 프로그램은 상태를 갖지 않고, 패킷 수나 Service 목록 같은 상태는 맵(map)이라는 커널 안의 키-값 저장소에 둔다. 사용자 공간 프로그램(Cilium 에이전트 같은)은 맵을 읽고 써서 프로그램의 동작을 바꾼다. 프로그램을 다시 올리지 않아도 된다.
+
+<SequenceDiagram
+  caption="C로 쓴 프로그램이 검증과 JIT를 거쳐 훅에 걸리고, 사용자 공간은 맵으로 대화한다"
+  actors={[
+    { id: "dev", label: "사용자 공간" },
+    { id: "ver", label: "검증기" },
+    { id: "jit", label: "JIT" },
+    { id: "hook", label: "훅 (XDP 등)" },
+    { id: "map", label: "BPF 맵" },
+  ]}
+  steps={[
+    { from: "dev", to: "dev", label: "clang -target bpf", title: "BPF 바이트코드로 컴파일한다", detail: "C 코드를 clang으로 BPF 명령어가 든 ELF 오브젝트로 만든다. 맵 정의와 BTF(타입 정보)도 같이 들어간다.", payload: "xdp_count.o: ELF 64-bit LSB relocatable, eBPF" },
+    { from: "dev", to: "ver", label: "bpf(BPF_PROG_LOAD)", title: "커널에 올려 달라고 한다", detail: "ip나 bpftool, libbpf가 bpf() 시스템 콜로 프로그램을 넘긴다. 맵이 먼저 만들어지고 프로그램 안의 맵 참조가 그 맵을 가리키게 고쳐진다." },
+    { from: "ver", to: "ver", label: "모든 경로 검사", title: "안전한지 증명한다", detail: "가능한 모든 분기를 따라가며 범위 밖 메모리 접근, 초기화 안 된 레지스터, 끝나지 않는 루프가 없는지 본다. 하나라도 있으면 거절한다." },
+    { from: "ver", to: "jit", label: "통과", title: "기계어로 바꾼다", detail: "검증을 통과한 BPF 명령을 CPU 명령으로 바꾼다. 이 커널은 JIT가 항상 켜져 있다(CONFIG_BPF_JIT_ALWAYS_ON)." },
+    { from: "jit", to: "hook", label: "attach", title: "훅에 건다", detail: "네트워크 장치의 XDP, tc의 clsact, cgroup의 connect 같은 길목에 건다. 이제 패킷이나 시스템 콜이 지날 때마다 프로그램이 돈다." },
+    { from: "hook", to: "map", label: "lookup / update", title: "상태는 맵에 쓴다", detail: "프로그램은 실행마다 맵의 값을 읽고 고친다. 패킷 수를 세거나 Service 주소로 백엔드를 찾는다." },
+    { from: "dev", to: "map", label: "bpf(MAP_UPDATE)", title: "바깥에서 맵을 고친다", detail: "사용자 공간도 같은 맵을 읽고 쓴다. Cilium 에이전트는 Pod가 바뀌면 맵만 고치고 프로그램은 그대로 둔다." },
+  ]}
+/>
+
+먼저 실습 환경에서 eBPF를 쓸 수 있는지 본다. `bpftool feature probe`는 커널 설정과 지원 기능을 알려 준다.
+
+```bash
+# 커널의 BPF 관련 설정과 권한 상태를 본다 (root 필요)
+sudo bpftool feature probe kernel | head -12
+# 일반 사용자가 bpf()를 쓸 수 있는지 (2면 막혀 있다)
+cat /proc/sys/kernel/unprivileged_bpf_disabled
+```
+
+```text
+Scanning system configuration...
+bpf() syscall restricted to privileged users (admin can change)
+JIT compiler is enabled
+JIT compiler hardening is disabled
+JIT compiler kallsyms exports are enabled for root
+Global memory limit for JIT compiler for unprivileged users is 528482304 bytes
+CONFIG_BPF is set to y
+CONFIG_BPF_SYSCALL is set to y
+CONFIG_HAVE_EBPF_JIT is set to y
+CONFIG_BPF_JIT is set to y
+CONFIG_BPF_JIT_ALWAYS_ON is set to y
+CONFIG_DEBUG_INFO_BTF is set to y
+2
+```
+
+`CONFIG_DEBUG_INFO_BTF`가 켜져 있어야 한 번 컴파일한 프로그램을 여러 커널 버전에서 쓰는 CO-RE가 동작한다. Cilium 같은 도구가 요구하는 커널 버전이 있는 이유도 이런 기능들 때문이다. Cilium v1.20 문서의 시스템 요구 사항은 리눅스 5.10 이상(RHEL 8.10은 4.18 백포트)이다.
+
+## 검증기가 먼저 읽는다
+
+받은 패킷의 IP 프로토콜 번호별로 수를 세고, ICMP는 버리는 XDP 프로그램을 썼다. 눈여겨볼 곳은 `data_end`와 비교하는 두 `if`다.
+
+```c
+// xdp_count.c — IP 프로토콜별 패킷 수를 세고, ICMP는 버린다
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/in.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);   // 키 0~255, 값 u64 카운터
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, __u64);
+} proto_count SEC(".maps");
+
+SEC("xdp")
+int xdp_count(struct xdp_md *ctx)
+{
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)        // 이더넷 헤더 14바이트가 있나
+        return XDP_PASS;
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)         // IP 헤더 20바이트가 있나
+        return XDP_PASS;
+    __u32 key = ip->protocol;
+    __u64 *val = bpf_map_lookup_elem(&proto_count, &key);
+    if (val)
+        __sync_fetch_and_add(val, 1);
+    if (ip->protocol == IPPROTO_ICMP)
+        return XDP_DROP;
+    return XDP_PASS;
+}
+
+char LICENSE[] SEC("license") = "GPL";
+```
+
+```bash
+# BPF 오브젝트로 컴파일한다 (libbpf-dev 헤더와 asm 헤더 경로가 필요하다)
+clang -O2 -g -target bpf -I/usr/include/x86_64-linux-gnu -c xdp_count.c -o xdp_count.o
+file xdp_count.o
+```
+
+```text
+xdp_count.o: ELF 64-bit LSB relocatable, eBPF, version 1 (SYSV), with debug_info, not stripped
+```
+
+두 번째 `if`(IP 헤더 길이 확인)를 지우고 다시 올리면 커널이 거절한다. 패킷이 34바이트보다 짧을 수도 있는데 `ip->protocol`(패킷 시작에서 23바이트째)을 읽기 때문이다. 검증기 로그의 끝부분이다(7~9번 명령 줄은 생략했다).
+
+```text
+; if ((void *)(eth + 1) > data_end) @ xdp_bad.c:22
+3: (bf) r1 = r6                       ; R1=pkt(r=0) R6=pkt(r=0)
+4: (07) r1 += 14                      ; R1=pkt(off=14,r=0)
+5: (2d) if r1 > r2 goto pc+19         ; R1=pkt(off=14,r=14) R2=pkt_end()
+; if (eth->h_proto != bpf_htons(ETH_P_IP)) @ xdp_bad.c:24
+6: (71) r1 = *(u8 *)(r6 +12)          ; R1=scalar(smin=smin32=0,smax=umax=smax32=umax32=255,var_off=(0x0; 0xff)) R6=pkt(r=14)
+...
+10: (55) if r2 != 0x8 goto pc+14      ; R2=8
+; __u32 key = ip->protocol; @ xdp_bad.c:27
+11: (71) r1 = *(u8 *)(r6 +23)
+invalid access to packet, off=23 size=1, R6(id=0,off=23,r=14)
+R6 offset is outside of the packet
+processed 12 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0
+-- END PROG LOAD LOG --
+libbpf: prog 'xdp_count': failed to load: -13
+```
+
+`R6=pkt(r=14)`가 읽는 법의 열쇠다. 검증기는 레지스터마다 "패킷 시작에서 몇 바이트까지 안전한지(r)"를 기억한다. 5번 명령의 비교가 끝난 뒤 그 값이 0에서 14가 됐다. 11번이 23번째 바이트를 읽으려는데 증명된 범위는 14까지라 거절했다. 아래 그림에서 다음을 누르면 검증기가 이 범위를 키워 가는 과정이 보인다.
+
+<AlgoTrace
+  caption="검증기는 data_end와 비교할 때마다 안전한 패킷 범위를 늘린다"
+  cells={["r1=data+14", "if r1>end", "read +12", "r1=data+34", "if r1>end", "read +23"]}
+  memoryLabel="증명된 범위"
+  steps={[
+    { pointer: 0, memory: ["r=0"], caption: "처음에는 패킷의 어느 바이트도 읽어도 된다는 증명이 없다." },
+    { pointer: 1, memory: ["r=14"], caption: "data+14가 data_end를 넘지 않는 경로에서는 앞 14바이트가 안전하다." },
+    { pointer: 2, memory: ["r=14"], caption: "12번째 바이트(이더넷 타입)를 읽는다. 14 안이라 통과다." },
+    { pointer: 3, memory: ["r=14"], caption: "IP 헤더 끝인 data+34를 계산한다. 아직 비교하지 않았으니 범위는 그대로다." },
+    { pointer: 4, memory: ["r=34"], caption: "두 번째 비교를 지나면 34바이트까지 안전해진다. 이 줄을 지우면 범위가 14에 머문다." },
+    { pointer: 5, found: [5], memory: ["r=34"], caption: "23번째 바이트(IP 프로토콜)를 읽는다. 34 안이라 통과다. 지운 버전에서는 여기서 invalid access로 끝난다." },
+  ]}
+/>
+
+검증기가 까다로운 만큼 eBPF 프로그램에는 제약이 많다. 스택은 512바이트, 루프는 끝이 증명돼야 하고(5.3 이후 경계가 정해진 루프 허용), 검사하는 명령 수에도 상한(로그의 `limit 1000000`)이 있다. Cilium 같은 큰 프로그램은 기능을 여러 프로그램으로 쪼개 tail call로 잇는다. 대신 검증을 통과한 프로그램은 커널을 멈추게 할 수 없다. 커널 모듈과 가장 크게 다른 점이다.
+
+## 맵에 상태를 두고 바깥에서 읽는다
+
+이제 제대로 된 프로그램을 veth 한쪽에 건다. 네임스페이스 두 개를 만들고 r12b 쪽 장치에 XDP 프로그램을 붙였다.
+
+```bash
+# 네임스페이스 두 개를 veth로 잇는다
+sudo ip netns add r12a && sudo ip netns add r12b
+sudo ip link add r12va type veth peer name r12vb
+sudo ip link set r12va netns r12a && sudo ip link set r12vb netns r12b
+sudo ip -n r12a addr add 10.12.0.1/24 dev r12va && sudo ip -n r12a link set r12va up
+sudo ip -n r12b addr add 10.12.0.2/24 dev r12vb && sudo ip -n r12b link set r12vb up
+# r12b 쪽 장치에 XDP 프로그램을 건다 (xdpgeneric: 드라이버 지원 없이 도는 모드)
+sudo ip -n r12b link set dev r12vb xdpgeneric obj xdp_count.o sec xdp
+sudo ip -n r12b link show r12vb
+```
+
+```text
+18: r12vb@if19: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdpgeneric qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether da:b4:7b:c3:9c:b0 brd ff:ff:ff:ff:ff:ff link-netns r12a
+    prog/xdp id 19 name xdp_count tag 5ada26aa4282c1d0 jited 
+```
+
+`xdpgeneric`과 `prog/xdp id 19 ... jited`가 붙었다. 이제 ping은 버려지고 HTTP는 지나가야 한다. r12b에서 `python3 -m http.server 8080`을 띄우고 r12a에서 보냈다.
+
+```bash
+# ICMP는 XDP에서 버려지고, TCP는 지나간다
+sudo ip netns exec r12a ping -c3 -W1 10.12.0.2
+sudo ip netns exec r12a curl -s -o /dev/null -w '%{http_code}\n' http://10.12.0.2:8080/
+# 프로그램과 맵이 커널에 어떻게 올라가 있나
+sudo bpftool prog show
+sudo ip netns exec r12b bpftool net show
+# 맵에서 프로토콜 1(ICMP)과 6(TCP)의 수를 읽는다 (키는 4바이트 리틀 엔디언)
+sudo bpftool map lookup name proto_count key 1 0 0 0
+sudo bpftool map lookup name proto_count key 6 0 0 0
+```
+
+```text
+PING 10.12.0.2 (10.12.0.2) 56(84) bytes of data.
+
+--- 10.12.0.2 ping statistics ---
+3 packets transmitted, 0 received, 100% packet loss, time 2042ms
+
+200
+19: xdp  name xdp_count  tag 5ada26aa4282c1d0  gpl
+	loaded_at 2026-10-21T01:26:25+0000  uid 0
+	xlated 280B  jited 178B  memlock 4096B  map_ids 5
+	btf_id 29
+xdp:
+r12vb(18) generic id 19
+
+tc:
+
+flow_dissector:
+
+netfilter:
+
+{
+    "key": 1,
+    "value": 3
+}
+{
+    "key": 6,
+    "value": 6
+}
+```
+
+ping 3개가 모두 사라졌고 맵의 키 1이 3이다. curl 한 번 동안 r12b로 들어온 TCP 패킷은 6개였다. `bpftool prog show`의 `xlated 280B jited 178B`는 검증 뒤 BPF 명령의 크기와 JIT 뒤 기계어 크기다. 바깥에서 맵 값을 바꾸면 프로그램은 다음 패킷부터 그 값을 본다.
+
+```bash
+# 사용자 공간에서 맵 값을 0으로 되돌린다
+sudo bpftool map update name proto_count key 6 0 0 0 value 0 0 0 0 0 0 0 0
+sudo bpftool map lookup name proto_count key 6 0 0 0
+```
+
+```text
+{
+    "key": 6,
+    "value": 0
+}
+```
+
+이 구조가 Cilium의 기본이다. 프로그램은 노드에 한 번 올리고, Service나 정책이 바뀌면 에이전트가 맵의 항목만 고친다. iptables처럼 규칙 목록 전체를 다시 쓰지 않으니 Service가 수만 개여도 갱신이 가볍고, 맵 조회는 해시라서 항목 수와 상관없이 일정하다. 맵 종류는 해시, 배열, LRU 해시, CPU별 해시, 주소 대역용 LPM trie, 이벤트를 보내는 ring buffer 등이 있고, 쓰임에 맞게 고른다.
+
+## 패킷이 지나는 길목: XDP, tc, 소켓
+
+eBPF를 걸 수 있는 네트워크 훅은 여러 층에 있다. 어디에 거느냐에 따라 볼 수 있는 정보와 할 수 있는 일이 다르다.
+
+- XDP: 네트워크 드라이버가 패킷을 받자마자, 커널이 `sk_buff` 구조체를 만들기도 전에 돈다. 가장 빠르고 버리기(DDoS 방어)나 다른 장치로 바로 보내기에 좋다. 받는 방향에만 있다. 드라이버가 지원하면 native, 아니면 위처럼 generic 모드로 돈다(generic은 느리다).
+- tc(clsact): `sk_buff`가 만들어진 뒤 들어오는 쪽과 나가는 쪽 모두에 건다. 주소를 바꾸거나 다른 장치로 넘기기 좋다. Cilium은 Pod의 veth와 노드 장치에 주로 여기에 건다.
+- 소켓과 cgroup: 패킷이 아니라 `connect()`, `sendmsg()` 같은 시스템 콜에 건다. 연결을 맺는 순간 목적지 주소를 바꿀 수 있다.
+
+나가는 쪽(tc egress)에서 TCP 8080을 막는 프로그램도 걸어 봤다. 반환값이 `TC_ACT_SHOT`이면 버린다.
+
+```bash
+# r12a 쪽에 clsact 큐를 만들고 나가는 방향에 프로그램을 건다
+sudo ip netns exec r12a tc qdisc add dev r12va clsact
+sudo ip netns exec r12a tc filter add dev r12va egress bpf da obj tc_port.o sec tc
+sudo ip netns exec r12a tc filter show dev r12va egress
+sudo ip netns exec r12a curl -s -m 3 -o /dev/null -w '%{http_code}\n' http://10.12.0.2:8080/; echo "exit=$?"
+sudo ip netns exec r12a bpftool net show
+```
+
+```text
+filter protocol all pref 49152 bpf chain 0 
+filter protocol all pref 49152 bpf chain 0 handle 0x1 tc_port.o:[tc] direct-action not_in_hw id 23 name block_8080 tag 539338c9942761da jited 
+000
+exit=28
+xdp:
+
+tc:
+r12va(19) clsact/egress tc_port.o:[tc] id 23
+
+flow_dissector:
+
+netfilter:
+```
+
+curl은 3초를 채우고 `000`, 종료 코드 28(시간 초과)로 끝났다. SYN이 장치를 떠나기 전에 버려졌기 때문이다. 두 프로그램이 패킷 경로의 어디에 있는지 그림으로 정리한다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="tc egress는 보내는 쪽에서, XDP는 받는 쪽 드라이버 바로 뒤에서 패킷을 본다"
+  zones={[
+    { id: "a", label: "netns r12a 10.12.0.1", x: 6, y: 6, w: 180, h: 306, tone: "private" },
+    { id: "b", label: "netns r12b 10.12.0.2", x: 214, y: 6, w: 180, h: 306, tone: "public" },
+  ]}
+  nodes={[
+    { id: "curl", label: "curl / ping", sub: "소켓", x: 96, y: 60, icon: "client", w: 120 },
+    { id: "tc", label: "tc egress", sub: "block_8080", x: 96, y: 160, icon: "firewall", w: 120 },
+    { id: "va", label: "r12va", sub: "veth", x: 96, y: 260, icon: "switch" },
+    { id: "vb", label: "r12vb", sub: "veth", x: 304, y: 260, icon: "switch" },
+    { id: "xdp", label: "XDP", sub: "xdp_count", x: 304, y: 160, icon: "firewall", w: 120 },
+    { id: "srv", label: "http.server", sub: ":8080", x: 304, y: 60, icon: "server", w: 120 },
+  ]}
+  links={[
+    { from: "curl", to: "tc" },
+    { from: "tc", to: "va" },
+    { from: "va", to: "vb" },
+    { from: "vb", to: "xdp" },
+    { from: "xdp", to: "srv" },
+  ]}
+  steps={[
+    { path: ["curl", "tc", "va", "vb", "xdp"], packet: "ICMP", blocked: true, title: "ping은 받는 쪽 XDP에서 버려진다", detail: "tc 프로그램은 TCP 8080만 보니 ICMP는 내보낸다. r12vb의 XDP가 프로토콜 1을 세고 XDP_DROP을 돌려준다. 커널 네트워크 스택은 이 패킷을 본 적도 없다.", payload: "proto_count[1] = 3" },
+    { path: ["curl", "tc", "va", "vb", "xdp", "srv"], packet: "SYN", title: "tc가 없을 때 HTTP는 지나간다", detail: "XDP는 TCP를 세기만 하고 XDP_PASS를 돌려준다. 패킷은 sk_buff가 되어 netfilter와 라우팅을 거쳐 서버 소켓에 닿는다.", payload: "proto_count[6] = 6, HTTP 200" },
+    { path: ["curl", "tc"], packet: "SYN", blocked: true, highlight: ["a"], title: "tc egress를 걸면 보내는 쪽에서 막힌다", detail: "block_8080이 목적지 포트 8080을 보고 TC_ACT_SHOT을 돌려준다. SYN이 장치를 떠나지 못해 curl은 재전송만 하다 3초 뒤 끝난다.", payload: "curl exit=28" },
+  ]}
+/>
+
+<Callout kind="warning">
+원격 서버의 주 인터페이스에 버리는 프로그램(XDP_DROP, TC_ACT_SHOT)을 시험 삼아 걸면 SSH도 같이 끊길 수 있다. 위처럼 네트워크 네임스페이스 안에서 먼저 시험한다. 되돌릴 때는 `sudo ip link set dev eth0 xdpgeneric off`(native로 걸었으면 `xdp off`), tc는 `sudo tc qdisc del dev eth0 clsact`다. 걸기 전에 `sleep 60 && ip link set dev eth0 xdpgeneric off` 같은 되돌리기 명령을 백그라운드로 띄워 두면 안전장치가 된다.
+</Callout>
+
+## Cilium은 이 길목들에 무엇을 거나
+
+Cilium은 이 훅들에 프로그램을 걸고 맵을 채우는 에이전트다. 노드마다 cilium-agent DaemonSet이 API 서버에서 Pod, Service, EndpointSlice, 정책을 지켜보다가 맵을 고친다. CNI 플러그인으로 Pod 네트워크를 만들 때 Pod의 veth(`lxc...`라는 이름) 양쪽에 tc 프로그램을 건다. 그래서 Pod가 보내는 모든 패킷은 노드에 들어오자마자 Cilium의 프로그램을 지난다.
+
+<ConceptDiagram
+  caption="에이전트가 API 서버를 지켜보고 맵을 채우면, 커널의 프로그램이 패킷마다 맵을 찾는다"
+  width={400}
+  height={320}
+  nodes={[
+    { id: "api", label: "API 서버", sub: "Pod·Service·정책", x: 200, y: 36, w: 140 },
+    { id: "op", label: "cilium-operator", sub: "identity·IPAM", x: 80, y: 120, w: 130 },
+    { id: "agent", label: "cilium-agent", sub: "노드마다", x: 300, y: 120, w: 130 },
+    { id: "maps", label: "BPF 맵", sub: "lb·policy·ipcache", x: 300, y: 210, w: 130 },
+    { id: "progs", label: "BPF 프로그램", sub: "tc·XDP·socket", x: 100, y: 210, w: 130 },
+    { id: "hubble", label: "Hubble", sub: "흐름 이벤트", x: 200, y: 292, w: 120 },
+  ]}
+  edges={[
+    { from: "api", to: "op", label: "watch" },
+    { from: "api", to: "agent", label: "watch" },
+    { from: "agent", to: "maps", label: "쓰기" },
+    { from: "agent", to: "progs", label: "적재" },
+    { from: "progs", to: "maps", label: "조회", arrow: "both" },
+    { from: "progs", to: "hubble", label: "이벤트", dashed: true },
+  ]}
+/>
+
+맵은 크게 셋이다. Service 주소와 백엔드 목록을 담은 로드 밸런서 맵, Pod IP를 그 Pod의 identity로 바꾸는 ipcache 맵, 엔드포인트마다 어떤 identity와 포트를 허용할지 담은 정책 맵이다. 프로그램은 패킷이 올 때마다 이 셋을 해시로 찾는다.
+
+## kube-proxy 없이 Service를 푸는 법
+
+Cilium을 kube-proxy 대체 모드로 깔면 Service 처리를 eBPF가 맡는다. kube-proxy가 없으니 Cilium 에이전트가 API 서버를 `kubernetes` Service의 ClusterIP로 찾을 수 없다. 그래서 설치할 때 API 서버 주소를 직접 알려 준다. Cilium v1.20.3 문서의 Helm 설정이다.
+
+```bash
+# Cilium 차트 저장소를 추가한다
+helm repo add cilium https://helm.cilium.io/
+# kube-proxy 없이 Cilium을 설치한다 (kubeadm이면 kube-proxy 애드온을 건너뛰고 클러스터를 만든다)
+helm install cilium cilium/cilium --namespace kube-system \
+  --set kubeProxyReplacement=true \
+  --set k8sServiceHost=${API_SERVER_IP} \
+  --set k8sServicePort=${API_SERVER_PORT}
+# 대체 모드로 도는지 확인한다
+kubectl -n kube-system exec ds/cilium -- cilium-dbg status --verbose
+```
+
+```text
+# 예시: Cilium v1.20.3 문서에 실린 출력
+KubeProxyReplacement Details:
+  Status:                True
+  Socket LB:             Enabled
+  Protocols:             TCP, UDP
+  Devices:               eth0 (Direct Routing), eth1
+  Mode:                  SNAT
+  Backend Selection:     Random
+  Session Affinity:      Enabled
+  Graceful Termination:  Enabled
+  NAT46/64 Support:      Enabled
+  XDP Acceleration:      Disabled
+  Services:
+  - ClusterIP:      Enabled
+  - NodePort:       Enabled (Range: 30000-32767)
+  - LoadBalancer:   Enabled
+  - externalIPs:    Enabled
+  - HostPort:       Enabled
+```
+
+`Socket LB: Enabled`가 kube-proxy와 가장 다른 부분이다. 문서에 따르면 Helm의 기본값은 `kubeProxyReplacement=false`이고, 이때는 ClusterIP에 대한 패킷 단위 분산만 켜진다. 소켓 단계 분산은 cgroup v2에 BPF 프로그램을 걸어 `connect()`를 가로챈다. 앱이 ClusterIP로 연결을 열려고 하면, 커널이 SYN을 만들기도 전에 목적지가 Pod 주소로 바뀐다.
+
+<SequenceDiagram
+  caption="소켓 단계 분산은 connect() 순간 목적지를 바꿔서 패킷마다 DNAT하지 않는다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "sock", label: "cgroup connect 훅" },
+    { id: "lb", label: "LB 맵" },
+    { id: "pod", label: "백엔드 Pod" },
+  ]}
+  steps={[
+    { from: "app", to: "sock", label: "connect(10.96.0.10:80)", title: "앱은 ClusterIP로 연결한다", detail: "앱 코드는 바뀌지 않는다. CoreDNS가 돌려준 ClusterIP로 connect()를 부른다." },
+    { from: "sock", to: "lb", label: "Service 조회", title: "맵에서 백엔드를 고른다", detail: "connect4 훅의 프로그램이 (10.96.0.10, 80, TCP)로 LB 맵을 찾아 백엔드 하나를 고른다.", payload: "10.96.0.10:80 → 10.217.0.107:80, 10.217.0.149:80" },
+    { from: "sock", to: "sock", label: "주소 바꿔 쓰기", title: "소켓의 목적지를 바꾼다", detail: "시스템 콜 인자의 목적지를 10.217.0.149:80으로 바꿔 쓴다. 이제 커널은 처음부터 Pod 주소로 연결을 맺는다." },
+    { from: "app", to: "pod", label: "SYN → 10.217.0.149", title: "패킷에는 Pod 주소만 있다", detail: "패킷마다 DNAT할 필요가 없고 DNAT용 conntrack 항목도 생기지 않는다. 노드에서 tcpdump를 떠도 ClusterIP는 보이지 않는다." },
+    { from: "app", to: "app", label: "getpeername()", title: "앱에는 원래 주소로 보여 준다", detail: "getpeername 훅이 상대 주소를 다시 ClusterIP로 돌려준다. 앱은 여전히 Service와 대화한다고 믿는다." },
+  ]}
+/>
+
+이 방식의 장점은 연결당 한 번만 일한다는 것이다. 패킷마다 NAT를 하지 않으니 conntrack 테이블이 덜 찬다. 바깥에서 들어오는 NodePort 트래픽에는 XDP 가속(`loadBalancer.acceleration=native`), 원래 클라이언트 IP를 지키는 DSR 모드(`loadBalancer.mode=dsr`), 백엔드가 바뀌어도 연결이 덜 흔들리는 Maglev 해싱(`loadBalancer.algorithm=maglev`) 같은 선택지도 있다. 문서는 Maglev가 바깥에서 들어오는(N-S) 트래픽에만 적용되고 노드 메모리를 더 쓴다고 적고 있다.
+
+대신 익숙한 도구가 안 통한다. Service가 안 될 때 `iptables-save`를 봐도 아무것도 없다. 같은 정보는 Cilium 명령으로 본다.
+
+```bash
+# Cilium이 아는 Service와 백엔드 목록 (kube-proxy의 KUBE-SVC 체인 자리)
+kubectl -n kube-system exec ds/cilium -- cilium-dbg service list
+```
+
+```text
+# 예시: Cilium v1.20.3 문서에 실린 출력
+ID   Frontend               Service Type   Backend
+4    10.104.239.135:80/TCP      ClusterIP      1 => 10.217.0.107:80/TCP
+                                               2 => 10.217.0.149:80/TCP
+5    0.0.0.0:31940/TCP          NodePort       1 => 10.217.0.107:80/TCP
+                                               2 => 10.217.0.149:80/TCP
+```
+
+## IP 대신 identity로 정책을 건다
+
+표준 NetworkPolicy를 iptables로 구현하면 "role=frontend Pod들의 IP 목록"을 노드마다 규칙으로 들고 있어야 한다. frontend Pod가 하나 뜰 때마다 backend가 있는 모든 노드의 규칙을 고쳐야 하고, 고치기 전에 새 Pod가 보낸 연결은 잘못 막힐 수 있다. Pod가 자주 바뀌는 큰 클러스터에서는 이 갱신이 병목이 된다.
+
+Cilium은 주소와 보안을 떼어 놓는다. 같은 라벨 묶음을 가진 Pod들은 같은 숫자 identity를 받는다. 정책 맵에는 IP가 아니라 identity가 들어간다. frontend Pod가 100개로 늘어도 identity는 하나라서 backend 쪽 정책 맵은 그대로다. 새 Pod는 자기 identity만 알면 된다. 숫자 몇 개는 예약돼 있다. Cilium 문서 기준으로 `reserved:host`는 1, 클러스터 밖 전부를 뜻하는 `reserved:world`는 2, 헬스 체크는 4, 다른 노드는 `reserved:remote-node` 6이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="보내는 노드가 identity를 실어 보내고, 받는 노드는 정책 맵에서 identity와 포트로 판정한다"
+  zones={[
+    { id: "n1", label: "node-1", x: 6, y: 6, w: 180, h: 288, tone: "private" },
+    { id: "n2", label: "node-2", x: 214, y: 6, w: 180, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "fe", label: "frontend", sub: "id 12345", x: 96, y: 60, icon: "container" },
+    { id: "batch", label: "batch-job", sub: "id 48213", x: 96, y: 140, icon: "container" },
+    { id: "c1", label: "cilium tc", sub: "ipcache", x: 96, y: 230, icon: "firewall" },
+    { id: "c2", label: "cilium tc", sub: "policy 맵", x: 304, y: 230, icon: "firewall" },
+    { id: "api", label: "api", sub: "id 6789 :8080", x: 304, y: 100, icon: "container", w: 116 },
+  ]}
+  links={[
+    { from: "fe", to: "c1" },
+    { from: "batch", to: "c1" },
+    { from: "c1", to: "c2", label: "VXLAN" },
+    { from: "c2", to: "api" },
+  ]}
+  steps={[
+    { path: ["fe", "c1"], packet: "SYN", title: "보내는 쪽이 출발지 identity를 찾는다", detail: "frontend의 veth에 걸린 프로그램이 출발지 Pod의 identity 12345를 안다. 라벨 app=frontend 묶음이 받은 번호다." },
+    { path: ["c1", "c2"], packet: "id12345", title: "identity를 실어 보낸다", detail: "터널 모드면 VXLAN이나 Geneve 헤더에 identity를 넣는다. 네이티브 라우팅이면 받는 쪽이 ipcache 맵에서 출발지 IP로 identity를 찾는다." },
+    { path: ["c2", "api"], packet: "SYN", highlight: ["n2"], title: "정책 맵에서 허용을 찾는다", detail: "api 엔드포인트의 정책 맵에서 (12345, 8080, TCP)를 찾는다. 허용 항목이 있으니 통과한다. IP 목록 비교는 없다.", payload: "policy[12345, 8080/TCP] = allow" },
+    { path: ["batch", "c1", "c2"], packet: "SYN", blocked: true, title: "허용 목록에 없는 identity는 버린다", detail: "batch-job의 identity 48213은 api 정책 맵에 없다. 받는 노드의 프로그램이 버리고, Hubble에 Policy denied로 남는다." },
+  ]}
+/>
+
+판정 규칙을 단순하게 코드로 옮겨 보면 이렇다. 정책 맵 항목에서 identity 0은 "모든 출발지", 포트 0은 "모든 포트"를 뜻한다고 두었다. 거부 항목이 하나라도 맞으면 거부가 이기고, 정책이 걸린 엔드포인트에서 맞는 허용이 없으면 버린다. 실제 Cilium의 맵 키와 우선순위 규칙은 더 복잡하다.
+
+<CodePlayground
+  caption="정책 맵에서 출발지 identity, 포트, 프로토콜로 판정하기"
+  functionName="verdict"
+  initialCode={`function verdict(policy, src, port, proto) {
+  // policy: [{ identity, port, proto, deny? }]  identity 0 = 아무나, port 0 = 모든 포트, proto "ANY"
+  // 반환: "FORWARDED" 또는 "DROPPED"
+  return "DROPPED";
+}`}
+  solution={`function verdict(policy, src, port, proto) {
+  const hits = policy.filter(e =>
+    (e.identity === 0 || e.identity === src) &&
+    (e.port === 0 || e.port === port) &&
+    (e.proto === "ANY" || e.proto === proto));
+  if (hits.some(e => e.deny)) return "DROPPED";
+  if (hits.length > 0) return "FORWARDED";
+  return "DROPPED";
+}`}
+  tests={[
+    { label: "frontend → 8080", args: [[{ identity: 12345, port: 8080, proto: "TCP" }, { identity: 0, port: 53, proto: "UDP" }, { identity: 2, port: 0, proto: "ANY", deny: true }], 12345, 8080, "TCP"], expected: "FORWARDED" },
+    { label: "frontend → 9090", args: [[{ identity: 12345, port: 8080, proto: "TCP" }, { identity: 0, port: 53, proto: "UDP" }, { identity: 2, port: 0, proto: "ANY", deny: true }], 12345, 9090, "TCP"], expected: "DROPPED" },
+    { label: "아무나 → 53/UDP", args: [[{ identity: 12345, port: 8080, proto: "TCP" }, { identity: 0, port: 53, proto: "UDP" }, { identity: 2, port: 0, proto: "ANY", deny: true }], 48213, 53, "UDP"], expected: "FORWARDED" },
+    { label: "world → 53/UDP (거부가 이긴다)", args: [[{ identity: 12345, port: 8080, proto: "TCP" }, { identity: 0, port: 53, proto: "UDP" }, { identity: 2, port: 0, proto: "ANY", deny: true }], 2, 53, "UDP"], expected: "DROPPED" },
+    { label: "빈 정책", args: [[], 12345, 8080, "TCP"], expected: "DROPPED" },
+  ]}
+/>
+
+identity 덕분에 표준 NetworkPolicy가 못 하는 것도 CiliumNetworkPolicy로 쓸 수 있다. HTTP 메서드와 경로로 거르는 L7 규칙(이때는 노드의 Envoy 프록시로 넘겨 검사한다)과, DNS 응답을 지켜보며 도메인 이름을 IP로 바꿔 허용하는 `toFQDNs`가 대표적이다.
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-ingress
+spec:
+  endpointSelector:
+    matchLabels: {app: api}
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {app: frontend}
+    toPorts:
+    - ports: [{port: "8080", protocol: TCP}]
+      rules:
+        http:
+        - {method: GET, path: "/v1/.*"}   # GET /v1/... 만 허용한다
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-egress-payments
+spec:
+  endpointSelector:
+    matchLabels: {app: api}
+  egress:
+  - toEndpoints:                          # toFQDNs는 DNS 응답을 봐야 하니 DNS 허용과 검사가 함께 필요하다
+    - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+    toPorts:
+    - ports: [{port: "53", protocol: ANY}]
+      rules:
+        dns:
+        - matchPattern: "*"
+  - toFQDNs:
+    - matchName: api.payments.example.com
+    toPorts:
+    - ports: [{port: "443", protocol: TCP}]
+```
+
+L7 규칙에는 대가가 있다. 그 포트의 트래픽이 커널에서 끝나지 않고 노드의 프록시를 한 번 지나니 지연과 CPU가 는다. 꼭 필요한 Service에만 건다.
+
+## Hubble로 흐름을 본다
+
+패킷이 eBPF 안에서 처리되면 tcpdump로는 "왜 버려졌는지"를 알 수 없다. Cilium의 프로그램은 판정할 때마다 이벤트를 남기고, Hubble이 이를 모아 흐름(flow)으로 보여 준다. 정책 문제를 볼 때 가장 먼저 여는 도구다.
+
+```bash
+# 버려진 흐름만 본다
+hubble observe --pod deathstar --verdict DROPPED
+# HTTP 수준으로 본다 (L7 정책이 걸린 포트)
+hubble observe --pod deathstar --protocol http
+```
+
+```text
+# 예시: Cilium v1.20.3 문서의 Hubble CLI 출력
+May  4 13:23:43.791: default/tiefighter:42742 -> default/deathstar-c74d84667-cx5kp:80 http-request DROPPED (HTTP/1.1 PUT http://deathstar.default.svc.cluster.local/v1/exhaust-port)
+May  4 13:23:47.852: default/xwing:42818 <> default/deathstar-c74d84667-cx5kp:80 Policy denied DROPPED (TCP Flags: SYN)
+May  4 13:23:48.854: default/xwing:42818 <> default/deathstar-c74d84667-cx5kp:80 Policy denied DROPPED (TCP Flags: SYN)
+```
+
+<UrlAnatomy
+  caption="Hubble 흐름 한 줄은 누가, 누구에게, 어디서, 어떤 판정을 받았는지다"
+  base="May  4 13:23:47.852"
+  separator=": "
+  joiner=" "
+  params={[
+    { key: "src", display: "default/xwing:42818", title: "출발지", description: "네임스페이스/Pod 이름과 포트다. IP가 아니라 이름으로 보이는 이유는 Hubble이 identity와 ipcache로 주소를 Pod로 바꿔 보여 주기 때문이다." },
+    { key: "dir", display: "<>", title: "방향", description: "->는 보내는 방향, <-는 응답, <>는 방향을 정하기 전에 판정된 경우다. 정책에 걸린 첫 SYN에서 자주 본다." },
+    { key: "dst", display: "default/deathstar-c74d84667-cx5kp:80", title: "목적지", description: "받는 Pod와 포트다. Service 이름이 아니라 실제 백엔드 Pod가 찍힌다. 소켓 단계 분산이 이미 주소를 바꿨기 때문이다." },
+    { key: "why", display: "Policy denied", title: "이유", description: "정책 맵에서 허용을 못 찾았다. 다른 값으로는 to-endpoint(전달), http-request(L7 판정) 등이 있다. 정책 이름은 cilium-dbg 쪽에서 찾는다." },
+    { key: "verdict", display: "DROPPED (TCP Flags: SYN)", title: "판정과 패킷", description: "버려진 것은 SYN이다. 1초 간격으로 같은 줄이 반복되면 클라이언트가 재전송하고 있는 것이고, 앱에서는 연결 시간 초과로 보인다." },
+  ]}
+/>
+
+## 언제 Cilium을 고르나
+
+Cilium이 유리한 곳은 Service와 Pod가 많고 자주 바뀌는 클러스터, 표준 NetworkPolicy로 부족한 L7·도메인 정책이 필요한 곳, 흐름 단위 관측이 필요한 곳이다. 서비스 메시의 일부 기능(mTLS, L7 관측)을 사이드카 없이 노드 단위로 가져가려는 경우에도 후보가 된다.
+
+비용도 분명하다.
+
+- 커널 의존성이 생긴다. 커널 버전과 설정에 따라 쓸 수 있는 기능이 다르고, 노드 이미지를 바꿀 때마다 확인해야 한다. 오래된 커널을 오래 쓰는 환경이면 걸림돌이 된다.
+- 디버깅 도구가 바뀐다. `iptables-save`, `conntrack -L` 대신 `cilium-dbg`, `hubble`, `bpftool`을 익혀야 한다. 장애 대응 문서와 사람의 습관이 같이 바뀌어야 한다.
+- 맵은 크기가 정해져 있다. Service, 백엔드, 연결 추적 항목이 맵 크기를 넘으면 새 항목이 들어가지 못한다. 큰 클러스터는 맵 크기 설정과 사용률 지표를 함께 본다.
+- 에이전트 업그레이드가 데이터패스 업그레이드다. 프로그램이 바뀌는 순간이 있으니 노드를 순서대로 올린다.
+
+iptables 기반 kube-proxy와 Calico(또는 Flannel) 조합은 여전히 무난한 선택이다. 노드 수백 대, Service 수천 개 정도면 iptables로도 버티고, 많은 사람이 디버깅법을 안다. Calico도 eBPF 데이터패스 모드를 갖고 있어서 "eBPF냐 아니냐"와 "Cilium이냐 아니냐"는 따로 따질 문제다.
+
+## 현장에서 eBPF 데이터패스를 의심할 때
+
+Cilium 클러스터에서 연결이 안 될 때는 판정을 먼저 본다. 버려졌는지, 어디서 버려졌는지를 알면 나머지는 빨리 좁혀진다.
+
+```bash
+# 1. 에이전트가 건강한가, kube-proxy 대체가 켜져 있나
+kubectl -n kube-system exec ds/cilium -- cilium-dbg status --brief
+# 2. 버려진 흐름이 있나 (정책 때문인지, 다른 이유인지)
+hubble observe --namespace <ns> --verdict DROPPED --last 50
+# 3. 노드에서 실시간으로 drop 이벤트를 본다
+kubectl -n kube-system exec ds/cilium -- cilium-dbg monitor --type drop
+# 4. Service 백엔드가 맵에 들어 있나
+kubectl -n kube-system exec ds/cilium -- cilium-dbg service list | grep <ClusterIP>
+# 5. 그 노드의 장치에 어떤 BPF 프로그램이 걸려 있나
+sudo bpftool net show
+```
+
+증상별로 자주 만나는 원인은 이렇다.
+
+- 새로 뜬 Pod가 처음 몇 초간 연결이 안 된다. identity가 아직 정해지지 않은 `reserved:init` 상태이거나, 상대 노드의 ipcache에 새 Pod IP가 아직 퍼지지 않았다. Hubble에서 출발지 identity가 숫자로 찍히는지 본다.
+- 정책을 걸었더니 외부 도메인 호출이 다 죽었다. `toFQDNs`를 쓰면서 DNS 허용과 DNS 검사 규칙을 같이 넣지 않았다. Cilium이 DNS 응답을 못 보면 도메인을 IP로 바꿀 수 없다.
+- kube-proxy를 지운다고 했는데 노드에 KUBE-SVC 체인이 남아 있다. kube-proxy DaemonSet은 지웠지만 노드의 규칙이 그대로 남았다. 둘이 같이 Service를 처리하면 증상이 이상해진다. 노드를 새로 띄우거나 kube-proxy의 `--cleanup` 모드로 규칙을 지운다.
+- 큰 패킷만 안 간다. 터널 모드(VXLAN, Geneve)의 헤더만큼 MTU가 줄어든다. 이 내용은 [CNI와 Pod 네트워크 글](/posts/k8s-cni-pod-network)에서 재현했다.
+- Service가 가끔 응답을 안 한다. 연결 추적 맵이나 NAT 맵이 꽉 찼을 수 있다. 에이전트의 맵 사용률 지표와 `cilium-dbg` 로그의 맵 관련 경고를 본다.
+
+## 규칙 목록에서 프로그램과 맵으로
+
+eBPF는 커널 길목에 검증된 작은 프로그램을 끼워 넣고, 상태는 맵에 두어 바깥에서 고치는 방식이다. XDP는 받자마자, tc는 들어오고 나갈 때, 소켓 훅은 연결을 여는 순간 동작한다. Cilium은 이 위에서 Service를 소켓 단계에서 풀어 kube-proxy를 대신하고, Pod 라벨로 만든 identity로 정책을 판정하고, 판정마다 남긴 이벤트를 Hubble로 보여 준다. 그 대가로 커널 버전과 새 디버깅 도구에 익숙해져야 한다. Service와 NetworkPolicy가 iptables 위에서 어떻게 생겼는지는 [kube-proxy 모드 글](/posts/k8s-kube-proxy-modes)과 [NetworkPolicy 글](/posts/k8s-network-policy)에서 비교해 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### eBPF는 커널 모듈과 무엇이 다른가요?
+
+eBPF 프로그램은 커널에 올리기 전에 검증기가 모든 경로를 따라가며 범위 밖 메모리 접근, 끝나지 않는 루프 같은 위험이 없는지 증명한다. 통과해야만 JIT로 기계어가 되어 훅에 걸리니, 버그가 있어도 커널을 멈추게 할 수 없다. 커널 모듈은 이런 검사 없이 커널 권한으로 돌아서 실수 하나가 커널 패닉이 된다. 대신 eBPF는 스택 크기, 명령 수, 쓸 수 있는 헬퍼 함수에 제약이 있다.
+
+### 검증기가 패킷 접근을 거절하는 대표적인 이유는요?
+
+`data_end`와 비교해 길이를 확인하지 않고 패킷을 읽었기 때문이다. 검증기는 레지스터마다 패킷 시작에서 몇 바이트까지 안전한지를 추적하고, 비교가 끝난 경로에서만 그 범위를 늘린다. 이더넷 헤더만 확인하고 IP 헤더의 필드를 읽으면 `invalid access to packet`으로 거절된다.
+
+### XDP와 tc 훅은 어떻게 다르고, 언제 무엇을 쓰나요?
+
+XDP는 드라이버가 패킷을 받자마자 `sk_buff`를 만들기 전에 돌아서 가장 빠르지만 받는 방향에만 있고 볼 수 있는 정보가 적다. 대량 차단이나 로드 밸런서 앞단 처리에 쓴다. tc는 `sk_buff`가 생긴 뒤 들어오고 나가는 양쪽에 걸 수 있어 주소 변환이나 Pod 단위 정책처럼 더 많은 문맥이 필요한 일에 쓴다. Cilium은 Pod의 veth에는 tc를, NodePort 가속에는 XDP를 쓴다.
+
+### Cilium은 kube-proxy 없이 Service를 어떻게 처리하나요?
+
+cgroup에 건 소켓 훅이 앱의 `connect()`를 가로채 LB 맵에서 백엔드를 골라 목적지를 Pod 주소로 바꿔 쓴다. 연결을 여는 순간 한 번만 바꾸니 패킷마다 DNAT하지 않고 conntrack 항목도 덜 생긴다. 소켓 단계가 아닌 경로(외부에서 오는 NodePort 등)는 tc나 XDP 프로그램이 패킷 단위로 처리한다. kube-proxy가 없으니 설치할 때 `k8sServiceHost`로 API 서버 주소를 직접 알려 줘야 한다.
+
+### identity 기반 정책이 IP 기반보다 나은 점은요?
+
+같은 라벨 묶음의 Pod들이 하나의 숫자 identity를 공유해서, Pod가 늘거나 바뀌어도 받는 쪽 노드의 정책 맵을 고칠 필요가 없다. IP 기반이면 Pod가 뜰 때마다 관련된 모든 노드의 IP 목록을 고쳐야 하고, 갱신 전에 보낸 연결이 잘못 막힐 수 있다. 터널 모드에서는 identity를 캡슐화 헤더에 실어 보내 받는 쪽이 IP를 해석하지 않아도 된다.
+
+### Cilium 클러스터에서 Pod 사이 연결이 안 되면 무엇부터 보나요?
+
+판정을 먼저 본다. `hubble observe --verdict DROPPED`로 버려졌는지와 이유(Policy denied 등)를 확인하고, 정책 문제가 아니면 `cilium-dbg monitor --type drop`으로 노드에서 drop 이유를 본다. Service 문제면 `cilium-dbg service list`에 백엔드가 들어 있는지 본다. `iptables-save`는 Cilium이 Service와 정책을 eBPF로 처리하니 거의 쓸모가 없다.
+
+### Cilium을 도입할 때 주의할 트레이드오프는요?
+
+커널 버전에 의존하고(v1.20 기준 5.10 이상), 디버깅 도구와 운영 습관이 바뀌고, 맵 크기라는 새 한계가 생긴다. L7 정책은 노드 프록시를 거치니 그 포트의 지연과 CPU가 는다. Service와 Pod가 적고 팀이 iptables 디버깅에 익숙하면 기존 kube-proxy 조합이 더 단순할 수 있다.

@@ -1,0 +1,365 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("serverless-limits");
+
+엑셀 내보내기 기능을 Lambda로 옮겼다. 테스트에서는 잘 됐는데 운영 첫날 큰 고객사 하나가 "504 Gateway Timeout"을 받았다. 함수 로그에는 에러가 없다. 함수는 41초 만에 파일을 다 만들고 정상 종료했다. 그런데 앞의 API Gateway는 29초에 이미 연결을 끊고 504를 돌려준 뒤였다. 같은 주에 PDF 업로드는 `413`을 냈고, 이벤트가 몰린 날에는 RDS가 `too many connections`로 쓰러졌다.
+
+서버리스는 서버를 관리하지 않는 대신 플랫폼이 정한 벽 안에서 일한다. 이 글은 그 벽을 하나씩 본다. 시간 한도, 요청·응답 크기, 동시성과 거절, 임시 저장소, DB 연결 폭주, 그리고 묶이는 비용까지. 숫자는 AWS Lambda를 기준으로 2026년 10월 확인 기준이며, 바뀌는 일이 잦으니 설계 전에 공식 할당량 문서를 다시 본다. 로컬 실험(시간 한도와 재시도, 연결 폭주, PgBouncer)은 이 컨테이너에서 Node 22.22와 PostgreSQL 16.15로 돌린 실제 출력이고, AWS CLI 출력은 계정 없이 실제 형식대로 쓴 예시다.
+
+이 주제의 다른 글: 첫 요청이 느린 문제는 [콜드 스타트](/posts/cold-starts)에서, 서버리스 요금이 어디서 커지는지는 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에서 다룬다.
+
+## 플랫폼이 정한 숫자부터 본다
+
+설계에 영향을 주는 숫자만 추리면 이 정도다. 대부분 "조정 가능"한 할당량이 아니라 바꿀 수 없는 한도다.
+
+<div className="mdx-table">
+
+| 항목 | Lambda 한도 | 바꿀 수 있나 |
+|---|---|---|
+| 실행 시간 | 최대 900초(15분) | 아니오 |
+| 동기 호출 요청·응답 | 각 6MB | 아니오 |
+| 비동기 호출 이벤트 | 1MB (2025년 10월 전에는 256KB) | 아니오 |
+| 메모리 | 128MB ~ 10,240MB | 설정값 |
+| 임시 저장소 `/tmp` | 512MB 기본, 최대 10,240MB | 설정값 |
+| 리전별 동시 실행 | 기본 1,000 (새 계정은 더 낮을 수 있음) | 할당량 증가 요청 |
+| 배포 묶음 | zip 50MB(직접 업로드), 압축 해제 250MB, 이미지 10GB | 아니오 |
+| 환경 변수 | 전체 4KB | 아니오 |
+
+</div>
+
+이 표만 봐도 맞지 않는 일이 보인다. 15분 넘게 도는 배치, 수백 MB 파일을 메모리로 받는 API, 웹소켓처럼 오래 붙어 있는 연결, 수천 개의 DB 연결을 여는 일이다. 하나씩 보자.
+
+## 시간 한도는 겹겹이 걸려 있다
+
+맨 앞의 504가 생긴 이유는 시간 한도가 하나가 아니라서다. 요청이 지나가는 층마다 따로 한도가 있고, 가장 짧은 한도가 전체를 정한다.
+
+<NetworkTopology
+  caption="함수는 15분을 쓸 수 있지만, 앞의 게이트웨이가 29초에 끊는다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "aws", label: "AWS", x: 120, y: 20, w: 272, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Browser", sub: "fetch 60s", x: 60, y: 130, icon: "client", w: 96 },
+    { id: "apigw", label: "API Gateway", sub: "29s", x: 200, y: 75, icon: "gateway", w: 120 },
+    { id: "fn", label: "Lambda", sub: "timeout 60s", x: 200, y: 190, icon: "container", w: 120 },
+    { id: "s3", label: "S3", sub: "export.xlsx", x: 332, y: 190, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "client", to: "apigw" },
+    { from: "apigw", to: "fn" },
+    { from: "fn", to: "s3" },
+  ]}
+  steps={[
+    { path: ["client", "apigw", "fn"], packet: "GET", title: "요청이 함수에 닿는다", detail: "함수는 60초 한도로 설정했다. 큰 고객사의 내보내기는 41초가 걸린다." },
+    { path: ["apigw", "client"], packet: "504", highlight: ["fn"], title: "29초에 게이트웨이가 끊는다", detail: "REST API의 통합 시간 한도 기본값은 29초다. 클라이언트는 504를 받는다. 함수는 이 사실을 모른 채 계속 돈다." },
+    { path: ["fn", "s3"], packet: "PUT", title: "함수는 41초에 정상 종료", detail: "파일은 만들어졌지만 받을 사람이 없다. 함수 로그에는 에러가 없어 원인을 찾기 어렵다." },
+    { path: ["client", "apigw", "fn"], packet: "retry", title: "사용자가 다시 누른다", detail: "같은 작업이 또 시작된다. 비용은 두 배, 부하도 두 배다." },
+  ]}
+/>
+
+API Gateway의 REST API는 통합 시간 한도가 기본 29초이고, 2024년부터 리전·프라이빗 REST API는 할당량 증가 요청으로 늘릴 수 있게 됐다(대신 계정의 처리량 할당량이 줄 수 있다). HTTP API는 최대 30초다. ALB 뒤에 두면 ALB의 유휴 시간 한도(기본 60초)가 걸린다. 브라우저나 앱의 요청 시간 한도도 따로 있다. 이 층들을 다 맞추는 규칙은 [타임아웃](/posts/timeouts) 글에 정리했다. 바깥 층일수록 길게, 안쪽일수록 짧게 둔다.
+
+오래 걸리는 일은 동기 응답으로 기다리게 하지 않는다. 요청을 받으면 작업 ID만 돌려주고(`202 Accepted`), 함수를 비동기로 돌리거나 큐에 넣고, 끝나면 S3의 결과 주소를 폴링이나 웹훅, 알림으로 알려 준다. 15분을 넘기는 일은 Step Functions로 단계를 나누거나, 컨테이너(ECS, AWS Batch)로 옮긴다.
+
+## 시간이 다 되면 중간에서 끊긴다
+
+함수의 시간 한도가 다 되면 런타임은 핸들러가 어디까지 했든 실행 환경을 멈춘다. `finally`도, 남은 루프도 돌지 않는다. 여기에 비동기 호출의 자동 재시도(기본 두 번 더)가 겹치면 이상한 결과가 나온다.
+
+로컬에서 흉내 냈다. 주문 10건에 메일을 보내는 핸들러가 한 건에 0.4초씩 쓴다. 런타임은 시간 한도가 지나면 프로세스를 `SIGKILL`로 끊고, 비동기 호출처럼 최대 세 번 시도한다. 메일 발송은 파일에 한 줄씩 남는 부작용으로 바꿨다. "Task timed out" 문구는 Lambda 로그 형식을 따라 내 스크립트가 찍은 것이다.
+
+```bash
+# 시간 한도 3초와 5초로 각각 돌려 부작용이 몇 번 남는지 센다
+node timeout.js 3000
+node timeout.js 5000
+```
+
+```text
+attempt 1: Task timed out after 3.00 seconds
+attempt 2: Task timed out after 3.00 seconds
+attempt 3: Task timed out after 3.00 seconds
+side effects: 21 lines, 7 unique, duplicated: 14
+attempt 1: done
+side effects: 10 lines, 10 unique, duplicated: 0
+```
+
+3초 한도에서는 세 번 모두 7건째에서 끊겼다. 1~7번 주문은 메일이 세 번씩 갔고, 8~10번 주문은 한 번도 가지 않았다. 재시도가 일을 끝내 주지도 못하고 중복만 만들었다.
+
+<AlgoTrace
+  caption="끊긴 작업을 처음부터 다시 하면 앞부분만 계속 반복된다"
+  memoryLabel="보낸 메일"
+  cells={["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10"]}
+  steps={[
+    { pointer: 0, memory: ["o1"], caption: "1차 시도가 처음부터 시작한다." },
+    { pointer: 6, memory: ["o1", "o2", "o3", "o4", "o5", "o6", "o7"], caption: "7건째를 보낸 직후 3초가 된다." },
+    { pointer: 7, memory: ["o1", "o2", "o3", "o4", "o5", "o6", "o7"], caption: "o8을 처리하던 중 환경이 멈춘다. 남은 일은 사라진다." },
+    { pointer: 0, memory: ["o1..o7", "o1"], caption: "재시도는 같은 이벤트로 다시 처음부터 시작한다. o1에 두 번째 메일." },
+    { pointer: 7, memory: ["o1..o7", "o1..o7", "o1..o7"], caption: "세 번 다 같은 자리에서 끊긴다. o1~o7은 세 번, o8~o10은 0번." },
+    { pointer: 9, found: [7, 8, 9], memory: ["처리 기록 확인", "o8", "o9", "o10"], caption: "처리한 주문을 기록하고 건너뛰게 하면 재시도가 남은 일만 이어서 한다." },
+  ]}
+/>
+
+고치는 방향은 둘이다. 하나는 일을 한도 안에 들어가게 쪼개는 것이다. 한 번에 10건이 아니라 메시지 하나에 주문 하나를 넣어 큐로 보낸다. 다른 하나는 다시 해도 같은 결과가 나오게 만드는 것이다. 처리한 주문 ID를 기록해 두고 건너뛰는 [멱등성 키](/posts/idempotency-key)가 그 방법이다. 핸들러 안에서 `context.getRemainingTimeInMillis()`로 남은 시간을 보고, 일정 시간 아래로 떨어지면 남은 일을 다시 큐에 넣고 깨끗하게 끝내는 방법도 있다.
+
+## 6MB를 넘는 파일은 함수를 지나가지 않게 한다
+
+동기 호출의 요청·응답은 각 6MB까지다. 그런데 실제로 올릴 수 있는 파일은 그보다 작다. API Gateway나 함수 URL을 거쳐 바이너리를 보내면 base64로 인코딩되는데, base64는 3바이트를 4글자로 늘린다. 이벤트 JSON의 헤더와 다른 필드도 6MB 안에 들어가야 한다.
+
+<CodePlayground
+  caption="한도 안에 넣을 수 있는 원본 바이너리 최대 크기"
+  functionName="maxBinaryBytes"
+  initialCode={`function maxBinaryBytes(limitBytes, overheadBytes) {
+  // limitBytes: 페이로드 한도, overheadBytes: 헤더 등 다른 필드
+  // base64는 3바이트마다 4글자(패딩 포함)를 쓴다
+  // 남은 자리에 들어가는 4글자 묶음 수 × 3
+  return 0;
+}`}
+  solution={`function maxBinaryBytes(limitBytes, overheadBytes) {
+  return Math.floor((limitBytes - overheadBytes) / 4) * 3;
+}`}
+  tests={[
+    { label: "6MiB, 다른 필드 없음", args: [6291456, 0], expected: 4718592 },
+    { label: "6MiB, 헤더 2KB", args: [6291456, 2048], expected: 4717056 },
+    { label: "1MiB 비동기, 300바이트", args: [1048576, 300], expected: 786207 },
+    { label: "100바이트", args: [100, 0], expected: 75 },
+    { label: "10바이트, 3바이트 사용", args: [10, 3], expected: 3 },
+  ]}
+/>
+
+6MiB 한도라면 원본은 4.5MiB(4,718,592바이트)가 끝이다. 실제로 Node에서 4,718,592바이트를 base64로 바꾸면 정확히 6,291,456글자이고, 1바이트만 늘려도 6,291,460글자로 넘친다. 여기에 헤더가 붙으니 "5MB짜리 PDF가 안 올라간다"는 문의가 나온다.
+
+큰 파일은 함수가 받지 않는다. 함수는 S3에 직접 올릴 수 있는 미리 서명된 URL(presigned URL)만 만들어 주고, 브라우저가 S3로 바로 올린다.
+
+<SequenceDiagram
+  caption="함수는 주소만 만들고, 파일은 S3로 바로 간다"
+  actors={[
+    { id: "web", label: "브라우저" },
+    { id: "fn", label: "Lambda" },
+    { id: "s3", label: "S3" },
+  ]}
+  steps={[
+    { from: "web", to: "fn", label: "POST /uploads", title: "올릴 준비를 요청한다", detail: "파일 이름, 크기, 종류만 보낸다. 몇 바이트짜리 JSON이다.", payload: "{ \"name\": \"contract.pdf\", \"size\": 48213117 }" },
+    { from: "fn", to: "fn", label: "presign PUT", title: "서명된 주소를 만든다", detail: "권한 검사 뒤 몇 분짜리 서명 주소를 만든다. 키 경로와 Content-Type, 크기 조건을 서명에 넣는다." },
+    { from: "fn", to: "web", label: "200 { url }", title: "주소만 돌려준다", detail: "함수는 여기서 끝난다. 파일 내용은 한 바이트도 지나가지 않았다." },
+    { from: "web", to: "s3", label: "PUT 48MB", title: "S3로 바로 올린다", detail: "6MB 한도와 29초 한도에 걸리지 않는다. 아주 크면 멀티파트 업로드를 쓴다." },
+    { from: "s3", to: "fn", label: "ObjectCreated", title: "올라오면 함수를 깨운다", detail: "S3 이벤트로 후처리 함수를 비동기로 부른다. 이벤트에는 파일 위치만 들어 있다." },
+  ]}
+/>
+
+응답도 같다. 큰 결과는 S3에 쓰고 서명된 다운로드 주소를 돌려준다. 응답 스트리밍을 지원하는 함수 URL로는 6MB보다 큰 응답을 흘려보낼 수 있지만, API Gateway를 거치면 그 경로를 쓸 수 없는 경우가 많다. 비동기 호출과 SQS·EventBridge 이벤트도 크기 한도가 있으니 이벤트에는 본문 대신 S3 키를 넣는 습관을 들인다.
+
+## 동시성은 계정 전체가 나눠 쓴다
+
+동시 실행 한도는 함수마다가 아니라 리전의 계정 전체에 걸린다. 기본 1,000이다. 한 함수가 900을 쓰면 나머지 함수 전부가 100을 나눠 쓴다. 함수별 확장 속도에도 한계가 있어서, 2023년 말 바뀐 규칙으로는 함수마다 10초에 1,000개씩 환경을 늘릴 수 있다. 한도를 넘은 요청은 거절(throttle)된다.
+
+<NetworkTopology
+  caption="한 함수가 계정의 동시 실행을 다 쓰면 다른 함수가 거절된다"
+  width={400}
+  height={290}
+  zones={[
+    { id: "acct", label: "계정 동시 실행 1,000", x: 150, y: 20, w: 242, h: 260, tone: "private" },
+  ]}
+  nodes={[
+    { id: "sqs", label: "SQS burst", sub: "50k messages", x: 70, y: 75, icon: "server", w: 116 },
+    { id: "user", label: "Login API", sub: "users", x: 70, y: 215, icon: "client", w: 116 },
+    { id: "batch", label: "image-resize", sub: "980 running", x: 280, y: 75, icon: "container", w: 132 },
+    { id: "login", label: "login", sub: "20 left", x: 280, y: 160, icon: "container", w: 132 },
+    { id: "res", label: "reserved 100", sub: "for login", x: 280, y: 240, icon: "lock", w: 132 },
+  ]}
+  links={[
+    { from: "sqs", to: "batch" },
+    { from: "user", to: "login" },
+    { from: "res", to: "login", dashed: true },
+  ]}
+  steps={[
+    { path: ["sqs", "batch"], packet: "x980", title: "배치가 동시성을 거의 다 쓴다", detail: "큐에 메시지가 쌓이자 이미지 처리 함수가 빠르게 늘어 980개까지 간다." },
+    { path: ["user", "login"], packet: "POST", blocked: true, title: "로그인이 429를 받는다", detail: "남은 20개로는 로그인 요청을 다 못 받는다. 사용자는 TooManyRequestsException 때문에 로그인하지 못한다." },
+    { path: ["res", "login"], packet: "100", highlight: ["acct"], title: "예약 동시성으로 칸을 나눈다", detail: "login에 100을 예약하면 그만큼은 다른 함수가 가져가지 못한다. 동시에 login은 100을 넘지 못한다." },
+    { path: ["sqs", "batch"], packet: "max 300", highlight: ["batch"], title: "배치 쪽에 상한을 건다", detail: "이벤트 소스 매핑의 최대 동시성으로 큐 소비 속도를 묶는다. 메시지는 큐에서 기다릴 뿐 잃지 않는다." },
+  ]}
+/>
+
+거절이 일어나면 무슨 일이 생기는지는 호출 방식에 따라 다르다. 동기 호출(API Gateway, 함수 URL, SDK의 `Invoke`)은 호출한 쪽이 바로 429를 받는다. 재시도는 호출한 쪽 몫이다. 비동기 호출은 Lambda가 내부 큐에 넣고 최대 6시간까지 다시 시도하다가, 끝내 실패하면 실패 목적지나 DLQ로 보낸다. SQS 이벤트 소스는 거절되면 메시지가 큐에 그대로 남아 가시성 시간 한도 뒤에 다시 꺼내진다.
+
+거절 응답은 이유를 함께 준다. 아래는 SDK가 받는 응답을 실제 형식대로 쓴 예시다.
+
+<UrlAnatomy
+  caption="Lambda 거절 응답 (예시). 이유 칸을 보면 어느 한도에 걸렸는지 안다"
+  base="HTTP/1.1 429"
+  separator=" | "
+  joiner=" | "
+  params={[
+    { key: "x-amzn-ErrorType", value: "TooManyRequestsException", title: "거절 예외", description: "동시성이나 요청 속도 한도에 걸렸다는 뜻이다. 5xx가 아니라 429라서 재시도 대상으로 분류한다." },
+    { key: "Reason", value: "ReservedFunctionConcurrentInvocationLimitExceeded", display: "Reason: ReservedFunction…LimitExceeded", title: "함수의 예약 한도", description: "이 함수에 건 예약 동시성을 다 썼다. 계정에는 여유가 있을 수 있다. 예약값을 너무 작게 잡았는지 본다.", required: true },
+    { key: "Reason (other)", value: "ConcurrentInvocationLimitExceeded", display: "or: ConcurrentInvocationLimitExceeded", title: "계정 전체 한도", description: "계정의 리전 동시성을 다 썼다. 다른 함수가 다 가져갔는지 ConcurrentExecutions 지표를 함수별로 본다." },
+    { key: "Retry-After", value: "?", display: "retry: 지수 백오프", title: "다시 시도할 때", description: "SDK는 기본으로 몇 번 재시도한다. 호출하는 쪽이 지터 없이 바로 재시도하면 거절이 더 늘어난다." },
+  ]}
+/>
+
+현장에서는 CloudWatch의 `Throttles`와 `ConcurrentExecutions` 지표를 함께 본다. 동시성이 계정 한도 근처에 붙어 있고 거절이 함께 오르면 한도 문제다. 동시성은 낮은데 특정 함수만 거절되면 그 함수의 예약 동시성이 작다.
+
+```bash
+# 계정의 동시성 한도와 예약되지 않은 몫을 본다
+aws lambda get-account-settings --query 'AccountLimit'
+# 함수에 예약 동시성 100을 건다
+aws lambda put-function-concurrency --function-name login \
+  --reserved-concurrent-executions 100
+```
+
+```text
+{
+    "TotalCodeSize": 80530636800,
+    "CodeSizeUnzipped": 262144000,
+    "CodeSizeZipped": 52428800,
+    "ConcurrentExecutions": 1000,
+    "UnreservedConcurrentExecutions": 900
+}
+```
+
+(계정 없이 실제 형식대로 쓴 예시다.) `UnreservedConcurrentExecutions`가 예약하지 않은 함수들이 나눠 쓰는 몫이다. 예약을 여기저기 걸면 이 값이 줄어 예약하지 않은 함수가 더 쉽게 거절된다. Lambda는 예약하지 않은 몫을 최소 100은 남기게 한다.
+
+## 메모리 칸 하나가 CPU까지 정한다
+
+Lambda에는 CPU 설정이 따로 없다. 메모리를 고르면 그에 비례해 CPU가 나온다. 1,769MB에서 vCPU 1개만큼이고, 10,240MB에서 최대 6개다. 그래서 "메모리는 100MB밖에 안 쓰니 128MB로 줄이자"가 함정이 된다. 메모리와 함께 CPU도 깎이기 때문이다.
+
+이 비례를 로컬에서 흉내 냈다. cgroup의 CPU 할당량을 "메모리 ÷ 1,769" vCPU로 걸고, SHA-256을 20만 번 이어서 계산하는 같은 일을 시켰다. 이 컨테이너는 cgroup v1이라 `cpu.cfs_quota_us`로 걸었다.
+
+```bash
+# CPU 컨트롤러 아래에 그룹을 만들고 주기를 100ms로 둔다
+sudo mkdir /sys/fs/cgroup/cpu/v20cpu
+echo 100000 | sudo tee /sys/fs/cgroup/cpu/v20cpu/cpu.cfs_period_us
+# 메모리 크기에 비례한 CPU 할당량을 걸고 같은 일을 돌린다 (512MB면 0.29 vCPU)
+echo 28942 | sudo tee /sys/fs/cgroup/cpu/v20cpu/cpu.cfs_quota_us
+sudo sh -c 'echo $$ > /sys/fs/cgroup/cpu/v20cpu/cgroup.procs; exec node work.js'
+# 다 쓰면 그룹을 지운다 (안에 프로세스가 없어야 지워진다)
+sudo rmdir /sys/fs/cgroup/cpu/v20cpu
+```
+
+```text
+memory=  512MB  cpu=0.29 vCPU  duration=  1398 ms
+memory= 1024MB  cpu=0.58 vCPU  duration=   668 ms
+memory= 1769MB  cpu=1.00 vCPU  duration=   392 ms
+memory= 3538MB  cpu=2.00 vCPU  duration=   357 ms
+```
+
+1vCPU까지는 메모리를 두 배로 하면 시간이 거의 절반이 됐다. 요금은 메모리(GB) × 시간(초)으로 매기니, GB-초로 바꾸면 512MB가 0.699, 1,024MB가 0.668, 1,769MB가 0.677로 거의 같다. 같은 돈으로 3.5배 빨리 끝난 셈이다. 그런데 3,538MB에서는 시간이 392ms에서 357ms로 조금밖에 줄지 않았고 GB-초는 1.233으로 두 배가 됐다. 이 작업은 스레드 하나로 도는 일이라 두 번째 vCPU를 쓰지 못한다. Node나 Python의 평범한 핸들러는 대부분 이렇다.
+
+정리하면, CPU를 쓰는 함수는 1,769MB 근처까지 올려 보는 게 손해가 아니고, 그 위로는 병렬로 일하는 코드일 때만 의미가 있다. 메모리 크기별로 실제로 돌려 보고 가장 싼 지점을 찾아 주는 AWS Lambda Power Tuning 같은 도구가 이 일을 자동으로 한다.
+
+## /tmp는 환경이 바뀌면 사라진다
+
+`/tmp`는 512MB가 기본이고 10GB까지 늘릴 수 있다. 같은 실행 환경이 재사용되는 동안은 남아 있어서 내려받은 모델 파일이나 큰 의존성을 캐시하기 좋다. 하지만 환경이 새로 만들어지면 비어 있고, 동시 실행 환경끼리는 서로 공유하지 않는다. 사용자 업로드를 `/tmp`에 두고 다음 요청에서 읽으려 하면 대부분 실패한다. 여러 환경이 함께 봐야 하는 파일은 S3, 함께 마운트해야 하면 EFS에 둔다.
+
+쓰고 지우지 않는 것도 흔한 실수다. 같은 환경이 수천 번 재사용되면서 `/tmp`가 가득 차고, 어느 순간 `ENOSPC: no space left on device`가 난다. 처리가 끝나면 지우고, 요청마다 다른 파일 이름을 쓴다. `/tmp`를 늘리면 1GB 단위로 비용이 붙는다.
+
+## 동시 실행 수만큼 DB 연결이 생긴다
+
+서버리스와 관계형 DB가 만나면 연결 수가 문제가 된다. 실행 환경 하나가 프로세스 하나라서, 함수 안에 풀을 두면 환경 수 × 풀 크기만큼 연결이 생긴다. 연결 하나가 왜 비싸고 풀을 어떻게 잡는지는 [커넥션 풀](/posts/connection-pool)에서 자세히 다뤘다. 여기서는 그 폭주가 실제로 어떻게 보이는지만 재현했다.
+
+로컬 PostgreSQL에 연결 한도 20인 역할을 만들고, "실행 환경" N개가 각자 풀 크기 5로 동시에 쿼리를 날렸다. 공유 클러스터의 `max_connections`(100)는 건드리지 않고 역할 단위 한도로 흉내 냈다.
+
+```sql
+-- 이 역할은 연결을 20개까지만 열 수 있다
+CREATE ROLE v20_app LOGIN PASSWORD 'v20pw' CONNECTION LIMIT 20;
+CREATE DATABASE v20_shop OWNER v20_app;
+```
+
+```bash
+# 환경 4개 × 풀 5, 환경 10개 × 풀 5를 DB에 바로 붙여 본다
+node burst.js 4 5
+node burst.js 10 5
+```
+
+```text
+envs=4 pool=5 → want 20 connections: ok=20
+envs=10 pool=5 → want 50 connections: ok=20
+  30 x too many connections for role "v20_app"
+```
+
+환경이 4개일 때는 괜찮다가, 10개가 되자 연결 50개 중 30개가 거절됐다. 운영에서는 이 숫자가 동시성 1,000 × 풀 5 = 5,000이 되고, 에러를 받은 함수가 재시도하면서 연결 시도가 더 늘어난다. 같은 실험을 PgBouncer(transaction 모드, 서버 쪽 연결 10개)를 앞에 두고 다시 했다.
+
+```bash
+# 환경 10개, 40개를 PgBouncer(6460 포트)로 붙이고, 도는 동안 풀 상태를 본다
+PGPORT_DEMO=6460 node burst.js 10 5
+PGPORT_DEMO=6460 node burst.js 40 5 &
+psql -h 127.0.0.1 -p 6460 -U v20_app pgbouncer -c "show pools;"
+```
+
+```text
+envs=10 pool=5 → want 50 connections: ok=50
+ database  |   user    | cl_active | cl_waiting | ... | sv_active | sv_idle | ...
+-----------+-----------+-----------+------------+-----+-----------+---------+----
+ pgbouncer | pgbouncer |         1 |          0 | ... |         0 |       0 | ...
+ v20_shop  | v20_app   |        30 |        170 | ... |        10 |       0 | ...
+envs=40 pool=5 → want 200 connections: ok=200 in 6.1s
+```
+
+(`show pools`는 열이 많아 일부만 남겼다.) 클라이언트 연결 200개가 모두 성공했다. DB 쪽 연결은 `sv_active` 10개뿐이고, 170개는 `cl_waiting`으로 PgBouncer의 줄에서 기다렸다. 0.3초짜리 쿼리 200개를 10개 연결로 나눠 처리하니 6.1초가 걸렸다. 거절이 대기로 바뀐 것이다. 대기가 함수 시간 한도보다 길어지면 그때는 시간 초과로 실패하니, 프록시 뒤에서도 동시성 상한은 필요하다.
+
+AWS에서는 이 자리에 RDS Proxy를 둔다. 함수는 프록시 주소로 붙고, 프록시가 DB 연결을 모아 돌려 쓴다. IAM 인증과 Secrets Manager를 쓰고, 장애 조치 때 새 프라이머리로의 재연결을 프록시가 대신 해서 앱이 겪는 끊김이 짧아진다. 대신 비용이 붙고(DB 인스턴스 vCPU 기준 시간당 요금), 지연이 조금 늘며, 세션 상태를 쓰는 쿼리(`SET`, 임시 테이블, 일부 prepared statement)는 연결을 한 클라이언트에 고정(pinning)시켜 재사용 효과를 없앤다. CloudWatch의 `DatabaseConnectionsCurrentlySessionPinned`가 높으면 이 문제다.
+
+DB를 HTTP로 부르는 길도 있다. Aurora의 Data API, DynamoDB처럼 연결 개념이 없는 저장소를 고르면 연결 폭주 자체가 없다.
+
+## 묶이는 정도와 맞지 않는 일
+
+서버리스 코드는 핸들러 모양, 이벤트 형식, 권한 모델이 플랫폼마다 다르다. Lambda의 SQS 이벤트와 Cloud Run의 Pub/Sub 푸시는 생긴 게 다르고, IAM 정책과 이벤트 연결은 거의 다 다시 써야 한다. 이 묶임(vendor lock-in)을 줄이려면 핸들러는 이벤트를 내 도메인 객체로 바꾸는 얇은 껍데기로 두고, 실제 로직은 플랫폼을 모르는 함수로 분리한다. 그러면 같은 로직을 컨테이너의 HTTP 서버로 옮기는 일이 하루 일이 된다. 완전히 피하려고 모든 것을 추상화하면 서버리스의 장점(관리형 이벤트 연결)을 버리게 되니, 묶여도 되는 부분과 아닌 부분을 고르는 문제다.
+
+서버리스가 맞지 않는 신호는 이렇다.
+
+- 트래픽이 하루 종일 꾸준히 높다. 동시성 수백이 늘 떠 있으면 같은 일을 하는 컨테이너나 VM보다 비싸다. 계산은 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에서 해 본다.
+- 15분을 넘기는 일, 수 GB 메모리를 오래 쓰는 일, GPU가 필요한 일.
+- 오래 붙어 있는 연결이 핵심이다. 웹소켓 서버, 스트리밍, 게임 서버. API Gateway의 웹소켓 API가 있지만 연결 상태를 따로 저장해야 한다.
+- p99 지연을 수십 ms로 약속해야 하는데 콜드 스타트를 감당할 수 없다.
+- 로컬 메모리 캐시나 프로세스 사이의 공유 상태에 기대는 구조다.
+
+반대로 들쭉날쭉한 트래픽, 이벤트에 반응하는 짧은 작업(파일 후처리, 웹훅, 큐 소비), 하루 몇 번 도는 작업에는 아주 잘 맞는다.
+
+## 벽에 부딪혔을 때 보는 순서
+
+증상별로 처음 볼 곳을 적어 둔다.
+
+- 클라이언트는 504인데 함수 로그는 정상 종료: 앞단(API Gateway 29초, ALB 유휴 60초)의 시간 한도다. 함수의 `Duration`과 게이트웨이의 `IntegrationLatency`를 비교한다.
+- 로그에 `Task timed out after N seconds`: 함수 시간 한도다. 같은 요청 ID의 마지막 로그가 어디서 멈췄는지 보고, 외부 호출의 시간 한도가 함수 한도보다 짧은지 확인한다.
+- `413` 또는 `Request must be smaller than 6291456 bytes`: 페이로드 한도다. base64로 부푼 크기를 계산하고 presigned URL로 바꾼다.
+- `429 TooManyRequestsException`: `Reason`으로 예약 한도인지 계정 한도인지 가른다. `ConcurrentExecutions`를 함수별로 쌓아 본다.
+- `too many connections` 또는 `remaining connection slots are reserved`: 동시성 × 풀 크기를 계산한다. 함수 풀은 1, 앞에 프록시, 동시성 상한을 건다.
+- `ENOSPC`: `/tmp`를 쓰고 지우지 않았다.
+
+## 벽을 알고 들어가면
+
+서버리스의 한도는 대부분 바꿀 수 없으니, 설계를 한도에 맞춘다. 오래 걸리는 일은 비동기로 돌리고 쪼개며, 큰 데이터는 함수를 지나가지 않게 S3로 보내고, 계정 전체가 나눠 쓰는 동시성은 예약과 상한으로 칸을 나누고, DB 앞에는 프록시를 둔다. 끊겨도 다시 하면 같은 결과가 나오게 만드는 것이 이 모든 것의 바닥이다. 그래도 맞지 않는 일이면 컨테이너로 옮기는 것이 정답이다.
+
+## 면접에서 나올 만한 질문
+
+### Lambda 함수는 41초에 정상 종료했는데 클라이언트는 504를 받았습니다. 왜인가요?
+
+앞단의 시간 한도가 더 짧아서다. API Gateway REST API의 통합 시간 한도는 기본 29초라서 그 시점에 클라이언트에게 504를 돌려주고, 함수는 그걸 모른 채 끝까지 돈다. 시간 한도는 층마다 따로 걸리고 가장 짧은 값이 전체를 정한다. 오래 걸리는 일은 202와 작업 ID를 돌려주고 비동기로 처리하게 바꾼다.
+
+### 시간 한도에 걸린 비동기 함수가 재시도되면 어떤 문제가 생기나요?
+
+끊긴 지점까지 한 부작용이 재시도마다 반복된다. 핸들러는 중간에서 강제로 멈추고, 재시도는 같은 이벤트로 처음부터 시작하기 때문이다. 직접 돌려 보니 세 번 모두 같은 자리에서 끊겨 앞의 7건은 세 번 처리되고 뒤의 3건은 한 번도 처리되지 않았다. 일을 한도 안에 들어가게 쪼개고, 처리 기록으로 멱등하게 만든다.
+
+### 5MB 파일 업로드가 실패합니다. 동기 호출 한도는 6MB인데요?
+
+바이너리가 base64로 인코딩되어 3분의 4로 부풀기 때문이다. 6MiB 한도면 원본은 4.5MiB가 최대이고 헤더까지 들어가야 한다. 큰 파일은 함수가 presigned URL만 만들어 주고 브라우저가 S3로 직접 올리게 한다. 후처리는 S3 이벤트로 함수를 깨워서 한다.
+
+### 배치 함수가 몰리자 로그인 API가 429를 냈습니다. 원인과 대책은요?
+
+동시 실행 한도가 리전의 계정 전체에 걸려 있어서 배치 함수가 몫을 다 가져간 것이다. 로그인 함수에 예약 동시성을 걸어 그만큼은 항상 쓸 수 있게 하고, 배치 쪽은 SQS 이벤트 소스의 최대 동시성으로 상한을 건다. 큐 메시지는 기다릴 뿐 잃지 않는다. 거절 응답의 Reason 값으로 계정 한도인지 함수 예약 한도인지 구분한다.
+
+### 동기 호출과 비동기 호출에서 거절은 어떻게 다르게 처리되나요?
+
+동기 호출은 호출한 쪽이 바로 429를 받고 재시도도 호출한 쪽이 한다. 비동기 호출은 Lambda가 내부 큐에 두고 최대 6시간까지 재시도한 뒤 실패 목적지나 DLQ로 보낸다. SQS 이벤트 소스는 메시지가 큐에 남아 가시성 시간 한도 뒤에 다시 꺼내진다. 그래서 사람이 기다리는 동기 경로부터 동시성을 지켜야 한다.
+
+### 서버리스에서 RDS 연결이 폭주하는 이유와 해결책은요?
+
+실행 환경 하나가 프로세스 하나라 동시 실행 수 × 풀 크기만큼 연결이 생기기 때문이다. 환경 10개 × 풀 5로 연결 한도 20인 DB에 붙였더니 30개가 거절됐다. 함수 안 풀은 1로 두고 핸들러 밖에 만들어 재사용하며, 앞에 RDS Proxy나 PgBouncer를 둔다. 프록시를 두면 거절이 대기로 바뀌니 동시성 상한도 같이 건다.
+
+### RDS Proxy를 두면 생기는 단점은요?
+
+비용과 약간의 지연이 늘고, 세션 상태를 쓰는 쿼리에서 연결 고정(pinning)이 생긴다. SET이나 임시 테이블처럼 세션에 남는 상태를 쓰면 프록시가 그 연결을 한 클라이언트에 묶어 재사용하지 못한다. 고정된 세션 지표를 보고 그런 쿼리를 없앤다. 장애 조치 때 재연결을 대신해 주는 장점과 함께 저울질한다.
+
+### 서버리스를 쓰지 말아야 할 때는 언제인가요?
+
+트래픽이 하루 종일 꾸준히 높아 동시성이 늘 수백인 서비스, 15분을 넘기는 작업, 오래 붙어 있는 연결이 핵심인 서비스, 콜드 스타트를 감당할 수 없는 지연 목표가 있는 경우다. 이런 곳은 컨테이너나 VM이 더 싸고 다루기 쉽다. 들쭉날쭉한 트래픽과 이벤트에 반응하는 짧은 작업에는 잘 맞는다. 묶임을 줄이려면 핸들러를 얇게 두고 로직을 플랫폼과 분리한다.

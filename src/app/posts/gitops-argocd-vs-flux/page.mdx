@@ -1,0 +1,556 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("gitops-argocd-vs-flux");
+
+플랫폼팀 회의에서 "ArgoCD로 갈까, Flux로 갈까"가 안건으로 올라왔다. 한쪽은 UI가 있어야 개발자들이 쓴다고 하고, 다른 쪽은 UI 없이 쿠버네티스 리소스만으로 굴러가는 게 낫다고 한다. 둘 다 GitOps 도구이고, 둘 다 CNCF 졸업 프로젝트다. 기능 목록을 나란히 놓으면 거의 같아 보여서 결정이 더 어렵다.
+
+이 글은 기능 목록 대신 "두 도구가 같은 일을 어떤 구조로 하느냐"를 본다. 그 구조 차이가 UI, 팀 나누기(멀티 테넌시), 적용 방식, Helm 다루기, 이미지 자동 갱신, 비밀 값 다루기에서 실제 차이로 드러난다. Flux 쪽 YAML은 Flux CLI v2.7.2의 `--export`로 직접 만든 출력이고, ArgoCD 쪽 출력은 [ArgoCD 기본](/posts/argocd-basics)에서 kwok 클러스터에 띄워 받은 것이다. Flux 컨트롤러는 실행하지 못해서 상태 출력(`flux get`)은 실제 형식대로 쓴 예시로 표시했다.
+
+이 주제의 다른 글: [ArgoCD 기본](/posts/argocd-basics)(동기화, selfHeal, wave, ApplicationSet), [EKS 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)(push와 pull 배포의 자격 증명·네트워크 차이), [차트 배포 흐름](/posts/helm-dependencies-oci-gitops)(ArgoCD가 Helm을 렌더링만 하는 이유).
+
+## GitOps가 약속하는 네 가지
+
+GitOps라는 말은 도구 이름보다 넓다. OpenGitOps 프로젝트가 정리한 원칙은 넷이다.
+
+1. 선언형: 시스템이 가져야 할 모습을 선언으로 적는다.
+2. 버전이 남고 바뀌지 않는다: 그 선언을 git처럼 이력이 남는 저장소에 둔다.
+3. 자동으로 끌어온다: 사람이나 CI가 밀어 넣는 대신 에이전트가 저장소에서 가져온다.
+4. 계속 맞춘다: 에이전트가 실제 상태를 지켜보다가 선언과 다르면 맞춘다.
+
+CI가 `kubectl apply`를 치는 방식은 1, 2는 지키지만 3, 4가 없다. 적용한 뒤 누가 손으로 고치면 다음 배포 때까지 아무도 모른다. ArgoCD와 Flux는 둘 다 클러스터 안에서 3과 4를 하는 에이전트다. 밀어 넣는 방식과 끌어오는 방식이 자격 증명과 네트워크에서 어떻게 다른지는 [EKS 배포 파이프라인](/posts/k8s-deploy-pipeline-eks#밀어-넣는-배포와-끌어오는-배포)에서 그림으로 다뤘으니 여기서는 반복하지 않는다.
+
+두 도구의 차이는 4번, "계속 맞추는 일"을 어떤 부품으로 나눴느냐에서 시작한다.
+
+## Flux는 컨트롤러 여러 개가 리소스로 이어진다
+
+ArgoCD는 Application이라는 리소스 하나에 "어디서 가져와 어디에 배포할지"를 다 적고, application-controller 하나가 비교와 적용을 맡는다. Flux는 이 일을 쪼갠다. 가져오는 일과 적용하는 일이 서로 다른 컨트롤러이고, 둘은 리소스 참조로 이어진다.
+
+```bash
+# Flux가 기본으로 설치하는 것을 클러스터에 넣지 않고 출력만 해 본다
+flux install --export > flux-install.yaml
+grep "^kind:" flux-install.yaml | sort | uniq -c
+grep -o "image: .*" flux-install.yaml
+```
+
+```text
+      3 kind: ClusterRole
+      2 kind: ClusterRoleBinding
+     11 kind: CustomResourceDefinition
+      4 kind: Deployment
+      1 kind: Namespace
+      3 kind: NetworkPolicy
+      1 kind: ResourceQuota
+      3 kind: Service
+      4 kind: ServiceAccount
+image: ghcr.io/fluxcd/source-controller:v1.7.2
+image: ghcr.io/fluxcd/kustomize-controller:v1.7.1
+image: ghcr.io/fluxcd/helm-controller:v1.4.2
+image: ghcr.io/fluxcd/notification-controller:v1.7.3
+```
+
+기본 설치는 컨트롤러 넷이다. 이미지 자동 갱신에 쓰는 둘(image-reflector, image-automation)은 `--components-extra`로 따로 켜야 들어간다. 각자 맡는 리소스가 있다.
+
+- source-controller: `GitRepository`, `HelmRepository`, `OCIRepository`, `Bucket`. 저장소를 주기적으로 받아 tar 묶음(artifact)으로 만들고 클러스터 안에서 HTTP로 내놓는다.
+- kustomize-controller: `Kustomization`. artifact를 받아 `kustomize build`를 하고 서버 쪽 apply로 적용한다. Flux의 Kustomization은 Kustomize의 `kustomization.yaml`과 이름만 같고 다른 물건이다.
+- helm-controller: `HelmRelease`. 차트를 받아 실제로 `helm install/upgrade`를 한다.
+- notification-controller: 이벤트를 슬랙 등으로 보내고, git 웹훅을 받는다.
+
+아래 그림에서 다음을 누르면 커밋 하나가 클러스터에 닿기까지 Flux 안에서 지나는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="Flux는 가져오는 컨트롤러와 적용하는 컨트롤러가 artifact로 이어진다"
+  zones={[
+    { id: "git", label: "git", x: 8, y: 8, w: 384, h: 70, tone: "edge" },
+    { id: "fs", label: "namespace flux-system", x: 8, y: 92, w: 384, h: 150, tone: "private" },
+    { id: "app", label: "namespace shop", x: 8, y: 256, w: 384, h: 66, tone: "public" },
+  ]}
+  nodes={[
+    { id: "repo", label: "shop-deploy", sub: "main", x: 200, y: 46, icon: "server" },
+    { id: "nc", label: "notification", sub: "webhook", x: 330, y: 140, icon: "gateway", w: 112 },
+    { id: "src", label: "source-ctrl", sub: "GitRepository", x: 80, y: 140, icon: "container", w: 112 },
+    { id: "ks", label: "kustomize", sub: "Kustomization", x: 200, y: 210, icon: "container", w: 112 },
+    { id: "dep", label: "shop-api", sub: "Deployment", x: 200, y: 290, icon: "container" },
+  ]}
+  links={[
+    { from: "src", to: "repo" },
+    { from: "repo", to: "nc" },
+    { from: "nc", to: "src" },
+    { from: "ks", to: "src" },
+    { from: "ks", to: "dep" },
+  ]}
+  steps={[
+    { path: ["repo", "nc", "src"], packet: "hook", title: "푸시를 웹훅으로 받는다", detail: "notification-controller의 Receiver가 git 서버 웹훅을 받아 GitRepository에 바로 다시 읽으라고 표시한다. 웹훅이 없으면 interval(예: 1m)마다 읽는다." },
+    { path: ["src", "repo", "src"], packet: "fetch", title: "저장소를 받아 artifact로 묶는다", detail: "커밋 SHA가 바뀌었으면 tar.gz로 묶어 클러스터 안에 HTTP로 내놓고, status.artifact.revision을 갱신한다.", payload: "revision: main@sha1:9f91c6629c28…" },
+    { path: ["ks", "src"], packet: "GET tgz", title: "적용 쪽이 artifact를 받는다", detail: "kustomize-controller는 git에 접근하지 않는다. source-controller가 내놓은 묶음만 받는다." },
+    { path: ["ks", "dep"], packet: "SSA", title: "빌드해서 서버 쪽 apply로 적용한다", detail: "kustomize build 결과에 소유 라벨을 붙여 적용하고, prune이 켜져 있으면 지난번 목록에 있었는데 이번에 없는 것을 지운다." },
+  ]}
+/>
+
+같은 Kustomization을 CLI로 만들면 이렇다.
+
+```bash
+# 소스: 어디서 가져올지
+flux create source git shop-deploy --url=https://github.com/acme/shop-deploy \
+  --branch=main --interval=1m --export
+# 적용: 가져온 것 중 어느 경로를 어떻게 적용할지
+flux create kustomization shop-api --source=GitRepository/shop-deploy \
+  --path=./apps/shop --prune=true --wait=true --interval=10m \
+  --retry-interval=2m --health-check-timeout=3m --target-namespace=shop --export
+```
+
+```text
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: shop-deploy
+  namespace: flux-system
+spec:
+  interval: 1m0s
+  ref:
+    branch: main
+  url: https://github.com/acme/shop-deploy
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: shop-api
+  namespace: flux-system
+spec:
+  interval: 10m0s
+  path: ./apps/shop
+  prune: true
+  retryInterval: 2m0s
+  sourceRef:
+    kind: GitRepository
+    name: shop-deploy
+  targetNamespace: shop
+  timeout: 3m0s
+  wait: true
+```
+
+간격이 둘인 점을 눈여겨본다. GitRepository의 `interval: 1m`은 git을 읽는 주기고, Kustomization의 `interval: 10m`은 클러스터를 다시 맞추는 주기다. 새 커밋이 들어오면 Kustomization은 10분을 기다리지 않고 바로 적용한다. 반대로 누가 손으로 고친 drift는 다음 10분 주기에 되돌린다. ArgoCD가 watch로 drift를 1초 안에 잡던 것과 다르다. Flux는 "주기마다 다시 적용"이고 ArgoCD는 "지켜보다가 다르면 표시하고, selfHeal이면 적용"이다.
+
+`wait: true`는 적용한 모든 리소스가 준비될 때까지 기다린 뒤 Ready를 True로 둔다. ArgoCD의 건강 상태에 해당하는 일을 Flux는 kstatus 규칙으로 한다. 상태를 보는 명령은 `flux get`이다(아래는 실제 형식대로 쓴 예시).
+
+```bash
+# 소스와 적용 상태를 차례로 본다
+flux get sources git
+flux get kustomizations
+```
+
+```text
+NAME       	REVISION                                       	SUSPENDED	READY	MESSAGE
+shop-deploy	main@sha1:9f91c6629c28730ad03b8c5a48badc8be210566b	False    	True 	stored artifact for revision 'main@sha1:9f91c6629c28730ad03b8c5a48badc8be210566b'
+NAME    	REVISION                                       	SUSPENDED	READY	MESSAGE
+shop-api	main@sha1:9f91c6629c28730ad03b8c5a48badc8be210566b	False    	True 	Applied revision: main@sha1:9f91c6629c28730ad03b8c5a48badc8be210566b
+```
+
+장애 때는 이 두 줄의 REVISION이 같은지를 먼저 본다. 소스는 새 커밋인데 Kustomization이 옛 커밋이면 빌드나 적용에서 막힌 것이다. 소스부터 옛 커밋이면 git 접근(자격 증명, 네트워크)이 문제다. 리비전 문자열의 생김새는 이렇다.
+
+<UrlAnatomy
+  caption="Flux의 리비전 문자열"
+  separator=""
+  joiner=""
+  params={[
+    { key: "ref", display: "main", title: "참조 이름", description: "브랜치나 태그 이름이다. 태그를 따라가면 v1.4.2 같은 값이 들어간다." },
+    { key: "at", display: "@", title: "구분자", description: "참조 이름과 다이제스트를 가른다." },
+    { key: "algo", display: "sha1:", title: "해시 알고리즘", description: "git 커밋은 sha1이다. OCIRepository처럼 이미지 다이제스트를 따라가면 sha256이 된다." },
+    { key: "sha", display: "9f91c662…", title: "커밋 해시", description: "40자리 커밋 SHA 전체가 들어간다. 이 값이 소스와 Kustomization에서 같아야 최신이 적용된 것이다." },
+  ]}
+/>
+
+## 리소스 모양이 다르면 생각하는 단위가 다르다
+
+두 도구의 객체를 나란히 놓으면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="ArgoCD는 한 장에, Flux는 두 장으로 나눠 적는다"
+  nodes={[
+    { id: "app", label: "Application", sub: "source + destination", x: 100, y: 40, w: 170 },
+    { id: "proj", label: "AppProject", sub: "울타리", x: 100, y: 130, w: 150 },
+    { id: "ac", label: "app-controller", sub: "비교·적용", x: 100, y: 215, w: 150 },
+    { id: "gr", label: "GitRepository", sub: "가져오기", x: 300, y: 40, w: 150 },
+    { id: "ks", label: "Kustomization", sub: "적용·prune", x: 300, y: 130, w: 150 },
+    { id: "sa", label: "ServiceAccount", sub: "적용 권한", x: 300, y: 215, w: 150 },
+  ]}
+  edges={[
+    { from: "app", to: "proj", label: "project" },
+    { from: "ac", to: "app", label: "reconcile" },
+    { from: "ks", to: "gr", label: "sourceRef" },
+    { from: "ks", to: "sa", label: "impersonate" },
+  ]}
+/>
+
+나눠 놓은 구조가 주는 장점은 재사용이다. GitRepository 하나를 Kustomization 열 개가 참조할 수 있고, 같은 저장소를 매번 다시 받지 않는다. Kustomization끼리는 `dependsOn`으로 순서를 건다. "인프라 컨트롤러(cert-manager, ESO)가 먼저 준비된 뒤 앱을 배포"를 Kustomization 단위로 적는다. ArgoCD는 같은 일을 Application 사이에서 하기 어렵고, 한 Application 안의 sync wave나 app-of-apps의 wave로 푼다.
+
+대신 무엇이 어디에 배포되는지가 여러 객체에 흩어진다. ArgoCD는 Application 한 장을 열면 저장소, 경로, 목적지, 동기화 정책이 다 보인다.
+
+## 화면이 필요한 팀과 필요 없는 팀
+
+ArgoCD를 고르는 가장 흔한 이유는 웹 UI다. 리소스 트리, live와 git의 diff, 이벤트, Pod 로그가 한 화면에 나오고, 동기화와 롤백을 버튼으로 한다. 쿠버네티스에 익숙하지 않은 개발자가 "내 배포가 어디까지 갔나"를 스스로 보게 하려면 이 화면이 큰 몫을 한다. SSO(OIDC, Dex)와 프로젝트별 RBAC도 이 화면에 붙어 있다.
+
+Flux에는 내장 웹 UI가 없다. Weaveworks가 만들던 Weave GitOps가 그 자리를 채웠지만 Weaveworks가 2024년 문을 닫은 뒤로는 서드파티 도구에 기대야 한다. 상태는 `flux get`, `kubectl get kustomizations`, 쿠버네티스 이벤트, 알림으로 본다. 팀이 이미 kubectl과 대시보드(Grafana)로 클러스터를 보는 데 익숙하면 문제가 안 된다. 오히려 UI 서버, 그 앞의 인그레스, SSO 설정이라는 운영 대상이 하나 줄어든다.
+
+UI가 있다는 건 공격면이 있다는 뜻이기도 하다. ArgoCD 서버는 클러스터에 넓은 권한을 가진 controller와 같은 시스템이라, UI를 인터넷에 열어 두고 기본 admin 계정을 남겨 두는 실수가 사고로 이어진다. 도입할 때 admin 계정을 끄고 SSO만 남기는 것까지 한 묶음으로 계획한다.
+
+## 팀을 나눌 때: AppProject와 ServiceAccount
+
+여러 팀이 한 클러스터를 쓰면 "결제팀 저장소가 검색팀 네임스페이스에 배포하지 못하게"가 필요하다. 두 도구는 이걸 다른 층에서 막는다.
+
+ArgoCD는 자기 안의 규칙으로 막는다. AppProject가 저장소, 목적지, 리소스 종류를 제한하고, ArgoCD RBAC가 누가 어떤 프로젝트의 앱을 동기화할 수 있는지 정한다. 적용 자체는 controller의 넓은 권한으로 한다. 그래서 AppProject 설정이 틀리면 막을 장치가 없다. 실습에서 `CreateNamespace=true`가 프로젝트 화이트리스트에 막혀 SyncFailed가 났던 것도 이 층의 검사다.
+
+Flux는 쿠버네티스 RBAC로 막는다. Kustomization에 `serviceAccountName`을 적으면 kustomize-controller가 그 ServiceAccount로 위장(impersonation)해서 적용한다. 그 SA가 `shop` 네임스페이스에만 권한이 있으면, git에 `kube-system` 리소스가 들어 있어도 API 서버가 거부한다.
+
+```bash
+# 테넌트 SA로 적용하고, 앞선 Kustomization이 준비된 뒤에 돌게 한다
+flux create kustomization shop-secrets --source=GitRepository/shop-deploy \
+  --path=./secrets/prod --prune=true --interval=10m \
+  --decryption-provider=sops --decryption-secret=sops-age \
+  --depends-on=infra-controllers --service-account=shop-deployer \
+  --target-namespace=shop --export
+```
+
+```text
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: shop-secrets
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  dependsOn:
+  - name: infra-controllers
+  interval: 10m0s
+  path: ./secrets/prod
+  prune: true
+  serviceAccountName: shop-deployer
+  sourceRef:
+    kind: GitRepository
+    name: shop-deploy
+  targetNamespace: shop
+```
+
+이 방식이 제대로 막으려면 컨트롤러 쪽 설정이 같이 있어야 한다. `--default-service-account`를 주지 않으면 `serviceAccountName`을 빼먹은 Kustomization은 컨트롤러 자신의 권한으로 적용된다. 그리고 테넌트가 자기 네임스페이스에서 남의 네임스페이스 소스를 참조하지 못하게 `--no-cross-namespace-refs=true`도 켠다. Flux로 팀을 나눌 때 빠뜨리면 안 되는 두 줄이다. 쿠버네티스 RBAC와 ServiceAccount 자체는 [RBAC 글](/posts/k8s-rbac)과 [ServiceAccount 토큰 글](/posts/k8s-serviceaccount-tokens)에 있다.
+
+정리하면 ArgoCD는 "한 화면에서 여러 팀을 관리하는 중앙 플랫폼"에, Flux는 "쿠버네티스 권한 모델 그대로 팀마다 떼어 주는 구성"에 자연스럽다. ArgoCD도 Application을 argocd 밖의 네임스페이스에 둘 수 있는 기능(apps in any namespace)이 생기면서 이 간격이 줄었다.
+
+## 클라이언트 쪽 apply와 서버 쪽 apply
+
+적용 방식도 다르다. Flux의 kustomize-controller는 항상 서버 쪽 apply(SSA)로 적용하고, 필드 주인(field manager)을 `kustomize-controller`로 남긴다. 자기가 적용한 리소스에는 소유 라벨을 붙인다. 로컬에서 Flux가 적용할 결과를 그대로 만들어 볼 수 있다.
+
+```bash
+# 클러스터 없이 Flux가 적용할 매니페스트를 빌드한다
+flux build kustomization shop-api --path ./apps/shop --kustomization-file ./ks.yaml --dry-run
+```
+
+```text
+apiVersion: v1
+data:
+  LOG_LEVEL: info
+kind: ConfigMap
+metadata:
+  labels:
+    kustomize.toolkit.fluxcd.io/name: shop-api
+    kustomize.toolkit.fluxcd.io/namespace: flux-system
+  name: shop-config
+  namespace: shop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    kustomize.toolkit.fluxcd.io/name: shop-api
+    kustomize.toolkit.fluxcd.io/namespace: flux-system
+  name: shop-api
+  namespace: shop
+spec:
+  replicas: 2
+```
+
+(출력의 앞부분만 옮겼다.)
+
+ArgoCD는 기본이 클라이언트 쪽 apply다. 실습에서 ArgoCD가 만든 ConfigMap에는 이런 어노테이션이 남아 있었다.
+
+```text
+{"argocd.argoproj.io/tracking-id":"shop-prod:/ConfigMap:shop-prod/shop-env","kubectl.kubernetes.io/last-applied-configuration":"{\"apiVersion\":\"v1\",\"data\":{\"ENV\":\"prod\"},...}"}
+```
+
+`last-applied-configuration`은 클라이언트 쪽 apply의 흔적이다. 큰 CRD처럼 이 어노테이션이 256KB 제한을 넘는 리소스는 적용에 실패하는데, ArgoCD에서는 `ServerSideApply=true` 동기화 옵션으로 서버 쪽 apply를 켜서 푼다. 두 방식의 차이와 필드 주인이 만드는 충돌은 [kubectl apply와 서버 쪽 apply](/posts/kubectl-apply-ssa)에서 자세히 다뤘다.
+
+SSA는 drift를 다루는 방식에도 영향을 준다. Flux가 매 주기 다시 적용할 때 자기 필드만 되돌린다. 누가 손으로 git에 없는 라벨을 붙였다면, 그 라벨은 다른 주인의 필드라 남는다. git에 있는 replicas를 바꿨다면 되돌아간다. HPA가 replicas를 가져가게 하려면 git에서 replicas를 빼는 것이 두 도구 모두에서 가장 깔끔하다.
+
+## Helm 차트를 다루는 방식
+
+ArgoCD는 차트를 `helm template`으로 렌더링해서 자기가 적용한다. Helm 릴리스 기록이 남지 않고, Helm 훅은 ArgoCD 훅으로 바뀐다. Flux의 helm-controller는 Helm SDK로 실제 설치와 업그레이드를 한다.
+
+```bash
+# 차트 저장소와 릴리스
+flux create source helm bitnami --url=oci://registry-1.docker.io/bitnamicharts --interval=1h --export
+flux create helmrelease redis --source=HelmRepository/bitnami --chart=redis \
+  --chart-version="20.x" --target-namespace=shop --interval=30m --export
+```
+
+```text
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: bitnami
+  namespace: flux-system
+spec:
+  interval: 1h0m0s
+  type: oci
+  url: oci://registry-1.docker.io/bitnamicharts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: redis
+  namespace: flux-system
+spec:
+  chart:
+    spec:
+      chart: redis
+      reconcileStrategy: ChartVersion
+      sourceRef:
+        kind: HelmRepository
+        name: bitnami
+      version: 20.x
+  interval: 30m0s
+  storageNamespace: shop
+  targetNamespace: shop
+```
+
+`storageNamespace: shop`은 Helm 릴리스 기록(Secret)을 `shop`에 남긴다는 뜻이다. 그래서 Flux로 배포한 차트는 `helm list -n shop`에 보이고, `helm history`로 이력을 볼 수 있다. 업그레이드가 실패하면 `upgrade.remediation`으로 자동 롤백하거나 재시도 횟수를 정한다. Helm 훅도 Helm이 실행하니 Helm으로 배포할 때와 똑같이 돈다.
+
+차이는 drift에서 나온다. Helm은 원래 누가 손으로 고친 것을 모른다. helm-controller는 `driftDetection.mode: enabled`를 켜야 클러스터 객체와 릴리스 매니페스트를 비교해 되돌린다. 차트를 많이 쓰는 팀이라면 "Helm의 이력과 롤백을 그대로 쓰고 싶은가(Flux)", "Helm은 템플릿 도구로만 쓰고 비교·적용은 GitOps 도구가 하길 원하는가(ArgoCD)"가 선택 기준이 된다. Helm 자체의 업그레이드와 롤백은 [Helm 릴리스 수명](/posts/helm-release-lifecycle)에 있다.
+
+## 새 이미지가 나오면 누가 git을 고치나
+
+GitOps에서 배포는 git의 이미지 태그 한 줄을 바꾸는 일이다. 그 한 줄을 누가 바꾸느냐가 문제다. 흔한 방법은 CI가 이미지를 올린 뒤 배포 저장소에 커밋하는 것이다. 다른 방법은 클러스터 안의 도구가 레지스트리를 보고 있다가 새 태그를 찾아 git에 커밋하는 것이다. Flux는 이걸 자기 컨트롤러로 한다.
+
+```bash
+# 레지스트리 감시, 태그 고르는 규칙, git에 쓰는 규칙
+flux create image repository shop-api --image=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api --interval=5m --export
+flux create image policy shop-api --image-ref=shop-api --select-semver=">=1.4.0 <2.0.0" --export
+flux create image update shop-deploy --git-repo-ref=shop-deploy --git-repo-path=./apps \
+  --checkout-branch=main --push-branch=main --author-name=fluxbot \
+  --author-email=fluxbot@example.com --commit-template="chore: update images" --export
+```
+
+```text
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: shop-api
+  namespace: flux-system
+spec:
+  image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api
+  interval: 5m0s
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImagePolicy
+metadata:
+  name: shop-api
+  namespace: flux-system
+spec:
+  imageRepositoryRef:
+    name: shop-api
+  policy:
+    semver:
+      range: '>=1.4.0 <2.0.0'
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageUpdateAutomation
+metadata:
+  name: shop-deploy
+  namespace: flux-system
+spec:
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        email: fluxbot@example.com
+        name: fluxbot
+      messageTemplate: 'chore: update images'
+    push:
+      branch: main
+  interval: 1m0s
+  sourceRef:
+    kind: GitRepository
+    name: shop-deploy
+  update:
+    path: ./apps
+    strategy: Setters
+```
+
+`strategy: Setters`는 매니페스트에 표시해 둔 줄만 고친다는 뜻이다. 고칠 줄 끝에 주석으로 정책 이름을 단다.
+
+```yaml
+      containers:
+        - name: api
+          image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api:1.4.2 # {"$imagepolicy": "flux-system:shop-api"}
+```
+
+아래 그림은 새 태그가 git 커밋이 되어 다시 배포로 돌아오는 고리다.
+
+<AlgoTrace
+  caption="이미지 자동 갱신 한 바퀴"
+  cells={["registry", "reflector", "policy", "automation", "git", "kustomize"]}
+  memoryLabel="지금 고른 태그"
+  steps={[
+    { pointer: 0, memory: ["1.4.2"], caption: "CI가 1.10.0을 레지스트리에 올렸다. git에는 아직 1.4.2가 적혀 있다." },
+    { pointer: 1, memory: ["1.4.2"], caption: "image-reflector가 5분마다 태그 목록을 읽어 ImageRepository status에 저장한다." },
+    { pointer: 2, found: [2], memory: ["1.10.0"], caption: "ImagePolicy가 semver 범위 안에서 가장 높은 태그를 고른다. 문자열 순서라면 1.4.2가 1.10.0보다 뒤지만 semver로는 1.10.0이 크다." },
+    { pointer: 3, memory: ["1.10.0"], caption: "image-automation이 $imagepolicy 표시가 있는 줄을 1.10.0으로 바꾼다." },
+    { pointer: 4, memory: ["1.10.0"], caption: "fluxbot 이름으로 커밋하고 main에 푸시한다. 이력이 git에 남는다." },
+    { pointer: 5, found: [5], memory: ["1.10.0"], caption: "GitRepository가 새 커밋을 받고 Kustomization이 적용한다. 고리가 한 바퀴 돌았다." },
+  ]}
+/>
+
+태그를 고르는 규칙은 직접 짜 볼 만하다. 아래 함수는 `>=min <max` 범위에서 가장 높은 정식 버전을 고른다. 정식 버전이 아닌 태그(`latest`, `main-3f9c2ab`, `1.5.0-rc.1`)는 건너뛴다.
+
+<CodePlayground
+  caption="semver 범위로 이미지 태그 고르기"
+  functionName="pickTag"
+  initialCode={`function pickTag(tags, min, max) {
+  // min 이상, max 미만인 X.Y.Z(앞에 v 허용) 중 가장 높은 태그
+  // 없으면 null
+  return null;
+}`}
+  solution={`function pickTag(tags, min, max) {
+  const parse = (t) => {
+    const m = /^v?(\\d+)\\.(\\d+)\\.(\\d+)$/.exec(t);
+    return m ? m.slice(1).map(Number) : null;
+  };
+  const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  const lo = parse(min), hi = parse(max);
+  let best = null, bestTag = null;
+  for (const t of tags) {
+    const v = parse(t);
+    if (!v || cmp(v, lo) < 0 || cmp(v, hi) >= 0) continue;
+    if (!best || cmp(v, best) > 0) { best = v; bestTag = t; }
+  }
+  return bestTag;
+}`}
+  tests={[
+    { label: "범위 밖, 프리릴리스, latest는 빼고", args: [["1.3.9", "1.4.0", "1.4.2", "1.10.0", "2.0.0", "latest", "1.5.0-rc.1"], "1.4.0", "2.0.0"], expected: "1.10.0" },
+    { label: "문자열 순서가 아니라 숫자 순서", args: [["1.9.0", "1.10.0", "1.2.0"], "1.0.0", "2.0.0"], expected: "1.10.0" },
+    { label: "고를 게 없으면 null", args: [["main-3f9c2ab", "latest"], "1.0.0", "2.0.0"], expected: null },
+    { label: "v 접두사도 버전으로", args: [["v1.4.1", "1.4.3"], "1.4.0", "2.0.0"], expected: "1.4.3" },
+  ]}
+/>
+
+ArgoCD에는 이 기능이 본체에 없다. 별도 프로젝트인 Argo CD Image Updater를 붙이거나, CI가 배포 저장소에 커밋한다. 실무에서는 Flux를 쓰는 팀도 CI 커밋 방식을 많이 쓴다. 자동 갱신 봇이 main에 직접 푸시하려면 브랜치 보호를 풀거나 봇 계정에 예외를 줘야 하고, 어떤 이미지가 언제 나갔는지 CI 쪽 기록과 git 커밋이 따로 남기 때문이다. 자동 갱신을 쓴다면 운영 환경은 PR을 만드는 브랜치(`--push-branch`를 별도로)로 두고 사람이 머지하는 구성이 안전하다.
+
+태그를 고르는 규칙에서 흔한 실수가 둘 있다. `latest`나 브랜치 이름 태그는 같은 이름에 다른 이미지가 올라오니 semver 정책으로 잡히지 않는다. 커밋 SHA 태그는 순서가 없어서 alphabetical 정책을 쓰면 엉뚱한 것을 고른다. 이런 태그를 써야 한다면 태그에 타임스탬프를 넣고(`main-20261021T0140-3f9c2ab`) 그 부분만 뽑아 정렬한다.
+
+## git에 비밀 값을 어떻게 두나
+
+GitOps의 약속은 "클러스터의 모든 것이 git에 있다"인데, DB 비밀번호를 평문으로 git에 둘 수는 없다. 방법은 크게 셋이다.
+
+- 암호화해서 git에 둔다: SOPS(age·KMS 키로 값만 암호화)나 Sealed Secrets(클러스터 안 컨트롤러의 공개키로 암호화). git에는 암호문만 있다.
+- 참조만 git에 둔다: External Secrets Operator(ESO)의 `ExternalSecret`처럼 "AWS Secrets Manager의 이 키를 가져와 Secret으로 만들어라"만 적는다. 값은 git에 아예 없다.
+- 적용할 때 넣는다: ArgoCD의 Vault 플러그인처럼 렌더링 중에 값을 끼워 넣는다. 렌더링 결과가 repo-server 캐시(redis)에 평문으로 남을 수 있어서 요즘은 권하지 않는 쪽이다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="암호문을 git에 두느냐, 참조만 두느냐"
+  zones={[
+    { id: "g", label: "git", x: 8, y: 8, w: 384, h: 72, tone: "edge" },
+    { id: "c", label: "cluster", x: 8, y: 94, w: 270, h: 218, tone: "private" },
+    { id: "cloud", label: "cloud", x: 288, y: 94, w: 104, h: 218, tone: "public" },
+  ]}
+  nodes={[
+    { id: "enc", label: "secret.enc", sub: "SOPS", x: 90, y: 46, icon: "lock" },
+    { id: "ref", label: "ExternalSecret", sub: "참조만", x: 290, y: 46, icon: "server", w: 120 },
+    { id: "ks", label: "kustomize", sub: "decrypt", x: 80, y: 160, icon: "container" },
+    { id: "eso", label: "ESO", sub: "controller", x: 200, y: 160, icon: "container" },
+    { id: "sec", label: "Secret", sub: "db-pass", x: 140, y: 270, icon: "lock" },
+    { id: "sm", label: "Secrets Mgr", sub: "AWS", x: 340, y: 200, icon: "db", w: 92 },
+  ]}
+  links={[
+    { from: "ks", to: "enc" },
+    { from: "ks", to: "sec" },
+    { from: "eso", to: "ref" },
+    { from: "eso", to: "sm" },
+    { from: "eso", to: "sec" },
+  ]}
+  steps={[
+    { path: ["ks", "enc"], packet: "ENC[]", title: "SOPS: git에는 암호문", detail: "Kustomization의 decryption 설정으로 kustomize-controller가 age 키(sops-age Secret)를 써서 적용 직전에 복호화한다." },
+    { path: ["ks", "sec"], packet: "apply", title: "복호화한 값으로 Secret을 만든다", detail: "평문은 클러스터 안에서만 생긴다. 키를 돌리면 저장소의 암호문을 모두 다시 암호화해야 한다." },
+    { path: ["eso", "ref"], packet: "spec", title: "ESO: git에는 참조만", detail: "ExternalSecret에는 어느 저장소의 어느 키를 가져올지와 갱신 주기만 있다. GitOps 도구는 이 객체를 평범하게 적용한다." },
+    { path: ["eso", "sm", "eso", "sec"], packet: "GetSecret", title: "값은 바깥 저장소에서 가져온다", detail: "IRSA 같은 워크로드 신원으로 읽어 와 Secret을 만들고, refreshInterval마다 다시 맞춘다. 값을 바꾸는 데 git 커밋이 필요 없다." },
+  ]}
+/>
+
+어느 쪽이든 GitOps 도구 입장에서 생기는 함정이 있다. ESO가 만든 Secret이나 Sealed Secrets 컨트롤러가 만든 Secret은 GitOps 도구가 적용한 것이 아니다. 그 Secret을 git의 리소스와 같은 경로에 두거나 같은 이름으로 또 정의하면, 두 컨트롤러가 서로 덮어쓰며 OutOfSync가 계속된다. ArgoCD에서는 ESO가 만든 Secret이 Application 리소스 트리에 자식으로 보이지만 비교 대상은 아니다. 또 `prune`이 켜진 상태에서 ExternalSecret 파일을 지우면 그 Secret도 같이 사라져, 그 Secret을 읽는 Pod가 다음 재시작 때 뜨지 못한다.
+
+ESO의 동작과 운영은 [External Secrets 글](/posts/external-secrets)에, 비밀 값이 새는 길과 Vault·SOPS의 차이는 [비밀 관리](/posts/secrets-management)에, Helm values에 비밀을 넣는 문제는 [Helm values와 비밀 값](/posts/helm-values-secrets)에 있다.
+
+## 둘 중 하나를 고를 때
+
+고르는 기준을 상황으로 적어 보면 이렇다.
+
+ArgoCD가 맞는 쪽:
+- 쿠버네티스에 익숙하지 않은 개발자가 배포 상태를 스스로 봐야 한다.
+- 플랫폼팀 하나가 여러 클러스터와 많은 팀을 한 화면에서 관리한다(ApplicationSet의 클러스터 생성기).
+- 손으로 고친 drift를 즉시 보고 싶다(watch 기반 비교).
+- 카나리 같은 점진 배포를 Argo Rollouts와 묶어 쓸 계획이 있다([카나리 릴리스](/posts/canary-release)).
+
+Flux가 맞는 쪽:
+- 모든 설정을 쿠버네티스 리소스와 RBAC로 다루고 별도 UI나 사용자 체계를 두고 싶지 않다.
+- 팀마다 권한을 쿠버네티스 ServiceAccount로 떼어 주고 싶다.
+- Helm 릴리스 이력과 Helm 훅을 그대로 쓰고 싶다.
+- 레지스트리를 보고 git을 갱신하는 자동화를 본체 기능으로 쓰고 싶다.
+
+어느 쪽을 고르든 선택보다 더 중요한 결정이 있다. 배포 저장소를 앱 저장소와 나눌지, 환경을 브랜치로 나눌지 폴더로 나눌지다. 환경을 브랜치로 나누면 머지 충돌과 환경 사이 차이를 추적하기 어려워져서, 대부분 한 브랜치에 환경별 폴더(Kustomize overlay)를 두고 승격을 PR로 한다. overlay 구성은 [Kustomize 글](/posts/kustomize-basics)에 있다.
+
+도입 초기에 흔한 사고도 둘 다 같다. prune을 처음부터 켜고 경로를 바꾸는 커밋을 올려 리소스가 통째로 지워진다. 비밀 값을 평문으로 커밋하고 나중에 지워도 이력에 남는다. 클러스터 하나에 두 도구를 같이 깔아 같은 리소스를 둘이 관리한다. 셋 다 도구 탓이 아니라 "git이 원본"이라는 말을 끝까지 따라가지 않아서 생긴다.
+
+## 같은 약속, 다른 조립
+
+ArgoCD와 Flux는 같은 약속(선언, 이력, 끌어오기, 계속 맞추기)을 지킨다. ArgoCD는 Application 한 장과 controller 하나에 모으고 그 위에 화면과 자체 권한 체계를 얹었다. Flux는 가져오기와 적용을 작은 컨트롤러로 나누고 권한은 쿠버네티스에 맡겼다. 그래서 drift를 잡는 속도, Helm을 다루는 방식, 팀을 나누는 층, 이미지 자동 갱신이 차례로 달라진다. 팀이 무엇을 화면으로 보고 싶은지, 권한을 어디서 관리하고 싶은지를 먼저 정하면 도구는 따라서 정해진다. 실제 동기화 동작은 [ArgoCD 기본](/posts/argocd-basics)에서 이어서 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### GitOps는 CI에서 kubectl apply를 하는 것과 무엇이 다른가요?
+
+클러스터 안의 에이전트가 git을 끌어와 계속 맞춘다는 점이 다릅니다. CI apply는 적용하는 순간만 맞고, 그 뒤 손으로 고친 drift는 다음 배포 때까지 모릅니다. 또 CI가 클러스터 자격 증명을 들고 있을 필요가 없어지고, 되돌리기가 git revert 하나로 정리됩니다.
+
+### Flux의 GitRepository와 Kustomization은 왜 나뉘어 있나요?
+
+가져오는 일과 적용하는 일을 다른 컨트롤러가 맡기 때문입니다. source-controller가 저장소를 받아 artifact로 내놓고, kustomize-controller는 git에 접근하지 않고 그 artifact만 받아 빌드·적용합니다. 덕분에 소스 하나를 여러 Kustomization이 재사용하고, dependsOn으로 Kustomization 사이 순서를 걸 수 있습니다.
+
+### ArgoCD와 Flux는 drift를 어떻게 다르게 다루나요?
+
+ArgoCD는 관리하는 리소스를 watch해서 바뀌는 즉시 OutOfSync로 표시하고, selfHeal이 켜져 있으면 바로 되돌립니다. Flux의 Kustomization은 interval마다 다시 적용해서 되돌리고, 서버 쪽 apply라 자기가 관리하는 필드만 덮습니다. HelmRelease는 driftDetection을 켜야 클러스터 쪽 변경을 되돌립니다.
+
+### 멀티 테넌시를 두 도구는 어떻게 구현하나요?
+
+ArgoCD는 AppProject로 저장소·목적지·리소스 종류를 제한하고, 적용은 controller의 넓은 권한으로 합니다. Flux는 Kustomization에 serviceAccountName을 적어 그 SA로 위장해 적용하므로 쿠버네티스 RBAC가 직접 막습니다. Flux에서는 `--default-service-account`와 `--no-cross-namespace-refs`를 함께 켜야 빈틈이 없습니다.
+
+### ArgoCD로 배포한 차트는 helm list에 없는데 Flux로 배포한 차트는 있는 이유는요?
+
+ArgoCD는 helm template으로 렌더링만 하고 적용은 자기가 하므로 Helm 릴리스 기록이 생기지 않습니다. Flux의 helm-controller는 Helm SDK로 실제 install과 upgrade를 해서 storageNamespace에 릴리스 Secret을 남깁니다. 그래서 Flux에서는 helm history와 Helm 훅, 실패 시 자동 롤백을 Helm 방식 그대로 씁니다.
+
+### 이미지 자동 갱신을 운영 환경에 쓸 때 무엇을 조심하나요?
+
+봇이 main에 직접 푸시하면 브랜치 보호 예외가 필요하고, 사람이 보지 않은 이미지가 바로 운영으로 갑니다. 그래서 운영은 별도 브랜치에 푸시해 PR로 머지하게 두는 편이 안전합니다. 태그 규칙도 semver처럼 순서가 있는 태그로 정해야 하고, latest나 커밋 SHA 태그는 정책으로 고를 수 없습니다.
+
+### GitOps에서 비밀 값은 어떻게 다루나요?
+
+SOPS나 Sealed Secrets로 암호문을 git에 두거나, External Secrets Operator처럼 참조만 git에 두고 값은 외부 비밀 저장소에서 가져옵니다. 참조 방식은 값을 바꾸는 데 커밋이 필요 없고 git에 평문이 남을 위험이 없습니다. 어느 쪽이든 다른 컨트롤러가 만든 Secret을 GitOps 도구가 또 관리하지 않게 하고, prune으로 원본 객체가 지워지면 Secret도 사라진다는 점을 챙깁니다.

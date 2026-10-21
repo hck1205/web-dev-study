@@ -1,0 +1,446 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ci-cd-basics");
+
+금요일 오후, 스테이징에서 이틀 동안 확인한 버전을 운영에 배포했다. 그런데 운영에서만 결제 금액이 이상하게 나온다. 한참 뒤에 알게 된 건, 운영 배포 잡이 스테이징에서 확인한 그 빌드를 쓰지 않고 같은 커밋을 다시 빌드했다는 사실이었다. 그 사이 의존성 하나가 `^` 범위 안에서 새 버전으로 올라가 있었다. 같은 커밋이었지만 같은 프로그램은 아니었다.
+
+CI/CD는 이런 일을 막으려고 만든 흐름이다. "자동으로 배포해 주는 도구"로 기억하기 쉽지만, 실제로 정하는 건 변경 하나가 어떤 검사를 어떤 순서로 통과해서 어디까지 가는지다. 이 글은 그 뼈대를 다룬다. GitHub Actions 문법과 OIDC, 이미지 태그 같은 구체적인 내용은 [GitHub Actions로 이미지 빌드하고 ECR에 올리기](/posts/github-actions-docker-ecr), 쿠버네티스까지 이어지는 길은 [push에서 EKS까지 배포 파이프라인](/posts/k8s-deploy-pipeline-eks), 인프라 설정의 파이프라인은 [네트워크 설정 CI/CD](/posts/network-config-cicd)에서 다뤘다. 여기서는 그 글들이 깔고 있는 개념을 본다.
+
+이 주제의 다른 글: [빌드 캐시로 파이프라인 줄이기](/posts/build-caching), [피처 플래그 운영](/posts/feature-flags), [롤백 전략](/posts/rollback-strategy).
+
+실습은 Ubuntu 24.04, Node 22.22.0에서 했다. GitHub Actions 워크플로는 [act](https://github.com/nektos/act) 0.2.82로 로컬에서 실제로 돌렸다. Docker가 없는 환경이라 `-P ubuntu-latest=-self-hosted`로 잡을 호스트에서 바로 실행했다.
+
+## 세 단어가 가리키는 범위
+
+CI/CD 안에는 세 가지 다른 약속이 섞여 있다.
+
+지속적 통합(Continuous Integration)은 여러 사람의 변경을 자주, 적어도 하루에 한 번 이상 main에 합치고, 합칠 때마다 빌드와 테스트를 자동으로 돌리는 습관이다. 이름에 "통합"이 들어간 이유가 있다. 브랜치에서 3주를 따로 살다가 합치면 충돌과 숨은 상호작용이 한꺼번에 터진다. 작은 변경을 자주 합치면 깨졌을 때 원인이 방금 들어온 몇 줄 안에 있다. 테스트 서버를 돌리는 건 이 습관을 버티게 하는 장치일 뿐이다. CI 서버가 있어도 브랜치를 몇 주씩 들고 있으면 CI를 하고 있는 게 아니다.
+
+지속적 전달(Continuous Delivery)은 main에 들어간 모든 커밋이 언제든 운영에 내보낼 수 있는 상태라는 약속이다. 빌드, 테스트, 스테이징 배포까지 자동이고, 운영에 내보내는 순간만 사람이 버튼으로 정한다. 지속적 배포(Continuous Deployment)는 그 버튼마저 없앤 것이다. 검사를 다 통과한 커밋은 사람의 승인 없이 운영까지 간다.
+
+<ConceptDiagram
+  caption="사람의 손이 어디에 남아 있느냐로 세 단어가 갈린다"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "commit", label: "main에 합침", sub: "작은 변경", x: 70, y: 40, w: 112 },
+    { id: "ci", label: "빌드·테스트", sub: "지속적 통합", x: 230, y: 40, w: 120 },
+    { id: "art", label: "아티팩트", sub: "한 번만 빌드", x: 330, y: 130, w: 104 },
+    { id: "stg", label: "스테이징", sub: "자동 배포", x: 200, y: 150, w: 104 },
+    { id: "gate", label: "사람의 승인", sub: "지속적 전달", x: 90, y: 230, w: 124 },
+    { id: "prod", label: "운영", sub: "같은 아티팩트", x: 300, y: 250, w: 112 },
+  ]}
+  edges={[
+    { from: "commit", to: "ci" },
+    { from: "ci", to: "art" },
+    { from: "art", to: "stg" },
+    { from: "stg", to: "gate" },
+    { from: "gate", to: "prod", label: "버튼" },
+    { from: "stg", to: "prod", label: "자동", dashed: true },
+  ]}
+/>
+
+점선은 지속적 배포다. 둘 중 무엇이 더 앞선 단계라고 할 수는 없다. 금융처럼 운영 반영에 변경 승인 기록이 필요한 곳은 지속적 전달에서 멈추는 게 맞고, 그래도 "언제든 내보낼 수 있는 상태"라는 약속은 지킬 수 있다. 지속적 배포를 하려면 테스트를 믿을 수 있어야 하고, 배포와 공개를 떼어 놓는 [피처 플래그](/posts/feature-flags)와 빠른 [롤백](/posts/rollback-strategy)이 받쳐 줘야 한다. 그게 없으면 사람이 버튼 앞에서 하던 걱정을 대신 해 줄 장치가 없다.
+
+## 커밋 하나가 운영까지 가는 길
+
+파이프라인은 변경 하나가 통과하는 검사들을 순서대로 늘어놓은 것이다. 순서에는 원칙이 있다. 빠르고 싸고 자주 실패하는 검사를 앞에, 느리고 비싼 검사를 뒤에 둔다. lint는 몇 초 만에 끝나고 오타 같은 흔한 실수를 잡는다. 단위 테스트는 몇십 초, 통합 테스트는 몇 분, 스테이징 배포 후 확인은 그보다 길다. 앞에서 떨어질 변경이 뒤의 비싼 단계까지 가지 않게 한다.
+
+아래 그림에서 다음을 누르면 커밋 하나가 각 단계를 지나는 순서가 나온다.
+
+<SequenceDiagram
+  caption="커밋 하나가 운영까지 가는 순서"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "ci", label: "CI" },
+    { id: "store", label: "아티팩트 저장소" },
+    { id: "stg", label: "스테이징" },
+    { id: "prod", label: "운영" },
+  ]}
+  steps={[
+    { from: "dev", to: "ci", label: "push main", title: "합치면 바로 시작한다", detail: "PR이 main에 합쳐지거나 main에 push되면 워크플로가 시작된다. PR 단계에서도 같은 검사를 먼저 돌려 둔다." },
+    { from: "ci", to: "ci", label: "lint · test", title: "싼 검사를 먼저", detail: "lint와 단위 테스트가 몇 초 안에 끝난다. 여기서 떨어지면 뒤의 단계는 돌지 않는다.", payload: "lint: ok\nℹ pass 2\nℹ fail 0" },
+    { from: "ci", to: "store", label: "upload", title: "한 번만 빌드해서 올린다", detail: "빌드 결과물에 커밋 SHA를 붙이고 해시(digest)를 기록해 저장소에 올린다. 이후 단계는 이것만 받는다.", payload: "price-api-90b7537.tgz\nsha256 520db2c86397…" },
+    { from: "store", to: "stg", label: "download", title: "스테이징은 받아서 배포한다", detail: "다시 빌드하지 않는다. 받은 파일의 해시가 기록과 같은지 확인하고 배포한다." },
+    { from: "stg", to: "stg", label: "smoke test", title: "떠 있는지 확인", detail: "헬스 체크와 핵심 API 몇 개를 실제로 불러 본다. 실패하면 운영으로 가지 않는다." },
+    { from: "store", to: "prod", label: "같은 파일", title: "운영도 같은 파일을", detail: "승인이 나면 스테이징이 받은 바로 그 파일을 운영에 배포한다. 해시가 같으니 스테이징에서 확인한 것과 같은 프로그램이다.", payload: "deploy dist/price-api-90b7537.tgz to production (sha256 520db2c86397)" },
+  ]}
+/>
+
+실제로 이 흐름을 워크플로로 짜서 돌렸다. 작은 Node 프로젝트에 lint, 테스트, 빌드, 스테이징 배포, 운영 배포 다섯 단계를 두고, 잡끼리는 `needs`로 순서를 정했다.
+
+```yaml
+# .github/workflows/ci.yml (요점만)
+jobs:
+  test:                       # lint와 단위 테스트
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run lint
+      - run: npm test
+  build:
+    needs: test               # test가 성공해야 시작한다
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run build    # dist/price-api-<sha>.tgz와 manifest.json을 만든다
+      - uses: actions/upload-artifact@v4
+        with: { name: bundle, path: dist/ }
+  deploy-staging:
+    needs: build
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: bundle, path: dist/ }
+      - run: ./scripts/deploy.sh staging
+  deploy-prod:
+    needs: deploy-staging
+    environment: production   # GitHub에서는 여기에 승인자를 걸 수 있다
+    steps:                    # (download-artifact와 deploy.sh production, 위와 같다)
+```
+
+운영 배포 잡에 붙은 설정 하나하나가 막는 사고가 다르다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="운영 배포 잡 한 덩어리"
+  base="deploy-prod:"
+  separator=" "
+  joiner="  "
+  params={[
+    { key: "needs", value: "deploy-staging", display: "needs: deploy-staging", title: "순서", description: "스테이징 배포가 성공해야 시작한다. 스테이징에서 떨어진 결과물이 운영으로 새지 않는다.", required: true },
+    { key: "environment", value: "production", display: "environment: production", title: "문지기", description: "GitHub에서는 environment에 승인자, 대기 시간, 허용 브랜치를 걸 수 있다. 운영 시크릿도 이 잡에서만 꺼낼 수 있게 묶인다. 지속적 전달의 버튼이 여기다." },
+    { key: "concurrency", value: "prod", display: "concurrency: prod", title: "겹치지 않게", description: "같은 이름의 실행이 이미 돌고 있으면 기다리게 한다. 두 커밋의 배포가 동시에 운영을 덮어쓰는 일을 막는다. 위 실습 파일에는 넣지 않았다." },
+    { key: "download", value: "bundle", display: "download: bundle", title: "다시 빌드하지 않는다", description: "빌드 잡이 올린 아티팩트를 받는다. 이 잡에는 빌드 명령이 아예 없다.", required: true },
+    { key: "verify", display: "sha256 확인", title: "받은 게 맞는지", description: "deploy.sh가 manifest.json에 적힌 해시와 받은 파일의 해시를 비교하고, 다르면 배포하지 않는다.", code: "got=$(sha256sum \"$file\" | cut -d' ' -f1)\nif [ \"$want\" != \"$got\" ]; then echo \"digest mismatch: $got\"; exit 1; fi" },
+  ]}
+/>
+
+act로 로컬에서 돌리는 명령은 이렇다. act는 GitHub의 러너 대신 내 컴퓨터에서 워크플로를 해석해 실행한다. 아티팩트 저장소도 흉내 내 주기 때문에 잡 사이에 파일을 넘기는 부분까지 확인할 수 있다.
+
+```bash
+# 워크플로를 로컬에서 push 이벤트로 실행한다
+# -P ...=-self-hosted : 컨테이너 대신 호스트에서 바로 실행
+# --artifact-server-path : upload/download-artifact가 쓸 로컬 저장소
+act push -P ubuntu-latest=-self-hosted --artifact-server-path ./artifacts
+```
+
+빌드 잡과 운영 배포 잡의 출력 일부다.
+
+```text
+[ci/build] ⭐ Run Main npm run build
+[ci/build]   | built dist/price-api-90b7537.tgz
+[ci/build]   | sha256 520db2c863974ebe3725ac94f78294ea35579b65df29145ed015fa4e599a27c1
+[ci/build]   ✅  Success - Main npm run build [264.419358ms]
+[ci/build] ⭐ Run Main actions/upload-artifact@v4
+[ci/build]   | With the provided path, there will be 2 files uploaded
+[ci/build]   | SHA256 digest of uploaded artifact zip is 74c89792905b7a606b75665afa7928859e71042720945c728da59c69403fd5bf
+[ci/build]   | Artifact bundle has been successfully uploaded! Final size is 804 bytes. Artifact ID is 304701189
+...
+[ci/deploy-prod   ] ⭐ Run Main actions/download-artifact@v4
+[ci/deploy-prod   ]   | SHA256 digest of downloaded artifact is 74c89792905b7a606b75665afa7928859e71042720945c728da59c69403fd5bf
+[ci/deploy-prod   ] ⭐ Run Main ./scripts/deploy.sh production
+[ci/deploy-prod   ]   | deploy dist/price-api-90b7537.tgz to production (sha256 520db2c86397)
+[ci/deploy-prod   ] 🏁  Job succeeded
+```
+
+봐야 할 줄은 두 군데다. 업로드한 zip의 digest(`74c897…`)와 운영 잡이 내려받은 zip의 digest가 같고, 배포 스크립트가 확인한 tgz의 해시(`520db2…`)가 빌드 때 찍힌 값과 같다. 운영에 나간 것이 빌드 잡이 만든 바로 그 파일이라는 증거다.
+
+## 한 번만 빌드하고 승격한다
+
+처음 이야기로 돌아가자. 환경마다 다시 빌드하면 같은 커밋에서 다른 결과물이 나올 수 있다. 의존성 범위가 열려 있거나, 베이스 이미지 태그가 `latest`이거나, 빌드 시각과 파일 수정 시각이 결과물에 들어가는 경우다. 마지막 것은 생각보다 흔하다. 내용이 같은 디렉터리를 1초 간격으로 그냥 압축해 봤다.
+
+```bash
+# 같은 내용을 두 번 압축한다. 사이에 파일 수정 시각만 바뀌었다
+tar czf a1.tgz src package.json
+touch src/price.js
+tar czf a2.tgz src package.json
+sha256sum a1.tgz a2.tgz
+```
+
+```text
+61f29e9e5860a1bbc9182ca0f46d651223a030b02966703c4e1647bb98fffbe1  a1.tgz
+7fe328b470de3fbc4fda433664a18447720ccb95fda249bc04a7f111f9fe5660  a2.tgz
+```
+
+tar는 파일 수정 시각과 소유자를, gzip은 압축한 시각을 헤더에 넣는다. 그래서 해시가 다르다. 빌드 스크립트는 `--sort=name --mtime=2026-01-01 --owner=0 --group=0`과 `gzip -n`으로 이런 값을 고정했다. 그 결과 위 실행에서 빌드 스크립트만 바꾼 두 커밋(`bbdc483`, `90b7537`)의 tgz 해시가 `520db2…`로 같게 나왔다. 이렇게 같은 입력에서 늘 같은 결과물이 나오는 빌드를 재현 가능한 빌드(reproducible build)라고 한다.
+
+재현 가능하게 만들면 다시 빌드해도 된다는 뜻은 아니다. 재현성은 "이 결과물이 정말 이 소스에서 나왔는지" 확인하는 데 쓰고, 배포는 여전히 한 번 만든 것을 옮긴다. 이걸 승격(promotion)이라고 부른다. 스테이징에서 확인한 결과물에 "운영 가능" 표시를 붙여 다음 환경으로 넘기는 것이다.
+
+<NetworkTopology
+  caption="빌드는 CI에서 한 번, 환경은 같은 digest를 받는다"
+  width={400}
+  height={330}
+  zones={[
+    { id: "ciz", label: "CI", x: 10, y: 10, w: 180, h: 310, tone: "neutral" },
+    { id: "stgz", label: "staging", x: 210, y: 10, w: 180, h: 110, tone: "private" },
+    { id: "prodz", label: "production", x: 210, y: 140, w: 180, h: 180, tone: "public" },
+  ]}
+  nodes={[
+    { id: "runner", label: "runner", sub: "build 1회", x: 100, y: 65, icon: "server" },
+    { id: "reg", label: "artifacts", sub: "sha256:520d…", x: 100, y: 255, icon: "db" },
+    { id: "stg", label: "stg app", sub: "price-api", x: 300, y: 65, icon: "container" },
+    { id: "rebuild", label: "re-build", sub: "운영 잡", x: 300, y: 195, icon: "server" },
+    { id: "prod", label: "prod app", sub: "price-api", x: 300, y: 275, icon: "container" },
+  ]}
+  links={[
+    { from: "runner", to: "reg", label: "upload" },
+    { from: "reg", to: "stg" },
+    { from: "reg", to: "prod" },
+    { from: "rebuild", to: "prod", dashed: true },
+  ]}
+  steps={[
+    { path: ["runner", "reg"], packet: "tgz", title: "빌드는 한 번", detail: "CI 러너가 커밋 90b7537을 빌드해 저장소에 올린다. 해시를 함께 기록한다.", payload: "sha256 520db2c86397…" },
+    { path: ["reg", "stg"], packet: "520d", highlight: ["stgz"], title: "스테이징이 받는다", detail: "스테이징은 저장소에서 내려받아 해시를 확인하고 배포한다. 테스트와 확인은 이 파일로 한다." },
+    { path: ["reg", "prod"], packet: "520d", highlight: ["prodz"], title: "운영도 같은 파일", detail: "승인 뒤 운영도 같은 저장소의 같은 파일을 받는다. 스테이징에서 본 것이 그대로 나간다." },
+    { path: ["rebuild", "prod"], packet: "61f2", blocked: true, title: "다시 빌드하면 다른 것", detail: "운영 잡에서 소스를 다시 빌드하면 해시가 달라진다. 배포 스크립트가 기록과 다른 해시를 거부한다.", payload: "digest mismatch: 61f29e9e…" },
+  ]}
+/>
+
+환경마다 다른 것은 결과물이 아니라 설정이다. DB 주소, 외부 API 키, 기능 스위치 같은 값은 빌드에 굽지 않고 배포할 때 환경 변수나 [ConfigMap](/posts/k8s-configmap), [Secret](/posts/k8s-secret)으로 넣는다. 프런트엔드는 여기서 자주 걸린다. `NEXT_PUBLIC_*`나 `VITE_*`처럼 빌드 시점에 번들에 박히는 값이 있으면, 환경마다 빌드하거나 실행 시점에 설정 파일을 따로 받아 오는 구조로 바꿔야 한다. 이걸 모르고 스테이징 빌드를 운영에 승격하면 운영 화면이 스테이징 API를 부른다.
+
+## 환경은 무엇을 확인하려고 두나
+
+환경을 많이 두면 안전해 보이지만, 환경 하나마다 유지 비용과 대기 시간이 붙는다. 환경마다 답하는 질문이 달라야 둘 가치가 있다.
+
+개발 환경은 "내 변경이 남의 것과 같이 돌아가는가"를 본다. 망가져도 된다. 스테이징은 "운영과 같은 모양에서 배포 절차 자체가 성공하는가"를 본다. 그래서 스테이징이 운영과 달라지면 쓸모를 잃는다. 버전이 다른 DB, 다른 인그레스 설정, 운영엔 있는 보안 그룹이 없는 상태라면, 스테이징을 통과해도 운영에서 어떻게 될지는 거의 알 수 없다. 스테이징 설정도 운영과 같은 IaC 코드에서 변수만 바꿔 만드는 이유다.
+
+스테이징이 운영과 완전히 같을 수는 없다. 트래픽 양과 데이터 모양이 다르다. 그래서 운영에서만 드러나는 문제는 운영 안에서 작게 확인하는 방식으로 넘긴다. 일부 사용자에게 먼저 내보내는 [카나리 배포](/posts/canary-release), 두 벌을 띄워 놓고 전환하는 [블루-그린 배포](/posts/blue-green-deployment)가 그 방법이다. PR마다 잠깐 떠서 리뷰가 끝나면 사라지는 프리뷰 환경도 흔해졌다. 이 블로그가 쓰는 Vercel처럼 브랜치마다 프리뷰 주소를 주는 플랫폼이 그렇다.
+
+## 합치는 주기가 파이프라인을 정한다
+
+파이프라인이 아무리 좋아도 브랜치가 오래 살면 효과가 줄어든다. 지속적 통합이 전제하는 건 짧게 사는 브랜치다. 브랜치를 하루 이틀 안에 main에 합치는 트렁크 기반 개발이 이 전제와 가장 잘 맞는다. 브랜치 전략별 차이는 [브랜치 전략](/posts/git-branching-strategy)에서 다뤘으니 여기서는 파이프라인 쪽에서 생기는 일만 보자.
+
+main에 하루 수십 번 합치면 문제가 하나 생긴다. PR 두 개가 각각은 테스트를 통과했는데, 합친 결과는 깨질 수 있다. A가 함수 이름을 바꾸고, B가 옛 이름으로 새 호출을 추가한 경우다. 둘 다 옛 main 기준으로는 초록불이다. 머지 큐(merge queue)는 PR을 바로 합치지 않고 줄을 세워, "지금 main + 앞 PR들 + 이 PR"을 합친 상태로 한 번 더 테스트한 뒤 통과한 것만 합친다. GitHub, GitLab 모두 기능으로 제공한다.
+
+<NetworkTopology
+  caption="머지 큐는 합친 상태로 한 번 더 시험한다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "q", label: "merge queue", x: 140, y: 10, w: 250, h: 130, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "a", label: "PR-A", sub: "이름 변경", x: 62, y: 60, icon: "client" },
+    { id: "b", label: "PR-B", sub: "옛 이름 호출", x: 62, y: 230, icon: "client" },
+    { id: "tmp", label: "main+A+B", sub: "임시 브랜치", x: 210, y: 90, icon: "switch", w: 110 },
+    { id: "ci", label: "CI", sub: "test", x: 330, y: 90, icon: "server", w: 90 },
+    { id: "main", label: "main", sub: "트렁크", x: 270, y: 230, icon: "db" },
+  ]}
+  links={[
+    { from: "a", to: "tmp" },
+    { from: "b", to: "tmp" },
+    { from: "tmp", to: "ci" },
+    { from: "ci", to: "main", label: "통과분만" },
+    { from: "b", to: "main", dashed: true },
+  ]}
+  steps={[
+    { path: ["b", "main"], packet: "merge", blocked: true, title: "큐 없이 바로 합치면", detail: "A와 B는 각각 옛 main 기준으로 초록불이었다. 둘 다 합쳐진 main에서는 B가 사라진 함수를 부른다. main이 깨진다.", payload: "TypeError: calcTotal is not a function" },
+    { path: ["a", "tmp", "ci"], packet: "A", highlight: ["q"], title: "큐에 줄을 선다", detail: "A를 main 위에 얹은 임시 브랜치를 만들어 테스트한다." },
+    { path: ["b", "tmp", "ci"], packet: "A+B", blocked: true, highlight: ["q"], title: "합친 상태로 시험한다", detail: "B는 main+A 위에 얹어 시험한다. 여기서 실패하니 B만 큐에서 빠지고 작성자에게 알린다." },
+    { path: ["ci", "main"], packet: "A", title: "통과한 것만 들어간다", detail: "A만 main에 합쳐진다. main은 계속 초록불이다." },
+  ]}
+/>
+
+아래 그림은 파이프라인이 단계를 지나가다 어디서 멈추는지 보여 준다. 먼저 실패한 단계에서 멈추면 그 뒤의 비싼 단계에 시간을 쓰지 않는다.
+
+<AlgoTrace
+  caption="빠른 단계에서 떨어뜨리면 뒤의 비싼 단계는 돌지 않는다"
+  memoryLabel="통과한 단계"
+  cells={["lint", "unit", "build", "integ", "staging", "prod"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "console.log를 남긴 커밋이 들어왔다. lint가 먼저 돈다." },
+    { pointer: 0, memory: ["lint ✗"], caption: "lint가 src/price.js:3에서 떨어뜨린다. 0.2초 만에 끝났다." },
+    { found: [], memory: ["lint ✗", "나머지 skip"], caption: "test 잡이 실패했으니 needs로 묶인 build 이후 잡은 시작하지 않는다." },
+    { pointer: 0, found: [0], memory: ["lint"], caption: "revert 커밋이 들어왔다. lint 통과." },
+    { pointer: 1, found: [0, 1], memory: ["lint", "unit"], caption: "단위 테스트 통과." },
+    { pointer: 2, found: [0, 1, 2], memory: ["lint", "unit", "build"], caption: "빌드는 한 번. 해시를 기록해 올린다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["lint", "unit", "build", "integ", "stg"], caption: "같은 파일로 통합 테스트와 스테이징 배포를 지난다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["…", "prod"], caption: "승인 뒤 운영. 처음 실패에서 여기까지 커밋 두 개였다." },
+  ]}
+/>
+
+실제로 `console.log`를 넣은 커밋으로 돌렸을 때의 출력이다.
+
+```text
+[ci/test] ⭐ Run Main npm run lint
+[ci/test]   | > price-api@1.4.0 lint
+[ci/test]   | > node scripts/lint.mjs
+[ci/test]   | src/price.js:3 console.log 금지
+[ci/test]   | lint: 1 problem(s)
+[ci/test]   ❌  Failure - Main npm run lint [230.862577ms]
+[ci/test] 🏁  Job failed
+Error: Job 'test' failed
+```
+
+main이 깨졌을 때의 규칙도 정해 둬야 한다. 트렁크 기반에서 main이 빨간불이면 모두의 작업이 막힌다. 그래서 고치는 데 몇 분 넘게 걸릴 것 같으면 원인 커밋을 먼저 `git revert`하고, 고친 것은 다시 PR로 올린다. 위 실행에서도 그렇게 했다. 빨간 main 위에 다른 사람이 계속 합치기 시작하면 무엇이 무엇을 깨뜨렸는지 가려내기가 급격히 어려워진다.
+
+## 가끔 실패하는 테스트
+
+같은 코드로 다시 돌리면 통과하는 테스트를 플레이키 테스트(flaky test)라고 한다. 파이프라인에 대한 신뢰를 가장 빨리 무너뜨리는 게 이것이다. 빨간불이 떠도 "또 그거겠지" 하고 재실행 버튼을 누르는 습관이 생기면, 진짜 실패도 같은 버튼으로 넘겨 버린다.
+
+일부러 시간에 기대는 테스트를 하나 만들어 봤다. TTL이 50ms인 캐시에 값을 넣고, 다른 일을 하느라 0~60ms를 쓴 뒤 값이 남아 있는지 본다. 기계가 한가하면 통과하고, 바쁘면 실패한다. CI 러너는 여러 잡이 한 머신을 나눠 쓰니 바쁜 날이 있다.
+
+```bash
+# 같은 테스트를 50번 돌려 통과·실패를 센다
+pass=0; fail=0
+for i in $(seq 1 50); do
+  if node --test flaky.test.js >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); fi
+done
+echo "pass=$pass fail=$fail"
+```
+
+```text
+pass=45 fail=5
+```
+
+50번 중 5번 실패했다. 코드는 한 글자도 바뀌지 않았다. 플레이키의 흔한 원인은 이렇다. 실제 시계와 `sleep`에 기대는 것, 테스트 순서에 기대는 것(앞 테스트가 남긴 DB 행), 공유 자원(같은 포트, 같은 임시 파일), 외부 네트워크 호출, 그리고 병렬 실행에서만 드러나는 경쟁 조건. 위 예는 시계를 주입받게 바꾸면 끝난다. 테스트에서는 가짜 시계로 시간을 직접 넘긴다.
+
+비슷하지만 다른 문제로 "내 컴퓨터에선 되는데 CI에서만 실패"가 있다. 이건 플레이키가 아니라 환경 차이라서 매번 같은 결과가 나온다. 시간대가 대표적이다. 주문 시각으로 주문일을 만드는 함수를 로컬 시간대 기준으로 짜면, 한국에 있는 노트북에서는 통과하고 UTC로 도는 러너에서는 실패한다.
+
+```bash
+# 같은 테스트를 시간대만 바꿔 돌린다
+TZ=Asia/Seoul node --test --test-reporter=spec tz.test.js
+TZ=UTC node --test --test-reporter=spec tz.test.js
+```
+
+```text
+✔ 자정 직후 주문은 그날 주문이다 (1.765179ms)
+...
+✖ 자정 직후 주문은 그날 주문이다 (3.499248ms)
+ℹ pass 0
+ℹ fail 1
+```
+
+GitHub이 주는 러너의 시간대는 UTC다. 로케일, 대소문자를 구분하는 파일 시스템(macOS 기본은 구분하지 않고 Linux는 구분한다), Node 버전도 같은 종류의 차이를 만든다. 런타임 버전은 `.nvmrc`나 `packageManager` 필드로 고정하고, CI에서도 그 값을 읽어 쓴다.
+
+플레이키 테스트를 다루는 순서는 이렇다. 먼저 실패 기록을 모은다. 같은 커밋에서 성공과 실패가 둘 다 나온 테스트가 플레이키다. 찾으면 격리(quarantine)한다. 필수 검사에서 빼서 따로 돌리되, 결과는 계속 기록한다. 그리고 주인을 정해 기한 안에 고친다. 자동 재시도는 쓰더라도 "재시도로 통과했다"는 사실을 숨기지 않고 보고에 남긴다. 재시도로 초록불을 만들기만 하면 플레이키가 쌓이는 걸 아무도 모른다.
+
+## 파이프라인의 속도를 재는 네 가지 숫자
+
+"우리 배포는 괜찮은가"를 감으로 말하면 끝이 없다. DORA(DevOps Research and Assessment) 연구팀이 수년간 조사해서 정리한 네 가지 지표가 흔히 쓰인다. 흔히 DORA 지표라고 부른다.
+
+- 배포 빈도: 운영에 얼마나 자주 배포하나.
+- 변경 리드 타임: 커밋이 운영에 닿기까지 얼마나 걸리나.
+- 변경 실패율: 배포 중 장애나 롤백·핫픽스로 이어진 비율.
+- 복구 시간: 배포 때문에 생긴 장애에서 회복하는 데 걸린 시간. 2023년 보고서부터 "실패한 배포 복구 시간"이라는 이름으로 바뀌었다.
+
+앞의 둘은 속도, 뒤의 둘은 안정성이다. DORA 연구에서 반복해서 나온 결과는 둘이 맞바꾸는 관계가 아니었다. 잘하는 팀은 자주 배포하면서 실패율도 낮다. 변경이 작을수록 무엇이 깨졌는지 찾기 쉽고 되돌리기도 쉬워서다. 2024년 보고서부터는 계획에 없던 배포(핫픽스 같은 재작업) 비율도 함께 보는데, 지표 정의는 해마다 조금씩 다듬어지니 인용할 때는 몇 년도 보고서인지 밝힌다.
+
+숫자를 내는 건 어렵지 않다. 배포 기록에 "어떤 커밋이 언제 만들어졌고 언제 배포됐는지, 실패였는지, 언제 회복했는지"만 있으면 된다. 아래 함수를 채워 보자. 시각은 계산을 쉽게 하려고 시작 시점부터 흐른 시간(시간 단위)으로 준다. 리드 타임과 복구 시간은 평균 대신 중앙값을 쓴다. 한 건이 사흘 걸리면 평균이 크게 흔들리기 때문이다.
+
+<CodePlayground
+  caption="배포 기록으로 DORA 지표 네 개 내기"
+  functionName="doraMetrics"
+  initialCode={`function doraMetrics(deploys, days) {
+  // deploys: [{ commitAt, deployAt, failed, restoredAt? }] (단위: 시간)
+  // perDay: 하루 배포 수 (소수 둘째 자리 반올림)
+  // leadTimeHours: (deployAt - commitAt)의 중앙값, 없으면 null
+  // changeFailurePct: 실패 비율 % (소수 첫째 자리 반올림), 배포가 없으면 0
+  // recoveryHours: 실패 건의 (restoredAt - deployAt) 중앙값, 없으면 null
+  return { perDay: 0, leadTimeHours: null, changeFailurePct: 0, recoveryHours: null };
+}`}
+  solution={`function doraMetrics(deploys, days) {
+  const median = (xs) => {
+    if (xs.length === 0) return null;
+    const s = [...xs].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  const failed = deploys.filter((d) => d.failed);
+  return {
+    perDay: Math.round((deploys.length / days) * 100) / 100,
+    leadTimeHours: median(deploys.map((d) => d.deployAt - d.commitAt)),
+    changeFailurePct: deploys.length
+      ? Math.round((failed.length / deploys.length) * 1000) / 10
+      : 0,
+    recoveryHours: median(failed.map((d) => d.restoredAt - d.deployAt)),
+  };
+}`}
+  tests={[
+    {
+      label: "일주일에 7번 배포, 2번 실패",
+      args: [[
+        { commitAt: 1, deployAt: 5, failed: false },
+        { commitAt: 3, deployAt: 26, failed: true, restoredAt: 27 },
+        { commitAt: 20, deployAt: 29, failed: false },
+        { commitAt: 40, deployAt: 49, failed: false },
+        { commitAt: 50, deployAt: 52, failed: false },
+        { commitAt: 70, deployAt: 98, failed: true, restoredAt: 101 },
+        { commitAt: 99, deployAt: 102, failed: false },
+      ], 7],
+      expected: { perDay: 1, leadTimeHours: 9, changeFailurePct: 28.6, recoveryHours: 2 },
+    },
+    {
+      label: "한 달에 2번, 큰 배포",
+      args: [[
+        { commitAt: 0, deployAt: 72, failed: false },
+        { commitAt: 10, deployAt: 240, failed: true, restoredAt: 264 },
+      ], 30],
+      expected: { perDay: 0.07, leadTimeHours: 151, changeFailurePct: 50, recoveryHours: 24 },
+    },
+    {
+      label: "배포가 없던 주",
+      args: [[], 7],
+      expected: { perDay: 0, leadTimeHours: null, changeFailurePct: 0, recoveryHours: null },
+    },
+  ]}
+/>
+
+두 번째 테스트가 흔한 모습이다. 몇 주 모아서 크게 배포하면 리드 타임이 길고, 한 번 터지면 무엇이 원인인지 찾느라 복구도 길다. 이 지표를 팀 평가 점수로 쓰기 시작하면 빈 커밋을 배포해 빈도를 올리는 식으로 숫자가 망가진다. 팀이 자기 흐름의 병목을 찾는 데 쓴다.
+
+## 파이프라인이 느려지는 자리
+
+리드 타임을 쪼개 보면 파이프라인 실행 시간은 일부일 뿐이다. 리뷰를 기다리는 시간, 승인을 기다리는 시간, 배포 창을 기다리는 시간이 대개 더 길다. 그래도 파이프라인 자체가 느리면 사람이 기다리지 않고 다른 일을 시작하고, 결과를 늦게 보고, 실패를 늦게 고친다. 커밋 후 첫 피드백(lint와 단위 테스트)은 몇 분 안에 와야 한다는 게 오래된 경험칙이다. 익스트림 프로그래밍에서 말하던 "10분 빌드"가 그 기준이다.
+
+느려지는 이유는 대개 세 가지다. 매번 의존성을 처음부터 받는다면 캐시가 없는 것이다. 이건 [빌드 캐시](/posts/build-caching)에서 따로 다룬다. 서로 상관없는 잡을 줄줄이 묶었다면 `needs`를 정리해 병렬로 돌린다. lint와 단위 테스트, 타입 검사는 서로 기다릴 이유가 없다. 테스트 하나가 수백 개로 커졌다면 여러 러너로 나눠(sharding) 돌린다. 모노레포라면 바뀐 경로에 해당하는 것만 돌리도록 경로 필터를 건다.
+
+act 출력에는 단계마다 걸린 시간이 붙는다. GitHub에서도 잡 화면에 같은 정보가 있다. 느리다고 느껴지면 감으로 고치지 말고 단계별 시간부터 본다. "Set up job"이 길면 러너를 기다리는 것이고, 의존성 설치가 길면 캐시 문제고, 테스트가 길면 테스트 자체 문제다.
+
+## 배포가 깨졌을 때 파이프라인에서 먼저 볼 것
+
+증상별로 정리하면 이렇다.
+
+로컬은 통과하는데 CI만 실패한다면 매번 실패하는지부터 본다. 매번이면 환경 차이(시간대, 로케일, 런타임 버전, 대소문자, 환경 변수 누락)이고, 가끔이면 플레이키다. CI 로그에서 런타임 버전을 찍는 줄(`node -v`)과 실패한 테스트 이름이 단서다.
+
+CI는 초록불인데 운영에서 깨졌다면 운영에 나간 것이 정말 테스트한 그것인지 확인한다. 배포 기록의 이미지 digest나 아티팩트 해시를 빌드 로그의 값과 비교한다. 다르면 어딘가에서 다시 빌드했거나 태그가 덮어씌워진 것이다. 같다면 설정 차이(환경 변수, 시크릿, 외부 서비스 주소)를 본다.
+
+배포가 됐는데 아무도 모른다면 알림과 기록이 없는 것이다. 배포할 때마다 커밋 SHA와 시각, 배포한 사람(또는 워크플로 실행 번호)을 남겨 두면, 장애가 났을 때 "그 시각 직전에 무엇이 나갔나"를 바로 답할 수 있다. 대시보드의 에러율 그래프에 배포 시점을 세로선으로 찍어 두는 것만으로도 원인 추적이 훨씬 빨라진다.
+
+마지막으로, 파이프라인 정의도 코드다. 워크플로 파일을 PR로 리뷰하고, 운영 배포 잡에 쓰는 권한은 그 잡에만 준다. 아무 브랜치에서나 운영 배포 잡을 돌릴 수 있다면 리뷰를 우회하는 길이 열려 있는 셈이다. 이 부분은 [environment와 승인 설정](/posts/github-actions-docker-ecr)에서 구체적으로 다뤘다.
+
+## 같은 커밋이 아니라 같은 파일
+
+CI/CD에서 기억할 것은 둘이다. 변경을 작게 자주 합치고 매번 자동으로 확인한다. 그리고 확인한 바로 그 결과물을 다시 만들지 않고 환경을 따라 옮긴다. 처음의 금요일 사고는 두 번째를 어긴 것이었다. 이 위에서 배포 속도를 더 올리려면 [빌드 캐시](/posts/build-caching)로 기다리는 시간을 줄이고, 배포와 공개를 떼어 놓으려면 [피처 플래그](/posts/feature-flags)를, 잘못 나갔을 때를 대비하려면 [롤백 전략](/posts/rollback-strategy)을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 지속적 전달과 지속적 배포는 어떻게 다른가요?
+
+운영 반영에 사람의 결정이 남아 있느냐가 다르다. 지속적 전달은 모든 커밋을 언제든 운영에 낼 수 있는 상태로 만들고, 운영 배포만 사람이 버튼으로 정한다. 지속적 배포는 검사를 통과하면 승인 없이 운영까지 간다. 지속적 배포를 하려면 테스트 신뢰도와 피처 플래그, 빠른 롤백이 받쳐 줘야 한다.
+
+### 지속적 통합에서 "통합"이 의미하는 건 무엇인가요?
+
+CI 서버를 두는 게 아니라, 변경을 자주(적어도 하루에 한 번) main에 합치는 습관이다. 브랜치를 오래 들고 있으면 합칠 때 충돌과 숨은 상호작용이 한꺼번에 터지고 원인을 찾기 어렵다. 자동 빌드와 테스트는 그 잦은 합치기를 안전하게 만드는 장치다.
+
+### 왜 환경마다 다시 빌드하면 안 되나요?
+
+같은 커밋이라도 다시 빌드하면 다른 결과물이 나올 수 있어서다. 열려 있는 의존성 범위, `latest` 베이스 이미지, 빌드 시각이 결과물에 섞인다. 그러면 스테이징에서 확인한 것과 운영에 나간 것이 달라진다. 한 번 빌드해 digest를 기록하고 그 파일을 환경을 따라 승격하며, 환경 차이는 배포 시점의 설정으로 넣는다.
+
+### 프런트엔드 빌드에 환경별 API 주소가 박혀 있으면 어떻게 하나요?
+
+`NEXT_PUBLIC_*`처럼 빌드 시점에 번들에 들어가는 값이 있으면 그대로는 승격할 수 없다. 실행 시점에 설정 파일(예: `/config.json`)을 받아 오게 바꾸거나, 서버에서 렌더링할 때 값을 주입하는 구조로 바꾼다. 어쩔 수 없이 환경별로 빌드한다면, 적어도 의존성 잠금과 재현 가능한 빌드로 차이를 줄이고 운영 빌드도 스테이징을 거치게 한다.
+
+### 플레이키 테스트는 어떻게 다루나요?
+
+같은 커밋에서 성공과 실패가 둘 다 나온 기록으로 찾고, 필수 검사에서 격리하되 결과는 계속 모으고, 주인과 기한을 정해 고친다. 원인은 대개 실제 시계, 테스트 순서 의존, 공유 자원, 외부 네트워크, 경쟁 조건이다. 자동 재시도를 쓰더라도 재시도로 통과한 사실을 보고에 남겨야 플레이키가 쌓이는 걸 알 수 있다.
+
+### DORA 네 가지 지표는 무엇이고 어떻게 쓰나요?
+
+배포 빈도, 변경 리드 타임, 변경 실패율, 복구 시간이다. 앞의 둘은 속도, 뒤의 둘은 안정성인데 잘하는 팀은 둘 다 좋다는 게 연구 결과다. 배포 기록(커밋 시각, 배포 시각, 실패 여부, 회복 시각)만 있으면 계산할 수 있고, 리드 타임은 중앙값으로 본다. 팀 평가 점수로 쓰면 숫자를 조작하게 되므로 병목을 찾는 데 쓴다.
+
+### main이 깨졌는데 고치는 데 시간이 걸린다면 어떻게 하나요?
+
+원인 커밋을 먼저 revert해서 main을 초록불로 돌리고, 수정은 다시 PR로 올린다. 깨진 main 위에 다른 변경이 계속 쌓이면 무엇이 무엇을 깨뜨렸는지 가리기 어려워지고 모두가 막힌다. 각각은 통과한 PR 두 개가 합쳐서 깨지는 일을 막으려면 머지 큐로 합친 상태를 한 번 더 테스트한다.
+
+### CI는 통과했는데 운영에서만 문제가 나면 무엇부터 보나요?
+
+운영에 나간 아티팩트의 digest가 빌드 로그의 값과 같은지부터 본다. 다르면 중간에 다시 빌드했거나 태그가 덮어씌워진 것이다. 같다면 결과물이 아니라 설정 차이(환경 변수, 시크릿, 연결된 외부 서비스)를 의심하고, 배포 시각과 에러율 그래프를 겹쳐 보며 그 시각에 무엇이 바뀌었는지 좁힌다.

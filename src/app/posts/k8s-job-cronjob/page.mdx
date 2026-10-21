@@ -1,0 +1,637 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-job-cronjob");
+
+밤새 돈 데이터 내보내기 Job이 아침에 `Failed`로 남아 있다. Pod를 열어 보니 네 개가 전부 `Error`이고, 로그는 마지막 하나만 남았다. 같은 설정 오류로 네 번 실패하는 데 3분이 걸렸고, 그동안 같은 파일을 네 번 반쯤 썼다. 다른 날에는 노드 점검으로 쫓겨난 것까지 실패로 세서 재시도 횟수를 다 써 버렸다. 끝나는 작업을 맡기는 Job은 단순해 보이지만, 실패를 어떻게 세고 언제 포기할지를 정하지 않으면 이런 일이 생긴다.
+
+이 글은 Job 컨트롤러가 Pod를 몇 개, 몇 번, 얼마나 오래 돌리는지 정하는 필드를 따라간다. completions와 parallelism, backoffLimit와 재시도 간격, activeDeadlineSeconds와 ttlSecondsAfterFinished, 번호를 붙여 일을 나누는 Indexed Job과 번호별 재시도, 실패의 종류를 가르는 podFailurePolicy, 그리고 CronJob이 놓친 회차를 어떻게 처리하는지다. 출력은 kwok로 띄운 Kubernetes 1.34.1 클러스터에서 받았다. Job 컨트롤러는 진짜이고, 컨테이너가 성공하거나 정해진 종료 코드로 실패하는 것만 kwok 단계(stage) 설정으로 흉내 냈다.
+
+이 주제의 다른 글: CronJob의 스케줄 문법, 시간대와 서머타임, concurrencyPolicy 세 값의 비교는 [크론 잡 글](/posts/cron-jobs#쿠버네티스-cronjob의-설정들)에서 실제 이벤트로 다뤘다. 여기서는 그 아래의 Job 쪽을 깊게 본다. 작업 자체를 두 번 돌아도 괜찮게 만드는 법은 [배치 처리 글](/posts/batch-processing#두-번-돌아도-결과가-같게-쓴다)에 있다.
+
+## 끝나야 성공인 Pod
+
+Deployment의 Pod는 끝나면 실패다. 컨테이너가 종료되면 kubelet이 다시 띄운다. Job의 Pod는 종료 코드 0으로 끝나야 성공이다. 그래서 Job의 Pod 템플릿에는 `restartPolicy: Always`를 쓸 수 없고 `Never`나 `OnFailure`만 받는다.
+
+- `Never`: 컨테이너가 실패하면 Pod가 `Failed`로 끝나고, Job 컨트롤러가 새 Pod를 만든다. 실패한 Pod가 남아서 로그를 볼 수 있다.
+- `OnFailure`: kubelet이 같은 Pod 안에서 컨테이너만 다시 띄운다. Pod가 노드에 남으니 빠르지만, 재시작 횟수가 backoffLimit에 닿으면 Pod 자체가 종료되어 로그를 보기 어렵다. 공식 문서도 디버깅할 때는 `Never`를 권한다.
+
+Job이 알아야 할 숫자는 두 개다. `completions`는 성공한 Pod가 몇 개 나와야 끝나는지, `parallelism`은 동시에 몇 개까지 돌릴지다. 둘 다 생략하면 1이다.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: thumbs
+  namespace: batch
+spec:
+  completions: 5        # 성공한 Pod가 5개 나와야 끝난다
+  parallelism: 2        # 동시에 최대 2개
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: thumbs
+        image: example/thumbs:1.4
+```
+
+```bash
+# 시각을 붙여 Pod가 생기고 끝나는 순간을 본다
+kubectl -n batch get pods -w --output-watch-events | while read -r l; do echo "$(date +%T) $l"; done
+```
+
+```text
+01:12:07 ADDED      thumbs-52ncp   0/1     Pending   0          0s
+01:12:07 ADDED      thumbs-tnm2c   0/1     Pending   0          0s
+01:12:15 MODIFIED   thumbs-tnm2c   0/1     Completed           0          8s
+01:12:16 ADDED      thumbs-dhkmk   0/1     Pending             0          0s
+01:12:18 MODIFIED   thumbs-52ncp   0/1     Completed           0          11s
+01:12:19 ADDED      thumbs-njn8s   0/1     Pending             0          0s
+01:12:25 MODIFIED   thumbs-dhkmk   0/1     Completed           0          10s
+01:12:25 ADDED      thumbs-dlcdz   0/1     Pending             0          0s
+01:12:27 MODIFIED   thumbs-njn8s   0/1     Completed           0          8s
+01:12:36 MODIFIED   thumbs-dlcdz   0/1     Completed           0          11s
+```
+
+처음 둘이 동시에 생기고, 하나가 끝날 때마다 하나가 채워진다. 마지막 `dlcdz`는 혼자 돈다. 남은 성공이 하나뿐이라 parallelism 2를 다 쓸 이유가 없어서다. 아래 그림의 두 칸이 parallelism이다.
+
+<AlgoTrace
+  caption="completions 5, parallelism 2: 두 칸을 채워 두고 하나가 끝나면 다음 Pod를 넣는다"
+  cells={["칸 1", "칸 2"]}
+  memoryLabel="성공한 Pod"
+  steps={[
+    { pointer: 0, caption: "01:12:07 두 Pod를 동시에 만든다. 성공 0/5." },
+    { pointer: 1, memory: ["tnm2c"], caption: "01:12:15 칸 2의 tnm2c가 끝났다. 1초 뒤 dhkmk로 채운다." },
+    { pointer: 0, memory: ["tnm2c", "52ncp"], caption: "01:12:18 칸 1의 52ncp가 끝나고 njn8s가 들어온다." },
+    { pointer: 1, memory: ["tnm2c", "52ncp", "dhkmk"], caption: "01:12:25 dhkmk가 끝나고 마지막 dlcdz가 들어온다." },
+    { pointer: 0, memory: ["tnm2c", "52ncp", "dhkmk", "njn8s"], caption: "01:12:27 njn8s가 끝났다. 남은 성공이 하나라 칸을 더 채우지 않는다." },
+    { found: [0, 1], memory: ["tnm2c", "52ncp", "dhkmk", "njn8s", "dlcdz"], caption: "01:12:36 5/5. Job이 Complete가 된다." },
+  ]}
+/>
+
+이 방식은 Pod들이 같은 일을 나눠 가질 방법을 Job이 주지 않는다는 점을 기억해 둔다. Pod 다섯이 모두 같은 명령을 받는다. 일감을 나누려면 큐에서 하나씩 꺼내 가게 하거나(작업 큐 패턴, 이때는 completions를 비우고 parallelism만 준다), 아래에서 볼 Indexed Job으로 번호를 받아 범위를 나눈다.
+
+공식 문서에는 한 문장이 더 있다. parallelism과 completions를 1로 두고 `Never`를 써도 같은 프로그램이 두 번 시작될 수 있다. 노드가 끊겨 컨트롤러가 Pod를 잃었다고 판단하는 경우 같은 것이다. 그래서 Job으로 돌리는 작업은 두 번 돌아도 결과가 같아야 한다. 이 이야기는 글 끝에서 다시 한다.
+
+## 실패를 몇 번까지 참나: backoffLimit
+
+`backoffLimit`(기본 6)은 실패한 Pod를 몇 개까지 참을지다. 언제나 실패하는 Job에 3을 줬다.
+
+```yaml
+spec:
+  backoffLimit: 3          # 실패를 3번까지 참는다. 4번째 실패에서 Job이 실패한다
+```
+
+```bash
+# Pod가 만들어진 시각과 끝난 시각, 종료 코드
+kubectl -n batch get pods -l job-name=export --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp,FINISHED:.status.containerStatuses[0].state.terminated.finishedAt,EXIT:.status.containerStatuses[0].state.terminated.exitCode
+kubectl -n batch describe job export | sed -n '/Events/,$p'
+```
+
+```text
+NAME           CREATED                FINISHED               EXIT
+export-pbth2   2026-10-21T01:13:17Z   2026-10-21T01:13:25Z   1
+export-7xrsj   2026-10-21T01:13:35Z   2026-10-21T01:13:40Z   1
+export-drgzh   2026-10-21T01:14:00Z   2026-10-21T01:14:06Z   1
+export-gvvrz   2026-10-21T01:14:46Z   2026-10-21T01:14:52Z   1
+Events:
+  Type     Reason                Age   From            Message
+  ----     ------                ----  ----            -------
+  Normal   SuccessfulCreate      100s  job-controller  Created pod: export-pbth2
+  Normal   SuccessfulCreate      82s   job-controller  Created pod: export-7xrsj
+  Normal   SuccessfulCreate      57s   job-controller  Created pod: export-drgzh
+  Normal   SuccessfulCreate      11s   job-controller  Created pod: export-gvvrz
+  Warning  BackoffLimitExceeded  5s    job-controller  Job has reached the specified backoff limit
+```
+
+Pod 넷, 즉 첫 시도 하나와 재시도 셋이다. 앞 Pod가 끝난 시각에서 다음 Pod가 만들어진 시각까지를 빼 보면 01:13:25 → 35는 10초, 01:13:40 → 14:00은 20초, 01:14:06 → 46은 40초다. 재시도 간격이 10초에서 두 배씩 늘어난다. 공식 문서 기준으로 이 간격의 상한은 10분이다.
+
+<AlgoTrace
+  caption="backoffLimit 3: 실패할 때마다 10초, 20초, 40초를 기다렸다가 다시 만들고, 네 번째 실패에서 멈춘다"
+  cells={["시도 1", "시도 2", "시도 3", "시도 4"]}
+  memoryLabel="실패한 Pod 수"
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "01:13:25 첫 Pod가 종료 코드 1로 끝난다. 실패 1. 한도 3 아래라 다시 한다." },
+    { pointer: 1, memory: ["1", "2"], caption: "10초 뒤 01:13:35 새 Pod. 01:13:40에 실패. 실패 2." },
+    { pointer: 2, memory: ["1", "2", "3"], caption: "20초 뒤 01:14:00 새 Pod. 01:14:06에 실패. 실패 3." },
+    { pointer: 3, memory: ["1", "2", "3", "4"], caption: "40초 뒤 01:14:46 새 Pod. 01:14:52에 실패. 실패 4가 한도 3을 넘는다." },
+    { memory: ["1", "2", "3", "4"], caption: "BackoffLimitExceeded. 남은 Pod를 정리하고 Job은 Failed로 끝난다." },
+  ]}
+/>
+
+Job의 상태 조건도 함께 본다.
+
+```bash
+# 실패 이유는 conditions에 남는다
+kubectl -n batch get job export -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+FailureTarget=True BackoffLimitExceeded: Job has reached the specified backoff limit
+Failed=True BackoffLimitExceeded: Job has reached the specified backoff limit
+```
+
+`FailureTarget`이 먼저 붙고, 남은 Pod가 모두 정리된 뒤 `Failed`가 붙는다. 실패를 감지하는 스크립트나 알림은 `Failed` 조건을 보면 된다. `kubectl wait --for=condition=Failed job/export`로 기다릴 수도 있다.
+
+숫자를 고를 때는 작업의 성격을 본다. 외부 API 일시 장애처럼 다시 하면 될 실패가 많으면 기본값 6이 괜찮다. 결제나 메일처럼 두 번 하면 안 되는 작업은 0으로 두고, 재시도는 작업이 멱등할 때만 켠다. 그리고 "다시 해 봐야 소용없는 실패"(설정 오류, 잘못된 입력)는 횟수와 상관없이 바로 멈추고 싶다. 그게 아래 podFailurePolicy다.
+
+## 시간 한도와 뒷정리
+
+`activeDeadlineSeconds`는 Job 전체가 쓸 수 있는 시간이다. 재시도를 포함해 이 시간을 넘기면 돌던 Pod까지 지우고 실패로 끝낸다. 2분 걸리는 작업에 20초를 줬다.
+
+```yaml
+spec:
+  activeDeadlineSeconds: 20   # Job 전체가 20초를 넘기면 끝낸다
+  backoffLimit: 6
+```
+
+```bash
+# 시간 한도에 걸린 Job
+kubectl -n batch get job reindex
+kubectl -n batch get pods -l job-name=reindex
+kubectl -n batch describe job reindex | sed -n '/Events/,$p'
+```
+
+```text
+NAME      STATUS   COMPLETIONS   DURATION   AGE
+reindex   Failed   0/1           30s        30s
+No resources found in batch namespace.
+Events:
+  Type     Reason            Age   From            Message
+  ----     ------            ----  ----            -------
+  Normal   SuccessfulCreate  30s   job-controller  Created pod: reindex-4znsm
+  Normal   SuccessfulDelete  10s   job-controller  Deleted pod: reindex-4znsm
+  Warning  DeadlineExceeded  5s    job-controller  Job was active longer than specified deadline
+```
+
+Pod가 지워져서 로그도 없다. 시간 한도로 죽은 작업이 어디까지 했는지 알려면 로그를 클러스터 밖으로 보내 두거나, 작업이 진행 위치를 DB에 남겨야 한다. `activeDeadlineSeconds`가 `backoffLimit`보다 먼저다. 시간 안에 재시도가 남아 있어도 시간이 끝나면 멈춘다.
+
+이 값이 없으면 멈춰 버린 작업(데드락, 응답 없는 외부 호출)이 영원히 돈다. CronJob에서 `concurrencyPolicy: Forbid`와 만나면 그 하나가 이후 모든 회차를 막는다. 그래서 정기 작업에는 평소 실행 시간의 몇 배 정도로 꼭 걸어 둔다.
+
+뒷정리는 `ttlSecondsAfterFinished`가 맡는다. 성공이든 실패든 끝나고 이 시간이 지나면 TTL 컨트롤러가 Job과 Pod를 지운다(1.23부터 정식).
+
+```yaml
+spec:
+  ttlSecondsAfterFinished: 30  # 끝나고 30초 뒤 Job과 Pod를 지운다
+```
+
+실습에서 `cleanup` Job은 끝난 지 30초 남짓 뒤에 목록에서 사라졌다. 이 값이 없는 Job은 끝나도 Pod와 함께 계속 남는다. 하루에 수천 개를 만드는 파이프라인이라면 etcd와 API 서버에 끝난 객체가 쌓인다. 반대로 너무 짧으면 실패 원인을 보기 전에 사라진다. 실패를 조사할 시간(예: 하루)을 남기고, 로그는 따로 모은다. CronJob이 만든 Job은 `successfulJobsHistoryLimit`, `failedJobsHistoryLimit`로 개수 기준 정리를 하니 둘 중 먼저 걸리는 쪽이 지운다.
+
+## 번호를 받아 일을 나누는 Indexed Job
+
+`completionMode: Indexed`로 두면 Pod마다 0부터 `completions-1`까지 번호가 붙는다. 번호마다 성공이 하나씩 나와야 Job이 끝난다.
+
+```yaml
+spec:
+  completionMode: Indexed   # Pod마다 0..completions-1 번호를 준다
+  completions: 4
+  parallelism: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: worker
+        image: example/shard-worker:1.0
+        command: ["sh", "-c", "process --shard=$JOB_COMPLETION_INDEX --total=4"]
+```
+
+```bash
+# 번호, hostname, 컨트롤러가 넣은 환경 변수
+kubectl -n batch get pods -l job-name=shard \
+  -o custom-columns=NAME:.metadata.name,INDEX:.metadata.annotations.batch\\.kubernetes\\.io/job-completion-index,HOSTNAME:.spec.hostname,STATUS:.status.phase
+kubectl -n batch get pod shard-0-7kt25 \
+  -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.valueFrom.fieldRef.fieldPath}{"\n"}{end}'
+kubectl -n batch get job shard -o jsonpath='{.status.completedIndexes} succeeded={.status.succeeded}{"\n"}'
+```
+
+```text
+NAME            INDEX   HOSTNAME   STATUS
+shard-0-7kt25   0       shard-0    Running
+shard-1-nf97t   1       shard-1    Running
+JOB_COMPLETION_INDEX=metadata.labels['batch.kubernetes.io/job-completion-index']
+0-3 succeeded=4
+```
+
+매니페스트에 적지 않은 `JOB_COMPLETION_INDEX` 환경 변수를 컨트롤러가 넣었다. 값은 Pod 라벨에서 온다. 번호는 어노테이션, 라벨, hostname, Pod 이름에 모두 들어간다. Pod 이름을 조각으로 읽어 보면 이렇다.
+
+<UrlAnatomy
+  caption="Indexed Job의 Pod 이름. 가운데 숫자가 번호다"
+  separator="-"
+  joiner="-"
+  base="shard-pi"
+  params={[
+    { key: "2", display: "2", title: "완료 번호", description: "0부터 completions-1까지. JOB_COMPLETION_INDEX 환경 변수와 batch.kubernetes.io/job-completion-index 라벨에도 같은 값이 들어간다. 같은 번호의 Pod가 실패하면 다음 Pod도 같은 번호를 받는다.", required: true },
+    { key: "4hwtv", display: "4hwtv", title: "무작위 접미사", description: "같은 번호로 다시 만든 Pod를 구분한다. 실습에서 번호 2는 4xgj5로 한 번, 4hwtv로 한 번 돌았다. hostname은 접미사 없이 shard-pi-2다." },
+  ]}
+/>
+
+hostname이 `shard-0`처럼 고정되니 headless Service를 붙이면 Pod끼리 이름으로 찾을 수 있다. MPI나 분산 학습처럼 워커들이 서로 연결해야 하는 작업에 쓴다. 완료 상태는 `completedIndexes`에 `0-3`처럼 구간으로 남는다.
+
+번호를 받으면 범위를 나누는 일은 앱 몫이다. 전체 건수를 completions로 고르게 나누고 남는 건 앞 번호부터 하나씩 더 준다.
+
+<CodePlayground
+  caption="번호와 전체 건수로 이 Pod가 맡을 [시작, 끝) 범위를 구한다"
+  functionName="shardRange"
+  initialCode={`function shardRange(index, completions, total) {\n  // [start, end)를 배열로 돌려준다\n  return [0, 0];\n}`}
+  solution={`function shardRange(index, completions, total) {\n  const base = Math.floor(total / completions);\n  const rem = total % completions;\n  const start = index * base + Math.min(index, rem);\n  const end = start + base + (index < rem ? 1 : 0);\n  return [start, end];\n}`}
+  tests={[
+    { args: [0, 4, 10], expected: [0, 3], label: "10건을 4개로, 번호 0" },
+    { args: [1, 4, 10], expected: [3, 6], label: "번호 1" },
+    { args: [2, 4, 10], expected: [6, 8], label: "번호 2" },
+    { args: [3, 4, 10], expected: [8, 10], label: "번호 3" },
+    { args: [4, 5, 3], expected: [3, 3], label: "건수보다 번호가 많으면 빈 범위" },
+  ]}
+/>
+
+범위를 실행 시각이 아니라 번호로 정하면, 같은 번호가 다시 돌아도 같은 범위를 본다. 재시도가 안전해지는 첫걸음이다. DB에서 범위를 나눠 여러 작업자가 돌리는 다른 방법(SKIP LOCKED 작업 큐)은 [배치 처리 글](/posts/batch-processing#여러-작업자로-나눠-돌리기)에 있다.
+
+### 번호마다 따로 세는 backoffLimitPerIndex
+
+backoffLimit은 Job 전체의 실패를 센다. 번호 하나가 계속 실패하면 그 하나가 한도를 다 써서 멀쩡한 나머지까지 멈춘다. `backoffLimitPerIndex`(1.33부터 정식)는 번호마다 따로 센다. 번호 2만 언제나 종료 코드 3으로 실패하게 만들어 돌렸다.
+
+```yaml
+spec:
+  completionMode: Indexed
+  completions: 4
+  parallelism: 4
+  backoffLimitPerIndex: 1   # 번호마다 재시도 1번
+  maxFailedIndexes: 1       # 실패한 번호가 1개를 넘으면 Job 전체를 일찍 멈춘다
+```
+
+```bash
+# 번호별 결과와 Job 상태
+kubectl -n batch get pods -l job-name=shard-pi --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name,INDEX:.metadata.annotations.batch\\.kubernetes\\.io/job-completion-index,STATUS:.status.phase,EXIT:.status.containerStatuses[0].state.terminated.exitCode
+kubectl -n batch get job shard-pi \
+  -o jsonpath='completed={.status.completedIndexes} failed={.status.failedIndexes} succeeded={.status.succeeded} failedPods={.status.failed}{"\n"}{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+NAME               INDEX   STATUS      EXIT
+shard-pi-0-6bdrh   0       Succeeded   0
+shard-pi-1-7wvft   1       Succeeded   0
+shard-pi-2-4xgj5   2       Failed      3
+shard-pi-3-7hn5g   3       Succeeded   0
+shard-pi-2-4hwtv   2       Failed      3
+completed=0,1,3 failed=2 succeeded=3 failedPods=2
+FailureTarget=True FailedIndexes: Job has failed indexes
+Failed=True FailedIndexes: Job has failed indexes
+```
+
+번호 2는 한 번 재시도한 뒤 실패로 표시됐고(`failed=2`), 0, 1, 3은 끝까지 갔다. 결과는 여전히 `Failed`다. 실패한 번호가 하나라도 있으면 Job은 실패로 끝난다. `maxFailedIndexes`는 그 수를 넘으면 남은 번호를 기다리지 않고 바로 멈추게 하는 장치다. 이 방식의 장점은 무엇을 다시 돌릴지가 정확하다는 것이다. `failedIndexes`에 적힌 번호만 새 Job으로 다시 돌리면 된다. backoffLimitPerIndex를 주면 backoffLimit의 기본값은 int32 최댓값으로 바뀌어 전체 한도로는 멈추지 않는다.
+
+아래 그림이 번호 넷이 데이터 조각 넷을 나눠 맡고, 번호 2만 다시 도는 모습이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="번호마다 맡은 범위가 있고, 실패한 번호만 같은 범위로 다시 돈다"
+  zones={[
+    { id: "job", label: "Job shard-pi", x: 6, y: 6, w: 388, h: 112, tone: "private" },
+    { id: "data", label: "orders 테이블", x: 6, y: 186, w: 388, h: 108, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "p0", label: "idx 0", sub: "Succeeded", x: 56, y: 70, icon: "container", w: 88 },
+    { id: "p1", label: "idx 1", sub: "Succeeded", x: 152, y: 70, icon: "container", w: 88 },
+    { id: "p2", label: "idx 2", sub: "exit 3", x: 248, y: 70, icon: "container", w: 88 },
+    { id: "p3", label: "idx 3", sub: "Succeeded", x: 344, y: 70, icon: "container", w: 88 },
+    { id: "d0", label: "id 0~3", x: 56, y: 248, icon: "db", w: 88 },
+    { id: "d1", label: "id 3~6", x: 152, y: 248, icon: "db", w: 88 },
+    { id: "d2", label: "id 6~8", x: 248, y: 248, icon: "db", w: 88 },
+    { id: "d3", label: "id 8~10", x: 344, y: 248, icon: "db", w: 88 },
+  ]}
+  links={[
+    { from: "p0", to: "d0" },
+    { from: "p1", to: "d1" },
+    { from: "p2", to: "d2" },
+    { from: "p3", to: "d3" },
+  ]}
+  steps={[
+    { path: ["p0", "d0"], packet: "0~3", title: "번호마다 자기 범위", detail: "번호 0은 앞의 3건을 맡는다. 다른 번호와 겹치지 않는다." },
+    { path: ["p2", "d2"], packet: "6~8", blocked: true, title: "번호 2가 실패한다", detail: "종료 코드 3. backoffLimitPerIndex가 1이라 이 번호만 한 번 더 할 수 있다. 다른 번호는 영향이 없다." },
+    { path: ["p2", "d2"], packet: "retry", blocked: true, title: "같은 번호, 같은 범위로 다시", detail: "새 Pod shard-pi-2-4hwtv가 같은 번호 2를 받는다. 다시 실패해서 failedIndexes에 2가 적힌다." },
+    { path: ["p3", "d3"], packet: "8~10", highlight: ["p1"], title: "나머지는 끝까지 간다", detail: "0, 1, 3이 성공한다. Job은 FailedIndexes로 실패하지만 무엇을 다시 돌릴지는 분명하다. 번호 2만." },
+  ]}
+/>
+
+반대 방향도 있다. 분산 학습처럼 리더(0번)만 성공하면 되는 작업은 `successPolicy`(1.33부터 정식)로 성공 조건을 바꾼다.
+
+```yaml
+spec:
+  completionMode: Indexed
+  completions: 4
+  parallelism: 4
+  successPolicy:
+    rules:
+    - succeededIndexes: "0"     # 0번이 성공하면 Job 성공
+```
+
+```text
+NAME    STATUS     COMPLETIONS   DURATION   AGE
+train   Complete   2/4           29s        31s
+SuccessCriteriaMet=True SuccessPolicy: Matched rules at index 0
+Complete=True SuccessPolicy: Matched rules at index 0
+  Normal  SuccessfulDelete  6s    job-controller  Deleted pod: train-3-ctlt5
+  Normal  SuccessfulDelete  6s    job-controller  Deleted pod: train-2-brq5r
+  Normal  Completed         2s    job-controller  Job completed
+```
+
+0번과 1번이 끝난 순간 규칙이 맞았고, 아직 돌던 2번과 3번은 지워졌다. 완료 수는 2/4인데 Job은 Complete다. 여러 Pod를 묶어 한 번에 띄워야 하는 학습 작업의 스케줄링(갱 스케줄링, 대기열)은 Job 하나로는 모자라서 Kueue나 JobSet을 쓴다. 그 이야기는 [배치 대기열 글](/posts/k8s-batch-kueue)에서 이어진다.
+
+## 실패의 종류를 가르는 podFailurePolicy
+
+backoffLimit은 실패를 모두 같게 센다. 하지만 실패에는 종류가 있다. 앱이 "설정이 틀렸다"고 정해진 코드로 끝났다면 다시 해 봐야 소용없다. 노드 점검으로 쫓겨났다면 앱 잘못이 아니니 횟수에서 빼야 한다. `podFailurePolicy`(1.31부터 정식)가 이 구분을 한다.
+
+```yaml
+spec:
+  backoffLimit: 6
+  podFailurePolicy:
+    rules:
+    - action: FailJob            # 설정 오류(42)는 다시 해 봐야 소용없다
+      onExitCodes:
+        containerName: migrate
+        operator: In
+        values: [42]
+    - action: Ignore             # 노드 drain·선점으로 쫓겨난 건 실패로 세지 않는다
+      onPodConditions:
+      - type: DisruptionTarget
+  template:
+    spec:
+      restartPolicy: Never       # podFailurePolicy는 Never에서만 쓸 수 있다
+```
+
+규칙은 위에서부터 차례로 맞춰 보고 처음 맞은 것 하나만 적용한다. 동작은 넷이다. `FailJob`은 Job을 바로 실패시키고, `Ignore`는 실패로 세지 않고 다시 만들고, `Count`는 평소처럼 세고, `FailIndex`는 Indexed Job에서 그 번호만 실패로 표시한다. 맞는 규칙이 없으면 `Count`다. 아래 그림은 Pod 하나가 끝났을 때 컨트롤러가 무엇을 보는지다.
+
+<SequenceDiagram
+  caption="Pod가 끝나면 Job 컨트롤러가 종료 코드와 조건을 규칙에 차례로 맞춰 본다"
+  actors={[
+    { id: "kubelet", label: "kubelet" },
+    { id: "api", label: "API 서버" },
+    { id: "job", label: "Job 컨트롤러" },
+  ]}
+  steps={[
+    { from: "kubelet", to: "api", label: "phase: Failed", title: "Pod가 끝났다고 알린다", detail: "컨테이너 종료 코드와 Pod 조건이 status에 남는다. 쫓겨난 Pod에는 DisruptionTarget 조건이 먼저 붙어 있다.", payload: "exitCode: 42, reason: Error" },
+    { from: "api", to: "job", label: "watch", title: "컨트롤러가 본다", detail: "podFailurePolicy가 있으면 Pod가 Failed 같은 끝 상태가 될 때까지 기다렸다가 판단한다. Terminating만으로는 세지 않는다." },
+    { from: "job", to: "job", label: "규칙 0: exit 42?", title: "위에서부터 맞춰 본다", detail: "첫 규칙 onExitCodes In [42]가 맞는다. 다음 규칙은 보지 않는다." },
+    { from: "job", to: "api", label: "FailureTarget", title: "FailJob이면 바로 끝낸다", detail: "backoffLimit이 6이어도 재시도하지 않는다. 남은 Pod를 정리하고 Failed를 붙인다.", payload: "reason: PodFailurePolicy" },
+  ]}
+/>
+
+종료 코드 42로 끝나게 만들어 돌렸다.
+
+```bash
+# backoffLimit 6인데 Pod 하나로 끝났는지 본다
+kubectl -n batch get job migrate
+kubectl -n batch get job migrate -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+NAME      STATUS   COMPLETIONS   DURATION   AGE
+migrate   Failed   0/1           21s        21s
+FailureTarget=True PodFailurePolicy: Container migrate for pod batch/migrate-jmrm2 failed with exit code 42 matching FailJob rule at index 0
+Failed=True PodFailurePolicy: Container migrate for pod batch/migrate-jmrm2 failed with exit code 42 matching FailJob rule at index 0
+```
+
+재시도 없이 Pod 하나로 끝났고, 메시지가 어느 규칙에 걸렸는지까지 알려 준다. 이 규칙이 쓸모 있으려면 앱이 실패를 종료 코드로 구분해 줘야 한다. "다시 해도 안 되는 실패"에 정해진 코드를 쓰도록 앱과 약속한다. 137(SIGKILL, 대개 OOMKilled)이나 143(SIGTERM)처럼 런타임이 정하는 코드와는 겹치지 않게 고른다. 종료 코드의 뜻은 [Pod 일생 글](/posts/k8s-pod-lifecycle#종료-코드로-읽는-마지막-순간)에 있다.
+
+### 쫓겨난 Pod는 세지 않는다
+
+두 번째 규칙을 확인하려고 `backoffLimit: 0`인 Job을 띄우고 그 노드를 drain했다. 실패를 하나도 못 참는 Job이다.
+
+```bash
+# Job Pod가 있는 노드를 비운다
+kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data --pod-selector=job-name=nightly
+kubectl -n batch get pod nightly-lz758 -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+```text
+evicting pod batch/nightly-lz758
+pod/nightly-lz758 evicted
+node/worker-2 drained
+Initialized=True : 
+Ready=True : 
+ContainersReady=True : 
+PodScheduled=True : 
+DisruptionTarget=True EvictionByEvictionAPI: Eviction API: evicting
+```
+
+Eviction API가 Pod에 `DisruptionTarget` 조건을 붙였다. kwok에는 컨테이너를 실제로 멈추는 kubelet이 없어서, kubelet이 할 일(Pod를 종료 코드 143, `Failed`로 바꾸기)은 status를 직접 고쳐 대신했다. 그 뒤의 판단은 진짜 Job 컨트롤러가 했다.
+
+```bash
+# 실패 수와 새 Pod
+kubectl -n batch get pods -l job-name=nightly -o wide
+kubectl -n batch get job nightly -o jsonpath='failed={.status.failed} active={.status.active}{"\n"}'
+```
+
+```text
+NAME            READY   STATUS              RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+nightly-mf65q   0/1     ContainerCreating   0          5s    10.0.0.20   worker-1   <none>           <none>
+failed= active=1
+```
+
+실패 수는 비어 있고(0), 다른 노드에 새 Pod가 떴다. 규칙이 없었다면 backoffLimit 0인 이 Job은 drain 한 번에 실패로 끝났을 것이다. 흐름을 노드 위에서 보면 이렇다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="drain으로 쫓겨난 Pod는 DisruptionTarget이 붙고, Ignore 규칙 덕분에 실패로 세지 않고 다른 노드에 다시 뜬다"
+  zones={[
+    { id: "w2", label: "worker-2 drain", x: 6, y: 110, w: 186, h: 162, tone: "edge" },
+    { id: "w1", label: "worker-1", x: 208, y: 110, w: 186, h: 162, tone: "private" },
+  ]}
+  nodes={[
+    { id: "op", label: "kubectl", sub: "drain", x: 70, y: 40, icon: "client", w: 100 },
+    { id: "job", label: "Job 컨트롤러", sub: "backoffLimit 0", x: 300, y: 40, icon: "server", w: 130 },
+    { id: "old", label: "lz758", sub: "Failed 143", x: 99, y: 190, icon: "container", w: 110 },
+    { id: "new", label: "mf65q", sub: "새 Pod", x: 301, y: 190, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "op", to: "old", label: "evict" },
+    { from: "old", to: "job", dashed: true },
+    { from: "job", to: "new" },
+  ]}
+  steps={[
+    { path: ["op", "old"], packet: "evict", title: "Eviction API로 쫓아낸다", detail: "drain은 Pod를 바로 지우지 않고 Eviction API를 부른다. API 서버가 DisruptionTarget 조건을 붙이고 삭제를 시작한다.", payload: "DisruptionTarget=True EvictionByEvictionAPI" },
+    { path: ["old"], highlight: ["job"], title: "끝 상태가 될 때까지 기다린다", detail: "podFailurePolicy가 있으면 교체 정책 기본값이 Failed라서, 컨트롤러는 Pod가 Failed가 된 뒤에 판단하고 새 Pod를 만든다." },
+    { path: ["old", "job"], packet: "143", title: "규칙 1: DisruptionTarget이면 Ignore", detail: "종료 코드 143은 42가 아니라 규칙 0은 안 맞고, 규칙 1이 맞는다. 실패 수에 넣지 않는다." },
+    { path: ["job", "new"], packet: "Pod", title: "다른 노드에 다시 만든다", detail: "worker-2는 cordon 상태라 worker-1로 간다. failed는 여전히 0이다." },
+  ]}
+/>
+
+교체 시점도 짚어 둔다. podFailurePolicy가 없는 Job은 Pod에 삭제 표시가 붙자마자 새 Pod를 만든다(`podReplacementPolicy: TerminatingOrFailed`). 옛 Pod가 종료 유예 시간 동안 아직 도는데 새 Pod가 함께 도는 순간이 생긴다는 뜻이다. 같은 파일에 쓰는 작업이라면 둘이 겹친다. `podReplacementPolicy: Failed`(1.34부터 정식)를 주면 옛 Pod가 완전히 끝난 뒤에 만든다. podFailurePolicy가 있으면 이 값이 기본이고 다른 값은 받지 않는다. 위 실습에서 새 Pod가 옛 Pod가 Failed가 된 뒤에야 생긴 이유다. PDB로 drain 속도를 조절하는 법은 [PodDisruptionBudget 글](/posts/k8s-pod-disruption-budget)에 있다.
+
+## 멈춰 두고, 손으로 돌리고
+
+Job은 `suspend: true`로 만들면 Pod를 만들지 않고 기다린다. 대기열 시스템이 자리가 날 때 풀어 주는 방식이 이걸 쓴다.
+
+```bash
+# 멈춘 채로 만든 Job을 풀어 준다
+kubectl -n batch get job backfill
+kubectl -n batch patch job backfill --type merge -p '{"spec":{"suspend":false}}'
+kubectl -n batch describe job backfill | sed -n '/Events/,$p'
+```
+
+```text
+NAME       STATUS      COMPLETIONS   DURATION   AGE
+backfill   Suspended   0/1                      3s
+job.batch/backfill patched
+Events:
+  Type    Reason            Age   From            Message
+  ----    ------            ----  ----            -------
+  Normal  Suspended         7s    job-controller  Job suspended
+  Normal  SuccessfulCreate  4s    job-controller  Created pod: backfill-jnhjc
+  Normal  Resumed           4s    job-controller  Job resumed
+```
+
+돌고 있는 Job을 suspend하면 아직 끝나지 않은 Pod에 SIGTERM을 보내 종료시키고, 이렇게 끝난 Pod는 completions에 들어가지 않는다. 앱이 종료 유예 시간 안에 진행 위치를 저장해야 하는 이유다. 다시 풀면 시작 시각이 새로 잡혀 activeDeadlineSeconds도 처음부터 잰다. 그리고 Job의 Pod 템플릿은 만든 뒤에 못 바꾼다.
+
+```bash
+# 만든 Job의 이미지를 바꿔 본다
+kubectl -n batch set image job/backfill backfill=example/backfill:1.1
+```
+
+```text
+error: failed to patch image update to pod template: Job.batch "backfill" is invalid: spec.template: Invalid value: ...: field is immutable
+```
+
+(가운데의 긴 템플릿 덤프는 줄였다.) 고친 이미지로 다시 돌리려면 지우고 새로 만든다. 같은 이름을 쓰려면 이전 Job을 먼저 지워야 하니, 파이프라인에서는 이름에 실행 번호나 시각을 붙이거나 `generateName`을 쓴다. Helm 훅으로 마이그레이션 Job을 돌리다 "field is immutable"을 만나는 것도 같은 이유다([Helm 릴리스 글](/posts/helm-release-lifecycle)).
+
+## CronJob은 놓친 회차를 몰아서 돌리지 않는다
+
+CronJob은 정해진 시각마다 Job 템플릿으로 Job을 하나 만든다. 설정 하나하나의 동작은 [크론 잡 글](/posts/cron-jobs#쿠버네티스-cronjob의-설정들)에서 실제 이벤트로 봤으니, 여기서는 그 글에서 다루지 않은 질문 하나를 확인했다. 컨트롤러가 회차를 여러 번 놓치면 돌아왔을 때 몇 번 돌리나.
+
+매분 도는 CronJob을 만들고, 3분 넘게 `suspend: true`로 멈췄다가 풀었다. `startingDeadlineSeconds`는 300초라 놓친 세 회차 모두 "늦게라도 시작해도 되는" 범위 안이다.
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: digest
+  namespace: batch
+spec:
+  schedule: "* * * * *"
+  timeZone: "Asia/Seoul"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: digest
+            image: example/digest:1.2
+```
+
+```bash
+# 01:23:35에 멈추고 01:26:55에 풀었다. 풀고 20초 뒤
+kubectl -n batch get cronjob digest
+kubectl -n batch get jobs
+kubectl -n batch get events --field-selector involvedObject.kind=CronJob --sort-by=.lastTimestamp
+```
+
+```text
+NAME     SCHEDULE    TIMEZONE     SUSPEND   ACTIVE   LAST SCHEDULE   AGE
+digest   * * * * *   Asia/Seoul   False     1        15s             4m55s
+NAME              STATUS     COMPLETIONS   DURATION   AGE
+digest-29875763   Complete   1/1           13s        4m15s
+digest-29875766   Complete   1/1           14s        20s
+digest-29875767   Running    0/1           6s         6s
+LAST SEEN   TYPE     REASON             OBJECT           MESSAGE
+4m15s       Normal   SuccessfulCreate   cronjob/digest   Created job digest-29875763
+4m2s        Normal   SawCompletedJob    cronjob/digest   Saw completed job: digest-29875763, condition: Complete
+20s         Normal   SuccessfulCreate   cronjob/digest   Created job digest-29875766
+6s          Normal   JobAlreadyActive   cronjob/digest   Not starting job because prior execution is running and concurrency policy is Forbid
+6s          Normal   SawCompletedJob    cronjob/digest   Saw completed job: digest-29875766, condition: Complete
+6s          Normal   SuccessfulCreate   cronjob/digest   Created job digest-29875767
+```
+
+Job 이름 끝 숫자는 예정 시각을 유닉스 분으로 적은 것이다. 29875763 × 60초는 2026-10-21 01:23:00 UTC(한국 시각 10:23), 29875766은 01:26:00, 29875767은 01:27:00이다. 멈춰 있던 동안 01:24, 01:25, 01:26 세 회차를 놓쳤는데, 풀린 뒤 만든 것은 가장 최근의 01:26 회차 하나뿐이다. 01:24와 01:25는 그냥 지나갔다. 그다음 01:27 회차는 정상으로 돌았다.
+
+정리하면 컨트롤러는 놓친 회차를 세기는 하지만 그중 마지막 하나만 실행한다. 정산처럼 회차마다 한 번씩 꼭 돌아야 하는 작업이라면, 이 동작 때문에 빠진 날이 생긴다. 그래서 작업이 "어제 하루"처럼 고정된 범위가 아니라 "마지막으로 처리한 지점부터 지금까지"를 처리하게 만들면 빠진 회차가 다음 회차에서 메워진다. 반대로 고정 범위로 처리하는 작업이라면 빠진 회차를 알아채는 감시가 필요하다([크론 잡 글](/posts/cron-jobs#안-돈-것을-알아채는-법)의 dead man's switch).
+
+놓친 회차가 100개를 넘으면 아예 시작하지 않고 "too many missed start times" 에러를 남긴다고 공식 문서가 적고 있다. `startingDeadlineSeconds`를 주면 그 시간 안의 회차만 세니 이 문제를 피한다. 매분 도는 CronJob에 이 값이 없으면 컨트롤러가 두 시간 가까이 멈췄다 돌아왔을 때 이 한도에 걸린다.
+
+### 손으로 한 번 돌리기
+
+배포 직후 확인하거나 실패한 회차를 다시 돌릴 때는 CronJob에서 Job을 바로 만든다.
+
+```bash
+# CronJob 템플릿으로 Job 하나를 지금 만든다
+kubectl -n batch create job digest-manual --from=cronjob/digest
+kubectl -n batch get job digest-manual -o jsonpath='{.metadata.annotations}{"\n"}{.metadata.ownerReferences}{"\n"}'
+```
+
+```text
+job.batch/digest-manual created
+{"cronjob.kubernetes.io/instantiate":"manual"}
+[{"apiVersion":"batch/v1","controller":true,"kind":"CronJob","name":"digest","uid":"0ac42f02-da86-4d7e-827e-9fe32bbe470a"}]
+```
+
+`instantiate: manual` 어노테이션이 붙고 주인은 CronJob이다. CronJob을 지우면 이 Job도 함께 지워진다. 손으로 돌린 시각이 예약 회차와 가까우면 두 Job이 같은 범위를 처리할 수 있으니, 정기 작업 바로 앞뒤에는 손 실행을 피하거나 작업 쪽 잠금에 기댄다.
+
+CronJob의 `jobTemplate`을 고치면 다음 회차부터 적용된다. 이미 돌고 있는 Job은 옛 템플릿 그대로다. 이미지를 고쳤는데 "아직도 옛 버전이 돈다"면 그 회차가 고치기 전에 만들어졌는지 Job의 생성 시각을 본다.
+
+## 두 번 돌아도 괜찮게 만들기
+
+여기까지 본 장치를 모아 보면, 쿠버네티스가 약속하는 것은 "정확히 한 번"이 아니다. Job은 같은 프로그램을 두 번 시작할 수 있고, 교체 정책에 따라 옛 Pod와 새 Pod가 겹칠 수 있고, CronJob은 회차를 건너뛰거나 드물게 두 번 만든다. 그래서 작업 쪽이 마지막 방어선이 된다.
+
+- 처리 범위는 번호나 회차로 정한다. Indexed Job의 번호, CronJob 회차 시각(Job 이름 끝 숫자를 환경 변수로 넘기는 방법이 있다)으로 범위를 계산하면 다시 돌아도 같은 범위다.
+- 쓰기는 덮어쓰기(upsert)로 한다. 더하기는 두 번 돌면 두 배다.
+- 바깥으로 나가는 동작(메일, 결제, 웹훅)에는 회차와 대상으로 만든 키를 붙인다. [멱등성 키 글](/posts/idempotency-key)의 방식이다.
+- 긴 작업은 진행 위치를 결과와 같은 트랜잭션에 적어 둔다. activeDeadlineSeconds로 끊겨도 이어서 할 수 있다.
+- "다시 해도 안 되는 실패"는 정해진 종료 코드로 끝내고 podFailurePolicy로 바로 멈춘다.
+
+사이드카를 붙인 Job이 끝나지 않는 문제(메인 컨테이너는 끝났는데 프록시가 계속 돈다)는 네이티브 사이드카로 풀린다. [멀티 컨테이너 글](/posts/k8s-pod-multicontainer#job이-끝나지-않는-이유)에 있다.
+
+## Job이 이상할 때 보는 순서
+
+```bash
+# 1. 상태 조건: 왜 끝났는지 reason이 말해 준다
+kubectl -n batch get job export -o jsonpath='{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
+# 2. Pod별 종료 코드와 시각
+kubectl -n batch get pods -l job-name=export --sort-by=.metadata.creationTimestamp \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,EXIT:.status.containerStatuses[0].state.terminated.exitCode
+# 3. 마지막으로 실패한 Pod의 로그
+kubectl -n batch logs job/export
+# 4. CronJob이면 마지막 예약 시각과 성공 시각
+kubectl -n batch get cronjob digest -o jsonpath='{.status.lastScheduleTime} {.status.lastSuccessfulTime}{"\n"}'
+```
+
+reason으로 갈래가 나뉜다. `BackoffLimitExceeded`면 Pod 로그와 종료 코드를 본다. `DeadlineExceeded`면 작업이 느려졌거나 멈춘 것이니 Pod가 지워지기 전의 로그(로그 수집 시스템)를 본다. `PodFailurePolicy`면 메시지에 걸린 규칙 번호가 있다. `FailedIndexes`면 `status.failedIndexes`의 번호만 다시 돌린다. Job이 Running인데 Pod가 없으면 suspend인지, Pending이면 [Pod 문제 해결 글](/posts/k8s-pod-troubleshooting)의 순서로 간다. 끝난 Pod에 셸을 붙여 볼 수는 없으니, 같은 템플릿으로 명령만 바꾼 Pod를 띄워 들어가는 `kubectl debug --copy-to`를 쓴다([kubectl 필수 명령 글](/posts/kubectl-essentials)).
+
+## 끝나는 작업의 숫자들
+
+Job은 성공한 Pod 수(completions)를 채울 때까지 동시에 parallelism만큼 Pod를 돌린다. 실패는 backoffLimit까지 10초부터 두 배씩 기다리며 다시 하고, 전체 시간은 activeDeadlineSeconds로 자르고, 끝난 뒤에는 ttlSecondsAfterFinished로 치운다. Indexed Job은 번호로 일을 나누고 번호마다 실패를 센다. podFailurePolicy는 다시 해도 안 되는 실패를 바로 멈추고, 쫓겨난 Pod는 세지 않는다. CronJob은 놓친 회차 중 마지막 하나만 돌린다. 이 모든 것 위에서 작업은 두 번 돌아도 결과가 같아야 한다. 계속 떠 있는 Pod를 다루는 [StatefulSet](/posts/k8s-statefulset)과 [DaemonSet](/posts/k8s-daemonset) 글과 함께 보면 Workloads의 컨트롤러가 각자 무엇을 고정하는지 정리된다.
+
+## 면접에서 나올 만한 질문
+
+### Job의 completions와 parallelism은 무엇을 정하나요?
+
+completions는 성공한 Pod가 몇 개 나와야 Job이 끝나는지, parallelism은 동시에 몇 개까지 돌릴지다. 하나가 끝나면 남은 성공 수 안에서 빈자리를 채운다. Pod들이 일을 어떻게 나눌지는 Job이 정하지 않으니, 작업 큐에서 꺼내 가게 하거나 Indexed Job으로 번호를 받아 범위를 나눈다.
+
+### backoffLimit에 걸리기까지 어떤 일이 일어나나요?
+
+실패한 Pod 수가 backoffLimit(기본 6)을 넘으면 Job이 BackoffLimitExceeded로 실패한다. 그 사이 새 Pod는 10초, 20초, 40초처럼 두 배씩 늘어나는 간격(상한 10분)을 두고 만들어진다. restartPolicy가 OnFailure면 컨테이너 재시작 횟수도 함께 센다. 두 번 하면 안 되는 작업은 0으로 두고, 재시도는 멱등할 때만 켠다.
+
+### activeDeadlineSeconds와 ttlSecondsAfterFinished는 어떻게 다른가요?
+
+activeDeadlineSeconds는 Job이 돌 수 있는 최대 시간이고, 넘기면 Pod를 지우고 DeadlineExceeded로 실패시킨다. 재시도가 남아 있어도 시간이 우선이다. ttlSecondsAfterFinished는 끝난 뒤 Job과 Pod를 지우기까지의 시간이라 뒷정리용이다. 앞의 것은 멈춘 작업이 다음 회차를 막지 않게, 뒤의 것은 끝난 객체가 쌓이지 않게 한다.
+
+### Indexed Job은 언제 쓰나요?
+
+Pod마다 0부터 번호를 줘서 일을 겹치지 않게 나눌 때 쓴다. 번호는 JOB_COMPLETION_INDEX 환경 변수와 라벨, hostname으로 들어가고, 번호마다 성공이 하나씩 나와야 끝난다. backoffLimitPerIndex로 번호마다 실패를 따로 세면 하나가 계속 실패해도 나머지는 끝까지 가고, failedIndexes의 번호만 다시 돌리면 된다. 리더만 성공하면 되는 작업은 successPolicy로 성공 조건을 바꾼다.
+
+### podFailurePolicy는 왜 필요한가요?
+
+실패의 종류에 따라 다르게 처리하려고 쓴다. 설정 오류처럼 다시 해도 안 되는 실패는 정해진 종료 코드로 FailJob을 걸어 바로 멈추고, drain이나 선점으로 쫓겨난 Pod는 DisruptionTarget 조건으로 Ignore해서 실패로 세지 않는다. restartPolicy가 Never여야 쓸 수 있고, 규칙은 위에서부터 처음 맞는 하나만 적용된다. 이게 있으면 Pod가 완전히 끝난 뒤에 교체 Pod를 만든다.
+
+### CronJob이 회차를 여러 번 놓치면 돌아왔을 때 어떻게 되나요?
+
+놓친 회차 중 가장 최근 하나만 실행한다. 실습에서 세 회차를 놓친 뒤 풀자 마지막 회차 하나만 만들어졌다. startingDeadlineSeconds 밖의 회차는 아예 실행하지 않고, 이 값 없이 놓친 회차가 100개를 넘으면 시작을 포기한다. 회차마다 꼭 돌아야 하는 작업은 마지막 처리 지점부터 이어서 처리하게 만들거나 빠진 회차를 감시한다.
+
+### 쿠버네티스 Job은 정확히 한 번 실행을 보장하나요?
+
+보장하지 않는다. 공식 문서도 parallelism 1, Never로 둬도 같은 프로그램이 두 번 시작될 수 있다고 적고, CronJob도 회차당 Job을 대략 한 번 만든다고 적는다. 그래서 범위를 회차나 번호로 고정하고, upsert로 쓰고, 바깥 동작에는 멱등성 키를 붙여 여러 번 돌아도 결과가 한 번이 되게 만든다.

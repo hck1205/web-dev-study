@@ -1,0 +1,696 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-admission-control");
+
+ConfigMap 하나를 만들었는데 이런 에러가 돌아왔다.
+
+```text
+error: failed to create configmap: Internal error occurred: failed calling webhook "configmap.policy.example.com": failed to call webhook: Post "https://127.0.0.1:9443/validate?timeout=2s": dial tcp 127.0.0.1:9443: connect: connection refused
+```
+
+권한도 있고 YAML도 멀쩡하다. RBAC은 통과했는데 그 뒤에서 누군가 요청을 붙잡고 있다가 연락이 끊긴 것이다. 그 "누군가"가 어드미션 컨트롤이다. 이 글은 요청이 인증과 인가를 지난 뒤 etcd에 저장되기 전까지 거치는 단계를 따라간다. 코드 없이 CEL 한 줄로 거는 ValidatingAdmissionPolicy와 MutatingAdmissionPolicy, 외부 서버를 부르는 웹훅, 그 웹훅이 죽었을 때 클러스터가 어떻게 멈추는지, Kyverno와 OPA Gatekeeper를 언제 고르는지까지 본다.
+
+출력은 [kwok 실습 클러스터](/posts/local-k8s-kind-minikube)(Kubernetes 1.37.0)에서 받았다. kwok은 kubelet을 흉내 낼 뿐이지만 API 서버와 etcd는 진짜 바이너리라서 어드미션 단계는 실제 클러스터와 똑같이 돈다. 웹훅 서버는 컨테이너 안에서 Node.js로 직접 띄웠다.
+
+이 주제의 다른 글: 요청이 "누가 무엇을 할 수 있나"를 묻는 인가 단계는 [RBAC 글](/posts/k8s-rbac)에서, Pod 보안 수준을 검사하는 내장 어드미션은 [Pod Security Admission 글](/posts/k8s-pod-security-admission)에서, 어드미션이 남긴 흔적을 읽는 법은 [감사 로그 글](/posts/k8s-audit-logging)에서 다룬다.
+
+## 요청이 etcd에 닿기 전에 지나는 관문
+
+`kubectl apply`는 결국 API 서버에 보내는 HTTPS 요청이다. API 서버는 이 요청을 받으면 순서대로 몇 개의 관문을 통과시킨다. 아래 그림에서 다음을 누르면 요청이 한 단계씩 나아간다.
+
+<SequenceDiagram
+  caption="요청 하나가 etcd에 저장되기까지"
+  actors={[
+    { id: "client", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "mut", label: "변경 단계" },
+    { id: "val", label: "검증 단계" },
+    { id: "etcd", label: "etcd" },
+  ]}
+  steps={[
+    { from: "client", to: "api", label: "POST deployments", title: "요청이 들어온다", detail: "kubectl이 Deployment를 JSON으로 바꿔 보낸다. 클라이언트 인증서나 토큰이 함께 간다.", payload: "POST /apis/apps/v1/namespaces/shop/deployments" },
+    { from: "api", to: "api", label: "인증 · 인가", title: "누구인지, 해도 되는지", detail: "인증서의 CN이나 토큰으로 사용자를 알아내고, RBAC으로 이 사용자가 shop에서 deployments를 create할 수 있는지 본다. 여기서 막히면 401이나 403이다." },
+    { from: "api", to: "mut", label: "Mutating", title: "고칠 사람이 먼저 고친다", detail: "MutatingAdmissionPolicy, 변경 웹훅, 내장 플러그인(ServiceAccount, DefaultStorageClass 등)이 객체를 고친다. 라벨이나 사이드카, 기본값이 이때 붙는다.", payload: "metadata.labels.team: unassigned" },
+    { from: "api", to: "api", label: "스키마 검증", title: "모양이 맞는지", detail: "고쳐진 객체가 OpenAPI 스키마에 맞는지 본다. replicas에 문자열이 들어 있으면 여기서 422가 난다." },
+    { from: "api", to: "val", label: "Validating", title: "막을 사람이 마지막에 본다", detail: "ValidatingAdmissionPolicy, 검증 웹훅, PodSecurity, ResourceQuota가 최종 모습을 보고 허락하거나 거절한다. 객체를 바꿀 수는 없다." },
+    { from: "api", to: "etcd", label: "저장", title: "통과하면 저장한다", detail: "모든 관문을 지난 객체만 etcd에 들어간다. 컨트롤러와 스케줄러는 이 저장을 watch로 보고 움직인다." },
+  ]}
+/>
+
+변경이 먼저고 검증이 나중이다. 검증 단계는 "변경이 다 끝난 최종 모습"을 본다. 그래서 변경 웹훅이 사이드카를 붙이면, 검증 정책은 그 사이드카까지 포함해 검사한다. 반대로 검증 단계에서 뭔가를 고치는 건 불가능하다.
+
+그리고 어드미션은 쓰기 요청에만 끼어든다. create, update, patch, delete, 그리고 `pods/exec` 같은 connect 요청이다. get, list, watch는 어드미션을 거치지 않는다. 읽기를 막는 건 인가([RBAC](/posts/k8s-rbac))의 몫이다.
+
+## 기본으로 켜져 있는 어드미션 플러그인
+
+어드미션이라고 하면 웹훅부터 떠올리지만, API 서버 안에는 이미 플러그인이 20개 넘게 돌고 있다. 1.37.0 바이너리의 도움말에서 기본으로 켜진 목록을 볼 수 있다.
+
+```bash
+# 기본으로 켜지는 어드미션 플러그인 목록을 본다
+kube-apiserver --help | grep -A3 -- '--enable-admission-plugins'
+```
+
+```text
+      --enable-admission-plugins strings             admission plugins that should be enabled in addition to default enabled ones (NamespaceLifecycle, LimitRanger, ServiceAccount, TaintNodesByCondition, PodSecurity, Priority, DefaultTolerationSeconds, DefaultStorageClass, StorageObjectInUseProtection, PodGroupProtection, PersistentVolumeClaimResize, RuntimeClass, CertificateApproval, CertificateSigning, ClusterTrustBundleAttest, CertificateSubjectRestriction, DefaultIngressClass, PodTopologyLabels, NodeDeclaredFeatureValidator, PodResizeValidator, MutatingAdmissionPolicy, MutatingAdmissionWebhook, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook, ResourceQuota). ...
+```
+
+평소에 겪는 동작 상당수가 여기서 나온다. 지우는 중인 네임스페이스에 새 객체를 못 만드는 것(NamespaceLifecycle), Pod에 ServiceAccount 토큰 볼륨이 자동으로 붙는 것(ServiceAccount), requests를 안 적은 Pod에 LimitRange 기본값이 채워지는 것(LimitRanger), 쿼터를 넘으면 `exceeded quota`로 거절되는 것(ResourceQuota)이 모두 어드미션 플러그인이다. 이 목록 끝쪽의 네 개, MutatingAdmissionPolicy·MutatingAdmissionWebhook·ValidatingAdmissionPolicy·ValidatingAdmissionWebhook이 사용자가 규칙을 끼워 넣는 자리다.
+
+목록에 없는 것도 눈여겨본다. `NodeRestriction`은 기본값에 없다. kubelet이 자기 노드와 자기 노드의 Pod만 고칠 수 있게 묶는 플러그인인데, kubeadm 같은 설치 도구가 `--enable-admission-plugins=NodeRestriction`으로 켜 준다. 직접 API 서버를 띄우는 환경이라면 빠뜨리기 쉽다.
+
+## CEL 한 줄로 막기
+
+예전에는 "latest 태그 금지" 같은 규칙 하나를 걸려고 해도 웹훅 서버를 만들어야 했다. 서버를 짜고, TLS 인증서를 만들고, Deployment로 띄우고, 고가용성까지 챙겨야 했다. ValidatingAdmissionPolicy(이하 VAP)는 이 규칙을 API 서버 안에서 CEL 식으로 평가한다. CEL(Common Expression Language)은 구글이 만든 작은 식 언어로, 반복문이 없고 실행 비용에 상한이 있어서 API 서버 안에서 돌려도 안전하다. VAP는 1.30에서 정식(v1)이 됐다.
+
+VAP는 두 객체로 나뉜다. 정책(무엇을 검사하나)과 바인딩(어디에, 어떻게 적용하나)이다.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deploy-guardrails
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  variables:
+    - name: containers
+      expression: "object.spec.template.spec.containers"
+  validations:
+    - expression: "variables.containers.all(c, !c.image.endsWith(':latest') && c.image.contains(':'))"
+      message: "이미지 태그를 고정해야 한다 (:latest 또는 태그 없음 금지)"
+    - expression: "object.spec.replicas <= 10"
+      messageExpression: "'replicas는 10 이하여야 한다. 지금 값: ' + string(object.spec.replicas)"
+    - expression: "has(object.metadata.labels) && 'team' in object.metadata.labels"
+      message: "team 라벨이 필요하다"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deploy-guardrails-shop
+spec:
+  policyName: deploy-guardrails
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        guardrails: enforce
+```
+
+`object`는 들어오는 객체, `oldObject`는 UPDATE일 때 기존 객체, `request`는 요청 정보(사용자, 작업 종류)다. `variables`로 긴 경로에 이름을 붙여 재사용한다. 바인딩은 `guardrails=enforce` 라벨이 붙은 네임스페이스에만 이 정책을 건다.
+
+```bash
+# shop 네임스페이스에 라벨을 붙이고 정책을 건다
+kubectl create ns shop
+kubectl label ns shop guardrails=enforce
+kubectl apply -f vap.yaml
+
+# 태그를 latest로 쓴 Deployment
+kubectl create deployment web -n shop --image=nginx:latest
+
+# 태그를 아예 안 쓴 Deployment
+kubectl create deployment web -n shop --image=nginx
+```
+
+```text
+error: failed to create deployment: deployments.apps "web" is forbidden: ValidatingAdmissionPolicy 'deploy-guardrails' with binding 'deploy-guardrails-shop' denied request: 이미지 태그를 고정해야 한다 (:latest 또는 태그 없음 금지)
+error: failed to create deployment: deployments.apps "web" is forbidden: ValidatingAdmissionPolicy 'deploy-guardrails' with binding 'deploy-guardrails-shop' denied request: 이미지 태그를 고정해야 한다 (:latest 또는 태그 없음 금지)
+```
+
+에러 메시지에 정책 이름과 바인딩 이름이 함께 나온다. 누가 왜 막았는지 바로 알 수 있다. 태그를 고치고 replicas를 12로 올리면 다음 규칙에 걸린다. `messageExpression` 덕분에 지금 값이 메시지에 들어간다.
+
+```text
+The deployments "web" is invalid: : ValidatingAdmissionPolicy 'deploy-guardrails' with binding 'deploy-guardrails-shop' denied request: replicas는 10 이하여야 한다. 지금 값: 12
+```
+
+`all()`은 리스트의 모든 원소가 조건을 만족하는지 본다. 아래 그림은 컨테이너 세 개짜리 Pod 템플릿에서 `all(c, !c.image.endsWith(':latest'))`가 원소를 하나씩 훑는 과정이다.
+
+<AlgoTrace
+  caption="all()은 거짓을 하나 찾으면 결과가 정해진다"
+  memoryLabel="원소별 결과"
+  cells={["nginx:1.27.3", "envoy:v1.31", "busybox:latest"]}
+  steps={[
+    { pointer: 0, memory: ["true"], caption: "첫 컨테이너 nginx:1.27.3은 latest가 아니다. 참이다." },
+    { pointer: 1, memory: ["true", "true"], caption: "사이드카 envoy:v1.31도 참이다. 아직 결과가 정해지지 않았다." },
+    { pointer: 2, memory: ["true", "true", "false"], caption: "busybox:latest에서 거짓이 나온다. all()은 거짓이 된다." },
+    { found: [2], memory: ["false"], caption: "식 전체가 거짓이니 거절된다. initContainers는 이 식이 보지 않는다는 점도 기억한다." },
+  ]}
+/>
+
+마지막 단계의 말이 실무에서 흔한 구멍이다. `spec.template.spec.containers`만 검사하면 `initContainers`와 `ephemeralContainers`로 latest 이미지가 들어온다. 이미지 규칙을 쓸 때는 세 리스트를 모두 본다.
+
+## 없는 필드를 읽으면 에러가 난다
+
+CEL에서 가장 많이 하는 실수는 없을 수도 있는 필드를 바로 읽는 것이다. JavaScript라면 `undefined`가 나오고 넘어가겠지만 CEL은 `no such key` 에러를 낸다. 일부러 `object.metadata.labels.owner != ''`와, 오타를 넣은 `object.spec.replica <= 10` 두 식으로 `need-owner` 정책을 만들었다.
+
+```bash
+# 정책을 만든 뒤 타입 검사 결과를 본다
+kubectl get validatingadmissionpolicy need-owner -o jsonpath='{.status}' | jq .
+```
+
+```text
+{
+  "observedGeneration": 1,
+  "typeChecking": {
+    "expressionWarnings": [
+      {
+        "fieldRef": "spec.validations[1].expression",
+        "warning": "apps/v1, Kind=Deployment: ERROR: <input>:1:12: undefined field 'replica'\n | object.spec.replica <= 10\n | ...........^\n"
+      }
+    ]
+  }
+}
+```
+
+API 서버는 정책을 저장한 뒤 `matchConstraints`의 리소스 스키마로 식을 타입 검사한다. Deployment에는 `spec.replica`가 없으니 경고가 남는다. 정책 생성 자체는 거절되지 않는다는 점이 함정이다. 정책을 배포하는 파이프라인에서 `status.typeChecking`이 비어 있는지 확인하는 단계를 두면 좋다.
+
+`labels.owner`는 타입 검사에 걸리지 않는다. labels는 맵이라 어떤 키든 있을 수 있기 때문이다. 이 식은 owner 라벨이 없는 객체를 만났을 때 실행 중에 에러를 낸다. 실행 에러는 정책의 `failurePolicy`를 따르고, `Fail`이면 위반으로 처리된다. 그래서 `has(object.metadata.labels) && 'owner' in object.metadata.labels`처럼 먼저 있는지 묻는다.
+
+CEL의 `&&`는 하나 더 특이하다. 왼쪽이 에러여도 오른쪽이 거짓이면 결과는 그냥 거짓이다. 순서와 상관없이 "거짓이 하나라도 있으면 거짓, 아니고 에러가 있으면 에러"로 계산한다. 실제 API 서버에서 `object.metadata.labels.team == 'pay' && object.spec.replicas > 100`을 라벨 없는 Deployment에 걸어 보면 에러가 아니라 위반 메시지가 나온다.
+
+아래에서 이 규칙들을 직접 구현해 볼 수 있다. 진짜 CEL의 아주 작은 부분집합이다. `has()`, 비교 연산, `startsWith`/`endsWith`, `all()`, `!`, `&&`만 지원한다. 없는 키를 읽으면 `"error: no such key: 키"`를 돌려주고, `&&`는 위에서 말한 대로 계산한다.
+
+<CodePlayground
+  caption="CEL 부분집합 평가기: 정책 식을 객체에 대 보기"
+  functionName="evaluate"
+  initialCode={`function evaluate(expr, object) {
+  // expr 예: "has(object.metadata.labels) && object.spec.replicas <= 10"
+  // 지원: has(경로), 경로 (==|!=|<=|>=|<|>) 리터럴, 경로.startsWith('x'), 경로.endsWith('x'),
+  //       경로.all(v, 식), 앞에 붙는 !, 그리고 &&로 이은 여러 식
+  // 리터럴은 '문자열' 또는 숫자
+  // 없는 키를 읽으면 "error: no such key: 키이름"
+  // &&: 하나라도 false면 false, 아니고 에러가 있으면 그 에러, 모두 true면 true
+  return true;
+}`}
+  solution={`function evaluate(expr, object) {
+  const ERR = (k) => ({ err: "no such key: " + k });
+  const isErr = (v) => v && v.err;
+  const lookup = (path, env) => {
+    const [head, ...rest] = path.split(".");
+    if (!(head in env)) return ERR(head);
+    let cur = env[head];
+    for (const k of rest) {
+      if (cur === null || typeof cur !== "object" || !(k in cur)) return ERR(k);
+      cur = cur[k];
+    }
+    return cur;
+  };
+  const lit = (t) => (t.trim().startsWith("'") ? t.trim().slice(1, -1) : Number(t));
+  const atom = (src, env) => {
+    src = src.trim();
+    let m, v;
+    if (src.startsWith("!")) return isErr((v = atom(src.slice(1), env))) ? v : !v;
+    if ((m = src.match(/^has\\((.+)\\)$/))) {
+      const parts = m[1].split(".");
+      const parent = lookup(parts.slice(0, -1).join("."), env);
+      return isErr(parent) ? parent : parent !== null && typeof parent === "object" && parts.at(-1) in parent;
+    }
+    if ((m = src.match(/^([\\w.]+)\\.all\\((\\w+),\\s*(.+)\\)$/))) {
+      const list = lookup(m[1], env);
+      if (isErr(list)) return list;
+      const rs = list.map((item) => atom(m[3], { ...env, [m[2]]: item }));
+      return rs.includes(false) ? false : rs.find(isErr) || true;
+    }
+    if ((m = src.match(/^([\\w.]+)\\.(startsWith|endsWith)\\((.+)\\)$/)))
+      return isErr((v = lookup(m[1], env))) ? v : v[m[2]](lit(m[3]));
+    if ((m = src.match(/^([\\w.]+)\\s*(==|!=|<=|>=|<|>)\\s*(.+)$/))) {
+      const a = lookup(m[1], env), b = lit(m[3]);
+      if (isErr(a)) return a;
+      return { "==": a === b, "!=": a !== b, "<=": a <= b, ">=": a >= b, "<": a < b, ">": a > b }[m[2]];
+    }
+    throw new Error("지원하지 않는 식: " + src);
+  };
+  const rs = expr.split("&&").map((part) => atom(part, { object }));
+  if (rs.includes(false)) return false;
+  const e = rs.find(isErr);
+  return e ? "error: " + e.err : true;
+}`}
+  tests={[
+    { label: "replicas 3 ≤ 10", args: ["object.spec.replicas <= 10", { metadata: { name: "web" }, spec: { replicas: 3 } }], expected: true },
+    { label: "replicas 12 ≤ 10", args: ["object.spec.replicas <= 10", { metadata: { name: "web" }, spec: { replicas: 12 } }], expected: false },
+    { label: "없는 labels 읽기", args: ["object.metadata.labels.team == 'pay'", { metadata: { name: "web" }, spec: { replicas: 3 } }], expected: "error: no such key: labels" },
+    { label: "has()로 먼저 묻기", args: ["has(object.metadata.labels) && object.metadata.labels.team == 'pay'", { metadata: { name: "web" }, spec: { replicas: 3 } }], expected: false },
+    { label: "에러 && 거짓은 거짓", args: ["object.metadata.labels.team == 'pay' && object.spec.replicas > 100", { metadata: { name: "web" }, spec: { replicas: 3 } }], expected: false },
+    { label: "latest가 섞인 컨테이너", args: ["object.spec.containers.all(c, !c.image.endsWith(':latest'))", { spec: { containers: [{ image: "nginx:1.27.3" }, { image: "busybox:latest" }] } }], expected: false },
+    { label: "빈 리스트의 all()", args: ["object.spec.containers.all(c, c.image.startsWith('registry.shop.io/'))", { spec: { containers: [] } }], expected: true },
+    { label: "라벨이 있으면 통과", args: ["has(object.metadata.labels) && object.metadata.labels.team != ''", { metadata: { labels: { team: "pay" } } }], expected: true },
+  ]}
+/>
+
+빈 리스트의 `all()`이 참이라는 것도 기억해 둔다. 컨테이너가 하나도 없는 객체는 모든 이미지 규칙을 통과한다. 스키마가 막아 주는 경우가 많지만 CRD처럼 스키마가 느슨한 객체에서는 실제로 빠져나간다.
+
+## 바로 막지 않고 경고부터
+
+이미 돌아가는 클러스터에 정책을 새로 걸 때 바로 `Deny`로 시작하면 배포 파이프라인 몇 개가 한꺼번에 깨진다. 바인딩의 `validationActions`는 세 가지 값을 받는다.
+
+<UrlAnatomy
+  caption="ValidatingAdmissionPolicyBinding의 validationActions"
+  base="validationActions:"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "Deny", display: "Deny", title: "요청을 거절한다", description: "위반하면 요청이 실패하고 객체가 저장되지 않는다. 사용자는 정책·바인딩 이름이 담긴 에러를 받는다." },
+    { key: "Warn", display: "Warn", title: "경고 헤더를 돌려준다", description: "요청은 성공한다. kubectl은 응답의 Warning 헤더를 'Warning:' 줄로 찍는다. CI 로그에 남아 사람이 보게 된다. Deny와 함께 쓸 수 없다." },
+    { key: "Audit", display: "Audit", title: "감사 로그에만 남긴다", description: "요청은 성공하고, 감사 이벤트의 annotations에 validation.policy.admission.k8s.io/validation_failure가 붙는다. 감사 로그를 켜 둔 클러스터에서만 의미가 있다." },
+  ]}
+/>
+
+`stage` 네임스페이스에 앞의 `need-owner` 정책을 `["Warn", "Audit"]`로 걸고 owner 라벨 없는 Deployment를 만들었다.
+
+```bash
+# 경고와 감사만 하는 바인딩 아래에서 Deployment를 만든다
+kubectl create deployment api -n stage --image=nginx:1.27.3
+```
+
+```text
+Warning: Validation failed for ValidatingAdmissionPolicy 'need-owner' with binding 'need-owner-stage': expression 'object.metadata.labels.owner != ''' resulted in error: no such key: owner
+Warning: Validation failed for ValidatingAdmissionPolicy 'need-owner' with binding 'need-owner-stage': expression 'object.spec.replica <= 10' resulted in error: no such key: replica
+deployment.apps/api created
+```
+
+객체는 만들어졌고 경고 두 줄이 남았다. 같은 요청의 감사 이벤트에는 이런 어노테이션이 붙는다. 감사 로그를 읽는 법은 [감사 로그 글](/posts/k8s-audit-logging)에서 자세히 다룬다.
+
+```text
+"validation.policy.admission.k8s.io/validation_failure": "[{\"message\":\"expression 'object.metadata.labels.owner != ''' resulted in error: no such key: owner\",\"policy\":\"need-owner\",\"binding\":\"need-owner-stage\",\"expressionIndex\":0,\"validationActions\":[\"Warn\",\"Audit\"]}, ...]"
+```
+
+`Deny`와 `Warn`을 함께 적으면 API 서버가 `must not contain both Deny and Warn`으로 바인딩을 거절한다. 같은 내용을 에러와 경고로 두 번 보낼 이유가 없어서다.
+
+실무에서는 `Audit`로 일주일쯤 걸어 두고 감사 로그에서 위반 건수를 센 다음, 팀별로 고치게 하고 `Deny`로 바꾸는 순서를 많이 쓴다. 정책 하나에 바인딩을 여러 개 둘 수 있어서 개발 네임스페이스는 `Warn`, 운영은 `Deny`처럼 나누는 것도 된다. 바인딩마다 다른 값(최대 replicas 같은)을 주고 싶으면 정책에 `paramKind`를 두고 바인딩의 `paramRef`로 ConfigMap이나 CRD를 가리킨다.
+
+## MutatingAdmissionPolicy로 기본값 채우기
+
+검증은 CEL로 되는데 변경은 여전히 웹훅이 필요했다. 그 빈자리를 MutatingAdmissionPolicy(이하 MAP)가 채운다. 버전에 따라 상태가 다르니 확인하고 쓴다. 1.30.4 바이너리에서는 알파 기능 게이트였고, 1.34.1에서는 베타지만 기본으로 꺼져 있었다. 이 글의 1.37.0 클러스터에서는 기능 게이트 목록에서 빠졌고 `admissionregistration.k8s.io/v1`으로 기본 제공된다.
+
+`kubectl api-resources | grep -i admission`을 치면 `mutatingadmissionpolicies`와 `mutatingadmissionpolicybindings`가 `admissionregistration.k8s.io/v1`으로 나온다. 1.34 이하 클러스터라면 `mutatingadmissionpolicies`가 아예 없거나 `v1beta1`·`v1alpha1`이고, 기능 게이트와 `--runtime-config`를 켜야 쓸 수 있다. 운영 클러스터 버전부터 본다. 관리형 쿠버네티스는 알파·베타 API를 못 켜게 막는 경우가 많다.
+
+team 라벨이 없는 Deployment에 `team: unassigned`를 붙이는 정책이다. 변경 내용은 CEL로 만든 "적용할 조각(ApplyConfiguration)"이다. [Server-Side Apply](/posts/kubectl-apply-ssa)와 같은 방식으로 병합된다.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: default-team-label
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["deployments"]
+  matchConditions:
+    - name: no-team-label
+      expression: "!has(object.metadata.labels) || !('team' in object.metadata.labels)"
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >
+          Object{
+            metadata: Object.metadata{
+              labels: {"team": "unassigned"}
+            }
+          }
+```
+
+바인딩은 VAP와 같은 `guardrails=enforce` 네임스페이스에 걸었다. 이제 shop에는 "team 라벨이 필요하다"는 VAP와 "없으면 붙여 준다"는 MAP이 함께 있다.
+
+```bash
+# team 라벨 없이 Deployment를 만든다
+kubectl create deployment cart -n shop --image=nginx:1.27.3
+
+# 라벨을 본다
+kubectl get deploy cart -n shop --show-labels
+```
+
+```text
+deployment.apps/cart created
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE   LABELS
+cart   0/1     1            0           0s    app=cart,team=unassigned
+```
+
+VAP가 막지 않았다. 변경 단계에서 라벨이 먼저 붙었고, 검증 단계는 붙은 뒤의 모습을 봤기 때문이다. 처음 그림의 순서가 그대로 보인다.
+
+`reinvocationPolicy: IfNeeded`는 다른 변경 플러그인이 나중에 객체를 또 바꿨을 때 이 정책을 한 번 더 돌릴지 정한다. 변경 단계 안의 순서는 보장되지 않는다. 그래서 변경 정책은 "몇 번을 돌려도 결과가 같게(멱등)" 짜야 한다. 위 정책은 `matchConditions`로 라벨이 이미 있으면 건너뛰니 두 번 돌아도 안전하다. 매번 리스트에 사이드카를 append하는 정책이라면 다시 불릴 때마다 사이드카가 늘어난다.
+
+## 웹훅은 API 서버가 거는 HTTPS 호출이다
+
+CEL로 안 되는 일이 있다. 외부 시스템을 조회해야 하는 규칙(이미지 서명이 레지스트리에 있는지, 이 팀에 남은 예산이 있는지), 복잡한 변경(사이드카 주입과 볼륨 설정을 한꺼번에), 수백 줄짜리 조직 규칙이다. 이럴 때 어드미션 웹훅을 쓴다. API 서버가 요청을 `AdmissionReview` JSON으로 감싸 웹훅 서버에 POST하고, 응답의 `allowed`를 보고 결정한다. 일반적인 [웹훅](/posts/webhooks)과 방향이 같다. 호출하는 쪽이 API 서버일 뿐이다.
+
+ConfigMap에 `PASSWORD`, `SECRET`, `TOKEN`이 들어간 키를 금지하는 웹훅 서버를 Node.js로 짜서 `127.0.0.1:9443`에 띄웠다. API 서버는 반드시 HTTPS로 부르므로 자체 CA로 서버 인증서를 만들고 그 CA를 `caBundle`에 넣었다.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: no-secret-in-configmap
+webhooks:
+  - name: configmap.policy.example.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 2
+    clientConfig:
+      url: https://127.0.0.1:9443/validate
+      caBundle: LS0tLS1CRUdJTi...   # 웹훅 서버 인증서를 서명한 CA (base64)
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["configmaps"]
+```
+
+클러스터 안에 웹훅을 띄우면 `url` 대신 `service: { namespace, name, port }`를 쓴다. 여기서는 API 서버가 컨테이너의 로컬 프로세스라 URL로 바로 불렀다.
+
+```bash
+# 비밀번호 키가 있는 ConfigMap
+kubectl create configmap app-env -n shop --from-literal=DB_HOST=db.shop --from-literal=DB_PASSWORD=hunter2
+
+# 비밀 키가 없는 ConfigMap
+kubectl create configmap app-env -n shop --from-literal=DB_HOST=db.shop
+```
+
+```text
+error: failed to create configmap: admission webhook "configmap.policy.example.com" denied the request: ConfigMap에 비밀 값처럼 보이는 키가 있다: DB_PASSWORD. Secret을 쓴다
+configmap/app-env created
+```
+
+웹훅 서버가 받은 요청 본문을 저장해 두고 필요한 부분만 뽑았다.
+
+```text
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "aca07b49-d346-44a7-89c5-467ddf869c08",
+    "kind": { "group": "", "version": "v1", "kind": "ConfigMap" },
+    "name": "app-env", "namespace": "shop", "operation": "CREATE",
+    "userInfo": { "username": "kwok-admin", "groups": ["system:masters", "system:authenticated"], ... },
+    "dryRun": false,
+    ...
+    "object": { "data": { "DB_HOST": "db.shop" } }
+  }
+}
+```
+
+응답은 요청의 `uid`를 그대로 돌려줘야 한다. 거절할 때는 `status.message`에 이유를 담는다. 이 문장이 사용자 화면에 그대로 찍히니 "무엇을 어떻게 고치라"까지 적는 게 좋다. 아래는 `DB_PASSWORD`가 든 요청(uid `f3abd2c3-…`)에 웹훅이 돌려준 응답이다.
+
+```json
+{ "apiVersion": "admission.k8s.io/v1", "kind": "AdmissionReview",
+  "response": { "uid": "f3abd2c3-938b-4170-a0d3-4ff1b7039168", "allowed": false,
+    "status": { "code": 403, "message": "ConfigMap에 비밀 값처럼 보이는 키가 있다: DB_PASSWORD. Secret을 쓴다" } } }
+```
+
+변경 웹훅은 여기에 `patchType: JSONPatch`와 base64로 인코딩한 `patch`를 더해 돌려준다. 요청 본문에 `dryRun`이 있다는 것도 본다. `kubectl apply --dry-run=server`도 어드미션을 끝까지 거친다. 웹훅이 외부에 무언가를 기록한다면 dry-run일 때 하지 말아야 하고, 그래서 설정에 `sideEffects: None` 또는 `NoneOnDryRun`을 꼭 적게 되어 있다.
+
+참고로 이 웹훅이 하는 일은 CEL 한 줄로도 된다. `!has(object.data) || !object.data.exists(k, k.matches('(?i)password|secret|token'))`를 VAP로 걸면 같은 에러가 나고, 서버도 인증서도 필요 없다. 웹훅을 만들기 전에 CEL로 되는지부터 따져 본다.
+
+## 웹훅이 죽으면 요청이 같이 죽는다
+
+웹훅은 API 서버의 쓰기 경로 한가운데에 외부 서버를 끼워 넣는다. 그 서버가 응답하지 않으면 무슨 일이 생기는지가 `failurePolicy`와 `timeoutSeconds`로 정해진다. 아래 그림에서 다음을 눌러 네 가지 상황을 차례로 본다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="failurePolicy와 timeoutSeconds가 정하는 것"
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 6, y: 6, w: 180, h: 288, tone: "private" },
+    { id: "pol", label: "namespace policy", x: 214, y: 6, w: 180, h: 288, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "kubectl", label: "kubectl", x: 96, y: 60, icon: "client" },
+    { id: "api", label: "API 서버", sub: ":6443", x: 96, y: 160, icon: "server" },
+    { id: "etcd", label: "etcd", x: 96, y: 250, icon: "db" },
+    { id: "svc", label: "webhook svc", sub: ":443", x: 304, y: 110, icon: "lb", w: 120 },
+    { id: "pod", label: "webhook Pod", sub: "/validate", x: 304, y: 220, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "kubectl", to: "api" },
+    { from: "api", to: "svc", label: "HTTPS" },
+    { from: "svc", to: "pod" },
+    { from: "api", to: "etcd" },
+  ]}
+  steps={[
+    { path: ["kubectl", "api", "svc", "pod"], packet: "Review", title: "평소: 응답이 온다", detail: "API 서버가 AdmissionReview를 보내고 allowed=true를 받으면 다음 단계로 간다. 웹훅 하나당 수 ms가 요청 지연에 더해진다." },
+    { path: ["api", "svc", "pod"], packet: "Review", blocked: true, title: "Fail: 서버가 없으면 거절", detail: "Pod가 없거나 엔드포인트가 비면 연결이 거절된다. failurePolicy: Fail이면 요청이 Internal error로 실패한다.", payload: "dial tcp 127.0.0.1:9443: connect: connection refused" },
+    { path: ["api", "etcd"], packet: "write", highlight: ["pol"], title: "Ignore: 검사 없이 통과", detail: "failurePolicy: Ignore면 웹훅을 건너뛰고 저장한다. 정책이 조용히 꺼진 셈이다. 비밀번호가 든 ConfigMap도 이때 들어온다.", payload: "configmap/leaked created" },
+    { path: ["api", "svc", "pod"], packet: "Review", blocked: true, title: "느린 서버: timeout까지 기다린다", detail: "응답이 timeoutSeconds를 넘기면 끊는다. Fail이면 실패, Ignore여도 매 요청이 그만큼 늦어진다.", payload: "context deadline exceeded (2.05s)" },
+  ]}
+/>
+
+실제로 웹훅 프로세스를 PID로 죽이고 같은 요청을 보냈다.
+
+```bash
+# 웹훅 서버를 멈춘다
+kill "$(cat wh.pid)"
+
+# failurePolicy: Fail인 상태에서 kube-system에 ConfigMap을 만든다
+kubectl create configmap lock-test -n kube-system --from-literal=a=b
+```
+
+```text
+error: failed to create configmap: Internal error occurred: failed calling webhook "configmap.policy.example.com": failed to call webhook: Post "https://127.0.0.1:9443/validate?timeout=2s": dial tcp 127.0.0.1:9443: connect: connection refused
+```
+
+shop뿐 아니라 kube-system도 똑같이 막혔다. 컨트롤러와 애드온 상당수가 ConfigMap과 Lease를 쓰면서 동작한다. 범위를 좁히지 않은 웹훅 하나가 죽으면 그 리소스를 쓰는 시스템 구성 요소도 같이 멈춘다.
+
+`failurePolicy`를 `Ignore`로 바꾸면 요청은 지나간다. 그 대가로 그 사이에 들어온 객체는 아무 검사도 받지 않았다.
+
+```text
+configmap/feature-flags created
+configmap/leaked created
+```
+
+`leaked`는 `API_TOKEN` 키를 가진 ConfigMap이다. 평소라면 막혔을 객체다. 이번에는 웹훅을 다시 띄우되 응답을 5초 늦추는 경로로 바꾸고 `timeoutSeconds: 2`를 줬다.
+
+```bash
+# 응답이 5초 걸리는 웹훅, timeoutSeconds 2, failurePolicy Fail
+time kubectl create configmap slow-1 -n shop --from-literal=A=1
+```
+
+```text
+error: failed to create configmap: Internal error occurred: failed calling webhook "configmap.policy.example.com": failed to call webhook: Post "https://127.0.0.1:9443/slow?timeout=2s": context deadline exceeded
+
+real	0m2.050s
+```
+
+같은 상황에서 `Ignore`로 바꾸면 요청은 성공하지만 역시 2.057초가 걸렸다. `Ignore`가 지연까지 없애 주지는 않는다. 웹훅 v1의 `timeoutSeconds` 기본값은 10초이고 1~30초만 허용된다. 기본값 그대로 두면 웹훅이 멈춘 동안 모든 쓰기가 10초씩 걸린다. 이 정도면 kubectl도 컨트롤러도 줄줄이 타임아웃을 낸다.
+
+`Ignore`로 넘어간 요청은 API 서버 로그와 메트릭에 남는다.
+
+```bash
+# API 서버 메트릭에서 웹훅 관련 값만 본다
+# APISERVER는 API 서버 주소 (kwok은 임의 포트를 쓴다)
+curl -s --cacert ca.crt --cert admin.crt --key admin.key "$APISERVER/metrics" \
+  | grep -E '^apiserver_admission_webhook_(rejection_count|fail_open_count)'
+```
+
+```text
+apiserver_admission_webhook_fail_open_count{name="configmap.policy.example.com",type="validating"} 3
+apiserver_admission_webhook_rejection_count{error_type="calling_webhook_error",name="configmap.policy.example.com",operation="CREATE",rejection_code="503",type="validating"} 3
+apiserver_admission_webhook_rejection_count{error_type="no_error",name="configmap.policy.example.com",operation="CREATE",rejection_code="403",type="validating"} 1
+```
+
+`fail_open_count`는 `Ignore` 때문에 검사 없이 통과한 횟수다. 보안 정책 웹훅이라면 이 값이 0이 아닌 순간 알림을 받아야 한다. `error_type="calling_webhook_error"`는 웹훅을 부르지 못한 경우, `no_error`에 403은 웹훅이 정상적으로 거절한 경우다. 지연은 `apiserver_admission_webhook_admission_duration_seconds` 히스토그램으로 본다.
+
+## 자기 Pod도 못 띄우는 웹훅
+
+가장 아픈 장애는 웹훅이 자기 자신을 다시 띄우지 못하는 경우다. Pod 생성을 검사하는 웹훅을 `failurePolicy: Fail`로 걸어 두었는데, 노드 장애로 웹훅 Pod가 모두 사라졌다고 하자. ReplicaSet이 웹훅 Pod를 새로 만들려면 Pod create 요청이 웹훅을 거쳐야 한다. 그런데 웹훅이 없다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="웹훅 Pod를 만드는 요청이 그 웹훅을 거쳐야 한다"
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 6, y: 6, w: 180, h: 248, tone: "private" },
+    { id: "pol", label: "namespace policy", x: 214, y: 6, w: 180, h: 248, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "rs", label: "ReplicaSet", sub: "controller", x: 96, y: 60, icon: "server", w: 112 },
+    { id: "api", label: "API 서버", x: 96, y: 160, icon: "server" },
+    { id: "svc", label: "webhook svc", sub: "endpoints 0", x: 304, y: 90, icon: "lb", w: 120 },
+    { id: "pod", label: "새 Pod", sub: "생성 대기", x: 304, y: 200, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "rs", to: "api", label: "create Pod" },
+    { from: "api", to: "svc", label: "HTTPS" },
+    { from: "svc", to: "pod", dashed: true },
+  ]}
+  steps={[
+    { path: ["rs", "api"], packet: "Pod", title: "Pod를 다시 만들려고 한다", detail: "웹훅 Pod가 사라지자 ReplicaSet 컨트롤러가 대체 Pod를 만들려고 create를 보낸다." },
+    { path: ["api", "svc"], packet: "Review", blocked: true, title: "검사할 웹훅이 없다", detail: "Pod create는 pods 웹훅의 대상이다. 엔드포인트가 비어 호출이 실패하고, Fail이라 생성이 거절된다.", payload: "Error creating: ... failed calling webhook" },
+    { path: ["rs"], highlight: ["pod"], title: "영영 돌아오지 않는다", detail: "컨트롤러는 백오프하며 재시도하지만 결과는 같다. 사람이 웹훅 설정을 지우거나 범위를 바꿔야 풀린다." },
+    { path: ["api", "pod"], packet: "Pod", highlight: ["pol"], title: "자기 네임스페이스를 빼 두면", detail: "namespaceSelector로 policy 네임스페이스를 대상에서 빼면 웹훅 Pod는 검사 없이 만들어지고, 다른 네임스페이스도 다시 검사받는다." },
+  ]}
+/>
+
+실습 클러스터에서 그대로 재현했다. 웹훅 서버를 꺼 둔 상태로 pods 대상 웹훅을 만들고, 웹훅 서버 자신을 Deployment로 배포했다.
+
+```bash
+# 웹훅 서버를 Deployment로 띄운다 (pods 웹훅은 Fail, 서버는 꺼진 상태)
+kubectl create deployment policy-webhook -n policy --image=registry.example.com/policy-webhook:1.4.0
+
+# ReplicaSet과 Pod 상태, 생성 실패 이벤트를 본다
+kubectl get deploy,rs,pod -n policy
+kubectl get events -n policy --field-selector reason=FailedCreate
+```
+
+```text
+NAME                             READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/policy-webhook   0/1     0            0           4s
+
+NAME                                        DESIRED   CURRENT   READY   AGE
+replicaset.apps/policy-webhook-5d8dfff77d   1         0         0       4s
+LAST SEEN   TYPE      REASON         OBJECT                                 MESSAGE
+1s          Warning   FailedCreate   replicaset/policy-webhook-5d8dfff77d   Error creating: Internal error occurred: failed calling webhook "pods.policy.example.com": failed to call webhook: Post "https://127.0.0.1:9443/validate?timeout=5s": dial tcp 127.0.0.1:9443: connect: connection refused
+```
+
+`DESIRED 1, CURRENT 0`이고 Pod가 하나도 없다. `kubectl get pod`만 보면 "Pod가 없다"는 사실만 보이고 이유가 안 보인다. Pod가 안 생길 때는 ReplicaSet의 이벤트를 본다.
+
+풀어 내는 길은 웹훅 설정 자체를 지우는 것이다. 웹훅은 ValidatingWebhookConfiguration·MutatingWebhookConfiguration 객체에 대한 요청에는 불리지 않아서, 웹훅이 다 죽어 있어도 `kubectl delete validatingwebhookconfiguration pod-policy`는 성공한다. 지우고 10초쯤 뒤 백오프하며 재시도하던 ReplicaSet의 `CURRENT`가 1이 되고 Pod가 생겼다.
+
+<Callout kind="warning" title="웹훅 설정을 지우기 전에 백업한다">
+장애 중에 웹훅 설정을 지우면 그 사이 들어오는 요청은 정책 없이 통과한다. 지우기 전에 `kubectl get validatingwebhookconfiguration pod-policy -o yaml > pod-policy.bak.yaml`로 받아 두고, 웹훅 Pod가 Ready가 된 것을 본 뒤 `kubectl apply -f pod-policy.bak.yaml`로 되돌린다. Helm이나 GitOps로 관리하는 설정이라면 그 도구가 바로 다시 만들어 버릴 수 있으니 동기화를 먼저 멈춘다.
+</Callout>
+
+## 웹훅을 안전하게 거는 설정
+
+위 장애들은 설정 몇 줄로 대부분 피한다. 같은 웹훅에 범위를 좁히는 설정을 더했다.
+
+```yaml
+webhooks:
+  - name: configmap.policy.example.com
+    failurePolicy: Fail
+    timeoutSeconds: 2
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "kube-node-lease"]
+    matchConditions:
+      - name: skip-system-users
+        expression: "!request.userInfo.username.startsWith('system:')"
+```
+
+`namespaceSelector`로 시스템 네임스페이스와 웹훅 자신의 네임스페이스를 뺀다. `kubernetes.io/metadata.name` 라벨은 모든 네임스페이스에 자동으로 붙는다. `matchConditions`는 CEL 식이 참일 때만 웹훅을 부른다. 웹훅을 부르기 전에 API 서버 안에서 걸러지니 네트워크 왕복도 줄어든다. 이 상태로 웹훅을 다시 죽이자 kube-system의 `configmap/sys-cm created`는 지나가고 shop만 `failed calling webhook`으로 막혔다. 장애의 반경이 사용자 네임스페이스로 줄었다.
+
+나머지 설정도 정리하면 이렇다. 웹훅 서버는 레플리카 2개 이상에 PodDisruptionBudget을 두고, 노드를 나눠 띄운다. `timeoutSeconds`는 기본 10초 대신 1~3초로 낮춘다. `rules`는 필요한 리소스와 작업만 적는다. `resources: ["*"]`는 절대 쓰지 않는다. 보안 정책이면 `Fail`, 편의 기능(라벨 붙이기 같은)이면 `Ignore`를 고르고, `Ignore`라면 `fail_open_count` 알림을 건다. 웹훅의 TLS 인증서 만료도 장애 원인이다. cert-manager 같은 도구로 인증서와 `caBundle`을 함께 갱신하게 해 둔다. 인증서 이야기는 [쿠버네티스 인증서 글](/posts/k8s-certificates-pki)에서 이어진다.
+
+## Kyverno와 OPA Gatekeeper
+
+정책이 수십 개가 되면 VAP를 손으로 관리하기 벅차고, 웹훅을 직접 짜기도 부담스럽다. 이때 정책 엔진을 들인다. 대표가 Kyverno와 OPA Gatekeeper다. 둘 다 결국 어드미션 웹훅으로 등록되어 동작한다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="정책을 거는 네 가지 방법은 모두 API 서버의 어드미션 단계로 모인다"
+  nodes={[
+    { id: "api", label: "API 서버 어드미션", sub: "변경 → 검증", x: 220, y: 150, w: 160 },
+    { id: "vap", label: "VAP · MAP", sub: "CEL, API 서버 안", x: 90, y: 50, w: 140 },
+    { id: "wh", label: "직접 만든 웹훅", sub: "Go · Node 서버", x: 350, y: 50, w: 140 },
+    { id: "kyv", label: "Kyverno", sub: "YAML 정책", x: 90, y: 250, w: 140 },
+    { id: "gk", label: "Gatekeeper", sub: "Rego 정책", x: 350, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "vap", to: "api", label: "내장" },
+    { from: "wh", to: "api", label: "HTTPS" },
+    { from: "kyv", to: "api", label: "웹훅" },
+    { from: "gk", to: "api", label: "웹훅" },
+  ]}
+/>
+
+Kyverno는 정책을 쿠버네티스 YAML 모양 그대로 쓴다. 검증뿐 아니라 변경, 다른 리소스 생성(네임스페이스가 생기면 기본 NetworkPolicy를 만들기), 이미지 서명 확인까지 한 도구로 한다. Rego 같은 새 언어를 배우지 않아도 되는 게 가장 큰 장점이다. "latest 금지"라면 `ClusterPolicy`의 `validate.pattern`에 `image: "!*:latest"`처럼 객체 모양 그대로 적고, `validationFailureAction`을 `Audit`이나 `Enforce`로 고른다. 최근 버전은 CEL로 쓰는 정책 종류도 더했다(버전마다 이름과 범위가 바뀌고 있으니 쓰는 버전의 문서를 확인한다).
+
+Gatekeeper는 OPA(Open Policy Agent)의 Rego 언어로 규칙을 쓴다. 규칙의 틀(ConstraintTemplate)과 그 틀에 값을 넣은 적용(Constraint)이 나뉘어 있어서, 플랫폼 팀이 템플릿을 만들고 각 팀이 값을 정하는 구조에 잘 맞는다. OPA는 쿠버네티스 밖(API 게이트웨이, Terraform 계획 검사)에서도 쓰이니 조직 전체 정책 언어를 하나로 맞추고 싶을 때 고른다.
+
+같은 "team 라벨 필수"를 Gatekeeper로 쓰면 Rego로 `not input.review.object.metadata.labels.team`일 때 `violation`을 내는 ConstraintTemplate을 하나 만들고, `K8sRequiredLabels` 같은 Constraint에서 대상 kind와 `enforcementAction`(deny, dryrun, warn)을 정한다. 두 엔진 모두 실습 클러스터에 설치해 돌리지는 않았다. 필드 이름은 각 프로젝트 문서 기준이다.
+
+어느 쪽을 고를지는 이렇게 판단한다. 규칙이 몇 개 안 되고 CEL로 표현되면 VAP·MAP이 가장 싸다. 별도 Pod가 없으니 웹훅 장애도 없다. 변경과 생성까지 YAML로 다루고 싶고 팀원이 Rego를 배울 여유가 없으면 Kyverno가 편하다. 쿠버네티스 밖까지 같은 정책 언어를 쓰거나 복잡한 논리(여러 객체를 엮는 규칙)가 많으면 Gatekeeper가 맞다. 둘 다 "이미 있는 객체가 정책을 어기는지" 주기적으로 훑는 기능(Kyverno의 정책 리포트, Gatekeeper의 audit)이 있다는 점이 VAP와 다르다. VAP는 들어오는 요청만 본다. 정책을 걸기 전에 이미 들어와 있던 latest 이미지는 그대로 남는다.
+
+어떤 엔진을 쓰든 정책 엔진 자체가 웹훅이라는 사실은 변하지 않는다. 앞 절의 `namespaceSelector`, 타임아웃, 레플리카 수, `fail_open_count` 감시가 똑같이 필요하다.
+
+## kubelet API 권한도 잘게 나뉘었다
+
+어드미션 이야기는 아니지만 같은 요청 경로의 앞부분, 인가에서 최근 바뀐 것이 하나 있다. 노드의 kubelet도 HTTPS API(포트 10250)를 연다. 모니터링 에이전트가 Pod 목록이나 헬스 상태를 읽으러 오는 곳이다. kubelet은 요청을 받으면 API 서버에 SubjectAccessReview를 보내 "이 사용자가 nodes의 어떤 하위 리소스에 접근해도 되나"를 묻는다.
+
+예전에는 `/pods`, `/healthz`, `/configz` 같은 경로 대부분이 `nodes/proxy` 하나로 묶여 있었다. 그런데 `nodes/proxy` 권한이 있으면 kubelet API로 컨테이너에 exec까지 할 수 있다. Pod 목록만 보려던 모니터링 도구에 사실상 노드 전체 권한을 줘야 했던 것이다. kubelet fine-grained authorization은 이 경로들을 `nodes/pods`, `nodes/healthz`, `nodes/configz`로 따로 검사하고, 없을 때만 예전처럼 `nodes/proxy`로 다시 묻는다. 1.34.1 바이너리에서는 `KubeletFineGrainedAuthz`가 베타·기본 켜짐이었고, 1.37.0에서는 기능 게이트 목록에서 빠졌다.
+
+```bash
+# 모니터링용 ServiceAccount에 kubelet의 읽기 경로만 준다
+kubectl create sa scraper -n monitoring
+kubectl create clusterrole kubelet-pods-reader --verb=get --resource=nodes/pods,nodes/metrics,nodes/healthz
+kubectl create clusterrolebinding scraper --clusterrole=kubelet-pods-reader --serviceaccount=monitoring:scraper
+
+# 하위 리소스별로 허용되는지 묻는다
+for s in pods metrics proxy; do echo -n "nodes/$s: "; kubectl auth can-i get nodes --subresource=$s --as=system:serviceaccount:monitoring:scraper 2>/dev/null; done
+```
+
+```text
+nodes/pods: yes
+nodes/metrics: yes
+nodes/proxy: no
+```
+
+내장 ClusterRole `system:kubelet-api-admin`에도 `nodes/configz`, `nodes/healthz`, `nodes/pods`가 들어 있는 것을 볼 수 있다. kwok에는 진짜 kubelet이 없어서 kubelet 쪽 동작까지는 확인하지 못했고, 여기서는 RBAC 판단만 봤다. 모니터링 에이전트의 ClusterRole에 `nodes/proxy`가 있다면 이 기능이 켜진 버전인지 확인하고 좁힌다. RBAC 규칙을 읽고 좁히는 법은 [RBAC 글](/posts/k8s-rbac)에 있다.
+
+## 어드미션 때문에 막혔을 때 보는 순서
+
+에러 문장이 어디서 나왔는지부터 가른다. 대부분은 문장 하나로 범인이 나온다.
+
+- `is forbidden: User "..." cannot create resource` → 인가(RBAC)다. 어드미션까지 오지도 않았다.
+- `ValidatingAdmissionPolicy 'X' with binding 'Y' denied request` → VAP다. `kubectl get validatingadmissionpolicy X -o yaml`로 식을 보고, 바인딩의 `matchResources`가 왜 이 네임스페이스에 걸렸는지 본다.
+- `admission webhook "X" denied the request` → 웹훅이 정상적으로 거절했다. 메시지대로 객체를 고친다.
+- `failed calling webhook "X"` → 웹훅을 부르지 못했다. 뒤에 붙은 말로 더 좁힌다. `connection refused`는 Pod나 엔드포인트가 없는 것, `context deadline exceeded`는 웹훅이 느린 것, `x509: certificate signed by unknown authority`는 `caBundle`이 서버 인증서를 서명한 CA와 다른 것이다. 마지막 것은 실습 중에 같은 포트에 다른 프로세스가 떠 있을 때 실제로 만났다. 인증서가 만료됐다면 `certificate has expired`가 나온다.
+- `violates PodSecurity "restricted:latest"` → 내장 PodSecurity 어드미션이다. [Pod Security Admission 글](/posts/k8s-pod-security-admission)을 본다.
+- `exceeded quota` → ResourceQuota다.
+
+웹훅 이름을 알면 설정을 찾는다.
+
+```bash
+# 웹훅마다 실패 정책, 타임아웃, 대상 리소스를 한 줄씩 본다
+kubectl get validatingwebhookconfiguration no-secret-in-configmap \
+  -o jsonpath='{range .webhooks[*]}{.name}{"  "}{.failurePolicy}{"  "}{.timeoutSeconds}{"s  "}{.rules}{"\n"}{end}'
+```
+
+증상이 "가끔 kubectl이 느리다"라면 웹훅 지연을 의심한다. `apiserver_admission_webhook_admission_duration_seconds`를 웹훅 이름별로 보고, 클라우드 관리형이라면 API 서버 로그에서 `Failed calling webhook`을 찾는다. 클러스터 업그레이드 직후 갑자기 막혔다면, 웹훅이 받는 `admissionReviewVersions`나 웹훅 서버가 모르는 새 필드 때문일 때가 있다.
+
+Pod가 안 생기는데 `kubectl get pod`에 아무것도 없다면 Pod가 만들어지기 전에 어드미션에서 막힌 것이다. Deployment가 아니라 ReplicaSet의 이벤트에 이유가 있다.
+
+## 저장 직전의 마지막 관문
+
+어드미션은 인증과 인가를 지난 쓰기 요청을 etcd에 넣기 직전에 고치고(변경) 막는(검증) 단계다. 변경이 먼저, 검증이 나중이라 검증은 최종 모습을 본다. 규칙이 CEL로 표현되면 VAP와 MAP으로 API 서버 안에서 끝내는 게 가장 싸고 안전하다. 웹훅은 할 수 있는 일이 많은 대신 쓰기 경로에 외부 서버를 끼워 넣는다. 그래서 `failurePolicy`, 짧은 `timeoutSeconds`, 시스템과 자기 네임스페이스를 빼는 `namespaceSelector`, 레플리카와 PDB, `fail_open_count` 감시까지 함께 설계해야 한다. 이 단계가 남긴 기록은 [감사 로그 글](/posts/k8s-audit-logging)에서 읽어 본다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 API 요청은 어떤 순서로 처리되나
+
+인증, 인가, 변경 어드미션, 스키마 검증, 검증 어드미션을 지나 etcd에 저장된다. 인증은 누구인지, 인가(RBAC)는 해도 되는지, 어드미션은 내용이 규칙에 맞는지를 본다. 변경이 검증보다 먼저라 검증 단계는 변경이 끝난 최종 객체를 본다. 어드미션은 쓰기 요청에만 적용되고 get·list·watch는 거치지 않는다.
+
+### ValidatingAdmissionPolicy와 검증 웹훅은 무엇이 다른가
+
+VAP는 CEL 식을 API 서버 안에서 평가하고, 웹훅은 API 서버가 외부 HTTPS 서버를 부른다. VAP는 띄울 서버가 없어서 네트워크 지연과 웹훅 장애가 없고, 인증서 관리도 필요 없다. 대신 외부 시스템 조회나 복잡한 논리는 못 한다. 규칙이 CEL로 표현되면 VAP를 먼저 고르고, 안 될 때 웹훅을 쓴다.
+
+### failurePolicy를 Fail과 Ignore 중 무엇으로 두나
+
+보안 정책이면 Fail, 편의 기능이면 Ignore가 기본 판단이다. Fail은 웹훅이 죽으면 해당 리소스 쓰기가 모두 실패하고, Ignore는 그 동안 정책이 조용히 꺼진다. Fail을 쓸 때는 namespaceSelector로 kube-system과 웹훅 자신의 네임스페이스를 빼고, 레플리카와 PDB로 가용성을 챙기고, timeoutSeconds를 기본 10초에서 1~3초로 낮춘다. Ignore여도 기다리는 시간은 그대로라서다. Ignore를 쓸 때는 `apiserver_admission_webhook_fail_open_count`에 알림을 건다.
+
+### 웹훅 때문에 클러스터 쓰기가 다 막혔다. 어떻게 푸나
+
+에러의 `failed calling webhook` 이름으로 설정을 찾아 백업한 뒤 지우거나 failurePolicy를 Ignore로 바꾼다. 웹훅은 웹훅 설정 객체에 대한 요청에는 불리지 않아서 웹훅이 다 죽어 있어도 설정은 고칠 수 있다. 웹훅 Pod가 다시 Ready가 되면 백업한 설정을 되돌린다. GitOps가 관리 중이면 동기화를 먼저 멈춘다.
+
+### CEL 식에서 없는 필드를 읽으면 어떻게 되나
+
+`no such key` 실행 에러가 나고 정책의 failurePolicy를 따른다. Fail이면 위반으로 처리돼 요청이 거절된다. 그래서 `has()`나 `in`으로 먼저 있는지 묻는다. 오타 같은 스키마에 없는 필드는 정책을 만들 때 `status.typeChecking`에 경고로 남지만 생성은 거절되지 않으니 배포 파이프라인에서 확인한다.
+
+### 변경 웹훅이나 MutatingAdmissionPolicy를 짤 때 주의할 점은
+
+여러 번 불려도 결과가 같게(멱등) 짜야 한다. 변경 플러그인 사이의 순서는 보장되지 않고, reinvocationPolicy: IfNeeded면 다른 플러그인이 객체를 바꾼 뒤 다시 불린다. 매번 리스트에 append하면 사이드카가 중복으로 붙는다. dry-run 요청도 어드미션을 거치니 외부에 부작용을 남기지 말고 `sideEffects: None`으로 선언한다.
+
+### Kyverno와 OPA Gatekeeper는 어떻게 고르나
+
+둘 다 어드미션 웹훅으로 동작하는 정책 엔진이다. Kyverno는 정책을 쿠버네티스 YAML로 쓰고 검증·변경·리소스 생성·이미지 서명 확인을 한 도구로 한다. Gatekeeper는 Rego로 규칙을 쓰고 템플릿과 적용을 나누며, OPA를 쿠버네티스 밖에서도 쓰는 조직에 맞다. 규칙이 적고 CEL로 되면 둘 다 들이지 않고 VAP로 끝내는 게 운영 부담이 가장 적다.

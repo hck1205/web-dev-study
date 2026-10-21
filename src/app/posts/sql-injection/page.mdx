@@ -1,0 +1,296 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-injection");
+
+로그인 폼에 아이디로 `admin' --`를 넣고 비밀번호는 아무거나 쳤더니 관리자로 로그인됐다. 서버 코드를 열어 보면 이유가 보인다. 아이디와 비밀번호를 문자열로 이어 붙여 SQL을 만들고 있었다.
+
+```js
+const sql = `SELECT ... WHERE username = '${username}' AND password = '${password}'`;
+```
+
+내가 넣은 `admin' --`가 끼어들면 쿼리는 이렇게 완성된다. `'`로 문자열을 닫고, `--`로 뒤의 비밀번호 조건을 통째로 주석 처리한다. 비밀번호 검사가 사라진다. 이게 SQL 주입(SQL Injection)이다. [XSS](/posts/xss)가 데이터를 HTML 코드로 둔갑시키는 공격이라면, SQL 주입은 데이터를 SQL 코드로 둔갑시키는 공격이다. 뿌리가 같아서 OWASP Top 10에서도 2021년부터 둘 다 A03 Injection으로 묶여 있다.
+
+이 글은 PostgreSQL 16과 node-postgres로 실제 쿼리를 돌려 가며, 문자열 이어 붙이기가 왜 위험한지, 파라미터 바인딩이 어떻게 막는지, 그리고 바인딩으로도 안 막히는 자리(정렬 컬럼 같은 식별자)를 어떻게 다루는지 본다. SQL 기본은 [SQL 기본 명령어](/posts/sql-basics)에, DB 권한 설계는 [역할과 권한](/posts/postgres-roles-security)에 있다.
+
+## 작은 쇼핑몰 테이블로 시작한다
+
+예제는 끝까지 이 두 테이블로 간다. 사용자와 상품이다.
+
+```sql
+-- 사용자: 로그인에 쓰는 테이블
+CREATE TABLE users (
+  id serial PRIMARY KEY, username text NOT NULL, password text NOT NULL,
+  email text NOT NULL, is_admin boolean DEFAULT false
+);
+INSERT INTO users (username, password, email, is_admin) VALUES
+  ('alice','alice-pw-9f3a','alice@shop.test',false),
+  ('bob','bob-pw-7c21','bob@shop.test',false),
+  ('admin','S3cret-Admin!','admin@shop.test',true);
+
+-- 상품: 검색·정렬에 쓰는 테이블
+CREATE TABLE products (id serial PRIMARY KEY, name text NOT NULL, price integer NOT NULL);
+INSERT INTO products (name, price) VALUES ('Keyboard',42000),('Mouse',19000),('Monitor',230000);
+```
+
+비밀번호를 평문으로 둔 건 공격 결과를 눈으로 보기 위한 예시다. 실제로는 해시해서 저장한다.
+
+## 이어 붙인 문자열은 코드가 된다
+
+문자열을 이어 붙여 만든 쿼리는 "코드"와 "데이터"가 한 덩어리로 섞인다. DB는 완성된 문자열을 받아 통째로 파싱하므로, 데이터 자리에 들어온 `'`나 `--`를 문법으로 해석한다. 아래 그림에서 입력이 쿼리에 끼어드는 과정을 단계별로 보자.
+
+<SequenceDiagram
+  caption="앱이 문자열을 이어 붙이는 순간, 입력이 SQL 문법의 일부가 된다."
+  actors={[
+    { id: "attacker", label: "공격자" },
+    { id: "app", label: "앱 서버" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    {
+      from: "attacker",
+      to: "app",
+      label: "username=admin' --",
+      title: "아이디 자리에 SQL 조각을 넣는다",
+      detail: "따옴표 하나와 주석 기호를 넣는다. 평범한 폼 입력처럼 보인다.",
+      payload: "username: admin' --\npassword: anything",
+    },
+    {
+      from: "app",
+      to: "app",
+      label: "문자열 결합",
+      title: "앱이 값을 그대로 쿼리에 끼워 넣는다",
+      detail: "따옴표가 문자열을 닫고, -- 뒤가 전부 주석이 된다. 비밀번호 조건이 사라진다.",
+      payload: "SELECT id, username, is_admin FROM users\nWHERE username = 'admin' --' AND password = 'anything'",
+    },
+    {
+      from: "app",
+      to: "db",
+      label: "완성된 SQL 전송",
+      title: "DB는 받은 문자열을 통째로 파싱한다",
+      detail: "DB 입장에서는 코드와 데이터가 구분되지 않는다. 주석 뒤는 무시하고 username만 본다.",
+    },
+    {
+      from: "db",
+      to: "app",
+      label: "admin 행 반환",
+      title: "비밀번호 검사 없이 관리자가 로그인된다",
+      detail: "where 조건이 username='admin' 하나만 남았으니 admin 행이 돌아온다.",
+      payload: "[{\"id\":3,\"username\":\"admin\",\"is_admin\":true}]",
+    },
+  ]}
+/>
+
+이걸 실제로 node-postgres로 돌렸다. 정상 로그인부터 공격까지 같은 취약 함수에 넣어 본 결과다.
+
+```text
+=== 1. Normal login (correct password) ===
+  [SQL] SELECT id, username, is_admin FROM users WHERE username = 'alice' AND password = 'alice-pw-9f3a'
+[{"id":1,"username":"alice","is_admin":false}]
+
+=== 3. Classic OR 1=1 bypass (username=admin' --) ===
+  [SQL] SELECT id, username, is_admin FROM users WHERE username = 'admin' --' AND password = 'anything'
+[{"id":3,"username":"admin","is_admin":true}]
+
+=== 4. OR 1=1 returns everyone ===
+  [SQL] SELECT id, username, is_admin FROM users WHERE username = 'x' OR '1'='1' AND password = 'y' OR '1'='1'
+[{"id":1,"username":"alice","is_admin":false},{"id":2,"username":"bob",...},{"id":3,"username":"admin","is_admin":true}]
+```
+
+3번은 관리자로 로그인됐고, 4번은 `OR '1'='1'`로 조건을 항상 참으로 만들어 모든 사용자 행을 끌어냈다. 4번에 들어간 입력을 조각으로 나눠 보면 각 글자가 쿼리에서 어떤 역할을 하는지 보인다.
+
+<UrlAnatomy
+  caption="username 칸에 넣은 x' OR '1'='1. 조각을 눌러 보자."
+  base="WHERE username = '"
+  separator=""
+  joiner=" "
+  params={[
+    {
+      key: "x'",
+      title: "문자열을 일찍 닫는다",
+      description: "앱이 열어 둔 따옴표를 입력의 따옴표가 닫는다. 이 뒤부터는 데이터가 아니라 SQL 문법이다.",
+    },
+    {
+      key: "OR",
+      title: "조건을 하나 더 붙인다",
+      description: "원래 조건이 거짓이어도 OR 뒤가 참이면 행이 통과한다.",
+    },
+    {
+      key: "'1'='1",
+      title: "항상 참인 비교",
+      description: "마지막 따옴표는 앱이 붙이는 닫는 따옴표와 짝이 맞는다. 그래서 문법 오류 없이 '1'='1'이 완성된다.",
+      code: "WHERE username = 'x' OR '1'='1' AND password = 'y' OR '1'='1'",
+    },
+  ]}
+/>
+
+AND가 OR보다 먼저 묶이므로 이 조건은 `username='x' OR ('1'='1' AND password='y') OR '1'='1'`가 되고, 마지막 `'1'='1'` 하나로 모든 행이 참이 된다. 여기까지는 "인증 우회"지만, 더 나가면 다른 테이블 내용까지 빼낼 수 있다.
+
+## UNION으로 다른 데이터를 끌어낸다
+
+`UNION`은 두 SELECT 결과를 이어 붙인다. 공격자가 원래 쿼리 뒤에 `UNION SELECT ...`를 주입하면, 화면에 상품 목록이 나오는 자리에 비밀번호를 섞어 내보낼 수 있다. 컬럼 개수와 타입만 맞추면 된다.
+
+```text
+=== 5. UNION-based extraction (pull password column) ===
+  [SQL] SELECT id, username, is_admin FROM users WHERE username = 'nope'
+        UNION SELECT id, username || ':' || password, is_admin FROM users --' AND password = ''
+[{"id":3,"username":"admin:S3cret-Admin!",...},
+ {"id":1,"username":"alice:alice-pw-9f3a",...},
+ {"id":2,"username":"bob:bob-pw-7c21",...}]
+```
+
+`username` 자리에 `username || ':' || password`를 넣어 비밀번호가 딸려 나왔다. 실전에서는 `information_schema`로 테이블·컬럼 이름을 먼저 알아낸 뒤 이런 식으로 데이터를 뽑는다.
+
+## 화면에 아무것도 안 떠도 시간으로 캔다
+
+응답에 쿼리 결과가 직접 드러나지 않아도 주입은 가능하다. 참/거짓에 따라 응답이 미묘하게 달라지거나(불린 기반), 응답 시간이 달라지게(시간 기반) 만들어 한 비트씩 알아내는 것이 블라인드 SQL 주입이다. PostgreSQL에는 `pg_sleep(초)`가 있다. "관리자 비밀번호 첫 글자가 S인가"가 참이면 2초 자고, 거짓이면 바로 응답하게 만들어 시간을 쟀다.
+
+```text
+=== Time-based blind SQLi: is admin password first char = S? ===
+  guess 'S': 2006 ms
+  guess 'Z': 1 ms
+```
+
+`S`로 추측했을 때만 2초가 걸렸다. 응답에 글자가 안 보여도 시간만으로 "첫 글자는 S"를 확인한 것이다. 이걸 글자마다 반복하면 비밀번호 전체를 복원한다. 화면에 결과가 안 나오니 안전하다는 생각은 틀렸다.
+
+## 파라미터 바인딩이 코드와 데이터를 가른다
+
+막는 방법은 하나로 모인다. **쿼리의 구조(코드)와 값(데이터)을 따로 보낸다.** 문자열로 이어 붙이지 않고, 자리표시자(`$1`, `$2`)를 둔 쿼리 템플릿과 값을 분리해 DB에 넘기면, DB는 템플릿을 먼저 파싱해 구조를 확정한 뒤 값을 그 자리에 "데이터로만" 끼운다. 값 안에 `'`나 `--`가 있어도 더 이상 문법이 아니라 그냥 글자다.
+
+<AlgoTrace
+  memoryLabel="바인딩된 값"
+  caption="자리표시자로 구조를 먼저 확정하면, 값은 데이터로만 들어간다"
+  cells={["SELECT ...", "WHERE username =", "$1", "AND password =", "$2"]}
+  steps={[
+    { pointer: 0, caption: "DB가 템플릿을 먼저 파싱한다. 이 시점엔 값이 없다." },
+    { pointer: 1, caption: "WHERE 절의 구조가 확정된다. 비교 대상 자리는 $1 하나다." },
+    { pointer: 2, memory: ["$1 = admin' --"], caption: "$1에 값을 데이터로 바인딩한다. 따옴표도 주석 기호도 그냥 글자다." },
+    { pointer: 4, memory: ["$1 = admin' --", "$2 = anything"], caption: "$2도 데이터로 바인딩된다. 구조는 이미 고정됐으니 값이 쿼리를 바꿀 수 없다." },
+  ]}
+/>
+
+같은 공격(`admin' --`)을 파라미터 바인딩 쿼리에 넣어 봤다.
+
+```text
+=== 6. Same attack #3 against parameterized query ===
+  SELECT id, username, is_admin FROM users WHERE username = $1 AND password = $2
+  values: ["admin' --", "anything"]
+[]
+```
+
+결과가 빈 배열이다. `admin' --`라는 **이름을 가진 사용자**를 찾았고, 그런 사용자는 없으니 아무것도 안 나왔다. 따옴표가 문법으로 해석되지 않았다는 뜻이다. 구조와 데이터를 분리하는 이 방식이 ConceptDiagram으로 보면 이렇다.
+
+<ConceptDiagram
+  caption="이어 붙이기는 한 채널로 섞어 보내고, 바인딩은 구조와 값을 나눠 보낸다."
+  width={400}
+  height={230}
+  nodes={[
+    { id: "concat", label: "문자열 결합", sub: "코드+데이터 혼합", x: 105, y: 50, w: 150 },
+    { id: "parse1", label: "DB 파서", sub: "전부 문법으로", x: 105, y: 160, w: 150 },
+    { id: "tmpl", label: "쿼리 템플릿", sub: "$1 $2 자리표시", x: 300, y: 45, w: 150 },
+    { id: "data", label: "값 배열", sub: "데이터 전용", x: 300, y: 120, w: 150 },
+    { id: "parse2", label: "DB 파서", sub: "구조 먼저 확정", x: 300, y: 195, w: 150 },
+  ]}
+  edges={[
+    { from: "concat", to: "parse1", label: "주입 가능" },
+    { from: "tmpl", to: "parse2", label: "구조" },
+    { from: "data", to: "parse2", label: "값만" },
+  ]}
+/>
+
+<Callout kind="note">
+이스케이프 함수로 따옴표를 직접 바꿔 막겠다는 생각은 권하지 않는다. 문자 인코딩, 숫자 자리, 백슬래시 처리 등 빈틈이 많다. 드라이버가 제공하는 자리표시자 바인딩을 쓰고, ORM을 쓰더라도 raw 쿼리에는 반드시 바인딩 파라미터를 넘긴다.
+</Callout>
+
+## 바인딩으로 못 막는 자리, 식별자
+
+파라미터 바인딩은 "값"이 들어갈 자리만 막는다. 컬럼 이름, 테이블 이름, `ORDER BY` 대상 같은 **식별자**는 값이 아니라 구조라서 자리표시자로 넘길 수 없다. "가격순 정렬"을 사용자가 고르는 기능에서 정렬 컬럼을 `$1`로 넘기면 어떻게 되는지 보자.
+
+```text
+=== ORDER BY injection: params do NOT help ===
+  ORDER BY $1 with "price": rows: ["Keyboard","Mouse","Monitor"]
+```
+
+`ORDER BY $1`에 `'price'`를 넘겼는데 정렬이 안 됐다. 삽입 순서 그대로다. `$1`이 컬럼 이름이 아니라 "문자열 상수 'price'"로 들어가서, 모든 행을 같은 상수로 정렬한 셈이라 순서가 안 바뀐 것이다. 바인딩이 식별자 자리에서는 통하지 않는다는 증거다. 그래서 식별자는 **허용 목록**으로 다룬다.
+
+<CodePlayground
+  caption="정렬 컬럼은 바인딩이 아니라 허용 목록으로 검증한다"
+  functionName="safeSort"
+  initialCode={`function safeSort(col) {\n  // 허용된 컬럼 이름만 통과시키고, 그 외에는 "id"로 되돌린다\n  // 허용: id, name, price\n  return "id";\n}`}
+  solution={`function safeSort(col) {\n  const allowed = { id: "id", name: "name", price: "price" };\n  return allowed[col] || "id";\n}`}
+  tests={[
+    { args: ["price"], expected: "price", label: "허용된 컬럼" },
+    { args: ["name"], expected: "name", label: "허용된 컬럼" },
+    { args: ["price; DROP TABLE users"], expected: "id", label: "주입 시도 차단" },
+    { args: ["(SELECT 1)"], expected: "id", label: "서브쿼리 차단" },
+  ]}
+/>
+
+허용 목록을 거친 값만 쿼리에 이어 붙이니 안전하다. 실제로 `safeSort('price; DROP TABLE users')`는 거부되고, 허용된 컬럼만 정렬에 쓰였다.
+
+```text
+=== Allow-list for ORDER BY ===
+  rejected: invalid sort column
+  safe sorted: ["Monitor","Keyboard","Mouse"]
+```
+
+허용 목록을 만들기 어려운 동적 상황이라면, PostgreSQL의 `format('%I', ...)`로 식별자를 안전하게 따옴표 처리한다. `%I`는 식별자 규칙에 맞게 큰따옴표로 감싸고 내부 따옴표를 두 배로 만들어 주입을 무력화한다.
+
+```text
+=== format(%I) to quote an identifier safely ===
+  SELECT * FROM products ORDER BY "weird"";DROP"
+```
+
+`weird";DROP`이라는 악의적 식별자가 `"weird"";DROP"`으로 바뀌어 하나의 식별자 이름이 됐다. 세미콜론도 DROP도 문법이 아니라 식별자 글자가 됐다.
+
+## 최소 권한으로 피해를 가둔다
+
+주입이 한 군데라도 뚫릴 수 있다는 전제에서, DB 역할의 권한을 좁혀 두면 피해가 작다. 앱이 쓰는 역할에 꼭 필요한 테이블·동작만 준다. 읽기 전용 화면용 역할이 `products`만 SELECT할 수 있게 해 두고, 그 역할로 `users`를 노리는 UNION 공격과 `DROP TABLE`을 시도해 봤다.
+
+```text
+=== readonly role: can it read products? ===
+  products OK: [{"name":"Keyboard"}]
+=== readonly role: UNION attack to read users ===
+  blocked: permission denied for table users
+=== readonly role: try to DROP TABLE ===
+  blocked: must be owner of table products
+```
+
+같은 주입이라도 `users` 읽기는 "permission denied"로, 테이블 삭제는 "must be owner"로 막혔다. 바인딩을 빠뜨린 쿼리가 하나 있어도, 역할이 그 테이블에 권한이 없으면 공격이 거기서 멈춘다. 역할·권한 설계는 [역할과 권한](/posts/postgres-roles-security)에 더 자세히 있다. 애플리케이션은 슈퍼유저나 테이블 소유자 역할로 붙지 않는 게 기본이다.
+
+## 실제로 SQL 주입을 만나는 순간
+
+운영에서 SQL 주입은 보통 이상 쿼리나 오류 폭증으로 드러난다. DB 로그에 평소 없던 `UNION SELECT`, `information_schema` 조회, `pg_sleep`이 보이면 주입 시도다. 응답 시간이 특정 파라미터에서만 규칙적으로 2초, 4초씩 늘면 시간 기반 블라인드를 의심한다. 확인은 그 엔드포인트가 쓰는 쿼리가 문자열 결합인지 바인딩인지 코드에서 보는 것부터 시작한다.
+
+ORM을 쓴다고 안심하면 안 된다. ORM의 기본 메서드(`findOne`, `where` 객체)는 바인딩을 쓰지만, `raw`·`$queryRawUnsafe`·`.query(문자열)` 같은 탈출구에 사용자 값을 이어 붙이면 그대로 뚫린다. 성능 튜닝한다고 손으로 쓴 raw 쿼리에 파라미터를 문자열로 박아 넣는 게 흔한 실수다. 또 하나는 "숫자니까 안전하다"는 착각이다. `WHERE id = ${id}`에서 `id`가 따옴표 없이 들어가면 `1 OR 1=1` 같은 숫자 자리 주입이 된다. 자리를 가리지 말고 전부 바인딩한다.
+
+정리하면 방어는 겹겹이다. 값 자리는 파라미터 바인딩으로 코드와 데이터를 가르고, 식별자 자리는 허용 목록이나 `format('%I')`로 다루고, DB 역할은 최소 권한으로 좁혀 뚫렸을 때의 피해를 가둔다. 가장 바깥의 입력 검증은 보조일 뿐, 핵심은 쿼리를 만드는 방식에 있다.
+
+## 면접에서 나올 만한 질문
+
+### SQL 주입은 왜 생기나
+
+쿼리를 문자열로 이어 붙이면 "코드"와 "데이터"가 한 덩어리로 섞여 DB에 전달되고, DB는 완성된 문자열을 통째로 파싱하기 때문이다. 그래서 데이터 자리에 들어온 따옴표나 주석 기호가 문법으로 해석돼 쿼리의 의미를 바꾼다. admin' -- 를 넣으면 비밀번호 조건이 주석 처리돼 인증이 우회되는 식이다. 근본 원인은 코드와 데이터를 분리하지 않은 데 있다.
+
+### 파라미터 바인딩은 어떻게 주입을 막나
+
+쿼리 구조를 담은 템플릿($1, $2 자리표시자)과 값을 따로 보낸다. DB가 템플릿을 먼저 파싱해 구조를 확정한 뒤 값을 데이터로만 끼우므로, 값 안의 따옴표나 주석 기호가 더 이상 문법이 아니라 그냥 글자가 된다. 실험에서 admin' -- 를 바인딩 쿼리에 넣으니 그런 이름의 사용자를 찾다 빈 결과가 나왔다. 구조가 값보다 먼저 고정된다는 게 핵심이다.
+
+### 결과가 화면에 안 보이는 엔드포인트도 주입이 가능한가
+
+가능하다. 블라인드 SQL 주입이다. 참/거짓에 따라 응답이 달라지거나, pg_sleep으로 응답 시간이 달라지게 만들어 한 비트씩 알아낸다. 실험에서 관리자 비밀번호 첫 글자가 S인지 묻는 조건이 참일 때만 2006ms, 거짓일 때 1ms가 걸려 글자를 특정했다. 화면에 결과가 없다고 안전한 게 아니다.
+
+### ORDER BY 컬럼은 왜 바인딩으로 못 막나
+
+바인딩은 값이 들어갈 자리만 막는다. 컬럼 이름이나 ORDER BY 대상은 값이 아니라 쿼리 구조(식별자)라서 자리표시자로 넘길 수 없다. 실험에서 ORDER BY $1에 'price'를 넘기자 컬럼이 아니라 문자열 상수로 취급돼 정렬이 안 됐다. 식별자는 허용 목록으로 검증하거나 PostgreSQL의 format('%I')로 안전하게 따옴표 처리한다.
+
+### ORM을 쓰면 SQL 주입을 신경 안 써도 되나
+
+아니다. ORM의 기본 메서드는 바인딩을 쓰지만, raw나 queryRawUnsafe, query(문자열) 같은 탈출구에 사용자 값을 이어 붙이면 그대로 뚫린다. 성능 때문에 손으로 쓴 raw 쿼리에 파라미터를 문자열로 박아 넣는 게 흔한 실수다. ORM을 쓰더라도 raw 쿼리에는 반드시 바인딩 파라미터를 넘겨야 한다.
+
+### 최소 권한 DB 역할이 주입 방어에 어떻게 기여하나
+
+주입이 한 군데 뚫려도 그 역할에 없는 권한은 쓸 수 없어 피해가 거기서 멈춘다. 실험에서 products만 읽을 수 있는 역할로 users를 노린 UNION 공격은 permission denied, DROP TABLE은 must be owner로 막혔다. 바인딩이 1차 방어라면 최소 권한은 뚫렸을 때의 피해를 가두는 심층 방어다. 애플리케이션은 슈퍼유저나 소유자 역할로 붙지 않는 게 기본이다.
+
+### 숫자 파라미터는 따옴표가 없으니 안전하지 않나
+
+아니다. `WHERE id = ${id}`처럼 따옴표 없이 숫자를 이어 붙이면 1 OR 1=1 같은 입력이 그대로 조건을 바꾼다. 따옴표 유무와 상관없이 문자열 결합 자체가 문제다. 숫자든 문자열이든 값 자리는 전부 바인딩하고, 정수여야 한다면 바인딩 전에 타입 검증까지 해 두는 게 안전하다.

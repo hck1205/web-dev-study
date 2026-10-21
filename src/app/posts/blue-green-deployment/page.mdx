@@ -1,0 +1,427 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("blue-green-deployment");
+
+배포 버튼을 누르면 30초쯤 502가 섞여 나온다. 서버를 한 대씩 내렸다 올리는 동안 로드 밸런서가 아직 안 뜬 서버에 요청을 보내기 때문이다. 더 곤란한 건 되돌릴 때다. 새 버전에서 버그가 보여서 옛 버전으로 돌리려니 다시 빌드하고 다시 한 대씩 올려야 해서 10분이 걸렸다. 그 10분 동안 버그는 계속 사용자에게 보인다.
+
+블루그린 배포는 이 두 문제를 "한 벌을 더 띄우는 비용"으로 푼다. 지금 서비스 중인 환경(블루) 옆에 똑같은 환경(그린)을 하나 더 띄우고, 새 버전을 그린에 올려 충분히 확인한 다음, 트래픽이 가는 방향만 한 번에 바꾼다. 문제가 생기면 방향을 다시 돌린다. 블루는 아직 그대로 떠 있으니 되돌리기가 빌드도 배포도 아닌 설정 한 줄이 된다.
+
+이 주제의 다른 글: 일부 사용자에게 먼저 보내며 지표를 보는 [카나리 릴리스](/posts/canary-release), 서버를 몇 대씩 차례로 바꾸는 [롤링 배포](/posts/rolling-deployment). 파이프라인 전체에서 배포 단계가 어디쯤인지는 [CI/CD 기본](/posts/ci-cd-basics)에, 쿠버네티스 Service 셀렉터로 하는 블루그린은 [Deployment 글](/posts/k8s-deployment)에 그림과 함께 있다.
+
+출력은 Ubuntu 24.04 컨테이너의 network namespace 안에서 받았다. Node.js로 만든 작은 백엔드 두 개(블루 v1은 9001, 그린 v2는 9002 포트, 요청마다 20ms 처리)를 띄우고 앞에 nginx 1.24를 세웠다. 부하는 keep-alive 연결 50개로 쉬지 않고 요청을 보내는 Node.js 스크립트가 만들고, 초마다 성공·실패 수와 응답한 버전을 센다.
+
+## 두 벌을 띄워 두고 방향만 바꾼다
+
+블루와 그린은 색 이름일 뿐 순서가 없다. 지금 운영 중인 쪽이 블루이고 다음 버전을 받을 쪽이 그린이다. 전환이 끝나면 그린이 운영이 되고, 다음 배포 때는 비어 있는 옛 블루가 새 버전을 받는다. 두 벌이 번갈아 가며 역할을 바꾼다.
+
+아래 그림에서 다음을 누르면 배포 한 번이 어떻게 흐르는지 보인다. 사용자 요청은 항상 로드 밸런서를 지나고, 로드 밸런서가 어느 쪽을 가리키는지만 바뀐다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="블루그린: 방향을 바꾸는 곳은 로드 밸런서 한 곳이다"
+  zones={[
+    { id: "blue", label: "blue (v1)", x: 8, y: 140, w: 186, h: 102, tone: "private" },
+    { id: "green", label: "green (v2)", x: 206, y: 140, w: 186, h: 102, tone: "public" },
+  ]}
+  nodes={[
+    { id: "user", label: "User", x: 120, y: 28, icon: "client" },
+    { id: "qa", label: "QA", sub: "internal", x: 300, y: 28, icon: "client" },
+    { id: "lb", label: "LB", sub: "nginx :8080", x: 200, y: 94, icon: "lb" },
+    { id: "b1", label: "blue-1", sub: ":9001", x: 100, y: 200, icon: "server" },
+    { id: "g1", label: "green-1", sub: ":9002", x: 300, y: 200, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "lb" },
+    { from: "qa", to: "g1", dashed: true, label: "test" },
+    { from: "lb", to: "b1" },
+    { from: "lb", to: "g1", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "lb", "b1"], packet: "GET /", highlight: ["blue"], title: "지금은 블루가 받는다", detail: "upstream에 블루만 들어 있다. 그린은 아직 비어 있거나 옛 버전이다." },
+    { path: ["qa", "g1"], packet: "smoke", highlight: ["green"], title: "그린에 새 버전을 올리고 따로 확인한다", detail: "운영 트래픽을 받기 전에 내부 주소로 스모크 테스트를 돌린다. 사용자는 아직 아무것도 모른다." },
+    { path: ["user", "lb", "g1"], packet: "GET /", highlight: ["green"], title: "방향을 바꾼다", detail: "upstream을 그린으로 바꾸고 reload 한다. 새 요청은 전부 그린으로 간다." },
+    { path: ["b1"], highlight: ["blue"], title: "블루는 지우지 않고 남겨 둔다", detail: "처리 중이던 요청을 마저 끝내고, 되돌릴 일에 대비해 한동안 그대로 둔다." },
+    { path: ["user", "lb", "b1"], packet: "GET /", highlight: ["blue"], title: "문제가 보이면 다시 돌린다", detail: "되돌리기도 같은 한 줄이다. 블루가 떠 있는 동안은 1초 안에 끝난다." },
+  ]}
+/>
+
+롤링 배포와 가장 크게 다른 점은 섞이는 시간이다. 롤링은 서버를 몇 대씩 바꾸니 몇 분 동안 v1과 v2가 함께 요청을 받는다. 블루그린은 방향을 바꾸는 순간 한 번에 넘어간다. 대신 그 순간까지 두 벌의 서버가 모두 떠 있어야 한다.
+
+## 어디서 방향을 바꾸나
+
+방향을 바꾸는 장치는 여러 층에 있다. 어느 층에서 바꾸느냐에 따라 전환 속도와 되돌리는 속도가 크게 달라진다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="방향을 바꾸는 자리마다 걸리는 시간이 다르다"
+  nodes={[
+    { id: "dns", label: "DNS 레코드", sub: "TTL만큼 늦다", x: 90, y: 40, w: 140 },
+    { id: "lb", label: "LB · 프록시", sub: "reload 즉시", x: 310, y: 40, w: 140 },
+    { id: "svc", label: "K8s Service", sub: "셀렉터 한 줄", x: 90, y: 140, w: 140 },
+    { id: "tg", label: "클라우드 LB", sub: "타깃 그룹 교체", x: 310, y: 140, w: 140 },
+    { id: "env", label: "블루 · 그린", sub: "두 벌의 서버", x: 200, y: 220, w: 150 },
+  ]}
+  edges={[
+    { from: "dns", to: "env", label: "IP" },
+    { from: "lb", to: "env", label: "upstream" },
+    { from: "svc", to: "env", label: "label" },
+    { from: "tg", to: "env", label: "listener" },
+  ]}
+/>
+
+- 로드 밸런서·리버스 프록시: nginx의 `upstream`, HAProxy의 backend를 바꾸고 설정을 다시 읽힌다. 새 요청부터 바로 바뀐다. 이 글에서 직접 재 볼 방식이다.
+- 클라우드 로드 밸런서: AWS ALB라면 리스너 규칙이 가리키는 타깃 그룹을 블루 그룹에서 그린 그룹으로 바꾼다. 가중치를 주는 forward 액션으로 0과 100을 맞바꾸는 방식도 쓴다. 바뀌는 데 보통 몇 초가 걸리고, 빠지는 타깃은 등록 해제 지연(기본 300초) 동안 진행 중인 요청을 마친다.
+- 쿠버네티스 Service: Deployment 두 개를 띄우고 Service의 `selector`를 `version: blue`에서 `version: green`으로 바꾼다. kube-proxy가 규칙을 고치는 몇 초 안에 넘어간다. 그림은 [Deployment 글](/posts/k8s-deployment)에 있다.
+- DNS: `api.example.com`의 A 레코드를 블루의 IP에서 그린의 IP로 바꾼다. 장비가 필요 없지만 가장 느리다. 아래에서 따로 본다.
+
+어느 쪽이든 원리는 같다. 사용자가 아는 주소는 그대로 두고, 그 주소 뒤에서 가리키는 대상만 갈아 끼운다.
+
+## nginx에서 upstream 한 줄을 바꿔 본다
+
+설정은 upstream의 서버 목록을 별도 파일로 빼 두는 것으로 시작한다. 전환할 때 이 파일 하나만 고친다.
+
+```nginx
+# /etc/nginx/conf.d/app.conf
+upstream app {
+    include /etc/nginx/active.conf;   # 지금 운영 중인 쪽 한 줄만 들어 있다
+    keepalive 32;                     # 백엔드로 여는 연결을 재사용한다
+}
+
+server {
+    listen 8080;
+    location / {
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
+```
+
+```bash
+# 지금은 블루를 가리킨다
+cat /etc/nginx/active.conf
+# 응답 헤더로 어느 버전이 받았는지 확인한다 (앱이 X-Version을 붙인다)
+curl -si http://127.0.0.1:8080/
+```
+
+```text
+server 127.0.0.1:9001;  # blue (v1)
+HTTP/1.1 200 OK
+Server: nginx/1.24.0 (Ubuntu)
+Date: Tue, 20 Oct 2026 20:10:11 GMT
+Content-Length: 29
+Connection: keep-alive
+X-Version: v1
+
+{"version":"v1","port":9001}
+```
+
+이제 부하를 걸어 둔 채 4초쯤에 방향을 바꾼다. 전환 절차는 세 줄이다.
+
+```bash
+# 1) 파일을 그린으로 바꾼다
+echo 'server 127.0.0.1:9002;  # green (v2)' | sudo tee /etc/nginx/active.conf
+# 2) 문법을 먼저 검사한다. 실패하면 reload 하지 않는다
+sudo nginx -t
+# 3) 설정을 다시 읽힌다 (프로세스를 내리지 않는다)
+sudo nginx -s reload
+```
+
+부하 스크립트가 초마다 센 결과다.
+
+```text
+t= 0s ok=1754 fail=0 v1=1754
+t= 1s ok=1878 fail=0 v1=1878
+t= 2s ok=1942 fail=0 v1=1942
+t= 3s ok=2094 fail=0 v1=2094
+t= 4s ok=1809 fail=0 v1=102 v2=1707
+t= 5s ok=1902 fail=0 v2=1902
+t= 6s ok=1988 fail=0 v2=1988
+t= 7s ok=2041 fail=0 v2=2041
+requests=15408 ok=15408 5xx=0 4xx=0 conn_errors=0
+by version: v1=7770 v2=7638
+```
+
+1만 5천 건 넘는 요청 중 실패는 0이다. 볼 곳은 `t= 4s` 줄이다. 전환한 그 1초 안에 v1 응답 102건과 v2 응답 1707건이 섞여 있다. 바꾸기 직전에 들어와 처리 중이던 요청은 옛 설정대로 블루가 끝냈고, 그 뒤 요청은 그린이 받았다. 1초가 지나면 v1은 하나도 없다.
+
+## reload가 요청을 떨어뜨리지 않는 이유
+
+`nginx -s reload`는 프로세스를 내렸다 올리는 게 아니다. nginx는 마스터 프로세스 하나와 실제로 요청을 처리하는 워커 여러 개로 돈다. reload 신호(SIGHUP)를 받은 마스터는 새 설정으로 워커를 새로 띄우고, 옛 워커에게는 "새 연결은 받지 말고 하던 것만 끝내라"고 알린다. 듣고 있는 소켓(8080)은 마스터가 쥐고 있으니 그 사이에 포트가 닫히는 순간이 없다.
+
+<SequenceDiagram
+  caption="reload 한 번에 일어나는 일"
+  actors={[
+    { id: "op", label: "운영자" },
+    { id: "m", label: "master" },
+    { id: "old", label: "옛 worker" },
+    { id: "new", label: "새 worker" },
+  ]}
+  steps={[
+    { from: "op", to: "m", label: "SIGHUP", title: "reload 신호를 보낸다", detail: "nginx -s reload는 마스터에게 SIGHUP을 보내는 명령이다. 설정이 틀리면 마스터는 옛 설정을 그대로 쓴다." },
+    { from: "m", to: "m", label: "설정 읽기", title: "새 설정을 읽는다", detail: "active.conf까지 포함해 다시 읽는다. 듣는 소켓은 그대로 쥐고 있다." },
+    { from: "m", to: "new", label: "fork", title: "새 워커를 띄운다", detail: "새 워커는 upstream이 그린인 설정으로 시작해 새 연결을 받는다." },
+    { from: "m", to: "old", label: "graceful", title: "옛 워커에게 정리하라고 한다", detail: "옛 워커는 새 연결을 받지 않는다. 처리 중인 요청은 옛 설정, 즉 블루로 끝낸다." },
+    { from: "old", to: "m", label: "exit 0", title: "할 일이 끝나면 나간다", detail: "남은 요청을 다 보내고 쉬는 keep-alive 연결을 닫은 뒤 종료한다." },
+  ]}
+/>
+
+위 실험에서 nginx 에러 로그를 notice 수준으로 남겨 두면 이 순서가 그대로 찍힌다.
+
+```text
+2026/10/20 20:10:21 [notice] 21917#21917: signal 1 (SIGHUP) received from 22042, reconfiguring
+2026/10/20 20:10:21 [notice] 21917#21917: reconfiguring
+2026/10/20 20:10:21 [notice] 21917#21917: using the "epoll" event method
+2026/10/20 20:10:21 [notice] 21917#21917: start worker processes
+2026/10/20 20:10:21 [notice] 21917#21917: start worker process 22045
+2026/10/20 20:10:21 [notice] 21917#21917: start worker process 22046
+2026/10/20 20:10:21 [notice] 21918#21918: gracefully shutting down
+2026/10/20 20:10:21 [notice] 21919#21919: gracefully shutting down
+2026/10/20 20:10:21 [notice] 21919#21919: exiting
+2026/10/20 20:10:21 [notice] 21919#21919: exit
+2026/10/20 20:10:21 [notice] 21917#21917: worker process 21919 exited with code 0
+```
+
+마스터(21917)가 새 워커 22045·22046을 먼저 띄우고, 그다음 옛 워커 21918·21919가 정리에 들어간다. 한 가지 틈은 있다. 클라이언트가 새 연결을 막 여는 순간과 reload가 겹치면, 정리에 들어간 옛 워커가 그 연결을 닫아 `ECONNRESET`이 날 수 있다. 연결 50개를 reload 직후에 한꺼번에 열게 한 실험에서는 5884건 중 6건이 이렇게 끊겼다. 브라우저 같은 클라이언트는 멱등한 요청을 한 번 다시 보내 덮지만, 재시도 없는 서버 간 호출이라면 이 몇 건이 에러로 남는다. 로그 한 줄은 아래처럼 읽는다.
+
+<UrlAnatomy
+  caption="nginx 에러 로그 한 줄 읽기"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "time", display: "2026/10/20 20:10:21", title: "시각", description: "초 단위다. reload 전후로 몇 초가 걸렸는지 보려면 이 칸을 본다." },
+    { key: "level", display: "[notice]", title: "수준", description: "error_log에 notice 이상을 남기도록 해야 reload 과정이 보인다. 기본값 error에서는 찍히지 않는다." },
+    { key: "pid", display: "21918#21918:", title: "프로세스#스레드", description: "앞 번호가 PID다. 마스터의 PID와 비교하면 이 줄이 마스터인지 워커인지 알 수 있다." },
+    { key: "msg", display: "gracefully shutting down", title: "내용", description: "옛 워커가 새 연결을 그만 받고 정리에 들어갔다는 뜻이다. 이 줄 뒤에 exiting이 늦게 나오면 오래 붙어 있는 연결이 있다는 신호다." },
+  ]}
+/>
+
+옛 워커가 오래 안 나가는 경우가 있다. WebSocket이나 스트리밍처럼 끝나지 않는 연결을 쥐고 있으면 그 연결이 닫힐 때까지 기다린다. reload를 여러 번 하면 `ps`에 `nginx: worker process is shutting down`이 줄줄이 남고 메모리가 쌓인다. nginx 1.11.11부터 있는 `worker_shutdown_timeout`(예: `30s`)을 주면 그 시간이 지나면 옛 워커가 남은 연결을 끊고 나간다.
+
+## 바꾸는 방법을 틀리면 실패가 생긴다
+
+같은 전환을 두 가지 흔한 실수로 다시 해 봤다. 첫째는 reload 대신 nginx를 내렸다 올리는 것이다. `systemctl restart nginx`가 하는 일이 이것이다.
+
+```bash
+# 잘못된 예: 프로세스를 내렸다 올린다
+sudo nginx -s stop && sudo nginx
+```
+
+```text
+t= 2s ok=1456 fail=0 v1=1456
+t= 3s ok=1537 fail=197 v1=1537
+t= 4s ok= 997 fail=500 v2=997
+t= 5s ok=1953 fail=0 v2=1953
+requests=12043 ok=11346 5xx=0 4xx=0 conn_errors=697
+```
+
+포트가 닫혀 있던 0.2초 동안 697건이 연결 단계에서 실패했다. 5xx가 아니라 `conn_errors`로 잡힌 점을 보면, 이 실패는 nginx 접근 로그에도 남지 않는다. 받지도 못한 요청이기 때문이다. 앱 로그와 nginx 로그를 아무리 봐도 안 보이고 클라이언트 쪽 지표에서만 보인다.
+
+둘째는 전환하자마자 블루를 바로 죽이는 것이다. 스크립트가 "reload 다음 줄"에서 옛 서버를 내리도록 짜여 있으면 이렇게 된다.
+
+```text
+t= 3s ok=2147 fail=50 v1=2147
+t= 4s ok=1980 fail=422 v2=1980
+t= 5s ok=2156 fail=0 v2=2156
+requests=17531 ok=17059 5xx=422 4xx=0 conn_errors=50
+```
+
+이번에는 502가 422건이다. reload 직후에도 옛 워커는 아직 처리 중인 요청과 keep-alive 연결을 들고 블루로 보내고 있었다. 그 블루가 사라졌으니 옛 워커가 받은 요청이 502로 끝났다. 앞의 정상 전환에서 `v1=102`로 찍힌 요청들이 바로 이 구간이다.
+
+<Callout kind="warning">
+전환 스크립트에서 옛 환경을 내리는 단계는 reload와 붙여 두지 않는다. 옛 워커가 모두 나갔는지(`ps -ef | grep "shutting down"`이 비었는지) 확인하고, 최소한 가장 긴 요청 시간보다 길게 기다린 뒤 내린다. 이미 내려 버렸다면 블루를 다시 띄우는 게 아니라 upstream이 그린만 가리키는지부터 확인하면 된다. 블루를 되살리는 건 되돌리기가 필요할 때의 일이다.
+</Callout>
+
+## DNS로 바꾸면 TTL만큼 섞인다
+
+로드 밸런서가 하나 더 있기 어려운 경우, 예를 들어 리전 전체를 통째로 바꾸는 경우에는 DNS 레코드로 방향을 바꾼다. 문제는 DNS 답이 여기저기 캐시된다는 것이다. 사용자의 리졸버는 레코드의 TTL 동안 옛 IP를 기억한다. 바꾼 순간 캐시가 막 채워진 리졸버는 TTL을 다 채울 때까지 블루로 보낸다.
+
+<NetworkTopology
+  width={400}
+  height={244}
+  caption="DNS 전환: 캐시가 만료된 리졸버부터 그린으로 넘어간다"
+  zones={[
+    { id: "blue", label: "blue 198.51.100.10", x: 8, y: 150, w: 186, h: 86, tone: "private" },
+    { id: "green", label: "green 198.51.100.20", x: 206, y: 150, w: 186, h: 86, tone: "public" },
+  ]}
+  nodes={[
+    { id: "ua", label: "User A", x: 70, y: 28, icon: "client" },
+    { id: "ub", label: "User B", x: 330, y: 28, icon: "client" },
+    { id: "ra", label: "Resolver A", sub: "TTL 240s left", x: 70, y: 96, icon: "dns" },
+    { id: "rb", label: "Resolver B", sub: "expired", x: 330, y: 96, icon: "dns" },
+    { id: "auth", label: "Auth DNS", sub: "A → .20", x: 200, y: 96, icon: "dns" },
+    { id: "b", label: "blue LB", x: 100, y: 200, icon: "lb" },
+    { id: "g", label: "green LB", x: 300, y: 200, icon: "lb" },
+  ]}
+  links={[
+    { from: "ua", to: "ra" },
+    { from: "ub", to: "rb" },
+    { from: "rb", to: "auth", dashed: true },
+    { from: "ra", to: "b" },
+    { from: "rb", to: "g" },
+  ]}
+  steps={[
+    { path: ["auth"], highlight: ["green"], title: "권한 DNS의 레코드를 바꾼다", detail: "A 레코드가 198.51.100.20을 가리킨다. 새로 묻는 리졸버만 이 답을 받는다." },
+    { path: ["ub", "rb", "auth"], packet: "A?", title: "캐시가 만료된 리졸버는 다시 묻는다", detail: "Resolver B는 TTL이 끝나서 권한 DNS에 다시 물었고 새 IP를 받았다." },
+    { path: ["ub", "rb", "g"], packet: "GET /", highlight: ["green"], title: "B의 사용자는 그린으로 간다", detail: "같은 순간에도 리졸버마다 다른 답을 쥐고 있다." },
+    { path: ["ua", "ra", "b"], packet: "GET /", highlight: ["blue"], title: "A의 사용자는 아직 블루로 간다", detail: "Resolver A에는 240초 남은 옛 답이 있다. 그동안 블루를 내리면 A의 사용자는 연결에 실패한다." },
+  ]}
+/>
+
+TTL이 300초라면 리졸버 캐시가 채워진 시점은 대략 고르게 퍼져 있으니, 바꾼 지 60초 뒤에는 약 80%가, 300초 뒤에는 거의 0%가 블루에 남는다. 문제는 "거의"다. TTL을 지키지 않고 오래 쥐고 있는 리졸버, IP를 한 번 받으면 연결을 계속 재사용하는 앱(커넥션 풀을 쥔 서버, 모바일 앱의 HTTP 클라이언트)이 있다. 이들은 TTL과 상관없이 옛 IP로 간다. 그래서 DNS 전환에서는 블루를 TTL의 몇 배 동안 살려 두고, 블루로 들어오는 요청 수가 0에 가까워진 걸 지표로 확인한 뒤 내린다.
+
+아래 함수로 "바꾼 지 t초 뒤 블루에 남은 비율"을 계산해 볼 수 있다. `sticky`는 TTL과 상관없이 옛 IP를 계속 쓰는 클라이언트의 비율이다.
+
+<CodePlayground
+  caption="DNS 전환 뒤 블루에 남는 트래픽 비율(%)"
+  functionName="oldShare"
+  initialCode={`function oldShare(ttl, t, sticky) {
+  // ttl: 레코드 TTL(초), t: 바꾼 뒤 지난 시간(초)
+  // sticky: TTL을 무시하고 옛 IP를 계속 쓰는 비율 (0~1)
+  // 소수 첫째 자리까지 반올림한 퍼센트를 돌려준다
+  return 0;
+}`}
+  solution={`function oldShare(ttl, t, sticky) {
+  const honoring = Math.max(0, 1 - t / ttl);
+  return Math.round(((1 - sticky) * honoring + sticky) * 1000) / 10;
+}`}
+  tests={[
+    { args: [300, 0, 0], expected: 100, label: "바꾼 직후" },
+    { args: [300, 60, 0], expected: 80, label: "TTL 300, 60초 뒤" },
+    { args: [300, 300, 0], expected: 0, label: "TTL 300, 300초 뒤" },
+    { args: [300, 600, 0.02], expected: 2, label: "2%가 TTL을 무시" },
+    { args: [60, 30, 0.05], expected: 52.5, label: "TTL 60, 30초 뒤" },
+    { args: [3600, 600, 0], expected: 83.3, label: "TTL 1시간이면" },
+  ]}
+/>
+
+마지막 테스트가 흔한 실수다. 평소 TTL을 3600초로 두고 전환 당일에 DNS를 바꾸면, 10분이 지나도 83%가 블루에 있다. 그래서 DNS 전환은 하루쯤 전에 TTL을 60초 정도로 미리 낮춰 두고, 옛 TTL만큼 기다린 다음 바꾼다. 되돌릴 때도 같은 시간만큼 걸린다는 점이 로드 밸런서 전환과 가장 다르다.
+
+## 데이터베이스는 한 벌뿐이다
+
+블루그린에서 두 벌이 되는 건 앱 서버다. 데이터베이스까지 두 벌로 만들어 바꾸는 경우는 드물다. 데이터가 계속 쓰이는 동안 두 DB를 같은 상태로 맞추기가 어렵기 때문이다. 그러니 블루와 그린은 같은 DB를 함께 본다. 여기서 블루그린의 "섞이는 시간이 없다"는 장점이 깨진다. 앱 서버는 한 번에 넘어가도, 스키마는 블루와 그린이 동시에 견딜 수 있어야 한다.
+
+새 버전이 `users.name`을 `full_name`으로 바꾼다고 하자. 그린을 띄우기 전에 열 이름을 바꾸면 아직 운영 중인 블루가 `name`을 찾다가 에러를 낸다. 그린으로 바꾼 뒤 문제가 생겨 블루로 되돌리면, 이번엔 블루가 또 깨진다. 되돌릴 수 없는 블루그린이 된다.
+
+그래서 스키마 변경은 넓히기와 좁히기로 나눠 여러 배포에 걸쳐 한다. 아래 그림은 배포 순서마다 스키마와 앱이 어떤 상태인지 보여 준다.
+
+<AlgoTrace
+  caption="열 이름 바꾸기를 배포 넷으로 나눈다"
+  memoryLabel="DB 스키마"
+  cells={["시작", "열 추가", "그린 v2", "채우기", "v3 배포", "옛 열 삭제"]}
+  steps={[
+    { pointer: 0, memory: ["name"], caption: "블루 v1이 name만 읽고 쓴다." },
+    { pointer: 1, memory: ["name", "full_name"], caption: "full_name을 nullable로 추가한다. v1은 이 열을 모르니 영향이 없다." },
+    { pointer: 2, memory: ["name", "full_name"], caption: "v2는 두 열에 모두 쓰고 name을 읽는다. 이때 블루그린 전환을 한다. 되돌려도 v1이 멀쩡하다." },
+    { pointer: 3, memory: ["name", "full_name"], caption: "옛 행의 full_name을 잘게 나눠 채운다." },
+    { pointer: 4, memory: ["name", "full_name"], found: [4], caption: "v3는 full_name만 읽는다. 여기서 되돌릴 대상은 v2라서 여전히 안전하다." },
+    { pointer: 5, memory: ["full_name"], found: [5], caption: "v1·v2로 돌아갈 일이 없어진 뒤에야 name을 지운다." },
+  ]}
+/>
+
+각 단계는 "바로 앞 버전으로 되돌려도 깨지지 않는다"는 조건을 지킨다. 열을 지우는 마지막 단계만 되돌릴 수 없으니, 그 단계는 블루그린 전환과 따로 한참 뒤에 한다. 마이그레이션 문장이 어떤 잠금을 잡는지, 큰 테이블을 어떻게 나눠 채우는지는 [무중단 마이그레이션 글](/posts/zero-downtime-migrations)에서 실제 PostgreSQL 출력과 함께 다뤘다.
+
+DB 말고도 한 벌뿐인 것은 많다. 메시지 큐의 컨슈머가 대표적이다. 블루와 그린이 같은 큐를 함께 구독하면, 트래픽을 그린으로 돌린 뒤에도 블루의 컨슈머가 메시지를 계속 가져간다. 백그라운드 워커, 크론 작업도 같다. 이들은 HTTP 방향 바꾸기로는 넘어가지 않으니, 블루의 워커를 끄는 단계를 따로 둔다. 둘 다 같은 작업을 돌리면 이메일이 두 번 나간다.
+
+## 세션과 오래 붙은 연결
+
+로그인 상태를 서버 메모리에 두는 앱이라면 전환 순간 모두 로그아웃된다. 블루에서 로그인한 뒤 그린으로 바꾸고 같은 쿠키로 요청해 봤다.
+
+```bash
+# 블루에서 로그인하고 쿠키를 저장한다
+curl -s -c jar.txt http://127.0.0.1:8080/login
+# 같은 쿠키로 내 정보를 본다
+curl -s -b jar.txt http://127.0.0.1:8080/me
+# (여기서 그린으로 전환) 다시 같은 쿠키로 요청한다
+curl -si -b jar.txt http://127.0.0.1:8080/me
+```
+
+```text
+{"version":"v1","login":"ok"}
+{"version":"v1","user":"kim"}
+HTTP/1.1 401 Unauthorized
+X-Version: v2
+{"version":"v2","user":null}
+```
+
+그린은 그 세션 ID를 모른다. 해결은 세션을 앱 밖으로 빼는 것이다. Redis 같은 공용 저장소에 두거나, 서버가 기억할 필요 없는 서명된 토큰을 쓴다. 이건 블루그린만의 문제가 아니라 서버를 두 대 이상 두면 어차피 맞닥뜨리는 문제다. 다만 블루그린에서는 전체 사용자에게 한꺼번에 터진다는 점이 다르다. 공용 저장소에 둔 세션도 직렬화 형식이 버전 사이에 바뀌면 똑같이 깨지니, 세션 형식도 스키마처럼 다룬다.
+
+WebSocket, SSE, gRPC 스트림처럼 오래 붙어 있는 연결은 방향을 바꿔도 따라오지 않는다. 이미 맺어진 연결은 블루에 그대로 있다. nginx는 옛 워커가 그 연결을 쥐고 있고, 클라우드 로드 밸런서는 등록 해제 지연이 끝날 때 끊는다. 클라이언트가 끊기면 다시 붙도록 만들어 두고, 블루를 내리기 전에 연결을 닫으라는 신호를 서버가 먼저 보내는 편이 덜 거칠다.
+
+## 두 배의 비용을 어디까지 줄이나
+
+블루그린의 가장 분명한 비용은 서버 두 벌이다. 운영 규모만큼의 환경이 하나 더 있어야 전환 순간 그린이 전체 트래픽을 받을 수 있다. 이 비용을 줄이는 방법은 몇 가지가 있고, 각각 무언가를 내준다.
+
+- 전환 전후에만 그린을 띄운다. 평소엔 한 벌만 돌리고 배포 때만 두 벌이 된다. 클라우드와 오토스케일링 그룹, 쿠버네티스에서는 이게 기본이다. 대신 되돌리기 창이 블루를 지우기 전까지로 짧아진다.
+- 그린을 작게 띄우고 전환 직전에 키운다. 키우는 데 걸리는 시간만큼 배포가 길어지고, 덜 데워진 캐시와 JIT 때문에 첫 몇 분 응답이 느릴 수 있다.
+- 그린을 미리 데운다. 전환 전에 내부 트래픽이나 녹화한 요청을 흘려 커넥션 풀과 캐시를 채운다. 자바처럼 시작 직후가 느린 런타임이면 이 단계가 전환 직후 지연 급등을 막는다.
+
+규모가 아주 크면 두 벌을 감당하기 어렵다. 그럴 때는 일부만 먼저 바꾸는 롤링이나 카나리가 더 맞다. 반대로 서버가 몇 대뿐인 서비스라면 한 벌 더 띄우는 비용은 작고, 설정 한 줄로 되돌릴 수 있다는 장점이 훨씬 크다.
+
+## 되돌리기가 빠른 이유와 그 조건
+
+그린으로 바꾼 상태에서 블루로 되돌리는 시간을 세 번 쟀다. 파일을 고치고, 문법을 검사하고, reload 한 뒤 첫 v1 응답이 올 때까지다.
+
+```bash
+# 블루로 되돌리고 첫 v1 응답까지 걸린 시간을 잰다
+s=$(date +%s%N)
+echo 'server 127.0.0.1:9001;  # blue (v1)' | sudo tee /etc/nginx/active.conf > /dev/null
+sudo nginx -t -q && sudo nginx -s reload
+until curl -s http://127.0.0.1:8080/ | grep -q v1; do :; done
+echo "rollback to blue: $(( ($(date +%s%N) - s) / 1000000 )) ms"
+```
+
+```text
+rollback to blue: 119 ms
+rollback to blue: 114 ms
+rollback to blue: 120 ms
+```
+
+0.1초 남짓이다. 다시 빌드하거나 서버를 띄우는 시간이 없기 때문이다. 하지만 이 숫자에는 조건이 셋 붙는다. 블루가 아직 떠 있어야 하고, 블루가 지금 DB 스키마를 견딜 수 있어야 하고, 그린이 그사이 쓴 데이터를 블루가 읽을 수 있어야 한다. 셋째가 가장 자주 빠진다. 그린이 새 형식의 JSON을 캐시나 DB에 써 두었다면, 블루로 돌아간 순간 블루가 그 값을 못 읽고 에러를 낸다. 되돌리기 전략 전체는 [롤백 전략](/posts/rollback-strategy)에서, 기능 단위로 끄는 방법은 [피처 플래그 글](/posts/feature-flags)에서 다룬다.
+
+## 현장에서 블루그린이 흔들리는 순간
+
+전환 직후 몇 초 동안 연결 오류가 튄다면 먼저 전환 방법을 본다. `systemctl restart`나 컨테이너 재생성으로 프록시를 다시 띄우고 있지 않은지, 설정 파일 대신 프록시 자체를 바꾸고 있지 않은지 확인한다. nginx 접근 로그에 그 요청이 없으면 프록시가 포트를 닫았던 것이다. `systemctl reload nginx`로 바꾸면 사라진다.
+
+전환 직후 502가 몇백 건 나오고 금방 멈춘다면 블루를 너무 빨리 내린 것이다. 에러 로그에서 `connect() failed (111: Connection refused) while connecting to upstream`의 upstream 주소가 블루인지 본다. 블루라면 전환 스크립트의 "블루 정리" 단계를 뒤로 미룬다.
+
+전환 뒤 일부 사용자만 계속 옛 화면을 본다면 DNS나 캐시다. `dig +short api.example.com`을 여러 리졸버에 물어 답이 갈리는지 보고, CDN이 옛 버전의 HTML이나 JS를 캐시하고 있지 않은지 본다. 정적 파일 이름에 해시를 붙이지 않았다면 그린의 HTML이 블루 시절 JS를 불러 화면이 깨지는 일도 생긴다.
+
+전환하자마자 모두 로그아웃된다면 세션이 서버 메모리에 있다. 전환 직후 지연만 치솟는다면 그린이 차갑다. 커넥션 풀, 캐시, JIT가 데워지지 않았다. 둘 다 전환 전에 그린에서 확인할 수 있는 문제이니, 스모크 테스트 목록에 로그인 유지와 응답 시간을 넣어 둔다.
+
+되돌렸는데도 에러가 계속된다면 그린이 이미 데이터를 바꿔 놓은 것이다. 이때는 블루로 돌아가는 것만으로 끝나지 않고, 그린이 쓴 데이터를 고치거나 블루를 그 데이터에 맞게 고쳐야 한다. 이 경우를 막으려면 스키마와 데이터 형식이 두 버전을 오가도 깨지지 않게 위 넓히기·좁히기 순서를 지킨다.
+
+## 방향 한 줄과 남겨 둔 한 벌
+
+블루그린은 새 버전을 운영과 똑같은 환경에 미리 다 띄워 두고, 트래픽 방향만 한 번에 바꾸는 배포다. 전환과 되돌리기가 모두 설정 한 줄이라 빠르고, 버전이 섞이는 시간이 없다. 대신 그 순간 두 벌의 비용이 들고, DB·큐·세션처럼 한 벌뿐인 것은 두 버전이 함께 견딜 수 있어야 한다. 방향을 바꾸는 자리는 로드 밸런서가 가장 빠르고 DNS가 가장 느리며, 옛 환경은 처리 중인 요청과 되돌릴 일에 대비해 한동안 남겨 둔다. 일부 사용자에게만 먼저 보내며 지표를 보고 싶다면 [카나리 릴리스](/posts/canary-release)로, 두 벌을 둘 여유가 없다면 [롤링 배포](/posts/rolling-deployment)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 블루그린 배포가 무엇이고 어떤 문제를 푸나요?
+
+운영 중인 환경 옆에 같은 환경을 하나 더 띄워 새 버전을 올리고, 로드 밸런서나 DNS가 가리키는 방향을 한 번에 바꾸는 배포 방식입니다. 서버를 차례로 내렸다 올리면서 생기는 에러와 버전이 섞이는 시간을 없애고, 옛 환경을 남겨 두어 되돌리기를 설정 한 줄로 만듭니다. 대신 전환하는 동안 두 벌의 자원이 듭니다.
+
+### 전환 방법으로 로드 밸런서와 DNS 중 무엇을 고르나요?
+
+가능하면 로드 밸런서입니다. 로드 밸런서 설정은 새 요청부터 즉시 바뀌고 되돌리기도 즉시입니다. DNS는 리졸버 캐시 때문에 TTL 동안 두 환경에 트래픽이 섞이고, TTL을 무시하는 클라이언트도 있어서 옛 환경을 TTL보다 훨씬 오래 살려 둬야 합니다. 리전 단위 전환처럼 DNS밖에 방법이 없다면 하루 전에 TTL을 낮춰 둡니다.
+
+### nginx reload로 전환하면 처리 중인 요청은 어떻게 되나요?
+
+끊기지 않습니다. 마스터가 새 설정으로 새 워커를 띄우고, 옛 워커는 새 연결을 받지 않은 채 처리 중인 요청을 옛 설정대로 끝낸 뒤 나갑니다. 듣는 소켓은 마스터가 계속 쥐고 있어서 포트가 닫히는 순간이 없습니다. 실제로 부하를 걸고 전환했을 때 1만 5천 건 중 실패가 0이었고, 전환한 1초 안에만 옛 버전 응답이 섞였습니다.
+
+### 블루그린인데 DB 스키마 변경은 어떻게 하나요?
+
+DB는 보통 한 벌이라 블루와 그린이 같은 스키마를 동시에 견뎌야 합니다. 그래서 열 추가 같은 넓히는 변경을 먼저 하고, 두 열에 모두 쓰는 버전으로 전환하고, 데이터를 채우고, 새 열만 쓰는 버전을 배포한 다음, 옛 버전으로 돌아갈 일이 없어진 뒤에 옛 열을 지웁니다. 열 삭제처럼 되돌릴 수 없는 변경은 전환과 같은 배포에 넣지 않습니다.
+
+### 블루그린으로 되돌렸는데 에러가 계속된다면 무엇을 의심하나요?
+
+그린이 그사이 쓴 데이터를 블루가 읽지 못하는 경우를 먼저 봅니다. 새 형식으로 쓴 캐시 값, JSON, 큐 메시지가 남아 있으면 블루로 돌아가도 에러가 납니다. 되돌리기를 보장하려면 새 버전이 쓰는 데이터 형식을 옛 버전도 읽을 수 있게 단계적으로 바꿔야 합니다.
+
+### 블루그린의 비용을 줄이는 방법은?
+
+평소에는 한 벌만 돌리고 배포할 때만 그린을 띄웠다가, 안정되면 블루를 지우는 방식이 흔합니다. 클라우드나 쿠버네티스에서는 이게 기본입니다. 다만 블루를 지우는 순간 빠른 되돌리기도 사라지니, 문제가 보통 드러나는 시간만큼은 남겨 둡니다. 규모가 커서 두 벌이 부담스럽다면 롤링이나 카나리가 더 맞습니다.
+
+### 블루그린과 카나리는 어떻게 다른가요?
+
+블루그린은 확인을 전환 전에 끝내고 전체 트래픽을 한 번에 옮기고, 카나리는 운영 트래픽의 일부만 새 버전으로 보내며 지표를 보고 비율을 올립니다. 블루그린은 버전이 섞이지 않고 되돌리기가 빠르지만, 문제가 있으면 모든 사용자가 잠깐이라도 겪습니다. 카나리는 영향 범위가 작지만 두 버전이 오래 섞이고, 비교할 지표와 자동화가 있어야 합니다. 둘을 섞어 그린으로 트래픽을 조금씩 옮기는 방식도 씁니다.

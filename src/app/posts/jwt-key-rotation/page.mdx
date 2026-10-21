@@ -1,0 +1,358 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("jwt-key-rotation");
+
+인증 서버의 서명 키를 바꾸는 배포를 했다. 배포 직후 주문 API에서 401이 쏟아진다. 인증 서버 로그를 보면 토큰은 정상으로 발급되고 있다. 30초쯤 지나자 주문 API는 조용해졌는데, 정산 서비스는 10분 동안 계속 401을 냈다. 같은 토큰, 같은 공개 키 목록인데 서비스마다 회복 시간이 달랐다.
+
+원인은 키가 아니라 키를 들고 있는 시간이었다. 토큰을 검증하는 서비스들은 인증 서버의 공개 키 목록(JWKS)을 받아 캐시해 둔다. 새 키로 서명한 토큰이 그 캐시보다 먼저 도착하면 검증자는 모르는 키를 만난다. 이 글은 JWT 서명 키를 장애 없이 바꾸는 순서를 다룬다. 헤더의 `kid`, JWKS 엔드포인트, 검증자의 캐시와 재요청 규칙, 옛 키와 새 키를 함께 두는 기간, 키가 샜을 때의 비상 교체, 그리고 교체(rotation)와 회수(revocation)가 왜 다른 문제인지까지 간다.
+
+JWT의 구조, 서명이 변조를 막는 원리, HS256과 RS256의 기본 차이, 리프레시 토큰은 [토큰으로 로그인하기](/posts/token-login)에서 다뤘다. 이 글은 그 글에서 한 문단으로 지나간 "키를 교체할 때" 부분을 파고드는 후속 글이다. 이 주제의 다른 글로 토큰을 발급받는 흐름은 [OAuth](/posts/oauth), 서명 키 같은 비밀 값을 보관하는 법은 [비밀 관리](/posts/secrets-management)에 있다. 실습은 Node.js 22와 jose 6.2.13으로, 같은 프로세스 안에 JWKS를 내주는 작은 인증 서버와 검증자 둘을 띄워 했다.
+
+## 키는 왜 바꾸나
+
+서명 키를 바꾸는 이유는 셋이다. 첫째는 키가 샜거나 샜을지 모를 때다. 개인 키가 든 파일이 백업에 섞여 나갔거나, 키에 접근할 수 있던 사람이 퇴사했다. 둘째는 정해진 수명이다. 키 하나로 오래 서명할수록 그 키가 샜을 때 피해 범위가 커지니, 보안 기준(NIST SP 800-57의 cryptoperiod 같은)은 키마다 쓰는 기간을 정하라고 한다. 셋째는 연습이다. 1년에 한 번도 안 바꾼 키는 정작 샜을 때 바꾸는 법을 아무도 모른다. 교체가 평범한 배포가 되도록 자주 하는 팀이 많다.
+
+여기서 구분해 둘 것이 있다. 키 교체는 "앞으로 발급할 토큰을 새 키로 서명하는 것"이다. 이미 발급된 토큰을 무효로 만드는 것(회수)과는 다르다. 옛 키가 공개 키 목록에 남아 있는 한, 옛 키로 서명한 토큰은 만료될 때까지 계속 통한다. 둘을 섞어 생각하면 "키를 바꿨으니 털린 토큰도 막혔다"는 잘못된 판단을 하게 된다. 이 차이는 뒤에서 다시 본다.
+
+## 토큰은 어느 키로 서명됐는지 헤더에 적는다
+
+검증자가 공개 키를 여러 개 갖고 있으면 토큰마다 어느 키로 검증할지 알아야 한다. 그 이름표가 헤더의 `kid`(key ID)다. 실습에서 발급한 토큰의 헤더 부분을 풀면 이렇다.
+
+```text
+eyJhbGciOiJFUzI1NiIsImtpZCI6IjIwMjYtMTAtYSIsInR5cCI6IkpXVCJ9
+{"alg":"ES256","kid":"2026-10-a","typ":"JWT"}
+```
+
+<UrlAnatomy
+  caption="토큰 헤더: 어떤 알고리즘으로, 어느 키로 서명했나"
+  separator=""
+  joiner=", "
+  params={[
+    { key: "alg", value: "ES256", display: "\"alg\": \"ES256\"", title: "서명 알고리즘", description: "토큰이 주장하는 알고리즘이다. 검증자는 이 값을 믿지 않고 허용 목록(algorithms: [\"ES256\"])과 맞춰 본다. 허용하지 않은 값이면 ERR_JOSE_ALG_NOT_ALLOWED로 거절한다.", required: true },
+    { key: "kid", value: "2026-10-a", display: "\"kid\": \"2026-10-a\"", title: "키 이름표", description: "JWKS에서 같은 kid를 가진 공개 키를 찾는다. 날짜를 넣으면 운영할 때 읽기 쉽고, 공개 키의 지문(RFC 7638 JWK thumbprint)을 쓰면 이름이 겹칠 일이 없다.", code: "kid는 공격자가 마음대로 쓸 수 있는 값이다.\n파일 경로나 SQL에 그대로 넣지 말고, 받아 둔 목록에서 찾기만 한다.", required: true },
+    { key: "typ", value: "JWT", display: "\"typ\": \"JWT\"", title: "토큰 종류", description: "선택 항목이다. 액세스 토큰을 다른 용도의 JWT와 구별하려고 at+jwt(RFC 9068) 같은 값을 쓰기도 한다." },
+  ]}
+/>
+
+`kid`가 없는 토큰도 만들 수는 있다. 그러면 검증자는 목록의 키를 하나씩 대 보거나, 키가 하나뿐이라고 가정해야 한다. 키가 하나일 때는 문제가 없지만, 교체하는 순간 두 키가 함께 있어야 하므로 `kid`가 없으면 교체가 훨씬 어렵다. 처음부터 붙여 둔다.
+
+## 공개 키 목록을 내주는 주소
+
+비대칭 서명(RS256, ES256, EdDSA)에서는 인증 서버만 개인 키를 갖고, 공개 키는 누구에게 줘도 된다. 공개 키를 나눠 주는 표준 형식이 JWKS(JSON Web Key Set, RFC 7517)다. OpenID Connect를 쓰는 인증 서버라면 `/.well-known/openid-configuration`의 `jwks_uri`가 이 주소를 알려 준다.
+
+```bash
+# 실습 인증 서버의 JWKS를 헤더까지 받아 본다
+curl -si http://127.0.0.1:18721/.well-known/jwks.json
+```
+
+```text
+HTTP/1.1 200 OK
+content-type: application/json
+cache-control: public, max-age=600
+Date: Wed, 21 Oct 2026 00:23:58 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"keys":[{"kty":"EC","x":"xVO09KjhLBeRp2GffApCCZuKL7jHkDI9f8KQeV8Rz9Q","y":"1aR4dMjlJc_DzNFZTGhKu572CmWIs7Ea7CkYdJefgIU","crv":"P-256","kid":"2026-10-a","alg":"ES256","use":"sig"}]}
+```
+
+`kty`, `crv`, `x`, `y`가 P-256 곡선의 공개 키이고, `kid`와 `alg`, `use: "sig"`(서명용)가 붙어 있다. 응답의 `cache-control: max-age=600`은 "10분 동안 캐시해도 된다"는 인증 서버의 의견이다. 이 의견을 따를지는 검증자가 정한다. 키가 어디에 있고 누가 무엇을 들고 있는지 그려 보면 이렇다.
+
+<ConceptDiagram
+  caption="개인 키는 한곳에, 공개 키는 여러 캐시에"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "kms", label: "개인 키", sub: "KMS·HSM", x: 70, y: 40, w: 110 },
+    { id: "issuer", label: "인증 서버", sub: "토큰 서명", x: 200, y: 40, w: 110 },
+    { id: "jwks", label: "JWKS 주소", sub: "공개 키 목록", x: 330, y: 40, w: 110 },
+    { id: "cdn", label: "CDN·프록시", sub: "중간 캐시", x: 330, y: 130, w: 110 },
+    { id: "v1", label: "주문 API", sub: "JWKS 캐시", x: 90, y: 220, w: 110 },
+    { id: "v2", label: "정산 서비스", sub: "JWKS 캐시", x: 220, y: 220, w: 110 },
+    { id: "v3", label: "게이트웨이", sub: "JWKS 캐시", x: 340, y: 220, w: 100 },
+  ]}
+  edges={[
+    { from: "kms", to: "issuer", label: "서명 요청" },
+    { from: "issuer", to: "jwks", label: "공개 키" },
+    { from: "jwks", to: "cdn" },
+    { from: "cdn", to: "v1", dashed: true },
+    { from: "cdn", to: "v2", dashed: true },
+    { from: "cdn", to: "v3", dashed: true },
+  ]}
+/>
+
+개인 키를 KMS나 HSM 안에 두면 인증 서버도 키를 꺼내지 못하고 서명 요청만 보낸다(AWS KMS의 `Sign` API 같은). 키가 파일로 샐 일이 없어지는 대신 서명마다 네트워크 왕복이 생긴다. 공개 키 쪽은 반대로 사본이 많다. 검증자마다 캐시가 있고, JWKS 앞에 CDN을 두면 캐시가 한 겹 더 생긴다. 교체가 어려운 건 이 사본들이 서로 다른 시각에 갱신되기 때문이다.
+
+## 검증자는 JWKS를 얼마나 들고 있나
+
+jose의 `createRemoteJWKSet`은 세 가지 숫자로 동작한다. 라이브러리 코드에서 기본값을 확인했다.
+
+```text
+const timeoutDuration = typeof timeoutOption == "number" ? timeoutOption : 5e3, cooldownDuration = validateDuration(opts.cooldownDuration, 3e4, "cooldownDuration"), cacheMaxAge = validateDuration(opts.cacheMaxAge, 6e5, "cacheMaxAge"), headers = new Headers(opts.headers);
+```
+
+`cacheMaxAge` 10분이 지나면 다음 검증 때 다시 받는다. 토큰의 `kid`가 캐시에 없으면 바로 다시 받는데, 마지막으로 받은 지 `cooldownDuration` 30초가 안 됐으면 다시 받지 않고 실패한다. 모르는 `kid`를 단 토큰을 대량으로 보내 JWKS 주소를 두드리는 공격을 막는 장치다. JWKS 요청은 5초가 지나면 끊는다. 그리고 jose는 응답의 `Cache-Control`을 읽지 않는다(배포된 코드에 `cache-control` 문자열이 없다). 인증 서버가 max-age를 60초로 줄여도 jose 검증자는 10분을 쓴다.
+
+다른 라이브러리는 숫자가 다르다. 응답 헤더를 따르는 것도 있고, 처음 한 번 받고 재시작할 때까지 안 바꾸는 것도 있다. 직접 짠 캐시는 대개 마지막 경우다. 실습에서는 검증자 둘을 띄웠다. A는 jose 기본값이고, B는 시작할 때 한 번 받아 10분 동안 쓰고 모르는 `kid`를 만나도 다시 받지 않는, 흔히 보이는 직접 만든 캐시다.
+
+## 새 키로 바로 서명하면 생기는 일
+
+처음 장면을 재현했다. 인증 서버가 JWKS에 새 키를 올리는 동시에 새 키로 서명을 시작한다.
+
+```bash
+# 키 두 개를 만들고, 잘못된 순서로 교체하는 장면을 돌린다
+node rotate.mjs
+```
+
+```text
++  0s JWKS fetches so far: 0
++  0s A(jose) kid=2026-10-a OK
++  0s B(naive) kid=2026-10-a OK
++  0s JWKS fetches so far: 2
++  0s --- 잘못된 교체: 새 키를 내놓자마자 그 키로 서명한다
++  0s A(jose) kid=2026-10-b FAIL ERR_JWKS_NO_MATCHING_KEY
++  0s B(naive) kid=2026-10-b FAIL ERR_JWKS_NO_MATCHING_KEY
++  0s JWKS fetches so far: 2
++ 31s A(jose) kid=2026-10-b OK
++ 31s B(naive) kid=2026-10-b FAIL ERR_JWKS_NO_MATCHING_KEY
++ 31s JWKS fetches so far: 3
+```
+
+둘 다 새 토큰에서 `ERR_JWKS_NO_MATCHING_KEY`를 냈다. 볼 곳은 `JWKS fetches` 숫자다. 실패하는 순간에도 2에서 늘지 않았다. A는 방금 받은 지 30초가 안 돼서 재요청을 참았고, B는 원래 재요청을 안 한다. 31초 뒤 A는 다시 받아(3) 회복했고, B는 캐시 수명 10분이 끝날 때까지 계속 실패한다. 처음 장면에서 주문 API가 30초 만에, 정산 서비스가 10분 만에 회복한 것과 같은 모양이다. 아래 그림에서 다음을 누르면 그 사이에 무슨 일이 있었는지 단계별로 보인다.
+
+<SequenceDiagram
+  caption="새 키를 올리자마자 서명하면, 검증자 캐시가 따라오지 못한다"
+  actors={[
+    { id: "auth", label: "인증 서버" },
+    { id: "client", label: "클라이언트" },
+    { id: "api", label: "검증자" },
+    { id: "jwks", label: "JWKS 주소" },
+  ]}
+  steps={[
+    { from: "api", to: "jwks", label: "GET (0s)", title: "검증자가 목록을 받아 둔다", detail: "옛 키 2026-10-a 하나만 있는 목록이다. 이제 10분 동안 이 목록을 쓴다." },
+    { from: "auth", to: "jwks", label: "a + b 게시", title: "새 키를 올린다", detail: "목록에 2026-10-b가 추가됐다. 검증자의 캐시는 이 사실을 모른다." },
+    { from: "auth", to: "client", label: "kid=b 토큰", title: "곧바로 새 키로 서명한다", detail: "같은 순간부터 발급되는 토큰은 모두 kid가 2026-10-b다." },
+    { from: "client", to: "api", label: "Bearer kid=b", title: "모르는 kid가 도착한다", detail: "캐시에 b가 없다. 마지막으로 받은 지 30초가 안 돼서 다시 받지 않는다." },
+    { from: "api", to: "client", label: "401", title: "검증 실패", detail: "ERR_JWKS_NO_MATCHING_KEY. 새로 로그인한 사용자부터 차례로 401을 받는다.", payload: "ERR_JWKS_NO_MATCHING_KEY" },
+    { from: "api", to: "jwks", label: "GET (31s)", title: "쿨다운이 지나면 다시 받는다", detail: "jose 검증자는 여기서 회복한다. 재요청을 안 하는 캐시는 수명이 끝날 때까지 실패한다." },
+  ]}
+/>
+
+이 장애가 고약한 건 인증 서버 쪽에는 아무 오류가 없다는 점이다. 토큰은 정상으로 발급되고, JWKS에도 새 키가 있다. `curl`로 JWKS를 보면 키가 멀쩡히 보이니 "키는 있는데 왜 실패하지"에서 시간을 쓴다. 문제는 검증자 메모리 속 사본이다.
+
+## 겹치는 기간을 두고 바꾼다
+
+해법은 순서다. 새 키를 서명에 쓰기 전에 모든 검증자가 그 키를 알게 하고, 옛 키를 빼기 전에 옛 키로 서명한 토큰이 모두 만료되게 한다. 그래서 교체는 세 단계로 나뉜다. 아래 그림은 JWKS 목록이 단계마다 어떻게 바뀌는지다.
+
+<AlgoTrace
+  caption="게시, 서명 전환, 퇴역: 목록에는 늘 두 키가 겹친다"
+  memoryLabel="JWKS에 게시된 키"
+  cells={["평소", "새 키 게시", "캐시 대기", "서명 전환", "토큰 만료 대기", "옛 키 퇴역"]}
+  steps={[
+    { pointer: 0, memory: ["a (서명 중)"], caption: "평소에는 키 하나로 서명하고 그 키만 게시한다." },
+    { pointer: 1, found: [1], memory: ["a (서명 중)", "b (대기)"], caption: "새 키 b를 목록에만 올린다. 서명은 아직 a로 한다. 이 단계에서는 아무것도 깨지지 않는다." },
+    { pointer: 2, found: [1, 2], memory: ["a (서명 중)", "b (대기)"], caption: "가장 오래 캐시하는 검증자가 목록을 한 번 새로 받을 때까지 기다린다. CDN 캐시가 있으면 그 시간도 더한다." },
+    { pointer: 3, found: [3], memory: ["a (검증만)", "b (서명 중)"], caption: "이제 b로 서명한다. 모든 검증자가 이미 b를 알고 있다. a는 이미 나간 토큰을 검증하려고 남겨 둔다." },
+    { pointer: 4, found: [3, 4], memory: ["a (검증만)", "b (서명 중)"], caption: "a로 서명한 마지막 토큰의 만료 시각에 시계 오차 여유(leeway)를 더한 만큼 기다린다." },
+    { pointer: 5, found: [5], memory: ["b (서명 중)"], caption: "a를 목록에서 뺀다. 다음 교체 때는 c를 미리 올리는 것부터 다시 시작한다." },
+  ]}
+/>
+
+대기 시간을 숫자로 정하면 이렇다. 검증자 캐시 최대 10분, JWKS 앞 CDN의 `max-age` 10분이면 새 키를 올리고 최소 20분 뒤에 서명을 바꾼다. 액세스 토큰 수명 15분, leeway 1분이면 서명을 바꾸고 최소 16분 뒤에 옛 키를 뺀다. 여유를 넉넉히 둬서 하루 간격으로 단계를 나누는 팀도 많다. 다음 키를 늘 미리 게시해 두는 방식도 있다. 목록에 "지금 키"와 "다음 키"가 항상 함께 있으면 교체는 서명 전환과 옛 키 퇴역 두 단계로 줄어든다.
+
+이 순서를 실제로 돌렸다. 실습 시간을 줄이려고 검증자 셋의 캐시 수명을 10초, 토큰 수명을 15초로 줄이고, 매초 토큰을 발급해 최근 토큰 여섯 개를 세 검증자가 모두 검증하게 했다.
+
+```bash
+# 게시 → 캐시 수명 대기 → 서명 전환 → 토큰 수명 대기 → 옛 키 퇴역
+node good.mjs
+```
+
+```text
++ 3s 1) 새 키를 JWKS에만 올린다 (서명은 아직 옛 키)
++15s 2) 캐시 수명이 지난 뒤 새 키로 서명을 바꾼다
++32s 3) 옛 키로 서명한 토큰이 모두 만료된 뒤 옛 키를 뺀다
++44s 검증 성공 729회, 실패 0회
+```
+
+만료로 거절된 것을 빼고 실패가 한 번도 없었다. 같은 두 키, 같은 검증자인데 순서만 바꿨다. 검증자의 캐시 규칙과 게시 일정을 넣으면 요청마다 성공·실패를 내는 시뮬레이터를 짜 보자. 규칙은 jose를 단순하게 옮긴 것이다. 캐시가 없거나 `cacheMaxAge`보다 오래됐으면 다시 받고, 모르는 `kid`면 `refetchOnMiss`가 켜져 있고 마지막으로 받은 지 `cooldown` 이상 지났을 때만 다시 받는다. 시간 단위는 초다.
+
+<CodePlayground
+  caption="JWKS 캐시 시뮬레이터"
+  functionName="simulate"
+  initialCode={`// timeline: [{ at, keys: ["a", "b"] }] 시각 순. at 이후로 그 목록이 게시된다
+// verifier: { cacheMaxAge, cooldown, refetchOnMiss }
+// requests: [{ at, kid }] 시각 순. 결과는 "OK" 또는 "FAIL" 배열
+function simulate(timeline, verifier, requests) {
+  return requests.map(() => "OK");
+}`}
+  solution={`function simulate(timeline, verifier, requests) {
+  const keysAt = (t) => {
+    let keys = [];
+    for (const e of timeline) if (e.at <= t) keys = e.keys;
+    return keys;
+  };
+  let cache = null, fetchedAt = -Infinity;
+  const fetchNow = (t) => { cache = keysAt(t); fetchedAt = t; };
+  return requests.map(({ at, kid }) => {
+    if (cache === null || at - fetchedAt > verifier.cacheMaxAge) fetchNow(at);
+    if (cache.includes(kid)) return "OK";
+    if (verifier.refetchOnMiss && at - fetchedAt >= verifier.cooldown) {
+      fetchNow(at);
+      if (cache.includes(kid)) return "OK";
+    }
+    return "FAIL";
+  });
+}`}
+  tests={[
+    { label: "jose 기본값, 바로 서명 전환", args: [[{ at: 0, keys: ["a"] }, { at: 1, keys: ["a", "b"] }], { cacheMaxAge: 600, cooldown: 30, refetchOnMiss: true }, [{ at: 0, kid: "a" }, { at: 1, kid: "b" }, { at: 31, kid: "b" }]], expected: ["OK", "FAIL", "OK"] },
+    { label: "재요청 없는 캐시, 31초 뒤에도 실패", args: [[{ at: 0, keys: ["a"] }, { at: 1, keys: ["a", "b"] }], { cacheMaxAge: 600, cooldown: 0, refetchOnMiss: false }, [{ at: 0, kid: "a" }, { at: 1, kid: "b" }, { at: 31, kid: "b" }]], expected: ["OK", "FAIL", "FAIL"] },
+    { label: "재요청 없는 캐시, 수명이 끝나면 회복", args: [[{ at: 0, keys: ["a"] }, { at: 1, keys: ["a", "b"] }], { cacheMaxAge: 600, cooldown: 0, refetchOnMiss: false }, [{ at: 0, kid: "a" }, { at: 1, kid: "b" }, { at: 601, kid: "b" }]], expected: ["OK", "FAIL", "OK"] },
+    { label: "겹치는 기간을 둔 교체", args: [[{ at: 0, keys: ["a"] }, { at: 100, keys: ["a", "b"] }, { at: 1900, keys: ["b"] }], { cacheMaxAge: 600, cooldown: 0, refetchOnMiss: false }, [{ at: 50, kid: "a" }, { at: 700, kid: "a" }, { at: 800, kid: "b" }, { at: 1700, kid: "a" }, { at: 2000, kid: "b" }]], expected: ["OK", "OK", "OK", "OK", "OK"] },
+    { label: "뺀 키도 캐시가 살아 있으면 통과", args: [[{ at: 0, keys: ["a", "b"] }, { at: 10, keys: ["b"] }], { cacheMaxAge: 600, cooldown: 30, refetchOnMiss: true }, [{ at: 0, kid: "a" }, { at: 20, kid: "a" }, { at: 700, kid: "a" }]], expected: ["OK", "OK", "FAIL"] },
+    { label: "게시된 키가 없다", args: [[], { cacheMaxAge: 600, cooldown: 30, refetchOnMiss: true }, [{ at: 0, kid: "a" }]], expected: ["FAIL"] },
+  ]}
+/>
+
+다섯 번째 테스트가 다음 절의 주제다. 목록에서 뺀 키도 검증자 캐시에는 남아 있어서, 캐시가 갱신될 때까지 그 키로 서명한 토큰이 통과한다.
+
+## 키가 샜을 때는 기다릴 수 없다
+
+계획된 교체는 겹치는 기간을 넉넉히 두면 된다. 개인 키가 샜다면 사정이 다르다. 공격자는 그 키로 아무 사용자, 아무 권한, 아무 만료 시각의 토큰이나 만들 수 있다. 옛 키를 당장 목록에서 빼야 한다. 실습에서 옛 키를 뺀 직후와 30초 뒤를 비교했다. 아직 만료 전인 옛 키 토큰이다.
+
+```text
++ 31s --- 옛 키를 너무 일찍 뺀다 (tokA는 아직 만료 전)
++ 31s A(jose) kid=2026-10-a OK
++ 62s A(jose) new instance kid=2026-10-a FAIL ERR_JWKS_NO_MATCHING_KEY
++ 62s JWKS fetches so far: 4
+```
+
+목록에서 뺐는데도 이미 목록을 받아 둔 검증자 A는 옛 키 토큰을 통과시켰다. 새로 뜬 검증자만 거절했다. 유출 대응에서는 이 "캐시가 남아 있는 동안"이 공격자에게 주어진 시간이다. 아래 그림에서 다음을 누르면 비상 교체 때 사본을 하나씩 비우는 순서가 보인다.
+
+<NetworkTopology
+  caption="비상 교체: 옛 키를 뺀 뒤 사본마다 직접 비운다"
+  width={400}
+  height={240}
+  zones={[
+    { id: "authz", label: "인증", x: 8, y: 10, w: 124, h: 220, tone: "edge" },
+    { id: "svc", label: "검증하는 서비스", x: 268, y: 10, w: 124, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "auth", label: "인증 서버", sub: "새 키로 서명", x: 70, y: 60, icon: "lock" },
+    { id: "jwks", label: "JWKS", sub: "옛 키 삭제", x: 70, y: 180, icon: "server" },
+    { id: "cdn", label: "CDN", sub: "max-age=600", x: 200, y: 180, icon: "internet", w: 104 },
+    { id: "api", label: "주문 API", sub: "캐시 10분", x: 330, y: 60, icon: "container" },
+    { id: "batch", label: "정산 서비스", sub: "재시작 전까지", x: 330, y: 180, icon: "container" },
+  ]}
+  links={[
+    { from: "auth", to: "jwks" },
+    { from: "jwks", to: "cdn" },
+    { from: "cdn", to: "api" },
+    { from: "cdn", to: "batch" },
+  ]}
+  steps={[
+    { path: ["auth", "jwks"], packet: "remove a", title: "옛 키를 빼고 새 키로 서명한다", detail: "겹치는 기간 없이 바로 바꾼다. 새 키가 퍼질 때까지 일부 사용자가 401을 받는 것은 감수한다." },
+    { path: ["jwks", "cdn"], packet: "purge", title: "CDN 캐시부터 비운다", detail: "CDN이 옛 목록을 10분 더 내주면 검증자가 새로 받아도 옛 키가 돌아온다. 무효화(purge)를 먼저 한다." },
+    { path: ["cdn", "api"], packet: "reload", title: "검증자 캐시를 비운다", detail: "jose라면 jwks.reload()를 부르는 관리용 엔드포인트를 두거나 Pod를 재시작한다. 기다리면 10분 동안 위조 토큰이 통한다." },
+    { path: ["cdn", "batch"], packet: "restart", title: "재요청 없는 검증자는 재시작한다", detail: "직접 만든 캐시는 수명이 끝나거나 재시작할 때까지 옛 키를 믿는다. 이런 서비스가 어디 있는지 미리 목록을 갖고 있어야 한다." },
+    { path: ["auth"], highlight: ["authz"], title: "이미 나간 토큰도 정리한다", detail: "옛 키로 서명된 진짜 토큰도 함께 무효가 되니 사용자는 다시 로그인한다. 리프레시 토큰도 옛 키로 서명했다면 함께 폐기한다." },
+  ]}
+/>
+
+그래서 비상 교체를 위해 평소에 준비해 둘 것이 있다. 검증자의 캐시를 밖에서 비울 수단(관리용 엔드포인트나 재시작 절차), JWKS 앞 CDN의 무효화 절차, 그리고 어떤 서비스가 어떤 라이브러리로 토큰을 검증하는지의 목록이다. 이게 없으면 "키를 뺐는데 왜 아직 통하지"를 서비스마다 하나씩 찾아다니게 된다. 캐시 수명을 짧게(1~5분) 잡는 것도 방법인데, 그만큼 JWKS 요청이 늘고 인증 서버나 CDN이 잠깐 죽었을 때 검증이 멈출 위험이 커진다. jose는 캐시 수명이 지난 뒤 다시 받기에 실패하면 받아 둔 목록으로 버티지 않고 그 오류를 그대로 낸다(코드에서 수명이 지나면 `reload()`를 기다린다). 쓰는 라이브러리가 어느 쪽인지 확인해 둔다.
+
+## 키를 바꾼다고 토큰이 회수되지는 않는다
+
+다시 교체와 회수의 차이로 돌아가 보자. 직원 한 명의 노트북이 털려서 그 사람의 액세스 토큰을 막고 싶다. 이때 서명 키를 바꾸는 건 맞지 않는 도구다. 키를 바꿔도 겹치는 기간 동안 옛 키는 목록에 남으니 그 토큰은 계속 통한다. 옛 키를 즉시 빼면 그 토큰은 막히지만, 같은 키로 서명된 모든 사용자의 토큰이 함께 막혀 전원이 다시 로그인한다.
+
+토큰 하나를 막는 방법은 따로 있다. 액세스 토큰 수명을 짧게(5~15분) 두고 리프레시 토큰을 서버에서 폐기한다. 바로 막아야 하면 토큰의 `jti`(토큰 ID)나 사용자 ID를 거부 목록에 넣고 검증자가 그 목록을 확인한다. 이 경우 검증자가 상태를 갖게 되어 JWT의 "서버가 아무것도 기억하지 않는다"는 장점 일부를 내준다. 리프레시 토큰 흐름은 [토큰으로 로그인하기](/posts/token-login#한-번-준-토큰은-되돌리기-어렵다)에 있다. 정리하면 키 교체는 키를 지키는 일이고, 회수는 토큰을 지우는 일이다. 키가 샜을 때만 두 일이 겹친다.
+
+## 공유 비밀이면 교체가 왜 더 어려운가
+
+HS256은 서명과 검증에 같은 비밀 값을 쓴다. 교체하려면 모든 검증자에게 새 비밀을 나눠 줘야 하는데, 공개 키처럼 주소 하나에 올려 둘 수 없다. 비밀 값이니 각 서비스에 비밀 저장소로 따로 배포해야 한다. 그 사이 검증자가 새 비밀만 갖고 있으면 옛 비밀로 서명한 토큰이 실패한다.
+
+```bash
+# HS256: 옛 비밀로 서명한 토큰을 새 비밀만으로 검증하고, kid로 비밀을 고르게 해 본다
+node show.mjs
+```
+
+```text
+new secret only: ERR_JWS_SIGNATURE_VERIFICATION_FAILED
+lookup by kid: hs-1 OK
+ES256 token, HS256 only: ERR_JOSE_ALG_NOT_ALLOWED
+```
+
+첫 줄은 비밀을 통째로 바꿔 끼운 검증자다. 오류 코드가 `NO_MATCHING_KEY`가 아니라 서명 실패로 나와서, 위조 토큰과 구별되지 않는다. 둘째 줄처럼 HS256에서도 `kid`를 붙이고 검증자가 비밀 여러 개를 `kid`로 고르게 하면 비대칭 키와 같은 겹치는 교체를 할 수 있다. 다만 새 비밀을 모든 검증자에 먼저 배포하는 단계가 JWKS 게시보다 훨씬 무겁다. 그리고 비밀을 가진 서비스는 누구나 토큰을 만들 수 있으니, 검증자가 셋을 넘으면 비대칭 키로 옮기는 편이 낫다. 셋째 줄은 허용 알고리즘을 고정해 둔 덕에 다른 알고리즘의 토큰이 걸러진 모습이다.
+
+비대칭 알고리즘끼리도 차이가 있다. 같은 페이로드로 세 알고리즘을 500번씩 돌려 평균을 냈다(이 컨테이너에서 한 번 잰 값이라 절대값보다 비율을 본다).
+
+```text
+RS256  token 400 chars, sig 256 bytes, sign 0.658 ms, verify 0.137 ms
+ES256  token 144 chars, sig 64 bytes, sign 0.119 ms, verify 0.158 ms
+EdDSA  token 144 chars, sig 64 bytes, sign 0.113 ms, verify 0.197 ms
+```
+
+RS256(2048비트)은 서명이 256바이트라 토큰이 세 배 가까이 길고, 서명은 느리지만 검증은 빠르다. 토큰은 요청마다 헤더에 실려 다니니 길이가 쌓이면 대역폭과 헤더 한도에 영향을 준다. ES256과 EdDSA는 짧고 서명이 빠르다. 호환성은 RS256이 가장 넓어서 오래된 클라이언트 라이브러리나 클라우드 서비스가 RS256만 받는 경우가 있다. 어떤 것을 고르든 교체 절차는 같다. 알고리즘 자체를 바꾸는 것도 교체의 한 종류로, 새 알고리즘의 키를 게시하고, 검증자의 허용 알고리즘 목록에 먼저 추가한 뒤, 서명을 바꾼다.
+
+## 교체를 사람 손에서 떼어 내기
+
+손으로 하는 교체는 대기 시간을 지키기 어렵다. "20분 뒤에 서명 바꾸기"를 누군가 기억해야 한다. 그래서 키마다 상태를 두고 정해진 시각에 상태가 넘어가게 만든다. 상태는 넷이면 충분하다. 게시만 하는 `pending`, 서명에 쓰는 `active`, 검증용으로만 남은 `retired`, 목록에서도 빠진 `deleted`다.
+
+```js
+// 키 상태표에서 JWKS 응답과 서명 키를 만든다
+const now = Date.now();
+const state = (k) =>
+  now < k.activateAt ? "pending"
+  : now < k.retireAt ? "active"
+  : now < k.deleteAt ? "retired"
+  : "deleted";
+
+// JWKS: pending, active, retired 셋 다 게시한다
+const jwks = { keys: keys.filter((k) => state(k) !== "deleted").map((k) => k.publicJwk) };
+// 서명: active 중 가장 늦게 활성화된 키 하나
+const signingKey = keys.filter((k) => state(k) === "active").sort((a, b) => b.activateAt - a.activateAt)[0];
+```
+
+새 키를 만들 때 `activateAt`은 생성 시각에 "검증자 캐시 최대 + CDN 캐시"보다 긴 시간을 더하고, 옛 키의 `deleteAt`은 새 키의 `activateAt`에 "토큰 최대 수명 + leeway"보다 긴 시간을 더해 정한다. 대기 시간이 데이터로 박혀 있으니 사람이 잊을 일이 없다. 인증 서버가 여러 대라면 모두 같은 상태표를 읽어야 한다. 한 대만 먼저 새 키로 서명하면 그 서버가 발급한 토큰만 실패하는, 재현하기 어려운 장애가 된다. 상태표는 DB나 비밀 저장소에 두고, 개인 키 자체는 KMS에 두는 구성이 흔하다. Keycloak, Auth0, AWS Cognito 같은 인증 서비스는 이런 상태 관리를 제품 기능으로 제공하지만, 검증자 쪽 캐시는 여전히 우리 코드의 몫이다.
+
+## 401이 몰려올 때 보는 곳
+
+키 교체 즈음에 401이 늘면 이 순서로 본다.
+
+먼저 실패한 토큰의 헤더에서 `kid`를 꺼낸다. 토큰 앞부분을 base64url로 풀면 된다. 그 `kid`가 검증자가 받는 JWKS에 있는지 `curl`로 확인한다. 이때 검증자와 같은 경로(CDN을 거치는지, 사내 프록시를 거치는지)로 받아야 한다. 인증 서버에서 직접 받으면 CDN의 옛 목록을 놓친다. 응답의 `Age` 헤더가 CDN 캐시가 얼마나 묵었는지 알려 준다.
+
+다음은 오류 종류다. `kid`를 못 찾았다(jose의 `ERR_JWKS_NO_MATCHING_KEY`)면 캐시 문제이고, 서명 검증 실패면 키 자체가 다르거나(HS 비밀 불일치, 같은 kid에 다른 키를 덮어쓴 경우) 토큰이 위조된 것이다. 같은 `kid`로 키 내용을 바꾸는 실수는 캐시를 가진 검증자에게 가장 오래 남는 장애를 만든다. `kid`는 키마다 새로 짓는다. 만료나 `nbf` 오류가 섞여 있으면 서버 사이 시계부터 의심한다([시계 어긋남](/posts/clock-skew)).
+
+장기적으로는 검증 실패를 오류 종류와 `kid`별로 나눠 지표로 남긴다. 교체 직후 "모르는 kid" 실패가 몇 분 동안 튀는지 보면 어느 서비스의 캐시가 긴지 드러난다. 다음 교체에서 대기 시간을 정하는 근거가 된다.
+
+키 교체는 결국 사본의 수명을 다루는 일이다. 새 키는 모든 사본에 퍼진 뒤에 쓰고, 옛 키는 그 키로 만든 토큰이 모두 죽은 뒤에 뺀다. 급할 때는 기다리는 대신 사본을 직접 비운다. 토큰 자체의 구조와 리프레시 흐름은 [토큰으로 로그인하기](/posts/token-login)에, 키를 저장소에 보관하고 짧게 빌려 쓰는 방법은 [비밀 관리](/posts/secrets-management)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### JWT 서명 키를 장애 없이 교체하려면 어떤 순서로 하나요?
+
+새 키를 JWKS에 먼저 게시하고, 가장 오래 캐시하는 검증자(와 CDN)가 목록을 갱신할 시간만큼 기다린 뒤 새 키로 서명을 바꾼다. 그다음 옛 키로 서명한 토큰이 모두 만료되고 leeway가 지날 때까지 옛 키를 남겨 두었다가 뺀다. 실습에서 이 순서로 돌리자 729번 검증에 실패가 없었고, 게시와 동시에 서명을 바꾸자 바로 `ERR_JWKS_NO_MATCHING_KEY`가 났다.
+
+### kid는 왜 필요한가요?
+
+검증자가 여러 공개 키 중 어느 것으로 검증할지 고르는 이름표다. 교체하는 동안에는 옛 키와 새 키가 함께 게시되므로 kid가 없으면 키를 하나씩 대 봐야 하고 교체가 어려워진다. kid는 토큰을 만든 쪽이 마음대로 쓸 수 있는 값이라 받아 둔 목록에서 찾는 데만 쓰고, 파일 경로나 쿼리에 그대로 넣지 않는다.
+
+### 검증자가 모르는 kid를 만나면 JWKS를 바로 다시 받나요?
+
+라이브러리에 따라 다르다. jose는 모르는 kid를 만나면 다시 받지만, 마지막으로 받은 지 30초(cooldownDuration)가 안 됐으면 참고 실패시킨다. 가짜 kid로 JWKS 주소를 두드리는 공격을 막기 위해서다. 직접 만든 캐시는 아예 다시 받지 않는 경우가 많아서 캐시 수명이 끝날 때까지 실패가 이어진다.
+
+### 서명 키를 바꾸면 이미 발급된 토큰은 막히나요?
+
+막히지 않는다. 옛 키가 JWKS에 남아 있으면 만료까지 통하고, 옛 키를 빼더라도 이미 목록을 캐시한 검증자는 캐시가 갱신될 때까지 통과시킨다. 실습에서 옛 키를 뺀 직후에도 캐시를 가진 검증자는 옛 키 토큰을 받아들였다. 특정 토큰을 막으려면 짧은 수명과 리프레시 토큰 폐기, 필요하면 jti 거부 목록을 쓴다.
+
+### 서명 키가 유출되면 어떻게 대응하나요?
+
+겹치는 기간 없이 옛 키를 목록에서 빼고 새 키로 서명을 바꾼 뒤, 사본을 직접 비운다. CDN 캐시를 무효화하고, 검증자 캐시를 reload나 재시작으로 비우고, 재요청하지 않는 검증자를 찾아 재시작한다. 옛 키로 서명된 정상 토큰과 리프레시 토큰도 함께 무효가 되므로 사용자 재로그인을 감수하고, 이를 위해 평소에 검증자 목록과 캐시 비우는 절차를 준비해 둔다.
+
+### HS256과 RS256·ES256은 교체 관점에서 무엇이 다른가요?
+
+HS256은 비밀 하나를 서명과 검증에 함께 써서, 새 비밀을 모든 검증자에게 비밀 저장소로 먼저 배포해야 하고 비밀을 가진 서비스는 토큰을 만들 수도 있다. 비대칭 키는 공개 키만 JWKS 주소에 올리면 검증자가 알아서 받으니 교체가 게시 한 번으로 끝난다. HS256도 kid로 여러 비밀을 고르게 하면 겹치는 교체는 할 수 있지만, 검증자가 여럿이면 비대칭으로 옮기는 편이 낫다.
+
+### JWKS 캐시 수명은 짧을수록 좋은가요?
+
+짧으면 새 키가 빨리 퍼지고 비상시 옛 키가 빨리 사라지지만, JWKS 요청이 늘고 인증 서버나 CDN이 잠깐 죽었을 때 검증 전체가 멈출 위험이 커진다. 그래서 수명은 분 단위(jose 기본 10분)로 두고, 계획된 교체는 그 수명보다 긴 대기 시간으로 흡수하며, 비상시에는 캐시를 밖에서 비우는 수단을 따로 둔다. jose는 응답의 Cache-Control을 따르지 않으니 인증 서버 쪽 max-age만 줄여서는 효과가 없다.

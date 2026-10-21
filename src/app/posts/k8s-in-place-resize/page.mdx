@@ -1,0 +1,387 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-in-place-resize");
+
+자정에 시작하는 정산 배치가 CPU를 많이 쓴다. 그 시간에만 API Pod의 CPU limits를 올리고 싶은데, Deployment의 resources를 고치면 롤링 업데이트가 돌아 Pod가 전부 새로 뜬다. 캐시가 날아가고, JVM은 다시 데워져야 하고, 붙어 있던 웹소켓 연결이 끊긴다. 숫자 하나 바꾸는 데 Pod를 갈아 끼워야 했던 이유는 오랫동안 Pod의 resources가 바꿀 수 없는 필드였기 때문이다.
+
+이제는 바꿀 수 있다. Pod를 그대로 둔 채 CPU와 메모리의 requests와 limits를 고치는 기능(In-place Pod Vertical Scaling, KEP-1287)이 1.27에 알파로 들어와 1.33에서 베타(기본 켜짐), 1.35에서 GA가 됐다(기능 게이트 `InPlacePodVerticalScaling`, 1.35부터 잠김). 이 글은 resize 하위 리소스로 요청하는 방법, `resizePolicy`로 재시작 여부를 고르는 법, kubelet이 실제로 값을 바꾸는 과정과 그 사이의 상태, 바꿀 수 없는 것들, 스케줄러와 쿼터가 이걸 어떻게 세는지를 본다.
+
+출력은 두 곳에서 받았다. API 쪽은 kwok 실습 클러스터(Kubernetes 1.37.0)의 진짜 API 서버와 스케줄러다. kwok에는 kubelet이 없어서 노드 쪽 동작(컨테이너의 cgroup 값을 바꾸고 status를 보고하는 일)은 일어나지 않는다. 그 부분은 같은 일을 리눅스 cgroup에 직접 해서 보이고, kubelet이 남기는 상태는 문서 형식대로 예시로 적는다.
+
+이 주제의 다른 글: 이 기능을 자동으로 쓰는 쪽은 [VPA](/posts/k8s-vpa)의 InPlaceOrRecreate 모드이고, requests와 limits가 무엇을 하는지는 [requests와 limits](/posts/k8s-pod-resources)에 있다. 노드를 바꾸는 쪽은 [노드 오토스케일링과 Karpenter](/posts/k8s-node-autoscaling-karpenter)에서 다룬다.
+
+## resize 하위 리소스로 요청한다
+
+Pod의 spec을 그냥 patch하면 거절된다. 실습 클러스터에서 확인했다.
+
+```bash
+# 일반 patch로 CPU requests를 바꿔 본다
+kubectl patch pod api --patch '{"spec":{"containers":[{"name":"api","resources":{"requests":{"cpu":"900m"}}}]}}'
+```
+
+```text
+The Pod "api" is invalid: spec: Forbidden: pod updates may not change fields other than `spec.containers[*].image`,`spec.initContainers[*].image`,`spec.activeDeadlineSeconds`,`spec.tolerations` (only additions to existing tolerations),`spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)
+```
+
+Pod spec은 여전히 대부분 바꿀 수 없다. resources는 `resize`라는 별도 하위 리소스로만 바꾼다. status를 `/status`로 고치는 것과 같은 구조다. 권한도 따로 줄 수 있어서 RBAC에서 `pods/resize`만 허락할 수 있다.
+
+```bash
+# resize 하위 리소스로 CPU requests와 limits를 올린다 (kubectl 1.32 이상)
+kubectl patch pod api --subresource resize \
+  --patch '{"spec":{"containers":[{"name":"api","resources":{"requests":{"cpu":"800m"},"limits":{"cpu":"1500m"}}}]}}'
+
+# 같은 일을 edit이나 server-side apply로도 할 수 있다
+kubectl edit pod api --subresource resize
+kubectl apply -f api-pod.yaml --subresource resize --server-side
+```
+
+kubectl이 오래되면 이 플래그를 모른다. 1.31 클라이언트로 같은 명령을 보내면 이렇게 나온다.
+
+```text
+error: invalid subresource value: "resize". Must be one of [status scale]
+```
+
+<UrlAnatomy
+  caption="resize 요청 한 줄 읽기"
+  base="kubectl patch pod api"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "sub", display: "--subresource resize", title: "하위 리소스", description: "PATCH /api/v1/namespaces/default/pods/api/resize로 간다. 이 경로는 resources와 resizePolicy만 받는다. 이미지 같은 다른 필드를 함께 보내면 조용히 무시된다." },
+    { key: "patch", display: "--patch '{\"spec\":{\"containers\":[{\"name\":\"api\", ...", title: "컨테이너는 이름으로 찾는다", description: "strategic merge patch라서 name이 맞는 컨테이너만 바뀐다. 이름을 틀리면 '컨테이너를 추가하거나 지울 수 없다'는 오류가 난다." },
+    { key: "res", display: "\"resources\":{\"requests\":{\"cpu\":\"800m\"}}", title: "바꿀 값", description: "CPU와 메모리만 바꿀 수 있다. 원하는 값(desired)이 spec에 적히고, 노드가 실제로 적용했는지는 status에서 따로 본다." },
+  ]}
+/>
+
+이미지를 resize로 보내 본 결과가 재밌다. `kubectl patch pod api --subresource resize`에 `"image":"node:24"`를 넣었더니 `pod/api patched`가 나왔지만 이미지는 `node:22` 그대로였다. resize 경로는 resources 말고는 받지 않고 버린다. 오류가 안 나니 착각하기 쉽다.
+
+## 원하는 값, 배정된 값, 실제 값
+
+resize가 받아들여졌다고 끝이 아니다. API 서버는 spec에 원하는 값을 적을 뿐이고, 실제로 컨테이너의 cgroup을 바꾸는 것은 노드의 kubelet이다. 그래서 Pod에는 같은 리소스가 세 군데 적힌다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="세 숫자가 같아져야 resize가 끝난다"
+  nodes={[
+    { id: "spec", label: "spec.resources", sub: "원하는 값 · 사용자가 씀", x: 220, y: 40, w: 200 },
+    { id: "alloc", label: "allocatedResources", sub: "kubelet이 수락한 값", x: 110, y: 150, w: 180 },
+    { id: "status", label: "status.resources", sub: "컨테이너에 적용된 값", x: 330, y: 150, w: 180 },
+    { id: "sched", label: "스케줄러", sub: "셋 중 가장 큰 값으로 셈", x: 110, y: 255, w: 170 },
+    { id: "cg", label: "cgroup", sub: "cpu quota · memory limit", x: 330, y: 255, w: 170 },
+  ]}
+  edges={[
+    { from: "spec", to: "alloc", label: "자리가 있으면" },
+    { from: "alloc", to: "status", label: "CRI 호출" },
+    { from: "status", to: "cg", arrow: "both", dashed: true },
+    { from: "alloc", to: "sched", dashed: true },
+    { from: "spec", to: "sched", dashed: true },
+  ]}
+/>
+
+kwok 노드에는 kubelet이 없으니 resize를 보내면 spec만 바뀌고 status는 영원히 옛 값이다. 이 차이가 그대로 보인다.
+
+```bash
+# resize 뒤 spec과 status, 그리고 generation
+kubectl get pod api -o jsonpath='gen={.metadata.generation}{"\n"}spec={.spec.containers[0].resources}{"\n"}status={.status.containerStatuses[0].resources}{"\n"}'
+```
+
+```text
+gen=2
+spec={"limits":{"cpu":"1500m","memory":"512Mi"},"requests":{"cpu":"800m","memory":"512Mi"}}
+status={"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"500m","memory":"512Mi"}}
+```
+
+`metadata.generation`이 1에서 2로 올랐다. 1.35부터 GA인 `status.observedGeneration`과 비교하면 kubelet이 이 요청까지 봤는지 알 수 있다. 실제 노드라면 kubelet이 이 차이를 보고 다음 순서로 움직인다. 아래 그림에서 다음을 누르면 따라간다.
+
+<SequenceDiagram
+  caption="resize 요청이 cgroup 값이 되기까지"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "cri", label: "런타임" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "PATCH /resize", title: "검증하고 spec에 적는다", detail: "QoS가 바뀌지 않는지, CPU와 메모리만 바뀌는지, 지울 수 없는 값을 지우지 않는지 본다. 통과하면 spec을 고치고 generation을 올린다." },
+    { from: "api", to: "kubelet", label: "watch", title: "kubelet이 차이를 본다", detail: "원하는 값과 배정된 값이 다르다. 노드에 남은 자리로 이 Pod의 새 requests를 받을 수 있는지 계산한다." },
+    { from: "kubelet", to: "kubelet", label: "admit", title: "받을 수 있으면 배정한다", detail: "allocatedResources를 새 값으로 바꾸고 PodResizeInProgress 조건을 붙인다. 자리가 모자라면 PodResizePending(Deferred 또는 Infeasible)을 붙이고 멈춘다." },
+    { from: "kubelet", to: "cri", label: "UpdateContainerResources", title: "런타임에 새 값을 넘긴다", detail: "containerd나 CRI-O가 컨테이너의 cgroup 파일에 새 quota와 메모리 한도를 쓴다. resizePolicy가 RestartContainer인 리소스가 바뀌었으면 대신 컨테이너를 재시작한다." },
+    { from: "cri", to: "kubelet", label: "ok", title: "적용된 값을 확인한다", detail: "kubelet이 컨테이너의 실제 값을 읽어 status.resources에 쓴다." },
+    { from: "kubelet", to: "api", label: "status", title: "조건이 사라지면 끝", detail: "PodResizeInProgress 조건이 없어지고 status.resources가 spec과 같아진다. restartCount로 재시작 여부를 확인한다." },
+  ]}
+/>
+
+런타임이 하는 일은 결국 cgroup 파일에 숫자를 쓰는 것이다. 이 실습 컨테이너는 cgroup v1이라 v1 파일 이름이 보인다(v2라면 `cpu.max`와 `memory.max`다). CPU를 계속 쓰는 프로세스 하나를 cgroup에 넣고, 도는 중에 quota만 바꿔 봤다.
+
+```bash
+# 0.2코어 quota인 cgroup에 바쁜 루프 하나를 넣는다
+mkdir -p /sys/fs/cgroup/cpu/r7resize /sys/fs/cgroup/cpuacct/r7resize
+echo 100000 > /sys/fs/cgroup/cpu/r7resize/cpu.cfs_period_us
+echo 20000  > /sys/fs/cgroup/cpu/r7resize/cpu.cfs_quota_us
+node -e 'for(;;){}' & PID=$!
+echo $PID > /sys/fs/cgroup/cpu/r7resize/tasks; echo $PID > /sys/fs/cgroup/cpuacct/r7resize/tasks
+
+# 3초 동안 쓴 CPU를 재고, quota를 0.8코어로 올린 뒤 다시 잰다 (cg.sh가 이 순서로 출력한다)
+echo 80000 > /sys/fs/cgroup/cpu/r7resize/cpu.cfs_quota_us
+ps -o pid=,etimes=,cmd= -p $PID
+```
+
+```text
+pid=18178 quota=20000 cpu=207m throttled=30
+pid=18178 quota=80000 cpu=806m throttled=59
+same process alive: 18178       6 node -e for(;;){}
+```
+
+같은 PID가 207m에서 806m로 바로 빨라졌다. 프로세스는 아무것도 모른다. CPU는 이렇게 재시작 없이 바꾸기 쉬운 리소스다.
+
+## 메모리는 재시작이 필요할 수 있다
+
+메모리는 사정이 다르다. 늘리는 것은 문제가 없지만, 줄일 때 프로세스가 이미 그보다 많이 쓰고 있으면 커널이 한도를 받아들이지 않거나(cgroup v1) 회수를 시도하다 OOM killer를 부른다(cgroup v2). v1에서 직접 해 봤다.
+
+```bash
+# 512Mi 한도의 cgroup에서 200MB를 잡은 프로세스, 한도를 300Mi로 줄였다가 100Mi로 줄여 본다
+echo $((300*1024*1024)) > /sys/fs/cgroup/memory/r7resize/memory.limit_in_bytes
+echo $((100*1024*1024)) > /sys/fs/cgroup/memory/r7resize/memory.limit_in_bytes
+```
+
+```text
+usage=208Mi limit=512Mi
+set 300Mi ok
+usage=208Mi limit=300Mi
+mem.sh: line 9: echo: write error: Device or resource busy
+limit now=300Mi alive=18421
+```
+
+사용량(208Mi)보다 높은 300Mi는 바로 됐고, 그보다 낮은 100Mi는 거절됐다. 그래서 kubelet은 메모리 limits를 줄이기 전에 지금 사용량을 먼저 확인하고, 사용량이 새 한도보다 크면 적용을 미룬 채 InProgress로 남겨 둔다. 문서는 이것을 "최선을 다하지만 보장하지는 않는다"고 적는다. 확인한 직후에 사용량이 튀면 OOM이 날 수 있다. 1.34부터 재시작 없는 메모리 limits 감소가 허용됐고(KEP 이력), 실습 클러스터(1.37)에서도 resizePolicy를 따로 주지 않은 Pod의 메모리 limits 감소가 API에서 받아들여졌다.
+
+더 큰 문제는 앱이다. JVM의 힙, Node의 `--max-old-space-size`, Go의 GOMEMLIMIT처럼 시작할 때 메모리 크기를 정하는 런타임은 한도가 바뀌어도 모른다. 한도를 올려도 힙은 그대로이고, 한도를 내리면 힙이 한도보다 커져 OOMKilled가 난다. 이런 앱에서는 메모리 변경 때 컨테이너를 재시작하는 쪽이 오히려 안전하다. 그걸 고르는 필드가 `resizePolicy`다.
+
+```yaml
+containers:
+- name: api
+  image: node:22
+  resizePolicy:
+  - resourceName: cpu
+    restartPolicy: NotRequired        # 기본값. 재시작 없이 적용한다
+  - resourceName: memory
+    restartPolicy: RestartContainer   # 메모리가 바뀌면 컨테이너를 재시작한다
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {cpu: "1", memory: 512Mi}
+```
+
+`RestartContainer`는 Pod를 새로 만드는 것이 아니라 그 컨테이너만 다시 띄운다. Pod 이름, IP, 노드, 볼륨은 그대로이고 `restartCount`만 하나 오른다. 두 리소스를 한꺼번에 바꾸면 하나라도 재시작이 필요한 쪽을 따른다.
+
+<AlgoTrace
+  caption="CPU는 NotRequired, 메모리는 RestartContainer일 때"
+  memoryLabel="바꾼 것 → 결과 · restartCount"
+  cells={["CPU만", "메모리만", "둘 다", "Never Pod"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["cpu 800m", "제자리 · 0"], caption: "CPU 정책이 NotRequired라 cgroup 값만 바뀐다. 프로세스는 그대로다." },
+    { pointer: 1, memory: ["memory 300Mi", "재시작 · 1"], caption: "메모리 정책이 RestartContainer라 컨테이너를 다시 띄운다. Pod와 IP는 그대로다." },
+    { pointer: 2, memory: ["cpu+memory", "재시작 · 2"], caption: "하나라도 재시작이 필요하면 재시작한다. CPU만 제자리로 바꾸고 메모리만 나중에 하는 식으로 쪼개지 않는다." },
+    { pointer: 3, memory: ["restartPolicy: Never", "생성 거부"], caption: "Pod의 restartPolicy가 Never면 재시작할 수 없으니 모든 resizePolicy가 NotRequired여야 한다. 아니면 API 서버가 거절한다." },
+  ]}
+/>
+
+마지막 경우는 실습 클러스터에서 Pod를 만들 때 바로 거절됐다.
+
+```text
+The Pod "batch-once" is invalid: spec.containers[0].resizePolicy: Invalid value: "RestartContainer": must be 'NotRequired' when pod `restartPolicy` is 'Never'
+```
+
+## 바꿀 수 없는 것들
+
+API 서버가 막는 경우를 하나씩 보냈다. 모두 실습 클러스터의 진짜 응답이다.
+
+```bash
+# requests와 limits를 같게 만들어 Burstable을 Guaranteed로 바꾸려 한다
+kubectl patch pod api --subresource resize --patch '{"spec":{"containers":[{"name":"api","resources":{"requests":{"cpu":"1500m"}}}]}}'
+
+# 이미 있는 limits를 지운다
+kubectl patch pod api --subresource resize --type json -p '[{"op":"remove","path":"/spec/containers/0/resources/limits/cpu"}]'
+
+# CPU, 메모리가 아닌 리소스를 바꾼다
+kubectl patch pod api --subresource resize --patch '{"spec":{"containers":[{"name":"api","resources":{"requests":{"ephemeral-storage":"1Gi"}}}]}}'
+```
+
+```text
+The Pod "api" is invalid: spec: Invalid value: "Burstable": Pod QOS Class may not change as a result of resizing
+The Pod "api" is invalid: spec.containers[0].resources.limits: Forbidden: resource limits cannot be removed
+The Pod "api" is invalid: spec: Forbidden: only cpu and memory resources are mutable
+```
+
+QoS 클래스가 가장 자주 걸린다. Pod의 QoS는 만들 때 정해지고 resize로 바꿀 수 없다. Guaranteed Pod는 바꾼 뒤에도 CPU와 메모리 모두 requests와 limits가 같아야 하고, Burstable은 둘 다 같아지면 안 되며, BestEffort에는 requests나 limits를 새로 넣을 수 없다. QoS가 무엇을 정하는지는 [requests와 limits](/posts/k8s-pod-resources)에 있다. 아래에서 요청이 어떻게 판정되는지 직접 돌려 볼 수 있다.
+
+<CodePlayground
+  caption="resize 요청 판정 (컨테이너 하나짜리 Pod)"
+  functionName="judgeResize"
+  initialCode={`// oldRes, newRes: { requests: {cpu, memory}, limits: {cpu, memory} } (없는 값은 빠져 있다, 단위는 숫자)
+// policy: { cpu: "NotRequired" | "RestartContainer", memory: ... }
+// 반환: "qos-changed" | "limit-removed" | "restart" | "in-place" | "no-change"
+function qos(r) {
+  const req = r.requests || {}, lim = r.limits || {};
+  if (!Object.keys(req).length && !Object.keys(lim).length) return "BestEffort";
+  const g = ["cpu", "memory"].every((k) => lim[k] !== undefined && (req[k] === undefined || req[k] === lim[k]));
+  return g ? "Guaranteed" : "Burstable";
+}
+function judgeResize(oldRes, newRes, policy) {
+  return "no-change";
+}`}
+  solution={`function qos(r) {
+  const req = r.requests || {}, lim = r.limits || {};
+  if (!Object.keys(req).length && !Object.keys(lim).length) return "BestEffort";
+  const g = ["cpu", "memory"].every((k) => lim[k] !== undefined && (req[k] === undefined || req[k] === lim[k]));
+  return g ? "Guaranteed" : "Burstable";
+}
+function judgeResize(oldRes, newRes, policy) {
+  if (qos(oldRes) !== qos(newRes)) return "qos-changed";
+  for (const k of ["cpu", "memory"]) {
+    if ((oldRes.limits || {})[k] !== undefined && (newRes.limits || {})[k] === undefined) return "limit-removed";
+  }
+  const changed = ["cpu", "memory"].filter((k) =>
+    (oldRes.requests || {})[k] !== (newRes.requests || {})[k] || (oldRes.limits || {})[k] !== (newRes.limits || {})[k]);
+  if (!changed.length) return "no-change";
+  return changed.some((k) => policy[k] === "RestartContainer") ? "restart" : "in-place";
+}`}
+  tests={[
+    { label: "CPU만 올림", args: [{ requests: { cpu: 500, memory: 512 }, limits: { cpu: 1000, memory: 512 } }, { requests: { cpu: 800, memory: 512 }, limits: { cpu: 1500, memory: 512 } }, { cpu: "NotRequired", memory: "RestartContainer" }], expected: "in-place" },
+    { label: "메모리 바꿈", args: [{ requests: { cpu: 500, memory: 512 }, limits: { cpu: 1000, memory: 512 } }, { requests: { cpu: 500, memory: 768 }, limits: { cpu: 1000, memory: 768 } }, { cpu: "NotRequired", memory: "RestartContainer" }], expected: "restart" },
+    { label: "Guaranteed가 되어 버림", args: [{ requests: { cpu: 500, memory: 512 }, limits: { cpu: 1000, memory: 512 } }, { requests: { cpu: 1000, memory: 512 }, limits: { cpu: 1000, memory: 512 } }, { cpu: "NotRequired", memory: "NotRequired" }], expected: "qos-changed" },
+    { label: "CPU limits 삭제", args: [{ requests: { cpu: 500, memory: 512 }, limits: { cpu: 1000, memory: 1024 } }, { requests: { cpu: 500, memory: 512 }, limits: { memory: 1024 } }, { cpu: "NotRequired", memory: "NotRequired" }], expected: "limit-removed" },
+    { label: "Guaranteed 유지하며 둘 다 올림", args: [{ requests: { cpu: 500, memory: 512 }, limits: { cpu: 500, memory: 512 } }, { requests: { cpu: 700, memory: 640 }, limits: { cpu: 700, memory: 640 } }, { cpu: "NotRequired", memory: "NotRequired" }], expected: "in-place" },
+  ]}
+/>
+
+문서의 제한 목록에는 이것들이 더 있다. Windows Pod는 안 된다. 재시작하지 않는 init 컨테이너와 임시(ephemeral) 컨테이너는 안 되고, 사이드카(재시작 정책이 Always인 init 컨테이너)는 된다. kubelet의 CPU Manager나 Memory Manager가 static 정책으로 CPU를 독점 배정한 Pod는 기본으로 안 된다(이를 여는 기능 게이트는 아직 알파다). swap을 쓰는 Pod는 메모리 정책이 RestartContainer여야 메모리를 바꿀 수 있다. Pod 단위 resources(`spec.resources`)를 쓰는 Pod의 resize는 `InPlacePodLevelResourcesVerticalScaling`이 1.35 알파, 1.36부터 베타다.
+
+## 노드에 자리가 없을 때
+
+resize도 노드의 자리를 쓴다. requests를 올리면 그만큼 노드 allocatable에서 빠져야 한다. kubelet이 판정하는 결과는 셋이다. 받아들이거나, 지금은 자리가 없지만 나중에 생길 수 있으니 미루거나(Deferred), 이 노드에서는 절대 안 된다고 하거나(Infeasible). 아래 그림에서 다음을 누르면 4코어 노드에서 차례로 따라간다.
+
+<NetworkTopology
+  caption="4코어 노드에서 resize가 받아들여지는 조건"
+  width={400}
+  height={250}
+  zones={[
+    { id: "node", label: "node-1 (allocatable 4 CPU)", x: 8, y: 10, w: 384, h: 120, tone: "private" },
+  ]}
+  nodes={[
+    { id: "api", label: "api", sub: "500m → ?", x: 80, y: 75, icon: "container" },
+    { id: "web", label: "web", sub: "1500m", x: 200, y: 75, icon: "container" },
+    { id: "batch", label: "batch", sub: "1500m", x: 320, y: 75, icon: "container" },
+    { id: "user", label: "kubectl", sub: "resize", x: 80, y: 205, icon: "client" },
+    { id: "kubelet", label: "kubelet", sub: "admit", x: 200, y: 205, icon: "server" },
+    { id: "sched", label: "스케줄러", sub: "max로 셈", x: 320, y: 205, icon: "gateway" },
+  ]}
+  links={[
+    { from: "user", to: "kubelet" },
+    { from: "kubelet", to: "api" },
+    { from: "kubelet", to: "sched", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "kubelet", "api"], packet: "1000m", title: "남은 자리 안이면 바로 된다", detail: "3500m가 쓰이고 500m가 남았다. api를 500m에서 1000m로 올리면 합이 4000m로 딱 맞는다. 받아들인다." },
+    { path: ["user", "kubelet", "api"], packet: "2000m", blocked: true, title: "자리가 모자라면 Deferred", detail: "다른 Pod가 빠지면 될 수도 있으니 PodResizePending, reason Deferred로 두고 다시 시도한다. 우선순위가 높은 Pod의 요청부터 다시 본다." },
+    { path: ["user", "kubelet", "api"], packet: "5000m", blocked: true, title: "노드보다 크면 Infeasible", detail: "노드 전체가 4코어라 어떤 Pod가 빠져도 안 된다. PodResizePending, reason Infeasible이다. 다른 노드로 옮기려면 Pod를 새로 만들어야 한다." },
+    { path: ["sched"], highlight: ["api", "node"], title: "스케줄러는 기다리는 값까지 센다", detail: "결정이 안 난 resize가 있으면 스케줄러는 원하는 값, 배정된 값, 실제 값 중 가장 큰 것을 그 Pod의 몫으로 본다. 새 Pod가 그 자리에 끼어들지 않게 하려는 것이다." },
+  ]}
+/>
+
+마지막 단계는 kwok에서도 진짜로 볼 수 있다. 스케줄러는 kubelet 없이도 돌기 때문이다. 4코어 노드의 api Pod(실제 값 500m)에 3500m로 resize를 보내 두고, 같은 노드에 1코어짜리 Pod를 하나 더 넣었다.
+
+```bash
+# api의 원하는 값을 3500m로 올린다. kubelet이 없으니 실제 값은 500m 그대로다
+kubectl patch pod api --subresource resize --patch '{"spec":{"containers":[{"name":"api","resources":{"requests":{"cpu":"3500m"},"limits":{"cpu":"4"}}}]}}'
+
+# 같은 노드에 1코어 Pod를 넣고 이벤트를 본다
+kubectl apply -f filler.yaml
+kubectl describe pod filler | sed -n '/Events/,$p'
+kubectl describe node node-1 | sed -n '/Non-terminated/,/Events/p'
+```
+
+```text
+  Warning  FailedScheduling  4s    default-scheduler  0/3 nodes are available: 1 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector. preemption: 0/3 nodes are available: 1 No preemption victims found for incoming pod, 2 Preemption is not helpful for scheduling.
+Non-terminated Pods:          (1 in total)
+  Namespace                   Name    CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----    ------------  ----------  ---------------  -------------  ---
+  default                     api     3500m (87%)   4 (100%)    512Mi (3%)       512Mi (3%)     90s
+```
+
+노드에서 실제로 쓰이는 requests는 500m뿐인데 스케줄러는 3500m로 세어 1코어 Pod를 거절했다. 운영에서 이게 증상으로 나타나는 모습은 "노드가 반쯤 비었는데 새 Pod가 Pending"이다. 원인을 찾으려면 resize가 걸려 있는 Pod를 본다.
+
+```bash
+# 원하는 값과 실제 값이 다른 Pod, 즉 결정이 안 난 resize를 찾는다
+kubectl get pods -A -o json | jq -r '.items[] | select(.status.conditions[]?.type | test("PodResize")) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+kubelet이 있는 노드라면 Pod에 이런 조건이 붙는다. 문서에 나온 형식을 그대로 옮긴 예시다.
+
+```text
+# 예시 (문서 형식): Infeasible
+status:
+  conditions:
+  - type: PodResizePending
+    status: "True"
+    reason: Infeasible
+    message: 'Node didn''t have enough capacity: cpu, requested: 800000, capacity: ...'
+```
+
+1.37에는 Deferred 요청을 위해 우선순위가 낮은 Pod를 밀어내는 스케줄러 preemption(`InPlacePodVerticalScalingSchedulerPreemption`)이 알파로 들어왔다. 기본은 꺼져 있으니 아직은 Deferred가 풀리기를 기다리거나 Pod를 다시 만들어 다른 노드로 보내야 한다.
+
+## Deployment와는 따로 논다
+
+resize는 Pod 하나를 바꾼다. Deployment나 ReplicaSet은 이 변화를 모른다. orders Deployment의 Pod 하나만 resize했다.
+
+```text
+NAME                      CPU    GEN   RESTARTS
+orders-69476796fc-4fbtb   400m   2     0
+orders-69476796fc-gpf5v   1      1     0
+NAME                DESIRED   CURRENT   READY   AGE
+orders-69476796fc   2         2         2       25m
+{"cpu":"1","memory":"1Gi"}
+```
+
+ReplicaSet은 Pod를 되돌리지도, 새로 만들지도 않았다. 템플릿은 여전히 `cpu: 1`이다. 다음에 롤아웃이 돌거나 Pod가 죽어 새로 만들어지면 템플릿 값으로 돌아간다. 그래서 손으로 하는 resize는 "지금 이 Pod를 급히 살리는" 응급 처치이고, 오래 유지할 값은 Deployment 템플릿에 적어야 한다. 이 사이를 자동으로 메우는 것이 VPA의 InPlaceOrRecreate 모드다. VPA가 resize 하위 리소스로 Pod를 고치고, 새 Pod는 admission webhook이 같은 값으로 만든다([VPA](/posts/k8s-vpa)).
+
+ResourceQuota와 LimitRange도 resize를 본다. 네임스페이스의 requests 한도를 넘기는 resize는 API 서버의 쿼터 검사에서 거절되고, LimitRange의 최소·최대를 벗어나는 값도 막힌다. 쿼터는 스케줄러처럼 원하는 값, 실제 값, 배정된 값 중 큰 값으로 센다(KEP-1287의 Resource Quota 항목). HPA는 사용률을 requests로 나누므로, resize로 requests를 바꾸면 HPA의 계산도 그 순간부터 달라진다([HPA](/posts/k8s-hpa)).
+
+## 현장에서 쓰는 순간
+
+쓰기 좋은 경우는 이렇다.
+
+- 시작할 때만 CPU를 많이 쓰는 앱. JVM처럼 기동 때 CPU를 몰아 쓰는 앱을 크게 띄웠다가, Ready가 된 뒤 CPU를 줄인다. VPA 최신 버전에는 이걸 하는 CPU Startup Boost 기능이 알파로 들어와 있다.
+- 상태를 오래 들고 있는 Pod. 캐시를 데우는 데 30분 걸리는 Pod, 웹소켓 연결을 수천 개 붙든 Pod, 학습 중인 Job처럼 재시작 비용이 큰 경우다.
+- 장애 대응. CPU 스로틀링으로 응답이 늦어지는 Pod의 limits를 그 자리에서 올려 숨을 돌린다([requests와 limits](/posts/k8s-pod-resources)의 스로틀링 이야기와 이어진다). 그 사이에 템플릿을 고친 배포를 준비한다.
+
+조심할 것도 있다. resize가 받아들여졌다는 메시지(`pod/api patched`)는 spec이 바뀌었다는 뜻일 뿐이다. 실제로 적용됐는지는 `status.containerStatuses[].resources`와 조건으로 확인한다. 기능이 꺼진 오래된 kubelet(베타가 기본으로 켜진 1.33 이전)이 도는 노드에서는 API 서버가 `Pod running on node without support for resize`로 거절한다. API 서버는 kubelet이 status에 리소스를 보고하는지로 노드의 지원 여부를 짐작하는데, 실습의 kwok 노드도 같은 이유로 처음에 거절당했다.
+
+## 숫자는 spec에서, 적용은 kubelet에서
+
+1.35부터 GA인 in-place resize는 resize 하위 리소스로 CPU와 메모리만 바꾼다. API 서버는 QoS 유지와 같은 규칙만 검사해 원하는 값을 spec에 적고, kubelet이 자리를 확인해 cgroup 값을 바꾼 뒤 status에 실제 값을 보고한다. CPU는 프로세스를 건드리지 않고 바뀌지만 메모리는 줄일 때 위험하고 런타임이 모를 수 있어 `resizePolicy`로 재시작을 고른다. 바꾼 값은 Pod에만 남으니 오래 쓸 값은 템플릿에 적거나 VPA에 맡긴다.
+
+## 면접에서 나올 만한 질문
+
+### Pod를 재시작하지 않고 리소스를 바꾸는 기능은 어떻게 쓰나요?
+
+`kubectl patch pod <이름> --subresource resize`처럼 Pod의 resize 하위 리소스로 resources를 보낸다. 일반 patch로는 Pod spec의 resources를 바꿀 수 없다. 1.27 알파, 1.33 베타를 거쳐 1.35에 GA가 됐고, kubectl은 1.32 이상이어야 이 플래그를 안다. 바꿀 수 있는 것은 CPU와 메모리의 requests와 limits뿐이다.
+
+### resize를 보냈는데 정말 적용됐는지 어떻게 아나요?
+
+spec은 원하는 값일 뿐이라 `status.containerStatuses[].resources`가 같은 값이 됐는지 본다. 진행 중이면 PodResizeInProgress, 자리가 없으면 PodResizePending(Deferred 또는 Infeasible) 조건이 붙는다. `metadata.generation`과 `status.observedGeneration`을 비교하면 kubelet이 이 요청까지 봤는지도 알 수 있다.
+
+### resizePolicy는 왜 리소스마다 따로 있나요?
+
+CPU는 cgroup quota만 바꾸면 프로세스가 모르는 채로 적용되지만, 메모리는 줄일 때 이미 쓰는 양보다 낮으면 OOM 위험이 있고 JVM 힙처럼 시작할 때 크기를 정하는 런타임은 바뀐 한도를 모른다. 그래서 CPU는 NotRequired, 메모리는 RestartContainer처럼 따로 고른다. RestartContainer는 Pod가 아니라 컨테이너만 재시작해 이름과 IP는 그대로다.
+
+### resize로 할 수 없는 것은 무엇인가요?
+
+QoS 클래스를 바꾸는 변경, 이미 있는 requests나 limits를 지우는 것, CPU와 메모리 외의 리소스 변경은 API 서버가 거절한다. Windows Pod, 재시작하지 않는 init 컨테이너와 임시 컨테이너, static CPU·Memory Manager가 배정한 Pod도 기본으로 안 된다. restartPolicy가 Never인 Pod는 모든 resizePolicy가 NotRequired여야 한다.
+
+### 노드에 자리가 없으면 resize는 어떻게 되나요?
+
+kubelet이 판정한다. 다른 Pod가 빠지면 될 수 있으면 Deferred로 두고 다시 시도하고, 노드 전체 용량을 넘으면 Infeasible로 두고 포기한다. 그동안 스케줄러는 원하는 값, 배정된 값, 실제 값 중 큰 값으로 그 Pod를 세므로 노드가 비어 보여도 새 Pod가 Pending이 될 수 있다. 다른 노드로 옮기려면 Pod를 다시 만들어야 한다.
+
+### 손으로 resize한 값은 계속 유지되나요?
+
+Pod가 살아 있는 동안만이다. Deployment와 ReplicaSet은 이 변화를 모르니 템플릿은 옛 값이고, 롤아웃이나 재생성 때 템플릿 값으로 돌아간다. 오래 쓸 값은 템플릿에 반영하고, 자동으로 맞추려면 VPA의 InPlaceOrRecreate 모드를 쓴다.

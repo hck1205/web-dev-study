@@ -1,0 +1,522 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("vpn-ipsec-wireguard");
+
+재택 근무 날, VPN을 켜고 사내 위키는 잘 열리는데 사내 DB(`192.168.60.20`)에는 접속이 안 된다. 옆자리 동료는 된다고 한다. 같은 날 인프라 팀은 IDC와 AWS 사이에 IPsec 터널을 새로 놓았는데, 로그에 `NO_PROPOSAL_CHOSEN`만 반복해서 찍힌다. 두 장면 모두 VPN이 무엇을 터널로 보낼지 정하는 규칙과, 터널을 맺는 협상 과정을 알면 바로 원인이 보인다.
+
+이 글은 VPN이 왜 필요한지에서 출발해, 패킷을 다른 패킷 안에 넣어 나르는 원리, IPsec이 IKE로 열쇠를 나누고 ESP로 암호화하는 과정, WireGuard가 이걸 훨씬 단순하게 다시 짠 방식을 차례로 본다. 실제로 터널을 두 개 만들어 패킷을 캡처했다. 기준 OS는 Ubuntu 24.04다. 실습 컨테이너의 커널에는 WireGuard 모듈과 IPsec(XFRM ESP)이 빠져 있어서, WireGuard는 공식 사용자 공간 구현인 wireguard-go로, IPsec은 strongSwan 5.9.13의 사용자 공간 ESP(kernel-libipsec 플러그인)로 돌렸다. 프로토콜과 패킷 모양, 명령 출력은 커널 구현과 같다. 다른 점은 그때그때 적는다.
+
+터널이 MTU를 깎아 큰 패킷만 사라지는 문제는 [MTU 글](/posts/layer-mtu-fragmentation)에서 자세히 다뤘으니 여기서는 짧게만 짚는다. 패킷을 감싸는 다른 방식인 VXLAN은 [오버레이 글](/posts/sdn-vxlan-overlay)에서 본다.
+
+## 남의 길 위에 내 전용 통로를 낸다
+
+회사 두 곳을 잇는 가장 확실한 방법은 전용 회선이다. 통신사가 두 건물 사이에 남과 섞이지 않는 회선을 깔아 준다. 안전하고 품질도 좋지만 비싸고, 개통에 몇 주가 걸리고, 직원 노트북마다 깔아 줄 수는 없다.
+
+VPN(Virtual Private Network)은 누구나 쓰는 인터넷 위에 전용 회선을 흉내 낸다. 이 글에서는 VPN을 "고속도로 위를 달리는 잠긴 화물 트럭"으로 생각하겠다. 고속도로(인터넷)는 모두가 쓰지만, 트럭(바깥 패킷) 안의 짐(원래 패킷)은 밖에서 볼 수도 바꿀 수도 없다. 트럭 겉면에는 출발 창고와 도착 창고 주소만 적혀 있다.
+
+VPN은 쓰임새로 두 가지로 나뉜다.
+
+- 사이트 간 VPN(site-to-site): 사무실과 IDC, IDC와 클라우드처럼 망과 망을 잇는다. 양 끝의 게이트웨이 장비가 터널을 맺고, 망 안의 서버들은 VPN이 있는지도 모른다. 주로 IPsec을 쓴다. AWS Site-to-Site VPN, GCP Cloud VPN이 이쪽이다.
+- 원격 접속 VPN(remote access): 직원 노트북 하나가 회사 망에 붙는다. 노트북에 클라이언트를 깔고 회사의 VPN 게이트웨이에 접속한다. IPsec(IKEv2), TLS 기반(OpenVPN, 상용 SSL VPN), WireGuard가 모두 쓰인다.
+
+어느 쪽이든 하는 일은 같다. 원래 패킷을 암호화해서 새 패킷 안에 넣고, 반대편 게이트웨이가 꺼내서 원래 목적지로 보낸다.
+
+## 패킷 안에 패킷을 넣는다
+
+아래 그림에서 다음을 누르면 노트북이 사내 DB로 보낸 패킷이 어떻게 감싸졌다가 풀리는지 보인다. 인터넷 구간에서는 바깥 주소만 보인다.
+
+<NetworkTopology
+  width={400}
+  height={340}
+  caption="원격 접속 VPN: 인터넷 구간에서는 바깥 패킷만 보인다"
+  zones={[
+    { id: "home", label: "집", x: 6, y: 6, w: 150, h: 120, tone: "neutral" },
+    { id: "inet", label: "인터넷", x: 164, y: 6, w: 230, h: 120, tone: "edge" },
+    { id: "corp", label: "사내망 192.168.60.0/24", x: 6, y: 140, w: 388, h: 194, tone: "private" },
+  ]}
+  nodes={[
+    { id: "pc", label: "laptop", sub: "10.8.0.2 (wg0)", x: 80, y: 74, icon: "client" },
+    { id: "net", label: "Internet", sub: "ISP 라우터들", x: 280, y: 74, icon: "internet" },
+    { id: "gw", label: "VPN GW", sub: "203.0.113.1", x: 280, y: 200, icon: "lock" },
+    { id: "wiki", label: "wiki", sub: "192.168.60.10", x: 80, y: 200, icon: "server" },
+    { id: "db", label: "db", sub: "192.168.60.20", x: 200, y: 290, icon: "db" },
+  ]}
+  links={[
+    { from: "pc", to: "net" },
+    { from: "net", to: "gw" },
+    { from: "gw", to: "wiki" },
+    { from: "gw", to: "db" },
+  ]}
+  steps={[
+    { path: ["pc"], title: "원래 패킷을 만든다", detail: "앱은 VPN을 모른다. 10.8.0.2에서 192.168.60.20:5432로 가는 평범한 TCP 패킷을 만든다. 라우팅 테이블이 이 목적지를 VPN 인터페이스로 보낸다.", payload: "10.8.0.2 → 192.168.60.20:5432 [SYN]" },
+    { path: ["pc", "net", "gw"], packet: "UDP", title: "감싸서 인터넷으로 보낸다", detail: "원래 패킷을 통째로 암호화하고 바깥 IP·UDP 헤더를 씌운다. 중간 라우터에는 집 공인 IP와 게이트웨이 IP만 보인다.", payload: "198.51.100.7:41820 → 203.0.113.1:51820 UDP (내용은 암호문)" },
+    { path: ["gw", "db"], packet: "SYN", title: "게이트웨이가 꺼내서 보낸다", detail: "복호화하고 무결성을 확인한 뒤 원래 패킷을 사내망으로 라우팅한다. DB 입장에서는 10.8.0.2가 보낸 평범한 연결이다." },
+    { path: ["db", "gw", "net", "pc"], packet: "SYN-ACK", title: "응답도 같은 터널로 돌아온다", detail: "DB는 10.8.0.0/24로 가는 응답을 게이트웨이로 보낸다. 사내 라우터에 이 경로가 없으면 응답이 엉뚱한 곳으로 가서 연결이 안 된다." },
+    { path: ["pc", "net"], packet: "HTTPS", highlight: ["home"], title: "터널 밖으로 가는 트래픽", detail: "스플릿 터널이면 유튜브 같은 일반 트래픽은 터널을 거치지 않고 집 회선으로 바로 나간다. 무엇을 터널로 보낼지는 VPN 설정의 라우팅 규칙이 정한다." },
+  ]}
+/>
+
+넷째 단계가 현장에서 자주 놓치는 부분이다. 터널은 양방향이 다 맞아야 한다. 노트북에서 DB로 가는 길은 VPN 설정이 만들어 주지만, DB가 `10.8.0.2`로 답할 길은 사내 라우터에 따로 있어야 한다. 게이트웨이가 출발지를 자기 주소로 바꾸는(NAT) 구성이면 이 문제가 없는 대신, DB 로그에 모든 VPN 사용자가 게이트웨이 IP 하나로 찍힌다.
+
+## IPsec은 두 단계로 나뉜다
+
+IPsec은 1990년대에 IPv6와 함께 설계된, IP 계층에서 암호화하는 표준 묶음이다. 장비 제조사와 클라우드가 모두 지원해서 사이트 간 VPN의 사실상 표준이다. 부품이 여럿이라 처음엔 헷갈리는데, 두 단계로 나눠 보면 정리된다.
+
+1. 열쇠를 나누는 단계: IKE(Internet Key Exchange). 서로 누구인지 확인하고, 어떤 암호 방식을 쓸지 합의하고, 암호 키를 만든다. UDP 500번(NAT가 있으면 4500번)으로 대화한다. 지금은 IKEv2(RFC 7296)를 쓴다.
+2. 실제 데이터를 보내는 단계: ESP(Encapsulating Security Payload). IKE가 만든 키로 패킷을 암호화하고 무결성 검사값을 붙인다. ESP는 TCP나 UDP가 아니라 IP 프로토콜 번호 50번을 쓰는 별도 프로토콜이다.
+
+IKE가 합의한 결과를 SA(Security Association)라고 부른다. IKE 자체를 보호하는 IKE SA가 하나 있고, 그 안에서 데이터용 CHILD SA(ESP SA)를 만든다. CHILD SA는 방향마다 하나씩, 각자 SPI라는 32비트 번호를 갖는다. 받는 쪽은 ESP 패킷의 SPI를 보고 어느 키로 풀지 찾는다.
+
+옛 글에 자주 나오는 AH(Authentication Header, 프로토콜 51)는 암호화 없이 무결성만 보장하고, 바깥 IP 헤더까지 검사해서 NAT를 지나면 깨진다. 지금은 거의 쓰지 않는다.
+
+모드도 두 가지다. 터널 모드는 원래 IP 패킷 전체를 암호화하고 새 IP 헤더를 씌운다. 게이트웨이끼리 망을 잇는 사이트 간 VPN이 이걸 쓴다. 전송 모드는 원래 IP 헤더는 두고 그 뒤의 내용만 암호화한다. 서버 두 대가 직접 암호화할 때 쓴다.
+
+### IKEv2 협상을 따라가 본다
+
+게이트웨이 두 대(`gw-a` 198.51.100.1, `gw-b` 198.51.100.2)를 네임스페이스로 만들고, 뒤에 각각 `10.1.0.0/24`, `10.2.0.0/24` 사내망을 붙였다. 설정은 strongSwan의 swanctl 형식이다.
+
+```text
+connections {
+  site-a-to-b {
+    version = 2
+    local_addrs = 198.51.100.1
+    remote_addrs = 198.51.100.2
+    proposals = aes256gcm16-prfsha256-x25519
+    local { auth = psk
+            id = gw-a }
+    remote { auth = psk
+             id = gw-b }
+    children {
+      lan-a-to-b {
+        local_ts = 10.1.0.0/24
+        remote_ts = 10.2.0.0/24
+        esp_proposals = aes256gcm16-x25519
+      }
+    }
+  }
+}
+```
+
+`proposals`는 IKE SA의 암호 조합(AES-256-GCM, PRF는 SHA-256, 키 교환은 X25519), `esp_proposals`는 데이터용 조합이다. `local_ts`와 `remote_ts`는 트래픽 셀렉터, 즉 "어떤 출발지에서 어떤 목적지로 가는 패킷을 이 터널에 넣을지"다. 아래 그림이 터널을 여는 메시지 흐름이다.
+
+<SequenceDiagram
+  caption="IKEv2로 IPsec 터널을 여는 네 개의 메시지"
+  actors={[
+    { id: "a", label: "gw-a" },
+    { id: "b", label: "gw-b" },
+  ]}
+  steps={[
+    { from: "a", to: "b", label: "IKE_SA_INIT 요청 (UDP 500)", title: "암호 조합과 키 재료를 내민다", detail: "쓸 수 있는 암호 조합(SA), Diffie-Hellman 공개값(KE), 난수(No)를 보낸다. NAT를 찾으려고 주소·포트의 해시(NATD)도 붙인다.", payload: "IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) ... ] (232 bytes)" },
+    { from: "b", to: "a", label: "IKE_SA_INIT 응답", title: "하나를 골라 답한다", detail: "제안 중 자기도 허용하는 조합 하나를 고르고 자기 공개값과 난수를 보낸다. 이제 양쪽이 같은 비밀값을 계산할 수 있다. 여기까지는 암호화 전이다.", payload: "selected proposal: IKE:AES_GCM_16_256/PRF_HMAC_SHA2_256/CURVE_25519" },
+    { from: "a", to: "b", label: "IKE_AUTH 요청 (UDP 4500)", title: "암호화된 채널에서 신원을 증명한다", detail: "자기 ID와 인증값(PSK 또는 인증서 서명), 그리고 만들 CHILD SA의 조합과 트래픽 셀렉터(TSi, TSr)를 보낸다. NAT 대비로 4500번으로 옮긴다.", payload: "IKE_AUTH request 1 [ IDi N(INIT_CONTACT) IDr AUTH SA TSi TSr ... ]" },
+    { from: "b", to: "a", label: "IKE_AUTH 응답", title: "확인하고 CHILD SA를 만든다", detail: "상대 인증을 확인하고, 트래픽 셀렉터가 자기 설정과 맞으면 ESP SA를 방향마다 하나씩 만든다.", payload: "CHILD_SA lan-a-to-b{1} established with SPIs 10773fa4_i 721a4fef_o\nand TS 10.1.0.0/24 === 10.2.0.0/24" },
+    { from: "a", to: "b", label: "ESP (SPI 721a4fef)", title: "데이터가 흐른다", detail: "이제 사내망 패킷은 ESP로 암호화돼 오간다. 키는 수명이 다하기 전에 CREATE_CHILD_SA로 새로 만든다(rekey)." },
+  ]}
+/>
+
+gw-a에서 터널을 열었을 때의 실제 로그다.
+
+```bash
+# 설정을 읽어 들이고, CHILD SA를 지정해서 협상을 시작한다
+sudo swanctl --load-all
+sudo swanctl --initiate --child lan-a-to-b
+```
+
+```text
+[IKE] initiating IKE_SA site-a-to-b[1] to 198.51.100.2
+[ENC] generating IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(REDIR_SUP) ]
+[NET] sending packet: from 198.51.100.1[500] to 198.51.100.2[500] (232 bytes)
+[NET] received packet: from 198.51.100.2[500] to 198.51.100.1[500] (240 bytes)
+[ENC] parsed IKE_SA_INIT response 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(CHDLESS_SUP) N(MULT_AUTH) ]
+[CFG] selected proposal: IKE:AES_GCM_16_256/PRF_HMAC_SHA2_256/CURVE_25519
+[IKE] remote host is behind NAT
+[IKE] authentication of 'gw-a' (myself) with pre-shared key
+[IKE] establishing CHILD_SA lan-a-to-b{1}
+[ENC] generating IKE_AUTH request 1 [ IDi N(INIT_CONTACT) IDr AUTH SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) N(MULT_AUTH) N(EAP_ONLY) N(MSG_ID_SYN_SUP) ]
+[NET] sending packet: from 198.51.100.1[4500] to 198.51.100.2[4500] (257 bytes)
+[NET] received packet: from 198.51.100.2[4500] to 198.51.100.1[4500] (213 bytes)
+[ENC] parsed IKE_AUTH response 1 [ IDr AUTH SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) ]
+[IKE] authentication of 'gw-b' with pre-shared key successful
+[IKE] IKE_SA site-a-to-b[1] established between 198.51.100.1[gw-a]...198.51.100.2[gw-b]
+[CFG] selected proposal: ESP:AES_GCM_16_256/NO_EXT_SEQ
+[IKE] CHILD_SA lan-a-to-b{1} established with SPIs 10773fa4_i 721a4fef_o and TS 10.1.0.0/24 === 10.2.0.0/24
+initiate completed successfully
+```
+
+`remote host is behind NAT`는 이 실습의 특성이다. 사용자 공간 ESP(kernel-libipsec)는 날것의 ESP(프로토콜 50)를 받을 수 없어서 항상 UDP로 감싸는데, 그러려고 NAT가 있는 것처럼 동작한다. 커널 XFRM을 쓰는 보통의 서버에서 NAT가 없으면 이 줄이 없고 ESP가 프로토콜 50으로 바로 나간다.
+
+같은 시각 gw-b의 바깥 랜카드에서 본 패킷이다.
+
+```text
+13:26:24.801644 IP 198.51.100.1.500 > 198.51.100.2.500: isakmp: parent_sa ikev2_init[I]
+13:26:24.803354 IP 198.51.100.2.500 > 198.51.100.1.500: isakmp: parent_sa ikev2_init[R]
+13:26:24.803998 IP 198.51.100.1.4500 > 198.51.100.2.4500: NONESP-encap: isakmp: child_sa  ikev2_auth[I]
+13:26:24.806047 IP 198.51.100.2.4500 > 198.51.100.1.4500: NONESP-encap: isakmp: child_sa  ikev2_auth[R]
+13:26:25.817458 IP 198.51.100.1.4500 > 198.51.100.2.4500: UDP-encap: ESP(spi=0x721a4fef,seq=0x1), length 120
+13:26:25.818102 IP 198.51.100.2.4500 > 198.51.100.1.4500: UDP-encap: ESP(spi=0x10773fa4,seq=0x1), length 120
+```
+
+다섯째 줄부터가 사내망 ping이다. 가는 쪽은 SPI `0x721a4fef`, 오는 쪽은 `0x10773fa4`로 방향마다 다르다. `seq`는 재전송 공격을 막는 일련번호다. 안의 84바이트 ICMP 패킷이 ESP 헤더 8, IV 8, 패딩을 더한 암호문 88, 무결성 태그 16바이트를 붙여 120바이트가 됐다. 같은 포트 4500에서 IKE와 ESP를 가르는 게 `NONESP-encap` 표시다. IKE 패킷 앞에는 4바이트 0을 붙여 ESP가 아님을 표시한다.
+
+협상이 끝난 상태는 `--list-sas`로 본다.
+
+```bash
+# 맺어진 IKE SA와 CHILD SA, 주고받은 바이트 수
+sudo swanctl --list-sas
+```
+
+```text
+site-a-to-b: #1, ESTABLISHED, IKEv2, 0a1a0117a4d84e4e_i* 0b650efec7f2819e_r
+  local  'gw-a' @ 198.51.100.1[4500]
+  remote 'gw-b' @ 198.51.100.2[4500]
+  AES_GCM_16-256/PRF_HMAC_SHA2_256/CURVE_25519
+  established 12s ago, rekeying in 14204s
+  lan-a-to-b: #1, reqid 1, INSTALLED, TUNNEL-in-UDP, ESP:AES_GCM_16-256
+    installed 12s ago, rekeying in 3380s, expires in 3948s
+    in  10773fa4,    168 bytes,     2 packets,    10s ago
+    out 721a4fef,    168 bytes,     2 packets,    10s ago
+    local  10.1.0.0/24
+    remote 10.2.0.0/24
+```
+
+장애를 볼 때는 `in`과 `out` 카운터가 핵심이다. `out`만 늘고 `in`이 0이면 터널은 맺어졌는데 상대가 응답을 터널로 돌려보내지 않는 것이다. 상대의 라우팅이나 방화벽, 또는 UDP 4500이 중간에서 막힌 경우다.
+
+## IPsec이 안 붙을 때 나오는 세 가지 메시지
+
+IPsec 장애의 대부분은 양쪽 설정이 어긋난 것이다. 먼저 트래픽 셀렉터가 실제로 무슨 일을 하는지 그림으로 보자. 셀렉터에 맞는 패킷만 ESP로 들어가고, 나머지는 터널을 모르는 것처럼 평소 경로로 나간다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="사이트 간 IPsec: 트래픽 셀렉터 10.1.0.0/24 === 10.2.0.0/24"
+  zones={[
+    { id: "sa", label: "사이트 A 10.1.0.0/24", x: 6, y: 6, w: 180, h: 150, tone: "private" },
+    { id: "sb", label: "사이트 B 10.2.0.0/24", x: 214, y: 6, w: 180, h: 150, tone: "private" },
+    { id: "net", label: "인터넷", x: 6, y: 170, w: 388, h: 154, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "ha", label: "app", sub: "10.1.0.10", x: 96, y: 56, icon: "server" },
+    { id: "ga", label: "gw-a", sub: "198.51.100.1", x: 96, y: 120, icon: "lock" },
+    { id: "gb", label: "gw-b", sub: "198.51.100.2", x: 304, y: 120, icon: "lock" },
+    { id: "hb", label: "db", sub: "10.2.0.10", x: 304, y: 56, icon: "db" },
+    { id: "inet", label: "Internet", sub: "공용 경로", x: 200, y: 250, icon: "internet" },
+    { id: "hx", label: "new subnet", sub: "10.2.1.5", x: 320, y: 280, icon: "server", w: 112 },
+  ]}
+  links={[
+    { from: "ha", to: "ga" },
+    { from: "ga", to: "inet" },
+    { from: "inet", to: "gb" },
+    { from: "gb", to: "hb" },
+    { from: "gb", to: "hx", dashed: true },
+  ]}
+  steps={[
+    { path: ["ha", "ga"], packet: "SYN", title: "셀렉터에 맞는지 본다", detail: "10.1.0.10 → 10.2.0.10은 local_ts와 remote_ts 안에 있다. 이 패킷은 CHILD SA로 보낸다." },
+    { path: ["ga", "inet", "gb"], packet: "ESP", title: "ESP로 감싸 인터넷을 건넌다", detail: "바깥 주소는 두 게이트웨이, 안은 암호문이다. SPI 721a4fef로 상대가 키를 찾는다.", payload: "198.51.100.1 > 198.51.100.2: ESP(spi=0x721a4fef,seq=0x1)" },
+    { path: ["gb", "hb"], packet: "SYN", title: "풀어서 사내망으로 보낸다", detail: "gw-b는 복호화한 패킷이 셀렉터 안의 주소인지 한 번 더 확인하고 db로 넘긴다." },
+    { path: ["ha", "ga", "inet"], packet: "SYN", blocked: true, highlight: ["hx"], title: "셀렉터 밖이면 터널을 타지 않는다", detail: "사이트 B에 10.2.1.0/24를 새로 만들고 셀렉터에 안 넣었다. 이 패킷은 평소 기본 경로로 인터넷에 나가고, 사설 주소라 어디선가 버려진다. 암호화도 안 된 채다." },
+  ]}
+/>
+
+실습에서 gw-b의 설정을 하나씩 틀리게 바꿔 실제 메시지를 받아 봤다.
+
+암호 조합이 겹치지 않으면 첫 메시지에서 끝난다. gw-b의 IKE 조합을 `aes128-sha256-modp2048`로 바꿨다.
+
+```text
+[NET] received packet: from 198.51.100.2[500] to 198.51.100.1[500] (36 bytes)
+[ENC] parsed IKE_SA_INIT response 0 [ N(NO_PROP) ]
+[IKE] received NO_PROPOSAL_CHOSEN notify error
+```
+
+처음 장면의 인프라 팀 로그가 이것이다. 클라우드 VPN과 붙일 때 흔하다. AWS 같은 클라우드는 기본으로 여러 조합을 받아 주지만, 사내 장비가 옛 조합(예: 3DES, DH 그룹 2) 하나만 고집하면 겹치는 게 없다. 양쪽이 제안하는 목록을 로그에서 비교하고, 한쪽에 맞춰 준다.
+
+사전 공유 키(PSK)가 다르면 두 번째 왕복에서 끝난다.
+
+```text
+[ENC] parsed IKE_AUTH response 1 [ N(AUTH_FAILED) ]
+[IKE] received AUTHENTICATION_FAILED notify error
+```
+
+키가 다른 경우 말고도, 한쪽이 기대하는 ID(`id = gw-b`)와 상대가 보낸 ID가 다를 때 같은 메시지가 나온다. 기본 ID가 IP 주소인데 상대가 NAT 뒤에 있어서 사설 IP를 ID로 보내는 경우가 대표적이다.
+
+트래픽 셀렉터가 어긋나면 IKE SA는 맺어지는데 CHILD SA가 안 생긴다. gw-b의 `remote_ts`를 `10.1.1.0/24`로 바꿨다.
+
+```text
+[IKE] IKE_SA site-a-to-b[4] established between 198.51.100.1[gw-a]...198.51.100.2[gw-b]
+[IKE] received TS_UNACCEPTABLE notify, no CHILD_SA built
+[IKE] failed to establish CHILD_SA, keeping IKE_SA
+```
+
+이게 가장 헷갈린다. 상태 화면에는 터널이 `ESTABLISHED`로 보이는데 사내망 트래픽이 안 흐른다. 한쪽은 `/24` 전체, 다른 쪽은 `/24` 중 일부만 적었거나, 서브넷을 하나 추가하면서 한쪽만 고친 경우다. 양쪽의 `local_ts`와 `remote_ts`가 서로 거울처럼 맞는지 본다.
+
+## NAT를 지나는 법
+
+ESP에는 포트 번호가 없다. 집 공유기나 클라우드의 NAT는 포트로 연결을 구분하는데, 포트가 없으니 ESP 패킷을 어느 내부 기기로 보낼지 모른다. 그래서 IKE가 첫 메시지에서 NAT가 있는지 확인하고(NATD 해시), NAT가 있으면 ESP를 UDP 4500번 안에 넣어 보낸다. 이게 NAT-T(NAT Traversal, RFC 3948)다. 위 캡처의 `UDP-encap: ESP`가 그 모양이다.
+
+NAT 장비는 한동안 패킷이 없는 UDP 연결을 금방 잊는다([UDP 글](/posts/udp-and-quic)에서 다뤘다). 그래서 NAT 뒤의 쪽은 20초 정도마다 1바이트짜리 NAT-T keepalive를 보내 연결 기록을 살려 둔다. 방화벽 담당자에게 IPsec을 열어 달라고 할 때는 UDP 500, UDP 4500, 그리고 NAT가 없을 때 쓰는 IP 프로토콜 50(ESP)을 함께 말해야 한다. 프로토콜 50을 "포트 50"으로 잘못 알아들어 TCP 50을 여는 실수도 실제로 있다.
+
+## WireGuard는 설정할 게 거의 없다
+
+IPsec은 강력하지만 고를 게 너무 많다. 암호 조합만 수십 가지, 인증 방식, 모드, 수명, 셀렉터까지 양쪽이 다 맞아야 한다. 코드도 크다. WireGuard는 2016년 Jason Donenfeld가 이걸 정반대로 다시 짰다. 리눅스 커널에는 5.6(2020년)부터 들어가 있고, Ubuntu 20.04 이후 커널은 모두 쓸 수 있다.
+
+설계 원칙은 "고를 게 없다"다.
+
+- 암호 방식이 고정이다. 키 교환은 Curve25519, 암호화는 ChaCha20-Poly1305, 해시는 BLAKE2s, 핸드셰이크는 Noise 프로토콜의 IKpsk2 패턴이다. 협상 단계가 없으니 `NO_PROPOSAL_CHOSEN` 같은 실패도 없다. 약점이 발견되면 프로토콜 버전을 통째로 올린다.
+- 신원은 공개 키 하나다. SSH처럼 서로의 공개 키를 설정 파일에 적는다. 사용자 이름, 인증서, PSK 없이도 된다(PSK는 양자 내성용 선택 사항이다).
+- UDP 하나만 쓴다. IKE와 ESP처럼 둘로 나뉘지 않고, NAT 통과가 처음부터 기본이다.
+- 연결 상태가 거의 없다. 보낼 게 없으면 아무것도 보내지 않는다. 모르는 키로 온 패킷에는 응답하지 않아서 포트 스캔에 걸리지도 않는다.
+
+설정 파일은 이 정도다. 노트북 쪽 `/etc/wireguard/wg0.conf` 예시다.
+
+```ini
+[Interface]
+PrivateKey = <노트북 개인 키>
+Address = 10.8.0.2/24
+DNS = 192.168.60.53
+
+[Peer]
+PublicKey = <게이트웨이 공개 키>
+Endpoint = vpn.example.com:51820
+AllowedIPs = 10.8.0.0/24, 192.168.60.0/24
+PersistentKeepalive = 25
+```
+
+```bash
+# 키 한 쌍 만들기 (개인 키는 남이 못 읽게)
+umask 077
+wg genkey | tee privatekey | wg pubkey > publickey
+# wg0.conf대로 인터페이스를 만들고 주소, 경로까지 잡는다
+sudo wg-quick up wg0
+# 부팅할 때 자동으로 올린다
+sudo systemctl enable wg-quick@wg0
+```
+
+### 실제로 터널을 열어 본다
+
+네임스페이스 두 개(`nwa` 203.0.113.1, `nwb` 203.0.113.2)에 wireguard-go로 `wg0`을 만들고 서로를 피어로 등록했다. 터널 주소는 `10.8.0.1`과 `10.8.0.2`다.
+
+```bash
+# 피어 상태 확인: 공개 키, 엔드포인트, AllowedIPs, 마지막 핸드셰이크, 주고받은 양
+sudo wg show
+```
+
+```text
+interface: wg0
+  public key: hhfDKNjWKji1WIJrYpDzLhCV4Y7kVYuybE1x+pNTpCk=
+  private key: (hidden)
+
+peer: STPI9v7GkfS9u0f/aqRrCJkFD49XTnORK0k3Sqy2ZUg=
+  endpoint: 203.0.113.2:51820
+  allowed ips: 10.8.0.2/32
+  latest handshake: 4 seconds ago
+  transfer: 348 B received, 404 B sent
+```
+
+`latest handshake`가 장애를 볼 때 제일 먼저 볼 줄이다. 줄이 아예 없으면 핸드셰이크가 한 번도 성공하지 않은 것이다. WireGuard는 트래픽이 있을 때 세션 키를 2분마다 새로 만들기 때문에, 패킷을 계속 보내는 중인데도 2분이 넘게 지나 있으면 새 핸드셰이크가 실패하고 있는 것이다. 조용한 터널은 몇 시간 전 값이 찍혀 있어도 정상이다.
+
+`10.8.0.1`에서 ping을 두 번 보내며 두 곳을 캡처했다. 위는 피어를 다시 등록해 핸드셰이크부터 새로 하게 한 뒤 바깥 랜카드(`veth-b`)에서, 아래는 그보다 앞선 실행에서 터널 인터페이스(`wg0`)로 본 것이다.
+
+```text
+listening on veth-b, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+13:21:56.868446 IP 203.0.113.1.51820 > 203.0.113.2.51820: UDP, length 148
+13:21:56.869097 IP 203.0.113.2.51820 > 203.0.113.1.51820: UDP, length 92
+13:21:56.869512 IP 203.0.113.1.51820 > 203.0.113.2.51820: UDP, length 128
+13:21:56.869712 IP 203.0.113.2.51820 > 203.0.113.1.51820: UDP, length 128
+13:21:57.870103 IP 203.0.113.1.51820 > 203.0.113.2.51820: UDP, length 128
+13:21:57.870335 IP 203.0.113.2.51820 > 203.0.113.1.51820: UDP, length 128
+
+listening on wg0, link-type RAW (Raw IP), snapshot length 262144 bytes
+13:21:33.147803 IP 10.8.0.1 > 10.8.0.2: ICMP echo request, id 18443, seq 1, length 64
+13:21:33.147936 IP 10.8.0.2 > 10.8.0.1: ICMP echo reply, id 18443, seq 1, length 64
+```
+
+바깥에서는 크기만 보인다. 148바이트가 핸드셰이크 시작, 92바이트가 응답이다. IKEv2가 네 메시지를 주고받은 것과 달리 한 번 왕복으로 끝난다. 그다음 128바이트짜리가 실제 ping이다. 터널 안에서는 평범한 ICMP로 보인다. 데이터 패킷 한 개를 뜯어 보자.
+
+<UrlAnatomy
+  caption="WireGuard 데이터 패킷 (UDP 페이로드 128바이트)"
+  separator=""
+  joiner=" | "
+  params={[
+    { key: "type", display: "04 000000", title: "메시지 종류 (4바이트)", description: "1은 핸드셰이크 시작, 2는 응답, 3은 쿠키(부하가 높을 때 DoS 방어), 4는 데이터다. 뒤 3바이트는 0으로 비워 둔다." },
+    { key: "receiver", display: "receiver idx", title: "받는 쪽 세션 번호 (4바이트)", description: "핸드셰이크 때 상대가 정해 준 번호다. IPsec의 SPI처럼 받는 쪽이 어느 세션 키로 풀지 찾는 데 쓴다." },
+    { key: "counter", display: "counter (8B)", title: "카운터 (8바이트)", description: "패킷마다 1씩 늘어난다. 암호화 논스로 쓰이고, 받는 쪽은 이미 본 번호를 버려서 재전송 공격을 막는다. 순서가 조금 뒤바뀐 패킷은 받아 준다." },
+    { key: "payload", display: "암호문 96B", title: "암호화된 원래 패킷", description: "안쪽 IP 패킷 84바이트를 16바이트 배수인 96바이트로 채운 뒤 ChaCha20으로 암호화했다. 패딩은 패킷 길이로 내용을 짐작하기 어렵게 한다." },
+    { key: "tag", display: "tag 16B", title: "Poly1305 인증 태그 (16바이트)", description: "한 비트라도 바뀌면 검증이 실패해 조용히 버린다. 16 + 96 + 16 = 128바이트가 캡처의 length 128이다." },
+  ]}
+/>
+
+헤더 16바이트와 태그 16바이트에 바깥 UDP 8, IPv4 20을 더하면 터널 하나에 최소 60바이트가 붙는다. 바깥이 IPv6면 80바이트다. 기본 MTU가 1420(=1500-80)인 이유다.
+
+<SequenceDiagram
+  caption="WireGuard 핸드셰이크는 한 번 왕복이다"
+  actors={[
+    { id: "a", label: "노트북" },
+    { id: "b", label: "게이트웨이" },
+  ]}
+  steps={[
+    { from: "a", to: "a", label: "보낼 패킷 생김", title: "처음 보낼 때 핸드셰이크한다", detail: "wg0으로 보낼 패킷이 생기는데 세션 키가 없으면 그 패킷을 잠시 붙잡고 핸드셰이크부터 한다. 미리 연결해 두지 않는다." },
+    { from: "a", to: "b", label: "Initiation (148B)", title: "임시 공개 키와 내 신원을 보낸다", detail: "이번에만 쓸 임시 키, 상대 공개 키로 암호화한 내 정적 공개 키, 타임스탬프를 담는다. 상대 공개 키를 모르는 사람은 이 메시지를 만들 수 없다." },
+    { from: "b", to: "b", label: "공개 키 확인", title: "아는 피어인지 본다", detail: "복호화한 공개 키가 설정된 피어 목록에 없으면 답하지 않는다. 같은 타임스탬프를 다시 보내는 재전송도 버린다." },
+    { from: "b", to: "a", label: "Response (92B)", title: "임시 키로 답한다", detail: "양쪽 임시 키로 세션 키 두 개(보내기용, 받기용)를 만든다. 임시 키를 버리므로 나중에 개인 키가 새도 지난 트래픽은 풀 수 없다(전방 비밀성)." },
+    { from: "a", to: "b", label: "Data (128B)", title: "붙잡아 둔 패킷을 보낸다", detail: "이제 데이터 메시지가 흐른다. 2분이 지나면 다음 패킷을 보낼 때 새 핸드셰이크로 키를 바꾼다." },
+  ]}
+/>
+
+## AllowedIPs가 라우팅과 방화벽을 겸한다
+
+WireGuard에서 가장 중요한 설정은 `AllowedIPs`다. 한 줄이 두 가지 일을 한다.
+
+- 나갈 때: 목적지가 어느 피어의 AllowedIPs에 들어가는지 보고 그 피어로 암호화해 보낸다. 여러 피어가 겹치면 더 긴 프리픽스가 이긴다. 라우팅 테이블과 같은 규칙이다(최장 일치는 [라우팅 글](/posts/layer-ip-routing-icmp)에서 다뤘다). 어느 피어에도 안 맞으면 보내지 않는다.
+- 들어올 때: 복호화한 패킷의 출발지 IP가 보낸 피어의 AllowedIPs에 들어 있는지 본다. 아니면 버린다.
+
+이 둘을 묶어 "암호 키 라우팅(cryptokey routing)"이라고 부른다. 나가는 쪽을 함수로 만들어 보자.
+
+<CodePlayground
+  caption="이 패킷은 어느 피어로 가나 (AllowedIPs 최장 일치)"
+  functionName="wgPeerFor"
+  initialCode={`// peers: [{ name, allowedIps: ["10.8.0.0/24", ...] }]
+// dst: 목적지 IPv4 주소 문자열
+// 반환: 가장 길게 일치하는 피어 이름, 없으면 null
+function wgPeerFor(peers, dst) {
+  return null;
+}`}
+  solution={`function wgPeerFor(peers, dst) {
+  const toInt = (ip) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
+  const d = toInt(dst);
+  let best = null;
+  let bestLen = -1;
+  for (const p of peers) {
+    for (const cidr of p.allowedIps) {
+      const [net, lenStr] = cidr.split("/");
+      const len = Number(lenStr);
+      const size = 2 ** (32 - len); // 이 프리픽스에 들어가는 주소 수
+      const same = Math.floor(d / size) === Math.floor(toInt(net) / size);
+      if (same && len > bestLen) {
+        best = p.name;
+        bestLen = len;
+      }
+    }
+  }
+  return best;
+}`}
+  tests={[
+    { args: [[{ name: "office", allowedIps: ["10.8.0.1/32", "192.168.50.0/24"] }], "192.168.50.7"], expected: "office", label: "사내 대역" },
+    { args: [[{ name: "office", allowedIps: ["10.8.0.1/32", "192.168.50.0/24"] }], "10.20.0.5"], expected: null, label: "어느 피어에도 없다 → 보내지 않음" },
+    { args: [[{ name: "office", allowedIps: ["192.168.50.0/24"] }, { name: "exit", allowedIps: ["0.0.0.0/0"] }], "8.8.8.8"], expected: "exit", label: "전체 터널의 기본 경로" },
+    { args: [[{ name: "office", allowedIps: ["192.168.50.0/24"] }, { name: "exit", allowedIps: ["0.0.0.0/0"] }], "192.168.50.7"], expected: "office", label: "/24가 /0을 이긴다" },
+    { args: [[{ name: "hq", allowedIps: ["10.0.0.0/8"] }, { name: "lab", allowedIps: ["10.1.0.0/16"] }], "10.1.2.3"], expected: "lab", label: "겹치면 긴 쪽" },
+    { args: [[{ name: "hq", allowedIps: ["10.0.0.0/8"] }, { name: "lab", allowedIps: ["10.1.0.0/16"] }], "10.2.0.1"], expected: "hq", label: "짧은 쪽만 맞을 때" },
+  ]}
+/>
+
+처음 장면으로 돌아가면, 노트북의 `AllowedIPs`에 `192.168.60.0/24`가 빠졌거나 `192.168.60.0/25`처럼 좁게 적혀 있으면 `.20`은 위키(`.10`)와 함께 갈 것 같지만 그렇지 않을 수 있다. 반대로 게이트웨이 쪽 피어 설정의 AllowedIPs에 노트북 주소가 빠져 있어도 응답이 버려진다. 동료는 되고 나만 안 되면 내 피어 항목의 AllowedIPs부터 비교한다.
+
+들어오는 쪽 검사도 실습에서 확인했다. `nwa`의 `wg0`에 `10.8.0.9`를 하나 더 붙이고 그 주소를 출발지로 ping을 보냈다. 상대 피어 설정의 AllowedIPs는 `10.8.0.1/32`뿐이다.
+
+```bash
+# 허용되지 않은 출발지로 보내 본다
+sudo ip netns exec nwa ping -c 2 -W 1 -I 10.8.0.9 10.8.0.2
+```
+
+```text
+PING 10.8.0.2 (10.8.0.2) from 10.8.0.9 : 56(84) bytes of data.
+
+--- 10.8.0.2 ping statistics ---
+2 packets transmitted, 0 received, 100% packet loss, time 1032ms
+```
+
+이때 `nwb`의 `wg0`에서 캡처한 결과는 `0 packets captured`였다. 암호화된 패킷은 도착해서 `transfer` 카운터는 늘었지만, 복호화한 뒤 출발지가 허용 목록에 없어서 터널 인터페이스로 올라오지도 못했다. 피어 하나가 털려도 남의 주소를 사칭해 사내망에 패킷을 넣을 수 없다는 뜻이다.
+
+## 무엇을 터널로 보낼 것인가
+
+VPN을 켰을 때 모든 트래픽을 터널로 보내면 전체 터널(full tunnel), 사내 대역만 보내면 스플릿 터널(split tunnel)이다. WireGuard에서는 AllowedIPs에 `0.0.0.0/0, ::/0`을 넣으면 전체 터널이다.
+
+전체 터널은 카페 Wi-Fi 같은 믿을 수 없는 망에서도 모든 트래픽을 보호하고, 회사가 인터넷 트래픽까지 검사할 수 있다. 대신 화상 회의와 동영상까지 회사 게이트웨이를 돌아 나가 느려지고, 게이트웨이 대역폭이 모자라기 쉽다. 스플릿 터널은 빠르지만, 노트북이 회사망과 인터넷에 동시에 걸쳐 있는 셈이라 보안 정책상 금지하는 회사도 있다.
+
+둘 다 놓치기 쉬운 게 DNS다. 사내 도메인(`db.corp.internal`)은 사내 DNS만 안다. 스플릿 터널인데 DNS는 집 공유기를 쓰면 사내 이름이 안 풀린다. 반대로 전체 터널인데 DNS 질의만 집 회선으로 새면(DNS 누출) 어떤 사이트에 가는지 그대로 드러난다. wg-quick의 `DNS =` 줄이나 systemd-resolved의 도메인별 라우팅으로 맞춘다.
+
+`PersistentKeepalive = 25`는 NAT 뒤의 피어가 25초마다 빈 패킷을 보내 NAT 기록을 살려 두는 설정이다. 게이트웨이처럼 고정 주소가 있는 쪽에는 필요 없고, NAT 뒤에 있으면서 밖에서 먼저 연결을 받아야 하는 쪽에 둔다. 이게 없으면 "한동안 조용하다가 서버 쪽에서 먼저 보내면 안 닿는다"는 증상이 생긴다.
+
+## 무엇을 고를까
+
+| | IPsec (IKEv2) | WireGuard | OpenVPN·SSL VPN |
+|---|---|---|---|
+| 동작 계층 | IP (커널) | IP (커널, 가상 인터페이스) | 사용자 공간, TLS 위 |
+| 협상 | 암호 조합·셀렉터를 협상 | 없음 (고정) | TLS 협상 |
+| 쓰는 포트 | UDP 500·4500, ESP(50) | UDP 하나 (보통 51820) | UDP 1194 또는 TCP 443 |
+| 장비·클라우드 호환 | 거의 모든 방화벽·클라우드 | 늘고 있지만 장비 지원은 적다 | 상용 SSL VPN 제품군 |
+| 사용자 인증 | 인증서, PSK, EAP(ID·비밀번호) | 공개 키뿐 (계정 연동은 별도) | 인증서, ID·비밀번호, SSO 연동 |
+
+사이트 간 연결, 특히 상대가 클라우드나 방화벽 장비라면 IPsec이 거의 유일한 선택이다. AWS Site-to-Site VPN은 연결 하나에 터널 두 개를 주고 BGP로 경로를 주고받게 한다. 한쪽 터널이 점검으로 내려가도 다른 쪽으로 넘어가게 하려는 것이니, 두 터널을 모두 올려 두지 않으면 AWS 정기 점검 때 연결이 끊긴다.
+
+서버끼리, 또는 개발팀의 원격 접속이라면 WireGuard가 설정과 운영 모두 단순하다. 다만 계정 관리(입사·퇴사 때 키 추가·삭제), SSO 연동, 접속 기록 같은 기능은 기본으로 없어서, Tailscale처럼 WireGuard 위에 관리 기능을 얹은 제품을 쓰거나 직접 만들어야 한다. TCP 443 하나만 열린 호텔 망에서 붙어야 한다면 TCP를 쓰는 SSL VPN이 유리하다. 다만 TCP 위에 TCP를 실으면 손실이 났을 때 재전송이 겹쳐 느려진다.
+
+VPN 자체가 "사내망에 들어오면 다 믿는다"는 모델이라는 점도 기억해 두자. 노트북 하나가 감염되면 VPN을 타고 사내망 전체에 닿는다. 사용자와 기기를 요청마다 확인하는 방향은 [제로 트러스트 글](/posts/zero-trust-architecture)에서 다룬다.
+
+## 현장에서 VPN을 들여다보는 순서
+
+VPN 장애는 "터널이 안 맺어진다"와 "맺어졌는데 트래픽이 안 흐른다"로 먼저 나눈다. 앞쪽은 협상 문제, 뒤쪽은 라우팅과 방화벽 문제다.
+
+터널이 안 맺어진다. 바깥 패킷이 오가는지부터 본다. 핸드셰이크 패킷이 나가기만 하고 돌아오지 않으면 중간 방화벽이나 상대 설정이다.
+
+```bash
+# IPsec: IKE(500, 4500)와 날것의 ESP가 오가는지
+sudo tcpdump -n -i eth0 'udp port 500 or udp port 4500 or esp'
+# WireGuard: 핸드셰이크(148바이트)가 나가고 92바이트 응답이 오는지
+sudo tcpdump -n -i eth0 udp port 51820
+# strongSwan 로그 (Ubuntu는 charon-systemd를 쓰면 journal로 간다)
+sudo journalctl -u strongswan -f
+```
+
+IPsec이면 로그의 notify 이름으로 좁힌다. `NO_PROPOSAL_CHOSEN`은 암호 조합, `AUTHENTICATION_FAILED`는 키나 ID, `TS_UNACCEPTABLE`은 트래픽 셀렉터다. WireGuard는 실패해도 아무 메시지를 보내지 않으니 `wg show`의 `latest handshake`가 갱신되는지만 볼 수 있다. 공개 키를 반대로 넣었거나(내 공개 키를 내 피어 항목에), 엔드포인트 포트가 다르면 핸드셰이크가 영영 안 된다.
+
+터널은 맺어졌는데 안 흐른다. 카운터로 방향을 가른다. `swanctl --list-sas`의 `in`/`out`, `wg show`의 `transfer`가 한쪽만 늘면 반대 방향이 문제다. 그다음 경로를 본다.
+
+```bash
+# 이 목적지가 정말 터널 인터페이스로 가는지
+ip route get 192.168.60.20
+# WireGuard 피어별 AllowedIPs만 모아 본다
+sudo wg show wg0 allowed-ips
+# 반대편 사내 라우터에 VPN 대역(10.8.0.0/24)으로 돌아올 경로가 있는지 확인한다
+```
+
+작은 요청은 되는데 큰 응답이나 업로드만 멈춘다. 터널 오버헤드 때문에 MTU를 넘는 것이다. WireGuard는 기본 1420, IPsec은 조합에 따라 50~70바이트를 깎는다. 터널 인터페이스의 MTU를 낮추거나 게이트웨이에서 MSS를 클램핑한다. 방법은 [MTU 글](/posts/layer-mtu-fragmentation)에 있다.
+
+몇 시간에 한 번씩 몇 초간 끊긴다. 키를 갱신(rekey)할 때 양쪽 수명 설정이 크게 다르거나, 양쪽이 동시에 갱신을 시작해 충돌하는 경우다. IPsec 로그에서 끊긴 시각의 `rekeying` 줄을 찾는다.
+
+## 결국 감싸고, 열쇠를 나누고, 무엇을 넣을지 정한다
+
+VPN은 원래 패킷을 암호화해 새 패킷 안에 넣는 터널이다. IPsec은 IKE로 열쇠와 조건을 협상하고 ESP로 데이터를 나르며, 협상할 게 많은 만큼 양쪽 설정이 어긋나는 장애가 많다. WireGuard는 암호를 고정하고 공개 키로 신원을 정해 협상을 없앴고, AllowedIPs 한 줄로 라우팅과 출발지 검사를 함께 한다. 어느 쪽이든 장애를 볼 때는 "터널이 맺어졌나", "어떤 트래픽을 넣기로 했나", "돌아오는 길이 있나" 세 가지를 차례로 확인하면 된다.
+
+## 면접에서 나올 만한 질문
+
+### VPN은 어떤 원리로 동작하나요?
+
+원래 패킷을 암호화하고 무결성 검사값을 붙여 새 IP·UDP 패킷 안에 넣어 보내고, 반대편 게이트웨이가 꺼내 원래 목적지로 라우팅하는 터널입니다. 인터넷 구간에서는 바깥 헤더의 게이트웨이 주소만 보입니다. 사이트 간 VPN은 망과 망을, 원격 접속 VPN은 기기 하나를 망에 잇습니다.
+
+### IPsec에서 IKE와 ESP는 각각 무슨 일을 하나요?
+
+IKE는 상대를 인증하고 암호 조합과 트래픽 셀렉터를 합의해 키를 만드는 제어용 프로토콜로, UDP 500과 NAT가 있으면 4500을 씁니다. ESP는 그 키로 실제 데이터를 암호화해 나르는 IP 프로토콜 50번입니다. IKEv2는 IKE_SA_INIT과 IKE_AUTH 두 번의 왕복으로 IKE SA와 첫 CHILD SA를 함께 만들고, 받는 쪽은 ESP 패킷의 SPI로 어느 SA인지 찾습니다.
+
+### IPsec 터널이 ESTABLISHED인데 트래픽이 안 흐릅니다. 무엇을 보나요?
+
+IKE SA만 맺어지고 CHILD SA가 안 생겼을 수 있으니 로그에서 TS_UNACCEPTABLE을 찾고, 양쪽 트래픽 셀렉터가 거울처럼 맞는지 봅니다. CHILD SA가 있다면 in/out 카운터로 어느 방향이 끊겼는지 가르고, 반대편 사내망에 터널 쪽으로 돌아오는 경로가 있는지, 방화벽이 ESP나 UDP 4500을 막는지 확인합니다.
+
+### NAT-T는 왜 필요한가요?
+
+ESP에는 포트 번호가 없어서 포트로 연결을 구분하는 NAT가 ESP 패킷을 어느 내부 기기로 보낼지 모르기 때문입니다. IKE가 첫 메시지의 NATD 해시로 NAT를 감지하면 ESP를 UDP 4500 안에 넣어 보내고, NAT 기록이 사라지지 않게 주기적으로 keepalive를 보냅니다.
+
+### WireGuard가 IPsec보다 단순하다는 건 구체적으로 무엇인가요?
+
+암호 방식이 고정이라 협상 단계가 없고, 신원은 서로의 공개 키로 정해서 인증서나 계정 설정이 필요 없습니다. 핸드셰이크는 한 번 왕복이고 UDP 포트 하나만 씁니다. 대신 암호를 바꾸려면 프로토콜 버전을 올려야 하고, 사용자 계정 연동이나 접속 기록 같은 관리 기능은 기본으로 없어 따로 갖춰야 합니다.
+
+### WireGuard의 AllowedIPs는 어떤 역할을 하나요?
+
+나갈 때는 목적지 주소를 최장 일치로 비교해 어느 피어로 암호화해 보낼지 정하는 라우팅 표 역할을 하고, 들어올 때는 복호화한 패킷의 출발지가 그 피어의 AllowedIPs에 있는지 확인하는 필터 역할을 합니다. 그래서 피어 하나가 다른 주소를 사칭해 패킷을 넣을 수 없습니다. 0.0.0.0/0을 넣으면 모든 트래픽을 보내는 전체 터널이 됩니다.
+
+### 전체 터널과 스플릿 터널은 어떻게 고르나요?
+
+믿을 수 없는 망에서 모든 트래픽을 보호하고 회사가 인터넷 트래픽까지 검사해야 하면 전체 터널, 성능과 게이트웨이 부하가 중요하면 스플릿 터널을 고릅니다. 어느 쪽이든 DNS를 함께 설계해야 합니다. 스플릿 터널에서는 사내 도메인을 사내 DNS로 보내야 하고, 전체 터널에서는 DNS 질의가 터널 밖으로 새지 않게 해야 합니다.
+
+### VPN을 켜면 큰 파일 업로드만 멈춥니다. 원인은요?
+
+터널 헤더만큼 실을 수 있는 크기가 줄었는데 그보다 큰 패킷이 경로 어딘가에서 버려지는 MTU 문제입니다. 특히 ICMP Fragmentation Needed가 막혀 있으면 경로 MTU 탐색이 실패해 큰 패킷만 사라집니다. 터널 인터페이스의 MTU를 오버헤드만큼 낮추거나(WireGuard 기본 1420) 게이트웨이에서 TCP MSS를 클램핑해서 고칩니다.

@@ -1,0 +1,464 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("n-plus-one-queries");
+
+## 화면은 그대로인데 쿼리가 101개
+
+주문 목록 화면이 느리다는 이야기를 듣고 슬로 쿼리 로그를 열었는데 아무것도 없다. 가장 느린 쿼리도 1ms가 안 된다. 그런데 ORM의 쿼리 로그를 켜 보면 화면 한 번에 `SELECT`가 100줄 넘게 쏟아진다. 쿼리 하나하나는 빠른데, 개수가 많아서 느린 것이다.
+
+이 장면 자체와 SQL로 고치는 법은 [쿼리 고쳐 쓰기 글의 N+1 부분](/posts/sql-query-rewrite)에 있다. 이 글은 그다음 질문을 다룬다. ORM은 왜, 언제 그 쿼리를 몰래 보내나. 관계가 한 단계 더 깊어지면 숫자가 어떻게 곱해지나. GraphQL처럼 필드마다 함수가 따로 도는 구조에서는 어떻게 묶나. 운영 중인 서비스에서 N+1을 어떻게 찾아내고, 다시 생기지 않게 막나.
+
+이 주제의 다른 글: [쿼리 고쳐 쓰기(JOIN과 IN으로 고치기)](/posts/sql-query-rewrite), [느린 쿼리 찾기(pg_stat_statements)](/posts/sql-query-tuning), [커넥션 풀](/posts/connection-pool).
+
+실험은 PostgreSQL 16과 Node.js 22, Sequelize 6.37, graphql 17, dataloader 2.2로 했다. 테이블은 넷이다.
+
+```sql
+CREATE TABLE users       (id bigint PRIMARY KEY, email text NOT NULL);
+CREATE TABLE products    (id bigint PRIMARY KEY, name text NOT NULL, price int NOT NULL);
+CREATE TABLE orders      (id bigint PRIMARY KEY, user_id bigint NOT NULL REFERENCES users,
+                          created_at timestamptz NOT NULL);
+CREATE TABLE order_items (id bigserial PRIMARY KEY, order_id bigint NOT NULL REFERENCES orders,
+                          product_id bigint NOT NULL REFERENCES products, qty int NOT NULL);
+CREATE INDEX ON orders (user_id);
+CREATE INDEX ON order_items (order_id);
+-- 회원 1,000명, 상품 200개, 주문 10,000건, 주문마다 상품 3줄(30,000줄)
+```
+
+## ORM은 객체에 손을 댈 때 쿼리를 보낸다
+
+ORM으로 `Order.findAll()`을 하면 `orders` 테이블만 읽는다. 주문에 딸린 회원이나 주문 상품은 비어 있다. 대신 그 자리에 "필요하면 가져오는" 함수나 대리 객체(프록시)를 둔다. 코드가 `order.getUser()`를 부르거나 `order.user`에 처음 손을 대는 순간 그때 SQL을 하나 보낸다. 이걸 지연 로딩(lazy loading)이라고 한다. 대리 객체가 진짜 객체를 늦게 만드는 구조는 [프록시 패턴 글](/posts/pattern-proxy)에 있다.
+
+지연 로딩은 나쁜 기능이 아니다. 주문 상세 화면 하나에서는 회원 정보가 필요할 수도, 아닐 수도 있다. 쓰지 않을 데이터를 미리 다 가져오는 것보다 손댈 때 가져오는 편이 싸다. 문제는 이 동작이 반복문 안에 들어갈 때다. 아래 그림에서 다음을 누르면 코드 한 줄이 SQL로 바뀌는 순서가 보인다.
+
+<SequenceDiagram
+  caption="지연 로딩: 코드가 손을 대는 순간 SQL이 나간다"
+  actors={[
+    { id: "code", label: "화면 코드" },
+    { id: "orm", label: "ORM" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "code", to: "orm", label: "findAll(limit 20)", title: "주문 20건을 달라고 한다", detail: "코드는 Order 객체 배열만 원한다. 연관된 회원과 상품은 말하지 않았다." },
+    { from: "orm", to: "db", label: "SELECT orders", title: "orders만 읽는다", detail: "결과에는 user_id 같은 외래 키 값만 있다. 회원 객체 자리는 비워 둔다.", payload: "SELECT id, created_at, user_id\nFROM orders ORDER BY id DESC LIMIT 20" },
+    { from: "code", to: "orm", label: "o.getUser()", title: "반복문 안에서 회원에 손댄다", detail: "코드에는 SQL이 보이지 않는다. 메서드 호출처럼 생겼을 뿐이다." },
+    { from: "orm", to: "db", label: "SELECT users id=1", title: "그때 쿼리를 하나 보낸다", detail: "ORM은 이 객체 하나만 보고 있다. 옆의 19개 주문도 곧 같은 걸 물을 거라는 걸 모른다.", payload: "SELECT id, email FROM users WHERE id = '1'" },
+    { from: "db", to: "orm", label: "1행", title: "왕복 한 번이 끝난다", detail: "DB 안에서는 0.02ms면 끝나지만 앱은 왕복 내내 기다린다." },
+    { from: "code", to: "orm", label: "다음 주문…", title: "다음 반복에서 또 손댄다", detail: "주문 20건이면 같은 모양의 쿼리가 20번 나간다. 이게 1 + N의 N이다." },
+  ]}
+/>
+
+문제의 뿌리는 ORM이 옆 객체를 모른다는 데 있다. 반복문은 앱 코드에 있고, ORM은 지금 불린 객체 하나만 본다. 그래서 ORM이 스스로 묶어 주지 못한다. 미리 "이 관계도 같이 가져와"라고 말해 줘야 한다.
+
+## 관계가 깊어지면 숫자가 곱해진다
+
+목록 화면이 주문마다 회원, 주문 상품, 각 상품의 이름까지 보여 준다고 하자. Sequelize로 아무 생각 없이 쓰면 이렇다.
+
+```js
+const orders = await Order.findAll({ order: [["id", "DESC"]], limit: 20 });
+for (const o of orders) {
+  const user = await o.getUser();              // 주문마다 1번
+  const items = await o.getOrderItems();       // 주문마다 1번
+  for (const it of items) {
+    const product = await it.getProduct();     // 주문 상품마다 1번
+  }
+}
+```
+
+쿼리 로그를 켜고(`logging: console.log`) 한 번 돌리면 앞부분이 이렇게 나온다.
+
+```text
+Executing (default): SELECT "id", "created_at" AS "createdAt", "user_id" AS "userId" FROM "orders" AS "order" ORDER BY "order"."id" DESC LIMIT 20;
+Executing (default): SELECT "id", "email" FROM "users" AS "user" WHERE "user"."id" = '1';
+Executing (default): SELECT "id", "qty", "order_id" AS "orderId", "product_id" AS "productId" FROM "order_items" AS "orderItem" WHERE "orderItem"."order_id" = '10000';
+Executing (default): SELECT "id", "name", "price" FROM "products" AS "product" WHERE "product"."id" = '18';
+Executing (default): SELECT "id", "name", "price" FROM "products" AS "product" WHERE "product"."id" = '35';
+Executing (default): SELECT "id", "name", "price" FROM "products" AS "product" WHERE "product"."id" = '52';
+```
+
+세어 보면 101개다. 아래 그림에서 단계를 넘기면 숫자가 어디서 불어나는지 보인다.
+
+<AlgoTrace
+  caption="주문 20건 화면이 쿼리 101개가 되는 과정"
+  memoryLabel="지금까지 보낸 쿼리"
+  cells={["orders", "users", "order_items", "products"]}
+  steps={[
+    { pointer: 0, memory: ["목록 1"], caption: "주문 20건을 가져온다. 쿼리 1개다." },
+    { pointer: 1, memory: ["목록 1", "회원 20"], caption: "주문마다 회원을 한 번씩 찾는다. 20개가 더해진다." },
+    { pointer: 2, memory: ["목록 1", "회원 20", "주문상품 20"], caption: "주문마다 주문 상품 목록을 찾는다. 또 20개다." },
+    { pointer: 3, memory: ["목록 1", "회원 20", "주문상품 20", "상품 60"], caption: "주문 상품 60줄마다 상품을 찾는다. 한 단계 깊어지자 N이 아니라 N × M이 됐다." },
+    { found: [0, 1, 2, 3], memory: ["합계 101"], caption: "1 + 20 + 20 + 60 = 101. 목록이 50건이면 1 + 50 + 50 + 150 = 251이 된다." },
+  ]}
+/>
+
+관계가 한 단계 깊어질 때마다 곱셈이 하나 더 붙는다. 그래서 N+1이라는 이름은 사실 얌전한 편이다. 실제 화면에서는 1 + N + N×M 꼴이 흔하다.
+
+## 가까운 DB에서는 안 보이는 이유
+
+개발 노트북에서는 DB가 같은 기계에 있어서 이 101번이 잘 티가 안 난다. 운영에서는 앱과 DB가 네트워크를 사이에 두고 있다. 같은 코드가 연결의 왕복 시간에 따라 얼마나 달라지는지 재 봤다. 앞의 화면 코드를 7번씩 돌려 가운데 값을 적었다. 두 번째 줄 묶음은 앱과 DB 사이에 패킷을 조금씩 늦추는 프록시를 끼워, 쿼리 하나에 약 3ms가 더 드는 연결로 만든 것이다(같은 기계에서 `SELECT` 200번이 평균 0.33ms, 프록시를 거치면 3.38ms였다).
+
+```bash
+# 직접 연결과 지연 프록시를 거친 연결에서 같은 화면 코드를 돌린다
+node nplus1.js
+PORT=15432 node nplus1.js
+```
+
+```text
+# 직접 연결
+lazy                         queries=101  rows=60  median 83.6 ms
+include_join                 queries=  1  rows=60  median 6.6 ms
+include_separate             queries=  2  rows=60  median 10.7 ms
+# 지연 프록시
+lazy                         queries=101  rows=60  median 434.8 ms
+include_join                 queries=  1  rows=60  median 22.9 ms
+include_separate             queries=  2  rows=60  median 19.1 ms
+```
+
+`lazy` 줄을 보면 된다. 같은 기계에서도 83ms로 고친 버전의 열 배 넘게 걸리고, 왕복이 조금 길어지자 435ms가 됐다. 쿼리 수는 그대로인데 시간은 왕복 시간에 비례해 늘었다. 고친 두 버전은 왕복이 한두 번뿐이라 거의 영향이 없다. 대기 시간이 어디서 생기는지는 [지연 시간과 처리량 글](/posts/latency-bandwidth-throughput)이 자세하다.
+
+<NetworkTopology
+  caption="쿼리 하나하나가 영역 사이를 오간다"
+  width={400}
+  height={220}
+  zones={[
+    { id: "az1", label: "AZ a · 앱", x: 10, y: 20, w: 170, h: 190, tone: "private" },
+    { id: "az2", label: "AZ b · DB", x: 220, y: 20, w: 170, h: 190, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "lb", label: "LB", x: 95, y: 70, icon: "lb" },
+    { id: "app", label: "api pod", sub: "Sequelize", x: 95, y: 160, icon: "container" },
+    { id: "pool", label: "PgBouncer", x: 305, y: 70, icon: "gateway" },
+    { id: "db", label: "PostgreSQL", sub: "primary", x: 305, y: 160, icon: "db" },
+  ]}
+  links={[
+    { from: "lb", to: "app" },
+    { from: "app", to: "pool" },
+    { from: "pool", to: "db" },
+  ]}
+  steps={[
+    { path: ["lb", "app"], packet: "GET", title: "요청이 하나 들어온다", detail: "사용자는 주문 목록 한 화면을 요청했다." },
+    { path: ["app", "pool", "db"], packet: "orders", title: "목록 쿼리가 영역을 건넌다", detail: "앱과 DB가 다른 가용 영역이면 왕복마다 네트워크 시간이 붙는다." },
+    { path: ["app", "pool", "db"], packet: "user 1", title: "회원 한 명을 찾으러 또 건넌다", detail: "DB 안에서는 금방 끝나지만 왕복은 똑같이 든다." },
+    { path: ["app", "pool", "db"], packet: "×99", highlight: ["az2"], title: "같은 왕복이 99번 더", detail: "왕복 시간이 3ms면 쿼리 시간과 상관없이 300ms가 된다. 그동안 연결 하나도 이 요청이 붙잡고 있다." },
+    { path: ["db", "pool", "app", "lb"], packet: "200", title: "응답은 그다음에야 나간다", detail: "앱 CPU도 DB CPU도 한가한데 응답이 느리다. 전형적인 N+1의 모습이다." },
+  ]}
+/>
+
+연결을 오래 붙잡는 것도 문제다. 요청 하나가 101번 왕복하는 동안 커넥션 풀의 연결 하나를 쓴다. 트래픽이 몰리면 풀이 먼저 마른다. 증상이 "DB는 한가한데 풀 대기 시간이 길다"로 나오기도 한다. [커넥션 풀 글](/posts/connection-pool)의 풀 고갈과 같은 모습이다.
+
+## 미리 가져오는 두 가지 방법
+
+고치는 방향은 하나다. 옆 객체들이 무엇을 물을지 미리 말해서 한 번에 가져오는 즉시 로딩(eager loading)이다. 방법은 JOIN과 IN 두 갈래로 나뉜다. Sequelize에서는 `include`가 JOIN을, `include`에 `separate: true`를 더하면 IN을 쓴다.
+
+```js
+// JOIN 한 번으로
+await Order.findAll({ order: [["id", "DESC"]], limit: 20,
+  include: [User, { model: OrderItem, include: [Product] }] });
+
+// 회원은 JOIN, 주문 상품은 IN으로 따로
+await Order.findAll({ order: [["id", "DESC"]], limit: 20,
+  include: [User, { model: OrderItem, separate: true, include: [Product] }] });
+```
+
+두 번째 방식이 실제로 보낸 SQL이다. 두 번째 쿼리의 `IN (...)`에 앞에서 받은 주문 id 20개가 들어 있다.
+
+```text
+SELECT "order"."id", "order"."created_at" AS "createdAt", "order"."user_id" AS "userId", "user"."id" AS "user.id", "user"."email" AS "user.email" FROM "orders" AS "order" LEFT OUTER JOIN "users" AS "user" ON "order"."user_id" = "user"."id" ORDER BY "order"."id" DESC LIMIT 20;
+SELECT "orderItem"."id", "orderItem"."qty", "orderItem"."order_id" AS "orderId", "orderItem"."product_id" AS "productId", "product"."id" AS "product.id", "product"."name" AS "product.name", "product"."price" AS "product.price" FROM "order_items" AS "orderItem" LEFT OUTER JOIN "products" AS "product" ON "orderItem"."product_id" = "product"."id" WHERE "orderItem"."order_id" IN ('10000', '9999', '9998', '9997', '9996', '9995', '9994', '9993', '9992', '9991', '9990', '9989', '9988', '9987', '9986', '9985', '9984', '9983', '9982', '9981');
+```
+
+어느 쪽이 나은지는 관계의 모양이 정한다. 하나에 하나가 붙는 관계(주문 → 회원)는 JOIN이 깔끔하다. 하나에 여러 개가 붙는 관계(주문 → 주문 상품)를 JOIN하면 부모 행이 자식 수만큼 복제된다.
+
+```sql
+-- 회원 20명의 주문과 주문 상품을 JOIN 한 번으로 가져오면
+SELECT count(*) AS result_rows,
+       count(DISTINCT u.id) AS users,
+       count(DISTINCT o.id) AS orders,
+       pg_size_pretty(sum(pg_column_size(u.email))) AS email_bytes
+FROM users u
+JOIN orders o ON o.user_id = u.id
+JOIN order_items i ON i.order_id = o.id
+WHERE u.id <= 20;
+```
+
+```text
+ result_rows | users | orders | email_bytes 
+-------------+-------+--------+-------------
+         600 |    20 |    200 | 11 kB
+(1 row)
+```
+
+회원은 20명인데 결과는 600줄이다. 회원 이메일이 한 사람당 30번씩 실려 온다. 같은 부모 아래 여러 개짜리 관계가 둘이면(주문 상품과 배송 기록처럼) 두 숫자가 곱해져 행이 폭발한다. 이걸 카테시안 폭발이라고 부르고, 그럴 때는 관계마다 IN 쿼리로 나누는 편이 전송량이 적다.
+
+JOIN에는 한 가지 함정이 더 있다. 여러 개짜리 관계를 JOIN한 결과에 `LIMIT`을 걸면 "주문 20건"이 아니라 "행 20개"에서 잘린다.
+
+```sql
+SELECT count(DISTINCT order_id) AS orders_in_page
+FROM (
+  SELECT o.id AS order_id
+  FROM orders o JOIN order_items i ON i.order_id = o.id
+  ORDER BY o.id DESC
+  LIMIT 20
+) t;
+```
+
+```text
+ orders_in_page 
+----------------
+              7
+(1 row)
+```
+
+20건을 원했는데 7건이 나왔고, 마지막 주문은 상품 일부만 담겼다. Sequelize는 이걸 알고 `limit`과 여러 개짜리 `include`가 함께 오면 주문을 먼저 서브쿼리로 자른 뒤 JOIN한다(`FROM (SELECT ... LIMIT 20) AS "order" LEFT OUTER JOIN ...`). 손으로 SQL을 쓸 때나 다른 ORM에서는 직접 확인해야 한다. Hibernate는 컬렉션 fetch join에 페이징을 걸면 경고(`HHH90003004`, 버전에 따라 번호가 다르다)를 내고 메모리에서 자른다.
+
+IN 쪽에도 한계가 있다. 키를 하나씩 바인드 변수로 넣으면 PostgreSQL 프로토콜은 메시지 하나에 변수를 65,535개까지만 받는다. 7만 개를 넣어 봤다.
+
+```text
+IN ($1..$70000): bind message has 4464 parameter formats but 0 parameters
+= ANY($1) 배열 하나: 1000
+```
+
+개수를 담는 칸이 16비트라 70,000이 4,464로 넘쳐 버렸다. 배열 하나를 변수로 넘기는 `= ANY($1::bigint[])`는 문제없다. 키가 수천 개를 넘을 수 있는 곳에서는 배열로 넘기거나, 나눠서 보낸다.
+
+## ORM마다 이름만 다르다
+
+어느 ORM이든 기본은 지연 로딩이고, 즉시 로딩을 고르는 옵션이 있다. 이름이 달라서 헷갈릴 뿐 하는 일은 JOIN이냐 IN이냐다.
+
+| ORM | 기본 동작 | JOIN으로 | IN으로 따로 |
+|---|---|---|---|
+| Sequelize | 접근 메서드(`getUser()`)로 지연 | `include` | `include` + `separate: true` (여러 개짜리 관계만) |
+| Prisma | 관계는 `include`·`select`로만 가져온다 | `relationLoadStrategy: "join"` (5.x 후반부터, 처음엔 preview) | 기본(`"query"`) |
+| TypeORM | `relations` 옵션이나 QueryBuilder로 | `leftJoinAndSelect` | `relationLoadStrategy: "query"` |
+| JPA·Hibernate | `@ManyToOne` 즉시, `@OneToMany` 지연 (스펙 기본값) | `join fetch`, `@EntityGraph` | `@BatchSize`, `default_batch_fetch_size` |
+| Django | 지연 | `select_related` | `prefetch_related` |
+| Rails | 지연 | `eager_load` | `preload` (`includes`는 상황 따라 둘 중 하나) |
+
+JPA의 기본값은 자주 나오는 꼬리 질문이다. `@ManyToOne`이 기본으로 즉시 로딩이라 "주문 목록"을 JPQL로 가져오면 회원을 찾는 쿼리가 주문 수만큼 따로 나간다. JOIN으로 붙여 주는 게 아니라 결과를 받은 뒤 하나씩 찾기 때문이다. 그래서 실무에서는 모든 연관을 `LAZY`로 바꾸고, 화면마다 fetch join이나 `@EntityGraph`로 필요한 것만 즉시 가져온다.
+
+Prisma는 반대쪽 끝에 있다. 지연 로딩이 없어서 `include`를 안 쓰면 관계가 아예 비어 있다. 대신 반복문 안에서 `prisma.user.findUnique()`를 부르면 똑같이 N+1이 된다. Prisma는 같은 틱에 들어온 `findUnique`를 묶어 주는 기능이 있지만 GraphQL 리졸버처럼 동시에 부르는 경우에만 효과가 있고, `await`를 하나씩 거는 반복문에는 소용없다.
+
+## 필드마다 함수가 도는 GraphQL
+
+GraphQL 서버는 N+1이 구조적으로 생긴다. 클라이언트가 이런 쿼리를 보낸다고 하자.
+
+```graphql
+{ orders(limit: 20) { id user { email } items { qty product { name } } } }
+```
+
+서버는 필드마다 리졸버 함수를 하나씩 둔다. `orders` 리졸버는 주문 20건을 돌려주고, GraphQL 실행기는 각 주문의 `user` 리졸버를 20번, `items` 리졸버를 20번, 각 상품의 `product` 리졸버를 60번 부른다. 리졸버마다 SQL을 하나씩 보내면 앞의 ORM 반복문과 똑같은 101개가 된다. 리졸버는 자기 부모 객체 하나만 받으니 옆을 볼 방법이 없다.
+
+이걸 푸는 게 DataLoader다. 리졸버는 SQL 대신 `loader.load(id)`를 부른다. DataLoader는 그 자리에서 쿼리를 보내지 않고 키를 모아 두었다가, 지금 실행 중인 동기 코드가 다 끝나 이벤트 루프가 한숨 돌리는 시점에 모인 키로 배치 함수를 한 번 부른다. 아래 그림에서 단계를 넘기면 키가 모였다가 한 번에 나가는 순서가 보인다.
+
+<SequenceDiagram
+  caption="DataLoader: 같은 틱에 모인 키를 한 번에 묻는다"
+  actors={[
+    { id: "r", label: "리졸버들" },
+    { id: "dl", label: "DataLoader" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "r", to: "dl", label: "load(1)", title: "첫 주문의 user 리졸버", detail: "DataLoader는 키 1을 대기 목록에 넣고 Promise만 돌려준다. 쿼리는 아직 안 나간다." },
+    { from: "r", to: "dl", label: "load(8) … load(1)", title: "나머지 19개 리졸버도 같은 틱에", detail: "GraphQL 실행기는 형제 필드를 동시에 부른다. 키 20개가 대기 목록에 쌓이고, 겹치는 키는 하나로 합쳐진다." },
+    { from: "dl", to: "dl", label: "다음 틱", title: "동기 코드가 끝나면 배치를 연다", detail: "process.nextTick 뒤에 배치 함수가 한 번 불린다. 기본값은 기다리는 시간 없이 이 틱 하나만 모은다." },
+    { from: "dl", to: "db", label: "ANY(20 ids)", title: "쿼리 하나로 묻는다", detail: "키 배열 하나를 변수로 넘긴다.", payload: "SELECT id, email FROM users\nWHERE id = ANY($1::bigint[])" },
+    { from: "db", to: "dl", label: "20행", title: "순서를 키에 맞춰 돌려준다", detail: "DB는 순서를 보장하지 않는다. 배치 함수는 키 순서대로, 없는 키 자리에는 null이나 Error를 넣어 같은 길이로 돌려줘야 한다." },
+    { from: "dl", to: "r", label: "resolve ×20", title: "각 리졸버의 Promise가 풀린다", detail: "리졸버 입장에서는 load 한 번에 회원 하나를 받은 것과 같다. 코드는 그대로, 쿼리는 하나다." },
+  ]}
+/>
+
+요청마다 로더를 새로 만들어 붙인 버전과 리졸버마다 SQL을 보내는 버전을 같은 GraphQL 쿼리로 돌렸다. 로더가 받은 키 수도 적었다.
+
+```text
+naive       queries=101 167.7 ms
+dataloader  queries=  4 12.4 ms
+  SELECT id, user_id FROM orders ORDER BY id DESC LIMIT $1
+  SELECT id, email FROM users WHERE id = ANY($1::bigint[])  -- keys 20
+  SELECT order_id, qty, product_id FROM order_items WHERE order_id = ANY($1::bigint[]) ORDER BY id  -- keys 20
+  SELECT id, name FROM products WHERE id = ANY($1::bigint[])  -- keys 34
+```
+
+쿼리가 GraphQL 쿼리의 깊이만큼, 4개로 줄었다. 마지막 줄의 키가 60이 아니라 34인 것도 볼 만하다. 주문 상품 60줄이 가리키는 상품은 실제로 34종류라서, 겹치는 키를 합쳐 34개만 물었다. 같은 요청 안에서는 한 번 가져온 키를 다시 묻지도 않는다.
+
+배치 함수는 이렇게 생겼다.
+
+```js
+// 요청마다 새로 만든다 (context에 넣어 리졸버에 넘긴다)
+const userLoader = new DataLoader(async (ids) => {
+  const rows = await q("SELECT id, email FROM users WHERE id = ANY($1::bigint[])", [ids]);
+  const byId = new Map(rows.map((r) => [String(r.id), r]));
+  // 키 순서대로, 같은 길이로. 없는 키는 Error로
+  return ids.map((id) => byId.get(String(id)) ?? new Error(`user ${id} not found`));
+});
+```
+
+DataLoader의 규칙을 직접 따라가 보자. 틱마다 리졸버들이 부른 키 목록과 한 번에 보낼 최대 키 수를 받아서, 실제로 DB에 보낼 배치들을 돌려주는 함수다. 같은 틱의 겹치는 키는 하나로 합치고, 앞 틱에서 이미 가져온 키는 캐시에서 꺼내니 다시 묻지 않는다. 최대 키 수를 넘으면 나눠 보낸다(DataLoader의 `maxBatchSize` 옵션).
+
+<CodePlayground
+  caption="DataLoader처럼 배치 나누기"
+  functionName="planBatches"
+  initialCode={`function planBatches(ticks, maxBatchSize) {
+  // ticks: [[7, 3, 7, 9], [3, 12]] 처럼 틱마다 load된 키 목록
+  // 1. 이 요청에서 이미 가져온 키는 건너뛴다 (캐시)
+  // 2. 같은 틱의 겹치는 키는 하나로
+  // 3. 한 배치는 maxBatchSize개까지
+  return [];
+}`}
+  solution={`function planBatches(ticks, maxBatchSize) {
+  const cache = new Set();   // 이 요청에서 이미 가져온 키
+  const batches = [];
+  for (const keys of ticks) {
+    const pending = [];
+    for (const key of keys) {
+      if (cache.has(key)) continue;   // 이미 가져왔거나 이번 틱에 담았다
+      cache.add(key);
+      pending.push(key);
+    }
+    for (let i = 0; i < pending.length; i += maxBatchSize) {
+      batches.push(pending.slice(i, i + maxBatchSize));
+    }
+  }
+  return batches;
+}`}
+  tests={[
+    { label: "같은 틱의 중복은 하나로", args: [[[7, 3, 7, 9]], 100], expected: [[7, 3, 9]] },
+    { label: "앞 틱에서 가져온 키는 다시 안 묻는다", args: [[[1, 2], [2, 3], [1]], 100], expected: [[1, 2], [3]] },
+    { label: "최대 키 수로 나눈다", args: [[[1, 2, 3, 4, 5]], 2], expected: [[1, 2], [3, 4], [5]] },
+    { label: "빈 틱과 같은 키 반복", args: [[[], [5, 5, 5]], 10], expected: [[5]] },
+    { label: "두 번째 틱이 전부 캐시에 있다", args: [[[1, 2], [1, 2]], 10], expected: [[1, 2]] },
+    { label: "캐시와 나누기가 함께", args: [[[10, 20, 30], [30, 40, 50, 60]], 2], expected: [[10, 20], [30], [40, 50], [60]] },
+  ]}
+/>
+
+## DataLoader를 잘못 쓰면 생기는 일
+
+가장 흔한 실수는 로더를 모듈 전역에 하나만 만드는 것이다. DataLoader의 캐시는 지우지 않는 한 계속 남는다. 첫 요청에서 회원 1을 읽고, DB에서 이메일을 바꾼 뒤, 두 번째 요청에서 다시 읽어 봤다.
+
+```text
+req1: user1@example.com
+req2 (global loader): user1@example.com  batch calls: 1
+req2 (new loader): new1@example.com  batch calls: 2
+```
+
+전역 로더는 배치 함수를 다시 부르지도 않고 옛 이메일을 돌려줬다. 데이터가 낡는 것보다 더 나쁜 건 권한이다. 로더 안에서 "이 사용자가 볼 수 있는 행만" 거르는데 로더를 요청끼리 공유하면, 앞 사용자의 권한으로 가져온 결과가 다음 사용자에게 간다. 로더는 반드시 요청마다 만들어 GraphQL context에 넣는다. 오래 기억할 데이터가 필요하면 DataLoader가 아니라 [캐시 전략](/posts/caching-strategies)을 따로 세운다.
+
+두 번째는 배치 함수가 돌려주는 순서다. `WHERE id = ANY(...)`의 결과 순서는 키 순서와 다르고, 없는 키는 아예 빠진다. 결과를 그대로 돌려주면 DataLoader가 길이가 다르다고 에러를 내거나, 길이가 우연히 맞으면 엉뚱한 회원이 엉뚱한 주문에 붙는다. 위 코드처럼 키로 맵을 만들어 키 순서대로 다시 늘어놓는다.
+
+세 번째는 키 타입이다. PostgreSQL의 `bigint`는 node-postgres에서 문자열로 온다. 리졸버는 숫자 `1`로 `load`하고 결과 맵은 문자열 `"1"`로 만들면 아무것도 못 찾는다. 위 코드에서 `String(id)`로 맞춘 이유다.
+
+마지막은 묶이지 않는 호출이다. DataLoader는 같은 틱에 들어온 키만 묶는다. 리졸버 안에서 `await loader.load(a)` 다음 줄에 `await loader.load(b)`를 쓰면 두 번에 나눠 나간다. 여러 개를 한 번에 원하면 `loader.loadMany([a, b])`나 `Promise.all`로 부른다.
+
+## 운영 중인 서비스에서 N+1 찾기
+
+N+1은 쿼리 하나가 느리지 않아서 슬로 쿼리 로그로는 못 찾는다. 대신 "같은 모양의 쿼리가 몇 번 불렸나"를 본다. 첫 번째 도구는 `pg_stat_statements`다. 값만 다른 쿼리를 하나로 묶어 횟수를 센다. 앞의 지연 로딩 화면을 요청 50번만큼 돌린 뒤 봤다.
+
+```sql
+SELECT calls,
+       round(total_exec_time::numeric, 1) AS total_ms,
+       round(mean_exec_time::numeric, 3)  AS mean_ms,
+       rows,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 60) AS query
+FROM pg_stat_statements
+WHERE query ILIKE 'select%'
+ORDER BY calls DESC
+LIMIT 5;
+```
+
+```text
+ calls | total_ms | mean_ms | rows |                            query                             
+-------+----------+---------+------+--------------------------------------------------------------
+  3000 |     87.0 |   0.029 | 3000 | SELECT "id", "name", "price" FROM "products" AS "product" WH
+  1000 |     18.0 |   0.018 | 1000 | SELECT "id", "email" FROM "users" AS "user" WHERE "user"."id
+  1000 |     24.0 |   0.024 | 3000 | SELECT "id", "qty", "order_id" AS "orderId", "product_id" AS
+    50 |     10.1 |   0.202 | 1000 | SELECT "id", "created_at" AS "createdAt", "user_id" AS "user
+     1 |      0.1 |   0.124 |    1 | select pg_stat_statements_reset()
+(5 rows)
+```
+
+읽는 법은 비율이다. 목록 쿼리(마지막에서 두 번째 줄)가 50번인데 상품 쿼리가 3,000번이다. 목록 한 번에 상품 쿼리가 60번씩 따라 나간다는 뜻이다. `mean_ms`가 0.03ms로 아주 작고 `rows`가 `calls`와 같다(한 번에 한 줄)는 것도 기본 키 하나씩 찾는 N+1의 지문이다. `total_exec_time` 순으로만 정렬하면 이런 쿼리는 위로 안 올라오니 `calls` 순으로도 본다. 이 뷰를 켜고 읽는 법은 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에 있다.
+
+`pg_stat_statements`는 요청 단위를 모른다. 어느 API가 범인인지는 APM이나 [분산 트레이싱](/posts/distributed-tracing)으로 본다. 요청 하나의 span 목록에 똑같은 DB span이 계단처럼 수십 개 늘어서 있으면 그 엔드포인트다. 많은 APM 도구가 이 모양을 "N+1" 경고로 따로 표시한다.
+
+<UrlAnatomy
+  caption="ORM 쿼리 로그 한 줄에서 볼 곳"
+  separator=" "
+  joiner=" "
+  base="Executing (default):"
+  params={[
+    { key: "SELECT", display: "SELECT \"id\", \"email\"", title: "고른 컬럼", description: "연관 객체 하나만 가져오는 쿼리는 컬럼이 적고 단순하다. 목록 쿼리와 모양이 다르다." },
+    { key: "FROM", display: "FROM \"users\" AS \"user\"", title: "테이블 별칭이 단수형", description: "Sequelize는 연관 이름(user)을 별칭으로 쓴다. 단수형 별칭이 반복되면 belongsTo 접근 메서드가 부른 쿼리다." },
+    { key: "WHERE", display: "WHERE \"user\".\"id\" = '1'", title: "기본 키 하나로 찾는다", description: "값만 바뀐 같은 줄이 연달아 나오면 N+1이다. IN이나 ANY로 바뀌어야 할 자리다.", required: true },
+    { key: "end", display: ";", title: "한 줄이 한 왕복", description: "줄 하나가 네트워크 왕복 하나다. 요청 하나에 줄이 몇 개인지 세는 게 가장 빠른 확인이다." },
+  ]}
+/>
+
+찾아서 고친 뒤에는 다시 생기지 않게 테스트로 잡는다. 화면 함수를 부르는 동안 나간 쿼리 수를 세어 상한을 거는 것이다. ORM의 로깅 훅으로 쉽게 셀 수 있다.
+
+```js
+// orders.test.js: 쿼리 로거로 개수를 센다
+let queries = 0;
+const { Order, User, OrderItem, Product } = make(port, () => { queries++; });
+
+test("주문 목록은 쿼리 3개 이하", async () => {
+  queries = 0;
+  await listOrders();
+  assert.ok(queries <= 3, `쿼리 ${queries}개가 나갔다`);
+});
+```
+
+```bash
+# 지연 로딩 버전과 고친 버전을 같은 테스트로 돌린다
+node --test --test-reporter=spec orders.test.js
+```
+
+```text
+✖ 주문 목록(lazy)은 쿼리 3개 이하 (172.583028ms)
+✔ 주문 목록(eager)은 쿼리 3개 이하 (20.049122ms)
+...
+  AssertionError [ERR_ASSERTION]: 쿼리 101개가 나갔다
+```
+
+이 테스트는 데이터 양과 상관없이 쿼리 수가 일정한지를 본다. 테스트 데이터가 주문 1건뿐이면 N+1이어도 쿼리가 3~4개라 통과해 버린다. 목록 테스트에는 최소 몇십 건을 넣는다. 다른 생태계에도 같은 장치가 있다. Rails는 `strict_loading`으로 지연 로딩 자체를 에러로 만들고 bullet gem이 경고를 띄운다. Django는 `assertNumQueries`, Hibernate는 통계(`hibernate.generate_statistics`)의 쿼리 수로 같은 테스트를 짠다.
+
+현장에서 흔한 실수도 몇 가지 적어 둔다.
+
+- 직렬화 단계의 N+1. 컨트롤러에서는 잘 가져왔는데, JSON으로 바꾸는 코드(`toJSON`, 시리얼라이저)가 연관 필드에 손을 대서 지연 로딩이 터진다. 로그를 보면 응답 직전에 쿼리가 몰려 있다.
+- 템플릿 안의 N+1. 서버 템플릿에서 `order.user.email`을 찍는 순간 쿼리가 나간다. 코드 리뷰에서 반복문만 보면 안 보인다.
+- 모든 관계를 즉시 로딩으로 바꾸기. 쿼리 수는 줄지만 화면마다 쓰지도 않는 데이터를 JOIN해서 오히려 느려진다. 즉시 로딩은 화면(쿼리) 단위로 고른다.
+- 캐시로 덮기. 회원 정보를 Redis에 넣으면 DB 쿼리는 줄지만 Redis 왕복 101번이 남는다. 캐시도 `MGET`처럼 여러 키를 한 번에 묻는 방식으로 써야 한다.
+
+## 반복문 바깥에서 한 번에 묻기
+
+N+1의 원인은 반복문 안에서 하나씩 묻는 데 있고, ORM과 GraphQL 리졸버는 이 반복문을 코드에서 감춘다. 해결책은 모두 같은 생각이다. 무엇이 필요한지 미리 말해 JOIN이나 IN으로 한 번에 가져오거나(즉시 로딩), 필요를 잠깐 모았다가 한 번에 묻는다(DataLoader). 찾을 때는 쿼리 하나의 시간이 아니라 횟수를 보고, 고친 뒤에는 쿼리 수 테스트로 묶어 둔다. SQL 쪽에서 JOIN과 IN 중 무엇을 고르는지, 실행 계획이 어떻게 달라지는지는 [쿼리 고쳐 쓰기 글](/posts/sql-query-rewrite)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### N+1 문제가 무엇이고 왜 생기나요?
+
+목록 쿼리 1번 뒤에 행마다 연관 데이터를 찾는 쿼리가 N번 더 나가는 문제다. ORM의 지연 로딩은 객체에 손을 댈 때 그 객체 하나만 보고 쿼리를 보내서, 반복문 안에서 연관에 접근하면 행 수만큼 쿼리가 나간다. 쿼리 하나는 빨라도 왕복이 N번 쌓이고, 연관이 한 단계 깊어지면 N × M으로 곱해진다.
+
+### 즉시 로딩을 JOIN으로 할 때와 IN으로 할 때는 어떻게 고르나요?
+
+하나에 하나가 붙는 관계는 JOIN, 하나에 여러 개가 붙는 관계는 IN이 대체로 낫다. 여러 개짜리 관계를 JOIN하면 부모 행이 자식 수만큼 복제되고, 그런 관계가 둘이면 곱해져 카테시안 폭발이 생긴다. 또 JOIN 결과에 LIMIT을 걸면 부모 기준이 아니라 행 기준으로 잘리니 페이징이 깨진다. IN은 쿼리가 관계 수만큼 늘지만 각 쿼리가 단순하고 전송량이 적다.
+
+### 모든 연관을 즉시 로딩으로 바꾸면 되지 않나요?
+
+안 된다. 쿼리 수는 줄어도 화면마다 쓰지 않는 데이터까지 JOIN해서 느려지고 메모리도 더 쓴다. JPA의 `@ManyToOne` 기본 EAGER처럼 즉시 로딩이 오히려 쿼리를 따로 보내 N+1을 만드는 경우도 있다. 기본은 지연 로딩으로 두고 화면이나 쿼리 단위로 fetch join, include, EntityGraph 같은 걸로 필요한 것만 즉시 가져온다.
+
+### GraphQL에서는 왜 N+1이 잘 생기고, DataLoader는 어떻게 푸나요?
+
+리졸버가 필드마다 따로 불리고 자기 부모 객체 하나만 받기 때문이다. DataLoader는 같은 이벤트 루프 틱에 들어온 `load(key)`를 모아 두었다가 배치 함수를 한 번 부르고, 겹치는 키는 합치며, 요청 안에서 한 번 가져온 키는 캐시에서 준다. 그래서 쿼리 수가 데이터 양이 아니라 GraphQL 쿼리의 깊이에 비례하게 된다.
+
+### DataLoader를 쓸 때 주의할 점은요?
+
+로더는 요청마다 새로 만든다. 전역에 두면 캐시가 요청을 넘어 남아서 낡은 데이터나 다른 사용자의 권한으로 가져온 데이터가 새어 나간다. 배치 함수는 받은 키와 같은 길이, 같은 순서로 값을 돌려줘야 하고 없는 키 자리에는 null이나 Error를 넣는다. 그리고 `await`를 하나씩 걸면 틱이 갈라져 묶이지 않으니 `loadMany`나 `Promise.all`을 쓴다.
+
+### 운영 중인 서비스에서 N+1을 어떻게 찾나요?
+
+슬로 쿼리 로그에는 안 잡히니 횟수를 본다. `pg_stat_statements`를 `calls` 순으로 보고, 목록 쿼리 대비 단건 조회 쿼리의 호출 비율이 행 수만큼 크면 의심한다. 평균 시간이 아주 작고 `rows`가 `calls`와 같은 것도 신호다. 어느 엔드포인트인지는 APM이나 트레이싱에서 요청 하나에 같은 DB span이 수십 개 늘어선 걸로 찾는다.
+
+### 고친 N+1이 다시 생기지 않게 하려면요?
+
+요청이나 함수 단위로 나간 쿼리 수를 세어 상한을 거는 테스트를 둔다. 테스트 데이터는 여러 건이어야 N+1이 드러난다. Rails의 `strict_loading`처럼 지연 로딩을 아예 에러로 만드는 설정이나, APM의 N+1 경고를 알림으로 받는 방법도 있다. 코드 리뷰에서는 반복문, 직렬화 코드, 템플릿 안의 연관 접근을 먼저 본다.
+
+### IN 목록에 키를 아주 많이 넣으면 어떻게 되나요?
+
+PostgreSQL 확장 프로토콜은 바인드 변수를 메시지 하나에 65,535개까지만 받아서, 키를 하나씩 변수로 넣으면 그 이상에서 에러가 난다. 배열 하나를 변수로 넘기는 `= ANY($1::bigint[])`를 쓰면 개수와 상관없이 쿼리 모양도 하나로 고정된다. 그래도 키가 수만 개면 결과도 크니, 그 전에 화면이 정말 그만큼 필요한지 페이지 크기부터 본다.

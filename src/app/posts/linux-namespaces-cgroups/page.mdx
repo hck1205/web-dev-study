@@ -1,0 +1,693 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-namespaces-cgroups");
+
+Pod 안에 `kubectl exec`로 들어가 `ps`를 치면 프로세스가 서너 개뿐이다. `hostname`은 Pod 이름이고, `ip addr`에는 처음 보는 주소 하나가 있다. 그런데 `free -m`을 치면 노드 전체 메모리 16GB가 그대로 나온다. 이 Pod의 메모리 limits는 512Mi인데 말이다. 어떤 건 가려져 있고 어떤 건 그대로 보인다.
+
+이 차이가 컨테이너의 정체를 알려 준다. 컨테이너는 커널이 주는 두 가지 기능을 조합한 보통 프로세스다. 무엇이 보이는지는 namespace가 나누고, 얼마나 쓸 수 있는지는 cgroup이 묶는다. `free`가 읽는 `/proc/meminfo`는 어느 쪽도 가리지 않아서 호스트 값이 나온다.
+
+[컨테이너는 무엇인가](/posts/docker-container-basics)에서 Docker로 namespace 목록과 cgroup 한도를 확인했다면, 이 글은 Docker 없이 `unshare`와 `nsenter`로 칸막이를 하나씩 직접 만들고 들어가 본다. cgroup은 v2의 파일 인터페이스를 중심으로 CPU, 메모리, 프로세스 수 한도를 걸고 실제로 넘겨 본다. 쿠버네티스에서 requests와 limits를 고르는 이야기는 [requests와 limits](/posts/k8s-pod-resources)에 있으니, 여기서는 그 숫자가 커널 파일로 바뀌는 부분까지만 간다.
+
+기준은 Ubuntu 24.04 LTS다(22.04도 같다). 실습 머신은 Ubuntu 24.04 사용자 공간에 커널 6.18인 VM이고, 루트로 실행했다. 이 머신의 cgroup은 v1과 v2가 섞인 하이브리드라서 그 차이도 뒤에서 그대로 보여 준다.
+
+## 컨테이너를 만드는 시스템 콜은 따로 없다
+
+커널에 `create_container()` 같은 건 없다. 프로세스를 만드는 `clone()`에 "이 칸막이는 새로 만들어 달라"는 플래그를 붙이거나, 이미 떠 있는 프로세스가 `unshare()`로 자기 칸막이를 새로 받거나, `setns()`로 남의 칸막이에 들어가는 것이 전부다. 명령줄 도구 `unshare`와 `nsenter`는 이 두 시스템 콜을 감싼 것이고, runc 같은 컨테이너 런타임도 결국 같은 호출을 한다.
+
+모든 프로세스는 namespace 종류마다 정확히 하나에 속한다. 그 목록은 `/proc/<PID>/ns/`에 링크로 보인다. 괄호 안 숫자는 namespace의 inode 번호이고, 두 프로세스의 숫자가 같으면 같은 칸에 있는 것이다.
+
+```bash
+# 지금 셸이 속한 namespace 목록. 괄호 안 숫자가 namespace를 가리킨다
+ls -l /proc/self/ns
+```
+
+```text
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 cgroup -> cgroup:[4026531835]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 ipc -> ipc:[4026531839]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 mnt -> mnt:[4026531832]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 net -> net:[4026531833]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 pid -> pid:[4026531836]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 pid_for_children -> pid:[4026531836]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 time -> time:[4026531834]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 time_for_children -> time:[4026531834]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 user -> user:[4026531837]
+lrwxrwxrwx 1 root root 0 Oct 21 00:21 uts -> uts:[4026531838]
+```
+
+흔히 말하는 일곱 가지(pid, net, mnt, uts, ipc, user, cgroup)에 커널 5.6에서 들어온 time이 하나 더 있다. `pid_for_children`은 다음에 만들 자식이 들어갈 PID namespace다. 이게 따로 있는 이유는 바로 다음 절에 나온다.
+
+## 새 PID 공간에서는 내가 1번이 된다
+
+PID namespace를 새로 만들면 그 안의 첫 프로세스가 PID 1이 된다. `unshare`로 해 보면 이렇다.
+
+```bash
+# 새 PID namespace에 bash를 띄우고, 그 안에서 /proc을 새로 마운트한다
+sudo unshare --pid --fork --mount-proc bash -c 'sleep 300 & echo "bash pid: $$"; ps -o pid,ppid,stat,comm; true'
+```
+
+```text
+bash pid: 1
+    PID    PPID STAT COMMAND
+      1       0 S    bash
+      2       1 S    sleep
+      3       1 R    ps
+```
+
+옵션 두 개가 빠지면 결과가 이상해진다. 먼저 `--mount-proc`을 빼 본다.
+
+```bash
+# --mount-proc 없이: PID는 1인데 ps는 호스트 프로세스를 보여 준다
+sudo unshare --pid --fork bash -c 'echo "bash pid: $$"; ps -o pid,comm | head -4; true'
+```
+
+```text
+bash pid: 1
+    PID COMMAND
+      1 process_api
+      2 kthreadd
+      3 pool_workqueue_release
+```
+
+bash 자신은 1번이라고 알고 있는데 `ps`에는 호스트의 PID 1(이 VM의 init)과 커널 스레드가 나온다. `ps`는 시스템 콜이 아니라 `/proc` 디렉터리를 읽는 프로그램이고, `/proc`은 마운트할 때의 PID namespace를 보여 주기 때문이다. 새 namespace를 만들어도 예전 `/proc`이 그대로 붙어 있으면 예전 세상이 보인다. 그래서 PID namespace는 거의 항상 mount namespace와 함께 쓰고, 그 안에 `/proc`을 새로 마운트한다.
+
+`--fork`를 빼면 더 헷갈린다. `unshare()`를 부른 프로세스 자신은 PID namespace를 옮기지 않는다. 이미 번호를 받은 프로세스의 번호를 바꿀 수는 없어서, 다음에 만드는 자식부터 새 namespace에 들어간다. `pid_for_children` 링크가 따로 있는 이유가 이것이다.
+
+```bash
+# --fork 없이 명령을 셋 실행한다. 첫 자식이 PID 1이 되었다가 끝나 버린다
+sudo unshare --pid bash -c '/bin/true; /bin/echo second; /bin/echo third'; echo "exit=$?"
+```
+
+```text
+bash: fork: Cannot allocate memory
+exit=254
+```
+
+메모리가 모자란 게 아니다. bash는 바깥에 남아 있고, 첫 자식 `/bin/true`가 새 namespace의 PID 1이 되었다. PID 1이 끝나면 그 namespace는 문을 닫고 더는 프로세스를 받지 않는다. 그다음 fork가 `ENOMEM`으로 실패한다. 아래 그림에서 단계를 넘기면 `--fork`가 이 문제를 어떻게 피하는지 보인다.
+
+<SequenceDiagram
+  caption="unshare --pid --fork --mount-proc 한 줄이 하는 일"
+  actors={[
+    { id: "sh", label: "내 셸" },
+    { id: "un", label: "unshare" },
+    { id: "k", label: "커널" },
+    { id: "c", label: "자식 (PID 1)" },
+  ]}
+  steps={[
+    { from: "sh", to: "un", label: "실행", title: "unshare가 뜬다", detail: "unshare 자신은 아직 호스트 PID namespace에 있다. 호스트 기준 번호를 하나 받는다." },
+    { from: "un", to: "k", label: "unshare(NEWPID|NEWNS)", title: "자식용 칸막이를 요청한다", detail: "자기 번호는 못 바꾸니 커널은 pid_for_children만 새 namespace로 바꿔 둔다. mount namespace는 즉시 새로 받는다." },
+    { from: "un", to: "c", label: "fork()", title: "--fork가 자식을 만든다", detail: "이 자식이 새 namespace의 첫 프로세스라서 PID 1을 받는다. 호스트에서 보면 평범한 번호다.", payload: "안: PID 1\n밖: PID 8104" },
+    { from: "c", to: "k", label: "mount proc", title: "--mount-proc이 /proc을 다시 붙인다", detail: "새 PID namespace 기준으로 /proc을 마운트한다. 이제 ps가 안쪽 프로세스만 센다." },
+    { from: "c", to: "c", label: "exec bash", title: "자식이 원래 명령으로 바뀐다", detail: "PID 1인 채로 bash가 된다. 이 bash가 끝나면 namespace 안의 모든 프로세스가 SIGKILL을 받는다." },
+  ]}
+/>
+
+PID 1은 특별한 자리다. namespace 안의 고아 프로세스를 입양해서 거둬야 하고, 커널은 PID 1이 핸들러를 등록하지 않은 시그널을 무시한다. 그래서 컨테이너 안에서 `kill -TERM 1`이 아무 일도 안 하는 경우가 있다. 이 이야기는 [리눅스 프로세스와 시그널](/posts/linux-processes-signals)에서 tini와 함께 자세히 다뤘다.
+
+## 이름과 공유 메모리는 가장 가벼운 칸막이
+
+UTS namespace는 hostname과 NIS 도메인 이름 두 개만 나눈다. Pod 안의 hostname이 Pod 이름인 것이 이 덕분이다. `sudo unshare --uts bash -c 'hostname r2-box; hostname'`은 `r2-box`를 찍고, 끝난 뒤 바깥의 `hostname`은 원래 이름(`vm`) 그대로다.
+
+IPC namespace는 System V 공유 메모리, 세마포어, 메시지 큐와 POSIX 메시지 큐를 나눈다. `ipcmk -M 4096`으로 공유 메모리를 만든 뒤 `sudo unshare --ipc ipcs -m`을 치면 목록이 비어 있다. 쿠버네티스는 같은 Pod의 컨테이너들이 IPC namespace를 함께 쓰게 한다. 공유 메모리로 붙는 두 프로세스를 사이드카로 나눠도 동작하는 이유다.
+
+여기서 실습하다 한 번 실수했다. 정리한다고 `ipcrm --all=shm`을 쳤더니 같은 머신에서 돌던 PostgreSQL의 세그먼트까지 지워졌다. PostgreSQL은 이 세그먼트를 이미 떠 있는 서버가 있는지 확인하는 용도로만 써서 서비스는 멀쩡했지만, 공유 호스트에서 `--all`은 남의 것까지 지운다. 지울 때는 `ipcrm -m <id>`로 집어서 지운다.
+
+## 마운트 목록을 따로 갖는다
+
+mount namespace는 프로세스가 보는 마운트 목록을 복사해서 따로 갖게 한다. 새로 받은 직후에는 바깥과 똑같지만, 그 뒤로 안에서 마운트하거나 해제한 것은 바깥에 보이지 않는다.
+
+```bash
+# 새 mount namespace 안에서만 tmpfs를 붙이고 파일을 쓴다
+mkdir -p mnt-demo
+sudo unshare --mount bash -c "mount -t tmpfs -o size=8m r2tmp $PWD/mnt-demo; echo inside > $PWD/mnt-demo/hello.txt; findmnt -no SOURCE,FSTYPE,SIZE $PWD/mnt-demo; cat $PWD/mnt-demo/hello.txt; true"
+
+# 바깥에서는 마운트도 파일도 없다
+findmnt $PWD/mnt-demo; ls -A mnt-demo
+```
+
+```text
+r2tmp  tmpfs    8M
+inside
+```
+
+바깥의 `findmnt`와 `ls`는 아무것도 출력하지 않았다. bash가 끝나는 순간 그 namespace를 쓰는 프로세스가 없어져서 tmpfs도 함께 사라졌다.
+
+여기에는 전파(propagation)라는 함정이 있다. systemd가 PID 1인 Ubuntu는 `/`를 `shared`로 마운트한다(`findmnt -o TARGET,PROPAGATION /`로 본다. systemd가 없는 이 VM은 `private`이었다). shared 마운트 아래에서 생긴 변화는 다른 namespace로 퍼진다. `unshare` 명령은 기본값으로 새 namespace의 마운트를 전부 `private`으로 바꿔서 이 문제를 막아 준다. 직접 `unshare()`를 부르는 프로그램은 이걸 스스로 해야 하고, 빠뜨리면 컨테이너 안에서 한 마운트가 호스트에 새어 나간다. 쿠버네티스 볼륨 설정의 `mountPropagation: Bidirectional`은 일부러 이 전파를 켜는 옵션이라 CSI 드라이버처럼 꼭 필요한 곳에만 쓴다.
+
+컨테이너가 이미지의 파일 시스템을 `/`로 보는 것도 mount namespace 위에서 `pivot_root`로 루트를 바꾼 결과다. 레이어가 어떻게 쌓이는지는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에서 다룬다.
+
+## 빈 네트워크 스택에 선을 꽂는다
+
+새 network namespace는 정말로 비어 있다. 인터페이스는 꺼진 `lo` 하나이고, 라우팅 표도 iptables 규칙도 없다. 심지어 루프백도 꺼져 있어서 `127.0.0.1`에 ping이 안 간다.
+
+```bash
+# 새 net namespace의 인터페이스와 루프백 ping
+sudo unshare --net bash -c 'ip -br link; ping -c1 -W1 127.0.0.1 2>&1 | tail -1; ip link set lo up; ping -c1 -W1 127.0.0.1 | sed -n 2p'
+```
+
+```text
+lo               DOWN           00:00:00:00:00:00 <LOOPBACK> 
+ping: connect: Network is unreachable
+64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=0.170 ms
+```
+
+이제 namespace 여러 개를 한꺼번에 만들어 작은 컨테이너를 하나 띄우고, 바깥과 선을 잇는다. 선은 veth다. 한쪽 끝에 넣은 패킷이 반대쪽 끝으로 나오는 가상 랜선 한 쌍이다.
+
+```bash
+# pid·mnt·uts·ipc·net을 새로 받은 "컨테이너"를 띄운다. 안에서는 sleep이 PID 1이다
+sudo unshare --pid --fork --mount-proc --uts --net --ipc --mount \
+  bash -c 'hostname r2-box; exec sleep 600' &
+
+# 그 sleep의 호스트 기준 PID
+PID=$(pgrep -f -n 'sleep 600'); echo $PID
+
+# veth 한 쌍을 만들고 한쪽 끝(r2c)을 컨테이너의 net namespace로 보낸다
+sudo ip link add r2h type veth peer name r2c netns $PID
+sudo ip addr add 10.222.0.1/24 dev r2h && sudo ip link set r2h up
+
+# 컨테이너 쪽 끝에 주소를 주고 켠다 (nsenter는 다음 절에서 자세히)
+sudo nsenter -t $PID -n bash -c 'ip addr add 10.222.0.2/24 dev r2c; ip link set r2c up; ip link set lo up; ip -br addr'
+```
+
+```text
+8104
+lo               UNKNOWN        127.0.0.1/8 
+r2c@if13         UP             10.222.0.2/24 
+```
+
+`r2c@if13`의 13은 짝꿍 인터페이스 번호다. 컨테이너 안에서 이 번호를 보고 호스트의 `ip link`에서 13번을 찾으면 어느 veth가 이 컨테이너 것인지 안다. 노드에 veth가 수십 개 있을 때 Pod와 인터페이스를 짝짓는 방법이다. 아래 그림에서 단계를 넘기며 패킷이 어떻게 지나가는지 본다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="unshare로 만든 컨테이너와 호스트를 veth 한 쌍으로 잇는다"
+  zones={[
+    { id: "host", label: "호스트 net ns", x: 8, y: 20, w: 384, h: 130, tone: "private" },
+    { id: "ctr", label: "새 net ns (r2-box)", x: 8, y: 176, w: 384, h: 140, tone: "public" },
+  ]}
+  nodes={[
+    { id: "srv", label: "http.server", sub: "10.222.0.1:18222", x: 110, y: 90, icon: "server", w: 120 },
+    { id: "r2h", label: "r2h", sub: "10.222.0.1/24", x: 290, y: 90, icon: "switch" },
+    { id: "r2c", label: "r2c", sub: "10.222.0.2/24", x: 290, y: 240, icon: "switch" },
+    { id: "app", label: "curl", sub: "PID 3 (안쪽)", x: 110, y: 240, icon: "container" },
+  ]}
+  links={[
+    { from: "srv", to: "r2h", label: "로컬" },
+    { from: "r2h", to: "r2c", label: "veth" },
+    { from: "r2c", to: "app" },
+  ]}
+  steps={[
+    { path: ["app", "r2c"], packet: "ping", blocked: true, title: "선을 꽂기 전에는 갈 곳이 없다", detail: "새 net namespace에는 꺼진 lo뿐이라 라우팅 표가 비어 있다. ping이 Network is unreachable로 바로 실패한다." },
+    { path: ["app", "r2c", "r2h"], packet: "ICMP", title: "veth로 호스트에 닿는다", detail: "r2c에 넣은 패킷은 짝꿍 r2h로 나온다. 같은 /24라 라우터 없이 바로 간다.", payload: "2 packets transmitted, 2 received, 0% packet loss" },
+    { path: ["app", "r2c", "r2h", "srv"], packet: "GET /", title: "호스트의 서버가 응답한다", detail: "서버가 본 출발지는 컨테이너 주소 10.222.0.2다. 바깥 인터넷으로 나가려면 여기에 라우팅과 NAT를 더해야 한다.", payload: "200 from 10.222.0.2" },
+    { path: ["app"], highlight: ["ctr"], title: "포트는 namespace마다 따로다", detail: "안에서 8080을 열어도 호스트의 ss에는 보이지 않는다. 컨테이너마다 같은 포트를 열 수 있는 이유다." },
+  ]}
+/>
+
+```bash
+# 컨테이너에서 호스트로 ping, 그리고 호스트에 띄운 서버로 HTTP 요청
+sudo nsenter -t $PID -n ping -c2 10.222.0.1 | tail -2
+python3 -m http.server 18222 --bind 10.222.0.1 >/dev/null 2>&1 &
+sudo nsenter -t $PID -n curl -s -o /dev/null -w '%{http_code} from %{local_ip}\n' http://10.222.0.1:18222/
+```
+
+```text
+2 packets transmitted, 2 received, 0% packet loss, time 1010ms
+rtt min/avg/max/mdev = 0.037/0.148/0.259/0.111 ms
+200 from 10.222.0.2
+```
+
+Docker의 bridge 네트워크는 이 veth 끝을 리눅스 브리지에 꽂고 iptables로 NAT를 건 것이다. 그 과정은 [Docker 네트워크 드라이버](/posts/docker-network-drivers)에, 쿠버네티스에서 CNI 플러그인이 같은 일을 하는 방식은 [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)에 있다. Pod 안 컨테이너들이 `localhost`로 서로 닿는 것도 같은 net namespace를 함께 쓰기 때문이다.
+
+## 안에서는 root, 밖에서는 nobody
+
+user namespace는 UID와 GID 번호를 바꿔 보이게 한다. 안의 UID 0을 밖의 다른 번호에 대응시킬 수 있고, 다른 namespace와 달리 일반 사용자도 만들 수 있다. 일반 사용자 nobody로 들어가 본다.
+
+```bash
+# nobody(65534)로 바꾼 뒤, 새 user namespace에서 자기를 root로 매핑한다
+sudo setpriv --reuid=65534 --regid=65534 --clear-groups bash -c '
+  id
+  unshare --user --map-root-user bash -c "id; cat /proc/self/uid_map; touch /etc/r2-test; ls -ld /etc; true"'
+```
+
+```text
+uid=65534(nobody) gid=65534(nogroup) groups=65534(nogroup)
+uid=0(root) gid=0(root) groups=0(root)
+         0      65534          1
+touch: cannot touch '/etc/r2-test': Permission denied
+drwxr-xr-x 109 nobody nogroup 4096 Oct 21 00:14 /etc
+```
+
+`uid_map`의 세 숫자는 "안의 0부터 1개를 밖의 65534로"라는 뜻이다. 안에서는 root인데 `/etc`에 파일을 못 만든다. 커널은 파일 권한을 검사할 때 밖의 UID 65534로 보기 때문이다. `/etc`의 주인이 nobody로 나오는 것도 재미있다. 밖의 root(0)는 이 namespace의 매핑에 없어서 넘침 UID인 65534로 보인다.
+
+안의 root가 가진 capability는 진짜다. 다만 그 user namespace가 소유한 자원에만 통한다.
+
+```bash
+# 같은 nobody로 시도한다
+sudo setpriv --reuid=65534 --regid=65534 --clear-groups bash -c '
+  unshare --user --map-root-user hostname x                                   # 1) 호스트의 UTS
+  unshare --user --map-root-user --uts bash -c "hostname r2-userns; hostname" # 2) 내가 만든 UTS
+  unshare -Ur grep CapEff /proc/self/status'
+```
+
+```text
+hostname: you must be root to change the host name
+r2-userns
+CapEff:	000001ffffffffff
+```
+
+CapEff가 전부 켜져 있는데도 1번은 실패했다. 호스트의 UTS namespace는 바깥 user namespace 소유라서다. 같은 명령에 `--uts`를 더해 새로 만든 UTS namespace는 안쪽 user namespace 소유라서 바뀐다. 루트 없는 컨테이너(rootless Podman, rootless Docker)가 이 원리로 돈다.
+
+Docker와 쿠버네티스는 오랫동안 user namespace를 기본으로 쓰지 않았다. 그래서 컨테이너 안의 root는 호스트에서도 UID 0이고, 탈출하면 진짜 root다. 쿠버네티스는 Pod 스펙의 `hostUsers: false`로 Pod마다 user namespace를 켤 수 있다. 1.25에 알파로 들어와 1.30에 베타가 되었고, 커널 6.3 이상과 idmap 마운트를 지원하는 런타임이 필요하다. 클러스터 버전마다 상태가 다르니 쓰기 전에 그 버전 문서를 확인한다. 권한과 UID가 맞지 않아 생기는 문제는 [리눅스 파일 권한](/posts/linux-files-permissions)의 컨테이너 UID 절에 정리했다.
+
+## 자기 cgroup을 루트로 보는 칸막이와 시간 칸막이
+
+cgroup namespace는 `/proc/self/cgroup`과 cgroup 파일 시스템에서 자기 위치를 루트(`/`)처럼 보이게 한다. 컨테이너 안의 프로그램이 호스트의 cgroup 경로 구조를 알 필요가 없게 하고, 경로로 호스트 구조를 엿보는 것도 막는다.
+
+```bash
+# 지금 셸의 메모리 cgroup 경로와, 새 cgroup namespace에서 본 경로
+grep memory /proc/self/cgroup
+sudo unshare --cgroup grep memory /proc/self/cgroup
+```
+
+```text
+4:memory:/process_api/01a15bca-0362-7380-83d9-2c7522081d49/claude-code-bash
+4:memory:/
+```
+
+time namespace(커널 5.6 이상)는 `CLOCK_MONOTONIC`과 `CLOCK_BOOTTIME`의 기준점만 옮긴다. 벽시계는 못 바꾼다. `unshare --time --fork --boottime 86400 cat /proc/uptime`을 치면 업타임만 하루 늘어서 나온다. 컨테이너를 다른 머신으로 옮겨 다시 살릴 때(CRIU) 업타임이 거꾸로 가지 않게 하려고 만든 것이다.
+
+## 실행 중인 칸막이 안으로 들어간다: nsenter
+
+`nsenter`는 `setns()`로 다른 프로세스의 namespace에 합류한 뒤 명령을 실행한다. `-t`로 대상 PID를 주고, 들어갈 종류를 고른다(`-n` net, `-m` mnt, `-p` pid, `-u` uts, `-i` ipc, `-U` user, `-C` cgroup, `-a` 전부).
+
+```bash
+# 앞에서 띄운 컨테이너의 namespace 목록
+sudo lsns -p $PID
+
+# 전부 합류해서 hostname, 프로세스, 인터페이스를 본다
+sudo nsenter --target $PID --all bash -c 'hostname; ps -o pid,ppid,cmd; true'
+```
+
+```text
+        NS TYPE   NPROCS   PID USER COMMAND
+4026531834 time      123     2 root kthreadd
+4026531835 cgroup    123     2 root kthreadd
+4026531837 user      123     2 root kthreadd
+4026532368 mnt         2  8102 root unshare --pid --fork --mount-proc --uts --net --ipc --mount bash -c hostname r2-box; exec sleep 600
+4026532369 uts         2  8102 root unshare --pid --fork --mount-proc --uts --net --ipc --mount bash -c hostname r2-box; exec sleep 600
+4026532371 ipc         2  8102 root unshare --pid --fork --mount-proc --uts --net --ipc --mount bash -c hostname r2-box; exec sleep 600
+4026532372 pid         1  8104 root `-sleep 600
+4026532373 net         2  8102 root unshare --pid --fork --mount-proc --uts --net --ipc --mount bash -c hostname r2-box; exec sleep 600
+r2-box
+    PID    PPID CMD
+      1       0 sleep 600
+      3       0 bash -c hostname; ps -o pid,ppid,cmd; ip -br link; true
+      5       3 ps -o pid,ppid,cmd
+```
+
+lsns에서 time, cgroup, user는 kthreadd가 주인이다. 호스트 것을 그대로 쓴다는 뜻이다. mnt·uts·ipc·net의 NPROCS가 2인 건 unshare 프로세스(8102)도 그 namespace에 들어가 있어서다. PID namespace만 sleep(8104) 하나다. `--fork` 때문이다. nsenter로 들어온 bash의 PPID가 0으로 보이는 것은 부모(nsenter)가 이 PID namespace 바깥에 있어서다.
+
+현장에서 nsenter가 가장 빛나는 건 셸도 도구도 없는 컨테이너의 네트워크를 볼 때다. net namespace만 들어가면 호스트의 `ss`, `tcpdump`, `curl` 바이너리를 그대로 쓴다. 파일 시스템(mnt)은 호스트 것이니까 도구가 다 있다.
+
+```bash
+# 컨테이너 안에서 8080을 연다
+sudo nsenter -t $PID -n -m -p bash -c 'python3 -m http.server 8080 >/dev/null 2>&1 &'
+
+# net만 들어가서 호스트의 ss로 리슨 소켓을 본다
+sudo nsenter -t $PID -n ss -ltnp
+
+# 호스트 net namespace에는 8080이 없다
+ss -ltn | grep -c 8080
+```
+
+```text
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5            0.0.0.0:8080      0.0.0.0:*    users:(("python3",pid=12,fd=3))
+0
+```
+
+쿠버네티스 노드에서는 컨테이너의 호스트 PID를 런타임에게 물어서 같은 일을 한다. 노드에 SSH로 들어갈 수 있을 때의 방법이다.
+
+```bash
+# 컨테이너 ID로 호스트 PID를 찾는다 (containerd + crictl)
+PID=$(sudo crictl inspect --output go-template --template '{{.info.pid}}' <컨테이너ID>)
+
+# 그 Pod의 net namespace에서 패킷을 찍는다
+sudo nsenter -t $PID -n tcpdump -ni eth0 port 5432
+```
+
+노드에 들어갈 수 없으면 `kubectl debug`로 도구 컨테이너를 같은 Pod에 붙인다. 이것도 결국 같은 namespace에 합류하는 일이다. 방법은 [Pod가 안 뜰 때 상태별로 보는 순서](/posts/k8s-pod-troubleshooting)에 있다. nsenter는 namespace만 바꾸고 cgroup과 seccomp, capability는 nsenter를 띄운 쪽 것을 쓴다. 그래서 노드에서 nsenter로 들어간 프로세스는 Pod의 메모리 한도에 걸리지 않는다. 디버깅에는 편하지만, 무거운 작업을 돌리면 그 부하가 Pod가 아니라 노드에 그대로 얹힌다.
+
+namespace는 그 안에 프로세스가 하나라도 있거나, 누군가 `/proc/<PID>/ns/*` 파일을 열거나 바인드 마운트해 두면 살아 있다. `ip netns add`는 `/run/netns/<이름>`에 net namespace를 바인드 마운트해서 프로세스 없이 namespace를 유지한다. Pod의 pause 컨테이너가 하는 일도 비슷하다. 아무것도 안 하고 자면서 Pod의 net·ipc namespace를 붙잡고 있어서, 앱 컨테이너가 죽었다 다시 떠도 IP가 그대로다.
+
+## cgroup v2는 트리 하나를 파일로 다룬다
+
+이제 쓰는 양을 묶는 쪽이다. cgroup은 프로세스를 묶음으로 만들고, 묶음마다 컨트롤러(memory, cpu, io, pids 등)로 한도를 건다. 모든 설정은 `/sys/fs/cgroup` 아래의 파일이다. 디렉터리를 만들면 cgroup이 생기고, `cgroup.procs`에 PID를 쓰면 그 프로세스가 들어가고, `memory.max`에 숫자를 쓰면 한도가 걸린다.
+
+v1은 컨트롤러마다 트리가 따로 있었다. 같은 프로세스가 memory 트리에서는 A에, cpu 트리에서는 B에 있을 수 있었고, 이게 관리를 꼬이게 했다. v2는 트리를 하나로 합치고 규칙 두 개를 더했다.
+
+- 자식에게 어떤 컨트롤러를 나눠 줄지는 부모의 `cgroup.subtree_control`에 `+memory +cpu`처럼 써서 정한다. 부모가 받은 컨트롤러만 자식에게 줄 수 있다.
+- 루트가 아닌 cgroup은 프로세스를 직접 갖거나 컨트롤러를 자식에게 나눠 주거나, 둘 중 하나만 한다(no internal process 규칙). 그래서 프로세스는 항상 트리의 잎에 있다.
+
+쿠버네티스 노드의 트리는 이 규칙대로 생겼다. 아래 그림은 systemd cgroup 드라이버를 쓰는 노드에서 Burstable Pod 하나가 놓이는 자리다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="kubelet이 만드는 cgroup v2 트리. 한도 파일은 각 층에 있고, 프로세스는 맨 아래 잎에만 있다."
+  nodes={[
+    { id: "root", label: "/sys/fs/cgroup", sub: "subtree: cpu memory pids", x: 200, y: 35, w: 180 },
+    { id: "kp", label: "kubepods.slice", sub: "노드 allocatable", x: 200, y: 110, w: 150 },
+    { id: "bu", label: "burstable.slice", sub: "QoS 단위", x: 110, y: 185, w: 140 },
+    { id: "be", label: "besteffort.slice", sub: "cpu.weight 1", x: 300, y: 185, w: 140 },
+    { id: "pod", label: "pod<uid>.slice", sub: "Pod 합계 한도", x: 110, y: 255, w: 140 },
+    { id: "c", label: "cri-*.scope", sub: "memory.max · cpu.max", x: 290, y: 290, w: 150 },
+  ]}
+  edges={[
+    { from: "root", to: "kp" },
+    { from: "kp", to: "bu" },
+    { from: "kp", to: "be" },
+    { from: "bu", to: "pod" },
+    { from: "pod", to: "c", label: "잎" },
+  ]}
+/>
+
+버전은 이렇게 확인한다. 실습 머신에서는 결과가 `tmpfs`로 나왔다.
+
+```bash
+# cgroup2fs면 v2 전용, tmpfs면 v1 또는 하이브리드
+stat -fc %T /sys/fs/cgroup/
+
+# 하이브리드라면 v2 트리가 unified 아래에 따로 있다. v2 쪽이 쓸 수 있는 컨트롤러
+cat /sys/fs/cgroup/unified/cgroup.controllers
+```
+
+```text
+tmpfs
+hugetlb
+```
+
+하이브리드 모드에서는 컨트롤러 하나가 v1이나 v2 중 한쪽에만 붙는다. 여기서는 memory, cpu, pids가 전부 v1에 붙어 있어서 v2 쪽에는 hugetlb 하나만 남았다. v2에서 memory를 켜 보면 이렇게 실패한다.
+
+```bash
+# v2 루트에서 자식에게 memory 컨트롤러를 나눠 주려고 시도한다
+echo '+memory' | sudo tee /sys/fs/cgroup/unified/cgroup.subtree_control
+```
+
+```text
+tee: /sys/fs/cgroup/unified/cgroup.subtree_control: No such file or directory
+```
+
+컨트롤러가 없는데 "파일이 없다"는 오류가 난다. 메시지만 보고 경로를 의심하기 쉬운 곳이다. Ubuntu 22.04 이후, RHEL 9, Debian 11 이후는 기본이 v2 전용이라 이런 일이 없다. 쿠버네티스는 1.31에 v1을 유지보수 모드로 돌렸고, 1.35부터 kubelet 설정 `failCgroupV1`의 기본값이 true라서 v1 노드에서는 kubelet이 아예 뜨지 않는다(확인 시점 2026년 10월 기준 문서와 블로그). 오래된 노드 이미지를 쓰는 클러스터를 올릴 때 먼저 걸리는 부분이다.
+
+컨트롤러가 없어도 v2에는 쓸 수 있는 기능이 있다. 프로세스 묶음을 통째로 얼리고(`cgroup.freeze`, 커널 5.2 이상) 통째로 죽이는(`cgroup.kill`, 5.14 이상) 파일이다.
+
+```bash
+# v2 트리에 내 cgroup을 만들고 sleep 하나를 넣는다 (아래는 root 셸에서 실행)
+mkdir /sys/fs/cgroup/unified/r2lab
+bash -c 'echo $$ | tee /sys/fs/cgroup/unified/r2lab/cgroup.procs >/dev/null; exec sleep 30' &
+
+# 얼린다. populated는 프로세스가 있는지, frozen은 얼었는지
+echo 1 | tee /sys/fs/cgroup/unified/r2lab/cgroup.freeze
+cat /sys/fs/cgroup/unified/r2lab/cgroup.events
+
+# 녹이고, 묶음 전체에 SIGKILL을 보낸다
+echo 0 | tee /sys/fs/cgroup/unified/r2lab/cgroup.freeze
+echo 1 | tee /sys/fs/cgroup/unified/r2lab/cgroup.kill
+cat /sys/fs/cgroup/unified/r2lab/cgroup.events
+```
+
+```text
+1
+populated 1
+frozen 1
+0
+1
+/bin/bash: line 12: 11891 Killed                  bash -c 'echo $$ | tee /sys/fs/cgroup/unified/r2lab/cgroup.procs >/dev/null; exec sleep 30'
+populated 0
+frozen 0
+```
+
+`1`, `0`, `1`은 tee가 쓴 값을 되풀이한 것이다. 얼린 뒤 `frozen 1`, 죽인 뒤 `populated 0`을 보면 된다.
+
+`cgroup.kill`은 묶음 안의 프로세스를 한 번에 죽여서, 하나씩 죽이는 사이에 새 프로세스가 fork되는 경쟁이 없다. systemd가 서비스를 멈출 때 cgroup 전체를 정리하는 것도 같은 생각이다([systemd와 systemctl](/posts/linux-systemd-systemctl)).
+
+## cpu.max는 주기마다 쓸 시간을 나눠 준다
+
+v2의 `cpu.max`에는 숫자 두 개를 쓴다. `50000 100000`이면 100ms(주기)마다 50ms(할당량)까지 CPU를 쓴다. 주기 안에 할당량을 다 쓰면 그 cgroup의 스레드는 다음 주기까지 전부 멈춘다. 이게 스로틀링이다. 할당량은 코어 수와 상관없이 cgroup 안 모든 스레드의 합이라서, 스레드 둘이 각자 코어 하나씩 달리면 25ms 만에 주기 몫을 다 쓴다.
+
+아래 그림은 스레드 두 개가 쉬지 않고 계산할 때 한 주기 안에서 일어나는 일이다.
+
+<AlgoTrace
+  caption="cpu.max 50000 100000에서 스레드 두 개가 CPU를 달라고 할 때"
+  cells={["0ms", "10", "20", "25", "50", "75", "100"]}
+  memoryLabel="남은 할당량"
+  steps={[
+    { pointer: 0, memory: ["50ms"], caption: "주기가 시작된다. 할당량 50ms가 채워진다." },
+    { pointer: 1, memory: ["30ms"], caption: "스레드 둘이 코어 두 개에서 동시에 돈다. 10ms 동안 20ms를 쓴다." },
+    { pointer: 2, memory: ["10ms"], caption: "20ms 지점. 벌써 40ms를 썼다." },
+    { pointer: 3, memory: ["0ms"], found: [3], caption: "25ms 만에 할당량이 바닥났다. 두 스레드가 함께 멈춘다. nr_throttled가 1 오른다." },
+    { pointer: 4, memory: ["0ms"], caption: "요청이 와도 처리할 수 없다. 이 75ms가 응답 지연으로 그대로 보인다." },
+    { pointer: 6, memory: ["50ms"], found: [6], caption: "다음 주기에 할당량이 다시 채워지고 스레드가 깨어난다." },
+  ]}
+/>
+
+이 머신은 cpu 컨트롤러가 v1에 있어서 같은 실험을 v1 파일로 했다. v1에서는 `cpu.cfs_quota_us`와 `cpu.cfs_period_us` 두 파일로 나뉘어 있을 뿐 뜻은 같다.
+
+```bash
+# 내 cgroup을 만들고 100ms마다 50ms로 묶는다 (v2라면: echo "50000 100000" > cpu.max)
+sudo mkdir /sys/fs/cgroup/cpu/r2cpu
+echo 50000 | sudo tee /sys/fs/cgroup/cpu/r2cpu/cpu.cfs_quota_us
+
+# 바쁜 스레드 2개를 3초 동안 돌리는 node 스크립트를 그 cgroup 안에서 실행한다
+time bash -c 'echo $$ | sudo tee /sys/fs/cgroup/cpu/r2cpu/cgroup.procs >/dev/null; exec node burn4.js 2 3000'
+
+# 스로틀링 통계
+cat /sys/fs/cgroup/cpu/r2cpu/cpu.stat
+```
+
+```text
+real 3.300  user 1.622  sys 0.039
+nr_periods 33
+nr_throttled 33
+throttled_time 4785037523
+nr_bursts 0
+burst_time 0
+```
+
+3.3초 동안 CPU를 1.62초 썼다. 0.5코어 × 3.3초와 거의 맞다. 실행 중에 `top`은 이 프로세스를 50%로 보여 줬다. 33개 주기가 전부 스로틀링에 걸렸고, `throttled_time`(나노초)은 스레드별로 멈춰 있던 시간을 더한 값이라 벽시계 시간보다 길게 나온다.
+
+v2에서는 같은 정보가 `cpu.stat` 한 파일에 `nr_periods`, `nr_throttled`, `throttled_usec`(마이크로초)로 나온다. 사용 시간 줄(`usage_usec`, `user_usec`, `system_usec`)은 컨트롤러가 없어도 나온다. 위 v2 실습 cgroup에서 node를 1초 돌렸더니 `usage_usec 1037337`이 찍혔다.
+
+볼 줄은 `nr_throttled / nr_periods`다. 이 비율이 높은데 평균 CPU 사용률은 낮다면, 평소엔 한가하다가 순간 버스트에서 할당량에 막히는 것이다. CPU 그래프는 1분 평균이라 이 장면을 지운다. 스로틀링이 없을 때 v2의 `cpu.max`는 `max 100000`이고, 경합할 때 몫을 나누는 비율은 `cpu.weight`(1~10000, 기본 100)가 정한다.
+
+## memory.max를 넘으면 그 cgroup 안에서 죽인다
+
+메모리는 CPU처럼 기다리게 할 수가 없다. cgroup 사용량이 한도에 닿으면 커널은 먼저 그 cgroup의 페이지 캐시를 비워서 자리를 만든다. 비울 게 없으면 cgroup 안의 프로세스 하나를 골라 SIGKILL로 죽인다. 노드 전체에 메모리가 남아 있어도 그렇다.
+
+v2에는 한도 파일이 넷 있다.
+
+- `memory.max`: 넘을 수 없는 선. 회수로도 못 맞추면 OOM kill이다.
+- `memory.high`: 부드러운 선. 넘으면 죽이지 않고 강하게 회수하며 할당을 느리게 만든다.
+- `memory.low`, `memory.min`: 반대로 보호선이다. 이 아래의 메모리는 다른 cgroup 때문에 회수되지 않게 지킨다.
+
+8MiB씩 할당하는 Node 스크립트를 64MiB 한도 안에서 돌려 본다. 아래 그림에서 한도에 닿는 순간을 따라간다.
+
+<AlgoTrace
+  caption="64MiB 한도 cgroup에서 8MiB씩 할당하다 OOM kill이 나기까지"
+  cells={["8", "16", "24", "32", "40", "48", "56", "64"]}
+  memoryLabel="cgroup 사용량"
+  steps={[
+    { pointer: 0, memory: ["node 런타임 ~30MiB"], caption: "node가 뜨는 것만으로 코드와 힙, 라이브러리 페이지가 먼저 잡힌다." },
+    { pointer: 3, memory: ["런타임", "버퍼 32MiB"], caption: "버퍼를 네 번 할당했다. 아직 한도 아래다." },
+    { pointer: 5, memory: ["런타임", "버퍼 48MiB"], caption: "48MiB를 찍었다. 사용량이 64MiB에 닿기 시작한다. failcnt가 오른다." },
+    { pointer: 6, memory: ["런타임", "버퍼 48MiB", "회수 실패"], caption: "다음 8MiB를 받으려는데 비울 캐시가 없다. 커널이 OOM killer를 부른다." },
+    { pointer: 7, found: [7], memory: ["SIGKILL"], caption: "cgroup 안에서 가장 큰 node가 죽는다. 종료 코드 137, 앱 로그에는 아무것도 없다." },
+  ]}
+/>
+
+```bash
+# v1 메모리 cgroup에 64MiB 한도를 건다 (v2라면: echo 64M > memory.max)
+sudo mkdir /sys/fs/cgroup/memory/r2mem
+echo $((64*1024*1024)) | sudo tee /sys/fs/cgroup/memory/r2mem/memory.limit_in_bytes
+
+# 8MiB씩 할당하며 로그를 찍는 스크립트를 그 안에서 실행한다
+bash -c 'echo $$ | sudo tee /sys/fs/cgroup/memory/r2mem/cgroup.procs >/dev/null; exec node hog.js' | tail -3; echo "exit=${PIPESTATUS[0]}"
+
+# OOM 기록과 한도에 부딪힌 횟수
+cat /sys/fs/cgroup/memory/r2mem/memory.oom_control
+cat /sys/fs/cgroup/memory/r2mem/memory.failcnt
+
+# 커널 로그의 마지막 줄
+sudo dmesg | tail -1
+```
+
+```text
+allocated 32 MiB
+allocated 40 MiB
+allocated 48 MiB
+exit=137
+oom_kill_disable 0
+under_oom 0
+oom_kill 1
+68
+[  894.672033] Memory cgroup out of memory: Killed process 8475 (node) total-vm:1069288kB, anon-rss:64380kB, file-rss:37576kB, shmem-rss:0kB, UID:0 pgtables:688kB oom_score_adj:0
+```
+
+마지막으로 찍힌 로그는 48MiB인데 죽었다. 버퍼만 센 게 아니라 node 런타임 자체의 메모리도 같은 cgroup에 청구되기 때문이다. 종료 코드 137은 128 + 9(SIGKILL)다. 앱은 죽는 순간을 모르니 앱 로그에는 아무 흔적이 없다. 증거는 커널 로그와 cgroup 파일에만 남는다. 커널 로그 한 줄을 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="cgroup OOM kill 로그. 앞의 oom-kill 줄에서 oom_memcg를 함께 보면 어느 cgroup 한도였는지 안다."
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "t", display: "[894.672033]", title: "부팅 후 초", description: "dmesg 기본 시각은 부팅 후 경과 초다. dmesg -T나 journalctl -k로 벽시계 시각을 본다." },
+    { key: "w", display: "Memory cgroup out of memory:", title: "어느 OOM인가", description: "cgroup 한도에 걸린 OOM이다. 노드 전체가 모자라 생긴 OOM은 'Out of memory:'로 시작한다. 둘은 고치는 곳이 다르다.", required: true },
+    { key: "p", display: "Killed process 8475 (node)", title: "죽은 프로세스", description: "호스트 기준 PID와 이름이다. 컨테이너 안의 PID와 다르다." },
+    { key: "a", display: "anon-rss:64380kB", title: "익명 메모리", description: "힙과 버퍼처럼 파일에 매이지 않은 메모리. 회수할 수 없어서 OOM의 주범이 된다.", required: true },
+    { key: "f", display: "file-rss:37576kB", title: "파일 매핑", description: "실행 파일과 라이브러리 페이지. 디스크에서 다시 읽을 수 있어 먼저 회수된다." },
+    { key: "o", display: "oom_score_adj:0", title: "죽을 순서 보정", description: "-1000이면 절대 안 고르고, 1000이면 먼저 고른다. kubelet은 QoS 클래스에 따라 이 값을 다르게 준다." },
+  ]}
+/>
+
+v2에서는 같은 기록이 `memory.events`에 모인다. 이 머신은 memory 컨트롤러가 v1에 있어서 v2 파일을 직접 만들 수 없었다. 아래는 v2 노드에서 같은 실험을 하면 보게 되는 형식의 예시다.
+
+```text
+low 0
+high 0
+max 68
+oom 1
+oom_kill 1
+oom_group_kill 0
+```
+
+`max`는 한도에 부딪힌 횟수, `oom`은 회수에 실패한 횟수, `oom_kill`은 실제로 죽인 횟수다. `high`가 계속 오르는데 `oom_kill`은 0이라면 memory.high 때문에 느려지고 있는 것이다. 이 파일은 하위 cgroup까지 합친 값이고, 그 cgroup만의 값은 `memory.events.local`에 있다. `memory.oom.group`에 1을 쓰면 하나만 고르지 않고 cgroup 전체를 함께 죽인다. 반쯤 죽은 프로세스 묶음보다 깨끗이 다시 뜨는 편이 나은 워크로드에 쓴다. 쿠버네티스는 v2 노드에서 1.28부터 컨테이너 cgroup에 이 값을 켠다.
+
+런타임이 한도를 모르면 이 일이 쉽게 생긴다. Node의 힙 상한이나 JVM의 `-Xmx`가 cgroup 한도보다 크면 GC가 힙을 줄일 기회를 얻기 전에 커널이 먼저 죽인다. 이 관계는 [가비지 컬렉션 안쪽](/posts/garbage-collection)에서 `--max-old-space-size`와 함께 재현했다.
+
+## pids.max로 포크 폭탄을 막는다
+
+pids 컨트롤러는 cgroup 안의 프로세스와 스레드 수를 센다. 메모리나 CPU 한도가 있어도 프로세스 수는 커널 전체 자원(PID 번호, 커널 메모리)이라, 컨테이너 하나의 포크 폭탄이 노드의 PID를 다 쓰면 다른 컨테이너도 새 프로세스를 못 띄운다.
+
+```bash
+# 프로세스 10개까지만 허용하는 cgroup (v1, v2 모두 파일 이름이 같다)
+sudo mkdir /sys/fs/cgroup/pids/r2pids
+echo 10 | sudo tee /sys/fs/cgroup/pids/r2pids/pids.max
+
+# 자식을 15개까지 만들어 보는 파이썬 스크립트를 그 안에서 실행한다
+bash -c 'echo $$ | sudo tee /sys/fs/cgroup/pids/r2pids/cgroup.procs >/dev/null; exec python3 -I forker.py'
+
+# 한도에 걸린 횟수
+cat /sys/fs/cgroup/pids/r2pids/pids.events
+```
+
+```text
+fork #10 failed: [Errno 11] Resource temporarily unavailable
+children: 9
+10 tasks in cgroup
+max 1
+```
+
+부모 하나에 자식 아홉, 합쳐서 열 개에서 막혔다. 한도에 걸린 fork는 `EAGAIN`을 받는다. bash라면 `fork: retry: Resource temporarily unavailable`을, 자바라면 `unable to create native thread`를 보게 된다. 스레드도 같이 세기 때문에 스레드 풀이 큰 JVM은 pids 한도가 생각보다 빨리 찬다. 쿠버네티스에서는 kubelet 설정 `podPidsLimit`으로 Pod마다 이 값을 건다.
+
+## 쿠버네티스 숫자가 cgroup 파일이 되기까지
+
+Pod 스펙의 requests와 limits는 kubelet과 런타임을 거쳐 결국 위 파일들에 숫자로 적힌다.
+
+- CPU limits는 `cpu.max`가 된다. 500m이면 `50000 100000`이다. limits가 없으면 `max 100000`.
+- CPU requests는 v1의 `cpu.shares`(밀리코어 × 1024 / 1000, 최소 2)로 바뀐 뒤, 런타임이 그 값을 v2의 `cpu.weight`(1~10000) 범위로 다시 옮긴다. 이 변환식이 최근에 바뀌었다. 예전 식은 `1 + ((shares - 2) × 9999) / 262142`라는 직선이라 1코어 requests가 weight 39가 되었다. 기본값 100보다 작아서, 쿠버네티스 밖에서 cgroup을 받은 프로세스와 경합하면 Pod가 불리했다. runc 1.3.2와 crun 1.23부터는 로그 눈금 위의 2차식(`l = log2(shares)`, `weight = ceil(10^((l² + 125l) / 612 − 7/34))`)을 써서 1코어가 100, 100m이 17이 된다(2026년 1월 쿠버네티스 블로그 기준). 노드의 런타임 버전에 따라 같은 Pod의 weight가 다르게 나올 수 있다.
+- 메모리 limits는 `memory.max`가 된다. 메모리 requests는 기본으로 어떤 파일에도 적히지 않고 스케줄링에만 쓰인다. 알파 기능인 MemoryQoS를 켜면 `memory.min`과 `memory.high`에 쓰인다.
+
+아래 코드에 새 변환식을 직접 짜 본다. requests와 limits(밀리코어)를 받아 cgroup v2 값을 돌려주면 된다. 정수 나눗셈은 `Math.floor`로 한다.
+
+<CodePlayground
+  caption="CPU requests·limits를 cgroup v2 파일 값으로 바꾸기 (runc 1.3.2 이후 식)"
+  functionName="cgroupCpu"
+  initialCode={`function cgroupCpu(requestMilli, limitMilli) {
+  // shares = max(2, floor(request * 1024 / 1000))
+  // l = log2(shares), weight = ceil(10 ** ((l*l + 125*l) / 612 - 7/34))
+  // max = limit가 있으면 "quota 100000" (quota = limit * 100, 최소 1000), 없으면 "max 100000"
+  return { weight: 0, max: "" };
+}`}
+  solution={`function cgroupCpu(requestMilli, limitMilli) {
+  const shares = Math.max(2, Math.floor((requestMilli * 1024) / 1000));
+  const l = Math.log2(shares);
+  const weight = Math.ceil(Math.pow(10, (l * l + 125 * l) / 612 - 7 / 34));
+  const max = limitMilli
+    ? \`\${Math.max(1000, Math.floor((limitMilli * 100000) / 1000))} 100000\`
+    : "max 100000";
+  return { weight, max };
+}`}
+  tests={[
+    { label: "250m / 500m", args: [250, 500], expected: { weight: 35, max: "50000 100000" } },
+    { label: "1 / 1", args: [1000, 1000], expected: { weight: 100, max: "100000 100000" } },
+    { label: "100m, limits 없음", args: [100, 0], expected: { weight: 17, max: "max 100000" } },
+    { label: "4 / 8", args: [4000, 8000], expected: { weight: 303, max: "800000 100000" } },
+    { label: "5m / 5m", args: [5, 5], expected: { weight: 2, max: "1000 100000" } },
+  ]}
+/>
+
+5m처럼 아주 작은 limits도 quota는 1000(1ms)보다 작아지지 않는다. 커널이 그보다 작은 할당량을 받지 않기 때문이다. 이렇게 작게 잡은 컨테이너는 주기마다 1ms만 돌고 99ms를 멈춘다. 헬스 체크 하나에도 타임아웃이 날 수 있는 값이다.
+
+## 컨테이너 안에서 본 숫자가 이상할 때
+
+처음 장면으로 돌아간다. 실습 컨테이너를 64MiB 메모리 cgroup에 넣고 그 안에서 `free`와 `nproc`을 쳐 봤다.
+
+```bash
+# 컨테이너 프로세스를 64MiB 한도 cgroup으로 옮긴다
+echo $PID | sudo tee /sys/fs/cgroup/memory/r2mem/cgroup.procs
+
+# 안에서 본 메모리와 CPU 수
+sudo nsenter -t $PID -a free -m | head -2
+sudo nsenter -t $PID -a nproc
+```
+
+```text
+               total        used        free      shared  buff/cache   available
+Mem:           16093        1105       12809          44        2525       14988
+4
+```
+
+한도가 걸려 있어도 16GB, 4코어로 보인다. `/proc/meminfo`와 `/proc/cpuinfo`는 namespace로도 cgroup으로도 가려지지 않는다(LXCFS 같은 도구가 이걸 덮어써 주기도 한다). 이 숫자를 믿고 스레드 풀이나 캐시 크기를 정하는 프로그램은 컨테이너에서 과하게 잡는다. 확인할 곳은 언제나 cgroup 파일이다.
+
+```bash
+# 컨테이너 안에서 진짜 한도를 읽는다 (v2 노드, 컨테이너 안에서는 cgroup ns 덕에 루트가 자기 cgroup이다)
+cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/cpu.max
+cat /sys/fs/cgroup/memory.current
+grep -E 'oom_kill|max' /sys/fs/cgroup/memory.events
+grep -E 'nr_throttled|nr_periods' /sys/fs/cgroup/cpu.stat
+```
+
+증상별로 보는 곳을 정리하면 이렇다. 재시작 횟수가 늘고 종료 코드가 137이면 `memory.events`의 `oom_kill`과 `dmesg`의 "Memory cgroup out of memory"를 본다. 노드 OOM("Out of memory:")이면 한도가 아니라 노드에 Pod를 너무 많이 올린 것이다. 지연이 주기적으로 튀는데 CPU 그래프는 낮으면 `cpu.stat`의 스로틀링 비율을 본다. 새 스레드를 못 만든다는 오류는 `pids.events`부터 본다. 고치는 순서와 설정값 고르기는 [requests와 limits](/posts/k8s-pod-resources)에서 이어진다.
+
+실습 정리는 만든 순서의 반대로 한다. 컨테이너의 PID 1을 죽이면 그 PID namespace의 프로세스가 전부 정리된다. 실습에서 `sudo kill $PID`(SIGTERM)는 아무 일도 안 했다. sleep은 SIGTERM 핸들러가 없고, 핸들러 없는 PID 1에는 바깥에서 보낸 시그널도 SIGKILL과 SIGSTOP만 통한다. 그래서 `sudo kill -9 $PID`로 정리했다. 그다음 호스트 쪽 veth(`sudo ip link del r2h`)를 지우면 짝꿍도 사라진다. cgroup은 안에 프로세스가 없어야 `rmdir`로 지워진다. `rm -r`을 쓰면 안의 파일을 지우려다 `Operation not permitted`가 줄줄이 난다. cgroup의 파일은 지울 수 있는 파일이 아니라 커널이 보여 주는 창이라서, 디렉터리를 `rmdir`로 통째로 없앤다.
+
+## 칸막이는 보이는 것을, cgroup은 쓰는 양을
+
+컨테이너는 namespace로 시야를 가리고 cgroup으로 사용량을 묶은 보통 프로세스다. namespace는 `unshare`로 만들고 `nsenter`로 들어가며, 프로세스나 바인드 마운트가 붙잡고 있는 동안 살아 있다. cgroup v2는 트리 하나에 파일로 한도를 걸고, 넘었을 때의 기록도 `cpu.stat`, `memory.events`, `pids.events` 같은 파일에 남긴다. 컨테이너가 이상하게 굴면 앱 로그보다 이 파일들을 먼저 읽는다. 다음은 이 칸막이 위에서 Pod를 띄우는 [requests와 limits](/posts/k8s-pod-resources)와, 이미지가 루트 파일 시스템이 되는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)다.
+
+## 면접에서 나올 만한 질문
+
+### namespace에는 어떤 종류가 있고 각각 무엇을 나누나요?
+
+pid는 프로세스 번호, net은 인터페이스·라우팅·포트, mnt는 마운트 목록, uts는 hostname, ipc는 System V IPC와 POSIX 메시지 큐, user는 UID·GID 매핑과 capability 범위, cgroup은 cgroup 경로의 루트, time은 부팅 후 시계를 나눈다. 쿠버네티스 Pod 안의 컨테이너들은 net과 ipc, uts를 함께 쓰고 mnt는 따로 쓴다.
+
+### unshare --pid만 하고 --fork를 빼면 왜 "Cannot allocate memory"가 나나요?
+
+`unshare()`를 부른 프로세스는 이미 번호가 있어서 자신은 옮겨지지 않고 다음 자식부터 새 PID namespace에 들어간다. 그 첫 자식이 PID 1이 되는데, 짧게 끝나 버리면 namespace는 더 이상 프로세스를 받지 않아 다음 fork가 ENOMEM으로 실패한다. `--fork`는 새 namespace에서 오래 살 자식을 먼저 만들어 이 문제를 피한다.
+
+### 컨테이너 안에서 free를 치면 왜 호스트 메모리가 나오나요?
+
+`free`는 `/proc/meminfo`를 읽는데, 이 파일은 namespace로도 cgroup으로도 가려지지 않는다. 실제 한도는 `/sys/fs/cgroup/memory.max`, 사용량은 `memory.current`에 있다. 이 차이 때문에 시스템 메모리를 보고 힙이나 캐시 크기를 정하는 런타임은 컨테이너 한도를 넘겨 OOM kill을 당할 수 있다.
+
+### memory.high와 memory.max는 어떻게 다른가요?
+
+memory.max는 넘을 수 없는 선이라 회수로 못 맞추면 OOM kill이 난다. memory.high는 넘어도 죽이지 않고 강하게 회수하며 할당을 늦춘다. 그래서 high는 느려지는 신호로, max는 마지막 안전선으로 쓴다. `memory.events`의 high와 oom_kill 칸으로 어느 쪽에 걸렸는지 구분한다.
+
+### OOMKilled가 났는데 앱 로그에 아무것도 없습니다. 어디를 보나요?
+
+SIGKILL은 프로그램이 받아서 처리할 수 없어서 앱은 마지막 말을 남기지 못한다. 커널 로그에서 "Memory cgroup out of memory"와 oom_memcg를 찾고, cgroup의 `memory.events`에서 oom_kill이 올랐는지 본다. "Out of memory:"로 시작하면 cgroup 한도가 아니라 노드 전체가 모자란 것이라 고칠 곳이 다르다.
+
+### nsenter와 kubectl debug는 어떻게 고르나요?
+
+노드에 SSH로 들어갈 수 있으면 nsenter로 Pod의 net namespace에만 들어가 호스트의 tcpdump, ss를 그대로 쓰는 게 빠르다. 다만 nsenter로 띄운 프로세스는 Pod의 cgroup에 묶이지 않아 무거운 작업이 노드에 부담이 된다. 노드 접근이 막힌 관리형 클러스터에서는 kubectl debug로 같은 Pod에 도구 컨테이너를 붙인다.

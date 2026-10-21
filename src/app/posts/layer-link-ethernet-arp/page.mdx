@@ -441,11 +441,13 @@ Ubuntu에서는 `ip link add link eth0 name eth0.10 type vlan id 10`처럼 태�
 12:00:00.000000 aa:bb:cc:00:00:01 > aa:bb:cc:00:00:02, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), 172.20.10.11 > 172.20.10.12: ICMP echo request, id 1, seq 1, length 64
 ```
 
+액세스·트렁크 포트 설정, VLAN 사이 라우팅, 네이티브 VLAN과 VLAN 호핑은 [VLAN 글](/posts/vlan-basics)에서 실제 캡처와 함께 이어서 다룬다.
+
 ## IPv6에는 ARP가 없다
 
 IPv6는 ARP 대신 NDP(Neighbor Discovery Protocol)를 쓴다. 같은 일을 ICMPv6 메시지로 한다. "이 IP 가진 사람"이라는 질문(Neighbor Solicitation)을 브로드캐스트가 아니라 대상 IP에서 계산한 멀티캐스트 주소로 보내서, 망의 모든 기기가 아니라 관련 있는 기기만 받는다. 응답은 Neighbor Advertisement다. 리눅스에서는 같은 이웃 테이블에 들어가므로 `ip -6 neigh`로 본다.
 
-실무에서 기억할 차이가 하나 있다. NDP는 ICMPv6 위에서 돌기 때문에 IPv6 방화벽에서 ICMPv6를 통째로 막으면 이웃 찾기부터 깨져 같은 망 통신이 안 된다. [iptables 글](/posts/iptables-basics)에서 ip6tables 규칙을 따로 만들 때 ICMPv6를 열어 두는 이유다.
+실무에서 기억할 차이가 하나 있다. NDP는 ICMPv6 위에서 돌기 때문에 IPv6 방화벽에서 ICMPv6를 통째로 막으면 이웃 찾기부터 깨져 같은 망 통신이 안 된다. [iptables 글](/posts/iptables-basics)에서 ip6tables 규칙을 따로 만들 때 ICMPv6를 열어 두는 이유다. 주소 자동 설정(SLAAC)과 라우터 광고까지 포함한 IPv6 동작은 [IPv6 글](/posts/ipv6-basics)에서 따라간다.
 
 ## 현장에서 L2를 만나는 순간
 

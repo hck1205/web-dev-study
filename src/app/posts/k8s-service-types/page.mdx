@@ -1,0 +1,594 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-service-types");
+
+웹 서버 앞의 Service를 `type: NodePort`로 바꿔서 사내 로드 밸런서에 물렸다. 접속은 잘 되는데 접근 로그의 클라이언트 IP가 전부 `192.168.50.11`, `192.168.50.13` 같은 노드 주소다. IP별로 걸어 둔 요청 수 제한이 노드 단위로 걸리고, 보안팀이 원하는 진짜 출발지는 어디에도 없다. 그래서 `externalTrafficPolicy: Local`로 바꿨더니 이번에는 노드 하나로 가는 요청만 전부 시간 초과가 난다.
+
+두 증상 모두 Service가 "가상 IP 하나에 DNAT 규칙 묶음"이라는 사실에서 나온다. 이 글은 ClusterIP, NodePort, LoadBalancer, ExternalName, headless가 각각 무엇을 더 얹는지, 트래픽 정책이 패킷의 출발지와 목적지를 어떻게 바꾸는지를 실제 API 객체와 손으로 만든 규칙으로 따라간다.
+
+kube-proxy가 nat 테이블에 쓰는 `KUBE-SERVICES → KUBE-SVC → KUBE-SEP` 체인과 `statistic` 확률이 엔드포인트를 고르는 원리, IPVS·nftables·eBPF 모드의 비교는 [iptables NAT 글](/posts/iptables-nat#쿠버네티스-service는-nat-규칙-묶음이다)에서 다뤘다. 여기서는 그 위에서 Service 타입마다 달라지는 부분을 본다. Pod가 ready에서 빠지고 종료되는 순서는 [Pod 일생 글](/posts/k8s-pod-lifecycle)에, HTTP를 host와 path로 나누는 입구는 [Ingress 글](/posts/kubernetes-ingress)에 있다.
+
+실습 환경은 두 가지다. API 객체(Service, EndpointSlice, 에러 메시지)는 kwok로 띄운 실제 kube-apiserver·controller-manager(v1.30.4)에서 나온 출력이다. kwok는 노드와 컨테이너를 흉내만 내서 패킷이 흐르지 않기 때문에, 데이터 경로는 네트워크 네임스페이스로 노드 세 대와 Pod 세 개를 만들고 kube-proxy iptables 모드와 같은 모양의 규칙을 손으로 넣어 재현했다. 주소는 두 환경을 똑같이 맞췄다. 체인 이름 끝의 해시는 실습에서 붙인 값이다.
+
+## Service는 이름, 가상 IP, 엔드포인트 목록이다
+
+Pod는 다시 뜰 때마다 IP가 바뀐다. 그래서 라벨로 묶은 Pod들 앞에 바뀌지 않는 이름과 주소를 세운다. 그게 Service다. Service 하나가 만들어지면 세 군데가 움직인다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="Service를 만들면 컨트롤러가 EndpointSlice를 채우고, 노드의 kube-proxy와 CoreDNS가 그걸 지켜보며 규칙과 레코드를 만든다"
+  nodes={[
+    { id: "svc", label: "Service web", sub: "selector app=web", x: 220, y: 40, w: 150 },
+    { id: "ctrl", label: "EndpointSlice 컨트롤러", sub: "controller-manager", x: 90, y: 135, w: 160 },
+    { id: "pods", label: "Pod 3개", sub: "app=web, Ready", x: 350, y: 135, w: 130 },
+    { id: "eps", label: "EndpointSlice", sub: "IP·포트·ready·노드", x: 220, y: 220, w: 150 },
+    { id: "kp", label: "kube-proxy", sub: "노드마다 iptables", x: 90, y: 290, w: 130 },
+    { id: "dns", label: "CoreDNS", sub: "web.default.svc", x: 350, y: 290, w: 130 },
+  ]}
+  edges={[
+    { from: "ctrl", to: "svc", label: "watch" },
+    { from: "ctrl", to: "pods", label: "watch", dashed: true },
+    { from: "ctrl", to: "eps", label: "쓰기" },
+    { from: "kp", to: "eps", label: "watch" },
+    { from: "dns", to: "eps", label: "watch" },
+  ]}
+/>
+
+EndpointSlice 컨트롤러는 selector에 맞는 Pod를 찾아 IP와 포트, 준비 상태, 노드 이름을 EndpointSlice에 적는다. 각 노드의 kube-proxy는 그걸 보고 iptables 규칙을 쓰고, CoreDNS는 이름을 답한다. 아무도 패킷을 중계하지 않는다. 이 글의 모든 이야기가 이 그림의 어딘가에서 일어난다.
+
+실습 클러스터에 Deployment `web`(레플리카 3, 컨테이너 포트 이름 `http`=8080)과 Service 여섯 개를 만들었다.
+
+```bash
+# Service 목록. -o wide는 selector까지 보여 준다
+kubectl get svc -o wide
+```
+
+```text
+NAME           TYPE           CLUSTER-IP       EXTERNAL-IP                PORT(S)        AGE    SELECTOR
+kubernetes     ClusterIP      10.96.0.1        <none>                     443/TCP        2m2s   <none>
+payments       ExternalName   <none>           api.payments.example.com   <none>         5s     <none>
+web            ClusterIP      10.96.120.15     <none>                     80/TCP         5s     app=web
+web-headless   ClusterIP      None             <none>                     8080/TCP       5s     app=web
+web-lb         LoadBalancer   10.105.39.12     <pending>                  80:32283/TCP   5s     app=web
+web-np         NodePort       10.106.182.89    <none>                     80:30080/TCP   5s     app=web
+web-typo       ClusterIP      10.102.149.166   <none>                     80/TCP         5s     app=wbe
+```
+
+PORT(S) 칸의 `80:30080/TCP`는 "Service 포트 80, 노드 포트 30080"이다. LoadBalancer도 노드 포트(32283)를 받았다. 타입은 서로 다른 물건이 아니라 층층이 쌓인다. NodePort는 ClusterIP에 노드 포트를 더하고, LoadBalancer는 NodePort에 바깥 로드 밸런서를 더한다. `web-typo`는 selector에 오타(`wbe`)를 낸 Service로, 뒤에서 쓴다.
+
+엔드포인트 목록은 EndpointSlice로 본다.
+
+```bash
+# web Service에 딸린 EndpointSlice를 YAML로 (관리용 필드는 줄였다)
+kubectl get endpointslice -l kubernetes.io/service-name=web -o yaml
+```
+
+```text
+  endpoints:
+  - addresses:
+    - 10.244.1.5
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+    nodeName: node-1
+    targetRef:
+      kind: Pod
+      name: web-94bf8fbc-7xfzk
+      namespace: default
+    zone: zone-1
+  - addresses:
+    - 10.244.2.5
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+    nodeName: node-2
+    targetRef:
+      kind: Pod
+      name: web-94bf8fbc-4ntdx
+      namespace: default
+    zone: zone-2
+  - addresses:
+    - 10.244.2.6
+    ...
+  kind: EndpointSlice
+  metadata:
+    generateName: web-
+    labels:
+      endpointslice.kubernetes.io/managed-by: endpointslice-controller.k8s.io
+      kubernetes.io/service-name: web
+    name: web-vc8gx
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+```
+
+엔드포인트마다 `nodeName`과 `zone`이 붙어 있다는 점을 기억해 두자. 뒤에서 볼 `externalTrafficPolicy: Local`과 토폴로지 기반 라우팅이 이 칸을 읽는다. 포트는 Service의 80이 아니라 Pod의 8080으로 풀려 있다. EndpointSlice 하나에는 기본으로 엔드포인트 100개까지 들어가고, 넘으면 슬라이스가 더 생긴다. 예전의 Endpoints 객체는 Service 하나에 거대한 객체 하나라서, Pod 하나가 바뀌어도 수천 개짜리 목록 전체가 모든 노드로 다시 퍼졌다. 그 비용 때문에 EndpointSlice로 바뀌었고, 1.33에서 Endpoints API는 deprecated가 됐다.
+
+## 포트 세 개가 각자 다른 곳을 가리킨다
+
+Service 매니페스트에서 가장 많이 틀리는 곳이 `ports`다. 숫자 세 개가 비슷하게 생겼지만 보는 쪽이 다르다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="Service ports 항목 하나"
+  base="ports:"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "name", display: "name: http", title: "포트 이름", description: "포트가 여럿이면 필수다. EndpointSlice의 포트 이름, DNS SRV 레코드(_http._tcp.web…), Ingress backend의 port.name이 이 이름으로 이어진다." },
+    { key: "port", display: "port: 80", title: "Service가 받는 포트", description: "클라이언트가 ClusterIP나 이름으로 두드리는 포트다. kube-proxy의 KUBE-SERVICES 줄에 --dport 80으로 들어간다.", required: true },
+    { key: "targetPort", display: "targetPort: http", title: "Pod에서 실제로 듣는 포트", description: "숫자로도, 컨테이너 포트 이름으로도 쓸 수 있다. 이름으로 쓰면 Pod마다 다른 번호여도 된다. 틀리면 Service는 멀쩡해 보이는데 연결이 거절된다. 생략하면 port와 같은 값이 된다." },
+    { key: "nodePort", display: "nodePort: 30080", title: "노드에서 여는 포트", description: "NodePort·LoadBalancer에만 있다. 생략하면 30000~32767에서 남는 번호를 고른다. 모든 노드의 같은 번호가 열린다." },
+    { key: "protocol", display: "protocol: TCP", title: "프로토콜", description: "기본 TCP. UDP·SCTP도 된다. 같은 포트 번호로 TCP와 UDP를 함께 열려면 항목을 두 개 쓴다(DNS의 53처럼)." },
+  ]}
+/>
+
+`nodePort`에는 API 서버가 검사하는 규칙이 있다. 범위 밖이나 이미 쓰는 번호를 적으면 객체가 만들어지지 않는다.
+
+```bash
+# 이미 web-np가 쓰고 있는 30080, 그리고 범위 밖인 8080을 요청해 본다
+kubectl apply -f web-np2.yaml
+kubectl apply -f web-np3.yaml
+```
+
+```text
+The Service "web-np2" is invalid: spec.ports[0].nodePort: Invalid value: 30080: provided port is already allocated
+The Service "web-np3" is invalid: spec.ports[0].nodePort: Invalid value: 8080: provided port is not in the valid range. The range of valid ports is 30000-32767
+```
+
+범위는 kube-apiserver의 `--service-node-port-range`로 바꿀 수 있다. 노드 포트는 클러스터 전체에서 하나의 번호 공간이라, 번호를 직접 고정하는 Service가 여럿이면 팀끼리 겹친다. 꼭 필요할 때만 고정한다.
+
+## ClusterIP: 어느 장치에도 없는 주소
+
+ClusterIP `10.96.120.15`는 노드의 어떤 인터페이스에도 붙어 있지 않다. 그래서 ping이 안 된다.
+
+```bash
+# Pod 안에서 ClusterIP로 ping, 그리고 HTTP
+ping -c 2 -W 1 10.96.120.15
+curl -s http://10.96.120.15/
+```
+
+```text
+--- 10.96.120.15 ping statistics ---
+2 packets transmitted, 0 received, 100% packet loss, time 1009ms
+
+hello from web-94bf8fbc-4ntdx, you are 10.244.1.5
+```
+
+규칙이 `-p tcp --dport 80`인 패킷만 DNAT하니 ICMP는 아무 규칙에도 걸리지 않고 기본 경로로 나가 사라진다. 면접에서 "ClusterIP에 ping이 안 되는데 장애인가요"라는 질문이 나오는 이유다. 장애가 아니다. Service 상태는 ping이 아니라 그 포트로 TCP 연결을 열어 확인한다(IPVS 모드는 VIP를 `kube-ipvs0` 장치에 실제로 붙이기 때문에 ping에 답하는 경우가 있다).
+
+Pod `web-94bf8fbc-7xfzk`(node-1)에서 ClusterIP로 300번 요청해 Pod별로 세어 봤다.
+
+```bash
+# ClusterIP로 300번 요청하고 응답한 Pod별로 센다
+for i in $(seq 300); do curl -s http://10.96.120.15/; done | sort | uniq -c
+
+# 그동안 오른 KUBE-SVC 체인의 카운터
+sudo iptables -t nat -L KUBE-SVC-7QRYJ4K2ZQX3MDYL -n -v
+```
+
+```text
+     90 hello from web-94bf8fbc-4ntdx, you are 10.244.1.5
+     93 hello from web-94bf8fbc-4qb66, you are 10.244.1.5
+    117 hello from web-94bf8fbc-7xfzk, you are 10.244.1.1
+Chain KUBE-SVC-7QRYJ4K2ZQX3MDYL (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  6    --  *      *      !10.244.0.0/16        10.96.120.15         /* default/web:http cluster IP */ tcp dpt:80
+  117  7020 KUBE-SEP-H3ZLQ6VNSE2RJXPA  0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web:http -> 10.244.1.5:8080 */ statistic mode random probability 0.33333333349
+   90  5400 KUBE-SEP-MC4K2XPLW7TDNB5O  0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web:http -> 10.244.2.5:8080 */ statistic mode random probability 0.50000000000
+   93  5580 KUBE-SEP-ZB6V3YQF2SLKGA7N  0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web:http -> 10.244.2.6:8080 */
+```
+
+연결 300개가 117, 90, 93으로 갈렸다. 카운터 합과 응답 수가 정확히 같다. 볼 곳은 출발지다. 다른 Pod들은 요청자를 `10.244.1.5`, 곧 원래 Pod IP로 봤다. 클러스터 안의 Pod끼리는 주소를 바꾸지 않는다. 그런데 자기 자신에게 돌아온 117번은 `10.244.1.1`(노드의 `cni0` 주소)로 봤다. 이 경우는 KUBE-SEP의 `-s 10.244.1.5/32 -j KUBE-MARK-MASQ` 줄이 출발지를 바꾼다. 바꾸지 않으면 Pod가 받은 응답의 출발지가 자기 자신이 되어 연결이 성립하지 않는다. 이 헤어핀은 노드 브리지 포트의 hairpin 설정(`bridge link set dev vethX hairpin on`)도 있어야 동작한다. kubelet이나 CNI가 켜 준다.
+
+아래 그림에서 다음을 누르면 node-1의 Pod가 ClusterIP로 보낸 연결이 node-2의 Pod에 닿기까지가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="ClusterIP는 출발 노드에서 DNAT된다. 받는 Pod는 원래 Pod IP를 본다"
+  zones={[
+    { id: "n1", label: "node-1 192.168.50.11", x: 6, y: 6, w: 186, h: 316, tone: "private" },
+    { id: "n2", label: "node-2 192.168.50.12", x: 208, y: 6, w: 186, h: 316, tone: "private" },
+  ]}
+  nodes={[
+    { id: "p1", label: "7xfzk", sub: "10.244.1.5", x: 99, y: 66, icon: "container" },
+    { id: "k1", label: "netfilter", sub: "KUBE-SERVICES", x: 99, y: 170, icon: "firewall", w: 120 },
+    { id: "r1", label: "eth0", sub: "→10.244.2.0/24", x: 99, y: 272, icon: "router" },
+    { id: "r2", label: "eth0", sub: "cni0 10.244.2.1", x: 301, y: 272, icon: "router" },
+    { id: "p2", label: "4ntdx", sub: "10.244.2.5", x: 254, y: 150, icon: "container", w: 80 },
+    { id: "p3", label: "4qb66", sub: "10.244.2.6", x: 348, y: 150, icon: "container", w: 80 },
+  ]}
+  links={[
+    { from: "p1", to: "k1", label: "veth" },
+    { from: "k1", to: "r1" },
+    { from: "r1", to: "r2", label: "노드 사이" },
+    { from: "r2", to: "p3" },
+    { from: "r2", to: "p2" },
+  ]}
+  steps={[
+    { path: ["p1", "k1"], packet: "SYN", title: "VIP로 보낸다", detail: "Pod는 10.96.120.15:80으로 SYN을 보낸다. 이 주소를 가진 장치는 어디에도 없다. 기본 경로로 노드에 넘어온다.", payload: "10.244.1.5:51234 → 10.96.120.15:80" },
+    { path: ["k1"], packet: "DNAT", title: "출발 노드에서 Pod 하나를 고른다", detail: "PREROUTING의 KUBE-SERVICES가 KUBE-SVC로, statistic 규칙이 KUBE-SEP 하나로 보낸다. 거기서 목적지를 Pod IP로 바꾼다. conntrack이 이 결정을 기억한다.", payload: "dst 10.96.120.15:80 → 10.244.2.5:8080" },
+    { path: ["k1", "r1", "r2", "p2"], packet: "SYN", title: "이제 평범한 Pod 사이 패킷이다", detail: "목적지가 Pod IP로 바뀌었으니 노드 라우팅(CNI가 만든 경로)을 따라 node-2로 간다. node-2는 아무 규칙도 보지 않고 넘긴다.", payload: "10.244.1.5:51234 → 10.244.2.5:8080" },
+    { path: ["p2", "r2", "r1", "k1", "p1"], packet: "SYN-ACK", title: "응답은 출발 노드에서 되돌려진다", detail: "응답은 10.244.1.5로 돌아온다. node-1의 conntrack이 출발지를 10.96.120.15:80으로 되돌린다. Pod는 VIP와 대화했다고 믿는다." },
+  ]}
+/>
+
+DNAT은 출발지 쪽 노드에서 한 번만 일어난다. 그래서 같은 노드에 Pod가 있어도 특별히 그쪽을 고르지 않고, 받는 쪽 노드에는 kube-proxy 규칙이 하나도 없어도 된다. 그리고 고르는 단위가 연결이다. gRPC나 HTTP/2처럼 연결 하나를 오래 쓰는 클라이언트는 처음 고른 Pod에 계속 붙는다. 레플리카를 늘려도 새 Pod에 요청이 안 가는 이유이고, 해법(클라이언트 쪽 분산, 연결 수명 제한)은 [iptables NAT 글](/posts/iptables-nat)에서 이어진다.
+
+### 엔드포인트가 없을 때와 포트가 틀렸을 때
+
+selector에 오타가 난 `web-typo`는 엔드포인트가 비어 있다. 이때 kube-proxy는 그 VIP 포트로 오는 새 연결을 filter 테이블에서 `REJECT`로 바로 거절한다.
+
+```bash
+# 엔드포인트가 없는 Service
+kubectl describe svc web-typo | grep -E 'Selector|Endpoints'
+
+# 그 ClusterIP로 접속하면 기다리지 않고 바로 실패한다
+curl -sS -m 3 http://10.102.149.166/
+
+# kube-proxy가 넣는 거절 규칙 (실습에서 같은 모양으로 넣었다)
+sudo iptables -L KUBE-SERVICES -n -v
+```
+
+```text
+Selector:                 app=wbe
+Endpoints:                
+curl: (7) Failed to connect to 10.102.149.166 port 80 after 0 ms: Couldn't connect to server
+Chain KUBE-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    1    60 REJECT     6    --  *      *       0.0.0.0/0            10.102.149.166       /* default/web-typo has no endpoints */ tcp dpt:80 reject-with icmp-port-unreachable
+```
+
+증상으로 원인을 가를 수 있다. "0 ms 만에 연결 실패"는 엔드포인트가 비었다는 뜻이라 selector와 Pod 라벨, readiness를 본다. 엔드포인트는 있는데 `Connection refused`면 DNAT은 됐지만 Pod의 그 포트에서 아무도 듣지 않는 것이라 `targetPort`와 앱이 묶인 주소(`127.0.0.1`에만 묶였는지)를 본다. 한참 기다리다 시간 초과면 패킷이 중간에서 버려진 것이라 NetworkPolicy와 노드 사이 경로를 본다. 그 둘은 [NetworkPolicy 글](/posts/k8s-network-policy)과 [CNI 글](/posts/k8s-cni-pod-network)에서 다룬다.
+
+엔드포인트가 비었는지 볼 때 함정이 하나 있다. 실습에서 Pod 하나(`4qb66`)의 Ready 조건을 False로 바꿔 봤다.
+
+```bash
+# 엔드포인트별 상태
+kubectl get endpointslice -l kubernetes.io/service-name=web \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}{.conditions}{"\n"}{end}'
+
+# 같은 시점의 요약 목록
+kubectl get endpointslices -l kubernetes.io/service-name=web
+```
+
+```text
+10.244.1.5	{"ready":true,"serving":true,"terminating":false}
+10.244.2.5	{"ready":true,"serving":true,"terminating":false}
+10.244.2.6	{"ready":false,"serving":false,"terminating":false}
+NAME        ADDRESSTYPE   PORTS   ENDPOINTS                          AGE
+web-vc8gx   IPv4          8080    10.244.1.5,10.244.2.5,10.244.2.6   33s
+```
+
+요약 목록의 ENDPOINTS 칸은 준비 여부를 가리지 않고 주소를 다 찍는다. kube-proxy가 실제로 트래픽을 보내는 건 `ready: true`인 두 개뿐이다. 엔드포인트가 "있다"고 말하기 전에 conditions를 봐야 한다.
+
+## NodePort: 모든 노드에 같은 문을 연다
+
+NodePort는 모든 노드의 같은 포트를 연다. 노드 주소 아무거나로 들어와도 같은 Service로 간다. nat 테이블에서는 `KUBE-SERVICES` 맨 끝의 "목적지가 이 노드 주소면 `KUBE-NODEPORTS`로" 줄에서 시작한다.
+
+```text
+-A KUBE-SERVICES -m comment --comment "kubernetes service nodeports; NOTE: this must be the last rule in this chain" -m addrtype --dst-type LOCAL -j KUBE-NODEPORTS
+-A KUBE-NODEPORTS -p tcp -m comment --comment "default/web:http" -m tcp --dport 30080 -j KUBE-EXT-7QRYJ4K2ZQX3MDYL
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -m comment --comment "masquerade traffic for default/web:http external destinations" -j KUBE-MARK-MASQ
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -j KUBE-SVC-7QRYJ4K2ZQX3MDYL
+```
+
+`KUBE-EXT` 체인이 바깥에서 온 트래픽의 입구다. 기본 정책(`externalTrafficPolicy: Cluster`)에서는 무조건 SNAT 표시를 하고 ClusterIP와 같은 `KUBE-SVC`로 넘긴다. 결과적으로 클러스터의 모든 Pod 중 하나로 간다. 클러스터 밖 클라이언트(`192.168.50.100`)에서 node-1과, Pod가 하나도 없는 node-3으로 60번씩 보냈다.
+
+```bash
+# 바깥 클라이언트에서 node-1, node-3의 30080으로 60번씩
+for n in 11 13; do
+  for i in $(seq 60); do curl -s -m 2 http://192.168.50.$n:30080/; done | sort | uniq -c
+done
+```
+
+```text
+     22 hello from web-94bf8fbc-4ntdx, you are 192.168.50.11
+     19 hello from web-94bf8fbc-4qb66, you are 192.168.50.11
+     19 hello from web-94bf8fbc-7xfzk, you are 10.244.1.1
+     21 hello from web-94bf8fbc-4ntdx, you are 192.168.50.13
+     25 hello from web-94bf8fbc-4qb66, you are 192.168.50.13
+     14 hello from web-94bf8fbc-7xfzk, you are 192.168.50.13
+```
+
+어느 노드로 들어가든 세 Pod가 다 응답했다. node-3처럼 Pod가 없는 노드도 다른 노드로 넘겨 준다. 대신 Pod가 본 출발지는 진짜 클라이언트(`192.168.50.100`)가 아니라 들어온 노드의 주소다. 같은 노드의 Pod로 갈 때는 그 노드의 `cni0` 주소다. 처음 장면의 로그가 이것이다.
+
+SNAT을 하는 이유는 응답 경로 때문이다. node-1로 들어온 패킷을 node-2의 Pod에 보냈을 때 출발지를 그대로 두면, Pod의 응답이 node-2에서 클라이언트로 곧장 나간다. 클라이언트는 node-1에 보냈는데 node-2에서 답이 오니 버린다. 출발지를 node-1로 바꾸면 응답이 node-1로 돌아와 conntrack이 되돌려 줄 수 있다. [iptables NAT 글](/posts/iptables-nat)의 헤어핀 NAT과 같은 이유다.
+
+### externalTrafficPolicy: Local
+
+`Local`은 "들어온 노드에 있는 Pod로만 보내고, 그러니 SNAT하지 않는다"는 정책이다. 규칙은 이렇게 바뀐다.
+
+```text
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -s 10.244.0.0/16 -m comment --comment "pod traffic for default/web:http external destinations" -j KUBE-SVC-7QRYJ4K2ZQX3MDYL
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -m comment --comment "masquerade LOCAL traffic for default/web:http external destinations" -m addrtype --src-type LOCAL -j KUBE-MARK-MASQ
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -m comment --comment "route LOCAL traffic for default/web:http external destinations" -m addrtype --src-type LOCAL -j KUBE-SVC-7QRYJ4K2ZQX3MDYL
+-A KUBE-EXT-7QRYJ4K2ZQX3MDYL -j KUBE-SVL-7QRYJ4K2ZQX3MDYL
+-A KUBE-SVL-7QRYJ4K2ZQX3MDYL -m comment --comment "default/web:http -> 10.244.2.5:8080" -m statistic --mode random --probability 0.50000000000 -j KUBE-SEP-MC4K2XPLW7TDNB5O
+-A KUBE-SVL-7QRYJ4K2ZQX3MDYL -m comment --comment "default/web:http -> 10.244.2.6:8080" -j KUBE-SEP-ZB6V3YQF2SLKGA7N
+```
+
+node-2의 규칙이다. 바깥에서 온 패킷은 마지막 줄을 타고 `KUBE-SVL`(Service Local)로 가는데, 이 체인에는 node-2의 Pod 둘만 있다. EndpointSlice의 `nodeName` 칸을 보고 만든 목록이다. 앞의 세 줄은 예외 처리다. Pod가 노드 포트로 접속하거나 노드 자신이 접속하면 예전처럼 전체 Pod로 보낸다. Pod가 하나도 없는 node-3에는 `KUBE-SVL`이 없고, 대신 filter 테이블에 버리는 규칙이 생긴다.
+
+```bash
+# 같은 실험을 Local 정책으로. node-3은 1초씩 기다리고 timeout을 찍는다
+for n in 11 12 13; do
+  for i in $(seq 60); do curl -s -m 1 http://192.168.50.$n:30080/ || echo timeout; done | sort | uniq -c
+done
+
+# node-3의 filter 규칙
+sudo iptables -L KUBE-EXTERNAL-SERVICES -n -v
+```
+
+```text
+     60 hello from web-94bf8fbc-7xfzk, you are 192.168.50.100
+     33 hello from web-94bf8fbc-4ntdx, you are 192.168.50.100
+     27 hello from web-94bf8fbc-4qb66, you are 192.168.50.100
+     60 timeout
+Chain KUBE-EXTERNAL-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+   60  3600 DROP       6    --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web:http has no local endpoints */ ADDRTYPE match dst-type LOCAL tcp dpt:30080
+```
+
+진짜 클라이언트 IP `192.168.50.100`이 보인다. 그리고 처음 장면의 두 번째 증상, node-3으로 간 60개는 모두 DROP됐다. 숫자를 하나 더 보자. node-1의 Pod 하나는 node-1로 온 트래픽을 혼자 받았고, node-2의 두 Pod는 반씩 나눠 받았다. 로드 밸런서가 노드에 고르게 나눠 주면 Pod 하나가 전체의 50%, 나머지 둘이 25%씩을 받는다. Local은 Pod가 노드마다 고르게 퍼져 있어야 공평하다.
+
+아래 그림에서 두 정책의 길을 차례로 비교해 보자.
+
+<NetworkTopology
+  width={400}
+  height={360}
+  caption="Cluster는 어느 노드로든 받아 SNAT해서 넘기고, Local은 들어온 노드의 Pod로만 보내 출발지를 지킨다"
+  zones={[
+    { id: "z1", label: "node-1 .11", x: 6, y: 112, w: 124, h: 240, tone: "private" },
+    { id: "z2", label: "node-2 .12", x: 138, y: 112, w: 124, h: 240, tone: "private" },
+    { id: "z3", label: "node-3 .13", x: 270, y: 112, w: 124, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "client", sub: "192.168.50.100", x: 200, y: 40, icon: "client" },
+    { id: "n1", label: ":30080", sub: "KUBE-EXT", x: 68, y: 172, icon: "firewall", w: 104 },
+    { id: "n2", label: ":30080", sub: "KUBE-EXT", x: 200, y: 172, icon: "firewall", w: 104 },
+    { id: "n3", label: ":30080", sub: "Pod 없음", x: 332, y: 172, icon: "firewall", w: 104 },
+    { id: "a", label: "7xfzk", sub: "10.244.1.5", x: 68, y: 292, icon: "container", w: 104 },
+    { id: "b", label: "4ntdx", sub: "10.244.2.5", x: 200, y: 292, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "cli", to: "n1" },
+    { from: "cli", to: "n2" },
+    { from: "cli", to: "n3" },
+    { from: "n1", to: "a" },
+    { from: "n2", to: "b" },
+    { from: "n3", to: "b", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "n3", "b"], packet: "SYN", highlight: ["z3"], title: "Cluster: Pod 없는 노드도 넘겨 준다", detail: "node-3이 받아 KUBE-SVC에서 node-2의 Pod를 골랐다. 응답이 node-3으로 돌아오도록 출발지를 node-3 주소로 바꾼다.", payload: "Pod가 본 출발지: 192.168.50.13" },
+    { path: ["cli", "n1", "a"], packet: "SYN", title: "Cluster: 같은 노드여도 SNAT한다", detail: "KUBE-EXT가 무조건 MARK-MASQ를 한다. 같은 노드의 Pod로 가면 출발지가 그 노드의 cni0 주소가 된다.", payload: "Pod가 본 출발지: 10.244.1.1" },
+    { path: ["cli", "n2", "b"], packet: "SYN", highlight: ["z2"], title: "Local: 들어온 노드의 Pod로만", detail: "KUBE-SVL에는 node-2의 Pod만 있다. 다른 노드로 넘기지 않으니 SNAT할 필요가 없고, 진짜 클라이언트 IP가 남는다.", payload: "Pod가 본 출발지: 192.168.50.100" },
+    { path: ["cli", "n3"], packet: "SYN", blocked: true, highlight: ["z3"], title: "Local: Pod 없는 노드는 버린다", detail: "node-3에는 '… has no local endpoints' DROP 규칙만 있다. 앞의 로드 밸런서가 이 노드를 빼 주지 않으면 요청의 일부가 시간 초과로 끝난다." },
+  ]}
+/>
+
+정리하면 Cluster는 고르게 퍼지고 어느 노드로 들어와도 되지만 클라이언트 IP를 잃고 노드를 한 번 더 건넌다. Local은 클라이언트 IP를 지키고 홉이 하나 줄지만, Pod가 없는 노드로 오는 트래픽을 버리고 노드별 Pod 수가 다르면 치우친다. 그래서 Local은 앞단이 "Pod가 있는 노드에만 보내는" 로드 밸런서일 때 쓴다. 다음 절의 LoadBalancer가 그 일을 한다.
+
+## LoadBalancer: 바깥 로드 밸런서를 붙이는 약속
+
+`type: LoadBalancer`는 쿠버네티스 혼자서는 완성되지 않는다. NodePort까지는 클러스터가 만들고, 그 앞에 실제 로드 밸런서를 세우는 건 클라우드 컨트롤러(cloud-controller-manager나 AWS Load Balancer Controller 같은 것)의 일이다. 실습 클러스터에는 그게 없어서 영원히 `<pending>`이다. controller-manager 로그에 이유가 그대로 찍혀 있다.
+
+```text
+E1020 14:02:40.855126   20650 core.go:105] "Failed to start service controller" err="WARNING: no cloud provider provided, services of type LoadBalancer will fail" logger="service-lb-controller"
+```
+
+온프레미스에서 EXTERNAL-IP가 계속 pending이면 이 상황이다. MetalLB처럼 주소를 나눠 주고 ARP나 BGP로 광고하는 컨트롤러를 따로 설치해야 한다. 클라우드에서 pending이 길면 그 컨트롤러의 로그와 `kubectl describe svc`의 이벤트(서브넷 태그 누락, 권한 부족, 할당량 초과)를 본다.
+
+`externalTrafficPolicy: Local`로 만든 `web-lb`의 spec을 보면 API 서버가 채워 준 값이 있다.
+
+```bash
+# API 서버가 기본값을 채운 web-lb의 spec
+kubectl get svc web-lb -o yaml
+```
+
+```text
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.105.39.12
+  clusterIPs:
+  - 10.105.39.12
+  externalTrafficPolicy: Local
+  healthCheckNodePort: 30618
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    nodePort: 32283
+    port: 80
+    protocol: TCP
+    targetPort: http
+  selector:
+    app: web
+  sessionAffinity: None
+  type: LoadBalancer
+status:
+  loadBalancer: {}
+```
+
+`healthCheckNodePort: 30618`이 Local 정책을 쓸 만하게 만드는 장치다. 각 노드의 kube-proxy가 이 포트에서 HTTP 헬스 체크를 받아, 그 노드에 이 Service의 ready Pod가 있으면 200, 없으면 503을 돌려준다. 클라우드 로드 밸런서는 이 포트를 헬스 체크 대상으로 삼아서 Pod가 없는 노드를 스스로 뺀다. 앞 절에서 node-3이 받던 트래픽이 처음부터 오지 않게 되는 것이다.
+
+<SequenceDiagram
+  caption="LoadBalancer Service 하나가 바깥 주소를 얻기까지"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "ccm", label: "클라우드 컨트롤러" },
+    { id: "lb", label: "클라우드 LB" },
+    { id: "node", label: "노드 kube-proxy" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "apply web-lb", title: "Service를 만든다", detail: "API 서버가 ClusterIP, nodePort, healthCheckNodePort를 할당한다. 여기까지는 클라우드와 상관없다.", payload: "nodePort: 32283\nhealthCheckNodePort: 30618" },
+    { from: "api", to: "node", label: "watch", title: "노드들이 규칙을 만든다", detail: "kube-proxy가 32283의 KUBE-EXT 규칙과 30618의 헬스 체크 서버를 띄운다." },
+    { from: "api", to: "ccm", label: "watch", title: "컨트롤러가 새 Service를 본다", detail: "type이 LoadBalancer인 Service를 찾아 어노테이션(내부용인지, 어떤 종류의 LB인지)을 읽는다." },
+    { from: "ccm", to: "lb", label: "LB 생성 API", title: "클라우드에 LB를 만든다", detail: "리스너 80 → 모든 노드의 32283. 헬스 체크는 노드의 30618 /healthz. 서브넷 태그나 권한이 없으면 여기서 실패하고 이벤트에 남는다." },
+    { from: "lb", to: "node", label: "GET :30618/healthz", title: "Pod 있는 노드만 살아 있다고 본다", detail: "Pod가 없는 노드는 503을 돌려주고 대상에서 빠진다. Local 정책이 트래픽을 버리지 않게 되는 이유다." },
+    { from: "ccm", to: "api", label: "status.loadBalancer", title: "주소를 기록한다", detail: "만든 LB의 IP나 호스트 이름을 status에 적으면 EXTERNAL-IP 칸이 pending에서 바뀐다.", payload: "status:\n  loadBalancer:\n    ingress:\n    - hostname: a1b2c3….elb.amazonaws.com" },
+  ]}
+/>
+
+LoadBalancer에는 알아 둘 필드가 몇 개 더 있다. `loadBalancerSourceRanges`는 LB 앞단에서 허용할 출발지 대역이다. 클라우드에 따라 보안 그룹 규칙이 되거나 노드의 iptables 규칙이 된다. `allocateLoadBalancerNodePorts: false`는 LB가 노드 포트를 거치지 않고 Pod IP로 바로 보내는 구성(AWS의 IP 타깃처럼)에서 노드 포트를 아예 안 만든다. `loadBalancerClass`는 클러스터에 LB 컨트롤러가 여럿일 때 이 Service를 누가 맡을지 정한다. Service마다 LB가 하나씩 생기니 비용이 서비스 수에 비례한다는 점이 Ingress나 Gateway를 쓰는 이유다.
+
+## headless와 ExternalName: 가상 IP 없이 이름만
+
+나머지 둘은 kube-proxy와 상관이 없다. 가상 IP를 만들지 않고 DNS 답만 바꾼다. 실습 클러스터의 API 서버에 실제 CoreDNS를 붙여 물어봤다(클러스터 DNS의 동작은 [CoreDNS 글](/posts/k8s-coredns)에서 자세히 본다).
+
+```bash
+# ClusterIP Service와 headless Service의 A 레코드
+dig web.default.svc.cluster.local +noall +answer
+dig web-headless.default.svc.cluster.local +noall +answer
+```
+
+```text
+web.default.svc.cluster.local. 25 IN	A	10.96.120.15
+web-headless.default.svc.cluster.local.	30 IN A	10.244.2.5
+web-headless.default.svc.cluster.local.	30 IN A	10.244.1.5
+```
+
+`clusterIP: None`인 headless Service는 VIP 대신 Pod IP들을 그대로 돌려준다. 세 Pod 중 둘만 나왔다. 앞에서 Ready를 False로 바꾼 `10.244.2.6`은 DNS 답에서도 빠진다. 클라이언트가 Pod 목록을 직접 받아서 스스로 고르거나 모두에게 연결해야 할 때 쓴다. 클라이언트 쪽에서 분산하는 gRPC, 멤버 목록을 직접 관리하는 DB 클러스터(Cassandra, Kafka 브로커 찾기)가 대표다. StatefulSet과 함께 쓰면 `web-0.web-headless.default.svc.cluster.local`처럼 Pod마다 고정된 이름도 생긴다. 시작 중이라 아직 Ready가 아닌 멤버끼리도 서로 찾아야 하는 클러스터는 `publishNotReadyAddresses: true`를 준다.
+
+headless는 SRV 레코드에서 차이가 더 분명하다.
+
+```bash
+# 포트 이름 http로 SRV 레코드를 묻는다
+dig _http._tcp.web-headless.default.svc.cluster.local SRV +noall +answer +additional
+```
+
+```text
+_http._tcp.web-headless.default.svc.cluster.local. 30 IN SRV 0 50 8080 10-244-1-5.web-headless.default.svc.cluster.local.
+_http._tcp.web-headless.default.svc.cluster.local. 30 IN SRV 0 50 8080 10-244-2-5.web-headless.default.svc.cluster.local.
+10-244-1-5.web-headless.default.svc.cluster.local. 30 IN A 10.244.1.5
+10-244-2-5.web-headless.default.svc.cluster.local. 30 IN A 10.244.2.5
+```
+
+`type: ExternalName`은 클러스터 밖의 이름에 클러스터 안의 별명을 붙인다. DNS가 CNAME을 돌려줄 뿐 아무것도 중계하지 않는다.
+
+```bash
+# ExternalName Service의 답
+dig payments.default.svc.cluster.local +noall +answer
+```
+
+```text
+payments.default.svc.cluster.local. 30 IN CNAME	api.payments.example.com.
+api.payments.example.com. 30	IN	A	203.0.113.50
+```
+
+앱 설정에는 `payments`만 적어 두고, 외부 결제 API를 나중에 클러스터 안으로 옮기면 Service 타입만 바꾸면 된다는 게 장점이다. 함정은 DNS 바깥에 있다. 앱이 `https://payments/`로 접속하면 TLS의 SNI와 HTTP Host 헤더에 `payments`가 실린다. 상대 서버의 인증서는 `api.payments.example.com`용이라 검증이 실패하고, Host로 가상 호스트를 고르는 서버는 404를 준다. HTTPS 외부 API를 ExternalName으로 감쌀 때는 앱이 원래 이름으로 TLS와 Host를 보내도록 설정할 수 있는지 먼저 확인한다. `externalName`에 IP를 적어도 IP로 동작하지 않는다(이름으로 취급된다). 외부 IP에 이름을 붙이려면 selector 없는 Service에 EndpointSlice를 직접 만든다.
+
+## 클러스터 안에서도 가까운 Pod로
+
+지금까지의 ClusterIP는 클러스터의 모든 ready Pod를 똑같이 다룬다. 노드가 여러 가용 영역(zone)에 걸쳐 있으면 요청의 대부분이 다른 영역의 Pod로 가고, 클라우드는 영역 사이 트래픽에 요금을 매긴다. 이걸 줄이는 필드가 둘 있다.
+
+`internalTrafficPolicy: Local`은 클러스터 안에서 온 트래픽도 같은 노드의 Pod로만 보낸다. 노드마다 하나씩 도는 DaemonSet(로그 수집기, 노드 로컬 캐시)에 맞는다. 같은 노드에 Pod가 없으면 실패하니 일반 서비스에는 쓰지 않는다.
+
+`trafficDistribution: PreferClose`는 같은 zone의 엔드포인트를 먼저 쓰고, 없으면 다른 zone으로 넘어간다. EndpointSlice의 `zone` 칸과 컨트롤러가 달아 주는 힌트를 kube-proxy가 읽는다. 1.31부터 베타로 기본 활성화됐고 버전마다 동작이 다듬어지고 있어서, 쓰는 버전의 문서를 확인한다. 영역마다 Pod 수가 크게 다르면 한 영역의 Pod가 몰려서 과부하가 날 수 있다는 점은 Local 정책과 같은 종류의 트레이드오프다.
+
+`sessionAffinity: ClientIP`는 같은 클라이언트 IP를 같은 Pod로 보낸다. iptables의 `recent` 모듈로 기억하고, 기본 유지 시간은 10800초(3시간)다. 클라이언트가 NAT 뒤에 몰려 있으면 IP 하나에 사용자 수천 명이 묶여 한 Pod로 쏠린다. 로그인 세션 같은 상태를 Pod에 두는 대신 Redis 같은 바깥 저장소로 옮기는 편이 낫다.
+
+## 트래픽 정책을 직접 따져 보기
+
+NodePort로 들어온 연결이 어느 Pod로 갈 수 있고 출발지가 바뀌는지를 함수로 옮겨 보자. 앞의 실험 결과가 그대로 테스트다.
+
+<CodePlayground
+  caption="노드 포트로 들어온 연결은 어디로 가나"
+  functionName="route"
+  initialCode={`// policy: "Cluster" | "Local" (externalTrafficPolicy)
+// node: 연결이 들어온 노드 이름
+// endpoints: [{ ip: "10.244.1.5", node: "node-1", ready: true }, ...]
+// 반환: { targets: 보낼 수 있는 Pod IP 배열(입력 순서), snat: 출발지를 바꾸나 }
+//       보낼 곳이 없으면 targets는 [], snat은 false
+function route(policy, node, endpoints) {
+  return { targets: [], snat: false };
+}`}
+  solution={`function route(policy, node, endpoints) {
+  const ready = endpoints.filter((e) => e.ready);
+  if (policy === "Local") {
+    const local = ready.filter((e) => e.node === node).map((e) => e.ip);
+    return { targets: local, snat: false };
+  }
+  return { targets: ready.map((e) => e.ip), snat: ready.length > 0 };
+}`}
+  tests={[
+    { label: "Cluster: 어느 노드든 전부, SNAT", args: ["Cluster", "node-1", [{ ip: "10.244.1.5", node: "node-1", ready: true }, { ip: "10.244.2.5", node: "node-2", ready: true }, { ip: "10.244.2.6", node: "node-2", ready: true }]], expected: { targets: ["10.244.1.5", "10.244.2.5", "10.244.2.6"], snat: true } },
+    { label: "Local: 그 노드의 Pod만", args: ["Local", "node-2", [{ ip: "10.244.1.5", node: "node-1", ready: true }, { ip: "10.244.2.5", node: "node-2", ready: true }, { ip: "10.244.2.6", node: "node-2", ready: true }]], expected: { targets: ["10.244.2.5", "10.244.2.6"], snat: false } },
+    { label: "Local: Pod 없는 노드는 버린다", args: ["Local", "node-3", [{ ip: "10.244.1.5", node: "node-1", ready: true }, { ip: "10.244.2.5", node: "node-2", ready: true }, { ip: "10.244.2.6", node: "node-2", ready: true }]], expected: { targets: [], snat: false } },
+    { label: "Local: ready가 아니면 빠진다", args: ["Local", "node-2", [{ ip: "10.244.1.5", node: "node-1", ready: true }, { ip: "10.244.2.5", node: "node-2", ready: true }, { ip: "10.244.2.6", node: "node-2", ready: false }]], expected: { targets: ["10.244.2.5"], snat: false } },
+    { label: "Cluster: Pod 없는 노드도 넘긴다", args: ["Cluster", "node-3", [{ ip: "10.244.1.5", node: "node-1", ready: true }, { ip: "10.244.2.5", node: "node-2", ready: true }, { ip: "10.244.2.6", node: "node-2", ready: false }]], expected: { targets: ["10.244.1.5", "10.244.2.5"], snat: true } },
+    { label: "엔드포인트가 없으면 갈 곳이 없다", args: ["Cluster", "node-1", []], expected: { targets: [], snat: false } },
+  ]}
+/>
+
+## Service에 붙는데 응답이 이상할 때
+
+현장에서 Service 문제는 대부분 "어디까지 갔나"를 순서대로 좁히면 풀린다. 위에서부터 본다.
+
+```bash
+# 1. 이름이 풀리나 (임시 Pod에서)
+kubectl run dns-check --rm -it --restart=Never --image=busybox:1.36 -- nslookup web.default.svc.cluster.local
+
+# 2. 엔드포인트가 있고 ready인가
+kubectl get endpointslice -l kubernetes.io/service-name=web \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}{.conditions.ready}{"\n"}{end}'
+
+# 3. selector와 Pod 라벨이 맞나
+kubectl get svc web -o jsonpath='{.spec.selector}{"\n"}'
+kubectl get pods -l app=web -o wide
+
+# 4. Pod IP와 targetPort로 직접 붙어 보나 (Service를 건너뛰고)
+kubectl run curl-check --rm -it --restart=Never --image=curlimages/curl:8.10.1 -- curl -s -m 3 http://10.244.2.5:8080/
+
+# 5. 노드에서 규칙이 있나 (kube-proxy iptables 모드)
+sudo iptables -t nat -S KUBE-SERVICES | grep 'default/web'
+```
+
+4번이 되는데 Service 주소로는 안 되면 kube-proxy 쪽이다. kube-proxy Pod 로그와 5번 규칙을 본다. 4번부터 안 되면 Service가 아니라 Pod나 네트워크 문제다. 클라이언트 IP가 노드 주소로 찍히면 `externalTrafficPolicy`를, 특정 노드로 가는 요청만 시간 초과면 그 노드에 Pod가 있는지와 LB 헬스 체크 포트를 본다.
+
+배포 중에만 요청 몇 개가 502나 연결 거절로 끝난다면 Service가 아니라 순서 문제다. 엔드포인트에서 빠지는 일과 Pod가 종료되는 일이 동시에 시작되기 때문인데, 이 흐름과 preStop으로 막는 법은 [Pod 일생 글](/posts/k8s-pod-lifecycle)에 있다. UDP Service라면 엔드포인트가 바뀐 뒤에도 예전 Pod로 가는 conntrack 항목을 의심한다.
+
+## 타입은 층, 정책은 출발지
+
+Service는 selector로 고른 Pod 목록(EndpointSlice)에 이름과 가상 IP를 붙인 것이다. ClusterIP는 출발 노드에서 DNAT하는 가상 IP, NodePort는 거기에 모든 노드의 문 하나, LoadBalancer는 다시 그 앞의 바깥 로드 밸런서이고, headless와 ExternalName은 가상 IP 없이 DNS 답만 바꾼다. `externalTrafficPolicy`는 넘겨줄 수 있는 대신 출발지를 바꿀지(Cluster), 출발지를 지키는 대신 그 노드에서만 받을지(Local)를 고르는 일이고, Local을 쓰면 앞단이 헬스 체크 포트로 노드를 걸러 줘야 한다. 이 규칙을 집행하는 노드 사이의 길은 [CNI 글](/posts/k8s-cni-pod-network)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### ClusterIP, NodePort, LoadBalancer는 어떻게 다른가요?
+
+서로 층으로 쌓인다. ClusterIP는 클러스터 안에서만 닿는 가상 IP이고, NodePort는 거기에 모든 노드의 같은 포트(기본 30000~32767)를 더해 바깥에서 노드 주소로 들어오게 한다. LoadBalancer는 NodePort 위에 클라우드 컨트롤러가 만든 바깥 로드 밸런서를 붙이고 그 주소를 status에 적는다. 그래서 LoadBalancer Service도 ClusterIP와 노드 포트를 함께 갖는다.
+
+### ClusterIP로 ping이 안 되는데 장애인가요?
+
+장애가 아니다. ClusterIP는 어떤 인터페이스에도 붙어 있지 않고, kube-proxy가 Service의 프로토콜·포트에 맞는 패킷만 DNAT하는 규칙으로 존재한다. ICMP는 그 규칙에 걸리지 않으니 응답이 없다. Service 상태는 해당 포트로 TCP 연결을 열어 보고, 엔드포인트가 ready인지로 확인한다. IPVS 모드는 VIP를 장치에 붙여서 ping에 답하기도 한다.
+
+### externalTrafficPolicy를 Local로 바꾸면 무엇이 달라지나요?
+
+들어온 노드에 있는 ready Pod로만 보내고 SNAT하지 않아서 Pod가 진짜 클라이언트 IP를 본다. 노드를 한 번 더 건너지 않는 장점도 있다. 대신 Pod가 없는 노드로 온 트래픽은 버려지고, 노드마다 Pod 수가 다르면 부하가 치우친다. 그래서 healthCheckNodePort로 Pod 없는 노드를 걸러 주는 로드 밸런서 앞에서 쓰고, Pod를 노드에 고르게 퍼뜨린다.
+
+### 기본 정책에서 노드 포트 트래픽을 SNAT하는 이유는요?
+
+다른 노드의 Pod로 넘겼을 때 응답이 들어온 노드로 돌아오게 하려고다. 출발지를 그대로 두면 Pod의 응답이 그 Pod가 있는 노드에서 클라이언트로 바로 나가고, 클라이언트는 자기가 보낸 적 없는 주소에서 온 응답을 버린다. 출발지를 들어온 노드 주소로 바꾸면 응답이 그 노드로 와서 conntrack이 DNAT을 되돌린다. 이 때문에 클라이언트 IP가 사라진다.
+
+### headless Service는 언제 쓰나요?
+
+클라이언트가 Pod 목록을 직접 받아야 할 때 쓴다. `clusterIP: None`이면 VIP와 kube-proxy 규칙이 없고, DNS가 ready인 Pod IP들을 A 레코드로, 포트 이름별로 SRV 레코드를 돌려준다. 클라이언트 쪽 분산을 하는 gRPC, 멤버를 서로 알아야 하는 DB나 메시지 브로커 클러스터, StatefulSet의 Pod별 고정 이름에 쓴다. 준비 전의 멤버도 서로 찾아야 하면 publishNotReadyAddresses를 켠다.
+
+### ExternalName Service를 쓸 때 주의할 점은요?
+
+DNS에서 CNAME만 돌려줄 뿐 트래픽을 중계하지 않는다. 그래서 앱이 Service 이름으로 접속하면 TLS의 SNI와 HTTP Host 헤더에 그 짧은 이름이 실려, 상대 서버의 인증서 검증이 실패하거나 가상 호스트를 못 찾는다. `externalName`에 IP를 넣어도 이름으로 취급되니, 외부 IP를 묶으려면 selector 없는 Service와 직접 만든 EndpointSlice를 쓴다.
+
+### Service는 있는데 접속이 안 됩니다. 증상별로 어디를 보나요?
+
+바로 실패하면(0 ms, couldn't connect) 엔드포인트가 비어 kube-proxy가 REJECT하는 것이라 selector, Pod 라벨, readiness를 본다. `Connection refused`면 DNAT은 됐지만 targetPort가 틀렸거나 앱이 그 포트·주소에서 듣지 않는다. 시간 초과면 패킷이 버려진 것이라 NetworkPolicy와 노드 사이 경로를 본다. Pod IP로 직접 붙어 보면 Service 문제와 Pod·네트워크 문제를 한 번에 가를 수 있다.
+
+### LoadBalancer Service의 EXTERNAL-IP가 계속 pending입니다.
+
+로드 밸런서를 실제로 만드는 컨트롤러가 없거나 실패한 것이다. 온프레미스나 로컬 클러스터는 클라우드 컨트롤러가 없으니 MetalLB 같은 것을 설치해야 하고, 클라우드라면 `kubectl describe svc`의 이벤트와 LB 컨트롤러 로그에서 권한, 서브넷 태그, 할당량 문제를 찾는다. 그동안에도 NodePort와 ClusterIP는 이미 동작하고 있어서 노드 포트로는 접속이 된다.

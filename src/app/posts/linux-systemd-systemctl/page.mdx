@@ -1,0 +1,561 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-systemd-systemctl");
+
+새 서버에 API를 올렸다. SSH를 끊으면 앱이 같이 죽어서 `nohup python3 app.py &`로 띄웠고, 잘 돌았다. 일주일 뒤 클라우드 쪽 점검으로 서버가 재부팅됐고, 그 뒤로 아무도 앱을 다시 띄우지 않았다. 새벽에 앱이 메모리 부족으로 한 번 죽었을 때도 마찬가지였다. `nohup`은 SIGHUP을 무시하게 해 줄 뿐, 앱을 돌보는 사람은 아니다.
+
+리눅스에서 그 돌보는 일을 하는 것이 systemd다. PID 1로 떠서 부팅 때 서비스를 순서대로 띄우고, 죽으면 다시 띄우고, 로그를 모으고, 멈출 때는 자식 프로세스까지 정리한다. 이 글은 유닛 파일을 직접 써서 서비스로 등록하고, `enable`과 `start`의 차이, 재시작 정책과 그 한도, 멈출 때의 순서, journalctl로 로그를 좁히는 법, cron 대신 timer를 쓰는 법, 서비스가 안 뜰 때 따라가는 순서까지 본다.
+
+기준은 Ubuntu 24.04 LTS(systemd 255)이고, 22.04(systemd 249)도 거의 같다. 실습 환경은 systemd가 PID 1이 아닌 컨테이너라서 `systemctl status`, `list-timers`처럼 실행 중인 systemd에 묻는 명령과 `journalctl`의 출력은 Ubuntu 24.04의 실제 형식대로 적은 예시다. `systemd-analyze`와 `systemctl --root` 출력은 직접 돌린 결과다. 컨테이너에서 systemctl을 치면 이렇게 나온다.
+
+```text
+System has not been booted with systemd as init system (PID 1). Can't operate.
+Failed to connect to bus: Host is down
+```
+
+이 메시지가 무슨 뜻인지는 글 끝에서 다시 본다.
+
+## 유닛은 systemd가 다루는 단위
+
+systemd가 관리하는 모든 것은 유닛이다. 유닛은 `이름.종류` 꼴의 설정 파일 하나로 정의된다.
+
+- `.service`: 프로세스 하나(또는 묶음). 웹 서버, API, 워커.
+- `.timer`: 정해진 시각에 다른 유닛(보통 같은 이름의 서비스)을 시작한다. cron의 자리다.
+- `.socket`: 소켓을 먼저 열어 두고 연결이 오면 서비스를 띄운다.
+- `.target`: 유닛 묶음에 붙인 이름. `multi-user.target`은 "여러 사용자가 로그인하는 일반 서버 상태"이고, 부팅은 이 target에 도달하는 것을 목표로 한다.
+- `.mount`, `.path`, `.slice` 등도 있다. slice는 cgroup 묶음이다.
+
+유닛 파일은 세 곳에 있다. 패키지가 설치한 것은 `/usr/lib/systemd/system/`(Ubuntu에서는 `/lib/systemd/system/`과 같은 곳), 관리자가 직접 만들거나 덮어쓴 것은 `/etc/systemd/system/`, 실행 중 임시로 생긴 것은 `/run/systemd/system/`이다. 같은 이름이 있으면 `/etc`가 이긴다. 그래서 내가 만드는 유닛은 `/etc/systemd/system/`에 둔다.
+
+유닛 사이에는 두 종류의 관계가 있다. "같이 띄워 달라"는 의존(`Wants=`, `Requires=`)과 "누가 먼저냐"는 순서(`After=`, `Before=`)다. 둘은 따로 논다. `After=postgresql.service`만 쓰면 PostgreSQL이 같이 시작될 때 그 뒤에 서라는 뜻이지, PostgreSQL을 띄워 달라는 뜻이 아니다. 아래 그림에서 실선은 의존, 점선은 순서다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="multi-user.target이 서비스를 원하고(Wants), 서비스는 네트워크 뒤에 선다(After)"
+  nodes={[
+    { id: "mu", label: "multi-user.target", sub: "부팅 목표", x: 200, y: 40, w: 150, h: 44 },
+    { id: "api", label: "orders-api", sub: ".service", x: 90, y: 150, w: 120, h: 44 },
+    { id: "timer", label: "orders-backup", sub: ".timer", x: 310, y: 150, w: 120, h: 44 },
+    { id: "net", label: "network-online", sub: ".target", x: 90, y: 260, w: 130, h: 44 },
+    { id: "bk", label: "orders-backup", sub: ".service", x: 310, y: 260, w: 120, h: 44 },
+  ]}
+  edges={[
+    { from: "mu", to: "api", label: "Wants" },
+    { from: "mu", to: "timer", label: "timers.target" },
+    { from: "api", to: "net", label: "After", dashed: true },
+    { from: "timer", to: "bk", label: "03:15에 시작" },
+  ]}
+/>
+
+## 서비스 유닛 파일 한 장 쓰기
+
+`nohup`으로 띄우던 앱을 서비스로 바꾼다. 앱 전용 사용자를 만들고 유닛 파일을 쓴다.
+
+```bash
+# 로그인할 수 없는 시스템 사용자를 만든다 (홈 없음, 셸 없음)
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin orders
+
+# 유닛 파일을 만든다
+sudo nano /etc/systemd/system/orders-api.service
+```
+
+```ini
+[Unit]
+Description=Orders API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orders
+Group=orders
+WorkingDirectory=/srv/orders
+EnvironmentFile=/etc/orders/orders.env
+ExecStart=/usr/bin/python3 /srv/orders/app.py
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=20s
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+```
+
+줄마다 하는 일을 짚는다.
+
+- `[Unit]`의 `After=network-online.target`과 `Wants=`: 네트워크 주소가 잡힌 뒤에 띄운다. `network.target`은 "네트워크 설정을 시작했다"는 뜻이라 주소가 아직 없을 수 있다. 외부 DB에 바로 붙는 앱이면 `network-online.target`을 쓰고, 둘을 함께 적어야 순서와 의존이 다 걸린다.
+- `Type=simple`: `ExecStart`로 띄운 프로세스가 곧 서비스다. 스스로 데몬이 되는(fork하고 부모가 끝나는) 옛 프로그램은 `Type=forking`과 `PIDFile=`을 쓴다. 준비가 끝났을 때 `sd_notify`로 systemd에 알려 주는 프로그램은 `Type=notify`, 한 번 돌고 끝나는 작업은 `Type=oneshot`이다. `Type=exec`는 simple과 같지만 실행 파일을 못 찾으면 start 명령이 바로 실패해서 더 일찍 알 수 있다.
+- `User=`, `Group=`: root로 돌리지 않는다. 파일 권한은 [리눅스 파일 권한](/posts/linux-files-permissions)에서 본 규칙대로 이 사용자 기준으로 검사된다.
+- `EnvironmentFile=`: 비밀 값은 유닛 파일이 아니라 `600` 권한의 별도 파일에 둔다. 유닛 파일은 누구나 읽을 수 있고 `systemctl show`로도 보인다.
+- `ExecStart=`: 절대 경로로 쓴다. 셸이 아니라서 `>`, `|`, `&&`, `$(...)`가 동작하지 않는다. 필요하면 `/bin/sh -c '...'`로 감싸지만, 그러면 셸이 메인 프로세스가 되니 마지막 명령은 `exec`로 띄운다.
+- `Restart=on-failure`, `RestartSec=2s`: 비정상 종료면 2초 뒤 다시 띄운다. 뒤에서 자세히 본다.
+- `TimeoutStopSec=20s`: 멈출 때 SIGTERM 뒤 20초 기다리고 SIGKILL이다. 기본은 90초다.
+- `[Install]`의 `WantedBy=multi-user.target`: `enable`할 때 어디에 매달지 정한다.
+
+저장했으면 문법부터 검사한다. `systemd-analyze verify`는 systemd가 PID 1이 아니어도 돌아서 CI에서도 쓸 수 있다.
+
+```bash
+# 유닛 파일 검사 (오타, 없는 실행 파일, 잘못된 조합)
+systemd-analyze verify /etc/systemd/system/orders-api.service
+```
+
+일부러 틀린 파일 세 개를 검사했다.
+
+```text
+/srv/r1sd/units/bad.service:7: Unknown key name 'Restar' in section 'Service', ignoring.
+bad2.service: Command /usr/local/bin/orders-api is not executable: No such file or directory
+dup.service: Service has more than one ExecStart= setting, which is only allowed for Type=oneshot services. Refusing.
+Unit dup.service has a bad unit file setting.
+```
+
+첫 줄이 무섭다. `Restart`를 `Restar`로 잘못 쓰면 systemd는 경고만 남기고 그 줄을 무시한 채 서비스를 띄운다. verify의 종료 코드도 0이다. 재시작 정책이 없는 서비스가 조용히 운영에 들어가는 것이다. 배포 파이프라인에서 verify 출력에 `Unknown key`가 있으면 실패로 처리해 두면 막을 수 있다. 반면 `User=`에 없는 사용자를 써도 verify는 통과한다. 그건 실제로 시작할 때 `217/USER`로 실패한다.
+
+## enable과 start는 다른 일이다
+
+`start`는 지금 띄우는 것이고, `enable`은 부팅 때 띄우도록 등록하는 것이다. 처음 이야기의 재부팅 사고는 enable을 빼먹어도 똑같이 난다.
+
+```bash
+# 새 유닛 파일을 systemd에 알린다
+sudo systemctl daemon-reload
+
+# 부팅 때 뜨도록 등록하고 지금 바로 띄운다
+sudo systemctl enable --now orders-api.service
+
+# 상태 확인
+systemctl is-enabled orders-api; systemctl is-active orders-api
+```
+
+enable이 실제로 하는 일은 심볼릭 링크 하나를 만드는 것이다. 빈 디렉터리를 루트 삼아 오프라인으로 돌려 보면 그대로 보인다.
+
+```bash
+# 실습: /srv/r1sd/root를 루트 파일 시스템으로 보고 enable한다
+sudo systemctl --root=/srv/r1sd/root enable orders-api.service orders-backup.timer
+sudo systemctl --root=/srv/r1sd/root list-unit-files 'orders*'
+```
+
+```text
+Created symlink /srv/r1sd/root/etc/systemd/system/multi-user.target.wants/orders-api.service → /etc/systemd/system/orders-api.service.
+Created symlink /srv/r1sd/root/etc/systemd/system/timers.target.wants/orders-backup.timer → /etc/systemd/system/orders-backup.timer.
+UNIT FILE             STATE   PRESET
+orders-api.service    enabled enabled
+orders-backup.service static  -
+orders-backup.timer   enabled enabled
+
+3 unit files listed.
+```
+
+`multi-user.target.wants/` 안에 링크가 생겼다. 부팅 때 systemd는 `multi-user.target`을 향해 가면서 이 디렉터리의 유닛을 모두 원한다. `[Install]`의 `WantedBy=`가 이 디렉터리 이름이 된다. `orders-backup.service`가 `static`인 건 `[Install]` 절이 없어서 직접 enable할 수 없다는 뜻이다. 타이머가 띄워 주는 서비스라 그게 맞다. `disable`은 이 링크를 지운다. `mask`는 유닛을 `/dev/null`로 링크해서 의존으로도, 손으로도 아예 못 띄우게 만든다.
+
+아래 그림은 enable부터 부팅 후 서비스가 뜨기까지다. 다음을 누르면 한 단계씩 넘어간다.
+
+<SequenceDiagram
+  caption="enable은 링크를 만들고, 부팅 때 systemd가 그 링크를 따라 서비스를 띄운다"
+  actors={[
+    { id: "op", label: "운영자" },
+    { id: "fs", label: "/etc/systemd" },
+    { id: "pid1", label: "systemd" },
+    { id: "app", label: "orders-api" },
+  ]}
+  steps={[
+    { from: "op", to: "fs", label: "enable", title: "링크를 만든다", detail: "WantedBy=multi-user.target을 읽고 multi-user.target.wants/ 안에 유닛 파일을 가리키는 링크를 만든다. 서비스는 아직 뜨지 않는다.", payload: "multi-user.target.wants/orders-api.service\n  → /etc/systemd/system/orders-api.service" },
+    { from: "pid1", to: "fs", label: "부팅: 유닛 읽기", title: "부팅 때 목표를 정한다", detail: "PID 1로 뜬 systemd가 기본 목표 multi-user.target과 그 wants 디렉터리를 읽어 띄울 유닛 목록과 순서를 만든다." },
+    { from: "pid1", to: "pid1", label: "After 순서", title: "순서를 맞춘다", detail: "orders-api는 After=network-online.target이라 주소가 잡힐 때까지 기다린다. 순서 관계가 없는 유닛들은 동시에 띄운다. 부팅이 빠른 이유다." },
+    { from: "pid1", to: "app", label: "fork + exec", title: "cgroup을 만들고 프로세스를 띄운다", detail: "system.slice/orders-api.service라는 cgroup을 만들고, User=orders로 바꾼 뒤 ExecStart를 실행한다. 이 프로세스가 만드는 자식도 모두 같은 cgroup에 들어간다.", payload: "CGroup: /system.slice/orders-api.service\n└─4211 /usr/bin/python3 /srv/orders/app.py" },
+    { from: "app", to: "pid1", label: "stdout", title: "출력은 journal로 간다", detail: "표준 출력과 표준 에러는 journald가 받아 유닛 이름을 붙여 저장한다. 앱은 파일에 로그를 쓰지 않고 print만 해도 된다." },
+  ]}
+/>
+
+## daemon-reload를 잊으면
+
+유닛 파일을 고친 뒤 `restart`만 하면 systemd는 메모리에 읽어 둔 옛 설정으로 다시 띄운다. 고친 게 반영되지 않는다. systemd 255는 이럴 때 경고를 보여 준다.
+
+```text
+Warning: The unit file, source configuration file or drop-ins of orders-api.service changed on disk. Run 'systemctl daemon-reload' to reload units.
+```
+
+순서는 항상 "파일 수정 → `daemon-reload` → `restart`"다. `daemon-reload`는 유닛 파일을 다시 읽을 뿐 떠 있는 서비스를 재시작하지 않는다. 반대로 `systemctl reload orders-api`는 유닛 파일과 상관없이 서비스에 `ExecReload=`(보통 SIGHUP)을 보내서 앱 설정을 다시 읽게 한다. 이름이 비슷해서 자주 헷갈린다.
+
+## systemctl status 읽기
+
+서비스 상태는 `systemctl status`로 본다. 아래는 정상일 때의 예시다.
+
+```bash
+# 상태와 최근 로그 10줄
+systemctl status orders-api
+```
+
+```text
+● orders-api.service - Orders API
+     Loaded: loaded (/etc/systemd/system/orders-api.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-10-20 14:45:02 UTC; 12s ago
+   Main PID: 4211 (python3)
+      Tasks: 1 (limit: 4557)
+     Memory: 18.4M (peak: 18.9M)
+        CPU: 152ms
+     CGroup: /system.slice/orders-api.service
+             └─4211 /usr/bin/python3 /srv/orders/app.py
+
+Oct 20 14:45:02 web-1 systemd[1]: Started orders-api.service - Orders API.
+```
+
+조각을 누르면 줄마다 무엇을 봐야 하는지 나온다.
+
+<UrlAnatomy
+  caption="systemctl status의 핵심 줄들 (예시)"
+  separator=" "
+  joiner="  "
+  params={[
+    { key: "dot", display: "●", title: "맨 앞 기호", description: "초록 ●는 실행 중, 흰 ○는 멈춤, 빨간 ×는 실패다. 색이 안 보이는 환경에서도 기호 모양으로 구분된다." },
+    { key: "loaded", display: "Loaded: loaded (...; enabled; preset: enabled)", title: "Loaded", description: "어느 파일에서 읽었는지, 부팅 때 뜨는지(enabled)가 나온다. 경로가 /lib면 패키지 기본값, /etc면 내가 만든 것이다. drop-in이 있으면 아래에 Drop-In: 줄이 붙는다.", required: true },
+    { key: "active", display: "Active: active (running) since ...; 12s ago", title: "Active", description: "지금 상태와 그 상태가 된 시각. 'since ... 12s ago'가 매번 짧다면 계속 재시작 중이라는 뜻이다. 실패면 failed (Result: exit-code)처럼 이유가 붙는다.", required: true },
+    { key: "pid", display: "Main PID: 4211 (python3)", title: "Main PID", description: "systemd가 서비스의 주인으로 보는 프로세스. 이 프로세스가 끝나면 서비스가 끝난 것으로 본다. 종료 후에는 (code=exited, status=1/FAILURE)처럼 종료 코드가 남는다." },
+    { key: "mem", display: "Memory: 18.4M (peak: 18.9M)", title: "Memory", description: "서비스 cgroup 전체의 메모리. 자식 프로세스까지 합친 값이다. MemoryMax=를 걸었다면 한도도 함께 나온다." },
+    { key: "cg", display: "CGroup: /system.slice/orders-api.service", title: "CGroup", description: "서비스에 속한 모든 프로세스가 나무로 나온다. 여기 없는 프로세스는 이 서비스가 관리하지 않는다." },
+  ]}
+/>
+
+여러 서비스를 한꺼번에 볼 때는 목록 명령이 낫다.
+
+```bash
+# 실패한 유닛만
+systemctl --failed
+
+# 실행 중인 서비스 목록
+systemctl list-units --type=service --state=running
+
+# 유닛의 실제 설정 (drop-in까지 합쳐서)
+systemctl cat orders-api
+
+# 특정 속성만 (스크립트에서 쓰기 좋다)
+systemctl show orders-api -p NRestarts -p ActiveState -p ExecMainStatus
+```
+
+`NRestarts`는 이 서비스가 몇 번 다시 띄워졌는지 센 값이다. 모니터링에서 이 값이 계속 오르면 "살아 있지만 계속 죽고 있는" 서비스다.
+
+## 죽으면 다시 띄운다, 한도까지
+
+`Restart=`는 어떤 종료에서 다시 띄울지 정한다. 자주 쓰는 값은 둘이다. `on-failure`는 종료 코드가 0이 아니거나, 시그널로 죽었거나, 타임아웃이 났을 때만 다시 띄운다. `always`는 정상 종료(0)에도 다시 띄운다. 웹 서버나 워커는 대개 `on-failure`, 어떤 이유로든 꼭 떠 있어야 하는 에이전트는 `always`를 쓴다. 손으로 `systemctl stop`한 서비스는 어느 쪽이든 다시 띄우지 않는다.
+
+무한정 다시 띄우지는 않는다. systemd에는 시작 한도가 있어서, 기본값으로 10초(`DefaultStartLimitIntervalSec=10s`) 안에 5번(`DefaultStartLimitBurst=5`)을 넘게 시작하면 더 이상 띄우지 않고 실패로 둔다. 기본 `RestartSec`이 100ms라서, 설정 파일 오타처럼 뜨자마자 죽는 앱은 순식간에 이 한도에 걸린다. 아래 그림은 0.3초 만에 죽는 앱을 `RestartSec=100ms`로 다시 띄울 때다.
+
+<AlgoTrace
+  caption="뜨자마자 죽는 앱: 10초 안에 다섯 번까지만 띄운다"
+  memoryLabel="이번 창의 시작 횟수"
+  cells={["0.0s", "0.4s", "0.8s", "1.2s", "1.6s", "2.0s"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "처음 시작한다. 10초짜리 창이 여기서 열린다. 0.3초 뒤 exit 1로 죽는다." },
+    { pointer: 1, memory: ["1", "2"], caption: "RestartSec 100ms 뒤 다시 띄운다. 창 안에서 두 번째다." },
+    { pointer: 2, memory: ["1", "2", "3"], caption: "세 번째. 로그에는 Scheduled restart job, restart counter is at 3이 찍힌다." },
+    { pointer: 4, memory: ["1", "2", "3", "4", "5"], caption: "1.6초에 다섯 번째 시작. 한도(5)에 닿았다." },
+    { pointer: 5, found: [5], memory: ["거부"], caption: "2.0초의 여섯 번째 시작은 거부된다. 서비스는 failed (Result: start-limit-hit)로 멈추고 더는 띄우지 않는다." },
+  ]}
+/>
+
+이때 journal에는 이런 줄이 남는다(예시).
+
+```text
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Main process exited, code=exited, status=1/FAILURE
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Failed with result 'exit-code'.
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Scheduled restart job, restart counter is at 5.
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Start request repeated too quickly.
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Failed with result 'start-limit-hit'.
+Oct 20 14:52:10 web-1 systemd[1]: Failed to start orders-api.service - Orders API.
+```
+
+`start-limit-hit`에 걸린 서비스는 원인을 고친 뒤 `systemctl reset-failed orders-api`로 카운터를 비우고 다시 `start`한다. 한도를 정하는 설정은 `[Service]`가 아니라 `[Unit]`에 있다는 것도 자주 틀린다.
+
+```ini
+[Unit]
+# 5분 안에 10번까지 시도한다
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+```
+
+`RestartSec`을 늘리면 DB가 잠깐 내려간 동안 앱이 한도를 다 써 버리는 일을 막는다. systemd 254부터는 `RestartSteps=`와 `RestartMaxDelaySec=`로 재시작 간격을 점점 늘릴 수도 있다(Ubuntu 24.04의 255에서 쓸 수 있고, 22.04의 249에는 없다). 아래에서 설정값을 바꿔 가며 한도에 걸리는지 계산해 보자. 실행 시간과 재시작 간격만 넣은 단순한 모델이다.
+
+<CodePlayground
+  caption="몇 번째 시작에서 start-limit-hit에 걸리나 (안 걸리면 0)"
+  functionName="startLimitHit"
+  initialCode={`// runSec: 뜬 뒤 죽기까지 걸리는 시간
+// restartSec: RestartSec
+// burst, intervalSec: StartLimitBurst, StartLimitIntervalSec
+// systemd처럼 창을 연 시각에서 intervalSec가 지나면 창을 새로 연다
+// 100번 시도할 때까지 안 걸리면 0
+function startLimitHit(runSec, restartSec, burst, intervalSec) {
+  return 0;
+}`}
+  solution={`function startLimitHit(runSec, restartSec, burst, intervalSec) {
+  let begin = null, num = 0, t = 0;
+  for (let attempt = 1; attempt <= 100; attempt++) {
+    if (begin === null || t - begin > intervalSec) {
+      begin = t;   // 새 창을 연다
+      num = 1;
+    } else if (num < burst) {
+      num++;
+    } else {
+      return attempt; // 이 시도가 거부된다
+    }
+    t += runSec + restartSec;
+  }
+  return 0;
+}`}
+  tests={[
+    { args: [0.3, 0.1, 5, 10], expected: 6, label: "기본값 (RestartSec 100ms)" },
+    { args: [0.3, 5, 5, 10], expected: 0, label: "RestartSec=5s" },
+    { args: [1, 2, 5, 10], expected: 0, label: "3초마다 죽는다" },
+    { args: [0.2, 1.5, 5, 10], expected: 6, label: "RestartSec=1.5s" },
+    { args: [0.3, 0.1, 10, 60], expected: 11, label: "Burst=10, 60초" },
+  ]}
+/>
+
+`RestartSec=1.5s`로는 부족하고 `5s`면 기본 한도 안에서 계속 다시 띄운다. 계속 다시 띄우는 게 늘 좋은 건 아니다. 설정 오류처럼 몇 번을 띄워도 안 될 문제라면 빨리 실패로 멈추고 알람이 가는 편이 낫다. 그래서 `OnFailure=`로 실패 시 알림 유닛을 붙이기도 한다.
+
+## 멈출 때는 cgroup 전체를 정리한다
+
+`systemctl stop`은 메인 프로세스만이 아니라 서비스 cgroup에 든 모든 프로세스에 SIGTERM을 보낸다(기본 `KillMode=control-group`). 셸 스크립트가 띄운 자식, 앱이 띄운 워커까지 다 받는다. `nohup`으로 띄운 앱의 부모만 죽였을 때 자식이 고아로 남던 문제가 여기서는 생기지 않는다. 시그널과 고아 이야기는 [리눅스 프로세스와 시그널](/posts/linux-processes-signals)에 있다.
+
+<SequenceDiagram
+  caption="systemctl stop: SIGTERM, 기다림, 그래도 남으면 SIGKILL"
+  actors={[
+    { id: "op", label: "운영자" },
+    { id: "pid1", label: "systemd" },
+    { id: "main", label: "메인 프로세스" },
+    { id: "child", label: "자식 워커" },
+  ]}
+  steps={[
+    { from: "op", to: "pid1", label: "stop", title: "멈춰 달라고 한다", detail: "ExecStop=이 있으면 먼저 그 명령을 실행한다. 없으면 바로 시그널 단계로 간다." },
+    { from: "pid1", to: "main", label: "SIGTERM", title: "cgroup의 모든 프로세스에 SIGTERM", detail: "KillMode=control-group이라 메인 프로세스와 자식 모두에 보낸다. 앱은 처리 중인 요청을 끝내고 스스로 나간다.", payload: "KillSignal=SIGTERM" },
+    { from: "pid1", to: "child", label: "SIGTERM", title: "자식도 같이 받는다", detail: "셸 스크립트로 띄운 워커, 앱이 fork한 자식도 같은 cgroup에 있어서 함께 받는다." },
+    { from: "pid1", to: "pid1", label: "TimeoutStopSec", title: "정해진 시간만큼 기다린다", detail: "기본 90초, 위 유닛은 20초다. 이 안에 모두 끝나면 inactive (dead)가 된다." },
+    { from: "pid1", to: "child", label: "SIGKILL", title: "남은 프로세스는 SIGKILL", detail: "시간이 지나도 남은 프로세스에 SIGKILL을 보낸다. 로그에 State 'stop-sigterm' timed out. Killing.이 남는다. 정리를 못 하고 죽었다는 뜻이니 앱의 종료 처리를 본다.", payload: "orders-api.service: State 'stop-sigterm' timed out. Killing." },
+  ]}
+/>
+
+재시작이나 배포 때마다 꼭 20초(또는 90초)가 걸린다면 앱이 SIGTERM을 무시하고 SIGKILL을 기다리는 것이다. `TimeoutStopSec`을 줄이는 건 답이 아니고, 앱에 SIGTERM 처리를 넣는다. 반대로 긴 작업을 하는 워커라면 `TimeoutStopSec`을 그 작업이 끝날 만큼 늘린다. 쿠버네티스의 `terminationGracePeriodSeconds`와 같은 역할이다.
+
+## 남의 유닛은 drop-in으로 고친다
+
+nginx나 PostgreSQL처럼 패키지가 설치한 유닛을 `/lib/systemd/system/`에서 직접 고치면 다음 패키지 업데이트에 덮어써진다. 고치고 싶은 줄만 drop-in 파일로 얹는다.
+
+```bash
+# /etc/systemd/system/nginx.service.d/override.conf를 편집기로 연다
+sudo systemctl edit nginx
+
+# 합쳐진 결과 확인 (원본과 drop-in이 순서대로 나온다)
+systemctl cat nginx
+```
+
+```ini
+# /etc/systemd/system/nginx.service.d/override.conf
+[Service]
+LimitNOFILE=65535
+Restart=on-failure
+```
+
+`systemctl edit`은 저장할 때 `daemon-reload`까지 해 준다. 손으로 파일을 만들었다면 직접 해야 한다. 함정은 목록형 설정이다. `ExecStart=`는 여러 번 쓰면 덮어쓰지 않고 쌓인다. 그래서 drop-in에서 바꾸려면 먼저 빈 값으로 지우고 새로 써야 한다.
+
+```ini
+[Service]
+# 원본의 ExecStart를 지운다
+ExecStart=
+# 새 ExecStart
+ExecStart=/usr/bin/python3 /srv/orders/app.py --workers 4
+```
+
+빈 줄 없이 두 번째 `ExecStart=`만 쓰면 위의 verify 결과처럼 `more than one ExecStart= setting ... Refusing.`이 나오고 서비스가 아예 뜨지 않는다.
+
+## journalctl로 로그 좁히기
+
+systemd 아래의 서비스 로그는 journald가 모은다. Ubuntu 24.04는 `/var/log/journal/`에 저장해서 재부팅 뒤에도 남는다. 쓸 만한 옵션 조합은 많지 않다.
+
+```bash
+# 이 서비스의 로그를 따라가며 본다 (tail -f처럼)
+journalctl -u orders-api -f
+
+# 10분 전부터, 경고 이상만
+journalctl -u orders-api --since "10 min ago" -p warning
+
+# 시각 범위를 정확히
+journalctl -u orders-api --since "2026-10-20 14:00" --until "2026-10-20 14:30"
+
+# 지난 부팅의 로그 (재부팅 직전에 무슨 일이 있었나)
+journalctl -u orders-api -b -1
+
+# 메타데이터 없이 메시지만 (grep, awk로 넘길 때)
+journalctl -u orders-api --since today -o cat | grep -c "status=500"
+
+# 커널 메시지만 (OOM killer 흔적 찾기)
+journalctl -k --since "1 hour ago" | grep -i "out of memory"
+
+# journal이 쓰는 디스크
+journalctl --disk-usage
+```
+
+`-u`는 systemd가 서비스를 다루며 남긴 줄(Started, Failed 등)과 앱이 출력한 줄을 함께 보여 준다. 앱이 죽은 이유는 대개 systemd의 `Main process exited` 줄 바로 위, 앱의 마지막 출력에 있다. 출력은 이렇게 생겼다(예시).
+
+```text
+Oct 20 14:52:09 web-1 python3[4301]: Traceback (most recent call last):
+Oct 20 14:52:09 web-1 python3[4301]:   File "/srv/orders/app.py", line 3, in <module>
+Oct 20 14:52:09 web-1 python3[4301]: KeyError: 'DATABASE_URL'
+Oct 20 14:52:10 web-1 systemd[1]: orders-api.service: Main process exited, code=exited, status=1/FAILURE
+```
+
+journal이 디스크를 너무 많이 쓰면 `/etc/systemd/journald.conf`의 `SystemMaxUse=`로 상한을 둔다. 기본은 파일 시스템의 10%(최대 4GB)다. 급하면 `sudo journalctl --vacuum-size=500M`으로 오래된 것부터 지운다. 대량 로그를 grep하고 집계하는 방법은 [grep, awk, sed로 로그 읽기](/posts/linux-grep-awk-sed)에서 따로 다룬다.
+
+## cron 대신 timer
+
+매일 새벽 백업을 cron 대신 timer로 걸어 본다. 서비스 하나와 같은 이름의 타이머 하나를 만든다.
+
+```ini
+# /etc/systemd/system/orders-backup.service
+[Unit]
+Description=Nightly orders backup
+
+[Service]
+Type=oneshot
+User=orders
+ExecStart=/usr/bin/pg_dump -Fc -f /var/backups/orders/orders.dump orders
+```
+
+```ini
+# /etc/systemd/system/orders-backup.timer
+[Unit]
+Description=Run orders backup every night
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+# 둘 다 검사
+systemd-analyze verify /etc/systemd/system/orders-backup.service /etc/systemd/system/orders-backup.timer
+
+# 시각 표현이 언제 걸리는지 미리 본다
+systemd-analyze calendar --iterations=3 '*-*-* 03:15:00' 'Mon..Fri 09:00'
+
+# 타이머를 켜고 (서비스가 아니라 타이머를 enable한다) 목록을 본다
+sudo systemctl enable --now orders-backup.timer
+systemctl list-timers orders-backup.timer
+
+# 기다리지 않고 지금 한 번 돌려 보기
+sudo systemctl start orders-backup.service
+```
+
+```text
+Normalized form: *-*-* 03:15:00
+    Next elapse: Wed 2026-10-21 03:15:00 UTC
+       From now: 12h left
+   Iteration #2: Thu 2026-10-22 03:15:00 UTC
+       From now: 1 day 12h left
+   Iteration #3: Fri 2026-10-23 03:15:00 UTC
+       From now: 2 days left
+
+  Original form: Mon..Fri 09:00
+Normalized form: Mon..Fri *-*-* 09:00:00
+    Next elapse: Wed 2026-10-21 09:00:00 UTC
+       From now: 18h left
+```
+
+verify는 아무것도 출력하지 않고 통과했고, `calendar` 출력은 실제로 돌린 결과다. `list-timers`는 이렇게 나온다(예시).
+
+```text
+NEXT                        LEFT LAST PASSED UNIT                ACTIVATES
+Wed 2026-10-21 03:21:44 UTC  12h -    -      orders-backup.timer orders-backup.service
+
+1 timers listed.
+Pass --all to see loaded but inactive timers, too.
+```
+
+`NEXT`가 03:15가 아니라 03:21인 건 `RandomizedDelaySec=10min`이 0~10분 사이에서 시각을 흔들었기 때문이다. 서버 수백 대가 같은 시각에 백업 저장소를 두드리는 일을 막는다. 시간대는 서버의 시간대를 따르고, `OnCalendar=*-*-* 03:15:00 Asia/Seoul`처럼 끝에 적을 수도 있다.
+
+cron과 비교하면 timer가 나은 점은 이렇다. 로그가 `journalctl -u orders-backup`으로 바로 모이고, 실패하면 `systemctl --failed`에 뜬다. 앞의 작업이 아직 돌고 있으면 같은 서비스를 겹쳐 띄우지 않는다(cron은 겹쳐 띄워서 `flock`을 따로 써야 한다). `Persistent=true`면 서버가 꺼져 있던 동안 놓친 실행을 켜진 직후 한 번 해 준다. 실행 환경도 유닛 파일에 다 적혀 있다. cron은 `PATH`가 짧은 최소 환경이라 "손으로 치면 되는데 cron에서는 안 된다"가 흔한데, timer는 서비스와 같은 방식으로 돌아서 환경을 예측하기 쉽다. 대신 파일이 두 개고 문법이 길다. 사용자 한 명이 개인 작업을 거는 정도라면 `crontab -e`가 여전히 빠르다.
+
+## 서비스가 안 뜰 때 따라가는 순서
+
+`systemctl start`가 실패하면 status의 `Main PID` 줄과 journal을 본다. 종료 코드 중 200번대는 앱이 아니라 systemd가 앱을 띄우는 준비 단계에서 실패했다는 뜻이라 원인이 빨리 좁혀진다.
+
+```text
+× orders-api.service - Orders API
+     Loaded: loaded (/etc/systemd/system/orders-api.service; enabled; preset: enabled)
+     Active: failed (Result: exit-code) since Tue 2026-10-20 15:02:11 UTC; 4s ago
+    Process: 5120 ExecStart=/usr/bin/python3 /srv/orders/app.py (code=exited, status=217/USER)
+   Main PID: 5120 (code=exited, status=217/USER)
+        CPU: 4ms
+```
+
+이 예시처럼 status가 숫자로 나오면 뜻은 이렇다.
+
+- `203/EXEC`: 실행 파일이 없거나 실행 권한이 없다. 경로 오타, 스크립트의 `#!` 줄, CRLF 줄바꿈을 본다.
+- `217/USER`: `User=`의 사용자가 없다. `id orders`로 확인한다.
+- `200/CHDIR`: `WorkingDirectory=`가 없거나 그 사용자가 들어갈 수 없다. `namei -l`로 경로를 본다.
+- `226/NAMESPACE`: `ReadWritePaths=`, `PrivateTmp=` 같은 격리 설정이 가리키는 경로가 없다.
+- `status=1/FAILURE` 같은 작은 숫자: 앱이 스스로 끝낸 것이다. journal에서 앱의 마지막 출력을 본다.
+- `code=killed, status=9/KILL`: 누군가 SIGKILL을 보냈다. `MemoryMax=`에 걸렸거나 커널 OOM killer라면 `journalctl -k`에 흔적이 있다.
+
+그다음은 손으로 똑같이 띄워 보는 것이다. 같은 사용자, 같은 작업 디렉터리, 같은 환경 변수로 실행하면 앱이 내는 에러를 직접 본다.
+
+```bash
+# 서비스와 같은 조건으로 한 번 실행해 본다
+sudo -u orders bash -c 'cd /srv/orders && set -a && . /etc/orders/orders.env && /usr/bin/python3 app.py'
+
+# 유닛에 실제로 적용된 값 확인
+systemctl show orders-api -p User -p WorkingDirectory -p Environment -p ExecStart
+```
+
+`EnvironmentFile`은 셸 스크립트가 아니어서 `$(...)` 같은 명령 치환이 실행되지 않고, 따옴표 처리도 셸과 조금 다르다. 손으로는 되는데 서비스로는 안 되면 이 차이를 의심한다.
+
+<Callout kind="warning" title="원격 서버에서 sshd나 네트워크 유닛을 건드릴 때">
+`systemctl stop ssh`나 `systemctl restart systemd-networkd`를 SSH 세션에서 실행하면 그 순간 접속이 끊기고, 설정이 틀렸다면 다시 들어갈 길이 없다. 바꾸기 전에 클라우드 콘솔이나 IPMI 같은 다른 접속 경로를 확인하고, sshd는 `sudo sshd -t`로 설정을 먼저 검사한다. 되돌릴 장치로 `sudo systemd-run --on-active=5min /bin/sh -c 'cp /etc/ssh/sshd_config.bak /etc/ssh/sshd_config && systemctl restart ssh'`처럼 5분 뒤 백업한 설정으로 돌리는 작업을 걸어 둔다. 새 설정으로 다시 접속되는 걸 확인했으면 `systemctl list-timers 'run-*'`로 그 임시 타이머 이름을 찾아 `systemctl stop`으로 취소한다.
+</Callout>
+
+## 컨테이너 안에는 systemd가 없다
+
+처음에 본 `System has not been booted with systemd as init system (PID 1)`은 이 컨테이너의 PID 1이 systemd가 아니라서 나온 메시지다. Docker나 쿠버네티스의 컨테이너는 대부분 앱 하나가 PID 1이다. 그래서 Dockerfile 안에서 `systemctl enable nginx`나 `service nginx start`를 쓰면 실패하거나 아무 효과가 없다. 컨테이너에서는 앱을 포그라운드로 띄우고(`nginx -g 'daemon off;'`), 재시작은 Docker의 `--restart`나 쿠버네티스의 kubelet이, 로그는 표준 출력으로 런타임이 모은다. systemd가 서버에서 하던 일을 컨테이너 세계에서는 런타임과 오케스트레이터가 나눠 맡는 셈이다. 컨테이너 안 PID 1이 맡아야 하는 신호 전달과 좀비 처리는 [리눅스 프로세스와 시그널](/posts/linux-processes-signals)에서 봤다.
+
+## nohup 대신 유닛 파일 한 장
+
+`nohup`이 하던 일은 SIGHUP을 무시하는 것 하나였다. 유닛 파일 한 장을 쓰면 부팅 때 띄우기(`enable`), 죽으면 다시 띄우기(`Restart=`와 시작 한도), 멈출 때 cgroup 전체 정리(SIGTERM 뒤 `TimeoutStopSec`, 그다음 SIGKILL), 로그 모으기(journal)를 systemd가 맡는다. 유닛을 고치면 `daemon-reload`, 패키지 유닛은 drop-in, 주기 작업은 timer다. 안 뜨면 status의 종료 코드로 어느 단계에서 막혔는지부터 본다.
+
+## 면접에서 나올 만한 질문
+
+### systemctl enable과 start의 차이는 무엇인가요?
+
+start는 지금 서비스를 띄우는 것이고 enable은 부팅 때 뜨도록 등록하는 것이다. enable은 `[Install]`의 `WantedBy=`를 읽어 `multi-user.target.wants/` 같은 디렉터리에 유닛 파일 링크를 만든다. 둘은 독립이라 start만 하면 재부팅 뒤에 안 뜨고, enable만 하면 지금은 안 떠 있다. 둘 다 하려면 `enable --now`를 쓴다.
+
+### 유닛 파일을 고쳤는데 반영이 안 됩니다. 왜 그런가요?
+
+systemd는 유닛 파일을 메모리에 읽어 두고 쓰기 때문에, 고친 뒤 `systemctl daemon-reload`를 해야 새 내용을 읽는다. 그다음 restart해야 서비스에 적용된다. daemon-reload는 유닛 정의만 다시 읽고 서비스를 재시작하지 않으며, `systemctl reload`는 유닛과 무관하게 앱에 설정을 다시 읽으라는 신호(ExecReload)를 보내는 것이라 다르다.
+
+### Restart=always로 했는데 서비스가 결국 멈춰 있습니다. 이유는요?
+
+시작 한도에 걸린 것이다. 기본값으로 10초 안에 5번을 넘게 시작하면 `start-limit-hit`으로 실패 처리하고 더 띄우지 않는다. 기본 RestartSec이 100ms라 뜨자마자 죽는 앱은 금방 걸린다. 원인을 고친 뒤 `reset-failed`로 풀고, `[Unit]`의 `StartLimitIntervalSec`·`StartLimitBurst`와 `RestartSec`을 같이 조정한다.
+
+### systemctl stop을 하면 어떤 일이 일어나나요?
+
+ExecStop이 있으면 실행하고, 서비스 cgroup의 모든 프로세스에 SIGTERM을 보낸 뒤 TimeoutStopSec(기본 90초)만큼 기다린다. 그때까지 남은 프로세스는 SIGKILL로 끝낸다. cgroup 단위라 셸이 띄운 자식이나 앱의 워커까지 함께 정리되고, 매번 타임아웃까지 걸린다면 앱이 SIGTERM을 처리하지 않는 것이다.
+
+### 패키지가 설치한 유닛의 설정을 바꾸려면 어떻게 하나요?
+
+`/lib/systemd/system`의 원본을 고치지 않고 `systemctl edit`으로 `/etc/systemd/system/<유닛>.d/override.conf` drop-in을 만든다. 원본은 패키지 업데이트에 덮어써지지만 drop-in은 남는다. ExecStart 같은 목록형 설정은 쌓이기 때문에 빈 `ExecStart=`로 먼저 지운 뒤 새 값을 써야 한다.
+
+### cron 대신 systemd timer를 쓰는 이유는요?
+
+실행 기록과 출력이 journal에 모이고 실패가 `systemctl --failed`에 보인다. 같은 작업이 아직 돌고 있으면 겹쳐 띄우지 않고, `Persistent=true`로 꺼져 있던 동안 놓친 실행을 보충하며, `RandomizedDelaySec`으로 여러 서버의 실행 시각을 흩는다. 실행 환경이 유닛에 명시돼서 cron의 짧은 PATH 같은 차이도 없다. 대신 파일이 둘이고 설정이 길어서 간단한 개인 작업은 cron이 편하다.
+
+### 서비스가 status=203/EXEC로 실패합니다. 무엇을 보나요?
+
+200번대 종료 코드는 systemd가 앱을 실행하기 전 준비 단계에서 실패했다는 뜻이고, 203은 실행 파일을 실행하지 못했다는 뜻이다. ExecStart 경로가 맞는지, 실행 권한이 있는지, 스크립트라면 `#!` 줄과 CRLF 줄바꿈을 본다. 비슷하게 217은 없는 사용자, 200은 작업 디렉터리 문제다.
+
+### 컨테이너 안에서 systemctl이 안 되는 이유는요?
+
+systemctl은 PID 1로 떠 있는 systemd와 D-Bus로 대화하는 도구인데, 컨테이너는 보통 앱이 PID 1이라 대화할 상대가 없다. 그래서 "System has not been booted with systemd as init system"이 나온다. 컨테이너에서는 앱을 포그라운드로 띄우고 재시작과 로그는 Docker나 kubelet 같은 런타임에 맡긴다.

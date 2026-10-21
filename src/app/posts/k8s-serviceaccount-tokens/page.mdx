@@ -1,0 +1,574 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-serviceaccount-tokens");
+
+보안 점검에서 이런 질문을 받았다. "CI가 클러스터에 붙을 때 쓰는 토큰, 언제 만료돼요?" CI 설정에 들어 있던 토큰은 몇 년 전에 누군가 Secret에서 꺼내 둔 것이었다. 꺼내서 가운데 조각을 디코드해 봤다.
+
+```bash
+# Secret에 든 토큰을 꺼내 JWT의 가운데(클레임) 조각만 디코드한다
+kubectl -n shop get secret orders-legacy-token -o jsonpath='{.data.token}' | base64 -d > tok.txt
+python3 dec.py < tok.txt
+```
+
+```text
+{
+  "iss": "kubernetes/serviceaccount",
+  "kubernetes.io/serviceaccount/namespace": "shop",
+  "kubernetes.io/serviceaccount/secret.name": "orders-legacy-token",
+  "kubernetes.io/serviceaccount/service-account.name": "orders",
+  "kubernetes.io/serviceaccount/service-account.uid": "8128176a-2dee-4be0-bb72-51015c6e71cb",
+  "sub": "system:serviceaccount:shop:orders"
+}
+```
+
+`exp`가 없다. 만료가 없는 토큰이다. 받는 쪽(`aud`)도 정해져 있지 않고, 어느 Pod에 묶인 것도 아니다. 이 문자열을 가진 사람은 Secret이 지워질 때까지 어디서든 이 ServiceAccount로 API를 부를 수 있다. 지금 Pod 안에 들어가는 토큰은 이것과 완전히 다르다. 이 글은 두 토큰이 어떻게 다른지, 지금의 토큰이 어떻게 발급되고 갱신되고 죽는지, 그리고 그 토큰을 클러스터 밖(Vault, AWS)이 믿게 하는 방법을 kwok으로 띄운 쿠버네티스 1.37.0 클러스터에서 직접 확인한다.
+
+이 토큰으로 무엇을 할 수 있는지는 [RBAC](/posts/k8s-rbac)가 정한다. JWT 서명과 키 교체의 일반론은 [JWT 키 교체](/posts/jwt-key-rotation)에 있다. 같은 보안 묶음의 다른 글은 [securityContext](/posts/k8s-security-context)와 [Pod Security Admission](/posts/k8s-pod-security-admission)이다.
+
+## ServiceAccount는 Pod의 신분증이다
+
+사람은 인증서나 OIDC로 로그인하고, Pod 안의 프로그램은 ServiceAccount로 로그인한다. 쿠버네티스가 직접 오브젝트로 갖고 있는 유일한 신원이다. 네임스페이스마다 `default`가 자동으로 생기고, Pod에 `serviceAccountName`을 안 적으면 그걸 쓴다.
+
+```bash
+# ServiceAccount를 만들고, 그 이름으로 토큰을 받아 API 서버가 누구로 보는지 확인한다
+kubectl -n shop create serviceaccount orders
+kubectl --token "$(kubectl -n shop create token orders --bound-object-kind=Pod --bound-object-name=vault-client)" auth whoami
+```
+
+```text
+serviceaccount/orders created
+ATTRIBUTE                                           VALUE
+Username                                            system:serviceaccount:shop:orders
+UID                                                 8128176a-2dee-4be0-bb72-51015c6e71cb
+Groups                                              [system:serviceaccounts system:serviceaccounts:shop system:authenticated]
+Extra: authentication.kubernetes.io/credential-id   [JTI=cf2883d3-8533-49da-9403-5696962ed451]
+Extra: authentication.kubernetes.io/node-name       [node-1]
+Extra: authentication.kubernetes.io/node-uid        [97f3bbd1-515b-4bb7-ab4c-3efd40c924ce]
+Extra: authentication.kubernetes.io/pod-name        [vault-client]
+Extra: authentication.kubernetes.io/pod-uid         [ad82a3c2-43bd-40a0-bda8-9971d35fe75e]
+```
+
+(위 명령의 kubectl 서버·CA 옵션은 줄였다.) 사용자 이름은 `system:serviceaccount:<네임스페이스>:<이름>` 형식이고 그룹이 두 개 붙는다. `system:serviceaccounts`(모든 SA)와 `system:serviceaccounts:shop`(이 네임스페이스의 모든 SA)이다. RBAC에서 "shop의 모든 SA에게 읽기를 준다"를 그룹 하나로 쓸 수 있는 이유다. 반대로 `system:serviceaccounts`에 권한을 주면 클러스터의 모든 Pod에 준 것이니 조심한다.
+
+`Extra`에 Pod와 노드 이름까지 들어 있는 게 눈에 띈다. 이 토큰이 특정 Pod에 묶인 토큰이라서다. 이 정보는 감사 로그에도 남아서 "어느 Pod가 이 요청을 보냈나"를 추적할 수 있다.
+
+## Pod 안의 토큰은 어디서 오나
+
+ServiceAccount가 있는 Pod를 하나 만들고 API 서버에 저장된 모습을 보면, 매니페스트에 없던 볼륨이 붙어 있다.
+
+```bash
+# serviceAccountName만 적은 Pod를 만든다
+kubectl -n shop run orders --image=busybox:1.36 --overrides='{"spec":{"serviceAccountName":"orders"}}' -- sleep 3600
+kubectl -n shop get pod orders -o yaml   # volumes 부분만 옮긴다
+```
+
+```text
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-tglvq
+      readOnly: true
+  volumes:
+  - name: kube-api-access-tglvq
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+```
+
+ServiceAccount 어드미션 플러그인이 Pod를 저장하기 전에 `kube-api-access-<랜덤>`이라는 projected 볼륨을 넣었다. projected 볼륨은 여러 출처를 한 디렉터리에 모아 주는 볼륨이다. 토큰(`token`), API 서버 인증서를 검증할 CA(`ca.crt`), 자기 네임스페이스 이름(`namespace`) 세 파일이 생긴다. client-go 같은 라이브러리가 "클러스터 안에서 실행 중"일 때 읽는 파일이 이것이다.
+
+토큰 파일은 Secret에서 오지 않는다. kubelet이 Pod를 띄울 때 API 서버에 그 Pod용 토큰을 새로 발급해 달라고 요청한다. 이 요청을 TokenRequest라고 한다.
+
+<SequenceDiagram
+  caption="Pod 하나에 토큰이 들어가기까지"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "app", label: "컨테이너" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "create pod", title: "Pod를 만든다", detail: "매니페스트에는 serviceAccountName만 있다." },
+    { from: "api", to: "api", label: "볼륨 주입", title: "어드미션이 볼륨을 넣는다", detail: "ServiceAccount 플러그인이 kube-api-access 볼륨과 마운트를 추가하고 저장한다.", payload: "serviceAccountToken: { expirationSeconds: 3607, path: token }" },
+    { from: "kubelet", to: "api", label: "TokenRequest", title: "kubelet이 토큰을 요청한다", detail: "노드에 배정된 Pod를 보고 serviceaccounts/orders/token에 POST한다. 이 Pod에 묶어 달라고 Pod 이름과 UID를 함께 보낸다." },
+    { from: "api", to: "kubelet", label: "서명된 JWT", title: "API 서버가 서명한다", detail: "서명 키로 JWT를 만든다. etcd에는 저장하지 않는다. 검증할 때 서명과 Pod가 살아 있는지로 판단한다." },
+    { from: "kubelet", to: "app", label: "token 파일", title: "tmpfs에 파일로 쓴다", detail: "노드 디스크가 아니라 메모리 파일 시스템에 쓰고 컨테이너에 읽기 전용으로 마운트한다." },
+    { from: "kubelet", to: "api", label: "재발급", title: "만료 전에 바꾼다", detail: "수명의 80%가 지나거나 24시간이 넘으면 새로 받아 파일을 바꾼다. 앱은 파일을 다시 읽어야 새 토큰을 쓴다." },
+  ]}
+/>
+
+토큰이 etcd에 저장되지 않는다는 점이 옛 방식과 가장 큰 차이다. etcd 백업이 새도 토큰은 안 샌다. Secret처럼 `list` 권한으로 꺼낼 수도 없다.
+
+## 토큰을 열어 보면
+
+`kubectl create token`은 kubelet이 하는 TokenRequest를 사람이 직접 보내는 명령이다. Pod에 묶어서 10분짜리를 받아 열어 봤다.
+
+```bash
+# orders Pod에 묶인 10분짜리 토큰을 받아 클레임을 본다
+kubectl -n shop create token orders --bound-object-kind=Pod --bound-object-name=orders \
+  --bound-object-uid=77a43a17-2818-4a63-a2ff-6dfe9f7c6020 --duration=10m | python3 dec.py
+```
+
+```text
+{
+  "aud": [
+    "https://kubernetes.default.svc.cluster.local"
+  ],
+  "exp": 1792544689,
+  "iat": 1792544089,
+  "iss": "https://kubernetes.default.svc.cluster.local",
+  "jti": "b7679214-de95-41d8-bca7-4e3e16f3f623",
+  "kubernetes.io": {
+    "namespace": "shop",
+    "node": {
+      "name": "node-1",
+      "uid": "97f3bbd1-515b-4bb7-ab4c-3efd40c924ce"
+    },
+    "pod": {
+      "name": "orders",
+      "uid": "77a43a17-2818-4a63-a2ff-6dfe9f7c6020"
+    },
+    "serviceaccount": {
+      "name": "orders",
+      "uid": "8128176a-2dee-4be0-bb72-51015c6e71cb"
+    }
+  },
+  "nbf": 1792544089,
+  "sub": "system:serviceaccount:shop:orders"
+}
+lifetime_s = 600
+```
+
+`dec.py`는 가운데 조각을 base64url로 풀어 JSON으로 찍고 `exp - iat`를 더한 다섯 줄짜리 스크립트다. 아래 그림에서 각 조각을 눌러 보면 무엇을 검증하는 데 쓰이는지 나온다.
+
+<UrlAnatomy
+  caption="바운드 토큰의 조각과 클레임"
+  separator=""
+  joiner="."
+  params={[
+    { key: "header", display: "eyJhbGciOiJSUzI1NiIs…", title: "헤더: 어느 키로 서명했나", description: "alg는 RS256, kid는 서명 키의 지문이다. 검증하는 쪽은 /openid/v1/jwks에서 같은 kid의 공개 키를 찾는다.", code: "{\n  \"alg\": \"RS256\",\n  \"kid\": \"sCm_oJs_PTR5-7GqSzgIkaI1uZRe8r1MFk0ekAJso-k\"\n}", required: true },
+    { key: "iss", display: "iss", title: "iss: 누가 발급했나", description: "API 서버의 --service-account-issuer 값이다. 클러스터 밖에서 검증할 때 이 주소의 OIDC 디스커버리 문서를 찾아간다. 옛 토큰은 kubernetes/serviceaccount라는 고정 문자열이었다." },
+    { key: "aud", display: "aud", title: "aud: 누구에게 보여 줄 토큰인가", description: "기본값은 API 서버 자신이다. Vault나 AWS STS에 보여 줄 토큰은 그쪽 이름으로 따로 받는다. 받는 쪽은 자기 이름이 아니면 거절해야 한다." },
+    { key: "exp", display: "exp·iat·nbf", title: "언제부터 언제까지", description: "이 토큰은 iat부터 600초 동안 유효하다. 옛 토큰에는 이 칸이 아예 없었다." },
+    { key: "bind", display: "kubernetes.io", title: "무엇에 묶였나", description: "네임스페이스, ServiceAccount UID, Pod 이름과 UID, 노드가 들어 있다. API 서버는 검증할 때 이 Pod가 아직 있는지, UID가 같은지 확인한다. Pod를 지우면 토큰도 죽는 이유다.", required: true },
+    { key: "sub", display: "sub", title: "sub: 누구인가", description: "system:serviceaccount:shop:orders. AWS IAM 신뢰 정책이 조건으로 비교하는 값이 이것이다." },
+    { key: "sig", display: "서명", title: "서명", description: "API 서버의 --service-account-signing-key-file 개인 키로 서명한다. 공개 키는 --service-account-key-file로 검증에 쓴다. 키를 바꿀 때는 옛 공개 키를 한동안 함께 둬야 이미 발급된 토큰이 살아남는다." },
+  ]}
+/>
+
+`jti`는 토큰마다 다른 ID다. 위 `whoami` 출력의 `credential-id`가 이 값이라, 감사 로그에서 같은 토큰으로 보낸 요청을 묶어 볼 수 있다.
+
+## 1시간짜리 토큰이 1년을 사는 이유
+
+앞의 Pod 볼륨에 적힌 수명은 `expirationSeconds: 3607`이었다. 3600이 아니라 3607이다. kubelet이 요청하는 것과 같은 조건으로 받아 봤다.
+
+```bash
+# kubelet처럼 Pod에 묶고 3607초를 요청한다
+kubectl -n shop create token orders --bound-object-kind=Pod --bound-object-name=orders \
+  --bound-object-uid=77a43a17-2818-4a63-a2ff-6dfe9f7c6020 --duration=3607s | python3 dec.py | grep -E 'lifetime|warnafter'
+```
+
+```text
+    "warnafter": 1792547705
+lifetime_s = 31536000
+```
+
+수명이 31536000초, 1년이다. API 서버의 `--service-account-extend-token-expiration`(기본 true)이 3607초 요청을 알아보고 늘려 준 것이다. 대신 `warnafter`에 원래 만료 시각을 적어 둔다. TokenRequest 응답을 그대로 보면 이 구조가 더 분명하다.
+
+```bash
+# TokenRequest API를 직접 부르고, 응답의 만료 시각과 토큰 안의 exp를 비교한다
+kubectl create --raw /api/v1/namespaces/shop/serviceaccounts/orders/token -f tr.json > trout.json
+date -u +%FT%TZ
+jq '{expirationTimestamp: .status.expirationTimestamp, spec: .spec.expirationSeconds}' trout.json
+jq -r .status.token trout.json | python3 dec.py | grep -E 'lifetime|warnafter'
+```
+
+```text
+2026-10-21T01:06:10Z
+{
+  "expirationTimestamp": "2026-10-21T02:06:17Z",
+  "spec": 3607
+}
+    "warnafter": 1792548377
+lifetime_s = 31536000
+```
+
+응답은 kubelet에게 "1시간 뒤 만료"라고 알려 주고, 토큰 안의 `exp`는 1년 뒤다. kubelet은 응답의 시각을 믿고 1시간 안에 새 토큰으로 바꾼다. 그런데 토큰 파일을 한 번 읽고 메모리에 들고 있는 오래된 클라이언트도 1년 동안은 끊기지 않는다. 바운드 토큰이 처음 기본값이 될 때(1.21 무렵) 그런 앱이 갑자기 401을 맞지 않게 넣은 완충 장치다. `warnafter`가 지난 토큰이 쓰이면 API 서버는 감사 로그에 `authentication.k8s.io/stale-token` 주석을 남기고 `serviceaccount_stale_tokens_total` 메트릭을 올린다. 이 숫자가 0이 아니면 토큰 파일을 다시 읽지 않는 앱이 있다는 뜻이다.
+
+kubelet의 갱신 시점을 시간 순서로 놓으면 이렇다.
+
+<AlgoTrace
+  caption="kubelet 기준 3607초 토큰 하나의 일생"
+  cells={["0초", "2885초", "3607초", "warnafter", "1년"]}
+  memoryLabel="token 파일"
+  steps={[
+    { pointer: 0, memory: ["토큰 A"], caption: "Pod가 뜨면서 토큰 A가 파일로 들어간다. kubelet이 아는 만료는 3607초 뒤다." },
+    { pointer: 1, memory: ["토큰 A", "토큰 B"], caption: "수명의 80%가 지났다. kubelet이 토큰 B를 받아 파일을 바꾼다. A는 아직 유효하다." },
+    { pointer: 1, found: [1], memory: ["토큰 B"], caption: "파일을 다시 읽는 앱은 B를 쓴다. client-go는 주기적으로 파일을 다시 읽는다." },
+    { pointer: 3, memory: ["토큰 B"], caption: "A를 계속 쓰는 앱이 있으면 warnafter 이후 stale-token으로 기록된다. 요청은 아직 성공한다." },
+    { pointer: 4, memory: ["토큰 B"], caption: "1년이 지나면 A는 정말 만료된다. 그 앱은 그때 401을 맞는다." },
+  ]}
+/>
+
+길이를 직접 정할 수도 있다. TokenRequest의 최소 수명은 10분이다.
+
+```bash
+# 5분짜리를 요청하면 거절된다
+kubectl -n shop create token orders --duration=5m
+```
+
+```text
+error: failed to create token: TokenRequest.authentication.k8s.io "" is invalid: spec.expirationSeconds: Invalid value: 300: may not specify a duration less than 10 minutes
+```
+
+최대값은 API 서버의 `--service-account-max-token-expiration`이 정한다. 이 실습 클러스터는 따로 정하지 않아서 `--duration=48h`도 그대로 172800초짜리가 나왔다. 운영에서는 이 값을 정해 두지 않으면 누군가 `kubectl create token --duration=8760h`로 1년짜리 토큰을 만들어 CI에 넣는 일을 막을 수 없다.
+
+## Pod가 지워지면 토큰도 죽는다
+
+바운드 토큰은 서명만 맞는다고 통과하지 않는다. 검증할 때 토큰에 적힌 Pod가 아직 있는지, UID가 같은지 확인한다. 이 검증은 TokenReview API로 외부에서도 요청할 수 있다. Vault 같은 시스템이 "이 토큰 진짜냐"를 API 서버에 묻는 방법이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="토큰을 받은 쪽은 TokenReview로 API 서버에 진위를 묻는다"
+  zones={[
+    { id: "node", label: "node-1", x: 6, y: 6, w: 150, h: 288, tone: "private" },
+    { id: "cp", label: "control plane", x: 172, y: 6, w: 222, h: 140, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "pod", label: "orders Pod", sub: "token 파일", x: 80, y: 80, icon: "container", w: 112 },
+    { id: "kubelet", label: "kubelet", sub: "TokenRequest", x: 80, y: 230, icon: "server", w: 112 },
+    { id: "api", label: "API server", sub: "TokenReview", x: 228, y: 80, icon: "gateway", w: 100 },
+    { id: "etcd", label: "etcd", sub: "Pod 오브젝트", x: 340, y: 80, icon: "db", w: 88 },
+    { id: "vault", label: "Vault", sub: "aud=vault", x: 300, y: 230, icon: "lock", w: 104 },
+  ]}
+  links={[
+    { from: "kubelet", to: "api", label: "발급" },
+    { from: "pod", to: "vault", label: "로그인" },
+    { from: "vault", to: "api", label: "검증" },
+    { from: "api", to: "etcd" },
+  ]}
+  steps={[
+    { path: ["kubelet", "api"], packet: "TokenRq", title: "토큰을 받는다", detail: "kubelet이 orders Pod에 묶인 토큰을 받아 파일로 넣는다." },
+    { path: ["pod", "vault", "api", "etcd"], packet: "JWT", title: "Vault가 진위를 묻는다", detail: "Pod가 토큰을 Vault에 내밀고, Vault는 그 토큰으로 TokenReview를 보낸다. API 서버는 서명과 Pod가 살아 있는지 본다.", payload: "{\"authenticated\":true,\"user\":\"system:serviceaccount:shop:orders\"}" },
+    { path: ["pod"], highlight: ["node"], title: "Pod를 지운다", detail: "kubectl delete pod orders. 토큰 파일을 미리 복사해 둔 사람이 있다고 해 보자." },
+    { path: ["pod", "vault", "api", "etcd"], packet: "JWT", blocked: true, title: "남은 토큰은 무효가 된다", detail: "토큰에 적힌 Pod가 없으니 서명이 맞아도 거절한다. 실습에서는 지운 뒤 십여 초 안에 거절로 바뀌었다.", payload: "service account token has been invalidated" },
+  ]}
+/>
+
+실제로 해 봤다.
+
+```bash
+# TokenReview를 보내는 작은 함수. $1은 토큰 파일, $2는 추가 spec 필드
+tr(){ printf '{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"token":"%s"%s}}' \
+  "$(cat $1)" "$2" | kubectl create -f - -o json | jq -c '.status | {authenticated, user: .user.username, error}'; }
+
+tr tok2.txt ""                         # Pod에 묶인 토큰
+kubectl -n shop delete pod orders --grace-period=0 --force
+sleep 12; tr tok2.txt ""               # Pod를 지운 뒤
+tr tok1.txt ""                         # Pod에 묶지 않고 받은 1시간짜리 토큰
+```
+
+```text
+{"authenticated":true,"user":"system:serviceaccount:shop:orders","error":null}
+Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. The resource may continue to run on the cluster indefinitely.
+pod "orders" force deleted from shop namespace
+{"authenticated":null,"user":null,"error":"[invalid bearer token, service account token has been invalidated]"}
+{"authenticated":true,"user":"system:serviceaccount:shop:orders","error":null}
+```
+
+지운 직후(2초 뒤)에 한 번 더 물었을 때는 아직 `true`였다. API 서버가 Pod 존재 여부를 informer 캐시로 보기 때문에 몇 초 늦을 수 있다. 마지막 줄도 중요하다. `kubectl create token`을 Pod 없이 받으면 ServiceAccount에만 묶인다. 그 토큰은 SA를 지우기 전까지, 만료 시각까지 유효하다. CI에 줄 토큰을 이렇게 받는다면 수명을 짧게 잡고, 필요하면 SA를 지웠다 다시 만드는 것이 회수 방법이다.
+
+## audience로 받는 쪽을 정한다
+
+API 서버용 토큰을 Vault에도, 사내 서비스에도 그대로 보여 주면 문제가 생긴다. 받은 쪽 누구든 그 토큰으로 API 서버를 부를 수 있다. 토큰 재사용 공격이다. 그래서 받는 쪽마다 `aud`가 다른 토큰을 따로 쓴다.
+
+```bash
+# vault용 토큰을 받는다
+kubectl -n shop create token orders --audience=vault --duration=10m > tok3.txt
+
+tr tok3.txt ""                           # API 서버가 자기 audience로 검증
+tr tok3.txt ',"audiences":["vault"]'     # vault audience로 검증
+```
+
+```text
+{"authenticated":null,"user":null,"error":"[invalid bearer token, token audiences [\"vault\"] is invalid for the target audiences [\"https://kubernetes.default.svc.cluster.local\"]]"}
+{"authenticated":true,"user":"system:serviceaccount:shop:orders","error":null}
+```
+
+vault용 토큰은 API 서버 로그인에는 쓸 수 없다. Vault가 털려서 토큰이 새도 API 서버는 안전하다. Pod에서는 projected 볼륨으로 이런 토큰을 받는다.
+
+```yaml
+spec:
+  serviceAccountName: orders
+  automountServiceAccountToken: false   # API 서버용 토큰은 넣지 않는다
+  containers:
+  - name: app
+    image: busybox:1.36
+    volumeMounts:
+    - name: vault-token
+      mountPath: /var/run/secrets/vault
+      readOnly: true
+  volumes:
+  - name: vault-token
+    projected:
+      sources:
+      - serviceAccountToken:
+          audience: vault
+          expirationSeconds: 900     # 600 미만이면 Pod 생성이 거절된다
+          path: token
+```
+
+처음에 `expirationSeconds: 300`으로 넣었더니 Pod 생성부터 막혔다.
+
+```text
+The Pod "vault-client" is invalid: 
+* spec.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds: Invalid value: 300: may not specify a duration less than 10 minutes
+```
+
+받는 쪽 검증 코드에서 흔한 실수는 `aud` 확인을 빼는 것이다. JWKS로 서명만 확인하고 `aud`를 안 보면, 같은 클러스터의 다른 용도 토큰이 다 통과한다.
+
+## 옛 방식: Secret에 든 영구 토큰
+
+맨 앞의 만료 없는 토큰이 옛 방식이다. 1.24 전에는 ServiceAccount를 만들면 컨트롤러가 `kubernetes.io/service-account-token` 타입 Secret을 자동으로 만들고 그 토큰을 Pod에 마운트했다. 지금은 자동으로 안 만든다(1.24 기본 꺼짐, 1.26 GA). 실습 클러스터에서 SA를 만든 뒤 Secret 목록은 비어 있었다. 지금도 손으로 만들면 생긴다.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orders-legacy-token
+  namespace: shop
+  annotations:
+    kubernetes.io/service-account.name: orders   # 이 SA의 토큰을 채워 달라
+type: kubernetes.io/service-account-token
+```
+
+```bash
+# 만들면 컨트롤러가 token, ca.crt, namespace를 채운다. 한 번 써 본 뒤 라벨을 본다
+kubectl apply -f legacy.yaml
+curl -sS --cacert ca.crt -H "Authorization: Bearer $(cat tokL.txt)" \
+  https://127.0.0.1:32732/api/v1/namespaces/shop/pods -o /dev/null -w '%{http_code}\n'
+kubectl -n shop get secret orders-legacy-token --show-labels
+```
+
+```text
+secret/orders-legacy-token created
+403
+NAME                  TYPE                                  DATA   AGE   LABELS
+orders-legacy-token   kubernetes.io/service-account-token   3      4s    kubernetes.io/legacy-token-last-used=2026-10-21
+```
+
+403은 인증은 통과했고 RBAC 권한이 없다는 뜻이다. 그 뒤 API 서버가 Secret에 `legacy-token-last-used` 라벨을 날짜로 붙였다. 옛 토큰이 실제로 쓰이는지 찾을 때 이 라벨을 본다. 1.29(베타)부터는 자동 생성된 옛 토큰을 오래(기본 1년) 안 쓰면 무효 표시를 하고 다시 일정 기간 뒤 지우는 정리 컨트롤러도 기본으로 켜져 있고, 1.30에 GA가 됐다. 손으로 만든 Secret은 정리 대상이 아니다.
+
+<ConceptDiagram
+  width={420}
+  height={260}
+  caption="옛 토큰과 바운드 토큰이 묶인 대상"
+  nodes={[
+    { id: "sa", label: "ServiceAccount", sub: "orders", x: 210, y: 40, w: 140 },
+    { id: "sec", label: "Secret 토큰", sub: "exp 없음, etcd", x: 80, y: 140, w: 130 },
+    { id: "tr", label: "TokenRequest", sub: "서명만, 저장 안 함", x: 340, y: 140, w: 150 },
+    { id: "leak", label: "누구든 꺼내 씀", sub: "list·백업", x: 80, y: 225, w: 130 },
+    { id: "pod", label: "Pod·노드에 묶임", sub: "aud·exp 있음", x: 340, y: 225, w: 150 },
+  ]}
+  edges={[
+    { from: "sa", to: "sec", label: "지우면 무효", dashed: true },
+    { from: "sa", to: "tr" },
+    { from: "sec", to: "leak" },
+    { from: "tr", to: "pod" },
+  ]}
+/>
+
+옛 토큰을 써야 하는 경우는 거의 없다. 클러스터 밖 도구가 토큰을 오래 들고 있어야 한다면 짧은 토큰을 주기적으로 `kubectl create token`으로 바꿔 넣거나, 그 도구가 OIDC 연동을 지원하는지 먼저 본다. 옛 토큰을 지울 때는 `legacy-token-last-used` 날짜가 오래된 것부터 지우고, 지운 뒤 401을 맞는 클라이언트가 없는지 감사 로그에서 확인한다.
+
+## 필요 없으면 마운트하지 않는다
+
+대부분의 앱은 쿠버네티스 API를 부르지 않는다. 그런데 기본 설정은 모든 Pod에 API 서버용 토큰을 넣는다. 앱에 원격 코드 실행 취약점이 있으면 공격자는 그 토큰으로 API를 두드려 본다. `default` SA에 실수로 권한을 줘 둔 클러스터라면 거기서 끝이다. 안 쓰면 넣지 않는다.
+
+```bash
+# shop의 default SA는 토큰을 마운트하지 않게 한다
+kubectl -n shop patch sa default -p '{"automountServiceAccountToken": false}'
+
+# 아무 설정 없는 Pod와, Pod에서 다시 켠 Pod를 비교한다
+kubectl -n shop run plain --image=busybox:1.36 -- sleep 3600
+kubectl -n shop run needs-api --image=busybox:1.36 --overrides='{"spec":{"automountServiceAccountToken":true}}' -- sleep 3600
+for p in plain needs-api; do echo "$p: $(kubectl -n shop get pod $p -o jsonpath='{.spec.volumes[*].name}')"; done
+```
+
+```text
+serviceaccount/default patched
+plain: 
+needs-api: kube-api-access-j6xd9
+```
+
+ServiceAccount에 둔 값은 기본값이고, Pod에 적은 값이 이긴다. 그래서 정책은 "SA에서 끄고, API가 필요한 Pod만 전용 SA를 만들어 그 Pod에서 켠다"가 깔끔하다. 하나 더. `automountServiceAccountToken: false`는 토큰을 안 넣을 뿐 SA의 신원이 사라지는 건 아니다. 앞의 vault 예처럼 다른 audience 토큰은 projected 볼륨으로 따로 받을 수 있다.
+
+## 클러스터 밖에서 이 토큰을 믿게 하기
+
+바운드 토큰은 OIDC 형식을 따른다. API 서버는 발급자 정보와 공개 키를 표준 주소로 내놓는다.
+
+```bash
+# OIDC 디스커버리 문서와 서명 공개 키
+kubectl get --raw /.well-known/openid-configuration | jq .
+kubectl get --raw /openid/v1/jwks | jq '.keys[0] | {use,kty,kid,alg, n: (.n[0:20]+"..."), e}'
+```
+
+```text
+{
+  "issuer": "https://kubernetes.default.svc.cluster.local",
+  "jwks_uri": "https://192.0.2.2:32732/openid/v1/jwks",
+  "response_types_supported": [
+    "id_token"
+  ],
+  "subject_types_supported": [
+    "public"
+  ],
+  "id_token_signing_alg_values_supported": [
+    "RS256"
+  ]
+}
+{
+  "use": "sig",
+  "kty": "RSA",
+  "kid": "sCm_oJs_PTR5-7GqSzgIkaI1uZRe8r1MFk0ekAJso-k",
+  "alg": "RS256",
+  "n": "7yQhfcJmY3zWz5lJ23ce...",
+  "e": "AQAB"
+}
+```
+
+`kid`가 앞의 토큰 헤더와 같다. 외부 시스템이 이 공개 키를 가져갈 수 있으면 API 서버에 묻지 않고도 토큰을 검증한다. 이 실습 클러스터의 발급자 주소는 클러스터 안에서만 의미 있는 이름이라 밖에서는 못 찾는다. 클라우드 관리형 클러스터는 발급자를 공개 URL로 두고 디스커버리 문서를 공개한다. AWS의 IRSA가 이 구조 위에 서 있다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="IRSA: STS가 클러스터의 공개 키로 Pod 토큰을 검증하고 역할을 내준다"
+  zones={[
+    { id: "eks", label: "EKS cluster", x: 6, y: 6, w: 160, h: 308, tone: "private" },
+    { id: "aws", label: "AWS", x: 182, y: 6, w: 212, h: 308, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "pod", label: "orders Pod", sub: "aud=sts", x: 86, y: 80, icon: "container", w: 112 },
+    { id: "hook", label: "IRSA webhook", sub: "볼륨 주입", x: 86, y: 230, icon: "gateway", w: 120 },
+    { id: "sts", label: "STS", sub: "WebIdentity", x: 288, y: 80, icon: "lock", w: 104 },
+    { id: "oidc", label: "OIDC issuer", sub: "jwks 공개", x: 288, y: 170, icon: "dns", w: 112 },
+    { id: "s3", label: "S3", sub: "orders-bucket", x: 288, y: 265, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "hook", to: "pod" },
+    { from: "pod", to: "sts" },
+    { from: "sts", to: "oidc", dashed: true },
+    { from: "pod", to: "s3" },
+  ]}
+  steps={[
+    { path: ["hook", "pod"], title: "웹훅이 토큰 볼륨을 넣는다", detail: "SA에 역할 ARN 어노테이션이 있으면 Pod 생성 때 aud가 sts.amazonaws.com인 projected 토큰과 환경 변수를 넣는다.", payload: "AWS_ROLE_ARN=arn:aws:iam::123456789012:role/orders-s3\nAWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token" },
+    { path: ["pod", "sts"], packet: "JWT", title: "SDK가 토큰을 STS에 낸다", detail: "AssumeRoleWithWebIdentity를 부른다. AWS 자격 증명 없이 토큰 하나로 부른다." },
+    { path: ["sts", "oidc"], packet: "jwks?", highlight: ["aws"], title: "STS가 공개 키로 검증한다", detail: "iss의 디스커버리 문서와 JWKS로 서명을 보고, 신뢰 정책 조건의 sub와 aud가 맞는지 비교한다. API 서버에는 묻지 않는다." },
+    { path: ["pod", "s3"], packet: "PutObj", title: "임시 자격 증명으로 호출한다", detail: "STS가 준 키로 S3를 부른다. 역할 권한만큼만 된다." },
+    { path: ["pod", "sts"], packet: "JWT", blocked: true, title: "다른 SA의 토큰은 거절된다", detail: "sub가 system:serviceaccount:shop:orders가 아니면 신뢰 정책 조건에서 막힌다." },
+  ]}
+/>
+
+역할의 신뢰 정책이 무엇을 비교하는지 보면 토큰 클레임이 그대로 조건이 된다. (예시, AWS 계정이 없어 실제 형식대로 옮겼다.)
+
+```text
+"Condition": {
+  "StringEquals": {
+    "oidc.eks.ap-northeast-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE:sub": "system:serviceaccount:shop:orders",
+    "oidc.eks.ap-northeast-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE:aud": "sts.amazonaws.com"
+  }
+}
+```
+
+`sub` 조건을 빼거나 `StringLike`로 `system:serviceaccount:*`처럼 넓히면 클러스터의 아무 SA나 그 역할을 맡는다. 실수로 자주 나오는 설정이다. EKS가 이 연결을 EKS API 쪽으로 옮긴 Pod Identity와, 두 방식을 고르는 기준, 노드 IAM 역할을 Pod가 꺼내 쓰지 못하게 막는 IMDS 설정은 [EKS 글](/posts/eks-cluster-basics)에 정리했다. GitHub Actions가 OIDC 토큰으로 AWS 역할을 맡는 [CI 파이프라인](/posts/github-actions-docker-ecr)도 같은 원리다. 발급자만 쿠버네티스가 아니라 GitHub일 뿐이다.
+
+## 클레임을 읽는 함수 짜 보기
+
+토큰의 가운데 조각은 서명 없이도 읽힌다. 아래 함수는 토큰을 받아 주체, audience, 수명, 묶인 Pod, 옛 토큰 여부를 돌려줘야 한다. 테스트 토큰은 실습에서 받은 토큰의 클레임을 줄이고 서명을 가짜(`c2ln`)로 바꾼 것이다. base64url은 `-`, `_`를 쓰고 끝의 `=`를 뗀다는 점을 기억하자. 브라우저의 `atob`는 표준 base64만 받는다.
+
+<CodePlayground
+  caption="ServiceAccount 토큰 클레임 읽기"
+  functionName="inspectToken"
+  initialCode={`function inspectToken(token) {
+  // { sub, aud(쉼표로 이은 문자열 또는 null), lifetime(초 또는 null), pod(이름 또는 null), legacy(boolean) }
+  return {};
+}`}
+  solution={`function inspectToken(token) {
+  const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  const c = JSON.parse(atob(part + "=".repeat((4 - (part.length % 4)) % 4)));
+  const k = c["kubernetes.io"];
+  return {
+    sub: c.sub,
+    aud: c.aud ? c.aud.join(",") : null,
+    lifetime: c.exp ? c.exp - c.iat : null,
+    pod: k && k.pod ? k.pod.name : null,
+    legacy: c.iss === "kubernetes/serviceaccount",
+  };
+}`}
+  tests={[
+    { label: "Pod에 묶인 토큰", args: ["eyJhbGciOiJSUzI1NiIsImtpZCI6InNDbV9vSnNfUFRSNS03R3FTemdJa2FJMXVaUmU4cjFNRmswZWtBSnNvLWsifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiXSwiZXhwIjoxNzkyNTQ0Njg5LCJpYXQiOjE3OTI1NDQwODksImlzcyI6Imh0dHBzOi8va3ViZXJuZXRlcy5kZWZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsIiwia3ViZXJuZXRlcy5pbyI6eyJuYW1lc3BhY2UiOiJzaG9wIiwicG9kIjp7Im5hbWUiOiJvcmRlcnMifSwic2VydmljZWFjY291bnQiOnsibmFtZSI6Im9yZGVycyJ9fSwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OnNob3A6b3JkZXJzIn0.c2ln"], expected: { sub: "system:serviceaccount:shop:orders", aud: "https://kubernetes.default.svc.cluster.local", lifetime: 600, pod: "orders", legacy: false } },
+    { label: "vault용 토큰", args: ["eyJhbGciOiJSUzI1NiIsImtpZCI6InNDbV9vSnNfUFRSNS03R3FTemdJa2FJMXVaUmU4cjFNRmswZWtBSnNvLWsifQ.eyJhdWQiOlsidmF1bHQiXSwiZXhwIjoxNzkyNTQ1Mjg5LCJpYXQiOjE3OTI1NDQ2ODksImlzcyI6Imh0dHBzOi8va3ViZXJuZXRlcy5kZWZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsIiwia3ViZXJuZXRlcy5pbyI6eyJuYW1lc3BhY2UiOiJzaG9wIiwic2VydmljZWFjY291bnQiOnsibmFtZSI6Im9yZGVycyJ9fSwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OnNob3A6b3JkZXJzIn0.c2ln"], expected: { sub: "system:serviceaccount:shop:orders", aud: "vault", lifetime: 600, pod: null, legacy: false } },
+    { label: "Secret에 든 옛 토큰", args: ["eyJhbGciOiJSUzI1NiIsImtpZCI6InNDbV9vSnNfUFRSNS03R3FTemdJa2FJMXVaUmU4cjFNRmswZWtBSnNvLWsifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJzaG9wIiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9zZWNyZXQubmFtZSI6Im9yZGVycy1sZWdhY3ktdG9rZW4iLCJrdWJlcm5ldGVzLmlvL3NlcnZpY2VhY2NvdW50L3NlcnZpY2UtYWNjb3VudC5uYW1lIjoib3JkZXJzIiwic3ViIjoic3lzdGVtOnNlcnZpY2VhY2NvdW50OnNob3A6b3JkZXJzIn0.c2ln"], expected: { sub: "system:serviceaccount:shop:orders", aud: null, lifetime: null, pod: null, legacy: true } },
+  ]}
+/>
+
+디코드는 누구나 할 수 있다는 점이 요점이다. JWT는 암호화가 아니라 서명이다. 토큰을 로그에 찍으면 그 안의 Pod 이름, 노드 이름이 그대로 보이고, 토큰 자체가 자격 증명이니 로그를 볼 수 있는 모든 사람이 그 SA가 된다.
+
+## 토큰 때문에 생기는 장애
+
+현장에서 토큰 문제는 대부분 401로 나타난다. 증상별로 보는 곳이 다르다.
+
+몇 달 잘 돌던 오래된 컨트롤러가 갑자기 401을 낸다. 토큰 파일을 시작할 때 한 번만 읽는 클라이언트일 가능성이 크다. 1년 연장 덕에 버티다가 진짜 만료를 맞은 것이다. 앞의 stale-token 메트릭이나 감사 로그 주석으로 미리 찾을 수 있다. 라이브러리를 올리거나 파일을 주기적으로 다시 읽게 고친다.
+
+Pod를 옮겼더니 외부 시스템 로그인이 안 된다. 토큰을 Vault 같은 곳에 캐시해 두고 재사용하는 구조라면, 원래 Pod가 지워지는 순간 그 토큰은 무효다. 오류 문구 `service account token has been invalidated`가 그 신호다.
+
+클러스터를 옮기거나 발급자 주소를 바꿨더니 IRSA가 전부 실패한다. 토큰의 `iss`가 바뀌면 신뢰 정책에 등록된 OIDC 공급자와 맞지 않는다. API 서버의 `--service-account-issuer`는 여러 번 줄 수 있어서, 첫 값으로 새 토큰을 발급하면서 이전 발급자의 토큰도 한동안 받아 줄 수 있다. 서명 키를 바꿀 때도 옛 공개 키를 `--service-account-key-file`에 남겨 둬야 이미 나간 토큰이 살아남는다.
+
+받는 쪽 서버에서 `token is not valid yet`이나 `exp` 관련 오류가 난다. 노드나 외부 서버의 시계가 어긋난 경우다. `nbf`와 `iat`는 발급 시각이라 몇 초만 어긋나도 엄격한 검증기는 거절한다. NTP부터 본다.
+
+## 신분증은 짧게, 받는 쪽을 정해서
+
+지금의 ServiceAccount 토큰은 TokenRequest로 그때그때 발급되고, etcd에 저장되지 않으며, 수명(`exp`)과 받는 쪽(`aud`)과 묶인 Pod가 정해져 있다. Pod가 사라지면 토큰도 무효가 되고, kubelet이 수명의 80%에서 바꿔 준다. 옛 Secret 토큰은 이 셋이 모두 없어서 위험하다. API를 안 부르는 Pod에는 토큰을 넣지 않고, 밖의 시스템에는 그 시스템 이름의 audience로 따로 받은 토큰을 보여 준다. 토큰이 무엇을 할 수 있는지는 [RBAC](/posts/k8s-rbac)가, 컨테이너가 노드에서 무엇을 할 수 있는지는 [securityContext](/posts/k8s-security-context)가 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 옛 ServiceAccount 토큰과 지금의 바운드 토큰은 무엇이 다른가요?
+
+옛 토큰은 Secret에 저장되고 만료와 audience가 없어서, 꺼낸 사람은 Secret이 지워질 때까지 어디서든 쓸 수 있었다. 바운드 토큰은 kubelet이 TokenRequest로 그때그때 받고 etcd에 저장하지 않으며, `exp`와 `aud`가 있고 Pod에 묶여서 Pod가 지워지면 무효가 된다. 1.24부터 SA를 만들어도 옛 토큰 Secret이 자동으로 생기지 않는다.
+
+### Pod 안의 토큰 파일은 누가 언제 바꾸나요?
+
+kubelet이 바꾼다. 토큰 수명의 80%가 지나거나 24시간이 넘으면 새로 받아 파일을 교체한다. 앱이 파일을 다시 읽어야 새 토큰을 쓰는데, client-go는 알아서 다시 읽는다. kubelet이 요청하는 3607초 토큰은 API 서버가 실제로는 1년짜리로 늘려 주고 `warnafter`를 적어 두는데, 파일을 다시 안 읽는 옛 클라이언트가 갑자기 끊기지 않게 하는 완충 장치다.
+
+### audience는 왜 필요한가요?
+
+토큰을 받은 쪽이 그 토큰을 다른 곳에 재사용하지 못하게 하려고다. API 서버용 토큰을 Vault에 보여 주면 Vault를 턴 사람이 그 토큰으로 API 서버를 부를 수 있다. Vault에는 `aud: vault` 토큰을 따로 주면 API 서버는 그 토큰을 거절한다. 받는 쪽 검증 코드는 서명뿐 아니라 `aud`를 반드시 확인해야 한다.
+
+### automountServiceAccountToken을 false로 두는 이유와 우선순위는요?
+
+API를 부르지 않는 앱에 토큰이 있으면, 앱이 뚫렸을 때 공격자가 그 토큰으로 API를 탐색한다. ServiceAccount에 false를 두면 기본값이 되고 Pod의 값이 그걸 이긴다. 그래서 `default` SA에서 끄고, API가 필요한 Pod만 전용 SA를 쓰면서 켠다. 꺼도 신원은 남아서 다른 audience의 토큰은 projected 볼륨으로 받을 수 있다.
+
+### IRSA는 어떻게 동작하나요?
+
+클러스터의 ServiceAccount 토큰이 OIDC 형식이고 발급자의 공개 키가 공개돼 있다는 점을 이용한다. 웹훅이 `aud: sts.amazonaws.com` 토큰을 Pod에 넣고, SDK가 그 토큰으로 `AssumeRoleWithWebIdentity`를 부르면 STS가 공개 키로 서명을 검증하고 신뢰 정책의 `sub`, `aud` 조건을 비교한 뒤 임시 자격 증명을 준다. `sub` 조건을 넓게 쓰면 다른 SA도 그 역할을 맡게 되는 것이 흔한 실수다.
+
+### Pod를 지웠는데 복사해 둔 토큰은 계속 쓸 수 있나요?
+
+Pod에 묶인 토큰이라면 못 쓴다. API 서버는 검증할 때 토큰에 적힌 Pod가 아직 있는지와 UID를 확인해서, 실습에서는 지운 뒤 십여 초 안에 `token has been invalidated`로 거절했다. Pod 없이 `kubectl create token`으로 받은 토큰은 SA에만 묶여서 SA를 지우거나 만료될 때까지 유효하다. 그래서 CI용 토큰은 수명을 짧게 잡는다.
+
+### 서명 키나 발급자 주소를 바꿀 때 주의할 점은요?
+
+이미 나간 토큰이 깨지지 않게 겹치는 기간을 둔다. 새 키로 서명하면서 옛 공개 키를 `--service-account-key-file`에 남겨 두고, 발급자는 `--service-account-issuer`를 여러 번 줘서 옛 발급자 토큰도 받아 준다. IRSA처럼 외부가 발급자 주소를 믿는 구조라면 외부 쪽 OIDC 공급자 등록도 함께 바꿔야 한다.

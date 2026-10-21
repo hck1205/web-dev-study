@@ -1,0 +1,360 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("schema-versioning");
+
+## 석 달 전 이벤트를 다시 읽는 날
+
+주문 이벤트를 소비하는 정산 서비스에 버그가 있어서, 고친 뒤 Kafka 오프셋을 석 달 전으로 돌려 다시 처리하기로 했다. 그런데 재처리가 시작되자마자 소비자가 죽는다. 로그에는 `no matching field for default-less shop.OrderCreated.currency`. 석 달 동안 이벤트 스키마가 세 번 바뀌었고, 지금 코드는 맨 처음 모양의 이벤트를 읽지 못한다.
+
+HTTP API는 요청과 응답이 그 순간에 끝나지만, 이벤트는 로그에 남는다. 오늘 쓴 메시지를 내일의 소비자가, 석 달 뒤의 소비자가 읽는다. 생산자와 소비자는 서로 다른 날 배포되고, 큐에는 옛 모양과 새 모양이 섞여 있다. 이 글은 그 섞임을 견디는 방법을 다룬다. Avro가 쓴 쪽 스키마와 읽는 쪽 스키마를 맞춰 읽는 방식, 그래서 스키마 레지스트리가 필요한 이유, 호환성 규칙을 최신 버전 하나와만 비교하면 놓치는 것, 이미 저장된 옛 이벤트를 새 코드가 읽게 올리는 방법이다.
+
+이 주제의 다른 글: 하위·상위 호환의 뜻과 protobuf 필드 번호 재사용 문제는 [API 버전 관리](/posts/api-versioning)와 [gRPC](/posts/grpc)에서 이미 다뤘다. 여기서는 그 설명을 반복하지 않는다. 메시지가 흐르는 길은 [Kafka 기초](/posts/kafka-basics)와 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에, DB 테이블의 스키마 변경은 [마이그레이션 도구](/posts/db-migration-tools)와 [무중단 스키마 변경](/posts/zero-downtime-migrations)에 있다.
+
+예제는 Node.js 22에서 avsc 5.7(Avro), protobufjs 8.8, ajv 8.20(JSON Schema)으로 직접 돌렸다. Confluent Schema Registry는 띄우지 못해서, 그 API 응답은 형식을 맞춘 예시로 표시했다.
+
+## Avro는 스키마 없이는 한 바이트도 못 읽는다
+
+같은 주문 이벤트를 Avro로 직렬화하면 이렇게 나온다. v2는 v1에 `coupon` 필드를 하나 더한 것이다.
+
+```js
+const v1 = rec([{ name: "order_id", type: "long" }, { name: "user_id", type: "long" }, { name: "amount", type: "int" }]);
+const v2 = rec([...v1Fields, { name: "coupon", type: ["null", "string"], default: null }]);
+v1.toBuffer({ order_id: 10001, user_id: 42, amount: 15000 });
+v2.toBuffer({ order_id: 10001, user_id: 42, amount: 15000, coupon: "WELCOME10" });
+```
+
+```text
+v1 bytes: a2 9c 01 54 b0 ea 01
+v2 bytes: a2 9c 01 54 b0 ea 01 02 12 57 45 4c 43 4f 4d 45 31 30
+```
+
+바이트에는 필드 이름도, protobuf 같은 필드 번호도 없다. 값만 스키마에 적힌 순서대로 붙어 있다. 그래서 Avro는 작고 빠르지만, 바이트만 봐서는 어디서 필드가 끝나는지 모른다. 옛 스키마(v1)로 새 데이터(v2)를 그냥 읽어 봤다.
+
+```text
+v1 decode v2 bytes (no resolver): ERROR trailing data
+```
+
+v1은 세 값을 읽고 나서 남은 바이트를 만나 멈췄다. 순서가 맞았으니 망정이지, 필드 순서가 바뀐 스키마였다면 에러 없이 엉뚱한 값을 읽었을 것이다. Avro는 이 문제를 이렇게 푼다. 읽을 때 "쓴 쪽 스키마(writer schema)"와 "내가 원하는 스키마(reader schema)"를 둘 다 받아서, 이름으로 필드를 짝지어 읽는다(schema resolution).
+
+```js
+// 쓴 쪽 스키마(v2)를 알고 있으면 옛 소비자(v1)도 새 데이터를 읽는다
+v1.fromBuffer(v2Bytes, v1.createResolver(v2));
+// 반대로 새 소비자(v2)가 옛 데이터(v1)를 읽는다
+v2.fromBuffer(v1Bytes, v2.createResolver(v1));
+```
+
+```text
+old reader(v1) <- v2 data: {"order_id":10001,"user_id":42,"amount":15000}
+new reader(v2) <- v1 data: {"order_id":10001,"user_id":42,"amount":15000,"coupon":null}
+```
+
+옛 소비자는 모르는 `coupon`을 건너뛰었고, 새 소비자는 옛 데이터에 없는 `coupon`을 스키마의 기본값 `null`로 채웠다. 조건이 하나 있다. 읽는 쪽은 쓴 쪽 스키마를 알아야 한다. 메시지마다 스키마 전체를 붙이면 수십 바이트짜리 이벤트에 수백 바이트 스키마가 붙는다. 그래서 스키마는 한곳에 모아 두고, 메시지에는 번호만 붙인다. 그 한곳이 스키마 레지스트리다.
+
+## 메시지에는 스키마 번호만 붙는다
+
+Confluent Schema Registry를 쓰는 직렬화기는 Avro 바이트 앞에 5바이트를 붙인다. 위 v2 이벤트를 스키마 id 7로 감싸면 이렇다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="Kafka 메시지 값 하나 (Confluent 형식 + Avro)"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "magic", display: "00", title: "매직 바이트", description: "항상 0이다. 이 형식으로 감쌌다는 표시다. 소비자가 다른 형식의 메시지를 만나면 여기서 알아챈다.", required: true },
+    { key: "id", display: "00 00 00 07", title: "스키마 id (4바이트)", description: "레지스트리에 등록된 쓴 쪽 스키마의 번호다. 소비자는 이 번호로 스키마를 받아 와 캐시한다. 스키마 내용 대신 번호만 실으니 메시지가 작다.", required: true },
+    { key: "oid", display: "a2 9c 01", title: "order_id = 10001", description: "Avro long은 지그재그 변환 후 가변 길이로 쓴다. 10001 × 2 = 20002를 7비트씩 나눠 a2 9c 01이 됐다." },
+    { key: "uid", display: "54", title: "user_id = 42", description: "42 × 2 = 84 = 0x54. 작은 수는 1바이트다." },
+    { key: "amt", display: "b0 ea 01", title: "amount = 15000", description: "30000을 가변 길이로 쓴 것이다. 필드 이름도 번호도 없이 값만 이어진다." },
+    { key: "union", display: "02", title: "union 갈래 = 1 (string)", description: "[\"null\", \"string\"]에서 0부터 세어 1번 갈래(string)라는 뜻이다(지그재그로 2). null이었다면 00 하나로 끝난다." },
+    { key: "str", display: "12 57 45 4c …", title: "coupon = \"WELCOME10\"", description: "길이 9(지그재그 0x12) 뒤에 UTF-8 바이트가 온다." },
+  ]}
+/>
+
+생산자와 소비자, 레지스트리가 주고받는 순서는 이렇다.
+
+<SequenceDiagram
+  caption="스키마 등록, 메시지 전송, 스키마 조회"
+  actors={[
+    { id: "prod", label: "생산자" },
+    { id: "reg", label: "레지스트리" },
+    { id: "kafka", label: "Kafka" },
+    { id: "cons", label: "소비자" },
+  ]}
+  steps={[
+    { from: "prod", to: "reg", label: "POST 스키마 v2", title: "생산자가 스키마를 등록한다", detail: "레지스트리는 주제(subject)에 걸린 호환성 규칙으로 이전 버전과 비교한다. 통과하면 id를 준다. 이미 있는 스키마면 같은 id를 돌려준다.", payload: "POST /subjects/orders-value/versions\n{\"schema\": \"{...OrderCreated v2...}\"}" },
+    { from: "reg", to: "prod", label: "id 7", title: "id를 받아 캐시한다", detail: "생산자는 메시지마다 레지스트리에 묻지 않는다. 처음 한 번만 묻고 기억한다." },
+    { from: "prod", to: "kafka", label: "00 00000007 …", title: "id를 붙여 메시지를 보낸다", detail: "Kafka 브로커는 이 바이트를 해석하지 않는다. 스키마 검사는 브로커가 아니라 직렬화기와 레지스트리의 일이다." },
+    { from: "kafka", to: "cons", label: "메시지", title: "소비자가 메시지를 받는다", detail: "옛 버전으로 쓴 메시지와 새 버전으로 쓴 메시지가 섞여 온다. id만 보면 무엇으로 썼는지 안다." },
+    { from: "cons", to: "reg", label: "GET /schemas/ids/7", title: "처음 보는 id면 스키마를 받아 온다", detail: "이후로는 캐시에서 꺼낸다. 레지스트리가 잠깐 죽어도 이미 아는 id의 메시지는 계속 읽힌다." },
+    { from: "cons", to: "cons", label: "resolve(v2 → 내 스키마)", title: "쓴 쪽과 읽는 쪽 스키마로 맞춰 읽는다", detail: "소비자 코드의 스키마가 v1이든 v3이든, 규칙만 지켰으면 이름으로 짝지어 읽는다." },
+  ]}
+/>
+
+운영에서 하나 챙길 설정이 있다. 직렬화기는 기본으로 처음 보는 스키마를 자동 등록한다(`auto.register.schemas=true`). 개발 중에는 편하지만 운영에서는 누군가의 로컬 빌드가 이상한 스키마를 등록해 버릴 수 있다. 운영 생산자는 자동 등록을 끄고(`auto.register.schemas=false`, `use.latest.version=true`), 스키마 등록은 CI 단계에서 호환성 검사와 함께 한다.
+
+## 레지스트리가 거절하는 변경
+
+레지스트리는 주제마다 호환성 규칙을 건다. 기본값은 `BACKWARD`다. 새 스키마로 바로 앞 버전의 데이터를 읽을 수 있어야 등록을 받아 준다. 기본값 없이 필드를 추가해 보면 무엇이 문제인지 보인다.
+
+```text
+new reader(no default) <- v1: ERROR no matching field for default-less shop.OrderCreated.coupon
+old reader(v1) <- v2NoDefault data: {"order_id":1,"user_id":2,"amount":3}
+```
+
+기본값 없는 `coupon`을 추가한 새 스키마는 옛 데이터를 읽지 못한다. 옛 데이터에 `coupon`이 없는데 채울 값도 모르기 때문이다. 반대로 옛 소비자는 새 데이터를 잘 읽는다. 모르는 필드는 건너뛰면 그만이다. 그래서 이 변경은 `FORWARD`로는 괜찮지만 `BACKWARD`로는 거절된다. 등록하기 전에 레지스트리의 호환성 검사 API에 물으면 이런 응답이 온다. 레지스트리를 직접 띄우지 못해서 Confluent REST API 형식에 맞춘 예시다. 실제로 등록(`POST /subjects/orders-value/versions`)하면 HTTP 409로 거절된다.
+
+```bash
+# 레지스트리에 새 스키마가 호환되는지 먼저 물어본다 (등록하지 않는다)
+curl -s -X POST -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  --data @order-created-v3.json \
+  "http://schema-registry:8081/compatibility/subjects/orders-value/versions/latest?verbose=true"
+```
+
+```text
+{"is_compatible":false,"messages":["{errorType:'READER_FIELD_MISSING_DEFAULT_VALUE', description:'The field 'coupon' at path '/fields/3' in the new schema has no default value and is missing in the old schema', additionalInfo:'coupon'}", "{oldSchemaVersion: 2}", "{compatibility: 'BACKWARD'}"]}
+```
+
+형식별로 지켜야 할 규칙은 결국 같은 질문에서 나온다. 읽는 쪽이 모르는 것을 만났을 때, 혹은 기대한 것이 없을 때 어떻게 하느냐다.
+
+| 변경 | Avro | Protobuf (proto3) | JSON Schema |
+|---|---|---|---|
+| 필드 추가 | 기본값이 있어야 양방향 호환 | 양방향 호환 | 읽는 쪽이 모르는 필드를 허용해야 상위 호환 |
+| 필드 삭제 | 지우는 필드에 기본값이 있었어야 양방향 호환 | 번호를 `reserved`로 막으면 호환 | 그 필드를 `required`로 기대하는 소비자가 깨진다 |
+| 타입 넓히기 | `int`→`long`, `float`→`double`은 새 소비자만 읽는다 | 일부만(`int32`↔`int64` 등) 같은 바이트 형식 | 소비자 검증 규칙에 달렸다 |
+| 이름 바꾸기 | `aliases`로 옛 이름을 알려 주면 된다 | 바이트에는 번호만 있어 무관, JSON 변환은 깨진다 | 삭제 + 추가와 같다 |
+
+타입 넓히기를 Avro로 확인해 봤다. 새 소비자가 `long`으로 읽는 건 되지만, 옛 소비자가 `long`으로 쓴 데이터를 `int`로 읽지는 못한다. 그래서 `BACKWARD`는 통과하고 `FORWARD`는 거절된다.
+
+```text
+reader long <- int data: {"order_id":10001,"user_id":42,"amount":15000}
+reader int <- long data: ERROR cannot read "long" as "int"
+```
+
+Avro 규칙을 직접 짜 보자. 쓴 쪽 필드 목록과 읽는 쪽 필드 목록을 받아서, 읽는 쪽이 이 데이터를 읽을 때 생기는 문제를 돌려준다. 읽는 쪽에만 있는 필드는 기본값이 있어야 하고(`이름: no default`), 양쪽에 있는 필드는 타입이 같거나 Avro가 허용하는 승격(`int`→`long`·`float`·`double`, `long`→`float`·`double`, `float`→`double`)이어야 한다(`이름: 쓴타입 -> 읽는타입`). 쓴 쪽에만 있는 필드는 건너뛴다. `BACKWARD` 검사는 `canRead(옛, 새)`, `FORWARD` 검사는 `canRead(새, 옛)`이다.
+
+<CodePlayground
+  caption="Avro 호환성 검사기"
+  functionName="canRead"
+  initialCode={`function canRead(writer, reader) {
+  // writer, reader: [{ name: "amount", type: "int", default?: 0 }, ...]
+  // 반환: 문제 목록 (읽는 쪽 필드 순서대로)
+  return [];
+}`}
+  solution={`function canRead(writer, reader) {
+  const PROMOTE = { int: ["long", "float", "double"], long: ["float", "double"], float: ["double"] };
+  const written = new Map(writer.map((f) => [f.name, f]));
+  const problems = [];
+  for (const r of reader) {
+    const w = written.get(r.name);
+    if (!w) {
+      if (!("default" in r)) problems.push(\`\${r.name}: no default\`);
+    } else if (w.type !== r.type && !(PROMOTE[w.type] || []).includes(r.type)) {
+      problems.push(\`\${r.name}: \${w.type} -> \${r.type}\`);
+    }
+  }
+  return problems;
+}`}
+  tests={[
+    { label: "기본값 있는 필드 추가 (BACKWARD)", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "int" }], [{ name: "order_id", type: "long" }, { name: "amount", type: "int" }, { name: "coupon", type: "string", default: "" }]], expected: [] },
+    { label: "기본값 없는 필드 추가 (BACKWARD)", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "int" }], [{ name: "order_id", type: "long" }, { name: "amount", type: "int" }, { name: "coupon", type: "string" }]], expected: ["coupon: no default"] },
+    { label: "같은 변경을 FORWARD로", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "int" }, { name: "coupon", type: "string" }], [{ name: "order_id", type: "long" }, { name: "amount", type: "int" }]], expected: [] },
+    { label: "int를 long으로 (BACKWARD)", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "int" }], [{ name: "order_id", type: "long" }, { name: "amount", type: "long" }]], expected: [] },
+    { label: "int를 long으로 (FORWARD)", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "long" }], [{ name: "order_id", type: "long" }, { name: "amount", type: "int" }]], expected: ["amount: long -> int"] },
+    { label: "타입 변경과 이름 변경", args: [[{ name: "order_id", type: "long" }, { name: "amount", type: "int" }], [{ name: "order_id", type: "string" }, { name: "total", type: "int" }]], expected: ["order_id: long -> string", "total: no default"] },
+  ]}
+/>
+
+## 최신 버전 하나와만 비교하면 놓치는 것
+
+맨 처음 장면의 원인이 여기 있다. 스키마가 이렇게 바뀌었다고 하자.
+
+```js
+v1 = [order_id, amount]
+v2 = [order_id, amount, { name: "currency", type: "string", default: "KRW" }]   // 기본값 있는 추가
+v3 = [order_id, amount, { name: "currency", type: "string" }]                   // 기본값 제거
+```
+
+`BACKWARD`는 새 스키마를 바로 앞 버전과만 비교한다. 단계마다 검사해 보면 모두 통과한다. 그런데 v3로 v1 데이터를 읽어 보면 깨진다.
+
+```text
+reader v2 <- data v1: ok
+reader v3 <- data v2: ok
+reader v3 <- data v1: FAIL: no matching field for default-less shop.OrderCreated.currency
+```
+
+v2 데이터에는 `currency`가 항상 들어 있으니 v3이 기본값을 지워도 v2 데이터는 읽힌다. 하지만 토픽에 아직 v1 데이터가 남아 있으면, 그걸 읽는 순간 실패한다. 아래 그림에서 단계를 넘기면 비교 대상이 어떻게 다른지 보인다.
+
+<AlgoTrace
+  caption="BACKWARD와 BACKWARD_TRANSITIVE가 비교하는 범위"
+  memoryLabel="v3 등록 검사"
+  cells={["v1 데이터", "v2 데이터", "v3 스키마"]}
+  steps={[
+    { pointer: 2, memory: ["v3: currency 기본값 없음"], caption: "v3을 등록하려 한다. currency의 기본값을 지웠다." },
+    { pointer: 1, found: [1], memory: ["v3 <- v2 : ok"], caption: "BACKWARD는 바로 앞 버전 v2와만 비교한다. v2 데이터에는 currency가 있으니 통과다." },
+    { pointer: 0, memory: ["v3 <- v2 : ok", "v3 <- v1 : 실패"], caption: "BACKWARD_TRANSITIVE는 모든 이전 버전과 비교한다. v1 데이터에는 currency가 없고 기본값도 없어 거절된다." },
+    { pointer: 0, memory: ["토픽 보존 90일", "v1 메시지 남아 있음"], caption: "보존 기간 안에 v1 메시지가 남아 있거나, 오프셋을 되돌려 다시 읽을 일이 있으면 TRANSITIVE가 필요하다." },
+  ]}
+/>
+
+호환성 규칙은 일곱 가지다. 방향(`BACKWARD`, `FORWARD`, `FULL`)마다 바로 앞 버전과만 볼지, 모든 이전 버전과 볼지(`_TRANSITIVE`)를 고르고, 아무것도 검사하지 않는 `NONE`이 있다. 고르는 기준은 두 가지다. 누가 먼저 배포되나(소비자가 먼저면 `BACKWARD`, 생산자가 먼저면 `FORWARD`, 모르면 `FULL`). 그리고 옛 데이터가 얼마나 오래 남나. 토픽 보존 기간이 길거나, 압축(compacted) 토픽처럼 영원히 남거나, 오프셋을 되돌려 재처리할 수 있다면 `_TRANSITIVE`를 쓴다.
+
+## 배포 순서가 규칙을 정한다
+
+생산자와 소비자가 여럿인 실제 구성에서 보면 이렇다. `BACKWARD` 규칙 아래에서 필드를 추가할 때의 순서다.
+
+<NetworkTopology
+  caption="BACKWARD 규칙에서 새 필드를 내보내는 순서"
+  width={400}
+  height={300}
+  zones={[
+    { id: "pz", label: "생산자", x: 10, y: 20, w: 120, h: 270, tone: "edge" },
+    { id: "kz", label: "Kafka", x: 145, y: 20, w: 110, h: 270, tone: "neutral" },
+    { id: "cz", label: "소비자", x: 270, y: 20, w: 120, h: 270, tone: "private" },
+  ]}
+  nodes={[
+    { id: "p", label: "order-api", sub: "v1 → v2", x: 70, y: 110, icon: "server", w: 100 },
+    { id: "reg", label: "registry", sub: "BACKWARD", x: 70, y: 230, icon: "dns", w: 100 },
+    { id: "t", label: "orders", sub: "topic", x: 200, y: 165, icon: "switch", w: 96 },
+    { id: "c1", label: "settle", sub: "v1 → v2", x: 330, y: 80, icon: "container", w: 100 },
+    { id: "c2", label: "search", sub: "v1", x: 330, y: 165, icon: "container", w: 100 },
+    { id: "c3", label: "analytics", sub: "v1", x: 330, y: 250, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "p", to: "t" },
+    { from: "p", to: "reg", dashed: true },
+    { from: "t", to: "c1" },
+    { from: "t", to: "c2" },
+    { from: "t", to: "c3" },
+  ]}
+  steps={[
+    { path: ["c1"], highlight: ["cz"], title: "소비자부터 v2 스키마로 배포한다", detail: "새 소비자는 v2 스키마로 v1 데이터를 읽는다. coupon은 기본값 null로 채워진다. 이게 BACKWARD가 보장하는 것이다." },
+    { path: ["p", "reg"], packet: "v2", title: "CI가 v2를 레지스트리에 등록한다", detail: "레지스트리가 v1과 비교해 통과시킨다. 기본값이 없었다면 여기서 409로 막혔다." },
+    { path: ["p", "t", "c1"], packet: "id 7", title: "생산자가 v2로 쓰기 시작한다", detail: "settle은 coupon을 읽는다." },
+    { path: ["t", "c2"], packet: "id 7", title: "아직 v1인 소비자도 계속 읽는다", detail: "Avro는 쓴 쪽 스키마(id 7)를 받아 와 coupon을 건너뛴다. 이 경우는 우연히 FORWARD도 맞아서 괜찮았다." },
+    { path: ["p", "reg"], packet: "v3", blocked: true, title: "옛 소비자를 깨는 변경은 등록 단계에서 막힌다", detail: "필드를 기본값 없이 지우거나 타입을 좁히면 레지스트리가 거절한다. 생산자 배포 전에 CI에서 실패하는 게 운영 장애보다 싸다." },
+  ]}
+/>
+
+깨는 변경이 꼭 필요할 때도 있다. 금액 단위를 원에서 전(minor unit)으로 바꾸는 것처럼 의미가 바뀌는 경우다. 같은 이름의 필드에 다른 의미를 담으면 어떤 규칙도 그걸 잡지 못한다. 이럴 때는 새 필드(`amount_minor`)를 추가해 한동안 둘 다 채우거나, 이벤트 타입이나 토픽을 새로 만든다(`orders.v2`). 생산자가 한동안 두 토픽에 함께 쓰고, 소비자가 다 옮겨 간 걸 확인한 뒤 옛 토픽을 멈춘다. DB 열 이름을 바꿀 때의 expand/contract와 같은 모양이다.
+
+## Protobuf와 JSON Schema에서 조용히 깨지는 것
+
+protobuf의 필드 번호 규칙과 모르는 필드를 보관하는 동작은 [API 버전 관리 글](/posts/api-versioning)에서 protoc로 확인했다. 그런데 이 동작은 라이브러리마다 다르다. protobufjs 8.8로 같은 실험을 해 봤다. v2(4번 `coupon` 추가)로 쓴 메시지를 v1으로 읽고 다시 직렬화해서 넘긴 뒤, v2로 읽었다.
+
+```text
+v2 bytes:            08 91 4e 10 2a 18 98 75 22 09 57 45 4c 43 4f 4d 45 31 30
+v1 relay re-encoded: 08 91 4e 10 2a 18 98 75
+v2 reader <- relayed: {"orderId":10001,"userId":42,"amount":15000,"coupon":""}
+```
+
+중간의 v1 서비스가 메시지를 다시 쓰면서 4번 필드(`22 09 …`)가 사라졌다. protoc(C++)과 Java, Go의 공식 구현은 모르는 필드를 보관해서 다시 쓸 때도 살리지만(proto3는 3.5부터), protobufjs는 8.8에서 확인한 대로 버린다. 메시지를 받아서 고쳐 넘기는 중계 서비스가 있다면, 그 서비스가 어떤 라이브러리를 쓰는지가 호환성의 일부가 된다.
+
+타입을 바꾸는 것도 조용히 깨진다. `user_id`를 `int64`에서 `string`으로 바꾼 메시지를 v1으로 읽었다.
+
+```text
+bad bytes: 08 91 4e 12 04 75 2d 34 32 18 98 75
+v1 reader <- user_id string: {"orderId":10001,"userId":0,"amount":15000}
+```
+
+에러가 아니라 `userId: 0`이다. 2번 필드의 전송 형식이 바뀌어(`10` 정수에서 `12` 길이 붙은 바이트로) 옛 소비자가 값을 못 읽고 기본값을 냈다. 회원 0번의 주문으로 정산이 잡히는 식의 사고가 난다. 바이트를 비교하는 `buf breaking` 같은 도구를 CI에 두는 이유다.
+
+JSON Schema는 형식 자체에 호환 규칙이 없어서, 소비자가 스키마를 어떻게 쓰느냐에 따라 결과가 갈린다. 소비자가 받은 이벤트를 v1 스키마로 검증한다고 하자.
+
+```text
+closed v1 <- v2 event            invalid [{"instancePath":"","message":"must NOT have additional properties","params":{"additionalProperty":"coupon"}}]
+open v1 <- v2 event              valid
+v2(required coupon) <- v1 event  invalid [{"instancePath":"","message":"must have required property 'coupon'","params":{"missingProperty":"coupon"}}]
+```
+
+`additionalProperties: false`로 닫아 둔 소비자는 필드 하나 추가에도 메시지를 거절한다. 스키마를 엄격하게 쓰고 싶은 마음은 이해하지만, 이벤트 소비자 쪽에서는 모르는 필드를 허용해야 생산자가 필드를 추가할 수 있다. 새 필드를 `required`로 넣으면 옛 이벤트가 거절된다. Confluent 레지스트리도 JSON Schema를 지원하는데, 열린 모델과 닫힌 모델에 따라 어떤 변경을 호환으로 볼지가 달라서 처음 정할 때 팀이 함께 정한다.
+
+## 이미 저장된 이벤트는 읽을 때 올린다
+
+이벤트 소싱처럼 이벤트 자체가 데이터의 원본이면, 옛 이벤트는 지우거나 고칠 수 없다. 10년 된 이벤트도 오늘의 코드가 읽어야 한다. 이때는 읽는 순간 옛 이벤트를 최신 모양으로 바꿔 주는 업캐스터(upcaster)를 둔다. 버전마다 바로 다음 버전으로 올리는 함수를 하나씩 만들고, 최신이 될 때까지 이어 붙인다.
+
+```js
+const upcasters = {
+  1: (e) => ({ ...e, schema_version: 2, currency: "KRW" }),                    // v1 → v2: 통화 추가
+  2: (e) => { const { amount, ...rest } = e;                                   // v2 → v3: 금액 단위 변경
+              return { ...rest, schema_version: 3, amount_minor: amount * 100 }; },
+};
+function upcast(event) {
+  let e = event;
+  while (e.schema_version < LATEST) e = upcasters[e.schema_version](e);
+  return e;
+}
+```
+
+```text
+{"type":"OrderCreated","schema_version":3,"order_id":1,"currency":"KRW","amount_minor":1500000}
+{"type":"OrderCreated","schema_version":3,"order_id":2,"currency":"USD","amount_minor":990000}
+{"type":"OrderCreated","schema_version":3,"order_id":3,"amount_minor":120000,"currency":"KRW"}
+```
+
+저장된 v1, v2, v3 이벤트가 모두 v3 모양으로 나왔다. 업캐스터를 바로 다음 버전으로만 올리게 짜면 버전이 늘어도 함수가 하나씩만 늘고, v1→v3 같은 조합을 따로 만들 필요가 없다. 아래 그림이 재처리할 때의 흐름이다.
+
+<SequenceDiagram
+  caption="재처리할 때 옛 이벤트를 최신 모양으로 올린다"
+  actors={[
+    { id: "store", label: "이벤트 저장소" },
+    { id: "up", label: "업캐스터" },
+    { id: "h", label: "핸들러 (v3만 안다)" },
+  ]}
+  steps={[
+    { from: "store", to: "up", label: "v1 이벤트", title: "가장 오래된 이벤트부터 읽는다", detail: "저장된 바이트는 그대로다. 고치지 않는다.", payload: "{\"schema_version\":1,\"order_id\":1,\"amount\":15000}" },
+    { from: "up", to: "up", label: "v1 → v2", title: "통화를 채운다", detail: "당시에는 원화만 받았으니 KRW를 넣는다. 이 판단은 도메인 지식이다. 기본값처럼 기계가 정할 수 없는 부분이다." },
+    { from: "up", to: "up", label: "v2 → v3", title: "금액 단위를 바꾼다", detail: "amount를 지우고 amount_minor = amount × 100을 넣는다." },
+    { from: "up", to: "h", label: "v3 모양", title: "핸들러는 최신 모양만 본다", detail: "핸들러 코드에는 옛 버전을 위한 분기가 없다. 버전 지식은 업캐스터 한곳에 모인다." },
+    { from: "store", to: "up", label: "v3 이벤트", title: "최신 이벤트는 그대로 지나간다", detail: "schema_version이 이미 3이면 아무 함수도 거치지 않는다." },
+  ]}
+/>
+
+업캐스터를 짤 때 주의할 점이 있다. 업캐스터는 순수 함수여야 한다. 외부 API나 DB를 불러 값을 채우면 재처리할 때마다 결과가 달라진다. 그리고 업캐스터 자체도 테스트한다. 버전별로 실제 저장된 이벤트 몇 개를 고정해 두고, 최신 모양으로 나오는지 확인하는 테스트를 둔다. 옛 이벤트가 너무 많아 매번 올리는 비용이 크면, 저장소 전체를 새 모양으로 한 번 복사해 새 스트림을 만드는 방법(copy-and-transform)도 있다.
+
+## 현장에서 스키마 문제를 만나는 순간
+
+소비자가 역직렬화 에러로 같은 메시지에서 계속 죽는다면, 먼저 그 메시지의 스키마 id를 본다. 값의 2~5번째 바이트다. 레지스트리에서 그 id의 스키마를 받아 소비자 코드의 스키마와 비교하면 어떤 필드가 문제인지 바로 보인다. 그 메시지를 건너뛸지는 [메시지 전달 보장 글](/posts/message-delivery-semantics)의 재시도와 DLQ 정책을 따른다.
+
+```bash
+# 메시지 값 앞 5바이트에서 스키마 id를 읽는다 (예: kcat으로 한 건 받아 hexdump)
+kcat -C -b kafka:9092 -t orders -o -1 -c 1 -f '%s' | head -c 5 | xxd
+# 그 id의 스키마를 레지스트리에서 받는다
+curl -s http://schema-registry:8081/schemas/ids/7
+```
+
+소비자에서 갑자기 값이 0이나 빈 문자열로 들어온다면 protobuf 타입 변경이나 번호 재사용을 의심한다. 에러가 안 나서 가장 늦게 발견된다. 생산자의 최근 `.proto` 변경 이력을 보고, CI에 `buf breaking`을 넣어 다음 번에는 배포 전에 막는다.
+
+등록이 409로 막혔다면 그 자체가 정상 동작이다. 규칙을 `NONE`으로 바꿔 통과시키고 싶은 유혹이 생기는데, 그러면 이 글 맨 처음의 장면이 몇 달 뒤에 온다. 막힌 변경을 기본값 추가, 새 필드, 새 토픽 중 하나로 다시 설계한다.
+
+## 데이터가 코드보다 오래 산다
+
+이벤트 스키마의 버전 관리는 결국 이 사실을 받아들이는 일이다. 코드는 배포하면 바뀌지만, 이미 쓴 메시지는 바뀌지 않는다. Avro는 쓴 쪽 스키마와 읽는 쪽 스키마를 이름으로 맞춰 읽고, 레지스트리는 그 쓴 쪽 스키마를 번호로 나눠 주며, 호환성 규칙으로 깨는 변경을 등록 단계에서 막는다. 옛 데이터가 오래 남으면 모든 이전 버전과 비교하고, 이벤트가 원본인 시스템에서는 업캐스터로 옛 이벤트를 읽는 순간 올린다.
+
+## 면접에서 나올 만한 질문
+
+### 이벤트 스키마 변경이 HTTP API 변경보다 까다로운 이유는요?
+
+이벤트는 로그에 남아서 오늘 쓴 메시지를 미래의 소비자가 읽는다. 큐와 토픽에는 옛 모양과 새 모양이 섞여 있고, 생산자와 소비자는 서로 다른 날 배포되며, 오프셋을 되돌려 몇 달 전 메시지를 다시 읽기도 한다. 그래서 바로 앞 버전뿐 아니라 보존 기간 안의 모든 버전을 읽을 수 있어야 한다.
+
+### Avro에는 왜 스키마 레지스트리가 필요한가요?
+
+Avro 바이트에는 필드 이름도 번호도 없이 값만 순서대로 있어서, 쓴 쪽 스키마 없이는 읽을 수 없다. 읽을 때 쓴 쪽 스키마와 읽는 쪽 스키마를 이름으로 맞춰 읽는다. 메시지마다 스키마 전체를 붙일 수 없으니 레지스트리에 등록하고 메시지에는 4바이트 id만 붙인다.
+
+### BACKWARD와 FORWARD 호환성은 언제 고르나요?
+
+BACKWARD는 새 스키마로 옛 데이터를 읽을 수 있는 것이라 소비자를 먼저 배포할 때 필요하다. FORWARD는 옛 스키마로 새 데이터를 읽을 수 있는 것이라 생산자를 먼저 배포할 때 필요하다. 순서를 보장할 수 없으면 FULL을 쓴다. Confluent 레지스트리의 기본값은 BACKWARD다.
+
+### TRANSITIVE 규칙은 왜 필요한가요?
+
+BACKWARD는 바로 앞 버전과만 비교해서, 단계마다 통과한 변경이 쌓여 첫 버전 데이터를 못 읽는 상태가 될 수 있다. 실험에서 기본값을 추가했다가 다음 버전에서 지우자 단계별 검사는 다 통과했지만 v1 데이터를 읽는 순간 실패했다. 보존 기간이 길거나 압축 토픽이거나 재처리를 하는 토픽이면 BACKWARD_TRANSITIVE나 FULL_TRANSITIVE를 쓴다.
+
+### Avro에서 필드를 안전하게 추가하고 지우려면요?
+
+추가하는 필드에는 기본값을 준다. 그래야 새 소비자가 옛 데이터를 읽을 때 채울 값이 있다. 지울 필드는 지우기 전에 기본값이 있어야 옛 소비자가 새 데이터를 읽을 때 채울 수 있다. 이름을 바꿀 때는 aliases로 옛 이름을 알려 준다.
+
+### 의미가 바뀌는 변경은 어떻게 하나요?
+
+같은 필드에 다른 의미를 담으면 어떤 호환성 검사도 잡지 못한다. 새 필드를 추가해 한동안 옛 필드와 함께 채우거나, 이벤트 타입이나 토픽을 새로 만들어 생산자가 한동안 양쪽에 쓴다. 소비자가 모두 옮겨 간 걸 확인한 뒤 옛 쪽을 멈춘다.
+
+### 이벤트 소싱에서 옛 이벤트의 스키마는 어떻게 다루나요?
+
+저장된 이벤트는 고치지 않고, 읽을 때 업캐스터가 최신 모양으로 올린다. 버전마다 바로 다음 버전으로 올리는 순수 함수를 두고 최신이 될 때까지 이어 붙이면, 핸들러는 최신 모양만 알면 된다. 옛 이벤트가 너무 많으면 새 모양으로 복사한 새 스트림을 만드는 방법도 있다.

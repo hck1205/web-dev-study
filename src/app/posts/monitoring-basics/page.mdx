@@ -1,0 +1,393 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("monitoring-basics");
+
+주문이 안 된다는 문의가 고객센터로 쏟아졌다. 그런데 모니터링 화면의 주문 서비스 오류율 그래프는 아무 일 없다는 듯 조용했다. 자세히 보니 조용한 게 아니라 비어 있었다. 서버 프로세스가 멈춰서 요청을 하나도 처리하지 못했으니, 앱이 세는 오류도 하나도 없었던 것이다. 대시보드는 40장이나 있었는데 "지금 사용자가 주문을 못 하고 있나"에 답하는 그래프는 없었다.
+
+모니터링은 그래프를 많이 그리는 일이 아니다. 미리 정한 질문("사용자가 불편한가", "곧 불편해질까")에 숫자로 답하게 만들어 두는 일이다. 이 글은 무엇을 재야 하는지 정리한 틀 세 가지(네 가지 황금 신호, RED, USE)와, 안에서 세기와 밖에서 두드리기의 차이, 그리고 그 숫자를 모으는 Prometheus의 pull 방식을 실습으로 따라간다.
+
+이 주제의 다른 글: 모르는 질문까지 다루는 [관측 가능성 기본](/posts/observability-basics), 숫자를 담는 그릇인 [지표 타입](/posts/metrics-types), 로그 한 줄을 남기는 [구조화 로그](/posts/structured-logging). 네트워크 장비와 커널 카운터를 보는 법은 [네트워크 모니터링](/posts/network-monitoring)에 따로 있다. 알림을 언제 울릴지는 [알림 글](/posts/alerting)과 [SLI와 SLO 글](/posts/sli-slo)이 맡는다.
+
+실습 환경은 Ubuntu 24.04, Node.js 22, Prometheus 3.5.0, node_exporter 1.9.1이다. 앱은 `prom-client` 15.1.3으로 `/metrics`를 내놓는 주문·검색 API이고, Prometheus가 5초마다 가져간다.
+
+## 사용자 쪽에서 보는 네 가지 숫자
+
+구글 SRE 책(2016)은 사용자를 상대하는 시스템이라면 최소한 네 가지를 재라고 한다. 지연(latency), 트래픽(traffic), 오류(errors), 포화도(saturation)다. 흔히 네 가지 황금 신호라고 부른다.
+
+지연은 요청 하나가 걸린 시간이다. 여기서 두 가지를 조심한다. 하나는 평균 대신 분포(p50, p99)를 본다는 것, 다른 하나는 성공한 요청과 실패한 요청의 지연을 나눠 본다는 것이다. DB 연결이 끊겨 1ms 만에 500을 돌려주는 요청이 섞이면 평균 지연이 오히려 좋아진다. 장애가 났는데 응답 시간 그래프가 내려가는 이상한 장면이 여기서 나온다.
+
+트래픽은 시스템이 받는 일의 양이다. 웹 API라면 초당 요청 수, 스트리밍이라면 초당 바이트다. 갑자기 0으로 떨어지는 트래픽은 오류율보다 빠른 장애 신호일 때가 많다.
+
+오류는 실패한 요청의 비율이다. 5xx만이 아니라 200을 돌려줬지만 내용이 틀린 경우, 1초 안에 답하기로 했는데 3초 걸린 경우처럼 약속을 어긴 응답도 오류로 셀 수 있다.
+
+포화도는 "얼마나 꽉 찼나"다. CPU 사용률처럼 지금 쓰는 양보다는, 처리하지 못하고 기다리는 일(대기열 길이, 이벤트 루프 지연, 커넥션 풀 대기)이 더 정직한 숫자다. 포화도는 다른 셋이 나빠지기 전에 미리 오르기 때문에 "곧 불편해질까"에 답한다.
+
+실습 앱에 검색 50rps, 주문 100rps를 1분 넘게 고르게 보내며 네 숫자를 PromQL로 뽑았다.
+
+```bash
+# 트래픽: route별 초당 요청 수
+promtool query instant http://127.0.0.1:19390 'sum by (route) (rate(http_requests_total{job="shop"}[30s]))'
+# 오류: route별 5xx 비율
+promtool query instant http://127.0.0.1:19390 \
+  'sum by (route) (rate(http_requests_total{job="shop",status=~"5.."}[30s])) / sum by (route) (rate(http_requests_total{job="shop"}[30s]))'
+# 지연: route별 p99
+promtool query instant http://127.0.0.1:19390 \
+  'histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="shop"}[30s])))'
+# 포화도: 동시에 처리 중이던 요청 수의 최댓값, 이벤트 루프 지연 p99
+promtool query instant http://127.0.0.1:19390 'max_over_time(http_in_flight_requests{job="shop"}[30s])'
+promtool query instant http://127.0.0.1:19390 'nodejs_eventloop_lag_p99_seconds{job="shop"}'
+```
+
+```text
+{route="/api/search"} => 48.84 @[1792526961.62]
+{route="/api/orders"} => 96.56 @[1792526961.62]
+{route="/api/orders"} => 0.021955260977630488 @[1792526961.677]
+{route="/api/search"} => 0 @[1792526961.677]
+{route="/api/search"} => 0.9593 @[1792526961.741]
+{route="/api/orders"} => 0.048935517970401694 @[1792526961.741]
+{instance="127.0.0.1:19311", job="shop"} => 12 @[1792526961.815]
+nodejs_eventloop_lag_p99_seconds{instance="127.0.0.1:19311", job="shop"} => 0.013303807 @[1792526961.943]
+```
+
+보낸 대로 검색 약 49rps, 주문 약 97rps가 잡혔다. 주문은 2.2%가 실패하고 있고, 검색은 100건 중 1건이 0.96초쯤 걸린다. 동시에 처리 중인 요청은 많아야 12개, 이벤트 루프 지연은 13ms라 아직 여유가 있다. 검색의 p99가 실제보다 크게 나온 이유(히스토그램 칸 경계)는 [지표 타입 글](/posts/metrics-types)에서 측정한다.
+
+검색 오류율이 "없음"이 아니라 0으로 나온 데도 이유가 있다. 앱이 시작할 때 `status="500"` 시계열을 0으로 미리 만들어 뒀기 때문이다. 이걸 안 하면 오류가 한 번도 없던 route는 비율 계산 결과에서 아예 빠진다.
+
+## 요청을 받는 쪽은 RED로
+
+네 가지 신호를 서비스마다 똑같이 그리기 쉽게 줄인 것이 RED다. Tom Wilkie가 마이크로서비스 대시보드를 위해 정리했다. Rate(초당 요청 수), Errors(실패 수 또는 비율), Duration(응답 시간 분포)이다. 황금 신호에서 포화도를 뺀 모양인데, 서비스가 많을수록 모든 서비스 대시보드의 첫 줄을 RED 세 칸으로 똑같이 맞추는 것이 힘을 발휘한다. 처음 보는 서비스의 대시보드를 열어도 어디를 봐야 할지 안다.
+
+RED 세 숫자는 사실 지표 두 개에서 나온다. 요청 카운터(`http_requests_total`)에서 Rate와 Errors가, 응답 시간 히스토그램에서 Duration이 나온다. 그래서 새 서비스를 만들면 이 둘부터 넣는다. 쿼리 하나를 뜯어 보자.
+
+<UrlAnatomy
+  caption="오류율 쿼리의 분자 부분"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "agg", display: "sum by (route)", title: "합치는 기준", description: "인스턴스와 method, status를 지우고 route별로 더한다. 서버가 10대여도 route마다 한 줄이 남는다. by 대신 without(instance)를 쓰면 지울 것만 고를 수 있다.", required: true },
+    { key: "fn", display: "(rate(", title: "초당 증가량", description: "카운터는 계속 늘기만 하는 누적값이다. rate가 범위 안의 증가량을 초당 값으로 바꾸고, 프로세스 재시작으로 값이 0이 된 것도 보정한다.", required: true },
+    { key: "sel", display: 'http_requests_total{job="shop",status=~"5.."}', title: "고르는 시계열", description: "=~ 는 정규식 일치다. 500부터 599까지 모두 고른다. 레이블 값이 문자열이라 숫자 비교(status >= 500)는 쓸 수 없다.", required: true },
+    { key: "range", display: "[30s]))", title: "범위", description: "최근 30초 안의 샘플로 계산한다. scrape 간격(5초)의 네 배 이상으로 잡아야 scrape가 한두 번 빠져도 값이 끊기지 않는다. 대시보드는 1~5분을 많이 쓴다." },
+  ]}
+/>
+
+분모는 같은 식에서 status 조건만 뺀 것이다. 비율은 꼭 `rate`끼리 나눈다. 누적값끼리 나누면 프로세스가 뜬 뒤 지금까지의 평균이 되어서, 방금 시작된 장애가 그래프에 거의 안 보인다.
+
+## 자원은 USE로
+
+RED가 요청을 받는 쪽의 질문이라면, USE는 자원 쪽 질문이다. Brendan Gregg가 성능 분석 체크리스트로 만들었다. 모든 자원(CPU, 메모리, 디스크, 네트워크, 그리고 커넥션 풀이나 스레드 풀 같은 소프트웨어 자원)마다 세 가지를 묻는다.
+
+- Utilization: 자원이 바쁜 시간의 비율. CPU 사용률, 디스크가 일한 시간 비율.
+- Saturation: 자원이 감당 못 해 쌓인 일. 실행을 기다리는 프로세스 수, 스왑, 대기열 길이.
+- Errors: 자원이 낸 오류. 디스크 I/O 오류, 네트워크 수신 오류.
+
+장점은 빠뜨리지 않는다는 것이다. "느리다"는 말을 들었을 때 자원 목록을 위에서부터 훑으며 세 칸을 채우면, 어느 자원이 범인인지 몇 분 안에 좁혀진다. 아래 그림은 실습 서버를 USE로 훑은 순서다.
+
+<AlgoTrace
+  caption="실습 서버를 USE로 훑기 (node_exporter 1.9.1 실측 값)"
+  memoryLabel="메모"
+  cells={["CPU", "메모리", "디스크", "네트워크"]}
+  steps={[
+    { pointer: 0, memory: ["CPU U 55%"], caption: "CPU 사용률부터 본다. 4코어 평균 55%다. 이것만으로는 넘치는지 모른다." },
+    { pointer: 0, memory: ["CPU U 55%", "CPU S load/코어 1.06", "PSI 대기 0.195"], caption: "포화도를 본다. 코어당 load가 1을 넘고, 실행을 기다린 시간 비율(PSI)이 19.5%다. CPU를 기다리는 일이 생기고 있다." },
+    { pointer: 1, memory: ["CPU 대기 있음", "MEM U 17%", "major fault 3.4/s"], caption: "메모리는 17%만 쓴다. 디스크에서 페이지를 다시 읽는 major fault도 초당 3.4번으로 낮다." },
+    { pointer: 2, memory: ["CPU 대기 있음", "MEM 여유", "DISK U 0.6%", "평균 대기열 0.04"], caption: "디스크는 일한 시간 비율(io_time)과 평균 대기열(io_time_weighted)을 본다. 가장 바쁜 vda도 0.6%만 일했다." },
+    { pointer: 3, found: [0], memory: ["CPU 대기 있음", "MEM 여유", "DISK 여유", "NET errs 0"], caption: "네트워크 수신 오류는 0이다. 남은 후보는 CPU 하나다. 이 서버는 다른 실습이 같이 돌고 있어 CPU를 나눠 쓰는 중이었다." },
+  ]}
+/>
+
+그림의 숫자는 node_exporter 지표로 뽑았다.
+
+```bash
+# CPU 사용률: idle이 아닌 시간의 비율
+promtool query instant http://127.0.0.1:19390 '1 - avg(rate(node_cpu_seconds_total{mode="idle"}[1m]))'
+# CPU 포화도: 실행을 기다린 시간의 비율 (커널 PSI, 4.20 이상)
+promtool query instant http://127.0.0.1:19390 'rate(node_pressure_cpu_waiting_seconds_total[1m])'
+# 메모리 사용률, major page fault
+promtool query instant http://127.0.0.1:19390 '1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes'
+promtool query instant http://127.0.0.1:19390 'rate(node_vmstat_pgmajfault[1m])'
+# 네트워크 수신 오류
+promtool query instant http://127.0.0.1:19390 'sum(rate(node_network_receive_errs_total[1m]))'
+# (조금 뒤에) 디스크별 사용률과 평균 대기열. 결과는 vda만 남기고 나머지(모두 0)는 줄였다
+promtool query instant http://127.0.0.1:19390 'max by (device) (rate(node_disk_io_time_seconds_total[1m]))'
+promtool query instant http://127.0.0.1:19390 'max by (device) (rate(node_disk_io_time_weighted_seconds_total[1m]))'
+```
+
+```text
+{} => 0.5484381250227284 @[1792526237.826]
+{instance="127.0.0.1:19391", job="node"} => 0.19535112185897877 @[1792526237.979]
+{instance="127.0.0.1:19391", job="node"} => 0.17148827531836064 @[1792526238.042]
+{instance="127.0.0.1:19391", job="node"} => 3.4183061202225535 @[1792526238.104]
+{} => 0 @[1792526238.164]
+{device="vda"} => 0.005527272727272247 @[1792527229.684]
+{device="vda"} => 0.03527272727272826 @[1792527229.744]
+```
+
+코어당 load를 구하다가 흔한 실수를 하나 했다. load를 코어 수로 나누려고 이렇게 썼더니 결과가 비어 있었다.
+
+```bash
+promtool query instant http://127.0.0.1:19390 'node_load1 / count(node_cpu_seconds_total{mode="idle"})'
+```
+
+```text
+
+```
+
+PromQL에서 두 벡터를 나누면 레이블이 똑같은 것끼리만 짝을 짓는다. `node_load1`에는 `instance`, `job` 레이블이 있는데 `count(...)`의 결과에는 레이블이 하나도 없어서 짝이 없다. 오류도 내지 않고 조용히 빈 결과가 나온다. 짝지을 레이블을 맞춰 주면 된다.
+
+```bash
+# instance를 남겨 세고, instance로 짝을 짓는다
+promtool query instant http://127.0.0.1:19390 \
+  'node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"})'
+```
+
+```text
+{instance="127.0.0.1:19391"} => 1.0575 @[1792526243.494]
+```
+
+대시보드의 빈 패널이 "문제없음"으로 읽히는 일이 많다. 빈 결과는 0이 아니다. 패널을 만들면 일부러 값을 바꿔 보며 실제로 움직이는지 확인한다.
+
+RED와 USE는 같이 쓴다. 서비스의 RED가 나빠지면 그 서비스가 쓰는 자원(서버 CPU, DB 커넥션 풀, 하위 서비스)의 USE를 본다. 하위 서비스는 그 자체로 또 RED를 가진 서비스이니, 나빠진 쪽을 따라 내려가면 된다.
+
+## 안에서 세기와 밖에서 두드리기
+
+처음 장면으로 돌아가자. 앱이 직접 세는 지표를 화이트박스(white-box) 모니터링이라고 한다. 안을 들여다보니 원인에 가깝고 자세하다. 대신 요청이 앱까지 들어와야만 센다. 바깥에서 사용자처럼 요청을 보내 보고 결과를 재는 것은 블랙박스(black-box) 모니터링이다. 원인은 모르지만 "사용자가 실제로 겪는 일"을 그대로 본다.
+
+실습 앱에 주문을 초당 20건씩 보내는 도중 `kill -STOP`으로 프로세스를 28초 동안 얼렸다. 프로세스는 살아 있고 포트도 열려 있지만 아무 일도 하지 않는 상태다. GC가 오래 멈추거나 이벤트 루프가 동기 작업에 묶였을 때와 비슷하다.
+
+```bash
+# 주문 API 프로세스를 얼린다 (되돌리기: kill -CONT)
+kill -STOP 19811
+# 25초 뒤 안쪽 지표: 오류율과 트래픽
+promtool query instant http://127.0.0.1:19390 \
+  'sum(rate(http_requests_total{job="shop",status=~"5.."}[30s])) / sum(rate(http_requests_total{job="shop"}[30s]))'
+promtool query instant http://127.0.0.1:19390 'sum(rate(http_requests_total{job="shop"}[30s]))'
+# 밖에서 두드리기: 3초 안에 답이 오나
+curl -s -o /dev/null -m 3 -w 'probe: code=%{http_code} connect=%{time_connect}s total=%{time_total}s\n' 127.0.0.1:19311/healthz; echo "exit=$?"
+kill -CONT 19811
+```
+
+```text
+
+probe: code=000 connect=0.000111s total=3.003227s
+exit=28
+```
+
+오류율도 트래픽도 빈 결과다. 앱이 멈췄으니 `/metrics`를 읽어 갈 수 없고, Prometheus는 scrape에 실패한 대상의 시계열에 "더 이상 값 없음" 표시(staleness marker)를 찍어 바로 지운다. 오류율 0%가 아니라 데이터가 없다. "오류율 > 5%"라는 알림은 값이 없으니 울리지 않는다. 처음 장면의 조용한 그래프가 이것이다.
+
+밖에서 두드린 쪽은 다르다. TCP 연결은 0.1ms 만에 맺어졌다. 커널이 대신 받아 주기 때문이다. 그런데 응답은 3초 동안 오지 않았고 curl이 시간 초과(exit 28)로 끝냈다. 부하를 보내던 쪽 집계는 이랬다.
+
+```text
+{"sent":1200,"ok":666,"fail":534}
+```
+
+요청 1,200건 중 534건이 2초 제한을 넘겨 실패했다. 앱 지표에는 이 534건이 한 건도 없다. 아래 그림에서 다음을 누르면 두 시선이 같은 장애를 어떻게 다르게 보는지 따라간다.
+
+<SequenceDiagram
+  caption="프로세스가 멈췄을 때 안쪽 지표와 바깥 탐침이 본 것"
+  actors={[
+    { id: "u", label: "사용자" },
+    { id: "k", label: "커널" },
+    { id: "a", label: "앱(멈춤)" },
+    { id: "p", label: "Prometheus" },
+    { id: "b", label: "탐침" },
+  ]}
+  steps={[
+    { from: "u", to: "k", label: "SYN", title: "연결은 맺어진다", detail: "앱이 멈춰도 커널은 listen 소켓의 대기열에 연결을 받아 둔다. 사용자 쪽에서는 연결 성공이다." },
+    { from: "k", to: "a", label: "accept 안 됨", title: "앱이 꺼내 가지 않는다", detail: "앱이 멈췄으니 대기열에서 연결을 꺼내 요청을 읽는 일이 없다. 요청은 대기열에서 기다리다 사용자 쪽 시간 제한에 걸린다." },
+    { from: "p", to: "a", label: "GET /metrics", title: "scrape 실패", detail: "Prometheus도 앱에 들어가지 못한다. up은 0이 되고, 앱이 내던 시계열은 staleness 표시와 함께 사라진다.", payload: "up{job=\"shop\"} => 0\n오류율 쿼리 => (빈 결과)" },
+    { from: "b", to: "k", label: "GET /healthz", title: "탐침은 실패를 그대로 본다", detail: "사용자처럼 요청을 보낸 탐침은 3초 동안 답을 못 받고 실패로 기록한다. 원인은 모르지만 사용자가 겪는 일과 같다.", payload: "code=000 total=3.003s exit=28" },
+    { from: "b", to: "p", label: "probe_success 0", title: "알림은 바깥 숫자와 up에도", detail: "앱 지표가 비면 오류율 알림은 울리지 않는다. up == 0과 탐침 실패, 그리고 absent()로 '값이 없음'에도 알림을 건다." },
+  ]}
+/>
+
+그래서 둘 다 둔다. 블랙박스는 "사용자가 불편한가"에 답하고 알림의 1순위가 된다. 화이트박스는 "왜"를 좁힌다. 블랙박스 탐침은 서비스 바깥(다른 네트워크, 가능하면 다른 리전)에서 보내야 한다. 같은 서버에서 localhost로 두드리면 로드 밸런서, DNS, 방화벽 문제를 못 본다. Prometheus에서 탐침을 돌리는 blackbox_exporter의 설정과 실제 실패 로그는 [네트워크 모니터링](/posts/network-monitoring)에 있다.
+
+로드 밸런서 접근 로그도 좋은 중간 지점이다. 앱 앞에서 세기 때문에 앱이 멈춰도 504가 찍힌다. 앱 지표, LB 지표, 바깥 탐침의 오류율이 서로 다르면 그 차이가 어디서 끊겼는지 알려 준다.
+
+## Prometheus는 가지러 간다
+
+지표를 모으는 방식은 둘이다. 앱이 저장소로 보내는 push(StatsD, OTLP, InfluxDB의 줄 프로토콜), 저장소가 앱에 와서 읽어 가는 pull이다. Prometheus는 pull을 기본으로 한다. 앱은 `/metrics`에 지금까지 센 숫자를 글자로 적어 두기만 하고, Prometheus가 정해진 간격(`scrape_interval`, 기본 1분, 실습은 5초)마다 읽어 간다.
+
+```yaml
+# prometheus.yml: 무엇을 얼마나 자주 읽어 갈지
+global:
+  scrape_interval: 5s      # 기본값은 1m
+  evaluation_interval: 5s  # 규칙과 알림을 계산하는 간격
+scrape_configs:
+  - job_name: shop
+    static_configs:
+      - targets: ["127.0.0.1:19311"]
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:19391"]
+  - job_name: shop2
+    static_configs:
+      - targets: ["127.0.0.1:19312"]
+```
+
+pull의 큰 장점은 "대상이 살아 있는지"가 공짜로 나온다는 것이다. 읽으러 갔는데 실패하면 그게 신호다. Prometheus는 scrape마다 `up`, `scrape_duration_seconds`, `scrape_samples_scraped` 같은 지표를 스스로 만든다. 두 번째 앱(shop2)을 `kill -9`로 죽이고 10초 뒤 확인했다.
+
+```bash
+# 대상별 생존 여부
+promtool query instant http://127.0.0.1:19390 'up'
+# 마지막 scrape의 오류 메시지
+curl -s 127.0.0.1:19390/api/v1/targets | jq -c '.data.activeTargets[] | {job: .labels.job, health, lastError}'
+```
+
+```text
+up{instance="127.0.0.1:19391", job="node"} => 1 @[1792526232.225]
+up{instance="127.0.0.1:19311", job="shop"} => 1 @[1792526232.225]
+up{instance="127.0.0.1:19312", job="shop2"} => 0 @[1792526232.225]
+{"job":"node","health":"up","lastError":""}
+{"job":"shop","health":"up","lastError":""}
+{"job":"shop2","health":"down","lastError":"Get \"http://127.0.0.1:19312/metrics\": dial tcp 127.0.0.1:19312: connect: connection refused"}
+```
+
+push 방식이었다면 shop2가 조용해진 이유가 "죽어서"인지 "할 일이 없어서"인지 구분하기 어렵다. 아래 그림에서 다음을 누르면 scrape 한 바퀴와 실패하는 장면이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="Prometheus가 대상을 돌며 /metrics를 읽어 간다"
+  zones={[
+    { id: "tg", label: "scrape 대상", x: 8, y: 16, w: 220, h: 270, tone: "private" },
+    { id: "mon", label: "모니터링", x: 248, y: 16, w: 144, h: 270, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "s1", label: "shop", sub: ":19311", x: 80, y: 70, icon: "server" },
+    { id: "s2", label: "shop2", sub: ":19312", x: 80, y: 150, icon: "server" },
+    { id: "ne", label: "node_exp", sub: ":19391", x: 80, y: 230, icon: "server" },
+    { id: "pr", label: "Prometheus", sub: "5s 간격", x: 320, y: 110, icon: "db", w: 116 },
+    { id: "am", label: "Alertmgr", sub: "알림 전달", x: 320, y: 220, icon: "router", w: 116 },
+  ]}
+  links={[
+    { from: "pr", to: "s1" },
+    { from: "pr", to: "s2" },
+    { from: "pr", to: "ne" },
+    { from: "pr", to: "am" },
+  ]}
+  steps={[
+    { path: ["pr", "s1", "pr"], packet: "GET", title: "읽어서 가져온다", detail: "Prometheus가 HTTP GET으로 /metrics를 읽는다. 앱은 지금 값만 글자로 내놓고, 저장과 계산은 Prometheus가 한다.", payload: 'http_requests_total{route="/api/orders",status="200"} 2950' },
+    { path: ["pr", "ne", "pr"], packet: "GET", title: "모든 대상을 같은 방식으로", detail: "서버 지표도 node_exporter가 같은 형식으로 내놓는다. 대상은 static_configs나 쿠버네티스 같은 서비스 디스커버리로 찾는다." },
+    { path: ["pr", "s2"], packet: "GET", blocked: true, title: "읽지 못하면 up은 0", detail: "연결이 거부됐다. up=0이 기록되고 shop2의 시계열은 사라진다. 대상이 죽었다는 사실을 따로 보내 줄 필요가 없다.", payload: "connect: connection refused" },
+    { path: ["pr", "am"], packet: "alert", highlight: ["s2"], title: "규칙을 계산해 알린다", detail: "up == 0이 정해진 시간(for) 넘게 이어지면 Alertmanager로 보낸다. Alertmanager가 묶고, 조용히 하고, 사람에게 전달한다." },
+  ]}
+/>
+
+pull에도 약점이 있다. 몇 초 만에 끝나는 배치 작업은 scrape가 오기 전에 사라진다. 이때는 작업이 끝나면서 Pushgateway에 결과를 밀어 넣고 Prometheus가 Pushgateway를 읽어 간다. 다만 Pushgateway는 받은 값을 지울 때까지 계속 들고 있어서, 작업이 죽어도 마지막 성공 값이 그대로 보인다. 그래서 값보다 "마지막으로 성공한 시각"(`*_last_success_timestamp_seconds`)을 밀어 넣고 `time() - 그 값`이 너무 커지면 알린다. Pushgateway는 서비스의 지표를 모으는 중계소로 쓰는 게 아니라, 짧은 배치 작업 전용이다.
+
+다른 약점은 네트워크다. Prometheus가 대상에 직접 닿아야 한다. NAT 뒤, 다른 VPC, 고객 쪽 장비처럼 들어갈 수 없는 곳은 그 안에 Prometheus(또는 OTel Collector)를 하나 두고 `remote_write`로 중앙에 밀어 보낸다. 실제 운영은 대부분 이렇게 pull과 push를 섞는다. 대상 가까이에서는 pull, 중앙으로는 push다.
+
+## 대시보드는 질문 하나에 패널 하나
+
+처음 장면의 40장짜리 대시보드는 대부분 "있으니까 그린" 그래프였다. CPU, 메모리, GC 횟수, 스레드 수가 같은 크기로 나열되어 있어서 장애 때 어느 것부터 봐야 할지 몰랐다. 대시보드를 질문의 계층으로 다시 짜면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="위에서 아래로 내려가며 범위를 좁힌다"
+  nodes={[
+    { id: "q1", label: "사용자가 불편한가", sub: "탐침 성공률, SLO", x: 200, y: 36, w: 190 },
+    { id: "q2", label: "어느 서비스가", sub: "서비스별 RED", x: 200, y: 106, w: 170 },
+    { id: "q3", label: "어느 자원이", sub: "USE, 커넥션 풀", x: 110, y: 180, w: 150 },
+    { id: "q4", label: "어느 하위 서비스가", sub: "하위 RED", x: 300, y: 180, w: 160 },
+    { id: "q5", label: "어느 요청이", sub: "exemplar → trace·로그", x: 200, y: 252, w: 190 },
+  ]}
+  edges={[
+    { from: "q1", to: "q2" },
+    { from: "q2", to: "q3" },
+    { from: "q2", to: "q4" },
+    { from: "q3", to: "q5" },
+    { from: "q4", to: "q5" },
+  ]}
+/>
+
+맨 위 한 장은 서비스 전체에서 "지금 사용자가 불편한가"만 답한다. 그 아래는 서비스마다 같은 모양의 RED 대시보드이고, 그 아래가 자원과 의존성이다. 맨 아래에서 지표를 떠나 trace와 로그로 넘어간다. 이 마지막 단계는 [관측 가능성 기본](/posts/observability-basics)의 이야기다.
+
+패널을 만들 때 지키면 좋은 것도 몇 가지 있다.
+
+- 패널 제목을 질문으로 쓴다. "CPU"보다 "CPU를 기다리는 일이 있나"가 낫다. 질문을 못 쓰겠으면 그 패널은 필요 없을 가능성이 높다.
+- 지연은 평균 대신 p50, p95, p99를 같이 그린다. 평균이 왜 거짓말을 하는지는 [지표 타입 글](/posts/metrics-types)에서 숫자로 본다.
+- 같은 대시보드의 `rate` 범위를 통일한다. 한 패널은 `[1m]`, 다른 패널은 `[10m]`이면 같은 시각에 다른 이야기를 한다.
+- 배포 시각을 주석(annotation)으로 겹쳐 그린다. 장애의 상당수는 배포 직후에 시작된다.
+
+## 모니터링을 들일 때 자주 하는 실수
+
+현장에서 자주 보는 실수를 증상과 함께 모았다.
+
+프로세스 감시만 한다. "프로세스가 떠 있나"는 위의 얼린 프로세스처럼 살아 있지만 일하지 않는 상태를 못 잡는다. 바깥 탐침과 `up`을 같이 본다.
+
+CPU 80%에 알림을 건다. CPU가 높아도 사용자가 멀쩡하면 깨울 이유가 없고, CPU가 낮아도 DB 락 때문에 다 멈춰 있을 수 있다. 사람을 깨우는 알림은 사용자 증상(오류율, 지연, 탐침 실패)에 걸고, 원인 쪽 숫자는 대시보드에 둔다. 알림 설계는 [알림 글](/posts/alerting)에서 이어진다.
+
+값이 없을 때를 생각하지 않는다. 위 실습처럼 대상이 죽으면 오류율 쿼리는 빈 결과가 되고 알림은 조용하다. `up == 0`과 `absent(up{job="shop"})`(대상 설정 자체가 사라진 경우)에도 알림을 건다.
+
+`rate` 범위를 scrape 간격과 같게 잡는다. 5초 간격에 `[5s]`로 잡으면 범위 안에 샘플이 하나뿐인 순간이 생겨 그래프에 구멍이 난다. 최소 네 배로 잡는다.
+
+에러가 한 번도 없던 레이블이 비율에서 빠진다. 위에서 본 것처럼 시작할 때 0으로 만들어 두거나, 쿼리에서 `or vector(0)`으로 메운다.
+
+모니터링이 장애와 같은 곳에 산다. 모니터링 서버가 같은 클러스터, 같은 리전에 있으면 그 클러스터가 죽을 때 같이 죽는다. 최소한 바깥 탐침과 "모니터링이 살아 있나"를 확인하는 감시(데드맨 스위치, 항상 울리는 알림이 끊기면 알리는 방식)는 다른 곳에 둔다.
+
+가용률을 직접 계산해 보면 `up` 샘플이 무엇을 말하는지 감이 온다. `avg_over_time(up[1d])`가 하는 일과 같다. 샘플 배열(1 또는 0)과 간격을 받아 살아 있던 비율과 가장 길게 이어진 다운 시간을 돌려주는 함수다.
+
+<CodePlayground
+  caption="up 샘플로 가용률과 가장 긴 다운 시간 구하기"
+  functionName="upStats"
+  initialCode={`// samples: scrape마다 기록된 up 값(1 또는 0), intervalSec: scrape 간격
+// 돌려줄 값: { ratio, longestDownSec }, 샘플이 없으면 null
+function upStats(samples, intervalSec) {
+  return null;
+}`}
+  solution={`function upStats(samples, intervalSec) {
+  if (samples.length === 0) return null;
+  let up = 0, run = 0, longest = 0;
+  for (const s of samples) {
+    if (s === 1) { up++; run = 0; }
+    else { run++; longest = Math.max(longest, run); }
+  }
+  return { ratio: up / samples.length, longestDownSec: longest * intervalSec };
+}`}
+  tests={[
+    { args: [[1, 1, 0, 0, 0, 1], 15], expected: { ratio: 0.5, longestDownSec: 45 }, label: "45초 한 번 다운" },
+    { args: [[1, 1, 1, 1], 15], expected: { ratio: 1, longestDownSec: 0 }, label: "계속 살아 있음" },
+    { args: [[0, 1, 0, 0], 10], expected: { ratio: 0.25, longestDownSec: 20 }, label: "다운 두 번" },
+    { args: [[1, 0, 1, 0, 1, 0, 1, 0], 60], expected: { ratio: 0.5, longestDownSec: 60 }, label: "깜빡이는 대상" },
+    { args: [[], 5], expected: null, label: "샘플 없음" },
+  ]}
+/>
+
+첫째와 넷째 테스트는 가용률이 똑같이 50%다. 그런데 하나는 45초짜리 장애 한 번이고, 다른 하나는 1분마다 깜빡이는 대상이다. 사용자가 겪는 일도, 고치는 방법도 다르다. 가용률 숫자 하나만 보지 말고 장애가 어떤 모양으로 났는지를 같이 본다. 그리고 `up`은 scrape 간격 사이에 잠깐 죽었다 살아난 것은 못 본다. 5초 간격이면 3초짜리 재시작은 기록되지 않을 수 있다. 이런 짧은 장애는 `process_start_time_seconds`가 바뀌었는지(`changes(process_start_time_seconds[1h])`)로 찾는다.
+
+## 다시 조용한 그래프 앞에서
+
+처음 장면의 오류율 그래프는 비어 있었고, 비어 있는 그래프는 아무도 깨우지 않았다. 사용자 쪽에서 본 네 숫자(지연, 트래픽, 오류, 포화도)를 서비스마다 RED로, 자원마다 USE로 같은 모양으로 그리고, 바깥 탐침과 `up`으로 "값이 없음"까지 잡아야 그 장면이 되풀이되지 않는다. 그 숫자를 어떤 그릇(카운터, 게이지, 히스토그램)에 담아야 하는지는 [지표 타입 글](/posts/metrics-types)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 네 가지 황금 신호는 무엇이고 왜 그 넷인가요?
+
+지연, 트래픽, 오류, 포화도다. 앞의 셋은 사용자가 지금 겪는 일(얼마나 느린지, 얼마나 많이 오는지, 얼마나 실패하는지)이고, 포화도는 곧 겪게 될 일(얼마나 꽉 찼는지)이다. 이 넷만 제대로 보면 사용자에게 영향을 주는 장애 대부분이 드러난다. 지연은 평균이 아닌 분포로, 성공과 실패를 나눠서 본다.
+
+### RED와 USE는 어떻게 다르고 언제 쓰나요?
+
+RED(Rate, Errors, Duration)는 요청을 받는 서비스 관점이고, USE(Utilization, Saturation, Errors)는 CPU, 메모리, 디스크, 커넥션 풀 같은 자원 관점이다. 서비스 대시보드의 첫 줄은 RED로 통일하고, RED가 나빠지면 그 서비스가 쓰는 자원을 USE로 훑어 범인을 찾는다. 하위 서비스는 다시 RED로 본다.
+
+### 화이트박스와 블랙박스 모니터링의 차이는요?
+
+화이트박스는 앱이 안에서 세는 지표라 원인에 가깝고 자세하지만, 요청이 앱까지 들어와야만 센다. 블랙박스는 바깥에서 사용자처럼 요청을 보내 결과를 재서, 원인은 모르지만 사용자가 겪는 증상을 그대로 본다. 앱이 멈추거나 앞단 네트워크가 끊기면 화이트박스 지표는 비고 블랙박스만 실패를 잡는다. 그래서 알림은 블랙박스와 사용자 증상에, 원인 분석은 화이트박스에 맡긴다.
+
+### Prometheus는 왜 pull 방식을 쓰나요? 단점은요?
+
+pull은 대상이 살아 있는지를 scrape 성공 여부(`up`)로 바로 알 수 있고, 모니터링 쪽이 수집 간격과 부하를 통제하며, 개발자 PC에서도 `/metrics`를 열어 바로 확인할 수 있다. 단점은 짧게 끝나는 배치 작업을 놓치고, Prometheus가 대상에 네트워크로 닿아야 한다는 것이다. 배치는 Pushgateway에 마지막 성공 시각을 밀어 넣고, 닿지 않는 곳은 그 안에 수집기를 두고 remote_write로 중앙에 보낸다.
+
+### 오류율 알림을 걸어 뒀는데 장애 때 울리지 않았습니다. 무엇을 의심하나요?
+
+먼저 값이 비어 있었는지 본다. 대상이 죽거나 멈추면 scrape가 실패해 시계열이 사라지고, 비교 대상이 없으니 알림 조건이 참이 되지 않는다. `up == 0`, `absent()`, 바깥 탐침 실패에 따로 알림을 걸어 둬야 한다. 그 밖에 `for` 기간이 장애보다 길었는지, 한 번도 오류가 없던 레이블이 비율에서 빠졌는지도 확인한다.
+
+### 대시보드를 설계할 때 무엇을 기준으로 하나요?
+
+패널 하나가 질문 하나에 답하게 하고, 위에서 아래로 범위를 좁히는 계층으로 짠다. 맨 위는 사용자가 불편한가(탐침, SLO), 그 아래 서비스별 RED, 그 아래 자원의 USE와 의존성, 마지막에 trace와 로그로 넘어가는 링크를 둔다. 지연은 백분위로 그리고, 같은 대시보드의 rate 범위를 통일하고, 배포 시각을 겹쳐 그린다.
+
+### Pushgateway를 쓸 때 주의할 점은요?
+
+Pushgateway는 받은 값을 지울 때까지 계속 보여 주기 때문에, 작업이 죽어도 마지막 값이 살아 있는 것처럼 보인다. 그래서 결과 값보다 마지막 성공 시각을 밀어 넣고 그 시각이 너무 오래되면 알린다. 또 Prometheus가 보는 `up`은 Pushgateway의 생존일 뿐 작업의 생존이 아니다. 오래 도는 서비스의 지표를 모으는 중계소로 쓰면 이런 문제가 커지니 짧은 배치 작업에만 쓴다.

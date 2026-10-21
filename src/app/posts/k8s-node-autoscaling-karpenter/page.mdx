@@ -1,0 +1,404 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-node-autoscaling-karpenter");
+
+점심 트래픽에 HPA가 Pod를 10개로 늘렸다. 그런데 `kubectl get pods`에 Pending이 줄지어 있다.
+
+```text
+Warning  FailedScheduling  0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.
+```
+
+HPA는 할 일을 다 했다. Pod 수는 늘렸는데 그 Pod를 받을 노드가 없다. 노드를 늘리는 일은 따로 있다. 쿠버네티스에서 이 일을 맡는 대표 도구가 둘이다. 오래 써 온 Cluster Autoscaler(CA)와, AWS가 만들어 지금은 쿠버네티스 SIG Autoscaling 프로젝트가 된 Karpenter다. 둘 다 Pending Pod를 보고 노드를 늘린다는 점은 같지만, 무엇을 늘리느냐가 다르다. CA는 미리 정해 둔 노드 그룹의 대수를 늘리고, Karpenter는 Pod에 맞는 인스턴스를 그때그때 고른다.
+
+이 글은 두 도구가 노드를 늘리는 방식, 노드 그룹을 고르는 expander, Pod를 노드에 빽빽이 채우는 bin-packing, 빈자리를 모아 노드를 줄이는 consolidation, 스팟 회수, 노드가 붙기까지의 시간을 본다. Karpenter 출력은 kwok 실습 클러스터(Kubernetes 1.37.0)에 Karpenter 1.15.0 코어를 kwok 클라우드 제공자로 빌드해 붙여 받은 진짜 로그와 이벤트다. 가짜 인스턴스라 노드가 1초 만에 붙는다는 점만 다르다. CA는 실행하지 않았고 문서의 설정값으로 설명한다.
+
+이 주제의 다른 글: 오토스케일링 전반은 [오토스케일링](/posts/autoscaling), Pod 수를 정하는 쪽은 [HPA](/posts/k8s-hpa), EKS에서 노드 그룹과 Karpenter를 고르는 이야기는 [EKS 클러스터 기본](/posts/eks-cluster-basics), 노드를 비울 때의 약속은 [PodDisruptionBudget](/posts/k8s-pod-disruption-budget)에 있다.
+
+## Pending Pod가 노드를 부른다
+
+두 도구 모두 CPU 사용률을 보지 않는다. 스케줄러가 "넣을 곳이 없다"고 표시한 Pod, 즉 `PodScheduled=False, reason=Unschedulable`인 Pod를 본다. 노드를 늘릴지 정하는 기준은 사용량이 아니라 requests다([requests와 limits](/posts/k8s-pod-resources)). requests 없이 뜨는 Pod는 아무리 CPU를 많이 써도 노드를 부르지 않는다.
+
+<NetworkTopology
+  caption="CA는 그룹의 숫자를, Karpenter는 인스턴스를 직접 고친다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "k8s", label: "클러스터", x: 8, y: 10, w: 384, h: 110, tone: "private" },
+    { id: "cloud", label: "클라우드 API", x: 8, y: 160, w: 384, h: 110, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "pod", label: "Pending Pod", sub: "cpu 1 ×7", x: 70, y: 70, icon: "container", w: 112 },
+    { id: "ca", label: "Cluster AS", sub: "10초마다", x: 200, y: 70, icon: "gateway" },
+    { id: "karp", label: "Karpenter", sub: "watch", x: 328, y: 70, icon: "gateway" },
+    { id: "asg", label: "노드 그룹", sub: "ASG desired", x: 120, y: 220, icon: "server", w: 112 },
+    { id: "fleet", label: "EC2 Fleet", sub: "타입 직접", x: 290, y: 220, icon: "internet", w: 112 },
+  ]}
+  links={[
+    { from: "pod", to: "ca" },
+    { from: "pod", to: "karp" },
+    { from: "ca", to: "asg" },
+    { from: "karp", to: "fleet" },
+  ]}
+  steps={[
+    { path: ["pod"], title: "스케줄러가 포기한 Pod", detail: "requests를 받을 노드가 없어 Unschedulable 조건이 붙는다. 두 도구 모두 이 조건을 신호로 쓴다." },
+    { path: ["pod", "ca"], packet: "scan", title: "CA가 시뮬레이션한다", detail: "노드 그룹마다 '이 그룹에 한 대를 더하면 Pod가 들어가나'를 그룹의 템플릿 노드로 계산한다." },
+    { path: ["ca", "asg"], packet: "+2", title: "그룹의 숫자를 올린다", detail: "들어갈 그룹을 고르고 ASG의 desired capacity를 올린다. 어떤 인스턴스가 뜰지는 그룹이 이미 정해 두었다." },
+    { path: ["pod", "karp"], packet: "batch", title: "Karpenter는 Pod를 모은다", detail: "새 Pending Pod가 1초 동안 안 오면 묶음을 닫는다(최대 10초). 묶은 Pod의 requests, 셀렉터, toleration을 합친다." },
+    { path: ["karp", "fleet"], packet: "c-16x", title: "맞는 인스턴스를 직접 띄운다", detail: "NodePool이 허락하는 타입 중 묶음이 들어가는 싼 것을 골라 EC2 Fleet API를 바로 부른다. ASG를 거치지 않는다." },
+  ]}
+/>
+
+## Cluster Autoscaler는 노드 그룹을 늘린다
+
+CA는 "노드 그룹 안의 기계는 모두 같다"고 가정한다. AWS라면 ASG 하나, GKE라면 노드 풀 하나가 한 그룹이다. CA는 그룹마다 템플릿 노드를 만들어 Pending Pod가 거기 들어가는지 계산하고, 들어가는 그룹의 대수를 늘린다. 문서가 밝히듯 이 계산은 실제 스케줄러보다 단순해서, 여러 바퀴를 돌아야 모든 Pod가 자리를 찾기도 한다.
+
+자주 만지는 설정은 이렇다(괄호 안은 현재 문서의 기본값).
+
+```yaml
+# Cluster Autoscaler Deployment의 컨테이너 인자 (EKS에서 ASG를 태그로 찾는 예)
+command:
+- ./cluster-autoscaler
+- --cloud-provider=aws
+- --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/prod
+- --expander=priority,least-waste          # 그룹 고르는 순서 (기본 least-waste)
+- --scan-interval=10s                      # Pending을 보는 주기 (10s)
+- --max-node-provision-time=15m            # 이 안에 안 붙으면 다른 그룹을 본다 (15m)
+- --scale-down-utilization-threshold=0.5   # requests 합이 50% 미만이면 축소 후보 (0.5)
+- --scale-down-unneeded-time=10m           # 후보로 10분을 버티면 지운다 (10m)
+- --scale-down-delay-after-add=10m         # 늘린 직후 10분은 줄이지 않는다 (10m)
+- --balance-similar-node-groups            # AZ별로 나눈 같은 그룹을 고르게 늘린다
+```
+
+그룹이 여럿이면 어느 그룹을 늘릴지 expander가 정한다. `random`은 아무거나, `most-pods`는 Pending Pod를 가장 많이 받는 그룹, `least-waste`는 늘린 뒤 남는 CPU(같으면 메모리)가 가장 적은 그룹, `least-nodes`는 노드 수를 가장 적게 쓰는 그룹, `priority`는 사람이 ConfigMap에 적은 우선순위, `price`는 가장 싼 그룹(GCE, GKE 등 일부 제공자만)이다. 1.23부터 `priority,least-waste`처럼 여럿을 이어 쓸 수 있고, 앞의 것이 고른 후보 중에서 다음 것이 다시 고른다. 기본값은 현재 문서 기준 `least-waste`이고, 예전 버전 문서에는 `random`으로 적혀 있었으니 쓰는 버전의 기본값을 확인한다.
+
+least-waste가 무엇을 고르는지 아래에서 계산해 볼 수 있다. Pending Pod의 CPU requests 합을 받으려면 그룹마다 몇 대가 필요하고, 그만큼 늘렸을 때 몇 코어가 남는지 비교한다.
+
+<CodePlayground
+  caption="least-waste expander 흉내 내기"
+  functionName="leastWaste"
+  initialCode={`// pendingCpu: Pending Pod들의 CPU requests 합 (코어)
+// podCpu: Pod 하나의 CPU requests (Pod는 쪼갤 수 없다)
+// groups: [{ name, cpu }] 그룹마다 노드 한 대의 allocatable CPU
+// 반환: 남는 CPU가 가장 적은 그룹 이름 (같으면 앞의 것)
+function leastWaste(pendingCpu, podCpu, groups) {
+  return groups[0].name;
+}`}
+  solution={`function leastWaste(pendingCpu, podCpu, groups) {
+  let best = null;
+  for (const g of groups) {
+    const perNode = Math.floor(g.cpu / podCpu);
+    if (perNode === 0) continue;
+    const pods = Math.round(pendingCpu / podCpu);
+    const nodes = Math.ceil(pods / perNode);
+    const waste = nodes * g.cpu - pendingCpu;
+    if (best === null || waste < best.waste) best = { name: g.name, waste };
+  }
+  return best ? best.name : null;
+}`}
+  tests={[
+    { label: "1코어 Pod 7개", args: [7, 1, [{ name: "m-4x", cpu: 3.9 }, { name: "m-8x", cpu: 7.9 }, { name: "m-16x", cpu: 15.9 }]], expected: "m-8x" },
+    { label: "2코어 Pod 3개", args: [6, 2, [{ name: "m-4x", cpu: 3.9 }, { name: "m-8x", cpu: 7.9 }]], expected: "m-8x" },
+    { label: "1코어 Pod 3개", args: [3, 1, [{ name: "m-4x", cpu: 3.9 }, { name: "m-8x", cpu: 7.9 }]], expected: "m-4x" },
+    { label: "4코어 Pod는 4x에 못 들어간다", args: [4, 4, [{ name: "m-4x", cpu: 3.9 }, { name: "m-8x", cpu: 7.9 }]], expected: "m-8x" },
+  ]}
+/>
+
+마지막 경우가 실무에서 자주 걸린다. "4코어 노드에 4코어 Pod"는 들어가지 않는다. 노드의 allocatable은 kubelet, 시스템 예약분, DaemonSet을 뺀 값이라 3.9코어 남짓이다. requests를 노드 크기에 딱 맞춰 잡으면 한 단계 큰 노드가 뜨고 절반이 빈다.
+
+CA의 약점도 이 구조에서 나온다. 그룹마다 인스턴스 타입이 정해져 있으니 Pod 크기가 다양하면 그룹을 여럿 만들어야 한다. GPU, ARM, 메모리 많은 타입, 스팟과 온디맨드, AZ별로 곱하면 그룹이 수십 개가 된다. 그룹을 0대로 둘 수는 있지만, 0대인 그룹의 템플릿을 알려면 ASG 태그로 라벨과 taint를 적어 줘야 한다.
+
+## Karpenter는 Pod를 보고 인스턴스를 고른다
+
+Karpenter는 노드 그룹이 없다. 대신 NodePool에 "어떤 노드까지 만들어도 되는가"를 조건으로 적는다. AWS에서는 네트워크와 AMI 같은 클라우드 쪽 설정을 EC2NodeClass에 따로 둔다.
+
+```yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      requirements:
+      - key: karpenter.k8s.aws/instance-category   # c, m, r 계열 중에서
+        operator: In
+        values: ["c", "m", "r"]
+      - key: karpenter.sh/capacity-type             # 스팟을 먼저, 없으면 온디맨드
+        operator: In
+        values: ["spot", "on-demand"]
+      - key: kubernetes.io/arch
+        operator: In
+        values: ["amd64", "arm64"]
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+      expireAfter: 720h            # 노드 최대 수명 (기본 720h)
+  limits:
+    cpu: 1000                      # 이 NodePool이 만들 수 있는 CPU 총량
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m
+    budgets:
+    - nodes: "10%"                 # 한 번에 줄일 수 있는 노드 비율 (기본 10%)
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  role: KarpenterNodeRole-prod
+  amiSelectorTerms:
+  - alias: al2023@latest
+  subnetSelectorTerms:
+  - tags: { karpenter.sh/discovery: prod }
+  securityGroupSelectorTerms:
+  - tags: { karpenter.sh/discovery: prod }
+```
+
+실습 클러스터에서는 EC2NodeClass 자리에 kwok용 KWOKNodeClass를 두고, CPU 1코어씩 요청하는 Pod 10개를 한 번에 띄웠다. Karpenter 로그에서 필요한 칸만 뽑았다.
+
+```bash
+# 1코어짜리 Pod 10개
+kubectl scale deploy inflate --replicas=10
+
+# 만들어진 NodeClaim과 노드
+kubectl get nodeclaims
+kubectl get nodes -L node.kubernetes.io/instance-type,karpenter.sh/capacity-type
+```
+
+```text
+01:06:57.766  found provisionable pod(s)   Pods: default/inflate-558dc58d7-k9v5z, ... and 5 other(s)
+01:06:57.767  computed new nodeclaim(s) to fit pod(s)   nodeclaims: 1, pods: 10
+01:06:57.773  created nodeclaim   default-2lnjh   requests: {cpu: 10, memory: 10Gi, pods: 10}
+              instance-types: c-16x-amd64-linux, c-16x-amd64-windows, c-32x-amd64-linux, ... and 25 other(s)
+01:06:57.781  launched nodeclaim   instance-type: c-16x-amd64-linux, zone: test-zone-a, capacity-type: spot
+              allocatable: {cpu: 15900m, memory: 32758Mi, pods: 256}
+01:06:58.867  registered nodeclaim
+01:06:58.903  initialized nodeclaim
+
+NAME            TYPE                CAPACITY   ZONE          NODE                                                    READY   AGE
+default-2lnjh   c-16x-amd64-linux   spot       test-zone-a   kwok-default-2lnjh-crystalnoon-1-svrtnc38hb-674761743   True    24s
+```
+
+Pod 10개를 노드 10대가 아니라 16코어짜리 한 대에 담았다. 이것이 bin-packing이다. 묶음 전체의 requests(CPU 10, 메모리 10Gi)를 한 번에 보고, 그게 들어가는 인스턴스 타입 30개를 후보로 넘긴다. 후보를 하나로 좁히지 않고 여럿 넘기는 이유는 클라우드에 그 타입의 여유가 없을 때 다음 후보로 넘어가기 위해서다. AWS에서는 이 목록으로 EC2 Fleet을 부르고, 스팟이면 price-capacity-optimized 전략으로 싸면서도 회수될 가능성이 낮은 쪽을 고른다. 문서가 스팟을 오래 쓰려면 NodePool의 타입 조건을 넓게 두라고 거듭 권하는 이유다.
+
+<ConceptDiagram
+  width={440}
+  height={280}
+  caption="NodePool은 조건, NodeClaim은 주문서, Node는 결과물"
+  nodes={[
+    { id: "np", label: "NodePool", sub: "타입·용량 조건", x: 110, y: 45, w: 150 },
+    { id: "nc", label: "EC2NodeClass", sub: "AMI·서브넷·SG", x: 330, y: 45, w: 150 },
+    { id: "claim", label: "NodeClaim", sub: "c-16x · spot", x: 220, y: 145, w: 150 },
+    { id: "ec2", label: "EC2 인스턴스", sub: "i-0abc...", x: 110, y: 240, w: 140 },
+    { id: "node", label: "Node", sub: "kubelet 등록", x: 330, y: 240, w: 140 },
+  ]}
+  edges={[
+    { from: "np", to: "claim", label: "만든다" },
+    { from: "nc", to: "claim", label: "참조", dashed: true },
+    { from: "claim", to: "ec2", label: "launch" },
+    { from: "ec2", to: "node", label: "join" },
+    { from: "claim", to: "node", label: "짝", arrow: "both", dashed: true },
+  ]}
+/>
+
+NodeClaim은 Karpenter가 "이런 노드를 하나 만든다"고 적어 두는 오브젝트다. 인스턴스 하나, 노드 하나와 짝이 맞는다. 노드가 이상할 때 `kubectl describe nodeclaim`이 클라우드 쪽 오류(용량 부족, 권한)를 가장 먼저 보여 준다.
+
+## 빈자리를 모아 노드를 줄인다
+
+늘리는 것보다 어려운 것이 줄이는 것이다. 위 상태에서 Pod를 3개로 줄였다. 16코어 노드에 3코어만 남았다. 이 노드는 처음에 스팟이었는데, Karpenter는 줄이지 않았다.
+
+```text
+Normal   Unconsolidatable   node/kwok-default-2lnjh-...   SpotToSpotConsolidation is disabled, can't replace a spot node with a spot node
+```
+
+스팟 노드를 더 작은 스팟 노드로 바꾸는 것은 기능 게이트(`SpotToSpotConsolidation`)를 켜야 한다. 켜고 다시 기다리자 메시지가 바뀌었다.
+
+```text
+Normal   Unconsolidatable   node/kwok-default-2lnjh-...   SpotToSpotConsolidation requires 15 cheaper instance type options than the current candidate to consolidate, got 12
+```
+
+스팟을 1대에서 1대로 바꿀 때는 더 싼 후보가 15개 이상 있어야 한다. 가장 싼 스팟으로 계속 내려가다 보면 회수가 잦은 타입에 몰리기 때문에 일부러 둔 제한이다. NodePool을 온디맨드로 바꿔 같은 실험을 다시 했다.
+
+```text
+01:11:36.936  disrupting node(s)
+              command: Underutilized/...: replace: nodepools=[default]: [kwok-default-df5xr-...] -> [1 replacement] (savings: $0.33)
+              disrupted: c-16x-amd64-linux on-demand, pod-count: 3
+              replacement instance-types: c-4x-amd64-linux, c-4x-amd64-windows, s-4x-amd64-linux, ... and 7 other(s)
+01:11:36.970  launched nodeclaim   default-747p5   instance-type: c-4x-amd64-linux   allocatable: {cpu: 3900m, memory: 8182Mi}
+01:11:39.030  initialized nodeclaim   default-747p5
+01:11:39.985  tainted node   kwok-default-df5xr-...   karpenter.sh/disrupted:NoSchedule
+01:11:44.155  deleted node   kwok-default-df5xr-...
+```
+
+```text
+Warning  FailedDraining  node/kwok-default-df5xr-...   Failed to drain node, 3 pods are waiting to be evicted
+Normal   Evicted         pod/inflate-558dc58d7-v4xlv   Evicted pod: Underutilized
+Normal   Unconsolidatable  node/kwok-default-747p5-...  Can't replace with a cheaper node
+```
+
+<UrlAnatomy
+  caption="disrupting node(s) 로그의 command 한 줄"
+  base="Underutilized/85863989"
+  separator=": "
+  joiner=": "
+  params={[
+    { key: "decision", display: "replace", title: "무엇을 하나", description: "delete면 노드를 지우기만 하고, replace면 더 싼 노드 하나를 먼저 띄운다. 이 앞의 Underutilized가 이유다. Empty, Drifted도 같은 자리에 온다." },
+    { key: "pool", display: "nodepools=[default]", title: "어느 NodePool인가", description: "disruption budgets는 NodePool마다 따로 센다. 이 NodePool의 예산이 0이면 이 줄이 찍히지 않는다." },
+    { key: "nodes", display: "[kwok-default-df5xr-...] -> [1 replacement]", title: "몇 대를 몇 대로", description: "여러 노드를 한 대로 합치는 multi-node consolidation이면 왼쪽에 노드가 여럿 온다." },
+    { key: "savings", display: "(savings: $0.33)", title: "얼마를 아끼나", description: "시간당 가격 차이다. 이 값이 0 이하면 replace하지 않는다. Balanced 정책은 이 절약액을 옮겨야 할 Pod 수와 견준다." },
+  ]}
+/>
+
+16코어 노드를 4코어 노드로 바꾸고 시간당 0.33달러(kwok의 가짜 가격)를 아꼈다. 순서가 중요하다. 아래 그림에서 다음을 누르면 따라간다.
+
+<SequenceDiagram
+  caption="consolidation의 replace: 새 노드를 먼저 띄우고 옛 노드를 비운다"
+  actors={[
+    { id: "kp", label: "Karpenter" },
+    { id: "cloud", label: "클라우드" },
+    { id: "old", label: "c-16x 노드" },
+    { id: "new", label: "c-4x 노드" },
+  ]}
+  steps={[
+    { from: "kp", to: "kp", label: "시뮬레이션", title: "옮길 곳을 계산한다", detail: "노드의 Pod 3개를 다른 노드의 빈자리와 더 싼 새 노드 하나에 넣을 수 있는지 스케줄링을 흉내 낸다. consolidateAfter 동안 Pod 변화가 없어야 후보가 된다." },
+    { from: "kp", to: "cloud", label: "launch c-4x", title: "대체 노드를 먼저 띄운다", detail: "새 노드가 Ready가 될 때까지 옛 노드는 건드리지 않는다. 대체 노드가 실패하면 처음부터 다시 한다." },
+    { from: "cloud", to: "new", label: "Ready", title: "새 자리가 생겼다", detail: "실제 EC2라면 부팅과 kubelet 등록에 시간이 걸린다. kwok에서는 2초였다." },
+    { from: "kp", to: "old", label: "taint disrupted", title: "새 Pod가 못 오게 막는다", detail: "karpenter.sh/disrupted:NoSchedule taint를 건다. 스케줄러가 이 노드에 더 넣지 않는다." },
+    { from: "kp", to: "old", label: "eviction ×3", title: "PDB를 지키며 내보낸다", detail: "eviction API를 쓴다. PDB가 허락하지 않으면 노드는 반쯤 빈 채로 기다린다. 이벤트에 FailedDraining이 남는다." },
+    { from: "old", to: "new", label: "Pod 이동", title: "새 노드에 다시 뜬다", detail: "ReplicaSet이 만든 Pod가 c-4x에 스케줄된다." },
+    { from: "kp", to: "cloud", label: "terminate", title: "옛 인스턴스를 반납한다", detail: "노드가 비면 finalizer를 풀고 인스턴스를 지운다. 이 시점부터 비용이 줄어든다." },
+  ]}
+/>
+
+consolidation은 세 가지 동작을 차례로 시도한다. 완전히 빈 노드는 한꺼번에 지운다. 여러 노드의 Pod를 다른 노드와 새 노드 하나로 모을 수 있으면 여럿을 함께 정리한다. 마지막으로 노드 하나씩 지우거나 더 싼 노드로 바꾼다. 어느 노드까지 볼지는 `consolidationPolicy`가 정한다. `WhenEmpty`는 빈 노드만, `WhenEmptyOrUnderutilized`(기본)는 비용을 줄일 수 있는 모든 노드를 본다. v1.14 문서부터는 절약액이 Pod를 옮기는 비용보다 클 때만 움직이는 `Balanced`도 보인다.
+
+같은 실험 중 NodePool의 capacity-type 조건을 바꾸자, 이미 떠 있던 스팟 노드가 조건에서 벗어나 `marking drifted`(reason RequirementsDrifted)가 찍히고 지워졌다. 이게 drift다. NodePool이나 EC2NodeClass(AMI, 서브넷, 보안 그룹)를 바꾸면 기존 노드가 새 설정과 다르다고 보고 갈아 끼운다. AMI를 올리는 배포가 곧 노드 교체 배포가 되는 셈이다. 속도는 NodePool의 disruption budgets가 정한다. 문서의 계산식은 `roundup(전체 × 비율) - 지금 지우는 중 - NotReady`다. 19대에 20%면 3.8을 올려 4대다. `schedule`과 `duration`을 함께 주면 업무 시간에는 0대로 묶는 식의 시간대별 예산도 걸 수 있다(UTC 기준).
+
+## 줄이지 못하게 막는 것들
+
+축소가 안 될 때 Karpenter는 이유를 이벤트로 남긴다. 위 상태에서 Pod 3개에 `minAvailable: 3`인 PDB를 걸어 두자 이렇게 나왔다.
+
+```text
+Normal   DisruptionBlocked   node/kwok-default-747p5-...   Pdb prevents pod evictions (PodDisruptionBudget=[default/inflate-pdb])
+Normal   DisruptionBlocked   nodeclaim/default-747p5       Pdb prevents pod evictions (PodDisruptionBudget=[default/inflate-pdb])
+Normal   DisruptionBlocked   node/kwok-default-lghkl-...   Node is nominated for a pending pod
+```
+
+막는 이유는 대개 이 넷 중 하나다.
+
+- PDB의 허용 수가 0이다. 한 노드의 Pod 여럿이 서로 다른 PDB에 걸려 있으면 그중 하나만 막아도 노드 전체가 못 움직인다([PodDisruptionBudget](/posts/k8s-pod-disruption-budget)).
+- Pod에 `karpenter.sh/do-not-disrupt: "true"` 어노테이션이 있다. `"30m"`처럼 시간을 주면 시작 후 그 시간 동안만 막는다. CA에서는 `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`가 같은 역할이다.
+- preferred anti-affinity나 topologySpread의 선호 조건이 있다. Karpenter는 노드를 띄울 때 선호 조건을 맞춰 줬으니, 줄일 때도 그걸 깨지 않으려 해 축소가 덜 된다. 로그에 `has a preferred Anti-Affinity which can prevent consolidation`이 남는다.
+- CA라면 로컬 스토리지(emptyDir, hostPath)를 쓰는 Pod가 있는 노드는 기본으로 지우지 않는다(`--skip-nodes-with-local-storage=true`). kube-system의 DaemonSet 아닌 Pod도 기본으로 막는다.
+
+반대로 영원히 막히면 곤란한 것도 있다. 보안 패치가 든 AMI 교체가 do-not-disrupt Pod 하나 때문에 몇 주씩 밀릴 수 있다. NodeClaim의 `terminationGracePeriod`(NodePool의 `spec.template.spec.terminationGracePeriod`)를 주면 그 시간이 지난 뒤에는 PDB와 어노테이션을 무시하고 강제로 비운다. `expireAfter`와 함께 쓰면 노드 수명의 상한이 `expireAfter + terminationGracePeriod`로 정해진다.
+
+## 스팟은 2분 전에 알려 준다
+
+스팟 인스턴스는 클라우드가 용량이 필요하면 회수한다. AWS는 회수 2분 전에 경고를 보낸다([클라우드 비용 줄이기](/posts/cloud-cost-optimization)에서 요금 이야기를 했다). 이 2분 안에 Pod를 옮겨야 한다.
+
+<NetworkTopology
+  caption="회수 경고가 노드 drain이 되기까지"
+  width={400}
+  height={260}
+  zones={[
+    { id: "aws", label: "AWS", x: 8, y: 10, w: 384, h: 100, tone: "edge" },
+    { id: "k8s", label: "클러스터", x: 8, y: 145, w: 384, h: 105, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ec2", label: "EC2", sub: "spot 회수", x: 70, y: 65, icon: "server" },
+    { id: "eb", label: "EventBridge", sub: "규칙", x: 200, y: 65, icon: "router", w: 112 },
+    { id: "sqs", label: "SQS 큐", sub: "interruption", x: 328, y: 65, icon: "db", w: 104 },
+    { id: "kp", label: "Karpenter", sub: "큐 구독", x: 328, y: 200, icon: "gateway" },
+    { id: "old", label: "spot 노드", sub: "2분 남음", x: 200, y: 200, icon: "container" },
+    { id: "new", label: "새 노드", sub: "미리 띄움", x: 70, y: 200, icon: "container" },
+  ]}
+  links={[
+    { from: "ec2", to: "eb" },
+    { from: "eb", to: "sqs" },
+    { from: "sqs", to: "kp" },
+    { from: "kp", to: "old" },
+    { from: "kp", to: "new", dashed: true },
+  ]}
+  steps={[
+    { path: ["ec2", "eb", "sqs"], packet: "warning", title: "회수 경고가 큐에 들어간다", detail: "EC2 Spot Interruption Warning 이벤트를 EventBridge 규칙이 SQS 큐로 보낸다. 이 큐와 규칙은 미리 만들어 둬야 한다." },
+    { path: ["sqs", "kp"], packet: "poll", title: "Karpenter가 읽는다", detail: "설정의 interruption queue 이름으로 큐를 구독한다. 이 설정이 없으면 회수를 미리 알 방법이 없다." },
+    { path: ["kp", "new"], packet: "launch", title: "대체 노드를 바로 띄운다", detail: "경고를 받자마자 새 노드를 요청한다. 2분 안에 Ready가 돼야 Pod가 갈 곳이 있다." },
+    { path: ["kp", "old"], packet: "drain", title: "동시에 비운다", detail: "taint를 걸고 eviction으로 Pod를 내보낸다. 2분이 지나면 PDB와 상관없이 인스턴스가 사라진다." },
+  ]}
+/>
+
+현장에서 확인할 것은 셋이다. 첫째, 큐가 실제로 설정돼 있는지. Karpenter를 Helm으로 설치할 때 `settings.interruptionQueue`가 비어 있으면 스팟 노드가 경고 없이 꺼진다. 둘째, 앱의 `terminationGracePeriodSeconds`가 2분 안에 끝나는지. 5분짜리 graceful shutdown은 스팟에서 의미가 없다. 셋째, 스팟 회수 경고와 리밸런스 권고는 다르다. Karpenter는 리밸런스 권고에 이벤트만 남기고 노드를 비우지는 않는다. 그것까지 처리하려면 AWS Node Termination Handler를 함께 쓰는데, 문서는 노드 교체가 더 잦아진다고 경고한다.
+
+스팟 회수는 PDB가 막을 수 없는 비자발적 중단에 가깝다. Karpenter가 eviction으로 비우긴 하지만 2분이 지나면 기다려 주지 않는다. 그래서 스팟에 올릴 앱은 replicas를 여러 AZ에 나눠 두고, 몇 개가 동시에 사라져도 버티게 만든다.
+
+## 노드가 붙기까지 걸리는 시간
+
+kwok에서는 NodeClaim을 만든 지 1초 만에 노드가 Ready였다. 실제 클라우드에서는 여러 단계가 더해진다.
+
+<AlgoTrace
+  caption="Pending부터 Pod Running까지 지나는 단계"
+  memoryLabel="이 단계에서 기다리는 것"
+  cells={["감지", "API 호출", "VM 부팅", "kubelet 등록", "CNI·DaemonSet", "이미지 받기", "readiness"]}
+  steps={[
+    { pointer: 0, memory: ["CA: 10초 주기", "Karpenter: 1~10초 묶음"], caption: "Pending을 알아채는 시간이다. CA는 scan-interval, Karpenter는 batch-idle-duration(1초)과 batch-max-duration(10초)이 정한다." },
+    { pointer: 1, memory: ["ASG 또는 Fleet"], caption: "클라우드 API를 부른다. 용량이 없으면 여기서 다음 타입이나 다음 그룹으로 넘어간다." },
+    { pointer: 2, memory: ["인스턴스 시작"], caption: "VM이 켜지고 OS가 올라온다. AMI와 인스턴스 타입에 따라 다르다." },
+    { pointer: 3, memory: ["TLS 부트스트랩"], caption: "kubelet이 API 서버에 노드로 등록한다. 이때부터 kubectl get nodes에 보인다." },
+    { pointer: 4, memory: ["NotReady → Ready"], caption: "CNI가 Pod 네트워크를 준비해야 노드가 Ready가 된다. VPC CNI처럼 IP를 붙이는 데 시간이 드는 경우도 있다." },
+    { pointer: 5, found: [5], memory: ["큰 이미지일수록 길다"], caption: "새 노드에는 이미지 캐시가 없다. 이미지가 1GB면 이 단계가 가장 길어질 수 있다." },
+    { pointer: 6, found: [6], memory: ["앱 기동 + 프로브"], caption: "앱이 뜨고 readiness를 통과해야 트래픽을 받는다. 이 모든 시간을 HPA의 목표 사용률 여유로 버틴다." },
+  ]}
+/>
+
+CA는 노드가 `--max-node-provision-time`(15분) 안에 안 붙으면 그 그룹을 포기하고 다른 그룹을 본다. 이 시간이 긴 만큼 클라우드 용량이 없을 때 반응도 느리다. Karpenter는 용량 부족 오류를 받으면 그 타입과 AZ 조합을 잠시 후보에서 빼고 바로 다른 후보로 다시 요청한다.
+
+기다릴 수 없는 서비스는 미리 자리를 맡는다. CA 문서가 소개하는 방법은 우선순위가 -10인 PriorityClass를 만들어 pause 컨테이너만 도는 "자리 맡기" Deployment를 띄워 두는 것이다. 진짜 Pod가 오면 스케줄러가 이 Pod를 밀어내고(preemption, [스케줄링](/posts/k8s-pod-scheduling)) 그 자리에 바로 뜬다. 밀려난 자리 맡기 Pod는 Pending이 되어 노드 오토스케일러가 노드를 하나 더 띄우게 만든다. 빈 노드 하나 값으로 반응 시간을 산다. 개념은 [오토스케일링](/posts/autoscaling)의 웜 풀과 같다.
+
+## 0개까지 내리는 이야기
+
+밤에는 아무도 안 쓰는 개발 클러스터라면 노드를 0대까지 줄이고 싶다. 노드가 0이 되려면 그 위의 Pod도 0이어야 한다. Karpenter는 Pod가 없으면 빈 노드를 지우니 NodePool은 자연히 0대가 된다. CA는 노드 그룹의 최솟값을 0으로 둘 수 있다.
+
+Pod를 0으로 내리는 것은 HPA의 일인데, HPA는 오랫동안 minReplicas 0을 받지 않았다. 0개면 CPU 사용률을 잴 Pod가 없으니 다시 늘릴 신호가 없기 때문이다. 이걸 여는 `HPAScaleToZero` 기능 게이트는 1.16부터 1.36까지 알파였고, 1.37에서 베타가 되면서 기본으로 켜졌다(kubernetes/website의 기능 게이트 문서 기준). 베타라도 조건은 그대로다. Object나 External 메트릭(큐 길이처럼 Pod 밖에서 오는 값)이 있을 때만 minReplicas 0이 허용된다. 1.36 이하 클러스터, 그리고 버전을 올렸어도 관리형 서비스가 이 게이트를 어떻게 두는지 확인하지 않은 클러스터에서는 여전히 KEDA가 0과 1 사이를 맡는다([HPA](/posts/k8s-hpa)). 0에서 첫 요청이 오면 Pod도, 노드도 새로 떠야 하니 위 단계 전체만큼 첫 응답이 늦다.
+
+## 어느 쪽을 고르나
+
+CA는 노드 그룹이라는 단단한 틀 위에서 움직인다. 어떤 인스턴스가 뜰지 미리 알 수 있고, 거의 모든 클라우드에서 돈다. 대신 Pod 종류가 다양하면 그룹 관리가 일이 되고, 노드를 더 싼 타입으로 바꾸는 판단은 하지 않는다. Karpenter는 Pod의 요구에서 출발해 타입을 고르고, 빈자리를 모아 더 작은 노드로 바꾸는 consolidation까지 한다. 대신 지원하는 클라우드가 정해져 있고(AWS, Azure 등 제공자 구현이 있는 곳), 노드가 자주 바뀌니 PDB와 graceful shutdown을 제대로 갖춘 앱이어야 덕을 본다. EKS에서 둘을 섞을 때는 Karpenter 자신과 CoreDNS 같은 핵심 부품을 작은 관리형 노드 그룹에 두고, 나머지를 Karpenter NodePool에 두는 구성이 흔하다([EKS 클러스터 기본](/posts/eks-cluster-basics)).
+
+어느 쪽이든 노드 축소가 비용을 줄이려면 Pod의 requests가 실제 사용량에 가까워야 한다. requests가 부풀어 있으면 노드는 꽉 찬 것처럼 보이고 아무것도 줄지 않는다. 그 숫자를 맞추는 것은 [VPA](/posts/k8s-vpa)와 [재시작 없는 리소스 변경](/posts/k8s-in-place-resize)의 몫이다.
+
+## Pending이 노드를 부르고, 빈자리가 노드를 지운다
+
+노드 오토스케일러는 사용률이 아니라 Pending Pod의 requests를 보고 노드를 늘린다. CA는 정해 둔 노드 그룹의 대수를 expander로 골라 늘리고, Karpenter는 Pod 묶음에 맞는 인스턴스를 직접 골라 빽빽이 채운다. 줄일 때는 둘 다 eviction으로 비우므로 PDB와 do-not-disrupt가 속도를 정하고, Karpenter는 더 싼 노드로 바꾸는 consolidation과 설정 변화에 따른 drift까지 맡는다. 스팟은 2분 경고 안에 끝나도록 큐와 종료 시간을 맞춘다.
+
+## 면접에서 나올 만한 질문
+
+### 노드 오토스케일러는 무엇을 보고 노드를 늘리나요?
+
+CPU 사용률이 아니라 스케줄러가 Unschedulable로 표시한 Pending Pod를 본다. 그 Pod의 requests가 들어갈 노드를 시뮬레이션해서 노드를 추가한다. 그래서 requests가 없는 Pod는 노드를 부르지 않고, requests가 과하면 실제 부하보다 노드가 많이 뜬다.
+
+### Cluster Autoscaler와 Karpenter는 어떻게 다른가요?
+
+CA는 같은 기계로 이뤄진 노드 그룹(ASG 등)의 대수를 늘리고 줄인다. 어떤 그룹을 늘릴지는 expander가 정한다. Karpenter는 그룹 없이 NodePool의 조건 안에서 Pending Pod 묶음에 맞는 인스턴스 타입을 직접 골라 클라우드 API로 띄우고, 빈자리를 모아 더 싼 노드로 바꾸는 consolidation도 한다. Pod 크기가 다양하고 스팟을 섞을수록 Karpenter가 유리하다.
+
+### expander의 least-waste는 무엇을 고르나요?
+
+여러 노드 그룹 중 늘린 뒤 남는 CPU(같으면 메모리)가 가장 적은 그룹을 고른다. 1코어 Pod 7개라면 16코어 노드 한 대보다 8코어 노드 한 대가 덜 남는다. 현재 문서 기준 기본값이고, priority와 이어 써서 우선순위가 같은 그룹 사이에서 고르는 데 많이 쓴다.
+
+### consolidation은 어떤 순서로 노드를 바꾸나요?
+
+대체 노드가 필요하면 먼저 띄워 Ready를 확인하고, 옛 노드에 disrupted taint를 걸어 새 Pod를 막은 뒤 eviction API로 Pod를 내보낸다. Pod가 다 나가면 인스턴스를 반납한다. PDB가 막으면 노드가 반쯤 빈 채로 기다리고 DisruptionBlocked 이벤트가 남는다. 한 번에 바꾸는 노드 수는 NodePool의 disruption budgets가 정한다.
+
+### 노드가 줄지 않으면 무엇을 보나요?
+
+노드와 NodeClaim의 이벤트에서 Unconsolidatable이나 DisruptionBlocked 이유를 먼저 본다. 허용 수가 0인 PDB, do-not-disrupt나 safe-to-evict 어노테이션, 로컬 스토리지를 쓰는 Pod, preferred anti-affinity가 흔한 원인이다. 스팟 노드라면 SpotToSpotConsolidation이 꺼져 있거나 더 싼 후보가 15개 미만이어서일 수 있다.
+
+### 스팟 인스턴스 회수는 어떻게 대비하나요?
+
+AWS는 회수 2분 전에 경고를 보낸다. Karpenter는 EventBridge 규칙이 보낸 SQS 큐를 구독해 경고를 받자마자 대체 노드를 띄우고 기존 노드를 비운다. 큐 설정이 없으면 경고 없이 꺼지고, 앱의 종료 시간이 2분을 넘으면 정리가 끝나지 않는다. 스팟에 올리는 앱은 여러 AZ에 나눠 동시에 몇 개가 사라져도 버티게 만든다.
+
+### 노드가 늘어나는 데 왜 몇 분씩 걸리나요?
+
+Pending 감지, 클라우드 API 호출, VM 부팅, kubelet 등록, CNI 준비, 이미지 받기, 앱 기동과 readiness가 차례로 더해지기 때문이다. 이미지가 크면 새 노드에서 받는 시간이 가장 길 수 있다. 기다릴 수 없으면 낮은 우선순위의 자리 맡기 Pod로 여유 노드를 두거나, 예측 가능한 시간에 미리 늘린다.

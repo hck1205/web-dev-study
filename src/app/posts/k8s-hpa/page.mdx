@@ -1,0 +1,449 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-hpa");
+
+점심시간에 주문이 몰리면 주문 API의 응답 시간이 튄다. Pod를 넉넉히 띄워 두면 해결되지만 새벽 내내 노는 Pod 값을 낸다. 그래서 HPA(Horizontal Pod Autoscaler)를 걸었다. 그런데 `kubectl get hpa`가 이렇게 나온다.
+
+```text
+NAME     REFERENCE           TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+report   Deployment/report   cpu: <unknown>/60%   2         6         2          51s
+```
+
+`<unknown>`이 사라지지 않는다. 고친 뒤에는 또 다른 질문이 생긴다. 부하가 내려갔는데 왜 5분이나 Pod가 그대로인지, 부하가 몰렸는데 왜 한 번에 끝까지 안 늘어나는지, CPU가 64%인데 목표 60%를 넘었는데도 왜 가만히 있는지.
+
+이 글은 HPA가 replicas를 정하는 공식 한 줄에서 시작해 메트릭이 오는 길, 10% 허용 오차, 늘릴 때와 줄일 때 다른 안정화 창, behavior 정책, requests가 없으면 계산이 안 되는 이유, 0개까지 줄이기의 현재 상태를 본다. 출력은 앞 글들과 같은 kwok 실습 클러스터(Kubernetes 1.30)에서 받았다. HPA 컨트롤러와 metrics-server(v0.7.1)는 진짜이고, Pod의 CPU 사용량은 kwok가 어노테이션 값을 그대로 보고하게 해서 흉내 냈다. 부하를 바꾸는 스크립트가 "전체 CPU 사용량"을 정해 두고 떠 있는 Pod에 고르게 나눠 준다. 실제 앱에서 Service가 요청을 Pod마다 고르게 나눠 주는 모습과 같다. 늘릴 대상인 Deployment가 롤링 업데이트를 어떻게 하는지는 [Deployment](/posts/k8s-deployment) 글에 있다.
+
+## 15초마다 재고 replicas를 고친다
+
+HPA는 Pod를 직접 만들지 않는다. kube-controller-manager 안의 HPA 컨트롤러가 기본 15초마다(`--horizontal-pod-autoscaler-sync-period`) 메트릭을 읽고, 필요한 Pod 수를 계산해 Deployment의 `replicas`만 고친다. Pod를 늘리고 줄이는 것은 그다음부터 Deployment와 ReplicaSet의 일이다.
+
+<SequenceDiagram
+  caption="HPA 컨트롤러의 한 바퀴"
+  actors={[
+    { id: "hpa", label: "HPA 컨트롤러" },
+    { id: "api", label: "API 서버" },
+    { id: "ms", label: "metrics-server" },
+    { id: "dep", label: "Deployment" },
+  ]}
+  steps={[
+    { from: "hpa", to: "api", label: "GET scale", title: "지금 몇 개인지 본다", detail: "대상의 scale 서브리소스에서 현재 replicas와 Pod 셀렉터를 읽는다. 그래서 scale 서브리소스가 있는 것이면 무엇이든 대상이 된다(Deployment, StatefulSet, CRD)." },
+    { from: "hpa", to: "api", label: "GET pods metrics", title: "메트릭을 묻는다", detail: "metrics.k8s.io API로 셀렉터에 맞는 Pod들의 CPU 사용량을 묻는다.", payload: "GET /apis/metrics.k8s.io/v1beta1/namespaces/store/pods?labelSelector=app=orders" },
+    { from: "api", to: "ms", label: "proxy", title: "API 서버가 넘겨준다", detail: "metrics.k8s.io는 API 서버에 내장된 API가 아니다. APIService로 등록된 metrics-server가 대신 답한다." },
+    { from: "hpa", to: "hpa", label: "ceil(n × 현재/목표)", title: "필요한 수를 계산한다", detail: "Pod requests 대비 평균 사용률을 목표와 나눠 비율을 구하고, 허용 오차와 안정화 창, 정책을 거친다." },
+    { from: "hpa", to: "dep", label: "PATCH replicas", title: "replicas만 고친다", detail: "값이 다르면 scale을 고치고 SuccessfulRescale 이벤트를 남긴다. 그다음은 Deployment가 Pod를 만든다." },
+  ]}
+/>
+
+이 구조 때문에 HPA가 늘린다고 바로 처리량이 느는 게 아니다. 컨트롤러가 다음 바퀴에 알아채고(최대 15초), metrics-server가 새 값을 받고(수집 주기 15초), Pod가 스케줄되고, 이미지를 받고, 앱이 뜨고, readiness를 통과해야 한다. 노드가 모자라면 노드를 새로 붙이는 시간까지 더해진다. 갑자기 몰리는 트래픽을 HPA만으로 막을 수 없는 이유다. 몇 분짜리 반응 시간을 버틸 여유를 minReplicas와 목표 사용률로 미리 남겨 둔다.
+
+## 메트릭이 오는 길
+
+CPU와 메모리 사용량은 각 노드의 kubelet이 cgroup에서 읽는다. metrics-server가 모든 kubelet에서 이 값을 모아 메모리에 들고 있다가, API 서버가 넘겨주는 질문에 답한다. 아래 그림에서 다음을 누르면 숫자 하나가 HPA에 닿고 replicas가 바뀌기까지 따라간다.
+
+<NetworkTopology
+  caption="kubelet에서 HPA까지, 그리고 다시 Deployment로"
+  width={400}
+  height={260}
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 8, y: 10, w: 384, h: 110, tone: "private" },
+    { id: "nodes", label: "워커 노드", x: 8, y: 140, w: 384, h: 110, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "hpa", label: "HPA ctrl", sub: "15초마다", x: 70, y: 70, icon: "server", w: 104 },
+    { id: "api", label: "API 서버", sub: "aggregator", x: 200, y: 70, icon: "gateway", w: 104 },
+    { id: "dep", label: "Deployment", sub: "replicas", x: 328, y: 70, icon: "server", w: 112 },
+    { id: "ms", label: "metrics-srv", sub: "kube-system", x: 70, y: 200, icon: "db", w: 104 },
+    { id: "k1", label: "kubelet", sub: "node-1", x: 200, y: 200, icon: "container", w: 104 },
+    { id: "k2", label: "kubelet", sub: "node-2", x: 328, y: 200, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "ms", to: "k1" },
+    { from: "ms", to: "k2" },
+    { from: "hpa", to: "api" },
+    { from: "api", to: "ms" },
+    { from: "api", to: "dep" },
+  ]}
+  steps={[
+    { path: ["ms", "k1"], packet: "scrape", highlight: ["k2"], title: "metrics-server가 kubelet을 긁는다", detail: "15초마다 모든 노드의 /metrics/resource를 읽는다. 컨테이너별 CPU 누적 시간과 메모리 working set이다.", payload: "container_cpu_usage_seconds_total{container=\"orders\",pod=\"orders-...\"}" },
+    { path: ["hpa", "api"], packet: "GET", title: "HPA가 API 서버에 묻는다", detail: "HPA는 metrics-server를 직접 부르지 않는다. 표준 API인 metrics.k8s.io로 묻는다." },
+    { path: ["api", "ms"], packet: "proxy", title: "API 서버가 넘겨준다", detail: "APIService v1beta1.metrics.k8s.io가 kube-system/metrics-server를 가리킨다. 이 등록이 False면 TARGETS가 unknown이 된다." },
+    { path: ["ms", "api", "hpa"], packet: "225%", title: "사용량이 돌아온다", detail: "Pod마다 CPU 사용량이 온다. HPA가 Pod의 requests로 나눠 사용률을 만든다." },
+    { path: ["hpa", "api", "dep"], packet: "4", title: "replicas를 고친다", detail: "계산 결과를 Deployment의 scale에 쓴다. 이벤트에 New size: 4가 남는다." },
+  ]}
+/>
+
+같은 경로를 명령으로 확인할 수 있다. `kubectl top`이 되면 HPA가 읽을 수 있는 값도 있다는 뜻이다.
+
+```bash
+# 메트릭 API 등록이 살아 있는지 (Local이 아닌 것만)
+kubectl get apiservice | grep -v Local
+
+# Pod별 CPU·메모리. HPA가 보는 것과 같은 값
+kubectl top pods -n store
+
+# HPA가 실제로 부르는 API를 그대로 불러 본다 (출력 앞부분)
+kubectl get --raw "/apis/metrics.k8s.io/v1beta1/namespaces/store/pods?labelSelector=app%3Dorders"
+```
+
+```text
+NAME                                   SERVICE                         AVAILABLE                 AGE
+v1beta1.metrics.k8s.io                 kube-system/metrics-server      True                      95s
+NAME                      CPU(cores)   MEMORY(bytes)
+orders-77bb84458b-4gx6k   400m         90Mi
+orders-77bb84458b-77ttc   400m         90Mi
+{"kind":"PodMetricsList","apiVersion":"metrics.k8s.io/v1beta1","metadata":{},"items":[{"metadata":{"name":"orders-77bb84458b-4gx6k","namespace":"store","creationTimestamp":"2026-10-20T14:34:16Z","labels":{"app":"orders","pod-template-hash":"77bb84458b"}},"timestamp":"2026-10-20T14:34:06Z","window":"14.993s","containers":[{"name":"orders","usage":{"cpu":"399998094n","memory":"90Mi"}}]}, ...]}
+```
+
+`window`가 15초다. metrics-server의 값은 최근 15초 동안의 평균이라 순간적인 튐은 보이지 않는다. 같은 경로를 쓰는 것이 두 개 더 있다. 요청 수, 큐 길이처럼 앱이 내는 메트릭은 `custom.metrics.k8s.io`, 클러스터 밖의 메트릭(SQS 큐 길이 등)은 `external.metrics.k8s.io`로 묻는다. 이 둘은 metrics-server가 아니라 Prometheus Adapter나 KEDA 같은 어댑터가 답한다. 어댑터를 지웠는데 APIService 등록만 남으면 HPA뿐 아니라 네임스페이스 삭제까지 멈춘다. 그 재현은 [네임스페이스](/posts/k8s-namespace) 글에 있다.
+
+## 공식은 한 줄이다
+
+HPA의 계산은 이것이 전부다.
+
+```text
+desiredReplicas = ceil( currentReplicas × currentMetricValue / desiredMetricValue )
+```
+
+CPU 사용률이 목표의 두 배면 Pod도 두 배, 절반이면 절반이다. 부하가 Pod 수에 반비례해서 나뉜다고 가정하는 셈이다. 무상태 웹 서버라면 대체로 맞는다. 사용률은 Pod의 CPU requests 대비 퍼센트다. 아래 describe의 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="kubectl describe hpa의 Metrics 한 줄"
+  base="resource cpu on pods"
+  separator="  "
+  joiner=" "
+  params={[
+    { key: "kind", display: "(as a percentage of request):", title: "requests 대비 퍼센트", description: "target.type이 Utilization이면 Pod requests 합 대비 사용량이다. requests가 200m인 Pod가 450m를 쓰면 225%다. limits는 계산에 들어가지 않는다." },
+    { key: "current", display: "225% (450m)", title: "지금 값", description: "셀렉터에 맞는 Pod들의 평균이다. 괄호 안은 Pod당 평균 사용량이다. 컨트롤러는 이 퍼센트를 정수로 버림해 쓴다." },
+    { key: "slash", display: "/", title: "구분", description: "왼쪽이 지금, 오른쪽이 목표다." },
+    { key: "target", display: "60%", title: "목표", description: "averageUtilization 값이다. 100%가 아니라 60~70%로 두는 이유는 늘어나는 동안 버틸 여유를 남기기 위해서다." },
+  ]}
+/>
+
+분모가 requests라서 같은 앱이라도 requests를 200m에서 400m로 올리면 사용률은 절반으로 보이고 HPA는 덜 늘린다. requests를 실제 사용량보다 터무니없이 낮게 잡으면 늘 수백 퍼센트라 maxReplicas에 붙어 있다. requests를 정하는 법은 [requests와 limits](/posts/k8s-pod-resources) 글에 있다. 사용률 대신 절대값으로 목표를 줄 수도 있다. `type: AverageValue`, `averageValue: 300m`이면 Pod당 평균 300m를 목표로 한다. requests와 무관해진다.
+
+공식에는 허용 오차가 붙는다. 비율이 1에서 0.1 이내(0.9~1.1)면 아무것도 하지 않는다(`--horizontal-pod-autoscaler-tolerance`, 기본 0.1). 측정값이 조금씩 흔들릴 때마다 Pod가 하나씩 늘고 줄어드는 걸 막는다. 계산 결과는 마지막에 minReplicas와 maxReplicas 사이로 자른다. 아래에서 직접 계산해 볼 수 있다.
+
+<CodePlayground
+  caption="HPA가 원하는 replicas"
+  functionName="hpaDesired"
+  initialCode={`function hpaDesired(current, currentValue, targetValue, minReplicas = 1, maxReplicas = 10, tolerance = 0.1) {
+  // ratio = currentValue / targetValue
+  // |ratio - 1| <= tolerance 이면 지금 수를 유지
+  // 아니면 ceil(current * ratio)
+  // 마지막에 minReplicas ~ maxReplicas로 자른다
+  return current;
+}`}
+  solution={`function hpaDesired(current, currentValue, targetValue, minReplicas = 1, maxReplicas = 10, tolerance = 0.1) {
+  const ratio = currentValue / targetValue;
+  const desired = Math.abs(ratio - 1) <= tolerance ? current : Math.ceil(current * ratio);
+  return Math.min(maxReplicas, Math.max(minReplicas, desired));
+}`}
+  tests={[
+    { args: [2, 225, 60, 2, 10], expected: 8, label: "2개, 225% → 8" },
+    { args: [4, 112, 60, 2, 10], expected: 8, label: "4개, 112% → 8" },
+    { args: [8, 56, 60, 2, 10], expected: 8, label: "56%는 허용 오차 안" },
+    { args: [3, 64, 60, 1, 10], expected: 3, label: "64%도 허용 오차 안" },
+    { args: [3, 67, 60, 1, 10], expected: 4, label: "67%는 밖이다" },
+    { args: [8, 18, 60, 2, 10], expected: 3, label: "8개, 18% → 3" },
+    { args: [10, 70, 60, 2, 10], expected: 10, label: "maxReplicas에서 멈춘다" },
+  ]}
+/>
+
+64%인데 안 움직이는 이유가 여기 있다. 64/60은 1.067이라 허용 오차 안이다. 목표 60%는 "60%에 맞춘다"가 아니라 "54%에서 66% 사이면 둔다"는 뜻이다. 허용 오차는 컨트롤러 플래그라서 관리형 클러스터에서는 바꿀 수 없다. HPA마다 다르게 주는 `behavior.scaleUp.tolerance` 필드가 1.33에 알파로 들어왔지만(기능 게이트 `HPAConfigurableTolerance`, 1.35 베타, 1.37 GA), 이 실습 클러스터(1.30)에서는 모르는 필드라고 거절한다.
+
+## 부하를 올려 보면
+
+목표 60%, requests 200m인 orders Deployment 2개에 전체 CPU 부하를 200m에서 900m로 올렸다. 5초마다 `kubectl get hpa`를 찍어 바뀐 줄만 남겼다.
+
+```bash
+# HPA를 만든다 (behavior는 적지 않았다)
+kubectl apply -f orders-hpa.yaml
+
+# 5초마다 상태를 기록한다
+while true; do echo "$(date +%H:%M:%S) $(kubectl -n store get hpa orders --no-headers)"; sleep 5; done
+```
+
+```text
+14:08:17 orders Deployment/orders cpu: 50%/60% 2 10 2 58s
+14:08:37 orders Deployment/orders cpu: 225%/60% 2 10 2 78s
+14:08:52 orders Deployment/orders cpu: 225%/60% 2 10 4 93s
+14:09:07 orders Deployment/orders cpu: 112%/60% 2 10 8 108s
+14:09:23 orders Deployment/orders cpu: 56%/60% 2 10 8 2m4s
+```
+
+```text
+Events:
+  Type    Reason             Age   From                       Message
+  ----    ------             ----  ----                       -------
+  Normal  SuccessfulRescale  92s   horizontal-pod-autoscaler  New size: 4; reason: cpu resource utilization (percentage of request) above target
+  Normal  SuccessfulRescale  77s   horizontal-pod-autoscaler  New size: 8; reason: cpu resource utilization (percentage of request) above target
+```
+
+450m/200m = 225%, 공식대로면 ceil(2 × 225/60) = 8이다. 그런데 처음에는 4까지만 갔다. behavior를 적지 않은 HPA는 한 번에 "지금의 2배와 4개 중 큰 쪽"까지만 늘린다(1.30의 컨트롤러 코드 기준). 15초 뒤 4개가 됐고, 각 Pod가 225m(112%)를 쓰니 ceil(4 × 112/60) = 8로 한 번 더 늘었다. 8개에서는 112.5m씩, 56%다. 허용 오차 안이라 멈췄다. 공식이 한 번에 맞히지 못해도 몇 바퀴 만에 목표 근처로 모인다.
+
+## 줄일 때는 5분을 기다린다
+
+이번에는 부하를 300m로 내렸다.
+
+```text
+14:10:23 orders Deployment/orders cpu: 56%/60% 2 10 8 3m5s
+14:10:54 orders Deployment/orders cpu: 18%/60% 2 10 8 3m35s
+14:11:24 orders Deployment/orders cpu: 18%/60% 2 10 8 4m5s
+14:14:38 orders Deployment/orders cpu: 18%/60% 2 10 8 7m19s
+14:15:54 orders Deployment/orders cpu: 18%/60% 2 10 3 8m35s
+```
+
+18%면 ceil(8 × 18/60) = 3인데, 14:10:54에 18%가 보이고 정확히 5분 뒤인 14:15:54에 3이 됐다. 줄일 때는 안정화 창(stabilization window)이 걸린다. 기본 300초다. 컨트롤러는 바퀴마다 계산한 추천값을 기억해 두고, 줄일 때는 지난 5분 추천값 중 가장 큰 것을 쓴다. 아래 그림에서 다음을 누르면 창이 어떻게 미끄러지는지 보인다.
+
+<AlgoTrace
+  caption="줄일 때는 창 안의 추천값 중 가장 큰 것을 쓴다"
+  memoryLabel="창 안의 추천값 → 적용"
+  cells={["t0: 8", "t1: 3", "t2: 3", "t3: 6", "t4: 3", "t5: 3"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["8", "→ 8"], caption: "부하가 높을 때 추천값은 8이다. 지금도 8개다." },
+    { pointer: 1, found: [0], memory: ["8", "3", "→ 8"], caption: "부하가 내려가 추천값이 3이 됐다. 창 안에 8이 있으니 그대로 둔다." },
+    { pointer: 3, found: [0, 3], memory: ["8", "3", "3", "6", "→ 8"], caption: "잠깐 부하가 다시 올라 추천값이 6이다. 이 값도 창에 들어간다. 줄였다가 다시 늘리는 출렁임을 이렇게 막는다." },
+    { pointer: 4, found: [3], memory: ["3", "3", "6", "3", "→ 6"], caption: "8이 창 밖으로 밀려났다. 이제 창 안의 최댓값은 6이다. 6으로 줄인다." },
+    { pointer: 5, found: [5], memory: ["3", "3", "→ 3"], caption: "6까지 밀려나면 남은 것은 3뿐이다. 그제야 3으로 줄인다." },
+  ]}
+/>
+
+늘릴 때의 기본 창은 0이라 바로 늘린다. 비대칭인 이유는 실수의 비용이 달라서다. 덜 줄이면 돈이 조금 더 들고, 너무 일찍 줄였다가 부하가 다시 오면 응답 지연과 장애가 난다. 그래서 줄이는 쪽만 느긋하다. 하루에 몇 번씩 부하가 짧게 오르내리는 서비스라면 오히려 이 창을 늘려서 Pod 수를 안정적으로 둔다. 배치처럼 끝나면 바로 내려도 되는 작업이라면 줄인다.
+
+## behavior로 속도를 정한다
+
+창과 속도는 `behavior`로 HPA마다 정한다. 일부만 적으면 나머지는 기본값으로 채워진다. 서버에 dry-run으로 넣어 보면 실제로 저장될 값이 나온다.
+
+```bash
+# scaleDown 창만 적은 HPA가 어떻게 채워지는지 본다
+kubectl apply --dry-run=server -o jsonpath='{.spec.behavior}' -f hpa-probe.yaml
+```
+
+```text
+{"scaleDown":{"policies":[{"periodSeconds":15,"type":"Percent","value":100}],"selectPolicy":"Max","stabilizationWindowSeconds":60},"scaleUp":{"policies":[{"periodSeconds":15,"type":"Pods","value":4},{"periodSeconds":15,"type":"Percent","value":100}],"selectPolicy":"Max","stabilizationWindowSeconds":0}}
+```
+
+늘릴 때는 15초마다 "4개"와 "100%" 중 큰 쪽(`selectPolicy: Max`)까지, 줄일 때는 15초마다 100%까지 가능하다. 줄이는 쪽 정책이 넉넉한 대신 안정화 창이 브레이크 역할을 한다. 앞의 behavior 없는 HPA와는 늘리는 규칙이 조금 다르다는 점도 보인다. 2개에서 시작하면 behavior 없이는 4개, 이 기본값으로는 6개까지 간다.
+
+줄이는 속도를 1분에 하나처럼 천천히 하고 싶으면 이렇게 쓴다.
+
+```yaml
+behavior:
+  scaleUp:
+    stabilizationWindowSeconds: 0
+    policies:
+      - { type: Percent, value: 100, periodSeconds: 15 }  # 15초에 두 배까지
+      - { type: Pods, value: 4, periodSeconds: 15 }       # 또는 15초에 4개까지
+    selectPolicy: Max                                     # 둘 중 많이 늘리는 쪽
+  scaleDown:
+    stabilizationWindowSeconds: 60                        # 1분 동안 추천값을 지켜본다
+    policies:
+      - { type: Pods, value: 1, periodSeconds: 30 }       # 30초에 하나씩만 줄인다
+```
+
+이 HPA로 3개에서 부하를 900m로 올렸다가 200m로 내렸다.
+
+```text
+14:16:50 orders Deployment/orders cpu: 150%/60% 2 10 3 9m31s
+14:17:05 orders Deployment/orders cpu: 150%/60% 2 10 7 9m47s
+14:17:21 orders Deployment/orders cpu: 64%/60% 2 10 7 10m
+14:18:22 orders Deployment/orders cpu: 14%/60% 2 10 7 11m
+14:19:23 orders Deployment/orders cpu: 14%/60% 2 10 6 12m
+14:19:53 orders Deployment/orders cpu: 14%/60% 2 10 5 12m
+14:20:24 orders Deployment/orders cpu: 20%/60% 2 10 4 13m
+14:20:55 orders Deployment/orders cpu: 25%/60% 2 10 3 13m
+14:21:20 orders Deployment/orders cpu: 33%/60% 2 10 2 14m
+```
+
+150%면 공식은 ceil(3 × 150/60) = 8이지만, 3에서 "4개 더"(7)가 "100% 더"(6)보다 커서 7까지 갔다. 7개에서는 64%로 허용 오차 안이다. 내릴 때는 14%가 보이고 1분 뒤부터 30초에 하나씩 7 → 6 → 5 → 4 → 3 → 2로 내려갔다. 줄이는 중간에 사용률이 20%, 25%, 33%로 오르는 것은 남은 Pod가 같은 부하를 나눠 받기 때문이다.
+
+`selectPolicy: Disabled`를 주면 그 방향으로는 아예 움직이지 않는다. 장애 대응 중에 HPA가 Pod를 줄이지 못하게 잠깐 막아 둘 때 `behavior.scaleDown.selectPolicy`만 Disabled로 바꾸는 편이 HPA를 통째로 지우는 것보다 낫다. 늘리는 쪽은 그대로 살아 있기 때문이다.
+
+## requests가 없으면 계산할 수 없다
+
+처음의 `<unknown>`으로 돌아가자. requests를 적지 않은 Deployment에 `kubectl autoscale`로 HPA를 걸었다.
+
+```bash
+# requests 없는 Deployment에 CPU 60% HPA를 건다
+kubectl -n store create deployment report --image=ghcr.io/example/report:1.0.0 --replicas=2
+kubectl -n store autoscale deployment report --cpu-percent=60 --min=2 --max=6
+kubectl -n store describe hpa report | sed -n '/Conditions/,$p'
+```
+
+```text
+deployment.apps/report created
+horizontalpodautoscaler.autoscaling/report autoscaled
+Conditions:
+  Type           Status  Reason                   Message
+  ----           ------  ------                   -------
+  AbleToScale    True    SucceededGetScale        the HPA controller was able to get the target's current scale
+  ScalingActive  False   FailedGetResourceMetric  the HPA was unable to compute the replica count: failed to get cpu utilization: missing request for cpu in container report of Pod report-6b5c7f79dc-q7f82
+Events:
+  Type     Reason                        Age                From                       Message
+  ----     ------                        ----               ----                       -------
+  Warning  FailedGetResourceMetric       21s (x2 over 36s)  horizontal-pod-autoscaler  failed to get cpu utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API
+  Warning  FailedComputeMetricsReplicas  21s (x2 over 36s)  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu resource metric value: failed to get cpu utilization: unable to get metrics for resource cpu: no metrics returned from resource metrics API
+  Warning  FailedGetResourceMetric       6s                 horizontal-pod-autoscaler  failed to get cpu utilization: missing request for cpu in container report of Pod report-6b5c7f79dc-q7f82
+  Warning  FailedComputeMetricsReplicas  6s                 horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu resource metric value: failed to get cpu utilization: missing request for cpu in container report of Pod report-6b5c7f79dc-q7f82
+```
+
+이벤트가 두 가지라 읽는 법을 알아 둘 만하다. 처음 두 줄 `no metrics returned from resource metrics API`는 Pod가 막 떠서 metrics-server가 아직 한 번도 수집하지 못한 상태다. 1분쯤 지나면 사라진다. 계속 이 메시지라면 metrics-server 자체(APIService가 False인지, kubelet에 접근하지 못하는지)를 본다. 뒤의 `missing request for cpu in container report`가 진짜 원인이다. 사용률은 requests 대비 퍼센트인데 분모가 없다. 컨테이너가 여럿이면 하나라도 requests가 없으면 같은 오류가 난다. 사이드카를 붙이면서 사이드카 requests를 빼먹어 갑자기 HPA가 멈추는 일이 흔하다([멀티 컨테이너 Pod](/posts/k8s-pod-multicontainer)).
+
+고치는 방법은 requests를 적는 것이다. 팀마다 빼먹는다면 네임스페이스에 LimitRange로 기본값을 넣는다. 사이드카 사용량 때문에 Pod 전체 평균이 흐려진다면 `type: ContainerResource`로 앱 컨테이너 하나만 보게 할 수 있다(1.30에 GA).
+
+```yaml
+metrics:
+  - type: ContainerResource
+    containerResource:
+      name: cpu
+      container: orders          # 이 컨테이너의 사용률만 본다
+      target: { type: Utilization, averageUtilization: 60 }
+```
+
+## 갓 뜬 Pod와 준비 안 된 Pod는 어떻게 세나
+
+새로 뜬 Pod는 JIT 컴파일, 캐시 채우기 때문에 CPU를 많이 쓰고, 아직 요청은 받지 않는다. 이 값을 그대로 넣으면 "늘렸더니 CPU가 더 올라가서 또 늘린다"는 고리가 생긴다. 그래서 CPU 메트릭에는 예외 규칙이 있다. 시작한 지 5분(`--horizontal-pod-autoscaler-cpu-initialization-period`) 안의 Pod는 Ready가 아니거나 Ready가 된 뒤 측정 창 하나가 지나지 않았으면 그 샘플을 버린다. 처음 30초(`--horizontal-pod-autoscaler-initial-readiness-delay`) 동안의 Ready 흔들림도 무시한다.
+
+버린 Pod를 어떻게 셀지도 정해져 있다. 메트릭이 없는 Pod는 늘리는 방향으로 계산할 때는 0%로, 줄이는 방향일 때는 100%로 친다. 준비 안 된 Pod는 늘리는 방향일 때 0%로 친다. 둘 다 "확실하지 않으면 덜 움직인다"는 쪽이다. 이 규칙 때문에 readiness가 느린 앱은 HPA가 기대보다 덜 늘린다. 실습에서 처음 HPA를 만들었을 때 `did not receive metrics for targeted pods (pods might be unready)`가 계속 나왔던 것도 같은 판정이다. 실습 클러스터의 Pod 상태에 `status.startTime`이 비어 있어서 컨트롤러가 모든 Pod를 준비 안 된 것으로 봤다. 실제 클러스터에서 이 메시지가 나오면 Pod가 정말 Ready인지, metrics-server가 그 Pod의 값을 갖고 있는지부터 본다.
+
+메모리는 이 예외가 없고, 다른 문제가 있다. 대부분의 런타임은 한 번 잡은 힙을 잘 돌려주지 않는다. Pod를 늘려도 기존 Pod의 메모리 사용량은 안 내려가니 사용률이 안 떨어지고, HPA는 계속 늘리거나 내려오지 않는다. 메모리로 늘릴 만큼 정말 요청 수에 비례해 메모리를 쓰는 앱이 아니라면 CPU나 요청 수로 건다.
+
+## 메트릭 여러 개와 앱이 내는 메트릭
+
+`metrics`에 여러 개를 적으면 각각 공식을 계산하고 가장 큰 값을 쓴다. CPU로는 3개, 초당 요청 수로는 6개가 나오면 6개다. 하나라도 계산에 실패하면 계산된 것들로 늘리는 것은 하되 줄이지는 않는다.
+
+```yaml
+metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: { type: Utilization, averageUtilization: 60 }
+  - type: Pods                       # Pod마다 나오는 앱 메트릭의 평균
+    pods:
+      metric: { name: http_requests_per_second }
+      target: { type: AverageValue, averageValue: "50" }
+  - type: External                   # 클러스터 밖의 값 (큐 길이 등)
+    external:
+      metric:
+        name: sqs_messages_visible
+        selector: { matchLabels: { queue: orders } }
+      target: { type: AverageValue, averageValue: "30" }  # Pod 하나가 30개씩 맡게
+```
+
+CPU는 결과일 뿐이다. 주문 API가 DB를 기다리느라 느린 거라면 CPU는 낮은데 응답은 느리고, HPA는 아무것도 안 한다. Pod를 늘려도 DB가 더 느려질 뿐이니 그게 맞는 판단일 수도 있다. 반대로 큐 소비자는 CPU보다 쌓인 메시지 수가 정확한 신호다. 앱이 내는 메트릭은 Prometheus가 모으고 Prometheus Adapter가 custom.metrics API로 바꿔 준다. KEDA는 이 어댑터 역할에 더해 Kafka, SQS, cron 같은 수십 가지 소스를 HPA용 External 메트릭으로 바꾸고, HPA 객체도 대신 만들어 준다.
+
+## 0개까지 줄일 수 있나
+
+minReplicas를 0으로 넣어 봤다.
+
+```text
+The HorizontalPodAutoscaler "zero" is invalid:
+* spec.minReplicas: Invalid value: 0: must be greater than or equal to 1
+* spec.metrics: Forbidden: must specify at least one Object or External metric to support scaling to zero replicas
+```
+
+메시지가 두 줄인 게 이유를 말해 준다. 0개가 되면 Pod가 없으니 CPU 사용률을 잴 수 없다. 다시 늘릴 신호가 없는 것이다. 그래서 Object나 External 메트릭(큐 길이처럼 Pod 밖에서 오는 값)이 있을 때만 의미가 있고, 그것도 `HPAScaleToZero` 기능 게이트를 켜야 한다. 이 게이트는 1.16부터 1.36까지 알파였고 1.37에서 베타가 되며 기본으로 켜졌다. 1.36 이하 관리형 클러스터는 대부분 알파 기능을 켤 수 없다. 노드까지 0으로 내리는 이야기는 [노드 오토스케일링과 Karpenter](/posts/k8s-node-autoscaling-karpenter)에 있다. 실무에서 0까지 내리는 것은 KEDA가 맡는다. KEDA는 활동이 없으면 Deployment를 직접 0으로 내리고, 큐에 메시지가 생기면 1로 올린 뒤 그다음부터 HPA에 넘긴다. 0에서 1로 가는 동안의 첫 요청 지연(콜드 스타트)은 감수해야 한다.
+
+## 함께 쓰면 부딪히는 것들
+
+매니페스트의 `replicas`가 첫째다. Deployment 매니페스트에 `replicas: 2`를 적어 두고 HPA를 쓰면, `kubectl apply`나 ArgoCD 동기화 때마다 HPA가 8로 늘려 둔 것이 2로 돌아갔다가 다음 바퀴에 다시 오른다. 점심시간 배포 한 번에 Pod가 순간적으로 줄어든다. HPA가 있는 Deployment는 `replicas` 필드를 매니페스트에서 빼고, 처음 만들 때의 수는 HPA의 minReplicas가 정하게 한다. Helm 차트는 보통 `{{- if not .Values.autoscaling.enabled }}`로 이 필드를 감싼다.
+
+노드가 둘째다. HPA는 Pod 수만 늘린다. 노드에 자리가 없으면 새 Pod는 Pending이고, HPA는 replicas를 이미 올렸으니 할 일을 다 했다고 본다. 노드를 늘리는 것은 Cluster Autoscaler나 Karpenter의 일이다. 아래 그림이 두 단계가 이어지는 모습이다.
+
+<NetworkTopology
+  caption="HPA는 Pod를, 노드 오토스케일러는 노드를 늘린다"
+  width={400}
+  height={230}
+  zones={[
+    { id: "n1", label: "node-1 (꽉 참)", x: 8, y: 10, w: 184, h: 120, tone: "private" },
+    { id: "n2", label: "새 노드", x: 208, y: 10, w: 184, h: 120, tone: "public" },
+  ]}
+  nodes={[
+    { id: "p1", label: "orders", sub: "Running", x: 100, y: 75, icon: "container" },
+    { id: "hpa", label: "HPA", sub: "replicas 2→4", x: 70, y: 185, icon: "server" },
+    { id: "ca", label: "Autoscaler", sub: "CA·Karpenter", x: 200, y: 185, icon: "gateway", w: 112 },
+    { id: "p3", label: "orders", sub: "Pending→Run", x: 300, y: 75, icon: "container", w: 112 },
+    { id: "cloud", label: "클라우드", sub: "EC2 등", x: 330, y: 185, icon: "internet" },
+  ]}
+  links={[
+    { from: "hpa", to: "p1", dashed: true },
+    { from: "ca", to: "cloud" },
+    { from: "cloud", to: "p3", dashed: true },
+    { from: "ca", to: "p3", dashed: true },
+  ]}
+  steps={[
+    { path: ["hpa", "p1"], packet: "4", title: "HPA가 replicas를 올린다", detail: "Deployment가 Pod 둘을 더 만든다. node-1에는 requests를 받을 자리가 없다." },
+    { path: ["p3"], highlight: ["n1"], title: "새 Pod가 Pending이다", detail: "스케줄러가 FailedScheduling을 남긴다. HPA는 여기에 관여하지 않는다." },
+    { path: ["ca", "cloud"], packet: "+1 node", title: "노드 오토스케일러가 Pending을 본다", detail: "Pending Pod의 requests를 받을 수 있는 노드 그룹을 골라 인스턴스를 요청한다. 노드가 붙기까지 보통 1~3분이 걸린다." },
+    { path: ["cloud", "p3"], packet: "join", highlight: ["n2"], title: "노드가 붙으면 Pod가 뜬다", detail: "새 노드에 스케줄되고, 이미지를 받고, Ready가 되면 그제야 처리량이 는다. 이 시간을 버틸 여유를 목표 사용률로 남긴다." },
+  ]}
+/>
+
+이 과정 때문에 노드부터 늘려야 하는 순간에는 반응이 몇 분 걸린다. 트래픽이 예측 가능하다면(매일 점심, 이벤트 시작 시각) 그 전에 minReplicas를 올려 두는 예약 스케일링이 더 확실하다. KEDA의 cron 스케일러나 CronJob으로 HPA의 minReplicas를 고치는 식이다. 노드 쪽 이야기는 [EKS 클러스터 기본](/posts/eks-cluster-basics)과 이어진다.
+
+셋째는 VPA다. VPA(Vertical Pod Autoscaler)는 requests 자체를 바꾼다([VPA](/posts/k8s-vpa)). HPA가 CPU 사용률로 움직이는데 VPA가 CPU requests를 올리면 사용률이 내려가 HPA가 줄이고, 줄이면 사용률이 올라 VPA가 또 올리는 식으로 서로를 건드린다. 같은 리소스(CPU)에 둘을 함께 걸지 않는다. HPA는 요청 수 같은 커스텀 메트릭으로, VPA는 추천만(`updateMode: "Off"`) 받아 requests를 정하는 데 쓰는 조합이 흔하다.
+
+넷째는 maxReplicas와 쿼터다. 부하를 4000m로 올리면 이렇게 된다.
+
+```text
+NAME     REFERENCE           TARGETS         MINPODS   MAXPODS   REPLICAS   AGE
+orders   Deployment/orders   cpu: 333%/60%   2         10        10         21m
+  ScalingLimited  True    TooManyReplicas   the desired replica count is more than the maximum replica count
+```
+
+`ScalingLimited=True, TooManyReplicas`는 HPA가 더 늘리고 싶은데 maxReplicas에 막혔다는 뜻이다. 알람으로 걸어 둘 만한 조건이다. maxReplicas는 비용과 DB 연결 수의 상한이기도 하다. Pod 하나가 연결 풀 20개를 잡으면 50개까지 늘리는 순간 DB에 1000개가 몰린다. 네임스페이스의 ResourceQuota가 먼저 차면 HPA는 replicas를 올렸는데 Pod가 만들어지지 않는다. 그럴 때 HPA 쪽에는 아무 에러가 없고 ReplicaSet 이벤트에 FailedCreate가 남는다.
+
+## HPA가 안 움직일 때 보는 순서
+
+`kubectl describe hpa`의 Conditions 세 줄이 거의 모든 답을 준다.
+
+```text
+Conditions:
+  Type            Status  Reason              Message
+  ----            ------  ------              -------
+  AbleToScale     True    ReadyForNewScale    recommended size matches current size
+  ScalingActive   True    ValidMetricFound    the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+  ScalingLimited  False   DesiredWithinRange  the desired count is within the acceptable range
+```
+
+ScalingActive가 False면 메트릭을 못 읽는 것이다. 메시지가 missing request면 requests, no metrics returned면 metrics-server와 APIService, 커스텀 메트릭이면 어댑터와 메트릭 이름을 본다. AbleToScale이 False면 대상의 scale을 못 고치는 것이다. scaleTargetRef의 이름이나 apiVersion이 틀렸거나, 대상이 지워졌다. 안정화 창 안이라 기다리는 중이면 Reason이 ScaleDownStabilized로 나온다. ScalingLimited가 True면 min이나 max에 막혔다.
+
+셋 다 정상인데 안 움직인다면 공식을 손으로 계산한다. 지금 사용률과 목표의 비율이 0.9~1.1 사이면 허용 오차 안이다. 사용률이 낮게 보이는데 체감 부하가 높다면 requests가 너무 크게 잡혔거나, CPU가 아닌 다른 곳(DB, 외부 API, 스레드 풀)이 병목이다. 이벤트의 `New size: N; reason: ...` 줄은 HPA가 언제 무엇을 보고 바꿨는지 남기는 유일한 기록이라, 장애 회고 때 타임라인을 맞추는 데 쓴다. 이벤트는 기본 1시간만 남으니 길게 보려면 `kube_horizontalpodautoscaler_status_desired_replicas` 같은 kube-state-metrics 지표를 대시보드에 둔다.
+
+## 공식 하나, 브레이크 셋
+
+HPA는 15초마다 ceil(지금 수 × 지금 값 / 목표)를 계산해 Deployment의 replicas를 고친다. 여기에 브레이크가 셋 붙는다. 비율이 10% 안이면 두는 허용 오차, 줄일 때 지난 5분의 가장 큰 추천값을 쓰는 안정화 창, 한 번에 움직이는 양을 정하는 behavior 정책이다. 사용률은 requests 대비라서 requests가 없으면 계산이 안 되고, requests를 잘못 잡으면 판단도 틀린다. Pod를 늘려도 노드가 없으면 Pending이니 노드 오토스케일러와 짝을 맞추고, 매니페스트에서 replicas를 빼 둔다.
+
+## 면접에서 나올 만한 질문
+
+### HPA는 replicas를 어떻게 계산하나요?
+
+desiredReplicas = ceil(현재 replicas × 현재 메트릭 / 목표 메트릭)이다. CPU Utilization이라면 Pod requests 대비 평균 사용률을 쓴다. 비율이 1에서 0.1 이내면 움직이지 않고, 결과는 minReplicas와 maxReplicas 사이로 자른다. 메트릭이 여러 개면 각각 계산해서 가장 큰 값을 쓴다.
+
+### HPA의 TARGETS가 unknown으로 나옵니다. 무엇을 보나요?
+
+`kubectl describe hpa`의 ScalingActive 조건과 이벤트를 본다. missing request for cpu면 컨테이너 중 하나라도 CPU requests가 없는 것이고, no metrics returned면 metrics-server가 값을 못 주는 것이라 APIService가 Available인지, `kubectl top pods`가 되는지 확인한다. 막 만든 Pod라면 첫 수집까지 1분쯤 기다리면 사라진다.
+
+### 부하가 줄었는데 Pod가 바로 줄지 않는 이유는?
+
+스케일 다운에는 기본 300초의 안정화 창이 있어서, 지난 5분 동안 계산한 추천값 중 가장 큰 값을 쓰기 때문이다. 부하가 잠깐 내려갔다 다시 오르는 출렁임에 Pod를 줄였다 늘리는 것을 막는다. 늘릴 때는 창이 0이라 바로 늘린다. behavior.scaleDown.stabilizationWindowSeconds로 HPA마다 바꿀 수 있다.
+
+### 부하가 몰렸는데 한 번에 maxReplicas까지 늘지 않는 이유는?
+
+한 번에 늘릴 수 있는 양에 제한이 있기 때문이다. behavior를 적으면 기본값은 15초마다 4개와 100% 중 큰 쪽까지이고, behavior가 없으면 지금의 2배와 4개 중 큰 쪽까지다. 몇 바퀴에 걸쳐 목표에 가까워진다. 여기에 Pod 기동 시간과 노드 증설 시간이 더해지니, 급격한 부하는 minReplicas와 목표 사용률의 여유로 버틴다.
+
+### 왜 목표 CPU 사용률을 100%가 아니라 60~70%로 잡나요?
+
+HPA가 반응해서 새 Pod가 실제로 요청을 받기까지 메트릭 수집, 컨트롤러 주기, 스케줄링, 기동, 노드 증설로 수십 초에서 몇 분이 걸리기 때문이다. 그 사이 늘어난 부하를 기존 Pod가 받아야 하니 여유를 남긴다. 또 사용률은 requests 대비라서 100%가 곧 한계는 아니고, limits가 없다면 그보다 더 쓸 수도 있다.
+
+### HPA와 VPA를 같이 써도 되나요?
+
+같은 리소스로 함께 쓰면 안 된다. VPA가 CPU requests를 올리면 사용률이 떨어져 HPA가 줄이고, 그러면 다시 사용률이 올라 서로를 흔든다. HPA는 요청 수 같은 커스텀 메트릭으로, VPA는 추천 모드로 requests를 정하는 데만 쓰는 식으로 나눈다.
+
+### HPA로 Pod를 0개까지 줄일 수 있나요?
+
+기본으로는 안 된다. minReplicas는 1 이상이어야 하고, 0을 쓰려면 HPAScaleToZero 기능 게이트(1.36까지 알파, 1.37부터 베타로 기본 켜짐)와 Object나 External 메트릭이 필요하다. Pod가 0개면 CPU를 잴 수 없어 다시 늘릴 신호가 없기 때문이다. 실무에서는 KEDA가 이벤트 소스를 보고 0과 1 사이를 맡고, 그 위는 HPA에 넘긴다.
+
+### HPA를 쓰는 Deployment 매니페스트에 replicas를 적으면 무슨 일이 생기나요?
+
+apply나 GitOps 동기화 때마다 replicas가 매니페스트 값으로 돌아간다. HPA가 8개로 늘려 둔 상태에서 배포하면 순간적으로 2개가 됐다가 다음 바퀴에 다시 오르니, 피크 시간 배포가 장애가 될 수 있다. 그래서 HPA가 있으면 replicas 필드를 매니페스트에서 뺀다.

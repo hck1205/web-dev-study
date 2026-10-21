@@ -1,0 +1,697 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kustomize-basics");
+
+운영 overlay에 "모든 리소스에 팀 라벨을 붙이자"며 `commonLabels` 한 줄을 넣었다. `kubectl apply -k`를 치자 Deployment는 에러로 거절됐는데 Service는 `configured`로 넘어갔다. 몇 초 뒤 Service의 엔드포인트가 비었다. 라벨 하나 붙이려다 트래픽이 끊긴 것이다.
+
+Kustomize는 겉으로는 단순하다. base에 YAML을 두고, 환경마다 overlay에서 다른 점만 덧씌운다. 그 단순함 아래에 규칙이 몇 개 있다. 라벨이 셀렉터까지 바뀌는지, 패치가 목록의 원소를 이름으로 찾는지 순서로 찾는지, generator가 이름을 왜 바꾸는지, 조각(component)이 언제 끼어드는지. 이 글은 그 규칙들을 실제 렌더링 결과로 하나씩 확인한다.
+
+Kustomize가 무엇이고 복사나 Helm보다 왜 나은지는 이미 두 글에서 짧게 다뤘다. 폴더를 어떻게 나누는지는 [프로젝트 구조 글](/posts/k8s-project-structure)의 "환경이 늘어날 때"에, Helm과의 비교표는 [차트 배포 흐름](/posts/helm-dependencies-oci-gitops)의 "Kustomize와 무엇이 다른가"에 있다. 여기서는 그다음, overlay를 직접 쓰다 부딪히는 부분을 본다. 출력은 kubectl 1.31에 들어 있는 Kustomize v5.4.2(`kubectl kustomize`)와 따로 설치한 kustomize v5.4.3에서 받았고, 클러스터에 적용한 부분은 kwok 실습 클러스터(Kubernetes 1.30)를 썼다.
+
+이 주제의 다른 글: [kubectl 기본기](/posts/kubectl-essentials), [kubectl apply와 서버 쪽 apply](/posts/kubectl-apply-ssa), [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts).
+
+## kustomization.yaml이 하는 일
+
+Kustomize의 입력은 디렉터리 하나다. 그 안의 `kustomization.yaml`이 어떤 파일을 읽고(resources), 무엇을 만들고(generators), 어떻게 고칠지(transformers, patches)를 적는다. 출력은 고친 YAML 묶음이다. 클러스터에 아무것도 묻지 않고 텍스트만 바꾼다.
+
+```text
+app/
+├── base/                 kustomization.yaml, deployment.yaml, service.yaml
+├── components/
+│   └── debug-sidecar/    kustomization.yaml
+└── overlays/
+    ├── dev/              kustomization.yaml
+    └── prod/             kustomization.yaml, api-resources.yaml
+```
+
+base의 kustomization은 이렇게 생겼다. Deployment와 Service를 읽고, 설정 값으로 ConfigMap을 하나 만든다.
+
+```yaml
+# base/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+- service.yaml
+configMapGenerator:
+- name: api-config
+  literals:
+  - DB_HOST=postgres.shop.svc
+  - FEATURE_COUPON=off
+```
+
+```bash
+# 렌더링만 한다. 클러스터에 보내지 않는다
+kubectl kustomize base
+```
+
+```text
+apiVersion: v1
+data:
+  DB_HOST: postgres.shop.svc
+  FEATURE_COUPON: "off"
+kind: ConfigMap
+metadata:
+  name: api-config-5f527m22tk
+---
+apiVersion: v1
+kind: Service
+...
+---
+apiVersion: apps/v1
+kind: Deployment
+...
+      containers:
+      - env:
+        - name: LOG_LEVEL
+          value: info
+        envFrom:
+        - configMapRef:
+            name: api-config-5f527m22tk
+        image: registry.example.com/shop-api:1.4.0
+        name: api
+      - image: fluent/fluent-bit:3.1
+        name: log-agent
+```
+
+(Service와 Deployment의 앞부분은 `...`로 줄였다.) ConfigMap 이름 뒤에 해시가 붙었고, Deployment의 `envFrom`도 그 이름으로 바뀌었다. 이 해시는 뒤에서 따로 본다. `off`가 `"off"`로 따옴표에 싸인 것도 눈여겨본다. YAML 1.1에서 따옴표 없는 `off`는 불리언 false로 읽힐 수 있어서 문자열로 지켜 준 것인데, 손으로 쓴 ConfigMap에는 이런 보호가 없다. 출력 순서도 파일 순서와 다르다. Kustomize는 Namespace, ConfigMap처럼 참조되는 쪽을 앞에 두도록 정렬한다.
+
+kubectl에 들어 있는 Kustomize는 kubectl 버전에 묶인다. `kubectl version --client`를 치면 `Kustomize Version: v5.4.2`가 함께 나온다(kubectl 1.31). 따로 설치한 `kustomize` 명령과 버전이 다르면 같은 디렉터리의 결과가 달라질 수 있다. CI와 내 노트북, ArgoCD가 쓰는 버전을 맞춰 둔다.
+
+## base 위에 overlay를 쌓는다
+
+overlay는 base를 resources로 읽고 그 위에 환경별 차이를 적는다. 운영 overlay를 만들었다.
+
+```yaml
+# overlays/prod/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shop-prod
+resources:
+- ../../base
+labels:
+- pairs:
+    team: shop
+  includeSelectors: false
+images:
+- name: registry.example.com/shop-api
+  newTag: 1.4.1
+replicas:
+- name: api
+  count: 4
+configMapGenerator:
+- name: api-config
+  behavior: merge
+  literals:
+  - FEATURE_COUPON=on
+patches:
+- path: api-resources.yaml
+```
+
+한 줄씩 하는 일이 다르다. `namespace`는 모든 리소스에 네임스페이스를 넣는다. `labels`는 라벨을 붙인다(셀렉터에는 넣지 않는다는 옵션까지 함께, 뒤에서 자세히 본다). `images`는 이미지 이름이 같은 곳의 태그를 바꾼다. `replicas`는 이름으로 replicas를 바꾼다. `configMapGenerator`의 `behavior: merge`는 base의 같은 ConfigMap에 값을 덧붙인다. `patches`는 파일로 적은 패치를 덮는다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="overlay는 base를 읽고, 조각은 필요한 overlay만 가져다 쓴다"
+  nodes={[
+    { id: "base", label: "base/", sub: "deploy · svc · cm", x: 210, y: 40, w: 170 },
+    { id: "comp", label: "components/", sub: "debug-sidecar", x: 350, y: 150, w: 130 },
+    { id: "dev", label: "overlays/dev", sub: "replicas 1", x: 110, y: 150, w: 140 },
+    { id: "prod", label: "overlays/prod", sub: "replicas 4 · 1.4.1", x: 230, y: 250, w: 170 },
+    { id: "out", label: "렌더링 결과", sub: "kubectl kustomize", x: 80, y: 250, w: 130 },
+  ]}
+  edges={[
+    { from: "base", to: "dev", label: "resources" },
+    { from: "base", to: "prod", label: "resources" },
+    { from: "comp", to: "dev", dashed: true, label: "components" },
+    { from: "dev", to: "out" },
+  ]}
+/>
+
+렌더링 결과에서 Deployment 부분만 보면 패치가 어떻게 들어갔는지 보인다. 패치 파일은 이렇게 생겼다.
+
+```yaml
+# overlays/prod/api-resources.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        env:
+        - name: LOG_LEVEL
+          value: warn
+```
+
+```bash
+# 운영 overlay를 렌더링한다
+kubectl kustomize overlays/prod
+```
+
+```text
+  replicas: 4
+...
+      containers:
+      - env:
+        - name: LOG_LEVEL
+          value: warn
+        envFrom:
+        - configMapRef:
+            name: api-config-4f222bbtb6
+        image: registry.example.com/shop-api:1.4.1
+        name: api
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+      - image: fluent/fluent-bit:3.1
+        name: log-agent
+```
+
+(Deployment의 replicas와 컨테이너 부분만 남겼다.) 패치에는 컨테이너 `api` 하나만 적었는데 `log-agent`는 그대로 남았고, `api`의 env는 통째로 바뀌지 않고 `LOG_LEVEL`만 warn으로 바뀌었다. `envFrom`과 `image`도 남았다. 이게 전략적 병합 패치의 성질이다.
+
+## 이름으로 찾아 합치는 패치
+
+위 패치처럼 일부만 적은 YAML 조각을 덮는 방식을 전략적 병합 패치(strategic merge patch)라고 한다. "전략적"이라는 말은 필드마다 합치는 전략이 정해져 있다는 뜻이다. 맵은 키별로 합치고, 컨테이너나 env 같은 목록은 원소를 `name`으로 찾아 합친다. 어느 목록을 어떤 키로 합칠지는 쿠버네티스 API 타입에 적혀 있어서(컨테이너는 name, 포트는 containerPort) Kustomize가 그대로 따른다.
+
+지우는 것도 된다. 배치용 overlay에서는 로그 사이드카가 필요 없어서 `$patch: delete`로 뺐다.
+
+```yaml
+# overlays/batch/kustomization.yaml
+resources:
+- ../../base
+patches:
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api
+    spec:
+      template:
+        spec:
+          containers:
+          - name: log-agent
+            $patch: delete
+```
+
+```text
+      containers:
+      - env:
+...
+        image: registry.example.com/shop-api:1.4.0
+        name: api
+```
+
+컨테이너 목록이 여기서 끝난다. `log-agent`가 사라졌다. 이름으로 찾아 합치는 규칙을 직접 짜 보면 동작이 분명해진다. 이름이 같으면 필드를 덮어 합치고(env는 다시 이름으로 합친다), 없으면 더하고, `$patch: delete`면 뺀다. 실제 Kustomize는 새로 더한 원소를 목록 어디에 둘지가 이 코드와 다를 수 있다. 위치가 아니라 이름이 기준이라는 것만 같다.
+
+<CodePlayground
+  caption="컨테이너 목록을 이름으로 합치기"
+  functionName="mergeByName"
+  initialCode={`function mergeByName(base, patch) {
+  // base, patch: [{ name, image?, env?: [{ name, value }], ... }]
+  // 같은 name이면 필드를 덮어 합친다. env는 다시 name으로 합친다
+  // 없는 name이면 뒤에 더한다
+  // $patch: "delete"면 그 원소를 뺀다
+  return base;
+}`}
+  solution={`function mergeByName(base, patch) {
+  const result = base.map((item) => ({ ...item }));
+  for (const p of patch) {
+    const i = result.findIndex((item) => item.name === p.name);
+    if (p.$patch === "delete") {
+      if (i >= 0) result.splice(i, 1);
+      continue;
+    }
+    if (i < 0) { result.push({ ...p }); continue; }
+    const merged = { ...result[i] };
+    for (const [key, value] of Object.entries(p)) {
+      if (key === "env" && Array.isArray(value)) merged.env = mergeByName(merged.env || [], value);
+      else merged[key] = value;
+    }
+    result[i] = merged;
+  }
+  return result;
+}`}
+  tests={[
+    {
+      label: "운영 패치: env 하나만 바뀐다",
+      args: [[{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }, { name: "log-agent", image: "fluent-bit:3.1" }], [{ name: "api", env: [{ name: "LOG_LEVEL", value: "warn" }], resources: { requests: { cpu: "500m" } } }]],
+      expected: [{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "warn" }], resources: { requests: { cpu: "500m" } } }, { name: "log-agent", image: "fluent-bit:3.1" }],
+    },
+    {
+      label: "$patch: delete",
+      args: [[{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }, { name: "log-agent", image: "fluent-bit:3.1" }], [{ name: "log-agent", $patch: "delete" }]],
+      expected: [{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }],
+    },
+    {
+      label: "없는 이름은 더한다",
+      args: [[{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }, { name: "log-agent", image: "fluent-bit:3.1" }], [{ name: "debug-tools", image: "netshoot:v0.13" }]],
+      expected: [{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }, { name: "log-agent", image: "fluent-bit:3.1" }, { name: "debug-tools", image: "netshoot:v0.13" }],
+    },
+    {
+      label: "env에 새 이름을 더한다",
+      args: [[{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }] }, { name: "log-agent", image: "fluent-bit:3.1" }], [{ name: "api", env: [{ name: "DEBUG_SQL", value: "true" }] }]],
+      expected: [{ name: "api", image: "shop-api:1.4.0", env: [{ name: "LOG_LEVEL", value: "info" }, { name: "DEBUG_SQL", value: "true" }] }, { name: "log-agent", image: "fluent-bit:3.1" }],
+    },
+  ]}
+/>
+
+이 방식의 한계도 있다. 키가 정해지지 않은 목록(예: 컨테이너의 `args`, `command`)은 합치지 않고 통째로 바꾼다. 인자 하나만 더하고 싶어도 전체를 다시 적어야 한다. CRD로 만든 리소스는 Kustomize가 키를 몰라서 목록이 통째로 바뀐다. 이럴 때 JSON 패치를 쓴다.
+
+## 위치로 찾아 바꾸는 패치
+
+JSON 패치(RFC 6902)는 "어느 경로에 무엇을 하라"는 연산 목록이다. 경로가 정확하니 키 없는 목록이나 CRD에도 쓸 수 있다. 개발 overlay에서 replicas를 1로 내리고 api 컨테이너에 env 하나를 더했다.
+
+```yaml
+# overlays/dev/kustomization.yaml (처음 버전)
+namespace: shop-dev
+resources:
+- ../../base
+patches:
+- target:
+    kind: Deployment
+    name: api
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: DEBUG_SQL
+        value: "true"
+```
+
+`containers/0`은 첫 번째 컨테이너, `env/-`는 env 목록의 끝이다. 렌더링하면 의도대로 나온다. 문제는 석 달 뒤에 생긴다. 누군가 base에서 `log-agent`를 목록 맨 앞으로 옮겼다(env도 하나 달았다). 개발 overlay는 아무도 건드리지 않았다.
+
+```text
+      containers:
+      - env:
+        - name: FLUENT_LOG
+          value: info
+        - name: DEBUG_SQL
+          value: "true"
+        image: fluent/fluent-bit:3.1
+        name: log-agent
+      - env:
+        - name: LOG_LEVEL
+          value: info
+...
+        name: api
+```
+
+에러 없이 렌더링됐고, `DEBUG_SQL`은 로그 사이드카에 붙었다. 앱은 SQL 로그를 찍지 않고, 누구도 이유를 모른다. 아래 그림이 그 순간이다.
+
+<AlgoTrace
+  caption="위치로 가리키는 패치는 목록 순서가 바뀌면 다른 원소를 고친다"
+  memoryLabel="containers/0이 가리키는 것"
+  cells={["containers[0]", "containers[1]", "patch: /containers/0/env/-"]}
+  steps={[
+    { pointer: 0, memory: ["api"], caption: "처음 base: 0번이 api, 1번이 log-agent다. 패치를 쓴 사람은 0번이 api라고 알고 썼다." },
+    { pointer: 2, found: [0], memory: ["api", "+DEBUG_SQL"], caption: "패치가 0번의 env 끝에 DEBUG_SQL을 붙인다. 의도대로다." },
+    { pointer: 0, memory: ["log-agent"], caption: "base에서 log-agent가 앞으로 왔다. overlay는 그대로인데 0번의 뜻이 바뀌었다." },
+    { pointer: 2, found: [0], memory: ["log-agent", "+DEBUG_SQL"], caption: "같은 패치가 log-agent에 붙는다. 경로는 여전히 유효해서 에러가 없다." },
+    { pointer: 1, memory: ["log-agent", "api: DEBUG_SQL 없음"], caption: "api에는 아무것도 붙지 않았다. 렌더링 결과를 직접 보기 전에는 모른다." },
+  ]}
+/>
+
+막는 방법은 둘이다. 하나는 전략적 병합 패치로 바꿔 이름으로 가리키는 것이다. 다른 하나는 JSON 패치의 `test` 연산으로 "0번이 api일 때만 하라"는 조건을 거는 것이다.
+
+```yaml
+  patch: |-
+    - op: test
+      path: /spec/template/spec/containers/0/name
+      value: api
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: DEBUG_SQL
+        value: "true"
+```
+
+```text
+error: testing value /spec/template/spec/containers/0/name failed: test failed
+```
+
+순서가 바뀐 base에서는 이제 조용히 엉뚱한 곳에 붙지 않고 렌더링이 실패한다. 경로가 아예 없을 때도 실패한다. 0번 컨테이너에 env 목록 자체가 없으면 `doc is missing path: "/spec/template/spec/containers/0/env/-"`로 멈춘다. JSON 패치의 `add`는 중간 경로를 만들어 주지 않는다. env가 없을 수도 있는 곳에는 `/env`에 목록 전체를 add하거나 전략적 병합 패치를 쓴다. 고르는 기준은 간단하다. 쿠버네티스 기본 리소스의 키 있는 목록은 전략적 병합 패치, 키 없는 목록이나 CRD, 정확히 한 값만 바꿀 때는 JSON 패치다. JSON 패치를 쓴다면 목록 인덱스 앞에 `test`를 거는 습관을 들인다.
+
+## 패치가 아무 데도 안 붙을 때
+
+패치의 대상 이름을 틀리면 어떻게 될까. 두 방식이 다르게 반응한다. 전략적 병합 패치는 패치 안의 `metadata.name`으로 대상을 찾고, 못 찾으면 실패한다.
+
+```text
+error: no resource matches strategic merge patch "Deployment.v1.apps/shop-api.[noNs]": no matches for Id Deployment.v1.apps/shop-api.[noNs]; failed to find unique target for patch Deployment.v1.apps/shop-api.[noNs]
+```
+
+`target`으로 대상을 고르는 패치는 다르다. target은 "이 조건에 맞는 리소스 모두에 걸어라"라는 셀렉터라서, 맞는 것이 없으면 아무 데도 안 걸고 성공한다.
+
+```bash
+# target 이름을 shop-api로 잘못 썼다. replicas: 9가 들어갔는지 본다
+kubectl kustomize overlays/typo | grep replicas; echo "[exit ${PIPESTATUS[0]}]"
+```
+
+```text
+  replicas: 2
+[exit 0]
+```
+
+9가 아니라 base의 2 그대로다. 에러도 없다. target은 `kind`와 `labelSelector`로 여러 리소스에 한꺼번에 거는 데 쓰라고 만든 것이라 이렇게 동작한다. 특정 리소스 하나를 고칠 때는 target에 기대지 말고 렌더링 결과를 검사하는 단계를 CI에 둔다. 아래 "결과를 보고 적용하기"에서 그 방법을 본다.
+
+## 라벨 한 줄이 셀렉터를 바꾼다
+
+처음 장면으로 돌아간다. `commonLabels`는 라벨을 metadata에만 붙이지 않는다. Deployment의 `spec.selector`, Pod 템플릿의 라벨, Service의 `selector`에도 넣는다. 렌더링해 보면 보인다.
+
+```bash
+# commonLabels를 넣은 overlay를 렌더링한다
+kubectl kustomize overlays/prod-cl
+```
+
+```text
+# Warning: 'commonLabels' is deprecated. Please use 'labels' instead. Run 'kustomize edit fix' to update your Kustomization automatically.
+kind: Deployment
+...
+  selector:
+    matchLabels:
+      app: api
+      app.kubernetes.io/part-of: shop
+```
+
+새로 만드는 리소스라면 문제가 없다. 이미 떠 있는 Deployment라면 다르다. 셀렉터는 바꿀 수 없는 필드라 Deployment는 거절된다. 하지만 Service의 셀렉터는 바꿀 수 있어서 먼저 적용된다. 실습 클러스터에서 그대로 쳤다.
+
+```bash
+# 적용 전 엔드포인트
+kubectl -n shop-prod get endpoints api
+
+# commonLabels가 들어간 overlay를 적용한다
+kubectl apply -k overlays/prod-cl
+
+# 적용 후 엔드포인트와 Service 셀렉터
+kubectl -n shop-prod get endpoints api
+kubectl -n shop-prod get svc api -o jsonpath='{.spec.selector}{"\n"}'
+```
+
+```text
+NAME   ENDPOINTS                                                  AGE
+api    10.0.0.14:8080,10.0.0.15:8080,10.0.1.14:8080 + 1 more...   15s
+configmap/api-config-4f222bbtb6 configured
+service/api configured
+The Deployment "api" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{"app":"api", "app.kubernetes.io/part-of":"shop"}, MatchExpressions:[]v1.LabelSelectorRequirement(nil)}: field is immutable
+NAME   ENDPOINTS   AGE
+api    <none>      16s
+{"app":"api","app.kubernetes.io/part-of":"shop"}
+```
+
+Service는 이제 `part-of=shop` 라벨이 있는 Pod만 찾는데, 떠 있는 Pod에는 그 라벨이 없다. 엔드포인트가 `<none>`이 됐다. 이 Service로 오는 요청은 갈 곳이 없다.
+
+<NetworkTopology
+  caption="Deployment는 거절되고 Service만 바뀌어 엔드포인트가 빈다"
+  width={400}
+  height={290}
+  zones={[
+    { id: "ns", label: "shop-prod", x: 8, y: 92, w: 384, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "apply -k", x: 80, y: 45, icon: "client" },
+    { id: "api", label: "API 서버", sub: "검증", x: 300, y: 45, icon: "server" },
+    { id: "svc", label: "svc/api", sub: "selector", x: 110, y: 145, icon: "lb" },
+    { id: "deploy", label: "deploy/api", sub: "selector 고정", x: 290, y: 145, icon: "lock", w: 116 },
+    { id: "p1", label: "Pod", sub: "app=api", x: 110, y: 235, icon: "container" },
+    { id: "p2", label: "Pod", sub: "app=api", x: 290, y: 235, icon: "container" },
+  ]}
+  links={[
+    { from: "cli", to: "api" },
+    { from: "api", to: "svc" },
+    { from: "api", to: "deploy" },
+    { from: "svc", to: "p1" },
+    { from: "svc", to: "p2" },
+  ]}
+  steps={[
+    { path: ["svc", "p1"], highlight: ["p2"], title: "처음에는 Pod 넷이 엔드포인트다", detail: "Service 셀렉터가 app=api라서 떠 있는 Pod를 모두 고른다." },
+    { path: ["cli", "api", "deploy"], packet: "selector", blocked: true, title: "Deployment는 거절된다", detail: "commonLabels가 spec.selector에 part-of를 넣었다. 셀렉터는 바꿀 수 없어서 API 서버가 거절한다. 그런데 apply는 리소스마다 따로 보내서 나머지는 계속 간다.", payload: "spec.selector: Invalid value: ...: field is immutable" },
+    { path: ["cli", "api", "svc"], packet: "selector", highlight: ["svc"], title: "Service는 바뀐다", detail: "Service 셀렉터는 바꿀 수 있는 필드라 configured로 넘어간다. 이제 app=api이면서 part-of=shop인 Pod를 찾는다." },
+    { path: ["svc", "p1"], blocked: true, title: "고를 Pod가 없다", detail: "떠 있는 Pod에는 part-of 라벨이 없다. 엔드포인트가 비고, 이 Service로 오는 요청은 연결을 받아 줄 곳이 없다.", payload: "NAME   ENDPOINTS   AGE\napi    <none>      16s" },
+  ]}
+/>
+
+되돌리는 것은 빠르다. 원래 overlay를 다시 apply하면 Service 셀렉터가 돌아온다. 근본 대책은 `commonLabels` 대신 `labels`를 쓰고 `includeSelectors: false`를 명시하는 것이다. 운영 overlay가 처음부터 그렇게 쓴 이유다. 라벨은 metadata에만 붙고 셀렉터는 건드리지 않는다.
+
+`commonLabels`는 v5에서 deprecated다. 경고 메시지가 권하는 `kustomize edit fix`를 돌리면 어떻게 될까.
+
+```bash
+# deprecated 필드를 새 형식으로 바꾼다. 결과로 labels가 이렇게 바뀌었다
+kustomize edit fix
+```
+
+```yaml
+labels:
+- pairs:
+    team: shop
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: shop
+```
+
+`includeSelectors: true`로 옮겼다. 결과를 바꾸지 않으려고 예전 동작을 그대로 살린 것이라, 셀렉터 문제는 고쳐지지 않는다. 바뀐 파일을 보고 셀렉터에 들어갈 필요가 없는 라벨은 `false`로 바꾼다. 셀렉터에 넣어도 되는 라벨은 처음 만들 때부터 붙어 있어서 앞으로도 바뀌지 않을 것뿐이다. 라벨과 셀렉터가 어떻게 짝을 맞추는지는 [라벨과 셀렉터](/posts/k8s-labels-selectors)에 있다.
+
+## 내용이 바뀌면 이름이 바뀌는 generator
+
+configMapGenerator가 이름에 해시를 붙이는 이유는 [ConfigMap 글](/posts/k8s-configmap)의 "설정이 바뀌면 Pod를 다시 띄우게 하기"에서 다뤘다. 이름이 바뀌면 그 이름을 참조하는 Pod 템플릿이 바뀌고, 템플릿이 바뀌면 롤아웃이 일어난다. 여기서는 이름을 조각내 읽고, 그 글에 없던 부분을 덧붙인다.
+
+<UrlAnatomy
+  caption="generator가 만든 이름 하나"
+  separator=""
+  joiner="-"
+  params={[
+    { key: "prefix", display: "stg", title: "namePrefix", description: "overlay의 namePrefix가 붙는다. 이 ConfigMap을 참조하는 envFrom, volumes도 함께 바뀐다." },
+    { key: "name", display: "api-config", title: "generator에 적은 이름", description: "configMapGenerator의 name이다. 매니페스트에서는 이 이름으로 참조하고, Kustomize가 렌더링할 때 최종 이름으로 바꿔 준다.", required: true },
+    { key: "hash", display: "5f527m22tk", title: "내용의 해시", description: "data 내용으로 만든 해시다. 값을 하나라도 바꾸면 해시가 바뀐다. 실습에서는 FEATURE_COUPON을 on으로 바꾸자 4f222bbtb6가 됐다.", required: true },
+  ]}
+/>
+
+운영에서 쿠폰 기능을 다시 끄고 적용해 봤다.
+
+```bash
+# 값을 바꾸고 무엇이 달라지는지 먼저 본다
+sed -i 's/FEATURE_COUPON=on/FEATURE_COUPON=off/' overlays/prod/kustomization.yaml
+kubectl diff -k overlays/prod
+
+# 적용하고 ConfigMap과 ReplicaSet을 본다
+kubectl apply -k overlays/prod
+kubectl -n shop-prod get cm
+kubectl -n shop-prod get rs
+```
+
+```text
+-            name: api-config-4f222bbtb6
++            name: api-config-5f527m22tk
+configmap/api-config-5f527m22tk created
+service/api unchanged
+deployment.apps/api configured
+NAME                    DATA   AGE
+api-config-4f222bbtb6   2      27s
+api-config-5f527m22tk   2      3s
+kube-root-ca.crt        1      28s
+NAME             DESIRED   CURRENT   READY   AGE
+api-5d5995d9fd   0         0         0       27s
+api-7fb8885595   4         4         4       3s
+```
+
+(diff는 이름이 바뀐 줄만 남겼다.) 새 ConfigMap이 생기고 새 ReplicaSet으로 롤아웃됐다. 옛 ConfigMap은 그대로 남았다. 이게 장점이자 할 일이다. 장점은 `kubectl rollout undo`로 옛 ReplicaSet으로 돌아가면 옛 ConfigMap을 가리키니 설정도 함께 돌아간다는 것이다. 할 일은 쌓인 옛 ConfigMap을 치우는 것이다. `kubectl apply -k`는 지우지 않는다. 지우는 쪽은 [apply 글의 prune](/posts/kubectl-apply-ssa)이나 GitOps 도구의 prune이 맡는데, 롤백에 쓸 몇 개는 남겨 두는 편이 낫다.
+
+generator에는 함정이 둘 더 있다. 하나는 `generatorOptions`의 범위다. 스테이징 overlay에 `disableNameSuffixHash: true`를 넣었는데도 이름에 해시가 남았다.
+
+```text
+  name: stg-api-config-5f527m22tk
+```
+
+generatorOptions는 그 kustomization이 직접 만든 generator에만 걸린다. ConfigMap을 만든 것은 base라서 overlay의 옵션이 닿지 않는다. 다른 하나는 secretGenerator다. 파일이나 literal에서 Secret을 만들어 주지만, 그 원본 파일이 git에 있으면 비밀이 git에 있는 것이다. Secret을 git 바깥에 두는 방법은 [Secret 글](/posts/k8s-secret)과 [values와 비밀 값 글](/posts/helm-values-secrets)의 SOPS 부분에 있다.
+
+## 이미지, replicas, 이름 앞머리
+
+자주 쓰는 transformer는 몇 개 안 된다. `images`는 이름이 같은 이미지를 찾아 태그나 이름, 다이제스트를 바꾼다. 스테이징에서는 ECR 주소와 다이제스트로 고정했다.
+
+```yaml
+# overlays/stg/kustomization.yaml
+resources:
+- ../../base
+namePrefix: stg-
+images:
+- name: registry.example.com/shop-api
+  newName: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api
+  digest: sha256:4b2e0f7c9a1d3e5f60718293a4b5c6d7e8f90123456789abcdef0123456789ab
+```
+
+```text
+  name: stg-api-config-5f527m22tk
+  name: stg-api
+    app: api
+  name: stg-api
+            name: stg-api-config-5f527m22tk
+        image: 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-api@sha256:4b2e0f7c9a1d3e5f60718293a4b5c6d7e8f90123456789abcdef0123456789ab
+```
+
+(이름과 이미지 줄만 grep했다. 다이제스트 값은 예시로 적은 것이다.) `namePrefix`는 리소스 이름 앞에 `stg-`를 붙이고, ConfigMap을 참조하는 `envFrom`도 함께 바꿨다. 라벨과 셀렉터(`app: api`)는 바꾸지 않는다. 그래서 같은 네임스페이스에 스테이징과 운영을 함께 두면 서로의 Service가 서로의 Pod를 고른다. 이름을 나눌 때는 네임스페이스도 나눈다.
+
+CI가 새 이미지 태그를 넣을 때는 파일을 sed로 고치기보다 overlay 디렉터리에서 `kustomize edit set image registry.example.com/shop-api:1.4.2`를 쓴다. 출력 없이 `images`의 `newTag` 한 줄만 바뀐다.
+
+`replicas` transformer는 이름으로 replicas를 고친다. HPA가 붙은 Deployment라면 overlay에 replicas를 두지 않는다. apply할 때마다 HPA가 늘린 값을 되돌리는 문제는 [apply 글](/posts/kubectl-apply-ssa)의 처음 장면과 같다.
+
+## 켜고 끄는 조각, component
+
+overlay가 늘면 "개발과 QA에는 디버그 사이드카를 넣고 운영에는 빼자" 같은 선택지가 생긴다. base에 넣으면 운영까지 들어가고, overlay마다 복사하면 다시 복사의 문제로 돌아간다. component는 여러 overlay가 골라서 가져다 쓰는 조각이다. kind가 `Component`다.
+
+```yaml
+# components/debug-sidecar/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api
+    spec:
+      template:
+        spec:
+          containers:
+          - name: debug-tools
+            image: nicolaka/netshoot:v0.13
+            command: ["sleep", "infinity"]
+configMapGenerator:
+- name: api-config
+  behavior: merge
+  literals:
+  - LOG_SQL=true
+```
+
+개발 overlay에 `components:`로 넣었다. 그러자 앞에서 `test`를 걸어 둔 JSON 패치가 실패했다.
+
+```text
+error: testing value /spec/template/spec/containers/0/name failed: test failed
+```
+
+component만 넣고 렌더링해 보면 이유가 보인다.
+
+```text
+      containers:
+      - command:
+        - sleep
+        - infinity
+        image: nicolaka/netshoot:v0.13
+        name: debug-tools
+      - env:
+...
+            name: api-config-tthkmd9785
+        image: registry.example.com/shop-api:1.4.0
+        name: api
+```
+
+(가운데를 줄였다. ConfigMap 해시가 바뀐 것은 component의 generator가 `LOG_SQL=true`를 합쳤기 때문이다.)
+
+전략적 병합 패치로 더한 `debug-tools`가 목록 맨 앞에 들어갔다(v5.4.2에서 확인). 그리고 component는 overlay 자신의 패치보다 먼저 적용된다. 그래서 overlay의 패치가 볼 때 0번은 이미 `debug-tools`다. `test`가 없었다면 `DEBUG_SQL`이 디버그 컨테이너에 붙었을 것이다. 결국 env 추가를 운영 overlay의 패치처럼 전략적 병합 패치(`containers: - name: api` 아래 env)로 바꿔 이름으로 가리키게 고쳤다. 위치가 필요 없는 replicas 교체는 JSON 패치로 그대로 둬도 된다.
+
+component를 `resources:`에 잘못 넣으면 `expected kind != 'Component'`로 끝나는 에러로 거절된다. component는 resources처럼 리소스 묶음을 더하는 게 아니라, 불러온 overlay 안에서 패치와 generator를 실행하는 조각이라 자리가 따로 있다.
+
+## 렌더링 결과를 보고 적용하기
+
+overlay는 결국 텍스트를 만든다. 무엇을 만들었는지 보고 나서 클러스터에 보내는 습관이 위의 함정 대부분을 막는다.
+
+```bash
+# 렌더링 결과를 파일로 남긴다. PR에서 이 파일의 차이를 리뷰한다
+kubectl kustomize overlays/prod > rendered/prod.yaml
+
+# 서버가 합칠 결과와 지금 클러스터를 비교한다
+kubectl diff -k overlays/prod
+
+# 문제없으면 적용한다
+kubectl apply -k overlays/prod
+```
+
+렌더링 결과를 git에 함께 올리는 팀도 있다. overlay를 한 줄 바꿨을 때 실제 매니페스트가 어디서 얼마나 바뀌는지가 PR 화면에 그대로 보인다. target 오타로 패치가 안 붙은 경우, 위치 패치가 다른 컨테이너에 붙은 경우가 여기서 걸린다.
+
+<NetworkTopology
+  caption="overlay는 텍스트를 만들 뿐이고, 검사와 적용은 다음 단계가 맡는다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "ci", label: "CI · 내 노트북", x: 8, y: 8, w: 384, h: 140, tone: "edge" },
+    { id: "cl", label: "클러스터", x: 8, y: 166, w: 384, h: 126, tone: "private" },
+  ]}
+  nodes={[
+    { id: "git", label: "git", sub: "base · overlays", x: 70, y: 60, icon: "db" },
+    { id: "build", label: "kustomize", sub: "build", x: 200, y: 60, icon: "switch" },
+    { id: "out", label: "prod.yaml", sub: "렌더링 결과", x: 330, y: 60, icon: "server" },
+    { id: "check", label: "검사", sub: "diff · dry-run", x: 200, y: 120, icon: "firewall" },
+    { id: "apisrv", label: "API 서버", sub: "shop-prod", x: 120, y: 235, icon: "server" },
+    { id: "argo", label: "ArgoCD", sub: "repo-server", x: 300, y: 235, icon: "gateway" },
+  ]}
+  links={[
+    { from: "git", to: "build" },
+    { from: "build", to: "out" },
+    { from: "out", to: "check" },
+    { from: "check", to: "apisrv" },
+    { from: "git", to: "argo", dashed: true },
+    { from: "argo", to: "apisrv" },
+  ]}
+  steps={[
+    { path: ["git", "build", "out"], packet: "render", title: "텍스트를 만든다", detail: "Kustomize는 클러스터에 묻지 않는다. 파일을 읽고 고친 YAML을 찍을 뿐이다. 같은 입력이면 같은 결과다." },
+    { path: ["out", "check"], packet: "diff", highlight: ["check"], title: "보내기 전에 본다", detail: "렌더링 결과의 차이를 PR에서 리뷰하고, kubectl diff -k로 서버가 합칠 결과를 본다. 패치가 안 붙었거나 셀렉터가 바뀐 것은 여기서 보인다." },
+    { path: ["out", "check", "apisrv"], packet: "selector", blocked: true, title: "서버 검사가 셀렉터 변경을 잡는다", detail: "--dry-run=server로 보내면 바꿀 수 없는 필드 변경이 실제 적용 전에 드러난다. Service만 먼저 바뀌는 사고를 막는다." },
+    { path: ["git", "argo", "apisrv"], packet: "sync", title: "GitOps는 자기 Kustomize로 렌더링한다", detail: "ArgoCD는 repo-server 안의 Kustomize로 같은 일을 한다. 그 버전이 내 kubectl의 것과 다르면 결과도 다를 수 있으니 버전을 맞춘다." },
+  ]}
+/>
+
+원격 base(`resources: - github.com/org/repo//k8s/base?ref=v1.2.0`)도 쓸 수 있다. 이때는 `ref`를 꼭 태그나 커밋으로 고정한다. 브랜치를 가리키면 남이 브랜치를 바꾸는 순간 내 렌더링 결과가 말없이 바뀐다.
+
+## Kustomize와 Helm 사이
+
+둘 중 무엇을 고르는지는 앞의 두 글에 정리돼 있다. 여기서 덧붙일 판단 기준은 이 글에서 본 함정 쪽이다. Kustomize는 무엇이든 고칠 수 있지만, 고치는 규칙(이름으로 합치기, 위치로 바꾸기, 셀렉터까지 바꾸는 라벨)을 overlay를 쓰는 사람이 알아야 한다. Helm은 차트 작성자가 열어 둔 values만 바꿀 수 있지만, 그 안에서는 규칙이 단순하다. 내 팀이 base와 overlay를 모두 쥐고 있으면 Kustomize의 자유가 이점이고, 남이 만든 것을 설치해 쓰면 Helm의 values가 이점이다.
+
+둘을 섞을 수도 있다. kustomization의 `helmCharts`는 차트를 렌더링한 뒤 그 위에 패치를 덮는데, `kubectl kustomize --enable-helm`처럼 따로 켜야 하고 helm 명령이 설치돼 있어야 한다. 차트 쪽 이야기는 [Helm은 무엇을 풀어 주나](/posts/helm-basics)와 [차트 템플릿 문법](/posts/helm-chart-templates)에서 시작한다.
+
+## overlay가 이상할 때 보는 순서
+
+1. 렌더링 결과를 직접 본다. `kubectl kustomize overlays/prod > /tmp/prod.yaml` 하고 의심 가는 리소스를 찾는다. 대부분 여기서 끝난다.
+2. 패치가 붙었는지 본다. target을 쓴 패치는 대상이 없어도 성공하니, 바뀌어야 할 값이 바뀌었는지 grep으로 확인한다.
+3. 목록 인덱스를 쓴 JSON 패치가 있으면 그 인덱스가 지금 무엇을 가리키는지 본다. component와 base 변경이 순서를 바꾼다.
+4. 셀렉터가 바뀌었는지 본다. `commonLabels`나 `includeSelectors: true`가 있으면 Deployment와 Service의 셀렉터를 렌더링 결과에서 확인한다.
+5. 버전을 본다. `kubectl version --client`의 Kustomize 버전, 독립 `kustomize version`, ArgoCD가 쓰는 버전이 같은지.
+6. 클러스터 쪽은 `kubectl diff -k`와 `--dry-run=server`로 본다. 렌더링은 맞는데 적용이 실패하면 그건 Kustomize가 아니라 API 서버의 검증 문제다.
+
+## base는 한 벌, 고치는 규칙은 넷
+
+Kustomize는 base를 한 벌 두고 overlay에서 고친다. 고치는 규칙은 크게 넷이다. 전략적 병합 패치는 목록을 이름으로 찾아 합치고, JSON 패치는 위치로 찾아 바꾸니 인덱스 앞에 `test`를 건다. 라벨은 `labels`와 `includeSelectors: false`로 붙여 셀렉터를 건드리지 않는다. generator는 내용이 바뀌면 이름을 바꿔 롤아웃을 일으키고 옛 것을 남긴다. 그리고 component는 overlay의 패치보다 먼저 끼어든다. 무엇을 만들었는지는 렌더링 결과로 확인하고 나서 보낸다.
+
+## 면접에서 나올 만한 질문
+
+### Kustomize의 base와 overlay는 무엇인가요?
+
+base는 환경에 상관없이 같은 매니페스트 묶음이고, overlay는 base를 resources로 읽어 환경별 차이(네임스페이스, 이미지 태그, replicas, 패치)만 덧씌우는 디렉터리다. 템플릿 없이 완성된 YAML 위에 고칠 것만 적으니 결과가 원래 YAML과 거의 같아 읽기 쉽다. kubectl에 들어 있어서 `kubectl kustomize`, `kubectl apply -k`로 바로 쓴다.
+
+### 전략적 병합 패치와 JSON 6902 패치는 언제 각각 쓰나요?
+
+전략적 병합 패치는 일부만 적은 YAML을 덮고, 컨테이너와 env 같은 목록은 name 같은 키로 찾아 합친다. 쿠버네티스 기본 리소스를 고칠 때 기본으로 쓴다. JSON 패치는 경로와 연산으로 정확히 한 곳을 바꾸니 키 없는 목록(args)이나 CRD에 쓴다. 다만 `containers/0`처럼 인덱스를 쓰면 순서가 바뀔 때 다른 원소를 고치니 `test` 연산으로 대상을 확인한다.
+
+### commonLabels를 운영 overlay에 추가했다가 장애가 났습니다. 왜일까요?
+
+commonLabels는 metadata뿐 아니라 Deployment의 spec.selector와 Service의 selector에도 라벨을 넣는다. 이미 있는 Deployment는 셀렉터가 immutable이라 거절되는데 Service 셀렉터는 바뀌어서, 새 라벨이 없는 기존 Pod를 고르지 못해 엔드포인트가 빈다. `labels`에 `includeSelectors: false`로 붙여야 하고, `kustomize edit fix`는 예전 동작을 살려 `includeSelectors: true`로 옮기니 직접 고친다.
+
+### configMapGenerator가 이름에 해시를 붙이는 이유는요?
+
+내용이 바뀌면 이름이 바뀌고, 그 이름을 참조하는 Pod 템플릿이 바뀌어 롤아웃이 자동으로 일어나게 하려는 것이다. 옛 ConfigMap이 남아 있어서 rollout undo로 옛 ReplicaSet에 돌아가면 설정도 함께 돌아간다. 대신 옛 ConfigMap이 쌓이니 prune이나 GitOps 도구로 정리한다.
+
+### target으로 지정한 패치가 적용되지 않았는데 에러가 없습니다. 왜 그런가요?
+
+target은 조건에 맞는 리소스 모두에 패치를 거는 셀렉터라 맞는 것이 하나도 없어도 성공으로 끝난다. 이름 오타나 kind 오타가 조용히 묻힌다. 반면 patch 안의 metadata.name으로 대상을 찾는 전략적 병합 패치는 대상이 없으면 실패한다. 그래서 렌더링 결과에서 바뀌어야 할 값을 확인하는 단계를 둔다.
+
+### component는 overlay나 base와 무엇이 다른가요?
+
+component는 kind가 Component인 재사용 조각으로, 불러온 overlay 안에서 패치와 generator를 실행한다. 디버그 사이드카, 모니터링 설정처럼 일부 환경에만 켜고 싶은 기능을 overlay마다 복사하지 않고 고를 수 있다. resources가 아니라 components 자리에 넣어야 하고, overlay 자신의 패치보다 먼저 적용되어 목록 순서를 바꿀 수 있다.

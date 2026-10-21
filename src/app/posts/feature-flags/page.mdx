@@ -1,0 +1,417 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("feature-flags");
+
+장애 대응 중이었다. 추천 영역이 부르는 API가 느려지면서 상품 페이지 전체가 같이 느려졌고, 그 영역만 끄기로 했다. 대시보드에서 킬 스위치를 내렸다. 그런데 에러율 그래프가 바로 꺾이지 않는다. 서버 몇 대는 곧바로 추천을 멈췄고, 나머지는 30초쯤 지나서야 따라왔다. 그 30초 동안 "플래그가 안 먹는다"는 말이 채널에 몇 번 올라왔다.
+
+플래그는 `if` 하나로 보이지만, 그 `if`의 답은 코드 밖 어딘가에서 정해져 서버마다 배달된다. 답을 정하는 규칙, 배달하는 방식, 배달이 끊겼을 때의 기본값, 그리고 다 쓴 플래그를 지우는 일까지가 피처 플래그를 운영한다는 뜻이다. 플래그가 왜 생겼는지, 해시로 사용자를 고정해서 나누는 원리, 실험 플래그와 통계는 [A/B 테스트와 피처 플래그](/posts/ab-testing)에서 다뤘다. 이 글은 그 위에서 플래그 시스템이 어떻게 돌아가는지를 본다.
+
+이 주제의 다른 글: [A/B 테스트와 피처 플래그](/posts/ab-testing), [CI/CD의 뼈대](/posts/ci-cd-basics), [롤백 전략](/posts/rollback-strategy).
+
+실습은 Ubuntu 24.04, Node 22.22.0, `@openfeature/server-sdk` 1.23.0으로 했다. 플래그 서버와 SDK는 동작을 보려고 직접 짠 작은 것이다.
+
+## 네 종류의 플래그는 운영 방식이 다르다
+
+플래그를 용도로 나누는 분류(릴리스, 실험, 운영, 권한)는 [앞 글](/posts/ab-testing)에 있다. 운영하는 쪽에서 보면 이 분류가 중요한 이유는 종류마다 다뤄야 하는 방식이 달라서다.
+
+| | 수명 | 누가 바꾸나 | 플래그 서비스가 죽으면 | 어디서 평가하나 |
+|---|---|---|---|---|
+| 릴리스 | 며칠~몇 주 | 개발팀 | 꺼진 쪽(옛 동작) | 서버·클라이언트 |
+| 실험 | 실험 기간 | 제품팀 | 대조군 | 노출을 기록하는 곳 |
+| 운영(킬 스위치) | 계속 | 당번(on-call) | 마지막으로 알던 값 | 서버 |
+| 권한 | 계속 | 영업·운영 | 닫힌 쪽 | 서버 |
+
+차이가 가장 큰 칸이 "플래그 서비스가 죽으면"이다. 릴리스 플래그는 답을 모를 때 옛 동작으로 가면 된다. 권한 플래그는 모를 때 닫아야 한다. 유료 기능을 공짜로 열어 주는 것보다 잠깐 막는 편이 낫다. 운영 플래그는 반대로 복잡하다. 장애 중에 끈 킬 스위치가 플래그 서비스 재시작과 함께 코드 기본값(켜짐)으로 돌아가면 장애가 다시 시작된다. 그래서 마지막으로 받은 값을 기억해 두는 장치가 필요하다.
+
+권한 플래그는 오래 살기 때문에 결국 플래그 시스템에서 나와 요금제·권한 시스템으로 옮겨 가는 게 자연스럽다. 플래그 대시보드에서 계약 상태를 관리하기 시작하면, 누가 무엇에 접근하는지가 감사 기록이 약한 곳에 흩어진다.
+
+## 규칙은 위에서부터 하나씩
+
+플래그 하나에는 여러 규칙이 붙는다. "직원은 켜기", "앱 5.2 이상은 켜기", "특정 사용자는 끄기", "나머지 10%만 켜기". 평가 엔진은 이 규칙을 정해진 순서대로 보다가 처음 맞는 규칙에서 멈춘다. 순서가 결과를 바꾼다. 대부분의 플래그 서비스가 쓰는 순서는 이렇다.
+
+1. 플래그가 꺼져 있으면 끈 값(off variant)을 돌려준다. 킬 스위치는 여기서 동작한다.
+2. 개별 지정(individual targets). 특정 사용자 id를 콕 집어 정한 값이다. 버그를 신고한 사용자만 옛 화면으로 돌려놓을 때 쓴다.
+3. 타기팅 규칙(targeting rules). 사용자의 속성(이메일 도메인, 앱 버전, 국가, 요금제)으로 조건을 건다. 위에서부터 처음 맞는 규칙을 쓴다.
+4. 아무 규칙에도 안 맞으면 기본 분배(fallthrough). 퍼센트 롤아웃이 여기서 해시 버킷으로 정해진다.
+
+아래 그림은 `new-checkout` 플래그를 사용자 몇 명에게 평가하는 과정이다. 버킷 번호는 [앞 글](/posts/ab-testing)과 같은 FNV-1a 해시로 계산한 값이다.
+
+<AlgoTrace
+  caption="new-checkout 평가: 처음 맞는 규칙에서 멈춘다"
+  memoryLabel="평가 결과"
+  cells={["enabled?", "targets", "@shop.example", "app≥520", "10% roll"]}
+  steps={[
+    { pointer: 0, memory: ["user-13"], caption: "user-13, 이메일 도메인 shop.example. 플래그는 켜져 있다. 다음 규칙으로." },
+    { pointer: 1, found: [1], memory: ["user-13 → off", "TARGETING_MATCH"], caption: "개별 지정에 off로 올라 있다. 직원 도메인 규칙보다 위에 있으니 여기서 끝난다." },
+    { pointer: 2, found: [2], memory: ["user-7 → on", "TARGETING_MATCH"], caption: "user-7은 개별 지정에 없고 직원 도메인이라 on이다." },
+    { pointer: 3, found: [3], memory: ["user-8 → on", "app 530"], caption: "user-8은 직원이 아니지만 앱 버전 530이 조건에 맞는다." },
+    { pointer: 4, found: [4], memory: ["user-3 → on", "버킷 1 < 10"], caption: "user-3은 어떤 규칙에도 안 맞아 기본 분배로 간다. 버킷 1이라 10% 안에 든다." },
+    { pointer: 4, memory: ["user-1 → off", "버킷 63"], caption: "user-1은 버킷 63이라 나머지 90%에 속한다." },
+    { pointer: 0, memory: ["모두 off", "DISABLED"], caption: "킬 스위치를 내리면 1번에서 바로 off다. 개별 지정도 규칙도 보지 않는다." },
+  ]}
+/>
+
+평가 결과에는 값만이 아니라 "왜 그 값인지(reason)"가 따라온다. 같은 off라도 플래그가 꺼져서인지, 규칙에 걸려서인지, 버킷이 밖이어서인지에 따라 대응이 다르다. 아래 함수에서 순서를 직접 구현해 보자. 해시 버킷 함수는 주어져 있다.
+
+<CodePlayground
+  caption="규칙 순서대로 플래그 평가하기"
+  functionName="evaluateFlag"
+  initialCode={`function bucket(flagKey, userKey) {
+  const s = flagKey + ":" + userKey;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h % 100;
+}
+
+function evaluateFlag(flag, ctx) {
+  // 1. enabled가 false면 { variant: flag.offVariant, reason: "DISABLED" }
+  // 2. flag.targets = { 변형: [사용자 key...] } 에 ctx.key가 있으면 TARGETING_MATCH
+  // 3. flag.rules를 위에서부터: op "in"(values에 포함) / "gte"(values[0] 이상)
+  //    처음 맞는 규칙의 variant, TARGETING_MATCH
+  // 4. bucket(flag.key, ctx.key)로 flag.rollout의 weight를 누적해 고른다, SPLIT
+  // 5. 누적 weight 밖이면 { variant: flag.offVariant, reason: "DEFAULT" }
+  return { variant: flag.offVariant, reason: "DEFAULT" };
+}`}
+  solution={`function bucket(flagKey, userKey) {
+  const s = flagKey + ":" + userKey;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h % 100;
+}
+
+function evaluateFlag(flag, ctx) {
+  if (!flag.enabled) return { variant: flag.offVariant, reason: "DISABLED" };
+  for (const [variant, ids] of Object.entries(flag.targets || {})) {
+    if (ids.includes(ctx.key)) return { variant, reason: "TARGETING_MATCH" };
+  }
+  for (const rule of flag.rules || []) {
+    const v = ctx[rule.attr];
+    const hit = rule.op === "in" ? rule.values.includes(v)
+      : rule.op === "gte" ? v !== undefined && v >= rule.values[0] : false;
+    if (hit) return { variant: rule.variant, reason: "TARGETING_MATCH" };
+  }
+  const b = bucket(flag.key, ctx.key);
+  let acc = 0;
+  for (const r of flag.rollout) {
+    acc += r.weight;
+    if (b < acc) return { variant: r.variant, reason: "SPLIT" };
+  }
+  return { variant: flag.offVariant, reason: "DEFAULT" };
+}`}
+  tests={[
+    { label: "개별 지정이 규칙보다 먼저", args: [{ key: "new-checkout", enabled: true, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }, { attr: "app_version", op: "gte", values: [520], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-13", email_domain: "shop.example" }], expected: { variant: "off", reason: "TARGETING_MATCH" } },
+    { label: "직원 도메인 규칙", args: [{ key: "new-checkout", enabled: true, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }, { attr: "app_version", op: "gte", values: [520], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-7", email_domain: "shop.example" }], expected: { variant: "on", reason: "TARGETING_MATCH" } },
+    { label: "앱 버전 규칙", args: [{ key: "new-checkout", enabled: true, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }, { attr: "app_version", op: "gte", values: [520], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-8", app_version: 530 }], expected: { variant: "on", reason: "TARGETING_MATCH" } },
+    { label: "버킷 1은 10% 안", args: [{ key: "new-checkout", enabled: true, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }, { attr: "app_version", op: "gte", values: [520], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-3", app_version: 510 }], expected: { variant: "on", reason: "SPLIT" } },
+    { label: "버킷 63은 나머지 90%", args: [{ key: "new-checkout", enabled: true, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }, { attr: "app_version", op: "gte", values: [520], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-1", app_version: 510 }], expected: { variant: "off", reason: "SPLIT" } },
+    { label: "킬 스위치", args: [{ key: "new-checkout", enabled: false, offVariant: "off", targets: { off: ["user-13"] }, rules: [{ attr: "email_domain", op: "in", values: ["shop.example"], variant: "on" }], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 90 }] }, { key: "user-7", email_domain: "shop.example" }], expected: { variant: "off", reason: "DISABLED" } },
+    { label: "비율 합이 80이면 버킷 82는 밖", args: [{ key: "new-checkout", enabled: true, offVariant: "off", rules: [], rollout: [{ variant: "on", weight: 10 }, { variant: "off", weight: 70 }] }, { key: "user-2" }], expected: { variant: "off", reason: "DEFAULT" } },
+  ]}
+/>
+
+규칙을 짤 때 흔한 실수가 둘 있다. 하나는 순서다. "베타 테스터는 켜기" 규칙 위에 "iOS 전체 끄기"를 두면 iOS 베타 테스터는 꺼진다. 대시보드에서 규칙을 드래그로 옮기는 순간 수많은 사용자의 결과가 바뀐다. 다른 하나는 맥락(context)에 없는 속성이다. 규칙이 `app_version`을 보는데 서버가 그 속성을 넘기지 않으면, 조건은 조용히 거짓이 되고 모두 기본 분배로 떨어진다. 위 함수에서도 `ctx.app_version`이 없으면 `gte` 규칙은 맞지 않는다.
+
+## 설정은 어떻게 서버에 닿나
+
+처음의 30초 이야기로 돌아가자. 대부분의 서버 SDK는 플래그를 요청마다 원격에 묻지 않는다. 시작할 때 전체 규칙을 받아 메모리에 두고, 요청이 오면 로컬에서 평가한다. 요청마다 네트워크를 타면 플래그 하나에 수 밀리초가 붙고, 플래그 서비스가 느려지면 모든 요청이 느려지기 때문이다. 대신 규칙이 바뀌면 그 변경을 받아 와야 하는데, 방법이 둘이다. 주기적으로 묻는 폴링(polling), 서버가 연결을 열어 두고 바뀔 때 밀어 주는 스트리밍(streaming, 대개 SSE)이다.
+
+직접 확인하려고 작은 플래그 서버와 SDK를 짰다. 서버는 `GET /flags`(폴링용)와 `GET /stream`(SSE)을 열고, SDK 하나는 5초마다 폴링하고 다른 하나는 스트림을 듣는다. 둘을 띄우고 1.2초쯤 뒤에 킬 스위치를 내렸다.
+
+```bash
+# 플래그 서버와 두 가지 SDK를 띄우고, 킬 스위치를 내린다
+node flag-server.mjs &
+node sdk-client.mjs poll 5000 > poll.log &
+node sdk-client.mjs stream > stream.log &
+sleep 1.3
+curl -s -X POST -d '{"enabled":false}' http://127.0.0.1:4200/flags/recs-widget
+```
+
+```text
+2026-10-20T20:15:44.624Z recs-widget -> enabled=false (v2), pushed to 1 stream(s)
+[poll] +  349ms got v1 enabled=true
+[poll] + 5303ms got v2 enabled=false
+[stream] +  377ms put v1 enabled=true
+[stream] + 1222ms patch v2 enabled=false
+```
+
+스트림 쪽은 바꾼 직후(+1222ms) 받았고, 폴링 쪽은 다음 폴링 차례(+5303ms)까지 4초를 더 옛 값으로 돌았다. 폴링 간격이 30초면 최악의 경우 30초 동안 서버마다 다른 답을 낸다. 처음 장면에서 일부 서버만 늦게 따라온 이유다.
+
+<SequenceDiagram
+  caption="킬 스위치 하나가 서버에 닿는 두 가지 길"
+  actors={[
+    { id: "ops", label: "당번" },
+    { id: "fs", label: "플래그 서버" },
+    { id: "s1", label: "서버(스트림)" },
+    { id: "s2", label: "서버(폴링)" },
+  ]}
+  steps={[
+    { from: "fs", to: "s1", label: "SSE put v1", title: "연결을 열어 둔다", detail: "스트림 SDK는 시작할 때 전체 규칙을 받고 연결을 끊지 않는다." },
+    { from: "s2", to: "fs", label: "GET /flags", title: "폴링 SDK는 주기적으로 묻는다", detail: "시작할 때 받고, 5초마다 다시 받는다. 바뀐 게 없으면 버전만 확인하고 넘어간다." },
+    { from: "ops", to: "fs", label: "enabled=false", title: "킬 스위치를 내린다", detail: "대시보드나 API로 플래그를 끈다. 버전이 v2로 오른다." },
+    { from: "fs", to: "s1", label: "SSE patch v2", title: "스트림은 바로 받는다", detail: "열린 연결로 바뀐 부분만 밀어 준다. 실습에서는 바꾼 직후 도착했다.", payload: "[stream] + 1222ms patch v2 enabled=false" },
+    { from: "s2", to: "s2", label: "옛 값 v1", title: "폴링은 다음 차례까지 모른다", detail: "다음 폴링 전까지 이 서버는 계속 추천 영역을 부른다." },
+    { from: "s2", to: "fs", label: "GET /flags", title: "다음 폴링에서 따라온다", detail: "4초 뒤 v2를 받는다. 간격이 길수록 서버마다 답이 다른 시간이 길어진다.", payload: "[poll] + 5303ms got v2 enabled=false" },
+  ]}
+/>
+
+스트리밍이 늘 나은 건 아니다. 서버 수천 대가 연결을 계속 열어 두니 플래그 서비스와 그 앞 프록시가 장시간 연결을 견뎌야 한다. 로드 밸런서의 유휴 타임아웃이 60초인데 SSE에 하트비트가 없으면 연결이 조용히 끊긴다. 그래서 상용 SDK는 스트림을 쓰다가 끊기면 다시 연결하고, 그동안은 폴링으로 버티는 식으로 둘을 섞는다. 서버리스 함수처럼 짧게 사는 프로세스는 연결을 열어 둘 수 없어서, 가까운 저장소(엣지 설정 저장소나 Redis)에 규칙을 복제해 두고 거기서 읽는 방식을 쓴다.
+
+## 플래그 서비스가 죽으면
+
+플래그 서비스도 장애가 난다. 이때 SDK가 무엇을 하느냐가 서비스 전체의 동작을 정한다. 실습에서 플래그 서버를 꺼 봤다.
+
+```text
+[poll] + 5303ms got v2 enabled=false
+[poll] +15300ms poll failed (ECONNREFUSED), keep last known: enabled=false
+[poll] +20304ms poll failed (ECONNREFUSED), keep last known: enabled=false
+```
+
+이미 값을 받아 둔 폴링 SDK는 마지막으로 알던 값(off)을 계속 쓴다. 킬 스위치는 꺼진 채로 남는다. 반면 직접 짠 스트림 클라이언트는 연결이 끊기자 그대로 죽었다.
+
+```text
+[stream] + 1222ms patch v2 enabled=false
+node:internal/deps/undici/undici:11322
+            fetchParams.controller.controller.error(new TypeError("terminated", {
+TypeError: terminated
+```
+
+재연결 로직이 없는 스트림 클라이언트는 이렇게 된다. 상용 SDK를 쓰는 이유 중 하나가 이런 경계 처리다. 더 위험한 건 서버가 죽은 상태에서 새로 뜬 프로세스다.
+
+```bash
+# 플래그 서버가 없는 상태에서 SDK를 새로 띄운다
+node sdk-client.mjs poll 5000
+```
+
+```text
+[poll] +  107ms poll failed (ECONNREFUSED), no cache: use code default enabled=false
+```
+
+받아 둔 값이 없으니 코드에 적은 기본값을 쓴다. 이 기본값이 `true`였다면, 장애 중에 오토스케일링으로 뜬 새 서버들은 꺼 둔 추천 영역을 다시 켠다. 그래서 플래그를 부를 때 넘기는 기본값은 "아무것도 모를 때 가장 안전한 쪽"으로 정한다. 킬 스위치처럼 마지막 값이 중요한 플래그는 디스크나 공유 캐시에 마지막 규칙을 남겨 두고(상용 SDK 대부분이 이런 지속 저장 옵션을 준다), 시작할 때 그걸 먼저 읽게 한다.
+
+<NetworkTopology
+  caption="킬 스위치는 무거운 의존성을 요청 경로에서 뺀다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "app", label: "app servers", x: 120, y: 10, w: 140, h: 280, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", sub: "상품 페이지", x: 58, y: 150, icon: "client", w: 92 },
+    { id: "s1", label: "app-1", sub: "stream SDK", x: 190, y: 80, icon: "server", w: 112 },
+    { id: "s2", label: "app-2", sub: "poll SDK", x: 190, y: 220, icon: "server", w: 112 },
+    { id: "recs", label: "recs API", sub: "p99 4.8s", x: 330, y: 150, icon: "server", w: 100 },
+    { id: "fs", label: "flags", sub: "recs-widget", x: 330, y: 50, icon: "switch", w: 100 },
+  ]}
+  links={[
+    { from: "user", to: "s1" },
+    { from: "user", to: "s2" },
+    { from: "s1", to: "recs" },
+    { from: "s2", to: "recs" },
+    { from: "fs", to: "s1", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "s1", "recs"], packet: "GET", highlight: ["recs"], title: "추천 API가 느리다", detail: "상품 페이지가 추천 영역을 그리려고 recs API를 기다린다. 페이지 전체가 같이 느려진다." },
+    { path: ["fs", "s1"], packet: "off", title: "킬 스위치를 내린다", detail: "스트림으로 듣는 app-1은 곧바로 받는다." },
+    { path: ["user", "s1", "recs"], packet: "GET", blocked: true, title: "app-1은 부르지 않는다", detail: "평가 결과가 off라 app-1은 추천 영역 없이 페이지를 그린다. recs API로 가는 호출이 사라진다." },
+    { path: ["user", "s2", "recs"], packet: "GET", highlight: ["s2"], title: "app-2는 아직 부른다", detail: "폴링 SDK는 다음 차례까지 옛 값을 쓴다. 이 시간 동안 서버마다 답이 다르다." },
+    { path: ["user", "s2", "recs"], packet: "GET", blocked: true, title: "다음 폴링에서 따라온다", detail: "app-2도 off를 받는다. 이제 recs API는 쉬면서 회복할 시간을 얻는다." },
+  ]}
+/>
+
+킬 스위치가 정말 일하게 하려면 플래그를 보는 위치도 중요하다. 추천 API를 이미 부른 뒤 결과를 그릴지 말지만 플래그로 정하면, 꺼도 호출은 계속 나간다. 무거운 호출을 하기 전에 플래그를 봐야 의존성이 요청 경로에서 빠진다. 그리고 킬 스위치는 평소에 한 번씩 실제로 꺼 봐야 한다. 몇 달 동안 아무도 끄지 않은 스위치는 꺼진 경로에 버그가 숨어 있기 쉽다.
+
+## 서버에서 평가할까, 브라우저에서 평가할까
+
+서버 SDK는 규칙 전체를 받아 로컬에서 평가한다. 브라우저나 모바일 앱에 같은 방식을 쓰면 안 된다. 규칙 전체에는 내부 정보가 들어 있다. 아직 발표하지 않은 기능 이름, 직원 이메일 도메인, 특정 고객사 id가 담긴 타기팅 규칙이 그대로 사용자 기기로 내려간다. 개발자 도구를 열면 누구나 읽을 수 있다.
+
+<NetworkTopology
+  caption="클라이언트에는 규칙이 아니라 평가한 결과만 보낸다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "dev", label: "사용자 기기", x: 10, y: 10, w: 150, h: 280, tone: "edge" },
+    { id: "srv", label: "우리 서버", x: 180, y: 10, w: 210, h: 280, tone: "private" },
+  ]}
+  nodes={[
+    { id: "br", label: "browser", sub: "client SDK", x: 85, y: 150, icon: "client", w: 110 },
+    { id: "eval", label: "eval API", sub: "결과만 응답", x: 285, y: 90, icon: "gateway", w: 110 },
+    { id: "rules", label: "rules", sub: "전체 규칙", x: 285, y: 220, icon: "db", w: 110 },
+  ]}
+  links={[
+    { from: "br", to: "eval" },
+    { from: "eval", to: "rules" },
+    { from: "br", to: "rules", dashed: true },
+  ]}
+  steps={[
+    { path: ["br", "rules"], packet: "rules", blocked: true, title: "규칙을 통째로 내려보내면", detail: "직원 도메인, 미공개 기능 이름, 고객사 id가 사용자 기기에 그대로 보인다.", payload: "{ \"new-pricing-2027\": { \"rules\": [{ \"email_domain\": [\"shop.example\"] }] } }" },
+    { path: ["br", "eval"], packet: "ctx", title: "맥락만 보낸다", detail: "브라우저는 로그인한 사용자 id와 필요한 속성만 보낸다. 속성은 서버가 세션에서 다시 확인한다." },
+    { path: ["eval", "rules", "eval"], packet: "eval", title: "서버에서 평가한다", detail: "평가 서비스가 규칙을 적용해 이 사용자의 결과만 만든다." },
+    { path: ["eval", "br"], packet: "values", title: "결과만 내려간다", detail: "이 사용자에게 해당하는 값 몇 개만 받는다. 규칙은 보이지 않는다.", payload: "{ \"new-checkout\": \"on\", \"recs-widget\": \"off\" }" },
+  ]}
+/>
+
+그래서 클라이언트 SDK는 대개 "맥락을 보내고 결과를 받는" 원격 평가 방식이다. 이렇게 해도 지켜야 할 것이 있다. 클라이언트가 보내는 속성은 믿지 않는다. 사용자가 `plan: "enterprise"`를 직접 보내 기업용 기능을 켤 수 있으면 안 되니, 권한에 관련된 속성은 서버가 세션에서 꺼내 붙인다. 그리고 클라이언트 플래그는 보안 장치가 아니다. 숨긴 버튼의 API는 서버에서 따로 막아야 한다. 화면이 처음 그려질 때 플래그 값이 아직 없어서 옛 화면이 깜빡이는 문제는 [앞 글의 깜빡임 이야기](/posts/ab-testing)와 같은 이유이고, 서버에서 평가한 값을 HTML에 실어 보내 푼다.
+
+## 벤더에 묶이지 않게 OpenFeature
+
+플래그 서비스는 LaunchDarkly, Unleash, Flagsmith, GrowthBook, 클라우드 업체의 설정 서비스까지 종류가 많고, SDK의 함수 이름도 제각각이다. 코드 수백 곳에 특정 벤더의 SDK 호출이 박혀 있으면 서비스를 옮기기 어렵다. OpenFeature는 CNCF 프로젝트로, 플래그 평가 API를 표준으로 정하고 벤더별 차이는 공급자(provider)에 맡긴다. 로깅에서 SLF4J나 OpenTelemetry가 하는 역할과 비슷하다.
+
+<ConceptDiagram
+  caption="앱은 OpenFeature API만 알고, 공급자를 바꿔 끼운다"
+  width={400}
+  height={280}
+  nodes={[
+    { id: "app", label: "앱 코드", sub: "getBooleanDetails", x: 90, y: 40, w: 140 },
+    { id: "api", label: "OpenFeature API", sub: "클라이언트·맥락", x: 90, y: 140, w: 150 },
+    { id: "hook", label: "훅", sub: "로그·지표", x: 300, y: 140, w: 100 },
+    { id: "prov", label: "공급자", sub: "provider", x: 90, y: 240, w: 120 },
+    { id: "vendor", label: "플래그 서비스", sub: "벤더·flagd", x: 300, y: 240, w: 130 },
+  ]}
+  edges={[
+    { from: "app", to: "api" },
+    { from: "api", to: "hook", label: "전후" },
+    { from: "api", to: "prov" },
+    { from: "prov", to: "vendor", arrow: "both" },
+  ]}
+/>
+
+메모리 공급자로 실제로 돌려 봤다. 앱 코드는 플래그 키, 기본값, 평가 맥락만 넘긴다.
+
+```js
+// of-demo.mjs 요점
+await OpenFeature.setProviderAndWait(new InMemoryProvider({
+  "new-checkout": {
+    disabled: false,
+    variants: { on: true, off: false },
+    defaultVariant: "off",
+    contextEvaluator: (ctx) => (ctx.plan === "beta" ? "on" : "off"),
+  },
+}));
+OpenFeature.addHooks({ after: (hc, d) => console.log(`[hook] ${d.flagKey}=${d.value} reason=${d.reason} variant=${d.variant}`) });
+const client = OpenFeature.getClient("checkout-service");
+await client.getBooleanDetails("new-checkout", false, { targetingKey: "user-42", plan: "beta" });
+await client.getBooleanDetails("new-chekout", false, { targetingKey: "user-42" });        // 오타
+await client.getStringDetails("new-checkout", "classic", { targetingKey: "user-42", plan: "beta" }); // 타입 틀림
+```
+
+```text
+[hook] new-checkout=true reason=TARGETING_MATCH variant=on
+{"value":true,"variant":"on","reason":"TARGETING_MATCH"}
+[hook] new-checkout=false reason=TARGETING_MATCH variant=off
+{"value":false,"variant":"off","reason":"TARGETING_MATCH"}
+[hook] error on new-chekout: no flag found with key new-chekout
+{"value":false,"reason":"ERROR","errorCode":"FLAG_NOT_FOUND"}
+[hook] error on new-checkout: 
+{"value":"classic","reason":"ERROR","errorCode":"TYPE_MISMATCH"}
+```
+
+눈여겨볼 것은 마지막 두 줄이다. 플래그 이름에 오타가 있거나 타입을 틀려도 예외가 나지 않고 기본값이 돌아온다. 플래그 평가가 서비스를 죽이면 안 되니 맞는 설계지만, 그 대가로 실수가 조용히 묻힌다. 평가 결과 한 덩어리를 펼쳐 보자.
+
+<UrlAnatomy
+  caption="OpenFeature 평가 결과(evaluation details) 한 덩어리"
+  base="details"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "flagKey", display: "flagKey: \"new-chekout\"", title: "물어본 이름", description: "코드에 적힌 그대로다. 오타가 있으면 여기서 보인다.", required: true },
+    { key: "value", display: "value: false", title: "돌려받은 값", description: "평가에 실패하면 코드가 넘긴 기본값이 그대로 돌아온다. 값만 보면 정상과 구분되지 않는다.", required: true },
+    { key: "reason", display: "reason: ERROR", title: "왜 이 값인가", description: "STATIC, TARGETING_MATCH, SPLIT, DISABLED, DEFAULT, CACHED, ERROR 같은 값이다. ERROR 비율을 지표로 모으면 오타와 설정 누락을 찾을 수 있다." },
+    { key: "errorCode", display: "errorCode: FLAG_NOT_FOUND", title: "무엇이 틀렸나", description: "FLAG_NOT_FOUND, TYPE_MISMATCH, PROVIDER_NOT_READY 등. 앱이 플래그 서비스보다 먼저 뜨면 PROVIDER_NOT_READY로 기본값이 나간다." },
+    { key: "variant", display: "variant", title: "어느 변형인가", description: "값 대신 변형 이름을 기록해 두면 실험 분석과 장애 조사에서 \"그때 누가 무엇을 봤나\"를 되짚을 수 있다." },
+  ]}
+/>
+
+그래서 훅이 쓸모 있다. `after`와 `error` 훅에서 플래그 키, 변형, reason을 로그나 지표로 남기면 벤더를 바꿔도 같은 관측 코드가 유지된다. reason이 ERROR인 평가가 늘면 알림을 건다. 평가 결과를 분산 추적의 span 속성으로 붙이면 느린 요청이 어떤 플래그 조합에서 나왔는지 볼 수 있다.
+
+## 플래그가 늘면 테스트할 조합이 폭발한다
+
+켜기·끄기 플래그가 n개면 가능한 조합은 2ⁿ개다. 플래그 10개면 1,024가지다. 모든 조합을 테스트할 수는 없다. 다행히 실제 버그 대부분은 플래그 한두 개의 상호작용에서 나온다. 그래서 모든 두 플래그 쌍의 네 가지 값(on·on, on·off, off·on, off·off)이 적어도 한 번씩 나오도록 조합을 고르는 쌍대 테스트(pairwise testing)를 쓴다. 탐욕적으로 고르는 스크립트를 돌려 봤다.
+
+```bash
+# 켜기/끄기 플래그 n개의 모든 두 개 쌍을 덮는 조합을 찾는다
+python3 pairwise.py 6
+python3 pairwise.py 10 | head -1
+```
+
+```text
+flags=6 all=64 pairwise=7
+off off off off off off
+off on  on  on  on  on 
+on  off off off on  on 
+on  on  on  on  off off
+off off off on  off on 
+off off on  off on  off
+off on  off off off off
+flags=10 all=1024 pairwise=9
+```
+
+64가지 대신 7가지, 1,024가지 대신 9가지면 모든 쌍을 한 번씩 본다. 탐욕적으로 고른 값이라 이론상 최솟값보다 조금 많다. 실무에서는 여기에 두 조합을 반드시 더한다. 지금 운영에 실제로 켜져 있는 조합, 그리고 다음 배포 후 켜질 조합이다. 테스트 코드에서는 플래그 SDK를 직접 부르지 말고 OpenFeature의 메모리 공급자처럼 값을 주입할 수 있는 구조로 만들어 둬야 조합을 바꿔 가며 돌릴 수 있다.
+
+더 나은 방법은 조합 자체를 줄이는 것이다. 다 켠 릴리스 플래그를 지우면 n이 줄어든다.
+
+## 플래그를 바꾸는 것도 운영 변경이다
+
+플래그를 끄고 켜는 건 배포가 아니라서 배포 절차의 검토와 기록을 건너뛰기 쉽다. 하지만 사용자가 보는 동작은 배포만큼 바뀐다. 구글의 SRE 책은 장애의 70% 정도가 운영 중인 시스템을 바꾸는 데서 온다고 적었는데, 플래그 변경도 그 "바꾸는 일"에 들어간다. 그래서 배포와 같은 장치가 필요하다.
+
+- 누가 언제 무엇을 바꿨는지 감사 기록을 남기고, 바꿀 때 이유를 적게 한다.
+- 운영 환경의 규칙 변경은 리뷰를 거치게 한다. 대부분의 서비스가 승인 흐름을 기능으로 준다. 단 킬 스위치는 예외로 당번이 바로 끌 수 있게 둔다.
+- 변경 이벤트를 모니터링 대시보드에 세로선으로 찍는다. 에러율이 오른 시각에 배포는 없었는데 플래그 변경이 있었다면 거기서부터 본다.
+- 퍼센트를 올릴 때는 1% → 5% → 25% → 100%처럼 단계를 두고, 단계마다 지표를 본다. 이건 사실상 플래그로 하는 [카나리 배포](/posts/canary-release)다.
+
+## 다 켠 플래그를 지우는 일
+
+플래그가 빚이 되는 이유와 Knight Capital 사례는 [앞 글](/posts/ab-testing)에 있다. 여기서는 지우는 일을 어떻게 굴리는지만 본다. 핵심 아이디어는 사람의 기억에 기대지 않고 코드와 설정을 기계로 맞대어 보는 것이다. 장난감 저장소에 스크립트를 돌려 봤다. 코드에서 `isOn("...")` 호출을 모으고, 플래그 설정과 비교한다.
+
+```bash
+# 코드의 플래그 호출과 플래그 설정을 맞대어 본다
+node find-stale-flags.mjs 2026-10-21
+```
+
+```text
+STALE      new-checkout = on 100% for 141d → src/checkout.ts:1 (pay-team)
+UNUSED     holiday-banner (설정에만 있음, growth)
+UNUSED     search-typo-fix (설정에만 있음, search)
+MISSING    serch-typo-fix at src/search.ts:2 (설정에 없음: 늘 기본값으로 평가된다)
+```
+
+네 줄이 각각 다른 일을 시킨다. `STALE`은 140일 넘게 100% 켜진 릴리스 플래그다. 코드에서 분기를 지우고 켜진 쪽만 남긴 뒤, 배포가 끝나면 설정에서도 지운다. 순서가 중요하다. 설정을 먼저 지우면 아직 그 플래그를 읽는 서버가 기본값(대개 off)으로 돌아가 옛 화면이 다시 나온다. `UNUSED`는 코드에서 이미 지운 플래그라 설정만 정리하면 된다. `MISSING`이 가장 반갑다. 코드의 `serch-typo-fix`는 오타라서 설정의 `search-typo-fix`와 이어지지 않았고, 대시보드에서 50%로 켰다고 믿는 기능이 실제로는 아무에게도 켜지지 않았다. OpenFeature 실습에서 본 `FLAG_NOT_FOUND`와 같은 문제다. 운영 플래그 `ops-recs-widget`은 100% 켜져 있지만 일부러 남기는 것이라 목록에서 뺐다.
+
+이 검사를 CI에 넣고, 플래그를 만들 때 주인과 만료일을 필수로 받으면 정리가 습관이 된다. 플래그 이름을 문자열 대신 상수나 생성된 타입으로 쓰게 하면 `MISSING` 같은 오타는 컴파일 단계에서 잡힌다.
+
+## 스위치 하나 뒤에 있는 시스템
+
+피처 플래그는 코드의 `if`와 그 답을 정하는 원격 시스템의 짝이다. 답은 규칙 순서대로 정해지고, 스트림이나 폴링으로 서버에 닿고, 닿지 않을 때는 마지막 값이나 안전한 기본값으로 버틴다. 브라우저에는 규칙이 아니라 결과만 보내고, 평가가 실패해도 조용히 기본값이 나가니 reason을 지표로 본다. 그리고 다 쓴 플래그는 코드에서 먼저, 설정에서 나중에 지운다. 실험에 쓰는 플래그의 통계 쪽은 [A/B 테스트와 피처 플래그](/posts/ab-testing)를, 플래그로 해결되지 않는 되돌리기는 [롤백 전략](/posts/rollback-strategy)을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 피처 플래그와 환경 변수 설정은 무엇이 다른가요?
+
+환경 변수는 배포 단위로 모든 요청에 같은 값을 주고, 바꾸려면 재시작이나 재배포가 필요하다. 플래그는 실행 중에 바뀌고, 사용자 맥락에 따라 다른 값을 돌려줄 수 있다. 그래서 배포와 공개를 떼어 놓고, 일부 사용자에게만 켜고, 장애 때 재배포 없이 끌 수 있다.
+
+### 플래그 평가 규칙은 어떤 순서로 적용되나요?
+
+보통 플래그 꺼짐 → 개별 지정 → 타기팅 규칙(위에서부터 처음 맞는 것) → 기본 분배(퍼센트 롤아웃) 순이다. 처음 맞는 곳에서 멈추기 때문에 규칙 순서를 바꾸면 결과가 바뀐다. 규칙이 보는 속성을 맥락에 넣지 않으면 조건이 조용히 거짓이 되어 모두 기본 분배로 떨어진다.
+
+### 킬 스위치를 내렸는데 일부 서버만 늦게 반응합니다. 왜 그런가요?
+
+서버 SDK가 규칙을 메모리에 들고 로컬에서 평가하고, 변경을 폴링으로 받고 있어서다. 다음 폴링 전까지는 옛 값을 쓴다. 실습에서는 스트림 SDK가 바로 받았고 5초 폴링 SDK는 4초 늦게 따라왔다. 킬 스위치가 중요한 서비스는 스트리밍을 쓰고 끊기면 폴링으로 보완하며, 무거운 호출을 하기 전에 플래그를 보는지도 확인한다.
+
+### 플래그 서비스가 죽으면 앱은 어떻게 동작해야 하나요?
+
+이미 받은 값이 있으면 마지막으로 알던 값을 계속 쓰고, 없으면 코드의 기본값을 쓴다. 그래서 기본값은 "아무것도 모를 때 가장 안전한 쪽"으로 정한다. 장애 중에 새로 뜬 서버가 기본값으로 킬 스위치를 다시 켜지 않게, 마지막 규칙을 디스크나 공유 캐시에 남겨 두고 시작할 때 먼저 읽게 한다.
+
+### 브라우저에서 플래그를 평가할 때 주의할 점은요?
+
+규칙 전체를 내려보내지 않는다. 미공개 기능 이름, 직원 도메인, 고객사 id가 사용자에게 노출된다. 맥락을 서버에 보내 평가한 결과만 받고, 권한에 관련된 속성은 클라이언트가 보낸 값을 믿지 말고 서버가 세션에서 붙인다. 클라이언트 플래그는 화면 제어일 뿐 보안 장치가 아니라 API는 서버에서 따로 막는다.
+
+### OpenFeature를 쓰면 무엇이 좋아지나요?
+
+앱 코드가 표준 평가 API만 알고 벤더 차이는 공급자가 맡아서, 플래그 서비스를 바꿀 때 호출 코드를 고치지 않아도 된다. 평가 결과에 reason과 errorCode가 표준으로 붙고, 훅으로 로그와 지표를 벤더와 무관하게 남길 수 있다. 오타나 타입 오류가 예외 없이 기본값으로 묻히므로 ERROR reason 비율을 지표로 보는 게 좋다.
+
+### 플래그가 많아지면 테스트는 어떻게 하나요?
+
+모든 조합(2ⁿ)은 불가능하니 모든 두 플래그 쌍의 값을 덮는 쌍대 테스트를 쓰고, 지금 운영 조합과 다음 배포 후 조합을 반드시 더한다. 실습에서는 6개 플래그를 64가지 대신 7가지로 덮었다. 테스트에서 값을 주입할 수 있게 플래그 호출을 추상화해 두고, 근본적으로는 다 켠 플래그를 지워 n을 줄인다.
+
+### 다 켠 플래그는 어떤 순서로 지우나요?
+
+코드에서 분기를 먼저 지우고 켜진 쪽만 남겨 배포한 뒤, 모든 서버가 새 코드로 바뀌면 설정에서 지운다. 설정을 먼저 지우면 아직 플래그를 읽는 서버가 기본값으로 돌아가 옛 동작이 되살아난다. 코드의 플래그 호출과 설정을 기계로 맞대어 오래된 플래그, 쓰이지 않는 설정, 설정에 없는 호출(오타)을 찾는 검사를 CI에 둔다.

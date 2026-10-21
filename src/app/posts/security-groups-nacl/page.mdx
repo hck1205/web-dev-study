@@ -1,0 +1,510 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("security-groups-nacl");
+
+보안 점검에서 "서브넷 단위 방화벽도 걸어 두라"는 지적을 받았다. 웹 서버가 있는 퍼블릭 서브넷의 네트워크 ACL을 새로 만들고, 인바운드는 80번만, 아웃바운드도 80번만 허용했다. 웹 서버니까 80번만 오가면 될 거라 생각했다. 적용하자마자 사이트가 안 열린다. 서버에서 `curl`로 외부를 찔러도 멈춘다. 같은 주에 다른 팀은 보안 그룹에서 SSH 규칙을 지웠는데, 이미 접속해 있던 세션은 끊기지 않고 계속 살아 있다며 "규칙이 적용이 안 된 것 같다"고 문의했다.
+
+두 장면은 AWS VPC의 두 방화벽이 연결을 기억하느냐 아니냐의 차이에서 나온다. 보안 그룹은 연결을 기억하고(stateful), 네트워크 ACL(NACL)은 기억하지 않는다(stateless). 이 글은 두 방화벽이 어디에 서 있는지, 패킷을 어떤 순서로 보는지, 돌아오는 패킷이 왜 문제가 되는지를 리눅스로 재현해서 본다. 실습은 [VPC 기본 글](/posts/vpc-basics)에서 Ubuntu 24.04 네트워크 네임스페이스로 만든 VPC 모형 위에 iptables 규칙을 얹어 진행한다.
+
+연결 추적(conntrack)이 커널 안에서 어떻게 동작하는지는 [iptables 기본 글](/posts/iptables-basics)에서 다뤘다. 이 글은 그 원리가 클라우드 방화벽 설계에서 어떤 결과로 나타나는지에 집중한다.
+
+## 두 방화벽이 서 있는 자리
+
+보안 그룹은 ENI(인스턴스의 가상 랜카드)마다 붙는다. NACL은 서브넷의 경계에 붙는다. 그래서 밖에서 들어오는 패킷은 NACL을 먼저 지나고 보안 그룹을 나중에 지난다. 나가는 패킷은 반대 순서다.
+
+여기서 중요한 사실이 하나 있다. NACL은 서브넷을 드나드는 트래픽만 본다. 같은 서브넷 안의 서버끼리 주고받는 트래픽은 NACL을 지나지 않는다. 같은 서브넷 안을 막을 수 있는 건 보안 그룹뿐이다. 아래 그림에서 다음을 누르면 패킷이 두 방화벽을 어떤 순서로 지나는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="NACL은 서브넷 경계에서, 보안 그룹은 ENI 앞에서 패킷을 본다"
+  zones={[
+    { id: "sub", label: "퍼블릭 서브넷 10.0.1.0/24", x: 8, y: 132, w: 384, h: 160, tone: "public" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", sub: "198.51.100.80", x: 200, y: 26, icon: "client", w: 120 },
+    { id: "nacl", label: "NACL", sub: "번호순·무상태", x: 200, y: 96, icon: "firewall", w: 120 },
+    { id: "sgw", label: "SG web", sub: "상태 기억", x: 104, y: 182, icon: "lock" },
+    { id: "web", label: "web", sub: "10.0.1.10", x: 104, y: 252, icon: "server" },
+    { id: "sgn", label: "SG batch", sub: "상태 기억", x: 296, y: 182, icon: "lock" },
+    { id: "batch", label: "batch", sub: "10.0.1.30", x: 296, y: 252, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "nacl" },
+    { from: "nacl", to: "sgw" },
+    { from: "sgw", to: "web" },
+    { from: "nacl", to: "sgn" },
+    { from: "sgn", to: "batch" },
+    { from: "web", to: "batch", dashed: true, label: "같은 서브넷" },
+  ]}
+  steps={[
+    {
+      path: ["user", "nacl", "sgw", "web"],
+      packet: "SYN :80",
+      title: "들어올 때: NACL 인바운드 → SG 인바운드",
+      detail: "NACL이 규칙 번호순으로 보고 허용하면, 웹 서버 ENI의 보안 그룹이 80번 허용 규칙을 찾는다. 둘 다 통과해야 서버에 닿는다.",
+    },
+    {
+      path: ["web", "sgw", "nacl", "user"],
+      packet: "SYN-ACK",
+      title: "나갈 때: SG는 기억으로, NACL은 다시 검사",
+      detail: "보안 그룹은 들어온 연결의 응답임을 기억하고 규칙을 보지 않고 내보낸다. NACL은 기억이 없어서 아웃바운드 규칙으로 처음부터 다시 검사한다.",
+      payload: "src 10.0.1.10:80 → dst 198.51.100.80:44988",
+    },
+    {
+      path: ["web", "sgw", "sgn", "batch"],
+      packet: ":9100",
+      highlight: ["sub"],
+      title: "같은 서브넷 안은 NACL을 지나지 않는다",
+      detail: "web에서 batch로 가는 패킷은 서브넷 경계를 넘지 않는다. 막고 싶으면 batch의 보안 그룹으로 막는다.",
+    },
+    {
+      path: ["user", "nacl", "sgn"],
+      packet: "SYN :22",
+      blocked: true,
+      title: "SG는 허용 규칙만 있다",
+      detail: "batch의 보안 그룹에 22번 허용 규칙이 없으니 버린다. 보안 그룹에는 거부 규칙을 쓸 수 없고, 허용 목록에 없으면 버린다.",
+    },
+  ]}
+/>
+
+두 방화벽 모두 버릴 때 아무 응답도 보내지 않는다. 그래서 어느 쪽에서 막혀도 클라이언트에게는 `Connection timed out`으로 보인다. `Connection refused`는 패킷이 서버까지 갔다는 뜻이니 방화벽 문제가 아니다.
+
+## 보안 그룹은 연결을 기억한다
+
+보안 그룹은 허용 규칙만 가진다. 거부 규칙이 없고, 규칙끼리 순서도 없다. 붙어 있는 규칙(과 ENI에 붙은 다른 보안 그룹들의 규칙) 중 하나라도 허용하면 통과한다. 새로 만든 보안 그룹은 인바운드가 비어 있고(전부 막힘) 아웃바운드는 모두 허용이다.
+
+보안 그룹이 연결을 기억한다는 건, 들어온 연결의 응답과 나간 연결의 응답을 규칙 없이 통과시킨다는 뜻이다. 웹 서버가 80번으로 받은 요청에 답할 때 아웃바운드 규칙을 보지 않고, 웹 서버가 밖으로 나간 요청의 응답이 돌아올 때 인바운드 규칙을 보지 않는다.
+
+모형의 웹 서버 네임스페이스에 보안 그룹처럼 동작하는 규칙을 넣었다. 첫 줄이 "기억하는 연결은 통과"이고, 그다음이 허용 목록, 마지막이 나머지 모두 버리기다.
+
+```bash
+# 이미 아는 연결(응답 포함)은 통과: 이 한 줄이 '상태 기억'이다
+sudo ip netns exec vc-web iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+sudo ip netns exec vc-web iptables -A INPUT -i lo -j ACCEPT
+# 보안 그룹의 인바운드 허용 목록
+sudo ip netns exec vc-web iptables -N SG-WEB-IN
+sudo ip netns exec vc-web iptables -A INPUT -j SG-WEB-IN
+sudo ip netns exec vc-web iptables -A SG-WEB-IN -p tcp --dport 80 -j ACCEPT
+sudo ip netns exec vc-web iptables -A SG-WEB-IN -p tcp --dport 9000 -j ACCEPT
+sudo ip netns exec vc-web iptables -A SG-WEB-IN -p tcp --dport 22 -s 10.0.0.0/16 -j ACCEPT
+# 목록에 없으면 버린다
+sudo ip netns exec vc-web iptables -A INPUT -j DROP
+```
+
+바깥에서 웹 서버로 한 번, 웹 서버에서 바깥으로 한 번 요청한 뒤 카운터를 본다.
+
+```bash
+sudo ip netns exec vc-inet curl -s -o /dev/null -w '%{http_code}\n' -m3 http://203.0.113.10/
+sudo ip netns exec vc-web curl -s -o /dev/null -w '%{http_code}\n' -m3 http://198.51.100.80/
+sudo ip netns exec vc-web iptables -L INPUT -v -n
+```
+
+```text
+200
+200
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+   11  1276 ACCEPT     0    --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
+    0     0 ACCEPT     0    --  lo     *       0.0.0.0/0            0.0.0.0/0           
+    1    60 SG-WEB-IN  0    --  *      *       0.0.0.0/0            0.0.0.0/0           
+    0     0 DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0           
+```
+
+`SG-WEB-IN`을 지난 패킷은 1개뿐이다. 바깥에서 들어온 첫 SYN이다. 나머지 11개(그 연결의 나머지 패킷과, 웹 서버가 밖으로 나간 요청의 응답 전부)는 첫 줄의 `ESTABLISHED`에서 통과했다. 웹 서버가 바깥으로 나간 요청의 응답에는 인바운드 허용 규칙이 하나도 없었는데도 들어왔다. 보안 그룹에서 응답용 규칙을 따로 만들지 않아도 되는 이유가 이것이다.
+
+### 보안 그룹은 다른 보안 그룹을 가리킬 수 있다
+
+보안 그룹 규칙의 출발지에는 IP 대역 대신 다른 보안 그룹 ID를 쓸 수 있다. "app-sg가 붙은 ENI에서 오는 5432번은 허용" 같은 식이다. 서버가 늘거나 IP가 바뀌어도 규칙을 고칠 필요가 없다. 이걸 이어 붙이면 계층마다 바로 앞 계층만 들어오게 하는 사슬이 된다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="보안 그룹을 사슬로 이으면 각 계층은 바로 앞 계층만 받는다"
+  nodes={[
+    { id: "user", label: "user", x: 60, y: 40, icon: "client" },
+    { id: "alb", label: "ALB", sub: "alb-sg", x: 60, y: 130, icon: "lb" },
+    { id: "app", label: "app", sub: "app-sg", x: 200, y: 130, icon: "server" },
+    { id: "db", label: "db", sub: "db-sg", x: 340, y: 130, icon: "db" },
+    { id: "ops", label: "ops", sub: "10.0.9.5", x: 200, y: 215, icon: "client" },
+  ]}
+  links={[
+    { from: "user", to: "alb", label: "443 from 0/0" },
+    { from: "alb", to: "app", label: "8080" },
+    { from: "app", to: "db", label: "5432" },
+    { from: "user", to: "db", dashed: true },
+    { from: "ops", to: "db", dashed: true },
+  ]}
+  steps={[
+    {
+      path: ["user", "alb", "app", "db"],
+      packet: "주문",
+      title: "앞 계층의 보안 그룹만 허용한다",
+      detail: "alb-sg는 443을 모두에게, app-sg는 8080을 alb-sg에게만, db-sg는 5432를 app-sg에게만 연다.",
+      payload: "db-sg inbound: tcp 5432 from sg-0app1234",
+    },
+    {
+      path: ["user", "db"],
+      packet: "5432",
+      blocked: true,
+      title: "인터넷에서 DB로 바로는 못 간다",
+      detail: "DB가 실수로 퍼블릭 서브넷에 있더라도 db-sg가 app-sg만 허용하니 막힌다. 경로와 방화벽이 이중으로 막는다.",
+    },
+    {
+      path: ["ops", "db"],
+      packet: "psql",
+      blocked: true,
+      title: "같은 VPC여도 app-sg가 없으면 막힌다",
+      detail: "운영자 PC가 VPC 안에 있어도 app-sg가 붙어 있지 않으니 통과하지 못한다. 대역으로 열었다면 열렸을 것이다.",
+    },
+  ]}
+/>
+
+보안 그룹 참조는 같은 VPC 안, 또는 같은 리전의 피어링된 VPC에서 쓸 수 있다. 보안 그룹당 규칙 수(기본 인바운드·아웃바운드 각 60개)와 ENI당 보안 그룹 수(기본 5개)에 할당량이 있어서, 대역을 하나하나 나열하는 설계는 금방 한계에 닿는다. 그때도 참조나 관리형 접두사 목록(prefix list)으로 묶는다.
+
+## NACL은 패킷 하나하나를 본다
+
+NACL은 번호가 붙은 규칙 목록이다. 허용(allow)과 거부(deny)를 둘 다 쓸 수 있고, 번호가 작은 규칙부터 보다가 처음 맞는 규칙에서 멈춘다. 어디에도 맞지 않으면 맨 끝의 `*` 규칙(전부 거부)에 걸린다. 규칙 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="NACL 아웃바운드 규칙 한 줄"
+  base="Egress"
+  separator=" { "
+  joiner=", "
+  params={[
+    {
+      key: "RuleNumber",
+      value: "200",
+      title: "규칙 번호",
+      description: "작은 번호부터 본다. 1부터 32766까지 쓸 수 있다. 나중에 사이에 끼워 넣을 수 있게 100, 200처럼 띄워서 매긴다.",
+      required: true,
+    },
+    {
+      key: "Protocol",
+      value: "6",
+      title: "프로토콜 번호",
+      description: "6은 TCP, 17은 UDP, 1은 ICMP, -1은 전부다. API와 CLI에서는 이름이 아니라 번호로 나온다.",
+      required: true,
+    },
+    {
+      key: "PortRange",
+      value: "1024-65535",
+      title: "목적지 포트 범위",
+      description: "아웃바운드 규칙에서는 나가는 패킷의 목적지 포트다. 응답 패킷의 목적지 포트는 클라이언트가 고른 임시 포트라서, 응답을 내보내려면 이 범위를 열어야 한다.",
+      required: true,
+    },
+    {
+      key: "CidrBlock",
+      value: "0.0.0.0/0",
+      title: "상대 대역",
+      description: "아웃바운드면 목적지, 인바운드면 출발지 대역이다. 보안 그룹과 달리 다른 보안 그룹 ID는 쓸 수 없다.",
+    },
+    {
+      key: "RuleAction",
+      value: "allow",
+      title: "허용 또는 거부",
+      description: "NACL에는 거부 규칙이 있다. 특정 대역을 서브넷 전체에서 막을 때 낮은 번호에 deny를 둔다.",
+      required: true,
+    },
+  ]}
+/>
+
+AWS가 만들어 주는 기본 NACL은 모든 트래픽을 허용한다. 직접 만든 NACL은 반대로 `*` 거부만 있는 상태로 시작한다. 처음 장면의 팀은 새 NACL을 만들었으니, 적은 규칙 말고는 전부 막힌 상태였다.
+
+번호순 평가가 어떻게 흘러가는지 아래 그림에서 다음을 눌러 보자. 인바운드에 `100 deny 198.51.100.0/24`와 `200 allow tcp 443`이 있을 때 패킷 셋이 차례로 들어온다.
+
+<AlgoTrace
+  caption="NACL 인바운드: 번호가 작은 규칙부터, 처음 맞는 곳에서 멈춘다"
+  memoryLabel="맞는 규칙"
+  cells={["198.51.100.80 :443", "203.0.113.5 :443", "203.0.113.5 :22"]}
+  steps={[
+    { memory: [], caption: "규칙: 100 deny all 198.51.100.0/24, 200 allow tcp 443 0.0.0.0/0, * deny." },
+    { pointer: 0, memory: ["100 deny"], caption: "첫 패킷은 100번에 먼저 맞는다. 200번이 443을 허용해도 보지 않는다." },
+    { pointer: 1, memory: ["100 (안 맞음)", "200 allow"], caption: "둘째 패킷은 막힌 대역이 아니다. 200번에서 허용한다." },
+    { pointer: 1, found: [1], memory: ["200 allow"], caption: "통과. 이제 보안 그룹이 다시 본다." },
+    { pointer: 2, memory: ["100 (안 맞음)", "200 (안 맞음)", "* deny"], caption: "22번은 어느 번호에도 맞지 않아 * 규칙에 걸린다." },
+  ]}
+/>
+
+같은 규칙을 순서를 바꿔 `100 allow tcp 443`, `200 deny 198.51.100.0/24`로 두면 첫 패킷이 허용된다. iptables가 위에서부터 처음 맞는 규칙에서 멈추는 것과 같은 원리다. 거부 규칙은 허용보다 작은 번호에 둔다.
+
+## 응답 패킷은 포트가 다르다
+
+처음 장면의 원인은 여기에 있다. 사용자가 웹 서버의 80번에 접속하면 사용자 쪽 포트는 운영체제가 고른 임시 포트(ephemeral port)다. 리눅스는 기본으로 `32768`~`60999`에서 고른다. 응답 패킷의 목적지 포트는 바로 그 임시 포트다.
+
+```bash
+# 리눅스가 출발지 포트로 쓰는 임시 포트 범위
+cat /proc/sys/net/ipv4/ip_local_port_range
+```
+
+```text
+32768	60999
+```
+
+NACL은 응답을 기억하지 못하니 "목적지 포트 44988로 나가는 TCP"를 새 패킷으로 보고 아웃바운드 규칙을 검사한다. 아웃바운드가 80번만 허용이면 응답이 막힌다. 다음을 누르면 그 순간을 볼 수 있다.
+
+<SequenceDiagram
+  caption="아웃바운드를 80번만 연 NACL에서 응답이 막히는 과정"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "nacl", label: "NACL" },
+    { id: "web", label: "웹 서버" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "nacl",
+      label: "SYN dport 80",
+      title: "요청은 인바운드 100번에 맞는다",
+      detail: "목적지 포트가 80이라 인바운드 100 allow tcp 80에 걸려 통과한다.",
+      payload: "198.51.100.80:44988 → 10.0.1.10:80",
+    },
+    {
+      from: "nacl",
+      to: "web",
+      label: "SYN",
+      title: "보안 그룹도 통과한다",
+      detail: "웹 서버의 보안 그룹이 80번을 허용하고, 이 연결을 기억해 둔다.",
+    },
+    {
+      from: "web",
+      to: "nacl",
+      label: "SYN-ACK dport 44988",
+      title: "응답의 목적지 포트는 44988이다",
+      detail: "보안 그룹은 기억으로 내보낸다. NACL은 이 패킷을 처음 보는 패킷으로 다룬다.",
+      payload: "10.0.1.10:80 → 198.51.100.80:44988",
+    },
+    {
+      from: "nacl",
+      to: "nacl",
+      label: "* deny",
+      title: "아웃바운드 100번(dport 80)에 맞지 않는다",
+      detail: "아웃바운드 규칙의 포트는 목적지 포트다. 44988은 80이 아니니 * 거부에 걸린다. 사용자는 SYN을 재전송하다 timeout을 낸다.",
+    },
+  ]}
+/>
+
+모형의 VPC 라우터에 NACL처럼 동작하는 규칙을 넣어 재현했다. 퍼블릭 서브넷 브리지(`brpub`)로 들어가는 패킷이 인바운드, 거기서 나오는 패킷이 아웃바운드다. conntrack 조건을 하나도 쓰지 않았다는 점이 보안 그룹 쪽 규칙과 다르다.
+
+```bash
+# 서브넷으로 들어가는 패킷 = NACL 인바운드, 나오는 패킷 = NACL 아웃바운드
+sudo ip netns exec vc-vr iptables -N NACL-PUB-IN
+sudo ip netns exec vc-vr iptables -N NACL-PUB-OUT
+sudo ip netns exec vc-vr iptables -A FORWARD -o brpub -j NACL-PUB-IN
+sudo ip netns exec vc-vr iptables -A FORWARD -i brpub -j NACL-PUB-OUT
+# 처음 장면의 규칙: 인바운드 80(과 실습용 9000), 아웃바운드 80만 허용
+sudo ip netns exec vc-vr iptables -A NACL-PUB-IN -p tcp --dport 80 -j ACCEPT -m comment --comment "rule 100"
+sudo ip netns exec vc-vr iptables -A NACL-PUB-IN -p tcp --dport 9000 -j ACCEPT -m comment --comment "rule 110"
+sudo ip netns exec vc-vr iptables -A NACL-PUB-IN -j DROP -m comment --comment "rule *"
+sudo ip netns exec vc-vr iptables -A NACL-PUB-OUT -p tcp --dport 80 -j ACCEPT -m comment --comment "rule 100"
+sudo ip netns exec vc-vr iptables -A NACL-PUB-OUT -j DROP -m comment --comment "rule *"
+# 바깥에서 웹 서버로 접속하고 카운터를 본다
+sudo ip netns exec vc-inet curl -sS -o /dev/null -w '%{http_code}\n' -m3 http://203.0.113.10/
+sudo ip netns exec vc-vr iptables -L NACL-PUB-IN -v -n
+sudo ip netns exec vc-vr iptables -L NACL-PUB-OUT -v -n
+```
+
+```text
+curl: (28) Connection timed out after 3002 milliseconds
+000
+Chain NACL-PUB-IN (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    3   180 ACCEPT     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:80 /* rule 100 */
+    0     0 ACCEPT     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:9000 /* rule 110 */
+    0     0 DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* rule * */
+Chain NACL-PUB-OUT (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 ACCEPT     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:80 /* rule 100 */
+    4   240 DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0            /* rule * */
+```
+
+인바운드 100번에 SYN 3개(첫 SYN과 재전송 2번)가 통과했고, 아웃바운드 `*`에 SYN-ACK 4개가 막혔다. 아웃바운드에 임시 포트 범위를 열면 사이트는 열린다. 그런데 이번엔 웹 서버가 밖으로 나가는 요청이 막힌다.
+
+```bash
+# 아웃바운드에 응답용 임시 포트를 연다
+sudo ip netns exec vc-vr iptables -I NACL-PUB-OUT 2 -p tcp --dport 1024:65535 -j ACCEPT -m comment --comment "rule 200"
+sudo ip netns exec vc-inet curl -sS -o /dev/null -w '%{http_code}\n' -m3 http://203.0.113.10/
+sudo ip netns exec vc-web curl -sS -o /dev/null -w '%{http_code}\n' -m3 http://198.51.100.80/
+sudo ip netns exec vc-app curl -sS -o /dev/null -w '%{http_code}\n' -m3 http://198.51.100.80/
+```
+
+```text
+200
+curl: (28) Connection timed out after 3003 milliseconds
+000
+curl: (28) Connection timed out after 3002 milliseconds
+000
+```
+
+웹 서버가 밖에 요청하면 요청은 아웃바운드 100번(목적지 80)으로 나가지만, 돌아오는 응답의 목적지 포트가 웹 서버의 임시 포트라 인바운드에서 막힌다. 프라이빗 서버(`vc-app`)까지 막힌 게 흥미롭다. 프라이빗 서버의 트래픽은 퍼블릭 서브넷의 NAT 게이트웨이를 지나는데, NAT로 들어오는 응답도 퍼블릭 서브넷의 NACL을 지나기 때문이다. NACL 하나가 다른 서브넷의 인터넷까지 끊을 수 있다. 인바운드에도 임시 포트를 열자 둘 다 `200`이 됐다.
+
+어느 범위를 열어야 하나. 응답을 받는 쪽이 누구냐에 따라 임시 포트가 다르다. 리눅스는 32768~60999, 윈도우는 49152~65535를 쓰고, NAT 게이트웨이와 ELB는 1024~65535를 쓴다. 그래서 AWS 문서도 1024~65535를 권한다. 범위를 좁게 잡으면 어떤 클라이언트는 되고 어떤 클라이언트는 안 되는, 재현이 어려운 장애가 된다.
+
+참고로 Amazon DNS 리졸버(VPC 대역+2), 인스턴스 메타데이터, DHCP 같은 트래픽은 NACL과 보안 그룹 모두 거르지 않는다. NACL을 촘촘히 짜도 DNS 조회가 되는 건 그래서다.
+
+규칙을 판정하는 함수를 직접 짜 보자. 규칙을 번호순으로 보고 처음 맞는 규칙의 `"번호 동작"`을 돌려주고, 아무것도 맞지 않으면 `"* deny"`를 돌려준다. 프로토콜이 `"all"`이면 포트를 보지 않는다.
+
+<CodePlayground
+  caption="NACL 규칙 판정"
+  functionName="naclDecide"
+  initialCode={`function naclDecide(rules, packet) {
+  // rules: [{ num: 100, proto: "tcp", from: 80, to: 80, cidr: "0.0.0.0/0", action: "allow" }]
+  // packet: { proto: "tcp", ip: "198.51.100.80", port: 44988 }  (ip는 상대 주소, port는 목적지 포트)
+  return "* deny";
+}`}
+  solution={`function naclDecide(rules, packet) {
+  const toInt = (a) => a.split(".").reduce((n, o) => n * 256 + Number(o), 0);
+  const inCidr = (ip, cidr) => {
+    const [net, len] = cidr.split("/");
+    const size = 2 ** (32 - Number(len));
+    return Math.floor(toInt(ip) / size) === Math.floor(toInt(net) / size);
+  };
+  const sorted = [...rules].sort((a, b) => a.num - b.num);
+  for (const r of sorted) {
+    if (r.proto !== "all" && r.proto !== packet.proto) continue;
+    if (!inCidr(packet.ip, r.cidr)) continue;
+    if (r.proto !== "all" && (packet.port < r.from || packet.port > r.to)) continue;
+    return \`\${r.num} \${r.action}\`;
+  }
+  return "* deny";
+}`}
+  tests={[
+    { label: "80만 연 아웃바운드에 응답", args: [[{ num: 100, proto: "tcp", from: 80, to: 80, cidr: "0.0.0.0/0", action: "allow" }], { proto: "tcp", ip: "198.51.100.80", port: 44988 }], expected: "* deny" },
+    { label: "임시 포트를 연 뒤", args: [[{ num: 100, proto: "tcp", from: 80, to: 80, cidr: "0.0.0.0/0", action: "allow" }, { num: 200, proto: "tcp", from: 1024, to: 65535, cidr: "0.0.0.0/0", action: "allow" }], { proto: "tcp", ip: "198.51.100.80", port: 44988 }], expected: "200 allow" },
+    { label: "UDP는 TCP 규칙에 안 맞는다", args: [[{ num: 100, proto: "tcp", from: 80, to: 80, cidr: "0.0.0.0/0", action: "allow" }, { num: 200, proto: "tcp", from: 1024, to: 65535, cidr: "0.0.0.0/0", action: "allow" }], { proto: "udp", ip: "8.8.8.8", port: 53 }], expected: "* deny" },
+    { label: "작은 번호의 deny가 이긴다", args: [[{ num: 200, proto: "tcp", from: 443, to: 443, cidr: "0.0.0.0/0", action: "allow" }, { num: 100, proto: "all", from: 0, to: 65535, cidr: "198.51.100.0/24", action: "deny" }], { proto: "tcp", ip: "198.51.100.80", port: 443 }], expected: "100 deny" },
+    { label: "막힌 대역 밖", args: [[{ num: 200, proto: "tcp", from: 443, to: 443, cidr: "0.0.0.0/0", action: "allow" }, { num: 100, proto: "all", from: 0, to: 65535, cidr: "198.51.100.0/24", action: "deny" }], { proto: "tcp", ip: "203.0.113.5", port: 443 }], expected: "200 allow" },
+  ]}
+/>
+
+## 규칙을 지웠는데 연결이 살아 있다
+
+두 번째 장면으로 가자. 보안 그룹에서 규칙을 지워도 이미 맺어진 연결은 끊기지 않는다. 보안 그룹은 새 연결을 받을지 말지를 규칙으로 정하고, 받은 연결은 기억으로 통과시키기 때문이다. NACL은 기억이 없으니 규칙을 바꾸는 순간 모든 패킷에 바로 적용된다.
+
+모형에서 1초마다 한 줄씩 주고받는 TCP 연결(9000번)을 열어 두고, 중간에 보안 그룹의 9000번 허용 규칙을 지웠다.
+
+```bash
+# 바깥에서 웹 서버 9000번으로 1초마다 ping을 보내고 답을 받는 스크립트
+sudo ip netns exec vc-inet python3 echo_cli.py 203.0.113.10 9000 8 &
+sleep 2.5
+# 연결 도중 보안 그룹에서 9000번 규칙을 지운다
+sudo ip netns exec vc-web iptables -D SG-WEB-IN -p tcp --dport 9000 -j ACCEPT
+```
+
+```text
+13:19:25 reply ping0
+13:19:26 reply ping1
+13:19:27 reply ping2
+13:19:28 reply ping3
+13:19:29 reply ping4
+13:19:30 reply ping5
+13:19:31 reply ping6
+13:19:32 reply ping7
+```
+
+규칙은 13:19:27에 지웠지만 연결은 끝까지 답을 받았다. 그 직후 새 연결을 열면 timeout이 난다. 같은 실험을 NACL로 했다. 연결 도중 NACL 인바운드 맨 앞에 그 클라이언트 대역을 막는 거부 규칙을 넣었다.
+
+```bash
+# 연결 도중 NACL 인바운드 맨 앞(낮은 번호)에 거부 규칙을 넣는다
+sudo ip netns exec vc-vr iptables -I NACL-PUB-IN 1 -p tcp -s 198.51.100.80 -j DROP -m comment --comment "rule 50 deny"
+```
+
+```text
+13:19:42 reply ping0
+13:19:43 reply ping1
+13:19:44 reply ping2
+13:19:45 timeout
+13:19:47 timeout
+```
+
+13:19:44에 규칙을 넣었고, 바로 다음 패킷부터 답이 끊겼다. 장애 대응에서 이 차이가 중요하다. 공격 중인 IP를 당장 끊어야 하면 보안 그룹 규칙을 지우는 것으로는 부족하고, NACL에 거부 규칙을 넣는 게 즉시 효과가 난다.
+
+AWS에는 여기에 예외가 하나 있다. 보안 그룹 규칙이 TCP·UDP를 인바운드와 아웃바운드 양쪽 모두 `0.0.0.0/0`의 전체 포트로 허용하면, AWS는 그 흐름을 추적하지 않는다(untracked). 추적하지 않는 흐름은 규칙을 지우는 즉시 끊긴다. 반대로 좁게 열수록 추적 대상이 되어, 규칙을 지워도 연결이 남는다. ICMP는 항상 추적한다.
+
+추적에는 비용도 있다. 인스턴스 유형마다 추적할 수 있는 연결 수에 한도가 있고, 넘치면 새 연결이 조용히 버려진다. ENA 드라이버의 통계에서 확인할 수 있다.
+
+```bash
+# ENA 랜카드의 연결 추적 한도 초과 횟수와 남은 여유
+ethtool -S ens5 | grep conntrack
+```
+
+```text
+     conntrack_allowance_exceeded: 0
+     conntrack_allowance_available: 136812
+```
+
+(예시 출력이다. 실제 EC2 인스턴스에서 나오는 항목 이름과 형식을 따랐다.) `conntrack_allowance_exceeded`가 늘고 있다면, 트래픽이 많은 서버의 보안 그룹을 추적하지 않는 형태로 바꾸거나 TCP 연결의 유휴 타임아웃을 줄인다. 보안 그룹의 TCP established 유휴 타임아웃 기본값은 5일(432,000초)이고, ENI 설정에서 60초까지 줄일 수 있다.
+
+## 어디서 막혔는지 확인하기
+
+"timeout이 난다"는 말만으로는 경로, 보안 그룹, NACL 중 어디인지 모른다. VPC 흐름 로그를 켜면 ENI를 지난(또는 버려진) 트래픽이 한 줄씩 남는다. 기본 형식의 한 줄은 이렇게 생겼다.
+
+```text
+2 123456789012 eni-0a1b2c3d4e5f67890 198.51.100.80 10.0.1.10 44988 80 6 3 180 1760965164 1760965224 ACCEPT OK
+2 123456789012 eni-0a1b2c3d4e5f67890 10.0.1.10 198.51.100.80 80 44988 6 4 240 1760965164 1760965224 REJECT OK
+```
+
+(예시 출력이다. 필드 순서는 기본 형식 그대로다.) 앞에서부터 버전, 계정, ENI, 출발지, 목적지, 출발지 포트, 목적지 포트, 프로토콜, 패킷 수, 바이트, 시작, 끝, 판정, 로그 상태다. 같은 연결의 들어오는 줄은 ACCEPT인데 나가는 응답 줄이 REJECT라면, 보안 그룹은 응답을 기억으로 내보내니 범인은 NACL이다. 처음 장면이 정확히 이 모양이다. 반대로 들어오는 줄부터 REJECT라면 보안 그룹 인바운드나 NACL 인바운드다. 흐름 로그를 읽고 모으는 법은 [흐름 로그 글](/posts/network-flow-logs)에서 자세히 본다.
+
+설정을 직접 확인할 때는 서브넷에 붙은 NACL의 규칙을 번호순으로 본다.
+
+```bash
+# 서브넷에 연결된 NACL의 규칙을 번호, 방향, 동작으로 본다
+aws ec2 describe-network-acls \
+  --filters Name=association.subnet-id,Values=subnet-0aa11bb22cc33dd44 \
+  --query 'NetworkAcls[].Entries[].[RuleNumber,Egress,Protocol,PortRange.From,PortRange.To,CidrBlock,RuleAction]' \
+  --output text
+```
+
+```text
+100	False	6	80	80	0.0.0.0/0	allow
+32767	False	-1	None	None	0.0.0.0/0	deny
+100	True	6	80	80	0.0.0.0/0	allow
+32767	True	-1	None	None	0.0.0.0/0	deny
+```
+
+(예시 출력이다.) `*` 규칙은 API에서 32767번으로 나온다. `Egress`가 `True`인 줄이 아웃바운드다. 이 표에서 아웃바운드에 임시 포트 범위가 없다는 걸 바로 읽을 수 있다.
+
+## 무엇을 어디에 걸까
+
+둘 다 방화벽이지만 역할을 나누는 게 보통이다.
+
+- 보안 그룹이 주력이다. 서버 역할마다 보안 그룹을 만들고, 앞 계층의 보안 그룹을 참조해서 연다. 응답을 신경 쓰지 않아도 되고, 같은 서브넷 안까지 막을 수 있다.
+- NACL은 굵은 선만 긋는다. 기본 NACL(전부 허용)을 그대로 두거나, "이 서브넷은 이 대역과 절대 통하지 않는다", "이 공격 대역은 서브넷 전체에서 거부" 같은 큰 규칙만 둔다. 거부 규칙과 즉시 적용이 필요할 때 쓴다.
+- NACL을 촘촘히 쓰려면 양방향과 임시 포트를 항상 함께 생각한다. 규칙 수 할당량(방향마다 기본 20개)도 작다.
+
+규모가 커져도 이 분담은 크게 바뀌지 않는다. 대신 규칙 관리 방식이 바뀐다. 계정과 VPC가 많아지면 보안 그룹을 콘솔에서 고치는 대신 코드로 관리하고([Terraform 글](/posts/terraform-network-iac)), 여러 계정의 보안 그룹을 한곳에서 감사하는 도구(AWS Firewall Manager 등)를 쓴다. L7 검사나 도메인 기반 차단이 필요하면 보안 그룹과 NACL로는 할 수 없으니 AWS Network Firewall 같은 별도 장비를 경로 중간에 둔다.
+
+## 두 장면을 다시 보면
+
+80번만 연 NACL에서 사이트가 안 열린 건 응답 패킷의 목적지 포트가 사용자 쪽 임시 포트였는데, 기억이 없는 NACL이 그걸 처음 보는 패킷으로 검사해서 막았기 때문이다. 보안 그룹에서 SSH 규칙을 지워도 세션이 살아 있던 건 보안 그룹이 이미 받은 연결을 기억으로 통과시키기 때문이다. 기억하는 방화벽은 응답을 신경 쓰지 않아도 되는 대신 규칙 변경이 기존 연결에 늦게 닿고, 기억하지 않는 방화벽은 즉시 닿는 대신 양방향을 다 적어야 한다. [VPC를 잇는 글](/posts/vpc-peering-transit-privatelink)에서 연결이 안 될 때 이 두 방화벽을 어디서 보는지 다시 나온다.
+
+## 면접에서 나올 만한 질문
+
+### 보안 그룹과 NACL의 차이는 무엇인가요?
+
+보안 그룹은 ENI에 붙는 상태 기억 방화벽이고 허용 규칙만 있으며 규칙 순서가 없다. NACL은 서브넷 경계에 붙는 상태 없는 방화벽이고, 허용과 거부를 번호순으로 보다가 처음 맞는 규칙에서 멈춘다. 그래서 보안 그룹은 응답 규칙이 필요 없고, NACL은 응답 방향과 임시 포트까지 적어야 한다.
+
+### NACL에서 인바운드 80, 아웃바운드 80만 열었더니 웹이 안 열립니다. 왜 그런가요?
+
+응답 패킷의 목적지 포트는 80이 아니라 클라이언트가 고른 임시 포트이기 때문이다. NACL은 연결을 기억하지 못해서 응답을 새 패킷으로 보고 아웃바운드 규칙에서 막는다. 아웃바운드에 1024~65535를 열어야 하고, 서버가 밖으로 나가는 요청을 하려면 인바운드에도 같은 범위가 필요하다.
+
+### 보안 그룹 규칙을 지웠는데 기존 연결이 끊기지 않습니다. 정상인가요?
+
+정상이다. 보안 그룹은 새 연결을 받을지만 규칙으로 정하고, 이미 추적 중인 연결은 기억으로 통과시킨다. 즉시 끊어야 하면 NACL에 거부 규칙을 넣으면 바로 다음 패킷부터 막힌다. 다만 양방향을 0.0.0.0/0 전체 포트로 연 규칙은 AWS가 추적하지 않아서 지우는 즉시 끊긴다.
+
+### 같은 서브넷에 있는 두 서버 사이를 NACL로 막을 수 있나요?
+
+막을 수 없다. NACL은 서브넷을 드나드는 트래픽만 보고, 같은 서브넷 안의 트래픽은 지나가지 않는다. 같은 서브넷 안을 막으려면 받는 쪽 서버의 보안 그룹에서 허용하지 않으면 된다.
+
+### 보안 그룹 규칙에 IP 대신 보안 그룹 ID를 쓰는 이유는요?
+
+서버가 늘어나거나 IP가 바뀌어도 규칙을 고칠 필요가 없고, 그 보안 그룹이 붙은 ENI만 정확히 허용할 수 있다. ALB → app → DB로 각 계층이 바로 앞 계층의 보안 그룹만 허용하게 이으면, DB가 실수로 퍼블릭 서브넷에 있어도 인터넷에서 닿지 않는다. 같은 VPC나 같은 리전의 피어링 VPC에서 쓸 수 있다.
+
+### 트래픽이 많은 서버에서 새 연결이 가끔 조용히 실패합니다. 방화벽 쪽에서 무엇을 보나요?
+
+연결 추적 한도를 본다. 인스턴스마다 추적할 수 있는 연결 수가 정해져 있고, 넘으면 새 연결이 버려진다. ENA 통계의 conntrack_allowance_exceeded가 늘고 있는지 확인하고, 보안 그룹을 추적하지 않는 형태로 바꾸거나 유휴 타임아웃을 줄인다.
+
+### timeout이 났을 때 보안 그룹과 NACL 중 어디서 막혔는지 어떻게 구분하나요?
+
+흐름 로그에서 같은 연결의 들어오는 줄과 나가는 줄을 함께 본다. 들어오는 줄이 ACCEPT인데 응답 줄이 REJECT면, 보안 그룹은 응답을 기억으로 내보내니 NACL 아웃바운드가 범인이다. 들어오는 줄부터 REJECT면 보안 그룹이나 NACL의 인바운드를 보고, 설정은 describe-network-acls로 번호순으로 확인한다.

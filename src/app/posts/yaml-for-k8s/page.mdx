@@ -1,0 +1,560 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("yaml-for-k8s");
+
+국가 코드를 ConfigMap에 넣었다. `COUNTRY: NO` 한 줄이다. `kubectl apply --dry-run=client`는 통과했는데 실제로 적용하자 API 서버가 거절했다.
+
+```text
+Error from server (BadRequest): error when creating "cm-norway.yaml": ConfigMap in version "v1" cannot be handled as a ConfigMap: json: cannot unmarshal bool into Go struct field ConfigMap.data of type string
+```
+
+`NO`를 문자열로 썼는데 서버는 bool을 받았다고 한다. 노르웨이의 국가 코드가 거짓(false)이 되는 이 현상은 너무 유명해서 "노르웨이 문제"라는 이름까지 있다. YAML은 따옴표 없는 값의 타입을 글자 모양으로 추측하고, 그 추측 규칙이 YAML 버전과 라이브러리마다 다르다.
+
+이 글은 쿠버네티스 매니페스트를 쓰다 만나는 YAML 함정을 실제 파서로 확인한다. 값의 타입이 바뀌는 경우(불리언, 8진수, 버전 번호), 여러 줄 문자열의 `|`와 `>`, 앵커와 별칭, `---`로 나누는 여러 문서, 들여쓰기 오류와 그 오류 메시지, YAML 안의 JSON까지 간다. 출력은 PyYAML 6.0.1, Node의 `yaml` 1.10.3, kubectl 1.31.4(서버는 kwok으로 띄운 kube-apiserver 1.30.4), yamllint 1.38.0에서 직접 받았다. Helm 템플릿이 만든 YAML의 들여쓰기 문제는 [차트 템플릿 문법](/posts/helm-chart-templates)에서 따로 다룬다.
+
+## 따옴표가 없으면 파서가 타입을 고른다
+
+YAML의 값은 세 가지 모양으로 쓴다. 따옴표 없는 평문(plain), 작은따옴표, 큰따옴표다. 따옴표를 쓰면 무조건 문자열이다. 평문이면 파서가 정규식 목록에 맞춰 보고, 맞는 게 있으면 그 타입으로 바꾼다. 이 목록을 스키마라고 부른다.
+
+문제는 목록이 두 개라는 것이다. 2005년의 YAML 1.1은 `yes`, `no`, `on`, `off`, `y`, `n`까지 불리언으로 봤고, `0`으로 시작하는 숫자를 8진수로 봤다. 2009년의 YAML 1.2는 JSON과 맞추면서 불리언을 `true`, `false`(대소문자 변형 포함)로 줄이고 8진수를 `0o`로 바꿨다. 그런데 파서들이 1.2로 다 넘어가지 않았다. PyYAML은 지금도 1.1이고, kubectl이 쓰는 Go 라이브러리(sigs.k8s.io/yaml, 안쪽은 go-yaml v2)도 1.1 규칙을 따른다.
+
+같은 파일을 세 파서에 넣어 본다.
+
+```yaml
+country: NO
+enabled: on
+answer: yes
+mode: 0755
+port: 012
+version: 1.10
+build: 1_000
+time: 3:25
+date: 2026-10-22
+nothing: ~
+sha: 1e10
+zip: 01234
+```
+
+```bash
+# PyYAML(YAML 1.1)로 읽고 값과 파이썬 타입을 찍는다
+python3 load.py scalars.yaml
+
+# Node yaml 패키지, 기본값인 YAML 1.2 core 스키마
+node load.mjs scalars.yaml 1.2
+```
+
+```text
+country  False                        bool
+enabled  True                         bool
+answer   True                         bool
+mode     493                          int
+port     10                           int
+version  1.1                          float
+build    1000                         int
+time     205                          int
+date     datetime.date(2026, 10, 22)  date
+nothing  None                         NoneType
+sha      '1e10'                       str
+zip      668                          int
+```
+
+```text
+country  "NO"                         string
+enabled  "on"                         string
+answer   "yes"                        string
+mode     755                          number
+port     12                           number
+version  1.1                          number
+build    "1_000"                      string
+time     "3:25"                       string
+date     "2026-10-22"                 string
+nothing  null                         object
+sha      10000000000                  number
+zip      1234                         number
+```
+
+한 줄도 같은 게 거의 없다. 1.1에서 `3:25`는 60진수라 205가 되고, 우편번호 `01234`는 8진수 668이 된다. `1e10`은 반대로 1.1에서 문자열이고 1.2에서 숫자다. 1.1의 지수 표기에는 소수점이 있어야 하기 때문이다. 커밋 해시가 우연히 숫자와 e로만 이루어지면 이렇게 타입이 바뀐다. `version: 1.10`은 두 파서 모두 숫자 1.1로 읽는다. 버전 번호는 숫자가 아니다.
+
+아래 그림은 1.1 파서가 평문 값을 하나씩 받아 타입을 고르는 과정이다.
+
+<AlgoTrace
+  caption="YAML 1.1 파서가 따옴표 없는 값의 타입을 고르는 순서"
+  cells={["NO", "on", "0755", "1.10", "3:25", "\"NO\""]}
+  memoryLabel="읽힌 값"
+  steps={[
+    { pointer: 0, memory: ["false"], caption: "NO는 1.1 불리언 목록(y, n, yes, no, on, off …)에 있다. false가 된다." },
+    { pointer: 1, memory: ["false", "true"], caption: "on도 불리언이다. 기능 플래그나 GitHub Actions의 on: 키가 여기에 걸린다." },
+    { pointer: 2, memory: ["false", "true", "493"], caption: "0으로 시작하는 숫자는 8진수다. 0755는 493이 된다." },
+    { pointer: 3, memory: ["false", "true", "493", "1.1"], caption: "1.10은 실수다. 끝의 0이 사라진다." },
+    { pointer: 4, memory: ["false", "true", "493", "1.1", "205"], caption: "콜론으로 이은 숫자는 60진수다. 3×60+25 = 205." },
+    { pointer: 5, found: [5], memory: ["false", "true", "493", "1.1", "205", "NO"], caption: "따옴표가 있으면 목록을 보지 않는다. 문자열 NO 그대로다." },
+  ]}
+/>
+
+## 쿠버네티스는 어느 규칙으로 읽나
+
+처음의 오류로 돌아간다. `kubectl apply`는 YAML을 직접 보내지 않는다. 파일을 YAML 1.1 규칙으로 읽어 JSON으로 바꾼 다음 API 서버에 보낸다. 서버는 그 JSON을 Go 구조체에 맞춰 넣는데, ConfigMap의 `data`는 문자열만 받는다.
+
+```bash
+# client dry-run이 서버로 보낼 내용을 YAML로 찍는다
+kubectl create --dry-run=client -f cm-norway.yaml -o yaml
+```
+
+```text
+apiVersion: v1
+data:
+  COUNTRY: false
+  FEATURE_X: true
+  VERSION: 1.1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: default
+```
+
+kubectl 단계에서 이미 `false`, `true`, `1.1`로 바뀌었다. `--dry-run=client`는 이 변환까지만 하고 타입은 검사하지 않아서 통과한다. 타입 검사는 서버가 구조체에 넣을 때 일어나고, 그래서 `--dry-run=server`나 실제 적용에서야 터진다. 아래 그림에서 단계를 넘기면 어디서 무엇이 바뀌는지 보인다.
+
+<SequenceDiagram
+  caption="COUNTRY: NO가 거절되기까지. 타입은 kubectl에서 바뀌고, 검사는 서버에서 한다."
+  actors={[
+    { id: "f", label: "YAML 파일" },
+    { id: "k", label: "kubectl" },
+    { id: "a", label: "API 서버" },
+    { id: "e", label: "etcd" },
+  ]}
+  steps={[
+    { from: "f", to: "k", label: "COUNTRY: NO", title: "파일을 읽는다", detail: "따옴표 없는 NO를 YAML 1.1 규칙으로 읽는다. 불리언 목록에 있어서 false가 된다." },
+    { from: "k", to: "k", label: "YAML → JSON", title: "JSON으로 바꾼다", detail: "타입을 정한 뒤 JSON으로 직렬화한다. 이 순간 원래 글자 NO는 사라진다. --dry-run=client는 여기서 끝나 통과한다.", payload: "{\"data\":{\"COUNTRY\":false}}" },
+    { from: "k", to: "a", label: "POST configmaps", title: "서버로 보낸다", detail: "서버는 YAML을 보지 못한다. 받는 건 false가 든 JSON이다." },
+    { from: "a", to: "a", label: "strict decode", title: "구조체에 넣다가 실패한다", detail: "ConfigMap.data는 map[string]string이라 bool을 넣을 수 없다. 400 BadRequest로 돌려보낸다. etcd에는 아무것도 쓰지 않는다.", payload: "json: cannot unmarshal bool into Go struct field ConfigMap.data of type string" },
+    { from: "a", to: "k", label: "400", title: "오류를 받는다", detail: "따옴표를 붙여 \"NO\"로 쓰면 문자열 그대로 JSON에 실려 저장된다." },
+  ]}
+/>
+
+같은 일이 환경 변수에서 가장 자주 난다. `env[].value`도 문자열만 받는다.
+
+```bash
+# env의 value에 숫자 3을 따옴표 없이 넣은 Pod
+kubectl apply --dry-run=server -f env.yaml
+```
+
+```text
+Error from server (BadRequest): error when creating "env.yaml": Pod in version "v1" cannot be handled as a Pod: json: cannot unmarshal number into Go struct field EnvVar.spec.containers.env.value of type string
+```
+
+오류를 내 주면 그나마 낫다. 위험한 건 문자열을 받는 칸이 아니라 아무 타입이나 받는 칸이다. CRD의 자유 형식 필드, Helm values, 애플리케이션이 직접 읽는 설정 파일에서는 `NO`가 조용히 `false`로 들어가고 아무 오류도 나지 않는다. 앱이 "국가 코드가 비어 있음"으로 처리하고 넘어가면 원인을 찾기까지 오래 걸린다.
+
+파이썬으로 GitHub Actions 워크플로를 읽는 스크립트도 같은 일을 겪는다.
+
+```bash
+# on: 키 자체가 True로 바뀐다
+python3 -c 'import yaml; print(yaml.safe_load("on:\n  push:\n    branches: [main]\n"))'
+```
+
+```text
+{True: {'push': {'branches': ['main']}}}
+```
+
+해결은 단순하다. 문자열이어야 하는 값은 따옴표로 감싼다. 특히 `yes`/`no`/`on`/`off`/`y`/`n`, 0으로 시작하는 숫자, 버전 번호, 우편번호와 전화번호, 숫자로만 된 ID와 해시, 콜론이 든 시각이 그렇다. kubectl이 출력하는 YAML이 `COUNTRY: "NO"`처럼 알아서 따옴표를 붙이는 것도 같은 이유다.
+
+## 8진수가 오히려 필요한 곳
+
+반대로 쿠버네티스가 8진수를 기대하는 칸도 있다. 볼륨의 파일 권한 `defaultMode`와 `items[].mode`다. 값이 정수라서, 리눅스 권한처럼 쓰려면 YAML의 8진수 규칙을 빌려야 한다. 네 가지로 써 봤다.
+
+```bash
+# defaultMode를 0644, 644, "0644", 0o644로 바꿔 가며 서버에 넣고, 저장된 값을 찍는다
+kubectl apply --dry-run=server -f mode.yaml -o jsonpath='{.spec.volumes[0].configMap.defaultMode}'
+```
+
+```text
+== defaultMode: 0644
+420
+== defaultMode: 644
+The Pod "mode-test" is invalid: spec.volumes[0].configMap.defaultMode: Invalid value: 644: must be a number between 0 and 0777 (octal), both inclusive
+== defaultMode: "0644"
+Error from server (BadRequest): error when creating "mode.yaml": Pod in version "v1" cannot be handled as a Pod: json: cannot unmarshal string into Go struct field ConfigMapVolumeSource.spec.volumes.configMap.defaultMode
+== defaultMode: 0o644
+420
+```
+
+`0644`는 8진수로 읽혀 10진수 420으로 저장된다. `kubectl get -o yaml`로 다시 보면 420이 나와서 처음 보면 놀란다. `644`라고 쓰면 10진수 644가 되고, 0777(511)을 넘어서 검증에 걸린다. 이건 걸려서 다행인 경우다. 600이라고 썼다면 10진수 600은 511보다 커서 걸리지만, `400`(8진수 0620)처럼 범위 안에 드는 숫자는 조용히 엉뚱한 권한이 된다. 따옴표를 붙이면 문자열이라 타입 오류다. JSON 매니페스트에는 8진수 문법이 없으니 420을 직접 써야 한다.
+
+go-yaml v2가 YAML 1.2식 `0o644`도 받아 주는 건 확인했지만, 다른 도구가 YAML 1.1로만 읽으면 문자열로 본다. 팀 안에서는 `0644` 하나로 맞추는 편이 덜 헷갈린다.
+
+## 직접 해 보기: 같은 글자, 다른 값
+
+아래 함수는 따옴표 없는 값 하나와 YAML 버전을 받아 파서가 돌려줄 값을 낸다. 불리언, null, 8진수와 16진수, 정수, 실수만 다룬다. 위의 실제 출력과 같은 결과가 나오게 채워 본다.
+
+<CodePlayground
+  caption="YAML 1.1과 1.2의 평문 값 해석"
+  functionName="resolveScalar"
+  initialCode={`function resolveScalar(text, version) {
+  // version은 "1.1" 또는 "1.2"
+  // 1) ~, null, 빈 문자열 → null
+  // 2) 불리언: 1.1은 yes/no/on/off/y/n/true/false (대소문자 변형), 1.2는 true/false만
+  // 3) 8진수: 1.1은 0으로 시작(0755), 1.2는 0o로 시작(0o755)
+  // 4) 16진수 0x.., 정수 (1.1은 _ 허용), 실수 1.10
+  // 그 밖은 문자열
+  return text;
+}`}
+  solution={`function resolveScalar(text, version) {
+  const v11 = version === "1.1";
+  if (/^(~|null|Null|NULL)?$/.test(text)) return null;
+  const bool11 = /^(y|Y|yes|Yes|YES|n|N|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$/;
+  const bool12 = /^(true|True|TRUE|false|False|FALSE)$/;
+  if ((v11 ? bool11 : bool12).test(text)) return /^(y|Y|yes|Yes|YES|true|True|TRUE|on|On|ON)$/.test(text);
+  if (v11 && /^[-+]?0[0-7_]+$/.test(text)) return parseInt(text.replace(/_/g, ""), 8);
+  if (!v11 && /^0o[0-7]+$/.test(text)) return parseInt(text.slice(2), 8);
+  if (/^0x[0-9a-fA-F]+$/.test(text)) return parseInt(text, 16);
+  if (v11 && /^[-+]?[0-9][0-9_]*$/.test(text)) return Number(text.replace(/_/g, ""));
+  if (!v11 && /^[-+]?[0-9]+$/.test(text)) return Number(text);
+  if (/^[-+]?([0-9]+\\.[0-9]*|\\.[0-9]+)$/.test(text)) return Number(text);
+  return text;
+}`}
+  tests={[
+    { label: "NO (1.1)", args: ["NO", "1.1"], expected: false },
+    { label: "NO (1.2)", args: ["NO", "1.2"], expected: "NO" },
+    { label: "on (1.2)", args: ["on", "1.2"], expected: "on" },
+    { label: "0755 (1.1)", args: ["0755", "1.1"], expected: 493 },
+    { label: "0755 (1.2)", args: ["0755", "1.2"], expected: 755 },
+    { label: "0o755 (1.2)", args: ["0o755", "1.2"], expected: 493 },
+    { label: "1.10 (1.2)", args: ["1.10", "1.2"], expected: 1.1 },
+    { label: "1_000 (1.1)", args: ["1_000", "1.1"], expected: 1000 },
+    { label: "1_000 (1.2)", args: ["1_000", "1.2"], expected: "1_000" },
+    { label: "~", args: ["~", "1.2"], expected: null },
+    { label: "nginx:1.27", args: ["nginx:1.27", "1.1"], expected: "nginx:1.27" },
+  ]}
+/>
+
+`nginx:1.27`이 문자열로 남는 건 콜론 뒤에 공백이 없어서다. YAML에서 키와 값을 가르는 건 `: `(콜론과 공백)이다. 그래서 `image: nginx:1.27`은 괜찮지만, `command`에 `echo start: ok`를 평문으로 쓰면 콜론 공백 때문에 맵으로 읽혀 오류가 난다. 그런 값은 따옴표로 감싼다.
+
+## 여러 줄 문자열: 막대와 꺾쇠
+
+ConfigMap에 설정 파일이나 스크립트를 통째로 넣을 때는 블록 스칼라를 쓴다. `|`(literal)는 줄바꿈을 그대로 두고, `>`(folded)는 줄바꿈을 공백으로 접는다. 뒤에 붙는 기호가 끝의 줄바꿈을 정한다. 아무것도 없으면 마지막 줄바꿈 하나만 남기고(clip), `-`는 다 지우고(strip), `+`는 빈 줄까지 다 남긴다(keep). 숫자는 들여쓰기를 직접 지정한다.
+
+```yaml
+literal: |
+  line one
+  line two
+folded: >
+  line one
+  line two
+strip: |-
+  no trailing newline
+keep: |+
+  keep all
+
+indented: |2
+    four spaces kept as two
+```
+
+```bash
+# PyYAML로 읽어 JSON으로 찍으면 줄바꿈이 \n으로 보인다
+python3 -c 'import yaml,json; print(json.dumps(yaml.safe_load(open("multi.yaml")), indent=1))'
+```
+
+```text
+{
+ "literal": "line one\nline two\n",
+ "folded": "line one line two\n",
+ "strip": "no trailing newline",
+ "keep": "keep all\n\n",
+ "indented": "  four spaces kept as two\n"
+}
+```
+
+블록 스칼라의 머리 한 줄에 들어가는 기호를 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="블록 스칼라 머리. 스타일, 들여쓰기, 끝 처리 세 가지를 한 줄에 정한다."
+  separator=" "
+  joiner=""
+  base="script:"
+  params={[
+    { key: "style", display: "|", title: "스타일", description: "|는 줄바꿈을 그대로 둔다. >는 줄바꿈을 공백으로 접고, 빈 줄과 더 들여쓴 줄에서만 줄을 바꾼다. 셸 스크립트, nginx 설정, PEM 인증서는 반드시 |로 쓴다.", required: true },
+    { key: "indent", display: "2", title: "들여쓰기 지정", description: "내용의 첫 줄이 공백으로 시작할 때 쓴다. 없으면 첫 줄의 들여쓰기를 기준으로 삼아서, 첫 줄 앞 공백이 사라지거나 오류가 난다." },
+    { key: "chomp", display: "-", title: "끝 처리", description: "없으면 마지막 줄바꿈 하나만 남긴다. -는 전부 지우고 +는 빈 줄까지 남긴다. 토큰이나 비밀번호를 넣을 때 끝의 \\n이 값에 붙어 인증이 실패하는 일이 흔하다." },
+  ]}
+/>
+
+현장에서 자주 보는 실수 두 가지가 있다. 하나는 스크립트를 `>`로 넣는 것이다. 줄이 전부 한 줄로 접혀서 `#!/bin/sh` 뒤의 명령이 주석이 되거나 `if`와 `then`이 붙어 버린다. 다른 하나는 값 끝의 줄바꿈이다. `|`로 넣은 토큰은 끝에 `\n`이 붙는다. 앱이 그 값을 그대로 헤더에 넣으면 인증이 실패한다. 한 줄짜리 값이면 블록 스칼라 대신 따옴표 문자열을 쓰거나 `|-`를 쓴다. Secret의 `data`에 base64로 넣을 때도 `echo` 대신 `echo -n`이나 `printf`로 인코딩해야 같은 일을 피한다([Secret 다루기](/posts/k8s-secret)).
+
+## 앵커와 별칭으로 같은 블록을 재사용한다
+
+`&이름`으로 노드에 이름을 붙이고(앵커), `*이름`으로 그 자리에 같은 내용을 넣는다(별칭). `<<: *이름`은 맵을 펼쳐 넣고 키를 덧붙이는 병합 키다. Deployment에서 라벨과 리소스 블록을 반복하지 않게 써 봤다.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels: &labels
+    app: web
+    tier: front
+spec:
+  replicas: 2
+  selector:
+    matchLabels: *labels
+  template:
+    metadata:
+      labels:
+        <<: *labels
+        version: v2
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          resources: &res
+            requests: { cpu: 100m, memory: 128Mi }
+        - name: sidecar
+          image: busybox:1.36
+          command: ["sleep", "infinity"]
+          resources: *res
+```
+
+```bash
+# 서버가 받은 selector, 템플릿 라벨, 두 번째 컨테이너의 리소스를 찍는다
+kubectl apply --dry-run=server -f anchors.yaml \
+  -o jsonpath='{.spec.selector.matchLabels}{"\n"}{.spec.template.metadata.labels}{"\n"}{.spec.template.spec.containers[1].resources}{"\n"}'
+```
+
+```text
+{"app":"web","tier":"front"}
+{"app":"web","tier":"front","version":"v2"}
+{"requests":{"cpu":"100m","memory":"128Mi"}}
+```
+
+kubectl은 앵커를 풀어서 보낸다. 서버는 앵커가 있었는지도 모른다. 그래서 `kubectl get -o yaml`로 다시 받으면 앵커가 사라지고 펼쳐진 내용만 나온다. 아래 그림은 파서가 앵커를 표에 적어 두었다가 별칭 자리에 꺼내 넣는 과정이다.
+
+<AlgoTrace
+  caption="앵커는 표에 적고, 별칭은 표에서 꺼낸다"
+  cells={["&labels", "*labels", "<<: *labels", "&res", "*res"]}
+  memoryLabel="앵커 표"
+  steps={[
+    { pointer: 0, memory: ["labels={app,tier}"], caption: "metadata.labels에 &labels를 붙였다. 이 맵을 labels라는 이름으로 적어 둔다." },
+    { pointer: 1, memory: ["labels={app,tier}"], caption: "selector.matchLabels 자리에 같은 맵을 그대로 넣는다." },
+    { pointer: 2, memory: ["labels={app,tier}"], found: [2], caption: "병합 키는 맵을 펼친 뒤 version: v2를 덧붙인다. 같은 키가 있으면 직접 쓴 쪽이 이긴다." },
+    { pointer: 3, memory: ["labels={app,tier}", "res={requests}"], caption: "첫 컨테이너의 resources를 res로 적는다." },
+    { pointer: 4, memory: ["labels={app,tier}", "res={requests}"], found: [4], caption: "사이드카에 같은 리소스를 넣는다. 앵커는 정의가 별칭보다 위에 있어야 하고, 같은 파일(같은 문서) 안에서만 통한다." },
+  ]}
+/>
+
+함정이 몇 개 있다. 병합 키 `<<`는 YAML 1.1의 부가 타입이라 1.2 파서는 기본으로 모른다. Node `yaml` 패키지에 같은 파일을 넣으면 `{"<<":{"app":"web","tier":"front"},"version":"v2"}`처럼 `<<`라는 키가 그대로 생기고, `merge: true` 옵션을 줘야 펼친다. 다음으로 앵커는 문서 하나 안에서만 통해서 `---` 너머의 앵커는 못 쓴다. 마지막으로 별칭은 같은 객체를 가리키는 참조라, 별칭을 수천 번 겹쳐 부르는 파일 하나로 파서의 메모리를 터뜨릴 수 있다(billion laughs). go-yaml v2는 2019년 패치(2.2.8)부터 별칭 확장 수를 제한한다. 남이 준 YAML을 파싱하는 서비스라면 라이브러리의 별칭 한도 옵션을 켠다.
+
+앵커는 읽는 사람에게도 비용이다. 라벨 하나를 바꾸려다 selector까지 바뀌면 Deployment의 selector는 바꿀 수 없어서 적용이 실패한다. 환경별 반복을 줄이려는 거라면 앵커보다 Kustomize나 Helm이 낫다([Helm은 무엇을 풀어 주나](/posts/helm-basics)).
+
+## 대시 세 개로 문서를 나눈다
+
+`---`는 문서를 나눈다. 한 파일에 Namespace와 ConfigMap을 함께 두는 게 흔하다. `...`는 문서의 끝을 표시하는데 거의 쓰지 않는다.
+
+```bash
+# 문서 세 개(가운데는 주석만 있는 빈 문서)를 kubectl과 PyYAML로 읽는다
+kubectl apply --dry-run=client -f multi-doc.yaml
+python3 -c 'import yaml; yaml.safe_load(open("multi-doc.yaml"))'
+python3 -c 'import yaml; print([d and d["kind"] for d in yaml.safe_load_all(open("multi-doc.yaml"))])'
+```
+
+```text
+namespace/shop created (dry run)
+configmap/shop-config created (dry run)
+yaml.composer.ComposerError: expected a single document in the stream
+  in "multi-doc.yaml", line 1, column 1
+but found another document
+  in "multi-doc.yaml", line 5, column 1
+['Namespace', None, 'ConfigMap']
+```
+
+kubectl은 빈 문서를 건너뛴다. 파이썬은 `safe_load`가 문서 하나만 받아서 실패하고, `safe_load_all`을 써야 한다. 빈 문서는 `None`으로 나온다. 스크립트로 매니페스트를 다룰 때 `None`을 거르지 않아서 `TypeError`가 나는 경우가 많다.
+
+더 위험한 건 `---`를 빠뜨린 경우다. 두 리소스를 붙여 쓰면 오류 없이 하나만 적용된다.
+
+```bash
+# Namespace와 ConfigMap 사이에 ---를 빠뜨린 파일
+kubectl apply --dry-run=client -f glued.yaml
+```
+
+```text
+configmap/shop-config created (dry run)
+```
+
+두 문서가 맵 하나가 되면서 `apiVersion`, `kind`, `metadata` 키가 두 번씩 나왔고, 뒤의 값이 앞의 값을 덮었다. Namespace는 흔적도 없이 사라졌다. 같은 키가 두 번 나오는 건 YAML 명세상 오류인데, kubectl의 변환 단계는 이를 조용히 받아들인다. 서버 dry-run도 이미 JSON으로 바뀐 뒤라 잡지 못한다.
+
+```bash
+# data에 k를 두 번 쓴 ConfigMap. 서버는 어느 값을 저장할까
+kubectl apply --dry-run=server -f dup.yaml -o jsonpath='{.data}'
+```
+
+```text
+{"k":"two"}
+```
+
+Node `yaml` 패키지는 같은 파일에 `YAMLSemanticError: Map keys must be unique; "k" is repeated`를 낸다. 이런 실수는 kubectl이 아니라 린터로 잡는다.
+
+```bash
+# yamllint로 세 파일을 검사한다 (pip install yamllint)
+yamllint cm-norway.yaml glued.yaml dup.yaml
+```
+
+```text
+cm-norway.yaml
+  1:1       warning  missing document start "---"  (document-start)
+  6:12      warning  truthy value should be one of [false, true]  (truthy)
+  7:14      warning  truthy value should be one of [false, true]  (truthy)
+
+glued.yaml
+  1:1       warning  missing document start "---"  (document-start)
+  5:1       error    duplication of key "apiVersion" in mapping  (key-duplicates)
+  6:1       error    duplication of key "kind" in mapping  (key-duplicates)
+  7:1       error    duplication of key "metadata" in mapping  (key-duplicates)
+
+dup.yaml
+  1:1       warning  missing document start "---"  (document-start)
+  7:3       error    duplication of key "k" in mapping  (key-duplicates)
+```
+
+`truthy` 규칙이 노르웨이 문제를, `key-duplicates`가 붙어 버린 문서를 잡았다. 흥미롭게도 6번째 줄 `COUNTRY: NO`와 7번째 줄 `FEATURE_X: on`은 잡았지만 `VERSION: 1.10`은 정상 YAML이라 경고가 없다. 타입이 의도와 다른지는 린터도 모른다. `document-start` 경고가 귀찮으면 `.yamllint`에서 끈다. CI에서는 yamllint에 이어 kubeconform 같은 스키마 검사기나 `kubectl apply --dry-run=server`를 함께 돌리면 단계별로 걸러진다.
+
+## 들여쓰기 오류는 한 줄 앞을 가리킨다
+
+YAML은 들여쓰기로 구조를 만든다. 들여쓰기에는 공백만 쓸 수 있고 탭은 안 된다. 깊이는 몇 칸이든 같은 층끼리만 맞으면 되지만, 한 칸이 어긋나면 구조가 바뀌거나 오류가 난다. kubectl이 내는 오류를 모아 봤다.
+
+```bash
+# 각각 들여쓰기를 한 곳씩 틀린 파일들
+kubectl apply --dry-run=client -f bad1.yaml   # namespace를 한 칸 더 들여씀
+kubectl apply --dry-run=client -f bad2.yaml   # 들여쓰기에 탭
+kubectl apply --dry-run=client -f bad4.yaml   # ports를 한 칸 덜 들여씀
+kubectl apply --dry-run=client -f bad5.yaml   # args: 뒤 같은 줄에 - 항목
+```
+
+```text
+error: error parsing bad1.yaml: error converting YAML to JSON: yaml: line 5: mapping values are not allowed in this context
+error: error parsing bad2.yaml: error converting YAML to JSON: yaml: line 6: found character that cannot start any token
+error: error parsing bad4.yaml: error converting YAML to JSON: yaml: line 8: did not find expected '-' indicator
+error: error parsing bad5.yaml: error converting YAML to JSON: yaml: line 13: block sequence entries are not allowed in this context
+```
+
+메시지를 해석하면 이렇다. "mapping values are not allowed"는 맵이 올 수 없는 자리에 `키: 값`이 나왔다는 뜻이다. 들여쓰기가 앞 줄의 값에 이어지는 것처럼 보일 때 난다. "found character that cannot start any token"은 탭이다. "did not find expected '-' indicator"는 목록 항목을 기대한 자리에 다른 들여쓰기가 왔다는 뜻이다. bad4에서 틀린 줄은 9번째 `ports:`인데 오류는 8번째 줄을 가리킨다. 파서가 목록 항목을 읽던 위치를 알려 주기 때문이다. 줄 번호가 가리키는 곳에 문제가 없으면 한두 줄 아래를 본다.
+
+bad4를 줄 단위로 따라가면 파서의 머릿속이 보인다.
+
+<AlgoTrace
+  caption="bad4.yaml: containers 목록 안에서 ports가 한 칸 덜 들여써졌다"
+  cells={["containers:", "- name: web", "image: …", " ports:", "- containerPort"]}
+  memoryLabel="들여쓰기 스택"
+  steps={[
+    { pointer: 0, memory: ["0 spec", "2 containers"], caption: "spec 아래 2칸에 containers 키. 값으로 목록이 온다." },
+    { pointer: 1, memory: ["0 spec", "2 containers", "4 - 항목"], caption: "4칸의 -가 목록 항목을 연다. 항목 안의 키는 6칸에 있다." },
+    { pointer: 2, memory: ["0 spec", "2 containers", "4 - 항목", "6 name·image"], caption: "image가 6칸이다. 같은 항목의 키로 들어간다." },
+    { pointer: 3, memory: ["0 spec", "2 containers", "4 - 항목", "5 ?"], found: [3], caption: "ports가 5칸이다. 6칸 키도 아니고 4칸의 새 - 항목도 아니다. 파서는 -를 기대하던 자리라서 그 말을 한다." },
+    { pointer: 4, memory: ["오류: line 8"], caption: "보고는 마지막으로 제대로 읽은 항목 근처(8번 줄)를 가리킨다." },
+  ]}
+/>
+
+오류가 안 나는 들여쓰기 실수가 더 무섭다. `labels:` 아래의 `app: web`을 `labels`와 같은 깊이로 쓰면 `labels`는 빈 값(null)이 되고, `app`은 `metadata`의 키가 된다. 문법은 맞아서 kubectl을 그대로 통과한다.
+
+```bash
+# labels 밑의 app을 들여쓰지 않은 ConfigMap을 서버에 보낸다
+kubectl apply --dry-run=server -f bad3.yaml
+kubectl apply --dry-run=server --validate=warn -f bad3.yaml
+```
+
+```text
+Error from server (BadRequest): error when creating "bad3.yaml": ConfigMap in version "v1" cannot be handled as a ConfigMap: strict decoding error: unknown field "metadata.app"
+Warning: unknown field "metadata.app"
+configmap/a created (server dry run)
+```
+
+서버가 모르는 필드를 거절했다. 서버 측 필드 검증은 1.27에 GA가 되었고, 그 무렵의 kubectl부터 기본값이 `--validate=strict`다. `--validate=warn`이나 `false`로 낮추면 경고만 내거나 그냥 지나가서, 라벨 없는 Deployment가 만들어지고 Service가 Pod를 못 찾는다. 오래된 CI 스크립트에 `--validate=false`가 남아 있다면 지운다.
+
+## JSON은 YAML이다, 거의
+
+YAML 1.2는 JSON을 거의 그대로 품도록 만들어졌다. `{ cpu: 100m }` 같은 흐름(flow) 문법이 JSON의 중괄호와 대괄호다. 그래서 kubectl은 `.json` 파일도 그냥 받고, YAML 파일 중간에 `command: ["sleep", "infinity"]`처럼 JSON식 배열을 섞어도 된다. Helm 템플릿에서 `toJson`으로 한 줄짜리 값을 찍어 넣어도 YAML로 읽히는 것도 이 덕분이다.
+
+아래 그림은 세 문법의 관계다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="JSON은 YAML 1.2 안에 들어간다. 쿠버네티스 도구는 1.1 규칙으로 읽고, 서버는 JSON만 받는다."
+  nodes={[
+    { id: "json", label: "JSON", sub: "탭·중괄호 OK", x: 80, y: 60, w: 110 },
+    { id: "y12", label: "YAML 1.2", sub: "Node yaml 기본", x: 220, y: 60, w: 120 },
+    { id: "y11", label: "YAML 1.1", sub: "PyYAML · go-yaml v2", x: 220, y: 160, w: 150 },
+    { id: "kubectl", label: "kubectl", sub: "YAML → JSON", x: 80, y: 220, w: 110 },
+    { id: "api", label: "API 서버", sub: "JSON · protobuf", x: 330, y: 220, w: 110 },
+  ]}
+  edges={[
+    { from: "json", to: "y12", label: "부분집합" },
+    { from: "y12", to: "y11", label: "규칙이 다름", dashed: true, arrow: "both" },
+    { from: "y11", to: "kubectl", label: "읽는 규칙" },
+    { from: "kubectl", to: "api", label: "JSON 전송" },
+  ]}
+/>
+
+"거의"인 이유를 실제로 보면 이렇다. 탭으로 들여쓴 JSON 파일을 두 파서에 넣었다.
+
+```bash
+# 탭으로 들여쓴 JSON ConfigMap을 kubectl, PyYAML, Node yaml에 각각 넣는다
+kubectl apply --dry-run=server -f cm.json
+python3 -c 'import yaml; print(yaml.safe_load(open("cm.json")))'
+node -e 'const Y=require("yaml"); console.log(JSON.stringify(Y.parse(require("fs").readFileSync("cm.json","utf8"))))'
+```
+
+```text
+configmap/from-json created (server dry run)
+found character '\t' that cannot start any token
+  in "cm.json", line 2, column 1
+{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"from-json"},"data":{"COUNTRY":"NO"}}
+```
+
+kubectl은 파일이 `{`로 시작하면 JSON 해석기로 바로 읽어서 문제가 없다. PyYAML은 1.1 규칙이라 흐름 문법 안의 탭도 거부한다. 1.2를 따르는 Node `yaml`은 읽는다. JSON 안의 문자열은 늘 따옴표가 있으니 노르웨이 문제도 없다. 기계가 만들고 기계가 읽는 매니페스트라면 JSON으로 내보내는 것도 방법이다. `kubectl create configmap ... --dry-run=client -o json`은 같은 리소스를 JSON으로 찍어 준다. 사람이 고치는 파일은 주석을 쓸 수 있는 YAML이 낫다.
+
+## 매니페스트를 쓰기 전에 정해 둘 것
+
+지금까지 본 함정은 대부분 YAML 문법 자체보다 "누가 어떤 규칙으로 읽나"에서 생겼다. 팀에서 정해 두면 사고가 줄어드는 것들이다.
+
+- 문자열 칸의 값은 기본으로 따옴표를 쓴다. 특히 ConfigMap `data`, `env[].value`, 라벨과 어노테이션 값이다. 라벨 값 `"true"`, 어노테이션 값 `"8080"`처럼 숫자나 불리언처럼 보이는 것도 문자열 칸이다.
+- 파일 권한은 `0644`처럼 0을 붙인 8진수로 쓰고, `get -o yaml`에서 420이 보여도 정상이라는 걸 알아 둔다.
+- 스크립트와 설정 파일은 `|`, 한 줄 비밀 값은 따옴표 문자열이나 `|-`.
+- 편집기에 탭 대신 공백 2칸을 강제하는 `.editorconfig`를 둔다.
+- CI에서 yamllint(truthy, key-duplicates) → 스키마 검사 → `kubectl apply --dry-run=server` 순서로 거른다. client dry-run은 타입을 검사하지 않는다.
+
+증상에서 거꾸로 찾아갈 때는 이렇게 본다. `cannot unmarshal bool/number into ... of type string`이면 따옴표 빠진 값이다. 오류 줄 번호에 문제가 없으면 위아래 줄의 들여쓰기를 본다. 리소스가 하나 덜 만들어졌으면 `---`가 빠졌는지 본다. 라벨이 없는 리소스가 생겼으면 `--validate` 옵션과 들여쓰기를 함께 본다.
+
+## 글자 모양이 타입을 정한다
+
+YAML은 따옴표 없는 값을 글자 모양으로 판단하고, 쿠버네티스 도구는 그 판단을 YAML 1.1 규칙으로 한 뒤 JSON으로 바꿔 서버에 보낸다. 서버는 바뀐 결과만 본다. 그래서 `NO`와 `1.10`과 `0755`는 쓴 사람의 뜻과 다르게 도착하고, 빠진 `---`와 겹친 키는 오류 없이 사라진다. 문자열은 따옴표로, 여러 줄은 `|`로 쓰고, 린터와 server dry-run으로 거르면 대부분 막힌다. 이렇게 만든 매니페스트를 서버가 어떻게 받아 저장하는지는 [kubectl apply와 서버 측 적용](/posts/kubectl-apply-ssa)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### YAML의 노르웨이 문제가 무엇인가요?
+
+YAML 1.1은 따옴표 없는 `yes`, `no`, `on`, `off` 같은 말을 불리언으로 읽어서, 국가 코드 `NO`가 false가 되는 현상이다. YAML 1.2는 불리언을 true와 false로 줄였지만 PyYAML과 kubectl이 쓰는 go-yaml v2는 여전히 1.1 규칙을 쓴다. 문자열 칸에는 따옴표를 붙이고, yamllint의 truthy 규칙으로 잡는다.
+
+### --dry-run=client는 통과했는데 실제 적용에서 타입 오류가 납니다. 왜 그런가요?
+
+kubectl은 YAML을 JSON으로 바꾸는 데까지만 하고, 그 JSON을 Go 구조체에 넣으며 타입을 검사하는 건 API 서버다. client dry-run은 서버에 가지 않아서 `ConfigMap.data`에 bool이 들어 있어도 모른다. CI에서는 `--dry-run=server`를 써야 서버의 디코딩과 검증, 어드미션까지 미리 돌려 볼 수 있다.
+
+### defaultMode에 0644를 썼는데 get -o yaml에는 420이 나옵니다. 잘못된 건가요?
+
+정상이다. YAML 1.1에서 0으로 시작하는 숫자는 8진수라 0644가 10진수 420으로 저장되고, 출력은 10진수로 나온다. 644로 쓰면 10진수 644가 되어 0777 범위를 넘으니 검증에 걸리고, 따옴표를 붙이면 문자열이라 타입 오류다. JSON 매니페스트에는 8진수가 없어서 420을 직접 쓴다.
+
+### |와 >는 어떻게 다르고 언제 무엇을 쓰나요?
+
+`|`는 줄바꿈을 그대로 두고 `>`는 줄바꿈을 공백으로 접는다. 셸 스크립트나 nginx 설정, 인증서처럼 줄이 의미 있는 내용은 `|`로 쓴다. 뒤에 `-`를 붙이면 끝의 줄바꿈까지 지워서, 토큰 같은 한 줄 값에 `\n`이 붙어 인증이 실패하는 일을 막는다.
+
+### 앵커와 병합 키를 쿠버네티스 매니페스트에 써도 되나요?
+
+kubectl은 go-yaml v2로 읽으니 앵커, 별칭, 병합 키 `<<`가 모두 풀린 채로 서버에 간다. 다만 병합 키는 YAML 1.1 부가 기능이라 1.2 파서는 기본으로 모르고, 앵커는 `---` 너머로 통하지 않으며, `get -o yaml`로 다시 받으면 사라진다. 환경별 반복을 줄이는 목적이라면 Kustomize나 Helm이 더 관리하기 쉽다.
+
+### 한 파일에 리소스 두 개를 넣었는데 하나만 만들어졌습니다. 무엇을 보나요?
+
+두 리소스 사이의 `---`가 빠졌는지 본다. 빠지면 두 문서가 맵 하나가 되어 `apiVersion`, `kind`, `metadata`가 중복되고, kubectl의 변환이 뒤의 값으로 앞을 조용히 덮는다. 서버는 이미 합쳐진 JSON만 받아서 잡지 못하니, yamllint의 key-duplicates 규칙을 CI에 넣는다.
+
+### YAML 오류 메시지의 줄 번호가 엉뚱한 곳을 가리킵니다. 어떻게 읽나요?
+
+파서는 구조가 어긋났다고 판단한 시점에 읽고 있던 위치를 알려 준다. 목록 항목 안의 들여쓰기가 틀리면 그 항목을 시작한 앞 줄이 찍히기도 한다. "mapping values are not allowed"는 맵이 올 수 없는 자리의 `키: 값`, "cannot start any token"은 탭, "did not find expected '-'"는 목록 들여쓰기 문제라서, 메시지 종류로 먼저 범위를 좁히고 그 줄의 위아래를 본다.
+
+### JSON은 YAML의 부분집합인가요?
+
+YAML 1.2는 JSON을 거의 그대로 읽도록 설계되어 대부분의 JSON 문서는 유효한 YAML이다. 하지만 1.1 파서인 PyYAML은 흐름 문법 안의 탭도 거부하고, 중복 키 처리처럼 세부가 다르다. kubectl은 `{`로 시작하는 파일을 JSON으로 바로 읽어서 이런 차이를 피한다.

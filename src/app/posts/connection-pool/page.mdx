@@ -1,0 +1,557 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("connection-pool");
+
+트래픽이 늘어 API 파드를 10개에서 30개로 늘렸다. 응답이 빨라지기는커녕 에러가 쏟아진다. 앱 로그에는 `timeout exceeded when trying to connect`가, DB 로그에는 `FATAL:  sorry, too many clients already`가 찍힌다. DB의 CPU는 40%로 한가하다. 서버를 늘렸는데 DB로 가는 문이 막혔다.
+
+커넥션 풀이 무엇이고 PgBouncer를 왜 두는지는 [쿼리 밖의 비용 글](/posts/sql-batch-timeout-pool)과 [PostgreSQL 운영 글](/posts/postgres-operations)에서 짧게 다뤘다. 이 글은 그 다음을 본다. 연결 하나가 실제로 얼마나 비싼지 재 보고, 풀 크기를 어떤 숫자로 정하는지, 풀이 바닥나거나 새면 어떤 증상이 나오는지, PgBouncer transaction 모드에서 무엇이 깨지는지를 직접 돌려 본다. 환경은 Ubuntu 24.04 컨테이너(4코어), PostgreSQL 16.15, PgBouncer 1.22.0, Node.js 22와 node-postgres 8.23이다. 다른 작업과 CPU를 나눠 쓰는 컨테이너라 처리량 숫자는 실행마다 10~20% 흔들렸다. 숫자의 크기보다 모양을 본다.
+
+## 연결 하나를 여는 데 드는 것
+
+PostgreSQL은 연결마다 운영체제 프로세스를 하나씩 띄운다. 클라이언트가 접속하면 postmaster가 자식 프로세스(backend)를 fork하고, 그 자식이 TLS와 인증을 처리한 뒤 카탈로그 캐시를 채우며 일할 준비를 한다. 아래 그림에서 다음을 누르면 그 과정을 따라간다.
+
+<SequenceDiagram
+  caption="psql이 PostgreSQL에 붙을 때 오가는 것"
+  actors={[
+    { id: "app", label: "앱 (libpq)" },
+    { id: "pm", label: "postmaster" },
+    { id: "be", label: "backend" },
+  ]}
+  steps={[
+    { from: "app", to: "pm", label: "TCP SYN", title: "TCP 연결을 연다", detail: "같은 VPC 안이라도 왕복 한 번이 든다. 리전이 다르면 수십 ms다." },
+    { from: "pm", to: "be", label: "fork()", title: "연결마다 프로세스를 하나 만든다", detail: "postmaster는 연결을 받자마자 자식 프로세스를 띄워 넘긴다. 이후 일은 전부 이 backend가 한다." },
+    { from: "app", to: "be", label: "SSLRequest", title: "TLS를 협상한다", detail: "sslmode=prefer(libpq 기본)면 먼저 TLS를 요청한다. Ubuntu 패키지는 ssl=on이라 여기서 TLS 1.3 핸드셰이크가 붙는다." },
+    { from: "app", to: "be", label: "StartupMessage", title: "누구로, 어느 DB에 붙을지 알린다", detail: "user, database, application_name 같은 값을 보낸다. pg_hba.conf에서 인증 방법이 정해진다." },
+    { from: "be", to: "app", label: "SASL SCRAM", title: "비밀번호를 SCRAM으로 확인한다", detail: "scram-sha-256은 양쪽 모두 반복 해시(기본 4096번)를 계산한다. 의도적으로 느리게 만든 단계다." },
+    { from: "be", to: "be", label: "캐시 준비", title: "backend가 일할 준비를 한다", detail: "공유 메모리에 붙고, 쓰는 테이블의 카탈로그 정보를 프로세스 안 캐시에 읽어 온다." },
+    { from: "be", to: "app", label: "ReadyForQuery", title: "이제 첫 쿼리를 받을 수 있다", detail: "서버 버전, 인코딩 같은 ParameterStatus를 보내고 대기 상태가 된다." },
+  ]}
+/>
+
+얼마나 드는지 pgbench로 쟀다. `-C`는 트랜잭션마다 연결을 새로 맺는 옵션이다. 같은 기본키 조회(`-S`)를 연결 하나로 돌려 쓸 때와 매번 새로 맺을 때를 비교했다.
+
+```bash
+# 연결 하나를 계속 쓴다
+pgbench -h 127.0.0.1 -U b3_pool_user -S -c 1 -T 10 b3_pool
+# 트랜잭션마다 새로 연결한다 (TCP + TLS + SCRAM)
+pgbench -h 127.0.0.1 -U b3_pool_user -S -C -c 1 -T 10 b3_pool
+```
+
+```text
+latency average = 0.096 ms
+initial connection time = 10.356 ms
+tps = 10439.262446 (without initial connection time)
+
+latency average = 14.145 ms
+average connection time = 13.102 ms
+tps = 70.697978 (including reconnection times)
+```
+
+쿼리는 0.1ms인데 연결은 13ms다. 매번 연결하면 초당 처리량이 10439에서 70으로, 약 150분의 1이 된다. 같은 측정을 조건만 바꿔 반복하면 13ms가 어디서 나오는지 나뉜다.
+
+```text
+# TCP + TLS 1.3 + SCRAM (위와 같은 실행)
+average connection time = 13.102 ms
+# TCP + SCRAM, PGSSLMODE=disable
+average connection time = 8.521 ms
+# Unix 소켓 + peer 인증 (sudo -u postgres pgbench -S -C ...)
+average connection time = 3.124 ms
+```
+
+비밀번호도 TLS도 없이 fork와 초기화만 해도 3ms, SCRAM이 5ms 남짓, TLS가 4~5ms를 더했다. 이건 같은 머신 안이다. 앱과 DB가 다른 호스트면 TCP·TLS 왕복 시간이 그대로 더해진다. 그리고 이 비용의 상당 부분은 DB 서버의 CPU에서 나간다.
+
+연결이 쥐는 메모리도 봤다. 막 연결해 `pg_sleep`만 하는 backend와, `pgbench_accounts`(100만 줄)를 조인해 읽은 backend의 `/proc/<pid>/smaps_rollup`이다.
+
+```bash
+# backend의 실제 메모리. RSS가 아니라 Pss와 Private를 본다
+grep -E '^(Rss|Pss|Shared_Dirty|Private_Dirty):' /proc/16051/smaps_rollup
+```
+
+```text
+# pid 16051: pg_sleep만 실행 중
+Rss:               17220 kB
+Pss:                4645 kB
+Shared_Dirty:       7376 kB
+Private_Dirty:      1140 kB
+
+# pid 16050: 100만 줄 조인을 읽은 뒤
+Rss:              139692 kB
+Pss:               48281 kB
+Shared_Dirty:     127596 kB
+Private_Dirty:      2412 kB
+```
+
+두 번째 backend의 RSS는 140MB지만 그중 128MB는 `shared_buffers`(이 클러스터는 128MB) 페이지를 건드려서 잡힌 공유 메모리다. 모든 backend가 같은 공유 메모리를 세기 때문에 `ps`의 RSS를 더하면 실제보다 훨씬 크게 나온다. 연결 하나가 혼자 쓰는 메모리(Private)는 1~3MB 정도였다. 여기에 정렬이나 해시를 하면 `work_mem`만큼씩, 테이블과 인덱스를 많이 건드리면 카탈로그 캐시가 늘어난다. 연결 1000개면 쉬고만 있어도 수 GB이고, 동시에 정렬을 돌리면 `work_mem × 연결 수 × 노드 수`가 된다. [운영 글의 work_mem 계산](/posts/postgres-operations)이 연결 수에 비례하는 이유다.
+
+## 풀은 빌려주고 돌려받는 줄이다
+
+그래서 연결을 미리 열어 두고 돌려 쓴다. 앱의 풀은 연결 몇 개와 기다리는 줄 하나로 되어 있다. 요청은 `connect()`(Hikari는 `getConnection()`)로 연결을 빌리고, 다 쓰면 `release()`(`close()`)로 돌려준다. 빈 연결이 없으면 줄에서 기다리고, 정해진 시간이 지나도 못 받으면 에러가 난다.
+
+연결 5개짜리 풀에 0.4초씩 쥐는 요청 20개를 한꺼번에 넣었다. 기다리는 한도(`connectionTimeoutMillis`)는 1초다.
+
+```bash
+# max 5, connectionTimeoutMillis 1000, 요청마다 SELECT pg_sleep(0.4)
+node exhaust.js
+```
+
+```text
+[t=100ms] total=5 idle=0 waiting=15
+req  1 ok    wait    1ms  total 404ms
+req  5 ok    wait    0ms  total 403ms
+req  6 ok    wait  403ms  total 804ms
+req 10 ok    wait  404ms  total 806ms
+req 11 ok    wait  804ms  total 1205ms
+req 15 ok    wait  806ms  total 1207ms
+req 16 FAIL  after 1000ms  timeout exceeded when trying to connect
+req 20 FAIL  after 1000ms  timeout exceeded when trying to connect
+```
+
+(가운데 줄은 같은 모양이라 줄였다.) 아래 그림은 이 실행을 0.4초 단위로 나눠 본 것이다.
+
+<AlgoTrace
+  caption="연결 5개에 요청 20개: 다섯 개씩 들어가고, 1초를 넘게 기다린 다섯 개는 실패한다"
+  memoryLabel="연결을 쥔 요청 / 줄에서 기다리는 요청"
+  cells={["0ms", "100ms", "400ms", "800ms", "1000ms", "1200ms"]}
+  steps={[
+    { pointer: 0, memory: ["쥠 1~5"], caption: "요청 20개가 동시에 온다. 미리 데워 둔 연결 5개가 바로 1~5번에게 간다." },
+    { pointer: 1, memory: ["쥠 1~5", "대기 6~20"], caption: "나머지 15개는 줄에 선다. pool.waitingCount가 15다. DB는 5개만 일하고 있다." },
+    { pointer: 2, memory: ["쥠 6~10", "대기 11~20"], caption: "0.4초. 1~5번이 끝나 연결을 돌려준다. 줄 맨 앞 6~10번이 받는다. 이들은 0.4초를 줄에서 썼다." },
+    { pointer: 3, memory: ["쥠 11~15", "대기 16~20"], caption: "0.8초. 11~15번 차례. 이들의 응답 시간 1.2초 중 0.8초가 기다린 시간이다." },
+    { pointer: 4, memory: ["쥠 11~15"], caption: "1초. 16~20번이 기다리는 한도를 넘어 timeout exceeded when trying to connect로 실패한다. 쿼리는 한 번도 실행되지 않았다." },
+    { pointer: 5, found: [5], memory: [], caption: "1.2초. 11~15번이 끝난다. 줄이 비었다. 0.2초만 더 기다렸으면 16~20번도 성공했다." },
+  ]}
+/>
+
+이 실행에서 두 가지를 알 수 있다. 응답 시간은 쿼리 시간과 줄 선 시간의 합이다. 11~15번은 쿼리가 0.4초였는데 응답은 1.2초였다. 그리고 풀이 바닥난 증상은 DB 쪽에서 안 보인다. DB에는 연결 5개가 0.4초짜리 쿼리를 성실히 돌린 기록만 남는다. 느린 쿼리 로그를 아무리 봐도 1.2초는 나오지 않는다.
+
+기다리는 한도의 기본값은 라이브러리마다 다르다. node-postgres(`pg-pool` 3.14)의 `connectionTimeoutMillis` 기본값은 0인데, 0은 영원히 기다린다는 뜻이다. 풀이 바닥나면 에러도 없이 요청이 쌓이기만 한다. HikariCP는 `connectionTimeout` 30초가 기본이고, 넘으면 이런 예외를 던진다(소스의 메시지 형식).
+
+```text
+HikariPool-1 - Connection is not available, request timed out after 30000ms (total=10, active=10, idle=0, waiting=37)
+```
+
+30초는 대부분의 HTTP 요청 한도보다 길다. 사용자는 이미 떠났는데 서버는 30초 동안 줄을 서 있다. 연결을 기다리는 한도는 요청 전체의 타임아웃보다 확실히 짧게, 보통 수백 ms에서 몇 초로 둔다. 풀이 바닥났을 때 빨리 실패해야 [서킷 브레이커](/posts/circuit-breaker)나 부하 차단이 일할 수 있다.
+
+## 풀 크기는 얼마로
+
+풀 크기를 정하는 출발점은 리틀의 법칙이다. 동시에 쓰이는 연결 수(L)는 초당 요청 수(λ)에 요청 하나가 연결을 쥐는 시간(W)을 곱한 값이다. 연결을 "쥐는 시간"이지 요청 전체의 시간이 아니라는 점이 중요하다. 초당 2000건이 오고 연결을 2ms씩 쥐면 평균 4개면 된다. 같은 요청이 트랜잭션을 열어 둔 채 외부 결제 API를 200ms 기다린다면 400개가 필요하다.
+
+pgbench 결과로 이 법칙을 확인할 수 있다. 같은 DB에 동시 클라이언트 수만 바꿔 TPC-B 비슷한 쓰기 트랜잭션을 15초씩 돌렸다.
+
+```bash
+# 클라이언트 1~64개로 15초씩. -j는 pgbench 스레드 수
+for c in 1 2 4 8 16 32 64; do
+  pgbench -h 127.0.0.1 -U b3_pool_user -c $c -j $(( c<4 ? c : 4 )) -T 15 b3_pool | grep -E 'latency average|^tps'
+done
+```
+
+```text
+c=1 latency average = 0.845 ms tps = 1183.083645 (without initial connection time)
+c=2 latency average = 0.907 ms tps = 2205.620643 (without initial connection time)
+c=4 latency average = 1.367 ms tps = 2926.199471 (without initial connection time)
+c=8 latency average = 1.613 ms tps = 4958.174168 (without initial connection time)
+c=16 latency average = 4.809 ms tps = 3326.815350 (without initial connection time)
+c=32 latency average = 7.879 ms tps = 4061.189620 (without initial connection time)
+c=64 latency average = 19.193 ms tps = 3334.631510 (without initial connection time)
+```
+
+8개일 때 초당 4958건, 지연 1.6ms다. 8 ÷ 0.001613초 = 4960이니 리틀의 법칙이 그대로 맞는다. 그 뒤로는 연결을 늘려도 처리량은 3300~4100 사이에서 오르내리고 지연만 4.8ms, 7.9ms, 19ms로 늘었다. 같은 측정을 한 번 더 했을 때도 8개 근처에서 정점(4303), 그 뒤로 평탄하거나 낮아지는 모양은 같았다. 이 지점을 넘으면 연결을 더 주는 건 DB 안에 줄을 하나 더 세우는 것과 같다.
+
+연결을 정점보다 많이 줬을 때 `pg_stat_activity`를 보면 이유가 보인다. 클라이언트 32개로 돌리는 도중에 찍었다.
+
+```sql
+-- 지금 이 DB의 연결이 무엇을 하고 있나
+SELECT usename, application_name, state, wait_event_type, wait_event, count(*)
+FROM pg_stat_activity
+WHERE datname = 'b3_pool'
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY count(*) DESC;
+```
+
+```text
+   usename    | application_name |        state        | wait_event_type |  wait_event   | count 
+--------------+------------------+---------------------+-----------------+---------------+-------
+ b3_pool_user | pgbench          | idle                | Client          | ClientRead    |    14
+ b3_pool_user | pgbench          | active              | Lock            | transactionid |    11
+ b3_pool_user | pgbench          | idle in transaction | Client          | ClientRead    |    10
+ b3_pool_user | pgbench          | active              | Client          | ClientRead    |     3
+ b3_pool_user | pgbench          | active              |                 |               |     1
+ b3_pool_user | pgbench          | idle in transaction |                 |               |     1
+ postgres     | psql             | active              |                 |               |     1
+(7 rows)
+```
+
+실제로 CPU를 쓰는 건 맨 아래 `active`에 대기 이벤트가 없는 한두 개뿐이다. 11개는 `Lock / transactionid`, 같은 줄을 고치려는 다른 트랜잭션이 끝나기를 기다린다. pgbench의 TPC-B는 스케일 10에서 `pgbench_branches`가 10줄뿐이라 연결이 많을수록 같은 줄을 두고 부딪친다. 실제 서비스에서도 인기 상품의 재고 줄, 카운터 줄처럼 몇 줄에 쓰기가 몰리면 같은 일이 생긴다. CPU 4개를 64개 프로세스가 나눠 쓰면 문맥 전환과 캐시 미스도 늘어난다. 연결이 늘면 일이 늘어나는 게 아니라 기다림이 늘어난다.
+
+흔히 인용되는 공식은 PostgreSQL 위키와 HikariCP 문서에 실린 `연결 수 = (코어 수 × 2) + 실효 스핀들 수`다. 4코어 SSD면 8~9개, 이 실험의 정점과 우연히 맞는다. 하지만 이건 시작값이지 정답이 아니다. 쿼리가 디스크를 기다리면 더 많아도 되고, 몇 줄에 쓰기가 몰리면 더 적어야 한다. 실무에서는 작게 시작해 두 숫자를 같이 본다. 앱 쪽의 연결 대기 시간(Hikari의 `hikaricp_connections_pending`, `hikaricp_connections_acquire_seconds`, node-postgres의 `waitingCount`)과 DB 쪽의 활성 연결과 대기 이벤트다. 앱에서 대기가 길고 DB가 한가하면 풀을 늘리고, DB에서 Lock 대기가 늘거나 CPU가 꽉 찼으면 풀을 늘리는 게 아니라 쿼리와 트랜잭션 길이를 고친다.
+
+## 돌려주지 않은 연결
+
+풀이 바닥나는 원인 중 가장 고약한 건 누수다. 빌린 연결을 어떤 경로에서 돌려주지 않으면 그 연결은 영영 풀로 돌아오지 않는다. 에러가 난 경로에서 `release()`를 빼먹은 코드를 돌려 봤다.
+
+```js
+async function transfer(id) {
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  await client.query("UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE aid = $1", [id]);
+  if (id % 2 === 0) throw new Error("validation failed"); // 짝수 id는 검증에서 실패
+  await client.query("COMMIT");
+  client.release(); // 성공한 경로에서만 돌려준다 (버그)
+}
+```
+
+```text
+transfer  1 ok
+transfer  2 error: validation failed  (total=1 idle=0)
+transfer  3 ok
+transfer  4 error: validation failed  (total=2 idle=0)
+transfer  6 error: validation failed  (total=3 idle=0)
+transfer  8 error: validation failed  (total=4 idle=0)
+transfer 10 error: validation failed  (total=5 idle=0)
+transfer 11 error: timeout exceeded when trying to connect  (total=5 idle=0)
+transfer 12 error: timeout exceeded when trying to connect  (total=5 idle=0)
+  pid  |        state        |    xact_age     |                          last_query                          
+-------+---------------------+-----------------+--------------------------------------------------------------
+ 27331 | idle in transaction | 00:00:02.092766 | UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE ai
+ 27336 | idle in transaction | 00:00:02.079734 | UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE ai
+ 27337 | idle in transaction | 00:00:02.069391 | UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE ai
+ 27338 | idle in transaction | 00:00:02.060765 | UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE ai
+ 27339 | idle in transaction | 00:00:02.051184 | UPDATE pgbench_accounts SET abalance = abalance - 1 WHERE ai
+(5 rows)
+```
+
+(5, 7, 9번의 ok 줄은 줄였다.) 실패가 다섯 번 나자 풀 5개가 다 새서 11번부터는 아무것도 못 한다. 성공한 요청이 연결을 돌려줘서 누수가 서서히 진행되는 점이 무섭다. 배포 직후에는 멀쩡하다가 몇 시간 뒤, 에러가 몇 번 쌓인 뒤에 갑자기 전부 막힌다. 재시작하면 고쳐지니 원인을 놓치기 쉽다.
+
+DB 쪽에서는 아래 표가 단서다. `idle in transaction`이 오래 남아 있다. 트랜잭션을 열고 아무것도 안 하는 연결이다. 이 연결들은 고친 줄의 잠금을 쥐고 있어서 같은 계좌를 고치려는 다른 요청을 막고, VACUUM이 죽은 줄을 치우지 못하게 한다([오래 열린 트랜잭션 이야기](/posts/sql-batch-timeout-pool)).
+
+고치는 법은 세 겹이다. 코드에서는 `try/finally`로 어느 경로든 돌려주게 한다. node-postgres라면 빌리지 않고 `pool.query()`를 쓰거나 `finally { client.release() }`, 자바는 try-with-resources다. 풀에서는 오래 돌아오지 않는 연결을 알린다. HikariCP의 `leakDetectionThreshold`(기본 0, 꺼짐)를 2초 정도로 주면 `Connection leak detection triggered for ... on thread ..., stack trace follows`와 함께 빌린 곳의 스택을 남긴다. DB에서는 안전망을 건다.
+
+```sql
+-- 이 역할의 연결이 트랜잭션을 연 채 30초 놀면 끊는다
+ALTER ROLE b3_pool_user SET idle_in_transaction_session_timeout = '30s';
+```
+
+PostgreSQL 16의 기본값은 0(꺼짐)이다. 클러스터 전체가 아니라 앱 역할에만 거는 편이 마이그레이션 같은 긴 작업을 덜 건드린다.
+
+## 앱 밖에 두는 풀, PgBouncer
+
+앱 안의 풀은 파드 하나 안에서만 나눠 쓴다. 파드가 30개면 풀도 30개라 DB 연결 수는 파드 수에 비례한다. PgBouncer는 앱과 DB 사이에서 여러 앱의 연결을 받아 적은 수의 DB 연결로 돌려 쓴다. 설정 방법과 모드의 차이는 [운영 글](/posts/postgres-operations#max_connections를-올리는-대신-연결-풀)에 있으니 여기서는 실제로 돌려 보고 숫자를 본다.
+
+PgBouncer를 6433 포트에 transaction 모드, `default_pool_size = 8`로 띄우고 pgbench 클라이언트 64개를 붙였다. 7초쯤에 관리 콘솔의 `SHOW POOLS`를 찍었다.
+
+```bash
+# 관리 콘솔(가상 DB 이름 pgbouncer)에 붙어 풀 상태를 본다
+psql "host=127.0.0.1 port=6433 user=b3_pool_user dbname=pgbouncer" -c "SHOW POOLS"
+```
+
+```text
+ database  |     user     | cl_active | cl_waiting | cl_active_cancel_req | cl_waiting_cancel_req | sv_active | sv_active_cancel | sv_being_canceled | sv_idle | sv_used | sv_tested | sv_login | maxwait | maxwait_us |  pool_mode  
+-----------+--------------+-----------+------------+----------------------+-----------------------+-----------+------------------+-------------------+---------+---------+-----------+----------+---------+------------+-------------
+ b3_pool   | b3_pool_user |         8 |         56 |                    0 |                     0 |         8 |                0 |                 0 |       0 |       0 |         0 |        0 |       0 |      20296 | transaction
+```
+
+열이 많아 한 줄로 늘어놓고 중요한 칸만 눌러 보면 이렇다.
+
+<UrlAnatomy
+  caption="SHOW POOLS 한 줄에서 볼 칸"
+  base="b3_pool"
+  separator=" | "
+  joiner=" | "
+  params={[
+    { key: "cl_active", value: "8", title: "DB 연결을 받아 일하는 클라이언트", description: "transaction 모드에서는 지금 트랜잭션 안에 있는 클라이언트만 여기 든다. sv_active와 같은 수다.", required: true },
+    { key: "cl_waiting", value: "56", title: "DB 연결을 기다리는 클라이언트", description: "64개 중 56개가 줄에 서 있다. 앱의 풀 대기와 같은 신호다. 이 값이 계속 0보다 크면 풀이 작거나 트랜잭션이 길다.", required: true },
+    { key: "sv_active", value: "8", title: "일하는 DB 연결", description: "default_pool_size = 8이 상한이다. PostgreSQL에는 backend가 8개만 떠 있다." },
+    { key: "sv_idle", value: "0", title: "쉬는 DB 연결", description: "0이면 남는 연결이 없다는 뜻이다. 평소에 이 값이 크면 풀을 줄여도 된다." },
+    { key: "maxwait_us", value: "20296", title: "가장 오래 기다린 클라이언트", description: "maxwait(초)와 maxwait_us(마이크로초)를 합쳐 읽는다. 0초 + 20296µs, 약 20ms. 이 값이 초 단위로 오르면 경보를 건다." },
+  ]}
+/>
+
+그럼 PgBouncer를 거치면 빨라질까. 같은 머신에서 직접 붙을 때와 비교했다.
+
+```text
+bouncer c=8 latency average = 2.667 ms tps = 3000.127089 (without initial connection time)
+direct c=8 latency average = 2.100 ms tps = 3810.031024 (without initial connection time)
+bouncer c=64 latency average = 31.877 ms tps = 2007.748256 (without initial connection time)
+direct c=64 latency average = 25.781 ms tps = 2482.480826 (without initial connection time)
+```
+
+빨라지지 않았다. 홉이 하나 늘었고, PgBouncer는 단일 스레드라 같은 4코어를 pgbench, PostgreSQL과 나눠 쓴다. 이 측정에서는 20% 남짓 느렸다. 트랜잭션마다 연결을 새로 맺는 `-C`도 직접 11.5ms, PgBouncer 12.0ms로 차이가 없었다. 클라이언트와 PgBouncer 사이에도 SCRAM 인증을 하니 비싼 부분이 그대로 남은 것이다(PgBouncer가 아끼는 건 fork와 backend 초기화다).
+
+PgBouncer가 주는 건 처리량이 아니라 상한이다. 클라이언트가 64개든 2000개든 DB에는 backend 8개만 뜨고, 넘치는 요청은 DB 밖의 줄에서 기다린다. 파드가 늘거나 배포로 연결이 출렁여도 DB는 같은 수의 프로세스로 일한다. 위에서 본 정점 근처에 DB 연결 수를 묶어 두는 장치라고 보면 된다.
+
+<NetworkTopology
+  caption="파드 30개의 연결 600개가 PgBouncer에서 DB 연결 16개로 줄어든다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "k8s", label: "API 파드 30개", x: 10, y: 20, w: 140, h: 270, tone: "private" },
+    { id: "dbz", label: "DB 서버", x: 270, y: 20, w: 124, h: 270, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "p1", label: "api-1", sub: "pool 20", x: 80, y: 70, icon: "container", w: 104 },
+    { id: "p2", label: "api-2", sub: "pool 20", x: 80, y: 155, icon: "container", w: 104 },
+    { id: "p3", label: "api-30", sub: "pool 20", x: 80, y: 240, icon: "container", w: 104 },
+    { id: "pgb", label: "PgBouncer", sub: "client 600", x: 210, y: 155, icon: "lb", w: 96 },
+    { id: "pg", label: "PostgreSQL", sub: "backend 16", x: 332, y: 155, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "p1", to: "pgb" },
+    { from: "p2", to: "pgb" },
+    { from: "p3", to: "pgb" },
+    { from: "pgb", to: "pg" },
+  ]}
+  steps={[
+    { path: ["p1", "pgb", "pg"], packet: "BEGIN", title: "트랜잭션이 시작되면 DB 연결을 하나 붙인다", detail: "api-1의 연결 하나가 BEGIN을 보낸다. PgBouncer는 남는 DB 연결 하나를 이 클라이언트에 붙인다." },
+    { path: ["p2", "pgb"], packet: "BEGIN", highlight: ["pg"], title: "DB 연결이 다 찼으면 PgBouncer에서 기다린다", detail: "16개가 모두 트랜잭션 중이다. api-2의 요청은 cl_waiting에 든다. PostgreSQL에는 17번째 backend가 생기지 않는다." },
+    { path: ["pg", "pgb", "p1"], packet: "COMMIT", title: "커밋하면 DB 연결이 바로 풀로 돌아간다", detail: "api-1의 클라이언트 연결은 계속 열려 있지만, DB 연결은 다음 트랜잭션을 위해 풀로 돌아간다." },
+    { path: ["p2", "pgb", "pg"], packet: "BEGIN", title: "기다리던 클라이언트가 그 연결을 받는다", detail: "방금 api-1이 쓰던 그 backend가 api-2의 트랜잭션을 처리한다. 다음 섹션의 문제가 여기서 생긴다." },
+  ]}
+/>
+
+## transaction 모드가 깨뜨리는 것
+
+위 그림의 마지막 단계처럼, transaction 모드에서는 한 backend를 여러 클라이언트가 번갈아 쓴다. backend에 남는 세션 상태는 다음 클라이언트에게 넘어간다. 목록은 [운영 글](/posts/postgres-operations)에 있으니 여기서는 실제로 어떻게 터지는지 본다. DB 연결이 하나뿐인 별칭 `b3_one`(`pool_size=1`)을 만들어 두 클라이언트를 차례로 붙였다.
+
+```bash
+B="host=127.0.0.1 port=6433 user=b3_pool_user dbname=b3_one"
+# 클라이언트 A: 세션 단위로 타임아웃을 건다
+psql "$B" -c "SET statement_timeout = '1s'" -c "SELECT pg_backend_pid()"
+# 클라이언트 B: 다른 프로세스, 다른 연결
+psql "$B" -c "SHOW statement_timeout" -c "SELECT pg_backend_pid()" -c "SELECT pg_sleep(2)"
+```
+
+```text
+SET
+ pg_backend_pid 
+----------------
+          25780
+(1 row)
+
+ statement_timeout 
+-------------------
+ 1s
+(1 row)
+
+ pg_backend_pid 
+----------------
+          25780
+(1 row)
+
+ERROR:  canceling statement due to statement timeout
+```
+
+A는 이미 연결을 끊었다. 그런데 B가 A의 `statement_timeout = 1s`를 물려받아, 2초짜리 쿼리가 1초에 취소됐다. 두 클라이언트의 `pg_backend_pid()`가 같다. transaction 모드에서는 클라이언트가 끊어도 `server_reset_query`(기본 `DISCARD ALL`)를 돌리지 않기 때문이다(`server_reset_query_always = 0`이 기본). PgBouncer가 클라이언트마다 따로 기억해 주는 파라미터는 `client_encoding`, `DateStyle`, `TimeZone`, `standard_conforming_strings`, `application_name`과 `track_extra_parameters`(1.22 기본 `IntervalStyle`)뿐이다.
+
+<SequenceDiagram
+  caption="A가 건 SET이 같은 backend를 받은 B에게 넘어간다"
+  actors={[
+    { id: "a", label: "클라이언트 A" },
+    { id: "pgb", label: "PgBouncer" },
+    { id: "be", label: "backend 25780" },
+    { id: "b", label: "클라이언트 B" },
+  ]}
+  steps={[
+    { from: "a", to: "pgb", label: "SET timeout 1s", title: "A가 세션 설정을 바꾼다", detail: "트랜잭션 밖의 SET이라 그 자체로 한 트랜잭션이다." },
+    { from: "pgb", to: "be", label: "SET", title: "backend에 설정이 남는다", detail: "SET은 backend 프로세스의 세션 상태를 바꾼다. 트랜잭션이 끝나자 PgBouncer는 이 backend를 풀로 돌린다." },
+    { from: "a", to: "pgb", label: "연결 종료", title: "A가 나간다", detail: "transaction 모드는 이때 DISCARD ALL을 돌리지 않는다. backend의 상태는 그대로다." },
+    { from: "b", to: "pgb", label: "pg_sleep(2)", title: "B가 2초짜리 쿼리를 보낸다", detail: "B는 타임아웃을 건 적이 없다." },
+    { from: "pgb", to: "be", label: "같은 backend", title: "B가 A의 backend를 받는다", detail: "풀에 하나뿐인 연결이다. 운영에서는 우연히 같은 backend를 받는 클라이언트에게만 생겨서 재현이 더 어렵다." },
+    { from: "be", to: "b", label: "ERROR 1s", title: "B의 쿼리가 1초에 취소된다", detail: "canceling statement due to statement timeout. B의 코드만 보면 원인을 찾을 수 없다." },
+  ]}
+/>
+
+세션 단위 advisory lock은 더 위험하다. 서로 다른 앱 인스턴스가 같은 작업을 동시에 하지 않으려고 쓰는 잠금인데, 같은 backend를 받으면 잠금이 서로를 막지 못한다.
+
+```text
+--- A: SELECT pg_advisory_lock(42)
+ pg_advisory_lock 
+------------------
+ 
+(1 row)
+
+--- B: SELECT pg_try_advisory_lock(42)
+ pg_try_advisory_lock 
+----------------------
+ t
+(1 row)
+
+ locktype | objid |  pid  
+----------+-------+-------
+ advisory |    42 | 25780
+(1 row)
+```
+
+A가 쥔 42번 잠금을 B도 `t`(성공)로 받았다. PostgreSQL 입장에서는 같은 세션(25780)이 한 번 더 잡은 것이라 재진입으로 허락한다. 두 인스턴스가 동시에 같은 배치를 돌리는 사고가 이렇게 난다. 트랜잭션 단위 잠금(`pg_advisory_xact_lock`)은 커밋할 때 풀리니 transaction 모드에서도 안전하다. 분산 잠금 전반은 [분산 락 글](/posts/distributed-lock)에서 다룬다.
+
+prepared statement는 PgBouncer 버전에 따라 결과가 갈린다. 1.21부터 프로토콜 수준의 prepared statement를 transaction 모드에서도 지원하지만, `max_prepared_statements`의 기본값이 1.21~1.23에서는 0(꺼짐)이고 1.24부터 200이다. Ubuntu 24.04 패키지는 1.22라 꺼져 있다. 이 상태에서 pgbench를 prepared 모드로 붙였다.
+
+```bash
+# 프로토콜 수준 prepared statement로 조회 (JDBC, asyncpg, pgx가 기본으로 쓰는 방식과 같다)
+pgbench -h 127.0.0.1 -p 6433 -U b3_pool_user -M prepared -S -c 16 -j 4 -T 3 b3_pool
+```
+
+```text
+pgbench: error: ERROR:  prepared statement "P_0" already exists
+pgbench: error: ERROR:  prepared statement "P_0" already exists
+pgbench: error: client 12 script 0 aborted in command 1 query 0: ERROR:  prepared statement "P_0" does not exist
+pgbench: error: client 13 script 0 aborted in command 1 query 0: ERROR:  prepared statement "P_0" does not exist
+```
+
+`already exists`는 다른 클라이언트가 같은 backend에 같은 이름으로 이미 만들어 둔 경우, `does not exist`는 만든 backend와 실행한 backend가 다른 경우다. `max_prepared_statements = 100`으로 바꾸고 다시 띄우자 같은 명령이 실패 0건, 초당 33893건으로 돌았다. 설정이 켜져도 SQL 문으로 쓰는 `PREPARE`/`EXECUTE`는 PgBouncer가 추적하지 않으니 여전히 쓰면 안 된다.
+
+이런 기능이 꼭 필요한 연결(마이그레이션 도구, `LISTEN` 하는 워커, 세션 잠금을 쓰는 스케줄러)은 PgBouncer를 거치지 않고 DB에 직접 붙이거나, 그 용도만 session 모드 풀로 따로 둔다.
+
+## max_connections 계산서
+
+DB 연결 수는 앱 개발자가 아니라 계산서가 정한다. PostgreSQL 16에서 일반 연결로 쓸 수 있는 수는 `max_connections - superuser_reserved_connections(기본 3) - reserved_connections(기본 0)`이다. 자리가 없으면 일반 역할은 `FATAL:  remaining connection slots are reserved for roles with the SUPERUSER attribute`를, 슈퍼유저 몫까지 다 차면 `FATAL:  sorry, too many clients already`를 받는다. 복제용 WAL sender와 autovacuum 작업자는 이 수에 들지 않는다.
+
+여기에 들어갈 연결을 전부 더한다. 놓치기 쉬운 건 평소 파드 수가 아니라 가장 많아지는 순간이다.
+
+- 서비스마다 `파드 수 × 파드당 풀 최대치`. 오토스케일러가 있으면 최대 파드 수로 센다.
+- 롤링 배포 중 잠깐 함께 뜨는 새 파드(`maxSurge`, 기본 25%). 새 파드가 풀을 열 때 옛 파드는 아직 연결을 쥐고 있다.
+- 크론잡, 배치, 마이그레이션, 관리자 접속, 모니터링 에이전트.
+- 읽기 복제본은 따로 센다. 복제본마다 자기 `max_connections`가 있고, 핫 스탠바이는 이 값이 프라이머리보다 작으면 읽기 질의를 받는 상태로 동작하지 못한다. 장애 조치로 복제본이 프라이머리가 되면 쓰기 연결까지 몰려오니 프라이머리와 같은 크기로 맞춘다.
+
+예를 들어 `max_connections = 200`, 예약과 관리용 20개면 앱 몫은 180개다. API 파드가 최대 20개, 배포 때 5개가 더 뜨면 파드당 풀은 `floor(180 ÷ 25) = 7`개까지다. 파드당 풀 기본값(HikariCP 10, node-postgres 10)을 그대로 두면 250개가 되어 배포 때마다 도입부의 에러가 난다.
+
+## 서버리스와 장애 조치 때 몰려오는 연결
+
+서버리스 함수는 동시 실행 하나가 프로세스 하나다. 함수 안에 풀을 만들면 동시 실행 수만큼 풀이 생긴다. 트래픽이 튀어 동시 실행이 1000이 되면 연결 1000개가 거의 같은 순간에 열린다. 앞에서 잰 대로 연결마다 수 ms의 DB CPU를 쓰니, 1000개면 DB가 연결을 받는 데만 코어 몇 개를 몇 초 동안 쓴다. 그 사이 기존 쿼리도 느려지고, 느려진 쿼리 때문에 함수가 더 오래 살아 동시 실행이 더 늘어난다.
+
+<NetworkTopology
+  caption="함수 동시 실행이 튀면 연결이 한꺼번에 몰리고, 풀러가 그 앞에서 받아낸다"
+  width={400}
+  height={260}
+  zones={[{ id: "fn", label: "함수 동시 실행", x: 10, y: 20, w: 130, h: 230, tone: "edge" }]}
+  nodes={[
+    { id: "f1", label: "fn #1", sub: "pool 1", x: 75, y: 65, icon: "container", w: 100 },
+    { id: "f2", label: "fn #2", sub: "pool 1", x: 75, y: 135, icon: "container", w: 100 },
+    { id: "f3", label: "fn #1000", sub: "pool 1", x: 75, y: 205, icon: "container", w: 100 },
+    { id: "px", label: "Pooler", sub: "proxy", x: 210, y: 135, icon: "lb", w: 96 },
+    { id: "db", label: "PostgreSQL", sub: "max 200", x: 332, y: 135, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "f1", to: "db", dashed: true },
+    { from: "f2", to: "px" },
+    { from: "f3", to: "px" },
+    { from: "px", to: "db" },
+  ]}
+  steps={[
+    { path: ["f1", "db"], packet: "connect", title: "함수가 DB에 직접 붙으면", detail: "실행마다 TCP, TLS, SCRAM, fork를 한다. 동시 실행 200개째까지는 된다." },
+    { path: ["f3", "db"], packet: "connect", blocked: true, title: "201번째부터 거절된다", detail: "FATAL: sorry, too many clients already. 함수는 재시도하고, 재시도가 연결 시도를 더 늘린다." },
+    { path: ["f2", "px", "db"], packet: "query", title: "앞에 풀러를 두면", detail: "함수는 풀러에 붙는다. 풀러는 DB 연결 수십 개만 유지하고 돌려 쓴다. 함수 쪽 풀은 1로 둔다." },
+    { path: ["f3", "px"], packet: "wait", highlight: ["db"], title: "넘치는 요청은 풀러의 줄에서 기다린다", detail: "DB는 연결 폭주를 보지 않는다. 대신 풀러의 대기 시간(cl_waiting, query_wait_timeout)을 지켜본다." },
+  ]}
+/>
+
+함수 쪽에서 할 일은 정해져 있다. 풀은 함수 핸들러 밖(전역)에 만들어 같은 실행 환경이 재사용될 때 연결을 재사용하고, 크기는 1로 둔다. 앞에는 PgBouncer나 클라우드의 DB 프록시를 transaction 모드로 둔다. 동시 실행 수에 상한을 걸어 DB가 받을 수 있는 양으로 묶는 것도 함께 한다.
+
+장애 조치도 같은 모양의 폭주를 만든다. 프라이머리가 바뀌는 순간 모든 파드의 풀이 연결을 잃고 동시에 다시 맺는다. 파드 30개 × 풀 20이면 600개가 새 프라이머리로 한꺼번에 온다. 풀의 재연결에 지터를 섞고, 최소 유휴 연결 수(`minimumIdle`, `min`)를 최대치보다 작게 두어 한 번에 다 채우지 않게 한다. HikariCP의 `maxLifetime`(기본 30분)도 같은 이유로 연결마다 약간씩 다르게 끝나도록 만들어져 있다.
+
+## 풀이 의심될 때 보는 순서
+
+증상은 대개 "API가 느리다" 또는 "가끔 타임아웃"이다. DB의 느린 쿼리 로그에 아무것도 없고 DB CPU도 낮다면 풀부터 의심한다.
+
+먼저 앱의 풀 지표를 본다. 대기 중인 요청 수(`hikaricp_connections_pending`, `waitingCount`)와 연결을 받기까지 걸린 시간이 늘었는지, 활성 수가 최대치에 붙어 있는지 본다. 활성이 최대치에 붙어 있는데 DB 쪽 활성 쿼리가 적다면 앱이 연결을 쥔 채 다른 일(외부 API, 큰 JSON 직렬화)을 하고 있거나 누수다.
+
+다음으로 DB에서 연결이 무엇을 하는지 본다.
+
+```sql
+-- 상태별 연결 수와 가장 오래된 트랜잭션
+SELECT application_name, state, count(*),
+       max(now() - xact_start) AS oldest_xact
+FROM pg_stat_activity
+WHERE backend_type = 'client backend'
+GROUP BY 1, 2
+ORDER BY 3 DESC;
+```
+
+`idle in transaction`이 많고 `oldest_xact`가 길면 누수나 트랜잭션 안의 느린 외부 호출이다. `active`에 `Lock` 대기가 많으면 풀이 아니라 쓰기 경합이다. 연결을 늘리면 더 나빠진다. `idle`만 잔뜩이면 풀이 너무 크다. 그 연결들은 메모리만 쓰고 있다. `application_name`을 서비스마다 다르게 넣어 두면 이 쿼리 한 번으로 어느 서비스가 연결을 쥐고 있는지 바로 나온다.
+
+PgBouncer가 있다면 `SHOW POOLS`의 `cl_waiting`과 `maxwait`를 본다. 클라이언트는 기다리는데 `sv_idle`이 0이고 `sv_active`가 풀 크기에 붙어 있다면 DB 연결이 모자라거나 트랜잭션이 길다.
+
+흔한 실수를 모으면 이렇다. 풀 크기를 "넉넉하게" 100으로 잡는다. 연결을 기다리는 한도를 기본값(무한, 30초)으로 둔다. 트랜잭션 안에서 외부 API를 부른다. 배포와 오토스케일링의 최대치로 계산하지 않는다. transaction 모드 PgBouncer 뒤에서 세션 `SET`과 세션 advisory lock을 쓴다.
+
+## 숫자를 넣어 계산해 보기
+
+아래 함수는 리틀의 법칙으로 평균적으로 바쁜 연결 수를 구하고, 여유 배수를 곱해 파드당 필요한 풀 크기를 낸다. 그리고 `max_connections`에서 예약분을 뺀 몫을 평소 파드와 배포 때 더 뜨는 파드로 나눠 파드당 쓸 수 있는 상한을 구한다. `busy`는 소수 둘째 자리에서 반올림하고, 필요 수는 올림, 상한은 내림한다.
+
+<CodePlayground
+  caption="풀 크기와 max_connections 계산"
+  functionName="planPool"
+  initialCode={`function planPool({ rps, holdMs, headroom, maxConnections, reserved, pods, surgePods }) {
+  // busy: 리틀의 법칙 (초당 요청 수 × 연결을 쥐는 시간)
+  // perPodNeed: busy × headroom을 올림한 뒤 파드 수로 나눠 올림
+  // perPodBudget: (maxConnections - reserved)를 (pods + surgePods)로 나눠 내림
+  return { busy: 0, perPodNeed: 0, perPodBudget: 0, ok: true };
+}`}
+  solution={`function planPool({ rps, holdMs, headroom, maxConnections, reserved, pods, surgePods }) {
+  const busy = Math.round(((rps * holdMs) / 1000) * 100) / 100;
+  const perPodNeed = Math.ceil(Math.ceil(busy * headroom) / pods);
+  const perPodBudget = Math.floor((maxConnections - reserved) / (pods + surgePods));
+  return { busy, perPodNeed, perPodBudget, ok: perPodNeed <= perPodBudget };
+}`}
+  tests={[
+    {
+      label: "2000 rps, 2ms",
+      args: [{ rps: 2000, holdMs: 2, headroom: 2, maxConnections: 100, reserved: 10, pods: 10, surgePods: 3 }],
+      expected: { busy: 4, perPodNeed: 1, perPodBudget: 6, ok: true },
+    },
+    {
+      label: "3000 rps, 15ms",
+      args: [{ rps: 3000, holdMs: 15, headroom: 1.5, maxConnections: 200, reserved: 20, pods: 20, surgePods: 5 }],
+      expected: { busy: 45, perPodNeed: 4, perPodBudget: 7, ok: true },
+    },
+    {
+      label: "트랜잭션 안에서 외부 API 120ms",
+      args: [{ rps: 500, holdMs: 120, headroom: 2, maxConnections: 100, reserved: 10, pods: 8, surgePods: 2 }],
+      expected: { busy: 60, perPodNeed: 15, perPodBudget: 9, ok: false },
+    },
+    {
+      label: "pgbench c=8 결과로 검산",
+      args: [{ rps: 4960, holdMs: 1.613, headroom: 1, maxConnections: 100, reserved: 3, pods: 1, surgePods: 0 }],
+      expected: { busy: 8, perPodNeed: 8, perPodBudget: 97, ok: true },
+    },
+    {
+      label: "파드 30개, 배포 때 8개 더",
+      args: [{ rps: 800, holdMs: 30, headroom: 2, maxConnections: 100, reserved: 10, pods: 30, surgePods: 8 }],
+      expected: { busy: 24, perPodNeed: 2, perPodBudget: 2, ok: true },
+    },
+  ]}
+/>
+
+셋째 경우가 흔한 함정이다. 초당 500건밖에 안 되는데 트랜잭션 안에서 외부 API를 120ms 기다리니 연결 60개가 늘 바쁘다. 풀이나 `max_connections`를 늘릴 게 아니라 외부 호출을 트랜잭션 밖으로 빼면 쥐는 시간이 몇 ms로 줄고, 같은 계산이 `ok`로 바뀐다.
+
+## 연결은 늘리는 게 아니라 나눠 쓰는 것
+
+연결 하나는 수 ms의 CPU와 프로세스 하나, 수 MB의 메모리를 쓴다. 그래서 미리 열어 두고 돌려 쓰지만, 많이 열어 둔다고 일이 빨라지지는 않는다. DB가 동시에 처리할 수 있는 양은 코어와 잠금 경합이 정하고, 그걸 넘는 연결은 DB 안에서 기다릴 뿐이다. 풀 크기는 리틀의 법칙으로 시작해 앱의 대기 시간과 DB의 대기 이벤트를 보며 맞추고, 전체 연결 수는 배포와 오토스케일링의 최대치로 계산한다. 파드가 많거나 서버리스라면 PgBouncer 같은 풀러로 DB 앞에 상한을 두되, transaction 모드에서 깨지는 세션 상태를 코드에서 지운다. 배경이 되는 글은 [쿼리 밖의 비용](/posts/sql-batch-timeout-pool), [PostgreSQL 운영](/posts/postgres-operations), [접속과 pg_hba.conf](/posts/postgres-connections-pg-hba)다.
+
+## 면접에서 나올 만한 질문
+
+### 커넥션 풀은 왜 필요한가?
+
+DB 연결을 맺는 비용이 쿼리보다 훨씬 크기 때문이다. PostgreSQL은 연결마다 프로세스를 fork하고 TLS와 SCRAM 인증을 거치는데, 같은 머신에서 재도 13ms쯤 들어 0.1ms짜리 조회보다 100배 넘게 비쌌다. 미리 열어 둔 연결을 빌려주고 돌려받으면 이 비용을 한 번만 낸다. 동시에 연결 수에 상한을 두어 DB가 감당할 수 있는 동시성으로 묶는 역할도 한다.
+
+### 풀 크기는 어떻게 정하나?
+
+리틀의 법칙으로 시작한다. 바쁜 연결 수는 초당 요청 수에 연결을 쥐는 시간을 곱한 값이다. 그다음 DB가 실제로 동시에 처리할 수 있는 양을 넘지 않게 한다. 실험에서는 4코어에서 8개 근처가 정점이고 그 뒤로는 지연만 늘었다. `코어 × 2 + 스핀들` 공식은 시작값일 뿐이고, 앱의 연결 대기 시간과 DB의 대기 이벤트를 보며 조정한다.
+
+### 풀을 크게 잡으면 안전하지 않나?
+
+아니다. 정점을 넘은 연결은 DB 안에서 CPU와 잠금을 두고 기다릴 뿐이라 처리량은 그대로거나 줄고 지연만 는다. 연결마다 메모리와 `work_mem` 예산이 들고, 파드 수를 곱하면 `max_connections`를 넘어 배포나 스케일 아웃 때 연결이 거절된다. 줄은 DB 안이 아니라 앱이나 풀러 쪽에 서게 하는 편이 낫다.
+
+### 풀 고갈과 커넥션 누수는 어떻게 구분하나?
+
+고갈은 부하가 줄면 회복되고, 누수는 부하와 상관없이 시간이 지날수록 나빠지며 재시작해야 낫는다. 누수면 DB의 `pg_stat_activity`에 `idle in transaction`이 오래 남아 있고, 앱의 활성 연결이 최대치에 붙어 내려오지 않는다. HikariCP의 `leakDetectionThreshold`로 빌린 곳의 스택을 남기고, `try/finally`로 반환을 보장하며, DB에는 `idle_in_transaction_session_timeout`을 안전망으로 건다.
+
+### PgBouncer의 session 모드와 transaction 모드는 무엇이 다르고, transaction 모드에서는 무엇이 깨지나?
+
+session 모드는 클라이언트가 끊을 때까지 DB 연결 하나를 내주고, transaction 모드는 트랜잭션이 끝날 때마다 돌려받아 다른 클라이언트에게 준다. transaction 모드에서는 세션 상태가 다음 클라이언트에게 넘어간다. 실험에서 A가 건 `statement_timeout`이 B의 쿼리를 취소했고, A가 쥔 세션 advisory lock을 B가 그대로 얻었다. prepared statement는 1.21부터 `max_prepared_statements`로 지원하는데 기본값이 1.24 전에는 0이다.
+
+### 서버리스 환경에서 DB 연결은 어떻게 다루나?
+
+동시 실행마다 프로세스가 따로라 함수 안의 풀은 동시 실행 수만큼 늘어난다. 그래서 풀은 핸들러 밖에 크기 1로 만들고, DB 앞에 PgBouncer나 DB 프록시 같은 외부 풀러를 transaction 모드로 둔다. 동시 실행 수에 상한을 걸어 연결 폭주가 DB까지 가지 않게 하는 것도 함께 한다.
+
+### max_connections는 어떻게 계산하나?
+
+가장 많아지는 순간의 연결을 다 더한다. 서비스별 최대 파드 수 × 풀 최대치, 롤링 배포 때 더 뜨는 파드, 배치·마이그레이션·모니터링, 슈퍼유저 예약분이다. 읽기 복제본은 따로 세고, 핫 스탠바이는 `max_connections`가 프라이머리보다 작으면 제대로 동작하지 못하니 같거나 크게 맞춘다. 합이 DB가 감당할 수준을 넘으면 `max_connections`를 올리기보다 풀러를 둔다.

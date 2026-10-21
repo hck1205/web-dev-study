@@ -1,0 +1,467 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-pod-security-admission");
+
+결제 네임스페이스 `pay`에 보안 수준을 걸기로 했다. 바로 `enforce`를 걸면 무엇이 깨질지 몰라서, 먼저 서버에 "걸면 어떻게 되냐"고만 물어봤다.
+
+```bash
+# 실제로는 바꾸지 않고, 걸었을 때의 경고만 받는다
+kubectl label --dry-run=server --overwrite ns pay pod-security.kubernetes.io/enforce=baseline
+kubectl label --dry-run=server --overwrite ns pay pod-security.kubernetes.io/enforce=restricted
+```
+
+```text
+Warning: existing pods in namespace "pay" violate the new PodSecurity enforce level "baseline:latest"
+Warning: log-agent: hostPath volumes
+Warning: netdebug: non-default capabilities, host namespaces
+namespace/pay labeled (server dry run)
+Warning: existing pods in namespace "pay" violate the new PodSecurity enforce level "restricted:latest"
+Warning: api-5f7b776b68-mjzx6 (and 1 other pod): allowPrivilegeEscalation != false, unrestricted capabilities, runAsNonRoot != true, seccompProfile
+Warning: log-agent: allowPrivilegeEscalation != false, unrestricted capabilities, restricted volume types, runAsNonRoot != true, seccompProfile
+Warning: netdebug: host namespaces, allowPrivilegeEscalation != false, unrestricted capabilities, runAsNonRoot != true, seccompProfile
+```
+
+두 줄 명령으로 네임스페이스의 현재 상태가 다 드러났다. `baseline`이면 Pod 둘이 걸리고, `restricted`면 전부 걸린다. Pod Security Admission(PSA)은 이렇게 네임스페이스 라벨 하나로 "이 칸의 Pod는 이 수준까지"를 정하는 API 서버 내장 기능이다. 1.25에 GA가 됐고, 그 버전에서 지워진 PodSecurityPolicy(PSP)를 대신한다.
+
+[네임스페이스 글](/posts/k8s-namespace)에서 restricted를 걸고 Pod가 거절되는 기본 동작과, 재배포 때 새 ReplicaSet만 조용히 막히는 함정을 이미 재현했다. 이 글은 그다음 질문들을 다룬다. 세 수준이 정확히 무엇을 검사하나, 라벨의 버전은 왜 고정하나, 클러스터 기본값과 예외는 어디서 정하나, 감사 로그로 위반을 어떻게 모으나, PSP에서 어떻게 넘어오나. 각 필드가 커널에서 무엇을 하는지는 [securityContext 글](/posts/k8s-security-context)에 있다. 같은 보안 묶음의 다른 글은 [RBAC](/posts/k8s-rbac)와 [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens)이다. 실습은 kwok으로 띄운 쿠버네티스 1.37.0 클러스터 두 개에서 했다. PSA는 API 서버 안의 어드미션 플러그인이라 kwok에서도 진짜로 동작한다.
+
+## 세 수준은 겹겹이 좁아진다
+
+Pod Security Standards는 세 단계다. 이름은 단순하지만 각 단계가 정확히 어떤 필드를 보는지 알아야 매니페스트를 고칠 수 있다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="privileged ⊃ baseline ⊃ restricted, 오른쪽은 각 단계가 새로 막는 것"
+  nodes={[
+    { id: "priv", label: "privileged", sub: "검사 없음", x: 90, y: 50, w: 130 },
+    { id: "base", label: "baseline", sub: "알려진 탈출 경로", x: 90, y: 150, w: 130 },
+    { id: "rest", label: "restricted", sub: "모범 설정 강제", x: 90, y: 250, w: 130 },
+    { id: "b1", label: "host* · privileged", sub: "hostPath·hostPort", x: 320, y: 150, w: 170 },
+    { id: "r1", label: "non-root · drop ALL", sub: "seccomp·볼륨 종류", x: 320, y: 250, w: 170 },
+  ]}
+  edges={[
+    { from: "priv", to: "base", label: "좁힌다" },
+    { from: "base", to: "rest", label: "좁힌다" },
+    { from: "base", to: "b1", dashed: true },
+    { from: "rest", to: "r1", dashed: true },
+  ]}
+/>
+
+`privileged`는 아무것도 막지 않는다. CNI, CSI 드라이버, 로그 수집기처럼 노드를 직접 만져야 하는 시스템 컴포넌트용이다.
+
+`baseline`은 알려진 권한 상승 경로만 막는다. 호스트 namespace(`hostNetwork`, `hostPID`, `hostIPC`), `privileged: true`, `hostPath` 볼륨, `hostPort`, 기본 집합 밖의 capability 추가(`NET_ADMIN`, `SYS_ADMIN` 등. 런타임 기본 집합에서 `NET_RAW`까지 빠진 13개만 허용), AppArmor·SELinux를 끄거나 바꾸는 설정, seccomp `Unconfined` 명시, `/proc` 마스킹 해제(`procMount: Unmasked`), 안전 목록 밖의 sysctl이다. 보통 앱은 손대지 않아도 통과한다.
+
+`restricted`는 baseline에 더해 "이렇게 써라"를 요구한다. `allowPrivilegeEscalation: false`, `capabilities.drop`에 `ALL`(추가는 `NET_BIND_SERVICE`만), `runAsNonRoot: true`, `runAsUser`가 0이 아닐 것, seccomp `RuntimeDefault` 또는 `Localhost`, 볼륨은 configMap·secret·emptyDir·PVC·projected·downwardAPI 같은 일부 종류만. 공식 이미지를 그냥 띄우면 거의 다 걸린다.
+
+실제로 걸어 보면 수준마다 오류 문구가 정확히 무엇을 고치라는지 알려 준다.
+
+```bash
+# pay: enforce는 baseline(1.37 기준으로 고정), warn·audit는 restricted
+kubectl label --overwrite ns pay \
+  pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/enforce-version=v1.37 \
+  pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/warn-version=latest \
+  pod-security.kubernetes.io/audit=restricted
+
+kubectl -n pay run nd2 --image=nicolaka/netshoot:v0.13 --overrides='{"spec":{"hostNetwork":true}}' -- sleep 3600
+kubectl -n pay run priv --image=busybox:1.36 \
+  --overrides='{"spec":{"containers":[{"name":"priv","image":"busybox:1.36","securityContext":{"privileged":true}}]}}'
+kubectl -n pay run plain --image=busybox:1.36 -- sleep 3600
+```
+
+```text
+namespace/pay labeled
+Error from server (Forbidden): pods "nd2" is forbidden: violates PodSecurity "baseline:v1.37": host namespaces (hostNetwork=true)
+Error from server (Forbidden): pods "priv" is forbidden: violates PodSecurity "baseline:v1.37": privileged (container "priv" must not set securityContext.privileged=true)
+Warning: would violate PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "plain" must set securityContext.allowPrivilegeEscalation=false), unrestricted capabilities (container "plain" must set securityContext.capabilities.drop=["ALL"]), runAsNonRoot != true (pod or container "plain" must set securityContext.runAsNonRoot=true), seccompProfile (pod or container "plain" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")
+pod/plain created
+```
+
+hostNetwork와 privileged는 baseline에서 거절됐고, 아무 설정 없는 `plain`은 baseline을 통과해서 만들어지되 restricted 경고를 받았다. enforce와 warn을 다른 수준으로 거는 이 조합이 실무에서 가장 많이 쓰는 모양이다. 지금은 막지 않으면서 다음 단계로 갈 준비를 시킨다.
+
+## 라벨 다섯 개를 읽는 법
+
+PSA 설정은 전부 네임스페이스 라벨이다. 모드 셋(`enforce`, `audit`, `warn`)마다 수준과 버전을 따로 줄 수 있다. 위에서 건 라벨을 조각내 보자.
+
+<UrlAnatomy
+  caption="pay 네임스페이스의 PSA 라벨"
+  base="kubectl label ns pay"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "pod-security.kubernetes.io/enforce", value: "baseline", title: "enforce: 어기면 거절", description: "Pod 생성과 수정을 막는다. Deployment 같은 워크로드 오브젝트에는 적용하지 않고, 컨트롤러가 Pod를 만들 때 막는다. 그래서 Deployment는 만들어지고 Pod만 안 생긴다.", required: true },
+    { key: "pod-security.kubernetes.io/enforce-version", value: "v1.37", title: "검사 규칙의 버전", description: "v1.37 시점의 규칙으로 검사한다. 클러스터를 올려도 규칙이 바뀌지 않는다. 비우면 latest다." },
+    { key: "pod-security.kubernetes.io/warn", value: "restricted", title: "warn: 응답에 경고만", description: "요청은 받아 주고 kubectl에 Warning 헤더를 돌려준다. Pod뿐 아니라 Deployment, Job 같은 워크로드의 Pod 템플릿에도 경고한다. 사람이 보는 신호다." },
+    { key: "pod-security.kubernetes.io/warn-version", value: "latest", title: "경고는 최신 규칙으로", description: "다음 버전에서 새로 걸릴 것을 미리 알려 준다. enforce는 고정하고 warn·audit는 latest로 두는 조합이 흔하다." },
+    { key: "pod-security.kubernetes.io/audit", value: "restricted", title: "audit: 감사 로그에 주석", description: "요청은 받아 주고 감사 이벤트에 pod-security.kubernetes.io/audit-violations 주석을 남긴다. 사람이 아니라 CI나 컨트롤러가 만든 Pod의 위반을 모으는 데 쓴다." },
+  ]}
+/>
+
+값이 틀리면 네임스페이스 자체가 거절된다. PSA는 네임스페이스 라벨 변경도 검사한다.
+
+```bash
+# 수준 오타, 버전 형식 오류
+kubectl label ns typo pod-security.kubernetes.io/enforce=strict
+kubectl label --overwrite ns typo pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/enforce-version=1.30
+```
+
+```text
+The Namespace "typo" is invalid: metadata.labels[pod-security.kubernetes.io/enforce]: Invalid value: "strict": must be one of privileged, baseline, restricted
+The Namespace "typo" is invalid: metadata.labels[pod-security.kubernetes.io/enforce-version]: Invalid value: "1.30": must be "latest" or "v1.x"
+```
+
+`v`를 빠뜨린 `1.30` 같은 실수가 그 자리에서 잡힌다. Helm이나 Terraform으로 라벨을 붙이다 이 오류가 나면 네임스페이스 생성부터 실패하니 놀라지 말고 값을 본다.
+
+## 판정은 한 번에 하나씩 쌓인다
+
+API 서버는 Pod 하나를 받으면 수준의 검사 항목을 차례로 돌려 위반을 모은다. 앞의 `netdebug` Pod(hostNetwork에 `NET_ADMIN` 추가)를 restricted로 판정하는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="netdebug Pod를 restricted 규칙으로 판정한다"
+  cells={["host ns", "privileged", "hostPath", "caps add", "APE", "drop ALL", "nonRoot", "seccomp"]}
+  memoryLabel="위반"
+  steps={[
+    { pointer: 0, memory: ["host namespaces"], caption: "hostNetwork: true. baseline 항목이라 restricted에도 그대로 걸린다." },
+    { pointer: 1, memory: ["host namespaces"], caption: "privileged는 없다. 통과." },
+    { pointer: 2, memory: ["host namespaces"], caption: "hostPath 볼륨도 없다. 통과." },
+    { pointer: 3, memory: ["host namespaces", "unrestricted capabilities"], caption: "NET_ADMIN 추가. baseline이면 non-default capabilities, restricted면 unrestricted capabilities로 묶여 보고된다." },
+    { pointer: 4, memory: ["host namespaces", "unrestricted capabilities", "allowPrivilegeEscalation != false"], caption: "allowPrivilegeEscalation을 false로 적지 않았다. 비어 있으면 위반이다." },
+    { pointer: 5, memory: ["host namespaces", "unrestricted capabilities", "allowPrivilegeEscalation != false"], caption: "drop ALL이 없는 것도 같은 unrestricted capabilities 항목에 들어간다." },
+    { pointer: 6, memory: ["host namespaces", "unrestricted capabilities", "allowPrivilegeEscalation != false", "runAsNonRoot != true"], caption: "Pod에도 컨테이너에도 runAsNonRoot가 없다." },
+    { pointer: 7, found: [0, 3, 4, 6, 7], memory: ["host namespaces", "unrestricted capabilities", "allowPrivilegeEscalation != false", "runAsNonRoot != true", "seccompProfile"], caption: "seccomp도 없다. 위반 다섯 개를 한 줄로 이어 붙인 것이 맨 앞 경고의 netdebug 줄이다." },
+  ]}
+/>
+
+함정 둘을 실제로 확인했다. 대문자 `ALL`만 인정한다. 그리고 `runAsUser: 0`은 `runAsNonRoot: true`가 있어도 따로 걸린다.
+
+```bash
+# vault-prod는 restricted 강제. drop을 소문자 all로, runAsUser를 0으로 바꿔 본다
+gen lower all 101 | kubectl apply -f -
+gen root ALL 0 | kubectl apply -f -
+```
+
+```text
+Error from server (Forbidden): error when creating "STDIN": pods "lower" is forbidden: violates PodSecurity "restricted:latest": unrestricted capabilities (container "app" must set securityContext.capabilities.drop=["ALL"])
+Error from server (Forbidden): error when creating "STDIN": pods "root" is forbidden: violates PodSecurity "restricted:latest": runAsUser=0 (pod must not set runAsUser=0)
+```
+
+`gen`은 이름, drop 값, UID를 받아 restricted용 Pod 매니페스트를 찍는 셸 함수다. 소문자 `all`은 API 검증은 통과하지만 PSA는 정확히 `ALL`을 찾는다. 추가가 허용되는 건 `NET_BIND_SERVICE` 하나라서, 같은 함수로 `add: ["NET_RAW"]`를 넣으면 `must not include "NET_RAW" in securityContext.capabilities.add`로 거절된다.
+
+## 버전을 고정하는 이유
+
+`restricted`의 내용은 쿠버네티스 버전에 따라 조금씩 늘어 왔다. 위의 `runAsUser=0` 검사가 좋은 예다. 같은 Pod를 규칙 버전만 바꿔서 다시 넣어 봤다.
+
+```bash
+# 같은 네임스페이스, 규칙 버전만 v1.22로 내린다
+kubectl label --overwrite ns vault-prod pod-security.kubernetes.io/enforce-version=v1.22
+gen root ALL 0 | kubectl apply -f - --dry-run=server
+```
+
+```text
+pod/root created (server dry run)
+```
+
+v1.22 규칙에는 이 검사가 없어서 통과했다. 규칙이 쿠버네티스 버전과 함께 움직이니 `enforce-version`을 비워 두면(`latest`) 클러스터를 올리는 날 어떤 Pod가 갑자기 거절될 수 있다. 그래서 enforce는 지금 버전으로 고정하고, warn과 audit는 `latest`로 둬서 다음 버전의 규칙 위반을 미리 본다. 클러스터를 올린 뒤 경고가 없으면 enforce 버전을 따라 올린다.
+
+반대로 버전을 너무 오래 고정해 두면 새 규칙의 보호를 못 받는다. 버전 라벨은 클러스터 업그레이드 체크리스트에 넣어 두는 항목이다.
+
+## 경고는 Deployment에, 거절은 Pod에
+
+enforce는 Pod만 검사한다. Deployment, StatefulSet, Job을 만들 때는 warn과 audit만 Pod 템플릿을 보고, enforce는 컨트롤러가 Pod를 만드는 순간에 적용된다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="hostPath를 쓰는 Deployment: 오브젝트는 만들어지고 Pod는 막힌다"
+  zones={[
+    { id: "cp", label: "control plane", x: 120, y: 6, w: 274, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "apply", x: 56, y: 70, icon: "client", w: 96 },
+    { id: "api", label: "API server", sub: "PSA", x: 200, y: 70, icon: "gateway", w: 104 },
+    { id: "etcd", label: "etcd", sub: "Deployment", x: 330, y: 70, icon: "db", w: 100 },
+    { id: "rs", label: "RS ctrl", sub: "Pod 생성", x: 200, y: 220, icon: "server", w: 100 },
+    { id: "ev", label: "Event", sub: "FailedCreate", x: 330, y: 220, icon: "lock", w: 104 },
+  ]}
+  links={[
+    { from: "cli", to: "api" },
+    { from: "api", to: "etcd" },
+    { from: "rs", to: "api" },
+    { from: "rs", to: "ev", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "api", "etcd"], packet: "Deploy", title: "Deployment는 경고만 받는다", detail: "warn 수준(restricted)으로 Pod 템플릿을 보고 Warning을 돌려준다. enforce는 워크로드 오브젝트에 적용하지 않아서 저장된다.", payload: "Warning: would violate PodSecurity \"restricted:latest\": ... restricted volume types (volume \"h\" uses restricted volume type \"hostPath\") ...\ndeployment.apps/collector created" },
+    { path: ["rs", "api"], packet: "Pod", blocked: true, title: "컨트롤러가 만든 Pod는 거절된다", detail: "ReplicaSet 컨트롤러가 Pod를 만들려 하자 enforce(baseline)가 hostPath를 거절한다." },
+    { path: ["rs", "ev"], packet: "event", title: "흔적은 이벤트에만 남는다", detail: "kubectl apply는 성공했으니 배포한 사람은 모른다. ReplicaSet 이벤트에 FailedCreate가 계속 쌓인다.", payload: "Error creating: pods \"collector-5df7867744-h6jpk\" is forbidden: violates PodSecurity \"baseline:v1.37\": hostPath volumes (volume \"h\")" },
+    { path: ["cli", "api"], packet: "get", highlight: ["cp"], title: "READY 0/1로 드러난다", detail: "kubectl get deploy에서 READY 0/1, UP-TO-DATE 0이 보인다. 원인은 events에서 찾는다." },
+  ]}
+/>
+
+```bash
+# hostPath를 쓰는 Deployment를 pay에 배포하고 상태와 이벤트를 본다
+kubectl apply -f dep-hp.yaml
+kubectl -n pay get deploy collector
+kubectl -n pay get events --field-selector reason=FailedCreate \
+  -o custom-columns=OBJECT:.involvedObject.name,REASON:.reason,MESSAGE:.message
+```
+
+```text
+deployment.apps/collector created
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+collector   0/1     0            0           3s
+OBJECT                 REASON         MESSAGE
+collector-5df7867744   FailedCreate   Error creating: pods "collector-5df7867744-h6jpk" is forbidden: violates PodSecurity "baseline:v1.37": hostPath volumes (volume "h")
+collector-5df7867744   FailedCreate   Error creating: pods "collector-5df7867744-fkkj5" is forbidden: violates PodSecurity "baseline:v1.37": hostPath volumes (volume "h")
+```
+
+경고 문구에 restricted 위반만 나오고 baseline의 hostPath 거절 예고는 따로 없다는 점도 눈여겨본다. Deployment 생성 때 받는 경고는 warn 수준의 것이다. 그래서 warn을 enforce보다 낮게 두면(예: enforce=restricted, warn=baseline) 배포하는 사람은 아무 경고도 못 받고 Pod만 막힌다. warn은 enforce와 같거나 더 엄격하게 둔다. CI에서는 `kubectl apply --dry-run=server`의 Warning을 실패로 처리하면 운영에 닿기 전에 잡힌다.
+
+디버깅 도구도 이 규칙을 지난다. `kubectl debug`가 붙이는 ephemeral container도 Pod 수정으로 검사된다.
+
+```bash
+# restricted 네임스페이스의 Pod에 디버그 컨테이너를 붙인다: 기본(general) 프로필, restricted 프로필
+kubectl -n vault-prod debug ok --image=busybox:1.36 --profile=general -- sh
+kubectl -n vault-prod debug ok --image=busybox:1.36 --profile=restricted -- sh
+```
+
+```text
+Defaulting debug container name to debugger-v75jf.
+Warning: Non-root user is configured for the entire target Pod, and some capabilities granted by debug profile may not work. Please consider using "--custom" with a custom profile that specifies "securityContext.runAsUser: 0".
+Error from server (Forbidden): pods "ok" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "debugger-v75jf" must set securityContext.allowPrivilegeEscalation=false), unrestricted capabilities (container "debugger-v75jf" must set securityContext.capabilities.drop=["ALL"]; container "debugger-v75jf" must not include "SYS_PTRACE" in securityContext.capabilities.add)
+Defaulting debug container name to debugger-fzlhb.
+```
+
+`general` 프로필은 `SYS_PTRACE`를 더해서 막혔고, `--profile=restricted`는 통과했다. 운영 장애 중에 디버그 컨테이너가 안 붙어 당황하지 않으려면 이 옵션을 기억해 둔다.
+
+## 클러스터 기본값과 예외
+
+라벨이 없는 네임스페이스는 어떻게 될까. 기본은 `privileged`, 즉 아무것도 안 막는다. 새로 만든 네임스페이스가 전부 무방비라는 뜻이다. 이 기본값은 API 서버의 어드미션 설정 파일로 바꾼다. 예외(검사를 건너뛸 네임스페이스, 사용자, RuntimeClass)도 여기서만 정할 수 있다. 라벨로는 예외를 못 만든다.
+
+```yaml
+# --admission-control-config-file로 넘기는 파일
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: PodSecurity
+  configuration:
+    apiVersion: pod-security.admission.config.k8s.io/v1
+    kind: PodSecurityConfiguration
+    defaults:                    # 라벨이 없는 네임스페이스에 적용
+      enforce: "baseline"
+      enforce-version: "latest"
+      audit: "restricted"
+      audit-version: "latest"
+      warn: "restricted"
+      warn-version: "latest"
+    exemptions:
+      usernames: []
+      runtimeClasses: []
+      namespaces: ["kube-system", "monitoring"]
+```
+
+이 설정과 감사 정책(Pod 생성을 Metadata 수준으로 기록)을 넣은 두 번째 실습 클러스터를 띄워 라벨 없는 네임스페이스 둘에 Pod를 넣어 봤다.
+
+<NetworkTopology
+  width={400}
+  height={310}
+  caption="라벨 없는 네임스페이스는 클러스터 기본값을, 예외 네임스페이스는 검사를 건너뛴다"
+  zones={[
+    { id: "ta", label: "team-a (기본값)", x: 6, y: 6, w: 186, h: 140, tone: "private" },
+    { id: "mon", label: "monitoring (예외)", x: 208, y: 6, w: 186, h: 140, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "nd", label: "nd", sub: "hostNetwork", x: 100, y: 60, icon: "container", w: 104 },
+    { id: "plain", label: "plain", sub: "설정 없음", x: 100, y: 112, icon: "container", w: 104 },
+    { id: "ne", label: "node-exp", sub: "hostNetwork", x: 300, y: 86, icon: "container", w: 112 },
+    { id: "api", label: "API server", sub: "PodSecurity", x: 100, y: 240, icon: "gateway", w: 110 },
+    { id: "log", label: "audit.log", sub: "annotations", x: 300, y: 240, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "nd", to: "api" },
+    { from: "plain", to: "api" },
+    { from: "ne", to: "api" },
+    { from: "api", to: "log" },
+  ]}
+  steps={[
+    { path: ["nd", "api"], packet: "create", blocked: true, title: "기본값 baseline에 걸린다", detail: "team-a에는 라벨이 없다. 설정 파일의 defaults가 적용되어 hostNetwork가 거절된다.", payload: "violates PodSecurity \"baseline:latest\": host namespaces (hostNetwork=true)" },
+    { path: ["plain", "api", "log"], packet: "create", title: "통과하지만 기록이 남는다", detail: "baseline은 통과하고 restricted 위반은 경고와 감사 주석으로 남는다." },
+    { path: ["ne", "api", "log"], packet: "create", highlight: ["mon"], title: "예외 네임스페이스는 건너뛴다", detail: "monitoring은 exemptions에 있다. 같은 hostNetwork Pod가 그대로 만들어지고 감사에는 exempt만 남는다.", payload: "\"pod-security.kubernetes.io/exempt\": \"namespace\"" },
+  ]}
+/>
+
+```bash
+# 라벨 없는 team-a, 예외인 monitoring
+kubectl -n team-a run nd --image=busybox:1.36 --overrides='{"spec":{"hostNetwork":true}}' -- sleep 3600
+kubectl -n monitoring run node-exporter --image=busybox:1.36 --overrides='{"spec":{"hostNetwork":true}}' -- sleep 3600
+```
+
+```text
+Error from server (Forbidden): pods "nd" is forbidden: violates PodSecurity "baseline:latest": host namespaces (hostNetwork=true)
+pod/node-exporter created
+```
+
+예외는 강력한 만큼 좁게 쓴다. `exemptions.usernames`에 사용자를 넣으면 그 사용자가 직접 만든 Pod만 건너뛴다. 컨트롤러가 대신 만드는 Pod(Deployment의 Pod)는 컨트롤러의 이름으로 들어오니 예외가 되지 않는다. 그렇다고 `system:serviceaccount:kube-system:replicaset-controller`를 넣으면 클러스터의 모든 Deployment가 예외가 된다. 네임스페이스 예외도 같다. 그 네임스페이스에 Pod를 만들 수 있는 사람은 사실상 노드 root다. 그래서 예외 네임스페이스에는 [RBAC](/posts/k8s-rbac)로 Pod 생성 권한을 꼭 필요한 사람에게만 준다.
+
+관리형 클러스터(EKS, GKE)는 API 서버 플래그를 못 만지니 이 파일도 못 쓴다. 그때는 네임스페이스마다 라벨을 거는 수밖에 없고, 새 네임스페이스에 라벨을 빠뜨리지 않게 [어드미션 정책](/posts/k8s-admission-control)이나 GitOps 템플릿으로 강제한다.
+
+## 감사 로그로 위반을 모은다
+
+`audit` 모드의 쓰임은 사람이 안 보는 위반을 모으는 데 있다. 위 클러스터의 감사 로그에서 Pod 생성 이벤트만 뽑아 봤다.
+
+```bash
+# Pod 생성 감사 이벤트의 PSA 주석만 본다
+grep '"pods"' audit.log | grep -v '"stage":"RequestReceived"' | jq -c 'select(.objectRef.namespace!=null)
+  | {ns: .objectRef.namespace, name: .objectRef.name, code: .responseStatus.code,
+     ann: (.annotations | with_entries(select(.key|startswith("pod-security"))))}'
+```
+
+```text
+{"ns":"team-a","name":"nd","code":403,"ann":{"pod-security.kubernetes.io/audit-violations":"would violate PodSecurity \"restricted:latest\": host namespaces (hostNetwork=true), allowPrivilegeEscalation != false (container \"nd\" must set securityContext.allowPrivilegeEscalation=false), unrestricted capabilities (container \"nd\" must set securityContext.capabilities.drop=[\"ALL\"]), runAsNonRoot != true (pod or container \"nd\" must set securityContext.runAsNonRoot=true), seccompProfile (pod or container \"nd\" must set securityContext.seccompProfile.type to \"RuntimeDefault\" or \"Localhost\")","pod-security.kubernetes.io/enforce-policy":"baseline:latest"}}
+{"ns":"team-a","name":"plain","code":201,"ann":{"pod-security.kubernetes.io/audit-violations":"would violate PodSecurity \"restricted:latest\": allowPrivilegeEscalation != false (container \"plain\" must set securityContext.allowPrivilegeEscalation=false), unrestricted capabilities (container \"plain\" must set securityContext.capabilities.drop=[\"ALL\"]), runAsNonRoot != true (pod or container \"plain\" must set securityContext.runAsNonRoot=true), seccompProfile (pod or container \"plain\" must set securityContext.seccompProfile.type to \"RuntimeDefault\" or \"Localhost\")","pod-security.kubernetes.io/enforce-policy":"baseline:latest"}}
+{"ns":"monitoring","name":"node-exporter","code":201,"ann":{"pod-security.kubernetes.io/exempt":"namespace"}}
+```
+
+`enforce-policy`는 실제로 적용된 수준, `audit-violations`는 audit 수준 기준의 위반이다. 이걸 네임스페이스별로 세면 "restricted로 올리려면 어느 팀부터 고쳐야 하나"가 숫자로 나온다. API 서버 메트릭도 같은 정보를 준다.
+
+```bash
+# PSA 판정 결과를 모드·수준별로 센다
+kubectl get --raw /metrics | grep -E '^pod_security_evaluations_total' | grep 'decision="deny"'
+```
+
+```text
+pod_security_evaluations_total{decision="deny",mode="audit",policy_level="restricted",policy_version="latest",request_operation="create",resource="pod",subresource=""} 2
+pod_security_evaluations_total{decision="deny",mode="enforce",policy_level="baseline",policy_version="latest",request_operation="create",resource="pod",subresource=""} 1
+pod_security_evaluations_total{decision="deny",mode="warn",policy_level="restricted",policy_version="latest",request_operation="create",resource="pod",subresource=""} 1
+```
+
+`mode="enforce", decision="deny"`가 갑자기 늘면 누군가의 배포가 막히고 있다는 뜻이니 알림을 걸어 둘 만하다. 감사 정책을 어떻게 짜는지는 [감사 로그 글](/posts/k8s-audit-logging)에서 다룬다.
+
+## 판정을 직접 짜 보기
+
+검사 항목 일부만 골라 PSA 판정을 흉내 내 보자. Pod를 받아 통과하는 가장 엄격한 수준을 돌려준다. baseline은 호스트 namespace, privileged, hostPath, 허용 목록 밖 capability 추가를 보고, restricted는 거기에 APE false, drop `ALL`, 추가는 `NET_BIND_SERVICE`만, runAsNonRoot true(컨테이너 값이 Pod 값을 덮음), runAsUser 0 금지, seccomp RuntimeDefault·Localhost, 볼륨 종류를 본다. 테스트는 위 실습에서 API 서버가 실제로 내린 판정과 같다.
+
+<CodePlayground
+  caption="Pod Security 수준 판정"
+  functionName="podLevel"
+  initialCode={`function podLevel(pod) {
+  // "restricted" | "baseline" | "privileged"
+  return "privileged";
+}`}
+  solution={`function podLevel(pod) {
+  const s = pod.securityContext || {};
+  const cs = pod.containers;
+  const BASE_CAPS = ["AUDIT_WRITE","CHOWN","DAC_OVERRIDE","FOWNER","FSETID","KILL","MKNOD","NET_BIND_SERVICE","SETFCAP","SETGID","SETPCAP","SETUID","SYS_CHROOT"];
+  const baselineOk =
+    !pod.hostNetwork && !pod.hostPID && !pod.hostIPC &&
+    !(pod.volumes || []).some((v) => v.hostPath) &&
+    cs.every((c) => {
+      const sc = c.securityContext || {};
+      const add = (sc.capabilities && sc.capabilities.add) || [];
+      return !sc.privileged && add.every((a) => BASE_CAPS.includes(a));
+    });
+  if (!baselineOk) return "privileged";
+  const pick = (c, k) => { const sc = c.securityContext || {}; return sc[k] !== undefined ? sc[k] : s[k]; };
+  const okVol = (pod.volumes || []).every((v) => v.emptyDir || v.configMap || v.secret || v.persistentVolumeClaim || v.projected || v.downwardAPI);
+  const restrictedOk = okVol && cs.every((c) => {
+    const sc = c.securityContext || {};
+    const caps = sc.capabilities || {};
+    const seccomp = pick(c, "seccompProfile");
+    return sc.allowPrivilegeEscalation === false &&
+      (caps.drop || []).includes("ALL") &&
+      (caps.add || []).every((a) => a === "NET_BIND_SERVICE") &&
+      pick(c, "runAsNonRoot") === true &&
+      pick(c, "runAsUser") !== 0 &&
+      !!seccomp && (seccomp.type === "RuntimeDefault" || seccomp.type === "Localhost");
+  });
+  return restrictedOk ? "restricted" : "baseline";
+}`}
+  tests={[
+    { label: "설정 없는 Pod", args: [{ containers: [{ name: "plain" }] }], expected: "baseline" },
+    { label: "restricted 모범", args: [{ securityContext: { runAsNonRoot: true, runAsUser: 101, seccompProfile: { type: "RuntimeDefault" } }, containers: [{ name: "app", securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } } }] }], expected: "restricted" },
+    { label: "hostNetwork", args: [{ hostNetwork: true, containers: [{ name: "nd" }] }], expected: "privileged" },
+    { label: "소문자 all", args: [{ securityContext: { runAsNonRoot: true, runAsUser: 101, seccompProfile: { type: "RuntimeDefault" } }, containers: [{ name: "app", securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["all"] } } }] }], expected: "baseline" },
+    { label: "runAsUser 0", args: [{ securityContext: { runAsNonRoot: true, runAsUser: 0, seccompProfile: { type: "RuntimeDefault" } }, containers: [{ name: "app", securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } } }] }], expected: "baseline" },
+    { label: "hostPath", args: [{ volumes: [{ name: "h", hostPath: { path: "/" } }], containers: [{ name: "c" }] }], expected: "privileged" },
+    { label: "NET_ADMIN 추가", args: [{ containers: [{ name: "t", securityContext: { capabilities: { add: ["NET_ADMIN"] } } }] }], expected: "privileged" },
+    { label: "NET_BIND_SERVICE만 추가", args: [{ securityContext: { runAsNonRoot: true, runAsUser: 101, seccompProfile: { type: "RuntimeDefault" } }, containers: [{ name: "app", securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"], add: ["NET_BIND_SERVICE"] } } }] }], expected: "restricted" },
+  ]}
+/>
+
+실제 PSA는 여기에 hostPort, procMount, sysctl, AppArmor·SELinux, seccomp Unconfined 명시, Windows Pod 예외, 버전별 차이까지 본다. 그래도 뼈대는 같다. 항목마다 위반을 모으고, 하나라도 있으면 그 수준에서 탈락한다.
+
+## PodSecurityPolicy에서 넘어오기
+
+PSP는 1.21에 지원 중단이 발표되고 1.25에서 지워졌다. 1.25 이후 클러스터에는 리소스 자체가 없다.
+
+```bash
+kubectl api-resources | grep -i -c podsecuritypolic
+```
+
+```text
+0
+```
+
+아직 PSP를 쓰는 옛 클러스터를 올려야 한다면 두 방식의 차이부터 알아야 한다. PSP는 정책 여러 개를 만들고 RBAC의 `use` 동사로 사용자나 ServiceAccount에 묶었다. 그래서 "누가 이 Pod를 만들었나"에 따라 다른 정책이 골라졌고, 어느 정책이 적용될지 예측하기 어려웠다. 게다가 PSP는 Pod를 고치기도 했다. `runAsUser`나 seccomp 기본값을 채워 넣는 식이다. PSA는 네임스페이스 라벨 하나로 정해지고, 정해진 세 수준만 있고, Pod를 절대 고치지 않는다.
+
+옮기는 순서는 이렇다.
+
+1. PSP가 채워 주던 값을 매니페스트로 옮긴다. PSA는 값을 채우지 않으니 PSP의 기본값(`defaultAddCapabilities`, `runAsUser` 규칙, seccomp 기본 annotation)에 기대던 Pod는 옮긴 뒤 거절된다. 매니페스트에 명시하거나, 꼭 채워야 하면 MutatingAdmissionPolicy나 웹훅으로 옮긴다.
+2. 네임스페이스마다 수준을 고른다. `kubectl label --dry-run=server --overwrite ns --all pod-security.kubernetes.io/enforce=baseline`으로 전 네임스페이스를 한 번에 미리 본다.
+3. `warn`과 `audit`부터 건다. 감사 로그와 메트릭으로 위반이 0이 될 때까지 매니페스트를 고친다.
+4. `enforce`를 버전 고정으로 건다. 그다음 PSP 어드미션 플러그인을 끄고 PSP 오브젝트를 지운다.
+
+2번의 출력은 이렇게 나온다. 이 kwok 클러스터는 kube-system에 Pod가 없어서 조용하지만, 실제 클러스터라면 CNI와 kube-proxy 때문에 kube-system에서 경고가 줄줄이 나온다. kube-system에는 `privileged`를 명시해 두는 이유다.
+
+```text
+namespace/default labeled (server dry run)
+namespace/kube-node-lease labeled (server dry run)
+namespace/kube-public labeled (server dry run)
+namespace/kube-system labeled (server dry run)
+Warning: existing pods in namespace "pay" violate the new PodSecurity enforce level "baseline:latest"
+Warning: log-agent: hostPath volumes
+Warning: netdebug: non-default capabilities, host namespaces
+namespace/pay labeled (server dry run)
+namespace/shop labeled (server dry run)
+```
+
+PSP로 하던 일 중 PSA로 안 되는 것도 있다. 허용할 이미지 레지스트리, 특정 hostPath 경로만 허용, 라벨 필수 같은 맞춤 규칙이다. 이런 것은 ValidatingAdmissionPolicy, Kyverno, OPA Gatekeeper가 맡는다. PSA를 바닥으로 깔고 그 위에 맞춤 규칙을 얹는 구성이 흔하다. 그 도구들은 [어드미션 컨트롤 글](/posts/k8s-admission-control)에서 비교한다.
+
+## 현장에서 수준을 올리는 순서
+
+"전부 restricted"는 목표지 출발점이 아니다. 실제로는 이렇게 간다. 먼저 클러스터 기본값(설정 파일을 쓸 수 있다면)이나 모든 네임스페이스에 `enforce=baseline`을 건다. 보통 앱은 바로 통과하고, 걸리는 건 대개 진짜로 위험한 것(hostPath, hostNetwork)이라 이유를 따져 볼 가치가 있다. 동시에 `warn=restricted`, `audit=restricted`를 건다. 그리고 팀별 위반 수를 감사 로그로 세어 공유한다. restricted로 올린 네임스페이스부터 enforce를 바꾼다.
+
+배포가 갑자기 안 될 때는 이 순서로 본다. `kubectl get deploy`에서 READY가 0인데 apply는 성공했다면 ReplicaSet 이벤트의 `FailedCreate`부터 본다. 문구에 `violates PodSecurity "수준:버전"`이 있으면 PSA다. 그 수준과 버전이 네임스페이스 라벨에서 왔는지, 클러스터 기본값에서 왔는지 `kubectl get ns <ns> --show-labels`로 확인한다. 라벨이 없는데 막혔다면 기본값이 걸린 클러스터다. 클러스터를 올린 직후라면 `enforce-version`이 비어 있지 않은지 본다.
+
+## 라벨 한 줄, 수준 셋, 모드 셋
+
+PSA는 네임스페이스 라벨로 privileged·baseline·restricted 중 하나를 고르고, enforce(거절)·warn(경고)·audit(감사 주석) 모드를 따로 건다. enforce는 Pod에만, warn과 audit는 워크로드 템플릿에도 적용되고, 값을 고치지 않는다. 규칙은 버전과 함께 바뀌니 enforce는 고정하고 warn·audit는 latest로 둔다. 기본값과 예외는 API 서버 설정 파일에서만 정한다. 맞춤 규칙이 필요하면 그 위에 어드미션 정책을 얹는다.
+
+## 면접에서 나올 만한 질문
+
+### Pod Security Standards의 세 수준은 무엇이 다른가요?
+
+`privileged`는 아무것도 막지 않아 시스템 컴포넌트용이다. `baseline`은 hostNetwork·hostPID, privileged, hostPath, 위험한 capability 추가처럼 알려진 권한 상승 경로를 막고 보통 앱은 그대로 통과한다. `restricted`는 거기에 non-root, `allowPrivilegeEscalation: false`, `drop: ["ALL"]`, seccomp RuntimeDefault, 제한된 볼륨 종류를 요구한다.
+
+### enforce, warn, audit는 어떻게 다르고 어떻게 조합하나요?
+
+enforce는 위반한 Pod를 거절하고, warn은 받아 주면서 kubectl에 경고를 돌려주고, audit는 감사 로그에 위반 주석을 남긴다. enforce는 Pod에만 걸리고 warn과 audit는 Deployment 같은 워크로드의 Pod 템플릿에도 걸린다. 보통 enforce는 baseline, warn과 audit는 restricted로 두고 위반을 줄인 뒤 enforce를 올린다. warn을 enforce보다 느슨하게 두면 배포하는 사람이 경고 없이 막히니 피한다.
+
+### Deployment는 만들어졌는데 Pod가 안 뜹니다. PSA가 원인인지 어떻게 아나요?
+
+enforce는 워크로드 오브젝트가 아니라 컨트롤러가 Pod를 만드는 순간에 적용돼서 apply는 성공한다. `kubectl get deploy`의 READY가 0이고 ReplicaSet 이벤트에 `FailedCreate`와 `violates PodSecurity "baseline:v1.37"` 같은 문구가 있으면 PSA다. 문구에 나온 항목대로 Pod 템플릿을 고친다.
+
+### enforce-version은 왜 고정하나요?
+
+수준의 검사 항목이 쿠버네티스 버전마다 늘어서, latest로 두면 업그레이드 날 갑자기 거절되는 Pod가 생길 수 있다. 실습에서 `runAsUser: 0` Pod가 v1.22 규칙으로는 통과하고 latest로는 거절됐다. 그래서 enforce는 현재 버전으로 고정하고 warn과 audit는 latest로 둬서 새 규칙 위반을 미리 본 뒤 버전을 올린다.
+
+### 특정 네임스페이스나 시스템 컴포넌트를 PSA에서 빼려면 어떻게 하나요?
+
+라벨로는 예외를 못 만들고, API 서버의 AdmissionConfiguration의 `exemptions`에 네임스페이스, 사용자, RuntimeClass를 적는다. 네임스페이스 하나만 풀려면 그 네임스페이스에 `enforce=privileged` 라벨을 거는 방법도 있다. 예외 네임스페이스에서 Pod를 만들 수 있으면 노드 root와 같으니 RBAC로 생성 권한을 좁혀야 한다. 관리형 클러스터는 설정 파일을 못 바꾸니 라벨로 관리한다.
+
+### PodSecurityPolicy에서 PSA로 옮길 때 가장 조심할 점은요?
+
+PSP는 Pod 값을 채워 주는 변형을 했지만 PSA는 절대 고치지 않는다는 점이다. PSP 기본값에 기대던 Pod는 옮긴 뒤 거절되니 그 값을 매니페스트로 옮기거나 변형 정책으로 대신한다. 또 PSP는 RBAC `use`로 주체별 정책을 골랐지만 PSA는 네임스페이스 단위라서 네임스페이스 설계를 다시 봐야 한다. 순서는 dry-run 라벨, warn·audit, enforce, PSP 제거다.
+
+### PSA만으로 부족하면 무엇을 더하나요?
+
+PSA는 정해진 세 수준만 있어서 허용 레지스트리, 특정 hostPath 경로 허용, 필수 라벨 같은 맞춤 규칙은 못 쓴다. 이런 것은 ValidatingAdmissionPolicy(CEL), Kyverno, OPA Gatekeeper로 추가한다. 보통 PSA를 바닥으로 두고 그 위에 맞춤 규칙을 얹는다.

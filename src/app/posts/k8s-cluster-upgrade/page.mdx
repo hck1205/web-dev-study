@@ -1,0 +1,493 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-cluster-upgrade");
+
+몇 달 미뤄 둔 클러스터 업그레이드를 하려고 kubeadm을 최신으로 받아 계획부터 돌려 봤다. 돌아온 답은 한 줄이었다.
+
+```text
+error: [upgrade/init config] FATAL: this version of kubeadm only supports deploying clusters with the control plane version >= 1.36.0. Current version: v1.34.1
+```
+
+1.34에서 1.37로 바로 갈 수 없다는 뜻이다. 1.35, 1.36을 차례로 거쳐야 하고, 그때마다 컨트롤 플레인과 노드를 모두 돌아야 한다. 미룬 만큼 일이 세 배가 된 셈이다. 쿠버네티스 업그레이드가 어려운 이유는 명령이 복잡해서가 아니라, 부품마다 서로 버틸 수 있는 버전 차이가 정해져 있고 그 범위 안에서만 움직여야 하기 때문이다.
+
+이 글은 그 범위(version skew policy)가 어떻게 생겼는지, 거기서 업그레이드 순서가 어떻게 나오는지, kubeadm이 `upgrade plan`과 `upgrade apply`에서 하는 일, EKS 같은 관리형 클러스터가 노드를 갈아 끼우는 방식, 사라진 API, 그리고 되돌리기가 어디까지 되는지를 본다.
+
+`kubeadm upgrade plan`의 출력은 kwok 실습 클러스터(Kubernetes 1.36.5 컨트롤 플레인, kubeadm 1.37.0)에서 진짜로 받았다. 다만 컨트롤 플레인 Pod와 노드가 가짜라서 CoreDNS와 kube-proxy 칸이 비어 있다. `kubeadm upgrade apply`와 AWS CLI 출력은 실제로 돌릴 수 없어 형식만 맞춘 예시로 표시한다. 버전 규칙은 kubernetes/website 저장소의 Version Skew Policy 문서(2026년 10월 기준)를 따랐다.
+
+이 주제의 다른 글: 노드를 비우는 절차는 [노드 점검과 drain](/posts/k8s-node-maintenance), 업그레이드 전에 옛 API를 찾는 법은 [기능 단계와 API 폐기](/posts/k8s-feature-maturity), 업그레이드 전에 떠 둘 백업은 [etcd 백업과 복원](/posts/k8s-etcd-backup)에서 다룬다.
+
+## 한 번에 한 마이너씩만 올라가는 이유
+
+쿠버네티스 버전은 `1.37.1`처럼 x.y.z로 쓴다. 가운데 숫자(마이너)가 1년에 세 번 올라오고, 프로젝트는 가장 최근 마이너 세 개(지금은 1.37, 1.36, 1.35)에만 패치를 낸다. 1.19 이후 버전은 약 1년 동안 패치를 받는다. 패치 버전(z)은 같은 마이너 안에서 버그와 보안 수정만 담으니 아무 때나 올려도 된다. 마이너가 문제다.
+
+API 서버는 마이너를 건너뛸 수 없다. 단일 노드 클러스터라도 그렇다. 이유는 API가 사라지는 방식에 있다. 어떤 API 버전이 폐기되면 적어도 몇 릴리스 동안은 옛 버전과 새 버전을 함께 제공하고, etcd에 저장하는 버전(storage version)을 새 쪽으로 옮긴 뒤에야 옛 것을 지운다. 1.35가 "새 버전으로 저장하기 시작"하고 1.37이 "옛 버전을 지운다"면, 1.34에서 1.37로 바로 뛰면 etcd에 옛 형식으로만 저장된 객체를 1.37이 읽어야 하는 상황이 생긴다. 한 칸씩 가야 그 사이 단계가 데이터를 옮겨 준다.
+
+API 서버 응답에도 이 생각이 드러난다. 1.36.5 클러스터의 `/version`을 보면 이런 필드가 있다.
+
+```bash
+# API 서버가 자기 버전과 호환 범위를 알려 준다
+kubectl get --raw /version
+```
+
+```text
+{
+  "major": "1",
+  "minor": "36",
+  "emulationMajor": "1",
+  "emulationMinor": "36",
+  "minCompatibilityMajor": "1",
+  "minCompatibilityMinor": "35",
+  "gitVersion": "v1.36.5",
+  "gitCommit": "ad950d1cc78b0183c476bd4d3f1934c104229727",
+  "gitTreeState": "clean",
+  "buildDate": "2026-09-23T17:07:02Z",
+  "goVersion": "go1.26.8",
+  "compiler": "gc",
+  "platform": "linux/amd64"
+}
+```
+
+아래 그림에서 조각을 누르면 각 필드의 뜻이 나온다.
+
+<UrlAnatomy
+  caption="/version 응답에서 업그레이드와 관련된 필드"
+  base='{"major":"1"'
+  separator=", "
+  joiner=", "
+  params={[
+    { key: "minor", display: "\"minor\":\"36\"", title: "바이너리의 마이너 버전", description: "실제로 돌고 있는 kube-apiserver 실행 파일의 버전이다. 업그레이드 계획의 출발점이다." },
+    { key: "emulationMinor", display: "\"emulationMinor\":\"36\"", title: "흉내 내는 버전", description: "--emulated-version으로 정한다. 1.32부터 생긴 옵션으로, 1.37 바이너리가 1.36처럼 API와 기능을 노출하게 할 수 있다. 바이너리 교체와 기능 변화를 두 단계로 나누는 장치다." },
+    { key: "minCompatibilityMinor", display: "\"minCompatibilityMinor\":\"35\"", title: "되돌아갈 수 있는 하한", description: "이 서버가 남기는 데이터가 몇 버전까지 호환되는지를 뜻한다. 기본은 바로 앞 마이너다." },
+    { key: "gitVersion", display: "\"gitVersion\":\"v1.36.5\"", title: "패치까지 포함한 버전", description: "kubeadm upgrade plan이 'Cluster version'으로 읽는 값과 같다." },
+  ]}
+/>
+
+1.37.0 바이너리의 도움말을 보면 흉내 낼 수 있는 범위가 적혀 있다.
+
+```bash
+# kube-apiserver가 흉내 낼 수 있는 버전 범위
+kube-apiserver --help 2>&1 | grep -A3 -- '--emulated-version'
+```
+
+```text
+      --emulated-version strings                           The versions different components emulate their capabilities (APIs, features, ...) of.
+                                                           If set, the component will emulate the behavior of this version instead of the underlying binary version.
+                                                           Version format could only be major.minor, for example: '--emulated-version=wardle=1.2,kube=1.31'.
+                                                           Options are: kube=1.34..1.37(default:1.37)
+```
+
+아직 kubeadm이나 관리형 서비스가 이 옵션을 기본 흐름에 넣은 것은 아니라서, 대부분의 클러스터에서 업그레이드는 여전히 "바이너리를 바꾸면 기능도 바뀐다"로 움직인다.
+
+## 누가 누구보다 앞서면 안 되나
+
+부품 사이의 허용 범위는 모두 kube-apiserver를 기준으로 정한다. 다른 부품은 전부 API 서버하고만 이야기하기 때문이다([쿠버네티스 아키텍처](/posts/k8s-architecture)). 규칙의 공통점은 하나다. API 서버보다 새 버전은 안 된다. 옛 클라이언트는 새 서버가 이해하지만, 새 클라이언트가 보내는 새 필드와 새 API를 옛 서버는 모른다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="kube-apiserver가 1.37일 때 각 부품이 버틸 수 있는 범위"
+  nodes={[
+    { id: "api", label: "kube-apiserver", sub: "1.37", x: 220, y: 150, w: 150 },
+    { id: "kubectl", label: "kubectl", sub: "1.36 ~ 1.38", x: 220, y: 40, w: 130 },
+    { id: "cm", label: "kcm · scheduler", sub: "1.36 ~ 1.37", x: 80, y: 150, w: 130 },
+    { id: "ha", label: "다른 apiserver", sub: "1.36 ~ 1.37", x: 360, y: 150, w: 130 },
+    { id: "kubelet", label: "kubelet", sub: "1.34 ~ 1.37", x: 120, y: 260, w: 130 },
+    { id: "proxy", label: "kube-proxy", sub: "1.34 ~ 1.37", x: 320, y: 260, w: 130 },
+  ]}
+  edges={[
+    { from: "kubectl", to: "api", label: "±1" },
+    { from: "cm", to: "api", label: "-1까지" },
+    { from: "ha", to: "api", label: "서로 1", arrow: "both" },
+    { from: "kubelet", to: "api", label: "-3까지" },
+    { from: "proxy", to: "api", label: "-3까지" },
+    { from: "proxy", to: "kubelet", label: "±3", dashed: true, arrow: "both" },
+  ]}
+/>
+
+- HA 구성의 kube-apiserver끼리는 가장 새 것과 가장 옛 것이 1 마이너 안이어야 한다.
+- kube-controller-manager, kube-scheduler, cloud-controller-manager는 API 서버보다 새면 안 되고, 1 마이너까지 뒤처질 수 있다. 업그레이드 도중 잠깐 생기는 차이를 견디라는 뜻이다.
+- kubelet과 kube-proxy는 API 서버보다 새면 안 되고, 3 마이너까지 뒤처질 수 있다. 1.25보다 옛 kubelet은 2까지였다. 1.28에서 3으로 넓어졌다.
+- kubectl은 API 서버의 위아래 1 마이너다. 유일하게 새 쪽도 허용된다.
+
+kubectl 규칙은 직접 확인할 수 있다. 1.37 kubectl로 1.34 서버에 붙으면 `kubectl version`이 경고한다.
+
+```bash
+# 클라이언트 1.37, 서버 1.34
+kubectl version
+```
+
+```text
+Client Version: v1.37.0
+Kustomize Version: v5.8.1
+Server Version: v1.34.1
+Warning: version difference between client (1.37) and server (1.34) exceeds the supported minor version skew of +/-1
+```
+
+경고는 `kubectl version`에서만 나오고, `kubectl get` 같은 평소 명령은 아무 말 없이 돈다. 대부분은 잘 되지만 `kubectl apply`가 서버에 없는 필드를 쓰거나, 플러그인과 인증 방식이 바뀐 지점에서 이상한 에러가 난다. 노트북의 kubectl 하나로 버전이 다른 여러 클러스터를 다루는 팀이라면 클러스터마다 맞는 kubectl을 쓰게 해 두는 편이 낫다.
+
+규칙을 지키게 하는 것은 사람이다. API 서버는 자기보다 새 kubelet이 붙어도 막지 않는다. 실습 클러스터(API 서버 1.36.5)에 kubelet 버전이 1.37.1이라고 보고하는 노드를 붙여 봤다.
+
+```bash
+# 각 노드의 kubelet 버전과 OS
+kubectl get nodes -o custom-columns=NAME:.metadata.name,KUBELET:.status.nodeInfo.kubeletVersion,OS:.status.nodeInfo.osImage
+```
+
+```text
+NAME       KUBELET   OS
+vm         v1.36.5   Ubuntu 24.04.3 LTS
+worker-1   v1.36.5   Ubuntu 24.04.3 LTS
+worker-2   v1.35.3   Ubuntu 24.04.3 LTS
+worker-3   v1.37.1   Ubuntu 24.04.3 LTS
+```
+
+kwok의 가짜 노드라 실제 kubelet은 아니지만, API 서버가 등록을 거절하지 않는다는 것은 진짜다. 노드 이미지를 실수로 새 버전으로 굽거나 오토스케일러가 최신 AMI를 고르면 이런 노드가 조용히 섞인다. 그래서 업그레이드 전후로 이 표를 한 번씩 뽑아 보는 게 좋다.
+
+## HA 클러스터에서는 범위가 더 좁아진다
+
+컨트롤 플레인이 셋이고 그중 하나만 올린 순간에는 API 서버가 1.37과 1.36 두 가지다. kubelet과 컨트롤러는 로드 밸런서를 거쳐 어느 API 서버에 붙을지 모른다. 그러니 둘 중 옛 쪽보다 새면 안 된다. 아래 그림에서 다음을 누르면 업그레이드 도중의 범위를 따라간다.
+
+<NetworkTopology
+  caption="API 서버가 섞인 동안에는 옛 버전이 기준이 된다"
+  width={400}
+  height={290}
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 8, y: 10, w: 384, h: 110, tone: "private" },
+    { id: "wk", label: "워커 노드", x: 8, y: 200, w: 384, h: 80, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "cp1", label: "cp-1", sub: "apiserver 1.37", x: 72, y: 70, icon: "server", w: 112 },
+    { id: "cp2", label: "cp-2", sub: "apiserver 1.36", x: 200, y: 70, icon: "server", w: 112 },
+    { id: "cp3", label: "cp-3", sub: "apiserver 1.36", x: 328, y: 70, icon: "server", w: 112 },
+    { id: "lb", label: "LB :6443", sub: "아무 데나", x: 200, y: 160, icon: "lb" },
+    { id: "k1", label: "kubelet", sub: "1.36", x: 110, y: 245, icon: "container" },
+    { id: "k2", label: "kubelet", sub: "1.37", x: 290, y: 245, icon: "container" },
+  ]}
+  links={[
+    { from: "lb", to: "cp1" },
+    { from: "lb", to: "cp2" },
+    { from: "lb", to: "cp3" },
+    { from: "k1", to: "lb" },
+    { from: "k2", to: "lb" },
+  ]}
+  steps={[
+    { path: ["cp1"], highlight: ["cp"], title: "첫 컨트롤 플레인만 올렸다", detail: "API 서버가 1.37 하나, 1.36 둘이다. 가장 새 것과 옛 것의 차이가 1이라 규칙 안이다." },
+    { path: ["k1", "lb", "cp1"], packet: "1.36", title: "1.36 kubelet은 어디에 붙어도 된다", detail: "1.37 서버보다 1 뒤처졌고, 1.36 서버와는 같다. 둘 다 허용 범위다." },
+    { path: ["k2", "lb", "cp2"], packet: "1.37", blocked: true, title: "1.37 kubelet은 아직 이르다", detail: "LB가 1.36 서버로 보내면 kubelet이 API 서버보다 새 상태가 된다. 노드는 컨트롤 플레인을 모두 올린 다음에 올린다." },
+    { path: ["cp2", "cp3"], highlight: ["cp"], title: "나머지를 올리면 범위가 넓어진다", detail: "API 서버가 모두 1.37이 되면 kubelet은 1.34부터 1.37까지 다시 허용된다." },
+  ]}
+/>
+
+같은 이유로 kubectl도 좁아진다. 1.37과 1.36이 섞인 동안 1.38 kubectl은 1.36 서버와 2 차이가 나서 범위 밖이다. 아래 함수로 규칙을 직접 확인해 볼 수 있다. 버전은 마이너 숫자만 쓴다.
+
+<CodePlayground
+  caption="이 부품 버전은 지금 클러스터에서 허용되나"
+  functionName="isSupported"
+  initialCode={`// apiservers: 지금 돌고 있는 kube-apiserver들의 마이너 버전 (예: [37, 36])
+// component: "kube-apiserver" | "kubelet" | "kube-proxy" | "kube-controller-manager" | "kube-scheduler" | "kubectl"
+// v: 확인할 부품의 마이너 버전
+function isSupported(apiservers, component, v) {
+  const lo = Math.min(...apiservers), hi = Math.max(...apiservers);
+  // 여기를 채운다
+  return false;
+}`}
+  solution={`function isSupported(apiservers, component, v) {
+  const lo = Math.min(...apiservers), hi = Math.max(...apiservers);
+  if (component === "kube-apiserver") return Math.max(hi, v) - Math.min(lo, v) <= 1;
+  if (component === "kubelet" || component === "kube-proxy") return v <= lo && v >= hi - 3;
+  if (["kube-controller-manager", "kube-scheduler", "cloud-controller-manager"].includes(component)) return v <= lo && v >= hi - 1;
+  if (component === "kubectl") return apiservers.every((a) => Math.abs(a - v) <= 1);
+  return false;
+}`}
+  tests={[
+    { label: "1.37 서버, kubelet 1.34", args: [[37], "kubelet", 34], expected: true },
+    { label: "1.37 서버, kubelet 1.33", args: [[37], "kubelet", 33], expected: false },
+    { label: "1.37·1.36 섞임, kubelet 1.37", args: [[37, 36], "kubelet", 37], expected: false },
+    { label: "1.37 서버, kubectl 1.38", args: [[37], "kubectl", 38], expected: true },
+    { label: "1.37·1.36 섞임, kubectl 1.38", args: [[37, 36], "kubectl", 38], expected: false },
+    { label: "1.37 서버, scheduler 1.35", args: [[37], "kube-scheduler", 35], expected: false },
+    { label: "1.37·1.36 섞임, scheduler 1.36", args: [[37, 36], "kube-scheduler", 36], expected: true },
+    { label: "1.36 서버를 1.38로", args: [[36], "kube-apiserver", 38], expected: false },
+  ]}
+/>
+
+## 올리는 순서는 규칙에서 나온다
+
+"API 서버보다 새면 안 된다"를 지키려면 순서가 하나로 정해진다. API 서버가 먼저, 그다음 컨트롤러와 스케줄러, 마지막에 노드다. 거꾸로 하면 중간에 반드시 규칙을 어기는 순간이 생긴다. 아래 그림은 1.36에서 1.37로 올리는 동안 부품 버전이 바뀌는 순서다.
+
+<AlgoTrace
+  caption="1.36에서 1.37로: 늘 API 서버가 가장 앞에 선다"
+  memoryLabel="가장 옛 apiserver → kubelet 허용 범위"
+  cells={["cp-1 apiserver", "cp-2 apiserver", "cp-3 apiserver", "kcm·scheduler", "node-a kubelet", "node-b kubelet"]}
+  steps={[
+    { memory: ["1.36", "1.33 ~ 1.36"], caption: "출발점. 모든 부품이 1.36이다. 그 전에 1.36의 최신 패치로 맞춰 둔다." },
+    { pointer: 0, found: [0], memory: ["1.36", "1.34 ~ 1.36"], caption: "cp-1의 API 서버를 1.37로 올렸다. 같은 노드의 컨트롤러와 스케줄러도 함께 올라가지만, 다른 API 서버에 붙을 수 있으니 아직 1.36처럼 행동해야 안전하다." },
+    { pointer: 1, found: [0, 1], memory: ["1.36", "1.34 ~ 1.36"], caption: "cp-2도 올렸다. 아직 1.36 서버가 하나 남아 있어 노드는 1.36에 머문다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1.37", "1.34 ~ 1.37"], caption: "마지막 API 서버까지 1.37이 됐다. 이제부터 노드를 올릴 수 있다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["1.37", "1.34 ~ 1.37"], caption: "컨트롤러와 스케줄러도 모두 1.37이다. kubeadm은 이 시점에 CoreDNS와 kube-proxy 애드온을 올린다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["1.37", "1.34 ~ 1.37"], caption: "node-a를 drain하고 kubelet을 올린 뒤 uncordon한다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["1.37", "1.34 ~ 1.37"], caption: "node-b까지 끝났다. 다음 업그레이드(1.38)를 위해 노드를 3 마이너 이상 뒤처지게 두지 않는다." },
+  ]}
+/>
+
+노드를 꼭 매번 올려야 하는 것은 아니다. kubelet은 3 마이너까지 뒤처져도 되니, 컨트롤 플레인을 1.35, 1.36, 1.37로 세 번 올리는 동안 노드를 1.34에 두는 것도 규칙 안이다. 문서는 이 경우를 따로 경고한다. 노드가 계속 3 마이너 뒤에 머물면 그 상태에서는 컨트롤 플레인을 더 올릴 수 없다. 1.38로 가려면 노드부터 1.35 이상으로 올려야 한다. 그리고 kubelet의 마이너 업그레이드는 제자리에서 하지 않는다. 노드를 먼저 drain한다.
+
+업그레이드 전에 하나 더 챙길 것이 어드미션 웹훅이다. 새 API 서버는 새 버전의 리소스와 새 필드를 웹훅에 보낸다. 웹훅이 그걸 이해하지 못하고 `failurePolicy: Fail`이면 API 서버를 올리자마자 Pod 생성이 막힌다.
+
+## kubeadm upgrade plan이 보여 주는 것
+
+kubeadm으로 만든 클러스터라면 첫 번째 컨트롤 플레인 노드에서 kubeadm 자체를 먼저 올린다. Ubuntu에서 `pkgs.k8s.io` 저장소는 마이너마다 주소가 따로라서, 저장소 줄의 버전부터 바꿔야 새 패키지가 보인다.
+
+```bash
+# 저장소 주소의 마이너 버전을 1.36에서 1.37로 바꾼다
+sudo sed -i 's#/v1.36/#/v1.37/#' /etc/apt/sources.list.d/kubernetes.list
+# 설치할 수 있는 1.37 패치 버전을 본다
+sudo apt-get update && apt-cache madison kubeadm
+# kubeadm만 먼저 올린다. hold를 잠깐 풀었다가 다시 건다
+sudo apt-mark unhold kubeadm && sudo apt-get install -y kubeadm='1.37.1-*' && sudo apt-mark hold kubeadm
+kubeadm version -o short
+```
+
+`apt-mark hold`가 걸려 있는 것이 정상이다. 걸어 두지 않으면 누군가 `apt upgrade`를 칠 때 kubelet이 새 마이너로 올라가 규칙을 깬다. 그다음 계획을 본다.
+
+```bash
+# 클러스터 상태를 확인하고 올라갈 수 있는 버전을 보여 준다 (아무것도 바꾸지 않는다)
+sudo kubeadm upgrade plan
+```
+
+```text
+[upgrade] Fetching available versions to upgrade to
+[upgrade/versions] Cluster version: 1.36.5
+[upgrade/versions] kubeadm version: v1.37.0
+[upgrade/versions] Target version: v1.37.1
+[upgrade/versions] Latest version in the v1.36 series: v1.36.5
+
+Components that must be upgraded manually after you have upgraded the control plane with 'kubeadm upgrade apply':
+COMPONENT   NODE       CURRENT   TARGET
+kubelet     worker-2   v1.35.3   v1.37.1
+kubelet     vm         v1.36.5   v1.37.1
+kubelet     worker-1   v1.36.5   v1.37.1
+
+Upgrade to the latest stable version:
+
+COMPONENT                 NODE      CURRENT   TARGET
+kube-apiserver            vm        v1.36.5   v1.37.1
+kube-controller-manager   vm        v1.36.5   v1.37.1
+kube-scheduler            vm        v1.36.5   v1.37.1
+kube-proxy                          1.36.5    v1.37.1
+CoreDNS                                       v1.14.6
+etcd                      vm        3.6.5-0   3.7.0-0
+
+You can now apply the upgrade by executing the following command:
+
+	kubeadm upgrade apply v1.37.1
+
+Note: Before you can perform this upgrade, you have to update kubeadm to v1.37.1.
+```
+
+읽을 곳은 넷이다. `Target version`은 dl.k8s.io의 안정 버전 목록에서 가져온 1.37의 최신 패치다. 맨 위 표는 kubeadm이 대신 올려 주지 않는 kubelet 목록이다. worker-2가 1.35.3이라 아직 규칙 안이지만, 이번에 올리지 않으면 다음 업그레이드에서 발목을 잡는다. 아래 표의 etcd 줄은 kubeadm이 etcd까지 올린다는 뜻이다. 1.37용 kubeadm은 etcd 3.7.0을 짝으로 고른다. 마지막 Note는 kubeadm 1.37.0으로는 1.37.1을 적용할 수 없으니 kubeadm부터 그 패치로 맞추라는 말이다. (CoreDNS의 CURRENT가 비어 있는 것은 실습 클러스터에 CoreDNS가 없어서다.)
+
+글 처음의 에러도 같은 명령에서 나왔다. kubeadm 1.37은 컨트롤 플레인이 1.36 이상일 때만 다룬다. 몇 버전 뒤처졌다면 kubeadm도 1.35, 1.36을 차례로 받아 같은 절차를 반복한다.
+
+## kubeadm upgrade apply 안에서 일어나는 일
+
+`apply`는 첫 번째 컨트롤 플레인 노드에서 한 번만 쓰고, 나머지 컨트롤 플레인 노드에서는 `kubeadm upgrade node`를 쓴다. 아래 그림에서 다음을 누르면 `apply` 한 번의 안쪽을 따라간다.
+
+<SequenceDiagram
+  caption="kubeadm upgrade apply v1.37.1이 하는 일"
+  actors={[
+    { id: "adm", label: "kubeadm" },
+    { id: "disk", label: "노드 디스크" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    { from: "adm", to: "api", label: "사전 점검", title: "올려도 되는 상태인지 본다", detail: "API 서버에 닿는지, 모든 노드가 Ready인지, 컨트롤 플레인이 건강한지 확인하고 skew 규칙을 검사한다. 이미지도 미리 받아 둔다." },
+    { from: "adm", to: "disk", label: "백업", title: "되돌릴 재료를 남긴다", detail: "/etc/kubernetes/tmp 아래에 kubeadm-backup-etcd-날짜와 kubeadm-backup-manifests-날짜를 만든다. 실패하면 자동으로 이걸로 되돌린다." },
+    { from: "adm", to: "disk", label: "etcd 매니페스트", title: "etcd를 먼저 바꾼다", detail: "/etc/kubernetes/manifests/etcd.yaml의 이미지를 바꾼다. kubelet이 스태틱 Pod를 다시 띄우는 동안 이 노드의 API 서버 요청은 잠깐 멈춘다." },
+    { from: "kubelet", to: "kubelet", label: "스태틱 Pod 재시작", title: "kubelet이 파일 변화를 보고 다시 띄운다", detail: "kubeadm은 새 Pod의 해시가 바뀌고 건강해질 때까지 기다린다. 기본 5분 안에 안 되면 백업 매니페스트로 되돌린다." },
+    { from: "adm", to: "disk", label: "apiserver·kcm·sched", title: "컨트롤 플레인을 하나씩 바꾼다", detail: "kube-apiserver, kube-controller-manager, kube-scheduler 순으로 매니페스트를 바꾸고 기다린다. 이 노드의 인증서도 기본으로 갱신한다." },
+    { from: "adm", to: "api", label: "설정 업로드", title: "클러스터 설정을 새 버전으로 쓴다", detail: "kubeadm-config, kubelet-config ConfigMap과 RBAC 규칙을 새 버전에 맞게 고친다." },
+    { from: "adm", to: "api", label: "애드온", title: "CoreDNS와 kube-proxy", detail: "1.28부터는 모든 컨트롤 플레인이 올라간 뒤에야 애드온을 올린다. 그래서 마지막 컨트롤 플레인의 upgrade node에서 실제로 바뀐다." },
+  ]}
+/>
+
+성공하면 이런 줄로 끝난다(문서에 나온 형식, 버전만 바꾼 예시).
+
+```text
+[upgrade/successful] SUCCESS! Your cluster was upgraded to "v1.37.1". Enjoy!
+[upgrade/kubelet] Now that your control plane is upgraded, please proceed with upgrading your kubelets if you haven't already done so.
+```
+
+몇 가지를 알아 두면 덜 놀란다. etcd를 올리는 동안 이 노드의 API 서버는 계속 떠 있으니 진행 중인 요청이 멈춘다. 문서는 `apply` 직전에 `killall -s SIGTERM kube-apiserver`로 API 서버를 먼저 정상 종료시키고 20초 기다리는 방법을 제시한다. 업그레이드 뒤에는 컨테이너 spec 해시가 바뀌어 스태틱 Pod의 컨테이너가 모두 다시 시작된다. `/etc/kubernetes/tmp`의 백업 폴더는 자동으로 지워지지 않으니 끝나고 직접 정리한다. 중간에 노드가 꺼져 어중간한 상태로 남았다면 같은 명령을 다시 돌리면 된다. 멱등이라 원하는 상태로 맞춘다.
+
+컨트롤 플레인이 끝나면 노드마다 이 순서를 반복한다. 컨트롤 플레인 노드의 kubelet도 같은 순서로 올린다.
+
+```bash
+# 1. 노드를 비운다 (자세한 플래그는 노드 점검 글 참고)
+kubectl drain worker-1 --ignore-daemonsets --delete-emptydir-data --timeout=10m
+# 2. 노드에서: kubelet 로컬 설정을 새 버전에 맞게 고친다
+sudo kubeadm upgrade node
+# 3. kubelet과 kubectl 패키지를 올린다
+sudo apt-mark unhold kubelet kubectl && sudo apt-get install -y kubelet='1.37.1-*' kubectl='1.37.1-*' && sudo apt-mark hold kubelet kubectl
+# 4. kubelet을 다시 띄우고 로그를 본다
+sudo systemctl daemon-reload && sudo systemctl restart kubelet
+journalctl -u kubelet -n 50 --no-pager
+# 5. VERSION 칸이 바뀌었는지 보고 다시 연다
+kubectl get node worker-1 && kubectl uncordon worker-1
+```
+
+1.37 kubelet은 기본으로 cgroup v1 호스트에서 시작을 거부한다(`FailCgroupV1` 기본 true). Ubuntu 22.04와 24.04는 기본이 cgroup v2라 괜찮지만, 오래된 이미지로 만든 노드라면 kubelet이 안 뜨는 원인이 여기일 수 있다. `stat -fc %T /sys/fs/cgroup/`이 `cgroup2fs`면 v2다([namespace와 cgroup](/posts/linux-namespaces-cgroups)).
+
+## 관리형 클러스터는 노드를 갈아 끼운다
+
+EKS, GKE, AKS 같은 관리형 클러스터에서는 컨트롤 플레인 업그레이드가 버튼 하나다. 사용자가 할 일은 노드다. EKS 관리형 노드 그룹은 노드를 제자리에서 올리지 않고, 새 AMI로 새 노드를 띄운 뒤 옛 노드를 비우고 지운다. 아래 그림에서 다음을 누르면 기본 전략(새 노드를 먼저 띄우는 쪽)의 순서를 따라간다.
+
+<NetworkTopology
+  caption="EKS 관리형 노드 그룹 업데이트: 먼저 늘리고 나중에 줄인다"
+  width={400}
+  height={290}
+  zones={[
+    { id: "asg", label: "Auto Scaling Group", x: 8, y: 10, w: 384, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "old1", label: "old-a", sub: "1.36 AMI", x: 75, y: 70, icon: "server", w: 100 },
+    { id: "old2", label: "old-b", sub: "1.36 AMI", x: 75, y: 140, icon: "server", w: 100 },
+    { id: "new1", label: "new-a", sub: "1.37 AMI", x: 325, y: 70, icon: "server", w: 100 },
+    { id: "new2", label: "new-b", sub: "1.37 AMI", x: 325, y: 140, icon: "server", w: 100 },
+    { id: "eks", label: "EKS 워크플로", sub: "update", x: 200, y: 105, icon: "gateway", w: 112 },
+    { id: "lb", label: "ELB", sub: "서비스 LB", x: 200, y: 245, icon: "lb" },
+  ]}
+  links={[
+    { from: "eks", to: "new1" },
+    { from: "eks", to: "new2" },
+    { from: "eks", to: "old1" },
+    { from: "eks", to: "old2" },
+    { from: "lb", to: "old2", dashed: true },
+    { from: "lb", to: "new2" },
+  ]}
+  steps={[
+    { path: ["eks", "new1"], packet: "launch", highlight: ["asg"], title: "새 노드부터 띄운다", detail: "ASG의 최대·희망 크기를 늘린다. 존 수의 두 배와 maxUnavailable 중 큰 값만큼까지 띄울 수 있고, 존마다 새 노드가 하나 이상 Ready가 돼야 다음으로 간다." },
+    { path: ["eks", "old1"], packet: "cordon", title: "옛 노드를 막고 LB에서 뺀다", detail: "cordon과 함께 node.kubernetes.io/exclude-from-external-load-balancers=true 라벨을 붙여 서비스 LB의 대상에서 먼저 빠지게 한다." },
+    { path: ["eks", "old1", "new1"], packet: "evict", title: "Pod를 eviction으로 옮긴다", detail: "PDB를 지킨다. 15분 안에 비우지 못하면 PodEvictionFailure로 실패한다. --force를 주면 PDB를 무시하고 지운다." },
+    { path: ["eks", "old1"], packet: "종료", blocked: true, title: "60초 기다린 뒤 인스턴스를 지운다", detail: "모든 Pod를 내보내고 60초 뒤 ASG에 종료를 요청한다. maxUnavailable(기본 1)만큼씩 반복한다." },
+    { path: ["lb", "new2"], highlight: ["new1", "new2"], title: "다 바뀌면 크기를 되돌린다", detail: "옛 시작 템플릿으로 뜬 노드가 없어지면 늘렸던 ASG 크기를 원래대로 줄인다." },
+  ]}
+/>
+
+GPU처럼 남는 인스턴스를 띄우기 어려운 경우를 위해 옛 노드를 먼저 지우는 minimal 전략도 있다. 이때는 업데이트 동안 용량이 줄어든다. 실패 메시지별 원인은 대략 이렇다. `NodeCreationFailure`는 그 존에 인스턴스 용량이 없거나, 계정의 EC2 한도에 걸렸거나, 사용자 데이터가 부트스트랩을 깨뜨려 새 노드가 15분 안에 Ready가 되지 않은 것이다. `PodEvictionFailure`는 허용 수 0인 PDB, 같은 Pod를 고르는 PDB 여럿, 또는 모든 taint를 견디는 Deployment가 비운 노드로 다시 돌아오는 경우다. 앞의 둘은 [PDB](/posts/k8s-pod-disruption-budget), 마지막은 [노드 점검](/posts/k8s-node-maintenance)의 nodeName 함정과 같은 이야기다.
+
+AWS CLI로는 이렇게 진행한다. 출력은 예시다(형식은 실제 응답과 같게 맞췄다).
+
+```bash
+# 1. 컨트롤 플레인을 한 마이너 올린다
+aws eks update-cluster-version --name prod --kubernetes-version 1.37
+# 2. 진행 상황을 본다
+aws eks describe-update --name prod --update-id <위에서 받은 id> --query 'update.status'
+# 3. 노드 그룹을 컨트롤 플레인 버전에 맞춘다
+aws eks update-nodegroup-version --cluster-name prod --nodegroup-name app-ng
+```
+
+```text
+"InProgress"
+```
+
+EKS는 업그레이드 전에 upgrade insights로 폐기된 API 사용 같은 문제를 검사해 보여 준다. 사용 기록은 30일 창으로 보기 때문에, 옛 API를 고친 뒤에도 한동안 경고가 남을 수 있다. 버전마다 표준 지원이 끝나면 추가 비용이 붙는 연장 지원으로 넘어가는데, 이 일정은 [EKS 클러스터 기본](/posts/eks-cluster-basics)에서 다뤘다.
+
+## 사라진 API가 업그레이드를 깨뜨린다
+
+skew보다 더 자주 사고를 내는 것은 사라진 API다. 1.25에서 `policy/v1beta1`의 PodDisruptionBudget이 사라졌는데, 그 뒤 버전에 옛 매니페스트를 적용하면 이렇게 된다(1.36.5 클러스터에서 실행).
+
+```bash
+# 옛 API 버전으로 적힌 PDB를 적용해 본다
+kubectl apply -f old-pdb.yaml
+# 지금 서버가 제공하는 policy 그룹 버전
+kubectl api-versions | grep -E '^policy|^autoscaling|^batch'
+```
+
+```text
+error: resource mapping not found for name: "legacy-pdb" namespace: "" from "old-pdb.yaml": no matches for kind "PodDisruptionBudget" in version "policy/v1beta1"
+ensure CRDs are installed first
+autoscaling/v1
+autoscaling/v2
+batch/v1
+policy/v1
+```
+
+이미 클러스터에 있던 객체는 괜찮다. API 서버가 새 버전으로 읽고 쓴다. 터지는 곳은 그 객체를 옛 버전으로 다시 쓰려는 쪽이다. CI 파이프라인의 `kubectl apply`, Helm 차트의 템플릿, 옛 클라이언트 라이브러리를 쓰는 오퍼레이터가 업그레이드 직후 일제히 실패한다. 역사적으로 큰 것은 1.16(옛 Deployment API), 1.22(Ingress의 `extensions/v1beta1`과 `networking.k8s.io/v1beta1`), 1.25(PodSecurityPolicy, `batch/v1beta1` CronJob, `policy/v1beta1` PDB), 1.26(`autoscaling/v2beta2` HPA)이었다. 누가 아직 옛 API를 부르는지 찾는 방법은 [기능 단계와 API 폐기](/posts/k8s-feature-maturity)에 정리했다. 업그레이드 전 주에 그 글의 순서대로 한 번 훑는다.
+
+## 되돌리기는 생각보다 좁다
+
+업그레이드에서 가장 많이 받는 질문이 "안 되면 되돌리면 되지 않나"다. 답은 "부분적으로만"이다.
+
+kubeadm 클러스터의 컨트롤 플레인 다운그레이드는 공식 절차가 없다. 1.37 API 서버가 etcd에 새 버전 형식으로 쓴 객체나 새 필드를 1.36 API 서버가 이해한다는 보장이 없어서다. kubeadm이 남기는 백업 폴더는 `apply` 도중 실패했을 때 자동 롤백에 쓰는 것이고, 업그레이드가 끝난 뒤 "어제로 돌아가는" 도구가 아니다. 업그레이드가 끝난 클러스터를 이전 상태로 돌리는 확실한 방법은 업그레이드 직전에 뜬 etcd 스냅숏으로 복원하는 것뿐이고, 그러면 그 사이에 생긴 변경은 모두 사라진다([etcd 백업과 복원](/posts/k8s-etcd-backup)).
+
+EKS는 2026년 기준으로 컨트롤 플레인을 바로 앞 마이너로 되돌리는 기능을 제공한다. 조건이 까다롭다. 업그레이드 후 7일 안이어야 하고, 한 마이너만 되돌릴 수 있으며, 그 버전으로 새로 만든 클러스터는 대상이 아니다. etcd 데이터와 워크로드는 그대로 두고 API 서버와 컨트롤 플레인 부품만 되돌린다. 애드온과 관리형 노드 그룹은 따로 되돌려야 하고, 노드가 컨트롤 플레인과 같은 버전이면 노드부터 먼저 내려야 한다. kubelet이 API 서버보다 새면 안 된다는 규칙이 여기서도 그대로다.
+
+<Callout kind="warning">
+되돌리기가 있다고 업그레이드를 가볍게 하면 안 된다. 노드와 애드온까지 거꾸로 돌려야 하고, 새 버전에서 만든 객체나 새 필드가 옛 버전에서 어떻게 보일지는 앱마다 다르다. 업그레이드 직전에 etcd 스냅숏(자체 관리 클러스터)이나 리소스 백업([Velero](/posts/velero-backup))을 떠 두고, 운영 클러스터보다 먼저 같은 버전 조합의 스테이징 클러스터에서 한 번 돌려 본다.
+</Callout>
+
+그래서 현실적인 안전장치는 되돌리기보다 "작게 나눠 앞으로 가기"다. 패치 버전을 먼저 최신으로 맞추고, 한 마이너씩, 컨트롤 플레인 다음 노드 순으로 간다. 노드를 제자리에서 올리기보다 새 노드 그룹을 만들어 워크로드를 옮기고 옛 그룹을 지우는 블루그린 방식을 쓰면, 노드 쪽은 옛 그룹을 남겨 두는 것으로 되돌릴 길이 생긴다. 컨트롤 플레인까지 그렇게 하려면 클러스터를 통째로 새로 만들어 옮겨야 하는데, GitOps로 모든 매니페스트가 저장소에 있다면 생각보다 현실적인 선택지다.
+
+## 업그레이드 전날 보는 목록
+
+1.36에서 1.37로 가는 전날 확인하는 것을 순서대로 적으면 이렇다.
+
+```bash
+# 1. 지금 버전들: 서버, 노드별 kubelet
+kubectl version
+kubectl get nodes -o custom-columns=NAME:.metadata.name,KUBELET:.status.nodeInfo.kubeletVersion
+
+# 2. 노드가 모두 Ready인지, 비정상 Pod가 없는지
+kubectl get nodes
+kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded
+
+# 3. 노드 작업을 막을 PDB
+kubectl get pdb -A
+
+# 4. 실패하면 막히는 웹훅 (failurePolicy가 Fail인 것)
+kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations -o custom-columns=NAME:.metadata.name,POLICY:.webhooks[*].failurePolicy
+```
+
+여기에 사람이 읽어야 하는 두 가지가 더 있다. 새 버전의 릴리스 노트에서 "Urgent Upgrade Notes" 부분, 그리고 클러스터에 깔린 애드온(CNI, CSI 드라이버, Ingress 컨트롤러, cert-manager 같은 오퍼레이터)의 호환 표다. 애드온이 새 버전을 지원하지 않으면 컨트롤 플레인을 올린 순간 그 애드온이 깨진다. 업그레이드가 실패하는 원인은 쿠버네티스 자체보다 이쪽이 훨씬 많다.
+
+현장에서 자주 보는 증상도 적어 둔다.
+
+- 업그레이드 직후 CI의 배포가 모두 실패한다: 사라진 API를 쓰는 매니페스트다. 에러에 `no matches for kind`가 있다.
+- API 서버를 올렸더니 Pod 생성이 `failed calling webhook`으로 막힌다: 웹훅이 새 버전을 이해하지 못하거나 웹훅 Pod가 업그레이드 중 내려가 있다.
+- 노드 그룹 업데이트가 `PodEvictionFailure`로 끝났다: 허용 수 0인 PDB를 찾는다.
+- 새 노드의 kubelet이 계속 재시작한다: `journalctl -u kubelet`에서 cgroup v1 거부, 사라진 kubelet 플래그를 본다. 버전이 오르며 없어진 커맨드라인 플래그가 systemd 드롭인 파일에 남아 있는 경우가 많다.
+
+## 정해진 범위 안에서 한 칸씩
+
+업그레이드 순서는 외울 것이 아니라 규칙에서 나온다. 어떤 부품도 API 서버보다 새면 안 되고, API 서버끼리는 1 마이너, 컨트롤러는 1 뒤까지, kubelet과 kube-proxy는 3 뒤까지, kubectl은 위아래 1이다. 그러니 API 서버를 한 마이너 올리고, 컨트롤러를 맞추고, 노드를 하나씩 비워 올린다. 관리형 클러스터는 같은 일을 새 노드를 먼저 띄워 갈아 끼우는 식으로 한다. 되돌리기는 좁고 조건이 많으니 직전 백업과 스테이징 리허설로 대신한다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스는 왜 마이너 버전을 건너뛰어 올릴 수 없나요?
+
+API 폐기와 저장 형식의 이동이 한 마이너씩 단계적으로 일어나기 때문이다. 옛 API 버전을 지우기 전에 중간 릴리스가 새 버전으로 저장하도록 바꿔 두는데, 건너뛰면 그 중간 단계를 거치지 않은 데이터를 새 API 서버가 읽어야 한다. 그래서 단일 노드 클러스터라도 API 서버는 1.35, 1.36, 1.37처럼 한 칸씩 올린다. kubeadm도 한 마이너 앞의 컨트롤 플레인만 다룬다.
+
+### version skew policy의 핵심 규칙을 설명해 주세요.
+
+모든 부품은 kube-apiserver보다 새면 안 된다. HA API 서버끼리는 1 마이너 차이까지, controller-manager와 scheduler는 1 마이너 뒤까지, kubelet과 kube-proxy는 3 마이너 뒤까지(1.25 미만 kubelet은 2) 허용된다. kubectl만 예외로 API 서버의 위아래 1 마이너가 허용된다. API 서버가 섞여 있는 동안에는 가장 옛 API 서버가 기준이 되어 범위가 좁아진다.
+
+### 업그레이드 순서는 어떻게 정하나요?
+
+skew 규칙에서 나온다. API 서버를 먼저 올리고(HA면 하나씩), 컨트롤러와 스케줄러를 맞추고, 모든 컨트롤 플레인이 끝난 뒤 노드를 하나씩 drain해서 kubelet을 올린다. 거꾸로 하면 어떤 순간 kubelet이나 컨트롤러가 API 서버보다 새 상태가 된다. 시작 전에는 현재 마이너의 최신 패치로 맞추고, 목표 마이너의 최신 패치로 올라간다.
+
+### kubeadm upgrade plan과 apply는 각각 무엇을 하나요?
+
+plan은 아무것도 바꾸지 않고 클러스터 상태를 점검한 뒤 올라갈 수 있는 버전과 부품별 현재·목표 버전, 손으로 올려야 하는 kubelet 목록을 보여 준다. apply는 첫 컨트롤 플레인 노드에서 사전 점검, etcd와 매니페스트 백업, etcd·API 서버·컨트롤러·스케줄러 스태틱 Pod 교체, 인증서 갱신, 클러스터 설정 업로드를 차례로 한다. 나머지 컨트롤 플레인 노드와 워커 노드에서는 kubeadm upgrade node를 쓴다. kubelet 패키지는 kubeadm이 올리지 않는다.
+
+### EKS 관리형 노드 그룹은 노드를 어떻게 업그레이드하나요?
+
+제자리에서 올리지 않고 새 AMI로 새 노드를 먼저 띄운 뒤 옛 노드를 cordon하고, LB 제외 라벨을 붙이고, eviction으로 비운 다음 지운다. maxUnavailable(기본 1)만큼씩 반복한다. Pod를 15분 안에 못 비우면 PodEvictionFailure로 실패하는데, 대부분 허용 수 0인 PDB 때문이다. 용량을 늘릴 수 없는 경우를 위해 옛 노드를 먼저 지우는 minimal 전략도 있다.
+
+### 업그레이드 후 문제가 생기면 되돌릴 수 있나요?
+
+kubeadm 클러스터의 컨트롤 플레인은 공식 다운그레이드 절차가 없다. 새 API 서버가 etcd에 쓴 데이터를 옛 버전이 이해한다는 보장이 없어서다. 확실한 방법은 업그레이드 직전 etcd 스냅숏으로 복원하는 것이고, 그 사이 변경은 잃는다. EKS는 업그레이드 후 7일 안에 한 마이너만 컨트롤 플레인을 되돌리는 기능이 있지만, 노드와 애드온은 따로 되돌려야 한다. 그래서 백업과 스테이징 리허설이 되돌리기보다 현실적인 안전장치다.
+
+### 업그레이드 직후 배포가 일제히 실패한다면 무엇부터 보나요?
+
+에러 메시지에 `no matches for kind ... in version ...`이 있는지 본다. 사라진 API 버전으로 적힌 매니페스트나 Helm 차트가 원인이다. 클러스터 안의 객체는 새 버전으로 이미 옮겨져 멀쩡하고, 옛 버전으로 쓰려는 클라이언트만 실패한다. 웹훅 호출 실패라면 웹훅이 새 버전을 처리하지 못하거나 업그레이드 중 내려가 있는지 확인한다.

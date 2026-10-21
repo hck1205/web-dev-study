@@ -1,0 +1,392 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("clock-skew");
+
+로그인 직후 API를 부르면 401이 난다. 1분쯤 기다렸다 다시 부르면 된다. 서버 로그에는 `jwt not active`. 같은 시기에 다른 서버에서는 5분짜리 토큰이 20초 만에 `jwt expired`로 죽는다. 코드는 바뀐 게 없다. 바뀐 건 서버 두 대의 시계였다. 인증 서버의 시계가 40초 빨랐고, 다른 인증 서버는 280초 느렸다.
+
+서버마다 시계는 조금씩 다르게 간다. 평소에는 NTP가 그 차이를 ms 단위로 묶어 두지만, 묶어 두지 못하는 순간이 있고, 묶여 있어도 ms 차이가 문제를 만드는 코드가 있다. 이 글은 시계가 어긋나면(clock skew) 무엇이 깨지는지를 직접 재현하고, 코드에서 어떤 시계를 써야 하는지, 시계 없이 순서를 정하는 램포트 시계와 벡터 시계, 그 둘을 섞은 하이브리드 논리 시계까지 따라간다. 시각을 실제로 바꿀 수는 없어서, libfaketime으로 프로세스 하나의 시계만 어긋나게 해 재현했다. 환경은 Ubuntu 24.04, Node 22, 커널 6.18이다.
+
+이 주제의 다른 글: 시계로 충돌을 푸는 LWW가 쓰기를 잃는 장면은 [CAP과 PACELC 글](/posts/db-consistency-cap), 시계에 기대는 락의 위험은 [분산 락 글](/posts/distributed-lock), "무엇을 봤나"를 들고 다니는 세션 보장은 [최종 일관성 글](/posts/eventual-consistency)에 있다. 응답이 없는 노드가 죽었는지 느린지 모르는 문제는 [네트워크 분할 글](/posts/network-partitions)에서 다룬다.
+
+## 서버마다 시계가 다르게 가는 이유
+
+컴퓨터의 시계는 수정 진동자(크리스털)가 정해진 횟수만큼 떨리면 1초로 센다. 이 진동수는 제조 편차와 온도에 따라 조금씩 다르다. 흔히 수십 ppm(백만분의 몇십)의 오차를 말하는데, 20ppm이면 하루에 약 1.7초가 어긋난다. 가상 머신은 하이퍼바이저가 시계를 흉내 내니 일시 정지나 라이브 마이그레이션 뒤에 한꺼번에 밀리기도 한다.
+
+그래서 서버는 NTP(Network Time Protocol)로 더 정확한 시계에 맞춘다. 원자시계나 GPS를 직접 보는 서버가 stratum 1, 그걸 보는 서버가 stratum 2, 이런 식으로 층이 쌓인다. 클라이언트는 질문 한 번에 시각 네 개를 얻는다. 아래 그림에서 다음을 누르면 순서대로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="NTP 질문 한 번으로 오차와 왕복 시간을 함께 구한다"
+  zones={[
+    { id: "ref", label: "time source", x: 10, y: 20, w: 380, h: 90, tone: "edge" },
+    { id: "vpc", label: "servers", x: 10, y: 130, w: 380, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "gps", label: "GPS/atomic", sub: "stratum 0", x: 90, y: 70, icon: "internet", w: 120 },
+    { id: "ntp", label: "time server", sub: "stratum 1", x: 290, y: 70, icon: "server", w: 120 },
+    { id: "app1", label: "app-1", sub: "chronyd", x: 290, y: 190, icon: "server", w: 110 },
+    { id: "app2", label: "app-2", sub: "no NTP", x: 290, y: 270, icon: "server", w: 110 },
+    { id: "auth", label: "auth", sub: "chronyd", x: 90, y: 230, icon: "lock", w: 100 },
+  ]}
+  links={[
+    { from: "gps", to: "ntp" },
+    { from: "ntp", to: "app1" },
+    { from: "ntp", to: "auth" },
+    { from: "ntp", to: "app2", dashed: true },
+  ]}
+  steps={[
+    { path: ["gps", "ntp"], packet: "1PPS", title: "기준 시계를 받는다", detail: "stratum 1 서버는 GPS나 원자시계에서 직접 시각을 받는다." },
+    { path: ["app1", "ntp"], packet: "t1", title: "app-1이 질문을 보낸다", detail: "보낸 순간 자기 시계로 t1을 적는다.", payload: "t1 = 100.000" },
+    { path: ["ntp", "app1"], packet: "t2,t3", title: "서버가 받은 시각과 보낸 시각을 돌려준다", detail: "서버 시계로 받은 순간 t2, 보낸 순간 t3을 적어 보낸다. 받은 순간 app-1은 t4를 적는다.", payload: "t2 = 100.120  t3 = 100.121  t4 = 100.041" },
+    { path: ["app1"], highlight: ["app1"], title: "오차와 왕복 시간을 계산한다", detail: "오차 = ((t2 - t1) + (t3 - t4)) / 2, 왕복 = (t4 - t1) - (t3 - t2). 가는 길과 오는 길이 같다고 가정한 계산이다.", payload: "offset = (0.120 + 0.080) / 2 = +0.100 s\ndelay  = 0.041 - 0.001  = 0.040 s" },
+    { path: ["ntp", "app2"], packet: "t1", blocked: true, title: "NTP가 없는 서버는 혼자 흐른다", detail: "UDP 123이 막혔거나 데몬이 꺼져 있다. 오차가 하루 몇 초씩 쌓인다." },
+  ]}
+/>
+
+계산의 약점은 마지막 가정이다. 가는 길이 30ms, 오는 길이 10ms처럼 비대칭이면 그 차이의 절반(10ms)이 그대로 오차로 남는다. 그래서 인터넷 너머의 NTP 서버는 수 ms에서 수십 ms, 같은 데이터센터 안의 서버는 1ms 이하 정도로 맞는다. 클라우드는 이 때문에 링크 로컬 주소에 시각 서버를 둔다. AWS Time Sync Service는 `169.254.169.123`이다.
+
+## chrony가 시계를 맞추는 두 가지 방법
+
+Ubuntu 24.04의 시각 동기화는 기본이 `systemd-timesyncd`이고, 서버에서는 보통 chrony로 바꾼다. 오차를 발견했을 때 시계를 고치는 방법은 둘이다.
+
+- 스텝(step): 시계를 한 번에 맞는 시각으로 옮긴다. 빠르지만 시계가 뒤로 가거나 앞으로 건너뛴다.
+- 슬루(slew): 시계를 조금 빠르게 또는 느리게 돌려서 서서히 따라잡는다. 시계가 거꾸로 가지는 않지만 큰 오차를 메우는 데 오래 걸린다. chrony의 기본 최대 속도로도 1초를 메우는 데 십여 초 이상 걸린다.
+
+Ubuntu의 chrony 기본 설정에는 `makestep 1 3`이 들어 있다. 시작 직후 처음 세 번의 갱신 동안만 오차가 1초를 넘으면 스텝하고, 그 뒤로는 슬루만 한다. 부팅 직후에는 시계가 크게 틀릴 수 있으니 한 번에 맞추고, 서비스가 도는 동안에는 시계가 튀지 않게 하려는 것이다. AWS 문서가 권하는 설정 한 줄은 이렇다.
+
+<UrlAnatomy
+  caption="chrony.conf의 서버 한 줄"
+  base="server 169.254.169.123"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "prefer", display: "prefer", title: "여러 서버 중 이것을 먼저 믿는다", description: "다른 server나 pool 줄이 있어도 이 서버가 쓸 만하면 우선 고른다. 링크 로컬 시각 서버는 왕복이 짧고 대칭이라 가장 정확하다." },
+    { key: "iburst", display: "iburst", title: "시작할 때 몇 번 빠르게 묻는다", description: "처음에 짧은 간격으로 여러 번 질문해서 부팅 직후 몇 초 안에 시계를 맞춘다. 없으면 첫 동기화까지 몇 분 걸릴 수 있다." },
+    { key: "minpoll", value: "4", display: "minpoll 4", title: "가장 짧은 질문 간격 2^4초", description: "16초. 값은 2의 거듭제곱 지수다. 짧을수록 변화를 빨리 따라가지만 서버 부하가 는다." },
+    { key: "maxpoll", value: "4", display: "maxpoll 4", title: "가장 긴 질문 간격도 16초", description: "간격을 늘리지 않고 16초로 고정한다. 공용 NTP 풀에는 이렇게 자주 묻지 않는다. 링크 로컬 서버라서 가능한 설정이다." },
+  ]}
+/>
+
+지금 시계 상태는 `chronyc tracking`으로 본다. 이 컨테이너에는 chrony가 없고 바깥 NTP(UDP 123)도 막혀 있어서, 아래는 AWS에서 chrony를 쓰는 서버의 출력 형식을 그대로 옮긴 예시다.
+
+```bash
+chronyc tracking      # 기준 시각과의 오차, 주파수 보정, 윤초 상태
+chronyc sources -v    # 서버별 도달 여부와 오차 (^*가 지금 고른 서버)
+```
+
+```text
+Reference ID    : A9FEA97B (169.254.169.123)
+Stratum         : 4
+Ref time (UTC)  : Tue Oct 20 19:20:11 2026
+System time     : 0.000012345 seconds fast of NTP time
+Last offset     : +0.000004567 seconds
+RMS offset      : 0.000010234 seconds
+Frequency       : 12.345 ppm slow
+Residual freq   : +0.001 ppm
+Skew            : 0.012 ppm
+Root delay      : 0.000345678 seconds
+Root dispersion : 0.000123456 seconds
+Update interval : 16.1 seconds
+Leap status     : Normal
+```
+
+봐야 할 줄은 셋이다. `System time`은 지금 내 시계가 기준보다 얼마나 빠르거나 느린지다(위 예시는 12µs 빠름). `Frequency`는 이 서버의 크리스털이 원래 얼마나 틀리게 가는지를 chrony가 보정하고 있는 값이다. `Leap status`가 `Not synchronised`면 기준 시각을 잃은 상태다. 장애를 볼 때는 `Root delay`의 절반에 `Root dispersion`을 더한 값을 "기준 시각까지의 최대 오차"로 읽는다.
+
+chrony 없이도 커널에게 직접 물어볼 수 있다. `adjtimex(2)`를 읽기 전용으로 부르면 커널이 아는 동기화 상태가 나온다. 이 컨테이너에서 실제로 부른 결과다.
+
+```bash
+python3 adjtimex_read.py   # ctypes로 adjtimex(modes=0)만 호출한다. 시계는 바꾸지 않는다
+```
+
+```text
+return 5 TIME_ERROR status=0x40 STA_UNSYNC maxerror_us 16000000 esterror_us 16000000 freq_ppm 0.0 tai 0
+```
+
+`STA_UNSYNC`는 이 커널의 시계를 NTP 데몬이 관리하고 있지 않다는 뜻이고, 최대 오차는 상한값인 16초로 찍혀 있다. 컨테이너는 호스트의 시계를 같이 쓰므로 호스트가 맞춰 주고 있을 가능성이 높지만, 그 사실을 컨테이너 안에서는 확인할 수 없다. systemd가 있는 서버라면 `timedatectl`의 `System clock synchronized: no`가 같은 상태다. 모니터링에는 이 값이나 `chronyc tracking`의 오차를 지표로 올려 둔다. node_exporter의 `node_timex_sync_status`와 `node_timex_offset_seconds`가 바로 이 커널 값이다.
+
+## 시간을 잴 때는 단조 시계로
+
+시계가 스텝으로 고쳐지면 그 순간 벽시계(wall clock)는 앞이나 뒤로 건너뛴다. 이 벽시계로 걸린 시간을 재면 어떻게 될까. 1초 걸리는 작업을 `Date.now()`와 `performance.now()`로 동시에 재고, 0.5초 지점에서 libfaketime으로 이 프로세스의 벽시계를 2초 뒤로 돌렸다.
+
+```bash
+# 이 프로세스만 벽시계를 바꾼다. 단조 시계는 건드리지 않는다
+echo "+0" > skew.txt; ( sleep 0.5; echo "-2" > skew.txt ) &
+LD_PRELOAD=./libfaketime.so.1 FAKETIME_TIMESTAMP_FILE=skew.txt FAKETIME_NO_CACHE=1 \
+  FAKETIME_DONT_FAKE_MONOTONIC=1 node jump.js
+```
+
+```text
+start  wall 2026-10-20T19:23:02.582Z
+end    wall 2026-10-20T19:23:01.609Z
+Date.now() elapsed        : -973 ms
+performance.now() elapsed : 1027.1 ms
+```
+
+`Date.now()`로 잰 시간은 -973ms다. 이 값이 타임아웃 계산, 요청 지연 지표, 레이트 리미터의 창, 재시도 백오프에 들어가면 음수 지연, 영원히 안 끝나는 대기, 갑자기 몰리는 재시도가 된다. `performance.now()`는 1027ms로 정확했다.
+
+리눅스에는 시계가 여럿 있고, 언어마다 어느 쪽을 쓰는지가 다르다. 실제로 Python에게 물어본 결과다.
+
+```bash
+python3 -c 'import time
+for c in ("time","monotonic","perf_counter"):
+    i=time.get_clock_info(c); print(c, i.implementation, "adjustable=", i.adjustable)'
+```
+
+```text
+time          impl=clock_gettime(CLOCK_REALTIME)          adjustable=True resolution=1e-09
+monotonic     impl=clock_gettime(CLOCK_MONOTONIC)         adjustable=False resolution=1e-09
+perf_counter  impl=clock_gettime(CLOCK_MONOTONIC)         adjustable=False resolution=1e-09
+```
+
+`adjustable=True`인 `CLOCK_REALTIME`은 NTP나 관리자가 옮길 수 있는 벽시계다. `CLOCK_MONOTONIC`은 부팅 뒤 흐른 시간이라 뒤로 가지 않는다. NTP가 슬루할 때는 이 시계의 빠르기도 아주 조금 조정되지만 건너뛰지는 않는다. 그 조정조차 받지 않는 `CLOCK_MONOTONIC_RAW`, 절전 중 시간까지 세는 `CLOCK_BOOTTIME`도 있다.
+
+<ConceptDiagram
+  width={400}
+  height={310}
+  caption="무엇을 알고 싶은지에 따라 고르는 시계"
+  nodes={[
+    { id: "q1", label: "지금 몇 시인가", sub: "로그, 만료 시각", x: 100, y: 40, w: 150 },
+    { id: "q2", label: "얼마나 걸렸나", sub: "타임아웃, 지연", x: 300, y: 40, w: 150 },
+    { id: "q3", label: "무엇이 먼저인가", sub: "충돌, 인과", x: 200, y: 160, w: 150 },
+    { id: "wall", label: "벽시계", sub: "Date.now, REALTIME", x: 100, y: 110, w: 150, h: 40 },
+    { id: "mono", label: "단조 시계", sub: "performance.now", x: 300, y: 110, w: 150, h: 40 },
+    { id: "logical", label: "논리 시계", sub: "램포트, 벡터", x: 110, y: 270, w: 130 },
+    { id: "hlc", label: "HLC, TrueTime", sub: "물리 + 논리", x: 290, y: 270, w: 140 },
+  ]}
+  edges={[
+    { from: "q1", to: "wall" },
+    { from: "q2", to: "mono" },
+    { from: "q3", to: "logical" },
+    { from: "q3", to: "hlc" },
+  ]}
+/>
+
+언어별로 옮기면 이렇다. JavaScript는 `performance.now()`나 Node의 `process.hrtime.bigint()`, Java는 `System.nanoTime()`(`currentTimeMillis()`가 아니라), Python은 `time.monotonic()`, Go는 `time.Now()`가 벽시계와 단조 시계를 함께 담고 있어 `time.Since()`가 단조 시계로 계산된다. Go가 1.9에서 이렇게 바뀐 데는 사연이 있다. 2016년 마지막 날 끝에 들어간 윤초 때 Cloudflare의 DNS 서버가 `time.Now()` 두 개의 차이로 음수 시간을 얻고, 그 값을 그대로 쓰다 패닉이 났다.
+
+단조 시계 값은 그 프로세스, 그 부팅 안에서만 의미가 있다. 다른 서버로 보내거나 DB에 저장하면 안 된다. 서버 사이를 오가는 만료 시각에는 결국 벽시계를 써야 하고, 그래서 다음 문제가 생긴다.
+
+## 토큰이 일찍 죽고 늦게 산다
+
+처음 장면을 재현했다. 발급 서버는 `nbf`(이 시각 전에는 쓰지 말 것)와 `exp`(5분 뒤 만료)를 자기 시계로 찍고, 검증 서버는 자기 시계로 비교한다. 검증에는 `jsonwebtoken` 9를 썼다. 발급 서버 프로세스만 libfaketime으로 40초 빠르게 했다.
+
+```bash
+T=$(LD_PRELOAD=./libfaketime.so.1 FAKETIME="+40s" node issue.js)   # 시계가 40초 빠른 발급 서버
+node verify.js $T 0     # 허용 오차 없이 검증
+node verify.js $T 60    # clockTolerance 60초로 검증
+```
+
+```text
+verifier now=1792524199 iat=1792524239 nbf=1792524239 exp=1792524539 (now-iat=-40s)
+clockTolerance=0: NotBeforeError: jwt not active
+verifier now=1792524199 iat=1792524239 nbf=1792524239 exp=1792524539 (now-iat=-40s)
+clockTolerance=60: OK
+```
+
+검증 서버가 보기에 이 토큰은 40초 뒤의 미래에서 왔다. 발급하자마자 쓴 토큰이 `jwt not active`로 거절된다. 반대로 발급 서버의 시계가 280초 느리면 이렇다.
+
+```text
+verifier now=1792524199 iat=1792523919 nbf=1792523919 exp=1792524219 (now-iat=280s)
+clockTolerance=0: OK
+verifier now=1792524220 iat=1792523919 nbf=1792523919 exp=1792524219 (now-iat=301s)
+clockTolerance=0: TokenExpiredError: jwt expired
+```
+
+5분짜리 토큰이 실제로는 21초 만에 만료됐다. 아래 그림이 그 흐름이다.
+
+<SequenceDiagram
+  caption="시계가 빠른 발급 서버의 토큰이 거절된다"
+  actors={[
+    { id: "user", label: "앱" },
+    { id: "auth", label: "인증(+40s)" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    { from: "user", to: "auth", label: "로그인", title: "로그인한다", detail: "인증 서버의 시계는 실제보다 40초 빠르다. 아무도 모른다." },
+    { from: "auth", to: "user", label: "JWT", title: "자기 시계로 nbf와 exp를 찍는다", detail: "nbf가 실제 시각보다 40초 뒤다.", payload: "{ \"iat\": 1792524239, \"nbf\": 1792524239, \"exp\": 1792524539 }" },
+    { from: "user", to: "api", label: "Bearer JWT", title: "바로 API를 부른다", detail: "토큰을 받은 지 1초도 안 됐다." },
+    { from: "api", to: "api", label: "now < nbf", title: "API 서버는 자기 시계로 비교한다", detail: "지금은 1792524199인데 nbf가 1792524239다. 아직 쓸 수 없는 토큰이다.", payload: "NotBeforeError: jwt not active" },
+    { from: "api", to: "user", label: "401", title: "401을 돌려준다", detail: "40초가 지나면 같은 토큰이 통과한다. '잠깐 뒤에 되는 401'의 정체다." },
+  ]}
+/>
+
+그래서 토큰 검증에는 허용 오차를 둔다. `jsonwebtoken`의 `clockTolerance`, Spring Security의 `JwtTimestampValidator`(기본 60초), Kerberos의 최대 시계 차이(기본 5분)가 같은 장치다. 허용 오차는 시계를 고치는 장치가 아니라 정상 범위의 어긋남을 흡수하는 장치다. 오차를 몇 분으로 늘려 증상을 덮으면 만료된 토큰이 그만큼 더 산다. 위 결과처럼 몇 십 초씩 어긋났다면 허용 오차보다 NTP를 먼저 고친다.
+
+같은 종류의 사고는 더 있다.
+
+- AWS API는 요청 서명에 찍힌 시각이 서버와 크게 다르면 거절한다. S3라면 `RequestTimeTooSkewed`가 난다. 시계가 틀어진 배치 서버에서만 업로드가 실패한다.
+- 클라이언트 시계가 틀리면 막 발급된 TLS 인증서가 아직 유효 기간 전이라거나 이미 만료됐다고 나온다. 브라우저 쪽 증상이라 서버 로그에는 아무것도 없다.
+- TOTP 2단계 인증은 30초 단위라, 서버 시계가 1분쯤 틀어지면 맞는 코드가 계속 틀렸다고 나온다. 보통 앞뒤 한 칸 정도를 허용한다.
+- 캐시나 Redis 키의 만료는 대부분 "지금부터 몇 초"로 주지만 내부에는 절대 시각으로 저장된다. Redis는 만료를 유닉스 시각으로 기록하므로, 시계가 크게 다른 서버로 RDB 파일을 옮기면 키가 한꺼번에 만료되거나 오래 남는다.
+- 분산 락의 TTL은 락 서버와 락을 쥔 쪽이 같은 빠르기로 시간이 흐른다고 가정한다. 이 가정이 깨질 때의 사고는 [분산 락 글](/posts/distributed-lock)에서 재현했다.
+
+### 정렬 기준으로 앱 서버의 시각을 쓰면
+
+`created_at`을 앱 서버에서 `new Date()`로 채우면, 서버 사이 시계 차이만큼 정렬 순서가 틀어진다. 1초 느린 서버가 쓴 글은 1초 먼저 쓴 글처럼 보인다. DB 시각을 쓰면 시계가 하나로 모인다. 다만 PostgreSQL의 `now()`는 트랜잭션이 시작된 시각이다.
+
+```sql
+BEGIN;
+SELECT now(), statement_timestamp(), clock_timestamp();
+SELECT pg_sleep(1.5);                                  -- 1.5초 기다린다
+SELECT now(), statement_timestamp(), clock_timestamp();
+COMMIT;
+```
+
+```text
+              now              |      statement_timestamp      |        clock_timestamp
+-------------------------------+-------------------------------+-------------------------------
+ 2026-10-20 19:24:27.359707+00 | 2026-10-20 19:24:27.359863+00 | 2026-10-20 19:24:27.360308+00
+(1 row)
+
+              now              |      statement_timestamp      |        clock_timestamp
+-------------------------------+-------------------------------+-------------------------------
+ 2026-10-20 19:24:27.359707+00 | 2026-10-20 19:24:28.861736+00 | 2026-10-20 19:24:28.861867+00
+(1 row)
+```
+
+1.5초 뒤에도 `now()`는 그대로다. 오래 걸린 트랜잭션이 나중에 커밋하면, 먼저 커밋된 행보다 작은 `created_at`을 갖고 나타난다. "마지막으로 읽은 `created_at` 이후"로 새 행을 가져가는 동기화 작업은 이 행을 놓친다. 이 함정이 아웃박스에서 어떻게 이벤트를 빠뜨리는지는 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture)에서 봤다. 순서가 정말 중요하면 시각 대신 커밋 순서를 따르는 값(WAL 위치, 단조 증가 시퀀스와 커밋 뒤 읽기)을 쓴다.
+
+## 윤초와 번지기
+
+지구 자전은 조금씩 불규칙해서, 원자시계로 센 시각(TAI)과 천문 시각을 맞추려고 UTC에 가끔 1초를 넣는다. 그날의 마지막 1분이 61초가 되고, `23:59:60`이 생긴다. 유닉스 시간은 하루를 정확히 86400초로 세서 이 1초를 표현할 수 없고, 리눅스 커널은 보통 `23:59:59`를 한 번 더 반복하는 식으로 시계를 1초 되돌린다.
+
+이 1초가 여러 번 사고를 냈다. 2012년 6월 윤초 때는 리눅스 커널 버그로 타이머가 계속 깨어나 Java와 MySQL 서버들의 CPU가 치솟았고, 2016년 마지막 날 윤초 때는 위의 Cloudflare 사고가 났다. 마지막 윤초가 2016년 12월 31일이었고, 2022년 국제도량형총회는 늦어도 2035년부터 윤초를 사실상 없애기로 결정했다. 앞으로 드물어지겠지만, "벽시계는 1초 되돌아갈 수 있다"는 교훈은 NTP 스텝, VM 마이그레이션, 관리자의 수동 변경에서 그대로 유효하다.
+
+대형 클라우드는 1초를 되돌리는 대신 번지기(leap smear)를 한다. Google은 윤초 앞뒤 24시간(정오부터 정오까지) 동안 시계를 아주 조금씩 느리게 돌려 1초를 고르게 흡수한다. 시계가 되돌아가지 않으니 위 사고가 안 난다. 대신 번지는 동안에는 번지는 서버와 번지지 않는 서버가 최대 0.5초까지 어긋난다. 그래서 한 서버의 chrony에 번지는 NTP 서버와 그렇지 않은 서버를 섞어 넣지 않는다. chrony는 `leapsecmode slew`로 스스로 슬루하게 하거나, `smoothtime`으로 아래 클라이언트들에게 번진 시각을 나눠 줄 수 있다.
+
+## 시계 없이 순서를 정한다
+
+시계를 아무리 잘 맞춰도 오차가 0이 되지는 않는다. 같은 데이터센터에서 1ms 이하로 맞춰도, 1ms 안에 쓰기 수백 개가 서로 다른 서버에서 일어난다. 그 순서를 벽시계로 정하면 틀린다. 1978년 레슬리 램포트(Leslie Lamport)는 질문을 바꿨다. 실제 시각을 몰라도, "a가 b의 원인이 될 수 있었나"는 알 수 있다. 같은 프로세스 안에서 먼저 일어났거나, a가 보낸 메시지를 받은 뒤 b가 일어났다면 a가 b보다 먼저(happened-before)다.
+
+램포트 시계는 이걸 숫자 하나로 센다. 규칙은 셋이다. 일이 일어날 때마다 내 숫자를 1 올린다. 메시지를 보낼 때 내 숫자를 붙인다. 메시지를 받으면 내 숫자를 "내 숫자와 받은 숫자 중 큰 것 + 1"로 바꾼다. 아래 그림에서 다음을 누르면 프로세스 셋의 숫자가 변하는 과정이 보인다.
+
+<AlgoTrace
+  caption="램포트 시계: 원인이면 숫자가 작다, 거꾸로는 아니다"
+  memoryLabel="각 프로세스의 숫자"
+  cells={["P1 일", "P1→P2", "P3 일", "P2 받음", "P2→P3", "P3 받음", "P1 일"]}
+  steps={[
+    { memory: ["P1=0", "P2=0", "P3=0"], caption: "세 프로세스 모두 0에서 시작한다." },
+    { pointer: 0, memory: ["P1=1", "P2=0", "P3=0"], caption: "P1에서 일이 하나 일어난다. 1 올린다." },
+    { pointer: 1, memory: ["P1=2", "P2=0", "P3=0"], caption: "P1이 P2에게 메시지를 보낸다. 2를 붙여 보낸다." },
+    { pointer: 2, memory: ["P1=2", "P2=0", "P3=1"], caption: "P3에서 상관없는 일이 하나 일어난다. P3는 1." },
+    { pointer: 3, memory: ["P1=2", "P2=3", "P3=1"], caption: "P2가 받는다. max(0, 2) + 1 = 3. 보낸 일(2)보다 받은 일(3)이 반드시 크다." },
+    { pointer: 4, memory: ["P1=2", "P2=4", "P3=1"], caption: "P2가 P3에게 4를 붙여 보낸다." },
+    { pointer: 5, memory: ["P1=2", "P2=4", "P3=5"], caption: "P3가 받는다. max(1, 4) + 1 = 5. 원인 사슬을 따라 숫자가 계속 커진다." },
+    { pointer: 6, found: [2, 6], memory: ["P1=3", "P2=4", "P3=5"], caption: "P1의 일은 3이고 P3의 첫 일은 1이다. 1 < 3이지만 둘은 서로 아무 관계가 없다. 숫자만으로는 동시인지 알 수 없다." },
+  ]}
+/>
+
+램포트 시계는 "a가 b의 원인이면 L(a) < L(b)"를 보장한다. 반대는 아니다. 숫자가 작다고 원인인 것은 아니다. 그래서 동점을 프로세스 ID로 깨면 모든 일에 하나의 전체 순서를 줄 수 있고(분산 큐나 락의 순서 정하기), 그 순서가 인과를 어기지 않는다. 하지만 "이 두 쓰기가 동시였나"는 답하지 못한다. 충돌을 찾아야 하는 저장소에는 그 답이 필요하다.
+
+### 벡터 시계는 동시를 알아낸다
+
+벡터 시계는 숫자 하나 대신 프로세스마다 칸을 둔다. 내 일이 일어나면 내 칸만 1 올리고, 메시지를 받으면 칸마다 큰 값을 고른 뒤 내 칸을 1 올린다. 두 벡터를 비교할 때 모든 칸이 작거나 같으면 앞이고, 어떤 칸은 크고 어떤 칸은 작으면 동시다. Dynamo 계열 저장소가 형제 버전(siblings)을 남기는 판단이 이것이고, [최종 일관성 글](/posts/eventual-consistency)의 "답글이 원글보다 먼저 도착하는" 문제를 막는 데도 쓴다. 비교 함수를 짜 보자.
+
+<CodePlayground
+  caption="벡터 시계 비교"
+  functionName="compareVC"
+  initialCode={`function compareVC(a, b) {
+  // a, b: { 노드이름: 카운터 } 없는 노드는 0으로 본다
+  // 반환: "before" | "after" | "equal" | "concurrent"
+  return "equal";
+}`}
+  solution={`function compareVC(a, b) {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  let less = false, greater = false;
+  for (const k of keys) {
+    const x = a[k] || 0, y = b[k] || 0;
+    if (x < y) less = true;
+    if (x > y) greater = true;
+  }
+  if (less && greater) return "concurrent";
+  if (less) return "before";
+  if (greater) return "after";
+  return "equal";
+}`}
+  tests={[
+    { label: "한 노드에서 이어서 쓴 것", args: [{ A: 1 }, { A: 2 }], expected: "before" },
+    { label: "뒤의 것이 앞의 것을 안다", args: [{ A: 2, B: 1 }, { A: 1, B: 1 }], expected: "after" },
+    { label: "서로 다른 노드에서 따로", args: [{ A: 1 }, { B: 1 }], expected: "concurrent" },
+    { label: "같은 버전", args: [{ A: 1, B: 2 }, { A: 1, B: 2 }], expected: "equal" },
+    { label: "칸마다 크고 작음이 엇갈린다", args: [{ A: 2, B: 0 }, { A: 1, B: 3 }], expected: "concurrent" },
+    { label: "빈 벡터는 모든 것보다 앞", args: [{}, { C: 1 }], expected: "before" },
+    { label: "없는 칸은 0", args: [{ A: 3, B: 2, C: 1 }, { A: 3, B: 2 }], expected: "after" },
+  ]}
+/>
+
+대가는 크기다. 칸이 노드(또는 클라이언트) 수만큼 늘어나서, 쓰는 주체가 많아지면 버전마다 붙는 벡터가 커진다. Riak은 이 문제 때문에 클라이언트 대신 서버 노드 기준의 "dotted version vector"로 옮겼다. 그리고 벡터 시계는 실제 시각과 전혀 관계가 없어서, "어제 오후 3시 기준으로 읽어 달라" 같은 질문에는 답하지 못한다.
+
+### 물리 시각과 논리 숫자를 합친 HLC
+
+하이브리드 논리 시계(HLC, 2014년 쿨카르니 등)는 둘의 장점을 섞는다. 타임스탬프를 (물리 시각, 카운터) 쌍으로 두고, 물리 부분은 "내 벽시계와 지금까지 본 가장 큰 물리 시각 중 큰 것"으로 정한다. 그 값이 그대로면 카운터를 올린다. 그러면 램포트 시계처럼 원인이 항상 작은 값을 갖고, 값 자체는 실제 시각과 거의 같아서 시각 기준 읽기에도 쓸 수 있다.
+
+LWW와 붙여 보면 차이가 분명하다. 노드 B의 시계가 5초 느리다. A가 x=1을 쓰고, B가 그걸 복제로 받아 본 뒤 100ms 뒤에 x=2로 고친다. 두 버전을 벽시계 LWW와 HLC LWW로 합쳐 본 Node 시뮬레이션의 실제 출력이다.
+
+```bash
+node hlc.js   # B의 시계는 -5000ms
+```
+
+```text
+write x=1 on A  wall=1792524000000  hlc=1792524000000.0
+write x=2 on B  wall=1792523995100  hlc=1792524000000.2   (실제로는 100ms 뒤, 원인을 본 뒤의 쓰기)
+LWW by wall clock -> x=1
+LWW by HLC        -> x=2
+HLC on B is ahead of B's wall clock by 4900ms
+```
+
+벽시계로 합치면 원인을 보고 나중에 고친 x=2가 사라진다. HLC는 B가 A의 타임스탬프를 받으면서 물리 부분을 A의 값으로 끌어올렸기 때문에, B의 쓰기가 A의 쓰기보다 뒤가 된다. 마지막 줄은 HLC의 비용이다. B의 HLC는 자기 벽시계보다 4.9초 앞서 간다. 시계가 크게 틀린 노드 하나가 있으면 모두의 HLC가 그쪽으로 끌려간다. 그래서 CockroachDB는 HLC를 쓰면서도 노드 간 시계 차이의 상한(기본 500ms)을 정해 두고, 그걸 넘는 노드는 스스로 내려가게 한다. 서로 원인 관계가 없는 동시 쓰기라면 HLC도 결국 시계가 순서를 정하므로, 그런 쓰기를 잃지 않으려면 벡터 시계나 [CRDT](/posts/crdt)가 필요하다.
+
+Spanner는 다른 길을 갔다. GPS와 원자시계로 오차 범위 자체를 작게 만들고, 시각을 하나의 값이 아니라 "이 구간 안의 어딘가"로 받아서, 커밋 때 그 불확실성 폭만큼 기다린다. 이 TrueTime과 CockroachDB의 비교는 [분산 SQL 글](/posts/db-type-newsql)에 정리했다.
+
+## 시계가 의심될 때 보는 순서
+
+시계 문제는 재현이 어렵고 증상이 엉뚱한 곳에서 난다. "특정 서버에서만", "잠깐 뒤에는 되는", "만료가 이상하게 빠른" 같은 말이 붙은 문의가 오면 시계를 의심한다.
+
+먼저 서버들 사이 차이를 잰다. 모든 서버에서 같은 순간 `date -u +%s.%N`을 찍어 비교하거나, `chronyc tracking`의 `System time`을 모은다. node_exporter를 쓴다면 `node_timex_offset_seconds`의 서버별 값과 `node_timex_sync_status`가 0인 서버를 찾는다. 0.1초를 넘는 차이가 보이면 토큰과 TTL 문제를 의심해 볼 만하다.
+
+동기화가 안 되는 서버라면 원인은 대개 단순하다. 데몬이 꺼져 있거나, 보안 그룹이나 방화벽이 UDP 123을 막았거나, `server` 줄이 닿지 않는 주소를 가리킨다. `chronyc sources`에서 `^?`(닿지 않음)나 `^x`(다른 서버와 맞지 않아 버림)를 찾는다. 크게 틀린 시계를 고칠 때 `chronyc makestep`은 시계를 한 번에 옮기므로, 그 순간 위의 `Date.now()` 사고가 날 수 있는 서비스는 트래픽을 빼고 한다.
+
+<Callout kind="warning">
+운영 중인 서버에서 `date -s`나 `chronyc makestep`으로 시계를 크게 옮기면, 벽시계로 시간을 재는 코드의 타임아웃과 만료, 로그 순서가 한꺼번에 틀어진다. 데몬의 슬루에 맡길 수 있는 오차(수 초 이하)는 기다리고, 그보다 크면 노드를 트래픽에서 뺀 뒤 스텝하고 넣는다. 옮긴 뒤에는 `chronyc tracking`의 `System time`과 `Leap status: Normal`을 확인한다. 되돌릴 방법은 없으니 옮기기 전 오차 값을 기록해 둔다.
+</Callout>
+
+코드 쪽에서는 이것만 지키면 대부분의 사고를 피한다.
+
+- 걸린 시간, 타임아웃, 재시도 간격, 레이트 리미터는 단조 시계로 잰다.
+- 서버 사이를 오가는 만료 시각에는 허용 오차를 두되, 허용 오차로 NTP 문제를 덮지 않는다.
+- 정렬과 충돌 해결에 앱 서버의 벽시계를 쓰지 않는다. DB 시각, 시퀀스, 버전 번호, HLC를 쓴다.
+- 여러 서버가 쓴 로그를 시각 순으로 합쳐 원인을 찾을 때, ms 단위 순서는 믿지 않는다. 요청 ID나 트레이스 ID로 묶어서 본다.
+
+## 시계는 순서를 증명하지 못한다
+
+서버의 시계는 늘 조금씩 어긋나고, NTP는 그 차이를 줄일 뿐 없애지 못한다. 벽시계는 스텝과 윤초로 건너뛰거나 되돌아갈 수 있으니 걸린 시간은 단조 시계로 잰다. 서버 사이 만료 시각은 허용 오차로 흡수하되 오차 자체를 감시한다. 그리고 "무엇이 먼저인가"를 시각으로 판단하지 않는다. 원인 관계만 필요하면 램포트 시계, 동시성을 알아내야 하면 벡터 시계, 실제 시각에 가까운 값까지 필요하면 HLC를 쓰고, 정말 실제 시각 순서가 필요하면 Spanner처럼 오차 범위만큼 기다리는 비용을 낸다.
+
+## 면접에서 나올 만한 질문
+
+### 서버 시계는 왜 서로 어긋나나요?
+
+시계를 만드는 수정 진동자의 진동수가 제조 편차와 온도에 따라 조금씩 달라서, 수십 ppm이면 하루에 1초 넘게 벌어진다. VM은 일시 정지나 마이그레이션 뒤 한꺼번에 밀리기도 한다. NTP가 기준 시계에 맞춰 주지만, 네트워크 왕복의 비대칭 때문에 같은 데이터센터에서도 수백 µs에서 ms 단위의 오차가 남는다.
+
+### 걸린 시간을 잴 때 Date.now()를 쓰면 안 되는 이유는요?
+
+`Date.now()`는 벽시계라서 NTP 스텝, 윤초, 수동 변경으로 앞뒤로 건너뛸 수 있다. 실험에서 1초 작업 도중 벽시계를 2초 되돌리니 `Date.now()` 차이는 -973ms, `performance.now()`는 1027ms였다. 타임아웃, 지연 측정, 백오프는 `performance.now()`, `process.hrtime`, `System.nanoTime()`, `time.monotonic()` 같은 단조 시계로 잰다.
+
+### 시계가 어긋나면 JWT에서 어떤 문제가 생기나요?
+
+발급 서버가 빠르면 nbf나 iat가 검증 서버 기준 미래라 방금 받은 토큰이 거절되고, 느리면 exp가 일찍 와서 토큰이 짧게 산다. 실험에서는 40초 빠른 발급 서버의 토큰이 `jwt not active`로, 280초 느린 서버의 5분짜리 토큰이 21초 만에 만료됐다. 검증에 수십 초 정도의 허용 오차를 두고, 그 이상 벌어지면 NTP를 고친다.
+
+### NTP는 오차를 어떻게 계산하고, 시계를 어떻게 고치나요?
+
+요청을 보낸 시각 t1, 서버가 받은 t2와 보낸 t3, 응답을 받은 t4로 오차 ((t2-t1)+(t3-t4))/2와 왕복 지연을 구한다. 가는 길과 오는 길이 같다고 가정하므로 비대칭만큼 오차가 남는다. 고칠 때는 한 번에 옮기는 스텝과 빠르기를 조절해 서서히 맞추는 슬루가 있고, chrony는 보통 시작 직후에만 스텝하고(`makestep 1 3`) 그 뒤로는 슬루한다.
+
+### 윤초 번지기(leap smear)는 무엇이고 주의할 점은요?
+
+윤초 1초를 한 번에 넣는 대신 24시간 정도에 걸쳐 시계를 조금씩 느리게 돌려 흡수하는 방법이다. 시계가 되돌아가지 않아 음수 시간 사고를 막는다. 다만 번지는 동안 번지는 서버와 번지지 않는 서버가 최대 0.5초까지 어긋나므로, 한 시스템 안에서 두 종류의 NTP 서버를 섞어 쓰지 않는다.
+
+### 램포트 시계와 벡터 시계는 무엇이 다른가요?
+
+램포트 시계는 숫자 하나로, a가 b의 원인이면 L(a) < L(b)를 보장하고 동점을 깨면 전체 순서를 만든다. 하지만 숫자가 작다고 원인이라는 보장은 없어서 두 일이 동시였는지 알 수 없다. 벡터 시계는 프로세스마다 칸을 두어 앞, 뒤, 동시를 정확히 구별하고, 대신 크기가 주체 수만큼 커진다.
+
+### HLC는 왜 쓰고, 한계는 무엇인가요?
+
+물리 시각과 카운터를 합쳐 원인 관계를 지키면서도 값이 실제 시각에 가깝게 유지된다. 그래서 LWW를 해도 원인을 본 뒤의 쓰기가 앞선 쓰기에 지지 않고, 시각 기준 읽기에도 쓸 수 있다. 하지만 시계가 크게 틀린 노드가 있으면 모두의 HLC가 그쪽으로 끌려가서 오차 상한을 두고 감시해야 하고, 원인 관계가 없는 동시 쓰기는 여전히 시계가 순서를 정하므로 잃지 않으려면 벡터 시계나 CRDT가 필요하다.

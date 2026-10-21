@@ -1,0 +1,678 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-network-iac");
+
+보안 그룹의 설명 문구를 "app servers"에서 "app servers (8080 from alb)"로 바꾸는 PR이 올라왔다. 한 줄짜리 변경이라 리뷰어는 plan을 대충 넘겼고, apply 직후 결제 API가 몇 초 동안 새 연결을 받지 못했다. plan 맨 아래에는 `Plan: 3 to add, 0 to change, 3 to destroy.`가 찍혀 있었다. 설명 문구는 보안 그룹을 통째로 갈아 끼우는 속성이었고, 그 위에 걸린 규칙도 함께 지워졌다가 다시 만들어졌다.
+
+네트워크를 코드로 옮기면 이런 일이 잦다. VPC, 서브넷, 라우트 테이블, 보안 그룹은 서로 꽉 물려 있어서 하나를 건드리면 연결이 끊기는 순간이 생긴다. 이 글은 네트워크 리소스만 다룬다. 주소 계획을 코드로 적는 법, VPC 한 벌을 짓는 법, 보안 그룹 규칙을 적는 방식에 따라 plan이 흔들리는 이유, 연결을 끊는 plan을 알아보는 법, 손으로 만든 규칙을 가져오는 법, plan을 정책으로 한 번 더 거르는 법까지 간다. plan과 state, 잠금은 [Terraform 기본](/posts/terraform-basics)에서, 모듈과 tfvars는 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서 다뤘다. VPC의 부품 자체는 [VPC 기본](/posts/vpc-basics), [서브넷과 라우트 테이블](/posts/vpc-subnets-route-tables), [보안 그룹과 NACL](/posts/security-groups-nacl)을 먼저 보면 편하다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.6, AWS 프로바이더 6.69.1로 했다. AWS 계정 대신 모의 AWS 서버(moto)에 붙였으므로 `vpc-971c...` 같은 ID는 모의 서버가 만든 값이다. plan과 apply의 메시지, 리소스를 만들고 지우는 순서는 Terraform이 정한 것이라 실제 AWS에서도 같다. 모의 서버 탓에 생기는 군더더기 줄은 지우고 그 사실을 적었다.
+
+## 네트워크 리소스는 서로 물려 있다
+
+Terraform은 리소스끼리 참조하는 관계로 그래프를 그리고, 만들 때는 그래프 위에서 아래로, 지울 때는 아래에서 위로 간다. 네트워크 리소스는 이 그래프가 유난히 촘촘하다. 서브넷은 VPC에, 라우트 테이블 연결은 서브넷과 라우트 테이블에, 서버의 네트워크 인터페이스(ENI)는 서브넷과 보안 그룹에 기대고 있다.
+
+<ConceptDiagram
+  caption="화살표는 만드는 순서다. 지울 때는 거꾸로 간다"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "vpc", label: "aws_vpc", sub: "10.20.0.0/16", x: 200, y: 32, w: 120 },
+    { id: "igw", label: "IGW", x: 66, y: 112, w: 96 },
+    { id: "subnet", label: "aws_subnet", sub: "x6 for_each", x: 200, y: 112, w: 110 },
+    { id: "sg", label: "security group", x: 330, y: 112, w: 120 },
+    { id: "rt", label: "route table", sub: "0.0.0.0/0", x: 66, y: 196, w: 104 },
+    { id: "eni", label: "ENI", sub: "서버의 NIC", x: 240, y: 196, w: 96 },
+    { id: "rule", label: "SG rule", sub: "8080 from alb", x: 348, y: 196, w: 92 },
+    { id: "rta", label: "association", sub: "서브넷 ↔ 테이블", x: 130, y: 272, w: 124 },
+  ]}
+  edges={[
+    { from: "vpc", to: "igw" },
+    { from: "vpc", to: "subnet" },
+    { from: "vpc", to: "sg" },
+    { from: "igw", to: "rt", label: "route" },
+    { from: "subnet", to: "rta" },
+    { from: "rt", to: "rta" },
+    { from: "subnet", to: "eni" },
+    { from: "sg", to: "eni" },
+    { from: "sg", to: "rule" },
+  ]}
+/>
+
+그래프가 촘촘하다는 것은 위쪽 노드 하나를 갈아 끼우면 아래쪽이 줄줄이 따라 움직인다는 뜻이다. 서브넷의 `cidr_block`을 바꾸면 서브넷이 교체되고, 그 서브넷에 붙은 ENI를 가진 서버가 먼저 비켜 줘야 한다. 보안 그룹이 교체되면 그 위의 규칙도 전부 새로 만들어진다. 애플리케이션 코드라면 다시 배포하면 그만이지만 네트워크는 교체되는 몇 초 동안 패킷이 떨어진다. 그래서 네트워크 코드는 무엇을 만들지보다 바꿀 때 무엇이 함께 움직이는지를 먼저 생각하며 짠다.
+
+## 주소 계획을 코드에 먼저 적는다
+
+VPC를 만들기 전에 정할 것이 대역이다. 나중에 다른 VPC와 피어링하거나 사내망과 VPN으로 이을 때 대역이 겹치면 잇지 못한다([VPC 잇기](/posts/vpc-peering-transit-privatelink)). 서브넷 대역은 한 번 정하면 서버를 다 빼기 전까지 바꾸지 못한다. 그래서 주소 계획은 코드 맨 위에, 계산식으로 적어 둔다. 대역과 서브넷 마스크를 자르는 원리는 [IP 주소와 서브넷](/posts/layer-ip-addressing)에 있다.
+
+Terraform에는 대역을 자르는 함수가 몇 개 있다. `terraform console`에서 바로 돌려 볼 수 있다.
+
+```bash
+# 작업 디렉터리에서 콘솔을 열고 식을 하나씩 넣어 본다 (코드가 없어도 함수는 돈다)
+echo 'cidrsubnets("10.20.0.0/16", 4, 4, 4, 8, 8, 8)' | terraform console
+echo 'cidrsubnet("10.20.0.0/16", 4, 3)' | terraform console
+```
+
+```text
+tolist([
+  "10.20.0.0/20",
+  "10.20.16.0/20",
+  "10.20.32.0/20",
+  "10.20.48.0/24",
+  "10.20.49.0/24",
+  "10.20.50.0/24",
+])
+"10.20.48.0/20"
+```
+
+`cidrsubnets(대역, 4, 4, 4, 8, 8, 8)`은 앞에서부터 빈자리를 채우며 `/20` 셋과 `/24` 셋을 차례로 잘라 준다. `cidrsubnet`(s가 없다)은 "4비트를 더 잘라 생긴 조각 중 3번"처럼 번호를 직접 고른다. 아래 그림에서 다음을 누르면 `cidrsubnets`가 주소 공간을 어떻게 채워 가는지 보인다.
+
+<AlgoTrace
+  caption="cidrsubnets는 앞에서부터 빈자리에 블록을 놓고, 크기에 맞게 경계를 맞춘다"
+  memoryLabel="다음 빈 주소"
+  cells={["0.0/20", "16.0/20", "32.0/20", "48.0/24", "49.0/24", "50.0/24"]}
+  steps={[
+    { pointer: 0, memory: ["10.20.16.0"], caption: "첫 인자 4: /16에 4비트를 더해 /20 하나를 맨 앞에 놓는다. 주소 4096개를 쓴다." },
+    { pointer: 1, memory: ["10.20.32.0"], caption: "두 번째 /20은 바로 뒤 10.20.16.0에서 시작한다." },
+    { pointer: 2, memory: ["10.20.48.0"], caption: "세 번째 /20까지 놓으면 다음 빈 주소는 10.20.48.0이다." },
+    { pointer: 3, memory: ["10.20.49.0"], caption: "인자 8은 /24다. /24 경계에 맞으니 10.20.48.0에 바로 놓는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["10.20.51.0"], caption: "나머지 /24 둘도 이어 붙는다. 순서대로 채우니 빈틈이 없다." },
+    { pointer: 0, memory: ["10.20.1.0 → 16.0"], caption: "작은 것을 먼저 두면(8, 4) /24 다음의 /20은 /20 경계인 10.20.16.0까지 밀린다. 10.20.1.0~15.255는 버려진다." },
+  ]}
+/>
+
+마지막 단계는 실제로 돌려 본 결과다. `cidrsubnets("10.20.0.0/16", 8, 4)`는 `["10.20.0.0/24", "10.20.16.0/20"]`을 돌려준다. 큰 블록을 앞에 두어야 주소가 덜 샌다.
+
+더 큰 함정은 목록 중간에 끼워 넣을 때다. 앱 서브넷 `/20`을 하나 더 넣으려고 인자 목록 셋째 자리에 4를 끼우면 그 뒤의 `/24`가 전부 밀린다.
+
+```text
+> cidrsubnets("10.20.0.0/16", 4, 4, 8, 8, 8, 8)
+["10.20.0.0/20", "10.20.16.0/20", "10.20.32.0/24", "10.20.33.0/24", "10.20.34.0/24", "10.20.35.0/24"]
+> cidrsubnets("10.20.0.0/16", 4, 4, 4, 8, 8, 8, 8)
+["10.20.0.0/20", "10.20.16.0/20", "10.20.32.0/20", "10.20.48.0/24", "10.20.49.0/24", "10.20.50.0/24", "10.20.51.0/24"]
+```
+
+(출력 형식만 한 줄로 모았다.) `10.20.32.0/24`였던 DB 서브넷이 `10.20.48.0/24`가 된다. 서브넷의 `cidr_block`은 갈아 끼워야 하는 속성이라 plan에는 DB 서브넷 교체가 뜬다. 그래서 운영 VPC에서는 `cidrsubnets`로 한꺼번에 자르기보다, 서브넷마다 `cidrsubnet(대역, 비트, 번호)`로 번호를 고정해 두는 편이 안전하다. 앱은 `/20`의 0~7번, DB는 `/24`의 128번부터, 퍼블릭은 240번부터처럼 구역을 정해 두면 나중에 무엇을 더해도 다른 서브넷이 움직이지 않는다.
+
+계정과 VPC가 늘면 대역이 겹치지 않는지 확인하는 일이 반복된다. 대역 목록을 받아 겹치는 쌍을 찾는 함수를 직접 짜 보면 겹침이 "시작과 끝 구간이 엇갈리는 것"이라는 감이 온다.
+
+<CodePlayground
+  caption="대역 목록에서 겹치는 쌍 찾기"
+  functionName="findOverlaps"
+  initialCode={`// cidrs: ["10.20.0.0/16", ...]
+// 겹치는 두 대역의 인덱스 쌍 [i, j] (i < j) 목록을 돌려준다
+function findOverlaps(cidrs) {
+  return [];
+}`}
+  solution={`function findOverlaps(cidrs) {
+  const toRange = (cidr) => {
+    const [ip, len] = cidr.split("/");
+    const n = ip.split(".").reduce((acc, o) => acc * 256 + Number(o), 0);
+    const size = 2 ** (32 - Number(len));
+    const start = n - (n % size);
+    return [start, start + size - 1];
+  };
+  const ranges = cidrs.map(toRange);
+  const out = [];
+  for (let i = 0; i < ranges.length; i++) {
+    for (let j = i + 1; j < ranges.length; j++) {
+      const [a1, a2] = ranges[i];
+      const [b1, b2] = ranges[j];
+      if (a1 <= b2 && b1 <= a2) out.push([i, j]);
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "서로 다른 /16", args: [["10.20.0.0/16", "10.30.0.0/16"]], expected: [] },
+    { label: "큰 대역 안의 작은 대역", args: [["10.20.0.0/16", "10.20.128.0/17"]], expected: [[0, 1]] },
+    { label: "서브넷 사이에 낀 /24", args: [["10.20.0.0/20", "10.20.16.0/20", "10.20.8.0/24"]], expected: [[0, 2]] },
+    { label: "10.0.0.0/8은 넓다", args: [["172.31.0.0/16", "10.0.0.0/8", "10.255.0.0/16"]], expected: [[1, 2]] },
+    { label: "붙어 있지만 겹치지 않음", args: [["192.168.0.0/24", "192.168.1.0/24"]], expected: [] },
+    { label: "두 쌍", args: [["10.20.0.0/16", "10.21.0.0/16", "10.20.240.0/24", "10.21.0.0/20"]], expected: [[0, 2], [1, 3]] },
+  ]}
+/>
+
+네 번째 테스트가 현장에서 자주 만나는 경우다. 사내망이 `10.0.0.0/8`을 통째로 쓰고 있으면 `10.x`로 시작하는 VPC는 어느 것이든 겹친다. VPC 대역은 회사 단위의 IP 대장(스프레드시트든 IPAM이든)에서 받아 오고, 코드에는 받은 값을 적는다.
+
+## VPC 한 벌을 for_each로 짓는다
+
+번호를 고정한 주소 계획을 `locals`에 적고, 서브넷은 그 맵을 `for_each`로 돈다. 맵의 키(`app-a`)가 리소스 주소가 되므로 서브넷을 더하거나 빼도 다른 서브넷의 주소가 흔들리지 않는다([count와 for_each의 차이](/posts/terraform-modules-tfvars)).
+
+```hcl
+locals {
+  vpc_cidr = "10.20.0.0/16"
+
+  # 번호를 고정해 두면 중간에 서브넷을 더해도 다른 서브넷이 밀리지 않는다
+  subnets = {
+    "app-a" = { az = "ap-northeast-2a", tier = "app", cidr = cidrsubnet(local.vpc_cidr, 4, 0) }      # 10.20.0.0/20
+    "app-c" = { az = "ap-northeast-2c", tier = "app", cidr = cidrsubnet(local.vpc_cidr, 4, 1) }      # 10.20.16.0/20
+    "db-a"  = { az = "ap-northeast-2a", tier = "db", cidr = cidrsubnet(local.vpc_cidr, 8, 128) }     # 10.20.128.0/24
+    "db-c"  = { az = "ap-northeast-2c", tier = "db", cidr = cidrsubnet(local.vpc_cidr, 8, 129) }     # 10.20.129.0/24
+    "pub-a" = { az = "ap-northeast-2a", tier = "public", cidr = cidrsubnet(local.vpc_cidr, 8, 240) } # 10.20.240.0/24
+    "pub-c" = { az = "ap-northeast-2c", tier = "public", cidr = cidrsubnet(local.vpc_cidr, 8, 241) } # 10.20.241.0/24
+  }
+}
+
+# aws_vpc.main(cidr_block = local.vpc_cidr)과 aws_internet_gateway.main은 한 줄짜리라 생략
+
+resource "aws_subnet" "this" {
+  for_each          = local.subnets
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = each.value.cidr
+  availability_zone = each.value.az
+  tags              = { Name = each.key, Tier = each.value.tier }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table" "private" { vpc_id = aws_vpc.main.id }
+
+# 서브넷의 성격은 어느 테이블에 연결되느냐가 정한다
+resource "aws_route_table_association" "this" {
+  for_each       = local.subnets
+  subnet_id      = aws_subnet.this[each.key].id
+  route_table_id = each.value.tier == "public" ? aws_route_table.public.id : aws_route_table.private.id
+}
+```
+
+여기에 ALB용과 앱용 보안 그룹, 규칙 셋을 더해 apply하면 리소스 21개가 그래프 순서대로 생긴다(`Apply complete! Resources: 21 added, 0 changed, 0 destroyed.`). VPC가 먼저, 그다음 IGW와 서브넷과 보안 그룹이 나란히, 라우트 테이블 연결이 마지막이다. 이 코드가 만든 망에서 패킷이 어디로 갈 수 있는지 따라가 보면 코드 한 줄 한 줄의 역할이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={360}
+  caption="코드가 만든 VPC에서 패킷이 갈 수 있는 길과 막히는 길"
+  zones={[
+    { id: "vpc", label: "VPC 10.20.0.0/16", x: 8, y: 50, w: 384, h: 302, tone: "neutral" },
+    { id: "pub", label: "public 240·241", x: 18, y: 74, w: 364, h: 82, tone: "public" },
+    { id: "app", label: "app 0.0/20·16.0/20", x: 18, y: 166, w: 364, h: 82, tone: "private" },
+    { id: "db", label: "db 128·129", x: 18, y: 258, w: 364, h: 84, tone: "private" },
+  ]}
+  nodes={[
+    { id: "net", label: "Internet", x: 80, y: 24, icon: "internet" },
+    { id: "igw", label: "IGW", x: 300, y: 24, icon: "gateway" },
+    { id: "alb", label: "ALB", sub: "sg shop-alb", x: 200, y: 124, icon: "lb" },
+    { id: "appa", label: "app a", sub: "10.20.0.10", x: 110, y: 216, icon: "server" },
+    { id: "appc", label: "app c", sub: "10.20.16.10", x: 290, y: 216, icon: "server" },
+    { id: "dbn", label: "postgres", sub: "10.20.128.5", x: 200, y: 308, icon: "db" },
+  ]}
+  links={[
+    { from: "net", to: "igw" },
+    { from: "igw", to: "alb" },
+    { from: "alb", to: "appa" },
+    { from: "alb", to: "appc" },
+    { from: "appa", to: "dbn" },
+    { from: "appc", to: "dbn" },
+  ]}
+  steps={[
+    { path: ["net", "igw", "alb"], packet: "SYN 443", highlight: ["pub"], title: "퍼블릭 테이블만 IGW를 안다", detail: "pub-a, pub-c는 public 테이블에 연결돼 있고, 그 테이블에만 0.0.0.0/0 → IGW 경로가 있다. ALB 보안 그룹은 443만 연다.", payload: "aws_route_table.public\n  route 0.0.0.0/0 → igw-3265f962f70141eaa" },
+    { path: ["alb", "appa"], packet: "8080", highlight: ["app"], title: "앱은 ALB 보안 그룹에서 온 것만 받는다", detail: "앱 보안 그룹의 규칙은 대역이 아니라 ALB의 보안 그룹을 가리킨다. ALB가 늘거나 IP가 바뀌어도 규칙을 고칠 일이 없다.", payload: "referenced_security_group_id = aws_security_group.alb.id\nfrom_port = 8080" },
+    { path: ["appc", "dbn"], packet: "5432", highlight: ["db"], title: "같은 VPC 안은 local 경로로 간다", detail: "모든 라우트 테이블에는 VPC 대역으로 가는 local 경로가 자동으로 있다. 앱에서 DB로 가는 길은 보안 그룹이 허락하는지만 남는다.", payload: "10.20.0.0/16 → local" },
+    { path: ["net", "igw", "dbn"], packet: "5432", blocked: true, highlight: ["db"], title: "DB 서브넷은 인터넷에서 닿지 않는다", detail: "DB 서브넷은 private 테이블에 연결돼 있고 그 테이블에는 IGW 경로가 없다. 공인 IP를 줘도 응답이 돌아갈 길이 없다.", payload: "aws_route_table.private\n  (0.0.0.0/0 경로 없음)" },
+  ]}
+/>
+
+프라이빗 서브넷에서 밖으로 나가는 NAT 게이트웨이는 AZ마다 하나씩 두는 것이 보통인데, 그 판단은 [서브넷과 라우트 테이블](/posts/vpc-subnets-route-tables)에서 다뤘다. 코드로는 `aws_nat_gateway`와 `aws_eip`를 AZ 맵으로 `for_each`하고, 프라이빗 라우트 테이블도 AZ마다 하나씩 만들어 각자의 NAT를 가리키게 한다.
+
+## 보안 그룹 규칙을 적는 세 가지 방법
+
+보안 그룹 규칙은 Terraform에서 적는 방법이 세 가지라서 혼란이 크다.
+
+- `aws_security_group` 안에 `ingress {}`/`egress {}` 블록으로 적는 인라인 방식. 그룹이 가진 규칙 전체를 코드가 소유한다.
+- `aws_security_group_rule` 리소스. 오래된 방식이다. 규칙 하나가 리소스 하나지만 어떤 속성을 바꿔도 지우고 다시 만든다.
+- `aws_vpc_security_group_ingress_rule`/`aws_vpc_security_group_egress_rule` 리소스. 지금 프로바이더 문서가 권하는 방식이다. 규칙 하나가 AWS의 규칙 ID(`sgr-...`) 하나와 짝이 되고, 태그와 설명을 달 수 있으며, 대부분의 속성을 제자리에서 고친다.
+
+권장 방식의 규칙 한 줄을 뜯어보면 이렇다.
+
+<UrlAnatomy
+  caption="규칙 리소스 하나는 AWS의 규칙 ID 하나와 짝이다"
+  base={`resource "aws_vpc_security_group_ingress_rule" "app_from_alb"`}
+  separator=" { "
+  joiner="  "
+  params={[
+    { key: "security_group_id", value: "sg.app.id", title: "규칙이 걸리는 그룹", description: "이 값이 바뀌면(그룹이 교체되면) 규칙도 갈아 끼워진다. plan에 `# forces replacement`가 붙는 곳이다.", required: true },
+    { key: "referenced_security_group_id", value: "sg.alb.id", title: "출발지를 그룹으로", description: "대역 대신 다른 보안 그룹을 출발지로 둔다. 그 그룹을 단 ENI에서 온 패킷만 받는다. 대역을 쓰려면 cidr_ipv4, 관리형 목록이면 prefix_list_id를 쓴다. 셋 중 하나만 적는다." },
+    { key: "ip_protocol", value: "tcp", title: "프로토콜", description: "tcp, udp, icmp 또는 전부를 뜻하는 -1. -1이면 포트를 적지 않는다.", required: true },
+    { key: "from_port", value: "8080", title: "포트 범위 시작", description: "to_port와 함께 범위를 만든다. 하나만 열려면 둘을 같게 둔다." },
+    { key: "to_port", value: "8080", title: "포트 범위 끝", description: "규칙 하나에 대역 하나, 포트 범위 하나만 든다. 대역이 셋이면 리소스도 셋이다(for_each로 만든다)." },
+  ]}
+/>
+
+옛 방식인 `aws_security_group_rule`에서 대역 하나를 더하면 어떻게 되는지 실제로 돌려 봤다.
+
+```text
+  # aws_security_group_rule.https must be replaced
+-/+ resource "aws_security_group_rule" "https" {
+      ~ cidr_blocks              = [ # forces replacement
+            "0.0.0.0/0",
+          + "10.0.0.0/8",
+        ]
+      ~ id                       = "sgrule-3891856422" -> (known after apply)
+      ~ security_group_rule_id   = "sgr-2df20f09fb9e4b432" -> (known after apply)
+        # (7 unchanged attributes hidden)
+    }
+
+Plan: 1 to add, 0 to change, 1 to destroy.
+```
+
+대역을 늘렸을 뿐인데 기존 규칙을 지우고 다시 만든다. 지우고 만드는 사이에 `0.0.0.0/0`에서 오는 443도 잠깐 막힌다. 새 방식에서 `cidr_ipv4`를 바꾸면 같은 상황이 `~ cidr_ipv4 = "10.20.0.0/16" -> "0.0.0.0/0"`처럼 제자리 수정으로 나온다(뒤에 나오는 정책 검사 실습의 plan에 이 줄이 있다).
+
+## 인라인과 개별 규칙을 섞으면 plan이 끝나지 않는다
+
+세 방식을 한 그룹에 섞으면 안 된다. 실습에서 앱 보안 그룹에 8080 규칙을 개별 리소스로 둔 채, 누군가 SSH 규칙을 인라인 블록으로 더했다고 해 보자.
+
+```hcl
+resource "aws_security_group" "app" {
+  name        = "shop-app"
+  description = "app tier"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {                         # 인라인 규칙: 이 그룹의 인바운드 전체를 코드가 소유한다고 선언한다
+    description = "ssh from vpc"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.20.0.0/16"]
+  }
+}
+```
+
+apply하면 인라인 블록은 "이 그룹의 인바운드는 22번 하나"라고 맞추며 8080 규칙을 지운다. 다음 plan은 사라진 8080 규칙을 다시 만들겠다고 하고, 그걸 apply하면 그다음 plan은 다시 8080을 지우겠다고 한다.
+
+```text
+  # aws_security_group.app will be updated in-place
+  ~ resource "aws_security_group" "app" {
+        id                     = "sg-d88e2167b56dc47a5"
+      ~ ingress                = [
+          - {
+              - cidr_blocks      = []
+              - from_port        = 8080
+              - ipv6_cidr_blocks = []
+              - prefix_list_ids  = []
+              - protocol         = "tcp"
+              - security_groups  = [
+                  - "sg-3d45778ccb6b8b9cd",
+                ]
+              - self             = false
+              - to_port          = 8080
+                # (1 unchanged attribute hidden)
+            },
+            # (1 unchanged element hidden)
+        ]
+        name                   = "shop-app"
+        tags                   = {}
+        # (9 unchanged attributes hidden)
+```
+
+(세 번째 plan에서 앱 그룹 부분만 옮겼다.) 두 리소스가 같은 규칙을 서로 자기 것이라고 우기는 셈이다. apply할 때마다 8080이 사라졌다 돌아오고, 그 사이 ALB에서 앱으로 가는 새 연결이 막힌다. "plan이 매번 뭔가 바꾸겠다고 나온다"는 증상을 보면 먼저 이 섞임을 의심한다.
+
+반대 방향의 함정도 있다. 인라인 블록을 코드에서 지우기만 하면 Terraform은 그 속성을 더 이상 관리하지 않는다고 보고 아무것도 지우지 않는다. 실습에서도 블록을 지운 뒤 plan에 앱 그룹 변경이 없었고, AWS에는 22번 규칙이 그대로 남아 있었다.
+
+그룹에 실제로 걸린 규칙은 `aws ec2 describe-security-group-rules --filters Name=group-id,Values=sg-d88e2167b56dc47a5`로 본다(`--query`로 ID, 방향, 프로토콜, 포트, 대역만 골랐다).
+
+```text
+sgr-a19c0323e5a8b9f85	True	-1	-1	-1	0.0.0.0/0
+sgr-4d0d09eda40fbc336	False	tcp	22	22	10.20.0.0/16
+sgr-ee5e13877b48407bc	False	tcp	8080	8080	None
+```
+
+인라인 규칙을 모두 비우려면 `ingress = []`처럼 빈 목록을 명시해야 한다. 팀 규칙은 하나로 정한다. 새 코드는 개별 규칙 리소스(`aws_vpc_security_group_*_rule`)로만 적고, 인라인 블록은 쓰지 않는다.
+
+개별 규칙 방식에도 약점이 하나 있다. Terraform은 자기가 만든 규칙만 안다. 누가 콘솔에서 `0.0.0.0/0`에 22번을 열어도 plan은 조용하다. 인라인 방식은 이런 규칙을 지워 주지만 위의 섞임 문제를 안고 간다. 그래서 개별 규칙 방식을 쓰면 "Terraform이 모르는 규칙"을 찾는 점검을 따로 둔다. 위의 `describe-security-group-rules` 결과에서 state에 없는 `sgr-` ID를 걸러 내면 된다.
+
+## 설명 한 줄 고쳤는데 보안 그룹이 갈아 끼워진다
+
+처음 장면으로 돌아가자. `aws_security_group`의 `name`과 `description`은 AWS가 나중에 고치는 API를 주지 않는 값이라 바꾸면 그룹이 교체된다. plan은 이렇게 나온다.
+
+```text
+  # aws_security_group.app must be replaced
+-/+ resource "aws_security_group" "app" {
+      ~ description            = "app servers" -> "app servers (8080 from alb)" # forces replacement
+      ~ id                     = "sg-ce92e6b2d1bdb2032" -> (known after apply)
+        name                   = "shop-app"
+        ...
+    }
+
+  # aws_vpc_security_group_ingress_rule.app_from_alb must be replaced
+-/+ resource "aws_vpc_security_group_ingress_rule" "app_from_alb" {
+      ~ security_group_id            = "sg-ce92e6b2d1bdb2032" -> (known after apply) # forces replacement
+    }
+
+Plan: 3 to add, 0 to change, 3 to destroy.
+```
+
+(속성 줄 여럿과 같은 모양인 egress 규칙 교체 한 건은 줄였다.) `-/+`는 지우고 나서 만든다는 뜻이다. 그런데 앱 서버의 ENI가 이 그룹을 달고 있다. 실제 AWS는 ENI가 달고 있는 보안 그룹을 지우지 못하게 `DependencyViolation`으로 거절하고, 프로바이더는 삭제 제한 시간(기본 15분) 동안 다시 시도하며 `Still destroying...`을 찍다가 실패한다. 모의 서버는 이 검사를 하지 않아서 실습에서는 그대로 지워졌다.
+
+해법은 두 가지를 같이 쓰는 것이다. `name` 대신 `name_prefix`를 써서 새 그룹이 옛 그룹과 이름이 겹치지 않게 하고, `lifecycle { create_before_destroy = true }`로 순서를 "만들고 나서 지운다"로 뒤집는다. 그런데 그룹에만 이 설정을 걸고 apply한 실제 순서는 이랬다.
+
+```text
+aws_vpc_security_group_ingress_rule.app_from_alb: Destroying... [id=sgr-40a2b32fc2c59e479]
+aws_vpc_security_group_egress_rule.app_all: Destroying... [id=sgr-e7e55cdc17a206313]
+aws_vpc_security_group_egress_rule.app_all: Destruction complete after 0s
+aws_vpc_security_group_ingress_rule.app_from_alb: Destruction complete after 0s
+aws_security_group.app: Creating...
+aws_security_group.app: Creation complete after 1s [id=sg-434691e64d0532918]
+aws_vpc_security_group_ingress_rule.app_from_alb: Creating...
+aws_vpc_security_group_egress_rule.app_all: Creating...
+aws_network_interface.app: Modifying... [id=eni-27478b7b53dacb5a2]
+aws_vpc_security_group_ingress_rule.app_from_alb: Creation complete after 0s [id=sgr-454b8ecb73ec5757f]
+aws_vpc_security_group_egress_rule.app_all: Creation complete after 0s [id=sgr-b9c39badeae14fa94]
+aws_network_interface.app: Modifications complete after 0s [id=eni-27478b7b53dacb5a2]
+aws_security_group.app (deposed object efce5bd7): Destroying... [id=sg-0b364e2025403cb53]
+aws_security_group.app: Destruction complete after 0s
+Apply complete! Resources: 3 added, 1 changed, 3 destroyed.
+```
+
+그룹은 만들고 나서 지웠지만, 규칙은 여전히 지우고 나서 만들었다. 맨 앞 두 줄에서 옛 그룹의 규칙이 먼저 사라지고, ENI는 아홉 번째 줄에서야 새 그룹으로 옮겨 간다. 그 사이 ENI는 규칙이 하나도 없는 옛 그룹을 달고 있다. 아래 그림에서 이 틈을 따라가 본다.
+
+<NetworkTopology
+  width={400}
+  height={220}
+  caption="그룹에만 create_before_destroy를 걸면 규칙이 먼저 사라지는 틈이 생긴다"
+  zones={[
+    { id: "eni", label: "app-a ENI", x: 284, y: 58, w: 112, h: 100, tone: "private" },
+  ]}
+  nodes={[
+    { id: "alb", label: "ALB", x: 62, y: 110, icon: "lb", w: 96 },
+    { id: "old", label: "sg old", sub: "sg-0b36…", x: 190, y: 56, icon: "firewall", w: 100 },
+    { id: "new", label: "sg new", sub: "sg-4346…", x: 190, y: 172, icon: "firewall", w: 100 },
+    { id: "app", label: "app", sub: "8080", x: 340, y: 110, icon: "server" },
+  ]}
+  links={[
+    { from: "alb", to: "old" },
+    { from: "old", to: "app" },
+    { from: "alb", to: "new", dashed: true },
+    { from: "new", to: "app", dashed: true },
+  ]}
+  steps={[
+    { path: ["alb", "old", "app"], packet: "8080", title: "평소에는 옛 그룹의 규칙으로 들어간다", detail: "ENI가 단 그룹은 sg old 하나다. 8080 규칙이 ALB 그룹을 허락한다." },
+    { path: ["alb", "old"], packet: "SYN", blocked: true, title: "규칙이 먼저 지워진다", detail: "규칙 리소스는 기본 순서대로 지우고 나서 만든다. 옛 그룹은 아직 ENI에 달려 있는데 규칙이 비었다. 새 연결이 여기서 떨어진다.", payload: "app_from_alb: Destroying... [id=sgr-40a2…]" },
+    { path: ["new"], highlight: ["new"], title: "새 그룹과 규칙이 생긴다", detail: "새 그룹이 생기고 그 위에 규칙이 다시 만들어진다. ENI는 아직 옛 그룹을 달고 있다.", payload: "aws_security_group.app: Creating..." },
+    { path: ["alb", "new", "app"], packet: "8080", highlight: ["eni"], title: "ENI가 새 그룹으로 옮겨 가면 다시 통한다", detail: "ENI의 security_groups가 새 ID로 바뀌는 제자리 수정이 끝나야 틈이 닫힌다.", payload: "aws_network_interface.app: Modifying..." },
+    { path: ["old"], highlight: ["old"], title: "옛 그룹을 지운다", detail: "아무도 달고 있지 않으니 이제 지울 수 있다. deposed는 교체되어 밀려난 옛 객체를 뜻한다.", payload: "aws_security_group.app (deposed object efce5bd7): Destroying..." },
+  ]}
+/>
+
+규칙 리소스에도 `create_before_destroy = true`를 걸고 같은 ENI를 둔 채 다시 교체해 봤다.
+
+```text
+aws_security_group.app: Creating...
+aws_security_group.app: Creation complete after 0s [id=sg-b6e30f172ea9de8ee]
+aws_network_interface.app: Modifying... [id=eni-27478b7b53dacb5a2]
+aws_vpc_security_group_ingress_rule.app_from_alb: Creating...
+aws_vpc_security_group_egress_rule.app_all: Creating...
+aws_vpc_security_group_ingress_rule.app_ssh: Creating...
+aws_vpc_security_group_ingress_rule.app_ssh: Creation complete after 0s [id=sgr-f05d50342b9b5ce07]
+aws_vpc_security_group_ingress_rule.app_from_alb: Creation complete after 0s [id=sgr-f722aa88d0b7d6fbe]
+aws_vpc_security_group_egress_rule.app_all: Creation complete after 0s [id=sgr-969015bc35c22732d]
+aws_vpc_security_group_ingress_rule.app_ssh (deposed object 2a330f0e): Destroying... [id=sgr-a793e1e24063c5d0f]
+aws_network_interface.app: Modifications complete after 0s [id=eni-27478b7b53dacb5a2]
+aws_vpc_security_group_ingress_rule.app_from_alb (deposed object 0d0ad809): Destroying... [id=sgr-f16d6b72aeceae5f6]
+...
+aws_security_group.app (deposed object 47e82349): Destroying... [id=sg-2b7ff5ad7a7683a91]
+Apply complete! Resources: 4 added, 1 changed, 4 destroyed.
+```
+
+틈은 줄었지만 닫히지는 않았다. 셋째 줄을 보면 ENI는 새 그룹이 생기자마자 옮겨 가기 시작하는데, 그때 새 그룹에는 규칙이 아직 없다. 옛 규칙을 지우는 줄도 ENI 수정이 끝나기 전에 시작한다. ENI는 그룹을 참조할 뿐 규칙을 참조하지 않으니, Terraform 그래프에는 "ENI를 옮긴 뒤 옛 규칙을 지운다"거나 "새 규칙이 생긴 뒤 ENI를 옮긴다"는 선이 없다. 순서가 정해지지 않은 작업은 동시에 돈다. 모의 서버에서는 0초 만에 끝났지만 실제 API에서는 이 사이가 수백 밀리초, 길게는 몇 초가 된다.
+
+그래서 운영 중인 그룹을 바꿀 때는 apply를 두 번으로 나눈다. 첫 번째 PR은 새 그룹(`app_v2`)과 규칙을 만들고 ENI에 옛 그룹과 새 그룹을 둘 다 단다. 보안 그룹은 허용 규칙의 합집합이라 둘 다 달려 있는 동안은 어느 쪽 규칙으로든 통한다.
+
+```text
+aws_security_group.app_v2: Creation complete after 0s [id=sg-dce769377bed69d7c]
+aws_vpc_security_group_egress_rule.app_v2_all: Creating...
+aws_vpc_security_group_ingress_rule.app_v2_from_alb: Creating...
+aws_network_interface.app: Modifying... [id=eni-27478b7b53dacb5a2]
+aws_vpc_security_group_ingress_rule.app_v2_from_alb: Creation complete after 0s [id=sgr-fb32409b1ecb1a4fd]
+aws_vpc_security_group_egress_rule.app_v2_all: Creation complete after 0s [id=sgr-393915b5f8b99e7d9]
+aws_network_interface.app: Modifications complete after 0s [id=eni-27478b7b53dacb5a2]
+Apply complete! Resources: 3 added, 2 changed, 0 destroyed.
+```
+
+destroy가 0이다. 두 번째 PR에서 ENI 목록에서 옛 그룹을 빼고 옛 그룹과 규칙 코드를 지운다. 이때는 ENI가 이미 새 그룹의 규칙으로 통하고 있으니 무엇을 어떤 순서로 지워도 틈이 없다. ENI 하나에 달 수 있는 그룹 수(기본 5개)를 넘지 않는지만 본다.
+
+정리하면, 설명을 바꿀 일을 아예 만들지 않는 것이 먼저다. 설명 대신 태그(`Name`, `Purpose`)를 쓰면 제자리 수정이다. 교체가 생길 수 있는 그룹에는 `name_prefix`와 `create_before_destroy`를 그룹과 규칙 양쪽에 걸어 두고, 운영 트래픽이 지나는 그룹을 바꿀 때는 "둘 다 달기 → 옛 것 빼기" 두 단계로 간다.
+
+## 물결표 하나가 서브넷을 인터넷에서 떼어 낸다
+
+교체(`-/+`)만 위험한 것은 아니다. 연결을 끊는 변경이 제자리 수정(`~`)으로 조용히 나오는 경우가 더 무섭다. 위 코드의 주소 계획에서 `tier = "public"`을 `"pubilc"`로 잘못 친 PR의 plan이다.
+
+```text
+  # aws_route_table_association.this["pub-a"] will be updated in-place
+  ~ resource "aws_route_table_association" "this" {
+        id             = "rtbassoc-8b820ef13e51e987c"
+      ~ route_table_id = "rtb-56dd7b7a6ccafbdf1" -> "rtb-77c31f77d0e4c6dac"
+        # (3 unchanged attributes hidden)
+    }
+
+  # aws_subnet.this["pub-a"] will be updated in-place
+  ~ resource "aws_subnet" "this" {
+        id                                             = "subnet-77ac71098d02082dc"
+      ~ tags                                           = {
+            "Name" = "pub-a"
+          ~ "Tier" = "public" -> "pubilc"
+        }
+        # (20 unchanged attributes hidden)
+    }
+```
+
+(모의 서버 탓에 매번 붙는 규칙 변경 한 건은 뺐다.) 리뷰어 눈에는 태그 오타 하나와 무언가의 ID 변경으로 보인다. 실제로는 `pub-a` 서브넷이 public 테이블에서 private 테이블로 옮겨 가고, 그 서브넷의 ALB 노드와 NAT 게이트웨이가 인터넷 경로를 잃는다. 제자리 수정이라 다운타임 경고도 없다.
+
+이런 값은 코드가 스스로 막게 한다. 서브넷 리소스에 `precondition`을 건다.
+
+```hcl
+resource "aws_subnet" "this" {
+  # ... 위와 같다
+  lifecycle {
+    precondition {
+      condition     = contains(["app", "db", "public"], each.value.tier)
+      error_message = "tier는 app, db, public 중 하나여야 한다."
+    }
+  }
+}
+```
+
+```text
+Error: Resource precondition failed
+
+  on network.tf line 34, in resource "aws_subnet" "this":
+  34:       condition     = contains(["app", "db", "public"], each.value.tier)
+    ├────────────────
+    │ each.value.tier is "pubilc"
+
+tier는 app, db, public 중 하나여야 한다.
+```
+
+값이 변수로 들어온다면 `variable` 블록의 `validation`이 같은 일을 한다. 네트워크 plan에서 `~`라도 다시 보는 속성은 정해져 있다. `route_table_id`(연결), 라우트의 대상(`gateway_id`, `nat_gateway_id`, `transit_gateway_id`), 서버의 `security_groups`/`vpc_security_group_ids`, NACL 규칙의 `rule_action`이다.
+
+## 콘솔에서 연 규칙을 코드로 데려오기
+
+장애 대응 중 콘솔에서 연 규칙, 인라인 블록을 지웠을 때 남은 규칙처럼 코드 밖의 규칙은 지우거나 데려와야 한다. 지금 쓰는 규칙이면 `import` 블록으로 데려온다. import 일반은 [Terraform 기본](/posts/terraform-basics)에 있으니 여기서는 네트워크에서 걸리는 부분만 본다.
+
+<SequenceDiagram
+  caption="손으로 만든 규칙을 import 블록으로 데려오는 흐름"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "tf", label: "Terraform" },
+    { id: "api", label: "EC2 API" },
+  ]}
+  steps={[
+    { from: "me", to: "api", label: "describe", title: "Terraform이 모르는 규칙을 찾는다", detail: "그룹의 규칙 목록과 state에 있는 규칙 ID를 비교해 남는 sgr- ID를 찾는다.", payload: "sgr-4d0d09eda40fbc336  tcp 22 10.20.0.0/16" },
+    { from: "me", to: "tf", label: "import {}", title: "import 블록을 적는다", detail: "어느 주소로 데려올지(to)와 실제 ID(id)를 적는다. 코드로 리뷰를 받을 수 있다.", payload: "import {\n  to = aws_vpc_security_group_ingress_rule.app_ssh\n  id = \"sgr-4d0d09eda40fbc336\"\n}" },
+    { from: "tf", to: "api", label: "Read", title: "규칙을 읽는다", detail: "plan -generate-config-out을 주면 읽은 값으로 리소스 코드 초안을 파일에 쓴다.", payload: "aws_vpc_security_group_ingress_rule.app_ssh: Preparing import... [id=sgr-4d0d09eda40fbc336]" },
+    { from: "tf", to: "me", label: "generated.tf", title: "초안을 다듬는다", detail: "초안에는 security_group_id가 문자열로 박혀 있다. 참조(aws_security_group.app.id)로 바꾸지 않으면 그룹이 교체될 때 이 규칙만 옛 그룹에 남는다." },
+    { from: "me", to: "tf", label: "apply", title: "가져오고 확인한다", detail: "1 to import로 apply한 뒤 다음 plan이 No changes인지 본다. 그때 import 블록을 지운다.", payload: "Plan: 1 to import, ...\n(다음 plan) No changes." },
+  ]}
+/>
+
+```bash
+# import 블록을 적은 뒤 초안 코드를 만들어 plan을 본다 (아직 아무것도 바꾸지 않는다)
+terraform plan -generate-config-out=generated.tf
+```
+
+```text
+aws_vpc_security_group_ingress_rule.app_ssh: Preparing import... [id=sgr-4d0d09eda40fbc336]
+
+  # aws_vpc_security_group_ingress_rule.app_ssh will be imported
+  # (config will be generated)
+    resource "aws_vpc_security_group_ingress_rule" "app_ssh" {
+        cidr_ipv4              = "10.20.0.0/16"
+        description            = "ssh from vpc"
+        from_port              = 22
+        id                     = "sgr-4d0d09eda40fbc336"
+        ip_protocol            = "tcp"
+        security_group_id      = "sg-d88e2167b56dc47a5"
+        to_port                = 22
+        ...
+    }
+```
+
+생성된 `generated.tf`에는 `cidr_ipv6 = null` 같은 빈 속성과 `security_group_id = "sg-d88e2167b56dc47a5"`가 그대로 박혀 있다. 빈 속성은 지우고 ID는 참조로 바꾼다. 실습에서 ID를 그대로 둔 채 그룹을 교체하는 plan을 만들어 보니, 그룹과 8080 규칙은 교체 목록에 올랐는데 SSH 규칙은 목록에 없었다. 그룹이 지워질 때 함께 사라질 규칙을 Terraform은 모른다.
+
+데려올 가치가 없는 규칙(임시로 연 22번 같은 것)은 콘솔이나 CLI로 지운다. 어느 쪽이든 결정은 PR로 남긴다.
+
+## plan을 사람 눈 대신 정책으로 한 번 더 본다
+
+사람이 plan 300줄을 매번 꼼꼼히 읽기는 어렵다. 그래서 검사기 두 종류를 같이 쓴다. 하나는 코드를 읽는 정적 검사기(tfsec, checkov, 지금은 tfsec을 이은 Trivy), 다른 하나는 plan 결과(JSON)를 읽고 팀 규칙을 적용하는 정책 엔진(OPA를 쓰는 conftest)이다.
+
+실습 코드에 SSH 규칙의 대역을 `0.0.0.0/0`으로 바꿔 넣고 두 정적 검사기를 돌렸다.
+
+```bash
+# 코드 정적 검사 (tfsec 1.28.11, checkov 3.3.30)
+tfsec . --concise-output
+checkov -d . --framework terraform --compact --quiet --skip-download
+```
+
+```text
+Result #1 MEDIUM VPC Flow Logs is not enabled for VPC
+...
+  8 passed, 1 potential problem(s) detected.
+```
+
+```text
+Passed checks: 37, Failed checks: 7, Skipped checks: 0
+
+Check: CKV_AWS_24: "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22"
+	FAILED for resource: aws_vpc_security_group_ingress_rule.app_ssh
+	File: /app_ssh.tf:2-9
+...
+Check: CKV2_AWS_11: "Ensure VPC flow logging is enabled in all VPCs"
+	FAILED for resource: aws_vpc.main
+```
+
+tfsec은 흐름 로그만 지적하고 전 세계에 열린 22번은 놓쳤다. 이 버전의 tfsec 규칙은 새 규칙 리소스 타입(`aws_vpc_security_group_ingress_rule`)을 보지 않는다. checkov는 잡았다. 검사기는 리소스 타입별로 규칙을 들고 있어서, 새 리소스 방식으로 옮기면 그 검사기가 그 타입을 아는지 먼저 확인해야 한다. 흐름 로그 지적은 맞는 말이다. 막힌 곳을 찾을 때 쓰는 그 로그다([흐름 로그](/posts/network-flow-logs)).
+
+정적 검사기가 모르는 것이 있다. "이 변경이 무엇을 지우는가"는 plan을 봐야 안다. conftest는 `terraform show -json`으로 뽑은 plan을 입력으로 받는다. 팀 규칙을 Rego로 적는다.
+
+```rego
+package main
+
+import rego.v1
+
+# 지우거나 갈아 끼우면 연결이 끊길 수 있는 리소스
+critical := {
+  "aws_route", "aws_route_table", "aws_route_table_association",
+  "aws_security_group", "aws_vpc_security_group_ingress_rule",
+  "aws_subnet", "aws_nat_gateway", "aws_network_acl_rule",
+}
+
+deny contains msg if {
+  rc := input.resource_changes[_]
+  critical[rc.type]
+  "delete" in rc.change.actions
+  msg := sprintf("%s: %v — 네트워크 리소스 삭제/교체는 별도 승인 필요", [rc.address, rc.change.actions])
+}
+
+deny contains msg if {
+  rc := input.resource_changes[_]
+  rc.type == "aws_vpc_security_group_ingress_rule"
+  rc.change.after.cidr_ipv4 == "0.0.0.0/0"
+  rc.change.after.from_port != 443
+  msg := sprintf("%s: 0.0.0.0/0에 %d번 포트를 연다", [rc.address, rc.change.after.from_port])
+}
+
+warn contains msg if {
+  rc := input.resource_changes[_]
+  rc.type == "aws_route_table_association"
+  "update" in rc.change.actions
+  msg := sprintf("%s: 서브넷의 라우트 테이블이 바뀐다 (%s -> %s)", [rc.address, rc.change.before.route_table_id, rc.change.after.route_table_id])
+}
+```
+
+앞에서 본 세 가지 사고(설명 변경, tier 오타, 전 세계에 연 22번)를 한 plan에 담아 돌렸다.
+
+```bash
+# plan을 파일로 저장하고 JSON으로 바꾼 뒤 policy/ 폴더의 정책으로 검사한다
+terraform plan -out=tfplan
+terraform show -json tfplan > tfplan.json
+conftest test tfplan.json
+```
+
+```text
+WARN - tfplan.json - main - aws_route_table_association.this["pub-a"]: 서브넷의 라우트 테이블이 바뀐다 (rtb-56dd7b7a6ccafbdf1 -> rtb-77c31f77d0e4c6dac)
+FAIL - tfplan.json - main - aws_security_group.app: ["delete", "create"] — 네트워크 리소스 삭제/교체는 별도 승인 필요
+FAIL - tfplan.json - main - aws_vpc_security_group_ingress_rule.app_from_alb: ["delete", "create"] — 네트워크 리소스 삭제/교체는 별도 승인 필요
+FAIL - tfplan.json - main - aws_vpc_security_group_ingress_rule.app_ssh: 0.0.0.0/0에 22번 포트를 연다
+
+4 tests, 0 passed, 1 warning, 3 failures, 0 exceptions
+```
+
+`actions`가 `["delete", "create"]`면 지우고 만드는 교체, `["create", "delete"]`면 `create_before_destroy`가 걸린 교체다. 정책을 "교체 금지"가 아니라 "교체는 별도 승인"으로 두는 것이 현실적이다. 실패하면 CI가 멈추고, 네트워크 담당자가 plan을 보고 예외를 승인하는 식이다. 이 검사를 PR 파이프라인에 넣는 방법은 [네트워크 설정 CI/CD](/posts/network-config-cicd)에서 이어 간다.
+
+## 현장에서 네트워크 plan을 읽는 순서
+
+plan 리뷰에서 네트워크 쪽은 아래 순서로 본다.
+
+1. 맨 아래 destroy 숫자, 그리고 `-/+`와 `# forces replacement`. 보안 그룹, 서브넷, NAT 게이트웨이, 라우트 테이블 교체는 연결을 끊을 수 있다. `+/-`(먼저 만든다)인지 확인한다.
+2. 제자리 수정 중 길을 바꾸는 속성: `route_table_id`, 라우트 대상, `security_groups`, NACL의 `rule_action`과 `rule_number`.
+3. 보안 그룹 규칙의 출발지가 `0.0.0.0/0`이나 `::/0`으로 넓어지는 줄.
+4. 같은 PR을 두 번 plan했을 때 결과가 같은지. 매번 다르면 인라인과 개별 규칙이 섞였거나 콘솔에서 바꾼 drift가 있다.
+
+증상별로 먼저 볼 곳도 정리해 둔다.
+
+- apply가 보안 그룹 삭제에서 `Still destroying...`만 찍으며 오래 멈춘다: 그 그룹을 단 ENI가 남아 있다. ENI 목록에서 `group-id`로 찾고, 교체라면 `create_before_destroy`가 빠졌다.
+- apply 직후 몇 초 동안 5xx가 튀었다가 돌아온다: 그룹 교체 중 규칙 없는 순간이 있었다. apply 로그에서 규칙의 `Destroying...`과 ENI `Modifying...`의 순서를 본다.
+- apply 후 프라이빗 서버의 `apt update`가 멈춘다: 라우트 테이블 연결이나 NAT 경로가 바뀌었다. `aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-...`로 지금 연결된 테이블을 본다.
+- plan이 매번 같은 규칙을 지웠다 만든다: 인라인과 개별 규칙이 섞였다. `grep -n "ingress {" *.tf`로 인라인 블록을 찾는다.
+- 콘솔에서 막아 둔 규칙이 apply 뒤 되살아났다: 인라인 방식이라 코드가 규칙 전체를 덮었다. 콘솔 변경을 코드에 옮기지 않은 것이다.
+
+변경이 큰 네트워크 작업(서브넷 대역 교체, VPC 이전)은 한 번의 apply로 하지 않는다. 새 서브넷을 먼저 만들고, 서버를 옮기고, 옛 서브넷을 지우는 세 번의 PR로 나눈다. 각 PR의 plan에는 destroy가 0이거나, 비어 있는 것만 지운다.
+
+## 코드는 바꾸되 길은 끊지 않는다
+
+네트워크를 Terraform으로 다룬다는 것은 리소스를 만드는 것보다 바꾸는 순간을 다루는 일이다. 주소는 번호를 고정한 `cidrsubnet`으로 적어 끼워 넣어도 밀리지 않게 하고, 보안 그룹 규칙은 개별 리소스 한 가지 방식으로만 적는다. 교체될 수 있는 그룹과 규칙에는 `name_prefix`와 `create_before_destroy`를 걸고 운영 중인 그룹은 두 단계로 바꾸며, 제자리 수정이라도 길을 바꾸는 속성은 따로 본다. 사람이 놓치는 것은 precondition과 conftest 정책이 잡게 둔다. 다음 글 [Ansible로 네트워크 설정 자동화](/posts/ansible-network-automation)에서는 클라우드 API가 아니라 서버와 장비 안의 설정을 코드로 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 서브넷 대역을 Terraform으로 계산할 때 주의할 점은 무엇인가요?
+
+번호를 고정해서 자르는 것이다. `cidrsubnets`에 크기 목록을 주면 앞에서부터 차례로 채우기 때문에 중간에 하나를 끼우면 뒤의 대역이 전부 밀리고, 서브넷의 `cidr_block`은 교체 속성이라 서브넷이 갈아 끼워진다. 그래서 서브넷마다 `cidrsubnet(대역, 비트, 번호)`로 번호를 정해 두고 계층별로 번호 구역을 나눈다. 큰 블록을 앞에 두지 않으면 경계 맞춤 때문에 주소가 버려진다는 점도 있다.
+
+### 보안 그룹 규칙을 인라인 블록과 개별 리소스로 섞으면 왜 문제가 되나요?
+
+인라인 블록은 그룹의 규칙 전체를 소유한다고 선언하기 때문이다. apply할 때 개별 리소스가 만든 규칙을 지우고, 다음 plan에서 개별 리소스가 그 규칙을 다시 만들겠다고 해서 apply할 때마다 규칙이 사라졌다 돌아온다. 그 사이 연결이 끊긴다. 한 그룹에는 한 방식만 쓰고, 지금은 `aws_vpc_security_group_ingress_rule` 같은 개별 규칙 리소스를 권한다.
+
+### 보안 그룹 설명만 바꿨는데 왜 교체되고, 어떻게 피하나요?
+
+AWS가 그룹의 이름과 설명을 나중에 고치는 API를 주지 않아서 Terraform이 교체로 처리한다. 기본 순서는 지우고 만들기라 ENI가 그룹을 달고 있으면 `DependencyViolation`으로 막히고, `create_before_destroy`를 그룹에만 걸면 규칙이 먼저 지워져 틈이 생긴다. 규칙에까지 걸어도 ENI 이동과 규칙 생성·삭제 사이에는 의존 관계가 없어 동시에 돈다. 그래서 설명 대신 태그를 쓰고, 운영 중인 그룹은 새 그룹을 ENI에 함께 달았다가 옛 그룹을 빼는 두 번의 apply로 바꾼다.
+
+### plan에 교체가 없는데도 연결이 끊길 수 있나요?
+
+있다. 라우트 테이블 연결의 `route_table_id`, 라우트의 대상, 인스턴스의 보안 그룹 목록, NACL 규칙의 동작은 제자리 수정(`~`)으로 나오지만 패킷이 가는 길을 바꾼다. 태그 오타 하나로 퍼블릭 서브넷이 프라이빗 테이블로 옮겨 가는 plan도 겉보기에는 사소하다. 그래서 이런 값에는 precondition이나 validation을 걸고, 정책 검사로 경고를 띄운다.
+
+### 콘솔에서 만든 보안 그룹 규칙은 어떻게 Terraform으로 가져오나요?
+
+규칙 ID(`sgr-...`)를 찾아 `import` 블록을 적고 `plan -generate-config-out`으로 초안을 받는다. 초안에 문자열로 박힌 `security_group_id`는 참조로 바꿔야 그룹이 교체될 때 함께 움직인다. apply 뒤 plan이 No changes인지 확인하면 끝이다. 개별 규칙 방식은 Terraform이 모르는 규칙을 감지하지 못하므로, 실제 규칙 목록과 state를 비교하는 점검을 따로 둔다.
+
+### tfsec이나 checkov가 있으면 conftest 같은 plan 정책은 필요 없지 않나요?
+
+둘은 보는 대상이 다르다. 정적 검사기는 코드만 보고 "열린 포트, 빠진 로그" 같은 설정 문제를 찾는다. plan 정책은 이번 변경이 무엇을 지우고 무엇을 바꾸는지를 보고 "네트워크 리소스 교체는 승인 필요" 같은 변경 규칙을 건다. 또 검사기는 리소스 타입별 규칙이라 새 리소스 타입을 모를 수 있다. 실습의 tfsec 1.28.11은 새 규칙 리소스로 연 22번을 놓쳤다.
+
+### 운영 중인 서브넷의 대역을 바꿔야 하면 어떻게 진행하나요?
+
+한 번의 apply로 하지 않는다. 새 대역의 서브넷을 먼저 추가하고, 서버나 노드 그룹을 새 서브넷으로 옮기고, 비워진 옛 서브넷을 마지막에 지우는 단계로 PR을 나눈다. 각 단계의 plan은 destroy가 없거나 빈 리소스만 지우게 만든다. 주소 계획을 번호 고정으로 해 두면 새 서브넷을 더하는 단계가 다른 서브넷을 건드리지 않는다.

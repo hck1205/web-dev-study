@@ -1,0 +1,480 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("api-versioning");
+
+주문 상태에 `REFUNDED`를 추가했다. 필드를 지운 것도 아니고 값 하나를 더했을 뿐이라 배포 공지도 하지 않았다. 다음 날 아침, 1년 전 버전의 안드로이드 앱에서 주문 목록 화면이 통째로 하얗게 뜬다는 리뷰가 쌓였다. 환불된 주문이 하나라도 있는 사용자만 그랬다.
+
+API를 바꾸는 일은 이미 배포된, 내가 고칠 수 없는 코드와의 약속을 바꾸는 일이다. 서버는 오늘 배포하면 끝이지만 클라이언트는 사용자가 업데이트할 때까지, 파트너사는 그쪽 일정이 날 때까지 옛 모양을 기대한다. 이 글은 그 약속을 어떻게 지키면서 바꾸는지를 운영 쪽에서 본다. 무엇이 실제로 깨지는지, 깨는 변경을 배포 전에 어떻게 잡는지, 여러 버전을 한 서버에서 어떻게 돌리는지, 옛 버전을 어떻게 끝내는지다.
+
+이 주제의 다른 글: 깨지 않는 변경과 깨는 변경의 기본 구분, 버전을 URL·헤더·미디어 타입에 적는 세 방식, `Deprecation`·`Sunset` 헤더의 뜻은 [REST API 설계](/posts/rest-api-design)에서 이미 다뤘다. 여기서는 그 설명을 반복하지 않고 그다음 단계를 다룬다. protobuf 필드 번호 규칙은 [gRPC](/posts/grpc), DB 스키마를 서비스 중단 없이 바꾸는 법은 [무중단 마이그레이션](/posts/zero-downtime-migrations)에 있다. 예제는 node 22와 nginx 1.24, graphql-js 17.0, protoc 35.1로 직접 돌렸다.
+
+## 추가했을 뿐인데 깨지는 이유
+
+"필드 추가는 안전하다"는 말은 클라이언트가 너그러울 때만 맞다. 1년 전 앱의 코드를 흉내 낸 두 클라이언트에 네 가지 변경된 응답을 넣어 봤다. 하나는 모르는 값을 만나면 예외를 던지는 엄격한 클라이언트, 하나는 모르는 값을 기본 처리로 넘기는 너그러운 클라이언트(tolerant reader)다.
+
+```js
+function label(status) {          // 엄격한 클라이언트
+  switch (status) {
+    case "PAID": return "결제 완료";
+    case "CANCELED": return "취소됨";
+    default: throw new Error(`unknown status: ${status}`);
+  }
+}
+function labelTolerant(status) {  // 모르는 값은 "처리 중"으로
+  return { PAID: "결제 완료", CANCELED: "취소됨" }[status] ?? "처리 중";
+}
+```
+
+```bash
+node client.js
+```
+
+```text
+필드 추가    | strict: 결제 완료, 42,000원                           | tolerant: 결제 완료
+enum 값 추가 | strict: ERROR unknown status: REFUNDED           | tolerant: 처리 중
+필드 삭제    | strict: ERROR Cannot read properties of undefined (reading 'toLocaleString') | tolerant: 결제 완료
+타입 변경    | strict: 결제 완료, 42000원                            | tolerant: 결제 완료
+```
+
+둘째 줄이 맨 앞의 사고다. 서버에서는 추가지만 `switch`로 모든 경우를 처리하던 클라이언트에게는 처리할 수 없는 값이다. TypeScript의 "모든 경우를 다 처리했는지 검사"하는 패턴(`never` 체크)이 컴파일 때는 안전을 주지만 런타임에 모르는 값이 오면 이렇게 터진다.
+
+넷째 줄이 더 무섭다. `total`이 숫자에서 문자열 `"42000"`으로 바뀌었는데 에러가 없다. `toLocaleString`이 문자열에도 있어서 콤마 없는 값이 화면에 나간다. 깨는 변경이 늘 에러로 드러나지는 않는다. 조용히 틀린 값이 나가는 쪽이 더 늦게 발견된다.
+
+그래서 변경을 셋으로 나눠 본다. 안전한 변경(새 엔드포인트, 응답의 새 필드, 요청의 선택 필드), 깨는 변경(필드 삭제·이름 변경·타입 변경, 선택을 필수로, 의미 변경), 그리고 그 사이의 위험한 변경이다. enum 값 추가, 선택 파라미터 추가(기본값이 동작을 바꿀 때), 에러 코드 추가, 응답 목록의 기본 정렬 변경, 페이지 크기 기본값 변경이 여기 들어간다. 위험한 변경은 클라이언트가 어떻게 짜였는지에 따라 깨질 수도 있다. 공개 API라면 문서에 "enum에 값이 추가될 수 있으니 모르는 값은 무시하라"를 계약으로 적어 두고, 모바일 앱이라면 서버가 클라이언트 버전을 보고 새 값을 옛 앱에는 보내지 않는 방법도 쓴다.
+
+## 깨는 변경을 배포 전에 기계로 잡는다
+
+사람이 리뷰로 깨는 변경을 다 잡기는 어렵다. 스키마가 있으면 옛 스키마와 새 스키마를 비교하는 도구가 잡는다. OpenAPI라면 oasdiff 같은 도구, protobuf라면 `buf breaking`, GraphQL이라면 graphql-js에 들어 있는 `findBreakingChanges`가 그 일을 한다. GraphQL로 세 단계의 스키마를 만들어 비교해 봤다.
+
+```graphql
+# v1
+enum OrderStatus { PAID CANCELED }
+type Order { id: ID! status: OrderStatus! total: Int! }
+type Query { order(id: ID!): Order }
+
+# v2: enum 값, 새 필드, 선택 인자를 추가하고 total에 사용 중단 표시
+enum OrderStatus { PAID CANCELED REFUNDED }
+type Order {
+  id: ID!
+  status: OrderStatus!
+  total: Int! @deprecated(reason: "amount를 쓴다. 2027-04-01 삭제 예정")
+  amount: Money!
+}
+type Query { order(id: ID!, includeItems: Boolean): Order }
+
+# v3: total 삭제, includeItems를 필수로
+```
+
+```bash
+node gql.mjs   # findDangerousChanges, findBreakingChanges로 비교
+```
+
+```text
+# v1 -> v2 위험한 변경
+  VALUE_ADDED_TO_ENUM - Enum value OrderStatus.REFUNDED was added.
+  OPTIONAL_ARG_ADDED - An optional argument Query.order(includeItems:) was added.
+# v1 -> v2 깨는 변경: 0
+# v2 -> v3 깨는 변경
+  FIELD_REMOVED - Field Order.total was removed.
+  ARG_CHANGED_KIND - Argument Query.order(includeItems:) has changed type from Boolean to Boolean!.
+```
+
+도구도 enum 값 추가를 "깨는 변경"이 아니라 "위험한 변경"으로 따로 분류한다. 앞에서 본 사고를 정확히 짚는다. CI에서 main 브랜치의 스키마와 PR의 스키마를 비교해 깨는 변경이 있으면 막고, 위험한 변경이면 리뷰어에게 경고를 남기는 식으로 쓴다.
+
+스키마 비교의 한계도 분명하다. 스키마에 적히지 않은 것은 못 잡는다. 필드의 의미를 바꾼 것, 정렬 순서를 바꾼 것, 에러가 나던 입력을 이제 받아 주는 것은 스키마가 같다. 그리고 "이 필드를 지우면 누가 깨지나"에는 답하지 못한다. 아무도 안 쓰는 필드라면 지워도 된다. 그 답은 소비자에게 있다.
+
+## 소비자가 쓰는 것만 지킨다
+
+소비자 주도 계약 테스트(consumer-driven contract testing)는 반대 방향에서 접근한다. 각 소비자가 "나는 이 요청을 보내고 응답에서 이 필드를 이 타입으로 쓴다"를 계약 파일로 남기고, 제공자는 배포 전에 자기 코드가 모든 소비자의 계약을 만족하는지 확인한다. Pact가 대표적인 도구다. 흐름은 아래와 같다.
+
+<SequenceDiagram
+  caption="소비자가 기대를 계약으로 올리고, 제공자는 배포 전에 그 계약을 모두 통과해야 한다"
+  actors={[
+    { id: "app", label: "소비자 (앱)" },
+    { id: "broker", label: "계약 저장소" },
+    { id: "ci", label: "제공자 CI" },
+    { id: "prod", label: "운영 배포" },
+  ]}
+  steps={[
+    { from: "app", to: "app", label: "테스트에서 기대 기록", title: "소비자 테스트가 계약을 만든다", detail: "목 서버를 상대로 테스트를 돌리면서 실제로 읽는 필드만 기록한다.", payload: "GET /orders/ord_8812 → id: string, status: string, amount.value: number" },
+    { from: "app", to: "broker", label: "계약 올리기", title: "계약을 저장소에 올린다", detail: "소비자 버전(앱 5.2)과 함께 올린다. 운영에 어떤 소비자 버전이 깔려 있는지도 기록한다." },
+    { from: "ci", to: "broker", label: "운영 소비자 계약 받기", title: "제공자가 PR마다 계약을 받아 온다", detail: "지금 운영에 있는 모든 소비자의 계약이다." },
+    { from: "ci", to: "ci", label: "실제 응답에 대 보기", title: "PR 코드의 응답을 계약에 맞춰 본다", detail: "한 소비자라도 깨지면 PR이 실패한다. 아무도 안 쓰는 필드는 지워도 통과한다." },
+    { from: "ci", to: "prod", label: "통과하면 배포", title: "배포 가능 여부를 묻고 내보낸다", detail: "Pact는 이 질문을 can-i-deploy라는 명령으로 만든다." },
+  ]}
+/>
+
+원리를 보려고 작은 검증기를 만들었다. 소비자 둘이 계약을 남겼고, 제공자에는 PR이 두 개 있다. 하나는 아무도 안 쓰는 `total`을 지우고, 하나는 `amount.value`를 `amount.minor`로 바꾼다.
+
+```json
+[
+  { "consumer": "android-app", "request": "GET /orders/ord_8812", "expects": { "id": "string", "status": "string", "amount.value": "number" } },
+  { "consumer": "settlement-batch", "request": "GET /orders/ord_8812", "expects": { "id": "string", "amount.value": "number", "amount.currency": "string" } }
+]
+```
+
+```bash
+node verify.js
+```
+
+```text
+main (현재)              PASS
+pr-311: total 삭제       PASS
+pr-312: value -> minor FAIL
+    android-app: amount.value expected number, got undefined
+    settlement-batch: amount.value expected number, got undefined
+```
+
+스키마 비교라면 둘 다 "필드 삭제"로 막혔을 것이다. 계약 테스트는 `total` 삭제를 통과시키고, 실제로 누군가 쓰는 필드를 건드린 PR만 누가 깨지는지 이름까지 대며 막는다. 대가는 운영 비용이다. 소비자 팀들이 계약 테스트를 써 줘야 하고, 계약 저장소를 운영해야 한다. 소비자가 회사 안의 팀들이라 서로 협조할 수 있을 때 잘 맞는다. 불특정 다수가 쓰는 공개 API에는 맞지 않는다. 그쪽은 스키마 비교와 사용량 로그로 간다.
+
+## 한 서버가 여러 버전을 내는 방법
+
+그래도 깨는 변경이 필요할 때가 온다. 버전을 나누는 방식 중 운영 부담이 가장 큰 차이를 만드는 것은 "버전마다 코드를 따로 두느냐, 최신 코드 하나에 변환을 거느냐"다.
+
+URL에 `/v1`, `/v2`를 두고 버전마다 핸들러를 따로 두면 단순하다. 대신 버그 하나를 고칠 때 두 곳을 고쳐야 하고, 세 번째 버전부터는 감당이 어려워진다. 그래서 큰 변경을 드물게 하는 API에 맞는다.
+
+Stripe가 쓰는 날짜 버전은 다르게 접근한다. 응답은 항상 최신 모양으로 만들고, 클라이언트가 고정한 버전이 옛날이면 "버전 변경" 목록을 최신부터 거꾸로 적용해 옛 모양으로 되돌린다. 계정마다 처음 API를 쓴 날의 버전이 고정되고, 헤더로 바꿔 시험할 수 있다. 이 방식을 node로 만들었다. 버전 변경은 두 개다. 2026-03-01에 `total`(정수)을 `amount{value, currency}`로 바꿨고, 2026-09-01에 `canceled` 철자를 `cancelled`로 통일했다.
+
+```js
+const CHANGES = [ // 최신부터. 각 변환은 이 버전보다 옛 클라이언트에게 적용된다
+  { version: "2026-09-01", down: (o) => ({ ...o, status: o.status === "cancelled" ? "canceled" : o.status }) },
+  { version: "2026-03-01", down: ({ amount, ...o }) => ({ ...o, total: amount.value }) },
+];
+let body = order;                 // 최신 모양으로 만든 응답
+for (const c of CHANGES) if (v < c.version) body = c.down(body);
+```
+
+```bash
+for v in 2026-09-01 2026-03-01 2025-11-01 2024-01-01; do
+  echo "# Api-Version: $v"
+  curl -s -H "Api-Version: $v" http://127.0.0.1:8191/orders/ord_8812
+done
+```
+
+```text
+# Api-Version: 2026-09-01
+{"id":"ord_8812","status":"cancelled","amount":{"value":42000,"currency":"KRW"}}
+# Api-Version: 2026-03-01
+{"id":"ord_8812","status":"canceled","amount":{"value":42000,"currency":"KRW"}}
+# Api-Version: 2025-11-01
+{"id":"ord_8812","status":"canceled","total":42000}
+# Api-Version: 2024-01-01
+{"error":"unknown version 2024-01-01"}
+```
+
+가장 옛 버전 요청이 변환 두 개를 차례로 지나는 과정은 이렇다.
+
+<AlgoTrace
+  caption="최신 응답에서 출발해, 클라이언트 버전보다 새로운 변경을 거꾸로 되돌린다"
+  memoryLabel="응답 (Api-Version: 2025-11-01)"
+  cells={["최신 응답", "2026-09-01 되돌리기", "2026-03-01 되돌리기", "전송"]}
+  steps={[
+    { pointer: 0, memory: ["status: cancelled", "amount: {42000, KRW}"], caption: "비즈니스 로직은 최신 버전 하나만 안다. 응답은 늘 최신 모양으로 만들어진다." },
+    { pointer: 1, found: [0], memory: ["status: canceled", "amount: {42000, KRW}"], caption: "2025-11-01은 2026-09-01보다 옛날이다. 철자 통일을 되돌린다." },
+    { pointer: 2, found: [0, 1], memory: ["status: canceled", "total: 42000"], caption: "2026-03-01보다도 옛날이다. amount 객체를 정수 total로 되돌린다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["status: canceled", "total: 42000"], caption: "변환이 끝난 모양을 보낸다. 2026-03-01 클라이언트라면 첫 변환만 거쳤을 것이다." },
+  ]}
+/>
+
+이 방식의 장점은 비즈니스 로직이 하나라는 것이다. 버전이 몇십 개가 돼도 버그는 한 곳에서 고친다. 버전 변경 하나는 작은 함수 하나라 깨는 변경을 작게, 자주 낼 수 있다. 대가도 있다. 변환은 응답뿐 아니라 요청, 웹훅 본문, 에러 모양에도 필요하다. 변환으로 되돌릴 수 없는 변경(옛 모양에 없는 정보가 필요한 기능)은 이 방식으로 못 낸다. 그리고 변환 목록이 길어지면 아주 옛 버전 요청은 그만큼 느려진다.
+
+직접 해 보자. 아래 `downgrade`가 응답과 클라이언트 버전을 받아 옛 모양으로 되돌리게 만든다. 날짜 문자열은 `"2025-11-01" < "2026-03-01"`처럼 그대로 비교된다.
+
+<CodePlayground
+  caption="날짜 버전 변환 계층"
+  functionName="downgrade"
+  initialCode={`const CHANGES = [
+  { version: "2026-09-01", down: (o) => ({ ...o, status: o.status === "cancelled" ? "canceled" : o.status }) },
+  { version: "2026-03-01", down: ({ amount, ...o }) => ({ ...o, total: amount.value }) },
+];
+
+function downgrade(body, version) {
+  // CHANGES를 앞에서부터 보며, version이 그 변경보다 옛날이면 down을 적용한다
+  return body;
+}`}
+  solution={`const CHANGES = [
+  { version: "2026-09-01", down: (o) => ({ ...o, status: o.status === "cancelled" ? "canceled" : o.status }) },
+  { version: "2026-03-01", down: ({ amount, ...o }) => ({ ...o, total: amount.value }) },
+];
+
+function downgrade(body, version) {
+  let out = body;
+  for (const c of CHANGES) {
+    if (version < c.version) out = c.down(out);
+  }
+  return out;
+}`}
+  tests={[
+    { label: "최신 버전", args: [{ id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } }, "2026-09-01"], expected: { id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } } },
+    { label: "최신보다 새 날짜", args: [{ id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } }, "2026-12-01"], expected: { id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } } },
+    { label: "2026-05-15", args: [{ id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } }, "2026-05-15"], expected: { id: "ord_8812", status: "canceled", amount: { value: 42000, currency: "KRW" } } },
+    { label: "가장 옛 버전", args: [{ id: "ord_8812", status: "cancelled", amount: { value: 42000, currency: "KRW" } }, "2025-11-01"], expected: { id: "ord_8812", status: "canceled", total: 42000 } },
+    { label: "취소가 아닌 주문", args: [{ id: "ord_1", status: "paid", amount: { value: 900, currency: "KRW" } }, "2025-11-01"], expected: { id: "ord_1", status: "paid", total: 900 } },
+  ]}
+/>
+
+## 헤더로 버전을 고르면 캐시가 섞인다
+
+버전을 헤더에 적는 방식에는 함정이 하나 있다. 캐시는 기본적으로 URL로 응답을 구분한다. 같은 URL에 버전 헤더만 다른 요청이 오면, 앞에서 캐시된 옛 버전 응답이 새 버전 클라이언트에게 나간다. 원본 서버 앞에 nginx `proxy_cache`를 두고 재현했다.
+
+```nginx
+proxy_cache_path /var/cache/nginx/api keys_zone=api:1m;
+server {
+  listen 127.0.0.1:8190;
+  location / {
+    proxy_pass http://127.0.0.1:8191;
+    proxy_cache api;
+    proxy_cache_valid 200 60s;
+    add_header X-Cache $upstream_cache_status always;   # HIT, MISS를 보이게 한다
+  }
+}
+```
+
+```bash
+# 옛 버전으로 한 번, 새 버전으로 두 번 요청한다
+req() { curl -s -D hdr.txt -o b.txt -H "Api-Version: $1" http://127.0.0.1:8190/orders/ord_8812
+        echo "# Api-Version: $1 -> $(tr -d '\r' < hdr.txt | grep -i '^x-cache') $(cat b.txt)"; }
+req 2025-11-01; req 2026-09-01; req 2026-09-01
+```
+
+```text
+# Api-Version: 2025-11-01 -> X-Cache: MISS {"id":"ord_8812","status":"canceled","total":42000}
+# Api-Version: 2026-09-01 -> X-Cache: HIT {"id":"ord_8812","status":"canceled","total":42000}
+# Api-Version: 2026-09-01 -> X-Cache: HIT {"id":"ord_8812","status":"canceled","total":42000}
+```
+
+최신 버전 클라이언트가 `total`이 든 옛 응답을 받았다. 원본 서버가 응답에 `Vary: Api-Version`을 붙이게 하고 캐시를 비운 뒤 다시 돌렸다.
+
+```text
+# Api-Version: 2025-11-01 -> X-Cache: MISS {"id":"ord_8812","status":"canceled","total":42000}
+# Api-Version: 2026-09-01 -> X-Cache: MISS {"id":"ord_8812","status":"cancelled","amount":{"value":42000,"currency":"KRW"}}
+# Api-Version: 2026-09-01 -> X-Cache: HIT {"id":"ord_8812","status":"cancelled","amount":{"value":42000,"currency":"KRW"}}
+# Api-Version: 2025-11-01 -> X-Cache: HIT {"id":"ord_8812","status":"canceled","total":42000}
+```
+
+`Vary`는 "이 헤더 값이 다르면 다른 응답"이라고 캐시에 알린다. nginx는 버전별로 따로 저장하고 각자에게 맞는 것을 돌려줬다. CDN은 `Vary`를 지원하는 정도가 제각각이라, CDN 캐시 키에 그 헤더를 직접 넣는 설정이 따로 필요한 경우가 많다. 미디어 타입 방식(`Accept: application/vnd.shop.v2+json`)이면 `Vary: Accept`가 필요하다. URL 방식은 주소가 다르니 이 문제가 없다. 캐시가 어떻게 키를 만드는지는 [HTTP 캐시와 CDN](/posts/http-caching-cdn)에 있다.
+
+<NetworkTopology
+  caption="버전 헤더가 캐시 키에 들어가지 않으면 옛 응답이 새 클라이언트에게 간다"
+  width={400}
+  height={240}
+  zones={[{ id: "edge", label: "캐시 (nginx·CDN)", x: 130, y: 20, w: 120, h: 200, tone: "edge" }]}
+  nodes={[
+    { id: "old", label: "old app", sub: "2025-11-01", x: 60, y: 60, icon: "client", w: 100 },
+    { id: "new", label: "new app", sub: "2026-09-01", x: 60, y: 180, icon: "client", w: 100 },
+    { id: "cache", label: "cache", sub: "key = URL", x: 190, y: 120, icon: "lb", w: 96 },
+    { id: "api", label: "API", sub: "date versions", x: 330, y: 120, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "old", to: "cache" },
+    { from: "new", to: "cache" },
+    { from: "cache", to: "api" },
+  ]}
+  steps={[
+    { path: ["old", "cache", "api"], packet: "v2025", title: "옛 앱이 먼저 요청한다", detail: "캐시에 없으니(MISS) 원본으로 간다. total이 든 옛 모양 응답이 URL 하나를 키로 저장된다." },
+    { path: ["new", "cache"], packet: "v2026", blocked: true, title: "새 앱이 같은 URL을 요청한다", detail: "키가 URL뿐이라 HIT. 새 앱은 amount가 없는 옛 응답을 받고 화면이 깨진다." },
+    { path: ["new", "cache", "api"], packet: "v2026", highlight: ["edge"], title: "Vary: Api-Version을 붙이면", detail: "캐시가 헤더 값까지 키에 넣는다. 새 버전은 따로 MISS가 나고 원본에서 새 모양을 받아 저장한다." },
+  ]}
+/>
+
+## 옛 버전을 끝내는 순서
+
+버전을 늘리기는 쉽고 줄이기는 어렵다. 끝내는 데도 순서가 있다.
+
+먼저 알린다. 사용 중단이 정해진 버전의 응답에 표준 헤더를 붙인다. 앞의 원본 서버가 옛 버전에 붙이는 헤더를 그대로 찍었다.
+
+```bash
+curl -si -H "Api-Version: 2025-11-01" http://127.0.0.1:8191/orders/ord_8812
+```
+
+```text
+HTTP/1.1 200 OK
+content-type: application/json
+api-version: 2025-11-01
+deprecation: @1790812800
+sunset: Thu, 01 Apr 2027 00:00:00 GMT
+link: <https://api.shop.example/docs/migrate-2026-03>; rel="deprecation"; type="text/html"
+```
+
+<UrlAnatomy
+  caption="옛 버전 응답에 붙는 사용 중단 헤더. 사람보다 SDK와 모니터링이 읽는다"
+  separator=" "
+  joiner=" · "
+  params={[
+    { key: "api-version", value: "2025-11-01", display: "api-version: 2025-11-01", title: "실제로 적용된 버전", description: "클라이언트가 헤더를 안 보냈을 때 어떤 버전으로 처리됐는지 알려 준다. 로그와 버그 리포트에서 가장 먼저 보는 값이다." },
+    { key: "deprecation", value: "@1790812800", display: "deprecation: @1790812800", title: "사용 중단 시점 (RFC 9745)", description: "@ 뒤는 유닉스 초다. 2026-10-01 00:00 UTC부터 이 버전은 사용 중단 상태라는 뜻이다. 아직 동작은 한다.", code: "date -u -d @1790812800\nThu Oct  1 00:00:00 UTC 2026" },
+    { key: "sunset", value: "Thu, 01 Apr 2027 00:00:00 GMT", display: "sunset: Thu, 01 Apr 2027 …", title: "실제로 사라지는 시점 (RFC 8594)", description: "이 시각 이후로는 응답하지 않을 수 있다. HTTP 날짜 형식이라 요일까지 맞아야 한다." },
+    { key: "link", value: "rel=deprecation", display: "link: <…/migrate-2026-03>; rel=\"deprecation\"", title: "옮겨 가는 방법", description: "이전 안내 문서 주소다. SDK가 경고 로그에 이 주소를 같이 찍게 만들면 개발자가 바로 찾아간다." },
+  ]}
+/>
+
+헤더만으로는 아무도 안 바뀐다. 그래서 다음은 누가 아직 쓰는지 세는 것이다. 요청 로그에 클라이언트 식별자(API 키, 앱 버전, 파트너 id)와 적용된 버전을 반드시 남긴다. 그걸 모아 보면 연락할 대상이 나온다.
+
+```bash
+# 로그 형식: <client-id> <version> <status>
+head -3 usage.log
+# 사용 중단 버전을 아직 쓰는 클라이언트별 호출 수
+awk '$2 < "2026-03-01" {n[$1" "$2]++} END {for (k in n) print n[k], k}' usage.log | sort -rn
+```
+
+```text
+android-5.2 2026-03-01 200
+android-5.2 2026-03-01 200
+android-5.2 2026-03-01 200
+7 android-4.9 2025-11-01
+3 partner-zeta 2025-11-01
+```
+
+`android-4.9`는 강제 업데이트 안내로, `partner-zeta`는 담당자에게 직접 연락해서 옮긴다. 공개 API라면 대시보드에 "이 키가 사용 중단 버전을 호출하고 있다"를 띄우고 메일을 보낸다.
+
+그래도 남는 소비자를 위해 Sunset 전에 brownout을 한다. 계획된 짧은 시간(예: 공지한 날의 한 시간) 동안 옛 버전을 일부러 실패시키는 것이다. 연락이 닿지 않던 소비자도 이때 장애로 알아챈다. Sunset 날 처음 알게 되는 것보다 낫다.
+
+```bash
+# brownout 중인 서버에 옛 버전으로 요청
+curl -si -H "X-Client-Id: partner-zeta" -H "Api-Version: 2025-11-01" http://127.0.0.1:8191/orders/ord_8812
+# 새 버전은 그대로 동작한다
+curl -s -o /dev/null -w '%{http_code}\n' -H "Api-Version: 2026-03-01" http://127.0.0.1:8191/orders/ord_8812
+```
+
+```text
+HTTP/1.1 410 Gone
+content-type: application/json
+api-version: 2025-11-01
+deprecation: @1790812800
+sunset: Thu, 01 Apr 2027 00:00:00 GMT
+link: <https://api.shop.example/docs/migrate-2026-03>; rel="deprecation"; type="text/html"
+
+{"error":"version 2025-11-01 is browned out, see Link"}
+200
+```
+
+상태 코드는 `410 Gone`이 맞다. "이 자원은 의도적으로 없앴다"는 뜻이라 404(원래 없거나 못 찾음)와 구분되고, 클라이언트 재시도 로직이 의미 없는 재시도를 하지 않는다. 에러 본문에도 옮겨 갈 곳을 적는다. 그리고 Sunset이 지나면 로그를 다시 보고, 호출이 0이 된 뒤에 코드를 지운다.
+
+## 이벤트와 메시지에도 버전이 있다
+
+HTTP API만 버전이 있는 게 아니다. 큐로 흘려보내는 이벤트, protobuf 메시지, 웹훅 본문도 생산자와 소비자가 다른 속도로 배포된다. 오히려 더 까다롭다. 큐에는 옛 형식 메시지가 며칠씩 남아 있고, 소비자는 그 옛 메시지와 새 메시지를 동시에 읽어야 한다.
+
+호환성은 방향으로 나눠 말한다.
+
+<ConceptDiagram
+  caption="새 스키마가 옛 데이터를 읽을 수 있으면 하위 호환, 옛 스키마가 새 데이터를 읽을 수 있으면 상위 호환"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "olds", label: "옛 스키마 v1", sub: "옛 소비자", x: 90, y: 50, w: 140 },
+    { id: "news", label: "새 스키마 v2", sub: "새 소비자", x: 310, y: 50, w: 140 },
+    { id: "oldd", label: "v1 데이터", sub: "큐에 남은 메시지", x: 90, y: 170, w: 140 },
+    { id: "newd", label: "v2 데이터", sub: "새 생산자", x: 310, y: 170, w: 140 },
+  ]}
+  edges={[
+    { from: "news", to: "oldd", label: "하위 호환 (BACKWARD)" },
+    { from: "olds", to: "newd", label: "상위 호환 (FORWARD)" },
+  ]}
+/>
+
+소비자를 먼저 배포하는 세상이라면 하위 호환이 필요하고, 생산자를 먼저 배포한다면 상위 호환이 필요하다. 순서를 장담할 수 없으면 둘 다(FULL)를 지킨다. Kafka의 스키마 레지스트리는 이 규칙을 주제(subject)마다 걸어 두고, 규칙을 어기는 스키마 등록을 거절한다.
+
+protobuf는 상위 호환을 구조적으로 지원한다. 새 필드가 든 메시지를 옛 스키마로 읽어 봤다.
+
+```bash
+# v2에서 currency(4번)를 추가했다. 새 메시지를 옛 스키마(v1)로 읽는다
+printf 'id: 150\nstatus: "PAID"\namount: 42000\ncurrency: "KRW"\n' \
+  | python3 -m grpc_tools.protoc -I. --encode=shop.Order v2.proto > new.bin
+python3 -m grpc_tools.protoc -I. --decode=shop.Order v1.proto < new.bin
+```
+
+```text
+id: 150
+status: "PAID"
+amount: 42000
+4: "KRW"
+```
+
+옛 스키마는 4번을 모르지만 에러 없이 읽고, 모르는 필드로 보관한다(`4: "KRW"`). 옛 소비자가 메시지를 다시 직렬화해 넘겨도 4번이 살아 있다. 위험한 건 번호를 재사용할 때다. `amount`(3번)를 지우고 3번을 `points`에 다시 썼다.
+
+```bash
+# v2bad: message Order { int64 id = 1; string status = 2; int32 points = 3; }
+printf 'id: 150\nstatus: "PAID"\npoints: 420\n' \
+  | python3 -m grpc_tools.protoc -I. --encode=shop.Order v2bad.proto \
+  | python3 -m grpc_tools.protoc -I. --decode=shop.Order v1.proto
+```
+
+```text
+id: 150
+status: "PAID"
+amount: 420
+```
+
+포인트 420이 옛 소비자에게는 결제 금액 420원으로 읽힌다. 에러는 없다. 지운 필드는 `reserved`로 막아 두면 컴파일러가 재사용을 거절한다.
+
+```text
+v2res.proto:4:12: Field "points" uses reserved number 3.
+v2res.proto:4:12: Suggested field numbers for shop.Order: 4
+```
+
+JSON 이벤트라면 규칙을 사람이 지켜야 한다. 이벤트에 `schema_version`을 넣고, 소비자는 모르는 필드를 무시하고, 의미를 바꿀 때는 이벤트 이름 자체를 바꾼다(`order.paid.v2`). 이벤트 스키마를 레지스트리로 관리하고 진화시키는 법은 [스키마 버전 관리](/posts/schema-versioning)에서 이어 간다.
+
+## GraphQL은 버전 없이 진화한다
+
+GraphQL은 처음부터 "버전을 나누지 않는다"를 원칙으로 둔다. 클라이언트가 쿼리에 필요한 필드를 직접 적으니, 서버는 새 필드를 얼마든지 더할 수 있고 옛 필드를 아무도 안 쓸 때까지 남겨 둘 수 있다. 앞의 v2 스키마에서 `total`에 `@deprecated`를 붙였다. 옛 쿼리는 그대로 동작하고, 스키마를 읽는 도구(IDE, 코드 생성기)는 경고를 띄운다.
+
+```text
+# v2: 옛 클라이언트 쿼리
+{"data":{"order":{"id":"ord_8812","total":42000}}}
+# v2: 필드 사용 중단 표시 (introspection)
+[{"name":"id","isDeprecated":false,"deprecationReason":null},{"name":"status","isDeprecated":false,"deprecationReason":null},{"name":"total","isDeprecated":true,"deprecationReason":"amount를 쓴다. 2027-04-01 삭제 예정"},{"name":"amount","isDeprecated":false,"deprecationReason":null}]
+```
+
+`total`을 실제로 지운 v3에 옛 쿼리를 보내면 실행 전 검증 단계에서 거절된다.
+
+```text
+["Cannot query field \"total\" on type \"Order\".","Argument \"Query.order(includeItems:)\" of type \"Boolean!\" is required, but it was not provided."]
+```
+
+그래서 GraphQL에서 지우기 전에 볼 것은 필드 사용량이다. 서버가 실행한 쿼리에서 필드별 사용 횟수를 모으면(Apollo의 필드 사용 통계 같은 기능) "`total`을 쓰는 쿼리가 지난 30일 동안 0건"을 확인하고 지울 수 있다. 쿼리를 미리 등록해 두는 persisted query를 쓰면 어떤 클라이언트 버전이 어떤 필드를 쓰는지까지 정확히 안다. 버전이 없는 대신 관측으로 진화하는 방식이다.
+
+## 버전 때문에 장애가 났을 때
+
+"배포 직후 특정 앱 버전에서만 크래시가 난다." 위험한 변경(enum 값, 새 에러 코드, 기본값 변경)이 들어갔는지 배포 diff를 본다. 크래시 리포트의 앱 버전과 요청 로그의 `api-version`을 맞춰 보면 어느 변경인지 좁혀진다. 급하면 서버에서 옛 앱 버전에는 새 값을 옛 값으로 바꿔 보내는 변환을 넣어 막는다.
+
+"새 버전 클라이언트가 옛 모양 응답을 받는다." 캐시다. 응답의 `Age`, `X-Cache`, CDN 캐시 상태 헤더를 보고, 버전 헤더가 캐시 키나 `Vary`에 들어가 있는지 확인한다.
+
+"Sunset 날짜가 지났는데 끌 수가 없다." 사용량 로그에 클라이언트 식별자가 없어서 누가 쓰는지 모르는 경우가 대부분이다. 지금부터라도 식별자를 남기고, brownout으로 남은 소비자를 드러낸다.
+
+"버전 헤더를 안 보낸 요청이 어떤 버전으로 처리됐는지 모른다." 기본 버전 규칙(가장 옛 버전, 키에 고정된 버전, 최신)을 문서로 정하고, 응답에 적용된 버전을 항상 헤더로 돌려준다. 기본값이 "최신"이면 서버 배포가 곧 모든 무버전 클라이언트의 깨는 변경이 된다.
+
+## 버전은 약속을 관리하는 도구다
+
+버전 번호를 올리는 것은 마지막 수단이다. 먼저 추가로 해결하고, 추가조차 위험할 수 있음을 계약(모르는 값은 무시)으로 정한다. 깨는 변경은 스키마 비교로 배포 전에 잡고, 누가 무엇을 쓰는지는 계약 테스트나 사용량 로그로 안다. 여러 버전을 낼 때는 최신 로직 하나에 변환을 거는 쪽이 오래 버티고, 헤더로 버전을 고르면 캐시 키를 챙긴다. 끝낼 때는 알리고, 세고, 일부러 잠깐 끊어 보고, 0이 된 뒤에 지운다.
+
+이 주제의 다른 글: 버전 관리의 기본 개념과 세 가지 표기 방식은 [REST API 설계](/posts/rest-api-design), 메시지 바이트 수준의 호환은 [gRPC](/posts/grpc), 이벤트 스키마는 [스키마 버전 관리](/posts/schema-versioning), DB 쪽은 [무중단 마이그레이션](/posts/zero-downtime-migrations)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 하위 호환을 깨지 않는 변경과 깨는 변경을 예로 들어 주세요.
+
+응답 필드 추가, 새 엔드포인트, 요청의 선택 파라미터 추가는 대체로 안전하다. 필드 삭제·이름 변경·타입 변경, 선택을 필수로 바꾸기, 같은 필드의 의미 변경은 깬다. 그 사이에 enum 값 추가나 기본값 변경 같은 위험한 변경이 있는데, 모르는 값에 예외를 던지는 클라이언트에서는 실제로 깨진다. 그래서 클라이언트는 모르는 값을 무시하도록 계약으로 정해 둔다.
+
+### 헤더로 버전을 관리할 때 주의할 점은요?
+
+캐시가 기본적으로 URL로 응답을 구분해서, 버전 헤더만 다른 요청에 옛 버전 응답이 나갈 수 있다. 응답에 Vary: Api-Version을 붙이거나 CDN 캐시 키에 그 헤더를 넣는다. 또 헤더를 안 보낸 요청의 기본 버전을 정하고, 적용된 버전을 응답 헤더로 돌려준다.
+
+### Stripe식 날짜 버전은 어떻게 동작하나요?
+
+계정마다 처음 쓴 날의 버전을 고정하고, 서버는 응답을 최신 모양으로 만든 뒤 클라이언트 버전보다 새로운 변경들을 거꾸로 되돌리는 변환을 차례로 적용한다. 비즈니스 로직이 하나라 버전이 많아도 유지할 수 있고 깨는 변경을 작게 자주 낼 수 있다. 대신 요청·응답·웹훅 모두에 변환을 써야 하고 되돌릴 수 없는 변경에는 못 쓴다.
+
+### 옛 API 버전은 어떻게 종료하나요?
+
+Deprecation과 Sunset 헤더, 문서 링크로 알리고, 요청 로그에 클라이언트 식별자와 버전을 남겨 아직 쓰는 소비자를 찾아 직접 연락한다. Sunset 전에 계획된 brownout으로 남은 소비자가 알아채게 하고, 종료 후에는 410 Gone과 이전 안내를 돌려준다. 호출이 0이 된 것을 확인한 뒤 코드를 지운다.
+
+### 소비자 주도 계약 테스트는 무엇이고 언제 쓰나요?
+
+각 소비자가 실제로 쓰는 요청과 응답 필드를 계약으로 남기고, 제공자가 배포 전에 모든 소비자 계약을 만족하는지 검증하는 방식이다. 아무도 안 쓰는 필드는 지울 수 있고, 누군가 쓰는 필드를 건드리면 누가 깨지는지까지 알려 준다. 소비자가 회사 안의 팀처럼 협조할 수 있을 때 맞고, 불특정 다수의 공개 API에는 스키마 비교와 사용량 로그를 쓴다.
+
+### 메시지 스키마에서 하위 호환과 상위 호환의 차이는요?
+
+하위 호환은 새 스키마로 옛 데이터를 읽을 수 있는 것, 상위 호환은 옛 스키마로 새 데이터를 읽을 수 있는 것이다. 소비자를 먼저 배포하면 하위, 생산자를 먼저 배포하면 상위 호환이 필요하고, 순서를 장담할 수 없으면 둘 다 지킨다. protobuf는 모르는 필드를 보관해 상위 호환을 지원하지만, 필드 번호를 재사용하면 에러 없이 틀린 값이 읽히니 reserved로 막는다.
+
+### GraphQL은 왜 버전을 잘 안 나누나요?
+
+클라이언트가 필요한 필드를 쿼리에 직접 적으니 필드 추가가 기존 쿼리에 영향을 주지 않고, 옛 필드는 @deprecated로 표시해 남겨 둘 수 있다. 지울 때는 필드별 사용량을 관측해 쓰는 쿼리가 없을 때 지운다. 대신 enum 값 추가나 인자를 필수로 바꾸는 것은 여전히 위험하거나 깨는 변경이라 스키마 비교를 CI에 둔다.

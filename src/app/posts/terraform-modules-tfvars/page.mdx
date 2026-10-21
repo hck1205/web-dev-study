@@ -1,0 +1,668 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-modules-tfvars");
+
+처음엔 `main.tf` 하나에 VPC와 EKS를 다 적었다. 스테이징이 필요해지자 디렉터리를 통째로 복사해서 CIDR만 바꿨다. 석 달 뒤 운영에 보안 그룹 규칙을 하나 더했는데 스테이징에는 빠져 있다. 두 디렉터리가 같은 듯 다르게 자라는 중이다. EKS 프로젝트 구조로 많이 도는 그림에는 이런 트리가 있다.
+
+```text
+terraform/
+├── modules/
+│   ├── eks/
+│   └── vpc/
+├── main.tf
+├── variables.tf
+├── outputs.tf
+└── terraform.tfvars
+```
+
+복사 대신 같은 코드를 값만 바꿔 여러 번 부르는 구조다. 이 글은 이 트리를 한 칸씩 채운다. 모듈이 무엇이고 변수와 출력으로 어떻게 값을 주고받는지, 환경마다 값을 tfvars로 나누는 법과 workspace를 쓸 때 조심할 점, 프로바이더와 모듈 버전을 묶는 법, 그리고 `terraform-aws-modules`의 VPC·EKS 모듈을 감싸서 쓰는 법까지 간다. plan, state, 잠금은 [Terraform 기본](/posts/terraform-basics)에서 다뤘으니 여기서는 쓰기만 한다. 이 모듈들이 실제로 만드는 VPC 구성은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서, EKS 쪽은 [EKS 클러스터 기본](/posts/eks-cluster-basics)에서 이어진다.
+
+출력은 Terraform 1.16.6, AWS 프로바이더 6.69.1로 직접 돌린 것이다. AWS 계정 대신 모의 AWS 서버(moto)에 붙였기 때문에 `vpc-38c1...` 같은 ID는 모의 서버가 만든 값이다. plan의 구조와 메시지는 진짜 AWS에서와 같다.
+
+## 폴더 하나가 모듈 하나
+
+Terraform에서 모듈은 `.tf` 파일이 들어 있는 디렉터리 하나다. 특별한 선언이 없다. `terraform` 명령을 실행하는 디렉터리도 모듈이고, 이것을 루트 모듈이라 부른다. 루트 모듈이 `module` 블록으로 다른 디렉터리를 부르면 그 디렉터리가 자식 모듈이 된다.
+
+파일을 어떻게 나누는지는 관례다. Terraform은 디렉터리 안의 `.tf`를 모두 합쳐 읽으니 파일 이름은 사람을 위한 것이다. 흔히 쓰는 나눔은 이렇다.
+
+- `main.tf`: 리소스와 자식 모듈 호출
+- `variables.tf`: 밖에서 받는 값(`variable`)
+- `outputs.tf`: 밖으로 내보내는 값(`output`)
+- `versions.tf`: Terraform과 프로바이더 버전 조건
+- `terraform.tfvars`: 루트 모듈의 변수에 넣을 실제 값. 자식 모듈에는 없다.
+
+아래 그림이 그 트리에서 값이 흐르는 방향이다. 루트는 tfvars에서 값을 받아 모듈에 넘기고, VPC 모듈이 내보낸 서브넷 ID를 EKS 모듈에 다시 넘긴다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="자식 모듈은 변수로 받고 출력으로만 돌려준다. 모듈끼리는 루트를 거쳐서만 만난다"
+  nodes={[
+    { id: "tfvars", label: "terraform.tfvars", sub: "env, vpc_cidr, azs", x: 200, y: 32, w: 160 },
+    { id: "root", label: "루트 모듈", sub: "main.tf", x: 200, y: 120, w: 140 },
+    { id: "vpc", label: "modules/vpc", sub: "aws_vpc, aws_subnet", x: 100, y: 235, w: 150 },
+    { id: "eks", label: "modules/eks", sub: "aws_eks_cluster", x: 300, y: 235, w: 150 },
+  ]}
+  edges={[
+    { from: "tfvars", to: "root", label: "var.*" },
+    { from: "root", to: "vpc", label: "cidr, azs" },
+    { from: "vpc", to: "root", label: "subnet_ids", dashed: true },
+    { from: "root", to: "eks", label: "vpc_id, subnet_ids" },
+  ]}
+/>
+
+자식 모듈 안에서는 루트의 변수나 다른 모듈의 리소스를 직접 참조할 수 없다. 받은 변수와 자기 리소스만 보인다. 이 제약 덕분에 모듈은 함수처럼 입력과 출력만 보면 무엇을 하는지 알 수 있다.
+
+실습 프로젝트의 VPC 모듈은 이렇게 부른다.
+
+```hcl
+# terraform/main.tf
+module "vpc" {
+  source = "./modules/vpc"
+
+  name = "shop-${var.env}"
+  cidr = var.vpc_cidr
+  azs  = var.azs
+}
+```
+
+```bash
+# 모듈을 처음 부르거나 source를 바꾸면 init을 다시 돌린다
+terraform init
+```
+
+```text
+Initializing the backend...
+
+Initializing modules...
+- vpc in modules/vpc
+
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~> 6.0"...
+- Installing hashicorp/aws v6.69.1...
+```
+
+로컬 경로 모듈은 복사하지 않고 그 자리를 가리키기만 한다(`- vpc in modules/vpc`). 원격 모듈이면 `.terraform/modules` 아래로 받아 온다.
+
+## 변수에 규칙을 건다
+
+변수는 타입과 기본값, 설명을 갖는다. 기본값이 없으면 필수다. 여기에 `validation`을 달면 잘못된 값이 plan 단계에서 막힌다. 클라우드 API까지 가서 이상한 에러를 받는 것보다 훨씬 빨리, 훨씬 읽기 쉬운 문장으로 멈춘다.
+
+```hcl
+# modules/vpc/variables.tf
+variable "cidr" {
+  description = "VPC 대역"
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(var.cidr, 0)) && tonumber(split("/", var.cidr)[1]) <= 20
+    error_message = "cidr는 /20보다 넓은 올바른 CIDR여야 한다 (예: 10.0.0.0/16)."
+  }
+}
+
+variable "azs" {
+  description = "서브넷을 만들 가용 영역 목록"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.azs) >= 2
+    error_message = "EKS는 서로 다른 AZ의 서브넷이 두 개 이상 필요하다."
+  }
+}
+```
+
+`/24` 대역에 AZ 하나만 넘겨 봤다.
+
+```bash
+# 일부러 규칙을 어기는 값을 넘긴다
+terraform plan -var-file=envs/dev.tfvars -var 'vpc_cidr=10.10.0.0/24' -var 'azs=["ap-northeast-2a"]'
+```
+
+```text
+Planning failed. Terraform encountered an error while generating this plan.
+
+
+Error: Invalid value for variable
+
+  on main.tf line 17, in module "vpc":
+  17:   cidr = var.vpc_cidr
+    ├────────────────
+    │ var.cidr is "10.10.0.0/24"
+
+cidr는 /20보다 넓은 올바른 CIDR여야 한다 (예: 10.0.0.0/16).
+
+This was checked by the validation rule at modules/vpc/variables.tf:10,3-13.
+
+Error: Invalid value for variable
+
+  on main.tf line 18, in module "vpc":
+  18:   azs  = var.azs
+    ├────────────────
+    │ var.azs is list of string with 1 element
+
+EKS는 서로 다른 AZ의 서브넷이 두 개 이상 필요하다.
+
+This was checked by the validation rule at modules/vpc/variables.tf:20,3-13.
+```
+
+두 규칙이 한 번에 다 보고되고, 어느 호출(`main.tf line 17`)에서 어떤 값이 들어왔는지까지 나온다. 루트 모듈의 `env` 변수에도 `contains(["dev", "stg", "prod"], var.env)` 규칙을 걸어 두면 `qa` 같은 오타가 state 파일 이름이나 태그로 퍼지기 전에 막힌다.
+
+validation 말고도 변수에 붙일 수 있는 장치가 몇 개 있다. `sensitive = true`는 plan 출력에서 값을 가린다(state에는 평문으로 남는다). `nullable = false`는 호출하는 쪽이 `null`을 넘겨 기본값을 지우는 것을 막는다. `object({ ... })` 타입에 `optional(string, "기본값")`을 쓰면 큰 설정 묶음을 받으면서 일부만 적게 할 수 있다.
+
+## 계산은 locals에 모은다
+
+변수는 밖에서 받는 값이고 `locals`는 모듈 안에서 계산한 값이다. 같은 식이 여러 리소스에 반복되면 locals로 뺀다. VPC 모듈에서는 서브넷 대역 계산과 공통 태그를 모았다.
+
+```hcl
+# modules/vpc/main.tf
+locals {
+  # AZ 이름 끝 글자(a, b, c...)로 번호를 정한다. 목록 순서가 바뀌어도 대역이 그대로다
+  az_num          = { for az in var.azs : az => index(["a", "b", "c", "d"], substr(az, -1, 1)) }
+  private_subnets = { for az, n in local.az_num : az => cidrsubnet(var.cidr, 4, n) }
+  public_subnets  = { for az, n in local.az_num : az => cidrsubnet(var.cidr, 8, 200 + n) }
+  common_tags     = merge(var.tags, { Module = "vpc" })
+}
+
+resource "aws_subnet" "private" {
+  for_each          = local.private_subnets
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = each.value
+  availability_zone = each.key
+  tags = merge(local.common_tags, {
+    Name                              = "${var.name}-private-${each.key}"
+    "kubernetes.io/role/internal-elb" = "1"
+  })
+}
+```
+
+`cidrsubnet(prefix, newbits, netnum)`은 큰 대역을 `newbits`만큼 더 잘게 자른 뒤 `netnum`번째 조각을 준다. `/16`에 4비트를 더하면 `/20` 조각이 16개 생기고, 0번은 `10.10.0.0/20`, 2번은 `10.10.32.0/20`이다. 대역 계산을 머리로 하다 겹치는 서브넷을 만드는 실수가 많아서, 직접 구현해 보면 감이 잡힌다. 테스트의 기대값은 `terraform console`에서 같은 식을 돌려 받은 값이다.
+
+<CodePlayground
+  caption="cidrsubnet을 직접 구현한다"
+  functionName="cidrsubnet"
+  initialCode={`// prefix: "10.10.0.0/16" 같은 IPv4 CIDR
+// newbits: 프리픽스 길이에 더할 비트 수 (/16 + 4 → /20)
+// netnum: 몇 번째 조각인가 (0부터). 2**newbits 이상이면 에러를 던진다
+// 결과는 "10.10.32.0/20" 같은 문자열
+function cidrsubnet(prefix, newbits, netnum) {
+  return "";
+}`}
+  solution={`function cidrsubnet(prefix, newbits, netnum) {
+  const [addr, lenStr] = prefix.split("/");
+  const len = Number(lenStr);
+  const newLen = len + newbits;
+  if (newLen > 32) throw new Error("prefix too long");
+  if (netnum < 0 || netnum >= 2 ** newbits) {
+    throw new Error("prefix extension of " + newbits + " does not accommodate a subnet numbered " + netnum);
+  }
+  const base = addr.split(".").reduce((acc, o) => acc * 256 + Number(o), 0);
+  const block = 2 ** (32 - len);
+  const network = Math.floor(base / block) * block;
+  const ip = network + netnum * 2 ** (32 - newLen);
+  const octets = [24, 16, 8, 0].map((s) => Math.floor(ip / 2 ** s) % 256);
+  return octets.join(".") + "/" + newLen;
+}`}
+  tests={[
+    { label: "/16 → /20 0번", args: ["10.10.0.0/16", 4, 0], expected: "10.10.0.0/20" },
+    { label: "/16 → /20 2번", args: ["10.10.0.0/16", 4, 2], expected: "10.10.32.0/20" },
+    { label: "/16 → /20 마지막", args: ["10.10.0.0/16", 4, 15], expected: "10.10.240.0/20" },
+    { label: "/16 → /24 200번", args: ["10.10.0.0/16", 8, 200], expected: "10.10.200.0/24" },
+    { label: "/16 → /19 5번", args: ["172.31.0.0/16", 3, 5], expected: "172.31.160.0/19" },
+    { label: "/8 → /16 255번", args: ["10.0.0.0/8", 8, 255], expected: "10.255.0.0/16" },
+  ]}
+/>
+
+범위를 넘는 번호를 주면 Terraform도 에러를 낸다. `cidrsubnet("10.10.0.0/16", 4, 16)`은 `prefix extension of 4 does not accommodate a subnet numbered 16`으로 멈춘다. 대역을 나누는 원리 자체는 [IP 주소와 서브넷](/posts/layer-ip-addressing)에 있다.
+
+## 모듈의 값은 outputs로만 나온다
+
+자식 모듈의 리소스 속성은 밖에서 보이지 않는다. 밖에 보여 줄 값은 `outputs.tf`에 적는다.
+
+```hcl
+# modules/vpc/outputs.tf
+output "vpc_id" {
+  value = aws_vpc.this.id
+}
+
+output "private_subnet_ids" {
+  description = "EKS 노드가 들어갈 서브넷"
+  value       = [for s in aws_subnet.private : s.id]
+}
+```
+
+루트에서는 `module.vpc.private_subnet_ids`로 읽어서 다른 모듈의 입력으로 넘긴다. 이 참조가 의존 관계가 되어, VPC 모듈의 서브넷이 다 만들어진 뒤에 EKS 모듈이 시작한다. 루트의 `outputs.tf`에 다시 적은 값은 apply 끝에 찍히고, 스크립트가 읽어 갈 수 있다.
+
+```bash
+# dev 값으로 apply한 뒤 출력만 다시 본다 (스크립트용 JSON)
+terraform output -json
+```
+
+```text
+{
+  "private_subnet_ids": {
+    "sensitive": false,
+    "type": [ ... ],
+    "value": [
+      "subnet-ce21dbab3c3e93558",
+      "subnet-9e483e237a26ebc1d"
+    ]
+  },
+  "vpc_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "vpc-38c17da3af96eb76a"
+  }
+}
+```
+
+배포 스크립트에서 값 하나만 필요하면 `-raw`를 쓴다. 따옴표 없이 값만 나온다. 이미지의 `scripts/deploy.sh`가 클러스터 이름을 읽어 kubeconfig를 만드는 식이다.
+
+```bash
+# 따옴표 없는 문자열 하나를 셸 변수에 담는다
+CLUSTER=$(terraform -chdir=terraform output -raw cluster_name)
+aws eks update-kubeconfig --name "$CLUSTER" --region ap-northeast-2
+```
+
+출력은 모듈의 공개 API다. 쓰는 곳이 생긴 뒤에 이름을 바꾸면 루트와 스크립트가 함께 깨진다. 처음부터 쓸 만한 것(ID, ARN, 엔드포인트)을 내보내고, 이름은 바꾸지 않는다.
+
+## count로 만들면 순서가 주소가 된다
+
+모듈 안에서 리소스를 여러 개 만들 때 `count`와 `for_each` 중 무엇을 쓰느냐가 나중에 큰 차이를 만든다. 레지스트리의 VPC 모듈은 서브넷을 `count`로 만든다. AZ 둘로 만든 VPC에 가운데 AZ `2b`를 끼워 넣어 봤다.
+
+```hcl
+  azs             = ["ap-northeast-2a", "ap-northeast-2b", "ap-northeast-2c"]
+  private_subnets = ["10.10.0.0/20", "10.10.32.0/20", "10.10.16.0/20"]
+```
+
+```text
+  # module.vpc.aws_subnet.private[1] must be replaced
+      ~ availability_zone                              = "ap-northeast-2c" -> "ap-northeast-2b" # forces replacement
+      ~ cidr_block                                     = "10.10.16.0/20" -> "10.10.32.0/20" # forces replacement
+  # module.vpc.aws_subnet.private[2] will be created
+  # module.vpc.aws_subnet.public[1] must be replaced
+  # module.vpc.aws_subnet.public[2] will be created
+  # module.vpc.aws_route_table_association.private[1] must be replaced
+  # module.vpc.aws_route_table_association.public[1] must be replaced
+Plan: 8 to add, 0 to change, 4 to destroy.
+```
+
+(줄 순서를 조금 묶었다.) 서브넷 두 개만 더하려 했는데 기존 `2c` 서브넷이 갈아 끼워진다. 노드가 떠 있는 서브넷이면 지울 수도 없어서 apply가 실패하거나, 지워지면 그 위 서비스가 멈춘다. `count`는 주소가 `[0]`, `[1]`처럼 목록의 위치라서 가운데에 끼우면 뒤가 한 칸씩 밀린다.
+
+<AlgoTrace
+  caption="count는 위치로, for_each는 키로 리소스를 기억한다"
+  memoryLabel="state의 주소 → 실제 서브넷"
+  cells={["2a", "2b", "2c"]}
+  steps={[
+    { pointer: 0, memory: ["[0] → 2a", "[1] → 2c"], caption: "AZ 둘일 때 count 주소는 [0]=2a, [1]=2c다." },
+    { pointer: 1, found: [1], memory: ["[0] → 2a", "[1] → 2c ⇒ 2b", "[2] → 새로"], caption: "2b를 가운데에 끼우면 [1]의 값이 2c에서 2b로 바뀐다. AZ는 갈아 끼워야 하는 속성이라 2c 서브넷이 지워진다." },
+    { pointer: 2, memory: ["[0] → 2a", "[1] → 2b", "[2] → 2c 새로"], caption: "2c는 [2]로 새로 만들어진다. 이름만 같은 다른 서브넷이다." },
+    { pointer: 1, found: [1], memory: ["[\"2a\"] → 2a", "[\"2c\"] → 2c", "[\"2b\"] → 새로"], caption: "for_each는 주소가 키다. 2b는 새 키라서 만들어지기만 하고 2a, 2c는 그대로 남는다." },
+  ]}
+/>
+
+실습용 모듈은 그래서 `for_each`에 AZ 이름을 키로 썼다. 그런데 처음 버전에서는 대역 번호를 목록의 순서(`for i, az in var.azs`)로 정했다. 키는 AZ 이름이라도 값(CIDR)이 순서에 따라 바뀌니 같은 사고가 났다.
+
+```text
+  # module.vpc.aws_subnet.private["ap-northeast-2b"] will be created
+  # module.vpc.aws_subnet.private["ap-northeast-2c"] must be replaced
+      ~ cidr_block                                     = "10.10.16.0/20" -> "10.10.32.0/20" # forces replacement
+```
+
+번호를 AZ 이름 끝 글자에서 뽑도록 고친 지금 버전은 `2b`를 더해도 `Plan: 2 to add, 0 to change, 0 to destroy`만 나온다. 리소스를 만드는 기준(키)과 속성을 정하는 기준이 모두 순서에 기대지 않아야 한다. 이미 count로 만든 리소스를 for_each로 옮길 때는 `moved { from = aws_subnet.private[0]  to = aws_subnet.private["ap-northeast-2a"] }`처럼 하나씩 옮긴다.
+
+## 값은 어디서 들어오나
+
+변수 값을 넣는 길은 여럿이고, 겹치면 나중에 읽는 쪽이 이긴다. `terraform console`로 `var.env`를 찍어 보며 확인했다. 디렉터리에는 `env = "stg"`가 적힌 `terraform.tfvars`가 있다.
+
+```bash
+# 같은 변수를 여러 경로로 넣고 어느 값이 남는지 본다
+echo 'var.env' | terraform console
+echo 'var.env' | TF_VAR_env=prod terraform console
+echo 'var.env' | TF_VAR_env=prod terraform console -var-file=envs/dev.tfvars
+echo 'var.env' | terraform console -var-file=envs/dev.tfvars -var env=prod
+```
+
+```text
+"stg"
+"stg"
+"dev"
+"prod"
+```
+
+<AlgoTrace
+  caption="읽는 순서대로 덮어쓴다. 마지막에 남은 값이 쓰인다"
+  memoryLabel="var.env"
+  cells={["TF_VAR_env", "terraform.tfvars", "*.auto.tfvars", "-var-file", "-var"]}
+  steps={[
+    { pointer: 0, memory: ["prod"], caption: "환경 변수 TF_VAR_env가 가장 먼저, 가장 약하게 들어간다." },
+    { pointer: 1, found: [1], memory: ["stg"], caption: "terraform.tfvars가 자동으로 읽혀 덮어쓴다. 두 번째 줄에서 prod가 stg에 진 이유다." },
+    { pointer: 2, memory: ["stg"], caption: "이름이 .auto.tfvars로 끝나는 파일이 사전순으로 읽힌다. 이 디렉터리에는 없다." },
+    { pointer: 3, found: [3], memory: ["dev"], caption: "명령줄의 -var-file이 적힌 순서대로 덮어쓴다." },
+    { pointer: 4, found: [4], memory: ["prod"], caption: "-var도 명령줄 순서를 따른다. 이 예에서는 맨 뒤에 있어서 이겼다." },
+  ]}
+/>
+
+CI에서 `TF_VAR_db_password`로 비밀을 넣었는데 저장소에 같은 이름이 적힌 `terraform.tfvars`가 있으면 환경 변수가 진다. 그래서 루트에 자동으로 읽히는 `terraform.tfvars`를 두는 것은 값이 한 벌뿐일 때만 편하다. 환경이 여럿이면 자동 로드 파일을 없애고 `-var-file`로만 넣는 편이 사고가 적다.
+
+## 환경마다 tfvars와 state를 나눈다
+
+환경을 나누는 가장 흔한 방식은 코드는 하나, 값 파일과 state 위치는 환경마다 따로다.
+
+```text
+terraform/
+├── modules/{vpc,eks}/
+├── main.tf  variables.tf  outputs.tf  versions.tf  backend.tf
+└── envs/
+    ├── dev.tfvars        dev.s3.tfbackend
+    └── prod.tfvars       prod.s3.tfbackend
+```
+
+```hcl
+# envs/prod.tfvars
+env      = "prod"
+vpc_cidr = "10.20.0.0/16"
+azs      = ["ap-northeast-2a", "ap-northeast-2b", "ap-northeast-2c"]
+```
+
+backend 블록에는 변수를 쓸 수 없다. 그래서 `backend "s3" {}`처럼 비워 두고 init 때 파일로 채운다(부분 설정).
+
+```hcl
+# envs/dev.s3.tfbackend
+bucket       = "acme-tfstate-prod"
+key          = "shop/dev/terraform.tfstate"
+region       = "ap-northeast-2"
+use_lockfile = true
+encrypt      = true
+```
+
+```bash
+# dev state를 보도록 초기화하고 dev 값으로 계획을 세운다
+terraform init -reconfigure -backend-config=envs/dev.s3.tfbackend
+terraform plan -var-file=envs/dev.tfvars -out=dev.tfplan
+```
+
+`-reconfigure`는 지금 붙어 있는 backend 설정을 버리고 새로 붙는다. 이걸 빼먹고 prod 설정으로 바꾸면 Terraform이 state를 옮길지 묻는데, 여기서 yes를 치면 dev state가 prod 자리로 복사된다. 환경을 오가는 스크립트에는 꼭 넣는다.
+
+환경 분리는 파일만으로 끝나지 않는다. 운영 state를 개발자 노트북에서 덮어쓸 수 있다면 분리가 아니다. 운영은 계정 자체를 나누고, CI가 환경마다 다른 IAM 역할을 맡게 하는 것이 보통이다. 아래 그림에서 넘겨 보면 마지막 단계가 그 이유다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="환경마다 값 파일, state 키, 맡는 역할이 따로 있다"
+  zones={[
+    { id: "s3", label: "S3 tfstate 버킷", x: 8, y: 110, w: 384, h: 92, tone: "neutral" },
+    { id: "dev", label: "dev 계정", x: 8, y: 220, w: 186, h: 92, tone: "public" },
+    { id: "prod", label: "prod 계정", x: 206, y: 220, w: 186, h: 92, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ci", label: "CI runner", sub: "terraform", x: 200, y: 40, icon: "server" },
+    { id: "kdev", label: "shop/dev", sub: "tfstate", x: 100, y: 160, icon: "db" },
+    { id: "kprod", label: "shop/prod", sub: "tfstate", x: 300, y: 160, icon: "db" },
+    { id: "vdev", label: "VPC dev", sub: "10.10.0.0/16", x: 100, y: 270, icon: "router" },
+    { id: "vprod", label: "VPC prod", sub: "10.20.0.0/16", x: 300, y: 270, icon: "router" },
+  ]}
+  links={[
+    { from: "ci", to: "kdev" },
+    { from: "ci", to: "kprod" },
+    { from: "kdev", to: "vdev" },
+    { from: "kprod", to: "vprod" },
+  ]}
+  steps={[
+    { path: ["ci", "kdev"], packet: "init", title: "dev state에 붙는다", detail: "init -backend-config=envs/dev.s3.tfbackend로 shop/dev 키를 본다.", payload: "key = \"shop/dev/terraform.tfstate\"" },
+    { path: ["ci", "kdev", "vdev"], packet: "apply", highlight: ["dev"], title: "dev 역할로 dev 계정을 바꾼다", detail: "dev.tfvars의 값으로 계획을 세우고, dev 계정의 역할만 맡아서 적용한다." },
+    { path: ["ci", "kprod", "vprod"], packet: "apply", highlight: ["prod"], title: "prod는 승인 뒤에 따로 돈다", detail: "같은 코드를 prod.tfvars와 shop/prod 키로 돌린다. 파이프라인에서 사람 승인을 거친다." },
+    { path: ["ci", "kprod"], packet: "write", blocked: true, title: "dev 역할로는 prod state를 못 쓴다", detail: "dev 작업이 실수로 prod 키를 가리켜도, dev 역할에는 그 키의 쓰기 권한이 없어 멈춘다. 파일 이름을 헷갈리는 사고를 권한이 막는다.", payload: "AccessDenied: s3:PutObject shop/prod/*" },
+  ]}
+/>
+
+## workspace는 언제 쓰나
+
+Terraform에는 같은 backend 안에서 state를 여러 벌 두는 workspace 기능이 있다.
+
+```bash
+# dev workspace를 만들고 그 안에서 apply한 뒤 목록을 본다
+terraform workspace new dev
+terraform apply -var-file=envs/dev.tfvars
+terraform workspace new prod
+terraform workspace list
+```
+
+```text
+Created and switched to workspace "dev"!
+
+You're now on a new, empty workspace. Workspaces isolate their state,
+so if you run "terraform plan" Terraform will not see any existing state
+for this configuration.
+...
+  default
+  dev
+* prod
+```
+
+로컬 backend는 `terraform.tfstate.d/dev/terraform.tfstate`처럼 workspace마다 디렉터리를 만든다. S3 backend에서는 키 앞에 `env:/`가 붙는다.
+
+```bash
+# S3 backend에서 canary workspace로 apply한 뒤 버킷을 본다
+aws s3 ls s3://acme-tfstate-prod --recursive | grep shop
+```
+
+```text
+2026-10-20 14:34:58      12559 env:/canary/shop/dev/terraform.tfstate
+2026-10-20 14:34:43      12559 shop/dev/terraform.tfstate
+```
+
+편해 보이지만 dev와 prod를 workspace로 나누는 데는 함정이 있다. 지금 어느 workspace인지는 `.terraform/environment` 파일 하나에 적혀 있고 명령에는 드러나지 않는다. `prod`에 선택된 채로 dev.tfvars를 넣어 apply하면 운영 VPC의 대역을 dev 값으로 바꾸려는 계획이 나온다. 모든 workspace가 같은 backend 설정을 쓰니 같은 자격 증명으로 운영 state에 닿는다는 점도 위험하다. HashiCorp 문서도 강한 분리가 필요한 환경 구분에는 workspace가 맞지 않다고 적고 있다.
+
+workspace가 잘 맞는 곳은 같은 환경 안에서 잠깐 쓰고 버리는 복제본이다. 기능 브랜치마다 미리보기 환경을 띄우거나, 같은 구성을 리전별로 몇 벌 찍을 때다. `terraform.workspace` 값을 이름에 넣어 리소스가 겹치지 않게 한다. workspace를 쓴다면 셸 프롬프트에 현재 workspace를 띄우거나, 루트 모듈에 `env`와 `terraform.workspace`가 다르면 멈추는 검사를 둔다.
+
+```hcl
+# workspace와 tfvars가 어긋나면 plan을 멈춘다 (check 블록은 경고만 하니 precondition을 쓴다)
+resource "terraform_data" "guard" {
+  lifecycle {
+    precondition {
+      condition     = terraform.workspace == "default" || terraform.workspace == var.env
+      error_message = "workspace(${terraform.workspace})와 env(${var.env})가 다르다."
+    }
+  }
+}
+```
+
+`prod` workspace에서 dev.tfvars로 plan을 돌리면 이렇게 멈춘다.
+
+```text
+Error: Resource precondition failed
+
+  on guard.tf line 4, in resource "terraform_data" "guard":
+   4:       condition     = terraform.workspace == "default" || terraform.workspace == var.env
+    ├────────────────
+    │ terraform.workspace is "prod"
+    │ var.env is "dev"
+
+workspace(prod)와 env(dev)가 다르다.
+```
+
+## 버전을 묶는 세 군데
+
+같은 코드가 반년 뒤에도 같은 계획을 내려면 버전을 묶어야 한다. 묶는 곳이 셋이다.
+
+```hcl
+# versions.tf (루트)
+terraform {
+  required_version = ">= 1.10, < 2.0"   # Terraform 본체
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"                # 프로바이더
+    }
+  }
+}
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "6.7.3"                     # 레지스트리 모듈
+}
+```
+
+`~> 6.0`은 6.x는 받되 7.0은 받지 않는다는 뜻이다. `~> 6.28`이라고 쓰면 6.28 이상 7.0 미만, `~> 6.28.0`이면 6.28.x까지만이다. 모듈은 가능한 한 정확한 버전을 적는다. 모듈은 잠금 파일에 기록되지 않아서, 범위를 열어 두면 init할 때마다 다른 코드를 받을 수 있다.
+
+조건은 루트와 모든 모듈에서 모여 하나로 합쳐진다. 루트가 `~> 6.28`, VPC 모듈이 `>= 6.28`을 요구하면 init은 둘 다 만족하는 버전을 찾는다.
+
+```text
+Initializing modules...
+Downloading git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=v6.7.3 for vpc...
+- vpc in .terraform/modules/vpc
+
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching ">= 6.28.0, ~> 6.28"...
+- Installing hashicorp/aws v6.69.1...
+```
+
+이 실습은 레지스트리 대신 GitHub 주소로 모듈을 받아서 `Downloading git::...`으로 나왔다. 레지스트리 주소면 `Downloading registry.terraform.io/terraform-aws-modules/vpc/aws 6.7.3 for vpc...`처럼 찍힌다. 누가 무엇을 요구하는지는 `terraform providers`가 트리로 보여 준다.
+
+```text
+Providers required by configuration:
+.
+├── provider[registry.terraform.io/hashicorp/aws] ~> 6.0
+└── module.vpc
+    └── provider[registry.terraform.io/hashicorp/aws] >= 6.0.0
+```
+
+조건 안에서 실제로 고른 버전은 `.terraform.lock.hcl`에 적힌다. 이 파일이 있으면 다음 init은 새 버전이 나와도 적힌 버전을 쓴다. 조건을 좁혀서 적힌 버전이 범위 밖이 되면 init이 멈춘다.
+
+```text
+Error: Failed to query available provider packages
+
+Could not retrieve the list of available versions for provider
+hashicorp/random: locked provider registry.terraform.io/hashicorp/random
+3.9.1 does not match configured version constraint ~> 3.6.0; must use
+terraform init -upgrade to allow selection of new versions
+```
+
+올리고 싶을 때만 `terraform init -upgrade`를 치고, 바뀐 잠금 파일을 커밋해서 리뷰받는다. Renovate나 Dependabot이 이 파일을 올리는 PR을 만들어 주게 해 두는 팀도 많다.
+
+잠금 파일에는 플랫폼별 해시가 들어간다. 맥북(`darwin_arm64`)에서 만든 잠금 파일을 리눅스 CI(`linux_amd64`)가 쓰면 해시가 맞는지 확인할 수 있어야 한다. 레지스트리에서 받으면 모든 플랫폼의 `zh:` 해시가 함께 적히지만, 미러에서 받으면 지금 플랫폼 것만 적히고 init이 경고한다.
+
+```text
+Warning: Incomplete lock file information for providers
+
+Due to your customized provider installation methods, Terraform was forced to
+calculate lock file checksums locally for the following providers:
+  - hashicorp/aws
+
+The current .terraform.lock.hcl file only includes checksums for linux_amd64,
+so Terraform running on another platform will fail to install these
+providers.
+```
+
+이럴 때는 `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`로 필요한 플랫폼 해시를 모두 채운다.
+
+## 레지스트리 모듈을 감싸서 쓴다
+
+VPC와 EKS는 직접 다 짜기보다 `terraform-aws-modules` 모듈을 쓰는 경우가 많다. 수년간 쌓인 엣지 케이스(AZ별 NAT, IPv6, EKS 접근 항목, 노드 그룹 시작 템플릿)가 들어 있다. `source` 주소는 세 조각으로 읽는다.
+
+<UrlAnatomy
+  caption="레지스트리 모듈 주소"
+  base="registry.terraform.io"
+  separator="/"
+  joiner="/"
+  params={[
+    { key: "namespace", display: "terraform-aws-modules", title: "네임스페이스", description: "모듈을 올린 조직이나 사람이다. terraform-aws-modules는 커뮤니티가 관리하는 AWS 모듈 묶음이고 HashiCorp 공식은 아니다. 검증 배지와 다운로드 수, 최근 릴리스 날짜를 보고 고른다.", required: true },
+    { key: "name", display: "vpc", title: "모듈 이름", description: "GitHub 저장소 이름 terraform-aws-vpc에서 앞의 terraform-과 뒤의 프로바이더를 뺀 부분이다.", required: true },
+    { key: "provider", display: "aws", title: "주로 쓰는 프로바이더", description: "이 모듈이 다루는 대상이다. 같은 이름의 모듈이 google, azurerm용으로 따로 있을 수 있다. 소스에 쓸 때는 앞의 호스트를 생략해 terraform-aws-modules/vpc/aws라고만 적는다.", required: true },
+  ]}
+/>
+
+모듈 하나가 만드는 리소스 수를 보면 왜 직접 짜지 않는지 보인다. AZ 둘, NAT 하나로 VPC 모듈을 부르면 19개, 여기에 노드 그룹 하나짜리 EKS 모듈을 더하면 56개다.
+
+```bash
+# VPC 모듈과 EKS 모듈을 함께 부른 루트에서 계획만 세운다
+terraform plan | grep -E '^  # module|^Plan'
+```
+
+```text
+  # module.vpc.aws_nat_gateway.this[0] will be created
+  # module.vpc.aws_subnet.private[0] will be created
+  ...
+  # module.eks.aws_eks_cluster.this[0] will be created
+  # module.eks.aws_eks_access_entry.this["cluster_creator"] will be created
+  # module.eks.aws_eks_addon.before_compute["vpc-cni"] will be created
+  # module.eks.module.eks_managed_node_group["general"].aws_eks_node_group.this[0] will be created
+  # module.eks.module.kms.aws_kms_key.this[0] will be created
+  ...
+Plan: 56 to add, 0 to change, 0 to destroy.
+```
+
+이미지의 `modules/eks`, `modules/vpc`는 이런 레지스트리 모듈을 한 겹 감싼 사내 모듈로 두는 경우가 많다. 감싸는 이유는 우리 팀의 정답을 기본값으로 박아 두기 위해서다. 엔드포인트 공개 범위, 로그 종류, 노드 AMI 종류, 필수 태그를 감싼 모듈 안에 고정하고, 밖에는 환경마다 달라지는 값만 변수로 연다.
+
+```hcl
+# modules/eks/main.tf (감싼 모듈)
+module "this" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "21.29.0"
+
+  name               = var.name
+  kubernetes_version = var.kubernetes_version
+
+  endpoint_public_access       = true
+  endpoint_public_access_cidrs = var.admin_cidrs   # 사내 대역만
+  enable_cluster_creator_admin_permissions = false # 접근은 access_entries로만 준다
+
+  vpc_id     = var.vpc_id
+  subnet_ids = var.private_subnet_ids
+
+  eks_managed_node_groups = {
+    general = {
+      ami_type       = "AL2023_x86_64_STANDARD"
+      instance_types = var.instance_types
+      min_size       = var.min_size
+      max_size       = var.max_size
+      desired_size   = var.min_size
+    }
+  }
+}
+```
+
+레지스트리 모듈은 메이저 버전에서 변수 이름이 자주 바뀐다. EKS 모듈 v21은 v20의 `cluster_name`, `cluster_version`, `cluster_endpoint_public_access`를 `name`, `kubernetes_version`, `endpoint_public_access`로 바꿨다. 메이저를 올릴 때는 모듈 저장소의 UPGRADE 문서를 읽고, plan에서 갈아 끼워지는 리소스가 없는지 확인한 뒤 올린다. 감싼 모듈이 있으면 이 작업을 한 곳에서 끝낸다.
+
+## 모듈을 나누다 생기는 사고
+
+- 모듈 source를 바꿨는데 `Module not installed`가 난다: `terraform init`을 다시 돌리지 않았다. source나 version을 바꾸면 항상 init이다.
+- AZ 하나를 더했더니 서브넷이 갈아 끼워진다: count 주소이거나, 값이 목록 순서에 기대고 있다. plan에서 `[1] must be replaced`가 보이면 apply하지 않고 for_each와 moved로 옮긴다.
+- 모듈 안에 `provider "aws"` 블록을 넣었다: 그 모듈은 `count`, `for_each`를 쓸 수 없고, 모듈을 지울 때 프로바이더 설정까지 사라져서 리소스를 못 지운다. 프로바이더는 루트에서만 설정하고 모듈에는 `required_providers`만 둔다. 다른 리전이 필요하면 루트에서 별칭 프로바이더를 만들어 `providers = { aws = aws.us_east_1 }`로 넘긴다.
+- 모듈이 너무 많은 것을 한다: VPC, EKS, RDS, 모니터링이 한 모듈과 한 state에 있으면 plan 한 번에 몇 분이 걸리고 작은 변경도 전체를 잠근다. 수명이 다른 것(네트워크는 거의 안 바뀌고 앱 인프라는 자주 바뀐다)은 state를 나누고, 앞 단의 출력은 `terraform_remote_state`나 SSM 파라미터로 넘긴다.
+- 모듈 버전을 `main` 브랜치로 걸었다: `?ref=main`이면 누가 모듈을 고친 순간 모든 환경의 다음 plan이 바뀐다. 태그를 건다.
+
+## 같은 코드, 다른 값
+
+모듈은 디렉터리 하나이고, 변수로 받고 출력으로만 돌려주는 함수처럼 쓴다. 값은 환경마다 tfvars로, state는 환경마다 다른 키와 다른 권한으로 나눈다. workspace는 짧게 쓰고 버리는 복제본에 맞고 dev와 prod를 가르는 데는 맞지 않다. 버전은 Terraform 본체, 프로바이더(잠금 파일), 모듈 세 군데서 묶는다. 여러 개를 만들 때는 순서가 아니라 키로 기억하게 해야 나중에 끼워 넣어도 무너지지 않는다. 이 위에 실제 VPC를 짜는 이야기는 [네트워크를 Terraform으로](/posts/terraform-network-iac)에, 프로젝트 전체 구조는 [쿠버네티스 프로젝트 구조](/posts/k8s-project-structure)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### Terraform 모듈은 무엇이고 왜 쓰나요?
+
+`.tf` 파일이 든 디렉터리 하나가 모듈이다. 같은 구성을 환경이나 서비스마다 복사하지 않고 값만 바꿔 여러 번 부르려고 쓴다. 변수로 입력을 받고 출력으로만 값을 돌려주니, 쓰는 쪽은 안을 몰라도 된다. 팀의 기본값(태그, 로그, 보안 설정)을 한곳에 고정하는 효과도 있다.
+
+### count와 for_each는 어떻게 다르고, 언제 무엇을 쓰나요?
+
+count는 리소스를 목록의 위치(`[0]`, `[1]`)로, for_each는 키로 기억한다. 그래서 count 목록 가운데에 항목을 끼우거나 빼면 뒤의 리소스가 모두 다른 값을 받아 갈아 끼워진다. 서브넷처럼 항목에 이름이 있는 것은 for_each를 쓰고, 키뿐 아니라 속성 값도 순서에 기대지 않게 만든다. count는 "켜고 끄기"(`count = var.enabled ? 1 : 0`)처럼 개수만 중요한 곳에 쓴다.
+
+### 환경을 workspace로 나누는 것과 tfvars·backend 설정으로 나누는 것의 차이는요?
+
+workspace는 같은 backend 설정 안에서 state만 여러 벌 두는 것이고, 지금 어느 workspace인지가 명령에 드러나지 않는다. 같은 자격 증명으로 모든 환경의 state에 닿고, 선택을 잘못한 채 apply하는 사고가 난다. 운영 분리는 환경마다 tfvars, backend 키, IAM 역할(가능하면 계정)을 따로 두는 쪽이 안전하다. workspace는 기능 브랜치 미리보기처럼 잠깐 쓰는 복제본에 맞다.
+
+### 변수 값이 여러 곳에서 들어오면 무엇이 이기나요?
+
+나중에 읽는 쪽이 이긴다. 환경 변수 `TF_VAR_`가 가장 약하고, 그다음 `terraform.tfvars`, `*.auto.tfvars`, 그리고 명령줄의 `-var-file`과 `-var`가 적힌 순서대로 덮어쓴다. 그래서 CI에서 환경 변수로 넣은 값이 저장소의 terraform.tfvars에 지는 일이 생긴다. 환경이 여럿이면 자동 로드 파일을 두지 않는 편이 낫다.
+
+### .terraform.lock.hcl은 무엇을 고정하고, 커밋해야 하나요?
+
+프로바이더의 정확한 버전과 패키지 해시를 고정하고, 커밋해야 한다. 버전 조건(`~> 6.0`)은 범위일 뿐이라 잠금 파일이 없으면 init할 때마다 다른 버전을 받을 수 있다. 올릴 때는 `init -upgrade`로 바꾸고 리뷰받는다. 모듈 버전은 이 파일에 들어가지 않으니 module 블록에 정확한 버전이나 태그를 적는다.
+
+### 모듈 안에 provider 블록을 두면 안 되는 이유는요?
+
+그 모듈을 count나 for_each로 부를 수 없고, 모듈을 코드에서 지울 때 프로바이더 설정도 같이 사라져 안의 리소스를 지우지 못하기 때문이다. 프로바이더 설정은 루트 모듈에만 두고, 모듈은 `required_providers`로 필요한 프로바이더와 최소 버전만 밝힌다. 리전이나 계정이 다른 프로바이더가 필요하면 루트에서 별칭을 만들어 `providers` 인자로 넘긴다.
+
+### 레지스트리 모듈을 그대로 쓰지 않고 한 겹 감싸는 이유는요?
+
+팀이 정한 기본값을 강제하고, 바깥에 여는 변수를 줄이고, 메이저 업그레이드를 한 곳에서 처리하려고 감싼다. 예를 들어 EKS 엔드포인트 공개 범위, 로그 종류, 노드 AMI를 감싼 모듈 안에 고정하고 환경별로 다른 값만 변수로 연다. 대신 감싼 모듈도 버전을 매겨 관리해야 하는 비용이 생긴다.

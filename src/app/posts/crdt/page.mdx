@@ -1,0 +1,415 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("crdt");
+
+지하철에서 휴대폰으로 메모의 첫 글자를 지웠다. 터널이라 전송이 안 됐다. 같은 시간 집에 둔 노트북에서는 가족이 같은 메모에 글자를 넣었다. 휴대폰이 다시 연결되자 서버는 "나중에 저장된 쪽"을 남겼고, 가족이 넣은 글자가 사라졌다. 둘 다 정상적으로 저장한 편집인데 하나는 흔적도 없다.
+
+[OT 글](/posts/operational-transform)에서는 서버가 순서를 하나로 정하고 그 순서에 맞춰 연산을 고쳐 써서 이 문제를 풀었다. 이 글은 반대쪽 접근을 본다. 순서를 정해 줄 서버가 없어도, 기기마다 다른 순서로 편집을 받아도, 같은 편집을 두 번 받아도 결국 같은 상태가 되도록 자료형 자체를 설계한다. 이런 자료형을 CRDT(Conflict-free Replicated Data Type)라고 부른다. 카운터와 집합부터 직접 만들어 합치는 함수의 성질을 확인하고, 공동 편집기가 쓰는 시퀀스 CRDT는 Yjs 13.6.33을 Node.js 22에서 실제로 돌려 본다.
+
+이 주제의 다른 글: 서버가 순서를 정하고 위치를 고쳐 쓰는 방식은 [Operational Transformation](/posts/operational-transform)에서 다뤘다. 여러 복제본이 "언젠가 같아진다"는 약속 자체는 [최종 일관성](/posts/eventual-consistency)에 있다.
+
+## 마지막 저장이 이기면 한쪽이 사라진다
+
+가장 흔한 합치기 규칙은 마지막 쓰기 승리(LWW, Last-Writer-Wins)다. 값마다 시각을 붙이고, 둘이 부딪히면 시각이 큰 쪽을 남긴다. 시각이 같으면 노드 이름처럼 양쪽이 똑같이 아는 값으로 정한다. 이것도 CRDT의 한 종류(LWW-Register)다. 어떤 순서로 합쳐도 결과가 같기 때문이다.
+
+문제는 "큰 시각"이 "실제로 나중"이라는 보장이 없다는 데 있다. 휴대폰 시계가 5초 빠른 상태에서, 휴대폰이 먼저 "회의 3시"를 쓰고 2초 뒤 노트북이 "회의 4시"를 썼다고 하자.
+
+```text
+--- LWW-Register: 시계가 5초 빠른 phone
+merge: {"v":"회의 3시","ts":6000,"node":"phone"} <- 나중에 쓴 '회의 4시'가 사라진다
+```
+
+모든 기기가 "회의 3시"로 수렴한다. 수렴은 했지만 실제로 나중에 한 편집이 졌다. 시계가 왜 어긋나고 얼마나 어긋나는지는 [시계 어긋남 글](/posts/clock-skew)에서 본다. LWW는 닉네임처럼 "마지막 값 하나"면 되는 곳에는 충분하다. 메모 본문, 장바구니, 좋아요 수처럼 양쪽 변경을 모두 살려야 하는 데이터에 쓰면 조용히 데이터를 잃는다.
+
+## 합치는 순서와 횟수를 무시해도 되는 조건
+
+여러 기기가 서로 상태를 주고받는 환경에서는 세 가지가 언제든 일어난다. 메시지가 다른 순서로 온다. 같은 메시지가 두 번 온다(재전송, 재연결). 어떤 기기는 A와 B를 먼저 합친 뒤 C를 받고, 다른 기기는 B와 C를 먼저 합친다.
+
+합치는 함수 merge가 다음 세 성질을 만족하면 이 셋을 모두 무시할 수 있다.
+
+```text
+교환법칙  merge(a, b) == merge(b, a)                     // 받는 순서가 상관없다
+결합법칙  merge(merge(a, b), c) == merge(a, merge(b, c)) // 묶는 순서가 상관없다
+멱등성    merge(a, a) == a                               // 두 번 받아도 같다
+```
+
+이 세 성질이 성립하는 합치기를 수학에서는 join(최소 상한)이라고 부르고, 상태들이 join으로 합쳐지는 구조를 join-semilattice라고 한다. 풀어 말하면 상태는 "더 많이 아는 쪽"으로만 움직이고, merge는 두 상태가 아는 것을 모두 아는 가장 작은 상태를 고른다. 모든 기기가 결국 같은 메시지 집합을 받으면 어떤 순서·횟수로 받았든 같은 상태에 도착한다. 이걸 강한 최종 일관성(strong eventual consistency)이라고 한다.
+
+CRDT는 무엇을 주고받느냐에 따라 두 갈래다.
+
+- 상태 기반(state-based, CvRDT): 상태 전체를 보내고 받는 쪽이 merge한다. merge가 위 세 성질을 만족하면 네트워크는 메시지를 잃거나 겹쳐 보내도 된다(언젠가 한 번은 전달되기만 하면 된다). 대신 상태가 크면 보내는 양이 많다.
+- 연산 기반(operation-based, CmRDT): "+1", "x 추가" 같은 연산만 보낸다. 작지만, 동시 연산끼리 교환법칙을 만족해야 하고 전달 계층이 각 연산을 정확히 한 번, 인과 순서대로 전달해야 한다.
+
+둘 사이에 델타 상태(delta-state) CRDT가 있다. 상태 기반의 성질을 유지하면서 최근에 바뀐 조각만 보낸다. 뒤에서 볼 Yjs의 업데이트도 이런 식으로 동작한다.
+
+<SequenceDiagram
+  caption="같은 메시지가 두 번 오면: 연산 기반과 상태 기반"
+  actors={[
+    { id: "l", label: "노트북" },
+    { id: "p", label: "휴대폰" },
+  ]}
+  steps={[
+    { from: "l", to: "l", label: "+2", title: "노트북에서 좋아요 2번", detail: "노트북의 카운터가 2 올랐다. 휴대폰은 이미 혼자 3을 올려 둔 상태다." },
+    { from: "l", to: "p", label: "op: +2", title: "연산 기반: +2를 보낸다", detail: "휴대폰은 3에 2를 더해 5가 된다.", payload: "phone = 3 + 2 = 5" },
+    { from: "l", to: "p", label: "op: +2 (재전송)", title: "응답이 늦어 다시 보냈다", detail: "휴대폰은 같은 연산인지 모른다. 또 더해 7이 된다. 연산 기반은 전달 계층이 정확히 한 번을 보장해야 한다.", payload: "phone = 5 + 2 = 7" },
+    { from: "l", to: "p", label: "state {laptop:2}", title: "상태 기반: 상태를 보낸다", detail: "노트북 몫의 칸이 2라는 상태를 보낸다. 휴대폰은 칸마다 큰 값을 고른다.", payload: "max({phone:3}, {laptop:2})\n= {phone:3, laptop:2} → 5" },
+    { from: "l", to: "p", label: "state (재전송)", title: "같은 상태가 또 와도", detail: "max는 같은 값을 두 번 넣어도 그대로다. 여전히 5다. 멱등성 덕분에 재전송을 걱정하지 않는다.", payload: "{phone:3, laptop:2} → 5" },
+  ]}
+/>
+
+## 카운터: 기기마다 칸을 따로 쓴다
+
+좋아요 수를 여러 기기에서 올린다고 하자. 숫자 하나를 두고 서로 더하면 위 그림처럼 재전송에서 틀린다. 둘 중 큰 값을 고르면 휴대폰의 3과 노트북의 2가 합쳐지지 않고 3만 남는다. G-Counter(Grow-only Counter)는 기기마다 칸을 따로 둔다.
+
+- 올리기: 자기 칸만 올린다.
+- 합치기: 칸마다 큰 값을 고른다.
+- 값: 모든 칸의 합.
+
+자기 칸은 자기만 올리니 칸마다 가장 큰 값이 곧 최신 값이다. 그래서 max가 정답이 된다.
+
+<AlgoTrace
+  caption="G-Counter: 칸마다 max로 합친다"
+  memoryLabel="각 기기가 가진 상태"
+  cells={["phone", "laptop", "tablet"]}
+  steps={[
+    { pointer: 0, memory: ["phone: [3, 0, 0] = 3", "laptop: [0, 0, 0]", "tablet: [1, 0, 0] (예전에 받음)"], caption: "휴대폰이 오프라인에서 좋아요를 3번 눌렀다. 자기 칸만 3이 됐다. 태블릿은 예전에 휴대폰 칸이 1일 때의 상태를 받아 두었다." },
+    { pointer: 1, memory: ["phone: [3, 0, 0] = 3", "laptop: [0, 2, 0] = 2", "tablet: [1, 0, 0] = 1"], caption: "노트북도 오프라인에서 2번 눌렀다. 서로의 칸은 건드리지 않는다." },
+    { pointer: 0, found: [0, 1], memory: ["phone: max([3,0,0], [0,2,0])", "= [3, 2, 0] = 5"], caption: "휴대폰이 노트북 상태를 받았다. 칸마다 큰 값을 고르면 3과 2가 모두 살아 5가 된다." },
+    { pointer: 0, found: [0, 1], memory: ["phone: max([3,2,0], [0,2,0])", "= [3, 2, 0] = 5"], caption: "같은 상태가 재전송으로 또 왔다. 큰 값은 그대로라 5다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["tablet: max([1,0,0], [3,2,0])", "= [3, 2, 0] = 5"], caption: "태블릿이 휴대폰의 최신 상태를 받았다. 옛 값 1과 새 값 3이 더해지지 않고 3이 남는다. 더하기였다면 6이 됐을 것이다." },
+  ]}
+/>
+
+직접 돌려 본 결과다.
+
+```text
+--- 좋아요 수: phone +3, laptop +2 (오프라인)
+phone {"phone":3} laptop {"laptop":2}
+merge(phone, laptop) {"phone":3,"laptop":2} = 5 | merge(laptop, phone) = 5
+같은 상태를 세 번 더 받음: 5
+합계를 더하는 방식, 재전송 한 번: 7
+```
+
+세 성질도 확인했다. 기기 네 대짜리 상태를 무작위로 10만 쌍(결합법칙은 10만 세트) 만들어 비교했다. 칸마다 max 대신 칸마다 더하기로 합치는 경우와 나란히 봤다.
+
+```text
+--- 무작위 상태 10만 쌍으로 성질 확인
+교환 100000/100000, 결합 100000/100000, 멱등 100000/100000
+칸마다 더하기로 합치면 멱등 1629/100000
+```
+
+더하기도 교환·결합법칙은 지킨다. 깨지는 건 멱등성이다. 1,629개가 통과한 건 모든 칸이 0이었던 경우뿐이다. 재전송이 있는 네트워크에서 더하기로 합치면 그대로 숫자가 부푼다.
+
+줄이기도 필요하면 G-Counter 두 개를 쓴다. 올린 횟수(P)와 내린 횟수(N)를 따로 G-Counter로 두고 값은 P − N이다. 이게 PN-Counter다. 여기서 CRDT가 못 하는 일이 하나 드러난다. 재고 10개에서 휴대폰은 3개, 노트북은 8개를 각자 오프라인으로 팔았다.
+
+```text
+--- PN-Counter: 재고 10에서 phone -3, laptop -8
+phone 7 laptop 2 merge -1
+```
+
+각 기기는 재고가 남아 있다고 보고 팔았고, 합치면 −1이다. CRDT는 "어떤 순서로 합쳐도 같다"만 보장하고 "재고는 0 이상" 같은 불변식은 지켜 주지 않는다. 이런 불변식은 합치기만으로는 지킬 수 없고 누군가 미리 허락해야 한다. 재고를 기기마다 미리 나눠 주고(각자 5개까지만 팔 수 있음) 모자라면 다른 기기에서 넘겨받는 방식(bounded counter, escrow)이 있지만, 결국 넘겨받을 때는 통신이 필요하다. 돈과 재고는 보통 중앙 DB의 트랜잭션에 맡긴다.
+
+## 지웠다가 다시 넣는 원소: OR-Set
+
+집합은 더 까다롭다. 장보기 목록에서 휴대폰은 "우유"를 지웠고, 같은 시간 노트북은 우유를 다시 추가했다. 합치면 우유가 있어야 할까.
+
+단순한 방법은 2P-Set이다. 추가 집합 A와 삭제 집합 R을 둘 다 G-Set(늘기만 하는 집합)으로 두고, 값은 A − R이다. 합치기는 A끼리, R끼리 합집합이라 세 성질을 지킨다. 하지만 한 번 R에 들어간 원소는 영원히 다시 넣을 수 없다.
+
+OR-Set(Observed-Remove Set)은 추가할 때마다 고유한 태그를 붙인다. 지울 때는 "내가 본 태그들"만 지운다. 내가 보지 못한 동시 추가의 태그는 살아남는다. 그래서 동시에 추가와 삭제가 부딪히면 추가가 이긴다(add-wins).
+
+<AlgoTrace
+  caption="OR-Set: 지울 때는 본 태그만 지운다"
+  memoryLabel="(원소, 태그) / 지운 태그"
+  cells={["phone", "laptop", "병합"]}
+  steps={[
+    { memory: ["추가: (milk, phone:1)", "지운 태그: 없음"], caption: "처음 목록에는 우유가 하나 있다. 휴대폰이 넣을 때 태그 phone:1이 붙었다. 두 기기 모두 이 상태다." },
+    { pointer: 0, memory: ["추가: (milk, phone:1)", "지운 태그: phone:1", "값: []"], caption: "휴대폰이 우유를 지운다. 지금 보이는 우유의 태그 phone:1만 지운 태그에 넣는다." },
+    { pointer: 1, memory: ["추가: (milk, phone:1), (milk, laptop:1)", "지운 태그: 없음", "값: [milk]"], caption: "노트북은 지운 걸 모르고 우유를 또 추가했다. 새 태그 laptop:1이 붙는다." },
+    { pointer: 2, found: [2], memory: ["추가: (milk, phone:1), (milk, laptop:1)", "지운 태그: phone:1", "값: [milk] ← laptop:1이 살아 있음"], caption: "합치면 추가 쌍은 합집합, 지운 태그도 합집합이다. phone:1은 지워졌지만 휴대폰이 본 적 없는 laptop:1은 남아서 우유가 있다." },
+  ]}
+/>
+
+```text
+--- OR-Set vs 2P-Set: phone이 우유 제거, 동시에 laptop이 우유 다시 추가
+2P-Set merge: [] (한 번 지운 원소는 다시 못 넣는다)
+OR-Set phone: [] laptop: ["milk"] merge: ["milk"] state: {"adds":[["milk","phone:1"],["milk","laptop:1"]],"rems":["phone:1"]}
+```
+
+마지막 줄의 상태를 보면 비용도 보인다. 우유는 하나인데 추가 쌍 두 개와 지운 태그 하나를 들고 있다. 지운 원소의 흔적을 버릴 수 없는 이유는, 버리면 그 삭제를 아직 못 받은 기기에서 원소가 되살아나기 때문이다. 이 흔적이 CRDT의 메모리 비용이고, 텍스트에서 훨씬 커진다.
+
+어느 쪽이 이겨야 하는지는 데이터마다 다르다. 장바구니는 추가가 이기는 편이 낫다(사용자가 다시 담은 걸 잃는 것보다 지운 게 남는 쪽이 덜 나쁘다). 권한 목록처럼 지운 게 남으면 위험한 데이터는 삭제가 이기는 변형(remove-wins)을 고르거나 아예 CRDT로 다루지 않는다.
+
+## 글자마다 이름을 붙이는 시퀀스 CRDT
+
+텍스트가 OT에서 어려웠던 이유는 위치가 숫자였기 때문이다. 앞에서 글자가 지워지면 모든 번호가 바뀐다. 시퀀스 CRDT는 글자마다 바뀌지 않는 이름(id)을 붙이고, "몇 번째"가 아니라 "어떤 글자 뒤"로 위치를 말한다. 2011년의 RGA, 2016년의 YATA가 이런 방식이고, Yjs는 YATA를 고친 알고리즘을 쓴다.
+
+Yjs에서 id는 `(clientID, clock)` 쌍이다. clientID는 문서를 연 기기(정확히는 Y.Doc 인스턴스)마다 무작위로 정하고, clock은 그 기기가 넣은 글자마다 1씩 오른다. 새 글자는 두 이웃을 기억한다. 넣을 때 왼쪽에 있던 글자의 id(origin)와 오른쪽에 있던 글자의 id(rightOrigin)다.
+
+<AlgoTrace
+  caption="cats에 글자 id를 붙이면 (Yjs의 실제 id)"
+  memoryLabel="항목 목록 (id 순서)"
+  cells={["c", "a", "t", "s"]}
+  steps={[
+    { memory: ["c(1,0) a(1,1) t(1,2) s(1,3)"], caption: "휴대폰(clientID 1)이 cats를 썼다. 글자마다 (1, 0)부터 (1, 3)까지 id가 붙었다. 노트북도 이 상태를 받았다." },
+    { pointer: 0, memory: ["c(1,0)✕ a(1,1) t(1,2) s(1,3)", "보이는 글: ats"], caption: "휴대폰이 c를 지운다. 항목을 목록에서 빼지 않고 지웠다는 표시만 남긴다. 이 표시가 남은 항목을 묘비(tombstone)라고 부른다." },
+    { pointer: 1, memory: ["c(1,0) h(2,0) a(1,1) t(1,2) s(1,3)", "h: origin (1,0), rightOrigin (1,1)"], caption: "노트북(clientID 2)이 c와 a 사이에 h를 넣는다. 위치는 숫자 1이 아니라 'c(1,0) 뒤, a(1,1) 앞'으로 기록된다." },
+    { pointer: 0, found: [0], memory: ["c(1,0)✕ h(2,0) a(1,1) t(1,2) s(1,3)", "보이는 글: hats"], caption: "휴대폰이 h를 받는다. c는 지워졌지만 묘비가 남아 있어서 'c 뒤'를 정확히 찾는다. 숫자 위치가 바뀌는 문제가 생기지 않는다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["… s(1,3) !(1,4)", "보이는 글: hats!"], caption: "휴대폰이 오프라인 중에 끝에 넣은 !도 origin이 s(1,3)이라 어느 기기에서 받든 s 뒤에 붙는다." },
+  ]}
+/>
+
+두 기기가 같은 이웃 사이에 동시에 글자를 넣으면 순서를 정해야 한다. YATA는 같은 origin을 가진 항목끼리 clientID가 작은 쪽을 왼쪽에 둔다. `d` 뒤에 한 기기는 X를, 다른 기기는 Y를 동시에 넣고 서로 받아 봤다.
+
+```text
+같은 위치 삽입: P dXY Q dXY
+clientID를 바꾸면(X쪽 7, Y쪽 3): dYX
+```
+
+X를 넣은 쪽이 clientID 1, Y 쪽이 2일 때는 dXY, 번호를 7과 3으로 바꾸자 dYX다. 누가 먼저 쳤는지와 상관없이 번호가 정한다. OT의 동점 규칙과 비슷하지만 차이가 크다. OT는 삭제로 이웃이 사라지면 원래 앞뒤 관계를 잃었는데, 여기서는 묘비가 남아 있으니 origin을 항상 찾을 수 있다. [OT 글](/posts/operational-transform)에서 TP2를 깨뜨린 `d` 예제를 Yjs로 돌리면 이렇게 나온다.
+
+```text
+A→B→C "xz"
+A→C→B "xz"
+B→A→C "xz"
+B→C→A "xz"
+C→A→B "xz"
+C→B→A "xz"
+```
+
+A는 d를 지우고, B는 d 뒤에 z를, C는 d 앞에 x를 넣었다. 세 업데이트를 여섯 가지 순서로 받아도 모두 `xz`다. 원래 의도(x는 d 앞, z는 d 뒤)도 지켜졌다.
+
+두 사람이 같은 자리에 단어를 동시에 치면 글자가 섞이지 않는지도 봤다. `[]` 사이에 한 사람은 cat, 다른 사람은 dog를 한 글자씩 쳤다.
+
+```text
+둘 다 앞에서부터 타이핑                  "[catdog]" (같음)
+둘 다 뒤에서부터 입력                   "[catdog]" (같음)
+```
+
+Yjs는 단어가 섞이지 않았다. 위치를 분수 같은 좌표로 정하는 일부 시퀀스 CRDT(Logoot, LSEQ 등)에서는 이런 동시 입력에서 두 단어의 글자가 번갈아 섞이는 문제가 논문으로 보고됐다. 라이브러리를 고를 때 확인할 거리다.
+
+## Yjs로 오프라인 두 기기를 합쳐 본다
+
+처음의 메모 장면을 Yjs로 만들었다. 휴대폰(clientID 1)이 cats를 쓰고 노트북(clientID 2)과 한 번 동기화한다. 그다음 둘 다 오프라인에서 편집한다. 휴대폰은 c를 지우고 끝에 !를 붙이고, 노트북은 c와 a 사이에 h를 넣는다.
+
+```js
+const Y = require("yjs");
+const phone = new Y.Doc(); phone.clientID = 1;   // 설명을 위해 고정. 실제로는 건드리지 않는다
+const laptop = new Y.Doc(); laptop.clientID = 2;
+// ... 처음 동기화 후 각자 편집
+// 다시 연결: 상대가 무엇을 가졌는지(state vector)를 받아 빠진 것만 만든다
+const toLaptop = Y.encodeStateAsUpdate(phone, Y.encodeStateVector(laptop));
+const toPhone = Y.encodeStateAsUpdate(laptop, Y.encodeStateVector(phone));
+Y.applyUpdate(laptop, toLaptop);
+Y.applyUpdate(phone, toPhone);
+```
+
+```text
+동기화 후     phone: cats  laptop: cats
+state vector phone: [[1,4]]
+오프라인      phone: ats!  laptop: chats
+state vector phone: [[1,5]]  laptop: [[2,1],[1,4]]
+diff bytes   phone->laptop: 14  laptop->phone: 12  full phone: 25
+병합 후       phone: hats!  laptop: hats!
+중복 적용 후  phone: hats!
+```
+
+state vector는 "clientID마다 몇 번 clock까지 가졌나"다. 노트북의 `[[2,1],[1,4]]`는 자기 글자 1개와 휴대폰 글자 4개(clock 0~3)를 가졌다는 뜻이다. 휴대폰은 이걸 보고 clock 4 이후(!)와 삭제 기록만 보낸다. 문서 전체 25바이트 대신 14바이트가 갔다. 같은 업데이트를 두 번 더 적용해도 결과가 같은 건 이미 가진 id를 건너뛰기 때문이다. 앞에서 본 멱등성이 여기서도 그대로 성립한다.
+
+삭제는 clock을 쓰지 않는다. 휴대폰이 c를 지웠는데 state vector는 5(글자 5개를 넣음)다. 삭제는 "client 1의 clock 0부터 1개"처럼 범위로 따로 모아 보낸다. 노트북이 보낸 업데이트를 풀어 보면 h 한 글자의 정보가 다 보인다.
+
+```text
+laptop이 보낸 업데이트: [{"id":{"client":2,"clock":0},"len":1,"origin":{"client":1,"clock":0},"rightOrigin":{"client":1,"clock":1},"content":"h"}] deletes: []
+phone이 보낸 업데이트: [{"id":{"client":1,"clock":4},"len":1,"origin":{"client":1,"clock":3},"rightOrigin":null,"content":"!"}] deletes: [[1,[[0,1]]]]
+```
+
+<UrlAnatomy
+  caption="노트북이 보낸 항목 하나 (Y.decodeUpdate)"
+  base="Item"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "id", display: "id (2, 0)", title: "id", description: "clientID 2가 처음 넣은 글자. 문서 안에서 유일하고 절대 바뀌지 않는다. 중복 업데이트는 이 id로 걸러진다.", required: true },
+    { key: "origin", display: "origin (1, 0)", title: "origin", description: "넣을 때 왼쪽에 있던 글자 c의 id. c가 지워져도 묘비가 남아 있어서 받는 쪽이 이 자리를 찾는다." },
+    { key: "right", display: "rightOrigin (1, 1)", title: "rightOrigin", description: "넣을 때 오른쪽에 있던 글자 a의 id. 같은 origin 뒤에 동시에 들어온 항목들의 순서를 정할 때 쓴다." },
+    { key: "content", display: "\"h\"", title: "content", description: "넣은 내용. 같은 기기가 이어서 친 글자들은 하나의 항목으로 합쳐져서 id 하나에 길이(len)만 늘어난다." },
+  ]}
+/>
+
+동기화 구조는 이렇게 생겼다. 실제 서비스에서는 기기끼리 직접 붙기보다 중계 서버(y-websocket, Hocuspocus 같은)를 두는 경우가 많다. 그래도 OT와 달리 서버는 순서를 정하거나 변환하지 않는다. 업데이트를 받아 다른 기기에 전해 주고, 원하면 저장해 둘 뿐이다.
+
+<NetworkTopology
+  caption="오프라인 편집 뒤 state vector로 빠진 것만 주고받기"
+  width={400}
+  height={300}
+  zones={[
+    { id: "dev", label: "사용자 기기", x: 10, y: 10, w: 380, h: 90, tone: "edge" },
+    { id: "srv", label: "중계 서버", x: 110, y: 130, w: 180, h: 160, tone: "private" },
+  ]}
+  nodes={[
+    { id: "phone", label: "Phone", sub: "SV {1:5}", x: 90, y: 60, icon: "client" },
+    { id: "laptop", label: "Laptop", sub: "SV {1:4, 2:1}", x: 310, y: 60, icon: "client", w: 120 },
+    { id: "relay", label: "Sync relay", sub: "y-websocket", x: 200, y: 180, icon: "server" },
+    { id: "store", label: "Doc store", sub: "merged update", x: 200, y: 255, icon: "db" },
+  ]}
+  links={[
+    { from: "phone", to: "relay", label: "WS" },
+    { from: "laptop", to: "relay", label: "WS" },
+    { from: "relay", to: "store" },
+  ]}
+  steps={[
+    { path: ["phone", "relay"], packet: "update", blocked: true, title: "터널 안에서 편집", detail: "휴대폰이 c를 지우고 !를 붙였다. 전송은 실패하지만 편집은 로컬 문서에 이미 반영됐다. 기다릴 필요가 없다." },
+    { path: ["laptop", "relay"], packet: "+h", title: "노트북은 연결돼 있다", detail: "노트북의 h는 중계 서버를 거쳐 저장소에 들어간다. 서버는 변환하지 않고 저장만 한다." },
+    { path: ["phone", "relay"], packet: "SV", title: "휴대폰이 다시 연결된다", detail: "휴대폰은 먼저 자기 state vector를 보낸다. '나는 client 1의 clock 5까지 가졌다'는 뜻이다.", payload: "[[1,5]]" },
+    { path: ["relay", "phone"], packet: "12 B", title: "빠진 것만 받는다", detail: "중계 서버는 휴대폰에 없는 client 2의 clock 0(h)만 골라 보낸다. 12바이트다.", payload: "h (2,0) origin (1,0)" },
+    { path: ["phone", "relay", "laptop"], packet: "14 B", title: "반대 방향도 같다", detail: "휴대폰의 !와 c 삭제 범위가 노트북으로 간다. 두 기기 모두 hats!가 된다. 어느 쪽이 먼저 받든 결과가 같다.", payload: "! (1,4) + delete [1: 0..1]" },
+    { path: ["relay", "store"], packet: "merge", title: "저장할 때는 합쳐서", detail: "업데이트를 받는 대로 이어 붙이기만 하면 저장소가 계속 커진다. 주기적으로 합친 상태 하나로 바꿔 저장한다." },
+  ]}
+/>
+
+## 지운 글자는 메모리에서 사라지지 않는다
+
+묘비가 공짜는 아니다. 글자 1만 개를 쓰고 9,990개를 지워 10글자만 남긴 문서의 크기를 쟀다. 처음부터 끝까지 이어서 치는 경우와, 문서 여기저기 무작위 위치에 치는 경우를 나눴다. Yjs의 가비지 컬렉션(`gc`, 기본값 켜짐)을 켠 경우와 끈 경우도 비교했다.
+
+```text
+끝에 이어 타이핑              gc=true  10000자:  10011 B, items     1 | 9990자 삭제 후 10자:     31 B, items 2
+끝에 이어 타이핑              gc=false 10000자:  10011 B, items     1 | 9990자 삭제 후 10자:  10021 B, items 2
+무작위 위치 타이핑             gc=true  10000자:  88635 B, items  9999 | 9990자 삭제 후 10자:  78689 B, items 9999
+무작위 위치 타이핑             gc=false 10000자:  88635 B, items  9999 | 9990자 삭제 후 10자:  88679 B, items 9999
+같은 10자 문자열 자체: 10 B
+```
+
+세 가지가 보인다. 한 기기가 이어서 친 글자는 항목 하나로 합쳐져서 1만 자가 10KB 남짓이다. 글자마다 id를 들고 다니지 않는다. 그런데 무작위 위치에 치면 항목이 9,999개로 쪼개지고 크기가 9배 가까이 된다. 그리고 gc를 켜도 지운 글자의 내용만 버릴 뿐 항목 자체는 남는다. 10글자짜리 문서가 78KB다. 항목을 지우면 그 항목을 origin으로 가리키는 동시 편집이 자리를 못 찾기 때문이다.
+
+gc를 끄는 건 지운 내용까지 남겨야 할 때다. Yjs의 스냅숏으로 과거 버전을 복원하거나 변경 이력을 보여 주려면 `gc: false`가 필요하고, 그만큼 문서는 계속 커진다. 묘비를 완전히 치우려면 "모든 기기가 이 삭제를 받았다"는 합의가 필요한데, 언제 돌아올지 모르는 오프라인 기기가 있으면 그 시점을 알 수 없다. 그래서 대부분의 구현은 묘비를 영원히 들고 간다. 이 비용은 위치 숫자 대신 이름으로 말하기로 한 대가다. 와이드 컬럼 DB가 삭제를 [툼스톤](/posts/db-type-wide-column)으로 남기는 것과 같은 이유다.
+
+## 카운터 합치기 직접 짜 보기
+
+`mergeAll(states)`를 완성해 보자. 각 상태는 PN-Counter로 `{ p: { 기기: 수 }, n: { 기기: 수 } }` 모양이다. 모든 상태를 합친 뒤 값(P의 합 − N의 합)을 돌려주면 된다. 같은 상태가 여러 번 들어오거나, 같은 기기의 옛 상태와 새 상태가 함께 들어오는 테스트가 있다. 기대값은 모두 Node.js에서 확인했다.
+
+<CodePlayground
+  caption="PN-Counter 합치기"
+  functionName="mergeAll"
+  initialCode={`function mergeAll(states) {
+  // 칸마다 어떻게 합쳐야 재전송과 옛 상태에 안전할까?
+  let total = 0;
+  for (const s of states) {
+    for (const k in s.p) total += s.p[k];
+    for (const k in s.n) total -= s.n[k];
+  }
+  return total;
+}`}
+  solution={`function mergeAll(states) {
+  const p = {}, n = {};
+  for (const s of states) {
+    for (const k in s.p) p[k] = Math.max(p[k] || 0, s.p[k]);
+    for (const k in s.n) n[k] = Math.max(n[k] || 0, s.n[k]);
+  }
+  const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  return sum(p) - sum(n);
+}`}
+  tests={[
+    { label: "phone +3, laptop +2", args: [[{ p: { phone: 3 }, n: {} }, { p: { laptop: 2 }, n: {} }]], expected: 5 },
+    { label: "laptop 상태가 세 번 옴", args: [[{ p: { phone: 3 }, n: {} }, { p: { laptop: 2 }, n: {} }, { p: { laptop: 2 }, n: {} }, { p: { laptop: 2 }, n: {} }]], expected: 5 },
+    { label: "phone의 옛 상태와 새 상태", args: [[{ p: { phone: 1 }, n: {} }, { p: { phone: 3, laptop: 2 }, n: {} }]], expected: 5 },
+    { label: "재고 10에서 -3, -8", args: [[{ p: { seed: 10 }, n: { phone: 3 } }, { p: { seed: 10 }, n: { laptop: 8 } }]], expected: -1 },
+    { label: "순서를 바꿔도", args: [[{ p: { seed: 10 }, n: { laptop: 8 } }, { p: { seed: 10 }, n: { phone: 3 } }]], expected: -1 },
+    { label: "빈 목록", args: [[]], expected: 0 },
+  ]}
+/>
+
+처음 코드는 첫 테스트와 빈 목록만 통과한다. 상태를 그대로 더하면 같은 상태가 여러 번 오거나 옛 상태가 함께 올 때 숫자가 부푼다. 재고 테스트에서는 seed 칸의 10이 두 번 더해진다.
+
+## 동기화가 이상할 때 보는 곳
+
+CRDT를 쓰면 "문서가 갈라졌다"는 문제는 거의 사라진다. 대신 다른 증상이 생긴다.
+
+문서를 열 때마다 느려지고 저장소 용량이 계속 는다. 중계 서버가 업데이트를 받는 대로 행 하나씩 추가만 하고 있을 가능성이 크다. 5,000자를 치고 4,000자를 지우는 동안 생긴 업데이트 9,000개를 세 방식으로 저장해 봤다.
+
+```text
+업데이트 9000개 이어 붙임: 87616 B | mergeUpdates: 29883 B | encodeStateAsUpdate: 1022 B | 본문 1000자
+```
+
+업데이트를 이어 붙이면 87KB, `Y.mergeUpdates`로 합치면 30KB, 문서에 적용한 뒤 `encodeStateAsUpdate`로 다시 뽑으면 1KB다. 마지막 방식만 gc가 지운 내용을 버린다. 주기적으로(예: 업데이트 N개마다, 또는 마지막 사용자가 나갈 때) 문서를 메모리에 올려 상태 하나로 다시 저장하는 작업이 필요하다.
+
+한 기기의 편집이 다른 기기에 영영 안 보인다. 두 Y.Doc이 같은 clientID를 쓰고 있는지 본다. 테스트를 위해 clientID를 고정했다가 그대로 배포하거나, clientID를 로컬 저장소에 저장해 여러 탭이 같이 쓰는 경우다.
+
+```text
+같은 clientID: A "aXb" B "aYb"
+```
+
+두 문서가 같은 clientID 5로 각자 clock 0에 글자를 넣었다. 서로 업데이트를 받아도 "client 5의 clock 0은 이미 있다"며 건너뛴다. 오류도 없이 영원히 다른 문서로 남는다. clientID는 Y.Doc을 만들 때마다 새로 뽑게 두고, 저장된 상태를 불러올 때도 새 Y.Doc에 적용한다.
+
+재고가 음수가 되거나 같은 쿠폰이 두 번 쓰였다. 앞의 PN-Counter처럼 불변식이 걸린 데이터를 CRDT로 다룬 경우다. 합치기는 정상 동작한 것이다. 이런 값은 CRDT 밖으로 빼서 서버 트랜잭션으로 처리한다.
+
+권한 검사가 어렵다. OT 서버는 모든 연산을 보고 거절할 수 있지만, CRDT는 각 기기가 이미 적용한 뒤에 업데이트가 온다. 서버에서 거절하면 그 기기만 다른 상태로 남는다. 읽기 전용 사용자의 업데이트는 중계 서버에서 아예 전달하지 않고, 받는 쪽도 신뢰할 수 없는 업데이트를 적용하지 않게 해야 한다.
+
+## OT와 CRDT 사이에서 고르기
+
+<ConceptDiagram
+  caption="동시 편집을 합치는 방식과 쓰는 곳"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "ot", label: "OT", sub: "서버가 순서·변환", x: 95, y: 40, w: 150 },
+    { id: "crdt", label: "CRDT", sub: "자료형이 수렴 보장", x: 305, y: 40, w: 160 },
+    { id: "srv", label: "서버 권한 + LWW", sub: "속성 단위 덮어쓰기", x: 200, y: 145, w: 180 },
+    { id: "gdocs", label: "구글 문서", sub: "ShareDB · ot.js", x: 95, y: 255, w: 150 },
+    { id: "lf", label: "로컬 우선 앱", sub: "Yjs · Automerge", x: 305, y: 255, w: 160 },
+  ]}
+  edges={[
+    { from: "ot", to: "gdocs", label: "긴 텍스트" },
+    { from: "crdt", to: "lf", label: "오프라인 · P2P" },
+    { from: "crdt", to: "srv", label: "아이디어 차용", dashed: true },
+    { from: "ot", to: "srv", label: "중앙 서버", dashed: true },
+  ]}
+/>
+
+실제 서비스들은 한쪽 극단에 있지 않다. 구글 문서는 서버가 있는 OT다. 피그마는 2019년 기술 블로그에서 OT를 쓰지 않고 CRDT에서 아이디어를 가져왔다고 설명했다. 다만 순수한 CRDT는 아니다. 서버가 최종 권한을 갖고, 도형의 속성(색, 위치) 하나하나를 서버가 받은 순서대로 마지막 쓰기 승리로 정한다. 디자인 도구에서는 같은 글자 사이에 동시에 끼어드는 일보다 같은 속성을 동시에 바꾸는 일이 훨씬 많아서 이 정도로 충분하다. Linear 같은 업무 도구도 클라이언트가 로컬에 먼저 쓰고 서버가 변경에 순서 번호를 매겨 퍼뜨리는 방식으로 알려져 있다. 필드 단위로는 서버 순서의 LWW에 가깝다.
+
+Yjs와 Automerge는 2019년 Ink & Switch가 "로컬 우선(local-first) 소프트웨어"라는 말로 정리한 방향의 기반이다. 데이터의 원본이 기기에 있고 서버는 동기화를 돕는 역할로 물러난다. 오프라인에서 며칠씩 편집해도 합칠 수 있고, 서버가 사라져도 데이터가 남는다.
+
+고를 때 물어볼 것은 이렇다.
+
+- 순서를 매길 서버를 둘 수 있나. 둘 수 있고 편집이 짧게 오간다면 OT도, 서버 권한 LWW도 단순하다.
+- 오프라인이 얼마나 길까. 몇 초짜리 끊김이면 OT의 보류 연산으로 충분하다. 며칠이면 서버가 쌓인 연산 전부에 맞춰 변환해야 하는 OT보다 CRDT가 편하다.
+- 무엇을 합치나. 같은 칸의 값 하나면 LWW, 숫자는 카운터, 목록은 OR-Set, 긴 텍스트는 시퀀스 CRDT나 OT. 한 앱 안에서도 데이터마다 다르게 고른다.
+- 지운 데이터를 얼마나 들고 갈 수 있나. 묘비와 버전 이력은 문서가 오래될수록 커진다.
+- 서버에서 검증해야 하는 규칙이 있나. 재고, 결제, 권한처럼 거절이 필요한 데이터는 CRDT 밖에 둔다.
+
+CRDT는 합치는 함수를 교환·결합·멱등이 성립하도록 설계해서, 어떤 순서로 몇 번 받든 같은 상태에 도착하게 만든다. 카운터는 기기별 칸에 max, 집합은 추가마다 고유 태그, 텍스트는 글자마다 바뀌지 않는 id와 이웃 기록으로 이걸 해낸다. 대가는 묘비와 메타데이터의 메모리, 그리고 불변식을 지킬 수 없다는 한계다.
+
+이 주제의 다른 글: [Operational Transformation](/posts/operational-transform), [최종 일관성](/posts/eventual-consistency), [시계 어긋남](/posts/clock-skew), [네트워크 분할](/posts/network-partitions)
+
+## 면접에서 나올 만한 질문
+
+### CRDT가 무엇이고 어떤 문제를 푸나
+
+여러 복제본이 조율 없이 각자 수정한 뒤 어떤 순서로 합쳐도 같은 상태가 되도록 설계한 자료형이다. 오프라인 편집, 여러 리전의 동시 쓰기, 기기 간 직접 동기화처럼 순서를 정해 줄 중앙이 없거나 기다릴 수 없는 곳에서 쓴다. 합치기가 교환·결합·멱등이면 메시지 순서가 바뀌거나 중복돼도 결국 같아진다.
+
+### 상태 기반과 연산 기반 CRDT의 차이는
+
+상태 기반은 상태 전체를 보내고 받는 쪽이 join으로 합친다. 멱등이라 재전송과 순서 뒤바뀜에 강하지만 상태가 크면 비싸다. 연산 기반은 "+1" 같은 연산만 보내 작지만, 전달 계층이 각 연산을 정확히 한 번 인과 순서대로 전달해야 한다. +2가 재전송되면 카운터가 7이 되는 식으로 깨진다. 실무에서는 바뀐 조각만 보내는 델타 상태 방식이 많다.
+
+### G-Counter는 왜 칸마다 max로 합치나
+
+각 칸은 그 기기만 올리므로 칸의 값은 커지기만 하고, 가장 큰 값이 최신이다. max는 교환·결합·멱등이라 재전송이나 옛 상태가 섞여 들어와도 안전하다. 칸마다 더하면 같은 상태를 두 번 받았을 때 숫자가 부푼다. 숫자 하나로 max를 하면 다른 기기의 증가분을 잃는다.
+
+### OR-Set은 동시 추가와 삭제를 어떻게 처리하나
+
+추가할 때마다 고유 태그를 붙이고, 삭제는 삭제하는 쪽이 본 태그만 지운다. 동시에 다른 기기가 추가한 태그는 삭제하는 쪽이 본 적이 없으니 남는다. 그래서 동시 추가와 삭제가 부딪히면 추가가 이긴다. 대신 지운 태그를 계속 들고 다녀야 한다. 2P-Set은 한 번 지운 원소를 다시 넣을 수 없다는 한계가 있다.
+
+### Yjs 같은 시퀀스 CRDT는 OT의 위치 문제를 어떻게 피하나
+
+글자마다 (clientID, clock) 같은 바뀌지 않는 id를 붙이고 위치를 "어떤 글자 뒤"로 기록한다. 지운 글자도 묘비로 남겨 두니 기준이 된 이웃을 항상 찾을 수 있다. 같은 자리에 동시에 넣으면 clientID 같은 정해진 규칙으로 순서를 정한다. 그래서 OT에서 변환 순서에 따라 갈라지던 예제가 여섯 가지 순서 모두 같은 결과를 낸다.
+
+### 묘비는 왜 지우지 못하고 비용은 얼마나 되나
+
+묘비를 지우면 그 글자를 기준으로 삼은 동시 편집이 자리를 못 찾고, 삭제를 아직 못 받은 기기에서 원소가 되살아날 수 있다. 모든 기기가 삭제를 받았다는 합의가 필요한데 오프라인 기기가 있으면 시점을 알 수 없다. 실제로 1만 자를 무작위 위치에 치고 10자만 남겼을 때 Yjs 문서는 gc를 켜도 78KB였다. 이어서 친 글은 항목이 합쳐져 31바이트로 줄었다.
+
+### CRDT로 재고나 잔액을 다루면 어떻게 되나
+
+합치기는 정상 동작해도 불변식이 깨진다. 재고 10에서 두 기기가 각자 3개와 8개를 팔면 합친 값이 −1이다. CRDT는 수렴만 보장하고 "0 이상" 같은 조건은 보장하지 않는다. 이런 값은 중앙 트랜잭션으로 처리하거나, 기기별로 한도를 미리 나눠 주는 방식처럼 조율을 넣어야 한다.
+
+### OT와 CRDT 중 무엇을 고르나
+
+중앙 서버가 있고 서버에서 권한 검사와 기록이 필요하며 오프라인이 짧다면 OT나 서버 권한 LWW가 단순하다. 긴 오프라인, 기기 간 직접 동기화, 서버 없는 로컬 우선 구조라면 CRDT가 맞다. 구글 문서는 OT, 피그마는 서버 권한에 속성 단위 LWW, 로컬 우선 앱은 Yjs나 Automerge다. 한 앱 안에서도 데이터마다 다른 방식을 섞는다.

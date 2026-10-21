@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-security-context");
+
+보안 점검 도구가 운영 Deployment 하나에 경고를 열 줄 넘게 달았다. "컨테이너가 root로 실행됨", "권한 상승 허용", "capability 제한 없음", "seccomp 프로필 없음". 앱은 nginx 하나다. 하나씩 끄면 되겠지 싶어 `readOnlyRootFilesystem: true`부터 넣었더니 Pod가 바로 죽었다.
+
+```text
+nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (30: Read-only file system)
+```
+
+(예시: kwok 클러스터에는 진짜 컨테이너가 없어서 nginx 공식 이미지가 내는 오류 형식을 옮겼다.) securityContext의 각 줄은 결국 리눅스 커널 기능 하나씩이다. 그 기능이 무엇을 막는지 알면 어떤 줄이 앱을 깨뜨릴지, 어디를 열어 줘야 할지 미리 안다. 이 글은 각 설정을 Ubuntu 24.04 호스트에서 `setpriv`, `capsh`, `unshare`, 작은 C 프로그램으로 직접 재현하고, 쿠버네티스 쪽 설정은 kwok으로 띄운 1.37.0 API 서버에서 검증한다.
+
+namespace와 cgroup으로 컨테이너를 만드는 부분은 [namespace와 cgroup](/posts/linux-namespaces-cgroups)에, 파일 권한과 setuid 비트는 [파일 권한](/posts/linux-files-permissions)에 있다. 이 글은 그 위에서 "컨테이너 안의 프로세스가 커널에 무엇을 요청할 수 있나"를 다룬다. 같은 보안 묶음의 다른 글로 [RBAC](/posts/k8s-rbac), [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens), 이 설정들을 네임스페이스 단위로 강제하는 [Pod Security Admission](/posts/k8s-pod-security-admission)이 있다.
+
+## 한 줄마다 커널 기능 하나
+
+점검 도구가 요구하는 설정을 모으면 대개 이렇다. 각 조각을 누르면 커널의 어느 기능이 되는지 나온다.
+
+<UrlAnatomy
+  caption="컨테이너 securityContext 한 덩어리를 조각내면"
+  base="securityContext:"
+  separator=" "
+  joiner="; "
+  params={[
+    { key: "runAsNonRoot", value: "true", title: "root면 시작하지 않는다", description: "kubelet이 컨테이너를 만들기 전에 실행 사용자를 확인한다. UID가 0이면 시작을 거부한다. 커널 기능이 아니라 kubelet의 검사다.", required: true },
+    { key: "runAsUser", value: "101", title: "UID를 정한다", description: "runc가 exec 전에 setuid(101)를 부른다. 이미지의 USER를 덮어쓴다. 파일 권한 검사는 이 숫자로 한다." },
+    { key: "allowPrivilegeEscalation", value: "false", title: "no_new_privs 비트", description: "prctl(PR_SET_NO_NEW_PRIVS)를 켠다. 이후 exec하는 setuid 바이너리나 file capability가 권한을 올리지 못한다.", required: true },
+    { key: "readOnlyRootFilesystem", value: "true", title: "루트 파일 시스템을 ro로 마운트", description: "이미지 레이어 위의 쓰기 층을 읽기 전용으로 마운트한다. 쓸 곳은 emptyDir로 따로 연다." },
+    { key: "capabilities.drop", value: "[ALL]", title: "capability를 모두 뺀다", description: "bounding 집합까지 비운다. root여도 chown, 포트 바인딩, raw 소켓이 막힌다. 필요한 것만 add로 되돌린다.", required: true },
+    { key: "seccompProfile", value: "RuntimeDefault", title: "시스템 콜 필터", description: "런타임 기본 seccomp 프로필을 건다. unshare, mount, keyctl 같은 위험한 시스템 콜이 EPERM으로 막힌다.", required: true },
+    { key: "appArmorProfile", value: "RuntimeDefault", title: "LSM 프로필", description: "AppArmor가 켜진 노드(Ubuntu 기본)에서 경로 단위 접근 제어를 건다. 1.30부터 필드로 쓴다." },
+  ]}
+/>
+
+그림으로 묶으면 이렇다. 프로세스가 커널에 무언가를 요청할 때 위에서부터 차례로 걸린다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="securityContext 필드와 그것이 켜는 커널 기능"
+  nodes={[
+    { id: "proc", label: "컨테이너 프로세스", sub: "UID 101", x: 210, y: 40, w: 150 },
+    { id: "sc", label: "seccomp", sub: "어떤 시스템 콜", x: 70, y: 130, w: 120 },
+    { id: "cap", label: "capabilities", sub: "root의 특권 조각", x: 210, y: 130, w: 130 },
+    { id: "lsm", label: "AppArmor", sub: "어떤 경로·동작", x: 350, y: 130, w: 120 },
+    { id: "nnp", label: "no_new_privs", sub: "exec로 못 올림", x: 70, y: 240, w: 130 },
+    { id: "ro", label: "ro 마운트", sub: "쓰기 금지", x: 210, y: 240, w: 110 },
+    { id: "uid", label: "UID·GID 검사", sub: "fsGroup", x: 350, y: 240, w: 120 },
+  ]}
+  edges={[
+    { from: "proc", to: "sc" },
+    { from: "proc", to: "cap" },
+    { from: "proc", to: "lsm" },
+    { from: "proc", to: "nnp" },
+    { from: "proc", to: "ro" },
+    { from: "proc", to: "uid" },
+    { from: "nnp", to: "sc", dashed: true, label: "먼저 켠다" },
+  ]}
+/>
+
+필드는 Pod 수준(`spec.securityContext`)과 컨테이너 수준(`containers[].securityContext`) 두 곳에 있다. 둘 다 있는 필드(runAsUser, runAsNonRoot, seccompProfile, appArmorProfile 등)는 컨테이너 값이 이긴다. `fsGroup`, `supplementalGroups`, `sysctls`는 Pod에만, `capabilities`, `privileged`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation`은 컨테이너에만 있다. 1.37의 필드 목록은 `kubectl explain`이 정확하다.
+
+```bash
+# 컨테이너 수준 securityContext 필드 목록
+kubectl explain pod.spec.containers.securityContext | sed -n '/FIELDS:/,$p' | grep -E '^  [a-zA-Z]'
+```
+
+```text
+  allowPrivilegeEscalation	<boolean>
+  appArmorProfile	<AppArmorProfile>
+  capabilities	<Capabilities>
+  privileged	<boolean>
+  procMount	<string>
+  enum: Default, Unmasked
+  readOnlyRootFilesystem	<boolean>
+  runAsGroup	<integer>
+  runAsNonRoot	<boolean>
+  runAsUser	<integer>
+  seLinuxOptions	<SELinuxOptions>
+  seccompProfile	<SeccompProfile>
+  windowsOptions	<WindowsSecurityContextOptions>
+```
+
+## root를 조각낸 것이 capability다
+
+리눅스에서 "root라서 되는 일"은 사실 40개 남짓한 capability로 쪼개져 있다. 파일 주인 바꾸기(`CAP_CHOWN`), 1024 아래 포트 열기(`CAP_NET_BIND_SERVICE`), 네트워크 설정 바꾸기(`CAP_NET_ADMIN`), 거의 모든 것(`CAP_SYS_ADMIN`) 같은 식이다. 커널은 UID가 0인지가 아니라 해당 capability가 있는지를 본다.
+
+지금 셸이 가진 것을 보면 이렇다.
+
+```bash
+# 현재 프로세스의 capability 집합을 16진수로 본다
+grep -E 'Cap(Prm|Eff|Bnd)' /proc/self/status
+```
+
+```text
+CapPrm:	000001fffeffffff
+CapEff:	000001fffeffffff
+CapBnd:	000001fffeffffff
+```
+
+컨테이너는 root로 떠도 이 전부를 받지 않는다. containerd와 Docker의 기본값은 14개다. `setpriv`로 bounding 집합을 그 14개로 줄여 실행해 보면 컨테이너 안의 root와 같은 상태가 된다.
+
+```bash
+# 런타임 기본 14개만 남기고 실행한다
+DEF=-all,+chown,+dac_override,+fowner,+fsetid,+kill,+setgid,+setuid,+setpcap,+net_bind_service,+net_raw,+sys_chroot,+mknod,+audit_write,+setfcap
+setpriv --bounding-set=$DEF --inh-caps=-all bash -c '
+  grep CapEff /proc/self/status
+  capsh --decode=$(awk "/CapEff/{print \$2}" /proc/self/status)
+  ip link add dummy9 type dummy; echo "ip exit=$?"'
+```
+
+```text
+CapEff:	00000000a80425fb
+0x00000000a80425fb=cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap
+RTNETLINK answers: Operation not permitted
+ip exit=2
+```
+
+root인데 네트워크 인터페이스를 못 만든다. `CAP_NET_ADMIN`이 없어서다. 그래도 14개면 꽤 많다. `CAP_NET_RAW`는 raw 소켓으로 같은 노드의 다른 Pod 트래픽을 위조하는 데 쓰일 수 있고, `CAP_CHOWN`, `CAP_DAC_OVERRIDE`는 파일 권한을 무시하게 해 준다. 그래서 `drop: ["ALL"]`로 다 빼는 것이 출발점이다.
+
+```bash
+# capability를 전부 빼고 root로 chown을 시도한다
+setpriv --bounding-set=-all --inh-caps=-all chown 0:0 owned.txt; echo "exit=$?"
+setpriv --bounding-set=-all --inh-caps=-all grep -E 'CapEff|CapBnd' /proc/self/status
+```
+
+```text
+chown: changing ownership of 'owned.txt': Operation not permitted
+exit=1
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+```
+
+16진수 마스크를 이름으로 바꾸는 건 비트 번호 표만 있으면 된다. `capsh --decode`가 하는 일을 직접 짜 보자. 비트 0이 `cap_chown`, 비트 10이 `cap_net_bind_service`, 비트 21이 `cap_sys_admin`이다. 32비트를 넘는 값이라 `BigInt`를 쓴다.
+
+<CodePlayground
+  caption="CapEff 16진수를 capability 이름으로"
+  functionName="decodeCaps"
+  initialCode={`const NAMES = ["chown","dac_override","dac_read_search","fowner","fsetid","kill","setgid","setuid","setpcap","linux_immutable","net_bind_service","net_broadcast","net_admin","net_raw","ipc_lock","ipc_owner","sys_module","sys_rawio","sys_chroot","sys_ptrace","sys_pacct","sys_admin","sys_boot","sys_nice","sys_resource","sys_time","sys_tty_config","mknod","lease","audit_write","audit_control","setfcap","mac_override","mac_admin","syslog","wake_alarm","block_suspend","audit_read","perfmon","bpf","checkpoint_restore"];
+
+function decodeCaps(hex) {
+  // "00000000a80425fb" → ["cap_chown", ...]
+  return [];
+}`}
+  solution={`const NAMES = ["chown","dac_override","dac_read_search","fowner","fsetid","kill","setgid","setuid","setpcap","linux_immutable","net_bind_service","net_broadcast","net_admin","net_raw","ipc_lock","ipc_owner","sys_module","sys_rawio","sys_chroot","sys_ptrace","sys_pacct","sys_admin","sys_boot","sys_nice","sys_resource","sys_time","sys_tty_config","mknod","lease","audit_write","audit_control","setfcap","mac_override","mac_admin","syslog","wake_alarm","block_suspend","audit_read","perfmon","bpf","checkpoint_restore"];
+
+function decodeCaps(hex) {
+  const mask = BigInt("0x" + hex);
+  return NAMES.filter((_, i) => (mask >> BigInt(i)) & 1n).map((n) => "cap_" + n);
+}`}
+  tests={[
+    { label: "런타임 기본 14개", args: ["00000000a80425fb"], expected: ["cap_chown", "cap_dac_override", "cap_fowner", "cap_fsetid", "cap_kill", "cap_setgid", "cap_setuid", "cap_setpcap", "cap_net_bind_service", "cap_net_raw", "cap_sys_chroot", "cap_mknod", "cap_audit_write", "cap_setfcap"] },
+    { label: "포트 바인딩 하나", args: ["0000000000000400"], expected: ["cap_net_bind_service"] },
+    { label: "drop ALL", args: ["0000000000000000"], expected: [] },
+    { label: "sys_admin 하나", args: ["0000000000200000"], expected: ["cap_sys_admin"] },
+  ]}
+/>
+
+## non-root에게 capability를 더해도 안 되는 경우
+
+nginx를 UID 101로 돌리면서 80번 포트를 쓰고 싶다. `capabilities.add: ["NET_BIND_SERVICE"]`를 넣으면 될 것 같다. 리눅스에서 이게 어떻게 동작하는지 보자. root가 아닌 프로세스가 `exec`하면 capability는 기본으로 다 사라진다. 살아남게 하려면 ambient 집합에 넣거나, 실행 파일 자체에 file capability를 붙여야 한다.
+
+```bash
+# UID 1000으로 80번 포트를 연다: 그냥, ambient로, file capability로
+setpriv --reuid=1000 --regid=1000 --clear-groups python3 - < bind80.py 2>&1 | tail -1
+setpriv --reuid=1000 --regid=1000 --clear-groups \
+  --inh-caps=+net_bind_service --ambient-caps=+net_bind_service python3 - < bind80.py 2>&1 | tail -1
+
+sudo setcap cap_net_bind_service=+ep ./bind80    # C로 만든 작은 바인드 프로그램
+getcap ./bind80
+setpriv --reuid=1000 --regid=1000 --clear-groups ./bind80
+```
+
+```text
+PermissionError: [Errno 13] Permission denied
+bound to :80
+bind80 cap_net_bind_service=ep
+bind :80 ok
+```
+
+여기서 쿠버네티스 쪽 함정이 있다. 컨테이너 런타임(containerd, CRI-O의 기본 동작)은 `capabilities.add`를 bounding·permitted 집합에는 넣지만 ambient에는 넣지 않는다. 그래서 non-root 컨테이너에 `add: ["NET_BIND_SERVICE"]`를 줘도 실행 파일에 file capability가 없으면 80번을 못 연다. 이 동작을 바꾸자는 이슈는 오래 열려 있다. 현실적인 답은 셋이다. 앱이 8080처럼 1024 이상 포트를 쓰고 Service가 80을 8080으로 넘기게 하거나(가장 흔하다), 이미지 빌드 때 `setcap`을 걸거나, 커널 sysctl `net.ipv4.ip_unprivileged_port_start`를 낮춘다. 마지막은 Pod의 `sysctls`로 줄 수 있는 안전한 sysctl 목록에 들어 있다.
+
+## exec로 권한을 올리지 못하게: allowPrivilegeEscalation
+
+`allowPrivilegeEscalation: false`는 이름이 막연한데 하는 일은 하나다. 프로세스에 `no_new_privs` 비트를 켠다. 이 비트가 켜지면 이후 `exec`하는 프로그램의 setuid 비트와 file capability가 무시된다. setuid root인 작은 프로그램과 앞의 `bind80`으로 확인했다.
+
+```bash
+# UID 1000 셸 안에서, no_new_privs 없이 한 번, 켜고 한 번
+setpriv --reuid=1000 --regid=1000 --clear-groups bash -c '
+  ./whoami-suid; ./bind80
+  echo "--- no_new_privs"
+  setpriv --no-new-privs ./whoami-suid; setpriv --no-new-privs ./bind80'
+```
+
+```text
+uid=1000 euid=0
+bind :80 ok
+--- no_new_privs
+uid=1000 euid=1000
+bind :80 failed: Permission denied
+```
+
+비트가 없을 때는 setuid 프로그램이 euid 0(root)으로 돌았다. 컨테이너 이미지 안에 `su`, `sudo`, `ping`(옛 배포판), `passwd` 같은 setuid 바이너리가 남아 있으면, 앱을 뚫은 공격자가 이걸로 root가 될 수 있다. 비트를 켜면 그 길이 막힌다. 대신 이미지가 file capability에 기대는 경우(앞의 `setcap` 방식)도 같이 막히니, 둘 중 무엇을 쓸지 정해야 한다.
+
+API 서버는 모순된 조합을 거절한다.
+
+```bash
+# privileged와 allowPrivilegeEscalation=false를 함께 쓰면
+kubectl apply -f bad2.yaml --dry-run=server
+```
+
+```text
+The Pod "bad2" is invalid: spec.containers[0].securityContext: Invalid value: {...}: cannot set `allowPrivilegeEscalation` to false and `privileged` to true
+```
+
+(오류 가운데의 구조체 덤프는 줄였다.) `CAP_SYS_ADMIN`을 add하면서 false를 주는 조합은 API가 받아 준다. 하지만 쿠버네티스 문서는 privileged이거나 `CAP_SYS_ADMIN`이 있으면 권한 상승이 항상 허용된 것으로 본다고 적는다. `SYS_ADMIN`을 더한 순간 이 줄은 의미가 없다고 생각하는 게 안전하다.
+
+## 쓰기를 막고 쓸 곳만 연다: readOnlyRootFilesystem
+
+컨테이너의 루트 파일 시스템은 이미지 레이어 위에 쓰기 층을 얹은 것이다. 공격자가 들어오면 여기에 도구를 내려받고, 설정 파일을 바꾸고, 웹 셸을 심는다. 읽기 전용으로 마운트하면 그게 안 된다. 같은 상황을 mount namespace에서 만들어 봤다.
+
+```bash
+# 새 mount namespace에서 rootfs를 읽기 전용으로 다시 마운트하고 /tmp만 tmpfs로 연다
+sudo unshare --mount bash -c '
+  R=/usr/local/r8demo/rootfs
+  mount --bind $R $R && mount -o remount,bind,ro $R
+  mount -t tmpfs -o size=16m tmp $R/tmp
+  touch $R/app/cache.db; echo "exit=$?"
+  touch $R/tmp/cache.db && echo "tmp write ok"
+  findmnt -o TARGET,FSTYPE,VFS-OPTIONS $R; findmnt -no TARGET,FSTYPE,VFS-OPTIONS $R/tmp'
+```
+
+```text
+touch: cannot touch '/usr/local/r8demo/rootfs/app/cache.db': Read-only file system
+exit=1
+tmp write ok
+TARGET                   FSTYPE VFS-OPTIONS
+/usr/local/r8demo/rootfs ext4   ro,relatime
+/usr/local/r8demo/rootfs/tmp tmpfs  rw,relatime
+```
+
+쿠버네티스에서 tmpfs 자리는 `emptyDir`가 맡는다. 맨 앞의 nginx 오류는 `/var/cache/nginx`에 쓰려다 난 것이니 거기와 `/tmp`(nginx-unprivileged 이미지는 PID 파일을 여기 둔다)에 emptyDir를 붙이면 된다. 어디에 쓰는지 모르겠으면 쓰기 층이 있는 상태로 한 번 띄워서 `kubectl exec <pod> -- find / -xdev -newer /etc/hostname -type f 2>/dev/null`로 시작 후 새로 생긴 파일을 찾는다. 로그를 파일로 쓰는 앱이라면 stdout으로 바꾸는 게 먼저다. emptyDir에는 `sizeLimit`를 걸어 둔다. 안 걸면 공격자나 버그가 노드 디스크를 채워 같은 노드의 다른 Pod까지 축출된다.
+
+## 시스템 콜을 거르는 seccomp
+
+capability가 "무엇을 할 권한"이라면 seccomp는 "어떤 시스템 콜을 부를 수 있나"다. 프로세스가 BPF 필터를 커널에 올려 두면, 이후 모든 시스템 콜마다 커널이 필터를 돌려 허용, 오류 반환, 프로세스 종료 중 하나를 정한다. 필터는 자식에게 상속되고 뗄 수 없다.
+
+`unshare(2)` 하나를 막는 필터를 걸고 프로그램을 실행하는 30줄짜리 C 프로그램을 만들었다. 필터는 아키텍처를 확인하고, 시스템 콜 번호가 `unshare`면 막고, 나머지는 허용한다.
+
+```c
+struct sock_filter f[] = {
+  BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+  BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+  BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+  BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+  BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_unshare, 0, 1),
+  BPF_STMT(BPF_RET | BPF_K, deny),          /* EPERM 또는 KILL */
+  BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+};
+prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);   /* root가 아니면 이게 먼저 있어야 필터를 걸 수 있다 */
+prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog);
+execvp(argv[2], argv + 2);
+```
+
+```bash
+# 필터 없이, EPERM 필터로, KILL 필터로 user namespace를 만들어 본다
+unshare --user --map-root-user id; echo "exit=$?"
+./seccomp-run errno unshare --user --map-root-user id; echo "exit=$?"
+bash -c './seccomp-run kill unshare --user --map-root-user id; echo "exit=$?"'
+./seccomp-run errno grep -E 'NoNewPrivs|Seccomp' /proc/self/status
+```
+
+```text
+uid=0(root) gid=0(root) groups=0(root)
+exit=0
+unshare: unshare failed: Operation not permitted
+exit=1
+bash: line 1: 19484 Bad system call         ./seccomp-run kill unshare --user --map-root-user id
+exit=159
+NoNewPrivs:	1
+Seccomp:	2
+Seccomp_filters:	1
+```
+
+`Seccomp: 2`가 필터 모드라는 뜻이다. 막힌 시스템 콜은 앱 입장에서 두 얼굴로 나타난다. EPERM이면 "Operation not permitted"라는, 권한 문제처럼 보이는 오류다. KILL이면 SIGSYS로 죽어서 종료 코드 159(128+31)와 "Bad system call"이 남는다. 둘 다 보통 앱 로그만으로는 seccomp 때문인지 모른다. `strace -f -e trace=unshare`로 보면 `= -1 EPERM`이 바로 보인다. 아래 그림은 필터가 시스템 콜 하나하나를 판정하는 순서를 따라간다.
+
+<AlgoTrace
+  caption="RuntimeDefault 같은 허용 목록 필터가 시스템 콜을 판정한다"
+  cells={["read", "openat", "mmap", "unshare", "mount", "keyctl", "write"]}
+  memoryLabel="판정"
+  steps={[
+    { pointer: 0, memory: ["read: ALLOW"], caption: "평범한 읽기는 허용 목록에 있다." },
+    { pointer: 1, memory: ["read: ALLOW", "openat: ALLOW"], caption: "파일 열기도 허용이다. 파일 권한 검사는 그다음 커널이 따로 한다." },
+    { pointer: 2, memory: ["read: ALLOW", "openat: ALLOW", "mmap: ALLOW"], caption: "메모리 매핑도 허용. 대부분의 앱은 여기까지로 충분하다." },
+    { pointer: 3, memory: ["openat: ALLOW", "mmap: ALLOW", "unshare: EPERM"], caption: "새 namespace를 만드는 unshare는 CAP_SYS_ADMIN이 없으면 막힌다. 컨테이너 탈출 공격의 흔한 첫 단계다." },
+    { pointer: 4, memory: ["mmap: ALLOW", "unshare: EPERM", "mount: EPERM"], caption: "mount도 같은 조건으로 막힌다." },
+    { pointer: 5, memory: ["unshare: EPERM", "mount: EPERM", "keyctl: EPERM"], caption: "커널 키링은 컨테이너끼리 분리되지 않아서 통째로 막는다." },
+    { pointer: 6, found: [6], memory: ["mount: EPERM", "keyctl: EPERM", "write: ALLOW"], caption: "앱은 계속 돈다. 막힌 호출만 오류를 받는다." },
+  ]}
+/>
+
+쿠버네티스에서 `seccompProfile.type`은 셋이다. `RuntimeDefault`는 containerd·CRI-O가 가진 기본 프로필(Docker의 기본 프로필과 같은 계열로, 수십 개 시스템 콜을 막는다), `Localhost`는 노드의 `/var/lib/kubelet/seccomp/` 아래 파일, `Unconfined`는 필터 없음이다. 중요한 사실 하나는 아무것도 안 적으면 쿠버네티스 기본은 `Unconfined`라는 것이다. Docker로 그냥 띄울 때보다 느슨하다. kubelet 설정의 `seccompDefault: true`(1.27 GA)를 켜면 노드의 모든 Pod 기본이 RuntimeDefault가 된다.
+
+API 서버는 형식 오류를 미리 잡는다.
+
+```bash
+# Localhost인데 파일 경로를 안 적고, runAsUser를 -1로 적은 Pod
+kubectl apply -f bad-sc.yaml --dry-run=server
+```
+
+```text
+The Pod "bad-sc" is invalid: 
+* spec.containers[0].securityContext.runAsUser: Invalid value: -1: must be between 0 and 2147483647, inclusive
+* spec.containers[0].securityContext.appArmorProfile.localhostProfile: Required value: must be set when AppArmor type is Localhost
+* spec.securityContext.seccompProfile.localhostProfile: Required value: must be set when seccomp type is Localhost
+```
+
+`Localhost` 프로필 파일이 노드에 없는 경우는 API가 알 수 없다. 그건 kubelet이 컨테이너를 만들 때 `CreateContainerError`로 드러난다. 프로필을 노드마다 배포해야 해서, 직접 만든 프로필은 Security Profiles Operator 같은 도구로 나눠 주는 경우가 많다. 앱에 맞는 좁은 프로필을 만들 때는 `SCMP_ACT_LOG`로 먼저 돌려 감사 로그에 남는 시스템 콜을 모은 뒤 허용 목록을 만든다.
+
+AppArmor는 Ubuntu 노드에서 기본으로 켜져 있는 LSM이다. 1.30부터 annotation 대신 `appArmorProfile` 필드를 쓴다. 옛 annotation을 쓰면 API 서버가 경고하고 필드로 옮겨 준다.
+
+```text
+Warning: metadata.annotations[container.apparmor.security.beta.kubernetes.io/app]: deprecated since v1.30; use the "appArmorProfile" field instead
+pod/aa-old created (server dry run)
+{"appArmorProfile":{"type":"RuntimeDefault"}}
+```
+
+이 실습 VM은 커널에 AppArmor 모듈이 없어서 프로필 동작 자체는 재현하지 못했다. RHEL 계열 노드는 AppArmor 대신 SELinux를 쓰고, 그때는 `seLinuxOptions`가 같은 자리다.
+
+## 누구로 돌고 어떤 그룹으로 쓰나: runAsNonRoot와 fsGroup
+
+`runAsNonRoot: true`는 커널 기능이 아니라 kubelet의 검사다. 컨테이너를 만들기 직전에 실제 실행 UID를 본다. `runAsUser`가 있으면 그 값을, 없으면 이미지의 `USER`를 본다. 이 검사가 실패하는 모습은 실제 노드에서만 나와서 형식만 옮긴다(예시).
+
+```text
+Warning  Failed  12s  kubelet  Error: container has runAsNonRoot and image will run as root (pod: "web-7d9c_shop(1c0e…)", container: nginx)
+Warning  Failed  9s   kubelet  Error: container has runAsNonRoot and image has non-numeric user (nginx), cannot verify user is non-root (pod: "web-6f4b_shop(9a1d…)", container: nginx)
+```
+
+두 번째가 흔한 함정이다. 이미지가 `USER nginx`처럼 이름으로 적혀 있으면 kubelet은 그 이름이 몇 번인지 모른다(이미지 안의 `/etc/passwd`를 열어 보지 않는다). `runAsUser: 101`처럼 숫자를 적어 주면 풀린다. Pod는 `CreateContainerConfigError` 상태로 멈추고 재시작도 안 되니 이벤트를 봐야 안다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="runAsNonRoot는 kubelet이 컨테이너를 만들기 직전에 막는다"
+  zones={[
+    { id: "node", label: "node-1", x: 120, y: 6, w: 274, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "reg", label: "registry", sub: "USER nginx", x: 56, y: 70, icon: "internet", w: 96 },
+    { id: "kubelet", label: "kubelet", sub: "SC 검사", x: 200, y: 70, icon: "server", w: 100 },
+    { id: "cri", label: "containerd", sub: "runc", x: 320, y: 70, icon: "gateway", w: 108 },
+    { id: "c1", label: "nginx", sub: "UID 101", x: 320, y: 230, icon: "container", w: 104 },
+    { id: "ev", label: "Event", sub: "Failed", x: 200, y: 230, icon: "lock", w: 100 },
+  ]}
+  links={[
+    { from: "reg", to: "kubelet", label: "pull" },
+    { from: "kubelet", to: "cri" },
+    { from: "cri", to: "c1" },
+    { from: "kubelet", to: "ev", dashed: true },
+  ]}
+  steps={[
+    { path: ["reg", "kubelet"], packet: "image", title: "이미지를 받고 USER를 읽는다", detail: "이미지 설정의 USER가 nginx라는 이름이다. runAsUser는 비어 있다." },
+    { path: ["kubelet", "ev"], packet: "검사", blocked: true, title: "숫자를 몰라서 거부한다", detail: "이름만으로는 root인지 확인할 수 없다. 컨테이너를 만들지 않고 이벤트만 남긴다.", payload: "image has non-numeric user (nginx), cannot verify user is non-root" },
+    { path: ["kubelet", "cri", "c1"], packet: "uid=101", title: "runAsUser: 101을 적으면", detail: "kubelet 검사를 통과한다. runc가 그룹과 UID를 바꾸고 capability를 정리한 뒤 no_new_privs와 seccomp 필터를 걸고 exec한다." },
+    { path: ["c1"], highlight: ["node"], title: "정해진 신원으로만 돈다", detail: "이후 파일 권한 검사는 UID 101과 그룹 목록으로 한다. 볼륨을 쓰려면 그룹이 맞아야 한다." },
+  ]}
+/>
+
+UID를 root가 아닌 값으로 바꾸면 다음 문제는 볼륨이다. PVC를 붙였더니 `Permission denied`가 난다. 볼륨 디렉터리의 주인은 root인데 프로세스는 101이기 때문이다. `fsGroup`이 이걸 푼다. kubelet이 볼륨을 마운트할 때 그 GID로 그룹을 바꾸고 setgid 비트를 켠 뒤, 컨테이너 프로세스의 보조 그룹에 그 GID를 넣는다. 리눅스에서 똑같이 해 봤다.
+
+```bash
+# 주인이 root인 디렉터리에 UID 1000이 쓰려 한다
+setpriv --reuid=1000 --regid=1000 --clear-groups touch vol/a.txt
+
+# fsGroup이 하는 일: 그룹을 2000으로, setgid 비트를 켠다
+sudo chgrp 2000 vol && sudo chmod 2775 vol && ls -ld vol
+
+# 보조 그룹 없이, 보조 그룹 2000과 함께
+setpriv --reuid=1000 --regid=1000 --clear-groups touch vol/b.txt
+setpriv --reuid=1000 --regid=3000 --groups=2000 bash -c 'id; touch vol/c.txt'
+ls -ln vol
+```
+
+```text
+touch: cannot touch 'vol/a.txt': Permission denied
+drwxrwsr-x 2 root 2000 4096 Oct 21 00:58 vol
+touch: cannot touch 'vol/b.txt': Permission denied
+uid=1000(ubuntu) gid=3000 groups=3000,2000
+total 0
+-rw-r--r-- 1 1000 2000 0 Oct 21 00:58 c.txt
+```
+
+보조 그룹 2000이 있어야 쓸 수 있고, 새 파일은 프로세스의 기본 그룹(3000)이 아니라 디렉터리의 그룹(2000)을 물려받았다. setgid 비트 덕분이다. 같은 fsGroup을 쓰는 다른 Pod도 이 파일을 읽을 수 있다.
+
+fsGroup에는 비용이 있다. kubelet은 기본으로 마운트할 때마다 볼륨 전체를 재귀로 chown·chmod한다. 파일이 수백만 개인 볼륨이면 Pod 시작이 몇 분씩 걸린다. `fsGroupChangePolicy: OnRootMismatch`를 주면 볼륨 루트의 주인과 권한이 이미 맞을 때 건너뛴다. 또 모든 볼륨에 적용되는 건 아니다. hostPath는 건드리지 않고, NFS 같은 CSI 볼륨은 드라이버의 `fsGroupPolicy`가 정한다.
+
+## 다 넣은 매니페스트
+
+지금까지의 설정을 nginx 하나에 다 넣으면 이렇다. 이 Deployment는 `restricted` 수준을 강제하는 네임스페이스에서 그대로 통과했다.
+
+```yaml
+spec:
+  automountServiceAccountToken: false
+  securityContext:                       # Pod 수준
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 2000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: nginx
+    image: nginxinc/nginx-unprivileged:1.27   # 8080에서 듣는 이미지
+    ports:
+    - containerPort: 8080
+    securityContext:                     # 컨테이너 수준
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+      appArmorProfile:
+        type: RuntimeDefault
+    volumeMounts:
+    - {name: tmp, mountPath: /tmp}
+    - {name: cache, mountPath: /var/cache/nginx}
+  volumes:
+  - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+  - {name: cache, emptyDir: {}}
+```
+
+```text
+deployment.apps/web created
+NAME                   READY   STATUS    RESTARTS   AGE
+web-66bbd9d888-gmsp2   1/1     Running   0          2s
+```
+
+(kwok의 Running은 진짜 컨테이너가 아니라 API 검증을 통과했다는 뜻이다.) 이 설정이 실제로 무엇을 막는지, 앱이 뚫렸다고 가정하고 공격자가 시도할 일을 따라가 보자.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="앱 취약점으로 셸을 얻은 뒤의 시도들이 하나씩 막힌다"
+  zones={[
+    { id: "ctr", label: "nginx 컨테이너 (UID 101)", x: 110, y: 6, w: 284, h: 210, tone: "private" },
+    { id: "host", label: "노드 커널", x: 110, y: 226, w: 284, h: 88, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "atk", label: "attacker", sub: "RCE", x: 50, y: 110, icon: "internet", w: 90 },
+    { id: "app", label: "app shell", sub: "UID 101", x: 190, y: 60, icon: "container", w: 104 },
+    { id: "fs", label: "rootfs", sub: "ro", x: 320, y: 60, icon: "db", w: 96 },
+    { id: "suid", label: "su·ping", sub: "setuid", x: 190, y: 170, icon: "lock", w: 100 },
+    { id: "ns", label: "unshare", sub: "mount", x: 320, y: 170, icon: "firewall", w: 96 },
+    { id: "kernel", label: "kernel", sub: "syscall", x: 252, y: 280, icon: "server", w: 104 },
+  ]}
+  links={[
+    { from: "atk", to: "app" },
+    { from: "app", to: "fs" },
+    { from: "app", to: "suid" },
+    { from: "app", to: "ns" },
+    { from: "ns", to: "kernel" },
+  ]}
+  steps={[
+    { path: ["atk", "app"], packet: "RCE", title: "셸을 얻었다", detail: "앱 취약점으로 컨테이너 안에서 명령을 실행한다. UID는 101이고 capability는 하나도 없다." },
+    { path: ["app", "fs"], packet: "wget", blocked: true, title: "도구를 내려받을 곳이 없다", detail: "루트 파일 시스템이 읽기 전용이다. /tmp는 64Mi emptyDir라 크게 쌓지 못한다.", payload: "Read-only file system" },
+    { path: ["app", "suid"], packet: "exec", blocked: true, title: "setuid로 root가 되지 못한다", detail: "no_new_privs가 켜져 있어 setuid 비트가 무시된다. euid는 101 그대로다." },
+    { path: ["app", "ns", "kernel"], packet: "unshare", blocked: true, title: "새 namespace를 못 만든다", detail: "seccomp RuntimeDefault가 unshare와 mount를 EPERM으로 돌려준다. 컨테이너 탈출 기법의 첫 단계가 막힌다.", payload: "unshare failed: Operation not permitted" },
+    { path: ["app"], highlight: ["ctr"], title: "남은 것은 앱 자신의 권한", detail: "토큰도 마운트하지 않았으니 API 서버도 못 부른다. 공격자가 쓸 수 있는 건 앱이 원래 할 수 있던 일뿐이다." },
+  ]}
+/>
+
+## 설정을 넣었더니 앱이 깨질 때
+
+현장에서 securityContext를 조일 때 깨지는 모양은 몇 가지로 정해져 있다. 증상으로 원인을 고른다.
+
+`Read-only file system`이 로그에 찍히고 죽는다. readOnlyRootFilesystem이다. 오류에 찍힌 경로에 emptyDir를 붙인다. 경로가 여러 개면 앞에서 쓴 `find -newer` 방법으로 한 번에 찾는다.
+
+Pod가 `CreateContainerConfigError`에서 멈춘다. runAsNonRoot 검사다. `kubectl describe pod`의 이벤트에서 "will run as root"인지 "non-numeric user"인지 보고, 숫자 `runAsUser`를 넣거나 non-root 이미지로 바꾼다.
+
+`Permission denied`가 볼륨 경로에서 난다. UID를 바꾼 뒤 흔하다. `fsGroup`을 넣고, 볼륨이 커서 시작이 느려지면 `OnRootMismatch`를 쓴다. hostPath라면 fsGroup이 안 먹으니 노드 쪽 권한을 맞춘다.
+
+`Operation not permitted`가 앱 기능 일부에서만 난다. capability나 seccomp다. 무엇이 막혔는지 모르면 같은 이미지를 로컬에서 `strace -f`로 돌려 `EPERM`을 돌려받은 시스템 콜을 찾는다. 시스템 콜이면 seccomp, 시스템 콜은 허용인데 권한이 없으면 capability다. 필요한 것만 `add`로 되돌린다. 이때 "일단 privileged: true로" 푸는 것이 가장 흔하고 가장 나쁜 실수다. privileged는 모든 capability, 모든 장치, seccomp·AppArmor 해제를 한꺼번에 준다. 사실상 노드 root다.
+
+종료 코드 159, 로그 없이 죽는다. seccomp KILL이다. 노드의 감사 로그(`dmesg`나 auditd의 `type=SECCOMP`)에 시스템 콜 번호가 남는다.
+
+## 커널에게 덜 요청하는 프로세스
+
+securityContext의 각 줄은 커널 기능 하나씩이다. UID를 바꾸고(runAsUser), root가 아니면 시작을 막고(runAsNonRoot), capability를 비우고(drop ALL), exec로 권한을 올리지 못하게 하고(no_new_privs), 루트 파일 시스템을 읽기 전용으로 두고, 위험한 시스템 콜을 거른다(seccomp). 앱이 뚫렸을 때 공격자가 할 수 있는 일을 앱이 원래 하던 일로 줄이는 것이 목표다. 이 설정들을 사람이 매번 기억하게 두지 않고 네임스페이스 단위로 강제하는 방법은 [Pod Security Admission](/posts/k8s-pod-security-admission)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 컨테이너를 root로 돌리면 왜 위험한가요? 컨테이너 안의 root는 격리돼 있지 않나요?
+
+user namespace를 쓰지 않는 한 컨테이너 안의 UID 0은 노드의 UID 0과 같은 숫자다. 격리는 namespace, capability, seccomp 같은 여러 겹이 만드는 것이라, 커널 취약점이나 잘못 마운트된 hostPath, 남아 있는 capability 하나로 노드 root가 될 수 있다. 런타임 기본으로도 14개 capability가 남는다. 그래서 non-root UID, drop ALL, seccomp를 함께 건다.
+
+### allowPrivilegeEscalation: false는 정확히 무엇을 하나요?
+
+프로세스에 `no_new_privs` 비트를 켠다. 이후 exec하는 setuid 바이너리와 file capability가 권한을 올리지 못한다. 실습에서 setuid root 프로그램이 비트 없이는 euid 0, 비트를 켜면 euid 1000으로 돌았다. privileged와 함께 false를 주면 API가 거절하고, `CAP_SYS_ADMIN`이 있으면 의미가 없어진다.
+
+### non-root 컨테이너에 capabilities.add로 NET_BIND_SERVICE를 줬는데 80번 포트가 안 열립니다. 왜죠?
+
+root가 아닌 프로세스는 exec할 때 capability가 사라지고, 살아남으려면 ambient 집합이나 실행 파일의 file capability가 필요하다. 컨테이너 런타임은 add를 ambient에 넣지 않아서 non-root에게는 효과가 없다. 1024 이상 포트를 쓰고 Service에서 포트를 바꾸거나, 이미지 빌드 때 setcap을 걸거나, `ip_unprivileged_port_start` sysctl을 낮춘다.
+
+### seccomp RuntimeDefault를 꼭 명시해야 하나요?
+
+쿠버네티스는 아무것도 안 적으면 Unconfined가 기본이라 명시해야 한다. kubelet의 `seccompDefault: true`로 노드 기본을 바꿀 수도 있다. RuntimeDefault는 unshare, mount, keyctl처럼 컨테이너 탈출에 쓰이는 시스템 콜을 막고 일반 앱에는 거의 영향이 없다. 막힌 호출은 EPERM이나 SIGSYS(종료 코드 159)로 나타나니 strace로 확인한다.
+
+### readOnlyRootFilesystem을 켜면 앱이 쓸 곳은 어떻게 주나요?
+
+쓰는 경로에만 emptyDir를 붙인다. nginx라면 `/var/cache/nginx`와 `/tmp`다. 로그는 파일 대신 stdout으로 보내고, emptyDir에는 sizeLimit을 걸어 노드 디스크를 채우지 못하게 한다. 이렇게 하면 공격자가 도구를 내려받거나 설정을 바꾸는 일이 어려워진다.
+
+### fsGroup은 무엇이고, 큰 볼륨에서 생기는 문제는요?
+
+kubelet이 볼륨의 그룹을 그 GID로 바꾸고 setgid 비트를 켠 뒤, 컨테이너 프로세스의 보조 그룹에 그 GID를 넣는다. 그래서 non-root 프로세스도 볼륨에 쓸 수 있고 새 파일이 같은 그룹을 물려받는다. 기본으로 마운트마다 재귀 chown을 해서 파일이 많으면 시작이 몇 분씩 걸리고, `fsGroupChangePolicy: OnRootMismatch`로 줄인다. hostPath에는 적용되지 않는다.
+
+### privileged: true와 capabilities.add: [SYS_ADMIN]은 어떻게 다른가요?
+
+privileged는 모든 capability에 더해 호스트 장치 접근, seccomp와 AppArmor 해제까지 준다. SYS_ADMIN은 capability 하나지만 mount 등 범위가 너무 넓어 거의 root와 같다. 둘 다 노드 탈출로 가는 길이 넓으니 꼭 필요하면 CNI나 CSI 같은 시스템 컴포넌트에만, 별도 네임스페이스에서 쓰고 PSA로 다른 곳에는 막는다.

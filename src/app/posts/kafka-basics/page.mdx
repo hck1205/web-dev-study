@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kafka-basics");
+
+포인트 적립이 밀린다는 알림이 왔다. 컨슈머 랙 그래프가 계속 오른다. 처리 서버를 3대에서 6대로 늘렸는데 랙은 그대로다. 새로 띄운 3대의 로그를 보니 메시지를 하나도 받지 않고 놀고 있다. 토픽의 파티션이 3개였기 때문이다.
+
+Kafka는 이런 식으로 구조를 모르면 숫자를 바꿔도 아무 일이 안 생긴다. 이 글은 Kafka를 처음 운영할 때 알아야 하는 것들을 실제 출력으로 따라간다. 파티션과 오프셋, 소비자 그룹과 리밸런싱, 키별 순서, 보관과 컴팩션, 복제와 `acks`, 그리고 랙을 읽는 법이다. 같은 컴퓨터에 KRaft 모드 브로커 세 대를 띄워서 돌렸다. Ubuntu 24.04, OpenJDK 21, Apache Kafka 3.9.1이다. Kafka 4.0부터는 ZooKeeper 모드가 빠지고 KRaft만 남았으니 새로 시작한다면 KRaft로 간다.
+
+이 주제의 다른 글: 큐와 토픽의 차이, 소비자 그룹이라는 개념 자체는 [발행·구독](/posts/pub-sub)에, ack와 재전달은 [메시지 큐 기초](/posts/message-queue-basics)에 있다. Kafka 위에 무엇을 이벤트로 올릴지는 [이벤트 기반 아키텍처](/posts/event-driven-architecture), 멱등 프로듀서와 트랜잭션으로 어디까지 중복을 막는지는 [메시지 전달 보장](/posts/message-delivery-semantics)에서 다룬다.
+
+## 토픽은 파티션 여러 개로 된 로그다
+
+Kafka의 토픽은 큐가 아니라 로그다. 메시지는 끝에 덧붙기만 하고, 읽었다고 지워지지 않는다. 각 메시지는 들어온 순서대로 0부터 붙는 번호를 받는데 이걸 오프셋(offset)이라고 한다. 컨슈머는 "어디까지 읽었다"를 오프셋으로 기억하고 다음 번호부터 읽는다.
+
+로그 하나로는 한 서버의 디스크와 한 컨슈머의 속도를 넘지 못한다. 그래서 토픽을 파티션 여러 개로 나눈다. 파티션 하나하나가 독립된 로그이고, 각자 자기 오프셋을 가진다. 파티션은 브로커 여러 대에 흩어져 놓인다.
+
+토픽을 만들고 상태를 본다.
+
+```bash
+# 파티션 3개, 복제본 3개, 최소 동기화 복제본 2개로 orders 토픽을 만든다
+kafka-topics.sh --bootstrap-server localhost:9091 --create --topic orders \
+  --partitions 3 --replication-factor 3 --config min.insync.replicas=2
+
+# 파티션마다 리더와 복제본이 어디 있는지 본다
+kafka-topics.sh --bootstrap-server localhost:9091 --describe --topic orders
+```
+
+```text
+Created topic orders.
+Topic: orders	TopicId: FrGCZua2R8SbMUTFftpRcw	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+	Topic: orders	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2,3	Elr: 	LastKnownElr: 
+	Topic: orders	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,3,1	Elr: 	LastKnownElr: 
+	Topic: orders	Partition: 2	Leader: 3	Replicas: 3,1,2	Isr: 3,1,2	Elr: 	LastKnownElr: 
+```
+
+한 줄이 파티션 하나다. `Leader`는 그 파티션의 읽기와 쓰기를 받는 브로커이고, `Replicas`는 사본을 가진 브로커 목록, `Isr`는 그중 리더를 제때 따라오고 있는 브로커 목록이다. 리더가 브로커 1, 2, 3에 하나씩 퍼져 있어서 쓰기 부하도 세 대가 나눠 받는다. `Elr`와 `LastKnownElr`는 KIP-966으로 들어온 리더 후보 목록인데, 이 클러스터에서는 그 기능을 켜지 않아 비어 있다.
+
+아래 그림에서 다음을 누르면 메시지 하나가 들어와서 컨슈머에게 가기까지가 나온다.
+
+<NetworkTopology
+  caption="파티션은 브로커에 흩어져 있고, 프로듀서는 리더에게 쓴다"
+  width={400}
+  height={270}
+  zones={[{ id: "cluster", label: "Kafka cluster", x: 120, y: 20, w: 160, h: 230, tone: "private" }]}
+  nodes={[
+    { id: "prod", label: "Order API", sub: "producer", x: 56, y: 140, icon: "server", w: 96 },
+    { id: "b1", label: "broker 1", sub: "P0 leader", x: 200, y: 72, icon: "db" },
+    { id: "b2", label: "broker 2", sub: "P1 leader", x: 200, y: 140, icon: "db" },
+    { id: "b3", label: "broker 3", sub: "P2 leader", x: 200, y: 208, icon: "db" },
+    { id: "ca", label: "points-a", sub: "P0, P1", x: 344, y: 100, icon: "container", w: 96 },
+    { id: "cb", label: "points-b", sub: "P2", x: 344, y: 190, icon: "container", w: 96 },
+  ]}
+  links={[
+    { from: "prod", to: "b1" },
+    { from: "prod", to: "b2" },
+    { from: "prod", to: "b3" },
+    { from: "b1", to: "ca" },
+    { from: "b2", to: "ca" },
+    { from: "b3", to: "cb" },
+  ]}
+  steps={[
+    { path: ["prod", "b1"], packet: "1042", title: "키로 파티션을 고른다", detail: "키 order-1042를 해시하면 파티션 0이 나온다. 프로듀서는 파티션 0의 리더인 브로커 1로 보낸다." },
+    { path: ["b1"], packet: "off 0", highlight: ["cluster"], title: "로그 끝에 붙는다", detail: "파티션 0의 다음 번호인 오프셋 0을 받는다. 같은 키의 다음 메시지는 오프셋 1, 2로 이어진다." },
+    { path: ["prod", "b2"], packet: "1043", title: "다른 키는 다른 파티션으로", detail: "order-1043은 파티션 1로 간다. 파티션끼리는 순서가 없다." },
+    { path: ["b1", "ca"], packet: "fetch", title: "컨슈머가 가져간다", detail: "브로커가 밀어 주지 않는다. 컨슈머가 자기가 맡은 파티션에서 다음 오프셋부터 끌어온다(pull)." },
+    { path: ["b3", "cb"], packet: "fetch", title: "파티션 하나는 그룹 안에서 한 명만 읽는다", detail: "points-b는 파티션 2만 맡는다. 파티션이 3개면 같은 그룹의 컨슈머는 3명까지만 일한다." },
+  ]}
+/>
+
+이 그림의 마지막 단계가 처음 장애의 답이다. 파티션 하나는 같은 소비자 그룹 안에서 컨슈머 한 명에게만 배정된다. 파티션이 3개인 토픽에 컨슈머를 6명 붙이면 3명은 받을 파티션이 없다. 병렬성의 상한은 파티션 수다.
+
+## 키가 파티션을 정하고, 순서는 파티션 안에서만 지킨다
+
+키를 붙여서 주문 이벤트 여섯 개를 넣고 어디로 갔는지 봤다.
+
+```bash
+# "키:값" 형식으로 한 줄씩 보낸다
+printf 'order-1042:{"type":"OrderPlaced","orderId":1042}\norder-1043:{"type":"OrderPlaced","orderId":1043}\norder-1042:{"type":"OrderPaid","orderId":1042}\norder-1044:{"type":"OrderPlaced","orderId":1044}\norder-1042:{"type":"OrderShipped","orderId":1042}\norder-1045:{"type":"OrderPlaced","orderId":1045}\n' \
+  | kafka-console-producer.sh --bootstrap-server localhost:9091 --topic orders \
+      --property parse.key=true --property key.separator=:
+
+# 처음부터 읽으며 파티션, 오프셋, 키를 함께 찍는다
+kafka-console-consumer.sh --bootstrap-server localhost:9091 --topic orders --from-beginning \
+  --property print.partition=true --property print.offset=true --property print.key=true \
+  --timeout-ms 8000
+```
+
+```text
+Partition:0	Offset:0	order-1042	{"type":"OrderPlaced","orderId":1042}
+Partition:0	Offset:1	order-1042	{"type":"OrderPaid","orderId":1042}
+Partition:0	Offset:2	order-1042	{"type":"OrderShipped","orderId":1042}
+Partition:0	Offset:3	order-1045	{"type":"OrderPlaced","orderId":1045}
+Partition:1	Offset:0	order-1043	{"type":"OrderPlaced","orderId":1043}
+Partition:1	Offset:1	order-1044	{"type":"OrderPlaced","orderId":1044}
+Processed a total of 6 messages
+```
+
+1042번 주문의 세 이벤트가 모두 파티션 0에, 넣은 순서대로 들어갔다. 같은 키는 같은 파티션으로 가고, 파티션 안의 순서는 지켜진다. 그래서 "같은 주문의 이벤트는 순서대로 처리돼야 한다"는 요구는 주문 ID를 키로 주는 것으로 해결한다. 반대로 토픽 전체의 순서는 없다. 1043번이 1042번보다 먼저 처리될 수 있다. 전체 순서가 꼭 필요하면 파티션을 하나로 두는 수밖에 없고, 그러면 병렬성도 하나다.
+
+파티션을 고르는 계산은 자바 클라이언트 기준으로 키 바이트의 murmur2 해시를 양수로 만든 뒤 파티션 수로 나눈 나머지다. 아래 함수의 해시 부분은 Kafka 소스의 `Utils.murmur2`를 그대로 옮겨 두었다. 마지막 한 줄만 채우면 된다. 테스트의 기대값은 위 실행에서 실제로 나온 파티션 번호다.
+
+<CodePlayground
+  caption="Kafka 기본 파티셔너가 키로 파티션을 고르는 계산"
+  functionName="assign"
+  initialCode={`function murmur2(bytes) {
+  const m = 0x5bd1e995, r = 24;
+  let h = (0x9747b28c ^ bytes.length) | 0;
+  const n4 = Math.floor(bytes.length / 4);
+  for (let i = 0; i < n4; i++) {
+    const j = i * 4;
+    let k = bytes[j] | (bytes[j + 1] << 8) | (bytes[j + 2] << 16) | (bytes[j + 3] << 24);
+    k = Math.imul(k, m); k ^= k >>> r; k = Math.imul(k, m);
+    h = Math.imul(h, m); h ^= k;
+  }
+  const rest = bytes.length % 4, base = bytes.length & ~3;
+  if (rest === 3) h ^= bytes[base + 2] << 16;
+  if (rest >= 2) h ^= bytes[base + 1] << 8;
+  if (rest >= 1) { h ^= bytes[base]; h = Math.imul(h, m); }
+  h ^= h >>> 13; h = Math.imul(h, m); h ^= h >>> 15;
+  return h;
+}
+
+function assign(keys, numPartitions) {
+  return keys.map((key) => {
+    const h = murmur2(new TextEncoder().encode(key));
+    // 할 일: 부호 비트를 지워 양수로 만든 뒤 파티션 수로 나눈 나머지
+    return 0;
+  });
+}`}
+  solution={`function murmur2(bytes) {
+  const m = 0x5bd1e995, r = 24;
+  let h = (0x9747b28c ^ bytes.length) | 0;
+  const n4 = Math.floor(bytes.length / 4);
+  for (let i = 0; i < n4; i++) {
+    const j = i * 4;
+    let k = bytes[j] | (bytes[j + 1] << 8) | (bytes[j + 2] << 16) | (bytes[j + 3] << 24);
+    k = Math.imul(k, m); k ^= k >>> r; k = Math.imul(k, m);
+    h = Math.imul(h, m); h ^= k;
+  }
+  const rest = bytes.length % 4, base = bytes.length & ~3;
+  if (rest === 3) h ^= bytes[base + 2] << 16;
+  if (rest >= 2) h ^= bytes[base + 1] << 8;
+  if (rest >= 1) { h ^= bytes[base]; h = Math.imul(h, m); }
+  h ^= h >>> 13; h = Math.imul(h, m); h ^= h >>> 15;
+  return h;
+}
+
+function assign(keys, numPartitions) {
+  return keys.map((key) => {
+    const h = murmur2(new TextEncoder().encode(key));
+    return (h & 0x7fffffff) % numPartitions;
+  });
+}`}
+  tests={[
+    { label: "파티션 3개: 실제 실행 결과", args: [["order-1042", "order-1043", "order-1044", "order-1045"], 3], expected: [0, 1, 1, 0] },
+    { label: "파티션을 4개로 늘리면", args: [["order-1042", "order-1043", "order-1044", "order-1045"], 4], expected: [2, 2, 1, 2] },
+    { label: "짧은 키", args: [["u1", "u2", "u3"], 3], expected: [1, 0, 1] },
+  ]}
+/>
+
+두 번째 테스트가 운영에서 자주 밟는 함정이다. 파티션 수가 바뀌면 나머지가 바뀌어 같은 키가 다른 파티션으로 간다. 실제로 파티션을 4개로 늘리고 1042번 주문의 이벤트를 하나 더 넣었다.
+
+```bash
+# 파티션을 3개에서 4개로 늘린다 (줄이는 건 안 된다)
+kafka-topics.sh --bootstrap-server localhost:9091 --alter --topic orders --partitions 4
+```
+
+```text
+Partition:0	Offset:0	order-1042	{"type":"OrderPlaced","orderId":1042}
+Partition:0	Offset:1	order-1042	{"type":"OrderPaid","orderId":1042}
+Partition:0	Offset:2	order-1042	{"type":"OrderShipped","orderId":1042}
+Partition:2	Offset:103	order-1042	{"type":"OrderDelivered","orderId":1042}
+```
+
+`OrderDelivered`만 파티션 2로 갔다. 파티션 0에 밀린 메시지가 남아 있었다면 배송 완료가 결제보다 먼저 처리될 수 있다. 그래서 키 순서가 중요한 토픽은 처음부터 파티션을 넉넉히 잡는다. 늘려야 한다면 생산을 잠깐 멈추고 기존 파티션의 랙이 0이 된 뒤에 늘리거나, 새 토픽을 만들어 옮긴다. 이 계산은 [일관된 해싱](/posts/consistent-hashing)을 쓰지 않는 단순한 나머지라서 파티션 하나만 늘려도 대부분의 키가 옮겨 간다.
+
+키가 없으면 어떻게 될까. 2.4 이후 자바 클라이언트는 키 없는 메시지를 한 파티션에 한 배치만큼 모았다가 다음 파티션으로 넘어가는 방식(sticky)으로 보낸다. 배치가 커져 효율은 좋지만 순서는 아무것도 보장하지 않는다. 키가 한쪽으로 쏠리는 것도 조심한다. 대형 판매자 하나의 ID를 키로 쓰면 그 판매자의 파티션 하나만 랙이 쌓인다.
+
+## 오프셋은 컨슈머가 남기는 책갈피다
+
+컨슈머는 어디까지 읽었는지를 브로커의 `__consumer_offsets`라는 내부 토픽에 커밋한다. 다음에 다시 뜨면 커밋한 오프셋부터 읽는다. 이 오프셋을 언제 커밋하느냐가 메시지를 잃을지 두 번 처리할지를 정한다.
+
+자바 컨슈머의 기본값은 자동 커밋(`enable.auto.commit=true`)이고, `poll()`을 부를 때 5초(`auto.commit.interval.ms`)가 지났으면 직전에 받아 간 위치를 커밋한다. 처리를 `poll()` 루프 안에서 끝내면 대개 괜찮지만, 받은 메시지를 다른 스레드로 넘기고 바로 다음 `poll()`을 부르면 처리 전에 커밋될 수 있다. 그래서 정확성이 중요하면 자동 커밋을 끄고 처리가 끝난 뒤 직접 커밋한다.
+
+아래 그림은 처리 후 커밋하는 컨슈머가 중간에 죽었을 때 무엇이 다시 오는지 보여 준다.
+
+<AlgoTrace
+  caption="처리하고 나서 커밋하면, 죽었을 때 커밋 뒤부터 다시 받는다"
+  cells={["off 100", "off 101", "off 102", "off 103", "off 104"]}
+  memoryLabel="커밋된 오프셋 / 처리한 것"
+  steps={[
+    { caption: "커밋된 위치는 100이다. 100부터 다섯 개를 받아 온다.", memory: ["커밋 100"] },
+    { pointer: 0, caption: "100을 처리했다. 포인트 410점 적립.", memory: ["커밋 100", "처리 100"] },
+    { pointer: 1, caption: "101도 처리했다.", memory: ["커밋 100", "처리 100", "처리 101"] },
+    { pointer: 2, caption: "102까지 처리하고 커밋한다. 다음에 읽을 위치인 103을 적는다.", memory: ["커밋 103", "처리 100~102"] },
+    { pointer: 3, caption: "103을 처리했는데, 커밋하기 전에 컨슈머가 죽는다.", memory: ["커밋 103", "처리 100~103"] },
+    { pointer: 3, found: [3, 4], caption: "새 컨슈머는 103부터 받는다. 103은 두 번 처리된다. 그래서 처리 쪽이 멱등해야 한다.", memory: ["커밋 103", "103 다시 받음"] },
+  ]}
+/>
+
+커밋을 처리보다 먼저 하면 반대가 된다. 죽었을 때 103은 커밋됐지만 처리되지 않았으니 잃는다. 앞이 "최소 한 번", 뒤가 "최대 한 번"이다. Kafka 소비자는 보통 앞을 고르고, 같은 메시지를 두 번 받아도 결과가 같게 만든다. 처리 결과와 오프셋을 한 트랜잭션에 묶는 방법은 [메시지 전달 보장](/posts/message-delivery-semantics)에서 다룬다.
+
+## 소비자 그룹과 리밸런싱
+
+같은 `group.id`로 붙은 컨슈머들이 소비자 그룹이다. 그룹 안에서는 파티션을 나눠 갖고, 그룹끼리는 서로 상관없이 같은 메시지를 각자 다 읽는다. 포인트 서비스와 알림 서비스가 그룹 이름만 다르게 쓰면 둘 다 모든 주문 이벤트를 받는다.
+
+`points` 그룹에 컨슈머 둘(`points-a`, `points-b`)을 붙인 상태를 봤다.
+
+```bash
+# 파티션별로 누가 맡았고 어디까지 읽었는지
+kafka-consumer-groups.sh --bootstrap-server localhost:9091 --describe --group points
+
+# 컨슈머마다 맡은 파티션 수
+kafka-consumer-groups.sh --bootstrap-server localhost:9091 --describe --group points --members
+
+# 그룹 상태와 코디네이터
+kafka-consumer-groups.sh --bootstrap-server localhost:9091 --describe --group points --state
+```
+
+```text
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                   HOST            CLIENT-ID
+points          orders          0          109             109             0               points-a-d1d42526-6c52-497e-b6b2-e7ec4d2b8571 /127.0.0.1      points-a
+points          orders          1          94              94              0               points-a-d1d42526-6c52-497e-b6b2-e7ec4d2b8571 /127.0.0.1      points-a
+points          orders          2          103             103             0               points-b-cb1bc349-aca9-4c3c-8d81-c7454c6bc8cd /127.0.0.1      points-b
+
+GROUP           CONSUMER-ID                                   HOST            CLIENT-ID       #PARTITIONS     
+points          points-a-d1d42526-6c52-497e-b6b2-e7ec4d2b8571 /127.0.0.1      points-a        2               
+points          points-b-cb1bc349-aca9-4c3c-8d81-c7454c6bc8cd /127.0.0.1      points-b        1               
+
+GROUP                     COORDINATOR (ID)          ASSIGNMENT-STRATEGY  STATE           #MEMBERS
+points                    localhost:9093  (3)       range                Stable          2
+```
+
+파티션 셋을 둘이 2:1로 나눠 가졌다. 그룹마다 코디네이터 브로커가 하나 정해지고(여기서는 브로커 3), 멤버가 들어오거나 나가면 코디네이터가 배정을 다시 한다. 이게 리밸런싱이다. 브로커 로그에 그 과정이 그대로 남는다.
+
+```text
+[2026-10-20 14:18:52,961] INFO [GroupCoordinator 3]: Preparing to rebalance group points in state PreparingRebalance with old generation 2 (__consumer_offsets-27) (reason: Adding new member points-b-cb1bc349-aca9-4c3c-8d81-c7454c6bc8cd with group instance id None; ...)
+[2026-10-20 14:18:52,962] INFO [GroupCoordinator 3]: Stabilized group points generation 3 (__consumer_offsets-27) with 1 members (kafka.coordinator.group.GroupCoordinator)
+[2026-10-20 14:18:53,155] INFO [GroupCoordinator 3]: Preparing to rebalance group points in state PreparingRebalance with old generation 3 (__consumer_offsets-27) (reason: Adding new member points-a-d1d42526-6c52-497e-b6b2-e7ec4d2b8571 with group instance id None; ...)
+[2026-10-20 14:18:56,012] INFO [GroupCoordinator 3]: Stabilized group points generation 4 (__consumer_offsets-27) with 2 members (kafka.coordinator.group.GroupCoordinator)
+[2026-10-20 14:19:17,599] INFO [GroupCoordinator 3]: Member MemberMetadata(memberId=points-a-d1d42526-..., groupInstanceId=None, clientId=points-a, clientHost=/127.0.0.1, sessionTimeoutMs=45000, rebalanceTimeoutMs=300000, supportedProtocols=List(range, cooperative-sticky)) has left group points through ...
+```
+
+`generation`은 배정을 다시 할 때마다 1씩 오른다. 두 번째 멤버가 들어온 14:18:53에서 안정된 14:18:56까지 약 3초 동안 이 그룹은 배정이 확정되지 않은 상태였다. 아래 그림에서 그 3초 사이에 무엇이 오가는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="새 컨슈머가 들어올 때의 리밸런싱 (기존 프로토콜, eager)"
+  actors={[
+    { id: "a", label: "points-a" },
+    { id: "coord", label: "코디네이터" },
+    { id: "b", label: "points-b" },
+  ]}
+  steps={[
+    { from: "a", to: "coord", label: "JoinGroup", title: "새 멤버가 들어온다", detail: "points-a가 그룹에 들어오겠다고 한다. 코디네이터는 그룹을 PreparingRebalance로 바꾼다." },
+    { from: "coord", to: "b", label: "REBALANCE_IN_PROGRESS", title: "기존 멤버에게 알린다", detail: "points-b는 다음 하트비트 응답에서 리밸런싱 중이라는 걸 안다." },
+    { from: "b", to: "b", label: "커밋 후 전부 반납", title: "eager 방식은 다 내려놓는다", detail: "range 배정기는 맡던 파티션을 모두 놓고 다시 받는다. 이 사이 그룹 전체가 읽기를 멈춘다." },
+    { from: "b", to: "coord", label: "JoinGroup", title: "기존 멤버도 다시 들어온다", detail: "max.poll.interval.ms(기본 5분) 안에 다시 들어오지 않으면 그 멤버는 빠진 채로 진행된다." },
+    { from: "coord", to: "b", label: "멤버 목록 (리더)", title: "한 컨슈머가 배정을 계산한다", detail: "배정 계산은 브로커가 아니라 그룹 리더로 뽑힌 컨슈머가 한다. 보통 먼저 있던 멤버가 리더가 된다." },
+    { from: "b", to: "coord", label: "SyncGroup + 배정", title: "배정 결과를 올린다", detail: "P0, P1은 points-a, P2는 points-b." },
+    { from: "coord", to: "a", label: "SyncGroup 응답: P0, P1", title: "각자 맡을 파티션을 받는다", detail: "generation 4로 안정된다. 각 컨슈머는 커밋된 오프셋부터 다시 읽는다." },
+  ]}
+/>
+
+세 번째 단계가 리밸런싱이 비싼 이유다. 기본 배정 방식(range, roundrobin)은 모두가 파티션을 내려놓고 다시 받는다. 그동안 그룹 전체가 멈춘다. `cooperative-sticky` 배정기를 쓰면 옮겨야 할 파티션만 놓고 나머지는 계속 읽는다. 콘솔 컨슈머 로그의 `supportedProtocols=List(range, cooperative-sticky)`는 3.x 자바 클라이언트의 기본 목록이다. 앞의 range가 우선이라 그대로 두면 eager로 동작한다. Kafka 4.0에서는 배정을 브로커가 맡는 새 그룹 프로토콜(`group.protocol=consumer`, KIP-848)이 정식이 됐고, 멤버 하나의 변화가 그룹 전체를 멈추지 않는다.
+
+리밸런싱을 부르는 원인은 셋이다. 컨슈머가 들어오거나 나가는 것, 하트비트가 `session.timeout.ms`(3.0부터 기본 45초) 동안 끊기는 것, 그리고 `poll()` 사이 간격이 `max.poll.interval.ms`(기본 5분)를 넘는 것이다. 마지막이 가장 흔하다. 한 번에 500개(`max.poll.records` 기본값)를 받아 하나에 1초씩 걸리는 외부 API를 부르면 500초가 걸리고, 5분을 넘긴 컨슈머는 그룹에서 쫓겨난다. 처리한 걸 커밋도 못 한 채 쫓겨나니 그 500개는 다른 컨슈머가 다시 처리하고, 그 컨슈머도 같은 이유로 쫓겨나는 리밸런싱 폭풍이 된다. `max.poll.records`를 줄이거나 처리 시간을 줄인다.
+
+쿠버네티스에서 배포할 때마다 Pod가 바뀌며 리밸런싱이 두 번씩 도는 것도 흔하다. 컨슈머에 `group.instance.id`를 고정으로 주는 정적 멤버십을 쓰면, 세션 타임아웃 안에 같은 ID로 돌아온 컨슈머에게는 리밸런싱 없이 원래 파티션을 돌려준다.
+
+## 랙은 남은 일의 양이다
+
+랙(lag)은 파티션의 끝 오프셋(`LOG-END-OFFSET`)과 그룹이 커밋한 오프셋(`CURRENT-OFFSET`)의 차이다. 컨슈머를 모두 멈춘 채 주문 300건을 넣고 같은 명령을 다시 냈다.
+
+```text
+Consumer group 'points' has no active members.
+
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+points          orders          0          4               109             105             -               -               -
+points          orders          1          2               94              92              -               -               -
+points          orders          2          0               103             103             -               -               -
+```
+
+한 줄을 조각으로 나눠 읽어 보자. 아래 조각을 누르면 각 열이 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="kafka-consumer-groups --describe의 한 줄"
+  separator=""
+  joiner="  "
+  params={[
+    { key: "group", value: "points", display: "points", title: "GROUP", description: "소비자 그룹 이름이다. 그룹마다 오프셋을 따로 기억하니, 같은 토픽이라도 그룹이 다르면 랙도 따로다." },
+    { key: "partition", value: "orders 0", display: "orders 0", title: "TOPIC과 PARTITION", description: "랙은 파티션 단위로 본다. 그룹 전체 랙의 합만 보면 한 파티션만 멈춘 경우를 놓친다." },
+    { key: "current", value: "4", display: "4", title: "CURRENT-OFFSET", description: "그룹이 마지막으로 커밋한 위치, 즉 다음에 읽을 오프셋이다. 컨슈머가 처리했어도 커밋하지 않았으면 오르지 않는다." },
+    { key: "end", value: "109", display: "109", title: "LOG-END-OFFSET", description: "그 파티션에 다음으로 붙을 오프셋이다. 프로듀서가 쓸 때마다 오른다." },
+    { key: "lag", value: "105", display: "LAG 105", title: "LAG", description: "끝 오프셋에서 커밋 오프셋을 뺀 값이다. 아직 처리되지 않은 메시지가 105개 있다는 뜻이다. 시간으로 몇 초 늦었는지는 알려 주지 않는다." },
+    { key: "consumer", value: "-", display: "-", title: "CONSUMER-ID", description: "이 파티션을 지금 맡은 컨슈머다. -이면 아무도 맡지 않았다. 그룹이 비어 있거나 배정이 아직 안 끝났다." },
+  ]}
+/>
+
+300건이 105, 92, 103으로 나뉘어 쌓였다. 키가 다양하면 이렇게 대체로 고르게 퍼진다. 운영에서 볼 것은 파티션별 랙의 모양이다. 모든 파티션의 랙이 같이 오르면 처리량이 부족한 것이니 컨슈머를 늘리거나(파티션 수까지) 처리를 빠르게 한다. 한 파티션만 오르면 그 파티션을 맡은 컨슈머가 멈췄거나, 특정 키가 몰린 것이다. `CONSUMER-ID`가 `-`이면 그룹에 아무도 없다.
+
+랙 숫자만으로는 얼마나 늦었는지 모른다. 초당 10건 들어오는 토픽의 랙 1000은 100초 지연이고, 초당 1만 건이면 0.1초다. 알람은 "가장 오래된 미처리 메시지가 몇 초 전 것인가"로 거는 편이 정확하다. Burrow 같은 도구나 컨슈머가 처리한 메시지의 타임스탬프와 현재 시각의 차이를 지표로 내보내 쓴다.
+
+장애를 고친 뒤 특정 위치부터 다시 읽어야 할 때는 오프셋을 옮긴다. 파티션 0의 오프셋을 5만큼 되돌렸다.
+
+```bash
+# 파티션 0만 5칸 뒤로. --dry-run으로 먼저 결과를 보고, --execute로 실제 반영한다
+kafka-consumer-groups.sh --bootstrap-server localhost:9091 --group points \
+  --topic orders:0 --reset-offsets --shift-by -5 --execute
+
+# 옮긴 결과를 확인한다
+kafka-consumer-groups.sh --bootstrap-server localhost:9091 --describe --group points
+```
+
+```text
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+points          orders          0          104             109             5               -               -               -
+points          orders          1          94              94              0               -               -               -
+points          orders          2          103             103             0               -               -               -
+```
+
+<Callout kind="warning">
+`--reset-offsets`는 그룹에 살아 있는 멤버가 있으면 거절된다. 컨슈머를 모두 내린 뒤 실행하고, 반드시 `--dry-run`으로 새 오프셋을 먼저 확인한다. `--to-earliest`를 잘못 쓰면 보관 기간 전체를 다시 처리하게 된다. 되돌리려면 실행 전에 `--describe`로 찍어 둔 `CURRENT-OFFSET`을 `--to-offset`으로 파티션마다 다시 지정한다.
+</Callout>
+
+## 리더 하나에 팔로워 둘, 그리고 acks
+
+파티션마다 리더 하나와 팔로워들이 있다. 프로듀서는 리더에게만 쓰고, 팔로워는 컨슈머처럼 리더에게서 가져와 자기 로그에 붙인다. 리더를 제때 따라오는 복제본 목록이 `Isr`다. `replica.lag.time.max.ms`(기본 30초) 동안 따라오지 못한 팔로워는 목록에서 빠진다.
+
+프로듀서의 `acks`는 "언제 성공으로 칠지"를 정한다. `acks=0`은 보내고 끝, `acks=1`은 리더가 자기 로그에 쓰면 성공, `acks=all`은 `Isr`의 모든 복제본이 받아야 성공이다. 3.0부터 자바 프로듀서의 기본값은 `acks=all`이다. 여기에 토픽 설정 `min.insync.replicas`가 짝을 이룬다. `Isr`가 이 숫자보다 작아지면 `acks=all` 쓰기를 거절한다.
+
+브로커 3을 내리고 토픽 상태를 다시 봤다.
+
+```bash
+# 동기화 복제본이 모자란 파티션만 골라 본다
+kafka-topics.sh --bootstrap-server localhost:9091 --describe --under-replicated-partitions
+```
+
+```text
+	Topic: orders	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2	Elr: 	LastKnownElr: 
+	Topic: orders	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,1	Elr: 	LastKnownElr: 
+	Topic: orders	Partition: 2	Leader: 1	Replicas: 3,1,2	Isr: 1,2	Elr: 	LastKnownElr: 
+	Topic: payments	Partition: 0	Leader: 1	Replicas: 3,1,2	Isr: 1,2	Elr: 	LastKnownElr: 
+```
+
+브로커 3이 리더였던 파티션 2의 리더가 1로 바뀌었고, 모든 파티션의 `Isr`에서 3이 빠졌다. `orders`는 `min.insync.replicas=2`라서 `Isr`가 둘인 지금도 `acks=all` 쓰기가 된다. 비교하려고 `min.insync.replicas=3`으로 만든 `payments` 토픽에 써 봤다.
+
+```bash
+# acks=all로 한 건 보낸다. 재시도와 타임아웃을 짧게 줘서 결과를 빨리 본다
+echo 'p-1:{"paymentId":1}' | kafka-console-producer.sh --bootstrap-server localhost:9091 \
+  --topic payments --property parse.key=true --property key.separator=: \
+  --producer-property acks=all --producer-property delivery.timeout.ms=10000 \
+  --producer-property request.timeout.ms=5000
+```
+
+```text
+[2026-10-20 14:20:19,967] WARN [Producer clientId=console-producer] Got error produce response with correlation id 6 on topic-partition payments-0, retrying (2 attempts left). Error: NOT_ENOUGH_REPLICAS (org.apache.kafka.clients.producer.internals.Sender)
+[2026-10-20 14:20:20,048] WARN [Producer clientId=console-producer] Got error produce response with correlation id 7 on topic-partition payments-0, retrying (1 attempts left). Error: NOT_ENOUGH_REPLICAS (org.apache.kafka.clients.producer.internals.Sender)
+[2026-10-20 14:20:20,262] WARN [Producer clientId=console-producer] Got error produce response with correlation id 8 on topic-partition payments-0, retrying (0 attempts left). Error: NOT_ENOUGH_REPLICAS (org.apache.kafka.clients.producer.internals.Sender)
+[2026-10-20 14:20:20,744] ERROR Error when sending message to topic payments with key: 3 bytes, value: 15 bytes with error: (org.apache.kafka.clients.producer.internals.ErrorLoggingCallback)
+org.apache.kafka.common.errors.NotEnoughReplicasException: Messages are rejected since there are fewer in-sync replicas than required.
+```
+
+거절됐다. 그런데 같은 토픽에 `acks=1`로 보내면 성공 응답이 온다. 여기서 하나 더 확인한 게 있다. `acks=1`로 성공한 메시지가 컨슈머에게 보이지 않았다.
+
+```bash
+# 파티션의 끝 오프셋(컨슈머가 읽을 수 있는 끝)을 본다
+kafka-get-offsets.sh --bootstrap-server localhost:9091 --topic payments
+```
+
+```text
+payments:0:0
+```
+
+리더는 메시지를 오프셋 0~3에 받아 두었지만(프로듀서 응답의 `baseOffset`이 3이었다), 컨슈머가 읽을 수 있는 경계인 하이 워터마크가 0에서 오르지 않았다. 브로커 3을 다시 올려 `Isr`가 1,2,3으로 돌아오자 `payments:0:4`가 되고 네 건이 한꺼번에 읽혔다. 직접 돌린 3.9.1에서는 `Isr`가 `min.insync.replicas`보다 작으면 `acks=1`로 받은 메시지도 노출을 미뤘다. KIP-966 작업과 함께 들어온 동작으로 보이고 오래된 버전에서는 다를 수 있으니, `acks=1`이면 "바로 보인다"는 기대로 설계하지 않는다.
+
+아래 그림이 `acks=all`로 쓴 메시지가 언제 성공이 되고 언제 거절되는지를 정리한다.
+
+<NetworkTopology
+  caption="acks=all: 동기화 복제본이 모두 받아야 성공, 모자라면 거절"
+  width={400}
+  height={250}
+  zones={[{ id: "isr", label: "Isr (min 2)", x: 130, y: 20, w: 140, h: 160, tone: "private" }]}
+  nodes={[
+    { id: "prod", label: "producer", sub: "acks=all", x: 60, y: 72, icon: "server", w: 96 },
+    { id: "l", label: "broker 1", sub: "leader", x: 200, y: 72, icon: "db" },
+    { id: "f2", label: "broker 2", sub: "follower", x: 200, y: 140, icon: "db" },
+    { id: "f3", label: "broker 3", sub: "down", x: 200, y: 220, icon: "db" },
+    { id: "cons", label: "consumer", x: 340, y: 72, icon: "container", w: 96 },
+  ]}
+  links={[
+    { from: "prod", to: "l" },
+    { from: "l", to: "f2" },
+    { from: "l", to: "f3", dashed: true },
+    { from: "l", to: "cons" },
+  ]}
+  steps={[
+    { path: ["prod", "l"], packet: "record", title: "리더가 받아 로그에 붙인다", detail: "아직 성공이 아니다. 하이 워터마크도 그대로다." },
+    { path: ["l", "f2"], packet: "fetch", title: "팔로워가 가져간다", detail: "팔로워가 다음 fetch에서 이 오프셋을 가져가면 리더는 그 팔로워가 받았다는 걸 안다." },
+    { path: ["l", "f3"], packet: "fetch", blocked: true, title: "브로커 3은 응답이 없다", detail: "30초 동안 따라오지 못해 Isr에서 빠졌다. 이제 Isr는 1, 2다." },
+    { path: ["l", "prod"], packet: "ack", highlight: ["isr"], title: "Isr 전원이 받았으니 성공", detail: "Isr 2개가 min.insync.replicas 2 이상이라 성공을 돌려준다. min이 3이었다면 NOT_ENOUGH_REPLICAS로 거절된다." },
+    { path: ["l", "cons"], packet: "HW", title: "이제 컨슈머에게 보인다", detail: "하이 워터마크가 올라가 컨슈머가 읽을 수 있다. 리더가 죽어도 브로커 2에 같은 메시지가 있다." },
+  ]}
+/>
+
+설정 조합은 대개 복제본 3, `min.insync.replicas=2`, `acks=all`이다. 브로커 하나가 죽어도 쓰기와 읽기가 계속되고, 성공 응답을 받은 메시지는 최소 두 대에 있다. 복제본 3에 `min.insync.replicas=3`이면 브로커 하나만 내려도(배포 중 재시작 포함) 쓰기가 멈춘다. `min.insync.replicas=1`이면 리더 혼자 받고 성공한 메시지가 리더와 함께 사라질 수 있다.
+
+리더가 죽었을 때 `Isr` 밖의 뒤처진 복제본을 리더로 올릴지는 `unclean.leader.election.enable`이 정한다. 기본값은 `false`이고 그대로 두는 게 맞다. `true`면 가용성은 얻지만 뒤처진 만큼의 메시지가 조용히 사라진다.
+
+## 얼마나 오래 둘까: 보관 기간과 컴팩션
+
+Kafka는 읽었다고 지우지 않으니 언제 지울지를 따로 정한다. 기본값은 시간 기준 7일이다.
+
+```bash
+# orders 토픽에 실제로 적용된 보관 관련 설정
+kafka-configs.sh --bootstrap-server localhost:9091 --entity-type topics --entity-name orders \
+  --describe --all | grep -E "retention|cleanup.policy|segment"
+```
+
+```text
+  cleanup.policy=delete sensitive=false synonyms={DEFAULT_CONFIG:log.cleanup.policy=delete}
+  delete.retention.ms=86400000 sensitive=false synonyms={DEFAULT_CONFIG:log.cleaner.delete.retention.ms=86400000}
+  retention.bytes=-1 sensitive=false synonyms={DEFAULT_CONFIG:log.retention.bytes=-1}
+  retention.ms=604800000 sensitive=false synonyms={}
+  segment.bytes=1073741824 sensitive=false synonyms={DEFAULT_CONFIG:log.segment.bytes=1073741824}
+  segment.ms=604800000 sensitive=false synonyms={}
+```
+
+`retention.ms=604800000`이 7일이고, `retention.bytes=-1`은 크기 제한이 없다는 뜻이다. 지우는 단위는 메시지가 아니라 세그먼트 파일이다. 파티션 로그는 1GiB(`segment.bytes`)나 7일(`segment.ms`)마다 새 파일로 넘어가고, 파일 안의 가장 새 메시지까지 보관 기간을 넘겨야 파일째 지운다. 그래서 7일 보관이라고 해도 실제로는 그보다 오래 남는 메시지가 있다. 개인정보 때문에 "정확히 7일 뒤 삭제"가 필요하면 보관 기간에 기대지 않는다.
+
+보관 기간은 재처리할 수 있는 시간이기도 하다. 컨슈머가 사흘 멈춰 있다가 돌아왔는데 보관이 하루면, 커밋된 오프셋이 이미 지워진 영역을 가리킨다. 그때 어디서 시작할지는 `auto.offset.reset`(기본 `latest`)이 정하고, 기본값이면 그 사이 메시지를 건너뛴다. 랙 알람의 기준은 보관 기간보다 훨씬 짧게 잡는다.
+
+다른 방식은 컴팩션이다. `cleanup.policy=compact`로 두면 키마다 마지막 값만 남기고 옛 값을 지운다. 값이 `null`인 메시지(툼스톤)는 그 키를 지우라는 표시다. 사용자 주소를 담는 토픽으로 해 봤다. 정리가 빨리 돌도록 세그먼트를 1초마다 넘기게 했다.
+
+```bash
+# 키마다 마지막 값만 남기는 토픽
+kafka-topics.sh --bootstrap-server localhost:9091 --create --topic user-address \
+  --partitions 1 --replication-factor 3 --config cleanup.policy=compact \
+  --config segment.ms=1000 --config min.cleanable.dirty.ratio=0.01 --config delete.retention.ms=1000
+
+# u1은 세 번 바뀌고, u2는 마지막에 지운다(NULL을 null 값으로 보낸다)
+printf 'u1:{"city":"Seoul"}\nu2:{"city":"Busan"}\nu1:{"city":"Incheon"}\nu3:{"city":"Daegu"}\nu1:{"city":"Suwon"}\nu2:NULL\n' \
+  | kafka-console-producer.sh --bootstrap-server localhost:9091 --topic user-address \
+      --property parse.key=true --property key.separator=: --property null.marker=NULL
+```
+
+넣은 직후와 정리가 돈 뒤(그 사이 u4, u5를 더 넣었다)를 비교했다.
+
+```text
+-- 넣은 직후
+Offset:0	u1	{"city":"Seoul"}
+Offset:1	u2	{"city":"Busan"}
+Offset:2	u1	{"city":"Incheon"}
+Offset:3	u3	{"city":"Daegu"}
+Offset:4	u1	{"city":"Suwon"}
+Offset:5	u2	null
+
+-- 컴팩션 뒤
+Offset:3	u3	{"city":"Daegu"}
+Offset:4	u1	{"city":"Suwon"}
+Offset:6	u4	{"city":"Jeju"}
+Offset:7	u5	{"city":"Ulsan"}
+```
+
+u1은 마지막 주소인 Suwon만 남았고, u2는 툼스톤과 함께 사라졌다. 오프셋 번호는 바뀌지 않고 빈자리만 생긴다. 지금 쓰고 있는 마지막 세그먼트는 정리하지 않으니 u4, u5를 넣어 세그먼트를 넘겨야 정리가 돌았다. 브로커의 `log-cleaner.log`에 `Beginning cleaning of log user-address-0`가 찍힌 게 그 순간이다.
+
+컴팩션 토픽은 "키별 최신 상태"를 담는 데 쓴다. 컨슈머가 처음부터 읽으면 전체 상태를 다시 만들 수 있다. Kafka 자신도 소비자 그룹의 오프셋을 컴팩션 토픽(`__consumer_offsets`)에 둔다. 툼스톤은 `delete.retention.ms`(기본 1일) 동안은 남아 있어서, 그 안에 읽는 컨슈머는 삭제를 볼 수 있다. 이 시간보다 오래 멈춰 있던 컨슈머는 삭제를 모른 채 옛 값을 계속 가진다.
+
+## 랙 알람이 울렸을 때 보는 순서
+
+처음의 장애로 돌아가자. 랙이 오른다는 알림을 받으면 이 순서로 좁힌다.
+
+1. `kafka-consumer-groups.sh --describe --group 그룹 --state`로 그룹이 `Stable`인지 본다. `PreparingRebalance`나 `CompletingRebalance`가 자주 보이면 리밸런싱 때문에 멈춰 있는 것이다.
+2. `--describe`로 파티션별 랙을 본다. 전부 오르면 처리량 부족, 하나만 오르면 그 파티션의 컨슈머나 키 쏠림이다. `CONSUMER-ID`가 비어 있는 파티션이 있는지도 본다.
+3. 컨슈머 수와 파티션 수를 비교한다. 컨슈머가 파티션보다 많으면 늘린 만큼 놀고 있다.
+4. 브로커 로그에서 그 그룹의 `Preparing to rebalance` 이유를 본다. `removing member ... on heartbeat expiration`이면 세션 타임아웃, 컨슈머 쪽 로그에 `poll timeout has expired`가 있으면 `max.poll.interval.ms` 초과다.
+5. 마지막으로 `--under-replicated-partitions`로 브로커 쪽 문제를 본다. 복제가 밀리면 하이 워터마크가 늦게 올라 컨슈머가 읽을 게 늦게 생긴다.
+
+처음 장애는 3번에서 끝난다. 파티션이 3개라 컨슈머 6대 중 3대는 놀았다. 파티션을 늘리면 키 순서 문제가 따라오니, 먼저 컨슈머 한 대의 처리량을 올렸다. 외부 API 호출을 묶어서 보내거나 컨슈머 안에서 키별로 나눠 병렬 처리하는 방법이 있다.
+
+## Kafka가 맞지 않는 곳
+
+Kafka는 대량의 이벤트를 오래 보관하고 여러 그룹이 각자 다시 읽는 데 강하다. 반대로 메시지 하나하나를 라우팅 규칙으로 나눠 보내고, 메시지마다 따로 ack하고, 우선순위나 지연 전달을 쓰는 작업 큐에는 불편하다. 파티션 하나에서 메시지 하나가 막히면 그 뒤가 다 기다리는 것도 작업 큐로 쓸 때 아프다. 그런 일은 [RabbitMQ](/posts/rabbitmq-basics)나 SQS가 단순하다. 하루 몇천 건이면 PostgreSQL 테이블 큐로도 충분하다.
+
+브로커를 세 대 이상 운영하고, 파티션 수를 미리 정하고, 복제와 디스크를 감시하는 비용도 있다. 매니지드 서비스(MSK, Confluent Cloud)를 써도 파티션, 키, 소비자 그룹 설계는 그대로 내 몫이다.
+
+## 파티션 수가 병렬성의 상한이다
+
+Kafka를 다룰 때 숫자 하나를 기억한다면 파티션 수다. 컨슈머를 늘려도 파티션 수를 넘으면 놀고, 파티션을 늘리면 키가 옮겨 가 순서가 흔들린다. 같은 키 안의 순서는 지키고 그 밖은 지키지 않는다. 오프셋을 처리 뒤에 커밋하면 죽었을 때 다시 받으니 처리를 멱등하게 만든다. 복제는 `acks=all`과 `min.insync.replicas=2`로 성공의 뜻을 정한다. 다음에는 이 위에서 중복을 어디까지 막을 수 있는지 [메시지 전달 보장](/posts/message-delivery-semantics)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 컨슈머를 늘렸는데 처리량이 늘지 않는다. 왜인가?
+
+같은 소비자 그룹 안에서 파티션 하나는 컨슈머 한 명에게만 배정되기 때문이다. 파티션 수보다 많은 컨슈머는 받을 파티션이 없어 논다. 파티션을 늘리거나 컨슈머 한 대의 처리량을 높여야 하는데, 파티션을 늘리면 키와 파티션의 대응이 바뀌어 키별 순서가 잠깐 깨질 수 있다.
+
+### Kafka는 메시지 순서를 어디까지 보장하나?
+
+파티션 안에서만 보장한다. 같은 키는 같은 파티션으로 가니 키별 순서는 지켜지고, 토픽 전체의 순서는 없다. 프로듀서 재시도로 순서가 바뀌는 건 멱등 프로듀서(3.0부터 기본으로 켜짐)가 막아 준다. 파티션 수를 바꾸면 같은 키가 다른 파티션으로 가서 순서가 깨질 수 있다.
+
+### 리밸런싱은 언제 일어나고 왜 문제가 되나?
+
+멤버가 들어오거나 나갈 때, 하트비트가 `session.timeout.ms` 동안 끊길 때, `poll()` 간격이 `max.poll.interval.ms`를 넘을 때 일어난다. eager 방식에서는 모든 컨슈머가 파티션을 내려놓고 다시 받으니 그동안 그룹 전체가 멈추고, 커밋 못 한 메시지는 다시 처리된다. cooperative-sticky 배정기나 정적 멤버십, Kafka 4.0의 새 그룹 프로토콜로 영향을 줄이고, 처리 시간이 긴 컨슈머는 `max.poll.records`를 줄인다.
+
+### acks=all이면 메시지를 절대 잃지 않나?
+
+`Isr` 전원이 받아야 성공이지만 `Isr`가 리더 하나로 줄어든 상태라면 리더 혼자 받고도 성공할 수 있다. 그래서 `min.insync.replicas=2`를 함께 걸어 최소 두 대에 있어야 성공하게 한다. 그리고 `unclean.leader.election.enable`을 `false`로 둬야 뒤처진 복제본이 리더가 되어 메시지가 사라지는 일이 없다. 디스크 플러시는 OS에 맡기므로 복제가 내구성의 중심이다.
+
+### 컨슈머 랙은 어떻게 보고 어떻게 해석하나?
+
+`kafka-consumer-groups.sh --describe`에서 파티션별로 끝 오프셋과 커밋 오프셋의 차이를 본다. 모든 파티션이 같이 오르면 처리량 부족, 한 파티션만 오르면 그 컨슈머의 문제나 키 쏠림이다. 랙 건수는 유입량에 따라 의미가 달라지니 알람은 가장 오래된 미처리 메시지의 나이로 거는 편이 낫다.
+
+### 보관 기간과 컴팩션은 어떻게 다른가?
+
+보관 기간(`cleanup.policy=delete`)은 시간이나 크기가 넘은 세그먼트를 통째로 지운다. 컴팩션(`compact`)은 키마다 마지막 값만 남기고, 값이 null인 툼스톤으로 키를 지운다. 이벤트 기록처럼 기간이 지나면 버려도 되는 데이터는 보관 기간을, 키별 최신 상태를 담는 데이터는 컴팩션을 쓴다. 둘 다 세그먼트 단위로 동작해서 지금 쓰는 세그먼트는 건드리지 않는다.
+
+### 오프셋은 언제 커밋해야 하나?
+
+처리가 끝난 뒤에 커밋하면 죽었을 때 커밋 이후를 다시 받으니 중복은 생기지만 잃지는 않는다. 처리 전에 커밋하면 반대로 잃을 수 있다. 그래서 보통 처리 후 커밋하고 처리를 멱등하게 만든다. 자동 커밋은 `poll()`을 부를 때 받아 간 위치를 커밋하므로, 처리를 다른 스레드로 넘기는 구조라면 처리 전에 커밋될 수 있어 끄고 직접 커밋한다.

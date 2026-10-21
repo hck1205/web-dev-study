@@ -464,7 +464,7 @@ CONTEXT:  while locking tuple (0,1) in relation "outbox"
 
 실제 서비스에서는 `seen`과 `lastVersion`이 메모리가 아니라 DB에 있어야 한다. 그리고 "이벤트 id 기록"과 "포인트 적립"을 같은 트랜잭션에 넣어야 한다. 따로 커밋하면 그 사이에 죽었을 때 다시 어긋난다. 이 받는 쪽 장치를 인박스(inbox)라고 부르기도 한다.
 
-아웃박스 테이블은 계속 커지니 보낸 행은 며칠 뒤 지운다. 양이 많으면 `created_at`으로 하루 단위 파티션을 만들어 통째로 떼어 낸다. 폴링 대신 Debezium으로 `outbox` 테이블의 INSERT를 WAL에서 읽어 보내는 방법도 있다. 폴링 쿼리가 없어지고 지연이 짧아지는 대신, 앞에서 본 복제 슬롯 관리가 따라온다.
+아웃박스 테이블은 계속 커지니 보낸 행은 며칠 뒤 지운다. 양이 많으면 `created_at`으로 하루 단위 파티션을 만들어 통째로 떼어 낸다. 폴링 대신 Debezium으로 `outbox` 테이블의 INSERT를 WAL에서 읽어 보내는 방법도 있다. 폴링 쿼리가 없어지고 지연이 짧아지는 대신, 앞에서 본 복제 슬롯 관리가 따라온다. 마지막으로 보낸 id만 기억해 읽는 폴링이 늦게 커밋된 이벤트를 놓치는 문제와 논리 디코딩으로 읽은 실제 출력은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에서 이어진다.
 
 ## 저장소는 접근 패턴으로 고른다
 
@@ -584,7 +584,7 @@ ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 
 마이그레이션 도구가 파일마다 트랜잭션으로 감싸는 경우가 많으니 이 파일만 트랜잭션을 끄는 옵션을 쓴다. 중간에 실패하면 `INVALID` 상태의 인덱스가 남는다. `\d users`에서 `INVALID`가 붙은 인덱스를 지우고 다시 만든다.
 
-기본값이 있는 열 추가도 확인해 둘 만하다. `ADD COLUMN ... DEFAULT 0`처럼 상수 기본값은 PostgreSQL 11부터 테이블을 다시 쓰지 않는다. `DEFAULT now()`나 `gen_random_uuid()`처럼 행마다 값이 다른 기본값은 모든 행을 다시 쓰느라 오래 잠근다. MySQL 8은 `ALGORITHM=INSTANT`로 즉시 끝나는 변경이 있고, 그렇지 않은 큰 변경에는 gh-ost나 pt-online-schema-change 같은 도구로 복사본 테이블을 만들어 바꿔치기한다.
+기본값이 있는 열 추가도 확인해 둘 만하다. `ADD COLUMN ... DEFAULT 0`처럼 상수 기본값은 PostgreSQL 11부터 테이블을 다시 쓰지 않는다. `gen_random_uuid()`나 `clock_timestamp()`처럼 행마다 값이 다른(volatile) 기본값은 모든 행을 다시 쓰느라 오래 잠근다. `now()`는 트랜잭션 안에서 값이 하나라 다시 쓰지 않는 대신, 기존 행이 모두 ALTER를 실행한 시각을 갖게 된다. 잠금 종류와 재작성 여부를 문장별로 잰 결과는 [무중단 스키마 변경 글](/posts/zero-downtime-migrations)에 있다. MySQL 8은 `ALGORITHM=INSTANT`로 즉시 끝나는 변경이 있고, 그렇지 않은 큰 변경에는 gh-ost나 pt-online-schema-change 같은 도구로 복사본 테이블을 만들어 바꿔치기한다.
 
 ## 앱 계정에는 필요한 권한만 준다
 

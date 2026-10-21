@@ -1,0 +1,558 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("eks-cluster-basics");
+
+Terraform으로 EKS 클러스터를 만들고 `kubectl get nodes`까지 확인했다. 다음 날 동료가 같은 명령을 쳤더니 `You must be logged in to the server`가 나온다. 권한은 AdministratorAccess인데도 그렇다. 한 달 뒤에는 노드 CPU와 메모리가 반 넘게 남는데 새 Pod가 `ContainerCreating`에서 멈춘다. 이벤트에는 `failed to assign an IP address to container`가 찍혀 있다.
+
+두 장면 모두 쿠버네티스 자체가 아니라 EKS가 쿠버네티스를 AWS에 붙이는 방식에서 나온다. 사람은 IAM으로 클러스터에 들어오고, Pod는 VPC의 IP를 받는다. 이 글은 EKS의 뼈대를 그 두 접점 중심으로 본다. AWS가 대신 운영하는 컨트롤 플레인과 엔드포인트, kubectl이 IAM으로 로그인하는 과정과 access entry, 노드를 띄우는 세 방식(관리형 노드 그룹, Fargate, Karpenter), VPC CNI가 Pod에 IP를 주는 방식과 서브넷이 바닥나는 계산, Pod에 AWS 권한을 주는 IRSA와 EKS Pod Identity, 애드온과 버전 업그레이드 주기까지 간다.
+
+클러스터를 만드는 Terraform 코드는 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서 `terraform-aws-modules/eks` 모듈로 다뤘다. 이 글의 `terraform plan` 출력은 그 모듈(v21.29.0)을 실제로 돌린 것이다. AWS 계정이 없어서 `aws` 명령의 응답은 대부분 예시다. 형식은 실제 CLI 그대로 두고 ID와 날짜만 지어 넣었으며, 모의 서버에서 실제로 받은 출력은 따로 밝혔다.
+
+## 컨트롤 플레인은 AWS 계정에 있다
+
+쿠버네티스 클러스터는 컨트롤 플레인(API 서버, etcd, 스케줄러, 컨트롤러 매니저)과 Pod가 실제로 도는 노드로 나뉜다. 직접 설치하면 etcd 백업, 인증서 갱신, API 서버 이중화, 버전 업그레이드를 모두 내가 한다. EKS는 이 컨트롤 플레인을 AWS가 소유한 계정의 VPC에 띄워 대신 운영한다. API 서버는 여러 대, etcd는 세 AZ에 나눠 두고, 죽으면 AWS가 바꿔 끼운다. 클러스터 하나에 시간당 요금(표준 지원 기간에 0.10달러)이 붙는다.
+
+내 계정에 생기는 것은 노드와 몇 개의 ENI뿐이다. 클러스터를 만들 때 지정한 서브넷에 EKS가 관리하는 ENI를 두세 개 꽂는데, 이것이 내 VPC와 AWS 쪽 컨트롤 플레인을 잇는 문이다. 노드의 kubelet이 API 서버에 말을 걸 때, 반대로 API 서버가 `kubectl logs`나 `exec`, 웹훅 호출 때문에 노드에 말을 걸 때 이 ENI를 지난다. 클러스터 서브넷은 서로 다른 AZ에서 두 개 이상이어야 하는 것도 이 ENI 때문이다.
+
+API 엔드포인트를 어디로 열지가 첫 설계 선택이다. 퍼블릭 엔드포인트는 인터넷에서 닿는 주소이고, 프라이빗 엔드포인트를 켜면 VPC 안에서 같은 이름이 그 ENI의 사설 IP로 풀린다. EKS API의 기본값은 퍼블릭만 켜져 있고 허용 대역이 `0.0.0.0/0`이다. 아래 그림에서 단계를 넘기며 각 연결이 어디를 지나는지 본다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="컨트롤 플레인은 AWS 계정에, 노드는 내 VPC에. 둘 사이를 EKS ENI가 잇는다"
+  zones={[
+    { id: "awsvpc", label: "AWS 소유 VPC", x: 8, y: 8, w: 384, h: 84, tone: "edge" },
+    { id: "myvpc", label: "내 VPC 10.10.0.0/16", x: 8, y: 112, w: 384, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "api", label: "API server", sub: "etcd 3 AZ", x: 200, y: 58, icon: "server" },
+    { id: "eni", label: "EKS ENI", sub: "10.10.3.17", x: 100, y: 170, icon: "switch" },
+    { id: "node", label: "node", sub: "kubelet", x: 300, y: 170, icon: "server" },
+    { id: "pod", label: "webhook Pod", sub: "10.10.5.40", x: 300, y: 270, icon: "container" },
+    { id: "me", label: "laptop", sub: "kubectl", x: 100, y: 270, icon: "client" },
+  ]}
+  links={[
+    { from: "api", to: "eni" },
+    { from: "eni", to: "node" },
+    { from: "node", to: "pod" },
+    { from: "me", to: "api", dashed: true },
+  ]}
+  steps={[
+    { path: ["me", "api"], packet: "HTTPS", title: "kubectl은 퍼블릭 엔드포인트로", detail: "퍼블릭 엔드포인트가 켜져 있으면 노트북의 kubectl이 인터넷으로 API 서버에 닿는다. 허용 대역을 사무실 IP로 좁혀 둔다.", payload: "https://ABCD1234.gr7.ap-northeast-2.eks.amazonaws.com" },
+    { path: ["node", "eni", "api"], packet: "watch", title: "kubelet은 EKS ENI로", detail: "프라이빗 엔드포인트를 켜면 VPC 안에서 같은 이름이 ENI의 사설 IP로 풀려서 노드 트래픽이 VPC를 떠나지 않는다." },
+    { path: ["api", "eni", "node"], packet: "logs", title: "API 서버가 노드로 오는 길", detail: "kubectl logs, exec, port-forward는 API 서버가 ENI를 거쳐 노드의 kubelet(10250)에 붙는다. 노드 보안 그룹이 클러스터 보안 그룹을 막으면 이것만 안 된다." },
+    { path: ["api", "eni", "node", "pod"], packet: "webhook", title: "웹훅도 같은 길이다", detail: "admission 웹훅이나 metrics-server 호출도 API 서버에서 Pod로 들어온다. 포트(443, 8443, 9443 등)가 노드 보안 그룹에 열려 있어야 한다." },
+    { path: ["me", "api"], packet: "HTTPS", blocked: true, title: "프라이빗만 켜면 밖에서는 막힌다", detail: "퍼블릭을 끄면 노트북에서는 i/o timeout이 난다. VPN, 배스천, 같은 VPC의 CI 러너에서만 kubectl을 쓴다.", payload: "dial tcp 10.10.3.17:443: i/o timeout" },
+  ]}
+/>
+
+운영에서 흔한 조합은 프라이빗을 켜고, 퍼블릭은 끄거나 사무실·CI 대역으로만 연다. EKS 모듈로 만든 계획에서도 이 부분을 그대로 볼 수 있다.
+
+```text
+  # module.eks.aws_eks_cluster.this[0] will be created
+  + resource "aws_eks_cluster" "this" {
+      + name                          = "shop-dev"
+      + version                       = "1.35"
+      ...
+      + access_config {
+          + authentication_mode                         = "API_AND_CONFIG_MAP"
+          + bootstrap_cluster_creator_admin_permissions = false
+        }
+      + encryption_config {
+          + resources = [
+              + "secrets",
+            ]
+        }
+      + vpc_config {
+          + endpoint_private_access   = true
+          + endpoint_public_access    = true
+          + public_access_cidrs       = [
+              + "0.0.0.0/0",
+            ]
+        }
+    }
+```
+
+(일부 속성만 남겼다.) `endpoint_public_access = true`만 주고 대역을 안 정하면 `0.0.0.0/0`이 들어간다는 것이 보인다. 인증이 있으니 바로 뚫리지는 않지만, API 서버의 취약점이나 유출된 자격 증명이 인터넷 어디서든 쓰인다. `encryption_config`는 Secret을 KMS 키로 한 번 더 암호화하는 설정이다([Secret](/posts/k8s-secret)에서 이 암호화가 무엇을 막는지 다뤘다).
+
+## kubectl이 IAM으로 로그인하는 길
+
+EKS는 kubectl 사용자를 따로 만들지 않는다. AWS 자격 증명이 곧 로그인 수단이다. kubeconfig는 CLI가 만들어 준다.
+
+```bash
+# 클러스터 엔드포인트와 CA를 받아 kubeconfig에 컨텍스트를 추가한다
+aws eks update-kubeconfig --name shop-prod --region ap-northeast-2
+```
+
+```text
+Added new context arn:aws:eks:ap-northeast-2:123456789012:cluster/shop-prod to /home/ubuntu/.kube/config
+```
+
+(모의 서버에 붙여 받은 출력이다. 경로만 바꿨다.) 들어간 내용을 보면 비밀번호나 토큰이 없다. 대신 kubectl이 매번 실행할 명령이 적혀 있다.
+
+```text
+users:
+- name: arn:aws:eks:ap-northeast-2:123456789012:cluster/shop-prod
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1beta1
+      args:
+      - --region
+      - ap-northeast-2
+      - eks
+      - get-token
+      - --cluster-name
+      - shop-prod
+      - --output
+      - json
+      command: aws
+```
+
+kubectl은 요청마다(캐시가 만료되면) `aws eks get-token`을 실행해 토큰을 받는다. 이 토큰의 정체가 재미있다. 직접 받아서 풀어 봤다.
+
+```bash
+# 토큰을 받는다 (네트워크 호출 없이 로컬에서 서명만 한다)
+aws eks get-token --cluster-name shop-prod --region ap-northeast-2
+```
+
+```text
+{
+    "kind": "ExecCredential",
+    "apiVersion": "client.authentication.k8s.io/v1beta1",
+    "spec": {},
+    "status": {
+        "expirationTimestamp": "2026-10-20T14:46:32Z",
+        "token": "k8s-aws-v1.aHR0cHM6Ly9zdHMuYXAtbm9ydGhlYXN0LTIuYW1hem9uYXdzLmNvbS8_QWN0aW9uPUdldENhbGxlcklkZW50aXR5..."
+    }
+}
+```
+
+`k8s-aws-v1.` 뒤를 base64url로 풀면 STS의 `GetCallerIdentity`를 부르는 미리 서명된(presigned) URL이 나온다. 아래 값은 AWS 문서의 예시 액세스 키로 실제 서명해서 받은 것이다.
+
+<UrlAnatomy
+  caption="EKS 토큰을 풀면 나오는 STS 주소"
+  base="https://sts.ap-northeast-2.amazonaws.com/"
+  params={[
+    { key: "Action", value: "GetCallerIdentity", title: "부르려는 API", description: "\"나는 누구인가\"를 묻는 STS API다. 권한이 전혀 없는 자격 증명으로도 부를 수 있다. 토큰은 이 호출을 할 수 있는 서명일 뿐 실제로 부르지 않았다.", required: true },
+    { key: "X-Amz-Credential", value: "AKIAIOSFODNN7EXAMPLE%2F20261020%2Fap-northeast-2%2Fsts%2Faws4_request", title: "누가 서명했나", description: "서명에 쓴 액세스 키 ID와 날짜, 리전이다. 비밀 키는 들어 있지 않다. API 서버는 이 URL을 대신 호출해서 돌아온 ARN으로 사용자를 정한다.", required: true },
+    { key: "X-Amz-Date", value: "20261020T143232Z", title: "서명 시각", description: "EKS는 서명 후 15분이 지난 토큰을 받지 않는다. get-token이 알려 주는 expirationTimestamp도 14분 뒤로 잡혀 있고, kubectl은 만료되면 다시 받는다." },
+    { key: "X-Amz-SignedHeaders", value: "host%3Bx-k8s-aws-id", title: "클러스터 이름도 서명에 들어간다", description: "x-k8s-aws-id 헤더에 클러스터 이름(shop-prod)을 넣고 함께 서명했다. 다른 클러스터의 API 서버가 이 토큰을 받아 재사용하지 못하게 묶는 장치다.", required: true },
+    { key: "X-Amz-Signature", value: "74838e9c…", title: "서명", description: "비밀 키로 만든 HMAC-SHA256 서명이다. 토큰이 새면 15분 안에는 그 사람으로 행세할 수 있으니 로그에 찍히지 않게 한다." },
+  ]}
+/>
+
+API 서버가 이 토큰을 받은 뒤 일어나는 일은 아래와 같다.
+
+<SequenceDiagram
+  caption="IAM으로 신원을 확인하고, access entry로 쿠버네티스 권한을 붙인다"
+  actors={[
+    { id: "k", label: "kubectl" },
+    { id: "cli", label: "aws CLI" },
+    { id: "api", label: "API 서버" },
+    { id: "sts", label: "STS" },
+    { id: "eks", label: "access entry" },
+  ]}
+  steps={[
+    { from: "k", to: "cli", label: "exec get-token", title: "토큰을 만든다", detail: "kubeconfig의 exec 설정대로 aws CLI를 실행한다. CLI는 지금 쓰는 자격 증명(프로필, SSO, 역할)으로 STS URL에 서명한다." },
+    { from: "k", to: "api", label: "Bearer k8s-aws-v1.…", title: "토큰을 붙여 요청한다", detail: "Authorization 헤더에 토큰을 넣어 GET /api/v1/pods 같은 요청을 보낸다." },
+    { from: "api", to: "sts", label: "GetCallerIdentity", title: "API 서버가 대신 묻는다", detail: "API 서버의 인증기가 토큰 속 URL을 그대로 호출한다. 서명이 맞으면 STS가 ARN을 돌려준다.", payload: "arn:aws:sts::123456789012:assumed-role/dev-readonly/alice" },
+    { from: "api", to: "eks", label: "ARN 조회", title: "access entry에서 찾는다", detail: "그 IAM 주체에 등록된 access entry가 있는지, 붙은 access policy나 쿠버네티스 그룹이 무엇인지 본다. 없으면 401 Unauthorized다." },
+    { from: "api", to: "api", label: "인가", title: "권한을 확인한다", detail: "access policy(예: AmazonEKSViewPolicy)나 그룹에 묶인 RBAC로 요청한 동작을 허락할지 정한다. 신원은 맞는데 권한이 없으면 403 Forbidden이다." },
+  ]}
+/>
+
+이 그림이 처음 장면의 답이다. 동료의 IAM 권한이 아무리 넓어도 그것은 AWS API 권한이고, 쿠버네티스 안의 권한은 access entry가 따로 준다. 401(Unauthorized)이면 신원 단계, 403(Forbidden)이면 권한 단계에서 막힌 것이다.
+
+## access entry가 aws-auth를 대신한다
+
+예전 EKS에서는 IAM 주체와 쿠버네티스 그룹의 대응을 `kube-system`의 `aws-auth` ConfigMap에 YAML로 적었다. 문제가 많았다. 들여쓰기 하나 틀리면 노드까지 클러스터에 못 붙었고, 이 ConfigMap을 고치려면 이미 클러스터 권한이 있어야 해서 잘못 고치면 아무도 못 들어가는 상황이 났다. 클러스터를 만든 IAM 주체가 보이지 않는 관리자로 남는다는 것도 감사 때 늘 문제가 됐다.
+
+2023년 말에 나온 access entry는 이 대응을 EKS API로 옮겼다. ConfigMap 대신 AWS API와 IAM 권한으로 관리하니 클러스터 안에 들어갈 수 없어도 밖에서 고칠 수 있고, CloudTrail에 남는다.
+
+```bash
+# 읽기 전용 역할을 클러스터에 등록한다
+aws eks create-access-entry --cluster-name shop-prod \
+  --principal-arn arn:aws:iam::123456789012:role/dev-readonly
+# shop 네임스페이스에서만 보기 권한을 붙인다
+aws eks associate-access-policy --cluster-name shop-prod \
+  --principal-arn arn:aws:iam::123456789012:role/dev-readonly \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy \
+  --access-scope type=namespace,namespaces=shop
+# 등록된 주체 목록
+aws eks list-access-entries --cluster-name shop-prod
+```
+
+```text
+{
+    "accessEntries": [
+        "arn:aws:iam::123456789012:role/dev-readonly",
+        "arn:aws:iam::123456789012:role/shop-prod-node-eks-node-group-20261020"
+    ]
+}
+```
+
+(예시) 관리형 노드 그룹의 노드 역할은 EKS가 알아서 등록한다. 미리 만들어진 access policy는 `AmazonEKSClusterAdminPolicy`, `AmazonEKSAdminPolicy`, `AmazonEKSEditPolicy`, `AmazonEKSViewPolicy` 넷이 기본이고, 더 세밀하게 나누려면 access entry에 쿠버네티스 그룹 이름을 붙이고 그 그룹에 RBAC를 직접 건다.
+
+클러스터의 `authentication_mode`가 어느 쪽을 볼지 정한다. `CONFIG_MAP`은 aws-auth만, `API_AND_CONFIG_MAP`은 둘 다, `API`는 access entry만 본다. 이 값은 한 방향으로만 바꿀 수 있다. aws-auth에서 옮길 때는 `API_AND_CONFIG_MAP`으로 바꾸고, aws-auth의 항목을 access entry로 하나씩 옮긴 뒤 `API`로 넘어간다. 새 클러스터라면 처음부터 `API`로 만들고, 모듈의 `enable_cluster_creator_admin_permissions` 대신 관리자 역할을 access entry로 명시해 두는 편이 감사하기 좋다.
+
+## 노드를 누가 띄우나
+
+Pod가 돌 자리를 만드는 방식은 크게 넷이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="노드를 누가 관리하느냐에 따라 할 일과 제약이 달라진다"
+  nodes={[
+    { id: "pod", label: "Pending Pod", sub: "자리가 필요하다", x: 200, y: 36, w: 140 },
+    { id: "mng", label: "관리형 노드 그룹", sub: "ASG + EKS 관리", x: 95, y: 135, w: 150 },
+    { id: "karp", label: "Karpenter", sub: "EC2를 직접 고른다", x: 305, y: 135, w: 150 },
+    { id: "fg", label: "Fargate", sub: "Pod 하나에 VM 하나", x: 95, y: 245, w: 150 },
+    { id: "auto", label: "EKS Auto Mode", sub: "노드까지 AWS가", x: 305, y: 245, w: 150 },
+  ]}
+  edges={[
+    { from: "pod", to: "mng", label: "CA가 ASG 증설" },
+    { from: "pod", to: "karp", label: "바로 생성" },
+    { from: "pod", to: "fg", label: "프로필 일치" },
+    { from: "karp", to: "auto", label: "관리형으로", dashed: true },
+  ]}
+/>
+
+관리형 노드 그룹은 EKS가 오토스케일링 그룹(ASG)과 시작 템플릿을 만들고, AMI 업데이트 때 새 노드를 띄운 뒤 옛 노드를 cordon·drain하는 롤링 교체까지 맡는다. 노드 수를 Pod 수요에 맞추는 일은 Cluster Autoscaler가 ASG의 desired 값을 바꿔서 한다. 인스턴스 타입이 노드 그룹마다 고정이라 크기가 다른 Pod가 섞이면 빈자리가 생긴다. 계획에서는 이렇게 보인다.
+
+```text
+  # module.eks.module.eks_managed_node_group["general"].aws_eks_node_group.this[0] will be created
+  + resource "aws_eks_node_group" "this" {
+      + ami_type               = "AL2023_x86_64_STANDARD"
+      + capacity_type          = "ON_DEMAND"
+      + instance_types         = [
+          + "m6i.large",
+        ]
+      + scaling_config {
+          + desired_size = 3
+          + max_size     = 6
+          + min_size     = 2
+        }
+      + update_config {
+          + max_unavailable_percentage = 33
+        }
+    }
+```
+
+`update_config`가 롤링 교체 때 한 번에 몇 대까지 빼도 되는지다. drain은 PodDisruptionBudget을 지키므로 PDB가 너무 빡빡하면 교체가 진행되지 못하고, 일정 시간(문서상 15분)이 지나면 노드 그룹 업데이트가 `PodEvictionFailure`로 실패한다.
+
+Karpenter는 ASG를 거치지 않는다. 스케줄되지 못한 Pod의 요구(CPU, 메모리, AZ, 아키텍처, 스팟 허용 여부)를 모아 그에 맞는 인스턴스 타입을 골라 EC2를 바로 띄운다. 여러 타입과 스팟을 섞기 쉽고, 노드가 비면 더 작은 노드로 합치는(consolidation) 일도 한다. 대신 Karpenter 자체를 설치하고 버전을 관리해야 하고, 그 컨트롤러는 Karpenter가 띄우지 않는 노드(작은 관리형 노드 그룹이나 Fargate)에 둔다. HPA가 Pod를 늘린 뒤 노드가 따라오는 흐름은 [HPA](/posts/k8s-hpa)에서 이어서 다뤘다. 2024년 말에 나온 EKS Auto Mode는 Karpenter 기반의 노드 관리와 VPC CNI, CoreDNS, EBS CSI, 로드 밸런서 컨트롤러까지 AWS가 맡는 선택지다. 손이 덜 가는 대신 노드에 붙는 요금이 있고 고칠 수 있는 범위가 좁다.
+
+Fargate는 노드라는 개념을 없앤다. Fargate 프로필의 네임스페이스와 라벨에 맞는 Pod는 Pod 하나마다 작은 VM 하나에서 돈다. 서버 패치가 없고 Pod 사이 격리가 강하다. 대신 DaemonSet이 돌지 않고(로그 수집은 사이드카나 내장 Fluent Bit로), privileged와 hostNetwork를 못 쓰고, GPU가 없고, EBS 볼륨을 못 붙인다(EFS만). 요청한 CPU·메모리는 정해진 크기로 올림되어 과금된다. 배치 작업이나 트래픽이 들쭉날쭉한 작은 서비스에 맞고, 노드 단위 에이전트가 필요한 플랫폼 팀에는 맞지 않다.
+
+## Pod IP가 VPC에서 나온다
+
+EKS의 기본 CNI인 VPC CNI는 Pod에게 VPC 서브넷의 진짜 사설 IP를 준다. 노드에 ENI를 더 꽂고, ENI마다 보조 IP를 여러 개 받아 두었다가 Pod가 뜰 때 하나씩 나눠 준다. 터널도 NAT도 없어서 RDS나 다른 VPC에서 보면 Pod IP가 그대로 보이고, 보안 그룹과 흐름 로그가 Pod 단위로 동작한다. 노드 하나에 띄울 수 있는 Pod 수가 인스턴스의 ENI 수와 ENI당 IP 수로 정해지는 계산은 [Pod 네트워크](/posts/k8s-cni-pod-network) 글에 있다. 인스턴스별 숫자는 CLI로 바로 본다.
+
+```bash
+# 인스턴스 타입별 최대 ENI 수와 ENI당 IPv4 수
+aws ec2 describe-instance-types --instance-types m6i.large t3.medium \
+  --query 'InstanceTypes[].[InstanceType,NetworkInfo.MaximumNetworkInterfaces,NetworkInfo.Ipv4AddressesPerInterface]' \
+  --output table
+```
+
+```text
+--------------------------
+|  DescribeInstanceTypes |
++------------+----+------+
+|  m6i.large |  3 |  10  |
+|  t3.medium |  3 |  6   |
++------------+----+------+
+```
+
+(모의 서버 출력이지만 숫자는 AWS가 공개한 사양과 같다.) 아래 그림은 Pod 하나가 IP를 받고 밖으로 나가는 길이다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="Pod IP는 노드 ENI의 보조 IP다. 서브넷에 남은 주소가 없으면 Pod가 뜨지 못한다"
+  zones={[
+    { id: "sub", label: "프라이빗 서브넷 10.10.0.0/24", x: 8, y: 8, w: 384, h: 220, tone: "private" },
+    { id: "dbsub", label: "DB 서브넷", x: 206, y: 236, w: 186, h: 80, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "ipamd", label: "aws-node", sub: "ipamd", x: 100, y: 60, icon: "gateway" },
+    { id: "eni0", label: "eth0", sub: "10.10.0.21", x: 100, y: 130, icon: "switch" },
+    { id: "eni1", label: "eth1", sub: "보조 IP 9개", x: 100, y: 190, icon: "switch" },
+    { id: "pod", label: "orders Pod", sub: "10.10.0.57", x: 300, y: 90, icon: "container" },
+    { id: "pod2", label: "new Pod", sub: "IP 없음", x: 300, y: 170, icon: "container" },
+    { id: "rds", label: "RDS", sub: "10.10.20.8", x: 300, y: 290, icon: "db" },
+  ]}
+  links={[
+    { from: "ipamd", to: "eni0" },
+    { from: "eni0", to: "eni1" },
+    { from: "eni0", to: "pod" },
+    { from: "eni1", to: "pod2" },
+    { from: "pod", to: "rds" },
+  ]}
+  steps={[
+    { path: ["ipamd", "eni0"], packet: "warm", title: "IP를 미리 받아 둔다", detail: "노드의 aws-node DaemonSet(ipamd)이 EC2 API로 ENI와 보조 IP를 미리 확보해 둔다(warm pool). Pod가 뜰 때마다 API를 부르면 느리기 때문이다." },
+    { path: ["ipamd", "eni0", "pod"], packet: "IP", highlight: ["pod"], title: "Pod에 VPC IP를 준다", detail: "CNI 플러그인이 warm pool에서 보조 IP 하나를 꺼내 Pod의 veth에 붙이고 노드에 경로를 놓는다.", payload: "10.10.0.57/32 dev eni3a8f… scope link" },
+    { path: ["pod", "rds"], packet: "5432", title: "밖에서도 Pod IP가 보인다", detail: "Pod에서 나간 패킷의 출발지는 Pod IP 그대로다. RDS 보안 그룹과 VPC 흐름 로그에 10.10.0.57이 찍힌다." },
+    { path: ["ipamd", "eni1"], packet: "ENI", title: "모자라면 ENI를 더 꽂는다", detail: "warm pool이 기준보다 줄면 ipamd가 새 ENI를 붙이고 보조 IP를 받는다. 이 IP들은 Pod가 없어도 서브넷에서 빠져나간다." },
+    { path: ["eni1", "pod2"], packet: "IP?", blocked: true, title: "서브넷이 비면 Pod가 멈춘다", detail: "서브넷에 남은 주소가 없으면 ENI도 보조 IP도 못 받는다. Pod는 ContainerCreating에 머물고 이벤트에 IP 할당 실패가 찍힌다.", payload: "InsufficientFreeAddressesInSubnet" },
+  ]}
+/>
+
+## 서브넷 IP가 먼저 바닥난다
+
+처음 장면의 두 번째 증상이 이것이다. CPU와 메모리가 남아도 서브넷 주소가 떨어지면 Pod는 못 뜬다. 이벤트는 대략 이렇게 생겼다.
+
+```text
+Warning  FailedCreatePodSandBox  12s  kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox "4c1f…": plugin type="aws-cni" name="aws-cni" failed (add): add cmd: failed to assign an IP address to container
+```
+
+(예시) 서브넷의 남은 주소는 EC2 API로 확인한다.
+
+```bash
+# VPC 안 서브넷별 남은 IP 수
+aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0a1b2c3d4e5f60718 \
+  --query 'Subnets[].[SubnetId,AvailabilityZone,CidrBlock,AvailableIpAddressCount]' \
+  --output table
+```
+
+```text
+------------------------------------------------------------------------
+|                            DescribeSubnets                           |
++---------------------------+-------------------+---------------+------+
+|  subnet-0c3d4e5f607182a9b |  ap-northeast-2a  |  10.10.0.0/24 |  3   |
+|  subnet-0e5f607182a9b3c4d |  ap-northeast-2c  |  10.10.1.0/24 |  148 |
++---------------------------+-------------------+---------------+------+
+```
+
+(예시) `/24` 서브넷은 AWS 예약 주소 다섯 개를 빼면 251개다. 숫자가 생각보다 빨리 주는 이유는 warm pool이다. 기본 설정(`WARM_ENI_TARGET=1`)은 "통째로 비어 있는 ENI 하나만큼"의 IP를 늘 더 쥐고 있으려 한다. m6i.large는 ENI 하나에 IP가 10개(노드 몫 1 + 보조 9)라, Pod가 열 개만 떠도 ENI 세 개, 서브넷 주소 30개를 가져간다. 아래는 그 동작을 단순하게 옮긴 것이다.
+
+<AlgoTrace
+  caption="m6i.large 노드 하나가 Pod 수에 따라 서브넷에서 가져가는 주소 (WARM_ENI_TARGET=1)"
+  memoryLabel="Pod / 확보한 보조 IP / 서브넷에서 빠진 주소"
+  cells={["ENI 0", "ENI 1", "ENI 2"]}
+  steps={[
+    { pointer: 0, memory: ["Pod 0", "보조 9", "서브넷 10"], caption: "노드가 막 떴다. ENI 0의 보조 IP 9개가 통째로 비어 있으니 기준을 채웠다." },
+    { pointer: 1, found: [0], memory: ["Pod 5", "보조 18", "서브넷 20"], caption: "Pod 다섯 개가 ENI 0의 IP를 썼다. 빈 IP가 4개로 줄어 ENI 하나만큼이 안 되니 ENI 1을 붙인다." },
+    { pointer: 2, found: [0, 1], memory: ["Pod 10", "보조 27", "서브넷 30"], caption: "열 번째 Pod부터 ENI 1도 쓰기 시작한다. 또 기준을 채우려고 ENI 2까지 붙였다. 붙일 수 있는 ENI는 이게 끝이다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["Pod 27", "보조 27", "서브넷 30"], caption: "보조 IP 27개를 다 쓰면 이 노드는 더 받을 수 없다. hostNetwork Pod 둘을 더해 최대 29개다." },
+  ]}
+/>
+
+`WARM_IP_TARGET`(남겨 둘 IP 수)과 `MINIMUM_IP_TARGET`(최소로 쥐고 있을 IP 수)을 주면 ENI 단위 대신 IP 단위로 확보해서 낭비가 준다. 대신 Pod가 몰려 뜰 때 EC2 API 호출이 늘어 스로틀링에 걸릴 수 있다. 직접 계산해 보면 설정에 따라 차이가 크다.
+
+<CodePlayground
+  caption="노드 하나가 서브넷에서 가져가는 IP 수 (단순화한 모델)"
+  functionName="subnetIps"
+  initialCode={`// n.enis: 인스턴스가 붙일 수 있는 최대 ENI 수
+// n.ipsPerEni: ENI당 IPv4 수 (첫 번째는 ENI 자신의 주소, 나머지가 Pod용 보조 IP)
+// n.pods: 지금 뜬 Pod 수 (hostNetwork Pod 제외)
+// n.warmIp, n.minIp: 있으면 IP 단위로 확보한다. 보조 IP = max(pods + warmIp, minIp)
+//   ENI는 그 보조 IP를 담을 만큼만 붙인다
+// 둘 다 없으면 WARM_ENI_TARGET=1: 비어 있는 보조 IP가 ENI 하나 분량 이상이 되도록 ENI를 붙인다
+// 어느 경우든 ENI 수와 보조 IP 수는 인스턴스 한도를 넘지 않는다
+// 서브넷에서 빠지는 주소 = 붙인 ENI 수 + 확보한 보조 IP 수
+function subnetIps(n) {
+  return 0;
+}`}
+  solution={`function subnetIps(n) {
+  const s = n.ipsPerEni - 1;
+  if (n.warmIp != null || n.minIp != null) {
+    const secondary = Math.min(n.enis * s, Math.max(n.pods + (n.warmIp ?? 0), n.minIp ?? 0));
+    const enis = Math.max(1, Math.ceil(secondary / s));
+    return secondary + enis;
+  }
+  const enis = Math.min(n.enis, Math.ceil((n.pods + s) / s));
+  return enis * n.ipsPerEni;
+}`}
+  tests={[
+    { label: "m6i.large, Pod 0", args: [{ enis: 3, ipsPerEni: 10, pods: 0 }], expected: 10 },
+    { label: "m6i.large, Pod 5", args: [{ enis: 3, ipsPerEni: 10, pods: 5 }], expected: 20 },
+    { label: "m6i.large, Pod 12", args: [{ enis: 3, ipsPerEni: 10, pods: 12 }], expected: 30 },
+    { label: "m6i.large, Pod 27 (한도)", args: [{ enis: 3, ipsPerEni: 10, pods: 27 }], expected: 30 },
+    { label: "Pod 5, WARM_IP_TARGET=2", args: [{ enis: 3, ipsPerEni: 10, pods: 5, warmIp: 2 }], expected: 8 },
+    { label: "Pod 5, WARM 2, MINIMUM 10", args: [{ enis: 3, ipsPerEni: 10, pods: 5, warmIp: 2, minIp: 10 }], expected: 12 },
+    { label: "t3.medium, Pod 4", args: [{ enis: 3, ipsPerEni: 6, pods: 4 }], expected: 12 },
+  ]}
+/>
+
+실제 ipamd는 노드가 막 떴을 때, Pod가 빠질 때 IP를 돌려주는 시점 같은 세부 동작이 더 있으니 숫자는 감을 잡는 용도로만 쓴다. 이 계산으로 서브넷 크기를 정하면 이렇다. m6i.large 노드 열 대가 Pod를 열둘씩 띄우면 기본 설정에서 300개가 필요해 `/24` 하나로는 안 된다. 노드 서브넷을 `/19`(8,187개)처럼 넉넉히 잡는 이유다([서브넷과 라우트 테이블](/posts/vpc-subnets-route-tables)).
+
+이미 좁게 만든 VPC라면 고칠 길이 셋이다.
+
+- 접두사 위임(`ENABLE_PREFIX_DELEGATION=true`): 보조 IP 한 칸에 IP 하나 대신 `/28`(16개)을 붙인다. 노드당 Pod 수가 늘고 EC2 API 호출이 준다. Nitro 인스턴스에서만 되고, 서브넷에 연속된 빈 `/28`이 있어야 해서 조각난 서브넷에서는 실패한다.
+- 보조 CIDR과 사용자 지정 네트워킹: VPC에 `100.64.0.0/16` 같은 대역을 더 붙이고 `ENIConfig`로 Pod용 ENI만 그 서브넷에 둔다. 노드 IP와 Pod IP 대역이 갈린다.
+- warm 설정 조정: `WARM_IP_TARGET`, `MINIMUM_IP_TARGET`을 Pod 밀도에 맞춘다. 애드온 설정으로 넣어야 업그레이드 때 사라지지 않는다.
+
+```bash
+# vpc-cni 애드온 설정으로 IP 단위 확보를 켠다 (kubectl set env로 바꾸면 애드온 업데이트 때 되돌아간다)
+aws eks update-addon --cluster-name shop-prod --addon-name vpc-cni \
+  --configuration-values '{"env":{"WARM_IP_TARGET":"2","MINIMUM_IP_TARGET":"10"}}'
+```
+
+## Pod에 AWS 권한 주기
+
+S3에 파일을 올리는 Pod가 있다. 가장 나쁜 방법은 액세스 키를 Secret에 넣는 것이고, 그다음으로 나쁜 방법은 노드 IAM 역할에 S3 권한을 주는 것이다. 노드 역할은 그 노드의 모든 Pod가 메타데이터 서버(169.254.169.254)로 꺼내 쓸 수 있다. Pod마다 다른 역할을 주는 방법이 둘 있다.
+
+IRSA(IAM Roles for Service Accounts)는 2019년부터 쓰인 방식이다. 클러스터마다 OIDC 발급자가 있고, 이를 IAM에 OIDC 공급자로 등록한다. ServiceAccount에 `eks.amazonaws.com/role-arn` 어노테이션을 달면 웹훅이 Pod에 서비스 어카운트 토큰 파일과 역할 ARN 환경 변수를 넣는다. AWS SDK는 그 토큰으로 `AssumeRoleWithWebIdentity`를 불러 임시 자격 증명을 받는다. 역할의 신뢰 정책이 "이 클러스터의 OIDC가 발급한, `system:serviceaccount:shop:orders`라는 주체"만 받도록 조건을 건다. 문제는 신뢰 정책에 클러스터의 OIDC 주소가 박힌다는 것이다. 클러스터를 새로 만들어 옮기면(블루그린 업그레이드) 역할마다 신뢰 정책을 고쳐야 하고, 계정당 OIDC 공급자 수와 신뢰 정책 길이에도 한도가 있다.
+
+이 토큰이 어떻게 발급되고 audience와 만료가 어떻게 정해지는지는 [ServiceAccount 토큰 글](/posts/k8s-serviceaccount-tokens)에 있다. EKS Pod Identity(2023년 말)는 이 연결을 EKS API로 옮겼다. 역할의 신뢰 정책은 클러스터와 상관없이 `pods.eks.amazonaws.com` 서비스 하나만 믿는다.
+
+```text
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Service": "pods.eks.amazonaws.com" },
+    "Action": ["sts:AssumeRole", "sts:TagSession"]
+  }]
+}
+```
+
+어느 클러스터의 어느 ServiceAccount가 이 역할을 쓸지는 연결(association)로 정한다.
+
+```bash
+# shop 네임스페이스의 orders ServiceAccount에 역할을 연결한다
+aws eks create-pod-identity-association --cluster-name shop-prod \
+  --namespace shop --service-account orders \
+  --role-arn arn:aws:iam::123456789012:role/orders-s3-writer
+```
+
+```text
+{
+    "association": {
+        "clusterName": "shop-prod",
+        "namespace": "shop",
+        "serviceAccount": "orders",
+        "roleArn": "arn:aws:iam::123456789012:role/orders-s3-writer",
+        "associationArn": "arn:aws:eks:ap-northeast-2:123456789012:podidentityassociation/shop-prod/a-4kq2xv8jz1mnb7tcd",
+        "associationId": "a-4kq2xv8jz1mnb7tcd",
+        "tags": {},
+        "createdAt": "2026-10-20T15:02:11.482000+00:00",
+        "modifiedAt": "2026-10-20T15:02:11.482000+00:00"
+    }
+}
+```
+
+(예시) Pod 안에서 자격 증명을 받는 길은 아래와 같다.
+
+<SequenceDiagram
+  caption="Pod Identity: SDK는 노드의 에이전트에게 묻고, 에이전트가 EKS에 대신 받아 온다"
+  actors={[
+    { id: "pod", label: "orders Pod" },
+    { id: "agent", label: "Pod Identity 에이전트" },
+    { id: "auth", label: "EKS Auth API" },
+    { id: "s3", label: "S3" },
+  ]}
+  steps={[
+    { from: "pod", to: "pod", label: "환경 변수", title: "웹훅이 넣어 둔 값", detail: "Pod가 뜰 때 연결이 있는 ServiceAccount라면 자격 증명 주소와 토큰 파일 경로가 환경 변수로 들어간다.", payload: "AWS_CONTAINER_CREDENTIALS_FULL_URI=http://169.254.170.23/v1/credentials\nAWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token" },
+    { from: "pod", to: "agent", label: "GET /v1/credentials", title: "노드의 에이전트에게 묻는다", detail: "SDK가 서비스 어카운트 토큰을 붙여 링크 로컬 주소로 요청한다. 에이전트는 노드마다 hostNetwork로 뜬 DaemonSet이다." },
+    { from: "agent", to: "auth", label: "AssumeRoleForPodIdentity", title: "에이전트가 대신 받는다", detail: "에이전트가 토큰을 EKS Auth API에 넘긴다. EKS는 토큰의 네임스페이스와 ServiceAccount로 연결을 찾아 역할을 맡는다." },
+    { from: "auth", to: "pod", label: "임시 자격 증명", title: "세션 태그가 붙어 온다", detail: "클러스터 이름, 네임스페이스, ServiceAccount, Pod 이름이 세션 태그로 붙는다. IAM 정책에서 이 태그로 조건을 걸 수 있다." },
+    { from: "pod", to: "s3", label: "PutObject", title: "역할 권한으로 호출한다", detail: "SDK는 만료 전에 다시 받아 온다. CloudTrail에는 역할 이름과 세션 태그가 남는다." },
+  ]}
+/>
+
+어느 쪽을 고를지 기준은 이렇다. 새 클러스터라면 Pod Identity가 관리할 것이 적다. 역할 하나를 여러 클러스터가 그대로 쓰고, 클러스터를 바꿔도 연결만 새로 만들면 된다. IRSA가 여전히 필요한 경우도 있다. Fargate Pod, EKS 밖의 쿠버네티스(자체 구축, 다른 클라우드), Pod Identity를 지원하는 버전보다 오래된 AWS SDK를 쓰는 앱이다. 두 방식 모두 노드 메타데이터로 노드 역할을 꺼내 쓰는 길은 따로 막아야 한다. 노드 시작 템플릿에서 IMDSv2 홉 제한을 1로 두면 Pod에서는 노드 역할을 못 꺼낸다(hostNetwork Pod 제외).
+
+## 애드온도 버전이 있다
+
+EKS 클러스터를 만들면 쿠버네티스 바이너리만 생기고, 클러스터를 실제로 쓰게 하는 부품은 애드온으로 따로 깐다. 기본 셋은 `vpc-cni`(Pod 네트워크), `coredns`(클러스터 DNS, [CoreDNS](/posts/k8s-coredns)), `kube-proxy`(Service 규칙)이고, Pod Identity 에이전트, EBS CSI 드라이버([PV와 PVC](/posts/k8s-pv-pvc)), 관측 에이전트가 자주 더해진다. EKS 모듈 계획에서도 이 순서가 보인다.
+
+```text
+  # module.eks.aws_eks_addon.before_compute["eks-pod-identity-agent"] will be created
+  # module.eks.aws_eks_addon.before_compute["vpc-cni"] will be created
+  # module.eks.aws_eks_addon.this["coredns"] will be created
+  # module.eks.aws_eks_addon.this["kube-proxy"] will be created
+```
+
+`before_compute`는 노드 그룹보다 먼저 깐다는 뜻이다. vpc-cni가 없는 노드는 Pod에 IP를 못 줘서 `NotReady`로 남으니, 노드보다 먼저 있어야 한다. 반대로 coredns는 돌 노드가 있어야 뜬다.
+
+애드온 버전은 클러스터 버전마다 맞는 범위가 있다.
+
+```bash
+# 이 클러스터 버전에서 쓸 수 있는 vpc-cni 버전과 기본값
+aws eks describe-addon-versions --addon-name vpc-cni --kubernetes-version 1.35 \
+  --query 'addons[0].addonVersions[0:3].[addonVersion,compatibilities[0].defaultVersion]' --output table
+```
+
+```text
+-------------------------------------
+|       DescribeAddonVersions       |
++----------------------+------------+
+|  v1.21.1-eksbuild.1  |  False     |
+|  v1.21.0-eksbuild.4  |  True      |
+|  v1.20.4-eksbuild.2  |  False     |
++----------------------+------------+
+```
+
+(예시. 버전 숫자는 지어낸 것이다.) 애드온을 손으로 고친 설정(`kubectl edit`, `set env`)은 애드온을 업데이트할 때 충돌한다. `--resolve-conflicts OVERWRITE`면 내 수정이 지워지고 `PRESERVE`면 남는다. 그래서 설정은 처음부터 `--configuration-values`로 애드온에 넣는다.
+
+## 1년에 세 번 올라오는 버전
+
+쿠버네티스는 대략 넉 달마다 마이너 버전이 나오고 EKS는 그보다 조금 늦게 따라온다. EKS는 각 버전을 출시 후 14개월 동안 표준 지원하고, 그 뒤 12개월은 연장 지원으로 클러스터 시간당 요금을 더 받는다(글 쓰는 시점에 표준 0.10달러, 연장 0.60달러). 연장 지원도 끝나면 AWS가 컨트롤 플레인을 강제로 올린다. 업그레이드 정책(`upgrade_policy`)을 `STANDARD`로 두면 표준 지원이 끝날 때 연장으로 넘어가지 않고 바로 올린다. 1년에 한두 번은 반드시 업그레이드를 하게 된다는 뜻이다.
+
+컨트롤 플레인은 한 번에 마이너 하나씩만 올릴 수 있고 내릴 수 없다. 순서는 이렇다.
+
+```bash
+# 1. 지워진 API를 쓰는 곳이 없는지 업그레이드 인사이트부터 본다
+aws eks list-insights --cluster-name shop-prod --filter categories=UPGRADE_READINESS
+# 2. 컨트롤 플레인을 한 단계 올린다 (수십 분 걸린다)
+aws eks update-cluster-version --name shop-prod --kubernetes-version 1.36
+# 3. 애드온을 새 버전에 맞는 버전으로 올린다
+aws eks update-addon --cluster-name shop-prod --addon-name vpc-cni --addon-version <새 버전>
+# 4. 노드 그룹을 올린다 (롤링 교체, PDB를 지킨다)
+aws eks update-nodegroup-version --cluster-name shop-prod --nodegroup-name general
+```
+
+Terraform으로 만든 클러스터라면 같은 순서를 코드에서 한다. `kubernetes_version`을 올려 plan과 apply, 애드온, 노드 그룹 순이다. 쿠버네티스 1.28부터는 kubelet이 API 서버보다 마이너 세 단계까지 뒤처져도 되지만, 그 여유는 노드 교체를 몰아서 하려고 두는 것이지 미루라고 있는 것이 아니다. 업그레이드에서 실제로 터지는 것은 대부분 쿠버네티스 쪽이다. 지워진 API 버전을 쓰는 매니페스트나 Helm 차트, 새 버전을 지원하지 않는 컨트롤러(Ingress, cert-manager, Karpenter)를 인사이트와 각 프로젝트의 호환표로 먼저 확인한다. 위험이 크면 새 버전 클러스터를 하나 더 만들어 트래픽을 옮기는 블루그린을 쓰는데, 앞에서 본 IRSA의 신뢰 정책 문제가 이때 드러난다.
+
+## EKS에서 막히는 순간
+
+증상별로 먼저 볼 곳이다.
+
+- `error: You must be logged in to the server (the server has asked for the client to provide credentials)`: 401, 신원 단계다. `aws sts get-caller-identity`로 지금 어떤 ARN인지 보고, 그 ARN이 `aws eks list-access-entries`에 있는지 본다. SSO로 들어왔다면 세션 ARN(`assumed-role/...`)이 아니라 그 SSO 역할(`AWSReservedSSO_...`)의 ARN이 등록돼 있어야 한다.
+- `Error from server (Forbidden): pods is forbidden: User "arn:aws:sts::123456789012:assumed-role/dev-readonly/alice" cannot list resource "pods"`: 403, 권한 단계다. access policy의 범위(네임스페이스)나 그룹의 RBAC를 본다.
+- `Unable to connect to the server: dial tcp 10.10.3.17:443: i/o timeout`: 프라이빗 엔드포인트로 풀렸는데 경로가 없다. VPN이나 같은 VPC에서 치는지, 퍼블릭 허용 대역에 내 IP가 있는지 본다.
+- `kubectl logs`와 `exec`만 timeout: 컨트롤 플레인에서 노드로 오는 길이 막혔다. 노드 보안 그룹이 클러스터 보안 그룹에서 10250을 받는지 본다.
+- Pod가 `ContainerCreating`이고 `failed to assign an IP address`: 서브넷의 `AvailableIpAddressCount`부터 본다. 남아 있는데도 실패하면 aws-node 로그(`/var/log/aws-routed-eni/ipamd.log`)와 노드 역할의 `AmazonEKS_CNI_Policy`를 본다.
+- 앱 로그에 S3 `AccessDenied`가 나고 ARN이 노드 역할이다: Pod Identity나 IRSA가 안 붙어서 SDK가 노드 메타데이터까지 내려갔다. Pod의 환경 변수에 `AWS_CONTAINER_CREDENTIALS_FULL_URI`나 `AWS_ROLE_ARN`이 있는지, ServiceAccount 이름이 연결과 같은지 본다. 연결은 Pod가 뜰 때 들어가니 연결을 만든 뒤 Pod를 다시 띄운다.
+- 노드 그룹 업데이트가 `PodEvictionFailure`로 실패: PDB가 노드를 비우지 못하게 막았다. `kubectl get pdb -A`에서 `ALLOWED DISRUPTIONS`가 0인 것을 찾는다.
+
+## IAM으로 들어오고 VPC에서 주소를 받는다
+
+EKS는 컨트롤 플레인을 AWS 계정에서 대신 돌리고, 내 VPC에 꽂은 ENI로 노드와 잇는다. 사람은 IAM 자격 증명으로 서명한 STS 주소를 토큰으로 내밀고, API 서버는 그 신원을 access entry에서 찾아 쿠버네티스 권한을 붙인다. Pod는 VPC CNI 덕분에 서브넷의 진짜 IP를 받는데, warm pool 때문에 Pod 수보다 많은 주소를 먼저 가져가니 서브넷은 크게 잡는다. Pod의 AWS 권한은 노드 역할이 아니라 Pod Identity나 IRSA로 ServiceAccount마다 준다. 이 클러스터에 앱을 올리는 흐름은 [EKS 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### EKS에서 AWS가 관리하는 것과 내가 관리하는 것은 어디서 나뉘나요?
+
+컨트롤 플레인(API 서버, etcd, 스케줄러, 컨트롤러)은 AWS가 자기 계정에서 이중화하고 패치한다. 노드, 애드온 버전, 네트워크 설계, IAM 연결, 쿠버네티스 안의 워크로드는 내 몫이다. 관리형 노드 그룹은 노드 교체를 도와주고, Fargate나 Auto Mode로 가면 노드 관리도 AWS 쪽으로 넘어간다. 버전 업그레이드를 시작하는 것은 언제나 내 일이다.
+
+### kubectl이 EKS에 인증하는 과정을 설명해 주세요.
+
+kubeconfig의 exec 설정대로 `aws eks get-token`이 돌아 STS GetCallerIdentity의 미리 서명된 URL을 만들고, 이것이 Bearer 토큰이 된다. API 서버는 그 URL을 대신 호출해 IAM ARN을 알아낸다. 그 ARN을 access entry(또는 aws-auth)에서 찾아 쿠버네티스 사용자와 그룹, 권한을 붙이고 RBAC로 인가한다. 토큰에는 클러스터 이름이 서명에 들어가고 15분만 유효하다.
+
+### IAM 관리자인데 kubectl이 Unauthorized입니다. 왜 그런가요?
+
+IAM 권한과 쿠버네티스 권한이 따로라서다. AdministratorAccess는 AWS API 권한일 뿐이고, 클러스터 안의 권한은 access entry나 aws-auth에 그 IAM 주체가 등록돼 있어야 생긴다. `aws sts get-caller-identity`로 지금 ARN을 확인하고 access entry를 만든 뒤 access policy를 붙인다. 401이면 등록이 없는 것이고 403이면 등록은 됐는데 권한 범위가 모자란 것이다.
+
+### VPC CNI에서 노드 CPU가 남는데 Pod가 안 뜨는 이유는요?
+
+Pod가 서브넷의 실제 IP를 쓰기 때문에 서브넷 주소나 노드의 ENI 한도가 먼저 찬다. 기본 warm 설정은 ENI 하나만큼의 IP를 미리 쥐고 있어서 Pod 수보다 많은 주소가 서브넷에서 빠진다. 서브넷 AvailableIpAddressCount와 노드의 최대 Pod 수를 확인하고, 접두사 위임, WARM_IP_TARGET 조정, 보조 CIDR로 Pod 전용 서브넷 만들기 중에서 고친다. 처음 설계할 때 노드 서브넷을 넉넉하게 잡는 것이 가장 싸다.
+
+### IRSA와 EKS Pod Identity의 차이는요?
+
+둘 다 ServiceAccount마다 IAM 역할을 주지만 연결하는 곳이 다르다. IRSA는 클러스터의 OIDC 공급자를 IAM에 등록하고 역할 신뢰 정책에 그 OIDC와 ServiceAccount를 적는다. Pod Identity는 신뢰 정책이 `pods.eks.amazonaws.com`만 믿고, 어느 클러스터의 어느 ServiceAccount인지는 EKS API의 연결로 정한다. 그래서 Pod Identity는 클러스터를 바꿔도 역할을 고칠 필요가 없고 세션 태그를 준다. Fargate나 EKS 밖 클러스터, 오래된 SDK에는 IRSA를 쓴다.
+
+### 관리형 노드 그룹, Karpenter, Fargate는 언제 무엇을 쓰나요?
+
+관리형 노드 그룹은 인스턴스 타입이 정해진 안정적인 기본 용량에, Karpenter는 Pod 크기가 다양하거나 스팟을 섞어 비용을 줄이고 싶을 때 쓴다. Fargate는 노드 관리를 없애고 Pod 격리가 중요한 배치나 작은 서비스에 맞지만 DaemonSet, hostNetwork, EBS, GPU를 못 쓴다. 실무에서는 시스템 컴포넌트와 Karpenter 컨트롤러를 작은 관리형 노드 그룹에 두고 앱 용량은 Karpenter로 늘리는 조합이 흔하다.
+
+### EKS 버전 업그레이드는 어떤 순서로, 얼마나 자주 하나요?
+
+컨트롤 플레인을 한 마이너씩 올리고, 애드온을 새 버전에 맞추고, 노드 그룹을 롤링 교체한다. 그 전에 업그레이드 인사이트와 매니페스트로 지워진 API와 컨트롤러 호환을 확인한다. EKS 표준 지원은 버전마다 14개월이고 그 뒤 연장 지원은 비용이 커서, 사실상 1년에 한두 번은 올리게 된다. 위험이 크면 새 클러스터를 만들어 트래픽을 옮기는 블루그린을 쓴다.
+
+### aws-auth ConfigMap 대신 access entry를 쓰는 이유는요?
+
+ConfigMap은 클러스터 안에 있어서 잘못 고치면 아무도 못 들어가고, 고치려면 이미 클러스터 권한이 있어야 하고, 변경 이력이 AWS 쪽에 남지 않는다. access entry는 EKS API라서 IAM 권한으로 밖에서 관리하고 CloudTrail에 남고, Terraform으로 다루기도 쉽다. 클러스터를 만든 주체가 숨은 관리자로 남는 문제도 없앨 수 있다. 옮길 때는 API_AND_CONFIG_MAP으로 두고 항목을 옮긴 뒤 API로 바꾼다.

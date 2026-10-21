@@ -1,0 +1,615 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("api-pagination-sorting");
+
+쇼핑몰 상품 목록에서 "낮은 가격순"을 누르고 2페이지로 넘어가면 1페이지에서 본 키보드가 또 나온다는 제보가 들어온다. 그사이 상품이 추가되거나 지워졌으면 이해가 가는데, 확인해 보니 새벽이라 상품 테이블은 그대로였다. 데이터가 하나도 안 바뀌었는데 페이지가 겹친 것이다. 원인은 페이지를 자르는 방식이 아니라 정렬에 있었다.
+
+새 글이 끼어들 때 OFFSET이 밀리는 이유와 커서의 기본 모양은 [REST API 설계](/posts/rest-api-design)에서, 뒤 페이지로 갈수록 OFFSET이 느려지는 실행 계획은 [SQL 쿼리 고쳐 쓰기](/posts/sql-query-rewrite)에서 봤다. 이 글은 그다음 질문을 다룬다. 정렬이 흔들리지 않으려면 무엇이 필요한가, 정렬 방향이 섞이거나 NULL이 있으면 키셋 조건을 어떻게 쓰는가, 커서 안에는 무엇을 담고 어떻게 지키는가. 상품 100만 개짜리 테이블을 PostgreSQL 16에 만들어 직접 돌렸다.
+
+```sql
+CREATE TABLE products (
+  id         bigint PRIMARY KEY,
+  name       text    NOT NULL,
+  price      int     NOT NULL,          -- 1000원 단위라 같은 값이 많다
+  rating     numeric(2,1),              -- 리뷰가 없으면 NULL
+  created_at timestamptz NOT NULL
+);
+-- 가격은 1000원부터 30만 원까지 300가지, 평점은 다섯 개 중 하나가 NULL이다
+INSERT INTO products
+SELECT g, 'product-' || g,
+       (1 + (hashint4(g) & 2147483647) % 300) * 1000,
+       CASE WHEN g % 5 = 0 THEN NULL
+            ELSE round((1 + ((hashint4(g * 7) & 2147483647) % 41) / 10.0)::numeric, 1) END,
+       timestamptz '2026-01-01' + (g || ' seconds')::interval * 25
+FROM generate_series(1, 1000000) g;
+VACUUM ANALYZE products;
+```
+
+가격이 300가지뿐이라 같은 가격의 상품이 평균 3,333개씩 있다. 실제 쇼핑몰도 9,900원, 19,900원처럼 가격이 몰린다.
+
+## 데이터가 그대로인데 페이지가 겹친다
+
+제보와 같은 쿼리를 그대로 돌려 봤다. 가격으로만 정렬하고 5개씩 두 페이지를 받는다.
+
+```sql
+SELECT id, price FROM products ORDER BY price LIMIT 5 OFFSET 0;  -- 1페이지
+SELECT id, price FROM products ORDER BY price LIMIT 5 OFFSET 5;  -- 2페이지
+```
+
+```text
+  id  | price 
+------+-------
+ 1355 |  1000
+ 1512 |  1000
+  375 |  1000
+  547 |  1000
+ 2175 |  1000
+(5 rows)
+
+  id  | price 
+------+-------
+ 1512 |  1000
+ 1355 |  1000
+ 2175 |  1000
+  547 |  1000
+ 4650 |  1000
+(5 rows)
+```
+
+2페이지 다섯 개 중 네 개가 1페이지에 있던 상품이다. 아래 그림에서 다음을 누르면 무슨 일이 생겼는지 차례로 보인다.
+
+<AlgoTrace
+  caption="가격이 같은 상품끼리는 순서가 정해져 있지 않다"
+  memoryLabel="사용자가 본 상품"
+  cells={["1355", "1512", "375", "547", "2175", "4650", "4432", "4494"]}
+  steps={[
+    { caption: "가격 1000원인 상품이 3천 개 넘게 있다. ORDER BY price는 이들 사이의 순서를 아무것도 정하지 않는다." },
+    { found: [0, 1, 2, 3, 4], memory: ["1355", "1512", "375", "547", "2175"], caption: "1페이지 요청. DB는 1000원짜리 중 아무 다섯 개나 골라 준다. 틀린 답이 아니다." },
+    { pointer: 5, found: [0, 1, 4, 3, 5], memory: ["1355", "1512", "375", "547", "2175", "1512", "1355", "2175", "547", "4650"], caption: "2페이지 요청은 별개의 쿼리다. 이번에는 같은 1000원짜리를 다른 순서로 늘어놓고 여섯 번째부터 준다. 네 개가 겹쳤다." },
+    { pointer: 6, found: [6, 7], memory: ["1355", "1512", "375", "547", "2175", "1512", "1355", "2175", "547", "4650"], caption: "겹친 만큼 어떤 상품은 어느 페이지에도 나오지 않는다. 4432와 4494는 LIMIT 10 한 번으로 받으면 맨 앞에 오는 상품인데 두 페이지 어디에도 없다." },
+  ]}
+/>
+
+SQL 표준도 PostgreSQL도 `ORDER BY`에 적은 값이 같은 행끼리의 순서는 보장하지 않는다. 실행 계획을 보면 이유가 보인다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF) SELECT id FROM products ORDER BY price LIMIT 20 OFFSET 20;
+```
+
+```text
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
+ Limit (actual time=64.530..68.731 rows=20 loops=1)
+   ->  Gather Merge (actual time=64.524..68.725 rows=40 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         ->  Sort (actual time=62.351..62.354 rows=40 loops=3)
+               Sort Key: price
+               Sort Method: top-N heapsort  Memory: 27kB
+               Worker 0:  Sort Method: top-N heapsort  Memory: 27kB
+               Worker 1:  Sort Method: top-N heapsort  Memory: 27kB
+               ->  Parallel Seq Scan on products (actual time=0.010..34.933 rows=333333 loops=3)
+ Planning Time: 0.297 ms
+ Execution Time: 68.827 ms
+(12 rows)
+```
+
+작업자 프로세스 셋이 테이블을 나눠 읽고(`Parallel Seq Scan`), 각자 상위 40개만 힙으로 추린 뒤(`top-N heapsort`) 합친다(`Gather Merge`). 힙 정렬은 같은 값끼리의 순서를 지키지 않고, 어느 작업자가 어느 블록을 먼저 읽을지도 그때그때 다르다. `LIMIT`이 바뀌면 힙의 크기도 바뀐다. 1페이지(상위 5개)와 2페이지(상위 10개)는 서로 다른 계산이라 동점끼리의 순서가 맞을 이유가 없다. 이 밖에도 행이 UPDATE로 다른 위치로 옮겨지거나, 통계가 바뀌어 실행 계획이 달라지면 순서가 바뀐다.
+
+50페이지(1000행)를 연달아 받아 세어 봤다.
+
+```bash
+# 20개씩 50페이지를 OFFSET으로 받아 중복을 센다
+node unstable.js
+```
+
+```text
+ORDER BY price      50페이지(1000행) 받음: 중복 455행, 서로 다른 행 545개
+ORDER BY price, id  50페이지(1000행) 받음: 중복 0행, 서로 다른 행 1000개
+```
+
+정렬에 `id` 하나를 덧붙이자 중복이 사라졌다. 앞 줄의 숫자는 돌릴 때마다 조금씩 달랐다(한 번은 416행). 결과가 매번 다르다는 것 자체가 순서가 정해져 있지 않다는 증거다.
+
+## 정렬 키 끝에는 유일한 열을 붙인다
+
+정렬 키 전체가 행 하나를 가리켜야 페이지 경계가 하나로 정해진다. 그래서 정렬 키 맨 끝에 기본 키 같은 유일한 열을 붙인다. 이걸 동점 처리 열(tie-breaker)이라고 한다. 사용자에게 보이는 정렬 옵션이 "가격순" 하나여도 SQL은 `ORDER BY price, id`다.
+
+정렬 옵션을 클라이언트가 고르게 할 때는 받은 문자열을 SQL에 끼워 넣지 않고 허용 목록에서 꺼내 쓴다. 옵션마다 동점 처리 열이 붙은 정렬과, 그 정렬에 맞는 인덱스를 함께 정해 둔다.
+
+```js
+// sort 파라미터 → SQL 정렬. 목록에 없는 값은 400
+const SORTS = {
+  "price":      { orderBy: "price ASC, id ASC",   index: "products_price_id_idx" },
+  "-price":     { orderBy: "price DESC, id ASC",  index: "products_price_desc_id_idx" },
+  "-createdAt": { orderBy: "created_at DESC, id DESC", index: "products_created_id_idx" },
+};
+```
+
+이 규칙은 OFFSET에도, 키셋(커서)에도 똑같이 필요하다. 커서 방식에서 동점 처리 열이 없으면 "가격이 1000원보다 큰 것"으로 다음 페이지를 찾게 되고, 1000원짜리 3천 개 중 첫 페이지에 못 든 나머지는 통째로 건너뛴다.
+
+## 인덱스 순서와 테이블 순서가 다르면 OFFSET은 더 비싸다
+
+`(price, id)` 인덱스를 만들고 50만 번째 근처 페이지를 두 방식으로 받았다. 키셋 쪽 커서는 OFFSET 499999 자리의 행 `(150000, 906589)`다.
+
+```sql
+CREATE INDEX products_price_id_idx ON products (price, id);
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, name, price FROM products ORDER BY price, id LIMIT 20 OFFSET 500000;
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, name, price FROM products
+WHERE (price, id) > (150000, 906589)
+ORDER BY price, id LIMIT 20;
+```
+
+```text
+                                                                       QUERY PLAN                                                                       
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=33554.36..33555.70 rows=20 width=26) (actual time=307.322..307.339 rows=20 loops=1)
+   Buffers: shared hit=421368
+   ->  Index Scan using products_price_id_idx on products  (cost=0.42..67108.30 rows=1000000 width=26) (actual time=0.030..284.485 rows=500020 loops=1)
+         Buffers: shared hit=421368
+ Planning:
+   Buffers: shared hit=99 dirtied=1
+ Planning Time: 0.377 ms
+ Execution Time: 307.368 ms
+(8 rows)
+
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..2.54 rows=20 width=26) (actual time=0.055..0.071 rows=20 loops=1)
+   Buffers: shared hit=18 read=1
+   ->  Index Scan using products_price_id_idx on products  (cost=0.42..53335.14 rows=505535 width=26) (actual time=0.054..0.068 rows=20 loops=1)
+         Index Cond: (ROW(price, id) > ROW(150000, 906589))
+         Buffers: shared hit=18 read=1
+ Planning Time: 0.171 ms
+ Execution Time: 0.109 ms
+(7 rows)
+```
+
+OFFSET 쪽은 `rows=500020`을 읽고 버렸는데, 버퍼(8KB 페이지)를 42만 번 건드렸다. [SQL 쿼리 고쳐 쓰기](/posts/sql-query-rewrite)에서 id 순서로 90만 행을 건너뛸 때는 1만 3천 번이었다. 차이는 인덱스 순서와 테이블에 행이 놓인 순서가 얼마나 닮았느냐다. id 순서는 행이 들어간 순서와 같아서 같은 테이블 페이지를 연달아 읽는다. 가격 순서는 테이블 여기저기에 흩어져 있어서 행 하나마다 다른 페이지를 찾아간다. 가격, 평점, 이름처럼 사용자가 고르는 정렬일수록 OFFSET이 이렇게 더 비싸진다. 키셋은 정렬과 상관없이 `Index Cond`로 시작점에 바로 내려가 19번 만에 끝났다.
+
+## 정렬 방향이 섞이면 행 비교를 못 쓴다
+
+이번에는 "높은 가격순, 같은 가격이면 먼저 등록한 순"이다. `ORDER BY price DESC, id ASC`. 행 비교 `(price, id) < (150000, 906589)`는 두 열을 같은 방향으로 비교하니 이 정렬의 "다음"을 뜻하지 않는다. 뜻대로 풀어 쓰면 "가격이 더 낮거나, 가격이 같고 id가 더 큰 것"이다.
+
+```sql
+CREATE INDEX products_price_desc_id_idx ON products (price DESC, id ASC);
+
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, name, price FROM products
+WHERE price < 150000 OR (price = 150000 AND id > 906589)
+ORDER BY price DESC, id ASC LIMIT 20;
+```
+
+```text
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Limit (actual time=261.186..261.200 rows=20 loops=1)
+   Buffers: shared hit=422388 read=1928
+   ->  Index Scan using products_price_desc_id_idx on products (actual time=261.185..261.196 rows=20 loops=1)
+         Filter: ((price < 150000) OR ((price = 150000) AND (id > 906589)))
+         Rows Removed by Filter: 502655
+         Buffers: shared hit=422388 read=1928
+ Planning:
+   Buffers: shared hit=119 read=1
+ Planning Time: 0.440 ms
+ Execution Time: 261.227 ms
+(10 rows)
+```
+
+방향이 맞는 인덱스를 탔는데도 261ms다. 조건이 `Index Cond`가 아니라 `Filter`에 있다. OR로 묶인 조건은 인덱스의 시작점으로 쓰지 못해서, 인덱스 맨 앞(가장 비싼 상품)부터 읽으며 50만 행을 걸러 냈다(`Rows Removed by Filter: 502655`). 고치는 방법이 두 가지 있다.
+
+첫째, 뜻은 같지만 인덱스가 쓸 수 있는 조건을 하나 덧붙인다. "가격이 15만 원 이하"는 OR 두 갈래에 모두 참이니 결과가 바뀌지 않는다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, name, price FROM products
+WHERE price <= 150000 AND (price < 150000 OR id > 906589)
+ORDER BY price DESC, id ASC LIMIT 20;
+```
+
+```text
+                                                QUERY PLAN                                                
+----------------------------------------------------------------------------------------------------------
+ Limit (actual time=5.776..5.818 rows=20 loops=1)
+   Buffers: shared hit=2519 read=1
+   ->  Index Scan using products_price_desc_id_idx on products (actual time=5.775..5.814 rows=20 loops=1)
+         Index Cond: (price <= 150000)
+         Filter: ((price < 150000) OR (id > 906589))
+         Rows Removed by Filter: 2969
+         Buffers: shared hit=2519 read=1
+ Planning:
+   Buffers: shared hit=134
+ Planning Time: 0.423 ms
+ Execution Time: 5.845 ms
+(11 rows)
+```
+
+`Index Cond: (price <= 150000)`로 15만 원 자리로 바로 내려갔다. 남은 낭비는 같은 15만 원짜리 중 커서보다 앞에 있던 2,969행이다. 동점이 많을수록 이 낭비가 커진다.
+
+둘째, 방향을 하나로 맞춘다. 숫자라면 `-price`로 뒤집은 식 인덱스를 만들면 두 열 모두 오름차순이 되어 행 비교를 그대로 쓸 수 있다.
+
+```sql
+CREATE INDEX products_negprice_id_idx ON products ((-price), id);
+
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, name, price FROM products
+WHERE (-price, id) > (-150000, 906589)
+ORDER BY -price, id LIMIT 20;
+```
+
+```text
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.047..0.080 rows=20 loops=1)
+   Buffers: shared hit=16 read=3
+   ->  Index Scan using products_negprice_id_idx on products (actual time=0.046..0.077 rows=20 loops=1)
+         Index Cond: (ROW((- price), id) > ROW('-150000'::integer, 906589))
+         Buffers: shared hit=16 read=3
+ Planning:
+   Buffers: shared hit=130 read=1
+ Planning Time: 0.468 ms
+ Execution Time: 0.114 ms
+(9 rows)
+```
+
+0.1ms, 19버퍼다. 문자열처럼 뒤집을 수 없는 값은 첫째 방법을 쓴다. 세 쿼리가 인덱스를 어떻게 읽었는지 그림으로 보면 이렇다.
+
+<AlgoTrace
+  caption="높은 가격순 다음 페이지: 어디서부터 읽기 시작하나"
+  memoryLabel="읽고 버린 행"
+  cells={["30만", "…", "15.1만", "15만 id≤906589", "15만 id>906589", "14.9만", "…"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "price DESC, id ASC 인덱스다. 앞 페이지의 마지막 행은 15만 원, id 906589였다." },
+    { pointer: 2, memory: ["30만~15.1만 약 50만 행"], caption: "OR 조건만 쓰면 시작점을 못 찾는다. 맨 앞 30만 원부터 읽으며 하나씩 조건을 확인하고 버린다." },
+    { pointer: 4, found: [4], memory: ["30만~15.1만 약 50만 행", "15만 앞쪽 2,969행"], caption: "50만 행을 지나서야 결과가 나온다. 261ms." },
+    { pointer: 3, memory: ["15만 앞쪽 2,969행"], caption: "price <= 150000을 덧붙이면 15만 원의 첫 행으로 바로 내려간다. 같은 가격 중 커서 앞쪽만 걸러 낸다. 5.8ms." },
+    { pointer: 4, found: [4], memory: [], caption: "(-price, id) 인덱스는 커서 바로 다음 칸으로 내려간다. 버린 행이 없다. 0.1ms." },
+  ]}
+/>
+
+MySQL 8.0도 내림차순 인덱스를 지원하니 같은 방법을 쓸 수 있다. 다만 MySQL은 버전과 쿼리 모양에 따라 행 비교 `(a, b) > (x, y)`를 인덱스 범위로 바꾸지 못하는 경우가 있어서 OR로 풀어 쓰고 첫째 방법처럼 범위 조건을 덧붙이는 편이 안전하다. 실행 계획으로 꼭 확인한다.
+
+## NULL이 섞인 열로 정렬하면 행이 사라진다
+
+"평점 높은 순"을 만들었다. 평점은 리뷰가 없는 상품이 NULL이다. 그냥 내림차순으로 정렬하면 이렇게 나온다.
+
+```sql
+SELECT id, rating FROM products ORDER BY rating DESC, id DESC LIMIT 3;
+```
+
+```text
+   id    | rating 
+---------+--------
+ 1000000 |       
+  999995 |       
+  999990 |       
+(3 rows)
+```
+
+PostgreSQL은 NULL을 어떤 값보다 크다고 보고 정렬한다. 그래서 내림차순이면 NULL이 맨 앞(`NULLS FIRST`)에 온다. 리뷰 없는 상품이 "평점 높은 순" 맨 위에 뜨니 `NULLS LAST`를 붙였다. 그다음 키셋으로 페이지를 넘기다 평점 있는 마지막 상품(1.0점, id 48)에서 다음 페이지를 요청했다.
+
+```sql
+-- 평점 있는 상품의 끝과 NULL의 시작
+SELECT id, rating FROM products ORDER BY rating DESC NULLS LAST, id DESC LIMIT 3 OFFSET 799998;
+-- 그 자리를 커서로 다음 페이지를 찾는다
+SELECT count(*) FROM products WHERE (rating, id) < (1.0, 48);
+-- 아직 남은 행
+SELECT count(*) FROM products WHERE rating IS NULL;
+```
+
+```text
+   id    | rating 
+---------+--------
+     137 |    1.0
+      48 |    1.0
+ 1000000 |       
+(3 rows)
+
+ count 
+-------
+     0
+(1 row)
+
+ count  
+--------
+ 200000
+(1 row)
+```
+
+다음 페이지가 0행이라 앱은 "목록 끝"을 보여 준다. 그 뒤에 리뷰 없는 상품 20만 개가 남아 있는데도. NULL과의 비교는 참도 거짓도 아닌 NULL이 되어 `WHERE`를 통과하지 못하기 때문이다(`(NULL, 5) < (1.0, 48)`은 NULL이다).
+
+<AlgoTrace
+  caption="NULLS LAST 정렬에 키셋 조건을 걸면 NULL 행은 영영 안 나온다"
+  memoryLabel="다음 페이지 결과"
+  cells={["4.9", "…", "1.0 id137", "1.0 id48", "NULL id1000000", "NULL id999995", "…"]}
+  steps={[
+    { pointer: 0, caption: "평점 내림차순, NULL은 맨 뒤다. 페이지를 넘기며 평점 있는 상품 80만 개를 다 봤다." },
+    { pointer: 3, found: [3], caption: "마지막 페이지의 끝은 1.0점, id 48이다. 이 값이 커서가 된다." },
+    { pointer: 4, memory: [], caption: "WHERE (rating, id) < (1.0, 48). NULL 행에서 이 비교는 참이 아니라 NULL이다. 조건을 통과하지 못한다." },
+    { pointer: 6, memory: [], caption: "결과 0행. 앱은 목록 끝이라고 판단한다. 리뷰 없는 상품 20만 개가 화면에서 사라졌다." },
+  ]}
+/>
+
+고치는 방법은 NULL을 정렬 가능한 값으로 바꾸는 것이다. 평점은 0.0보다 작을 수 없으니 NULL을 -1로 바꾼 식으로 정렬하고, 같은 식으로 인덱스를 만든다.
+
+```sql
+CREATE INDEX products_rating_sort_idx ON products ((coalesce(rating, -1)) DESC, id DESC);
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT id, rating FROM products
+WHERE (coalesce(rating, -1), id) < (1.0, 48)
+ORDER BY coalesce(rating, -1) DESC, id DESC LIMIT 3;
+```
+
+```text
+                                              QUERY PLAN                                               
+-------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.094..0.096 rows=3 loops=1)
+   ->  Index Scan using products_rating_sort_idx on products (actual time=0.093..0.094 rows=3 loops=1)
+         Index Cond: (ROW(COALESCE(rating, '-1'::numeric), id) < ROW(1.0, 48))
+ Planning Time: 0.651 ms
+ Execution Time: 0.130 ms
+(5 rows)
+```
+
+이번에는 id 1000000, 999995, 999990의 NULL 행이 이어서 나온다. 커서에는 원래 값(NULL)이 아니라 정렬에 쓴 값(-1)을 담는다. 다른 방법으로는 커서가 NULL 구간에 들어왔는지에 따라 `rating IS NULL AND id < $1` 쿼리로 갈아타는 것이 있다. 식을 쓰기 싫으면 열을 `NOT NULL DEFAULT 0`으로 바꾸는 것도 방법이다. MySQL 8은 NULL을 가장 작은 값으로 보아 오름차순에서 맨 앞, 내림차순에서 맨 뒤에 두고 `NULLS LAST` 문법이 없다. DB를 옮길 때 목록 순서가 바뀌는 흔한 원인이다.
+
+## 이전 페이지로 돌아가기
+
+키셋은 "다음"만 되는 줄 알기 쉽지만 "이전"도 된다. 지금 페이지의 첫 행을 기준으로 비교와 정렬 방향을 모두 뒤집어 받은 뒤, 앱에서 다시 뒤집는다. 가격순에서 커서 `(150000, 906589)`의 다음과 이전 세 개씩이다.
+
+```sql
+-- 다음 페이지
+SELECT id, price FROM products WHERE (price, id) > (150000, 906589) ORDER BY price, id LIMIT 3;
+-- 이전 페이지: 비교와 정렬을 뒤집고, 바깥에서 원래 순서로 되돌린다
+SELECT * FROM (
+  SELECT id, price FROM products
+  WHERE (price, id) < (150000, 906589)
+  ORDER BY price DESC, id DESC LIMIT 3
+) p ORDER BY price, id;
+```
+
+```text
+   id   | price  
+--------+--------
+ 906784 | 150000
+ 907331 | 150000
+ 907451 | 150000
+(3 rows)
+
+   id   | price  
+--------+--------
+ 904338 | 150000
+ 905298 | 150000
+ 905620 | 150000
+(3 rows)
+```
+
+안쪽 쿼리는 커서에서 가까운 것부터(905620, 905298, 904338) 가져오고, 바깥 정렬이 화면 순서로 되돌린다. 안쪽을 뒤집지 않고 `ORDER BY price, id`로 쓰면 맨 처음 세 상품이 나온다. 응답에는 다음과 이전 커서를 둘 다 실어 준다.
+
+<SequenceDiagram
+  caption="다음과 이전 커서를 함께 주고, 받으면 검증부터 한다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "api", label: "API" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "api", label: "GET ?sort=price", title: "첫 페이지", detail: "커서가 없으면 처음부터다. 서버는 limit + 1개를 읽어 다음이 있는지 안다.", payload: "GET /v1/products?sort=price&limit=20" },
+    { from: "api", to: "db", label: "LIMIT 21", title: "하나 더 읽는다", detail: "21개가 오면 다음 페이지가 있다. 20개만 돌려주고 20번째 행으로 next 커서를 만든다." },
+    { from: "api", to: "app", label: "data · next", title: "커서는 서명해서 준다", detail: "첫 페이지라 prev는 없다. 커서 안에는 정렬 이름, 마지막 행의 정렬 값, 방향, 필터 해시가 들어 있다.", payload: "{ \"data\": [...], \"next\": \"eyJ2IjoxLCJz….G4s5nu8jVzY-siRz\", \"prev\": null }" },
+    { from: "app", to: "api", label: "GET ?cursor=…", title: "다음 페이지 요청", detail: "앱은 커서를 해석하지 않고 그대로 돌려보낸다." },
+    { from: "api", to: "api", label: "서명·정렬 확인", title: "받은 커서부터 검증한다", detail: "서명이 맞는지, 지금 요청의 정렬과 필터가 커서를 만들 때와 같은지 본다. 다르면 400이다." },
+    { from: "api", to: "db", label: "(price,id) > …", title: "방향에 맞는 조건으로 읽는다", detail: "next면 커서보다 뒤, prev면 비교와 정렬을 뒤집어 앞쪽을 읽고 앱에 주기 전에 순서를 되돌린다." },
+    { from: "api", to: "app", label: "data · next · prev", title: "양쪽 커서를 함께 준다", detail: "prev는 이 페이지 첫 행으로, next는 마지막 행으로 만든다. 끝에 닿은 쪽은 null이다." },
+  ]}
+/>
+
+## 커서에 담을 것과 지킬 것
+
+커서는 정렬 값만 담은 문자열이 아니다. 아래는 위 그림에서 쓴 커서를 해독한 모양이다.
+
+```bash
+# 커서를 만들고, 해독하고, 변조·정렬 변경·필터 변경을 넣어 본다
+node cursor.js
+```
+
+```text
+cursor : eyJ2IjoxLCJzIjoiLXByaWNlLGlkIiwiayI6WzE1MDAwMCw5MDY1ODldLCJkIjoibmV4dCIsImYiOiJhNDRkNTE5NiJ9.G4s5nu8jVzY-siRz
+decoded: {"v":1,"s":"-price,id","k":[150000,906589],"d":"next","f":"a44d5196"}
+tampered        -> 400 invalid cursor (signature)
+sort changed    -> 400 cursor was made for sort=-price,id
+filter changed  -> 400 cursor was made for another filter
+```
+
+<UrlAnatomy
+  caption="커서 하나를 펼쳐 보기"
+  base="cursor"
+  separator=" = "
+  joiner=" · "
+  params={[
+    {
+      key: "v",
+      value: "1",
+      title: "커서 형식 버전",
+      description: "정렬 키를 바꾸거나 형식을 고칠 때 옛 커서를 알아보고 400으로 돌려보내거나 변환한다. 버전이 없으면 배포 직후 옛 커서로 온 요청이 이상한 쿼리가 된다.",
+    },
+    {
+      key: "s",
+      value: "-price,id",
+      title: "이 커서를 만든 정렬",
+      description: "가격순으로 받은 커서를 평점순 요청에 붙여 보내면 엉뚱한 값을 비교하게 된다. 정렬이 다르면 거절하고, 앱은 정렬을 바꿀 때 커서를 버린다.",
+    },
+    {
+      key: "k",
+      value: "[150000,906589]",
+      title: "경계 행의 정렬 값",
+      description: "정렬 키 전부의 값이다. 동점 처리 열(id)까지 들어가야 경계가 하나로 정해진다. NULL을 바꿔 정렬했다면 바꾼 값을 넣는다. 화면에 안 보이는 열이라도 정렬 키면 들어간다.",
+      required: true,
+    },
+    {
+      key: "d",
+      value: "next",
+      title: "방향",
+      description: "next면 경계 뒤를, prev면 경계 앞을 읽는다. 방향을 커서에 넣어 두면 API 파라미터를 하나 줄일 수 있다.",
+    },
+    {
+      key: "f",
+      value: "a44d5196",
+      title: "필터 해시",
+      description: "category=keyboard로 받은 커서를 category=mouse 요청에 쓰면 경계가 의미 없어진다. 필터 조건의 해시를 넣어 두고 다르면 거절한다.",
+    },
+    {
+      key: ".G4s5nu8jVzY-siRz",
+      display: ".서명",
+      title: "HMAC 서명",
+      description: "base64url은 암호화가 아니다. 누구나 풀고 고쳐 다시 감쌀 수 있다. 서버만 아는 비밀로 서명해 두면 고친 커서를 바로 알아본다. 비교는 timingSafeEqual 같은 상수 시간 비교로 하고, 비밀을 교체할 때는 이전 비밀도 잠시 함께 받아 준다.",
+    },
+  ]}
+/>
+
+서명은 보안 때문만은 아니다. 클라이언트가 커서를 직접 만들어 쓰기 시작하면 그 형식이 사실상 공개 API가 되어 나중에 정렬 키를 바꿀 수 없다. 서명이 있으면 "해석하지 말고 그대로 돌려보내라"는 약속을 서버가 강제할 수 있다. 커서에 들어간 값은 해독하면 보이니 노출되면 안 되는 값(내부 점수, 다른 사용자의 정보)은 넣지 않는다. 숨겨야 하면 서명 대신 암호화한다.
+
+## 직접 짜 보는 커서 비교
+
+메모리 캐시에 올려 둔 목록이나 여러 저장소에서 모은 결과를 앱에서 페이지로 자를 때는 SQL 대신 코드로 "커서 뒤에 오는가"를 판단해야 한다. 정렬 정의(`[["price", "desc"], ["id", "asc"]]` 같은 배열)를 받아서 `row`가 `cursor`보다 엄밀히 뒤에 오면 `true`를 돌려주는 함수를 짜 보자. 앞 열부터 비교하고, 같으면 다음 열로 넘어간다.
+
+<CodePlayground
+  caption="방향이 섞인 정렬에서 커서 뒤인지 판단하기"
+  functionName="isAfter"
+  initialCode={`function isAfter(row, cursor, sort) {
+  // sort: [[필드, "asc" | "desc"], ...] 앞 열이 우선
+  // 앞 열부터 비교: 값이 같으면 다음 열로
+  // asc면 큰 쪽이 뒤, desc면 작은 쪽이 뒤
+  // 모든 열이 같으면 같은 행이니 false
+  return false;
+}`}
+  solution={`function isAfter(row, cursor, sort) {
+  for (const [field, dir] of sort) {
+    if (row[field] === cursor[field]) continue;
+    const greater = row[field] > cursor[field];
+    return dir === "asc" ? greater : !greater;
+  }
+  return false;
+}`}
+  tests={[
+    { label: "높은 가격순: 더 싼 상품", args: [{ price: 100, id: 5 }, { price: 150, id: 9 }, [["price", "desc"], ["id", "asc"]]], expected: true },
+    { label: "같은 가격, id가 더 큼", args: [{ price: 150, id: 10 }, { price: 150, id: 9 }, [["price", "desc"], ["id", "asc"]]], expected: true },
+    { label: "같은 가격, id가 더 작음", args: [{ price: 150, id: 8 }, { price: 150, id: 9 }, [["price", "desc"], ["id", "asc"]]], expected: false },
+    { label: "커서 자신", args: [{ price: 150, id: 9 }, { price: 150, id: 9 }, [["price", "desc"], ["id", "asc"]]], expected: false },
+    { label: "더 비싼 상품", args: [{ price: 200, id: 1 }, { price: 150, id: 9 }, [["price", "desc"], ["id", "asc"]]], expected: false },
+    { label: "낮은 가격순: 더 싼 상품", args: [{ price: 100, id: 1 }, { price: 150, id: 9 }, [["price", "asc"], ["id", "asc"]]], expected: false },
+    { label: "세 열: 마지막 열로 결정", args: [{ rating: 4.5, price: 100, id: 3 }, { rating: 4.5, price: 100, id: 2 }, [["rating", "desc"], ["price", "asc"], ["id", "asc"]]], expected: true },
+    { label: "세 열: 첫 열로 결정", args: [{ rating: 4.0, price: 1, id: 1 }, { rating: 4.5, price: 100, id: 2 }, [["rating", "desc"], ["price", "asc"], ["id", "asc"]]], expected: true },
+  ]}
+/>
+
+마지막 테스트에서 가격과 id가 훨씬 작아도 평점이 낮으니 뒤에 온다. 앞 열이 다르면 뒤 열은 보지 않는다. 앱에서 문자열을 비교할 때는 DB의 정렬 규칙(collation)과 JavaScript의 비교가 다를 수 있다. 한글이나 대소문자가 섞인 이름으로 정렬한다면 DB와 같은 규칙으로 비교하거나, 정렬과 자르기를 DB에 맡긴다.
+
+## 전체 개수와 페이지 번호가 꼭 필요할 때
+
+관리자 화면처럼 "총 36,481건, 1,825페이지 중 3페이지"를 보여 줘야 하는 화면도 있다. 정확한 `COUNT(*)`가 비싼 이유는 [SQL 쿼리 고쳐 쓰기](/posts/sql-query-rewrite)에서 봤다. 대략이면 되는 곳은 통계 추정치를 쓴다.
+
+```sql
+-- 테이블 전체 행 수의 추정치 (VACUUM/ANALYZE 때 갱신)
+SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = 'products';
+-- 조건이 있으면 실행 계획의 rows 추정치를 쓴다
+EXPLAIN SELECT count(*) FROM products WHERE price BETWEEN 10000 AND 20000;
+-- 실제 값
+SELECT count(*) FROM products WHERE price BETWEEN 10000 AND 20000;
+```
+
+```text
+ estimate 
+----------
+  1000000
+(1 row)
+
+                                                 QUERY PLAN                                                  
+-------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=1386.01..1386.02 rows=1 width=8)
+   ->  Index Only Scan using products_price_desc_id_idx on products  (cost=0.42..1294.73 rows=36515 width=0)
+         Index Cond: ((price >= 10000) AND (price <= 20000))
+(3 rows)
+
+ count 
+-------
+ 36481
+(1 row)
+```
+
+추정 36,515건, 실제 36,481건이다. 조건이 단순하면 꽤 맞지만, 여러 열이 얽힌 조건이나 통계가 낡은 테이블에서는 몇 배씩 틀리기도 한다. 화면에는 "약 3만 6천 건"처럼 어림이라는 걸 드러낸다. 검색 서비스들이 "약 1,230,000개"라고 보여 주는 것도 같은 이유다.
+
+페이지 번호로 이동해야 하면 OFFSET을 쓰되 갈 수 있는 깊이에 상한을 둔다. 100페이지 이후는 "검색 조건을 좁혀 달라"고 안내하는 식이다. Elasticsearch도 `from + size`가 기본 1만(`index.max_result_window`)을 넘으면 거절하고, 더 깊이 가려면 정렬 값으로 이어 가는 `search_after`를 쓰게 한다. 키셋과 같은 생각이다.
+
+내보내기처럼 몇십 분 동안 수백만 행을 일관되게 읽어야 하면 페이지를 여러 번 나눠 읽는 동안 데이터가 바뀌는 문제가 남는다. 이때는 REPEATABLE READ 트랜잭션 하나에서 서버 쪽 커서(`DECLARE ... CURSOR`)로 흘려 읽거나, 시작 시점의 결과 id 목록을 따로 저장해 두고 그 목록으로 페이지를 나눈다. Elasticsearch라면 PIT(point in time)를 연다. 어느 쪽이든 오래 열어 두는 만큼 비용이 든다.
+
+<ConceptDiagram
+  caption="어떤 페이지 방식을 고를까"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "q", label: "목록 화면", x: 200, y: 30, w: 120 },
+    { id: "off", label: "OFFSET", sub: "번호 이동, 깊이 상한", x: 70, y: 130, w: 120 },
+    { id: "key", label: "키셋 커서", sub: "더 보기, 공개 API", x: 200, y: 130, w: 120 },
+    { id: "snap", label: "스냅샷", sub: "내보내기, 일관성", x: 330, y: 130, w: 120 },
+    { id: "tie", label: "정렬 + 유일 열", sub: "셋 다 필요", x: 200, y: 210, w: 140 },
+  ]}
+  edges={[
+    { from: "q", to: "off", label: "작은 표" },
+    { from: "q", to: "key", label: "큰·바뀌는 목록" },
+    { from: "q", to: "snap", label: "전체를 한 번에" },
+    { from: "off", to: "tie", dashed: true },
+    { from: "key", to: "tie", dashed: true },
+    { from: "snap", to: "tie", dashed: true },
+  ]}
+/>
+
+## 목록이 이상하다는 문의가 오면
+
+"같은 항목이 두 페이지에 나온다"는데 데이터 변경이 없었다면 정렬 키에 동점 처리 열이 있는지부터 본다. 실행 계획에 병렬 작업자나 `top-N heapsort`가 보이면 거의 확실하다. 데이터가 계속 바뀌는 목록이면 OFFSET이 밀리는 경우다.
+
+"목록 끝까지 갔는데 항목 수가 모자란다"면 NULL이 있는 열로 키셋을 거는지, 커서에 동점 처리 열이 빠졌는지 본다. 커서를 해독해서 `k`에 정렬 키가 몇 개 들어 있는지 세어 보면 바로 보인다.
+
+"뒤 페이지로 갈수록 느리다"는 OFFSET이다. 가격·평점처럼 테이블 순서와 다른 정렬이면 같은 깊이라도 훨씬 느리다. 실행 계획의 `rows`와 `Buffers`를 본다.
+
+"정렬을 바꿨더니 이상한 결과가 나온다"면 앱이 이전 정렬의 커서를 그대로 붙여 보내는 경우가 많다. 서버가 커서의 정렬과 요청의 정렬을 비교해서 거절하게 만들면 이 버그가 조용히 넘어가지 않는다.
+
+"방향이 섞인 정렬만 느리다"면 조건이 `Index Cond`가 아니라 `Filter`에 있는지 본다. OR 조건만 있으면 인덱스 시작점을 못 찾는다.
+
+## 페이지는 정렬이 정해져야 잘린다
+
+페이지를 자르는 방법보다 먼저 정렬이 행 하나하나의 자리를 정해야 한다. 정렬 키 끝에 유일한 열을 붙이고, 방향이 섞이면 인덱스가 쓸 수 있는 조건으로 풀고, NULL은 정렬 가능한 값으로 바꾼다. 커서에는 정렬 키 전부와 정렬 이름, 필터, 방향을 담고 서명한다. 커서와 OFFSET의 기본은 [REST API 설계](/posts/rest-api-design)와 [SQL 쿼리 고쳐 쓰기](/posts/sql-query-rewrite)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 데이터가 바뀌지 않았는데 OFFSET 페이지에 중복이 생기는 이유는 무엇인가요?
+
+정렬 값이 같은 행끼리의 순서를 DB가 보장하지 않기 때문이다. 페이지마다 별개의 쿼리라서 병렬 스캔, top-N 힙 정렬, 실행 계획 변화에 따라 동점끼리의 순서가 달라진다. 정렬 키 끝에 기본 키 같은 유일한 열을 붙이면 순서가 하나로 정해져 중복이 사라진다.
+
+### 키셋 페이지네이션에서 정렬 방향이 섞이면 어떻게 하나요?
+
+행 비교는 모든 열을 같은 방향으로 비교하니 쓸 수 없고, "앞 열이 더 작거나, 같고 뒤 열이 더 큰" OR 조건으로 풀어 쓴다. OR 조건은 인덱스 시작점으로 못 쓰니 `price <= 값` 같은 범위 조건을 덧붙이거나, 숫자 열이면 -price 식 인덱스로 방향을 맞춰 행 비교를 쓴다. 실제로 OR만 쓴 쿼리는 261ms, 범위를 덧붙이면 5.8ms, 식 인덱스는 0.1ms였다.
+
+### NULL이 있는 열로 키셋 페이지네이션을 하면 어떤 문제가 있나요?
+
+NULL과의 비교는 참이 아니라 NULL이라서 WHERE를 통과하지 못하고, NULLS LAST로 정렬하면 NULL 구간이 통째로 사라진다. coalesce로 NULL을 정렬 가능한 값으로 바꾼 식으로 정렬하고 같은 식 인덱스를 만들거나, NULL 구간에서는 IS NULL 조건 쿼리로 갈아탄다. PostgreSQL은 NULL을 가장 큰 값으로, MySQL은 가장 작은 값으로 다룬다는 차이도 있다.
+
+### 커서에는 무엇을 담나요?
+
+경계 행의 정렬 키 값 전부(동점 처리 열 포함), 커서를 만든 정렬 이름, 필터 해시, 방향, 형식 버전을 담고 서버 비밀로 서명한다. 받은 커서는 서명과 정렬, 필터가 지금 요청과 맞는지 먼저 확인하고 다르면 400을 돌려준다. base64는 암호화가 아니니 노출되면 안 되는 값은 넣지 않는다.
+
+### 키셋으로 이전 페이지는 어떻게 가져오나요?
+
+현재 페이지 첫 행을 기준으로 비교 방향과 정렬 방향을 모두 뒤집어 LIMIT만큼 읽은 뒤, 결과를 다시 원래 순서로 뒤집는다. 안쪽 정렬을 뒤집지 않으면 커서 가까이가 아니라 목록 맨 처음 행들이 온다. 응답에는 첫 행으로 만든 prev 커서와 마지막 행으로 만든 next 커서를 함께 준다.
+
+### 가격순 OFFSET이 id순 OFFSET보다 훨씬 느린 이유는 무엇인가요?
+
+인덱스 순서와 테이블에 행이 놓인 순서가 다르기 때문이다. id 순서는 입력 순서와 같아 같은 테이블 페이지를 연달아 읽지만, 가격 순서는 행마다 다른 페이지를 찾아가야 해서 같은 50만 행을 건너뛰는 데 버퍼를 42만 번 건드렸다. 키셋은 정렬과 상관없이 시작점으로 바로 내려가니 이 차이가 없다.
+
+### 전체 개수를 꼭 보여 줘야 하면 어떻게 하나요?
+
+정확한 COUNT가 비싸면 pg_class.reltuples나 EXPLAIN의 rows 추정치를 쓰고 화면에 어림이라는 걸 드러낸다. 페이지 번호 이동이 필요하면 OFFSET을 쓰되 깊이에 상한을 둔다. 수백만 행을 일관되게 읽어야 하는 내보내기는 트랜잭션 하나의 서버 쪽 커서나 결과 스냅샷으로 따로 처리한다.

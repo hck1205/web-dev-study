@@ -1,0 +1,561 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-cni-pod-network");
+
+노드를 하나 새로 붙였다. `kubectl get nodes`에서는 Ready인데, 그 노드에 뜬 Pod만 다른 노드의 Pod와 통신이 안 된다. 같은 노드 안의 Pod끼리는 잘 된다. 며칠 전에는 반대로, 노드를 초기화하고 다시 붙였더니 Pod가 `ContainerCreating`에서 멈췄고 이벤트에 `"cni0" already has an IP address different from 10.244.1.1/24`가 찍혀 있었다.
+
+둘 다 CNI 플러그인이 노드에서 하는 일을 알면 어디를 볼지 바로 나온다. 쿠버네티스 자체는 Pod에 IP를 주지도, 노드 사이에 길을 놓지도 않는다. 그 일은 노드마다 설치된 CNI 플러그인 실행 파일이 한다. 이 글은 kubelet이 플러그인을 어떻게 부르고 플러그인이 무엇을 받아 무엇을 만드는지 실제로 실행해 보고, 노드 사이를 경로로 잇는 방식과 VXLAN으로 잇는 방식을 손으로 만들어 비교한다.
+
+Pod 안의 컨테이너들이 네트워크 네임스페이스 하나를 나눠 쓰는 구조는 [Pod 글](/posts/k8s-pod-basics)에, 컨테이너 하나를 veth와 브리지로 잇는 기본기는 [Docker 네트워크 드라이버 글](/posts/docker-network-drivers)에, VXLAN 캡슐화와 VTEP은 [SDN과 VXLAN 오버레이 글](/posts/sdn-vxlan-overlay)에 있다. 여기서는 그 조각들을 쿠버네티스가 어떻게 조립하는지를 본다.
+
+실습은 Ubuntu 24.04 기준으로, 네트워크 네임스페이스 두 개를 노드로, 다섯 개를 Pod로 썼다. CNI 플러그인은 `go install`로 받은 공식 참조 구현(containernetworking/plugins v1.6.2의 `bridge`, `host-local`)을 직접 실행했고, 노드의 Pod 대역 할당은 kwok로 띄운 실제 controller-manager(v1.30.4)에서 봤다. kubelet 이벤트처럼 실습에서 재현할 수 없었던 출력은 예시로 표시했다.
+
+## 쿠버네티스가 네트워크에 요구하는 세 가지
+
+쿠버네티스 네트워크 모델은 요구 사항만 적어 두고 구현은 플러그인에 맡긴다. 요구는 세 줄이다.
+
+- Pod마다 클러스터 전체에서 겹치지 않는 IP가 하나씩 있다.
+- 모든 Pod는 NAT 없이 다른 모든 Pod와 통신한다. 받는 쪽이 보는 출발지가 보낸 Pod의 IP 그대로다.
+- 노드의 에이전트(kubelet 등)는 그 노드의 모든 Pod에 닿는다.
+
+Docker의 기본 bridge와 비교하면 이유가 보인다. Docker는 호스트마다 같은 `172.17.0.0/16`을 쓰고 바깥과는 `-p` 포트 게시와 NAT로 통신한다. 컨테이너가 수천 개로 늘고 여러 호스트에 흩어지면 포트 번호를 누가 나눠 가질지, 상대의 진짜 주소가 무엇인지가 전부 문제가 된다. 쿠버네티스는 Pod를 "IP를 가진 작은 VM"처럼 다루기로 했다. 그러면 앱은 포트 충돌 걱정 없이 늘 같은 포트로 뜨고, 서비스 발견과 방화벽 규칙은 IP 기준으로 단순해진다. 그 대가로 노드마다 겹치지 않는 Pod 대역을 나눠 주고 노드 사이에 그 대역으로 가는 길을 놓아야 한다. 이게 CNI 플러그인의 일이다.
+
+## kubelet은 플러그인을 실행 파일로 부른다
+
+CNI(Container Network Interface)는 데몬이 아니라 "실행 파일을 이런 환경 변수와 표준 입력으로 부르면, 이런 JSON을 표준 출력으로 돌려준다"는 약속이다. Pod 하나가 노드에 배정되면 이런 순서로 일이 일어난다.
+
+<SequenceDiagram
+  caption="Pod 하나에 네트워크가 붙기까지"
+  actors={[
+    { id: "kubelet", label: "kubelet" },
+    { id: "cri", label: "containerd" },
+    { id: "cni", label: "CNI 플러그인" },
+    { id: "ipam", label: "IPAM 플러그인" },
+  ]}
+  steps={[
+    { from: "kubelet", to: "cri", label: "RunPodSandbox", title: "샌드박스를 만들어 달라고 한다", detail: "kubelet은 네트워크를 직접 만지지 않는다. CRI로 Pod 샌드박스(pause 컨테이너와 네트워크 네임스페이스)를 요청한다." },
+    { from: "cri", to: "cri", label: "netns 생성", title: "빈 네임스페이스를 만든다", detail: "/var/run/netns/cni-… 같은 이름으로 네트워크 네임스페이스를 만든다. 이 시점엔 lo밖에 없다." },
+    { from: "cri", to: "cni", label: "exec ADD", title: "설정 파일의 플러그인을 실행한다", detail: "/etc/cni/net.d에서 사전순으로 첫 설정 파일을 읽고, 거기 적힌 type 이름의 실행 파일을 /opt/cni/bin에서 찾아 실행한다. 설정은 표준 입력으로, 대상은 환경 변수로 준다.", payload: "CNI_COMMAND=ADD\nCNI_NETNS=/var/run/netns/cni-…\nCNI_IFNAME=eth0" },
+    { from: "cni", to: "ipam", label: "exec ADD", title: "주소는 IPAM에게 묻는다", detail: "bridge 플러그인은 설정의 ipam.type(host-local)을 같은 방식으로 실행해 이 노드 대역에서 빈 IP를 하나 받는다." },
+    { from: "ipam", to: "cni", label: "10.244.1.2/24", title: "IP와 게이트웨이를 돌려준다", detail: "host-local은 받은 IP를 파일로 기록해 두고 JSON으로 답한다." },
+    { from: "cni", to: "cri", label: "결과 JSON", title: "veth를 꽂고 결과를 보고한다", detail: "veth 쌍을 만들어 한쪽을 eth0로 네임스페이스에 넣고 주소와 경로를 설정한 뒤, 만든 인터페이스와 IP를 JSON으로 출력한다." },
+    { from: "cri", to: "kubelet", label: "Pod IP", title: "Pod IP가 status에 오른다", detail: "kubelet이 결과 IP를 Pod의 status.podIP로 보고하고, 그다음에 앱 컨테이너들이 이 네임스페이스로 들어간다." },
+  ]}
+/>
+
+플러그인이 받는 환경 변수는 몇 개 되지 않는다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="CNI 플러그인을 부르는 환경 변수"
+  base="env"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "CNI_COMMAND", value: "ADD", title: "할 일", description: "ADD(붙이기), DEL(떼기), CHECK(잘 붙어 있나), VERSION(지원 버전), 그리고 스펙 1.1에서 생긴 STATUS(받을 준비가 됐나), GC(남은 찌꺼기 정리). DEL은 몇 번을 불러도 성공해야 한다. 런타임이 중간에 죽었다 다시 부를 수 있어서다.", required: true },
+    { key: "CNI_CONTAINERID", value: "3f9a1c2b7d4e", title: "샌드박스 ID", description: "IPAM이 'IP ↔ 누가 쓰나'를 기록할 때 쓰는 키다. host-local은 이 값을 IP 이름의 파일에 적는다.", required: true },
+    { key: "CNI_NETNS", value: "/var/run/netns/cni-…", title: "대상 네트워크 네임스페이스", description: "플러그인이 eth0를 만들어 넣을 곳이다. 프로세스가 아니라 네임스페이스 파일 경로로 준다.", required: true },
+    { key: "CNI_IFNAME", value: "eth0", title: "만들 인터페이스 이름", description: "Pod 안에서 보일 이름이다. Multus 같은 메타 플러그인은 net1, net2로 이름을 바꿔 여러 번 부른다." },
+    { key: "CNI_PATH", value: "/opt/cni/bin", title: "다른 플러그인을 찾을 경로", description: "bridge가 host-local을, 체인의 다음 플러그인(portmap, bandwidth)을 이 경로에서 찾는다. 여기 없으면 'failed to find plugin'으로 실패한다." },
+  ]}
+/>
+
+### 참조 플러그인을 직접 실행한다
+
+containerd가 하는 일을 손으로 해 보자. 노드 1의 네임스페이스 안에서 설정 JSON을 표준 입력으로 주고 `bridge`를 실행했다.
+
+```bash
+# 공식 참조 플러그인을 받는다 (실제 노드에는 /opt/cni/bin에 패키지로 깔려 있다)
+GOBIN=$HOME/cni-bin go install github.com/containernetworking/plugins/plugins/main/bridge@v1.6.2
+GOBIN=$HOME/cni-bin go install github.com/containernetworking/plugins/plugins/ipam/host-local@v1.6.2
+
+# Pod 대신 쓸 빈 네임스페이스
+sudo ip netns add n4cp1
+
+# containerd 대신 직접 부른다: 설정은 표준 입력, 대상은 환경 변수
+# (실습에서는 노드 역할을 하는 네임스페이스 n4cn1 안에서 실행했다)
+sudo ip netns exec n4cn1 env CNI_COMMAND=ADD CNI_CONTAINERID=3f9a1c2b7d4e \
+  CNI_NETNS=/var/run/netns/n4cp1 CNI_IFNAME=eth0 CNI_PATH=$HOME/cni-bin \
+  $HOME/cni-bin/bridge < net-node1.json
+```
+
+넘긴 설정은 이렇다. `dataDir`은 실습에서 작업 디렉터리 아래로 바꿨고, 생략하면 `/var/lib/cni/networks`다. 실제 노드라면 `/etc/cni/net.d/10-mynet.conflist`의 `plugins` 배열 한 칸에 해당한다(런타임이 conflist의 `name`과 `cniVersion`을 각 칸에 붙여서 넘긴다).
+
+```text
+{
+  "type": "bridge",
+  "bridge": "cni0",
+  "isGateway": true,
+  "ipMasq": true,
+  "hairpinMode": true,
+  "mtu": 1500,
+  "ipam": {
+    "type": "host-local",
+    "ranges": [[{ "subnet": "10.244.1.0/24" }]],
+    "routes": [{ "dst": "0.0.0.0/0" }],
+    "dataDir": "…/cni-data/node1"
+  },
+  "cniVersion": "1.0.0",
+  "name": "k8s-pod-network"
+}
+```
+
+플러그인이 표준 출력으로 돌려준 결과다.
+
+```text
+{
+    "cniVersion": "1.0.0",
+    "interfaces": [
+        {
+            "mac": "16:b6:ce:85:dd:b0",
+            "name": "cni0"
+        },
+        {
+            "mac": "5a:5c:5f:4a:85:ad",
+            "name": "vethebef0116"
+        },
+        {
+            "mac": "12:ee:ac:67:32:0e",
+            "name": "eth0",
+            "sandbox": "/var/run/netns/n4cp1"
+        }
+    ],
+    "ips": [
+        {
+            "address": "10.244.1.2/24",
+            "gateway": "10.244.1.1",
+            "interface": 2
+        }
+    ],
+    "routes": [
+        {
+            "dst": "0.0.0.0/0"
+        }
+    ]
+}
+```
+
+`interfaces`에 세 개가 있다. 노드의 브리지 `cni0`(없어서 새로 만들었다), 노드 쪽 veth 끝, 그리고 `sandbox` 경로가 붙은 Pod 안의 `eth0`. `ips`의 `"interface": 2`는 이 주소가 세 번째 인터페이스(`eth0`)에 붙었다는 뜻이다. `isGateway: true`라서 브리지에 `10.244.1.1`이 붙고 Pod의 게이트웨이가 됐다. 런타임은 이 JSON에서 IP를 꺼내 kubelet에 넘긴다. Pod 안을 보면 결과 그대로다.
+
+```bash
+# Pod 네임스페이스 안
+sudo ip -n n4cp1 addr show eth0
+sudo ip -n n4cp1 route
+```
+
+```text
+2: eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+    link/ether 12:ee:ac:67:32:0e brd ff:ff:ff:ff:ff:ff link-netns n4cn1
+    inet 10.244.1.2/24 brd 10.244.1.255 scope global eth0
+       valid_lft forever preferred_lft forever
+default via 10.244.1.1 dev eth0 
+10.244.1.0/24 dev eth0 proto kernel scope link src 10.244.1.2 
+```
+
+### IP는 파일 하나로 기억된다
+
+같은 노드에 Pod를 하나 더 붙인 뒤 host-local의 데이터 디렉터리를 봤다.
+
+```bash
+# host-local이 쓰는 할당 기록 (기본 경로는 /var/lib/cni/networks/<네트워크 이름>, 실습은 dataDir 아래)
+ls -la cni-data/node1/k8s-pod-network/
+for f in cni-data/node1/k8s-pod-network/*; do echo "$f: $(cat $f | tr '\n' ' ')"; done
+```
+
+```text
+total 20
+drwxr-xr-x 2 root root 4096 Oct 20 14:14 .
+drwxr-xr-x 3 root root 4096 Oct 20 14:14 ..
+-rw------- 1 root root   18 Oct 20 14:14 10.244.1.2
+-rw------- 1 root root   18 Oct 20 14:14 10.244.1.3
+-rw------- 1 root root   10 Oct 20 14:14 last_reserved_ip.0
+-rwxr-x--- 1 root root    0 Oct 20 14:14 lock
+cni-data/node1/k8s-pod-network/10.244.1.2: 3f9a1c2b7d4e eth0
+cni-data/node1/k8s-pod-network/10.244.1.3: 8b2e6f1a9c3d eth0
+```
+
+IP 이름의 파일에 컨테이너 ID와 인터페이스 이름이 적혀 있다. 이게 전부다. DEL을 부르면 파일이 지워진다. 그래서 런타임이 DEL을 못 부르고 죽거나 노드가 갑자기 꺼지면 파일이 남고, 그 IP는 계속 "사용 중"이 된다. 대역이 작은 노드에서 이런 찌꺼기가 쌓이면 새 Pod가 이렇게 실패한다. `/30` 대역으로 줄여 재현했다.
+
+```text
+{'code': 999, 'msg': 'failed to allocate for range 0: no IP addresses available in range set: 10.244.9.1-10.244.9.2'}
+```
+
+kubelet 이벤트에서는 런타임 메시지에 감싸져 이런 모양으로 보인다(예시).
+
+```text
+Warning  FailedCreatePodSandBox  8s  kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox "a41f0c…": plugin type="bridge" name="k8s-pod-network" failed (add): failed to allocate for range 0: no IP addresses available in range set: 10.244.1.1-10.244.1.254
+```
+
+`plugin type="…" failed (add):` 뒤가 플러그인이 돌려준 `msg` 그대로다. CNI 문제를 볼 때는 이 부분부터 읽는다. 처음 장면의 `"cni0" already has an IP address different from …`도 같은 자리에 찍히는 bridge 플러그인의 메시지다. 실습에서 같은 노드에 다른 대역 설정으로 ADD를 부르니 똑같이 나왔다.
+
+```text
+{
+    "code": 999,
+    "msg": "failed to set bridge addr: \"cni0\" already has an IP address different from 10.244.9.1/30"
+}
+```
+
+`kubeadm reset` 후 다시 조인하면서 노드의 Pod 대역이 바뀌었는데, 예전 대역 주소를 단 `cni0`가 남아 있을 때 난다. 노드에서 `sudo ip link delete cni0`(Flannel이면 `flannel.1`도)로 지우고 kubelet과 CNI Pod를 다시 띄우면 새 대역으로 다시 만들어진다. 지우는 순간 그 노드의 Pod 통신이 끊기니 노드를 drain한 뒤에 한다.
+
+플러그인 실행 파일 자체가 없으면 이렇다.
+
+```text
+{
+    "code": 999,
+    "msg": "failed to find plugin \"host-local\" in path [/opt/cni/bin]"
+}
+```
+
+CNI DaemonSet이 아직 안 떠서 `/etc/cni/net.d`가 비어 있으면, 노드가 Pod를 받기 전 단계에서 `NotReady`가 되고 이유에 `container runtime network not ready: NetworkReady=false reason:NetworkPluginNotReady message:Network plugin returns error: cni plugin not initialized`(예시)가 찍힌다. 클러스터를 막 만든 직후 모든 노드가 NotReady라면 대개 이것이다.
+
+## 노드마다 Pod 대역을 나눠 준다
+
+Pod IP가 클러스터 전체에서 겹치지 않으려면 노드마다 다른 대역을 써야 한다. 흔한 방법은 controller-manager가 클러스터 대역(`--cluster-cidr=10.244.0.0/16`)을 노드마다 /24로 잘라 `node.spec.podCIDR`에 적어 주는 것이다(`--allocate-node-cidrs=true`, `--node-cidr-mask-size=24`). 실습 클러스터에 대역이 비어 있는 노드 둘을 새로 붙였다.
+
+```bash
+# 새로 붙인 노드가 받은 Pod 대역
+kubectl get nodes node-3 node-4 -o custom-columns=NAME:.metadata.name,PODCIDR:.spec.podCIDR
+
+# controller-manager 로그의 할당 기록
+kubectl -n kube-system logs kube-controller-manager-<노드> | grep 'Set node PodCIDR'
+```
+
+```text
+NAME     PODCIDR
+node-3   10.244.0.0/24
+node-4   10.244.3.0/24
+I1020 14:13:59.437625   21507 range_allocator.go:381] "Set node PodCIDR" logger="node-ipam-controller" node="node-3" podCIDRs=["10.244.0.0/24"]
+I1020 14:14:13.120658   21507 range_allocator.go:381] "Set node PodCIDR" logger="node-ipam-controller" node="node-4" podCIDRs=["10.244.3.0/24"]
+```
+
+1번과 2번은 이미 쓰이고 있어서 node-3은 남은 첫 조각 `10.244.0.0/24`, node-4는 그다음 `10.244.3.0/24`를 받았다. /16을 /24로 자르면 노드 256대까지다. 클러스터를 처음 만들 때 고른 숫자가 나중에 노드 수의 상한이 되니, 대역 설계는 [IP 주소 글](/posts/layer-ip-addressing)에서 본 계산으로 미리 해 둔다. 사내망이나 VPC 대역과 겹치지 않게 고르는 것도 같은 이유다. 겹치면 Pod가 그 대역의 사내 서버에 닿지 못한다.
+
+모든 CNI가 이 칸을 쓰지는 않는다. Calico와 Cilium은 자기 IPAM으로 더 작은 블록(Calico 기본 /26)을 필요할 때마다 노드에 붙여 주고, AWS VPC CNI는 VPC 서브넷의 IP를 노드의 네트워크 인터페이스(ENI)에 붙여 Pod에 그대로 준다. 앞의 두 방식은 Pod 대역이 VPC와 따로이고, 마지막 방식은 Pod가 VPC 주소를 직접 갖는다.
+
+## 노드를 넘는 첫 번째 방법: 경로를 놓는다
+
+이제 노드 1(`192.168.60.11`, Pod 대역 `10.244.1.0/24`)의 Pod에서 노드 2(`192.168.60.12`, `10.244.2.0/24`)의 Pod로 가 보자. 아직 아무것도 안 했으니 안 된다.
+
+```bash
+# 노드 1에서 다른 노드의 Pod 대역으로 가는 길이 있나
+ip route get 10.244.2.2
+```
+
+```text
+RTNETLINK answers: Network is unreachable
+```
+
+가장 단순한 해법은 각 노드에 "저 노드의 Pod 대역은 저 노드로 보내라"는 경로를 넣는 것이다. Flannel의 host-gw 모드가 이것이고, Calico는 같은 경로를 BGP로 노드와 라우터에 퍼뜨린다.
+
+```bash
+# 노드 1: 10.244.2.0/24는 노드 2로
+sudo ip route add 10.244.2.0/24 via 192.168.60.12
+# 노드 2: 10.244.1.0/24는 노드 1로
+sudo ip route add 10.244.1.0/24 via 192.168.60.11
+
+# Pod 1에서 Pod 3(노드 2)으로 요청하고, 지나는 홉을 본다
+curl -s http://10.244.2.2:8080/
+traceroute -n -q1 -w1 10.244.2.2
+```
+
+```text
+hello from pod3, you are 192.168.60.11
+traceroute to 10.244.2.2 (10.244.2.2), 30 hops max, 60 byte packets
+ 1  10.244.1.1  0.038 ms
+ 2  192.168.60.12  0.213 ms
+ 3  10.244.2.2  0.201 ms
+```
+
+길은 열렸다. 노드 1의 `cni0`, 노드 2, Pod 3 순서로 세 홉이다. 그런데 응답 첫 줄이 이상하다. Pod 3이 본 출발지가 Pod 1(`10.244.1.2`)이 아니라 노드 1(`192.168.60.11`)이다. 쿠버네티스 모델의 두 번째 요구를 어겼다. 노드 1의 nat 테이블에 범인이 있다.
+
+```bash
+# bridge 플러그인의 ipMasq: true가 넣은 규칙
+sudo iptables -t nat -S | grep CNI-7a92
+```
+
+```text
+-A POSTROUTING -s 10.244.1.2/32 -m comment --comment "name: \"k8s-pod-network\" id: \"3f9a1c2b7d4e\"" -j CNI-7a9293d19f0c0646a514ced8
+-A CNI-7a9293d19f0c0646a514ced8 -d 10.244.1.0/24 -m comment --comment "name: \"k8s-pod-network\" id: \"3f9a1c2b7d4e\"" -j ACCEPT
+-A CNI-7a9293d19f0c0646a514ced8 ! -d 224.0.0.0/4 -m comment --comment "name: \"k8s-pod-network\" id: \"3f9a1c2b7d4e\"" -j MASQUERADE
+```
+
+참조 bridge 플러그인은 자기가 아는 대역, 곧 이 노드의 `10.244.1.0/24`만 예외로 두고 나머지는 전부 MASQUERADE한다. 다른 노드의 Pod 대역도 "바깥"으로 본 것이다. 진짜 CNI 플러그인은 예외를 클러스터 전체 대역으로 잡는다. Pod 규칙을 지우고 그렇게 한 줄로 바꿨다.
+
+```bash
+# 클러스터 대역 밖으로 나갈 때만 노드 주소로 바꾼다
+sudo iptables -t nat -A POSTROUTING -s 10.244.0.0/16 ! -d 10.244.0.0/16 \
+  -m comment --comment "pod to outside only" -j MASQUERADE
+
+# 노드 2의 eth0에서 본 패킷
+sudo tcpdump -ni eth0 -c 2 tcp port 8080
+```
+
+```text
+hello from pod3, you are 10.244.1.2
+14:15:03.668680 IP 10.244.1.2.52294 > 10.244.2.2.8080: Flags [S], seq 2349096944, win 64240, options [mss 1460,sackOK,TS val 3412102371 ecr 0,nop,wscale 10], length 0
+14:15:03.668704 IP 10.244.2.2.8080 > 10.244.1.2.52294: Flags [S.], seq 897335643, ack 2349096945, win 65160, options [mss 1460,sackOK,TS val 2464412435 ecr 3412102371,nop,wscale 10], length 0
+```
+
+이제 Pod 3이 진짜 출발지를 본다. 노드 사이 선(`eth0`)에 Pod 주소가 그대로 지나간다는 점도 보자. 캡슐화가 없으니 헤더 비용도 MTU 손해도 없다. NetworkPolicy가 출발지 Pod IP로 허용 여부를 정하는데, 중간에 NAT가 끼면 그 판단이 전부 틀어진다. "Pod 사이엔 NAT 없음"이 원칙인 실무적인 이유다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="경로 방식: 노드는 서로의 Pod 대역을 상대 노드로 보내는 라우터다"
+  zones={[
+    { id: "n1", label: "node-1 192.168.60.11", x: 6, y: 6, w: 186, h: 230, tone: "private" },
+    { id: "n2", label: "node-2 192.168.60.12", x: 208, y: 6, w: 186, h: 230, tone: "private" },
+    { id: "ul", label: "노드 사이 L2", x: 6, y: 250, w: 388, h: 74, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "p1", label: "pod1", sub: "10.244.1.2", x: 99, y: 66, icon: "container" },
+    { id: "b1", label: "cni0", sub: "10.244.1.1", x: 99, y: 176, icon: "router" },
+    { id: "p3", label: "pod3", sub: "10.244.2.2", x: 301, y: 66, icon: "container" },
+    { id: "b2", label: "cni0", sub: "10.244.2.1", x: 301, y: 176, icon: "router" },
+    { id: "sw", label: "switch", sub: "192.168.60.0/24", x: 200, y: 290, icon: "switch", w: 120 },
+  ]}
+  links={[
+    { from: "p1", to: "b1", label: "veth" },
+    { from: "b1", to: "sw", label: "eth0" },
+    { from: "sw", to: "b2", label: "eth0" },
+    { from: "b2", to: "p3", label: "veth" },
+  ]}
+  steps={[
+    { path: ["p1", "b1"], packet: "SYN", title: "Pod는 게이트웨이로 보낸다", detail: "목적지 10.244.2.2는 자기 대역이 아니니 기본 경로 10.244.1.1(cni0)로 보낸다." },
+    { path: ["b1"], packet: "SYN", blocked: true, title: "경로가 없으면 여기서 끝난다", detail: "노드 1의 라우팅 표에 10.244.2.0/24가 없다. Network is unreachable. 새 노드의 Pod만 통신이 안 될 때 가장 먼저 의심할 곳이다." },
+    { path: ["p1", "b1", "sw", "b2", "p3"], packet: "SYN", title: "경로를 넣으면 평범한 라우팅이다", detail: "10.244.2.0/24 via 192.168.60.12. 패킷은 감싸지지 않고 Pod 주소 그대로 선 위를 지난다.", payload: "10.244.1.2.52294 > 10.244.2.2.8080: Flags [S]" },
+    { path: ["p3", "b2", "sw", "b1", "p1"], packet: "SYN-ACK", title: "응답도 반대쪽 경로로 돌아온다", detail: "노드 2에도 10.244.1.0/24 via 192.168.60.11이 있어야 한다. 한쪽만 넣으면 SYN은 가고 응답이 사라진다." },
+  ]}
+/>
+
+경로 방식은 빠르고 디버깅이 쉽다. tcpdump에 Pod 주소가 그대로 보이고, traceroute로 홉이 보인다. 대신 노드 사이 망이 Pod 주소를 받아 줘야 한다. 노드가 같은 L2에 있으면 위처럼 직접 넘기면 되지만, 노드가 라우터를 사이에 두고 떨어져 있으면 그 라우터도 Pod 대역을 알아야 한다. Calico가 BGP로 ToR 스위치와 경로를 주고받는 이유다. 클라우드 VPC는 대개 인스턴스에 할당되지 않은 주소의 패킷을 버린다. AWS라면 인스턴스의 출발지/목적지 확인(source/dest check)을 끄고 VPC 라우팅 표에 노드별 경로를 넣어야 하고, 라우팅 표 항목 수에 제한이 있어 노드가 많아지면 버겁다.
+
+## 노드를 넘는 두 번째 방법: VXLAN으로 감싼다
+
+노드 사이 망을 건드릴 수 없으면 Pod 패킷을 노드 주소끼리의 UDP에 싸서 보낸다. Flannel의 기본 모드(VXLAN)가 하는 일을 그대로 손으로 해 봤다. 앞에서 넣은 경로는 지웠다.
+
+```bash
+# 노드 1: VNI 1, Flannel이 쓰는 포트 8472, 모르는 MAC을 배우지 않는(nolearning) VXLAN 장치
+sudo ip link add flannel.1 type vxlan id 1 local 192.168.60.11 dev eth0 dstport 8472 nolearning
+sudo ip addr add 10.244.1.0/32 dev flannel.1
+sudo ip link set flannel.1 up
+
+# 노드 2에 대해 세 가지를 미리 적어 둔다 (노드 2의 flannel.1 MAC = 42:a7:5b:80:48:ba)
+# 1) 경로: 10.244.2.0/24는 flannel.1로, 다음 홉은 노드 2의 flannel.1 주소
+sudo ip route add 10.244.2.0/24 via 10.244.2.0 dev flannel.1 onlink
+# 2) 이웃: 그 다음 홉의 MAC
+sudo ip neigh add 10.244.2.0 lladdr 42:a7:5b:80:48:ba dev flannel.1 nud permanent
+# 3) FDB: 그 MAC은 노드 2(192.168.60.12) 뒤에 있다
+sudo bridge fdb append 42:a7:5b:80:48:ba dev flannel.1 dst 192.168.60.12
+
+# 확인
+ip -d link show flannel.1
+ip route
+ip neigh show dev flannel.1
+bridge fdb show dev flannel.1
+```
+
+```text
+6: flannel.1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/ether de:ad:1e:7c:e4:07 brd ff:ff:ff:ff:ff:ff promiscuity 0  allmulti 0 minmtu 68 maxmtu 65535 
+    vxlan id 1 fan-map local 192.168.60.11 dev eth0 srcport 0 0 dstport 8472 nolearning ttl auto ageing 300 udpcsum noudp6zerocsumtx noudp6zerocsumrx numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536 
+10.244.1.0/24 dev cni0 proto kernel scope link src 10.244.1.1 
+10.244.2.0/24 via 10.244.2.0 dev flannel.1 onlink 
+192.168.60.0/24 dev eth0 proto kernel scope link src 192.168.60.11 
+10.244.2.0 lladdr 42:a7:5b:80:48:ba PERMANENT 
+42:a7:5b:80:48:ba dst 192.168.60.12 self permanent
+```
+
+이 방식은 L2를 늘리는 게 아니라 L3 라우팅 위에 터널을 얹는다. 노드마다 `flannel.1`이 자기 대역의 `.0` 주소를 갖고, 다른 노드로 가는 경로의 다음 홉이 "상대 노드의 flannel.1"이다. 그 다음 홉의 MAC(이웃 표)과 그 MAC이 있는 노드 주소(FDB)를 미리 적어 두니, ARP도 브로드캐스트도 터널 위로 나가지 않는다. 실제 Flannel에서는 노드마다 도는 `flanneld`가 API 서버에서 다른 노드의 podCIDR과 VTEP MAC(노드 어노테이션 `flannel.alpha.coreos.com/backend-data`)을 읽어 이 세 줄을 대신 써 준다. 노드가 하나 붙을 때마다 기존 노드 모두에 세 줄이 늘어나는 셈이다.
+
+커널이 Pod 3으로 가는 패킷 하나를 처리하는 순서를 따라가 보자.
+
+<AlgoTrace
+  caption="노드 1의 커널이 10.244.2.2로 가는 패킷을 감싸 보내기까지"
+  memoryLabel="지금까지 정해진 것"
+  cells={["route", "neigh", "fdb", "encap", "eth0"]}
+  steps={[
+    { pointer: 0, memory: ["dev flannel.1", "nexthop 10.244.2.0"], caption: "라우팅 표: 10.244.2.0/24 via 10.244.2.0 dev flannel.1 onlink. onlink는 다음 홉이 같은 대역이 아니어도 그 장치에 바로 붙어 있다고 믿으라는 뜻이다." },
+    { pointer: 1, memory: ["dev flannel.1", "nexthop 10.244.2.0", "dst MAC 42:a7:5b:80:48:ba"], caption: "이웃 표: 다음 홉의 MAC을 찾는다. PERMANENT 항목이라 ARP를 보내지 않는다." },
+    { pointer: 2, memory: ["dst MAC 42:a7:5b:80:48:ba", "VTEP 192.168.60.12"], caption: "FDB: 그 MAC은 192.168.60.12 뒤에 있다. 항목이 없으면 nolearning이라 보낼 곳을 모르고 버린다." },
+    { pointer: 3, memory: ["VTEP 192.168.60.12", "UDP 8472, VNI 1", "+50 바이트"], caption: "안쪽 이더넷 프레임 앞에 VXLAN·UDP·IP 헤더를 붙인다. 출발지 포트는 안쪽 흐름의 해시로 정한다." },
+    { pointer: 4, found: [4], memory: ["192.168.60.11 > 192.168.60.12:8472"], caption: "바깥 패킷은 평범한 노드 사이 UDP다. 노드 사이 망은 Pod 주소를 몰라도 된다." },
+  ]}
+/>
+
+노드 2의 `eth0`에서 잡으면 바깥과 안쪽이 두 줄로 나온다. tcpdump는 4789만 VXLAN으로 알아보니 8472는 `-T vxlan`으로 알려 준다.
+
+```bash
+# 노드 2의 eth0에서 Flannel 포트를 VXLAN으로 풀어 본다
+sudo tcpdump -ni eth0 -c 2 -T vxlan udp port 8472
+```
+
+```text
+14:15:20.294147 IP 192.168.60.11.50967 > 192.168.60.12.8472: VXLAN, flags [I] (0x08), vni 1
+IP 10.244.1.2.43064 > 10.244.2.2.8080: Flags [S], seq 2885110228, win 64240, options [mss 1460,sackOK,TS val 3558790179 ecr 0,nop,wscale 10], length 0
+14:15:20.294195 IP 192.168.60.12.60334 > 192.168.60.11.8472: VXLAN, flags [I] (0x08), vni 1
+IP 10.244.2.2.8080 > 10.244.1.2.43064: Flags [S.], seq 896132394, ack 2885110229, win 65160, options [mss 1460,sackOK,TS val 1370391733 ecr 3558790179,nop,wscale 10], length 0
+```
+
+바깥은 노드끼리의 UDP 8472, 안쪽은 Pod끼리의 TCP다. 안쪽 출발지가 여전히 `10.244.1.2`라서 NAT 없는 모델은 지켜진다. 노드 사이 방화벽이나 보안 그룹에서 UDP 8472(표준 VXLAN 포트로 바꾼 설정이면 4789)가 막히면, 같은 노드 안은 되는데 다른 노드로만 시간 초과가 나는 처음 장면의 증상이 그대로 나온다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="VXLAN 방식: Pod 패킷을 노드 주소끼리의 UDP에 싸서 건넌다"
+  zones={[
+    { id: "n1", label: "node-1 192.168.60.11", x: 6, y: 6, w: 186, h: 230, tone: "private" },
+    { id: "n2", label: "node-2 192.168.60.12", x: 208, y: 6, w: 186, h: 230, tone: "private" },
+    { id: "ul", label: "노드 사이 망 (Pod 주소 모름)", x: 6, y: 250, w: 388, h: 74, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "p1", label: "pod1", sub: "10.244.1.2", x: 99, y: 66, icon: "container" },
+    { id: "f1", label: "flannel.1", sub: "10.244.1.0/32", x: 99, y: 176, icon: "gateway" },
+    { id: "p3", label: "pod3", sub: "10.244.2.2", x: 301, y: 66, icon: "container" },
+    { id: "f2", label: "flannel.1", sub: "10.244.2.0/32", x: 301, y: 176, icon: "gateway" },
+    { id: "fw", label: "방화벽", sub: "UDP 8472?", x: 200, y: 290, icon: "firewall", w: 120 },
+  ]}
+  links={[
+    { from: "p1", to: "f1", label: "cni0" },
+    { from: "f1", to: "fw", label: "eth0" },
+    { from: "fw", to: "f2", label: "eth0" },
+    { from: "f2", to: "p3", label: "cni0" },
+  ]}
+  steps={[
+    { path: ["p1", "f1"], packet: "SYN", title: "경로가 flannel.1을 가리킨다", detail: "노드 1의 라우팅 표가 10.244.2.0/24를 flannel.1로 보낸다. 이웃 표와 FDB에서 상대 VTEP을 찾는다." },
+    { path: ["f1", "fw", "f2"], packet: "UDP", title: "노드 주소끼리의 UDP로 감싼다", detail: "바깥 헤더 50바이트가 붙는다. 중간 망은 192.168.60.11 → 192.168.60.12 UDP 8472만 본다.", payload: "192.168.60.11.50967 > 192.168.60.12.8472: VXLAN, vni 1" },
+    { path: ["f2", "p3"], packet: "SYN", title: "풀어서 Pod에 넣는다", detail: "노드 2의 flannel.1이 헤더를 벗기고, 안쪽 패킷을 평소처럼 라우팅해 cni0의 Pod 3에 넘긴다. 출발지는 10.244.1.2 그대로다." },
+    { path: ["f1", "fw"], packet: "UDP", blocked: true, title: "8472가 막히면 노드를 넘을 때만 실패한다", detail: "같은 노드 안 Pod끼리는 터널을 안 타니 멀쩡하다. 새 노드의 보안 그룹에 이 포트를 빠뜨린 경우가 많다." },
+  ]}
+/>
+
+### 감싼 만큼 MTU가 줄어든다
+
+`flannel.1`의 MTU가 1450이다. 바깥 헤더 50바이트만큼 작다. Pod의 `eth0`는 bridge 플러그인 설정대로 1500이니, 1500짜리 패킷을 보내면 노드에서 걸린다.
+
+```bash
+# Pod 1에서 DF를 켜고 1500바이트(1472 + 28) ping
+ping -c 2 -M do -s 1472 -W 1 10.244.2.2
+# 1450바이트로 줄이면
+ping -c 1 -M do -s 1422 -W 1 10.244.2.2
+# Pod가 배운 경로 MTU
+ip route get 10.244.2.2
+```
+
+```text
+PING 10.244.2.2 (10.244.2.2) 1472(1500) bytes of data.
+From 10.244.1.1 icmp_seq=1 Frag needed and DF set (mtu = 1450)
+ping: local error: message too long, mtu=1450
+
+--- 10.244.2.2 ping statistics ---
+2 packets transmitted, 0 received, +2 errors, 100% packet loss, time 1017ms
+
+PING 10.244.2.2 (10.244.2.2) 1422(1450) bytes of data.
+1430 bytes from 10.244.2.2: icmp_seq=1 ttl=62 time=0.279 ms
+10.244.2.2 via 10.244.1.1 dev eth0 src 10.244.1.2 uid 0 
+    cache expires 597sec mtu 1450
+```
+
+여기서는 노드(`10.244.1.1`)가 "조각내야 하는데 DF가 켜져 있다"는 ICMP를 돌려줘서 Pod가 경로 MTU 1450을 배웠다. 두 번째 패킷부터는 Pod 커널이 알아서 줄인다. 같은 노드가 ICMP를 만드니 이번엔 됐지만, 노드 사이 망 쪽 MTU가 더 작고(VPN, 일부 클라우드) 중간 장비가 ICMP를 막으면 아무도 알려 주지 않는다. TCP 핸드셰이크와 작은 요청은 되는데 큰 응답만 멈추는 증상이 그것이다([MTU 글](/posts/layer-mtu-fragmentation)). 그래서 CNI는 Pod의 MTU 자체를 터널 MTU에 맞춰 준다. Flannel은 1450, Calico는 VXLAN이면 50, IP-in-IP면 20바이트를 빼고, Cilium도 터널 모드에서 같은 계산을 한다. 노드 NIC의 MTU가 9001인 AWS처럼 점보 프레임 망이면 이 값을 크게 올려서 처리량을 얻는다.
+
+## 어떤 CNI를 고르나
+
+방식은 결국 셋으로 나뉜다. 노드 사이에 경로를 놓거나(Flannel host-gw, Calico BGP), 터널로 감싸거나(Flannel VXLAN, Calico VXLAN·IP-in-IP, Cilium 터널), 클라우드 망이 Pod 주소를 직접 알게 하거나(AWS VPC CNI, Azure CNI, GKE의 VPC 기반 클러스터). 제품을 고를 때 보는 기준은 다음과 같다.
+
+- NetworkPolicy가 필요한가. Flannel은 정책을 집행하지 않는다. 정책이 필요하면 Calico나 Cilium을 쓰거나 Flannel 위에 Calico를 정책 전용으로 얹는다(Canal). 정책을 어떻게 집행하는지는 [NetworkPolicy 글](/posts/k8s-network-policy)에서 이어진다.
+- 노드 사이 망을 내가 다룰 수 있나. 온프레미스에서 ToR 스위치와 BGP를 맺을 수 있으면 터널 없는 Calico가 빠르고 투명하다. 망을 못 건드리면 터널이다.
+- 클라우드 통합이 중요한가. VPC CNI는 Pod가 VPC 주소를 가져서 보안 그룹, 흐름 로그, 다른 VPC 서비스가 Pod를 바로 본다. 대신 서브넷 IP를 Pod 수만큼 먹고 노드당 Pod 수가 인스턴스의 ENI 한도에 묶인다.
+- eBPF가 필요한가. Cilium은 iptables 대신 eBPF로 경로와 정책, Service 분산까지 처리해서 kube-proxy를 대체할 수 있고, L7 정책과 흐름 관측(Hubble)을 준다. 커널 버전 요구와 다른 디버깅 도구에 익숙해지는 비용이 있다.
+
+노드 하나에 Pod를 몇 개까지 띄울 수 있는지도 CNI가 정한다. podCIDR 방식은 대역 크기와 kubelet의 `maxPods`(기본 110) 중 작은 값이다. AWS VPC CNI는 인스턴스가 붙일 수 있는 ENI 수와 ENI당 IP 수로 정해진다. ENI마다 첫 IP는 노드 자신이 쓰니 하나씩 빼고, hostNetwork로 뜨는 Pod 두 개(aws-node, kube-proxy)를 더한다. 접두사 위임(prefix delegation)을 켜면 IP 하나 대신 /28 하나(16개)를 붙인다.
+
+<CodePlayground
+  caption="노드 하나에 Pod를 몇 개까지 띄울 수 있나"
+  functionName="maxPods"
+  initialCode={`// node.mode가
+//  "podcidr": node.mask(노드 Pod 대역의 프리픽스 길이). host-local은 네트워크·브로드캐스트·게이트웨이(.1)를 뺀다.
+//  "vpc-cni": node.enis(최대 ENI 수), node.ipsPerEni(ENI당 IPv4 수). ENI마다 첫 IP는 노드 몫, +2는 hostNetwork Pod.
+//  "vpc-cni-prefix": 위와 같고 ENI의 보조 IP 칸마다 /28(16개)이 붙는다.
+// node.kubeletMax가 있으면 그 값을 넘지 않는다. podcidr 모드는 없으면 110.
+function maxPods(node) {
+  return 0;
+}`}
+  solution={`function maxPods(node) {
+  if (node.mode === "podcidr") return Math.min(2 ** (32 - node.mask) - 3, node.kubeletMax ?? 110);
+  const perEni = node.ipsPerEni - 1;
+  const ips = node.mode === "vpc-cni-prefix" ? node.enis * perEni * 16 : node.enis * perEni;
+  return Math.min(ips + 2, node.kubeletMax ?? Infinity);
+}`}
+  tests={[
+    { label: "m5.large (ENI 3, IP 10)", args: [{ mode: "vpc-cni", enis: 3, ipsPerEni: 10 }], expected: 29 },
+    { label: "t3.medium (ENI 3, IP 6)", args: [{ mode: "vpc-cni", enis: 3, ipsPerEni: 6 }], expected: 17 },
+    { label: "m5.large + 접두사 위임, kubelet 110", args: [{ mode: "vpc-cni-prefix", enis: 3, ipsPerEni: 10, kubeletMax: 110 }], expected: 110 },
+    { label: "podCIDR /24", args: [{ mode: "podcidr", mask: 24 }], expected: 110 },
+    { label: "podCIDR /26", args: [{ mode: "podcidr", mask: 26 }], expected: 61 },
+    { label: "podCIDR /24, maxPods 250", args: [{ mode: "podcidr", mask: 24, kubeletMax: 250 }], expected: 250 },
+  ]}
+/>
+
+t3.medium 노드에 Pod가 17개를 넘으면 나머지가 `Pending`에 머물고, 이벤트에 `Too many pods`가 찍힌다. CPU와 메모리가 남아도 그렇다. VPC CNI를 쓰는 EKS에서 작은 인스턴스를 고를 때 가장 많이 당하는 일이다. 서브넷 쪽도 함께 본다. Pod가 VPC 주소를 쓰니 /24 서브넷(쓸 수 있는 주소 251개)에 노드 몇 대만 올려도 IP가 바닥날 수 있다.
+
+## 노드를 넘을 때만 안 되면
+
+현장에서 Pod 네트워크 문제는 "같은 노드 안"과 "노드를 넘을 때"를 나누는 데서 시작한다. Pod를 두 노드에 하나씩, 같은 노드에 하나 더 띄워 두고 Pod IP로 직접 두드린다. Service를 끼우면 kube-proxy 문제와 섞이니 빼고 본다([Service 글](/posts/k8s-service-types)).
+
+```bash
+# 1. 문제 노드의 CNI Pod가 떠 있고 재시작이 없는가
+kubectl -n kube-system get pods -o wide | grep -E 'flannel|calico|cilium|aws-node'
+
+# 2. 노드의 CNI 설정과 실행 파일 (사전순 첫 파일이 쓰인다. 예전 CNI의 파일이 남았나)
+ls -l /etc/cni/net.d/ /opt/cni/bin/
+
+# 3. 다른 노드의 Pod 대역으로 가는 길이 있나
+ip route | grep 10.244.
+ip route get 10.244.2.2
+
+# 4. 터널 방식이면 이웃·FDB 항목이 있나
+ip neigh show dev flannel.1
+bridge fdb show dev flannel.1
+
+# 5. 패킷이 노드를 떠나고 상대 노드에 도착하나 (양쪽 노드에서)
+sudo tcpdump -ni eth0 udp port 8472 or udp port 4789
+```
+
+2번에서 `/etc/cni/net.d`에 예전 CNI의 설정 파일이 남아 있으면, 이름이 사전순으로 앞선 쪽이 쓰여 새로 깐 CNI가 무시된다. CNI를 바꿨는데 일부 노드만 이상하면 이걸 본다. 3번에서 경로가 없으면 그 노드의 CNI 에이전트가 API 서버에서 다른 노드 정보를 못 받은 것이라 에이전트 로그를 본다. 5번에서 보내는 노드에는 보이고 받는 노드에는 안 보이면 그 사이 방화벽이나 보안 그룹이다. 받는 노드에 도착했는데 Pod에 안 닿으면 받는 노드의 FORWARD 정책(Docker가 DROP으로 바꿔 놓은 경우가 있다)과 `rp_filter`를 본다.
+
+## 쿠버네티스는 약속만, 길은 플러그인이
+
+쿠버네티스는 "Pod마다 고유한 IP, Pod 사이엔 NAT 없음"이라는 약속만 하고, 그 약속을 지키는 일은 노드에 깔린 CNI 실행 파일이 한다. 런타임이 Pod의 빈 네트워크 네임스페이스와 설정 JSON을 넘기면 플러그인은 veth를 꽂고 IPAM에서 주소를 받아 결과 JSON을 돌려준다. 노드 사이 길은 노드마다 나눈 Pod 대역을 경로로 알리거나, VXLAN으로 감싸 노드 주소끼리 보내거나, 클라우드 망에 직접 맡기는 셋 중 하나다. 어느 쪽이든 장애는 경로, 터널 포트, MTU, 그리고 Pod 사이에 끼어든 NAT 넷 중 하나에서 나는 경우가 많다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 네트워크 모델의 요구 사항은 무엇인가요?
+
+모든 Pod가 클러스터에서 겹치지 않는 IP를 갖고, 모든 Pod가 NAT 없이 서로 통신하며, 노드의 에이전트가 그 노드의 Pod에 닿아야 한다. 쿠버네티스는 이 요구만 정하고 구현은 CNI 플러그인에 맡긴다. Pod를 IP를 가진 작은 호스트처럼 다루면 포트 충돌이 없고, 서비스 발견과 NetworkPolicy가 IP 기준으로 단순해진다.
+
+### CNI 플러그인은 언제, 어떻게 호출되나요?
+
+kubelet이 CRI로 Pod 샌드박스를 요청하면 containerd 같은 런타임이 네트워크 네임스페이스를 만들고 `/etc/cni/net.d`의 사전순 첫 설정 파일을 읽어 거기 적힌 type의 실행 파일을 `/opt/cni/bin`에서 실행한다. 할 일과 대상은 CNI_COMMAND, CNI_NETNS, CNI_IFNAME 같은 환경 변수로, 네트워크 설정은 표준 입력 JSON으로 준다. 플러그인은 인터페이스와 IP를 설정한 결과를 JSON으로 돌려주고, 런타임은 그 IP를 Pod IP로 보고한다. Pod를 지울 때는 DEL로 다시 부른다.
+
+### IPAM은 무엇이고 IP가 바닥나는 경우는 언제인가요?
+
+IPAM은 Pod에 줄 주소를 고르고 기록하는 부분이다. host-local은 노드의 Pod 대역에서 빈 IP를 고르고 IP 이름의 파일에 컨테이너 ID를 적어 둔다. 런타임이 DEL을 부르지 못하고 죽으면 파일이 남아 그 IP가 계속 쓰이는 것처럼 보이고, 작은 대역에서는 `no IP addresses available in range set`으로 새 Pod가 실패한다. 클라우드 CNI는 서브넷 IP나 ENI 한도가 바닥나는 식으로 같은 문제가 온다.
+
+### 노드 사이 Pod 통신을 경로 방식과 VXLAN 방식으로 하면 무엇이 다른가요?
+
+경로 방식은 각 노드가 다른 노드의 Pod 대역을 그 노드로 보내는 경로를 갖는다. 캡슐화가 없어 빠르고 tcpdump에 Pod 주소가 그대로 보이지만, 노드 사이 망이 Pod 주소를 받아 줘야 해서 같은 L2이거나 BGP로 라우터에 알려야 한다. VXLAN 방식은 Pod 패킷을 노드 주소끼리의 UDP로 감싸 노드 사이 망이 Pod 주소를 몰라도 되지만, 헤더 50바이트만큼 MTU가 줄고 UDP 포트가 열려 있어야 한다.
+
+### 같은 노드의 Pod끼리는 되는데 다른 노드로만 안 됩니다. 어디를 보나요?
+
+Pod IP로 직접 두드려 Service를 빼고 본다. 문제 노드에서 다른 노드의 Pod 대역으로 가는 경로가 있는지(`ip route get`), 터널 방식이면 이웃 표와 FDB 항목이 있는지 보고, 없으면 CNI 에이전트 로그를 본다. 있으면 양쪽 노드에서 tcpdump로 터널 포트(Flannel 8472, 표준 4789)를 잡아 보내는 쪽과 받는 쪽 중 어디서 사라지는지 확인한다. 보내고 못 받으면 보안 그룹이나 방화벽이다.
+
+### Pod MTU를 잘못 잡으면 어떤 증상이 나나요?
+
+터널 헤더만큼 줄어든 경로보다 Pod MTU가 크면, 작은 요청과 TCP 핸드셰이크는 되는데 큰 응답이나 업로드만 멈춘다. 중간에서 ICMP Frag needed가 막히면 Pod가 경로 MTU를 배우지 못해 재전송만 반복한다. 그래서 CNI는 Pod MTU를 노드 MTU에서 터널 헤더를 뺀 값(VXLAN이면 50바이트 작게)으로 설정하고, 노드 사이 망 MTU가 1500보다 작으면 그만큼 더 낮춘다.
+
+### 'cni0 already has an IP address different from ...' 에러는 왜 나나요?
+
+노드의 Pod 대역이 바뀌었는데 예전 대역 주소를 단 `cni0` 브리지가 남아 있을 때 bridge 플러그인이 낸다. kubeadm reset 후 다시 조인하거나 클러스터 대역을 바꿨을 때 흔하다. 노드를 drain하고 `cni0`(Flannel이면 `flannel.1`도)를 지운 뒤 CNI 에이전트와 kubelet을 다시 띄우면 새 대역으로 다시 만들어진다.
+
+### AWS VPC CNI에서 노드의 Pod 수가 적게 잡히는 이유는요?
+
+Pod가 VPC 서브넷의 주소를 직접 받기 때문에, 노드에 붙일 수 있는 ENI 수와 ENI당 IP 수가 Pod 수의 상한이 된다. 계산은 ENI 수 × (ENI당 IP − 1) + 2이고, m5.large는 29개, t3.medium은 17개다. 이를 넘으면 자원이 남아도 `Too many pods`로 Pending이 된다. 접두사 위임을 켜면 IP 칸마다 /28을 붙여 크게 늘릴 수 있지만 서브넷 주소도 그만큼 많이 쓴다.

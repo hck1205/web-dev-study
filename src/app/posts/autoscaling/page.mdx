@@ -1,0 +1,350 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("autoscaling");
+
+아침 9시에 쿠폰을 연다. 8시 59분까지 인스턴스 5대가 CPU 40%로 한가하다. 9시가 되자 요청이 세 배로 뛰고 CPU가 100%에 붙는다. 오토스케일링은 켜 두었으니 걱정하지 않았다. 그런데 새 인스턴스가 로드 밸런서에 붙은 건 9시 4분이었고, 그 4분 동안 5xx가 쏟아졌다. 쿠폰은 9시 3분에 다 나갔다. 오토스케일링은 정확히 동작했다. 너무 늦었을 뿐이다.
+
+오토스케일링(autoscaling)은 부하에 맞춰 서버 수를 자동으로 늘리고 줄이는 장치다. 이 글은 "늘리는 데 얼마나 걸리나"에서 출발해 반응형·예약형·예측형의 차이, 어떤 지표를 보고 늘릴지, 줄일 때 생기는 플래핑과 쿨다운을 시뮬레이션 결과로 비교한다. AWS Auto Scaling 그룹과 쿠버네티스에서 실제 설정이 어떻게 생기는지도 본다. 시뮬레이션은 Node 22로 직접 돌렸고, AWS CLI 출력은 계정 없이 실제 형식대로 쓴 예시다.
+
+이 주제의 다른 글: 서버를 늘릴지 키울지는 [수평 확장과 수직 확장](/posts/scaling-horizontal-vertical)에서, 쿠버네티스 HPA의 공식과 동작은 [HPA](/posts/k8s-hpa)에서, 노드를 늘리는 쪽은 [노드 오토스케일링과 Karpenter](/posts/k8s-node-autoscaling-karpenter)에서 다룬다.
+
+## 늘리는 데 걸리는 시간이 먼저다
+
+오토스케일링을 이해하는 첫 질문은 "부하가 오른 순간부터 새 서버가 요청을 받기까지 몇 초인가"다. 이 시간이 짧으면 거의 모든 문제가 쉬워지고, 길면 어떤 정책도 스파이크를 따라잡지 못한다. 그 사이에 일어나는 일을 순서대로 보자.
+
+<SequenceDiagram
+  caption="부하가 오른 뒤 새 인스턴스가 요청을 받기까지"
+  actors={[
+    { id: "mon", label: "지표 수집" },
+    { id: "as", label: "오토스케일러" },
+    { id: "cloud", label: "클라우드" },
+    { id: "vm", label: "새 인스턴스" },
+    { id: "lb", label: "LB" },
+  ]}
+  steps={[
+    { from: "mon", to: "as", label: "CPU 1분 평균", title: "지표가 모인다", detail: "대개 1분 단위로 평균을 낸다. 부하가 오른 첫 1분은 지표에 다 반영되지도 않는다." },
+    { from: "as", to: "as", label: "N번 연속 확인", title: "경보가 판단한다", detail: "한 번 튄 값에 반응하지 않도록 몇 번 연속으로 넘어야 늘린다. 여기서 몇 분이 간다." },
+    { from: "as", to: "cloud", label: "desired 5 → 9", title: "원하는 수를 바꾼다", detail: "정책이 필요한 대수를 계산해 그룹의 desired capacity를 올린다." },
+    { from: "cloud", to: "vm", label: "launch", title: "VM이 뜬다", detail: "자리를 잡고 이미지를 받아 OS를 부팅한다. 수십 초에서 몇 분." },
+    { from: "vm", to: "vm", label: "앱 기동 · 워밍업", title: "앱이 준비된다", detail: "런타임 기동, 설정 로딩, 커넥션 풀, 캐시 채우기, JIT. 자바 서비스라면 여기서도 1분 넘게 걸린다." },
+    { from: "lb", to: "vm", label: "health check OK", title: "LB에 붙는다", detail: "헬스 체크가 몇 번 연속 통과해야 트래픽을 보낸다. 이때부터 부하를 나눠 받는다." },
+  ]}
+/>
+
+AWS의 대상 추적 정책은 기본 1분 지표로 경보를 만들고, 늘리는 쪽 경보는 3분 연속으로 목표를 넘어야 울린다. 여기에 EC2 부팅과 앱 기동을 더하면 3~6분이 흔하다. 쿠버네티스 HPA는 15초마다 판단하고 Pod는 빨리 뜨지만, 노드 자리가 없으면 노드를 새로 만드는 시간이 다시 붙는다. 이 반응 시간을 줄이는 것이 정책을 다듬는 것보다 효과가 크다.
+
+## 반응형, 예약형, 예측형
+
+언제 늘릴지를 정하는 방식은 셋이다.
+
+- **반응형(reactive)**: 지표가 목표를 넘으면 늘린다. 대상 추적(target tracking), 단계 조정(step scaling), HPA가 여기에 든다. 예측할 수 없는 부하에 맞지만 반응 시간만큼 늘 늦다.
+- **예약형(scheduled)**: 시각을 정해 대수를 바꾼다. "평일 8시 50분에 최소 15대". 쿠폰 오픈, 방송, 정산 배치처럼 시각을 아는 부하에 맞다.
+- **예측형(predictive)**: 지난 며칠의 패턴을 학습해 미리 늘린다. AWS 예측 스케일링은 최근 최대 14일의 지표로 앞으로 48시간을 예측한다. 매일 반복되는 출퇴근 곡선 같은 부하에 맞고, 처음 보는 이벤트는 모른다.
+
+반응형 안에서도 두 갈래가 있다. 대상 추적은 목표값 하나만 주면 필요한 대수를 비율로 계산한다. 온도 조절기처럼 "60%를 유지하라"만 말하는 셈이다. 단계 조정은 "70~85%면 2대, 85% 넘으면 4대"처럼 구간마다 늘릴 양을 사람이 정한다. 대부분은 대상 추적으로 시작하고, 급하게 치솟는 구간에서 더 공격적으로 늘려야 할 때 단계 조정을 덧붙인다.
+
+셋은 섞어 쓴다. 예측형이나 예약형으로 바닥을 미리 깔고, 반응형으로 그 위의 예상 밖 변동을 받는다. 반응형만 쓰면 위의 쿠폰처럼 매번 늦는다.
+
+## 스파이크와 늘어나는 속도의 경주
+
+얼마나 늦는지 숫자로 보려고 1초 단위 시뮬레이션을 짰다. 인스턴스 하나는 초당 100건을 처리하고 5대로 시작한다. 300초부터 30초 동안 초당 300건이 900건으로 오른다. 반응형 정책은 목표 사용률 60%로 필요한 대수를 계산하고, 새 인스턴스는 180초 뒤에 준비된다.
+
+```bash
+# 정책과 부팅 시간을 바꿔 가며 용량을 넘친 요청 수를 센다
+node asim.js detail
+node asim.js
+```
+
+```text
+== reactive, 60s check, 180s boot: over-capacity requests 87800 / 621600 (14.1%)
+t=300s rps=300 ready= 5 booting=0 util=60% dropped=0
+t=330s rps=900 ready= 5 booting=0 util=100% dropped=4200
+t=360s rps=900 ready= 5 booting=10 util=100% dropped=16200
+t=420s rps=900 ready= 5 booting=10 util=100% dropped=40200
+t=480s rps=900 ready= 5 booting=10 util=100% dropped=64200
+t=540s rps=900 ready=15 booting=0 util=60% dropped=87800
+t=600s rps=900 ready=15 booting=0 util=60% dropped=87800
+```
+
+360초에 판단해서 10대를 주문했지만 준비된 건 540초다. 그 사이 4분 동안 용량을 넘은 요청이 87,800건, 전체의 14%다. 조건을 바꿔 다시 돌렸다.
+
+```text
+== reactive, 60s check, 180s boot: over-capacity requests 87800 / 621600 (14.1%)
+== reactive, 15s check, 180s boot: over-capacity requests 69800 / 621600 (11.2%)
+== reactive, 15s check, 30s boot (warm pool): over-capacity requests 9800 / 621600 (1.6%)
+== scheduled 15 at t=60 + reactive: over-capacity requests 0 / 621600 (0.0%)
+== scheduled 15 at t=200 + reactive: over-capacity requests 23800 / 621600 (3.8%)
+== reactive, 15s check, 180s boot, target 40%: over-capacity requests 16700 / 621600 (2.7%)
+```
+
+판단을 60초에서 15초로 당겨도 11%로 조금 나아질 뿐이다. 부팅 180초가 그대로라서다. 부팅을 30초로 줄이자(미리 만들어 둔 인스턴스를 깨우는 웜 풀) 1.6%로 떨어졌다. 예약형은 시각만 맞으면 0%지만, 스파이크 100초 전(t=200)에 예약하면 부팅이 끝나기 전에 스파이크가 와서 3.8%를 놓쳤다. 예약은 "부하가 오는 시각"이 아니라 "부하가 오는 시각 − 준비 시간"에 걸어야 한다. 목표 사용률을 40%로 낮추는 방법도 효과가 있다. 평소에 여유분을 더 들고 있는 것이니 비용으로 산 결과다.
+
+<NetworkTopology
+  caption="스파이크는 30초에 오고, 새 인스턴스는 3분 뒤에 온다"
+  width={400}
+  height={270}
+  zones={[
+    { id: "asg", label: "Auto Scaling 그룹", x: 140, y: 20, w: 252, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "users", label: "Users", sub: "300 → 900 rps", x: 66, y: 140, icon: "client", w: 108 },
+    { id: "lb", label: "ALB", x: 200, y: 140, icon: "lb", w: 90 },
+    { id: "old", label: "5 x ready", sub: "100 rps each", x: 322, y: 70, icon: "server", w: 116 },
+    { id: "new", label: "10 x booting", sub: "180s left", x: 322, y: 140, icon: "container", w: 116 },
+    { id: "as", label: "Autoscaler", sub: "target 60%", x: 322, y: 215, icon: "gateway", w: 116 },
+  ]}
+  links={[
+    { from: "users", to: "lb" },
+    { from: "lb", to: "old" },
+    { from: "lb", to: "new", dashed: true },
+    { from: "as", to: "new" },
+  ]}
+  steps={[
+    { path: ["users", "lb", "old"], packet: "300rps", title: "평소에는 60%", detail: "5대가 초당 300건을 받는다. 여유가 40% 있다." },
+    { path: ["users", "lb", "old"], packet: "900rps", highlight: ["old"], title: "30초 만에 세 배", detail: "5대가 감당할 수 있는 건 500건이다. 나머지 400건은 대기열에 쌓이거나 실패한다." },
+    { path: ["as", "new"], packet: "+10", title: "다음 판단 때 10대를 주문한다", detail: "900 ÷ (100 × 0.6) = 15대가 필요하다고 계산한다. 이미 5대가 있으니 10대를 더한다." },
+    { path: ["lb", "new"], packet: "GET", blocked: true, title: "아직 받을 수 없다", detail: "부팅과 앱 기동, 헬스 체크가 끝나기 전에는 LB가 보내지 않는다. 이 3분이 장애 시간이다." },
+    { path: ["users", "lb", "new"], packet: "900rps", highlight: ["old"], title: "15대가 60%로 나눠 받는다", detail: "준비가 끝나면 사용률이 목표로 돌아온다. 스파이크는 이미 3분 전에 시작됐다." },
+  ]}
+/>
+
+필요한 여유분은 계산할 수 있다. 반응 시간 동안 부하가 얼마나 오를 수 있는지 알면, 그만큼은 지금 들고 있어야 한다.
+
+<CodePlayground
+  caption="반응 시간 동안 버티려면 지금 몇 대가 있어야 하나"
+  functionName="instancesNeeded"
+  initialCode={`function instancesNeeded(rps, growthPerSec, reactionSec, perInstance, target) {
+  // rps: 지금 부하, growthPerSec: 부하가 1초에 늘 수 있는 최대량
+  // reactionSec: 판단부터 새 인스턴스가 받기까지
+  // 1) 평소에는 목표 사용률(target)을 지킬 만큼
+  // 2) 반응 시간 끝의 부하를 100%로라도 받을 만큼
+  // 둘 중 큰 값
+  return 0;
+}`}
+  solution={`function instancesNeeded(rps, growthPerSec, reactionSec, perInstance, target) {
+  const steady = Math.ceil(rps / (perInstance * target));
+  const peak = Math.ceil((rps + growthPerSec * reactionSec) / perInstance);
+  return Math.max(steady, peak);
+}`}
+  tests={[
+    { label: "부하가 늘지 않는다", args: [300, 0, 240, 100, 0.6], expected: 5 },
+    { label: "초당 2.5씩, 반응 240초", args: [300, 2.5, 240, 100, 0.6], expected: 9 },
+    { label: "초당 2.5씩, 반응 60초", args: [300, 2.5, 60, 100, 0.6], expected: 5 },
+    { label: "대당 200rps, 반응 210초", args: [1000, 5, 210, 200, 0.7], expected: 11 },
+    { label: "같은 조건, 반응 30초", args: [1000, 5, 30, 200, 0.7], expected: 8 },
+  ]}
+/>
+
+둘째와 셋째 테스트를 보면 반응 시간이 240초에서 60초로 줄자 필요한 대수가 9에서 5로 줄었다. 넷째와 다섯째도 같다. 반응 시간을 줄이는 투자(가벼운 이미지, 빠른 기동, 웜 풀)가 그대로 평소 대수와 비용을 줄인다.
+
+## 무엇을 보고 늘리나
+
+지표 선택이 정책의 절반이다. 좋은 지표는 부하에 비례하고, 서버를 늘리면 내려가며, 빨리 보인다.
+
+**CPU 사용률**은 기본값이고 CPU를 쓰는 서비스에는 잘 맞는다. 하지만 대부분의 시간을 DB나 외부 API 응답을 기다리며 보내는 서비스는 CPU가 30%인데도 요청이 밀린다. 이벤트 루프나 스레드 풀이 막혀 있는데 CPU는 한가한 모양이다. 컨테이너가 CPU limits에 걸려 스로틀링되면 CPU 사용률이 limits에 붙어서 실제 부하를 반영하지 못하기도 한다.
+
+**인스턴스당 요청 수**(AWS의 `ALBRequestCountPerTarget`)는 웹 서비스에 가장 직관적이다. 부하 테스트로 "한 대가 초당 몇 건까지 지연 목표를 지키나"를 재 두면 목표값이 바로 나온다. 요청마다 비용이 크게 다르면(가벼운 조회와 무거운 리포트가 섞이면) 정확도가 떨어진다.
+
+**큐 깊이**는 워커에 맞다. 정확히는 "인스턴스당 밀린 메시지 수"를 본다. 메시지 하나 처리에 0.5초 걸리고 10초 안에 처리하고 싶다면 인스턴스당 20개가 목표다. 쿠버네티스에서는 KEDA가 큐 길이로 Pod를 늘리는 대표적인 도구다.
+
+어떤 지표든 목표값은 부하 테스트로 정한다. 인스턴스 한 대에 부하를 조금씩 올리면서 p99 지연이 목표(예: 300ms)를 넘기 시작하는 지점의 CPU, 요청 수, 큐 깊이를 적어 두고, 그 값의 60~70%를 목표로 잡는다. 감으로 정한 "CPU 70%"는 서비스마다 전혀 다른 의미다.
+
+피해야 할 지표도 있다. **지연 시간**은 서버를 늘려서 내려가지 않는 경우가 많다. 느린 원인이 DB라면 앱 서버를 늘릴수록 DB 커넥션만 늘어 더 느려진다. **메모리 사용률**은 GC 런타임이 메모리를 잘 돌려주지 않아서 부하가 줄어도 내려가지 않고, 그러면 줄이지를 못한다. 이유는 [가비지 컬렉션](/posts/garbage-collection) 글에서 봤다.
+
+## 줄일 때는 천천히
+
+늘리는 것보다 줄이는 쪽에서 사고가 더 난다. 부하가 경계선 근처에서 출렁이면 늘렸다 줄였다를 반복하는 플래핑(flapping)이 생긴다. 아래 그림은 70%를 넘으면 늘리고 50% 밑이면 줄이는 단순한 정책이 같은 부하에서 어떻게 흔들리는지 보여 준다.
+
+<AlgoTrace
+  caption="70% 넘으면 +1, 50% 밑이면 −1. 부하는 거의 같은데 대수가 계속 바뀐다"
+  memoryLabel="인스턴스 수"
+  cells={["560rps", "460rps", "570rps", "440rps", "570rps", "440rps"]}
+  steps={[
+    { pointer: 0, memory: ["8대"], caption: "560rps ÷ 800 = 70%. 경계선이다. 아직 그대로." },
+    { pointer: 1, memory: ["8대"], caption: "460 ÷ 800 = 57.5%. 그대로다." },
+    { pointer: 2, found: [2], memory: ["9대"], caption: "570 ÷ 800 = 71%. 조금 넘었다고 한 대 늘린다." },
+    { pointer: 3, found: [3], memory: ["8대"], caption: "440 ÷ 900 = 49%. 바로 한 대 줄인다. 새로 뜬 인스턴스는 일도 거의 못 했다." },
+    { pointer: 4, found: [4], memory: ["9대"], caption: "570 ÷ 800 = 71%. 또 늘린다. 부팅과 워밍업 비용을 또 낸다." },
+    { pointer: 5, found: [5], memory: ["8대"], caption: "440 ÷ 900 = 49%. 또 줄인다. 줄일 때마다 처리 중이던 연결이 끊길 위험도 따라온다." },
+  ]}
+/>
+
+평균 560rps에 사인파와 잡음으로 ±120rps가 출렁이는 부하를 한 시간 동안 15초마다 판단하게 했다.
+
+```text
+no cooldown                        scale events/hour=64
+scale-in cooldown 300s             scale events/hour=22
+scale-in only after 20 low checks  scale events/hour=3
+```
+
+아무 장치가 없으면 한 시간에 64번 늘리고 줄였다. 줄인 뒤 5분 동안은 다시 줄이지 않는 쿨다운(cooldown)을 두면 22번, "최근 5분(20번) 내내 낮았을 때만 줄인다"는 안정화 창을 두면 3번으로 줄었다. 원칙은 비대칭이다. 늘리는 건 빨리, 줄이는 건 천천히 한다. 늦게 줄여서 잃는 건 몇 분치 인스턴스 비용이고, 성급하게 줄여서 잃는 건 가용성이다. HPA의 기본 5분 안정화 창도 같은 생각이고, 동작은 [HPA](/posts/k8s-hpa) 글에 있다.
+
+줄일 때는 무엇을 끊는지도 챙긴다. LB에서 빼고 진행 중인 요청을 끝낼 시간(ALB의 deregistration delay, 기본 300초), 처리 중인 작업을 넘길 시간(ASG의 수명 주기 훅, 쿠버네티스의 `preStop`과 `terminationGracePeriodSeconds`)이 없으면 줄일 때마다 몇 건씩 실패한다. 긴 배치를 돌리는 워커에는 스케일 인 보호를 걸어 두기도 한다.
+
+## AWS Auto Scaling 그룹에 걸어 보면
+
+대상 추적 정책은 "평균 CPU를 60%로 유지하라"처럼 목표만 주면 늘리고 줄이는 경보를 AWS가 만든다. 아래 명령과 출력은 실제 형식대로 쓴 예시다.
+
+```bash
+# 그룹 평균 CPU를 60%로 유지하는 대상 추적 정책 (예시)
+aws autoscaling put-scaling-policy \
+  --auto-scaling-group-name web-asg \
+  --policy-name cpu60 \
+  --policy-type TargetTrackingScaling \
+  --target-tracking-configuration '{"PredefinedMetricSpecification":{"PredefinedMetricType":"ASGAverageCPUUtilization"},"TargetValue":60.0}'
+```
+
+<UrlAnatomy
+  caption="대상 추적 정책 한 줄을 조각내 읽기"
+  base="aws autoscaling put-scaling-policy"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "group", display: "--auto-scaling-group-name web-asg", title: "어느 그룹인가", description: "최소·최대·원하는 대수를 가진 그룹이다. 정책은 원하는 대수(desired)만 바꾸고, 최소·최대 사이를 벗어나지 못한다.", required: true },
+    { key: "type", display: "--policy-type TargetTrackingScaling", title: "정책 종류", description: "목표값만 주는 대상 추적이다. 경계별로 몇 대씩 늘릴지 직접 정하려면 StepScaling을 쓴다." },
+    { key: "metric", display: "ASGAverageCPUUtilization", title: "무엇을 볼까", description: "CPU 대신 ALBRequestCountPerTarget(대당 요청 수)을 쓰려면 ResourceLabel로 대상 그룹을 함께 준다." },
+    { key: "target", display: "\"TargetValue\":60.0", title: "목표값", description: "낮을수록 여유분을 더 들고 있어 스파이크에 강하고 비싸다. 반응 시간이 길수록 낮게 잡는다." },
+    { key: "warmup", display: "(그룹의 DefaultInstanceWarmup)", title: "새 인스턴스를 언제부터 셀까", description: "막 뜬 인스턴스의 낮은 CPU가 평균을 끌어내려 덜 늘리는 일을 막는다. 앱 워밍업 시간에 맞춰 그룹에 설정한다." },
+  ]}
+/>
+
+```text
+{
+    "PolicyARN": "arn:aws:autoscaling:ap-northeast-2:123456789012:scalingPolicy:2f1c3a7e-5b8d-4e0f-9a61-0c7d2b9e4f13:autoScalingGroupName/web-asg:policyName/cpu60",
+    "Alarms": [
+        {
+            "AlarmName": "TargetTracking-web-asg-AlarmHigh-6b1f0d2a-3c4e-4f5a-8b7c-9d0e1f2a3b4c",
+            "AlarmARN": "arn:aws:cloudwatch:ap-northeast-2:123456789012:alarm:TargetTracking-web-asg-AlarmHigh-6b1f0d2a-3c4e-4f5a-8b7c-9d0e1f2a3b4c"
+        },
+        {
+            "AlarmName": "TargetTracking-web-asg-AlarmLow-0a9b8c7d-6e5f-4a3b-2c1d-0e9f8a7b6c5d",
+            "AlarmARN": "arn:aws:cloudwatch:ap-northeast-2:123456789012:alarm:TargetTracking-web-asg-AlarmLow-0a9b8c7d-6e5f-4a3b-2c1d-0e9f8a7b6c5d"
+        }
+    ]
+}
+```
+
+경보가 두 개 생긴다. High는 늘리는 쪽, Low는 줄이는 쪽이다. 이 경보를 손으로 고치면 정책이 다시 덮어쓰니 건드리지 않는다. 쿠폰처럼 시각을 아는 부하에는 예약 작업을 더한다.
+
+```bash
+# 매일 08:50(서울)에 최소 대수를 15로 올린다 (예시)
+aws autoscaling put-scheduled-update-group-action \
+  --auto-scaling-group-name web-asg \
+  --scheduled-action-name coupon-prewarm \
+  --recurrence "50 8 * * *" --time-zone "Asia/Seoul" \
+  --min-size 15
+# 미리 만들어 멈춰 둔 인스턴스 5대를 대기시킨다(웜 풀) (예시)
+aws autoscaling put-warm-pool --auto-scaling-group-name web-asg --pool-state Stopped --min-size 5
+```
+
+늘어났는지, 왜 늘었는지는 활동 기록으로 본다.
+
+```bash
+# 최근 스케일링 활동과 그 이유 (예시)
+aws autoscaling describe-scaling-activities --auto-scaling-group-name web-asg --max-items 1
+```
+
+```text
+{
+    "Activities": [
+        {
+            "ActivityId": "5e8f2c1a-7b3d-4a9e-b6c0-1d2e3f4a5b6c",
+            "AutoScalingGroupName": "web-asg",
+            "Description": "Launching a new EC2 instance: i-0a1b2c3d4e5f67890",
+            "Cause": "At 2026-10-21T00:02:42Z a monitor alarm TargetTracking-web-asg-AlarmHigh-6b1f0d2a-3c4e-4f5a-8b7c-9d0e1f2a3b4c in state ALARM triggered policy cpu60 changing the desired capacity from 5 to 9.  At 2026-10-21T00:02:51Z an instance was started in response to a difference between desired and actual capacity, increasing the capacity from 5 to 9.",
+            "StartTime": "2026-10-21T00:02:51.120000+00:00",
+            "EndTime": "2026-10-21T00:03:27+00:00",
+            "StatusCode": "Successful",
+            "Progress": 100,
+            "Details": "{\"Subnet ID\":\"subnet-0123456789abcdef0\",\"Availability Zone\":\"ap-northeast-2a\"}"
+        }
+    ]
+}
+```
+
+`Cause`에 경보가 울린 시각이 있다. 이 시각을 트래픽 그래프의 상승 시작점과 비교하면 반응 시간 중 판단에 쓴 몫이 나오고, LB 대상 그룹에 healthy로 붙은 시각과 비교하면 부팅과 워밍업 몫이 나온다. 어디를 줄일지는 이 두 숫자를 보고 정한다.
+
+## 쿠버네티스에서는 두 층이 따로 늘어난다
+
+쿠버네티스에서는 Pod 수와 노드 수가 따로 늘어난다. HPA가 Pod를 늘려도 노드에 자리가 없으면 Pod는 Pending으로 남고, 그걸 본 노드 오토스케일러(Cluster Autoscaler나 Karpenter)가 노드를 새로 만든다. 반응 시간이 두 번 더해지는 셈이다.
+
+<NetworkTopology
+  caption="Pod가 먼저 늘고, 자리가 없으면 노드가 따라 는다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 8, y: 20, w: 384, h: 82, tone: "neutral" },
+    { id: "nodes", label: "노드", x: 8, y: 118, w: 384, h: 152, tone: "private" },
+  ]}
+  nodes={[
+    { id: "hpa", label: "HPA", sub: "15초마다", x: 70, y: 66, icon: "gateway", w: 96 },
+    { id: "deploy", label: "Deployment", sub: "replicas 6", x: 200, y: 66, icon: "server", w: 112 },
+    { id: "karp", label: "Karpenter", sub: "Pending 감시", x: 330, y: 66, icon: "gateway", w: 104 },
+    { id: "n1", label: "node-a", sub: "Pod 4개 꽉 참", x: 80, y: 170, icon: "container", w: 120 },
+    { id: "pend", label: "Pending x2", sub: "자리 없음", x: 220, y: 170, icon: "container", w: 110 },
+    { id: "n2", label: "node-b (new)", sub: "약 1분", x: 320, y: 235, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "hpa", to: "deploy" },
+    { from: "deploy", to: "n1" },
+    { from: "deploy", to: "pend", dashed: true },
+    { from: "karp", to: "n2" },
+    { from: "pend", to: "n2", dashed: true },
+  ]}
+  steps={[
+    { path: ["hpa", "deploy"], packet: "4→6", title: "HPA가 replicas를 올린다", detail: "CPU 평균이 목표를 넘어 Pod 두 개를 더 원한다." },
+    { path: ["deploy", "pend"], packet: "Pod", blocked: true, title: "노드에 자리가 없다", detail: "스케줄러가 requests를 받아 줄 노드를 찾지 못한다. Pod는 Pending이다." },
+    { path: ["karp", "n2"], packet: "launch", highlight: ["pend"], title: "노드 오토스케일러가 노드를 만든다", detail: "Pending Pod의 requests에 맞는 인스턴스를 골라 띄운다. VM 부팅과 kubelet 등록 시간이 붙는다." },
+    { path: ["pend", "n2"], packet: "bind", title: "Pod가 새 노드로 간다", detail: "이미지를 받고 컨테이너가 뜬 뒤 readiness가 통과해야 Service 뒤로 들어간다." },
+  ]}
+/>
+
+그래서 쿠버네티스에서도 여유분을 미리 두는 기법이 있다. 우선순위가 낮은 "자리 맡기" Pod를 띄워 두었다가, 진짜 Pod가 오면 그걸 밀어내고 그 자리에 바로 들어가게 하는 방식(overprovisioning)이다. 밀려난 자리 맡기 Pod가 Pending이 되면서 새 노드를 미리 부른다. requests를 실제와 맞게 잡는 일도 오토스케일링의 일부다. HPA의 사용률은 requests 대비로 계산되고, 노드 오토스케일러도 requests로 자리를 계산한다. requests를 자동으로 맞추는 쪽은 [VPA](/posts/k8s-vpa) 글에서 다룬다.
+
+## 0까지 줄이면 첫 요청이 기다린다
+
+밤에 요청이 없는 사내 도구라면 0대까지 줄이고 싶다. 서버리스 함수, Knative, KEDA가 이걸 한다. 대신 0에서 1로 가는 첫 요청은 인스턴스가 뜰 때까지 기다린다. 이 지연이 콜드 스타트다. 몇백 ms면 괜찮지만 자바 서비스처럼 기동이 수십 초면 첫 사용자는 타임아웃을 본다. 줄일 수 있는 최솟값은 "첫 요청이 견딜 수 있는 기동 시간"이 정한다. 기동 시간을 줄이는 방법은 [콜드 스타트](/posts/cold-starts) 글에 있다.
+
+## 오토스케일링이 도와주지 못할 때
+
+늘려도 안 되는 경우를 알아 두면 장애 때 시간을 아낀다.
+
+병목이 뒤에 있는 경우다. 앱 서버를 10대에서 30대로 늘리면 각 서버의 커넥션 풀도 세 배가 되어 DB의 `max_connections`를 넘는다. 증상은 "늘렸더니 에러가 더 많아졌다"이다. 앱 서버의 최대 대수는 DB가 받을 수 있는 커넥션 수에서 거꾸로 계산해 둔다. DB 쪽을 늘리는 방법은 [DB 복제](/posts/db-replication-sharding)와 [샤딩](/posts/db-sharding) 글에 있다.
+
+최대 대수가 없는 경우다. 재시도 폭풍이나 봇 트래픽은 진짜 부하처럼 보여서 오토스케일러가 성실하게 늘린다. 다음 달 청구서로 알게 된다. 최대 대수는 비용 한도이기도 하다. 입구의 [요청 수 제한](/posts/rate-limiting-in-practice)과 [백프레셔](/posts/backpressure)가 함께 있어야 한다.
+
+최소 대수가 너무 작은 경우다. 가용 영역 하나가 통째로 빠지면 남은 영역이 그 몫을 즉시 받아야 한다. 오토스케일링이 반응하는 몇 분 동안 버틸 수 있도록, 최소 대수는 "영역 하나가 빠져도 남은 대수로 평소 부하를 받는다"를 기준으로 잡는다.
+
+## 정책보다 반응 시간
+
+오토스케일링은 지표를 보고 대수를 바꾸는 단순한 고리다. 어려운 건 그 고리가 도는 데 걸리는 시간이다. 반응 시간이 길면 반응형 정책은 늘 늦고, 그 공백은 여유분(낮은 목표값), 예약과 예측, 웜 풀로 메운다. 지표는 서버를 늘리면 내려가는 것을 고르고, 줄이는 쪽은 쿨다운과 안정화 창으로 천천히 한다. 그리고 최대 대수와 뒤쪽 병목을 함께 본다.
+
+## 면접에서 나올 만한 질문
+
+### 오토스케일링이 켜져 있는데도 트래픽 급증 때 장애가 나는 이유는요?
+
+반응 시간 때문이다. 지표가 모이고 경보가 연속으로 확인되고 새 인스턴스가 부팅해서 헬스 체크를 통과하기까지 몇 분이 걸리고, 스파이크는 그보다 빨리 온다. 시뮬레이션에서 판단 주기만 줄였을 때는 14%에서 11%로 조금 나아졌지만, 부팅을 30초로 줄이자 1.6%가 됐다. 시각을 아는 부하는 예약으로, 반복되는 부하는 예측으로 미리 늘리고, 나머지는 여유분과 웜 풀로 버틴다.
+
+### 반응형, 예약형, 예측형 스케일링은 언제 쓰나요?
+
+반응형은 예측할 수 없는 변동에, 예약형은 시각을 아는 이벤트에, 예측형은 매일 반복되는 패턴에 쓴다. 실제로는 예약형이나 예측형으로 바닥을 깔고 반응형으로 그 위를 받는 식으로 섞는다. 예약은 부하가 오는 시각에서 준비 시간만큼 앞당겨 건다.
+
+### 스케일링 지표로 CPU가 맞지 않는 경우는요?
+
+대부분의 시간을 I/O를 기다리며 보내는 서비스는 요청이 밀려도 CPU가 낮아서 늘어나지 않는다. CPU limits에 걸려 스로틀링되는 컨테이너도 사용률이 실제 부하를 반영하지 못한다. 이럴 때는 인스턴스당 요청 수나 인스턴스당 밀린 메시지 수처럼 부하에 직접 비례하는 지표를 쓴다. 지연 시간은 원인이 뒤에 있으면 늘려도 내려가지 않아서 피한다.
+
+### 플래핑은 왜 생기고 어떻게 막나요?
+
+부하가 늘리는 경계와 줄이는 경계 근처에서 출렁이면 늘렸다 줄였다를 반복한다. 늘리는 경계와 줄이는 경계 사이를 벌리고, 줄인 뒤 일정 시간 다시 줄이지 않는 쿨다운이나 최근 몇 분 내내 낮았을 때만 줄이는 안정화 창을 둔다. 시뮬레이션에서는 시간당 64번이던 변경이 안정화 창으로 3번까지 줄었다. 늘리는 건 빠르게, 줄이는 건 천천히가 원칙이다.
+
+### 스케일 인 할 때 조심할 점은요?
+
+줄어드는 인스턴스가 처리 중인 요청과 작업을 끝낼 시간을 줘야 한다. LB의 연결 드레이닝(deregistration delay), ASG 수명 주기 훅, 쿠버네티스의 preStop과 종료 유예 시간이 그 장치다. 긴 작업을 하는 워커에는 스케일 인 보호를 건다. 이게 없으면 줄일 때마다 몇 건씩 실패한다.
+
+### 앱 서버를 늘렸더니 오히려 에러가 늘었습니다. 무엇을 의심하나요?
+
+병목이 앱 서버 뒤에 있다는 신호다. 가장 흔한 건 DB 커넥션이다. 서버가 늘면 커넥션 풀도 함께 늘어 DB의 최대 커넥션 수를 넘거나 DB가 더 느려진다. 앱 서버의 최대 대수를 DB 커넥션 한도에서 거꾸로 계산하고, 필요하면 커넥션 풀러를 두거나 DB 쪽을 확장한다.
+
+### 쿠버네티스에서 HPA만으로 충분하지 않은 이유는요?
+
+HPA는 Pod 수만 늘리고 노드는 늘리지 않는다. 노드에 자리가 없으면 Pod가 Pending으로 남고, 노드 오토스케일러가 새 노드를 띄울 때까지 기다려야 한다. 그래서 Cluster Autoscaler나 Karpenter를 함께 쓰고, 급한 서비스는 낮은 우선순위의 자리 맡기 Pod로 노드 여유분을 미리 둔다.

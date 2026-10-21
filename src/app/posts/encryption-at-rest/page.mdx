@@ -1,0 +1,646 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("encryption-at-rest");
+
+서버를 정리하다가 이런 질문을 받는다. "교체해서 반납한 디스크에 고객 데이터가 남아 있으면 어떻게 돼요?" 같은 주에 보안 점검표에는 "저장 데이터 암호화 여부: 예/아니오" 칸이 있다. 클라우드 콘솔에서 체크박스 하나 켜면 "예"라고 쓸 수 있다. 그런데 그 체크박스가 정확히 무엇을 막아 주는지 물으면 대답이 막힌다.
+
+저장 데이터 암호화(encryption at rest)는 디스크, 데이터베이스 파일, 백업처럼 "가만히 놓여 있는" 데이터를 암호문으로 두는 것이다. 네트워크를 지나가는 데이터를 지키는 건 [전송 구간 암호화](/posts/encryption-in-transit)가 따로 맡는다. 이 글은 리눅스 디스크 암호화(LUKS)부터 PostgreSQL 16의 컬럼 암호화, KMS를 쓰는 봉투 암호화, 키 교체까지 실제로 돌려 보면서, 결국 "어떤 키를 누가 갖고 있느냐"가 전부라는 걸 확인한다. 명령은 Ubuntu 24.04 기준이다.
+
+## 반납한 디스크와 SQL 인젝션은 다른 문제다
+
+먼저 위협을 나눠야 한다. 저장 데이터를 노리는 길은 크게 둘이다. 하나는 물리적인 매체를 손에 넣는 것이다. 폐기한 디스크, 도난당한 노트북, 실수로 공개된 백업 스냅샷, 다른 계정으로 복사된 볼륨 이미지가 여기에 속한다. 다른 하나는 정상적인 경로로 들어오는 것이다. 앱 서버를 장악하거나 SQL 인젝션으로 쿼리를 바꾸면, 데이터베이스는 평소처럼 복호화해서 결과를 돌려준다.
+
+아래 그림에서 다음을 누르면 세 가지 경로가 각각 어디서 막히는지 볼 수 있다. 디스크와 백업은 암호화되어 있고 키는 KMS에 있다고 가정한다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="디스크를 훔치면 막히지만, 앱을 통해 들어오면 평문이 나온다"
+  zones={[
+    { id: "vpc", label: "서비스 VPC", x: 8, y: 92, w: 384, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "atk", label: "attacker", x: 70, y: 40, icon: "client" },
+    { id: "kms", label: "KMS", sub: "master key", x: 320, y: 40, icon: "lock" },
+    { id: "app", label: "app", sub: "10.0.1.10", x: 80, y: 150, icon: "server" },
+    { id: "db", label: "postgres", sub: "10.0.2.20", x: 260, y: 150, icon: "db" },
+    { id: "disk", label: "EBS volume", sub: "encrypted", x: 260, y: 250, icon: "lock" },
+    { id: "snap", label: "snapshot", sub: "encrypted", x: 80, y: 250, icon: "db" },
+  ]}
+  links={[
+    { from: "atk", to: "app" },
+    { from: "app", to: "db" },
+    { from: "db", to: "disk" },
+    { from: "disk", to: "snap", dashed: true },
+    { from: "kms", to: "disk", dashed: true },
+    { from: "atk", to: "snap", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "db", "disk"], packet: "SELECT", highlight: ["kms"], title: "평소의 읽기", detail: "DB가 디스크에서 블록을 읽으면 호스트가 KMS에서 받아 둔 키로 복호화해 넘긴다. DB와 앱은 암호화를 의식하지 않는다." },
+    { path: ["atk", "snap"], packet: "copy", blocked: true, title: "스냅샷을 빼 가도 읽을 수 없다", detail: "다른 계정으로 스냅샷을 복사해도 KMS 키를 쓸 권한이 없으면 볼륨을 만들 수 없다." },
+    { path: ["atk", "app", "db", "disk"], packet: "' OR 1=1", highlight: ["kms"], title: "SQL 인젝션은 그대로 통과한다", detail: "공격자의 쿼리도 DB가 실행하는 정상 쿼리다. 디스크는 평소처럼 복호화되어 평문 행이 돌아간다." },
+  ]}
+/>
+
+세 번째 단계가 이 글에서 가장 중요한 장면이다. 디스크 암호화는 매체를 잃어버렸을 때를 위한 장치다. 살아 있는 시스템에 들어온 공격자에게는 아무 효과가 없다. 그래서 "어느 층에서 암호화하느냐"를 고를 때는 "그 층의 키를 누가 들고 있느냐"를 같이 봐야 한다.
+
+## 자물쇠를 거는 층과 키를 쥔 사람
+
+암호화할 수 있는 층은 넷이다. 블록 디바이스 전체(LUKS, EBS 암호화), 데이터베이스 파일(TDE, Transparent Data Encryption), 특정 컬럼(pgcrypto 같은 함수), 그리고 애플리케이션이 DB에 넣기 전에 직접 암호화하는 방식이다. 아래로 갈수록 투명하고 위로 갈수록 범위가 좁고 강하다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="위층에서 암호화할수록 평문을 보는 주체가 줄어든다"
+  nodes={[
+    { id: "app", label: "앱 암호화", sub: "앱만 평문", x: 110, y: 40 },
+    { id: "col", label: "컬럼 암호화", sub: "DB 세션이 평문", x: 110, y: 115 },
+    { id: "tde", label: "TDE", sub: "DB 프로세스가 평문", x: 110, y: 190 },
+    { id: "disk", label: "디스크 암호화", sub: "OS가 평문", x: 110, y: 265 },
+    { id: "kms", label: "KMS", sub: "마스터 키", x: 310, y: 150 },
+  ]}
+  edges={[
+    { from: "kms", to: "app", label: "DEK", dashed: true },
+    { from: "kms", to: "tde", dashed: true },
+    { from: "kms", to: "disk", dashed: true },
+    { from: "app", to: "col", arrow: "none" },
+    { from: "col", to: "tde", arrow: "none" },
+    { from: "tde", to: "disk", arrow: "none" },
+  ]}
+/>
+
+디스크 암호화에서는 OS가 마운트한 순간부터 모든 프로세스가 평문을 본다. root가 아니어도 파일 권한만 있으면 읽는다. TDE는 DB 프로세스가 파일을 읽을 때 풀어 주므로, OS 관리자가 데이터 파일을 복사해 가도 못 읽는다. 하지만 DB에 접속한 사람은 다 읽는다. 컬럼 암호화는 키를 아는 세션만 그 컬럼을 풀 수 있다. 앱 암호화는 DB 관리자도, DB 백업도 암호문만 본다.
+
+대가는 반대 방향으로 붙는다. 위층으로 갈수록 검색, 정렬, 인덱스가 안 된다. 앱 코드가 키를 다뤄야 하고, 키를 잃으면 데이터가 같이 사라진다. 그래서 보통은 바닥(디스크)을 기본으로 깔고, 카드 번호나 주민등록번호처럼 정말 민감한 몇 개 컬럼만 위층에서 한 번 더 암호화한다.
+
+## 디스크 통째로: LUKS와 dm-crypt
+
+리눅스에서 디스크 암호화는 커널의 dm-crypt가 하고, 그 키와 설정을 담는 표준 형식이 LUKS(Linux Unified Key Setup)다. 실제 디스크 대신 32MB짜리 파일로 따라 해 본다. 파일에 LUKS2 머리말을 쓰는 데는 커널 모듈이 필요 없다.
+
+```bash
+# 32MB짜리 빈 파일을 디스크 대신 쓴다
+truncate -s 32M disk.img
+
+# 패스프레이즈 파일 (실제로는 대화형 입력이나 TPM을 쓴다)
+echo -n 'correct-horse-battery' > pass.txt
+
+# LUKS2로 포맷한다. 기존 내용은 사라진다
+sudo cryptsetup luksFormat --type luks2 --batch-mode --key-file pass.txt disk.img
+
+# 머리말 확인
+sudo cryptsetup luksDump disk.img
+```
+
+```text
+Data segments:
+  0: crypt
+	offset: 16777216 [bytes]
+	length: (whole device)
+	cipher: aes-xts-plain64
+	sector: 4096 [bytes]
+
+Keyslots:
+  0: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      argon2id
+	Time cost:  4
+	Memory:     923806
+	Threads:    4
+	Salt:       20 8c 17 4c 1a da 04 3b a3 9a a4 9e ab 31 a9 56 
+	            cb 8e 90 97 be f8 63 4e 52 e4 bf 18 85 ec a7 a2 
+	AF stripes: 4000
+	AF hash:    sha256
+	Area offset:32768 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+```
+
+볼 곳은 두 군데다. `Data segments`의 `cipher: aes-xts-plain64`가 실제 데이터를 암호화하는 방식이고, `offset: 16777216`은 앞 16MB가 머리말이라는 뜻이다. `Keyslots`의 `PBKDF: argon2id`와 `Memory: 923806`(KB, 약 900MB)은 패스프레이즈에서 키를 뽑는 함수와 그 비용이다. 이 값은 포맷할 때 기계 성능을 재서 대략 2초가 걸리게 정해진다. 그래서 이 컨테이너에서 포맷 하나가 8초쯤 걸렸다.
+
+XTS는 디스크용으로 만든 모드다. 섹터 번호를 섞어서 같은 내용이 다른 섹터에 있으면 다른 암호문이 나온다. 대신 무결성 검사는 없다. 누가 암호문 바이트를 바꾸면 복호화 결과가 쓰레기가 될 뿐 오류가 나지 않는다. 디스크 암호화가 막는 건 "읽기"지 "변조"가 아니다. 키 512비트는 XTS가 키 두 개(각 256비트)를 쓰기 때문이다.
+
+### 암호화한 디스크와 안 한 디스크를 grep으로 비교하기
+
+같은 CSV를 평범한 ext4 이미지에 넣고 바이트를 그대로 검색해 봤다. `mkfs.ext4 -d`는 마운트 없이 디렉터리 내용을 이미지에 넣는다.
+
+```bash
+# 평문 파일시스템 이미지에 고객 CSV를 넣는다
+printf 'id,email,card\n1,minji@example.com,4111-1111-1111-1111\n' > src/customers.csv
+truncate -s 8M plain.img && mkfs.ext4 -q -d src plain.img
+
+# 마운트 없이 원시 바이트에서 찾는다
+grep -a -o 'minji@example.com,4111[-0-9]*' plain.img
+
+# LUKS 이미지에서는?
+grep -c -a 'minji@example.com' disk.img
+
+# LUKS 이미지가 무엇인지는 누구나 안다
+blkid disk.img
+```
+
+```text
+minji@example.com,4111-1111-1111-1111
+0
+disk.img: UUID="c70ec974-d67b-4d21-afb5-3eb789d8ee9b" TYPE="crypto_LUKS"
+```
+
+평문 이미지는 파일시스템을 몰라도 `grep` 한 번에 카드 번호가 나온다. 반납한 디스크에서 일어나는 일이 이것이다. LUKS 이미지는 "LUKS다"라는 사실과 UUID까지는 숨기지 않는다. 머리말은 평문이다.
+
+### 실제 서버에서 열고 마운트하기
+
+여기서 실제로 쓰려면 dm-crypt로 열어서 가상 블록 디바이스를 만든다.
+
+```bash
+# 파일을 루프 디바이스로 연결하고 LUKS를 연다. /dev/mapper/secure가 생긴다
+sudo cryptsetup open --key-file pass.txt disk.img secure
+
+# 평문 쪽 디바이스에 파일시스템을 만들고 마운트한다
+sudo mkfs.ext4 /dev/mapper/secure
+sudo mount /dev/mapper/secure /mnt/secure
+
+# 다 쓰면 닫는다. 닫으면 커널 메모리의 키도 지워진다
+sudo umount /mnt/secure && sudo cryptsetup close secure
+```
+
+`cryptsetup open`은 성공하면 아무것도 출력하지 않는다. 이 글을 쓴 컨테이너에서는 커널의 device-mapper를 쓸 수 없어서 이렇게 실패했다.
+
+```text
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device v16a-secure, name is invalid or still in use.
+```
+
+컨테이너나 일부 CI 러너에서 디스크 암호화를 시험하다 만나는 오류다. `luksFormat`, `luksDump`, 키 슬롯 관리는 머리말만 만지므로 되고, 실제로 블록을 읽고 쓰는 `open`부터는 호스트 커널의 `dm_mod`가 필요하다. 클라우드에서는 보통 이 층을 직접 하지 않는다. EBS나 GCP 영구 디스크의 암호화는 하이퍼바이저 쪽 하드웨어가 처리해서 게스트 OS는 평범한 디스크로 본다.
+
+## 패스프레이즈를 바꿔도 데이터는 다시 암호화되지 않는다
+
+LUKS에서 데이터를 암호화하는 키(볼륨 키)는 포맷할 때 무작위로 한 번 만들어지고 바뀌지 않는다. 패스프레이즈는 그 볼륨 키를 감싸는 열쇠일 뿐이다. 키 슬롯마다 같은 볼륨 키가 다른 패스프레이즈로 감싸여 들어간다. LUKS2는 슬롯이 32개, LUKS1은 8개다.
+
+<SequenceDiagram
+  caption="LUKS를 열 때: 패스프레이즈에서 볼륨 키까지"
+  actors={[
+    { id: "user", label: "운영자" },
+    { id: "cs", label: "cryptsetup" },
+    { id: "hdr", label: "LUKS 머리말" },
+    { id: "dm", label: "dm-crypt" },
+  ]}
+  steps={[
+    { from: "user", to: "cs", label: "패스프레이즈", title: "패스프레이즈를 넣는다", detail: "사람이 입력하거나 키 파일, TPM, 네트워크 키 서버가 준다." },
+    { from: "cs", to: "hdr", label: "슬롯 0 읽기", title: "슬롯의 소금과 비용을 읽는다", detail: "argon2id에 패스프레이즈와 슬롯의 salt를 넣어 슬롯 키를 만든다. 일부러 느리고 메모리를 많이 쓰게 해서 추측 공격을 비싸게 만든다.", payload: "PBKDF: argon2id\nTime cost: 4\nMemory: 923806" },
+    { from: "cs", to: "cs", label: "볼륨 키 풀기", title: "슬롯에서 볼륨 키를 꺼낸다", detail: "슬롯 키로 감싸인 볼륨 키를 풀고, 머리말의 digest와 맞춰 본다. 틀리면 다음 슬롯을 시도한다." },
+    { from: "cs", to: "dm", label: "볼륨 키", title: "커널에 볼륨 키를 넘긴다", detail: "이제부터 섹터를 읽고 쓸 때마다 dm-crypt가 AES-XTS로 풀고 감싼다. 볼륨 키는 닫을 때까지 커널 메모리에 있다." },
+  ]}
+/>
+
+이 구조 덕분에 패스프레이즈를 바꾸는 건 몇 초짜리 작업이다. 복구용 키를 슬롯 1에 추가하고, 패스프레이즈를 바꾸고, 복구 키를 지워 봤다. 볼륨 키의 digest를 앞뒤로 비교한다.
+
+```bash
+# 무작위 복구 키를 만들어 슬롯 1에 추가한다
+head -c 64 /dev/urandom > recovery.key
+sudo cryptsetup luksAddKey --batch-mode --key-file pass.txt disk.img recovery.key
+
+# 복구 키가 실제로 열리는지 시험만 한다 (dm 없이 된다)
+sudo cryptsetup open --test-passphrase --key-file recovery.key disk.img -v
+
+# 틀린 키는?
+sudo cryptsetup open --test-passphrase --key-file wrong.txt disk.img -v
+```
+
+```text
+No usable token is available.
+Key slot 1 unlocked.
+Command successful.
+No key available with this passphrase.
+No usable token is available.
+Command failed with code -2 (no permission or bad passphrase).
+```
+
+```bash
+# 바꾸기 전 볼륨 키 digest를 저장해 둔다
+sudo cryptsetup luksDump disk.img | sed -n '/Digests:/,$p' > d1
+
+# 패스프레이즈를 바꾸고 (슬롯 0을 새 값으로 다시 쓴다)
+sudo cryptsetup luksChangeKey --batch-mode --key-file pass.txt disk.img pass2.txt
+
+# digest 비교
+sudo cryptsetup luksDump disk.img | sed -n '/Digests:/,$p' > d2
+diff d1 d2 && echo SAME_DIGEST
+
+# 다 쓴 복구 슬롯은 지운다
+sudo cryptsetup luksKillSlot --batch-mode --key-file pass2.txt disk.img 1
+```
+
+```text
+SAME_DIGEST
+```
+
+`luksChangeKey`는 12초쯤 걸렸고 그 대부분이 argon2id 계산이다. 32MB든 4TB든 시간이 같다. 데이터는 한 바이트도 다시 쓰지 않았다는 뜻이다. 여기서 흔한 오해가 생긴다. 퇴사자가 패스프레이즈를 알았다고 패스프레이즈를 바꾸면 끝일까. 그 사람이 이미 볼륨 키를 빼 갔다면(`luksDump --dump-volume-key`나 열린 시스템의 메모리에서) 패스프레이즈 교체는 소용없다. 볼륨 키 자체를 바꾸려면 `cryptsetup reencrypt`로 전체 데이터를 다시 써야 한다.
+
+<Callout kind="warning" title="머리말이 깨지면 데이터 전체가 사라진다">
+볼륨 키는 머리말에만 있다. 앞 16MB가 덮어써지면 패스프레이즈를 알아도 열 수 없다. 포맷 직후 `sudo cryptsetup luksHeaderBackup disk.img --header-backup-file hdr.bin`으로 머리말을 떠서 디스크 밖 안전한 곳에 둔다. 되살릴 때는 `luksHeaderRestore`를 쓴다. 이 백업 파일에도 슬롯이 그대로 들어 있으니, 나중에 지운 패스프레이즈로도 이 파일을 쓰면 열린다는 점을 기억해 둔다.
+</Callout>
+
+서버를 재부팅할 때마다 사람이 패스프레이즈를 칠 수는 없다. 그래서 `/etc/crypttab`에 키 파일 경로를 적거나(키 파일이 같은 디스크에 있으면 의미가 줄어든다), TPM2에 묶거나(`systemd-cryptenroll --tpm2-device=auto`), 네트워크의 키 서버가 있어야 열리게 한다(Clevis와 Tang). 마지막 방식은 "데이터센터 안에서 켜질 때만 열린다"를 만든다. 서버를 통째로 들고 나가면 열리지 않는다.
+
+## 데이터베이스 안에서: TDE와 컬럼 암호화
+
+PostgreSQL 16을 디스크 암호화 없이 쓰면 테이블 파일에 무엇이 있을까. 고객 테이블을 만들고 카드 번호만 pgcrypto로 암호화해서 넣은 뒤, 데이터 파일을 직접 열어 봤다.
+
+```sql
+-- pgcrypto 확장을 켠다 (PostgreSQL 기본 배포에 포함)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE customers (
+  id serial PRIMARY KEY,
+  email text NOT NULL,
+  card_enc bytea NOT NULL,      -- 카드 번호 암호문
+  card_last4 text NOT NULL      -- 화면 표시용 끝 4자리
+);
+
+-- pgp_sym_encrypt: 키로 OpenPGP 형식 대칭 암호문을 만든다
+INSERT INTO customers (email, card_enc, card_last4) VALUES
+  ('minji@example.com', pgp_sym_encrypt('4111-1111-1111-1111', 'app-key-v1', 'cipher-algo=aes256'), '1111'),
+  ('junho@example.com', pgp_sym_encrypt('5500-0000-0000-0004', 'app-key-v1', 'cipher-algo=aes256'), '0004');
+
+SELECT id, email, left(encode(card_enc, 'hex'), 24) AS card_enc_head, card_last4 FROM customers;
+```
+
+```text
+ id |       email       |      card_enc_head       | card_last4 
+----+-------------------+--------------------------+------------
+  1 | minji@example.com | c30d04090302c2c63ada3344 | 1111
+  2 | junho@example.com | c30d04090302355daf7f8961 | 0004
+(2 rows)
+```
+
+```sql
+CHECKPOINT;                               -- 메모리의 변경을 파일에 내려쓴다
+SELECT pg_relation_filepath('customers'); -- 이 테이블의 데이터 파일 경로
+```
+
+```bash
+# 데이터 디렉터리에서 그 파일을 그대로 검색한다
+cd /var/lib/postgresql/16/main
+sudo grep -a -o 'minji@example.com' base/58425/58464
+sudo grep -a -c '4111-1111' base/58425/58464
+```
+
+```text
+minji@example.com
+0
+```
+
+이메일은 파일에 평문으로 있고 카드 번호는 없다. PostgreSQL 커뮤니티 버전에는 16 기준으로 TDE가 없다. 데이터 파일, WAL, 임시 파일 모두 평문이다. 그래서 파일 단위 보호가 필요하면 디스크 암호화를 깔거나, Percona의 pg_tde 확장이나 EDB 같은 상용 배포판의 TDE를 쓴다. MySQL 8은 InnoDB에 테이블스페이스 암호화가 들어 있어서 keyring 컴포넌트를 설정한 뒤 `ALTER TABLE customers ENCRYPTION='Y'`로 켠다. Oracle과 SQL Server도 TDE를 기본 기능으로 제공한다.
+
+TDE는 디스크 암호화보다 한 층 위에서 같은 일을 한다. OS 관리자가 데이터 파일을 복사해 가거나 백업 파일이 새도 못 읽는다. 그러나 DB 접속 권한을 가진 사람, 그리고 SQL 인젝션 앞에서는 디스크 암호화와 똑같이 무력하다.
+
+### 키를 아는 세션만 푼다
+
+컬럼 암호화는 다르다. 키가 없으면 DB 안에서도 풀리지 않는다.
+
+```sql
+SELECT id, pgp_sym_decrypt(card_enc, 'app-key-v1') AS card FROM customers;
+SELECT pgp_sym_decrypt(card_enc, 'wrong-key') FROM customers WHERE id = 1;
+```
+
+```text
+ id |        card         
+----+---------------------
+  1 | 4111-1111-1111-1111
+  2 | 5500-0000-0000-0004
+(2 rows)
+
+ERROR:  Wrong key or corrupt data
+```
+
+문제는 키가 SQL 문자열 안에 들어간다는 것이다. 쿼리 문자열은 여러 곳에 남는다. `log_min_duration_statement`에 걸린 느린 쿼리 로그, `pg_stat_statements`, `pg_stat_activity`, 그리고 아래에서 보듯 실행 계획에도 그대로 찍힌다. 키를 DB로 보내는 순간 DB 운영자도 키를 볼 수 있게 된다. 이게 싫으면 앱에서 암호화해서 bytea만 DB에 넣는다.
+
+## 암호화한 컬럼은 찾을 수 없다
+
+이메일까지 암호화하자는 요구가 오면 바로 검색 문제가 생긴다. 2만 명을 넣고 이메일로 한 명을 찾아봤다. 암호문은 같은 평문이라도 매번 다르게 나오므로(무작위 소금과 IV 때문에) 인덱스를 걸 수 없다. 모든 행을 풀어 봐야 한다.
+
+```sql
+ALTER TABLE customers ADD COLUMN email_enc bytea, ADD COLUMN email_bidx bytea;
+-- (2만 행을 넣고 email_enc를 채운 뒤)
+EXPLAIN ANALYZE
+SELECT id FROM customers
+WHERE pgp_sym_decrypt(email_enc, 'app-key-v1') = 'user777@example.com';
+```
+
+```text
+                                                 QUERY PLAN                                                  
+-------------------------------------------------------------------------------------------------------------
+ Seq Scan on customers  (cost=0.00..1331.00 rows=100 width=4) (actual time=413.869..8921.134 rows=1 loops=1)
+   Filter: (pgp_sym_decrypt(email_enc, 'app-key-v1'::text) = 'user777@example.com'::text)
+   Rows Removed by Filter: 19999
+ Planning Time: 0.276 ms
+ Execution Time: 8921.193 ms
+(5 rows)
+```
+
+`Seq Scan`과 `Rows Removed by Filter: 19999`가 전부 풀어 봤다는 뜻이고, 8.9초가 걸렸다. 행 하나에 0.45ms인데, `pgp_sym_*`가 키 문자열에서 실제 키를 뽑을 때 일부러 해시를 수만 번 돌리기 때문이다. 그리고 `Filter:` 줄에 키 `'app-key-v1'`이 그대로 보인다. auto_explain을 켜 둔 서버라면 이 줄이 로그 파일에 남는다.
+
+흔히 쓰는 해법은 블라인드 인덱스다. 검색용으로 정규화한 값의 HMAC을 별도 키로 계산해 옆 컬럼에 두고 거기에 인덱스를 건다. HMAC은 같은 입력에 항상 같은 값을 내므로 같음 비교가 된다.
+
+```sql
+-- 검색용 키는 암호화 키와 다른 것을 쓴다
+UPDATE customers SET email_bidx = hmac(lower(email), 'bidx-key-v1', 'sha256');
+CREATE INDEX ON customers (email_bidx);
+ANALYZE customers;
+
+EXPLAIN ANALYZE
+SELECT id FROM customers
+WHERE email_bidx = hmac('user777@example.com', 'bidx-key-v1', 'sha256');
+```
+
+```text
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using customers_email_bidx_idx on customers  (cost=0.41..8.43 rows=1 width=4) (actual time=0.067..0.068 rows=1 loops=1)
+   Index Cond: (email_bidx = '\xf93e633aeca0eafa659a390abe50919bc2530b47507ace0cd4051d0b8ed7d652'::bytea)
+ Planning Time: 0.161 ms
+ Execution Time: 0.078 ms
+(4 rows)
+```
+
+8921ms가 0.078ms가 됐다. 대신 잃는 것도 있다. 같은 값은 같은 HMAC을 가지므로 "이 두 행은 이메일이 같다"는 사실이 드러난다. 성별이나 국가처럼 값 종류가 몇 개 안 되는 컬럼에 블라인드 인덱스를 걸면 빈도만 세어도 원래 값을 짐작할 수 있다. `LIKE`, 범위 검색, 정렬은 여전히 안 된다. 그래서 "검색해야 하는 민감 컬럼"은 정말 정확히 일치 검색만 필요한지부터 따진다.
+
+## 봉투 암호화: 데이터 키와 마스터 키
+
+위 예제에서 키 `app-key-v1`은 어디에 둘까. 앱 설정 파일에 두면 앱 서버 디스크를 가진 사람이 키와 데이터를 함께 가진다. 키를 키로 감싸는 구조가 필요하다. 이게 봉투 암호화(envelope encryption)다. 비유하자면 데이터는 봉투 안의 편지고, 봉투를 잠근 작은 열쇠(데이터 키, DEK)는 금고에 있는 큰 열쇠(마스터 키, KEK)로 한 번 더 잠가서 봉투에 같이 붙여 둔다. 큰 열쇠는 금고 밖으로 나오지 않는다. 그 금고가 KMS(Key Management Service)다.
+
+<SequenceDiagram
+  caption="봉투 암호화로 저장하고 읽기"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "kms", label: "KMS" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "app", to: "kms", label: "GenerateDataKey", title: "데이터 키를 받는다", detail: "KMS가 무작위 256비트 DEK를 만들어 평문과, 마스터 키로 감싼 사본을 함께 준다.", payload: "KeyId: alias/customer-data\nKeySpec: AES_256" },
+    { from: "app", to: "app", label: "AES-GCM", title: "데이터를 로컬에서 암호화한다", detail: "큰 데이터도 KMS로 보내지 않는다. 메모리의 평문 DEK로 암호화하고 DEK는 바로 지운다." },
+    { from: "app", to: "db", label: "INSERT", title: "암호문과 감싼 DEK를 같이 저장한다", detail: "DB에는 평문 키가 하나도 없다. 감싼 DEK는 KMS 없이는 쓸모없는 바이트다.", payload: "{ keyId, wrappedKey, iv, tag, ct }" },
+    { from: "app", to: "kms", label: "Decrypt(DEK)", title: "읽을 때는 감싼 DEK만 보낸다", detail: "KMS가 권한을 확인하고 DEK를 풀어 준다. 이 호출이 감사 로그에 남는다. 누가 언제 무엇을 풀었는지 기록이 생긴다." },
+    { from: "app", to: "app", label: "복호화", title: "앱이 데이터를 푼다", detail: "풀린 DEK로 암호문을 풀고, 인증 태그가 맞지 않으면 실패한다." },
+  ]}
+/>
+
+KMS는 4KB 넘는 데이터를 직접 암호화하지 않는다(AWS KMS의 `Encrypt` 한도). 처음부터 키만 다루라고 만든 서비스다. AWS CLI로 데이터 키를 받으면 이런 모양이 돌아온다. 아래는 계정이 없어 문서 형식대로 적은 예시다.
+
+```bash
+# 마스터 키로 감싼 DEK와 평문 DEK를 함께 받는다
+aws kms generate-data-key --key-id alias/customer-data --key-spec AES_256
+```
+
+```text
+# 예시 (실제 형식, 값은 지어낸 것)
+{
+    "CiphertextBlob": "AQIDAHhBQ0fK0V0b2tUdW...(약 184바이트, base64)",
+    "Plaintext": "VdzKNHGzUAzJeRBVY+uUmofUGGiDzyB3+i9fVkh3piw=",
+    "KeyId": "arn:aws:kms:ap-northeast-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+}
+```
+
+계정이 없으니 KMS를 흉내 내는 객체를 두고 Node의 `crypto`로 실제 동작을 확인했다. 마스터 키는 `kms` 객체 안에만 있다.
+
+```js
+import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
+
+function encryptRecord(id, text) {
+  const { plaintext: dek, wrapped } = kms.generateDataKey(); // DEK 평문 + 감싼 사본
+  const iv = randomBytes(12);                                 // GCM은 12바이트 IV, 매번 새로
+  const c = createCipheriv("aes-256-gcm", dek, iv);
+  c.setAAD(Buffer.from(`customer:${id}`));                    // 이 행에 묶는 추가 인증 데이터
+  const ct = Buffer.concat([c.update(text, "utf8"), c.final()]);
+  dek.fill(0);                                                // 다 쓴 평문 키는 지운다
+  return { id, wrappedKey: wrapped, iv: iv.toString("base64"),
+           tag: c.getAuthTag().toString("base64"), ct: ct.toString("base64") };
+}
+```
+
+저장된 레코드 하나는 아래처럼 생겼다. 조각을 누르면 각 필드가 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="봉투 암호화로 저장한 레코드 한 줄"
+  base="customer#1"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "keyId", value: "kek-v1", title: "어느 마스터 키로 감쌌나", description: "키 교체 중에는 옛 키와 새 키로 감싼 레코드가 섞인다. 이 값으로 어떤 키에 풀어 달라고 할지 고른다. AWS KMS의 CiphertextBlob은 이 정보를 안에 품고 있어서 따로 적지 않아도 된다.", required: true },
+    { key: "wrappedKey", value: "Dd3HUzVT…", title: "감싼 데이터 키", description: "마스터 키로 암호화한 DEK다. 이 실습에서는 IV 12 + 태그 16 + 키 32 = 60바이트였다. 이것만 훔쳐서는 아무것도 못 한다.", required: true },
+    { key: "iv", value: "JLtxhFk0…", title: "IV(nonce)", description: "같은 키로 암호화할 때마다 달라야 하는 12바이트 값이다. 비밀은 아니라 평문으로 저장한다.", required: true },
+    { key: "tag", value: "U/ZuGZBM…", title: "인증 태그", description: "GCM이 만드는 16바이트 검사값이다. 암호문이나 AAD가 한 비트라도 바뀌면 복호화가 실패한다. XTS에는 없는 기능이다.", required: true },
+    { key: "ct", value: "tuetRWF0…", title: "암호문", description: "평문과 길이가 같다. 카드 번호 19글자가 19바이트 암호문이 됐다.", required: true },
+  ]}
+/>
+
+GCM의 인증 태그와 AAD가 실제로 무엇을 막는지 시험했다. 암호문 첫 바이트를 한 비트 뒤집은 경우, 그리고 2번 고객의 암호문을 1번 고객 자리에 옮겨 붙인 경우다.
+
+```text
+stored: {"id":1,"wrappedKey":{"keyId":"kek-v1","blob":"Dd3HUzVTXnXpU8TAE/6G..."},"iv":"JLtxhFk0//RnFMjF","tag":"U/ZuGZBMmyd+Do+BpkPgqw==","ct":"tuetRWF0jg5zg4GFQzqnoEsIiQ=="}
+wrapped DEK bytes: 60
+decrypt r1: 4111-1111-1111-1111
+tampered: Unsupported state or unable to authenticate data
+swapped row: Unsupported state or unable to authenticate data
+```
+
+두 번째가 중요하다. AAD가 없으면 DB에 쓰기 권한이 있는 사람이 남의 암호문을 자기 행에 복사해 놓고 앱이 풀어 주게 만들 수 있다. 암호문 자체는 멀쩡하니 복호화가 성공한다. 행 id나 테넌트 id를 AAD로 묶어 두면 이 "잘라 붙이기"가 막힌다.
+
+봉투 방식이 얻는 건 셋이다. 마스터 키가 KMS 밖으로 나오지 않는다. 데이터 암호화는 로컬에서 하니 빠르다(이 컨테이너에서 `openssl speed`로 잰 AES-256-GCM은 코어 하나에 초당 약 2.8GB였다). 그리고 마스터 키를 바꿀 때 데이터를 다시 암호화하지 않아도 된다. 다음 절이 그 이야기다.
+
+## GCM에서 nonce를 다시 쓰면
+
+봉투 암호화를 직접 구현할 때 가장 위험한 실수는 IV를 재사용하는 것이다. GCM은 내부적으로 CTR 모드라서, 키와 IV로 만든 키 스트림을 평문에 XOR한다. 같은 키와 IV로 두 번 암호화하면 키 스트림이 같으니 두 암호문을 XOR하면 두 평문의 XOR이 나온다. 평문 하나를 알거나 짐작할 수 있으면 다른 하나가 그대로 나온다. 게다가 GCM은 이때 인증 키까지 계산될 수 있어서 위조도 가능해진다.
+
+아래 두 암호문은 Node에서 같은 키와 같은 IV로 실제로 만든 것이다. 첫 평문이 `card=4111111111111111`이라는 걸 안다고 하고, 두 번째 평문을 복원해 보자.
+
+<CodePlayground
+  caption="같은 IV로 만든 두 암호문에서 평문 꺼내기"
+  functionName="recover"
+  initialCode={`function recover(c1Hex, c2Hex, knownPlain) {
+  // c1Hex, c2Hex: 같은 키와 IV로 만든 암호문(16진수 문자열)
+  // knownPlain: c1의 평문으로 알고 있는 앞부분
+  // 반환: c2의 평문 중 knownPlain 길이만큼
+  return "";
+}`}
+  solution={`function recover(c1Hex, c2Hex, knownPlain) {
+  let out = "";
+  for (let i = 0; i < knownPlain.length; i++) {
+    const a = parseInt(c1Hex.slice(i * 2, i * 2 + 2), 16);
+    const b = parseInt(c2Hex.slice(i * 2, i * 2 + 2), 16);
+    // c1 ^ c2 = p1 ^ p2 이므로 p2 = c1 ^ c2 ^ p1
+    out += String.fromCharCode(a ^ b ^ knownPlain.charCodeAt(i));
+  }
+  return out;
+}`}
+  tests={[
+    { label: "전체 평문을 알 때", args: ["c7eb12eb005666a4c1d336c5edb892c58b1d1f8ffd", "c7eb12eb005762a5c0d237c4ecb993c48a1c1e8ef8", "card=4111111111111111"], expected: "card=5500000000000004" },
+    { label: "앞부분만 알 때", args: ["c7eb12eb005666a4c1d336c5edb892c58b1d1f8ffd", "c7eb12eb005762a5c0d237c4ecb993c48a1c1e8ef8", "card="], expected: "card=" },
+    { label: "방향을 바꿔도", args: ["c7eb12eb005762a5c0d237c4ecb993c48a1c1e8ef8", "c7eb12eb005666a4c1d336c5edb892c58b1d1f8ffd", "card=5500000000000004"], expected: "card=4111111111111111" },
+  ]}
+/>
+
+키는 한 번도 쓰지 않았다. 그래서 IV는 반드시 `randomBytes(12)`로 매번 새로 만든다. 무작위 96비트 IV는 같은 키로 2^32번쯤 암호화하면 충돌 확률이 무시할 수 없어지기 때문에 NIST도 그 정도에서 키를 바꾸라고 한다. 레코드마다 새 DEK를 받는 위 구조는 이 걱정을 거의 없앤다. 키마다 한 번만 암호화하기 때문이다.
+
+## 키 교체와 재암호화
+
+키 교체(key rotation)에는 두 종류가 있고, 섞어서 말하면 일정이 꼬인다. 마스터 키 교체는 감싼 DEK만 다시 감싸면 된다. DEK 교체는 데이터를 다시 암호화해야 한다.
+
+아래 그림은 마스터 키를 kek-v1에서 kek-v2로 바꾸면서 레코드를 하나씩 다시 감싸는 과정이다. 위 칸은 레코드, 아래는 KMS가 들고 있는 키 버전이다.
+
+<AlgoTrace
+  caption="마스터 키 교체: 데이터는 그대로, 봉투만 바꾼다"
+  memoryLabel="KMS 키"
+  cells={["r1:v1", "r2:v1", "r3:v1", "r4:v1"]}
+  steps={[
+    { memory: ["kek-v1"], caption: "모든 레코드의 DEK가 kek-v1로 감싸여 있다." },
+    { memory: ["kek-v1", "kek-v2"], caption: "새 마스터 키를 만들고 새로 쓰는 레코드부터 kek-v2를 쓴다. 옛 키는 아직 지우지 않는다." },
+    { pointer: 0, memory: ["kek-v1", "kek-v2"], caption: "r1의 DEK를 kek-v1로 풀고 kek-v2로 다시 감싼다. 암호문 ct는 건드리지 않는다." },
+    { pointer: 1, found: [0], memory: ["kek-v1", "kek-v2"], caption: "r2도 같은 방식으로. 레코드 하나에 KMS 호출 두 번, 수십 바이트만 다시 쓴다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["kek-v1", "kek-v2"], caption: "마지막 레코드까지 다시 감싼다. 배치로 나눠 돌리고 중간에 끊겨도 keyId로 이어 간다." },
+    { found: [0, 1, 2, 3], memory: ["kek-v2"], caption: "keyId가 v1인 레코드가 0개인지 확인한 뒤에야 kek-v1을 비활성화한다." },
+  ]}
+/>
+
+실습 코드로 확인한 결과다. 다시 감싼 뒤 암호문이 그대로인지, 옛 마스터 키를 지운 뒤에도 풀리는지 봤다.
+
+```text
+after rewrap keyId: kek-v2 | ciphertext unchanged: true
+decrypt r2: 5500-0000-0000-0004
+decrypt after kek-v1 deleted: 4111-1111-1111-1111
+```
+
+AWS KMS의 자동 교체는 더 편하다. 자동 교체를 켜면 같은 키 ID 아래에 새 키 재료가 생기고, 옛 재료는 지워지지 않고 남아서 예전 암호문도 계속 풀린다. 새로 감싸는 것만 새 재료를 쓴다. 기본 주기는 1년이고, 2024년부터 90일에서 2560일 사이로 고르거나 즉시 교체를 요청할 수 있다. 이 방식은 "재감싸기조차 안 하는" 교체라서, 옛 재료가 유출됐을 때의 대응이 아니라 정기 교체 규정을 맞추는 용도다. 유출이 의심되면 새 키를 만들고 위 그림처럼 직접 다시 감싸야 한다.
+
+DEK를 바꾸려면 데이터를 풀었다 다시 암호화한다. 앞의 pgcrypto 테이블에서 키 버전 컬럼을 두고 1000행씩 나눠 바꿔 봤다.
+
+```sql
+ALTER TABLE customers ADD COLUMN key_ver smallint NOT NULL DEFAULT 1;
+
+-- 한 번에 다 하지 않고 id 범위로 나눠 돌린다 (긴 트랜잭션과 잠금을 피한다)
+UPDATE customers
+   SET card_enc = pgp_sym_encrypt(pgp_sym_decrypt(card_enc, 'app-key-v1'), 'app-key-v2', 'cipher-algo=aes256'),
+       key_ver  = 2
+ WHERE key_ver = 1 AND id BETWEEN 1 AND 1000;
+
+SELECT key_ver, count(*) FROM customers GROUP BY key_ver ORDER BY key_ver;
+```
+
+```text
+UPDATE 1000
+ key_ver | count 
+---------+-------
+       1 | 19000
+       2 |  1000
+(2 rows)
+```
+
+교체가 진행되는 동안 읽기 코드는 두 키를 모두 알아야 한다. `CASE key_ver WHEN 1 THEN 'app-key-v1' ELSE 'app-key-v2' END`처럼 버전으로 키를 고른다. 이걸 빼먹고 새 키만 쓰도록 배포하면 아직 안 바뀐 19000행이 `Wrong key or corrupt data`를 낸다. UPDATE는 행마다 새 버전을 만들어서 테이블이 부풀고 WAL도 그만큼 쌓인다. 큰 테이블이면 배치 사이에 쉬어 가며 autovacuum이 따라오게 둔다.
+
+## 저장 암호화가 막지 못하는 것
+
+맨 처음 그림의 세 번째 단계를 다시 실행해 봤다. 앱이 `WHERE email = '<입력>'`을 문자열로 이어 붙이는데, 입력에 `' OR '1'='1`이 들어온 경우다.
+
+```sql
+SELECT id, email, card_last4 FROM customers WHERE email = '' OR '1'='1' ORDER BY id LIMIT 3;
+```
+
+```text
+ id |       email       | card_last4 
+----+-------------------+------------
+  1 | minji@example.com | 1111
+  2 | junho@example.com | 0004
+  3 | user3@example.com | 0003
+(3 rows)
+```
+
+디스크가 LUKS든 EBS 암호화든 TDE든 이 결과는 똑같다. 막는 건 [SQL 인젝션](/posts/sql-injection) 자체를 없애는 파라미터 바인딩이다. 카드 번호는 암호문으로 나오지만, 키가 앱 설정에 있고 앱이 장악됐다면 그것도 풀린다. 그 밖에도 저장 암호화의 범위 밖인 것들이 있다.
+
+- 권한이 너무 넓은 DB 계정, 앱 계정. 이건 [IAM과 최소 권한](/posts/iam-basics)이 맡는다.
+- 로그, 에러 리포트, 분석용 복제본에 평문이 흘러가는 것. 원본만 암호화하고 ETL로 데이터 웨어하우스에 평문 사본을 만드는 경우가 흔하다.
+- 메모리. 열린 디스크의 볼륨 키, 앱이 받은 DEK는 메모리에 있다. 메모리 덤프나 코어 파일에 키가 남을 수 있다.
+- 키를 데이터 옆에 둔 경우. 키 파일이 같은 디스크에, 암호화 키가 같은 Git 저장소에 있으면 암호화는 모양만 남는다. 키 보관은 [비밀 관리](/posts/secrets-management)에서 따로 다룬다.
+
+그렇다고 저장 암호화가 쓸모없는 건 아니다. 디스크 폐기, 스냅샷 공유 실수, 백업 유출은 실제로 자주 일어나는 사고고, 그때 "암호문만 나갔고 키는 KMS에 있다"고 말할 수 있으면 사고의 크기가 완전히 달라진다. 규정(PCI DSS, 개인정보 보호법의 고유식별정보 암호화)이 요구하는 것도 이 수준부터다.
+
+## 클라우드에서 체크박스를 켜기 전에 확인할 것
+
+마지막으로 클라우드에서 실제로 부딪히는 일들이다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="다른 계정으로 스냅샷을 공유하면 키 권한도 함께 넘겨야 한다"
+  zones={[
+    { id: "a", label: "계정 A (운영)", x: 8, y: 30, w: 186, h: 240, tone: "private" },
+    { id: "b", label: "계정 B (DR)", x: 206, y: 30, w: 186, h: 240, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "vol", label: "EBS vol", sub: "encrypted", x: 100, y: 90, icon: "db", w: 100 },
+    { id: "snap", label: "snapshot", x: 100, y: 160, icon: "db", w: 100 },
+    { id: "kmsa", label: "KMS key A", x: 100, y: 230, icon: "lock", w: 100 },
+    { id: "copy", label: "copy", x: 300, y: 160, icon: "db", w: 100 },
+    { id: "kmsb", label: "KMS key B", x: 300, y: 230, icon: "lock", w: 100 },
+    { id: "nv", label: "new vol", x: 300, y: 90, icon: "db", w: 100 },
+  ]}
+  links={[
+    { from: "vol", to: "snap" },
+    { from: "snap", to: "copy" },
+    { from: "kmsa", to: "snap", dashed: true },
+    { from: "kmsb", to: "copy", dashed: true },
+    { from: "copy", to: "nv" },
+  ]}
+  steps={[
+    { path: ["vol", "snap"], highlight: ["kmsa"], title: "스냅샷은 원본과 같은 키로 암호화된다", detail: "스냅샷 블록도 키 A로 암호화된 채 저장된다." },
+    { path: ["snap", "copy"], packet: "share", blocked: true, title: "키 정책 없이 공유하면 막힌다", detail: "계정 B는 스냅샷은 보이지만 키 A를 쓸 권한이 없어 복사가 실패한다. AWS 관리형 키(aws/ebs)로 암호화한 스냅샷은 다른 계정과 아예 공유할 수 없다." },
+    { path: ["snap", "copy", "nv"], packet: "re-key", highlight: ["kmsa", "kmsb"], title: "키 A 사용을 허락하고 키 B로 다시 암호화해 복사한다", detail: "키 A의 정책에 계정 B를 추가하고, 복사할 때 계정 B의 키를 지정한다. 이후 계정 B는 키 A 없이도 볼륨을 만든다." },
+  ]}
+/>
+
+- 기존에 암호화하지 않은 RDS 인스턴스는 그 자리에서 암호화를 켤 수 없다. 스냅샷을 찍고, 암호화 옵션을 켜서 스냅샷을 복사하고, 그 스냅샷으로 새 인스턴스를 만든 뒤 엔드포인트를 바꾼다. 다운타임 계획이 필요하다.
+- EBS는 리전 설정으로 "기본 암호화"를 켤 수 있다. 켠 뒤에 만드는 볼륨부터 적용되고 이미 있는 볼륨은 그대로다. 그래서 켜고 나서 `aws ec2 describe-volumes --filters Name=encrypted,Values=false`로 남은 것을 찾는다.
+- S3는 2023년 1월부터 새 객체를 기본으로 SSE-S3로 암호화한다. 이 키는 AWS가 관리하므로 "버킷 권한이 있으면 읽는다"는 사실은 변하지 않는다. 버킷 권한과 별도로 키 권한까지 요구하려면 SSE-KMS로 바꾸고 키 정책을 좁힌다. 대신 객체를 읽을 때마다 KMS 호출이 생기니 S3 버킷 키를 켜서 호출 수를 줄인다.
+- KMS 키를 삭제 예약하면 대기 기간(7~30일)이 지나는 순간 그 키로 감싼 모든 데이터가 영구히 사라진다. 지우기 전에 먼저 키를 비활성화해 두고, 그동안 `Decrypt` 실패가 CloudTrail에 나타나는지 지켜본다.
+- 앱이 레코드마다 KMS를 부르면 지연과 비용이 늘고 KMS 요청 한도에 걸린다(`ThrottlingException`). 풀린 DEK를 짧게 메모리에 캐시하거나, 하나의 DEK로 여러 레코드를 암호화하되 사용 횟수와 시간에 상한을 둔다. AWS Encryption SDK의 데이터 키 캐싱이 이 방식이다.
+
+백업도 같은 원칙을 따른다. 백업은 운영 DB와 다른 키, 가능하면 다른 계정의 키로 암호화해 두면 운영 계정이 털려도 백업은 지켜진다. 백업 설계 전체는 [백업 전략](/posts/backup-strategy)에서 이어서 본다.
+
+## 결국 키가 어디 있느냐
+
+저장 암호화는 데이터를 암호문으로 두고 키를 다른 곳에 두는 일이다. 키가 데이터 옆에 있으면 아무것도 지키지 않고, 키를 쥔 프로세스가 장악되면 평문이 나간다. 디스크 암호화는 매체 분실을, 컬럼·앱 암호화는 DB 관리자와 백업을, 봉투 암호화는 키 보관과 교체를 해결한다. 그리고 어느 것도 SQL 인젝션과 과한 권한은 막지 못한다. 네트워크 위의 데이터는 [전송 구간 암호화](/posts/encryption-in-transit)에서 이어서 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 저장 데이터 암호화는 무엇을 막고 무엇을 못 막나요?
+
+물리 매체나 파일이 통째로 새는 경우를 막는다. 폐기한 디스크, 도난당한 노트북, 공유 실수로 나간 스냅샷과 백업이 여기에 속한다. 살아 있는 시스템을 통해 들어오는 공격, 즉 SQL 인젝션이나 앱 서버 장악, 권한이 넓은 계정으로의 조회는 막지 못한다. 그 경로에서는 DB나 OS가 정상적으로 복호화해서 돌려주기 때문이다.
+
+### 디스크 암호화, TDE, 컬럼 암호화는 어떻게 고르나요?
+
+누가 평문을 보면 안 되는지로 고른다. 매체 분실만 걱정이면 디스크 암호화로 충분하고, OS 관리자나 백업 파일에서도 숨겨야 하면 TDE, DB 관리자에게서도 숨겨야 하면 컬럼이나 앱 단 암호화를 쓴다. 위층으로 갈수록 검색·인덱스가 어려워지고 키 관리를 앱이 떠안는다. 보통은 디스크 암호화를 기본으로 깔고 민감한 몇 컬럼만 앱에서 한 번 더 암호화한다.
+
+### 봉투 암호화를 왜 쓰나요?
+
+마스터 키를 KMS 밖으로 꺼내지 않으면서 큰 데이터를 빠르게 암호화하기 위해서다. 데이터는 로컬에서 데이터 키로 암호화하고, 데이터 키만 KMS의 마스터 키로 감싸 함께 저장한다. 덕분에 KMS 호출 기록으로 누가 언제 풀었는지 감사할 수 있고, 마스터 키를 바꿀 때 데이터는 그대로 두고 감싼 데이터 키만 다시 감싸면 된다.
+
+### 마스터 키를 교체하면 데이터를 전부 다시 암호화해야 하나요?
+
+봉투 구조라면 아니다. 감싼 데이터 키만 옛 마스터 키로 풀고 새 키로 다시 감싸면 된다. AWS KMS 자동 교체는 같은 키 ID에 새 키 재료를 추가하고 옛 재료를 남겨 두는 방식이라 그마저도 필요 없다. 다만 데이터 키 자체가 유출됐다면 데이터를 다시 암호화해야 하고, 이때는 키 버전 컬럼을 두고 배치로 나눠 바꾼다.
+
+### LUKS에서 패스프레이즈를 바꾸면 안전해지나요?
+
+패스프레이즈만 아는 사람은 막지만, 볼륨 키를 이미 가진 사람은 못 막는다. 데이터는 포맷할 때 만든 볼륨 키로 암호화되고 패스프레이즈는 키 슬롯에서 그 볼륨 키를 감쌀 뿐이라, 바꿔도 데이터는 그대로다. 볼륨 키 유출이 의심되면 `cryptsetup reencrypt`로 데이터 전체를 다시 암호화해야 한다.
+
+### 암호화한 컬럼으로 검색해야 하면 어떻게 하나요?
+
+같음 검색만 필요하면 블라인드 인덱스를 둔다. 정규화한 값의 HMAC을 별도 키로 계산해 옆 컬럼에 넣고 인덱스를 거는 방식이다. 실습에서 전체 복호화 스캔이 8.9초, 블라인드 인덱스가 0.08ms였다. 대신 같은 값끼리는 같다는 게 드러나서, 값 종류가 적은 컬럼에 쓰면 빈도로 원래 값을 짐작당한다.
+
+### AES-GCM을 쓸 때 가장 조심할 점은 무엇인가요?
+
+같은 키로 IV(nonce)를 다시 쓰면 안 된다. 두 암호문의 XOR이 두 평문의 XOR이 되어 한쪽 평문을 알면 다른 쪽이 풀리고, 인증 키까지 드러나 위조도 가능해진다. IV는 매번 무작위 12바이트로 만들고, 행 id 같은 문맥을 AAD로 묶어 다른 행의 암호문을 옮겨 붙이는 것도 막는다.
+
+### KMS 키를 삭제하면 어떻게 되나요?
+
+대기 기간이 끝나는 순간 그 키로 감싼 모든 데이터를 영원히 풀 수 없게 된다. 그래서 바로 지우지 않고 먼저 비활성화해서, 아직 그 키를 쓰는 곳이 있는지 Decrypt 실패 기록으로 확인한다. 옛 키로 감싼 레코드가 0개라는 걸 확인한 뒤에 삭제를 예약한다.

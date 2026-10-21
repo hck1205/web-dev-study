@@ -1,0 +1,582 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pub-sub");
+
+상품 가격을 바꿨는데 검색 결과에는 새 가격이, 상품 상세에는 옛 가격이 나온다. 다른 상품은 반대로 상세만 맞고 검색이 틀린다. 가격 변경 이벤트를 큐 하나에 넣고 검색 색인 서비스와 캐시 무효화 서비스가 그 큐를 같이 읽게 해 둔 상태였다. 두 서비스는 서로를 경쟁하는 컨슈머로 여기고 메시지를 반씩 나눠 가졌다. 둘 다 모든 메시지를 받아야 했는데.
+
+큐는 메시지 하나를 컨슈머 하나에게 준다. 메시지 하나를 관심 있는 모두에게 주는 건 발행·구독(publish/subscribe, pub/sub)이다. 이 글은 그 차이에서 시작해, Redis PUB/SUB가 왜 끊긴 구독자의 메시지를 버리는지, 느린 구독자 하나가 어떻게 끊기는지, Redis Streams의 소비자 그룹이 같은 일을 어떻게 놓치지 않고 하는지, AWS에서 SNS 토픽 뒤에 SQS 큐를 하나씩 붙이는 이유가 무엇인지를 따라간다. Redis 7.0과 Node.js 22로 직접 돌렸고, AWS 부분은 예시 출력이다.
+
+이 주제의 다른 글: 메시지 하나를 한 컨슈머가 확실히 처리하는 과정(ack, 가시성 타임아웃, 경쟁하는 컨슈머)은 [메시지 큐 기초](/posts/message-queue-basics)에, 끝내 실패하는 메시지는 [데드 레터 큐](/posts/dead-letter-queue)에 있다. 이벤트를 주고받는 구조 전체의 설계는 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에서 다룬다.
+
+## 한 명에게 주는 큐, 모두에게 주는 토픽
+
+처음 장면을 그림으로 보면 이렇다. 다음을 누르면 가격 변경 이벤트 두 개가 큐 하나를 거쳐 두 서비스에 하나씩 나뉜다. 마지막 단계는 고친 뒤의 모습이다.
+
+<NetworkTopology
+  caption="같은 큐를 읽으면 서비스끼리 메시지를 나눠 가진다"
+  width={400}
+  height={250}
+  zones={[{ id: "subs", label: "구독하고 싶은 서비스", x: 230, y: 20, w: 164, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "price", label: "Price API", x: 66, y: 70, icon: "server", w: 112 },
+    { id: "q", label: "price-queue", x: 132, y: 170, icon: "db", w: 112 },
+    { id: "search", label: "Search Index", x: 312, y: 90, icon: "container", w: 120 },
+    { id: "cache", label: "Cache Purge", x: 312, y: 190, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "price", to: "q" },
+    { from: "q", to: "search" },
+    { from: "q", to: "cache" },
+  ]}
+  steps={[
+    { path: ["price", "q"], packet: "1001", title: "1001번 가격이 바뀐다", detail: "Price API는 이벤트 하나를 큐에 넣는다." },
+    { path: ["q", "search"], packet: "1001", highlight: ["cache"], title: "검색 서비스가 가져간다", detail: "큐는 메시지 하나를 한 컨슈머에게만 준다. 캐시 서비스는 1001번을 못 본다. 상세 페이지는 옛 가격이다." },
+    { path: ["price", "q", "cache"], packet: "1002", highlight: ["search"], title: "1002번은 캐시 서비스가 가져간다", detail: "이번엔 반대다. 검색 색인이 옛 가격으로 남는다. 두 서비스가 경쟁하는 컨슈머가 된 것이다." },
+    { path: ["price", "search"], packet: "copy", highlight: ["cache", "q"], title: "토픽이면 둘 다 받는다", detail: "발행자는 토픽에 한 번 보내고, 토픽이 구독자마다 사본을 만든다. 구독자가 셋으로 늘어도 발행자 코드는 그대로다." },
+  ]}
+/>
+
+토픽의 핵심 성질은 발행자가 구독자를 모른다는 것이다. Price API는 "가격이 바뀌었다"고만 알린다. 그걸로 검색 색인을 고칠지, 캐시를 지울지, 가격 알림 메일을 보낼지는 구독자가 정한다. 새 기능이 생겨도 발행자를 고치지 않고 구독자만 붙인다. 반대로 말하면 발행자는 누가 받았는지, 다 처리됐는지 알 수 없다. 그건 큐에서 컨슈머가 ack로 알려 주던 정보다.
+
+그래서 실무에서 쓰는 모양은 대개 둘을 겹친 것이다. 토픽으로 서비스마다 사본을 만들고, 각 서비스 안에서는 그 사본을 큐처럼 여러 인스턴스가 나눠 처리한다. "서비스끼리는 모두 받고, 한 서비스의 인스턴스끼리는 나눠 받는다." 이 한 문장을 Redis Streams는 소비자 그룹으로, AWS는 SNS와 SQS 조합으로, Kafka는 컨슈머 그룹으로 구현한다.
+
+<ConceptDiagram
+  caption="서비스 사이에서는 복사하고, 서비스 안에서는 나눈다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "pub", label: "발행자", sub: "Price API", x: 200, y: 36, w: 120 },
+    { id: "topic", label: "토픽", sub: "price.changed", x: 200, y: 110, w: 140 },
+    { id: "g1", label: "구독 A", sub: "search 그룹", x: 96, y: 180, w: 120 },
+    { id: "g2", label: "구독 B", sub: "cache 그룹", x: 304, y: 180, w: 120 },
+    { id: "i1", label: "인스턴스 1·2", x: 96, y: 232, w: 120, h: 30 },
+    { id: "i2", label: "인스턴스 1·2", x: 304, y: 232, w: 120, h: 30 },
+  ]}
+  edges={[
+    { from: "pub", to: "topic", label: "한 번 발행" },
+    { from: "topic", to: "g1", label: "사본" },
+    { from: "topic", to: "g2", label: "사본" },
+    { from: "g1", to: "i1", label: "나눠 받기", dashed: true },
+    { from: "g2", to: "i2", label: "나눠 받기", dashed: true },
+  ]}
+/>
+
+## Redis PUBLISH는 그 순간 듣던 사람에게만 간다
+
+Redis의 `PUBLISH`와 `SUBSCRIBE`는 가장 가벼운 토픽이다. 명령 사용법은 [Redis 기초](/posts/redis-basics)에 있다. 여기서 볼 건 이 가벼움의 대가다. Redis는 채널에 들어온 메시지를 저장하지 않는다. 지금 연결돼 있는 구독자의 소켓에 써 주고 끝이다. 받았는지 확인하지도 않는다. 이런 방식을 fire-and-forget(쏘고 잊기)이라고 부른다.
+
+구독자 B가 배포로 잠깐 끊긴 사이에 메시지를 하나 발행해 봤다.
+
+```bash
+# 구독자 A, B를 붙이고, B를 끊었다 다시 붙이며 m1~m3를 발행한다
+node pubsub-miss.js
+```
+
+```text
+PUBLISH m1 -> 2
+B got m1
+A got m1
+B disconnected (deploy)
+PUBLISH m2 -> 1
+A got m2
+B resubscribed
+PUBLISH m3 -> 2
+B got m3
+A got m3
+PUBSUB NUMSUB -> [ 'ch:price', 2 ]
+```
+
+`PUBLISH`가 돌려주는 숫자는 메시지를 받은 구독자 수다. m2 때는 1이었다. B는 다시 붙은 뒤 m3부터 받았고, m2는 B에게 영영 가지 않는다. 다시 보내 달라고 할 방법도 없다. 아래 그림은 같은 장면을 시간 순으로 다시 보여 준다.
+
+<SequenceDiagram
+  caption="끊겨 있던 동안의 메시지는 사라진다"
+  actors={[
+    { id: "p", label: "Price API" },
+    { id: "r", label: "Redis" },
+    { id: "a", label: "구독자 A" },
+    { id: "b", label: "구독자 B" },
+  ]}
+  steps={[
+    { from: "p", to: "r", label: "PUBLISH m1", title: "m1을 발행한다", detail: "Redis는 지금 구독 중인 연결 목록을 보고 각 소켓에 쓴다. 돌려준 값은 2다." },
+    { from: "r", to: "b", label: "m1", title: "A와 B가 모두 받는다", detail: "여기까지는 문제없다. 저장은 하지 않았다." },
+    { from: "b", to: "b", label: "재시작", title: "B가 배포로 끊긴다", detail: "Redis 쪽에서 B의 구독 정보는 연결과 함께 사라진다. 구독은 연결에 붙어 있는 상태다." },
+    { from: "p", to: "r", label: "PUBLISH m2", title: "m2를 발행한다", detail: "받은 구독자는 1이다. B를 위해 남겨 두는 곳은 없다." },
+    { from: "r", to: "a", label: "m2", title: "A만 받는다", detail: "발행자는 PUBLISH의 반환값을 보지 않으면 이 사실조차 모른다." },
+    { from: "b", to: "r", label: "SUBSCRIBE", title: "B가 다시 구독한다", detail: "이 순간부터의 메시지만 받는다. m2는 B에게 영영 안 간다." },
+  ]}
+/>
+
+그래서 Redis PUB/SUB는 놓쳐도 괜찮은 알림에 쓴다. 각 서버의 로컬 캐시를 지우라는 신호(놓쳐도 TTL이 언젠가 정리한다), 지금 접속 중인 사용자에게 보내는 실시간 알림, 설정이 바뀌었으니 다시 읽으라는 신호 같은 것이다. 처음 장면의 캐시 무효화라면 PUB/SUB에 짧은 TTL을 함께 거는 것도 답이 될 수 있다. 검색 색인처럼 하나라도 놓치면 틀린 상태가 계속 남는 일에는 맞지 않는다.
+
+Redis Cluster에서는 일반 `PUBLISH`가 모든 노드로 퍼진다. 노드가 많을수록 노드 사이 트래픽이 커진다. Redis 7.0에 생긴 샤드 채널(`SSUBSCRIBE`, `SPUBLISH`)은 채널 이름의 해시 슬롯이 속한 샤드 안에서만 퍼진다. 슬롯 개념은 [Redis Cluster](/posts/redis-cluster)에 있다.
+
+## 느린 구독자 하나는 끊긴다
+
+PUB/SUB에는 함정이 하나 더 있다. Redis는 구독자에게 보낼 메시지를 그 연결의 출력 버퍼에 쌓았다가 소켓으로 보낸다. 구독자가 받는 속도보다 발행이 빠르면 버퍼가 커진다. 그냥 두면 Redis 메모리가 구독자 하나 때문에 바닥난다. 그래서 상한이 있다.
+
+```bash
+# 구독자 종류별 출력 버퍼 상한을 본다
+redis-cli -p 6492 CONFIG GET client-output-buffer-limit
+```
+
+```text
+client-output-buffer-limit
+normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60
+```
+
+`pubsub 33554432 8388608 60`은 기본값이다. 버퍼가 32MB(하드 한도)를 넘는 즉시, 또는 8MB(소프트 한도)를 60초 넘게 넘겨 있으면 그 연결을 끊는다. 구독만 하고 소켓을 읽지 않는 구독자를 하나 만들고, 10KB짜리 메시지를 4000번 발행하면서 1000번마다 그 연결의 출력 버퍼(`omem`)를 봤다.
+
+```bash
+# 읽지 않는 구독자를 띄운다 (CLIENT SETNAME slow-sub 후 SUBSCRIBE, 그리고 읽기 중단)
+node slowsub.js &
+
+# 10KB 메시지를 4000번 발행하며 CLIENT LIST에서 slow-sub의 버퍼를 본다
+node publish-big.js
+```
+
+```text
+slow-sub: stop reading
+published 1000, receivers=1
+name=slow-sub omem=6233216 tot-mem=6256568
+published 2000, receivers=1
+name=slow-sub omem=16546728 tot-mem=16570080
+published 3000, receivers=1
+name=slow-sub omem=26839736 tot-mem=26863088
+published 4000, receivers=0
+slow-sub gone
+```
+
+버퍼가 6MB, 16MB, 26MB로 커지다가 32MB를 넘는 순간 연결이 끊겼고, 마지막 발행의 수신자는 0이 됐다. Redis 로그에는 이렇게 남는다.
+
+```text
+26566:M 20 Oct 2026 14:13:00.978 # Client id=33 addr=127.0.0.1:44842 laddr=127.0.0.1:6492 fd=7 name=slow-sub age=1 idle=0 flags=P db=0 sub=1 psub=0 ssub=0 multi=-1 qbuf=0 qbuf-free=20474 argv-mem=0 multi-mem=0 rbs=2048 rbp=1024 obl=0 oll=1637 omem=33565048 tot-mem=33588400 events=rw cmd=subscribe user=default redir=-1 resp=2 scheduled to be closed ASAP for overcoming of output buffer limits.
+```
+
+`flags=P`가 PUB/SUB 연결이라는 뜻이고, `omem=33565048`이 끊길 때의 버퍼 크기다. 구독자 쪽에서는 그냥 연결이 끊긴 것으로 보인다. 재접속 코드가 있으면 다시 붙어서 계속 받는 것처럼 보이지만, 끊긴 순간 버퍼에 있던 메시지와 다시 붙기 전까지의 메시지는 사라졌다. "가끔 몇 개씩 안 온다"는 신고의 흔한 원인이다. 이 로그 줄이 보이면 구독자의 처리를 비동기로 돌리거나(받는 즉시 내부 큐에 넣고 바로 다음 것을 읽는다), 메시지를 작게 하거나, 저장되는 스트림으로 옮긴다. 한도를 키우는 건 Redis 메모리를 구독자에게 더 내주는 것일 뿐이다.
+
+이건 느린 소비자 문제의 한 모양이다. 저장하지 않는 시스템은 끊어서 자신을 지키고, 저장하는 시스템은 쌓아 두고 디스크나 보관 기간이 바닥날 때까지 버틴다. 어느 쪽이든 받는 쪽 속도를 맞추는 장치가 필요하다는 이야기는 [백프레셔](/posts/backpressure)에서 이어진다.
+
+## Redis Streams: 그룹마다 모두, 그룹 안에서는 나눠서
+
+Redis Streams는 같은 Redis 안에서 이 문제를 푼다. 스트림은 지워지지 않는 로그처럼 메시지를 쌓고, 소비자 그룹이 "어디까지 받았는지"와 "누가 아직 ack하지 않았는지"를 서버가 기억한다. 그룹끼리는 서로 영향이 없다. 그룹 하나가 구독 하나에 해당한다.
+
+가격 이벤트 세 개를 넣고, 검색 색인 그룹과 캐시 무효화 그룹을 만들었다. 검색 그룹에는 인스턴스가 둘이다.
+
+```bash
+# 이벤트 세 개
+redis-cli -p 6492 XADD stream:price '*' sku 1001 price 35000
+redis-cli -p 6492 XADD stream:price '*' sku 1002 price 12000
+redis-cli -p 6492 XADD stream:price '*' sku 1003 price 8900
+
+# 구독 두 개 = 그룹 두 개. 0은 스트림 처음부터 읽겠다는 뜻
+redis-cli -p 6492 XGROUP CREATE stream:price search-indexer 0
+redis-cli -p 6492 XGROUP CREATE stream:price cache-invalidator 0
+
+# 검색 그룹의 idx-1이 아직 아무도 안 받은(>) 것을 2개까지 받는다
+redis-cli -p 6492 XREADGROUP GROUP search-indexer idx-1 COUNT 2 STREAMS stream:price '>'
+```
+
+```text
+"1792505615428-0"
+"1792505615433-0"
+"1792505615439-0"
+OK
+OK
+1) 1) "stream:price"
+   2) 1) 1) "1792505615428-0"
+         2) 1) "sku"
+            2) "1001"
+            3) "price"
+            4) "35000"
+      2) 1) "1792505615433-0"
+         2) 1) "sku"
+            2) "1002"
+            3) "price"
+            4) "12000"
+```
+
+같은 그룹의 idx-2가 받으면 남은 1003만 온다. 캐시 그룹의 inv-1은 세 개를 모두 받는다.
+
+```bash
+# 같은 그룹의 다른 인스턴스
+redis-cli -p 6492 XREADGROUP GROUP search-indexer idx-2 COUNT 2 STREAMS stream:price '>'
+
+# 다른 그룹
+redis-cli -p 6492 XREADGROUP GROUP cache-invalidator inv-1 COUNT 10 STREAMS stream:price '>'
+```
+
+```text
+1) 1) "stream:price"
+   2) 1) 1) "1792505615439-0"
+         2) 1) "sku"
+            2) "1003"
+            3) "price"
+            4) "8900"
+1) 1) "stream:price"
+   2) 1) 1) "1792505615428-0"
+   ...
+      3) 1) "1792505615439-0"
+         2) 1) "sku"
+            2) "1003"
+            3) "price"
+            4) "8900"
+```
+
+두 번째 출력은 가운데를 줄였다. 처음 장면의 문제가 풀렸다. 아래 그림에서 다음을 누르면 그룹마다 따로 움직이는 읽기 위치(`last-delivered-id`)가 보인다.
+
+<AlgoTrace
+  caption="스트림은 하나, 읽기 위치는 그룹마다 따로"
+  memoryLabel="search 위치 | cache 위치"
+  cells={["1001", "1002", "1003", "1004"]}
+  steps={[
+    { memory: ["0-0", "|", "0-0"], caption: "두 그룹을 0에서 만들었다. 둘 다 아직 아무것도 안 받았다." },
+    { pointer: 1, found: [0, 1], memory: ["1002", "|", "0-0"], caption: "search의 idx-1이 두 개를 받는다. search 그룹의 위치만 움직인다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1003", "|", "0-0"], caption: "search의 idx-2가 나머지 하나를 받는다. 같은 그룹이니 나눠 가진다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1003", "|", "1003"], caption: "cache의 inv-1은 처음부터 세 개를 다 받는다. 다른 그룹의 진도와 상관없다." },
+    { pointer: 3, memory: ["1003", "|", "1003"], caption: "1004가 들어온다. 두 그룹 모두 하나씩 뒤처졌다(lag 1)." },
+  ]}
+/>
+
+## 그룹이 얼마나 밀렸는지 보기
+
+그룹마다 진도를 보는 명령이 `XINFO GROUPS`다. idx-1은 1001만 ack하고 1002를 붙든 채, idx-2는 1003을 받고 죽은 상황을 만들었다. 캐시 그룹은 셋 다 ack했다. 그다음 1004가 들어왔다.
+
+```bash
+# search 그룹은 1001만, cache 그룹은 셋 다 ack
+redis-cli -p 6492 XACK stream:price search-indexer 1792505615428-0
+redis-cli -p 6492 XACK stream:price cache-invalidator 1792505615428-0 1792505615433-0 1792505615439-0
+
+# 새 이벤트 하나
+redis-cli -p 6492 XADD stream:price '*' sku 1004 price 4500
+
+# 그룹별 상태
+redis-cli -p 6492 XINFO GROUPS stream:price
+```
+
+```text
+(integer) 1
+(integer) 3
+"1792505622019-0"
+1)  1) "name"
+    2) "cache-invalidator"
+    3) "consumers"
+    4) (integer) 1
+    5) "pending"
+    6) (integer) 0
+    7) "last-delivered-id"
+    8) "1792505615439-0"
+    9) "entries-read"
+   10) (integer) 3
+   11) "lag"
+   12) (integer) 1
+2)  1) "name"
+    2) "search-indexer"
+    3) "consumers"
+    4) (integer) 2
+    5) "pending"
+    6) (integer) 2
+    7) "last-delivered-id"
+    8) "1792505615439-0"
+    9) "entries-read"
+   10) (integer) 3
+   11) "lag"
+   12) (integer) 1
+```
+
+두 그룹 모두 `lag`(아직 아무에게도 안 준 것)는 1이다. 차이는 `pending`이다. search 그룹은 내주긴 했지만 ack를 못 받은 것이 2개 있다. `lag`만 보고 "잘 따라오고 있다"고 판단하면 안 되는 이유다. 아래 그림에서 각 필드를 눌러 보면 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="XINFO GROUPS 한 줄을 조각으로 읽기"
+  base="search-indexer"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "consumers", value: "2", title: "consumers", description: "이 그룹에 한 번이라도 붙었던 소비자 이름 수다. 죽은 인스턴스의 이름도 지울 때까지(XGROUP DELCONSUMER) 남는다. 쿠버네티스처럼 Pod 이름이 매번 바뀌면 계속 늘어난다." },
+    { key: "pending", value: "2", title: "pending", description: "내줬지만 ack를 못 받은 수다. 계속 늘면 소비자가 죽었거나 ack를 빼먹는 코드가 있다. 이 목록(PEL)은 메모리를 차지한다.", required: true },
+    { key: "last-delivered-id", value: "…439-0", title: "last-delivered-id", description: "이 그룹이 마지막으로 내준 항목의 ID다. 그룹의 읽기 위치이고, XGROUP SETID로 옮길 수 있다." },
+    { key: "entries-read", value: "3", title: "entries-read", description: "이 그룹이 지금까지 읽은 항목 수다. Redis 7.0에 생겼다. 스트림에 추가된 전체 수와의 차이로 lag를 계산한다." },
+    { key: "lag", value: "1", title: "lag", description: "아직 이 그룹의 누구에게도 안 준 항목 수다. 계산할 수 없는 상황(중간 항목 삭제 등)이면 nil이 나온다. pending과 함께 봐야 진짜 밀린 양이 보인다.", required: true },
+  ]}
+/>
+
+## 죽은 소비자의 몫 가져오기
+
+idx-2는 1003을 받은 채 죽었다. 스트림은 이걸 기억하고 있다. `XPENDING`에 범위를 주면 항목마다 누가 들고 있는지, 얼마나 오래 됐는지(밀리초), 몇 번 내줬는지가 나온다.
+
+```bash
+# search 그룹의 미확인 항목을 자세히
+redis-cli -p 6492 XPENDING stream:price search-indexer - + 10
+```
+
+```text
+1) 1) "1792505615433-0"
+   2) "idx-1"
+   3) (integer) 6575
+   4) (integer) 1
+2) 1) "1792505615439-0"
+   2) "idx-2"
+   3) (integer) 6570
+   4) (integer) 1
+```
+
+세 번째 값이 받은 뒤 지난 시간, 네 번째가 내준 횟수(delivery count)다. 살아 있는 idx-1이 5초 넘게 묵은 1003을 가져온다. `XCLAIM`은 ID를 지정해서, `XAUTOCLAIM`(6.2부터)은 조건에 맞는 것을 커서로 훑어 가져온다. 이 두 명령이 큐의 가시성 타임아웃 역할을 한다. 다른 점은 시간이 지났다고 저절로 다시 나오지 않고, 누군가 가져와야 한다는 것이다.
+
+```bash
+# 5000ms 넘게 묵은 1003을 idx-1이 가져온다
+redis-cli -p 6492 XCLAIM stream:price search-indexer idx-1 5000 1792505615439-0
+
+# 새 인스턴스 idx-3이 5000ms 넘게 묵은 것을 훑어 가져온다
+redis-cli -p 6492 XAUTOCLAIM stream:price search-indexer idx-3 5000 0-0 COUNT 10
+
+# 다시 본다
+redis-cli -p 6492 XPENDING stream:price search-indexer - + 10
+```
+
+```text
+1) 1) "1792505615439-0"
+   2) 1) "sku"
+      2) "1003"
+      3) "price"
+      4) "8900"
+1) "0-0"
+2) 1) 1) "1792505615433-0"
+      2) 1) "sku"
+         2) "1002"
+         3) "price"
+         4) "12000"
+3) (empty array)
+1) 1) "1792505615433-0"
+   2) "idx-3"
+   3) (integer) 5
+   4) (integer) 2
+2) 1) "1792505615439-0"
+   2) "idx-1"
+   3) (integer) 10
+   4) (integer) 2
+```
+
+`XAUTOCLAIM`은 1003을 건드리지 않았다. 방금 `XCLAIM`으로 가져가면서 묵은 시간이 0으로 돌아갔기 때문이다. 대신 idx-1이 붙들고 있던 1002를 idx-3이 가져갔다. 둘 다 내준 횟수가 2가 됐다. 이 숫자가 계속 오르는 항목은 처리할 때마다 실패하는 메시지다. 몇 번에서 끊어 따로 뺄지는 [데드 레터 큐](/posts/dead-letter-queue)에서 이 숫자로 직접 만든다. `XAUTOCLAIM`의 첫 값 `0-0`은 다음에 이어 훑을 커서인데, 0-0이면 끝까지 훑었다는 뜻이다.
+
+## 스트림을 자르면 늦은 그룹은 모른 채 잃는다
+
+스트림은 쌓이기만 하니 길이를 잘라야 한다. `XADD ... MAXLEN ~ 100000`처럼 넣을 때 자르거나 `XTRIM`을 따로 돌린다. 문제는 자르기가 그룹의 진도를 보지 않는다는 것이다. 처음부터 읽을 analytics 그룹을 새로 만들고, 아직 아무것도 안 읽은 상태에서 길이를 2로 잘랐다.
+
+```bash
+# 0부터 읽을 그룹을 만든다
+redis-cli -p 6492 XGROUP CREATE stream:price analytics 0
+
+# 지금 길이 4를 2로 자른다
+redis-cli -p 6492 XLEN stream:price
+redis-cli -p 6492 XTRIM stream:price MAXLEN 2
+
+# analytics 그룹이 읽는다
+redis-cli -p 6492 XREADGROUP GROUP analytics a-1 COUNT 10 STREAMS stream:price '>'
+```
+
+```text
+OK
+(integer) 4
+(integer) 2
+1) 1) "stream:price"
+   2) 1) 1) "1792505615439-0"
+   ...
+      2) 1) "1792505622019-0"
+   ...
+```
+
+analytics는 1003과 1004만 받았다. 1001과 1002는 이 그룹에게서 조용히 사라졌고, 에러도 경고도 없다. 이때 `XINFO GROUPS`의 analytics `lag`는 2로 나왔다. 남은 것 기준이라 잃은 것이 드러나지 않는다. 한편 search 그룹의 PEL에는 이미 지워진 1002가 남아 있었다. `XAUTOCLAIM`은 이런 ID를 세 번째 값으로 알려 주고 PEL에서 정리한다(7.0부터).
+
+```bash
+# 묵은 시간 조건 0으로 전부 훑고, 내용 없이 ID만 받는다
+redis-cli -p 6492 XAUTOCLAIM stream:price search-indexer idx-1 0 0-0 COUNT 10 JUSTID
+```
+
+```text
+1) "0-0"
+2) 1) "1792505615439-0"
+3) 1) "1792505615433-0"
+```
+
+세 번째 값의 1002가 "PEL에는 있었는데 스트림에서는 지워진" 항목이다. 길이 상한은 가장 느린 그룹이 감당할 수 있는 지연을 기준으로 잡는다. 초당 100건이 들어오고 소비자가 최대 1시간 멈출 수 있다면 36만 건 이상을 남겨야 한다. 메모리가 부담이면 길게 보관하는 Kafka 같은 로그가 맞는 자리다([Kafka 기초](/posts/kafka-basics)).
+
+## SNS 토픽 뒤에 SQS 큐를 하나씩
+
+AWS에서 가장 흔한 팬아웃 구성은 SNS 토픽 하나에 서비스마다 SQS 큐를 하나씩 구독시키는 것이다. SNS는 받은 메시지를 구독마다 복사해 밀어 주는 토픽이고, SQS는 그 사본을 받아 두는 큐다. SNS가 람다나 HTTP 엔드포인트로 직접 밀어 줄 수도 있는데 굳이 큐를 끼우는 이유는 Redis PUB/SUB의 약점과 같다. HTTP 엔드포인트가 잠깐 죽거나 느려지면 SNS는 재시도 정책(기본은 몇 번, 수십 초 안쪽)이 끝난 뒤 포기한다. 람다로 바로 보내도 람다 쪽 비동기 재시도가 끝나면 실패 목적지를 따로 정하지 않은 메시지는 버려진다. 큐가 있으면 메시지는 큐에 남아 구독자가 돌아올 때까지 기다리고, 구독자는 자기 속도로 꺼내며, 끝내 실패한 것은 그 서비스의 데드 레터 큐로 간다. 서비스마다 큐가 따로라서 한 서비스가 밀려도 다른 서비스에는 영향이 없다.
+
+아래 그림에서 다음을 누르면 메시지 하나가 큐 셋으로 복사되고, 필터에 걸린 하나는 들어가지 않는다.
+
+<NetworkTopology
+  caption="SNS가 복사하고, 각 SQS 큐가 받아 둔다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "aws", label: "ap-northeast-2", x: 8, y: 20, w: 386, h: 250, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "price", label: "Price API", x: 70, y: 70, icon: "server", w: 104 },
+    { id: "sns", label: "SNS topic", sub: "price-changed", x: 70, y: 175, icon: "gateway", w: 112 },
+    { id: "q1", label: "search-q", x: 210, y: 80, icon: "db", w: 96 },
+    { id: "q2", label: "cache-q", x: 210, y: 160, icon: "db", w: 96 },
+    { id: "q3", label: "alert-q", sub: "price<10000", x: 210, y: 235, icon: "db", w: 96 },
+    { id: "s1", label: "search", x: 334, y: 80, icon: "container", w: 92 },
+    { id: "s2", label: "cache", x: 334, y: 160, icon: "container", w: 92 },
+    { id: "s3", label: "alert", x: 334, y: 235, icon: "container", w: 92 },
+  ]}
+  links={[
+    { from: "price", to: "sns" },
+    { from: "sns", to: "q1" },
+    { from: "sns", to: "q2" },
+    { from: "sns", to: "q3", dashed: true },
+    { from: "q1", to: "s1" },
+    { from: "q2", to: "s2" },
+    { from: "q3", to: "s3" },
+  ]}
+  steps={[
+    { path: ["price", "sns"], packet: "1001", title: "한 번 발행한다", detail: "Price API는 토픽 ARN 하나만 안다. 구독자가 몇인지 모른다.", payload: "aws sns publish --topic-arn ...:price-changed \\\n  --message '{\"sku\":1001,\"price\":35000}'" },
+    { path: ["sns", "q1", "s1"], packet: "copy", title: "search 큐에 사본이 들어간다", detail: "검색 서비스가 꺼내 색인을 고친다. 서비스 안 인스턴스들은 이 큐를 나눠 읽는다." },
+    { path: ["sns", "q2", "s2"], packet: "copy", title: "cache 큐에도 사본이 들어간다", detail: "캐시 서비스가 지금 배포 중이어도 괜찮다. 메시지는 큐에서 기다린다." },
+    { path: ["sns", "q3"], packet: "35000", blocked: true, title: "alert 큐는 필터에 걸린다", detail: "이 구독에는 price가 10000 미만일 때만 받는 필터 정책이 있다. 35000원은 복사되지 않는다." },
+  ]}
+/>
+
+설정에서 자주 틀리는 곳이 세 군데 있다. 첫째, SQS 큐 정책이 SNS의 `SendMessage`를 허용해야 한다. 구독은 만들어졌는데 큐가 비어 있다면 대개 이것이다. 조건에 `aws:SourceArn`으로 토픽 ARN을 걸어 다른 토픽이 넣지 못하게 한다. 둘째, 원본 메시지 전달(raw message delivery)을 켜지 않으면 SQS에 들어가는 본문이 SNS의 JSON 봉투로 감싸진다. 컨슈머가 본문을 바로 파싱하다 실패하는 흔한 원인이다. 셋째, 순서가 필요해 FIFO를 쓰려면 토픽도 SNS FIFO, 큐도 SQS FIFO여야 한다.
+
+```bash
+# 예시: search 큐를 토픽에 구독시키고 원본 메시지 전달을 켠다
+aws sns subscribe \
+  --topic-arn arn:aws:sns:ap-northeast-2:123456789012:price-changed \
+  --protocol sqs \
+  --notification-endpoint arn:aws:sqs:ap-northeast-2:123456789012:search-q \
+  --attributes RawMessageDelivery=true
+```
+
+```text
+{
+    "SubscriptionArn": "arn:aws:sns:ap-northeast-2:123456789012:price-changed:8b6f2c1e-0d3a-4a51-9a3e-5c2f0e7d9a41"
+}
+```
+
+원본 메시지 전달을 끈 채 SQS에서 받으면 본문은 아래 같은 봉투다(예시 출력, 실제 계정에서 받은 값이 아니다). 컨슈머가 실제 이벤트를 꺼내려면 `Message` 필드를 한 번 더 파싱해야 한다.
+
+<UrlAnatomy
+  caption="SNS가 감싼 SQS 메시지 본문 (예시)"
+  base="{"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "\"Type\"", value: "\"Notification\"", title: "Type", description: "SNS 알림이라는 표시다. 구독 확인 메시지는 SubscriptionConfirmation으로 온다." },
+    { key: "\"MessageId\"", value: "\"5d1c…\"", title: "MessageId", description: "SNS가 붙인 ID다. SNS가 재시도하면 같은 ID로 두 번 들어올 수 있으니 중복 제거 키로 쓸 수 있다.", required: true },
+    { key: "\"TopicArn\"", value: "\"…:price-changed\"", title: "TopicArn", description: "어느 토픽에서 왔는지. 큐 하나가 여러 토픽을 구독할 때 갈래를 나누는 데 쓴다." },
+    { key: "\"Message\"", value: "\"{\\\"sku\\\":1001,…}\"", title: "Message", description: "발행자가 보낸 원래 본문이 문자열로 들어 있다. JSON이면 한 번 더 파싱해야 한다. 원본 메시지 전달을 켜면 이 봉투 없이 이것만 온다.", required: true, code: "{\"sku\":1001,\"price\":35000}" },
+    { key: "\"MessageAttributes\"", value: "{…}", title: "MessageAttributes", description: "발행할 때 붙인 속성이다. 필터 정책은 기본적으로 이 속성을 보고 고른다." },
+    { key: "\"Signature\"", value: "\"…\"", title: "Signature 외", description: "SignatureVersion, SigningCertURL, UnsubscribeURL이 함께 온다. HTTP 구독에서는 이 서명으로 진짜 SNS가 보냈는지 확인한다." },
+  ]}
+/>
+
+## 구독자가 고르게 하는 필터
+
+모든 구독자가 모든 메시지를 원하지는 않는다. 가격 알림 서비스는 1만 원 미만으로 떨어진 것만 알고 싶다. 다 받아서 구독자 코드에서 버려도 되지만, 그만큼 큐 요금과 처리 비용이 든다. SNS 구독의 필터 정책(filter policy)은 메시지 속성을 보고 복사할지 정한다. 키마다 조건을 쓰면 모든 키가 맞아야 통과하고(AND), 한 키의 배열 안 조건은 하나만 맞으면 된다(OR).
+
+```json
+{
+  "eventType": ["price.changed"],
+  "price": [{ "numeric": ["<", 10000] }]
+}
+```
+
+아래 함수는 필터 정책의 일부 규칙(정확히 같은 값, `prefix`, `anything-but`, `numeric`)만 흉내 낸다. 메시지 속성에 정책의 키가 없으면 통과하지 못한다는 점에 주의해서 완성해 보자.
+
+<CodePlayground
+  caption="SNS 필터 정책 흉내 내기"
+  functionName="matches"
+  initialCode={`// policy: { 키: [조건, ...] }
+// 조건은 값 그대로, { prefix: "..." }, { "anything-but": [...] }, { numeric: [op, n, op, n] }
+// attrs: 메시지 속성 { 키: 값 }
+function matches(policy, attrs) {
+  return true;
+}`}
+  solution={`function matches(policy, attrs) {
+  for (const [key, rules] of Object.entries(policy)) {
+    if (!(key in attrs)) return false;
+    const v = attrs[key];
+    const ok = rules.some((rule) => {
+      if (typeof rule !== "object") return rule === v;
+      if ("prefix" in rule) return typeof v === "string" && v.startsWith(rule.prefix);
+      if ("anything-but" in rule) return !rule["anything-but"].includes(v);
+      if ("numeric" in rule) {
+        if (typeof v !== "number") return false;
+        const n = rule.numeric;
+        for (let i = 0; i < n.length; i += 2) {
+          const op = n[i], x = n[i + 1];
+          const pass = op === "<" ? v < x : op === "<=" ? v <= x : op === ">" ? v > x : op === ">=" ? v >= x : v === x;
+          if (!pass) return false;
+        }
+        return true;
+      }
+      return false;
+    });
+    if (!ok) return false;
+  }
+  return true;
+}`}
+  tests={[
+    { args: [{ eventType: ["price.changed"] }, { eventType: "price.changed", price: 35000 }], expected: true, label: "종류만 맞으면 통과" },
+    { args: [{ eventType: ["price.changed"] }, { eventType: "stock.changed" }], expected: false, label: "다른 종류" },
+    { args: [{ eventType: ["price.changed"], price: [{ numeric: ["<", 10000] }] }, { eventType: "price.changed", price: 8900 }], expected: true, label: "8900원은 1만 원 미만" },
+    { args: [{ eventType: ["price.changed"], price: [{ numeric: ["<", 10000] }] }, { eventType: "price.changed", price: 35000 }], expected: false, label: "35000원은 걸러진다" },
+    { args: [{ eventType: ["price.changed"], price: [{ numeric: ["<", 10000] }] }, { eventType: "price.changed" }], expected: false, label: "price 속성이 없으면 통과 못 한다" },
+    { args: [{ sku: [{ prefix: "BOOK-" }], store: [{ "anything-but": ["test"] }] }, { sku: "BOOK-1001", store: "seoul" }], expected: true, label: "prefix와 anything-but" },
+    { args: [{ sku: [{ prefix: "BOOK-" }], store: [{ "anything-but": ["test"] }] }, { sku: "BOOK-1001", store: "test" }], expected: false, label: "테스트 매장은 제외" },
+    { args: [{ price: [{ numeric: [">=", 1000, "<", 5000] }] }, { price: 4500 }], expected: true, label: "범위 조건" },
+  ]}
+/>
+
+필터를 쓰면 발행자는 필터에 쓰일 속성을 꼭 붙여야 한다. 속성을 빠뜨린 메시지는 필터가 있는 구독에 하나도 가지 않고, 에러도 나지 않는다. 필터 정책은 기본으로 메시지 속성을 보고, 구독 설정 `FilterPolicyScope`를 `MessageBody`로 바꾸면 JSON 본문을 본다. 필터를 바꾼 뒤 완전히 반영되기까지 최대 15분쯤 걸릴 수 있다는 점도 운영 중에 헷갈리는 부분이다.
+
+## 이벤트 이름과 내용은 구독자를 위해 짓는다
+
+토픽은 발행자와 구독자 사이의 약속이라서 한 번 쓰기 시작하면 바꾸기 어렵다. 토픽 이름은 "무슨 일이 일어났나"로 짓는다(`price-changed`, `order-paid`). "누가 받나"로 지으면(`search-update`) 구독자가 늘 때마다 토픽이 늘고, 발행자가 다시 구독자를 알게 된다.
+
+본문에 무엇을 담을지도 고른다. ID만 담고 구독자가 필요하면 원본을 다시 조회하게 하면 메시지는 작지만, 구독자 열 개가 동시에 Price API를 두드린다. 바뀐 상태를 통째로 담으면 조회가 없지만 메시지가 커지고 스키마를 바꾸기 어렵다. 어느 쪽이든 이벤트 ID와 발생 시각, 스키마 버전은 넣는다. 구독자는 같은 이벤트를 두 번 받을 수 있고(SNS와 SQS 표준 큐 모두 최소 한 번 전달이다), 순서가 바뀌어 올 수 있기 때문이다. 이 선택들의 장단점과 스키마를 어떻게 진화시킬지는 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에서 이어진다.
+
+## 구독자가 메시지를 못 받는다는 신고가 오면
+
+먼저 그 구독이 저장되는 방식인지 본다. Redis PUB/SUB라면 끊겨 있던 시간의 메시지는 원래 못 받는다. Redis 로그에서 `scheduled to be closed ASAP for overcoming of output buffer limits`를 찾고, 구독자 쪽 재접속 로그와 시각을 맞춰 본다. `PUBLISH`의 반환값을 지표로 남겨 두면 "구독자 0명에게 발행한" 순간이 보인다.
+
+Redis Streams라면 `XINFO GROUPS`로 그 그룹의 `lag`와 `pending`을, `XPENDING`으로 오래 묵은 항목과 내준 횟수를 본다. pending이 늘기만 하면 죽은 소비자의 몫을 아무도 가져오지 않는 것이다. `XAUTOCLAIM`을 주기적으로 돌리는 코드가 있는지 확인한다. `XINFO CONSUMERS`에서 idle이 매우 긴 이름이 잔뜩 있으면 사라진 Pod들의 이름이니 정리한다. 받았어야 할 항목이 아예 없다면 `MAXLEN` 자르기가 그 그룹을 앞질렀는지 의심한다.
+
+SNS와 SQS라면 SNS 쪽 지표 `NumberOfNotificationsFailed`와 `NumberOfNotificationsFilteredOut`을 본다. 실패가 늘면 큐 정책 권한이나 KMS 키 권한(암호화된 큐라면 SNS가 그 키를 쓸 수 있어야 한다)이고, 필터 아웃이 늘면 발행자가 속성을 빠뜨렸거나 필터가 틀렸다. 메시지는 들어갔는데 컨슈머가 처리를 못 한다면 봉투 문제(원본 메시지 전달 설정)부터 본다.
+
+## 복사하는 곳과 나누는 곳
+
+토픽은 메시지를 구독마다 복사하고, 큐와 소비자 그룹은 그 사본을 인스턴스끼리 나눈다. 저장하지 않는 토픽은 끊긴 구독자와 느린 구독자의 몫을 버리고, 저장하는 토픽은 그 대신 진도(lag, pending)와 보관 길이를 관리해야 한다. 어느 쪽을 고를지는 "구독자가 하나라도 놓치면 무엇이 틀리나"로 정한다.
+
+## 면접에서 나올 만한 질문
+
+### 메시지 큐와 pub/sub은 무엇이 다른가요?
+
+큐는 메시지 하나를 컨슈머 하나에게 주고, pub/sub은 메시지 하나를 구독자마다 복사해 모두에게 준다. 큐는 일을 나눠 처리할 때, pub/sub은 한 사건에 여러 서비스가 각자 반응할 때 쓴다. 실무에서는 둘을 겹쳐서, 서비스 사이에서는 복사하고 한 서비스의 인스턴스끼리는 나눠 받게 만든다.
+
+### Redis PUB/SUB를 이벤트 전달에 써도 되나요?
+
+놓쳐도 괜찮은 알림에만 쓴다. 메시지를 저장하지 않아서 구독자가 끊겨 있던 동안의 메시지는 사라지고, 받았는지 확인도 하지 않는다. 느린 구독자는 출력 버퍼 한도(기본 하드 32MB, 소프트 8MB 60초)에 걸려 끊기며 그때 버퍼의 메시지도 잃는다. 놓치면 안 되는 이벤트는 Streams나 다른 브로커를 쓴다.
+
+### Redis Streams의 소비자 그룹은 어떻게 동작하나요?
+
+스트림 하나에 그룹을 여러 개 만들 수 있고, 그룹마다 읽기 위치와 미확인 목록(PEL)을 따로 가진다. 그룹끼리는 모든 항목을 받고, 같은 그룹의 소비자끼리는 항목을 나눠 받는다. 소비자는 처리 후 XACK를 보내고, 죽은 소비자가 들고 있던 항목은 XCLAIM이나 XAUTOCLAIM으로 다른 소비자가 가져온다. 시간이 지났다고 저절로 다시 나오지는 않으니 가져오는 코드가 필요하다.
+
+### SNS에서 바로 서비스로 보내지 않고 SQS를 사이에 두는 이유는?
+
+구독자가 죽거나 느려도 메시지가 큐에 남아 기다리게 하려고다. SNS가 HTTP나 람다로 바로 보내면 재시도가 끝난 뒤 포기하지만 큐는 보관 기간 동안 지니고 있고, 구독자는 자기 속도로 꺼내며 실패한 것은 자기 데드 레터 큐로 보낸다. 서비스마다 큐가 따로라 한 서비스가 밀려도 다른 서비스에 번지지 않는다.
+
+### 느린 구독자 하나가 전체에 영향을 주나요?
+
+시스템에 따라 다르다. 저장하지 않는 Redis PUB/SUB는 그 구독자를 끊어서 서버를 지키므로 그 구독자만 메시지를 잃는다. 저장하는 시스템은 쌓아 두는데, Redis Streams는 메모리를, Kafka는 디스크와 보관 기간을 쓴다. 보관 한도를 넘으면 늦은 구독자는 아직 안 읽은 메시지를 잃는다. 그래서 구독자별 지연을 지표로 보고, 보관 길이를 가장 느린 구독자 기준으로 잡는다.
+
+### 스트림 길이를 자를 때 주의할 점은?
+
+자르기는 그룹의 진도를 보지 않는다. 늦은 그룹이 아직 안 읽은 항목도 지워지고, 그 그룹은 에러 없이 조용히 건너뛴다. 가장 느린 그룹이 멈출 수 있는 시간 × 유입 속도보다 길게 남기고, 그룹별 lag를 알람으로 건다. 오래 보관해야 하면 디스크 기반 로그로 옮긴다.
+
+### 구독자가 같은 이벤트를 두 번 받으면 어떻게 하나요?
+
+두 번 받는 걸 전제로 만든다. SNS, SQS 표준 큐, Streams의 재전달 모두 최소 한 번 전달이다. 이벤트에 고유 ID를 넣고, 구독자가 처리한 ID를 결과와 같은 트랜잭션에 기록해 두었다가 같은 ID는 건너뛴다. 순서도 바뀔 수 있으니 버전이나 발생 시각으로 오래된 이벤트를 무시하게 한다.

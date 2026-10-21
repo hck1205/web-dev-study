@@ -1,0 +1,351 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("multi-region");
+
+서비스가 서울 리전 하나에서 돌고 있다. 리전 장애에 대비하고, 일본 사용자도 빠르게 하려고 도쿄 리전을 하나 더 열기로 했다. 회의에서 "그냥 양쪽에 똑같이 띄우고 DB는 복제하면 되지 않나"라는 말이 나온다. 그런데 막상 해 보면 도쿄 사용자의 주문 버튼이 오히려 느려지고, 가끔 재고가 한 개씩 어긋나고, 개인정보를 어느 나라에 저장하는지 묻는 메일이 법무팀에서 온다.
+
+멀티 리전은 서비스를 지리적으로 떨어진 데이터 센터 묶음(리전) 두 곳 이상에서 돌리는 구성이다. 이 글은 먼저 거리가 정하는 지연을 계산하고, 리전 사이에 동기 복제를 걸면 커밋 하나가 얼마나 느려지는지 PostgreSQL 16으로 직접 잰다. 그다음 쓰기를 한 리전에만 받는 액티브-패시브와 양쪽에서 받는 액티브-액티브를 비교하고, 양쪽 쓰기가 부딪칠 때의 충돌, 사용자를 가까운 리전으로 보내는 라우팅, 데이터 거주 요건, 그리고 리전 안에서 피해 범위를 줄이는 셀 구조까지 본다.
+
+이 주제의 다른 글: 사고 때 목표 숫자와 DR 단계는 [재해 복구](/posts/disaster-recovery), 대기 서버로 넘기는 과정과 펜싱은 [장애 조치](/posts/failover), 백업 사본의 위치는 [백업 전략](/posts/backup-strategy)에서 다룬다. 결국 같아지게 만드는 장치는 [최종 일관성](/posts/eventual-consistency), 순서와 상관없이 합쳐지는 자료형은 [CRDT](/posts/crdt), 같은 IP가 가까운 곳에서 답하는 원리는 [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast)에 있다.
+
+## 빛이 정하는 바닥
+
+리전 사이의 지연은 줄일 수 없는 바닥이 있다. 광섬유 안에서 빛은 진공의 약 2/3, 초당 20만 km쯤으로 간다. 1ms에 200km다. 서울과 도쿄는 직선으로 약 1,150km라서 왕복(RTT) 바닥이 11.5ms, 서울과 미국 동부(버지니아)는 약 11,000km라서 110ms다. 실제 케이블은 직선으로 깔려 있지 않고 중간에 장비를 거치니 측정값은 이보다 크다. 서울-도쿄는 보통 30ms 안팎, 서울-미국 동부는 180ms 안팎이 나온다. 회선과 경로에 따라 다르니 자기 환경에서 `ping`이나 `mtr`로 재 본다.
+
+이 숫자가 무서운 이유는 곱해지기 때문이다. 요청 하나가 리전을 한 번 건너는 게 아니라, TCP 연결과 TLS 협상에 왕복이 몇 번, DB 쿼리가 순서대로 몇 번이면 그만큼 곱해진다. [지연과 대역폭](/posts/latency-bandwidth-throughput) 글의 왕복 계산을 리전 단위로 해 보자.
+
+<CodePlayground
+  caption="리전을 건너는 요청 하나의 시간(ms)"
+  functionName="crossRegionPageMs"
+  initialCode={`// p.km          : 두 리전 사이 직선 거리
+// p.routeFactor : 실제 경로가 직선보다 얼마나 긴가 (보통 1.5~3)
+// p.roundTrips  : 이 요청이 리전을 오가는 왕복 횟수 (연결, TLS, 순차 쿼리…)
+// p.serverMs    : 서버가 일하는 시간
+// 광섬유 속 빛: 1ms에 200km. 결과는 정수로 반올림.
+function crossRegionPageMs(p) {
+  return 0;
+}`}
+  solution={`function crossRegionPageMs(p) {
+  const rtt = (2 * p.km / 200) * p.routeFactor;
+  return Math.round(rtt * p.roundTrips + p.serverMs);
+}`}
+  tests={[
+    { label: "서울-도쿄 왕복 한 번", args: [{ km: 1150, routeFactor: 2.5, roundTrips: 1, serverMs: 0 }], expected: 29 },
+    { label: "서울→버지니아, 순차 왕복 6번", args: [{ km: 11000, routeFactor: 1.7, roundTrips: 6, serverMs: 40 }], expected: 1162 },
+    { label: "같은 요청을 한 번에 묶으면", args: [{ km: 11000, routeFactor: 1.7, roundTrips: 1, serverMs: 40 }], expected: 227 },
+    { label: "같은 리전 안", args: [{ km: 0, routeFactor: 1, roundTrips: 5, serverMs: 30 }], expected: 30 },
+  ]}
+/>
+
+버지니아의 앱 서버가 서울의 DB에 쿼리를 순서대로 여섯 번 보내면 1.16초다. 같은 내용을 한 번에 묶으면 0.23초다. 리전을 나눌 때 가장 먼저 지켜야 할 규칙이 여기서 나온다. 한 요청 안에서 리전을 여러 번 오가는 호출이 없게 한다. 앱과 그 앱이 자주 부르는 DB, 캐시, 내부 API는 같은 리전에 둔다.
+
+## 커밋 하나가 바다를 건너면
+
+리전 장애에 데이터를 하나도 잃지 않으려면 커밋이 다른 리전의 기록을 기다려야 한다. 동기 복제다. 그 비용을 직접 쟀다. 프라이머리와 스탠바이를 서로 다른 네트워크 네임스페이스에 띄우고, 복제 경로에 Node로 짠 지연 프록시를 끼워 한쪽 16ms(왕복 약 32ms, 서울-도쿄 정도)와 65ms(왕복 약 130ms, 서울-미국 서부 정도)를 넣었다. 이 컨테이너에는 `tc netem`이 없어서 쓴 방법이다.
+
+```bash
+# 프록시: 받은 바이트를 양쪽 모두 DELAY ms 뒤에 넘긴다 (TCP_NODELAY를 켜야 지연이 쌓이지 않는다)
+sudo ip netns exec v18p node delay-proxy.js 10.18.2.2 6432 10.18.2.2 5432 16 &
+
+# 스탠바이는 프록시를 거쳐 복제받고, 프라이머리는 그 스탠바이를 동기로 기다린다
+psql -h 10.18.1.2 -U postgres -c "ALTER SYSTEM SET synchronous_standby_names = '*'" -c "SELECT pg_reload_conf()"
+
+# INSERT 한 줄짜리 부하를 5초 동안, 연결 1개
+echo "INSERT INTO orders(amount) VALUES (1);" > ins.sql
+echo "== one-way 16ms ($(psql -h 10.18.1.2 -U postgres -XAtc 'select sync_state from pg_stat_replication'))"
+for m in local on remote_apply; do
+  printf "%-13s " $m
+  PGOPTIONS="-c synchronous_commit=$m" pgbench -h 10.18.1.2 -U postgres -n -c 1 -T 5 -f ins.sql postgres | grep "latency average"
+done
+# 연결 8개로 동시에
+echo "8 clients, on:"
+PGOPTIONS="-c synchronous_commit=on" pgbench -h 10.18.1.2 -U postgres -n -c 8 -T 5 -f ins.sql postgres | grep -E "latency average|^tps"
+# 프록시 지연을 65로 바꿔 같은 측정을 한 번 더
+```
+
+```text
+== one-way 16ms (sync)
+local         latency average = 0.653 ms
+on            latency average = 34.779 ms
+remote_apply  latency average = 36.007 ms
+8 clients, on:
+latency average = 34.747 ms
+tps = 230.237913 (without initial connection time)
+
+== one-way 65ms (sync)
+local         latency average = 0.296 ms
+on            latency average = 136.322 ms
+remote_apply  latency average = 132.996 ms
+8 clients, on:
+latency average = 133.355 ms
+tps = 59.990110 (without initial connection time)
+```
+
+`synchronous_commit = local`(다른 리전을 기다리지 않음)은 0.3~0.7ms, `on`(스탠바이가 디스크에 썼다는 답을 기다림)은 왕복 시간과 거의 같은 35ms와 136ms다. 커밋 하나에 왕복 한 번이 그대로 붙는다. 연결 하나로는 초당 7~28건밖에 못 쓰는 셈이다. 연결 8개로 늘리자 처리량은 연결 수만큼 늘어 230건, 60건이 됐다. 각 커밋이 따로 왕복을 기다릴 뿐 서로를 막지는 않아서다. 그래도 커밋 하나의 지연은 35ms, 133ms 그대로라 사용자 한 명이 기다리는 시간은 줄지 않는다.
+
+그래서 리전 사이의 동기 복제는 골라서 쓴다. PostgreSQL은 트랜잭션마다 `synchronous_commit`을 바꿀 수 있다. 결제 확정처럼 절대 잃으면 안 되는 쓰기만 `SET LOCAL synchronous_commit = on`으로 기다리게 하고, 조회 기록 같은 쓰기는 `local`로 둔다. 리전 하나가 사라질 때 잃는 것은 그 비동기 쓰기 몇 초어치다.
+
+## 쓰기는 한 리전에서: 액티브-패시브
+
+가장 흔한 멀티 리전은 쓰기를 한 리전(주 리전)만 받는 구성이다. 다른 리전은 읽기 복제본으로 읽기만 처리하고, 쓰기는 주 리전으로 보낸다. 주 리전이 사라지면 다른 리전의 복제본을 승격한다. 아래 그림에서 다음을 누르면 도쿄 사용자의 읽기와 쓰기가 가는 길이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="액티브-패시브: 읽기는 가까이, 쓰기는 주 리전으로"
+  zones={[
+    { id: "sel", label: "서울 (쓰기)", x: 8, y: 96, w: 184, h: 216, tone: "private" },
+    { id: "tyo", label: "도쿄 (읽기)", x: 208, y: 96, w: 184, h: 216, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "u", label: "user (JP)", x: 300, y: 36, icon: "client" },
+    { id: "as", label: "app", x: 100, y: 160, icon: "server" },
+    { id: "at", label: "app", x: 300, y: 160, icon: "server" },
+    { id: "p", label: "primary", x: 100, y: 260, icon: "db" },
+    { id: "r", label: "replica", sub: "async", x: 300, y: 260, icon: "db" },
+  ]}
+  links={[
+    { from: "u", to: "at" },
+    { from: "at", to: "r" },
+    { from: "at", to: "p", dashed: true, label: "write" },
+    { from: "as", to: "p" },
+    { from: "p", to: "r", label: "WAL" },
+  ]}
+  steps={[
+    { path: ["u", "at", "r"], packet: "GET", title: "읽기는 도쿄 안에서 끝난다", detail: "상품 목록과 주문 내역은 도쿄 복제본에서 읽는다. 리전을 건너지 않으니 몇 ms면 된다." },
+    { path: ["u", "at", "p"], packet: "POST", title: "쓰기는 서울로 건너간다", detail: "주문 쓰기는 서울 프라이머리로 간다. 왕복 30ms 안팎이 붙지만 한 요청에 한 번이면 견딜 만하다." },
+    { path: ["p", "r"], packet: "WAL", title: "복제는 조금 늦게 따라온다", detail: "서울에서 커밋된 주문이 도쿄 복제본에 보이기까지 수십~수백 ms가 걸린다." },
+    { path: ["u", "at", "r"], packet: "GET", highlight: ["r"], title: "방금 쓴 주문이 안 보일 수 있다", detail: "주문 직후 내역을 도쿄 복제본에서 읽으면 아직 없다. 쓴 사람에게는 잠깐 주 리전에서 읽게 하거나 커밋 LSN을 들고 다닌다." },
+    { path: ["p"], packet: "down", blocked: true, highlight: ["sel"], title: "서울이 사라지면 도쿄를 승격한다", detail: "도쿄 복제본을 승격하고 쓰기를 도쿄로 돌린다. 비동기 복제였다면 건너오지 못한 몇 초를 잃는다." },
+  ]}
+/>
+
+이 구성의 장점은 충돌이 없다는 것이다. 쓰기가 한 곳에서만 일어나니 순서가 하나다. 대신 먼 사용자의 쓰기는 느리고, 복제 지연 때문에 "방금 쓴 게 안 보인다"가 생긴다. 이건 [최종 일관성](/posts/eventual-consistency) 글의 세션 보장(내 쓰기 읽기)으로 푼다. 주 리전 장애 때의 전환은 [장애 조치](/posts/failover)와 같지만, 리전 단위라 판단을 사람이 하는 경우가 많다. 리전 하나가 30초 흔들렸다고 리전 전체를 넘기면 그 비용이 더 크기 때문이다.
+
+## 양쪽에서 쓰면 부딪친다: 액티브-액티브
+
+두 리전 모두 쓰기를 받으면 먼 사용자의 쓰기도 빨라지고, 리전 하나가 사라져도 다른 쪽이 바로 받는다. 대가는 같은 데이터를 양쪽에서 동시에 바꾸는 충돌이다. 가장 단순한 해결 규칙인 "나중에 쓴 쪽이 이긴다(LWW, Last Write Wins)"를 Node로 흉내 내 보자. 버지니아 서버의 시계가 200ms 늦은 상태에서 두 리전이 같은 행을 고치고, 복제가 도착하면 타임스탬프가 큰 쪽이 행 전체를 가져간다.
+
+```bash
+# 두 리전이 같은 행을 각자 고친 뒤 LWW로 합치는 흉내 (lww.js)
+node lww.js
+```
+
+```text
+1000ms seoul    write {"stock":9} ts=1000
+1000ms virginia write {"stock":9} ts=800
+1100ms seoul    write {"nickname":"kim-seoul"} ts=1100
+1150ms virginia write {"nickname":"kim-virginia"} ts=950
+merged: {"stock":9,"nickname":"kim-seoul","ts":1100}
+expected by real time: stock 8, nickname kim-virginia
+```
+
+두 가지가 틀렸다. 재고는 양쪽에서 하나씩 팔렸으니 8이어야 하는데 9가 됐다. 둘 다 10을 읽고 9를 썼고, 합치면서 한쪽 쓰기가 사라졌다. 닉네임은 버지니아가 50ms 더 늦게 바꿨는데 서울 값이 남았다. 버지니아의 시계가 늦어서 타임스탬프가 작게 찍혔다. 에러는 어디에도 없다. 아래 그림에서 다음을 누르면 두 쓰기가 어디서 사라지는지 보인다.
+
+<AlgoTrace
+  caption="LWW로 합치면 조용히 사라지는 쓰기"
+  memoryLabel="합친 결과"
+  cells={["서울 stock=9", "버지니아 stock=9", "서울 nick", "버지니아 nick", "병합"]}
+  steps={[
+    { pointer: 0, memory: ["stock 10"], caption: "두 리전 모두 재고 10을 읽었다. 서울이 하나 팔고 9를 쓴다." },
+    { pointer: 1, found: [0], memory: ["stock 10"], caption: "같은 순간 버지니아도 하나 팔고 9를 쓴다. 서로의 쓰기를 아직 모른다." },
+    { pointer: 2, found: [0, 1], memory: ["stock 10"], caption: "서울이 닉네임을 바꾼다. 서울 시계로 ts=1100." },
+    { pointer: 3, found: [0, 1, 2], memory: ["stock 10"], caption: "50ms 뒤 버지니아도 바꾼다. 실제로는 더 나중인데 시계가 200ms 늦어서 ts=950." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["stock 9", "nick kim-seoul"], caption: "ts가 큰 서울 행이 통째로 이긴다. 재고 하나와 버지니아의 닉네임이 사라졌다." },
+  ]}
+/>
+
+충돌을 다루는 방법은 크게 세 가지다.
+
+첫째, 충돌이 나지 않게 쓰기의 주인을 나눈다. 사용자마다 홈 리전을 정하고 그 사용자의 데이터는 홈 리전에서만 쓴다. 한국 사용자는 서울, 미국 사용자는 버지니아가 주인이다. 테이블 전체로 보면 액티브-액티브지만 행 하나로 보면 액티브-패시브다. 실무에서 가장 많이 쓰는 방법이다. 사용자가 이사하면 홈 리전을 옮기는 절차가 필요하고, 두 사용자 사이의 거래처럼 주인이 둘인 데이터는 따로 설계한다.
+
+둘째, 합치는 규칙이 순서와 상관없는 자료형을 쓴다. 재고를 "값 9"로 쓰지 않고 "리전별로 몇 개 뺐다"로 쓰면 합칠 때 더하기만 하면 된다. 이게 [CRDT](/posts/crdt)의 카운터다. 다만 재고처럼 "0 아래로 내려가면 안 된다"는 조건은 CRDT만으로는 지킬 수 없다. 양쪽이 동시에 마지막 하나를 팔 수 있기 때문이다. 이런 조건은 리전마다 재고를 미리 나눠 주거나(서울 6개, 버지니아 4개), 그 결정만 한 리전에서 하게 한다.
+
+셋째, LWW를 쓰되 잃어도 되는 데이터에만 쓴다. 마지막 접속 시각, 화면 설정처럼 하나가 덮여도 문제없는 값이다. 시계에 기대니 [시계 차이](/posts/clock-skew)를 줄이고, 가능하면 서버 시각 대신 하이브리드 논리 시계처럼 인과를 반영한 값을 쓴다. DynamoDB 글로벌 테이블이나 Cassandra의 다중 데이터센터 쓰기는 기본이 LWW 계열이라, 이 성질을 알고 써야 한다.
+
+## 두 리전이 같은 번호를 만들지 않게
+
+액티브-액티브에서 충돌보다 먼저 터지는 게 ID다. 두 리전이 각자 `bigserial`로 주문 번호를 매기면 서울의 1001번과 도쿄의 1001번이 따로 생기고, 복제가 만나는 순간 기본 키가 부딪친다. 가장 간단한 해결은 리전마다 번호 공간을 나누는 것이다.
+
+```sql
+-- 리전마다 시퀀스를 따로: 서울은 홀수, 도쿄는 짝수
+CREATE SEQUENCE order_id_seoul START 1 INCREMENT 2;
+CREATE SEQUENCE order_id_tokyo START 2 INCREMENT 2;
+SELECT nextval('order_id_seoul') AS seoul, nextval('order_id_tokyo') AS tokyo FROM generate_series(1,3);
+```
+
+```text
+ seoul | tokyo
+-------+-------
+     1 |     2
+     3 |     4
+     5 |     6
+(3 rows)
+```
+
+간단하지만 리전을 셋으로 늘리면 증가 폭을 다시 정해야 하고, 번호 순서가 생성 시각 순서와 어긋난다. 그래서 요즘은 리전과 상관없이 겹치지 않는 ID를 쓰는 경우가 많다. 시각이 앞자리에 들어가 정렬도 되는 UUIDv7이나, 시각·리전·순번을 비트로 나눠 담는 Snowflake 방식이다. PostgreSQL 16에는 무작위 UUID(`gen_random_uuid()`, v4)만 있고 `uuidv7()`은 18부터 들어왔다. 16에서는 앱에서 만들어 넣는다. ID 설계 자체는 [샤딩](/posts/db-sharding) 글의 전역 ID 부분에 자세히 있다.
+
+ID만 나눠서는 안 되는 것도 있다. 이메일 같은 유일 제약은 두 리전이 동시에 같은 값을 받으면 각자 성공하고 나중에 부딪친다. 이런 제약은 홈 리전 하나에서만 검사하게 하거나, 값을 해시해 주인 리전을 정해 그쪽에 먼저 등록하게 한다.
+
+## 사용자를 가까운 리전으로
+
+사용자를 어느 리전으로 보낼지는 보통 DNS나 애니캐스트가 정한다. DNS 방식은 질의한 리졸버의 위치나 측정된 지연으로 가까운 리전의 IP를 돌려준다(Route 53의 지연 기반·지리 기반 라우팅, 다른 DNS 서비스의 GeoDNS). 헬스 체크와 묶으면 리전이 죽었을 때 그 리전을 응답에서 뺀다. 애니캐스트는 여러 리전이 같은 IP를 광고하고 BGP 경로가 가까운 곳으로 보낸다. 원리는 [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast)에 있다. 아래 그림에서 다음을 누르면 평소의 라우팅과 리전 장애 때의 라우팅이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="DNS가 가까운 리전을 고르고, 죽은 리전은 응답에서 뺀다"
+  zones={[
+    { id: "sel", label: "서울", x: 8, y: 170, w: 184, h: 120, tone: "private" },
+    { id: "iad", label: "버지니아", x: 208, y: 170, w: 184, h: 120, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "kr", label: "user (KR)", x: 70, y: 36, icon: "client" },
+    { id: "us", label: "user (US)", x: 330, y: 36, icon: "client" },
+    { id: "dns", label: "geo DNS", sub: "health check", x: 200, y: 110, icon: "dns", w: 116 },
+    { id: "ls", label: "LB", sub: "ap-ne-2", x: 100, y: 236, icon: "lb" },
+    { id: "lv", label: "LB", sub: "us-east-1", x: 300, y: 236, icon: "lb" },
+  ]}
+  links={[
+    { from: "kr", to: "dns" },
+    { from: "us", to: "dns" },
+    { from: "dns", to: "ls" },
+    { from: "dns", to: "lv" },
+  ]}
+  steps={[
+    { path: ["kr", "dns", "ls"], packet: "A?", title: "한국 사용자는 서울로", detail: "DNS가 리졸버 위치(또는 EDNS 클라이언트 서브넷)를 보고 서울 LB의 IP를 준다." },
+    { path: ["us", "dns", "lv"], packet: "A?", title: "미국 사용자는 버지니아로", detail: "같은 이름인데 묻는 위치에 따라 다른 답이 나온다." },
+    { path: ["dns", "ls"], packet: "check", blocked: true, highlight: ["sel"], title: "서울 헬스 체크가 실패한다", detail: "여러 위치의 검사기가 연속으로 실패하면 서울을 건강하지 않다고 본다." },
+    { path: ["kr", "dns", "lv"], packet: "A?", title: "한국 사용자도 버지니아로", detail: "서울을 응답에서 빼고 버지니아를 준다. TTL이 지난 클라이언트부터 옮겨 온다. 버지니아가 두 리전 몫을 받을 여유가 있어야 한다." },
+  ]}
+/>
+
+여기에 함정이 셋 있다. 하나는 홈 리전 구성과의 충돌이다. DNS는 지금 사용자 위치로 보내는데, 출장 간 한국 사용자의 데이터 주인은 여전히 서울이다. 그래서 받은 리전이 사용자의 홈 리전을 확인하고 필요하면 그쪽으로 넘기는 라우팅 층이 하나 더 필요하다. 둘은 용량이다. 리전 둘이 각각 60%씩 쓰고 있다면 하나가 죽었을 때 남은 쪽은 120%를 받아야 한다. 액티브-액티브는 각 리전을 50% 아래로 운영하거나 빠르게 늘릴 수 있어야 의미가 있다. 셋은 DNS 캐시다. [장애 조치](/posts/failover) 글에서 계산했듯 TTL이 길면 리전을 빼도 사용자가 늦게 옮겨 온다.
+
+## 리전을 계획대로 비우는 순서
+
+장애가 아니어도 리전을 비울 일이 생긴다. 주 리전의 대규모 점검, 전환 훈련, 비용 때문에 주 리전을 옮기는 경우다. 계획된 전환은 장애 조치와 달리 잃는 데이터 없이 할 수 있다. 쓰기를 먼저 멈추고, 대기 리전이 끝까지 따라온 걸 확인한 뒤 넘기면 된다. 아래 그림에서 다음을 누르면 서울에서 도쿄로 주 리전을 옮기는 순서가 보인다.
+
+<SequenceDiagram
+  caption="계획된 리전 전환: 멈추고, 따라오게 하고, 넘긴다"
+  actors={[
+    { id: "op", label: "당번" },
+    { id: "dns", label: "DNS" },
+    { id: "sel", label: "서울 primary" },
+    { id: "tyo", label: "도쿄 replica" },
+  ]}
+  steps={[
+    { from: "op", to: "dns", label: "TTL 60→30", title: "하루 전에 TTL을 줄인다", detail: "기존 TTL이 300초라면 그만큼 지나야 줄인 값이 퍼진다. 전환 당일에 줄이면 늦다." },
+    { from: "op", to: "sel", label: "read-only", title: "쓰기를 막는다", detail: "앱을 점검 모드로 바꾸거나 DB에서 default_transaction_read_only를 켠다. 이 순간부터 쓰기가 멈추니 사용자에게 미리 알린다." },
+    { from: "op", to: "tyo", label: "LSN 확인", title: "도쿄가 끝까지 따라왔는지 본다", detail: "프라이머리의 현재 LSN과 복제본이 받은·재생한 LSN이 같아질 때까지 기다린다. 같으면 잃을 것이 없다.", payload: "pg_is_in_recovery|pg_last_wal_receive_lsn|pg_last_wal_replay_lsn\nt|0/334CF08|0/334CF08" },
+    { from: "op", to: "tyo", label: "promote", title: "도쿄를 승격한다", detail: "서울은 쓰기를 막은 채로 두거나 내린다. 두 리전이 동시에 쓰기를 받는 순간이 없게 한다." },
+    { from: "op", to: "dns", label: "→ 도쿄", title: "DNS를 도쿄로 돌린다", detail: "TTL 30초가 지나면 대부분의 클라이언트가 도쿄로 온다. 서울은 나중에 도쿄의 복제본으로 다시 붙인다." },
+  ]}
+/>
+
+도쿄 쪽에서 따라온 정도는 이렇게 확인한다. 실험에서 승격 직전에 찍은 값이다. 받은 위치와 재생한 위치가 같다.
+
+```sql
+-- 복제본에서: 받은 WAL 위치와 재생한 WAL 위치
+SELECT pg_is_in_recovery(), pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn();
+```
+
+```text
+pg_is_in_recovery|pg_last_wal_receive_lsn|pg_last_wal_replay_lsn
+t|0/334CF08|0/334CF08
+(1 row)
+```
+
+프라이머리 쪽에서는 `SELECT application_name, pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS bytes_behind FROM pg_stat_replication`으로 복제본마다 몇 바이트 뒤처졌는지 본다. 쓰기를 막은 뒤 이 값이 0이 되면 넘긴다. 쓰기를 막지 않고 넘기면 그 사이의 쓰기를 잃는다는 점에서 장애 조치와 같아진다.
+
+DNS 쪽 설정도 한 번 읽어 두자. Route 53의 지연 기반 레코드는 리전마다 같은 이름의 레코드를 하나씩 두고, 각각에 헬스 체크를 묶는다(값은 예시).
+
+<UrlAnatomy
+  caption="지연 기반 DNS 레코드 하나 읽기"
+  base="api.example.com A"
+  separator=" · "
+  joiner=" · "
+  params={[
+    { key: "SetIdentifier", value: "seoul", title: "레코드 이름표", description: "같은 이름의 레코드가 리전마다 하나씩 있으니 구분할 이름을 붙인다.", required: true },
+    { key: "Region", value: "ap-northeast-2", title: "이 레코드의 리전", description: "질의한 리졸버에서 이 리전까지의 측정 지연이 가장 짧으면 이 레코드를 답한다. 사용자 위치가 아니라 리졸버 위치 기준이라 공용 DNS를 쓰는 사용자는 엉뚱한 리전으로 갈 수 있다." },
+    { key: "HealthCheckId", value: "hc-seoul", title: "묶은 헬스 체크", description: "헬스 체크가 실패하면 이 레코드는 답에서 빠진다. 기본 검사 간격은 30초(빠른 검사 10초), 연속 실패 3번이 기본이다." },
+    { key: "TTL", value: "60", title: "캐시 시간", description: "리전을 빼도 이 시간 동안은 옛 답이 남는다. 감지 시간에 TTL을 더한 것이 전환에 걸리는 최소 시간이다." },
+  ]}
+/>
+
+## 데이터가 국경을 넘으면
+
+멀티 리전을 하면 데이터가 나라를 넘는다. 복제본, 백업 사본, 로그, 분석용 사본이 다 그렇다. 어떤 데이터는 특정 국가 안에 있어야 하거나, 밖으로 옮길 때 동의나 계약 같은 조건이 붙는다. EU의 GDPR은 유럽 경제 지역 밖으로 개인정보를 옮길 때 적정성 결정이나 표준 계약 조항 같은 근거를 요구하고, 한국 개인정보 보호법도 국외 이전에 고지와 동의 같은 요건을 둔다. 금융, 공공, 의료는 업종별 규정이 더 있다. 구체적인 판단은 법무팀의 몫이고, 엔지니어가 할 일은 "어떤 데이터가 어디에 있는지"를 답할 수 있게 만드는 것이다.
+
+설계로 옮기면 이렇다. 개인정보는 사용자의 홈 리전에만 저장하고, 다른 리전에는 식별자만 둔다. 전역 검색이나 통계가 필요하면 가명 처리한 값만 모은다. 그리고 데이터 경로를 빠짐없이 센다. 흔히 놓치는 것이 백업이다. DB는 서울에만 두었는데 백업 사본을 재해 대비로 미국 리전에 복사하고 있었다면 그것도 국외 이전이다. 로그 수집 서비스, 오류 추적 SaaS, 고객 지원 도구로 흘러가는 개인정보도 같다.
+
+## 셀 기반 구조: 리전 안에서도 쪼갠다
+
+리전을 둘로 늘려도 남는 위험이 있다. 잘못된 배포나 설정 하나가 모든 리전에 동시에 퍼지면 리전이 몇 개든 함께 죽는다. 그리고 리전 하나의 규모가 너무 커지면 그 안의 장애가 사용자 전부에게 닿는다. 셀 기반 구조(cell-based architecture)는 서비스 전체를 작은 복사본(셀) 여러 개로 나누고, 사용자를 셀 하나에 고정한다. 셀은 앱, 캐시, DB까지 자기 것을 따로 가진다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="셀 라우터가 사용자를 셀 하나에 고정한다"
+  nodes={[
+    { id: "u", label: "사용자", sub: "user_id", x: 200, y: 30, w: 110 },
+    { id: "rt", label: "셀 라우터", sub: "user → cell 표", x: 200, y: 110, w: 140 },
+    { id: "c1", label: "셀 1", sub: "app·cache·DB", x: 70, y: 210, w: 110 },
+    { id: "c2", label: "셀 2", sub: "app·cache·DB", x: 200, y: 210, w: 110 },
+    { id: "c3", label: "셀 3", sub: "배포 중", x: 330, y: 210, w: 110 },
+  ]}
+  edges={[
+    { from: "u", to: "rt" },
+    { from: "rt", to: "c1" },
+    { from: "rt", to: "c2" },
+    { from: "rt", to: "c3", dashed: true },
+  ]}
+/>
+
+셀이 열 개면 셀 하나가 죽어도 사용자의 10%만 영향을 받는다. 배포는 셀 하나에 먼저 내고 문제가 없으면 다음 셀로 넘긴다. 리전은 여러 셀을 담는 그릇이 되고, 셀 하나가 리전 둘에 걸쳐 액티브-패시브로 있을 수도 있다. 셀 라우터는 가능한 한 단순하게 만든다. 라우터가 죽으면 모든 셀에 못 가니, 라우팅 표를 각 진입점에 캐시해 두고 라우터 장애 때도 마지막 표로 보낼 수 있게 한다. 대가도 있다. 셀을 넘는 조회(전체 사용자 통계, 셀이 다른 두 사용자의 거래)는 따로 모아야 하고, 셀을 늘릴 때 사용자를 옮기는 작업이 생긴다. 사용자를 셀에 나누는 계산은 [일관된 해싱](/posts/consistent-hashing)이나 명시적인 매핑 표를 쓴다.
+
+## 멀티 리전이 아픈 순간
+
+"리전을 하나 더 열었더니 p99가 두 배가 됐다"는 리전을 넘는 호출이 숨어 있는 경우다. 도쿄 앱이 세션 확인은 서울 Redis에서, 설정 조회는 서울 API에서 하고 있었다. 분산 추적에서 한 요청 안의 구간을 리전별로 칠해 보면 바로 보인다. 앱이 부르는 것들의 엔드포인트를 리전별로 나눠 같은 리전 것만 부르게 고친다.
+
+"대기 리전의 복제본이 몇 시간째 뒤처져 있었다"는 평소에 아무도 안 보는 쪽에서 생긴다. 리전 사이 대역폭은 리전 안보다 훨씬 좁고 비싸서, 대량 배치 하나가 복제를 몇 시간 밀어 놓는다. 대기 리전의 복제 지연(`pg_stat_replication.replay_lag`)에 알림을 건다. 장애 때 잃는 양이 곧 이 값이다.
+
+"클라우드 요금에서 데이터 전송비가 갑자기 늘었다"는 리전 간 전송이 공짜가 아니어서다. 리전 사이 트래픽은 보통 GB당 몇 센트가 붙고, 복제, 백업 복사, 리전을 넘는 API 호출이 모두 여기에 들어간다. 복제와 백업은 압축하고, 리전을 넘는 호출은 위에서처럼 없앤다.
+
+"재고나 잔액이 가끔 한두 개씩 맞지 않는다"는 액티브-액티브의 LWW가 조용히 쓰기를 덮은 경우다. 에러가 없어서 정산에서야 드러난다. 충돌이 나면 안 되는 데이터에 LWW가 걸려 있지 않은지 테이블별로 확인하고, 홈 리전이나 CRDT로 옮긴다.
+
+## 거리와 충돌을 먼저 정한다
+
+멀티 리전에서 먼저 정할 것은 서버 대수가 아니라 두 가지다. 리전을 건너는 왕복을 어디에 쓸지, 그리고 양쪽에서 쓴 것이 부딪칠 때 누가 이길지다. 실험에서 리전 사이 동기 커밋은 왕복 시간 그대로(35ms, 136ms) 늦어졌고, LWW 병합은 에러 없이 재고 하나와 닉네임 하나를 잃었다. 대부분의 서비스는 쓰기의 주인을 한 리전(또는 사용자의 홈 리전)으로 정하고, 읽기를 가까이 두고, 리전 안에서는 셀로 피해 범위를 줄이는 쪽으로 간다.
+
+이 주제의 다른 글: [재해 복구](/posts/disaster-recovery), [백업 전략](/posts/backup-strategy), [장애 조치](/posts/failover).
+
+## 면접에서 나올 만한 질문
+
+### 액티브-패시브와 액티브-액티브의 차이는 무엇인가요?
+
+액티브-패시브는 쓰기를 한 리전만 받고 다른 리전은 읽기와 대기를 맡는다. 쓰기 순서가 하나라 충돌이 없지만 먼 사용자의 쓰기가 느리고, 주 리전 장애 때 승격과 전환이 필요하다. 액티브-액티브는 양쪽이 쓰기를 받아 빠르고 장애에 강하지만, 같은 데이터를 동시에 바꾸는 충돌을 해결해야 하고 각 리전이 상대 몫까지 받을 용량을 가져야 한다.
+
+### 리전 사이에 동기 복제를 걸면 어떻게 되나요?
+
+커밋마다 리전 간 왕복 시간이 그대로 붙는다. 실험에서 왕복 약 32ms에서는 커밋이 35ms, 약 130ms에서는 136ms가 걸렸고, 같은 조건의 로컬 커밋은 1ms도 안 됐다. 연결을 늘리면 처리량은 늘지만 사용자 한 명의 대기 시간은 줄지 않는다. 그래서 잃으면 안 되는 쓰기만 트랜잭션 단위로 동기로 기다리게 한다.
+
+### Last Write Wins의 문제는 무엇인가요?
+
+동시에 들어온 쓰기 중 하나를 에러 없이 버린다. 실험에서 두 리전이 재고 10에서 하나씩 팔았는데 병합 결과가 8이 아니라 9였다. 또 서버 시계에 기대므로 시계가 늦은 리전의 더 나중 쓰기가 진다. 덮여도 되는 값에만 쓰고, 카운터는 CRDT로, 중요한 데이터는 홈 리전으로 주인을 정한다.
+
+### 액티브-액티브에서 충돌을 피하는 실용적인 방법은 무엇인가요?
+
+사용자마다 홈 리전을 정해 그 사용자의 데이터는 그 리전에서만 쓰게 하는 것이다. 테이블 전체로는 양쪽에서 쓰지만 행 하나로는 주인이 하나라 충돌이 없다. 다른 리전으로 들어온 요청은 홈 리전으로 넘기고, 두 사용자에 걸친 데이터나 이사 같은 경우는 따로 설계한다.
+
+### 사용자를 가까운 리전으로 보내는 방법은 무엇인가요?
+
+DNS 기반 라우팅과 애니캐스트가 대표적이다. DNS는 리졸버 위치나 측정 지연으로 가까운 리전의 IP를 주고 헬스 체크로 죽은 리전을 뺀다. 대신 TTL만큼 전환이 늦다. 애니캐스트는 같은 IP를 여러 곳에서 광고하고 BGP 경로가 고르게 해서 전환이 빠르지만, 경로가 바뀌면 진행 중인 TCP 연결이 끊길 수 있다.
+
+### 데이터 거주 요건은 설계에 어떤 영향을 주나요?
+
+개인정보를 어느 나라에 저장하는지 답할 수 있게 데이터 경로를 설계해야 한다. 보통 개인정보는 사용자의 홈 리전에만 두고 다른 리전에는 식별자나 가명 처리한 값만 둔다. 복제본뿐 아니라 백업 사본, 로그, 외부 SaaS로 가는 데이터도 국외 이전이 될 수 있어 함께 센다.
+
+### 셀 기반 구조는 무엇이고 왜 쓰나요?
+
+서비스 전체를 앱, 캐시, DB까지 갖춘 작은 복사본 여러 개로 나누고 사용자를 하나에 고정하는 구조다. 셀 하나의 장애나 잘못된 배포가 그 셀의 사용자에게만 닿아 피해 범위가 줄고, 배포를 셀 단위로 나눠 낼 수 있다. 대신 셀을 넘는 조회와 사용자 이동이 복잡해지고, 셀 라우터가 단일 장애점이 되지 않게 단순하게 만들어야 한다.

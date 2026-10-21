@@ -1,0 +1,431 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cdn-edge-anycast");
+
+서울 사무실에서 사이트 응답 헤더를 보다가 이상한 걸 발견했다. CDN이 붙여 주는 엣지 위치 헤더에 서울이 아니라 도쿄 코드가 찍혀 있다. 서울에도 엣지가 있다고 들었는데 왜 도쿄로 갈까. 같은 날 해외 지사 동료가 같은 도메인의 IP를 알려 줬는데, 서울에서 조회한 IP와 숫자가 똑같다. 그런데 그쪽에서 ping을 치면 몇 ms 만에 돌아온다고 한다. 같은 IP가 서울에서도 가깝고 프랑크푸르트에서도 가깝다.
+
+CDN의 캐시 규칙, 그러니까 `Cache-Control`, 캐시 키, 무효화는 [HTTP 캐시와 CDN 글](/posts/http-caching-cdn)에서 다뤘다. 이 글은 그 앞 단계, 사용자의 패킷이 어떻게 수백 개 엣지 중 하나를 찾아가는지를 본다. 같은 IP를 여러 곳에서 광고하는 애니캐스트(anycast), DNS로 가까운 엣지를 골라 주는 방식, 경로가 바뀔 때 TCP 연결에 생기는 일, 엣지와 오리진 사이의 계층을 차례로 본다. 실험은 Ubuntu 24.04의 네트워크 네임스페이스로 엣지 두 곳을 만들어 진행한다.
+
+## 같은 IP가 여러 도시에 있다
+
+보통의 IP 주소는 유니캐스트다. 주소 하나는 세상에 한 곳에만 있다. 애니캐스트는 같은 주소 대역을 여러 곳에서 동시에 광고한다. CDN이 `192.0.2.0/24`를 서울, 도쿄, 프랑크푸르트 PoP(Point of Presence, 엣지 서버가 모여 있는 거점)에서 모두 광고하면, 인터넷의 라우터들은 그 대역으로 가는 길을 여러 개 알게 되고 그중 자기에게 가장 좋은 길 하나를 고른다. 사용자는 아무것도 하지 않아도 자기 위치에서 가까운 PoP로 간다.
+
+이 글에서는 애니캐스트를 "전국에 같은 번호로 걸 수 있는 대표 번호"에 빗대어 보겠다. 어디서 걸든 번호는 같은데, 통신망이 가까운 지점으로 연결해 준다. 아래 그림에서 다음을 누르면 서울과 도쿄의 사용자가 같은 주소로 보낸 패킷이 각자 다른 PoP에 닿는다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="같은 192.0.2.10을 두 PoP가 광고한다. 사용자마다 가까운 쪽으로 간다"
+  zones={[
+    { id: "icn", label: "ICN PoP", x: 8, y: 196, w: 184, h: 86, tone: "edge" },
+    { id: "nrt", label: "NRT PoP", x: 208, y: 196, w: 184, h: 86, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "u1", label: "user 서울", x: 100, y: 30, icon: "client" },
+    { id: "u2", label: "user 도쿄", x: 300, y: 30, icon: "client" },
+    { id: "isp1", label: "ISP 서울", x: 100, y: 120, icon: "router" },
+    { id: "isp2", label: "ISP 도쿄", x: 300, y: 120, icon: "router" },
+    { id: "e1", label: "edge", sub: "192.0.2.10", x: 100, y: 244, icon: "server" },
+    { id: "e2", label: "edge", sub: "192.0.2.10", x: 300, y: 244, icon: "server" },
+  ]}
+  links={[
+    { from: "u1", to: "isp1" },
+    { from: "u2", to: "isp2" },
+    { from: "isp1", to: "e1" },
+    { from: "isp2", to: "e2" },
+    { from: "isp1", to: "e2", dashed: true },
+    { from: "isp1", to: "isp2", label: "해저 케이블" },
+  ]}
+  steps={[
+    {
+      path: ["e1", "isp1"],
+      packet: "BGP",
+      highlight: ["e2", "isp2"],
+      title: "두 PoP가 같은 대역을 광고한다",
+      detail: "ICN과 NRT 모두 BGP로 192.0.2.0/24를 알린다. ISP 라우터는 이 대역으로 가는 길을 둘 다 안다.",
+      payload: "ICN: 192.0.2.0/24 AS-path 13335\nNRT: 192.0.2.0/24 AS-path 13335",
+    },
+    {
+      path: ["u1", "isp1", "e1"],
+      packet: "SYN",
+      title: "서울 사용자는 ICN으로 간다",
+      detail: "서울 ISP에게는 ICN으로 가는 길이 더 좋다. 사용자는 IP 하나만 알 뿐, 어느 도시로 가는지 모른다.",
+    },
+    {
+      path: ["u2", "isp2", "e2"],
+      packet: "SYN",
+      title: "도쿄 사용자는 같은 IP로 NRT에 간다",
+      detail: "목적지 주소는 똑같다. 도쿄 ISP의 라우팅 표에서는 NRT 쪽 길이 더 좋을 뿐이다.",
+    },
+    {
+      path: ["u1", "isp1", "isp2", "e2"],
+      packet: "SYN",
+      highlight: ["e1"],
+      title: "가까움은 거리가 아니라 경로로 정한다",
+      detail: "서울 ISP가 ICN PoP와 직접 연결이 없고 도쿄에서 CDN과 연결되어 있다면, 서울 사용자도 바다를 건너 NRT로 간다. 처음 장면이 이것이다.",
+    },
+  ]}
+/>
+
+DNS 루트 서버, 구글의 `8.8.8.8`, Cloudflare의 `1.1.1.1`이 모두 애니캐스트다. `8.8.8.8`이라는 서버가 한 대 있는 게 아니라 전 세계 수많은 지점이 같은 주소를 쓴다.
+
+## 라우터가 고르는 "가까움"
+
+마지막 단계가 처음 장면의 답이다. 인터넷에서 길을 고르는 건 BGP(Border Gateway Protocol, 통신사들 사이에 "이 대역은 나를 거쳐 갈 수 있다"를 주고받는 프로토콜)이고, BGP는 킬로미터를 모른다. 통신사 정책과 경로의 모양으로 고른다. 실제 판단 순서는 열 단계 가까이 되지만, 자주 결과를 가르는 건 앞쪽 셋이다.
+
+1. 로컬 선호도(local preference): 통신사가 정책으로 정하는 값. 높을수록 좋다. "돈을 내는 상위 통신사보다 직접 연결(피어링)한 상대를 먼저 쓴다" 같은 정책이 여기 들어간다.
+2. AS 경로 길이: 대역에 닿기까지 거치는 통신사(AS, 자율 시스템) 수. 짧을수록 좋다.
+3. MED: 이웃 AS가 "우리 쪽에선 이 입구로 들어와 달라"고 붙이는 힌트. 낮을수록 좋다.
+
+아래 그림은 서울의 한 통신사가 ICN과 NRT로 가는 두 경로 중 하나를 고르는 과정이다. 숫자는 설명을 위한 예다.
+
+<AlgoTrace
+  caption="BGP가 두 경로 중 하나를 고르는 순서 (단순화)"
+  memoryLabel="남은 후보"
+  cells={["ICN: pref 100, AS 3356 4766 13335", "NRT: pref 100, AS 2914 13335"]}
+  steps={[
+    { memory: ["ICN", "NRT"], caption: "같은 192.0.2.0/24에 대한 경로가 둘 들어왔다." },
+    { pointer: 0, memory: ["ICN", "NRT"], caption: "1단계 로컬 선호도: 둘 다 100이다. 아직 못 고른다." },
+    { pointer: 1, memory: ["NRT"], caption: "2단계 AS 경로 길이: ICN 쪽은 통신사 셋, NRT 쪽은 둘을 거친다. 짧은 NRT가 남는다." },
+    { pointer: 1, found: [1], memory: ["NRT"], caption: "거리로는 ICN이 훨씬 가깝지만 BGP는 NRT를 고른다." },
+    { pointer: 0, memory: ["ICN (pref 200)"], caption: "CDN이 이 통신사와 서울에서 직접 피어링하면, 통신사는 그 경로의 선호도를 올려 둔다." },
+    { pointer: 0, found: [0], memory: ["ICN"], caption: "1단계에서 바로 ICN이 이긴다. 엣지 위치 문제는 대개 피어링으로 푼다." },
+  ]}
+/>
+
+그래서 "서울 사용자가 도쿄 엣지로 간다"는 문제는 CDN 설정으로 고치기 어렵다. CDN과 그 통신사가 서울에서 직접 연결되어 있는지의 문제다. CDN 사업자들이 큰 통신사와의 피어링을 늘리는 데 공을 들이는 이유다. 사용자 쪽에서 할 수 있는 건 대개 CDN 지원 창구에 경로를 알려 주는 정도다.
+
+판단 순서를 함수로 짜 보자. 로컬 선호도가 높은 것, 같으면 AS 경로가 짧은 것, 그것도 같으면 MED가 낮은 것을 고른다. 후보가 없으면 `null`이다.
+
+<CodePlayground
+  caption="BGP 최적 경로 고르기 (앞 세 단계만)"
+  functionName="bestPath"
+  initialCode={`function bestPath(routes) {
+  // routes: [{ pop: "ICN", localPref: 100, asPath: [4766, 13335], med: 0 }, ...]
+  return null;
+}`}
+  solution={`function bestPath(routes) {
+  if (routes.length === 0) return null;
+  const sorted = [...routes].sort(
+    (a, b) =>
+      b.localPref - a.localPref ||
+      a.asPath.length - b.asPath.length ||
+      a.med - b.med,
+  );
+  return sorted[0].pop;
+}`}
+  tests={[
+    { label: "AS 경로가 짧은 NRT", args: [[{ pop: "ICN", localPref: 100, asPath: [3356, 4766, 13335], med: 0 }, { pop: "NRT", localPref: 100, asPath: [2914, 13335], med: 0 }]], expected: "NRT" },
+    { label: "피어링으로 선호도를 올린 ICN", args: [[{ pop: "ICN", localPref: 200, asPath: [3356, 4766, 13335], med: 0 }, { pop: "NRT", localPref: 100, asPath: [2914, 13335], med: 0 }]], expected: "ICN" },
+    { label: "길이가 같으면 MED", args: [[{ pop: "ICN", localPref: 100, asPath: [4766, 13335], med: 50 }, { pop: "NRT", localPref: 100, asPath: [2914, 13335], med: 10 }]], expected: "NRT" },
+    { label: "후보 하나", args: [[{ pop: "ICN", localPref: 100, asPath: [4766, 13335], med: 0 }]], expected: "ICN" },
+    { label: "후보 없음", args: [[]], expected: null },
+  ]}
+/>
+
+## 리눅스로 엣지 두 곳 만들기
+
+네임스페이스 넷으로 작은 애니캐스트를 만들었다. 사용자(`va-cli`), 통신사 라우터(`va-isp`), 엣지 두 곳(`va-icn`, `va-nrt`)이다. 두 엣지는 루프백에 똑같이 `192.0.2.10`을 붙이고, 응답 헤더에 자기 PoP 이름을 넣는 작은 파이썬 웹 서버를 띄웠다. BGP 대신 통신사 라우터에 같은 목적지로 가는 경로 두 개를 metric만 다르게 넣었다. metric이 작은 쪽이 먼저 쓰이니 "ICN 쪽이 더 좋은 경로"를 흉내 낸 것이다.
+
+```bash
+# 두 엣지가 같은 주소를 가진다
+sudo ip netns exec va-icn ip addr add 192.0.2.10/32 dev lo
+sudo ip netns exec va-nrt ip addr add 192.0.2.10/32 dev lo
+# 통신사 라우터: 같은 목적지로 가는 길 두 개, ICN 쪽을 우선
+sudo ip netns exec va-isp ip route add 192.0.2.10/32 via 172.20.1.2 metric 10
+sudo ip netns exec va-isp ip route add 192.0.2.10/32 via 172.20.2.2 metric 20
+sudo ip netns exec va-isp ip route show 192.0.2.10
+# 사용자가 접속하면 어느 엣지가 답하나
+sudo ip netns exec va-cli curl -sS -i http://192.0.2.10/
+```
+
+```text
+192.0.2.10 via 172.20.1.2 dev to-icn metric 10 
+192.0.2.10 via 172.20.2.2 dev to-nrt metric 20 
+HTTP/1.0 200 OK
+Server: BaseHTTP/0.6 Python/3.13.16
+Date: Tue, 20 Oct 2026 13:21:47 GMT
+X-Edge-Pop: ICN
+Content-Length: 15
+
+hello from ICN
+```
+
+이제 ICN 쪽 링크를 내린다. 실제 인터넷에서는 ICN PoP가 장애로 BGP 광고를 거둬들이는(withdraw) 상황이다.
+
+```bash
+# ICN PoP로 가는 링크를 내린다 (광고 철회를 흉내)
+sudo ip netns exec va-isp ip link set to-icn down
+sudo ip netns exec va-isp ip route show 192.0.2.10
+sudo ip netns exec va-cli curl -sS -i http://192.0.2.10/
+```
+
+```text
+192.0.2.10 via 172.20.2.2 dev to-nrt metric 20 
+HTTP/1.0 200 OK
+Server: BaseHTTP/0.6 Python/3.13.16
+Date: Tue, 20 Oct 2026 13:21:47 GMT
+X-Edge-Pop: NRT
+Content-Length: 15
+
+hello from NRT
+```
+
+ICN 경로가 사라지자 같은 주소로 보낸 요청에 NRT가 답했다. 사용자는 DNS를 다시 조회하지도, 설정을 바꾸지도 않았다. 애니캐스트의 장애 조치는 라우팅이 바뀌는 속도로 일어난다. 실제 인터넷에서는 BGP 변경이 퍼지는 데 수 초에서 수십 초가 걸리지만, DNS TTL이 끝나기를 기다리는 것보다는 대체로 빠르다.
+
+## 경로가 바뀌면 TCP 연결은 어디로 가나
+
+애니캐스트에는 약점이 하나 있다. 라우팅은 패킷 단위로 길을 고르는데, TCP는 연결 상태가 한 서버에 있다. 연결 도중에 경로가 바뀌어 다음 패킷이 다른 PoP에 가면, 그 PoP는 이 연결을 모른다. 모형에서 두 엣지에 같은 주소의 9000번 에코 서버를 띄우고, 1초마다 주고받는 연결을 연 뒤 중간에 ICN 경로를 지웠다.
+
+```bash
+# 1초마다 한 줄씩 주고받는 연결을 연다
+sudo ip netns exec va-cli python3 echo_cli.py 192.0.2.10 9000 5 &
+sleep 2.5
+# 연결 도중 ICN 경로를 지운다
+sudo ip netns exec va-isp ip route del 192.0.2.10/32 via 172.20.1.2 metric 10
+```
+
+```text
+13:21:55 reply ping0
+13:21:56 reply ping1
+13:21:57 reply ping2
+Traceback (most recent call last):
+  File "/tmp/claude-0/-home-user-web-dev-study/52dcee39-f6ba-5249-8d8c-fa7de29b3e49/scratchpad/net-cloud/echo_cli.py", line 7, in <module>
+    c.sendall(f"ping{i}\n".encode()); d=c.recv(100)
+                                        ~~~~~~^^^^^^
+ConnectionResetError: [Errno 104] Connection reset by peer
+```
+
+경로를 지운 직후 다음 패킷이 NRT에 닿았고, NRT 커널은 모르는 연결의 패킷에 RST를 돌려줬다. 다음을 누르면 순서대로 보인다.
+
+<SequenceDiagram
+  caption="연결 도중 애니캐스트 경로가 바뀌면 새 PoP가 RST를 보낸다"
+  actors={[
+    { id: "cli", label: "사용자" },
+    { id: "isp", label: "ISP 라우터" },
+    { id: "icn", label: "ICN" },
+    { id: "nrt", label: "NRT" },
+  ]}
+  steps={[
+    {
+      from: "cli",
+      to: "icn",
+      label: "SYN … 데이터",
+      title: "연결은 ICN과 맺었다",
+      detail: "3-way 핸드셰이크와 앞의 데이터는 모두 ICN이 받았다. 연결 상태(순서 번호, 소켓)는 ICN 서버에만 있다.",
+    },
+    {
+      from: "isp",
+      to: "isp",
+      label: "ICN 경로 철회",
+      title: "라우터의 선택이 바뀐다",
+      detail: "ICN이 광고를 거둬들이거나 더 좋은 경로가 생기면, ISP 라우터는 같은 목적지의 다음 패킷부터 NRT로 보낸다.",
+    },
+    {
+      from: "cli",
+      to: "nrt",
+      label: "데이터 (같은 연결)",
+      title: "다음 패킷은 NRT로 간다",
+      detail: "사용자는 같은 연결의 다음 데이터를 보냈을 뿐이다. 목적지 주소도 포트도 그대로다.",
+      payload: "src 100.70.0.2:51234 → dst 192.0.2.10:9000 [P.]",
+    },
+    {
+      from: "nrt",
+      to: "cli",
+      label: "RST",
+      title: "NRT는 이 연결을 모른다",
+      detail: "NRT에는 이 4-튜플의 소켓이 없으니 커널이 RST로 답한다. 앱에는 Connection reset by peer가 뜬다.",
+    },
+  ]}
+/>
+
+그런데도 큰 CDN들이 애니캐스트로 TCP를 잘 서비스하는 이유가 있다. 인터넷의 BGP 경로는 대부분의 시간 동안 안정적이고, 웹 요청은 대체로 짧다. 경로가 바뀌어 끊기는 연결은 아주 적고, 브라우저와 HTTP 클라이언트는 다시 연결하면 된다. PoP 안에서는 서버가 여러 대인데, 앞단의 L4 로드 밸런서가 연결 정보를 해시해서 같은 연결을 같은 서버로 보낸다([로드 밸런싱 알고리즘 글](/posts/load-balancing-algorithms)). QUIC은 연결을 IP와 포트가 아니라 연결 ID로 구분해서 이런 변화에 조금 더 강하다.
+
+그래도 대용량 파일 다운로드나 오래 유지되는 WebSocket처럼 긴 연결이 많은 서비스라면, 애니캐스트 앞단에서 연결이 끊길 수 있다는 걸 알고 재연결 로직을 넣어 둬야 한다.
+
+## DNS로 엣지를 골라 주는 방식
+
+모든 CDN이 애니캐스트만 쓰는 건 아니다. 다른 방식은 DNS가 가까운 엣지의 유니캐스트 IP를 골라 주는 것이다. 사용자의 DNS 리졸버가 CDN의 권한 있는 네임서버에 묻으면, 네임서버가 "이 리졸버는 서울에 있으니 서울 PoP의 IP"를 답한다. CloudFront와 Akamai가 기본으로 이 방식을 쓰고, Cloudflare는 애니캐스트를 쓴다. 둘을 섞기도 한다.
+
+DNS 방식에는 고유한 함정이 있다. CDN 네임서버가 보는 건 사용자가 아니라 사용자의 리졸버다. 회사가 모든 DNS를 미국에 있는 리졸버로 보내거나, 사용자가 멀리 있는 공용 리졸버를 쓰면 엉뚱한 지역의 엣지를 받는다. 이걸 줄이려고 EDNS Client Subnet(ECS, RFC 7871)이 생겼다. 리졸버가 질의에 사용자 IP의 앞부분(예: `/24`)을 실어 보내 네임서버가 사용자 위치로 고르게 한다. 다만 공용 리졸버마다 정책이 다르다. 구글 `8.8.8.8`은 ECS를 보내고, Cloudflare `1.1.1.1`은 개인정보 보호를 이유로 보내지 않는다.
+
+두 방식의 차이를 정리하면 이렇다.
+
+- 장애 조치: 애니캐스트는 라우팅이 바뀌는 대로 바로 옮겨 간다. DNS 방식은 TTL(보통 60초 안팎)이 끝나야 새 IP를 받고, TTL을 무시하는 클라이언트는 더 늦다.
+- 연결 안정성: DNS 방식은 받은 IP가 한 곳에만 있으니 연결 도중 다른 PoP로 튀지 않는다. 애니캐스트는 앞에서 본 RST가 생길 수 있다.
+- 제어: DNS 방식은 서버 부하나 비용을 보고 PoP를 골라 줄 수 있다. 애니캐스트는 사용자를 어느 PoP로 보낼지 통신사의 BGP가 정해서 CDN이 세밀하게 조정하기 어렵다.
+- 공격 흡수: 애니캐스트는 공격 트래픽이 출발지마다 가까운 PoP로 흩어진다. 한 PoP가 모든 공격을 받지 않는다.
+
+DNS 방식은 [DNS 글](/posts/dns)에서 본 TTL과 캐시가 그대로 장애 조치 속도를 정한다는 것만 기억하면 된다.
+
+## 엣지에서 오리진까지 한 번 더 모은다
+
+엣지가 수백 곳이면 캐시도 수백 개로 나뉜다. 같은 파일이 각 PoP에서 처음 요청될 때마다 오리진에 요청이 간다. PoP가 300곳이면 인기 파일 하나가 배포 직후 오리진에 300번 요청될 수 있다. 그래서 큰 CDN은 엣지와 오리진 사이에 중간 계층을 둔다. 지역별 중간 캐시(regional edge cache)와, 오리진 바로 앞의 한 곳으로 모으는 오리진 실드(origin shield)다. 아래 그림에서 다음을 누르면 실드가 오리진 요청을 하나로 모으는 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="엣지의 캐시 미스가 오리진 실드에서 한 번 더 모인다"
+  zones={[
+    { id: "edges", label: "엣지 PoP", x: 8, y: 30, w: 384, h: 74, tone: "edge" },
+    { id: "originz", label: "오리진 리전", x: 100, y: 176, w: 200, h: 116, tone: "private" },
+  ]}
+  nodes={[
+    { id: "icn", label: "ICN", x: 70, y: 70, icon: "server", w: 92 },
+    { id: "nrt", label: "NRT", x: 200, y: 70, icon: "server", w: 92 },
+    { id: "sin", label: "SIN", x: 330, y: 70, icon: "server", w: 92 },
+    { id: "shield", label: "shield", sub: "오리진 실드", x: 200, y: 214, icon: "lb" },
+    { id: "origin", label: "origin", sub: "ALB + app", x: 200, y: 268, icon: "server" },
+  ]}
+  links={[
+    { from: "icn", to: "shield" },
+    { from: "nrt", to: "shield" },
+    { from: "sin", to: "shield" },
+    { from: "shield", to: "origin" },
+  ]}
+  steps={[
+    {
+      path: ["icn", "shield", "origin"],
+      packet: "MISS",
+      title: "첫 미스는 실드를 거쳐 오리진으로 간다",
+      detail: "ICN에 없으니 실드에 묻고, 실드에도 없으니 오리진에서 가져온다. 실드와 ICN 둘 다 사본을 둔다.",
+    },
+    {
+      path: ["nrt", "shield"],
+      packet: "MISS",
+      title: "다른 PoP의 미스는 실드에서 끝난다",
+      detail: "NRT에는 아직 없지만 실드에 있다. 오리진은 이 요청을 보지 못한다.",
+    },
+    {
+      path: ["sin", "shield"],
+      packet: "MISS",
+      title: "PoP가 늘어도 오리진 요청은 그대로다",
+      detail: "엣지가 300곳이어도 오리진이 받는 요청은 실드의 미스뿐이다. 실드 안에서 같은 객체 요청을 하나로 합쳐 동시 미스도 줄인다.",
+    },
+    {
+      path: ["shield", "origin"],
+      packet: "TTL",
+      highlight: ["edges"],
+      title: "대신 한 단계가 늘어난다",
+      detail: "실드가 오리진과 먼 곳에 있으면 첫 미스의 지연이 늘고, 실드를 지나는 요청에 요금이 붙는 CDN도 있다. 실드는 오리진과 가까운 리전 하나로 고른다.",
+    },
+  ]}
+/>
+
+실드가 있으면 배포 직후나 캐시를 전부 지운 직후에 오리진으로 몰리는 요청이 크게 준다. 한꺼번에 만료되어 몰리는 현상 자체와 그걸 막는 캐시 규칙은 [HTTP 캐시와 CDN 글](/posts/http-caching-cdn)에서 다뤘다. 여기서 기억할 건 오리진을 보호하는 장치가 캐시 규칙만이 아니라 엣지 계층의 모양이기도 하다는 것이다.
+
+## 엣지 위치를 확인하는 법
+
+CDN은 응답 헤더에 어느 PoP가 답했는지 남긴다. 헤더 이름은 CDN마다 다르다. CloudFront 응답 헤더를 예로 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="CloudFront 응답에서 엣지 위치를 알려 주는 헤더"
+  base="HTTP/2 200"
+  separator=" | "
+  joiner=" | "
+  params={[
+    {
+      key: "x-cache",
+      value: "Hit from cloudfront",
+      display: "x-cache: Hit from cloudfront",
+      title: "캐시 판정",
+      description: "엣지에 사본이 있어 바로 줬다는 뜻이다. Miss from cloudfront면 실드나 오리진까지 갔다. RefreshHit은 오래된 사본을 오리진에 확인하고 그대로 썼다는 뜻이다.",
+      required: true,
+    },
+    {
+      key: "x-amz-cf-pop",
+      value: "ICN57-P1",
+      display: "x-amz-cf-pop: ICN57-P1",
+      title: "답한 PoP",
+      description: "앞 세 글자가 가까운 공항 코드다. ICN은 인천(서울), NRT는 나리타(도쿄). 처음 장면에서 서울 사용자에게 NRT가 찍혔다면 경로나 DNS 리졸버 위치를 의심한다.",
+      required: true,
+    },
+    {
+      key: "via",
+      value: "1.1 3f2c9d0a1b.cloudfront.net (CloudFront)",
+      display: "via: 1.1 …cloudfront.net (CloudFront)",
+      title: "거친 프록시",
+      description: "HTTP 표준 Via 헤더다. 요청이 어떤 프록시를 지났는지 남긴다. 이 앞에 다른 프록시가 있으면 쉼표로 이어진다.",
+    },
+    {
+      key: "age",
+      value: "4211",
+      display: "age: 4211",
+      title: "사본의 나이",
+      description: "엣지가 이 사본을 받은 지 몇 초 지났는지다. Hit인데 age가 계속 0에 가깝다면 캐시가 금방 버려지고 있다는 신호다.",
+    },
+  ]}
+/>
+
+(헤더 값은 예시다. 이름과 형식은 실제 CloudFront 응답과 같다.) Cloudflare는 `cf-ray: 8d2c1e5f8a3b1234-ICN`처럼 요청 ID 끝에 PoP 코드를 붙이고, `cf-cache-status`로 판정을 알려 준다. Cloudflare 앞단에 있는 사이트라면 `/cdn-cgi/trace` 경로로 지금 붙은 PoP를 바로 볼 수 있다.
+
+```bash
+# 응답 헤더에서 PoP와 캐시 판정만 본다
+curl -sI https://www.example.com/ | grep -iE 'x-amz-cf-pop|x-cache|cf-ray|cf-cache-status|age'
+# Cloudflare 앞단 사이트라면 지금 붙은 PoP를 직접 묻는다
+curl -s https://www.cloudflare.com/cdn-cgi/trace
+```
+
+```text
+fl=465f12
+h=www.cloudflare.com
+ip=203.0.113.7
+ts=1792481407.512
+visit_scheme=https
+uag=curl/8.5.0
+colo=ICN
+sliver=none
+http=http/2
+loc=KR
+tls=TLSv1.3
+sni=plaintext
+warp=off
+gateway=off
+rbi=off
+kex=X25519
+```
+
+(예시 출력이다. 이 실습 환경에서는 외부 CDN에 접속할 수 없어 형식만 옮겼다.) `colo`가 붙은 PoP이고 `loc`는 CDN이 판단한 사용자 국가다. `colo`가 기대와 다르면 통신사 경로 문제일 가능성이 크고, 같은 도메인을 DNS 방식 CDN에서 받는다면 `dig`로 리졸버가 돌려주는 IP와 그 위치를 함께 본다.
+
+## CDN 앞단에서 흔히 하는 실수
+
+엣지가 사용자와 오리진 사이에 끼면서 생기는 실수들이다.
+
+- 오리진을 직접 열어 둔다: 엣지만 거치게 하려고 CDN을 붙였는데 오리진 서버의 공인 IP가 그대로 열려 있으면, 공격자는 CDN을 우회해 오리진을 직접 친다. 오리진의 보안 그룹을 CDN 사업자의 IP 대역만 허용하게 하거나(AWS는 CloudFront 대역을 관리형 접두사 목록으로 제공한다), 오리진을 사설 망에 두고 CDN 전용 연결로만 받는다. 보안 그룹 설정은 [보안 그룹과 NACL 글](/posts/security-groups-nacl)에서 다뤘다.
+- 접속 IP로 지역을 판단한다: 오리진에 찍히는 출발지 IP는 사용자 IP가 아니라 엣지 IP다. 국가별 차단이나 사용자 IP 기록은 CDN이 붙여 주는 헤더(`X-Forwarded-For`, `CloudFront-Viewer-Country`, `CF-Connecting-IP` 등)를 써야 한다. 그 헤더를 믿어도 되는 건 요청이 정말 CDN에서 왔을 때뿐이니 첫 번째 항목과 짝을 이룬다. 헤더를 읽는 법은 [프록시 글](/posts/proxy-reverse-proxy)에 있다.
+- 엣지 IP를 허용 목록에 고정한다: 애니캐스트든 DNS 방식이든 엣지 IP는 바뀐다. 방화벽이나 파트너사 허용 목록에 지금 조회한 IP 몇 개를 적어 두면 어느 날 갑자기 막힌다. CDN이 공개하는 대역 목록을 주기적으로 가져와 반영한다.
+- 한 PoP에서만 이상한 걸 전체 문제로 본다: 특정 지역 사용자만 옛 파일을 받거나 느리다면 그 PoP의 캐시나 경로 문제다. 응답 헤더의 PoP 코드를 함께 받아 두면 범위를 바로 좁힐 수 있다.
+
+## 같은 번호, 가까운 지점
+
+처음 장면으로 돌아가면, 서울 사무실이 도쿄 엣지로 간 건 BGP가 거리 대신 통신사 정책과 AS 경로로 길을 골랐기 때문이다. 해외 지사와 같은 IP를 받았는데도 둘 다 빨랐던 건 그 IP가 애니캐스트라서 각자 가까운 PoP가 같은 번호로 답했기 때문이다. 애니캐스트는 장애 조치가 빠르고 공격을 흩어 받는 대신, 경로가 바뀌면 진행 중인 TCP 연결이 끊길 수 있다. DNS 방식은 장단점이 그 반대다. 엣지에 닿은 다음 무엇을 얼마나 캐시하는지는 [HTTP 캐시와 CDN 글](/posts/http-caching-cdn)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 애니캐스트가 무엇이고 CDN에서 왜 쓰나요?
+
+같은 IP 대역을 여러 위치에서 동시에 BGP로 광고해서, 라우터가 그중 가장 좋은 경로의 위치로 패킷을 보내게 하는 방식이다. 사용자는 IP 하나만 알면 가까운 PoP에 닿고, PoP 하나가 광고를 거둬들이면 라우팅이 바뀌는 대로 다른 PoP로 옮겨 간다. 공격 트래픽도 출발지마다 가까운 PoP로 흩어져서 DDoS를 나눠 받는다.
+
+### 애니캐스트에서 "가장 가까운" PoP는 무엇을 기준으로 정해지나요?
+
+물리적 거리가 아니라 BGP 경로 선택으로 정해진다. 통신사의 로컬 선호도, AS 경로 길이, MED 같은 순서로 고르기 때문에 서울 사용자가 도쿄 PoP로 가는 일이 생긴다. 이런 문제는 대개 CDN과 그 통신사가 직접 피어링을 맺어 경로 선호도를 바꾸는 식으로 풀린다.
+
+### 애니캐스트 위에서 TCP를 쓰면 어떤 문제가 있나요?
+
+연결 도중 경로가 바뀌어 다음 패킷이 다른 PoP에 가면, 그 PoP에는 연결 상태가 없어서 RST를 보내고 연결이 끊긴다. 실제로는 BGP 경로가 대부분 안정적이고 웹 요청이 짧아서 영향이 작고, PoP 안에서는 L4 로드 밸런서가 연결 해시로 같은 서버에 보낸다. 긴 연결을 쓰는 서비스는 재연결 로직을 넣어 둔다.
+
+### DNS 기반으로 엣지를 고르는 방식과 비교하면 어떤가요?
+
+DNS 방식은 네임서버가 리졸버 위치를 보고 가까운 PoP의 유니캐스트 IP를 돌려준다. PoP를 부하나 비용까지 보고 세밀하게 고를 수 있고 연결 도중 PoP가 바뀌지 않지만, 장애 조치가 TTL만큼 늦고 리졸버가 멀리 있으면 엉뚱한 PoP를 받는다. 애니캐스트는 그 반대로 장애 조치가 빠른 대신 CDN이 경로를 세밀하게 정하기 어렵다.
+
+### EDNS Client Subnet은 왜 필요한가요?
+
+DNS 방식 CDN의 네임서버는 사용자가 아니라 리졸버의 IP만 보기 때문에, 멀리 있는 공용 리졸버나 사내 중앙 리졸버를 쓰는 사용자에게 엉뚱한 PoP를 준다. ECS는 리졸버가 사용자 IP 앞부분을 질의에 실어 보내 사용자 위치로 고르게 한다. 다만 개인정보 때문에 보내지 않는 리졸버도 있다.
+
+### 오리진 실드는 무엇을 해결하나요?
+
+엣지 PoP마다 캐시가 따로라서, 인기 객체가 각 PoP에서 처음 요청될 때마다 오리진에 요청이 가는 문제를 줄인다. 엣지의 미스를 오리진 앞의 한 계층에서 다시 받아 그곳의 사본으로 답하고, 동시에 들어온 같은 요청을 하나로 합친다. 대신 계층이 하나 늘어 첫 미스의 지연이 늘 수 있어서 오리진과 가까운 리전에 둔다.
+
+### CDN을 붙였는데 오리진이 공격을 받았습니다. 무엇을 의심하나요?
+
+오리진의 공인 주소가 그대로 열려 있어서 공격자가 CDN을 우회하는 경우를 먼저 의심한다. 오리진의 보안 그룹을 CDN 사업자의 IP 대역만 허용하게 하거나, 오리진을 사설 망에 두고 CDN 전용 연결로만 받게 바꾼다. 오리진 로그의 출발지가 CDN 대역이 아닌 요청이 있는지로 확인한다.

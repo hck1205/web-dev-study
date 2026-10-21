@@ -1,0 +1,593 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-operators");
+
+DB 백업 하나를 쿠버네티스에서 돌리려면 손이 꽤 간다. CronJob을 만들고, 이미지와 명령을 넣고, 보관 기간을 환경 변수로 넘기고, 저장소에 경로를 미리 만들어 둔다. DB를 하나 더 붙이면 이걸 복사해서 이름만 바꾼다. 백업을 그만둘 때는 CronJob만 지우고 저장소 경로는 잊어버린다. 반년쯤 지나면 아무도 주인을 모르는 백업 폴더가 수십 개 쌓인다.
+
+사람이 매번 하던 이 절차를 코드로 옮겨 클러스터 안에서 계속 돌게 하는 것이 오퍼레이터다. 사용자는 `Backup`이라는 문서에 "orders DB를 매일 3시에, 14일 보관"이라고만 쓴다. 오퍼레이터가 그 문서를 보고 CronJob과 저장소 경로를 만들고, 누가 CronJob을 손으로 고치면 되돌리고, `Backup`을 지우면 저장소 경로까지 치운다.
+
+이 글은 오퍼레이터가 무엇이고 어디까지 해야 하는지, 만드는 도구(kubebuilder, Operator SDK, kopf)는 무엇이 다른지, 그리고 오퍼레이터를 만들지 말아야 할 때를 본다. 중간에 Node로 200줄 남짓한 `Backup` 오퍼레이터를 만들어 kwok 실습 클러스터(kube-apiserver v1.37.0)에 붙인다. CronJob 컨트롤러는 진짜이고, kwok가 Job의 Pod를 바로 완료 처리한다. 클러스터 밖 저장소는 같은 호스트에 띄운 작은 HTTP 서버로 흉내 냈다.
+
+이 주제의 다른 글: 컨트롤러가 watch와 작업 큐로 도는 방식은 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile), `Backup`의 스키마와 status 서브리소스는 [CRD 글](/posts/k8s-crd), finalizer와 ownerReferences의 기본 동작은 [API 오브젝트](/posts/k8s-api-objects)에 있다. 여기서는 그 설명을 반복하지 않고 링크로 넘긴다.
+
+## 운영 지식을 코드로 옮긴 컨트롤러
+
+오퍼레이터라는 말은 2016년 CoreOS가 etcd 클러스터를 관리하는 프로그램을 소개하며 썼다. 정의는 단순하다. CRD로 새 종류를 만들고, 그 종류를 맡는 컨트롤러를 붙인다. 여기까지는 컨트롤러와 다를 게 없다. 차이는 컨트롤러가 담는 내용에 있다. ReplicaSet 컨트롤러는 Pod 수를 맞추는 일반적인 일을 한다. 오퍼레이터는 특정 소프트웨어를 운영하는 사람이 알던 것을 담는다. "Postgres 복제본을 올릴 때는 이 순서로", "백업을 지우면 버킷 경로도 같이", "마이너 업그레이드는 복제본부터".
+
+아래 그림이 이 글에서 만드는 오퍼레이터의 전체 모양이다. 사용자는 맨 위의 `Backup`만 쓴다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="사용자가 쓰는 것은 Backup 하나다. 나머지는 오퍼레이터와 내장 컨트롤러가 만든다"
+  nodes={[
+    { id: "bk", label: "Backup", sub: "orders, 0 3 * * *", x: 200, y: 40, w: 150 },
+    { id: "op", label: "backup-operator", sub: "reconcile", x: 200, y: 120, w: 150 },
+    { id: "bucket", label: "저장소 경로", sub: "클러스터 밖", x: 70, y: 200, w: 120 },
+    { id: "cj", label: "CronJob", sub: "backup-orders-db", x: 290, y: 200, w: 150 },
+    { id: "job", label: "Job → Pod", sub: "pg_dump", x: 290, y: 280, w: 150 },
+  ]}
+  edges={[
+    { from: "op", to: "bk", label: "watch·status", arrow: "both" },
+    { from: "op", to: "bucket", label: "PUT·DELETE" },
+    { from: "op", to: "cj", label: "apply" },
+    { from: "cj", to: "job", label: "CronJob 컨트롤러" },
+    { from: "cj", to: "bk", label: "owner", dashed: true },
+  ]}
+/>
+
+CronJob에서 `Backup`으로 가는 점선이 ownerReferences다. CronJob은 `Backup`이 지워지면 가비지 컬렉터가 함께 지운다. 저장소 경로는 클러스터 밖이라 가비지 컬렉터가 모른다. 그래서 오퍼레이터가 finalizer로 직접 치운다. 이 두 갈래가 오퍼레이터 설계의 뼈대다.
+
+## 어디까지 해 주나, 다섯 단계
+
+Operator Framework 프로젝트는 오퍼레이터가 얼마나 많은 운영을 맡는지 다섯 단계로 나눈다. 카탈로그(OperatorHub)에서 오퍼레이터를 고를 때 이 단계를 표시해 둔다. 아래 그림에서 다음을 누르면 단계마다 무엇이 더해지는지, 이 글의 `Backup` 오퍼레이터는 어디쯤인지 나온다.
+
+<AlgoTrace
+  caption="단계가 오를수록 사람이 하던 운영을 오퍼레이터가 더 가져간다"
+  cells={["1 설치", "2 업그레이드", "3 수명 주기", "4 관찰", "5 자동 운전"]}
+  memoryLabel="이 글의 오퍼레이터"
+  steps={[
+    { pointer: 0, found: [0], memory: ["CronJob 생성"], caption: "1단계: CR을 보고 필요한 리소스를 만들고 설정을 반영한다. Helm 차트가 하는 일과 비슷하다." },
+    { pointer: 1, found: [0], memory: ["CronJob 생성"], caption: "2단계: 오퍼레이터와 관리 대상의 버전을 끊김 없이 올린다. 이미지 태그를 바꾸는 것 이상으로, 순서와 호환성을 챙긴다." },
+    { pointer: 2, found: [0, 2], memory: ["CronJob 생성", "버킷 정리"], caption: "3단계: 백업, 복구, 장애 조치, 정리까지 맡는다. finalizer로 바깥 자원을 지우는 것도 여기다." },
+    { pointer: 3, found: [0, 2], memory: ["CronJob 생성", "버킷 정리", "conditions"], caption: "4단계: 메트릭, 알림, 이벤트로 상태를 알려 준다. status.conditions는 그 시작이다." },
+    { pointer: 4, found: [0, 2], memory: ["CronJob 생성", "버킷 정리", "conditions"], caption: "5단계: 부하에 맞춰 늘리고, 이상을 감지해 스스로 고친다. DB 오퍼레이터 중에도 여기까지 가는 건 드물다." },
+  ]}
+/>
+
+단계는 등급표라기보다 체크리스트로 쓰면 좋다. 오퍼레이터를 들이기 전에 "설치만 해 주는가, 업그레이드와 복구까지 맡는가"를 물어보는 데 쓴다. 1단계만 하는 오퍼레이터라면 Helm 차트로 충분한 경우가 많다.
+
+## 만드는 도구들
+
+직접 watch와 작업 큐를 짜는 대신 대부분은 프레임워크를 쓴다. 고르는 기준은 팀이 쓰는 언어와, 오퍼레이터를 얼마나 깊게 만들지다.
+
+kubebuilder는 쿠버네티스 SIG API Machinery 산하 프로젝트로, Go와 controller-runtime 라이브러리 위에서 프로젝트 뼈대를 만들어 준다. Go 구조체에 주석 마커(`+kubebuilder:validation:Minimum=1`)를 달면 CRD의 스키마가 생성되고, informer 캐시, 작업 큐, 리더 선출, 웹훅 서버가 다 들어 있다. 쿠버네티스 생태계의 큰 오퍼레이터 대부분이 이 계열이다.
+
+Operator SDK는 Operator Framework의 도구다. Go 프로젝트는 kubebuilder를 그대로 플러그인으로 쓰고, 그 위에 Helm 차트나 Ansible 플레이북을 감싸 오퍼레이터로 만드는 방식과 OLM(Operator Lifecycle Manager) 배포 묶음을 더한다. 이미 Helm 차트가 있는데 그걸 CR 하나로 관리하고 싶을 때 빠른 길이다. 다만 Helm 기반 오퍼레이터는 앞의 단계로 치면 1~2단계에 머문다.
+
+kopf는 Python 프레임워크다. 함수에 데코레이터를 달면 그 함수가 이벤트 처리기가 된다. 운영팀이 Python에 익숙하고, 오퍼레이터가 작다면 잘 맞는다. 그 밖에 Java(java-operator-sdk), Rust(kube-rs), 그리고 코드 없이 웹훅 하나로 컨트롤러를 만드는 Metacontroller가 있다.
+
+kubebuilder로 같은 일을 하면 reconcile은 대략 이런 모양이 된다. 실행해 보지 않은 예시이고, 흐름만 보려고 줄였다.
+
+```go
+// 예시: kubebuilder(controller-runtime)로 쓴 Backup reconcile의 뼈대
+func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var bk opsv1.Backup
+	if err := r.Get(ctx, req.NamespacedName, &bk); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !bk.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&bk, finalizer) {
+			if err := r.Store.DeleteBucket(ctx, bucketName(&bk)); err != nil {
+				return ctrl.Result{}, err // 지수 백오프로 다시 들어온다
+			}
+			controllerutil.RemoveFinalizer(&bk, finalizer)
+			return ctrl.Result{}, r.Update(ctx, &bk)
+		}
+		return ctrl.Result{}, nil
+	}
+	if controllerutil.AddFinalizer(&bk, finalizer) {
+		return ctrl.Result{}, r.Update(ctx, &bk)
+	}
+	// ... 버킷 PUT, CronJob 만들기(ctrl.SetControllerReference), status 쓰기
+	meta.SetStatusCondition(&bk.Status.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "CronJobReady"})
+	return ctrl.Result{}, r.Status().Update(ctx, &bk)
+}
+
+func (r *BackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&opsv1.Backup{}).
+		Owns(&batchv1.CronJob{}). // CronJob이 바뀌면 주인 Backup을 큐에 넣는다
+		Complete(r)
+}
+```
+
+`Owns`가 눈여겨볼 부분이다. 자식 객체의 변화를 주인의 키로 바꿔 큐에 넣는다. 아래 Node 오퍼레이터도 같은 일을 손으로 한다.
+
+## Node로 만드는 Backup 오퍼레이터
+
+[CRD 글](/posts/k8s-crd)에서 만든 `backups.ops.example.com`(v1)을 그대로 쓴다. 오퍼레이터는 [컨트롤러 글](/posts/k8s-controllers-reconcile)의 informer와 작업 큐를 가져오고, 거기에 세 가지를 더한다. 실패하면 1, 2, 4, 8, 16초로 늘어나는 재시도, 같은 키의 재시도 타이머를 하나만 두는 처리, 그리고 CronJob 이벤트를 주인 `Backup`의 키로 바꾸는 일이다. 인증은 로컬 실습이라 `kubectl proxy`에 맡겼다.
+
+원하는 CronJob은 `Backup`에서 계산한다. 같은 `Backup`이면 몇 번을 계산해도 같은 결과가 나와야 한다.
+
+```js
+function desiredCronJob(bk) {
+  const { name, namespace, uid } = bk.metadata;
+  const s = bk.spec;
+  return {
+    apiVersion: "batch/v1", kind: "CronJob",
+    metadata: {
+      name: `backup-${name}`, namespace,
+      labels: { "app.kubernetes.io/managed-by": MANAGER, "ops.example.com/backup": name },
+      ownerReferences: [{ apiVersion: "ops.example.com/v1", kind: "Backup", name, uid, controller: true, blockOwnerDeletion: true }],
+    },
+    spec: {
+      schedule: s.schedule, suspend: s.suspend, concurrencyPolicy: "Forbid",
+      jobTemplate: { spec: { backoffLimit: 2, template: { spec: {
+        restartPolicy: "Never",
+        containers: [{
+          name: "dump", image: "postgres:16",
+          command: ["sh", "-c", "pg_dump -Fc \"$DB\" | upload \"$BUCKET\" --keep-days \"$RETENTION_DAYS\""],
+          env: [
+            { name: "DB", value: s.database },
+            { name: "BUCKET", value: `s3://backups/${namespace}-${name}` },
+            { name: "RETENTION_DAYS", value: String(s.retentionDays) },
+          ],
+        }],
+      } } } },
+    },
+  };
+}
+```
+
+reconcile은 다섯 단계를 위에서부터 차례로 본다. 지우는 중인가, finalizer가 있나, 바깥 자원이 있나, CronJob이 원하는 모양인가, status가 맞나. 앞 단계에서 무언가 바꿨으면 그 변경이 이벤트가 되어 다시 들어오니 거기서 끝낸다.
+
+```js
+async function reconcile(key) {
+  const [ns, name] = key.split("/");
+  const base = `/apis/ops.example.com/v1/namespaces/${ns}/backups/${name}`;
+  const got = await req("GET", base);
+  if (got.status === 404) { log(`reconcile ${key}: 없음, 할 일 없음`); return; }
+  const bk = got.json;
+  const fins = bk.metadata.finalizers ?? [];
+
+  // 1) 지우는 중이면: CronJob을 멈추고, 바깥 자원을 정리하고, finalizer를 뗀다
+  if (bk.metadata.deletionTimestamp) {
+    if (!fins.includes(FINALIZER)) return;
+    await req("PATCH", `/apis/batch/v1/namespaces/${ns}/cronjobs/backup-${name}`,
+      { spec: { suspend: true } }, "application/merge-patch+json");
+    const d = await fetch(`${STORE}/buckets/${ns}-${name}`, { method: "DELETE" });
+    if (d.status !== 204 && d.status !== 404) throw new Error(`버킷 삭제 실패 ${d.status}`);
+    await req("PATCH", base, [
+      { op: "test", path: "/metadata/resourceVersion", value: bk.metadata.resourceVersion },
+      { op: "replace", path: "/metadata/finalizers", value: fins.filter((f) => f !== FINALIZER) },
+    ], "application/json-patch+json");
+    return;
+  }
+  // 2) finalizer부터 단다. 바깥 자원을 만들기 전에
+  if (!fins.includes(FINALIZER)) {
+    await req("PATCH", base, [
+      { op: "test", path: "/metadata/resourceVersion", value: bk.metadata.resourceVersion },
+      { op: "add", path: "/metadata/finalizers", value: [...fins, FINALIZER] },
+    ], "application/json-patch+json");
+    return;
+  }
+  // 3) 바깥 자원. PUT은 몇 번을 불러도 결과가 같다
+  const p = await fetch(`${STORE}/buckets/${ns}-${name}`, { method: "PUT" });
+  if (p.status >= 300) {
+    await setCondition(bk, { type: "Ready", status: "False", reason: "BucketUnavailable", message: `저장소 응답 ${p.status}` }, "Error");
+    throw new Error(`버킷 준비 실패 ${p.status}`);
+  }
+  // 4) CronJob은 서버 쪽 apply로 원하는 모양을 통째로 보낸다
+  const cj = desiredCronJob(bk);
+  await req("PATCH", `/apis/batch/v1/namespaces/${ns}/cronjobs/${cj.metadata.name}?fieldManager=${MANAGER}&force=true`,
+    cj, "application/apply-patch+yaml");
+  // 5) status는 /status로
+  await setCondition(bk, { type: "Ready", status: "True", reason: "CronJobReady", message: `cronjob/${cj.metadata.name}` },
+    bk.spec.suspend ? "Suspended" : "Scheduled");
+}
+```
+
+로그를 찍는 줄은 빼고 실었다. CronJob 이벤트를 주인 키로 바꾸는 부분은 두 줄이다. 라벨에 주인 이름을 적어 두었으니 그걸 읽는다.
+
+```js
+informer("/apis/ops.example.com/v1/backups", (type, bk) => enqueue(`${bk.metadata.namespace}/${bk.metadata.name}`, `Backup ${type}`));
+informer("/apis/batch/v1/cronjobs?labelSelector=app.kubernetes.io%2Fmanaged-by%3Dbackup-operator", (type, cj) => {
+  if (type === "SYNC" || type === "ADDED") return;
+  enqueue(`${cj.metadata.namespace}/${cj.metadata.labels["ops.example.com/backup"]}`, `CronJob ${type}`);
+});
+```
+
+CronJob을 만들거나 고칠 때 GET 후 비교하지 않고 서버 쪽 apply(SSA)를 쓴 이유가 있다. 원하는 모양 전체를 보내면 API 서버가 "이 필드의 주인은 backup-operator"라고 기록하고, 바뀐 게 없으면 resourceVersion도 그대로 둔다. 비교 코드를 짤 필요가 없고 몇 번을 보내도 같다. 요청 한 줄을 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="오퍼레이터가 CronJob을 맞출 때 보내는 요청"
+  base="PATCH /apis/batch/v1/namespaces/shop/cronjobs/backup-orders-db"
+  params={[
+    { key: "fieldManager", value: "backup-operator", title: "필드 주인 이름", description: "이 요청이 보낸 필드의 주인으로 기록된다. 다른 주인이 같은 필드를 가지고 있으면 충돌이 난다.", required: true },
+    { key: "force", value: "true", title: "충돌하면 빼앗는다", description: "누가 kubectl로 schedule을 고쳤어도 그 필드의 주인을 오퍼레이터로 되돌린다. 컨트롤러는 보통 force를 켠다. 사람이 쓰는 apply에서는 끄는 게 안전하다." },
+    { key: "Content-Type", value: "application/apply-patch+yaml", display: "Content-Type: apply-patch+yaml", title: "서버 쪽 apply라는 표시", description: "본문은 JSON이어도 된다. 이 타입이어야 merge patch가 아니라 apply로 처리된다. 없는 객체면 만든다.", code: "{\"apiVersion\":\"batch/v1\",\"kind\":\"CronJob\",\"metadata\":{...},\"spec\":{...}}" },
+  ]}
+/>
+
+SSA가 남의 필드를 어떻게 다루는지는 [kubectl apply 글](/posts/kubectl-apply-ssa)에 자세히 있다.
+
+## 돌려 보기: 만들고, 바꾸고, 되돌리기
+
+```bash
+# 저장소 흉내 서버, 프록시, 오퍼레이터를 띄운다
+node storage.mjs &
+kubectl proxy --port=18311 &
+node backup-operator.mjs
+# 다른 창에서 Backup을 만든다
+kubectl apply -f orders-db.yaml
+```
+
+```text
+01:25:52 backup-operator 시작
+01:25:53 queue + shop/orders-db (Backup ADDED)
+01:25:53 reconcile shop/orders-db: gen=1 schedule="0 3 * * *" deleting=false
+01:25:53 queue + shop/orders-db (Backup MODIFIED)
+01:25:53   finalizer 추가 -> 200
+01:25:53 reconcile shop/orders-db: gen=1 schedule="0 3 * * *" deleting=false
+01:25:53   apply cronjob/backup-orders-db -> 201 rv=1526
+01:25:53 queue + shop/orders-db (Backup MODIFIED)
+01:25:53   status Scheduled Ready=True (CronJobReady) gen=1 -> 200
+01:25:53 reconcile shop/orders-db: gen=1 schedule="0 3 * * *" deleting=false
+01:25:53   apply cronjob/backup-orders-db -> 200 rv=1526
+```
+
+reconcile이 세 번 돈다. 첫 번째는 finalizer만 달고 끝났다. 그 변경이 MODIFIED로 돌아와 두 번째가 CronJob을 만들고(201) status를 썼다. status 변경이 또 MODIFIED로 돌아와 세 번째가 돌았지만, apply는 200에 resourceVersion이 1526 그대로고 status도 같아서 쓰지 않았다. 자기가 쓴 것 때문에 다시 깨어나는 건 정상이다. 그때 아무것도 바꾸지 않아야 루프가 멈춘다. 매번 `lastTransitionTime`을 새 시각으로 쓰는 오퍼레이터는 status 쓰기가 이벤트를 부르고 그 이벤트가 또 status를 쓰는 고리에 빠진다.
+
+아래 그림에서 다음을 누르면 첫 생성 때 요청이 어디를 지나는지 따라간다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="오퍼레이터는 바깥 저장소와 API 서버 사이에서 일한다. CronJob에서 Job을 만드는 건 내장 컨트롤러다"
+  zones={[
+    { id: "cp", label: "cluster", x: 6, y: 6, w: 388, h: 196, tone: "private" },
+    { id: "out", label: "outside", x: 6, y: 214, w: 388, h: 80, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "kubectl", sub: "apply", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "api", label: "apiserver", sub: "v1.37.0", x: 200, y: 60, icon: "server", w: 104 },
+    { id: "op", label: "operator", sub: "backup", x: 334, y: 60, icon: "gateway", w: 96 },
+    { id: "cjc", label: "cronjob ctl", sub: "kcm", x: 200, y: 150, icon: "gateway", w: 104 },
+    { id: "etcd", label: "etcd", x: 66, y: 150, icon: "db", w: 96 },
+    { id: "store", label: "storage", sub: ":18200", x: 334, y: 264, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "op", dashed: true, label: "watch" },
+    { from: "op", to: "store" },
+    { from: "api", to: "etcd" },
+    { from: "cjc", to: "api", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "api", "etcd"], packet: "Backup", title: "Backup이 저장된다", detail: "스키마 검사와 기본값 채우기를 지나 etcd에 들어간다. 이 순간엔 아무 리소스도 없다." },
+    { path: ["api", "op"], packet: "ADDED", title: "watch로 오퍼레이터가 깨어난다", detail: "키 shop/orders-db가 큐에 들어간다. 오퍼레이터는 이벤트 내용이 아니라 키만 쓴다." },
+    { path: ["op", "api", "etcd"], packet: "fin", title: "finalizer를 먼저 단다", detail: "바깥 자원을 만들기 전에 단다. 반대로 하면 그 사이에 지워진 Backup의 버킷을 아무도 치우지 않는다.", payload: "ops.example.com/bucket-cleanup" },
+    { path: ["op", "store"], packet: "PUT", title: "저장소 경로를 만든다", detail: "이미 있으면 200, 없으면 201이다. 몇 번을 불러도 결과가 같은 요청만 쓴다." },
+    { path: ["op", "api", "etcd"], packet: "apply", title: "CronJob을 서버 쪽 apply로 맞춘다", detail: "ownerReferences에 Backup을 주인으로 적는다. 그다음 /status에 Ready=True를 쓴다." },
+    { path: ["cjc", "api", "etcd"], packet: "Job", title: "Job은 CronJob 컨트롤러가 만든다", detail: "오퍼레이터는 Job을 모른다. 일을 내장 컨트롤러에 넘기면 오퍼레이터 코드가 작아진다." },
+  ]}
+/>
+
+이제 spec을 바꾸고, 누군가 CronJob을 손으로 고친 상황을 만든다.
+
+```bash
+# 매분 돌게 바꾸고 보관 기간을 늘린다
+kubectl patch bk orders-db -n shop --type=merge -p '{"spec":{"schedule":"*/1 * * * *","retentionDays":14}}'
+# 누군가 CronJob을 직접 고친다
+kubectl patch cronjob backup-orders-db -n shop --type=merge -p '{"spec":{"schedule":"0 12 * * *"}}'
+kubectl get cronjob -n shop
+```
+
+```text
+01:25:56 queue + shop/orders-db (Backup MODIFIED)
+01:25:56 reconcile shop/orders-db: gen=2 schedule="*/1 * * * *" deleting=false
+01:25:56 queue + shop/orders-db (CronJob MODIFIED)
+01:25:56   apply cronjob/backup-orders-db -> 200 rv=1535
+01:25:57   status Scheduled Ready=True (CronJobReady) gen=2 -> 200
+01:25:57 reconcile shop/orders-db: gen=2 schedule="*/1 * * * *" deleting=false
+01:25:57   apply cronjob/backup-orders-db -> 200 rv=1535
+01:25:58 queue + shop/orders-db (CronJob MODIFIED)
+01:25:58 reconcile shop/orders-db: gen=2 schedule="*/1 * * * *" deleting=false
+01:25:58 queue + shop/orders-db (CronJob MODIFIED)
+01:25:58   apply cronjob/backup-orders-db -> 200 rv=1540
+NAME               SCHEDULE      TIMEZONE   SUSPEND   ACTIVE   LAST SCHEDULE   AGE
+backup-orders-db   */1 * * * *   <none>     False     1        0s              7s
+```
+
+01:25:58에 누군가 `0 12 * * *`로 바꾼 CronJob이 1초도 안 돼 `*/1 * * * *`로 돌아왔다. CronJob의 MODIFIED 이벤트가 주인 키로 들어갔고, reconcile이 원하는 모양을 force로 다시 apply했다. 이게 오퍼레이터를 쓰는 팀에서 자주 듣는 불평 "CronJob을 고쳤는데 자꾸 돌아간다"의 정체다. 오퍼레이터가 만든 리소스는 오퍼레이터의 CR로 고친다. 잠깐 손으로 바꿔야 한다면 오퍼레이터가 지원하는 일시 정지 표시(보통 어노테이션)를 쓰거나 오퍼레이터를 내린다.
+
+몇 초 뒤 CronJob 컨트롤러가 진짜 Job을 만들었고, status에는 반영된 generation이 남았다.
+
+```text
+NAME                                  STATUS     COMPLETIONS   DURATION   AGE
+job.batch/backup-orders-db-29875766   Complete   1/1           1s         12s
+{"conditions":[{"lastTransitionTime":"2026-10-21T01:25:53Z","message":"cronjob/backup-orders-db","reason":"CronJobReady","status":"True","type":"Ready"}],"observedGeneration":2,"phase":"Scheduled"}
+```
+
+Job 이름의 숫자 29875766은 예정 시각을 분 단위 유닉스 시간으로 쓴 것이다(29875766 × 60초 = 2026-10-21T01:26:00Z). `observedGeneration: 2`는 spec 변경까지 반영됐다는 뜻이고, `lastTransitionTime`이 처음 01:25:53 그대로인 것은 Ready가 True에서 True로 바뀌지 않았기 때문이다.
+
+## status.conditions는 기계와 사람이 함께 읽는다
+
+오퍼레이터의 상태를 `phase` 한 칸에만 담으면 금방 막힌다. "준비됐지만 마지막 백업은 실패", "설정은 반영됐지만 저장소가 느림" 같은 상태를 한 단어로 못 쓴다. 쿠버네티스 API 관례는 `conditions` 목록을 쓴다. 조건마다 `type`(Ready, Degraded 등), `status`(True, False, Unknown), 기계가 읽는 `reason`(CamelCase 한 단어), 사람이 읽는 `message`, 그 상태로 바뀐 시각 `lastTransitionTime`, 몇 번째 spec을 보고 쓴 것인지 `observedGeneration`을 둔다.
+
+저장소를 내려 둔 채로 `Backup`을 만들어 봤다.
+
+```bash
+# 저장소가 503을 내는 상태에서 Backup을 만든다
+kubectl apply -f audit-db.yaml
+kubectl get bk -n shop
+kubectl get bk audit-db -n shop -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason} {.message} {.lastTransitionTime}{"\n"}{end}'
+# 저장소를 살리고 Ready가 될 때까지 기다린다
+kubectl wait --for=condition=Ready bk/audit-db -n shop --timeout=5s
+```
+
+```text
+NAME       DATABASE   SCHEDULE    PHASE   LAST   AGE
+audit-db   audit      0 3 * * *   Error          4s
+Ready=False BucketUnavailable 저장소 응답 503 2026-10-21T01:27:27Z
+NAME       DATABASE   SCHEDULE    PHASE       LAST   AGE
+audit-db   audit      0 3 * * *   Scheduled          14s
+Ready=True CronJobReady cronjob/backup-audit-db 2026-10-21T01:27:33Z
+backup.ops.example.com/audit-db condition met
+```
+
+`kubectl wait --for=condition=Ready`가 그대로 동작한다. 조건 관례를 따르면 kubectl, ArgoCD의 상태 판정, 배포 파이프라인이 이 CR을 특별 대우 없이 읽는다. CI에서 "Backup이 준비될 때까지 기다린다"를 한 줄로 쓸 수 있다. 오퍼레이터 로그에는 1, 2, 4초 간격 재시도가 찍혔고 세 번째 재시도에서 저장소가 살아나 CronJob이 만들어졌다.
+
+조건을 고치는 규칙은 하나다. 같은 type의 status가 바뀔 때만 `lastTransitionTime`을 새 시각으로 쓴다. reason이나 message만 바뀌면 시각은 그대로 둔다. controller-runtime의 `meta.SetStatusCondition`이 이 일을 한다. 직접 짜 보면 아래와 같다.
+
+<CodePlayground
+  caption="조건 목록에 조건 하나 넣기"
+  functionName="setCondition"
+  initialCode={`function setCondition(conditions, cond, now) {
+  // conditions: [{ type, status, reason, lastTransitionTime }]
+  // 같은 type이 있으면 바꾸고, 없으면 끝에 붙인다.
+  // status가 그대로면 lastTransitionTime도 그대로 둔다.
+  // 결과 칸 순서: type, status, reason, lastTransitionTime
+  return conditions;
+}`}
+  solution={`function setCondition(conditions, cond, now) {
+  const out = conditions.map((c) => ({ ...c }));
+  const i = out.findIndex((c) => c.type === cond.type);
+  if (i < 0) {
+    out.push({ ...cond, lastTransitionTime: now });
+    return out;
+  }
+  const prev = out[i];
+  out[i] = {
+    ...cond,
+    lastTransitionTime: prev.status === cond.status ? prev.lastTransitionTime : now,
+  };
+  return out;
+}`}
+  tests={[
+    { label: "처음 넣기", args: [[], { type: "Ready", status: "True", reason: "CronJobReady" }, "2026-10-21T01:25:53Z"], expected: [{ type: "Ready", status: "True", reason: "CronJobReady", lastTransitionTime: "2026-10-21T01:25:53Z" }] },
+    { label: "reason만 바뀜", args: [[{ type: "Ready", status: "True", reason: "CronJobReady", lastTransitionTime: "2026-10-21T01:25:53Z" }], { type: "Ready", status: "True", reason: "CronJobUpdated" }, "2026-10-21T01:40:00Z"], expected: [{ type: "Ready", status: "True", reason: "CronJobUpdated", lastTransitionTime: "2026-10-21T01:25:53Z" }] },
+    { label: "status가 바뀜", args: [[{ type: "Ready", status: "True", reason: "CronJobReady", lastTransitionTime: "2026-10-21T01:25:53Z" }], { type: "Ready", status: "False", reason: "BucketUnavailable" }, "2026-10-21T01:40:00Z"], expected: [{ type: "Ready", status: "False", reason: "BucketUnavailable", lastTransitionTime: "2026-10-21T01:40:00Z" }] },
+    { label: "다른 type 추가", args: [[{ type: "Ready", status: "True", reason: "CronJobReady", lastTransitionTime: "2026-10-21T01:25:53Z" }], { type: "Degraded", status: "False", reason: "AsExpected" }, "2026-10-21T01:40:00Z"], expected: [{ type: "Ready", status: "True", reason: "CronJobReady", lastTransitionTime: "2026-10-21T01:25:53Z" }, { type: "Degraded", status: "False", reason: "AsExpected", lastTransitionTime: "2026-10-21T01:40:00Z" }] },
+  ]}
+/>
+
+## 지울 때는 바깥부터 치운다, finalizer
+
+`Backup`을 지우면 API 서버는 바로 지우지 않는다. finalizer가 남아 있으니 `deletionTimestamp`만 찍고 기다린다. 오퍼레이터는 이 표시를 보고 바깥 자원을 치운 다음 자기 finalizer를 뗀다. 정리가 실패하면 떼지 않고 다시 시도한다. 저장소를 내려 둔 채로 지워 봤다.
+
+```bash
+# 저장소가 503을 내는 상태에서 Backup을 지운다 (기다리지 않는다)
+kubectl delete bk orders-db -n shop --wait=false
+kubectl get bk orders-db -n shop -o jsonpath='deletionTimestamp={.metadata.deletionTimestamp} finalizers={.metadata.finalizers}'
+kubectl get bk,cronjob -n shop
+```
+
+```text
+backup.ops.example.com "orders-db" deleted from shop namespace
+deletionTimestamp=2026-10-21T01:26:18Z finalizers=["ops.example.com/bucket-cleanup"]
+NAME                               DATABASE   SCHEDULE      PHASE       LAST   AGE
+backup.ops.example.com/orders-db   orders     */1 * * * *   Scheduled          34s
+
+NAME                             SCHEDULE      TIMEZONE   SUSPEND   ACTIVE   LAST SCHEDULE   AGE
+cronjob.batch/backup-orders-db   */1 * * * *   <none>     True      0        27s             34s
+```
+
+kubectl은 `deleted`라고 말했지만 객체는 남아 있다. 그리고 CR의 `kubectl get` 출력에는 Pod처럼 `Terminating`이 따로 나오지 않는다. `deletionTimestamp`를 직접 봐야 지우는 중인지 안다. 오퍼레이터 로그는 이렇다.
+
+```text
+01:26:18 queue + shop/orders-db (Backup MODIFIED)
+01:26:18 reconcile shop/orders-db: gen=3 schedule="*/1 * * * *" deleting=true
+01:26:18 queue + shop/orders-db (CronJob MODIFIED)
+01:26:18   cronjob/backup-orders-db suspend
+01:26:18   실패(1번째): 버킷 삭제 실패 503 -> 1s 뒤 다시
+01:26:18 reconcile shop/orders-db: gen=3 schedule="*/1 * * * *" deleting=true
+01:26:18   cronjob/backup-orders-db suspend
+01:26:18   실패(2번째): 버킷 삭제 실패 503 -> 2s 뒤 다시
+01:26:20 queue + shop/orders-db (retry)
+01:26:20   실패(3번째): 버킷 삭제 실패 503 -> 4s 뒤 다시
+01:26:24 queue + shop/orders-db (retry)
+01:26:24   실패(4번째): 버킷 삭제 실패 503 -> 8s 뒤 다시
+01:26:32 queue + shop/orders-db (retry)
+01:26:32   cronjob/backup-orders-db suspend
+01:26:32   버킷 shop-orders-db 정리 -> 204
+01:26:32 queue + shop/orders-db (Backup DELETED)
+01:26:32   finalizer 제거 -> 200
+01:26:32 queue + shop/orders-db (CronJob DELETED)
+01:26:32 reconcile shop/orders-db: 없음, 할 일 없음
+```
+
+(가운데 reconcile 줄 몇 개는 줄였다.) 볼 곳이 셋 있다. `gen=3`이다. CR은 `deletionTimestamp`가 찍힐 때 generation이 하나 오른다. 지우는 동안 첫 동작이 CronJob을 멈추는 것이다. 정리하는 사이에도 매분 백업이 돌면 지우는 버킷에 새 파일이 생긴다. 위 CronJob 목록의 SUSPEND가 이미 True인 게 그 결과다. 마지막으로 01:26:32에 저장소가 살아나자 정리하고 finalizer를 뗐고, 그 즉시 `Backup`이 사라졌으며 CronJob은 가비지 컬렉터가 지웠다(`CronJob DELETED`).
+
+아래 그림에서 다음을 누르면 이 삭제 과정을 순서대로 본다.
+
+<SequenceDiagram
+  caption="finalizer가 있으면 삭제는 표시와 정리, 떼기의 세 단계가 된다"
+  actors={[
+    { id: "user", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "op", label: "operator" },
+    { id: "store", label: "저장소" },
+    { id: "gc", label: "GC" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "DELETE", title: "지우라고 한다", detail: "finalizer가 있으니 API 서버는 deletionTimestamp만 찍는다. 객체는 그대로 있다." },
+    { from: "api", to: "op", label: "MODIFIED", title: "오퍼레이터가 표시를 본다", detail: "deletionTimestamp가 있으면 만들기 대신 정리 경로로 간다. generation이 3으로 올랐다." },
+    { from: "op", to: "api", label: "suspend", title: "CronJob부터 멈춘다", detail: "정리하는 동안 새 백업이 돌지 않게 한다." },
+    { from: "op", to: "store", label: "DELETE 503", title: "정리가 실패한다", detail: "finalizer를 떼지 않고 1, 2, 4, 8초 간격으로 다시 시도한다. 그동안 Backup은 지워지는 중으로 남는다." },
+    { from: "op", to: "store", label: "DELETE 204", title: "저장소가 살아나 정리된다", detail: "404도 성공으로 본다. 이미 지워진 걸 다시 지우는 건 멱등이어야 한다." },
+    { from: "op", to: "api", label: "finalizer 제거", title: "finalizer를 뗀다", detail: "resourceVersion test를 붙인 JSON patch라 그사이 다른 쓰기가 있었다면 실패하고 다시 읽는다." },
+    { from: "gc", to: "api", label: "DELETE CronJob", title: "자식은 가비지 컬렉터가 지운다", detail: "ownerReferences에 Backup이 주인으로 있으니 주인이 사라지면 함께 지운다." },
+  ]}
+/>
+
+finalizer를 다는 순서도 중요하다. 이 오퍼레이터는 버킷을 만들기 전에 finalizer부터 단다. 반대로 하면 "버킷을 만들고 finalizer를 달기 전" 짧은 틈에 `Backup`이 지워졌을 때 버킷을 치울 기회가 없다.
+
+## 오퍼레이터가 멈춘 채로 지우면
+
+오퍼레이터가 없는 상태에서 `Backup`을 지우면 아무도 finalizer를 떼지 않는다. 이걸 손으로 떼면 어떻게 되는지 봤다.
+
+```bash
+# 오퍼레이터를 끈 채로 지운다. 5초만 기다린다
+kubectl delete bk users-db -n shop --timeout=5s
+kubectl get bk -n shop
+# finalizer를 손으로 뗀다 (마지막 수단)
+kubectl patch bk users-db -n shop --type=merge -p '{"metadata":{"finalizers":null}}'
+kubectl get bk,cronjob -n shop
+# 저장소에 남은 경로
+curl -s 127.0.0.1:18200/buckets
+```
+
+```text
+backup.ops.example.com "users-db" deleted from shop namespace
+error: timed out waiting for the condition on backups/users-db
+NAME       DATABASE   SCHEDULE    PHASE       LAST   AGE
+users-db   users      0 3 * * *   Scheduled          8s
+backup.ops.example.com/users-db patched
+No resources found in shop namespace.
+["shop-users-db"]
+```
+
+클러스터 안은 깨끗해졌다. CronJob도 가비지 컬렉터가 지웠다. 저장소의 `shop-users-db`만 남았다. 처음 장면의 "주인 모를 백업 폴더"가 이렇게 생긴다. 아래 그림의 마지막 단계가 그 모습이다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="finalizer를 손으로 떼면 클러스터 안은 정리되지만 바깥 자원은 고아가 된다"
+  zones={[
+    { id: "cp", label: "cluster", x: 6, y: 6, w: 388, h: 150, tone: "private" },
+    { id: "out", label: "outside", x: 6, y: 164, w: 388, h: 82, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "kubectl", sub: "delete", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "api", label: "apiserver", sub: "users-db", x: 200, y: 60, icon: "server", w: 104 },
+    { id: "op", label: "operator", sub: "멈춤", x: 334, y: 60, icon: "gateway", w: 96 },
+    { id: "gc", label: "garbage col", sub: "kcm", x: 200, y: 120, icon: "gateway", w: 112 },
+    { id: "store", label: "storage", sub: "shop-users-db", x: 334, y: 214, icon: "db", w: 112 },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "op", dashed: true },
+    { from: "op", to: "store" },
+    { from: "gc", to: "api", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "api"], packet: "DELETE", title: "지우라고 한다", detail: "deletionTimestamp가 찍히고 finalizer가 남는다. kubectl은 5초를 기다리다 시간 초과로 끝난다." },
+    { path: ["api", "op"], packet: "watch", blocked: true, title: "아무도 받지 않는다", detail: "오퍼레이터가 꺼져 있다. 이벤트는 쌓이지 않고 지나가지만, 다시 켜지면 목록을 받아 정리할 수 있다." },
+    { path: ["user", "api"], packet: "fin=null", title: "finalizer를 손으로 뗀다", detail: "API 서버가 바로 객체를 지운다. 그 결과 오퍼레이터가 다시 켜져도 정리할 대상이 없다." },
+    { path: ["gc", "api"], packet: "CronJob", title: "자식은 지워진다", detail: "ownerReferences로 묶인 CronJob은 가비지 컬렉터가 지운다." },
+    { path: ["store"], packet: "orphan", highlight: ["out"], title: "바깥 자원은 남는다", detail: "저장소의 shop-users-db는 아무도 지우지 않는다. 비용과 보안 문제로 돌아온다." },
+  ]}
+/>
+
+그래서 `Terminating`에 멈춘 객체를 만나면 finalizer부터 떼지 말고 그 finalizer의 주인부터 찾는다. 이름(`ops.example.com/bucket-cleanup`)에 주인이 드러나게 짓는 이유다. 주인 오퍼레이터를 다시 살리면 목록을 받는 순간 `deletionTimestamp`가 찍힌 객체를 보고 정리를 끝낸다. 오퍼레이터를 영영 지울 거라면 바깥 자원을 손으로 치운 뒤에 finalizer를 뗀다. 네임스페이스 삭제가 멈추는 흔한 원인도 이것이다([네임스페이스 글](/posts/k8s-namespace)).
+
+## 클러스터에 올릴 때 챙길 것
+
+실습은 `kubectl proxy`의 관리자 권한으로 돌았다. 클러스터 안에 Deployment로 올리면 ServiceAccount에 필요한 권한만 준다. finalizer를 달고 떼려면 `backups`에 patch가, status를 쓰려면 `backups/status`가 따로 필요하다([RBAC 글](/posts/k8s-rbac)).
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-operator
+rules:
+  - apiGroups: ["ops.example.com"]
+    resources: ["backups"]
+    verbs: ["get", "list", "watch", "patch", "update"]   # finalizer를 달고 떼려면 patch
+  - apiGroups: ["ops.example.com"]
+    resources: ["backups/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]                                # 리더 선출
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+```
+
+`kubectl apply --dry-run=server`로 실습 클러스터에 보내 형식을 확인했다(`clusterrole.rbac.authorization.k8s.io/backup-operator created (server dry run)`). 그 밖에 챙길 것들이 있다. 복제본을 둘 이상 두면 Lease로 리더를 뽑아 하나만 일하게 한다. 클러스터 전체를 watch하면 메모리가 객체 수만큼 늘어나니, 라벨 셀렉터로 필요한 것만 캐시에 담는다(위 코드는 `managed-by` 라벨로 CronJob을 걸렀다). 오퍼레이터 Pod가 죽어 있는 동안에도 CR 생성은 막히지 않으니, 오퍼레이터의 상태를 알림으로 따로 본다. 변환 웹훅이나 검증 웹훅을 같은 Pod에 넣었다면 오퍼레이터 장애가 API 요청 실패로 번진다([CRD 글](/posts/k8s-crd)의 변환 웹훅 절).
+
+## 오퍼레이터를 만들지 말아야 할 때
+
+오퍼레이터는 코드다. 테스트하고, 버전을 올리고, 장애 때 깨어나 고쳐야 하는 코드가 클러스터 안에서 높은 권한으로 돈다. 그만한 값을 하는지 먼저 따진다.
+
+배포할 리소스 묶음을 값에 따라 찍어 내는 게 전부라면 Helm 차트나 Kustomize가 맞다. 만든 뒤에 계속 지켜보며 판단할 일이 없으면 컨트롤러가 필요 없다. 앞의 단계로 치면 1단계다.
+
+이미 잘 만든 오퍼레이터가 있는 소프트웨어(PostgreSQL의 CloudNativePG, Kafka의 Strimzi, 인증서의 cert-manager)라면 직접 만들지 않는다. DB 장애 조치 같은 일은 엣지 케이스가 끝이 없어서, 여러 회사가 몇 년씩 다듬은 코드를 따라가기 어렵다.
+
+운영 절차가 한 달에 한 번, 사람이 판단해야 하는 일이라면 런북과 스크립트가 낫다. 드물고 위험한 일을 자동화하면 그 코드가 도는 순간이 가장 위험한 순간이 된다.
+
+반대로 오퍼레이터가 값을 하는 경우는 이렇다. 같은 절차를 수십 번 반복하고, 클러스터 밖 자원과 수명을 맞춰야 하고, 만든 뒤에도 drift를 바로잡아야 할 때다. 이 글의 `Backup`이 그 예다. 그리고 오퍼레이터를 만들 팀이 그 코드의 주인으로 계속 남을 수 있어야 한다.
+
+## 오퍼레이터 때문에 막히는 순간
+
+손으로 고친 리소스가 자꾸 돌아가면 그 리소스의 `ownerReferences`와 `managedFields`의 manager를 본다. 오퍼레이터가 주인이면 CR에서 고친다. 이 실습에서도 `kubectl get cronjob backup-orders-db --show-managed-fields`의 manager가 `backup-operator`(Apply) 하나만 남았다. 손으로 고친 kubectl의 필드를 force로 가져갔기 때문이다.
+
+CR을 만들었는데 아무 일도 안 일어나면 `status.observedGeneration`이 `metadata.generation`을 따라왔는지 본다. 따라오지 않았으면 오퍼레이터가 이 객체를 못 봤다. 오퍼레이터 Pod 로그, 그 Pod가 보는 네임스페이스 범위(`WATCH_NAMESPACE` 같은 설정), RBAC 거절(`forbidden`)을 차례로 본다.
+
+status가 계속 바뀌고 API 서버 요청이 많으면 status 쓰기가 자기 자신을 깨우는 고리를 의심한다. 매번 시각을 새로 쓰거나 목록 순서를 바꿔 쓰는 오퍼레이터에서 생긴다. `kubectl get bk -w`로 resourceVersion이 쉬지 않고 오르는지 본다.
+
+지운 CR이 사라지지 않으면 finalizer의 주인 오퍼레이터가 살아 있는지, 로그에 정리 실패가 반복되는지 본다. 앞 절처럼 손으로 떼는 건 바깥 자원을 치운 뒤에 한다.
+
+## 오퍼레이터는 CRD, 컨트롤러, 그리고 절차다
+
+오퍼레이터는 CRD로 사용자가 쓸 문서를 정하고, 컨트롤러로 그 문서를 계속 맞추고, 그 안에 사람이 하던 운영 절차를 담은 것이다. 만들 때 지킬 것은 몇 개 안 된다. reconcile은 몇 번 돌아도 같은 결과를 내고, 클러스터 안 자식은 ownerReferences로, 바깥 자원은 finalizer로 정리하고, 상태는 conditions와 observedGeneration으로 알린다. 그리고 Helm 차트로 끝날 일에 오퍼레이터를 만들지 않는다. 이 시리즈의 다음 글은 API 서버 자체를 넓히는 다른 방법, [API 집계와 스케줄러](/posts/k8s-api-aggregation-schedulers)다.
+
+## 면접에서 나올 만한 질문
+
+### 오퍼레이터와 컨트롤러는 무엇이 다른가요?
+
+구조는 같고 담는 내용이 다르다. 둘 다 watch로 객체를 보고 원하는 상태에 맞추는 루프다. 오퍼레이터는 CRD로 특정 소프트웨어용 종류를 만들고, 그 소프트웨어를 운영하는 사람이 알던 절차(백업, 업그레이드 순서, 장애 조치)를 컨트롤러 코드에 담은 것을 말한다. ReplicaSet 컨트롤러처럼 일반적인 일을 하는 건 보통 오퍼레이터라고 부르지 않는다.
+
+### finalizer는 언제 쓰고, ownerReferences와 무엇이 다른가요?
+
+클러스터 안 자식 객체는 ownerReferences로 묶어 두면 가비지 컬렉터가 함께 지운다. 클러스터 밖 자원(버킷, DNS 레코드, 클라우드 디스크)은 가비지 컬렉터가 모르니 finalizer를 달고, 삭제 표시(deletionTimestamp)를 본 오퍼레이터가 바깥 자원을 지운 뒤 finalizer를 뗀다. finalizer는 바깥 자원을 만들기 전에 달아야 틈이 없다.
+
+### CR이 Terminating에서 멈췄습니다. 어떻게 하나요?
+
+finalizer를 바로 떼지 않고 그 finalizer의 주인 오퍼레이터부터 찾는다. 오퍼레이터가 살아 있으면 로그에서 정리가 왜 실패하는지 보고, 죽어 있으면 다시 띄워서 정리를 끝내게 한다. 손으로 떼면 객체는 사라지지만 오퍼레이터가 치우려던 바깥 자원이 고아로 남는다. 실습에서도 finalizer를 떼자 저장소 경로가 그대로 남았다.
+
+### reconcile을 멱등하게 만든다는 건 구체적으로 무엇인가요?
+
+같은 입력으로 몇 번을 돌려도 결과가 같고, 바꿀 게 없으면 아무것도 쓰지 않는다는 뜻이다. 바깥 자원은 PUT처럼 다시 불러도 같은 요청을 쓰고, 자식 객체는 서버 쪽 apply로 원하는 모양을 통째로 보내면 바뀐 게 없을 때 resourceVersion도 그대로다. status는 값이 같으면 쓰지 않고 lastTransitionTime은 status가 바뀔 때만 고친다. 이걸 어기면 자기가 쓴 변경에 다시 깨어나는 고리가 생긴다.
+
+### status에 phase 하나 대신 conditions를 쓰는 이유는요?
+
+상태는 여러 축이 동시에 있어서 한 단어로 못 담기 때문이다. Ready, Degraded처럼 type별로 True/False/Unknown과 reason, message, 바뀐 시각을 두면 kubectl wait, ArgoCD, CI가 같은 규칙으로 읽는다. observedGeneration을 함께 두면 이 상태가 최신 spec을 보고 쓴 것인지도 알 수 있다.
+
+### kubebuilder, Operator SDK, kopf는 어떻게 고르나요?
+
+Go로 깊은 오퍼레이터를 만들면 kubebuilder(controller-runtime)가 표준에 가깝다. 스키마 생성, 캐시, 리더 선출, 웹훅이 다 들어 있다. Operator SDK는 Go 쪽은 kubebuilder를 쓰고 Helm 차트나 Ansible을 감싸는 방식과 OLM 배포를 더한다. Python 팀의 작은 오퍼레이터라면 kopf가 빠르다.
+
+### 오퍼레이터를 만들지 말아야 할 때는 언제인가요?
+
+만든 뒤에 계속 판단할 일이 없고 리소스를 찍어 내는 게 전부면 Helm이나 Kustomize로 충분하다. 성숙한 오퍼레이터가 이미 있는 소프트웨어는 직접 만들지 않는다. 드물고 사람이 판단해야 하는 절차는 런북이 낫다. 오퍼레이터는 높은 권한으로 도는 코드라 그 코드를 계속 맡을 팀이 있을 때만 만든다.
+
+### 오퍼레이터가 만든 CronJob을 손으로 고쳤더니 되돌아갑니다. 왜인가요?
+
+오퍼레이터가 CronJob 변경 이벤트를 주인 CR의 키로 받아 reconcile하고, 원하는 모양을 다시 적용하기 때문이다. 서버 쪽 apply에 force를 쓰면 손으로 고친 필드의 주인도 오퍼레이터로 되돌아간다. 오퍼레이터가 관리하는 리소스는 CR에서 고치고, 잠깐 멈춰야 하면 오퍼레이터가 제공하는 일시 정지 방법을 쓴다.

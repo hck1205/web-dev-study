@@ -1,0 +1,387 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-factory-method");
+
+주문이 끝나면 영수증을 이메일로 보내는 함수가 있다. 어느 날 문자로도 보내 달라는 요청이 와서 `if`를 하나 붙였다. 몇 달 뒤 카카오 알림톡이 추가되자 같은 `if`가 결제, 환불, 비밀번호 재설정, 마케팅 발송 네 군데에 복사돼 있다는 걸 알게 된다. 테스트를 돌리면 진짜 메일 서버에 접속하려다 타임아웃이 난다. 함수 안에 `new EmailClient()`가 박혀 있어서 가짜로 바꿀 틈이 없다.
+
+```ts
+export async function sendReceipt(order: Order) {
+  const body = renderReceipt(order);
+  if (order.channel === "email") {
+    const client = new EmailClient(process.env.SMTP_URL ?? "");
+    await client.send(order.email, "주문 영수증", body);
+  } else if (order.channel === "sms") {
+    const client = new SmsClient(process.env.SMS_API_KEY ?? "");
+    await client.send(order.phone, body);
+  }
+}
+```
+
+이 함수는 두 가지 일을 한다. 영수증을 만들어 보내는 흐름, 그리고 어떤 클라이언트를 쓸지 고르는 일이다. 흐름은 거의 바뀌지 않는데 고르는 일은 채널이 늘 때마다 바뀐다. 바뀌는 쪽을 메서드 하나로 떼어 내는 것이 팩토리 메서드 패턴이다. 패턴 전체 지도는 [디자인 패턴 개요](/posts/design-patterns-overview)에 정리해 두었다.
+
+## new가 박힌 자리를 메서드로 바꾼다
+
+GoF는 이 패턴을 이렇게 정의한다. 객체를 만드는 인터페이스는 정의하되, 어떤 클래스의 인스턴스를 만들지는 하위 클래스가 정하게 한다. 그래서 가상 생성자(virtual constructor)라는 별명도 있다. 등장인물은 넷이다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="상위 클래스는 흐름을 쥐고, 무엇을 만들지는 하위 클래스가 정한다"
+  nodes={[
+    { id: "creator", label: "ReceiptSender", sub: "send() 흐름", x: 100, y: 50, w: 150 },
+    { id: "product", label: "Channel", sub: "인터페이스", x: 310, y: 50, w: 120 },
+    { id: "cc", label: "SmsSender", sub: "createChannel()", x: 100, y: 190, w: 150 },
+    { id: "cp", label: "SmsChannel", x: 310, y: 190, w: 120 },
+  ]}
+  edges={[
+    { from: "creator", to: "product", label: "사용" },
+    { from: "cc", to: "creator", label: "상속", dashed: true },
+    { from: "cp", to: "product", label: "구현", dashed: true },
+    { from: "cc", to: "cp", label: "생성" },
+  ]}
+/>
+
+Creator(`ReceiptSender`)는 제품을 쓰는 흐름을 가진다. Product(`Channel`)는 Creator가 기대하는 인터페이스다. ConcreteCreator(`SmsReceiptSender`)가 팩토리 메서드를 구현해 ConcreteProduct(`SmsChannel`)를 만든다. Creator는 끝까지 인터페이스만 안다.
+
+```ts
+export interface Channel {
+  send(to: Recipient, text: string): Promise<void>;
+}
+
+export abstract class ReceiptSender {
+  // 팩토리 메서드: 어떤 채널을 만들지는 하위 클래스가 정한다
+  protected abstract createChannel(): Channel;
+
+  // 흐름은 상위 클래스가 쥔다
+  async send(order: Order): Promise<void> {
+    const text = renderReceipt(order);
+    const channel = this.createChannel();
+    await channel.send(order.recipient, text);
+  }
+}
+
+export class EmailReceiptSender extends ReceiptSender {
+  protected createChannel(): Channel {
+    return new EmailChannel("smtp://mail.internal:587");
+  }
+}
+
+export class SmsReceiptSender extends ReceiptSender {
+  protected createChannel(): Channel {
+    return new SmsChannel();
+  }
+}
+```
+
+`send()` 안에서 `new`가 사라지고 `this.createChannel()`이 그 자리를 차지했다. 이 한 줄이 팩토리 메서드의 전부다. 선언 한 줄을 조각내 보면 각 키워드가 맡은 일이 보인다.
+
+<UrlAnatomy
+  caption="팩토리 메서드 선언 한 줄"
+  base=""
+  separator=""
+  joiner=" "
+  params={[
+    { key: "protected", display: "protected", title: "바깥에서는 부르지 않는다", description: "팩토리 메서드는 Creator의 흐름 안에서 쓰는 부품이다. 호출하는 쪽은 send()만 알면 된다. 하위 클래스는 재정의할 수 있다." },
+    { key: "abstract", display: "abstract", title: "하위 클래스가 반드시 채운다", description: "기본 구현을 두는 것도 GoF가 허용하는 형태다. 기본은 이메일로 두고 필요한 하위 클래스만 바꾸게 할 수 있다.", required: true },
+    { key: "name", display: "createChannel()", title: "만드는 일만 하는 메서드", description: "이름에 create, make, new를 붙여 '만든다'는 걸 드러낸다. 인자를 받아 무엇을 만들지 고르는 매개변수형 팩토리 메서드도 있다.", required: true },
+    { key: "ret", display: ": Channel;", title: "돌려주는 타입은 인터페이스", description: "구체 클래스(EmailChannel)가 아니라 인터페이스를 돌려준다. 이게 구체 타입이면 Creator가 다시 구현에 묶인다.", required: true },
+  ]}
+/>
+
+실행 순서를 따라가 보자. 아래 그림에서 다음을 누르면 `send()`가 팩토리 메서드를 거쳐 문자 채널에 닿는다.
+
+<SequenceDiagram
+  caption="흐름은 상위 클래스의 send()가, 생성은 하위 클래스가 맡는다"
+  actors={[
+    { id: "api", label: "주문 API" },
+    { id: "sender", label: "SmsSender" },
+    { id: "ch", label: "SmsChannel" },
+    { id: "gw", label: "문자 게이트웨이" },
+  ]}
+  steps={[
+    { from: "api", to: "sender", label: "send(order)", title: "주문 API는 send만 부른다", detail: "어떤 채널로 가는지 모른다. 받은 sender가 SmsReceiptSender라는 것도 시작점에서 정했을 뿐이다." },
+    { from: "sender", to: "sender", label: "renderReceipt()", title: "상위 클래스의 흐름이 돈다", detail: "영수증 문구를 만드는 일은 모든 채널이 같다. 그래서 ReceiptSender에 한 번만 있다.", payload: "주문 A-1042 결제 금액 39,000원" },
+    { from: "sender", to: "ch", label: "createChannel()", title: "만드는 순간만 하위 클래스로 내려간다", detail: "this.createChannel()은 재정의된 SmsReceiptSender의 메서드를 부른다. 여기서 SmsChannel이 생긴다." },
+    { from: "sender", to: "ch", label: "channel.send()", title: "흐름으로 돌아와 인터페이스로 부른다", detail: "send()는 받은 객체가 Channel이라는 것만 안다. 이메일이든 문자든 같은 코드다." },
+    { from: "ch", to: "gw", label: "POST /messages", title: "구체 채널이 실제로 보낸다", detail: "문자 길이 제한, 발신 번호 같은 채널 고유의 사정은 SmsChannel 안에 갇혀 있다.", payload: "{ \"to\": \"010-1234-5678\", \"text\": \"주문 A-1042 결제 금액 39,000원\" }" },
+  ]}
+/>
+
+실제로 돌리면 같은 주문이 두 채널로 나간다.
+
+```text
+[email via smtp://mail.internal:587] kim@example.com: 주문 A-1042 결제 금액 39,000원
+[sms] 010-1234-5678: 주문 A-1042 결제 금액 39,000원
+```
+
+## 이름이 비슷한 세 가지
+
+"팩토리"라는 말은 셋을 섞어서 부른다. 면접에서도 자주 헷갈리는 부분이라 나눠 둔다.
+
+첫째는 흔히 심플 팩토리라 부르는 것이다. `createChannel(kind)`처럼 `switch`로 골라 만드는 함수 하나다. GoF 23개에 들지 않는 관용구지만 실무에서 가장 많이 쓴다. Node.js의 `crypto.createHash("sha256")`가 이 모양이다. 문자열로 알고리즘을 고르면 맞는 해시 객체를 준다.
+
+둘째는 정적 팩토리 메서드다. Effective Java의 첫 항목이 "생성자 대신 정적 팩토리 메서드를 고려하라"다. `Integer.valueOf(42)`, `List.of(1, 2)`처럼 이름을 붙일 수 있고, 캐시된 객체를 줄 수 있고, 하위 타입을 돌려줄 수 있다. 자바스크립트의 `Array.from`, `Promise.resolve`도 같은 부류다. 이것도 GoF의 팩토리 메서드와는 다르다. 상속으로 바꿔 끼우는 구조가 없다.
+
+셋째가 이 글의 GoF 팩토리 메서드다. 생성이 "재정의할 수 있는 메서드"이고, 그 메서드를 부르는 흐름이 상위 클래스에 있다. 구조로 보면 [템플릿 메서드](/posts/pattern-template-method)의 한 단계를 "만드는 일"로 특화한 것이다.
+
+## 매일 쓰는 팩토리 메서드
+
+자바스크립트에서 가장 많이 쓰이는 팩토리 메서드는 `for...of` 뒤에 숨어 있다. `for...of`는 컬렉션의 `[Symbol.iterator]()`를 불러 반복자를 받는다. 어떤 반복자를 만들지는 컬렉션마다 다르다.
+
+```js
+const collections = [[10, 20], new Set(["a"]), new Map([["k", 1]]), "hi"];
+for (const c of collections) {
+  const it = c[Symbol.iterator](); // 컬렉션마다 자기 반복자를 만든다
+  console.log(Object.prototype.toString.call(it).padEnd(26), JSON.stringify(it.next()));
+}
+```
+
+```text
+[object Array Iterator]    {"value":10,"done":false}
+[object Set Iterator]      {"value":"a","done":false}
+[object Map Iterator]      {"value":["k",1],"done":false}
+[object String Iterator]   {"value":"h","done":false}
+```
+
+`for...of`는 무엇을 돌고 있는지 모른 채 `next()`만 부른다. 내가 만든 클래스에 `[Symbol.iterator]()`를 구현하면 그 클래스도 `for...of`, 전개 연산자, `Array.from`에 그대로 들어간다. 자바의 `Collection.iterator()`가 GoF 책 이후 이 패턴의 대표 예로 꼽히는 것도 같은 구조라서다. 반복자 자체는 [이터레이터 패턴](/posts/pattern-iterator)에서 따로 다룬다.
+
+DOM의 `document.createElement("input")`도 문서 객체의 팩토리 메서드다. HTML 문서에서는 태그 이름에 맞춰 `HTMLInputElement`, `HTMLDivElement` 같은 하위 클래스를 돌려주고, 부른 쪽은 `Element`로 받아 쓴다. Spring의 `FactoryBean<T>`은 `getObject()`로 무엇을 만들지 빈이 정하게 하는 확장점이다. Go에는 클래스 상속이 없어서 `http.NewRequest`처럼 `New`로 시작하는 생성 함수를 쓰고, 바꿔 끼울 필요가 있으면 함수를 필드나 인자로 받는다.
+
+## 상속 대신 함수를 넘기면
+
+하위 클래스를 채널마다 하나씩 만드는 건 자바스크립트에서는 손이 많이 간다. 팩토리 메서드가 결국 "제품을 돌려주는 함수"라면 그 함수를 그냥 넘겨도 된다.
+
+```ts
+export type ChannelKind = "email" | "sms";
+
+const channelFactories = {
+  email: () => new EmailChannel("smtp://mail.internal:587"),
+  sms: () => new SmsChannel(),
+} satisfies Record<ChannelKind, () => Channel>;
+
+export function createReceiptSender(createChannel: () => Channel) {
+  return {
+    async send(order: Order): Promise<void> {
+      await createChannel().send(order.recipient, renderReceipt(order));
+    },
+  };
+}
+
+export const senderFor = (kind: ChannelKind) => createReceiptSender(channelFactories[kind]);
+```
+
+`satisfies`가 쓸모 있는 건 채널을 추가할 때다. `ChannelKind`에 `"kakao"`를 넣고 팩토리를 빠뜨리면 컴파일러가 바로 알려 준다.
+
+```text
+fn.ts(8,3): error TS1360: Type '{ email: () => EmailChannel; sms: () => SmsChannel; }' does not satisfy the expected type 'Record<ChannelKind, () => Channel>'.
+  Property 'kakao' is missing in type '{ email: () => EmailChannel; sms: () => SmsChannel; }' but required in type 'Record<ChannelKind, () => Channel>'.
+```
+
+`if` 사슬은 새 분기를 빠뜨려도 조용히 아무것도 안 한다. 표로 바꾸면 빠뜨린 곳을 컴파일러가 찾아 준다.
+
+그렇다고 클래스 형태가 쓸모없어지는 건 아니다. Creator가 바꿀 지점을 여러 개 가진 큰 흐름이라면 클래스가 낫다. 영수증 발송에 "채널 만들기", "문구 만들기", "실패 시 재시도 정책"이 모두 바뀌어야 한다면, 함수 세 개를 따로 넘기는 것보다 하위 클래스 하나가 세 메서드를 묶어 재정의하는 편이 읽기 쉽다. 프레임워크가 확장점을 열어 줄 때 추상 클래스를 쓰는 이유가 이것이다. 바꿀 것이 하나면 함수, 여러 개가 함께 바뀌면 클래스라고 기억하면 된다.
+
+## 채널 하나를 추가할 때 고치는 곳
+
+처음 장면의 코드에서 카카오 알림톡을 추가한다고 해 보자. 예제 저장소에서 문자 분기를 찾으면 네 군데가 나온다.
+
+```bash
+# 채널 분기가 몇 군데에 퍼져 있는지 찾는다
+grep -rn 'channel === "sms"' src
+```
+
+```text
+src/auth/reset-password.ts:4:  } else if (user.channel === "sms") {
+src/orders/refund.ts:4:  } else if (user.channel === "sms") {
+src/orders/checkout.ts:4:  } else if (user.channel === "sms") {
+src/marketing/campaign.ts:4:  } else if (user.channel === "sms") {
+```
+
+리팩터링 책에서는 이런 냄새를 산탄총 수술(shotgun surgery)이라고 부른다. 변경 하나가 여러 파일에 흩어진 수정을 요구한다. 아래 그림은 같은 요구사항을 두 구조에서 처리할 때 손대는 파일을 비교한다.
+
+<AlgoTrace
+  caption="분기가 퍼져 있으면 네 곳, 생성이 한곳에 모여 있으면 한 곳"
+  memoryLabel="고친 곳"
+  cells={["checkout.ts", "refund.ts", "reset-password.ts", "campaign.ts", "channels.ts"]}
+  steps={[
+    { pointer: 0, memory: ["checkout"], caption: "분기가 퍼진 구조. 결제 영수증에 kakao 분기를 넣는다." },
+    { pointer: 1, memory: ["checkout", "refund"], caption: "환불 알림에도 같은 분기를 복사한다." },
+    { pointer: 2, memory: ["checkout", "refund", "reset-pw"], caption: "비밀번호 재설정에도 넣는다. 여기는 템플릿 키가 달라 복사가 아니라 고쳐 써야 한다." },
+    { pointer: 3, memory: ["checkout", "refund", "reset-pw"], caption: "마케팅 발송은 grep이 'channel ==='로만 찾아서 놓쳤다. 이 경로의 kakao 사용자는 아무것도 받지 못한다." },
+    { pointer: 4, found: [4], memory: ["channels"], caption: "생성이 모인 구조. 팩토리 표에 kakao 한 줄을 넣는다. 네 기능은 Channel 인터페이스만 쓰니 고칠 것이 없다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["channels"], caption: "빠뜨린 곳이 있으면 satisfies가 컴파일 에러로 알려 준다. 조용히 아무것도 안 하는 경로가 없다." },
+  ]}
+/>
+
+이게 개방 폐쇄 원칙(OCP)이 말하는 모습이다. 새 채널을 더할 때는 새 코드를 추가하고, 이미 돌아가는 흐름은 고치지 않는다. 코드 리뷰에서 같은 타입 판별 `if`나 `switch`, `instanceof` 사슬이 두 군데 이상 보이면 생성을 한곳으로 모을 때가 됐다는 신호다. 한 군데뿐이라면 그대로 두는 편이 낫다. 분기 하나를 위해 클래스 계층을 세우면 읽는 사람이 파일 다섯 개를 열어야 한다.
+
+## 모르는 채널은 시작할 때 막는다
+
+채널 종류가 설정 파일이나 DB에서 온다면 생성 시점에 잘못된 값이 들어올 수 있다. 아래 그림은 요청이 팩토리를 지나 채널에 닿는 길과, 모르는 값이 막히는 자리를 보여 준다.
+
+<NetworkTopology
+  caption="팩토리는 요청이 채널로 가는 갈림길에 서 있다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "api", label: "Order API", x: 55, y: 125, icon: "client", w: 90 },
+    { id: "sender", label: "Sender", sub: "send()", x: 160, y: 125, icon: "server", w: 84 },
+    { id: "factory", label: "Factory", sub: "createChannel", x: 260, y: 125, icon: "switch", w: 100 },
+    { id: "email", label: "SMTP", x: 355, y: 45, icon: "server", w: 70 },
+    { id: "sms", label: "SMS GW", x: 355, y: 125, icon: "gateway", w: 70 },
+    { id: "kakao", label: "Kakao", x: 355, y: 205, icon: "internet", w: 70 },
+  ]}
+  links={[
+    { from: "api", to: "sender" },
+    { from: "sender", to: "factory" },
+    { from: "factory", to: "email" },
+    { from: "factory", to: "sms" },
+    { from: "factory", to: "kakao" },
+  ]}
+  steps={[
+    { path: ["api", "sender", "factory", "email"], packet: "email", title: "kind가 email이면 메일로 간다", detail: "Sender는 팩토리가 준 채널에 send만 부른다." },
+    { path: ["api", "sender", "factory", "sms"], packet: "sms", title: "같은 코드가 문자로 간다", detail: "흐름은 그대로이고 팩토리가 고른 제품만 다르다." },
+    { path: ["api", "sender", "factory", "kakao"], packet: "kakao", title: "새 채널은 갈래 하나만 늘린다", detail: "팩토리 표에 한 줄을 더하고 KakaoChannel을 만들었다. Sender와 API는 그대로다." },
+    { path: ["api", "sender", "factory"], packet: "fax", blocked: true, title: "모르는 값은 팩토리에서 멈춘다", detail: "설정에 오타가 있으면 여기서 에러가 난다. 발송 시점이 아니라 앱 시작 때 모든 설정값으로 팩토리를 한 번씩 불러 보면 배포 직후 바로 드러난다.", payload: "Error: unknown channel: fax" },
+  ]}
+/>
+
+표로 만든 팩토리에는 함정이 하나 있다. `channelFactories[kind]`에서 `kind`가 바깥에서 온 문자열이면 `"toString"`이나 `"constructor"` 같은 값이 `Object.prototype`의 함수를 찾아낸다. 에러 대신 엉뚱한 함수가 불린다. `Object.hasOwn`으로 확인하거나 `Map`을 쓰거나 `Object.create(null)`로 만든 객체를 쓴다. 아래 연습에서 직접 확인해 보자.
+
+<CodePlayground
+  caption="채널 팩토리 완성하기"
+  functionName="preview"
+  initialCode={`// kind에 맞는 채널을 만든다. 모르는 kind면 "unknown channel: " + kind 에러를 던진다.
+// kakao(최대 1000자) 채널도 추가해 보자. sms는 예제라서 10자로 잘랐다.
+const factories = {
+  email: () => ({ name: "email", limit: 2000 }),
+  sms: () => ({ name: "sms", limit: 10 }),
+};
+
+function createChannel(kind) {
+  return factories[kind]();
+}
+
+// 아래는 고치지 않는다
+function preview(kind, text) {
+  try {
+    const ch = createChannel(kind);
+    return ch.name + ":" + text.slice(0, ch.limit);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  solution={`const factories = {
+  email: () => ({ name: "email", limit: 2000 }),
+  sms: () => ({ name: "sms", limit: 10 }),
+  kakao: () => ({ name: "kakao", limit: 1000 }),
+};
+
+function createChannel(kind) {
+  // 프로토타입에서 물려받은 toString, constructor 같은 이름을 거른다
+  if (!Object.hasOwn(factories, kind)) throw new Error("unknown channel: " + kind);
+  return factories[kind]();
+}
+
+function preview(kind, text) {
+  try {
+    const ch = createChannel(kind);
+    return ch.name + ":" + text.slice(0, ch.limit);
+  } catch (e) {
+    return "error:" + e.message;
+  }
+}`}
+  tests={[
+    { args: ["email", "주문 완료"], expected: "email:주문 완료" },
+    { args: ["sms", "주문 A-1042 결제 완료"], expected: "sms:주문 A-1042 " },
+    { args: ["kakao", "알림톡"], expected: "kakao:알림톡", label: "kakao 채널을 추가한다" },
+    { args: ["fax", "hi"], expected: "error:unknown channel: fax", label: "모르는 채널은 에러" },
+    { args: ["toString", "hi"], expected: "error:unknown channel: toString", label: "프로토타입 이름에 속지 않는다" },
+  ]}
+/>
+
+## 테스트에서 가짜 채널 끼우기
+
+처음 장면의 테스트 문제는 생성이 바꿀 수 있는 자리로 나오면서 풀린다. 클래스 형태라면 테스트 안에서 하위 클래스를 만들어 팩토리 메서드만 재정의하고, 함수 형태라면 가짜를 돌려주는 함수를 넘긴다.
+
+```ts
+class FakeChannel implements Channel {
+  sent: string[] = [];
+  async send(to: Recipient, text: string) {
+    this.sent.push(`${to.phone} ${text}`);
+  }
+}
+
+test("하위 클래스로 팩토리 메서드를 바꿔 끼운다", async () => {
+  const fake = new FakeChannel();
+  class TestSender extends ReceiptSender {
+    protected createChannel() {
+      return fake;
+    }
+  }
+  await new TestSender().send(order);
+  assert.deepEqual(fake.sent, ["010-1234-5678 주문 A-1042 결제 금액 39,000원"]);
+});
+
+test("함수를 넘겨 바꿔 끼운다", async () => {
+  const fake = new FakeChannel();
+  await createReceiptSender(() => fake).send(order);
+  assert.equal(fake.sent.length, 1);
+});
+```
+
+```bash
+# Node.js 22의 타입 변환 옵션으로 TypeScript 테스트를 바로 돌린다
+node --experimental-transform-types --no-warnings --test --test-reporter=spec receipt.test.ts
+```
+
+```text
+✔ 하위 클래스로 팩토리 메서드를 바꿔 끼운다 (19.118738ms)
+✔ 함수를 넘겨 바꿔 끼운다 (0.334204ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+```
+
+메일 서버도, `jest.mock` 같은 모듈 바꿔치기도 필요 없었다. 모듈 모킹은 import 경로에 묶여 있어서 파일을 옮기면 깨지지만, 이 방식은 코드의 구조만으로 가짜를 끼운다.
+
+## 팩토리 메서드가 과한 경우
+
+패턴을 들이면 클래스나 함수 하나가 늘고, 읽는 사람은 "실제로 무엇이 만들어지나"를 찾으러 한 번 더 이동해야 한다. 만드는 대상이 하나뿐이고 바뀔 계획도 없다면 `new`를 그대로 쓰는 게 낫다. 테스트를 위해서만이라면 생성자 인자로 의존성을 받는 것으로 충분하다.
+
+클래스 형태에는 상속의 비용도 따라온다. 제품 종류와 다른 축(예: 국내·해외 발송)이 함께 갈리면 `EmailDomesticSender`, `EmailGlobalSender`, `SmsDomesticSender`처럼 하위 클래스가 곱으로 는다. 이럴 때는 상속 대신 축마다 객체를 따로 넘기는 조합으로 바꾼다.
+
+비슷한 패턴과의 경계도 짚어 두자. 팩토리 메서드는 제품 하나를 만드는 메서드 하나다. 서로 짝이 맞아야 하는 제품 여러 개를 한 벌로 만들어야 한다면(AWS용 저장소와 큐, GCP용 저장소와 큐) [추상 팩토리](/posts/pattern-abstract-factory)가 그 일을 한다. 만드는 과정이 길고 단계가 많다면 [빌더](/posts/pattern-builder), 이미 있는 객체를 복제해 만든다면 [프로토타입](/posts/pattern-prototype)이 맞다.
+
+처음의 영수증 함수로 돌아가면, 바뀌지 않는 흐름과 자주 바뀌는 생성을 갈라놓은 것이 이 패턴이 한 일의 전부다. 그 덕에 새 채널은 추가만으로 끝나고, 테스트는 가짜를 끼울 자리를 얻었다.
+
+## 면접에서 나올 만한 질문
+
+### 팩토리 메서드 패턴이 무엇인가요?
+
+객체를 만드는 일을 재정의할 수 있는 메서드로 떼어 내고, 어떤 클래스를 만들지는 하위 클래스가 정하게 하는 패턴이다. 상위 클래스는 제품 인터페이스만 알고 흐름을 진행하며, 생성 순간에만 하위 클래스의 메서드를 부른다. 그래서 흐름을 고치지 않고 제품을 바꿔 끼울 수 있다.
+
+### 심플 팩토리, 정적 팩토리 메서드와는 어떻게 다른가요?
+
+심플 팩토리는 switch로 골라 만드는 함수 하나이고 GoF 패턴은 아니다. 정적 팩토리 메서드는 List.of처럼 생성자 대신 이름 있는 정적 메서드를 쓰는 관용구로, 캐시나 하위 타입 반환이 장점이지만 상속으로 바꿔 끼우는 구조가 없다. GoF 팩토리 메서드는 생성이 재정의 가능한 메서드이고 그걸 부르는 흐름이 상위 클래스에 있다는 점이 다르다.
+
+### 이 패턴이 어떤 설계 원칙과 연결되나요?
+
+개방 폐쇄 원칙과 의존성 역전 원칙이다. 새 제품은 하위 클래스나 팩토리 항목을 추가하는 것으로 끝나고 기존 흐름은 고치지 않는다. 상위 흐름은 구체 클래스가 아니라 제품 인터페이스에 의존하게 된다.
+
+### 자바스크립트에서 실제로 쓰이는 예를 들어 주세요.
+
+for...of가 부르는 `[Symbol.iterator]()`가 대표적이다. 배열, Set, Map, 문자열이 각자 자기 반복자를 만들어 주고 for...of는 인터페이스인 next()만 부른다. DOM의 document.createElement도 태그에 맞는 HTMLElement 하위 클래스를 돌려주는 팩토리 메서드다.
+
+### 클래스 상속 대신 함수를 넘기면 안 되나요?
+
+바꿀 지점이 하나라면 함수를 넘기는 쪽이 더 간단하고 자바스크립트에서는 그게 일반적이다. 다만 생성, 문구, 재시도처럼 함께 바뀌는 지점이 여럿이면 하위 클래스 하나가 묶어서 재정의하는 편이 읽기 쉽다. 프레임워크 확장점이 추상 클래스로 열려 있는 이유다.
+
+### 팩토리를 표(객체)로 만들 때 주의할 점은요?
+
+키가 바깥 입력에서 오면 toString, constructor처럼 프로토타입에서 물려받은 이름이 걸려 엉뚱한 함수가 불릴 수 있다. Object.hasOwn으로 확인하거나 Map, Object.create(null)을 쓴다. 타입스크립트에서는 satisfies Record로 모든 종류가 채워졌는지 컴파일 시점에 검사한다.
+
+### 팩토리 메서드와 추상 팩토리는 어떻게 고르나요?
+
+만들 제품이 하나면 팩토리 메서드, 서로 짝이 맞아야 하는 제품 여러 개를 한 벌로 만들어야 하면 추상 팩토리다. 팩토리 메서드는 상속으로 메서드 하나를 바꾸고, 추상 팩토리는 제품군 전체를 만드는 객체를 통째로 바꾼다. 실제로 추상 팩토리의 각 메서드를 팩토리 메서드로 구현하는 경우가 많다.

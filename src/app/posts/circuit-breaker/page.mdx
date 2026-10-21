@@ -1,0 +1,535 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("circuit-breaker");
+
+추천 서비스 앞에 서킷 브레이커를 달았다. 설정은 라이브러리 기본값 그대로다. 그런데 추천 서비스 DB가 멈춘 날, 브레이커는 1분이 넘도록 열리지 않았다. 요청은 계속 5초씩 붙잡혀 있다가 실패했다. 반대로 새벽 트래픽이 거의 없을 때는 요청 한 건이 실패하자마자 회로가 열려 30초 동안 추천 칸이 비었다. 같은 장치가 열려야 할 때 안 열리고, 안 열려도 될 때 열렸다.
+
+서킷 브레이커가 왜 필요한지, 타임아웃·재시도·벌크헤드와 어떻게 함께 쓰는지는 [장애가 번지지 않게 막는 패턴 글](/posts/resilience-patterns)에서 다뤘다. 이 글은 그 다음 질문을 본다. 브레이커는 무엇을 세고, 언제 판정하고, 숫자 몇 개가 어떻게 위의 두 증상을 만드는가. 상태 기계를 직접 짜서 일부러 망가지는 서버 앞에 세워 보고, 자바의 Resilience4j(2.x)와 Node.js의 opossum(10.0.0) 소스에서 기본값을 확인했다. 실행 환경은 Node.js 22다.
+
+## 세 상태와 두 개의 질문
+
+브레이커는 호출 하나마다 두 번 끼어든다. 보내기 전에 "보내도 되나"를 묻고, 끝난 뒤에 "결과가 어땠나"를 듣는다. 이 둘 사이에서 상태가 바뀐다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="닫힘, 열림, 반열림 사이를 오가는 조건"
+  nodes={[
+    { id: "closed", label: "CLOSED", sub: "보내고 결과를 센다", x: 90, y: 60, w: 150 },
+    { id: "open", label: "OPEN", sub: "보내지 않는다", x: 310, y: 60, w: 150 },
+    { id: "half", label: "HALF_OPEN", sub: "N개만 보내 본다", x: 200, y: 240, w: 170 },
+  ]}
+  edges={[
+    { from: "closed", to: "open", label: "실패율·느린 비율 초과" },
+    { from: "open", to: "half", label: "대기 시간 경과" },
+    { from: "half", to: "open", label: "시험도 실패" },
+    { from: "half", to: "closed", label: "시험 통과" },
+  ]}
+/>
+
+그림의 화살표 넷이 전부다. 어려운 건 화살표에 붙은 조건이다. "실패율"은 몇 건 중의 비율인가. 몇 건이 모여야 판정을 시작하나. "느리다"의 기준은 무엇인가. 시험 요청은 몇 개를 보내고, 그 결과는 어떻게 합치나. 이걸 코드로 옮기면 이렇다.
+
+```js
+// breaker.js의 핵심 (전체는 아래 실습에서 그대로 돌린다)
+tryAcquire() {
+  // 열린 지 openMs가 지났으면 이번 호출에서 반열림으로 바꾼다
+  if (this.state === "OPEN" && this.now() - this.openedAt >= this.cfg.openMs) this.toHalfOpen();
+  if (this.state === "OPEN") return false;              // 보내지 않는다
+  if (this.state === "HALF_OPEN") {
+    if (this.permits === 0) return false;               // 시험 몫을 다 썼다
+    this.permits--;
+  }
+  return true;
+}
+
+onResult({ ms, ok, ignored = false }) {
+  if (ignored) { if (this.state === "HALF_OPEN") this.permits++; return; } // 4xx 같은 건 세지 않는다
+  const r = { fail: !ok, slow: ms >= this.cfg.slowCallMs };
+  if (this.state === "CLOSED") {
+    this.window.add(r);
+    if (this.tripped(this.window.stats(), this.cfg.minimumCalls)) this.toOpen();
+  } else if (this.state === "HALF_OPEN") {
+    this.probe.add(r);
+    const s = this.probe.stats();
+    if (s.calls < this.cfg.halfOpenCalls) return;       // 시험 결과가 다 모일 때까지 판정하지 않는다
+    if (this.tripped(s, this.cfg.halfOpenCalls)) this.toOpen(); else this.toClosed();
+  }
+}
+
+tripped({ calls, fails, slow }, minimum) {
+  if (calls === 0 || calls < minimum) return false;     // 표본이 모자라면 판정하지 않는다
+  return (fails / calls) * 100 >= this.cfg.failureRate
+      || (slow / calls) * 100 >= this.cfg.slowCallRate;
+}
+```
+
+열림에서 반열림으로 가는 시점을 타이머가 아니라 다음 호출이 정한다는 점을 눈여겨본다. Resilience4j의 기본 동작이 이렇다(`automaticTransitionFromOpenToHalfOpenEnabled=false`). 호출이 없으면 대기 시간이 한참 지나도 상태는 OPEN으로 남는다. 대시보드에서 "트래픽이 끊긴 뒤에도 계속 열려 있다"는 그래프를 보면 이 때문이다. opossum은 반대로 `setTimeout`으로 `resetTimeout`(기본 30초) 뒤에 스스로 반열림이 된다.
+
+## 몇 건 중의 실패율인가: 건수 창과 시간 창
+
+실패율의 분모를 정하는 방법은 둘이다. 최근 N건을 보는 건수 기반 창(count-based)과 최근 N초를 보는 시간 기반 창(time-based)이다.
+
+건수 창은 크기 N짜리 원형 버퍼다. 새 결과가 들어오면 가장 오래된 결과가 밀려난다. 아래 그림은 크기 5, 실패율 50%, 최소 호출 수 5인 창에 결과가 하나씩 들어오는 모습이다.
+
+<AlgoTrace
+  caption="크기 5짜리 건수 창: 오래된 결과가 밀려나며 비율이 바뀐다"
+  memoryLabel="창 안의 결과 (최근 5건)"
+  cells={["ok", "ok", "fail", "ok", "fail", "fail", "ok", "fail"]}
+  steps={[
+    { pointer: 0, memory: ["ok"], caption: "1건. 최소 호출 수 5에 못 미쳐 판정하지 않는다." },
+    { pointer: 1, memory: ["ok", "ok"], caption: "2건. 아직 판정 전이다." },
+    { pointer: 2, memory: ["ok", "ok", "fail"], caption: "실패가 하나 들어왔다. 3건 중 1건이지만 표본이 모자라 넘어간다." },
+    { pointer: 3, memory: ["ok", "ok", "fail", "ok"], caption: "4건." },
+    { pointer: 4, memory: ["ok", "ok", "fail", "ok", "fail"], caption: "창이 찼다. 5건 중 실패 2건, 40%라 닫힘을 유지한다." },
+    { pointer: 5, memory: ["ok", "fail", "ok", "fail", "fail"], caption: "맨 앞의 ok가 밀려나고 fail이 들어왔다. 5건 중 3건, 60%. 기준 50%를 넘어 연다." },
+    { pointer: 6, memory: ["ok", "fail", "ok", "fail", "fail"], caption: "열린 뒤 들어온 호출은 보내지 않으니 창에 기록되지 않는다. 창은 그대로 멈춘다." },
+  ]}
+/>
+
+시간 창은 1초짜리 칸 여러 개로 나눈다. Resilience4j의 `SlidingTimeWindowMetrics`는 창 크기(초)만큼의 칸을 원형 배열로 두고, 칸마다 호출 수·실패 수·느린 호출 수와 총 시간만 더해 둔다. 결과가 들어올 때 현재 초와 가장 최근 칸의 초를 비교해 그 사이의 칸을 비우고 합계에서 뺀다. 호출을 하나하나 기억하지 않으니 초당 수만 건이어도 메모리가 창 크기(초)에만 비례한다.
+
+<AlgoTrace
+  caption="10초 창을 1초 칸 열 개로: 1초가 지날 때마다 맨 끝 칸이 통째로 빠진다"
+  memoryLabel="합계 (호출 / 실패)"
+  cells={["t-9", "t-8", "t-7", "t-6", "t-5", "t-4", "t-3", "t-2", "t-1", "t"]}
+  steps={[
+    { pointer: 9, memory: ["200 / 2"], caption: "지금 칸에 20건, 앞의 아홉 칸에도 20건씩 쌓였다. 합계 200건 중 실패 2건, 1%다." },
+    { pointer: 9, memory: ["200 / 2", "200 / 12"], caption: "이번 초에 실패가 10건 늘었다. 합계 칸만 고치면 되니 계산은 덧셈 한 번이다." },
+    { pointer: 0, memory: ["200 / 12", "180 / 12"], caption: "1초가 지났다. 가장 오래된 칸(t-9)의 20건을 합계에서 빼고 그 칸을 비워 새 초에 쓴다." },
+    { pointer: 9, found: [9], memory: ["180 / 12", "200 / 32"], caption: "새 칸에 20건이 들어오는데 전부 실패다. 200건 중 32건, 16%. 이런 초가 몇 번 더 이어져야 50%에 닿는다." },
+  ]}
+/>
+
+어느 쪽이 나은지는 트래픽 양에 달렸다. 직접 짠 브레이커를 가짜 시계 위에서 돌려, 10분 동안 정상 트래픽을 흘린 뒤 갑자기 모든 호출이 실패하게 했다. 열리기까지 걸린 시간을 초당 요청 수별로 쟀다.
+
+```bash
+# 장애가 시작된 뒤 몇 초 만에 열리는지 창 종류별로 잰다
+node window-compare.js
+```
+
+```text
+┌─────────┬─────┬─────────────────────┬────────────────────┬───────────────────┐
+│ (index) │ rps │ count 100 / min 100 │ count 100 / min 10 │ time 10s / min 20 │
+├─────────┼─────┼─────────────────────┼────────────────────┼───────────────────┤
+│ 0       │ 200 │ '0.25s'             │ '0.25s'            │ '5.00s'           │
+│ 1       │ 20  │ '2.50s'             │ '2.50s'            │ '5.00s'           │
+│ 2       │ 2   │ '25.00s'            │ '25.00s'           │ '5.00s'           │
+│ 3       │ 0.2 │ '250.00s'           │ '250.00s'          │ 'never (10 min)'  │
+└─────────┴─────┴─────────────────────┴────────────────────┴───────────────────┘
+```
+
+건수 창이 성공 100건으로 차 있으면 실패 50건이 들어와야 50%가 된다. 초당 200건이면 0.25초지만 초당 2건이면 25초, 초당 0.2건이면 4분이 넘는다. 도입부의 "1분이 넘도록 안 열렸다"가 이 줄이다. 시간 창은 창의 절반, 5초면 트래픽과 상관없이 열린다. 대신 10초 동안 20건이 안 모이는 한산한 경로에서는 영영 판정하지 않는다.
+
+`minimumNumberOfCalls`를 100에서 10으로 낮춰도 표의 둘째 열은 변하지 않았다. 최소 호출 수는 창이 차기 전, 그러니까 앱이 막 떴거나 브레이커가 방금 닫혀 창이 비었을 때만 의미가 있다. 도입부의 두 번째 증상, 실패 한 건에 열린 것은 이 숫자가 너무 작을 때 생긴다. Resilience4j는 건수 창에서 최소 호출 수를 `min(minimumNumberOfCalls, slidingWindowSize)`로 잘라 쓰고, 시간 창에서는 설정값을 그대로 쓴다. 그래서 시간 창에 최소 호출 수를 창 안에 모일 수 없는 큰 값으로 두면 브레이커가 꺼진 것과 같아진다.
+
+정리하면 트래픽이 많고 고른 경로는 건수 창으로 빠르게, 트래픽이 시간대에 따라 크게 출렁이는 경로는 시간 창으로 "몇 초 안에는 판정한다"를 보장하는 편이 낫다. 어느 쪽이든 최소 호출 수는 그 경로의 한산한 시간대 트래픽으로 정한다.
+
+## 실패보다 느림을 먼저 센다
+
+브레이커가 막아야 하는 건 실패보다 느림이다. 실패는 빨리 끝나서 자원을 금방 돌려주지만, 5초씩 붙잡힌 요청은 스레드와 커넥션을 쥔 채 놓지 않는다. 그런데 Resilience4j의 기본값은 `slowCallDurationThreshold=60s`, `slowCallRateThreshold=100`이다. 60초 넘게 걸린 호출이 창 안에서 100%가 되어야 연다. 사실상 꺼져 있다.
+
+느린 호출 기준은 타임아웃보다 짧아야 의미가 있다. 타임아웃이 1초인데 느린 기준이 2초라면, 2초까지 가기 전에 타임아웃이 끊어 실패로 센다. 순서는 이렇게 잡는다.
+
+```yaml
+# application.yml (Spring Boot + resilience4j-spring-boot3)
+resilience4j:
+  circuitbreaker:
+    instances:
+      recs:
+        slidingWindowType: TIME_BASED      # 최근 N초
+        slidingWindowSize: 10              # 10초
+        minimumNumberOfCalls: 20           # 한산한 시간대 10초 트래픽보다 작게
+        failureRateThreshold: 50
+        slowCallDurationThreshold: 300ms   # 평소 p99(120ms)의 두세 배
+        slowCallRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        ignoreExceptions:
+          - org.springframework.web.client.HttpClientErrorException  # 4xx는 세지 않는다
+  timelimiter:
+    instances:
+      recs:
+        timeoutDuration: 1s                # 느린 기준(300ms)보다 길게
+```
+
+설정 줄 하나하나가 무엇을 바꾸는지 눌러 보면 이렇다.
+
+<UrlAnatomy
+  caption="한 줄로 늘어놓은 recs 브레이커 설정"
+  base="recs"
+  separator=": "
+  joiner=", "
+  params={[
+    { key: "window", value: "TIME 10s", title: "무엇을 분모로 삼나", description: "최근 10초 동안의 호출을 센다. 건수 창이면 최근 N건이다. 트래픽이 출렁이는 경로라 시간 창을 골랐다.", required: true },
+    { key: "min", value: "20", title: "판정을 시작할 표본 수", description: "10초 동안 20건이 모이기 전에는 실패율을 계산하지 않는다. 새벽 트래픽에서 한두 건 실패로 열리는 것을 막는다." },
+    { key: "fail", value: "50%", title: "실패율 기준", description: "Resilience4j는 같거나 크면(>=) 연다. opossum은 클 때(>)만 연다. 시험 요청 2개 중 1개 실패처럼 딱 50%가 나오는 경우에 결과가 갈린다." },
+    { key: "slow", value: "300ms@50%", title: "느린 호출 기준", description: "300ms 이상 걸린 호출이 절반을 넘으면 실패가 없어도 연다. 타임아웃(1s)보다 짧아야 의미가 있다." },
+    { key: "wait", value: "10s", title: "열림 유지 시간", description: "이 시간 동안은 부르지 않는다. 너무 길면 상대가 회복한 뒤에도 기능이 꺼져 있고, 너무 짧으면 회복 중인 상대를 계속 두드린다." },
+    { key: "probe", value: "5", title: "반열림 시험 요청 수", description: "5개의 결과를 모두 받은 뒤 같은 기준으로 실패율을 계산해 닫을지 다시 열지 정한다." },
+  ]}
+/>
+
+## 반열림에서는 몇 개를 보내 보나
+
+반열림은 "다시 보내도 될까"를 묻는 단계다. 몇 개를 보내 보는지는 라이브러리마다 다르다. Resilience4j는 `permittedNumberOfCallsInHalfOpenState`(기본 10)개를 보내고, 그 결과가 모두 모이면 같은 실패율 기준으로 판정한다. 그 사이에 들어온 나머지 호출은 `CallNotPermittedException`으로 거절한다. 결과가 영영 안 오면 반열림에 갇히는데, `maxWaitDurationInHalfOpenState`(기본 0, 무한 대기)를 주면 그 시간 뒤에 다시 연다.
+
+opossum은 시험 요청이 하나뿐이다. 기본값 그대로 만든 브레이커에 실패를 한 번 주고, 반열림이 된 뒤 동시에 다섯 개를 보내 봤다.
+
+```bash
+# opossum 기본값 + resetTimeout 1초. 첫 호출을 실패시키고, 반열림에서 동시 호출 5개
+node opossum-demo.js
+```
+
+```text
+[failure]
+[open]
+1) first call fails: [ 'popular' ]
+   state opened = true  stats.fires = 1
+[reject]
+2) next call: [ 'popular' ]  upstream calls so far = 1
+[halfOpen]
+3) 5 concurrent calls in half-open
+[reject]
+[reject]
+[reject]
+[reject]
+[close]
+[success]
+   results: [["a","b"],["popular"],["popular"],["popular"],["popular"]]  upstream calls so far = 2
+```
+
+두 가지가 보인다. 첫째, 호출 한 번 실패로 바로 열렸다(`stats.fires = 1`). opossum의 `volumeThreshold` 기본값이 0이라 표본이 1건이어도 실패율 100%로 판정한다. 운영에 쓸 때는 반드시 값을 준다. 둘째, 반열림에서 다섯 개 중 하나만 상대에게 갔고 나머지 넷은 폴백(`popular`)을 받았다. 그 하나가 성공하자 바로 닫혔다.
+
+시험 요청이 하나면 운 좋은 한 번에 닫혀 버릴 수 있다. 여러 개면 판정이 안정적이지만, 인스턴스가 많을 때 다른 문제가 생긴다. 브레이커 상태는 보통 인스턴스마다 따로 있으니, 파드 100개가 같은 순간에 열렸다면 대기 시간이 끝나는 순간도 거의 같다.
+
+<SequenceDiagram
+  caption="파드 100개의 브레이커가 동시에 반열림이 되면"
+  actors={[
+    { id: "pods", label: "주문 파드 100개" },
+    { id: "rec", label: "추천 서비스" },
+  ]}
+  steps={[
+    { from: "rec", to: "rec", label: "DB 재시작", title: "추천 서비스가 회복 중이다", detail: "DB가 다시 떠서 캐시를 데우는 중이다. 평소의 3분의 1 정도만 받을 수 있다." },
+    { from: "pods", to: "pods", label: "10s 경과", title: "모든 파드가 같은 시각에 반열림이 된다", detail: "같은 장애로 거의 같은 순간에 열렸으니 대기 시간도 거의 같은 순간에 끝난다." },
+    { from: "pods", to: "rec", label: "시험 100×10", title: "시험 요청이 한꺼번에 몰린다", detail: "파드마다 10개씩, 1000개가 동시에 도착한다. 회복 중인 서비스에는 평소 피크보다 큰 덩어리다." },
+    { from: "rec", to: "pods", label: "503", title: "시험이 실패한다", detail: "과부하로 다시 503이 난다. 모든 파드가 다시 열리고 10초를 처음부터 센다." },
+    { from: "pods", to: "pods", label: "대기 시간 흔들기", title: "대기 시간에 지터를 섞는다", detail: "열림 유지 시간을 10초 고정이 아니라 8~12초 사이로 흩거나, 시험 요청 수를 줄여 몰림을 나눈다." },
+    { from: "pods", to: "rec", label: "시험 몇 개씩", title: "시험이 시간에 흩어져 도착한다", detail: "회복 중인 서비스가 받을 수 있는 양으로 나뉘어 들어오고, 성공한 파드부터 차례로 닫힌다." },
+  ]}
+/>
+
+Resilience4j는 `waitIntervalFunctionInOpenState`(코드 설정, `IntervalFunction`)로 열림 대기 시간을 고정값 대신 함수로 정할 수 있다. 열릴 때마다 대기 시간을 늘리는 지수 백오프나 무작위 값이 여기에 들어간다.
+
+## 일부러 망가지는 서버 앞에 세워 보기
+
+이제 직접 짠 브레이커를 실제 HTTP 호출에 붙인다. `127.0.0.1:4100`에 추천 서버를 띄우고, 0~3초는 20ms에 정상 응답, 3~7초는 절반은 503, 절반은 2초 지연, 7초부터 다시 정상이 되게 했다. 클라이언트는 100ms마다 한 번 부르고, 읽기 타임아웃은 300ms다. 브레이커는 건수 창 10, 최소 10건, 실패율 50%, 느린 기준 200ms에 50%, 열림 2초, 시험 3개다.
+
+```bash
+# 망가지는 upstream과 브레이커를 붙인 클라이언트를 한 프로세스에서 12초 돌린다
+node demo.js
+```
+
+```text
+ 3.6s  CLOSED -> OPEN
+ 5.6s  OPEN -> HALF_OPEN
+ 6.1s  HALF_OPEN -> OPEN
+ 8.1s  OPEN -> HALF_OPEN
+ 8.4s  HALF_OPEN -> CLOSED
+
+sec  sent   ok  fail  rejected
+  0     9    9     0         0
+  1    10   10     0         0
+  2    10   10     0         0
+  3     6    0     6         4
+  4     0    0     0        10
+  5     3    0     2         7
+  6     0    0     1        10
+  7     0    0     0        10
+  8     9    9     0         1
+  9    10   10     0         0
+ 10    10   10     0         0
+ 11    10   10     0         0
+```
+
+`sent`는 실제로 서버에 보낸 수, `rejected`는 브레이커가 보내지 않고 바로 돌려준 수다. 3초에 고장이 나고 0.6초 만에 열렸다. 4초 구간은 10건이 모두 거절됐다. 서버를 한 번도 부르지 않았으니 300ms 타임아웃을 기다린 요청도 없다. 5.6초에 반열림이 되어 시험 3개를 보냈는데 셋 다 실패했다(5초 줄의 fail 2와 6초 줄의 fail 1, 마지막은 타임아웃이라 300ms 뒤에 집계됐다). 그래서 6.1초에 다시 열렸다.
+
+7초 줄을 본다. 서버는 7초부터 멀쩡한데 브레이커는 1초 내내 거절했다. 다시 열린 6.1초부터 2초를 기다려야 했기 때문이다. 대기 시간은 상대를 쉬게 해 주는 대신, 회복한 뒤에도 그만큼 기능을 꺼 둔다. 열림 유지 시간을 정할 때 이 손해를 같이 본다. 8.1초에 반열림, 시험 3개가 성공해 8.4초에 닫혔다. 이 흐름을 그림으로 보면 이렇다.
+
+<NetworkTopology
+  caption="열림 동안에는 요청이 브레이커에서 바로 폴백으로 돌아선다"
+  width={400}
+  height={250}
+  zones={[{ id: "app", label: "주문 서비스", x: 10, y: 20, w: 250, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "client", label: "Handler", sub: "100ms마다", x: 75, y: 70, icon: "client", w: 110 },
+    { id: "cb", label: "Breaker", sub: "count 10", x: 195, y: 130, icon: "lock", w: 110 },
+    { id: "fb", label: "Fallback", sub: "인기 상품", x: 75, y: 200, icon: "server", w: 110 },
+    { id: "rec", label: "recs", sub: ":4100", x: 335, y: 130, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "client", to: "cb" },
+    { from: "cb", to: "rec" },
+    { from: "cb", to: "fb", dashed: true },
+  ]}
+  steps={[
+    { path: ["client", "cb", "rec"], packet: "GET", title: "0~3초: 닫힘", detail: "모든 요청이 recs로 가고 20ms에 돌아온다. 브레이커는 최근 10건을 센다." },
+    { path: ["client", "cb", "rec"], packet: "503", blocked: true, title: "3초: 고장", detail: "절반은 503, 절반은 300ms 타임아웃으로 실패한다. 창 안 10건 중 5건이 실패하는 순간 연다." },
+    { path: ["client", "cb", "fb"], packet: "reject", highlight: ["rec"], title: "3.6~5.6초: 열림", detail: "보내지 않고 바로 폴백한다. 요청은 1ms 안에 끝나고 recs는 요청을 받지 않는다." },
+    { path: ["client", "cb", "rec"], packet: "probe", blocked: true, title: "5.6초: 반열림, 시험 실패", detail: "시험 3개를 보냈으나 모두 실패한다. 6.1초에 다시 열리고 2초를 처음부터 센다." },
+    { path: ["client", "cb", "fb"], packet: "reject", highlight: ["rec"], title: "7초: 서버는 회복, 브레이커는 아직 열림", detail: "recs는 이미 정상이지만 대기 시간이 남아 1초 동안 10건을 거절한다. 대기 시간의 대가다." },
+    { path: ["client", "cb", "rec"], packet: "probe", title: "8.1초: 시험 통과", detail: "시험 3개가 모두 성공해 8.4초에 닫힌다. 다음 요청부터 평소처럼 recs로 간다." },
+  ]}
+/>
+
+## 브레이커는 의존성마다 따로 둔다
+
+브레이커 하나를 클라이언트 전체에 두면, 상대 하나가 망가질 때 멀쩡한 상대까지 끊긴다. 상품 상세가 추천·재고·리뷰를 부르는데 브레이커가 하나라면, 추천의 실패가 실패율을 끌어올려 재고 호출까지 막는다. 그래서 의존성마다, 같은 서비스라도 성격이 다른 엔드포인트(가벼운 조회와 무거운 검색)는 따로 둔다.
+
+<NetworkTopology
+  caption="의존성마다 브레이커를 하나씩 두면 피해가 그 선에서 멈춘다"
+  width={400}
+  height={300}
+  zones={[{ id: "svc", label: "상품 서비스", x: 10, y: 20, w: 240, h: 270, tone: "private" }]}
+  nodes={[
+    { id: "h", label: "GET /items", sub: "상세 조합", x: 70, y: 155, icon: "client", w: 104 },
+    { id: "cb1", label: "cb-recs", sub: "OPEN", x: 190, y: 70, icon: "lock", w: 104 },
+    { id: "cb2", label: "cb-stock", sub: "CLOSED", x: 190, y: 155, icon: "lock", w: 104 },
+    { id: "cb3", label: "cb-review", sub: "CLOSED", x: 190, y: 240, icon: "lock", w: 104 },
+    { id: "recs", label: "recs", sub: "DB 멈춤", x: 335, y: 70, icon: "server", w: 100 },
+    { id: "stock", label: "stock", sub: "정상", x: 335, y: 155, icon: "server", w: 100 },
+    { id: "review", label: "review", sub: "정상", x: 335, y: 240, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "h", to: "cb1" },
+    { from: "h", to: "cb2" },
+    { from: "h", to: "cb3" },
+    { from: "cb1", to: "recs" },
+    { from: "cb2", to: "stock" },
+    { from: "cb3", to: "review" },
+  ]}
+  steps={[
+    { path: ["h", "cb1"], packet: "recs", blocked: true, highlight: ["recs"], title: "추천 브레이커만 열려 있다", detail: "recs의 실패가 cb-recs의 창에만 쌓였다. 추천 호출은 브레이커에서 바로 폴백한다." },
+    { path: ["h", "cb2", "stock"], packet: "stock", title: "재고는 평소대로 간다", detail: "cb-stock의 창에는 재고 호출의 결과만 있다. 추천의 장애가 여기 실패율에 섞이지 않는다." },
+    { path: ["h", "cb3", "review"], packet: "review", title: "리뷰도 평소대로 간다", detail: "응답은 추천 칸만 비거나 인기 상품으로 채워진 채 나간다." },
+  ]}
+/>
+
+반대 방향의 실수도 있다. 브레이커는 "상대 서비스 전체"를 본다. 추천 서비스 인스턴스 세 대 중 한 대만 망가졌다면 실패율은 33% 근처에서 맴돈다. 기준이 50%면 영영 안 열리고, 기준을 30%로 낮추면 멀쩡한 두 대까지 같이 끊는다. 인스턴스 하나의 문제는 브레이커가 아니라 로드 밸런서가 풀 일이다.
+
+## 헬스 체크, 아웃라이어 감지와 무엇이 다른가
+
+비슷해 보이는 장치가 셋 있다. 로드 밸런서의 능동 헬스 체크는 따로 `/health`를 주기적으로 물어 인스턴스를 빼고 넣는다([로드 밸런서 글](/posts/load-balancer-basics)). 아웃라이어 감지(outlier detection)는 실제 요청 결과를 보고 이상한 인스턴스를 잠깐 빼는 수동 헬스 체크다. 서킷 브레이커는 호출하는 쪽에서 의존성 전체를 보고 호출 자체를 멈춘다.
+
+<NetworkTopology
+  caption="인스턴스 하나의 문제는 로드 밸런서가 빼고, 서비스 전체의 문제는 브레이커가 끊는다"
+  width={400}
+  height={260}
+  zones={[{ id: "pool", label: "recs 인스턴스", x: 220, y: 20, w: 174, h: 230, tone: "private" }]}
+  nodes={[
+    { id: "caller", label: "caller", sub: "cb-recs", x: 52, y: 135, icon: "lock", w: 90 },
+    { id: "lb", label: "LB / Envoy", sub: "outlier", x: 158, y: 135, icon: "lb", w: 96 },
+    { id: "r1", label: "recs-1", sub: "정상", x: 307, y: 65, icon: "server", w: 104 },
+    { id: "r2", label: "recs-2", sub: "5xx 연속", x: 307, y: 135, icon: "server", w: 104 },
+    { id: "r3", label: "recs-3", sub: "정상", x: 307, y: 205, icon: "server", w: 104 },
+  ]}
+  links={[
+    { from: "caller", to: "lb" },
+    { from: "lb", to: "r1" },
+    { from: "lb", to: "r2" },
+    { from: "lb", to: "r3" },
+  ]}
+  steps={[
+    { path: ["caller", "lb", "r2"], packet: "503", blocked: true, title: "한 대만 연속으로 실패한다", detail: "브레이커가 보는 실패율은 33% 남짓이라 열리지 않는다. 열려서도 안 된다. 나머지 두 대는 멀쩡하다." },
+    { path: ["lb", "r2"], packet: "eject", blocked: true, title: "아웃라이어 감지가 그 한 대를 뺀다", detail: "Envoy는 기본으로 5xx가 5번 연속이면 그 호스트를 30초(배수로 늘어남) 동안 빼고, 한 번에 클러스터의 10%까지만 뺀다." },
+    { path: ["caller", "lb", "r1"], packet: "GET", highlight: ["r3"], title: "요청은 남은 두 대로 간다", detail: "호출하는 쪽은 아무것도 모른 채 성공한다. 브레이커의 창에는 성공만 쌓인다." },
+    { path: ["caller"], packet: "OPEN", highlight: ["r1", "r2", "r3"], title: "세 대가 다 같은 DB를 쓰다 함께 느려지면", detail: "이건 인스턴스를 바꿔도 해결되지 않는다. 이때 브레이커가 실패율과 느린 비율을 보고 호출 자체를 멈춘다." },
+  ]}
+/>
+
+이름이 헷갈리는 곳이 하나 있다. Envoy와 Istio의 "circuit breaking" 설정은 이 글의 상태 기계가 아니라 동시성 상한이다. 업스트림 클러스터마다 `max_connections`, `max_pending_requests`, `max_requests`(기본 각각 1024)와 `max_retries`(기본 3)를 넘으면 바로 503을 돌려준다. 실패율을 세서 열고 닫는 동작은 Envoy에서는 위의 `outlier_detection`이 맡는다. 벌크헤드에 더 가깝다. 서비스 메시를 쓴다고 앱의 브레이커가 필요 없어지는 건 아니고, 두 층이 서로 다른 것을 막는다고 보는 게 맞다. 메시의 구조는 [서비스 메시 글](/posts/service-mesh)에 있다.
+
+## 재시도와 타임아웃 사이 어디에 끼우나
+
+장치를 겹쳐 쓸 때는 감싸는 순서가 동작을 바꾼다. Spring Boot에서 Resilience4j 어노테이션을 함께 붙이면 기본 순서가 `Retry ( CircuitBreaker ( RateLimiter ( TimeLimiter ( Bulkhead ( 호출 ) ) ) ) )`다. 재시도가 가장 바깥이라, 재시도 한 번 한 번이 브레이커를 지나며 각각 한 건으로 집계된다.
+
+<SequenceDiagram
+  caption="Retry가 CircuitBreaker를 감싸고, TimeLimiter가 호출을 끊는다"
+  actors={[
+    { id: "retry", label: "Retry" },
+    { id: "cb", label: "CircuitBreaker" },
+    { id: "tl", label: "TimeLimiter" },
+    { id: "rec", label: "recs" },
+  ]}
+  steps={[
+    { from: "retry", to: "cb", label: "시도 1", title: "첫 시도가 브레이커를 지난다", detail: "브레이커가 닫혀 있어 통과시킨다." },
+    { from: "cb", to: "tl", label: "1s 한도", title: "시간 한도를 건다", detail: "TimeLimiter가 1초 뒤에 끊을 준비를 한다." },
+    { from: "tl", to: "rec", label: "GET /recs", title: "실제 호출", detail: "추천 서비스로 요청이 나간다." },
+    { from: "tl", to: "cb", label: "Timeout", title: "1초가 지나 끊는다", detail: "브레이커는 이 결과를 실패 한 건, 동시에 300ms를 넘었으니 느린 호출 한 건으로 센다." },
+    { from: "cb", to: "retry", label: "실패", title: "재시도가 결과를 받는다", detail: "재시도 대상 예외이고 GET이라 한 번 더 보낸다. 백오프 대기 후 시도 2." },
+    { from: "retry", to: "cb", label: "시도 2", title: "두 번째 시도도 브레이커를 지난다", detail: "그 사이 다른 요청들의 실패까지 쌓여 실패율이 기준을 넘었다. 이번에는 브레이커가 열려 있다." },
+    { from: "cb", to: "retry", label: "NotPermitted", title: "바로 거절된다", detail: "CallNotPermittedException. 이 예외는 재시도 대상에서 빼 둔다. 열린 회로에 재시도하면 대기 시간만 늘리고 얻는 게 없다." },
+    { from: "retry", to: "retry", label: "폴백", title: "재시도를 멈추고 폴백한다", detail: "남은 시도를 쓰지 않고 바로 폴백으로 간다." },
+  ]}
+/>
+
+여기서 나오는 규칙이 몇 개 있다. 재시도 대상 예외 목록에서 `CallNotPermittedException`을 뺀다. 재시도가 바깥에 있으니 시도 3번이면 실패도 3건으로 세어져, 사용자 요청 기준보다 빨리 열린다는 걸 감안해 기준을 정한다. 타임아웃(TimeLimiter)은 브레이커 안쪽에 있어야 타임아웃이 실패로 집계된다. 바깥에 두면 브레이커는 끝나지 않은 호출을 영영 모른다. 그리고 재시도 대기 시간까지 합친 전체 시간이 호출한 쪽의 타임아웃 안에 들어와야 한다. 재시도 예산과 지터는 [장애 패턴 글](/posts/resilience-patterns)에서, 다시 보내도 안전하게 만드는 법은 [멱등성 키 글](/posts/idempotency-key)에서 다룬다.
+
+## 폴백은 무엇을 돌려주나
+
+회로가 열렸을 때 돌려줄 것은 기능의 성격이 정한다.
+
+추천, 광고, 최근 본 상품처럼 없어도 페이지가 성립하는 기능은 캐시해 둔 값이나 빈 목록을 돌려주고, 응답에 "줄여서 보냈다"는 표시를 남긴다. 재고나 가격처럼 틀린 값이 더 위험한 기능은 오래된 캐시를 쓰더라도 시각을 함께 보여 주거나, 그냥 에러를 낸다. 결제·주문 같은 쓰기는 폴백으로 "성공한 척"을 하면 안 된다. 빠르게 실패하고 사용자에게 다시 시도하게 하거나, 큐에 넣어 나중에 처리한다.
+
+폴백이 다른 서비스를 부른다면 그 호출에도 브레이커와 타임아웃이 필요하다. 1차 추천이 죽어서 2차 추천 서비스로 몰린 트래픽이 2차를 쓰러뜨리는 일이 흔하다. 폴백은 가능하면 로컬에서 끝나는 것(메모리 캐시, 정적 기본값)으로 만든다.
+
+## 열린 회로를 현장에서 알아채는 법
+
+브레이커는 조용히 일한다. 열려 있어도 에러 로그가 크게 늘지 않고 응답도 빠르다. 사용자는 "추천이 안 뜬다"고만 느낀다. 그래서 상태를 지표로 내보내는 게 첫 번째 일이다. Resilience4j를 Micrometer와 묶으면 `resilience4j.circuitbreaker.state`(상태별 0/1 게이지), `resilience4j.circuitbreaker.calls`(`kind` 태그: successful, failed, ignored, not_permitted), `resilience4j.circuitbreaker.failure.rate`, `resilience4j.circuitbreaker.slow.call.rate`가 나온다. Prometheus로 받으면 점이 밑줄로 바뀐다.
+
+```text
+# PromQL 예시: 1분 넘게 열려 있는 브레이커
+max_over_time(resilience4j_circuitbreaker_state{state="open"}[1m]) == 1
+```
+
+장애 때 보는 순서는 이렇다. 먼저 어느 브레이커가 열렸는지 본다. 열린 브레이커가 하나뿐이면 그 의존성 문제다. 여러 브레이커가 동시에 열렸다면 상대들이 아니라 내 쪽(스레드 풀, DNS, 네트워크, GC)을 의심한다. 다음으로 열린 이유가 실패율인지 느린 비율인지 본다. 느린 비율로 열렸는데 상대의 서버 측 지연은 멀쩡하다면, 내 쪽 커넥션 풀이 바닥나 대기 시간이 호출 시간에 섞인 경우가 많다([커넥션 풀 글](/posts/connection-pool)).
+
+흔한 실수를 증상과 함께 모으면 이렇다.
+
+- 장애 때 안 열린다: 건수 창이 크고 트래픽이 적다. 느린 호출 기준이 기본값(60초)이다. 타임아웃이 브레이커 바깥에 있다.
+- 한산할 때 툭하면 열린다: 최소 호출 수가 작다. opossum의 `volumeThreshold`를 안 줬다.
+- 사용자 실수에 열린다: 404, 400, 검증 실패를 실패로 센다. Resilience4j는 `ignoreExceptions`, opossum은 `errorFilter`로 뺀다.
+- 멀쩡한 기능까지 꺼진다: 의존성 여러 개가 브레이커 하나를 나눠 쓴다.
+- 서버리스 함수에서 효과가 없다: 브레이커 상태가 인스턴스 메모리에 있는데, 인스턴스가 짧게 살고 많이 뜨면 상태가 쌓이기 전에 사라진다. 이때는 Redis 같은 공유 저장소에 상태를 두거나, 앞단의 게이트웨이·메시에서 막는다.
+
+## 상태 기계를 직접 짜 보기
+
+아래 함수는 설정과 호출 목록을 받아, 호출마다 거절됐으면 `"reject"`, 보냈으면 그 결과를 반영한 뒤의 상태를 돌려준다. 호출은 `[시각(ms), 결과]`이고 결과는 `"ok"`, `"fail"`, `"slow"` 중 하나다. 건수 창만 다룬다. 열림에서 반열림으로는 다음 호출이 들어올 때 넘어가고, 반열림에서는 시험 결과가 `halfOpenCalls`개 다 모였을 때 판정한다. 기준은 같거나 크면(>=) 넘은 것으로 본다.
+
+<CodePlayground
+  caption="서킷 브레이커 타임라인"
+  functionName="breakerTimeline"
+  initialCode={`function breakerTimeline(cfg, events) {
+  // cfg: { windowSize, minimumCalls, failureRate, slowCallRate, openMs, halfOpenCalls }
+  // events: [[t, "ok" | "fail" | "slow"], ...]
+  const out = [];
+  for (const [t, result] of events) {
+    out.push("closed");
+  }
+  return out;
+}`}
+  solution={`function breakerTimeline(cfg, events) {
+  const { windowSize, minimumCalls, failureRate, slowCallRate, openMs, halfOpenCalls } = cfg;
+  let state = "closed";
+  let window = [];
+  let openedAt = 0;
+  let permits = 0;
+  let probes = [];
+  const tripped = (list, min) => {
+    if (list.length === 0 || list.length < min) return false;
+    const fails = list.filter((r) => r === "fail").length;
+    const slow = list.filter((r) => r === "slow").length;
+    return (fails / list.length) * 100 >= failureRate || (slow / list.length) * 100 >= slowCallRate;
+  };
+  const out = [];
+  for (const [t, result] of events) {
+    if (state === "open" && t - openedAt >= openMs) {
+      state = "half_open";
+      permits = halfOpenCalls;
+      probes = [];
+    }
+    if (state === "open" || (state === "half_open" && permits === 0)) {
+      out.push("reject");
+      continue;
+    }
+    if (state === "closed") {
+      window.push(result);
+      if (window.length > windowSize) window.shift();
+      if (tripped(window, Math.min(minimumCalls, windowSize))) {
+        state = "open";
+        openedAt = t;
+      }
+    } else {
+      permits--;
+      probes.push(result);
+      if (probes.length === halfOpenCalls) {
+        if (tripped(probes, halfOpenCalls)) {
+          state = "open";
+          openedAt = t;
+        } else {
+          state = "closed";
+          window = [];
+        }
+      }
+    }
+    out.push(state);
+  }
+  return out;
+}`}
+  tests={[
+    {
+      label: "4건 중 2건 실패면 연다",
+      args: [{ windowSize: 4, minimumCalls: 4, failureRate: 50, slowCallRate: 100, openMs: 1000, halfOpenCalls: 2 }, [[0, "ok"], [10, "fail"], [20, "ok"], [30, "fail"], [40, "ok"]]],
+      expected: ["closed", "closed", "closed", "open", "reject"],
+    },
+    {
+      label: "최소 호출 수 2면 두 번째에 연다",
+      args: [{ windowSize: 4, minimumCalls: 2, failureRate: 50, slowCallRate: 100, openMs: 1000, halfOpenCalls: 2 }, [[0, "fail"], [10, "ok"], [20, "ok"]]],
+      expected: ["closed", "open", "reject"],
+    },
+    {
+      label: "대기 후 시험 2개 통과",
+      args: [{ windowSize: 4, minimumCalls: 4, failureRate: 50, slowCallRate: 100, openMs: 1000, halfOpenCalls: 2 }, [[0, "ok"], [10, "ok"], [20, "fail"], [30, "fail"], [500, "ok"], [1030, "ok"], [1040, "ok"], [1050, "ok"]]],
+      expected: ["closed", "closed", "closed", "open", "reject", "half_open", "closed", "closed"],
+    },
+    {
+      label: "시험 2개 중 1개 실패(50%)면 다시 연다",
+      args: [{ windowSize: 4, minimumCalls: 4, failureRate: 50, slowCallRate: 100, openMs: 1000, halfOpenCalls: 2 }, [[0, "fail"], [1, "fail"], [2, "fail"], [3, "fail"], [1003, "ok"], [1004, "fail"], [1005, "ok"], [2004, "ok"], [2005, "ok"]]],
+      expected: ["closed", "closed", "closed", "open", "half_open", "open", "reject", "half_open", "closed"],
+    },
+    {
+      label: "실패 없이 느린 호출만으로 연다",
+      args: [{ windowSize: 4, minimumCalls: 4, failureRate: 50, slowCallRate: 50, openMs: 1000, halfOpenCalls: 2 }, [[0, "slow"], [10, "ok"], [20, "slow"], [30, "ok"]]],
+      expected: ["closed", "closed", "closed", "open"],
+    },
+  ]}
+/>
+
+넷째 테스트가 `>=`와 `>`의 차이가 드러나는 자리다. 비교를 `>`로 바꾸면 시험 2개 중 1개 실패가 50%로 기준을 "넘지 않아" 닫혀 버린다.
+
+## 숫자를 고르기 전에 트래픽부터 본다
+
+서킷 브레이커는 상태 세 개짜리 단순한 기계지만, 실제 동작은 창의 종류와 크기, 최소 호출 수, 느린 기준, 대기 시간, 시험 수라는 숫자들이 정한다. 그 숫자는 라이브러리 기본값이 아니라 그 경로의 트래픽(한산할 때와 붐빌 때), 평소 지연(p99), 상대가 회복하는 데 걸리는 시간에서 나온다. 브레이커는 의존성마다 두고, 인스턴스 하나의 문제는 로드 밸런서에 맡기고, 상태는 지표로 내보낸다. 장치 전체의 그림은 [장애 패턴 글](/posts/resilience-patterns)에, 들어오는 양을 줄이는 쪽은 [레이트 리미팅 글](/posts/rate-limiting-in-practice)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 서킷 브레이커가 타임아웃만으로는 안 되는 이유는?
+
+타임아웃은 한 번의 호출이 얼마나 기다릴지를 정할 뿐, 상대가 계속 망가져 있다는 사실을 기억하지 못한다. 그래서 상대가 죽어 있는 동안 모든 요청이 타임아웃만큼 기다렸다 실패하고, 회복하려는 상대에게도 계속 부하가 간다. 브레이커는 최근 결과를 기억해 실패할 게 뻔한 호출을 보내지 않고 즉시 폴백하며, 대기 시간 동안 상대를 쉬게 한다.
+
+### 건수 기반 창과 시간 기반 창은 언제 무엇을 고르나?
+
+트래픽이 많고 고르면 건수 창이 빠르게 반응하고, 트래픽이 출렁이면 시간 창이 낫다. 건수 창은 성공 N건으로 차 있으면 실패가 N/2건 쌓여야 50%가 되니 트래픽이 적을 때 열리기까지 오래 걸린다. 초당 2건에 창 100이면 25초다. 시간 창은 트래픽과 상관없이 창의 절반 정도 시간에 판정하지만, 그 시간 안에 최소 호출 수가 모이지 않으면 아예 판정하지 않는다.
+
+### minimumNumberOfCalls는 왜 있고, 어떻게 정하나?
+
+표본이 너무 적을 때 비율로 판정하지 않게 하는 값이다. 한 건 중 한 건 실패도 100%이기 때문이다. opossum은 이 값(`volumeThreshold`)의 기본이 0이라 첫 호출 실패만으로 열린다. 그 경로의 한산한 시간대에 창 안에 모이는 호출 수보다 작게, 그러면서 우연한 실패 한두 건에 열리지 않을 만큼 크게 정한다.
+
+### 느린 호출 비율로도 여는 이유는?
+
+연쇄 장애를 만드는 건 대부분 실패가 아니라 느림이기 때문이다. 느린 호출은 스레드와 커넥션을 쥔 채 놓지 않아 호출한 쪽의 자원을 바닥낸다. Resilience4j 기본값(60초, 100%)은 사실상 꺼져 있으니 평소 p99의 몇 배 정도로 기준을 잡고, 그 값은 타임아웃보다 짧아야 의미가 있다.
+
+### 반열림에서 시험 요청을 몇 개 보내는 게 좋은가?
+
+하나면 운 좋은 성공 한 번에 닫힐 수 있고, 많으면 판정은 안정적이지만 회복 중인 상대에게 부담이 된다. Resilience4j 기본은 10개, opossum은 1개다. 인스턴스가 많으면 모든 인스턴스의 브레이커가 동시에 반열림이 되어 시험 요청이 몰리니, 대기 시간에 지터나 백오프를 넣어 흩는다.
+
+### 재시도와 서킷 브레이커를 같이 쓰면 무엇을 조심하나?
+
+감싸는 순서와 재시도 대상 예외다. 재시도가 바깥에 있으면 시도마다 브레이커에 한 건씩 집계되어 더 빨리 열리고, 열린 뒤 나오는 `CallNotPermittedException`은 재시도 대상에서 빼야 의미 없는 대기가 없다. 타임아웃은 브레이커 안쪽에 둬야 실패로 집계된다.
+
+### 인스턴스 하나만 망가졌을 때도 서킷 브레이커가 열려야 하나?
+
+아니다. 그건 로드 밸런서의 헬스 체크나 아웃라이어 감지가 그 인스턴스를 빼서 풀 문제다. 의존성 단위 브레이커가 열리면 멀쩡한 인스턴스까지 같이 끊긴다. 브레이커는 모든 인스턴스가 같은 DB를 쓰다 함께 느려지는 것처럼 서비스 전체가 아플 때 호출 자체를 멈추는 장치다.
+
+### Envoy의 circuit breaking은 애플리케이션의 서킷 브레이커와 같은가?
+
+이름만 같고 다르다. Envoy의 circuit breaking은 업스트림 클러스터별 동시 연결·대기 요청·요청·재시도 수의 상한(기본 1024, 1024, 1024, 3)이고 넘으면 바로 503을 낸다. 실패를 세서 호스트를 빼는 건 outlier detection이 한다. 그래서 메시를 쓰더라도 의존성 단위로 폴백을 정하는 앱의 브레이커는 따로 필요할 수 있다.

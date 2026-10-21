@@ -1,0 +1,420 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-mediator");
+
+결제 화면에는 다섯 부품이 있다. 배송 방법 선택, 주소 입력, 쿠폰 입력, 금액 요약, 결제 버튼이다. 처음엔 단순했다. 쿠폰을 넣으면 금액 요약을 고친다. 그런데 요구가 붙을 때마다 부품끼리 서로를 부르기 시작했다. 새벽 배송은 수도권 주소에서만 되니 주소 입력이 배송 선택을 부르고, 배송비가 바뀌니 배송 선택이 금액 요약을 부르고, 금액이 0원이 되면 결제 버튼 문구가 바뀌니 금액 요약이 결제 버튼을 부른다.
+
+```ts
+declare class PriceSummary { recalc(): void }
+declare class PayButton { refresh(): void }
+declare class ShippingSelect { readonly method: string }
+
+// 쿠폰 입력이 세 부품을 직접 안다
+class CouponInput {
+  constructor(
+    private readonly summary: PriceSummary,
+    private readonly pay: PayButton,
+    private readonly shipping: ShippingSelect, // 새벽 배송엔 쿠폰을 못 쓴다는 규칙 때문에 추가됐다
+  ) {}
+  enter(code: string) {
+    if (this.shipping.method === "dawn") return;
+    // ... 쿠폰 검사
+    this.summary.recalc();
+    this.pay.refresh();
+  }
+}
+```
+
+이제 쿠폰 입력을 다른 화면(장바구니)에서 다시 쓰려면 금액 요약과 결제 버튼과 배송 선택을 같이 가져가야 한다. "새벽 배송이면 쿠폰 불가" 규칙은 쿠폰 입력 안에 있고, "주소가 바뀌면 새벽 배송 해제" 규칙은 주소 입력 안에 있다. 결제 화면의 규칙이 다섯 파일에 흩어진 것이다. 이번 글은 부품들이 서로를 부르지 않고 가운데 객체 하나에만 알리게 하는 중재자(Mediator) 패턴이다.
+
+## 서로 아는 선이 열 개에서 다섯 개로
+
+부품 다섯 개가 서로를 알 수 있다면 연결은 최대 5 × 4 / 2 = 10개다. 부품이 하나 늘 때마다 연결이 부품 수만큼 늘어난다. 아래 그림이 지금 결제 화면의 모습이다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="부품끼리 직접 부르면 연결이 부품 수의 제곱으로 는다"
+  nodes={[
+    { id: "ship", label: "Shipping", x: 200, y: 35, w: 100 },
+    { id: "addr", label: "Address", x: 345, y: 110, w: 96 },
+    { id: "pay", label: "PayButton", x: 290, y: 215, w: 104 },
+    { id: "sum", label: "Summary", x: 110, y: 215, w: 100 },
+    { id: "coupon", label: "Coupon", x: 55, y: 110, w: 90 },
+  ]}
+  edges={[
+    { from: "addr", to: "ship", arrow: "none" },
+    { from: "ship", to: "sum", arrow: "none" },
+    { from: "ship", to: "pay", arrow: "none" },
+    { from: "coupon", to: "sum", arrow: "none" },
+    { from: "coupon", to: "pay", arrow: "none" },
+    { from: "coupon", to: "ship", arrow: "none" },
+    { from: "sum", to: "pay", arrow: "none" },
+    { from: "addr", to: "pay", arrow: "none" },
+    { from: "addr", to: "sum", arrow: "none" },
+    { from: "addr", to: "coupon", arrow: "none" },
+  ]}
+/>
+
+중재자는 이 그물을 별 모양으로 바꾼다. 부품(GoF는 Colleague, 동료라고 부른다)은 중재자 하나만 알고, "나 바뀌었다"고만 알린다. 누가 바뀌면 누구를 어떻게 바꿀지는 중재자만 안다. 연결은 부품 수만큼, 다섯 개가 된다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="부품은 중재자에게만 알리고, 중재자가 나머지를 움직인다"
+  nodes={[
+    { id: "med", label: "Checkout", sub: "Mediator", x: 200, y: 125, w: 110 },
+    { id: "ship", label: "Shipping", x: 200, y: 30, w: 100 },
+    { id: "addr", label: "Address", x: 345, y: 90, w: 96 },
+    { id: "pay", label: "PayButton", x: 300, y: 220, w: 104 },
+    { id: "sum", label: "Summary", x: 100, y: 220, w: 100 },
+    { id: "coupon", label: "Coupon", x: 55, y: 90, w: 90 },
+  ]}
+  edges={[
+    { from: "ship", to: "med", label: "notify" },
+    { from: "addr", to: "med", label: "notify" },
+    { from: "coupon", to: "med", label: "notify" },
+    { from: "med", to: "sum", label: "render" },
+    { from: "med", to: "pay", label: "setEnabled" },
+  ]}
+/>
+
+연결 수가 줄어든 것보다 중요한 건 규칙이 한곳에 모인다는 것이다. "새벽 배송은 수도권만", "쿠폰은 3만 원 이상", "주소가 없으면 결제 버튼 비활성"이 모두 중재자의 `notify` 안에 있다. 결제 정책을 바꾸려면 그 파일 하나를 연다.
+
+## 부품은 알리기만 한다
+
+부품 쪽 코드는 짧아진다. 자기 값을 바꾸고 중재자에게 사건을 알린다. 다른 부품의 이름은 나오지 않는다.
+
+```ts
+type CheckoutEvent =
+  | { type: "shipping:changed"; method: "standard" | "dawn" }
+  | { type: "address:changed"; zip: string }
+  | { type: "coupon:entered"; code: string }
+  | { type: "total:changed"; total: number };
+
+interface Mediator {
+  notify(event: CheckoutEvent): void;
+}
+
+class ShippingSelect {
+  method: "standard" | "dawn" = "standard";
+  constructor(private readonly mediator: Mediator) {}
+  choose(method: "standard" | "dawn") {
+    this.method = method;
+    this.mediator.notify({ type: "shipping:changed", method });
+  }
+  disableDawn(reason: string) {
+    this.method = "standard"; // 중재자가 시킨 변경은 다시 알리지 않는다
+    console.log(`  [shipping] 새벽 배송 끔 (${reason})`);
+  }
+}
+
+class AddressForm {
+  zip = "";
+  constructor(private readonly mediator: Mediator) {}
+  input(zip: string) {
+    this.zip = zip;
+    this.mediator.notify({ type: "address:changed", zip });
+  }
+}
+
+class CouponInput {
+  discount = 0;
+  constructor(private readonly mediator: Mediator) {}
+  enter(code: string) {
+    this.mediator.notify({ type: "coupon:entered", code });
+  }
+  show(message: string) {
+    console.log(`  [coupon] ${message}`);
+  }
+}
+
+class PriceSummary {
+  total = 0;
+  constructor(private readonly mediator: Mediator) {}
+  render(subtotal: number, shippingFee: number, discount: number) {
+    const next = subtotal + shippingFee - discount;
+    console.log(`  [summary] ${subtotal} + 배송 ${shippingFee} - 할인 ${discount} = ${next}`);
+    if (next === this.total) return; // 바뀌지 않았으면 알리지 않는다
+    this.total = next;
+    this.mediator.notify({ type: "total:changed", total: next });
+  }
+}
+
+class PayButton {
+  enabled = false;
+  setEnabled(enabled: boolean, label: string) {
+    this.enabled = enabled;
+    console.log(`  [pay] ${enabled ? "활성" : "비활성"} · ${label}`);
+  }
+}
+```
+
+알리는 한 줄을 뜯어 보면 부품이 무엇을 알고 무엇을 모르는지가 보인다.
+
+<UrlAnatomy
+  caption="부품이 아는 것은 중재자와 사건 이름뿐이다"
+  base="this.mediator.notify("
+  separator=""
+  joiner=" "
+  params={[
+    { key: "type", display: "{ type: \"coupon:entered\",", title: "무슨 일이 있었나", description: "\"금액을 다시 계산해라\"가 아니라 \"쿠폰이 입력됐다\"고 알린다. 그 결과 무엇이 바뀌어야 하는지는 부품이 모른다.", required: true },
+    { key: "payload", display: "code }", title: "판단에 필요한 값", description: "중재자가 다시 물어보지 않아도 되게 바뀐 값을 함께 보낸다. 부품의 내부 객체를 통째로 넘기지 않는다." },
+    { key: "close", display: ")", title: "돌려받는 값이 없다", description: "notify는 void다. 부품은 결과를 기다리지 않는다. 결과가 필요하면 중재자가 부품의 메서드(show, setEnabled)를 불러 알려 준다.", code: "coupon.show(\"10% 할인 적용\")" },
+  ]}
+/>
+
+## 규칙은 중재자 한 파일에
+
+중재자는 부품을 만들고 들고 있다가, 사건이 오면 규칙에 따라 부품들을 움직인다.
+
+```ts
+const DAWN_ZIPS = /^0[0-9]|^1[0-8]/; // 새벽 배송 가능 우편번호 앞자리 (예시 규칙)
+
+class CheckoutMediator implements Mediator {
+  readonly shipping = new ShippingSelect(this);
+  readonly address = new AddressForm(this);
+  readonly coupon = new CouponInput(this);
+  readonly summary = new PriceSummary(this);
+  readonly pay = new PayButton();
+  constructor(private readonly subtotal: number) {}
+
+  notify(event: CheckoutEvent) {
+    console.log(`mediator ← ${event.type}`);
+    switch (event.type) {
+      case "address:changed":
+        if (this.shipping.method === "dawn" && !DAWN_ZIPS.test(event.zip)) this.shipping.disableDawn("지원 지역 아님");
+        return this.recalc();
+      case "shipping:changed":
+        return this.recalc();
+      case "coupon:entered": {
+        const ok = event.code === "WELCOME10" && this.subtotal >= 30000;
+        this.coupon.discount = ok ? Math.floor(this.subtotal * 0.1) : 0;
+        this.coupon.show(ok ? "10% 할인 적용" : "쓸 수 없는 쿠폰");
+        return this.recalc();
+      }
+      case "total:changed":
+        return this.pay.setEnabled(this.address.zip !== "" && event.total > 0, `${event.total}원 결제`);
+    }
+  }
+
+  private recalc() {
+    const fee = this.shipping.method === "dawn" ? 4000 : this.subtotal >= 50000 ? 0 : 3000;
+    this.summary.render(this.subtotal, fee, this.coupon.discount);
+  }
+}
+
+const checkout = new CheckoutMediator(42000);
+checkout.shipping.choose("dawn");
+checkout.address.input("48058"); // 수도권이 아닌 우편번호
+checkout.coupon.enter("WELCOME10");
+```
+
+실제로 돌린 출력이다. 어느 사건이 무엇을 움직였는지 한 줄씩 보인다.
+
+```text
+mediator ← shipping:changed
+  [summary] 42000 + 배송 4000 - 할인 0 = 46000
+mediator ← total:changed
+  [pay] 비활성 · 46000원 결제
+mediator ← address:changed
+  [shipping] 새벽 배송 끔 (지원 지역 아님)
+  [summary] 42000 + 배송 3000 - 할인 0 = 45000
+mediator ← total:changed
+  [pay] 활성 · 45000원 결제
+mediator ← coupon:entered
+  [coupon] 10% 할인 적용
+  [summary] 42000 + 배송 3000 - 할인 4200 = 40800
+mediator ← total:changed
+  [pay] 활성 · 40800원 결제
+```
+
+같은 세 사건을 화면 상태로 따라가면 이렇다. 아래 그림에서 다음을 누르면 사건 하나가 들어올 때마다 중재자가 바꾼 값이 오른쪽에 쌓인다.
+
+<AlgoTrace
+  caption="사건이 들어올 때마다 중재자가 상태를 맞춘다"
+  memoryLabel="결제 화면 상태"
+  cells={["새벽 배송 선택", "주소 48058", "쿠폰 WELCOME10"]}
+  steps={[
+    { memory: ["배송: 일반", "총액: 0", "결제: 비활성"], caption: "상품 금액 42,000원짜리 결제 화면이 열렸다." },
+    { pointer: 0, memory: ["배송: 새벽", "총액: 46000", "결제: 비활성"], caption: "새벽 배송비 4,000원이 붙는다. 주소가 아직 없으니 결제 버튼은 꺼져 있다." },
+    { pointer: 1, memory: ["배송: 일반 ↺", "총액: 45000", "결제: 활성"], caption: "48058은 새벽 배송 지역이 아니다. 중재자가 배송을 일반으로 되돌리고 배송비 3,000원으로 다시 계산한다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["배송: 일반", "할인: 4200", "총액: 40800", "결제: 활성"], caption: "3만 원 이상이라 쿠폰이 맞는다. 10% 할인이 들어가고 결제 버튼 문구가 40,800원으로 바뀐다." },
+  ]}
+/>
+
+쿠폰 하나가 들어왔을 때 객체 사이의 호출을 보면, 부품끼리는 한 번도 직접 말하지 않는다.
+
+<SequenceDiagram
+  caption="쿠폰 입력에서 결제 버튼까지, 모든 호출이 중재자를 지난다"
+  actors={[
+    { id: "coupon", label: "Coupon" },
+    { id: "med", label: "Mediator" },
+    { id: "sum", label: "Summary" },
+    { id: "pay", label: "PayButton" },
+  ]}
+  steps={[
+    { from: "coupon", to: "med", label: "coupon:entered", title: "쿠폰 입력은 알리기만 한다", detail: "쿠폰이 맞는지, 금액을 다시 계산해야 하는지 쿠폰 입력은 모른다.", payload: "{ type: \"coupon:entered\", code: \"WELCOME10\" }" },
+    { from: "med", to: "coupon", label: "show(10% 할인)", title: "판단은 중재자가 한다", detail: "상품 금액이 3만 원 이상인지 보고 할인액을 정한다. 결과 문구는 쿠폰 입력에게 보여 달라고 한다." },
+    { from: "med", to: "sum", label: "render()", title: "금액을 다시 그리게 한다", detail: "배송비와 할인액을 넘겨 금액 요약을 다시 그린다." },
+    { from: "sum", to: "med", label: "total:changed", title: "총액이 바뀌었다고 알린다", detail: "금액 요약도 결제 버튼을 모른다. 총액이 바뀌었다는 사실만 중재자에게 알린다." },
+    { from: "med", to: "pay", label: "setEnabled(true)", title: "결제 버튼을 맞춘다", detail: "주소가 있고 총액이 0보다 크니 버튼을 켜고 문구를 40,800원으로 바꾼다." },
+  ]}
+/>
+
+## 알림이 다시 알림을 부를 때
+
+위 코드의 `PriceSummary`에는 "값이 같으면 알리지 않는다"는 한 줄이 있다. 이 줄을 지우고, 중재자가 총액이 바뀌면 무료 배송 기준을 다시 보도록 `recalc()`를 한 번 더 부르게 바꿔 봤다. 그럴듯한 요구다.
+
+```text
+RangeError: Maximum call stack size exceeded after 2673 notify calls
+```
+
+금액 요약이 알리고, 중재자가 다시 계산하고, 금액 요약이 또 알리는 고리가 생겼다. 중재자 구조에서 가장 흔한 사고다. 모든 알림이 한곳으로 모이니 고리를 만들기도 쉽다. 아래 그림에서 마지막 단계가 고리가 끊기는 지점이다.
+
+<NetworkTopology
+  caption="값이 그대로면 알리지 않아야 고리가 끊긴다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "coupon", label: "Coupon", x: 55, y: 60, icon: "client", w: 74 },
+    { id: "med", label: "Mediator", x: 200, y: 115, icon: "router", w: 84 },
+    { id: "sum", label: "Summary", x: 345, y: 60, icon: "server", w: 80 },
+    { id: "pay", label: "PayButton", x: 345, y: 185, icon: "lock", w: 88 },
+  ]}
+  links={[
+    { from: "coupon", to: "med" },
+    { from: "med", to: "sum" },
+    { from: "med", to: "pay" },
+  ]}
+  steps={[
+    { path: ["coupon", "med", "sum"], packet: "coupon", title: "쿠폰이 들어와 다시 계산한다", detail: "중재자가 할인액을 정하고 금액 요약에 다시 그리라고 한다." },
+    { path: ["sum", "med", "pay"], packet: "total", title: "총액이 바뀌어 결제 버튼을 맞춘다", detail: "여기까지는 정상이다. 그런데 중재자가 총액 변경에도 recalc()를 부르게 되어 있다." },
+    { path: ["med", "sum", "med"], packet: "total", title: "같은 총액으로 다시 알린다", detail: "값 비교가 없으면 금액 요약은 같은 40,800원으로 또 알린다. 중재자는 또 다시 계산한다. 호출 스택이 2,673번 만에 넘쳤다." },
+    { path: ["med", "sum"], packet: "40800", blocked: true, title: "값이 같으면 여기서 멈춘다", detail: "금액 요약이 이전 값과 비교해 같으면 알리지 않는다. 고리는 한 바퀴 만에 끝난다." },
+  ]}
+/>
+
+막는 방법은 몇 가지가 있고 보통 함께 쓴다. 값이 실제로 바뀌었을 때만 알린다. 중재자가 시킨 변경(위의 `disableDawn`)은 다시 알리지 않는다. 그래도 불안하면 중재자에 처리 중 표시를 두고, 처리 중에 들어온 사건은 큐에 쌓았다가 지금 처리가 끝난 뒤 차례로 처리한다. React도 비슷한 장치를 둔다. 같은 값으로 `setState`하면(`Object.is`로 비교한다) 다시 그리지 않고 넘어가고, 렌더링 도중 상태를 계속 바꾸는 고리는 일정 횟수에서 `Too many re-renders` 에러로 끊는다.
+
+## 이미 쓰고 있는 중재자
+
+HTML의 라디오 버튼이 가장 작은 예다. `name`이 같은 라디오 버튼은 서로를 모르는데, 하나를 고르면 나머지가 풀린다. 그 규칙은 브라우저가 같은 이름의 그룹을 묶어 처리한다. Java Swing은 이것을 `ButtonGroup`이라는 객체로 드러내 놓았다. 버튼들을 그룹에 넣으면 그룹이 "하나만 선택" 규칙을 맡는다.
+
+React에서 "상태 끌어올리기"를 하면 부모 컴포넌트가 중재자가 된다. 형제 컴포넌트는 서로를 import하지 않고, `onChange` 콜백으로 부모에게 알리고 부모가 내려 준 props로 다시 그려진다. 위의 결제 화면을 React로 짜면 `CheckoutPage`가 상태와 규칙을 쥐고 다섯 자식에게 값과 콜백을 내려 주는 모양이 된다. 규칙이 커지면 `useReducer`의 리듀서 하나로 모은다. 리듀서의 `switch`가 위 `notify`의 `switch`와 거의 같다.
+
+서버 쪽에도 있다. .NET의 MediatR은 `mediator.Send(new PlaceOrder(...))`로 요청을 보내면 그 요청을 처리할 핸들러를 찾아 연결해 준다. NestJS CQRS 모듈의 `CommandBus.execute()`도 같은 모양이다. 컨트롤러가 서비스를 직접 알지 않게 해 주지만, 이 둘은 규칙을 가진 중재자라기보다 요청을 이름으로 연결해 주는 배달부에 가깝다. 여러 서비스 사이에서는 사가의 오케스트레이터가 중재자 역할을 한다. 흐름을 중앙에서 쥘지 각 서비스가 이벤트에 반응하게 둘지는 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture#흐름을-누가-쥐나)과 [사가 패턴 글](/posts/saga-pattern)에서 다뤘다.
+
+## 이벤트 버스는 규칙 없는 중재자다
+
+중재자를 만들 때 흔히 이렇게 짠다. 부품들이 중앙 이벤트 버스에 이벤트를 던지고, 다른 부품들이 그 버스를 구독한다. 이것도 부품끼리 서로를 모르니 그물은 사라진다. 그런데 규칙은 어디 있을까. 각 구독자 안에 흩어져 있다. "주소가 바뀌면 새벽 배송 해제"는 배송 선택의 구독 코드에, "쿠폰은 3만 원 이상"은 쿠폰 입력의 구독 코드에 있다. 처음 문제였던 "규칙이 다섯 파일에 흩어진" 상태로 돌아간다. 거기에 누가 무엇을 듣는지 코드만 봐서는 찾기 어려워진다.
+
+[옵서버](/posts/pattern-observer)와 중재자의 차이가 여기서 갈린다. 옵서버의 주체(Subject)는 누가 듣는지, 듣고 무엇을 하는지 모르고 관심도 없다. 중재자는 부품들을 알고, 무엇이 무엇을 바꾸는지 결정한다. 그래서 둘을 함께 쓰는 경우가 많다. 부품은 옵서버 방식으로 사건을 알리고, 그 사건을 듣는 쪽은 중재자 하나뿐이며, 중재자가 규칙에 따라 부품을 부른다. 구독자가 여럿 붙기 시작하면 이름만 중재자인 이벤트 버스가 된다.
+
+[퍼사드](/posts/pattern-facade#어댑터-중재자와-나란히-놓으면)와도 그림이 닮았는데, 퍼사드는 바깥에서 안으로 한 방향으로 흐르고 하위 시스템이 퍼사드를 모른다는 점이 다르다. 그 비교는 퍼사드 글에 정리했다.
+
+## 중재자가 신 객체가 되는 길
+
+중재자의 약점은 정직하다. 그물의 복잡도가 사라진 게 아니라 중재자 안으로 옮겨 왔다. 결제 화면에 규칙이 30개 붙으면 `notify`의 `switch`는 수백 줄이 되고, 모든 변경이 이 파일에서 충돌한다. 그때 쓰는 방법은 이렇다.
+
+- 관심사별로 중재자를 나눈다. 배송 규칙과 할인 규칙이 서로 영향을 주지 않는다면 `ShippingRules`, `DiscountRules` 두 중재자로 쪼개고, 금액 요약은 둘의 결과만 받는다.
+- 규칙 자체를 함수로 뺀다. 배송비 계산은 `shippingFee(method, subtotal)` 같은 순수 함수로, 결제 가능 여부는 `canPay(state)`로 둔다. 중재자는 사건을 받아 이 함수들을 순서대로 부르는 얇은 층이 된다. 순수 함수는 테스트하기도 쉽다.
+- 화면에 단계가 있다면(주소 입력 → 결제 수단 → 확인) 단계별 규칙을 [상태 패턴](/posts/pattern-state)으로 나눈다.
+
+중재자가 커지는 신호는 이렇다. `notify`에 `if (this.a.x && this.b.y && !this.c.z)` 같은 여러 부품을 동시에 보는 조건이 늘고, 사건 하나를 처리하는데 같은 부품을 두 번 부른다. 이때가 나눌 때다.
+
+## 부품과 중재자를 따로 테스트한다
+
+부품은 중재자 인터페이스만 알기 때문에 가짜 중재자로 테스트할 수 있다. 다른 부품을 하나도 만들지 않아도 된다.
+
+```ts
+const events: CheckoutEvent[] = [];
+const fakeMediator: Mediator = { notify: (e) => events.push(e) };
+
+const summary = new PriceSummary(fakeMediator);
+summary.render(42000, 3000, 0);
+summary.render(42000, 3000, 0); // 같은 값
+
+console.assert(events.length === 1, "같은 총액이면 두 번 알리지 않는다");
+console.assert(events[0].type === "total:changed");
+```
+
+중재자 테스트는 반대로 진짜 부품을 붙이고 사건 순서를 넣어 최종 상태를 본다. 위에서 돌린 시나리오 출력이 그대로 테스트의 기대값이 된다. 처음 구조에서는 쿠폰 입력 하나를 테스트하려 해도 금액 요약, 결제 버튼, 배송 선택을 모두 만들어 넣어야 했다.
+
+## 결제 화면 규칙 직접 맞추기
+
+중재자 역할을 하는 `checkout(subtotal, events)`를 완성해 보자. 사건은 `["shipping", "dawn" | "standard"]`, `["zip", 우편번호]`, `["coupon", 코드]`이고, 모든 사건을 처리한 뒤 `[총액, 결제 가능 여부]`를 돌려준다. 규칙은 코드 주석에 있다.
+
+<CodePlayground
+  caption="사건을 받아 규칙대로 화면 상태를 맞추는 중재자"
+  functionName="checkout"
+  initialCode={`// 규칙
+// - 배송비: 새벽 4000원, 일반은 상품 금액 5만 원 이상이면 0원 아니면 3000원
+// - 새벽 배송은 우편번호가 0 또는 1로 시작할 때만 된다 (주소가 비어 있으면 일단 허용)
+//   안 되는 주소에서 새벽을 고르거나, 새벽인데 안 되는 주소가 들어오면 일반으로 바꾼다
+// - 쿠폰 WELCOME10: 상품 금액 3만 원 이상이면 10% 할인 (소수점 버림), 아니면 할인 0
+// - 결제 가능: 주소가 입력되어 있으면 true
+function checkout(subtotal, events) {
+  const state = { method: "standard", zip: "", discount: 0 };
+  for (const [type, value] of events) {
+    // 사건마다 규칙대로 state를 맞춘다
+  }
+  return [subtotal, state.zip !== ""];
+}`}
+  solution={`function checkout(subtotal, events) {
+  const state = { method: "standard", zip: "", discount: 0 };
+  const dawnOk = (zip) => zip === "" || /^[01]/.test(zip);
+  for (const [type, value] of events) {
+    if (type === "shipping") {
+      state.method = value === "dawn" && !dawnOk(state.zip) ? "standard" : value;
+    } else if (type === "zip") {
+      state.zip = value;
+      if (state.method === "dawn" && !dawnOk(value)) state.method = "standard";
+    } else if (type === "coupon") {
+      state.discount = value === "WELCOME10" && subtotal >= 30000 ? Math.floor(subtotal * 0.1) : 0;
+    }
+  }
+  const fee = state.method === "dawn" ? 4000 : subtotal >= 50000 ? 0 : 3000;
+  return [subtotal + fee - state.discount, state.zip !== ""];
+}`}
+  tests={[
+    { args: [42000, [["shipping", "dawn"], ["zip", "48058"], ["coupon", "WELCOME10"]]], expected: [40800, true], label: "본문 시나리오" },
+    { args: [42000, [["zip", "04524"], ["shipping", "dawn"]]], expected: [46000, true], label: "수도권이면 새벽 배송" },
+    { args: [42000, [["zip", "48058"], ["shipping", "dawn"]]], expected: [45000, true], label: "안 되는 주소에서 새벽을 고르면 일반" },
+    { args: [60000, [["zip", "48058"]]], expected: [60000, true], label: "5만 원 이상 일반 배송은 무료" },
+    { args: [20000, [["coupon", "WELCOME10"], ["zip", "13529"]]], expected: [23000, true], label: "3만 원 미만은 쿠폰 불가" },
+    { args: [42000, [["shipping", "dawn"]]], expected: [46000, false], label: "주소가 없으면 결제 불가" },
+  ]}
+/>
+
+중재자는 서로를 부르던 부품들 사이에 가운데 객체를 두어, 부품은 알리기만 하고 무엇이 무엇을 바꾸는지는 중재자가 정하게 하는 패턴이다. 얻는 것은 한곳에 모인 규칙과 다시 쓸 수 있는 부품이고, 치르는 것은 커지기 쉬운 중재자 하나다. 만들 때는 알림이 알림을 부르는 고리부터 막고, 중재자가 여러 부품을 동시에 들여다보는 조건으로 가득 차면 나눌 때가 된 것이다.
+
+## 면접에서 나올 만한 질문
+
+### 중재자 패턴은 어떤 문제를 푸나요?
+
+여러 객체가 서로를 직접 참조해 그물처럼 얽힌 문제를 푼다. 객체들은 중재자 하나만 알고 자기에게 일어난 일을 알리며, 누가 바뀌면 누구를 어떻게 바꿀지는 중재자가 정한다. 연결이 부품 수의 제곱에서 부품 수로 줄고, 흩어져 있던 상호작용 규칙이 한곳에 모여 부품을 다른 곳에서 다시 쓸 수 있게 된다.
+
+### 중재자와 옵서버는 어떻게 다른가요?
+
+옵서버의 주체는 누가 듣는지, 듣고 무엇을 하는지 모르고, 반응하는 로직은 구독자 각자에게 있다. 중재자는 참여하는 객체들을 알고 그 사이의 규칙을 직접 가진다. 실제로는 함께 쓰는 경우가 많아서, 부품은 이벤트로 알리고 그 이벤트를 듣는 쪽은 중재자 하나이며 중재자가 규칙대로 부품을 부른다.
+
+### 이벤트 버스를 쓰면 중재자 패턴인가요?
+
+부품끼리 서로를 모르게 한다는 점은 같지만, 버스가 규칙을 갖지 않으면 상호작용 규칙이 각 구독자 안으로 다시 흩어진다. 누가 무엇을 듣고 무엇을 바꾸는지 추적하기도 어려워진다. 규칙을 한곳에 모으고 싶다면 버스를 듣는 쪽을 중재자 하나로 두고 그 안에 규칙을 둔다.
+
+### 중재자 패턴의 단점은 무엇이고 어떻게 다루나요?
+
+복잡도가 사라지는 게 아니라 중재자로 옮겨 오기 때문에, 규칙이 늘면 중재자가 모든 걸 아는 신 객체가 된다. 관심사별로 중재자를 나누고, 배송비나 결제 가능 여부 같은 규칙은 순수 함수로 빼서 중재자를 얇게 유지한다. 화면에 단계가 있다면 단계별 규칙을 상태 패턴으로 나눈다.
+
+### 중재자를 쓸 때 무한 루프는 왜 생기고 어떻게 막나요?
+
+부품이 알리면 중재자가 다른 부품을 바꾸고, 그 부품이 또 알리는 고리가 생기기 때문이다. 실험에서는 값 비교 한 줄을 지우자 같은 총액 알림이 반복되어 2,673번 만에 호출 스택이 넘쳤다. 값이 실제로 바뀔 때만 알리고, 중재자가 시킨 변경은 다시 알리지 않으며, 필요하면 처리 중에 들어온 사건을 큐에 쌓았다가 순서대로 처리한다.
+
+### 중재자와 퍼사드는 어떻게 다른가요?
+
+둘 다 가운데 객체가 여럿과 연결되지만 방향이 다르다. 퍼사드는 바깥 클라이언트를 위한 단순한 입구이고, 하위 시스템은 퍼사드를 모르며 요청이 한 방향으로 흐른다. 중재자의 동료 객체들은 중재자를 알고 서로의 상호작용을 중재자를 거쳐 주고받는다.
+
+### 실무에서 중재자를 본 예를 들어 주세요.
+
+React에서 상태를 부모로 끌어올리면 부모 컴포넌트가 중재자가 된다. 형제는 서로를 모르고 콜백으로 부모에게 알리며 부모가 내려 준 props로 그려진다. 같은 name의 HTML 라디오 버튼과 Java Swing의 ButtonGroup은 "하나만 선택" 규칙을 맡는 중재자이고, 서비스 사이에서는 사가의 오케스트레이터가 흐름을 쥔 중재자 역할을 한다.

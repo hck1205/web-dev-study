@@ -1,0 +1,654 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-batch-kueue");
+
+GPU 8장짜리 클러스터에 학습 Job 두 개가 동시에 들어왔다. 둘 다 GPU 6장이 있어야 돌아가는 분산 학습이다. 몇 분 뒤 보니 Job A의 Pod 4개와 Job B의 Pod 4개가 Running이고, 나머지 4개는 Pending이다. GPU 8장이 모두 잡혀 있는데 어느 Job도 학습을 시작하지 못한다. 둘 다 동료 Pod를 기다리며 GPU만 붙잡고 있다.
+
+웹 서버라면 Pod 4개라도 뜨는 편이 낫다. 배치와 학습은 다르다. 전부 떠야 의미가 있고, 누가 먼저 쓸지 순서와 몫이 있어야 하고, 남는 자원은 다른 팀이 빌려 써야 한다. 이 글은 기본 스케줄러가 배치에 부족한 지점을 실제로 재현하고, Kueue가 대기열과 할당량으로 그 빈자리를 어떻게 채우는지, 학습 Job을 한 덩어리로 다루는 JobSet과 gang scheduling까지 따라간다.
+
+Job 자체의 동작(completions, parallelism, Indexed Job, backoffLimit)은 [Job과 CronJob 글](/posts/k8s-job-cronjob)에, 스케줄러를 확장하거나 갈아 끼우는 방법은 [API 확장과 사용자 스케줄러 글](/posts/k8s-api-aggregation-schedulers)에 있다. GPU를 Pod에 붙이는 방식은 [GPU와 DRA 글](/posts/k8s-gpu-dra)에서 다뤘다.
+
+실습은 Ubuntu 24.04에서 kwok으로 띄운 Kubernetes v1.37.0 클러스터다. 노드 두 대에 GPU를 4장씩 적어 두었다. Kueue v0.20.2의 CRD(이 버전에서 제공되는 API는 `kueue.x-k8s.io/v1beta2`)와 JobSet v0.13.0의 CRD는 실제로 설치해 검증까지 확인했다. Kueue 컨트롤러는 v0.20.2 소스로 빌드해 클러스터 밖에서 kwok API 서버에 붙여 돌렸다(웹훅은 등록하지 않아서 Job을 처음부터 `suspend: true`로 만들었다). kwok은 Job의 Pod를 바로 완료시켜 몫을 금방 돌려주기 때문에, 몫을 잡고 있는 장면은 GPU 노드를 cordon해 Pod가 Pending에 머물게 하고 찍었다. 교착과 gang scheduling 출력은 실제 kube-scheduler가, Workload와 선점 출력은 실제 Kueue가 낸 것이다.
+
+## 기본 스케줄러는 Pod 하나씩 본다
+
+kube-scheduler는 대기열에서 Pod를 하나 꺼내 노드를 고르고, 다음 Pod를 꺼낸다. 이 Pod가 어느 Job에 속하는지, 같은 Job의 다른 Pod가 자리를 얻을 수 있는지는 따지지 않는다. 배치에서 이게 세 가지 문제로 이어진다.
+
+- 전부 아니면 아무것도 아닌(all-or-nothing) 배치가 안 된다. 일부만 떠서 자원을 잡은 채 기다리면 교착이 생긴다.
+- 대기열이 없다. 자원이 모자라면 Pod가 Pending으로 쌓일 뿐이고, 먼저 낸 Job이 먼저 돈다는 보장도, 팀별 차례도 없다.
+- 팀별 몫이 없다. ResourceQuota는 네임스페이스가 쓸 수 있는 상한을 정할 뿐이다. 넘는 Pod는 대기열에 줄을 서는 게 아니라 만들어지는 순간 거절된다. 남는 몫을 빌려주는 개념도 없다.
+
+첫 번째를 실제로 만들었다. GPU 1장씩 원하는 Pod 6개짜리 묶음 두 개를 번갈아 만들었다.
+
+```bash
+# ja-0, jb-0, ja-1, jb-1 ... 순서로 Pod 12개를 만든 뒤 배치를 본다
+kubectl get pods -o wide --sort-by=.metadata.name
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED NODE   R
+ja-0   1/1     Running   0          11s   10.0.0.1   gpu-1    <none>           <
+ja-1   1/1     Running   0          11s   10.0.0.3   gpu-1    <none>           <
+ja-2   1/1     Running   0          10s   10.0.0.5   gpu-2    <none>           <
+ja-3   1/1     Running   0          9s    10.0.0.7   gpu-1    <none>           <
+ja-4   0/1     Pending   0          9s    <none>     <none>   <none>           <
+ja-5   0/1     Pending   0          9s    <none>     <none>   <none>           <
+jb-0   1/1     Running   0          11s   10.0.0.2   gpu-2    <none>           <
+jb-1   1/1     Running   0          10s   10.0.0.4   gpu-1    <none>           <
+jb-2   1/1     Running   0          10s   10.0.0.6   gpu-2    <none>           <
+jb-3   1/1     Running   0          9s    10.0.0.8   gpu-2    <none>           <
+jb-4   0/1     Pending   0          9s    <none>     <none>   <none>           <
+jb-5   0/1     Pending   0          9s    <none>     <none>   <none>           <
+```
+
+GPU 8장이 4장씩 나뉘었다. 분산 학습 프레임워크는 보통 모든 워커가 모여야 첫 스텝을 시작하니, 이 상태는 아무도 끝나지 않는 교착이다. 어느 한쪽이 포기하지 않는 한 풀리지 않는다. 아래 그림에서 다음을 누르면 이 상태가 만들어지는 순서가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="Pod를 하나씩 배치하면 두 Job이 GPU를 반씩 잡고 서로를 기다린다"
+  zones={[
+    { id: "n1", label: "gpu-1 GPU 4", x: 6, y: 120, w: 188, h: 162, tone: "private" },
+    { id: "n2", label: "gpu-2 GPU 4", x: 206, y: 120, w: 188, h: 162, tone: "private" },
+  ]}
+  nodes={[
+    { id: "sched", label: "scheduler", sub: "Pod 단위", x: 200, y: 40, icon: "server", w: 120 },
+    { id: "a1", label: "ja-0,1,3", sub: "Running", x: 100, y: 180, icon: "container", w: 120 },
+    { id: "b1", label: "jb-1", sub: "Running", x: 100, y: 248, icon: "container", w: 120 },
+    { id: "a2", label: "ja-2", sub: "Running", x: 300, y: 180, icon: "container", w: 120 },
+    { id: "b2", label: "jb-0,2,3", sub: "Running", x: 300, y: 248, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "sched", to: "a1" },
+    { from: "sched", to: "a2" },
+    { from: "a1", to: "b1" },
+    { from: "a2", to: "b2" },
+  ]}
+  steps={[
+    { path: ["sched", "a1"], packet: "ja-0", title: "먼저 온 Pod부터 넣는다", detail: "ja-0은 GPU 하나만 있으면 되니 gpu-1에 들어간다. 스케줄러는 ja의 나머지 다섯 개를 생각하지 않는다." },
+    { path: ["sched", "a2", "b2"], packet: "jb-0", title: "다른 Job도 번갈아 들어온다", detail: "jb-0도 GPU 하나로 충분하다. 두 Job의 Pod가 엇갈려 들어오며 두 노드의 GPU를 나눠 갖는다." },
+    { path: ["a1", "b1"], highlight: ["n1", "n2"], title: "8장이 4장씩 찬다", detail: "여덟 번째 Pod까지 들어가자 GPU가 남지 않는다. ja도 jb도 4개씩만 Running이다." },
+    { path: ["sched", "a1"], packet: "ja-4", blocked: true, title: "나머지는 Pending", detail: "ja-4, ja-5, jb-4, jb-5는 GPU가 없어 못 들어간다. Running인 8개는 동료를 기다리며 GPU를 놓지 않는다. 교착이다." },
+  ]}
+/>
+
+## 대기열을 따로 두는 Kueue
+
+Kueue는 스케줄러를 바꾸지 않는다. 기본 스케줄러 앞에 문지기를 하나 세운다. Job이 들어오면 일단 멈춰 두고(suspend), 그 Job 전체가 쓸 자원이 팀의 몫 안에 들어오는지 따져서 들어오면 풀어 준다. 풀린 뒤 Pod 배치는 평소처럼 kube-scheduler가 한다. 쿠버네티스 SIG Scheduling 산하 프로젝트이고, Job, JobSet, Kubeflow 학습 Job, RayJob 같은 여러 종류를 같은 대기열에 세운다.
+
+멈춰 두는 장치는 Job의 `spec.suspend`다. Kueue가 없어도 직접 확인할 수 있다. `suspend: true`로 만든 Job은 Pod를 하나도 만들지 않고, `false`로 바꾸는 순간 Pod를 만든다.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-resnet
+  labels:
+    kueue.x-k8s.io/queue-name: training   # Kueue가 이 라벨로 대기열을 찾는다
+spec:
+  suspend: true          # Kueue가 있으면 웹훅이 자동으로 true로 만든다
+  parallelism: 4
+  completions: 4
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: train
+        image: trainer:v1
+        resources:
+          requests: {cpu: "4", memory: 16Gi}
+          limits: {nvidia.com/gpu: 1}
+```
+
+```bash
+# 멈춘 Job은 Pod를 만들지 않는다
+kubectl get job train-resnet
+kubectl get pods -l job-name=train-resnet
+# Kueue가 받아들일 때 하는 일을 손으로 한다
+kubectl patch job train-resnet --type=merge -p '{"spec":{"suspend":false}}'
+kubectl describe job train-resnet | sed -n '/Events/,$p'
+```
+
+```text
+NAME           STATUS      COMPLETIONS   DURATION   AGE
+train-resnet   Suspended   0/4                      3s
+No resources found in default namespace.
+job.batch/train-resnet patched
+Events:
+  Type    Reason            Age   From            Message
+  ----    ------            ----  ----            -------
+  Normal  Suspended         7s    job-controller  Job suspended
+  Normal  SuccessfulCreate  4s    job-controller  Created pod: train-resnet-6p7pc
+  Normal  SuccessfulCreate  4s    job-controller  Created pod: train-resnet-n5mhh
+  Normal  SuccessfulCreate  4s    job-controller  Created pod: train-resnet-lxv4w
+  Normal  SuccessfulCreate  4s    job-controller  Created pod: train-resnet-cxfwt
+  Normal  Resumed           4s    job-controller  Job resumed
+  Normal  Completed         3s    job-controller  Job completed
+```
+
+kwok은 Job의 Pod를 바로 완료시켜서 `Completed`까지 1초 만에 갔다. 실제 클러스터라면 그 자리에서 학습이 돈다. 이 흐름에 Kueue가 끼면 이렇게 된다.
+
+<SequenceDiagram
+  caption="Kueue는 Job을 멈춰 두고, 몫이 생기면 노드 조건을 붙여 풀어 준다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "kueue", label: "Kueue" },
+    { id: "job", label: "Job 컨트롤러" },
+    { id: "sched", label: "kube-scheduler" },
+  ]}
+  steps={[
+    { from: "user", to: "kueue", label: "Job 생성", title: "웹훅이 Job을 멈춘다", detail: "queue-name 라벨이 있는 Job이 오면 Kueue의 웹훅이 suspend: true로 바꾼다. Job 컨트롤러는 Pod를 만들지 않는다.", payload: "kueue.x-k8s.io/queue-name: training" },
+    { from: "kueue", to: "kueue", label: "Workload 생성", title: "Job을 Workload로 요약한다", detail: "Pod 템플릿과 개수로 Job 전체가 쓸 자원을 계산한 Workload 객체를 만든다. GPU 1장 × 4개면 GPU 4장, CPU 16, 메모리 64Gi다.", payload: "podSets: main × 4\nnvidia.com/gpu: 4" },
+    { from: "kueue", to: "kueue", label: "몫 확인", title: "ClusterQueue의 몫과 비교한다", detail: "LocalQueue가 가리키는 ClusterQueue에 남은 몫이 있는지 ResourceFlavor 순서대로 본다. 모자라면 cohort의 남는 몫을 빌릴 수 있는지 본다." },
+    { from: "kueue", to: "job", label: "suspend: false", title: "노드 조건을 붙여 풀어 준다", detail: "몫이 확보되면 고른 ResourceFlavor의 nodeLabels와 tolerations를 Pod 템플릿에 넣고 suspend를 false로 바꾼다. Workload에 QuotaReserved와 Admitted가 붙는다." },
+    { from: "job", to: "sched", label: "Pod 4개", title: "배치는 평소대로 한다", detail: "Job 컨트롤러가 Pod를 만들고 kube-scheduler가 노드를 고른다. Kueue는 몫을 셌을 뿐 어느 노드로 갈지는 정하지 않는다." },
+    { from: "kueue", to: "kueue", label: "Finished", title: "끝나면 몫을 돌려받는다", detail: "Job이 끝나면 Workload에 Finished가 붙고 그 몫이 다시 비어 다음 Workload가 들어온다." },
+  ]}
+/>
+
+중요한 점은 Kueue가 Job 전체를 한 번에 센다는 것이다. 몫이 4장 남았는데 6장짜리 Job이 오면, 4개만 먼저 띄우지 않고 통째로 기다리게 한다. 앞에서 본 교착의 첫 원인(일부만 들어가 자원을 잡는 것)이 몫 단계에서 막힌다.
+
+## 몫을 정하는 네 가지 객체
+
+Kueue의 설정은 관리자 쪽 셋과 사용자 쪽 하나로 나뉜다.
+
+<ConceptDiagram
+  caption="사용자는 LocalQueue만 알고, 몫은 ClusterQueue가, 노드 종류는 ResourceFlavor가 정한다"
+  width={400}
+  height={320}
+  nodes={[
+    { id: "job", label: "Job", sub: "queue-name 라벨", x: 80, y: 40, w: 120 },
+    { id: "lq", label: "LocalQueue", sub: "ns: ml", x: 80, y: 140, w: 120 },
+    { id: "wl", label: "Workload", sub: "Job의 요약", x: 80, y: 250, w: 120 },
+    { id: "cq", label: "ClusterQueue", sub: "team-ml 몫", x: 300, y: 140, w: 130 },
+    { id: "rf", label: "ResourceFlavor", sub: "a100 노드", x: 300, y: 40, w: 130 },
+    { id: "co", label: "Cohort", sub: "research", x: 300, y: 250, w: 130 },
+  ]}
+  edges={[
+    { from: "job", to: "lq", label: "줄 선다" },
+    { from: "job", to: "wl", label: "요약", dashed: true },
+    { from: "lq", to: "cq", label: "가리킴" },
+    { from: "cq", to: "rf", label: "flavor별 몫" },
+    { from: "cq", to: "co", label: "빌려주고 받기" },
+  ]}
+/>
+
+- ResourceFlavor: 노드의 종류다. "A100 노드", "스팟 노드"처럼 노드 라벨과 테인트로 정의한다. Kueue가 Job을 받아들일 때 이 flavor의 `nodeLabels`와 `tolerations`를 Pod에 넣어서, 몫을 센 그 노드 종류로 Pod가 가게 만든다.
+- ClusterQueue: 팀의 몫이다. flavor마다 자원별 `nominalQuota`(평소 몫), `borrowingLimit`(더 빌릴 수 있는 양), `lendingLimit`(빌려줄 수 있는 양)을 적는다. 클러스터 범위 객체라 관리자가 만든다.
+- Cohort: ClusterQueue를 묶는 이름이다. 같은 cohort의 ClusterQueue끼리는 쓰지 않는 몫을 빌려주고 빌린다. v1beta2에서는 `spec.cohortName`에 적는다.
+- LocalQueue: 네임스페이스 안의 창구다. 사용자는 Job 라벨에 LocalQueue 이름만 적고, LocalQueue가 어느 ClusterQueue로 가는지는 관리자가 정한다.
+
+실제로 만든 설정이다. 두 팀(team-ml, team-vision)이 GPU 4장씩을 평소 몫으로 갖고 같은 cohort에 있다. team-ml만 4장을 더 빌릴 수 있다.
+
+```yaml
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: a100
+spec:
+  nodeLabels:
+    nvidia.com/gpu.product: NVIDIA-A100-SXM4-40GB
+  tolerations:
+  - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: team-ml
+spec:
+  cohortName: research
+  namespaceSelector: {}            # 비우면 모든 네임스페이스의 LocalQueue를 받는다
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+    flavors:
+    - name: a100
+      resources:
+      - {name: cpu, nominalQuota: 32}
+      - {name: memory, nominalQuota: 256Gi}
+      - {name: nvidia.com/gpu, nominalQuota: 4, borrowingLimit: 4}
+  preemption:
+    reclaimWithinCohort: Any           # 이 큐의 Workload가 남에게 빌려준 몫을 되찾을 수 있다
+    withinClusterQueue: LowerPriority  # 팀 안에서는 낮은 우선순위를 밀어낸다
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: training
+  namespace: ml
+spec:
+  clusterQueue: team-ml
+```
+
+```bash
+kubectl apply -f queues.yaml
+kubectl get resourceflavors,clusterqueues
+kubectl get localqueues -A
+```
+
+```text
+resourceflavor.kueue.x-k8s.io/a100 created
+clusterqueue.kueue.x-k8s.io/team-ml created
+clusterqueue.kueue.x-k8s.io/team-vision created
+namespace/ml created
+localqueue.kueue.x-k8s.io/training created
+NAME                                 AGE
+resourceflavor.kueue.x-k8s.io/a100   0s
+
+NAME                                      COHORT     PENDING WORKLOADS
+clusterqueue.kueue.x-k8s.io/team-ml       research   
+clusterqueue.kueue.x-k8s.io/team-vision   research   
+NAMESPACE   NAME       CLUSTERQUEUE   PENDING WORKLOADS   ADMITTED WORKLOADS
+ml          training   team-ml
+```
+
+`PENDING WORKLOADS`가 비어 있는 건 아직 Kueue 컨트롤러를 띄우기 전이라 상태를 채운 쪽이 없어서다. 컨트롤러를 띄우면 두 큐 모두 `ACTIVE True`, `REASON Ready`로 바뀐다. CRD의 검증 규칙은 컨트롤러 없이도 동작한다. 자주 하는 두 가지 실수를 API 서버가 바로 잡아 준다.
+
+```text
+The ClusterQueue "lonely" is invalid: spec: Invalid value: borrowingLimit must be nil when cohort is empty
+The ClusterQueue "mismatch" is invalid: spec.resourceGroups[0]: Invalid value: flavors must have the same number of resources as the coveredResources
+```
+
+첫 번째는 cohort 없이 `borrowingLimit`을 준 경우다. 빌릴 상대가 없으니 의미가 없다. 두 번째는 `coveredResources`에 cpu를 적고 flavor에는 GPU 몫만 적은 경우다. 이 그룹이 다루겠다고 한 자원은 flavor마다 모두 몫이 있어야 한다. 또 하나, Job이 요청하는 자원 중 ClusterQueue의 `coveredResources`에 없는 것이 있으면 그 Job은 영영 들어오지 못한다. `requests`에 `ephemeral-storage: 10Gi`를 더한 Job을 넣었더니 Kueue가 이렇게 답했다.
+
+```text
+NAME               QUEUE      RESERVED IN   ADMITTED   FINISHED   AGE
+job-ml-eph-eba49   training                 False                 4s
+Events:
+  Type     Reason            Age   From             Message
+  ----     ------            ----  ----             -------
+  Warning  NoMatchingFlavor  4s    kueue-admission  couldn't assign flavors to pod set main: resource ephemeral-storage unavailable in ClusterQueue
+```
+
+## 남는 몫을 빌리고 돌려받는다
+
+cohort의 쓸모는 빌리기다. team-vision이 GPU를 안 쓰는 밤에는 team-ml이 그 4장을 빌려 8장으로 학습한다. 아침에 team-vision의 Job이 오면 빌려준 몫을 돌려받아야 한다. 이 규칙은 돌려받는 쪽(team-vision)의 `preemption.reclaimWithinCohort`가 정한다. 빌린 쪽(team-ml)에 적은 값이 아니다. 받는 쪽에 이 값이 있으면 Kueue는 빌린 쪽의 Workload를 내보내(evict) 몫을 비우고, 내보낸 Job은 다시 suspend되어 대기열 뒤로 간다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="team-ml이 빈 몫을 빌려 쓰다가, team-vision의 Job이 오면 돌려준다"
+  zones={[
+    { id: "co", label: "cohort research GPU 8", x: 6, y: 6, w: 388, h: 288, tone: "neutral" },
+    { id: "ml", label: "team-ml 몫 4", x: 16, y: 110, w: 176, h: 174, tone: "private" },
+    { id: "vis", label: "team-vision 몫 4", x: 208, y: 110, w: 176, h: 174, tone: "public" },
+  ]}
+  nodes={[
+    { id: "kueue", label: "Kueue", sub: "몫 계산", x: 200, y: 56, icon: "gateway", w: 120 },
+    { id: "mla", label: "ml-a", sub: "GPU 4", x: 104, y: 170, icon: "container" },
+    { id: "mlb", label: "ml-b", sub: "GPU 4 빌림", x: 296, y: 170, icon: "container", w: 120 },
+    { id: "visa", label: "vis-a", sub: "GPU 4", x: 296, y: 248, icon: "container" },
+  ]}
+  links={[
+    { from: "kueue", to: "mla" },
+    { from: "kueue", to: "mlb" },
+    { from: "kueue", to: "visa", dashed: true },
+  ]}
+  steps={[
+    { path: ["kueue", "mla"], packet: "admit", highlight: ["ml"], title: "자기 몫 안에서 들어온다", detail: "ml-a는 GPU 4장으로 team-ml의 평소 몫을 다 쓴다." },
+    { path: ["kueue", "mlb"], packet: "borrow", highlight: ["vis"], title: "빈 몫을 빌린다", detail: "ml-b도 GPU 4장이다. team-ml 몫은 찼지만 borrowingLimit이 4이고 team-vision 몫이 비어 있어 빌려서 들어온다." },
+    { path: ["kueue", "visa"], packet: "vis-a", blocked: true, title: "주인이 왔는데 자리가 없다", detail: "team-vision의 vis-a가 GPU 4장으로 온다. 자기 몫 안이지만 cohort 8장이 다 쓰이고 있다." },
+    { path: ["kueue", "mlb"], packet: "evict", blocked: true, title: "빌린 쪽을 내보낸다", detail: "team-vision에 reclaimWithinCohort: Any가 있어서 빌려 간 ml-b의 Workload를 내보낸다. ml-b의 Job은 다시 suspend되고 대기열로 돌아간다." },
+    { path: ["kueue", "visa"], packet: "admit", highlight: ["vis"], title: "주인이 몫을 쓴다", detail: "비워진 몫으로 vis-a가 들어온다. 학습 Job이라면 ml-b는 체크포인트부터 다시 시작해야 한다." },
+  ]}
+/>
+
+실제 Kueue로 이 장면을 그대로 돌렸다. GPU 1장짜리 Pod 4개인 Job을 ml 네임스페이스에 둘(ml-a, ml-b), vision 네임스페이스에 하나(vis-a) 넣었다. 처음에는 team-vision에 `preemption`을 적지 않았다.
+
+```bash
+# Job 세 개를 차례로 넣고 Workload와 큐 상태를 본다
+kubectl apply -f ml-a.yaml -f ml-b.yaml
+kubectl get workloads -A
+kubectl get clusterqueue team-ml -o jsonpath='{.status.flavorsUsage}'
+kubectl -n ml describe workload job-ml-b-99b26 | sed -n '/^Events/,$p'
+```
+
+```text
+NAMESPACE   NAME             QUEUE      RESERVED IN   ADMITTED   FINISHED   AGE
+ml          job-ml-a-ba380   training   team-ml       True                  8s
+ml          job-ml-b-99b26   training   team-ml       True                  4s
+[{"name":"a100","resources":[{"borrowed":"0","name":"cpu","total":"8"},{"borrowed":"0","name":"memory","total":"32Gi"},{"borrowed":"4","name":"nvidia.com/gpu","total":"8"}]}]
+Events:
+  Type    Reason         Age   From             Message
+  ----    ------         ----  ----             -------
+  Normal  QuotaReserved  12s   kueue-admission  Quota reserved in ClusterQueue team-ml, wait time since queued was 0s; Flavors considered: main: a100(Fit;borrow=1)
+  Normal  Admitted       12s   kueue-admission  Admitted by ClusterQueue team-ml, wait time since reservation was 0s
+```
+
+`borrowed: "4"`와 `a100(Fit;borrow=1)`이 빌린 흔적이다. Kueue는 받아들인 Job의 Pod에 ResourceFlavor의 조건을 넣었다. Pod 하나를 열어 보면 `nodeSelector`에 `{"nvidia.com/gpu.product":"NVIDIA-A100-SXM4-40GB"}`, 톨러레이션에 `{"effect":"NoSchedule","key":"nvidia.com/gpu","operator":"Exists"}`가 들어 있다. 이 상태에서 vis-a를 넣으면 자기 몫 4장 안인데도 못 들어온다.
+
+```text
+vision      job-vis-a-76c7e   training                 False                 6s
+  Warning  WaitingForQuota  5s    kueue-admission  couldn't assign flavors to pod set main: insufficient unused quota for nvidia.com/gpu in flavor a100, 4 more needed
+```
+
+team-vision에 `reclaimWithinCohort: Any`를 넣자 몇 초 만에 ml-b가 밀려났다.
+
+```bash
+kubectl patch clusterqueue team-vision --type=merge -p '{"spec":{"preemption":{"reclaimWithinCohort":"Any"}}}'
+kubectl get workloads -A
+kubectl -n ml get jobs
+```
+
+```text
+NAMESPACE   NAME              QUEUE      RESERVED IN   ADMITTED   FINISHED   AGE
+ml          job-ml-a-ba380    training   team-ml       True                  39s
+ml          job-ml-b-99b26    training                 False                 35s
+vision      job-vis-a-76c7e   training   team-vision   True                  18s
+NAME   STATUS      COMPLETIONS   DURATION   AGE
+ml-a   Running     0/4           34s        39s
+ml-b   Suspended   0/4                      35s
+```
+
+ml-b의 이벤트에는 왜 밀려났는지가 그대로 적힌다(UID 부분은 줄였다).
+
+```text
+  Normal   EvictedDueToPreempted  5s  kueue-admission  Preempted to accommodate a workload (UID: a26e0001-..., JobUID: 705ea457-...) due to reclamation within the cohort; preemptor path: /research/team-vision; preemptee path: /research/team-ml
+  Warning  WaitingForQuota        3s  kueue-admission  couldn't assign flavors to pod set main: insufficient unused quota for nvidia.com/gpu in flavor a100, 4 more needed
+```
+
+빌리기를 켤 때 꼭 함께 정해야 하는 것이 체크포인트다. 빌린 몫으로 돈 Job은 언제든 쫓겨날 수 있다. 몇 시간짜리 학습이 체크포인트 없이 돌다가 쫓겨나면 처음부터 다시 한다. 빌린 몫에는 짧은 Job이나 체크포인트를 자주 남기는 Job만 보내거나, `lendingLimit`으로 빌려줄 양 자체를 줄인다.
+
+대기열 순서는 `queueingStrategy`로 정한다. `StrictFIFO`는 맨 앞 Workload가 들어오기 전까지 뒤를 막는다. 큰 Job이 앞에 있으면 작은 Job도 같이 기다린다. 기본값인 `BestEffortFIFO`는 맨 앞이 안 들어가면 건너뛰고 뒤에서 들어갈 수 있는 것을 먼저 받는다. 자원은 덜 놀지만, 큰 Job은 작은 Job들에게 계속 밀려 굶을 수 있다. 우선순위는 `WorkloadPriorityClass`로 Pod 우선순위와 따로 줄 수 있다. 팀 사이의 공평함이 더 필요하면 ClusterQueue마다 가중치를 주는 fair sharing 모드가 있는데, 이 모드에서는 위의 `borrowWithinCohort` 같은 일부 선점 옵션을 함께 쓸 수 없다(`kubectl explain`의 필드 설명에 그렇게 적혀 있다).
+
+아래 그림은 BestEffortFIFO가 대기열을 훑는 모습이다. 위 설정 그대로 team-ml은 4장을 더 빌릴 수 있고 team-vision은 빌릴 수 없다.
+
+<AlgoTrace
+  caption="BestEffortFIFO는 못 들어가는 Workload를 건너뛰고 다음을 본다"
+  cells={["vis-big 5", "vis-a 2", "ml-a 6"]}
+  memoryLabel="받아들임"
+  steps={[
+    { pointer: 0, memory: [], caption: "vis-big은 GPU 5장. team-vision 몫은 4장이고 빌릴 수 없어(borrowingLimit 0) 건너뛴다." },
+    { pointer: 1, memory: ["vis-a"], caption: "vis-a는 2장. 자기 몫 안이라 들어온다. cohort 사용량 2/8." },
+    { pointer: 2, memory: ["vis-a"], caption: "ml-a는 6장. team-ml 몫 4장을 넘는 2장은 빌려야 한다. 빌릴 수 있는 한도 4장 안이다." },
+    { pointer: 2, found: [1, 2], memory: ["vis-a", "ml-a"], caption: "cohort 사용량이 8/8로 맞아 ml-a도 들어온다. StrictFIFO였다면 vis-big 뒤에서 모두 기다렸다." },
+  ]}
+/>
+
+같은 규칙을 코드로 옮겨 본다. ClusterQueue는 모두 한 cohort에 있고, cohort 전체 몫은 각 몫의 합이다. Workload는 도착 순서대로 보고, 들어갈 수 없으면 건너뛴다. 선점은 하지 않는다.
+
+<CodePlayground
+  caption="한 cohort 안에서 BestEffortFIFO로 받아들일 Workload 고르기"
+  functionName="admit"
+  initialCode={`function admit(queues, workloads) {
+  // queues: [{ name, nominal, borrowingLimit }]  borrowingLimit이 없으면 무제한
+  // workloads: [{ name, queue, gpus }]  도착 순서
+  // 반환: 받아들인 Workload 이름 배열
+  return [];
+}`}
+  solution={`function admit(queues, workloads) {
+  const nominal = {}, limit = {}, used = {};
+  let cohortNominal = 0, cohortUsed = 0;
+  for (const q of queues) {
+    nominal[q.name] = q.nominal;
+    limit[q.name] = q.borrowingLimit ?? Infinity;
+    used[q.name] = 0;
+    cohortNominal += q.nominal;
+  }
+  const admitted = [];
+  for (const w of workloads) {
+    const after = used[w.queue] + w.gpus;
+    const borrow = Math.max(0, after - nominal[w.queue]);
+    if (borrow > limit[w.queue]) continue;
+    if (cohortUsed + w.gpus > cohortNominal) continue;
+    used[w.queue] = after;
+    cohortUsed += w.gpus;
+    admitted.push(w.name);
+  }
+  return admitted;
+}`}
+  tests={[
+    { label: "빌려서 들어온다", args: [[{ name: "team-ml", nominal: 4, borrowingLimit: 4 }, { name: "team-vision", nominal: 4, borrowingLimit: 0 }], [{ name: "ml-a", queue: "team-ml", gpus: 3 }, { name: "ml-b", queue: "team-ml", gpus: 3 }]], expected: ["ml-a", "ml-b"] },
+    { label: "cohort가 차면 주인도 못 들어온다", args: [[{ name: "team-ml", nominal: 4, borrowingLimit: 4 }, { name: "team-vision", nominal: 4, borrowingLimit: 0 }], [{ name: "ml-a", queue: "team-ml", gpus: 3 }, { name: "ml-b", queue: "team-ml", gpus: 3 }, { name: "vis-a", queue: "team-vision", gpus: 3 }]], expected: ["ml-a", "ml-b"] },
+    { label: "큰 것은 건너뛰고 뒤를 받는다", args: [[{ name: "team-ml", nominal: 4, borrowingLimit: 4 }, { name: "team-vision", nominal: 4, borrowingLimit: 0 }], [{ name: "vis-a", queue: "team-vision", gpus: 4 }, { name: "ml-a", queue: "team-ml", gpus: 6 }, { name: "ml-b", queue: "team-ml", gpus: 4 }]], expected: ["vis-a", "ml-b"] },
+    { label: "빌릴 수 없는 팀", args: [[{ name: "team-ml", nominal: 4, borrowingLimit: 4 }, { name: "team-vision", nominal: 4, borrowingLimit: 0 }], [{ name: "vis-big", queue: "team-vision", gpus: 5 }, { name: "vis-a", queue: "team-vision", gpus: 2 }, { name: "ml-a", queue: "team-ml", gpus: 6 }]], expected: ["vis-a", "ml-a"] },
+  ]}
+/>
+
+두 번째 테스트가 앞의 그림과 같은 상황이다. 선점이 없으면 vis-a는 자기 몫 안인데도 들어오지 못한다. 실제 Kueue에서도 team-vision에 `reclaimWithinCohort`를 넣기 전에는 똑같이 `WaitingForQuota`였다.
+
+## 몫은 맞았는데 Pod가 안 뜨는 경우
+
+Kueue는 몫을 셀 뿐 노드를 고르지 않는다. GPU 몫이 8장 남았다고 받아들였는데 실제 노드에는 4장씩 흩어져 있거나, 다른 일이 일부를 쓰고 있으면 Pod 일부가 Pending이 된다. 앞의 교착이 모양만 바꿔 다시 나온다. 이 틈을 메우는 방법이 둘 있다.
+
+하나는 Kueue의 `waitForPodsReady`다. 받아들인 Workload의 Pod가 정해진 시간 안에 모두 Ready가 되지 않으면 Workload를 내보내고 다시 줄 세운다. 시간 기준으로 흉내 낸 all-or-nothing이다. v0.20.2 매니저 설정 파일의 주석에 있는 형식은 이렇다.
+
+```yaml
+# Kueue 매니저 설정(config.kueue.x-k8s.io/v1beta2 Configuration)의 일부
+waitForPodsReady:
+  timeout: 30m              # 받아들인 뒤 모든 Pod가 Ready가 되기까지 기다리는 시간
+  recoveryTimeout: 5m       # 돌던 중 Pod 하나가 빠졌을 때 다시 채워지기를 기다리는 시간
+  blockAdmission: false     # true면 앞 Workload가 다 뜰 때까지 다른 Workload를 받지 않는다
+  requeuingStrategy:
+    timestamp: Eviction
+    backoffLimitCount: null # 다시 줄 세우는 횟수 제한(null이면 무한)
+    backoffBaseSeconds: 60
+    backoffMaxSeconds: 3600
+```
+
+다른 하나는 진짜 gang scheduling이다. 스케줄러가 Pod 묶음을 한 단위로 보고, `minCount`개를 동시에 놓을 수 있을 때만 하나라도 노드에 묶는다. 예전에는 Volcano나 scheduler-plugins의 coscheduling처럼 별도 스케줄러나 플러그인이 필요했다. 쿠버네티스 1.35부터는 본체에 Workload와 PodGroup API(`scheduling.k8s.io`)와 gang 정책이 들어왔다. 웹사이트 저장소의 feature gate 문서 기준으로 `GenericWorkload` 게이트가 1.35–1.36 알파, 1.37 베타이고, 베타지만 기본값은 꺼져 있다. 그래서 이 클러스터는 게이트와 API 그룹을 켜고 띄웠다.
+
+```bash
+# kwok 클러스터를 게이트와 API 그룹을 켜고 만든다
+KWOK_KUBE_VERSION=v1.37.0 kwokctl create cluster --name r12-gang --runtime binary \
+  --kube-feature-gates "GenericWorkload=true" \
+  --kube-runtime-config "scheduling.k8s.io/v1beta1=true"
+kubectl api-resources | grep scheduling.k8s
+```
+
+```text
+podgroups                                        scheduling.k8s.io/v1beta1         true         PodGroup
+priorityclasses                     pc           scheduling.k8s.io/v1              false        PriorityClass
+workloads                                        scheduling.k8s.io/v1beta1         true         Workload
+```
+
+앞의 교착 실험을 그대로 다시 했다. 다른 점은 PodGroup 두 개(`ja`, `jb`, 둘 다 `minCount: 6`)를 만들고, 각 Pod의 `spec.schedulingGroup.podGroupName`에 묶음 이름을 적은 것뿐이다.
+
+```yaml
+apiVersion: scheduling.k8s.io/v1beta1
+kind: PodGroup
+metadata: {name: ja}
+spec:
+  schedulingPolicy:
+    gang: {minCount: 6}   # 6개를 함께 놓을 수 있을 때만 배치한다
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: ja-0, labels: {job: ja}}
+spec:
+  schedulingGroup:
+    podGroupName: ja
+  containers:
+  - name: w
+    image: trainer:v1
+    resources: {limits: {nvidia.com/gpu: 1}}
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE   IP         NODE     NOMINATED 
+ja-0   1/1     Running   0          6s    10.0.0.4   gpu-1    <none>    
+ja-1   1/1     Running   0          6s    10.0.0.2   gpu-1    <none>    
+ja-2   1/1     Running   0          6s    10.0.0.1   gpu-1    <none>    
+ja-3   1/1     Running   0          6s    10.0.0.5   gpu-2    <none>    
+ja-4   1/1     Running   0          5s    10.0.0.7   gpu-2    <none>    
+ja-5   1/1     Running   0          5s    10.0.0.3   gpu-2    <none>    
+jb-0   0/1     Pending   0          6s    <none>     <none>   <none>    
+jb-1   0/1     Pending   0          6s    <none>     <none>   <none>    
+jb-2   0/1     Pending   0          6s    <none>     <none>   <none>    
+jb-3   0/1     Pending   0          5s    <none>     <none>   <none>    
+jb-4   0/1     Pending   0          5s    <none>     <none>   <none>    
+jb-5   0/1     Pending   0          5s    <none>     <none>   <none>    
+NAME   POLICY   WORKLOAD   STATUS          AGE
+ja     Gang     <none>     Scheduled       7s
+jb     Gang     <none>     Unschedulable   7s
+```
+
+이번에는 ja가 6장을 모두 받았고, jb는 한 장도 잡지 않은 채 기다린다. 남은 GPU 2장은 다른 일이 쓸 수 있다. jb의 Pod 이벤트에는 묶음 단위의 이유가 찍힌다.
+
+```text
+Events:
+  Type     Reason            Age              From               Message
+  ----     ------            ----             ----               -------
+  Warning  FailedScheduling  10s              default-scheduler  pod group is unschedulable, minCount (6) cannot be satisfied: 2 scheduled, 3 remaining, pod group preemption: No preemption victims found for incoming preemptor
+  Warning  FailedScheduling  6s (x2 over 9s)  default-scheduler  pod group is unschedulable, minCount (6) cannot be satisfied: 2 scheduled, 3 remaining, pod group preemption: No preemption victims found for incoming preemptor
+```
+
+<UrlAnatomy
+  caption="gang 스케줄링 실패 메시지는 묶음 단위로 이유를 적는다"
+  base="pod group is unschedulable"
+  separator=", "
+  joiner=", "
+  params={[
+    { key: "minCount", display: "minCount (6) cannot be satisfied", title: "묶음 조건을 못 채웠다", description: "PodGroup의 minCount 6을 동시에 놓을 자리가 없다. Pod 하나의 문제가 아니라 묶음 전체의 판정이다. 이 줄이 보이면 노드별 남은 자원 합계부터 계산한다." },
+    { key: "count", display: "2 scheduled, 3 remaining", title: "이번 시도에서 센 수", description: "스케줄러가 이번 배치 시도에서 놓을 수 있었던 수와 남은 수다. 실험에서는 GPU가 2장 남아 있었다. 6에 못 미치니 하나도 묶지 않는다." },
+    { key: "preemption", display: "pod group preemption: No preemption victims", title: "묶음 단위 선점", description: "우선순위가 낮은 다른 묶음을 쫓아내면 자리가 나는지도 묶음 단위로 따진다. 두 그룹의 우선순위가 같아서 쫓아낼 대상이 없었다." },
+  ]}
+/>
+
+ja의 Pod를 지우자 몇 초 뒤 jb 여섯 개가 한꺼번에 Running이 되고 두 PodGroup이 모두 `Scheduled`가 됐다. 문서에 따르면 Job 컨트롤러가 `spec.scheduling`을 보고 Workload와 PodGroup을 직접 만드는 기능(`WorkloadWithJob`, 1.36 알파)도 있다. 아직 알파라 지금은 JobSet 같은 상위 컨트롤러나 Kueue가 묶음을 만드는 경우가 많다.
+
+Kueue와 gang scheduling은 맡은 일이 다르다. Kueue는 언제 시작할지(대기열과 몫)를 정하고, gang scheduling은 어디에 한꺼번에 놓을지를 정한다. 몫은 있는데 배치가 안 되는 틈을 gang이 막고, 배치는 되는데 팀 사이 순서가 없는 틈을 Kueue가 막는다. 큰 학습 클러스터는 둘을 함께 쓴다. Kueue에는 노드 랙과 블록 구조를 Topology 객체로 알려 주고 Pod를 같은 블록에 몰아 넣는 topology-aware scheduling도 있다.
+
+## 학습 Job을 한 덩어리로: JobSet
+
+분산 학습 하나는 대개 Job 하나로 안 끝난다. 좌표를 잡는 driver 하나와 GPU 워커 여러 묶음이 함께 떠야 하고, 서로 이름으로 찾아야 하고, 워커 하나가 죽으면 전체를 다시 띄워야 한다. Job 여러 개와 headless Service를 손으로 엮으면 이 규칙을 매번 다시 짜야 한다. JobSet이 이 묶음을 객체 하나로 만든다.
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: llm-pretrain
+  namespace: ml
+  labels:
+    kueue.x-k8s.io/queue-name: training   # Kueue는 JobSet 전체를 Workload 하나로 센다
+spec:
+  failurePolicy:
+    maxRestarts: 3            # 어느 Job이든 실패하면 JobSet 전체를 다시 띄운다. 3번까지
+  network:
+    enableDNSHostnames: true  # Pod마다 고정 DNS 이름을 준다
+  replicatedJobs:
+  - name: driver
+    replicas: 1
+    template:
+      spec:
+        parallelism: 1
+        completions: 1
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: driver
+              image: trainer:v1
+              resources: {requests: {cpu: "2", memory: 8Gi}}
+  - name: worker
+    replicas: 2               # 워커 Job 2개
+    template:
+      spec:
+        parallelism: 4        # Job마다 Pod 4개
+        completions: 4
+        completionMode: Indexed
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: worker
+              image: trainer:v1
+              resources: {limits: {nvidia.com/gpu: 1}}
+```
+
+```bash
+# JobSet CRD v0.13.0을 설치한 클러스터에 적용한다 (컨트롤러가 없어 상태 칸은 비어 있다)
+kubectl apply -f jobset.yaml
+kubectl -n ml get jobsets
+```
+
+```text
+jobset.jobset.x-k8s.io/llm-pretrain created
+NAME           TERMINALSTATE   RESTARTS   COMPLETED   SUSPENDED   STARTTIME   AGE
+llm-pretrain                                                                  1s
+```
+
+컨트롤러가 돌면 Job이 `llm-pretrain-driver-0`, `llm-pretrain-worker-0`, `llm-pretrain-worker-1` 세 개 생기고, Pod는 `llm-pretrain-worker-1-2.llm-pretrain`처럼 Job 이름과 순번으로 된 고정 DNS 이름을 받는다. 워커 0번이 다른 워커를 이 이름으로 찾는다. `failurePolicy`의 `restartStrategy`는 기본 `Recreate`이고, 이 CRD에는 `BlockingRecreate`, `InPlaceRestart`도 있다. 실패한 Pod 하나만 다시 띄우지 않고 묶음 전체를 다시 띄우는 이유는, 분산 학습에서 워커 하나가 빠지면 나머지가 집합 통신에서 멈춰 있기 때문이다.
+
+이 GPU 8장(워커 2 × 4)을 Kueue는 JobSet 하나의 Workload로 센다. 그래서 몫 단계의 all-or-nothing이 JobSet 전체에 걸린다. JobSet v0.13.0 CRD에는 앞에서 본 Workload와 PodGroup을 만들어 kube-scheduler의 gang 정책을 쓰게 하는 `spec.scheduling` 필드도 들어 있다(별도 feature gate가 필요하다고 필드 설명에 적혀 있다).
+
+## 배치 클러스터에서 막히는 순간
+
+Job이 안 도는 이유를 찾을 때는 Kueue 단계와 스케줄러 단계를 먼저 나눈다. Job이 `Suspended`면 Kueue가 아직 안 받아 준 것이고, Pod가 Pending이면 받아 준 뒤 배치에서 막힌 것이다. 보는 순서는 이렇다.
+
+```bash
+# 1. Job이 멈춰 있나, Pod는 있나
+kubectl -n ml get jobs
+# 2. Kueue가 만든 Workload의 상태 (Job 이름 앞에 job-이 붙는다)
+kubectl -n ml get workloads
+# 3. 왜 못 들어오는지는 Workload의 조건과 이벤트에 있다
+kubectl -n ml describe workload <workload 이름>
+# 4. 팀 몫이 얼마나 쓰였나
+kubectl get clusterqueue team-ml -o jsonpath='{.status.flavorsUsage}'
+```
+
+```text
+Status:
+  Admission:
+    Cluster Queue:  team-ml
+    Pod Set Assignments:
+      Count:  4
+      Flavors:
+        Cpu:             a100
+        Memory:          a100
+        nvidia.com/gpu:  a100
+      Name:              main
+  Conditions:
+    Reason:                QuotaReserved
+    Status:                True
+    Type:                  QuotaReserved
+    Reason:                Admitted
+    Status:                True
+    Type:                  Admitted
+    Message:               Not all pods are ready or succeeded
+    Reason:                WaitForStart
+    Status:                False
+    Type:                  PodsReady
+```
+
+위는 앞 실습의 ml-b가 밀려나기 전 `describe workload`에서 줄 몇 개만 남긴 것이다. 조건 셋을 순서대로 읽는다. `QuotaReserved`는 몫을 잡았는지, `Admitted`는 받아들였는지, `PodsReady`는 Pod가 다 떴는지다. 이 실습에서는 GPU 노드를 cordon해 둬서 `PodsReady`가 `WaitForStart`에 머물렀다. 설정 파일에 `waitForPodsReady`를 적지 않았는데도, v0.20.2 매니저가 시작할 때 로그에 찍은 설정에는 `waitForPodsReady`(timeout 30m, recoveryTimeout 30m)가 기본값으로 채워져 있었다. 이 상태가 30분 넘게 이어지면 Workload가 내보내진다. `RESERVED IN`이 비어 있으면 몫을 아직 못 받은 것이고, 이벤트에 어느 flavor에서 무엇이 모자란지가 적힌다. 자주 만나는 원인은 이렇다.
+
+- Job에 `kueue.x-k8s.io/queue-name` 라벨이 없다. Kueue 설정의 `manageJobsWithoutQueueName`이 false(기본)면 그 Job은 Kueue를 거치지 않고 바로 돈다. 몫을 우회하는 Job이 생기는 길이다. 막으려면 이 값을 켜고 시스템 네임스페이스는 `managedJobsNamespaceSelector`로 뺀다.
+- LocalQueue 이름 오타나 다른 네임스페이스의 LocalQueue를 적었다. LocalQueue는 네임스페이스 객체라 Job과 같은 네임스페이스에 있어야 한다.
+- Job이 ClusterQueue가 다루지 않는 자원을 요청한다. `coveredResources`에 없는 자원(흔히 `ephemeral-storage`나 다른 extended resource)이 하나라도 있으면 영원히 들어오지 못한다.
+- 받아들여졌는데 Pod가 Pending이다. ResourceFlavor의 `nodeLabels`가 실제 노드 라벨과 다르거나 톨러레이션이 빠졌다. Kueue는 몫만 세서 이 오류를 잡지 못한다. `kubectl get pod -o yaml`로 Kueue가 넣은 `nodeSelector`를 보고 노드 라벨과 비교한다.
+- 학습이 자꾸 처음부터 다시 돈다. 빌린 몫으로 돌다가 주인에게 밀려났거나, `waitForPodsReady` 시간 안에 Pod가 다 뜨지 못해 내보내졌다. Workload 이벤트의 `Evicted` 이유(`Preempted`, `PodsReadyTimeout`)로 구분한다.
+
+## 시작은 대기열이, 배치는 묶음이
+
+기본 스케줄러는 Pod를 하나씩 놓으니 배치 Job이 일부만 떠서 자원을 잡는 교착을 막지 못하고, 대기열과 팀별 몫도 없다. Kueue는 Job을 멈춰 둔 채 전체 자원을 ClusterQueue의 몫과 비교해 받아들이고, cohort 안에서 남는 몫을 빌려주고 돌려받는다. 그래도 몫과 실제 배치 사이의 틈은 남아서, `waitForPodsReady`로 시간 기준으로 막거나 PodGroup의 gang 정책으로 스케줄러가 묶음을 한꺼번에 놓게 한다. 여러 Job으로 된 학습은 JobSet으로 묶어 한 단위로 세고 다시 띄운다.
+
+## 면접에서 나올 만한 질문
+
+### 기본 kube-scheduler로 배치나 분산 학습을 돌리면 무엇이 문제인가요?
+
+Pod를 하나씩 배치해서 Job 전체가 들어갈 수 있는지를 보지 않는다. 그래서 두 Job이 자원을 반씩 잡고 서로 나머지 Pod를 기다리는 교착이 생긴다. 또 대기열과 팀별 몫이 없어 자원이 모자라면 Pending만 쌓이고, ResourceQuota는 넘는 요청을 거절할 뿐 줄 세우거나 남는 몫을 빌려주지 못한다.
+
+### Kueue는 스케줄러를 대체하나요?
+
+아니다. Kueue는 Job을 suspend 상태로 붙잡아 두고, Job 전체가 쓸 자원이 ClusterQueue의 몫에 들어오면 풀어 준다. 풀어 줄 때 ResourceFlavor의 노드 라벨과 톨러레이션을 Pod에 넣을 뿐, 실제 노드 선택은 kube-scheduler가 한다. 그래서 기존 스케줄러와 함께 쓰고, 언제 시작할지를 정하는 계층으로 보면 된다.
+
+### ClusterQueue, LocalQueue, ResourceFlavor, Cohort는 각각 무엇인가요?
+
+ResourceFlavor는 노드 종류, ClusterQueue는 flavor별 자원 몫, Cohort는 몫을 서로 빌려주는 ClusterQueue 묶음, LocalQueue는 네임스페이스 안에서 사용자가 Job을 넣는 창구다. 사용자는 Job 라벨에 LocalQueue 이름만 적고, 몫과 노드 종류는 관리자가 ClusterQueue와 ResourceFlavor로 관리한다.
+
+### 빌려 간 몫은 어떻게 돌려받나요? 이때 주의할 점은요?
+
+몫을 돌려받는 쪽 ClusterQueue의 `preemption.reclaimWithinCohort`가 `Any`나 `LowerPriority`면, 그 큐의 Workload가 왔을 때 빌려 간 쪽의 Workload를 내보내 몫을 비운다. 기본값은 `Never`라서 이 값을 적지 않으면 자기 몫인데도 기다리기만 한다. 내보낸 Job은 다시 suspend되어 대기열로 돌아간다. 그래서 빌린 몫으로 도는 학습은 체크포인트가 없으면 처음부터 다시 해야 하고, 빌려줄 양을 `lendingLimit`으로 제한하기도 한다.
+
+### StrictFIFO와 BestEffortFIFO는 어떻게 고르나요?
+
+StrictFIFO는 맨 앞이 들어가기 전까지 뒤를 막아 순서를 지키지만, 큰 Job이 앞에 있으면 자원이 놀 수 있다. BestEffortFIFO는 못 들어가는 Workload를 건너뛰고 뒤를 먼저 받아 자원을 덜 놀리지만, 큰 Job이 작은 Job에 계속 밀려 굶을 수 있다. 기본값은 BestEffortFIFO이고, 큰 Job이 굶으면 우선순위나 StrictFIFO로 보완한다.
+
+### gang scheduling은 무엇이고, Kueue와는 어떻게 다른가요?
+
+gang scheduling은 Pod 묶음을 minCount개 동시에 놓을 수 있을 때만 하나라도 배치하는 all-or-nothing 스케줄링이다. 쿠버네티스 1.35부터 Workload와 PodGroup API로 본체에 들어왔고 1.37에서 베타지만 기본은 꺼져 있다. Kueue는 몫을 기준으로 시작 시점을 정하고 gang은 배치를 원자적으로 하니, 몫은 있는데 노드가 쪼개져 일부만 뜨는 틈을 gang이 막는다.
+
+### JobSet은 Job 여러 개를 직접 만드는 것과 무엇이 다른가요?
+
+JobSet은 driver와 워커 같은 여러 Job을 한 객체로 묶고, headless Service로 Pod마다 고정 DNS 이름을 주고, 하나가 실패하면 묶음 전체를 다시 띄우는 정책(`failurePolicy`)을 준다. Kueue는 JobSet 전체를 Workload 하나로 세서 몫 단계의 all-or-nothing이 묶음 전체에 걸린다. Job을 따로 만들면 이 연결과 재시작 규칙을 직접 짜야 한다.

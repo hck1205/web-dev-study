@@ -1,0 +1,556 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-cri-cni-csi");
+
+노드 하나가 갑자기 Pod를 못 띄운다. 이벤트에는 `failed to setup network for sandbox`가 찍혀 있다. 옆 노드에서는 PVC가 Pending에 멈춰 `Waiting for a volume to be created either by the external provisioner`라고만 한다. 둘 다 쿠버네티스 코드가 아니라 플러그인에서 난 문제다. kubelet은 컨테이너를 직접 띄우지 않고, 네트워크를 직접 꽂지 않고, 디스크를 직접 붙이지 않는다. 셋 다 표준 인터페이스 너머의 플러그인에게 맡긴다.
+
+그 세 인터페이스가 CRI(Container Runtime Interface), CNI(Container Network Interface), CSI(Container Storage Interface)다. 이 글은 셋이 왜 따로 생겼는지, 각각 누가 누구를 어떻게 부르는지, 고장 나면 어디에 흔적이 남는지를 본다. 실습은 Ubuntu 24.04 컨테이너에서 했다. GitHub 릴리스에서 받은 containerd v2.3.0, runc v1.4.0, crictl v1.37.0, CNI 참조 플러그인 v1.9.1로 진짜 Pod sandbox를 띄웠고, CSI는 소스에서 빌드한 hostpath 드라이버(v1.18.0)와 external-provisioner(v6.4.0)를 kwok 실습 클러스터(kube-apiserver v1.37.0)에 붙였다. kubelet은 kwok의 가짜 노드라 없다. kubelet이 할 일은 crictl과 gRPC 호출로 손수 대신했다.
+
+이 주제의 다른 글: bridge와 host-local이 노드 안에서 주소를 주는 방식, 노드 사이를 잇는 라우팅과 VXLAN은 [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)에 있다. PV와 PVC, StorageClass의 바인딩 규칙은 [PV와 PVC](/posts/k8s-pv-pvc) 글에 있다. 여기서는 그 설명을 반복하지 않고 인터페이스 자체를 본다.
+
+## kubelet은 세 곳에 일을 맡긴다
+
+쿠버네티스 초기에는 Docker 호출 코드가 kubelet 안에 들어 있었다. rkt를 지원하려고 또 넣었다. 네트워크는 kubenet, 디스크는 AWS EBS, GCE PD, Ceph 같은 드라이버가 전부 쿠버네티스 소스 트리 안(in-tree)에 있었다. 저장소 회사가 버그 하나를 고치려면 쿠버네티스 릴리스를 기다려야 했다. 인터페이스를 밖으로 빼서 플러그인이 쿠버네티스와 따로 릴리스하게 한 것이 세 인터페이스다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="kubelet은 런타임에게 gRPC로, 런타임은 CNI를 실행 파일로, 저장소는 CSI gRPC로 부른다"
+  nodes={[
+    { id: "kubelet", label: "kubelet", sub: "노드 에이전트", x: 200, y: 40, w: 130 },
+    { id: "rt", label: "containerd", sub: "CRI 서버", x: 90, y: 140, w: 130 },
+    { id: "runc", label: "runc", sub: "OCI 런타임", x: 90, y: 240, w: 110 },
+    { id: "cni", label: "CNI 플러그인", sub: "bridge, cilium…", x: 90, y: 300, w: 130 },
+    { id: "csi", label: "CSI 노드 플러그인", sub: "DaemonSet", x: 310, y: 140, w: 150 },
+    { id: "side", label: "사이드카", sub: "provisioner…", x: 310, y: 240, w: 130 },
+  ]}
+  edges={[
+    { from: "kubelet", to: "rt", label: "CRI gRPC" },
+    { from: "rt", to: "runc", label: "exec" },
+    { from: "rt", to: "cni", label: "exec + stdin", dashed: true },
+    { from: "kubelet", to: "csi", label: "CSI gRPC" },
+    { from: "side", to: "csi", label: "CSI gRPC" },
+  ]}
+/>
+
+셋의 모양이 다르다는 점을 먼저 알아 두면 장애를 볼 때 덜 헤맨다. CRI는 kubelet이 유닉스 소켓으로 붙는 gRPC 서버다(`/run/containerd/containerd.sock`). CNI는 서버가 없다. 런타임이 Pod를 만들 때마다 `/opt/cni/bin`의 실행 파일을 부르고 끝난다. CSI는 다시 gRPC 서버이지만, kubelet뿐 아니라 클러스터 쪽 사이드카들도 같은 드라이버를 부른다.
+
+## CRI: kubelet과 런타임 사이의 gRPC
+
+CRI는 두 서비스로 이루어진다. Pod sandbox와 컨테이너를 다루는 `RuntimeService`(RunPodSandbox, CreateContainer, StartContainer, StopPodSandbox, ExecSync 등), 이미지를 다루는 `ImageService`(PullImage, ListImages, RemoveImage)다. 이 gRPC를 구현하면 무엇이든 런타임이 될 수 있다. 지금 많이 쓰는 건 containerd와 CRI-O다. containerd는 Docker에서 떨어져 나온 범용 런타임에 CRI 플러그인이 들어 있고, CRI-O는 처음부터 쿠버네티스 CRI만을 위해 만든 런타임이다. 둘 다 실제 컨테이너는 runc(또는 crun, gVisor, Kata) 같은 OCI 런타임으로 띄운다.
+
+crictl은 이 CRI를 그대로 부르는 클라이언트다. 노드에서 kubelet이 보는 것을 똑같이 본다. containerd를 띄우고 붙어 봤다.
+
+```bash
+# containerd를 실습용 설정으로 띄운다 (소켓은 /run/r11-ctr/containerd.sock)
+sudo containerd --config ./config.toml &
+# crictl이 붙을 소켓을 알려 준다
+printf 'runtime-endpoint: unix:///run/r11-ctr/containerd.sock\nimage-endpoint: unix:///run/r11-ctr/containerd.sock\n' > crictl.yaml
+sudo crictl --config crictl.yaml version
+```
+
+```text
+Version:  0.1.0
+RuntimeName:  containerd
+RuntimeVersion:  v2.3.0
+RuntimeApiVersion:  v1
+```
+
+처음엔 이게 안 됐다. 설정 일부가 잘못돼 CRI 플러그인이 로드되지 않았는데, containerd 자체는 잘 떠서 소켓도 열려 있었다. crictl은 이렇게 말했다.
+
+```text
+validate service connection: validate CRI v1 runtime API for endpoint "unix:///run/r11-ctr/containerd.sock": rpc error: code = Unimplemented desc = unknown service runtime.v1.RuntimeService
+```
+
+`Unimplemented ... runtime.v1.RuntimeService`는 소켓 너머에 gRPC 서버는 있는데 CRI 서비스가 없다는 뜻이다. 노드에서 이 말을 보면 containerd 로그에서 `failed to load plugin`을 찾는다. 이번 원인은 이미지를 받는 transfer 플러그인이 필요한 도구(`mkfs.erofs`)가 없어 빠지고, 그에 기대는 CRI 플러그인이 줄줄이 빠진 것이었다. 예전에는 `/etc/containerd/config.toml`에 `disabled_plugins = ["cri"]`가 남아 있는 경우(Docker 설치가 깔아 둔 설정)가 흔한 원인이었다.
+
+`crictl info`는 런타임이 kubelet에게 보고하는 상태다. 여기 있는 두 조건이 그대로 노드의 Ready를 정한다(출력에서 `status.conditions` 앞부분만 옮겼다).
+
+```text
+ "conditions": [
+  {
+   "message": "",
+   "reason": "",
+   "status": true,
+   "type": "RuntimeReady"
+  },
+  {
+   "message": "",
+   "reason": "",
+   "status": true,
+   "type": "NetworkReady"
+  },
+```
+
+## Pod 하나가 뜨는 순서
+
+kubelet이 Pod를 띄울 때 CRI를 부르는 순서를 crictl로 그대로 따라 했다. sandbox를 먼저 만들고, 그 안에 컨테이너를 만들고, 시작한다.
+
+```bash
+# 1) Pod sandbox (pause 컨테이너 + 네트워크 네임스페이스 + CNI)
+sudo crictl runp pod.json
+# 2) 그 sandbox 안에 컨테이너를 만들고 시작한다
+sudo crictl create 65623abb99bf7 ctr.json pod.json
+sudo crictl start ab83064f6e54a
+sudo crictl pods
+sudo crictl ps
+sudo crictl exec ab83064f6e54a ip -4 addr show eth0
+```
+
+```text
+65623abb99bf7418f1282f7ed6a0a5095710a6086bb46a12bb341182a24b20ce
+POD ID              CREATED                  STATE               NAME                NAMESPACE           ATTEMPT             RUNTIME
+65623abb99bf7       Less than a second ago   Ready               web                 shop                0                   (default)
+CONTAINER           IMAGE                            CREATED             STATE               NAME                ATTEMPT             POD ID              POD                 NAMESPACE
+ab83064f6e54a       docker.io/library/busybox:1.37   1 second ago        Running             app                 0                   65623abb99bf7       unknown             unknown
+2: eth0@if23: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc noqueue qlen 1000
+    inet 10.111.0.3/24 brd 10.111.0.255 scope global eth0
+```
+
+`crictl ps`의 POD 칸이 `unknown`인 건 kubelet이 붙이는 라벨(`io.kubernetes.pod.name`)을 컨테이너 설정에 넣지 않아서다. 진짜 노드에서는 여기에 Pod 이름이 나온다. 아래 그림에서 다음을 누르면 `runp` 한 번 안에서 일어나는 일을 차례로 본다.
+
+<SequenceDiagram
+  caption="sandbox가 먼저다. 네트워크는 컨테이너가 아니라 sandbox에 꽂힌다"
+  actors={[
+    { id: "kubelet", label: "kubelet" },
+    { id: "rt", label: "containerd" },
+    { id: "cni", label: "CNI 체인" },
+    { id: "runc", label: "runc" },
+  ]}
+  steps={[
+    { from: "kubelet", to: "rt", label: "RunPodSandbox", title: "sandbox를 요청한다", detail: "Pod 이름, 네임스페이스, uid, 포트 매핑, 어노테이션을 넘긴다. 컨테이너 이미지는 아직 없다.", payload: "metadata: {name: web, namespace: shop, uid: r11-web-1}" },
+    { from: "rt", to: "rt", label: "netns 생성", title: "네트워크 네임스페이스를 만든다", detail: "/var/run/netns/cni-34a5d43c-...처럼 이름을 붙여 둔다. 나중에 DEL할 때 같은 경로를 넘긴다." },
+    { from: "rt", to: "cni", label: "ADD", title: "CNI 체인을 차례로 부른다", detail: "conflist의 plugins를 위에서부터 실행한다. 앞 플러그인의 결과가 다음 플러그인의 prevResult로 들어간다." },
+    { from: "cni", to: "rt", label: "IP 10.111.0.3", title: "결과를 돌려준다", detail: "인터페이스, IP, 게이트웨이, 라우트가 담긴 JSON이다. 런타임은 이 IP를 sandbox 상태에 적고, kubelet이 Pod IP로 보고한다." },
+    { from: "rt", to: "runc", label: "pause 시작", title: "pause 컨테이너를 띄운다", detail: "네임스페이스를 붙잡고 있는 아주 작은 프로세스다. 앱 컨테이너는 이 네임스페이스에 들어온다." },
+    { from: "kubelet", to: "rt", label: "Create·Start", title: "앱 컨테이너를 만든다", detail: "이미지가 없으면 PullImage부터 부른다. 컨테이너는 sandbox의 네트워크를 같이 쓴다." },
+  ]}
+/>
+
+실습에서 첫 `runp`는 실패했다. runc가 sandbox의 `oom_score_adj`를 -998로 낮추려다 권한이 없었다(`failed to update /proc/self/oom_score_adj: Permission denied`). 컨테이너 안에서 컨테이너 런타임을 돌릴 때 흔히 만나는 제약이라 containerd의 `restrict_oom_score_adj = true`로 풀었다. 쿠버네티스가 sandbox와 시스템 Pod의 OOM 점수를 낮게 잡아 두는 이유는 [requests와 limits 글](/posts/k8s-pod-resources)의 노드 압박 절에 있다.
+
+## Docker는 왜 빠졌나, dockershim
+
+kubelet은 CRI가 생긴 뒤에도 Docker만은 CRI 없이 썼다. Docker Engine은 CRI를 구현하지 않아서, kubelet 안에 Docker API를 CRI로 바꿔 주는 어댑터(dockershim)를 넣어 두었다. 쿠버네티스는 1.20에 dockershim을 deprecated로 알렸고 1.24에서 지웠다. 노드에서 "Docker가 없으면 쿠버네티스가 안 돈다"는 오해가 생긴 이유이기도 한데, 실제로는 거꾸로다. Docker도 내부에서 containerd를 쓰니, kubelet이 containerd에 바로 붙으면 계층 하나가 빠진다.
+
+달라진 것은 노드 위의 도구다. 노드에서 `docker ps`로 쿠버네티스 컨테이너를 보던 습관은 `crictl ps`로 바꾼다. 이미지는 OCI 표준이라 `docker build`로 만든 이미지를 그대로 쓴다. Docker Engine을 꼭 런타임으로 써야 한다면 Mirantis가 관리하는 cri-dockerd 어댑터를 따로 설치한다. 노드 Docker 소켓(`/var/run/docker.sock`)을 마운트해 이미지를 빌드하던 CI 파이프라인은 1.24 이후 노드에서 깨진다. 빌드는 kaniko나 BuildKit처럼 소켓이 필요 없는 도구로 옮긴다.
+
+## CNI: 설정 파일 하나에 플러그인 여러 개
+
+CNI 스펙이 정하는 것은 단순하다. 런타임이 실행 파일을 부를 때 할 일(CNI_COMMAND=ADD, DEL, CHECK, VERSION, 스펙 1.1의 STATUS와 GC)과 대상(CNI_NETNS, CNI_CONTAINERID, CNI_IFNAME)을 환경 변수로, 설정을 표준 입력 JSON으로 준다. 이 부분은 [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)에서 bridge 하나를 손으로 실행하며 자세히 봤다. 여기서는 플러그인 여러 개를 엮는 체인(conflist)을 본다.
+
+실습에 쓴 conflist다. 참조 플러그인 릴리스(cni-plugins-linux-amd64-v1.9.1.tgz, sha256 b98f74a0…b303, 릴리스에 같이 올라온 체크섬과 일치)를 받아 풀었다.
+
+```json
+{
+  "cniVersion": "1.1.0",
+  "name": "r11-pod-net",
+  "plugins": [
+    {
+      "type": "bridge", "bridge": "r11cni0", "isGateway": true, "ipMasq": true, "hairpinMode": true,
+      "ipam": { "type": "host-local", "ranges": [[{ "subnet": "10.111.0.0/24" }]], "routes": [{ "dst": "0.0.0.0/0" }] }
+    },
+    { "type": "portmap", "capabilities": { "portMappings": true } },
+    { "type": "bandwidth", "capabilities": { "bandwidth": true } },
+    { "type": "tuning", "sysctl": { "net.ipv4.conf.eth0.accept_redirects": "0" } }
+  ]
+}
+```
+
+플러그인마다 맡은 일이 다르다. bridge는 veth 한 쌍을 만들어 한쪽을 Pod에, 다른 쪽을 노드 브리지에 꽂고 IPAM(host-local)에게 주소를 받는다. portmap은 Pod 스펙의 `hostPort`를 iptables DNAT로 연다. bandwidth는 Pod 어노테이션 `kubernetes.io/egress-bandwidth`를 tc로 건다. tuning은 Pod 안의 sysctl을 바꾼다. `capabilities`는 "런타임이 이 값을 넘겨 달라"는 표시다. kubelet이 Pod 스펙에서 포트와 대역폭을 읽어 런타임에 넘기면, 런타임이 이 플러그인에만 `runtimeConfig`로 끼워 준다.
+
+체인이 실제로 남긴 흔적을 노드에서 봤다.
+
+```bash
+# 노드에서 Pod IP와 hostPort로 들어가 본다
+curl -s http://10.111.0.3:8080/
+curl -s http://192.0.2.2:18080/
+# portmap이 만든 DNAT, bandwidth가 만든 tbf, tuning이 바꾼 sysctl
+sudo iptables -t nat -S | grep 'dport 18080'
+sudo tc qdisc show | grep tbf
+sudo crictl exec ab83064f6e54a cat /proc/sys/net/ipv4/conf/eth0/accept_redirects
+```
+
+```text
+hello-from-pod
+hello-from-pod
+-A CNI-DN-21043ab726d10ca43dc72 -s 10.111.0.0/24 -p tcp -m tcp --dport 18080 -j CNI-HOSTPORT-SETMARK
+-A CNI-DN-21043ab726d10ca43dc72 -s 127.0.0.1/32 -p tcp -m tcp --dport 18080 -j CNI-HOSTPORT-SETMARK
+-A CNI-DN-21043ab726d10ca43dc72 -p tcp -m tcp --dport 18080 -j DNAT --to-destination 10.111.0.3:8080
+qdisc tbf 1: dev bwp21043ab726d1 root refcnt 2 rate 1Mbit burst 21474835b lat 4.12e+03s 
+0
+```
+
+`bwp21043ab726d1`은 bandwidth 플러그인이 만든 ifb 장치다. Pod가 내보내는 트래픽은 노드 쪽 veth로 들어오는 트래픽이라 거기에 바로 tbf를 걸 수 없어, ifb로 돌려 그 위에서 1Mbit로 자른다. 아래 그림에서 다음을 누르면 체인 네 개가 무엇을 만들었는지, 그리고 바깥에서 hostPort로 들어온 요청이 그 길을 어떻게 타는지 따라간다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="체인의 각 플러그인이 노드에 남긴 것: veth와 브리지, DNAT, ifb, sysctl"
+  zones={[
+    { id: "host", label: "node 192.0.2.2", x: 6, y: 6, w: 388, h: 196, tone: "public" },
+    { id: "pod", label: "pod netns", x: 6, y: 212, w: 388, h: 82, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "client", sub: ":18080", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "nat", label: "iptables", sub: "CNI-DN-…", x: 200, y: 60, icon: "firewall", w: 104 },
+    { id: "ifb", label: "ifb bwp…", sub: "tbf 1Mbit", x: 334, y: 60, icon: "switch", w: 96 },
+    { id: "br", label: "r11cni0", sub: "10.111.0.1", x: 200, y: 160, icon: "switch", w: 104 },
+    { id: "pod", label: "eth0", sub: "10.111.0.3", x: 200, y: 262, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "client", to: "nat" },
+    { from: "nat", to: "br" },
+    { from: "br", to: "pod", label: "veth" },
+    { from: "br", to: "ifb", dashed: true },
+  ]}
+  steps={[
+    { path: ["br", "pod"], packet: "bridge", title: "bridge가 선을 꽂는다", detail: "veth 한 쌍을 만들어 Pod 쪽을 eth0으로, 노드 쪽을 r11cni0에 붙인다. host-local이 10.111.0.3을 준다." },
+    { path: ["nat"], packet: "portmap", title: "portmap이 문을 연다", detail: "hostPort 18080을 10.111.0.3:8080으로 바꾸는 DNAT 체인을 컨테이너 ID 이름으로 만든다." },
+    { path: ["ifb"], packet: "bw", title: "bandwidth가 속도를 건다", detail: "Pod의 egress 어노테이션을 읽어 ifb 장치에 tbf를 단다." },
+    { path: ["pod"], packet: "tuning", title: "tuning이 Pod 안을 고친다", detail: "Pod 네임스페이스 안의 sysctl을 바꾼다. accept_redirects가 0이 됐다." },
+    { path: ["client", "nat", "br", "pod"], packet: "GET /", title: "바깥 요청이 그 길을 탄다", detail: "노드의 18080으로 온 요청이 DNAT로 Pod IP가 되어 브리지를 지나 eth0에 닿는다.", payload: "curl http://192.0.2.2:18080/ → hello-from-pod" },
+  ]}
+/>
+
+## 설정 파일이 없으면 노드가 NotReady가 된다
+
+체인 설정 파일을 디렉터리에서 빼 보면 노드 장애 하나가 그대로 재현된다.
+
+```bash
+# CNI 설정 파일을 치운다
+sudo mv net.d/10-r11.conflist off/
+sudo crictl info   # status.conditions와 lastCNILoadStatus만 추렸다
+```
+
+```text
+{'message': '', 'reason': '', 'status': True, 'type': 'RuntimeReady'}
+{'message': 'Network plugin returns error: cni plugin not initialized', 'reason': 'NetworkPluginNotReady', 'status': False, 'type': 'NetworkReady'}
+cni config load failed: no network config found in .../cni/net.d: cni plugin not initialized: failed to load cni config
+```
+
+kubelet은 이 `NetworkReady=false`를 받아 노드를 `NotReady`로 보고한다(노드 조건 메시지에 `container runtime network not ready: NetworkReady=false reason:NetworkPluginNotReady`가 붙는다). 새 클러스터를 만들고 CNI 애드온(Calico, Cilium 등)을 아직 설치하지 않았을 때 모든 노드가 NotReady인 이유가 이것이다. CNI 에이전트 DaemonSet이 뜨면서 이 디렉터리에 설정 파일을 써 넣으면 Ready로 바뀐다. 거꾸로, CNI 에이전트를 지웠는데 설정 파일이 남아 있으면 노드는 Ready인데 새 Pod만 실패한다.
+
+## 체인 중간이 실패하면 IP가 샌다
+
+체인 맨 끝에 실습 디렉터리에 없는 `firewall` 플러그인을 붙이고 Pod를 하나 더 띄웠다.
+
+```text
+E1021 01:36:41.314169   18088 remote_runtime.go:325] "RunPodSandbox from runtime service failed" err="rpc error: code = Unknown desc = failed to setup network for sandbox \"e171d0200a38c174822bac851125aa9c08aaf569a9af61b0079755bd849f81d5\": plugin type=\"firewall\" failed (add): failed to find plugin \"firewall\" in path [.../dl/x/cni]"
+```
+
+containerd 로그에는 바로 뒤에 한 줄이 더 있었다.
+
+```text
+level=error msg="Failed to destroy network for sandbox \"e171d0200a38c174822bac851125aa9c08aaf569a9af61b0079755bd849f81d5\"" error="plugin type=\"firewall\" failed (delete): failed to find plugin \"firewall\" in path [...]"
+```
+
+ADD가 실패하면 런타임은 체인을 거꾸로 DEL해서 치우려 한다. 그런데 거꾸로 부르는 첫 번째가 바로 그 없는 `firewall`이라, DEL도 거기서 멈췄다. 앞에서 성공한 bridge, portmap, bandwidth는 정리되지 않았다. 설정을 고치고 확인했더니 흔적이 남아 있었다.
+
+```bash
+# host-local이 기록한 할당 파일
+sudo ls /run/r11-ctr/ipam/r11-pod-net/
+sudo cat /run/r11-ctr/ipam/r11-pod-net/10.111.0.4
+# 없는 Pod로 가는 hostPort 규칙
+sudo iptables -t nat -S | grep 'dports 18081'
+```
+
+```text
+10.111.0.3
+10.111.0.4
+last_reserved_ip.0
+lock
+e171d0200a38c174822bac851125aa9c08aaf569a9af61b0079755bd849f81d5
+eth0
+-A CNI-HOSTPORT-DNAT -p tcp -m comment --comment "dnat name: \"r11-pod-net\" id: \"e171d0200a38c174822bac851125aa9c08aaf569a9af61b0079755bd849f81d5\"" -m multiport --dports 18081 -j CNI-DN-e194d54fe09b664d0ebdf
+```
+
+10.111.0.4는 이미 사라진 sandbox의 이름으로 잡혀 있고, 18081 포트는 없는 Pod로 DNAT된다. 이런 일이 쌓이면 노드 대역(/24면 253개)이 차서 [CNI 글](/posts/k8s-cni-pod-network)에 나온 `no IP addresses available in range set`이 난다. 같은 포트로 새 Pod를 띄우면 엉뚱한 곳으로 가는 규칙과 부딪힌다. 아래 그림이 그 과정이다.
+
+<AlgoTrace
+  caption="ADD는 위에서 아래로, DEL은 아래에서 위로. DEL이 첫 칸에서 멈추면 나머지가 남는다"
+  cells={["bridge", "portmap", "bandwidth", "tuning", "firewall"]}
+  memoryLabel="노드에 남은 것"
+  steps={[
+    { pointer: 0, found: [0], memory: ["IP .4", "veth"], caption: "ADD bridge: veth를 만들고 host-local에서 10.111.0.4를 받는다." },
+    { pointer: 1, found: [0, 1], memory: ["IP .4", "veth", "DNAT 18081"], caption: "ADD portmap: hostPort 18081 DNAT 규칙을 만든다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["IP .4", "veth", "DNAT 18081", "ifb"], caption: "ADD bandwidth: ifb 장치와 tbf를 만든다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["IP .4", "veth", "DNAT 18081", "ifb"], caption: "ADD firewall: 실행 파일이 없다. 체인 전체가 실패한다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["IP .4", "veth", "DNAT 18081", "ifb"], caption: "DEL은 역순이라 firewall부터 부른다. 여기서 또 실패하고 멈춘다." },
+    { pointer: 0, memory: ["IP .4", "DNAT 18081", "ifb"], caption: "런타임이 netns를 지우며 veth는 사라졌지만 IP 기록, DNAT, ifb는 남았다." },
+  ]}
+/>
+
+고칠 때는 고친 설정으로 DEL을 다시 부른다. DEL은 몇 번을 불러도 성공해야 한다는 게 스펙의 약속이고, 네임스페이스가 이미 없어도(`CNI_NETNS=""`) 부를 수 있다. 짧은 스크립트로 체인을 역순으로 DEL했다.
+
+```text
+DEL tuning    exit=0 
+DEL bandwidth exit=0 
+DEL portmap   exit=0 
+DEL bridge    exit=0 
+```
+
+IP 기록과 ifb는 지워졌다. 그런데 DNAT 규칙과 bridge의 MASQUERADE 규칙은 남았다. portmap은 어떤 포트였는지(`runtimeConfig.portMappings`)를 다시 받아야 지웠고, bridge는 네임스페이스가 없어 Pod IP를 못 읽으니 자기 MASQUERADE 체인을 못 찾았다. 마지막 체인은 iptables로 직접 지웠다. 런타임은 이런 정보를 sandbox 상태에 저장해 두고 DEL 때 같이 넘긴다. 손으로 고칠 때는 그걸 다 맞춰야 한다는 게 교훈이다. CNI 스펙 1.1의 GC 명령은 "지금 살아 있는 sandbox 목록"을 주고 나머지를 플러그인이 치우게 해서 이 문제를 줄이려고 생겼다. 런타임과 플러그인이 둘 다 지원해야 쓸 수 있다.
+
+현장에서 순서는 이렇다. 이벤트의 `plugin type="..." failed (add):` 뒤 메시지로 어느 플러그인인지 본다. `/etc/cni/net.d`에 설정 파일이 여러 개면 사전순 첫 파일만 쓰니 엉뚱한 파일이 앞에 있지 않은지 본다. `/opt/cni/bin`에 그 type 이름의 실행 파일이 있는지 본다. IP 고갈이면 `/var/lib/cni/networks/<이름>/`의 파일 수와 실제 sandbox 수(`crictl pods -q | wc -l`)를 비교한다. 파일이 훨씬 많으면 샌 것이다.
+
+host-local이 다음 주소를 고르는 규칙을 직접 짜 보자. 실습에서 첫 sandbox가 실패하며 .2를 반납한 뒤에도 다음 Pod는 .2가 아니라 .3을 받았다. host-local은 마지막으로 준 주소(`last_reserved_ip.0`) 다음부터 찾고, 끝에 닿으면 처음으로 돌아간다. 막 반납된 주소를 바로 다시 주지 않으려는 것이다.
+
+<CodePlayground
+  caption="host-local처럼 다음 IP 고르기"
+  functionName="nextIP"
+  initialCode={`function nextIP(subnet, used, lastReserved) {
+  // subnet: "10.111.0.0/24", used: 이미 쓰는 IP 목록
+  // .0(네트워크), .1(게이트웨이), 마지막(브로드캐스트)은 쓰지 않는다
+  // lastReserved 다음부터 찾고, 끝에 닿으면 처음으로 돌아간다
+  // 남은 게 없으면 null
+  return null;
+}`}
+  solution={`function nextIP(subnet, used, lastReserved) {
+  const [base, bits] = subnet.split("/");
+  const toInt = (ip) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
+  const toIp = (n) => [24, 16, 8, 0].map((s) => Math.floor(n / 2 ** s) % 256).join(".");
+  const size = 2 ** (32 - Number(bits));
+  const net = toInt(base);
+  const first = net + 2;
+  const last = net + size - 2;
+  const taken = new Set(used.map(toInt));
+  const count = last - first + 1;
+  const start = lastReserved ? toInt(lastReserved) + 1 : first;
+  for (let i = 0; i < count; i++) {
+    let cand = start + i;
+    if (cand > last) cand = first + ((cand - first) % count);
+    if (!taken.has(cand)) return toIp(cand);
+  }
+  return null;
+}`}
+  tests={[
+    { label: "처음", args: ["10.111.0.0/24", [], null], expected: "10.111.0.2" },
+    { label: ".2를 반납한 뒤", args: ["10.111.0.0/24", [], "10.111.0.2"], expected: "10.111.0.3" },
+    { label: ".3을 쓰는 중", args: ["10.111.0.0/24", ["10.111.0.3"], "10.111.0.3"], expected: "10.111.0.4" },
+    { label: "/29가 꽉 참", args: ["10.0.0.0/29", ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"], "10.0.0.6"], expected: null },
+    { label: "끝에서 처음으로", args: ["10.0.0.0/29", ["10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"], "10.0.0.6"], expected: "10.0.0.2" },
+  ]}
+/>
+
+## CSI: 컨트롤러 쪽과 노드 쪽
+
+CSI 드라이버는 gRPC 서비스 셋을 구현한다. `Identity`(이름, 버전, 지원 기능), `Controller`(디스크를 만들고 지우고, 노드에 붙이고 떼기, 스냅숏, 확장), `Node`(노드에서 포맷하고 마운트하기)다. 보통 드라이버 하나를 두 모양으로 배포한다. Controller 서비스는 Deployment나 StatefulSet으로 한두 개 띄우고, Node 서비스는 DaemonSet으로 모든 노드에 띄운다. 노드 쪽은 마운트를 해야 하니 privileged에 `mountPropagation: Bidirectional`이 붙는다.
+
+hostpath 드라이버를 띄우고 kubelet과 사이드카가 하는 호출을 grpcurl로 직접 해 봤다.
+
+```bash
+# 드라이버를 띄운다 (노드 이름 kw-node-1)
+sudo hostpathplugin --endpoint=unix:///run/r11-csi/csi.sock --nodeid=kw-node-1 \
+  --drivername=hostpath.csi.k8s.io --statedir=./csi/state &
+# CSI 스펙 v1.12.0의 csi.proto로 부른다
+G="grpcurl -plaintext -unix -import-path ./spec -proto csi.proto"
+sudo $G -d '{}' /run/r11-csi/csi.sock csi.v1.Identity/GetPluginInfo
+sudo $G -d '{}' /run/r11-csi/csi.sock csi.v1.Node/NodeGetCapabilities
+```
+
+```text
+{
+  "name": "hostpath.csi.k8s.io",
+  "vendorVersion": "v1.18.0"
+}
+        "type": "STAGE_UNSTAGE_VOLUME"
+        "type": "VOLUME_CONDITION"
+        "type": "GET_VOLUME_STATS"
+        "type": "SINGLE_NODE_MULTI_WRITER"
+        "type": "EXPAND_VOLUME"
+```
+
+처음 빌드에서는 `GetPluginInfo`가 `Code: Unavailable, Message: Driver is missing version`을 돌려줬다. 버전 문자열을 빌드 때 넣지 않아서였다. kubelet과 사이드카는 시작할 때 이 호출부터 하니, 드라이버 Pod가 떠 있어도 이 단계가 실패하면 등록이 안 된다.
+
+디스크 하나가 Pod에 닿기까지 부르는 순서는 CreateVolume → (ControllerPublishVolume) → NodeStageVolume → NodePublishVolume이다. 같은 이름으로 CreateVolume을 두 번 부르고, 크기를 바꿔 한 번 더 불렀다.
+
+```bash
+# 같은 이름으로 두 번 만든다 (사이드카가 재시도하는 상황)
+sudo $G -d '{"name":"pvc-demo-1","capacity_range":{"required_bytes":1073741824},"volume_capabilities":[...]}' \
+  /run/r11-csi/csi.sock csi.v1.Controller/CreateVolume
+# 같은 이름, 다른 크기
+sudo $G -d '{"name":"pvc-demo-1","capacity_range":{"required_bytes":2147483648},"volume_capabilities":[...]}' \
+  /run/r11-csi/csi.sock csi.v1.Controller/CreateVolume
+```
+
+```text
+    "volumeId": "837f3bc2-ccf0-11f1-9fe2-56915279506e",
+    "volumeId": "837f3bc2-ccf0-11f1-9fe2-56915279506e",
+ERROR:
+  Code: AlreadyExists
+  Message: Volume with the same name: pvc-demo-1 but with different size already exist
+```
+
+두 번 불러도 같은 volumeId가 나왔다. CSI는 `name`을 멱등 키로 쓴다. 사이드카는 시간 초과가 나면 같은 이름으로 다시 부르기 때문에, 이 약속이 없으면 재시도마다 클라우드 디스크가 하나씩 생긴다. 이름은 provisioner가 PV 이름(`pvc-<PVC uid>`)으로 정한다.
+
+노드 쪽은 두 단계다. NodeStageVolume은 노드에 한 번만 하는 일(블록 장치 포맷, 전역 경로 마운트), NodePublishVolume은 Pod마다 하는 일(그 경로를 Pod 디렉터리로 bind mount)이다. 한 디스크를 같은 노드의 Pod 둘이 쓰면 stage는 한 번, publish는 두 번이다.
+
+```bash
+sudo $G -d '{"volume_id":"837f3bc2-…","staging_target_path":".../plugins/staging/837f3bc2-…",…}' /run/r11-csi/csi.sock csi.v1.Node/NodeStageVolume
+sudo $G -d '{"volume_id":"837f3bc2-…","target_path":".../pods/web/volumes/data",…}' /run/r11-csi/csi.sock csi.v1.Node/NodePublishVolume
+# Pod 디렉터리에 무엇이 붙었나
+findmnt -T ./csi/kubelet/pods/web/volumes/data -o TARGET,SOURCE,FSTYPE
+```
+
+```text
+TARGET                                 SOURCE                                                         FSTYPE
+$LAB/csi/kubelet/pods/web/volumes/data /dev/vda[$LAB/csi/state/837f3bc2-ccf0-11f1-9fe2-56915279506e] ext4
+```
+
+(`$LAB`은 실습 디렉터리 경로를 줄인 것이다.) 진짜 노드라면 이 자리가 `/var/lib/kubelet/pods/<pod uid>/volumes/kubernetes.io~csi/<pv>/mount`다.
+
+여기서 하나를 일부러 틀렸다. publish를 풀지 않은 채로 DeleteVolume을 불렀다. hostpath 드라이버는 이걸 막지 않았고(`{}`), Pod 디렉터리의 마운트는 이렇게 남았다.
+
+```text
+TARGET                                 SOURCE
+$LAB/csi/kubelet/pods/web/volumes/data /dev/vda[$LAB/csi/state/837f3bc2-ccf0-11f1-9fe2-56915279506e//deleted]
+```
+
+드라이버는 순서를 지키는 쪽이 오케스트레이터라고 믿는다. 쿠버네티스에서 그 순서를 지키는 장치가 PVC와 PV의 보호 finalizer(`kubernetes.io/pvc-protection`, `kubernetes.io/pv-protection`)와 attach/detach 컨트롤러다. 쓰는 Pod가 있으면 PVC 삭제가 멈추는 이유다. 노드를 강제로 지우거나 VolumeAttachment를 손으로 지워 이 장치를 건너뛰면 실제 디스크에서 이런 일이 난다.
+
+## 사이드카가 쿠버네티스 쪽 일을 맡는다
+
+CSI 드라이버는 쿠버네티스를 모른다. PVC도, PV도, 노드 이름도 모르고 gRPC만 안다. 쿠버네티스 객체를 watch하다가 CSI 호출로 바꿔 주는 것은 쿠버네티스 프로젝트가 만든 사이드카 컨테이너들이다. external-provisioner(PVC → CreateVolume/DeleteVolume), external-attacher(VolumeAttachment → ControllerPublish/Unpublish), external-resizer(PVC 크기 변경 → ControllerExpandVolume), external-snapshotter(VolumeSnapshot → CreateSnapshot), node-driver-registrar(노드 플러그인을 kubelet에 등록), livenessprobe(Probe 호출을 HTTP 헬스 체크로)다. 드라이버 제작사는 gRPC만 구현하고 이 사이드카들을 같은 Pod에 붙여 배포한다.
+
+external-provisioner를 빌드해 kwok 클러스터와 hostpath 드라이버 사이에 띄우고 PVC를 만들었다.
+
+```bash
+# 사이드카: 클러스터는 kubeconfig로, 드라이버는 소켓으로 붙는다
+sudo csi-provisioner --kubeconfig=$KUBECONFIG --csi-address=/run/r11-csi/csi.sock --leader-election=false &
+# StorageClass(provisioner: hostpath.csi.k8s.io)와 PVC 1Gi
+kubectl apply -f sc-pvc.yaml
+kubectl describe pvc orders-data -n shop | sed -n '/Events/,$p'
+```
+
+```text
+Events:
+  Type     Reason                Age              From                                                         Message
+  ----     ------                ----             ----                                                         -------
+  Normal   ExternalProvisioning  4s               persistentvolume-controller                                  Waiting for a volume to be created either by the external provisioner 'hostpath.csi.k8s.io' or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+  Normal   Provisioning          1s (x3 over 4s)  hostpath.csi.k8s.io_vm_bb27091a-0a60-4d94-933a-dac326f3872e  External provisioner is provisioning volume for claim "shop/orders-data"
+  Warning  ProvisioningFailed    1s (x3 over 4s)  hostpath.csi.k8s.io_vm_bb27091a-0a60-4d94-933a-dac326f3872e  error generating accessibility requirements: no available topology found
+```
+
+이벤트를 낸 쪽(From)이 둘이다. 첫 줄은 컨트롤러 매니저 안의 PV 컨트롤러다. 자기는 만들 줄 모르니 외부 provisioner를 기다린다고만 말한다. PVC가 Pending이고 이 줄만 있으면 provisioner 사이드카가 없거나 StorageClass의 `provisioner` 이름이 드라이버 이름과 다르다. 다음 줄부터가 사이드카다. 토폴로지를 지원하는 드라이버인데 어느 노드에 어떤 토폴로지가 있는지 알려 줄 CSINode가 없어서 실패했다.
+
+CSINode는 원래 노드의 kubelet이 만든다. node-driver-registrar가 드라이버 소켓을 kubelet의 `/var/lib/kubelet/plugins_registry/`에 등록하면, kubelet이 NodeGetInfo를 불러 노드 ID와 토폴로지를 CSINode와 노드 라벨에 적는다. kwok 노드에는 kubelet이 없으니 그 결과를 손으로 만들었다.
+
+```yaml
+# kubelet과 node-driver-registrar가 하는 일을 손으로 한다
+apiVersion: storage.k8s.io/v1
+kind: CSINode
+metadata:
+  name: kw-node-1
+spec:
+  drivers:
+    - name: hostpath.csi.k8s.io
+      nodeID: kw-node-1
+      topologyKeys: ["topology.hostpath.csi/node"]
+```
+
+```text
+csinode.storage.k8s.io/kw-node-1 created
+node/kw-node-1 labeled
+NAME          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+orders-data   Bound    pvc-27827912-5b3e-407d-844e-41badb937555   1Gi        RWO            hostpath       <unset>                 25s
+  Normal   ProvisioningSucceeded  10s                hostpath.csi.k8s.io_vm_bb27091a-0a60-4d94-933a-dac326f3872e  Successfully provisioned volume pvc-27827912-5b3e-407d-844e-41badb937555
+```
+
+드라이버 로그에는 `GRPC call: /csi.v1.Controller/CreateVolume`이 찍혔고, 만들어진 PV에는 `csi.driver: hostpath.csi.k8s.io`, `volumeHandle: a19ddd10-…`(드라이버가 준 volumeId)와 `nodeAffinity`(`topology.hostpath.csi/node`)가 들어 있었다. PVC를 지우자 1초 안에 `DeleteVolume`이 불리고 PV가 사라졌다(reclaimPolicy Delete). 아래 그림에서 다음을 누르면 PVC 하나가 디스크가 되고 Pod 디렉터리에 붙기까지 누가 누구를 부르는지 본다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="쿠버네티스 쪽 일은 사이드카와 kubelet이, 디스크 일은 드라이버가 한다"
+  zones={[
+    { id: "ctl", label: "controller pod", x: 6, y: 6, w: 388, h: 96, tone: "private" },
+    { id: "node", label: "node kw-node-1", x: 6, y: 114, w: 388, h: 96, tone: "public" },
+    { id: "be", label: "storage", x: 6, y: 216, w: 388, h: 78, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "api", label: "apiserver", sub: "PVC·PV", x: 66, y: 60, icon: "server", w: 96 },
+    { id: "prov", label: "provisioner", sub: "sidecar", x: 200, y: 60, icon: "gateway", w: 104 },
+    { id: "ctrl", label: "CSI ctrl", sub: "csi.sock", x: 334, y: 60, icon: "lock", w: 96 },
+    { id: "kubelet", label: "kubelet", sub: "volume mgr", x: 200, y: 168, icon: "server", w: 104 },
+    { id: "nodep", label: "CSI node", sub: "DaemonSet", x: 334, y: 168, icon: "lock", w: 96 },
+    { id: "disk", label: "backend", sub: "디스크", x: 334, y: 268, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "api", to: "prov", dashed: true },
+    { from: "prov", to: "ctrl" },
+    { from: "ctrl", to: "disk" },
+    { from: "api", to: "kubelet", dashed: true },
+    { from: "kubelet", to: "nodep" },
+    { from: "nodep", to: "disk" },
+  ]}
+  steps={[
+    { path: ["api", "prov"], packet: "PVC", title: "provisioner가 PVC를 본다", detail: "StorageClass의 provisioner 이름이 자기 드라이버와 같은 PVC만 집는다." },
+    { path: ["prov", "ctrl", "disk"], packet: "Create", title: "CreateVolume을 부른다", detail: "name은 pvc-<uid>다. 같은 이름으로 다시 불러도 같은 디스크가 나온다.", payload: "GRPC call: /csi.v1.Controller/CreateVolume" },
+    { path: ["prov", "api"], packet: "PV", title: "PV를 만든다", detail: "volumeHandle에 드라이버가 준 ID를, nodeAffinity에 토폴로지를 적는다. PV 컨트롤러가 PVC와 묶는다." },
+    { path: ["api", "kubelet"], packet: "Pod", title: "Pod가 노드에 배정된다", detail: "attachRequired: false라 VolumeAttachment와 external-attacher는 건너뛴다. 클라우드 디스크라면 여기서 ControllerPublish로 노드에 붙인다." },
+    { path: ["kubelet", "nodep", "disk"], packet: "Stage", title: "노드에서 한 번 마운트한다", detail: "NodeStageVolume으로 노드 전역 경로에 포맷·마운트한다." },
+    { path: ["kubelet", "nodep"], packet: "Publish", title: "Pod 디렉터리에 bind mount", detail: "NodePublishVolume으로 Pod마다 붙인다. 컨테이너는 그 경로를 volumeMounts로 본다." },
+  ]}
+/>
+
+드라이버의 성격은 CSIDriver 객체로 쿠버네티스에 알린다. `attachRequired: false`면 attach 단계를 건너뛰고, `podInfoOnMount: true`면 NodePublish 때 Pod 이름과 네임스페이스를 넘겨 준다. Secret을 마운트하는 Secrets Store CSI Driver가 이 정보를 써서 Pod별 인증을 한다.
+
+```text
+NAME                  ATTACHREQUIRED   PODINFOONMOUNT   STORAGECAPACITY   TOKENREQUESTS   REQUIRESREPUBLISH   MODES                  AGE
+hostpath.csi.k8s.io   false            true             false             <unset>         false               Persistent,Ephemeral   1s
+```
+
+in-tree 드라이버는 대부분 CSI로 옮겨졌다(CSI migration). AWS EBS, GCE PD, Azure Disk 같은 주요 드라이버는 1.2x 릴리스들에서 GA가 됐고, 옛 `kubernetes.io/aws-ebs` StorageClass로 만든 볼륨도 내부에서는 CSI 드라이버로 처리된다. 그래서 이 드라이버들이 설치되어 있지 않으면 옛 StorageClass도 동작하지 않는다. EKS에서 1.23 이후 EBS CSI 애드온을 따로 깔아야 하는 이유다([EKS 글](/posts/eks-cluster-basics)).
+
+## GPU 같은 장치는 디바이스 플러그인으로
+
+컨테이너, 네트워크, 디스크 말고 노드에 꽂힌 장치(GPU, FPGA, 고속 NIC)를 Pod에 나눠 주는 인터페이스도 있다. 디바이스 플러그인은 kubelet의 `/var/lib/kubelet/device-plugins/kubelet.sock`에 gRPC로 등록하고, `nvidia.com/gpu: 4` 같은 확장 리소스를 노드에 광고한다. Pod가 `resources.limits`에 `nvidia.com/gpu: 1`을 적으면 스케줄러는 개수만 세고, kubelet은 컨테이너를 만들 때 플러그인의 Allocate를 불러 장치 파일과 환경 변수를 넣는다. 개수만 셀 수 있고 "메모리 40GB 이상인 GPU"처럼 속성으로 고르지 못한다는 한계 때문에 DRA(Dynamic Resource Allocation)가 나왔다. 실습 클러스터의 APIService 목록에도 `v1.resource.k8s.io`가 보인다. 자세한 내용은 [GPU와 DRA 글](/posts/k8s-gpu-dra)에 있다.
+
+## 플러그인 문제를 노드에서 좁히는 순서
+
+Pod가 `ContainerCreating`에 오래 머물면 이벤트의 출처를 먼저 본다. `FailedCreatePodSandBox ... failed to setup network`는 CNI, `FailedMount`나 `FailedAttachVolume`은 CSI, `Failed to pull image`는 CRI의 ImageService다.
+
+CRI 쪽이면 노드에서 `crictl info`로 RuntimeReady와 NetworkReady를 본다. `crictl pods`, `crictl ps -a`로 kubelet이 만들려던 sandbox와 컨테이너가 런타임에 있는지 보고, 런타임 로그(`journalctl -u containerd`)에서 sandbox ID로 찾는다.
+
+CNI 쪽이면 `/etc/cni/net.d`의 사전순 첫 파일이 원하는 설정인지, `/opt/cni/bin`에 type 이름의 실행 파일이 있는지, CNI 에이전트 Pod(Cilium, Calico)가 그 노드에서 Ready인지 본다. IP 고갈이면 IPAM 기록 수와 sandbox 수를 비교한다.
+
+CSI 쪽이면 `kubectl get csidrivers,csinodes`로 드라이버가 등록됐는지, 그 노드의 CSINode에 드라이버가 있는지 본다. 없으면 노드 플러그인 DaemonSet과 node-driver-registrar 로그를 본다. PVC가 Pending이면 이벤트의 From을 보고 provisioner 사이드카 로그로 간다. 볼륨이 노드에서 안 떨어지면 `kubectl get volumeattachments`를 본다.
+
+## 약속은 셋, 구현은 플러그인
+
+kubelet은 Pod를 띄우는 순서만 안다. 컨테이너를 실제로 띄우는 일은 CRI 너머의 런타임이, 네트워크를 꽂는 일은 런타임이 부르는 CNI 실행 파일 체인이, 디스크를 만들고 붙이는 일은 사이드카와 kubelet이 부르는 CSI 드라이버가 한다. 장애가 나면 어느 인터페이스 너머인지부터 가르고, 그 플러그인이 남긴 흔적(런타임 로그, IPAM 기록과 iptables, 사이드카 이벤트)을 읽는다. 쿠버네티스 API 쪽을 넓히는 방법은 [CRD](/posts/k8s-crd)와 [API 집계와 스케줄러](/posts/k8s-api-aggregation-schedulers) 글로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### CRI, CNI, CSI는 각각 무엇이고 왜 따로 있나요?
+
+CRI는 kubelet이 컨테이너 런타임을 부르는 gRPC 인터페이스, CNI는 런타임이 Pod 네트워크를 설정할 때 부르는 실행 파일 규약, CSI는 저장소 드라이버가 구현하는 gRPC 인터페이스다. 예전에는 Docker 호출, 네트워크, 클라우드 디스크 코드가 쿠버네티스 소스 안에 있어서 고치려면 쿠버네티스 릴리스를 기다려야 했다. 인터페이스로 빼면서 런타임, 네트워크, 저장소 제작사가 따로 개발하고 릴리스할 수 있게 됐다.
+
+### dockershim이 제거되면 Docker로 만든 이미지는 못 쓰나요?
+
+쓸 수 있다. 이미지는 OCI 표준이라 containerd나 CRI-O가 그대로 받는다. 1.24에서 사라진 건 kubelet 안의 Docker 어댑터라, 노드의 런타임이 Docker Engine이 아니게 된 것뿐이다. 영향을 받는 건 노드의 docker.sock을 마운트해 쓰던 빌드나 모니터링 도구, `docker ps`로 노드를 보던 습관이고, crictl과 소켓 없는 빌드 도구로 옮긴다.
+
+### CNI 플러그인 체인은 어떻게 동작하나요?
+
+conflist의 plugins를 위에서부터 차례로 ADD하고, 앞 플러그인의 결과가 다음 플러그인의 prevResult로 들어간다. 보통 첫 플러그인이 인터페이스와 IP를 만들고, 뒤 플러그인들이 hostPort(portmap), 대역폭(bandwidth), sysctl(tuning)처럼 덧붙인다. DEL은 역순으로 부르고 몇 번을 불러도 성공해야 한다. 중간에서 DEL이 실패하면 앞쪽 자원이 남아 IP가 새는 원인이 된다.
+
+### 새 클러스터의 노드가 모두 NotReady입니다. 무엇을 보나요?
+
+`kubectl describe node`의 조건 메시지에서 `NetworkReady=false reason:NetworkPluginNotReady`를 찾는다. CNI 설정 파일이 `/etc/cni/net.d`에 없으면 런타임이 이렇게 보고하고 kubelet이 노드를 NotReady로 만든다. CNI 애드온을 설치하지 않았거나 그 DaemonSet이 그 노드에서 안 떴을 때가 대부분이다. 에이전트가 뜨면서 설정 파일을 쓰면 Ready가 된다.
+
+### CSI의 Controller 서비스와 Node 서비스는 어떻게 다르게 배포하나요?
+
+Controller 서비스는 디스크를 만들고 지우고 노드에 붙이는 일이라 클러스터에 한두 개, Deployment나 StatefulSet으로 띄우고 external-provisioner, attacher, resizer, snapshotter 사이드카를 붙인다. Node 서비스는 각 노드에서 포맷과 마운트를 하니 DaemonSet으로, privileged와 양방향 마운트 전파를 켜고 node-driver-registrar를 붙여 kubelet에 등록한다. 드라이버는 쿠버네티스를 모르고 사이드카와 kubelet이 쿠버네티스 객체를 CSI 호출로 바꿔 준다.
+
+### NodeStageVolume과 NodePublishVolume은 왜 나뉘어 있나요?
+
+stage는 노드마다 한 번 하는 일이고 publish는 Pod마다 하는 일이라서다. 블록 장치를 포맷하고 노드 전역 경로에 마운트하는 건 한 번이면 되고, 그 경로를 Pod 디렉터리로 bind mount하는 건 그 디스크를 쓰는 Pod마다 한다. 드라이버가 STAGE_UNSTAGE_VOLUME 기능을 광고할 때만 kubelet이 stage를 부른다.
+
+### PVC가 Pending에서 안 넘어갑니다. 어디부터 보나요?
+
+`kubectl describe pvc`의 이벤트 출처를 본다. persistentvolume-controller의 `Waiting for a volume to be created either by the external provisioner`만 있으면 provisioner 사이드카가 없거나 StorageClass의 provisioner 이름이 드라이버 이름과 다르다. 사이드카가 낸 ProvisioningFailed가 있으면 그 메시지와 사이드카 로그를 본다. WaitForFirstConsumer라면 Pod가 스케줄되기 전까지는 Pending이 정상이다.
+
+### 디바이스 플러그인과 DRA는 무엇이 다른가요?
+
+디바이스 플러그인은 장치를 `nvidia.com/gpu` 같은 확장 리소스의 개수로만 광고하고, 스케줄러는 개수만 센다. 그래서 GPU의 메모리나 모델 같은 속성으로 고르거나 여러 Pod가 장치 하나를 나눠 쓰는 걸 표현하기 어렵다. DRA는 장치를 속성이 있는 객체로 광고하고 Pod가 ResourceClaim으로 조건을 적어 요청하게 해서 이 한계를 푼다.

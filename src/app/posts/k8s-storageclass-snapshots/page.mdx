@@ -1,0 +1,596 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-storageclass-snapshots");
+
+DB 스키마를 바꾸는 마이그레이션 전날, 리뷰어가 "디스크 스냅샷부터 떠 두고 하자"고 한다. 클라우드 콘솔에서 EBS 스냅샷 버튼을 누르는 대신 쿠버네티스 안에서 하고 싶다. `VolumeSnapshot`을 만들었는데 READYTOUSE가 한참 비어 있다. 겨우 찍었더니 스테이징 네임스페이스에서는 그 스냅샷으로 복원이 안 된다. 그리고 애초에 이 디스크를 만든 StorageClass의 IOPS를 올리려고 고쳤더니 API 서버가 거절한다.
+
+이 글은 디스크를 어떤 등급으로 만들지 정하는 StorageClass 설계와, 그 디스크를 찍고 되살리는 VolumeSnapshot을 다룬다. 이 주제의 다른 글도 있다. PVC가 PV에 묶이는 규칙, 접근 모드(RWO·ROX·RWX·RWOP), `WaitForFirstConsumer`와 존 때문에 생기는 Pending, `Retain`·`Delete` 회수 정책의 함정, 용량 확장은 [PV와 PVC 글](/posts/k8s-pv-pvc)에 실제 출력과 함께 있다. 여기서는 그 설명을 반복하지 않는다. 백업을 몇 벌, 어디에, 얼마나 오래 둘지는 [백업 전략 글](/posts/backup-strategy)이 맡는다.
+
+실습은 kwok로 띄운 Kubernetes v1.37.0 API 서버에서 했다. 여기에 CSI 참조 구현인 hostpath 드라이버(csi-driver-host-path v1.18.0)와 external-provisioner v6.4.0, external-snapshotter v8.7.0의 snapshot-controller와 csi-snapshotter를 소스에서 빌드해 클러스터 밖 프로세스로 붙였다. Pod가 실제로 돌지는 않지만 PVC 프로비저닝, 스냅샷, 복원은 진짜 CSI 호출로 일어나고, hostpath 드라이버가 볼륨을 로컬 디렉터리로 만들기 때문에 복원된 데이터도 파일로 직접 확인할 수 있다.
+
+## StorageClass는 한 번 만들면 고칠 수 없다
+
+리뷰어 말대로 IOPS를 올리려고 StorageClass를 고쳐 봤다. `parameters`와 `reclaimPolicy`는 거절되고, `allowVolumeExpansion`만 바뀐다.
+
+```bash
+# 이미 있는 StorageClass의 parameters, reclaimPolicy, allowVolumeExpansion을 차례로 고쳐 본다
+kubectl patch sc fast -p '{"parameters":{"kind":"block"}}'
+kubectl patch sc fast -p '{"reclaimPolicy":"Retain"}'
+kubectl patch sc fast -p '{"allowVolumeExpansion":false}'
+```
+
+```text
+The StorageClass "fast" is invalid: parameters: Invalid value: null: field is immutable
+The StorageClass "fast" is invalid: reclaimPolicy: Invalid value: null: field is immutable
+storageclass.storage.k8s.io/fast patched
+```
+
+이유는 StorageClass가 설정 객체가 아니라 주문서 양식이기 때문이다. 이 양식으로 이미 만든 디스크 수백 개가 있는데 양식을 바꾸면, 기존 디스크는 예전 값이고 새 디스크만 새 값이 된다. 같은 이름의 class 아래 다른 디스크가 섞이는 일을 막으려고 대부분의 필드를 못 바꾸게 했다. 그래서 StorageClass는 처음부터 등급표처럼 설계한다. 아래에서 매니페스트를 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="StorageClass 한 장. 대부분 만든 뒤에는 못 바꾼다"
+  base="kind: StorageClass"
+  separator=" · "
+  joiner=" · "
+  params={[
+    { key: "provisioner", display: "provisioner: ebs.csi.aws.com", title: "누가 디스크를 만드나", description: "CSI 드라이버 이름이다. 이 이름으로 등록된 external-provisioner가 PVC를 집어 간다. 오타가 나면 PVC는 아무 에러 없이 ExternalProvisioning 이벤트만 남기고 Pending에 머문다.", required: true },
+    { key: "parameters", display: "parameters: {type: gp3, iops: 6000}", title: "드라이버에 그대로 넘기는 값", description: "쿠버네티스는 해석하지 않고 CreateVolume 호출에 실어 보낸다. 키 이름과 허용 값은 드라이버 문서가 정한다. 바꿀 수 없으니 등급마다 class를 따로 만든다.", code: "parameters:\n  type: gp3\n  iops: \"6000\"\n  throughput: \"250\"\n  encrypted: \"true\"" },
+    { key: "reclaimPolicy", display: "reclaimPolicy: Retain", title: "PVC를 지우면 디스크는", description: "새로 만드는 PV에 복사된다. 운영 DB용 class는 Retain으로 따로 만들어 실수로 PVC를 지워도 디스크가 남게 한다. 바꿀 수 없다." },
+    { key: "volumeBindingMode", display: "WaitForFirstConsumer", title: "언제 만드나", description: "Pod가 노드에 배정된 뒤 그 노드의 존에 만든다. 존이 있는 블록 디스크라면 사실상 필수다. 자세한 흐름은 PV와 PVC 글에 있다." },
+    { key: "allowVolumeExpansion", display: "allowVolumeExpansion: true", title: "나중에 키울 수 있나", description: "유일하게 나중에 바꿀 수 있는 주요 필드다. 켜 두면 PVC의 requests.storage를 올려 디스크를 키운다. 줄이지는 못한다." },
+    { key: "allowedTopologies", display: "allowedTopologies: [zone a, c]", title: "어느 존에만 만드나", description: "드라이버가 디스크를 만들 수 있는 토폴로지를 좁힌다. WaitForFirstConsumer와 함께 쓰면 스케줄러도 이 범위의 노드만 고른다.", code: "allowedTopologies:\n  - matchLabelExpressions:\n      - key: topology.ebs.csi.aws.com/zone\n        values: [ap-northeast-2a, ap-northeast-2c]" },
+    { key: "mountOptions", display: "mountOptions: [noatime]", title: "마운트할 때 붙일 옵션", description: "드라이버와 파일 시스템이 지원해야 한다. 틀린 옵션은 만들 때가 아니라 Pod가 마운트할 때 실패하므로 늦게 발견된다." },
+  ]}
+/>
+
+이미 있는 디스크의 성능만 바꾸고 싶다면 StorageClass가 아니라 VolumeAttributesClass를 쓴다. 1.34에 GA가 됐고(1.36부터 기능 게이트가 잠긴 정식 기능) IOPS나 처리량처럼 바꿀 수 있는 속성을 담는다. PVC의 `spec.volumeAttributesClassName`을 다른 class로 바꾸면 드라이버가 `ControllerModifyVolume`으로 디스크를 그 자리에서 고친다. 앞의 실습 출력에서 PVC 목록마다 `VOLUMEATTRIBUTESCLASS` 칸이 보이는 이유다. 드라이버가 이 기능을 지원하는지는 드라이버 문서에서 확인한다.
+
+### 기본 class가 둘이면
+
+`storageclass.kubernetes.io/is-default-class: "true"`가 붙은 class는 `storageClassName`을 적지 않은 PVC가 쓴다. 이 어노테이션을 class 두 개에 붙여 봤다. `standard-old`를 먼저, 2초 뒤 `standard-new`를 만들었다.
+
+```bash
+kubectl get sc
+# class를 적지 않은 PVC를 만든다
+kubectl apply -f no-class-pvc.yaml
+kubectl get pvc no-class -n shop
+```
+
+```text
+NAME                     PROVISIONER           RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE
+fast                     hostpath.csi.k8s.io   Delete          Immediate           true                   97s
+standard-new (default)   hostpath.csi.k8s.io   Retain          Immediate           false                  0s
+standard-old             hostpath.csi.k8s.io   Delete          Immediate           false                  2s
+persistentvolumeclaim/no-class created
+NAME       STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+no-class   Bound    pvc-095ea9d2-ab61-4dcc-ade8-2d651c4e5497   1Gi        RWO            standard-new   <unset>                 6s
+```
+
+가장 최근에 만든 기본 class가 이긴다. 공식 문서도 이렇게 적고 있고, 기본 class를 둘 이상 허용하는 이유는 기본 class를 갈아탈 때 끊김을 없애려는 것이라고 한다. 문제는 이게 조용히 일어난다는 것이다. 클러스터 애드온(예: 클라우드의 EBS CSI 애드온, 로컬 스토리지 프로비저너)이 설치되면서 자기 class를 기본으로 달면, 그 뒤로 class를 안 적은 모든 PVC가 다른 회수 정책과 다른 디스크 종류로 만들어진다. 위 출력에서도 `no-class`는 `Retain`인 class를 받았다. 운영에서는 기본 class를 하나만 두고, 차트와 매니페스트에는 class 이름을 항상 적는다.
+
+## 프로비저너가 디스크를 만드는 길
+
+PVC가 생기면 쿠버네티스 안에서 실제로 움직이는 건 CSI 드라이버 옆에 붙은 external-provisioner 사이드카다. PVC를 보고 드라이버의 `CreateVolume`을 부르고, 결과로 PV를 만든다. 실습에서 처음 PVC를 만들었을 때 이 단계에서 막혔다.
+
+```bash
+kubectl describe pvc pg-data -n shop | sed -n '/Events/,$p'
+```
+
+```text
+Events:
+  Type     Reason                Age              From                                                         Message
+  ----     ------                ----             ----                                                         -------
+  Normal   ExternalProvisioning  9s               persistentvolume-controller                                  Waiting for a volume to be created either by the external provisioner 'hostpath.csi.k8s.io' or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+  Normal   Provisioning          2s (x4 over 9s)  hostpath.csi.k8s.io_vm_9ec5d9ba-8c33-4c10-9e6e-9ebea9bbe4c5  External provisioner is provisioning volume for claim "shop/pg-data"
+  Warning  ProvisioningFailed    2s (x4 over 9s)  hostpath.csi.k8s.io_vm_9ec5d9ba-8c33-4c10-9e6e-9ebea9bbe4c5  error generating accessibility requirements: no available topology found
+```
+
+`no available topology found`는 드라이버가 "디스크를 어디에 만들 수 있는지" 알려 주는 토폴로지 기능을 쓰는데, 어느 노드에도 그 드라이버가 등록돼 있지 않다는 뜻이다. 노드마다 도는 CSI 노드 플러그인(DaemonSet)이 kubelet에 등록하면 CSINode 객체에 드라이버 이름과 토폴로지 키가 적힌다. 실습 클러스터에는 진짜 kubelet이 없어서 그 일을 손으로 했다.
+
+```yaml
+# kubelet과 노드 플러그인이 대신 해 주는 등록을 손으로 (실습용)
+apiVersion: storage.k8s.io/v1
+kind: CSINode
+metadata: { name: node-1 }
+spec:
+  drivers:
+    - name: hostpath.csi.k8s.io
+      nodeID: node-1
+      topologyKeys: [topology.hostpath.csi/node]
+```
+
+등록하자 몇 초 뒤 PVC가 Bound가 됐다. 만들어진 PV를 보면 드라이버가 돌려준 값이 그대로 들어 있다.
+
+```bash
+kubectl get pv pvc-a0cd72f8-3ad2-4326-bbe1-b02fadeab34b -o yaml | sed -n '/^spec:/,/^status/p'
+```
+
+```text
+spec:
+  accessModes:
+  - ReadWriteOncePod
+  capacity:
+    storage: 1Gi
+  claimRef:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    name: pg-data
+    namespace: shop
+    resourceVersion: "2437"
+    uid: a0cd72f8-3ad2-4326-bbe1-b02fadeab34b
+  csi:
+    driver: hostpath.csi.k8s.io
+    volumeAttributes:
+      csi.storage.k8s.io/pv/name: pvc-a0cd72f8-3ad2-4326-bbe1-b02fadeab34b
+      csi.storage.k8s.io/pvc/name: pg-data
+      csi.storage.k8s.io/pvc/namespace: shop
+      storage.kubernetes.io/csiProvisionerIdentity: 1792546105101-3740-hostpath.csi.k8s.io
+    volumeHandle: d266c433-ccee-11f1-8799-56915279506e
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: topology.hostpath.csi/node
+          operator: In
+          values:
+          - node-1
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: fast
+  volumeMode: Filesystem
+status:
+```
+
+`volumeHandle`은 스토리지 쪽의 진짜 디스크 ID다(EBS라면 `vol-0abc...`). 쿠버네티스 객체를 지워도 이 값만 알면 디스크를 찾을 수 있으니, 운영 볼륨은 PV 이름과 함께 이 값을 기록해 둔다. `nodeAffinity`는 드라이버가 "이 디스크는 이 토폴로지에서만 붙는다"고 알려 준 결과다. hostpath는 노드 하나, EBS는 존 하나다. PVC는 RWOP(`ReadWriteOncePod`)로 만들었다. DB 데이터 디렉터리처럼 두 프로세스가 동시에 열면 망가지는 볼륨이라 노드가 아니라 Pod 하나로 제한했다. 접근 모드의 차이는 [PV와 PVC 글](/posts/k8s-pv-pvc#접근-모드는-pod가-아니라-노드를-센다)에 있다.
+
+아래 그림에서 다음을 누르면 PVC 하나가 디스크가 되기까지와, 노드 등록이 빠졌을 때 어디서 멈추는지가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="PVC는 provisioner 사이드카가 CSI CreateVolume을 불러 PV가 된다. 노드 등록이 없으면 토폴로지 단계에서 멈춘다"
+  zones={[
+    { id: "cp", label: "컨트롤 플레인", x: 6, y: 6, w: 186, h: 200, tone: "neutral" },
+    { id: "ctl", label: "CSI 컨트롤러 Pod", x: 208, y: 6, w: 186, h: 200, tone: "private" },
+    { id: "nd", label: "node-1", x: 6, y: 220, w: 388, h: 94, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "api", label: "API 서버", sub: "PVC pg-data", x: 99, y: 60, icon: "server" },
+    { id: "csinode", label: "CSINode", sub: "topologyKeys", x: 99, y: 156, icon: "db" },
+    { id: "prov", label: "provisioner", sub: "사이드카", x: 301, y: 60, icon: "container" },
+    { id: "drv", label: "CSI 드라이버", sub: "CreateVolume", x: 301, y: 156, icon: "container", w: 120 },
+    { id: "kubelet", label: "node plugin", sub: "DaemonSet", x: 99, y: 270, icon: "container" },
+    { id: "disk", label: "디스크", sub: "volumeHandle", x: 301, y: 270, icon: "db" },
+  ]}
+  links={[
+    { from: "api", to: "prov", label: "watch" },
+    { from: "prov", to: "csinode", dashed: true },
+    { from: "prov", to: "drv", label: "gRPC" },
+    { from: "drv", to: "disk" },
+    { from: "kubelet", to: "csinode", label: "등록" },
+  ]}
+  steps={[
+    { path: ["api", "prov"], packet: "PVC", title: "provisioner가 PVC를 집는다", detail: "PVC의 class가 가리키는 provisioner 이름이 자기 드라이버 이름과 같으면 맡는다. 다르면 아무도 안 맡아 ExternalProvisioning 이벤트만 쌓인다.", payload: "storageClassName: fast → provisioner: hostpath.csi.k8s.io" },
+    { path: ["prov", "csinode"], packet: "topo?", blocked: true, title: "만들 곳을 찾는다", detail: "노드 플러그인이 등록되지 않아 CSINode에 이 드라이버가 없다. 갈 토폴로지가 없으니 CreateVolume을 부르지도 못한다.", payload: "error generating accessibility requirements: no available topology found" },
+    { path: ["kubelet", "csinode"], packet: "등록", highlight: ["nd"], title: "노드 플러그인이 등록한다", detail: "DaemonSet이 뜨면 kubelet이 CSINode에 드라이버 이름, nodeID, 토폴로지 키를 적는다. 실습에서는 이 객체를 손으로 넣었다." },
+    { path: ["prov", "drv", "disk"], packet: "Create", title: "디스크를 만든다", detail: "provisioner가 parameters와 토폴로지 요구를 실어 CreateVolume을 부른다. 드라이버가 디스크를 만들고 ID와 접근 가능한 토폴로지를 돌려준다." },
+    { path: ["prov", "api"], packet: "PV", title: "PV를 만들어 묶는다", detail: "돌려받은 volumeHandle과 nodeAffinity로 PV를 만들고, PV 컨트롤러가 PVC와 묶어 Bound가 된다.", payload: "volumeHandle: d266c433-...\nnodeAffinity: topology.hostpath.csi/node In [node-1]" },
+  ]}
+/>
+
+현장에서는 이 메시지가 노드 플러그인 DaemonSet이 일부 노드에서 안 뜰 때 나온다. 새 노드 그룹에 taint가 있는데 DaemonSet에 toleration이 없는 경우가 흔하다. `kubectl get csinode`에서 DRIVERS 칸이 0인 노드를 찾으면 된다.
+
+## 스냅샷은 CRD와 컨트롤러 둘이 만든다
+
+VolumeSnapshot은 쿠버네티스 핵심 API가 아니다. CRD 세 개(`VolumeSnapshot`, `VolumeSnapshotContent`, `VolumeSnapshotClass`)와, 그걸 처리하는 두 프로그램으로 이루어진다. 클러스터에 하나 도는 snapshot-controller가 VolumeSnapshot을 보고 VolumeSnapshotContent를 만들고 둘을 묶는다. CSI 드라이버 옆의 csi-snapshotter 사이드카가 VolumeSnapshotContent를 보고 드라이버의 `CreateSnapshot`을 부른다. 공식 문서는 CRD와 snapshot-controller 설치를 쿠버네티스 배포판의 몫으로 본다. 관리형 클러스터에서도 애드온으로 따로 켜야 하는 경우가 있으니, 처음 쓰기 전에 있는지부터 본다.
+
+```bash
+# 스냅샷 API가 있는지 (없으면 CRD부터 없는 것)
+kubectl api-resources --api-group=snapshot.storage.k8s.io
+kubectl api-resources --api-group=groupsnapshot.storage.k8s.io
+```
+
+```text
+NAME                     SHORTNAMES          APIVERSION                   NAMESPACED   KIND
+volumesnapshotclasses    vsclass,vsclasses   snapshot.storage.k8s.io/v1   false        VolumeSnapshotClass
+volumesnapshotcontents   vsc,vscs            snapshot.storage.k8s.io/v1   false        VolumeSnapshotContent
+volumesnapshots          vs                  snapshot.storage.k8s.io/v1   true         VolumeSnapshot
+NAME                          SHORTNAMES            APIVERSION                        NAMESPACED   KIND
+volumegroupsnapshotclasses    vgsclass,vgsclasses   groupsnapshot.storage.k8s.io/v1   false        VolumeGroupSnapshotClass
+volumegroupsnapshotcontents   vgsc,vgscs            groupsnapshot.storage.k8s.io/v1   false        VolumeGroupSnapshotContent
+volumegroupsnapshots          vgs                   groupsnapshot.storage.k8s.io/v1   true         VolumeGroupSnapshot
+```
+
+모양이 PV와 PVC를 그대로 닮았다. 사용자가 네임스페이스 안에서 요청하는 쪽(VolumeSnapshot ↔ PVC), 클러스터 범위의 실제 자원(VolumeSnapshotContent ↔ PV), 만드는 방식을 정하는 등급(VolumeSnapshotClass ↔ StorageClass)이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="스냅샷 객체는 PV·PVC와 같은 짝을 이룬다. 복원은 스냅샷을 dataSource로 삼은 새 PVC다"
+  nodes={[
+    { id: "pvc", label: "PVC", sub: "pg-data (ns)", x: 70, y: 40, w: 112 },
+    { id: "pv", label: "PV", sub: "클러스터 범위", x: 70, y: 140, w: 112 },
+    { id: "sc", label: "StorageClass", sub: "만드는 법", x: 70, y: 250, w: 112 },
+    { id: "vs", label: "VolumeSnapshot", sub: "요청 (ns)", x: 290, y: 40, w: 150 },
+    { id: "vsc", label: "SnapshotContent", sub: "클러스터 범위", x: 290, y: 140, w: 150 },
+    { id: "vsclass", label: "SnapshotClass", sub: "deletionPolicy", x: 290, y: 250, w: 150 },
+  ]}
+  edges={[
+    { from: "pvc", to: "pv", label: "바인딩", arrow: "both" },
+    { from: "vs", to: "vsc", label: "바인딩", arrow: "both" },
+    { from: "sc", to: "pv", label: "프로비저닝", dashed: true },
+    { from: "vsclass", to: "vsc", label: "생성", dashed: true },
+    { from: "vs", to: "pvc", label: "source" },
+    { from: "pv", to: "vsc", label: "volumeHandle", dashed: true },
+  ]}
+/>
+
+실습에서 마이그레이션 전 스냅샷을 찍었다. 그 전에 볼륨 디렉터리에 `orders.csv`를 하나 써 두었다.
+
+```yaml
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata: { name: hostpath-snap }
+driver: hostpath.csi.k8s.io
+deletionPolicy: Delete
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: { name: pg-data-before-migration, namespace: shop }
+spec:
+  volumeSnapshotClassName: hostpath-snap
+  source:
+    persistentVolumeClaimName: pg-data
+```
+
+```bash
+kubectl apply -f snap.yaml
+kubectl get volumesnapshot -n shop          # 바로
+sleep 5; kubectl get volumesnapshot -n shop  # 5초 뒤
+kubectl get volumesnapshotcontent
+```
+
+```text
+volumesnapshot.snapshot.storage.k8s.io/pg-data-before-migration created
+NAME                       READYTOUSE   SOURCEPVC   SOURCESNAPSHOTCONTENT   RESTORESIZE   SNAPSHOTCLASS   SNAPSHOTCONTENT                                    CREATIONTIME   AGE
+pg-data-before-migration   false        pg-data                                           hostpath-snap   snapcontent-19dc153b-767f-4c0a-97f6-df7466e502b8                  0s
+NAME                       READYTOUSE   SOURCEPVC   SOURCESNAPSHOTCONTENT   RESTORESIZE   SNAPSHOTCLASS   SNAPSHOTCONTENT                                    CREATIONTIME   AGE
+pg-data-before-migration   true         pg-data                             1Gi           hostpath-snap   snapcontent-19dc153b-767f-4c0a-97f6-df7466e502b8   5s             5s
+NAME                                               READYTOUSE   RESTORESIZE   DELETIONPOLICY   DRIVER                VOLUMESNAPSHOTCLASS   VOLUMESNAPSHOT             VOLUMESNAPSHOTNAMESPACE   AGE
+snapcontent-19dc153b-767f-4c0a-97f6-df7466e502b8   true         1073741824    Delete           hostpath.csi.k8s.io   hostpath-snap         pg-data-before-migration   shop                      5s
+```
+
+처음에는 Content 이름만 있고 READYTOUSE가 false다. snapshot-controller가 Content를 만들고 묶었지만 드라이버가 아직 다 찍지 못한 상태다. 5초 뒤 true가 되고 RESTORESIZE(되살릴 때 필요한 최소 크기)가 채워졌다. `CREATIONTIME`은 스토리지가 실제로 시점을 찍은 시각이다. 아래 그림에서 그 사이에 일어난 일을 보자.
+
+<SequenceDiagram
+  caption="VolumeSnapshot 하나에 컨트롤러 둘과 CSI 호출 하나가 움직인다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "ctl", label: "snapshot-controller" },
+    { id: "side", label: "csi-snapshotter" },
+    { id: "drv", label: "CSI 드라이버" },
+  ]}
+  steps={[
+    { from: "user", to: "ctl", label: "VolumeSnapshot", title: "요청을 만든다", detail: "PVC 이름과 class를 적은 VolumeSnapshot을 만든다. API 서버가 CEL 규칙으로 source가 둘 중 하나만 있는지부터 검사한다.", payload: "source.persistentVolumeClaimName: pg-data" },
+    { from: "ctl", to: "ctl", label: "Content 생성", title: "짝을 만들고 묶는다", detail: "PVC가 묶인 PV의 volumeHandle을 읽어 VolumeSnapshotContent를 만들고 서로 가리키게 한다. 원본 PVC에는 찍는 동안 지워지지 않게 보호 finalizer가 붙는다." },
+    { from: "ctl", to: "side", label: "watch Content", title: "사이드카가 Content를 본다", detail: "csi-snapshotter는 자기 드라이버 이름이 적힌 Content만 처리한다. VolumeSnapshotClass의 driver가 틀리면 여기서 아무 일도 안 일어나 READYTOUSE가 계속 비어 있다." },
+    { from: "side", to: "drv", label: "CreateSnapshot", title: "스토리지에 찍으라고 한다", detail: "volumeHandle과 class의 parameters로 CreateSnapshot을 부른다. 스토리지는 이 시점의 블록을 고정한다. EBS라면 이때 스냅샷 ID가 나온다." },
+    { from: "drv", to: "side", label: "snapshotId, ready", title: "결과를 받는다", detail: "스냅샷 ID, 크기, ready 여부가 돌아온다. 큰 디스크는 ready가 늦게 true가 되고, 사이드카가 다시 물어본다.", payload: "snapshotHandle: da598234-...\nrestoreSize: 1073741824" },
+    { from: "side", to: "user", label: "readyToUse: true", title: "상태가 채워진다", detail: "Content의 status를 채우면 snapshot-controller가 VolumeSnapshot status로 옮긴다. 이제 복원에 쓸 수 있다." },
+  ]}
+/>
+
+스냅샷 객체에도 API 서버 쪽 검증이 있다. source를 두 개 다 적거나, 만든 뒤 source를 바꾸려 하면 거절된다.
+
+```text
+The VolumeSnapshot "bad" is invalid: spec.source: Invalid value: exactly one of volumeSnapshotContentName and persistentVolumeClaimName must be set
+The VolumeSnapshot "pg-data-before-migration" is invalid: spec.source.persistentVolumeClaimName: Invalid value: "pg-wal": persistentVolumeClaimName is immutable
+```
+
+### 지우면 진짜 스냅샷도 지워지나
+
+VolumeSnapshotClass의 `deletionPolicy`가 정한다. `Delete`면 VolumeSnapshot을 지울 때 Content와 스토리지의 스냅샷까지 지운다. `Retain`이면 Content와 스토리지의 스냅샷이 남는다. Retain class로 찍은 `pg-data-daily`를 지워 봤다.
+
+```bash
+kubectl delete volumesnapshot pg-data-daily -n shop
+kubectl get volumesnapshotcontent -o custom-columns=NAME:.metadata.name,POLICY:.spec.deletionPolicy,SNAPSHOT:.spec.volumeSnapshotRef.name,READY:.status.readyToUse
+ls state/ | grep snap    # hostpath 드라이버가 스냅샷을 저장하는 디렉터리
+```
+
+```text
+volumesnapshot.snapshot.storage.k8s.io "pg-data-daily" deleted from shop namespace
+NAME                                               POLICY   SNAPSHOT                   READY
+snapcontent-19dc153b-767f-4c0a-97f6-df7466e502b8   Delete   pg-data-before-migration   true
+snapcontent-20530130-ba0d-4ceb-bae0-03728a3be248   Retain   pg-data-daily              true
+17d174a4-ccef-11f1-8799-56915279506e.snap
+da598234-ccee-11f1-8799-56915279506e.snap
+```
+
+VolumeSnapshot은 사라졌는데 Content와 파일은 남았다. 이 남은 Content가 다음 절에서 다른 네임스페이스로 스냅샷을 넘기는 열쇠가 된다. 반대로 Retain을 쓰면 아무도 안 지우는 스냅샷이 스토리지에 계속 쌓여 비용이 된다. 정기 스냅샷은 Delete class로 찍고 보관 기간이 지나면 VolumeSnapshot을 지우는 도구(CronJob이나 백업 도구의 보관 정책)를 둔다.
+
+## 스냅샷에서 되살리기
+
+복원은 새 PVC를 만들면서 `dataSource`에 스냅샷을 적는 것이다. 원래 PVC를 덮어쓰지 않는다. 마이그레이션이 잘못된 상황을 만들려고 원본 볼륨의 `orders.csv`를 `orders: BROKEN`으로 덮어쓴 뒤, 스냅샷으로 새 PVC 두 개를 만들었다. 하나는 같은 크기, 하나는 절반 크기다.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: pg-data-restored, namespace: shop }
+spec:
+  storageClassName: fast
+  accessModes: [ReadWriteOncePod]
+  resources: { requests: { storage: 1Gi } }   # 절반짜리 pg-data-small은 512Mi
+  dataSource:
+    apiGroup: snapshot.storage.k8s.io
+    kind: VolumeSnapshot
+    name: pg-data-before-migration
+```
+
+```bash
+kubectl get pvc -n shop
+kubectl describe pvc pg-data-small -n shop | grep ProvisioningFailed
+# 원본과 복원본의 파일 비교 (hostpath 드라이버의 볼륨 디렉터리)
+cat state/d266c433-ccee-11f1-8799-56915279506e/orders.csv
+cat state/<복원 볼륨 ID>/orders.csv
+```
+
+```text
+NAME               STATUS    VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+pg-data            Bound     pvc-a0cd72f8-3ad2-4326-bbe1-b02fadeab34b   1Gi        RWOP           fast           <unset>                 68s
+pg-data-restored   Bound     pvc-d6cface7-6622-4bf9-b097-a53f3ee0012f   1Gi        RWOP           fast           <unset>                 8s
+pg-data-small      Pending                                                                        fast           <unset>                 8s
+  Warning  ProvisioningFailed    1s (x4 over 8s)  hostpath.csi.k8s.io_vm_9ec5d9ba-8c33-4c10-9e6e-9ebea9bbe4c5  error getting handle for DataSource Type VolumeSnapshot by Name pg-data-before-migration: requested volume size 536870912 is less than the size 1073741824 for the source snapshot pg-data-before-migration
+orders: BROKEN
+orders: 1001,1002,1003
+```
+
+복원본에는 마이그레이션 전 데이터가 있다. 앱을 되돌리려면 Deployment나 StatefulSet이 이 새 PVC를 쓰게 바꾸거나, 새 PVC에서 데이터를 꺼내 원본에 다시 넣는다. StatefulSet은 PVC 이름이 템플릿으로 정해져 있어서 보통 원래 PVC를 지우고 같은 이름으로 스냅샷에서 다시 만든다. 이때 원래 PV의 회수 정책이 Delete면 원본 디스크가 함께 사라지니, 지우기 전에 Retain으로 바꿔 둔다.
+
+절반짜리는 Pending에 걸렸다. 복원할 PVC는 스냅샷의 `restoreSize` 이상이어야 한다. 반대로 더 크게 복원하는 건 되고, 드라이버가 파일 시스템까지 늘려 준다.
+
+### 다른 네임스페이스로는 안 된다
+
+스테이징에서 운영 스냅샷으로 PVC를 만들어 봤다.
+
+```text
+error getting handle for DataSource Type VolumeSnapshot by Name pg-data-before-migration: error getting snapshot pg-data-before-migration from api server: volumesnapshots.snapshot.storage.k8s.io "pg-data-before-migration" not found
+```
+
+`dataSource`는 같은 네임스페이스만 본다. 다른 네임스페이스의 데이터를 아무나 끌어다 쓰면 안 되기 때문이다. 다른 네임스페이스를 가리키는 `dataSourceRef`와 ReferenceGrant 조합(`CrossNamespaceVolumeDataSource` 기능 게이트)은 1.37 기준 아직 알파다. 그래서 실무에서는 클러스터 관리자가 스냅샷 자체를 넘겨준다. 앞에서 Retain으로 남긴 스냅샷의 스토리지 ID(`snapshotHandle`)로 VolumeSnapshotContent를 직접 만들고, 스테이징 네임스페이스의 VolumeSnapshot과 짝지운다. 미리 만들어 두는(pre-provisioned) 방식이다.
+
+```yaml
+# 클러스터 관리자가 만든다: 이미 있는 스냅샷을 staging에 연결한다
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotContent
+metadata: { name: staging-pg-daily-content }
+spec:
+  deletionPolicy: Retain
+  driver: hostpath.csi.k8s.io
+  source:
+    snapshotHandle: 17d174a4-ccef-11f1-8799-56915279506e   # 남겨 둔 Content의 status.snapshotHandle
+  sourceVolumeMode: Filesystem
+  volumeSnapshotRef: { name: pg-daily, namespace: staging }
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: { name: pg-daily, namespace: staging }
+spec:
+  source:
+    volumeSnapshotContentName: staging-pg-daily-content
+```
+
+```text
+NAME       READYTOUSE   SOURCEPVC   SOURCESNAPSHOTCONTENT      RESTORESIZE   SNAPSHOTCLASS   SNAPSHOTCONTENT            CREATIONTIME   AGE
+pg-daily   true                     staging-pg-daily-content   1Gi                           staging-pg-daily-content   27s            8s
+NAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+pg-from-prod   Bound    pvc-e3d70bfb-3ae1-4922-848d-ef0d2f96abdd   1Gi        RWOP           fast           <unset>                 8s
+```
+
+이번에는 SOURCEPVC 칸이 비고 SOURCESNAPSHOTCONTENT가 채워졌다. 복원된 볼륨 디렉터리의 `orders.csv`에는 `orders: 1001,1002,1003`이 들어 있었다. 스테이징의 PVC가 운영 데이터로 만들어졌다. 운영 데이터를 스테이징으로 옮길 때는 개인정보 마스킹 같은 절차가 따로 필요하다는 점도 이 단계에서 챙긴다. 이 방식은 다른 클러스터로 옮길 때도 같다. 스토리지가 같은 계정·리전에 있으면 snapshotHandle만 알면 된다.
+
+복제(clone)도 같은 모양이다. `dataSource`에 `kind: PersistentVolumeClaim`과 같은 네임스페이스의 PVC 이름을 적으면 그 순간의 사본으로 새 볼륨을 만든다. 실습에서 원본을 BROKEN으로 덮은 뒤 clone을 만들었더니 clone에도 `orders: BROKEN`이 들어 있었다. clone은 지금의 사본이지 과거로 돌아가는 수단이 아니다.
+
+복원 요청이 받아들여지는 조건을 함수로 옮겨 보자. 실습에서 만난 거절 이유들이 테스트다.
+
+<CodePlayground
+  caption="이 PVC를 이 스냅샷에서 복원할 수 있나"
+  functionName="canRestore"
+  initialCode={`// pvc: { namespace, sizeGi, driver(class의 provisioner), volumeMode }
+// snap: { namespace, readyToUse, restoreSizeGi, driver, sourceVolumeMode, allowModeChange }
+// 반환: "ok" | "not-found" | "not-ready" | "too-small" | "driver-mismatch" | "mode-change"
+//   검사 순서: 네임스페이스 → 준비 → 드라이버 → 크기 → 볼륨 모드
+function canRestore(pvc, snap) {
+  return "ok";
+}`}
+  solution={`function canRestore(pvc, snap) {
+  if (pvc.namespace !== snap.namespace) return "not-found";
+  if (!snap.readyToUse) return "not-ready";
+  if (pvc.driver !== snap.driver) return "driver-mismatch";
+  if (pvc.sizeGi < snap.restoreSizeGi) return "too-small";
+  if (pvc.volumeMode !== snap.sourceVolumeMode && !snap.allowModeChange) return "mode-change";
+  return "ok";
+}`}
+  tests={[
+    { label: "같은 크기로 복원", args: [{ namespace: "shop", sizeGi: 1, driver: "hostpath.csi.k8s.io", volumeMode: "Filesystem" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 1, driver: "hostpath.csi.k8s.io", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "ok" },
+    { label: "절반 크기", args: [{ namespace: "shop", sizeGi: 0.5, driver: "hostpath.csi.k8s.io", volumeMode: "Filesystem" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 1, driver: "hostpath.csi.k8s.io", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "too-small" },
+    { label: "다른 네임스페이스", args: [{ namespace: "staging", sizeGi: 1, driver: "hostpath.csi.k8s.io", volumeMode: "Filesystem" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 1, driver: "hostpath.csi.k8s.io", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "not-found" },
+    { label: "아직 찍는 중", args: [{ namespace: "shop", sizeGi: 1, driver: "hostpath.csi.k8s.io", volumeMode: "Filesystem" }, { namespace: "shop", readyToUse: false, restoreSizeGi: 1, driver: "hostpath.csi.k8s.io", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "not-ready" },
+    { label: "다른 드라이버의 class", args: [{ namespace: "shop", sizeGi: 20, driver: "efs.csi.aws.com", volumeMode: "Filesystem" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 10, driver: "ebs.csi.aws.com", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "driver-mismatch" },
+    { label: "Filesystem 스냅샷을 Block으로", args: [{ namespace: "shop", sizeGi: 10, driver: "ebs.csi.aws.com", volumeMode: "Block" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 10, driver: "ebs.csi.aws.com", sourceVolumeMode: "Filesystem", allowModeChange: false }], expected: "mode-change" },
+    { label: "관리자가 모드 변경을 허락함", args: [{ namespace: "shop", sizeGi: 10, driver: "ebs.csi.aws.com", volumeMode: "Block" }, { namespace: "shop", readyToUse: true, restoreSizeGi: 10, driver: "ebs.csi.aws.com", sourceVolumeMode: "Filesystem", allowModeChange: true }], expected: "ok" },
+  ]}
+/>
+
+마지막 두 테스트는 볼륨 모드 변환 보호다. Filesystem 볼륨의 스냅샷을 Block 볼륨으로 복원하면 파일 시스템을 거치지 않고 원시 블록을 읽을 수 있어서, 지워진 파일의 흔적 같은 것까지 볼 수 있다. 그래서 Content에 `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"` 어노테이션이 있을 때만 허락한다. 그 어노테이션은 클러스터 범위 객체인 Content에 붙으니 일반 사용자는 못 붙인다.
+
+## 스냅샷은 백업이 아니다
+
+원본 PVC를 지워 봤다. 회수 정책이 Delete라 디스크도 지워졌다.
+
+```bash
+kubectl delete pvc pg-data -n shop
+ls state/                           # 원본 볼륨 디렉터리 d266c433-... 이 사라졌다
+kubectl get volumesnapshot pg-data-before-migration -n shop
+```
+
+```text
+persistentvolumeclaim "pg-data" deleted from shop namespace
+NAME                       READYTOUSE   SOURCEPVC   SOURCESNAPSHOTCONTENT   RESTORESIZE   SNAPSHOTCLASS   SNAPSHOTCONTENT                                    CREATIONTIME   AGE
+pg-data-before-migration   true         pg-data                             1Gi           hostpath-snap   snapcontent-19dc153b-767f-4c0a-97f6-df7466e502b8   2m55s          2m55s
+```
+
+스냅샷은 원본 디스크와 따로 산다. EBS 같은 클라우드 디스크도 마찬가지라 PVC를 실수로 지워도 스냅샷이 있으면 되살릴 수 있다. 그래도 스냅샷을 백업이라고 부르기는 어렵다. 이유가 셋이다.
+
+첫째, 같은 스토리지 시스템 안에 있다. 스토리지 계정이 털리거나 리전 장애가 나거나 누가 스냅샷까지 지우면 함께 잃는다. 백업이라고 부르려면 다른 계정·리전·매체로 복사해야 한다(3-2-1 규칙은 [백업 전략 글](/posts/backup-strategy#세-벌-두-매체-한-곳은-밖)에 있다). 둘째, 쿠버네티스 객체가 없다. 디스크 내용만 있고 Deployment, Secret, ConfigMap은 없다. 클러스터 단위 복구는 Velero 같은 도구가 객체와 스냅샷을 함께 묶는다. 셋째, 일관성이다. 스토리지가 찍는 순간은 앱이 디스크에 쓰는 중간일 수 있다.
+
+### 전원을 뽑은 순간과 같은 사본
+
+볼륨 스냅샷은 crash-consistent하다. 그 순간 전원을 뽑은 서버의 디스크와 같은 상태라는 뜻이다. 디스크에 이미 내려간 블록은 다 있지만 메모리의 페이지 캐시나 앱 버퍼에 있던 것은 없다. PostgreSQL처럼 WAL(먼저 쓰는 로그)이 있는 DB는 이런 디스크에서 다시 켜면 WAL을 재생해 스스로 맞추니 대개 괜찮다. 그래도 확실히 하려면 찍기 전에 `CHECKPOINT`로 더티 페이지를 내려 두거나, `pg_backup_start()`·`pg_backup_stop()`으로 감싼다. WAL이 없는 앱이나 여러 파일을 한 번에 바꾸는 앱은 `fsfreeze --freeze`로 파일 시스템 쓰기를 잠깐 멈추고 찍은 뒤 `fsfreeze --unfreeze`로 푼다. 멈추는 시간만큼 쓰기가 막히니 짧게 끝낸다.
+
+스토리지도 공간에 묶인다. 아래 그림은 존 하나에 붙는 블록 디스크의 스냅샷을 다른 존에서 되살리는 흐름이다. EBS처럼 스냅샷을 리전 저장소에 두는 스토리지라면 다른 존에서 복원할 수 있지만, 로컬 디스크나 일부 온프레미스 스토리지는 스냅샷도 원래 노드나 존에 묶인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="존에 묶인 디스크도 리전 저장소의 스냅샷으로 다른 존에 되살린다. 스냅샷이 존에 묶이는 스토리지라면 막힌다"
+  zones={[
+    { id: "za", label: "zone a", x: 6, y: 6, w: 186, h: 180, tone: "private" },
+    { id: "zb", label: "zone b", x: 208, y: 6, w: 186, h: 180, tone: "private" },
+    { id: "rg", label: "리전 저장소", x: 6, y: 200, w: 388, h: 94, tone: "public" },
+  ]}
+  nodes={[
+    { id: "na", label: "node-a", sub: "pg-0 (죽음)", x: 99, y: 60, icon: "server" },
+    { id: "da", label: "disk-a", sub: "vol-0a1", x: 99, y: 140, icon: "db" },
+    { id: "nb", label: "node-b", sub: "pg-0 새 자리", x: 301, y: 60, icon: "server" },
+    { id: "db", label: "disk-b", sub: "복원 볼륨", x: 301, y: 140, icon: "db" },
+    { id: "snap", label: "snapshot", sub: "snap-0f3", x: 200, y: 250, icon: "lock", w: 120 },
+  ]}
+  links={[
+    { from: "na", to: "da" },
+    { from: "da", to: "snap", label: "CreateSnapshot" },
+    { from: "snap", to: "db", label: "CreateVolume" },
+    { from: "nb", to: "db" },
+  ]}
+  steps={[
+    { path: ["da", "snap"], packet: "snap", title: "존 a의 디스크를 찍는다", detail: "스냅샷은 블록을 리전 단위 저장소로 옮긴다. 원본 디스크는 여전히 존 a에만 붙는다.", payload: "readyToUse: true, restoreSize: 100Gi" },
+    { path: ["na"], packet: "down", blocked: true, highlight: ["za"], title: "존 a가 장애다", detail: "node-a와 같은 존의 노드가 모두 응답하지 않는다. disk-a는 다른 존의 노드에 붙일 수 없다." },
+    { path: ["snap", "db"], packet: "restore", highlight: ["zb"], title: "존 b에 새 디스크를 만든다", detail: "WaitForFirstConsumer class라면 새 Pod가 node-b에 배정된 뒤 그 존에 복원 볼륨을 만든다. Immediate라면 엉뚱한 존에 만들 수 있다." },
+    { path: ["db", "nb"], packet: "mount", title: "새 자리에서 다시 켠다", detail: "DB는 crash-consistent한 디스크에서 WAL을 재생하고 뜬다. 스냅샷 이후의 쓰기는 없으니 그 차이는 WAL 아카이브나 복제본에서 메운다." },
+  ]}
+/>
+
+공식 문서에는 스냅샷이 쓸 수 있는 토폴로지를 Content의 `nodeAffinity`로 기록하는 `VolumeSnapshotTopology` 기능이 있지만, 1.37 기준 CSI 사이드카의 알파 기능이다. 지금은 스토리지 문서에서 스냅샷이 어느 범위에서 복원되는지 직접 확인하는 게 맞다.
+
+## 여러 볼륨을 같은 순간에 찍기
+
+DB가 데이터와 WAL을 서로 다른 볼륨에 두는 경우를 보자. 볼륨마다 스냅샷을 따로 찍으면 두 시점이 몇 초씩 어긋난다. 아래 그림처럼 데이터 볼륨에는 41번과 42번 변경이 다 있는데 WAL 볼륨에는 41번까지만 있는 사본이 나올 수 있다. DB는 이런 조합을 정상적인 장애 직후 상태로 볼 수 없다.
+
+<AlgoTrace
+  caption="볼륨별 스냅샷은 시점이 어긋나고, 그룹 스냅샷은 한 시점에 함께 찍는다"
+  memoryLabel="사본에 담긴 것"
+  cells={["WAL #41", "data #41", "WAL #42", "data #42"]}
+  steps={[
+    { found: [0, 1], memory: ["WAL ≤41", "data ≤41"], caption: "41번 변경까지 WAL과 데이터에 모두 내려갔다. 여기서 둘을 함께 찍으면 맞는 사본이다." },
+    { pointer: 2, found: [0, 1], memory: ["WAL 스냅샷 찍음", "WAL ≤41"], caption: "WAL 볼륨의 스냅샷이 먼저 찍혔다. 42번 WAL은 아직 쓰기 전이다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["WAL 스냅샷 ≤41", "data 진행 중"], caption: "그 사이 42번 변경이 WAL에 쓰이고 데이터 파일에도 반영된다." },
+    { found: [0, 1, 2, 3], memory: ["WAL 스냅샷 ≤41", "data 스냅샷 ≤42"], caption: "몇 초 뒤 데이터 볼륨이 찍혔다. 데이터에는 42번이 있는데 WAL에는 없다. 복원하면 DB가 설명할 수 없는 상태다." },
+    { found: [0, 1], memory: ["그룹 스냅샷", "WAL ≤41", "data ≤41"], caption: "VolumeGroupSnapshot은 스토리지가 두 볼륨을 같은 시점에 찍는다. 41번까지만 있거나 42번까지 다 있거나, 둘 중 하나다." },
+  ]}
+/>
+
+Volume Group Snapshot은 1.27 알파, 1.32 베타, 1.34 두 번째 베타를 거쳐 1.36에 GA가 됐고, API는 `groupsnapshot.storage.k8s.io/v1`이다. 라벨 선택자로 PVC 여러 개를 고르면 드라이버가 한 시점에 함께 찍는다. 스토리지가 일관성 그룹(consistency group)을 지원하고 CSI 드라이버가 그룹 컨트롤러 기능(`CreateVolumeGroupSnapshot`)을 구현해야 한다. 실습의 hostpath 드라이버는 구현돼 있다.
+
+```yaml
+apiVersion: groupsnapshot.storage.k8s.io/v1
+kind: VolumeGroupSnapshotClass
+metadata: { name: hostpath-group }
+driver: hostpath.csi.k8s.io
+deletionPolicy: Delete
+---
+apiVersion: groupsnapshot.storage.k8s.io/v1
+kind: VolumeGroupSnapshot
+metadata: { name: orders-db-0300, namespace: shop }
+spec:
+  volumeGroupSnapshotClassName: hostpath-group
+  source:
+    selector:
+      matchLabels: { app: orders-db }   # pg-data-restored와 pg-wal에 이 라벨을 붙였다
+```
+
+```bash
+kubectl get volumegroupsnapshot -n shop
+kubectl get volumesnapshot -n shop -o custom-columns='NAME:.metadata.name,PVC:.spec.source.persistentVolumeClaimName,GROUP:.status.volumeGroupSnapshotName'
+```
+
+```text
+NAME             READYTOUSE   VOLUMEGROUPSNAPSHOTCLASS   VOLUMEGROUPSNAPSHOTCONTENT                              CREATIONTIME   AGE
+orders-db-0300   true         hostpath-group             groupsnapcontent-ee661b12-60b4-419e-b7c5-c81eba44db89   10s            10s
+NAME                                                                        PVC                GROUP
+pg-data-before-migration                                                    pg-data            <none>
+snapshot-f42272c04d28b17354792e03ee5d85461646e0d9ba1914896f3740e4cea26bb7   pg-wal             orders-db-0300
+snapshot-ff622d72391c6b8a1ea4fb974cba6fbc665c7bff89678e9ad150ac64d2b8ddf7   pg-data-restored   orders-db-0300
+```
+
+그룹 하나에 볼륨별 VolumeSnapshot이 자동으로 생겼다. 이름은 해시라서 사람이 읽기 어렵고, 어느 PVC 것인지는 `source`와 `status.volumeGroupSnapshotName`으로 찾는다. 복원은 이 개별 스냅샷마다 PVC를 하나씩 만드는 것이라 앞 절과 같다. 그룹에 속한 스냅샷 하나만 지우려 하면 컨트롤러가 막는다.
+
+```text
+deletion of the individual volume snapshot shop/snapshot-f42272c04d28b17354792e03ee5d85461646e0d9ba1914896f3740e4cea26bb7 is not allowed as it belongs to group snapshot shop/orders-db-0300. Deleting the group snapshot will trigger the deletion of all the individual volume snapshots that are part of the group.
+```
+
+삭제 요청은 받아들여져 `deletionTimestamp`가 찍히지만, `volumesnapshot-in-group-protection` finalizer 때문에 Terminating으로 남는다. 그룹 전체를 지워야 함께 사라진다. 보관 정책 스크립트가 개별 스냅샷을 지우는 식이면 이런 Terminating 객체가 쌓이니, 그룹 단위로 지우게 고친다.
+
+## 스냅샷이 안 찍히거나 안 되살아날 때
+
+증상별로 보는 곳이 정해져 있다.
+
+```bash
+# 1. API와 컨트롤러가 있는지
+kubectl api-resources --api-group=snapshot.storage.k8s.io
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.spec.containers[*].name}{"\n"}{end}' | grep -E 'snapshot-controller|csi-snapshotter'
+
+# 2. class의 driver가 PVC를 만든 드라이버와 같은지
+kubectl get volumesnapshotclass
+kubectl get pv <PV 이름> -o jsonpath='{.spec.csi.driver}'; echo
+
+# 3. 스냅샷과 Content의 이벤트, 에러
+kubectl describe volumesnapshot <이름> -n <ns> | sed -n '/Events/,$p'
+kubectl get volumesnapshotcontent <Content 이름> -o jsonpath='{.status.error}'; echo
+
+# 4. 복원 PVC가 Pending이면 provisioner의 메시지
+kubectl get events -n <ns> --field-selector reason=ProvisioningFailed -o jsonpath='{.items[*].message}'; echo
+```
+
+READYTOUSE가 비어 있고 Content 이름조차 없으면 snapshot-controller가 없거나 CRD 버전이 맞지 않는 것이다. Content는 있는데 READYTOUSE가 계속 false면 csi-snapshotter 사이드카나 드라이버 쪽이다. 사이드카가 드라이버 Pod에 없거나(차트에서 스냅샷 기능을 켜야 붙는 경우가 많다), class의 `driver`가 틀렸거나, 클라우드 권한(IAM의 스냅샷 생성 권한)이 없다. 큰 디스크라면 정말 오래 걸리는 중일 수도 있다. 복원 PVC가 Pending이면 이벤트 메시지가 거의 항상 이유를 말한다. 크기가 restoreSize보다 작은지, 스냅샷이 다른 네임스페이스에 있는지, 복원 PVC의 class가 다른 드라이버인지 본다.
+
+## 고르고, 찍고, 되살리는 순서
+
+StorageClass는 디스크 주문서 양식이라 만든 뒤에는 provisioner, parameters, reclaimPolicy를 못 바꾼다. 그래서 등급별로 class를 나누고, 기본 class는 하나만 두며(둘이면 가장 최근 것이 조용히 이긴다), 운영 데이터용은 Retain class를 따로 둔다. 이미 있는 디스크의 성능은 VolumeAttributesClass로 바꾼다. 스냅샷은 PV·PVC와 똑같은 짝(VolumeSnapshot·Content·Class)을 snapshot-controller와 csi-snapshotter가 처리하고, 복원은 스냅샷을 dataSource로 삼은 새 PVC다. 같은 네임스페이스, restoreSize 이상, 같은 드라이버여야 하고, 네임스페이스를 넘길 때는 snapshotHandle로 Content를 미리 만들어 준다. 스냅샷은 같은 스토리지 안의 crash-consistent 사본이라 백업의 한 재료일 뿐이고, 여러 볼륨은 1.36에 GA가 된 그룹 스냅샷으로 같은 시점에 찍는다. 이 주제의 다른 글: 바인딩과 접근 모드, 존, 회수 정책은 [PV와 PVC 글](/posts/k8s-pv-pvc), 사본을 어디에 몇 벌 둘지는 [백업 전략 글](/posts/backup-strategy).
+
+## 면접에서 나올 만한 질문
+
+### StorageClass의 parameters를 바꾸려는데 거절됩니다. 왜 그렇고 어떻게 하나요?
+
+StorageClass는 provisioner, parameters, reclaimPolicy 같은 필드가 만든 뒤 바뀌지 않는다. 이미 그 class로 만든 디스크와 새 디스크가 같은 이름 아래 다른 설정으로 섞이는 걸 막으려는 것이다. 새 설정이 필요하면 다른 이름의 class를 만들고 새 PVC부터 그걸 쓴다. 이미 있는 디스크의 IOPS나 처리량을 바꾸려면 1.34에 GA가 된 VolumeAttributesClass를 만들고 PVC의 volumeAttributesClassName을 바꾼다. allowVolumeExpansion은 예외로 바꿀 수 있다.
+
+### 기본 StorageClass가 두 개면 어떻게 되나요?
+
+class를 적지 않은 PVC는 가장 최근에 만든 기본 class를 받는다. 기본 class를 갈아타는 동안 끊김이 없게 하려고 둘 이상을 허용하지만, 애드온이 자기 class를 기본으로 다는 바람에 회수 정책이나 디스크 종류가 조용히 바뀌는 사고가 난다. 기본 class는 하나만 두고, 매니페스트에는 class 이름을 늘 적는다.
+
+### VolumeSnapshot을 만들었는데 READYTOUSE가 계속 비어 있습니다.
+
+어느 단계에서 멈췄는지부터 가른다. Content 이름조차 없으면 snapshot-controller나 스냅샷 CRD가 없는 것이다. Content는 있는데 false면 드라이버 쪽 csi-snapshotter 사이드카가 없거나, VolumeSnapshotClass의 driver가 PVC를 만든 드라이버와 다르거나, 클라우드 권한이 없거나, 큰 디스크라 아직 찍는 중이다. Content의 status.error와 VolumeSnapshot의 이벤트가 이유를 남긴다.
+
+### 스냅샷에서 복원하는 방법과 조건은요?
+
+원래 PVC를 덮는 게 아니라 dataSource에 VolumeSnapshot을 적은 새 PVC를 만든다. 같은 네임스페이스의 스냅샷이어야 하고, 요청 크기가 스냅샷의 restoreSize 이상이어야 하며, PVC의 class가 같은 드라이버여야 한다. Filesystem 스냅샷을 Block으로 복원하는 건 관리자가 Content에 모드 변경 허용 어노테이션을 붙였을 때만 된다. StatefulSet이라면 원래 PVC의 PV를 Retain으로 바꾼 뒤 지우고 같은 이름으로 스냅샷에서 다시 만든다.
+
+### 다른 네임스페이스의 스냅샷으로 PVC를 만들 수 있나요?
+
+dataSource로는 안 된다. 같은 네임스페이스만 보기 때문에 "not found"로 Pending에 걸린다. dataSourceRef와 ReferenceGrant로 넘나드는 기능은 1.37 기준 알파다. 실무에서는 Retain 정책으로 스냅샷을 남기고, 그 snapshotHandle로 VolumeSnapshotContent를 직접 만들어 대상 네임스페이스의 VolumeSnapshot과 짝지운 뒤 복원한다. 클러스터 범위 객체라 관리자가 해 준다.
+
+### 볼륨 스냅샷이 있으면 백업은 필요 없나요?
+
+필요하다. 스냅샷은 같은 스토리지 시스템 안에 있어서 계정 침해, 리전 장애, 실수로 스냅샷까지 지우는 경우에 함께 잃고, 쿠버네티스 객체는 담지 않는다. 그리고 찍는 순간의 crash-consistent 사본이라 앱이 버퍼에 들고 있던 것은 없다. 그래서 스냅샷을 다른 계정·리전으로 복사하고, Velero 같은 도구로 객체와 함께 묶고, DB는 CHECKPOINT나 백업 함수로 감싸거나 논리 백업을 따로 둔다. 무엇보다 복원을 실제로 해 본다.
+
+### Volume Group Snapshot은 왜 필요한가요?
+
+여러 볼륨에 걸친 앱을 같은 시점으로 되살리기 위해서다. 데이터와 WAL을 다른 볼륨에 둔 DB를 볼륨마다 따로 찍으면 시점이 어긋나 데이터에는 있고 WAL에는 없는 변경이 생길 수 있다. 그룹 스냅샷은 라벨 선택자로 PVC들을 고르고 스토리지가 한 시점에 함께 찍어 crash-consistent한 세트를 만든다. 1.36에 GA가 됐고, 스토리지와 CSI 드라이버가 그룹 기능을 지원해야 한다. 그룹에 속한 개별 스냅샷은 따로 지울 수 없고 그룹째 지운다.

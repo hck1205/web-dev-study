@@ -1,0 +1,443 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-learning-roadmap");
+
+"Kubernetes Roadmap 2026"이라는 이미지 아홉 장을 저장해 뒀다. 시작하기 전에, 기초, 워크로드, 네트워킹, 설정과 저장소, 신뢰성, 보안과 운영, 플랫폼. 칸마다 단어가 열 개 넘게 들어 있다. StatefulSet, IPVS, VolumeSnapshot, PodDisruptionBudget, ValidatingAdmissionPolicy, DRA, Kueue. 단어를 하나씩 검색하면 공식 문서가 나오는데, 문서를 열 개쯤 읽고 나면 앞에서 읽은 것이 무엇이었는지 흐려진다. 순서가 없어서다.
+
+이 블로그에는 그 칸을 채운 쿠버네티스 글이 일흔 편 가까이 있다. 이 글은 새 개념을 설명하지 않는다. 로드맵 이미지의 순서(00부터 07까지)를 그대로 따르면서, 글마다 "어떤 질문에 답하고 왜 그 자리에서 읽는지"를 한두 문장으로 붙였다. 그리고 장애가 났을 때 증상에서 어느 글을 먼저 펼지 길을 놓았다. 자격증을 준비한다면 시험 영역과 글을 짝지은 [쿠버네티스 자격증 글](/posts/k8s-certifications)을 같이 본다.
+
+명령 출력은 Ubuntu 24.04 컨테이너의 kwok 클러스터(쿠버네티스 v1.37.0)에서 뽑았다. kwok은 kubelet만 가짜인 클러스터라 API 서버, 스케줄러, 컨트롤러가 남기는 기록은 진짜다. 로드맵 이미지에 적힌 버전 이야기(1.35의 in-place resize GA, 1.36의 볼륨 그룹 스냅숏 GA, ingress-nginx 은퇴 같은 것)는 각 글이 확인한 범위에서 다뤘고, 여기서는 그 글로 가는 길만 놓는다.
+
+## kubectl apply 한 줄이 지나는 부품들
+
+로드맵을 칸 순서대로 읽기 전에, 그 칸들이 한 번의 배포에서 어디에 놓이는지부터 본다. 아래 그림은 Deployment 하나를 apply 했을 때 요청과 변경이 지나는 부품이다. 다음을 누르면 한 홉씩 움직이고, 홉마다 그 부품을 다룬 글 이름이 나온다.
+
+<NetworkTopology
+  caption="kubectl apply부터 Service 규칙까지, 홉마다 읽을 글"
+  width={400}
+  height={400}
+  zones={[
+    { id: "me", label: "내 터미널", x: 8, y: 4, w: 122, h: 84, tone: "neutral" },
+    { id: "cp", label: "컨트롤 플레인", x: 138, y: 4, w: 254, h: 220, tone: "edge" },
+    { id: "node", label: "워커 노드", x: 8, y: 236, w: 384, h: 156, tone: "private" },
+  ]}
+  nodes={[
+    { id: "kubectl", label: "kubectl", sub: "kubeconfig", x: 70, y: 50, icon: "client" },
+    { id: "api", label: "API 서버", sub: "authn·authz", x: 200, y: 50, icon: "gateway" },
+    { id: "etcd", label: "etcd", sub: "저장소", x: 330, y: 50, icon: "db" },
+    { id: "ctrl", label: "컨트롤러", sub: "reconcile", x: 330, y: 120, icon: "server" },
+    { id: "sched", label: "스케줄러", sub: "nodeName", x: 330, y: 190, icon: "router" },
+    { id: "proxy", label: "kube-proxy", sub: "Service 규칙", x: 70, y: 288, icon: "firewall" },
+    { id: "kubelet", label: "kubelet", sub: "Pod 실행", x: 200, y: 288, icon: "server" },
+    { id: "rt", label: "런타임", sub: "CRI", x: 330, y: 288, icon: "container" },
+    { id: "cni", label: "CNI", sub: "Pod IP", x: 330, y: 358, icon: "switch" },
+  ]}
+  links={[
+    { from: "kubectl", to: "api" },
+    { from: "api", to: "etcd" },
+    { from: "api", to: "ctrl" },
+    { from: "api", to: "sched" },
+    { from: "api", to: "kubelet" },
+    { from: "api", to: "proxy", dashed: true },
+    { from: "kubelet", to: "rt" },
+    { from: "rt", to: "cni" },
+  ]}
+  steps={[
+    { path: ["kubectl", "api"], packet: "PATCH", highlight: ["me"], title: "kubeconfig가 고른 클러스터로 간다", detail: "apply는 지금 컨텍스트의 API 서버로 간다. 무엇을 비교해서 보내는지가 3방향 병합과 서버 쪽 apply다. 글: kubeconfig-contexts, kubectl-apply-ssa, kubectl-essentials." },
+    { path: ["api"], packet: "검사", highlight: ["cp"], title: "누구인지, 해도 되는지, 받아도 되는지", detail: "인증서나 토큰으로 사용자를 알아내고, RBAC로 동사를 검사하고, 어드미션이 고치거나 막는다. 기록은 감사 로그에 남는다. 글: k8s-certificates-pki, k8s-serviceaccount-tokens, k8s-rbac, k8s-admission-control, k8s-pod-security-admission, k8s-audit-logging." },
+    { path: ["api", "etcd"], packet: "PUT", title: "원하는 상태를 저장한다", detail: "spec이 저장되고 resourceVersion이 붙는다. 여기까지가 apply의 응답이다. 아직 Pod는 하나도 없다. 글: k8s-api-objects, k8s-etcd-backup." },
+    { path: ["ctrl", "api"], packet: "watch", title: "컨트롤러가 차이를 메운다", detail: "Deployment 컨트롤러가 ReplicaSet을, ReplicaSet 컨트롤러가 Pod를 만든다. 이벤트가 아니라 상태 차이를 보고 움직인다. 글: k8s-controllers-reconcile, k8s-deployment, k8s-labels-selectors." },
+    { path: ["sched", "api"], packet: "bind", title: "스케줄러가 노드를 고른다", detail: "requests, taint, affinity로 노드를 거르고 점수를 매겨 nodeName을 적는다. 못 고르면 Pending이다. 글: k8s-pod-scheduling, k8s-pod-resources." },
+    { path: ["api", "kubelet"], packet: "Pod", highlight: ["node"], title: "그 노드의 kubelet이 받아 간다", detail: "kubelet은 자기 노드에 배정된 Pod만 지켜본다. 프로브와 재시작도 kubelet의 일이다. 글: k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-basics." },
+    { path: ["kubelet", "rt"], packet: "CRI", title: "런타임이 컨테이너를 만든다", detail: "gRPC로 샌드박스와 컨테이너를 만든다. 이미지 받기 실패와 cgroup 한도가 여기서 드러난다. 글: k8s-cri-cni-csi, linux-namespaces-cgroups." },
+    { path: ["rt", "cni"], packet: "ADD", title: "CNI가 Pod IP를 준다", detail: "런타임이 CNI 플러그인을 실행해 네트워크 네임스페이스에 선을 꽂고 주소를 준다. 글: k8s-cni-pod-network, cilium-ebpf." },
+    { path: ["api", "proxy"], packet: "EPS", title: "준비되면 Service 규칙에 들어간다", detail: "readiness가 통과하면 EndpointSlice에 주소가 오르고, kube-proxy가 노드마다 규칙을 바꾼다. 글: k8s-service-types, k8s-kube-proxy-modes." },
+  ]}
+/>
+
+그림의 마지막 칸까지 가야 트래픽을 받는다. apply가 성공했다는 출력은 세 번째 칸에서 나온다. 그 뒤의 일은 전부 비동기라서, "apply는 됐는데 안 뜬다"는 말은 네 번째 칸부터 어딘가에서 멈췄다는 뜻이다. 어디서 멈췄는지는 이벤트가 알려 준다. kwok 클러스터에서 Deployment를 apply하고 이벤트를 남긴 부품별로 찍어 봤다.
+
+```bash
+# 뼈대를 뽑아 파일로 받고 apply 한다
+kubectl create deployment api --image=nginx:1.27 --replicas=2 -n road --dry-run=client -o yaml > api.yaml
+kubectl apply -f api.yaml -n road
+# 이벤트를 남긴 부품 이름과 함께 본다
+kubectl get events -n road -o custom-columns=REASON:.reason,FROM:.reportingComponent,OBJECT:.involvedObject.kind,MESSAGE:.message
+```
+
+```text
+deployment.apps/api created
+REASON              FROM                    OBJECT       MESSAGE
+Scheduled           default-scheduler       Pod          Successfully assigned road/api-7c5b468964-jtq8s to node-2
+Scheduled           default-scheduler       Pod          Successfully assigned road/api-7c5b468964-sbbfw to node-1
+SuccessfulCreate    replicaset-controller   ReplicaSet   Created pod: api-7c5b468964-jtq8s
+SuccessfulCreate    replicaset-controller   ReplicaSet   Created pod: api-7c5b468964-sbbfw
+ScalingReplicaSet   deployment-controller   Deployment   Scaled up replica set api-7c5b468964 from 0 to 2
+```
+
+FROM 칸을 아래에서 위로 읽으면 그림의 순서와 같다. deployment-controller가 ReplicaSet을 늘리고, replicaset-controller가 Pod를 만들고, default-scheduler가 노드를 정했다. 이벤트는 같은 초 안에서 순서가 섞여 나오므로 시간 순서를 믿지 말고 부품 이름으로 읽는다. 진짜 클러스터라면 이 아래에 kubelet이 남긴 Pulling, Created, Started가 이어진다. kwok에는 kubelet이 없어서 여기서 끝난다. 이벤트 정렬의 함정은 [Pod 상태별 진단](/posts/k8s-pod-troubleshooting)에 있다.
+
+## 여덟 칸은 서로 기대고 있다
+
+로드맵의 칸은 나란히 그려져 있지만 실제로는 앞 칸 위에 뒤 칸이 선다. 아래 그림의 화살표는 "먼저 읽을 칸"에서 "그 위에 서는 칸"으로 간다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="화살표 방향으로 읽는다. 점선은 일부만 기댄다"
+  nodes={[
+    { id: "c0", label: "00 준비", sub: "리눅스·컨테이너", x: 200, y: 32, w: 140, h: 44 },
+    { id: "c1", label: "01 기초", sub: "API·컨트롤러", x: 200, y: 112, w: 140, h: 44 },
+    { id: "c2", label: "02 워크로드", sub: "Pod·Deployment", x: 70, y: 196, w: 124, h: 44 },
+    { id: "c3", label: "03 네트워킹", sub: "Service·CNI", x: 200, y: 196, w: 124, h: 44 },
+    { id: "c4", label: "04 설정·저장", sub: "ConfigMap·PV", x: 330, y: 196, w: 124, h: 44 },
+    { id: "c5", label: "05 신뢰성", sub: "PDB·오토스케일", x: 70, y: 292, w: 124, h: 44 },
+    { id: "c6", label: "06 보안·운영", sub: "RBAC·업그레이드", x: 200, y: 292, w: 124, h: 44 },
+    { id: "c7", label: "07 플랫폼", sub: "CRD·GitOps", x: 330, y: 292, w: 124, h: 44 },
+  ]}
+  edges={[
+    { from: "c0", to: "c1" },
+    { from: "c1", to: "c2" },
+    { from: "c1", to: "c3" },
+    { from: "c1", to: "c4" },
+    { from: "c2", to: "c5" },
+    { from: "c2", to: "c6" },
+    { from: "c3", to: "c6", dashed: true },
+    { from: "c4", to: "c7", dashed: true },
+    { from: "c6", to: "c7" },
+  ]}
+/>
+
+01 기초를 건너뛰고 02로 가는 사람이 많다. Pod와 Deployment가 눈에 보이는 것이라 먼저 만지고 싶어진다. 그런데 02의 글은 거의 모두 "컨트롤러가 상태 차이를 보고 움직인다"를 전제로 쓰여 있다. 01을 먼저 읽으면 02부터 07까지 같은 문장이 반복해서 보인다. 07 플랫폼은 그 문장을 내가 직접 구현하는 칸이다.
+
+## 00 시작하기 전에: 리눅스, 컨테이너, 네트워크, YAML
+
+쿠버네티스는 리눅스 프로세스를 여러 노드에 나눠 띄우는 시스템이다. 그래서 첫 칸은 쿠버네티스가 아니라 그 아래의 리눅스와 컨테이너다. 이 칸을 건너뛰면 OOMKilled나 SIGTERM 같은 말이 나올 때마다 돌아와야 한다.
+
+리눅스는 네 편이다. [파일 권한](/posts/linux-files-permissions)은 컨테이너 안의 UID가 볼륨 파일의 주인과 맞지 않아 Permission denied가 나는 이유에 답한다. 나중에 securityContext의 runAsUser와 fsGroup을 읽을 바닥이다. [프로세스와 시그널](/posts/linux-processes-signals)은 PID 1이 SIGTERM을 무시하면 무슨 일이 생기는지를 다룬다. Pod 종료 순서를 읽기 전에 와야 한다. [systemd와 systemctl](/posts/linux-systemd-systemctl)은 노드에서 kubelet과 containerd가 서비스로 도는 방식이고, `journalctl -u kubelet`이 노드 장애의 첫 명령이 되는 이유다. [grep, awk, sed](/posts/linux-grep-awk-sed)는 로그에서 원인 줄을 골라내는 손놀림이다.
+
+컨테이너 쪽은 [네임스페이스와 cgroup](/posts/linux-namespaces-cgroups)에서 시작한다. "컨테이너를 만드는 시스템 콜은 없다"를 unshare로 직접 보여 주고, requests와 limits가 cgroup 파일의 숫자가 되는 과정까지 간다. 이 글을 읽으면 이후의 CPU 스로틀링과 OOM 이야기가 커널 이야기로 읽힌다. 그다음 [컨테이너 기초](/posts/docker-container-basics)와 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)로 이미지가 무엇인지, [Docker 네트워크와 볼륨](/posts/docker-network-volume)으로 컨테이너끼리 이름으로 부르는 법을 익힌다. [Docker 네트워크 드라이버](/posts/docker-network-drivers)는 bridge와 veth가 커널에서 어떤 장치인지 보여 줘서 03의 CNI 글과 바로 이어진다. [Docker Compose](/posts/docker-compose)는 여러 컨테이너를 한 파일로 띄우는 경험이 있어야 "그럼 노드가 여러 대면?"이라는 질문이 생겨서 넣었다.
+
+네트워크는 따로 지도가 있다. [DevOps 네트워킹 지도](/posts/devops-networking-roadmap)의 기본 개념 칸, 특히 [IP 주소와 서브넷](/posts/layer-ip-addressing), [포트와 소켓](/posts/ports-and-sockets), [DNS](/posts/dns), [iptables NAT](/posts/iptables-nat)를 읽고 오면 03 칸이 반쯤 쉬워진다.
+
+마지막으로 도구 셋이다. [쿠버네티스 YAML 함정](/posts/yaml-for-k8s)은 `NO`가 false가 되는 노르웨이 문제와 들여쓰기 오류를 다룬다. 매니페스트를 처음 쓰기 전에 읽어 두면 한참 헤맬 일을 줄인다. [curl로 디버깅하기](/posts/curl-for-debugging)는 Pod 안에서 Service를 직접 부를 때 쓰는 명령이다. [로컬 쿠버네티스 고르기](/posts/local-k8s-kind-minikube)로 kind, minikube, k3d, kwok 중 하나를 띄우고 나면 01로 넘어간다.
+
+## 01 기초: API 서버에 원하는 상태를 적는 일
+
+이 칸에서 얻을 것은 문장 하나다. 쿠버네티스는 원하는 상태를 API 서버에 적어 두면 컨트롤러들이 그 상태로 맞춰 가는 시스템이다. 이 칸의 글은 그 문장을 부품, 문서, 루프, 도구로 나눠 본다.
+
+1. [쿠버네티스 구조](/posts/k8s-architecture)가 처음이다. 위 그림의 부품들이 각각 무엇을 맡는지, 하나를 멈추면 어디서 흐름이 끊기는지를 보여 준다. 이 지도가 있어야 이후의 장애가 "어느 부품의 일인가"로 읽힌다.
+2. [API 오브젝트](/posts/k8s-api-objects)는 매니페스트의 다섯 칸(apiVersion, kind, metadata, spec, status)이 누구의 것인지에 답한다. spec은 내가, status는 컨트롤러가 쓴다는 구분과 finalizer가 삭제를 붙잡는 방식은 07의 CRD와 오퍼레이터까지 그대로 간다.
+3. [라벨과 셀렉터](/posts/k8s-labels-selectors)는 객체끼리 서로를 찾는 유일한 방법을 다룬다. Service가 엉뚱한 Pod로 트래픽을 보내는 사고의 원인이 대부분 셀렉터라서 Deployment보다 먼저 읽는다.
+4. [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)은 "이벤트가 아니라 상태를 보고 움직인다"를 Node로 만든 작은 컨트롤러로 확인한다. 01의 중심 글이다.
+5. [kubectl 기본기](/posts/kubectl-essentials)는 get, describe, logs, exec가 각각 API 서버와 kubelet 중 어디까지 가는지 따라간다. 장애 때 치는 순서도 여기 있다.
+6. [kubectl apply는 무엇을 비교하나](/posts/kubectl-apply-ssa)는 손으로 늘린 replicas가 apply 한 번에 되돌아가는 이유에 답한다. 선언형이라는 말의 실제 동작이 3방향 비교와 서버 쪽 apply다. diff와 서버 dry-run도 여기서 익힌다.
+7. [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts)는 "지금 어느 클러스터에 붙어 있나"를 다룬다. 클러스터가 둘이 되는 날 운영에 delete를 보내지 않으려면 이 시점에 읽어 둔다.
+8. [네임스페이스](/posts/k8s-namespace)는 이름만 나눈다는 것, 네트워크와 노드는 그대로 공유한다는 것을 보여 준다. 06에서 RBAC와 쿼터를 네임스페이스에 거는 이야기의 바닥이다.
+9. [alpha, beta, GA와 API 폐기](/posts/k8s-feature-maturity)는 로드맵 이미지마다 붙은 버전 번호를 읽는 법이다. feature gate와 API 버전이 따로 켜진다는 걸 알아야 뒤의 "1.35에 GA" 같은 문장이 무슨 뜻인지 보인다.
+10. [Kustomize](/posts/kustomize-basics)는 같은 매니페스트를 환경별로 조금씩 바꾸는 방법이다. kubectl에 들어 있는 도구라 기초 칸 끝에 둔다. Helm은 07에서 따로 본다.
+
+## 02 워크로드: Pod 하나에서 컨트롤러 여럿으로
+
+이 칸은 Pod 자체를 먼저 깊게 보고, 그 Pod를 대신 만들어 주는 컨트롤러로 넓힌다. 아래 그림은 Deployment가 만든 Pod 하나가 트래픽을 받기까지의 흐름이다. 단계마다 이 칸의 글이 하나씩 붙는다.
+
+<SequenceDiagram
+  caption="Pod 하나가 Service 뒤에 서기까지"
+  actors={[
+    { id: "rs", label: "ReplicaSet" },
+    { id: "sch", label: "스케줄러" },
+    { id: "kl", label: "kubelet" },
+    { id: "svc", label: "EndpointSlice" },
+  ]}
+  steps={[
+    { from: "rs", to: "rs", label: "Pod 생성", title: "모자란 수만큼 Pod를 만든다", detail: "리비전마다 ReplicaSet이 따로 있고, maxSurge와 maxUnavailable이 두 무리의 수를 정한다. 글: k8s-deployment." },
+    { from: "rs", to: "sch", label: "nodeName 없음", title: "노드가 비어 있는 Pod", detail: "스케줄러가 requests와 taint, affinity로 노드를 고른다. 자리가 없으면 Pending이다. 글: k8s-pod-scheduling, k8s-pod-resources." },
+    { from: "sch", to: "kl", label: "bind", title: "배정된 노드의 kubelet이 받는다", detail: "init 컨테이너와 사이드카가 먼저 뜨고 본 컨테이너가 뜬다. 글: k8s-pod-multicontainer, k8s-pod-basics." },
+    { from: "kl", to: "kl", label: "probe", title: "준비됐는지 묻는다", detail: "startup이 끝나야 liveness와 readiness가 돈다. 잘못 건 liveness는 멀쩡한 Pod를 죽인다. 글: k8s-pod-probes." },
+    { from: "kl", to: "svc", label: "Ready", title: "준비되면 엔드포인트에 오른다", detail: "readiness를 통과한 Pod 주소만 Service 뒤에 선다. 롤아웃은 이 순간을 기다리며 다음 Pod로 넘어간다. 글: k8s-service-types." },
+    { from: "kl", to: "svc", label: "SIGTERM", title: "내릴 때는 거꾸로", detail: "엔드포인트에서 빠지는 것과 SIGTERM이 동시에 일어난다. preStop으로 몇 초를 벌어야 502가 안 난다. 글: k8s-pod-lifecycle." },
+  ]}
+/>
+
+Pod 편은 일곱 편이다. [Pod는 왜 Pod인가](/posts/k8s-pod-basics)가 "왜 컨테이너가 아니라 Pod가 단위인가"에 pause 컨테이너로 답한다. [Pod의 일생](/posts/k8s-pod-lifecycle)은 STATUS 칸의 말이 phase가 아니라는 데서 출발해 CrashLoopBackOff의 대기 시간과 종료 순서, 종료 코드 137과 143을 다룬다. 00의 시그널 글을 읽은 직후에 읽으면 가장 잘 들어온다. [멀티 컨테이너 Pod](/posts/k8s-pod-multicontainer)는 init 자리에 두는 네이티브 사이드카가 시작과 종료 순서를 어떻게 푸는지 본다. [프로브](/posts/k8s-pod-probes)는 DB를 확인하는 liveness가 전체 재시작을 부르는 이유에 답한다. [requests와 limits](/posts/k8s-pod-resources)는 스케줄러가 읽는 숫자와 커널이 읽는 숫자가 다르다는 것을 OOM과 스로틀링 재현으로 보여 준다. [스케줄링과 Pending](/posts/k8s-pod-scheduling)은 FailedScheduling 메시지를 읽는 법이다. 마지막 [Pod 상태별 진단](/posts/k8s-pod-troubleshooting)은 앞의 여섯 편을 STATUS별 확인 순서로 묶는다. 이 칸에서 가장 자주 돌아오게 되는 글이다.
+
+그다음 Pod를 대신 관리하는 컨트롤러다. [Deployment와 롤링 업데이트](/posts/k8s-deployment)는 배포 중 이름이 다른 Pod 두 무리가 섞이는 이유와 되돌리기를 다룬다. 배포 전략 자체가 궁금하면 쿠버네티스 밖에서 쓴 [롤링 배포](/posts/rolling-deployment), [블루·그린](/posts/blue-green-deployment), [카나리](/posts/canary-release)로 잠깐 나갔다 온다. [StatefulSet](/posts/k8s-statefulset)은 번호와 이름과 디스크를 고정해야 하는 경우다. 04의 PVC를 먼저 조금 알아야 해서 Deployment 다음에 둔다. [DaemonSet](/posts/k8s-daemonset)은 노드마다 하나씩 도는 에이전트이고, 나중에 taint를 걸었더니 로그 수집기가 사라지는 사고가 여기 있다. [Job과 CronJob](/posts/k8s-job-cronjob)은 끝나는 일을 다룬다. 실패를 세는 법과 Indexed Job, 놓친 회차를 하나만 돌리는 CronJob을 본다.
+
+## 03 네트워킹: 이름 하나로 Pod 여럿에 닿기
+
+Pod는 죽고 다시 뜨면 IP가 바뀐다. 이 칸 전체가 "그래도 이름 하나로 찾아가게 하려면"이라는 질문 하나에 답한다. 순서는 안쪽(Service)에서 시작해 바닥(CNI)으로 내려갔다가 바깥(입구)으로 나간다.
+
+[Service 타입](/posts/k8s-service-types)이 먼저다. ClusterIP, NodePort, LoadBalancer가 층층이 쌓이는 구조와 EndpointSlice, externalTrafficPolicy를 손으로 만든 규칙으로 보여 준다. [kube-proxy 모드](/posts/k8s-kube-proxy-modes)는 그 규칙을 노드에 까는 방식을 iptables, nftables, IPVS로 비교한다. IPVS가 1.35에 deprecated가 된 이유와, nftables가 1.33에 GA가 됐는데도 1.37까지 기본값이 iptables로 남은 사정이 규칙 수에 따른 지연 측정과 함께 나온다. Service 글 바로 다음에 읽어야 같은 규칙이 두 번 설명되지 않는다.
+
+[CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)는 "Pod IP는 누가 주나"에 답하고 노드끼리 잇는 경로 방식과 VXLAN 방식을 비교한다. 00의 Docker 드라이버 글이 바로 여기서 쓰인다. [Cilium과 eBPF](/posts/cilium-ebpf)는 같은 일을 iptables 없이 커널 프로그램으로 하는 방식이라, kube-proxy와 CNI를 둘 다 읽은 뒤에 읽는다. 노드에서 `iptables-save`를 쳤는데 아무것도 안 나오는 장면이 그 글의 시작이다.
+
+[CoreDNS](/posts/k8s-coredns)는 이름을 Service IP로 바꾸는 쪽이다. ndots:5가 질의를 여러 번 만드는 과정과 가끔 5초씩 늦는 이름 풀이를 캡처로 보여 준다. [NetworkPolicy](/posts/k8s-network-policy)는 기본 거부를 걸자마자 DNS가 죽는 이유에서 시작한다. CoreDNS 글 다음에 와야 그 사고가 왜 일어나는지 바로 보인다.
+
+입구는 셋이다. [Ingress](/posts/kubernetes-ingress)가 로드 밸런서 하나로 여러 서비스를 여는 기본이다. [게이트웨이](/posts/gateway)는 API 게이트웨이와 Gateway API가 역할을 어떻게 나누는지를 개념으로 보고, [Gateway API 운영](/posts/k8s-gateway-api)은 CRD 채널, status 조건, 은퇴한 ingress-nginx에서 옮길 때 바뀌는 동작까지 실무로 다룬다. 로드맵 이미지가 Ingress를 "기능 동결"로 표시한 이유가 마지막 글에 있다. [서비스 메시](/posts/service-mesh)는 이 칸의 끝이다. Service와 입구를 다 안 뒤에야 "Pod 옆의 프록시가 왜 필요한가"가 질문으로 성립한다.
+
+## 04 설정과 저장소: 이미지 밖에 두는 것들
+
+이미지는 한 번 빌드하고 환경마다 같은 것을 쓴다. 그럼 환경마다 다른 값과 Pod보다 오래 살아야 하는 데이터는 어디 두나. 이 칸의 질문이다.
+
+[ConfigMap](/posts/k8s-configmap)은 환경 변수, 볼륨, subPath에 따라 값이 언제 Pod에 닿고 언제 안 바뀌는지에 답한다. "ConfigMap을 고쳤는데 앱이 옛 값을 쓴다"가 이 글의 시작이다. [Secret](/posts/k8s-secret)은 base64가 암호가 아니라는 것, etcd에 평문으로 들어 있는 것을 직접 보여 주고 저장 시 암호화를 다룬다. ConfigMap 다음에 읽어야 둘의 차이가 거의 없다는 게 보인다. 비밀을 클러스터 밖 저장소에 두는 원칙은 [비밀 관리](/posts/secrets-management)가 다루고, 그 값을 Secret으로 복사해 오는 도구는 [External Secrets](/posts/external-secrets)다. 저장소에서 비밀번호를 바꿨는데 앱이 옛 값을 쓰는 장면에서 시작해서, refreshInterval이 앱까지 걸리는 시간이 아니라는 것을 보여 준다. ConfigMap 글의 "값이 언제 Pod에 닿나"를 알아야 그 이유가 바로 읽힌다.
+
+[PV와 PVC](/posts/k8s-pv-pvc)는 Pod보다 오래 사는 디스크의 바인딩 규칙, 접근 모드, 존에 묶인 디스크 때문에 생기는 Pending, 회수 정책의 함정을 다룬다. [StorageClass와 VolumeSnapshot](/posts/k8s-storageclass-snapshots)은 그 디스크를 등급별로 고르고, 찍고, 되살린다. 1.36에 GA가 된 볼륨 그룹 스냅숏도 여기 있다. 순서를 바꾸면 안 된다. 바인딩을 모르면 WaitForFirstConsumer가 왜 필요한지 보이지 않는다.
+
+## 05 신뢰성: 늘리고, 줄이고, 빼도 끊기지 않게
+
+이 칸부터는 "돌아간다"가 아니라 "계속 돌아간다"를 묻는다. 부하가 늘 때 늘리고, 줄 때 줄이고, 노드를 빼야 할 때 서비스가 끊기지 않게 한다. 셋은 서로 엮여 있어서 따로 읽으면 함정이 안 보인다.
+
+[HPA](/posts/k8s-hpa)가 먼저다. desired = ceil(현재 × 현재값 / 목표) 공식 한 줄과, 줄일 때만 걸리는 안정화 창을 metrics-server가 붙은 클러스터에서 재현한다. requests가 없으면 계산이 안 된다는 점에서 02의 리소스 글과 이어진다. 0개까지 줄이기의 현재 상태도 이 글에서 확인한다. [VPA](/posts/k8s-vpa)는 반대 방향, Pod 하나의 크기를 사용 기록으로 정한다. HPA와 같은 CPU에 걸면 서로 싸운다는 걸 HPA 글을 읽은 뒤에 봐야 이해된다. [재시작 없는 리소스 변경](/posts/k8s-in-place-resize)은 1.35에 GA가 된 in-place resize로, VPA가 Pod를 죽이지 않고 크기를 바꿀 수 있게 된 바탕이다.
+
+[노드 오토스케일링](/posts/k8s-node-autoscaling-karpenter)은 HPA가 늘린 Pod가 Pending으로 남는 장면에서 출발한다. Cluster Autoscaler의 노드 그룹 방식과 Karpenter의 bin-packing을 비교하고, 빈자리를 모아 노드를 바꾸는 consolidation을 본다. 쿠버네티스 밖에서 본 오토스케일링 원리는 [오토스케일링](/posts/autoscaling)에 있다. [PodDisruptionBudget](/posts/k8s-pod-disruption-budget)은 이 칸의 끝이다. consolidation과 drain이 Pod를 빼는 순간 PDB가 막고, eviction이 429를 받는 과정을 재현한다. 노드 오토스케일러 다음에 읽어야 "노드가 왜 안 줄어드나"의 답이 PDB에 있다는 게 보인다.
+
+## 06 보안과 운영: 누가 무엇을 할 수 있고, 어떻게 올리나
+
+이 칸은 둘로 나뉜다. 앞쪽은 API 서버의 문(인증, 인가, 어드미션)과 Pod의 칸막이, 뒤쪽은 클러스터 자체를 고치고 올리고 되살리는 일이다.
+
+문 쪽은 요청이 지나는 순서대로 읽는다. [인증서와 PKI](/posts/k8s-certificates-pki)가 "클러스터 안의 연결은 모두 서로를 확인한다"에서 출발해 CA 셋과 인증서 열 장, 1년 뒤 만료되는 아침을 다룬다. 사람의 인증이 인증서라면 Pod의 인증은 토큰이다. [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens)은 만료 없는 옛 토큰에서 Pod에 묶인 토큰으로 바뀐 이유를 클레임을 직접 읽으며 보여 준다. [RBAC](/posts/k8s-rbac)는 그다음 관문이다. 403 한 줄을 동사, 그룹, 리소스로 쪼개 읽는 법과 권한이 넓어지는 길을 다룬다. [어드미션 컨트롤](/posts/k8s-admission-control)은 RBAC를 통과한 요청을 고치거나 막는 마지막 관문이다. CEL로 쓰는 ValidatingAdmissionPolicy와 MutatingAdmissionPolicy, 웹훅이 죽으면 요청이 같이 죽는 이유, Kyverno와 OPA Gatekeeper를 본다. [감사 로그](/posts/k8s-audit-logging)는 이 모든 관문을 지난 요청을 기록한다. "누가 Deployment를 지웠나"는 이 글이 없으면 답이 없다.
+
+Pod의 칸막이는 둘이다. [securityContext](/posts/k8s-security-context)는 한 줄마다 켜지는 커널 기능(capability, seccomp, AppArmor, 읽기 전용 루트)을 재현한다. 00의 네임스페이스와 권한 글이 여기서 다시 쓰인다. [Pod Security Admission](/posts/k8s-pod-security-admission)은 그 설정을 네임스페이스 라벨 하나로 강제한다. securityContext를 먼저 알아야 restricted가 무엇을 검사하는지 읽힌다.
+
+운영 쪽은 작은 일에서 큰 일로 간다. [노드 점검](/posts/k8s-node-maintenance)은 cordon과 drain이 각각 무엇을 막고 내보내는지, drain을 멈춰 세우는 Pod를 다룬다. 05의 PDB 글과 짝이다. [클러스터 업그레이드](/posts/k8s-cluster-upgrade)는 부품마다 허용되는 버전 차이에서 올리는 순서가 나오는 이유를 보여 준다. 노드 점검을 알아야 노드를 한 대씩 갈아 끼우는 단계가 읽힌다. [etcd 백업과 복원](/posts/k8s-etcd-backup)은 클러스터 전체를 스냅숏 하나로 되돌리는 법과, 복원 뒤 watch가 조용히 틀리는 함정을 다룬다. [Velero](/posts/velero-backup)는 같은 질문에 다른 답을 한다. etcd 통째가 아니라 네임스페이스 단위로 API 객체와 볼륨을 묶는다. 둘을 이어서 읽어야 언제 무엇을 쓸지 고를 수 있다.
+
+## 07 플랫폼: 쿠버네티스를 늘리고, 그 위에 길을 깐다
+
+마지막 칸은 쿠버네티스를 쓰는 사람에서 쿠버네티스를 넓히는 사람으로 넘어간다. 셋으로 나눠 읽는다. 쿠버네티스의 플러그인 자리, 내 API 만들기, 그리고 배포와 관측의 길이다.
+
+플러그인 자리는 [CRI, CNI, CSI](/posts/k8s-cri-cni-csi)에서 시작한다. kubelet이 런타임, 네트워크, 저장소를 세 개의 약속으로 맡기는 구조이고, 노드가 NotReady가 되는 흔한 원인이 CNI 설정 파일 하나라는 걸 보여 준다. 위 그림의 마지막 두 홉을 자세히 본 글이다. [GPU와 DRA](/posts/k8s-gpu-dra)는 GPU를 개수로 알리는 디바이스 플러그인의 한계와, 장치를 설명하고 조건으로 요청하는 Dynamic Resource Allocation을 다룬다. [배치와 Kueue](/posts/k8s-batch-kueue)는 GPU 8장을 두 Job이 반씩 잡고 둘 다 못 도는 장면에서 출발해 대기열과 몫, JobSet을 다룬다. GPU 글 다음에 읽어야 "왜 Pod 하나씩 보는 스케줄러로는 안 되나"가 선다.
+
+내 API 만들기는 [CRD](/posts/k8s-crd)와 [오퍼레이터](/posts/k8s-operators) 두 편이다. CRD는 ConfigMap에 적은 설정을 아무도 검사하지 않는 문제를 스키마와 CEL로 푼다. 오퍼레이터는 그 문서를 보고 일하는 컨트롤러를 Node로 직접 만든다. 01의 reconcile 글을 다시 펴 놓고 읽으면 좋다. 같은 루프를 이번엔 내가 쓴다. CRD로 안 되는 경우가 [API 집계와 스케줄러 확장](/posts/k8s-api-aggregation-schedulers)이다. `kubectl top`이 CRD 없이 답하는 이유인 API 집계와, 스케줄러 플러그인과 두 번째 스케줄러, 다 같이 뜨거나 아예 안 뜨는 gang 스케줄링을 다룬다. CRD와 오퍼레이터를 먼저 읽어야 "이건 CRD로 충분한가"를 물을 수 있어서 그 뒤에 둔다.
+
+배포의 길은 Helm 다섯 편이 있다. [Helm 기본](/posts/helm-basics)이 차트와 릴리스가 무엇인지, [차트 템플릿](/posts/helm-chart-templates)이 Go 템플릿과 들여쓰기를, [values와 비밀 값](/posts/helm-values-secrets)이 환경별 값이 합쳐지는 순서를, [업그레이드와 롤백](/posts/helm-release-lifecycle)이 릴리스가 꼬일 때를, [차트 배포 흐름](/posts/helm-dependencies-oci-gitops)이 의존성과 OCI 저장소와 ArgoCD를 다룬다. 이 순서 그대로 읽는다. 01의 Kustomize와 무엇이 다른지는 마지막 글에 정리돼 있다. 렌더링한 매니페스트를 git에서 클러스터로 끌어오는 쪽은 [ArgoCD 기본](/posts/argocd-basics)이다. 손으로 늘린 replicas가 1초 만에 되돌아가는 selfHeal, git에서 지웠는데 남는 객체와 prune, Synced와 Healthy가 다른 질문이라는 것을 다룬다. 01의 서버 쪽 apply 글과 같은 "누가 이 필드의 주인인가" 문제가 여기서 다시 나온다. 같은 약속을 Flux는 어떻게 다르게 지키는지, 비밀 값은 git에 어떻게 두는지는 [ArgoCD와 Flux 비교](/posts/gitops-argocd-vs-flux)가 이어서 본다. 저장소에서 클러스터까지 이어지는 실제 길은 [EKS 배포 프로젝트 구조](/posts/k8s-project-structure)와 [push에서 EKS까지 배포 파이프라인](/posts/k8s-deploy-pipeline-eks)이 직접 만들어 보여 준다. 클라우드 쪽 바닥은 [EKS 기본](/posts/eks-cluster-basics)이다.
+
+관측은 쿠버네티스 밖에서 쓴 글이 바닥이다. [모니터링 기본](/posts/monitoring-basics)과 [지표 타입](/posts/metrics-types)이 무엇을 셀지, [구조화 로그](/posts/structured-logging)가 무엇을 남길지, [분산 추적](/posts/distributed-tracing)이 요청 하나를 어떻게 이어 볼지를 다룬다. DaemonSet으로 수집기를 까는 모습은 02의 DaemonSet 글에 있다. 클러스터 안에서 Prometheus가 대상을 어떻게 찾고 라벨을 고치는지, ServiceMonitor 라벨 하나로 대상이 조용히 빠지는 이유는 [Prometheus 내부 구조](/posts/prometheus-basics)가, 모은 지표를 변수와 코드로 관리하는 대시보드로 묶는 법은 [Grafana 대시보드](/posts/grafana-dashboards)가 다룬다.
+
+로드맵 이미지의 마지막 줄은 자격증과 학습 경로다. [쿠버네티스 자격증](/posts/k8s-certifications)이 시험별 영역을 이 지도의 글과 짝지어 놓았다.
+
+## 이 증상이면 이 글부터
+
+공부 순서와 별개로, 장애가 나면 증상에서 출발한다. 가장 흔한 출발점은 `kubectl get pods`의 STATUS 칸이다. 아래 그림은 STATUS에 찍히는 말을 하나씩 짚으며 처음 펼 글을 모은다.
+
+<AlgoTrace
+  caption="STATUS 칸의 말마다 처음 펼 글"
+  memoryLabel="펼 글"
+  cells={["Pending", "ContainerCreating", "ImagePullBackOff", "ConfigError", "CrashLoopBackOff", "OOMKilled", "Running 0/1", "Terminating"]}
+  steps={[
+    { memory: [], caption: "STATUS는 phase가 아니라 지금 멈춘 곳의 이름이다. 왼쪽일수록 앞 단계에서 멈췄다." },
+    { pointer: 0, memory: ["pod-scheduling"], caption: "노드를 못 골랐다. Insufficient면 노드 오토스케일러, taint나 affinity면 스케줄링 글, PVC 때문이면 PV 글." },
+    { pointer: 1, memory: ["pod-scheduling", "cri-cni-csi"], caption: "노드에는 갔는데 샌드박스나 볼륨을 못 만든다. CNI와 CSI 쪽이다." },
+    { pointer: 2, memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting"], caption: "이미지를 못 받았다. 태그 오타, 레지스트리 권한, 노드의 아웃바운드. 배포 파이프라인 글에 세 원인이 있다." },
+    { pointer: 3, memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting", "configmap"], caption: "참조한 ConfigMap이나 Secret의 키가 없다. CreateContainerConfigError다." },
+    { pointer: 4, memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting", "configmap", "pod-lifecycle"], caption: "떴다가 죽기를 반복한다. 종료 코드와 이전 로그(--previous)부터. liveness가 죽이는 건지도 본다." },
+    { pointer: 5, found: [5], memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting", "configmap", "pod-lifecycle", "pod-resources"], caption: "메모리 한도에 걸려 커널이 죽였다. 종료 코드 137. 런타임의 힙 설정까지 본다." },
+    { pointer: 6, found: [5, 6], memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting", "configmap", "pod-lifecycle", "pod-resources", "pod-probes"], caption: "돌고 있는데 준비가 안 됐다. readiness가 실패해 엔드포인트에 오르지 못한다." },
+    { pointer: 7, found: [5, 6, 7], memory: ["pod-scheduling", "cri-cni-csi", "troubleshooting", "configmap", "pod-lifecycle", "pod-resources", "pod-probes", "api-objects"], caption: "지워지지 않는다. finalizer가 붙잡고 있거나 노드가 죽었다. finalizer는 API 오브젝트 글, 노드는 노드 점검 글." },
+  ]}
+/>
+
+Pending이면 이벤트의 FailedScheduling 메시지를 먼저 읽는다. kwok 클러스터에 CPU 16개를 요구하는 Pod를 띄웠다. 노드는 4코어짜리 두 대다.
+
+```bash
+# 노드보다 큰 requests를 가진 Pod
+kubectl run big --image=nginx:1.27 -n road \
+  --overrides='{"spec":{"containers":[{"name":"big","image":"nginx:1.27","resources":{"requests":{"cpu":"16"}}}]}}'
+# 그 Pod의 이벤트만 본다
+kubectl get events -n road --field-selector involvedObject.name=big -o custom-columns=REASON:.reason,MESSAGE:.message
+```
+
+```text
+pod/big created
+REASON             MESSAGE
+FailedScheduling   0/2 nodes are available: 2 Insufficient cpu. preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling.
+```
+
+이 한 줄에 펼 글이 셋 들어 있다. 아래에서 조각을 누르면 어느 조각이 어느 글로 가는지 나온다.
+
+<UrlAnatomy
+  caption="FailedScheduling 한 줄 (kwok v1.37 실측)"
+  base=""
+  separator=""
+  joiner=" "
+  params={[
+    { key: "0/2 nodes are available:", display: "0/2 nodes are available:", title: "후보 노드 수", description: "분모가 클러스터의 노드 수다. 분모가 기대보다 작으면 노드가 NotReady이거나 cordon된 것이다.", code: "k8s-node-maintenance, k8s-cri-cni-csi" },
+    { key: "2 Insufficient cpu.", display: "2 Insufficient cpu.", title: "걸러진 이유와 노드 수", description: "requests 합이 allocatable을 넘었다. 이유가 여러 개면 노드마다 걸린 이유가 따로 센다. untolerated taint, node affinity가 같은 자리에 나온다.", code: "k8s-pod-resources, k8s-pod-scheduling" },
+    { key: "preemption:", display: "preemption: 0/2 ...", title: "선점으로도 안 된다", description: "더 낮은 우선순위 Pod를 내보내도 자리가 안 난다는 뜻이다. 노드를 늘려야 한다. 노드 오토스케일러가 이 Pod를 보고 노드를 띄우는지 확인한다.", code: "k8s-node-autoscaling-karpenter" },
+  ]}
+/>
+
+같은 Pending이라도 이유 칸이 Insufficient면 노드가 모자란 것이고, untolerated taint나 didn't match node affinity면 내가 건 조건이 틀린 것이다. 앞쪽은 [노드 오토스케일링](/posts/k8s-node-autoscaling-karpenter), 뒤쪽은 [스케줄링과 Pending](/posts/k8s-pod-scheduling)으로 간다. Pod는 멀쩡한데 PVC가 Pending이면 [PV와 PVC](/posts/k8s-pv-pvc)다.
+
+### drain이 끝나지 않는다
+
+노드를 비우는 drain은 Pod를 지우는 게 아니라 하나씩 eviction을 요청한다. 그 요청을 PDB가 거절하면 drain은 같은 요청을 끝없이 다시 보낸다. 아래 그림에서 어느 단계에서 멈추는지 보면 펼 글이 정해진다.
+
+<NetworkTopology
+  caption="drain 한 번: 내보내고, 막히고, 자리가 생기면 다시"
+  width={400}
+  height={284}
+  zones={[
+    { id: "n1", label: "node-1 (cordon)", x: 8, y: 96, w: 254, h: 96, tone: "edge" },
+    { id: "n2", label: "node-2", x: 272, y: 96, w: 120, h: 96, tone: "private" },
+  ]}
+  nodes={[
+    { id: "drain", label: "kubectl", sub: "drain node-1", x: 70, y: 44, icon: "client" },
+    { id: "api", label: "API 서버", sub: "eviction", x: 200, y: 44, icon: "gateway" },
+    { id: "pdb", label: "PDB web", sub: "minAvailable 2", x: 330, y: 44, icon: "lock" },
+    { id: "pa", label: "web-a", sub: "Running", x: 70, y: 150, icon: "container" },
+    { id: "pb", label: "web-b", sub: "Running", x: 196, y: 150, icon: "container" },
+    { id: "pc", label: "web-c", sub: "Pending", x: 332, y: 150, icon: "container" },
+    { id: "karp", label: "Karpenter", sub: "NodeClaim", x: 70, y: 244, icon: "router" },
+    { id: "n3", label: "node-3", sub: "새 노드", x: 330, y: 244, icon: "server" },
+  ]}
+  links={[
+    { from: "drain", to: "api" },
+    { from: "api", to: "pdb" },
+    { from: "api", to: "pa" },
+    { from: "api", to: "pb" },
+    { from: "api", to: "pc" },
+    { from: "karp", to: "api", dashed: true },
+    { from: "karp", to: "n3" },
+  ]}
+  steps={[
+    { path: ["drain", "api"], packet: "cordon", highlight: ["n1"], title: "먼저 새 Pod가 못 오게 막는다", detail: "노드에 unschedulable을 건다. 이미 있는 Pod는 그대로다. 글: k8s-node-maintenance." },
+    { path: ["drain", "api", "pa"], packet: "evict", title: "여유가 있으면 내보낸다", detail: "web은 3개, minAvailable은 2라 하나는 내보낼 수 있다. web-a가 나가고 ReplicaSet이 대신할 web-c를 만든다." },
+    { path: ["drain", "api", "pdb"], packet: "evict", blocked: true, title: "두 번째는 429로 거절된다", detail: "web-c가 아직 준비되지 않아 지금 준비된 건 2개다. 하나 더 빼면 minAvailable을 깬다. drain은 5초마다 다시 묻는다. 글: k8s-pod-disruption-budget." },
+    { path: ["api", "pc"], packet: "Pending", highlight: ["n2"], title: "대신할 Pod가 자리를 못 찾는다", detail: "node-2가 가득 차서 web-c가 Pending이다. 이게 drain이 멈춘 진짜 원인이다. 글: k8s-pod-scheduling." },
+    { path: ["karp", "n3"], packet: "launch", title: "노드 오토스케일러가 노드를 붙인다", detail: "Pending Pod를 보고 노드를 띄운다. 노드가 붙고 web-c가 준비되기까지 몇 분이 걸린다. 글: k8s-node-autoscaling-karpenter." },
+    { path: ["drain", "api", "pb"], packet: "evict", title: "자리가 나면 drain이 이어진다", detail: "web-c가 준비돼 다시 하나를 뺄 수 있다. web-b가 나가고 drain이 끝난다." },
+  ]}
+/>
+
+처음 펼 글은 [PodDisruptionBudget](/posts/k8s-pod-disruption-budget)이다. ALLOWED DISRUPTIONS가 0이면 이유가 셋 중 하나다. 레플리카가 minAvailable과 같거나, 대신할 Pod가 준비되지 않았거나, 이미 준비 안 된 Pod가 있어서다. 대신할 Pod가 Pending이면 스케줄링과 노드 오토스케일링 글로 넘어간다. PDB와 상관없이 drain이 멈추면 [노드 점검](/posts/k8s-node-maintenance)의 세 가지 Pod(로컬 저장소, 컨트롤러 없는 Pod, DaemonSet)를 본다.
+
+### 나머지 증상
+
+나머지는 짧게 적는다. 앞의 글이 처음 펼 글이다.
+
+- `pods is forbidden: User "..." cannot list resource "pods"`. [RBAC](/posts/k8s-rbac)다. kwok에서 기본 ServiceAccount로 쳐 보면 이렇게 나온다. `Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:road:default" cannot list resource "pods" in API group "" in the namespace "road"`. 사용자, 동사, 리소스, API 그룹, 네임스페이스가 한 줄에 다 있다. 이 다섯 칸으로 Role을 쓴다.
+- 같은 Forbidden인데 `violates PodSecurity`가 붙어 있다. RBAC가 아니라 [Pod Security Admission](/posts/k8s-pod-security-admission)이다. `admission webhook ... denied the request`면 [어드미션 컨트롤](/posts/k8s-admission-control)이다. Forbidden이라는 말만 보고 권한을 넓히면 안 되는 이유다.
+- `You must be logged in to the server (Unauthorized)`. 401이다. 권한이 아니라 신원을 못 밝혔다. [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts)의 exec 플러그인과 만료된 토큰, kubeadm 클러스터라면 [인증서와 PKI](/posts/k8s-certificates-pki)의 만료일.
+- `x509: certificate has expired`. [인증서와 PKI](/posts/k8s-certificates-pki). kubeadm 클러스터의 1년짜리 인증서다.
+- Service에 요청이 안 간다, 엔드포인트가 비어 있다. [라벨과 셀렉터](/posts/k8s-labels-selectors)에서 셀렉터와 Pod 라벨을 대조하고, 그다음 [프로브](/posts/k8s-pod-probes)의 readiness.
+- 외부 호출이 가끔 5초씩 늦다. [CoreDNS](/posts/k8s-coredns). 기본 거부 정책을 건 뒤로 모든 이름이 안 풀리면 [NetworkPolicy](/posts/k8s-network-policy).
+- 노드가 NotReady다. [CRI, CNI, CSI](/posts/k8s-cri-cni-csi)의 노드에서 좁히는 순서, 그다음 [systemd와 systemctl](/posts/linux-systemd-systemctl)로 kubelet 로그.
+- 네임스페이스가 Terminating에서 안 넘어간다. [네임스페이스](/posts/k8s-namespace), 원인은 대개 [API 오브젝트](/posts/k8s-api-objects)의 finalizer다.
+- 업그레이드 뒤 `no matches for kind`. [alpha, beta, GA와 API 폐기](/posts/k8s-feature-maturity). 사라진 API 버전이다. CRD를 지웠다면 [CRD](/posts/k8s-crd).
+- 손으로 늘린 replicas가 배포마다 되돌아간다. [kubectl apply는 무엇을 비교하나](/posts/kubectl-apply-ssa), HPA를 쓰고 있다면 매니페스트에서 replicas를 빼는 이유가 [HPA](/posts/k8s-hpa)에 있다.
+- HPA의 TARGETS가 unknown이다. [HPA](/posts/k8s-hpa)의 metrics-server와 requests.
+- 누가 Deployment를 지웠는지 모른다. [감사 로그](/posts/k8s-audit-logging). 켜 두지 않았다면 답이 없다는 것까지 그 글에 있다.
+- 배포가 ProgressDeadlineExceeded로 끝났다. [Deployment](/posts/k8s-deployment)의 progressDeadlineSeconds, CI에서 났다면 [배포 파이프라인](/posts/k8s-deploy-pipeline-eks).
+- etcd를 복원했더니 컨트롤러가 이상하게 군다. [etcd 백업과 복원](/posts/k8s-etcd-backup)의 resourceVersion 되감기.
+
+## 증상 문장에서 첫 글 고르기
+
+위의 길을 규칙으로 바꿨다. 증상 문장에 규칙의 단어가 모두 들어 있으면 그 글을 돌려준다. 규칙은 위에서부터 보고 처음 맞는 것에서 멈춘다. 그래서 순서가 중요하다. "forbidden" 규칙이 "podsecurity" 규칙보다 위에 있으면, Pod Security에 막힌 증상이 전부 RBAC 글로 가서 권한만 넓히게 된다.
+
+<CodePlayground
+  caption="증상 → 처음 펼 쿠버네티스 글"
+  functionName="firstPost"
+  initialCode={`// 위에서부터 보고, words가 모두 들어 있는 첫 규칙의 post를 돌려준다.
+// 대소문자는 가리지 않는다. 맞는 규칙이 없으면 "kubectl-essentials".
+const ROUTES = [
+  { words: ["pvc", "pending"], post: "k8s-pv-pvc" },
+  { words: ["pending", "insufficient"], post: "k8s-node-autoscaling-karpenter" },
+  { words: ["pending"], post: "k8s-pod-scheduling" },
+  { words: ["oomkilled"], post: "k8s-pod-resources" },
+  { words: ["crashloopbackoff"], post: "k8s-pod-troubleshooting" },
+  { words: ["imagepullbackoff"], post: "k8s-pod-troubleshooting" },
+  { words: ["drain"], post: "k8s-pod-disruption-budget" },
+  { words: ["podsecurity"], post: "k8s-pod-security-admission" },
+  { words: ["webhook", "denied"], post: "k8s-admission-control" },
+  { words: ["forbidden"], post: "k8s-rbac" },
+  { words: ["x509"], post: "k8s-certificates-pki" },
+  { words: ["unauthorized"], post: "kubeconfig-contexts" },
+  { words: ["namespace", "terminating"], post: "k8s-namespace" },
+  { words: ["no matches for kind"], post: "k8s-feature-maturity" },
+  { words: ["dns"], post: "k8s-coredns" },
+  { words: ["notready"], post: "k8s-cri-cni-csi" },
+];
+
+function firstPost(symptom) {
+  return "";
+}`}
+  solution={`const ROUTES = [
+  { words: ["pvc", "pending"], post: "k8s-pv-pvc" },
+  { words: ["pending", "insufficient"], post: "k8s-node-autoscaling-karpenter" },
+  { words: ["pending"], post: "k8s-pod-scheduling" },
+  { words: ["oomkilled"], post: "k8s-pod-resources" },
+  { words: ["crashloopbackoff"], post: "k8s-pod-troubleshooting" },
+  { words: ["imagepullbackoff"], post: "k8s-pod-troubleshooting" },
+  { words: ["drain"], post: "k8s-pod-disruption-budget" },
+  { words: ["podsecurity"], post: "k8s-pod-security-admission" },
+  { words: ["webhook", "denied"], post: "k8s-admission-control" },
+  { words: ["forbidden"], post: "k8s-rbac" },
+  { words: ["x509"], post: "k8s-certificates-pki" },
+  { words: ["unauthorized"], post: "kubeconfig-contexts" },
+  { words: ["namespace", "terminating"], post: "k8s-namespace" },
+  { words: ["no matches for kind"], post: "k8s-feature-maturity" },
+  { words: ["dns"], post: "k8s-coredns" },
+  { words: ["notready"], post: "k8s-cri-cni-csi" },
+];
+
+function firstPost(symptom) {
+  const text = symptom.toLowerCase();
+  for (const route of ROUTES) {
+    // 단어가 전부 있어야 그 규칙이다 (some이 아니라 every)
+    if (route.words.every((w) => text.includes(w))) return route.post;
+  }
+  return "kubectl-essentials";
+}`}
+  tests={[
+    { args: ["0/2 nodes are available: 2 Insufficient cpu. Pod는 계속 Pending"], expected: "k8s-node-autoscaling-karpenter" },
+    { args: ["Pod가 Pending인데 이벤트에 untolerated taint가 보인다"], expected: "k8s-pod-scheduling" },
+    { args: ["PVC가 Pending에서 안 넘어간다"], expected: "k8s-pv-pvc" },
+    { args: ["Back-off restarting failed container, 상태는 CrashLoopBackOff"], expected: "k8s-pod-troubleshooting" },
+    { args: ["Last State: Terminated, Reason: OOMKilled"], expected: "k8s-pod-resources" },
+    { args: ["kubectl drain이 Cannot evict pod를 반복한다"], expected: "k8s-pod-disruption-budget" },
+    { args: ['pods is forbidden: User "dev" cannot list resource "pods"'], expected: "k8s-rbac" },
+    { args: ['pods "web" is forbidden: violates PodSecurity "restricted:latest"'], expected: "k8s-pod-security-admission" },
+    { args: ['admission webhook "validate.kyverno.svc" denied the request'], expected: "k8s-admission-control" },
+    { args: ["x509: certificate has expired or is not yet valid"], expected: "k8s-certificates-pki" },
+    { args: ["error: You must be logged in to the server (Unauthorized)"], expected: "kubeconfig-contexts" },
+    { args: ['no matches for kind "Ingress" in version "extensions/v1beta1"'], expected: "k8s-feature-maturity" },
+    { args: ["노드 하나가 NotReady로 바뀌었다"], expected: "k8s-cri-cni-csi" },
+    { args: ["그냥 앱이 느리다"], expected: "kubectl-essentials" },
+  ]}
+/>
+
+틀리기 쉬운 곳은 세 군데다. 소문자로 바꾸지 않으면 "CrashLoopBackOff"와 "NotReady"가 규칙에 걸리지 않는다. `every` 대신 `some`을 쓰면 "PVC가 Pending" 규칙이 Pod의 Pending까지 잡아서 첫 테스트가 PV 글로 간다. 그리고 "pending" 하나짜리 규칙을 "pending·insufficient"보다 위에 두면, 노드가 모자란 Pending이 전부 스케줄링 글로 가서 taint만 뒤지게 된다. 런북의 증상 표도 똑같이 위에서부터 읽히니, 좁은 규칙을 넓은 규칙보다 위에 둔다.
+
+## 다 읽지 않아도 된다
+
+이 지도를 처음부터 끝까지 읽을 필요는 없다. 처음이라면 00의 네임스페이스와 cgroup 글, 01의 구조·API 오브젝트·컨트롤러, 02의 Pod 일곱 편과 Deployment, 03의 Service와 CoreDNS까지만 읽어도 위의 증상 대부분에서 첫 글을 고를 수 있다. 나머지는 그 증상을 처음 만났을 때 읽으면 오래 남는다. 어느 쪽이든 결국 같은 문장으로 돌아온다. 원하는 상태는 API 서버에 적혀 있고, 그 상태를 맞추는 부품 중 하나가 멈췄다. 어느 부품인지 이벤트로 찾고, 그 부품의 글을 편다.
+
+## 면접에서 나올 만한 질문
+
+### kubectl apply 한 번 뒤에 클러스터에서 일어나는 일을 순서대로 설명해 보라
+
+kubectl이 kubeconfig의 현재 컨텍스트로 API 서버에 요청을 보내고, API 서버가 인증, 인가(RBAC), 어드미션을 거쳐 etcd에 저장한다. apply의 응답은 여기서 끝난다. 그 뒤 Deployment 컨트롤러가 ReplicaSet을, ReplicaSet 컨트롤러가 Pod를 만들고, 스케줄러가 노드를 정해 nodeName을 적는다. 그 노드의 kubelet이 CRI로 컨테이너를, 런타임이 CNI로 Pod IP를 만들고, readiness가 통과하면 EndpointSlice에 올라 kube-proxy가 노드 규칙을 바꾼다. 이 중 어디서 멈췄는지는 이벤트의 보고 부품으로 가린다.
+
+### 쿠버네티스를 처음 배우는 사람에게 어떤 순서를 권하나
+
+리눅스 프로세스와 네임스페이스, cgroup, 컨테이너 이미지를 먼저 보고, 쿠버네티스는 구조와 API 오브젝트, 컨트롤러의 reconcile부터 시작하라고 한다. 그다음 Pod를 깊게(수명 주기, 프로브, 리소스, 스케줄링) 보고 Deployment 같은 컨트롤러로 넓힌다. 네트워킹, 설정과 저장소를 지나 오토스케일링과 PDB, 보안과 업그레이드, 마지막에 CRD와 오퍼레이터로 간다. 컨트롤러가 상태 차이를 메운다는 문장을 먼저 잡으면 뒤의 모든 기능이 같은 패턴으로 읽힌다.
+
+### Pod가 Pending이다. 어디부터 보나
+
+`kubectl describe pod`나 이벤트에서 FailedScheduling 메시지를 읽는다. 분모는 후보 노드 수고, 이유 칸이 Insufficient cpu나 memory면 requests 합이 노드의 allocatable을 넘은 것이라 노드 오토스케일러가 반응하는지 본다. untolerated taint나 node affinity 불일치면 내가 건 조건이 틀린 것이다. PVC가 묶이지 않아 Pending인 경우도 있어서 PVC 상태와 StorageClass의 바인딩 모드도 확인한다.
+
+### 403 Forbidden이 났다. 권한을 넓히기 전에 확인할 것은
+
+메시지에 RBAC 문구(User ... cannot verb resource)가 있는지, 아니면 violates PodSecurity나 admission webhook denied가 붙어 있는지 본다. 뒤의 둘은 권한이 아니라 정책에 막힌 것이라 Role을 넓혀도 해결되지 않는다. RBAC라면 메시지의 사용자, 동사, 리소스, API 그룹, 네임스페이스를 그대로 Role로 옮기고, `kubectl auth can-i`로 그 칸만 열렸는지 검증한다. 401은 신원을 못 밝힌 것이라 kubeconfig의 자격 증명이나 인증서 만료를 본다.
+
+### drain이 끝나지 않는다. 무엇이 막고 있나
+
+drain은 Pod마다 eviction을 요청하고, PDB가 허용하지 않으면 API 서버가 429를 돌려줘 drain이 계속 다시 묻는다. PDB의 ALLOWED DISRUPTIONS가 0인 이유를 본다. 레플리카가 minAvailable과 같거나, 대신 뜬 Pod가 아직 준비되지 않았거나 Pending인 경우가 많다. 대신할 Pod가 자리가 없어 Pending이면 노드 오토스케일러가 노드를 붙일 때까지 기다리게 된다. PDB와 무관하게 로컬 저장소를 쓰는 Pod나 컨트롤러 없는 Pod도 drain을 멈춘다.
+
+### CrashLoopBackOff와 OOMKilled는 어떻게 구분하고, 각각 무엇을 보나
+
+CrashLoopBackOff는 컨테이너가 죽고 kubelet이 점점 길게 기다렸다 다시 띄우는 상태 이름이고, OOMKilled는 죽은 이유 중 하나다. describe의 Last State에서 종료 코드와 Reason을 본다. 137과 OOMKilled면 메모리 limit과 런타임 힙 설정을, 1 같은 코드면 `kubectl logs --previous`로 앱 로그를 본다. liveness 실패로 kubelet이 죽이는 경우도 있어서 이벤트의 Unhealthy 기록도 함께 본다.
+
+### Ingress, Gateway API, 서비스 메시는 각각 언제 쓰나
+
+Ingress는 HTTP 입구를 호스트와 경로로 나누는 오래된 표준이고 지금은 기능이 동결됐다. Gateway API는 그 뒤를 잇는 표준으로 인프라 담당과 앱 담당이 객체를 나눠 갖고, TCP나 gRPC 라우팅과 가중치 분할을 표준 필드로 표현한다. 서비스 메시는 클러스터 안의 서비스 사이 통신에 mTLS, 재시도, 세밀한 트래픽 제어를 붙인다. 바깥에서 들어오는 길은 Gateway API로, 안쪽 서비스 간 보안과 관측이 필요할 때 메시를 더한다.

@@ -1,0 +1,637 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-gpu-dra");
+
+학습 Job을 올렸는데 Pod가 Pending에서 움직이지 않는다. 이벤트에는 `Insufficient nvidia.com/gpu`가 찍혀 있다. GPU 노드는 분명히 붙어 있고 `nvidia-smi`도 잘 돈다. 반대로 GPU가 놀고 있는데 추론 Pod 열 개가 한 장씩 차지해서 더 못 올리는 날도 있다. 둘 다 쿠버네티스가 GPU를 어떻게 세고 나눠 주는지 알면 어디부터 볼지 정해진다.
+
+이 글은 GPU 같은 특수 장치를 Pod에 붙이는 두 방식을 다룬다. 오래 써 온 디바이스 플러그인과 `nvidia.com/gpu` 같은 extended resource, 그리고 그 한계를 풀려고 나온 Dynamic Resource Allocation(DRA)이다. 그 사이에 GPU 노드 풀을 라벨과 테인트로 나누는 법, 한 장을 여러 Pod가 나눠 쓰는 MIG와 time-slicing을 끼워 넣었다. 테인트와 톨러레이션, `nodeSelector` 자체는 [Pod 스케줄링 글](/posts/k8s-pod-scheduling)에, requests와 limits의 의미는 [Pod 리소스 글](/posts/k8s-pod-resources)에 있다.
+
+실습은 Ubuntu 24.04에서 kwok으로 띄운 Kubernetes v1.37.0 클러스터에서 했다. kwok에는 kubelet도 실제 GPU도 없다. 그래서 노드 용량과 ResourceSlice는 손으로 만들었고, 그 위에서 진짜 kube-scheduler가 GPU를 세고 장치를 고르는 결과를 그대로 옮겼다. 컨테이너 안에서 GPU가 보이는 단계는 실행해 볼 수 없어서 설명으로만 다룬다. 버전 정보는 kubernetes/website 저장소의 feature gate 문서와 NVIDIA k8s-device-plugin README에서 확인했다.
+
+## 쿠버네티스는 GPU를 모른다
+
+스케줄러가 기본으로 아는 자원은 CPU, 메모리, 임시 저장소, Pod 개수 정도다. GPU, FPGA, 고속 NIC 같은 장치는 종류도 많고 다루는 방법도 제조사마다 달라서 쿠버네티스 본체에 넣지 않았다. 대신 두 가지 약속만 만들었다.
+
+하나는 extended resource다. 노드 상태의 `capacity`에 `nvidia.com/gpu: 4`처럼 이름과 개수를 적으면, 스케줄러는 그 이름을 CPU처럼 세서 남은 개수만큼만 Pod를 보낸다. 무엇인지는 모르고 개수만 센다. 다른 하나는 디바이스 플러그인이다. 장치를 아는 쪽(제조사)이 노드마다 데몬을 띄워 kubelet에 "이 노드에 이 장치가 몇 개 있다"고 알리고, Pod가 장치를 받을 때 컨테이너에 무엇을 꽂아야 하는지 알려 준다.
+
+## 디바이스 플러그인이 GPU를 개수로 알린다
+
+NVIDIA라면 보통 GPU Operator가 드라이버, 컨테이너 툴킷, 디바이스 플러그인, 모니터링 익스포터를 DaemonSet으로 한꺼번에 깐다. 이 중 디바이스 플러그인이 kubelet과 이야기하는 부분이 아래 흐름이다.
+
+<SequenceDiagram
+  caption="디바이스 플러그인은 장치 목록을 kubelet에 알리고, Pod가 오면 무엇을 꽂을지 답한다"
+  actors={[
+    { id: "dp", label: "디바이스 플러그인" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "api", label: "API 서버" },
+    { id: "sched", label: "스케줄러" },
+  ]}
+  steps={[
+    { from: "dp", to: "kubelet", label: "Register", title: "자기 소개를 한다", detail: "플러그인은 kubelet의 유닉스 소켓에 gRPC로 등록한다. 자기가 맡을 자원 이름과 자기 소켓 위치를 알린다.", payload: "/var/lib/kubelet/device-plugins/kubelet.sock\nresourceName: nvidia.com/gpu" },
+    { from: "kubelet", to: "dp", label: "ListAndWatch", title: "장치 목록을 계속 받는다", detail: "kubelet이 목록을 구독한다. 플러그인은 장치 ID와 상태(Healthy, Unhealthy)를 스트림으로 보낸다. GPU 하나가 망가지면 그 장치만 Unhealthy로 바뀐다.", payload: "GPU-6f1c... Healthy\nGPU-8a02... Healthy\nGPU-91be... Healthy\nGPU-c4d7... Healthy" },
+    { from: "kubelet", to: "api", label: "Node status", title: "노드 용량에 숫자로 적는다", detail: "건강한 장치 수가 노드의 capacity와 allocatable에 nvidia.com/gpu: 4로 올라간다. 여기서부터 장치 ID는 사라지고 숫자만 남는다." },
+    { from: "sched", to: "api", label: "Bind", title: "스케줄러는 개수만 센다", detail: "limits에 nvidia.com/gpu: 1을 적은 Pod를 남은 개수가 1 이상인 노드로 보낸다. 어느 GPU를 줄지는 스케줄러가 정하지 않는다." },
+    { from: "kubelet", to: "dp", label: "Allocate", title: "어느 장치를 줄지는 노드에서 정한다", detail: "kubelet이 비어 있는 장치 ID를 골라 플러그인에 Allocate를 부른다. 플러그인은 컨테이너에 넣을 장치 파일, 환경 변수, 마운트(또는 CDI 장치 이름)를 돌려준다.", payload: "NVIDIA_VISIBLE_DEVICES=GPU-8a02...\n/dev/nvidia1, /dev/nvidiactl" },
+    { from: "kubelet", to: "kubelet", label: "컨테이너 생성", title: "런타임이 장치를 꽂는다", detail: "containerd가 그 답대로 컨테이너를 만든다. 컨테이너 안의 nvidia-smi에는 받은 GPU 한 장만 보인다." },
+  ]}
+/>
+
+중요한 점은 세 번째 단계에서 정보가 줄어든다는 것이다. 플러그인은 GPU마다 ID와 상태를 알지만, 스케줄러가 보는 것은 `4`라는 숫자뿐이다. 이 노드의 GPU가 40GB짜리인지 80GB짜리인지, 같은 NVLink로 이어진 것인지 스케줄러는 모른다. 뒤에서 보는 DRA가 바로 이 부분을 바꾼다.
+
+kwok 노드에 디바이스 플러그인이 올렸을 법한 용량을 직접 적었다. 실제 GPU 노드에서도 `kubectl describe node`의 이 칸을 먼저 본다.
+
+```bash
+# GPU 노드의 용량과 이미 나간 양을 본다
+kubectl describe node gpu-node-1 | sed -n '/Capacity/,/System Info/p;/Allocated resources/,/Events/p'
+```
+
+```text
+Capacity:
+  cpu:             32
+  memory:          256Gi
+  nvidia.com/gpu:  4
+  pods:            110
+Allocatable:
+  cpu:             32
+  memory:          256Gi
+  nvidia.com/gpu:  4
+  pods:            110
+System Info:
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests  Limits
+  --------           --------  ------
+  cpu                0 (0%)    0 (0%)
+  memory             0 (0%)    0 (0%)
+  ephemeral-storage  0 (0%)    0 (0%)
+  nvidia.com/gpu     1         1
+```
+
+`Allocatable`의 `nvidia.com/gpu`가 4인데 `Allocated`가 1이면 세 장이 남았다. 실제 노드에서 `Capacity`에 `nvidia.com/gpu` 줄이 아예 없거나 0이면 스케줄러 문제가 아니다. 플러그인이 등록하지 못한 것이니 드라이버와 플러그인 Pod 로그로 간다.
+
+## 정수로만, 요청과 상한은 같게
+
+extended resource에는 CPU와 다른 규칙이 둘 있다. 소수점을 쓸 수 없고, requests와 limits가 같아야 한다. GPU 반 장을 달라거나 평소엔 한 장, 바쁠 땐 두 장을 달라고 하면 API 서버가 바로 거절한다.
+
+```yaml
+# half-gpu.yaml: 반 장을 달라는 Pod
+resources:
+  limits: {nvidia.com/gpu: 500m}
+---
+# overcommit-gpu.yaml: 요청과 상한이 다른 Pod
+resources:
+  requests: {nvidia.com/gpu: 1}
+  limits: {nvidia.com/gpu: 2}
+```
+
+```text
+The Pod "half-gpu" is invalid: 
+* spec.containers[0].resources.limits[nvidia.com/gpu]: Invalid value: "500m": must be an integer
+* spec.containers[0].resources.requests[nvidia.com/gpu]: Invalid value: "500m": must be an integer
+The Pod "overcommit-gpu" is invalid: spec.containers[0].resources.requests: Invalid value: "1": must be equal to nvidia.com/gpu limit of 2
+```
+
+limits만 적으면 requests가 같은 값으로 채워진다. 그래서 매니페스트에는 보통 `limits`만 쓴다. 이 규칙 때문에 GPU에는 오버커밋이 없다. 한 장은 한 컨테이너가 통째로 가져가고, 그 컨테이너가 GPU를 1%만 써도 다른 Pod는 그 장을 못 받는다. 추론 서버 열 개가 GPU 열 장을 붙잡고 노는 장면이 여기서 나온다. 나눠 쓰려면 아래에서 보는 MIG나 time-slicing이 필요하다.
+
+## GPU 노드는 따로 묶어 둔다
+
+GPU 노드는 비싸다. 아무 Pod나 들어와서 CPU와 메모리를 먼저 차지하면, 정작 GPU Pod는 GPU가 남아도 CPU가 모자라 못 들어간다. 그래서 GPU 노드 풀에는 테인트를 걸어 일반 Pod를 막고, GPU Pod에만 톨러레이션과 노드 선택 조건을 준다. 아래 그림에서 다음을 누르면 세 Pod가 각자 어디로 가는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="테인트는 일반 Pod를 막고, 톨러레이션과 라벨이 GPU Pod를 GPU 노드로 보낸다"
+  zones={[
+    { id: "cpu", label: "cpu 풀", x: 6, y: 120, w: 180, h: 172, tone: "public" },
+    { id: "gpu", label: "gpu 풀 taint", x: 204, y: 120, w: 190, h: 172, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "sched", label: "scheduler", sub: "kube-scheduler", x: 200, y: 40, icon: "server", w: 120 },
+    { id: "cpu1", label: "cpu-node-1", sub: "cpu 16", x: 96, y: 190, icon: "server", w: 120 },
+    { id: "gpu1", label: "gpu-node-1", sub: "gpu 4", x: 299, y: 190, icon: "server", w: 120 },
+    { id: "web", label: "web", sub: "Running", x: 96, y: 258, icon: "container" },
+    { id: "train", label: "train-1gpu", sub: "Running", x: 299, y: 258, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "sched", to: "cpu1" },
+    { from: "sched", to: "gpu1" },
+    { from: "cpu1", to: "web" },
+    { from: "gpu1", to: "train" },
+  ]}
+  steps={[
+    { path: ["sched", "gpu1"], packet: "web", blocked: true, highlight: ["gpu"], title: "일반 Pod는 GPU 노드에 못 간다", detail: "gpu-node-1에는 nvidia.com/gpu=present:NoSchedule 테인트가 있다. 톨러레이션이 없는 web은 이 노드를 후보에서 뺀다.", payload: "Taints: nvidia.com/gpu=present:NoSchedule" },
+    { path: ["sched", "cpu1", "web"], packet: "web", title: "남은 곳으로 간다", detail: "web은 cpu-node-1에 자리를 잡는다. GPU 노드의 CPU와 메모리는 GPU Pod 몫으로 남는다." },
+    { path: ["sched", "cpu1"], packet: "gpu:1", blocked: true, highlight: ["cpu"], title: "GPU가 없는 노드는 탈락한다", detail: "train-no-tol은 GPU 한 장을 원한다. cpu-node-1에는 nvidia.com/gpu가 0개라 Insufficient로 빠진다." },
+    { path: ["sched", "gpu1"], packet: "gpu:1", blocked: true, highlight: ["gpu"], title: "톨러레이션이 없으면 GPU 노드도 탈락한다", detail: "남은 gpu-node-1은 테인트 때문에 빠진다. 두 노드 모두 탈락해 Pending이다. 이벤트에 두 이유가 함께 찍힌다." },
+    { path: ["sched", "gpu1", "train"], packet: "gpu:1", title: "톨러레이션과 라벨을 함께 준다", detail: "train-1gpu는 테인트를 견디는 톨러레이션과 nvidia.com/gpu.present=true 노드 선택 조건이 있다. gpu-node-1에 들어가 4장 중 1장을 받는다." },
+  ]}
+/>
+
+실제로 넷을 한 번에 올리면 이렇게 된다. `train-4gpu`는 톨러레이션은 있지만 네 장을 원하는데 이미 한 장이 나갔다.
+
+```yaml
+# train-1gpu: 톨러레이션 + 노드 선택 + GPU 1장
+spec:
+  tolerations:
+  - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  nodeSelector: {nvidia.com/gpu.present: "true"}
+  containers:
+  - name: train
+    image: nvcr.io/nvidia/pytorch:25.01-py3
+    resources:
+      limits: {nvidia.com/gpu: 1}
+```
+
+```bash
+# Pod가 어느 노드에 갔는지, 못 간 Pod의 이유는 무엇인지 본다
+kubectl get pods -o wide
+kubectl describe pod train-no-tol | sed -n '/Events/,$p'
+kubectl describe pod train-4gpu | sed -n '/Events/,$p'
+```
+
+```text
+NAME           READY   STATUS    RESTARTS   AGE   IP         NODE         NOMINATED NODE   READINESS GATES
+train-1gpu     1/1     Running   0          4s    10.0.0.1   gpu-node-1   <none>           <none>
+train-4gpu     0/1     Pending   0          4s    <none>     <none>       <none>           <none>
+train-no-tol   0/1     Pending   0          4s    <none>     <none>       <none>           <none>
+web            1/1     Running   0          4s    10.0.0.2   cpu-node-1   <none>           <none>
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  4s    default-scheduler  0/2 nodes are available: 1 Insufficient nvidia.com/gpu, 1 node(s) had untolerated taint(s). preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling.
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  4s    default-scheduler  0/2 nodes are available: 2 Insufficient nvidia.com/gpu. preemption: 0/2 nodes are available: 1 No preemption victims found for incoming pod, 1 Preemption is not helpful for scheduling.
+```
+
+이 메시지는 노드마다 탈락 이유를 세어 적은 것이다. 처음 보면 헷갈리니 조각으로 나눠 읽어 둔다.
+
+<UrlAnatomy
+  caption="FailedScheduling 메시지는 노드별 탈락 이유의 집계다"
+  base="0/2 nodes are available"
+  separator=": "
+  joiner=", "
+  params={[
+    { key: "1 Insufficient nvidia.com/gpu", display: "1 Insufficient nvidia.com/gpu", title: "개수가 모자란 노드 수", description: "남은 nvidia.com/gpu가 요청보다 적은 노드가 1개다. GPU가 아예 없는 cpu-node-1이 여기에 들어간다. 이 숫자가 GPU 노드 수와 같으면 노드에 플러그인이 용량을 올렸는지부터 본다." },
+    { key: "1 node(s) had untolerated taint(s)", display: "1 node(s) had untolerated taint(s)", title: "테인트에 막힌 노드 수", description: "GPU는 있지만 테인트를 견디지 못해 빠진 노드다. Pod 스펙의 tolerations 오타(key 이름, effect)를 먼저 본다." },
+    { key: "preemption", value: "…", display: "preemption: 2 Preemption is not helpful", title: "선점해도 소용없는지", description: "낮은 우선순위 Pod를 쫓아내면 자리가 나는지 따져 본 결과다. 테인트처럼 쫓아내도 안 풀리는 이유면 not helpful이 붙는다." },
+  ]}
+/>
+
+GPU 풀 라벨은 손으로 붙이기보다 NVIDIA GPU Feature Discovery가 붙이는 값을 쓰는 편이 낫다. `nvidia.com/gpu.product`, `nvidia.com/gpu.memory`, `nvidia.com/gpu.count`, `nvidia.com/mig.capable` 같은 라벨이 노드마다 자동으로 붙어서, "A100 80GB 노드만"처럼 고를 수 있다. 관리형 쿠버네티스에서 GPU 노드 풀을 만들면 같은 모양의 `nvidia.com/gpu` 테인트를 자동으로 거는 곳도 있다. GKE가 그렇고, EKS는 노드 그룹 설정에 직접 적는다.
+
+톨러레이션을 매번 적기 귀찮으면 API 서버의 `ExtendedResourceToleration` 어드미션 플러그인을 켠다. 테인트 키가 extended resource 이름과 같으면, 그 자원을 요청한 Pod에 맞는 톨러레이션을 자동으로 붙여 준다. 테인트 키를 `nvidia.com/gpu`로 맞춰 두는 이유가 이것이다.
+
+흔한 실수는 테인트 없이 라벨만 쓰는 것이다. `nodeSelector`는 "GPU Pod는 GPU 노드로"만 강제하고, "일반 Pod는 GPU 노드에 오지 마라"는 막지 못한다. 클러스터 오토스케일러나 Karpenter를 쓴다면 테인트가 없는 GPU 노드풀에 일반 Pod가 들어가 비싼 노드가 내려가지 않는 일도 생긴다.
+
+## 한 장을 나눠 쓰는 세 가지 방법
+
+추론이나 노트북처럼 GPU를 조금씩 쓰는 일에 한 장씩 주면 낭비다. NVIDIA 디바이스 플러그인은 한 장을 여러 Pod에 나눠 주는 방법을 세 가지 지원한다. 셋은 무엇을 나누느냐가 다르다.
+
+MIG(Multi-Instance GPU)는 A100, H100 같은 데이터센터 GPU를 하드웨어에서 잘라 독립된 작은 GPU로 만든다. 메모리와 연산 유닛이 칸막이로 나뉘어서, 한 조각의 Pod가 메모리를 다 써도 옆 조각은 영향이 없다. A100 40GB는 `1g.5gb` 조각 일곱 개까지 나뉜다. 플러그인의 `migStrategy`가 `single`이면 노드의 모든 조각을 그냥 `nvidia.com/gpu`로 세고, `mixed`면 `nvidia.com/mig-1g.5gb`, `nvidia.com/mig-3g.20gb`처럼 조각 크기마다 다른 자원 이름으로 알린다. 조각 모양은 미리 정해 두는 것이라, 바꾸려면 그 GPU를 비우고 다시 잘라야 한다.
+
+time-slicing은 칸막이 없이 시간을 나눈다. 설정에 `replicas: 4`를 주면 플러그인은 GPU 한 장을 네 개로 알리고, CUDA가 프로세스들에 번갈아 시간을 준다. README의 경고대로 메모리 격리가 없고 같은 장애 영역에 있다. 한 Pod가 메모리를 다 쓰면 옆 Pod가 OOM으로 죽는다. MPS는 그 중간이다. 제어 데몬이 메모리와 연산량에 상한을 걸어 공간을 나누지만, 디바이스 플러그인에서는 v0.15.0부터 실험 기능으로 표시돼 있고 MIG가 켜진 장치에서는 쓸 수 없다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="MIG는 칸막이로 나누고, time-slicing은 같은 칸을 번갈아 쓴다"
+  zones={[
+    { id: "mig", label: "A100 MIG 1g.5gb x7", x: 6, y: 100, w: 188, h: 192, tone: "private" },
+    { id: "ts", label: "T4 time-slicing x4", x: 206, y: 100, w: 188, h: 192, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "sched", label: "scheduler", sub: "gpu 개수만 셈", x: 200, y: 40, icon: "server", w: 120 },
+    { id: "m1", label: "mig slice 0", sub: "5GB 전용", x: 100, y: 160, icon: "lock", w: 120 },
+    { id: "m2", label: "mig slice 1", sub: "5GB 전용", x: 100, y: 240, icon: "lock", w: 120 },
+    { id: "t", label: "T4 16GB", sub: "공유 메모리", x: 300, y: 160, icon: "db", w: 120 },
+    { id: "p3", label: "infer-c", sub: "replica 3/4", x: 300, y: 240, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "sched", to: "m1" },
+    { from: "sched", to: "t" },
+    { from: "m1", to: "m2", dashed: true },
+    { from: "t", to: "p3" },
+  ]}
+  steps={[
+    { path: ["sched", "m1"], packet: "gpu:1", highlight: ["mig"], title: "MIG 조각 하나를 받는다", detail: "single 전략이면 조각 일곱 개가 nvidia.com/gpu: 7로 보인다. Pod는 그중 하나를 통째로 받는다." },
+    { path: ["m1", "m2"], packet: "OOM", blocked: true, title: "옆 조각에는 번지지 않는다", detail: "slice 0의 Pod가 메모리를 다 써도 slice 1의 메모리는 따로다. 장애도 그 조각 안에서 끝난다." },
+    { path: ["sched", "t", "p3"], packet: "gpu:1", highlight: ["ts"], title: "time-slicing은 같은 장을 또 준다", detail: "replicas: 4면 T4 한 장이 nvidia.com/gpu: 4로 보인다. infer-c는 세 번째 몫을 받았지만 실제로는 같은 GPU 전체를 번갈아 쓴다." },
+    { path: ["p3", "t"], packet: "16GB", blocked: true, title: "메모리는 나뉘지 않는다", detail: "infer-c가 16GB를 다 잡으면 같은 장을 쓰는 다른 세 Pod가 메모리 할당에 실패한다. 한 장애가 네 Pod 모두의 장애다." },
+  ]}
+/>
+
+time-slicing 설정은 디바이스 플러그인의 설정 파일(Helm이면 ConfigMap)에 이렇게 적는다. README에 있는 형식이다.
+
+```yaml
+# NVIDIA k8s-device-plugin 설정 (time-slicing)
+version: v1
+sharing:
+  timeSlicing:
+    renameByDefault: true             # 자원 이름을 nvidia.com/gpu.shared로 바꿔 알린다
+    failRequestsGreaterThanOne: true  # 공유 GPU를 2개 이상 요청하면 거절한다
+    resources:
+    - name: nvidia.com/gpu
+      replicas: 4                     # 한 장을 4개로 알린다
+```
+
+두 옵션은 켜 두는 편이 낫다. `renameByDefault`가 꺼져 있으면 공유 GPU와 전용 GPU가 같은 `nvidia.com/gpu`라는 이름으로 섞여서, 학습 Job이 공유 GPU 노드에 떨어져도 알 길이 없다. `failRequestsGreaterThanOne`이 꺼져 있으면 공유 GPU를 두 개 요청한 Pod가 두 배의 연산을 받는다고 오해한다. 실제로는 같은 장을 번갈아 쓸 뿐이다. README는 이 값을 켜라고 권하지만 하위 호환 때문에 기본값은 `false`다. 또 하나, 공유 방식은 노드 단위다. 한 노드 안에서 GPU마다 다르게 정할 수 없으니 공유 노드와 전용 노드를 풀로 나눈다.
+
+## 개수로는 말할 수 없는 것
+
+여기까지가 디바이스 플러그인으로 할 수 있는 것이다. 써 보면 표현이 안 되는 요구가 금방 나온다.
+
+- "메모리 40GB 이상인 GPU 한 장"을 요청할 수 없다. 라벨로 노드를 고르는 것까지는 되지만, 한 노드에 40GB와 80GB가 섞여 있으면 어느 장을 받을지 고를 수 없다.
+- 한 장을 두 Pod가 의도적으로 함께 쓰는 것을 요청할 수 없다. time-slicing은 플러그인이 몰래 숫자를 부풀리는 방식이라 스케줄러는 공유인지 모른다.
+- 장치에 설정을 넘길 수 없다. "이 Pod에는 MIG 2g.10gb로 잘라서 달라"는 요청이 Pod 스펙에 들어갈 자리가 없다.
+- 장치 할당이 Pod 수명에 묶여 있다. Pod가 지워지면 장치도 풀린다. 여러 Pod를 거쳐 같은 장치를 이어 쓰려면 방법이 없다.
+
+이 한계는 플러그인이 장치를 개수로만 알려 주기 때문에 생긴다. 스케줄러가 장치의 속성을 볼 수 있고, 사용자가 조건을 적을 수 있으면 풀린다. DRA가 그렇게 만든 API다.
+
+## DRA는 장치를 설명하고 요청을 조건으로 적는다
+
+DRA(Dynamic Resource Allocation)는 저장소에서 PV와 PVC가 하는 일을 장치에 하는 API다. 드라이버가 노드에 있는 장치를 속성과 함께 공개하고, 관리자는 장치 종류를 정의하고, 사용자는 조건을 적은 요청서를 Pod에 붙인다. 스케줄러는 요청서를 장치 목록과 맞춰 보고 직접 장치를 고른다. 객체는 넷이다.
+
+<ConceptDiagram
+  caption="드라이버는 ResourceSlice로 장치를 알리고, Pod는 ResourceClaim으로 조건을 적는다"
+  width={400}
+  height={340}
+  nodes={[
+    { id: "drv", label: "DRA 드라이버", sub: "노드마다", x: 90, y: 40, w: 130 },
+    { id: "slice", label: "ResourceSlice", sub: "장치와 속성", x: 90, y: 140, w: 130 },
+    { id: "class", label: "DeviceClass", sub: "관리자가 정함", x: 300, y: 40, w: 130 },
+    { id: "tmpl", label: "ClaimTemplate", sub: "Pod마다 claim", x: 300, y: 140, w: 130 },
+    { id: "claim", label: "ResourceClaim", sub: "조건 + 할당 결과", x: 300, y: 240, w: 130 },
+    { id: "sched", label: "스케줄러", sub: "장치를 고름", x: 90, y: 240, w: 130 },
+    { id: "pod", label: "Pod", sub: "resourceClaims", x: 195, y: 315, w: 110 },
+  ]}
+  edges={[
+    { from: "drv", to: "slice", label: "공개" },
+    { from: "tmpl", to: "class", label: "참조", dashed: true },
+    { from: "tmpl", to: "claim", label: "생성" },
+    { from: "sched", to: "slice", label: "읽음" },
+    { from: "sched", to: "claim", label: "할당 기록" },
+    { from: "pod", to: "claim", label: "사용" },
+  ]}
+/>
+
+- ResourceSlice: 드라이버가 만든다. 노드 하나(또는 장치 풀 하나)에 어떤 장치가 있는지와 각 장치의 속성(`attributes`), 용량(`capacity`)을 적는다. 사람이 고치는 객체가 아니다.
+- DeviceClass: 관리자가 만든다. "이 드라이버의 장치"처럼 장치 종류를 CEL 식으로 고르고, 드라이버에 넘길 설정을 붙일 수 있다. 스토리지의 StorageClass 자리다.
+- ResourceClaim: "이 클래스의 장치 하나, 단 메모리 64Gi 이상"처럼 조건을 적은 요청서다. 할당이 끝나면 어느 장치를 받았는지가 `status`에 적힌다.
+- ResourceClaimTemplate: Pod마다 새 claim을 찍어 내는 틀이다. Deployment처럼 Pod가 여럿이면 claim도 Pod마다 따로 생기고, Pod가 지워질 때 같이 지워진다.
+
+DRA의 핵심 기능은 `DynamicResourceAllocation` feature gate로 묶여 있다. 1.30–1.31 알파, 1.32–1.33 베타(기본 꺼짐)를 거쳐 1.34에서 stable이 되면서 `resource.k8s.io/v1` API와 함께 기본으로 켜졌고, 1.35부터는 끌 수 없게 잠겼다. 세부 기능은 따로 간다. 웹사이트 저장소의 feature gate 문서 기준으로 대안 목록을 적는 prioritized list와 관리자 접근(admin access)은 1.36에서, 기존 extended resource 요청을 DRA로 받는 기능(`DRAExtendedResource`)은 1.37에서 stable이 됐다. 장치를 동적으로 쪼개는 partitionable devices와 용량 일부만 가져가는 consumable capacity는 1.36에서 베타다. 1.37 클러스터에서 실제로 보이는 API는 이렇다.
+
+```bash
+# resource.k8s.io 그룹에 어떤 객체가 있나
+kubectl api-resources | grep resource.k8s
+```
+
+```text
+deviceclasses                                    resource.k8s.io/v1                false        DeviceClass
+devicetaintrules                                 resource.k8s.io/v1                false        DeviceTaintRule
+resourceclaims                                   resource.k8s.io/v1                true         ResourceClaim
+resourceclaimtemplates                           resource.k8s.io/v1                true         ResourceClaimTemplate
+resourceslices                                   resource.k8s.io/v1                false        ResourceSlice
+```
+
+DeviceClass와 ResourceSlice는 클러스터 범위(세 번째 칸 `false`)이고, claim과 template은 네임스페이스 범위다. 장치는 클러스터가 갖고, 요청은 팀이 낸다는 뜻이다.
+
+## kwok 클러스터에서 ResourceClaim을 할당받기
+
+실제 DRA 드라이버(NVIDIA는 `k8s-dra-driver-gpu`라는 별도 드라이버를 낸다)가 하는 일 중 ResourceSlice 공개만 손으로 대신했다. `gpu-node-2`에 40Gi와 80Gi GPU가 하나씩 있다고 알렸다.
+
+```yaml
+# 드라이버가 만들었을 ResourceSlice와, 관리자가 만드는 DeviceClass
+apiVersion: resource.k8s.io/v1
+kind: ResourceSlice
+metadata:
+  name: gpu-node-2-gpu.example.com
+spec:
+  driver: gpu.example.com
+  nodeName: gpu-node-2
+  pool: {name: gpu-node-2, generation: 1, resourceSliceCount: 1}
+  devices:
+  - name: gpu-0
+    attributes:
+      model: {string: A100-SXM4-40GB}
+    capacity:
+      memory: {value: 40Gi}
+  - name: gpu-1
+    attributes:
+      model: {string: A100-SXM4-80GB}
+    capacity:
+      memory: {value: 80Gi}
+---
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: gpu.example.com
+spec:
+  selectors:
+  - cel:
+      expression: device.driver == "gpu.example.com"
+```
+
+이제 사용자 쪽이다. 메모리 64Gi 이상인 장치 하나를 원하는 claim 틀과, 그 틀을 쓰는 Pod다. CEL 식에서 `device.capacity["gpu.example.com"].memory`는 드라이버 이름을 도메인으로 쓴 용량 값이다.
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: big-gpu
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: gpu.example.com
+          selectors:
+          - cel:
+              expression: device.capacity["gpu.example.com"].memory.compareTo(quantity("64Gi")) >= 0
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: llm-finetune}
+spec:
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: big-gpu
+  containers:
+  - name: train
+    image: nvcr.io/nvidia/pytorch:25.01-py3
+    resources:
+      claims:
+      - name: gpu       # 이 컨테이너가 위 claim을 쓴다
+```
+
+Pod를 만들고 몇 초 뒤의 모습이다. 아래 흐름도에서 그사이에 일어난 일을 단계별로 볼 수 있다.
+
+<SequenceDiagram
+  caption="claim 틀로 만든 claim을 스케줄러가 할당하고, kubelet이 드라이버에 준비를 맡긴다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "cm", label: "컨트롤러" },
+    { id: "sched", label: "스케줄러" },
+    { id: "kubelet", label: "kubelet" },
+    { id: "drv", label: "DRA 드라이버" },
+  ]}
+  steps={[
+    { from: "user", to: "cm", label: "Pod 생성", title: "Pod가 claim 틀을 가리킨다", detail: "Pod의 resourceClaims에 big-gpu 틀 이름이 있다. 아직 claim은 없다." },
+    { from: "cm", to: "cm", label: "claim 생성", title: "Pod 전용 claim이 생긴다", detail: "kube-controller-manager의 resourceclaim 컨트롤러가 틀로 llm-finetune-gpu-dww99를 만든다. 주인은 Pod라서 Pod가 지워지면 같이 지워진다.", payload: "llm-finetune-gpu-dww99   pending" },
+    { from: "sched", to: "sched", label: "slice와 맞춤", title: "조건에 맞는 장치를 찾는다", detail: "ResourceSlice의 장치마다 클래스 선택식과 claim 선택식을 계산한다. gpu-0(40Gi)은 64Gi 조건에서 떨어지고 gpu-1(80Gi)이 남는다." },
+    { from: "sched", to: "cm", label: "allocation 기록", title: "고른 장치를 claim에 적는다", detail: "claim의 status.allocation에 gpu-1과 그 장치가 있는 노드를 적고, reservedFor에 이 Pod를 적는다. 그 다음 Pod를 gpu-node-2에 바인딩한다.", payload: "device: gpu-1\nnodeSelector: gpu-node-2\nreservedFor: llm-finetune" },
+    { from: "kubelet", to: "drv", label: "NodePrepareResources", title: "노드에서 장치를 준비한다", detail: "kubelet이 드라이버의 kubelet 플러그인에 gRPC로 준비를 맡긴다. 드라이버는 장치를 설정하고 CDI 장치 이름을 돌려준다(kwok에는 이 단계가 없다)." },
+    { from: "kubelet", to: "kubelet", label: "컨테이너 생성", title: "런타임이 CDI로 장치를 꽂는다", detail: "containerd가 CDI 명세대로 장치 파일과 환경 변수를 넣어 컨테이너를 만든다. Pod가 끝나면 NodeUnprepareResources로 정리한다." },
+  ]}
+/>
+
+```bash
+# Pod가 어디로 갔나, claim은 어떤 상태인가, 무엇을 할당받았나
+kubectl get pod llm-finetune -o wide
+kubectl get resourceclaims
+kubectl get resourceclaim -o yaml | sed -n '/^  status:/,$p'
+```
+
+```text
+NAME           READY   STATUS    RESTARTS   AGE   IP         NODE         NOMINATED NODE   READINESS
+llm-finetune   1/1     Running   0          4s    10.0.0.3   gpu-node-2   <none>           <none>
+NAME                     STATE                AGE
+llm-finetune-gpu-dww99   allocated,reserved   4s
+  status:
+    allocation:
+      allocationTimestamp: "2026-10-21T01:29:26Z"
+      devices:
+        results:
+        - device: gpu-1
+          driver: gpu.example.com
+          pool: gpu-node-2
+          request: gpu
+      nodeSelector:
+        nodeSelectorTerms:
+        - matchFields:
+          - key: metadata.name
+            operator: In
+            values:
+            - gpu-node-2
+    reservedFor:
+    - name: llm-finetune
+      resource: pods
+      uid: 7fccd5ea-670e-4f77-968b-5e53a591daab
+```
+
+`STATE`의 두 단어를 나눠 읽는다. `allocated`는 장치가 정해졌다는 뜻이고, `reservedFor`에 소비자가 적히면 `reserved`가 붙는다. `devices.results`에 80Gi짜리 `gpu-1`이 있다. 디바이스 플러그인 방식과 달리 어느 장치를 줄지 스케줄러가 정했고, 그 결과가 API에 남는다. 장애가 났을 때 "이 Pod가 어느 GPU를 쓰고 있었나"를 `kubectl`로 볼 수 있다는 점이 운영에서 꽤 크다.
+
+## 장치가 다 나가면 claim은 pending에 머문다
+
+같은 틀을 쓰는 두 번째 Pod를 올렸다. 80Gi 장치는 이미 나갔고 40Gi는 조건에 맞지 않는다.
+
+```text
+NAME             READY   STATUS    RESTARTS   AGE
+llm-finetune-2   0/1     Pending   0          4s
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  4s    default-scheduler  0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 cannot allocate all claims. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.
+NAME                       STATE                AGE
+llm-finetune-2-gpu-p4hnk   pending              4s
+llm-finetune-gpu-dww99     allocated,reserved   15s
+```
+
+DRA에서 장치가 모자라면 `Insufficient`가 아니라 `cannot allocate all claims`가 찍힌다. 첫 번째 Pod를 지우자 claim이 함께 지워지고, 몇 초 뒤 두 번째 Pod가 같은 장치를 받았다.
+
+```text
+pod "llm-finetune" force deleted from default namespace
+NAME                       STATE                AGE
+llm-finetune-2-gpu-p4hnk   allocated,reserved   19s
+NAME             READY   STATUS    RESTARTS   AGE   IP         NODE         NOMINATED NODE
+llm-finetune-2   1/1     Running   0          19s   10.0.0.3   gpu-node-2   <none>
+```
+
+스케줄러가 장치를 고르는 방식은 단순한 첫 번째 맞춤이 아니다. 요청이 여러 개면 모든 요청을 동시에 만족하는 조합을 찾는다. 아래 그림은 요청 두 개(16Gi 이상, 64Gi 이상)를 장치 두 개에 맞추는 과정이다. 장치 목록에서 80Gi가 먼저 나오면, 앞 요청이 큰 장치를 먼저 집어 뒤 요청이 갈 곳을 잃는다.
+
+<AlgoTrace
+  caption="앞 요청이 큰 장치를 먼저 잡으면 되돌아가서 다른 조합을 찾는다"
+  cells={["gpu-1 80Gi", "gpu-0 40Gi"]}
+  memoryLabel="할당"
+  steps={[
+    { pointer: 0, memory: [], caption: "요청 small(16Gi 이상)이 목록 첫 장치 gpu-1을 본다. 조건에 맞다." },
+    { pointer: 0, memory: ["small→gpu-1"], caption: "small에 gpu-1을 임시로 준다." },
+    { pointer: 1, memory: ["small→gpu-1"], caption: "요청 big(64Gi 이상)은 남은 gpu-0을 본다. 40Gi라 맞지 않는다. 더 볼 장치가 없다." },
+    { pointer: 0, memory: [], caption: "되돌아간다. small에 준 gpu-1을 회수한다." },
+    { pointer: 1, memory: ["small→gpu-0"], caption: "small에 다음 후보 gpu-0을 준다. 16Gi 이상이니 맞다." },
+    { pointer: 0, found: [0, 1], memory: ["small→gpu-0", "big→gpu-1"], caption: "big이 gpu-1을 받는다. 두 요청이 다 채워져 이 노드에 할당이 성립한다." },
+  ]}
+/>
+
+조합 탐색은 장치와 요청이 많으면 비싸진다. 그래서 스케줄러에는 노드 하나에서 DRA 필터가 너무 오래 걸리면 끊는 시간 제한(`DRASchedulerFilterTimeout`, 1.34 알파부터)도 생겼다. 직접 짜 보면 왜 되돌아가야 하는지가 손에 잡힌다. 아래 함수는 장치 목록과 요청 목록을 받아 요청 이름별로 장치 이름을 돌려주고, 조합이 없으면 `null`을 돌려준다. 장치 하나는 한 요청에만 줄 수 있다.
+
+<CodePlayground
+  caption="요청마다 조건에 맞는 장치를 하나씩, 겹치지 않게 고른다"
+  functionName="allocate"
+  initialCode={`function allocate(devices, requests) {
+  // devices: [{ name, memGi }]
+  // requests: [{ name, minMemGi }]
+  // 반환: { 요청이름: 장치이름 } 또는 null
+  return null;
+}`}
+  solution={`function allocate(devices, requests) {
+  const used = new Set();
+  const result = {};
+  function tryFrom(i) {
+    if (i === requests.length) return true;
+    const req = requests[i];
+    for (const d of devices) {
+      if (used.has(d.name) || d.memGi < req.minMemGi) continue;
+      used.add(d.name);
+      result[req.name] = d.name;
+      if (tryFrom(i + 1)) return true;
+      used.delete(d.name);
+      delete result[req.name];
+    }
+    return false;
+  }
+  return tryFrom(0) ? result : null;
+}`}
+  tests={[
+    { label: "64Gi 이상 하나", args: [[{ name: "gpu-0", memGi: 40 }, { name: "gpu-1", memGi: 80 }], [{ name: "big", minMemGi: 64 }]], expected: { big: "gpu-1" } },
+    { label: "되돌아가야 하는 순서", args: [[{ name: "gpu-1", memGi: 80 }, { name: "gpu-0", memGi: 40 }], [{ name: "small", minMemGi: 16 }, { name: "big", minMemGi: 64 }]], expected: { small: "gpu-0", big: "gpu-1" } },
+    { label: "큰 장치는 하나뿐", args: [[{ name: "gpu-0", memGi: 40 }, { name: "gpu-1", memGi: 80 }], [{ name: "a", minMemGi: 64 }, { name: "b", minMemGi: 64 }]], expected: null },
+    { label: "조건 없는 요청 둘", args: [[{ name: "gpu-0", memGi: 40 }, { name: "gpu-1", memGi: 80 }], [{ name: "a", minMemGi: 0 }, { name: "b", minMemGi: 0 }]], expected: { a: "gpu-0", b: "gpu-1" } },
+  ]}
+/>
+
+## 장치 하나를 여러 Pod가 함께 쓰기
+
+claim 틀 대신 ResourceClaim을 직접 만들고 여러 Pod가 같은 이름을 가리키면, 그 Pod들은 장치 하나를 함께 쓴다. time-slicing처럼 플러그인이 숫자를 부풀리는 게 아니라, 공유한다는 사실이 API에 드러난다.
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata: {name: shared-gpu}
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly:
+        deviceClassName: gpu.example.com
+---
+# notebook-a, notebook-b 두 Pod가 같은 claim 이름을 쓴다
+spec:
+  resourceClaims:
+  - {name: gpu, resourceClaimName: shared-gpu}
+```
+
+```text
+NAME         READY   STATUS    RESTARTS   AGE   IP         NODE         NOMINATED NODE   R
+notebook-a   1/1     Running   0          5s    10.0.0.4   gpu-node-2   <none>           <
+notebook-b   1/1     Running   0          5s    10.0.0.5   gpu-node-2   <none>           <
+NAME         STATE                AGE
+shared-gpu   allocated,reserved   5s
+notebook-a
+notebook-b
+gpu-0
+```
+
+마지막 세 줄은 `reservedFor`의 두 Pod와 할당된 장치 `gpu-0`이다. 장치는 한 노드에 있으니 claim을 공유하는 Pod는 모두 그 노드로 간다. 공유 claim은 Pod가 지워져도 남는다. 다 쓴 claim은 사람이 지워야 장치가 풀린다는 뜻이고, 이걸 잊으면 아무도 안 쓰는 GPU가 계속 잡혀 있다.
+
+## nvidia.com/gpu 요청을 그대로 DRA로 받기
+
+DRA로 옮긴다고 모든 팀이 매니페스트를 고쳐야 하면 옮기기 어렵다. 1.37에서 stable이 된 extended resource 매핑은 DeviceClass에 `extendedResourceName`을 적어 두면 예전처럼 `limits`에 자원 이름만 적은 Pod도 DRA 장치로 받게 해 준다.
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: gpu-ext.example.com
+spec:
+  extendedResourceName: example.com/gpu   # 이 이름을 요청한 Pod를 이 클래스로 받는다
+  selectors:
+  - cel:
+      expression: device.driver == "gpu.example.com"
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: legacy-gpu-pod}
+spec:
+  containers:
+  - name: infer
+    image: nvcr.io/nvidia/tritonserver:25.01-py3
+    resources:
+      limits: {example.com/gpu: 1}        # 예전 방식 그대로
+```
+
+```text
+NAME             READY   STATUS    RESTARTS   AGE   IP         NODE         NOMINATED NODE
+legacy-gpu-pod   1/1     Running   0          5s    10.0.0.4   gpu-node-2   <none>        
+NAME                                      STATE                AGE
+legacy-gpu-pod-extended-resources-4xp9v   allocated,reserved   6s
+llm-finetune-2-gpu-p4hnk                  allocated,reserved   31s
+{"requestMappings":[{"containerName":"infer","requestName":"container-0-request-0","resourceName":"example.com/gpu"}],"resourceClaimName":"legacy-gpu-pod-extended-resources-4xp9v"}
+```
+
+`gpu-node-2`는 노드 용량에 `example.com/gpu`가 하나도 없는데 Pod가 거기로 갔다. 스케줄러가 claim(`...-extended-resources-4xp9v`)을 대신 만들어 남은 `gpu-0`을 할당했고, Pod의 `status.extendedResourceClaimStatus`에 그 연결이 적혔다. 디바이스 플러그인 노드와 DRA 노드가 섞인 클러스터에서 옮기는 동안 쓰기 좋다.
+
+언제 무엇을 고르나. 장치를 통째로 한 장씩 주고 종류가 하나뿐이면 디바이스 플러그인으로 충분하고 도구도 익숙하다. 노드 안에 종류가 섞여 있거나, 장치 속성으로 골라야 하거나, Pod 사이 공유와 장치 설정을 명시해야 하면 DRA가 맞다. 다만 DRA는 장치 드라이버가 DRA를 지원해야 쓸 수 있고, 드라이버마다 성숙도가 다르다. 도입 전에 쓰는 GPU 드라이버의 DRA 지원 범위부터 확인한다.
+
+## GPU Pod가 안 뜰 때 보는 순서
+
+GPU 문제는 스케줄링 단계와 노드 단계로 나뉜다. Pending이면 스케줄링, ContainerCreating에서 멈추거나 컨테이너 안에서 GPU가 안 보이면 노드 쪽이다.
+
+```bash
+# 1. 노드가 GPU를 알리고 있나 (0이거나 없으면 플러그인·드라이버 문제)
+kubectl get nodes -o custom-columns='NAME:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu'
+# 2. 디바이스 플러그인 Pod가 노드마다 떠 있나 (GPU Operator라면 네임스페이스가 gpu-operator)
+kubectl -n gpu-operator get pods -o wide | grep -E 'device-plugin|driver'
+# 3. Pending 이유가 무엇인가 (Insufficient, untolerated taint, cannot allocate all claims)
+kubectl describe pod <pod> | sed -n '/Events/,$p'
+# 4. DRA라면 claim 상태와 할당 결과, 노드의 ResourceSlice를 본다
+kubectl get resourceclaims
+kubectl get resourceslices --field-selector spec.nodeName=<node>
+# 5. 컨테이너 안에서 GPU가 보이나
+kubectl exec -it <pod> -- nvidia-smi -L
+```
+
+증상별로 자주 만나는 원인은 이렇다.
+
+- 노드의 `nvidia.com/gpu`가 갑자기 4에서 3으로 줄었다. 플러그인이 장치 하나를 Unhealthy로 보고했다. 그 GPU를 쓰던 Pod는 그대로 남아 있을 수 있으니 `nvidia-smi`의 XID 오류와 드라이버 로그를 본다.
+- 노드를 재부팅한 뒤 GPU가 0개다. 드라이버 모듈이 커널 업데이트 뒤 다시 빌드되지 않았거나 드라이버 Pod가 아직 준비 중이다. 디바이스 플러그인은 드라이버가 준비된 뒤에야 장치를 알린다.
+- `Insufficient nvidia.com/gpu`인데 노드에 GPU가 남아 보인다. 노드 용량 숫자와 비교하지 말고 `Allocated resources`를 본다. 끝난 Job의 Pod가 Completed로 남아 있어도 GPU는 풀린다. Running인데 아무 일도 안 하는 Pod가 붙잡고 있는 경우가 더 흔하다.
+- GPU 사용률이 늘 낮다. DCGM 익스포터의 `DCGM_FI_DEV_GPU_UTIL`을 Pod별로 보고, 추론처럼 가벼운 일은 MIG나 time-slicing 노드로 옮긴다.
+- DRA claim이 `pending`에서 안 움직인다. `kubectl get resourceslices`에 그 노드가 없으면 드라이버가 장치를 공개하지 못한 것이다. slice는 있는데 할당이 안 되면 claim의 CEL 식을 의심한다. 속성 이름의 도메인(`gpu.example.com`)을 빠뜨리는 실수가 많다.
+
+## 개수에서 설명으로
+
+디바이스 플러그인은 장치를 개수로 바꿔 스케줄러에 넘기고, 어느 장치를 줄지는 노드에서 정한다. 그래서 단순하지만 조건과 공유를 말할 수 없다. DRA는 드라이버가 장치의 속성을 ResourceSlice로 공개하고, 사용자가 ResourceClaim에 조건을 적고, 스케줄러가 장치를 골라 결과를 claim에 적는다. GPU 노드 풀은 어느 방식이든 테인트로 막고 라벨로 고르며, 한 장을 나눌 때는 격리가 필요하면 MIG, 아니면 time-slicing을 쓴다. 여러 GPU Pod를 한꺼번에 띄워야 하는 학습 Job의 대기열과 할당량은 [Kueue와 배치 스케줄링 글](/posts/k8s-batch-kueue)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스는 GPU를 어떻게 스케줄링하나요?
+
+기본 스케줄러는 GPU를 모르고, 노드의 extended resource 개수만 센다. 노드마다 뜬 디바이스 플러그인이 kubelet에 장치 목록을 알리면 kubelet이 `nvidia.com/gpu: 4`처럼 노드 용량에 적는다. Pod가 `limits`에 개수를 적으면 스케줄러는 남은 개수가 있는 노드로 보내고, 어느 장치를 줄지는 kubelet이 플러그인의 Allocate로 정한다.
+
+### GPU를 0.5개 요청하거나 requests와 limits를 다르게 줄 수 있나요?
+
+안 된다. extended resource는 정수여야 하고 requests와 limits가 같아야 해서 API 서버가 거절한다. 그래서 GPU에는 오버커밋이 없고 한 장은 한 컨테이너가 통째로 가져간다. 한 장을 나누려면 MIG로 하드웨어를 자르거나 time-slicing으로 플러그인이 한 장을 여러 개로 알리게 해야 한다.
+
+### MIG와 time-slicing은 무엇이 다른가요?
+
+격리가 다르다. MIG는 GPU를 하드웨어에서 잘라 메모리와 연산 유닛을 조각마다 따로 주니 한 조각의 OOM이나 장애가 옆으로 번지지 않는다. time-slicing은 같은 GPU를 시간으로 번갈아 쓸 뿐이라 메모리 격리가 없고 장애 영역이 같다. MIG는 지원하는 GPU에서만 되고 조각 모양을 미리 정해야 하며, time-slicing은 어떤 GPU에서도 되지만 성능과 메모리를 보장하지 않는다.
+
+### GPU 노드 풀은 어떻게 구성하나요?
+
+테인트로 일반 Pod를 막고, 라벨로 GPU Pod를 고른다. `nvidia.com/gpu=present:NoSchedule` 같은 테인트를 걸고 GPU Pod에 톨러레이션과 `nvidia.com/gpu.product` 같은 노드 선택 조건을 준다. 라벨만 쓰면 일반 Pod가 GPU 노드의 CPU를 차지해 GPU가 남아도 못 쓰는 일이 생긴다. 테인트 키를 자원 이름과 같게 두면 `ExtendedResourceToleration` 어드미션 플러그인으로 톨러레이션을 자동으로 붙일 수 있다.
+
+### DRA는 왜 나왔고, 디바이스 플러그인과 무엇이 다른가요?
+
+디바이스 플러그인은 장치를 개수로만 알려서 "메모리 64Gi 이상", "이 장치를 두 Pod가 공유", "이 설정으로 잘라서" 같은 요구를 표현할 수 없다. DRA는 드라이버가 장치와 속성을 ResourceSlice로 공개하고, 사용자가 ResourceClaim에 CEL 조건을 적으면 스케줄러가 직접 장치를 골라 claim의 status에 적는다. 1.34에서 GA가 됐고 `resource.k8s.io/v1` API를 쓴다.
+
+### ResourceClaim과 ResourceClaimTemplate은 언제 각각 쓰나요?
+
+Pod마다 따로 장치가 필요하면 틀을, 여러 Pod가 같은 장치를 써야 하면 claim을 직접 만든다. 틀로 만든 claim은 Pod가 주인이라 Pod와 함께 지워지고, 직접 만든 claim은 Pod가 사라져도 남아 장치를 계속 잡고 있다. 그래서 공유 claim은 다 쓴 뒤 지우는 절차가 필요하다.
+
+### GPU 노드가 있는데 Pod가 Insufficient nvidia.com/gpu로 Pending이면 무엇부터 보나요?
+
+노드가 GPU를 알리고 있는지부터 본다. `kubectl describe node`의 Allocatable에 `nvidia.com/gpu`가 없거나 0이면 스케줄러가 아니라 드라이버나 디바이스 플러그인 문제라 그 Pod의 로그로 간다. 숫자가 있으면 Allocated resources로 이미 나간 양을 보고, 이벤트에 테인트 이유가 함께 있으면 톨러레이션을 본다. DRA라면 `cannot allocate all claims`가 찍히니 claim 상태와 ResourceSlice를 확인한다.

@@ -1,0 +1,526 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-interpreter");
+
+쿠폰 발급 대상을 정하는 코드가 있다. 처음엔 `if (user.country === "KR" && user.age >= 19)` 한 줄이었다. 다음 달엔 "VIP는 나이 제한 없이", 그다음 달엔 "장바구니 5만 원 이상만"이 붙었다. 조건이 바뀔 때마다 배포를 기다리던 마케팅 팀이 결국 이렇게 묻는다. "조건을 관리자 화면에 글로 써 넣으면 안 되나요?"
+
+```text
+country == "KR" and (age >= 19 or vip)
+```
+
+이 문자열을 서버가 읽고 판단하려면 작은 언어 하나를 해석해야 한다. 문자열을 `eval`에 넘기는 유혹이 먼저 오지만, 그건 관리자 화면에 서버 셸을 열어 주는 일이다. 이번 글은 문법 규칙 하나를 클래스 하나로 만들고, 그 객체들로 만든 트리가 스스로 답을 계산하게 하는 인터프리터(Interpreter) 패턴이다. 다른 패턴과 어떻게 이어지는지는 [디자인 패턴 개요](/posts/design-patterns-overview)에 정리해 두었다.
+
+## 문법 한 줄이 클래스 하나가 된다
+
+먼저 이 작은 언어에 무엇이 있는지 적는다. 변수(`age`), 값(`19`, `"KR"`), 비교(`>=`), 그리고 `and`, `or`, `not`, 괄호다. 문법으로 쓰면 이렇다.
+
+```text
+or      := and ("or" and)*
+and     := unary ("and" unary)*
+unary   := "not" unary | primary
+primary := "(" or ")" | operand (CMP operand)?
+operand := NUMBER | STRING | IDENT
+```
+
+인터프리터 패턴은 이 규칙들을 클래스로 옮긴다. 더 쪼갤 수 없는 것(변수, 값)은 끝 기호(Terminal) 표현식, 다른 표현식을 품는 것(비교, `and`, `or`)은 비끝 기호(Nonterminal) 표현식이 된다. 모두 `interpret(context)` 하나만 가진다. Context는 해석에 필요한 바깥 정보로, 여기서는 사용자 한 명의 속성이다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="모든 노드가 interpret(ctx) 하나로 답한다"
+  nodes={[
+    { id: "client", label: "CouponService", sub: "Client", x: 85, y: 35, w: 130 },
+    { id: "ctx", label: "Context", sub: "user 속성", x: 310, y: 35, w: 110 },
+    { id: "expr", label: "Expr", sub: "interpret(ctx)", x: 200, y: 120, w: 130 },
+    { id: "term", label: "Variable", sub: "Terminal", x: 85, y: 220, w: 110 },
+    { id: "nonterm", label: "And · Or", sub: "Nonterminal", x: 310, y: 220, w: 120 },
+  ]}
+  edges={[
+    { from: "client", to: "expr", label: "interpret()" },
+    { from: "client", to: "ctx", label: "만든다", dashed: true },
+    { from: "term", to: "expr", label: "implements", dashed: true },
+    { from: "nonterm", to: "expr", label: "implements", dashed: true },
+    { from: "nonterm", to: "expr", label: "자식으로 품는다" },
+  ]}
+/>
+
+```ts
+type Value = string | number | boolean;
+type Context = Record<string, Value>;
+
+interface Expr {
+  interpret(ctx: Context): Value;
+}
+
+// 끝 기호: 더 쪼개지지 않는다
+class Literal implements Expr {
+  constructor(private readonly value: Value) {}
+  interpret() {
+    return this.value;
+  }
+}
+
+class Variable implements Expr {
+  constructor(private readonly name: string) {}
+  interpret(ctx: Context) {
+    if (!(this.name in ctx)) throw new Error(`unknown variable: ${this.name}`);
+    return ctx[this.name];
+  }
+}
+
+// 비끝 기호: 자식 표현식에게 먼저 묻고 그 답을 엮는다
+type CmpOp = "==" | "!=" | ">=" | "<=" | ">" | "<";
+class Compare implements Expr {
+  constructor(private readonly op: CmpOp, private readonly left: Expr, private readonly right: Expr) {}
+  interpret(ctx: Context) {
+    const a = this.left.interpret(ctx);
+    const b = this.right.interpret(ctx);
+    switch (this.op) {
+      case "==": return a === b;
+      case "!=": return a !== b;
+      case ">=": return a >= b;
+      case "<=": return a <= b;
+      case ">": return a > b;
+      case "<": return a < b;
+    }
+  }
+}
+
+class And implements Expr {
+  constructor(private readonly left: Expr, private readonly right: Expr) {}
+  interpret(ctx: Context) {
+    return Boolean(this.left.interpret(ctx)) && Boolean(this.right.interpret(ctx));
+  }
+}
+
+class Or implements Expr {
+  constructor(private readonly left: Expr, private readonly right: Expr) {}
+  interpret(ctx: Context) {
+    return Boolean(this.left.interpret(ctx)) || Boolean(this.right.interpret(ctx));
+  }
+}
+
+class Not implements Expr {
+  constructor(private readonly inner: Expr) {}
+  interpret(ctx: Context) {
+    return !this.inner.interpret(ctx);
+  }
+}
+```
+
+`And`가 자식 `Expr`을 품고, 그 자식이 또 `Or`일 수 있다. 하나와 묶음이 같은 인터페이스로 답하는 구조는 [컴포지트](/posts/pattern-composite)와 똑같다. 인터프리터는 컴포지트 트리에 "문법"이라는 의미를 얹은 것이라고 봐도 된다. `And`가 왼쪽이 거짓이면 오른쪽을 묻지 않는 것(단락 평가)도 자바스크립트의 `&&`를 그대로 빌려 쓴 결과다.
+
+## 문자열에서 트리까지는 패턴 밖의 일
+
+면접에서 자주 놓치는 부분이 있다. GoF의 인터프리터 패턴은 트리가 이미 있다고 가정한다. 문자열을 읽어 트리를 만드는 파싱은 패턴의 범위가 아니다. 실제로 쓰려면 두 단계를 직접 만들어야 한다. 문자열을 의미 있는 조각(토큰)으로 자르는 토큰화, 토큰 줄을 문법에 맞춰 트리로 세우는 파싱이다.
+
+아래는 위 규칙 문자열을 조각마다 눌러 보는 그림이다. 조각마다 어떤 노드가 되는지 적었다.
+
+<UrlAnatomy
+  caption="규칙 문자열 한 줄이 노드 여섯 개가 된다"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "c1", display: "country == \"KR\"", title: "Compare(Variable, Literal)", description: "변수 하나, 비교 연산자 하나, 값 하나가 비교 노드 하나로 묶인다. 문자열은 따옴표를 벗겨 Literal에 담는다.", required: true },
+    { key: "and", display: "and", title: "And 노드", description: "and는 or보다 먼저 묶인다. 그래서 문법에서 and 규칙이 or 규칙의 아래층에 있다. 아래층일수록 먼저 묶인다." },
+    { key: "open", display: "(", title: "괄호는 처음부터 다시", description: "괄호를 만나면 가장 위 규칙(or)부터 다시 읽는다. 재귀 호출이 한 층 깊어진다. 깊이를 세야 하는 이유가 여기 있다." },
+    { key: "c2", display: "age >= 19", title: "Compare(Variable, Literal)", description: "19는 숫자 토큰이라 Number로 바꿔 둔다. 문자열 \"19\"와 비교하면 결과가 달라질 수 있어서 토큰 단계에서 타입을 정한다." },
+    { key: "or", display: "or", title: "Or 노드", description: "괄호 안이라 바깥 and보다 먼저 묶인다. 괄호가 우선순위를 바꾸는 방법이 이것이다." },
+    { key: "vip", display: "vip )", title: "Variable 하나로 끝나는 식", description: "비교 없이 변수만 오면 그 값을 참·거짓으로 쓴다. 닫는 괄호를 만나면 재귀가 한 층 돌아온다.", code: "And(Compare(==, country, \"KR\"), Or(Compare(>=, age, 19), Variable(vip)))" },
+  ]}
+/>
+
+토큰화는 정규식 하나로 충분하다. `y` 플래그(sticky)를 쓰면 정규식이 `lastIndex` 위치에서만 맞춰 보기 때문에, 앞에서부터 한 조각씩 빈틈없이 잘라 나갈 수 있다.
+
+```ts
+type Token =
+  | { kind: "num"; value: number }
+  | { kind: "str"; value: string }
+  | { kind: "ident"; value: string }
+  | { kind: "op"; value: string };
+
+function tokenize(src: string): Token[] {
+  // 숫자 | "문자열" | 이름 | 연산자·괄호
+  const re = /\s*(?:(\d+(?:\.\d+)?)|"([^"]*)"|([A-Za-z_]\w*)|(==|!=|>=|<=|[()<>]))/y;
+  const tokens: Token[] = [];
+  let pos = 0;
+  while (pos < src.length) {
+    if (/^\s*$/.test(src.slice(pos))) break; // 남은 게 공백뿐이면 끝
+    re.lastIndex = pos;
+    const m = re.exec(src);
+    if (!m) throw new SyntaxError(`unexpected character at ${pos}: ${src[pos]}`);
+    pos = re.lastIndex;
+    if (m[1] !== undefined) tokens.push({ kind: "num", value: Number(m[1]) });
+    else if (m[2] !== undefined) tokens.push({ kind: "str", value: m[2] });
+    else if (m[3] !== undefined) tokens.push({ kind: "ident", value: m[3] });
+    else tokens.push({ kind: "op", value: m[4] });
+  }
+  return tokens;
+}
+```
+
+```text
+ident:country op:== str:KR ident:and op:( ident:age op:>= num:19 ident:or ident:vip op:)
+```
+
+파서는 재귀 하강(recursive descent) 방식으로 짠다. 문법 규칙 하나가 함수 하나다. `parseOr`는 `parseAnd`를 부르고, `parseAnd`는 `parseUnary`를, 괄호를 만나면 다시 `parseOr`를 부른다. 문법이 코드 모양에 그대로 드러나서 손으로 짜고 고치기 쉽다.
+
+```ts
+const MAX_DEPTH = 32;
+
+function parse(src: string, allowed: ReadonlySet<string>): Expr {
+  const tokens = tokenize(src);
+  let i = 0;
+  let depth = 0;
+  const peek = () => tokens[i];
+  const isWord = (w: string) => peek()?.kind === "ident" && peek()?.value === w;
+  const isOp = (o: string) => peek()?.kind === "op" && peek()?.value === o;
+
+  const parseOr = (): Expr => {
+    let left = parseAnd();
+    while (isWord("or")) { i++; left = new Or(left, parseAnd()); }
+    return left;
+  };
+  const parseAnd = (): Expr => {
+    let left = parseUnary();
+    while (isWord("and")) { i++; left = new And(left, parseUnary()); }
+    return left;
+  };
+  const parseUnary = (): Expr => {
+    if (isWord("not")) { i++; return new Not(parseUnary()); }
+    return parsePrimary();
+  };
+  const parseOperand = (): Expr => {
+    const t = tokens[i++];
+    if (!t) throw new SyntaxError("unexpected end");
+    if (t.kind === "num" || t.kind === "str") return new Literal(t.value);
+    if (t.kind === "ident") {
+      if (t.value === "true" || t.value === "false") return new Literal(t.value === "true");
+      if (!allowed.has(t.value)) throw new SyntaxError(`unknown variable: ${t.value}`); // 허용 목록 밖은 거절
+      return new Variable(t.value);
+    }
+    throw new SyntaxError(`unexpected token: ${t.value}`);
+  };
+  const parsePrimary = (): Expr => {
+    if (isOp("(")) {
+      if (++depth > MAX_DEPTH) throw new SyntaxError("too deeply nested");
+      i++;
+      const inner = parseOr();
+      if (!isOp(")")) throw new SyntaxError("missing )");
+      i++;
+      depth--;
+      return inner;
+    }
+    const left = parseOperand();
+    const t = peek();
+    if (t?.kind === "op" && ["==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
+      i++;
+      return new Compare(t.value as CmpOp, left, parseOperand());
+    }
+    return left;
+  };
+
+  const expr = parseOr();
+  if (i < tokens.length) throw new SyntaxError(`unexpected token: ${String(tokens[i].value)}`);
+  return expr;
+}
+```
+
+아래 그림에서 다음을 누르면 파서가 토큰을 하나씩 읽으며 함수 호출을 쌓고 푸는 모습이 보인다. 오른쪽은 지금 열려 있는 함수 호출이다.
+
+<AlgoTrace
+  caption="괄호를 만나면 맨 위 규칙부터 다시 내려간다"
+  memoryLabel="열려 있는 호출"
+  cells={["country", "==", "\"KR\"", "and", "(", "age", ">=", "19", "or", "vip", ")"]}
+  steps={[
+    { pointer: 0, memory: ["parseOr", "parseAnd", "parseUnary", "parsePrimary"], caption: "맨 위 parseOr에서 출발해 한 층씩 내려간다. 첫 토큰 country를 변수로 읽는다." },
+    { pointer: 1, memory: ["parseOr", "parseAnd", "parsePrimary"], caption: "다음이 ==라서 비교식이다. 오른쪽 값을 하나 더 읽어야 한다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["parseOr", "parseAnd", "Compare ✓"], caption: "\"KR\"까지 읽어 Compare 노드가 완성됐다. parsePrimary가 끝나고 parseAnd로 돌아온다." },
+    { pointer: 3, memory: ["parseOr", "parseAnd"], caption: "and를 만났다. parseAnd가 오른쪽을 읽으려고 다시 아래로 내려간다." },
+    { pointer: 4, memory: ["parseOr", "parseAnd", "parsePrimary", "parseOr ↻ 깊이 1"], caption: "여는 괄호다. 맨 위 규칙인 parseOr를 다시 부른다. 재귀가 한 층 깊어져서 깊이를 센다." },
+    { pointer: 7, found: [5, 6, 7], memory: ["parseOr", "parseAnd", "parseOr ↻", "Compare ✓"], caption: "괄호 안에서 age >= 19가 Compare 노드가 된다." },
+    { pointer: 9, found: [5, 6, 7, 8, 9], memory: ["parseOr", "parseAnd", "parseOr ↻", "Or ✓"], caption: "or 뒤의 vip는 변수 하나뿐인 식이다. 괄호 안의 parseOr가 Or 노드를 만든다." },
+    { pointer: 10, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], memory: ["And(Compare, Or)"], caption: "닫는 괄호로 재귀가 돌아오고 And 노드가 완성된다. 토큰이 남지 않았으니 파싱이 끝난다." },
+  ]}
+/>
+
+## 트리가 스스로 답을 계산한다
+
+트리가 만들어지면 해석은 루트에 `interpret(ctx)`를 한 번 부르는 것으로 끝난다. 루트는 자식에게 묻고, 자식은 또 자식에게 묻는다. 답은 잎에서 위로 올라온다.
+
+```ts
+const allowed = new Set(["country", "age", "vip", "cartTotal"]);
+const rule = parse('country == "KR" and (age >= 19 or vip)', allowed);
+
+rule.interpret({ country: "KR", age: 17, vip: true, cartTotal: 0 });  // true
+rule.interpret({ country: "KR", age: 17, vip: false, cartTotal: 0 }); // false
+rule.interpret({ country: "JP", age: 30, vip: true, cartTotal: 0 });  // false
+```
+
+17살 VIP 한국 사용자로 해석해 보면 노드들이 이렇게 말을 주고받는다.
+
+<SequenceDiagram
+  caption="17살 VIP 한국 사용자를 해석할 때 노드 사이의 호출"
+  actors={[
+    { id: "svc", label: "쿠폰 서비스" },
+    { id: "and", label: "And" },
+    { id: "cmp", label: "Compare들" },
+    { id: "or", label: "Or" },
+    { id: "ctx", label: "Context" },
+  ]}
+  steps={[
+    { from: "svc", to: "and", label: "interpret(ctx)", title: "루트에 한 번만 묻는다", detail: "쿠폰 서비스는 트리 안에 무엇이 있는지 모른다. 루트 노드에 사용자 정보를 건넬 뿐이다.", payload: "{ country: \"KR\", age: 17, vip: true }" },
+    { from: "and", to: "cmp", label: "country == KR?", title: "왼쪽 자식부터 묻는다", detail: "And는 스스로 판단하지 않는다. 왼쪽 자식의 답을 먼저 받는다." },
+    { from: "cmp", to: "ctx", label: "ctx.country", title: "변수는 Context에서 값을 꺼낸다", detail: "Variable 노드가 이름으로 값을 찾는다. \"KR\" == \"KR\"이니 참이다." },
+    { from: "and", to: "or", label: "interpret(ctx)", title: "왼쪽이 참이라 오른쪽도 묻는다", detail: "왼쪽이 거짓이었다면 여기서 바로 false를 돌려줬다. && 의 단락 평가를 그대로 쓴다." },
+    { from: "or", to: "cmp", label: "age >= 19?", title: "17은 19보다 작다", detail: "Or의 왼쪽 비교는 거짓이다. Or는 오른쪽을 마저 묻는다." },
+    { from: "or", to: "ctx", label: "ctx.vip", title: "vip가 참이라 Or는 참", detail: "변수 하나뿐인 식이다. 값 true가 그대로 답이 된다." },
+    { from: "and", to: "svc", label: "true", title: "답이 루트까지 올라온다", detail: "Or가 true를 And에 주고, And가 쿠폰 서비스에 true를 돌려준다. 이 사용자에게 쿠폰을 준다." },
+  ]}
+/>
+
+## eval로 끝내면 안 되는 이유
+
+문법을 자바스크립트와 비슷하게 맞추면 파서 없이 `new Function`으로 끝낼 수 있을 것처럼 보인다. 실제로 돌려 보면 이렇다.
+
+```js
+const check = (rule) => new Function("ctx", `with (ctx) { return (${rule}); }`);
+const ctx = { country: "KR", age: 20, vip: false };
+
+console.log(check('country == "KR" && age >= 19')(ctx));
+console.log(check("process.env.HOME")(ctx));
+console.log(check("(globalThis.coupon = () => true, true)")(ctx), typeof globalThis.coupon);
+```
+
+```text
+true
+/root
+true function
+```
+
+두 번째 줄은 서버의 환경 변수를 읽었고, 세 번째 줄은 전역 객체에 함수를 심었다. 관리자 계정 하나가 털리면 데이터베이스 비밀번호까지 같이 나간다. 직접 만든 파서는 문법에 없는 것을 처음부터 읽지 못한다. 점(`.`)이 문법에 없으니 `process.env`는 토큰화 단계에서 끝나고, 허용 목록에 없는 변수 이름도 파싱 단계에서 거절된다.
+
+```text
+SyntaxError: unexpected character at 7: .
+SyntaxError: unexpected end
+SyntaxError: unknown variable: role
+SyntaxError: too deeply nested
+```
+
+위에서부터 `process.exit()`, 끝이 잘린 `country == "KR" and`, 허용 목록에 없는 `role == "admin"`, 괄호 40겹짜리 규칙을 넣은 결과다. 그래서 규칙은 저장할 때 한 번 파싱해서 검증하고, 실패하면 저장 자체를 막는다. 아래 그림에서 다음을 누르면 규칙이 저장되고 쓰이는 길이 보인다.
+
+<NetworkTopology
+  caption="규칙은 저장할 때 검증하고, 서버가 뜰 때 한 번 파싱해 둔다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "back", label: "서버 쪽", x: 110, y: 20, w: 280, h: 215, tone: "private" },
+  ]}
+  nodes={[
+    { id: "admin", label: "관리자", x: 50, y: 70, icon: "client", w: 66 },
+    { id: "api", label: "Rule API", x: 175, y: 70, icon: "server", w: 76 },
+    { id: "parser", label: "parse()", x: 300, y: 70, icon: "firewall", w: 76 },
+    { id: "db", label: "rules", x: 300, y: 185, icon: "db", w: 70 },
+    { id: "coupon", label: "Coupon svc", x: 175, y: 185, icon: "container", w: 88 },
+  ]}
+  links={[
+    { from: "admin", to: "api" },
+    { from: "api", to: "parser" },
+    { from: "parser", to: "db" },
+    { from: "db", to: "coupon" },
+  ]}
+  steps={[
+    { path: ["admin", "api", "parser", "db"], packet: "rule", title: "저장 전에 파싱해 본다", detail: "파싱에 성공한 규칙만 저장한다. 원문 문자열을 저장해 두면 나중에 화면에 다시 보여 주기도 쉽다.", payload: "country == \"KR\" and (age >= 19 or vip)" },
+    { path: ["admin", "api", "parser"], packet: "rule", blocked: true, title: "문법 밖의 글자는 여기서 막힌다", detail: "점이 문법에 없으니 토큰화에서 실패한다. eval이었다면 그대로 실행됐을 문자열이다.", payload: "SyntaxError: unexpected character at 7: ." },
+    { path: ["db", "coupon"], packet: "load", title: "쿠폰 서버는 뜰 때 한 번 파싱한다", detail: "규칙이 바뀌면 다시 읽는다. 파싱 결과인 트리를 메모리에 들고 있는다." },
+    { path: ["coupon"], highlight: ["coupon"], title: "요청마다 트리만 해석한다", detail: "요청이 올 때마다 파싱하면 백 배 가까이 느리다. 다음 절에서 직접 잰다." },
+  ]}
+/>
+
+## 매번 파싱하면 백 배 느리다
+
+해석 비용은 어디서 생길까. 같은 규칙을 사용자 100만 명에게 적용하며 세 방식을 쟀다. Node.js 22에서 같은 데이터로 미리 세 번 돌린 뒤 잰 값이다.
+
+```text
+parse + interpret (매번)      9670 ms  (hits 395000)
+cached AST interpret         100 ms  (hits 395000)
+```
+
+요청마다 파싱하면 해석만 할 때보다 100배 가까이 느리다. 규칙 문자열은 거의 바뀌지 않으니 트리를 한 번 만들어 재사용하는 것이 첫 번째 최적화다. 규칙 id를 키로 트리를 캐시해 두고, 규칙이 수정될 때 그 키만 지운다.
+
+트리를 해석하는 비용도 줄일 수 있다. 노드 객체의 메서드를 따라 내려가는 대신, 트리를 한 번 훑어 클로저 트리로 바꿔 두는 방법이다. 해석할 때마다 노드 종류를 확인하던 분기가 컴파일할 때 한 번으로 줄어든다. 클래스 대신 판별 유니온으로 트리를 만든 버전으로 비교했다.
+
+```ts
+type RuleNode =
+  | { type: "lit"; value: Value }
+  | { type: "var"; name: string }
+  | { type: "cmp"; op: "==" | ">="; left: RuleNode; right: RuleNode }
+  | { type: "and" | "or"; left: RuleNode; right: RuleNode }
+  | { type: "not"; inner: RuleNode };
+
+// 해석: 노드 종류마다 case 하나
+function evaluate(node: RuleNode, ctx: Context): Value {
+  switch (node.type) {
+    case "lit": return node.value;
+    case "var": return ctx[node.name];
+    case "cmp": {
+      const a = evaluate(node.left, ctx), b = evaluate(node.right, ctx);
+      return node.op === "==" ? a === b : a >= b;
+    }
+    case "and": return Boolean(evaluate(node.left, ctx)) && Boolean(evaluate(node.right, ctx));
+    case "or": return Boolean(evaluate(node.left, ctx)) || Boolean(evaluate(node.right, ctx));
+    case "not": return !evaluate(node.inner, ctx);
+  }
+}
+
+// 컴파일: 트리를 한 번 훑어 클로저 트리로 바꿔 둔다
+type Compiled = (ctx: Context) => Value;
+function compile(node: RuleNode): Compiled {
+  switch (node.type) {
+    case "lit": { const v = node.value; return () => v; }
+    case "var": { const n = node.name; return (ctx) => ctx[n]; }
+    case "cmp": {
+      const l = compile(node.left), r = compile(node.right);
+      return node.op === "==" ? (ctx) => l(ctx) === r(ctx) : (ctx) => l(ctx) >= r(ctx);
+    }
+    case "and": { const l = compile(node.left), r = compile(node.right); return (ctx) => Boolean(l(ctx)) && Boolean(r(ctx)); }
+    case "or": { const l = compile(node.left), r = compile(node.right); return (ctx) => Boolean(l(ctx)) || Boolean(r(ctx)); }
+    case "not": { const inner = compile(node.inner); return (ctx) => !inner(ctx); }
+  }
+}
+```
+
+```text
+evaluate(switch)      132 ms  hits=395000
+compile → closure      42 ms  hits=395000
+```
+
+세 배 남짓 빨라졌다. 다만 100만 번에 0.1초 차이라 쿠폰 대상 판단 정도에서는 캐시만으로 충분하다. 규칙이 수천 개이고 이벤트가 초당 수십만 건 흐르는 곳(광고 타기팅, 로그 필터)에서나 컴파일을 고민한다. 숫자는 기계마다 다르니 비율만 본다.
+
+## 괄호 오천 개에 서버가 넘어진다
+
+재귀 하강 파서는 괄호 한 겹마다 함수 호출이 몇 층씩 쌓인다. 깊이 제한을 빼고 괄호를 겹겹이 넣어 봤다.
+
+```text
+1000 ok
+5000 RangeError: Maximum call stack size exceeded
+20000 RangeError: Maximum call stack size exceeded
+```
+
+Node.js의 기본 스택 크기에서는 5000겹이면 넘친다. 이 예외를 잡지 못하면 요청 하나가 프로세스를 죽인다. 규칙이 외부에서 들어오는 순간 입력 크기는 믿을 수 없는 값이 된다. 그래서 파서에는 세 가지 상한을 둔다. 괄호 깊이(`MAX_DEPTH`), 원문 길이, 노드 수다. 해석 쪽도 같다. 이 문법에는 반복문이 없어서 해석 시간이 트리 크기에 비례하지만, 반복이나 함수 호출을 넣는 순간 해석이 끝나지 않는 규칙도 만들 수 있게 된다.
+
+이 점을 처음부터 설계에 넣은 언어가 구글의 CEL(Common Expression Language)이다. 마음대로 쓰는 반복문과 재귀가 없고(목록을 도는 `all`, `exists` 같은 매크로만 있다), 실행 전에 비용을 추정할 수 있게 만들었다. 쿠버네티스 API 서버는 규칙의 추정 비용이 상한을 넘으면 등록 자체를 거절한다. 쿠버네티스가 CRD 검증 규칙(`x-kubernetes-validations`, 1.29 GA)과 ValidatingAdmissionPolicy(1.30 GA)에 CEL을 쓰는 것도 API 서버 안에서 사용자가 쓴 식을 안전하게 돌려야 하기 때문이다.
+
+```yaml
+x-kubernetes-validations:
+  - rule: "self.minReplicas <= self.maxReplicas"
+    message: "minReplicas must not exceed maxReplicas"
+```
+
+## 이미 쓰고 있는 작은 언어들
+
+인터프리터는 직접 짤 일이 드문 패턴이지만, 그 결과물은 매일 쓴다.
+
+Java의 `java.util.regex.Pattern`은 정규식 문자열을 컴파일해 `Node` 객체의 사슬을 만든다. 글자 하나, 문자 클래스, 반복이 저마다 `Node`의 하위 클래스이고 `match()`로 답한다. GoF 교과서 예제 그대로의 구조다. Spring의 SpEL도 `parser.parseExpression("age >= 19 and vip")`로 문자열을 받아 `OpAnd`, `OpGE` 같은 노드 트리를 만들고, 각 노드가 값을 계산한다. `@PreAuthorize("hasRole('ADMIN')")`의 문자열이 바로 이 SpEL로 해석된다.
+
+문자열 파싱을 아예 건너뛰는 방법도 있다. 규칙을 처음부터 트리 모양의 데이터로 받는 것이다.
+
+```js
+// MongoDB 쿼리 필터: 연산자가 키인 객체가 곧 트리다
+{ country: "KR", $or: [{ age: { $gte: 19 } }, { vip: true }] }
+
+// JSON Logic: 같은 생각을 언어 중립적인 JSON으로
+{ "and": [{ "==": [{ "var": "country" }, "KR"] },
+          { "or": [{ ">=": [{ "var": "age" }, 19] }, { "var": "vip" }] }] }
+```
+
+관리자 화면을 조건 블록을 끌어다 놓는 UI로 만든다면 이 방식이 낫다. 토큰화와 파서가 통째로 사라지고 JSON 스키마로 검증할 수 있다. 사람이 직접 타이핑하는 규칙이라면 문자열 문법이 읽기 쉽다. 어느 쪽이든 트리를 받아 노드마다 계산한다는 해석 부분은 같다.
+
+## 노드를 더하기 쉬운 쪽, 연산을 더하기 쉬운 쪽
+
+규칙이 쌓이면 새 요구가 온다. "왜 이 사용자는 쿠폰을 못 받았나요?" 해석 말고 설명이라는 연산이 하나 더 필요해진 것이다. 여기서 클래스 버전과 유니온 버전이 갈린다.
+
+클래스 버전은 새 노드를 더하기 쉽다. `In` 연산자(`country in ["KR", "JP"]`)가 필요하면 `In` 클래스 하나를 만들고 파서에 한 줄 더한다. 다른 클래스는 건드리지 않는다. 대신 `explain()` 같은 새 연산을 더하려면 모든 노드 클래스를 열어 메서드를 추가해야 한다.
+
+유니온 버전은 반대다. `explain(node)` 함수 하나를 새로 쓰면 끝이지만, 새 노드 종류를 더하면 `evaluate`, `compile`, `explain`의 `switch`를 모두 고쳐야 한다. 타입스크립트는 `switch`에 빠진 case가 있으면 반환 타입 검사로 알려 주니, 고칠 곳을 놓치지는 않는다. 이 긴장을 "표현식 문제(expression problem)"라고 부른다. 노드는 안정적이고 연산이 계속 늘어난다면, 노드 클래스는 두고 연산만 따로 떼어 내는 [비지터](/posts/pattern-visitor)가 그 답이다. Babel 플러그인과 ESLint 규칙이 AST 노드를 고치지 않고 `Identifier`, `CallExpression` 같은 노드 종류별 방문 함수만 등록하는 것이 그 모양이다.
+
+## 언제 직접 만들고 언제 가져다 쓰나
+
+GoF도 이 패턴은 문법이 단순할 때만 맞는다고 적었다. 문법 규칙마다 클래스가 하나씩 생기니, 규칙이 수십 개가 되면 클래스도 수십 개다. 판단 기준은 이렇다.
+
+- 연산자 몇 개짜리 필터, 권한 식, 계산식처럼 문법이 한 화면에 들어가면 직접 짠다. 재귀 하강 파서와 노드 클래스로 수백 줄이면 끝난다.
+- 문법이 커지거나 오류 메시지를 친절하게 내야 하면 파서 생성기(peggy, ANTLR, Chevrotain)로 파서를 만들고, 해석만 직접 짠다.
+- 규칙을 사람이 아니라 UI가 만든다면 JSON Logic처럼 트리를 데이터로 받는다.
+- 여러 언어의 서비스가 같은 규칙을 평가해야 하면 CEL처럼 이미 여러 언어 구현이 있는 표준 식 언어를 쓴다.
+
+어느 쪽이든 `eval`, `new Function`, `vm` 모듈로 사용자 입력을 실행하는 길은 고르지 않는다. Node.js 문서도 `vm` 모듈이 보안 경계가 아니라고 명시한다.
+
+## 규칙 트리 계산기 만들기
+
+트리를 배열로 받는 해석기를 완성해 보자. `["and", a, b]`, `["or", a, b]`, `["not", a]`, `["==", a, b]`, `[">=", a, b]`, `["var", "이름"]`이 노드이고, 배열이 아닌 값은 그대로 값이다. 없는 변수는 에러를 던지되, 단락 평가 때문에 묻지 않은 변수는 에러가 나면 안 된다.
+
+<CodePlayground
+  caption="배열로 만든 규칙 트리를 해석한다"
+  functionName="evaluate"
+  initialCode={`function evaluate(node, ctx) {
+  // 배열이 아니면 값 그대로
+  // ["var", name] 은 ctx에서 꺼낸다 (없으면 에러)
+  // and, or, not, ==, >= 를 처리한다
+  return false;
+}`}
+  solution={`function evaluate(node, ctx) {
+  if (!Array.isArray(node)) return node;
+  const [op, a, b] = node;
+  switch (op) {
+    case "var":
+      if (!(a in ctx)) throw new Error("unknown variable: " + a);
+      return ctx[a];
+    case "and": return Boolean(evaluate(a, ctx)) && Boolean(evaluate(b, ctx));
+    case "or": return Boolean(evaluate(a, ctx)) || Boolean(evaluate(b, ctx));
+    case "not": return !evaluate(a, ctx);
+    case "==": return evaluate(a, ctx) === evaluate(b, ctx);
+    case ">=": return evaluate(a, ctx) >= evaluate(b, ctx);
+    default: throw new Error("unknown op: " + op);
+  }
+}`}
+  tests={[
+    { args: [["==", ["var", "country"], "KR"], { country: "KR" }], expected: true, label: "비교 하나" },
+    { args: [["and", ["==", ["var", "country"], "KR"], ["or", [">=", ["var", "age"], 19], ["var", "vip"]]], { country: "KR", age: 17, vip: true }], expected: true, label: "17살 VIP는 통과" },
+    { args: [["and", ["==", ["var", "country"], "KR"], ["or", [">=", ["var", "age"], 19], ["var", "vip"]]], { country: "KR", age: 17, vip: false }], expected: false, label: "17살 일반 회원은 탈락" },
+    { args: [[">=", ["var", "age"], 19], { age: 19 }], expected: true, label: "경계값 19" },
+    { args: [["not", ["var", "vip"]], { vip: false }], expected: true, label: "not" },
+    { args: [["or", ["var", "vip"], ["var", "missing"]], { vip: true }], expected: true, label: "단락 평가: 묻지 않은 변수는 에러가 아니다" },
+  ]}
+/>
+
+인터프리터는 작은 언어의 문법 규칙을 클래스로 옮겨, 그 객체들로 만든 트리가 스스로 답하게 하는 패턴이다. 실무에서 진짜 일은 패턴 바깥에 있다. 문자열을 안전하게 트리로 만드는 파서, 입력 크기의 상한, 트리 캐시가 그렇다. 규칙을 외부에 열어 줄 일이 생기면 `eval` 대신 이 구조를 떠올리고, 문법이 커지면 직접 짜기 전에 CEL이나 JSON Logic부터 본다.
+
+## 면접에서 나올 만한 질문
+
+### 인터프리터 패턴은 무엇이고 언제 쓰나요?
+
+작은 언어의 문법 규칙 하나하나를 클래스로 만들고, 그 객체들로 만든 트리(AST)가 `interpret(context)`로 스스로 값을 계산하게 하는 패턴이다. 관리자가 쓰는 필터 규칙, 권한 식, 계산식처럼 문법이 단순하고 규칙이 자주 바뀌어 코드에 박아 두기 어려울 때 쓴다. 문법이 커지면 클래스가 너무 많아져서 맞지 않는다.
+
+### 인터프리터 패턴에 파싱도 포함되나요?
+
+포함되지 않는다. GoF의 인터프리터는 트리가 이미 있다고 보고 그 트리를 해석하는 부분만 다룬다. 실제로는 문자열을 토큰으로 자르고, 재귀 하강 파서나 파서 생성기로 트리를 세우는 단계를 따로 만들어야 한다. 규칙을 JSON 트리로 받으면 파싱 단계를 건너뛸 수 있다.
+
+### 사용자가 입력한 식을 eval로 실행하면 안 되는 이유는 무엇인가요?
+
+식이 언어 전체에 접근하기 때문이다. `new Function`으로 규칙을 실행하면 `process.env`를 읽거나 전역 객체를 바꾸는 코드도 그대로 돌아간다. 직접 만든 문법은 정한 연산자와 허용한 변수만 읽을 수 있어서, 그 밖의 입력은 파싱 단계에서 거절된다. Node.js의 `vm` 모듈도 보안 경계가 아니라서 대안이 되지 않는다.
+
+### 사용자 규칙을 파싱할 때 어떤 방어가 필요한가요?
+
+입력 크기에 상한을 둔다. 재귀 하강 파서는 괄호 한 겹마다 호출 스택이 쌓여서, 실험에서는 괄호 5000겹에 `RangeError: Maximum call stack size exceeded`가 났다. 괄호 깊이, 원문 길이, 노드 수를 제한하고, 문법에 반복이나 함수 호출을 넣는다면 해석 시간 상한도 둔다. 저장할 때 파싱해 검증하면 잘못된 규칙이 운영에 들어가지 않는다.
+
+### 해석 성능은 어떻게 개선하나요?
+
+먼저 트리를 캐시한다. 실험에서 요청마다 파싱하면 캐시한 트리를 해석할 때보다 100배 가까이 느렸다. 그다음은 트리를 한 번 훑어 클로저로 바꿔 두는 컴파일인데, 노드 종류 분기가 한 번으로 줄어 세 배쯤 빨라졌다. 대부분은 캐시로 충분하고, 컴파일은 규칙과 트래픽이 아주 많을 때 고려한다.
+
+### 인터프리터와 컴포지트, 비지터는 어떤 관계인가요?
+
+인터프리터의 AST는 구조로 보면 컴포지트다. 하나(변수, 값)와 묶음(And, Or)이 같은 인터페이스로 답한다. 해석 말고 설명, 최적화, 출력 같은 연산이 계속 늘면 노드 클래스마다 메서드를 더해야 하는데, 이때 연산을 노드 밖으로 떼어 내는 것이 비지터다. 노드 종류가 자주 늘면 인터프리터 쪽, 연산이 자주 늘면 비지터 쪽이 유리하다.
+
+### 실무에서 인터프리터 패턴이 쓰이는 예를 들어 주세요.
+
+Java의 `java.util.regex.Pattern`은 정규식을 `Node` 객체 사슬로 만들어 해석하고, Spring의 SpEL은 `@PreAuthorize` 같은 식을 노드 트리로 파싱해 계산한다. MongoDB 쿼리 필터와 JSON Logic은 규칙을 트리 모양 데이터로 받아 해석한다. 쿠버네티스는 CRD 검증 규칙과 ValidatingAdmissionPolicy에 CEL을 쓰는데, 임의의 반복과 재귀가 없어 실행 전에 비용을 추정할 수 있는 언어다.

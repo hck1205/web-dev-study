@@ -1,0 +1,430 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rolling-deployment");
+
+로드 밸런서 뒤에 서버 네 대가 있다. 배포 스크립트는 한 대씩 돌면서 프로세스를 내리고 새 버전으로 다시 띄운다. 한 대씩이니 나머지 세 대가 받아 줄 거라고 생각했다. 그런데 배포를 돌리자 4초쯤 뒤부터 6초 동안 모든 요청이 502였다. 앱은 네 대 모두 멀쩡히 떠서 헬스 체크에 200을 주고 있었다. nginx 에러 로그에는 한 줄이 수만 번 찍혀 있었다. `no live upstreams`.
+
+롤링 배포는 가장 흔한 배포 방식이다. 서버를 몇 대씩 묶어 차례로 새 버전으로 바꾸니 추가 서버가 거의 필요 없고, 어떤 도구에도 기본으로 들어 있다. 하지만 "한 대씩 바꾼다"는 말에는 빠진 단계가 많다. 로드 밸런서에서 빼고, 남은 요청을 끝내고, 새 버전이 정말 준비됐는지 확인하고, 다시 넣는 일이다. 이 글은 쿠버네티스 밖, 로드 밸런서 뒤 VM이나 인스턴스 묶음에서 롤링 배포를 직접 돌리며 그 단계를 하나씩 본다. 쿠버네티스 Deployment가 같은 일을 maxSurge와 maxUnavailable 두 숫자로 하는 방식은 [Deployment 글](/posts/k8s-deployment)에 있으니 여기서 반복하지 않는다.
+
+이 주제의 다른 글: 두 벌을 띄워 한 번에 바꾸는 [블루그린 배포](/posts/blue-green-deployment), 일부 트래픽만 먼저 보내며 지표를 보는 [카나리 릴리스](/posts/canary-release). 로드 밸런서가 서버를 빼고 넣는 원리는 [로드 밸런서 기본](/posts/load-balancer-basics)에 있다.
+
+출력은 Ubuntu 24.04 컨테이너의 network namespace 안에서 받았다. Node.js 백엔드 네 개(9201~9204, 요청마다 50ms)를 nginx 1.24 upstream 하나에 묶고, 배포는 100줄짜리 Node.js 스크립트가 한다. 부하는 keep-alive 연결 40개로 쉬지 않고 요청을 보내는 스크립트가 만들고, 초마다 성공·실패와 응답한 버전을 센다.
+
+## 한 대씩 빼고, 바꾸고, 확인하고, 넣는다
+
+제대로 된 롤링 배포의 한 바퀴는 다섯 단계다. 아래 그림에서 다음을 누르면 서버 한 대가 그 다섯 단계를 지나는 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={236}
+  caption="롤링 배포 한 바퀴: 서버 한 대가 빠졌다가 새 버전으로 돌아온다"
+  zones={[
+    { id: "pool", label: "upstream pool", x: 8, y: 126, w: 384, h: 102, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "Users", x: 200, y: 28, icon: "client" },
+    { id: "lb", label: "nginx", sub: ":8082", x: 200, y: 88, icon: "lb" },
+    { id: "s1", label: "9201", sub: "v1 → v2", x: 58, y: 186, icon: "server", w: 80 },
+    { id: "s2", label: "9202", sub: "v1", x: 152, y: 186, icon: "server", w: 80 },
+    { id: "s3", label: "9203", sub: "v1", x: 248, y: 186, icon: "server", w: 80 },
+    { id: "s4", label: "9204", sub: "v1", x: 342, y: 186, icon: "server", w: 80 },
+  ]}
+  links={[
+    { from: "user", to: "lb" },
+    { from: "lb", to: "s1" },
+    { from: "lb", to: "s2" },
+    { from: "lb", to: "s3" },
+    { from: "lb", to: "s4" },
+  ]}
+  steps={[
+    { path: ["user", "lb", "s1"], packet: "GET /", blocked: true, highlight: ["s1"], title: "1. 로드 밸런서에서 뺀다", detail: "9201에 down 표시를 하고 reload 한다. 새 요청은 더 이상 9201로 가지 않는다." },
+    { path: ["s1"], highlight: ["s1"], title: "2. 남은 요청을 끝낸다", detail: "이미 보낸 요청은 9201이 마저 처리한다. 가장 긴 요청보다 길게 기다린다." },
+    { path: ["s1"], highlight: ["s1"], title: "3. 내리고 새 버전으로 띄운다", detail: "SIGTERM으로 정상 종료하고 v2를 띄운다. 이 동안 세 대가 전체 트래픽을 받는다." },
+    { path: ["lb", "s1"], packet: "health", highlight: ["s1"], title: "4. 정말 준비됐는지 확인한다", detail: "/health가 연속 세 번 200이어야 통과한다. 실패하면 여기서 배포를 멈춘다." },
+    { path: ["user", "lb", "s1"], packet: "GET /", highlight: ["s1"], title: "5. 다시 넣는다", detail: "down 표시를 지우고 reload 한다. 다음 서버 9202로 넘어간다." },
+  ]}
+/>
+
+이 다섯 단계를 몇 대씩 묶어 하느냐가 배치 크기다. 한 대씩이면 느리지만 용량이 25%만 줄고, 두 대씩이면 두 배 빠르지만 그동안 절반으로 버틴다. 단계 하나라도 빼면 어떻게 되는지 직접 돌려 봤다.
+
+## 그냥 내렸다 올리면 생기는 일
+
+첫 번째 스크립트는 로드 밸런서를 건드리지 않는다. 서버를 한 대씩 내리고(여기서는 장애를 흉내 내려고 SIGKILL), 새 버전을 띄우고, 헬스 체크가 통과하면 다음으로 넘어간다. nginx 설정은 기본값 그대로다.
+
+```nginx
+upstream pool {
+    server 127.0.0.1:9201;
+    server 127.0.0.1:9202;
+    server 127.0.0.1:9203;
+    server 127.0.0.1:9204;
+    keepalive 32;
+}
+```
+
+```text
+[  0.3s] 9201 restarted as v2
+[  1.2s] 9201 healthy
+[  1.6s] 9202 restarted as v2
+[  2.4s] 9202 healthy
+[  2.8s] 9203 restarted as v2
+[  3.6s] 9203 healthy
+[  4.0s] 9204 restarted as v2
+[  4.8s] 9204 healthy
+[  4.8s] rollout complete
+t= 0s ok= 730 fail=0 v1=730
+t= 1s ok= 737 fail=0 v1=737
+t= 2s ok= 752 fail=0 v1=752
+t= 3s ok= 752 fail=0 v1=752
+t= 4s ok= 412 fail=1171 v1=412
+t= 5s ok=   0 fail=5147
+t= 6s ok=   0 fail=5475
+t= 7s ok=   0 fail=5840
+t= 8s ok=   0 fail=5886
+t= 9s ok=   0 fail=6067
+t=10s ok=   0 fail=6828
+t=11s ok= 232 fail=3511 v2=232
+t=12s ok= 743 fail=0 v2=743
+requests=46599 ok=6674 5xx=39925 4xx=0 conn_errors=0
+by status: 200=6674 502=39925
+```
+
+배포 스크립트는 4.8초에 "완료"를 찍었다. 네 대 모두 헬스 체크를 통과했다. 그런데 부하 쪽에서는 4초부터 11초까지 거의 모든 요청이 502다. 그 시간 동안 새 버전 v2는 한 건도 응답하지 않았다. 에러 로그는 한 종류다.
+
+```text
+2026/10/20 20:28:12 [error] 5280#5280: *278 no live upstreams while connecting to upstream, client: 127.0.0.1, server: , request: "GET / HTTP/1.1", upstream: "http://pool/", host: "127.0.0.1:8082"
+```
+
+## 기본값 max_fails가 서버를 10초씩 가둔다
+
+원인은 nginx의 수동 헬스 체크다. nginx 오픈 소스에는 주기적으로 `/health`를 찔러 보는 능동 헬스 체크가 없다. 대신 실제 요청이 실패하면 그 서버를 잠깐 빼 둔다. 그 기준이 `max_fails`(기본 1)와 `fail_timeout`(기본 10s)이다. 10초 안에 한 번 실패하면 그 서버를 10초 동안 고르지 않는다.
+
+<UrlAnatomy
+  caption="upstream server 한 줄에 숨어 있는 기본값"
+  base="server"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "addr", display: "127.0.0.1:9201", title: "주소", description: "백엔드 하나. 롤링 배포는 이 줄들을 하나씩 다룬다." },
+    { key: "max_fails", value: "1", title: "max_fails=1 (기본)", description: "fail_timeout 안에 이만큼 실패하면 서버를 쉬게 한다. 0이면 이 기능을 끈다. 서버를 내리는 순간의 실패도 여기 들어간다." },
+    { key: "fail_timeout", value: "10s", title: "fail_timeout=10s (기본)", description: "실패를 세는 창이자 쉬게 하는 시간이다. 그동안 서버가 살아나도 nginx는 모른다." },
+    { key: "down", title: "down", description: "운영자가 손으로 빼는 표시. reload 하면 새 요청이 가지 않는다. 롤링 배포에서 빼는 단계가 이것이다." },
+  ]}
+/>
+
+한 대를 죽이는 순간 그 서버에서 처리 중이던 요청이 실패하고, 서버는 10초 감옥에 들어간다. 1.2초 간격으로 네 대를 돌리니 네 번째 서버가 들어가는 순간 네 대가 모두 감옥에 있다. 이미 v2로 살아나 헬스 체크를 통과한 서버도 nginx 입장에서는 아직 쉬는 중이다. 첫 서버의 10초가 끝나는 11초에 가서야 v2가 응답하기 시작한다. 아래 그림이 그 과정이다.
+
+<AlgoTrace
+  caption="1.2초 간격으로 내리면 네 대가 모두 쉬는 상태가 된다"
+  memoryLabel="nginx가 빼 둔 서버"
+  cells={["9201", "9202", "9203", "9204"]}
+  steps={[
+    { pointer: 0, memory: ["9201 ~11s"], caption: "1초: 9201을 내린다. 처리 중이던 요청이 실패해 9201은 10초 동안 빠진다." },
+    { pointer: 1, memory: ["9201 ~11s", "9202 ~12s"], caption: "2.3초: 9201은 이미 v2로 살아났지만 아직 빠져 있다. 9202를 내린다." },
+    { pointer: 2, memory: ["9201 ~11s", "9202 ~12s", "9203 ~13s"], caption: "3.5초: 남은 건 9204 하나다. 모든 요청이 9204로 몰린다." },
+    { pointer: 3, memory: ["9201 ~11s", "9202 ~12s", "9203 ~13s", "9204 ~15s"], caption: "4.7초: 9204까지 빠진다. 고를 서버가 없어 모든 요청이 no live upstreams로 502가 된다." },
+    { pointer: 0, found: [0], memory: ["9202 ~12s", "9203 ~13s", "9204 ~15s"], caption: "11초: 9201의 10초가 끝났다. 그제야 v2가 응답하기 시작한다." },
+  ]}
+/>
+
+이 함정은 nginx만의 것이 아니다. 로드 밸런서는 어떤 형태로든 "실패한 서버를 잠깐 쉬게 하는" 장치를 갖고 있고, 롤링 배포는 일부러 서버를 실패시키는 작업이다. 배포 속도가 그 쉬는 시간보다 빠르면 쉬는 서버가 쌓인다. 배포 스크립트의 "완료"와 헬스 체크 통과만 보고는 알 수 없고, 로드 밸런서 쪽 지표를 봐야 보인다.
+
+## 재시도가 GET은 숨기고 POST는 못 숨긴다
+
+`max_fails=0`으로 수동 헬스 체크를 끄고 같은 배포를 다시 돌렸다. 이번에는 GET 부하와 POST 부하를 따로 걸었다.
+
+```text
+# GET
+requests=5922 ok=5922 5xx=0 4xx=0 conn_errors=0
+by status: 200=5922
+# POST
+requests=5977 ok=5932 5xx=45 4xx=0 conn_errors=0
+by status: 200=5932 502=45
+```
+
+같은 배포인데 GET은 하나도 실패하지 않았고 POST는 45건이 502다. 차이를 만든 건 `proxy_next_upstream`이다. 기본값 `error timeout`은 백엔드와 통신하다 에러가 나면 다음 서버로 다시 보낸다. GET은 몇 번 보내도 결과가 같은 요청이라 그냥 다시 보낸다. POST는 nginx 1.9.13부터 "이미 백엔드에 보낸 뒤"에는 다시 보내지 않는다. 결제 요청을 두 번 처리하면 안 되기 때문이다. 연결 자체가 거절된 경우(아직 아무것도 안 보냄)는 POST도 다시 보내지만, 처리 도중 서버가 죽은 요청은 그대로 502가 된다.
+
+여기서 흔히 하는 오해가 있다. GET만으로 배포 테스트를 하면 실패가 0이라 롤링 배포가 안전해 보인다. 실제 서비스의 쓰기 요청은 그 사이에 떨어지고 있다. 배포 리허설에는 쓰기 요청도 섞어야 하고, POST를 다시 보내도 안전하게 만들려면 [멱등성 키](/posts/idempotency-key)가 필요하다. `proxy_next_upstream non_idempotent`로 POST까지 다시 보내게 하는 건 그 키가 있을 때만 한다.
+
+수동 헬스 체크를 끈 게 답은 아니다. 서버가 진짜로 죽었을 때 빼 주는 장치이기도 하다. 문제는 배포가 "실패하는 방식"으로 서버를 내렸다는 점이다.
+
+## 정상 종료만으로는 모자란 이유
+
+그럼 SIGKILL 대신 SIGTERM으로 정상 종료하면 어떨까. 이 앱은 SIGTERM을 받으면 새 연결을 받지 않고, 쉬는 keep-alive 연결을 닫고, 처리 중인 요청을 끝낸 뒤 나간다. nginx 설정은 다시 기본값으로 돌렸다.
+
+```text
+# 정상 종료 + 기본 max_fails=1, GET
+requests=26037 ok=5068 5xx=20969 4xx=0 conn_errors=0
+by status: 200=5068 502=20969
+# 같은 시간대 nginx 에러 로그를 종류별로 센 결과
+     2 Connection refused
+ 20969 no live upstreams
+```
+
+똑같이 무너졌다. 처리 중인 요청은 지켰지만, 서버가 포트를 닫은 뒤 nginx가 새 연결을 시도하다 `Connection refused`를 한 번 받으면 그것도 실패로 센다. 실패가 한 번이면 10초 감옥이다. 앱이 아무리 점잖게 내려가도 로드 밸런서가 모르는 사이에 내려가면 로드 밸런서에게는 장애다. 그래서 순서가 중요하다. 로드 밸런서가 먼저 빼고, 그다음 앱이 내려간다.
+
+<SequenceDiagram
+  caption="서버 한 대를 안전하게 바꾸는 순서"
+  actors={[
+    { id: "ctl", label: "배포 스크립트" },
+    { id: "lb", label: "nginx" },
+    { id: "app", label: "9201" },
+  ]}
+  steps={[
+    { from: "ctl", to: "lb", label: "down + reload", title: "먼저 로드 밸런서에서 뺀다", detail: "새 요청이 더 이상 9201로 가지 않는다. 처리 중인 요청은 계속된다.", payload: "server 127.0.0.1:9201 down;" },
+    { from: "ctl", to: "ctl", label: "drain 2s", title: "남은 요청이 끝나길 기다린다", detail: "가장 긴 요청 시간보다 길게 기다린다. 이 앱은 요청이 50ms라 2초면 충분하다." },
+    { from: "ctl", to: "app", label: "SIGTERM", title: "그다음 정상 종료한다", detail: "이미 트래픽이 없으니 실패할 요청이 없다. nginx는 이 서버에 연결을 시도하지 않으니 실패로 세지 않는다." },
+    { from: "ctl", to: "app", label: "GET /health ×3", title: "새 버전을 띄우고 확인한다", detail: "연속 세 번 200이어야 통과다. 한 번만 보면 막 뜬 뒤 곧 죽는 버전을 놓친다." },
+    { from: "ctl", to: "lb", label: "remove down", title: "다시 넣는다", detail: "down을 지우고 reload 한다. 다음 서버로 넘어간다." },
+  ]}
+/>
+
+이 순서로 GET과 POST를 다시 돌렸다. 설정은 기본값 그대로다.
+
+```text
+[  0.0s] 9201 marked down, draining 2s
+[  2.4s] 9201 restarted as v2
+[  3.2s] 9201 healthy, back in pool
+[  3.3s] 9202 marked down, draining 2s
+...
+[ 12.8s] 9204 healthy, back in pool
+[ 12.8s] rollout complete
+# GET
+requests=12035 ok=12031 5xx=0 4xx=0 conn_errors=4
+by status: 200=12031 ECONNRESET=4
+# POST
+requests=12124 ok=12119 5xx=0 4xx=0 conn_errors=5
+by status: 200=12119 ECONNRESET=5
+```
+
+502는 0이 됐다. 배포 시간은 4.8초에서 12.8초로 늘었다. 서버마다 2초씩 빼고 기다린 값이다. 남은 `ECONNRESET` 4~5건은 앱이 아니라 클라이언트와 nginx 사이에서 생겼다. 서버 하나에 reload가 두 번, 모두 여덟 번 일어나는데, reload 때 정리에 들어간 옛 nginx 워커가 쉬는 keep-alive 연결을 닫는 순간 클라이언트가 바로 그 연결로 요청을 보내면 끊긴다. 이 부하 스크립트는 재시도를 하지 않아 그대로 보이고, 브라우저는 이런 경우 멱등한 요청을 한 번 다시 보낸다. reload 없이 서버를 빼고 넣을 수 있는 로드 밸런서(HAProxy 런타임 API, NGINX Plus API, 클라우드 로드 밸런서의 타깃 등록 해제)를 쓰면 이 틈도 사라진다.
+
+드레이닝을 클라우드에서는 직접 짤 필요가 없다. AWS ALB의 타깃 그룹에는 등록 해제 지연(기본 300초)이 있어서, 타깃을 빼면 새 요청은 보내지 않고 진행 중인 요청은 그 시간까지 기다린다. 자세한 원리는 [로드 밸런서 기본](/posts/load-balancer-basics)에 있다. 이 기본값이 너무 길어 배포가 느려지는 경우가 흔하다. 요청이 1초 안에 끝나는 API라면 30초 정도로 줄여도 충분하다.
+
+## 섞여 있는 몇 초 동안
+
+롤링 배포에서 피할 수 없는 게 하나 있다. 두 버전이 함께 요청을 받는 시간이다. 위 POST 배포를 초 단위로 보면 이렇다.
+
+```text
+t= 3s ok= 746 fail=0 v1=746
+t= 4s ok= 752 fail=1 v1=583 v2=169
+t= 5s ok= 765 fail=0 v2=255 v1=510
+t= 6s ok= 770 fail=0 v1=513 v2=257
+t= 7s ok= 751 fail=2 v1=390 v2=361
+t= 8s ok= 754 fail=0 v2=503 v1=251
+t= 9s ok= 737 fail=0 v1=246 v2=491
+t=10s ok= 769 fail=0 v1=186 v2=583
+t=11s ok= 768 fail=0 v2=768
+```
+
+4초부터 10초까지 7초 동안 v1과 v2가 섞여 있다. 서버 네 대에서 7초이고, 서버가 100대이고 한 대에 1분씩 걸리면 한 시간 넘게 섞인다. 그 시간 동안 같은 사용자의 요청이 v1과 v2를 오갈 수 있다. 여기서 깨지는 것들이 있다.
+
+<SequenceDiagram
+  caption="섞여 있을 때 깨지는 흔한 경우: 새 화면이 옛 API를 부른다"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "lb", label: "LB" },
+    { id: "v2", label: "서버 v2" },
+    { id: "v1", label: "서버 v1" },
+  ]}
+  steps={[
+    { from: "br", to: "lb", label: "GET /", title: "페이지를 연다", detail: "로드 밸런서가 이미 바뀐 서버를 고른다." },
+    { from: "lb", to: "v2", label: "HTML v2", title: "새 화면을 받는다", detail: "v2의 HTML과 JS는 새 API 경로 /api/orders/summary를 부른다." },
+    { from: "br", to: "lb", label: "GET /api/orders/summary", title: "바로 이어서 API를 부른다", detail: "이번 요청은 아직 안 바뀐 서버로 간다. 연결마다, 요청마다 고르기 때문이다." },
+    { from: "lb", to: "v1", label: "→ v1", title: "옛 서버가 받는다", detail: "v1에는 그 경로가 없다." },
+    { from: "v1", to: "br", label: "404", title: "화면이 깨진다", detail: "배포가 끝나면 사라지는 에러라 재현이 어렵다. 배포 시간대에만 몰려 있는 4xx가 신호다." },
+  ]}
+/>
+
+API는 "새 버전이 옛 요청을 받을 수 있다"와 "옛 버전이 새 요청을 견딘다"를 모두 지켜야 한다. 새 엔드포인트를 쓰는 화면은 그 엔드포인트가 모든 서버에 깔린 다음 배포로 내보낸다. 응답 필드는 지우지 말고 추가만 하고, 이름을 바꿀 때는 옛 필드와 새 필드를 한동안 함께 보낸다. 클라이언트가 붙는 API라면 [API 버전 관리](/posts/api-versioning)가 이 문제를 더 길게 다룬다.
+
+DB 스키마도 같다. v2가 열 이름을 바꾸면 아직 남은 v1이 깨진다. 열 추가 → 두 열에 쓰는 버전 배포 → 채우기 → 새 열만 읽는 버전 배포 → 옛 열 삭제처럼 단계를 나누는 이유가 이것이다. 그 순서와 잠금 문제는 [무중단 마이그레이션](/posts/zero-downtime-migrations)에서 다뤘다. 롤링 배포에서는 이 단계 하나하나가 "섞여 있는 동안에도 깨지지 않는가"라는 질문을 통과해야 한다.
+
+눈에 덜 띄는 것도 있다. 캐시에 넣는 값의 형식이 바뀌면 v2가 쓴 값을 v1이 읽다가 에러가 난다. 큐 메시지 형식도 마찬가지다. 세션에 넣는 객체 구조가 바뀌어도 그렇다. 이런 것은 "읽을 때는 옛 형식과 새 형식을 모두 받고, 쓰는 형식은 모든 서버가 새 버전이 된 뒤에 바꾼다"는 규칙으로 막는다.
+
+## 헬스 체크가 배포를 멈추게 한다
+
+새 버전이 아예 준비되지 못하는 경우를 만들어 봤다. v3는 `/health`에 503을 준다. 설정 파일 하나를 빠뜨려 DB에 붙지 못하는 상황이라고 생각하면 된다.
+
+```text
+[  0.0s] 9201 marked down, draining 2s
+[  2.3s] 9201 restarted as v3
+[  7.4s] 9201 failed health check -> stop rollout, 9201 stays out of pool
+requests=7577 ok=7577 5xx=0 4xx=0 conn_errors=0
+by version: v1=7577
+```
+
+```bash
+# 배포가 멈춘 뒤 upstream 상태를 본다
+cat /etc/nginx/pool.conf
+# 멈춘 서버에 직접 헬스 체크를 해 본다
+curl -si http://127.0.0.1:9201/health
+```
+
+```text
+server 127.0.0.1:9201 down;
+server 127.0.0.1:9202;
+server 127.0.0.1:9203;
+server 127.0.0.1:9204;
+HTTP/1.1 503 Service Unavailable
+...
+not ready
+```
+
+배포는 첫 서버에서 멈췄고 사용자 요청은 하나도 실패하지 않았다. 고장 난 v3는 로드 밸런서에 들어가지 못했고, 나머지 세 대가 v1으로 받고 있다. 이게 헬스 체크로 단계를 막는 이유다. 대신 용량이 3/4로 줄어든 채 남아 있으니, 멈춘 배포는 누군가 알아차리고 9201을 v1으로 되돌리거나 고쳐야 한다. 알림 없이 멈추기만 하는 배포가 흔한 실수다.
+
+헬스 체크가 너무 너그러우면 이 장치가 소용없다. 프로세스가 떠 있기만 하면 200을 주는 `/health`는 DB 연결이 안 되는 v3도 통과시킨다. 반대로 DB, 캐시, 외부 API까지 다 확인하는 헬스 체크는 외부 API 하나가 느려지면 모든 서버를 빼 버린다. 배포 게이트용 헬스 체크는 "이 프로세스가 요청을 처리할 준비가 됐나"까지만 본다. 설정을 읽었는지, DB 커넥션 풀을 만들었는지, 캐시를 데웠는지다. 쿠버네티스가 이걸 readiness와 liveness로 나눈 이유는 [프로브 글](/posts/k8s-pod-probes)에 있다.
+
+통과 기준도 한 번이 아니라 연속 몇 번으로 둔다. 뜨자마자 몇 초 뒤 메모리가 터지는 버전은 첫 헬스 체크를 통과한다. 더 길게 보고 싶으면 서버를 다시 넣은 뒤에도 몇 분 동안 그 서버의 에러율을 보고 나서 다음 배치로 넘어간다. 이 관찰을 지표로 자동화하면 [카나리 릴리스](/posts/canary-release)와 거의 같아진다.
+
+## 몇 대씩 바꿀까
+
+배치 크기는 속도와 용량 사이의 선택이다. 같은 네 대를 두 대씩 바꿨더니 12.8초가 7.7초로 줄었다.
+
+```text
+[  0.0s] 9201,9202 marked down, draining 2s
+[  2.4s] 9201,9202 restarted as v2
+[  3.9s] 9201,9202 healthy, back in pool
+[  3.9s] 9203,9204 marked down, draining 2s
+[  6.2s] 9203,9204 restarted as v2
+[  7.7s] 9203,9204 healthy, back in pool
+[  7.7s] rollout complete
+requests=6822 ok=6821 5xx=0 4xx=0 conn_errors=1
+```
+
+대신 그 7.7초 동안 서버 두 대가 전체 트래픽을 받았다. 이 실험은 부하가 가벼워 문제가 없었지만, 피크 시간에 서버 넷이 꼭 필요한 부하였다면 절반으로 버티는 동안 지연이 치솟았을 것이다. 배치 크기를 정하는 질문은 하나다. 빠진 서버를 뺀 나머지가 지금 부하를 감당하나.
+
+<ConceptDiagram
+  width={400}
+  height={230}
+  caption="배치 크기가 정하는 것들"
+  nodes={[
+    { id: "batch", label: "배치 크기", x: 200, y: 40, w: 120 },
+    { id: "speed", label: "배포 시간", sub: "배치 수 × 한 바퀴", x: 80, y: 130, w: 140 },
+    { id: "cap", label: "남은 용량", sub: "(N − 배치) × 1대 처리량", x: 320, y: 130, w: 160 },
+    { id: "blast", label: "한 번에 망가지는 수", sub: "헬스 체크가 놓치면", x: 200, y: 200, w: 170 },
+  ]}
+  edges={[
+    { from: "batch", to: "speed", label: "클수록 짧다" },
+    { from: "batch", to: "cap", label: "클수록 적다" },
+    { from: "batch", to: "blast", label: "클수록 많다" },
+  ]}
+/>
+
+용량이 빠듯하면 서버를 빼기 전에 새 서버를 먼저 하나 더 띄우는 방법이 있다. 쿠버네티스의 maxSurge, AWS ECS의 `maximumPercent`(기본 200), 오토스케일링 그룹의 인스턴스 새로 고침이 이 방식을 쓴다. 잠깐 서버가 N+1대가 되니 비용이 조금 들지만 용량은 줄지 않는다. 반대로 ECS의 `minimumHealthyPercent`(기본 100)나 오토스케일링 그룹의 `MinHealthyPercentage`(기본 90)는 "얼마 아래로는 내려가지 않는다"는 아래쪽 선이다. 이름만 다를 뿐 쿠버네티스의 두 숫자와 같은 생각이다.
+
+아래 함수로 배치 크기에 따라 몇 바퀴를 돌고, 그동안 서비스에 남는 서버가 몇 대이며, 그 서버들이 피크 부하를 버틸 수 있는지 계산해 볼 수 있다.
+
+<CodePlayground
+  caption="롤링 배포 계획: 바퀴 수, 남는 서버, 버틸 수 있나"
+  functionName="rollingPlan"
+  initialCode={`function rollingPlan(total, batch, perInstanceRps, peakRps) {
+  // total: 서버 수, batch: 한 번에 바꾸는 수
+  // perInstanceRps: 서버 한 대가 버티는 초당 요청, peakRps: 피크 부하
+  // { rounds, minInService, ok }를 돌려준다
+  return { rounds: 0, minInService: 0, ok: false };
+}`}
+  solution={`function rollingPlan(total, batch, perInstanceRps, peakRps) {
+  const rounds = Math.ceil(total / batch);
+  const minInService = total - batch;
+  return { rounds, minInService, ok: minInService * perInstanceRps >= peakRps };
+}`}
+  tests={[
+    { args: [4, 1, 1000, 2500], expected: { rounds: 4, minInService: 3, ok: true }, label: "4대, 한 대씩" },
+    { args: [4, 2, 1000, 2500], expected: { rounds: 2, minInService: 2, ok: false }, label: "4대, 두 대씩" },
+    { args: [10, 3, 500, 3000], expected: { rounds: 4, minInService: 7, ok: true }, label: "10대, 세 대씩" },
+    { args: [20, 5, 200, 3200], expected: { rounds: 4, minInService: 15, ok: false }, label: "20대, 25%씩" },
+    { args: [3, 1, 1000, 2500], expected: { rounds: 3, minInService: 2, ok: false }, label: "3대면 한 대도 빼기 어렵다" },
+  ]}
+/>
+
+마지막 경우가 작은 서비스에서 흔하다. 서버 세 대가 피크 때 2.5대분의 일을 하고 있으면, 한 대만 빼도 모자란다. 이럴 때는 피크를 피해 배포하거나, 먼저 한 대를 더 띄우고(surge) 시작한다. Ansible로 VM 묶음을 배포한다면 플레이북의 `serial`이 배치 크기이고, `max_fail_percentage`가 "몇 % 실패하면 멈출지"다.
+
+```yaml
+# 예시: Ansible로 4대를 한 대씩 롤링 배포한다 (이 글의 실험은 Node.js 스크립트로 했다)
+- hosts: web
+  serial: 1                 # 한 번에 한 대
+  max_fail_percentage: 0    # 한 대라도 실패하면 멈춘다
+  pre_tasks:
+    - name: 로드 밸런서에서 뺀다
+      ansible.builtin.command: /usr/local/bin/lb-drain {{ inventory_hostname }}
+      delegate_to: lb01
+    - name: 남은 요청을 기다린다
+      ansible.builtin.pause:
+        seconds: 30
+  roles:
+    - app                   # 새 버전 설치와 재시작
+  post_tasks:
+    - name: 헬스 체크가 연속으로 통과할 때까지 기다린다
+      ansible.builtin.uri:
+        url: "http://{{ inventory_hostname }}:8080/health"
+      register: h
+      until: h.status == 200
+      retries: 10
+      delay: 3
+    - name: 로드 밸런서에 다시 넣는다
+      ansible.builtin.command: /usr/local/bin/lb-enable {{ inventory_hostname }}
+      delegate_to: lb01
+```
+
+Ansible 자체를 다루는 법은 [Ansible 네트워크 자동화 글](/posts/ansible-network-automation)에 있다.
+
+## 롤링이 맞지 않는 경우
+
+롤링 배포는 "두 버전이 잠깐 섞여도 괜찮다"는 전제 위에 있다. 그 전제가 깨지면 다른 방식을 고른다.
+
+두 버전이 함께 돌 수 없을 때. 메시지 형식이나 프로토콜을 호환되지 않게 바꿔야 하고 그걸 단계로 나눌 수 없다면, 섞이는 시간이 없는 [블루그린](/posts/blue-green-deployment)이나 잠깐 내리고 올리는 방식이 낫다. 쿠버네티스의 Recreate가 후자다.
+
+빨리 되돌려야 할 때. 롤링 배포의 되돌리기는 같은 롤링을 거꾸로 한 번 더 하는 일이다. 서버 100대를 한 시간 걸려 바꿨다면 되돌리는 데도 비슷하게 걸린다. 그동안 버그는 점점 줄어들 뿐 계속 보인다. 되돌리기 속도가 중요하면 블루그린이 맞고, 영향을 처음부터 작게 하고 싶으면 카나리가 맞다.
+
+상태를 가진 서버일 때. 서버마다 로컬 디스크에 데이터나 세션을 쥐고 있다면 빼는 순간 그 상태가 사라진다. 데이터베이스 클러스터처럼 순서가 중요한 경우(리더를 마지막에 바꾼다)는 일반 롤링 스크립트가 아니라 그 시스템의 절차를 따른다.
+
+서버가 아주 적을 때. 두 대뿐이면 한 대를 빼는 순간 용량이 절반이고, 남은 한 대가 죽으면 서비스가 멈춘다. 이 경우엔 먼저 한 대를 더 띄우는 surge 방식으로 하거나 블루그린이 더 단순하다.
+
+## 현장에서 롤링 배포를 의심하는 순간
+
+배포 시간대에만 502가 몰린다면 먼저 로드 밸런서에서 빼는 단계가 있는지 본다. nginx라면 에러 로그에서 `no live upstreams`, `upstream prematurely closed connection`, `connect() failed (111: Connection refused)` 중 무엇이 찍혔는지 센다.
+
+```bash
+# 배포 시간대 nginx 에러를 종류별로 센다
+grep -o "no live upstreams\|prematurely closed\|Connection refused" /var/log/nginx/error.log | sort | uniq -c
+```
+
+`no live upstreams`가 많으면 위에서 본 감옥이다. 서버를 로드 밸런서에서 먼저 빼거나, 배치 사이 간격을 `fail_timeout`보다 길게 둔다. `prematurely closed`가 많으면 처리 중인 요청을 끊고 서버를 내렸다는 뜻이니 드레이닝 시간을 늘리거나 앱의 정상 종료를 고친다. `Connection refused`만 조금 있고 사용자 에러가 없다면 nginx가 다른 서버로 재시도해서 덮은 것이다. 다만 POST가 섞여 있다면 그만큼 502가 났을 수 있다.
+
+배포는 "완료"인데 일부 서버가 옛 버전이라면 헬스 체크에서 멈춘 배포가 알림 없이 끝난 것이다. 버전을 응답 헤더나 `/version` 엔드포인트로 노출해 두면 서버마다 한 번씩 물어 바로 확인할 수 있다.
+
+배포 중에만 4xx나 역직렬화 에러가 보인다면 섞여 있는 버전끼리 맞지 않는 것이다. 에러 로그에서 요청을 받은 서버의 버전과, 그 요청을 만든 화면이나 메시지의 버전을 같이 본다. 배포가 끝나면 사라지니 재현하려 애쓰기보다 배포 시간대 로그를 버전별로 나눠 보는 게 빠르다.
+
+## 빼는 순서가 전부다
+
+롤링 배포는 서버를 몇 대씩 묶어 차례로 바꾸는 방식이고, 추가 비용이 거의 없는 대신 두 버전이 섞이는 시간을 견뎌야 한다. 안전한 한 바퀴는 로드 밸런서에서 빼기, 남은 요청 끝내기, 정상 종료와 새 버전 시작, 연속 헬스 체크, 다시 넣기의 순서다. 로드 밸런서보다 앱이 먼저 내려가면, 정상 종료를 해도 로드 밸런서는 그걸 장애로 보고 서버를 쉬게 하고, 배포 속도가 그 쉬는 시간보다 빠르면 서버가 모두 빠질 수 있다. 배치 크기는 남은 서버가 피크를 버티는지로 정하고, API·스키마·캐시 형식은 섞여 있는 동안에도 깨지지 않게 단계를 나눈다.
+
+## 면접에서 나올 만한 질문
+
+### 롤링 배포가 무엇이고 장단점은?
+
+서버를 몇 대씩 묶어 차례로 새 버전으로 바꾸는 배포입니다. 추가 서버가 거의 필요 없고 대부분의 도구가 기본으로 지원합니다. 대신 배포하는 동안 두 버전이 함께 요청을 받으니 API와 스키마가 두 버전과 모두 맞아야 하고, 되돌리기도 같은 롤링을 다시 해야 해서 느립니다.
+
+### 롤링 배포 중에 502가 나는 흔한 원인은?
+
+로드 밸런서에서 빼기 전에 서버를 내리는 것입니다. 처리 중이던 요청이 끊기고, 로드 밸런서는 그걸 장애로 보고 서버를 잠깐 제외합니다. nginx는 기본값 max_fails=1, fail_timeout=10s라서 1초 간격으로 네 대를 돌렸더니 네 대가 모두 제외되어 7초 동안 no live upstreams 502가 났습니다. 로드 밸런서에서 먼저 빼고, 드레이닝한 뒤 내립니다.
+
+### 앱이 SIGTERM에 정상 종료하면 충분하지 않나요?
+
+충분하지 않습니다. 처리 중인 요청은 지키지만, 포트를 닫은 뒤 로드 밸런서가 새 연결을 시도하면 거절당하고 그것도 실패로 셉니다. 로드 밸런서가 모르는 사이에 내려가면 로드 밸런서에게는 장애입니다. 그래서 로드 밸런서에서 빼는 단계가 앱 종료보다 먼저 와야 합니다.
+
+### 배포 중 GET은 괜찮은데 POST만 실패하는 이유는?
+
+프록시의 재시도 정책 때문입니다. nginx의 proxy_next_upstream은 에러가 나면 다음 서버로 다시 보내는데, POST 같은 멱등하지 않은 요청은 이미 백엔드에 보낸 뒤라면 다시 보내지 않습니다. 처리 도중 서버가 내려가면 GET은 재시도로 가려지고 POST는 502가 됩니다. 배포 리허설에 쓰기 요청을 섞어야 하는 이유입니다.
+
+### 배치 크기는 어떻게 정하나요?
+
+빠진 서버를 뺀 나머지가 피크 부하를 감당하는지로 정합니다. 배치가 크면 빨리 끝나지만 남은 용량이 줄고, 헬스 체크가 놓친 문제가 한 번에 더 많은 서버로 퍼집니다. 용량이 빠듯하면 먼저 새 서버를 더 띄우는 surge 방식을 쓰고, 서버가 아주 적으면 블루그린이 더 단순할 수 있습니다.
+
+### 섞여 있는 동안 깨지지 않게 하려면 무엇을 지켜야 하나요?
+
+새 버전이 옛 요청을 받고 옛 버전이 새 요청을 견디게 합니다. 새 API를 부르는 화면은 그 API가 모든 서버에 깔린 다음 배포에서 내보내고, 응답 필드는 지우지 말고 추가합니다. DB 스키마는 넓히기와 좁히기로 나누고, 캐시나 큐 메시지 형식은 읽을 때 두 형식을 모두 받게 한 뒤 쓰는 형식을 나중에 바꿉니다.
+
+### 롤링 배포 대신 블루그린이나 카나리를 고르는 때는?
+
+두 버전이 함께 돌 수 없거나 되돌리기가 빨라야 하면 블루그린입니다. 롤링의 되돌리기는 같은 롤링을 다시 하는 일이라 서버가 많으면 오래 걸립니다. 영향 범위를 처음부터 작게 하고 지표로 판단하고 싶으면 카나리입니다. 서버가 두세 대뿐이라 한 대만 빼도 용량이 모자랄 때도 블루그린이나 surge가 낫습니다.

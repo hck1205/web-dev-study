@@ -1,0 +1,419 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-composite");
+
+쇼핑몰에 "카메라 키트"라는 세트 상품이 있다. 바디, SD카드, 그리고 "렌즈 세트"가 들어 있고, 렌즈 세트는 다시 렌즈와 필터로 이루어진다. 세트 안에 세트가 들어간 것이다. 어느 날 장바구니 화면의 상품 개수가 4가 아니라 2로 찍힌다는 문의가 들어온다. 금액과 무게는 맞는데 개수만 틀렸다.
+
+원인을 찾아보면 금액, 무게, 개수를 세는 함수가 각자 "세트면 안을 뒤진다"는 재귀를 따로 짜고 있었다. 그중 하나가 한 단계만 내려가고 멈췄다. 이번 글은 이런 트리 모양 데이터를 다루는 컴포지트(Composite) 패턴이다. 하나짜리와 묶음을 같은 방식으로 부르게 해서, 재귀를 부르는 쪽이 아니라 객체 안에 한 번만 두는 방법이다. 구조 패턴 전체에서 어디쯤인지는 [디자인 패턴 개요](/posts/design-patterns-overview)에 정리해 두었다.
+
+## 세트 안에 세트가 들어오던 날
+
+처음 코드는 이렇다. 상품과 세트를 `kind`로 나누고, 필요한 계산마다 함수를 하나씩 만들었다.
+
+```ts
+type Product = { kind: "product"; name: string; price: number; weight: number };
+type Bundle = { kind: "bundle"; name: string; discount: number; items: CartItem[] };
+type CartItem = Product | Bundle;
+
+// 금액 계산
+function priceOf(item: CartItem): number {
+  if (item.kind === "product") return item.price;
+  let sum = 0;
+  for (const child of item.items) sum += priceOf(child);
+  return Math.round(sum * (1 - item.discount));
+}
+
+// 배송 무게: 같은 재귀를 또 쓴다
+function weightOf(item: CartItem): number {
+  if (item.kind === "product") return item.weight;
+  return item.items.reduce((s, c) => s + weightOf(c), 0);
+}
+
+// 상품 개수: 세트 안의 세트를 깜빡했다
+function countOf(item: CartItem): number {
+  if (item.kind === "product") return 1;
+  return item.items.filter((c) => c.kind === "product").length;
+}
+```
+
+`countOf`는 바로 아래 칸만 본다. 카메라 키트의 직접 자식 중 상품은 바디와 SD카드 둘뿐이라 2가 나온다. 렌즈 세트 안의 렌즈와 필터는 빠졌다.
+
+코드 리뷰에서 이걸 잡기는 어렵다. 함수마다 따로 보면 다 그럴듯하다. 문제는 "세트면 안으로 들어간다"는 같은 규칙이 함수 수만큼 복사되어 있다는 데 있다. 쿠폰 적용 가능 여부, 재고 확인, 포인트 적립률처럼 계산이 늘 때마다 `if (item.kind === "bundle")`도 같이 늘어난다. 그리고 그중 하나는 언젠가 틀린다.
+
+## 하나와 묶음이 같은 질문에 답한다
+
+컴포지트는 질문을 받는 쪽을 바꾼다. 장바구니가 "이게 세트인가?"를 묻지 않고, 모든 항목에게 같은 질문(`price()`, `weight()`, `count()`)을 던진다. 상품은 자기 값을 바로 답하고, 세트는 자식들에게 같은 질문을 넘긴 뒤 답을 모아 돌려준다. 묻는 쪽은 상대가 하나짜리인지 묶음인지 모른다.
+
+GoF는 등장인물을 셋으로 나눈다. 공통 인터페이스인 Component, 자식이 없는 Leaf, 자식을 들고 있는 Composite다. 아래 그림에서 Bundle이 무엇을 들고 있는지 보자. 자식의 타입이 Product가 아니라 CartItem이라서 세트 안에 세트가 얼마든지 들어간다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="Bundle은 CartItem을 담고, 자신도 CartItem이다"
+  nodes={[
+    { id: "client", label: "Cart", sub: "Client", x: 170, y: 35, w: 110 },
+    { id: "comp", label: "CartItem", sub: "price() count()", x: 170, y: 120, w: 140 },
+    { id: "items", label: "CartItem[]", sub: "자식 목록", x: 335, y: 120, w: 110 },
+    { id: "leaf", label: "Product", sub: "Leaf", x: 80, y: 215, w: 110 },
+    { id: "bundle", label: "Bundle", sub: "Composite", x: 275, y: 215, w: 120 },
+  ]}
+  edges={[
+    { from: "client", to: "comp", label: "같은 질문" },
+    { from: "leaf", to: "comp", label: "implements", dashed: true },
+    { from: "bundle", to: "comp", label: "implements", dashed: true },
+    { from: "bundle", to: "items", label: "가진다" },
+    { from: "items", to: "comp", label: "원소 타입" },
+  ]}
+/>
+
+코드로 옮기면 재귀는 `Bundle` 안에 한 번씩만 남는다.
+
+```ts
+interface CartItem {
+  readonly name: string;
+  price(): number;
+  weight(): number;
+  count(): number;
+}
+
+class Product implements CartItem {
+  constructor(readonly name: string, private readonly unitPrice: number, private readonly grams: number) {}
+  price() { return this.unitPrice; }
+  weight() { return this.grams; }
+  count() { return 1; }
+}
+
+class Bundle implements CartItem {
+  private readonly items: CartItem[] = [];
+  constructor(readonly name: string, private readonly discount = 0) {}
+
+  add(item: CartItem): this {
+    this.items.push(item);
+    return this;
+  }
+
+  price() {
+    const sum = this.items.reduce((s, c) => s + c.price(), 0);
+    return Math.round(sum * (1 - this.discount));
+  }
+  weight() { return this.items.reduce((s, c) => s + c.weight(), 0); }
+  count() { return this.items.reduce((s, c) => s + c.count(), 0); }
+}
+
+const lens = new Bundle("렌즈 세트", 0.1)
+  .add(new Product("렌즈", 300_000, 400))
+  .add(new Product("필터", 40_000, 50));
+
+const kit = new Bundle("카메라 키트", 0.05)
+  .add(new Product("바디", 1_200_000, 650))
+  .add(lens)
+  .add(new Product("SD카드", 30_000, 10));
+
+const cart: CartItem[] = [kit, new Product("가방", 80_000, 900)];
+
+for (const item of cart) console.log(item.name, item.price(), item.weight(), item.count());
+console.log("total", cart.reduce((s, c) => s + c.price(), 0));
+```
+
+```text
+카메라 키트 1459200 1110 4
+가방 80000 900 1
+total 1539200
+```
+
+개수가 4로 돌아왔다. `count()`도 `price()`와 같은 자리에서 같은 방식으로 자식에게 묻기 때문이다. 장바구니 코드에는 `kind` 검사가 하나도 없다. 세트를 몇 겹으로 넣든 `cart`를 도는 반복문은 그대로다.
+
+## 계산은 잎에서 시작해 위로 올라온다
+
+`kit.price()` 한 번이 안에서 어떻게 퍼지는지 따라가 보자. 아래 그림에서 다음을 누르면 질문이 아래로 내려가고 답이 위로 올라온다.
+
+<SequenceDiagram
+  caption="같은 질문이 트리를 타고 내려갔다가 합쳐져 올라온다"
+  actors={[
+    { id: "cart", label: "Cart" },
+    { id: "kit", label: "카메라 키트" },
+    { id: "lens", label: "렌즈 세트" },
+    { id: "leaf", label: "Product" },
+  ]}
+  steps={[
+    { from: "cart", to: "kit", label: "price()", title: "장바구니는 키트에게 묻는다", detail: "장바구니는 키트가 세트인지 모른다. CartItem이니 price()를 부를 뿐이다." },
+    { from: "kit", to: "leaf", label: "바디.price()", title: "키트는 첫 자식에게 같은 질문을 넘긴다", detail: "바디는 Leaf라 더 내려갈 곳이 없다. 자기 가격을 바로 답한다." },
+    { from: "leaf", to: "kit", label: "1,200,000", title: "잎이 먼저 답한다", detail: "키트는 이 값을 들고 다음 자식으로 넘어간다." },
+    { from: "kit", to: "lens", label: "price()", title: "다음 자식은 또 세트다", detail: "키트 입장에서는 바디와 렌즈 세트가 똑같이 CartItem이다. 같은 메서드를 부른다." },
+    { from: "lens", to: "leaf", label: "렌즈, 필터", title: "렌즈 세트가 자기 자식에게 묻는다", detail: "한 단계 더 내려갔다. 질문의 모양은 그대로다." },
+    { from: "leaf", to: "lens", label: "340,000", title: "두 잎의 합이 올라온다", detail: "300,000 + 40,000 = 340,000이다." },
+    { from: "lens", to: "kit", label: "306,000", title: "세트가 자기 규칙을 적용해 답한다", detail: "렌즈 세트는 10% 할인이라 340,000 × 0.9 = 306,000을 돌려준다. 할인 규칙은 세트마다 자기 안에 있다." },
+    { from: "kit", to: "cart", label: "1,459,200", title: "맨 위에서 마지막 계산을 한다", detail: "SD카드 30,000까지 더한 1,536,000에 키트 할인 5%를 적용해 1,459,200이다.", payload: "(1,200,000 + 306,000 + 30,000) × 0.95 = 1,459,200" },
+  ]}
+/>
+
+순서로 보면 깊이 우선 탐색의 후위 순회다. 자식을 다 계산해야 부모를 계산할 수 있다. 호출 스택에 무엇이 쌓였다 빠지는지 보면 더 분명하다.
+
+<AlgoTrace
+  caption="세트에 들어갈 때 스택에 쌓이고, 다 더하면 빠진다"
+  memoryLabel="호출 스택 (세트: 지금까지 합)"
+  cells={["키트", "바디", "렌즈 세트", "렌즈", "필터", "SD카드"]}
+  steps={[
+    { pointer: 0, memory: ["키트: 0"], caption: "키트의 price()가 시작된다. 아직 아무것도 더하지 않았다." },
+    { pointer: 1, memory: ["키트: 1,200,000"], caption: "바디는 잎이라 바로 답한다. 스택에 쌓이지 않는다." },
+    { pointer: 2, memory: ["키트: 1,200,000", "렌즈 세트: 0"], caption: "렌즈 세트에 들어가면서 스택이 한 칸 깊어진다." },
+    { pointer: 3, memory: ["키트: 1,200,000", "렌즈 세트: 300,000"], caption: "렌즈 300,000을 더한다." },
+    { pointer: 4, memory: ["키트: 1,200,000", "렌즈 세트: 340,000"], caption: "필터 40,000까지 더하면 렌즈 세트의 자식이 끝난다." },
+    { pointer: 2, found: [3, 4], memory: ["키트: 1,506,000"], caption: "렌즈 세트가 10% 할인한 306,000을 돌려주고 스택에서 빠진다. 키트의 합에 더해진다." },
+    { pointer: 5, found: [1, 3, 4], memory: ["키트: 1,536,000"], caption: "SD카드 30,000을 더한다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "키트가 5% 할인한 1,459,200을 돌려주고 스택이 빈다." },
+  ]}
+/>
+
+스택 깊이는 트리 깊이와 같다. 이 사실이 뒤에서 깊은 트리를 다룰 때 다시 나온다.
+
+## add를 어디에 둘 것인가
+
+GoF 책은 `add`, `remove`, `getChild` 같은 자식 관리 메서드를 Component에 두는 쪽을 보여 준다. 그러면 클라이언트가 Leaf와 Composite를 완전히 똑같이 다룰 수 있다. 이걸 투명성(transparency)이라고 부른다. 대신 Leaf도 `add`를 갖게 되고, 상품에 상품을 넣으려 하면 실행 중에 에러를 던지는 수밖에 없다.
+
+반대는 안전성(safety)이다. 위 코드처럼 `add`를 Bundle에만 둔다. 상품에 `add`를 부르는 코드는 컴파일이 안 된다. 대신 트리를 조립하는 코드는 Bundle 타입을 알아야 한다.
+
+TypeScript에서는 안전한 쪽이 대체로 낫다. 트리를 조립하는 곳(세트 등록 화면, JSON을 읽어 트리로 만드는 곳)은 몇 군데 안 되고, 트리를 읽는 곳(금액, 무게, 화면 그리기)은 많다. 투명성이 필요한 건 읽는 쪽이고, 읽는 쪽에는 `price()` 같은 공통 메서드만 있으면 충분하다. 책에서도 이 선택을 트레이드오프로 남겨 두었다.
+
+## 클래스 없이 트리 하나와 fold 하나
+
+데이터가 서버에서 JSON으로 오는 경우가 많다. 그때마다 클래스 인스턴스로 바꾸는 게 번거롭다면, 처음의 판별 유니온을 그대로 두고 재귀만 한 곳으로 모으는 방법이 있다. 트리를 접는(fold) 함수를 하나 만들고, 계산마다 "잎이면 무엇, 묶음이면 자식 결과로 무엇"만 넘긴다.
+
+```ts
+type Item =
+  | { kind: "product"; name: string; price: number; weight: number }
+  | { kind: "bundle"; name: string; discount: number; items: Item[] };
+
+// 재귀는 여기 한 번만 쓴다
+function fold<R>(
+  item: Item,
+  onProduct: (p: Extract<Item, { kind: "product" }>) => R,
+  onBundle: (b: Extract<Item, { kind: "bundle" }>, children: R[]) => R,
+): R {
+  if (item.kind === "product") return onProduct(item);
+  return onBundle(item, item.items.map((c) => fold(c, onProduct, onBundle)));
+}
+
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+const priceOf = (i: Item) => fold(i, (p) => p.price, (b, xs) => Math.round(sum(xs) * (1 - b.discount)));
+const weightOf = (i: Item) => fold(i, (p) => p.weight, (_, xs) => sum(xs));
+const countOf = (i: Item) => fold(i, () => 1, (_, xs) => sum(xs));
+```
+
+같은 키트로 돌리면 `1459200 1110 4`가 나온다. 처음 코드의 버그는 "재귀를 함수마다 따로 짠다"는 데서 나왔다. fold는 그 재귀를 하나로 줄이니 같은 버그가 생길 자리가 없다.
+
+둘 중 무엇을 고를지는 무엇이 더 자주 늘어나는지로 정한다. 계산 종류(가격, 무게, 개수, 쿠폰 가능 여부…)가 자주 늘고 노드 종류는 상품과 세트로 고정이라면 fold 쪽이 편하다. 계산 하나 추가가 함수 하나 추가다. 노드 종류(구독 상품, 증정품, 디지털 상품…)가 자주 늘고 종류마다 규칙이 다르다면 클래스 쪽이 낫다. 새 종류는 클래스 하나로 끝나고 기존 코드를 건드리지 않는다. 이 축의 반대편을 정면으로 다루는 게 [방문자(Visitor) 패턴](/posts/pattern-visitor)인데, 컴포지트 트리 위에서 계산 종류를 바깥에서 늘리는 방법이다.
+
+## 매일 쓰는 트리들
+
+컴포지트는 이미 날마다 쓰는 도구 안에 있다.
+
+DOM이 가장 익숙한 예다. `Element`와 `Text`는 모두 `Node`를 상속하고, `div.textContent`는 자기 아래 모든 텍스트 노드를 이어 붙여 돌려준다. `p` 하나에 물어보든 `body`에 물어보든 같은 속성이다. `node.contains(other)`, `cloneNode(true)`, `remove()`도 노드 하나와 서브트리를 구분하지 않는다.
+
+React의 자식 타입도 같은 모양이다. `@types/react` 19의 `ReactNode` 정의를 열어 보면 자기 자신을 품고 있다.
+
+<UrlAnatomy
+  caption="ReactNode는 하나짜리와 묶음을 한 타입에 담는다 (@types/react 19)"
+  base="type ReactNode ="
+  separator=" "
+  joiner=" | "
+  params={[
+    { key: "element", display: "ReactElement", title: "컴포넌트 하나", description: "<Button />처럼 JSX 하나가 만드는 값이다. 자기 안에 또 children을 가질 수 있어 Composite 역할도 한다.", required: true },
+    { key: "text", display: "string | number", title: "더 내려갈 곳이 없는 잎", description: "글자와 숫자는 그대로 텍스트 노드가 된다. Leaf다." },
+    { key: "iter", display: "Iterable<ReactNode>", title: "자기 자신을 담는 묶음", description: "배열이나 이터러블 안에 ReactNode가 다시 들어간다. 그래서 [<A />, [<B />, \"text\"]]처럼 겹쳐도 받아 준다. 이 한 줄이 컴포지트다.", code: "const children: ReactNode = [<Title key=\"t\" />, [\"본문\", <Footer key=\"f\" />]];", required: true },
+    { key: "empty", display: "boolean | null | undefined", title: "아무것도 그리지 않는 값", description: "{cond && <A />}가 false를 내도 에러가 나지 않는 이유다. 빈 잎으로 취급한다." },
+  ]}
+/>
+
+Express의 `Router`도 컴포지트다. 라우터는 `(req, res, next)`를 받는 함수, 즉 미들웨어와 같은 모양이다. 그래서 `app.use`에 미들웨어 대신 라우터를 넣을 수 있고, 라우터 안에 라우터를 다시 넣을 수 있다. Express 5.3에서 직접 확인했다.
+
+```js
+const users = express.Router();
+users.get("/:id", (req, res) => {
+  console.log("users:", req.baseUrl, req.url);
+  res.send(`user ${req.params.id}`);
+});
+
+const api = express.Router();
+api.use((req, res, next) => { console.log("api mw:", req.baseUrl, req.url); next(); });
+api.use("/users", users); // 라우터 안에 라우터
+
+const app = express();
+app.use("/api", api);
+
+console.log("typeof router:", typeof users, "| length:", users.length);
+```
+
+```text
+typeof router: function | length: 3
+api mw: /api /users/42
+users: /api/users /42
+200 user 42
+```
+
+`typeof`가 `function`이고 인자 수가 3이다. 미들웨어와 구별할 수 없다. 단계마다 `req.url`에서 붙은 경로가 떨어지고 `req.baseUrl`에 쌓이는 것도 보인다. 아래 그림은 같은 요청이 라우터 트리를 따라 내려가는 모습이다.
+
+<NetworkTopology
+  caption="요청은 라우터 트리를 따라 내려가고, 맞는 곳이 없으면 위로 빠져나온다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "client", label: "Client", x: 45, y: 120, icon: "client", w: 74 },
+    { id: "app", label: "app", sub: "/", x: 135, y: 120, icon: "gateway", w: 72 },
+    { id: "api", label: "api", sub: "/api", x: 225, y: 120, icon: "switch", w: 76 },
+    { id: "users", label: "users", sub: "/users", x: 320, y: 60, icon: "switch", w: 84 },
+    { id: "handler", label: "GET /:id", x: 320, y: 185, icon: "server", w: 96 },
+  ]}
+  links={[
+    { from: "client", to: "app" },
+    { from: "app", to: "api" },
+    { from: "api", to: "users" },
+    { from: "users", to: "handler" },
+  ]}
+  steps={[
+    { path: ["client", "app"], packet: "GET", title: "app이 요청을 받는다", detail: "app은 안에 라우터를 하나 품고 있다. 등록된 순서대로 자식에게 요청을 넘긴다.", payload: "GET /api/users/42" },
+    { path: ["app", "api"], packet: "req", title: "/api가 맞으니 api 라우터로 넘긴다", detail: "api 입장에서 req.url은 /users/42다. 자기가 어디에 붙어 있는지 몰라도 된다." },
+    { path: ["api", "users"], packet: "req", title: "라우터가 라우터를 부른다", detail: "api는 users를 미들웨어 하나로 본다. 같은 (req, res, next) 모양이기 때문이다." },
+    { path: ["users", "handler"], packet: "200", title: "잎에서 응답한다", detail: "핸들러가 user 42를 보낸다. 위의 라우터들은 아무것도 몰라도 된다." },
+    { path: ["client", "app", "api"], packet: "GET", blocked: true, title: "맞는 자식이 없으면 next()로 올라간다", detail: "GET /api/orders는 users에 걸리지 않는다. api가 next()를 불러 app으로 돌아가고, app의 마지막 처리기가 404를 낸다." },
+  ]}
+/>
+
+이 밖에도 파일 시스템(디렉터리 안의 파일과 디렉터리, `du -sh`가 디렉터리 크기를 재귀로 합친다), 조직도, 댓글 트리, 권한 그룹 안의 그룹, 그래픽 편집기의 도형 그룹이 모두 같은 구조다.
+
+## 트리가 그래프가 되는 순간
+
+컴포지트는 데이터가 트리라고 믿는다. 운영 데이터는 그 믿음을 자주 깬다.
+
+첫째는 순환이다. 관리자 화면에서 세트 B 안에 세트 A를 넣었는데 A 안에 이미 B가 있었다면 어떻게 될까.
+
+```js
+const a = new Bundle("A"), b = new Bundle("B");
+a.add(new Product("x", 100)).add(b);
+b.add(a); // B 안에 A를 넣었다
+a.price();
+```
+
+```text
+RangeError: Maximum call stack size exceeded
+```
+
+`a.price()`가 `b.price()`를 부르고, 그게 다시 `a.price()`를 부른다. 이 에러가 상품 상세 API에서 터지면 그 세트가 들어간 모든 장바구니가 500을 낸다. 막는 자리는 조립할 때다. 넣으려는 항목이 이미 나를 품고 있는지 확인한다.
+
+```ts
+interface CartItem {
+  readonly name: string;
+  price(): number;
+  contains(target: CartItem): boolean;
+}
+
+class Bundle implements CartItem {
+  private readonly items: CartItem[] = [];
+  constructor(readonly name: string) {}
+
+  contains(target: CartItem): boolean {
+    return target === this || this.items.some((c) => c.contains(target));
+  }
+
+  add(item: CartItem): this {
+    if (item.contains(this)) throw new Error(`${item.name} 안에 이미 ${this.name}이(가) 있다`);
+    this.items.push(item);
+    return this;
+  }
+
+  price() { return this.items.reduce((s, c) => s + c.price(), 0); }
+}
+```
+
+```text
+A 안에 이미 B이(가) 있다
+```
+
+Product의 `contains`는 `target === this`만 돌려주면 된다. 데이터가 DB에서 오는 경우라면 같은 검사를 저장할 때 한 번 더 한다. 트리를 읽을 때마다 방문한 노드 집합을 들고 다니는 방법도 있지만, 매번 비용을 치르게 된다.
+
+둘째는 공유된 자식이다. 같은 충전기 객체를 세트1과 세트2에 넣고 두 세트를 한 주문에 담으면, `price()`는 충전기를 두 번 센다. 25,000원짜리가 주문 총액에서 50,000원이 된다. 상품을 두 번 산 것이 맞다면 문제없지만, "같은 물건이니 하나만 배송"이 요구사항이라면 트리가 아니라 그래프(DAG)를 다루는 셈이다. 그때는 단순 합 대신 방문한 id를 모아 한 번만 세는 별도 계산이 필요하다. 어느 쪽이 맞는지는 코드가 아니라 기획이 정할 일이니, 공유 자식이 생길 수 있는지 먼저 물어봐야 한다.
+
+셋째는 깊이다. 앞에서 스택 깊이가 트리 깊이와 같다고 했다. 실험해 보니 Node.js 22에서 `reduce` 안에서 재귀하는 이 코드는 깊이 1,000에서는 돌고 3,000에서는 `RangeError`를 냈다. 장바구니가 그렇게 깊을 일은 없지만, 댓글의 답글 체인이나 외부에서 받은 조직도처럼 깊이를 통제할 수 없는 데이터라면 명시적인 스택을 쓰는 반복문으로 바꾼다. 같은 실험에서 반복문 버전은 깊이 100,000도 처리했다.
+
+마지막으로 비용이다. 트리가 크고 `price()`를 자주 부른다면 매번 끝까지 내려가는 게 부담이 된다. 계산 결과를 노드에 캐시하고, 자식이 바뀌면 부모를 거슬러 올라가며 캐시를 지우는 방법을 쓴다. 이러려면 자식이 부모 참조를 알아야 하니 구조가 복잡해진다. 측정해 보고 느릴 때만 한다.
+
+## 데코레이터와 같은 모양, 다른 목적
+
+컴포지트와 [데코레이터](/posts/pattern-decorator)는 클래스 그림이 거의 같다. 둘 다 공통 인터페이스를 구현하면서 같은 인터페이스의 객체를 안에 품는다. 다른 점은 몇 개를 품고 무엇을 하느냐다. 컴포지트는 자식을 여럿 품고 그 결과를 모은다. 데코레이터는 하나만 감싸고 그 호출 앞뒤에 기능을 더한다. 세트 가격은 자식 가격의 합이니 컴포지트이고, "가격에 부가세를 붙여 보여 주기"는 상품 하나를 감싸는 데코레이터다.
+
+[책임 연쇄](/posts/pattern-chain-of-responsibility)와도 헷갈린다. 앞의 Express 예처럼 라우터 트리를 요청이 지나가면 사슬처럼 보인다. 책임 연쇄는 처리할 사람을 찾을 때까지 넘기는 데 목적이 있고, 컴포지트는 전체를 하나처럼 다루는 데 목적이 있다. Express는 두 가지를 겹쳐 쓴다. 트리 안의 각 단계가 `next()`로 넘기는 방식이 책임 연쇄다.
+
+트리를 순서대로 훑는 일만 따로 떼어 내고 싶다면 [반복자](/posts/pattern-iterator)를 붙인다. `*[Symbol.iterator]()`를 Bundle에 구현해 두면 바깥에서 `for...of`로 모든 상품을 돌 수 있다.
+
+## 직접 만들어 보는 세트 계산
+
+아래 `summarize`는 상품이나 세트를 받아 `{ price, count }`를 돌려줘야 한다. 상품은 `{ name, price }`, 세트는 `{ name, discount, items }`다. 세트 가격은 자식 가격 합에 `(1 - discount)`를 곱해 반올림한다. 빈 세트도 들어온다.
+
+<CodePlayground
+  caption="세트 안의 세트까지 계산하는 summarize"
+  functionName="summarize"
+  initialCode={`// node가 상품이면 { name, price }, 세트면 { name, discount, items }다.
+// { price, count }를 돌려준다. count는 들어 있는 상품 수다.
+function summarize(node) {
+  return { price: 0, count: 0 };
+}`}
+  solution={`function summarize(node) {
+  if (!node.items) return { price: node.price, count: 1 };
+  let price = 0;
+  let count = 0;
+  for (const child of node.items) {
+    const r = summarize(child); // 상품이든 세트든 같은 함수로 묻는다
+    price += r.price;
+    count += r.count;
+  }
+  return { price: Math.round(price * (1 - (node.discount ?? 0))), count };
+}`}
+  tests={[
+    { args: [{ name: "펜", price: 1500 }], expected: { price: 1500, count: 1 }, label: "상품 하나" },
+    { args: [{ name: "문구 세트", discount: 0.1, items: [{ name: "펜", price: 1500 }, { name: "노트", price: 3500 }] }], expected: { price: 4500, count: 2 }, label: "할인 10% 세트" },
+    { args: [{ name: "카메라 키트", discount: 0.05, items: [{ name: "바디", price: 1200000 }, { name: "렌즈 세트", discount: 0.1, items: [{ name: "렌즈", price: 300000 }, { name: "필터", price: 40000 }] }, { name: "SD카드", price: 30000 }] }], expected: { price: 1459200, count: 4 }, label: "세트 안의 세트" },
+    { args: [{ name: "빈 세트", discount: 0, items: [] }], expected: { price: 0, count: 0 }, label: "빈 세트" },
+    { args: [{ name: "겉", discount: 0, items: [{ name: "속", discount: 0, items: [{ name: "a", price: 100 }] }, { name: "b", price: 50 }] }], expected: { price: 150, count: 2 }, label: "할인 없는 이중 세트" },
+  ]}
+/>
+
+풀이의 `summarize(child)`는 상대가 상품인지 세트인지 묻지 않는다. 분기는 함수 맨 위 한 곳뿐이다. 클래스 버전에서는 그 분기마저 다형성(메서드 호출)이 대신한다.
+
+## 컴포지트가 과한 경우
+
+깊이가 고정되어 있으면 트리로 일반화할 이유가 없다. "대분류 › 소분류" 두 단계로 정해진 카테고리라면 `Category { subcategories: Subcategory[] }`처럼 타입을 둘로 두는 편이 읽기 쉽고, "소분류 안에 대분류"처럼 말이 안 되는 조합을 타입이 막아 준다.
+
+잎과 묶음이 할 수 있는 일이 크게 다를 때도 무리가 생긴다. 공통 인터페이스에 둘 중 한쪽만 의미 있는 메서드가 쌓이기 시작하면(`Product.getSku()`를 위해 Bundle도 `getSku()`를 만들고 `null`을 돌려주는 식), 같은 것처럼 다루는 이점보다 억지로 맞추는 비용이 커진 것이다.
+
+컴포지트는 "하나와 여럿을 같은 질문으로 다룬다"는 한 문장으로 기억하면 된다. 질문을 받는 쪽이 자기 자식에게 같은 질문을 넘기니 재귀가 객체 안에 한 번만 남고, 부르는 쪽은 트리의 모양을 몰라도 된다. 대신 데이터가 정말 트리인지(순환, 공유, 깊이)는 조립하는 쪽이 지켜야 한다.
+
+## 면접에서 나올 만한 질문
+
+### 컴포지트 패턴은 어떤 문제를 푸나요?
+
+부분과 전체가 트리를 이룰 때 하나짜리와 묶음을 같은 인터페이스로 다루게 한다. 클라이언트가 "이게 묶음인가"를 매번 검사하지 않고 같은 메서드를 부르면, 묶음은 자식에게 같은 메서드를 넘겨 결과를 모은다. 재귀가 호출하는 쪽마다 복사되지 않고 Composite 안에 한 번만 남는 것이 가장 큰 이점이다.
+
+### Leaf와 Composite의 차이는 무엇이고, 자식 관리 메서드는 어디에 두나요?
+
+Leaf는 자식이 없어 자기 값을 바로 답하고, Composite는 자식 목록을 들고 결과를 모은다. add나 remove를 Component에 두면 둘을 완전히 같게 다룰 수 있지만(투명성) Leaf에 의미 없는 메서드가 생기고 실행 중 에러로 막아야 한다. Composite에만 두면(안전성) 컴파일러가 잘못된 조립을 막는 대신 조립하는 코드는 Composite 타입을 알아야 한다. 타입이 있는 언어에서는 읽는 곳이 많고 조립하는 곳이 적어서 안전성 쪽을 고르는 경우가 많다.
+
+### 실무에서 컴포지트를 본 예를 들어 주세요.
+
+DOM이 대표적이다. Element와 Text가 모두 Node이고, textContent나 cloneNode(true)는 노드 하나와 서브트리를 구분하지 않는다. React의 ReactNode 타입은 `Iterable<ReactNode>`를 포함해서 배열 안에 배열을 넣어도 받아 준다. Express의 Router는 미들웨어와 같은 (req, res, next) 함수라서 app.use에 넣을 수 있고 라우터 안에 라우터를 넣을 수 있다.
+
+### 컴포지트 트리에 순환이 생기면 어떻게 되고, 어떻게 막나요?
+
+자식이 부모를 다시 품으면 재귀 호출이 끝나지 않아 자바스크립트에서는 Maximum call stack size exceeded가 난다. 그 노드가 들어간 모든 계산이 실패하니 장애 범위가 크다. 조립할 때 넣으려는 항목이 이미 나를 포함하는지 contains로 검사해 막고, DB에서 읽는 데이터라면 저장 시점에도 같은 검사를 한다.
+
+### 트리가 아주 깊거나 크면 무엇이 문제인가요?
+
+재귀 깊이가 트리 깊이와 같아서 깊은 트리는 스택 오버플로를 낸다. 깊이를 통제할 수 없는 데이터라면 명시적 스택을 쓰는 반복문으로 바꾼다. 크고 자주 계산하는 트리라면 노드에 결과를 캐시하고 자식이 바뀔 때 부모 쪽으로 무효화를 전파하는데, 부모 참조가 필요해지니 측정한 뒤에 도입한다.
+
+### 컴포지트와 데코레이터는 구조가 비슷한데 무엇이 다른가요?
+
+둘 다 같은 인터페이스를 구현하면서 같은 인터페이스의 객체를 품지만, 컴포지트는 자식을 여럿 품고 결과를 모으는 것이 목적이고 데코레이터는 하나를 감싸 호출 앞뒤에 기능을 더하는 것이 목적이다. 세트 가격 합산은 컴포지트, 상품 하나에 부가세 표시를 덧붙이는 건 데코레이터다.
+
+### 클래스 없이 컴포지트를 구현한다면요?
+
+판별 유니온으로 트리 타입을 정의하고 fold 같은 재귀 함수 하나에 순회를 모은 뒤, 계산마다 잎과 묶음의 처리만 넘긴다. 계산 종류가 자주 늘고 노드 종류가 고정이면 이 방식이 편하다. 노드 종류가 자주 늘고 종류마다 규칙이 다르면 클래스 다형성이 새 종류를 기존 코드 수정 없이 받아 준다.

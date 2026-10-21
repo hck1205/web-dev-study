@@ -1,0 +1,274 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("csrf");
+
+은행 사이트에 로그인해 둔 채로 다른 탭에서 "귀여운 고양이 모음" 같은 페이지를 열었다. 그 페이지 안에 숨어 있던 `<form>`이 내 몰래 은행의 송금 주소로 POST를 날린다. 브라우저는 그 요청에 내 로그인 쿠키를 알아서 붙여 보낸다. 은행 서버 입장에서는 진짜 나의 요청과 구분이 안 된다. 이게 CSRF(Cross-Site Request Forgery), 교차 사이트 요청 위조다.
+
+핵심은 이상하게도 공격 코드가 내 쿠키를 훔치지 않는다는 데 있다. 쿠키는 그대로 브라우저 안에 잘 있다. 공격자는 쿠키를 읽지 못해도 된다. 브라우저가 요청에 쿠키를 자동으로 붙인다는 성질 하나만 빌리면 된다. 이 글은 왜 쿠키가 이런 공격을 가능하게 하는지, 그리고 SameSite·토큰·`Origin` 검사로 어떻게 막는지를 컨테이너 안에서 실제 크로미움을 띄워 확인한 결과로 설명한다.
+
+쿠키와 세션의 기본은 [쿠키와 세션으로 로그인 상태 유지하기](/posts/cookie-session-login)에, 브라우저가 응답을 못 읽게 막는 CORS는 [CORS: 서버는 응답했는데 브라우저가 막는 이유](/posts/cors)에 정리해 두었다. 이 글은 그 위에서 "요청 자체를 위조하는" 쪽을 다룬다.
+
+## 쿠키가 알아서 붙는다는 것의 대가
+
+로그인 상태를 쿠키로 들고 다니는 구조를 떠올려 보자. 로그인하면 서버가 `Set-Cookie`로 세션 번호표를 주고, 이후 같은 사이트로 가는 모든 요청에 브라우저가 그 쿠키를 자동으로 붙인다. 덕분에 매번 로그인하지 않아도 된다. 편하다.
+
+문제는 "같은 사이트로 가는 모든 요청"에 **다른 사이트가 유발한 요청**도 섞여 있다는 점이다. `attacker.test`가 띄운 페이지가 `victim.test`로 요청을 보내게 만들면, 그 요청에도 `victim.test`의 쿠키가 붙는다. 브라우저는 "이 요청을 누가 시켰는지"를 따지지 않고, "어느 사이트로 가는지"만 보고 쿠키를 붙이기 때문이다.
+
+아래 그림에서 다음을 누르면 공격이 한 단계씩 진행된다.
+
+<SequenceDiagram
+  caption="공격 페이지는 쿠키를 훔치지 않는다. 브라우저가 알아서 붙여 줄 뿐이다."
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "evil", label: "공격 페이지" },
+    { id: "browser", label: "브라우저" },
+    { id: "bank", label: "victim.test" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "bank",
+      label: "로그인",
+      title: "먼저 피해 사이트에 로그인해 둔다",
+      detail: "victim.test에 로그인하면 세션 쿠키가 브라우저에 저장된다. 이 쿠키는 victim.test로 가는 요청에 자동으로 붙는다.",
+      payload: "Set-Cookie: session=sess-xyz; HttpOnly; Path=/",
+    },
+    {
+      from: "user",
+      to: "evil",
+      label: "다른 탭 방문",
+      title: "사용자가 공격자의 페이지를 연다",
+      detail: "광고, 메일 링크, 커뮤니티 글 어디서든 열릴 수 있다. 로그인은 그대로 유지된다.",
+    },
+    {
+      from: "evil",
+      to: "browser",
+      label: "form.submit()",
+      title: "공격 페이지가 몰래 POST를 쏜다",
+      detail: "숨겨 둔 폼이 자바스크립트로 자동 제출된다. 보내는 주소는 victim.test의 송금 엔드포인트다.",
+      payload: "<form action=\"https://victim.test/transfer\" method=POST>\n  <input name=to value=mallory>\n</form>",
+    },
+    {
+      from: "browser",
+      to: "bank",
+      label: "POST +cookie",
+      title: "브라우저가 세션 쿠키를 붙여 보낸다",
+      detail: "요청 주소가 victim.test이므로 브라우저는 그 사이트의 쿠키를 자동으로 붙인다. 공격 페이지는 이 쿠키를 보지도 못한다.",
+      payload: "POST /transfer HTTP/1.1\nHost: victim.test\nCookie: session=sess-xyz\nOrigin: https://attacker.test",
+    },
+    {
+      from: "bank",
+      to: "bank",
+      label: "송금 실행",
+      title: "서버는 진짜 요청과 구분하지 못한다",
+      detail: "유효한 세션 쿠키가 붙어 있으니 서버는 로그인한 사용자가 보낸 요청으로 본다. 돈이 빠져나간다.",
+    },
+  ]}
+/>
+
+눈여겨볼 곳은 네 번째 단계다. 응답을 읽는 건 [CORS](/posts/cors)가 막지만, 요청이 가서 서버가 처리하는 것 자체는 CORS가 막지 않는다. CORS는 "다른 출처의 응답을 **읽는** 것"을 막는 규칙이지 "요청을 **보내는** 것"을 막는 규칙이 아니다. 송금은 보내는 순간 이미 끝난다. 그래서 CSRF는 상태를 바꾸는 요청(POST·PUT·DELETE)에서 특히 위험하다.
+
+## Set-Cookie에 붙는 옵션을 뜯어본다
+
+CSRF 방어의 1차 방어선은 쿠키 자체에 있다. 세션 쿠키를 내려 줄 때 붙이는 속성 하나하나가 공격 표면을 줄인다.
+
+<UrlAnatomy
+  caption="세션 쿠키를 내려 줄 때의 Set-Cookie. 조각을 눌러 보자."
+  base="Set-Cookie: session=sess-xyz"
+  separator="; "
+  joiner="; "
+  params={[
+    {
+      key: "HttpOnly",
+      title: "자바스크립트가 못 읽는다",
+      description: "document.cookie로 접근할 수 없다. XSS로 스크립트가 심겨도 세션 쿠키를 긁어 가지 못한다. CSRF 자체를 막지는 않지만 피해를 줄인다.",
+    },
+    {
+      key: "Secure",
+      title: "HTTPS에서만 전송",
+      description: "암호화된 연결에서만 쿠키를 보낸다. SameSite=None을 쓰려면 반드시 함께 붙여야 한다.",
+    },
+    {
+      key: "SameSite",
+      value: "Lax",
+      title: "교차 사이트 요청에 붙일지 결정",
+      description: "이 글의 주인공이다. Strict / Lax / None 세 값에 따라 다른 사이트가 유발한 요청에 쿠키를 붙일지가 갈린다.",
+    },
+    {
+      key: "Path",
+      value: "/",
+      title: "쿠키를 보낼 경로 범위",
+      description: "이 경로 아래로 가는 요청에만 붙는다. 보안 경계라기보다 범위 설정에 가깝다.",
+    },
+  ]}
+/>
+
+`HttpOnly`가 왜 CSRF 글에 나오는지 짚어 두자. CSRF와 XSS는 자주 엮인다. [XSS](/posts/xss)로 스크립트를 심을 수 있으면 공격자는 CSRF 토큰까지 읽어서 방어를 통째로 우회한다. `HttpOnly`는 그 연결 고리 하나를 끊는다. 쿠키는 못 읽게 하되, 붙는 건 그대로다.
+
+## SameSite가 교차 사이트 요청을 거른다
+
+`SameSite`는 "이 쿠키를 다른 사이트가 유발한 요청에도 붙일 것인가"를 정한다. 여기서 "사이트"는 등록 가능 도메인(eTLD+1) 기준이다. `victim.test`와 `attacker.test`는 다른 사이트이고, `a.victim.test`와 `victim.test`는 같은 사이트다. 포트나 서브도메인 차이는 사이트를 가르지 않는다(이 점이 출처 기준인 CORS와 다르다).
+
+세 값의 동작을 글로만 읽으면 헷갈린다. 그래서 `victim.test`와 `attacker.test`를 로컬에 HTTPS로 띄우고, 실제 크로미움으로 공격을 재현했다. 공격 페이지는 숨긴 폼을 자동 제출해 `victim.test/transfer`로 교차 사이트 POST를 보낸다. 서버는 세션 쿠키가 붙어 왔는지를 로그로 남긴다.
+
+```text
+========== SameSite=Strict ==========
+TRANSFER method=POST cookie=(none) authed=false Origin=https://attacker.test Sec-Fetch-Site=cross-site
+
+========== SameSite=Lax ==========
+TRANSFER method=POST cookie=(none) authed=false Origin=https://attacker.test Sec-Fetch-Site=cross-site
+
+========== SameSite=None ==========
+TRANSFER method=POST cookie=sess-xyz authed=true Origin=https://attacker.test Sec-Fetch-Site=cross-site
+```
+
+`Strict`와 `Lax`는 교차 사이트 POST에 쿠키를 붙이지 않았다(`cookie=(none)`, `authed=false`). `None`은 붙였다(`cookie=sess-xyz`, `authed=true`). `None`에서는 공격이 그대로 성공한다는 뜻이다. `None`은 반드시 `Secure`와 함께여야 하고, 서드파티 쿠키가 꼭 필요한 경우(결제 위젯, 임베드)에만 쓴다.
+
+그럼 `Strict`와 `Lax`의 차이는 뭘까. `Lax`는 "최상위 내비게이션 GET"에는 예외를 둔다. 사용자가 링크를 눌러 다른 사이트에서 `victim.test`로 **이동**하는 GET 요청에는 쿠키를 붙인다. 로그인된 채로 외부 링크를 눌렀을 때 바로 로그인 상태로 보이게 하려는 절충이다. 같은 실험에서 공격 페이지의 링크를 눌러 `victim.test/whoami`로 이동해 봤다.
+
+```text
+--- top-level GET navigation attacker->victim/whoami (SameSite=Strict) ---
+WHOAMI method=GET cookie=(none) authed=false Sec-Fetch-Site=cross-site
+
+--- top-level GET navigation attacker->victim/whoami (SameSite=Lax) ---
+WHOAMI method=GET cookie=sess-xyz authed=true Sec-Fetch-Site=cross-site
+```
+
+`Strict`는 링크 클릭 이동에도 쿠키를 안 붙였다. `Lax`는 붙였다. 그래서 **상태를 바꾸는 요청은 반드시 GET이 아니어야** 한다. `Lax` 쿠키를 쓰면서 `GET /transfer?to=mallory` 같은 엔드포인트를 두면 링크 한 줄로 CSRF가 뚫린다. [HTTP 메서드](/posts/http-methods)에서 GET을 안전한 메서드로 다루는 이유가 여기서도 이어진다.
+
+이 판단을 요청 종류별로 한 번에 보면 이렇다. `Lax` 쿠키 기준으로 각 상황에서 쿠키가 붙는지 따라가 보자.
+
+<AlgoTrace
+  memoryLabel="쿠키 전송?"
+  caption="SameSite=Lax일 때 요청 종류별로 세션 쿠키가 붙는지"
+  cells={["같은 사이트 POST", "교차 top GET", "교차 POST", "교차 fetch", "<img> 교차 GET"]}
+  steps={[
+    { pointer: 0, memory: ["보냄"], caption: "같은 사이트 요청이면 메서드와 무관하게 쿠키를 붙인다." },
+    { pointer: 1, memory: ["보냄", "보냄"], caption: "교차 사이트라도 링크 클릭 같은 최상위 GET 이동이면 Lax는 붙인다." },
+    { pointer: 2, memory: ["보냄", "보냄", "안 보냄"], caption: "교차 사이트 POST에는 붙이지 않는다. 폼 자동 제출 공격이 막힌다." },
+    { pointer: 3, memory: ["보냄", "보냄", "안 보냄", "안 보냄"], caption: "교차 사이트 fetch/XHR에도 붙이지 않는다." },
+    { pointer: 4, found: [1, 4], memory: ["보냄", "보냄", "안 보냄", "안 보냄", "안 보냄"], caption: "이미지 같은 하위 리소스 GET에도 붙이지 않는다. 쿠키가 붙는 교차 경로는 top-level GET 하나뿐이다." },
+  ]}
+/>
+
+<Callout kind="note">
+2020년 이후 크롬 계열은 `SameSite`를 지정하지 않은 쿠키를 `Lax`로 취급한다. 그래서 요즘은 아무것도 안 적어도 교차 사이트 POST는 기본적으로 막힌다. 다만 모든 브라우저·버전이 동일하지는 않고, `Lax`의 top-level GET 예외도 남아 있으니 쿠키 설정만으로 끝났다고 보면 안 된다.
+</Callout>
+
+## 브라우저만 믿지 않는다, 토큰과 Origin 검사
+
+`SameSite`는 브라우저가 지켜 주는 방어다. 오래된 브라우저, 비표준 클라이언트, `Lax`의 GET 예외 같은 틈이 있다. 그래서 서버 쪽에서도 "이 요청이 정말 우리 화면에서 시작됐는가"를 직접 확인한다. 두 축이 있다.
+
+하나는 **CSRF 토큰**이다. 서버가 화면을 내려 줄 때 예측 불가능한 토큰을 심고, 상태를 바꾸는 요청에 그 토큰을 같이 받아 대조한다. 공격 페이지는 `victim.test`의 응답을 읽지 못하니 이 토큰을 알 수 없다. 두 가지 방식이 있다.
+
+<ConceptDiagram
+  caption="동기화 토큰은 서버가 기억하고, 이중 제출 쿠키는 쿠키와 폼 값을 맞춰 본다."
+  width={400}
+  height={250}
+  nodes={[
+    { id: "syn", label: "동기화 토큰", sub: "서버 세션에 저장", x: 110, y: 55, w: 150 },
+    { id: "sess", label: "서버 세션", sub: "token 보관", x: 110, y: 160, w: 150 },
+    { id: "dbl", label: "이중 제출 쿠키", sub: "서버 저장 없음", x: 300, y: 55, w: 150 },
+    { id: "ck", label: "쿠키의 token", sub: "", x: 300, y: 145, w: 150 },
+    { id: "form", label: "폼의 token", sub: "", x: 300, y: 205, w: 150 },
+  ]}
+  edges={[
+    { from: "syn", to: "sess", label: "대조" },
+    { from: "dbl", to: "ck", arrow: "none" },
+    { from: "dbl", to: "form", arrow: "none" },
+    { from: "ck", to: "form", label: "같은지 비교", arrow: "both", dashed: true },
+  ]}
+/>
+
+**동기화 토큰(synchronizer token)**은 서버가 세션에 토큰을 저장해 두고, 폼이 보낸 토큰과 세션의 토큰을 맞춰 본다. 가장 확실하지만 서버가 상태를 들고 있어야 한다. 서버가 여러 대로 늘어나면 세션 공유가 필요하다.
+
+**이중 제출 쿠키(double-submit cookie)**는 서버가 아무것도 저장하지 않는다. 같은 랜덤 값을 쿠키와 폼(또는 커스텀 헤더) 양쪽에 담게 하고, 요청이 오면 둘이 같은지만 본다. 공격 페이지는 `victim.test`의 쿠키 값을 읽을 수 없으니 폼에 같은 값을 채워 넣지 못한다. 상태 없이 동작해서 서버 여러 대 환경에 편하지만, 서브도메인 XSS나 쿠키 주입에 약하다는 한계가 있어 값에 서명을 붙이는 변형을 쓴다.
+
+이중 제출 검증의 핵심 로직은 아주 짧다. 직접 고쳐 돌려 보자.
+
+<CodePlayground
+  caption="이중 제출 쿠키 검증: 쿠키의 토큰과 헤더의 토큰을 타이밍 공격에 안전하게 비교한다"
+  functionName="csrfOk"
+  initialCode={`function csrfOk(cookieToken, headerToken) {\n  // 두 토큰이 모두 존재하고 정확히 같을 때만 true\n  // 길이가 다르면 바로 false, 같으면 모든 글자를 끝까지 비교(조기 종료 금지)\n  return false;\n}`}
+  solution={`function csrfOk(cookieToken, headerToken) {\n  if (!cookieToken || !headerToken) return false;\n  if (cookieToken.length !== headerToken.length) return false;\n  let diff = 0;\n  for (let i = 0; i < cookieToken.length; i++) {\n    diff |= cookieToken.charCodeAt(i) ^ headerToken.charCodeAt(i);\n  }\n  return diff === 0;\n}`}
+  tests={[
+    { args: ["a1b2c3", "a1b2c3"], expected: true, label: "같은 토큰" },
+    { args: ["a1b2c3", "a1b2c4"], expected: false, label: "한 글자 다름" },
+    { args: ["a1b2c3", "a1b2"], expected: false, label: "길이 다름" },
+    { args: ["", ""], expected: false, label: "둘 다 비어 있음" },
+    { args: ["a1b2c3", ""], expected: false, label: "헤더 없음" },
+  ]}
+/>
+
+다른 한 축은 **요청 출처 검사**다. 브라우저는 교차 사이트 요청에 `Origin` 헤더와 `Sec-Fetch-Site` 헤더를 자동으로 붙인다. 둘 다 페이지 코드가 바꿀 수 없다. 서버는 상태 변경 요청에서 이 값을 보고 교차 사이트면 거절한다. 앞 실험의 공격 요청에는 `Origin: https://attacker.test`, `Sec-Fetch-Site: cross-site`가 찍혀 있었다. 이걸 그대로 거르는 엔드포인트를 두고 다시 공격해 봤다.
+
+```text
+========== guarded endpoint: cross-site POST from attacker origin ==========
+GUARDED cookie=sess-xyz Origin=https://attacker.test Sec-Fetch-Site=cross-site -> REJECT
+```
+
+세션 쿠키가 붙어 왔는데도(`SameSite=None`으로 일부러 붙게 한 상황) `Origin`이 우리 사이트가 아니라서 막혔다. `Sec-Fetch-Site: same-origin`일 때만 통과시키면 토큰 없이도 상당수의 CSRF를 거른다. `Origin`이 비어 오는 구형 클라이언트가 걱정이면 `Referer`까지 보조로 본다.
+
+## JSON API와 CORS 사전 요청의 관계
+
+요즘 백엔드는 폼 대신 `fetch`로 JSON을 주고받는다. 여기엔 CSRF 관점에서 중요한 성질이 하나 있다. `Content-Type: application/json`으로 보내는 교차 출처 요청은 CORS의 **사전 요청(preflight)** 대상이다. 브라우저가 실제 요청 전에 `OPTIONS`를 먼저 보내 허락을 받고, 서버가 허용 헤더를 안 주면 실제 요청은 아예 나가지 않는다.
+
+반대로 `application/x-www-form-urlencoded`나 `text/plain` 같은 "단순 요청"은 사전 요청 없이 바로 나간다. 폼 제출이 CSRF에 쓰이는 이유가 이것이다. 같은 공격자 페이지에서 두 방식으로 `victim.test`를 공격해 봤다.
+
+```text
+=== A) 교차 출처 fetch, application/json (사전 요청 발생) ===
+API OPTIONS cookie=(none) CT=(none) Origin=https://attacker.test
+  attacker fetch result: BLOCKED: Failed to fetch
+
+=== B) 교차 출처 POST, form 타입 (단순 요청, 사전 요청 없음) ===
+API POST cookie=sess-xyz CT=application/x-www-form-urlencoded Origin=https://attacker.test
+  attacker fetch result: BLOCKED(read): Failed to fetch
+```
+
+A는 `OPTIONS`만 서버에 닿았고, 서버가 허용 헤더를 안 주자 실제 POST는 나가지도 않았다(`cookie=(none)`). B는 사전 요청 없이 **실제 POST가 쿠키까지 달고 서버에 닿았다**(`cookie=sess-xyz`). 공격자가 응답을 못 읽는 건 둘 다 같지만, B는 이미 서버에서 상태가 바뀐 뒤다. 읽기가 막힌 것과 쓰기가 막힌 것은 전혀 다르다.
+
+여기서 흔한 오해 하나가 풀린다. "우리는 CORS를 설정했으니 CSRF도 막힌다"는 틀린 말이다. CORS는 교차 출처 **읽기**를 막을 뿐, 폼 타입의 단순 요청이 일으키는 **쓰기**는 막지 못한다. JSON만 받도록 `Content-Type`을 강제하고 커스텀 헤더(예: `X-Requested-With`)를 요구하면 사전 요청을 강제해 간접적인 방어가 되지만, 이것도 서버가 `Content-Type`을 엄격히 검사할 때만 성립한다. 자세한 CORS 규칙은 [CORS 글](/posts/cors)에 있다.
+
+## 실제로 CSRF를 만나는 순간
+
+CSRF는 재현이 애매해서 운영에서 "원인 불명"으로 남기 쉽다. 증상부터 보자. 로그인한 사용자 계정에서 본인이 하지 않은 상태 변경(비밀번호 변경, 이메일 변경, 송금, 글 삭제)이 일어났는데 세션은 정상이고 접근 로그도 깨끗하다. 이때 요청 로그에서 `Referer`나 `Origin`이 우리 사이트가 아닌 상태 변경 요청을 찾아본다. 외부 도메인에서 온 POST가 보이면 CSRF를 의심한다.
+
+확인 순서는 이렇게 잡는다. 먼저 세션 쿠키의 `SameSite` 값을 응답 헤더에서 확인한다(`None`이거나 비어 있으면서 구형 브라우저 대상이면 위험). 다음으로 상태 변경 엔드포인트가 GET으로도 동작하는지 본다. 마지막으로 토큰·`Origin` 검사가 그 엔드포인트에 실제로 걸려 있는지 코드로 확인한다. 미들웨어가 특정 경로만 검사에서 빼 두는 설정 실수가 가장 흔하다.
+
+흔한 실수 몇 가지를 모으면 이렇다. 상태 변경을 GET으로 노출한 것, API만 만들면서 CSRF 토큰을 "REST라서 필요 없다"고 건너뛴 것(세션 쿠키로 인증한다면 여전히 필요하다), `SameSite=None`을 습관적으로 붙인 것, 토큰을 심어 놓고 서버에서 실제로 대조하지 않는 것. 참고로 쿠키가 아니라 `Authorization` 헤더로 토큰을 보내는 [토큰 로그인](/posts/token-login) 방식은 브라우저가 헤더를 자동으로 붙이지 않으므로 CSRF에서 비교적 자유롭다. 인증을 쿠키로 하느냐 헤더로 하느냐가 방어 설계를 가른다.
+
+OWASP Top 10에서 CSRF는 2013년 A08, 2017년 A05로 올라 있었다가 2021년 목록에서는 별도 항목으로 빠졌다. 프레임워크 기본 방어(`SameSite` 기본값, 내장 토큰)가 퍼져 발생 빈도가 줄었다는 판단이다. 사라진 게 아니라 다른 카테고리(접근 제어) 안으로 녹아든 쪽에 가깝고, 세션 쿠키 인증을 쓰는 한 여전히 설계에서 챙겨야 한다.
+
+## 정리
+
+CSRF는 쿠키가 자동으로 붙는 성질을 빌려 "진짜 같은 가짜 요청"을 서버에 보내는 공격이다. 막는 방법은 겹겹이다. 세션 쿠키에 `SameSite=Lax` 이상과 `HttpOnly`·`Secure`를 붙이고, 상태 변경은 GET이 아니게 하고, 서버에서 토큰이나 `Origin`·`Sec-Fetch-Site`로 요청 출처를 직접 확인한다. CORS는 이 방어의 일부가 아니라는 점만 분명히 기억하면 된다. 읽기를 막는 것과 쓰기를 막는 것은 다르다.
+
+## 면접에서 나올 만한 질문
+
+### CSRF는 쿠키를 훔치는 공격인가
+
+아니다. 공격자는 쿠키를 읽지도 못한다. 사용자가 피해 사이트에 로그인해 둔 상태에서, 공격 페이지가 그 사이트로 요청을 보내게만 만들면 브라우저가 알아서 세션 쿠키를 붙여 준다. 쿠키 탈취는 XSS의 영역이고, CSRF는 "요청 위조"다. 그래서 `HttpOnly`로 쿠키를 숨겨도 CSRF 자체는 막지 못한다.
+
+### SameSite의 Strict와 Lax는 어떻게 다른가
+
+Strict는 교차 사이트에서 유발된 모든 요청에 쿠키를 붙이지 않는다. 링크를 눌러 이동하는 경우에도 안 붙여서, 외부 링크로 들어오면 로그아웃된 것처럼 보인다. Lax는 "최상위 내비게이션 GET"에만 예외를 둬서 링크 클릭 이동에는 쿠키를 붙인다. 실험에서 Lax는 교차 top-level GET에 쿠키를 보냈고 Strict는 보내지 않았다. 그래서 Lax를 쓸 때 상태 변경을 GET으로 노출하면 안 된다.
+
+### CORS를 켜 두면 CSRF도 막히는가
+
+아니다. CORS는 교차 출처 응답을 읽는 것을 막는 규칙이지 요청을 보내는 것을 막지 않는다. 폼 타입(form-urlencoded, text/plain)의 단순 요청은 사전 요청 없이 그대로 서버에 닿아 상태를 바꾼다. 실험에서 form 타입 POST는 세션 쿠키를 달고 서버에 도착했고, 공격자가 응답을 못 읽었을 뿐 송금은 이미 실행됐다. 반면 application/json 요청은 사전 요청에서 막혀 아예 나가지 못했다.
+
+### 동기화 토큰과 이중 제출 쿠키 중 무엇을 고르나
+
+서버가 세션 상태를 들고 있다면 동기화 토큰이 가장 확실하다. 서버 세션에 토큰을 저장해 대조하므로 쿠키 주입 같은 변형 공격에 강하다. 서버가 여러 대이고 상태를 공유하기 싫다면 이중 제출 쿠키가 편하다. 서버 저장 없이 쿠키와 폼 값이 같은지만 보면 되기 때문이다. 다만 이중 제출은 서브도메인 XSS나 쿠키 주입에 약하므로 토큰 값에 서명을 붙여 보완한다.
+
+### REST API라서 세션이 없으면 CSRF를 신경 안 써도 되나
+
+인증을 무엇으로 하느냐에 달렸다. Authorization 헤더로 토큰을 싣는 방식이면 브라우저가 그 헤더를 자동으로 붙이지 않으므로 CSRF 위험이 낮다. 하지만 세션 쿠키로 인증하는 API라면 REST든 아니든 브라우저가 쿠키를 자동으로 붙이므로 CSRF에 노출된다. "API라서 안전하다"가 아니라 "쿠키 인증이 아니라서 안전하다"가 정확한 설명이다.
+
+### Origin과 Sec-Fetch-Site 검사만으로 충분한가
+
+상당수의 CSRF를 막지만 단독으로 쓰기엔 틈이 있다. Origin이 비어 오는 구형 클라이언트나 특수한 리다이렉트 상황이 있어서, 토큰 방식과 함께 겹쳐 쓰는 편이 안전하다. 두 헤더 모두 페이지 코드가 바꿀 수 없다는 점이 강점이고, 서버가 same-origin일 때만 상태 변경을 허용하도록 기본값을 잡은 뒤 토큰을 2차 방어로 두는 구성이 현실적이다.
+
+### SameSite 기본값이 Lax가 됐는데 왜 아직 CSRF를 챙기나
+
+크롬 계열이 미지정 쿠키를 Lax로 다루기 시작하면서 교차 사이트 POST는 기본적으로 막히지만, 모든 브라우저와 버전이 같지 않고 Lax에는 top-level GET 예외가 남아 있다. 상태 변경을 GET으로 노출하면 그 예외로 뚫리고, 레거시 클라이언트는 기본값 적용을 못 받을 수 있다. 브라우저 동작은 바뀔 수 있는 전제이므로 서버 쪽 토큰·출처 검사를 함께 두는 게 안전하다.

@@ -1,0 +1,422 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("devops-networking-roadmap");
+
+배포 직후 502가 몇 분 동안 튀었다. 앱 로그를 열었는데 그 시각에 찍힌 요청이 하나도 없다. 네트워크를 제대로 공부해야겠다고 "Networking for DevOps" 같은 목차를 펴면 열 개의 칸이 나온다. 기본 개념, 인프라와 구성도, 클라우드 네트워킹, 네트워크 자동화, 서비스 디스커버리, 컨테이너 네트워킹, 모니터링·로깅·추적, 네트워크 보안, 성능, SDN. 칸마다 단어가 열 개씩 들어 있고, 그 단어를 다 외워도 502의 원인은 나오지 않는다.
+
+이 블로그에는 그 칸을 하나씩 채운 글이 이미 쉰 편 가까이 있다. 이 글은 새로운 개념을 설명하지 않는다. 그 글들을 어떤 순서로 읽으면 앞 글이 다음 글의 바닥이 되는지, 그리고 장애가 났을 때 어떤 증상이면 어느 글부터 펴야 하는지를 정리한다. 목차의 열 칸 순서를 그대로 따르되, 칸마다 "이 글이 어떤 질문에 답하고, 왜 지금 읽는지"를 한두 문장으로 붙였다.
+
+명령과 출력은 Ubuntu 24.04 컨테이너에서 돌린 것이다. 클라우드와 쿠버네티스의 실제 출력은 각 글에 있고, 여기서는 그 글로 가는 길만 놓는다.
+
+## 요청 하나가 지나는 일곱 칸
+
+목차를 순서대로 읽기 전에, 이 글들이 실제로 어디에 쓰이는지부터 본다. 브라우저에서 출발한 요청 하나가 쿠버네티스 Pod에 닿기까지 지나는 칸을 그렸다. 아래 그림에서 다음을 누르면 패킷이 한 칸씩 이동하고, 칸마다 그 구간을 다룬 글 이름이 나온다.
+
+<NetworkTopology
+  caption="브라우저에서 Pod까지, 홉마다 읽을 글"
+  width={400}
+  height={384}
+  zones={[
+    { id: "net", label: "인터넷", x: 8, y: 4, w: 384, h: 92, tone: "edge" },
+    { id: "vpc", label: "VPC 10.0.0.0/16", x: 8, y: 112, w: 384, h: 264, tone: "public" },
+    { id: "k8s", label: "클러스터 (프라이빗 서브넷)", x: 20, y: 204, w: 360, h: 164, tone: "private" },
+  ]}
+  nodes={[
+    { id: "web", label: "브라우저", sub: "203.0.113.7", x: 70, y: 58, icon: "client" },
+    { id: "dns", label: "DNS", sub: "shop.example", x: 200, y: 58, icon: "dns" },
+    { id: "cdn", label: "CDN 엣지", sub: "anycast", x: 330, y: 58, icon: "internet" },
+    { id: "lb", label: "로드 밸런서", sub: "퍼블릭 서브넷", x: 330, y: 166, icon: "lb" },
+    { id: "ing", label: "Ingress", sub: "ingress-nginx", x: 330, y: 258, icon: "gateway" },
+    { id: "side", label: "sidecar", sub: "envoy", x: 200, y: 258, icon: "lock" },
+    { id: "pod", label: "Pod", sub: "10.0.12.34", x: 70, y: 258, icon: "container" },
+    { id: "cdns", label: "CoreDNS", sub: "10.96.0.10", x: 70, y: 330, icon: "dns" },
+  ]}
+  links={[
+    { from: "web", to: "dns" },
+    { from: "web", to: "cdn" },
+    { from: "cdn", to: "lb" },
+    { from: "lb", to: "ing" },
+    { from: "ing", to: "side" },
+    { from: "side", to: "pod" },
+    { from: "pod", to: "cdns", dashed: true },
+  ]}
+  steps={[
+    { path: ["web", "dns"], packet: "A?", title: "이름을 주소로 바꾼다", detail: "리졸버가 루트부터 물어 IP를 받고 TTL만큼 기억한다. 글: dns, hosts-file." },
+    { path: ["web", "cdn"], packet: "TLS", title: "가까운 엣지가 받는다", detail: "같은 IP를 여러 도시가 광고해서 BGP 경로상 가까운 엣지로 간다. TLS도 여기서 끝난다. 글: cdn-edge-anycast, https-tls." },
+    { path: ["cdn", "lb"], packet: "MISS", highlight: ["vpc"], title: "캐시에 없으면 오리진으로", detail: "엣지가 VPC의 로드 밸런서에 다시 묻는다. 보안 그룹과 라우트 테이블을 지난다. 글: http-caching-cdn, vpc-subnets-route-tables, security-groups-nacl." },
+    { path: ["lb", "ing"], packet: "Host:", title: "살아 있는 대상으로 넘긴다", detail: "로드 밸런서는 헬스 체크를 통과한 노드나 Pod로만 보낸다. 글: load-balancer-basics, k8s-service-types." },
+    { path: ["ing", "side"], packet: "path", highlight: ["k8s"], title: "Host와 경로로 서비스를 고른다", detail: "Ingress 규칙이 Service를 고르고 엔드포인트 하나로 보낸다. 글: kubernetes-ingress, gateway." },
+    { path: ["side", "pod"], packet: "mTLS", title: "옆의 프록시가 가로챈다", detail: "iptables가 Pod로 오는 연결을 Envoy로 돌린다. 재시도와 mTLS가 여기서 붙는다. 글: service-mesh." },
+    { path: ["pod", "cdns"], packet: "A?", title: "Pod가 다른 이름을 묻는다", detail: "Pod의 resolv.conf는 CoreDNS를 가리키고 search 도메인을 붙여 묻는다. 글: k8s-coredns." },
+    { path: ["pod", "cdns"], packet: "53/udp", blocked: true, title: "기본 거부 정책이면 여기서 끊긴다", detail: "이그레스 기본 거부를 걸고 53번을 열지 않으면 이름 풀이부터 죽는다. 글: k8s-network-policy." },
+  ]}
+/>
+
+그림을 다 넘기고 나면 한 가지가 보인다. 칸마다 실패하는 방식이 다르다. DNS는 틀린 주소를 주거나 늦게 주고, 엣지는 오래된 캐시를 주고, 로드 밸런서는 502를 만들고, 메시는 503을 만들고, NetworkPolicy는 아무 말 없이 버린다. 장애를 볼 때 "어느 칸에서 멈췄나"를 먼저 정하는 이유다. 칸 사이에서 각 장비가 무엇을 읽고 넘기는지는 [OSI 현장 글](/posts/osi-in-practice)과 [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)이 한 번에 훑는다.
+
+## 열 칸은 서로 기대고 있다
+
+목차의 열 칸은 나란히 놓여 있지만 실제로는 아래 칸 위에 위 칸이 선다. 서비스 디스커버리를 읽으려면 DNS와 로드 밸런서를 알아야 하고, 컨테이너 네트워킹을 읽으려면 브리지와 NAT와 VXLAN을 알아야 한다. 아래 그림은 어느 칸이 어느 칸을 바닥으로 쓰는지 그린 것이다. 화살표 방향으로 점이 흐르는 쪽이 "먼저 읽을 것"에서 "나중에 읽을 것"이다.
+
+<ConceptDiagram
+  width={400}
+  height={336}
+  caption="화살표는 먼저 읽을 칸에서 그 위에 서는 칸으로 간다"
+  nodes={[
+    { id: "base", label: "기본 개념", sub: "층·주소·포트", x: 200, y: 32, w: 132, h: 44 },
+    { id: "infra", label: "장비·구성도", sub: "VLAN·LB·VPN", x: 70, y: 118, w: 116, h: 44 },
+    { id: "cloud", label: "클라우드", sub: "VPC·SG", x: 200, y: 118, w: 116, h: 44 },
+    { id: "auto", label: "자동화", sub: "Terraform", x: 330, y: 118, w: 116, h: 44 },
+    { id: "cont", label: "컨테이너", sub: "CNI·Service", x: 70, y: 210, w: 116, h: 44 },
+    { id: "disc", label: "디스커버리", sub: "이름→목록", x: 200, y: 210, w: 116, h: 44 },
+    { id: "sec", label: "보안", sub: "층마다 문", x: 330, y: 210, w: 116, h: 44 },
+    { id: "obs", label: "관측", sub: "지표·흐름·추적", x: 70, y: 300, w: 116, h: 44 },
+    { id: "perf", label: "성능", sub: "지연·처리량", x: 200, y: 300, w: 116, h: 44 },
+    { id: "sdn", label: "SDN", sub: "오버레이", x: 330, y: 300, w: 116, h: 44 },
+  ]}
+  edges={[
+    { from: "base", to: "infra" },
+    { from: "base", to: "cloud" },
+    { from: "cloud", to: "auto", label: "코드로" },
+    { from: "infra", to: "cont" },
+    { from: "cloud", to: "disc" },
+    { from: "cont", to: "disc" },
+    { from: "cloud", to: "sec" },
+    { from: "cont", to: "obs" },
+    { from: "disc", to: "perf" },
+    { from: "infra", to: "sdn", dashed: true, label: "VLAN 다음" },
+  ]}
+/>
+
+SDN 칸이 맨 아래에 있는 게 이상해 보일 수 있다. SDN은 개념상으로는 장비 칸 바로 다음이지만, 클라우드의 VPC와 쿠버네티스의 Pod 네트워크를 먼저 겪고 나서 읽으면 "아, 그게 다 오버레이였구나" 하고 앞의 칸이 한 번에 묶인다. 그래서 목차 순서대로 마지막에 둔다. 나머지 칸은 위에서 아래로 읽으면 된다.
+
+## 패킷 한 장을 읽는 눈부터
+
+첫 칸은 기본 개념이다. 여기서 얻을 것은 지식보다 눈이다. 에러 메시지 하나를 보고 어느 층이 말했는지 가늠하는 눈.
+
+1. [OSI 7계층과 TCP/IP 4계층](/posts/network-layers-overview)이 시작이다. "왜 통신을 층으로 나누나"에 답하고, 프레임 한 장을 벗겨 보며 L4와 L7이라는 말의 뜻을 정한다. 이 뒤의 모든 글이 "L4 로드 밸런서", "L7 정책" 같은 말을 쓰니 가장 먼저 읽는다.
+2. [IP 주소와 서브넷](/posts/layer-ip-addressing)은 "같은 망이면 직접, 아니면 게이트웨이로"를 계산으로 보여 준다. CIDR을 비트로 읽을 줄 알아야 나중에 VPC 대역을 나누고 Docker 대역이 사내망과 겹치는 사고를 알아본다.
+3. [데이터 링크 계층과 ARP](/posts/layer-link-ethernet-arp)는 같은 망 안에서 IP를 MAC으로 바꾸는 단계다. 스위치가 무엇을 배우는지 알아야 다음 칸의 VLAN이 읽힌다.
+4. [라우팅과 ICMP](/posts/layer-ip-routing-icmp)는 "패킷은 다음 한 칸만 안다"를 직접 보여 준다. 최장 접두사 일치는 클라우드 라우트 테이블에서 그대로 다시 나온다.
+5. [포트와 소켓](/posts/ports-and-sockets)과 [TCP 연결의 일생](/posts/tcp-connection-lifecycle)은 같이 읽는다. 앞 글은 0.0.0.0과 127.0.0.1의 차이로 "로컬에선 되는데 컨테이너에선 안 된다"를 풀고, 뒤 글은 refused와 timeout과 RST가 각각 무엇을 뜻하는지 상태 전이로 보여 준다. 502의 원인을 찾을 때 가장 자주 돌아오는 두 글이다.
+6. [DNS](/posts/dns)는 이름이 IP가 되는 길과 TTL이 만드는 시차를 다룬다. [hosts 파일](/posts/hosts-file)은 그보다 먼저 보는 한 줄이다. 나중에 CoreDNS와 서비스 디스커버리가 전부 이 위에 선다.
+7. [UDP와 QUIC](/posts/udp-and-quic), [IPv6](/posts/ipv6-basics)는 바로 읽지 않아도 된다. 앞의 여섯 편을 읽은 뒤 "TCP가 아니면 무엇이 달라지나", "주소를 DHCP 없이 받으면 무엇이 달라지나"가 궁금해질 때 편다.
+
+이 칸을 다 읽었으면 [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer)를 한 번 훑어 둔다. 앞에서 읽은 개념이 명령 하나씩으로 바뀐다. 이 글은 뒤의 증상별 길에서 기본 출발점으로 다시 나온다.
+
+## 장비 위에 그려지는 구성도
+
+두 번째 칸은 인프라와 구성도다. 망을 나누는 장비, 나눠 주는 장비, 잇는 장비 순서로 읽는다.
+
+[VLAN](/posts/vlan-basics)이 먼저다. "같은 대역인데 왜 ping이 안 되나"에 802.1Q 태그로 답한다. 스위치 하나를 여러 망으로 쪼개는 생각이 이후 VPC와 오버레이의 출발점이다.
+
+그다음 [프록시와 리버스 프록시](/posts/proxy-reverse-proxy)로 "누가 누구를 대신하나"를 정한다. 앱 로그에 로드 밸런서 IP만 찍히는 이유, X-Forwarded-For를 오른쪽부터 읽는 이유가 여기 있다. 로드 밸런서를 읽기 전에 "앞 연결과 뒤 연결은 다른 연결"이라는 감각을 먼저 잡아 두려고 이 순서로 둔다.
+
+[로드 밸런서 기본](/posts/load-balancer-basics)은 이 칸의 중심이다. 헬스 체크의 판정 시간, 드레이닝 없이 서버를 빼면 생기는 502, 세션 고정, VRRP 이중화를 다룬다. 이어서 [로드 밸런싱 알고리즘](/posts/load-balancing-algorithms)은 "어디로 보낼까"를 숫자로 비교한다. 순서를 바꾸지 않는 게 좋다. 실무에서 사고는 고르는 알고리즘보다 빼고 넣는 순서에서 더 자주 난다.
+
+[VPN: IPsec과 WireGuard](/posts/vpn-ipsec-wireguard)는 망과 망을 남의 길 위로 잇는다. 패킷 안에 패킷을 넣는 캡슐화를 처음 제대로 보는 글이라, 마지막 칸의 VXLAN을 읽을 때 다시 쓰인다. 웹 서버 구성으로 손을 옮기고 싶으면 [Nginx 리버스 프록시](/posts/nginx-reverse-proxy)가 같은 내용을 설정 파일로 보여 준다.
+
+## 클라우드에서는 라우터가 표 한 장이다
+
+세 번째 칸에서는 앞 칸의 장비가 API 객체로 바뀐다. 라우터는 라우트 테이블이 되고, 방화벽은 보안 그룹이 된다. 이름은 바뀌어도 규칙은 앞에서 읽은 그대로다.
+
+1. [VPC 기본](/posts/vpc-basics)은 "인스턴스 안에 공인 IP가 왜 안 보이나"에서 시작해 인터넷 게이트웨이의 1:1 NAT를 보여 준다. VPC DNS가 대역 시작 주소에 2를 더한 곳(10.0.0.0/16이면 10.0.0.2)에 있다는 것도 여기서 나온다.
+2. [서브넷과 라우트 테이블](/posts/vpc-subnets-route-tables)은 퍼블릭과 프라이빗을 가르는 것이 서브넷 자체가 아니라 연결된 라우트 테이블 한 줄이라는 걸 보여 준다. "프라이빗 서버에서 apt가 멈춘다"의 답이 NAT 게이트웨이 경로에 있다.
+3. [보안 그룹과 NACL](/posts/security-groups-nacl)은 연결을 기억하는 방화벽과 잊는 방화벽의 차이다. 응답 패킷이 임시 포트로 돌아온다는 것을 라우팅 다음에 배워야 NACL 사고가 이해된다.
+4. [VPC 잇기: 피어링, Transit Gateway, PrivateLink](/posts/vpc-peering-transit-privatelink)는 VPC가 둘 이상이 될 때 읽는다. 피어링이 전이되지 않는 이유와 대역이 겹치면 잇지 못하는 이유는 앞의 서브넷 글을 알아야 바로 보인다.
+5. [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast)는 VPC 바깥, 사용자 쪽 끝이다. 같은 IP가 여러 도시에서 답하는 원리와 엣지 위치를 확인하는 법을 다룬다. 캐시 헤더 자체는 [HTTP 캐시와 CDN](/posts/http-caching-cdn)과 [엣지 캐싱](/posts/edge-caching)에 있다.
+
+권한 쪽은 [IAM 기본](/posts/iam-basics)이 따로 다룬다. 네트워크는 열렸는데 403이 나는 경우가 생각보다 많아서 한 번은 읽어 둔다.
+
+## 손으로 고치던 설정을 PR로
+
+네 번째 칸은 네트워크 자동화다. 클라우드 칸 바로 다음에 두는 이유가 있다. 콘솔에서 보안 그룹을 몇 번 고쳐 보고 나서야 "누가 언제 왜 바꿨는지 모른다"는 문제가 몸으로 느껴진다.
+
+[IaC 기본](/posts/iac-basics)이 먼저 "선언형 도구는 왜 state를 들고 있어야 하나"에 답한다. [Terraform 기본](/posts/terraform-basics)은 plan과 apply와 잠금을, [모듈과 tfvars](/posts/terraform-modules-tfvars)는 환경마다 복사하지 않는 법을 다룬다.
+
+네트워크에만 해당하는 함정은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에 모았다. 설명 한 줄을 고쳤는데 보안 그룹이 교체되며 연결이 끊기는 사고, cidrsubnet으로 주소 계획을 코드에 고정하는 법이 여기 있다. 앞의 VPC 글을 읽지 않고 이 글을 읽으면 plan의 어느 줄이 위험한지 감이 오지 않는다.
+
+서버 안의 sysctl과 방화벽 규칙처럼 Terraform이 닿지 않는 곳은 [Ansible로 네트워크 설정 자동화](/posts/ansible-network-automation)가 맡는다. 두 도구를 다 본 뒤 [네트워크 설정 CI/CD](/posts/network-config-cicd)로 PR에서 plan, 승인, apply, drift 감지까지 잇는다. 이 칸의 마지막 글이 "자동화가 사고를 키우는 순간"을 다루는 것은 의도한 순서다. 자동화는 실수도 자동으로 퍼뜨린다.
+
+## 주소 대신 이름으로 찾는 일
+
+다섯 번째 칸 서비스 디스커버리는 "서버가 계속 바뀌는데 호출하는 쪽은 어떻게 아나"라는 질문 하나다. 답은 결국 목록이고, 장애는 목록이 낡는 곳에서 난다.
+
+[서비스 디스커버리](/posts/service-discovery)가 중심 글이다. 클라이언트 측과 서버 측 방식, 임대로 하는 등록, 그리고 레지스트리는 바뀌었는데 JVM DNS 캐시와 연결 풀 때문에 옛 주소로 가는 현상을 다룬다. DNS 글과 로드 밸런서 글을 읽은 뒤에 와야 하는 이유가 여기 있다. 디스커버리는 그 둘을 합친 것이다.
+
+이 칸에서 같이 볼 글은 셋이다. [헬스 체크 설계](/posts/health-checks)는 목록에 남길지 뺄지를 정하는 질문을 다루고, 깊은 검사가 서버 전체를 한꺼번에 빼는 연쇄 장애를 재현한다. [Kubernetes Service 타입](/posts/k8s-service-types)은 쿠버네티스가 디스커버리를 Service와 EndpointSlice로 푸는 방식이다. [CoreDNS](/posts/k8s-coredns)는 그 목록을 이름으로 묻는 길이다. 마지막 두 편은 다음 칸과 겹치니 여기서 한 번 읽고 다음 칸에서 다시 펴도 된다.
+
+## 컨테이너와 Pod가 주소를 받는 법
+
+여섯 번째 칸은 컨테이너 네트워킹이다. 앞에서 읽은 브리지, NAT, 라우팅, 캡슐화가 한 호스트 안에서 다시 조립된다. 리눅스 쪽 바닥은 [네임스페이스와 cgroups](/posts/linux-namespaces-cgroups), [iptables NAT](/posts/iptables-nat)가 깔아 준다.
+
+1. [Docker 네트워크와 볼륨](/posts/docker-network-volume)으로 컨테이너끼리 이름으로 부르는 법을 먼저 익힌다.
+2. [Docker 네트워크 드라이버](/posts/docker-network-drivers)는 bridge, host, macvlan, overlay가 커널에서 각각 어떤 장치인지 손으로 재현한다. 기본 대역 172.17.0.0/16이 사내망과 겹치는 사고도 여기 있다.
+3. [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)는 "Pod IP는 누가 주나"에 답한다. kubelet이 CNI 플러그인을 실행 파일로 부르는 모습, 노드를 경로로 잇는 방식과 VXLAN으로 잇는 방식을 비교한다. Docker 드라이버 글 바로 다음에 두면 같은 장치가 이름만 바뀌어 나오는 게 보인다.
+4. [Service 타입](/posts/k8s-service-types)은 앞 칸에서 읽었다면 이번엔 트래픽 정책 쪽을 본다. NodePort 뒤에서 클라이언트 IP가 노드 주소로 찍히는 이유가 externalTrafficPolicy에 있다.
+5. [Ingress](/posts/kubernetes-ingress)와 [게이트웨이](/posts/gateway)는 클러스터의 입구다. 502, 503, 413을 만났을 때 어디를 보는지가 Ingress 글에 있다.
+6. [CoreDNS](/posts/k8s-coredns)는 ndots:5가 질의 여러 개를 만드는 과정과 가끔 5초씩 늦는 이름 풀이를 캡처로 보여 준다.
+7. [서비스 메시](/posts/service-mesh)는 이 칸의 끝이다. 사이드카가 iptables로 트래픽을 가로채고, 컨트롤 플레인이 xDS로 설정을 밀어 준다. 재시도가 곱해지는 문제는 [재시도 글](/posts/retries)과 같이 읽는다.
+
+클라우드에 붙이는 모습은 [EKS 기본](/posts/eks-cluster-basics)이 VPC CNI로 보여 준다. Pod가 VPC 주소를 직접 받는 방식이라 서브넷 크기 계산이 다시 중요해진다.
+
+## 안 보이는 것을 숫자와 로그로
+
+일곱 번째 칸은 모니터링, 로깅, 추적이다. 앞의 여섯 칸이 "어떻게 동작하나"였다면 이 칸은 "지금 어디서 깨지고 있나"를 묻는다. 무엇을 봐야 하는지 알아야 무엇을 모을지 정할 수 있어서, 동작을 다 읽은 뒤에 둔다.
+
+[모니터링 기본](/posts/monitoring-basics)이 황금 신호와 RED, USE로 "무엇을 지켜보나"를 정한다. [네트워크 모니터링](/posts/network-monitoring)은 대역폭 그래프 뒤에 숨은 숫자를 꺼낸다. 인터페이스 카운터가 0인데 qdisc에서 버려지는 패킷, accept 큐가 넘쳐 SYN이 조용히 사라지는 장면이 여기 있다.
+
+[흐름 로그](/posts/network-flow-logs)는 패킷 대신 "누가 누구와 이야기했나"를 한 줄씩 남긴다. 보안 그룹에서 REJECT가 찍힌 줄을 읽을 수 있으면 막힌 곳을 추측하지 않아도 된다. 실제 패킷이 필요하면 [tcpdump로 계층을 눈으로 보기](/posts/packet-capture-tcpdump)로 내려간다.
+
+[구조화 로그](/posts/structured-logging)와 [분산 추적](/posts/distributed-tracing)은 앱 쪽에서 본다. traceparent 헤더가 한 번 끊기면 추적도 끊기는데, 끊는 범인이 앞 칸의 프록시나 메시인 경우가 많다. 그래서 컨테이너 칸 다음에 읽는다. 지표 자체를 다루는 법은 [지표 타입](/posts/metrics-types)과 [응답 시간 백분위](/posts/percentile-latency)가 맡는다.
+
+## 막는 장치는 층마다 따로 선다
+
+여덟 번째 칸은 보안이다. 이 칸은 새 장치를 배우는 칸이라기보다, 앞에서 이미 본 문들을 층별로 다시 세우는 칸이다.
+
+[iptables로 리눅스 방화벽 이해하기](/posts/iptables-basics)가 바닥이다. 보안 그룹, NetworkPolicy, Docker의 격리 규칙이 결국 이 검문소 위에서 돈다. [보안 그룹과 NACL](/posts/security-groups-nacl)은 클라우드 칸에서 읽었으니, 여기서는 [NetworkPolicy](/posts/k8s-network-policy)를 읽으며 같은 허용 목록이 Pod 단위로 내려오는 모습을 본다. 기본 거부를 걸자마자 이름 풀이가 죽는 사고가 이 글의 첫 장면이다.
+
+L3·L4 방화벽 위에는 내용을 보는 장치가 선다. [IDS와 IPS](/posts/ids-ips)는 패킷 내용으로 공격을 찾고, [WAF](/posts/waf)는 TLS가 풀린 HTTP 요청을 해석해 점수를 매긴다. 둘 다 TLS를 어디서 푸느냐에 따라 놓을 자리가 정해지므로 [HTTPS와 TLS 1.3](/posts/https-tls)을 먼저 읽어 둔 상태에서 본다.
+
+내부 구간은 [전송 구간 암호화](/posts/encryption-in-transit)가 mTLS로 다루고, 그 원칙을 조직 전체로 넓힌 것이 [제로 트러스트](/posts/zero-trust-architecture)다. 사내 IP를 믿는 관리자 앱이 감염된 프린터에 열리는 장면에서 시작한다. 이 칸의 마지막에 두는 이유는 단순하다. 앞의 모든 문을 알고 나서야 "IP로 믿지 말자"가 무엇을 버리자는 말인지 보인다. 서버가 내부 주소를 대신 부르게 하는 공격은 [SSRF](/posts/ssrf)에 따로 있다.
+
+## 느리다는 말을 숫자 셋으로
+
+아홉 번째 칸은 성능이다. "느리다"는 신고가 오면 먼저 어느 구간이 느린지 쪼갠다. curl은 요청 하나의 구간별 시각을 찍어 준다. 같은 컨테이너에 네트워크 네임스페이스를 하나 만들고, 응답 전에 300ms를 쉬는 HTTPS 서버를 띄운 뒤 쟀다.
+
+```bash
+# --resolve로 DNS를 건너뛰고, 구간별 시각을 한 줄로 찍는다
+curl -sk --noproxy '*' -o /dev/null --resolve shop.internal:443:10.77.0.2 \
+  -w 'dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} code=%{http_code}\n' \
+  https://shop.internal/
+```
+
+```text
+dns=0.000014 connect=0.000111 tls=0.004489 ttfb=0.305206 total=0.305262 code=200
+```
+
+이 값들은 구간 길이가 아니라 요청을 시작한 순간부터의 누적 시각이다. 그래서 빼서 읽는다. 아래에서 조각을 하나씩 눌러 보면 어느 구간이 어느 글로 이어지는지 나온다.
+
+<UrlAnatomy
+  caption="curl -w 한 줄 (실측, 같은 호스트의 네임스페이스)"
+  base=""
+  separator=""
+  joiner=" "
+  params={[
+    { key: "dns", value: "0.000014", title: "이름 풀이 끝", description: "--resolve로 건너뛰어 0에 가깝다. 실제 환경에서 이 값이 수십 ms를 넘거나 가끔 5초가 되면 DNS 글과 CoreDNS 글로 간다.", code: "dns, k8s-coredns" },
+    { key: "connect", value: "0.000111", title: "TCP 연결 끝", description: "connect - dns가 3-way handshake 한 번, 대략 왕복 한 번이다. 이 값이 크면 거리나 경로 문제고, 여기서 멈추면 방화벽이나 듣는 프로세스 문제다.", code: "tcp-connection-lifecycle, latency-bandwidth-throughput" },
+    { key: "tls", value: "0.004489", title: "TLS 핸드셰이크 끝", description: "tls - connect = 약 4.4ms. TLS 1.3은 왕복 한 번을 더 쓰고, 나머지는 키 교환 계산이다. 인증서 오류는 여기서 멈춘다.", code: "https-tls" },
+    { key: "ttfb", value: "0.305206", title: "첫 바이트", description: "ttfb - tls = 약 300.7ms. 서버가 일부러 쉰 300ms가 그대로 보인다. 네트워크가 아니라 앱이나 그 뒤의 DB를 봐야 한다는 뜻이다.", code: "distributed-tracing, timeouts" },
+    { key: "total", value: "0.305262", title: "전체", description: "응답이 3바이트라 본문 전송은 0.06ms였다. 큰 파일에서 total - ttfb가 크면 대역폭과 창 크기 쪽이다.", code: "tcp-reliability-congestion" },
+    { key: "code", value: "200", title: "상태 코드", description: "000이면 HTTP 응답을 받지 못했다는 뜻이다. 연결이나 TLS에서 끝났다." },
+  ]}
+/>
+
+같은 300ms라도 connect에서 쓰였으면 네트워크 칸으로, ttfb에서 쓰였으면 앱 칸으로 간다. 이 칸의 글은 그 구분을 숫자로 하게 해 준다.
+
+[지연, 대역폭, 처리량](/posts/latency-bandwidth-throughput)이 첫 글이다. 회선을 열 배로 올려도 API가 빨라지지 않는 이유를 왕복 횟수로 푼다. [TCP 재전송과 혼잡 제어](/posts/tcp-reliability-congestion)는 대역폭 지연 곱과 Nagle·지연 ACK가 만드는 40ms를 다룬다. [MTU와 단편화](/posts/layer-mtu-fragmentation)는 작은 요청은 되고 큰 응답만 멈추는 장애를 다룬다. 터널과 오버레이가 MTU를 깎기 때문에 VPN 글과 다음 칸의 VXLAN 글과 이어진다.
+
+[트래픽 셰이핑과 QoS](/posts/traffic-shaping-qos)는 병목에서 줄의 순서를 정한다. 백업이 돌면 SSH가 늦어지는 장면이다. 서버 여러 대를 거치는 요청에서 드문 느림이 흔해지는 이유는 [꼬리 지연](/posts/tail-latency)이, 구간마다 걸린 시간 한도는 [타임아웃 글](/posts/timeouts)이 다룬다.
+
+## 마지막 칸, 물리망 위의 논리망
+
+열 번째 칸 SDN은 [SDN과 VXLAN 오버레이](/posts/sdn-vxlan-overlay) 한 편이다. "Pod IP가 노드 캡처에 왜 안 보이나"에 VXLAN 캡슐화로 답하고, 제어 평면을 장비에서 떼어 컨트롤러로 모은 구조를 그린다.
+
+앞의 칸을 다 읽고 이 글을 보면 세 가지가 한 번에 정리된다. VLAN의 4094개 한계를 VXLAN의 24비트 VNI가 넘는다. VPC는 사용자에게 보이지 않는 오버레이이고, 클라우드 컨트롤러가 호스트마다 규칙을 내린다. Flannel이나 Calico 같은 CNI는 API 서버를 지도 삼아 각 노드의 에이전트가 경로와 FDB를 맞추는 분산 SDN이다. VXLAN이 바깥에 50바이트를 덧씌우기 때문에 1500 MTU 망에서 안쪽 MTU가 1450이 되는 것도, 성능 칸의 MTU 글과 그대로 이어진다.
+
+## 이 증상이면 이 글부터
+
+공부 순서와 별개로, 장애가 났을 때는 증상에서 출발한다. 아래 길은 "처음 펼 글"과 "그다음 글"이다. 처음 글에서 원인이 안 나오면 다음 글로 넘어간다.
+
+### 502인데 앱 로그가 비어 있다
+
+502는 앞단 프록시가 뒤에서 제대로 된 응답을 받지 못했을 때 자기가 만들어 보내는 코드다. 앱 로그가 비어 있다면 요청이 앱 프로세스까지 오지 않았다는 뜻이다. 아래 그림은 같은 502가 나오는 세 가지 길이다.
+
+<SequenceDiagram
+  caption="502는 로드 밸런서가 만든다. 앱은 요청을 본 적이 없다"
+  actors={[
+    { id: "c", label: "브라우저" },
+    { id: "lb", label: "로드 밸런서" },
+    { id: "app", label: "앱 서버" },
+  ]}
+  steps={[
+    { from: "c", to: "lb", label: "GET /orders", title: "요청은 로드 밸런서까지 왔다", detail: "LB 접근 로그에는 이 요청이 남는다. 앱 로그와 LB 로그를 같은 시각으로 맞춰 보는 게 첫 확인이다." },
+    { from: "lb", to: "app", label: "SYN :8080", title: "뒤쪽 연결을 새로 연다", detail: "앞 연결과 뒤 연결은 다른 TCP 연결이다. LB는 헬스 체크가 살아 있다고 본 대상으로 연결한다." },
+    { from: "app", to: "lb", label: "RST", title: "듣는 프로세스가 없다", detail: "배포로 앱이 재시작 중이면 커널이 RST로 거절한다. 앱 코드는 이 연결을 모른다. 드레이닝과 헬스 체크 판정 시간을 본다." },
+    { from: "lb", to: "c", label: "502", title: "로드 밸런서가 502를 만든다", detail: "응답의 Server 헤더나 본문이 LB 것이다. 누가 만든 502인지 응답 모양으로 먼저 가린다." },
+    { from: "lb", to: "app", label: "재사용 연결", title: "가끔 하나씩 튀는 502", detail: "LB가 재사용하려던 유휴 연결을 앱이 막 닫았다. 앱의 keep-alive 유휴 시간이 LB보다 짧을 때 생긴다." },
+    { from: "lb", to: "lb", label: "대상 0개", title: "모두 빠졌을 때", detail: "깊은 헬스 체크가 공유 의존성 하나 때문에 모든 대상을 뺐다. HAProxy는 503을 낸다. ALB처럼 이때 오히려 모든 대상에 보내는 제품도 있다." },
+  ]}
+/>
+
+처음 펼 글은 [OSI 현장 글](/posts/osi-in-practice)이다. 에러 메시지가 어느 층에서 나왔는지 읽는 법으로 "누가 만든 502인가"를 먼저 정한다. 배포 시각과 겹치면 [로드 밸런서 기본](/posts/load-balancer-basics)의 드레이닝 순서를, 대상이 한꺼번에 빠졌으면 [헬스 체크 설계](/posts/health-checks)를 본다. 배포와 상관없이 하루에 몇 건씩 섞이면 [타임아웃 글](/posts/timeouts)의 keep-alive 유휴 시간 부분이다. 대표적인 예가 AWS ALB(유휴 타임아웃 기본 60초) 뒤의 Node.js 서버다. Node.js의 `keepAliveTimeout` 기본값은 5초라 서버가 먼저 연결을 닫는다. 쿠버네티스 안이라면 [Ingress 글](/posts/kubernetes-ingress)의 502·503·413 부분을, 메시가 있으면 Envoy가 만드는 503과 `upstream connect error or disconnect/reset before headers`를 [서비스 메시 글](/posts/service-mesh)에서 본다.
+
+### 노트북에선 풀리는 이름이 Pod에서만 안 풀린다
+
+같은 이름이라도 노트북과 Pod는 다른 리졸버에게 묻는다. Pod는 CoreDNS에게, CoreDNS는 노드의 리졸버(클라우드라면 VPC DNS)에게 넘긴다. 아래 그림에서 어느 홉에서 끊기는지에 따라 펼 글이 달라진다.
+
+<NetworkTopology
+  caption="같은 이름, 다른 길: 어느 홉에서 끊겼나"
+  width={400}
+  height={232}
+  zones={[
+    { id: "office", label: "사무실", x: 8, y: 4, w: 184, h: 84, tone: "neutral" },
+    { id: "vpc", label: "VPC (클러스터 노드)", x: 8, y: 108, w: 384, h: 116, tone: "private" },
+  ]}
+  nodes={[
+    { id: "laptop", label: "노트북", sub: "dig api.pay.io", x: 96, y: 54, icon: "client" },
+    { id: "pub", label: "공용 리졸버", sub: "재귀 질의", x: 310, y: 54, icon: "dns" },
+    { id: "pod", label: "Pod", sub: "ndots:5", x: 70, y: 174, icon: "container" },
+    { id: "core", label: "CoreDNS", sub: "10.96.0.10", x: 200, y: 174, icon: "dns" },
+    { id: "vdns", label: "VPC DNS", sub: "10.0.0.2", x: 330, y: 174, icon: "dns" },
+  ]}
+  links={[
+    { from: "laptop", to: "pub" },
+    { from: "pod", to: "core" },
+    { from: "core", to: "vdns" },
+    { from: "vdns", to: "pub", dashed: true },
+  ]}
+  steps={[
+    { path: ["laptop", "pub"], packet: "A?", title: "노트북은 바로 묻는다", detail: "노트북의 리졸버는 이름을 그대로 묻고 답을 받는다. 여기서 되는 건 이름 자체가 살아 있다는 뜻일 뿐이다." },
+    { path: ["pod", "core"], packet: "NX", title: "search 도메인부터 붙여 묻는다", detail: "점이 다섯 개 미만인 이름은 default.svc.cluster.local 같은 꼬리를 붙여 먼저 묻는다. 없는 이름에 질의가 여러 번 간다. 글: k8s-coredns." },
+    { path: ["pod", "core", "vdns", "pub"], packet: "A?", title: "마지막에야 원래 이름으로", detail: "꼬리를 다 붙여 보고 실패한 뒤에 원래 이름이 VPC DNS를 거쳐 나간다. 늦지만 풀린다. 글: k8s-coredns, vpc-basics." },
+    { path: ["pod", "core"], packet: "53/udp", blocked: true, title: "Pod에서 53번이 막혔다", detail: "이그레스 기본 거부 NetworkPolicy가 kube-dns로 가는 길을 열지 않았다. 모든 이름이 한꺼번에 안 풀린다. 글: k8s-network-policy." },
+    { path: ["core", "vdns"], packet: "응답", blocked: true, title: "노드 밖에서 응답이 버려진다", detail: "NACL이 임시 포트로 돌아오는 UDP 응답을 막으면 CoreDNS가 타임아웃만 받는다. 글: security-groups-nacl." },
+  ]}
+/>
+
+처음 펼 글은 [CoreDNS 글](/posts/k8s-coredns)이다. Pod의 resolv.conf와 ndots, 가끔 5초씩 늦는 conntrack 경쟁까지 이 글이 다룬다. 모든 이름이 한꺼번에 죽었다면 최근에 건 정책을 의심하고 [NetworkPolicy 글](/posts/k8s-network-policy)로 간다. 클러스터 안 이름(서비스 이름)은 되는데 바깥 이름만 안 되면 CoreDNS가 넘기는 쪽, 곧 노드의 리졸버와 [보안 그룹과 NACL](/posts/security-groups-nacl)을 본다. DNS 자체가 낯설면 [DNS 글](/posts/dns)의 dig 부분부터.
+
+### 증상을 한 칸씩 지워 가는 순서
+
+증상이 어디에도 딱 맞지 않을 때는 아래에서 위로 한 칸씩 확인한다. [계층별로 장애 좁히기](/posts/network-troubleshooting-by-layer)가 정리한 순서를 그대로 따라가 보면 이렇다. 아래 예는 포트에서 처음 실패하는 경우다.
+
+<AlgoTrace
+  caption="아래에서 위로 확인하다가 처음 실패한 칸에서 멈춘다"
+  memoryLabel="통과한 칸"
+  cells={["링크", "주소·길", "이웃", "도달", "이름", "포트", "TLS", "HTTP"]}
+  steps={[
+    { memory: [], caption: "접속이 안 된다는 신고 한 줄. curl -v로 어디서 멈췄는지 보고 아래부터 확인한다." },
+    { pointer: 0, found: [0], memory: ["링크"], caption: "ip link에서 state UP. 선과 인터페이스는 살아 있다." },
+    { pointer: 1, found: [0, 1], memory: ["링크", "주소·길"], caption: "ip route get으로 나갈 길과 출발 주소가 정해진다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["링크", "주소·길", "이웃"], caption: "ip neigh에서 게이트웨이 MAC이 REACHABLE이다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["링크", "주소·길", "이웃", "도달"], caption: "목적지까지 패킷이 간다. ping이 막힌 망이면 TCP로 확인한다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["링크", "주소·길", "이웃", "도달", "이름"], caption: "이름이 기대한 주소로 풀린다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: ["링크", "주소·길", "이웃", "도달", "이름"], caption: "Connection refused. 처음 실패한 칸은 포트다. ports-and-sockets와 tcp-connection-lifecycle로 간다. 위의 TLS와 HTTP는 볼 필요가 없다." },
+  ]}
+/>
+
+나머지 증상은 짧게 적는다. 앞에 쓴 글이 처음 펼 글이다.
+
+- 작은 요청은 되는데 큰 응답이나 파일 업로드만 멈춘다. [MTU와 단편화](/posts/layer-mtu-fragmentation)의 ICMP 블랙홀부터 본다. VPN이나 오버레이 위라면 [VPN 글](/posts/vpn-ipsec-wireguard)과 [VXLAN 글](/posts/sdn-vxlan-overlay)로 이어진다.
+- 프라이빗 서브넷의 서버에서 apt나 외부 API가 멈춘다. [서브넷과 라우트 테이블](/posts/vpc-subnets-route-tables)에서 0.0.0.0/0이 NAT 게이트웨이를 가리키는지 본다. 경로가 맞는데 일부 연결만 끊기면 같은 글의 NAT 포트 한도 부분이다.
+- 같은 노드의 Pod끼리는 되는데 다른 노드로 넘어가면 안 된다. [CNI와 Pod 네트워크](/posts/k8s-cni-pod-network)의 노드 간 경로와 MTU, 그다음 [보안 그룹](/posts/security-groups-nacl)에서 VXLAN 포트(UDP 4789, Flannel은 8472)가 열렸는지 본다.
+- 앱 로그의 클라이언트 IP가 전부 같은 사설 주소다. [프록시와 리버스 프록시](/posts/proxy-reverse-proxy)의 X-Forwarded-For와 PROXY protocol, 쿠버네티스라면 [Service 타입](/posts/k8s-service-types)의 externalTrafficPolicy.
+- 서버에 CLOSE_WAIT가 계속 쌓인다. 네트워크가 아니라 내 코드가 소켓을 닫지 않는 것이다. [TCP 연결의 일생](/posts/tcp-connection-lifecycle).
+- 트래픽 그래프는 평온한데 연결이 가끔 안 맺어진다. [네트워크 모니터링](/posts/network-monitoring)의 accept 큐 넘침과 conntrack 한도.
+- 정상 사용자의 요청이 403으로 막혔다는 문의. [WAF 글](/posts/waf)의 로그 읽는 순서. 네트워크 경로는 멀쩡하다.
+- 콘솔에서 고친 규칙이 며칠 뒤 되살아났다. [네트워크 설정 CI/CD](/posts/network-config-cicd)의 drift 감지.
+
+## 증상 문장에서 첫 글 고르기
+
+위의 길을 규칙으로 바꿔 봤다. 증상 문장에 어떤 단어가 모두 들어 있으면 그 규칙의 글을 돌려준다. 규칙은 위에서부터 보고, 처음 맞는 규칙에서 멈춘다. 방화벽 규칙을 읽는 방식과 같다. 그래서 순서가 중요하다. "502"만 보는 규칙이 "502와 배포"를 보는 규칙보다 위에 있으면 배포 중 502가 전부 엉뚱한 글로 간다.
+
+<CodePlayground
+  caption="증상 → 처음 펼 글"
+  functionName="firstPost"
+  initialCode={`// 위에서부터 보고, words가 모두 들어 있는 첫 규칙의 post를 돌려준다.
+// 대소문자는 가리지 않는다. 맞는 규칙이 없으면 "network-troubleshooting-by-layer".
+const ROUTES = [
+  { words: ["502", "배포"], post: "load-balancer-basics" },
+  { words: ["502", "가끔"], post: "timeouts" },
+  { words: ["502"], post: "osi-in-practice" },
+  { words: ["networkpolicy"], post: "k8s-network-policy" },
+  { words: ["5초"], post: "k8s-coredns" },
+  { words: ["pod", "dns"], post: "k8s-coredns" },
+  { words: ["dns"], post: "dns" },
+  { words: ["큰 응답"], post: "layer-mtu-fragmentation" },
+  { words: ["프라이빗", "밖"], post: "vpc-subnets-route-tables" },
+  { words: ["connection refused"], post: "ports-and-sockets" },
+  { words: ["close_wait"], post: "tcp-connection-lifecycle" },
+  { words: ["다른 노드"], post: "k8s-cni-pod-network" },
+];
+
+function firstPost(symptom) {
+  return "";
+}`}
+  solution={`const ROUTES = [
+  { words: ["502", "배포"], post: "load-balancer-basics" },
+  { words: ["502", "가끔"], post: "timeouts" },
+  { words: ["502"], post: "osi-in-practice" },
+  { words: ["networkpolicy"], post: "k8s-network-policy" },
+  { words: ["5초"], post: "k8s-coredns" },
+  { words: ["pod", "dns"], post: "k8s-coredns" },
+  { words: ["dns"], post: "dns" },
+  { words: ["큰 응답"], post: "layer-mtu-fragmentation" },
+  { words: ["프라이빗", "밖"], post: "vpc-subnets-route-tables" },
+  { words: ["connection refused"], post: "ports-and-sockets" },
+  { words: ["close_wait"], post: "tcp-connection-lifecycle" },
+  { words: ["다른 노드"], post: "k8s-cni-pod-network" },
+];
+
+function firstPost(symptom) {
+  const text = symptom.toLowerCase();
+  for (const route of ROUTES) {
+    // some이 아니라 every: 단어가 전부 있어야 그 규칙이다
+    if (route.words.every((w) => text.includes(w))) return route.post;
+  }
+  return "network-troubleshooting-by-layer";
+}`}
+  tests={[
+    { args: ["502인데 앱 로그엔 아무것도 없다"], expected: "osi-in-practice" },
+    { args: ["배포할 때마다 502가 몇 초씩 튄다"], expected: "load-balancer-basics" },
+    { args: ["502 Bad Gateway가 가끔 하나씩 섞인다"], expected: "timeouts" },
+    { args: ["Pod 안에서만 DNS가 안 풀린다"], expected: "k8s-coredns" },
+    { args: ["NetworkPolicy를 건 뒤로 DNS 질의가 전부 실패한다"], expected: "k8s-network-policy" },
+    { args: ["외부 API 호출이 가끔 5초씩 늦다"], expected: "k8s-coredns" },
+    { args: ["작은 요청은 되는데 큰 응답만 멈춘다"], expected: "layer-mtu-fragmentation" },
+    { args: ["Connection refused"], expected: "ports-and-sockets" },
+    { args: ["프라이빗 서브넷에서 밖으로 apt가 안 나간다"], expected: "vpc-subnets-route-tables" },
+    { args: ["그냥 접속이 안 된다"], expected: "network-troubleshooting-by-layer" },
+  ]}
+/>
+
+흔히 틀리는 곳은 두 군데다. 대소문자를 맞추지 않으면 "NetworkPolicy"와 "Pod"가 규칙에 걸리지 않는다. 단어 중 하나만 있어도 맞다고 보면(`some`) "502인데 앱 로그엔"이 첫 규칙 "502·배포"에 걸려 드레이닝 글로 간다. 규칙 표를 직접 운영해 보면 이 두 실수가 런북에서도 똑같이 나온다. 증상 표현이 사람마다 달라서, 단어 목록은 장애를 겪을 때마다 늘려야 한다.
+
+## 한 번에 다 읽지 않아도 된다
+
+이 지도를 처음부터 끝까지 읽을 필요는 없다. 처음이라면 기본 개념 칸의 여섯 편, 로드 밸런서 기본, VPC 두 편, CNI, CoreDNS까지만 읽어도 위의 증상 대부분에서 첫 글을 고를 수 있다. 나머지는 장애를 만났을 때 증상에서 출발해 읽으면 오래 남는다. 어느 쪽이든 요점은 같다. 요청이 지나는 칸을 알고, 처음 실패한 칸을 찾고, 그 칸의 글을 편다.
+
+## 면접에서 나올 만한 질문
+
+### 브라우저에서 Pod까지 요청이 지나는 길을 설명하고, 홉마다 생길 수 있는 장애를 하나씩 말해 보라
+
+DNS, CDN 엣지, 로드 밸런서, Ingress, 사이드카, Pod 순서이고 Pod가 다른 서비스를 부를 때 CoreDNS를 한 번 더 지난다. DNS는 TTL 때문에 옛 주소를 주고, 엣지는 오래된 캐시를 주고, 로드 밸런서는 드레이닝 없이 대상을 빼면 502를 만든다. Ingress는 엔드포인트가 없으면 503을, 메시는 재시도를 곱해 부하를 키운다. Pod 쪽에서는 NetworkPolicy가 DNS를 막는 경우가 흔하다. 홉을 알면 장애가 났을 때 어느 로그부터 볼지가 정해진다.
+
+### 502와 504는 누가 만들고, 어떻게 가리나
+
+둘 다 앞단 프록시가 만든다. 502는 뒤에서 응답을 받지 못했거나 잘못된 응답을 받았을 때(연결 거절, 응답 중 연결 끊김), 504는 정해진 시간 안에 응답이 오지 않았을 때다. 앱 로그가 비어 있으면 요청이 앱에 닿지 않은 것이고, 응답의 Server 헤더와 본문 모양으로 어느 프록시가 만들었는지 가린다. 간헐적인 502는 앱의 keep-alive 유휴 시간이 로드 밸런서보다 짧을 때 자주 생긴다. 504는 바깥 타임아웃이 안쪽보다 짧게 잡혀 있지 않은지도 본다.
+
+### 노트북에선 풀리는 이름이 Pod 안에서만 안 풀린다. 어디부터 보나
+
+Pod가 묻는 리졸버가 다르다는 데서 출발한다. Pod의 resolv.conf에서 nameserver가 CoreDNS인지, search와 ndots가 어떤지 보고, 클러스터 안 이름과 바깥 이름을 각각 물어 어느 쪽이 실패하는지 나눈다. 모든 이름이 한꺼번에 실패하면 최근의 NetworkPolicy, 바깥 이름만 실패하면 CoreDNS가 넘기는 노드 리졸버와 NACL 쪽이다. 가끔 5초씩 늦는 것은 conntrack 경쟁으로 UDP 질의가 버려지는 경우가 많아서 NodeLocal DNSCache를 검토한다.
+
+### 보안 그룹, NACL, NetworkPolicy, 메시의 인가 정책이 모두 "막는 장치"다. 왜 여러 겹으로 두고, 각각 어디에 쓰나
+
+막는 단위와 아는 정보가 다르기 때문이다. NACL은 서브넷 단위로 상태 없이 패킷을 보고, 보안 그룹은 인스턴스 단위로 연결을 기억한다. NetworkPolicy는 Pod 라벨을 알고, 메시 인가 정책은 mTLS 인증서에 담긴 서비스 이름과 HTTP 경로까지 안다. 넓고 거친 차단은 아래층에, 서비스 신원과 요청 내용이 필요한 판단은 위층에 둔다. 겹이 많으면 원인 찾기가 어려워지므로 흐름 로그와 정책 로그로 어느 겹에서 막혔는지 확인할 수 있어야 한다.
+
+### VPN, VXLAN 오버레이, 서비스 메시는 모두 무언가를 감싼다. 운영에서 공통으로 조심할 것은
+
+크기와 가시성이다. 패킷을 감싸면 헤더가 늘어 안쪽 MTU가 줄어든다. VXLAN은 50바이트를 덧씌워 1500 망에서 1450이 되고, WireGuard는 기본 MTU를 1420으로 잡는다. 이걸 맞추지 않으면 작은 요청은 되고 큰 응답만 멈추는 블랙홀이 생긴다. 또 바깥에서 보이는 주소와 포트가 바뀌니 캡처와 흐름 로그를 어느 층에서 볼지 정해야 한다. 메시는 패킷이 아니라 연결을 감싸므로 MTU 문제는 없지만, 재시도와 타임아웃이 앱 모르게 붙는다.
+
+### 쿠버네티스에서 서비스 디스커버리는 어떻게 동작하고, 목록이 낡으면 어떤 증상이 나오나
+
+Service가 이름과 가상 IP를 주고, EndpointSlice가 준비된 Pod 주소 목록을 들고 있다. CoreDNS는 이름을 가상 IP로 풀고, kube-proxy나 eBPF 규칙이 가상 IP를 엔드포인트 하나로 바꾼다. 메시가 있으면 컨트롤 플레인이 같은 목록을 xDS로 프록시에 밀어 준다. 목록이 낡는 곳은 앱 쪽 DNS 캐시, 오래 사는 연결 풀, 프록시가 마지막으로 받은 설정이다. 이미 사라진 Pod로 요청이 가거나, 새 Pod에 트래픽이 오지 않는 증상으로 나타난다.
+
+### 네트워크 설정을 코드로 바꾸면 무엇이 좋아지고, 오히려 사고가 커지는 경우는
+
+누가 언제 왜 바꿨는지가 PR에 남고, 같은 망을 몇 번이고 똑같이 만들 수 있다. plan을 사람과 정책 검사가 함께 보고, 저장한 plan만 apply하게 하면 리뷰한 것과 다른 변경이 나가지 않는다. 반대로 작은 수정이 리소스 교체로 번져 연결을 끊거나, 잘못된 값이 모든 환경에 한 번에 퍼질 수 있다. 그래서 state를 쪼개 폭발 반경을 줄이고, 단계적으로 적용하고, drift 감지로 코드 밖 변경을 찾는다.
+
+### "서비스가 느리다"는 신고를 받았다. 네트워크 탓인지 앱 탓인지 어떻게 나누나
+
+요청 하나를 구간으로 쪼갠다. curl의 구간별 시각에서 connect까지가 길면 경로나 거리, TLS까지가 길면 핸드셰이크나 인증서 검증, 첫 바이트까지가 길면 앱과 그 뒤의 의존성이다. 큰 응답에서 첫 바이트 이후가 길면 대역폭과 TCP 창 크기를 본다. 평균이 아니라 p99로 보고, 서버 여러 대를 거치는 요청이면 분산 추적으로 어느 구간이 늘었는지 확인한다. 네트워크 지표로는 재전송 비율과 큐 드롭을 같이 본다.

@@ -1,0 +1,381 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("distributed-lock");
+
+일일 정산 배치는 서버 세 대에서 크론으로 돌고, 한 대만 실제로 일하도록 Redis 락을 잡는다. 어느 날 정산 테이블의 금액이 맞지 않았다. 로그를 보니 서버 A가 락을 잡고 정산을 시작했는데, 계산 도중 GC로 4초쯤 멈췄다. 락의 만료 시간은 3초였다. 그사이 서버 B가 락을 잡고 정산을 끝내 저장했고, 깨어난 A는 자기가 아직 락을 쥐고 있다고 믿은 채 옛 데이터로 계산한 금액을 그 위에 덮어썼다. 락 코드는 교과서대로였다. `SET NX PX`로 잡고, 무작위 토큰을 넣고, 풀 때는 Lua로 토큰을 확인했다.
+
+`SET ... NX PX` 한 줄로 락을 잡고 Lua로 안전하게 푸는 방법은 [Redis 기본 글](/posts/redis-basics)에서 다뤘다. 이 글은 그 락이 어떻게 깨지는지에서 출발한다. 프로세스가 멈출 때, 장애 조치가 일어날 때 락이 둘이 되는 장면을 실제로 재현하고, 펜싱 토큰으로 저장소가 늦은 쓰기를 거절하게 만들고, Redlock 논쟁과 etcd·ZooKeeper 같은 합의 시스템의 락을 비교한다. Redis 7.0.15, PostgreSQL 16.15, etcd 3.4.30을 이 컨테이너에 띄워 실제로 실행한 결과다.
+
+## 락을 쥔 줄 알았던 워커
+
+처음 장면을 그대로 재현했다. 락을 잡을 때 펜싱 토큰도 함께 받도록 Lua 스크립트 하나로 묶었다(토큰 이야기는 뒤에서 한다). 만료 시간은 3초로 짧게 줬다.
+
+```bash
+# 락 잡기: 키가 없을 때만 내 토큰을 3초짜리로 쓰고, 성공하면 펜싱 번호를 하나 올려 돌려준다
+redis-cli -p 6390 EVAL "if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then return redis.call('INCR', KEYS[2]) else return 0 end" \
+  2 lock:{settle} fence:{settle} worker-a:7f3e 3000
+```
+
+```text
+-- 워커 A
+127.0.0.1:6390> EVAL "if redis.call('SET', ...) ..." 2 lock:{settle} fence:{settle} worker-a:7f3e 3000
+(integer) 33
+
+-- 워커 B, 곧바로
+127.0.0.1:6390> EVAL "..." 2 lock:{settle} fence:{settle} worker-b:c41d 3000
+(integer) 0
+127.0.0.1:6390> PTTL lock:{settle}
+(integer) 2392
+
+-- 3초가 지난 뒤 워커 B (A는 그동안 멈춰 있다)
+127.0.0.1:6390> GET lock:{settle}
+(nil)
+127.0.0.1:6390> EVAL "..." 2 lock:{settle} fence:{settle} worker-b:c41d 3000
+(integer) 34
+```
+
+A는 33번으로 락을 잡았고, B는 처음엔 실패(0)했다. 남은 시간은 2,392ms였다. 3초가 지나자 키가 사라졌고 B가 34번으로 잡았다. Redis 입장에서는 아무 문제가 없다. 만료 시간이 지났으니 지웠고, 비었으니 B에게 줬다. 문제는 A가 이 사실을 모른다는 것이다. 멈춰 있던 프로세스는 깨어나서 "락을 잡았다" 다음 줄을 그대로 실행한다. 시계를 다시 보는 코드가 있어도, 확인한 직후에 또 멈추면 소용없다.
+
+<SequenceDiagram
+  caption="멈춘 사이 락이 만료되면 둘이 동시에 쥔다"
+  actors={[
+    { id: "a", label: "워커 A" },
+    { id: "r", label: "Redis" },
+    { id: "b", label: "워커 B" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "a", to: "r", label: "SET NX PX 3000", title: "A가 락을 잡는다", detail: "3초짜리 락과 펜싱 번호 33을 받는다. 정산 계산을 시작한다.", payload: "(integer) 33" },
+    { from: "a", to: "a", label: "GC 4초", title: "A가 멈춘다", detail: "GC, 스왑, VM 일시 정지, 컨테이너 CPU 제한. 이유는 다양하지만 결과는 같다. A의 시간만 멈추고 바깥 시계는 간다." },
+    { from: "r", to: "r", label: "만료", title: "3초가 지나 키가 지워진다", detail: "Redis는 A가 살아 있는지 모른다. 약속한 시간이 지났을 뿐이다." },
+    { from: "b", to: "r", label: "SET NX PX 3000", title: "B가 락을 잡는다", detail: "키가 비었으니 성공이다. 번호 34를 받고 정산해서 저장한다.", payload: "(integer) 34" },
+    { from: "b", to: "db", label: "UPDATE 1250000", title: "B가 결과를 쓴다", detail: "새 데이터로 계산한 정산 금액이 들어간다." },
+    { from: "a", to: "db", label: "UPDATE 1190000", title: "깨어난 A도 쓴다", detail: "A는 여전히 락을 쥐었다고 믿는다. 옛 데이터로 계산한 금액이 B의 결과를 덮는다. 락만으로는 이걸 막을 수 없다." },
+  ]}
+/>
+
+이건 Redis의 문제가 아니라 만료 시간이 있는 락, 즉 임대(lease)라면 어디서나 생기는 문제다. 만료 시간이 없으면 락을 쥔 채 죽은 워커 때문에 영원히 아무도 못 잡는다. 만료 시간이 있으면 살아 있지만 멈춘 워커와 새 워커가 겹칠 수 있다. 둘 중 하나는 받아들여야 한다.
+
+## 락이 지키려는 것이 효율인가 정확성인가
+
+분산 락을 고르기 전에 먼저 물어볼 게 있다. 락이 깨져서 두 워커가 같은 일을 하면 무슨 일이 생기나.
+
+같은 이메일이 두 번 가거나, 같은 캐시를 두 번 데우거나, 같은 리포트를 두 번 만드는 정도라면 락은 효율을 위한 것이다. 가끔 깨져도 비용이 조금 더 들 뿐이다. 이런 곳에는 Redis 한 대의 `SET NX PX`로 충분하고, 복잡한 장치는 오히려 장애 지점을 늘린다.
+
+정산 금액이 틀리거나, 같은 결제가 두 번 나가거나, 파일이 깨진다면 락은 정확성을 위한 것이다. 이때는 "락이 절대 깨지지 않는다"에 기대면 안 된다. 앞에서 본 것처럼 만료 시간이 있는 락은 원리적으로 깨질 수 있다. 정확성은 락이 아니라 데이터를 쓰는 쪽에서 지켜야 한다. 이 구분은 마틴 클레프만(Martin Kleppmann)이 2016년 Redlock을 비판한 글에서 정리한 것이고, 분산 락을 다룰 때 가장 먼저 꺼내는 질문이 됐다.
+
+정확성이 필요하다면 락 없이 해결되는지도 먼저 본다. "하루 정산 한 번"은 `settlements` 테이블의 `settle_date` 기본 키가 이미 지켜 준다. 같은 결제 두 번은 [멱등성 키](/posts/idempotency-key)로, 같은 행 동시 수정은 [낙관적 잠금](/posts/optimistic-locking)이나 [비관적 잠금](/posts/pessimistic-locking)으로 DB가 판정하게 하는 게 더 단단하다. 분산 락은 그게 안 될 때, 예를 들어 여러 시스템에 걸친 작업을 한 번에 하나만 돌려야 할 때 꺼낸다.
+
+## 만료 시간은 짧아도 길어도 문제다
+
+만료 시간(TTL)을 길게 잡으면 멈춘 워커와 겹칠 확률은 줄지만, 락을 쥔 워커가 정말 죽었을 때 그 시간만큼 아무도 일을 못 한다. 30초짜리 락이면 서버가 죽은 뒤 30초 동안 정산이 멈춘다. 짧게 잡으면 반대다. 그래서 흔히 쓰는 방법이 짧은 TTL과 갱신이다. 락을 잡은 워커가 일하는 동안 주기적으로 "아직 내 락이면 만료 시간을 다시 늘린다"를 보낸다.
+
+<UrlAnatomy
+  caption="락 갱신 스크립트 한 줄 읽기"
+  base="EVAL"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "IF", display: "if GET(KEYS[1]) == ARGV[1]", title: "아직 내 락인가", description: "키의 값이 내가 넣은 토큰인지 본다. 이미 만료되어 다른 워커가 잡았다면 값이 다르다. 남의 락을 늘려 주면 안 되니 확인이 먼저다.", required: true },
+    { key: "THEN", display: "then PEXPIRE(KEYS[1], ARGV[2])", title: "만료 시간 다시 늘리기", description: "내 락이면 만료 시간을 다시 3초로 맞춘다. 확인과 연장이 Lua 안에서 한 번에 일어나니 그 사이에 끼어들 틈이 없다.", required: true },
+    { key: "ELSE", display: "else return 0", title: "내 락이 아니다", description: "0이 오면 이미 락을 잃었다는 뜻이다. 하던 일을 바로 멈춰야 한다. 실제로 A가 깨어나 갱신을 시도했을 때 0이 왔다.", code: "-- B (락 주인)\n(integer) 1\n-- A (락을 잃은 쪽)\n(integer) 0" },
+    { key: "ARGS", display: "1 lock:{settle} worker-b:c41d 3000", title: "키 하나, 토큰, 새 TTL", description: "키 개수 1, 락 키, 내 토큰, 늘릴 시간(ms). 갱신은 보통 TTL의 1/3마다 보낸다. 3초 락이면 1초마다다." },
+  ]}
+/>
+
+Java의 Redisson이 이 방식을 기본으로 한다. 락 시간을 따로 주지 않으면 `lockWatchdogTimeout`(기본 30초)짜리 락을 잡고, 그 3분의 1인 10초마다 워치독이 갱신한다. 프로세스가 죽으면 갱신이 멈추니 최대 30초 뒤 풀린다.
+
+갱신이 해결하지 못하는 게 있다. 갱신을 보내는 스레드도 같은 프로세스 안에 있으니, 프로세스 전체가 멈추면 갱신도 같이 멈춘다. 처음 장면의 GC는 모든 스레드를 세운다. 갱신은 "일이 TTL보다 오래 걸리는" 문제를 풀 뿐, "프로세스가 TTL보다 오래 멈추는" 문제는 그대로 남긴다. 갱신 결과가 0이면 하던 일을 멈추는 코드도 꼭 넣는다. 락을 잃은 줄 알면서 계속 쓰는 워커가 생각보다 흔하다.
+
+## 늦게 온 쓰기를 저장소가 거절하게
+
+락이 깨지는 걸 막을 수 없다면, 깨졌을 때 피해가 없게 만든다. 방법이 펜싱 토큰(fencing token)이다. 락을 잡을 때마다 계속 커지는 번호를 함께 받고, 데이터를 쓸 때 그 번호를 같이 보낸다. 저장소는 지금까지 본 가장 큰 번호를 기억하고, 그보다 작은 번호의 쓰기는 거절한다. 늦게 깨어난 A의 번호(33)는 이미 B의 번호(34)를 본 저장소에서 거절된다.
+
+앞의 Lua 스크립트가 락과 함께 `INCR`로 번호를 준 이유가 이것이다. 두 키 이름에 `{settle}`을 넣은 건 Redis Cluster에서 두 키가 같은 슬롯에 들어가게 하는 해시 태그다. 슬롯이 다르면 한 스크립트에서 두 키를 다룰 수 없다. 저장소인 PostgreSQL 쪽에는 정산 행에 `fence` 열을 두고, 내 번호가 기록된 번호보다 작지 않을 때만 쓴다.
+
+```sql
+CREATE TABLE settlements (
+  settle_date date   PRIMARY KEY,
+  total       bigint,
+  status      text   NOT NULL DEFAULT 'pending',
+  fence       bigint NOT NULL DEFAULT 0      -- 지금까지 쓴 가장 큰 펜싱 번호
+);
+
+-- B (번호 34): 쓰기 두 번. 같은 번호의 두 번째 쓰기도 받아야 하니 <=
+UPDATE settlements SET total = 1250000, status = 'done', fence = 34
+WHERE settle_date = '2026-10-20' AND fence <= 34;
+UPDATE settlements SET total = 1250000, status = 'done', fence = 34
+WHERE settle_date = '2026-10-20' AND fence <= 34;
+
+-- 깨어난 A (번호 33)
+UPDATE settlements SET total = 1190000, status = 'done', fence = 33
+WHERE settle_date = '2026-10-20' AND fence <= 33;
+
+SELECT * FROM settlements;
+```
+
+```text
+UPDATE 1
+UPDATE 1
+UPDATE 0
+ settle_date |  total  | status | fence
+-------------+---------+--------+-------
+ 2026-10-20  | 1250000 | done   |    34
+(1 row)
+```
+
+A의 쓰기는 `UPDATE 0`으로 거절됐고 B의 결과가 남았다. 조건을 `fence < 34`로 쓰면 락 주인이 같은 번호로 두 번째 쓰기를 할 때 스스로 거절당하니 `<=`다. 모양을 보면 [낙관적 잠금](/posts/optimistic-locking)의 버전 조건과 같다. 다른 점은 버전은 데이터가 매기고, 펜싱 번호는 락 서비스가 매긴다는 것이다. 그래서 같은 락으로 보호하는 여러 행, 여러 테이블에 같은 번호를 쓸 수 있다.
+
+<AlgoTrace
+  caption="저장소는 가장 큰 번호보다 작은 쓰기를 거절한다"
+  memoryLabel="저장소가 본 가장 큰 번호"
+  cells={["A 잡음 33", "A 멈춤", "B 잡음 34", "B 쓰기 34", "B 쓰기 34", "A 쓰기 33"]}
+  steps={[
+    { pointer: 0, memory: ["0"], caption: "A가 락과 함께 번호 33을 받는다. 아직 아무것도 안 썼다." },
+    { pointer: 1, memory: ["0"], caption: "A가 멈춘다. 그사이 3초짜리 락이 만료된다." },
+    { pointer: 2, memory: ["0"], caption: "B가 락을 잡고 번호 34를 받는다. INCR이라 번호는 줄어들 수 없다." },
+    { pointer: 3, found: [3], memory: ["34"], caption: "B가 34로 쓴다. 0 ≤ 34라 받아들이고, 이제 저장소는 34를 기억한다." },
+    { pointer: 4, found: [3, 4], memory: ["34"], caption: "B의 두 번째 쓰기도 34다. 34 ≤ 34라 받는다. 락 주인은 여러 번 쓸 수 있어야 한다." },
+    { pointer: 5, found: [3, 4], memory: ["34"], caption: "깨어난 A가 33으로 쓴다. 33은 34보다 작으니 거절한다(UPDATE 0). A는 락을 잃었음을 이때 안다." },
+  ]}
+/>
+
+펜싱의 한계도 분명하다. 저장소가 번호를 검사할 수 있어야 한다. 내 DB라면 열 하나와 조건 하나로 되지만, 외부 결제 API나 이메일 발송처럼 번호를 이해하지 못하는 곳에는 쓸 수 없다. 그런 곳은 결국 상대가 제공하는 멱등성 키로 중복을 막아야 한다. 그리고 번호는 락 서비스가 단조 증가를 보장해야 의미가 있다. 다음 절에서 보듯, Redis가 장애 조치로 프라이머리를 바꾸면 `INCR` 값도 뒤로 갈 수 있다.
+
+아래 함수에 이 규칙을 직접 넣어 보자. 도착한 순서대로 쓰기 목록을 받아, 최종 값과 받아들인 번호, 거절한 번호를 돌려준다.
+
+<CodePlayground
+  caption="applyWrites: 펜싱 번호로 늦은 쓰기 거절하기"
+  functionName="applyWrites"
+  initialCode={`function applyWrites(writes) {
+  // writes: [{ token, value }, ...] 도착한 순서
+  // 지금까지 받아들인 가장 큰 번호보다 작은 쓰기는 거절한다 (같은 번호는 받는다)
+  // 반환: { value: 마지막으로 받아들인 값(없으면 null), accepted: [...번호], rejected: [...번호] }
+  return { value: null, accepted: [], rejected: [] };
+}`}
+  solution={`function applyWrites(writes) {
+  let lastToken = 0;
+  let value = null;
+  const accepted = [];
+  const rejected = [];
+  for (const w of writes) {
+    if (w.token >= lastToken) {
+      lastToken = w.token;
+      value = w.value;
+      accepted.push(w.token);
+    } else {
+      rejected.push(w.token); // 락을 잃은 뒤 늦게 도착한 쓰기
+    }
+  }
+  return { value, accepted, rejected };
+}`}
+  tests={[
+    { label: "처음 장면: B 다음 늦은 A", args: [[{ token: 34, value: "B 1250000" }, { token: 33, value: "A 1190000" }]], expected: { value: "B 1250000", accepted: [34], rejected: [33] } },
+    { label: "순서대로 오면 둘 다", args: [[{ token: 33, value: "A" }, { token: 34, value: "B" }]], expected: { value: "B", accepted: [33, 34], rejected: [] } },
+    { label: "같은 번호로 두 번 쓰기", args: [[{ token: 34, value: "B1" }, { token: 34, value: "B2" }]], expected: { value: "B2", accepted: [34, 34], rejected: [] } },
+    { label: "중간에 끼어든 옛 번호", args: [[{ token: 5, value: "x" }, { token: 7, value: "y" }, { token: 6, value: "z" }, { token: 8, value: "w" }]], expected: { value: "w", accepted: [5, 7, 8], rejected: [6] } },
+    { label: "쓰기 없음", args: [[]], expected: { value: null, accepted: [], rejected: [] } },
+  ]}
+/>
+
+## 장애 조치 한 번에 락이 사라진다
+
+멈춤 말고도 락이 둘이 되는 길이 있다. Redis 복제는 비동기다. 프라이머리는 쓰기를 받자마자 클라이언트에 `OK`를 돌려주고, 레플리카에는 조금 뒤에 보낸다. 그 사이에 프라이머리가 죽고 Sentinel이 레플리카를 승격하면, 새 프라이머리에는 방금 잡은 락이 없다.
+
+이걸 재현하려고 레플리카 하나를 붙이고, `iptables`로 프라이머리에서 레플리카로 가는 복제 패킷만 막은 채 락을 잡았다. 그다음 프라이머리를 `kill -9`로 죽이고 레플리카를 승격했다.
+
+```bash
+# 레플리카(6391)가 프라이머리(6390)에 붙은 연결의 로컬 포트를 찾아, 프라이머리 → 레플리카 패킷만 버린다
+sudo iptables -I OUTPUT -p tcp --sport 6390 --dport 59844 -j DROP
+# 락을 잡고, 같은 연결에서 레플리카 1대가 받았는지 500ms 기다린다
+printf 'SET lock:{settle} worker-a:7f3e NX PX 30000\nWAIT 1 500\n' | redis-cli -p 6390
+# 프라이머리가 죽는다. 레플리카를 승격한다 (Sentinel이 하는 일을 손으로)
+kill -9 <프라이머리 pid>
+redis-cli -p 6391 REPLICAOF NO ONE
+# 규칙을 지우고(되돌리기) 새 프라이머리에서 락을 본다
+sudo iptables -D OUTPUT -p tcp --sport 6390 --dport 59844 -j DROP
+redis-cli -p 6391 GET lock:{settle}
+redis-cli -p 6391 SET lock:{settle} worker-b:c41d NX PX 30000
+```
+
+```text
+OK
+0
+OK
+
+OK
+```
+
+차례로 A의 락 잡기 `OK`, `WAIT`의 결과 0(락을 받은 레플리카가 0대), 승격 `OK`, 새 프라이머리의 `GET`은 빈 값(nil), B의 락 잡기 `OK`다. A와 B가 동시에 같은 락을 쥐었다. 같은 이유로 `fence:{settle}`의 `INCR` 값도 레플리카에 안 넘어갔다면 승격 뒤 번호가 다시 33부터 나올 수 있다. 펜싱 번호를 Redis에서 받는다면 이 경우까지 생각해야 한다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="비동기 복제 중 장애 조치: 락이 새 프라이머리로 건너가지 못한다"
+  zones={[
+    { id: "redis", label: "Redis + Sentinel", x: 150, y: 20, w: 240, h: 255, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "worker A", sub: "token 7f3e", x: 70, y: 80, icon: "server", w: 100 },
+    { id: "b", label: "worker B", sub: "token c41d", x: 70, y: 220, icon: "server", w: 100 },
+    { id: "p", label: "primary", sub: ":6390", x: 270, y: 80, icon: "lock" },
+    { id: "r", label: "replica", sub: ":6391", x: 270, y: 220, icon: "lock" },
+  ]}
+  links={[
+    { from: "a", to: "p" },
+    { from: "p", to: "r", label: "async", dashed: true },
+    { from: "b", to: "r" },
+  ]}
+  steps={[
+    { path: ["a", "p"], packet: "SET NX", title: "A가 프라이머리에 락을 잡는다", detail: "프라이머리는 바로 OK를 돌려준다. 레플리카에 복제됐는지는 기다리지 않는다.", payload: "SET lock:{settle} worker-a:7f3e NX PX 30000\nOK" },
+    { path: ["p", "r"], packet: "repl", blocked: true, title: "복제가 도착하기 전에", detail: "복제 스트림이 아직 레플리카에 닿지 않았다. WAIT 1 500의 결과가 0이다.", payload: "WAIT 1 500\n(integer) 0" },
+    { path: ["p"], highlight: ["p"], title: "프라이머리가 죽는다", detail: "kill -9. Sentinel이라면 down-after-milliseconds 뒤 장애로 판단하고 레플리카를 승격한다." },
+    { path: ["b", "r"], packet: "SET NX", highlight: ["r"], title: "B가 새 프라이머리에서 락을 잡는다", detail: "승격된 레플리카에는 A의 락이 없다. B도 OK를 받는다. 이제 둘이 같은 락을 쥐고 있다.", payload: "GET lock:{settle}\n(nil)\nSET ... NX PX 30000\nOK" },
+  ]}
+/>
+
+`WAIT`를 쓰면 될 것 같지만 한계가 있다. 레플리카가 받았다는 걸 확인할 뿐 디스크에 썼는지는 보장하지 않고, Sentinel이 가장 최신 레플리카를 고른다는 보장도 없다. 그리고 실험 중에 알게 된 함정이 하나 있다. `WAIT`는 그 연결이 마지막으로 한 쓰기를 기준으로 센다. `redis-cli SET ...`과 `redis-cli WAIT 1 500`을 따로 실행하면 두 번째 연결은 쓴 게 없어서 레플리카가 멈춰 있어도 즉시 1을 돌려줬다. 같은 연결에서 보내야 의미가 있다.
+
+<Callout kind="warning" title="iptables 규칙은 실험 뒤 꼭 지운다">
+위 실험은 로컬 루프백의 특정 포트 하나만 막는다. 원격 서버에서 `OUTPUT` 체인에 `DROP`을 넣을 때 포트를 잘못 적으면 SSH 응답까지 막혀 접속이 끊긴다. `sudo iptables -S OUTPUT`으로 넣은 규칙을 확인하고, 끝나면 같은 조건으로 `-D`를 실행해 지운다. 원격이라면 `sudo sh -c 'sleep 300; iptables -D OUTPUT ...' &`처럼 일정 시간 뒤 자동으로 지우는 안전장치를 먼저 걸어 둔다.
+</Callout>
+
+## 다수결로 잡는 Redlock과 그 논쟁
+
+Redis 작성자 살바토레 산필리포(antirez)가 제안한 Redlock은 복제 대신 서로 독립된 Redis 프라이머리 여러 대(보통 5대)를 쓴다. 클라이언트가 모든 노드에 같은 키, 같은 토큰으로 `SET NX PX`를 보내고, 과반(5대 중 3대)에서 성공했고 그 과정에 걸린 시간이 TTL보다 충분히 짧으면 락을 얻은 것으로 본다. 남은 유효 시간은 TTL에서 걸린 시간과 시계 오차 여유를 뺀 값이다. 참조 구현은 오차 여유를 TTL의 1%에 2ms를 더한 값으로 잡는다. 과반에 실패하면 모든 노드에 해제를 보낸다. 노드 한두 대가 죽어도 락이 유지되고, 비동기 복제로 락이 사라지는 문제는 피한다.
+
+클레프만은 2016년 글에서 두 가지를 지적했다. 첫째, 처음 장면의 프로세스 멈춤은 Redlock으로도 막을 수 없고, Redlock에는 펜싱 토큰처럼 단조 증가하는 번호가 없어 저장소가 늦은 쓰기를 거절할 수 없다. 둘째, 노드의 시계가 갑자기 앞으로 뛰면(NTP가 크게 보정하면) 한 노드의 키가 일찍 만료되어 과반이 두 번 생길 수 있다. 즉 Redlock은 네트워크 지연, 프로세스 멈춤, 시계 오차가 모두 일정 범위 안이라는 가정 위에 서 있다. antirez는 반론 글에서 시계는 크게 뛰지 않게 운영할 수 있고, 걸린 시간을 다시 재는 단계가 지연을 걸러 낸다고 답했다. 논쟁은 결론 없이 끝났지만 실무의 정리는 대체로 이렇다. 효율용 락이라면 Redlock까지 갈 필요 없이 Redis 한 대로 충분하고, 정확성용이라면 Redlock도 충분하지 않으니 펜싱이나 합의 시스템을 쓴다. Redlock이 맞는 자리는 생각보다 좁다.
+
+## 합의 시스템 위의 락
+
+etcd와 ZooKeeper는 Raft, ZAB 같은 합의 알고리즘으로 여러 노드가 같은 순서의 기록을 갖는다. 과반이 기록해야 쓰기가 성공하니, 리더가 바뀌어도 성공한 락이 사라지지 않는다. 그리고 모든 쓰기에 전역적으로 증가하는 번호가 붙어서, 그 번호를 펜싱 토큰으로 바로 쓸 수 있다.
+
+etcd는 락을 임대(lease)로 만든다. 클라이언트가 TTL이 있는 임대를 만들고 살아 있는 동안 계속 갱신(keepalive)하며, 그 임대에 묶인 키를 `락 이름/임대 ID`로 쓴다. 키를 가장 먼저 만든(생성 번호가 가장 작은) 쪽이 락 주인이고, 나머지는 자기 바로 앞 키가 지워지기를 지켜본다. `etcdctl lock`으로 두 터미널에서 같은 락을 잡았다.
+
+```bash
+# 터미널 1, 2에서 같은 이름으로. TTL 10초 임대를 만들고 락을 잡는다 (잡을 때까지 기다린다)
+etcdctl --endpoints=127.0.0.1:23790 lock --ttl=10 job/daily-settlement
+# 다른 터미널에서 락 키들을 본다
+etcdctl --endpoints=127.0.0.1:23790 get --prefix job/daily-settlement -w fields | grep -E 'Key|CreateRevision|"Lease"'
+```
+
+```text
+-- 터미널 1: 바로 잡았다
+job/daily-settlement/2040a159880d0406
+-- 터미널 2: 아무것도 안 찍고 기다린다
+
+"Key" : "job/daily-settlement/2040a159880d0406"
+"CreateRevision" : 2
+"Lease" : 2324034813629891590
+"Key" : "job/daily-settlement/2040a159880d040a"
+"CreateRevision" : 3
+"Lease" : 2324034813629891594
+
+-- 터미널 1에서 Ctrl+C로 놓은 뒤 터미널 2
+job/daily-settlement/2040a159880d040a
+```
+
+생성 번호(`CreateRevision`)가 2인 키가 주인이고, 3인 키가 줄을 서 있다가 앞 키가 지워지자 락을 얻었다. 이 생성 번호가 그대로 펜싱 토큰이 된다. etcd 전체에서 단조 증가하고, 리더가 바뀌어도 뒤로 가지 않는다.
+
+그럼 처음 장면의 멈춤은 어떻게 될까. 주인 프로세스를 `kill -STOP`으로 멈추고 TTL 5초짜리로 다시 해 봤다.
+
+```text
+13:37:56.192 터미널 1 락 획득: job/daily-settlement/2040a159880d0416
+13:37:56.198 터미널 1 프로세스 정지 (kill -STOP)
+13:37:59.719 터미널 2 락 획득: job/daily-settlement/2040a159880d041a
+-- kill -CONT로 깨운 뒤 터미널 1
+Error: session expired
+```
+
+etcd도 멈춘 쪽의 임대가 끝나자 다른 쪽에 락을 넘겼다. 합의 시스템이라도 임대 기반 락은 멈춤을 막지 못한다. 다른 점은 두 가지다. 깨어난 쪽이 세션 만료를 알 수 있고, 무엇보다 생성 번호라는 믿을 만한 펜싱 토큰이 있다. 저장소가 이 번호를 검사하면 깨어난 쪽의 쓰기는 거절된다.
+
+ZooKeeper도 모양이 거의 같다. 임시 순차 노드(ephemeral sequential znode)를 만들고, 번호가 가장 작으면 주인, 아니면 바로 앞 번호의 노드를 지켜본다. 세션이 끊기면 임시 노드가 지워져 락이 풀린다. Apache Curator의 `InterProcessMutex`가 이 레시피를 구현한다. 펜싱 토큰으로는 노드의 생성 트랜잭션 ID(`czxid`)를 쓴다. Kubernetes의 컨트롤러 리더 선출은 `coordination.k8s.io`의 `Lease` 객체로 같은 일을 하고, 그 저장소가 etcd다. 락을 오래 쥐는 리더 선출은 [리더 선출](/posts/leader-election)에서 따로 다룬다.
+
+대가는 운영이다. 합의 시스템은 최소 3대를 따로 운영해야 하고, 쓰기마다 과반의 디스크 기록을 기다려서 Redis보다 느리다. 락을 초당 수만 번 잡는 용도로는 맞지 않는다.
+
+## 무엇으로 락을 잡을까
+
+<ConceptDiagram
+  width={400}
+  height={340}
+  caption="분산 락 고르기"
+  nodes={[
+    { id: "q0", label: "DB 제약으로 되나", sub: "유일 키, 조건부 UPDATE", x: 200, y: 40, w: 190 },
+    { id: "db", label: "락 없이 DB가 판정", sub: "가장 단단하다", x: 90, y: 125, w: 150 },
+    { id: "q1", label: "깨지면 데이터가 틀리나", sub: "효율 vs 정확성", x: 300, y: 125, w: 170 },
+    { id: "redis", label: "Redis SET NX PX", sub: "한 대로 충분", x: 90, y: 215, w: 150 },
+    { id: "q2", label: "같은 DB를 쓰나", sub: "작업이 한 DB 안", x: 300, y: 215, w: 170 },
+    { id: "adv", label: "PG advisory lock", sub: "+ 펜싱", x: 90, y: 305, w: 150 },
+    { id: "etcd", label: "etcd, ZooKeeper", sub: "revision으로 펜싱", x: 300, y: 305, w: 170 },
+  ]}
+  edges={[
+    { from: "q0", to: "db", label: "예" },
+    { from: "q0", to: "q1", label: "아니요" },
+    { from: "q1", to: "redis", label: "아니요" },
+    { from: "q1", to: "q2", label: "예" },
+    { from: "q2", to: "adv", label: "예" },
+    { from: "q2", to: "etcd", label: "아니요" },
+  ]}
+/>
+
+이미 PostgreSQL을 쓰고 있고 보호할 작업도 그 DB 안에서 끝난다면 [advisory lock](/posts/pessimistic-locking)이 가장 싸다. 새 시스템이 필요 없고, 연결이 끊기면 저절로 풀리며, DB 한 대가 판정하니 비동기 복제 문제도 없다(장애 조치로 프라이머리가 바뀌면 잠금은 사라진다). 여러 서비스와 여러 저장소에 걸친 정확성이 필요하면 etcd나 ZooKeeper에 펜싱을 더한다. 중복 실행이 귀찮을 뿐 해롭지 않다면 Redis 한 대로 충분하다.
+
+## 현장에서 중복 실행을 추적하는 법
+
+"같은 작업이 두 번 돌았다"는 증상이 오면 먼저 락의 생애를 시간순으로 맞춰 본다. 그러려면 평소에 락 이벤트를 로그로 남겨 둬야 한다. 잡을 때, 갱신할 때, 놓을 때 토큰과 펜싱 번호, 남은 TTL을 함께 찍는다.
+
+```text
+2026-10-20T03:00:00.012Z settle lock acquired key=lock:{settle} token=worker-a:7f3e fence=33 ttl_ms=3000
+2026-10-20T03:00:03.020Z settle lock acquired key=lock:{settle} token=worker-b:c41d fence=34 ttl_ms=3000
+2026-10-20T03:00:04.105Z settle lock renew FAILED key=lock:{settle} token=worker-a:7f3e (not owner)
+```
+
+(위는 남겨 두면 좋은 로그 형식의 예다.) 이런 로그가 있으면 "A가 33으로 잡고, 3초 뒤 B가 34로 잡았고, 그다음에야 A가 갱신을 시도해 실패했다"가 바로 보인다. 같은 시각의 GC 로그(JVM이라면 `-Xlog:gc`), 컨테이너의 CPU 스로틀링 지표(`container_cpu_cfs_throttled_seconds_total`), Redis 장애 조치 로그(Sentinel의 `+switch-master`)를 겹쳐 보면 멈춤 때문인지 장애 조치 때문인지 갈린다.
+
+지표로는 락을 쥔 시간의 분포를 본다. 쥔 시간의 p99가 TTL에 가까워지면 곧 깨진다는 신호다. 지금 걸린 락은 바로 볼 수 있다.
+
+```bash
+# 지금 누가 쥐고 있고 얼마나 남았나
+redis-cli -p 6390 GET lock:{settle}
+redis-cli -p 6390 PTTL lock:{settle}     # -2: 키 없음, -1: 만료 없음(위험)
+# Redis 응답 지연 자체가 TTL을 잡아먹고 있지 않은지
+redis-cli -p 6390 --latency
+```
+
+`PTTL`이 -1이면 누군가 만료 없이 락을 잡았다는 뜻이다. `SETNX` 뒤에 `EXPIRE`를 따로 보내다 그 사이에 죽은 흔적이고, 사람이 지우기 전까지 아무도 못 잡는다.
+
+흔한 실수를 모아 두면 이렇다. TTL을 평균 작업 시간에 맞춰 잡는다(꼬리 지연과 GC를 생각하지 않는다). 토큰 확인 없이 `DEL`로 푼다(남의 락을 지운다). 갱신 실패를 무시하고 하던 일을 계속한다. 락 획득 재시도를 지터 없이 바쁘게 돌려 Redis를 두드린다. 락을 잡은 채 외부 API를 부르고 응답을 기다리며 TTL을 다 쓴다. 그리고 가장 큰 실수는 정확성이 걸린 일을 락 하나에만 맡기는 것이다.
+
+## 락은 시간을 빌리는 것이다
+
+분산 락은 영원히 쥐는 게 아니라 정해진 시간만큼 빌리는 임대다. 빌린 쪽이 멈추거나 락 서버가 장애 조치를 하면, 둘이 같은 락을 쥐는 순간이 원리적으로 생긴다. 그래서 먼저 락이 효율을 위한 것인지 정확성을 위한 것인지 가른다. 효율이면 Redis 한 대로 충분하고, 정확성이면 락보다 저장소가 판정하게 만든다. 단조 증가하는 펜싱 토큰을 받아 쓰기에 실어 보내고, 저장소가 작은 번호를 거절하면 락이 깨져도 데이터는 틀리지 않는다. 락 명령 자체의 사용법은 [Redis 기본 글](/posts/redis-basics)에, DB 안의 잠금은 [비관적 잠금 글](/posts/pessimistic-locking)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### Redis로 분산 락을 어떻게 구현하나요?
+
+`SET key token NX PX ttl` 한 명령으로 키가 없을 때만 무작위 토큰과 만료 시간을 함께 쓴다. 풀 때는 Lua로 "값이 내 토큰일 때만 삭제"를 원자적으로 한다. 작업이 길면 같은 방식으로 "내 토큰일 때만 PEXPIRE"를 주기적으로 보내 갱신하고, 갱신이 0을 돌려주면 하던 일을 멈춘다. 다만 이건 멈춤과 장애 조치에 깨질 수 있어서 효율용 락에 맞다.
+
+### 만료 시간이 있는 락이 깨지는 경우는요?
+
+락을 쥔 프로세스가 GC나 VM 정지로 TTL보다 오래 멈추면 락이 만료되고 다른 쪽이 잡는다. 깨어난 프로세스는 그 사실을 모르고 계속 쓴다. 실제로 3초 락을 잡은 A가 멈춘 사이 B가 잡아 정산을 쓰고, 깨어난 A가 그 위에 덮어쓰는 장면을 재현했다. 갱신 스레드도 같은 프로세스 안에 있어서 프로세스 전체가 멈추면 갱신도 멈춘다.
+
+### 펜싱 토큰은 무엇이고 어떻게 쓰나요?
+
+락을 잡을 때마다 단조 증가하는 번호를 함께 받아, 데이터를 쓸 때 실어 보내는 것이다. 저장소는 본 가장 큰 번호보다 작은 번호의 쓰기를 거절한다. PostgreSQL이라면 `fence` 열을 두고 `WHERE fence <= $token`으로 쓰면 늦게 깨어난 33번 쓰기가 `UPDATE 0`이 된다. 락이 깨지는 걸 막는 게 아니라 깨져도 데이터가 틀리지 않게 하는 장치이고, 번호를 검사할 수 없는 외부 API에는 쓸 수 없다.
+
+### Redis 장애 조치 때 락이 왜 사라지나요?
+
+Redis 복제가 비동기라서 프라이머리가 락을 쓰고 `OK`를 돌려준 뒤 레플리카에 복제하기 전에 죽으면, 승격된 레플리카에는 락이 없다. 복제를 막은 상태로 재현했더니 새 프라이머리의 `GET`이 nil이었고 다른 워커가 같은 락을 잡았다. `WAIT`로 복제를 확인할 수 있지만 같은 연결에서 써야 하고, 디스크 기록이나 승격 대상까지 보장하지는 않는다.
+
+### Redlock은 안전한가요?
+
+과반 노드에서 락을 잡아 노드 장애와 비동기 복제 문제는 피하지만, 프로세스 멈춤은 여전히 못 막고 펜싱 토큰이 없다. 시계가 크게 뛰면 과반이 두 번 생길 수 있다는 비판도 있다. 지연, 멈춤, 시계 오차가 일정 범위 안이라는 가정 위의 알고리즘이다. 효율용이면 Redis 한 대로 충분하고 정확성용이면 Redlock도 충분하지 않아서 쓰임새가 좁다.
+
+### etcd나 ZooKeeper 락은 Redis 락과 무엇이 다른가요?
+
+합의 알고리즘으로 과반이 기록해야 성공하니 리더가 바뀌어도 성공한 락이 사라지지 않는다. 그리고 etcd의 생성 리비전, ZooKeeper의 `czxid` 같은 전역 단조 번호를 펜싱 토큰으로 바로 쓸 수 있다. 임대 기반이라 멈춘 프로세스의 락이 넘어가는 건 같아서, 펜싱을 함께 써야 한다. 대신 3대 이상 운영해야 하고 쓰기가 Redis보다 느리다.
+
+### 분산 락 대신 쓸 수 있는 방법은요?
+
+많은 경우 DB 제약이 더 단단하다. 하루 한 번 정산이면 날짜 기본 키, 같은 결제 두 번이면 멱등성 키와 유일 제약, 같은 행 동시 수정이면 낙관적 잠금이나 `FOR UPDATE`로 DB가 판정하게 한다. 작업이 한 PostgreSQL 안에서 끝나면 advisory lock이 새 시스템 없이 가장 싸다. 분산 락은 여러 시스템에 걸친 작업을 하나만 돌려야 할 때 쓴다.

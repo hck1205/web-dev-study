@@ -1,0 +1,537 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-audit-logging");
+
+아침에 보니 shop 네임스페이스의 Deployment `web`이 없다. `kubectl get events`는 한 시간이면 사라지고, 남은 이벤트에는 ReplicaSet과 Pod가 지워졌다는 말뿐이다. 누가 언제 어디서 지웠는지는 쿠버네티스 오브젝트 어디에도 남지 않는다. 그 답은 API 서버의 감사 로그(audit log)에만 있다. 감사 로그를 켜 두지 않았다면 답이 없다.
+
+이 글은 감사 로그가 무엇을 어떤 단위로 남기는지, 정책의 네 가지 수준과 단계, 규칙이 고르는 순서, 파일과 웹훅 두 가지 백엔드를 보고, 실제 로그에서 jq로 "누가 지웠나"를 찾는다. 감사 로그가 Secret 값을 그대로 적어 버리는 실수와, 아무것도 안 해도 하루에 쌓이는 양도 직접 잰다.
+
+출력은 [kwok 실습 클러스터](/posts/local-k8s-kind-minikube)(Kubernetes 1.37.0) 두 개에서 받았다. 하나는 실무형 정책, 하나는 모든 것을 RequestResponse로 남기는 정책이다. kwokctl의 `--kube-audit-policy`와 `--extra-args`로 API 서버에 감사 옵션을 넣었다.
+
+이 주제의 다른 글: 감사 로그에 남는 인가 판단(`authorization.k8s.io/reason`)은 [RBAC 글](/posts/k8s-rbac)에서, 어드미션 정책이 감사 로그에 남기는 흔적의 출처는 [어드미션 컨트롤 글](/posts/k8s-admission-control)에서 다룬다. 앱 로그를 JSON으로 남기는 일반론은 [구조화 로깅 글](/posts/structured-logging)에 있다.
+
+## 감사 이벤트 한 줄 읽기
+
+감사 로그는 API 서버에 들어온 요청 하나마다 JSON 이벤트를 남긴다. 사람이 kubectl로 보낸 요청도, 컨트롤러가 보낸 요청도 똑같이 남는다. 개발자 `minsu`가 `kubectl delete deployment web -n shop`을 했을 때 남은 이벤트를 조각별로 읽어 보자. 아래 조각을 누르면 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="Deployment를 지운 요청 하나의 감사 이벤트"
+  base="Event"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "auditID", display: "auditID", title: "요청마다 하나인 ID", description: "같은 요청의 여러 단계(RequestReceived, ResponseComplete)는 같은 auditID를 가진다. 응답 헤더 Audit-Id로도 돌아와서, 사용자가 받은 에러와 로그를 이어 붙일 때 쓴다.", code: "91b5373f-0fa4-4a42-9fa0-aac74a8e9df6" },
+    { key: "user", display: "user", title: "인증된 사용자", description: "인증서의 CN과 O, 토큰의 사용자 이름과 그룹이 들어간다. 누가 했는지의 답이다.", code: "{\"username\":\"minsu\",\"groups\":[\"dev\",\"system:authenticated\"]}", required: true },
+    { key: "verb", display: "verb", title: "무엇을 했나", description: "get, list, watch, create, update, patch, delete, deletecollection. HTTP 메서드가 아니라 쿠버네티스 동사다.", code: "delete", required: true },
+    { key: "objectRef", display: "objectRef", title: "어떤 오브젝트에", description: "리소스, 네임스페이스, 이름, API 그룹. exec나 log 같은 하위 리소스는 subresource로 따로 남는다.", code: "{\"resource\":\"deployments\",\"namespace\":\"shop\",\"name\":\"web\",\"apiGroup\":\"apps\"}" },
+    { key: "sourceIPs", display: "sourceIPs", title: "어디서", description: "요청을 보낸 IP. 프록시나 로드 밸런서를 지나면 X-Forwarded-For의 값이 앞에 붙는다. 앞단 IP를 믿을 수 있는지는 구성에 따라 다르다.", code: "[\"127.0.0.1\"]" },
+    { key: "userAgent", display: "userAgent", title: "어떤 도구로", description: "kubectl 버전, 컨트롤러 이름, CI 도구가 남는다. 위조할 수 있는 값이라 참고만 한다.", code: "kubectl/v1.37.0 (linux/amd64) kubernetes/f54c212" },
+    { key: "responseStatus", display: "responseStatus", title: "결과", description: "HTTP 상태 코드. 200·201은 성공, 403은 RBAC이나 어드미션 거절, 404는 없는 오브젝트다.", code: "{\"status\":\"Success\",\"code\":200}" },
+    { key: "annotations", display: "annotations", title: "판단의 이유", description: "인가가 왜 허용했는지, 어드미션 정책이 무엇을 남겼는지가 붙는다. 어떤 RoleBinding 덕분에 지울 수 있었는지가 여기 있다.", code: "\"authorization.k8s.io/reason\": \"RBAC: allowed by RoleBinding \\\"dev-edit/shop\\\" of ClusterRole \\\"edit\\\" to Group \\\"dev\\\"\"" },
+  ]}
+/>
+
+이벤트에는 시각도 두 개 있다. `requestReceivedTimestamp`는 요청을 받은 때, `stageTimestamp`는 이 단계에 이른 때다. 둘의 차이가 그 요청을 처리하는 데 걸린 시간이다.
+
+## 네 가지 기록 수준
+
+이벤트에 얼마나 많이 적을지는 감사 정책의 `level`이 정한다. 위로 갈수록 앞의 것을 모두 포함한다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="수준이 올라갈수록 앞 단계의 내용에 본문이 더해진다"
+  nodes={[
+    { id: "none", label: "None", sub: "아무것도 남기지 않음", x: 210, y: 40, w: 180 },
+    { id: "meta", label: "Metadata", sub: "누가 · 언제 · 무엇을 · 결과", x: 210, y: 120, w: 200 },
+    { id: "req", label: "Request", sub: "+ requestObject (보낸 본문)", x: 210, y: 200, w: 210 },
+    { id: "rr", label: "RequestResponse", sub: "+ responseObject (받은 본문)", x: 210, y: 270, w: 220 },
+  ]}
+  edges={[
+    { from: "none", to: "meta", label: "메타데이터" },
+    { from: "meta", to: "req", label: "요청 본문" },
+    { from: "req", to: "rr", label: "응답 본문" },
+  ]}
+/>
+
+같은 요청이 수준에 따라 얼마나 커지는지 쟀다. 두 클러스터에 똑같이 Secret을 하나 만들고, 1KiB짜리 ConfigMap 100개를 만든 뒤 `kubectl get configmaps -o json`으로 목록을 읽었다.
+
+```bash
+# 두 클러스터의 감사 로그에서 같은 요청의 이벤트 크기를 잰다
+jq -c 'select(.objectRef.name=="pg-cred" and .verb=="create")' audit.log | wc -c
+jq -c 'select(.verb=="list" and .objectRef.namespace=="bulk" and .stage=="ResponseComplete")' audit.log | wc -c
+```
+
+```text
+# Metadata 정책
+889
+837
+# RequestResponse 정책
+1518
+140858
+```
+
+Secret 생성은 두 배가 안 되지만 목록 읽기는 168배다. RequestResponse는 응답 본문, 즉 ConfigMap 100개를 통째로 로그에 다시 적는다. 컨트롤러와 모니터링 도구는 list와 watch를 쉬지 않고 보낸다. 읽기 요청을 RequestResponse로 남기면 로그가 클러스터 데이터보다 빨리 불어난다. 읽기는 Metadata, 쓰기는 Request가 보통의 출발점이다. RequestResponse는 RBAC 변경처럼 결과까지 남겨야 하는 좁은 범위에만 쓴다.
+
+## 요청 하나가 남기는 단계
+
+이벤트는 요청 하나에 하나가 아니라, 요청이 거치는 단계마다 하나씩 남는다.
+
+<SequenceDiagram
+  caption="요청이 지나가며 감사 이벤트를 남기는 지점"
+  actors={[
+    { id: "client", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "audit", label: "감사 백엔드" },
+  ]}
+  steps={[
+    { from: "client", to: "api", label: "GET ?watch=true", title: "요청이 들어온다", detail: "인증이 끝나면 정책을 보고 수준을 정한다. 수준이 None이면 이후 아무것도 남지 않는다." },
+    { from: "api", to: "audit", label: "RequestReceived", title: "받자마자 한 번", detail: "처리를 시작하기 전에 남긴다. 아직 결과가 없다. 대부분의 정책은 이 단계를 omitStages로 뺀다.", payload: "stage: RequestReceived, responseStatus 없음" },
+    { from: "api", to: "client", label: "200 헤더", title: "응답 헤더를 보낸다", detail: "watch나 exec처럼 오래 열려 있는 요청은 헤더를 먼저 보내고 본문을 계속 흘린다." },
+    { from: "api", to: "audit", label: "ResponseStarted", title: "오래 걸리는 요청만", detail: "long-running 요청은 헤더를 보낸 시점에 한 번 더 남긴다. 연결이 열려 있다는 기록이다." },
+    { from: "client", to: "api", label: "연결 종료", title: "끝난다", detail: "클라이언트가 끊거나 watch 타임아웃이 되면 요청이 끝난다." },
+    { from: "api", to: "audit", label: "ResponseComplete", title: "결과와 함께 마지막으로", detail: "응답 코드와 (수준에 따라) 응답 본문이 담긴다. 처리 중 패닉이 나면 Panic 단계가 대신 남는다.", payload: "stage: ResponseComplete, code: 200" },
+  ]}
+/>
+
+모든 단계를 남기는 정책으로 6초 동안 watch를 열었다가 끊었다.
+
+```bash
+# 6초 동안 ConfigMap을 watch한다
+timeout 6 kubectl get configmaps -n pay --watch-only
+
+# 같은 auditID의 단계들을 본다
+jq -r 'select(.verb=="watch" and .objectRef.resource=="configmaps" and .objectRef.namespace=="pay")
+  | [.auditID[0:8], .stage, .requestReceivedTimestamp, .stageTimestamp, .responseStatus.code // "-"] | @tsv' audit.log
+```
+
+```text
+41d13dcf	RequestReceived	2026-10-21T01:23:34.995300Z	2026-10-21T01:23:34.995300Z	-
+41d13dcf	ResponseStarted	2026-10-21T01:23:34.995300Z	2026-10-21T01:23:34.996087Z	200
+41d13dcf	ResponseComplete	2026-10-21T01:23:34.995300Z	2026-10-21T01:23:40.911842Z	200
+```
+
+ResponseComplete의 `stageTimestamp`가 6초 뒤다. 짧은 요청(create)은 RequestReceived와 ResponseComplete 두 개만 남는다. RequestReceived에는 결과가 없어서 분석에 거의 쓰지 않는다. 그래서 정책 맨 위에 `omitStages: ["RequestReceived"]`를 두면 이벤트 수가 바로 절반 가까이 준다.
+
+## 위에서부터 처음 맞는 규칙 하나
+
+감사 정책은 규칙 목록이고, 요청마다 위에서부터 훑어 처음 맞는 규칙 하나의 수준을 쓴다. 맞는 규칙이 없으면 None이다. 실무형 정책으로 이렇게 썼다.
+
+```yaml
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived
+rules:
+  # 노이즈: 리더 선출 Lease, 헬스 체크는 남기지 않는다
+  - level: None
+    resources:
+      - group: coordination.k8s.io
+        resources: ["leases"]
+  - level: None
+    nonResourceURLs: ["/healthz*", "/livez*", "/readyz*", "/version"]
+  # Secret·ConfigMap은 값이 남지 않게 Metadata까지만
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps"]
+  # 읽기는 Metadata
+  - level: Metadata
+    verbs: ["get", "list", "watch"]
+  # 나머지 쓰기는 요청 본문까지
+  - level: Request
+```
+
+규칙의 순서가 결과를 바꾼다. Secret 규칙이 "나머지 쓰기는 Request"보다 위에 있어야 Secret 생성 본문이 남지 않는다. 아래 그림은 개발자가 Secret을 만드는 요청이 규칙을 하나씩 지나는 모습이다.
+
+<AlgoTrace
+  caption="create secrets 요청이 규칙을 위에서부터 훑는다"
+  memoryLabel="판정"
+  cells={["None leases", "None /healthz*", "Meta secrets", "Meta get·list", "Request *"]}
+  steps={[
+    { pointer: 0, memory: ["leases 아님"], caption: "첫 규칙은 coordination.k8s.io의 leases만 본다. secrets는 지나간다." },
+    { pointer: 1, memory: ["leases 아님", "URL 규칙"], caption: "nonResourceURLs 규칙은 /healthz 같은 경로 요청에만 맞는다. 리소스 요청은 지나간다." },
+    { pointer: 2, found: [2], memory: ["leases 아님", "URL 규칙", "Metadata"], caption: "core 그룹의 secrets가 맞는다. 여기서 멈추고 Metadata로 남긴다." },
+    { found: [2], memory: ["Metadata"], caption: "아래 'Request *' 규칙은 보지도 않는다. 이 둘의 순서를 바꾸면 Secret 본문이 로그에 남는다." },
+  ]}
+/>
+
+하위 리소스는 따로 맞춘다. `resources: ["pods"]`는 Pod 자체에만 맞고 `pods/exec`, `pods/log`에는 맞지 않는다. 일부러 `pods`를 RequestResponse, `*/log`를 Request, 나머지를 Metadata로 둔 정책으로 API 서버를 다시 띄우고 확인했다.
+
+```bash
+# Pod 조회, exec, logs를 한 번씩 보낸다 (kwok이라 exec와 logs는 실패한다)
+kubectl get pod -n policy policy-webhook-5d8dfff77d-7s5ds
+kubectl exec -n policy policy-webhook-5d8dfff77d-7s5ds -- ls
+kubectl logs -n policy policy-webhook-5d8dfff77d-7s5ds
+
+# 동사, 리소스, 하위 리소스별로 어떤 수준이 남았는지 센다
+jq -r 'select(.objectRef.namespace=="policy" and .objectRef.resource=="pods")
+  | [.verb, .objectRef.resource, (.objectRef.subresource // "-"), .level] | @tsv' audit.log | sort | uniq -c
+```
+
+```text
+      2 create	pods	exec	Metadata
+      2 get	pods	-	RequestResponse
+      2 get	pods	exec	Metadata
+      2 get	pods	log	Request
+```
+
+`pods` 규칙은 exec를 잡지 못했고, exec는 catch-all의 Metadata로 내려갔다. `*/log`는 `pods/log`에 맞았다. exec 요청은 `get`과 `create` 두 동사로 남는 것도 보인다. kubectl이 웹소켓 업그레이드를 먼저 시도하고 실패하면 다른 방식으로 다시 보내기 때문이다. "누가 운영 Pod에 exec했나"를 찾으려면 `subresource=="exec"`로 찾고, 동사는 거르지 않는다.
+
+아래에서 이 매칭 규칙을 직접 짜 볼 수 있다. 규칙의 `users`, `userGroups`, `verbs`, `namespaces`, `resources`(그룹과 리소스, `*`, `*/하위`, `리소스/*`), `nonResourceURLs`(끝의 `*`는 접두사)를 지원한다. 리소스 조건이 있는 규칙은 경로 요청에 맞지 않고, 반대도 마찬가지다.
+
+<CodePlayground
+  caption="감사 정책: 이 요청은 어떤 수준으로 남나"
+  functionName="auditLevel"
+  initialCode={`function auditLevel(rules, req) {
+  // rules: [{ level, users?, userGroups?, verbs?, namespaces?, resources?: [{ group, resources? }], nonResourceURLs? }]
+  // req: 리소스 요청이면 { user, groups?, verb, group, resource, subresource?, namespace? }
+  //      경로 요청이면 { user, verb, path }
+  // 위에서부터 처음 맞는 규칙의 level, 없으면 "None"
+  return "None";
+}`}
+  solution={`function auditLevel(rules, req) {
+  const has = (list, v) => list.includes(v);
+  const matchPath = (path, spec) =>
+    spec === "*" || spec === path || (spec.endsWith("*") && path.startsWith(spec.slice(0, -1)));
+  const matchResource = (r) => {
+    if (!req.resource) return false;
+    if (r.namespaces && !has(r.namespaces, req.namespace ?? "")) return false;
+    if (!r.resources) return true;
+    const combined = req.subresource ? req.resource + "/" + req.subresource : req.resource;
+    return r.resources.some((gr) => gr.group === (req.group ?? "") && (!gr.resources || gr.resources.some((res) =>
+      res === combined || res === "*" ||
+      (req.subresource && res === "*/" + req.subresource) ||
+      (res.endsWith("/*") && res.slice(0, -2) === req.resource))));
+  };
+  for (const r of rules) {
+    if (r.users && !has(r.users, req.user)) continue;
+    if (r.userGroups && !(req.groups || []).some((g) => has(r.userGroups, g))) continue;
+    if (r.verbs && !has(r.verbs, req.verb)) continue;
+    if (r.namespaces || r.resources) { if (matchResource(r)) return r.level; continue; }
+    if (r.nonResourceURLs) {
+      if (!req.resource && r.nonResourceURLs.some((s) => matchPath(req.path, s))) return r.level;
+      continue;
+    }
+    return r.level;
+  }
+  return "None";
+}`}
+  tests={[
+    { label: "스케줄러의 Lease 갱신", args: [[{ level: "None", resources: [{ group: "coordination.k8s.io", resources: ["leases"] }] }, { level: "Request" }], { user: "system:kube-scheduler", verb: "update", group: "coordination.k8s.io", resource: "leases", namespace: "kube-system" }], expected: "None" },
+    { label: "/healthz/etcd", args: [[{ level: "None", nonResourceURLs: ["/healthz*", "/version"] }, { level: "Metadata" }], { user: "kubelet", verb: "get", path: "/healthz/etcd" }], expected: "None" },
+    { label: "Secret 생성", args: [[{ level: "Metadata", resources: [{ group: "", resources: ["secrets", "configmaps"] }] }, { level: "Request" }], { user: "minsu", verb: "create", group: "", resource: "secrets", namespace: "pay" }], expected: "Metadata" },
+    { label: "Deployment 삭제", args: [[{ level: "Metadata", resources: [{ group: "", resources: ["secrets"] }] }, { level: "Metadata", verbs: ["get", "list", "watch"] }, { level: "Request" }], { user: "minsu", verb: "delete", group: "apps", resource: "deployments", namespace: "shop" }], expected: "Request" },
+    { label: "pods 규칙과 exec", args: [[{ level: "RequestResponse", resources: [{ group: "", resources: ["pods"] }] }, { level: "Request", resources: [{ group: "", resources: ["*/log"] }] }, { level: "Metadata" }], { user: "minsu", verb: "create", group: "", resource: "pods", subresource: "exec", namespace: "shop" }], expected: "Metadata" },
+    { label: "*/log와 pods/log", args: [[{ level: "RequestResponse", resources: [{ group: "", resources: ["pods"] }] }, { level: "Request", resources: [{ group: "", resources: ["*/log"] }] }, { level: "Metadata" }], { user: "minsu", verb: "get", group: "", resource: "pods", subresource: "log", namespace: "shop" }], expected: "Request" },
+    { label: "그룹으로 맞추기", args: [[{ level: "Metadata", userGroups: ["system:serviceaccounts:ci"] }], { user: "system:serviceaccount:ci:deployer", groups: ["system:serviceaccounts", "system:serviceaccounts:ci", "system:authenticated"], verb: "patch", group: "apps", resource: "deployments" }], expected: "Metadata" },
+    { label: "맞는 규칙이 없다", args: [[{ level: "Metadata", users: ["admin"] }], { user: "minsu", verb: "get", group: "", resource: "pods" }], expected: "None" },
+  ]}
+/>
+
+마지막 테스트처럼 맞는 규칙이 없으면 None이 된다. 정책 끝에 catch-all 규칙을 두지 않으면 생각지 못한 요청이 조용히 빠진다. 반대로 맨 위에 넓은 규칙(`- level: Metadata` 하나)을 두면 그 아래 규칙은 전부 죽은 코드가 된다.
+
+## Secret을 RequestResponse로 남기면
+
+"일단 다 남기자"며 모든 요청을 RequestResponse로 남기는 정책을 걸면 어떻게 되는지 확인했다. 비밀번호가 든 Secret을 만들고 한 번 읽었다.
+
+```bash
+# DB 비밀번호 Secret을 만들고 읽는다
+kubectl create secret generic pg-cred -n pay --from-literal=password='Tr0ub4dor&3'
+kubectl get secret pg-cred -n pay -o yaml > /dev/null
+
+# 비밀번호의 base64를 감사 로그에서 찾는다
+echo -n 'Tr0ub4dor&3' | base64
+jq -c 'select(.objectRef.name=="pg-cred") | {verb, level, req: .requestObject.data, resp: .responseObject.data}' audit.log
+```
+
+```text
+VHIwdWI0ZG9yJjM=
+{"verb":"create","level":"RequestResponse","req":{"password":"VHIwdWI0ZG9yJjM="},"resp":{"password":"VHIwdWI0ZG9yJjM="}}
+{"verb":"get","level":"RequestResponse","req":null,"resp":{"password":"VHIwdWI0ZG9yJjM="}}
+```
+
+비밀번호가 요청 본문과 응답 본문에 두 번, 읽을 때 또 한 번 적혔다. base64는 암호가 아니니([Secret 글](/posts/k8s-secret) 참고) 평문이 남은 것과 같다. 이 클러스터는 웹훅 백엔드도 켜 두었다. Secret을 하나 더 만들고 수집기가 받은 이벤트를 파일로 저장해 보니 그 값도 그대로 들어 있었다. 외부 시스템으로도 나간 것이다.
+
+이 로그는 Secret보다 훨씬 넓게 퍼진다. 감사 로그는 로그 수집 시스템으로 보내고, 보안 팀과 SRE가 검색하고, 오래 보관한다. etcd의 Secret을 [저장 시 암호화](/posts/encryption-at-rest)로 잠가 두고 RBAC으로 읽을 사람을 줄여도, 감사 로그를 볼 수 있는 사람은 그 모든 값을 본다. 한 번 새면 로그 보관 기간 동안 회수할 수 없으니 값을 교체하는 수밖에 없다.
+
+그래서 실무형 정책의 앞부분은 늘 이렇다. `secrets`, `configmaps`(비밀이 섞여 들어오는 일이 잦다), `tokenreviews`와 `serviceaccounts/token`(토큰이 본문에 있다)은 Metadata로 먼저 잡는다. 실무형 정책 클러스터에서 같은 요청은 이렇게 남았다. 값이 없다.
+
+```text
+{"verb":"create","stage":"ResponseComplete","level":"Metadata","user":"kwok-admin","requestURI":"/api/v1/namespaces/pay/secrets?fieldManager=kubectl-create&fieldValidation=Strict","has_req":false,"code":201}
+{"verb":"get","stage":"ResponseComplete","level":"Metadata","user":"kwok-admin","requestURI":"/api/v1/namespaces/pay/secrets/pg-cred","has_req":false,"code":200}
+```
+
+CRD로 비밀을 다루는 도구(External Secrets의 일부 리소스, cert-manager의 일부 리소스처럼 본문에 키가 들어가는 것)도 같은 이유로 확인한다. 로그 파일 자체의 권한도 본다. kwok이 만든 파일은 `-rw-r-----`(소유자 root)였다. 노드에 로그인할 수 있는 사람이 누구인지가 곧 감사 로그를 읽을 수 있는 사람이다.
+
+## 아무것도 안 해도 쌓이는 로그
+
+사람이 아무 요청도 보내지 않는 1분 동안 두 클러스터의 로그가 얼마나 늘어나는지 쟀다. 노드도 Pod도 거의 없는 kwok 클러스터다.
+
+```bash
+# 60초 동안 로그 크기와 줄 수가 얼마나 늘어나는지 잰다
+a1=$(stat -c %s audit.log); l1=$(wc -l < audit.log); sleep 60
+a2=$(stat -c %s audit.log); l2=$(wc -l < audit.log); echo "$((a2-a1)) bytes $((l2-l1)) events"
+```
+
+```text
+실무형 정책:          56820 bytes 65 events
+RequestResponse 정책: 386708 bytes 196 events
+```
+
+RequestResponse 정책 쪽에서 무엇이 쌓였는지 세 보니 대부분이 Lease 갱신이었다.
+
+```text
+     60 update	leases	ResponseComplete	kwok-admin
+     60 update	leases	RequestReceived	kwok-admin
+     12 get	/openapi/v3	ResponseComplete	system:apiserver
+     12 get	/openapi/v3	RequestReceived	system:apiserver
+```
+
+컨트롤러 매니저와 스케줄러가 리더 자리를 지키려고 2초마다 Lease를 갱신한다. 1분에 60번, 단계 두 개씩이다. 실무형 정책은 Lease를 None으로, RequestReceived를 omitStages로 빼서 같은 시간에 7분의 1 정도만 남았다. 진짜 클러스터는 여기에 노드마다 10초에 한 번씩 노드 Lease 갱신이 더해지고, kube-proxy와 CNI, 모니터링 도구의 watch와 list가 붙는다. 노드 100대짜리 클러스터라면 노드 Lease만 1분에 600번이다.
+
+로그 파일 백엔드는 회전(rotation) 옵션을 같이 정한다. 기본값을 1.37.0 도움말에서 확인했다.
+
+```text
+--audit-log-maxage int        ... Setting a value of 0 means old audit log files are not removed based on age. (default 366)
+--audit-log-maxbackup int     The maximum number of old audit log files to retain. ... (default 100)
+--audit-log-maxsize int       The maximum size in megabytes of the audit log file before it gets rotated. ... (default 100)
+--audit-log-mode string       ... Known modes are batch,blocking,blocking-strict. (default "blocking")
+```
+
+기본값 그대로면 100MB 파일 100개, 10GB까지 컨트롤 플레인 노드 디스크에 쌓인다. 컨트롤 플레인 디스크가 차면 etcd가 먼저 멈춘다. 감사 로그 경로를 etcd 데이터와 다른 디스크(또는 별도 파티션)에 두거나, `maxbackup`을 줄이고 수집기로 빨리 내보낸다. `blocking` 모드는 이벤트를 다 쓴 뒤에 응답한다. 디스크가 느리면 API 요청 전체가 느려진다.
+
+## 파일로 남길까, 웹훅으로 보낼까
+
+백엔드는 두 가지다. 로그 백엔드(`--audit-log-path`)는 API 서버가 있는 노드의 파일에 쓰고, 웹훅 백엔드(`--audit-webhook-config-file`)는 kubeconfig 형식으로 적은 주소로 이벤트 묶음을 POST한다. 둘을 같이 켤 수 있다. 실습에서는 둘 다 켜고 `127.0.0.1:19644`에 수집기를 띄웠다.
+
+```yaml
+# 웹훅 백엔드 설정 (kubeconfig 형식)
+apiVersion: v1
+kind: Config
+clusters:
+  - name: audit-sink
+    cluster:
+      server: http://127.0.0.1:19644/audit
+contexts:
+  - name: default
+    context:
+      cluster: audit-sink
+      user: ""
+current-context: default
+users: []
+```
+
+```bash
+# kwok 클러스터를 감사 정책과 웹훅 백엔드를 켜고 만든다
+kwokctl create cluster --name r9-aud --runtime binary \
+  --kube-audit-policy ./naive-policy.yaml \
+  --extra-args kube-apiserver=audit-webhook-config-file=$PWD/webhook-kubeconfig.yaml \
+  --extra-args kube-apiserver=audit-webhook-batch-max-wait=5s
+```
+
+수집기는 받은 묶음의 크기만 기록했다. 클러스터가 뜨는 순간에는 400개씩 꽉 찬 묶음이 오고, 조용해지면 5초마다 작은 묶음이 온다. 400은 `--audit-webhook-batch-max-size`의 기본값이다.
+
+```text
+{"batch":1,"at":"2026-10-21T01:20:55.903Z","path":"/audit?timeout=30s","kind":"EventList","items":400,"bytes":332383}
+{"batch":2,"at":"2026-10-21T01:20:56.985Z","path":"/audit?timeout=30s","kind":"EventList","items":400,"bytes":485330}
+{"batch":5,"at":"2026-10-21T01:21:04.405Z","path":"/audit?timeout=30s","kind":"EventList","items":200,"bytes":435289}
+```
+
+웹훅 백엔드의 기본 모드는 `batch`다. 이벤트를 버퍼에 모아 비동기로 보내므로 수집기가 죽어도 API 요청은 막히지 않는다. 대신 이벤트가 사라진다. 아래 그림에서 두 경로와 수집기 장애를 본다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="감사 이벤트가 나가는 두 길, 그리고 수집기가 죽었을 때"
+  zones={[
+    { id: "cp", label: "컨트롤 플레인 노드 2대", x: 6, y: 6, w: 200, h: 288, tone: "private" },
+    { id: "ext", label: "로그 수집", x: 222, y: 6, w: 172, h: 288, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "api1", label: "apiserver-1", x: 70, y: 70, icon: "server", w: 112 },
+    { id: "file1", label: "audit.log", sub: "노드 1 디스크", x: 70, y: 150, icon: "db", w: 112 },
+    { id: "api2", label: "apiserver-2", x: 140, y: 230, icon: "server", w: 112 },
+    { id: "col", label: "collector", sub: ":19644", x: 308, y: 110, icon: "gateway", w: 116 },
+    { id: "siem", label: "SIEM", sub: "검색 · 보관", x: 308, y: 230, icon: "db", w: 116 },
+  ]}
+  links={[
+    { from: "api1", to: "file1", label: "write" },
+    { from: "api1", to: "col", label: "POST batch" },
+    { from: "api2", to: "col", label: "POST batch" },
+    { from: "col", to: "siem" },
+  ]}
+  steps={[
+    { path: ["api1", "file1"], packet: "event", title: "로그 백엔드: 노드 파일에 쓴다", detail: "기본 blocking 모드라 쓰고 나서 응답한다. 파일은 그 API 서버가 있는 노드에만 있다." },
+    { path: ["api2", "col", "siem"], packet: "400건", highlight: ["api1"], title: "API 서버가 여러 대면 로그도 나뉜다", detail: "요청은 로드 밸런서를 지나 아무 API 서버로나 간다. 노드 파일만 보면 다른 API 서버가 받은 삭제를 놓친다. 수집기로 한데 모아야 한다." },
+    { path: ["api1", "col"], packet: "batch", blocked: true, title: "수집기가 죽으면 재시도 후 버린다", detail: "batch 모드는 API 요청을 막지 않는다. 재시도하다가 포기하면 그 묶음은 사라지고 에러 로그와 메트릭만 남는다.", payload: "Error in audit plugin 'webhook' affecting 22 audit events" },
+    { path: ["api1", "file1"], packet: "event", highlight: ["file1"], title: "그래서 파일도 함께 둔다", detail: "웹훅이 끊긴 동안의 기록은 노드의 파일에 남아 있다. 두 백엔드를 같이 켜는 이유다." },
+  ]}
+/>
+
+실제로 수집기를 PID로 죽인 뒤 ConfigMap을 만들었다. 요청은 69ms에 끝났다. 1분 반쯤 지나 API 서버 로그에 에러가 찍혔고, 메트릭에 버린 이벤트 수가 남았다.
+
+```text
+E1021 01:25:30.160803   17789 metrics.go:110] Error in audit plugin 'webhook' affecting 22 audit events: Post "http://127.0.0.1:19644/audit?timeout=30s": dial tcp 127.0.0.1:19644: connect: connection refused
+E1021 01:25:30.867908   17789 metrics.go:110] Error in audit plugin 'webhook' affecting 20 audit events: Post "http://127.0.0.1:19644/audit?timeout=30s": dial tcp 127.0.0.1:19644: connect: connection refused
+```
+
+```text
+apiserver_audit_error_total{plugin="webhook"} 58
+apiserver_audit_event_total 2738
+apiserver_audit_requests_rejected_total 0
+```
+
+`apiserver_audit_error_total`이 늘면 감사 기록에 구멍이 생기고 있다는 뜻이다. 규정상 감사 기록이 빠지면 안 되는 환경이라면 `blocking-strict` 모드가 있다. 감사 이벤트를 남기지 못하면 요청 자체를 실패시킨다. 수집기 장애가 곧 클러스터 쓰기 장애가 되니 [어드미션 웹훅](/posts/k8s-admission-control)의 `failurePolicy: Fail`과 같은 무게로 고른다.
+
+## 지운 사람을 jq로 찾기
+
+이제 처음 질문으로 돌아간다. 실무형 정책 클러스터에서 `dev` 그룹 인증서를 가진 `minsu`가 `web`을 지웠고, 관리자가 `--as=jiwoo`로 jiwoo 행세를 하며 ConfigMap 하나를 지웠다.
+
+```bash
+# web Deployment를 지운 요청을 찾는다
+jq -c 'select(.verb=="delete" and .objectRef.resource=="deployments" and .objectRef.name=="web")
+  | {time: .requestReceivedTimestamp, user: .user.username, groups: .user.groups, ip: .sourceIPs, ua: .userAgent, code: .responseStatus.code}' audit.log
+```
+
+```text
+{"time":"2026-10-21T01:23:08.918894Z","user":"minsu","groups":["dev","system:authenticated"],"ip":["127.0.0.1"],"ua":"kubectl/v1.37.0 (linux/amd64) kubernetes/f54c212","code":200}
+```
+
+한 줄로 답이 나왔다. 같은 이벤트의 어노테이션에는 왜 지울 수 있었는지도 있다.
+
+```text
+"authorization.k8s.io/reason": "RBAC: allowed by RoleBinding \"dev-edit/shop\" of ClusterRole \"edit\" to Group \"dev\""
+```
+
+다음 할 일이 바로 보인다. dev 그룹 전체에 edit를 준 RoleBinding이 원인이니 그 바인딩을 좁힌다. 네임스페이스 하나에서 일어난 삭제를 시간순으로 보면 그림이 더 분명해진다.
+
+```bash
+# shop 네임스페이스의 삭제를 시간순으로 본다. 행세한 사용자도 함께
+jq -r 'select(.verb=="delete" and .objectRef.namespace=="shop")
+  | [.stageTimestamp, .user.username, (.impersonatedUser.username // "-"), .objectRef.resource, .objectRef.name, .responseStatus.code] | @tsv' audit.log
+```
+
+```text
+2026-10-21T01:23:08.923152Z	minsu	-	deployments	web	200
+2026-10-21T01:23:08.944125Z	kwok-admin	-	replicasets	web-5997c7558c	200
+2026-10-21T01:23:08.962972Z	kwok-admin	-	pods	web-5997c7558c-58w8g	200
+2026-10-21T01:23:08.965938Z	kwok-admin	-	pods	web-5997c7558c-wpzcv	200
+2026-10-21T01:23:08.968645Z	kwok-admin	-	pods	web-5997c7558c-drnpv	200
+2026-10-21T01:23:09.106930Z	kwok-admin	jiwoo	configmaps	feature-flags	200
+```
+
+두 가지를 읽어 낸다. 첫째, minsu의 삭제 하나 뒤에 ReplicaSet과 Pod 삭제가 줄줄이 따라왔다. 가비지 컬렉터가 소유 관계를 따라 지운 것이다. kwok은 컨트롤러 매니저가 관리자 인증서로 돌아서 `kwok-admin`으로 찍혔지만, 보통 클러스터에서는 `system:serviceaccount:kube-system:generic-garbage-collector`로 남는다. 범인을 찾을 때는 시스템 계정의 삭제를 걸러 내고 사람의 첫 삭제를 찾는다.
+
+둘째, 마지막 줄은 `user`가 관리자, `impersonatedUser`가 jiwoo다. `kubectl --as`로 행세한 요청은 실제 인증된 사람과 행세한 사람이 둘 다 남는다. 인가는 jiwoo의 권한으로 했지만 책임은 관리자에게 있다. 행세 권한(`impersonate` 동사)을 가진 사람이 누구인지 함께 점검한다.
+
+자주 쓰는 질문 몇 개를 더 적어 둔다.
+
+```bash
+# 거절된 요청: 누가 무엇을 하려다 막혔나
+jq -r 'select(.responseStatus.code==403)
+  | [.user.username, .verb, .objectRef.resource, .objectRef.namespace, .annotations["authorization.k8s.io/decision"]] | @tsv' audit.log
+
+# 이 네임스페이스에 exec한 사람 (동사는 get, create 둘 다 나온다)
+jq -r 'select(.objectRef.subresource=="exec" and .objectRef.namespace=="policy" and .stage=="ResponseComplete")
+  | [.requestReceivedTimestamp, .user.username, .verb, .objectRef.name, .responseStatus.code] | @tsv' audit.log
+
+# 사람이 Secret을 읽은 기록 (시스템 계정 제외)
+jq -r 'select(.objectRef.resource=="secrets" and (.verb=="get" or .verb=="list")
+  and (.user.username | startswith("system:") | not))
+  | [.requestReceivedTimestamp, .user.username, .objectRef.namespace, .objectRef.name // "(list)"] | @tsv' audit.log
+```
+
+```text
+kwok-admin	create	configmaps	shop	allow
+kwok-admin	create	configmaps	shop	allow
+kwok-admin	create	configmaps	shop	allow
+minsu	list	secrets	kube-system	forbid
+
+2026-10-21T01:25:27.165656Z	kwok-admin	get	policy-webhook-5d8dfff77d-7s5ds	400
+2026-10-21T01:25:27.170692Z	kwok-admin	create	policy-webhook-5d8dfff77d-7s5ds	400
+
+2026-10-21T01:02:17.171114Z	kwok-admin		(list)
+2026-10-21T01:22:35.682667Z	kwok-admin	pay	pg-cred
+2026-10-21T01:23:09.037841Z	minsu	kube-system	(list)
+```
+
+exec가 400인 것은 kwok의 Pod가 노드에 실제로 떠 있지 않아서다. 실패한 exec 시도도 기록에 남는다는 점이 오히려 쓸모 있다. Secret 기록의 빈 네임스페이스는 전체 네임스페이스를 대상으로 한 list다.
+
+403인데 `decision`이 `allow`인 줄이 섞여 있다. RBAC은 허용했는데 어드미션(여기서는 검증 웹훅과 VAP)이 거절한 경우다. `forbid`가 RBAC 거절이다. 같은 403도 어디서 막혔는지 이렇게 가른다.
+
+## 어드미션과 지연도 어노테이션으로 남는다
+
+감사 이벤트의 `annotations`에는 인가 말고도 여러 구성 요소가 메모를 남긴다. 실습 로그에 나온 키를 모두 셌다.
+
+```bash
+# 어노테이션 키별로 몇 번 나왔는지 센다
+jq -r '.annotations // {} | keys[]' audit.log | sort | uniq -c
+```
+
+```text
+      5 apiserver.latency.k8s.io/authentication
+      5 apiserver.latency.k8s.io/authorization
+      3 apiserver.latency.k8s.io/etcd
+      5 apiserver.latency.k8s.io/response-write
+      5 apiserver.latency.k8s.io/serialize-response-object
+      5 apiserver.latency.k8s.io/total
+      4 apiserver.latency.k8s.io/transform-response-object
+      2 apiserver.latency.k8s.io/validating-webhook
+   3950 authorization.k8s.io/decision
+   3950 authorization.k8s.io/reason
+      3 failed-open.validating.webhook.admission.k8s.io/round_0_index_0
+    178 k8s.io/deprecated
+     19 pod-security.kubernetes.io/enforce-policy
+      2 validation.policy.admission.k8s.io/validation_failure
+```
+
+`failed-open.validating.webhook...`은 웹훅 호출이 실패했는데 `failurePolicy: Ignore`라서 그냥 통과시킨 요청이다. 어떤 객체가 검사 없이 들어왔는지 이 키로 찾는다. `validation.policy.admission.k8s.io/validation_failure`는 VAP를 `Audit` 동작으로 걸었을 때 남는 위반 기록이다. `k8s.io/deprecated`는 곧 사라질 API 버전을 부른 요청이라 업그레이드 전에 꼭 찾아본다. `pod-security.kubernetes.io/enforce-policy`는 [Pod Security Admission](/posts/k8s-pod-security-admission)이 어떤 수준으로 검사했는지다.
+
+`apiserver.latency.k8s.io/*`는 오래 걸린 요청에만 붙는다. 응답이 늦은 웹훅 때문에 2초 걸린 요청의 이벤트에는 이렇게 남았다.
+
+```text
+"apiserver.latency.k8s.io/total": "2.003663626s",
+"apiserver.latency.k8s.io/validating-webhook": "2.000678189s",
+"apiserver.latency.k8s.io/authentication": "116.671µs",
+```
+
+"kubectl이 가끔 느리다"는 말을 들으면 이 키를 찾는다. 시간이 etcd에서 걸렸는지 웹훅에서 걸렸는지가 요청 단위로 나온다.
+
+## 관리형 클러스터에서 감사 로그를 켜는 곳
+
+EKS, GKE, AKS에서는 API 서버 플래그를 직접 못 건드린다. 감사 정책도 클라우드가 정해 둔 것을 쓰고, 사용자는 내보낼지 말지를 고른다. EKS는 컨트롤 플레인 로깅에서 `audit` 로그 종류를 켜야 CloudWatch Logs로 나가고 기본은 꺼져 있다. GKE는 Cloud Audit Logs의 관리자 활동 로그가 기본으로 남고, 데이터 접근 로그는 따로 켠다. AKS는 진단 설정에서 `kube-audit` 또는 `kube-audit-admin` 범주를 고른다. 세부 이름과 기본값은 서비스마다 자주 바뀌니 쓰는 클라우드의 문서로 확인한다. 공통으로 기억할 것은 둘이다. 켜지 않으면 사고가 난 뒤에는 되돌려 볼 방법이 없고, 켜면 로그 저장 비용이 꽤 나온다. 쓰기만 남기는 범주(`kube-audit-admin`처럼)가 있으면 그것부터 켠다.
+
+## 사고가 나기 전에 켜 두는 기록
+
+감사 로그는 API 서버에 들어온 요청마다 누가, 언제, 어디서, 무엇을, 왜 허용됐는지를 남긴다. 정책은 위에서부터 처음 맞는 규칙 하나를 쓰므로 None으로 노이즈를 먼저 빼고, Secret처럼 값이 위험한 리소스를 Metadata로 잡은 다음, 읽기는 Metadata, 쓰기는 Request, 마지막에 catch-all을 둔다. RequestResponse는 응답 본문까지 적어서 비밀 값이 새고 로그 양이 폭발한다. 백엔드는 노드 파일과 웹훅을 함께 두고, `apiserver_audit_error_total`로 구멍을 감시한다. 이렇게 켜 둔 기록이 있으면 "누가 지웠나"는 jq 한 줄이다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 감사 로그는 무엇을 남기나
+
+API 서버에 들어온 요청마다 사용자와 그룹, 동사, 대상 오브젝트, 출발 IP, user agent, 응답 코드, 인가 판단의 이유를 JSON 이벤트로 남긴다. 사람과 컨트롤러의 요청을 구분하지 않고 모두 남긴다. 정책 수준에 따라 요청 본문과 응답 본문이 더해진다. 쿠버네티스 Event는 금방 사라지고 행위자를 남기지 않으니, 누가 무엇을 했는지는 감사 로그로만 답한다.
+
+### 네 가지 수준을 어떻게 나눠 쓰나
+
+None은 노이즈(Lease 갱신, 헬스 체크)에, Metadata는 읽기와 Secret·ConfigMap·토큰 관련 리소스에, Request는 일반 쓰기에, RequestResponse는 결과까지 남겨야 하는 좁은 범위에 쓴다. 실습에서 ConfigMap 100개 목록 하나가 Metadata로는 837바이트, RequestResponse로는 14만 바이트였다. 읽기를 RequestResponse로 남기면 로그가 데이터보다 빨리 늘어난다.
+
+### 감사 정책에서 규칙 순서가 왜 중요한가
+
+요청마다 위에서부터 처음 맞는 규칙 하나만 쓰기 때문이다. Secret을 Metadata로 잡는 규칙이 '나머지 쓰기는 Request'보다 아래에 있으면 Secret 본문이 로그에 남는다. 맞는 규칙이 없으면 None이라 끝에 catch-all을 둔다. `pods` 규칙이 `pods/exec`에 맞지 않는 것처럼 하위 리소스도 따로 적어야 한다.
+
+### omitStages에 RequestReceived를 넣는 이유는
+
+RequestReceived는 처리 전에 남기는 단계라 결과가 없고, 같은 요청의 ResponseComplete가 그 내용을 모두 포함하기 때문이다. 빼면 짧은 요청의 이벤트가 두 개에서 하나로 줄어 로그 양이 절반 가까이 준다. watch나 exec 같은 long-running 요청은 ResponseStarted가 연결이 열렸다는 기록을 따로 남긴다.
+
+### 로그 백엔드와 웹훅 백엔드는 어떻게 다르고, 왜 둘 다 켜나
+
+로그 백엔드는 API 서버가 있는 노드의 파일에 쓰고 기본이 blocking이다. 웹훅 백엔드는 외부 수집기로 묶음을 POST하고 기본이 batch라 요청을 막지 않지만, 수집기가 죽으면 재시도 끝에 이벤트를 버리고 `apiserver_audit_error_total`만 남는다. API 서버가 여러 대면 파일이 노드마다 나뉘니 수집기로 모으고, 수집기 장애 동안의 기록은 파일로 메우려고 둘을 함께 켠다.
+
+### 감사 로그에 Secret 값이 남았다. 어떻게 하나
+
+먼저 값을 교체한다. 로그는 수집 시스템과 백업으로 퍼져 있어서 회수할 수 없다고 본다. 그다음 정책에서 secrets, configmaps, tokenreviews 같은 리소스를 Metadata로 잡는 규칙을 쓰기 규칙보다 위에 둔다. 감사 로그 자체에 접근할 수 있는 사람도 Secret을 읽을 수 있는 사람으로 보고 권한을 관리한다.
+
+### 감사 로그에서 Deployment를 누가 지웠는지 어떻게 찾나
+
+`verb=="delete"`와 objectRef의 리소스·네임스페이스·이름으로 이벤트를 찾아 `user`, `impersonatedUser`, `sourceIPs`, 시각을 본다. 같은 시각에 따라오는 ReplicaSet과 Pod 삭제는 가비지 컬렉터의 것이니 걸러 낸다. `kubectl --as`로 행세한 경우에는 실제 사람이 `user`에 남는다. `authorization.k8s.io/reason`에서 어떤 바인딩 덕분에 지울 수 있었는지도 보고 권한을 좁힌다.

@@ -1,0 +1,564 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-builder");
+
+외부 API를 부르는 코드를 리뷰하다가 이런 줄에서 멈췄다.
+
+```ts
+const req = new HttpRequest("https://api.example.com/orders", "POST", { "content-type": "application/json" }, "{}", 3000, 2, false, false);
+```
+
+`3000`은 타임아웃 같고 `2`는 재시도 횟수 같다. 끝의 `false, false`는 무엇인지 생성자를 열어 봐야 안다. 열어 보니 `keepAlive`와 `followRedirects`였다. 둘의 순서를 바꿔 써도 타입이 같으니 컴파일러는 아무 말도 하지 않는다. 생성자 인자가 여덟 개까지 불어난 이 클래스를 단계별로 조립하게 바꾸는 것이 빌더 패턴이다. 생성 패턴 전체의 지도는 [디자인 패턴 개요](/posts/design-patterns-overview)에 있다.
+
+## false, false가 무엇인지 아무도 모른다
+
+처음에는 `url` 하나였을 것이다. 메서드가 필요해 두 번째 인자가 생기고, 헤더와 본문이 붙고, 장애가 한 번 난 뒤에 타임아웃과 재시도가 붙었다. 인자는 뒤에 붙일수록 기본값을 줘야 하니, 앞쪽 인자를 건너뛰고 뒤쪽만 바꾸는 방법이 없다. `followRedirects`만 끄고 싶어도 그 앞의 여섯 개를 전부 써야 한다. 자바 쪽에서는 이런 모양을 점층적 생성자(telescoping constructor)라고 부른다. 인자 수만 다른 생성자 오버로드가 망원경처럼 줄줄이 늘어서서 붙은 이름이다.
+
+같은 타입이 나란히 있으면 순서 실수가 조용히 지나간다. 위 코드에서 `3000, 2`를 `2, 3000`으로 쓰면 타임아웃 2ms에 재시도 3000번짜리 요청이 나간다. 불리언 두 개가 붙어 있는 건 더 나쁘다. 리뷰어가 줄만 보고는 틀렸는지 알 수 없다.
+
+자바스크립트와 타입스크립트에서는 대부분 이 문제를 객체 리터럴 하나로 푼다.
+
+```ts
+interface RequestOptions {
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs?: number;
+  retries?: number;
+  keepAlive?: boolean;
+  followRedirects?: boolean;
+}
+
+declare function request(url: string, options?: RequestOptions): Promise<Response>;
+
+request("https://api.example.com/orders", { method: "POST", timeoutMs: 3000, followRedirects: false });
+```
+
+이름이 붙으니 순서 실수가 없고, 필요한 것만 쓰면 된다. `fetch(url, { method, headers })`가 이 모양이다. 자바처럼 이름 있는 인자가 없는 언어에서 빌더가 하던 일의 상당 부분을 객체 리터럴이 이미 해 준다. 그러니 타입스크립트에서 빌더를 꺼내려면 객체 리터럴로는 안 되는 이유가 있어야 한다.
+
+## 객체 리터럴로 모자라는 순간
+
+옵션 객체는 한 번에 다 적을 수 있을 때 좋다. 아래 상황에서는 모자란다.
+
+여러 필드에 걸친 규칙이 있을 때다. "POST를 재시도하려면 멱등성 키 헤더가 있어야 한다"는 규칙은 `method`, `retries`, `headers` 셋을 함께 봐야 한다. 옵션 객체를 받는 함수 안에서 검사해도 되지만, 객체가 여기저기서 조금씩 만들어져 넘어오면 검사할 시점이 흐려진다. 재시도가 왜 이런 규칙을 요구하는지는 [멱등성 키](/posts/idempotency-key) 글에 있다.
+
+조건에 따라 조금씩 쌓아 갈 때다. 검색 화면의 필터처럼 "가격이 있으면 가격 조건, 카테고리가 있으면 카테고리 조건"을 붙여 나가는 코드는 중간 상태를 들고 다녀야 한다.
+
+같은 조립 순서로 다른 결과물을 만들 때다. 주문 내역을 마크다운 표로도, CSV로도, 개수와 합계만 담은 요약으로도 뽑아야 한다면 "제목 → 줄 → 합계" 순서는 같고 결과물만 다르다. GoF가 처음 빌더를 설명한 동기가 이쪽이다.
+
+결과물이 불변이어야 할 때다. 완성된 요청 객체는 여러 곳에 넘어가도 바뀌지 않는 게 안전하다. 그러면 만드는 동안만 바뀌는 무언가가 따로 필요하다.
+
+## 한 단계씩 쌓고 build에서 검사한다
+
+빌더는 만드는 중인 객체와 완성된 객체를 다른 타입으로 나눈다. 빌더는 바뀌면서 값을 모으고, `build()`가 규칙을 검사한 뒤 얼린 결과물을 돌려준다.
+
+```ts
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+
+export interface HttpRequest {
+  readonly url: string;
+  readonly method: Method;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body?: string;
+  readonly timeoutMs: number;
+  readonly retries: number;
+}
+
+export class RequestBuilder {
+  private method: Method = "GET";
+  private headers: Record<string, string> = {};
+  private body?: string;
+  private timeoutMs = 10_000;
+  private retries = 0;
+
+  constructor(private readonly url: string) {}
+
+  post(json: unknown): this {
+    this.method = "POST";
+    this.body = JSON.stringify(json);
+    return this.header("content-type", "application/json");
+  }
+
+  header(name: string, value: string): this {
+    this.headers[name.toLowerCase()] = value;
+    return this;
+  }
+
+  timeout(ms: number): this {
+    this.timeoutMs = ms;
+    return this;
+  }
+
+  retry(times: number): this {
+    this.retries = times;
+    return this;
+  }
+
+  build(): HttpRequest {
+    // 규칙은 완성하는 순간 한 번에 검사한다
+    if (this.retries > 0 && this.method === "POST" && !this.headers["idempotency-key"]) {
+      throw new Error("POST를 재시도하려면 idempotency-key 헤더가 필요하다");
+    }
+    if (this.timeoutMs <= 0) throw new Error("timeout은 0보다 커야 한다");
+    return Object.freeze({
+      url: this.url,
+      method: this.method,
+      headers: Object.freeze({ ...this.headers }),
+      body: this.body,
+      timeoutMs: this.timeoutMs,
+      retries: this.retries,
+    });
+  }
+}
+```
+
+메서드마다 `this`를 돌려주니 호출을 점으로 이어 쓸 수 있다. 이런 문체를 플루언트 인터페이스라고 한다. 처음의 생성자 호출과 같은 요청을 빌더로 쓰면 이렇다. 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="빌더 체인 한 줄을 조각으로 읽기"
+  base="new RequestBuilder(url)"
+  separator=""
+  joiner=""
+  params={[
+    { key: "post", display: ".post({ sku })", title: "본문과 함께 메서드가 정해진다", description: "post()가 method, body, content-type 헤더 세 필드를 한 번에 맞춘다. 서로 짝이 맞아야 하는 값을 한 메서드로 묶으면 반쯤 설정된 상태가 생기지 않는다.", code: "method: \"POST\"\nbody: '{\"sku\":\"A-1042\",\"qty\":1}'\nheaders: { \"content-type\": \"application/json\" }" },
+    { key: "header", display: ".header(\"Idempotency-Key\", k)", title: "이름이 붙은 설정", description: "인자 위치가 아니라 메서드 이름이 뜻을 말한다. 헤더 이름은 여기서 소문자로 맞춘다." },
+    { key: "timeout", display: ".timeout(3000)", title: "빠뜨려도 되는 단계", description: "부르지 않으면 기본값 10초가 남는다. 순서도 상관없다. retry 뒤에 불러도 결과가 같다." },
+    { key: "retry", display: ".retry(2)", title: "다른 필드와 얽힌 설정", description: "재시도 자체는 숫자 하나지만 POST라면 멱등성 키가 있어야 안전하다. 이 검사는 여기서 하지 않고 build로 미룬다. 헤더를 나중에 붙일 수도 있기 때문이다." },
+    { key: "build", display: ".build()", title: "검사하고 얼린다", description: "필드 사이의 규칙을 한 번에 검사하고, 통과하면 Object.freeze로 얼린 HttpRequest를 돌려준다. 이 뒤로는 빌더가 아니라 결과물만 돌아다닌다.", required: true },
+  ]}
+/>
+
+빌더 안에서 값이 어떻게 쌓이는지 따라가 보자. 아래 그림의 칸은 체인의 각 호출이고, 오른쪽에 빌더가 들고 있는 값이 쌓인다.
+
+<AlgoTrace
+  caption="호출마다 빌더 안에 값이 쌓이고, build에서 한 번에 검사한다"
+  memoryLabel="빌더 상태"
+  cells={["new", ".post()", ".retry(2)", ".build()", ".header()", ".build()"]}
+  steps={[
+    { pointer: 0, memory: ["url", "GET", "10s", "retry 0"], caption: "생성자는 url만 받는다. 나머지는 기본값으로 채워져 있다." },
+    { pointer: 1, memory: ["url", "POST", "body", "json", "10s", "retry 0"], caption: "post()가 메서드, 본문, content-type을 함께 바꾼다." },
+    { pointer: 2, memory: ["url", "POST", "body", "json", "10s", "retry 2"], caption: "재시도 횟수가 들어간다. 아직 검사하지 않는다." },
+    { pointer: 3, memory: ["url", "POST", "body", "json", "10s", "retry 2"], caption: "build가 규칙을 본다. POST 재시도인데 멱등성 키가 없어서 에러를 던진다." },
+    { pointer: 4, memory: ["url", "POST", "body", "json", "idem-key", "10s", "retry 2"], caption: "멱등성 키 헤더를 붙인다. 순서가 정해져 있지 않으니 retry 뒤에 붙여도 된다." },
+    { pointer: 5, found: [5], memory: ["frozen HttpRequest"], caption: "규칙을 통과하자 얼린 결과물이 나온다. 이제부터는 값이 바뀌지 않는다." },
+  ]}
+/>
+
+실제로 돌려 본 결과다. 멱등성 키 없이 POST를 재시도하려 하면 `build()`에서 멈춘다.
+
+```text
+{
+  url: 'https://api.example.com/orders',
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'idempotency-key': '7f3c9e' },
+  body: '{"sku":"A-1042","qty":1}',
+  timeoutMs: 3000,
+  retries: 2
+}
+POST를 재시도하려면 idempotency-key 헤더가 필요하다
+```
+
+검사를 `build()` 한곳에 모은 데는 이유가 있다. 세터가 하나씩 검사하면 "헤더를 아직 안 붙였을 뿐"인 중간 상태를 에러로 오해한다. 반대로 검사를 아예 안 하면 잘못된 요청이 네트워크까지 나간 뒤에야 드러난다.
+
+## GoF의 빌더에는 감독이 있다
+
+위의 `RequestBuilder`는 사실 GoF 책(1994)의 빌더와 모양이 조금 다르다. 우리가 흔히 쓰는 플루언트 빌더는 조슈아 블로크가 Effective Java에서 "생성자에 인자가 많으면 빌더를 고려하라"(3판 아이템 2)며 퍼뜨린 형태다. 목적은 많은 인자를 읽기 좋게 받는 것이다.
+
+GoF 빌더의 목적은 조립 과정과 결과물의 표현을 떼어 놓는 것이다. 그래서 등장인물이 하나 더 있다. 조립 순서를 아는 Director, 각 단계를 구현하는 Builder, 그리고 Builder마다 다른 Product다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="Director는 순서만 알고, 무엇이 만들어지는지는 Builder가 정한다"
+  nodes={[
+    { id: "dir", label: "writeReport()", sub: "Director", x: 90, y: 50, w: 140 },
+    { id: "b", label: "ReportBuilder", sub: "인터페이스", x: 300, y: 50, w: 140 },
+    { id: "md", label: "MarkdownReport", x: 90, y: 150, w: 140 },
+    { id: "csv", label: "CsvReport", x: 300, y: 150, w: 140 },
+    { id: "out1", label: "string (표)", x: 90, y: 230, w: 120 },
+    { id: "out2", label: "string (CSV)", x: 300, y: 230, w: 120 },
+  ]}
+  edges={[
+    { from: "dir", to: "b", label: "단계 호출" },
+    { from: "md", to: "b", label: "구현", dashed: true },
+    { from: "csv", to: "b", label: "구현", dashed: true },
+    { from: "md", to: "out1", label: "result()" },
+    { from: "csv", to: "out2", label: "result()" },
+  ]}
+/>
+
+주문 내역 보고서로 만들어 보자. Builder 인터페이스는 조립 단계만 정하고 결과물의 타입은 제네릭으로 열어 둔다.
+
+```ts
+interface Order { id: string; amount: number }
+
+// Builder: 조립 단계만 정한다. 결과물의 모양은 모른다
+interface ReportBuilder<T> {
+  title(text: string): void;
+  row(cells: string[]): void;
+  total(amount: number): void;
+  result(): T;
+}
+
+class CsvReport implements ReportBuilder<string> {
+  private lines: string[] = ["order,amount"];
+  title() {} // CSV에는 제목 줄이 없다. 단계를 무시해도 된다
+  row(cells: string[]) { this.lines.push(cells.join(",")); }
+  total(amount: number) { this.lines.push(`TOTAL,${amount}`); }
+  result() { return this.lines.join("\n"); }
+}
+
+// Director: 순서를 안다. 무엇이 만들어지는지는 모른다
+function writeOrderReport<T>(builder: ReportBuilder<T>, orders: Order[]): T {
+  builder.title("10월 주문 내역");
+  let sum = 0;
+  for (const o of orders) {
+    builder.row([o.id, String(o.amount)]);
+    sum += o.amount;
+  }
+  builder.total(sum);
+  return builder.result();
+}
+```
+
+`MarkdownReport`는 같은 단계에서 표 줄을 쌓고, `SummaryReport`는 줄 수만 세다가 `{ count, total }` 객체를 돌려준다. 아래 그림에서 다음을 누르면 Director가 같은 순서로 단계를 부르고, 마지막에 Builder에게서 결과물을 받는다.
+
+<SequenceDiagram
+  caption="같은 순서의 호출이 Builder에 따라 다른 결과물이 된다"
+  actors={[
+    { id: "client", label: "관리자 화면" },
+    { id: "dir", label: "Director" },
+    { id: "builder", label: "CsvReport" },
+  ]}
+  steps={[
+    { from: "client", to: "dir", label: "write(new CsvReport())", title: "결과물의 종류는 부르는 쪽이 고른다", detail: "관리자 화면이 CSV 내려받기를 눌렀으니 CsvReport를 넘긴다. Director는 이게 CSV인지 모른다." },
+    { from: "dir", to: "builder", label: "title()", title: "첫 단계는 제목", detail: "CSV에는 제목 줄이 없어서 CsvReport는 이 단계를 그냥 넘긴다. 단계를 무시할 수 있는 것도 빌더의 자유다." },
+    { from: "dir", to: "builder", label: "row() × 2", title: "주문마다 한 줄", detail: "Director는 주문을 돌며 셀 값만 넘긴다. 쉼표로 이을지 파이프로 이을지는 Builder가 정한다.", payload: "A-1042,39000\nA-1043,12500" },
+    { from: "dir", to: "builder", label: "total(51500)", title: "합계는 Director가 계산한다", detail: "합계를 내는 규칙은 결과물의 모양과 상관없으니 Director에 한 번만 있다." },
+    { from: "builder", to: "dir", label: "result()", title: "완성품은 Builder에게서 꺼낸다", detail: "결과물 타입이 Builder마다 달라서 Director가 직접 만들 수 없다. 그래서 result()가 Builder에 있다.", payload: "order,amount\nA-1042,39000\nA-1043,12500\nTOTAL,51500" },
+  ]}
+/>
+
+세 Builder로 돌린 실제 출력이다.
+
+```text
+# 10월 주문 내역
+
+| 주문 | 금액 |
+| --- | ---: |
+| A-1042 | 39000 |
+| A-1043 | 12500 |
+| **합계** | **51,500** |
+---
+order,amount
+A-1042,39000
+A-1043,12500
+TOTAL,51500
+---
+{ count: 2, total: 51500 }
+```
+
+`SummaryReport`는 문자열도 아닌 객체를 돌려준다. 결과물끼리 공통 타입이 없어도 된다. 여기서 GoF 빌더가 [추상 팩토리](/posts/pattern-abstract-factory)와 갈리는 지점이다. 추상 팩토리는 같은 인터페이스를 가진 제품을 한 번에 돌려주고, 빌더는 여러 단계를 거쳐 마지막에 결과물을 꺼낸다. 마크다운 파서가 문서를 읽으며 HTML이나 다른 형식으로 바꾸는 구조, 컴파일러가 구문 트리를 단계별로 쌓는 구조가 이 모양에 가깝다.
+
+## 매일 쓰는 빌더들
+
+쿼리 빌더가 가장 흔하다. knex(3.x)의 `knex("orders").where(...).orderBy(...)`, Kysely의 `db.selectFrom("orders").where(...)`가 SQL 문자열을 단계별로 쌓는다. 둘 다 체인 끝에서 SQL로 컴파일된다는 점은 같은데, 중간 객체를 다루는 방식이 정반대다. 이건 아래에서 실제로 돌려 본다.
+
+검증 라이브러리 zod(3.x)도 빌더처럼 읽힌다. `z.string().min(3).max(20)`이 규칙을 하나씩 붙여 스키마를 만든다. 자바에는 표준 라이브러리에 빌더가 많다. Java 11의 `HttpRequest.newBuilder().uri(...).timeout(...).POST(...).build()`, 문자열을 쌓는 `StringBuilder`, 그리고 클래스에 `@Builder`를 붙이면 빌더를 생성해 주는 Lombok이 있다. Go에서는 `strings.Builder`가 같은 일을 하고, 많은 인자는 빌더 대신 함수형 옵션(`grpc.Dial(addr, grpc.WithTimeout(...))`)이나 설정 구조체로 받는 문화가 강하다.
+
+## 빌더를 재사용했더니 헤더가 섞였다
+
+플루언트 빌더에는 함정이 하나 있다. 위의 `RequestBuilder`는 메서드마다 자기 자신을 고치고 `this`를 돌려준다. 공통 헤더를 붙인 빌더를 하나 만들어 두고 여러 요청에 나눠 쓰면 무슨 일이 생길까.
+
+```ts
+const base = new RequestBuilder("https://api.example.com/me").header("accept", "application/json");
+const admin = base.header("authorization", "Bearer admin-token").build();
+const guest = base.build();
+console.log("guest headers:", guest.headers);
+```
+
+```text
+guest headers: { accept: 'application/json', authorization: 'Bearer admin-token' }
+```
+
+`admin`을 만들려고 부른 `header()`가 `base` 자체를 고쳤다. 손님 요청에 관리자 토큰이 실려 나간다. 테스트에서는 요청을 하나씩 만드니 잘 드러나지 않고, 공통 빌더를 모듈 수준에 두고 여러 요청에서 나눠 쓰기 시작할 때 터진다.
+
+<NetworkTopology
+  caption="가변 빌더 하나를 나눠 쓰면 앞 요청의 설정이 뒤 요청에 남는다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "admin", label: "Admin page", x: 60, y: 60, icon: "client", w: 96 },
+    { id: "guest", label: "Guest page", x: 60, y: 180, icon: "client", w: 96 },
+    { id: "base", label: "base", sub: "공유 빌더", x: 200, y: 120, icon: "switch", w: 90 },
+    { id: "api", label: "API", sub: "/me", x: 340, y: 120, icon: "server", w: 80 },
+  ]}
+  links={[
+    { from: "admin", to: "base" },
+    { from: "guest", to: "base" },
+    { from: "base", to: "api" },
+  ]}
+  steps={[
+    { path: ["admin", "base", "api"], packet: "admin token", title: "관리자 요청이 base에 토큰을 붙인다", detail: "header()가 새 빌더를 만들지 않고 base 자신의 headers에 값을 넣는다.", payload: "authorization: Bearer admin-token" },
+    { path: ["guest", "base", "api"], packet: "admin token", highlight: ["base"], title: "손님 요청에 그 토큰이 남아 있다", detail: "guest는 아무 헤더도 붙이지 않았지만 base가 이미 바뀌어 있다. 서버는 손님을 관리자로 본다.", payload: "accept: application/json\nauthorization: Bearer admin-token" },
+    { path: ["guest", "base", "api"], packet: "accept", title: "불변 빌더는 사본을 돌려준다", detail: "header()가 바뀐 새 빌더를 돌려주게 바꾸면 base는 처음 모습 그대로다. 손님 요청에는 accept만 실린다.", payload: "accept: application/json" },
+    { path: ["admin", "base"], packet: "POST retry", blocked: true, title: "규칙은 build에서 막는다", detail: "멱등성 키 없이 POST 재시도를 만들려 하면 네트워크로 나가기 전에 build()가 에러를 던진다." },
+  ]}
+/>
+
+라이브러리도 이 지점에서 갈린다. knex와 Kysely로 "결제된 주문" 쿼리를 만들어 두고 거기에 날짜 조건을 덧붙여 봤다.
+
+```ts
+const base = knex("orders").where("status", "paid");
+const recent = base.where("created_at", ">", "2026-10-01");
+
+const kbase = db.selectFrom("orders").selectAll().where("status", "=", "paid");
+const krecent = kbase.where("created_at", ">", "2026-10-01");
+```
+
+```text
+knex base  : select * from "orders" where "status" = 'paid' and "created_at" > '2026-10-01'
+knex recent: select * from "orders" where "status" = 'paid' and "created_at" > '2026-10-01'
+same object: true
+kysely base  : select * from "orders" where "status" = $1
+kysely recent: select * from "orders" where "status" = $1 and "created_at" > $2
+```
+
+knex 3.3.0의 쿼리 빌더는 가변이라 `base`와 `recent`가 같은 객체이고, 날짜 조건이 `base`에도 붙었다. 갈라 쓰려면 `base.clone()`을 먼저 불러야 한다. Kysely 0.27.6은 메서드마다 새 빌더를 돌려주니 `base`가 그대로다. zod 3.25도 불변이다. `z.string()`에 `.max(5)`를 붙여도 원래 스키마는 8글자 문자열을 여전히 통과시킨다.
+
+빌더를 불변으로 만들려면 메서드가 자신을 고치지 않고 바뀐 사본으로 새 빌더를 만들면 된다.
+
+```ts
+interface Draft {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+}
+
+export class ImmutableRequestBuilder {
+  private constructor(private readonly draft: Draft) {}
+
+  static to(url: string) {
+    return new ImmutableRequestBuilder({ url, headers: {}, timeoutMs: 10_000 });
+  }
+
+  header(name: string, value: string) {
+    // 자신을 고치지 않고 바뀐 사본을 돌려준다
+    return new ImmutableRequestBuilder({
+      ...this.draft,
+      headers: { ...this.draft.headers, [name.toLowerCase()]: value },
+    });
+  }
+
+  build(): Draft {
+    return this.draft;
+  }
+}
+```
+
+```text
+admin: { accept: 'application/json', authorization: 'Bearer admin-token' }
+guest: { accept: 'application/json' }
+```
+
+호출마다 작은 객체가 하나씩 생기지만, 요청 하나를 만드는 데 드는 비용은 네트워크 왕복에 비하면 무시할 수준이다. 수만 번 도는 반복문 안에서 빌더를 쓰는 게 아니라면 불변 쪽이 안전하다. 가변 빌더를 쓴다면 "build를 부른 빌더는 다시 쓰지 않는다"는 규칙을 팀에서 정해 두거나, knex처럼 `clone()`을 꼭 거치게 한다.
+
+## 직접 만들어 보는 쿼리 빌더
+
+아래 코드는 가변 빌더라서 첫 세 테스트는 통과하고 마지막 테스트에서 걸린다. 메서드가 사본을 돌려주도록 고쳐 보자.
+
+<CodePlayground
+  caption="불변 쿼리 빌더"
+  functionName="check"
+  initialCode={`// where는 여러 번 부를 수 있고 AND로 잇는다. orderBy, limit은 부른 순서와 상관없이 뒤에 붙는다.
+function query(table) {
+  const state = { table, wheres: [], order: null, limit: null };
+  const builder = {
+    where(cond) { state.wheres.push(cond); return builder; },
+    orderBy(col) { state.order = col; return builder; },
+    limit(n) {
+      if (n <= 0) throw new Error("limit must be positive");
+      state.limit = n;
+      return builder;
+    },
+    toSQL() {
+      let sql = "SELECT * FROM " + state.table;
+      if (state.wheres.length) sql += " WHERE " + state.wheres.join(" AND ");
+      if (state.order) sql += " ORDER BY " + state.order;
+      if (state.limit) sql += " LIMIT " + state.limit;
+      return sql;
+    },
+  };
+  return builder;
+}
+
+// 아래는 고치지 않는다
+function check(name) {
+  if (name === "basic") return query("orders").where("status = 'paid'").toSQL();
+  if (name === "order") return query("orders").limit(10).orderBy("id DESC").where("amount > 1000").where("status = 'paid'").toSQL();
+  if (name === "invalid") { try { query("orders").limit(0); return "no error"; } catch (e) { return e.message; } }
+  if (name === "branch") {
+    const base = query("orders").where("status = 'paid'");
+    const top5 = base.orderBy("amount DESC").limit(5).toSQL();
+    return [top5, base.toSQL()];
+  }
+}`}
+  solution={`function query(table, state = { table, wheres: [], order: null, limit: null }) {
+  // 바뀐 상태로 새 빌더를 만든다. 원래 state는 건드리지 않는다
+  const next = (patch) => query(table, { ...state, ...patch });
+  return {
+    where: (cond) => next({ wheres: [...state.wheres, cond] }),
+    orderBy: (col) => next({ order: col }),
+    limit(n) {
+      if (n <= 0) throw new Error("limit must be positive");
+      return next({ limit: n });
+    },
+    toSQL() {
+      let sql = "SELECT * FROM " + state.table;
+      if (state.wheres.length) sql += " WHERE " + state.wheres.join(" AND ");
+      if (state.order) sql += " ORDER BY " + state.order;
+      if (state.limit) sql += " LIMIT " + state.limit;
+      return sql;
+    },
+  };
+}
+
+function check(name) {
+  if (name === "basic") return query("orders").where("status = 'paid'").toSQL();
+  if (name === "order") return query("orders").limit(10).orderBy("id DESC").where("amount > 1000").where("status = 'paid'").toSQL();
+  if (name === "invalid") { try { query("orders").limit(0); return "no error"; } catch (e) { return e.message; } }
+  if (name === "branch") {
+    const base = query("orders").where("status = 'paid'");
+    const top5 = base.orderBy("amount DESC").limit(5).toSQL();
+    return [top5, base.toSQL()];
+  }
+}`}
+  tests={[
+    { args: ["basic"], expected: "SELECT * FROM orders WHERE status = 'paid'", label: "조건 하나" },
+    { args: ["order"], expected: "SELECT * FROM orders WHERE amount > 1000 AND status = 'paid' ORDER BY id DESC LIMIT 10", label: "부른 순서와 상관없는 절 순서" },
+    { args: ["invalid"], expected: "limit must be positive", label: "잘못된 값은 바로 막는다" },
+    { args: ["branch"], expected: ["SELECT * FROM orders WHERE status = 'paid' ORDER BY amount DESC LIMIT 5", "SELECT * FROM orders WHERE status = 'paid'"], label: "base에서 갈라 써도 base는 그대로" },
+  ]}
+/>
+
+`limit(0)`은 `build`까지 기다리지 않고 바로 막았다. 한 필드만 보고 판단할 수 있는 값은 그 자리에서, 여러 필드를 함께 봐야 하는 규칙은 `build`에서 검사하면 에러가 난 자리를 찾기 쉽다.
+
+## 빠뜨린 단계를 컴파일러가 잡게 하기
+
+`build()` 검사는 실행해야 드러난다. 필수 필드가 분명하다면 타입으로 순서를 강제할 수 있다. 단계마다 다음에 부를 수 있는 메서드만 가진 인터페이스를 돌려주는 방식이다. 스텝 빌더라고 부른다.
+
+```ts
+interface Email {
+  to: string;
+  subject: string;
+  html?: string;
+  text?: string;
+}
+
+// 단계마다 다음에 부를 수 있는 메서드만 열어 둔다
+interface NeedsTo { to(address: string): NeedsSubject }
+interface NeedsSubject { subject(s: string): NeedsBody }
+interface NeedsBody {
+  html(h: string): CanBuild;
+  text(t: string): CanBuild;
+}
+interface CanBuild { build(): Email }
+
+export function email(): NeedsTo {
+  const e: Partial<Email> = {};
+  const canBuild: CanBuild = { build: () => ({ ...(e as Email) }) };
+  const needsBody: NeedsBody = {
+    html: (h) => ((e.html = h), canBuild),
+    text: (t) => ((e.text = t), canBuild),
+  };
+  return {
+    to: (address) => ((e.to = address), { subject: (s) => ((e.subject = s), needsBody) }),
+  };
+}
+
+const ok = email().to("kim@example.com").subject("주문 영수증").text("39,000원").build();
+const missing = email().to("kim@example.com").text("39,000원").build();
+```
+
+```text
+step.ts(33,47): error TS2339: Property 'text' does not exist on type 'NeedsSubject'.
+```
+
+제목을 빠뜨린 줄이 컴파일 단계에서 걸린다. 편집기 자동 완성도 지금 부를 수 있는 메서드만 보여 주니 쓰는 사람이 순서를 외울 필요가 없다. 대가는 인터페이스 수다. 필수 단계가 다섯 개면 인터페이스도 다섯 개가 필요하다. 필수 값이 두세 개라면 그것만 생성자 인자로 받고 나머지를 빌더 메서드로 받는 편이 단순하다. 블로크의 빌더도 필수 인자는 빌더 생성자로 받는다.
+
+## 테스트 데이터를 만드는 빌더
+
+빌더가 제품 코드보다 더 많이 쓰이는 곳은 테스트일지도 모른다. 주문 객체에 필드가 열 개 있으면 테스트마다 열 개를 다 적게 되고, 필드가 하나 늘면 테스트 수십 개를 고쳐야 한다. 테스트 데이터 빌더는 "평범한 정상 값"을 기본으로 들고, 테스트가 관심 있는 부분만 바꾸게 한다.
+
+```ts
+function anOrder(overrides: Partial<Order> = {}) {
+  let order: Order = { id: "A-1042", status: "pending", amount: 39000, coupon: null, paidAt: null, ...overrides };
+  const builder = {
+    paid(at = new Date("2026-10-21T09:00:00Z")) {
+      order = { ...order, status: "paid", paidAt: at };
+      return builder;
+    },
+    withCoupon(code: string) {
+      order = { ...order, coupon: code };
+      return builder;
+    },
+    build: () => order,
+  };
+  return builder;
+}
+
+test("쿠폰을 쓴 주문은 환불할 수 없다", () => {
+  assert.equal(refundable(anOrder().paid().withCoupon("WELCOME10").build()), false);
+});
+```
+
+```text
+✔ 결제된 주문은 환불할 수 있다 (1.58512ms)
+✔ 쿠폰을 쓴 주문은 환불할 수 없다 (0.267122ms)
+✔ 결제 전 주문은 환불 대상이 아니다 (0.314071ms)
+ℹ tests 3
+ℹ pass 3
+ℹ fail 0
+```
+
+테스트 이름과 빌더 체인이 같은 말을 한다. `paid()`가 `status`와 `paidAt`을 함께 맞추니 "결제됐는데 결제 시각이 없는" 이상한 데이터도 생기지 않는다. 처음 장면의 `post()`가 메서드와 본문과 헤더를 함께 맞춘 것과 같은 이유다.
+
+## 빌더가 짐이 되는 경우
+
+빌더는 결과물 클래스 옆에 거의 같은 필드를 가진 클래스를 하나 더 만든다. 필드가 하나 늘면 두 곳을 고쳐야 하고, 빌더에 세터를 빠뜨리면 그 필드는 기본값으로만 남는다. 필드가 서너 개이고 필드 사이 규칙이 없다면 옵션 객체가 낫다. 타입스크립트라면 `Partial`과 기본값으로 충분한 경우가 대부분이다.
+
+`build()` 없이 빌더 자체를 결과물처럼 넘기는 실수도 흔하다. 빌더를 받은 쪽이 값을 더 고칠 수 있게 되니 불변 결과물을 만든 의미가 사라진다. 함수 시그니처에는 빌더가 아니라 결과물 타입을 적는다.
+
+비슷한 생성 패턴과는 이렇게 나뉜다. 제품 하나를 어떤 클래스로 만들지 바꾸는 건 [팩토리 메서드](/posts/pattern-factory-method), 짝이 맞는 제품 여러 개를 한 벌로 만드는 건 [추상 팩토리](/posts/pattern-abstract-factory)다. 빌더는 하나의 복잡한 결과물을 여러 단계로 조립한다. 이미 잘 만들어진 객체가 있고 거기서 조금만 바꾼 것을 원한다면 [프로토타입](/posts/pattern-prototype)으로 복제하는 쪽이 빠르다. 빌더가 만드는 결과물이 트리 모양인 경우도 많은데(문서, UI, 쿼리의 구문 트리), 그 트리 자체는 [컴포지트](/posts/pattern-composite)로 표현된다.
+
+처음의 `false, false`로 돌아가면, 빌더가 한 일은 위치로 말하던 인자에 이름을 붙이고, 흩어질 뻔한 규칙 검사를 `build()` 한곳에 모은 것이다. 타입스크립트에서는 이름 붙이기를 옵션 객체가 이미 해 주니, 빌더를 고를 이유는 단계적 조립과 검사, 그리고 불변 결과물에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 빌더 패턴은 어떤 문제를 푸나요?
+
+복잡한 객체를 한 번에 만들지 않고 단계별로 조립한 뒤 마지막에 완성품을 꺼내게 한다. 인자가 많은 생성자의 순서 실수와 가독성 문제를 줄이고, 필드 사이의 규칙 검사를 build 한곳에 모을 수 있다. 결과물을 불변으로 만들기도 쉽다.
+
+### GoF 빌더와 흔히 쓰는 플루언트 빌더는 어떻게 다른가요?
+
+GoF 빌더는 조립 순서를 아는 Director와 단계를 구현하는 Builder를 나눠, 같은 순서로 다른 표현의 결과물을 만드는 데 목적이 있다. 플루언트 빌더는 Effective Java에서 퍼진 형태로, 인자가 많은 객체를 메서드 체인으로 읽기 좋게 만드는 데 목적이 있고 Director가 없다. 실무에서 빌더라고 하면 대부분 후자를 말한다.
+
+### 자바스크립트에서는 옵션 객체가 있는데 빌더가 필요한가요?
+
+인자 이름 문제만이라면 옵션 객체로 충분하고 그쪽이 더 단순하다. 조건에 따라 조금씩 쌓아야 하거나, 여러 필드에 걸친 검사를 완성 시점에 해야 하거나, 같은 조립 과정으로 다른 결과물을 만들어야 할 때 빌더가 값을 한다. 쿼리 빌더와 스키마 빌더가 대표적인 예다.
+
+### 빌더를 재사용할 때 주의할 점은요?
+
+메서드가 자신을 고치고 this를 돌려주는 가변 빌더는 공유하면 앞 요청의 설정이 뒤 요청에 남는다. knex의 쿼리 빌더가 가변이라 갈라 쓰려면 clone()이 필요하고, Kysely나 zod는 메서드마다 새 객체를 돌려주는 불변 방식이다. 공유할 빌더라면 불변으로 만들고, 가변이라면 build 뒤에 다시 쓰지 않는다는 규칙을 둔다.
+
+### 필수 값을 빠뜨리는 실수를 컴파일 시점에 막을 수 있나요?
+
+단계마다 다음에 부를 수 있는 메서드만 가진 인터페이스를 돌려주는 스텝 빌더로 막을 수 있다. 타입스크립트에서는 빠뜨린 단계의 메서드가 타입에 없어서 컴파일 에러가 난다. 다만 인터페이스가 단계 수만큼 늘어나니, 필수 값이 적으면 생성자 인자로 받는 편이 간단하다.
+
+### 빌더와 추상 팩토리는 어떻게 다른가요?
+
+추상 팩토리는 서로 짝이 맞는 제품 여러 개를 메서드 하나씩으로 바로 돌려준다. 빌더는 하나의 복잡한 결과물을 여러 번의 호출로 조립하고, 마지막에 result나 build로 꺼낸다. 그래서 빌더의 결과물들은 공통 인터페이스가 없어도 되지만, 추상 팩토리의 제품은 정해진 인터페이스를 따라야 한다.
+
+### 테스트 코드에서 빌더를 어떻게 쓰나요?
+
+테스트 데이터 빌더로 정상적인 기본값을 가진 객체를 만들고, 테스트가 관심 있는 필드만 바꾼다. 필드가 늘어나도 빌더의 기본값만 고치면 되니 테스트 수십 개를 고칠 일이 없다. paid()처럼 함께 바뀌어야 하는 필드를 한 메서드로 묶으면 현실에 없는 데이터가 테스트에 섞이는 것도 막는다.

@@ -1,0 +1,377 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-command");
+
+사내 위키의 편집기를 맡았다. 툴바의 "굵게" 버튼은 `onClick`에서 선택 영역에 `<strong>`을 씌운다. 그런데 `Ctrl+B` 단축키도, `/bold`를 치는 명령 팔레트도 같은 일을 해야 한다. 지금은 세 군데에 비슷한 코드가 복사되어 있다. 여기에 요구가 하나 붙었다. "`Ctrl+Z`로 되돌릴 수 있게 해 주세요."
+
+버튼 핸들러가 문서를 바로 고치는 구조에서는 되돌리기를 붙일 자리가 없다. 무엇을 했는지 어디에도 남지 않기 때문이다. 해야 할 일은 "굵게 만들기"라는 요청 자체를 값으로 만드는 것이다. 값이면 세 곳에서 같은 것을 부를 수 있고, 목록에 쌓아 둘 수 있고, 나중에 거꾸로 실행할 수도 있다. 이번 글은 요청을 객체로 만드는 커맨드(Command) 패턴이다.
+
+## 요청을 객체로 만들면 생기는 자리
+
+커맨드에는 네 역할이 나온다. 실제 일을 할 줄 아는 Receiver(문서), 그 일을 언제 할지 정하는 Invoker(버튼, 단축키, 실행 기록), 둘 사이에서 "무엇을 누구에게 할지"를 담는 Command, 그리고 Command를 만들어 Invoker에 건네는 Client다. 핵심은 Invoker가 Receiver를 모른다는 것이다. 버튼은 문서가 무엇인지 모르고 `execute()`만 부른다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="Invoker는 execute()만 알고, 무엇을 할지는 Command가 안다"
+  nodes={[
+    { id: "client", label: "Editor setup", sub: "Client", x: 80, y: 40, w: 120 },
+    { id: "invoker", label: "History", sub: "Invoker", x: 300, y: 40, w: 110 },
+    { id: "cmd", label: "Command", sub: "execute · undo", x: 300, y: 140, w: 130 },
+    { id: "insert", label: "InsertText", sub: "Concrete", x: 200, y: 225, w: 110 },
+    { id: "doc", label: "TextDocument", sub: "Receiver", x: 80, y: 140, w: 120 },
+  ]}
+  edges={[
+    { from: "client", to: "invoker", label: "run(cmd)" },
+    { from: "invoker", to: "cmd", label: "execute()" },
+    { from: "insert", to: "cmd", label: "implements", dashed: true },
+    { from: "insert", to: "doc", label: "doc.insert()" },
+    { from: "client", to: "doc", label: "만든다", dashed: true },
+  ]}
+/>
+
+텍스트 편집으로 옮기면 이렇다. 명령은 실행하는 방법과 되돌리는 방법을 함께 안다.
+
+```ts
+// Receiver: 실제 일을 할 줄 아는 쪽
+class TextDocument {
+  text = "";
+  insert(at: number, s: string) {
+    this.text = this.text.slice(0, at) + s + this.text.slice(at);
+  }
+  remove(at: number, length: number) {
+    const removed = this.text.slice(at, at + length);
+    this.text = this.text.slice(0, at) + this.text.slice(at + length);
+    return removed;
+  }
+}
+
+interface Command {
+  readonly label: string; // 메뉴에 "실행 취소: 입력"처럼 보여 줄 이름
+  execute(): void;
+  undo(): void;
+  mergeWith?(next: Command): boolean;
+}
+
+class InsertText implements Command {
+  readonly label = "입력";
+  constructor(private readonly doc: TextDocument, private at: number, private text: string, private time = Date.now()) {}
+
+  execute() {
+    this.doc.insert(this.at, this.text);
+  }
+  undo() {
+    this.doc.remove(this.at, this.text.length);
+  }
+  mergeWith(next: Command) {
+    // 바로 뒤에 이어서 1초 안에 친 글자면 하나로 합친다
+    if (!(next instanceof InsertText) || next.at !== this.at + this.text.length || next.time - this.time > 1000) return false;
+    this.text += next.text;
+    this.time = next.time;
+    return true;
+  }
+}
+
+class DeleteText implements Command {
+  readonly label = "삭제";
+  private removed = "";
+  constructor(private readonly doc: TextDocument, private readonly at: number, private readonly length: number) {}
+
+  execute() {
+    this.removed = this.doc.remove(this.at, this.length); // 되돌릴 때 필요한 것을 실행하면서 기억한다
+  }
+  undo() {
+    this.doc.insert(this.at, this.removed);
+  }
+}
+```
+
+`DeleteText`가 지운 글자를 `execute` 안에서 기억하는 부분을 보자. 무엇이 지워질지는 실행해 봐야 안다. 그래서 되돌리기에 필요한 정보는 명령이 만들어질 때가 아니라 실행될 때 모은다.
+
+## 버튼, 단축키, 팔레트가 같은 명령을 부른다
+
+처음 문제였던 세 군데 복사는 명령을 이름으로 등록해 두면 풀린다. 버튼, 단축키, 팔레트는 모두 Invoker이고, 이름으로 명령을 찾아 실행할 뿐이다.
+
+```ts
+type CommandFactory = () => { label: string; execute(): void; undo(): void };
+
+const registry = new Map<string, CommandFactory>();
+const registerCommand = (id: string, factory: CommandFactory) => registry.set(id, factory);
+
+declare function toggleBold(): () => void; // 굵게를 토글하고, 되돌리는 함수를 돌려준다
+declare const edits: { run(command: ReturnType<CommandFactory>): void };
+
+registerCommand("editor.bold", () => {
+  let revert = () => {};
+  return { label: "굵게", execute: () => (revert = toggleBold()), undo: () => revert() };
+});
+
+// 세 Invoker가 모두 같은 줄로 끝난다
+const runById = (id: string) => {
+  const factory = registry.get(id);
+  if (factory) edits.run(factory());
+};
+document.querySelector("#bold")?.addEventListener("click", () => runById("editor.bold"));
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "b") runById("editor.bold");
+});
+```
+
+VS Code가 정확히 이렇게 되어 있다. 확장은 `vscode.commands.registerCommand("myExt.format", fn)`으로 명령을 등록하고, 단축키 설정과 명령 팔레트와 메뉴는 그 id를 가리킨다. `keybindings.json`에 `"command": "editor.action.formatDocument"`라고 적는 것도 명령 이름으로 Invoker를 연결하는 일이다. 아래 그림에서 다음을 누르면 단축키 하나가 문서에 닿기까지 지나는 길이 보인다.
+
+<SequenceDiagram
+  caption="단축키는 명령 이름만 알고, 명령이 문서를 고친다"
+  actors={[
+    { id: "key", label: "Ctrl+B" },
+    { id: "reg", label: "registry" },
+    { id: "hist", label: "History" },
+    { id: "cmd", label: "BoldCommand" },
+    { id: "doc", label: "Document" },
+  ]}
+  steps={[
+    { from: "key", to: "reg", label: "editor.bold", title: "단축키는 이름으로 찾는다", detail: "키 처리기는 문서도, 굵게 만드는 방법도 모른다. 명령 id 하나만 안다." },
+    { from: "reg", to: "hist", label: "new Command", title: "등록부가 새 명령 객체를 만든다", detail: "실행할 때마다 새 객체를 만든다. 객체마다 자기가 되돌릴 정보를 따로 들고 있어야 하기 때문이다." },
+    { from: "hist", to: "cmd", label: "execute()", title: "실행 기록이 실행을 맡는다", detail: "History는 명령을 실행하고 되돌리기 스택에 쌓는다. 무슨 명령인지는 상관하지 않는다." },
+    { from: "cmd", to: "doc", label: "wrap <strong>", title: "명령이 문서를 고친다", detail: "실제로 문서를 아는 건 명령뿐이다. 되돌릴 방법도 이때 기억한다." },
+    { from: "key", to: "hist", label: "Ctrl+Z → undo()", title: "되돌리기도 같은 길로", detail: "History가 스택에서 마지막 명령을 꺼내 undo()를 부른다. 버튼으로 했든 단축키로 했든 같은 기록에 남아 있다." },
+    { from: "hist", to: "cmd", label: "undo()", title: "명령이 스스로 되돌린다", detail: "굵게를 풀고 History는 그 명령을 다시 실행하기 스택으로 옮긴다." },
+  ]}
+/>
+
+## 되돌리기 스택과 다시 실행하기 스택
+
+실행 기록은 스택 두 개로 충분하다. 실행한 명령은 되돌리기 스택에 쌓고, 되돌린 명령은 다시 실행하기 스택으로 옮긴다. 새 명령을 실행하면 다시 실행하기 스택을 비운다.
+
+```ts
+interface Command {
+  execute(): void;
+  undo(): void;
+  mergeWith?(next: Command): boolean;
+}
+
+class CommandHistory {
+  private readonly undoStack: Command[] = [];
+  private redoStack: Command[] = [];
+  constructor(private readonly limit = 100) {}
+
+  run(command: Command) {
+    command.execute();
+    const last = this.undoStack.at(-1);
+    if (!last?.mergeWith?.(command)) this.undoStack.push(command); // 합쳐지면 따로 쌓지 않는다
+    if (this.undoStack.length > this.limit) this.undoStack.shift(); // 오래된 것부터 버린다
+    this.redoStack = []; // 새 명령이 들어오면 다시 실행할 미래는 사라진다
+  }
+  undo() {
+    const command = this.undoStack.pop();
+    if (!command) return;
+    command.undo();
+    this.redoStack.push(command);
+  }
+  redo() {
+    const command = this.redoStack.pop();
+    if (!command) return;
+    command.execute();
+    this.undoStack.push(command);
+  }
+}
+```
+
+"hello"를 한 글자씩 0.1초 간격으로 치고, 5초 뒤에 " world"를 붙인 다음 되돌리기와 다시 실행하기를 섞어 봤다.
+
+```text
+"hello" undo=1 redo=0
+"hello world" undo=2 redo=0
+undo   "hello" undo=1 redo=1
+redo   "hello world" undo=2 redo=0
+delete "world" undo=3 redo=0
+undo×2 "hello" undo=1 redo=2
+new    "hello!" undo=2 redo=0
+```
+
+<AlgoTrace
+  caption="되돌린 명령은 옆 스택으로 옮겨 가고, 새 명령이 오면 그 스택이 비워진다"
+  memoryLabel="↶ 되돌리기 스택 · ↷ 다시 실행하기 스택"
+  cells={["입력 hello", "입력 world", "undo", "redo", "삭제 6자", "undo", "undo", "입력 !"]}
+  steps={[
+    { pointer: 0, memory: ["↶ hello"], caption: "다섯 글자가 1초 안에 이어져 명령 하나로 합쳐졌다. 되돌리기 한 번에 hello가 통째로 지워진다." },
+    { pointer: 1, memory: ["↶ hello", "↶ world"], caption: "5초 뒤에 친 글자는 합치지 않는다. 명령이 둘이 된다." },
+    { pointer: 2, memory: ["↶ hello", "↷ world"], caption: "undo는 world 명령을 꺼내 되돌리고 오른쪽 스택으로 옮긴다." },
+    { pointer: 3, found: [3], memory: ["↶ hello", "↶ world"], caption: "redo는 오른쪽에서 꺼내 다시 실행하고 왼쪽으로 돌려놓는다." },
+    { pointer: 4, memory: ["↶ hello", "↶ world", "↶ 삭제"], caption: "삭제 명령은 지운 'hello '를 실행하면서 기억해 둔다." },
+    { pointer: 5, memory: ["↶ hello", "↶ world", "↷ 삭제"], caption: "삭제를 되돌린다. 기억해 둔 글자를 다시 넣는다." },
+    { pointer: 6, memory: ["↶ hello", "↷ 삭제", "↷ world"], caption: "한 번 더 되돌리면 world도 오른쪽으로 간다. 문서는 hello다." },
+    { pointer: 7, found: [7], memory: ["↶ hello", "↶ !"], caption: "여기서 새 명령을 실행하면 오른쪽 스택이 비워진다. 되돌렸던 미래는 이제 다시 실행할 수 없다." },
+  ]}
+/>
+
+마지막 단계가 대부분의 편집기가 따르는 규칙이다. 되돌린 뒤 새로 입력하면 그 전의 "미래"는 버린다. 버리지 않고 가지로 남기는 편집기(Vim의 undo tree)도 있지만, 사용자가 이해하기 어려워서 흔하지 않다.
+
+### 글자마다 명령 하나면 곤란하다
+
+`mergeWith`가 없으면 "hello"를 지우는 데 `Ctrl+Z`를 다섯 번 눌러야 한다. 사람은 "방금 친 단어"를 한 번에 되돌리기를 기대한다. 그래서 편집기들은 이어지는 입력을 하나로 합친다. 합치는 기준(같은 위치에 이어서, 1초 안에, 공백이 나오기 전까지)은 제품마다 다르고, 이 기준이 되돌리기의 손맛을 정한다. 반대로 여러 명령을 하나로 묶어야 할 때도 있다. "찾아서 모두 바꾸기"는 바꾸기 명령 수십 개를 담은 매크로 명령 하나로 기록해야 한 번에 되돌아간다. 명령의 목록을 다시 명령으로 만드는 것이니 [컴포지트](/posts/pattern-composite)와 같은 구조다.
+
+`limit`도 실무에서 꼭 정한다. 되돌리기 스택은 메모리에 계속 쌓인다. 명령이 바뀐 부분만 기억하면 작지만, 실수로 큰 값을 붙잡으면 금방 커진다. 1만 행짜리 표에서 500번 편집하는 동안 되돌리기 기록에 쓰인 힙을 `node --expose-gc`로 쟀다.
+
+```text
+snapshot 500 edits on 10,000 rows: +464,876 KB heap
+command  500 edits on 10,000 rows: +33 KB heap
+```
+
+편집할 때마다 표 전체를 `structuredClone`해 두는 방식은 450MB를 넘겼고, "몇 번째 행의 수량을 무엇에서 무엇으로"만 기억하는 명령은 33KB였다. 전체를 저장해 두는 방식이 [메멘토](/posts/pattern-memento)이고, 바뀐 것과 되돌리는 법만 저장하는 방식이 커맨드다. 메멘토는 되돌리는 코드를 짤 필요가 없어 실수가 적고, 커맨드는 작고 빠르다. 그래서 둘을 섞는 경우가 많다. 평소에는 명령을 쌓고, 몇십 개마다 전체 상태를 한 번 저장해 둔다.
+
+## 되돌리기가 어려운 명령
+
+모든 명령이 `undo`를 가질 수 있는 것은 아니다. 메일 보내기, 결제, 외부 API 호출은 되돌릴 수 없다. 이런 명령은 되돌리기 스택에 넣지 않거나, 되돌리기 대신 반대 동작(환불, 취소 메일)을 새 명령으로 실행한다. 분산 트랜잭션에서 단계마다 보상 동작을 짝지어 두는 [사가 패턴](/posts/saga-pattern)이 이 생각을 서비스 사이로 넓힌 것이다.
+
+곱하기처럼 역연산이 늘 있지는 않은 명령도 있다. 값에 0을 곱한 뒤 되돌리려고 0으로 나눌 수는 없다. 그래서 역연산을 계산하기보다 "실행 전 값"을 기억하는 편이 안전하다. 또 하나의 함정은 위치다. `InsertText`는 "5번째 자리에 넣었다"를 기억한다. 그 사이 다른 사람이 문서 앞쪽에 글자를 넣었다면 되돌리기가 엉뚱한 글자를 지운다. 혼자 쓰는 편집기에서는 생기지 않지만, 여럿이 함께 편집하는 도구는 다른 사람의 변경에 맞춰 명령의 위치를 고쳐 주는 변환(Operational Transformation)이나 CRDT 같은 별도 기법을 쓴다.
+
+## 명령을 줄 세웠다가 나중에 실행한다
+
+명령이 객체라는 것은 지금 실행하지 않아도 된다는 뜻이기도 하다. 함수 호출은 그 자리에서 끝나지만, 명령 객체는 큐에 넣었다가 다른 프로세스에서 꺼내 실행할 수 있다. 이때 명령은 함수가 아니라 직렬화할 수 있는 데이터(`{ name: "send-receipt", data: { orderId } }`)여야 한다. BullMQ의 `queue.add("send-receipt", { orderId: 42 }, { attempts: 3 })`가 이 모양이다. 작업 이름과 데이터가 명령이고, 워커가 이름을 보고 처리기를 고른다.
+
+<NetworkTopology
+  caption="명령을 데이터로 만들면 다른 프로세스가 나중에 실행할 수 있다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "api", label: "API", x: 45, y: 115, icon: "server", w: 66 },
+    { id: "queue", label: "Queue", sub: "Redis", x: 145, y: 115, icon: "db", w: 72 },
+    { id: "worker", label: "Worker", x: 250, y: 115, icon: "container", w: 74 },
+    { id: "mail", label: "Mail API", x: 355, y: 115, icon: "internet", w: 74 },
+  ]}
+  links={[
+    { from: "api", to: "queue" },
+    { from: "queue", to: "worker" },
+    { from: "worker", to: "mail" },
+  ]}
+  steps={[
+    { path: ["api", "queue"], packet: "job", title: "API는 명령을 큐에 넣고 바로 답한다", detail: "영수증 메일을 지금 보내지 않는다. 무엇을 할지만 데이터로 남긴다.", payload: "{ name: \"send-receipt\", data: { orderId: 42 }, attempts: 3 }" },
+    { path: ["queue", "worker"], packet: "job", title: "워커가 꺼내 이름으로 처리기를 고른다", detail: "API 서버가 재시작되어도 명령은 큐에 남아 있다." },
+    { path: ["worker", "mail"], packet: "send", blocked: true, title: "메일 API가 실패한다", detail: "처리기가 에러를 던지면 명령은 큐로 돌아가 정해진 간격 뒤에 다시 실행된다." },
+    { path: ["queue", "worker", "mail"], packet: "send", title: "같은 명령을 다시 실행한다", detail: "명령이 데이터라서 그대로 다시 꺼내면 된다. 첫 시도가 실제로는 성공했다면 메일이 두 번 간다." },
+  ]}
+/>
+
+마지막 단계가 큐에 넣는 명령의 숙제다. 큐는 보통 "적어도 한 번" 전달을 보장하니, 같은 명령이 두 번 실행되어도 결과가 같게 만들어야 한다. 명령에 고유 id를 넣고 처리한 id를 기록해 두는 것이 흔한 방법이다([멱등성 키 글](/posts/idempotency-key)). 몇 번을 다시 시도해도 실패하는 명령을 따로 빼 두는 곳이 [데드 레터 큐](/posts/dead-letter-queue)다. 큐 자체의 동작은 [메시지 큐 글](/posts/message-queue-basics)에서 다뤘다.
+
+AWS SDK v3도 모든 API 호출을 명령 객체로 만든다. API마다 클라이언트 메서드가 하나씩 달린 v2와 달리, v3는 클라이언트 하나에 `send` 하나만 두고 무엇을 할지는 명령 객체가 정한다.
+
+<UrlAnatomy
+  caption="AWS SDK v3에서 명령 하나를 보내는 줄"
+  base="await s3.send("
+  separator=""
+  joiner=" "
+  params={[
+    { key: "cmd", display: "new PutObjectCommand(", title: "무엇을 할지 담은 명령", description: "API 하나가 클래스 하나다. 필요한 명령 클래스만 import하니 쓰지 않는 API는 번들에 들어가지 않는다.", required: true },
+    { key: "input", display: "{ Bucket, Key, Body })", title: "명령의 인자", description: "command.input으로 다시 꺼내 볼 수 있다. 실행 전에 로그를 남기거나 테스트에서 '무슨 명령을 보냈나'를 검사하기 쉽다.", code: "expect(sent[0].input.Key).toBe(\"receipts/42.pdf\")" },
+    { key: "opts", display: ", { abortSignal })", title: "이번 실행에만 주는 옵션", description: "명령은 그대로 두고 실행 방식만 바꾼다. 같은 명령 객체를 다른 클라이언트로 보낼 수도 있다." },
+    { key: "send", display: ")", title: "Invoker는 send 하나", description: "s3 클라이언트는 명령 종류를 모른 채 서명, 재시도, 직렬화 미들웨어를 차례로 통과시켜 보낸다. 명령마다 미들웨어를 더할 수도 있다." },
+  ]}
+/>
+
+`send` 안에서 명령이 지나는 미들웨어 스택은 [책임 연쇄](/posts/pattern-chain-of-responsibility)다. 명령 객체가 사슬을 따라 흘러가는 구조라 두 패턴이 자연스럽게 함께 쓰인다. 테스트에서도 이점이 크다. `aws-sdk-client-mock` 같은 도구가 "어떤 명령 클래스가 어떤 입력으로 보내졌나"를 검사할 수 있는 것은 호출이 값으로 남기 때문이다.
+
+## Redux 액션은 커맨드인가
+
+Redux의 `dispatch({ type: "cart/itemAdded", payload: { id: 7 } })`도 요청을 객체로 만든다. 그래서 액션 기록을 다시 돌려 화면을 되감는 DevTools의 타임 트래블이 가능하다. 커맨드와 닮았지만 한 가지가 다르다. 커맨드는 스스로 실행할 줄 알고(`execute`), 액션은 일어난 일을 적은 데이터일 뿐 실행 방법은 리듀서가 안다.
+
+Redux 스타일 가이드가 액션을 "명령(setter)이 아니라 일어난 일(event)로 이름 지으라"고 권하는 것도 이 차이에서 나온다. `setCartCount(3)`보다 `cart/itemAdded`가 낫다는 것이다. 여러 리듀서가 같은 일에 각자 반응할 수 있기 때문이다. 커맨드는 "이걸 해라"(한 받는 쪽), 이벤트는 "이게 일어났다"(받는 쪽 여럿)다. 이 구분은 CQRS에서 쓰는 커맨드(`PlaceOrder`)와 도메인 이벤트(`OrderPlaced`)에서도 그대로다. 받는 쪽이 여럿인 이벤트 쪽은 [옵서버](/posts/pattern-observer)의 영역이다.
+
+## 클래스 대신 클로저 한 쌍
+
+자바스크립트에서는 `execute`와 `undo`를 클로저 한 쌍으로 만들면 대부분 충분하다. 그 모양은 [디자인 패턴 개요](/posts/design-patterns-overview#함수가-있으면-사라지는-패턴도-있다)에서 봤다. 되돌리기가 필요 없다면 명령은 그냥 `() => void` 함수다. `setTimeout(fn)`, `queueMicrotask(fn)`, 버튼의 `onClick`이 모두 실행을 미뤄 둔 명령을 받는 Invoker다.
+
+클래스가 값을 하는 경우는 명령에 메서드가 아닌 것들이 붙을 때다. 메뉴에 보여 줄 `label`, 합치기 규칙(`mergeWith`), 큐로 보내기 위한 직렬화, 실행 권한 확인, 로그에 남길 이름이 그렇다. 클로저는 직렬화할 수 없어서 큐에 넣거나 다른 탭에 보낼 수 없다. 명령을 저장하거나 보내야 한다면 처음부터 `{ type, args }` 같은 데이터로 두고, 실행할 쪽에서 이름으로 처리기를 찾는 것이 맞다.
+
+[전략](/posts/pattern-strategy)과도 모양이 비슷하다. 둘 다 함수 하나를 객체로 감싼다. 전략은 "어떻게"를 갈아 끼우는 것이라 Context가 필요할 때마다 부른다. 커맨드는 "무엇을"을 값으로 만든 것이라 언제 실행할지, 되돌릴지, 다시 할지를 Invoker가 정한다.
+
+## 직접 만드는 되돌리기
+
+`runHistory(ops)`를 완성해 보자. 값은 0에서 시작한다. `["add", n]`과 `["mul", n]`은 명령을 만들어 실행하고, `["undo"]`와 `["redo"]`는 실행 기록을 움직인다. 결과로 `[현재 값, 되돌리기 스택 크기, 다시 실행하기 스택 크기]`를 돌려준다. 0을 곱한 뒤에도 되돌릴 수 있어야 한다.
+
+<CodePlayground
+  caption="명령 객체와 스택 두 개로 만드는 실행 기록"
+  functionName="runHistory"
+  initialCode={`function runHistory(ops) {
+  const state = { value: 0 };
+  // makeCommand(type, n)이 execute와 undo를 가진 명령을 돌려주게 하고,
+  // undo/redo 스택 두 개로 실행 기록을 관리한다.
+  for (const [type, n] of ops) {
+    if (type === "add") state.value += n;
+    if (type === "mul") state.value *= n;
+  }
+  return [state.value, 0, 0];
+}`}
+  solution={`function runHistory(ops) {
+  const state = { value: 0 };
+  const makeCommand = (type, n) => {
+    let prev;
+    return {
+      execute() {
+        prev = state.value; // 역연산 대신 실행 전 값을 기억한다
+        state.value = type === "add" ? state.value + n : state.value * n;
+      },
+      undo() {
+        state.value = prev;
+      },
+    };
+  };
+  const undoStack = [];
+  let redoStack = [];
+  for (const [type, n] of ops) {
+    if (type === "undo") {
+      const c = undoStack.pop();
+      if (c) { c.undo(); redoStack.push(c); }
+    } else if (type === "redo") {
+      const c = redoStack.pop();
+      if (c) { c.execute(); undoStack.push(c); }
+    } else {
+      const c = makeCommand(type, n);
+      c.execute();
+      undoStack.push(c);
+      redoStack = []; // 새 명령이 오면 다시 실행할 미래는 버린다
+    }
+  }
+  return [state.value, undoStack.length, redoStack.length];
+}`}
+  tests={[
+    { args: [[["add", 5], ["mul", 3]]], expected: [15, 2, 0], label: "명령 두 개를 실행한다" },
+    { args: [[["add", 5], ["mul", 3], ["undo"]]], expected: [5, 1, 1], label: "되돌리면 옆 스택으로 옮긴다" },
+    { args: [[["add", 5], ["mul", 3], ["undo"], ["redo"]]], expected: [15, 2, 0], label: "다시 실행한다" },
+    { args: [[["add", 5], ["undo"], ["add", 2]]], expected: [2, 1, 0], label: "새 명령이 오면 redo가 비워진다" },
+    { args: [[["add", 5], ["mul", 0], ["undo"]]], expected: [5, 1, 1], label: "0을 곱해도 되돌린다" },
+    { args: [[["undo"], ["redo"], ["add", 1]]], expected: [1, 1, 0], label: "빈 스택에서 undo, redo는 아무 일도 안 한다" },
+  ]}
+/>
+
+커맨드는 요청을 값으로 만들어 "무엇을 할지"와 "언제, 누가 실행할지"를 떼어 놓는 패턴이다. 값이 되었으니 여러 곳에서 같은 명령을 부르고, 쌓아 두었다 되돌리고, 큐에 넣어 나중에 실행할 수 있다. 되돌리기를 만든다면 되돌릴 정보를 실행할 때 모으고, 새 명령이 오면 redo를 비우고, 스택에 한도를 두는 세 가지를 먼저 챙긴다.
+
+## 면접에서 나올 만한 질문
+
+### 커맨드 패턴은 무엇이고 어떤 문제를 푸나요?
+
+요청을 객체로 만들어서 요청을 보내는 쪽(Invoker)과 실제로 일을 하는 쪽(Receiver)을 떼어 놓는 패턴이다. 요청이 값이 되면 버튼, 단축키, 메뉴가 같은 명령을 부를 수 있고, 실행 기록을 쌓아 되돌리거나, 큐에 넣어 나중에 실행할 수 있다. Invoker는 명령의 execute만 알면 된다.
+
+### 커맨드로 undo와 redo를 어떻게 구현하나요?
+
+명령마다 execute와 undo를 두고, 실행 기록에 되돌리기 스택과 다시 실행하기 스택을 둔다. 실행하면 되돌리기 스택에 쌓고, undo는 꺼내서 undo를 부른 뒤 다시 실행하기 스택으로 옮기고, redo는 그 반대다. 새 명령을 실행하면 다시 실행하기 스택을 비운다. 되돌릴 정보(지운 글자, 실행 전 값)는 명령이 실행될 때 기억한다.
+
+### 커맨드와 메멘토는 되돌리기에서 어떻게 다른가요?
+
+커맨드는 바뀐 부분과 되돌리는 방법을 저장하고, 메멘토는 바뀌기 전의 상태 전체를 저장한다. 커맨드는 작고 빠르지만 명령마다 되돌리는 코드를 정확히 짜야 하고, 메멘토는 되돌리는 코드가 필요 없지만 상태가 크면 메모리를 많이 쓴다. 1만 행 표에서 500번 편집했을 때 전체 복사는 450MB를 넘겼고 명령 기록은 33KB였다. 그래서 평소에는 명령을 쌓고 가끔 스냅숏을 두는 식으로 섞는다.
+
+### 되돌릴 수 없는 명령은 어떻게 다루나요?
+
+메일 발송이나 결제처럼 외부에 영향을 준 명령은 진짜로 되돌릴 수 없으니 되돌리기 기록에서 빼거나, 환불 같은 반대 동작을 새 명령으로 실행한다. 서비스 여러 개에 걸친 작업에서는 단계마다 보상 동작을 짝지어 두는 사가 패턴을 쓴다. 역연산이 없는 연산은 역연산 대신 실행 전 값을 기억한다.
+
+### 명령을 큐에 넣어 나중에 실행할 때 주의할 점은 무엇인가요?
+
+명령이 함수가 아니라 직렬화할 수 있는 데이터여야 하고, 같은 명령이 두 번 실행되어도 결과가 같아야 한다. 큐는 보통 적어도 한 번 전달이라 재시도나 워커 장애로 같은 명령이 다시 올 수 있다. 명령에 고유 id를 넣어 처리 여부를 기록하고, 계속 실패하는 명령은 데드 레터 큐로 뺀다.
+
+### Redux의 액션은 커맨드 패턴인가요?
+
+요청을 객체로 만든다는 점은 같지만 정확히는 다르다. 커맨드는 스스로 실행할 줄 알고 받는 쪽이 하나인 "이걸 해라"이고, Redux 액션은 실행 방법이 없는 데이터이며 리듀서 여럿이 반응할 수 있는 "이게 일어났다"에 가깝다. 그래서 Redux 스타일 가이드는 액션을 setter가 아니라 이벤트처럼 이름 짓기를 권한다.
+
+### 자바스크립트에서 커맨드를 꼭 클래스로 만들어야 하나요?
+
+아니다. 되돌리기가 없으면 함수 하나, 있으면 execute와 undo 클로저 한 쌍으로 충분하다. 다만 명령을 저장하거나 큐와 네트워크로 보내야 하면 클로저는 직렬화할 수 없으니 type과 인자를 담은 데이터로 둔다. 메뉴 이름, 합치기 규칙, 권한 같은 부가 정보가 붙으면 클래스가 읽기 쉽다.
