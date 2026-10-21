@@ -1,0 +1,582 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-video-upload-transcoding");
+
+이 시리즈에서 이 글의 자리: [㉚ 자동완성 데이터 파이프라인](/posts/sd-autocomplete-data-pipeline)으로 검색어 자동완성을 마쳤고, 이 글부터 두 편은 동영상 서비스를 설계한다. 이 글은 올리는 쪽, 즉 큰 파일을 받아 여러 화질로 바꾸는 일을 맡는다. 같은 장의 다음 글 [㉜ 동영상 서비스 설계 ②: 나눠 보내기와 CDN 비용](/posts/sd-video-streaming-cost)이 보는 쪽을 다루고, 그다음은 [㉝ 파일 동기화 설계 ①](/posts/sd-file-sync-block-upload)이다.
+
+휴대폰으로 찍은 10분짜리 1080p 영상을 올린다고 해 보자. 요즘 휴대폰은 1080p를 초당 10~20메가비트쯤으로 기록하니 10분이면 1GB 안팎이다. 지하철에서 올리다 터널에 들어가 연결이 끊겼다. 앱이 처음부터 다시 올리기 시작하면 사용자는 앱을 지운다. 올라간 뒤에도 문제가 남는다. 1GB짜리 원본을 그대로 틀어 주면 3G로 보는 사람은 재생 버튼을 누르고 한참 기다린다.
+
+면접 단골 질문 "유튜브 같은 동영상 서비스를 설계하라"는 기능이 둘뿐이다. 올리기와 보기. 이 글은 올리기만 본다. 서버 한 대로 시작해서, 큰 파일을 어디로 받을지, 끊긴 업로드를 어떻게 이어 갈지, 원본을 여러 화질로 바꾸는 일을 어떻게 나눠 할지 차례로 정한다. 기준 환경은 Node 22와 ffmpeg 6.1이고, 아래 출력은 모두 이 환경에서 실제로 돌린 결과다.
+
+## 서버 한 대가 동영상을 받으면
+
+가장 작은 버전부터 그려 보자. 웹 서버 한 대가 `POST /videos`로 파일을 받아 디스크에 저장하고, 그 자리에서 ffmpeg를 돌려 작은 화질을 만든 뒤 응답한다. ffmpeg는 동영상을 읽고 다른 형식으로 바꾸는 오픈소스 도구다.
+
+이 서버로 무엇이 먼저 깨지는지 따라가 보자.
+
+<NetworkTopology
+  caption="서버 한 대가 받고 바꾸고 답하는 구조"
+  width={420}
+  height={220}
+  zones={[
+    { id: "svc", label: "우리 서버 한 대", x: 140, y: 20, w: 260, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "phone", label: "휴대폰", sub: "1GB 영상", x: 60, y: 110, icon: "client" },
+    { id: "web", label: "web", sub: "Node", x: 210, y: 110, icon: "server" },
+    { id: "disk", label: "디스크", x: 335, y: 60, icon: "db" },
+    { id: "ff", label: "ffmpeg", sub: "같은 CPU", x: 335, y: 160, icon: "container" },
+  ]}
+  links={[
+    { from: "phone", to: "web" },
+    { from: "web", to: "disk" },
+    { from: "web", to: "ff" },
+  ]}
+  steps={[
+    { path: ["phone", "web"], packet: "1GB", title: "파일이 서버를 지나간다", detail: "업로드가 10분 걸리면 요청 하나가 10분 동안 연결과 메모리를 붙잡는다." },
+    { path: ["web", "disk"], packet: "write", title: "디스크에 쓴다", detail: "하루 수십만 개면 디스크 한 장은 며칠 만에 찬다." },
+    { path: ["web", "ff"], packet: "encode", title: "같은 서버에서 인코딩한다", detail: "인코딩이 CPU를 다 쓰는 동안 다른 사용자의 요청이 밀린다." },
+    { path: ["phone", "web"], packet: "timeout", blocked: true, title: "응답 전에 끊긴다", detail: "로드 밸런서나 앱의 요청 시간 한도에 걸려 사용자는 실패를 본다. 다시 올리면 처음부터다." },
+  ]}
+/>
+
+문제는 세 갈래다. 큰 파일이 우리 웹 서버를 지나가는 것, 끊기면 처음부터라는 것, 그리고 무거운 인코딩을 요청 안에서 한다는 것. 이 글은 이 셋을 순서대로 떼어 낸다. 먼저 규모를 숫자로 잡아 두자.
+
+하루에 영상 20만 개가 올라오고 원본이 평균 400MB라고 하자. 400MB는 1080p를 초당 5메가비트쯤으로 10분 찍은 크기다.
+
+- 하루 들어오는 양: 20만 × 400MB = 80TB.
+- 평균 수신 대역폭: 80TB ÷ 86,400초 ≈ 초당 926MB, 비트로 약 7.4Gbps. 저녁 피크가 평균의 두 배면 15Gbps 가까이 된다.
+
+웹 서버가 이 바이트를 전부 중계하면 웹 서버 대수는 요청 수가 아니라 네트워크 카드가 정한다. 그래서 첫 결정은 "파일은 우리 웹 서버를 지나가지 않는다"다. 어림셈 방법은 [⑩ 용량 어림하기](/posts/sd-capacity-estimation)에 있다.
+
+## 파일은 저장소로 바로 보낸다
+
+동영상 파일은 오브젝트 스토리지에 둔다. 오브젝트 스토리지는 파일을 키(경로처럼 생긴 이름) 하나로 넣고 꺼내는 저장소로, S3 같은 서비스가 대표적이다. 용량이 거의 무한하고 여러 장비에 복제해 두니 디스크가 차거나 고장 나는 걱정을 덜 수 있다.
+
+그런데 아무나 우리 저장소에 파일을 올리게 둘 수는 없다. 그렇다고 앱에 저장소 비밀 키를 넣어 배포하면 그 키를 꺼낸 사람이 저장소를 마음대로 쓴다. 그래서 쓰는 방법이 서명된 업로드 주소, 흔히 presigned URL이라 부르는 것이다. API 서버가 로그인과 권한을 확인한 뒤 "이 경로에, 이 시각까지, 이 형식으로 한 번 올려도 된다"는 내용에 서명해서 주소로 만들어 준다. 앱은 그 주소로 저장소에 직접 올린다. 함수 플랫폼의 요청 크기 한도를 피하는 용도로는 [서버리스의 한계](/posts/serverless-limits)에서도 같은 방법을 썼다.
+
+<SequenceDiagram
+  caption="업로드 주소를 받아 저장소로 바로 올린다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "api", label: "API 서버" },
+    { id: "db", label: "메타 DB" },
+    { id: "store", label: "저장소" },
+  ]}
+  steps={[
+    { from: "app", to: "api", label: "POST /api/videos", title: "올리겠다고 알린다", detail: "제목과 파일 크기 같은 정보만 보낸다. 파일 본문은 아직 보내지 않는다." },
+    { from: "api", to: "db", label: "INSERT uploading", title: "영상 행을 먼저 만든다", detail: "영상 번호를 정하고 상태를 uploading으로 적는다." },
+    { from: "api", to: "api", label: "HMAC 서명", title: "주소에 서명한다", detail: "경로, 만료 시각, 최대 크기, 형식을 비밀 키로 서명한다.", payload: "/raw/9002.mp4?expires=1792578853\n  &maxBytes=1073741824&sig=a6b4de48…" },
+    { from: "api", to: "app", label: "201 uploadUrl", title: "주소를 돌려준다", detail: "앱은 이 주소 말고는 저장소에 대한 권한이 없다." },
+    { from: "app", to: "store", label: "PUT 1GB", title: "저장소로 바로 올린다", detail: "큰 바이트는 API 서버를 지나가지 않는다." },
+    { from: "store", to: "store", label: "서명 검사", title: "저장소가 서명을 다시 계산한다", detail: "같은 비밀 키로 계산한 값과 다르거나 만료됐으면 403으로 거절한다." },
+    { from: "store", to: "api", label: "업로드 완료 이벤트", title: "다 올라왔다고 알린다", detail: "저장소 이벤트가 상태를 uploaded로 바꾸고 다음 단계를 깨운다." },
+  ]}
+/>
+
+## 서명이 하는 일
+
+서명이 무엇을 막는지 직접 확인해 보려고 API 서버와 저장소를 한 프로세스에 흉내 낸 작은 서버를 만들었다. API 쪽은 서명을 만들고, 저장소 쪽은 사용자 DB를 전혀 모른 채 서명만 다시 계산해 본다.
+
+```js
+// upload-server.mjs 일부: 서명 만들기와 검사하기
+const SECRET = "storage-shared-secret";          // API 서버와 저장소만 아는 비밀
+const sign = (method, path, expires, maxBytes, contentType) =>
+  crypto.createHmac("sha256", SECRET)
+    .update([method, path, expires, maxBytes, contentType].join("\n"))
+    .digest("hex");
+
+// API 서버: 로그인한 사용자에게 10분짜리 주소를 준다
+const path = `/raw/${videoId}.mp4`;
+const expires = Math.floor(Date.now() / 1000) + 600;
+const sig = sign("PUT", path, expires, 1_073_741_824, "video/mp4");
+
+// 저장소: 들어온 요청으로 서명을 다시 계산해 비교한다
+const want = Buffer.from(sign("PUT", url.pathname, expires, maxBytes, req.headers["content-type"]), "hex");
+if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return json(res, 403, { error: "SignatureDoesNotMatch" });
+if (Date.now() / 1000 > expires) return json(res, 403, { error: "Request has expired" });
+```
+
+HMAC은 비밀 키와 메시지를 섞어 만든 지문이다. 메시지가 한 글자만 달라도 지문이 완전히 바뀌고, 비밀 키 없이는 맞는 지문을 만들 수 없다. 비교에 `timingSafeEqual`을 쓴 이유는 앞 글자부터 비교하다 다르면 바로 멈추는 방식이 걸린 시간으로 몇 글자가 맞았는지 흘리기 때문이다.
+
+주소를 받아 18MB짜리 시험 영상을 올리고, 주소를 이리저리 고쳐 봤다.
+
+```bash
+# 로그인한 사용자로 업로드 주소를 받는다
+curl -s -X POST http://127.0.0.1:8090/api/videos -H 'Authorization: Bearer user-42'
+# 받은 주소로 그대로 올린다
+curl -s -X PUT "http://127.0.0.1:8090$U" -H 'Content-Type: video/mp4' --data-binary @original.mp4
+# 영상 번호만 바꿔서, 최대 크기를 10GB로 바꿔서, 형식을 HTML로 바꿔서 올려 본다
+curl -s -X PUT "http://127.0.0.1:8090${U/9002/9003}" -H 'Content-Type: video/mp4' --data-binary @original.mp4
+```
+
+```text
+/raw/9002.mp4?expires=1792578853&maxBytes=1073741824&sig=a6b4de48895878f1f6d5b916b3783ae3548ecfa940a26238c2b378efd9ed58da
+--- ok
+{"stored":"/raw/9002.mp4","bytes":18060218} 201
+--- other key
+{"error":"SignatureDoesNotMatch"} 403
+--- bigger maxBytes
+{"error":"SignatureDoesNotMatch"} 403
+--- html
+{"error":"SignatureDoesNotMatch"} 403
+--- expired
+{"error":"Request has expired"} 403
+```
+
+그대로 쓴 주소만 201이다. 경로를 남의 영상 번호로 바꾸거나, 크기 한도를 늘리거나, `Content-Type`을 `text/html`로 바꾸면 서명이 맞지 않아 403이다. 형식을 서명에 넣은 데는 이유가 있다. 누군가 HTML 파일을 우리 도메인에 올려 두면 그 주소가 피싱 페이지가 된다. 만료 시각이 지난 주소(마지막 줄)도 거절했다.
+
+<UrlAnatomy
+  caption="서명된 업로드 주소를 조각으로 읽기"
+  base="PUT /raw/9002.mp4"
+  params={[
+    { key: "expires", value: "1792578853", title: "만료 시각", description: "유닉스 시각(초)이다. 이 시각이 지나면 저장소가 거절한다. 업로드에 걸리는 시간보다 조금 길게, 보통 몇 분에서 한 시간 안쪽으로 준다.", required: true },
+    { key: "maxBytes", value: "1073741824", title: "최대 크기", description: "1GiB다. 서명 안에 들어 있어서 사용자가 숫자를 키우면 서명이 깨진다.", required: true },
+    { key: "sig", value: "a6b4de48…", title: "서명", description: "메서드, 경로, 만료 시각, 최대 크기, Content-Type을 줄바꿈으로 이어 HMAC-SHA256으로 만든 값이다. 비밀 키는 API 서버와 저장소만 안다.", code: "PUT\n/raw/9002.mp4\n1792578853\n1073741824\nvideo/mp4", required: true },
+  ]}
+/>
+
+실제 S3의 서명 주소는 모양이 더 길다. `X-Amz-Algorithm`, `X-Amz-Credential`, `X-Amz-Date`, `X-Amz-Expires`, `X-Amz-SignedHeaders`, `X-Amz-Signature` 같은 쿼리 값이 붙고, 서명 버전 4 기준으로 유효 기간은 최대 7일이다. 생각은 같다. 무엇을 서명에 넣느냐가 무엇을 막느냐를 정한다.
+
+현장에서 자주 하는 실수가 몇 가지 있다.
+
+- 만료를 너무 길게 준다. 주소가 로그나 공유 링크로 새면 그 시간 동안 누구나 쓴다. 업로드에 필요한 만큼만 준다.
+- 크기를 막지 못한다. S3의 서명된 PUT 주소는 크기 범위를 강제하지 못한다(정확한 `Content-Length`를 서명 헤더에 넣으면 그 크기만 받게 할 수는 있다). 범위를 걸려면 POST 정책의 `content-length-range`를 쓰거나, 올라온 뒤 크기를 검사해 지운다.
+- 올라왔다고 믿는다. 앱이 "다 올렸다"고 알려 오는 것만 믿으면 안 된다. 저장소의 완료 이벤트나 `HEAD` 요청으로 정말 있는지, 크기가 맞는지 확인한 뒤 상태를 바꾼다.
+- 서명 주소를 받는 API에 제한이 없다. 주소 발급 자체에 [요청 수 제한](/posts/sd-rate-limiter-design)과 사용자별 하루 용량 한도를 건다.
+
+## 끊기면 처음부터 다시 올려야 할까
+
+서명된 주소로 PUT 한 번에 1GB를 올리면 99%에서 끊겨도 처음부터다. 그래서 큰 파일은 조각으로 나눠 올린다. 조각 업로드(멀티파트 업로드)는 세 단계다. 업로드 세션을 열어 번호를 받고, 조각마다 번호를 붙여 따로 올리고, 다 올리면 "이 번호들을 이 순서로 합쳐라"라고 마무리한다. 조각을 여러 개 동시에 올리면 회선 하나를 꽉 채우기도 쉽다.
+
+로컬 서버에 세션, 조각 받기, 받은 조각 조회, 합치기 네 개의 API를 붙이고 클라이언트를 만들었다. 18MB 파일을 4MiB 조각 다섯 개로 나눠 세 개씩 동시에 올리다가, 4번 조각 앞에서 네트워크가 끊긴다고 쳤다.
+
+```js
+// resumable-client.mjs 일부: 끊긴 뒤 서버에 받은 조각을 묻고 빠진 것만 올린다
+const { received } = await (await fetch(`${BASE}/api/uploads/${uploadId}`)).json();
+const missing = all.filter((n) => !received.includes(n));
+for (const n of missing) await putPart(n);
+await fetch(`${BASE}/api/uploads/${uploadId}/complete`, {
+  method: "POST",
+  body: JSON.stringify({ parts: all, sha256 }),     // 순서와 전체 파일의 해시를 함께 보낸다
+});
+```
+
+```text
+upload c5c6d660: 18060218 bytes -> 5 parts of 4194304
+  part 1 ok etag=aa55e85a
+  ! network lost before part 4
+  part 3 ok etag=d0a10088
+resume: server has [1,3], missing [2,4,5]
+  part 2 ok etag=8c9105b0
+  part 2 ok
+  part 4 ok
+  part 5 ok
+retry part 2 -> { part: 2, etag: '8c9105b0' }
+complete: 200 { bytes: 18060218, sha256: 'fc3211189b55d21f…' }
+```
+
+다시 연결된 클라이언트는 서버에 받은 조각을 물어 `[1,3]`을 듣고 빠진 2, 4, 5만 올렸다. 출력에 재미있는 장면이 하나 있다. 2번 조각은 끊기기 전에 이미 출발해서, 클라이언트가 "빠졌다"고 판단한 직후에 늦게 도착했다(`part 2 ok etag=8c9105b0`). 그런데 클라이언트는 2번을 한 번 더 올렸다. 같은 번호의 조각을 다시 받으면 덮어쓰기만 하도록 서버를 만들었기 때문에 결과는 똑같다. 응답이 유실돼 재시도하는 일은 늘 생기니, 조각 올리기는 몇 번을 반복해도 같은 결과가 나와야 한다. 이런 성질을 멱등성이라고 하고, 일반적인 API에서 같은 요청의 중복을 막는 방법은 [멱등성 키 구현](/posts/idempotency-key)에 있다.
+
+마무리 요청에 전체 파일의 SHA-256을 함께 보냈다. 서버가 합친 결과의 해시와 비교해서, 조각 순서가 바뀌었거나 중간에 깨진 조각이 섞였으면 거절한다.
+
+<AlgoTrace
+  caption="조각 다섯 개를 올리다 끊기고 이어 올린다"
+  cells={["part 1", "part 2", "part 3", "part 4", "part 5"]}
+  memoryLabel="서버가 받은 조각"
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "세 조각을 동시에 보낸다. 1번이 먼저 도착한다." },
+    { pointer: 3, memory: ["1", "3"], caption: "4번을 보내기 전에 연결이 끊긴다. 3번은 도착했고 2번은 아직 가는 중이다." },
+    { pointer: 1, memory: ["1", "3", "2"], caption: "다시 연결해 받은 조각을 물으니 [1, 3]이었다. 그 사이 늦게 출발한 2번이 도착한다." },
+    { pointer: 1, memory: ["1", "3", "2"], caption: "클라이언트는 2번을 한 번 더 보낸다. 같은 번호는 덮어쓰니 결과가 같다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["1", "3", "2", "4", "5"], caption: "4, 5번을 마저 올리고 합친다. 전체 해시가 맞아서 완료된다." },
+  ]}
+/>
+
+실제 서비스에서는 직접 만들지 않고 저장소가 주는 기능을 쓴다. S3의 멀티파트 업로드는 조각이 최소 5MiB(마지막 조각 제외), 최대 1만 개라서 조각 크기를 파일 크기에 맞춰 정해야 한다. 위 실험의 4MiB는 조각 수를 보기 좋게 맞추려고 고른 값이다. 저장소에 묶이지 않는 공개 규약으로는 tus가 있다. 어느 쪽이든 세 가지를 지킨다.
+
+- 업로드 세션 번호를 앱이 저장해 둔다. 앱이 꺼졌다 켜져도 같은 세션으로 이어 가야 한다.
+- 다 끝나지 않은 세션은 일정 기간 뒤 지운다. 마무리되지 않은 조각도 저장 요금이 나간다. S3는 수명 주기 규칙으로 완료되지 않은 멀티파트 업로드를 며칠 뒤 정리하게 할 수 있다.
+- 업로드는 가까운 곳에서 받는다. 사용자에게 가까운 엣지에서 받아 빠른 사설망으로 원본 지역에 보내는 업로드 가속 기능이 있다. 엣지가 무엇인지는 [CDN 엣지와 애니캐스트](/posts/cdn-edge-anycast)에서 봤다.
+
+## 원본을 그대로 틀면 안 되는 이유
+
+올라온 원본을 그대로 틀어 주면 안 될까. 시험 영상을 ffprobe로 열어 보면 답이 보인다.
+
+```bash
+# 원본의 코덱, 해상도, 비트레이트를 본다
+ffprobe -v error -show_entries format=duration,size,bit_rate:stream=codec_name,width,height,bit_rate -of default=nw=1 original.mp4
+```
+
+```text
+codec_name=h264
+width=1920
+height=1080
+bit_rate=11877836
+codec_name=aac
+bit_rate=152528
+duration=12.000000
+size=18060218
+bit_rate=12040145
+```
+
+12초에 18MB, 초당 약 12메가비트다. 휴대폰 원본은 이 정도가 흔하다. 초당 3메가비트밖에 안 나오는 회선에서는 1초 분량을 받는 데 4초가 걸리니 계속 멈춘다. 게다가 원본의 형식은 기기마다 제각각이다. 아이폰은 HEVC로, 어떤 카메라는 MOV 파일로 찍는다. 그래서 원본을 받아 정해진 형식과 여러 화질로 다시 만드는 일, 트랜스코딩을 한다.
+
+두 용어를 구분해 두면 편하다. 컨테이너는 상자다. MP4, MOV, WebM처럼 영상 트랙, 음성 트랙, 자막, 메타데이터를 한 파일에 담는 형식이다. 코덱은 상자 안 내용물을 줄이는 방법이다. 영상은 H.264, HEVC(H.265), VP9, AV1, 음성은 AAC, Opus 같은 것이 있다. 위 원본은 MP4 상자에 H.264 영상과 AAC 음성이 들어 있다. 같은 MP4라도 코덱이 다르면 못 트는 기기가 있다.
+
+시험 영상을 해상도별로 비트레이트를 정해 인코딩했다. 이렇게 해상도와 비트레이트를 짝지은 목록을 비트레이트 사다리라고 부른다.
+
+```text
+1920,1080,5214139
+1280,720,2948956
+854,480,1481194
+640,360,845360
+```
+
+```text
+8026866 final-1080.mp4
+4629122 final-720.mp4
+2427107 final-480.mp4
+1473264 final-360.mp4
+194296 audio.m4a
+15963 thumb.jpg
+```
+
+1080p가 5.2Mbps, 360p는 0.85Mbps다. 같은 12초가 8MB에서 1.5MB까지 내려간다. 보는 사람의 회선에 맞는 화질을 골라 주는 일은 다음 글에서 보고, 여기서는 이 파일들을 만드는 일에 집중한다. 사다리의 값은 내가 정한 예시다. 실제 서비스는 콘텐츠 종류(애니메이션, 스포츠)마다 다르게 잡고, 화면이 단순한 영상은 같은 화질을 더 낮은 비트레이트로 낸다.
+
+사다리 전체의 크기도 따져 둔다. 위 예에서 음성이 들어간 네 화질 파일을 합치면 16.6MB로 원본 18MB에 맞먹는다. 원본까지 보관하면 저장량은 두 배 가까이 된다. 저장 비용은 다음 글에서 다시 본다.
+
+## 일을 그래프로 적는다
+
+영상 하나를 처리하는 일은 화질 네 개만이 아니다. 파일이 멀쩡한지 검사하고, 음성을 따로 인코딩하고, 미리보기 그림(썸네일)을 뽑고, 서비스에 따라 워터마크를 넣고, 마지막에 영상과 음성을 묶는다. 이 일들은 순서가 있는 것도 있고 동시에 해도 되는 것도 있다. 검사는 맨 처음이어야 하고, 묶기는 화질과 음성이 다 끝난 뒤여야 한다. 화질 네 개와 썸네일은 서로 상관없다.
+
+이런 관계는 방향 있는 그래프로 적는다. 화살표는 "이게 끝나야 저걸 시작한다"는 뜻이고, 화살표를 따라가다 제자리로 돌아오는 고리가 없어야 한다. 고리가 있으면 서로가 서로를 기다려 영원히 시작하지 못한다. 이런 그래프를 DAG(Directed Acyclic Graph, 방향 비순환 그래프)라고 한다.
+
+<ConceptDiagram
+  caption="영상 하나를 처리하는 작업 그래프"
+  width={420}
+  height={300}
+  nodes={[
+    { id: "inspect", label: "inspect", sub: "검사", x: 60, y: 150 },
+    { id: "audio", label: "audio", sub: "AAC 128k", x: 180, y: 35 },
+    { id: "v1080", label: "v1080", x: 180, y: 90 },
+    { id: "v720", label: "v720", x: 180, y: 145 },
+    { id: "v480", label: "v480", x: 180, y: 200 },
+    { id: "v360", label: "v360", x: 180, y: 255 },
+    { id: "thumb", label: "thumb", sub: "썸네일", x: 300, y: 255 },
+    { id: "package", label: "package", sub: "묶기", x: 300, y: 120 },
+    { id: "notify", label: "notify", x: 375, y: 190, w: 70 },
+  ]}
+  edges={[
+    { from: "inspect", to: "audio" },
+    { from: "inspect", to: "v1080" },
+    { from: "inspect", to: "v720" },
+    { from: "inspect", to: "v480" },
+    { from: "inspect", to: "v360" },
+    { from: "inspect", to: "thumb" },
+    { from: "audio", to: "package" },
+    { from: "v1080", to: "package" },
+    { from: "v720", to: "package" },
+    { from: "v480", to: "package" },
+    { from: "v360", to: "package" },
+    { from: "package", to: "notify" },
+    { from: "thumb", to: "notify" },
+  ]}
+/>
+
+그래프를 코드로 적으면 이렇다. 각 작업에 선행 작업 목록을 붙이고, 작업자 N명이 "선행 작업이 다 끝난 작업"을 하나씩 집어 간다.
+
+```js
+// dag.mjs 일부: 작업과 선행 작업을 적는다. 각 작업은 실제 ffmpeg 명령이다
+const dag = {
+  inspect: { deps: [], job: () => run("ffprobe", ["-v", "error", "-show_format", SRC]) },
+  audio:   { deps: ["inspect"], job: () => ff("-i", SRC, "-vn", "-c:a", "aac", "-b:a", "128k", `${OUT}/audio.m4a`) },
+  v1080:   { deps: ["inspect"], job: enc(1080, 5000) },
+  v720:    { deps: ["inspect"], job: enc(720, 2800) },
+  v480:    { deps: ["inspect"], job: enc(480, 1400) },
+  v360:    { deps: ["inspect"], job: enc(360, 800) },
+  thumb:   { deps: ["inspect"], job: () => ff("-ss", "3", "-i", SRC, "-frames:v", "1", "-vf", "scale=-2:360", `${OUT}/thumb.jpg`) },
+  package: { deps: ["audio", "v1080", "v720", "v480", "v360"], job: muxAll },
+  notify:  { deps: ["package", "thumb"], job: async () => {} },
+};
+
+// 의존성이 풀린 작업을 빈 작업자 수만큼 시작한다
+const ready = Object.keys(dag).filter((k) => !done.has(k) && !running.has(k) && dag[k].deps.every((d) => done.has(d)));
+```
+
+작업자 한 명이 기계 한 대라고 치려고 ffmpeg마다 `-threads 1`로 CPU 하나만 쓰게 했다. 4코어 컨테이너에서 작업자 1명과 4명으로 돌렸다.
+
+```text
+    0ms start inspect
+   76ms done  inspect
+   76ms start audio
+  390ms done  audio
+  390ms start v1080
+13236ms done  v1080
+13236ms start v720
+21474ms done  v720
+21475ms start v480
+27694ms done  v480
+27694ms start v360
+32453ms done  v360
+...
+total 32908ms with 1 workers
+```
+
+```text
+    1ms start inspect
+   71ms done  inspect
+   72ms start audio
+   74ms start v1080
+   76ms start v720
+   78ms start v480
+  339ms done  audio
+  339ms start v360
+ 5117ms done  v360
+ 5118ms start thumb
+ 5236ms done  thumb
+ 5941ms done  v480
+ 8394ms done  v720
+13195ms done  v1080
+13195ms start package
+13512ms done  package
+13513ms start notify
+13513ms done  notify
+total 13513ms with 4 workers
+```
+
+혼자 하면 33초, 넷이 하면 13.5초다. 넷이 하는 쪽의 시간 기록을 따라가 보자.
+
+<AlgoTrace
+  caption="작업자 넷이 그래프를 따라 일을 집어 간다"
+  cells={["inspect", "audio", "v1080", "v720", "v480", "v360", "thumb", "package"]}
+  memoryLabel="지금 일하는 작업자"
+  steps={[
+    { pointer: 0, memory: ["inspect"], caption: "0ms. 선행 작업이 없는 검사만 시작할 수 있다." },
+    { pointer: 2, found: [0], memory: ["audio", "v1080", "v720", "v480"], caption: "71ms. 검사가 끝나 여섯 개가 풀렸다. 빈자리 넷이 앞에서부터 집어 간다." },
+    { pointer: 5, found: [0, 1], memory: ["v1080", "v720", "v480", "v360"], caption: "339ms. 음성이 끝난 자리를 360p가 채운다." },
+    { pointer: 6, found: [0, 1, 5, 6], memory: ["v1080", "v720", "v480"], caption: "5.2초. 360p와 썸네일이 끝났다. 더 집을 일이 없어 한 자리가 논다." },
+    { pointer: 2, found: [0, 1, 3, 4, 5, 6], memory: ["v1080"], caption: "8.4초. 720p까지 끝났다. 묶기는 1080p를 기다린다." },
+    { pointer: 7, found: [0, 1, 2, 3, 4, 5, 6, 7], memory: ["package"], caption: "13.2초. 1080p가 끝나야 묶을 수 있다. 전체 시간은 가장 긴 줄이 정했다." },
+  ]}
+/>
+
+## 가장 긴 줄이 전체 시간을 정한다
+
+작업자를 넷에서 백으로 늘리면 더 빨라질까. 아니다. 위 기록에서 5초 이후 작업자들이 놀고 있었다. 묶기는 1080p를 기다려야 하고, 1080p는 혼자 13초가 걸린다. 그래프에서 시작부터 끝까지 시간이 가장 오래 걸리는 경로를 임계 경로라고 한다. 작업자가 무한해도 전체 시간은 임계 경로보다 짧아지지 않는다.
+
+임계 경로를 줄이려면 가장 긴 작업 자체를 쪼갠다. 영상은 프레임을 하나하나 따로 저장하지 않는다. 가끔 혼자서 그려지는 완전한 프레임(키프레임 또는 I 프레임)을 두고, 그 사이 프레임은 앞 프레임과의 차이만 저장한다. 키프레임 하나와 그 뒤 차이 프레임들의 묶음을 GOP(Group of Pictures)라고 한다. 차이 프레임은 앞 프레임 없이는 그릴 수 없으니, 영상을 자를 때는 키프레임 경계에서만 잘라야 한다.
+
+시험 원본의 키프레임 위치를 봤다.
+
+```bash
+# 키프레임만 골라 표시 시각을 출력한다
+ffprobe -v error -select_streams v -skip_frame nokey -show_entries frame=pts_time -of default=nw=1:nk=1 original.mp4
+```
+
+```text
+0.000000 1.000000 2.000000 3.000000 4.000000 5.000000 6.000000 7.000000 8.000000 9.000000 10.000000 11.000000
+```
+
+1초마다 키프레임이 있다. 이 경계에서 재인코딩 없이 3초 단위로 자르고, 조각 넷을 동시에 1080p로 인코딩한 뒤 이어 붙였다.
+
+```js
+// gop-split.mjs 일부
+await ff("-i", SRC, "-an", "-c", "copy", "-f", "segment", "-segment_time", "3", "-reset_timestamps", "1", "gop/part%02d.mp4");
+await Promise.all(parts.map((p) => ff("-i", `gop/${p}`, "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-b:v", "5000k", /* … */ `gop/enc-${p}`)));
+await ff("-f", "concat", "-safe", "0", "-i", "gop/list.txt", "-c", "copy", "gop/v1080.mp4");
+```
+
+```text
+split into 4 parts in 99ms
+  part03.mp4 encoded in 4432ms
+  part02.mp4 encoded in 5451ms
+  part01.mp4 encoded in 5456ms
+  part00.mp4 encoded in 6109ms
+parallel encode 6109ms
+concat 223ms, duration 12.000000s
+```
+
+13.2초 걸리던 1080p가 자르기, 동시 인코딩, 붙이기를 합쳐 6.4초가 됐다. 이어 붙인 결과도 정확히 12초다. 네 배가 아니라 두 배 남짓 빨라진 것은 코어 넷을 서로 나눠 쓴 데다 앞 조각이 더 길었기 때문이다. 실제 서비스라면 조각마다 다른 기계에 맡긴다.
+
+쪼개면 공짜는 아니다. 조각마다 인코더가 앞뒤 사정을 모르고 따로 비트를 배분하니 경계에서 화질이 살짝 튈 수 있고, 조각 수만큼 작업 관리가 늘어난다. 그래서 짧은 영상은 통째로, 긴 영상만 쪼갠다. 그리고 1080p를 쪼개고 나면 임계 경로는 다음으로 긴 720p로 옮겨 간다. 아래에서 직접 계산해 보자.
+
+작업 목록 `[이름, 걸리는 ms, 선행 작업 이름들]`을 받아 작업자가 무한할 때의 `[전체 시간, 임계 경로]`를 돌려주는 함수를 만든다. 선행 작업 중 가장 늦게 끝나는 것이 그 작업의 시작 시각이다. 같은 시각에 끝나는 선행 작업이 여럿이면 목록에서 먼저 나온 것을 경로로 고른다.
+
+<CodePlayground
+  caption="트랜스코딩 그래프의 임계 경로"
+  functionName="criticalPath"
+  initialCode={`function criticalPath(tasks) {
+  // tasks: [[name, ms, [deps...]], ...]
+  // 반환: [전체 ms, [시작부터 끝까지 가장 긴 경로의 작업 이름들]]
+  return [0, []];
+}`}
+  solution={`function criticalPath(tasks) {
+  const byName = new Map(tasks.map((t) => [t[0], t]));
+  const finish = new Map();
+  const from = new Map();
+  function end(name) {
+    if (finish.has(name)) return finish.get(name);
+    const [, ms, deps] = byName.get(name);
+    let start = 0, prev = null;
+    for (const d of deps) {
+      const e = end(d);
+      if (e > start) { start = e; prev = d; }
+    }
+    finish.set(name, start + ms);
+    from.set(name, prev);
+    return start + ms;
+  }
+  let last = null, total = 0;
+  for (const [name] of tasks) {
+    const e = end(name);
+    if (e > total) { total = e; last = name; }
+  }
+  const path = [];
+  for (let n = last; n !== null; n = from.get(n)) path.unshift(n);
+  return [total, path];
+}`}
+  tests={[
+    {
+      label: "본문의 그래프",
+      args: [[["inspect", 70, []], ["audio", 270, ["inspect"]], ["v1080", 13120, ["inspect"]], ["v720", 8320, ["inspect"]], ["v480", 5860, ["inspect"]], ["v360", 4780, ["inspect"]], ["thumb", 120, ["inspect"]], ["package", 320, ["audio", "v1080", "v720", "v480", "v360"]], ["notify", 10, ["package", "thumb"]]]],
+      expected: [13520, ["inspect", "v1080", "package", "notify"]],
+    },
+    {
+      label: "1080p를 네 조각으로 쪼갠 뒤",
+      args: [[["inspect", 70, []], ["split", 100, ["inspect"]], ["p0", 6100, ["split"]], ["p1", 5450, ["split"]], ["p2", 5450, ["split"]], ["p3", 4430, ["split"]], ["concat", 220, ["p0", "p1", "p2", "p3"]], ["v720", 8320, ["inspect"]], ["audio", 270, ["inspect"]], ["package", 320, ["concat", "v720", "audio"]]]],
+      expected: [8710, ["inspect", "v720", "package"]],
+    },
+    {
+      label: "시작이 둘인 그래프",
+      args: [[["a", 5, []], ["b", 3, ["a"]], ["c", 4, ["b"]], ["d", 20, []], ["e", 1, ["c", "d"]]]],
+      expected: [21, ["d", "e"]],
+    },
+  ]}
+/>
+
+두 번째 테스트가 이 절의 요점이다. 1080p를 쪼개자 전체 시간이 13.5초에서 8.7초로 줄었지만 이제 720p가 발목을 잡는다. 임계 경로는 하나를 줄이면 다른 곳으로 옮겨 간다.
+
+## 작업자에게 일을 나눠 주는 쪽
+
+영상이 하루 20만 개면 그래프도 20만 개고 작업은 그 몇 배다. 작업을 누가 어느 기계에 줄지 정하는 부분을 세 조각으로 나눠 생각하면 편하다.
+
+- 그래프 스케줄러: 영상마다 그래프를 펼쳐서 선행 작업이 끝난 작업을 작업 큐에 넣는다. 위 코드의 `ready` 계산이 이 일이다.
+- 작업 큐: 처리할 작업이 줄 서는 곳. 우선순위를 둘 수 있다. 짧은 영상, 유료 채널, 화질 낮은 것부터 먼저 처리하면 "일단 볼 수 있게 되기"까지 시간이 줄어든다. 360p가 먼저 나오면 1080p가 만들어지는 동안에도 영상을 공개할 수 있다.
+- 작업자: 큐에서 작업을 꺼내 실행하고 결과를 저장한다. 인코딩용(CPU나 GPU가 센 기계), 썸네일용(가벼운 기계)처럼 작업 종류마다 다른 기계를 둘 수 있다.
+
+큐와 작업자 사이에서 생기는 일은 [메시지 큐 기초](/posts/message-queue-basics)에서 본 것과 같다. 작업자가 작업을 꺼내면 큐는 그 작업을 잠시 안 보이게 하고, 작업자가 끝났다고 확인(ack)하면 지운다. 작업자가 인코딩 도중 죽으면 확인이 오지 않으니 시간이 지나 작업이 다시 보이고 다른 작업자가 가져간다.
+
+그래서 작업 하나는 두 번 실행될 수 있다고 가정하고 만든다. 출력 경로를 `videos/9002/720p.mp4`처럼 작업마다 정해진 이름으로 두면 두 번 실행돼도 같은 파일을 덮어쓸 뿐이다. 반대로 결과를 "새 파일 하나 추가"로 만들면 재실행마다 파일이 늘어난다.
+
+<NetworkTopology
+  caption="올리기부터 공개까지의 전체 흐름"
+  width={420}
+  height={330}
+  zones={[
+    { id: "ingest", label: "받기", x: 90, y: 10, w: 140, h: 150, tone: "private" },
+    { id: "work", label: "트랜스코딩", x: 240, y: 10, w: 170, h: 310, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱", x: 40, y: 80, icon: "client" },
+    { id: "api", label: "API", x: 160, y: 45, icon: "server" },
+    { id: "raw", label: "원본 저장소", x: 160, y: 125, icon: "db" },
+    { id: "meta", label: "메타 DB", x: 90, y: 230, icon: "db" },
+    { id: "q", label: "작업 큐", x: 300, y: 50, icon: "switch" },
+    { id: "wk", label: "작업자들", sub: "ffmpeg", x: 300, y: 135, icon: "container" },
+    { id: "out", label: "결과 저장소", x: 300, y: 220, icon: "db" },
+    { id: "done", label: "완료 큐", x: 300, y: 295, icon: "switch" },
+    { id: "cdn", label: "CDN", x: 380, y: 220, icon: "internet", w: 50 },
+  ]}
+  links={[
+    { from: "app", to: "api" },
+    { from: "app", to: "raw" },
+    { from: "api", to: "meta" },
+    { from: "raw", to: "q" },
+    { from: "q", to: "wk" },
+    { from: "wk", to: "out" },
+    { from: "wk", to: "done" },
+    { from: "done", to: "meta" },
+    { from: "out", to: "cdn", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "api", "meta"], packet: "새 영상", title: "영상 행을 만들고 주소를 받는다", detail: "메타 DB에 uploading 상태로 적고 서명된 주소를 돌려준다." },
+    { path: ["app", "raw"], packet: "parts", title: "조각으로 바로 올린다", detail: "끊기면 빠진 조각만 다시 올린다. 바이트는 API를 지나가지 않는다." },
+    { path: ["raw", "q"], packet: "uploaded", title: "완료 이벤트가 그래프를 펼친다", detail: "스케줄러가 검사 작업부터 작업 큐에 넣는다." },
+    { path: ["q", "wk", "out"], packet: "720p", title: "작업자가 꺼내 인코딩한다", detail: "결과는 영상 번호와 화질로 정해진 경로에 쓴다. 다시 실행돼도 덮어쓸 뿐이다." },
+    { path: ["wk", "done", "meta"], packet: "ready", title: "완료를 알린다", detail: "완료 큐의 소비자가 메타 DB 상태를 ready로 바꾸고 올린 사람에게 알린다." },
+    { path: ["out", "cdn"], packet: "segments", title: "보는 쪽으로 넘긴다", detail: "결과물을 CDN이 가져갈 수 있게 된다. 다음 글의 출발점이다." },
+  ]}
+/>
+
+메타 DB의 상태는 `uploading → uploaded → processing → ready`로 흐르고, 실패하면 `failed`다. 화면은 이 상태를 보고 "처리 중" 표시를 띄운다. 완료 알림을 작업자가 메타 DB에 직접 쓰지 않고 완료 큐를 거치게 하면, DB가 잠깐 느려져도 인코딩 기계가 기다리지 않는다.
+
+## 실패를 두 종류로 나눈다
+
+트랜스코딩은 실패가 잦은 일이다. 기계가 죽고, 디스크가 차고, 이상한 파일이 들어온다. 실패는 다시 하면 되는 것과 다시 해도 안 되는 것으로 나눈다.
+
+다시 하면 되는 실패는 작업자가 죽거나, 저장소 요청이 잠깐 실패하거나, 기계가 모자란 경우다. 큐가 작업을 다시 내주고, 원본과 중간 결과(쪼갠 GOP 조각, 다 만든 화질)는 임시 저장소에 남아 있으니 실패한 작업만 다시 돌린다. 1080p 조각 하나가 실패했다고 영상 전체를 처음부터 하지 않는 것이 그래프로 나눈 덕이다. 재시도 횟수는 정해 둔다. 같은 작업이 다섯 번 실패하면 그건 일시적인 문제가 아니다.
+
+다시 해도 안 되는 실패는 파일 자체가 잘못된 경우다. 원본 앞부분만 400바이트 남긴 파일과, 동영상이 아닌 파일을 검사해 봤다.
+
+```bash
+# 잘린 파일과 동영상이 아닌 파일을 검사한다
+head -c 400 original.mp4 > broken.mp4
+ffprobe -hide_banner broken.mp4; echo "exit=$?"
+printf 'hello' > notvideo.mp4
+ffprobe -hide_banner notvideo.mp4; echo "exit=$?"
+```
+
+```text
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x55fe336d6700] moov atom not found
+broken.mp4: Invalid data found when processing input
+exit=1
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x55567981a700] Format mov,mp4,m4a,3gp,3g2,mj2 detected only with low score of 1, misdetection possible!
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x55567981a700] moov atom not found
+notvideo.mp4: Invalid data found when processing input
+exit=1
+```
+
+`moov atom not found`가 볼 곳이다. MP4는 어디에 어떤 프레임이 있는지 적은 목차(`moov` 상자)가 있어야 열리는데, 촬영 도중 앱이 죽거나 업로드가 잘리면 이 목차가 없다. 이런 파일은 백 번 다시 돌려도 같은 결과다. 그래서 그래프 맨 앞에 검사 작업을 두고, 여기서 실패하면 재시도하지 않고 상태를 `failed`로 바꿔 사용자에게 "파일을 열 수 없다"고 알린다. 맨 앞에서 거르면 비싼 인코딩 기계를 낭비하지 않는다.
+
+검사에서 확인하면 좋은 것이 몇 가지 더 있다. 길이(서비스 한도를 넘는지), 해상도(너무 작거나 비정상적으로 크지 않은지), 코덱(우리 작업자가 읽을 수 있는지)이다. 동영상 파일은 복잡한 형식이라 디코더의 보안 취약점이 종종 나온다. 작업자는 권한이 적은 격리된 환경에서 돌리고, 사용자가 올린 파일이 다른 작업에 영향을 주지 않게 한다.
+
+## 다음 글: 만든 파일을 보는 사람에게
+
+정리하면 올리기 쪽은 세 가지 결정으로 이뤄진다. 큰 바이트는 서명된 주소로 저장소에 바로 보낸다. 끊길 수 있으니 조각으로 나눠 올리고, 조각 올리기는 반복해도 같은 결과가 나오게 만든다. 트랜스코딩은 작업 그래프로 적어 작업자들에게 나눠 주고, 가장 긴 줄을 쪼개고, 실패는 다시 할 것과 멈출 것으로 나눈다.
+
+이제 화질별 파일이 결과 저장소에 쌓였다. [㉜ 동영상 서비스 설계 ②](/posts/sd-video-streaming-cost)에서는 이 파일을 몇 초짜리 조각으로 나눠 보내는 HLS, 회선에 맞춰 화질을 바꾸는 방법, 그리고 하루 수 페타바이트를 내보내는 CDN 비용을 줄이는 법을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 사용자가 올린 동영상 파일은 어떤 경로로 저장하나요?
+
+앱이 API 서버에서 서명된 업로드 주소를 받아 오브젝트 스토리지에 직접 올린다. 큰 바이트가 API 서버를 지나가지 않으니 API 서버는 요청 수만큼만 늘리면 된다. API 서버는 권한 확인, 메타 DB에 영상 행 만들기, 주소 서명만 맡는다. 업로드 완료는 앱의 말이 아니라 저장소 이벤트로 확인한다.
+
+### 서명된 업로드 주소는 어떻게 안전한가요?
+
+경로, 만료 시각, 크기 한도, 형식 같은 조건을 비밀 키로 HMAC 서명해 주소에 붙이고, 저장소가 같은 키로 다시 계산해 비교한다. 조건 하나만 바꿔도 서명이 맞지 않아 거절된다. 그래서 무엇을 서명에 넣느냐가 무엇을 막느냐를 정하고, 만료는 업로드에 필요한 만큼만 짧게 준다. 주소 발급 API에도 사용자별 요청 수와 용량 한도를 건다.
+
+### 1GB 업로드가 중간에 끊기면 어떻게 하나요?
+
+조각 업로드를 쓴다. 세션을 열고 조각마다 번호를 붙여 따로 올린 뒤 마지막에 순서대로 합친다. 끊기면 서버에 받은 조각 목록을 물어 빠진 것만 다시 올린다. 같은 조각을 두 번 받아도 덮어쓰도록 만들어야 응답 유실로 인한 재시도가 안전하고, 마무리할 때 전체 해시를 비교해 깨진 조각을 걸러 낸다.
+
+### 왜 트랜스코딩을 하나요?
+
+원본은 비트레이트가 높고 기기마다 코덱과 컨테이너가 제각각이다. 정해진 코덱으로 여러 해상도와 비트레이트를 만들어 두면 어느 기기에서나 틀 수 있고, 느린 회선에는 낮은 화질을 보낼 수 있다. 저장할 사다리 전체가 원본만큼 커질 수 있다는 점은 비용 계산에 넣는다.
+
+### 트랜스코딩이 너무 오래 걸립니다. 기계를 늘리면 해결되나요?
+
+작업 그래프의 임계 경로보다 짧아지지는 않는다. 보통 가장 높은 화질 인코딩이 임계 경로라서, 영상을 키프레임 경계(GOP)에서 조각내 여러 기계가 동시에 인코딩하고 다시 이어 붙인다. 쪼개면 다음으로 긴 작업이 임계 경로가 되니 그것도 본다. 낮은 화질을 먼저 처리해 일단 공개하는 우선순위도 체감 시간을 줄인다.
+
+### 인코딩하던 작업자가 죽으면 어떻게 되나요?
+
+작업 큐가 확인을 받지 못한 작업을 일정 시간 뒤 다시 내주고 다른 작업자가 처리한다. 원본과 중간 결과가 임시 저장소에 남아 있으니 실패한 작업만 다시 돌린다. 같은 작업이 두 번 실행될 수 있으니 출력 경로를 작업마다 고정해 덮어쓰게 만든다.
+
+### 깨진 파일이 올라오면요?
+
+그래프 맨 앞의 검사 작업에서 걸러 낸다. ffprobe가 `moov atom not found`처럼 파일을 열지 못하면 재시도해도 소용없으니 바로 실패로 기록하고 사용자에게 알린다. 다시 하면 되는 실패와 다시 해도 안 되는 실패를 나눠야 재시도가 비싼 인코딩 기계를 갉아먹지 않는다.
+
+### 업로드가 10배로 늘면 어디가 먼저 버거워지나요?
+
+API 서버는 바이트를 받지 않으니 비교적 덜 버겁다. 먼저 트랜스코딩 작업자와 큐 길이가 늘고 공개까지 걸리는 시간이 길어진다. 큐 길이를 보고 작업자를 자동으로 늘리고, 저화질 우선, 긴 영상 쪼개기로 지연을 줄인다. 저장량도 10배가 되니 원본 보관 기간과 사다리 구성을 다시 본다.

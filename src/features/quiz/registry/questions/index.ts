@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
@@ -17,6 +18,7 @@ import { BIG_O_NOTATION } from "./big-o-notation";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHING_STRATEGIES } from "./caching-strategies";
@@ -151,6 +153,7 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
@@ -381,6 +384,8 @@ import { SD_CHAT_CONNECTIONS } from "./sd-chat-connections";
 import { SD_CHAT_MESSAGE_STORAGE } from "./sd-chat-message-storage";
 import { SD_CHAT_PRESENCE } from "./sd-chat-presence";
 import { SD_DB_REPLICATION_INTRO } from "./sd-db-replication-intro";
+import { SD_FILE_SYNC_BLOCK_UPLOAD } from "./sd-file-sync-block-upload";
+import { SD_FILE_SYNC_CONFLICTS } from "./sd-file-sync-conflicts";
 import { SD_INTERVIEW_FRAMEWORK } from "./sd-interview-framework";
 import { SD_KV_STORE_FAILURE_HANDLING } from "./sd-kv-store-failure-handling";
 import { SD_KV_STORE_PARTITION_REPLICATION } from "./sd-kv-store-partition-replication";
@@ -401,6 +406,8 @@ import { SD_START_SINGLE_SERVER } from "./sd-start-single-server";
 import { SD_UNIQUE_ID_GENERATOR } from "./sd-unique-id-generator";
 import { SD_URL_SHORTENER_API_REDIRECT } from "./sd-url-shortener-api-redirect";
 import { SD_URL_SHORTENER_KEY_GENERATION } from "./sd-url-shortener-key-generation";
+import { SD_VIDEO_STREAMING_COST } from "./sd-video-streaming-cost";
+import { SD_VIDEO_UPLOAD_TRANSCODING } from "./sd-video-upload-transcoding";
 import { SD_WEB_CRAWLER_ARCHITECTURE } from "./sd-web-crawler-architecture";
 import { SD_WEB_CRAWLER_POLITENESS_DEDUP } from "./sd-web-crawler-politeness-dedup";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
@@ -482,6 +489,7 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  ABORT_CONTROLLER,
   ACID_TRANSACTIONS,
   ALERTING,
   ANIMATION_PATTERNS,
@@ -500,6 +508,7 @@ export const QUESTION_SETS = [
   BLOOM_FILTER,
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
+  BROWSER_STORAGE,
   BUILD_CACHING,
   CACHE_INVALIDATION,
   CACHING_STRATEGIES,
@@ -634,6 +643,7 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JAVASCRIPT_ROADMAP,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
@@ -864,6 +874,8 @@ export const QUESTION_SETS = [
   SD_CHAT_MESSAGE_STORAGE,
   SD_CHAT_PRESENCE,
   SD_DB_REPLICATION_INTRO,
+  SD_FILE_SYNC_BLOCK_UPLOAD,
+  SD_FILE_SYNC_CONFLICTS,
   SD_INTERVIEW_FRAMEWORK,
   SD_KV_STORE_FAILURE_HANDLING,
   SD_KV_STORE_PARTITION_REPLICATION,
@@ -884,6 +896,8 @@ export const QUESTION_SETS = [
   SD_UNIQUE_ID_GENERATOR,
   SD_URL_SHORTENER_API_REDIRECT,
   SD_URL_SHORTENER_KEY_GENERATION,
+  SD_VIDEO_STREAMING_COST,
+  SD_VIDEO_UPLOAD_TRANSCODING,
   SD_WEB_CRAWLER_ARCHITECTURE,
   SD_WEB_CRAWLER_POLITENESS_DEDUP,
   SDN_VXLAN_OVERLAY,

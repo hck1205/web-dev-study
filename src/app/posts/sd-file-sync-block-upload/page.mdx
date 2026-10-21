@@ -1,0 +1,473 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-file-sync-block-upload");
+
+이 시리즈에서 이 글의 자리: [㉜ 동영상 서비스 설계 ②](/posts/sd-video-streaming-cost)로 동영상 서비스를 마쳤고, 이 글부터 두 편은 구글 드라이브나 드롭박스 같은 파일 동기화 서비스를 설계한다. 이 글은 파일을 블록으로 나눠 올리고 바뀐 블록만 보내는 쪽을 맡는다. 같은 장의 다음 글 [㉞ 파일 동기화 설계 ②: 충돌, 변경 알림, 저장 공간](/posts/sd-file-sync-conflicts)이 여러 기기가 같은 파일을 고칠 때를 다루고, 그다음은 [㉟ 주변 장소 검색](/posts/sd-proximity-service)이다.
+
+노트북의 동기화 폴더에 24MB짜리 판매 기록 CSV가 있다. 가격 하나를 고치고 저장했다. 글자 수로는 10바이트가 바뀌었는데 동기화 프로그램이 24MB를 처음부터 다시 올린다. 카페 와이파이에서 1분이 걸리고, 그 사이 데스크톱과 휴대폰은 옛 파일을 들고 있다. 하루에 이 파일을 스무 번 고치면 480MB를 올리는 셈이다.
+
+면접에서 "구글 드라이브를 설계하라"는 질문이 나오면 기능은 이렇게 잡는다. 파일 올리기와 받기, 여러 기기 사이 동기화, 버전 기록, 공유, 바뀌었다는 알림. 그리고 하나가 다른 모든 것보다 앞선다. 사용자의 파일을 절대 잃어버리면 안 된다. 이 글은 폴더 하나와 서버 한 대로 시작해서, 바뀐 곳만 보내는 구조까지 간다. 기준 환경은 Node 22와 PostgreSQL 16이고 출력은 모두 실제로 돌린 결과다.
+
+## 폴더 하나와 서버 한 대로 시작하기
+
+가장 작은 버전은 웹 서버 한 대와 디스크다. 서버에 `drive/`라는 폴더를 두고, 그 아래 사용자마다 폴더를 하나씩 만든다. 사용자 42의 파일은 `drive/42/reports/sales.csv`에 들어간다. 이렇게 사용자별로 나뉜 공간을 네임스페이스라고 부른다. 네임스페이스와 그 안의 경로를 이으면 파일 하나가 정확히 하나로 정해진다.
+
+API는 셋이면 시작할 수 있다.
+
+- 올리기: 작은 파일은 요청 한 번에 본문을 담아 보낸다. 큰 파일은 세션을 열고 조각으로 나눠 이어 올린다. 이어 올리기의 원리는 [㉛ 동영상 서비스 설계 ①](/posts/sd-video-upload-transcoding)에서 직접 돌려 봤다.
+- 받기: 경로로 파일을 내려받는다.
+- 버전 목록: 한 파일의 지난 버전들을 본다.
+
+사용자가 늘면 무엇이 먼저 깨질지 숫자로 보자. 활성 사용자가 하루 500만 명이고 한 사람이 하루 파일 2개를 평균 1MB짜리로 올린다고 하자.
+
+- 올리기 요청: 500만 × 2 ÷ 86,400초 ≈ 초당 116번. 출근 시간 피크를 두 배로 잡으면 230번 남짓이다.
+- 하루 들어오는 양: 1,000만 × 1MB = 10TB.
+- 한 사람에게 15GB씩 준다면 다 채웠을 때 75PB다. 실제로 다 채우는 사람은 드물지만 저장소는 이 방향으로 자란다.
+
+요청 수는 서버 몇 대면 되는데 저장량이 문제다. 디스크 한 대는 며칠 만에 차고, 그 디스크가 죽으면 사용자의 파일이 사라진다. 그래서 파일 본문은 S3 같은 오브젝트 스토리지로 옮긴다. 여러 장비와 여러 데이터센터에 복제해 두니 디스크 한 장이 죽어도 파일이 남는다. 파일 이름, 크기, 버전 같은 정보(메타데이터)는 DB에 따로 두고, 웹 서버는 [로드 밸런서](/posts/sd-load-balancer-stateless) 뒤에 여러 대 세운다. DB는 사용자 번호로 [샤딩](/posts/sd-sharding-intro)하기 쉽다. 한 사용자의 파일은 거의 그 사용자 안에서만 찾기 때문이다.
+
+<NetworkTopology
+  caption="서버 한 대에서 나눠 맡는 구조로"
+  width={420}
+  height={260}
+  zones={[
+    { id: "one", label: "처음: 서버 한 대", x: 10, y: 10, w: 120, h: 95, tone: "neutral" },
+    { id: "svc", label: "나눈 뒤", x: 140, y: 10, w: 270, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "old", label: "web + 디스크", sub: "drive/42/…", x: 70, y: 65, icon: "server" },
+    { id: "user", label: "노트북", x: 60, y: 185, icon: "client" },
+    { id: "lb", label: "LB", x: 185, y: 185, icon: "lb" },
+    { id: "api", label: "API 서버들", x: 270, y: 120, icon: "server" },
+    { id: "meta", label: "메타 DB", sub: "사용자별 샤드", x: 365, y: 60, icon: "db" },
+    { id: "s3", label: "오브젝트 저장소", sub: "복제", x: 365, y: 185, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "old", dashed: true },
+    { from: "user", to: "lb" },
+    { from: "lb", to: "api" },
+    { from: "api", to: "meta" },
+    { from: "api", to: "s3" },
+  ]}
+  steps={[
+    { path: ["user", "old"], packet: "PUT", blocked: true, title: "한 대에 다 맡기면", detail: "디스크가 차거나 죽는 순간 그 안의 모든 사용자 파일이 위험하다." },
+    { path: ["user", "lb", "api"], packet: "PUT", title: "아무 API 서버나 받는다", detail: "API 서버는 상태가 없어서 몇 대든 늘릴 수 있다." },
+    { path: ["api", "meta"], packet: "INSERT", title: "이름과 버전은 DB에", detail: "사용자 번호로 샤드를 골라 파일 정보와 버전을 적는다." },
+    { path: ["api", "s3"], packet: "본문", title: "본문은 저장소에", detail: "여러 장비와 지역에 복제되니 디스크 한 장이 죽어도 남는다." },
+  ]}
+/>
+
+여기까지는 앞 장들에서 본 그대로다. 남은 문제는 맨 처음의 그 24MB다.
+
+## 파일을 4MiB 블록으로 자른다
+
+파일을 통째로 다루지 않고 정해진 크기의 블록으로 자른다. 드롭박스는 4MiB 블록을 쓴다고 알려져 있어서 그 값을 따랐다. 블록마다 내용의 SHA-256 해시를 계산한다. 해시는 내용이 같으면 늘 같고, 한 바이트만 달라도 완전히 달라지는 지문이다. 이 지문이 블록의 이름이 된다.
+
+판매 기록처럼 생긴 24MiB 텍스트 파일을 만들어 잘라 봤다(해시는 앞 12자리만 보인다).
+
+```js
+// blocks.mjs 일부: 4MiB씩 자르고 블록마다 SHA-256을 계산한다
+const BLOCK = 4 * 1024 * 1024;
+const h = (b) => crypto.createHash("sha256").update(b).digest("hex").slice(0, 12);
+const split = (buf) => { const out = []; for (let o = 0; o < buf.length; o += BLOCK) out.push(buf.subarray(o, o + BLOCK)); return out; };
+split(v1).forEach((b, i) => console.log(`  #${i} ${h(b)} ${b.length}`));
+```
+
+```text
+v1 blocks:
+  #0 f82553cb478c 4194304
+  #1 7f960c696206 4194304
+  #2 f58b1458d462 4194304
+  #3 ae805732595f 4194304
+  #4 a0549cdcef77 4194304
+  #5 7639bf343bcd 4194304
+```
+
+블록 여섯 개다. 이제 파일은 "이 해시들을 이 순서로 이어 붙인 것"으로 표현된다. 블록 자체는 오브젝트 스토리지에 해시를 키로 넣는다.
+
+<ConceptDiagram
+  caption="파일은 블록 해시의 목록이고, 블록은 해시로 저장된다"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "file", label: "sales.csv", sub: "버전 1, 24MiB", x: 70, y: 125, w: 100 },
+    { id: "b0", label: "#0 f825…", x: 210, y: 35, w: 90 },
+    { id: "b1", label: "#1 7f96…", x: 210, y: 95, w: 90 },
+    { id: "b2", label: "#2 f58b…", x: 210, y: 155, w: 90 },
+    { id: "bn", label: "#3~#5", x: 210, y: 215, w: 90 },
+    { id: "store", label: "오브젝트 저장소", sub: "키 = 해시", x: 350, y: 125, w: 110 },
+  ]}
+  edges={[
+    { from: "file", to: "b0", label: "순서 0" },
+    { from: "file", to: "b1" },
+    { from: "file", to: "b2" },
+    { from: "file", to: "bn" },
+    { from: "b0", to: "store" },
+    { from: "b1", to: "store" },
+    { from: "b2", to: "store" },
+    { from: "bn", to: "store" },
+  ]}
+/>
+
+블록 크기는 트레이드오프다. 작으면 조금 고쳤을 때 다시 보낼 양이 줄지만, 블록 수가 늘어 메타데이터 행과 요청 수가 많아진다. 24MiB 파일을 64KiB로 자르면 블록이 384개다. 크면 그 반대다. 4MiB 근처는 큰 파일에서 요청 수를 적게 유지하는 쪽을 고른 값이다.
+
+## 고친 곳만 다시 올린다
+
+가격 하나를 고쳤다. 9MiB 지점의 10바이트를 같은 길이의 다른 글자로 덮어썼다.
+
+```js
+// 9MiB 지점의 10바이트를 덮어쓴다 (파일 길이는 그대로)
+const v2 = Buffer.from(v1);
+v2.write("9999999.99", 9 * MiB + 100);
+```
+
+```text
+v2 blocks:
+  #0 f82553cb478c
+  #1 7f960c696206
+  #2 dfe4f7a7d5e2  <- changed
+  #3 ae805732595f
+  #4 a0549cdcef77
+  #5 7639bf343bcd
+overwrite 10 bytes: 6 blocks, 1 new, send 4.00 MiB of 24.00 MiB
+```
+
+9MiB는 8~12MiB 구간, 즉 2번 블록 안이다. 2번의 해시만 바뀌었다. 서버가 이미 나머지 다섯 블록을 갖고 있으니 2번 블록 4MiB만 보내면 된다. 24MiB를 보내던 것이 4MiB가 됐다. 이렇게 바뀐 부분만 보내는 것을 델타 동기화라고 한다.
+
+<AlgoTrace
+  caption="버전 2의 블록을 서버가 가진 해시와 비교한다"
+  cells={["#0 f825", "#1 7f96", "#2 dfe4", "#3 ae80", "#4 a054", "#5 7639"]}
+  memoryLabel="올려야 할 블록"
+  steps={[
+    { pointer: 0, memory: [], caption: "0번의 해시 f825…는 서버에 이미 있다. 건너뛴다." },
+    { pointer: 1, memory: [], caption: "1번도 같다. 아직 올릴 것이 없다." },
+    { pointer: 2, memory: ["#2 dfe4 (4MiB)"], caption: "2번의 해시가 서버에 없다. 가격을 고친 블록이다." },
+    { pointer: 4, memory: ["#2 dfe4 (4MiB)"], caption: "3, 4번은 그대로다." },
+    { pointer: 5, found: [2], memory: ["#2 dfe4 (4MiB)"], caption: "다 비교했다. 24MiB 중 4MiB만 보내면 된다." },
+  ]}
+/>
+
+이 비교를 직접 짜 보자. 서버가 가진 해시 목록, 새 버전의 블록 해시 목록, 블록마다 크기를 받아 `[올려야 할 블록 번호들, 보낼 바이트]`를 돌려준다. 새 파일 안에서 같은 블록이 두 번 나오면 한 번만 올린다.
+
+<CodePlayground
+  caption="바뀐 블록만 고르기"
+  functionName="deltaPlan"
+  initialCode={`function deltaPlan(serverHashes, newHashes, sizes) {
+  // 서버에 없는 해시의 블록만 올린다. 같은 해시는 한 번만.
+  // 반환: [[올릴 블록 번호...], 보낼 바이트 합]
+  return [[], 0];
+}`}
+  solution={`function deltaPlan(serverHashes, newHashes, sizes) {
+  const have = new Set(serverHashes);
+  const send = [];
+  let bytes = 0;
+  newHashes.forEach((h, i) => {
+    if (have.has(h)) return;
+    have.add(h);
+    send.push(i);
+    bytes += sizes[i];
+  });
+  return [send, bytes];
+}`}
+  tests={[
+    { label: "본문의 예", args: [["f8", "7f", "f5", "ae", "a0", "76"], ["f8", "7f", "df", "ae", "a0", "76"], [4194304, 4194304, 4194304, 4194304, 4194304, 4194304]], expected: [[2], 4194304] },
+    { label: "가운데 하나만 바뀜", args: [["a", "b", "c", "d"], ["a", "b", "x", "d"], [4, 4, 4, 4]], expected: [[2], 4] },
+    { label: "처음 올리는데 같은 블록이 두 번", args: [[], ["a", "a", "b"], [4, 4, 2]], expected: [[0, 2], 6] },
+    { label: "순서만 바뀜", args: [["a", "b", "c"], ["c", "b", "a"], [4, 4, 4]], expected: [[], 0] },
+    { label: "새 블록이 중복", args: [["a"], ["b", "c", "a", "c"], [4, 4, 4, 1]], expected: [[0, 1], 8] },
+  ]}
+/>
+
+네 번째 테스트처럼 순서만 바뀌면 보낼 블록이 없다. 새 해시 목록만 메타데이터로 보내면 된다.
+
+## 앞에 한 글자를 넣으면 전부 밀린다
+
+덮어쓰기는 잘 됐다. 그런데 사람이 파일을 고칠 때는 덮어쓰기보다 끼워 넣기가 많다. 맨 앞에 한 글자를 넣거나, 가운데 줄을 하나 추가하면 어떻게 될까.
+
+```text
+insert 1 byte at start: 7 blocks, 7 new, send 24.00 MiB of 24.00 MiB
+insert 200 bytes in middle: 7 blocks, 5 new, send 16.00 MiB of 24.00 MiB
+```
+
+맨 앞에 1바이트를 넣었더니 블록 일곱 개가 모두 새 블록이 됐다. 4MiB 경계가 파일 시작에서 센 위치에 고정되어 있으니, 1바이트가 밀리면 모든 블록의 내용이 1바이트씩 밀려 해시가 다 바뀐다. 가운데에 넣으면 그 뒤 블록이 전부 바뀐다. 고정 크기 블록의 약점이다.
+
+이 문제를 푸는 방법은 두 가지다. 하나는 rsync처럼 받는 쪽이 블록 지문을 주면 보내는 쪽이 파일을 한 바이트씩 밀며 같은 블록을 찾는 방법이다. 한 칸씩 미는 체크섬이 어떻게 싸게 계산되는지는 [rsync 알고리즘](/posts/rsync-algorithm)에서 자세히 봤다. 다른 하나는 경계를 위치가 아니라 내용이 정하게 하는 방법, 내용 기반 나누기(content-defined chunking)다. 파일을 한 바이트씩 읽으며 최근 몇십 바이트로 해시를 굴리고, 그 해시가 특정 모양(위 20비트가 모두 0)이 되는 곳을 경계로 삼는다. 경계가 내용에 붙어 있으니 앞에 글자를 넣어도 뒤쪽 경계는 같은 내용을 따라 같이 밀린다.
+
+```js
+// cdc.mjs 일부: gear 해시를 굴리다가 위 20비트가 0이면 자른다 (최소 256KiB, 최대 4MiB)
+hash = ((hash << 1) + GEAR[buf[i]]) >>> 0;
+const len = i - start + 1;
+if ((len >= MIN && (hash & MASK) === 0) || len >= MAX) {
+  out.push(buf.subarray(start, i + 1)); start = i + 1; hash = 0;
+}
+```
+
+```text
+v1: 15 chunks, sizes MiB [0.76, 1.09, 3.95, 0.62, 1.65, 0.85, 3.01, 3.75, 1.01, 0.35, 1.68, 1.37, 1.14, 0.56, 2.22]
+insert 1 byte at start: 15 chunks, 1 new, send 0.76 MiB
+insert 200 bytes in middle: 15 chunks, 1 new, send 3.01 MiB
+overwrite 10 bytes: 15 chunks, 1 new, send 3.01 MiB
+```
+
+같은 파일이 크기가 제각각인 조각 15개로 나뉘었다. 평균은 1.6MiB쯤이다. 맨 앞에 1바이트를 넣어도 첫 조각 하나(0.76MiB)만 새것이고, 가운데에 200바이트를 넣어도 그 자리의 조각 하나만 새것이다. 고정 블록이면 24MiB, 16MiB를 보낼 일이 0.76MiB, 3.01MiB로 줄었다.
+
+<AlgoTrace
+  caption="맨 앞에 1바이트를 넣었을 때 블록 경계"
+  cells={["고정 #0", "고정 #1", "고정 #2", "고정 #3~6", "내용 #0", "내용 #1", "내용 #2~14"]}
+  memoryLabel="새로 올릴 것"
+  steps={[
+    { pointer: 0, memory: ["고정 #0"], caption: "고정 블록은 경계가 0, 4, 8MiB…에 박혀 있다. 1바이트가 밀려 0번 내용이 바뀐다." },
+    { pointer: 1, memory: ["고정 #0", "고정 #1"], caption: "1번 블록도 앞의 1바이트를 받고 끝의 1바이트를 넘긴다. 해시가 바뀐다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["고정 #0~#6", "24MiB"], caption: "끝까지 전부 밀렸다. 고친 건 1바이트인데 다 보내야 한다." },
+    { pointer: 4, memory: ["내용 #0"], caption: "내용 기반 조각은 첫 조각에 1바이트가 늘었다. 이 조각만 해시가 바뀐다." },
+    { pointer: 6, found: [4], memory: ["내용 #0", "0.76MiB"], caption: "다음 경계는 같은 내용을 따라 1바이트 뒤로 옮겨졌을 뿐이다. 나머지 14개는 그대로다." },
+  ]}
+/>
+
+그럼 늘 내용 기반으로 자르면 될까. 대가가 있다. 경계를 찾느라 모든 바이트에서 해시를 굴리니 CPU를 더 쓰고, 조각 크기가 들쭉날쭉해서 최소·최대 크기를 정해 둬야 한다. 끼워 넣기가 드문 파일(사진, 동영상, 압축 파일)은 고정 블록으로도 충분하다. 백업 도구(restic, borg 등)는 내용 기반 나누기를 쓰고, 동기화 서비스마다 고른 방식이 다르다. 면접에서는 고정 블록으로 시작하고, 끼워 넣기에 약하다는 점과 그 대안을 말할 수 있으면 된다. 덮어쓰기 실험에서 내용 기반 쪽이 3.01MiB로 고정 블록의 4MiB보다 적게 보낸 것은 그 자리의 조각이 마침 4MiB보다 작았기 때문이다.
+
+## 압축은 블록 종류를 보고, 암호화는 그다음에
+
+보낼 블록이 정해졌으면 압축해서 보낸다. 블록 4MiB 하나를 gzip(레벨 6)으로 압축해 봤다.
+
+```js
+// compress.mjs 일부
+row("csv text", text);                       // CSV 텍스트 블록
+row("random (jpeg-like)", random);           // 이미 압축된 파일과 비슷한 무작위 바이트
+row("csv text, encrypted", encrypt(text));   // AES-256-GCM으로 먼저 암호화한 블록
+```
+
+```text
+csv text               4.00 MiB -> 0.99 MiB  (24.7%)  146ms
+random (jpeg-like)     4.00 MiB -> 4.00 MiB  (100.0%)  114ms
+csv text, encrypted    4.00 MiB -> 4.00 MiB  (100.0%)  107ms
+csv text brotli q1  -> 1.13 MiB  29ms
+csv text brotli q5  -> 0.34 MiB  137ms
+csv text brotli q9  -> 0.39 MiB  603ms
+random gzip bytes 4194304 -> 4195607
+```
+
+텍스트는 4분의 1로 줄었다. 무작위 바이트는 전혀 줄지 않고 오히려 1,303바이트 커졌다. JPEG, MP4, ZIP처럼 이미 압축된 파일이 이렇다. 그런데도 110ms의 CPU를 썼다. 그래서 파일 종류(확장자나 첫 몇 바이트)를 보고 이미 압축된 형식이면 압축을 건너뛴다. 알고리즘에 따라서도 다르다. 같은 텍스트를 brotli 품질 5로 압축하면 0.34MiB로 gzip의 3분의 1이고, 품질 1은 빠르지만 덜 줄었다. 품질 9는 품질 5보다 4배 느리면서 오히려 조금 컸다. 품질 숫자를 올린다고 늘 작아지지는 않으니 자기 데이터로 재 봐야 한다.
+
+세 번째 줄이 순서의 문제다. 암호화한 데이터는 무작위처럼 보이도록 만들어진 것이라 압축되지 않는다. 그래서 압축을 먼저 하고 암호화를 나중에 한다. 블록은 저장소에 넣기 전에 암호화해 두고, 키는 블록과 다른 곳에서 관리한다. 저장소가 털려도 블록만으로는 내용을 읽지 못하게 하려는 것이다.
+
+## 메타데이터 DB에 적는 것들
+
+블록은 오브젝트 스토리지에 있고, 어떤 파일의 몇 번째 버전이 어떤 블록들로 이뤄졌는지는 메타데이터 DB에 적는다. 이 DB는 사용자와 파일, 버전의 관계가 얽혀 있고 "새 버전을 확정할 때 다른 기기가 먼저 바꾸지 않았는지" 같은 일관성이 중요하다. 그래서 트랜잭션이 되는 관계형 DB가 잘 맞는다. PostgreSQL 16에 가장 중요한 표 네 개만 만들었다.
+
+```sql
+CREATE TABLE files (
+  file_id     bigint PRIMARY KEY,
+  owner_id    bigint NOT NULL,              -- 이 파일이 속한 사용자(네임스페이스)
+  path        text   NOT NULL,              -- /reports/sales.csv
+  latest_ver  int    NOT NULL DEFAULT 0,    -- 최신 버전 번호
+  UNIQUE (owner_id, path)
+);
+CREATE TABLE file_versions (
+  file_id    bigint NOT NULL REFERENCES files,
+  ver        int    NOT NULL,
+  size       bigint NOT NULL,
+  status     text   NOT NULL,               -- pending -> uploaded
+  device     text   NOT NULL,               -- 어느 기기에서 올렸나
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, ver)
+);
+CREATE TABLE blocks (
+  hash       text PRIMARY KEY,              -- 블록 내용의 SHA-256
+  size       int  NOT NULL,
+  stored_key text NOT NULL                  -- 오브젝트 스토리지의 키
+);
+CREATE TABLE version_blocks (
+  file_id bigint NOT NULL,
+  ver     int    NOT NULL,
+  idx     int    NOT NULL,                  -- 파일 안에서 몇 번째 블록인가
+  hash    text   NOT NULL REFERENCES blocks,
+  PRIMARY KEY (file_id, ver, idx),
+  FOREIGN KEY (file_id, ver) REFERENCES file_versions
+);
+```
+
+위 실험의 버전 1(블록 여섯 개)과 버전 2(2번만 바뀜)를 넣고 세 가지를 물었다. 데모라서 해시는 앞 12자리만 넣었다.
+
+```sql
+-- 버전 2를 다시 조립하려면 이 순서로 블록을 이어 붙인다
+SELECT idx, hash, stored_key FROM version_blocks JOIN blocks USING (hash)
+WHERE file_id = 1 AND ver = 2 ORDER BY idx;
+```
+
+```text
+ idx |     hash     |     stored_key      
+-----+--------------+---------------------
+   0 | f82553cb478c | blk/f8/f82553cb478c
+   1 | 7f960c696206 | blk/7f/7f960c696206
+   2 | dfe4f7a7d5e2 | blk/df/dfe4f7a7d5e2
+   3 | ae805732595f | blk/ae/ae805732595f
+   4 | a0549cdcef77 | blk/a0/a0549cdcef77
+   5 | 7639bf343bcd | blk/76/7639bf343bcd
+(6 rows)
+```
+
+```sql
+-- 버전 1을 가진 기기가 버전 2로 가려면 무엇을 받아야 하나
+SELECT idx, hash FROM version_blocks WHERE file_id = 1 AND ver = 2
+  AND hash NOT IN (SELECT hash FROM version_blocks WHERE file_id = 1 AND ver = 1);
+```
+
+```text
+ idx |     hash     
+-----+--------------
+   2 | dfe4f7a7d5e2
+(1 row)
+```
+
+```sql
+-- 논리 크기(버전들의 크기 합)와 실제로 저장한 블록 크기
+SELECT (SELECT sum(size) FROM file_versions) AS logical_bytes,
+       (SELECT sum(size) FROM blocks) AS stored_bytes;
+```
+
+```text
+ logical_bytes | stored_bytes 
+---------------+--------------
+      50331648 |     29360128
+(1 row)
+```
+
+받는 쪽도 바뀐 블록 하나만 받으면 된다. 마지막 결과는 다음 글로 이어진다. 버전 두 개를 합치면 48MiB인데 실제로 저장한 블록은 28MiB다. 같은 블록을 두 버전이 함께 쓰기 때문이다. 버전이 쌓일수록 이 차이가 커지고, 그만큼 저장 공간을 아낀다. 블록을 함께 쓰면 지울 때 조심해야 하는데, 그 이야기는 [㉞](/posts/sd-file-sync-conflicts)에서 한다.
+
+실서비스 표에는 사용자, 기기, 공유 권한, 작업 공간 같은 표가 더 있고, `blocks`는 사용자 범위로 나누는 경우가 많다. 이 표들을 사용자 번호로 샤딩하면 한 사용자의 질문은 한 샤드 안에서 끝난다. 자주 읽는 최신 버전의 블록 목록은 캐시에 둔다.
+
+## 올리기 한 번의 순서
+
+순서를 정리하면 이렇다. 클라이언트가 블록 해시를 계산하고, 블록 서버에 "이 중 없는 게 뭐냐"고 묻고, 없는 블록만 올리고, 마지막에 API 서버에 "이 해시들을 이 순서로 이은 것이 새 버전"이라고 확정한다. 블록 서버는 블록을 받아 압축, 암호화해 저장소에 넣는 서버다.
+
+로컬에 블록 서버와 메타데이터 API를 한 프로세스로 흉내 내는 작은 서버를 띄우고, 노트북이 버전 1을, 데스크톱이 가격을 고친 버전 2를, 휴대폰이 같은 내용을 다른 경로로 올리게 했다.
+
+```js
+// upload-client.mjs 일부
+const hashes = parts.map(sha);
+const [, { missing }] = await post("/blocks/missing", { hashes });          // 1) 서버에 없는 블록을 묻는다
+for (const h of missing) await fetch(`${BASE}/blocks/${h}`, { method: "PUT", body: parts[hashes.indexOf(h)] }); // 2) 없는 것만 올린다
+const [status, out] = await post("/files/commit", { path, base, blocks: hashes, device });   // 3) 순서를 확정한다
+```
+
+```text
+laptop: 6 blocks, missing 6, sent 25165824 bytes -> 200 {"ver":1,"cursor":1}
+desktop: 6 blocks, missing 1, sent 4194304 bytes -> 200 {"ver":2,"cursor":2}
+phone: 6 blocks, missing 0, sent 0 bytes -> 200 {"ver":1,"cursor":3}
+fake block: 400 { error: 'hash mismatch' }
+server: { storedBlocks: 7, storedBytes: 29360128, receivedBytes: 29360128 }
+```
+
+노트북은 여섯 개를 다 올렸고, 데스크톱은 하나, 휴대폰은 0바이트를 보냈다. 서버가 받은 바이트는 모두 합쳐 28MiB, 버전 세 개의 논리 크기 72MiB보다 훨씬 적다.
+
+`fake block` 줄도 중요하다. "hello"의 해시를 이름으로 대고 다른 내용을 올렸더니 서버가 받은 내용을 직접 해시해 보고 거절했다. 블록 서버가 클라이언트가 말한 해시를 그대로 믿으면, 고장 난 클라이언트나 악의적인 사용자가 남의 블록 이름으로 엉뚱한 내용을 심을 수 있다. 해시를 이름으로 쓰는 저장소는 받을 때 반드시 다시 계산한다.
+
+<SequenceDiagram
+  caption="블록을 올리고 새 버전을 확정한다"
+  actors={[
+    { id: "c", label: "데스크톱" },
+    { id: "bs", label: "블록 서버" },
+    { id: "s3", label: "저장소" },
+    { id: "api", label: "API · 메타 DB" },
+  ]}
+  steps={[
+    { from: "c", to: "c", label: "6개 해시", title: "블록으로 자르고 해시한다", detail: "파일을 4MiB씩 잘라 SHA-256을 계산한다." },
+    { from: "c", to: "bs", label: "missing?", title: "없는 블록을 묻는다", detail: "해시 목록만 보낸다. 몇백 바이트다.", payload: "{ \"hashes\": [\"f825…\", \"7f96…\", \"dfe4…\", …] }" },
+    { from: "bs", to: "c", label: "[dfe4…]", title: "하나만 없다", detail: "나머지 다섯 개는 버전 1 때 이미 받았다." },
+    { from: "c", to: "bs", label: "PUT dfe4…", title: "없는 블록만 올린다", detail: "4MiB 한 개만 보낸다." },
+    { from: "bs", to: "s3", label: "압축 · 암호화", title: "검증하고 저장한다", detail: "받은 내용을 다시 해시해 이름과 맞는지 보고, 압축과 암호화를 거쳐 저장소에 넣는다." },
+    { from: "c", to: "api", label: "commit base=1", title: "새 버전을 확정한다", detail: "기준 버전과 해시 순서를 보낸다. 모든 블록이 있는지 확인하고 버전 2로 기록한다." },
+    { from: "api", to: "c", label: "200 ver=2", title: "다른 기기에 알릴 차례", detail: "변경 기록에 한 줄이 추가되고, 기다리던 다른 기기들이 깨어난다. 다음 글에서 본다." },
+  ]}
+/>
+
+확정을 마지막에 따로 하는 이유가 있다. 블록을 올리는 도중 끊기면 블록 몇 개만 저장소에 남고 새 버전은 생기지 않는다. 다른 기기는 여전히 온전한 버전 1을 본다. 반쪽짜리 파일이 동기화되는 일이 없다. 대신 확정되지 않은 블록이 저장소에 쌓이니 일정 기간 어느 버전도 쓰지 않는 블록은 지운다. 버전 행을 `pending`으로 먼저 만들고 블록이 다 들어오면 `uploaded`로 바꾸는 방식도 같은 생각이다.
+
+## 다른 기기가 새 버전을 받아 조립한다
+
+노트북은 버전 1을 들고 있다. 데스크톱이 버전 2를 확정했다는 알림을 받으면(알림은 다음 글에서 다룬다) 노트북은 메타데이터 API에서 버전 2의 블록 목록을 받고, 자기에게 없는 블록만 블록 서버에서 받아 이어 붙인다. 위 SQL의 두 번째 질문이 이 계산이다.
+
+<NetworkTopology
+  caption="노트북이 버전 2를 받아 조립하는 길"
+  width={420}
+  height={250}
+  zones={[
+    { id: "svc", label: "동기화 서비스", x: 115, y: 15, w: 295, h: 225, tone: "private" },
+  ]}
+  nodes={[
+    { id: "lap", label: "노트북", sub: "버전 1", x: 50, y: 125, icon: "client" },
+    { id: "noti", label: "알림 서버", x: 180, y: 50, icon: "server" },
+    { id: "api", label: "API", x: 180, y: 125, icon: "server" },
+    { id: "meta", label: "메타 DB", sub: "+ 캐시", x: 320, y: 125, icon: "db" },
+    { id: "bs", label: "블록 서버", x: 180, y: 205, icon: "server" },
+    { id: "s3", label: "저장소", x: 320, y: 205, icon: "db" },
+  ]}
+  links={[
+    { from: "lap", to: "noti" },
+    { from: "lap", to: "api" },
+    { from: "api", to: "meta" },
+    { from: "lap", to: "bs" },
+    { from: "bs", to: "s3" },
+  ]}
+  steps={[
+    { path: ["noti", "lap"], packet: "ver 2", title: "바뀌었다는 소식이 온다", detail: "어떤 파일이 몇 번 버전이 됐는지만 온다. 내용은 없다." },
+    { path: ["lap", "api", "meta"], packet: "blocks?", title: "새 버전의 블록 목록을 받는다", detail: "해시 여섯 개의 순서를 받는다. 최신 버전 목록은 캐시에서 나온다." },
+    { path: ["lap"], packet: "diff", title: "없는 블록을 고른다", detail: "로컬에 있는 버전 1의 블록과 비교하니 2번만 없다." },
+    { path: ["lap", "bs", "s3"], packet: "GET dfe4", title: "없는 블록만 받는다", detail: "4MiB 하나를 받아 복호화, 압축 해제한다." },
+    { path: ["lap"], packet: "rename", title: "임시 파일로 조립하고 바꿔 끼운다", detail: "블록을 이어 임시 파일에 쓰고 해시를 확인한 뒤 원래 파일 자리로 이름을 바꾼다." },
+  ]}
+/>
+
+마지막 단계는 실무에서 자주 놓친다. 받은 블록을 원래 파일에 바로 덮어쓰다가 노트북이 꺼지면 파일이 반만 바뀐 채 남는다. 그래서 같은 디스크의 임시 파일에 다 쓰고, 블록 해시를 다시 확인한 뒤, 원래 이름으로 바꾼다. 같은 파일 시스템 안의 이름 바꾸기는 원자적이라 중간 상태가 남지 않는다. 사용자가 그 파일을 열어 둔 상태라면 운영체제에 따라 바꿔 끼우기가 막힐 수 있으니 다음 기회로 미룬다.
+
+## 서버가 죽으면 무엇이 남나
+
+"파일을 잃으면 안 된다"를 부품별로 확인해 보자.
+
+- 블록 서버가 죽으면: 블록 서버는 상태가 없다. 받은 블록을 저장소에 넣기 전에 죽었다면 클라이언트는 확인을 못 받았으니 다른 블록 서버로 다시 올린다. 같은 해시를 두 번 올려도 결과가 같다.
+- 메타데이터 DB가 죽으면: 주 DB가 죽으면 복제본 하나를 주로 올린다. 이때 아직 복제되지 않은 마지막 확정이 사라질 수 있는데, 그 기기는 확정 응답을 못 받았거나 받은 직후라 다시 확정을 보낼 수 있게 클라이언트가 로컬에 기록을 남겨 둔다. 복제와 승격은 [④ DB 복제](/posts/sd-db-replication-intro)에서 봤다.
+- 저장소 한 지역이 장애면: 블록을 다른 지역에도 복제해 두고 그쪽에서 읽는다.
+- 로드 밸런서가 죽으면: 대기하던 두 번째 로드 밸런서가 이어받는다.
+
+어느 경우든 클라이언트의 로컬 파일이 마지막 사본이다. 서버 확정을 받기 전에는 로컬의 변경 기록을 지우지 않는다. 그래서 동기화 클라이언트는 "무엇을 올렸고 무엇이 아직 확정되지 않았는지"를 로컬 DB에 따로 들고 있다.
+
+## 다음 글: 두 기기가 같은 파일을 고치면
+
+이 글의 결정을 정리하면 이렇다. 파일을 블록으로 자르고 블록 내용의 해시를 이름으로 쓴다. 서버에 없는 블록만 보내고, 마지막에 해시 순서를 확정해 새 버전을 만든다. 고정 크기 블록은 끼워 넣기에 약하니 필요하면 내용 기반 나누기를 쓴다. 압축은 파일 종류를 보고 하고 암호화보다 먼저 한다.
+
+남은 질문은 셋이다. 노트북과 데스크톱이 같은 파일을 동시에 고치면 누구 것이 남나. 노트북은 데스크톱이 확정한 사실을 어떻게 바로 아나. 버전과 블록이 쌓이면 저장 공간은 어떻게 아끼나. [㉞ 파일 동기화 설계 ②](/posts/sd-file-sync-conflicts)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 파일을 왜 블록으로 나눠 저장하나요?
+
+조금 고친 파일을 통째로 다시 올리지 않으려고다. 블록마다 내용 해시를 계산해 두면 서버가 이미 가진 블록은 건너뛰고 바뀐 블록만 보낼 수 있다. 큰 파일을 조각으로 이어 올리기도 쉬워지고, 같은 블록을 여러 버전이 함께 써서 저장 공간도 준다.
+
+### 델타 동기화는 어떻게 동작하나요?
+
+클라이언트가 새 버전을 블록으로 잘라 해시 목록을 만들고, 서버에 없는 해시를 물어 그 블록만 올린 뒤, 해시 순서를 확정해 새 버전을 만든다. 받는 기기는 새 버전의 해시 목록과 자기가 가진 블록을 비교해 없는 것만 받는다. 24MiB 파일의 10바이트를 고치면 4MiB 블록 하나만 오간다.
+
+### 블록 크기는 어떻게 정하나요?
+
+작으면 조금 고쳤을 때 보낼 양이 줄지만 블록 수가 늘어 메타데이터 행과 요청 수가 많아진다. 크면 그 반대다. 큰 파일이 많은 서비스는 4MiB 근처를 많이 쓰고, 작은 파일은 블록 하나로 끝난다. 결국 평균 파일 크기와 고치는 패턴을 보고 정한다.
+
+### 파일 앞에 한 줄을 추가하면 어떻게 되나요?
+
+고정 크기 블록이면 경계가 위치에 박혀 있어서 그 뒤 모든 블록이 밀리고 해시가 다 바뀐다. 실험에서 1바이트를 앞에 넣자 24MiB를 전부 보내야 했다. 내용 기반 나누기는 굴리는 해시로 경계를 내용에 붙여서, 같은 실험에서 0.76MiB 조각 하나만 보냈다. 대신 CPU를 더 쓰고 조각 크기가 들쭉날쭉하다. rsync처럼 보내는 쪽이 한 바이트씩 밀며 같은 블록을 찾는 방법도 있다.
+
+### 압축과 암호화는 어떤 순서로 하나요?
+
+압축을 먼저 한다. 암호화된 데이터는 무작위처럼 보여서 압축되지 않는다. 그리고 JPEG, MP4처럼 이미 압축된 파일은 압축해도 줄지 않고 CPU만 쓰니 파일 종류를 보고 건너뛴다.
+
+### 블록을 올리던 중에 끊기면 반쪽 파일이 다른 기기로 퍼지지 않나요?
+
+새 버전은 모든 블록이 올라간 뒤 확정 요청으로만 생긴다. 끊기면 블록 몇 개가 저장소에 남을 뿐 버전은 그대로라 다른 기기는 온전한 이전 버전을 본다. 남은 블록은 어느 버전도 쓰지 않으면 일정 기간 뒤 지운다. 받는 쪽도 임시 파일에 조립하고 해시를 확인한 뒤 이름을 바꿔 끼운다.
+
+### 블록 서버가 클라이언트가 보낸 해시를 그대로 믿으면 어떤 문제가 생기나요?
+
+해시가 블록의 이름이니, 남의 블록 이름으로 다른 내용을 심으면 그 블록을 쓰는 모든 파일이 오염된다. 블록 서버는 받은 내용을 직접 해시해 이름과 다르면 거절한다. 실험에서도 이름과 내용이 다른 블록은 400으로 거절했다.
+
+### 메타데이터 DB는 무엇으로 하나요?
+
+파일, 버전, 블록의 관계가 얽혀 있고 새 버전을 확정할 때 다른 기기가 먼저 바꾸지 않았는지 확인하는 일관성이 중요해서 트랜잭션이 되는 관계형 DB가 잘 맞는다. 사용자 번호로 샤딩하면 한 사용자의 질문이 한 샤드 안에서 끝나고, 최신 버전의 블록 목록은 캐시에 둔다.

@@ -2,6 +2,159 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "javascript-roadmap": {
+    "links": [
+      "k8s-learning-roadmap",
+      "networking-essentials-map",
+      "js-var-let-const",
+      "js-scope-lexical",
+      "js-hoisting-tdz",
+      "js-primitive-vs-reference",
+      "js-equality-coercion",
+      "js-truthy-falsy-typeof",
+      "js-function-forms",
+      "js-first-class-callbacks",
+      "js-closures",
+      "js-iife-module-pattern",
+      "js-currying-partial",
+      "js-pure-functions",
+      "js-memoization",
+      "js-array-transform",
+      "js-array-mutation",
+      "js-object-methods",
+      "js-destructuring",
+      "js-spread-rest",
+      "js-shallow-deep-copy",
+      "js-immutability-react",
+      "js-template-literals",
+      "js-optional-chaining-nullish",
+      "js-short-circuit",
+      "js-es-modules",
+      "js-this-binding",
+      "js-call-apply-bind",
+      "js-prototype-chain",
+      "js-classes",
+      "js-strict-mode",
+      "js-callback-hell",
+      "js-promises",
+      "js-async-await",
+      "js-promise-combinators",
+      "js-execution-context",
+      "event-loop",
+      "js-microtask-macrotask",
+      "js-timers-accuracy",
+      "garbage-collection",
+      "js-memory-leak",
+      "dom-basics",
+      "event-propagation",
+      "event-delegation",
+      "debounce-throttle",
+      "browser-fetch",
+      "abort-controller",
+      "browser-storage",
+      "cors",
+      "react-rerender",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "core-web-vitals"
+    ]
+  },
+  "abort-controller": {
+    "links": [
+      "browser-fetch",
+      "js-memory-leak",
+      "js-async-await",
+      "client-data-cache",
+      "event-propagation"
+    ],
+    "mentions": [
+      "js-pure-functions",
+      "http-status-codes",
+      "js-closures"
+    ]
+  },
+  "browser-storage": {
+    "links": [
+      "frontend-browser-cache",
+      "cookie-session-login",
+      "token-login",
+      "debounce-throttle",
+      "csrf",
+      "xss",
+      "js-shallow-deep-copy",
+      "react-rerender"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "http-versions",
+      "event-loop",
+      "what-happens-google-com"
+    ]
+  },
+  "sd-file-sync-conflicts": {
+    "links": [
+      "sd-file-sync-block-upload",
+      "clock-skew",
+      "optimistic-locking",
+      "sd-kv-store-versioning",
+      "git-merge-conflict",
+      "crdt",
+      "realtime-communication",
+      "long-polling",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "git-branch-merge",
+      "db-locking-deadlock"
+    ]
+  },
+  "sd-file-sync-block-upload": {
+    "links": [
+      "sd-video-streaming-cost",
+      "sd-file-sync-conflicts",
+      "sd-video-upload-transcoding",
+      "sd-load-balancer-stateless",
+      "sd-sharding-intro",
+      "rsync-algorithm",
+      "sd-db-replication-intro"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "db-type-relational"
+    ]
+  },
+  "sd-video-streaming-cost": {
+    "links": [
+      "sd-video-upload-transcoding",
+      "sd-file-sync-block-upload",
+      "http-caching-cdn",
+      "cdn-edge-anycast",
+      "edge-caching",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "packet-encapsulation"
+    ]
+  },
+  "sd-video-upload-transcoding": {
+    "links": [
+      "sd-autocomplete-data-pipeline",
+      "sd-video-streaming-cost",
+      "sd-file-sync-block-upload",
+      "sd-capacity-estimation",
+      "serverless-limits",
+      "sd-rate-limiter-design",
+      "idempotency-key",
+      "cdn-edge-anycast",
+      "message-queue-basics"
+    ],
+    "mentions": [
+      "sd-autocomplete-trie",
+      "sd-start-single-server",
+      "http-methods"
+    ]
+  },
   "sd-chat-presence": {
     "links": [
       "sd-chat-connections",
@@ -67,6 +220,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "sd-autocomplete-data-pipeline": {
     "links": [
       "sd-autocomplete-trie",
+      "sd-video-upload-transcoding",
       "sd-queue-logging-automation",
       "kafka-basics",
       "batch-processing",
@@ -87,6 +241,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-chat-presence",
       "sd-autocomplete-data-pipeline",
+      "sd-video-upload-transcoding",
       "http-caching-cdn",
       "debounce-throttle",
       "browser-fetch",
@@ -738,6 +893,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "code-splitting",
       "loading-patterns",
       "react-rerender",
+      "abort-controller",
       "rate-limiting-algorithms"
     ],
     "mentions": [
@@ -1033,6 +1189,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-object-methods",
       "js-this-binding",
       "js-function-forms",
+      "abort-controller",
       "js-prototype-chain"
     ],
     "mentions": [
@@ -1077,6 +1234,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-this-binding",
       "js-prototype-chain",
       "js-currying-partial",
+      "abort-controller",
       "js-memory-leak",
       "react-rerender",
       "js-memoization"
@@ -1397,6 +1555,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-var-let-const",
       "js-primitive-vs-reference",
       "js-es-modules",
+      "abort-controller",
       "pattern-singleton"
     ],
     "mentions": [
@@ -1431,6 +1590,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "browser-storage",
       "db-types-overview"
     ]
   },
@@ -1527,6 +1687,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "postgres-reporting-sql",
       "microservices",
+      "browser-storage",
       "db-index-design",
       "resilience-patterns",
       "kafka-basics",
@@ -1813,6 +1974,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-async-await",
       "idempotency-key",
       "client-data-cache",
+      "abort-controller",
       "timeouts"
     ],
     "mentions": [
@@ -1830,6 +1992,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-promise-combinators",
       "event-loop",
       "js-es-modules",
+      "abort-controller",
       "client-data-cache"
     ],
     "mentions": [
@@ -1846,6 +2009,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-promise-combinators",
       "event-loop",
       "browser-fetch",
+      "abort-controller",
       "client-data-cache"
     ],
     "mentions": [
@@ -1862,7 +2026,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-first-class-callbacks",
       "event-loop",
       "saga-pattern",
-      "js-this-binding"
+      "js-this-binding",
+      "abort-controller"
     ],
     "mentions": [
       "json-crud-http",
@@ -4692,7 +4857,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "rsync-algorithm": {
     "links": [
       "merkle-tree",
-      "traffic-shaping-qos"
+      "traffic-shaping-qos",
+      "sd-file-sync-block-upload"
     ],
     "mentions": []
   },
@@ -4828,6 +4994,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-internals-basics"
     ],
     "mentions": [
+      "browser-storage",
       "js-immutability-react",
       "js-shallow-deep-copy"
     ]
@@ -5972,6 +6139,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "service-mesh",
+      "abort-controller",
       "tail-latency",
       "backpressure",
       "grpc"
@@ -8338,6 +8506,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "code-splitting"
     ],
     "mentions": [
+      "browser-storage",
       "realtime-communication",
       "js-pure-functions",
       "pattern-proxy",
@@ -8356,6 +8525,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "browser-storage",
       "js-memoization",
       "loading-patterns"
     ]
@@ -8626,6 +8796,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-status-codes",
       "cors",
       "cookie-session-login",
+      "abort-controller",
       "http-methods",
       "resilience-patterns",
       "rest-api-design",
@@ -9085,6 +9256,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "oauth"
     ],
     "mentions": [
+      "browser-storage",
       "base64",
       "csrf",
       "sd-start-single-server",
