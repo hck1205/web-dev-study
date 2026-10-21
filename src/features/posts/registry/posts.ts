@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "backend-engineer-roadmap",
+    title: "백엔드 엔지니어 로드맵: 여섯 층을 아래부터 쌓는 순서",
+    summary: "느린 주문 API 하나를 쫓다 보면 HTTP부터 분산 시스템까지 여섯 층을 다 지난다. 층마다 왜 그 자리에 있는지, 먼저 읽을 글, 직접 만들어 볼 것, 다 됐다고 볼 기준을 적고 증상에서 층을 거꾸로 찾는 표를 둔다.",
+    topic: "programming/backend",
+    tags: ["Backend", "HTTP", "Database", "DevOps", "System Design"],
+    date: "2026-10-23",
+    keywords: ["백엔드 로드맵", "백엔드 학습 순서", "백엔드 엔지니어 스킬"],
+  },
+  {
     slug: "mysql-replication-online-ddl",
     title: "MySQL 복제와 온라인 DDL: binlog, GTID, 반동기 복제, 메타데이터 잠금",
     summary: "프라이머리에서 9초에 끝난 ALTER가 레플리카를 17초 뒤처지게 만든 장면을 서버 두 대로 재현하고, binlog 형식, 받는 스레드와 적용 스레드, GTID와 errant 트랜잭션, 반동기 복제의 timeout 전환, Seconds_Behind_Source의 함정, GTID로 기다리는 읽기를 실제 출력으로 본다. INSTANT·INPLACE·COPY의 차이, 메타데이터 잠금 줄, gh-ost와 pt-osc도 다룬다.",

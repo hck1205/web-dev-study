@@ -12,6 +12,7 @@ import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview
 import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
+import { BACKEND_ENGINEER_ROADMAP } from "./backend-engineer-roadmap";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
@@ -559,6 +560,7 @@ export const QUESTION_SETS = [
   ARGOCD_BASICS,
   AUTHN_VS_AUTHZ,
   AUTOSCALING,
+  BACKEND_ENGINEER_ROADMAP,
   BACKPRESSURE,
   BACKUP_STRATEGY,
   BASE64,

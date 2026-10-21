@@ -15,6 +15,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "argocd-basics": 7,
   "authn-vs-authz": 7,
   "autoscaling": 6,
+  "backend-engineer-roadmap": 5,
   "backpressure": 6,
   "backup-strategy": 7,
   "base64": 7,
