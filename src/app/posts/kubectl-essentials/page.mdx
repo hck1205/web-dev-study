@@ -1,0 +1,663 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kubectl-essentials");
+
+알림이 하나 왔다. `shop` 네임스페이스의 `api`가 500을 낸다고 한다. 터미널을 열고 `kubectl get pods`를 쳤더니 전부 `Running`이다. 여기서 다음에 무엇을 칠지가 사람마다 다르다. 어떤 사람은 바로 `logs`를 보고, 어떤 사람은 `describe`부터 보고, 어떤 사람은 `exec`로 들어가 `curl`을 친다. 순서가 틀리면 같은 정보를 세 번 다른 방법으로 보다가 시간이 간다.
+
+이 글은 kubectl로 클러스터를 "보는" 명령을 정리한다. `get`의 출력을 원하는 모양으로 바꾸는 법, 라벨과 필드로 좁히는 법, `--watch`로 변화를 지켜보는 법, `logs`·`exec`·`port-forward`가 실제로 어디를 지나가는지, 그리고 장애 때 어떤 순서로 치는지다. Pod 상태별로 원인을 찾는 방법은 [Pod가 안 뜰 때 상태별로 보는 순서](/posts/k8s-pod-troubleshooting)에 따로 있어서 여기서는 도구 쪽에 집중한다.
+
+출력은 kwok로 띄운 실습 클러스터(Kubernetes 1.30, kubectl 1.31)에서 받았다. API 서버와 스케줄러, 컨트롤러는 진짜이고 노드와 컨테이너만 흉내 낸다. `logs`와 `port-forward`는 kwok의 가짜 kubelet이 내 컴퓨터에서 돌린 작은 Node 서버로 이어 주도록 설정했다. 그래서 응답과 로그 줄은 실제로 그 서버가 낸 것이다.
+
+이 주제의 다른 글: [kubectl apply와 서버 쪽 apply](/posts/kubectl-apply-ssa), [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts), [Kustomize](/posts/kustomize-basics).
+
+## 명령 한 줄을 조각내 읽기
+
+kubectl 명령은 모양이 거의 같다. 동사, 리소스 종류, 이름이나 거르는 조건, 출력 모양이다. 처음 보면 옵션이 많아 보이지만 자주 쓰는 조각은 몇 개 안 된다.
+
+<UrlAnatomy
+  caption="장애 때 가장 자주 치는 한 줄"
+  base="kubectl"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "-n", value: "shop", display: "-n shop", title: "어느 네임스페이스", description: "안 주면 kubeconfig 현재 컨텍스트의 네임스페이스, 거기도 없으면 default를 본다. 결과가 비어 있으면 Pod가 사라진 게 아니라 다른 칸을 보고 있는 경우가 많다.", required: true },
+    { key: "get", display: "get", title: "동사", description: "get, describe, logs, exec, port-forward, debug가 보는 쪽 동사다. apply, delete, scale처럼 바꾸는 동사와 섞어 외우지 않는다.", required: true },
+    { key: "pods", display: "pods", title: "리소스 종류", description: "pod, pods, po가 모두 같다. kubectl api-resources의 SHORTNAMES 칸에 줄임말이 있다(deploy, svc, cm)." , required: true },
+    { key: "-l", value: "app=api", display: "-l app=api", title: "라벨로 거르기", description: "API 서버에 labelSelector로 넘어가 서버에서 거른다. 쉼표는 AND다." },
+    { key: "-o", value: "wide", display: "-o wide", title: "출력 모양", description: "wide는 IP와 노드 칸을 더한다. yaml, json, name, jsonpath, custom-columns로 바꿀 수 있다." },
+    { key: "--watch", display: "--watch", title: "계속 지켜보기", description: "처음 목록을 찍은 뒤 연결을 끊지 않고 바뀐 줄만 이어서 찍는다. -w로 줄여 쓴다." },
+  ]}
+/>
+
+리소스와 이름은 `pods api-55b9dbd58d-9f67v`처럼 띄어 써도 되고 `pod/api-55b9dbd58d-9f67v`처럼 붙여 써도 된다. 붙여 쓰는 쪽은 `deploy/api`, `svc/api`처럼 종류가 다른 것을 한 줄에 섞을 수 있어서 `logs`, `port-forward`에서 자주 쓴다.
+
+필드 이름이 기억나지 않으면 문서 사이트보다 `kubectl explain deployment.spec.strategy`처럼 지금 붙은 클러스터에 묻는 편이 정확하다. 그 쓰임새는 [API 객체 글](/posts/k8s-api-objects)의 "필드 이름은 explain에 물어본다"에 있다.
+
+## get 한 줄이 API 서버에 닿기까지
+
+`kubectl get pods`는 HTTP 요청 하나다. `-v=6`을 붙이면 kubectl이 보낸 요청이 보인다.
+
+```bash
+# 요청 URL과 응답 코드를 함께 찍는다
+kubectl -n shop get pods -v=6
+```
+
+```text
+I1021 00:36:35.674774   17566 loader.go:395] Config loaded from file:  /home/ubuntu/.kube/dev.yaml
+I1021 00:36:35.686991   17566 round_trippers.go:553] GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods?limit=500 200 OK in 6 milliseconds
+NAME                   READY   STATUS    RESTARTS   AGE
+api-86995f7bff-2cf5g   1/1     Running   0          118s
+api-86995f7bff-84ppg   1/1     Running   0          118s
+api-86995f7bff-mm7kk   1/1     Running   0          118s
+```
+
+(설정 파일 경로만 줄였다.) 첫 줄은 어느 kubeconfig를 읽었는지, 둘째 줄은 어느 서버에 무엇을 물었는지다. 엉뚱한 클러스터를 보고 있는지 의심될 때 이 두 줄이 가장 빠른 답이다. `limit=500`은 한 번에 500개씩 끊어 받는다는 뜻이고, 더 있으면 kubectl이 continue 토큰으로 이어서 받는다.
+
+`-v=8`로 올리면 요청 헤더가 보인다. 눈여겨볼 것은 Accept 헤더다.
+
+```text
+I1021 00:36:35.748717   17573 round_trippers.go:473]     Accept: application/json;as=Table;v=v1;g=meta.k8s.io,application/json;as=Table;v=v1beta1;g=meta.k8s.io,application/json
+```
+
+kubectl은 Pod 객체 전체가 아니라 "표로 만들어 달라"(`as=Table`)고 요청한다. READY, STATUS, AGE 같은 칸은 API 서버가 정해서 보낸다. 그래서 CRD도 정의할 때 적어 둔 칸(`additionalPrinterColumns`)이 `get`에 그대로 나온다. 반대로 `-o yaml`이나 `-o jsonpath`를 쓰면 표가 아니라 객체 전체를 받아 kubectl이 직접 모양을 만든다.
+
+<SequenceDiagram
+  caption="kubectl get pods 한 번에 오가는 것"
+  actors={[
+    { id: "cli", label: "kubectl" },
+    { id: "cfg", label: "kubeconfig" },
+    { id: "api", label: "API 서버" },
+    { id: "etcd", label: "etcd" },
+  ]}
+  steps={[
+    { from: "cli", to: "cfg", label: "읽기", title: "어디로 갈지 정한다", detail: "현재 컨텍스트에서 서버 주소, 인증서나 토큰, 기본 네임스페이스를 꺼낸다. -n이 없으면 여기 적힌 네임스페이스를 쓴다." },
+    { from: "cli", to: "api", label: "GET /api/v1/…/pods", title: "표로 달라고 묻는다", detail: "Accept에 as=Table을 넣는다. 라벨 조건(-l)과 필드 조건(--field-selector)도 쿼리 문자열로 함께 간다.", payload: "GET /api/v1/namespaces/shop/pods?labelSelector=app%3Dapi&limit=500" },
+    { from: "api", to: "api", label: "인증·인가", title: "누가, 무엇을 하려는지 본다", detail: "인증서나 토큰으로 사용자를 정하고, RBAC로 이 사용자가 shop 네임스페이스의 pods를 list할 수 있는지 확인한다. 막히면 401이나 403이다." },
+    { from: "api", to: "etcd", label: "목록 읽기", title: "저장된 객체를 읽는다", detail: "보통은 API 서버의 watch 캐시에서 답한다. 라벨 조건은 서버가 걸러서 맞는 것만 남긴다." },
+    { from: "api", to: "cli", label: "Table", title: "칸을 채워 돌려준다", detail: "API 서버가 READY, STATUS, AGE를 계산한 표를 보낸다. kubectl은 그걸 줄 맞춰 찍기만 한다." },
+  ]}
+/>
+
+이 흐름을 알면 `kubectl get`이 느릴 때 어디를 볼지도 정해진다. 수천 개의 Pod가 있는 네임스페이스에서 `-o yaml`로 전부 받으면 표보다 훨씬 무겁다. 라벨 조건을 주면 서버에서 걸러 오니 응답이 작아진다. 스크립트가 1초마다 전체 목록을 받아 가면 그 부담은 API 서버가 진다.
+
+## 칸을 고르는 출력 옵션
+
+기본 표에 없는 정보가 필요할 때가 많다. 어느 노드에 떴는지, IP가 무엇인지 보려면 `-o wide`다.
+
+```bash
+# IP와 노드 칸을 더해서 본다
+kubectl -n shop get pods -o wide
+```
+
+```text
+NAME                      READY   STATUS    RESTARTS   AGE     IP         NODE          NOMINATED NODE   READINESS GATES
+api-86995f7bff-2cf5g      1/1     Running   0          2m26s   10.0.1.1   node-000001   <none>           <none>
+api-86995f7bff-84ppg      1/1     Running   0          2m26s   10.0.0.2   node-000000   <none>           <none>
+api-86995f7bff-mm7kk      1/1     Running   0          2m26s   10.0.0.1   node-000000   <none>           <none>
+worker-7b6875466d-8k7gf   1/1     Running   0          15s     10.0.0.3   node-000000   <none>           <none>
+```
+
+에러가 특정 노드의 Pod에서만 난다면 NODE 칸이 첫 단서다. 같은 노드에 몰린 Pod만 아프면 앱보다 노드를 의심한다.
+
+라벨을 칸으로 보고 싶으면 `--show-labels`나 `-L`을 쓴다. `-L tier`는 tier 라벨 값만 칸 하나로 뽑는다.
+
+```bash
+# tier 라벨을 칸으로 보여 준다
+kubectl -n shop get pods -L tier
+```
+
+```text
+NAME                      READY   STATUS    RESTARTS   AGE     TIER
+api-86995f7bff-2cf5g      1/1     Running   0          2m26s   canary
+api-86995f7bff-84ppg      1/1     Running   0          2m26s   
+api-86995f7bff-mm7kk      1/1     Running   0          2m26s   
+worker-7b6875466d-8k7gf   1/1     Running   0          15s     
+```
+
+객체 전체를 보는 `-o yaml`은 정확하지만 길다. 필드 몇 개만 필요하면 jsonpath로 뽑는다. 문법은 `{}` 안에 경로를 쓰고, `range`로 목록을 돈다.
+
+```bash
+# 이름, 노드, phase를 탭으로 나눠 한 줄씩 찍는다
+kubectl -n shop get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\t"}{.status.phase}{"\n"}{end}'
+
+# 조건 목록에서 type이 Ready인 것의 status만 뽑는다
+kubectl -n shop get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+```
+
+```text
+api-86995f7bff-2cf5g	node-000001	Running
+api-86995f7bff-84ppg	node-000000	Running
+api-86995f7bff-mm7kk	node-000000	Running
+report		Pending
+worker-7b6875466d-8k7gf	node-000000	Running
+api-86995f7bff-2cf5g	True
+api-86995f7bff-84ppg	True
+api-86995f7bff-mm7kk	True
+report	
+worker-7b6875466d-8k7gf	True
+```
+
+`report`는 노드도 Ready 값도 비어 있다. 자원이 모자라 아직 스케줄되지 못한 Pod다. 두 번째 명령의 `?(@.type=="Ready")`는 목록 안에서 조건에 맞는 원소만 고르는 필터다. `conditions[1]`처럼 순서로 고르면 조건이 몇 번째에 오는지가 Pod마다 달라서 틀린다.
+
+jsonpath는 칸 이름을 붙이기가 번거롭다. 표 모양이 필요하면 custom-columns가 낫다.
+
+```bash
+# 칸 이름:경로 쌍을 쉼표로 이어 표를 만든다
+kubectl -n shop get pods -o custom-columns='NAME:.metadata.name,NODE:.spec.nodeName,IMAGE:.spec.containers[*].image,CPU_REQ:.spec.containers[*].resources.requests.cpu'
+```
+
+```text
+NAME                      NODE          IMAGE                                    CPU_REQ
+api-86995f7bff-2cf5g      node-000001   registry.example.com/shop-api:1.4.0      <none>
+api-86995f7bff-84ppg      node-000000   registry.example.com/shop-api:1.4.0      <none>
+api-86995f7bff-mm7kk      node-000000   registry.example.com/shop-api:1.4.0      <none>
+report                    <none>        registry.example.com/shop-report:0.9.1   64
+worker-7b6875466d-8k7gf   node-000000   registry.example.com/shop-worker:2.1.0   <none>
+```
+
+CPU 64개를 요청한 Pod가 한눈에 보인다. 값이 없으면 `<none>`이 찍히고, 컨테이너가 여럿이면 `[*]`가 값을 쉼표로 잇는다. 아래에서 그 규칙을 직접 만들어 볼 수 있다. 경로 문자열을 조각으로 나누고, `*`를 만나면 배열을 펼치고, 끝까지 값이 없으면 `<none>`을 돌려주면 된다.
+
+<CodePlayground
+  caption="custom-columns처럼 경로로 칸 뽑기"
+  functionName="customColumns"
+  initialCode={`function customColumns(items, spec) {
+  // spec: "NAME:.metadata.name,IMAGES:.spec.containers[*].image"
+  // 첫 줄은 칸 이름, 다음 줄부터 객체마다 값
+  // 값이 없으면 "<none>", 여러 개면 쉼표로 잇는다
+  return [];
+}`}
+  solution={`function pick(obj, path) {
+  const parts = path.replace(/\\[(\\*|\\d+)\\]/g, ".$1").split(".").filter(Boolean);
+  let values = [obj];
+  for (const p of parts) {
+    const next = [];
+    for (const v of values) {
+      if (v == null) continue;
+      if (p === "*") { if (Array.isArray(v)) next.push(...v); }
+      else if (v[p] !== undefined) next.push(v[p]);
+    }
+    values = next;
+  }
+  return values.length ? values.join(",") : "<none>";
+}
+
+function customColumns(items, spec) {
+  const cols = spec.split(",").map((c) => c.split(":"));
+  const rows = [cols.map(([name]) => name)];
+  for (const item of items) rows.push(cols.map(([, path]) => String(pick(item, path))));
+  return rows;
+}`}
+  tests={[
+    {
+      label: "이름과 노드, 노드 없는 Pod",
+      args: [
+        [
+          { metadata: { name: "api-1" }, spec: { nodeName: "node-a", containers: [{ image: "api:1.4.1" }, { image: "envoy:1.31" }] } },
+          { metadata: { name: "report" }, spec: { containers: [{ image: "report:0.9.1", resources: { requests: { cpu: "64" } } }] } },
+        ],
+        "NAME:.metadata.name,NODE:.spec.nodeName",
+      ],
+      expected: [["NAME", "NODE"], ["api-1", "node-a"], ["report", "<none>"]],
+    },
+    {
+      label: "[*]는 값을 쉼표로 잇는다",
+      args: [
+        [
+          { metadata: { name: "api-1" }, spec: { nodeName: "node-a", containers: [{ image: "api:1.4.1" }, { image: "envoy:1.31" }] } },
+          { metadata: { name: "report" }, spec: { containers: [{ image: "report:0.9.1", resources: { requests: { cpu: "64" } } }] } },
+        ],
+        "IMAGES:.spec.containers[*].image",
+      ],
+      expected: [["IMAGES"], ["api:1.4.1,envoy:1.31"], ["report:0.9.1"]],
+    },
+    {
+      label: "번호로 고르기와 깊은 경로",
+      args: [
+        [
+          { metadata: { name: "api-1" }, spec: { nodeName: "node-a", containers: [{ image: "api:1.4.1" }, { image: "envoy:1.31" }] } },
+          { metadata: { name: "report" }, spec: { containers: [{ image: "report:0.9.1", resources: { requests: { cpu: "64" } } }] } },
+        ],
+        "FIRST:.spec.containers[0].image,CPU:.spec.containers[*].resources.requests.cpu",
+      ],
+      expected: [["FIRST", "CPU"], ["api:1.4.1", "<none>"], ["report:0.9.1", "64"]],
+    },
+    { label: "빈 목록", args: [[], "NAME:.metadata.name"], expected: [["NAME"]] },
+  ]}
+/>
+
+jsonpath에는 조용한 함정이 둘 있다. 하나는 오타다. 필드 이름을 틀려도 에러가 나지 않는다.
+
+```bash
+# metadata.name을 nmae로 잘못 썼다
+kubectl -n shop get pods -o jsonpath='{.items[*].metadata.nmae}'; echo "[exit $?]"
+
+# 작은따옴표를 빠뜨렸다
+kubectl -n shop get pods -o jsonpath={range .items[*]}{.metadata.name}{end}; echo "[exit $?]"
+```
+
+```text
+[exit 0]
+Error from server (NotFound): pods ".items[*]}{.metadata.name}{end}" not found
+[exit 1]
+```
+
+첫 줄은 아무것도 찍지 않고 성공으로 끝난다. 스크립트에서 `IP=$(kubectl get ... -o jsonpath=...)`로 받아 쓰면 빈 값이 그대로 다음 명령으로 넘어간다. 스크립트라면 값이 비었는지 꼭 확인한다. 두 번째는 셸이 중괄호와 공백을 먼저 해석해서 kubectl이 뒤쪽 조각을 Pod 이름으로 받은 경우다. jsonpath는 항상 작은따옴표로 감싼다.
+
+정렬은 `--sort-by`에 jsonpath를 준다. `--sort-by=.metadata.creationTimestamp`면 새로 생긴 Pod가 아래로 간다. 이벤트를 `.lastTimestamp`로 정렬할 때 생기는 함정은 [Pod 문제 해결 글의 이벤트 정렬](/posts/k8s-pod-troubleshooting)에 있다.
+
+## 라벨과 필드로 좁히기
+
+Pod 이름은 해시가 붙어 매번 바뀐다. 그래서 이름보다 라벨로 고르는 습관을 들인다. 라벨 셀렉터 문법(`=`, `!=`, `in`, `notin`, 존재 여부)이 어떻게 해석되는지는 [라벨과 셀렉터](/posts/k8s-labels-selectors)에서 자세히 다루고, 여기서는 kubectl에서 쓰는 모양만 본다.
+
+```bash
+# app이 api나 worker이고, tier가 canary가 아닌 Pod
+kubectl -n shop get pods -l 'app in (api,worker),tier!=canary'
+
+# 필드로 거르기: 특정 노드에 떠 있는 Pod를 모든 네임스페이스에서
+kubectl get pods -A --field-selector spec.nodeName=node-000000
+
+# Running이 아닌 Pod만
+kubectl get pods -A --field-selector status.phase!=Running
+```
+
+```text
+NAME                      READY   STATUS    RESTARTS   AGE
+api-86995f7bff-84ppg      1/1     Running   0          2m26s
+api-86995f7bff-mm7kk      1/1     Running   0          2m26s
+worker-7b6875466d-8k7gf   1/1     Running   0          15s
+NAMESPACE   NAME                      READY   STATUS    RESTARTS   AGE
+shop        api-86995f7bff-84ppg      1/1     Running   0          2m26s
+shop        api-86995f7bff-mm7kk      1/1     Running   0          2m26s
+shop        worker-7b6875466d-8k7gf   1/1     Running   0          15s
+NAMESPACE   NAME     READY   STATUS    RESTARTS   AGE
+shop        report   0/1     Pending   0          4s
+```
+
+`!=`가 들어간 라벨 조건은 셸이 `!`를 히스토리 확장으로 먹을 수 있어서 작은따옴표로 감싼다. 필드 셀렉터는 아무 필드나 되지 않는다([라벨과 셀렉터 글](/posts/k8s-labels-selectors)의 "필드 셀렉터" 참고). Pod는 `spec.nodeName`, `status.phase`, `metadata.name`, `metadata.namespace` 같은 몇 개만 서버가 색인해 두었다. 노드 하나를 비우기 전에 그 노드에 무엇이 떠 있는지 볼 때 `spec.nodeName` 필터를 가장 많이 쓴다.
+
+셋째 결과처럼 `status.phase!=Running`은 장애 때 "정상이 아닌 것만" 보는 빠른 방법이지만 빈틈이 있다. CrashLoopBackOff인 Pod도 phase는 `Running`일 수 있다. STATUS 칸과 phase가 다른 이유는 [Pod의 일생](/posts/k8s-pod-lifecycle)에 있다. 그래서 이 필터 다음에는 RESTARTS 칸이 큰 Pod를 따로 본다.
+
+`kubectl get all`도 이름과 달리 전부를 보여 주지 않는다. Pod, Service, Deployment, ReplicaSet 같은 몇 종류만 묶은 별칭이라 ConfigMap, Secret, Ingress, PVC는 빠진다. 네임스페이스에 무엇이 남았는지 확인할 때 이걸 믿으면 놓친다. 정말 전부를 보려면 목록 가능한 리소스를 돌면서 묻는다.
+
+```bash
+# 네임스페이스 리소스 중 list가 되는 것을 모두 돌며 조회한다. 이벤트는 너무 많아서 뺀다
+kubectl api-resources --namespaced=true --verbs=list -o name \
+  | grep -v -E '^events' \
+  | xargs -n 1 kubectl get -n shop --ignore-not-found --show-kind
+```
+
+```text
+NAME                         DATA   AGE
+configmap/kube-root-ca.crt   1      8m56s
+NAME            ENDPOINTS                                   AGE
+endpoints/api   10.0.0.1:8080,10.0.1.1:8080,10.0.1.2:8080   6m45s
+```
+
+(뒤쪽 Pod, Deployment 목록은 줄였다.) `get all`에 없던 ConfigMap과 Endpoints가 보인다.
+
+## --watch로 바뀌는 순간을 본다
+
+배포 중에는 상태가 몇 초 사이에 바뀐다. `get`을 여러 번 치는 대신 `--watch`로 연결을 열어 둔다. 이미지를 바꾸는 동안 지켜봤다.
+
+```bash
+# 다른 터미널에서 지켜본다
+kubectl -n shop get pods -l app=api --watch
+
+# 이벤트 종류까지 보고 싶으면, 처음 목록은 빼고
+kubectl -n shop get pods -l app=api --watch-only --output-watch-events
+
+# 이 터미널에서 이미지를 바꾼다
+kubectl -n shop set image deploy/api shop-api=registry.example.com/shop-api:1.4.1
+```
+
+```text
+EVENT      NAME                   READY   STATUS    RESTARTS   AGE
+ADDED      api-55b9dbd58d-wvsqp   0/1     Pending   0          0s
+MODIFIED   api-55b9dbd58d-wvsqp   0/1     Pending   0          0s
+MODIFIED   api-55b9dbd58d-wvsqp   1/1     Running   0          0s
+MODIFIED   api-86995f7bff-mm7kk   1/1     Terminating   0          3m2s
+MODIFIED   api-86995f7bff-mm7kk   1/1     Terminating   0          3m2s
+DELETED    api-86995f7bff-mm7kk   1/1     Terminating   0          3m2s
+ADDED      api-55b9dbd58d-9f67v   0/1     Pending       0          0s
+MODIFIED   api-55b9dbd58d-9f67v   0/1     Pending       0          0s
+MODIFIED   api-55b9dbd58d-9f67v   1/1     Running       0          0s
+MODIFIED   api-86995f7bff-2cf5g   1/1     Terminating   0          3m2s
+DELETED    api-86995f7bff-2cf5g   1/1     Terminating   0          3m2s
+```
+
+(실습 노드는 컨테이너를 진짜로 띄우지 않아서 Pending에서 Running까지 0초다.) 새 Pod 하나가 Running이 되면 옛 Pod 하나가 Terminating으로 가는 리듬이 보인다. 롤링 업데이트가 maxSurge만큼 늘리고 줄이는 모습 그대로다. 숫자의 의미는 [Deployment와 롤링 업데이트](/posts/k8s-deployment)에 있다.
+
+`--watch`는 줄을 고쳐 쓰지 않고 바뀔 때마다 새 줄을 덧붙인다. 같은 Pod가 여러 번 나오는 이유다. 아래 그림은 이벤트가 하나 올 때마다 kubectl이 머릿속에 들고 있는 Pod 목록이 어떻게 바뀌는지를 따라간다.
+
+<AlgoTrace
+  caption="watch 이벤트 하나가 목록 하나를 고친다"
+  memoryLabel="지금 보이는 Pod"
+  cells={["목록", "ADDED wvsqp", "MOD wvsqp", "MOD mm7kk", "DEL mm7kk", "ADDED 9f67v", "DEL 2cf5g"]}
+  steps={[
+    { pointer: 0, memory: ["2cf5g", "84ppg", "mm7kk"], caption: "처음에는 GET 한 번으로 목록을 받는다. 응답에 이 목록의 resourceVersion이 붙어 온다." },
+    { pointer: 1, memory: ["2cf5g", "84ppg", "mm7kk", "wvsqp…"], caption: "그 버전 이후의 변화만 달라고 watch를 연다. 새 Pod가 Pending으로 들어온다." },
+    { pointer: 2, found: [2], memory: ["2cf5g", "84ppg", "mm7kk", "wvsqp"], caption: "같은 Pod의 MODIFIED다. 스케줄되고 Running이 됐다." },
+    { pointer: 3, memory: ["2cf5g", "84ppg", "mm7kk…", "wvsqp"], caption: "옛 Pod에 deletionTimestamp가 찍혀 Terminating이 됐다. 아직 지워진 건 아니다." },
+    { pointer: 4, memory: ["2cf5g", "84ppg", "wvsqp"], caption: "DELETED가 와야 목록에서 빠진다. 종료 유예가 길면 이 사이가 길어진다." },
+    { pointer: 5, memory: ["2cf5g", "84ppg", "wvsqp", "9f67v"], caption: "두 번째 새 Pod가 들어온다. 이런 식으로 하나씩 바뀐다." },
+    { pointer: 6, found: [6], memory: ["84ppg", "wvsqp", "9f67v"], caption: "옛 Pod가 하나 더 빠졌다. 처음 목록에 이벤트를 차례로 적용하면 지금 상태가 된다." },
+  ]}
+/>
+
+`-v=6`으로 보면 이 두 단계가 요청 두 개로 보인다.
+
+```text
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods?labelSelector=app%3Dapi&limit=500 200 OK in 5 milliseconds
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods?labelSelector=app%3Dapi&resourceVersion=659&watch=true 200 OK in 0 milliseconds
+```
+
+목록을 받고, 그 목록의 `resourceVersion=659` 이후를 `watch=true`로 이어 받는다. 컨트롤러들이 클러스터를 따라가는 방식도 이것과 같다. 그쪽 이야기는 [컨트롤러와 조정 루프](/posts/k8s-controllers-reconcile)에서 이어진다. 롤아웃이 끝났는지만 알고 싶으면 watch보다 `kubectl rollout status deploy/api --timeout=5m`이 낫다. 끝나면 0, 시간 안에 못 끝나면 0이 아닌 코드로 끝나서 CI에서 쓰기 좋다.
+
+## describe는 여러 객체를 모아 보여 준다
+
+`get -o yaml`이 객체 하나를 그대로 보여 준다면, `describe`는 사람이 읽기 좋게 관련된 것을 모은다. Deployment를 describe하면 어느 ReplicaSet이 새것인지와 최근 이벤트가 함께 나온다.
+
+```bash
+# Deployment의 상태와 이벤트를 함께 본다
+kubectl -n shop describe deploy api
+```
+
+```text
+Name:                   api
+Namespace:              shop
+Annotations:            deployment.kubernetes.io/revision: 2
+Selector:               app=api
+Replicas:               3 desired | 3 updated | 3 total | 3 available | 0 unavailable
+StrategyType:           RollingUpdate
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=api
+  Containers:
+   shop-api:
+    Image:         registry.example.com/shop-api:1.4.1
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    True    NewReplicaSetAvailable
+OldReplicaSets:  api-86995f7bff (0/0 replicas created)
+NewReplicaSet:   api-55b9dbd58d (3/3 replicas created)
+Events:
+  Type    Reason             Age    From                   Message
+  ----    ------             ----   ----                   -------
+  Normal  ScalingReplicaSet  3m48s  deployment-controller  Scaled up replica set api-86995f7bff to 3
+  Normal  ScalingReplicaSet  46s    deployment-controller  Scaled up replica set api-55b9dbd58d to 1
+  Normal  ScalingReplicaSet  46s    deployment-controller  Scaled down replica set api-86995f7bff to 2 from 3
+```
+
+(가운데 몇 줄을 줄였다.) Events 칸이 describe를 치는 가장 큰 이유다. 이벤트는 Pod 자신이 아니라 그 Pod를 다룬 쪽(스케줄러, kubelet, 컨트롤러)이 남기는 별도 객체다. 자원이 모자라 뜨지 못한 `report` Pod는 이렇게 나온다.
+
+```text
+Events:
+  Type     Reason            Age                From               Message
+  ----     ------            ----               ----               -------
+  Warning  FailedScheduling  80s                default-scheduler  0/2 nodes are available: 2 Insufficient cpu. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.
+```
+
+`get`의 STATUS 칸은 `Pending` 한 단어지만 이벤트는 "노드 2개 모두 CPU가 모자라다"고 이유까지 말한다. 메시지를 읽는 법은 [스케줄러와 Pending](/posts/k8s-pod-scheduling)에 있다. 네임스페이스 전체에서 경고만 보려면 `kubectl -n shop get events --field-selector type=Warning`을 친다. describe는 사람용 출력이라 형식이 버전마다 조금씩 바뀐다. 스크립트에서는 describe를 파싱하지 말고 `-o json`과 jq, 또는 jsonpath를 쓴다.
+
+## logs, exec, port-forward는 노드까지 간다
+
+`get`과 `describe`는 API 서버가 가진 기록만 읽는다. `logs`, `exec`, `port-forward`는 다르다. 로그 파일과 컨테이너 프로세스는 노드에 있어서, API 서버가 요청을 노드의 kubelet(10250 포트)으로 넘긴다. `-v=6`으로 보면 Pod 아래의 하위 리소스 주소로 간다.
+
+```text
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods/api-55b9dbd58d-9f67v/log?container=shop-api&tailLines=1 200 OK in 2 milliseconds
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods/api-55b9dbd58d-9f67v/exec?command=cat&command=server.js&container=shop-api&stderr=true&stdout=true 101 Switching Protocols in 11 milliseconds
+POST https://127.0.0.1:32747/api/v1/namespaces/shop/pods/api-55b9dbd58d-9f67v/portforward 101 Switching Protocols in 7 milliseconds
+```
+
+`101 Switching Protocols`는 HTTP 연결을 양방향 스트림으로 바꿨다는 뜻이다. exec는 kubectl 1.30, port-forward는 1.31부터 WebSocket을 먼저 시도하고, 서버가 받지 않으면 예전 방식(SPDY)으로 내려간다. 권한도 따로 있다. `pods/log`, `pods/exec`, `pods/portforward`는 RBAC에서 별도 하위 리소스라서 Pod를 볼 수 있다고 exec까지 되는 것은 아니다.
+
+<NetworkTopology
+  caption="노드까지 가야 하는 요청은 API 서버가 kubelet으로 넘긴다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "laptop", label: "내 노트북", x: 8, y: 10, w: 140, h: 90, tone: "edge" },
+    { id: "cp", label: "컨트롤 플레인", x: 196, y: 10, w: 196, h: 90, tone: "neutral" },
+    { id: "node", label: "node-000000", x: 8, y: 140, w: 384, h: 150, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "logs · exec", x: 78, y: 60, icon: "client" },
+    { id: "api", label: "API 서버", sub: ":6443", x: 300, y: 60, icon: "server" },
+    { id: "fw", label: "방화벽", sub: "→ :10250", x: 300, y: 192, icon: "firewall" },
+    { id: "kubelet", label: "kubelet", sub: ":10250", x: 160, y: 192, icon: "server" },
+    { id: "pod", label: "api Pod", sub: "shop-api", x: 160, y: 258, icon: "container" },
+    { id: "logf", label: "로그 파일", sub: "/var/log/pods", x: 310, y: 258, icon: "db" },
+  ]}
+  links={[
+    { from: "cli", to: "api" },
+    { from: "api", to: "fw" },
+    { from: "fw", to: "kubelet" },
+    { from: "kubelet", to: "pod" },
+    { from: "kubelet", to: "logf", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "api"], packet: "GET log", title: "API 서버에 먼저 묻는다", detail: "kubectl은 노드에 직접 붙지 않는다. Pod의 log 하위 리소스로 요청하고, API 서버가 인증과 pods/log 권한을 확인한다." },
+    { path: ["cli", "api", "fw", "kubelet", "logf"], packet: "log", title: "kubelet이 파일을 읽어 준다", detail: "API 서버가 Pod가 뜬 노드의 kubelet에 요청을 넘긴다. kubelet은 런타임이 쓴 로그 파일을 읽어 그대로 흘려보낸다.", payload: "/var/log/pods/shop_api-55b9dbd58d-9f67v_<uid>/shop-api/0.log" },
+    { path: ["cli", "api", "fw", "kubelet", "pod"], packet: "exec", title: "exec는 프로세스를 하나 더 띄운다", detail: "kubelet이 런타임에 같은 컨테이너 안에서 명령을 실행하게 하고, 입출력을 스트림으로 이어 준다." },
+    { path: ["cli", "api", "fw"], packet: "exec", blocked: true, title: "10250이 막혀 있으면", detail: "get은 되는데 logs와 exec만 타임아웃이 난다. 컨트롤 플레인에서 노드의 10250으로 가는 길이 보안 그룹이나 방화벽에 막힌 경우다.", payload: "Error from server: Get \"https://10.0.1.5:10250/containerLogs/...\": dial tcp 10.0.1.5:10250: i/o timeout" },
+  ]}
+/>
+
+마지막 단계의 증상이 현장에서 꽤 헷갈린다. 권한 문제라면 `Forbidden`이 나와야 하는데, 타임아웃이 나면 API 서버에서 노드로 가는 네트워크를 본다. 관리형 클러스터에서 노드 보안 그룹을 손으로 줄였을 때 흔히 나온다. 이 에러 문구는 형식을 보여 주려고 적은 예시다.
+
+로그는 옵션으로 범위를 좁혀서 본다.
+
+```bash
+# 마지막 4줄만
+kubectl -n shop logs api-55b9dbd58d-9f67v --tail=4
+
+# 최근 30초 안의 줄 중에 error만
+kubectl -n shop logs api-55b9dbd58d-9f67v --since=30s | grep error
+
+# Deployment 이름으로 주면 Pod 하나를 골라 준다
+kubectl -n shop logs deploy/api --tail=1
+```
+
+```text
+{"ts":"2026-10-21T00:38:45.577Z","level":"info","msg":"GET /","status":200,"ms":1}
+{"ts":"2026-10-21T00:38:45.589Z","level":"info","msg":"GET /healthz","status":200,"ms":1}
+{"ts":"2026-10-21T00:38:45.607Z","level":"error","msg":"GET /orders/42 failed","err":"connect ETIMEDOUT 10.0.3.15:5432","ms":1}
+{"ts":"2026-10-21T00:38:45.620Z","level":"error","msg":"GET /orders/43 failed","err":"connect ETIMEDOUT 10.0.3.15:5432","ms":0}
+{"ts":"2026-10-21T00:38:45.607Z","level":"error","msg":"GET /orders/42 failed","err":"connect ETIMEDOUT 10.0.3.15:5432","ms":1}
+{"ts":"2026-10-21T00:38:45.620Z","level":"error","msg":"GET /orders/43 failed","err":"connect ETIMEDOUT 10.0.3.15:5432","ms":0}
+Found 3 pods, using pod/api-55b9dbd58d-9f67v
+{"ts":"2026-10-21T00:38:45.620Z","level":"error","msg":"GET /orders/43 failed","err":"connect ETIMEDOUT 10.0.3.15:5432","ms":0}
+```
+
+처음 장면의 500은 DB 연결 타임아웃이었다. 셋째 명령의 첫 줄을 놓치면 안 된다. `deploy/api`는 Pod 셋 중 하나만 보여 준다. 에러가 Pod 하나에서만 나는 상황이면 엉뚱한 Pod 로그를 보고 "에러가 없다"고 결론 내린다. 여러 Pod를 함께 보려면 라벨로 묻고 줄마다 출처를 붙인다.
+
+```bash
+# 라벨에 맞는 Pod 모두에서, 줄 앞에 Pod 이름을 붙여 따라간다
+kubectl -n shop logs -l app=api --prefix --tail=20 -f --max-log-requests=10
+```
+
+`-l`을 주면 `--tail`의 기본값이 10줄로 바뀌고, 동시에 따라가는 Pod 수가 기본 5개로 묶인다. 그보다 많으면 에러가 나니 `--max-log-requests`를 올린다. 수십 개를 따라가야 한다면 kubectl보다 로그 수집 시스템에서 보는 게 맞다. 컨테이너가 재시작했다면 지금 컨테이너가 아니라 죽기 직전 것을 `--previous`로 봐야 하고, 컨테이너가 여럿인 Pod는 `-c`로 고른다. 없는 컨테이너 이름을 주면 이렇게 나온다.
+
+```text
+error: container sidecar is not valid for pod api-55b9dbd58d-9f67v
+```
+
+## port-forward는 Pod 하나에 붙는다
+
+클러스터 안의 서비스를 내 컴퓨터에서 잠깐 확인할 때 `port-forward`를 쓴다. Service 이름으로 줄 수 있지만 그렇다고 Service를 지나가는 것은 아니다.
+
+```bash
+# 내 컴퓨터의 18080을 Service api의 80번으로 잇는다
+kubectl -n shop port-forward svc/api 18080:80 -v=6
+
+# 다른 터미널에서 요청을 보낸다
+for u in / /healthz /orders/42; do curl -s -o /dev/null -w "%{http_code} $u\n" localhost:18080$u; done
+```
+
+```text
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/services/api 200 OK in 5 milliseconds
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods?labelSelector=app%3Dapi 200 OK in 2 milliseconds
+POST https://127.0.0.1:32747/api/v1/namespaces/shop/pods/api-55b9dbd58d-9f67v/portforward 101 Switching Protocols in 7 milliseconds
+Forwarding from 127.0.0.1:18080 -> 8080
+Handling connection for 18080
+200 /
+200 /healthz
+500 /orders/42
+```
+
+kubectl이 Service를 읽어 셀렉터(`app=api`)를 알아내고, 그 셀렉터로 Pod 목록을 받아, 그중 하나(`9f67v`)의 portforward로 연결했다. 포트도 Service의 80이 아니라 targetPort인 8080으로 바꿔 붙었다. Service의 가상 IP와 로드 밸런싱은 전혀 쓰지 않는다.
+
+<NetworkTopology
+  caption="port-forward는 Service를 지나지 않고 Pod 하나로 바로 간다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "laptop", label: "내 노트북", x: 8, y: 8, w: 384, h: 84, tone: "edge" },
+    { id: "cluster", label: "클러스터 shop", x: 8, y: 106, w: 384, h: 186, tone: "private" },
+  ]}
+  nodes={[
+    { id: "curl", label: "curl", sub: ":18080", x: 80, y: 60, icon: "client" },
+    { id: "cli", label: "kubectl", sub: "port-forward", x: 290, y: 60, icon: "client", w: 116 },
+    { id: "svc", label: "svc/api", sub: "10.0.0.193:80", x: 200, y: 160, icon: "lb", w: 116 },
+    { id: "p1", label: "api 9f67v", sub: ":8080", x: 70, y: 245, icon: "container" },
+    { id: "p2", label: "api wvsqp", sub: ":8080", x: 200, y: 245, icon: "container" },
+    { id: "p3", label: "api rkdjw", sub: ":8080", x: 330, y: 245, icon: "container" },
+  ]}
+  links={[
+    { from: "curl", to: "cli" },
+    { from: "cli", to: "p1", dashed: true },
+    { from: "svc", to: "p1" },
+    { from: "svc", to: "p2" },
+    { from: "svc", to: "p3" },
+  ]}
+  steps={[
+    { path: ["cli", "svc"], packet: "selector", highlight: ["svc"], title: "Service에서는 셀렉터만 읽는다", detail: "kubectl이 Service 객체를 GET해서 app=api와 targetPort 8080을 알아낸다. 트래픽은 여기로 오지 않는다." },
+    { path: ["curl", "cli", "p1"], packet: "GET /", title: "고른 Pod 하나로만 간다", detail: "Pod 목록에서 하나를 골라 그 Pod의 8080에 스트림을 연다. 요청을 몇 번 보내도 같은 Pod로 간다." },
+    { path: ["svc", "p2"], highlight: ["p3"], title: "나머지 Pod는 확인되지 않는다", detail: "port-forward로 잘 된다고 Service 뒤의 모든 Pod가 괜찮다는 뜻이 아니다. 고장 난 Pod가 섞여 있어도 보이지 않는다." },
+    { path: ["curl", "cli", "p1"], packet: "GET /", blocked: true, title: "그 Pod가 죽으면 끊긴다", detail: "롤아웃으로 9f67v가 지워지면 port-forward는 다른 Pod로 옮겨 가지 않는다. 명령을 다시 띄워야 한다.", payload: "E1021 ... portforward.go:413] an error occurred forwarding 18080 -> 8080: error forwarding port 8080 to pod ..., uid : ... not found" },
+  ]}
+/>
+
+마지막 단계의 에러 문구는 형식을 보여 주려고 적은 예시다. port-forward는 "Pod 하나가 이 요청에 이렇게 답한다"를 확인하는 도구다. Service의 셀렉터가 맞는지, 엔드포인트가 잡히는지, 부하가 고르게 나뉘는지는 확인되지 않는다. 그건 클러스터 안에서 Service 이름으로 직접 불러 봐야 안다. [Service 타입](/posts/k8s-service-types) 글에 그 길이 있다. 또 하나, `port-forward`는 기본으로 127.0.0.1에만 열린다. `--address 0.0.0.0`을 주면 같은 네트워크의 다른 사람도 내 노트북을 거쳐 운영 Pod에 붙을 수 있으니 쓰지 않는다.
+
+## 들어가 보기: exec와 debug
+
+`exec`는 떠 있는 컨테이너 안에서 명령을 실행한다. 컨테이너 안에서 보이는 DNS, 환경 변수, 파일이 바깥에서 짐작한 것과 다를 때 쓴다.
+
+```bash
+# 컨테이너 안에서 환경 변수와 DNS 설정을 본다
+kubectl -n shop exec deploy/api -- env
+kubectl -n shop exec deploy/api -- cat /etc/resolv.conf
+
+# 셸로 들어가기. -i는 입력을 붙이고 -t는 터미널을 할당한다
+kubectl -n shop exec -it deploy/api -- sh
+```
+
+명령 앞의 `--`는 빠뜨리면 안 된다. 예전 형식으로 쓰면 지금 kubectl은 거부한다.
+
+```text
+error: exec [POD] [COMMAND] is not supported anymore. Use exec [POD] -- [COMMAND] instead
+See 'kubectl exec -h' for help and examples
+```
+
+`--` 뒤는 모두 컨테이너 안 명령의 인자다. 앞쪽 옵션을 kubectl이 먹을지 명령이 먹을지 헷갈리지 않게 경계를 긋는다. exec로 컨테이너 안을 고치는 것은 피한다. 설정 파일을 손으로 바꾸면 Pod가 다시 뜰 때 사라지고, 누가 무엇을 고쳤는지 기록도 남지 않는다. 확인만 하고 고치는 것은 매니페스트로 한다.
+
+요즘 이미지는 셸이 없는 경우가 많다(distroless). 그러면 `kubectl debug`로 도구가 든 임시 컨테이너를 붙인다. 원리와 `--copy-to`, 노드 디버그는 [Pod 문제 해결 글](/posts/k8s-pod-troubleshooting)에서 자세히 다뤘다. 여기서는 그 글에 없는 `--profile` 하나만 덧붙인다.
+
+```bash
+# 네트워크 진단용 이미지를 붙이고, NET_ADMIN 권한이 필요한 도구도 쓸 수 있게 한다
+kubectl -n shop debug api-55b9dbd58d-9f67v --image=nicolaka/netshoot:v0.13 --target=shop-api --profile=netadmin -- sleep 600
+
+# 붙은 임시 컨테이너의 이름, 이미지, 추가된 권한
+kubectl -n shop get pod api-55b9dbd58d-9f67v -o jsonpath='{range .spec.ephemeralContainers[*]}{.name}{"\t"}{.image}{"\t"}{.securityContext.capabilities.add}{"\n"}{end}'
+```
+
+```text
+Targeting container "shop-api". If you don't see processes from this container it may be because the container runtime doesn't support this feature.
+Defaulting debug container name to debugger-88t7r.
+debugger-88t7r	nicolaka/netshoot:v0.13	["NET_ADMIN","NET_RAW"]
+```
+
+프로필은 임시 컨테이너에 줄 보안 설정 묶음이다. kubectl 1.31에는 legacy, general, baseline, restricted, netadmin, sysadmin이 있고 기본은 legacy다. `tcpdump`나 `ip route` 같은 명령이 권한 부족으로 실패하면 netadmin을 준다. 반대로 네임스페이스에 Pod Security `restricted`가 걸려 있으면 권한을 더한 임시 컨테이너는 거절된다. 그때는 restricted 프로필로 붙이고 할 수 있는 만큼만 본다.
+
+## 장애 때 치는 순서
+
+명령을 다 알아도 순서가 없으면 헤맨다. 넓게 보고 좁혀 들어가는 순서가 기본이다. 바깥 기록(API 서버)으로 끝낼 수 있는 질문은 바깥에서 끝내고, 노드까지 가야 하는 명령은 그다음에 친다.
+
+<ConceptDiagram
+  width={420}
+  height={330}
+  caption="넓은 데서 좁은 데로, 기록에서 실물로"
+  nodes={[
+    { id: "ctx", label: "어디를 보나", sub: "context · -n", x: 210, y: 30, w: 170 },
+    { id: "get", label: "get -o wide", sub: "STATUS · RESTARTS · NODE", x: 210, y: 95, w: 210 },
+    { id: "desc", label: "describe · events", sub: "왜 그 상태인가", x: 110, y: 165, w: 170 },
+    { id: "logs", label: "logs", sub: "--previous · -l --prefix", x: 310, y: 165, w: 170 },
+    { id: "pf", label: "port-forward", sub: "Pod 하나의 응답", x: 110, y: 235, w: 160 },
+    { id: "exec", label: "exec", sub: "안에서 본 DNS · env", x: 310, y: 235, w: 160 },
+    { id: "debug", label: "debug", sub: "셸 없는 이미지 · 노드", x: 210, y: 300, w: 190 },
+  ]}
+  edges={[
+    { from: "ctx", to: "get" },
+    { from: "get", to: "desc", label: "안 뜬다" },
+    { from: "get", to: "logs", label: "떴는데 이상" },
+    { from: "logs", to: "pf" },
+    { from: "logs", to: "exec" },
+    { from: "exec", to: "debug", dashed: true },
+    { from: "desc", to: "debug", dashed: true },
+  ]}
+/>
+
+1. 지금 어느 클러스터, 어느 네임스페이스를 보는지 확인한다. `kubectl config current-context`를 한 번 치는 데 1초도 안 걸린다. 왜 이게 첫 단계인지는 [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts)에 있다.
+2. `get -o wide`로 STATUS, RESTARTS, NODE를 본다. 한 노드에만 몰렸는지, 재시작이 늘고 있는지가 여기서 보인다.
+3. 뜨지 못했다면(Pending, ContainerCreating, ImagePullBackOff) `describe`의 이벤트가 답을 준다. 로그는 아직 없다.
+4. 떴는데 이상하다면 `logs`다. 재시작했으면 `--previous`, Pod가 여럿이면 `-l --prefix`.
+5. 로그로 부족하면 `port-forward`로 Pod 하나의 응답을 직접 보거나, `exec`로 안에서 DNS와 연결을 확인한다.
+6. 셸이 없거나 노드 자체를 봐야 하면 `debug`.
+
+이 순서에서 자주 하는 실수는 3과 4를 바꾸는 것이다. ImagePullBackOff인 Pod에 `logs`를 치면 컨테이너가 시작조차 안 해서 "waiting to start" 같은 메시지만 돌아온다. 반대로 Running인데 500을 내는 Pod는 describe 이벤트가 깨끗하다. 문제가 앱 안에 있기 때문이다.
+
+이 명령들은 모두 보기만 한다. 장애 중에 손이 바빠지면 `delete pod`로 일단 살리고 싶어진다. 지우기 전에 `describe`와 `logs --previous`를 파일로 떠 둔다. Pod가 지워지면 그 Pod의 이벤트와 로그도 함께 사라진다.
+
+```bash
+# 지우기 전에 증거를 남긴다
+kubectl -n shop describe pod api-55b9dbd58d-9f67v > api-9f67v.describe.txt
+kubectl -n shop logs api-55b9dbd58d-9f67v --all-containers --timestamps > api-9f67v.log
+kubectl -n shop get events --sort-by=.metadata.creationTimestamp > shop-events.txt
+```
+
+## 기록을 읽는 명령, 노드까지 가는 명령
+
+kubectl의 "보는" 명령은 두 갈래다. `get`, `describe`, `events`, `--watch`는 API 서버의 기록을 읽고, `logs`, `exec`, `port-forward`, `debug`는 API 서버를 거쳐 노드의 kubelet까지 간다. 앞쪽은 상태가 왜 그런지, 뒤쪽은 실제 프로세스가 무엇을 하는지 알려 준다. 출력은 `-o wide`, jsonpath, custom-columns로 필요한 칸만 뽑고, 이름 대신 라벨로 고른다. 그리고 `deploy/api`로 본 로그와 `svc/api`로 연 port-forward가 Pod 하나만 보여 준다는 것을 잊지 않는다. 다음은 바꾸는 쪽 명령, [kubectl apply가 무엇과 무엇을 비교하는지](/posts/kubectl-apply-ssa)다.
+
+## 면접에서 나올 만한 질문
+
+### kubectl get pods를 치면 내부적으로 어떤 일이 일어나나요?
+
+kubeconfig에서 현재 컨텍스트의 서버 주소와 자격 증명, 네임스페이스를 읽고 `GET /api/v1/namespaces/{ns}/pods`를 보낸다. API 서버는 인증과 RBAC 인가를 거쳐 watch 캐시나 etcd에서 목록을 읽는다. kubectl이 Accept 헤더로 Table 형식을 요청하기 때문에 READY, STATUS 같은 칸은 서버가 계산해서 보낸다. `-v=6`으로 실제 요청 URL을 볼 수 있다.
+
+### kubectl logs와 kubectl get의 경로는 어떻게 다른가요?
+
+get은 API 서버가 가진 객체 기록만 읽는다. logs는 Pod의 log 하위 리소스로 요청하면 API 서버가 Pod가 있는 노드의 kubelet(10250)에 넘기고, kubelet이 노드의 로그 파일을 읽어 흘려준다. 그래서 get은 되는데 logs와 exec만 타임아웃이 나면 API 서버에서 노드로 가는 네트워크가 막혔는지 본다. 권한도 pods/log, pods/exec로 따로 준다.
+
+### kubectl port-forward svc/api로 확인했는데 정상입니다. 서비스가 정상이라고 봐도 되나요?
+
+아니다. port-forward는 Service의 셀렉터로 Pod 하나를 골라 그 Pod에 직접 연결한다. Service의 가상 IP, kube-proxy 규칙, 엔드포인트, 로드 밸런싱을 하나도 거치지 않으니 셀렉터가 틀렸거나 일부 Pod만 고장 난 상황을 잡지 못한다. 그 Pod가 지워지면 연결도 끊긴다. Service까지 확인하려면 클러스터 안에서 Service 이름으로 요청해 본다.
+
+### 여러 Pod의 로그를 한 번에 보려면 어떻게 하나요?
+
+`kubectl logs -l app=api --prefix -f`처럼 라벨로 묻고 줄마다 Pod 이름을 붙인다. `deploy/api`처럼 상위 객체 이름으로 주면 Pod 하나만 골라서 보여 주니 에러가 한 Pod에서만 날 때 놓친다. 라벨로 볼 때는 동시 스트림이 기본 5개로 제한돼 `--max-log-requests`를 올려야 하고, 그보다 많으면 로그 수집 시스템을 쓰는 게 맞다.
+
+### jsonpath로 값을 뽑아 스크립트에서 쓸 때 조심할 점은요?
+
+필드 이름을 틀려도 에러 없이 빈 값과 종료 코드 0을 돌려준다. 그래서 받은 값이 비었는지 꼭 확인해야 한다. 표현식은 셸이 중괄호와 느낌표를 해석하지 않게 작은따옴표로 감싸고, 조건 목록은 `conditions[1]` 같은 순서 대신 `?(@.type=="Ready")` 필터로 고른다. 복잡하면 `-o json`을 jq로 처리하는 편이 안전하다.
+
+### --watch는 어떻게 동작하나요?
+
+처음에 목록을 한 번 GET하고, 응답의 resourceVersion을 붙여 `watch=true` 요청을 연다. 그 뒤로는 ADDED, MODIFIED, DELETED 이벤트가 스트림으로 오고 kubectl은 줄을 새로 덧붙인다. 컨트롤러가 informer로 클러스터를 따라가는 방식과 같다. 배포 완료 여부만 필요하면 `kubectl rollout status`가 종료 코드까지 줘서 CI에 낫다.
+
+### 셸이 없는 컨테이너는 어떻게 들여다보나요?
+
+`kubectl debug`로 도구 이미지를 임시 컨테이너로 붙인다. `--target`을 주면 앱 컨테이너의 프로세스 namespace에 합류해 프로세스가 보이고, 네트워크 namespace는 Pod와 같아 localhost로 앱에 닿는다. 네트워크 도구에 권한이 필요하면 `--profile=netadmin`을 주는데, 네임스페이스의 Pod Security 수준이 높으면 거절될 수 있다. 계속 죽는 Pod는 `--copy-to`로 복사본을 만든다.

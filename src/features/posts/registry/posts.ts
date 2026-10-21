@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "kustomize-basics",
+    title: "Kustomize 깊게: overlay, 패치 두 가지, generator, component",
+    summary: "commonLabels 한 줄로 Service 엔드포인트가 빈 장면에서 출발해 이름으로 합치는 전략적 병합 패치와 위치로 바꾸는 JSON 패치, 아무 데도 안 붙는 target 패치, 해시 이름을 만드는 generator, overlay보다 먼저 끼어드는 component를 실제 렌더링 결과로 확인한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "GitOps"],
+    date: "2026-10-22",
+    keywords: ["kustomization.yaml", "전략적 병합 패치", "commonLabels", "JSON 6902"],
+  },
+  {
+    slug: "kubeconfig-contexts",
+    title: "kubeconfig와 컨텍스트: kubectl은 지금 어느 클러스터에 붙어 있나",
+    summary: "한 터미널의 use-context가 다른 터미널의 delete를 운영으로 보내는 이유에서 출발해 kubeconfig의 세 목록, KUBECONFIG 병합 규칙과 이름 충돌, exec 자격 증명 플러그인, 터미널별 파일과 프롬프트, 읽기 전용 권한으로 실수를 막는 법을 정리한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Security", "Authentication"],
+    date: "2026-10-22",
+    keywords: ["current-context", "KUBECONFIG 병합", "exec 플러그인", "kubectx"],
+  },
+  {
+    slug: "kubectl-apply-ssa",
+    title: "kubectl apply는 무엇을 비교하나: 클라이언트 apply와 서버 쪽 apply",
+    summary: "손으로 늘린 replicas가 apply 한 번에 되돌아가는 장면에서 출발해 last-applied 어노테이션으로 하는 3방향 비교, 필드마다 주인을 적는 서버 쪽 apply와 충돌, kubectl diff와 서버 dry-run, --prune이 남의 객체를 지우는 경우까지 본다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "GitOps"],
+    date: "2026-10-22",
+    keywords: ["서버 쪽 apply", "Server-Side Apply", "managedFields", "last-applied-configuration", "--force-conflicts"],
+  },
+  {
+    slug: "kubectl-essentials",
+    title: "kubectl 기본기: 보고, 좁히고, 들어가 보기",
+    summary: "get 출력을 jsonpath와 custom-columns로 바꾸고 라벨과 필드로 좁히는 법, --watch가 목록과 watch로 나뉘는 방식, logs·exec·port-forward가 API 서버를 거쳐 kubelet까지 가는 길을 따라간다. port-forward와 deploy 로그가 Pod 하나만 보여 주는 함정과 장애 때 치는 순서도 정리한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["jsonpath", "custom-columns", "kubectl port-forward", "kubectl logs"],
+  },
+  {
     slug: "k8s-feature-maturity",
     title: "alpha, beta, GA와 API 폐기: 업그레이드 전에 옛 API 찾기",
     summary: "기능의 feature gate와 API 버전이 따로 켜지는 방식, 폐기 정책의 기한, extensions/v1beta1과 PodSecurityPolicy가 사라진 과정을 보고, Warning 헤더·지표·감사 로그·pluto·kubectl convert로 업그레이드 전에 옛 API를 찾아 옮기는 법을 정리한다.",

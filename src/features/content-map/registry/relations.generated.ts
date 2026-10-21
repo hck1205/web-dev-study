@@ -2,6 +2,91 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "kustomize-basics": {
+    "links": [
+      "k8s-project-structure",
+      "helm-dependencies-oci-gitops",
+      "kubectl-essentials",
+      "kubectl-apply-ssa",
+      "kubeconfig-contexts",
+      "k8s-labels-selectors",
+      "k8s-configmap",
+      "k8s-secret",
+      "helm-values-secrets",
+      "helm-basics",
+      "helm-chart-templates"
+    ],
+    "mentions": [
+      "k8s-deployment",
+      "k8s-pod-basics",
+      "local-k8s-kind-minikube",
+      "github-actions-docker-ecr",
+      "k8s-hpa"
+    ]
+  },
+  "kubeconfig-contexts": {
+    "links": [
+      "kubectl-essentials",
+      "kubectl-apply-ssa",
+      "kustomize-basics",
+      "k8s-namespace",
+      "eks-cluster-basics"
+    ],
+    "mentions": [
+      "local-k8s-kind-minikube",
+      "k8s-architecture",
+      "token-login",
+      "linux-files-permissions"
+    ]
+  },
+  "kubectl-apply-ssa": {
+    "links": [
+      "k8s-api-objects",
+      "k8s-controllers-reconcile",
+      "kubectl-essentials",
+      "kubeconfig-contexts",
+      "kustomize-basics",
+      "k8s-secret",
+      "helm-release-lifecycle",
+      "k8s-project-structure"
+    ],
+    "mentions": [
+      "k8s-configmap",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "webhooks"
+    ]
+  },
+  "kubectl-essentials": {
+    "links": [
+      "k8s-pod-troubleshooting",
+      "kubectl-apply-ssa",
+      "kubeconfig-contexts",
+      "kustomize-basics",
+      "k8s-api-objects",
+      "k8s-labels-selectors",
+      "k8s-pod-lifecycle",
+      "k8s-deployment",
+      "k8s-controllers-reconcile",
+      "k8s-pod-scheduling",
+      "k8s-service-types"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "dockerfile-image-layers",
+      "iptables-nat",
+      "k8s-configmap",
+      "docker-container-basics",
+      "realtime-communication",
+      "k8s-architecture",
+      "kubernetes-ingress",
+      "security-groups-nacl",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "dns"
+    ]
+  },
   "k8s-feature-maturity": {
     "links": [
       "k8s-api-objects",
@@ -29,6 +114,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-api-objects",
       "k8s-labels-selectors",
       "exponential-backoff-jitter",
+      "kubectl-apply-ssa",
       "leader-election"
     ],
     "mentions": [
@@ -67,6 +153,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-controllers-reconcile",
       "k8s-labels-selectors",
       "k8s-feature-maturity",
+      "kubectl-apply-ssa",
       "k8s-namespace",
       "optimistic-locking"
     ],
@@ -169,10 +256,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "local-k8s-kind-minikube": {
     "links": [
       "k8s-architecture",
+      "kubeconfig-contexts",
       "k8s-network-policy",
       "k8s-cni-pod-network",
       "linux-namespaces-cgroups",
-      "k8s-feature-maturity"
+      "k8s-feature-maturity",
+      "kubectl-essentials"
     ],
     "mentions": [
       "k8s-hpa",
@@ -224,7 +313,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "helm-chart-templates",
       "k8s-secret",
-      "helm-basics"
+      "helm-basics",
+      "kubectl-apply-ssa"
     ],
     "mentions": [
       "k8s-architecture",
@@ -308,6 +398,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "k8s-api-objects",
       "k8s-controllers-reconcile",
+      "kubectl-apply-ssa",
       "k8s-pod-scheduling",
       "k8s-pod-lifecycle",
       "optimistic-locking",
@@ -1914,6 +2005,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks"
     ],
     "mentions": [
+      "kubectl-essentials",
       "kubernetes-ingress",
       "network-flow-logs",
       "terraform-basics",
@@ -2569,6 +2661,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pv-pvc"
     ],
     "mentions": [
+      "kubectl-apply-ssa",
       "grpc",
       "k8s-architecture",
       "cron-jobs",
@@ -3323,6 +3416,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
+      "kubectl-essentials",
       "k8s-cni-pod-network",
       "k8s-architecture",
       "local-k8s-kind-minikube",

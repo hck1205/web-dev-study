@@ -1,0 +1,607 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kubectl-apply-ssa");
+
+트래픽이 몰려서 결제 API를 손으로 6개로 늘렸다. 30분 뒤 동료가 이미지 태그 하나를 바꾸려고 `kubectl apply -f api.yaml`을 쳤다. Pod가 다시 3개가 됐다. 파일에 `replicas: 3`이 적혀 있었기 때문이다. 같은 일은 HPA가 늘려 둔 replicas에서도, 누가 `kubectl edit`으로 고친 값에서도 생긴다.
+
+이상한 건 반대 경우다. 그날 아침 다른 사람이 `kubectl label`로 붙여 둔 `oncall=kim` 라벨은 apply 뒤에도 그대로 남았다. 파일에 없는 값인데 왜 라벨은 살아남고 replicas는 덮였을까. 답은 `kubectl apply`가 무엇과 무엇을 비교하느냐에 있다. 이 글은 클라이언트 쪽 apply가 쓰는 3방향 비교와 `last-applied-configuration` 어노테이션, 그 한계를 풀려고 나온 서버 쪽 apply(Server-Side Apply)의 필드 주인 개념, 충돌과 `--force-conflicts`, 적용 전에 보는 `kubectl diff`와 서버 dry-run, 그리고 `--prune`의 위험을 차례로 본다.
+
+출력은 kwok 실습 클러스터(Kubernetes 1.30, kubectl 1.31)에서 받았다. apply와 managedFields는 API 서버가 처리하는 부분이라 실제 클러스터와 같다. API 객체의 spec과 status가 무엇인지는 [쿠버네티스 API 객체](/posts/k8s-api-objects)에, 컨트롤러가 spec을 보고 움직이는 방식은 [컨트롤러와 조정 루프](/posts/k8s-controllers-reconcile)에 있다.
+
+이 주제의 다른 글: [kubectl 기본기](/posts/kubectl-essentials), [kubeconfig와 컨텍스트](/posts/kubeconfig-contexts), [Kustomize](/posts/kustomize-basics).
+
+## 명령으로 바꾸기, 파일로 맞추기
+
+kubectl로 무언가를 바꾸는 방법은 크게 둘이다. 하나는 "이렇게 해라"를 명령으로 주는 명령형이다. `create`, `scale`, `set image`, `label`, `edit`이 여기 속한다. 다른 하나는 "이 모양이어야 한다"를 파일로 주는 선언형, 곧 `apply`다.
+
+```bash
+# 명령형: 같은 명령을 두 번 치면 두 번째는 실패한다
+kubectl -n pay create deploy api2 --image=nginx:1.27
+kubectl -n pay create deploy api2 --image=nginx:1.27
+
+# 선언형: 같은 파일을 두 번 적용하면 두 번째는 바꿀 게 없다
+kubectl apply -f api.yaml
+kubectl apply -f api.yaml
+```
+
+```text
+deployment.apps/api2 created
+error: failed to create deployment: deployments.apps "api2" already exists
+deployment.apps/api created
+deployment.apps/api unchanged
+```
+
+apply는 몇 번을 실행해도 결과가 같다. 그래서 CI가 매 배포마다 같은 디렉터리를 apply해도 되고, git에 있는 파일이 클러스터가 가져야 할 모습의 원본이 된다. 명령형은 장애 때 빠르다. 대신 무엇을 바꿨는지 파일에 남지 않고, 다음 apply가 그 변경을 어떻게 다룰지는 apply의 비교 방식에 달려 있다. 처음 장면은 바로 그 지점에서 생겼다.
+
+## 클라이언트 쪽 apply는 셋을 비교한다
+
+`kubectl apply`의 기본 동작(클라이언트 쪽 apply)은 kubectl이 직접 patch를 계산해서 보낸다. 계산에 쓰는 재료는 셋이다.
+
+- 지금 적용하려는 파일
+- 클러스터에 저장된 지금 객체(live)
+- 지난번에 apply했던 파일. 객체의 `kubectl.kubernetes.io/last-applied-configuration` 어노테이션에 JSON으로 들어 있다
+
+```bash
+# 지난번 apply 내용을 본다
+kubectl -n pay apply view-last-applied deploy/api -o json
+```
+
+```text
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "annotations": {},
+    "labels": {
+      "app": "api",
+      "team": "payments"
+    },
+    "name": "api",
+    "namespace": "pay"
+  },
+  "spec": {
+    "replicas": 3,
+```
+
+처음 장면을 그대로 재현했다. 파일에서 `team: payments` 라벨을 지우고, 그 사이 누군가 replicas를 6으로 늘리고 `oncall=kim` 라벨을 붙였다. 그 상태에서 apply할 때 kubectl이 보낸 요청 본문을 `-v=8`로 떴다.
+
+```bash
+# 손으로 6개로 늘리고, 라벨도 하나 붙인다
+kubectl -n pay scale deploy api --replicas=6
+kubectl -n pay label deploy api oncall=kim
+
+# team 라벨을 지운 파일을 apply하면서 요청 본문을 본다
+kubectl apply -f api-v2.yaml -v=8
+```
+
+```text
+PATCH https://127.0.0.1:32747/apis/apps/v1/namespaces/pay/deployments/api?fieldManager=kubectl-client-side-apply&fieldValidation=Strict
+    Content-Type: application/strategic-merge-patch+json
+Request Body: {"metadata": {"annotations": {"kubectl.kubernetes.io/last-applied-configuration": "…"}, "labels": {"team": null}}, "spec": {"replicas": 3}}
+```
+
+(어노테이션 값은 길어서 줄였다.) patch에 든 것은 세 가지뿐이다. `team: null`은 지우라는 뜻이고, `replicas: 3`은 되돌리라는 뜻이고, 어노테이션은 이번 파일로 갈아 끼운다. `oncall`은 patch에 없다. 그래서 남았다. 아래 그림이 kubectl이 필드마다 내린 판단이다.
+
+<AlgoTrace
+  caption="필드마다 세 값을 맞대 보고 patch에 넣을지 정한다"
+  memoryLabel="만들어진 patch"
+  cells={["labels.app", "labels.team", "labels.oncall", "replicas"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "app: 파일에 api, 지금도 api다. 같으니 건드릴 것이 없다." },
+    { pointer: 1, memory: ["team: null"], caption: "team: 지난번 파일에는 있었는데 이번 파일에는 없다. 내가 넣었다가 뺀 값이니 지운다." },
+    { pointer: 2, memory: ["team: null"], caption: "oncall: 지난번 파일에도 이번 파일에도 없다. 남이 넣은 값이라 보고 그대로 둔다." },
+    { pointer: 3, memory: ["team: null", "replicas: 3"], caption: "replicas: 파일은 3, 지금은 6이다. 파일에 적힌 값이 이긴다. 누가 왜 6으로 바꿨는지는 모른다." },
+    { pointer: 3, found: [1, 3], memory: ["team: null", "replicas: 3", "last-applied 교체"], caption: "마지막으로 이번 파일을 새 last-applied로 넣는다. 다음 apply는 이걸 기준으로 비교한다." },
+  ]}
+/>
+
+규칙은 셋이다. 파일에 있는 필드는 지금 값과 다르면 파일 값으로 바꾼다. 지난번 파일에 있었는데 이번 파일에 없는 필드는 지운다. 둘 다에 없는 필드는 남이 관리하는 것으로 보고 손대지 않는다. 직접 짜 보면 생각보다 짧다.
+
+<CodePlayground
+  caption="3방향 비교로 patch 만들기"
+  functionName="threeWayPatch"
+  initialCode={`function threeWayPatch(last, live, next) {
+  // last: 지난번 apply한 값, live: 지금 클러스터 값, next: 이번 파일
+  // 필드 이름은 "labels.team"처럼 평평하게 준다
+  // 지울 필드는 null로 넣는다
+  return {};
+}`}
+  solution={`function threeWayPatch(last, live, next) {
+  const patch = {};
+  for (const key of Object.keys(next)) {
+    if (live[key] !== next[key]) patch[key] = next[key];
+  }
+  for (const key of Object.keys(last)) {
+    if (!(key in next) && key in live) patch[key] = null;
+  }
+  return patch;
+}`}
+  tests={[
+    {
+      label: "처음 장면: team 삭제, replicas 되돌림",
+      args: [
+        { "labels.app": "api", "labels.team": "payments", replicas: 3 },
+        { "labels.app": "api", "labels.team": "payments", "labels.oncall": "kim", replicas: 6 },
+        { "labels.app": "api", replicas: 3 },
+      ],
+      expected: { replicas: 3, "labels.team": null },
+    },
+    {
+      label: "바뀐 게 없으면 빈 patch",
+      args: [{ replicas: 3, image: "pay-api:2.0.0" }, { replicas: 3, image: "pay-api:2.0.0" }, { replicas: 3, image: "pay-api:2.0.0" }],
+      expected: {},
+    },
+    {
+      label: "파일에서 replicas를 빼면 지운다",
+      args: [{ replicas: 3, image: "pay-api:2.0.0" }, { replicas: 7, image: "pay-api:2.0.0" }, { image: "pay-api:2.1.0" }],
+      expected: { image: "pay-api:2.1.0", replicas: null },
+    },
+    {
+      label: "last-applied가 없을 때",
+      args: [{}, { replicas: 6, "labels.app": "api" }, { replicas: 3, "labels.app": "api" }],
+      expected: { replicas: 3 },
+    },
+  ]}
+/>
+
+셋째 테스트가 HPA를 붙일 때 많이 밟는 함정이다. HPA에게 replicas를 맡기려고 파일에서 `replicas`를 지우면, 지난번 파일에는 있었으니 kubectl은 "지우라"고 보낸다. 지워진 replicas는 기본값 1이 된다.
+
+```bash
+# 7개로 늘려 둔 상태에서 replicas를 뺀 파일을 apply한다
+kubectl -n csa scale deploy api --replicas=7
+kubectl apply -f csa-norep.yaml
+kubectl -n csa get deploy api -o jsonpath='{.spec.replicas}{"\n"}'
+```
+
+```text
+deployment.apps/api scaled
+deployment.apps/api configured
+1
+```
+
+7개가 한 번에 1개가 됐다. 운영에서라면 HPA가 다시 늘리기 전까지 Pod 하나가 트래픽을 모두 받는다. 피하려면 파일에서 빼기 전에 last-applied에서 먼저 replicas를 지운다.
+
+```bash
+# 지난번 apply 기록을 꺼내 replicas 줄을 지우고 다시 넣는다
+kubectl -n csa apply view-last-applied deploy/api -o yaml > la.yaml
+sed -i '/replicas: 3/d' la.yaml
+kubectl -n csa apply set-last-applied -f la.yaml
+
+# 이제 replicas 없는 파일을 apply해도 지우지 않는다
+kubectl apply -f csa-norep.yaml
+kubectl -n csa get deploy api -o jsonpath='{.spec.replicas}{"\n"}'
+```
+
+```text
+deployment.apps/api configured
+deployment.apps/api unchanged
+7
+```
+
+`kubectl apply edit-last-applied`로 편집기에서 바로 고쳐도 된다. 뒤에서 볼 서버 쪽 apply로 넘어가면 이런 손질이 필요 없어진다.
+
+## last-applied가 남기는 문제
+
+어노테이션 하나에 기억을 맡긴 방식이라 생기는 문제가 몇 가지 있다.
+
+첫째, `create`로 만든 객체에는 기록이 없다. 그 상태에서 apply하면 경고를 내고 어노테이션을 새로 붙인다.
+
+```text
+configmap/flags created
+Warning: resource configmaps/flags is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by kubectl apply. kubectl apply should only be used on resources created declaratively by either kubectl create --save-config or kubectl apply. The missing annotation will be patched automatically.
+configmap/flags configured
+```
+
+경고는 넘어가도 되지만 의미는 알아 둔다. 첫 apply 때는 "지난번 파일"이 비어 있어서, create 때 넣었는데 파일에 없는 필드를 지우지 못한다. 처음부터 apply로 관리할 객체는 `create --save-config`로 만들거나 처음부터 apply한다.
+
+둘째, 크기 제한이다. 객체 하나의 어노테이션을 다 합쳐 256KiB(262144바이트)를 넘을 수 없다. 객체 내용 전체가 어노테이션에 한 번 더 들어가니, 300KB짜리 ConfigMap은 객체 자체는 1MiB 한도 안인데도 만들어지지 않는다.
+
+```bash
+# 316KB짜리 ConfigMap을 클라이언트 쪽 apply와 서버 쪽 apply로 올려 본다
+kubectl apply -f big.yaml
+kubectl apply --server-side -f big.yaml
+```
+
+```text
+The ConfigMap "geoip" is invalid: metadata.annotations: Too long: must have at most 262144 bytes
+configmap/geoip serverside-applied
+```
+
+CRD 정의처럼 큰 객체를 apply하다 이 에러를 만나는 일이 흔하다. 셋째, 어노테이션에는 파일이 그대로 들어간다. Secret을 `stringData`로 써서 apply하면 평문이 어노테이션에 남는다. 이 문제는 [Secret 글](/posts/k8s-secret)에서 실제 출력과 함께 다뤘다.
+
+가장 큰 한계는 넷째다. 이 기록은 kubectl 한 명의 기억이다. HPA, 다른 팀의 스크립트, ArgoCD, `kubectl edit`이 바꾼 값은 "남이 바꾼 값"이라는 표시조차 없다. 내 파일에 그 필드가 있으면 아무 경고 없이 덮는다. 처음 장면의 replicas가 그랬다.
+
+## 서버 쪽 apply는 필드마다 주인을 적는다
+
+서버 쪽 apply는 계산을 API 서버로 옮겼다. kubectl은 파일을 그대로 보내고 "나는 kubectl이다"라고 이름만 밝힌다. API 서버는 필드마다 누가 마지막으로 그 값을 정했는지를 객체의 `metadata.managedFields`에 기록한다. 1.22부터 GA다.
+
+```bash
+# 서버 쪽 apply로 만든다
+kubectl apply --server-side -f web.yaml
+
+# managedFields는 기본 출력에서 숨겨져 있다. 보이게 한다
+kubectl -n pay get deploy web -o yaml --show-managed-fields
+```
+
+```text
+deployment.apps/web serverside-applied
+  managedFields:
+  - apiVersion: apps/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:labels:
+          f:app: {}
+          f:team: {}
+      f:spec:
+        f:replicas: {}
+        f:selector: {}
+        f:template:
+          f:spec:
+            f:containers:
+              k:{"name":"web"}:
+                .: {}
+                f:image: {}
+                f:name: {}
+    manager: kubectl
+    operation: Apply
+    time: "2026-10-21T00:45:12Z"
+  - apiVersion: apps/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:status:
+        f:availableReplicas: {}
+        f:readyReplicas: {}
+    manager: kube-controller-manager
+    operation: Update
+    subresource: status
+```
+
+(필드 목록 일부를 줄였다.) 항목 하나가 "이 관리자가 이 필드들을 갖고 있다"는 선언이다. 하나를 조각내 읽으면 이렇다.
+
+<UrlAnatomy
+  caption="managedFields 항목 하나"
+  base="managedFields[0]"
+  separator=" → "
+  joiner=" · "
+  params={[
+    { key: "manager", value: "kubectl", title: "필드 관리자", description: "누가 이 필드들을 정했는지다. kubectl apply --server-side는 기본으로 kubectl, 클라이언트 쪽 apply는 kubectl-client-side-apply, kubectl label은 kubectl-label로 남는다. --field-manager로 이름을 직접 줄 수 있다.", required: true },
+    { key: "operation", value: "Apply", title: "어떻게 정했나", description: "Apply는 서버 쪽 apply로 '이 값이어야 한다'고 선언한 것이다. Update는 PUT이나 일반 PATCH로 값을 바꾼 것이다(scale, edit, 컨트롤러의 갱신). 둘 다 주인이 되지만 충돌을 다루는 방식이 다르다.", required: true },
+    { key: "subresource", value: "status", title: "어느 하위 리소스로", description: "status나 scale 같은 하위 리소스로 바꿨으면 여기에 적힌다. 컨트롤러는 status를 고치고, kubectl scale은 scale 하위 리소스로 replicas를 고친다." },
+    { key: "fieldsV1", value: "f:spec.f:replicas", title: "가진 필드 목록", description: "f:는 필드 이름, k:는 목록 원소를 키로 고른 것이다. k:{\"name\":\"web\"}는 이름이 web인 컨테이너를 뜻한다. 목록을 순서가 아니라 키로 가리켜서, 컨테이너 순서가 바뀌어도 주인이 섞이지 않는다.", code: "f:spec:\n  f:replicas: {}\n  f:template:\n    f:spec:\n      f:containers:\n        k:{\"name\":\"web\"}:\n          f:image: {}", required: true },
+    { key: "time", value: "2026-10-21T00:45:12Z", title: "마지막으로 바꾼 시각", description: "이 관리자가 마지막으로 값을 쓴 시각이다. 누가 언제 손댔는지 추적할 때 쓸모가 있다." },
+  ]}
+/>
+
+이 기록 덕분에 API 서버는 "이 필드는 다른 관리자가 갖고 있다"는 사실을 안다. 그래서 남의 필드를 말없이 덮지 않고 멈춘다.
+
+## 남의 필드를 건드리면 충돌이 난다
+
+HPA처럼 replicas를 바꾸는 또 하나의 관리자를 흉내 내 봤다. `autoscaler-bot`이라는 이름으로 replicas만 담은 파일을 서버 쪽 apply한다.
+
+```bash
+# replicas: 6만 담은 파일을 다른 관리자 이름으로 apply한다
+kubectl apply --server-side --field-manager=autoscaler-bot -f web-scale.yaml; echo "[exit $?]"
+```
+
+```text
+error: Apply failed with 1 conflict: conflict with "kubectl": .spec.replicas
+Please review the fields above--they currently have other managers. Here
+are the ways you can resolve this warning:
+* If you intend to manage all of these fields, please re-run the apply
+  command with the `--force-conflicts` flag.
+* If you do not intend to manage all of the fields, please edit your
+  manifest to remove references to the fields that should keep their
+  current managers.
+* You may co-own fields by updating your manifest to match the existing
+  value; in this case, you'll become the manager if the other manager(s)
+  stop managing the field (remove it from their configuration).
+See https://kubernetes.io/docs/reference/using-api/server-side-apply/#conflicts
+[exit 1]
+```
+
+에러 메시지가 해결책 셋을 다 말해 준다. 내가 주인이 되겠다면 `--force-conflicts`, 아니면 내 파일에서 그 필드를 빼거나, 지금 값과 같은 값을 써서 공동 주인이 된다. 아래 그림은 주인이 바뀌는 과정을 따라간다.
+
+<SequenceDiagram
+  caption="필드 주인이 있으면 서버가 덮어쓰기를 멈춘다"
+  actors={[
+    { id: "k", label: "kubectl" },
+    { id: "api", label: "API 서버" },
+    { id: "bot", label: "autoscaler-bot" },
+  ]}
+  steps={[
+    { from: "k", to: "api", label: "apply replicas 3", title: "kubectl이 주인이 된다", detail: "파일 전체를 서버 쪽 apply로 보낸다. replicas를 포함한 필드들이 manager kubectl, operation Apply로 기록된다." },
+    { from: "bot", to: "api", label: "apply replicas 6", title: "다른 관리자가 같은 필드를 요구한다", detail: "값이 다르고 주인도 다르다. 서버는 저장하지 않고 409 Conflict를 돌려준다.", payload: "conflict with \"kubectl\": .spec.replicas" },
+    { from: "bot", to: "api", label: "--force-conflicts", title: "강제로 주인을 가져온다", detail: "replicas가 6으로 바뀌고 주인이 autoscaler-bot으로 넘어간다. kubectl의 목록에서는 replicas가 빠진다." },
+    { from: "k", to: "api", label: "apply replicas 3", title: "이번엔 kubectl이 막힌다", detail: "옛 파일 그대로 다시 apply하면 이번엔 kubectl이 충돌을 받는다. 처음 장면처럼 말없이 3으로 돌아가는 일이 없다.", payload: "conflict with \"autoscaler-bot\": .spec.replicas" },
+    { from: "k", to: "api", label: "apply (replicas 없음)", title: "파일에서 빼면 넘겨준다", detail: "kubectl이 replicas를 파일에서 빼고 apply하면 그 필드를 놓는다. 다른 주인이 있으니 값 6은 그대로 남는다." },
+  ]}
+/>
+
+마지막 두 단계를 실제로 확인했다.
+
+```bash
+# 강제로 가져온 뒤 관리자 목록과 값
+kubectl apply --server-side --field-manager=autoscaler-bot --force-conflicts -f web-scale.yaml
+kubectl -n pay get deploy web -o jsonpath='{.spec.replicas}{"\n"}'
+
+# kubectl이 replicas를 뺀 파일로 apply한다
+kubectl apply --server-side -f web-norep.yaml
+kubectl -n pay get deploy web -o jsonpath='{.spec.replicas}{"\n"}'
+```
+
+```text
+deployment.apps/web serverside-applied
+6
+deployment.apps/web serverside-applied
+6
+```
+
+다른 주인이 있으면 내가 놓아도 값이 남는다. 주인이 나 혼자일 때는 다르다. 아무도 갖지 않은 필드는 지워지고 기본값으로 돌아간다.
+
+```bash
+# 주인이 kubectl 하나뿐인 Deployment에서 replicas를 빼고 apply한다
+kubectl apply --server-side -f solo.yaml
+kubectl apply --server-side -f solo-norep.yaml
+kubectl -n pay get deploy solo -o jsonpath='{.spec.replicas}{"\n"}'
+```
+
+```text
+deployment.apps/solo serverside-applied
+1
+```
+
+3이 1이 됐다. 서버 쪽 apply로 바꿔도 "HPA를 붙이기 전에 replicas를 빼면" 1이 되는 건 같다. 그래서 순서를 지킨다. HPA를 먼저 만들고, HPA가 replicas를 한 번 바꿔 주인 기록이 생긴 것을 `--show-managed-fields`로 확인한 뒤 파일에서 replicas를 뺀다. HPA가 계산한 값이 지금 값과 같아 아무것도 쓰지 않았다면 주인 기록도 없다.
+
+명령형으로 바꾼 값도 주인이 된다. 서버 쪽 apply로 관리하던 Deployment를 `kubectl scale`로 늘리면 `kubectl`이 `scale` 하위 리소스를 거쳐 Update한 주인으로 기록된다. 그 뒤 옛 파일을 apply하면 충돌이 난다.
+
+```text
+kubectl	Apply	
+kubectl	Update	scale
+kube-controller-manager	Update	status
+error: Apply failed with 1 conflict: conflict with "kubectl" with subresource "scale" using apps/v1: .spec.replicas
+```
+
+장애 때 손으로 늘린 값을 다음 배포가 말없이 되돌리지 않는다는 뜻이다. 처음 장면의 문제가 여기서 풀린다. 대신 CI 파이프라인이 이 에러로 멈출 수 있으니, 손으로 바꾼 뒤에는 파일도 고치거나 그 필드를 빼 둔다.
+
+`--force-conflicts`를 CI에 습관처럼 넣는 경우가 있다. 충돌 에러가 귀찮아서다. 그러면 결국 클라이언트 쪽 apply와 같아진다. 매번 남의 필드를 가져와 덮으니까. 강제는 "이 필드는 원래 내 것이고 남이 잘못 건드렸다"는 판단이 섰을 때만 쓴다.
+
+## 서버 쪽 apply로 옮겨 갈 때
+
+클라이언트 쪽 apply로 관리하던 객체에 `--server-side`를 처음 쓰면 서버가 last-applied 어노테이션을 읽어 주인 기록으로 옮겨 준다.
+
+```bash
+# 옮기기 전과 후의 관리자 목록
+kubectl -n pay get deploy api --show-managed-fields -o jsonpath='{range .metadata.managedFields[*]}{.manager}{"\t"}{.operation}{"\t"}{.subresource}{"\n"}{end}'
+kubectl apply --server-side -f api-v2.yaml
+kubectl -n pay get deploy api --show-managed-fields -o jsonpath='{range .metadata.managedFields[*]}{.manager}{"\t"}{.operation}{"\t"}{.subresource}{"\n"}{end}'
+```
+
+```text
+kube-controller-manager	Update	status
+kubectl-client-side-apply	Update	
+kubectl-label	Update	
+deployment.apps/api serverside-applied
+kubectl-last-applied	Apply	
+kubectl	Apply	
+kubectl-label	Update	
+kube-controller-manager	Update	status
+```
+
+`kubectl-client-side-apply`가 사라지고 `kubectl-last-applied`와 `kubectl`이 생겼다. `kubectl label`로 붙인 라벨은 여전히 `kubectl-label`의 것이다. 팀에서 한 객체를 두 방식으로 번갈아 apply하면 주인 기록이 계속 뒤섞이니, 옮기기로 했으면 스크립트와 CI를 한꺼번에 바꾼다.
+
+도구마다 관리자 이름이 다르다. 충돌 메시지에 `helm`, `argocd-controller`, `kustomize-controller`(Flux) 같은 이름이 보이면 그 도구가 관리하는 필드를 내가 건드린 것이다. ArgoCD는 동기화 옵션 `ServerSideApply=true`로 서버 쪽 apply를 쓸 수 있고, Flux의 kustomize-controller는 서버 쪽 apply를 기본으로 쓴다. Helm 3는 자기 릴리스 기록과 비교하는 별도 방식이라 [Helm 릴리스 글](/posts/helm-release-lifecycle)의 "손으로 고친 값" 이야기와 함께 보면 좋다.
+
+## 적용하기 전에 결과를 본다
+
+apply 전에 무엇이 바뀔지 보는 명령이 `kubectl diff`다. 이미지 태그만 바꾼 파일로 해 봤다.
+
+```bash
+# 서버가 합친 결과와 지금 객체를 비교한다
+kubectl diff --server-side -f web-v2.yaml; echo "[exit $?]"
+```
+
+```text
+diff -u -N /tmp/LIVE-1372700942/apps.v1.Deployment.pay.web /tmp/MERGED-3593687726/apps.v1.Deployment.pay.web
+--- /tmp/LIVE-1372700942/apps.v1.Deployment.pay.web	2026-10-21 00:45:46.708067967 +0000
++++ /tmp/MERGED-3593687726/apps.v1.Deployment.pay.web	2026-10-21 00:45:46.708067967 +0000
+@@ -4,7 +4,7 @@
+   annotations:
+     deployment.kubernetes.io/revision: "1"
+   creationTimestamp: "2026-10-21T00:45:12Z"
+-  generation: 2
++  generation: 3
+   labels:
+     app: web
+     team: payments
+@@ -31,7 +31,7 @@
+         app: web
+     spec:
+       containers:
+-      - image: registry.example.com/pay-web:2.0.0
++      - image: registry.example.com/pay-web:2.1.0
+         imagePullPolicy: IfNotPresent
+         name: web
+         ports:
+[exit 1]
+```
+
+종료 코드는 차이가 없으면 0, 있으면 1, 에러면 1보다 크다. 차이가 있는 게 실패가 아니니 CI에서 `set -e`와 함께 쓸 때 조심한다. diff는 파일과 파일을 비교하는 게 아니다. `-v=6`으로 보면 서버에 dry-run patch를 보내고 돌아온 결과를 비교한다.
+
+```text
+GET https://127.0.0.1:32747/apis/apps/v1/namespaces/pay/deployments/web 200 OK in 6 milliseconds
+PATCH https://127.0.0.1:32747/apis/apps/v1/namespaces/pay/deployments/web?dryRun=All&fieldManager=kubectl&force=false 200 OK in 4 milliseconds
+```
+
+그래서 기본값 채우기, 어드미션 웹훅이 넣는 값, 검증까지 거친 "실제로 저장될 모습"이 나온다. 같은 원리로 `--dry-run=server`는 저장 직전까지 다 하고 멈춘다. 셀렉터를 바꾼 파일로 두 dry-run을 비교했다.
+
+```bash
+# 셀렉터를 바꾼 파일. 클라이언트 검사와 서버 검사
+kubectl apply -f web-sel.yaml --dry-run=client
+kubectl apply --server-side -f web-sel.yaml --dry-run=server
+```
+
+```text
+deployment.apps/web configured (dry run)
+The Deployment "web" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{"app":"web2"}, MatchExpressions:[]v1.LabelSelectorRequirement(nil)}: field is immutable
+```
+
+클라이언트 검사는 통과하고 서버 검사가 바꿀 수 없는 필드를 잡았다. 두 검사가 무엇을 잡고 무엇을 놓치는지, 클러스터 없이 검사하는 kubeconform까지는 [프로젝트 구조 글](/posts/k8s-project-structure)의 "클라이언트 검사만 믿으면 안 된다"에서 다뤘다. 아래 그림은 세 명령이 API 서버 안에서 어디까지 가는지를 보여 준다.
+
+<NetworkTopology
+  caption="diff와 dry-run은 저장 직전에 멈추고, apply만 etcd까지 간다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "api", label: "API 서버 안", x: 8, y: 92, w: 384, h: 110, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "diff · apply", x: 200, y: 45, icon: "client" },
+    { id: "merge", label: "병합", sub: "필드 주인", x: 70, y: 150, icon: "switch" },
+    { id: "adm", label: "어드미션", sub: "기본값 · 웹훅", x: 200, y: 150, icon: "firewall", w: 112 },
+    { id: "valid", label: "검증", sub: "immutable", x: 330, y: 150, icon: "lock" },
+    { id: "etcd", label: "etcd", sub: "저장", x: 330, y: 255, icon: "db" },
+    { id: "out", label: "diff 출력", sub: "LIVE ↔ MERGED", x: 120, y: 255, icon: "server", w: 120 },
+  ]}
+  links={[
+    { from: "cli", to: "merge" },
+    { from: "merge", to: "adm" },
+    { from: "adm", to: "valid" },
+    { from: "valid", to: "etcd" },
+    { from: "valid", to: "out", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "merge", "adm", "valid", "out"], packet: "dryRun", title: "diff는 끝까지 가 보고 돌아온다", detail: "dryRun=All로 보내면 병합, 기본값, 웹훅, 검증을 모두 거친 결과를 돌려준다. kubectl은 이것과 지금 객체를 비교해 찍는다." },
+    { path: ["cli", "merge", "adm", "valid"], packet: "selector", blocked: true, title: "바꿀 수 없는 필드는 검증에서 막힌다", detail: "서버 dry-run은 셀렉터 변경을 여기서 잡는다. 클라이언트 dry-run은 이 칸까지 오지 않아서 통과한다.", payload: "spec.selector: Invalid value: ...: field is immutable" },
+    { path: ["cli", "merge"], packet: "apply", blocked: true, highlight: ["merge"], title: "필드 주인이 다르면 병합에서 막힌다", detail: "서버 쪽 apply는 병합 단계에서 충돌을 찾는다. dry-run이어도 충돌은 똑같이 보고된다." },
+    { path: ["cli", "merge", "adm", "valid", "etcd"], packet: "apply", title: "apply만 저장까지 간다", detail: "같은 길을 지나 etcd에 쓴다. 이 시점부터 컨트롤러가 바뀐 spec을 보고 움직인다." },
+  ]}
+/>
+
+## prune은 파일에 없는 것을 지운다
+
+선언형의 마지막 조각은 삭제다. 파일을 지운다고 클러스터의 객체가 사라지지는 않는다. `--prune`은 "이 셀렉터에 맞는데 이번 파일 목록에 없는 객체"를 지운다.
+
+```bash
+# 디렉터리의 파일을 적용하고, 같은 라벨인데 파일에 없는 객체는 지운다
+kubectl apply -f . -l app.kubernetes.io/part-of=orders --prune
+
+# feature-flags.yaml을 지운 뒤 서버 dry-run으로 먼저 본다
+rm feature-flags.yaml
+kubectl apply -f . -l app.kubernetes.io/part-of=orders --prune --dry-run=server
+```
+
+```text
+configmap/api-config created
+configmap/feature-flags created
+W1021 00:46:22.743301   28635 prune.go:71] Deprecated: kubectl apply will no longer prune non-namespaced resources by default when used with the --namespace flag in a future release. To preserve the current behaviour, list the resources you want to target explicitly in the --prune-allowlist flag.
+configmap/api-config unchanged (server dry run)
+configmap/feature-flags pruned (server dry run)
+```
+
+같은 라벨을 붙였지만 `kubectl create`로 만든 `hand-made` ConfigMap은 지워지지 않았다. prune은 last-applied 어노테이션이 있는 객체, 곧 apply로 만든 것만 대상으로 삼는다. 문제는 셀렉터가 넓을 때다. 다른 디렉터리에 같은 라벨을 쓴 파일이 있다고 해 보자.
+
+```bash
+# 다른 디렉터리를 같은 라벨로 prune 하면
+kubectl apply -f other/ -l app.kubernetes.io/part-of=orders --prune --dry-run=server
+```
+
+```text
+configmap/batch-config created (server dry run)
+configmap/api-config pruned (server dry run)
+```
+
+`other/`에는 `api-config`가 없으니 "필요 없는 것"으로 보고 지운다. 실제로 쳤다면 다른 서비스의 설정이 사라진다. kubectl이 무엇을 기준으로 지울 대상을 고르는지 그림으로 따라가 보면 이렇다.
+
+<NetworkTopology
+  caption="prune은 라벨과 last-applied로 대상을 고르고, 파일 목록에 없으면 지운다"
+  width={400}
+  height={290}
+  zones={[
+    { id: "repo", label: "내 디렉터리", x: 8, y: 8, w: 384, h: 80, tone: "edge" },
+    { id: "ns", label: "네임스페이스 orders", x: 8, y: 110, w: 384, h: 172, tone: "private" },
+  ]}
+  nodes={[
+    { id: "files", label: "other/", sub: "batch-config", x: 90, y: 58, icon: "server" },
+    { id: "cli", label: "kubectl", sub: "--prune -l", x: 300, y: 58, icon: "client" },
+    { id: "batch", label: "batch-config", sub: "새로 만듦", x: 80, y: 170, icon: "db", w: 116 },
+    { id: "apicfg", label: "api-config", sub: "last-applied", x: 210, y: 170, icon: "db", w: 116 },
+    { id: "hand", label: "hand-made", sub: "create로 만듦", x: 335, y: 170, icon: "db", w: 104 },
+    { id: "other", label: "kube-root-ca", sub: "라벨 없음", x: 210, y: 240, icon: "db", w: 116 },
+  ]}
+  links={[
+    { from: "files", to: "cli" },
+    { from: "cli", to: "batch" },
+    { from: "cli", to: "apicfg", dashed: true },
+    { from: "cli", to: "hand", dashed: true },
+  ]}
+  steps={[
+    { path: ["files", "cli", "batch"], packet: "apply", title: "파일에 있는 것을 먼저 적용한다", detail: "other/ 안의 batch-config를 만든다. 여기까지는 보통 apply와 같다." },
+    { path: ["cli", "apicfg"], packet: "list", highlight: ["hand", "ns"], title: "셀렉터로 후보를 모은다", detail: "app.kubernetes.io/part-of=orders 라벨이 붙은 객체를 네임스페이스에서 모두 조회한다. 라벨이 없는 kube-root-ca.crt는 후보가 아니다." },
+    { path: ["cli", "hand"], highlight: ["hand"], title: "apply로 만든 것만 남긴다", detail: "hand-made는 라벨은 맞지만 last-applied 어노테이션이 없다. kubectl create로 만든 것이라 후보에서 빠진다." },
+    { path: ["cli", "apicfg"], packet: "DELETE", blocked: true, title: "파일 목록에 없으면 지운다", detail: "api-config는 라벨도 맞고 apply로 만들었는데 other/에 없다. 다른 디렉터리의 것이어도 kubectl은 알 길이 없어 지운다.", payload: "configmap/api-config pruned" },
+  ]}
+/>
+
+<Callout kind="warning">
+`--prune`은 셀렉터에 맞고 이번 파일 목록에 없는 객체를 지운다. 라벨이 겹치는 다른 디렉터리, 일부 파일만 넣은 apply, 오타 난 경로(`-f ./k8s/prod` 대신 `-f ./k8s/pord`)가 그대로 삭제로 이어진다. 운영에서는 항상 `--dry-run=server`로 pruned 줄을 먼저 확인하고, `--prune-allowlist`로 지울 수 있는 종류를 좁힌다. 지워진 Deployment나 ConfigMap은 git의 파일로 다시 apply하면 돌아오지만, PVC처럼 데이터가 붙은 객체는 돌아오지 않는다. PVC는 prune 대상 종류에 넣지 않는다.
+</Callout>
+
+이 위험을 줄이려고 나온 것이 ApplySet이다. 셀렉터 대신 "이 묶음에 속한 객체"를 부모 객체(기본은 Secret)에 기록하고, 묶음 안에서만 지운다. kubectl 1.27부터 알파이고, 1.31에서도 `KUBECTL_APPLYSET=true` 환경 변수로 켜야 한다.
+
+```bash
+# 묶음 이름을 정해 prune한다. 부모 Secret에 묶음 정보가 남는다
+KUBECTL_APPLYSET=true kubectl apply -n orders -f prune/ --prune --applyset=orders-app --server-side
+
+# 다른 묶음으로 other/를 적용해도 orders-app의 객체는 건드리지 않는다
+KUBECTL_APPLYSET=true kubectl apply -n orders -f other/ --prune --applyset=batch-app --server-side --dry-run=server
+```
+
+```text
+configmap/api-config serverside-applied
+configmap/batch-config serverside-applied (server dry run)
+```
+
+이번엔 `api-config`가 pruned 목록에 없다. 다만 알파 기능이라 운영 배포의 핵심을 맡기기에는 이르다. 삭제까지 자동으로 맞추고 싶다면 대부분의 팀은 ArgoCD나 Flux 같은 GitOps 도구의 prune을 쓴다. 이 도구들도 결국 "무엇이 내 묶음인가"를 따로 기록해서 같은 문제를 푼다.
+
+## 현장에서 apply 때문에 생기는 증상
+
+- 배포할 때마다 replicas가 줄어든다. 파일에 replicas가 남아 있고 HPA가 같은 Deployment를 맡고 있다. 파일에서 빼되, 클라이언트 쪽 apply라면 last-applied부터 지운다.
+- `kubectl edit`으로 고친 값이 다음 배포에 사라진다. 그 필드가 파일에도 있으면 클라이언트 쪽 apply는 말없이 덮는다. 고친 값을 파일에 옮긴다.
+- `Apply failed with 1 conflict: conflict with "argocd-controller"`. 그 필드는 GitOps가 관리한다. 손으로 apply하지 말고 git을 고친다.
+- `metadata.annotations: Too long`. 큰 ConfigMap이나 CRD를 클라이언트 쪽 apply했다. `--server-side`로 올린다.
+- apply는 됐는데 원하는 값이 아니다. `kubectl diff`로 서버가 합친 결과를 보고, `--show-managed-fields`로 그 필드의 주인이 누구인지 본다.
+
+## 기억이 어디 있느냐의 차이
+
+클라이언트 쪽 apply는 kubectl의 기억(last-applied 어노테이션)과 지금 값, 새 파일을 맞대 kubectl이 patch를 만든다. 남이 바꾼 값은 구분하지 못하고, 파일에 그 필드가 있으면 덮는다. 서버 쪽 apply는 API 서버가 필드마다 주인을 기록하고, 남의 필드를 바꾸려 하면 충돌로 멈춘다. 주인이 하나뿐인 필드를 파일에서 빼면 기본값으로 돌아가는 것은 둘 다 같다. 적용 전에는 `kubectl diff`와 서버 dry-run으로 저장될 모습을 보고, `--prune`은 묶음의 경계가 확실할 때만 쓴다. 파일이 여러 환경으로 늘어나면 [Kustomize](/posts/kustomize-basics)로 나눈다.
+
+## 면접에서 나올 만한 질문
+
+### kubectl apply와 kubectl create는 무엇이 다른가요?
+
+create는 "만들어라"라는 명령이라 이미 있으면 AlreadyExists로 실패한다. apply는 "이 모양이어야 한다"는 선언이라 없으면 만들고 있으면 차이만 고치며, 몇 번 실행해도 결과가 같다. 그래서 git의 파일을 원본으로 두고 CI에서 반복 실행하는 배포에는 apply를 쓴다. create로 만든 객체에 나중에 apply하면 last-applied 기록이 없어서 경고가 난다.
+
+### 클라이언트 쪽 apply의 3방향 병합은 어떻게 동작하나요?
+
+이번 파일, 클러스터의 지금 객체, last-applied 어노테이션에 저장된 지난번 파일을 비교한다. 파일에 있는 필드는 지금 값과 다르면 파일 값으로 바꾸고, 지난번에 있었는데 이번에 빠진 필드는 지우고, 둘 다 없는 필드는 남의 것으로 보고 둔다. kubectl이 이 patch를 계산해 strategic merge patch로 보내고, 어노테이션도 새 파일로 갈아 끼운다.
+
+### HPA를 붙인 Deployment에서 apply할 때마다 replicas가 돌아갑니다. 어떻게 고치나요?
+
+파일에서 replicas를 뺀다. 다만 클라이언트 쪽 apply에서 그냥 빼면 last-applied에 있던 필드라 삭제되어 1이 되므로, `apply set-last-applied`나 `edit-last-applied`로 기록에서 먼저 지운다. 서버 쪽 apply라면 HPA가 한 번 replicas를 고쳐 주인이 된 뒤에 빼면 값이 유지된다. 주인이 나뿐일 때 빼면 서버 쪽 apply도 기본값 1로 돌아간다.
+
+### 서버 쪽 apply의 managedFields는 무엇을 기록하나요?
+
+필드마다 어느 관리자가 어떤 방식(Apply 또는 Update)으로 마지막에 값을 정했는지를 기록한다. 목록 원소는 컨테이너 이름 같은 키로 가리켜서 순서가 바뀌어도 섞이지 않는다. 이 기록으로 서버는 다른 관리자가 가진 필드를 바꾸려는 apply를 충돌로 막는다. 기본 출력에서는 숨겨져 있어 `--show-managed-fields`로 본다.
+
+### 충돌이 나면 --force-conflicts를 쓰면 되지 않나요?
+
+쓸 수 있지만 습관처럼 쓰면 서버 쪽 apply를 쓰는 의미가 사라진다. 강제하면 그 필드의 주인을 가져오면서 값을 덮으니, 결국 남의 변경을 말없이 덮던 클라이언트 쪽 apply와 같아진다. 충돌 상대가 HPA나 GitOps 도구라면 내 파일에서 그 필드를 빼는 게 맞고, 강제는 그 필드가 원래 내 것이라는 판단이 섰을 때만 쓴다.
+
+### kubectl diff는 어떻게 결과를 만드나요?
+
+로컬 파일끼리 비교하지 않고, 서버에 dry-run patch를 보내 실제로 저장될 객체를 받아 와 지금 객체와 비교한다. 그래서 기본값, 어드미션 웹훅이 넣는 값, 검증 오류까지 반영된다. 종료 코드는 차이 없음 0, 차이 있음 1, 에러는 1보다 크다.
+
+### kubectl apply --prune은 왜 위험한가요?
+
+셀렉터에 맞는데 이번 파일 목록에 없는 객체를 지우기 때문이다. 다른 디렉터리가 같은 라벨을 쓰거나 일부 파일만 적용하면 남의 객체가 삭제된다. last-applied가 있는 객체만 대상이지만 그걸로는 부족해서, 항상 서버 dry-run으로 pruned 목록을 먼저 보고 allowlist로 종류를 좁힌다. 묶음을 명시적으로 기록하는 ApplySet은 아직 알파라 GitOps 도구의 prune을 쓰는 경우가 많다.

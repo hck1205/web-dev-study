@@ -1,0 +1,581 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kubeconfig-contexts");
+
+터미널을 두 개 띄워 놓고 일한다. 왼쪽은 운영 클러스터를 지켜보고, 오른쪽은 개발 클러스터에서 테스트용 Deployment를 지웠다 만들었다 한다. 왼쪽에서 운영 상태를 보려고 `kubectl config use-context prod`를 쳤다. 그리고 오른쪽으로 돌아와 늘 하던 `kubectl delete deploy api`를 친다. 오른쪽 터미널은 아무것도 바꾸지 않았는데, 지워진 것은 운영의 api다.
+
+두 터미널이 같은 파일 하나(`~/.kube/config`)를 읽기 때문에 생기는 일이다. "현재 컨텍스트"는 셸마다 있는 상태가 아니라 파일에 적힌 한 줄이다. 이 글은 kubeconfig 파일이 무엇으로 이루어지는지, kubectl이 어느 파일의 어느 값을 고르는지, 여러 파일을 `KUBECONFIG`로 합칠 때 생기는 일, 비밀번호 대신 명령을 실행해 자격 증명을 받는 exec 플러그인, 그리고 엉뚱한 클러스터에 명령을 치지 않게 막는 장치들을 본다.
+
+출력은 kwok로 띄운 실습 클러스터 두 개(dev, prod. 둘 다 Kubernetes 1.30)와 kubectl 1.31에서 받았다. 두 클러스터는 인증서 발급 기관(CA)이 서로 다른 별개의 API 서버다. 파일 경로는 읽기 쉽게 줄였다.
+
+이 주제의 다른 글: [kubectl 기본기](/posts/kubectl-essentials), [kubectl apply와 서버 쪽 apply](/posts/kubectl-apply-ssa), [Kustomize](/posts/kustomize-basics).
+
+## 파일 하나에 목록 셋
+
+kubeconfig는 YAML 파일이다. 안에 목록이 셋 있고, 그 셋을 잇는 이름이 하나 있다. 개발 클러스터용 파일을 kubectl 명령으로 직접 만들어 봤다.
+
+```bash
+# 클러스터: API 서버 주소와, 그 서버 인증서를 확인할 CA
+kubectl config --kubeconfig=dev.yaml set-cluster dev --server=https://127.0.0.1:32747 --certificate-authority=pki/ca.crt --embed-certs=true
+
+# 사용자: 내가 누구인지 증명할 자격 증명
+kubectl config --kubeconfig=dev.yaml set-credentials dev-admin --client-certificate=pki/admin.crt --client-key=pki/admin.key --embed-certs=true
+
+# 컨텍스트: 클러스터와 사용자와 기본 네임스페이스의 짝
+kubectl config --kubeconfig=dev.yaml set-context dev --cluster=dev --user=dev-admin --namespace=shop
+kubectl config --kubeconfig=dev.yaml use-context dev
+
+# 만든 파일을 본다. 인증서 내용은 가려서 보여 준다
+kubectl config view --kubeconfig=dev.yaml
+```
+
+```text
+Cluster "dev" set.
+User "dev-admin" set.
+Context "dev" created.
+Switched to context "dev".
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: DATA+OMITTED
+    server: https://127.0.0.1:32747
+  name: dev
+contexts:
+- context:
+    cluster: dev
+    namespace: shop
+    user: dev-admin
+  name: dev
+current-context: dev
+kind: Config
+preferences: {}
+users:
+- name: dev-admin
+  user:
+    client-certificate-data: DATA+OMITTED
+    client-key-data: DATA+OMITTED
+```
+
+`clusters`는 어디로 갈지, `users`는 누구로 갈지, `contexts`는 그 둘과 기본 네임스페이스를 묶은 이름표다. `current-context`는 지금 어느 이름표를 쓸지다. 클러스터 하나에 사용자가 여럿일 수 있고(관리자, 읽기 전용), 같은 사용자를 여러 클러스터에 쓸 수도 있어서 이렇게 나눠 둔다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="컨텍스트는 클러스터와 사용자를 잇는 이름표다"
+  nodes={[
+    { id: "cur", label: "current-context", sub: "dev", x: 210, y: 35, w: 170 },
+    { id: "cdev", label: "context dev", sub: "ns: shop", x: 110, y: 120, w: 150 },
+    { id: "cprod", label: "context prod-ro", sub: "ns: shop", x: 310, y: 120, w: 160 },
+    { id: "kdev", label: "cluster dev", sub: "server · CA", x: 60, y: 250, w: 120 },
+    { id: "udev", label: "user dev-admin", sub: "인증서", x: 190, y: 250, w: 130 },
+    { id: "kprod", label: "cluster prod", sub: "server · CA", x: 345, y: 250, w: 120 },
+  ]}
+  edges={[
+    { from: "cur", to: "cdev" },
+    { from: "cdev", to: "kdev" },
+    { from: "cdev", to: "udev" },
+    { from: "cprod", to: "kprod" },
+    { from: "cur", to: "cprod", dashed: true, label: "use-context" },
+  ]}
+/>
+
+`--embed-certs=true`를 주면 인증서 파일 경로 대신 내용(`*-data`)이 파일 안에 들어간다. 파일 하나만 옮겨도 동작하는 대신, 그 파일 하나가 곧 클러스터 열쇠가 된다. 실습 클러스터의 관리자 인증서를 열어 보면 무게가 실감 난다.
+
+```bash
+# 인증서의 주체, 발급자, 만료일
+openssl x509 -in pki/admin.crt -noout -subject -issuer -enddate
+
+# API 서버가 나를 누구로 보는지
+kubectl auth whoami
+```
+
+```text
+subject=O = system:masters, CN = kwok-admin
+issuer=CN = kwok-ca
+notAfter=Sep 27 00:34:28 2126 GMT
+ATTRIBUTE   VALUE
+Username    kwok-admin
+Groups      [system:masters system:authenticated]
+```
+
+`O = system:masters`는 RBAC 검사를 건너뛰는 그룹이다. 이 인증서는 RoleBinding을 지워도 권한이 줄지 않고, 인증서는 만료 전에 하나만 골라 취소할 방법이 없다(실습용이라 만료가 100년 뒤다). kubeadm도 예전에는 `admin.conf`에 이런 인증서를 넣었고, 1.29부터는 system:masters 인증서를 `super-admin.conf`로 따로 떼어 두었다. 이런 파일을 슬랙에 붙이거나 git에 올리면 클러스터 CA를 바꾸는 수준의 대응이 필요하다. 사람에게는 이런 파일 대신 뒤에서 볼 exec 플러그인이나 짧게 사는 토큰을 준다.
+
+## kubectl이 설정을 고르는 순서
+
+kubectl은 실행할 때마다 설정을 새로 읽는다. 어느 파일을 읽을지는 이 순서로 정한다.
+
+1. `--kubeconfig` 플래그가 있으면 그 파일 하나만 쓴다.
+2. 없고 `KUBECONFIG` 환경 변수가 있으면 거기 적힌 파일들을 합쳐 쓴다(리눅스와 macOS는 `:`, 윈도는 `;`로 구분).
+3. 둘 다 없으면 `~/.kube/config`를 쓴다.
+
+파일을 정한 다음에는 값을 고른다. 컨텍스트는 `--context` 플래그가 이기고, 없으면 `current-context`다. 클러스터, 사용자, 네임스페이스도 `--cluster`, `--user`, `-n`이 컨텍스트에 적힌 값을 이긴다. 파일이 하나도 없으면 kubectl은 예전 기본값인 `localhost:8080`으로 간다. 처음 보는 사람은 이 에러를 API 서버 장애로 오해한다.
+
+```text
+The connection to the server localhost:8080 was refused - did you specify the right host or port?
+```
+
+이 줄이 보이면 클러스터가 아니라 kubeconfig를 못 찾은 것이다. `echo $KUBECONFIG`와 `ls ~/.kube/`부터 본다. 없는 컨텍스트를 고르면 메시지가 다르다.
+
+```text
+Error in configuration: context was not found for specified context: staging
+```
+
+## KUBECONFIG로 여러 파일 합치기
+
+클러스터가 늘면 파일도 는다. 클라우드 CLI(`aws eks update-kubeconfig`, `gcloud container clusters get-credentials`)는 `~/.kube/config`에 항목을 덧붙이고, kind나 minikube도 저마다 항목을 넣는다. 파일을 따로 두고 `KUBECONFIG`로 합치는 사람도 많다.
+
+<UrlAnatomy
+  caption="환경 변수 한 줄이 파일 목록이다"
+  base="export KUBECONFIG="
+  separator=""
+  joiner=":"
+  params={[
+    { key: "dev", display: "~/.kube/dev.yaml", title: "첫 번째 파일", description: "같은 이름의 항목이 여러 파일에 있으면 앞에 있는 파일이 이긴다. current-context도 이 값을 처음 정한 파일의 것을 쓴다. use-context가 쓰는 곳도 보통 여기다.", required: true },
+    { key: "prod", display: "~/.kube/prod.yaml", title: "두 번째 파일", description: "앞 파일에 없는 이름만 더해진다. 앞 파일과 사용자 이름이 같으면 이 파일의 자격 증명은 무시된다." },
+    { key: "nope", display: "~/.kube/old.yaml", title: "없는 파일", description: "목록의 파일이 없으면 조용히 건너뛴다. 오타를 내도 에러가 나지 않아서 '분명 넣었는데 컨텍스트가 안 보인다'가 된다." },
+  ]}
+/>
+
+두 파일을 합쳐 보면 컨텍스트 목록이 하나로 보인다.
+
+```bash
+# 두 파일을 합쳐서 본다
+export KUBECONFIG=dev.yaml:prod.yaml
+kubectl config get-contexts
+
+# 지금 컨텍스트 말고 다른 클러스터를 한 번만 보고 싶을 때
+kubectl --context=prod get deploy
+```
+
+```text
+CURRENT   NAME   CLUSTER   AUTHINFO     NAMESPACE
+*         dev    dev       dev-admin    shop
+          prod   prod      prod-admin   shop
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+api    4/4     4            4           20s
+```
+
+합칠 때의 규칙은 하나다. 같은 이름이면 먼저 나온 것이 이긴다. 바로 이 규칙 때문에 생기는 장애가 있다. 두 파일이 사용자 이름을 똑같이 `admin`으로 써서(도구가 기본 이름을 쓰면 흔하다) 합쳤더니 이렇게 됐다.
+
+```bash
+# 사용자 이름이 둘 다 admin인 파일 두 개
+export KUBECONFIG=dev-same.yaml:prod-same.yaml
+kubectl config get-contexts
+kubectl --context=prod get deploy -v=6
+```
+
+```text
+CURRENT   NAME   CLUSTER   AUTHINFO   NAMESPACE
+*         dev    dev       admin      shop
+          prod   prod      admin      shop
+Config loaded from file:  dev-same.yaml
+Config loaded from file:  prod-same.yaml
+GET https://127.0.0.1:32740/apis/apps/v1/namespaces/shop/deployments?limit=500 401 Unauthorized in 4 milliseconds
+error: You must be logged in to the server (Unauthorized)
+```
+
+prod 컨텍스트는 prod 서버(32740)로 갔지만, `admin` 사용자는 앞 파일인 dev의 것이 이겼다. dev CA가 발급한 인증서를 prod 서버에 내미니 401이다. 각 파일은 따로 쓰면 멀쩡해서 원인을 찾기 어렵다. 아래 그림에서 합치는 과정을 한 항목씩 따라가 본다.
+
+<AlgoTrace
+  caption="이름이 같으면 먼저 읽은 파일의 것만 남는다"
+  memoryLabel="합친 결과"
+  cells={["dev: current", "dev: ctx dev", "dev: user admin", "prod: current", "prod: ctx prod", "prod: user admin"]}
+  steps={[
+    { pointer: 0, memory: ["current=dev"], caption: "첫 파일의 current-context가 먼저 자리를 잡는다." },
+    { pointer: 1, memory: ["current=dev", "ctx dev→dev,admin"], caption: "컨텍스트 dev가 들어간다. cluster dev, user admin을 가리킨다." },
+    { pointer: 2, memory: ["current=dev", "ctx dev→dev,admin", "admin=dev 인증서"], caption: "사용자 admin이 dev 인증서로 들어간다." },
+    { pointer: 3, memory: ["current=dev", "ctx dev→dev,admin", "admin=dev 인증서"], caption: "prod 파일의 current-context는 버려진다. 이미 정해졌다." },
+    { pointer: 4, memory: ["current=dev", "ctx dev→dev,admin", "admin=dev 인증서", "ctx prod→prod,admin"], caption: "컨텍스트 prod는 새 이름이라 더해진다." },
+    { pointer: 5, found: [2, 4], memory: ["current=dev", "ctx dev→dev,admin", "admin=dev 인증서", "ctx prod→prod,admin"], caption: "사용자 admin은 이미 있어서 prod 인증서가 버려진다. prod 컨텍스트가 dev 인증서를 쓰게 된다." },
+  ]}
+/>
+
+같은 규칙을 코드로 옮겨 봤다. 파일 목록을 앞에서부터 읽으며 처음 본 이름만 담고, 컨텍스트를 골라 그 사용자의 자격 증명을 돌려준다.
+
+<CodePlayground
+  caption="여러 kubeconfig를 합쳐 컨텍스트 하나 고르기"
+  functionName="resolveContext"
+  initialCode={`function resolveContext(files, contextFlag) {
+  // files: [{ currentContext, contexts: [{ name, cluster, user }], users: [{ name, cert }] }]
+  // 같은 이름은 먼저 나온 파일이 이긴다
+  // contextFlag가 있으면 그 컨텍스트, 없으면 current-context
+  // 없는 컨텍스트면 null
+  return null;
+}`}
+  solution={`function resolveContext(files, contextFlag) {
+  let current = null;
+  const contexts = {};
+  const users = {};
+  for (const f of files) {
+    if (current === null && f.currentContext) current = f.currentContext;
+    for (const c of f.contexts || []) if (!(c.name in contexts)) contexts[c.name] = c;
+    for (const u of f.users || []) if (!(u.name in users)) users[u.name] = u;
+  }
+  const name = contextFlag || current;
+  const ctx = contexts[name];
+  if (!ctx) return null;
+  const user = users[ctx.user];
+  return { context: name, cluster: ctx.cluster, user: ctx.user, cert: user ? user.cert : null };
+}`}
+  tests={[
+    {
+      label: "dev:prod 순서면 dev가 현재 컨텍스트",
+      args: [[
+        { currentContext: "dev", contexts: [{ name: "dev", cluster: "dev", user: "admin" }], users: [{ name: "admin", cert: "dev-ca" }] },
+        { currentContext: "prod", contexts: [{ name: "prod", cluster: "prod", user: "admin" }], users: [{ name: "admin", cert: "prod-ca" }] },
+      ]],
+      expected: { context: "dev", cluster: "dev", user: "admin", cert: "dev-ca" },
+    },
+    {
+      label: "--context=prod인데 인증서는 dev 것",
+      args: [[
+        { currentContext: "dev", contexts: [{ name: "dev", cluster: "dev", user: "admin" }], users: [{ name: "admin", cert: "dev-ca" }] },
+        { currentContext: "prod", contexts: [{ name: "prod", cluster: "prod", user: "admin" }], users: [{ name: "admin", cert: "prod-ca" }] },
+      ], "prod"],
+      expected: { context: "prod", cluster: "prod", user: "admin", cert: "dev-ca" },
+    },
+    {
+      label: "순서를 바꾸면 prod가 이긴다",
+      args: [[
+        { currentContext: "prod", contexts: [{ name: "prod", cluster: "prod", user: "admin" }], users: [{ name: "admin", cert: "prod-ca" }] },
+        { currentContext: "dev", contexts: [{ name: "dev", cluster: "dev", user: "admin" }], users: [{ name: "admin", cert: "dev-ca" }] },
+      ]],
+      expected: { context: "prod", cluster: "prod", user: "admin", cert: "prod-ca" },
+    },
+    {
+      label: "없는 컨텍스트",
+      args: [[{ currentContext: "dev", contexts: [{ name: "dev", cluster: "dev", user: "admin" }], users: [{ name: "admin", cert: "dev-ca" }] }], "staging"],
+      expected: null,
+    },
+  ]}
+/>
+
+해결은 이름을 겹치지 않게 짓는 것이다. 사용자와 클러스터 이름에 클러스터 이름을 붙인다(`prod-admin`). `aws eks update-kubeconfig`가 이름을 클러스터 ARN으로 길게 짓는 이유도 이것이다. 합친 결과가 의심스러우면 `kubectl config view --minify`로 지금 컨텍스트가 실제로 쓰는 항목만 뽑아 본다.
+
+쓰기에도 규칙이 있다. 합친 상태에서 `use-context`를 치면 어느 파일이 바뀔까.
+
+```bash
+# 합친 상태에서 컨텍스트를 바꾸고, 각 파일의 current-context를 본다
+export KUBECONFIG=dev.yaml:prod.yaml
+kubectl config use-context prod
+grep current-context dev.yaml prod.yaml
+```
+
+```text
+Switched to context "prod".
+dev.yaml:current-context: prod
+prod.yaml:current-context: prod
+```
+
+바뀐 쪽은 dev.yaml이다. 앞 파일이 current-context를 정하고 있었으니 거기에 썼다. dev 전용이라고 생각한 파일에 prod가 적혀 있게 된다. 그래서 파일을 합쳐 쓰는 사람은 "현재 컨텍스트"를 파일 바깥(셸 변수, 플래그)에 두는 쪽이 안전하다. 뒤의 안전장치에서 이어서 본다.
+
+## 컨텍스트에 붙은 네임스페이스
+
+컨텍스트는 기본 네임스페이스도 들고 있다. `kubectl config set-context --current --namespace=...`로 바꾸고, 그러면 `-n` 없는 모든 명령이 그 칸을 본다. 이 동작과 오타 난 네임스페이스가 에러 대신 빈 결과를 돌려주는 함정은 [네임스페이스 글](/posts/k8s-namespace)의 "kubectl이 어느 칸을 보고 있나"에서 자세히 다뤘다. 여기서 덧붙일 것은 하나다. 네임스페이스를 바꾸는 것도 파일에 쓰는 일이라, 위에서 본 current-context와 똑같이 다른 터미널에 번진다.
+
+## 비밀 대신 명령을 적는 exec 플러그인
+
+파일에 인증서나 토큰을 넣어 두면 파일이 새는 순간 끝이다. 그래서 클라우드와 회사 SSO는 파일에 "자격 증명을 받아 오는 명령"만 적는다. kubectl은 요청을 보내기 전에 그 명령을 실행하고, 명령이 표준 출력으로 돌려준 `ExecCredential` JSON의 토큰이나 인증서를 쓴다. EKS라면 이 명령이 `aws eks get-token`이고, 그 토큰 안에 무엇이 들었는지는 [EKS 글의 IAM 로그인](/posts/eks-cluster-basics)에서 풀어 봤다.
+
+원리를 보려고 데모 플러그인을 직접 만들었다. 실습 클러스터는 토큰 인증을 따로 설정하지 않아서, 토큰 대신 인증서를 ExecCredential에 담아 돌려준다. 실제 플러그인은 대개 짧게 사는 토큰을 돌려준다는 것만 다르다.
+
+```python
+#!/usr/bin/env python3
+# kube-login-demo: 인증서를 ExecCredential로 돌려주는 데모 플러그인
+import json, os, sys, datetime
+sys.stderr.write("kube-login-demo called, KUBERNETES_EXEC_INFO=%s\n" % os.environ.get("KUBERNETES_EXEC_INFO"))
+pki = sys.argv[sys.argv.index("--pki") + 1]
+exp = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+print(json.dumps({
+  "apiVersion": "client.authentication.k8s.io/v1",
+  "kind": "ExecCredential",
+  "status": {
+    "expirationTimestamp": exp,
+    "clientCertificateData": open(pki + "/admin.crt").read(),
+    "clientKeyData": open(pki + "/admin.key").read(),
+  },
+}))
+```
+
+```bash
+# 사용자 항목에 실행할 명령을 적는다
+kubectl config --kubeconfig=sso.yaml set-credentials dev-sso \
+  --exec-api-version=client.authentication.k8s.io/v1 \
+  --exec-command=kube-login-demo --exec-arg=--pki --exec-arg=pki \
+  --exec-interactive-mode=Never
+kubectl config --kubeconfig=sso.yaml set-context dev --user=dev-sso
+
+# 플러그인이 PATH에 없을 때와 있을 때
+KUBECONFIG=sso.yaml kubectl get deploy
+PATH=$PWD/plug:$PATH KUBECONFIG=sso.yaml kubectl get deploy
+```
+
+```text
+User "dev-sso" set.
+Context "dev" modified.
+Unable to connect to the server: getting credentials: exec: executable kube-login-demo not found
+
+It looks like you are trying to use a client-go credential plugin that is not installed.
+
+To learn more about this feature, consult the documentation available at:
+      https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins
+kube-login-demo called, KUBERNETES_EXEC_INFO={"kind":"ExecCredential","apiVersion":"client.authentication.k8s.io/v1","spec":{"interactive":false}}
+
+NAME     READY   UP-TO-DATE   AVAILABLE   AGE
+api      3/3     3            3           17m
+worker   1/1     1            1           15m
+```
+
+파일에는 이제 비밀이 없다. 명령 이름과 인자만 있다. 플러그인은 `KUBERNETES_EXEC_INFO` 환경 변수로 "지금 사람에게 물어봐도 되는지(interactive)" 같은 정보를 받는다. `interactiveMode: Never`면 브라우저 로그인 창을 띄우지 못하는 CI에서도 멈추지 않고 실패한다.
+
+<SequenceDiagram
+  caption="요청 전에 플러그인을 실행해 자격 증명을 받는다"
+  actors={[
+    { id: "k", label: "kubectl" },
+    { id: "p", label: "exec 플러그인" },
+    { id: "idp", label: "SSO · IAM" },
+    { id: "api", label: "API 서버" },
+  ]}
+  steps={[
+    { from: "k", to: "p", label: "실행", title: "명령을 실행한다", detail: "kubeconfig의 command와 args로 플러그인을 띄운다. KUBERNETES_EXEC_INFO 환경 변수에 interactive 여부를 넣어 준다." },
+    { from: "p", to: "idp", label: "로그인·서명", title: "플러그인이 신원을 증명한다", detail: "aws CLI는 지금 쓰는 AWS 자격 증명으로 STS URL에 서명하고, OIDC 플러그인은 브라우저 로그인이나 저장해 둔 리프레시 토큰을 쓴다. 이 부분은 플러그인마다 다르다." },
+    { from: "p", to: "k", label: "ExecCredential", title: "표준 출력으로 돌려준다", detail: "토큰이나 인증서와 만료 시각을 JSON으로 찍는다. 종료 코드가 0이 아니면 kubectl은 요청을 보내지 않고 멈춘다.", payload: "{\"kind\":\"ExecCredential\",\"status\":{\"token\":\"…\",\"expirationTimestamp\":\"…\"}}" },
+    { from: "k", to: "api", label: "Bearer 토큰", title: "받은 자격 증명으로 요청한다", detail: "한 번 실행한 kubectl 프로세스 안에서는 만료 전까지 다시 부르지 않는다. 명령을 새로 치면 프로세스가 새로 뜨니 다시 부른다." },
+  ]}
+/>
+
+마지막 단계를 확인해 봤다. 요청 세 개를 보내는 명령 하나에서 플러그인은 한 번만 불렸다.
+
+```text
+kube-login-demo called, KUBERNETES_EXEC_INFO={"kind":"ExecCredential","apiVersion":"client.authentication.k8s.
+GET https://127.0.0.1:32747/apis/apps/v1/namespaces/shop/deployments?limit=500 200 OK in 33 milliseconds
+GET https://127.0.0.1:32747/apis/apps/v1/namespaces/shop/replicasets?limit=500 200 OK in 2 milliseconds
+GET https://127.0.0.1:32747/api/v1/namespaces/shop/pods?limit=500 200 OK in 2 milliseconds
+```
+
+kubectl을 반복 실행하는 스크립트에서는 매번 플러그인이 돈다. 느린 플러그인이면 스크립트도 느려진다. 그래서 OIDC 플러그인들은 받은 토큰을 디스크에 캐시해 두는 경우가 많다. 그 캐시 디렉터리도 비밀이 들어 있는 곳이니 권한을 같이 챙긴다.
+
+플러그인이 실패할 때의 메시지도 알아 둔다. SSO 세션이 끝나 플러그인이 1로 끝나면 이렇게 나온다. 플러그인이 표준 에러로 찍은 줄이 그대로 보인다.
+
+```text
+error: SSO session expired. run 'corp-sso login' first
+Unable to connect to the server: getting credentials: exec: executable kube-login-expired failed with exit code 1
+```
+
+"Unable to connect to the server"로 시작하지만 서버와 네트워크는 멀쩡하다. `getting credentials`가 보이면 kubectl이 서버에 요청을 보내기도 전에 멈춘 것이다. 팀에 새로 온 사람이 이 에러를 자주 만나니, 사용자 항목의 `installHint`에 설치 안내를 적어 두면 "not found" 메시지 아래에 그 문구가 함께 나온다.
+
+## 엉뚱한 클러스터에 명령이 닿는 길
+
+처음 장면을 실제로 재현했다. 두 터미널이 같은 `~/.kube/config`를 읽는다.
+
+```bash
+# 터미널 B: 개발이라고 생각하고 본다
+kubectl get deploy api
+
+# 터미널 A: 운영을 보려고 컨텍스트를 바꾼다
+kubectl config use-context prod
+
+# 터미널 B: 아무것도 안 바꿨는데 운영을 보고 있다
+kubectl get deploy api
+```
+
+```text
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+api    3/3     3            3           17m
+Switched to context "prod".
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+api    4/4     4            4           37s
+```
+
+READY가 3에서 4로, AGE가 17분에서 37초로 바뀌었다. 다른 클러스터다. 터미널 B의 프롬프트에는 아무 표시가 없다. 여기서 `delete`를 쳤다면 운영의 api가 지워진다.
+
+<NetworkTopology
+  caption="current-context는 셸이 아니라 파일에 있어서, 한 터미널의 전환이 다른 터미널에 번진다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "laptop", label: "내 노트북", x: 8, y: 8, w: 384, h: 150, tone: "edge" },
+    { id: "devz", label: "dev 클러스터", x: 8, y: 180, w: 184, h: 112, tone: "public" },
+    { id: "prodz", label: "prod 클러스터", x: 208, y: 180, w: 184, h: 112, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ta", label: "터미널 A", sub: "운영 감시", x: 70, y: 60, icon: "client" },
+    { id: "tb", label: "터미널 B", sub: "개발 작업", x: 330, y: 60, icon: "client" },
+    { id: "cfg", label: "~/.kube/config", sub: "current-context", x: 200, y: 120, icon: "db", w: 132 },
+    { id: "dapi", label: "API 서버", sub: ":32747", x: 100, y: 240, icon: "server" },
+    { id: "papi", label: "API 서버", sub: ":32740", x: 300, y: 240, icon: "server" },
+  ]}
+  links={[
+    { from: "ta", to: "cfg" },
+    { from: "tb", to: "cfg" },
+    { from: "cfg", to: "dapi" },
+    { from: "cfg", to: "papi" },
+  ]}
+  steps={[
+    { path: ["tb", "cfg", "dapi"], packet: "get", title: "B는 dev를 본다", detail: "파일의 current-context가 dev라서 B의 요청은 dev API 서버로 간다." },
+    { path: ["ta", "cfg"], packet: "use prod", highlight: ["cfg"], title: "A가 파일을 고친다", detail: "use-context prod는 A의 셸 상태가 아니라 파일의 한 줄을 고친다. 같은 파일을 읽는 모든 터미널, 에디터 플러그인, 스크립트가 영향을 받는다." },
+    { path: ["tb", "cfg", "papi"], packet: "delete", title: "B의 delete가 운영으로 간다", detail: "B는 아무것도 바꾸지 않았다. 다음 명령이 새 프로세스로 뜨면서 파일을 다시 읽고 prod로 간다." },
+    { path: ["tb", "cfg", "papi"], packet: "delete", blocked: true, highlight: ["prodz"], title: "막는 방법은 권한과 분리다", detail: "운영 기본 컨텍스트를 읽기 전용 사용자로 두면 같은 실수가 Forbidden으로 끝난다. 터미널마다 다른 KUBECONFIG를 쓰면 애초에 번지지 않는다.", payload: "Error from server (Forbidden): deployments.apps \"api\" is forbidden" },
+  ]}
+/>
+
+## 실수를 막는 장치들
+
+장치는 겹겹이 둔다. 하나는 습관이고, 하나는 화면이고, 하나는 권한이다.
+
+먼저 상태를 파일에서 셸로 옮긴다. 터미널마다 다른 kubeconfig를 쓰면 한쪽의 전환이 다른 쪽에 번지지 않는다.
+
+```bash
+# 운영용 파일을 따로 뽑는다. 지금 컨텍스트에 필요한 항목만, 인증서 내용까지 넣어서
+kubectl config view --minify --flatten --context=prod > ~/.kube/prod-only.yaml
+chmod 600 ~/.kube/prod-only.yaml
+
+# 이 터미널에서만 운영 파일을 쓴다
+export KUBECONFIG=~/.kube/prod-only.yaml
+kubectl config get-contexts
+```
+
+```text
+CURRENT   NAME   CLUSTER   AUTHINFO     NAMESPACE
+*         prod   prod      prod-admin   shop
+```
+
+이 터미널에는 prod밖에 없으니 실수로 dev로 갈 일도, 다른 터미널이 이 터미널을 바꿀 일도 없다. direnv 같은 도구로 디렉터리에 들어갈 때 `KUBECONFIG`를 바꾸는 방법도 많이 쓴다. 스크립트와 CI에서는 더 단순하다. current-context에 기대지 말고 모든 명령에 `--context`를 명시한다.
+
+다음은 화면이다. 지금 어디에 붙어 있는지가 프롬프트에 보이면 실수를 칠 때 한 번 더 눈에 걸린다. kube-ps1을 붙이고 컨텍스트를 바꿔 봤다.
+
+```bash
+# bash 프롬프트에 컨텍스트와 네임스페이스를 띄운다
+source kube-ps1.sh
+PS1='$(kube_ps1) \$ '
+
+# 운영 컨텍스트 이름은 눈에 띄게 바꿔 둔다
+kubectl config rename-context prod PROD-ap-northeast-2
+
+# 운영으로 바꾸면 프롬프트도 바뀐다
+kubectx PROD-ap-northeast-2
+```
+
+```text
+(dev:shop) $ 
+Context "prod" renamed to "PROD-ap-northeast-2".
+Switched to context "PROD-ap-northeast-2".
+(PROD-ap-northeast-2:shop) $ 
+```
+
+프롬프트를 운영일 때 빨갛게 칠하는 설정도 많이 한다. kubectx와 kubens는 컨텍스트와 네임스페이스 전환을 짧게 해 주는 도구다.
+
+```bash
+# 컨텍스트 목록, 전환, 바로 전 컨텍스트로 돌아가기
+kubectx
+kubectx PROD-ap-northeast-2
+kubectx -
+
+# 네임스페이스 전환과 되돌리기
+kubens kube-system
+kubens -
+```
+
+```text
+PROD-ap-northeast-2
+dev
+Switched to context "PROD-ap-northeast-2".
+Switched to context "dev".
+Context "dev" modified.
+Active namespace is "kube-system".
+Context "dev" modified.
+Active namespace is "shop".
+```
+
+출력의 `Context "dev" modified.`를 눈여겨본다. kubectx와 kubens도 결국 kubeconfig 파일을 고친다. 전환이 편해질수록 처음 장면은 더 쉽게 일어난다. 그래서 편의 도구는 프롬프트 표시나 터미널별 파일과 함께 쓴다.
+
+마지막이자 가장 확실한 장치는 권한이다. 운영에 평소 붙는 컨텍스트는 읽기 전용 사용자로 만들고, 바꿀 일이 있을 때만 쓰기 권한 컨텍스트로 간다. 실습에서는 ServiceAccount 토큰에 `view` 권한을 묶어 흉내 냈다. 실제로는 IAM 역할이나 SSO 그룹을 읽기 전용 RBAC에 묶는다.
+
+```bash
+# 읽기 전용 컨텍스트로 조회와 삭제를 해 본다
+kubectl --context=prod-ro get deploy
+kubectl --context=prod-ro delete deploy api
+kubectl --context=prod-ro auth can-i delete deployments -n shop
+```
+
+```text
+NAME   READY   UP-TO-DATE   AVAILABLE   AGE
+api    4/4     4            4           2m43s
+Error from server (Forbidden): deployments.apps "api" is forbidden: User "system:serviceaccount:shop:readonly-human" cannot delete resource "deployments" in API group "apps" in the namespace "shop"
+no
+```
+
+조회는 되고 삭제는 막힌다. 실수가 장애가 아니라 에러 한 줄로 끝난다. 권한을 어떻게 나누는지는 [RBAC 글](/posts/k8s-rbac)에서 이어진다.
+
+<NetworkTopology
+  caption="같은 클러스터라도 어느 사용자로 붙느냐에 따라 delete의 결과가 다르다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "kc", label: "kubeconfig", x: 8, y: 8, w: 384, h: 92, tone: "edge" },
+    { id: "prod", label: "prod 클러스터", x: 8, y: 120, w: 384, h: 152, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ro", label: "prod-ro", sub: "view", x: 100, y: 58, icon: "client" },
+    { id: "rw", label: "prod-admin", sub: "필요할 때만", x: 300, y: 58, icon: "lock", w: 116 },
+    { id: "rbac", label: "RBAC", sub: "인가", x: 200, y: 172, icon: "firewall" },
+    { id: "deploy", label: "deploy/api", sub: "shop", x: 200, y: 235, icon: "container" },
+  ]}
+  links={[
+    { from: "ro", to: "rbac" },
+    { from: "rw", to: "rbac" },
+    { from: "rbac", to: "deploy" },
+  ]}
+  steps={[
+    { path: ["ro", "rbac", "deploy"], packet: "get", title: "평소에는 읽기 전용으로 본다", detail: "view 역할은 get, list, watch만 허락한다. 감시와 조회에는 이걸로 충분하다." },
+    { path: ["ro", "rbac"], packet: "delete", blocked: true, title: "실수한 delete는 인가에서 막힌다", detail: "API 서버가 RBAC를 확인하고 403 Forbidden을 돌려준다. 객체는 그대로다." },
+    { path: ["rw", "rbac", "deploy"], packet: "apply", title: "바꿀 때만 쓰기 컨텍스트로 간다", detail: "쓰기 권한 컨텍스트로 바꾸는 순간이 하나의 확인 단계가 된다. 프롬프트 색까지 바뀌면 더 눈에 띈다." },
+  ]}
+/>
+
+## 클러스터 안의 Pod는 kubeconfig가 없다
+
+Pod 안에서 도는 프로그램(컨트롤러, CI 러너)은 kubeconfig 파일 없이 API 서버에 붙는다. kubelet이 ServiceAccount 토큰을 `/var/run/secrets/kubernetes.io/serviceaccount/token`에 넣어 주고, 같은 폴더의 `ca.crt`와 환경 변수 `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`로 주소를 안다. client-go의 in-cluster 설정이 이 세 가지를 읽는다. 그래서 Pod 안에서 `kubectl`을 쳐도 kubeconfig 없이 자기 ServiceAccount로 동작한다. 그 토큰이 어떻게 만들어지고 언제 만료되는지는 [ServiceAccount 토큰 글](/posts/k8s-serviceaccount-tokens)에서 다룬다.
+
+## kubeconfig를 다룰 때 흔한 실수
+
+- 관리자 kubeconfig를 팀 채널이나 위키에 붙인다. `--flatten`한 파일에는 개인 키가 그대로 있다. 공유할 때는 exec 플러그인 방식 파일을 주거나 각자 클라우드 CLI로 만들게 한다.
+- 파일 권한을 넓게 둔다. kubeconfig는 `chmod 600`이 기본이다. Helm은 그룹이나 다른 사용자가 읽을 수 있는 파일이면 경고를 낸다.
+- `KUBECONFIG`에 오타 난 경로를 넣는다. 없는 파일은 조용히 무시되니 컨텍스트가 안 보이면 경로부터 본다.
+- 여러 도구가 같은 이름(`admin`, `default`)으로 항목을 넣는다. 합쳤을 때 앞의 것이 이겨 401이 난다.
+- 스크립트가 current-context에 기댄다. 누군가 터미널에서 전환하면 스크립트의 대상도 바뀐다. 스크립트에는 `--context`를 박아 둔다.
+- 다 쓴 컨텍스트를 남겨 둔다. 지운 클러스터의 항목이 목록에 쌓이면 잘못 고르기 쉽다. `kubectl config delete-context`, `delete-cluster`, `delete-user`로 함께 지운다.
+
+## 파일 한 줄이 정하는 목적지
+
+kubeconfig는 클러스터, 사용자, 컨텍스트 세 목록과 current-context 한 줄이다. kubectl은 플래그, `KUBECONFIG`, `~/.kube/config` 순으로 파일을 고르고, 여러 파일을 합칠 때는 같은 이름이면 먼저 나온 것이 이긴다. current-context는 파일에 있어서 같은 파일을 쓰는 모든 터미널에 번진다. 자격 증명은 파일에 넣지 않고 exec 플러그인으로 그때그때 받는 편이 안전하고, 엉뚱한 클러스터를 막는 장치는 터미널별 파일, 프롬프트 표시, 읽기 전용 기본 권한 순으로 겹쳐 둔다. 명령을 치기 전에 어디를 보는지 확인하는 습관은 [kubectl 기본기](/posts/kubectl-essentials)의 장애 순서 첫 단계와 같다.
+
+## 면접에서 나올 만한 질문
+
+### kubeconfig의 cluster, user, context는 각각 무엇인가요?
+
+cluster는 API 서버 주소와 그 서버 인증서를 확인할 CA, user는 인증서나 토큰, exec 플러그인 같은 자격 증명, context는 cluster와 user와 기본 네임스페이스를 묶은 이름이다. current-context가 지금 쓸 context를 가리킨다. 이렇게 나눠 두어 한 클러스터에 여러 사용자를, 한 사용자를 여러 클러스터에 조합할 수 있다.
+
+### kubectl은 어떤 kubeconfig를 쓰나요? 여러 파일이면 어떻게 합치나요?
+
+`--kubeconfig` 플래그가 있으면 그 파일만, 없으면 `KUBECONFIG` 환경 변수의 파일들을 합치고, 그것도 없으면 `~/.kube/config`를 쓴다. 합칠 때는 같은 이름의 항목이 있으면 먼저 나온 파일이 이기고, current-context도 처음 정한 파일의 값을 쓴다. 그래서 두 파일이 사용자 이름을 똑같이 쓰면 뒤 파일의 자격 증명이 무시되어 401이 날 수 있다.
+
+### 다른 터미널에서 use-context를 쳤는데 왜 이 터미널까지 바뀌나요?
+
+current-context가 셸 상태가 아니라 kubeconfig 파일에 적힌 값이기 때문이다. kubectl은 실행할 때마다 파일을 새로 읽으니, 같은 파일을 쓰는 모든 터미널과 스크립트가 영향을 받는다. 막으려면 터미널마다 `KUBECONFIG`를 다른 파일로 두거나 명령마다 `--context`를 명시한다.
+
+### exec 자격 증명 플러그인은 왜 쓰나요?
+
+kubeconfig에 오래 사는 비밀(인증서, 토큰)을 넣지 않기 위해서다. 파일에는 실행할 명령만 적고, kubectl이 요청 전에 그 명령을 실행해 짧게 사는 토큰을 ExecCredential로 받는다. EKS의 `aws eks get-token`이나 OIDC 로그인 플러그인이 이 방식이다. 파일이 새도 플러그인을 실행할 자격(IAM, SSO 세션)이 없으면 쓸 수 없다.
+
+### "Unable to connect to the server: getting credentials"는 어디가 문제인가요?
+
+서버가 아니라 자격 증명 플러그인 단계다. 플러그인이 PATH에 없거나(executable not found), 로그인 세션이 끝나 0이 아닌 코드로 끝난 경우다. kubectl은 서버에 요청을 보내기도 전에 멈췄으니 네트워크보다 플러그인 설치와 로그인 상태를 먼저 본다.
+
+### 운영 클러스터에 실수로 명령을 치지 않으려면 어떻게 하나요?
+
+겹겹이 둔다. 터미널마다 다른 kubeconfig를 써서 전환이 번지지 않게 하고, 스크립트에는 `--context`를 명시하고, 프롬프트에 컨텍스트와 네임스페이스를 띄우고 운영 이름을 눈에 띄게 짓는다. 가장 확실한 것은 권한이다. 운영의 기본 컨텍스트를 읽기 전용 사용자로 두면 실수한 delete가 Forbidden으로 끝난다.
+
+### system:masters 그룹이 든 인증서가 새면 어떻게 되나요?
+
+이 그룹은 RBAC를 건너뛰어서 RoleBinding을 지워도 권한이 남는다. 인증서는 하나만 골라 취소하는 표준 방법이 없어서 만료까지 유효하다. 결국 클러스터 CA를 바꾸는 수준의 대응이 필요하니, 사람에게는 이런 인증서 대신 exec 플러그인이나 짧은 토큰을 주고 관리자 파일은 비상용으로만 보관한다.

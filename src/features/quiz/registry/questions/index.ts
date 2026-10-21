@@ -156,7 +156,11 @@ import { K8S_PV_PVC } from "./k8s-pv-pvc";
 import { K8S_SECRET } from "./k8s-secret";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
 import { KAFKA_BASICS } from "./kafka-basics";
+import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
+import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
+import { KUBECTL_ESSENTIALS } from "./kubectl-essentials";
 import { KUBERNETES_INGRESS } from "./kubernetes-ingress";
+import { KUSTOMIZE_BASICS } from "./kustomize-basics";
 import { LATENCY_BANDWIDTH_THROUGHPUT } from "./latency-bandwidth-throughput";
 import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
@@ -492,7 +496,11 @@ export const QUESTION_SETS = [
   K8S_SECRET,
   K8S_SERVICE_TYPES,
   KAFKA_BASICS,
+  KUBECONFIG_CONTEXTS,
+  KUBECTL_APPLY_SSA,
+  KUBECTL_ESSENTIALS,
   KUBERNETES_INGRESS,
+  KUSTOMIZE_BASICS,
   LATENCY_BANDWIDTH_THROUGHPUT,
   LAYER_IP_ADDRESSING,
   LAYER_IP_ROUTING_ICMP,
