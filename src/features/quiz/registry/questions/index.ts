@@ -134,7 +134,13 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
+import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
+import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
+import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
+import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
+import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
 import { K8S_ADMISSION_CONTROL } from "./k8s-admission-control";
@@ -200,6 +206,7 @@ import { LAYER_IP_ADDRESSING } from "./layer-ip-addressing";
 import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
+import { LAYERED_ARCHITECTURE } from "./layered-architecture";
 import { LEADER_ELECTION } from "./leader-election";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
@@ -219,8 +226,10 @@ import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
+import { MODULAR_MONOLITH } from "./modular-monolith";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
+import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
@@ -510,7 +519,13 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JS_EQUALITY_COERCION,
+  JS_HOISTING_TDZ,
   JS_MEMORY_LEAK,
+  JS_PRIMITIVE_VS_REFERENCE,
+  JS_SCOPE_LEXICAL,
+  JS_TRUTHY_FALSY_TYPEOF,
+  JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
   K8S_ADMISSION_CONTROL,
@@ -576,6 +591,7 @@ export const QUESTION_SETS = [
   LAYER_IP_ROUTING_ICMP,
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
+  LAYERED_ARCHITECTURE,
   LEADER_ELECTION,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
@@ -595,8 +611,10 @@ export const QUESTION_SETS = [
   METRICS_TYPES,
   MICRO_FRONTENDS,
   MICROSERVICES,
+  MODULAR_MONOLITH,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
+  MONOLITH_ARCHITECTURE,
   MULTI_REGION,
   MVC_PATTERN,
   N_PLUS_ONE_QUERIES,

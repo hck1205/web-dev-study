@@ -1,0 +1,487 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-var-let-const");
+
+버튼 세 개에 각자 번호를 출력하는 핸들러를 붙이려고 반복문을 썼다. 동작을 빨리 확인하려고 핸들러 대신 `setTimeout`으로 바꿔 돌려 봤다.
+
+```js
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log("var", i), 0);
+}
+for (let j = 0; j < 3; j++) {
+  setTimeout(() => console.log("let", j), 0);
+}
+```
+
+Node 22에서 돌린 결과다.
+
+```text
+var 3
+var 3
+var 3
+let 0
+let 1
+let 2
+```
+
+`var`로 쓴 쪽은 세 번 다 3이 찍힌다. 키워드 하나만 바꿨는데 결과가 다르다. 이 차이는 "변수가 어느 상자에 담기느냐"에서 나온다. 이 글은 `var`, `let`, `const`가 각각 어떤 상자를 만들고, 그 상자를 언제 새로 만드는지 따라간다.
+
+이 주제와 이어지는 글이 둘 있다. 이름을 어디서 찾는지는 [스코프와 렉시컬 스코프](/posts/js-scope-lexical)에서, 선언 전에 이름을 쓰면 무슨 일이 생기는지는 [호이스팅과 TDZ](/posts/js-hoisting-tdz)에서 다룬다. 여기서는 세 키워드의 차이에만 집중한다.
+
+## var는 함수 하나에 상자 하나다
+
+명세에서는 변수를 담는 상자를 환경 레코드(Environment Record)라고 부른다. 이름과 값을 짝지어 적어 두는 표다. 함수를 호출하면 그 함수의 환경 레코드가 하나 생기고, 블록(`{ }`)에 들어갈 때마다 블록용 레코드가 생길 수 있다.
+
+`var`는 블록 레코드를 무시한다. 가장 가까운 함수(함수 밖이면 전역)의 레코드에 이름을 올린다. 그래서 `if` 블록 안에서 선언한 `var`가 블록 밖에서도 보인다.
+
+```js
+function f() {
+  if (true) {
+    var a = 1;
+    let b = 2;
+  }
+  console.log(a);
+  console.log(typeof b);
+}
+f();
+```
+
+```text
+1
+undefined
+```
+
+`a`는 함수 레코드에 있으니 블록이 끝나도 남는다. `b`는 블록 레코드에 있었고 블록을 나오면서 그 레코드에 닿을 길이 없어졌다. `typeof`는 없는 이름에도 오류 없이 `"undefined"`를 돌려준다.
+
+처음 코드로 돌아가면, `for (var i ...)`의 `i`도 반복문을 감싼 범위에 딱 하나 있다. 반복은 세 번 돌지만 `i`라는 칸은 하나이고, 화살표 함수 세 개가 모두 그 한 칸을 가리킨다. 타이머가 실행될 때는 반복이 끝나 `i`가 3이 된 뒤다. 화살표 함수는 값이 아니라 칸을 기억한다는 점이 중요하다(이렇게 바깥 칸을 기억하는 함수를 [클로저](/posts/js-closures)라고 한다).
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="var는 칸이 하나라 세 콜백이 같은 i를 본다. let은 반복마다 칸이 따로 생긴다."
+  nodes={[
+    { id: "c0", label: "콜백 0", x: 60, y: 40, w: 90 },
+    { id: "c1", label: "콜백 1", x: 60, y: 125, w: 90 },
+    { id: "c2", label: "콜백 2", x: 60, y: 210, w: 90 },
+    { id: "shared", label: "var i = 3", sub: "칸 하나", x: 200, y: 125, w: 100 },
+    { id: "e0", label: "let j = 0", sub: "반복 0의 칸", x: 335, y: 40, w: 110 },
+    { id: "e1", label: "let j = 1", sub: "반복 1의 칸", x: 335, y: 125, w: 110 },
+    { id: "e2", label: "let j = 2", sub: "반복 2의 칸", x: 335, y: 210, w: 110 },
+  ]}
+  edges={[
+    { from: "c0", to: "shared", label: "var" },
+    { from: "c1", to: "shared" },
+    { from: "c2", to: "shared" },
+    { from: "c0", to: "e0", dashed: true, label: "let" },
+    { from: "c1", to: "e1", dashed: true },
+    { from: "c2", to: "e2", dashed: true },
+  ]}
+/>
+
+실선은 `var` 버전에서 콜백이 가리키는 칸, 점선은 `let` 버전에서 가리키는 칸이다. `var` 버전은 화살표가 한 점으로 모인다.
+
+## let은 반복마다 새 i를 만든다
+
+`let`과 `const`는 블록 레코드에 이름을 올린다. 블록 하나에 칸 하나다. 그런데 `for` 문은 한 단계 더 나간다. 괄호 안에 `let`으로 선언한 변수가 있으면 반복마다 새 환경을 만들고 직전 값을 복사해 넣는다. 명세의 `CreatePerIterationEnvironment`라는 단계가 이 일을 한다.
+
+아래 그림에서 다음을 누르면 `for (let j = 0; j < 3; j++)`가 칸을 만들고 복사하는 순서를 볼 수 있다. 위 칸은 지금 실행 중인 부분, 아래 상자는 지금까지 만들어진 반복 환경이다.
+
+<AlgoTrace
+  caption="for (let j = 0; j < 3; j++) 의 환경이 만들어지는 순서"
+  memoryLabel="만들어진 반복 환경"
+  cells={["let j = 0", "j < 3", "본문", "복사", "j++"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "초기화는 한 번만 실행된다. j = 0인 첫 환경이 생긴다." },
+    { pointer: 3, memory: ["#0 j=0"], caption: "첫 조건 검사 전에 한 번 복사한다. 이 #0이 첫 반복의 환경이다." },
+    { pointer: 1, memory: ["#0 j=0"], caption: "0 < 3이라 본문으로 간다." },
+    { pointer: 2, memory: ["#0 j=0 ← 콜백0"], caption: "본문의 화살표 함수가 #0 환경을 기억한다." },
+    { pointer: 3, memory: ["#0 j=0 ← 콜백0", "#1 j=0"], caption: "다음 반복 전에 #0을 복사해 #1을 만든다. 값은 아직 0이다." },
+    { pointer: 4, memory: ["#0 j=0 ← 콜백0", "#1 j=1"], caption: "증가식은 새 환경 #1에서 실행된다. #0의 j는 0 그대로다." },
+    { pointer: 2, memory: ["#0 j=0 ← 콜백0", "#1 j=1 ← 콜백1", "#2 j=2 ← 콜백2"], caption: "같은 일을 반복해 콜백마다 자기 환경을 갖는다." },
+    { pointer: 1, found: [1], memory: ["#0 j=0 ← 콜백0", "#1 j=1 ← 콜백1", "#2 j=2 ← 콜백2", "#3 j=3"], caption: "#3에서 3 < 3이 거짓이라 끝난다. 이 환경을 잡은 콜백은 없다." },
+  ]}
+/>
+
+복사가 증가식보다 먼저 일어나는 게 요점이다. 증가식이 이전 환경의 `j`를 바꾸지 않으니 콜백 0이 본 `j`는 끝까지 0이다.
+
+`for` 머리말을 조각으로 나눠 보면 어느 부분이 몇 번 실행되는지 정리된다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="for 머리말의 세 조각"
+  base="for"
+  separator=" ("
+  joiner="; "
+  params={[
+    { key: "init", display: "let j = 0", title: "초기화", description: "반복문 전체에서 한 번만 실행된다. 여기서 let으로 선언한 이름이 반복마다 복사할 목록에 오른다. var로 선언하면 바깥 함수의 칸 하나를 계속 쓴다." },
+    { key: "test", display: "j < 3", title: "조건", description: "매 반복 시작 전에 검사한다. 이미 복사된 새 환경에서 읽는다." },
+    { key: "update", display: "j++", title: "증가", description: "본문이 끝나고 복사가 끝난 다음 실행된다. 그래서 이전 반복의 j는 바뀌지 않는다. 이 자리 때문에 const는 일반 for 문에 쓸 수 없다." },
+  ]}
+/>
+
+`for...of`와 `for...in`도 반복마다 새 환경을 만든다. 거기서는 증가식이 없어서 `const`도 쓸 수 있다.
+
+```js
+try {
+  for (const i = 0; i < 2; i++) {}
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+for (const x of [1, 2]) console.log(x);
+```
+
+```text
+TypeError: Assignment to constant variable.
+1
+2
+```
+
+일반 `for` 문의 `const`는 첫 번째 `i++`에서 깨진다. 조건 검사까지는 통과하니 본문이 한 번 돌고 나서야 오류가 난다는 점도 기억해 둘 만하다.
+
+직접 고쳐 보자. 아래 `collect`는 지금 `var` 때문에 `[3, 3, 3]`을 돌려준다. 테스트가 통과하도록 고쳐서 실행해 본다.
+
+<CodePlayground
+  caption="반복마다 자기 번호를 기억하는 함수 만들기"
+  functionName="collect"
+  initialCode={`function collect(n) {
+  const getters = [];
+  for (var i = 0; i < n; i++) {
+    getters.push(() => i);
+  }
+  // 모든 getter를 부른 결과를 돌려준다
+  return getters.map((get) => get());
+}`}
+  solution={`function collect(n) {
+  const getters = [];
+  // let은 반복마다 새 i를 만든다
+  for (let i = 0; i < n; i++) {
+    getters.push(() => i);
+  }
+  return getters.map((get) => get());
+}`}
+  tests={[
+    { args: [3], expected: [0, 1, 2] },
+    { args: [1], expected: [0] },
+    { args: [0], expected: [] },
+    { args: [5], expected: [0, 1, 2, 3, 4] },
+  ]}
+/>
+
+`let`이 없던 ES5 시절에는 즉시 실행 함수로 함수 레코드를 반복마다 하나씩 만들어 같은 효과를 냈다. 그 이야기는 [IIFE와 모듈 패턴](/posts/js-iife-module-pattern)에 있다.
+
+## 같은 이름을 두 번 선언하면
+
+`var`는 같은 범위에서 다시 선언해도 아무 말이 없다. 두 번째 선언은 그냥 대입이 된다.
+
+```js
+var x = 1;
+var x = 2;
+console.log(x);
+```
+
+```text
+2
+```
+
+파일이 짧을 때는 문제가 없다. 수백 줄짜리 함수 아래쪽에서 `var result`를 새로 선언했는데 위쪽에도 같은 이름이 있었다면, 위쪽 값이 조용히 덮인다. `let`과 `const`는 같은 범위에서 같은 이름을 두 번 선언하면 실행 전에 막는다.
+
+```js
+let y = 1;
+let y = 2;
+```
+
+```text
+let y = 2;
+    ^
+
+SyntaxError: Identifier 'y' has already been declared
+```
+
+`SyntaxError`라는 점이 중요하다. 첫 줄도 실행되지 않는다. 엔진이 코드를 읽는 단계에서 이미 거절한다.
+
+바깥 블록과 안쪽 블록에서 같은 이름을 쓰는 건 재선언이 아니라 가리기(shadowing)다. 이건 허용된다. 가리기가 언제 버그가 되는지는 [스코프 글](/posts/js-scope-lexical)에서 다룬다.
+
+## 전역에서 var는 window의 속성이 된다
+
+전역 범위는 조금 특별하다. 전역 환경 레코드는 안에 레코드를 두 개 갖고 있다. 하나는 전역 객체(브라우저의 `window`, 어디서나 `globalThis`)를 그대로 쓰는 객체 레코드이고, 다른 하나는 일반적인 선언용 레코드다. 클래식 `<script>` 최상위에서 `var`와 함수 선언은 객체 레코드로 가고, `let`, `const`, `class`는 선언용 레코드로 간다.
+
+크롬(Playwright로 띄운 Chromium)에서 아래 HTML을 열어 콘솔을 확인했다.
+
+```html
+<script>
+  var apiUrl = "/v1";
+  let token = "abc";
+  const MAX = 3;
+  function boot() {}
+  console.log(window.apiUrl, window.token, window.MAX, typeof window.boot);
+</script>
+<script>
+  console.log(token);
+</script>
+<script>
+  let token = "def";
+</script>
+<script type="module">
+  var inModule = 1;
+  console.log("module:", window.inModule);
+</script>
+```
+
+```text
+/v1 undefined undefined function
+abc
+Uncaught SyntaxError: Identifier 'token' has already been declared
+module: undefined
+```
+
+아래 그림에서 다음을 누르면 각 선언이 전역 환경의 어느 칸에 들어가는지 따라갈 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="클래식 스크립트의 전역 선언이 들어가는 자리"
+  zones={[
+    { id: "global", label: "전역 환경", x: 10, y: 10, w: 380, h: 200 },
+    { id: "obj", label: "객체 레코드 = window", x: 20, y: 40, w: 175, h: 160, tone: "edge" },
+    { id: "decl", label: "선언용 레코드", x: 205, y: 40, w: 175, h: 160, tone: "private" },
+  ]}
+  nodes={[
+    { id: "apiUrl", label: "apiUrl", sub: "var", x: 107, y: 90, icon: "db" },
+    { id: "boot", label: "boot", sub: "function", x: 107, y: 160, icon: "db" },
+    { id: "token", label: "token", sub: "let", x: 292, y: 90, icon: "db" },
+    { id: "max", label: "MAX", sub: "const", x: 292, y: 160, icon: "db" },
+    { id: "script", label: "script", sub: "클래식", x: 200, y: 255, icon: "client" },
+  ]}
+  links={[
+    { from: "script", to: "apiUrl" },
+    { from: "script", to: "boot" },
+    { from: "script", to: "token" },
+    { from: "script", to: "max" },
+  ]}
+  steps={[
+    { path: ["script", "apiUrl"], packet: "var", title: "var는 window 속성이 된다", detail: "window.apiUrl로 읽힌다. 다른 스크립트와 확장 프로그램도 같은 이름을 볼 수 있다." },
+    { path: ["script", "boot"], packet: "function", title: "함수 선언도 window로 간다", detail: "typeof window.boot가 function이다. 인라인 onclick 속성이 전역 함수를 찾을 수 있는 이유다." },
+    { path: ["script", "token"], packet: "let", title: "let은 선언용 레코드로 간다", detail: "다른 스크립트에서 token으로는 읽히지만 window.token은 undefined다." },
+    { path: ["script", "max"], packet: "const", title: "const도 마찬가지다", detail: "전역 객체를 더럽히지 않는다. 그래도 페이지 안의 모든 클래식 스크립트가 같은 이름을 공유한다." },
+    { path: ["script", "token"], packet: "let token", blocked: true, title: "다른 스크립트에서 다시 선언", detail: "선언용 레코드는 스크립트끼리 공유된다. 세 번째 스크립트가 통째로 실행되지 않는다." },
+  ]}
+/>
+
+모듈(`type="module"`)은 최상위도 모듈 스코프라서 `var`조차 `window`에 붙지 않는다. Node.js의 CommonJS 파일도 모듈 함수로 감싸서 실행하므로 최상위 `var`가 `globalThis`에 붙지 않는다. 번들러를 쓰는 요즘 프로젝트에서 전역 오염이 잘 안 보이는 이유가 이것이다. 모듈 스코프는 [ES 모듈 글](/posts/js-es-modules)에서 더 다룬다.
+
+`window`에는 이미 정해진 속성이 많다는 점도 함정이다. 클래식 스크립트 최상위에서 `var name = 123`이라고 쓰면 이렇게 된다.
+
+```js
+var name = 123;
+console.log(typeof name, name);
+```
+
+```text
+string 123
+```
+
+`window.name`은 문자열만 담는 접근자 속성이라 숫자가 문자열로 바뀌었다. `status`, `top`, `parent`, `length` 같은 이름도 비슷한 사고를 낸다. `let`으로 선언하면 선언용 레코드에 따로 생기므로 이 문제가 없다.
+
+## const가 막는 것은 재할당뿐이다
+
+`const`라는 이름 때문에 "값이 바뀌지 않는다"고 오해하기 쉽다. 실제로는 이름과 값을 잇는 연결을 다시 걸 수 없다는 뜻이다. 그 값이 객체라면 객체 안은 얼마든지 바뀐다.
+
+```js
+const user = { name: "kim" };
+user.name = "lee";
+console.log(user);
+try {
+  user = {};
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+const frozen = Object.freeze({ tags: ["a"] });
+frozen.tags.push("b");
+console.log(frozen.tags);
+```
+
+```text
+{ name: 'lee' }
+TypeError: Assignment to constant variable.
+[ 'a', 'b' ]
+```
+
+`user`라는 이름은 처음 만든 객체를 끝까지 가리킨다. 그 객체의 `name`을 바꾸는 건 연결을 바꾸는 게 아니라 객체를 고치는 일이라 막지 않는다. 객체 자체를 못 바꾸게 하려면 `Object.freeze`를 쓰는데, 마지막 줄처럼 한 단계만 얼린다. `tags` 배열은 얼지 않았다. 얕은 동결과 속성 설명자 이야기는 [객체 메서드 글](/posts/js-object-methods)에, 값과 참조의 차이는 [원시 값과 참조 글](/posts/js-primitive-vs-reference)에 있다.
+
+이 구분이 실무에서 중요한 이유는 React에서 드러난다. 상태 객체를 `const`로 받았다고 안전한 게 아니다. `state.items.push(x)` 같은 코드는 `const`를 전혀 어기지 않으면서 React가 변화를 알아채지 못하게 만든다. 이 문제는 [React의 불변 업데이트 글](/posts/js-immutability-react)에서 다룬다.
+
+## 무엇을 기본으로 쓸까
+
+요즘 코드에서 고르는 순서는 거의 정해져 있다.
+
+1. 기본은 `const`. 다시 대입하지 않는 이름이 대부분이다.
+2. 다시 대입해야 할 때만 `let`. 누적값, 반복문 카운터, 조건에 따라 나중에 정해지는 값이다.
+3. `var`는 쓰지 않는다. 오래된 코드를 읽을 때 알아보면 충분하다.
+
+`const`를 기본으로 두는 이유는 읽는 사람을 위해서다. `const`로 선언된 이름은 그 아래 어디를 봐도 같은 대상을 가리킨다. `let`이 보이면 "이 값은 어딘가에서 바뀐다"는 신호가 되니 그 부분만 주의해서 읽으면 된다. 엔진 입장에서 성능 차이를 기대할 이유는 거의 없다. 선택 기준은 읽기 쉬움이다.
+
+이 규칙은 사람이 지키기보다 린터에 맡기는 편이 낫다. ESLint 9에 `no-var`와 `prefer-const`를 켜고 아래 파일을 검사했다.
+
+```js
+var total = 0;
+let items = [1, 2, 3];
+for (let i = 0; i < items.length; i++) {
+  total += items[i];
+}
+console.log(total);
+```
+
+```text
+  1:1  error  Unexpected var, use let or const instead          no-var
+  2:5  error  'items' is never reassigned. Use 'const' instead  prefer-const
+
+✖ 2 problems (2 errors, 0 warnings)
+  2 errors and 0 warnings potentially fixable with the `--fix` option.
+```
+
+출력 맨 위의 파일 경로 줄은 뺐다. `total`은 반복문에서 다시 대입하니 `let`이 맞고, `items`는 한 번도 다시 대입하지 않으니 `const`로 바꾸라고 한다. 둘 다 `--fix`로 자동 수정된다.
+
+## TypeScript에서는 타입까지 달라진다
+
+TypeScript는 `let`과 `const`를 보고 타입을 다르게 추론한다. 다시 대입할 수 없는 `const`는 리터럴 그 자체를 타입으로 잡고, `let`은 같은 종류의 다른 값이 들어올 수 있으니 넓은 타입으로 잡는다.
+
+```ts
+const method = "GET";
+let method2 = "GET";
+type A = typeof method;
+type B = typeof method2;
+const a: A = "POST";
+const b: B = "POST";
+function send(m: "GET" | "POST") {}
+send(method);
+send(method2);
+```
+
+`tsc --strict`(5.9)로 검사한 결과다.
+
+```text
+t1.ts(5,7): error TS2322: Type '"POST"' is not assignable to type '"GET"'.
+t1.ts(9,6): error TS2345: Argument of type 'string' is not assignable to parameter of type '"GET" | "POST"'.
+```
+
+`A`는 `"GET"`이라서 `"POST"`를 넣을 수 없고, `B`는 `string`이라서 `"POST"`가 들어간다. 반대로 `send(method2)`는 `string`을 좁은 유니온에 넘기니 실패한다. 설정값을 `let`으로 받아 두었다가 리터럴 유니온을 요구하는 함수에 넘길 때 자주 보는 오류다. 이때는 `const`로 바꾸거나 `as const`를 붙인다. 객체 리터럴은 `const`로 선언해도 속성이 바뀔 수 있으니 속성 타입은 넓게 잡힌다. 속성까지 좁히려면 `as const`가 필요하다.
+
+## React 컴포넌트 안의 const
+
+React 코드를 보면 상태를 `const`로 받는다.
+
+```js
+function Counter() {
+  const [count, setCount] = useState(0);
+  const handleClick = () => setCount(count + 1);
+  return <button onClick={handleClick}>{count}</button>;
+}
+```
+
+`count`가 `const`인데 화면의 숫자는 올라간다. 바뀌는 게 아니라 렌더링할 때마다 함수 `Counter`가 다시 호출되고, 그 호출마다 새 `count`가 새 환경에 생기기 때문이다. `for (let ...)`이 반복마다 새 환경을 만드는 것과 닮았다. 렌더 한 번이 반복 한 번이다.
+
+<SequenceDiagram
+  caption="렌더마다 새 const가 생기고, 핸들러는 자기 렌더의 값을 본다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "react", label: "React" },
+    { id: "render", label: "Counter()" },
+    { id: "handler", label: "핸들러" },
+  ]}
+  steps={[
+    { from: "react", to: "render", label: "렌더 #1", title: "첫 렌더", detail: "Counter가 호출되고 이번 호출의 환경에 const count = 0이 생긴다." },
+    { from: "render", to: "handler", label: "count=0 기억", title: "핸들러 생성", detail: "handleClick은 이번 렌더의 환경을 기억한다. 그 안의 count는 0이다." },
+    { from: "user", to: "handler", label: "click", title: "클릭", detail: "사용자가 버튼을 누르면 렌더 #1에서 만든 핸들러가 실행된다." },
+    { from: "handler", to: "react", label: "setCount(1)", title: "다음 값 요청", detail: "count + 1은 0 + 1이다. count를 바꾸는 게 아니라 다음 렌더에 쓸 값을 맡긴다." },
+    { from: "react", to: "render", label: "렌더 #2", title: "두 번째 렌더", detail: "Counter가 다시 호출되고 새 환경에 const count = 1이 생긴다. 렌더 #1의 count는 여전히 0이다." },
+  ]}
+/>
+
+React 없이 같은 구조를 흉내 내 보면 확실해진다.
+
+```js
+let stored = 0;
+const handlers = [];
+function render() {
+  const count = stored; // 이번 렌더의 count
+  handlers.push(() => console.log("handler sees", count));
+  console.log("render", count);
+}
+render();
+stored = 1;
+render();
+handlers[0]();
+handlers[1]();
+```
+
+```text
+render 0
+render 1
+handler sees 0
+handler sees 1
+```
+
+첫 렌더의 핸들러는 두 번째 렌더가 끝난 뒤에 불려도 0을 본다. 실제 React에서 `setInterval`이나 `useEffect` 안에 예전 렌더의 함수가 남아 오래된 값을 보는 현상(stale closure)이 이것이다. `setCount((c) => c + 1)`처럼 업데이트 함수를 넘기면 React가 최신 값을 넣어 주므로 이 문제를 피한다. 왜 렌더가 다시 일어나는지는 [React 리렌더링 글](/posts/react-rerender)에서, 함수가 환경을 기억하는 원리는 [클로저 글](/posts/js-closures)에서 다룬다.
+
+## 오래된 var를 let으로 바꿀 때
+
+`no-var`를 켜고 `--fix`로 한 번에 바꾸면 대부분 그대로 동작한다. 그런데 `var`의 성질에 기대던 코드는 깨진다. 실제로 많이 걸리는 경우는 이렇다.
+
+반복문 변수를 루프 밖에서 쓰는 코드가 있다.
+
+```js
+function find(list, id) {
+  for (var k = 0; k < list.length; k++) {
+    if (list[k] === id) break;
+  }
+  return k; // 루프 밖에서 k를 쓴다
+}
+console.log(find(["a", "b", "c"], "b"));
+```
+
+```text
+1
+```
+
+`var k`를 `let k`로만 바꾸면 `return k`에서 `ReferenceError: k is not defined`가 난다. `k`가 `for` 블록 안에만 있게 됐기 때문이다. ESLint의 `no-var` 자동 수정은 이렇게 블록 밖에서 쓰이는 `var`는 고치지 않고 남겨 둔다. 남은 것들은 사람이 보고 선언을 바깥으로 올리거나 `findIndex`로 바꿔야 한다.
+
+전역에 의존하는 코드도 있다. HTML의 `onclick="submitForm()"`이나 다른 `<script>`, 서드파티 위젯이 `window.config`를 읽는 구조라면 전역 `var`를 `let`으로 바꾸는 순간 `window`에서 사라진다. 이런 이름은 `window.config = ...`처럼 명시적으로 붙여서 의도를 드러내는 편이 낫다.
+
+선언보다 먼저 이름을 쓰는 코드도 깨진다. `var`는 그 자리에서 `undefined`를 읽지만 `let`은 `ReferenceError`를 던진다. 이 차이가 [호이스팅과 TDZ 글](/posts/js-hoisting-tdz)의 주제다.
+
+<Callout kind="warning" title="자동 수정 뒤에는 테스트를 돌린다">
+`var`를 `let`으로 바꾸는 변경은 문법상 작아 보여도 범위와 전역 노출이 함께 바뀐다. 레거시 코드에 일괄 적용했다면 블록 밖 참조, `window` 속성 참조, 선언 전 사용이 있는지 테스트와 검색(`grep -n "window\."`)으로 확인한다.
+</Callout>
+
+## 다시 세 번의 3으로
+
+처음 코드에서 `var i`는 함수(여기서는 모듈) 범위에 칸 하나를 만들었고, 세 콜백이 그 한 칸을 공유했다. 타이머가 돌 때 그 칸에는 3이 들어 있었다. `let j`는 반복마다 새 칸을 만들고 값을 복사해 넘겼으니 콜백마다 자기 숫자를 본다. 정리하면 `var`는 함수 단위, `let`과 `const`는 블록 단위로 칸을 만들고, `const`는 칸에 든 연결을 다시 걸지 못하게 할 뿐 그 안의 객체까지 지켜 주지는 않는다.
+
+## 면접에서 나올 만한 질문
+
+### var, let, const의 차이를 설명해 주세요
+
+범위와 재선언, 재할당 세 가지가 다르다. `var`는 함수 범위이고 같은 이름을 다시 선언해도 허용되며, 전역에서 선언하면 `window`의 속성이 된다. `let`과 `const`는 블록 범위이고 같은 범위에서 재선언하면 `SyntaxError`가 난다. `const`는 여기에 더해 재할당을 막는다. 선언 전에 접근했을 때 `var`는 `undefined`, `let`과 `const`는 `ReferenceError`라는 차이도 있다.
+
+### 반복문 안의 setTimeout에서 var는 3, 3, 3이 찍히고 let은 0, 1, 2가 찍히는 이유는 무엇인가요?
+
+`var`는 반복 전체에 변수 칸이 하나뿐이고 콜백 세 개가 같은 칸을 기억하기 때문이다. 타이머가 실행될 때는 반복이 끝나 값이 3이다. `let`으로 선언한 `for` 변수는 반복마다 새 환경이 만들어지고 직전 값이 복사되므로, 콜백마다 다른 칸을 기억한다. 복사가 증가식보다 먼저 일어나서 이전 반복의 값이 바뀌지 않는다.
+
+### const로 선언한 객체의 속성은 왜 바꿀 수 있나요?
+
+`const`가 막는 것은 이름에 다른 값을 다시 연결하는 재할당뿐이기 때문이다. 이름이 가리키는 객체는 그대로이고 그 객체의 속성을 고치는 건 막지 않는다. 객체를 못 바꾸게 하려면 `Object.freeze`를 쓰는데 한 단계만 얼리므로 중첩된 객체는 따로 얼려야 한다. TypeScript에서는 `readonly`나 `as const`로 컴파일 시점에 막을 수 있지만 실행 중에는 막지 않는다.
+
+### 왜 const를 기본으로 쓰라고 하나요?
+
+읽는 사람에게 "이 이름은 끝까지 같은 대상을 가리킨다"는 보장을 주기 때문이다. 대부분의 변수는 다시 대입할 일이 없으니 `const`로 두고, 바뀌는 것만 `let`으로 두면 `let`이 주의할 지점을 표시하는 신호가 된다. 성능 때문은 아니다. 팀에서는 ESLint의 `prefer-const`와 `no-var`로 강제하는 게 보통이다.
+
+### 전역에서 var와 let으로 선언했을 때 어떤 차이가 있나요?
+
+클래식 스크립트 최상위의 `var`와 함수 선언은 전역 객체의 속성이 되고, `let`, `const`, `class`는 전역 환경의 별도 선언용 레코드에 들어간다. 그래서 `window.x`로 읽으면 `var`만 보인다. 둘 다 같은 페이지의 다른 클래식 스크립트와 이름을 공유하는 건 같아서 다른 스크립트에서 같은 이름을 `let`으로 다시 선언하면 그 스크립트 전체가 실행되지 않는다. 모듈과 CommonJS 파일에서는 최상위도 모듈 범위라 어느 쪽도 전역 객체에 붙지 않는다.
+
+### React에서 상태를 const로 받는데 어떻게 값이 바뀌나요?
+
+값이 바뀌는 게 아니라 렌더링마다 컴포넌트 함수가 다시 호출되고 그때마다 새 `const`가 생긴다. 이전 렌더에서 만든 핸들러는 그 렌더의 값을 계속 본다. 그래서 오래된 핸들러가 예전 값을 쓰는 stale closure가 생길 수 있고, `setCount((c) => c + 1)`처럼 업데이트 함수를 쓰거나 의존성 배열을 바르게 채워서 피한다.
+
+### 오래된 코드의 var를 let으로 일괄 변경할 때 무엇을 확인해야 하나요?
+
+범위가 줄어들고 전역 노출이 사라지는 두 가지 변화를 확인한다. 블록 안에서 선언하고 블록 밖에서 쓰던 변수는 `ReferenceError`가 나고, 다른 스크립트나 인라인 이벤트 속성이 `window`로 읽던 전역 변수는 사라진다. 선언 전에 읽던 코드도 `undefined` 대신 예외를 던진다. ESLint `no-var`의 자동 수정은 위험한 경우를 건너뛰니, 남은 것은 직접 고치고 테스트로 확인한다.

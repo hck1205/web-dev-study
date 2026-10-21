@@ -2,6 +2,115 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "layered-architecture": {
+    "links": [
+      "modular-monolith",
+      "monolith-architecture",
+      "mvc-pattern",
+      "n-plus-one-queries",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "sql-basics",
+      "http-caching-cdn",
+      "sql-batch-timeout-pool",
+      "http-status-codes",
+      "what-happens-google-com"
+    ]
+  },
+  "modular-monolith": {
+    "links": [
+      "monolith-architecture",
+      "layered-architecture",
+      "postgres-roles-security"
+    ],
+    "mentions": [
+      "rabbitmq-basics",
+      "microservices",
+      "pattern-proxy",
+      "kafka-basics",
+      "loading-patterns",
+      "grpc"
+    ]
+  },
+  "monolith-architecture": {
+    "links": [
+      "microservices",
+      "modular-monolith",
+      "layered-architecture",
+      "saga-pattern",
+      "event-loop",
+      "connection-pool",
+      "js-memory-leak",
+      "scaling-horizontal-vertical",
+      "db-architecture-by-scale",
+      "feature-flags",
+      "micro-frontends"
+    ],
+    "mentions": [
+      "build-caching",
+      "db-replication-sharding",
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "redis-basics"
+    ]
+  },
+  "js-hoisting-tdz": {
+    "links": [
+      "js-var-let-const",
+      "js-scope-lexical"
+    ],
+    "mentions": [
+      "code-splitting"
+    ]
+  },
+  "js-scope-lexical": {
+    "links": [
+      "js-var-let-const",
+      "js-hoisting-tdz",
+      "js-memory-leak",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
+  "js-var-let-const": {
+    "links": [
+      "js-scope-lexical",
+      "js-hoisting-tdz",
+      "js-primitive-vs-reference",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
+  "js-truthy-falsy-typeof": {
+    "links": [
+      "js-primitive-vs-reference",
+      "js-equality-coercion",
+      "js-hoisting-tdz"
+    ],
+    "mentions": [
+      "json-crud-http"
+    ]
+  },
+  "js-equality-coercion": {
+    "links": [
+      "js-primitive-vs-reference",
+      "js-truthy-falsy-typeof",
+      "react-rerender"
+    ],
+    "mentions": [
+      "sql-injection"
+    ]
+  },
+  "js-primitive-vs-reference": {
+    "links": [
+      "js-equality-coercion",
+      "js-truthy-falsy-typeof",
+      "js-var-let-const",
+      "react-rerender"
+    ],
+    "mentions": []
+  },
   "ddos-protection": {
     "links": [
       "tcp-connection-lifecycle",
@@ -1342,6 +1451,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "helm-dependencies-oci-gitops",
       "grpc",
+      "js-truthy-falsy-typeof",
       "linux-files-permissions",
       "local-k8s-kind-minikube",
       "db-type-key-value"
@@ -1401,7 +1511,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
-      "dockerfile-image-layers"
+      "dockerfile-image-layers",
+      "js-hoisting-tdz"
     ]
   },
   "semantic-versioning": {
@@ -6641,7 +6752,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-strategies"
     ],
     "mentions": [
-      "core-web-vitals"
+      "core-web-vitals",
+      "js-primitive-vs-reference"
     ]
   },
   "rendering-strategies": {
@@ -6675,10 +6787,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "grpc",
+      "modular-monolith",
       "observability-basics",
       "db-type-columnar-olap",
       "rabbitmq-basics",
       "client-data-cache",
+      "monolith-architecture",
       "event-driven-architecture",
       "pub-sub",
       "db-index-design",
