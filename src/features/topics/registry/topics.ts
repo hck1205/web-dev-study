@@ -22,6 +22,7 @@ export const TOPICS: Topic[] = [
         label: "Algorithms",
         description: "문제 풀이와 해설, 자료구조",
         children: [
+          { id: "techniques", label: "Techniques", description: "정렬, 이분 탐색, 재귀와 백트래킹, 동적 계획법, 그리디" },
           { id: "data-structures", label: "Data Structures", description: "배열, 연결 리스트, 스택·큐·덱, 해시맵, 트리, 힙, 트라이, 그래프, 유니온 파인드" },
           { id: "system-design", label: "For System Design", description: "블룸 필터, HyperLogLog, 지오해시, 쿼드트리, 머클 트리, Raft, OT·CRDT 등 대규모 시스템의 알고리즘" },
         ],
@@ -80,6 +81,8 @@ export const TOPICS: Topic[] = [
         label: "Frontend",
         description: "브라우저, 렌더링, React · Next.js",
         children: [
+          { id: "css", label: "CSS", description: "CSS 성능, 웹 폰트, 크리티컬 CSS" },
+          { id: "typescript", label: "TypeScript", description: "타입 시스템, 제네릭, 좁히기, 유틸리티 타입, tsconfig" },
           { id: "architecture", label: "Architecture", description: "프런트엔드 구조 설계, 마이크로 프런트엔드" },
           {
             id: "javascript",
