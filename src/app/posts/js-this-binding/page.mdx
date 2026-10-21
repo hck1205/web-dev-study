@@ -542,7 +542,7 @@ function run(scenario) {
 
 일반 함수 리스너라면 `event.currentTarget`, 즉 리스너를 등록한 요소다. 화살표 함수 리스너는 이 값을 무시하고 바깥 `this`를 쓴다. 그래서 리스너를 화살표 함수로 바꿀 때는 `this` 대신 `event.currentTarget`을 써야 한다.
 
-### React 클래스 컴포넌트에서 onClick={this.handleClick}이 왜 에러가 났나요?
+### React 클래스 컴포넌트에서 `onClick={this.handleClick}`이 왜 에러가 났나요?
 
 JSX에 함수 값만 넘기고, React DOM이 나중에 `listener(event)`처럼 점 없이 부르기 때문이다. 클래스 본문은 엄격 모드라 `this`가 `undefined`가 되고 `this.setState`에서 터진다. 생성자에서 `bind`하거나, 클래스 필드 화살표 함수로 만들거나, JSX에서 화살표로 감싸서 고쳤다. 함수 컴포넌트는 `this` 대신 클로저로 상태를 보기 때문에 이 문제가 없다.
 
