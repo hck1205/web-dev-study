@@ -2,6 +2,31 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "acid-vs-base": {
+    "links": [
+      "acid-transactions",
+      "db-transaction-isolation",
+      "db-consistency-cap",
+      "eventual-consistency",
+      "redis-basics",
+      "optimistic-locking",
+      "redis-persistence-ha",
+      "distributed-transactions-2pc",
+      "mongodb-document-model",
+      "db-type-newsql",
+      "saga-pattern",
+      "transactional-outbox",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "redis-cluster",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "sd-start-single-server",
+      "db-type-relational",
+      "http-methods"
+    ]
+  },
   "centralized-logging-pipeline": {
     "links": [
       "structured-logging",
@@ -2433,6 +2458,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-sharding-intro",
+      "acid-vs-base",
       "db-type-columnar-olap",
       "db-replication-sharding",
       "sd-mq-storage-partitions",
@@ -2456,14 +2482,19 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "high-availability",
       "idempotency-key",
-      "fault-tolerance"
+      "fault-tolerance",
+      "optimistic-locking",
+      "acid-vs-base"
     ],
     "mentions": [
       "pessimistic-locking",
       "postgres-advanced-sql",
+      "db-type-wide-column",
       "db-architecture-by-scale",
       "mysql-innodb-basics",
+      "mongodb-document-model",
       "sd-start-single-server",
+      "redis-basics",
       "resilience-patterns",
       "postgres-getting-started",
       "http-methods"
@@ -3093,6 +3124,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mongodb-document-model",
       "db-type-wide-column",
       "db-type-key-value",
+      "acid-vs-base",
       "db-replication-sharding",
       "redis-basics"
     ]
@@ -9188,6 +9220,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-key-value",
+      "acid-vs-base",
       "network-partitions",
       "mongodb-document-model",
       "sd-kv-store-versioning",
@@ -9282,6 +9315,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-graph"
     ],
     "mentions": [
+      "acid-vs-base",
       "sd-start-single-server",
       "db-sharding",
       "db-type-relational",
@@ -10485,6 +10519,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "sd-sharding-intro",
+      "acid-vs-base",
       "sd-start-single-server",
       "distributed-transactions-2pc",
       "db-index-design",

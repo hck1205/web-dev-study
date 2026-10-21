@@ -4,6 +4,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
   "abort-controller": 7,
   "acid-transactions": 7,
+  "acid-vs-base": 7,
   "agentic-rag": 7,
   "alerting": 6,
   "animation-patterns": 6,

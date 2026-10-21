@@ -1,6 +1,7 @@
 import { AB_TESTING } from "./ab-testing";
 import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
+import { ACID_VS_BASE } from "./acid-vs-base";
 import { AGENTIC_RAG } from "./agentic-rag";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
@@ -552,6 +553,7 @@ export const QUESTION_SETS = [
   AB_TESTING,
   ABORT_CONTROLLER,
   ACID_TRANSACTIONS,
+  ACID_VS_BASE,
   AGENTIC_RAG,
   ALERTING,
   ANIMATION_PATTERNS,

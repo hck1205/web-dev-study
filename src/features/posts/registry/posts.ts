@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "acid-vs-base",
+    title: "ACID와 BASE: 저장소마다 다른 트랜잭션의 약속",
+    summary: "Redis의 MULTI/EXEC는 롤백하지 않고, Cassandra의 조건부 쓰기는 왕복 네 번이 든다. 노드가 여러 대이거나 NoSQL로 가면 ACID의 네 글자가 각각 어떻게 바뀌는지, 비는 글자를 앱이 어떻게 메우는지 본다.",
+    topic: "programming/database",
+    tags: ["Database", "Redis", "MongoDB", "Transaction", "System Design"],
+    date: "2026-10-24",
+    keywords: ["BASE 모델", "경량 트랜잭션", "EXECABORT", "다중 문서 트랜잭션"],
+  },
+  {
     slug: "centralized-logging-pipeline",
     title: "중앙 로그 파이프라인: 수집기에서 검색 가능한 저장소까지",
     summary: "앱의 표준 출력이 수집기, 가공, 버퍼를 거쳐 저장소에 들어가기까지를 Vector와 OpenSearch로 직접 돌려 보고, 여러 줄 로그 묶기, 저장소 장애 때의 유실, 색인형과 레이블형 저장소, 보관 비용, 로그 알림을 다룬다.",
