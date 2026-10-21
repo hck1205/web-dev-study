@@ -482,6 +482,7 @@ import { SSRF } from "./ssrf";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
 import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
+import { SYSTEM_DESIGN_STUDY_PATH } from "./system-design-study-path";
 import { TAIL_LATENCY } from "./tail-latency";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
@@ -998,6 +999,7 @@ export const QUESTION_SETS = [
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
   SYSTEM_DESIGN_CONCEPTS_MAP,
+  SYSTEM_DESIGN_STUDY_PATH,
   TAIL_LATENCY,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,

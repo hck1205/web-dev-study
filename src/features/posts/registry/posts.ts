@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "system-design-study-path",
+    title: "시스템 디자인 공부 순서: 서버 한 대에서 증권 거래소까지 60편 읽는 법",
+    summary: "System Design Notes 시리즈 60편을 읽는 순서를 정리한다. 서버 한 대에 부품을 하나씩 붙이는 기초 12편을 먼저 읽고, 설계 사례는 일관된 해싱, 고유 ID, 큐와 팬아웃, WebSocket, 지리 색인, 멱등 키처럼 사례마다 다시 나오는 부품으로 묶어 읽는다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Architecture", "Scalability"],
+    date: "2026-10-22",
+    keywords: ["System Design Notes", "설계 사례 읽는 순서", "시스템 설계 학습 경로"],
+  },
+  {
     slug: "sd-payment-reliability",
     title: "결제 시스템 설계 ②: 재시도, 웹훅, 대사로 한 번만 청구하기",
     summary: "시간 초과는 실패가 아니라 모르는 상태다. 가짜 PSP로 이중 청구, 중복·위조·분실 웹훅을 재현해 멱등성 키, 상태 규칙, 스위퍼로 막고, 정산 파일과 원장을 대사해 남은 어긋남을 잡는다.",
