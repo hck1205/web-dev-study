@@ -72,6 +72,7 @@ export const Summary = styled.p`
   color: ${color.textMuted};
   font-size: ${font.size.lg};
   line-height: ${font.leading.normal};
+  overflow-wrap: anywhere;
 `;
 
 export const Meta = styled.div`
