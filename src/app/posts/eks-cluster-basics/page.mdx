@@ -396,7 +396,7 @@ S3에 파일을 올리는 Pod가 있다. 가장 나쁜 방법은 액세스 키�
 
 IRSA(IAM Roles for Service Accounts)는 2019년부터 쓰인 방식이다. 클러스터마다 OIDC 발급자가 있고, 이를 IAM에 OIDC 공급자로 등록한다. ServiceAccount에 `eks.amazonaws.com/role-arn` 어노테이션을 달면 웹훅이 Pod에 서비스 어카운트 토큰 파일과 역할 ARN 환경 변수를 넣는다. AWS SDK는 그 토큰으로 `AssumeRoleWithWebIdentity`를 불러 임시 자격 증명을 받는다. 역할의 신뢰 정책이 "이 클러스터의 OIDC가 발급한, `system:serviceaccount:shop:orders`라는 주체"만 받도록 조건을 건다. 문제는 신뢰 정책에 클러스터의 OIDC 주소가 박힌다는 것이다. 클러스터를 새로 만들어 옮기면(블루그린 업그레이드) 역할마다 신뢰 정책을 고쳐야 하고, 계정당 OIDC 공급자 수와 신뢰 정책 길이에도 한도가 있다.
 
-EKS Pod Identity(2023년 말)는 이 연결을 EKS API로 옮겼다. 역할의 신뢰 정책은 클러스터와 상관없이 `pods.eks.amazonaws.com` 서비스 하나만 믿는다.
+이 토큰이 어떻게 발급되고 audience와 만료가 어떻게 정해지는지는 [ServiceAccount 토큰 글](/posts/k8s-serviceaccount-tokens)에 있다. EKS Pod Identity(2023년 말)는 이 연결을 EKS API로 옮겼다. 역할의 신뢰 정책은 클러스터와 상관없이 `pods.eks.amazonaws.com` 서비스 하나만 믿는다.
 
 ```text
 {

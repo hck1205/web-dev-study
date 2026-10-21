@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-pod-security-admission",
+    title: "Pod Security Admission: 네임스페이스 라벨로 거는 보안 수준",
+    summary: "dry-run 라벨 두 줄로 네임스페이스의 위반을 미리 보는 데서 출발해 privileged·baseline·restricted의 검사 항목, enforce·warn·audit와 버전 고정, Deployment는 통과하고 Pod만 막히는 이유, 클러스터 기본값과 예외, 감사 로그로 위반 모으기, PodSecurityPolicy에서 옮기는 순서를 실습 클러스터에서 따라간다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["Pod Security Admission", "Pod Security Standards", "PodSecurityPolicy"],
+  },
+  {
+    slug: "k8s-security-context",
+    title: "securityContext: 한 줄마다 켜지는 커널 기능",
+    summary: "보안 점검 경고를 고치다 readOnlyRootFilesystem 한 줄에 nginx가 죽는 장면에서 출발해 capability, no_new_privs, 읽기 전용 루트, seccomp, AppArmor, runAsNonRoot와 fsGroup이 커널에서 무엇을 막는지 setpriv·capsh·unshare와 작은 C 프로그램으로 재현하고, 설정 뒤 앱이 깨질 때 증상별로 원인을 찾는 법을 정리한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Linux", "Container"],
+    date: "2026-10-22",
+    keywords: ["securityContext", "seccomp", "readOnlyRootFilesystem", "allowPrivilegeEscalation"],
+  },
+  {
+    slug: "k8s-serviceaccount-tokens",
+    title: "ServiceAccount 토큰: 만료 없는 Secret에서 Pod에 묶인 토큰으로",
+    summary: "Secret에 든 옛 토큰에 exp가 없다는 데서 출발해 TokenRequest와 projected 볼륨, 토큰 클레임 읽기, 3607초 토큰이 1년으로 늘어나는 이유와 kubelet 갱신, Pod를 지우면 무효가 되는 바인딩, audience 분리, automountServiceAccountToken, OIDC 디스커버리와 IRSA를 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Authentication", "JWT"],
+    date: "2026-10-22",
+    keywords: ["TokenRequest", "바운드 서비스 어카운트 토큰", "automountServiceAccountToken", "projected 토큰"],
+  },
+  {
+    slug: "k8s-rbac",
+    title: "쿠버네티스 RBAC: 403 한 줄을 읽고 권한을 좁히는 법",
+    summary: "scale 권한을 줬는데 kubectl scale이 403을 맞는 장면에서 출발해 401과 403의 차이, 요청이 동사·그룹·리소스·서브리소스로 쪼개지는 방식, Role과 바인딩의 조합, aggregated ClusterRole, escalate·bind·impersonate와 edit의 ServiceAccount 행세로 권한이 넓어지는 길, can-i --list로 하는 감사를 실습 클러스터에서 따라간다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Authorization", "DevOps"],
+    date: "2026-10-22",
+    keywords: ["ClusterRoleBinding", "kubectl auth can-i", "aggregated ClusterRole", "권한 상승 검사"],
+  },
+  {
     slug: "kustomize-basics",
     title: "Kustomize 깊게: overlay, 패치 두 가지, generator, component",
     summary: "commonLabels 한 줄로 Service 엔드포인트가 빈 장면에서 출발해 이름으로 합치는 전략적 병합 패치와 위치로 바꾸는 JSON 패치, 아무 데도 안 붙는 target 패치, 해시 이름을 만드는 generator, overlay보다 먼저 끼어드는 component를 실제 렌더링 결과로 확인한다.",

@@ -429,7 +429,7 @@ api-59cfb66bb    3         3         3       29s
 api-66767b8646   1         0         0       3s
 ```
 
-경고는 길어서 뒷부분을 줄였다. 새 ReplicaSet은 DESIRED 1, CURRENT 0이다. Pod를 만들 때마다 거절당하고 있다. 옛 Pod가 살아 있어 서비스는 멀쩡하니 아무도 모르고 지나가다가, 노드 교체로 옛 Pod가 사라지는 날 장애가 된다. 그래서 순서를 지킨다. 먼저 `warn`과 `audit`만 걸어 두고 경고가 사라질 때까지 매니페스트를 고친 다음 `enforce`로 올린다. `kubectl label --dry-run=server`로 미리 걸어 보면 위 경고만 받고 실제로는 바뀌지 않는다.
+경고는 길어서 뒷부분을 줄였다. 새 ReplicaSet은 DESIRED 1, CURRENT 0이다. Pod를 만들 때마다 거절당하고 있다. 옛 Pod가 살아 있어 서비스는 멀쩡하니 아무도 모르고 지나가다가, 노드 교체로 옛 Pod가 사라지는 날 장애가 된다. 그래서 순서를 지킨다. 먼저 `warn`과 `audit`만 걸어 두고 경고가 사라질 때까지 매니페스트를 고친 다음 `enforce`로 올린다. `kubectl label --dry-run=server`로 미리 걸어 보면 위 경고만 받고 실제로는 바뀌지 않는다. RBAC 규칙을 읽는 법과 권한 상승 경로는 [RBAC 글](/posts/k8s-rbac)에, 수준별 검사 항목과 버전 고정, 클러스터 기본값과 예외는 [Pod Security Admission 글](/posts/k8s-pod-security-admission)에 이어 정리했다.
 
 ## 지웠는데 Terminating에서 멈출 때
 

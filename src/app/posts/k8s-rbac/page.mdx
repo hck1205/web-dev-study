@@ -1,0 +1,641 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-rbac");
+
+프런트엔드 팀이 "Pod 로그 보고, 급할 때 replicas만 늘릴 수 있게 해 달라"고 했다. 그래서 `pods/log` 읽기와 `deployments/scale` 수정 권한만 담은 Role을 만들어 줬다. 다음 날 메시지가 왔다.
+
+```text
+$ kubectl -n shop scale deploy web --replicas=3
+Error from server (Forbidden): deployments.apps "web" is forbidden: User "jane" cannot get resource "deployments" in API group "apps" in the namespace "shop"
+```
+
+scale 권한을 줬는데 거절당했다. 오류를 자세히 보면 거절된 동사는 `get`이고 리소스는 `deployments`다. `kubectl scale`은 바꾸기 전에 Deployment를 먼저 읽는다. RBAC는 이렇게 요청 하나하나를 동사·그룹·리소스·이름으로 쪼개서 본다. 이 글은 그 쪼개는 방식을 따라가면서 권한을 좁게 주는 법, 그리고 권한을 넓히는 권한(escalate, bind, impersonate)이 왜 가장 위험한지를 실습 클러스터에서 확인한다.
+
+실습은 kwok으로 띄운 쿠버네티스 1.37.0 클러스터에서 했다. 노드와 컨테이너는 가짜지만 API 서버, RBAC, 컨트롤러 매니저는 진짜라서 권한 관련 출력은 실제 클러스터와 같다. 네임스페이스 단위로 권한을 거는 기본 흐름은 [네임스페이스 글](/posts/k8s-namespace)에, Secret의 `list` 권한이 사실상 읽기 권한이라는 함정은 [Secret 글](/posts/k8s-secret)에 있으니 여기서는 반복하지 않는다. 같은 보안 묶음의 다른 글로 [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens), [securityContext](/posts/k8s-security-context), [Pod Security Admission](/posts/k8s-pod-security-admission)이 있다.
+
+## 401과 403은 다른 문에서 막힌다
+
+API 서버에 들어온 요청은 세 개의 문을 차례로 지난다. 인증(authentication)은 "너는 누구냐"를 묻고, 인가(authorization)는 "그 사람이 이걸 해도 되냐"를 묻고, 어드미션은 "내용이 규칙에 맞냐"를 묻는다. RBAC는 두 번째 문이다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="요청은 인증, 인가, 어드미션을 차례로 지나야 etcd에 닿는다"
+  zones={[
+    { id: "cp", label: "kube-apiserver", x: 118, y: 6, w: 276, h: 288, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cli", label: "kubectl", sub: "jane", x: 58, y: 150, icon: "client", w: 96 },
+    { id: "authn", label: "authn", sub: "cert·token", x: 190, y: 60, icon: "lock", w: 112 },
+    { id: "authz", label: "authz", sub: "Node,RBAC", x: 330, y: 60, icon: "firewall", w: 104 },
+    { id: "adm", label: "admission", sub: "PodSecurity…", x: 330, y: 160, icon: "gateway", w: 112 },
+    { id: "etcd", label: "etcd", sub: "/registry", x: 250, y: 250, icon: "db", w: 104 },
+  ]}
+  links={[
+    { from: "cli", to: "authn" },
+    { from: "authn", to: "authz" },
+    { from: "authz", to: "adm" },
+    { from: "adm", to: "etcd" },
+  ]}
+  steps={[
+    { path: ["cli", "authn"], packet: "bad tok", blocked: true, title: "누군지 모르면 401", detail: "토큰이 틀리면 인증에서 끝난다. 인가까지 가지도 않는다.", payload: "error: You must be logged in to the server (Unauthorized)" },
+    { path: ["cli", "authn", "authz"], packet: "anon", blocked: true, title: "자격 증명이 없으면 익명이 된다", detail: "아무것도 안 보내면 401이 아니라 system:anonymous라는 사용자가 된다. 그 사용자에게 권한이 없으니 403이다." },
+    { path: ["cli", "authn", "authz"], packet: "jane", blocked: true, title: "누군지 알지만 권한이 없으면 403", detail: "인증서의 CN이 jane, O가 frontend다. 인증은 통과했고 RBAC가 맞는 규칙을 못 찾아 거절했다.", payload: "pods is forbidden: User \"jane\" cannot list resource \"pods\"" },
+    { path: ["cli", "authn", "authz", "adm", "etcd"], packet: "jane", title: "권한이 있으면 어드미션까지 간다", detail: "인가를 통과한 요청은 어드미션이 내용을 보고 저장한다. 읽기 요청은 어드미션을 거치지 않는다." },
+  ]}
+/>
+
+직접 보내 보면 차이가 분명하다.
+
+```bash
+# 틀린 토큰, 자격 증명 없음, 인증서는 있지만 권한 없는 jane을 차례로 보낸다
+curl -sS --cacert ca.crt -H 'Authorization: Bearer nope' https://127.0.0.1:32732/api/v1/namespaces/default/pods
+curl -sS --cacert ca.crt https://127.0.0.1:32732/api/v1/namespaces/default/pods
+curl -sS --cacert ca.crt --cert jane.crt --key jane.key https://127.0.0.1:32732/api/v1/namespaces/default/pods
+```
+
+```text
+  "message": "Unauthorized",
+  "reason": "Unauthorized",
+  "code": 401
+  "message": "pods is forbidden: User \"system:anonymous\" cannot list resource \"pods\" in API group \"\" in the namespace \"default\"",
+  "reason": "Forbidden",
+  "code": 403
+  "message": "pods is forbidden: User \"jane\" cannot list resource \"pods\" in API group \"\" in the namespace \"default\"",
+  "reason": "Forbidden",
+  "code": 403
+```
+
+응답 JSON에서 세 줄씩만 남겼다. 401이면 자격 증명 쪽(만료된 인증서, 잘못된 kubeconfig, OIDC 토큰 만료)을 보고, 403이면 RBAC를 본다. 403 메시지에 이미 답이 다 들어 있다. 누가(`User "jane"`), 무엇을(`list`), 어느 그룹의 어떤 리소스를(`"" pods`), 어디서(`namespace "default"`) 하려다 막혔는지.
+
+## 쿠버네티스에는 사용자 오브젝트가 없다
+
+`kubectl get users` 같은 명령은 없다. 쿠버네티스는 사람을 저장하지 않는다. 인증 방식이 알려 주는 이름과 그룹을 그대로 믿을 뿐이다. 클라이언트 인증서라면 CN이 이름, O가 그룹이다. OIDC라면 토큰의 클레임(보통 `email`, `groups`)이 이름과 그룹이 된다. ServiceAccount만 예외로 API 오브젝트가 있다.
+
+```bash
+# CN=jane, O=frontend 인증서를 클러스터 CA로 서명했다
+openssl req -new -key jane.key -subj "/CN=jane/O=frontend" -out jane.csr
+openssl x509 -req -in jane.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out jane.crt -days 30
+
+# API 서버가 나를 누구로 보는지 확인한다
+kubectl --kubeconfig jane.kubeconfig auth whoami
+```
+
+```text
+ATTRIBUTE                                           VALUE
+Username                                            jane
+Groups                                              [frontend system:authenticated]
+Extra: authentication.kubernetes.io/credential-id   [X509SHA256=170119d41d64d291622e619c1203403e0e27a52c07621bd86dd7b08551863ec0]
+```
+
+`system:authenticated`는 인증을 통과한 모든 주체에게 붙는다. 여기에 권한을 주면 클러스터에 로그인할 수 있는 모두에게 준 셈이다. 그룹은 인증서를 다시 발급하거나 IdP에서 그룹을 바꾸기 전에는 바뀌지 않는다. 인증서로 사람을 관리하면 퇴사자의 인증서를 회수할 방법이 마땅치 않다. 쿠버네티스는 인증서 폐기 목록(CRL)을 확인하지 않는다. 사람은 OIDC로 붙이고, 인증서는 컴포넌트와 비상용 관리자 계정에만 쓰는 이유다. 인증서가 발급되는 과정은 [인증서와 PKI](/posts/k8s-certificates-pki)에서 따로 다룬다.
+
+특별한 그룹이 하나 있다. `system:masters`다. 이 그룹은 RBAC를 거치지 않고 모든 요청이 허락된다. API 서버의 인가 단계 맨 앞에 이 그룹을 무조건 통과시키는 장치가 있어서, `cluster-admin` ClusterRoleBinding을 지워도 소용없다. 그래서 이 그룹이 박힌 인증서가 새면 만료될 때까지 막을 방법이 없다. kubeadm 1.29부터 `admin.conf`가 `system:masters` 대신 `kubeadm:cluster-admins` 그룹(RBAC로 cluster-admin에 묶인 그룹)을 쓰고, `system:masters` 인증서는 비상용 `super-admin.conf`로 따로 뺀 것도 이 때문이다.
+
+## 요청 하나는 동사, 그룹, 리소스, 이름으로 바뀐다
+
+RBAC가 보는 것은 HTTP 요청에서 뽑아낸 속성 몇 개다. 맨 앞의 상황에서 `kubectl scale`이 보낸 요청을 조각내 보자. 아래 그림에서 조각을 누르면 그 조각이 RBAC 규칙의 어느 칸과 비교되는지 나온다.
+
+<UrlAnatomy
+  caption="PATCH 요청 하나가 RBAC 속성 다섯 개로 바뀐다"
+  base="PATCH /apis"
+  separator="/"
+  joiner="/"
+  params={[
+    { key: "apps", display: "apps", title: "apiGroup: apps", description: "/apis/ 다음이 API 그룹이다. Pod, Service, Secret처럼 /api/v1로 시작하는 코어 그룹은 빈 문자열 \"\"로 쓴다. 규칙에 apps를 써야 할 곳에 \"\"를 쓰는 실수가 가장 흔하다.", required: true },
+    { key: "v1", display: "v1", title: "버전은 보지 않는다", description: "RBAC 규칙에는 버전 칸이 없다. apps/v1이든 앞으로 나올 버전이든 같은 규칙으로 판단한다." },
+    { key: "ns", display: "namespaces/shop", title: "namespace: shop", description: "RoleBinding은 자기 네임스페이스의 요청에만 효력이 있다. 이 칸이 없는 요청(노드, 네임스페이스 자체, ClusterRole)은 ClusterRoleBinding만 허락할 수 있다.", required: true },
+    { key: "res", display: "deployments", title: "resource: deployments", description: "복수형 소문자로 쓴다. Deployment나 deployment라고 쓰면 아무것도 맞지 않는다. kubectl api-resources의 NAME 열이 정확한 이름이다.", required: true },
+    { key: "name", display: "web", title: "name: web", description: "resourceNames로 이름을 못 박을 때 비교하는 칸이다. create는 요청 URL에 이름이 없어서 resourceNames로 제한할 수 없다." },
+    { key: "sub", display: "scale", title: "subresource: scale", description: "규칙에는 deployments/scale처럼 리소스와 붙여 쓴다. deployments 권한이 있어도 deployments/scale은 따로 줘야 하고, 반대도 마찬가지다.", code: "HTTP 메서드 → 동사\nGET (이름 있음)  → get\nGET (이름 없음)  → list (?watch=true면 watch)\nPOST            → create\nPUT             → update\nPATCH           → patch\nDELETE          → delete (컬렉션이면 deletecollection)" },
+  ]}
+/>
+
+동사는 HTTP 메서드에서 나오지만 일대일은 아니다. 같은 GET이 이름이 있으면 `get`, 없으면 `list`, `?watch=true`면 `watch`가 된다. 그래서 `get`만 주고 `kubectl get pods`(목록)를 시키면 막힌다. HTTP와 상관없는 특수 동사도 있다. `escalate`, `bind`, `impersonate`, 그리고 CSR 승인에 쓰는 `approve` 같은 것들이다. 이 셋은 뒤에서 따로 본다.
+
+서브리소스는 별개의 리소스처럼 다뤄진다. `pods/log`, `pods/exec`, `pods/portforward`, `pods/eviction`, `deployments/scale`, `*/status`가 대표적이다. `pods`에 `get`을 줬다고 `pods/log`를 읽을 수 있는 게 아니다. 반대로 `pods/exec`에 `create`만 있으면 Pod를 수정할 권한이 없어도 그 안에서 셸을 띄울 수 있다. 운영 클러스터에서 exec 권한이 사실상 컨테이너의 모든 비밀(환경 변수, 마운트된 토큰)을 읽는 권한인 이유다.
+
+## Role 한 장 읽기
+
+처음 상황의 Role이다. 그룹 `frontend`에 묶었다.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-debugger
+  namespace: shop
+rules:
+- apiGroups: [""]                      # 코어 그룹: pods
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]     # 서브리소스만
+  verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: frontend-debug
+  namespace: shop
+subjects:
+- kind: Group
+  name: frontend                       # 인증서의 O 값
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: pod-debugger
+  apiGroup: rbac.authorization.k8s.io
+```
+
+`kubectl auth can-i`로 하나씩 물어본다. `--as`와 `--as-group`은 관리자가 다른 사람인 척 물어보는 옵션이다.
+
+```bash
+# jane(frontend 그룹)이 shop에서 할 수 있는 일을 하나씩 확인한다
+kubectl auth can-i get pods -n shop --as=jane --as-group=frontend
+kubectl auth can-i get pods --subresource=log -n shop --as=jane --as-group=frontend
+kubectl auth can-i create pods --subresource=exec -n shop --as=jane --as-group=frontend
+kubectl auth can-i update deployments.apps/web --subresource=scale -n shop --as=jane --as-group=frontend
+kubectl auth can-i update deployments.apps/web -n shop --as=jane --as-group=frontend
+kubectl auth can-i get pods -n default --as=jane --as-group=frontend
+```
+
+```text
+yes
+yes
+no
+yes
+no
+no
+```
+
+규칙대로다. 그런데 `kubectl scale`은 실패했다. `-v=6`으로 kubectl이 실제로 보낸 요청을 보면 이유가 보인다.
+
+```bash
+# kubectl이 보내는 HTTP 요청을 찍는다
+kubectl -n shop scale deploy web --replicas=3 -v=6 2>&1 | grep -E 'GET|PATCH|PUT'
+```
+
+```text
+I1021 00:51:53.181703    4405 round_trippers.go:632] "Response" verb="GET" url="https://127.0.0.1:32732/apis/apps/v1/namespaces/shop/deployments/web" status="403 Forbidden" milliseconds=6
+```
+
+scale 서브리소스를 건드리기 전에 Deployment 본체를 `GET`한다. 그 단계에서 막혔다. 고치는 길은 둘이다. `deployments`에 `get`을 더 주거나, 서브리소스로 바로 요청하는 명령을 쓰거나.
+
+```bash
+# scale 서브리소스로 직접 patch한다
+kubectl -n shop patch deployment web --subresource=scale --type=merge -p '{"spec":{"replicas":3}}'
+kubectl -n shop get deployment web --subresource=scale
+```
+
+```text
+scale.autoscaling/web patched
+NAME   DESIRED   AVAILABLE   AGE
+web    3         3           19s
+```
+
+`can-i`가 yes라고 해도 kubectl 명령 하나가 여러 요청을 보낼 수 있다는 걸 기억해 둔다. `kubectl apply`는 `get`과 `patch`를, `kubectl rollout restart`는 `get`과 `patch`를, `kubectl logs -f`는 `pods`의 `get`과 `pods/log`의 `get`을 쓴다. 권한을 좁게 줄 때는 실제 명령을 `-v=6`으로 한 번 돌려 보는 게 가장 정확하다.
+
+## 네 가지 오브젝트를 짝지으면
+
+RBAC 오브젝트는 넷이다. 권한 묶음인 Role(네임스페이스 안)과 ClusterRole(클러스터 전체), 그 묶음을 누구에게 줄지 정하는 RoleBinding(네임스페이스 안)과 ClusterRoleBinding(클러스터 전체). 헷갈리는 건 조합이다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="효력 범위는 묶음이 아니라 바인딩이 정한다"
+  nodes={[
+    { id: "role", label: "Role", sub: "shop 안의 묶음", x: 80, y: 50, w: 130 },
+    { id: "cr", label: "ClusterRole", sub: "클러스터에 하나", x: 330, y: 50, w: 140 },
+    { id: "rb", label: "RoleBinding", sub: "shop에만 효력", x: 80, y: 170, w: 130 },
+    { id: "crb", label: "ClusterRoleBinding", sub: "모든 네임스페이스", x: 330, y: 170, w: 160 },
+    { id: "who", label: "User·Group·SA", sub: "subjects", x: 205, y: 265, w: 140 },
+  ]}
+  edges={[
+    { from: "rb", to: "role", label: "roleRef" },
+    { from: "rb", to: "cr", label: "재사용", dashed: true },
+    { from: "crb", to: "cr", label: "roleRef" },
+    { from: "who", to: "rb" },
+    { from: "who", to: "crb" },
+  ]}
+/>
+
+- Role + RoleBinding: 그 네임스페이스 안에서만, 그 네임스페이스에서만 쓰는 묶음.
+- ClusterRole + RoleBinding: 묶음은 클러스터에 하나 두고 효력은 바인딩이 있는 네임스페이스에만. 내장 `edit`, `view`를 팀 네임스페이스마다 주는 방식이다.
+- ClusterRole + ClusterRoleBinding: 모든 네임스페이스와 클러스터 범위 리소스(노드, PV, 네임스페이스 자체)까지.
+- Role + ClusterRoleBinding: 이 조합은 없다. ClusterRoleBinding은 ClusterRole만 가리킬 수 있다.
+
+두 번째 조합은 뒤에서 `bind` 실습에서 다시 나온다. `cluster-admin`도 RoleBinding으로 묶으면 그 네임스페이스의 관리자가 될 뿐이다. 바인딩의 `roleRef`는 만든 뒤에 바꿀 수 없다. 다른 역할로 바꾸려면 지우고 다시 만든다. 그 사이 몇 초 동안 권한이 비니, 바꿀 때는 새 바인딩을 먼저 만들고 옛 바인딩을 지운다.
+
+내장 ClusterRole 중 사람에게 주는 것은 넷이다. `view`(읽기, Secret 제외), `edit`(대부분 쓰기, Role·RoleBinding 제외), `admin`(네임스페이스 안의 Role·RoleBinding까지), `cluster-admin`(전부)이다. 이 실습 클러스터에는 ClusterRole이 73개 있었고 나머지는 대부분 `system:`으로 시작하는 컴포넌트용이다.
+
+```bash
+# 내장 역할이 합쳐지는 규칙(aggregationRule)과 자기 라벨을 본다
+for r in view edit admin; do
+  echo "$r: $(kubectl get clusterrole $r -o jsonpath='{.metadata.labels}')  agg=$(kubectl get clusterrole $r -o jsonpath='{.aggregationRule.clusterRoleSelectors}')"
+done
+```
+
+```text
+view: {"kubernetes.io/bootstrapping":"rbac-defaults","rbac.authorization.k8s.io/aggregate-to-edit":"true"}  agg=[{"matchLabels":{"rbac.authorization.k8s.io/aggregate-to-view":"true"}}]
+edit: {"kubernetes.io/bootstrapping":"rbac-defaults","rbac.authorization.k8s.io/aggregate-to-admin":"true"}  agg=[{"matchLabels":{"rbac.authorization.k8s.io/aggregate-to-edit":"true"}}]
+admin: {"kubernetes.io/bootstrapping":"rbac-defaults"}  agg=[{"matchLabels":{"rbac.authorization.k8s.io/aggregate-to-admin":"true"}}]
+```
+
+## 내장 역할은 라벨로 합쳐진다
+
+위 출력에 흥미로운 구조가 있다. `view`는 `aggregate-to-view` 라벨이 붙은 ClusterRole을 모아 만들고, 자기 자신에게는 `aggregate-to-edit` 라벨이 붙어 있다. 그래서 `view`의 규칙이 `edit`로, `edit`의 규칙이 `admin`으로 올라간다. 이걸 aggregated ClusterRole이라고 한다. CRD를 설치했을 때 그 리소스를 `view`에 넣고 싶으면 내장 역할을 고칠 필요 없이 라벨 붙은 ClusterRole을 하나 더 만들면 된다.
+
+```bash
+# Coupon CRD를 만든 뒤 jane에게 view를 준다
+kubectl apply -f coupons-crd.yaml
+kubectl create rolebinding jane-view -n shop --clusterrole=view --user=jane
+kubectl auth can-i list coupons.shop.example.com -n shop --as=jane
+
+# aggregate-to-view 라벨이 붙은 ClusterRole을 추가한다
+kubectl apply -f coupons-viewer.yaml
+kubectl auth can-i list coupons.shop.example.com -n shop --as=jane
+kubectl auth can-i list coupons.shop.example.com -n shop --as=bob   # bob은 edit
+```
+
+```text
+customresourcedefinition.apiextensions.k8s.io/coupons.shop.example.com created
+rolebinding.rbac.authorization.k8s.io/jane-view created
+no
+clusterrole.rbac.authorization.k8s.io/coupons-viewer created
+yes
+yes
+```
+
+`coupons-viewer`는 `view` 라벨만 달았는데 `edit`를 가진 bob도 볼 수 있다. 컨트롤러 매니저의 clusterrole-aggregation 컨트롤러가 라벨을 보고 규칙을 이어 붙이는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="clusterrole-aggregation 컨트롤러가 라벨을 따라 규칙을 위로 옮긴다"
+  cells={["coupons-viewer", "aggregate-to-view", "view", "aggregate-to-edit", "edit", "admin"]}
+  memoryLabel="edit의 rules"
+  steps={[
+    { pointer: 0, memory: [], caption: "coupons-viewer가 생겼다. 라벨은 aggregate-to-view=true 하나다." },
+    { pointer: 2, found: [0, 1], memory: [], caption: "view의 selector가 aggregate-to-view를 고른다. 내장 규칙과 coupons 규칙이 view에 들어간다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["view 규칙", "coupons get·list"], caption: "view 자신은 aggregate-to-edit 라벨을 갖고 있다. edit의 selector가 view를 고른다." },
+    { pointer: 4, found: [2, 3], memory: ["view 규칙", "coupons get·list", "쓰기 규칙"], caption: "edit는 view 규칙과 자기 쓰기 규칙을 합친다. bob이 coupons를 볼 수 있게 된다." },
+    { pointer: 5, found: [4, 5], memory: ["view 규칙", "coupons get·list", "쓰기 규칙", "RBAC 관리"], caption: "edit의 aggregate-to-admin 라벨로 admin까지 같은 규칙이 올라간다." },
+  ]}
+/>
+
+함정이 하나 있다. aggregationRule이 있는 ClusterRole의 `rules`는 컨트롤러가 덮어쓴다. `kubectl edit clusterrole view`로 규칙을 직접 넣으면 잠깐 동작하다가 사라진다. 꼭 라벨 붙은 별도 ClusterRole로 추가한다. 반대 방향 함정도 있다. 오퍼레이터를 설치하면 그 차트가 `aggregate-to-edit` ClusterRole을 함께 넣는 경우가 많다. 그 안에 Secret 같은 민감한 리소스가 있으면 `edit`를 가진 모든 사람의 권한이 조용히 넓어진다. 차트를 설치한 뒤 `kubectl get clusterroles -l rbac.authorization.k8s.io/aggregate-to-edit=true`로 무엇이 붙었는지 본다.
+
+## 권한을 만드는 권한이 가장 위험하다
+
+Role과 RoleBinding도 API 오브젝트라서, 그걸 만들 권한이 있으면 자기에게 권한을 더 줄 수 있을 것 같다. RBAC는 이걸 막는 장치를 갖고 있다. Role을 만들거나 고칠 때, 거기 담긴 권한을 요청자가 이미 다 갖고 있어야 한다. RoleBinding을 만들 때는 묶으려는 역할의 권한을 요청자가 다 갖고 있어야 한다.
+
+jane에게 shop 네임스페이스의 Role·RoleBinding 관리 권한만 줬다. Secret 권한은 없다.
+
+```bash
+# jane은 roles, rolebindings를 만들 수 있다. secrets 권한은 없다
+kubectl -n shop create role secret-reader --verb=get,list --resource=secrets
+kubectl -n shop create rolebinding jane-admin --clusterrole=cluster-admin --user=jane
+kubectl -n shop create role pod-reader --verb=get,list --resource=pods
+```
+
+```text
+Error from server (Forbidden): roles.rbac.authorization.k8s.io "secret-reader" is forbidden: user "jane" (groups=["frontend" "system:authenticated"]) is attempting to grant RBAC permissions not currently held:
+{APIGroups:[""], Resources:["secrets"], Verbs:["get" "list"]}
+error: failed to create rolebinding: rolebindings.rbac.authorization.k8s.io "jane-admin" is forbidden: user "jane" (groups=["frontend" "system:authenticated"]) is attempting to grant RBAC permissions not currently held:
+{APIGroups:["*"], Resources:["*"], Verbs:["*"]}
+{NonResourceURLs:["*"], Verbs:["*"]}
+role.rbac.authorization.k8s.io/pod-reader created
+```
+
+자기가 가진 `pods` 읽기를 담은 Role은 만들어지고, 없는 권한을 담은 것은 막힌다. 이 검사를 건너뛰게 해 주는 동사가 두 개 있다.
+
+<SequenceDiagram
+  caption="RoleBinding을 만들 때 API 서버가 묻는 것"
+  actors={[
+    { id: "jane", label: "jane" },
+    { id: "api", label: "API 서버" },
+    { id: "rbac", label: "RBAC" },
+  ]}
+  steps={[
+    { from: "jane", to: "api", label: "create rolebinding", title: "cluster-admin을 묶으려 한다", detail: "shop 네임스페이스에 jane을 cluster-admin에 묶는 RoleBinding을 만든다.", payload: "roleRef: ClusterRole/cluster-admin\nsubjects: [User jane]" },
+    { from: "api", to: "rbac", label: "create 권한?", title: "먼저 일반 인가", detail: "rolebindings에 create 권한이 있는지 본다. rbac-manager Role 덕분에 있다." },
+    { from: "api", to: "rbac", label: "이미 다 갖고 있나?", title: "권한 상승 검사", detail: "cluster-admin의 규칙 전부를 jane이 shop에서 이미 갖고 있는지 본다. 없다." },
+    { from: "api", to: "rbac", label: "bind 동사?", title: "예외를 확인한다", detail: "clusterroles/cluster-admin에 bind 동사를 가졌다면 검사를 건너뛴다. 처음에는 없다." },
+    { from: "api", to: "jane", label: "403", title: "가진 것만 나눠 줄 수 있다", detail: "bind가 없으면 attempting to grant RBAC permissions not currently held로 거절한다." },
+  ]}
+/>
+
+`bind`는 특정 역할을 남(또는 자기)에게 묶어도 되는 권한이다. `escalate`는 Role 안에 자기에게 없는 권한을 써넣어도 되는 권한이다. 둘 다 주면 실제로 어떻게 되는지 보자.
+
+```bash
+# cluster-admin에 대한 bind만 담은 ClusterRole을 jane에게 shop에서 준다
+kubectl apply -f bind-cluster-admin.yaml   # resources: clusterroles, verbs: bind, resourceNames: cluster-admin
+kubectl create rolebinding jane-bind -n shop --clusterrole=bind-cluster-admin --user=jane
+
+# 아까 막힌 명령을 다시 친다
+kubectl -n shop create rolebinding jane-admin --clusterrole=cluster-admin --user=jane
+kubectl -n shop get secrets
+kubectl -n default get secrets
+```
+
+```text
+clusterrole.rbac.authorization.k8s.io/bind-cluster-admin created
+rolebinding.rbac.authorization.k8s.io/jane-bind created
+rolebinding.rbac.authorization.k8s.io/jane-admin created
+No resources found in shop namespace.
+Error from server (Forbidden): secrets is forbidden: User "jane" cannot list resource "secrets" in API group "" in the namespace "default"
+```
+
+jane은 스스로 shop의 관리자가 됐다. RoleBinding이라 default 네임스페이스까지 넘어가진 못했다. `escalate`도 같다. `roles`에 `escalate`를 주자 아까 막힌 `secret-reader` Role이 그대로 만들어졌다.
+
+```bash
+# 관리자가 roles에 대한 escalate를 jane에게 준다
+kubectl create role role-escalator -n shop --verb=escalate --resource=roles.rbac.authorization.k8s.io
+kubectl create rolebinding jane-esc -n shop --role=role-escalator --user=jane
+
+# jane이 아까 막힌 Role을 다시 만든다
+kubectl -n shop create role secret-reader --verb=get,list --resource=secrets
+```
+
+```text
+role.rbac.authorization.k8s.io/role-escalator created
+rolebinding.rbac.authorization.k8s.io/jane-esc created
+role.rbac.authorization.k8s.io/secret-reader created
+```
+
+`bind`와 `escalate`가 정당하게 필요한 곳은 RBAC를 대신 관리해 주는 컨트롤러 정도다. 그때도 `resourceNames`로 묶을 수 있는 역할 이름을 정해 둔다.
+
+세 번째가 `impersonate`다. `--as`로 다른 사람인 척 요청하는 권한이다. `users`, `groups`에 이걸 주면 끝이다.
+
+```bash
+# users, groups, serviceaccounts에 impersonate를 가진 jane
+kubectl get nodes --as=anyone --as-group=system:masters
+kubectl auth whoami --as=anyone --as-group=system:masters
+```
+
+```text
+NAME     STATUS   ROLES    AGE   VERSION
+node-1   Ready    <none>   92s   fake
+ATTRIBUTE   VALUE
+Username    anyone
+Groups      [system:masters system:authenticated]
+```
+
+있지도 않은 사용자에게 `system:masters` 그룹을 붙여서 클러스터 관리자가 됐다. impersonate 권한이 없을 때 1.37.0 API 서버가 낸 오류는 `cannot impersonate-on:user-info:list resource "pods"`였다. 이 버전에서 베타로 켜져 있는 ConstrainedImpersonation 기능의 동사 이름이다. "누구로 가장해서 무엇을 할 수 있나"까지 나눠 주려는 기능인데, 버전마다 상태가 다르니 쓰기 전에 클러스터의 기능 게이트를 확인한다.
+
+## edit만 있어도 ServiceAccount가 될 수 있다
+
+내장 `edit`에도 impersonate가 들어 있다. 대상은 ServiceAccount다.
+
+```bash
+# edit 역할에서 impersonate가 들어 있는 규칙만 뽑는다
+kubectl get clusterrole edit -o json | jq -c '.rules[] | select(.verbs|index("impersonate"))'
+kubectl auth can-i create serviceaccounts/token -n shop --as=bob
+```
+
+```text
+{"apiGroups":[""],"resources":["serviceaccounts"],"verbs":["impersonate"]}
+yes
+```
+
+`edit`를 가진 사람은 그 네임스페이스의 어떤 ServiceAccount로도 행세할 수 있고 토큰도 발급받을 수 있다. 같은 네임스페이스에 권한 큰 ServiceAccount가 있으면 그게 곧 그 사람의 권한이다. 실제로 해 봤다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="edit를 가진 bob이 넓은 권한의 ServiceAccount를 거쳐 관리자가 된다"
+  zones={[
+    { id: "shop", label: "namespace shop", x: 150, y: 6, w: 244, h: 278, tone: "private" },
+  ]}
+  nodes={[
+    { id: "bob", label: "bob", sub: "edit", x: 64, y: 70, icon: "client", w: 96 },
+    { id: "api", label: "API server", sub: "RBAC", x: 64, y: 210, icon: "gateway", w: 104 },
+    { id: "sa", label: "ci-deployer", sub: "Role: *.*", x: 290, y: 70, icon: "lock", w: 116 },
+    { id: "rb", label: "bob-admin", sub: "RoleBinding", x: 290, y: 210, icon: "server", w: 116 },
+  ]}
+  links={[
+    { from: "bob", to: "api" },
+    { from: "api", to: "sa", dashed: true, label: "--as" },
+    { from: "api", to: "rb" },
+  ]}
+  steps={[
+    { path: ["bob", "api", "rb"], packet: "create", blocked: true, title: "bob 이름으로는 막힌다", detail: "edit에는 rolebindings 쓰기 권한이 없다.", payload: "User \"bob\" cannot create resource \"rolebindings\"" },
+    { path: ["bob", "api", "sa"], packet: "--as", highlight: ["shop"], title: "SA로 행세한다", detail: "edit에 들어 있는 serviceaccounts impersonate로 ci-deployer가 된다. CI용으로 별표 Role을 받아 둔 계정이다." },
+    { path: ["bob", "api", "rb"], packet: "create", title: "SA 이름으로는 된다", detail: "ci-deployer는 shop에서 무엇이든 할 수 있다. bob을 admin에 묶는 RoleBinding이 만들어진다.", payload: "rolebinding.rbac.authorization.k8s.io/bob-admin created" },
+  ]}
+/>
+
+```bash
+# bob 자신으로, 그리고 ci-deployer로 행세해서 같은 명령을 친다
+kubectl -n shop create rolebinding bob-admin --clusterrole=admin --user=bob
+kubectl -n shop create rolebinding bob-admin --clusterrole=admin --user=bob \
+  --as=system:serviceaccount:shop:ci-deployer
+```
+
+```text
+error: failed to create rolebinding: rolebindings.rbac.authorization.k8s.io is forbidden: User "bob" cannot create resource "rolebindings" in API group "rbac.authorization.k8s.io" in the namespace "shop"
+rolebinding.rbac.authorization.k8s.io/bob-admin created
+```
+
+쿠버네티스 문서도 `edit`를 설명하면서 "네임스페이스의 어떤 ServiceAccount로든 API에 접근할 수 있다"고 경고한다. 그래서 권한 큰 ServiceAccount(CI, 오퍼레이터)는 사람에게 `edit`를 주는 네임스페이스에 두지 않는다. 오퍼레이터를 `operators` 같은 별도 네임스페이스에 두는 관례가 이 때문이다.
+
+## 별표 하나가 여는 것들
+
+CI 파이프라인이 "권한 오류가 귀찮으니" 받은 Role이다.
+
+```yaml
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+```
+
+```bash
+# 별표 Role을 받은 ci-deployer가 shop에서 할 수 있는 것들
+SA=system:serviceaccount:shop:ci-deployer
+kubectl auth can-i get secrets -n shop --as=$SA
+kubectl auth can-i create pods --subresource=exec -n shop --as=$SA
+kubectl auth can-i escalate roles.rbac.authorization.k8s.io -n shop --as=$SA
+kubectl auth can-i delete coupons.shop.example.com -n shop --as=$SA
+```
+
+```text
+yes
+yes
+yes
+yes
+```
+
+`verbs: ["*"]`에는 `escalate`, `bind`, `impersonate`가 다 들어간다. `resources: ["*"]`에는 서브리소스(`pods/exec`)와 내일 설치할 CRD까지 들어간다. 오늘 안전한 별표가 내일은 아닐 수 있다. 이 Role은 RoleBinding으로 묶였으니 shop 안의 cluster-admin과 같다.
+
+여기서 `can-i`의 함정도 하나 봤다. 클러스터 범위 리소스를 `-n`과 함께 물으면 엉뚱한 답이 나온다.
+
+```bash
+kubectl auth can-i get nodes -n shop --as=$SA
+kubectl get nodes --as=$SA
+```
+
+```text
+Warning: resource 'nodes' is not namespace scoped
+
+yes
+Error from server (Forbidden): nodes is forbidden: User "system:serviceaccount:shop:ci-deployer" cannot list resource "nodes" in API group "" at the cluster scope
+```
+
+`can-i`는 네임스페이스가 붙은 질문을 보냈고, shop의 별표 Role이 그걸 허락했다. 실제 노드 요청에는 네임스페이스가 없어서 막힌다. 경고를 무시하지 않는다.
+
+## 누가 무엇을 할 수 있는지 훑기
+
+권한 감사의 출발점은 두 질문이다. "이 주체는 무엇을 할 수 있나"와 "이 역할을 누가 갖고 있나". 앞의 것은 `can-i --list`가 답한다.
+
+```bash
+# jane이 shop에서 가진 권한 전체
+kubectl auth can-i --list -n shop --as=jane | head -8
+```
+
+```text
+Resources                                       Non-Resource URLs   Resource Names   Verbs
+selfsubjectreviews.authentication.k8s.io        []                  []               [create]
+selfsubjectaccessreviews.authorization.k8s.io   []                  []               [create]
+selfsubjectrulesreviews.authorization.k8s.io    []                  []               [create]
+roles.rbac.authorization.k8s.io                 []                  []               [get list create update patch delete escalate]
+rolebindings.rbac.authorization.k8s.io          []                  []               [get list create update patch delete]
+bindings                                        []                  []               [get list watch]
+configmaps                                      []                  []               [get list watch]
+```
+
+`--as=jane`만 주면 그룹 없이 물어본다. 실제 권한은 그룹(`frontend`)까지 더해야 하니 `--as-group`을 빠뜨리지 않는다. `--list`는 RBAC 규칙만 보여 준다. 인가 웹훅이 따로 있는 클러스터라면 그쪽 결정은 빠진다.
+
+"누가 갖고 있나"는 바인딩을 뒤져야 한다. 기본 kubectl에 역방향 조회는 없어서 출력을 걸러 본다.
+
+```bash
+# shop의 바인딩을 역할·주체와 함께 본다
+kubectl get rolebindings -n shop -o wide
+
+# 별표, escalate, bind, impersonate가 든 역할을 찾는다 (system: 제외)
+kubectl get roles,clusterroles -A -o json | jq -r '.items[]
+  | select(.metadata.name|startswith("system:")|not)
+  | select(any(.rules[]?; (.verbs|index("*")) or ((.resources // [])|index("*"))
+      or (.verbs|index("escalate")) or (.verbs|index("bind")) or (.verbs|index("impersonate"))))
+  | "\(.kind)  \(.metadata.namespace // "-")  \(.metadata.name)"'
+```
+
+```text
+NAME             ROLE                  AGE     USERS   GROUPS     SERVICEACCOUNTS
+bob-edit         ClusterRole/edit      91s     bob                
+ci-everything    Role/ci-everything    26s                        shop/ci-deployer
+frontend-debug   Role/pod-debugger     2m14s           frontend   
+jane-esc         Role/role-escalator   67s     jane               
+jane-rbac        Role/rbac-manager     77s     jane               
+jane-view        ClusterRole/view      104s    jane               
+Role  shop  ci-everything
+Role  shop  role-escalator
+ClusterRole  -  admin
+ClusterRole  -  bind-cluster-admin
+ClusterRole  -  cluster-admin
+ClusterRole  -  edit
+ClusterRole  -  impersonate-any
+```
+
+`edit`와 `admin`이 목록에 있는 이유가 앞에서 본 ServiceAccount impersonate다. 이렇게 걸러진 목록을 하나씩 "정말 필요한가"로 검토하는 것이 정기 감사다. 손으로 하기 번거로우면 `kubectl-who-can`, `rbac-tool` 같은 플러그인이 역방향 조회를 해 준다. 실제로 누가 무엇을 했는지는 권한이 아니라 기록의 문제라서 [감사 로그](/posts/k8s-audit-logging)를 본다.
+
+## IAM 정책과 무엇이 다른가
+
+AWS IAM을 먼저 배웠다면 RBAC가 단순해 보인다. 실제로 단순하다. [IAM 글](/posts/iam-basics)과 나란히 놓으면 차이가 분명하다.
+
+거부 규칙이 없다. IAM은 명시적 Deny가 어떤 Allow보다 강하다. RBAC 규칙은 허용만 있고, 여러 바인딩의 권한은 더하기로 합쳐진다. "edit는 주되 Secret만 빼라"를 RBAC 하나로는 못 쓴다. Secret을 뺀 역할을 따로 만들어야 한다. 이미 준 권한을 다른 규칙으로 덮어 막고 싶으면 인가 웹훅이나 [어드미션 정책](/posts/k8s-admission-control)을 쓴다.
+
+조건이 없다. IAM은 태그, 시간, 출발 IP 같은 조건을 정책에 쓴다. RBAC는 동사·그룹·리소스·이름·네임스페이스 다섯 칸만 본다. "라벨이 team=a인 Pod만" 같은 규칙은 RBAC로 안 되고, 그게 필요하면 역시 어드미션 쪽으로 간다.
+
+주체를 저장하지 않는다. IAM에는 사용자와 역할이 오브젝트로 있다. RBAC는 인증 단계가 넘겨준 이름과 그룹 문자열만 비교한다. 오타가 난 사용자 이름에 바인딩을 만들어도 오류가 나지 않는다. 그냥 아무에게도 효력이 없다.
+
+범위가 네임스페이스로 정해진다. IAM은 ARN으로 자원을 고르고, RBAC는 네임스페이스가 가장 큰 경계다. 그래서 RBAC 설계는 사실상 네임스페이스 설계다.
+
+EKS에서는 두 체계가 맞물린다. 사람은 IAM으로 로그인하고, access entry가 IAM 주체를 쿠버네티스 사용자 이름과 그룹으로 바꾼 다음, 그 그룹에 RBAC가 권한을 준다. Pod가 AWS를 부를 때는 반대로 ServiceAccount가 IAM 역할로 바뀐다. 이 연결은 [EKS 글](/posts/eks-cluster-basics)과 [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens)에서 다룬다.
+
+## 규칙 맞추기를 직접 짜 보기
+
+RBAC 인가기는 바인딩마다 규칙을 훑어서 하나라도 맞으면 허락한다. 규칙 하나가 맞으려면 동사, 그룹, 리소스(서브리소스 포함), 이름이 모두 맞아야 한다. 아래 함수를 채워 보자. 규칙의 `*`는 무엇이든 맞고, 리소스 칸에 `*/scale`처럼 쓰면 모든 리소스의 그 서브리소스와 맞는다. `resourceNames`가 있으면 요청 이름이 그 안에 있어야 한다.
+
+<CodePlayground
+  caption="RBAC 규칙 매칭"
+  functionName="isAllowed"
+  initialCode={`function isAllowed(rules, req) {
+  // req = { verb, apiGroup, resource, subresource, name }
+  // rules = [{ apiGroups, resources, verbs, resourceNames? }]
+  return false;
+}`}
+  solution={`function isAllowed(rules, req) {
+  const has = (list, v) => list.includes("*") || list.includes(v);
+  const res = req.subresource ? req.resource + "/" + req.subresource : req.resource;
+  return rules.some((r) =>
+    has(r.verbs, req.verb) &&
+    has(r.apiGroups, req.apiGroup) &&
+    (r.resources.includes("*") ||
+      r.resources.includes(res) ||
+      (req.subresource !== "" && r.resources.includes("*/" + req.subresource))) &&
+    (!r.resourceNames || r.resourceNames.length === 0 || r.resourceNames.includes(req.name))
+  );
+}`}
+  tests={[
+    { label: "pods/log 읽기", args: [[{ apiGroups: [""], resources: ["pods", "pods/log"], verbs: ["get", "list", "watch"] }], { verb: "get", apiGroup: "", resource: "pods", subresource: "log", name: "web-1" }], expected: true },
+    { label: "pods/exec는 따로", args: [[{ apiGroups: [""], resources: ["pods", "pods/log"], verbs: ["get", "list", "watch"] }], { verb: "create", apiGroup: "", resource: "pods", subresource: "exec", name: "web-1" }], expected: false },
+    { label: "scale만 있고 본체 get", args: [[{ apiGroups: ["apps"], resources: ["deployments/scale"], verbs: ["get", "patch", "update"] }], { verb: "get", apiGroup: "apps", resource: "deployments", subresource: "", name: "web" }], expected: false },
+    { label: "그룹이 틀림", args: [[{ apiGroups: [""], resources: ["deployments"], verbs: ["get"] }], { verb: "get", apiGroup: "apps", resource: "deployments", subresource: "", name: "web" }], expected: false },
+    { label: "resourceNames 일치", args: [[{ apiGroups: [""], resources: ["secrets"], verbs: ["get"], resourceNames: ["db-cred"] }], { verb: "get", apiGroup: "", resource: "secrets", subresource: "", name: "db-cred" }], expected: true },
+    { label: "resourceNames 불일치", args: [[{ apiGroups: [""], resources: ["secrets"], verbs: ["get"], resourceNames: ["db-cred"] }], { verb: "get", apiGroup: "", resource: "secrets", subresource: "", name: "smtp" }], expected: false },
+    { label: "*/scale", args: [[{ apiGroups: ["*"], resources: ["*/scale"], verbs: ["update"] }], { verb: "update", apiGroup: "apps", resource: "deployments", subresource: "scale", name: "web" }], expected: true },
+    { label: "별표는 escalate까지", args: [[{ apiGroups: ["*"], resources: ["*"], verbs: ["*"] }], { verb: "escalate", apiGroup: "rbac.authorization.k8s.io", resource: "roles", subresource: "", name: "" }], expected: true },
+  ]}
+/>
+
+실제 인가기는 여기에 네임스페이스 비교(RoleBinding은 자기 네임스페이스만), 주체 비교(사용자 이름, 그룹, ServiceAccount), 리소스가 아닌 URL(`/healthz`, `/metrics`)의 `nonResourceURLs` 규칙이 더해진다. 거부 규칙이 없으니 순서도 상관없다. 하나라도 맞으면 끝이다.
+
+## 403을 받았을 때 보는 순서
+
+현장에서 권한 문제는 대개 아래 순서로 좁힌다.
+
+1. 오류 메시지를 끝까지 읽는다. 사용자 이름, 동사, API 그룹, 리소스, 네임스페이스가 다 들어 있다. `at the cluster scope`라고 나오면 클러스터 범위 요청이라 RoleBinding으로는 못 푼다.
+2. `kubectl auth whoami`로 API 서버가 보는 이름과 그룹을 확인한다. OIDC 그룹이 안 넘어오거나(IdP의 groups 클레임 설정), EKS access entry의 그룹 매핑이 틀린 경우가 생각보다 많다.
+3. `kubectl auth can-i <동사> <리소스> --as=<이름> --as-group=<그룹> -n <ns>`로 재현한다. 서브리소스는 `--subresource`로 따로 묻는다.
+4. 바인딩을 찾는다. `kubectl get rolebindings -n <ns> -o wide`와 ClusterRoleBinding을 본다. ServiceAccount 주체에 `namespace`가 빠졌거나, 바인딩을 다른 네임스페이스에 만들었거나, roleRef의 kind가 Role인데 그 이름의 Role이 그 네임스페이스에 없는 경우가 흔하다. RBAC는 없는 역할을 가리키는 바인딩도 오류 없이 받아 준다.
+5. 규칙의 철자를 본다. `apiGroups: [""]`와 `["apps"]`, 리소스는 복수형 소문자(`deployments`), 서브리소스는 따로.
+
+RBAC 변경은 API 서버가 watch로 받아 거의 바로 반영한다. 바꾸고 몇 초가 지나도 안 되면 반영이 느린 게 아니라 규칙이 틀린 것이다. 반대로 권한을 뺐는데 여전히 된다면, 다른 바인딩(특히 그룹 바인딩이나 `system:authenticated`)이 같은 권한을 주고 있거나 `system:masters` 인증서를 쓰고 있는 것이다.
+
+## 더하기만 있는 권한
+
+RBAC는 요청을 동사·그룹·리소스·이름·네임스페이스로 쪼개서 허용 규칙과 맞춰 보고, 거부 없이 허용만 더한다. 그래서 설계는 빼기가 아니라 처음부터 좁게 주는 쪽으로 간다. 서브리소스와 kubectl이 실제로 보내는 요청을 확인하고, 별표를 피하고, escalate·bind·impersonate처럼 권한을 만드는 권한은 사람에게 주지 않는다. 다음으로 볼 것은 이 권한을 받는 주체 중 사람이 아닌 쪽, [ServiceAccount와 그 토큰](/posts/k8s-serviceaccount-tokens)이다.
+
+## 면접에서 나올 만한 질문
+
+### 401과 403은 어떻게 다른가요?
+
+401은 인증 실패로, API 서버가 요청자가 누구인지 확인하지 못했다는 뜻이다. 403은 누구인지는 알지만 RBAC 같은 인가 단계가 그 동작을 허락하지 않았다는 뜻이다. 자격 증명을 아예 안 보내면 401이 아니라 `system:anonymous`로 인증된 뒤 403이 난다. 그래서 401이면 kubeconfig와 토큰 만료를, 403이면 바인딩과 규칙을 본다.
+
+### Role과 ClusterRole, RoleBinding과 ClusterRoleBinding은 어떻게 조합하나요?
+
+효력 범위는 바인딩이 정한다. ClusterRole을 RoleBinding으로 묶으면 그 네임스페이스에서만 효력이 있어서, 내장 `edit`나 `view`를 팀 네임스페이스마다 재사용하는 방식으로 쓴다. ClusterRoleBinding은 모든 네임스페이스와 노드 같은 클러스터 범위 리소스까지 덮는다. ClusterRoleBinding이 Role을 가리키는 조합은 없다.
+
+### deployments 권한이 있는데 kubectl scale이 안 되는 이유는요?
+
+RBAC는 서브리소스를 별개로 본다. `deployments`와 `deployments/scale`은 다른 리소스라 각각 줘야 한다. 거꾸로 scale만 줬을 때 `kubectl scale`이 막히는 건, kubectl이 Deployment 본체를 먼저 `get`하기 때문이다. `-v=6`으로 kubectl이 실제로 보내는 요청을 보고 필요한 동사를 정한다.
+
+### Role을 만들 권한이 있으면 자기 권한을 늘릴 수 있지 않나요?
+
+막혀 있다. Role에 넣는 권한이나 RoleBinding으로 묶는 역할의 권한을 요청자가 이미 다 갖고 있어야 한다. 이 검사를 건너뛰게 하는 게 `escalate`(Role에 없는 권한 쓰기)와 `bind`(특정 역할 묶기) 동사다. `impersonate`는 아예 다른 사용자나 `system:masters` 그룹으로 행세하게 해 주니 셋 다 사람에게 주지 않고, 컨트롤러에 줄 때도 `resourceNames`로 좁힌다.
+
+### 내장 edit 역할을 줘도 되는 상황인가요, 위험은 없나요?
+
+`edit`에는 그 네임스페이스 ServiceAccount에 대한 impersonate와 토큰 발급이 들어 있다. 같은 네임스페이스에 권한 큰 ServiceAccount가 있으면 `edit`를 가진 사람은 그 권한을 그대로 쓸 수 있다. 실습에서 edit만 가진 사용자가 별표 Role을 받은 CI ServiceAccount로 행세해서 자기를 admin에 묶었다. 권한 큰 계정은 별도 네임스페이스로 빼는 게 답이다.
+
+### aggregated ClusterRole은 언제 쓰나요?
+
+CRD를 설치했을 때 그 리소스 권한을 내장 `view`, `edit`, `admin`에 넣는 데 쓴다. `rbac.authorization.k8s.io/aggregate-to-view: "true"` 같은 라벨을 단 ClusterRole을 만들면 컨트롤러가 규칙을 합쳐 준다. 합쳐진 역할의 rules를 직접 고치면 덮어써지니 꼭 별도 ClusterRole로 추가한다. 차트가 넣는 aggregate 역할이 권한을 조용히 넓히지 않는지도 확인해야 한다.
+
+### RBAC와 AWS IAM의 가장 큰 차이는 무엇인가요?
+
+RBAC에는 거부 규칙과 조건이 없다. IAM은 명시적 Deny가 Allow를 이기고 태그나 IP 조건을 쓰지만, RBAC는 허용 규칙을 더하기만 하고 다섯 가지 속성만 비교한다. 또 RBAC는 사용자를 저장하지 않고 인증이 넘겨준 문자열을 믿는다. 거부나 조건이 필요하면 인가 웹훅이나 ValidatingAdmissionPolicy 같은 어드미션 정책으로 보완한다.
+
+### 클러스터 권한을 정기적으로 감사한다면 무엇을 보나요?
+
+`cluster-admin`과 `system:masters`를 누가 쓰는지, 별표와 escalate·bind·impersonate가 든 역할이 어디 묶였는지, `system:authenticated` 같은 넓은 그룹에 준 권한이 있는지를 본다. `kubectl auth can-i --list --as`로 주체별 권한을 확인하고, 바인딩 목록은 jq나 who-can 같은 도구로 역방향 조회한다. 권한이 실제로 쓰였는지는 감사 로그로 확인해서 안 쓰는 권한을 걷어 낸다.

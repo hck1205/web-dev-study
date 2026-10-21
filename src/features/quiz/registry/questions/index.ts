@@ -150,11 +150,15 @@ import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
 import { K8S_POD_PROBES } from "./k8s-pod-probes";
 import { K8S_POD_RESOURCES } from "./k8s-pod-resources";
 import { K8S_POD_SCHEDULING } from "./k8s-pod-scheduling";
+import { K8S_POD_SECURITY_ADMISSION } from "./k8s-pod-security-admission";
 import { K8S_POD_TROUBLESHOOTING } from "./k8s-pod-troubleshooting";
 import { K8S_PROJECT_STRUCTURE } from "./k8s-project-structure";
 import { K8S_PV_PVC } from "./k8s-pv-pvc";
+import { K8S_RBAC } from "./k8s-rbac";
 import { K8S_SECRET } from "./k8s-secret";
+import { K8S_SECURITY_CONTEXT } from "./k8s-security-context";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
+import { K8S_SERVICEACCOUNT_TOKENS } from "./k8s-serviceaccount-tokens";
 import { KAFKA_BASICS } from "./kafka-basics";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
@@ -490,11 +494,15 @@ export const QUESTION_SETS = [
   K8S_POD_PROBES,
   K8S_POD_RESOURCES,
   K8S_POD_SCHEDULING,
+  K8S_POD_SECURITY_ADMISSION,
   K8S_POD_TROUBLESHOOTING,
   K8S_PROJECT_STRUCTURE,
   K8S_PV_PVC,
+  K8S_RBAC,
   K8S_SECRET,
+  K8S_SECURITY_CONTEXT,
   K8S_SERVICE_TYPES,
+  K8S_SERVICEACCOUNT_TOKENS,
   KAFKA_BASICS,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,

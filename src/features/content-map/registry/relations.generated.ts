@@ -2,6 +2,76 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-pod-security-admission": {
+    "links": [
+      "k8s-namespace",
+      "k8s-security-context",
+      "k8s-rbac",
+      "k8s-serviceaccount-tokens"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "iptables-nat",
+      "terraform-basics",
+      "docker-container-basics",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "webhooks"
+    ]
+  },
+  "k8s-security-context": {
+    "links": [
+      "linux-namespaces-cgroups",
+      "linux-files-permissions",
+      "k8s-rbac",
+      "k8s-serviceaccount-tokens",
+      "k8s-pod-security-admission"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "k8s-architecture",
+      "local-k8s-kind-minikube"
+    ]
+  },
+  "k8s-serviceaccount-tokens": {
+    "links": [
+      "k8s-rbac",
+      "jwt-key-rotation",
+      "k8s-security-context",
+      "k8s-pod-security-admission",
+      "eks-cluster-basics",
+      "github-actions-docker-ecr"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "base64",
+      "k8s-controllers-reconcile",
+      "k8s-architecture",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "token-login",
+      "webhooks"
+    ]
+  },
+  "k8s-rbac": {
+    "links": [
+      "k8s-namespace",
+      "k8s-secret",
+      "k8s-serviceaccount-tokens",
+      "k8s-security-context",
+      "k8s-pod-security-admission",
+      "iam-basics",
+      "eks-cluster-basics"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "docker-container-basics",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "webhooks"
+    ]
+  },
   "kustomize-basics": {
     "links": [
       "k8s-project-structure",
@@ -30,7 +100,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubectl-apply-ssa",
       "kustomize-basics",
       "k8s-namespace",
-      "eks-cluster-basics"
+      "eks-cluster-basics",
+      "k8s-rbac",
+      "k8s-serviceaccount-tokens"
     ],
     "mentions": [
       "local-k8s-kind-minikube",
@@ -90,6 +162,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "k8s-feature-maturity": {
     "links": [
       "k8s-api-objects",
+      "k8s-pod-security-admission",
       "k8s-labels-selectors"
     ],
     "mentions": [
@@ -344,6 +417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-basics",
       "iptables-basics",
+      "k8s-security-context",
       "k8s-architecture",
       "packet-capture-tcpdump",
       "osi-in-practice",
@@ -644,7 +718,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "github-actions-docker-ecr",
       "secrets-management",
-      "ssrf"
+      "ssrf",
+      "k8s-rbac"
     ],
     "mentions": [
       "http-status-codes"
@@ -2000,6 +2075,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-hpa",
       "k8s-cni-pod-network",
       "vpc-subnets-route-tables",
+      "k8s-serviceaccount-tokens",
       "k8s-coredns",
       "k8s-pv-pvc",
       "k8s-deploy-pipeline-eks"
@@ -2105,6 +2181,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "docker-network-volume",
       "dockerfile-image-layers",
+      "k8s-security-context",
       "linux-processes-signals"
     ],
     "mentions": [
@@ -2374,6 +2451,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-coredns",
       "k8s-network-policy",
       "k8s-pod-resources",
+      "k8s-rbac",
+      "k8s-pod-security-admission",
       "eks-cluster-basics",
       "k8s-deployment"
     ],
@@ -2641,6 +2720,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret"
     ],
     "mentions": [
+      "k8s-pod-security-admission",
       "k8s-labels-selectors",
       "k8s-architecture",
       "cloud-cost-optimization",
@@ -5148,6 +5228,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "iptables-basics",
       "rest-api-design",
+      "k8s-security-context",
       "grpc",
       "linux-processes-signals",
       "udp-and-quic"
