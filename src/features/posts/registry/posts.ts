@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sd-object-storage-versioning-multipart",
+    title: "객체 저장소 설계 ③: 버전, 멀티파트 업로드, 가비지 컬렉션",
+    summary: "덮어쓴 객체를 되돌리는 버전 관리와 삭제 마커, 큰 파일을 조각으로 받아 합치는 멀티파트 업로드를 만든다. 그 과정에서 생긴 고아 조각과 지운 객체를 컴팩션으로 안전하게 치운다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Backend", "AWS", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["삭제 마커", "합친 ETag", "고아 조각", "볼륨 컴팩션"],
+  },
+  {
+    slug: "sd-object-storage-durability",
+    title: "객체 저장소 설계 ②: 복제와 이레이저 코딩, 체크섬",
+    summary: "디스크가 매주 죽어도 데이터를 잃지 않으려면 몇 벌을 어디에 두어야 하는지 계산한다. XOR과 P+Q 패리티로 잃은 조각을 되살려 보고, 체크섬과 스크럽으로 조용히 뒤집힌 비트를 잡는다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Backend", "SRE", "AWS"],
+    date: "2026-10-22",
+    keywords: ["이레이저 코딩", "리드-솔로몬", "비트 부패", "장애 도메인", "스크럽"],
+  },
+  {
+    slug: "sd-object-storage-architecture",
+    title: "객체 저장소 설계 ①: 본문과 이름표 나누기, 볼륨 파일과 메타데이터",
+    summary: "웹 서버 디스크에 쌓던 사진을 객체 저장소로 옮긴다. 본문은 데이터 노드의 볼륨 파일에 이어 쓰고, 이름표는 샤딩한 메타데이터 저장소에 적는 구조를 직접 만들어 본다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Backend", "Database", "AWS"],
+    date: "2026-10-22",
+    keywords: ["객체 저장소", "메타데이터 저장소", "데이터 라우팅 서비스", "볼륨 파일"],
+  },
+  {
     slug: "sd-mq-replication",
     title: "분산 메시지 큐 설계 ③: 복제, ISR, acks",
     summary: "파티션마다 리더 하나와 팔로워를 두고, 동기화 복제본 전원이 받은 메시지만 확정한다. acks와 min.insync.replicas가 지연과 내구성을 함께 정하고, 리더가 죽을 때 무엇을 잃는지 재현한다.",

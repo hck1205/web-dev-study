@@ -2,6 +2,59 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-object-storage-versioning-multipart": {
+    "links": [
+      "sd-object-storage-architecture",
+      "sd-object-storage-durability",
+      "sd-unique-id-generator",
+      "backup-strategy",
+      "sd-video-upload-transcoding",
+      "sd-kv-store-write-read-path"
+    ],
+    "mentions": [
+      "db-sharding",
+      "db-type-wide-column",
+      "js-memory-leak",
+      "db-type-embedded",
+      "http-caching-cdn"
+    ]
+  },
+  "sd-object-storage-durability": {
+    "links": [
+      "sd-object-storage-architecture",
+      "sd-object-storage-versioning-multipart",
+      "sd-kv-store-partition-replication",
+      "sd-file-sync-block-upload",
+      "encryption-at-rest",
+      "backup-strategy",
+      "merkle-tree"
+    ],
+    "mentions": [
+      "tail-latency",
+      "vpc-basics"
+    ]
+  },
+  "sd-object-storage-architecture": {
+    "links": [
+      "sd-object-storage-durability",
+      "sd-object-storage-versioning-multipart",
+      "sd-load-balancer-stateless",
+      "raft-consensus",
+      "consistent-hashing",
+      "sd-kv-store-partition-replication",
+      "sd-db-replication-intro",
+      "sd-sharding-intro",
+      "sd-video-upload-transcoding",
+      "sd-file-sync-block-upload"
+    ],
+    "mentions": [
+      "js-memory-leak",
+      "sd-start-single-server",
+      "db-type-embedded",
+      "db-type-relational",
+      "db-replication-sharding"
+    ]
+  },
   "sd-mq-replication": {
     "links": [
       "sd-mq-storage-partitions",
@@ -95,7 +148,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-graph"
     ],
     "mentions": [
-      "grpc"
+      "grpc",
+      "sd-object-storage-architecture"
     ]
   },
   "sd-nearby-friends": {
@@ -381,6 +435,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "hyperloglog",
       "db-type-key-value",
+      "sd-object-storage-architecture",
       "sqld-group-by-having",
       "redis-basics",
       "db-modeling-normalization"
@@ -513,6 +568,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-url-shortener-api-redirect",
+      "sd-object-storage-architecture",
       "sd-start-single-server",
       "db-sharding",
       "bloom-filter",
@@ -640,6 +696,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-kv-store-write-read-path",
       "db-type-key-value",
       "sd-interview-framework",
+      "sd-object-storage-architecture",
       "db-consistency-cap",
       "raft-consensus",
       "consistent-hashing",
@@ -897,6 +954,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "high-availability",
       "message-delivery-semantics",
       "db-type-key-value",
+      "sd-object-storage-architecture",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "redis-basics",
@@ -958,6 +1016,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sd-interview-framework",
       "high-availability",
+      "sd-object-storage-architecture",
       "db-replication-sharding"
     ]
   },
@@ -2465,6 +2524,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-basics",
       "cron-jobs",
+      "sd-object-storage-architecture",
       "sdn-vxlan-overlay",
       "grpc",
       "db-type-key-value",
@@ -2580,6 +2640,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "helm-basics",
       "kubernetes-ingress",
+      "sd-object-storage-architecture",
       "scaling-horizontal-vertical",
       "local-k8s-kind-minikube",
       "zero-downtime-migrations"
@@ -2660,6 +2721,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-basics",
       "iam-basics",
       "base64",
+      "sd-object-storage-architecture",
       "local-k8s-kind-minikube",
       "eks-cluster-basics",
       "db-type-key-value"
@@ -3976,6 +4038,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multi-region"
     ],
     "mentions": [
+      "sd-object-storage-architecture",
       "postgres-architecture",
       "on-call"
     ]
@@ -3992,6 +4055,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "docker-container-basics",
       "db-replication-sharding",
+      "sd-object-storage-architecture",
       "sd-start-single-server",
       "osi-in-practice",
       "postgres-architecture",
@@ -4510,6 +4574,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "linux-processes-signals",
       "network-partitions",
+      "sd-object-storage-architecture",
       "sd-start-single-server",
       "sql-batch-timeout-pool",
       "redis-basics",
@@ -8184,6 +8249,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-tips-advanced",
       "git-branching-strategy",
       "git-large-files-secrets",
+      "sd-object-storage-architecture",
       "build-caching"
     ]
   },

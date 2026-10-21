@@ -404,6 +404,9 @@ import { SD_NEWS_FEED_PUBLISHING } from "./sd-news-feed-publishing";
 import { SD_NEWS_FEED_RETRIEVAL } from "./sd-news-feed-retrieval";
 import { SD_NOTIFICATION_RELIABILITY } from "./sd-notification-reliability";
 import { SD_NOTIFICATION_SYSTEM } from "./sd-notification-system";
+import { SD_OBJECT_STORAGE_ARCHITECTURE } from "./sd-object-storage-architecture";
+import { SD_OBJECT_STORAGE_DURABILITY } from "./sd-object-storage-durability";
+import { SD_OBJECT_STORAGE_VERSIONING_MULTIPART } from "./sd-object-storage-versioning-multipart";
 import { SD_PROXIMITY_SERVICE } from "./sd-proximity-service";
 import { SD_QUEUE_LOGGING_AUTOMATION } from "./sd-queue-logging-automation";
 import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
@@ -901,6 +904,9 @@ export const QUESTION_SETS = [
   SD_NEWS_FEED_RETRIEVAL,
   SD_NOTIFICATION_RELIABILITY,
   SD_NOTIFICATION_SYSTEM,
+  SD_OBJECT_STORAGE_ARCHITECTURE,
+  SD_OBJECT_STORAGE_DURABILITY,
+  SD_OBJECT_STORAGE_VERSIONING_MULTIPART,
   SD_PROXIMITY_SERVICE,
   SD_QUEUE_LOGGING_AUTOMATION,
   SD_RATE_LIMITER_DESIGN,
