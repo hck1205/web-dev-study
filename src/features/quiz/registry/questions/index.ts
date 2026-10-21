@@ -1,12 +1,16 @@
 import { AB_TESTING } from "./ab-testing";
 import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
+import { ACID_VS_BASE } from "./acid-vs-base";
 import { AGENTIC_RAG } from "./agentic-rag";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
+import { API_GATEWAY_USE_CASES } from "./api-gateway-use-cases";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
+import { API_SCALING_LADDER } from "./api-scaling-ladder";
+import { API_STYLES_OVERVIEW } from "./api-styles-overview";
 import { API_VERSIONING } from "./api-versioning";
 import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview";
 import { ARGOCD_BASICS } from "./argocd-basics";
@@ -23,6 +27,7 @@ import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
+import { BULLMQ_JOB_QUEUE } from "./bullmq-job-queue";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
 import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
@@ -34,6 +39,11 @@ import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CLAUDE_CODE_CONTEXT_WINDOW } from "./claude-code-context-window";
+import { CLAUDE_CODE_EXTENSIONS } from "./claude-code-extensions";
+import { CLAUDE_CODE_FUNDAMENTALS_MAP } from "./claude-code-fundamentals-map";
+import { CLAUDE_CODE_PARALLEL_AND_SCHEDULED } from "./claude-code-parallel-and-scheduled";
+import { CLAUDE_CODE_PROJECT_STRUCTURE } from "./claude-code-project-structure";
 import { CLEAN_ARCHITECTURE } from "./clean-architecture";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
@@ -53,6 +63,7 @@ import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
+import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
@@ -63,6 +74,7 @@ import { DB_LOCKING_DEADLOCK } from "./db-locking-deadlock";
 import { DB_MIGRATION_TOOLS } from "./db-migration-tools";
 import { DB_MODELING_NORMALIZATION } from "./db-modeling-normalization";
 import { DB_PARTITIONING } from "./db-partitioning";
+import { DB_PERFORMANCE_MAP } from "./db-performance-map";
 import { DB_REPLICATION_SHARDING } from "./db-replication-sharding";
 import { DB_SHARDING } from "./db-sharding";
 import { DB_TRANSACTION_ISOLATION } from "./db-transaction-isolation";
@@ -89,12 +101,22 @@ import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
 import { DISTRIBUTED_TRANSACTIONS_2PC } from "./distributed-transactions-2pc";
 import { DNS } from "./dns";
+import { DOCKER_COMMANDS_WORKFLOW } from "./docker-commands-workflow";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { DOM_BASICS } from "./dom-basics";
+import { DS_ARRAY_MATRIX } from "./ds-array-matrix";
+import { DS_BINARY_TREE_BST } from "./ds-binary-tree-bst";
+import { DS_GRAPH_BFS_DFS } from "./ds-graph-bfs-dfs";
+import { DS_HASH_MAP } from "./ds-hash-map";
+import { DS_HEAP } from "./ds-heap";
+import { DS_LINKED_LIST } from "./ds-linked-list";
+import { DS_STACK_QUEUE_DEQUE } from "./ds-stack-queue-deque";
+import { DS_TRIE } from "./ds-trie";
+import { DS_UNION_FIND } from "./ds-union-find";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
@@ -122,6 +144,7 @@ import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
+import { GIT_FEATURES_MAP } from "./git-features-map";
 import { GIT_IGNORE_CONFIG } from "./git-ignore-config";
 import { GIT_INTERNALS_BASICS } from "./git-internals-basics";
 import { GIT_LARGE_FILES_SECRETS } from "./git-large-files-secrets";
@@ -129,6 +152,7 @@ import { GIT_MERGE_CONFLICT } from "./git-merge-conflict";
 import { GIT_REBASE } from "./git-rebase";
 import { GIT_REMOTE_COLLABORATION } from "./git-remote-collaboration";
 import { GIT_REPO_ERRORS } from "./git-repo-errors";
+import { GIT_STACKED_PRS } from "./git-stacked-prs";
 import { GIT_STAGING_AREA } from "./git-staging-area";
 import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
@@ -140,6 +164,7 @@ import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
 import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRAPH_RAG } from "./graph-rag";
+import { GRAPHQL_BASICS } from "./graphql-basics";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -155,6 +180,7 @@ import { HTTP_CACHING_CDN } from "./http-caching-cdn";
 import { HTTP_MESSAGE } from "./http-message";
 import { HTTP_METHODS } from "./http-methods";
 import { HTTP_STATUS_CODES } from "./http-status-codes";
+import { HTTP_STREAMING_SSE } from "./http-streaming-sse";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
 import { HYDRATION } from "./hydration";
@@ -263,6 +289,7 @@ import { K8S_STATEFULSET } from "./k8s-statefulset";
 import { K8S_STORAGECLASS_SNAPSHOTS } from "./k8s-storageclass-snapshots";
 import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
+import { KAFKA_VS_RABBITMQ_REPLAY } from "./kafka-vs-rabbitmq-replay";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
 import { KUBECTL_ESSENTIALS } from "./kubectl-essentials";
@@ -439,6 +466,7 @@ import { SD_MQ_CONSUMER_GROUPS } from "./sd-mq-consumer-groups";
 import { SD_MQ_REPLICATION } from "./sd-mq-replication";
 import { SD_MQ_STORAGE_PARTITIONS } from "./sd-mq-storage-partitions";
 import { SD_MULTI_DATACENTER } from "./sd-multi-datacenter";
+import { SD_MUSIC_STREAMING } from "./sd-music-streaming";
 import { SD_NEARBY_FRIENDS } from "./sd-nearby-friends";
 import { SD_NEWS_FEED_PUBLISHING } from "./sd-news-feed-publishing";
 import { SD_NEWS_FEED_RETRIEVAL } from "./sd-news-feed-retrieval";
@@ -552,12 +580,16 @@ export const QUESTION_SETS = [
   AB_TESTING,
   ABORT_CONTROLLER,
   ACID_TRANSACTIONS,
+  ACID_VS_BASE,
   AGENTIC_RAG,
   ALERTING,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
+  API_GATEWAY_USE_CASES,
   API_PAGINATION_SORTING,
+  API_SCALING_LADDER,
+  API_STYLES_OVERVIEW,
   API_VERSIONING,
   ARCHITECTURE_PATTERNS_OVERVIEW,
   ARGOCD_BASICS,
@@ -574,6 +606,7 @@ export const QUESTION_SETS = [
   BROWSER_FETCH,
   BROWSER_STORAGE,
   BUILD_CACHING,
+  BULLMQ_JOB_QUEUE,
   CACHE_INVALIDATION,
   CACHE_WRITE_POLICIES,
   CACHING_CONCEPTS_MAP,
@@ -585,6 +618,11 @@ export const QUESTION_SETS = [
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CLAUDE_CODE_CONTEXT_WINDOW,
+  CLAUDE_CODE_EXTENSIONS,
+  CLAUDE_CODE_FUNDAMENTALS_MAP,
+  CLAUDE_CODE_PARALLEL_AND_SCHEDULED,
+  CLAUDE_CODE_PROJECT_STRUCTURE,
   CLEAN_ARCHITECTURE,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
@@ -604,6 +642,7 @@ export const QUESTION_SETS = [
   CSRF,
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
+  DATA_STRUCTURES_OVERVIEW,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
@@ -614,6 +653,7 @@ export const QUESTION_SETS = [
   DB_MIGRATION_TOOLS,
   DB_MODELING_NORMALIZATION,
   DB_PARTITIONING,
+  DB_PERFORMANCE_MAP,
   DB_REPLICATION_SHARDING,
   DB_SHARDING,
   DB_TRANSACTION_ISOLATION,
@@ -640,12 +680,22 @@ export const QUESTION_SETS = [
   DISTRIBUTED_TRACING,
   DISTRIBUTED_TRANSACTIONS_2PC,
   DNS,
+  DOCKER_COMMANDS_WORKFLOW,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
   DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
   DOM_BASICS,
+  DS_ARRAY_MATRIX,
+  DS_BINARY_TREE_BST,
+  DS_GRAPH_BFS_DFS,
+  DS_HASH_MAP,
+  DS_HEAP,
+  DS_LINKED_LIST,
+  DS_STACK_QUEUE_DEQUE,
+  DS_TRIE,
+  DS_UNION_FIND,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
@@ -673,6 +723,7 @@ export const QUESTION_SETS = [
   GEOHASH,
   GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
+  GIT_FEATURES_MAP,
   GIT_IGNORE_CONFIG,
   GIT_INTERNALS_BASICS,
   GIT_LARGE_FILES_SECRETS,
@@ -680,6 +731,7 @@ export const QUESTION_SETS = [
   GIT_REBASE,
   GIT_REMOTE_COLLABORATION,
   GIT_REPO_ERRORS,
+  GIT_STACKED_PRS,
   GIT_STAGING_AREA,
   GIT_STASH_REFLOG,
   GIT_TIPS_ADVANCED,
@@ -691,6 +743,7 @@ export const QUESTION_SETS = [
   GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
   GRAPH_RAG,
+  GRAPHQL_BASICS,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,
@@ -706,6 +759,7 @@ export const QUESTION_SETS = [
   HTTP_MESSAGE,
   HTTP_METHODS,
   HTTP_STATUS_CODES,
+  HTTP_STREAMING_SSE,
   HTTP_VERSIONS,
   HTTPS_TLS,
   HYDRATION,
@@ -814,6 +868,7 @@ export const QUESTION_SETS = [
   K8S_STORAGECLASS_SNAPSHOTS,
   K8S_VPA,
   KAFKA_BASICS,
+  KAFKA_VS_RABBITMQ_REPLAY,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,
   KUBECTL_ESSENTIALS,
@@ -990,6 +1045,7 @@ export const QUESTION_SETS = [
   SD_MQ_REPLICATION,
   SD_MQ_STORAGE_PARTITIONS,
   SD_MULTI_DATACENTER,
+  SD_MUSIC_STREAMING,
   SD_NEARBY_FRIENDS,
   SD_NEWS_FEED_PUBLISHING,
   SD_NEWS_FEED_RETRIEVAL,

@@ -1,0 +1,562 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("claude-code-project-structure");
+
+팀 저장소의 `CLAUDE.md`에 "`.env`는 절대 읽지 마라"라고 적어 두었다. 그런데 Claude Code는 필요하다고 판단하면 여전히 `.env`를 열 수 있다. 반대로 어떤 날은 내가 승인한 적 없는 `docker compose up`이 묻지도 않고 실행된다. 누군가 자기 컴퓨터에서 "다시 묻지 않기"를 눌러 생긴 `settings.local.json`을 저장소에 커밋했기 때문이다.
+
+두 사고 모두 "어떤 파일을 누가, 언제, 어떤 힘으로 읽느냐"를 몰라서 생긴다. 이 글은 Claude Code 프로젝트에 놓이는 설정 파일을 하나씩 열어 본다. `CLAUDE.md`와 메모리 파일, `settings.json`의 네 겹, 권한 규칙, `.mcp.json`, 그리고 무엇을 커밋하고 무엇을 남겨 둘지까지다. 슬래시 명령·스킬·서브에이전트·훅은 [Claude Code 확장 글](/posts/claude-code-extensions)에서, 컨텍스트가 차고 압축되는 과정은 [컨텍스트 창 글](/posts/claude-code-context-window)에서 다룬다.
+
+기준은 Claude Code 2.1.306(Ubuntu 24.04, bash)과 2026년 10월에 읽은 [공식 문서](https://code.claude.com/docs/en/memory)다. 이 도구는 몇 주 단위로 바뀌어서, 문서에 버전이 적힌 동작은 버전을 함께 적었다.
+
+```bash
+# 지금 쓰는 버전부터 확인한다
+claude --version
+```
+
+```text
+2.1.306 (Claude Code)
+```
+
+## 돌아다니는 구조도와 공식 문서 맞춰 보기
+
+SNS에 도는 "Claude Code 프로젝트 구조" 그림은 대략 이렇게 생겼다.
+
+```text
+project/
+├── CLAUDE.md
+├── CLAUDE.local.md
+├── .mcp.json
+└── .claude/
+    ├── settings.json
+    ├── settings.local.json
+    ├── rules/
+    ├── commands/       review.md, fix-issue.md
+    ├── skills/deploy/  SKILL.md, ...
+    ├── agents/         code-reviewer.md, security-auditor.md
+    └── hooks/          validate-bash.sh
+```
+
+대부분 공식 문서와 맞는다. 다만 두 군데는 그림만 보고 따라 하면 헷갈린다. 하나씩 문서와 맞춰 보면 이렇다.
+
+| 그림의 항목 | 공식 문서에서 | 커밋 |
+|---|---|---|
+| `CLAUDE.md` | 프로젝트 지시. `./CLAUDE.md`나 `./.claude/CLAUDE.md` | 한다 |
+| `CLAUDE.local.md` | 나만 쓰는 프로젝트 지시. 문서가 직접 `.gitignore`에 넣으라고 한다 | 안 한다 |
+| `.mcp.json` | 팀이 함께 쓰는 MCP 서버(project scope). 저장소 루트 | 한다 |
+| `.claude/settings.json` | 팀 공용 권한·훅·환경 변수 | 한다 |
+| `.claude/settings.local.json` | 이 프로젝트에서 나만 쓰는 덮어쓰기 | 안 한다 |
+| `.claude/rules/` | 정식 기능. `paths`로 특정 파일에만 걸 수 있다 | 한다 |
+| `.claude/commands/` | 아직 동작하지만 스킬로 합쳐진 옛 형식 | 한다 |
+| `.claude/skills/`, `.claude/agents/` | 정식 기능 | 한다 |
+| `.claude/hooks/` | 정해진 폴더가 아니다. 훅은 `settings.json`의 `hooks` 키에 등록하고, 스크립트는 어디에 둬도 된다 | 스크립트는 한다 |
+
+차이가 나는 곳은 마지막 두 줄이다. `hooks/` 폴더에 스크립트를 넣기만 해서는 아무 일도 일어나지 않는다. 공식 문서의 `.claude` 디렉터리 파일 목록에도 `hooks/`는 없고, 훅 안내 예제가 스크립트를 `.claude/hooks/`에 두는 관례만 보여 준다. 그리고 `commands/`는 이제 스킬의 한 형태다. `.claude/commands/deploy.md`와 `.claude/skills/deploy/SKILL.md`는 둘 다 `/deploy`를 만든다.
+
+그림에 없는 것도 있다. 내 홈 디렉터리의 `~/.claude/`(모든 프로젝트에 걸리는 개인 설정), 회사가 배포하는 관리형(managed) 설정, MCP 서버의 개인 설정이 저장되는 `~/.claude.json`, Claude가 스스로 적는 자동 메모리(`~/.claude/projects/<project>/memory/`)다. 저장소만 보면 이 층들이 안 보이니, 같은 저장소에서 사람마다 다르게 동작하는 이유를 찾을 때 자주 놓친다.
+
+## 글로 부탁하는 것과 클라이언트가 막는 것
+
+이 파일들은 성격이 두 갈래로 나뉜다. 하나는 모델이 읽는 글이다. `CLAUDE.md`, `CLAUDE.local.md`, `rules/*.md`, 자동 메모리는 세션이 시작될 때 컨텍스트에 들어가고, Claude는 그것을 참고해서 행동한다. 공식 문서도 이 파일들을 "강제되는 설정이 아니라 컨텍스트"라고 적는다. 지시가 서로 부딪치면 Claude가 아무거나 고를 수 있다는 말까지 있다.
+
+다른 하나는 Claude Code라는 프로그램이 직접 지키는 설정이다. `settings.json`의 `permissions`와 `hooks`, `.mcp.json`의 서버 목록은 모델의 판단과 상관없이 클라이언트가 적용한다. 아래 그림에서 점이 흐르는 방향을 보면, 왼쪽 파일들은 모델에게 들어가고 오른쪽 파일들은 모델이 낸 도구 호출을 가로막는 자리에 선다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="왼쪽은 모델이 참고하는 글, 오른쪽은 클라이언트가 지키는 규칙"
+  nodes={[
+    { id: "md", label: "CLAUDE.md", sub: "rules · memory", x: 80, y: 50, w: 120 },
+    { id: "model", label: "모델", sub: "다음 행동 결정", x: 80, y: 160, w: 120 },
+    { id: "call", label: "도구 호출", sub: "Bash · Edit · MCP", x: 220, y: 250, w: 130 },
+    { id: "client", label: "Claude Code", sub: "권한 · 훅 검사", x: 320, y: 160, w: 130 },
+    { id: "settings", label: "settings.json", sub: ".mcp.json", x: 320, y: 50, w: 130 },
+    { id: "run", label: "실행", x: 360, y: 250, w: 70 },
+  ]}
+  edges={[
+    { from: "md", to: "model", label: "참고" },
+    { from: "model", to: "call" },
+    { from: "call", to: "client" },
+    { from: "settings", to: "client", label: "강제" },
+    { from: "client", to: "run", label: "통과" },
+  ]}
+/>
+
+그래서 처음 상황의 답이 나온다. "`.env`를 읽지 마라"는 `CLAUDE.md`가 아니라 `settings.json`의 `deny` 규칙 `Read(./.env)`로 써야 한다. 공식 문서의 표현을 빌리면, 무조건 막아야 하는 것은 권한 규칙이나 `PreToolUse` 훅의 몫이고, `CLAUDE.md`는 코드 스타일이나 작업 순서 같은 행동 안내에 쓴다.
+
+## CLAUDE.md가 쌓이는 순서
+
+`CLAUDE.md`는 한 곳에만 있지 않다. 넓은 범위부터 좁은 범위 순으로 네 자리가 있다.
+
+- 관리형 정책: Linux·WSL은 `/etc/claude-code/CLAUDE.md`, macOS는 `/Library/Application Support/ClaudeCode/CLAUDE.md`. 회사가 배포하고, 개인 설정으로 뺄 수 없다.
+- 사용자: `~/.claude/CLAUDE.md`. 내 모든 프로젝트에 걸린다.
+- 프로젝트: `./CLAUDE.md` 또는 `./.claude/CLAUDE.md`. 커밋해서 팀이 공유한다.
+- 로컬: `./CLAUDE.local.md`. 이 프로젝트에서 나만 쓴다.
+
+이 파일들은 서로를 덮어쓰지 않는다. 찾은 파일을 모두 이어 붙여 컨텍스트에 넣는다. 프로젝트 안에서는 Claude Code를 띄운 디렉터리부터 파일시스템 루트까지 올라가며 `CLAUDE.md`와 `CLAUDE.local.md`를 찾고, 루트 쪽 파일을 먼저, 작업 디렉터리에 가까운 파일을 나중에 넣는다. 같은 디렉터리 안에서는 `CLAUDE.local.md`가 `CLAUDE.md` 뒤에 붙는다. 하위 디렉터리의 `CLAUDE.md`는 시작할 때 읽지 않고, Claude가 그 디렉터리의 파일을 읽거나 고칠 때 한 번 읽는다.
+
+아래는 `~/work/shop` 저장소의 `api/` 디렉터리에서 `claude`를 띄웠을 때다. 다음을 누르면 어떤 파일이 어떤 순서로 쌓이는지 볼 수 있다.
+
+<AlgoTrace
+  caption="cwd가 ~/work/shop/api일 때 컨텍스트에 쌓이는 순서"
+  memoryLabel="컨텍스트"
+  cells={["managed", "~/.claude", "shop/", "shop/api/", "shop/api/db/"]}
+  steps={[
+    { pointer: 0, memory: ["managed"], caption: "관리형 CLAUDE.md가 가장 먼저 들어간다. 있으면 뺄 수 없다." },
+    { pointer: 1, memory: ["managed", "user"], caption: "~/.claude/CLAUDE.md. 내 모든 프로젝트에 공통이다." },
+    { pointer: 2, memory: ["managed", "user", "shop"], caption: "루트 쪽부터 내려온다. 저장소 루트의 CLAUDE.md가 먼저다." },
+    { pointer: 2, memory: ["managed", "user", "shop", "shop.local"], caption: "같은 디렉터리의 CLAUDE.local.md는 바로 뒤에 붙는다." },
+    { pointer: 3, memory: ["managed", "user", "shop", "shop.local", "api"], caption: "작업 디렉터리의 CLAUDE.md가 마지막이다. 덮어쓰지 않고 이어 붙는다." },
+    { pointer: 4, found: [4], memory: ["managed", "user", "shop", "shop.local", "api", "api/db"], caption: "하위 db/의 CLAUDE.md는 Claude가 그 안의 파일을 읽을 때 나중에 들어온다." },
+  ]}
+/>
+
+이어 붙이기 때문에 충돌을 Claude Code가 풀어 주지 않는다. 루트 `CLAUDE.md`에 "npm을 쓴다", `api/CLAUDE.md`에 "pnpm을 쓴다"가 있으면 둘 다 컨텍스트에 있고, 어느 쪽을 따를지는 모델의 판단이다. 공식 문서도 서로 모순되는 지시는 주기적으로 정리하라고 하고, `/doctor prompt-audit`(2.1.283 이상)로 오래되거나 부딪치는 지시를 찾게 해 준다.
+
+### 무엇을 어떻게 쓰나
+
+문서가 권하는 크기는 파일 하나에 200줄 아래다. 길수록 컨텍스트를 많이 먹고 지시를 덜 지킨다. 4MiB를 넘는 파일은 아예 건너뛴다. 이 블로그 저장소의 `CLAUDE.md`를 세어 보면 권장치를 꽤 넘는다.
+
+```bash
+# 이 블로그 저장소의 CLAUDE.md 줄 수
+wc -l CLAUDE.md
+```
+
+```text
+326 CLAUDE.md
+```
+
+이 파일에는 "변경 후 `pnpm typecheck`와 `pnpm build`를 통과시킨다", "필요한 파일만 만든다" 같은 작업 규칙과, 글 문체나 퀴즈 형식처럼 글을 쓸 때만 필요한 규칙이 함께 들어 있다. 문서 기준으로 보면 뒤쪽은 `.claude/rules/`에 `paths`를 걸어 MDX 파일을 만질 때만 읽히게 하거나, 스킬로 빼서 필요할 때만 불러오는 편이 맞다. 그리고 "빌드를 통과시킨다"처럼 반드시 지켜야 하는 규칙은 글로만 두지 말고 Stop 훅으로 검사하게 만들 수 있다. 훅은 [확장 글](/posts/claude-code-extensions)에서 직접 만든다.
+
+몇 가지 작은 규칙도 알아 두면 좋다.
+
+- `@path/to/file`로 다른 파일을 불러올 수 있다. 상대 경로는 불러오는 파일 기준이고, 최대 4단계까지 이어진다. 하지만 불러온 파일도 시작할 때 다 읽히므로 컨텍스트 비용은 줄지 않는다.
+- 저장소 밖을 가리키는 import(예: `@~/.claude/my-notes.md`)는 처음 한 번 승인 창이 뜬다. 남이 커밋한 파일이 내 홈 디렉터리의 파일을 끌어오지 못하게 하려는 장치다.
+- 블록 단위 HTML 주석(`<!-- ... -->`)은 컨텍스트에 넣기 전에 지운다. 사람에게만 남기는 메모로 쓸 수 있다.
+- `/compact` 뒤에는 저장소 루트의 `CLAUDE.md`를 디스크에서 다시 읽는다. 대화로만 말한 지시는 압축 때 사라질 수 있다.
+- 어떤 파일이 실제로 들어갔는지는 세션에서 `/context`를 열어 Memory files 목록으로 확인한다.
+
+`CLAUDE.local.md`는 git worktree를 여러 개 쓸 때 주의한다. gitignore된 파일이라 만든 worktree에만 있다. 모든 worktree에서 쓰려면 홈 디렉터리의 파일을 `@~/...`로 불러오라고 문서가 권한다. 그리고 저장소에 `CLAUDE.md`가 없고 `AGENTS.md`만 있으면 2.1.277부터는 `AGENTS.md`를 대신 읽는데, 이때 `CLAUDE.local.md`를 하나 만들면 그 파일이 `CLAUDE.md` 쪽으로 세어져서 `AGENTS.md`를 더 이상 읽지 않는다. 다른 코딩 에이전트와 같은 지시 파일을 쓰는 팀이라면 한 번쯤 겪을 수 있는 함정이다.
+
+### 자동 메모리는 Claude가 쓰는 노트다
+
+`CLAUDE.md`는 내가 쓰고, 자동 메모리는 Claude가 쓴다. 내가 고쳐 준 것이나 선호를 `~/.claude/projects/<project>/memory/`에 적어 두고, 그 목차인 `MEMORY.md`의 앞 200줄(또는 25KB)을 매 세션 읽는다. 저장소 단위라 같은 저장소의 worktree끼리는 공유되지만 다른 컴퓨터로는 가지 않는다. 그러니 팀이 알아야 할 규칙이 메모리에만 있으면 팀원에게는 전해지지 않는다. 그런 건 `CLAUDE.md`로 옮긴다. 끄려면 `/memory`의 토글이나 `autoMemoryEnabled: false`를 쓴다.
+
+## 필요할 때만 읽히는 규칙
+
+`.claude/rules/` 아래의 `.md` 파일은 하위 폴더까지 모두 찾는다. 앞머리(frontmatter)에 `paths`가 없으면 `.claude/CLAUDE.md`와 같은 우선순위로 시작할 때 읽히고, `paths`가 있으면 Claude가 맞는 파일을 Read·Write·Edit할 때 읽힌다. 규칙 파일이 읽는 앞머리 필드는 `paths` 하나뿐이고, 다른 필드는 오류 없이 무시된다.
+
+```markdown
+---
+paths:
+  - "src/api/**/*.ts"
+---
+
+- 모든 엔드포인트는 입력을 zod로 검증한다.
+- 에러 응답은 `{ code, message }` 모양으로 맞춘다.
+```
+
+이 파일은 `src/api/` 아래 TypeScript 파일을 건드리기 전까지 컨텍스트에 없다. 프런트엔드 작업만 하는 세션은 API 규칙에 컨텍스트를 쓰지 않는다. `cat`이나 `head`로 파일 하나를 보는 것도 읽기로 세지만, 패턴이 YAML로 파싱되지 않으면 `paths`가 없는 규칙처럼 항상 읽힌다. 규칙이 안 걸리는 것 같으면 `claude --debug`로 파싱 오류부터 본다.
+
+규칙과 스킬의 경계도 여기서 갈린다. 규칙은 맞는 파일을 열면 자동으로 들어가는 지식이고, 스킬은 부르거나 Claude가 필요하다고 판단할 때 들어가는 절차다. 배포 순서처럼 매번 필요하지 않은 긴 절차는 스킬로 둔다.
+
+## settings.json은 네 겹이다
+
+설정 파일은 넷이고, 회사가 내려보내는 관리형 설정이 그 위에 하나 더 있다.
+
+- 사용자 `~/.claude/settings.json`: 내 컴퓨터의 모든 프로젝트.
+- 공유 프로젝트 `.claude/settings.json`: 커밋해서 팀이 같은 권한·훅·플러그인을 받는다.
+- 로컬 프로젝트 `.claude/settings.local.json`: 이 프로젝트에서 나만.
+- 관리형 `managed-settings.json`, MDM 정책, claude.ai 관리 콘솔의 서버 관리 설정.
+
+같은 키가 여러 곳에 있으면 높은 쪽이 이긴다. 순서는 관리형 > 명령줄(`--settings`) > 로컬 프로젝트 > 공유 프로젝트 > 사용자다. 개인 설정이 팀 설정보다 아래에 있어서 처음엔 어색하다. 팀이 `.claude/settings.json`에 `model`을 정해 두면 내 `~/.claude/settings.json`의 값은 그 프로젝트에서만 진다. 내 값을 되찾으려면 그 프로젝트의 `settings.local.json`에 다시 적는다.
+
+다만 배열은 다르게 합쳐진다. `permissions.allow` 같은 목록 키는 높은 쪽 하나를 고르지 않고 모든 파일의 항목을 합친다. 아래 그림은 한 프로젝트에서 `model`(값 하나)과 `permissions.allow`(목록)가 어떻게 정해지는지 따라간다.
+
+<AlgoTrace
+  caption="값 하나는 위에서 이기고, 목록은 모두 합친다"
+  memoryLabel="결과"
+  cells={["managed", "--settings", "local", "project", "user"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "관리형 설정에는 model도 allow도 없다. 다음 층으로 내려간다." },
+    { pointer: 1, memory: [], caption: "이번 세션은 --settings 없이 띄웠다." },
+    { pointer: 2, found: [2], memory: ["model=opus", "allow: docker compose up *"], caption: "local에 model이 있다. 가장 높은 층이라 model은 여기서 정해진다." },
+    { pointer: 3, memory: ["model=opus", "allow: docker compose up *", "allow: pnpm test *"], caption: "project의 model=sonnet은 진다. 하지만 allow 목록은 합쳐진다." },
+    { pointer: 4, memory: ["model=opus", "allow: docker compose up *", "allow: pnpm test *", "allow: git log *"], caption: "user의 allow도 더해진다. 목록 키는 누구도 다른 층의 항목을 지우지 못한다." },
+  ]}
+/>
+
+몇 개는 이 규칙의 예외다. `permissions.defaultMode`의 `auto`와 `bypassPermissions`는 프로젝트나 로컬 파일에 적어도 먹지 않는다(`bypassPermissions`는 2.1.257부터). 저장소가 스스로 권한을 풀 수 없게 막은 것이다. 반대로 몇몇 보안 키는 낮은 층의 더 엄격한 값이 관리형보다 우선한다. 환경 변수도 이 층에 끼지 않는다. 예를 들어 셸에 export한 `ANTHROPIC_MODEL`은 어느 파일의 `model`보다 먼저다.
+
+설정 파일은 엄격한 JSON이다. 주석이나 끝에 붙은 쉼표가 있으면 다음 시작 때 Settings Error가 뜬다. 편집하고 나서 node로 한 번 파싱해 보면 바로 잡힌다.
+
+```js
+// check-json.cjs: 설정 파일이 엄격한 JSON인지 본다
+const fs = require("node:fs");
+for (const f of process.argv.slice(2)) {
+  try {
+    const v = JSON.parse(fs.readFileSync(f, "utf8"));
+    console.log(`ok    ${f}  keys=${Object.keys(v).join(",")}`);
+  } catch (e) {
+    console.log(`FAIL  ${f}  ${e.message}`);
+    process.exitCode = 1;
+  }
+}
+```
+
+```bash
+# 정상 파일 셋과, 쉼표·주석을 일부러 넣은 파일 둘
+node check-json.cjs .claude/settings.json .claude/settings.local.json .mcp.json \
+  .claude/broken-trailing.json .claude/broken-comment.json
+```
+
+```text
+ok    .claude/settings.json  keys=$schema,permissions,hooks
+ok    .claude/settings.local.json  keys=permissions
+ok    .mcp.json  keys=mcpServers
+FAIL  .claude/broken-trailing.json  Unexpected token ']', ..." *)",
+    ]
+  }
+}
+" is not valid JSON
+FAIL  .claude/broken-comment.json  Expected property name or '}' in JSON at position 4 (line 2 column 3)
+```
+
+Claude Code도 세션 밖에서 같은 검사를 해 준다. `claude doctor`는 현재 디렉터리의 설정 파일을 신뢰 확인 없이 읽고 문제를 적는다. `settings.local.json`에 끝 쉼표를 넣고 돌린 실제 출력이다(앞쪽 긴 경로는 `…`로 줄였다).
+
+```text
+Invalid settings
+- …/demo/.claude/settings.local.json: Invalid or malformed JSON
+- …/demo/.mcp.json › mcpServers.github: Missing environment variables: GITHUB_MCP_TOKEN
+  Suggested fix: Set the following environment variables: GITHUB_MCP_TOKEN
+```
+
+세션 안에서는 `/status`의 Setting sources 줄이 이번 세션에 실제로 읽힌 파일을 보여 준다. 어느 파일이 어떤 키를 정했는지까지는 안 보여 주니, 값이 이상하면 위의 층 순서대로 파일을 직접 열어 본다.
+
+## 허용, 확인, 거부
+
+권한 규칙은 `permissions` 아래 `allow`, `ask`, `deny` 세 목록이다. 평가 순서는 deny → ask → allow이고, 이 순서에서 처음 맞는 규칙이 결과를 정한다. 규칙이 더 구체적이라고 순서가 바뀌지 않는다. 그래서 `deny`의 `Bash(git push *)`가 있으면 `allow`에 `Bash(git push origin feature)`를 넣어도 막힌다. allow로 deny에 예외 구멍을 낼 수 없다.
+
+층이 달라도 마찬가지다. 사용자 설정이 허용하고 프로젝트 설정이 거부하면 거부가 이긴다. 거부 규칙은 어느 층에서 왔든 허용보다 먼저 보기 때문이다. 앞 절의 "높은 층이 이긴다"는 값 하나짜리 키 이야기고, 권한은 목록을 모두 합친 다음 이 순서로 본다.
+
+규칙 문법은 `Tool` 또는 `Tool(지정자)`다. Bash 규칙 하나를 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="Bash(git log *) 한 줄을 조각으로 읽기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "Bash", display: "Bash", title: "도구 이름", description: "정식 도구 이름을 쓴다. 화면에 보이는 라벨과 다를 수 있다. 괄호 없이 Bash만 쓰면 모든 Bash 명령이고, deny에 쓰면 도구 자체가 사라진다.", required: true },
+    { key: "open", display: "(", title: "지정자 시작", description: "괄호 안 글자는 그대로 비교한다. 명령에 괄호가 있어도 이스케이프하지 않는다." },
+    { key: "prefix", display: "git log", title: "고정된 앞부분", description: "첫 * 앞까지는 적힌 그대로 맞아야 한다. 프로그램과 하위 명령까지 적어야 범위가 좁아진다. git *로 쓰면 모든 git 명령이 된다.", required: true },
+    { key: "star", display: " *", title: "공백 + 와일드카드", description: "*는 공백을 포함한 아무 글자다. 앞의 공백도 규칙의 일부라 ls *는 lsof에 맞지 않는다. 끝에 공백과 *가 하나뿐이면 맨 명령(git log)에도 맞는다.", code: "Bash(ls *)  → ls, ls -la  (lsof는 아님)\nBash(ls*)   → ls -la, lsof\nBash(ls:*)  → Bash(ls *)와 같다" },
+    { key: "close", display: ")", title: "지정자 끝", description: "규칙은 셸 연산자를 안다. Bash(npm test *)는 npm test && rm -rf x를 허용하지 않는다. 하위 명령마다 따로 맞춰 본다." },
+  ]}
+/>
+
+Bash 규칙에서 자주 틀리는 부분은 이렇다.
+
+- 복합 명령은 쪼개서 본다. `&&`, `||`, `;`, `|`, `&`, 줄바꿈으로 나눈 하위 명령이 각각 허용돼야 allow가 된다. 반대로 deny와 ask는 하위 명령 하나만 맞아도 걸린다. `$(...)` 안이나 `for` 본문 속 명령까지 본다.
+- `timeout`, `time`, `nice`, `nohup` 같은 래퍼는 벗겨서 본다. 하지만 `npx`, `docker exec`, `devbox run`처럼 뒤의 인자를 명령으로 실행하는 도구는 벗기지 않는다. `Bash(npx *)`를 허용하면 `npx` 뒤에 오는 어떤 명령이든 허용한 셈이다.
+- 같은 프로그램을 다른 모양으로 부르면 안 맞는다. 문서 예시대로 `Bash(rm *)`는 `/bin/rm -rf build/`나 `bash -c 'rm -rf build/'`를 막지 못하고, `Bash(git push *)`는 `git -C . push`를 막지 못한다. Bash 규칙은 Claude가 흔히 쓰는 모양을 걸러 주는 장치지 보안 경계가 아니다.
+
+파일 규칙도 범위가 있다. `Read(./.env)` 거부는 Claude의 Read·Grep·Glob 도구와, Claude Code가 알아보는 `cat`, `head`, `sed` 같은 Bash 명령, `< .env` 같은 리다이렉션까지 막는다. 하지만 `.env`를 직접 여는 Python이나 Node 스크립트를 실행하면 그 안까지는 보지 못한다. 경로 표기도 헷갈린다. `/path`는 파일시스템 루트가 아니라 설정 파일 기준이고, 진짜 절대 경로는 `//path`로 쓴다. 운영체제 수준에서 모든 프로세스를 막아야 하면 샌드박스를 켠다. 그리고 `.claudeignore` 파일은 효과가 없다. 그 안의 항목은 `Read` 거부 규칙으로 옮긴다.
+
+권한 프롬프트에서 "Yes, and don't ask again"을 고르면 그 규칙이 저장소 루트의 `.claude/settings.local.json`에 `allow`로 저장된다. 처음 상황에서 승인한 적 없는 명령이 돌았던 이유가 이것이다. 누군가의 개인 승인이 담긴 파일이 커밋되어 모두에게 퍼졌다.
+
+### 직접 판정해 보기
+
+아래는 deny → ask → allow 순서와 Bash 와일드카드 규칙을 흉내 내는 `decide` 함수다. 실제 Claude Code 매처의 일부만 구현한 교육용 버전이다(래퍼 벗기기, `$()` 안쪽 검사는 뺐다). 아무 규칙에도 안 맞으면 `"prompt"`(Manual 모드에서 묻는다)를 돌려준다.
+
+<CodePlayground
+  caption="권한 규칙 판정기: deny, ask, allow 순서로 본다"
+  functionName="decide"
+  initialCode={`function decide(rules, command) {
+  // rules: { allow?: string[], ask?: string[], deny?: string[] }
+  // 규칙 모양: "Bash(npm run *)", "Bash(ls:*)", "Bash(git push origin main)"
+  // 1. 명령을 &&, ||, ;, | 로 하위 명령으로 나눈다
+  // 2. deny가 하나라도 맞으면 "deny", ask가 하나라도 맞으면 "ask"
+  // 3. 모든 하위 명령이 allow에 맞으면 "allow", 아니면 "prompt"
+  return "prompt";
+}`}
+  solution={`function decide(rules, command) {
+  const toRegex = (rule) => {
+    const m = /^Bash\\((.*)\\)$/.exec(rule);
+    if (!m) return null;
+    let p = m[1];
+    if (p.endsWith(":*")) p = p.slice(0, -2) + " *";
+    const esc = p.split("*").map((s) => s.replace(/[.+?^\${}()|[\\]\\\\]/g, "\\\\$&"));
+    let src = "^" + esc.join(".*") + "$";
+    const stars = p.split("*").length - 1;
+    if (stars === 1 && p.endsWith(" *")) {
+      src = "^(" + esc[0].slice(0, -1) + "|" + esc.join(".*") + ")$";
+    }
+    return new RegExp(src);
+  };
+  const parts = command.split(/&&|\\|\\||;|\\|/).map((s) => s.trim()).filter(Boolean);
+  const hit = (list, part) =>
+    (list || []).some((r) => { const re = toRegex(r); return re && re.test(part); });
+  if (parts.some((p) => hit(rules.deny, p))) return "deny";
+  if (parts.some((p) => hit(rules.ask, p))) return "ask";
+  if (parts.length && parts.every((p) => hit(rules.allow, p))) return "allow";
+  return "prompt";
+}`}
+  tests={[
+    { label: "npm run build", args: [{ allow: ["Bash(npm run *)"] }, "npm run build"], expected: "allow" },
+    { label: "npm install은 규칙 밖", args: [{ allow: ["Bash(npm run *)"] }, "npm install"], expected: "prompt" },
+    { label: "넓은 allow, 좁은 deny", args: [{ allow: ["Bash(git *)"], deny: ["Bash(git push *)"] }, "git push origin main"], expected: "deny" },
+    { label: "좁은 allow도 ask를 못 이긴다", args: [{ allow: ["Bash(git push origin main)"], ask: ["Bash(git push *)"] }, "git push origin main"], expected: "ask" },
+    { label: "&& 뒤 명령이 허용 밖", args: [{ allow: ["Bash(npm test *)"] }, "npm test && rm -rf build"], expected: "prompt" },
+    { label: "&& 뒤 명령이 deny", args: [{ allow: ["Bash(npm test *)"], deny: ["Bash(rm *)"] }, "npm test && rm -rf build"], expected: "deny" },
+    { label: "ls *는 lsof가 아니다", args: [{ allow: ["Bash(ls *)"] }, "lsof"], expected: "prompt" },
+    { label: "ls *는 맨 ls에도 맞는다", args: [{ allow: ["Bash(ls *)"] }, "ls"], expected: "allow" },
+    { label: "ls*는 lsof에도 맞는다", args: [{ allow: ["Bash(ls*)"] }, "lsof"], expected: "allow" },
+    { label: ":*는 공백 *와 같다", args: [{ allow: ["Bash(ls:*)"] }, "ls -la"], expected: "allow" },
+  ]}
+/>
+
+## 팀이 함께 쓰는 MCP 서버
+
+MCP(Model Context Protocol)는 Claude Code에 바깥 도구를 붙이는 표준이다. GitHub, 데이터베이스, 사내 API 같은 것을 서버로 띄우면 Claude가 그 서버의 도구를 부를 수 있다. 서버 설정은 세 범위 중 하나에 저장된다.
+
+- local(기본값): `~/.claude.json` 안의 이 프로젝트 항목. 나만, 이 프로젝트에서만.
+- project: 저장소 루트의 `.mcp.json`. 커밋해서 팀이 같은 서버를 받는다.
+- user: `~/.claude.json`. 내 모든 프로젝트.
+
+이름이 겹치면 local > project > user 순으로 하나만 쓰고, 필드를 섞지 않고 항목 전체를 고른다. MCP의 "local"은 `settings.local.json`과 다른 곳이라 헷갈리기 쉽다. MCP local은 홈 디렉터리의 `~/.claude.json`에 들어간다.
+
+`.mcp.json`은 커밋되는 파일이라 토큰을 직접 쓰면 안 된다. `${VAR}`와 `${VAR:-기본값}` 문법으로 환경 변수를 펼칠 수 있으니, 비밀값은 각자 셸에 두고 이름만 커밋한다.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+`url`이 있는데 `type`이 없으면 stdio 서버로 읽혀서 설정 오류가 난다. 원격 서버에는 `"type": "http"`를 꼭 적는다. 그리고 원격 서버의 `url`과 `headers`에서는 `ANTHROPIC_API_KEY`, `HTTPS_PROXY`, `NPM_TOKEN` 같은 자격 증명 변수가 일부러 빈 값으로 읽힌다. 남의 저장소가 `.mcp.json`으로 내 Claude Code 키를 자기 서버로 보내게 하지 못하게 한 장치다. 진짜로 넘겨야 하면 내가 지은 다른 이름의 변수에 옮겨 담는다.
+
+저장소를 처음 열면 `.mcp.json`의 서버는 바로 붙지 않는다. 대화형 세션은 이 서버를 쓸지 먼저 묻는다. 데모 저장소에서 토큰 없이 확인해 본 실제 출력이다.
+
+```bash
+# 이 프로젝트에 보이는 MCP 서버와 상태
+claude mcp list
+```
+
+```text
+Checking MCP server health…
+
+github: https://api.githubcopilot.com/mcp/ (HTTP) - ⏸ Pending approval (run `claude` to approve)
+
+MCP config diagnostics ‼
+
+For help configuring MCP servers, see: https://code.claude.com/docs/en/mcp
+
+[Contains warnings] Project config (shared via .mcp.json)
+Location: …/demo/.mcp.json
+ └ [Warning] [github] mcpServers.github: Missing environment variables: GITHUB_MCP_TOKEN
+```
+
+`Pending approval`이 승인 전 상태다. 변수가 없을 때 설정을 거부하지 않고 경고만 낸 뒤 `${GITHUB_MCP_TOKEN}` 글자를 그대로 쓴다. `claude mcp get github`로 보면 헤더도 값이 아니라 변수 이름으로 나온다.
+
+```text
+github:
+  Scope: Project config (shared via .mcp.json)
+  Status: ⏸ Pending approval (run `claude` to approve)
+  Type: http
+  URL: https://api.githubcopilot.com/mcp/
+  Headers:
+    Authorization: Bearer ${GITHUB_MCP_TOKEN}
+
+To remove this server, run: claude mcp remove github -s project
+```
+
+아래 그림은 남이 만든 저장소를 처음 열 때 일어나는 순서다. 신뢰 확인이 먼저 오고, 그 뒤에야 저장소가 준 허용 규칙과 MCP 서버가 살아난다.
+
+<SequenceDiagram
+  caption="처음 연 저장소: 신뢰 확인 뒤에 권한과 MCP가 붙는다"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "cc", label: "Claude Code" },
+    { id: "repo", label: "저장소 파일" },
+    { id: "mcp", label: "MCP 서버" },
+  ]}
+  steps={[
+    { from: "me", to: "cc", label: "claude", title: "세션을 띄운다", detail: "처음 보는 폴더에서 대화형 세션을 시작한다." },
+    { from: "cc", to: "repo", label: "읽기", title: "설정과 지시를 읽는다", detail: "CLAUDE.md, settings.json, .mcp.json을 찾는다. deny와 ask 규칙은 제한만 하므로 바로 적용된다.", payload: "deny: Read(./.env)  → 즉시 적용\nallow: Bash(pnpm test *) → 신뢰 전까지 보류" },
+    { from: "cc", to: "me", label: "신뢰 확인", title: "이 폴더를 믿을지 묻는다", detail: "저장소가 주는 allow 규칙과 추가 디렉터리를 보여 준다. 대화형 세션은 신뢰 전까지 설정 파일의 훅도 돌리지 않는다." },
+    { from: "me", to: "cc", label: "신뢰", title: "신뢰한다", detail: "신뢰는 git 저장소 루트를 기준으로 저장된다. 이제 저장소의 allow 규칙이 살아난다." },
+    { from: "cc", to: "me", label: "서버 승인?", title: ".mcp.json 서버를 묻는다", detail: "저장소가 settings.json에 스스로 적은 승인은 세지 않는다. 사용자가 고른다." },
+    { from: "cc", to: "mcp", label: "연결", title: "승인한 서버만 붙는다", detail: "도구 이름은 mcp__github__create_issue처럼 서버 이름이 붙는다. 권한 규칙도 이 이름으로 쓴다.", payload: "allow: mcp__github__get_*\ndeny:  mcp__github__delete_*" },
+  ]}
+/>
+
+이 확인을 건너뛰는 실행 경로도 있다. `claude -p`(비대화형)와 Agent SDK는 확인 창을 띄울 수 없어서 `.mcp.json` 서버를 묻지 않고 붙이고, 공유 설정의 훅도 돌린다. 승인 선택을 되돌리려면 `claude mcp reset-project-choices`, 특정 서버를 늘 막으려면 `disabledMcpjsonServers`에 이름을 넣는다.
+
+## 저장소에 올릴 것과 내 컴퓨터에 둘 것
+
+정리하면 커밋하는 쪽은 팀이 같아야 하는 것들이다. `CLAUDE.md`, `.claude/settings.json`, `.mcp.json`, `.claude/rules/`, `skills/`, `commands/`, `agents/`, 훅 스크립트. 남겨 두는 쪽은 나만의 것이다. `CLAUDE.local.md`, `.claude/settings.local.json`, 그리고 애초에 저장소 밖에 있는 `~/.claude/`와 `~/.claude.json`이다.
+
+아래 그림에서 다음을 누르면 파일이 원격 저장소를 지나 팀원 컴퓨터까지 가는 길과, 중간에 멈춰야 하는 파일이 보인다.
+
+<NetworkTopology
+  caption="커밋되는 파일은 팀원에게 가고, 개인 파일은 내 컴퓨터에서 멈춘다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "mine", label: "내 컴퓨터", x: 10, y: 10, w: 180, h: 280, tone: "private" },
+    { id: "remote", label: "원격", x: 205, y: 10, w: 80, h: 280, tone: "edge" },
+    { id: "team", label: "팀원", x: 300, y: 10, w: 90, h: 280, tone: "public" },
+  ]}
+  nodes={[
+    { id: "shared", label: "settings.json", sub: "CLAUDE.md", x: 100, y: 70, icon: "server", w: 120 },
+    { id: "local", label: "settings.local", sub: "CLAUDE.local.md", x: 100, y: 160, icon: "lock", w: 120 },
+    { id: "home", label: "~/.claude", sub: "~/.claude.json", x: 100, y: 245, icon: "client", w: 120 },
+    { id: "git", label: "git remote", x: 245, y: 150, icon: "internet", w: 70 },
+    { id: "mate", label: "teammate", x: 345, y: 150, icon: "client", w: 80 },
+  ]}
+  links={[
+    { from: "shared", to: "git" },
+    { from: "local", to: "git", dashed: true },
+    { from: "git", to: "mate" },
+  ]}
+  steps={[
+    { path: ["shared", "git", "mate"], packet: "commit", title: "공용 파일은 팀원에게 간다", detail: "settings.json, CLAUDE.md, .mcp.json, skills, agents는 커밋해서 같은 환경을 받는다." },
+    { path: ["local", "git"], packet: "local", blocked: true, title: "개인 파일은 막는다", detail: "settings.local.json과 CLAUDE.local.md는 .gitignore나 전역 제외 파일로 막는다. 직접 만든 파일은 저절로 막히지 않는다." },
+    { path: ["home"], title: "홈 디렉터리는 애초에 밖이다", detail: "~/.claude의 개인 설정과 ~/.claude.json의 MCP local·user 서버는 저장소에 들어갈 일이 없다." },
+    { path: ["shared", "git", "mate"], packet: "trust", highlight: ["mate"], title: "받은 쪽은 신뢰부터", detail: "팀원 컴퓨터에서도 allow 규칙은 그 사람이 폴더를 신뢰한 뒤에 살아난다." },
+  ]}
+/>
+
+`settings.local.json`은 Claude Code가 처음 이 파일에 쓸 때 전역 git 제외 파일(`core.excludesFile`, 없으면 `~/.config/git/ignore`)에 `**/.claude/settings.local.json`을 넣어 준다. 하지만 손으로 만든 파일은 그 전까지 아무도 막지 않는다. `CLAUDE.local.md`는 아예 자동으로 막아 주지 않으니 직접 `.gitignore`에 넣는다. 데모 저장소에서 확인했다.
+
+```bash
+# 아무것도 무시하지 않은 상태에서 커밋 후보 보기
+git status --short --untracked-files=all
+```
+
+```text
+?? .claude/agents/code-reviewer.md
+?? .claude/agents/security-auditor.md
+?? .claude/commands/fix-issue.md
+?? .claude/hooks/validate-bash.sh
+?? .claude/rules/api.md
+?? .claude/settings.json
+?? .claude/settings.local.json
+?? .claude/skills/deploy/SKILL.md
+?? .claude/skills/deploy/scripts/deploy.sh
+?? .mcp.json
+?? CLAUDE.local.md
+?? CLAUDE.md
+```
+
+개인 파일 두 개가 커밋 후보에 그대로 있다. `.gitignore`에 넣고 `git check-ignore -v`로 어느 규칙이 막았는지 본다. 막히지 않은 파일은 출력에 안 나온다.
+
+```bash
+# 무시 규칙 추가 후, 파일마다 어느 규칙에 걸렸는지 확인
+printf 'CLAUDE.local.md\n.claude/settings.local.json\n.env\n' > .gitignore
+git check-ignore -v CLAUDE.local.md .claude/settings.local.json .claude/settings.json .mcp.json CLAUDE.md
+```
+
+```text
+.gitignore:1:CLAUDE.local.md	CLAUDE.local.md
+.gitignore:2:.claude/settings.local.json	.claude/settings.local.json
+```
+
+`.gitignore:2:`처럼 파일과 줄 번호가 나오니, 규칙이 어디서 왔는지 바로 알 수 있다. Claude Code가 넣어 주는 전역 제외 파일의 규칙도 같은 방식으로 보인다. 아래는 그 파일을 흉내 낸 파일을 `core.excludesFile`로 지정하고 돌린 결과다(경로는 줄였다).
+
+```text
+…/global-ignore:1:**/.claude/settings.local.json	.claude/settings.local.json
+```
+
+함정은 이미 커밋된 파일이다. `.gitignore`는 추적 중인 파일에는 효과가 없고, `git check-ignore`도 아무것도 출력하지 않는다. `--no-index`를 붙여야 "규칙은 맞는데 이미 추적 중"이라는 사실이 드러난다.
+
+```bash
+# settings.local.json이 이미 커밋된 저장소에서
+git check-ignore -v .claude/settings.local.json; echo "exit=$?"
+git check-ignore -v --no-index .claude/settings.local.json
+git ls-files .claude
+# 추적만 끊는다 (내 디스크의 파일은 남는다)
+git rm --cached .claude/settings.local.json
+git status --short
+```
+
+```text
+exit=1
+.gitignore:1:.claude/settings.local.json	.claude/settings.local.json
+.claude/settings.local.json
+D  .claude/settings.local.json
+?? .gitignore
+```
+
+추적되는 `settings.local.json`은 Claude Code도 다르게 대한다. 내 파일이 아니라 저장소가 준 파일로 보고, 그 안의 allow 규칙을 폴더를 신뢰할 때까지 보류한다. 그래도 이미 원격에 올라간 개인 승인 규칙은 팀원 각자가 신뢰를 누르는 순간 살아나니, 발견하면 바로 추적을 끊는다. 비밀값이 커밋됐다면 지우는 것만으로는 부족하고 키를 바꿔야 한다. 그 과정은 [Git에 올라간 비밀값 글](/posts/git-large-files-secrets)에 있다.
+
+마지막으로, 대화 기록(`~/.claude/projects/<project>/*.jsonl`)은 암호화되지 않는다. Claude가 `.env`를 읽거나 명령이 토큰을 출력하면 그 값이 기록 파일에 남는다. 자격 증명 파일에 `Read` 거부를 거는 이유가 하나 더 있는 셈이다.
+
+## 남이 만든 저장소를 열 때
+
+신뢰 확인은 귀찮은 창이 아니라 이 구조 전체의 안전장치다. 저장소는 `CLAUDE.md`로 지시를 심을 수 있고, `settings.json`으로 권한을 풀고 훅을 걸 수 있고, `.mcp.json`으로 서버를 띄울 수 있다. 문서가 정리한 신뢰 전 동작을 간추리면 이렇다.
+
+- 대화형 세션은 신뢰 전에는 설정 파일의 훅을 돌리지 않고, 저장소의 `allow` 규칙과 추가 디렉터리를 보류한다. `deny`와 `ask`는 제한만 하니 바로 적용한다.
+- `.mcp.json` 서버는 대화형에서 따로 승인을 받는다. 저장소가 `enableAllProjectMcpServers`를 스스로 켜 둬도 신뢰 전에는 무시한다.
+- `claude -p`와 SDK는 확인 창이 없어서 폴더를 신뢰한 것으로 친다. 공유 설정의 훅이 돌고, `.mcp.json` 서버가 묻지 않고 붙는다.
+
+<Callout kind="warning">
+CI나 스크립트에서 남이 만든 저장소에 `claude -p`를 돌리면 그 저장소의 `.claude/settings.json` 훅이 내 권한으로 실행된다. 먼저 `.claude/`를 읽어 보고, 필요하면 `--setting-sources user`로 프로젝트 설정과 `.mcp.json`을 빼거나, `--bare`로 훅·스킬·서브에이전트·MCP를 읽지 않게 하거나, `--settings '{"disableAllHooks": true}'`로 그 실행의 훅을 끈다. 사용자 설정에 `disableAllHooks`를 넣는 것만으로는 부족하다. 프로젝트 설정이 더 높은 층이라 `false`로 되돌릴 수 있다.
+</Callout>
+
+## 규칙이 안 먹을 때 증상별로 볼 곳
+
+증상별로 처음 보는 곳이 다르다.
+
+"CLAUDE.md에 적었는데 안 지킨다"면 먼저 `/context`의 Memory files에 그 파일이 있는지 본다. 있으면 지시가 모호하거나 다른 파일과 부딪치는 경우가 많다. "포맷을 잘 맞춰라"보다 "2칸 들여쓰기", "커밋 전에 `pnpm test`"처럼 확인할 수 있게 쓴다. 그래도 매번 지켜야 하는 것이면 훅으로 옮긴다.
+
+"허용했는데 계속 묻는다"면 `/permissions`에서 규칙과 그 규칙이 온 파일을 본다. 다른 층의 `ask` 규칙이 내 `allow`보다 먼저 걸렸을 수 있다. 팀원에게만 안 먹는다면 그 사람이 폴더를 아직 신뢰하지 않았을 수 있다. 커밋한 `allow`는 신뢰 뒤에만 산다.
+
+"값을 바꿨는데 그대로다"면 `/status`의 Setting sources로 파일이 읽혔는지, 위 층이 같은 키를 정하지 않았는지, 환경 변수가 덮지 않았는지 본다. `model`과 `effortLevel`은 세션 시작 때 한 번만 읽으니 `/model`, `/effort`로 바꾼다. 대부분의 다른 키, 권한과 훅까지는 파일을 저장하면 실행 중인 세션에 바로 반영된다.
+
+"MCP 서버가 안 붙는다"면 `claude mcp list`에서 상태를 본다. `Pending approval`이면 대화형 세션에서 승인하고, 변수 누락 경고가 있으면 셸에 값을 넣는다.
+
+## 모델이 읽는 글, 클라이언트가 지키는 규칙
+
+설정 파일은 두 부류로 기억하면 된다. `CLAUDE.md`와 rules는 모델이 참고하는 글이라 이어 붙고 부딪칠 수 있다. `settings.json`과 `.mcp.json`은 클라이언트가 지키는 규칙이라 층 순서와 deny → ask → allow로 정해진다. 팀과 나눌 것은 커밋하고, 내 것은 `.local`에 두고, 남의 저장소는 신뢰하기 전에 `.claude/`부터 읽는다. 이 파일들 위에서 돌아가는 스킬·서브에이전트·훅은 [Claude Code 확장 글](/posts/claude-code-extensions)에서 이어 보고, 전체 기능의 지도는 [Claude Code 기본기 지도](/posts/claude-code-fundamentals-map)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### CLAUDE.md와 settings.json은 어떻게 다른가?
+
+`CLAUDE.md`는 모델이 읽는 지시고, `settings.json`은 Claude Code 클라이언트가 강제하는 설정이다. `CLAUDE.md`는 세션 시작 때 컨텍스트에 들어가 행동을 이끌지만 지켜진다는 보장이 없다. 반드시 막아야 하는 파일 읽기나 명령은 `settings.json`의 `deny` 규칙이나 `PreToolUse` 훅으로 건다.
+
+### CLAUDE.md가 여러 개 있으면 어느 것이 적용되나?
+
+모두 적용된다. 관리형, 사용자, 프로젝트 순으로, 프로젝트 안에서는 루트 쪽부터 작업 디렉터리 쪽으로 이어 붙이고 같은 디렉터리의 `CLAUDE.local.md`는 뒤에 붙인다. 덮어쓰지 않기 때문에 서로 모순되면 모델이 아무거나 고를 수 있어서, 충돌을 사람이 정리해야 한다.
+
+### 같은 설정 키가 사용자 설정과 프로젝트 설정에 다르게 있으면?
+
+프로젝트 설정이 이긴다. 순서는 관리형 > `--settings` > 로컬 프로젝트 > 공유 프로젝트 > 사용자라서, 팀이 정한 값을 개인 전역 설정으로는 못 바꾸고 그 프로젝트의 `settings.local.json`으로만 덮을 수 있다. 다만 `permissions.allow` 같은 배열은 고르지 않고 모든 층의 항목을 합친다.
+
+### allow에 구체적인 규칙을 넣으면 넓은 deny의 예외가 되나?
+
+안 된다. 권한은 deny → ask → allow 순서로 처음 맞는 규칙이 정하고, 구체성은 순서를 바꾸지 않는다. `deny`의 `Bash(git push *)`가 있으면 `allow`의 `Bash(git push origin feature)`도 막힌다. 예외가 필요하면 deny를 좁게 다시 쓰거나 훅으로 세밀하게 판단한다.
+
+### Bash(rm *)를 deny에 넣으면 rm을 완전히 막을 수 있나?
+
+아니다. Bash 규칙은 명령 글자를 비교하므로 `/bin/rm`, `bash -c 'rm ...'`, 그 파일을 지우는 스크립트 실행은 못 막는다. 문서도 Bash 규칙을 보안 경계가 아니라고 적는다. 운영체제 수준으로 막으려면 샌드박스를 켜고, 명령 전체를 해석해야 하면 `PreToolUse` 훅을 쓴다.
+
+### 무엇을 커밋하고 무엇을 gitignore하나?
+
+팀이 같아야 하는 `CLAUDE.md`, `.claude/settings.json`, `.mcp.json`, rules, skills, agents, 훅 스크립트는 커밋한다. `CLAUDE.local.md`와 `.claude/settings.local.json`은 개인 파일이라 무시한다. `settings.local.json`은 Claude Code가 처음 쓸 때 전역 제외 파일에 넣어 주지만 손으로 만든 경우와 `CLAUDE.local.md`는 직접 넣어야 하고, 이미 추적 중이면 `git rm --cached`로 끊어야 한다.
+
+### .mcp.json에 API 키를 어떻게 넣나? 남의 저장소의 .mcp.json은 안전한가?
+
+키는 커밋하지 않고 `${VAR}` 확장으로 환경 변수 이름만 적는다. 원격 서버의 `url`과 `headers`에서는 Claude Code 자신의 키 같은 자격 증명 변수가 빈 값으로 읽혀서 남의 서버로 새지 않게 되어 있다. 대화형 세션은 `.mcp.json` 서버를 승인받고 붙이지만 `claude -p`는 묻지 않고 붙이므로, 모르는 저장소에서는 `--setting-sources user`나 `--strict-mcp-config`로 막는다.
+
+### 팀원에게 커밋한 allow 규칙이 왜 안 먹나?
+
+저장소가 주는 `allow` 규칙은 권한을 넓히는 설정이라, 각자 그 폴더의 신뢰 확인을 수락한 뒤에만 적용된다. 반면 `deny`와 `ask`는 제한만 하므로 바로 적용된다. 팀원이 아직 신뢰 창을 넘기지 않았거나 `claude -p`가 아닌 다른 경로로 띄웠는지부터 확인한다.

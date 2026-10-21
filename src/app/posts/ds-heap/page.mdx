@@ -1,0 +1,527 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ds-heap");
+
+작업마다 마감 시각이 있고, 워커는 늘 마감이 가장 이른 작업부터 꺼낸다. 이걸 배열로 만들면 가장 먼저 떠오르는 코드는 "넣을 때마다 정렬하고 앞에서 꺼내기"다.
+
+```js
+const queue = [];
+function push(deadline) { queue.push(deadline); queue.sort((a, b) => a - b); }
+function pop() { return queue.shift(); }
+```
+
+작업 1만 개를 넣고, 이어서 하나 넣고 하나 꺼내기를 2만 번 반복했다. 같은 일을 배열로 만든 이진 힙과 비교한 결과다. `checksum`은 꺼낸 값의 합이라 셋이 같은 순서로 꺼냈는지 확인하는 용도다.
+
+```text
+sort every push          5660.8ms checksum 6662676177023
+sorted array + splice      54.9ms checksum 6662676177023
+binary heap                26.7ms checksum 6662676177023
+```
+
+정렬을 매번 하면 5.7초, 힙은 27ms다. 가운데 줄은 이진 탐색으로 자리를 찾아 `splice`로 끼워 넣는 방법인데, 이 크기에서는 힙과 크게 다르지 않다. 그런데 큐가 더 커지면 이야기가 달라진다. 이 글은 그 이유를 따라가면서, 배열 하나로 트리를 흉내 내는 이진 힙(binary heap)이 어떻게 생겼는지, 넣고 꺼내기가 왜 O(log n)이고 한 번에 만들기는 왜 O(n)인지를 직접 구현하고 재 본다. 그 위에서 상위 k개, k개 정렬 리스트 합치기, 흐르는 숫자의 중앙값처럼 면접에 자주 나오는 문제를 푼다. 실행 결과는 모두 Node.js 22에서 직접 돌린 값이다.
+
+힙도 트리의 한 종류라 [이진 트리와 BST 글](/posts/ds-binary-tree-bst)의 용어(루트, 잎, 높이)를 그대로 쓴다. 해시와 함께 쓰는 문제는 [해시맵 글](/posts/ds-hash-map)과 이어진다.
+
+## 배열 하나에 트리를 접어 넣는다
+
+최소 힙(min-heap)의 규칙은 하나다. 모든 노드는 자기 자식보다 작거나 같다. 그러면 루트가 전체에서 가장 작은 값이 된다. BST와 달리 왼쪽과 오른쪽 사이에는 아무 순서가 없다. "가장 작은 것 하나"만 빨리 알면 되니 그 이상의 정렬은 하지 않는다. 이 게으름이 힙을 빠르게 만든다. 규칙을 뒤집어 부모가 자식보다 크거나 같으면 최대 힙이다.
+
+모양에도 규칙이 있다. 힙은 위층부터, 같은 층에서는 왼쪽부터 빈틈없이 채운 완전 이진 트리다. 빈틈이 없으니 노드를 위에서 아래, 왼쪽에서 오른쪽 순서로 배열에 늘어놓기만 하면 된다. 포인터가 필요 없다. 인덱스 i인 노드의 가족은 계산으로 나온다.
+
+```js
+const parent = (i) => (i - 1) >> 1; // 부모
+const left = (i) => 2 * i + 1;      // 왼쪽 자식
+const right = (i) => 2 * i + 2;     // 오른쪽 자식
+```
+
+아래는 배열 `[1, 3, 2, 5, 9, 8]`을 트리로 펼친 모습이다. 이름표의 대괄호가 배열 인덱스다.
+
+<VectorSpace
+  caption="배열 [1, 3, 2, 5, 9, 8]을 트리로 펼치면"
+  width={400}
+  height={220}
+  points={[
+    { id: "i0", label: "1 [0]", x: 200, y: 30 },
+    { id: "i1", label: "3 [1]", x: 110, y: 100 },
+    { id: "i2", label: "2 [2]", x: 290, y: 100 },
+    { id: "i3", label: "5 [3]", x: 60, y: 175 },
+    { id: "i4", label: "9 [4]", x: 160, y: 175 },
+    { id: "i5", label: "8 [5]", x: 250, y: 175 },
+  ]}
+  edges={[["i0", "i1"], ["i0", "i2"], ["i1", "i3"], ["i1", "i4"], ["i2", "i5"]]}
+  steps={[
+    { caption: "인덱스 0이 루트이고 가장 작은 값이다. 층마다 왼쪽부터 채워서 빈칸이 없다.", showEdges: true },
+    { caption: "인덱스 1(3)의 자식은 2·1+1 = 3, 2·1+2 = 4번, 즉 5와 9다. 부모가 자식보다 작다.", showEdges: true, path: ["i1", "i3"] },
+    { caption: "인덱스 5(8)의 부모는 (5−1) >> 1 = 2번, 값 2다. 아래에서 위로 갈 때는 이 계산만 반복한다.", showEdges: true, path: ["i5", "i2", "i0"] },
+    { caption: "3과 2는 형제지만 둘 사이 순서는 정해져 있지 않다. 힙은 위아래 순서만 지킨다.", showEdges: true },
+  ]}
+/>
+
+이 배치에서 바로 나오는 성질이 있다. 노드 n개짜리 완전 이진 트리의 높이는 ⌊log₂ n⌋ + 1이다. 100만 개여도 20층이다. BST처럼 한쪽으로 기울 수가 없다. 모양이 규칙으로 고정되어 있어서다. 그리고 값은 연속된 배열에 담기니 노드마다 객체를 만들 필요가 없고 캐시에도 유리하다.
+
+## 넣으면 올라가고 꺼내면 내려간다
+
+넣기(push)는 배열 끝에 붙이고 시작한다. 모양 규칙은 바로 지켜진다. 부모보다 작으면 규칙이 깨지니 부모와 자리를 바꾸고, 또 부모보다 작으면 또 바꾼다. 이걸 위로 올리기(sift up)라고 한다. `[3, 5, 8]`에 1을 넣는 과정이다.
+
+<AlgoTrace
+  caption="1을 넣기: 끝에 붙이고 부모보다 크거나 같아질 때까지 올린다"
+  memoryLabel="배열"
+  cells={["[0]", "[1]", "[2]", "[3]"]}
+  steps={[
+    { found: [0, 1, 2], memory: ["3, 5, 8"], caption: "3, 5, 8이 든 힙이다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["3, 5, 8, 1"], caption: "1을 끝(인덱스 3)에 붙인다. 부모는 (3−1) >> 1 = 1번, 값 5다." },
+    { pointer: 1, found: [0, 1, 2, 3], memory: ["3, 1, 8, 5"], caption: "1 < 5라 바꾼다. 이제 1은 인덱스 1에 있고 부모는 0번, 값 3이다." },
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["1, 3, 8, 5"], caption: "1 < 3이라 또 바꾼다. 루트에 닿았으니 멈춘다. 바꾸기 두 번이었다." },
+  ]}
+/>
+
+꺼내기(pop)는 루트를 들어낸다. 빈 루트 자리에 배열의 마지막 원소를 올리면 모양은 다시 완전 이진 트리가 된다. 그 값은 대개 크니까 두 자식 중 더 작은 쪽과 자리를 바꾸며 내려 보낸다(sift down). 두 자식 중 작은 쪽을 고르는 이유는 그 값이 새 부모가 되어 다른 자식보다도 작아야 해서다.
+
+<AlgoTrace
+  caption="루트 꺼내기: 마지막 원소를 올리고 작은 자식 쪽으로 내린다"
+  memoryLabel="배열"
+  cells={["[0]", "[1]", "[2]", "[3]", "[4]", "[5]"]}
+  steps={[
+    { found: [0, 1, 2, 3, 4, 5], memory: ["1, 3, 2, 5, 9, 8"], caption: "가장 작은 1을 꺼낸다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["8, 3, 2, 5, 9"], caption: "마지막 원소 8을 루트 자리로 올리고 배열 길이를 하나 줄인다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["8, 3, 2, 5, 9", "자식: [1]=3, [2]=2"], caption: "두 자식 3과 2 중 작은 2와 비교한다. 8 > 2라 바꾼다." },
+    { pointer: 2, found: [0, 1, 2, 3, 4], memory: ["2, 3, 8, 5, 9"], caption: "8은 인덱스 2로 내려갔다. 자식 인덱스 5, 6은 배열 밖이다. 멈춘다." },
+  ]}
+/>
+
+```js
+class MinHeap {
+  constructor(less = (a, b) => a < b) { this.a = []; this.less = less; }
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(x) {
+    const a = this.a;
+    a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {                       // 위로 올리기
+      const p = (i - 1) >> 1;
+      if (!this.less(a[i], a[p])) break;
+      [a[i], a[p]] = [a[p], a[i]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a;
+    if (a.length === 0) return undefined;
+    const top = a[0], last = a.pop();
+    if (a.length > 0) { a[0] = last; this.siftDown(0); }
+    return top;
+  }
+  siftDown(i) {                           // 아래로 내리기
+    const a = this.a, n = a.length;
+    while (true) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < n && this.less(a[l], a[m])) m = l;
+      if (r < n && this.less(a[r], a[m])) m = r;
+      if (m === i) return;
+      [a[i], a[m]] = [a[m], a[i]];
+      i = m;
+    }
+  }
+}
+
+const h = new MinHeap();
+for (const x of [5, 3, 8, 1, 9, 2]) { h.push(x); console.log("push", x, "→", JSON.stringify(h.a)); }
+while (h.size) { const x = h.pop(); console.log("pop ", x, "→", JSON.stringify(h.a)); }
+```
+
+```text
+push 5 → [5]
+push 3 → [3,5]
+push 8 → [3,5,8]
+push 1 → [1,3,8,5]
+push 9 → [1,3,8,5,9]
+push 2 → [1,3,2,5,9,8]
+pop  1 → [2,3,8,5,9]
+pop  2 → [3,5,8,9]
+pop  3 → [5,9,8]
+pop  5 → [8,9]
+pop  8 → [9]
+pop  9 → []
+```
+
+꺼낸 순서는 1, 2, 3, 5, 8, 9로 정렬되어 있지만 배열 자체는 한 번도 정렬된 적이 없다. 올리기와 내리기는 한 층에 한 번씩 비교하고 바꾸니 많아야 높이만큼, O(log n)이다. 가장 작은 값 보기(`peek`)는 루트를 읽을 뿐이라 O(1)이다.
+
+뒤에서 이 클래스를 계속 쓴다. 측정에 쓴 버전은 바꾸기 횟수를 세는 `swaps` 카운터와 아래의 `heapify`가 더 붙어 있을 뿐 같은 코드다.
+
+## 한꺼번에 만들면 O(n)이다
+
+원소가 이미 다 있는 배열을 힙으로 만들 때, 하나씩 `push`하면 n번 × O(log n)이다. 더 빠른 방법이 있다. 배열을 그대로 둔 채 잎이 아닌 마지막 노드부터 루트까지 거꾸로 가며 `siftDown`을 부른다. 이걸 heapify라고 한다.
+
+```js
+static heapify(arr, less) {
+  const h = new MinHeap(less);
+  h.a = arr;
+  for (let i = (arr.length >> 1) - 1; i >= 0; i--) h.siftDown(i); // 잎은 건너뛴다
+  return h;
+}
+```
+
+`[9, 5, 8, 1, 3, 2]`로 따라가 보면 이렇다.
+
+<AlgoTrace
+  caption="heapify: 아래쪽 작은 서브트리부터 정리한다"
+  memoryLabel="배열"
+  cells={["[0]", "[1]", "[2]", "[3]", "[4]", "[5]"]}
+  steps={[
+    { memory: ["9, 5, 8, 1, 3, 2"], caption: "아무렇게나 놓인 배열이다. 인덱스 3, 4, 5는 잎이라 혼자서 이미 힙이다." },
+    { pointer: 2, found: [2, 5], memory: ["9, 5, 2, 1, 3, 8"], caption: "잎이 아닌 마지막 노드 2번(8)부터. 자식 2보다 커서 바꾼다. 서브트리 하나가 힙이 됐다." },
+    { pointer: 1, found: [1, 3, 4], memory: ["9, 1, 2, 5, 3, 8"], caption: "1번(5)의 자식 1, 3 중 작은 1과 바꾼다." },
+    { pointer: 0, found: [0, 1, 2], memory: ["1, 9, 2, 5, 3, 8"], caption: "루트 9를 내린다. 자식 1, 2 중 1과 바꾼다." },
+    { pointer: 1, found: [0, 1, 2, 3, 4, 5], memory: ["1, 3, 2, 5, 9, 8"], caption: "9는 인덱스 1에서 자식 5, 3 중 3과 한 번 더 바꾼다. 바꾸기 4번으로 끝났다." },
+  ]}
+/>
+
+이게 O(n)인 이유는 "대부분의 노드가 아래쪽에 있다"는 데 있다. 완전 이진 트리에서 노드의 절반은 잎이라 한 번도 안 움직인다. 1/4은 한 층만 내려가고, 1/8은 두 층 … 루트 하나만 log n 층을 내려간다. 모두 더하면 n × (1/4 + 2/8 + 3/16 + …) = n × 1이라 n을 넘지 않는다. `push`로 하나씩 넣으면 반대로 대부분의 노드가 아래층에 붙어서 위로 먼 길을 올라가야 한다.
+
+100만 개로 재 봤다. 최소 힙에서 가장 나쁜 입력은 큰 값부터 들어오는 내림차순이다. 새 원소가 매번 루트까지 올라가야 하니까.
+
+```text
+random     push x N: swaps   1280556  242ms | heapify: swaps   743530  81ms | same min true
+descending push x N: swaps  17951445  423ms | heapify: swaps   999988  20ms | same min true
+N log2 N = 19931569
+```
+
+내림차순에서 `push`는 바꾸기 1,795만 번으로 N log₂ N(1,993만)에 가깝다. `heapify`는 99만 9,988번으로 N보다 적다. 이론 그대로다. 무작위 입력에서는 `push`도 원소 하나당 평균 1.28번만 바꿨다. 무작위 값은 대개 아래층에 머물러서 평균은 O(1)에 가깝지만, 최악은 막아 주지 못한다.
+
+heapify 다음에 루트를 하나씩 꺼내 배열 뒤쪽에 쌓으면 힙 정렬(heap sort)이 된다. 추가 메모리 없이 최악 O(n log n)을 보장하지만, 멀리 떨어진 인덱스를 오가서 캐시 효율이 나쁘고 같은 값의 순서를 지키지 않는다(불안정). 그래서 범용 정렬로는 잘 안 쓰고, 퀵 정렬이 너무 깊어질 때 힙 정렬로 갈아타는 인트로 정렬(introsort) 안에서 안전장치로 쓰인다.
+
+## 정렬된 배열이 아니라 힙인 이유
+
+처음 측정으로 돌아가자. 매번 `sort`하면 넣을 때마다 O(n log n)이다(거의 정렬된 배열이라 V8의 TimSort가 실제로는 O(n)에 가깝게 처리하지만 그래도 n에 비례한다). 이진 탐색 + `splice`는 자리 찾기가 O(log n)이지만 끼워 넣으면서 뒤의 원소를 한 칸씩 밀어야 해서 O(n)이고, 앞에서 꺼내는 `shift`도 O(n)이다. 큐 크기를 늘려 가며 하나 넣고 하나 꺼내기 2만 번에 걸린 시간을 다시 쟀다.
+
+```text
+queue size    1000 | 20000 x (push+pop) | splice     38.4ms | heap     30.8ms
+queue size   10000 | 20000 x (push+pop) | splice     69.5ms | heap     36.9ms
+queue size   30000 | 20000 x (push+pop) | splice   2495.6ms | heap     11.1ms
+queue size   50000 | 20000 x (push+pop) | splice   4575.8ms | heap     22.0ms
+queue size  100000 | 20000 x (push+pop) | splice   7345.0ms | heap     11.0ms
+```
+
+1만까지는 메모리 이동이 빨라서 `splice`도 버틴다. 그런데 1만과 3만 사이에 절벽이 있다. 2.5초, 10만에서 7.3초다. 배열이 커지면 V8이 작은 배열에 쓰는 빠른 경로를 못 쓰는 것으로 보이는데, 정확한 경계는 V8 버전과 원소 종류에 따라 다르다. 확실한 건 정렬된 배열의 넣기와 앞 꺼내기가 O(n)이고, 그 비용이 언젠가는 드러난다는 것이다. 힙은 크기가 100배가 되어도 10~37ms 사이에서 움직인다(이 정도 시간은 JIT와 GC 때문에 들쭉날쭉하다).
+
+표로 비교하면 이렇다.
+
+| 연산 | 정렬된 배열 | 이진 힙 | 균형 BST |
+|---|---|---|---|
+| 가장 작은 값 보기 | O(1) | O(1) | O(log n) |
+| 넣기 | O(n) | O(log n) | O(log n) |
+| 가장 작은 값 꺼내기 | O(n) (`shift`) | O(log n) | O(log n) |
+| 아무 값 찾기 | O(log n) | O(n) | O(log n) |
+| 정렬된 순서로 전부 훑기 | O(n) | O(n log n) | O(n) |
+| 한꺼번에 만들기 | O(n log n) | O(n) | O(n log n) |
+
+힙이 이기는 건 "가장 작은 것 하나를 계속 꺼내면서 계속 넣는" 일이다. 아무 값이나 찾거나, 정렬된 순서로 훑거나, 가장 큰 것과 가장 작은 것을 둘 다 꺼내야 하면 [BST](/posts/ds-binary-tree-bst)가 맞다. 이 여유 덕분에 힙의 상수가 작다. 회전도 포인터도 없이 배열 하나에서 바꾸기만 한다.
+
+## 비교 함수 하나가 힙의 성격을 정한다
+
+위 `MinHeap`은 "a가 b보다 먼저 나와야 하는가"를 묻는 `less` 함수 하나로 모든 순서를 정한다. 최대 힙이 필요하면 `(a, b) => a > b`를 넘긴다. 객체라면 비교할 필드를 꺼낸다. 이 함수에서 실수가 자주 나온다.
+
+첫째, `sort`의 비교 함수와 모양이 다르다. `sort`는 음수·0·양수를 돌려받지만 이 힙은 참·거짓을 받는다. 습관대로 `(a, b) => a - b`를 넘기면 이렇게 된다.
+
+```js
+const wrong = new MinHeap((a, b) => a - b); // 0이 아니면 truthy라 "a가 먼저"로 읽힌다
+for (const x of [5, 3, 8, 1]) wrong.push(x);
+const w = [];
+while (wrong.size) w.push(wrong.pop());
+console.log("comparator a-b:", w.join(" "));
+```
+
+```text
+comparator a-b: 1 3 8 5
+```
+
+에러 없이 틀린 순서가 나온다. 라이브러리마다 비교 함수 약속이 다르니 문서를 먼저 본다. `sort` 비교 함수의 약속은 [배열 메서드 글](/posts/js-array-mutation)에서 다뤘다.
+
+둘째, 힙은 같은 우선순위의 순서를 지키지 않는다. 우선순위 1인 작업 A~F 사이에 우선순위 0인 `urgent`를 끼워 넣고 꺼냈다.
+
+```js
+const jobs = ["A", "B", "C", "D", "E", "F"].map((name) => ({ name, pri: 1 }));
+jobs.splice(2, 0, { name: "urgent", pri: 0 });
+
+const h = new MinHeap((a, b) => a.pri < b.pri);
+for (const j of jobs) h.push(j);
+const order = [];
+while (h.size) order.push(h.pop().name);
+console.log("no tie-break  :", order.join(" "));
+
+let seq = 0; // 넣을 때마다 1씩 늘어나는 번호를 두 번째 기준으로
+const h2 = new MinHeap((a, b) => a.pri < b.pri || (a.pri === b.pri && a.seq < b.seq));
+for (const j of jobs) h2.push({ ...j, seq: seq++ });
+const order2 = [];
+while (h2.size) order2.push(h2.pop().name);
+console.log("with seq      :", order2.join(" "));
+```
+
+```text
+no tie-break  : urgent F E D C A B
+with seq      : urgent A B C D E F
+```
+
+같은 우선순위끼리는 F, E, D 순서로 뒤죽박죽 나왔다. 자리 바꾸기가 같은 값의 상대 순서를 섞기 때문이다. 작업 큐에서 이러면 먼저 들어온 작업이 계속 밀리는 일이 생긴다. 넣을 때마다 증가하는 번호(`seq`)를 두 번째 비교 기준으로 붙이면 들어온 순서가 지켜진다.
+
+셋째, 힙 안에 넣은 객체의 우선순위 필드를 밖에서 바꾸면 힙이 깨진다. 힙은 바뀐 줄 모르니 그 원소가 엉뚱한 자리에 남는다. 우선순위를 바꾸려면 원소의 인덱스를 따로 기억해 두고 그 자리에서 올리기나 내리기를 다시 부르거나(decrease-key), 새 우선순위로 하나 더 넣고 꺼낼 때 낡은 항목을 버린다(lazy deletion). 다익스트라 구현에서 흔히 쓰는 방법이 뒤쪽이다.
+
+## 상위 k개만 남기기
+
+점수 100만 개 중 상위 10개를 구한다. 전부 정렬하면 O(n log n)이다. 크기 k짜리 최소 힙을 쓰면 O(n log k)다. 힙의 루트는 "지금까지 본 값 중 k등"이고, 새 값이 그보다 크면 루트를 그 값으로 바꾸고 내린다. 작으면 상위 k에 들 수 없으니 버린다.
+
+최대값을 구하는데 최소 힙을 쓰는 게 처음엔 헷갈린다. 지켜야 할 것은 "상위 k개 중 가장 약한 것", 즉 다음에 쫓겨날 후보라서 그게 루트에 있어야 한다.
+
+<AlgoTrace
+  caption="상위 3개 남기기: 크기 3인 최소 힙"
+  memoryLabel="힙 (맨 앞이 루트 = 3등)"
+  cells={["4", "9", "1", "7", "3", "8", "6"]}
+  steps={[
+    { pointer: 2, found: [0, 1, 2], memory: ["1", "9", "4"], caption: "처음 세 개 4, 9, 1은 그냥 넣는다. 루트 1이 지금 3등이다." },
+    { pointer: 3, found: [0, 1, 3], memory: ["4", "9", "7"], caption: "7 > 1이다. 루트 1을 7로 바꾸고 내리면 4가 루트로 올라온다." },
+    { pointer: 4, found: [0, 1, 3], memory: ["4", "9", "7"], caption: "3 < 4다. 3등보다 작으니 상위 3에 못 든다. 버린다." },
+    { pointer: 5, found: [1, 3, 5], memory: ["7", "9", "8"], caption: "8 > 4다. 4를 8로 바꾸고 내린다. 새 3등은 7이다." },
+    { pointer: 6, found: [1, 3, 5], memory: ["7", "9", "8"], caption: "6 < 7이라 버린다. 상위 3개는 9, 8, 7이다. 힙 크기는 끝까지 3이었다." },
+  ]}
+/>
+
+```js
+function topKHeap(a, k) {
+  const h = new MinHeap();
+  for (const x of a) {
+    if (h.size < k) h.push(x);
+    else if (x > h.peek()) { h.a[0] = x; h.siftDown(0); } // pop + push를 한 번에
+  }
+  return h.a.sort((x, y) => y - x);
+}
+```
+
+```text
+k=10    sort  391ms | heap  24.5ms | same true | top3 999999598,999999116,999998367
+k=1000  sort  389ms | heap  36.0ms | same true | top3 999999598,999999116,999998367
+```
+
+100만 개에서 정렬은 390ms, 힙은 25~36ms다. 메모리 차이가 더 크다. 정렬은 100만 개 사본을 만들지만 힙은 k개만 든다. 그래서 끝을 모르는 스트림이나 메모리에 다 안 올라가는 로그에서도 쓸 수 있다. 서버 여러 대에서 각자 상위 k를 구한 뒤 그것들만 모아 다시 상위 k를 구하는 식으로 나눠 계산하기도 쉽다. 한 번만 구하면 되고 정렬된 결과가 필요 없다면, 퀵 정렬의 분할만 쓰는 quickselect가 평균 O(n)으로 더 빠를 수 있다. 대신 배열을 통째로 메모리에 두고 고쳐야 한다.
+
+가장 자주 나오는 변형은 "가장 많이 나온 k개"다. 해시맵으로 횟수를 세고, 횟수를 기준으로 크기 k짜리 최소 힙을 돌린다. 직접 풀어 보자. `MinHeap`은 들어 있고, 결과의 순서는 상관없다. 기대값은 Node로 실행해 확인한 값이다.
+
+<CodePlayground
+  caption="가장 많이 나온 k개 (해시맵 + 힙)"
+  functionName="topKFrequent"
+  initialCode={`class MinHeap {
+  constructor(less) { this.a = []; this.less = less; }
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(x) {
+    const a = this.a; a.push(x);
+    let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(a[i], a[p])) break; [a[i], a[p]] = [a[p], a[i]]; i = p; }
+  }
+  pop() {
+    const a = this.a; const top = a[0], last = a.pop();
+    if (a.length > 0) {
+      a[0] = last; let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break; [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function topKFrequent(nums, k) {
+  // 1. Map으로 숫자별 횟수를 센다
+  // 2. [숫자, 횟수]를 횟수 기준 최소 힙에 넣고, 크기가 k를 넘으면 하나 꺼낸다
+  return [];
+}`}
+  solution={`class MinHeap {
+  constructor(less) { this.a = []; this.less = less; }
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(x) {
+    const a = this.a; a.push(x);
+    let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(a[i], a[p])) break; [a[i], a[p]] = [a[p], a[i]]; i = p; }
+  }
+  pop() {
+    const a = this.a; const top = a[0], last = a.pop();
+    if (a.length > 0) {
+      a[0] = last; let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break; [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function topKFrequent(nums, k) {
+  const count = new Map();
+  for (const n of nums) count.set(n, (count.get(n) ?? 0) + 1);
+  const h = new MinHeap((a, b) => a[1] < b[1]);
+  for (const e of count) {
+    h.push(e);
+    if (h.size > k) h.pop(); // 가장 적게 나온 것을 버린다
+  }
+  return h.a.map((e) => e[0]);
+}`}
+  tests={[
+    { args: [[1, 1, 1, 2, 2, 3], 2], expected: [2, 1], compare: "unordered", label: "1이 3번, 2가 2번" },
+    { args: [[1], 1], expected: [1], label: "하나뿐" },
+    { args: [[4, 4, 4, 5, 5, 6, 6, 6, 6, 7], 2], expected: [4, 6], compare: "unordered", label: "6이 4번, 4가 3번" },
+    { args: [[-1, -1, 2, 2, 2, 3], 1], expected: [2], label: "음수 섞임" },
+    { args: [[9, 8, 8, 7, 7, 7, 6, 6, 6, 6], 3], expected: [8, 6, 7], compare: "unordered", label: "상위 3개" },
+    { args: [[3, 0, 1, 0], 1], expected: [0], label: "0도 숫자다" },
+  ]}
+/>
+
+마지막 테스트는 답이 숫자 0인 경우다. `if (!x)` 같은 거짓 값 검사로 0을 걸러 내는 실수를 잡는다.
+
+## k개의 줄을 하나로 합치기
+
+정렬된 리스트 k개를 하나의 정렬된 리스트로 합친다. 각 리스트의 맨 앞 원소만 힙에 넣어 두고, 가장 작은 것을 꺼낼 때마다 그 원소가 나온 리스트의 다음 원소를 넣는다. 힙에는 늘 k개 이하만 있으니 전체 원소 N개에 O(N log k)다.
+
+```js
+function mergeK(lists) {
+  const h = new MinHeap((a, b) => a.val < b.val);
+  lists.forEach((l, li) => { if (l.length) h.push({ val: l[0], li, i: 0 }); });
+  const out = [];
+  while (h.size) {
+    const { val, li, i } = h.pop();
+    out.push(val);
+    if (i + 1 < lists[li].length) h.push({ val: lists[li][i + 1], li, i: i + 1 }); // 같은 줄의 다음
+  }
+  return out;
+}
+console.log("mergeK        :", mergeK([[1, 4, 7], [2, 5, 8], [3, 6, 9, 10]]).join(" "));
+```
+
+```text
+mergeK        : 1 2 3 4 5 6 7 8 9 10
+```
+
+모두 이어 붙인 뒤 정렬하면 O(N log N)이다. k가 작고 N이 크면 차이가 커진다. 이 모양은 면접 문제로 끝나지 않는다. 메모리에 다 안 올라가는 큰 파일을 정렬할 때 조각마다 정렬해 디스크에 쓰고 이 방법으로 합치는 외부 정렬, 여러 샤드에서 시각순으로 정렬된 로그를 하나로 모으기, LSM 트리 저장소의 컴팩션이 모두 k-way merge다.
+
+## 흐르는 숫자의 중앙값
+
+숫자가 하나씩 들어올 때마다 지금까지의 중앙값을 바로 답해야 한다. 매번 정렬하면 O(n log n), 정렬된 배열에 끼워 넣으면 O(n)이다. 힙 두 개로 나누면 넣기 O(log n), 중앙값 O(1)이 된다.
+
+- 아래 절반은 최대 힙(`lo`)에, 위 절반은 최소 힙(`hi`)에 둔다. `lo`의 루트가 아래 절반의 가장 큰 값, `hi`의 루트가 위 절반의 가장 작은 값이다.
+- 크기는 `lo`가 `hi`와 같거나 하나 많게 유지한다. 넘치면 루트 하나를 반대편으로 옮긴다.
+- 개수가 홀수면 `lo`의 루트, 짝수면 두 루트의 평균이 중앙값이다.
+
+<AlgoTrace
+  caption="두 힙으로 중앙값 구하기: 5, 15, 1, 3, 8, 7"
+  memoryLabel="lo(최대 힙) | hi(최소 힙)"
+  cells={["5", "15", "1", "3", "8", "7"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["lo: 5", "hi: (비었다)", "중앙값 5"], caption: "5는 lo로 간다. 하나뿐이니 중앙값은 5다." },
+    { pointer: 1, found: [0, 1], memory: ["lo: 5", "hi: 15", "중앙값 10"], caption: "15는 lo의 최대 5보다 크니 hi로 간다. 크기가 같으니 (5 + 15) / 2 = 10." },
+    { pointer: 2, found: [0, 1, 2], memory: ["lo: 5, 1", "hi: 15", "중앙값 5"], caption: "1은 lo로 간다. lo가 하나 많아 lo의 루트 5가 중앙값이다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["lo: 3, 1", "hi: 5, 15", "중앙값 4"], caption: "3이 lo로 가자 lo가 셋이 돼 넘친다. 루트 5를 hi로 옮긴다. (3 + 5) / 2 = 4." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["lo: 5, 1, 3", "hi: 8, 15", "중앙값 5"], caption: "8은 hi로 간다. 이번엔 hi가 더 많아져 hi의 루트 5를 lo로 옮긴다. 중앙값 5." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["lo: 5, 1, 3", "hi: 7, 15, 8", "중앙값 6"], caption: "7은 hi로 간다. 크기가 같으니 (5 + 7) / 2 = 6." },
+  ]}
+/>
+
+```js
+function medians(stream) {
+  const lo = new MinHeap((a, b) => a > b); // 최대 힙
+  const hi = new MinHeap();               // 최소 힙
+  const out = [];
+  for (const x of stream) {
+    if (lo.size === 0 || x <= lo.peek()) lo.push(x); else hi.push(x);
+    if (lo.size > hi.size + 1) hi.push(lo.pop());      // lo가 넘치면
+    else if (hi.size > lo.size) lo.push(hi.pop());     // hi가 넘치면
+    out.push(lo.size > hi.size ? lo.peek() : (lo.peek() + hi.peek()) / 2);
+    console.log(`  add ${String(x).padStart(2)} lo(max)=${JSON.stringify(lo.a)} hi(min)=${JSON.stringify(hi.a)} median=${out.at(-1)}`);
+  }
+  return out;
+}
+console.log("medians       :", medians([5, 15, 1, 3, 8, 7]).join(" "));
+```
+
+```text
+  add  5 lo(max)=[5] hi(min)=[] median=5
+  add 15 lo(max)=[5] hi(min)=[15] median=10
+  add  1 lo(max)=[5,1] hi(min)=[15] median=5
+  add  3 lo(max)=[3,1] hi(min)=[5,15] median=4
+  add  8 lo(max)=[5,1,3] hi(min)=[8,15] median=5
+  add  7 lo(max)=[5,1,3] hi(min)=[7,15,8] median=6
+medians       : 5 10 5 4 5 6
+```
+
+출력의 배열은 힙 내부 배열 그대로라 정렬되어 있지 않다. 루트(맨 앞)만 보면 된다. 응답 시간의 중앙값이나 p90을 실시간으로 보여 주는 대시보드라면, 최근 N개만 남기려면 오래된 값을 지워야 해서 lazy deletion이 필요해진다. 값이 수백만 개 쌓이는 운영 지표는 정확한 분위수 대신 히스토그램이나 t-digest 같은 근사 구조를 쓴다. 분위수 자체는 [지연 시간 분위수 글](/posts/percentile-latency)에서 다룬다.
+
+## 힙이 일하는 곳
+
+힙은 눈에 잘 안 띄지만 런타임 안쪽에서 꾸준히 일한다.
+
+<ConceptDiagram
+  caption="'가장 이른 것부터'가 필요한 곳들"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "heap", label: "이진 힙", sub: "가장 작은 것 O(1)", x: 200, y: 130, w: 140 },
+    { id: "timer", label: "타이머", sub: "만료 시각이 이른 순", x: 85, y: 40, w: 150 },
+    { id: "dij", label: "다익스트라", sub: "가장 가까운 정점", x: 315, y: 40, w: 150 },
+    { id: "topk", label: "상위 k", sub: "크기 k 최소 힙", x: 85, y: 220, w: 140 },
+    { id: "merge", label: "k-way 병합", sub: "외부 정렬 · 로그", x: 315, y: 220, w: 150 },
+  ]}
+  edges={[
+    { from: "timer", to: "heap", label: "다음 만료" },
+    { from: "dij", to: "heap", label: "다음 정점" },
+    { from: "heap", to: "topk", label: "k등 교체" },
+    { from: "heap", to: "merge", label: "다음 원소" },
+  ]}
+/>
+
+- 타이머: Node.js는 `setTimeout`을 같은 지연 시간끼리 리스트로 묶고, 그 리스트들을 만료 시각 순으로 우선순위 큐에 둔다. Node 소스의 `lib/internal/priority_queue.js`가 그 힙이다. 그 아래 libuv도 타이머를 최소 힙으로 관리해서, 이벤트 루프가 "다음 타이머까지 얼마나 잘 수 있나"를 루트 하나로 안다. 이벤트 루프 쪽 이야기는 [이벤트 루프 글](/posts/event-loop)과 [타이머 정확도 글](/posts/js-timers-accuracy)에 있다.
+- 최단 경로: 다익스트라는 "아직 확정 안 된 정점 중 가장 가까운 것"을 반복해서 꺼낸다. 힙으로 O((V + E) log V)다. 지도 길찾기 맥락은 [지도·경로 글](/posts/sd-maps-tiles-routing)에서, 그래프 탐색 기초는 [그래프 글](/posts/ds-graph-bfs-dfs)에서 다룬다.
+- 작업 스케줄링: 마감이나 우선순위가 있는 작업 큐, 시뮬레이션의 "다음 이벤트" 처리.
+
+JS와 Node에는 공개된 우선순위 큐가 없다. 위의 Node 내부 모듈은 `--expose-internals` 플래그로만 보이는 내부 구현이라 애플리케이션에서 쓰면 안 된다. 직접 50줄 남짓 짜거나 검증된 패키지를 쓴다. 직접 짤 때는 위의 실수 세 가지(비교 함수 모양, 같은 우선순위 순서, 밖에서 우선순위 바꾸기)와 빈 힙에서 꺼내기를 테스트로 먼저 막아 둔다.
+
+힙을 고를 신호는 단순하다. 코드에 "정렬한 뒤 맨 앞만 쓴다"가 반복해서 나오면 힙 자리다. 반대로 맨 앞 말고 중간 값을 찾거나, 정렬된 전체가 필요하거나, 우선순위를 자주 바꿔야 하면 힙이 맞지 않는다. 힙은 순서를 딱 루트 하나만큼만 지키고, 그 대신 넣기와 꺼내기를 log n에 묶어 둔 구조다.
+
+## 면접에서 나올 만한 질문
+
+### 힙은 어떤 자료구조이고 연산 비용은 어떻게 되나요?
+
+모든 부모가 자식보다 작거나 같은(최소 힙) 완전 이진 트리다. 가장 작은 값 보기는 루트를 읽으니 O(1), 넣기와 꺼내기는 한 층씩 올리거나 내리니 높이만큼인 O(log n)이다. 완전 이진 트리라 높이가 항상 log n으로 고정되어 BST처럼 기울지 않는다. 아무 값 찾기는 순서 정보가 없어서 O(n)이다.
+
+### 힙을 왜 배열로 구현하나요?
+
+빈틈없이 채운 완전 이진 트리라서 위에서 아래, 왼쪽에서 오른쪽 순서로 배열에 담으면 인덱스 계산만으로 가족을 찾을 수 있기 때문이다. i의 부모는 (i − 1) / 2를 내린 값, 자식은 2i + 1과 2i + 2다. 포인터와 노드 객체가 필요 없어 메모리가 작고, 연속된 메모리라 캐시에도 유리하다.
+
+### heapify가 O(n log n)이 아니라 O(n)인 이유는 무엇인가요?
+
+아래에서부터 siftDown을 부르면 노드 대부분이 짧은 거리만 내려가기 때문이다. 노드 절반은 잎이라 안 움직이고, 1/4은 한 층, 1/8은 두 층만 내려가서 전부 더하면 n의 상수배다. 실제로 내림차순 100만 개를 하나씩 push하면 바꾸기가 1,795만 번이었지만 heapify는 100만 번이 안 됐다.
+
+### 배열 100만 개에서 상위 10개를 구하려면 어떻게 하나요?
+
+크기 10짜리 최소 힙을 두고, 새 값이 루트(현재 10등)보다 크면 루트와 바꿔 내린다. O(n log k)이고 메모리는 k개만 쓰니 스트림에도 쓸 수 있다. 측정에서 전체 정렬이 390ms일 때 힙은 25ms였다. 한 번만 구하고 순서가 필요 없다면 quickselect로 평균 O(n)도 가능하다.
+
+### 상위 k개를 구하는데 왜 최대 힙이 아니라 최소 힙을 쓰나요?
+
+지켜야 할 것이 "상위 k개 중 가장 작은 값", 즉 다음에 밀려날 후보라서다. 최소 힙이면 그 값이 루트에 있어 새 값과 O(1)에 비교하고 O(log k)에 바꾼다. 최대 힙에 전부 넣고 k번 꺼내도 되지만 그러면 n개를 다 들고 있어야 해서 O(n) 메모리와 heapify 비용이 든다.
+
+### 힙은 같은 우선순위의 순서를 지키나요?
+
+지키지 않는다. 자리 바꾸기가 같은 값의 상대 순서를 섞어서, 우선순위가 같은 작업이 들어온 순서와 다르게 나온다. 넣을 때마다 증가하는 번호를 두 번째 비교 기준으로 붙이면 들어온 순서가 보장된다. 작업 큐에서 이걸 빼먹으면 오래 기다린 작업이 계속 밀릴 수 있다.
+
+### 스트림에서 중앙값을 계속 구하려면 어떻게 하나요?
+
+아래 절반은 최대 힙, 위 절반은 최소 힙에 두고 크기 차이를 1 이하로 맞춘다. 중앙값은 두 루트만 보면 되니 O(1), 넣기는 힙 연산 몇 번이라 O(log n)이다. 최근 N개만 보려면 오래된 값을 지워야 해서 lazy deletion을 붙이고, 값이 아주 많으면 히스토그램 같은 근사 구조를 쓴다.
+
+### 힙에 들어 있는 원소의 우선순위를 바꿔야 하면 어떻게 하나요?
+
+원소를 밖에서 고치기만 하면 힙 규칙이 깨진다. 원소의 인덱스를 따로 기억해 두고 바꾼 뒤 그 자리에서 올리기나 내리기를 다시 하거나(decrease-key), 새 우선순위로 한 번 더 넣고 꺼낼 때 낡은 항목을 건너뛴다. 다익스트라 구현은 보통 뒤쪽 방법을 쓴다. 힙에 중복 항목이 쌓이는 대신 코드가 단순하다.

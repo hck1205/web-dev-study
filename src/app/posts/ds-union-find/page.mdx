@@ -1,0 +1,371 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ds-union-find");
+
+같은 사람이 만든 계정끼리 묶는 기능을 생각해 보자. 이메일이나 휴대폰 번호가 겹치는 계정은 같은 사람으로 보고 잇는다. 연결 정보는 계속 들어오고, 로그인할 때마다 "이 두 계정이 같은 사람인가"를 물어야 한다. 처음 떠오르는 방법은 계정을 정점, 연결을 간선으로 둔 그래프에서 [BFS](/posts/ds-graph-bfs-dfs)를 돌리는 것이다.
+
+계정 10만 개, 연결 8만 개를 만들고 Node 22에서 두 방법으로 1,000번 물어봤다.
+
+```text
+BFS per query   9.641ms/query same=405 visited/query=27743
+union-find      build 16.1ms, 0.218us/query same=405
+groups=25605 biggest=64156
+```
+
+답은 둘 다 405번 "같은 사람"이다. BFS는 질문마다 평균 2만 7,743개 계정을 훑어 9.6ms가 걸렸다. 연결이 무작위라 6만 4천 개짜리 큰 덩어리가 생겼고, 그 안의 두 계정을 물으면 덩어리를 거의 다 돌아야 한다. 아래 줄의 유니온 파인드(Union-Find)는 연결 8만 개를 16ms에 다 넣고, 질문 하나에 0.22µs로 답했다. 4만 배쯤 빠르다.
+
+유니온 파인드는 "서로소 집합(disjoint set)"을 다루는 구조다. 할 줄 아는 일은 두 가지뿐이다. 두 원소를 같은 그룹으로 합치기(union), 그리고 어떤 원소가 속한 그룹의 대표 찾기(find). 경로를 알려 주지도, 그룹을 다시 쪼개지도 못한다. 대신 그 두 가지를 거의 상수 시간에 한다. 이 글은 그 "거의 상수"가 어디서 오는지 직접 재 보고, 크루스칼 알고리즘과 Redundant Connection 같은 면접 문제로 이어 간다. 그래프 탐색은 [그래프와 BFS·DFS](/posts/ds-graph-bfs-dfs), 전체 지도는 [자료구조 한눈에 고르기](/posts/data-structures-overview)에 있다.
+
+## 배열 하나로 숲을 만든다
+
+유니온 파인드는 그룹 하나를 나무 하나로 표현한다. 나무의 뿌리가 그 그룹의 대표다. 그런데 나무를 객체와 포인터로 만들 필요가 없다. 원소를 0부터 n-1까지 번호로 두고, `parent[i]`에 i의 부모 번호를 적은 배열 하나면 된다. 뿌리는 자기 자신을 부모로 가리킨다.
+
+```js
+class UnionFind {
+  constructor(n) {
+    this.parent = Array.from({ length: n }, (_, i) => i); // 처음엔 모두 자기 자신이 대표
+    this.size = new Array(n).fill(1);                     // 뿌리일 때만 의미 있는 그룹 크기
+    this.count = n;                                       // 그룹 수
+  }
+  find(x) {
+    let root = x;
+    while (this.parent[root] !== root) root = this.parent[root]; // 대표까지 올라간다
+    while (this.parent[x] !== root) {                            // 지나온 길을 대표에 바로 붙인다
+      const next = this.parent[x]; this.parent[x] = root; x = next;
+    }
+    return root;
+  }
+  union(a, b) {
+    let ra = this.find(a), rb = this.find(b);
+    if (ra === rb) return false;                            // 이미 같은 그룹
+    if (this.size[ra] < this.size[rb]) [ra, rb] = [rb, ra]; // 작은 나무를 큰 나무 밑에
+    this.parent[rb] = ra; this.size[ra] += this.size[rb];
+    this.count--;
+    return true;
+  }
+}
+```
+
+원소 8개로 여섯 번 합쳐 봤다. 매번 `parent` 배열과 그룹 수를 찍었다.
+
+```text
+union(0,1) true parent=[0,0,2,3,4,5,6,7] groups=7
+union(2,3) true parent=[0,0,2,2,4,5,6,7] groups=6
+union(1,3) true parent=[0,0,0,2,4,5,6,7] groups=5
+union(4,5) true parent=[0,0,0,2,4,4,6,7] groups=4
+union(6,7) true parent=[0,0,0,2,4,4,6,6] groups=3
+union(5,7) true parent=[0,0,0,2,4,4,4,6] groups=2
+same(0,2) true same(0,4) false
+union(0,2) false groups 2
+```
+
+<AlgoTrace
+  caption="union을 할 때마다 parent 배열에서 한 칸만 바뀐다"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7"]}
+  memoryLabel="parent 배열 / 그룹 수"
+  steps={[
+    { memory: ["0 1 2 3 4 5 6 7", "8그룹"], caption: "처음엔 모두 자기 자신을 가리킨다. 여덟 그룹이다." },
+    { pointer: 1, found: [0, 1], memory: ["0 0 2 3 4 5 6 7", "7그룹"], caption: "union(0,1): 1의 부모를 0으로 바꾼다. 칸 하나만 바뀌었다." },
+    { pointer: 3, found: [2, 3], memory: ["0 0 2 2 4 5 6 7", "6그룹"], caption: "union(2,3): 3이 2 밑으로 들어간다." },
+    { pointer: 2, found: [0, 1, 2, 3], memory: ["0 0 0 2 4 5 6 7", "5그룹"], caption: "union(1,3): 1의 대표 0과 3의 대표 2를 찾아, 대표끼리 잇는다. 3은 그대로 2를 가리킨다." },
+    { pointer: 6, found: [4, 5, 6, 7], memory: ["0 0 0 2 4 4 4 6", "2그룹"], caption: "4, 5와 6, 7을 묶고 union(5,7)로 두 덩어리를 대표끼리 잇는다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["find(3) = 2 → 0", "union(0,2)는 false"], caption: "3에서 2, 0으로 올라가면 대표 0이다. 0과 2는 이미 같은 그룹이라 union이 false를 돌려준다." },
+  ]}
+/>
+
+<ConceptDiagram
+  caption="마지막 parent 배열이 그리는 숲. 화살표는 부모를 가리킨다"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "n0", label: "0", sub: "대표", x: 100, y: 40, w: 52 },
+    { id: "n1", label: "1", x: 50, y: 120, w: 40 },
+    { id: "n2", label: "2", x: 150, y: 120, w: 40 },
+    { id: "n3", label: "3", x: 150, y: 195, w: 40 },
+    { id: "n4", label: "4", sub: "대표", x: 300, y: 40, w: 52 },
+    { id: "n5", label: "5", x: 250, y: 120, w: 40 },
+    { id: "n6", label: "6", x: 350, y: 120, w: 40 },
+    { id: "n7", label: "7", x: 350, y: 195, w: 40 },
+  ]}
+  edges={[
+    { from: "n1", to: "n0" },
+    { from: "n2", to: "n0" },
+    { from: "n3", to: "n2" },
+    { from: "n5", to: "n4" },
+    { from: "n6", to: "n4" },
+    { from: "n7", to: "n6" },
+  ]}
+/>
+
+"두 원소가 같은 그룹인가"는 `find(a) === find(b)`다. 두 그룹을 합칠 때 원소를 하나하나 옮기지 않고, 대표 하나를 다른 대표 밑에 붙이기만 하는 게 이 구조의 요령이다. 그룹이 6만 개짜리여도 바뀌는 칸은 하나다.
+
+## 한 줄로 늘어진 나무
+
+위 코드에는 두 가지 장치가 들어 있다. 작은 나무를 큰 나무 밑에 붙이는 것, 그리고 `find`가 지나온 길을 대표에 바로 붙이는 것. 둘을 빼면 어떻게 되는지부터 보자.
+
+가장 단순한 버전은 `union(a, b)`에서 무조건 `parent[find(b)] = find(a)`로 붙인다. 그리고 `union(1, 0)`, `union(2, 1)`, `union(3, 2)` 순서로 넣으면 0 → 1 → 2 → 3 → … 으로 나무가 한 줄 사슬이 된다. 원소 10만 개로 이 순서를 넣고 `find(0)`을 1,000번 불러 부모를 따라간 횟수를 셌다. 장치를 하나씩 켠 네 가지 버전을 비교했다.
+
+```text
+-- chain unions n=100000, then 1000 x find(0)
+naive          depth= 99999 steps=  99999000 unions 4.4ms finds 269.6ms
+size only      depth=     1 steps=    100997 unions 10.6ms finds 0.0ms
+compress only  depth= 99999 steps=    100998 unions 8.2ms finds 3.8ms
+size+compress  depth=     1 steps=    100997 unions 3.0ms finds 0.0ms
+```
+
+장치가 없는 `naive`는 깊이가 99,999다. `find(0)` 한 번에 부모를 99,999번 따라가고, 1,000번이면 1억 번이다. 이러면 유니온 파인드가 아니라 연결 리스트다.
+
+## 작은 나무를 큰 나무 밑에
+
+첫 번째 장치는 합칠 때 크기가 작은 쪽의 대표를 큰 쪽 대표 밑에 붙이는 것이다(union by size). 위 결과의 `size only` 줄에서 같은 순서로 넣었는데 깊이가 1이다. 새로 들어오는 원소 하나짜리 나무가 매번 큰 나무의 뿌리 밑에 바로 붙기 때문이다.
+
+이 규칙 하나로 나무 높이가 log₂ n을 넘지 않는다는 게 보장된다. 이유가 꼬리 질문으로 잘 나온다. 어떤 원소의 깊이가 1 늘어나는 건 그 원소가 속한 나무가 다른 나무 밑에 붙을 때뿐이다. 그런데 작은 쪽이 밑으로 가니, 붙는 순간 그 원소가 속한 나무의 크기는 적어도 두 배가 된다. 크기는 n을 넘을 수 없으니 두 배가 되는 일은 log₂ n번까지만 일어난다. 원소 100만 개면 깊이가 많아야 19다.
+
+크기 대신 랭크(rank, 나무 높이의 상한)를 비교해도 같은 보장이 나온다. 교과서는 랭크를 많이 쓰고, 실무 코드는 크기를 많이 쓴다. 크기를 들고 있으면 "이 그룹에 몇 명이 있나"까지 바로 답할 수 있어서다. 처음 예제의 6만 4,156명짜리 덩어리가 그 값이다.
+
+<AlgoTrace
+  caption="크기 3짜리 나무와 크기 1짜리 나무를 합치는 두 방법"
+  cells={["A", "B", "C", "X"]}
+  memoryLabel="합친 뒤 가장 깊은 원소"
+  steps={[
+    { pointer: 0, found: [0, 1, 2], memory: ["A가 대표, B·C는 깊이 1"], caption: "A가 대표인 크기 3 나무와, 혼자인 X가 있다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["X 깊이 1", "B·C 깊이 1"], caption: "X를 A 밑에 붙이면 X만 깊이 1이 되고 나머지는 그대로다." },
+    { pointer: 0, memory: ["B·C 깊이 2", "A 깊이 1"], caption: "반대로 A를 X 밑에 붙이면 B와 C가 한 칸씩 내려가 깊이 2가 된다. 많은 원소가 한꺼번에 깊어진다." },
+  ]}
+/>
+
+## 지나온 길을 대표에 바로 붙인다
+
+두 번째 장치는 경로 압축(path compression)이다. `find(x)`로 대표를 찾았으면, 올라오며 지나친 원소들의 부모를 전부 대표로 바꿔 둔다. 다음에 그 원소들을 찾을 때는 한 번에 대표에 닿는다.
+
+```js
+find(x) {
+  let root = x;
+  while (this.parent[root] !== root) root = this.parent[root]; // 1) 대표까지 올라간다
+  while (this.parent[x] !== root) {                            // 2) 같은 길을 다시 걸으며
+    const next = this.parent[x]; this.parent[x] = root; x = next; //    부모를 대표로 바꾼다
+  }
+  return root;
+}
+```
+
+<AlgoTrace
+  caption="사슬 0→1→2→3→4에서 find(0) 한 번이 나무를 납작하게 만든다"
+  cells={["0", "1", "2", "3", "4"]}
+  memoryLabel="parent 배열"
+  steps={[
+    { pointer: 0, memory: ["1 2 3 4 4"], caption: "0의 부모는 1, 1의 부모는 2. 한 줄로 늘어진 사슬이다." },
+    { pointer: 4, found: [4], memory: ["1 2 3 4 4"], caption: "부모를 네 번 따라가 대표 4를 찾는다." },
+    { pointer: 0, found: [4], memory: ["4 2 3 4 4"], caption: "다시 0부터 걸으며 0의 부모를 4로 바꾼다." },
+    { pointer: 2, found: [4], memory: ["4 4 4 4 4"], caption: "1과 2도 4를 가리키게 된다. 3은 이미 4를 가리키고 있었다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["4 4 4 4 4"], caption: "이제 어느 원소든 한 번에 대표에 닿는다. 비싼 find 한 번이 뒤의 find를 싸게 만들었다." },
+  ]}
+/>
+
+앞의 측정에서 `compress only` 줄이 이 모습이다. union만 할 때는 `find`가 대표인 원소만 불려서 압축할 길이 없었고, 깊이 99,999짜리 사슬이 그대로 생겼다. 그런데 `find(0)` 첫 번째가 99,999번을 걸으면서 사슬 전체를 대표에 붙였고, 나머지 999번은 한 번씩만 걸었다. 그래서 총 10만 998번이다. 처음 한 번이 비싸고 나머지가 싸지는 이런 모양을 분할 상환 분석으로 센다. 하나하나는 들쭉날쭉해도 연산 여러 번의 평균이 작다는 뜻이다.
+
+경로 압축을 한 번 더 걷지 않고 하는 변형도 많이 쓴다. 올라가면서 `parent[x] = parent[parent[x]]`로 할아버지를 가리키게 하는 경로 절반화(path halving)다. 반복문 하나로 끝나고 이론적 보장도 같다. 뒤의 크루스칼 코드가 이 방식이다.
+
+## 둘을 합치면 사실상 상수
+
+두 장치를 함께 쓰면 연산 m번에 O(m α(n))이 든다는 게 증명되어 있다. α는 역 아커만 함수로, 극단적으로 느리게 자라서 실용적인 모든 n에서 4를 넘지 않는다. 그래서 면접에서는 "연산당 분할 상환 거의 O(1)"이라고 말하고, 정확히는 α(n)이라고 덧붙이면 된다.
+
+사슬이라는 최악 말고 무작위 순서에서는 어떨까. 원소 10만 개에 무작위 union 10만 번, find 10만 번을 하고, 부모를 따라간 횟수를 연산 수로 나눴다. 각 버전을 세 번씩 돌려 마지막 결과를 적었다.
+
+```text
+-- random n=100000: 100000 unions + 100000 finds
+naive          maxDepth=10182 steps/op=2601.44 6643ms
+size only      maxDepth=  8 steps/op=1.21 9ms
+compress only  maxDepth=  4 steps/op=1.73 10ms
+size+compress  maxDepth=  3 steps/op=0.79 8ms
+```
+
+무작위여도 장치가 없으면 깊이 1만이 넘는 나무가 생겨 6.6초가 걸렸다. 장치 하나만 켜도 연산당 1~2번으로 떨어진다. 원소를 100만 개로 늘려도(장치 없는 버전은 너무 오래 걸려 뺐다) 모양이 거의 같다.
+
+```text
+-- random n=1000000: 1000000 unions + 1000000 finds
+size only      maxDepth=  9 steps/op=1.21 308ms
+compress only  maxDepth=  5 steps/op=1.93 362ms
+size+compress  maxDepth=  4 steps/op=0.79 221ms
+```
+
+원소가 10배 늘었는데 연산당 걸음 수는 그대로고, 둘 다 켠 버전의 최대 깊이는 4다. 하나만 켜도 무작위 입력에서는 충분히 빠르지만, 크기 규칙만 쓰면 최악이 O(log n), 압축만 쓰면 분할 상환 O(log n)이다. 둘 다 몇 줄이면 되니 같이 쓰는 게 기본이다.
+
+## 재귀 find가 죽는 순간
+
+경로 압축은 재귀로 쓰면 한 줄이라 많이들 이렇게 외운다.
+
+```js
+const findRec = (x) => (parent[x] === x ? x : (parent[x] = findRec(parent[x])));
+```
+
+짧고 맞는 코드다. 그런데 압축이 일어나기 전의 나무가 깊으면 호출 스택이 먼저 터진다. 크기 규칙 없이 사슬 10만 개를 만든 뒤 불러 봤다.
+
+```text
+RangeError: Maximum call stack size exceeded
+```
+
+크기 규칙을 같이 쓰면 깊이가 log₂ n으로 묶이니 재귀도 안전하다. 크기 규칙을 빼먹었거나 입력이 어떤 순서로 올지 모르면, 위의 반복문 버전이나 경로 절반화로 쓴다. 재귀 깊이 한계는 [그래프 글의 측정](/posts/ds-graph-bfs-dfs)에서 수천 단계였다.
+
+## 그룹이 몇 개 남았나
+
+`count`를 n에서 시작해 union이 실제로 두 그룹을 합칠 때만 하나씩 줄이면, 언제든 그룹 수를 O(1)에 알 수 있다. LeetCode 547번 Number of Provinces, 323번 Number of Connected Components가 이것으로 끝난다. 처음 예제의 `groups=25605`는 자기 자신을 가리키는 원소, 즉 대표의 수를 다시 훑어 센 값이다. `count`를 들고 있으면 이렇게 훑을 필요가 없다.
+
+[섬 개수 문제](/posts/ds-graph-bfs-dfs)도 유니온 파인드로 풀 수 있다. 땅 칸마다 오른쪽과 아래 땅 칸을 union하고 남은 그룹 수를 센다. 격자가 고정이면 BFS가 더 간단하다. 유니온 파인드가 빛나는 건 305번 Number of Islands II처럼 땅이 하나씩 생기고 그때마다 섬 수를 물을 때다. BFS는 매번 다시 훑어야 하지만, 유니온 파인드는 새 칸을 이웃 땅과 union하기만 하면 된다.
+
+## 싼 선부터 고르는 크루스칼
+
+사무실 여섯 곳을 광케이블로 이어 서로 통하게 하려고 한다. 이을 수 있는 구간마다 비용이 다르다. 모두 연결되면서 비용 합이 가장 작은 선 집합, 최소 신장 트리(MST)를 찾는 문제다.
+
+크루스칼 알고리즘은 선을 비용 순으로 정렬해 싼 것부터 본다. 선의 양끝이 아직 다른 그룹이면 그 선을 고르고 두 그룹을 합친다. 이미 같은 그룹이면 그 선은 고리를 만들 뿐이니 버린다. "이미 같은 그룹인가"를 묻는 데 유니온 파인드가 쓰인다.
+
+```js
+const parent = names.map((_, i) => i);
+const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }; // 경로 절반화
+const sorted = [...edges].sort((p, q) => p[2] - q[2]);  // 싼 선부터
+for (const [a, b, w] of sorted) {
+  const ra = find(a), rb = find(b);
+  if (ra === rb) { console.log(`skip ...: 이미 연결됨`); continue; }
+  parent[ra] = rb; total += w; chosen.push(label);
+  if (chosen.length === names.length - 1) break;         // 선 V-1개면 끝
+}
+```
+
+```text
+take B-C(1)
+take B-D(2)
+take D-E(2)
+take A-C(3)
+skip A-B(4): 이미 연결됨
+skip C-D(4): 이미 연결됨
+skip C-E(5): 이미 연결됨
+take E-F(6)
+MST B-C(1) B-D(2) D-E(2) A-C(3) E-F(6) total 14
+```
+
+<AlgoTrace
+  caption="비용 순으로 정렬한 선을 하나씩 본다"
+  cells={["B-C 1", "B-D 2", "D-E 2", "A-C 3", "A-B 4", "C-D 4", "C-E 5", "E-F 6", "D-F 7"]}
+  memoryLabel="그룹"
+  steps={[
+    { pointer: 0, found: [0], memory: ["BC", "A", "D", "E", "F"], caption: "가장 싼 B-C를 고른다. B와 C가 한 그룹이 된다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["BCDE", "A", "F"], caption: "B-D, D-E도 서로 다른 그룹을 잇는다. 둘 다 고른다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["ABCDE", "F"], caption: "A-C로 A가 들어온다. 이제 F만 따로다." },
+    { pointer: 6, found: [0, 1, 2, 3], memory: ["ABCDE", "F"], caption: "A-B, C-D, C-E는 양끝이 이미 같은 그룹이다. 고르면 고리가 생기니 버린다." },
+    { pointer: 7, found: [0, 1, 2, 3, 7], memory: ["ABCDEF"], caption: "E-F로 F까지 이어졌다. 선 다섯 개(정점 수 - 1)를 골랐으니 D-F는 보지 않고 끝낸다." },
+  ]}
+/>
+
+<VectorSpace
+  caption="고른 선이 차례로 이어진다. 이 예제의 MST는 A-C-B-D-E-F 한 줄이다"
+  width={400}
+  height={260}
+  points={[
+    { id: "A", label: "A", x: 45, y: 130 },
+    { id: "B", label: "B", x: 155, y: 50 },
+    { id: "C", label: "C", x: 155, y: 210 },
+    { id: "D", label: "D", x: 260, y: 90 },
+    { id: "E", label: "E", x: 270, y: 205 },
+    { id: "F", label: "F", x: 365, y: 140, labelAt: "left" },
+  ]}
+  edges={[["A", "B"], ["A", "C"], ["B", "C"], ["B", "D"], ["C", "D"], ["D", "E"], ["E", "F"], ["D", "F"], ["C", "E"]]}
+  steps={[
+    { caption: "이을 수 있는 구간 아홉 개. 비용은 위 표의 숫자다.", showEdges: true },
+    { caption: "B-C(1)를 고른다.", showEdges: true, path: ["B", "C"] },
+    { caption: "B-D(2)와 D-E(2)를 고른다.", showEdges: true, path: ["C", "B", "D", "E"] },
+    { caption: "A-C(3)를 고른다. A-B, C-D, C-E는 고리를 만들어 버린다.", showEdges: true, path: ["A", "C", "B", "D", "E"] },
+    { caption: "E-F(6)로 끝난다. 비용 합은 14다.", showEdges: true, path: ["A", "C", "B", "D", "E", "F"] },
+  ]}
+/>
+
+시간은 간선 정렬의 O(E log E)가 대부분이고, 유니온 파인드 부분은 E번 연산에 거의 선형이다. 같은 문제를 푸는 프림 알고리즘은 한 정점에서 출발해 [힙](/posts/ds-heap)으로 가장 싼 바깥 선을 하나씩 끌어온다. 간선이 적은 그래프는 크루스칼, 간선이 아주 많은 빽빽한 그래프는 프림이 대체로 낫다.
+
+## 고리를 만드는 첫 간선
+
+LeetCode 684번 Redundant Connection은 크루스칼에서 "버리는 선"만 떼어 낸 문제다. 1부터 n까지 정점의 트리에 간선 하나를 더해 고리가 생긴 그래프가 간선 목록으로 주어진다. 지우면 다시 트리가 되는 간선을 찾되, 답이 여럿이면 목록에서 가장 나중에 나온 것을 돌려준다.
+
+간선을 순서대로 union하다가, 양끝이 이미 같은 그룹인 간선을 처음 만나면 그게 답이다. 그 전까지의 간선은 고리 없이 이어졌고, 이 간선이 처음으로 고리를 닫았다. 고리 위의 다른 간선들은 모두 이보다 앞에 나왔으니 "가장 나중"이라는 조건도 맞는다.
+
+<AlgoTrace
+  caption="[[1,2],[2,3],[3,4],[1,4],[1,5]]를 순서대로 union한다"
+  cells={["1-2", "2-3", "3-4", "1-4", "1-5"]}
+  memoryLabel="그룹"
+  steps={[
+    { pointer: 0, memory: ["12", "3", "4", "5"], caption: "1과 2를 합친다." },
+    { pointer: 2, memory: ["1234", "5"], caption: "2-3, 3-4까지 합치면 1, 2, 3, 4가 한 그룹이다." },
+    { pointer: 3, found: [3], memory: ["1234", "5"], caption: "1-4의 양끝은 이미 같은 그룹이다. 이 간선이 고리를 닫았다. 답은 [1,4]다." },
+  ]}
+/>
+
+<CodePlayground
+  caption="Redundant Connection"
+  functionName="findRedundantConnection"
+  initialCode={`function findRedundantConnection(edges) {
+  // 정점은 1..n (n = edges.length)
+  // 간선을 순서대로 union하다가 양끝이 이미 같은 그룹이면 그 간선을 돌려준다
+  return [];
+}`}
+  solution={`function findRedundantConnection(edges) {
+  const parent = Array.from({ length: edges.length + 1 }, (_, i) => i);
+  const find = (x) => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  for (const [a, b] of edges) {
+    const ra = find(a), rb = find(b);
+    if (ra === rb) return [a, b];
+    parent[ra] = rb;
+  }
+  return [];
+}`}
+  tests={[
+    { args: [[[1, 2], [1, 3], [2, 3]]], expected: [2, 3], label: "삼각형" },
+    { args: [[[1, 2], [2, 3], [3, 4], [1, 4], [1, 5]]], expected: [1, 4], label: "사각형 고리 + 꼬리" },
+    { args: [[[1, 4], [3, 4], [1, 3], [1, 2], [4, 5]]], expected: [1, 3], label: "고리가 앞쪽에" },
+    { args: [[[2, 1], [3, 1], [4, 2], [1, 4]]], expected: [1, 4], label: "정점 순서가 뒤섞임" },
+    { args: [[[1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 1]]], expected: [8, 1], label: "큰 원" },
+    { args: [[[3, 4], [1, 2], [2, 4], [3, 5], [2, 5]]], expected: [2, 5], label: "따로 자라다 만난다" },
+  ]}
+/>
+
+마지막 테스트는 3-4와 1-2가 따로 자라다가 2-4에서 만나고, 3-5까지 붙은 뒤 2-5가 3-4-2-5-3 고리를 닫는다. 그룹이 여러 개였다가 합쳐지는 순서를 따라가 보면 대표끼리만 이어 붙이는 이유가 보인다. 방향 그래프 버전인 685번은 부모가 둘인 정점까지 따져야 해서 훨씬 까다롭다.
+
+## 유니온 파인드가 못 하는 일
+
+합치기만 되고 쪼개기는 안 된다. 계정 연결을 해제하거나 친구를 끊는 기능이 있으면 그 순간 그룹을 다시 계산해야 한다. 지울 일이 적으면 지울 때만 그 그룹을 BFS로 다시 만들고, 모든 질의를 미리 알고 있으면 시간을 거꾸로 돌려 "지우기"를 "합치기"로 바꾸는 오프라인 기법을 쓴다. 삭제와 질의가 계속 섞여 들어오는 일반적인 동적 연결성 문제는 훨씬 어려운 자료구조가 필요하다.
+
+경로도 모른다. 같은 그룹이라는 건 알려 주지만 어떤 간선을 거쳐 이어졌는지, 몇 단계인지는 모른다. 그건 BFS의 일이다. 방향도 다루지 못한다. "A가 B에 의존한다"처럼 방향이 중요한 관계의 사이클은 [색 세 가지 DFS나 위상 정렬](/posts/ds-graph-bfs-dfs)로 찾는다.
+
+원소가 문자열이면 번호를 붙이는 단계가 하나 더 든다. 계정 ID나 이메일을 [해시맵](/posts/ds-hash-map)으로 0부터 번호에 대응시키고 배열을 쓰는 게 보통이다. LeetCode 721번 Accounts Merge가 정확히 이 모양이다. 이메일마다 처음 본 계정 번호를 적어 두고, 같은 이메일이 다른 계정에서 나오면 두 계정을 union한다.
+
+고르는 기준은 단순하다. 연결이 계속 추가되고 "같은 그룹인가", "그룹이 몇 개인가", "이 간선이 고리를 만드나"를 자주 물으면 유니온 파인드다. 그래프가 고정이고 질문이 몇 번 안 되면 BFS 한 번이 더 간단하다. 경로나 거리가 필요하면 BFS, 삭제가 잦으면 다른 방법을 찾는다.
+
+## 면접에서 나올 만한 질문
+
+### 유니온 파인드는 무엇이고 어떤 연산을 지원하나요?
+
+서로 겹치지 않는 그룹들을 관리하는 구조로, 두 원소의 그룹을 합치는 union과 원소가 속한 그룹의 대표를 찾는 find를 지원한다. 그룹을 나무로, 나무 전체를 parent 배열 하나로 표현한다. 두 원소가 같은 그룹인지는 find 결과가 같은지로 본다.
+
+### 최적화 없이 쓰면 왜 느려지나요?
+
+합치는 순서에 따라 나무가 한 줄 사슬이 되어 find가 O(n)이 된다. 원소 10만 개로 사슬을 만들고 find(0)을 1,000번 부르니 부모를 1억 번 따라갔다. 무작위 순서에서도 깊이가 1만을 넘었다.
+
+### union by rank나 size가 높이를 log n으로 묶는 이유는요?
+
+작은 나무를 큰 나무 밑에 붙이면, 어떤 원소의 깊이가 1 늘어날 때마다 그 원소가 속한 나무의 크기가 적어도 두 배가 된다. 크기는 n을 넘지 못하니 깊이는 log₂ n을 넘지 못한다. 크기를 쓰면 그룹의 원소 수도 함께 알 수 있다.
+
+### 경로 압축은 무엇이고, 둘을 함께 쓰면 복잡도가 어떻게 되나요?
+
+find로 대표를 찾은 뒤 지나온 원소들이 대표를 바로 가리키게 바꾸는 것이다. 한 번은 비싸도 이후 같은 길의 find가 한 번에 끝난다. 두 기법을 같이 쓰면 연산당 분할 상환 O(α(n))이고, α는 역 아커만 함수라 실용적인 모든 n에서 4 이하다. 원소 100만 개에서 최대 깊이가 4였다.
+
+### 재귀 find를 쓰면 문제가 없나요?
+
+압축 전 나무가 깊으면 호출 스택이 터진다. 크기 규칙 없이 사슬 10만 개를 만들고 재귀 find를 부르니 RangeError가 났다. 크기나 랭크 규칙을 같이 쓰면 깊이가 log n으로 묶여 안전하고, 아니면 반복문이나 경로 절반화로 쓴다.
+
+### 크루스칼 알고리즘에서 유니온 파인드는 어떤 역할을 하나요?
+
+간선을 비용 순으로 정렬해 보면서, 양끝이 이미 같은 그룹인지 find로 확인한다. 같은 그룹이면 고리를 만드니 버리고, 아니면 고르고 union한다. 전체 시간은 정렬의 O(E log E)가 지배하고 유니온 파인드 부분은 거의 선형이다.
+
+### BFS로도 연결 여부를 알 수 있는데 언제 유니온 파인드를 쓰나요?
+
+연결이 계속 추가되면서 같은 그룹인지 자주 물을 때다. BFS는 질문마다 O(V + E)를 다시 훑고, 유니온 파인드는 거의 상수다. 측정에서 질의당 9.6ms와 0.22µs였다. 대신 유니온 파인드는 그룹을 쪼개지 못하고 경로도 모르니, 삭제가 잦거나 경로가 필요하면 BFS를 쓴다.

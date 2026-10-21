@@ -1,0 +1,442 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ds-stack-queue-deque");
+
+조직도나 카테고리 트리를 위에서부터 한 층씩 훑는 너비 우선 탐색(BFS)을 짰다. 큐는 배열로 만들고 `push`로 넣고 `shift`로 뺐다. 노드 1만 개에서는 6ms였는데, 노드를 30만 개로 늘리자 2분 가까이 걸렸다. 큐를 바꾸는 한 줄만 고치면 29ms다.
+
+```js
+// 자식이 10개씩인 트리(노드 i의 자식은 10i+1 … 10i+10)를 너비 우선으로 훑는다
+function bfs(total, queue) {
+  let visited = 0, maxLen = 0;
+  queue.push(0);
+  while (!queue.isEmpty()) {
+    const node = queue.shift();
+    visited++;
+    for (let k = 1; k <= 10; k++) {
+      const child = node * 10 + k;
+      if (child < total) queue.push(child);
+    }
+    maxLen = Math.max(maxLen, queue.size());
+  }
+  return { visited, maxLen };
+}
+const arrayShift = () => { const a = []; return { push: (x) => a.push(x), shift: () => a.shift(), isEmpty: () => a.length === 0, size: () => a.length }; };
+const headIndex = () => { const a = []; let h = 0; return { push: (x) => a.push(x), shift: () => a[h++], isEmpty: () => h === a.length, size: () => a.length - h }; };
+
+for (const total of [10_000, 100_000, 300_000]) {
+  for (const [name, mk] of [["array.shift()", arrayShift], ["head index", headIndex]]) {
+    const t = performance.now();
+    const r = bfs(total, mk());
+    console.log(String(total).padStart(7), name.padEnd(14), (performance.now() - t).toFixed(1).padStart(8) + "ms", "최대 큐 길이", r.maxLen);
+  }
+}
+```
+
+```text
+  10000 array.shift()       5.9ms 최대 큐 길이 9000
+  10000 head index          6.9ms 최대 큐 길이 9000
+ 100000 array.shift()   12343.1ms 최대 큐 길이 90000
+ 100000 head index          7.4ms 최대 큐 길이 90000
+ 300000 array.shift()  115302.9ms 최대 큐 길이 270000
+ 300000 head index         28.7ms 최대 큐 길이 270000
+```
+
+이 글의 시간은 모두 이 글을 쓴 머신(Intel Xeon 2.8GHz, Node 22.22)에서 잰 값이다. 마지막 열이 원인을 가리킨다. 트리가 넓으면 마지막 층이 통째로 큐에 들어가서 큐 길이가 27만까지 간다. 배열의 `shift`는 맨 앞을 빼고 나머지를 한 칸씩 당기니 한 번에 O(큐 길이)다. 같은 BFS라도 격자처럼 큐가 짧게 유지되는 그래프에서는 이 문제가 거의 안 보인다. 테스트 데이터에서는 멀쩡하다가 넓은 데이터를 만난 날 터지는 이유다.
+
+이 글은 자료구조 시리즈의 세 번째 글로, 넣고 빼는 위치를 끝으로 제한한 세 가지 구조를 다룬다. 한쪽 끝에서만 넣고 빼는 스택, 한쪽으로 넣고 반대쪽으로 빼는 큐, 양쪽 끝 모두에서 넣고 빼는 덱(deque)이다. `shift` 자체가 왜 느린지는 [배열을 고치는 메서드 글](/posts/js-array-mutation)에서 10만 개로 쟀고, 배열의 메모리 배치는 [배열과 행렬](/posts/ds-array-matrix), 노드를 이어 붙이는 방식은 [연결 리스트](/posts/ds-linked-list)에서 다뤘다. 여기서는 그 둘로 세 구조를 어떻게 만들고, 어떤 문제에 쓰는지 본다.
+
+## 마지막에 넣은 것이 먼저 나온다
+
+스택은 접시를 쌓듯 위에만 올리고 위에서만 꺼내는 구조다. 마지막에 넣은 것이 먼저 나온다(LIFO). 자바스크립트 배열의 `push`와 `pop`이 정확히 이 일을 한다. 둘 다 배열 끝에서만 일어나서 아무것도 옮기지 않으니 O(1)이다(`push`는 가끔 용량을 늘려서 분할 상환 O(1)). 스택을 위해 따로 클래스를 만들 이유가 거의 없다.
+
+스택이 맞는 문제는 "가장 최근에 열린 것부터 닫는다"는 구조를 가진다. 함수 호출이 그렇다. 함수 안에서 부른 함수가 먼저 끝나야 바깥 함수로 돌아간다. 엔진의 콜 스택이 이 모양이고, 너무 깊어지면 `RangeError: Maximum call stack size exceeded`가 난다([실행 컨텍스트와 콜 스택](/posts/js-execution-context)). 편집기의 되돌리기도 마지막 작업부터 취소하니 스택이다([커맨드 패턴](/posts/pattern-command)).
+
+면접의 단골은 괄호 짝 맞추기다. 여는 괄호는 쌓고, 닫는 괄호가 나오면 가장 최근에 연 괄호와 짝이 맞는지 본다.
+
+```js
+function isValid(s) {
+  const pair = { ")": "(", "]": "[", "}": "{" };
+  const stack = [];
+  for (const ch of s) {
+    if (ch in pair) {
+      if (stack.pop() !== pair[ch]) return false; // 비었거나 짝이 다르다
+    } else stack.push(ch);
+  }
+  return stack.length === 0;
+}
+console.log(isValid("([]{})"), isValid("([)]"), isValid("(("), isValid("]"));
+```
+
+```text
+true false false false
+```
+
+<AlgoTrace
+  caption="([)] 검사: 닫는 괄호는 가장 최근에 연 괄호와 짝이어야 한다"
+  memoryLabel="스택"
+  cells={["(", "[", ")", "]"]}
+  steps={[
+    { pointer: 0, memory: ["("], caption: "여는 괄호는 쌓는다." },
+    { pointer: 1, memory: ["(", "["], caption: "[도 쌓는다. 맨 위는 [다." },
+    { pointer: 2, memory: ["("], caption: ")가 나왔다. 꺼낸 맨 위는 [라서 짝이 아니다. false." },
+  ]}
+/>
+
+마지막 줄의 `stack.length === 0`이 빠지기 쉽다. `"(("`처럼 닫히지 않은 괄호가 남으면 반복문은 무사히 끝나지만 답은 false다. `"]"`처럼 빈 스택에서 꺼내는 경우는 `pop()`이 `undefined`를 돌려줘서 짝 비교에서 자연스럽게 걸린다.
+
+## 쌓인 것을 정리하며 쌓는 단조 스택
+
+스택이 진짜 위력을 보이는 건 단조 스택(monotonic stack)이다. 스택 안의 값이 항상 한 방향으로 정렬된 상태를 유지하도록, 새 값이 들어올 때 그 규칙을 깨는 값들을 먼저 꺼낸다. "오른쪽에서 처음으로 나보다 큰 값"을 찾는 문제를 O(n)에 푼다.
+
+일별 기온에서 며칠 뒤에 더 따뜻해지는지 구하는 문제로 보자. 날마다 오른쪽을 다 훑으면 O(n²)이다. 단조 스택에는 아직 더 따뜻한 날을 못 만난 날들이 기온이 내려가는 순서로 쌓인다. 오늘 기온이 스택 맨 위보다 높으면, 맨 위의 날은 오늘이 답이다. 꺼내고 다음 맨 위를 또 본다.
+
+```js
+function dailyTemperatures(temps) {
+  const answer = new Array(temps.length).fill(0);
+  const stack = []; // 아직 답을 못 찾은 날의 인덱스. 기온이 내려가는 순서로 쌓인다
+  for (let i = 0; i < temps.length; i++) {
+    while (stack.length && temps[stack.at(-1)] < temps[i]) {
+      const j = stack.pop();
+      answer[j] = i - j;
+    }
+    stack.push(i);
+  }
+  return answer;
+}
+console.log(dailyTemperatures([73, 74, 75, 71, 69, 72, 76, 73]));
+```
+
+```text
+[
+  1, 1, 4, 2,
+  1, 1, 0, 0
+]
+```
+
+<AlgoTrace
+  caption="더 따뜻한 날 찾기: 스택은 늘 기온이 내려가는 순서다"
+  memoryLabel="스택 (날짜:기온)"
+  cells={["73", "74", "75", "71", "69", "72", "76", "73"]}
+  steps={[
+    { pointer: 0, memory: ["0:73"], caption: "첫날은 그냥 쌓는다." },
+    { pointer: 1, found: [0], memory: ["1:74"], caption: "74 > 73. 0일의 답은 1일 뒤. 꺼내고 1일을 쌓는다." },
+    { pointer: 2, found: [1], memory: ["2:75"], caption: "75 > 74. 1일의 답도 1." },
+    { pointer: 4, memory: ["2:75", "3:71", "4:69"], caption: "71, 69는 맨 위보다 낮으니 그대로 쌓인다." },
+    { pointer: 5, found: [3, 4], memory: ["2:75", "5:72"], caption: "72가 69와 71을 차례로 꺼낸다. 4일은 1일 뒤, 3일은 2일 뒤." },
+    { pointer: 6, found: [2, 5], memory: ["6:76"], caption: "76이 72와 75를 꺼낸다. 2일의 답은 4일 뒤." },
+    { pointer: 7, memory: ["6:76", "7:73"], caption: "끝까지 남은 날은 더 따뜻한 날이 없어서 0이다." },
+  ]}
+/>
+
+안쪽에 `while`이 있어서 O(n²)처럼 보이지만 O(n)이다. 날마다 스택에 한 번 들어가고 많아야 한 번 나오니, `while`이 도는 횟수를 전부 더해도 n을 넘지 않는다. 이렇게 한 번의 연산이 아니라 전체를 세는 것이 분할 상환 분석이다([Big O 글](/posts/big-o-notation)). 면접에서 "이중 반복문인데 왜 O(n)이냐"는 꼬리 질문이 자주 나오니 이 논리로 답한다.
+
+같은 틀로 푸는 문제가 많다. 주식 가격이 며칠 동안 떨어지지 않았는지(스팬), 히스토그램에서 가장 큰 직사각형, 빗물 가두기가 모두 "처음으로 나보다 크거나 작은 값이 어디 있나"를 묻는다. 비교 방향(`<`인지 `<=`인지)이 같은 값의 처리를 정하니, 같은 값이 연속으로 나오는 입력을 꼭 넣어 본다.
+
+## 먼저 온 것이 먼저 나간다
+
+큐는 줄을 서는 구조다. 뒤에 넣고 앞에서 빼서, 먼저 들어온 것이 먼저 나간다(FIFO). 배열의 `push`와 `shift`로 만들면 처음 본 것처럼 `shift`가 O(n)이라 큐가 길어지면 무너진다. 큐를 만드는 방법은 크게 네 가지다. 길이 L을 유지한 채 넣기 하나, 빼기 하나를 20만 번 반복해서 비교했다.
+
+```js
+// 길이 L을 유지하면서 push 하나, shift 하나를 20만 번 반복한다
+class ArrayQueue { a = []; push(x) { this.a.push(x); } shift() { return this.a.shift(); } }
+
+class IndexQueue {
+  a = []; h = 0;
+  push(x) { this.a.push(x); }
+  shift() {
+    const x = this.a[this.h++];
+    if (this.h > 1024 && this.h * 2 > this.a.length) { this.a = this.a.slice(this.h); this.h = 0; } // 앞쪽 빈자리 정리
+    return x;
+  }
+}
+
+class LinkedQueue {
+  head = null; tail = null;
+  push(x) { const n = { x, next: null }; if (this.tail) this.tail.next = n; else this.head = n; this.tail = n; }
+  shift() { const n = this.head; this.head = n.next; if (!this.head) this.tail = null; return n.x; }
+}
+
+class RingDeque {
+  buf = new Array(16); head = 0; size = 0; // 용량은 늘 2의 거듭제곱
+  #grow() {
+    const old = this.buf, cap = old.length, next = new Array(cap * 2);
+    for (let i = 0; i < this.size; i++) next[i] = old[(this.head + i) & (cap - 1)];
+    this.buf = next; this.head = 0;
+  }
+  push(x) { if (this.size === this.buf.length) this.#grow(); this.buf[(this.head + this.size++) & (this.buf.length - 1)] = x; }
+  shift() { const x = this.buf[this.head]; this.buf[this.head] = undefined; this.head = (this.head + 1) & (this.buf.length - 1); this.size--; return x; }
+}
+
+const OPS = 200_000;
+// 한 번씩 데워 둔다
+for (const Q of [ArrayQueue, IndexQueue, LinkedQueue, RingDeque]) { const q = new Q(); for (let i = 0; i < 50_000; i++) { q.push(i); q.push(i); q.shift(); } }
+for (const L of [1_000, 10_000, 100_000]) {
+  for (const Q of [ArrayQueue, IndexQueue, LinkedQueue, RingDeque]) {
+    const q = new Q();
+    for (let i = 0; i < L; i++) q.push(i);
+    const t = performance.now();
+    let s = 0;
+    for (let i = 0; i < OPS; i++) { q.push(i); s += q.shift(); }
+    console.log(`L=${L}`.padEnd(9), Q.name.padEnd(12), (performance.now() - t).toFixed(1).padStart(8) + "ms");
+  }
+}
+```
+
+```text
+L=1000    ArrayQueue       30.0ms
+L=1000    IndexQueue       19.9ms
+L=1000    LinkedQueue      16.9ms
+L=1000    RingDeque        15.9ms
+L=10000   ArrayQueue       48.6ms
+L=10000   IndexQueue        6.0ms
+L=10000   LinkedQueue       4.7ms
+L=10000   RingDeque         2.1ms
+L=100000  ArrayQueue    54439.2ms
+L=100000  IndexQueue        6.7ms
+L=100000  LinkedQueue      18.4ms
+L=100000  RingDeque         2.0ms
+```
+
+큐 길이 1천과 1만에서는 `shift`도 수십 ms라 큰 문제가 없다. 그런데 10만에서 54초로 폭발한다. 나머지 셋은 길이와 상관없이 몇 ms에 머문다. 짧을 때 멀쩡한 건 V8이 배열 앞부분을 잘라 내는 최적화(left-trimming)로 원소를 옮기지 않고 넘어갈 때가 있기 때문으로 보인다. 어느 길이부터 이 최적화가 빠지는지는 엔진 버전마다 다르니 직접 재 보는 수밖에 없다.
+
+| 방식 | 빼기 비용 | 장점 | 단점 |
+|---|---|---|---|
+| 배열 + `shift` | O(n) | 코드가 가장 짧다 | 큐가 길어지면 무너진다 |
+| 배열 + head 인덱스 | O(1), 정리할 때 분할 상환 | 짧고 빠르다 | 앞쪽 빈자리를 정리하지 않으면 메모리가 계속 는다 |
+| 연결 리스트 | O(1) | 크기 제한이 없다 | 원소마다 노드 객체를 만들어 GC 부담이 크다 |
+| 링 버퍼 | O(1), 늘릴 때 분할 상환 | 가장 빠르고, 덱으로도 쓴다 | 구현이 조금 길다 |
+
+head 인덱스 방식에서 정리 코드를 빼면 이미 꺼낸 원소가 배열 앞에 계속 남는다. 처음의 BFS처럼 한 번 쓰고 버리는 큐라면 상관없지만, 서버가 떠 있는 내내 쓰는 작업 큐라면 메모리 누수가 된다. 꺼낸 칸이 절반을 넘으면 `slice`로 잘라 내는 게 위 코드의 요령이고, 정리 비용이 꺼낸 개수에 비례하니 분할 상환 O(1)이 유지된다.
+
+큐가 맞는 문제는 "도착한 순서대로 처리한다"는 구조다. 요청 대기열, 프린터 작업, 메시지 큐([메시지 큐 기초](/posts/message-queue-basics)), 그리고 BFS다. 자바스크립트 런타임의 태스크 큐와 마이크로태스크 큐도 이름 그대로 큐다([이벤트 루프](/posts/event-loop)).
+
+## 너비 우선 탐색이 큐를 쓰는 이유
+
+처음의 BFS로 돌아가자. 시작점에서 가까운 것부터 차례로 방문하려면, 먼저 발견한 것을 먼저 처리해야 한다. 거리 1인 노드들을 다 꺼내기 전에는 거리 2인 노드를 꺼내지 않는다. 큐의 FIFO가 그 순서를 자동으로 지켜 준다. 아래 그림에서 꺼낸 노드의 자식을 큐 뒤에 넣는 순서를 따라가 보자.
+
+<VectorSpace
+  caption="BFS는 층 순서로 방문한다: 큐에서 꺼내고 자식을 뒤에 넣는다"
+  groups={[
+    { id: "d0", label: "거리 0" },
+    { id: "d1", label: "거리 1" },
+    { id: "d2", label: "거리 2" },
+  ]}
+  points={[
+    { id: "r", label: "A", x: 200, y: 35, group: "d0" },
+    { id: "b", label: "B", x: 110, y: 120, group: "d1" },
+    { id: "c", label: "C", x: 290, y: 120, group: "d1" },
+    { id: "d", label: "D", x: 60, y: 210, group: "d2" },
+    { id: "e", label: "E", x: 160, y: 210, group: "d2" },
+    { id: "f", label: "F", x: 245, y: 210, group: "d2" },
+    { id: "g", label: "G", x: 340, y: 210, group: "d2", labelAt: "left" },
+  ]}
+  edges={[
+    ["r", "b"],
+    ["r", "c"],
+    ["b", "d"],
+    ["b", "e"],
+    ["c", "f"],
+    ["c", "g"],
+  ]}
+  steps={[
+    { showEdges: true, caption: "큐: [A]. 시작점만 넣고 시작한다." },
+    { showEdges: true, path: ["r", "b", "c"], caption: "A를 꺼내고 자식 B, C를 뒤에 넣는다. 큐: [B, C]." },
+    { showEdges: true, path: ["b", "d", "e"], caption: "B를 꺼내고 D, E를 넣는다. 큐: [C, D, E]. C가 D보다 앞에 있다." },
+    { showEdges: true, path: ["c", "f", "g"], caption: "C를 꺼내고 F, G를 넣는다. 큐: [D, E, F, G]. 거리 1을 다 끝냈다." },
+    { showEdges: true, path: ["r", "b", "c", "d", "e", "f", "g"], caption: "방문 순서는 A, B, C, D, E, F, G. 층 순서 그대로다." },
+  ]}
+/>
+
+같은 코드에서 큐를 스택으로 바꾸면(뒤에서 꺼내면) 깊이 우선 탐색(DFS)이 된다. 가장 최근에 발견한 노드부터 파고들기 때문이다. 가중치 없는 그래프에서 최단 거리는 BFS로만 구한다. DFS는 먼저 닿은 경로가 가장 짧다는 보장이 없다. 그래프에서 방문 표시를 언제 하는지(넣을 때 하지 않으면 같은 노드가 큐에 여러 번 들어간다), 격자 문제, 위상 정렬은 [그래프 BFS와 DFS](/posts/ds-graph-bfs-dfs)에서 이어서 다룬다.
+
+BFS의 큐는 마지막 층 전체를 한꺼번에 들 수 있다. 처음 예에서 노드 30만 개 중 27만 개가 동시에 큐에 있었다. 메모리도 그만큼 든다. 넓은 그래프를 BFS로 훑는다면 큐 구현과 함께 최대 길이를 재 보는 게 좋다.
+
+## 양쪽 끝이 다 열린 덱과 링 버퍼
+
+덱(deque, double-ended queue)은 앞뒤 양쪽에서 넣고 뺄 수 있는 큐다. 스택과 큐를 둘 다 흉내 낼 수 있다. 배열로 만들면 앞쪽 연산이 O(n)이 되고, 이중 연결 리스트로 만들면 O(1)이지만 노드마다 객체가 생긴다. 실전에서 가장 많이 쓰는 방식은 링 버퍼(ring buffer, 원형 버퍼)다.
+
+링 버퍼는 고정 크기 배열의 끝과 처음이 이어져 있다고 보고, 시작 위치(head)와 원소 수(size)만 움직인다. 원소는 옮기지 않는다. 인덱스가 끝을 넘으면 0으로 돌아간다. 용량을 2의 거듭제곱으로 두면 나머지 연산(`%`) 대신 비트 마스크(`& (용량 − 1)`)로 감을 수 있어서, 음수가 되는 `head − 1`도 바로 제자리로 돌아온다(자바스크립트에서 `-1 % 4`는 `-1`이지만 `-1 & 3`은 `3`이다).
+
+```js
+class RingDeque {
+  constructor(capacity = 4) { this.buf = new Array(capacity); this.head = 0; this.size = 0; } // capacity는 2의 거듭제곱
+  get mask() { return this.buf.length - 1; }
+  #grow() {
+    const old = this.buf, next = new Array(old.length * 2);
+    for (let i = 0; i < this.size; i++) next[i] = old[(this.head + i) & this.mask]; // 논리 순서대로 펴서 옮긴다
+    this.buf = next; this.head = 0;
+  }
+  push(x) { if (this.size === this.buf.length) this.#grow(); this.buf[(this.head + this.size++) & this.mask] = x; }
+  unshift(x) { if (this.size === this.buf.length) this.#grow(); this.head = (this.head - 1) & this.mask; this.buf[this.head] = x; this.size++; }
+  shift() { if (!this.size) return undefined; const x = this.buf[this.head]; this.buf[this.head] = undefined; this.head = (this.head + 1) & this.mask; this.size--; return x; }
+  pop() { if (!this.size) return undefined; const i = (this.head + --this.size) & this.mask; const x = this.buf[i]; this.buf[i] = undefined; return x; }
+  toString() { return `buf=[${[...this.buf].map((v) => v ?? "_").join(" ")}] head=${this.head} size=${this.size}`; }
+}
+const d = new RingDeque(4);
+d.push("a"); d.push("b"); d.push("c");
+console.log("push a,b,c   ", String(d));
+console.log("shift ->", d.shift(), " ", String(d));
+d.push("d"); d.push("e");
+console.log("push d,e     ", String(d));
+d.unshift("z");
+console.log("unshift z (꽉 차서 확장)", String(d));
+d.push("f");
+console.log("push f", String(d));
+console.log("pop ->", d.pop(), "   ", String(d));
+```
+
+```text
+push a,b,c    buf=[a b c _] head=0 size=3
+shift -> a   buf=[_ b c _] head=1 size=2
+push d,e      buf=[e b c d] head=1 size=4
+unshift z (꽉 차서 확장) buf=[b c d e _ _ _ z] head=7 size=5
+push f buf=[b c d e f _ _ z] head=7 size=6
+pop -> f     buf=[b c d e _ _ _ z] head=7 size=5
+```
+
+<AlgoTrace
+  caption="용량 4짜리 링 버퍼: 원소는 그대로 두고 head만 돈다"
+  memoryLabel="head와 size"
+  cells={["0", "1", "2", "3"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2], memory: ["head=0 size=3", "[a b c _]"], caption: "a, b, c를 넣었다. 다음 자리는 (0+3) & 3 = 3." },
+    { pointer: 1, found: [1, 2], memory: ["head=1 size=2", "[_ b c _]"], caption: "shift는 head 칸을 비우고 head를 한 칸 옮긴다. b와 c는 움직이지 않는다." },
+    { pointer: 1, found: [1, 2, 3], memory: ["head=1 size=3", "[_ b c d]"], caption: "d는 (1+2) & 3 = 3번 칸에 들어간다." },
+    { pointer: 1, found: [0, 1, 2, 3], memory: ["head=1 size=4", "[e b c d]"], caption: "e는 (1+3) & 3 = 0번 칸. 끝을 넘어 처음으로 감겼다. 논리 순서는 b c d e." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["꽉 찼다 → 용량 8", "[b c d e _ _ _ z]"], caption: "unshift z에서 꽉 차 있어 두 배로 늘리며 b c d e를 앞부터 펴서 옮긴다. z는 (0−1) & 7 = 7번 칸." },
+  ]}
+/>
+
+꺼낸 칸에 `undefined`를 써 넣는 줄을 빼먹지 않아야 한다. 안 그러면 논리적으로는 빠진 객체를 배열 칸이 계속 가리켜서 가비지 컬렉터가 치우지 못한다. 꽉 찼을 때 늘리는 대신 가장 오래된 것을 덮어쓰게 만들면 "최근 N개만 남기는 버퍼"가 된다. 로그 수집기의 최근 이벤트 버퍼, 오디오 스트림, 리눅스 커널의 네트워크 수신 링이 이 방식이다. 크기를 고정하고 미리 잡아 둔 링 버퍼가 GC를 없애서 지연 시간을 줄이는 모습, 스레드 사이를 순번 두 개로 잇는 방식은 [거래소의 저지연 설계 글](/posts/sd-stock-exchange-low-latency)에서 쟀다.
+
+Node.js 안에도 링 버퍼가 있다. `process.nextTick` 콜백을 담는 큐가 `internal/fixed_queue`의 `FixedQueue`인데, 칸 2048개짜리 원형 버퍼(`FixedCircularBuffer`)를 다 차면 하나 더 만들어 연결 리스트로 잇는 구조다. Node 22 바이너리에 들어 있는 소스에서 직접 확인했다(`const kSize = 2048;`, `this.head = this.head.next = new FixedCircularBuffer();`). 이 버퍼는 가득 찼는지 빠르게 판단하려고 칸 하나를 일부러 비워 둔다. 링 버퍼의 장점(옮기지 않음, 캐시 지역성)과 연결 리스트의 장점(크기 제한 없음, 늘릴 때 전체 복사 없음)을 섞은 설계다.
+
+## 창 안의 최댓값을 덱으로 따라가기
+
+덱이 빛나는 면접 문제가 슬라이딩 윈도 최댓값이다. 배열 `[1, 3, −1, −3, 5, 3, 6, 7]`에서 길이 3짜리 창을 한 칸씩 밀며 창마다 최댓값을 구한다. 창마다 다시 훑으면 O(nk)다. 합이라면 들어오는 값을 더하고 나가는 값을 빼면 되지만([배열 글의 슬라이딩 윈도](/posts/ds-array-matrix)), 최댓값은 나간 값이 최댓값이었을 때 다음 최댓값을 알 수 없다.
+
+덱에는 인덱스를 넣고, 앞에서 뒤로 값이 줄어드는 순서를 유지한다. 새 값이 들어오면 그보다 작거나 같은 값을 뒤에서 꺼낸다. 그 값들은 새 값보다 먼저 창을 나가니 다시는 최댓값이 될 수 없다. 덱의 앞은 늘 창의 최댓값이고, 창 밖으로 나간 인덱스는 앞에서 뺀다. 앞에서 본 단조 스택에 앞쪽 출구를 하나 더 단 셈이다.
+
+```js
+function maxSlidingWindow(nums, k) {
+  const dq = []; // 인덱스. 앞에서 뒤로 값이 줄어드는 순서
+  let head = 0;  // 덱의 앞 (shift 대신 인덱스)
+  const out = [];
+  for (let i = 0; i < nums.length; i++) {
+    if (head < dq.length && dq[head] <= i - k) head++;                // 창 밖으로 나간 앞을 뺀다
+    while (dq.length > head && nums[dq.at(-1)] <= nums[i]) dq.pop(); // 나보다 작은 뒤쪽은 다시 최댓값이 될 수 없다
+    dq.push(i);
+    if (i >= k - 1) out.push(nums[dq[head]]);
+  }
+  return out;
+}
+console.log(maxSlidingWindow([1, 3, -1, -3, 5, 3, 6, 7], 3));
+```
+
+```text
+[ 3, 3, 5, 5, 6, 7 ]
+```
+
+<AlgoTrace
+  caption="k = 3 슬라이딩 윈도 최댓값: 덱 앞이 늘 창의 최댓값"
+  memoryLabel="덱 (인덱스:값)"
+  cells={["1", "3", "-1", "-3", "5", "3", "6", "7"]}
+  steps={[
+    { pointer: 0, memory: ["0:1"], caption: "1을 넣는다." },
+    { pointer: 1, memory: ["1:3"], caption: "3이 들어오며 더 작은 1을 뒤에서 꺼낸다." },
+    { pointer: 2, found: [1], memory: ["1:3", "2:-1"], caption: "−1은 작으니 뒤에 붙는다. 첫 창 [1, 3, −1]의 최댓값은 앞의 3." },
+    { pointer: 3, found: [1], memory: ["1:3", "2:-1", "3:-3"], caption: "−3도 붙는다. 창 [3, −1, −3]의 최댓값 3." },
+    { pointer: 4, found: [4], memory: ["4:5"], caption: "1번은 창 밖이라 앞에서 빼고, 5가 −3과 −1을 뒤에서 꺼낸다. 최댓값 5." },
+    { pointer: 5, found: [4], memory: ["4:5", "5:3"], caption: "3은 뒤에 붙는다. 최댓값 5." },
+    { pointer: 6, found: [6], memory: ["6:6"], caption: "6이 3과 5를 꺼낸다. 최댓값 6." },
+    { pointer: 7, found: [7], memory: ["7:7"], caption: "7이 6을 꺼낸다. 결과는 [3, 3, 5, 5, 6, 7]." },
+  ]}
+/>
+
+각 인덱스는 덱에 한 번 들어가고 많아야 한 번 나오니 전체 O(n)이다. 덱의 크기는 k를 넘지 않는다. 위 코드는 덱 앞을 `shift` 대신 `head` 인덱스로 뺐다. 링 버퍼 덱이 있다면 그걸 쓰면 되고, k가 작으면 `shift`를 써도 실제로는 문제가 없다. 덱에 값이 아니라 인덱스를 넣는 이유는 앞의 원소가 창 밖으로 나갔는지 판단하려면 위치가 필요해서다.
+
+직접 짜 보자. 값이 같은 경우, 창이 배열 전체인 경우, 계속 줄어드는 배열이 경계다.
+
+<CodePlayground
+  caption="슬라이딩 윈도 최댓값"
+  functionName="maxSlidingWindow"
+  initialCode={`function maxSlidingWindow(nums, k) {
+  // 덱에 인덱스를 넣고, 앞에서 뒤로 값이 줄어드는 순서를 유지한다
+  return [];
+}`}
+  solution={`function maxSlidingWindow(nums, k) {
+  const dq = [];
+  let head = 0;
+  const out = [];
+  for (let i = 0; i < nums.length; i++) {
+    if (head < dq.length && dq[head] <= i - k) head++;
+    while (dq.length > head && nums[dq.at(-1)] <= nums[i]) dq.pop();
+    dq.push(i);
+    if (i >= k - 1) out.push(nums[dq[head]]);
+  }
+  return out;
+}`}
+  tests={[
+    { args: [[1, 3, -1, -3, 5, 3, 6, 7], 3], expected: [3, 3, 5, 5, 6, 7] },
+    { args: [[9, 8, 7, 6], 2], expected: [9, 8, 7], label: "계속 줄어드는 배열" },
+    { args: [[4], 1], expected: [4], label: "원소 하나" },
+    { args: [[1, -1], 1], expected: [1, -1], label: "k = 1" },
+    { args: [[2, 2, 2], 2], expected: [2, 2], label: "같은 값" },
+    { args: [[1, 3, 2], 3], expected: [3], label: "창이 배열 전체" },
+  ]}
+/>
+
+## React의 상태 업데이트도 큐에 쌓인다
+
+React에서 `setCount(c => c + 1)`을 한 이벤트 안에서 세 번 부르면 3이 오른다. 세 업데이트가 버려지지 않고 들어온 순서대로 적용되기 때문이다. 훅마다 업데이트 큐가 있고, react-dom 19의 개발 빌드 소스를 보면 이 큐는 원형 연결 리스트다.
+
+```js
+// node_modules/react-dom/cjs/react-dom-client.development.js (19.3.1), finishQueueingConcurrentUpdates 일부
+var pending = queue.pending;
+null === pending
+  ? (update.next = update)
+  : ((update.next = pending.next), (pending.next = update));
+queue.pending = update;
+```
+
+`queue.pending`은 마지막 업데이트를 가리키고, 마지막의 `next`가 첫 업데이트다. 포인터 하나로 맨 뒤(넣을 곳)와 맨 앞(꺼낼 곳)을 둘 다 O(1)에 얻는 요령이다. 렌더링할 때 첫 업데이트부터 차례로 꺼내 이전 상태에 적용하니 FIFO 큐다. `setCount(count + 1)`을 세 번 부르면 1만 오르는 건 큐의 문제가 아니라, 세 업데이트가 모두 같은 `count` 값으로 계산된 숫자를 들고 있어서다. 언제 다시 그리는지와 자동 배칭은 [React 리렌더링 글](/posts/react-rerender)에서 다룬다.
+
+## 큐가 쌓이기만 할 때
+
+자료구조로서의 큐는 비용이 O(1)이어도, 운영에서 큐는 다른 방식으로 문제를 일으킨다. 넣는 속도가 빼는 속도보다 빠르면 큐는 끝없이 길어진다. 메모리 안의 큐라면 결국 힙이 가득 차서 프로세스가 죽고, 그 전에 큐 맨 뒤의 작업은 이미 의미 없을 만큼 늦어진다.
+
+그래서 큐에는 상한을 둔다. 꽉 차면 새 작업을 거절하거나(빠르게 실패시켜 호출자가 다른 길을 찾게 한다), 가장 오래된 것을 버리거나(최신 값만 의미 있는 시세, 위치 정보), 넣는 쪽을 멈추게 한다. 마지막이 배압(backpressure)이다. Node 스트림의 `write()`가 `false`를 돌려주는 것이 그 신호다([배압](/posts/backpressure)). 큐 깊이를 지표로 내보내서 계속 오르는지 보는 게 가장 먼저 할 일이다.
+
+스택에도 같은 일이 있다. 재귀로 깊이 우선 탐색을 하면 엔진의 콜 스택을 쓰는데, 깊이가 입력에 비례하면 스택이 넘친다. 명시적인 배열 스택으로 바꾸면 힙을 쓰니 훨씬 깊이 갈 수 있다.
+
+끝으로 고르는 기준을 정리하면, 마지막에 넣은 것을 먼저 꺼내면 배열 하나로 된 스택이고, 먼저 넣은 것을 먼저 꺼내면 큐다. 큐가 짧게 유지된다는 확신이 없으면 `shift` 대신 head 인덱스나 링 버퍼를 쓴다. 양쪽 끝이 다 필요하거나 창 안의 최댓값처럼 앞뒤에서 함께 빼야 하면 덱이다. 매번 가장 작은 것이나 가장 급한 것을 꺼내야 한다면 순서대로 꺼내는 큐가 아니라 [힙](/posts/ds-heap)이 맞다. 전체 고르는 법은 [자료구조 한눈에 보기](/posts/data-structures-overview)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 스택과 큐의 차이와 각각 어디에 쓰는지 말해 보세요.
+
+스택은 마지막에 넣은 것이 먼저 나오고(LIFO), 큐는 먼저 넣은 것이 먼저 나온다(FIFO). 스택은 함수 호출, 되돌리기, 괄호 짝 맞추기, DFS처럼 가장 최근 것부터 처리할 때 쓴다. 큐는 요청 대기열, 메시지 큐, BFS처럼 도착 순서대로 처리할 때 쓴다.
+
+### 자바스크립트 배열로 큐를 만들면 어떤 문제가 있나요?
+
+`shift`가 나머지 원소를 한 칸씩 당겨서 O(n)이라, 큐가 길어지면 전체가 O(n²)이 된다. 이 글의 측정에서 길이 10만을 유지하며 20만 번 넣고 뺐더니 54초가 걸렸고, head 인덱스나 링 버퍼로는 몇 ms였다. head 인덱스 방식은 꺼낸 앞쪽을 주기적으로 잘라 내지 않으면 메모리가 계속 늘어난다.
+
+### 링 버퍼는 어떻게 동작하나요? 용량을 2의 거듭제곱으로 두는 이유는요?
+
+고정 크기 배열의 끝과 처음이 이어졌다고 보고 head와 size만 움직여서, 원소를 옮기지 않고 양쪽 끝에서 O(1)에 넣고 뺀다. 인덱스를 감을 때 용량이 2의 거듭제곱이면 `%` 대신 `& (용량 − 1)`로 계산할 수 있고, `head − 1`이 음수가 되어도 바로 마지막 칸으로 돌아온다. 꽉 차면 두 배로 늘리며 논리 순서대로 펴서 옮기므로 분할 상환 O(1)이다.
+
+### 단조 스택 풀이는 반복문이 이중인데 왜 O(n)인가요?
+
+원소마다 스택에 한 번 들어가고 많아야 한 번 나오기 때문이다. 안쪽 `while`이 어떤 한 번에 많이 돌 수는 있어도, 전체에서 꺼내는 횟수의 합은 n을 넘지 못한다. 연산 하나가 아니라 전체 작업량을 세는 분할 상환 분석이다.
+
+### 슬라이딩 윈도 최댓값을 O(n)에 구하는 방법을 설명해 보세요.
+
+덱에 인덱스를 넣고 앞에서 뒤로 값이 줄어드는 순서를 유지한다. 새 값이 오면 그보다 작거나 같은 값을 뒤에서 꺼내고(다시 최댓값이 될 수 없으니), 창 밖으로 나간 인덱스는 앞에서 뺀다. 그러면 덱의 앞이 늘 창의 최댓값이고, 원소마다 한 번 들어가고 한 번 나가서 O(n)이다. 힙으로도 풀 수 있지만 O(n log k)다.
+
+### BFS는 왜 큐를 쓰고, 스택으로 바꾸면 어떻게 되나요?
+
+먼저 발견한 노드를 먼저 처리해야 가까운 것부터 층 순서로 방문하기 때문이다. 그래서 가중치 없는 그래프의 최단 거리를 BFS로 구한다. 스택으로 바꾸면 가장 최근에 발견한 노드부터 파고드는 DFS가 되고, 처음 닿은 경로가 가장 짧다는 보장이 사라진다.
+
+### 메모리 안의 작업 큐가 계속 길어지면 어떻게 대응하나요?
+
+넣는 속도가 처리 속도보다 빠르다는 뜻이라 상한을 두고 정책을 정한다. 새 작업을 거절하거나, 오래된 것을 버리거나, 생산자를 멈추게 하는 배압을 건다. 큐 깊이를 지표로 내보내 추세를 보고, 처리 쪽을 늘리거나 디스크·브로커 기반 큐로 옮길지 판단한다.

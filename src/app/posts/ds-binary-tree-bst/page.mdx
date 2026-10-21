@@ -1,0 +1,556 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ds-binary-tree-bst");
+
+주문 id로 빨리 찾으려고 이진 탐색 트리(BST)를 직접 만든다고 해 보자. 교과서대로 재귀로 짠 `insert`에, DB에서 id 순서로 읽어 온 주문 10만 건을 차례로 넣는 상황을 그대로 흉내 내 봤다.
+
+```js
+class Node {
+  constructor(key) { this.key = key; this.left = null; this.right = null; }
+}
+function insertRec(node, key) {
+  if (node === null) return new Node(key);
+  if (key < node.key) node.left = insertRec(node.left, key);
+  else if (key > node.key) node.right = insertRec(node.right, key);
+  return node;
+}
+
+let root = null;
+for (let id = 1; id <= 100_000; id++) root = insertRec(root, id);
+```
+
+```bash
+node orders.js
+```
+
+이런 에러가 난다.
+
+```text
+/home/me/orders.js:2
+  constructor(key) { this.key = key; this.left = null; this.right = null; }
+             ^
+
+RangeError: Maximum call stack size exceeded
+    at new Node (/home/me/orders.js:2:14)
+    at insertRec (/home/me/orders.js:5:29)
+    at insertRec (/home/me/orders.js:7:41)
+    at insertRec (/home/me/orders.js:7:41)
+    at insertRec (/home/me/orders.js:7:41)
+```
+
+출력의 파일 경로는 줄였다. 같은 루프를 `try`로 감싸고 에러가 난 순간 트리에 든 노드를 세어 보니 1만 3,945개였다. DB가 id 순서로 돌려준 게 원인이다. 정렬된 키를 BST에 넣으면 모든 노드가 오른쪽 자식으로만 이어져서 트리가 한 줄짜리 리스트가 된다. 깊이가 1만을 넘으니 재귀 호출이 콜 스택을 다 썼다. 에러가 안 났더라도 찾기 한 번이 1만 칸을 걷는다.
+
+이 글은 이 사고를 출발점으로 이진 트리가 메모리에 어떻게 놓이는지, 네 가지 순회가 각각 무엇에 쓰이는지, BST의 찾기·넣기·지우기가 왜 높이에 비례하는지, 그리고 그 높이가 무너지는 순간을 Node.js 22로 직접 재 보며 따라간다. 면접에 자주 나오는 BST 검증과 최소 공통 조상도 단계별로 푼다. 같은 시리즈의 [해시맵](/posts/ds-hash-map), [힙](/posts/ds-heap)과 비교하면서 읽으면 좋다. 전체 지도는 [자료구조 한눈에 보기](/posts/data-structures-overview)에 있다.
+
+## 노드 하나에 자식 두 개
+
+이진 트리(binary tree)는 노드마다 자식이 많아야 둘인 트리다. 맨 위 노드를 루트(root), 자식이 없는 노드를 잎(leaf)이라고 한다. 루트에서 어떤 노드까지 내려가는 간선 수가 그 노드의 깊이(depth)이고, 가장 깊은 잎까지의 단계 수가 트리의 높이(height)다. 이 글에서 높이는 노드 수로 센다. 노드 하나짜리 트리는 높이 1이다.
+
+JS에서 트리는 보통 객체와 참조로 만든다. 노드 하나가 키와 왼쪽·오른쪽 자식을 가리키는 참조 두 개를 들고 있다. 배열처럼 연속된 메모리가 아니라, 힙 메모리 여기저기 흩어진 객체가 참조로 이어진 모양이다.
+
+```js
+// 노드 100만 개를 만들고 늘어난 힙 크기를 잰다 (node --expose-gc)
+global.gc(); const before = process.memoryUsage().heapUsed;
+const nodes = new Array(1_000_000);
+for (let i = 0; i < nodes.length; i++) nodes[i] = new Node(i);
+global.gc(); const after = process.memoryUsage().heapUsed;
+console.log("bytes per node (incl. array slot):", ((after - before) / nodes.length).toFixed(1));
+```
+
+```text
+bytes per node (incl. array slot): 56.0
+```
+
+정수 키 하나를 담는데 노드 하나가 56바이트다(노드를 담아 둔 배열 칸 포함). 객체 머리와 필드 세 개가 붙어서 그렇다. 같은 정수 100만 개를 정렬된 배열에 담으면 `Int32Array`로 4MB인데 트리는 56MB다. 노드가 흩어져 있어서 내려갈 때마다 캐시 미스가 날 수 있는 것도 비용이다. 트리는 이 비용을 내고 "정렬된 순서를 유지하면서 중간에 넣고 빼기"를 산다. 배열은 정렬을 유지하며 중간에 넣으려면 뒤의 원소를 모두 밀어야 한다.
+
+## 왼쪽은 작고 오른쪽은 크다
+
+이진 탐색 트리는 이진 트리에 규칙 하나를 더한다. 모든 노드에서 왼쪽 서브트리의 키는 전부 그 노드보다 작고, 오른쪽 서브트리의 키는 전부 크다. "왼쪽 자식이 작다"가 아니라 "왼쪽 서브트리 전체가 작다"인 게 중요하다. 이 차이가 뒤에서 검증 문제의 함정이 된다.
+
+이 규칙 덕분에 찾기는 루트에서 시작해 비교 한 번마다 한쪽 서브트리를 통째로 버린다. 배열의 이진 탐색을 포인터로 옮긴 셈이다. 아래 트리는 `[8, 3, 10, 1, 6, 14, 4, 7, 13]`을 이 순서로 넣은 결과다.
+
+<VectorSpace
+  caption="BST에서 찾기: 비교 한 번에 한쪽을 버린다"
+  width={400}
+  height={250}
+  points={[
+    { id: "n8", label: "8", x: 200, y: 30 },
+    { id: "n3", label: "3", x: 110, y: 90 },
+    { id: "n10", label: "10", x: 290, y: 90 },
+    { id: "n1", label: "1", x: 60, y: 150 },
+    { id: "n6", label: "6", x: 160, y: 150 },
+    { id: "n14", label: "14", x: 340, y: 150 },
+    { id: "n4", label: "4", x: 125, y: 210 },
+    { id: "n7", label: "7", x: 195, y: 210 },
+    { id: "n13", label: "13", x: 305, y: 210 },
+  ]}
+  edges={[["n8", "n3"], ["n8", "n10"], ["n3", "n1"], ["n3", "n6"], ["n10", "n14"], ["n6", "n4"], ["n6", "n7"], ["n14", "n13"]]}
+  steps={[
+    { caption: "9개를 넣은 BST다. 어느 노드에서 봐도 왼쪽은 작고 오른쪽은 크다.", showEdges: true },
+    { caption: "7을 찾는다. 7 < 8이니 왼쪽으로 간다. 오른쪽의 10, 14, 13은 볼 필요가 없다.", showEdges: true, path: ["n8", "n3"] },
+    { caption: "7 > 3이니 오른쪽 6으로, 7 > 6이니 다시 오른쪽. 네 번 비교해서 7을 찾았다.", showEdges: true, path: ["n8", "n3", "n6", "n7"] },
+    { caption: "5를 찾는다. 8 → 3 → 6 → 4까지 내려가고 4의 오른쪽이 비어 있다. 없다.", showEdges: true, path: ["n8", "n3", "n6", "n4"] },
+    { caption: "5를 넣는다면 바로 그 빈자리, 4의 오른쪽 자식이 된다. 넣기는 실패한 찾기의 끝에 붙인다.", showEdges: true, path: ["n8", "n3", "n6", "n4"] },
+  ]}
+/>
+
+넣기는 찾기와 같은 길을 가다가 빈자리에 노드를 단다. 그래서 찾기, 넣기, 지우기 모두 비용이 트리 높이 h에 비례하는 O(h)다. 노드 n개가 고르게 퍼져 있으면 h ≈ log₂ n이라 100만 개에서 20단계 남짓이다. 한 줄로 늘어서면 h = n이다. BST의 성능은 "몇 개가 들어 있나"보다 "어떤 모양인가"가 정한다.
+
+재귀 없이 반복문으로 쓰면 깊이가 깊어도 콜 스택을 쓰지 않는다. 처음의 에러를 피하는 첫걸음이다.
+
+```js
+function insert(root, key) {
+  const n = new Node(key);
+  if (root === null) return n;
+  let cur = root;
+  while (true) {
+    if (key < cur.key) { if (cur.left === null) { cur.left = n; break; } cur = cur.left; }
+    else if (key > cur.key) { if (cur.right === null) { cur.right = n; break; } cur = cur.right; }
+    else break; // 같은 키는 무시한다
+  }
+  return root;
+}
+```
+
+같은 키를 어떻게 할지는 미리 정해야 한다. 무시하거나, 값만 덮어쓰거나, 노드에 개수를 두는 방법이 흔하다. "같으면 오른쪽"처럼 중복 노드를 허용하면 지우기와 검증 규칙이 모두 복잡해진다.
+
+## 네 가지 순서로 훑기
+
+트리의 모든 노드를 한 번씩 방문하는 순서는 네 가지가 기본이다. 앞의 셋은 깊이 우선(DFS)이고, "자기 자신을 언제 처리하나"만 다르다.
+
+```js
+const pre = [], ino = [], post = [];
+function walk(n) {
+  if (!n) return;
+  pre.push(n.key);   // 전위: 내려가기 전에
+  walk(n.left);
+  ino.push(n.key);   // 중위: 왼쪽을 다 본 뒤에
+  walk(n.right);
+  post.push(n.key);  // 후위: 양쪽을 다 본 뒤에
+}
+walk(root);
+
+const level = [], q = [root]; // 레벨 순서: 큐로 한 층씩
+for (let i = 0; i < q.length; i++) {
+  const n = q[i];
+  level.push(n.key);
+  if (n.left) q.push(n.left);
+  if (n.right) q.push(n.right);
+}
+```
+
+```text
+pre   8 3 1 6 4 7 10 14 13
+in    1 3 4 6 7 8 10 13 14
+post  1 4 7 6 3 13 14 10 8
+level 8 3 10 1 6 14 4 7 13
+```
+
+중위 순회 결과가 정렬되어 있다. BST에서만 생기는 성질이고, 뒤의 검증 문제에서 그대로 쓴다. 순서마다 쓰임이 다르다.
+
+- 전위: 부모를 먼저 적으니 트리를 복사하거나 직렬화할 때 쓴다. 이 순서로 다시 넣으면 같은 모양의 BST가 나온다.
+- 중위: BST의 정렬된 순회, k번째로 작은 값.
+- 후위: 자식을 먼저 끝내니 폴더 크기 합산, 트리 지우기, 수식 트리 계산처럼 "아래 결과로 위를 계산"할 때 쓴다.
+- 레벨: 루트에서 가까운 순이라 "가장 얕은 잎", 층별 출력, 최단 거리에 쓴다. 그래프의 BFS와 같다. [그래프 글](/posts/ds-graph-bfs-dfs)에서 더 넓게 다룬다.
+
+화면 쪽에서도 같은 순서를 만난다. DOM 트리의 `querySelectorAll`은 문서 순서, 즉 전위 순서로 결과를 돌려주고, React도 컴포넌트 트리를 자식부터 내려갔다가 형제로 넘어가는 깊이 우선 순서로 훑는다. DOM 구조는 [DOM 글](/posts/dom-basics)에 있다.
+
+재귀 없이 중위 순회를 하려면 콜 스택이 하던 일을 배열 스택이 대신한다. 왼쪽 끝까지 내려가며 쌓고, 하나 꺼내 방문하고, 그 오른쪽으로 옮겨 가서 다시 왼쪽 끝까지 쌓는다.
+
+```js
+function inorderIter(root) {
+  const out = [], stack = [];
+  let cur = root;
+  while (cur || stack.length) {
+    while (cur) { stack.push(cur); cur = cur.left; } // 왼쪽 끝까지 쌓는다
+    cur = stack.pop();
+    out.push(cur.key);                               // 방문
+    cur = cur.right;                                 // 오른쪽으로 옮겨 간다
+  }
+  return out;
+}
+```
+
+아래 그림의 칸은 방문하는 순서(정렬 순서)이고, 오른쪽은 그 순간의 스택이다. 실제로 스택 상태를 찍은 출력 그대로 옮겼다.
+
+<AlgoTrace
+  caption="스택으로 하는 중위 순회"
+  memoryLabel="스택 (오른쪽이 맨 위)"
+  cells={["1", "3", "4", "6", "7", "8", "10", "13", "14"]}
+  steps={[
+    { memory: ["8", "3", "1"], caption: "루트에서 왼쪽 끝까지 내려가며 8, 3, 1을 쌓는다." },
+    { pointer: 0, found: [0], memory: ["8", "3"], caption: "1을 꺼내 방문한다. 1의 오른쪽은 비어 있다." },
+    { pointer: 1, found: [0, 1], memory: ["8"], caption: "3을 꺼내 방문한다. 이제 3의 오른쪽 6으로 간다." },
+    { memory: ["8", "6", "4"], caption: "6에서 다시 왼쪽 끝까지 쌓는다. 6, 4가 올라간다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["8", "6"], caption: "4를 꺼내 방문한다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["8", "7"], caption: "6을 꺼내 방문하고 오른쪽 7을 쌓는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "7, 8을 차례로 방문한다. 왼쪽 절반이 끝났고 스택이 비었다." },
+    { pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: [], caption: "8의 오른쪽 10, 14, 13도 같은 규칙으로 돈다. 스택은 높이만큼만 쌓인다." },
+  ]}
+/>
+
+스택에 동시에 쌓이는 노드는 많아야 트리 높이만큼이다. 균형 트리면 O(log n), 한 줄짜리면 O(n)이다. 반복문으로 바꿔도 메모리 크기는 같고, 다만 콜 스택(보통 1MB 안팎) 대신 힙(수백 MB 이상)을 쓰니 넘치지 않을 뿐이다.
+
+레벨 순회는 스택 대신 큐다. 먼저 들어온 노드를 먼저 꺼내니 층 순서가 지켜진다.
+
+<AlgoTrace
+  caption="큐로 하는 레벨 순회"
+  memoryLabel="큐 (왼쪽이 먼저 나간다)"
+  cells={["8", "3", "10", "1", "6", "14", "4", "7", "13"]}
+  steps={[
+    { memory: ["8"], caption: "루트 8을 큐에 넣고 시작한다." },
+    { pointer: 0, found: [0], memory: ["3", "10"], caption: "8을 꺼내 방문하고 자식 3, 10을 뒤에 넣는다." },
+    { pointer: 1, found: [0, 1], memory: ["10", "1", "6"], caption: "3을 꺼내고 자식 1, 6을 넣는다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1", "6", "14"], caption: "10을 꺼내고 오른쪽 자식 14만 넣는다. 첫 두 층이 끝났다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["14", "4", "7"], caption: "1은 잎이라 넣을 게 없다. 6을 꺼내며 4, 7을 넣는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["4", "7", "13"], caption: "14를 꺼내며 13을 넣는다. 셋째 층이 끝났다." },
+    { pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: [], caption: "남은 4, 7, 13은 모두 잎이다. 큐가 비면 끝이다." },
+  ]}
+/>
+
+위 코드에서 `q.shift()` 대신 인덱스 `i`를 앞으로 옮긴 이유가 있다. `shift`는 배열 앞을 지우면서 나머지를 당겨서 O(n)이라, 노드가 많으면 순회 전체가 O(n²)이 된다. 이 비용은 [스택·큐·덱 글](/posts/ds-stack-queue-deque)에서 재 봤다.
+
+## 재귀는 깊이만큼 스택을 먹는다
+
+트리 코드는 재귀로 쓰면 짧고 읽기 쉽다. 대신 호출 하나가 콜 스택에 프레임 하나를 쌓는다. 처음 예제에서는 1만 3,945단계에서 넘쳤다. 이 숫자는 함수의 지역 변수와 인자 수, Node 버전, 플랫폼에 따라 달라진다. Node 22의 V8 기본 스택은 1MB 안팎이고 `node --stack-size`로 바꿀 수 있지만, OS 스레드 스택보다 크게 잡으면 `RangeError` 대신 프로세스가 세그폴트로 죽을 수 있어서 해결책으로 쓰지 않는다.
+
+고르는 기준은 이렇다. 균형이 보장된 트리(높이가 log n)라면 재귀로 써도 100만 개에서 깊이 20~40이라 안전하다. 입력이 사용자나 외부 데이터이고 모양을 보장할 수 없다면 반복문과 명시적 스택으로 쓴다. JSON을 재귀로 훑는 코드도 같은 문제를 안고 있다. 수만 단계로 중첩된 JSON을 일부러 보내면 재귀 파서나 재귀 `deepClone`이 넘친다.
+
+## 지우기는 자식 수에 따라 세 갈래
+
+지울 노드를 찾은 다음, 그 노드의 자식 수에 따라 처리가 갈린다.
+
+- 자식이 없다: 그냥 떼어 낸다.
+- 자식이 하나다: 그 자식을 내 자리에 올린다.
+- 자식이 둘이다: 오른쪽 서브트리에서 가장 작은 키(후계자, in-order successor)를 찾아 내 자리에 복사하고, 후계자를 원래 자리에서 지운다. 후계자는 오른쪽 서브트리의 왼쪽 끝이라 왼쪽 자식이 없으니, 그 지우기는 앞의 두 경우로 끝난다.
+
+<VectorSpace
+  caption="자식이 둘인 3을 지우기: 후계자 4가 올라온다"
+  width={400}
+  height={250}
+  points={[
+    { id: "n8", label: "8", x: 200, y: 30 },
+    { id: "n3", label: "3", x: 110, y: 90 },
+    { id: "n10", label: "10", x: 290, y: 90 },
+    { id: "n1", label: "1", x: 60, y: 150 },
+    { id: "n6", label: "6", x: 160, y: 150 },
+    { id: "n14", label: "14", x: 340, y: 150 },
+    { id: "n4", label: "4", x: 125, y: 210 },
+    { id: "n7", label: "7", x: 195, y: 210 },
+    { id: "n13", label: "13", x: 305, y: 210 },
+  ]}
+  edges={[["n8", "n3"], ["n8", "n10"], ["n3", "n1"], ["n3", "n6"], ["n10", "n14"], ["n6", "n4"], ["n6", "n7"], ["n14", "n13"]]}
+  steps={[
+    { caption: "3을 지운다. 3에는 자식 1과 6이 모두 있다.", showEdges: true, path: ["n8", "n3"] },
+    { caption: "오른쪽 서브트리(6, 4, 7)에서 가장 작은 키를 찾는다. 오른쪽으로 한 번, 그다음 왼쪽 끝까지 간다.", showEdges: true, path: ["n3", "n6", "n4"] },
+    { caption: "후계자는 4다. 4는 3보다 크고, 오른쪽 서브트리의 나머지(6, 7)보다는 작다. 3 자리에 앉아도 규칙이 지켜진다.", showEdges: true, path: ["n3", "n6", "n4"] },
+    { caption: "3 자리에 4를 복사하고, 원래 4 노드를 지운다. 4는 잎이라 그냥 떼어 내면 끝이다. 결과는 아래 실행 결과 첫 줄이다.", showEdges: true, path: ["n6", "n4"] },
+  ]}
+/>
+
+```js
+function remove(node, key) {
+  if (!node) return null;
+  if (key < node.key) node.left = remove(node.left, key);
+  else if (key > node.key) node.right = remove(node.right, key);
+  else {
+    if (!node.left) return node.right;   // 자식 0개 또는 오른쪽만
+    if (!node.right) return node.left;   // 왼쪽만
+    let s = node.right;                  // 자식 2개: 후계자를 찾는다
+    while (s.left) s = s.left;
+    node.key = s.key;
+    node.right = remove(node.right, s.key);
+  }
+  return node;
+}
+
+root = remove(root, 3);  // 자식 2개
+root = remove(root, 14); // 자식 1개 (13)
+root = remove(root, 7);  // 자식 0개
+```
+
+```text
+remove 3 → pre 8 4 1 6 7 10 14 13 | in 1 4 6 7 8 10 13 14
+remove 14 → pre 8 4 1 6 7 10 13
+remove 7 → pre 8 4 1 6 10 13
+```
+
+3을 지운 뒤 전위 순서에서 3 자리에 4가 들어갔고, 중위 순서는 여전히 정렬되어 있다. 14를 지우면 자식 13이 그 자리로 올라와 `10 13`이 됐다. 후계자 대신 왼쪽 서브트리의 가장 큰 키(선행자)를 써도 된다. 늘 후계자만 쓰면 지우기를 반복할수록 트리가 한쪽으로 기우는 경향이 있어서 둘을 번갈아 쓰는 구현도 있다.
+
+## 정렬된 키를 넣으면 리스트가 된다
+
+처음 사고를 숫자로 다시 보자. 키 2만 개를 무작위 순서로 넣은 트리와 1부터 차례로 넣은 트리를 반복문 `insert`로 만들고, 모든 키를 한 번씩 찾았다. 무작위 순서는 시드를 고정한 셔플이다.
+
+```text
+random  height     32 | build     6.3ms | search all     4.4ms | avg steps 18.3
+sorted  height  20000 | build   771.1ms | search all   795.0ms | avg steps 10000.5
+log2(20000) = 14.3
+```
+
+무작위로 넣으면 높이 32, 찾기 한 번에 평균 18.3단계다. 무작위 BST에서 찾기 한 번의 평균 비교 횟수는 이론상 2(1 + 1/n)Hₙ − 3(Hₙ은 조화수)이고, 2만 개면 약 18이라 측정과 맞는다. 대략 1.39 log₂ n이다. 정렬해서 넣으면 높이가 정확히 2만, 평균 1만 단계를 걷는다. 만들기와 찾기 모두 120배 이상 느리다. 실제 데이터는 무작위가 아니다. id, 시각, 일련번호처럼 거의 정렬된 채로 들어오는 키가 흔하다.
+
+<VectorSpace
+  caption="1부터 7까지 차례로 넣은 BST"
+  width={400}
+  height={260}
+  points={[
+    { id: "s1", label: "1", x: 40, y: 25 },
+    { id: "s2", label: "2", x: 90, y: 60 },
+    { id: "s3", label: "3", x: 140, y: 95 },
+    { id: "s4", label: "4", x: 190, y: 130 },
+    { id: "s5", label: "5", x: 240, y: 165 },
+    { id: "s6", label: "6", x: 290, y: 200 },
+    { id: "s7", label: "7", x: 340, y: 235 },
+  ]}
+  edges={[["s1", "s2"], ["s2", "s3"], ["s3", "s4"], ["s4", "s5"], ["s5", "s6"], ["s6", "s7"]]}
+  steps={[
+    { caption: "1을 넣으면 루트, 2는 1보다 커서 오른쪽, 3은 2의 오른쪽 … 왼쪽 자식이 하나도 없다.", showEdges: true },
+    { caption: "7을 찾으려면 루트부터 일곱 번 비교한다. 연결 리스트를 앞에서부터 훑는 것과 같다.", showEdges: true, path: ["s1", "s2", "s3", "s4", "s5", "s6", "s7"] },
+  ]}
+/>
+
+같은 7개를 4, 2, 6, 1, 3, 5, 7 순서로 넣으면 높이 3짜리 완전한 트리가 된다. 키는 같고 넣는 순서만 다르다.
+
+해결책은 트리가 스스로 균형을 잡게 하는 것이다. 넣거나 지울 때 회전(rotation)으로 높이를 고쳐서 항상 O(log n)을 보장하는 트리를 균형 이진 탐색 트리라고 부른다.
+
+- AVL 트리: 모든 노드에서 좌우 높이 차를 1 이하로 지킨다. 높이가 더 낮아 찾기가 빠르고, 대신 넣기·지우기 때 회전이 잦다.
+- 레드-블랙 트리: 규칙을 느슨하게 해서 높이가 최악 약 2 log₂ n이다. 회전이 적어 쓰기가 많을 때 유리하다. 자바 `TreeMap`, C++ `std::map`(주요 구현), 리눅스 커널의 CFS 스케줄러 실행 대기열이 이걸 썼다.
+- B-tree: 노드 하나에 키를 수백 개 담아 높이를 3~4로 낮춘다. 디스크 페이지 단위로 읽는 DB 인덱스의 기본 구조다. [인덱스 글](/posts/db-index)에서 실행 계획과 함께 다뤘다.
+- 스킵 리스트: 트리 대신 여러 층의 연결 리스트에 확률로 균형을 맞춘다. Redis의 정렬된 셋이 이 구조다([리더보드 글](/posts/sd-leaderboard-sorted-set)).
+
+<ConceptDiagram
+  caption="이진 트리에서 갈라져 나온 구조들"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "bt", label: "이진 트리", sub: "자식 ≤ 2", x: 200, y: 30, w: 120 },
+    { id: "bst", label: "BST", sub: "왼쪽 < 나 < 오른쪽", x: 100, y: 110, w: 150 },
+    { id: "heap", label: "힙", sub: "부모 ≤ 자식", x: 310, y: 110, w: 120 },
+    { id: "bal", label: "AVL · 레드-블랙", sub: "회전으로 O(log n)", x: 100, y: 190, w: 160 },
+    { id: "btree", label: "B-tree", sub: "자식 수백 개 · 디스크", x: 300, y: 230, w: 150 },
+  ]}
+  edges={[
+    { from: "bt", to: "bst", label: "순서 규칙" },
+    { from: "bt", to: "heap", label: "부모 규칙" },
+    { from: "bst", to: "bal", label: "균형 유지" },
+    { from: "bal", to: "btree", label: "가지를 넓게", dashed: true },
+  ]}
+/>
+
+JS에는 정렬된 맵이 내장되어 있지 않다. 자바의 `TreeMap` 같은 걸 기대하고 찾으면 없다. 선택지는 몇 가지다. 키가 한 번에 다 주어지고 잘 안 바뀌면 정렬된 배열에 이진 탐색이 가장 빠르고 작다. 정렬된 배열에서 가운데를 루트로 삼아 재귀로 만들면 균형 트리가 바로 나오는데, 2만 개로 만들면 높이 15(= ⌈log₂ 20001⌉)였다. 넣고 빼기가 계속 섞이면 검증된 라이브러리의 레드-블랙 트리나 B+ 트리를 쓴다. 대부분의 웹 서비스에서는 순서가 필요한 데이터를 DB 인덱스나 Redis 정렬된 셋에 맡기고, 애플리케이션 메모리에서는 해시맵을 쓴다. BST를 직접 짤 일은 생각보다 적지만, 그 아래에서 무슨 일이 일어나는지는 알아야 인덱스와 정렬된 셋의 비용을 설명할 수 있다.
+
+## BST가 맞는지 검증하기
+
+면접 단골인 "이 트리가 BST인가" 문제는 거의 모두가 한 번은 같은 함정에 빠진다. 부모와 직접 자식만 비교하는 것이다.
+
+```js
+function wrongValid(n) { // 부모와 자식만 비교한다
+  if (!n) return true;
+  if (n.left && n.left.val >= n.val) return false;
+  if (n.right && n.right.val <= n.val) return false;
+  return wrongValid(n.left) && wrongValid(n.right);
+}
+```
+
+`[5, 3, 8, null, null, 4, 9]`(레벨 순서, `null`은 빈자리)는 루트 5의 오른쪽 8 아래 왼쪽에 4가 있는 트리다. 4 < 8이라 지역 비교는 통과한다. 그런데 4는 5의 오른쪽 서브트리에 있으니 5보다 커야 한다. BST가 아니다.
+
+바르게 하려면 각 노드가 들어갈 수 있는 범위를 들고 내려간다. 왼쪽으로 가면 상한이 부모 값으로 줄고, 오른쪽으로 가면 하한이 부모 값으로 오른다.
+
+<AlgoTrace
+  caption="범위를 들고 내려가는 검증: [5, 3, 8, null, null, 4, 9]"
+  memoryLabel="노드: 허용 범위"
+  cells={["5", "3", "8", "4", "9"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["5: (−∞, ∞)"], caption: "루트 5는 아무 값이나 된다. 통과." },
+    { pointer: 1, found: [0, 1], memory: ["5: (−∞, ∞)", "3: (−∞, 5)"], caption: "왼쪽 자식 3은 5보다 작아야 한다. 통과." },
+    { pointer: 2, found: [0, 1, 2], memory: ["5: (−∞, ∞)", "3: (−∞, 5)", "8: (5, ∞)"], caption: "오른쪽 자식 8은 5보다 커야 한다. 통과." },
+    { pointer: 3, found: [0, 1, 2], memory: ["8: (5, ∞)", "4: (5, 8)"], caption: "8의 왼쪽 4는 8보다 작고 5보다 커야 한다. 범위가 (5, 8)로 좁아졌다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["4: (5, 8)", "4 ≤ 5 → 실패"], caption: "4는 하한 5를 못 넘는다. BST가 아니다. 부모 8만 봤다면 놓쳤을 위반이다." },
+  ]}
+/>
+
+```js
+function isValidBST(levelOrder) {
+  const root = buildTree(levelOrder);
+  function check(n, lo, hi) { // lo < n.val < hi
+    if (!n) return true;
+    if (n.val <= lo || n.val >= hi) return false;
+    return check(n.left, lo, n.val) && check(n.right, n.val, hi);
+  }
+  return check(root, -Infinity, Infinity);
+}
+```
+
+```text
+[2,1,3]                                    wrong: true  right: true
+[5,1,4,null,null,3,6]                      wrong: false  right: false
+[5,3,8,null,null,4,9]                      wrong: true  right: false
+[8,3,10,1,6,null,14,null,null,4,7,13]      wrong: true  right: true
+[1,1]                                      wrong: false  right: false
+[]                                         wrong: true  right: true
+[2147483647]                               wrong: true  right: true
+[-5,-10,0]                                 wrong: true  right: true
+[10,5,15,null,null,6,20]                   wrong: true  right: false
+```
+
+틀린 버전이 `true`라고 답한 `[5,3,8,null,null,4,9]`와 `[10,5,15,null,null,6,20]`이 함정이다. 범위의 시작값은 `-Infinity`, `Infinity`로 잡는다. 다른 언어 풀이를 옮기면서 `Number.MIN_SAFE_INTEGER` 같은 값을 쓰면 그 값이 노드에 들어 있을 때 틀린다. `[2147483647]`이 그런 경계 테스트다. 다른 방법으로는 앞에서 본 중위 순회를 하면서 직전 값보다 항상 큰지만 확인해도 된다. 정렬되어 나와야 BST라는 성질을 그대로 쓴 풀이다.
+
+아래에서 직접 풀어 보자. `buildTree`는 이미 들어 있고, 기대값은 Node로 실행해 확인한 값이다.
+
+<CodePlayground
+  caption="BST 검증"
+  functionName="isValidBST"
+  initialCode={`// 레벨 순서 배열(null = 빈자리)을 트리로 만든다
+function buildTree(arr) {
+  if (!arr.length || arr[0] === null) return null;
+  const root = { val: arr[0], left: null, right: null }, q = [root];
+  let i = 1;
+  for (let h = 0; h < q.length && i < arr.length; h++) {
+    const n = q[h];
+    if (i < arr.length && arr[i] !== null) { n.left = { val: arr[i], left: null, right: null }; q.push(n.left); } i++;
+    if (i < arr.length && arr[i] !== null) { n.right = { val: arr[i], left: null, right: null }; q.push(n.right); } i++;
+  }
+  return root;
+}
+
+function isValidBST(levelOrder) {
+  const root = buildTree(levelOrder);
+  // 모든 노드가 왼쪽 서브트리 전체보다 크고 오른쪽 서브트리 전체보다 작아야 한다
+  return true;
+}`}
+  solution={`function buildTree(arr) {
+  if (!arr.length || arr[0] === null) return null;
+  const root = { val: arr[0], left: null, right: null }, q = [root];
+  let i = 1;
+  for (let h = 0; h < q.length && i < arr.length; h++) {
+    const n = q[h];
+    if (i < arr.length && arr[i] !== null) { n.left = { val: arr[i], left: null, right: null }; q.push(n.left); } i++;
+    if (i < arr.length && arr[i] !== null) { n.right = { val: arr[i], left: null, right: null }; q.push(n.right); } i++;
+  }
+  return root;
+}
+
+function isValidBST(levelOrder) {
+  const root = buildTree(levelOrder);
+  function check(n, lo, hi) {
+    if (!n) return true;
+    if (n.val <= lo || n.val >= hi) return false;
+    return check(n.left, lo, n.val) && check(n.right, n.val, hi);
+  }
+  return check(root, -Infinity, Infinity);
+}`}
+  tests={[
+    { args: [[2, 1, 3]], expected: true, label: "[2,1,3]" },
+    { args: [[5, 1, 4, null, null, 3, 6]], expected: false, label: "오른쪽 자식이 루트보다 작다" },
+    { args: [[5, 3, 8, null, null, 4, 9]], expected: false, label: "손자가 루트 범위를 어긴다" },
+    { args: [[8, 3, 10, 1, 6, null, 14, null, null, 4, 7, 13]], expected: true, label: "본문의 트리" },
+    { args: [[1, 1]], expected: false, label: "같은 키" },
+    { args: [[]], expected: true, label: "빈 트리" },
+    { args: [[2147483647]], expected: true, label: "큰 값 하나" },
+    { args: [[10, 5, 15, null, null, 6, 20]], expected: false, label: "6이 10의 오른쪽에" },
+  ]}
+/>
+
+## 두 노드의 가장 가까운 공통 조상
+
+최소 공통 조상(LCA, lowest common ancestor)은 두 노드를 모두 자손으로 가진 노드 중 가장 깊은 것이다. 조직도에서 두 사람의 가장 가까운 공통 상사, 파일 경로 두 개의 공통 상위 폴더, git에서 두 브랜치가 갈라진 커밋(merge-base)이 모두 같은 질문이다.
+
+BST라면 값만 보고 내려가면 된다. 두 값이 모두 현재 노드보다 작으면 왼쪽, 모두 크면 오른쪽, 그렇지 않으면 두 값이 여기서 갈라지니 현재 노드가 답이다.
+
+<VectorSpace
+  caption="BST에서 4와 7의 공통 조상 찾기"
+  width={400}
+  height={250}
+  points={[
+    { id: "n8", label: "8", x: 200, y: 30 },
+    { id: "n3", label: "3", x: 110, y: 90 },
+    { id: "n10", label: "10", x: 290, y: 90 },
+    { id: "n1", label: "1", x: 60, y: 150 },
+    { id: "n6", label: "6", x: 160, y: 150 },
+    { id: "n14", label: "14", x: 340, y: 150 },
+    { id: "n4", label: "4", x: 125, y: 210 },
+    { id: "n7", label: "7", x: 195, y: 210 },
+    { id: "n13", label: "13", x: 305, y: 210 },
+  ]}
+  edges={[["n8", "n3"], ["n8", "n10"], ["n3", "n1"], ["n3", "n6"], ["n10", "n14"], ["n6", "n4"], ["n6", "n7"], ["n14", "n13"]]}
+  steps={[
+    { caption: "4와 7의 공통 조상을 찾는다. 루트 8에서 4, 7 모두 8보다 작다. 왼쪽으로 간다.", showEdges: true, path: ["n8", "n3"] },
+    { caption: "3에서는 둘 다 3보다 크다. 오른쪽으로 간다.", showEdges: true, path: ["n8", "n3", "n6"] },
+    { caption: "6에서 4는 작고 7은 크다. 두 길이 여기서 갈라지니 6이 답이다.", showEdges: true, path: ["n8", "n3", "n6"] },
+    { caption: "4와 13이라면 루트 8에서 바로 갈라진다. 답은 8이다. 한쪽이 다른 쪽의 조상이면(1과 3) 그 조상이 답이다.", showEdges: true, path: ["n8"] },
+  ]}
+/>
+
+BST가 아닌 일반 이진 트리라면 값으로 방향을 정할 수 없다. 후위 순회로 양쪽 서브트리에 물어본다. 왼쪽과 오른쪽에서 하나씩 찾았다면 내가 답이고, 한쪽에서만 찾았다면 그 결과를 위로 올린다.
+
+```js
+function lcaBST(root, p, q) { // O(h), 반복문
+  let cur = root;
+  while (cur) {
+    if (p < cur.val && q < cur.val) cur = cur.left;
+    else if (p > cur.val && q > cur.val) cur = cur.right;
+    else return cur.val;
+  }
+  return null;
+}
+function lca(n, p, q) { // 일반 이진 트리, O(n)
+  if (!n || n.val === p || n.val === q) return n;
+  const L = lca(n.left, p, q), R = lca(n.right, p, q);
+  return L && R ? n : L || R;
+}
+```
+
+```text
+lcaBST(4,7) 6 lcaBST(4,13) 8 lcaBST(1,3) 3
+lca(4,7) 6 lca(1,7) 3 lca(13,8) 8
+```
+
+일반 트리 풀이는 두 노드가 모두 트리에 있다고 가정한다. 하나만 있으면 그 노드를 답으로 돌려주는데, 면접에서 이 가정을 먼저 확인하면 좋다. 한 트리에 LCA 질문이 수십만 번 들어온다면 매번 O(n)은 비싸다. 노드마다 깊이와 2^k번째 조상을 미리 계산해 두는 이진 리프팅(binary lifting)으로 질문 하나를 O(log n)에 답한다.
+
+## 트리를 꺼낼 때와 넣어 둘 때
+
+BST를 고르는 이유는 하나다. 순서가 필요한데 데이터가 계속 바뀐다. "이 값 이상 중 가장 작은 것", "구간 안의 모든 키", "k번째로 작은 값"을 넣고 빼기와 섞어서 물어야 할 때다. 순서가 필요 없으면 [해시맵](/posts/ds-hash-map)이 빠르고, 가장 작은 것 하나만 반복해서 꺼내면 [힙](/posts/ds-heap)이 더 단순하고 빠르다. 데이터가 거의 안 바뀌면 정렬된 배열이 메모리도 적고 캐시에도 유리하다.
+
+트리 코드에서 실제로 자주 보는 실수는 이렇다.
+
+- 정렬된 입력을 균형 없는 BST에 넣는다. 처음 예제처럼 리스트가 되고, 재귀면 스택이 넘친다.
+- 검증할 때 부모와 자식만 비교한다. 범위를 들고 내려가야 한다.
+- 레벨 순회에 `shift()`를 쓴다. 큰 트리에서 O(n²)이 된다.
+- 중복 키 규칙을 정하지 않는다. 넣기는 오른쪽, 찾기는 왼쪽처럼 어긋나면 있는 키를 못 찾는다.
+- 지우기에서 부모의 참조를 갱신하지 않는다. 위 `remove`처럼 "서브트리의 새 루트를 돌려받아 다시 단다"로 쓰면 부모 포인터 없이도 깔끔하다.
+
+트리 문제는 결국 "이 노드에서 할 일을 정하고 자식에게 같은 일을 맡긴다"로 푼다. 할 일을 언제 하느냐가 순회 순서를 정하고, 무엇을 들고 내려가느냐(범위, 깊이, 경로)가 문제를 푼다. 그 틀 위에서 높이가 곧 비용이라는 것만 기억하면 BST, 균형 트리, B-tree가 한 줄로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### BST의 찾기, 넣기, 지우기 시간 복잡도는 어떻게 되나요?
+
+모두 트리 높이 h에 비례하는 O(h)다. 균형이 잡혀 있으면 h가 log n이라 O(log n)이지만, 정렬된 키를 차례로 넣는 식으로 한쪽으로 기울면 h가 n이 되어 O(n)이다. 실제로 키 2만 개를 무작위로 넣으면 평균 18단계였고 정렬해서 넣으면 1만 단계였다. 그래서 최악을 보장해야 하면 AVL이나 레드-블랙 같은 균형 트리를 쓴다.
+
+### 전위, 중위, 후위, 레벨 순회는 각각 언제 쓰나요?
+
+전위는 부모를 먼저 처리하니 트리 복사나 직렬화에, 중위는 BST에서 정렬된 순서가 나오니 정렬 순회나 k번째 원소에 쓴다. 후위는 자식 결과로 부모를 계산하는 폴더 크기 합이나 트리 해제에 쓴다. 레벨 순회는 큐로 루트에서 가까운 순서대로 보니 층별 처리나 가장 얕은 노드 찾기에 쓴다.
+
+### 재귀 대신 반복문으로 트리를 순회해야 하는 이유는 무엇인가요?
+
+재귀는 깊이만큼 콜 스택 프레임을 쌓아서 한쪽으로 긴 트리에서는 스택이 넘친다. Node 22에서 재귀 insert가 깊이 1만 4천 정도에서 RangeError를 냈다. 반복문과 배열 스택을 쓰면 같은 정보를 힙에 쌓으니 넘치지 않는다. 트리 모양을 보장할 수 없는 외부 입력이면 반복문이 안전하다.
+
+### 자식이 둘인 노드는 어떻게 지우나요?
+
+오른쪽 서브트리에서 가장 작은 노드(후계자)를 찾아 그 키를 지울 자리에 복사하고, 후계자 노드를 원래 위치에서 지운다. 후계자는 왼쪽 자식이 없으니 그 지우기는 자식이 0개나 1개인 쉬운 경우로 끝난다. 왼쪽 서브트리의 가장 큰 노드(선행자)를 써도 같다.
+
+### 이 트리가 BST인지 어떻게 검증하나요? 흔한 실수는요?
+
+각 노드가 들어갈 수 있는 하한과 상한을 들고 내려가며 확인한다. 왼쪽으로 가면 상한이 부모 값이 되고 오른쪽으로 가면 하한이 부모 값이 된다. 흔한 실수는 부모와 직접 자식만 비교하는 것인데, 손자 노드가 조상의 범위를 어기는 경우를 놓친다. 중위 순회 결과가 엄격하게 증가하는지 보는 방법도 같은 답을 준다.
+
+### BST가 한쪽으로 기우는 걸 어떻게 막나요?
+
+넣고 지울 때 회전으로 높이를 고치는 균형 트리를 쓴다. AVL은 좌우 높이 차를 1 이하로 엄격하게 지켜 찾기가 빠르고, 레드-블랙은 느슨한 대신 회전이 적어 쓰기가 많은 곳에 맞다. 데이터를 한 번에 다 안다면 정렬한 뒤 가운데를 루트로 삼아 재귀로 만들면 바로 균형 트리가 나온다.
+
+### DB 인덱스는 왜 이진 트리가 아니라 B-tree를 쓰나요?
+
+디스크나 페이지 캐시는 한 번에 수 KB 페이지 단위로 읽기 때문이다. 이진 트리는 노드 하나에 키 하나라 100만 개면 20번 가까이 페이지를 읽어야 하지만, B-tree는 노드 하나(페이지 하나)에 키를 수백 개 담아 높이를 3~4로 낮춘다. 읽는 페이지 수가 곧 비용이라 가지를 넓게 펴는 쪽이 유리하다.
+
+### 일반 이진 트리에서 두 노드의 최소 공통 조상은 어떻게 찾나요?
+
+후위 순회로 왼쪽과 오른쪽 서브트리에 두 노드를 찾게 하고, 양쪽에서 하나씩 찾았으면 현재 노드가 답이다. 한쪽에서만 찾았으면 그 결과를 위로 올린다. 시간은 O(n)이고 두 노드가 모두 트리에 있다는 가정이 필요하다. BST라면 값만 보고 갈라지는 지점을 찾으면 되니 O(h)다.

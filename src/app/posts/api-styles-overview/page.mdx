@@ -1,0 +1,292 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("api-styles-overview");
+
+쇼핑 앱 다음 분기 기능 목록에 다섯 줄이 있다. 주문 목록 화면 개편, 결제 완료 처리, 고객 상담 채팅, AI 상품 추천 답변, 그리고 주문 서비스가 재고 서비스를 부르는 내부 호출. 회의에서 누군가 "그냥 다 REST로 하면 안 돼요?"라고 묻는다. 할 수는 있다. 결제가 끝났는지 1초마다 PG사에 묻고, 채팅 새 메시지를 2초마다 묻고, AI 답변이 다 만들어질 때까지 10초 동안 빈 화면을 띄우면 된다. 다섯 줄 중 셋에서 사용자가 불편을 느낀다.
+
+API에는 모양이 여러 가지 있고, 모양마다 잘 푸는 문제가 다르다. 이 글은 그 모양들을 한 장의 지도에 놓는다. 스타일마다 자세한 내용은 각 글에 있고, 여기서는 스타일들이 서로 어떻게 다른지, 위의 다섯 줄에는 각각 무엇을 고를지를 정리한다.
+
+## 누가 먼저 말을 거는가
+
+API 스타일을 가르는 첫 질문은 대화를 누가 시작하느냐다. 아래 그림처럼 두 갈래로 나뉜다.
+
+<ConceptDiagram
+  caption="API 스타일의 두 갈래"
+  width={640}
+  height={300}
+  nodes={[
+    { id: "api", label: "API", x: 320, y: 40 },
+    { id: "rr", label: "요청-응답", sub: "클라이언트가 묻는다", x: 170, y: 130, w: 150 },
+    { id: "ev", label: "이벤트 기반", sub: "생기면 알려 준다", x: 470, y: 130, w: 150 },
+    { id: "rest", label: "REST", sub: "자원", x: 60, y: 240 },
+    { id: "rpc", label: "RPC", sub: "동작", x: 170, y: 240 },
+    { id: "gql", label: "GraphQL", sub: "화면 모양", x: 280, y: 240 },
+    { id: "wh", label: "Webhook", sub: "서버→서버", x: 370, y: 240 },
+    { id: "ws", label: "WebSocket", sub: "양방향", x: 480, y: 240 },
+    { id: "st", label: "Streaming", sub: "긴 응답", x: 590, y: 240 },
+  ]}
+  edges={[
+    { from: "api", to: "rr" },
+    { from: "api", to: "ev" },
+    { from: "rr", to: "rest" },
+    { from: "rr", to: "rpc" },
+    { from: "rr", to: "gql" },
+    { from: "ev", to: "wh" },
+    { from: "ev", to: "ws" },
+    { from: "ev", to: "st" },
+  ]}
+/>
+
+요청-응답(request-response) 쪽은 클라이언트가 필요할 때 묻고 서버가 한 번 답하면 끝난다. 서버는 묻지 않은 것을 먼저 말할 수 없다. REST, RPC, GraphQL은 "무엇을 묻는가"를 표현하는 방식이 다를 뿐 이 틀은 같다.
+
+이벤트 기반(event-driven) 쪽은 무언가 생긴 쪽이 먼저 알린다. 결제가 끝난 PG사, 새 메시지를 받은 채팅 서버, 다음 토큰을 만든 LLM이 그렇다. 묻기 전에 소식이 오니 폴링이 필요 없다. 대신 알림을 받을 주소나 열린 연결을 미리 마련해 둬야 한다. 웹훅, WebSocket, HTTP 스트리밍은 "어떻게 먼저 말하는가"의 세 가지 방법이다.
+
+서비스 사이의 비동기 메시지(Kafka, RabbitMQ 같은 브로커를 거치는 이벤트)도 이벤트 기반이지만 이 지도에서는 뺐다. 그건 API 모양보다 시스템 구조의 문제라서 [이벤트 기반 아키텍처](/posts/event-driven-architecture)와 [메시지 큐](/posts/message-queue-basics)에서 다룬다.
+
+## 묻고 답하는 세 가지
+
+REST는 자원에 이름(URL)을 붙이고 HTTP 메서드로 그 자원을 다룬다. `GET /orders/42`, `POST /orders`, `PATCH /orders/42`처럼 명사와 표준 동사의 조합이다. HTTP의 의미를 그대로 쓰니 캐시, 프록시, 모니터링, curl이 별도 지원 없이 이해한다. 외부 개발자가 처음 봐도 쓰기 쉽다. 설계 규칙과 페이지네이션은 [REST API 설계](/posts/rest-api-design)와 [페이지네이션과 정렬](/posts/api-pagination-sorting)에 있다.
+
+RPC(Remote Procedure Call)는 원격의 함수를 이름으로 부른다. 주소는 하나이고 무엇을 할지는 메서드 이름이 말한다. `cancelOrder(42)`처럼 동사가 중심이라 CRUD로 깔끔하게 안 떨어지는 동작을 표현하기 쉽다. 가장 단순한 형태인 JSON-RPC 2.0을 직접 만들어 봤다. 요청을 눌러 조각을 보자.
+
+<UrlAnatomy
+  caption="JSON-RPC 2.0 요청 하나"
+  base="POST /rpc"
+  separator=" { "
+  joiner=" , "
+  params={[
+    { key: "jsonrpc", display: "\"jsonrpc\": \"2.0\"", title: "버전 표시", description: "항상 문자열 \"2.0\"이다. 없거나 다르면 서버는 -32600 Invalid Request로 답한다.", required: true },
+    { key: "method", display: "\"method\": \"user.get\"", title: "부를 함수 이름", description: "URL이 아니라 이 문자열이 무엇을 할지 정한다. 점으로 이름공간을 나누는 관례가 흔하다. 없는 이름이면 -32601 Method not found다.", required: true },
+    { key: "params", display: "\"params\": { \"id\": 1 }", title: "인자", description: "객체(이름 있는 인자)나 배열(순서 있는 인자)이다. 서버가 검사해 맞지 않으면 -32602 Invalid params를 돌려준다." },
+    { key: "id", display: "\"id\": 7", title: "응답을 짝지을 번호", description: "응답에 같은 id가 붙어 온다. 배치로 여러 요청을 보내면 응답 순서가 바뀔 수 있어서 이 값으로 짝을 짓는다. id를 아예 빼면 알림(notification)이라 서버는 답하지 않는다.", code: "{\"jsonrpc\":\"2.0\",\"result\":{\"id\":1,\"name\":\"kim\"},\"id\":7}" },
+  ]}
+/>
+
+```bash
+# 하나 부르기, 없는 메서드, 잘못된 인자
+curl -s http://127.0.0.1:18220/rpc -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"user.get","params":{"id":1},"id":7}'
+curl -s http://127.0.0.1:18220/rpc -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"user.delete","params":{"id":1},"id":8}'
+curl -s http://127.0.0.1:18220/rpc -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"user.get","params":{"id":"1"},"id":9}'
+```
+
+```text
+{"jsonrpc":"2.0","result":{"id":1,"name":"kim"},"id":7}
+{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":8}
+{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params","data":"id는 숫자"},"id":9}
+```
+
+배열로 여러 호출을 한 번에 보낼 수도 있다. 가운데의 `audit.log`는 id가 없는 알림이라 응답 배열에서 빠졌다.
+
+```bash
+curl -s http://127.0.0.1:18220/rpc -H 'content-type: application/json' -d '[
+  {"jsonrpc":"2.0","method":"math.add","params":[2,3],"id":"a"},
+  {"jsonrpc":"2.0","method":"audit.log","params":{"who":"lee"}},
+  {"jsonrpc":"2.0","method":"user.get","params":{"id":2},"id":"b"},
+  {"jsonrpc":"2.0","method":"nope","id":"c"}]'
+```
+
+```text
+[{"jsonrpc":"2.0","result":5,"id":"a"},{"jsonrpc":"2.0","result":{"id":2,"name":"lee"},"id":"b"},{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":"c"}]
+```
+
+JSON-RPC 명세는 전송 방법을 정하지 않는다. HTTP 상태 코드를 어떻게 쓸지도 정하지 않아서, 이 서버는 에러도 200 본문에 담고 알림만 온 요청에는 204로 답하게 만들었다. 에러를 HTTP 상태가 아니라 본문에 담는 것은 GraphQL, gRPC와 같다. JSON-RPC는 이더리움 노드 API, 에디터와 언어 서버 사이의 LSP, AI 도구 연결 규약인 MCP가 쓴다. 한 프로세스와 오래 대화하며 함수를 부르는 곳에 잘 맞는다.
+
+같은 RPC 계열에서 서비스 사이 호출의 표준이 된 것이 gRPC다. `.proto` 파일로 계약을 정하고 양쪽 코드를 생성하며, HTTP/2 위에서 Protocol Buffers 바이너리로 주고받는다. 메시지가 작고 타입이 맞지 않는 실수가 컴파일 때 걸린다. 연결이 오래 살아서 L4 로드 밸런서가 부하를 못 나누는 문제, 브라우저에서 바로 못 부르는 문제는 [gRPC](/posts/grpc)에서 재현했다.
+
+GraphQL은 클라이언트가 받고 싶은 모양을 쿼리로 적는다. 서버는 타입 스키마를 내놓고 필드마다 리졸버를 둔다. 화면마다 필요한 데이터가 다를 때 오버페칭과 언더페칭이 사라지는 대신, N+1과 비싼 쿼리를 서버가 막아야 하고 HTTP 캐시를 쓰기 어렵다. [GraphQL 기초](/posts/graphql-basics)에서 그 비용을 직접 쟀다.
+
+## 먼저 말하는 세 가지
+
+이벤트 기반의 세 가지는 "누가 누구에게, 어떤 통로로" 먼저 말하는지가 다르다. 아래 그림에서 단계를 넘기며 비교해 보자.
+
+<SequenceDiagram
+  caption="같은 '먼저 말하기'도 통로가 다르다"
+  actors={[
+    { id: "pg", label: "PG사" },
+    { id: "srv", label: "우리 서버" },
+    { id: "app", label: "앱" },
+  ]}
+  steps={[
+    { from: "app", to: "srv", label: "GET /orders/42", title: "요청-응답: 앱이 묻는다", detail: "앱이 필요할 때 묻고 서버가 한 번 답한다. 결제가 끝났는지 알려면 끝날 때까지 계속 물어야 한다." },
+    { from: "pg", to: "srv", label: "POST /webhooks/pg", title: "웹훅: 남의 서버가 우리 서버를 부른다", detail: "결제가 끝나면 PG사가 미리 등록해 둔 우리 주소로 HTTP 요청을 보낸다. 방향만 거꾸로일 뿐 평범한 요청 하나다.", payload: "{\"type\":\"payment.succeeded\",\"orderId\":42}" },
+    { from: "srv", to: "srv", label: "서명 검증·저장", title: "받은 쪽은 의심하고 빨리 답한다", detail: "서명으로 PG사가 보낸 게 맞는지 확인하고, 저장만 하고 2xx로 답한 뒤 처리는 큐에서 한다. 제공자는 실패하면 다시 보내니 중복을 걸러야 한다." },
+    { from: "srv", to: "app", label: "stream: 결제 완료", title: "HTTP 스트리밍: 열어 둔 응답에 이어 쓴다", detail: "앱이 미리 열어 둔 SSE나 NDJSON 응답에 서버가 한 줄을 쓴다. 서버에서 앱 쪽으로만 흐른다." },
+    { from: "app", to: "srv", label: "ws: 상담 메시지", title: "WebSocket: 같은 연결로 양쪽이 말한다", detail: "채팅처럼 앱도 자주 말하면 업그레이드한 연결 하나에서 프레임을 주고받는다. 요청마다 HTTP 헤더를 다시 보내지 않는다." },
+    { from: "srv", to: "app", label: "ws: 상담원 답장", title: "서버도 같은 연결로 답한다", detail: "연결이 끊기면 둘 다 모른다. ping으로 살아 있는지 확인하고, 다시 붙을 때 놓친 메시지를 이어 받는 장치가 필요하다." },
+  ]}
+/>
+
+웹훅은 서버 사이에서 쓴다. 브라우저나 앱은 고정된 주소가 없어서 남이 먼저 요청을 보낼 수 없기 때문이다. 결제, 배송 추적, Git 저장소 이벤트처럼 "다른 회사의 시스템에서 생긴 일"을 받을 때 쓴다. 서명 검증, 재전송과 중복, 순서 뒤바뀜, 보내는 쪽이 됐을 때의 SSRF는 [웹훅](/posts/webhooks)에서 직접 공격해 봤다.
+
+WebSocket은 HTTP 요청 하나로 시작해 `101 Switching Protocols`로 업그레이드한 뒤, 같은 TCP 연결 위에서 양쪽이 아무 때나 프레임을 보낸다. 클라이언트도 초당 여러 번 말하는 채팅, 게임, 공동 편집에 맞다. 연결을 오래 쥐는 데서 오는 일들(유휴 타임아웃, 죽은 연결, 서버를 늘리면 메시지가 반만 가는 문제)은 [WebSocket 깊게 보기](/posts/websocket-deep-dive)에 있다.
+
+HTTP 스트리밍은 응답 하나를 끝내지 않고 이어 쓴다. 서버에서 클라이언트로만 흐르는 소식(알림, 진행 상황, LLM 토큰)에 맞고, 평범한 HTTP라서 기존 인증과 로드 밸런서를 그대로 쓴다. 그 위에 얹는 형식이 SSE와 NDJSON이다. 조각을 어떻게 자르고 끊김과 배압을 어떻게 다루는지는 [HTTP 스트리밍](/posts/http-streaming-sse)에, 폴링·롱 폴링과의 비교는 [실시간 통신 네 가지 비교](/posts/realtime-communication)에 있다.
+
+## 여섯 가지를 같은 잣대로
+
+비교할 축이 여섯 개라 표로 놓는다.
+
+| 스타일 | 누가 시작 | 연결 | 결합 | HTTP 캐시 | 도구 | 잘 깨지는 곳 |
+|---|---|---|---|---|---|---|
+| REST | 클라이언트 | 요청마다 | URL·JSON 모양 | 그대로 쓴다 | OpenAPI, curl | 화면 하나에 요청 여러 번 |
+| RPC (gRPC) | 클라이언트 | 오래 산다 (HTTP/2) | `.proto` 계약, 코드 생성 | 못 쓴다 | protoc, grpcurl | 한 Pod에 몰리는 부하, 브라우저 |
+| GraphQL | 클라이언트 | 요청마다 | 스키마 | 해시 GET일 때만 | 스키마, 코드 생성 | N+1, 비싼 쿼리, 200 속의 에러 |
+| Webhook | 외부 서버 | 요청마다 | 이벤트 모양 | 해당 없음 | 서명 검증, 재전송 대시보드 | 중복, 순서, 유실 |
+| WebSocket | 양쪽 | 오래 산다 | 메시지 규약(직접 정함) | 해당 없음 | 개발자 도구 WS 탭 | 유휴 끊김, 서버 확장 |
+| HTTP 스트리밍 | 서버 (요청 뒤) | 응답이 오래 산다 | 이벤트 형식 | 끈다 | curl -N | 프록시 버퍼, 200 뒤의 실패 |
+
+"결합" 칸은 양쪽이 무엇을 함께 약속해야 하는지다. REST와 GraphQL은 응답 모양만 맞추면 되고 언어는 상관없다. gRPC는 계약이 더 엄격한 대신 그 엄격함이 실수를 막는다. WebSocket은 프레임 위에 무엇을 실을지 정한 표준이 없어서 메시지 종류, 응답 짝짓기, 재전송을 팀이 직접 정한다. 이 부분이 생각보다 일이 많다.
+
+"잘 깨지는 곳" 칸은 그 스타일을 처음 운영할 때 가장 먼저 만나는 장애다. 요청-응답 쪽은 주로 너무 많이 부르거나(REST의 계단, GraphQL의 N+1) 한곳에 몰리는(gRPC의 긴 연결) 문제다. 이벤트 기반 쪽은 주로 소식이 사라지거나 두 번 오는 문제다. 웹훅은 제공자가 재전송하다 포기하면 유실되고, WebSocket과 스트리밍은 연결이 조용히 끊긴 사이에 온 소식을 놓친다. 그래서 이벤트 기반 API는 거의 항상 "놓친 것을 다시 받는 길"과 짝을 이룬다. 웹훅은 주기적인 조회로 맞춰 보고, 스트림은 마지막 id부터 이어 받는다.
+
+## 한 서비스가 여섯 가지를 다 쓴다
+
+처음의 다섯 줄을 한 그림에 놓으면 이렇다. 앱 뒤에 화면용 서버(BFF)가 있고, 그 뒤에 내부 서비스들이 있다. 단계를 넘기며 경로마다 어떤 스타일이 쓰이는지 보자.
+
+<NetworkTopology
+  caption="쇼핑 앱 한 곳에서 쓰는 API 스타일들"
+  width={640}
+  height={300}
+  zones={[
+    { id: "out", label: "바깥", x: 10, y: 20, w: 150, h: 270, tone: "public" },
+    { id: "edge", label: "화면용 서버", x: 190, y: 20, w: 170, h: 270, tone: "edge" },
+    { id: "in", label: "내부 서비스", x: 390, y: 20, w: 240, h: 270, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱", x: 85, y: 90, icon: "client" },
+    { id: "pg", label: "PG사", x: 85, y: 230, icon: "internet" },
+    { id: "bff", label: "BFF", sub: "GraphQL·SSE·WS", x: 275, y: 90, icon: "gateway", w: 120 },
+    { id: "hook", label: "webhook 수신", x: 275, y: 230, icon: "server", w: 110 },
+    { id: "order", label: "주문", x: 470, y: 90, icon: "server" },
+    { id: "stock", label: "재고", x: 580, y: 160, icon: "server" },
+    { id: "llm", label: "LLM API", x: 470, y: 230, icon: "internet" },
+  ]}
+  links={[
+    { from: "app", to: "bff" },
+    { from: "bff", to: "order" },
+    { from: "order", to: "stock" },
+    { from: "pg", to: "hook" },
+    { from: "hook", to: "order" },
+    { from: "bff", to: "llm" },
+  ]}
+  steps={[
+    { path: ["app", "bff", "order"], packet: "query", title: "주문 목록 화면: GraphQL", detail: "앱이 화면에 필요한 필드만 쿼리로 묻는다. BFF가 내부 서비스를 불러 그 모양으로 조립한다. 웹과 앱이 다른 화면을 각자 바꿀 수 있다." },
+    { path: ["order", "stock"], packet: "gRPC", title: "주문 → 재고: gRPC", detail: "내부 서비스끼리는 .proto 계약과 기한(deadline)이 있는 gRPC로 부른다. 초당 수천 번이라 메시지 크기와 연결 재사용이 효과를 낸다." },
+    { path: ["pg", "hook", "order"], packet: "webhook", title: "결제 완료: 웹훅", detail: "PG사가 우리 수신 주소로 POST를 보낸다. 서명을 확인하고 저장한 뒤 바로 2xx를 준다. 주문 상태 변경은 그 뒤에 한다." },
+    { path: ["bff", "app"], packet: "SSE", title: "결제 완료를 앱에 알린다: 스트리밍", detail: "앱이 열어 둔 SSE 연결로 '결제 완료' 한 줄을 보낸다. 앱은 PG사에도 우리 서버에도 묻지 않고 기다리기만 한다." },
+    { path: ["app", "bff"], packet: "ws", title: "상담 채팅: WebSocket", detail: "고객과 상담원이 서로 자주 말하니 양방향 연결을 연다. 상담원 쪽 서버가 여러 대면 메시지 버스로 이어 준다." },
+    { path: ["app", "bff", "llm"], packet: "POST", title: "AI 추천: 스트리밍 응답", detail: "앱이 질문을 POST로 보내고, BFF가 API 키를 붙여 LLM을 부른다. 토큰이 오는 대로 응답에 이어 써서 첫 글자가 0.2초 안에 보인다." },
+  ]}
+/>
+
+바깥에 공개하는 상품 API가 따로 있다면 그건 REST로 낸다. 결국 여섯 가지가 한 서비스 안에서 자기 자리를 갖는다. 스타일 하나로 통일하는 것보다 경로마다 맞는 것을 고르는 편이 운영이 쉽다. 대신 스타일이 하나 늘 때마다 모니터링, 인증, 문서화 방식이 하나씩 는다는 것도 계산에 넣는다.
+
+## 상황별로 고르기
+
+공개 API라면 REST다. 처음 보는 외부 개발자가 문서와 curl만으로 쓸 수 있어야 하고, URL 단위로 요청 수 제한과 캐시를 걸어야 한다. 버전을 어떻게 나누고 끝낼지는 [API 버전 관리](/posts/api-versioning)를, 요청 수 제한은 [요청 수 제한 붙이기](/posts/rate-limiting-in-practice)을 본다.
+
+내부 마이크로서비스 사이라면 gRPC가 기본값이다. 호출이 잦고, 팀 사이 계약이 분명해야 하고, 기한 전파가 필요하다. 응답을 기다릴 필요가 없는 일(주문이 생겼다는 사실을 알리기)은 호출 대신 메시지 브로커로 보내 서비스끼리 덜 묶이게 한다. 이 판단은 [마이크로서비스](/posts/microservices)와 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에 있다.
+
+모바일 앱 화면이 많고 자주 바뀐다면 GraphQL을 BFF 자리에 둔다. 화면 하나에 REST 요청이 계단처럼 여러 번 생기고, 웹과 앱이 서로 다른 필드를 원할 때 효과가 크다. 화면이 몇 개 안 되면 REST에 `fields`·`expand`를 붙이는 쪽이 싸다. 자세한 비용은 [GraphQL 기초](/posts/graphql-basics)에 있다.
+
+결제처럼 외부 시스템의 결과를 받아야 한다면 웹훅을 받고, 웹훅만 믿지 않는다. 서명을 검증하고, 이벤트 id로 중복을 거르고, 몇 분마다 "처리 중"으로 남은 주문을 제공자 API로 다시 조회해 맞춘다. 같은 요청이 두 번 와도 한 번만 처리되게 하는 방법은 [멱등성 키](/posts/idempotency-key)에 있다.
+
+채팅이라면 WebSocket이다. 양쪽이 자주 짧게 말하기 때문이다. 다만 알림 배지처럼 서버에서만 소식이 오는 기능까지 WebSocket으로 만들 필요는 없다. 연결을 붙잡는 비용은 같고, 메시지 규약을 직접 정해야 하는 일만 늘어난다. 채팅 서버를 여러 대로 늘리는 설계는 [채팅 시스템 설계](/posts/sd-chat-connections)에 있다.
+
+AI 답변처럼 응답이 천천히 만들어진다면 HTTP 스트리밍이다. POST 요청 하나의 응답을 토큰 단위로 이어 쓴다. 첫 토큰까지의 시간이 사용자가 느끼는 대기 시간이 된다. 프록시 버퍼링을 끄고, 끝 메시지를 두고, 사용자가 중지하면 생성도 멈춘다.
+
+이 판단을 질문 순서로 적으면 아래와 같다. 결제 콜백 하나를 넣고 단계를 따라가 보자.
+
+<AlgoTrace
+  caption="질문 순서대로 후보를 줄여 나간다"
+  cells={["외부 시스템이 먼저 알리나", "내부 서비스끼리인가", "양쪽이 자주 말하나", "서버에서만 흘러오나", "화면이 많고 자주 바뀌나", "REST"]}
+  memoryLabel="남은 후보"
+  steps={[
+    { pointer: 0, memory: ["REST", "gRPC", "GraphQL", "Webhook", "WebSocket", "Streaming"], caption: "PG사의 결제 완료 알림이다. 먼저 말을 거는 쪽이 우리 바깥의 서버다." },
+    { pointer: 0, found: [0], memory: ["Webhook"], caption: "외부 서버가 우리 서버를 부르는 통로는 웹훅뿐이다. 남의 서버에 우리 연결을 열어 둘 수 없다." },
+    { pointer: 3, memory: ["Webhook", "+ Streaming"], caption: "받은 결과를 앱에 알리는 건 다른 경로다. 서버에서 앱으로만 흐르니 같은 질문 목록을 다시 돈다." },
+    { pointer: 3, found: [3], memory: ["Webhook", "Streaming(SSE)"], caption: "앱 쪽은 열어 둔 SSE에 한 줄을 쓴다. 기능 하나가 스타일 두 개를 쓴다." },
+    { pointer: 5, found: [5], memory: ["Webhook", "Streaming(SSE)", "+ REST 조회"], caption: "놓친 알림을 맞춰 보는 주기적 조회는 평범한 REST 호출이다. 이벤트 기반 API에는 대개 이런 짝이 붙는다." },
+  ]}
+/>
+
+같은 순서를 함수로 적어 보자. 기능 하나의 성격을 받아서 스타일 이름을 돌려준다. 질문 순서에 따라 답이 바뀐다. 외부 알림인지를 가장 먼저 보고, 화면 다양성은 가장 나중에 본다.
+
+<CodePlayground
+  caption="기능 성격으로 API 스타일 고르기"
+  functionName="pickApiStyle"
+  initialCode={`function pickApiStyle(need) {
+  // need.pushFrom: "external"(외부 시스템이 알림) | "server"(우리 서버가 클라이언트에게) | 없음
+  // need.bidirectional: 클라이언트도 자주 말하나
+  // need.audience: "public" | "internal" | "own-clients"
+  // need.manyScreens: 화면이 많고 자주 바뀌나
+  // 반환: "webhook" | "grpc" | "websocket" | "http-streaming" | "graphql" | "rest"
+  return "rest";
+}`}
+  solution={`function pickApiStyle(need) {
+  if (need.pushFrom === "external") return "webhook";     // 남의 서버가 먼저 부른다
+  if (need.audience === "internal") return "grpc";        // 서비스 사이 (스트리밍도 gRPC로)
+  if (need.bidirectional) return "websocket";             // 양쪽이 자주 말한다
+  if (need.pushFrom === "server") return "http-streaming"; // 서버에서만 흘러온다
+  if (need.manyScreens) return "graphql";                 // 화면마다 모양이 다르다
+  return "rest";
+}`}
+  tests={[
+    { label: "공개 상품 API", args: [{ audience: "public" }], expected: "rest" },
+    { label: "주문 → 재고", args: [{ audience: "internal" }], expected: "grpc" },
+    { label: "앱 화면이 많다", args: [{ audience: "own-clients", manyScreens: true }], expected: "graphql" },
+    { label: "관리자 화면 몇 개", args: [{ audience: "own-clients", manyScreens: false }], expected: "rest" },
+    { label: "PG 결제 콜백", args: [{ pushFrom: "external", audience: "public" }], expected: "webhook" },
+    { label: "상담 채팅", args: [{ pushFrom: "server", bidirectional: true, audience: "own-clients" }], expected: "websocket" },
+    { label: "AI 답변 토큰", args: [{ pushFrom: "server", audience: "own-clients" }], expected: "http-streaming" },
+    { label: "서비스 사이 이벤트 구독", args: [{ pushFrom: "server", audience: "internal" }], expected: "grpc" },
+  ]}
+/>
+
+마지막 테스트는 규칙의 한계를 보여 준다. 내부 서비스 사이의 구독은 gRPC 서버 스트리밍으로도 되지만, 받는 쪽이 여럿이거나 잠깐 죽어 있어도 소식을 잃으면 안 된다면 메시지 브로커가 맞다. 규칙은 출발점이고, 최종 판단은 "소식을 잃어도 되는가, 받는 쪽이 몇인가"를 더 물어서 한다.
+
+## 잘못 골랐을 때 보이는 증상
+
+결제 결과를 폴링으로 확인하면 PG사의 요청 수 제한에 먼저 걸린다. 429가 늘고, 결제는 끝났는데 화면은 "처리 중"에 머문다. 웹훅으로 바꾸고 폴링은 몇 분 간격의 맞춰 보기로만 남긴다.
+
+서버에서만 소식이 오는 알림을 WebSocket으로 만들면 로드 밸런서 뒤에서 연결이 한 서버에 쌓이고, 배포 때마다 모든 연결이 한꺼번에 다시 붙는다. 메시지 규약과 재연결 코드는 직접 짠 만큼 버그가 생긴다. 같은 일을 SSE로 하면 재연결과 이어 받기는 브라우저가 해 준다.
+
+공개 API를 GraphQL로만 내면 외부 개발자가 쿼리 문법부터 배워야 하고, CDN 캐시가 빠져서 같은 상품 목록 요청이 모두 원 서버까지 온다. 깊이·비용 제한을 안 넣었다면 쿼리 하나로 서버가 멈출 수도 있다.
+
+내부 서비스 사이를 JSON REST로 두면 호출이 깊어질수록 직렬화 비용과 지연이 쌓이고, 응답 모양이 바뀐 걸 배포 후에야 안다. 반대로 브라우저가 부르는 API를 gRPC로만 두면 gRPC-Web 프록시가 하나 더 생긴다.
+
+AI 답변을 일반 요청-응답으로 두면 10초 동안 빈 화면을 보고, 그 사이 로드 밸런서의 응답 시간 한도에 걸려 504가 나기도 한다. 스트리밍으로 바꿨는데도 답이 한꺼번에 온다면 프록시 버퍼링을 먼저 본다.
+
+## 다시 기능 목록으로
+
+처음 다섯 줄에 답을 붙이면 이렇다. 주문 목록 화면은 GraphQL, 결제 완료는 웹훅으로 받아 SSE로 앱에 알리고, 상담 채팅은 WebSocket, AI 추천은 스트리밍 응답, 주문에서 재고로 가는 호출은 gRPC다. 공개 상품 API가 생기면 REST로 낸다. 고르는 기준은 두 가지 질문으로 줄어든다. 누가 먼저 말을 거는가, 그리고 받는 쪽이 무엇을 원하는 모양으로 받아야 하는가다.
+
+## 면접에서 나올 만한 질문
+
+### 요청-응답 API와 이벤트 기반 API는 무엇이 다른가요?
+
+누가 대화를 시작하느냐가 다르다. 요청-응답은 클라이언트가 필요할 때 묻고 서버가 한 번 답하며, REST·RPC·GraphQL이 여기에 속한다. 이벤트 기반은 무언가 생긴 쪽이 먼저 알리며, 웹훅·WebSocket·HTTP 스트리밍이 여기에 속한다. 이벤트 기반은 폴링을 없애는 대신 받을 주소나 열린 연결을 미리 마련해야 하고, 놓친 소식을 다시 받는 길이 함께 필요하다.
+
+### REST와 RPC는 어떻게 다른가요?
+
+REST는 자원에 URL로 이름을 붙이고 HTTP 메서드라는 정해진 동사로 다루는 반면, RPC는 원격 함수를 이름으로 부르고 동사를 자유롭게 정한다. REST는 HTTP의 의미를 그대로 써서 캐시와 프록시, 모니터링이 바로 이해하고, RPC는 CRUD로 안 떨어지는 동작을 표현하기 쉽다. JSON-RPC는 에러를 HTTP 상태가 아니라 본문의 code로 돌려주고, gRPC는 여기에 `.proto` 계약과 바이너리 직렬화를 더해 서비스 사이 호출에 쓴다.
+
+### JSON-RPC의 notification과 batch는 무엇인가요?
+
+notification은 id를 뺀 요청으로, 서버는 실행만 하고 응답을 보내지 않는다. 결과가 필요 없는 로그 기록 같은 호출에 쓴다. batch는 요청 여러 개를 배열 하나로 보내는 것이고, 응답도 배열로 오지만 순서가 바뀔 수 있어 id로 짝을 짓는다. 배치 안의 알림은 응답 배열에서 빠지고, 알림만 보냈다면 응답 자체가 없다.
+
+### 웹훅을 쓸 때 꼭 함께 해야 하는 일은요?
+
+서명으로 보낸 쪽을 확인하고, 이벤트 id로 중복을 거르고, 저장만 한 뒤 빨리 2xx로 답하고 처리는 비동기로 한다. 제공자는 실패하면 다시 보내므로 같은 이벤트가 여러 번 오고 순서도 바뀔 수 있다. 재전송을 포기하면 유실되니 주기적으로 제공자 API를 조회해 상태를 맞추는 작업도 둔다.
+
+### 서버에서 클라이언트로 알림을 보낼 때 WebSocket과 SSE 중 무엇을 고르나요?
+
+서버에서만 소식이 온다면 SSE가 낫다. 평범한 HTTP라 기존 인증과 로드 밸런서를 쓰고, 재연결과 Last-Event-ID 이어 받기를 브라우저가 해 준다. 클라이언트도 초당 여러 번 말하는 채팅·게임·공동 편집이라면 WebSocket이 맞다. 둘 다 연결을 오래 쥐므로 하트비트와 서버 확장 대책은 똑같이 필요하다.
+
+### 한 서비스에서 여러 API 스타일을 섞어 써도 되나요?
+
+경로마다 맞는 것을 고르는 편이 보통 낫다. 공개 API는 REST, 앱 화면용 BFF는 GraphQL, 내부 호출은 gRPC, 외부 결제 결과는 웹훅, 채팅은 WebSocket, AI 답변은 스트리밍처럼 한 서비스 안에서 자리를 나눈다. 다만 스타일이 하나 늘 때마다 모니터링, 인증, 문서화 방식도 하나씩 늘어나니, 효과가 분명한 경로에만 들인다.
+
+### AI 답변 기능에 어떤 API 스타일을 쓰겠나요?
+
+POST 요청 하나의 응답을 토큰 단위로 이어 쓰는 HTTP 스트리밍을 쓴다. 첫 토큰까지의 시간이 체감 대기 시간이 되고, 질문 본문과 인증 헤더가 필요하므로 EventSource 대신 fetch로 읽는다. 프록시 버퍼링을 끄고, 끝 메시지로 정상 종료를 구분하고, 사용자가 중지하면 LLM 호출도 끊어 비용을 줄인다.

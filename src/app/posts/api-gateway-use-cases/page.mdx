@@ -1,0 +1,635 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("api-gateway-use-cases");
+
+"API 게이트웨이로 할 수 있는 일 열 가지"라는 그림이 자주 돈다. 요청 수 제한, 인증, 로드 밸런싱, 라우팅, TLS 종료, 캐시, 변환, 서킷 브레이커, 로그와 지표, 버전 관리. 새 서비스를 붙이는 사람이 이 그림을 보고 "열 개 다 켜 주세요"라고 하면, 그대로 켜도 될까. 켜면 요청에 정확히 무슨 일이 일어나고, 무엇이 여전히 서비스 몫으로 남고, 입구에 몰아넣은 대가로 무엇을 내는지 알아야 고를 수 있다.
+
+이 주제의 다른 글과 나눠 맡는 부분부터 적는다. 게이트웨이가 무엇이고 리버스 프록시·로드 밸런서와 어떻게 다른지, 쿠버네티스 Gateway API가 역할을 어떻게 나누는지는 [게이트웨이 글](/posts/gateway)에 있다. nginx, HAProxy, 직접 짠 게이트웨이를 한 줄로 쌓고 401·429·502·504를 만든 층을 가려내는 실험은 [세 층을 한 줄로 세운 글](/posts/reverse-proxy-lb-api-gateway)에 있다. 이 글은 그 사이의 질문 하나를 다룬다. 열 가지 일 하나하나에서 게이트웨이가 요청을 받아 무엇을 하는가. 그래서 일마다 작은 실험 하나씩만 돌리고, 원리가 깊은 부분은 각 글로 넘긴다.
+
+## 열 가지를 한 프로세스에 몰아 둔 실험실
+
+환경은 Ubuntu 24.04, Node 22.22다. 외부 패키지 없이 `node:http`, `node:https`, `node:crypto`만 쓴다. 22.04에서도 Node만 맞추면 그대로 돈다.
+
+뒤쪽에는 이런 서비스들이 한 프로세스(`services.js`)에서 포트만 나눠 뜬다.
+
+- 인증 서비스(18405): JWT 서명과 만료를 확인하고 사용자 ID를 돌려준다.
+- 회원 v1(18411): 옛 서비스라 XML로만 답한다. 회원 v2(18412): JSON이고 필드 모양도 다르다.
+- 주문 서비스 세 대(18421~18423): 주문의 주인이 아니면 403을 낸다.
+- 상품 서비스(18431): 응답에 80ms가 걸리고 `Cache-Control: public, max-age=30`을 붙인다.
+- 재고 서비스(18441): 관리 주소로 고장 모드를 켜면 500을 낸다.
+
+게이트웨이(`gateway.js`, 약 290줄)는 18400에서 HTTPS를 받고, 지표는 따로 연 관리 포트 18402에서만 내준다. 동작은 대부분 라우트 표가 정한다.
+
+```js
+const ROUTES = [
+  { name: "users.v1.create", method: "POST", prefix: "/v1/users", auth: true, upstreams: ["127.0.0.1:18412"], rewrite: () => "/users", transform: "xml-v1-to-json-v2" },
+  { name: "users.v1", prefix: "/v1/users", auth: true, upstreams: ["127.0.0.1:18411"], rewrite: (p) => p.replace("/v1", ""), deprecated: true },
+  { name: "users.v2", prefix: "/v2/users", auth: true, upstreams: ["127.0.0.1:18412"], rewrite: (p) => p.replace("/v2", "") },
+  { name: "orders", prefix: "/orders", auth: true, upstreams: ["127.0.0.1:18421", "127.0.0.1:18422", "127.0.0.1:18423"] },
+  { name: "products", prefix: "/products", auth: false, upstreams: ["127.0.0.1:18431"], cache: true },
+  { name: "inventory", prefix: "/inventory", auth: true, upstreams: ["127.0.0.1:18441"], breaker: true },
+];
+```
+
+요청 하나는 이 순서로 지나간다. 라우트 찾기 → 인증 → 요청 수 제한 → 캐시 조회 → 서킷 브레이커 → 헤더 다듬기 → 변환 → 인스턴스 고르기 → 전달 → 응답 변환 → 캐시 저장 → 접근 로그. 띄우는 명령과 curl 준비는 이렇다.
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout key.pem -out cert.pem -days 7 -subj "/CN=api.local" \
+  -addext "subjectAltName=DNS:api.local"          # 실험용 자체 서명 인증서
+node services.js > services.out 2>&1 &              # 뒤쪽 서비스들
+node gateway.js  > gateway.out  2>&1 &              # 게이트웨이
+C="curl -s --resolve api.local:18400:127.0.0.1 --cacert cert.pem"   # api.local을 내 컴퓨터로
+GW=https://api.local:18400
+T=$(node mint.js u-42 3600)                          # 사용자 u-42의 1시간짜리 토큰
+```
+
+아래 그림에서 다음을 누르면 열 가지 일이 실험실의 어느 길에서 일어나는지 하나씩 나온다. 입구에서 끝나는 일과 뒤쪽까지 가는 일이 섞여 있다.
+
+<NetworkTopology
+  width={420}
+  height={350}
+  caption="실험실 구성. 게이트웨이 하나가 열 가지 일을 맡는다"
+  zones={[
+    { id: "net", label: "인터넷", x: 8, y: 8, w: 124, h: 86, tone: "public" },
+    { id: "edge", label: "입구 :18400", x: 222, y: 8, w: 136, h: 86, tone: "edge" },
+    { id: "lan", label: "내부망 (평문 HTTP)", x: 8, y: 110, w: 404, h: 232, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "app", sub: "curl", x: 70, y: 55, icon: "client", w: 90 },
+    { id: "gw", label: "gateway", sub: "Node 22", x: 290, y: 55, icon: "gateway" },
+    { id: "v1", label: "users-v1", sub: "XML", x: 56, y: 185, icon: "server", w: 88 },
+    { id: "v2", label: "users-v2", sub: "JSON", x: 156, y: 185, icon: "server", w: 88 },
+    { id: "orders", label: "orders x3", sub: "a·b·c", x: 262, y: 185, icon: "container", w: 92 },
+    { id: "products", label: "products", sub: "80ms", x: 362, y: 185, icon: "server", w: 88 },
+    { id: "inventory", label: "inventory", sub: "고장 모드", x: 120, y: 290, icon: "db", w: 100 },
+    { id: "auth", label: "auth", sub: "토큰 검증", x: 300, y: 290, icon: "lock", w: 100 },
+  ]}
+  links={[
+    { from: "client", to: "gw" },
+    { from: "gw", to: "v1" },
+    { from: "gw", to: "v2" },
+    { from: "gw", to: "orders" },
+    { from: "gw", to: "products" },
+    { from: "gw", to: "inventory" },
+    { from: "gw", to: "auth", dashed: true },
+  ]}
+  steps={[
+    { path: ["client", "gw"], packet: "101번째", blocked: true, title: "요청 수 제한", detail: "사용자마다 60초에 100번까지 센다. 101번째는 뒤로 가지 않고 입구에서 429로 끝난다.", payload: "429 Too Many Requests\nretry-after: 58" },
+    { path: ["client", "gw", "auth"], packet: "verify", title: "인증", detail: "토큰을 인증 서비스에 물어보고 답을 30초 기억한다. 통과하면 사용자 ID를 헤더로 붙인다." },
+    { path: ["client", "gw", "orders"], packet: "GET /orders", highlight: ["orders"], title: "로드 밸런싱", detail: "같은 주문 서비스 세 대에 차례로 나눈다. 1,000번이면 333·334·333이다." },
+    { path: ["client", "gw", "products"], packet: "/products/7", title: "라우팅", detail: "경로 접두어로 갈 서비스를 고른다. 맞는 줄이 없으면 404를 입구에서 낸다." },
+    { path: ["client", "gw"], packet: "TLS 1.3", highlight: ["edge"], title: "TLS 종료", detail: "암호는 입구에서 풀고, 안쪽은 평문 HTTP로 보낸다. 대신 x-forwarded-proto를 적어 준다." },
+    { path: ["client", "gw"], packet: "HIT", highlight: ["gw"], title: "캐시", detail: "공개 응답을 30초 들고 있다가 같은 요청에 바로 준다. 상품 서비스는 이 요청을 모른다." },
+    { path: ["client", "gw", "v2"], packet: "XML→JSON", title: "변환", detail: "옛 앱이 보낸 XML을 새 서비스가 아는 JSON으로 바꿔 보내고, 답은 다시 XML로 바꾼다." },
+    { path: ["client", "gw", "inventory"], packet: "503 open", blocked: true, highlight: ["inventory"], title: "서킷 브레이커", detail: "재고 서비스가 연속 다섯 번 실패하자 문을 닫았다. 3초 동안은 보내지 않고 바로 503을 준다." },
+    { path: ["gw"], packet: "access.log", highlight: ["edge"], title: "로그와 지표", detail: "모든 요청이 지나가니 한 형식으로 한 줄씩 남기고 라우트별 p50·p99를 센다." },
+    { path: ["client", "gw", "v1"], packet: "/v1/users", title: "버전 라우팅", detail: "경로의 v1은 옛 서비스로, v2는 새 서비스로 간다. v1 응답에는 중단 예정 헤더를 붙인다." },
+  ]}
+/>
+
+## 101번째 요청이 입구에서 끝난다
+
+요청 수 제한은 게이트웨이가 하는 일 중 가장 단순하다. 사용자 ID와 60초 칸을 묶은 키로 카운터를 하나 올리고, 100을 넘으면 뒤로 보내지 않는다.
+
+```bash
+T9=$(node mint.js u-9 3600)
+for i in $(seq 1 100); do                               # 같은 사용자로 100번
+  $C -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $T9" $GW/orders/1
+done | sort | uniq -c
+$C -i -H "Authorization: Bearer $T9" $GW/orders/1 | grep -iE "^HTTP|^ratelimit|^retry-after|^\{"   # 101번째
+```
+
+```text
+    100 200
+HTTP/1.1 429 Too Many Requests
+ratelimit-policy: 100;w=60
+ratelimit: limit=100, remaining=0, reset=58
+retry-after: 58
+{"error":"too many requests"}
+```
+
+`retry-after: 58`은 지금 칸이 끝날 때까지 남은 초다. 고정 창이라 칸 경계에서 두 배가 새는 문제가 있고, 실제로는 토큰 버킷이나 슬라이딩 창을 쓴다([알고리즘 글](/posts/rate-limiting-algorithms)). 게이트웨이를 여러 대 띄우면 카운터를 Redis로 옮겨야 한다는 이야기, 무엇을 키로 셀지는 [실무 글](/posts/rate-limiting-in-practice#인스턴스마다-세면-한도가-곱해진다)에 있다.
+
+여기서 볼 것은 순서다. 이 게이트웨이는 인증을 먼저 하고 사용자 단위로 센다. 그러면 토큰이 엉터리인 요청은 카운터에 닿기 전에 인증 서비스까지 간다. 아무 문자열이나 붙인 요청 50개를 보내 봤다.
+
+```bash
+b=$(grep -c verify services.out)
+for i in $(seq 1 50); do $C -o /dev/null -H "Authorization: Bearer garbage-$i" $GW/orders/1; done
+echo "verify calls for 50 bad tokens: $(( $(grep -c verify services.out) - b ))"
+```
+
+```text
+verify calls for 50 bad tokens: 50
+```
+
+50번 모두 인증 서비스를 불렀다. 실패한 답은 기억하지 않으니, 공격자는 토큰만 바꿔 가며 인증 서비스를 두드릴 수 있다. 그래서 인증 앞에 IP 단위의 거친 제한을 하나 더 두거나 그 일을 앞쪽 WAF에 맡긴다. 사용자 단위 제한은 인증 뒤, IP 단위 제한은 인증 앞. 두 개가 각자 다른 공격을 막는다.
+
+## 토큰은 인증 서비스에 묻고 답을 잠깐 기억한다
+
+게이트웨이가 토큰을 확인하는 방법은 크게 둘이다. 하나는 게이트웨이가 공개 키(JWKS)를 받아 두고 서명을 직접 검증하는 것이고, 다른 하나는 매번 인증 서비스에 "이 토큰 살아 있나"를 묻는 것이다. 뒤쪽을 포워드 인증이라고 부른다. nginx의 `auth_request`, Envoy의 `ext_authz`, Traefik의 ForwardAuth가 이 모양이고, 불투명한 토큰이면 OAuth 토큰 인트로스펙션(RFC 7662) 엔드포인트를 부른다. 실험실 게이트웨이는 포워드 인증을 하고, 성공한 답을 토큰 해시 기준으로 30초(토큰 만료가 더 빠르면 그때까지) 기억한다.
+
+아래 그림에서 다음을 누르면 같은 토큰으로 두 번 부를 때 인증 서비스가 몇 번 불리는지, 그리고 남의 주문을 달라고 했을 때 누가 거절하는지 나온다.
+
+<SequenceDiagram
+  caption="포워드 인증과 검증 결과 캐시"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "gw", label: "게이트웨이" },
+    { id: "auth", label: "인증 서비스" },
+    { id: "orders", label: "주문 서비스" },
+  ]}
+  steps={[
+    { from: "app", to: "gw", label: "GET /orders/77", title: "토큰을 들고 온다", detail: "앱은 로그인 때 받은 토큰을 Authorization 헤더에 붙인다.", payload: "GET /orders/77\nAuthorization: Bearer eyJhbGciOiJIUzI1NiIs..." },
+    { from: "gw", to: "auth", label: "GET /verify", title: "처음 보는 토큰이면 묻는다", detail: "캐시에 없으니 인증 서비스에 그대로 넘긴다. 서명과 만료는 인증 서비스가 본다." },
+    { from: "auth", to: "gw", label: "200 sub=u-42", title: "누구인지 알려 준다", detail: "살아 있는 토큰이면 사용자 ID와 만료 시각을 준다. 게이트웨이는 이 답을 30초 기억한다.", payload: "{\"active\":true,\"sub\":\"u-42\",\"exp\":1792625455}" },
+    { from: "gw", to: "orders", label: "x-user-id: u-42", title: "확인한 사용자만 적어 보낸다", detail: "손님이 보낸 x-user-id는 지우고 게이트웨이가 확인한 값만 적는다. 토큰 원문은 안쪽으로 넘기지 않는다." },
+    { from: "app", to: "gw", label: "GET /orders/78", title: "같은 토큰으로 또 온다", detail: "이번엔 캐시에 답이 있어 인증 서비스를 부르지 않는다." },
+    { from: "gw", to: "orders", label: "x-user-id: u-42", title: "인증은 통과했다", detail: "게이트웨이는 토큰이 진짜라는 것까지만 안다. 78번 주문이 누구 것인지는 모른다." },
+    { from: "orders", to: "app", label: "403", title: "주인 확인은 서비스가 한다", detail: "78번은 u-7의 주문이다. 데이터를 가진 주문 서비스만 이 판단을 할 수 있다.", payload: "{\"error\":\"not your order\",\"instance\":\"orders-b\"}" },
+  ]}
+/>
+
+손님이 `X-User-Id: u-7`을 직접 넣어 보내도 게이트웨이가 지우고 다시 쓴다.
+
+```bash
+$C -H "Authorization: Bearer $T" -H "X-User-Id: u-7" $GW/orders/78; echo   # 남의 ID를 위조해 본다
+$C -H "Authorization: Bearer $T" $GW/orders/77; echo                       # 내 주문
+```
+
+```text
+{"error":"not your order","instance":"orders-b"}
+{"instance":"orders-c","id":"77","owner":"u-42"}
+```
+
+캐시가 얼마나 차이를 만드는지 쟀다. 연결 하나를 재사용하며 200번 데운 뒤 2,000번 보내 정렬했다(`bench.js`). 첫 줄은 게이트웨이 없이 주문 서비스를 바로 부른 값이다.
+
+```text
+direct       /orders/77   p50=0.14ms p99=0.52ms
+gw+cache     /orders/77   p50=0.35ms p99=1.22ms
+gw-nocache   /orders/77   p50=1.24ms p99=4.72ms
+verify calls: 2200
+```
+
+캐시를 끄면 요청마다 인증 서비스로 한 번 더 왕복해서 p50이 세 배 넘게, p99가 네 배 가까이 늘었다. 같은 컴퓨터 안인데도 그렇다. 2,200번 요청에 인증 서비스도 2,200번 불렸으니, 인증 서비스의 용량이 곧 전체 API의 용량이 된다. 여러 번 돌리면 숫자는 0.1ms 단위로 흔들린다.
+
+캐시에는 값이 있다. 로그아웃하거나 강제로 회수한 토큰이 최대 30초 더 통한다. 공개 키로 직접 검증하는 방식은 인증 서비스를 아예 안 부르는 대신 만료 전 회수를 모른다. 관리형도 같은 고민을 한다. AWS API Gateway REST API의 Lambda 권한 부여자는 결과를 기본 300초 캐시한다(최대 3600초). 회수가 바로 반영돼야 하는 결제·관리자 API만 캐시를 짧게 두고, 나머지는 짧은 액세스 토큰 수명으로 위험을 줄이는 게 흔한 절충이다. 토큰 수명과 회수는 [토큰 로그인 글](/posts/token-login), 공개 키 목록을 얼마나 들고 있을지는 [JWT 키 교체 글](/posts/jwt-key-rotation#검증자는-jwks를-얼마나-들고-있나)에서 다뤘다.
+
+## 갈 곳을 고르고, 같은 서비스 여럿에 나눈다
+
+라우팅과 로드 밸런싱은 짝으로 일어난다. 라우트 표에서 경로 접두어로 서비스를 고르고, 그 서비스의 인스턴스 중 하나를 고른다.
+
+```bash
+for p in /v2/users/42 /orders/77 /products/1 /payments/1; do
+  $C -o /dev/null -w "%{http_code} $p\n" -H "Authorization: Bearer $T" $GW$p
+done
+```
+
+```text
+200 /v2/users/42
+200 /orders/77
+200 /products/1
+404 /payments/1
+```
+
+`/payments`는 표에 없어서 게이트웨이가 404를 냈다. 이 404는 서비스 로그 어디에도 없다. 장애 문의에서 "404가 나는데 서비스엔 요청이 안 왔다"면 라우트 표부터 본다. 접두어 비교를 `startsWith("/users")`로만 하면 `/usersettings`까지 회원 서비스로 가니, 실험실은 같거나 `접두어/`로 시작할 때만 맞게 했다.
+
+분배는 라운드 로빈이다. 한도에 걸리지 않게 사용자 열 명이 100번씩 보냈다.
+
+```bash
+for u in $(seq 1 10); do t=$(node mint.js lb-$u 600)
+  for i in $(seq 1 100); do $C -H "Authorization: Bearer $t" $GW/orders/1; echo; done
+done | grep -o '"instance":"[^"]*"' | sort | uniq -c
+```
+
+```text
+    333 "instance":"orders-a"
+    334 "instance":"orders-b"
+    333 "instance":"orders-c"
+```
+
+33.3%, 33.4%, 33.3%. 요청이 고르게 가볍다면 이걸로 된다. 요청마다 무게가 다르거나 인스턴스 성능이 다르면 최소 연결이나 가중치를 쓰고, 죽은 인스턴스를 빼는 헬스 체크가 같이 있어야 한다. 이 실험실 게이트웨이에는 헬스 체크가 없어서 한 대가 죽으면 세 번에 한 번은 502다. 알고리즘은 [로드 밸런싱 알고리즘 글](/posts/load-balancing-algorithms), 층마다 분배가 여러 번 일어나는 모습은 [세 층 글](/posts/reverse-proxy-lb-api-gateway#로드-밸런서는-같은-서비스-여럿-중-하나를-고른다)에 있다.
+
+## 암호는 입구에서 풀고 안쪽엔 적어서 보낸다
+
+TLS 종료는 바깥 연결의 암호를 게이트웨이에서 푸는 일이다. 안쪽 서비스는 인증서를 가질 필요도, 핸드셰이크 비용을 낼 필요도 없다. 받은 요청을 그대로 돌려주는 서비스(`/echo`)로 확인한다. 손님이 몰래 `X-User-Id: admin`을 넣었다.
+
+```bash
+$C -v -H "X-User-Id: admin" $GW/echo 2>&1 | grep -E "SSL connection|subject:"   # 바깥 연결
+$C -H "X-User-Id: admin" $GW/echo | python3 -m json.tool                         # 안쪽이 받은 것
+```
+
+```text
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+*  subject: CN=api.local
+{
+    "encrypted": false,
+    "remote": "127.0.0.1",
+    "headers": {
+        "user-agent": "curl/8.5.0",
+        "accept": "*/*",
+        "x-request-id": "0386c05f88a8682e",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "127.0.0.1",
+        "host": "127.0.0.1:18432",
+        "connection": "keep-alive"
+    }
+}
+```
+
+바깥은 TLS 1.3인데 안쪽 소켓은 `encrypted: false`다. 서비스는 원래 HTTPS였다는 사실을 `x-forwarded-proto: https`로만 안다. 이걸 안 보고 리다이렉트 주소를 만들면 `http://`로 돌려보내는 버그가 난다. 위조한 `x-user-id`는 사라졌다.
+
+평문 구간이 생긴다는 게 대가다. 같은 호스트나 믿을 만한 VPC 안이면 받아들이는 팀이 많고, 규정상 안쪽도 암호화해야 하면 게이트웨이에서 다시 TLS를 걸거나 서비스 메시의 mTLS를 쓴다. 어디서 벗길지의 선택지는 [세 층 글](/posts/reverse-proxy-lb-api-gateway#tls를-어디서-벗길지)과 [HTTPS 글](/posts/https-tls)에 있다.
+
+## 느린 상품 조회를 입구에서 받아 준다
+
+상품 서비스는 80ms가 걸리고 `Cache-Control: public, max-age=30`을 붙여 준다. 게이트웨이는 `public`이고 `max-age`가 있는 GET 200 응답만 들고 있는다. 1초 간격으로 세 번 불렀다.
+
+```bash
+for i in 1 2 3; do
+  $C -o body.txt -D - -w "time=%{time_total}s\n" $GW/products/7 | grep -iE "x-cache|^age|time="
+  cat body.txt; echo; sleep 1
+done
+```
+
+```text
+x-cache: MISS
+time=0.088669s
+{"id":"7","name":"keyboard","price":89000,"servedBy":"products call #2"}
+x-cache: HIT
+age: 1
+time=0.004586s
+{"id":"7","name":"keyboard","price":89000,"servedBy":"products call #2"}
+x-cache: HIT
+age: 2
+time=0.004639s
+{"id":"7","name":"keyboard","price":89000,"servedBy":"products call #2"}
+```
+
+세 번 다 `products call #2`다. 두 번째부터 상품 서비스는 요청을 받지 않았다. curl이 잰 4.6ms는 대부분 매번 새로 맺은 TLS 핸드셰이크고, 게이트웨이 접근 로그를 보면 HIT 처리 자체는 0.14ms, MISS는 82.77ms였다. 아래 그림은 게이트웨이가 무엇을 기억하는지 따라간다.
+
+<AlgoTrace
+  caption="캐시 키는 메서드와 경로, 신선한 기간은 max-age"
+  memoryLabel="게이트웨이 캐시"
+  cells={["t=0 /products/7", "t=1 /products/7", "t=2 /products/7", "t=2 /products/8", "t=3 /orders/77", "t=31 /products/7"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "처음 보는 키다. 상품 서비스로 보내고 80ms 기다린다." },
+    { pointer: 0, found: [0], memory: ["GET /products/7 ~t=30"], caption: "public, max-age=30이라 30초까지 들고 있기로 한다." },
+    { pointer: 1, found: [0, 1], memory: ["GET /products/7 ~t=30"], caption: "같은 키, 아직 신선하다. 서비스에 묻지 않고 age: 1로 준다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["GET /products/7 ~t=30"], caption: "또 HIT다. 상품 서비스 호출 수는 그대로 1이다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["GET /products/7 ~t=30", "GET /products/8 ~t=32"], caption: "경로가 다르면 다른 키다. 이건 MISS라 서비스까지 간다." },
+    { pointer: 4, found: [0, 1, 2], memory: ["GET /products/7 ~t=30", "GET /products/8 ~t=32"], caption: "주문은 캐시하지 않는 라우트다. 사람마다 답이 다르기 때문이다." },
+    { pointer: 5, found: [0, 1, 2], memory: ["GET /products/8 ~t=32"], caption: "30초가 지나 7번은 상했다. 다시 MISS로 서비스를 부른다." },
+  ]}
+/>
+
+<Callout kind="warning">
+인증이 붙은 라우트를 경로만으로 캐시하면, 첫 사용자의 응답이 다음 사용자에게 간다. 실험실 캐시 키는 `GET /products/7`뿐이라 주문 라우트에 `cache: true`를 켜는 순간 u-42의 주문이 u-7에게 보인다. 사람마다 다른 응답은 캐시하지 않거나, 키에 사용자를 넣고 `Cache-Control: private`인 응답은 공유 캐시에 두지 않는다. 고칠 때는 캐시부터 비운다.
+</Callout>
+
+캐시는 지표도 바꾼다. 상품 라우트에 요청 50개 중 5개만 MISS였을 때 게이트웨이 지표는 `p50=0.05ms p99=82.32ms`였다. 중앙값은 HIT, p99는 MISS를 가리킨다. 캐시가 있는 라우트의 지연 그래프는 두 덩어리로 나뉘니 히트율을 같이 봐야 해석된다. 무엇을 같은 요청으로 볼지, `Vary`, 만료가 한꺼번에 몰릴 때의 문제는 [HTTP 캐시 글](/posts/http-caching-cdn#사람마다-다른-페이지를-공유-캐시에-두면)에 있다.
+
+## 옛 앱이 보내는 XML을 새 서비스의 JSON으로
+
+회원 서비스를 v2로 다시 만들면서 JSON으로 바꿨고 필드 모양도 바꿨다(`name` → `displayName`, `email` → `contact.email`). 그런데 몇 년 전 배포한 앱과 파트너 시스템은 여전히 `POST /v1/users`에 XML을 보낸다. 앱을 당장 못 고치면 v1 서비스를 계속 살려 두거나, 게이트웨이가 통역을 맡는다. 실험실은 v1 생성 라우트를 v2로 보내면서 들어가는 길과 나오는 길을 모두 바꾼다.
+
+```js
+const V1_TO_V2 = (x) => ({ displayName: x.user.name, contact: { email: x.user.email } });
+const V2_TO_V1 = (u) => ({ id: u.id, name: u.displayName, email: u.contact.email });
+// 들어가는 길: body = JSON.stringify(V1_TO_V2(xmlToJson(body))), content-type과 content-length를 다시 쓴다
+// 나오는 길: 2xx면 toXml("user", V2_TO_V1(JSON.parse(up.body)))
+```
+
+```bash
+$C -i -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/xml' \
+  --data '<?xml version="1.0"?><user><name>Lee Jun</name><email>jun@example.com</email></user>' \
+  $GW/v1/users
+grep "users-v2" services.out | tail -1          # 새 서비스가 실제로 받은 것
+```
+
+```text
+HTTP/1.1 201 Created
+ratelimit: limit=100, remaining=99, reset=39
+x-request-id: 31903fe508002d80
+content-type: application/xml
+
+<?xml version="1.0"?><user><id>101</id><name>Lee Jun</name><email>jun@example.com</email></user>
+[users-v2] POST /users content-type=application/json body={"displayName":"Lee Jun","contact":{"email":"jun@example.com"}}
+```
+
+옛 앱은 XML을 보내고 XML을 받았다. 새 서비스는 XML이 있었다는 걸 모른다. 아래 그림에서 다음을 누르면 본문이 두 번 바뀌는 자리가 나온다.
+
+<SequenceDiagram
+  caption="게이트웨이가 v1 계약을 v2 서비스 위에서 지킨다"
+  actors={[
+    { id: "old", label: "옛 앱" },
+    { id: "gw", label: "게이트웨이" },
+    { id: "v2", label: "회원 v2" },
+  ]}
+  steps={[
+    { from: "old", to: "gw", label: "POST /v1/users", title: "옛 앱은 XML을 보낸다", detail: "앱 코드는 몇 년째 그대로다. Content-Type도 XML이다.", payload: "<user><name>Lee Jun</name><email>jun@example.com</email></user>" },
+    { from: "gw", to: "gw", label: "XML → JSON", title: "본문을 다 받아서 바꾼다", detail: "XML을 객체로 읽고, v1 필드를 v2 이름으로 옮긴다. 길이가 바뀌니 content-length도 다시 쓴다." },
+    { from: "gw", to: "v2", label: "POST /users", title: "새 서비스는 JSON만 본다", detail: "경로도 /v1/users에서 /users로 바뀐다.", payload: "{\"displayName\":\"Lee Jun\",\"contact\":{\"email\":\"jun@example.com\"}}" },
+    { from: "v2", to: "gw", label: "201 JSON", title: "새 모양으로 답한다", detail: "v2에는 tier 같은 새 필드도 있다.", payload: "{\"id\":\"101\",\"displayName\":\"Lee Jun\",\"contact\":{\"email\":\"jun@example.com\"},\"tier\":\"basic\"}" },
+    { from: "gw", to: "gw", label: "JSON → XML", title: "옛 모양으로 되돌린다", detail: "v1 계약에 있던 id, name, email만 남긴다. 새 필드 tier는 버린다." },
+    { from: "gw", to: "old", label: "201 XML", title: "옛 앱은 달라진 걸 모른다", detail: "상태 코드와 본문 모양이 예전과 같다.", payload: "<user><id>101</id><name>Lee Jun</name><email>jun@example.com</email></user>" },
+  ]}
+/>
+
+변환에는 눈에 덜 띄는 비용이 있다. 본문을 끝까지 받아야 바꿀 수 있으니 스트리밍이 끊기고, 큰 본문은 게이트웨이 메모리에 통째로 올라온다. 필드 이름 대응표는 사실상 v1 계약의 사본이라, v2 필드가 바뀌면 게이트웨이도 같이 고쳐야 한다. 실패도 새로 생긴다. XML이 깨져 있으면 이제 400을 서비스가 아닌 게이트웨이가 내야 하고, v2가 4xx를 주면 그 오류 본문도 v1 모양으로 바꿀지 정해야 한다. 실험실은 2xx만 바꾸고 오류는 그대로 통과시켰다.
+
+제품마다 할 수 있는 범위도 다르다. AWS API Gateway는 REST API에서만 매핑 템플릿으로 본문을 바꾸고 HTTP API는 헤더·경로 같은 파라미터만 바꾼다. Spring Cloud Gateway에는 `ModifyRequestBody`·`ModifyResponseBody` 필터가 있다. 어느 쪽이든 변환은 이전 기간을 버티는 다리로 쓰고, 끝나는 날짜를 정해 둔다. 변환 규칙이 화면별로 갈라지기 시작하면 게이트웨이가 아니라 [BFF](/posts/gateway)의 일이다.
+
+변환의 중심인 XML 읽기를 직접 짜 본다. 속성은 없다고 치고, 자식이 있으면 객체, 글자만 있으면 문자열, 같은 이름이 반복되면 배열, `<nick/>`과 빈 요소는 빈 문자열로 둔다. 맨 앞의 `<?xml ...?>` 선언은 건너뛰고, 글자 안의 `&amp;`, `&lt;`, `&gt;`는 원래 문자로 되돌린다. 앞뒤 공백은 지운다.
+
+<CodePlayground
+  caption="작은 XML을 객체로"
+  functionName="xmlToJson"
+  initialCode={`function xmlToJson(xml) {
+  // "<user><id>42</id></user>" -> { user: { id: "42" } }
+  return {};
+}`}
+  solution={`function xmlToJson(xml) {
+  let s = xml.trim();
+  if (s.startsWith("<?")) s = s.slice(s.indexOf("?>") + 2).trim();
+  const decode = (t) => t.split("&lt;").join("<").split("&gt;").join(">").split("&amp;").join("&");
+  let i = 0;
+  function readNode() {
+    const close = s.indexOf(">", i);
+    let name = s.slice(i + 1, close).trim();
+    i = close + 1;
+    if (name.endsWith("/")) return [name.slice(0, -1).trim(), ""];
+    const end = "</" + name + ">";
+    const kids = {};
+    let text = "";
+    let hasKids = false;
+    while (!s.startsWith(end, i)) {
+      if (s[i] === "<") {
+        hasKids = true;
+        const [k, v] = readNode();
+        if (!(k in kids)) kids[k] = v;
+        else if (Array.isArray(kids[k])) kids[k].push(v);
+        else kids[k] = [kids[k], v];
+      } else {
+        text += s[i];
+        i++;
+      }
+    }
+    i += end.length;
+    return [name, hasKids ? kids : decode(text.trim())];
+  }
+  const [root, value] = readNode();
+  return { [root]: value };
+}`}
+  tests={[
+    { label: "평평한 요소", args: ["<user><id>42</id><name>Kim</name></user>"], expected: { user: { id: "42", name: "Kim" } } },
+    { label: "선언과 줄바꿈", args: ['<?xml version="1.0"?>\n<user>\n  <id>7</id>\n  <name>Lee Jun</name>\n</user>'], expected: { user: { id: "7", name: "Lee Jun" } } },
+    { label: "중첩", args: ["<order><id>1</id><buyer><name>Lee</name><email>lee@example.com</email></buyer></order>"], expected: { order: { id: "1", buyer: { name: "Lee", email: "lee@example.com" } } } },
+    { label: "반복은 배열", args: ["<cart><item>a</item><item>b</item><item>c</item></cart>"], expected: { cart: { item: ["a", "b", "c"] } } },
+    { label: "빈 요소", args: ["<user><nick/><bio></bio></user>"], expected: { user: { nick: "", bio: "" } } },
+    { label: "뿌리에 글자만", args: ["<ping>ok</ping>"], expected: { ping: "ok" } },
+    { label: "엔티티", args: ["<user><name>Tom &amp; Jerry</name><note>1 &lt; 2</note></user>"], expected: { user: { name: "Tom & Jerry", note: "1 < 2" } } },
+  ]}
+/>
+
+이런 변환에는 고질병이 하나 있다. 반복 요소가 하나뿐이면 배열이 아니라 문자열이 된다. `<item>a</item>` 하나만 온 날 v2 서비스가 `item.map`에서 죽는다. 실제 변환 규칙에는 "이 필드는 항상 배열" 같은 스키마 정보가 들어가야 한다.
+
+## 경로의 v1과 v2가 다른 서비스로 간다
+
+버전 라우팅은 라우팅의 특별한 경우다. 경로 앞의 `/v1`, `/v2`를 보고 다른 서비스로 보내고, 서비스에는 버전을 뗀 경로를 넘긴다. 옛 버전 응답에는 사용 중단을 알리는 헤더를 게이트웨이가 붙인다. 서비스 코드는 손대지 않는다.
+
+```bash
+$C -i -H "Authorization: Bearer $T" $GW/v1/users/42
+$C -i -H "Authorization: Bearer $T" $GW/v2/users/42
+```
+
+```text
+HTTP/1.1 200 OK
+ratelimit: limit=100, remaining=99, reset=43
+x-request-id: 3c8828ba141871f8
+content-type: application/xml
+deprecation: @1790812800
+sunset: Wed, 31 Mar 2027 00:00:00 GMT
+link: </v2/users>; rel="successor-version"
+
+<?xml version="1.0"?><user><id>42</id><name>Kim Minji</name><email>minji@example.com</email></user>
+HTTP/1.1 200 OK
+ratelimit: limit=100, remaining=97, reset=39
+x-request-id: ddc159659443e23c
+content-type: application/json
+
+{"id":"42","displayName":"Kim Minji","contact":{"email":"minji@example.com"},"tier":"gold"}
+```
+
+(두 응답은 따로 실행한 것이라 `remaining`이 이어지지 않는다.) `deprecation: @1790812800`은 2026-10-01 00:00 UTC부터 중단 상태라는 뜻이다(RFC 9745). 라우트 표의 순서도 버전 관리의 일부다. `POST /v1/users` 줄이 `/v1/users` 줄보다 위에 있어야 생성 요청이 변환 라우트를 탄다. 순서를 바꾸면 XML 생성 요청이 GET만 아는 옛 서비스로 가서 엉뚱한 응답이 나온다.
+
+게이트웨이가 할 수 있는 건 길을 나누고 헤더를 붙이는 데까지다. 무엇이 깨는 변경인지 판단하고, 누가 아직 v1을 부르는지 세고, 언제 끝낼지 정하는 일은 [API 버전 관리 글](/posts/api-versioning)에 있다. 누가 아직 v1을 부르는지 세는 데는 다음에 볼 접근 로그가 쓰인다.
+
+## 망가진 재고 서비스 앞에서 문을 닫는다
+
+재고 서비스가 고장 났다. 게이트웨이는 라우트마다 브레이커를 두고, 연속 다섯 번 실패하면 3초 동안 보내지 않는다. 3초가 지나면 반열림으로 바꿔 한 건만 시험 삼아 보낸다.
+
+```bash
+T=$(node mint.js u-cb2 600)
+curl -s http://127.0.0.1:18441/admin?fail=1; echo                   # 재고 서비스 고장 모드
+for i in $(seq 1 8); do $C -o /dev/null -w "$i %{http_code} %{time_total}s\n" -H "Authorization: Bearer $T" $GW/inventory/sku-1; done
+curl -s http://127.0.0.1:18441/admin?fail=0; echo; sleep 3.1         # 고치고 3초 기다린다
+P=""; for i in 1 2 3; do                                             # 반열림에 동시에 셋
+  $C -w " %{http_code}\n" -H "Authorization: Bearer $T" $GW/inventory/sku-1 & P="$P $!"
+done; wait $P
+$C -w " %{http_code}\n" -H "Authorization: Bearer $T" $GW/inventory/sku-1
+cat gateway.out; grep inventory services.out | tail -7
+```
+
+```text
+{"failing":true}
+1 500 0.099309s
+2 500 0.036219s
+3 500 0.035911s
+4 500 0.037797s
+5 500 0.037264s
+6 503 0.004118s
+7 503 0.003972s
+8 503 0.003704s
+{"failing":false}
+{"error":"upstream unavailable","circuit":"half_open"} 503
+{"error":"upstream unavailable","circuit":"half_open"} 503
+{"sku":"sku-1","stock":12} 200
+{"sku":"sku-1","stock":12} 200
+gateway https :18400
+[gw] breaker: 5 fails in a row -> open
+[gw] breaker: open -> half_open
+[gw] breaker: trial ok -> closed
+[inventory] call #7 -> 500
+[inventory] call #8 -> 500
+[inventory] call #9 -> 500
+[inventory] call #10 -> 500
+[inventory] call #11 -> 500
+[inventory] call #12 -> 200
+[inventory] call #13 -> 200
+```
+
+여섯 번째부터는 36ms 대신 4ms에 503이 왔다(그 4ms도 대부분 새 TLS 연결이다). 재고 서비스 로그에는 #11 다음이 #12다. 열려 있는 동안 간 요청이 없다. 반열림에서 동시에 온 셋 중 하나만 #12로 갔고 나머지 둘은 게이트웨이가 바로 거절했다. 시험이 성공하자 닫혔고, 그다음 요청(#13)은 평소처럼 갔다.
+
+<AlgoTrace
+  caption="연속 5번 실패하면 열고, 3초 뒤 한 건만 시험한다"
+  memoryLabel="inventory 브레이커"
+  cells={["#1~4 500", "#5 500", "#6~8", "3초 뒤 A", "같은 때 B·C", "다음 요청"]}
+  steps={[
+    { pointer: 0, memory: ["closed", "fails 4"], caption: "실패가 쌓이지만 아직 닫힘이다. 500이 그대로 손님에게 간다." },
+    { pointer: 1, memory: ["open", "openedAt t"], caption: "다섯 번째 실패로 열렸다. 지금부터 3초는 아무것도 보내지 않는다." },
+    { pointer: 2, memory: ["open"], caption: "게이트웨이가 4ms 만에 503을 준다. 재고 서비스는 이 요청을 모른다." },
+    { pointer: 3, found: [3], memory: ["half_open", "trial 사용 중"], caption: "3초가 지났다. 첫 요청 A만 시험으로 보낸다." },
+    { pointer: 4, found: [3], memory: ["half_open", "trial 사용 중"], caption: "시험이 진행 중이라 B와 C는 바로 503이다." },
+    { pointer: 5, found: [3, 5], memory: ["closed", "fails 0"], caption: "A가 200으로 끝나 닫혔다. 다음 요청부터는 평소처럼 간다." },
+  ]}
+/>
+
+게이트웨이 브레이커가 지키는 건 두 가지다. 망가진 서비스가 살아날 틈을 주고, 손님이 36ms든 1초 타임아웃이든 기다리지 않게 한다. 하지만 게이트웨이는 라우트 단위로만 본다. 재고 서비스가 부르는 DB나 결제사 같은 서비스 사이 호출은 그 서비스 안의 브레이커가 맡아야 한다. 이름도 헷갈린다. Envoy의 `circuit_breakers`는 이런 상태 기계가 아니라 최대 연결·대기 요청·재시도 수를 묶는 동시성 한도이고, 실패한 호스트를 빼는 쪽은 `outlier_detection`이다. 창을 건수로 셀지 시간으로 셀지, 반열림에서 몇 개를 보낼지, 느린 호출을 실패로 칠지는 [서킷 브레이커 글](/posts/circuit-breaker)에서 상태 기계를 직접 짜며 다뤘다.
+
+## 모든 요청이 한 줄씩 남긴다
+
+게이트웨이 접근 로그는 모든 API 호출이 같은 형식으로 남는 유일한 곳이다. 실험실은 요청마다 JSON 한 줄을 `access.log`에 쓴다. 조각을 누르면 그 필드로 무엇을 찾는지 나온다.
+
+<UrlAnatomy
+  caption="access.log 한 줄. 응답 직전에 쓴다"
+  base="{"
+  separator=""
+  joiner=", "
+  params={[
+    { key: "ts", display: "\"ts\":\"2026-10-21T22:38:10.838Z\"", title: "요청을 받은 시각", description: "UTC로 적는다. 서비스 로그와 맞출 때 시계 차이를 감안한다." },
+    { key: "rid", display: "\"rid\":\"cacdac45e40267ca\"", title: "요청 ID", description: "게이트웨이가 만들어 x-request-id로 서비스에 넘기고 응답에도 붙인다. 문의가 오면 이 값 하나로 모든 층의 로그를 찾는다.", required: true },
+    { key: "route", display: "\"route\":\"orders\"", title: "맞은 라우트", description: "경로 원문 대신 라우트 이름으로 묶어야 /orders/1, /orders/2가 한 지표가 된다." },
+    { key: "upstream", display: "\"upstream\":\"127.0.0.1:18422\"", title: "실제로 보낸 인스턴스", description: "한 대만 이상할 때 이 값으로 묶어 본다. 캐시 HIT나 브레이커 거절이면 \"-\"다." },
+    { key: "status", display: "\"status\":403", title: "손님이 받은 상태 코드", description: "이 403은 서비스가 만들었다. upstream이 \"-\"인 401·429·503은 게이트웨이가 만든 것이다.", required: true },
+    { key: "ms", display: "\"ms\":0.82", title: "게이트웨이 안에서 걸린 시간", description: "받은 순간부터 응답을 쓸 때까지다. 손님이 느낀 시간에는 네트워크와 TLS가 더 붙는다." },
+    { key: "user", display: "\"user\":\"u-log\"", title: "인증된 사용자", description: "토큰 원문은 절대 적지 않는다. 확인한 사용자 ID만 남긴다." },
+  ]}
+/>
+
+같은 기록으로 관리 포트가 라우트별 지표를 낸다. 주문 50번(남의 주문이라 전부 403)과 상품 50번을 보낸 뒤다.
+
+```bash
+curl -s http://127.0.0.1:18402/metrics     # 바깥 18400이 아니라 내부 관리 포트에서만 연다
+```
+
+```text
+gw_requests{route="inventory"} 12  p50=31.82ms p99=91.87ms
+gw_requests{route="orders"} 50  p50=0.82ms p99=4.98ms
+gw_requests{route="products"} 50  p50=0.05ms p99=82.32ms
+gw_responses{route="inventory",status="500"} 5
+gw_responses{route="inventory",status="503"} 5
+gw_responses{route="inventory",status="200"} 2
+gw_responses{route="orders",status="403"} 50
+gw_responses{route="products",status="200"} 50
+gw_breaker_state{route="inventory"} closed
+```
+
+`orders`의 403 50건은 게이트웨이 입장에선 정상 처리다. 4xx를 오류율에 넣을지, 5xx만 넣을지 정해 두지 않으면 이런 숫자가 알람을 울린다. 실험실은 지연을 배열에 다 쌓아 두고 정렬하지만, 실제 게이트웨이는 히스토그램 구간으로 세고 Prometheus 같은 곳이 가져간다. 로그를 어떤 필드로 남길지는 [구조화 로그 글](/posts/structured-logging), 요청 ID를 넘어 서비스 사이 호출까지 잇는 법은 [분산 추적 글](/posts/distributed-tracing), 층마다 요청 ID로 로그를 꿰는 장면은 [세 층 글](/posts/reverse-proxy-lb-api-gateway#요청-id-하나로-네-층의-로그를-꿴다)에 있다.
+
+## 입구가 대신 못 하는 일
+
+열 가지를 다 켜도 서비스에 남는 일이 있다. 앞의 403이 첫 번째다. 게이트웨이는 "이 토큰은 u-42의 것"까지 안다. "78번 주문은 u-42의 것인가"는 주문 테이블을 가진 서비스만 답한다. 게이트웨이에 `/orders/78`의 주인을 알려 주려고 주문 DB를 조회하게 만들면, 서비스마다 그런 규칙이 게이트웨이로 모여 결국 게이트웨이를 고치지 않으면 기능을 못 내는 상태가 된다. 역할 같은 거친 범위 확인(`scope=orders:read`)까지가 게이트웨이 몫이고, 개별 데이터에 대한 인가는 서비스 몫이다([인증과 인가 글](/posts/authn-vs-authz#검사는-어디에-두나)).
+
+두 번째는 멱등성이다. 게이트웨이가 1초 타임아웃으로 `POST /orders`를 끊었다고 해 보자. 주문 서비스는 그 사이 주문을 만들었을 수도, 아닐 수도 있다. 게이트웨이는 모른다. 이때 게이트웨이가 재시도하면 주문이 두 건 생길 수 있다. 그래서 게이트웨이는 GET 같은 안전한 메서드나 연결 자체가 안 된 경우만 재시도하고, POST는 클라이언트가 보낸 `Idempotency-Key`를 그대로 넘긴다. 같은 키의 두 번째 요청에 첫 결과를 돌려주려면 키 저장과 주문 생성이 같은 데이터 옆에서 함께 일어나야 하니, 중복을 막는 일은 서비스에 있다([멱등성 키 글](/posts/idempotency-key)).
+
+입력 검증도 나뉜다. 본문이 JSON인지, 크기가 10MB를 넘는지는 입구에서 막아도 된다. "재고보다 많이 주문할 수 없다"는 서비스의 일이다. 아래 그림은 이 경계를 정리한 것이다. 화살표는 요청이 흐르는 방향이다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="왼쪽은 모든 API에 똑같이 적용되는 일, 오른쪽은 데이터를 알아야 하는 일"
+  nodes={[
+    { id: "edge1", label: "누구인가", sub: "토큰 검증", x: 100, y: 45, w: 150 },
+    { id: "edge2", label: "얼마나 부르나", sub: "요청 수 제한", x: 100, y: 125, w: 150 },
+    { id: "edge3", label: "어디로 가나", sub: "라우팅·분배·버전", x: 100, y: 205, w: 150 },
+    { id: "edge4", label: "무엇이 지났나", sub: "로그·지표", x: 100, y: 275, w: 150 },
+    { id: "svc1", label: "해도 되나", sub: "이 주문의 주인인가", x: 335, y: 70, w: 160 },
+    { id: "svc2", label: "두 번 와도 한 번", sub: "멱등성 키 저장", x: 335, y: 160, w: 160 },
+    { id: "svc3", label: "업무 규칙", sub: "재고보다 많이는 안 된다", x: 335, y: 250, w: 160 },
+  ]}
+  edges={[
+    { from: "edge1", to: "edge2" },
+    { from: "edge2", to: "edge3" },
+    { from: "edge3", to: "svc1", label: "x-user-id" },
+    { from: "svc1", to: "svc2" },
+    { from: "svc2", to: "svc3" },
+    { from: "edge3", to: "edge4", dashed: true },
+  ]}
+/>
+
+## 입구에 몰아넣은 대가
+
+첫째는 지연이다. 앞의 측정에서 게이트웨이를 한 번 지나는 비용은 같은 컴퓨터 안에서 p50 약 0.1~0.2ms, p99 약 0.5~0.7ms였다. 인증 캐시를 끄면 홉이 하나 더 생기는 것과 같아서 p50이 1.24ms가 됐다. 일을 하나 켤 때마다 그 일이 바깥 호출을 부르는지 본다. 토큰 검증, Redis 카운터, 원격 캐시는 각각 왕복 한 번이다. 실제 클라우드에서는 홉마다 다른 머신으로 건너가니 수백 μs~1ms가 더 붙고, 층이 쌓일수록 p99 꼬리가 길어진다([세 층 글의 측정](/posts/reverse-proxy-lb-api-gateway#한-홉에-얼마나-드나), [꼬리 지연 글](/posts/tail-latency)).
+
+둘째는 단일 장애점이다. 게이트웨이를 내려 봤다.
+
+```bash
+kill <게이트웨이 PID>                                  # ss -ltnp | grep 18400 으로 찾은 PID
+for p in /orders/1 /products/1 /v2/users/42; do $C -o /dev/null -w "%{http_code} " $GW$p; echo "exit=$?"; done
+curl -s -o /dev/null -w "direct orders-a %{http_code}\n" http://127.0.0.1:18421/orders/1
+```
+
+```text
+000 exit=7
+000 exit=7
+000 exit=7
+direct orders-a 200
+```
+
+`exit=7`은 curl이 연결조차 못 했다는 뜻이다. 주문 서비스는 멀쩡히 200을 내는데 바깥에서는 모든 API가 죽었다. 그래서 게이트웨이는 최소 두 대를 다른 가용 영역에 두고 앞에 로드 밸런서를 세우며, 상태(요청 수 카운터, 브레이커 상태, 캐시)를 인스턴스 메모리에 두면 대수만큼 판단이 갈린다는 것까지 감안한다. 실험실 브레이커를 세 대에 띄우면 각자 따로 열리고 닫힌다. 브레이커는 그래도 괜찮지만 요청 수 한도는 세 배가 된다. 배포도 위험해진다. 라우트 한 줄을 잘못 고치면 모든 서비스가 같이 영향받으니, 설정 변경도 카나리로 내보낸다([고가용성 글](/posts/high-availability)).
+
+셋째는 설정이 퍼지는 문제다. 실험실 라우트 표는 여섯 줄이지만, 라우트마다 인증 여부, 한도, 캐시, 브레이커, 변환, 버전 헤더가 붙으면 수백 줄이 된다. 팀마다 자기 줄을 고치러 오고, 누가 왜 넣었는지 모르는 예외 규칙이 쌓인다. `POST /v1/users`처럼 순서에 의존하는 줄은 리뷰에서 잘 안 보인다. 설정을 Git에 선언형으로 두고(Kong의 decK, Gateway API의 HTTPRoute 리소스), 라우트마다 담당 팀을 적고, 배포 전에 "이 경로는 이 라우트로 간다"는 테스트를 돌린다. 쿠버네티스 Gateway API가 플랫폼 팀의 Gateway와 앱 팀의 HTTPRoute를 나눈 것도 이 문제 때문이다([게이트웨이 글](/posts/gateway)).
+
+## 지금 단계에서 켤 것과 미룰 것
+
+열 가지를 처음부터 다 켤 필요는 없다. 서비스 규모와 손님 종류에 따라 필요한 게 달라진다. 단계마다 켜는 것이 실제로 달라서 표로 정리한다.
+
+| 단계 | 상황 | 켤 것 | 미뤄도 되는 것 |
+|---|---|---|---|
+| 앱 하나 | 서비스 하나, 손님은 우리 앱뿐 | TLS 종료, 접근 로그, IP 단위 거친 제한. nginx나 ALB면 충분하다 | 게이트웨이 제품, 변환, 버전 라우팅 |
+| 서비스 몇 개 | 2~5개 서비스, 한두 팀 | 경로 라우팅, 토큰 검증 한 곳, 사용자 단위 제한, 요청 ID, 라우트별 지표 | 게이트웨이 캐시, 변환 |
+| 여러 팀과 외부 손님 | 파트너·공개 API, 고칠 수 없는 클라이언트 | API 키와 사용량 한도, 버전 라우팅과 중단 헤더, 라우트별 브레이커와 타임아웃, 공개 응답만 캐시 | 화면 맞춤 응답(BFF로 뺀다) |
+| 이전 기간 | 옛 클라이언트를 못 고친다 | 변환을 끝나는 날짜와 함께 켠다 | 영구 변환 |
+
+로드 밸런싱은 표에 없다. 어느 단계에서든 이미 앞의 프록시나 쿠버네티스 Service가 하고 있어서, 게이트웨이에서 또 할지는 인스턴스를 누가 알고 있느냐로 정한다. 캐시는 늦게 켤수록 좋다. 공개되는 응답이 많고 원본이 느리다는 게 지표로 보일 때 켜고, 그 전에는 [CDN](/posts/http-caching-cdn)에 맡기는 편이 사고가 적다. 반대로 인증과 요청 ID는 서비스가 둘이 되는 순간 입구로 올리는 게 낫다. 서비스마다 토큰 검증 코드가 다르게 자라기 시작하면 다시 모으기 어렵다.
+
+다음 단계로 넘어갈 신호도 대개 증상으로 온다. 서비스마다 토큰 검증 라이브러리 버전이 달라 같은 토큰이 한쪽에서만 401이 난다면 인증을 입구로 모을 때다. 한 손님이 전체를 느리게 만든다면 사용자 단위 제한이 필요하다. "아직 v1을 누가 부르나"에 아무도 답하지 못하면 라우트별 지표와 버전 라우팅이 필요하다. 게이트웨이 설정 PR에 화면 이름이 등장하기 시작하면 BFF를 떼어 낼 때다.
+
+## 열 가지를 질문 몇 개로 줄이면
+
+열 가지는 게이트웨이가 요청 하나를 받을 때마다 묻는 질문 몇 개로 줄어든다. 누구인가(인증), 얼마나 불렀나(요청 수 제한), 어디로 가나(라우팅, 분배, 버전), 뒤가 살아 있나(서킷 브레이커), 대신 답할 수 있나(캐시), 말을 바꿔 줘야 하나(변환), 그리고 그 모든 걸 기록한다(로그와 지표). TLS 종료는 그 앞의 준비다. 데이터를 봐야 답할 수 있는 질문, 이 주문의 주인인지와 이 요청이 두 번째인지는 서비스에 남긴다. 하나를 켤 때마다 바깥 호출이 하나 늘지 않는지, 게이트웨이 여러 대에서 판단이 갈리지 않는지, 라우트 표가 누구 손에 있는지를 같이 본다.
+
+## 면접에서 나올 만한 질문
+
+### API 게이트웨이가 맡는 일을 말해 보고, 그중 서비스에 남겨야 하는 것은 무엇인가요?
+
+게이트웨이는 모든 API에 똑같이 적용되는 일을 맡는다. 토큰 검증, 요청 수 제한, 라우팅과 분배, TLS 종료, 공개 응답 캐시, 서킷 브레이커, 접근 로그와 지표, 버전 라우팅, 이전 기간의 형식 변환이다. 데이터를 알아야 하는 판단은 서비스에 남긴다. "이 사용자가 이 주문을 볼 수 있나" 같은 개별 인가, 멱등성 키로 중복을 막는 일, 업무 규칙 검증이 그렇다.
+
+### 게이트웨이가 JWT를 검증했으면 서비스는 아무 검사도 안 해도 되나요?
+
+아니다. 게이트웨이가 보장하는 건 "토큰이 진짜이고 이 사용자의 것"까지다. 개별 자원에 대한 인가는 서비스가 해야 하고, 서비스가 게이트웨이를 거친 요청만 받도록 네트워크 정책이나 mTLS로 막아야 `x-user-id` 헤더를 믿을 수 있다. 게이트웨이는 손님이 보낸 같은 이름의 헤더를 지우고 다시 써야 한다.
+
+### 인증 서비스에 매번 토큰을 물어보면 어떤 문제가 있고, 어떻게 줄이나요?
+
+요청마다 왕복이 하나 늘어 지연이 커지고 인증 서비스 용량이 전체 API 용량이 된다. 실험에서는 캐시를 끄자 p50이 0.35ms에서 1.24ms로 늘었다. 성공한 검증 결과를 토큰 해시로 짧게 캐시하거나, 공개 키(JWKS)로 게이트웨이가 직접 서명을 검증한다. 둘 다 회수된 토큰이 캐시 기간이나 만료까지 통한다는 대가가 있어서, 민감한 API만 캐시를 짧게 두는 식으로 나눈다. 실패한 결과는 캐시하지 않으니 엉터리 토큰 폭주는 인증 앞의 IP 단위 제한으로 막는다.
+
+### 게이트웨이에서 응답을 캐시할 때 가장 위험한 실수는 무엇인가요?
+
+사람마다 다른 응답을 경로만으로 캐시하는 것이다. 첫 사용자의 주문 목록이 다음 사용자에게 그대로 간다. `Cache-Control: public`이고 사람과 무관한 응답만 공유 캐시에 두고, 인증이 붙은 라우트는 캐시하지 않거나 키에 사용자를 넣는다. 캐시가 켜진 라우트는 지연 분포가 HIT와 MISS 두 덩어리로 갈려서 히트율과 같이 봐야 한다.
+
+### 게이트웨이의 서킷 브레이커와 서비스 안의 서킷 브레이커는 무엇이 다른가요?
+
+게이트웨이 브레이커는 라우트 단위로 바깥 손님과 뒤쪽 서비스 사이를 지킨다. 손님에게 빠른 503을 주고 망가진 서비스에 회복할 틈을 준다. 서비스가 DB나 다른 서비스를 부르는 안쪽 호출은 게이트웨이가 볼 수 없으니 그 서비스 안의 브레이커가 맡는다. 제품마다 용어도 달라서 Envoy의 `circuit_breakers`는 동시성 한도이고, 실패한 호스트를 빼는 건 `outlier_detection`이다.
+
+### 반열림 상태에서 요청이 동시에 여러 개 오면 어떻게 되나요?
+
+설정한 시험 수만큼만 뒤로 보내고 나머지는 바로 거절한다. 실험실 게이트웨이는 시험을 한 건만 허용해서, 동시에 온 세 요청 중 하나만 재고 서비스로 갔고 둘은 503을 받았다. 시험이 성공하면 닫히고 실패하면 다시 열린다. 시험 결과가 영영 안 오면 반열림에 갇힐 수 있어서 시험 요청에도 타임아웃이 있어야 한다.
+
+### 게이트웨이에서 실패한 POST를 재시도해도 되나요?
+
+기본은 하지 않는다. 타임아웃으로 끊겼을 때 서비스가 이미 처리했는지 게이트웨이는 모르기 때문에, 재시도하면 주문이 두 번 생길 수 있다. 연결 자체가 안 된 경우나 GET 같은 안전한 메서드만 재시도하고, POST는 클라이언트의 `Idempotency-Key`를 서비스로 넘겨 서비스가 같은 키에 같은 결과를 돌려주게 한다.
+
+### 작은 팀이 게이트웨이를 처음 들일 때 무엇부터 켜나요?
+
+서비스가 하나면 nginx나 ALB로 TLS 종료, 접근 로그, IP 단위 제한만 해도 충분하다. 서비스가 둘 이상이 되면 경로 라우팅, 토큰 검증 한 곳, 요청 ID, 사용자 단위 제한을 입구로 올린다. 외부 파트너가 생기면 API 키와 사용량 한도, 버전 라우팅을 더하고, 캐시와 변환은 지표로 필요가 보일 때 기한을 정해 켠다. 게이트웨이를 들이는 순간 단일 장애점이 되니 처음부터 두 대 이상, 설정은 Git으로 관리한다.

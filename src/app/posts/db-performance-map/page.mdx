@@ -1,0 +1,464 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("db-performance-map");
+
+쇼핑몰을 연 첫 달에는 "내 주문 내역" 화면이 금방 떴다. 1년이 지나 주문이 200만 건 쌓이자 같은 화면이 0.1초 넘게 걸리기 시작했다. 사용자가 늘면서 DB 연결 오류가 나고, 관리자 매출 화면은 누를 때마다 느리고, 어느 날은 DB 서버 CPU가 100%에 붙었다. 하나의 테이블이 자라면서 문제가 차례로 바뀐다.
+
+"DB를 빠르게 만드는 방법"으로 자주 묶이는 여덟 가지가 있다. 인덱스, B-tree, 캐시, 블룸 필터, 파티셔닝, 샤딩, 복제, 커넥션 풀. 따로 외우면 다 비슷하게 들린다. 이 글은 주문 테이블 하나가 자라는 순서대로 여덟 개를 꺼낸다. 각각 어떤 문제를 풀고, 대신 무엇을 새로 떠안는지를 숫자 하나씩과 함께 짧게 보고, 깊은 내용은 그 주제를 다룬 글로 넘긴다.
+
+기준은 Ubuntu 24.04의 PostgreSQL 16(16.15)이다. 실행 계획과 측정값은 모두 이 환경의 실습 DB에서 실제로 돌린 출력이고, 실습이 끝난 뒤 DB는 지웠다.
+
+| 꺼내는 순서 | 기법 | 이런 증상일 때 | 새로 생기는 문제 | 깊게 다룬 글 |
+|---|---|---|---|---|
+| 1 | 인덱스 | 몇 줄 찾는 쿼리가 테이블 전체를 읽는다 | 쓰기가 느려지고 공간을 먹는다 | [인덱스](/posts/db-index), [인덱스 고르기](/posts/db-index-design) |
+| 2 | B-tree | 인덱스가 왜 빠른지 설명해야 한다 | 앞부분이 안 맞는 검색은 못 돕는다 | [인덱스](/posts/db-index) |
+| 3 | 커넥션 풀 | 요청마다 연결을 열다가 지연과 연결 오류 | 풀 고갈, 누수 | [커넥션 풀](/posts/connection-pool) |
+| 4 | 캐시 | 같은 무거운 결과를 계속 다시 계산한다 | 낡은 값, 무효화 | [캐시 전략](/posts/caching-strategies) |
+| 5 | 복제 | 읽기가 한 대의 CPU를 넘는다 | 복제 지연 | [복제와 샤딩](/posts/db-replication-sharding) |
+| 6 | 파티셔닝 | 테이블이 너무 커서 범위 조회와 정리가 무겁다 | 키 없는 쿼리는 전부 훑는다 | [파티셔닝](/posts/db-partitioning) |
+| 7 | 블룸 필터 | 없는 값을 찾느라 DB를 두드린다 | 가끔 "있을 수도"라고 틀린다 | [블룸 필터](/posts/bloom-filter) |
+| 8 | 샤딩 | 쓰기가 한 대의 한계를 넘는다 | 샤드를 넘는 쿼리, 재배치 | [샤딩](/posts/db-sharding) |
+
+순서는 비용 순이다. 위쪽은 설정 하나, 인덱스 하나로 끝나고, 아래로 갈수록 운영할 서버와 코드가 늘어난다. 서비스 규모 전체로 DB 구조가 어떻게 바뀌는지는 [서비스 규모별 DB 설계](/posts/db-architecture-by-scale)에서 따로 봤다. 이 글은 그중 "빠르게"에만 집중한다.
+
+여덟 개가 요청 경로의 어디에 붙는지부터 보자. 화살표를 따라 점이 흐르는 방향이 요청이 가는 방향이다.
+
+<ConceptDiagram
+  caption="여덟 가지가 요청 경로에 붙는 자리"
+  width={420}
+  height={280}
+  nodes={[
+    { id: "app", label: "앱", x: 50, y: 140, w: 70 },
+    { id: "bloom", label: "블룸 필터", sub: "없으면 여기서 끝", x: 165, y: 40, w: 110 },
+    { id: "cache", label: "캐시", sub: "결과 재사용", x: 165, y: 140, w: 110 },
+    { id: "pool", label: "커넥션 풀", sub: "연결 재사용", x: 165, y: 240, w: 110 },
+    { id: "db", label: "DB 한 대", sub: "인덱스(B-tree), 파티션", x: 330, y: 140, w: 150 },
+    { id: "rep", label: "복제본", sub: "읽기 분산", x: 300, y: 240, w: 100 },
+    { id: "shard", label: "샤드", sub: "서버를 나눔", x: 330, y: 40, w: 110 },
+  ]}
+  edges={[
+    { from: "app", to: "bloom" },
+    { from: "app", to: "cache" },
+    { from: "app", to: "pool" },
+    { from: "cache", to: "db", label: "미스" },
+    { from: "pool", to: "db" },
+    { from: "pool", to: "rep", dashed: true },
+    { from: "db", to: "rep", label: "WAL", dashed: true },
+    { from: "db", to: "shard", dashed: true, arrow: "none" },
+  ]}
+/>
+
+블룸 필터와 캐시는 DB에 가기 전에 답을 끝내고, 커넥션 풀은 DB로 가는 길을 재사용하며, 인덱스와 파티션은 DB 안에서 읽는 양을 줄이고, 복제와 샤딩은 DB를 여러 대로 늘린다. 이 네 층을 기억해 두면 증상이 어느 층의 문제인지 먼저 가를 수 있다.
+
+## 주문 200만 건에서 회원 한 명 찾기
+
+실습 테이블이다. 2025년 한 해 동안 들어온 주문 200만 건, 회원은 10만 명이다.
+
+```sql
+CREATE TABLE orders (
+  id         bigserial PRIMARY KEY,
+  user_id    bigint      NOT NULL,
+  status     text        NOT NULL,
+  total      integer     NOT NULL,
+  created_at timestamptz NOT NULL
+);
+-- 회원 10만 명, 1년에 고르게 퍼진 주문 200만 건
+INSERT INTO orders (user_id, status, total, created_at)
+SELECT (random()*99999)::int + 1,
+       (ARRAY['paid','shipped','cancelled'])[1 + (g % 3)],
+       1000 + (g * 37) % 99000,
+       timestamptz '2025-01-01' + (g * interval '15.768 seconds')
+FROM generate_series(1, 2000000) AS g;
+ANALYZE orders;
+```
+
+테이블은 130MB다. "내 주문 내역" 화면은 회원 한 명의 최근 주문 10건을 읽는다. 4242번 회원의 주문은 22건이다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, total, created_at FROM orders
+WHERE user_id = 4242 ORDER BY created_at DESC LIMIT 10;
+```
+
+```text
+ Limit  (cost=28083.83..28085.00 rows=10 width=20) (actual time=75.542..77.083 rows=10 loops=1)
+   Buffers: shared hit=12611 read=4130
+   ->  Gather Merge  (cost=28083.83..28085.93 rows=18 width=20) (actual time=75.540..77.078 rows=10 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=12611 read=4130
+         ->  Sort  (cost=27083.81..27083.83 rows=9 width=20) (actual time=68.131..68.134 rows=6 loops=3)
+               Sort Key: created_at DESC
+               ...
+               ->  Parallel Seq Scan on orders  (cost=0.00..27083.67 rows=9 width=20) (actual time=9.291..68.041 rows=7 loops=3)
+                     Filter: (user_id = 4242)
+                     Rows Removed by Filter: 666659
+                     Buffers: shared hit=12537 read=4130
+ Planning Time: 0.400 ms
+ Execution Time: 77.156 ms
+```
+
+볼 줄은 세 개다. `Parallel Seq Scan`은 테이블을 처음부터 끝까지 읽었다는 뜻이고, 작업자 3개가 나눠 읽었다. `Rows Removed by Filter: 666659`가 `loops=3`이니 200만 건 가까이 읽고 버렸다. `Buffers`의 hit와 read를 더하면 16,741페이지다. 테이블이 16,667페이지이니 전부 읽은 셈이다. 22건을 찾으려고 130MB를 읽었다. 병렬 작업자를 끈 같은 쿼리는 131ms가 걸렸다.
+
+## 1. 인덱스: 읽을 범위를 좁힌다
+
+인덱스는 컬럼 값을 정렬해 행 위치와 함께 따로 저장한 사본이다. 책 뒤의 찾아보기처럼, 값으로 위치를 바로 찾는다. 이 쿼리는 `user_id`로 거르고 `created_at`으로 정렬하니 두 컬럼을 이 순서로 묶는다.
+
+```sql
+CREATE INDEX orders_user_created ON orders (user_id, created_at);  -- 1.45초 걸렸다
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, total, created_at FROM orders
+WHERE user_id = 4242 ORDER BY created_at DESC LIMIT 10;
+```
+
+```text
+ Limit  (cost=0.43..42.51 rows=10 width=20) (actual time=0.044..0.071 rows=10 loops=1)
+   Buffers: shared hit=13 read=3
+   ->  Index Scan Backward using orders_user_created on orders  (cost=0.43..88.79 rows=21 width=20) (actual time=0.042..0.068 rows=10 loops=1)
+         Index Cond: (user_id = 4242)
+         Buffers: shared hit=13 read=3
+ Planning Time: 0.622 ms
+ Execution Time: 0.100 ms
+```
+
+77ms가 0.1ms로, 16,741페이지가 16페이지로 줄었다. `Index Scan Backward`는 인덱스를 거꾸로 읽어 최근 것부터 10건을 꺼냈다는 뜻이다. 인덱스가 이미 `created_at` 순이라 `Sort` 단계가 사라졌다.
+
+대가도 있다. 이 인덱스는 60MB로 테이블의 절반 가까이 된다. 주문이 들어올 때마다 테이블과 인덱스 두 곳에 쓴다. 인덱스를 다섯 개 붙이면 쓰기도 그만큼 무거워진다. 그리고 쿼리 모양이 안 맞으면 인덱스가 있어도 안 탄다. 컬럼에 함수를 씌우거나, 묶음 인덱스의 첫 컬럼 없이 찾거나, `'%kim%'`처럼 앞이 열린 검색이 대표적이다. 실행 계획을 읽는 법은 [인덱스 글](/posts/db-index)에, 컬럼 순서와 커버링·부분 인덱스는 [인덱스 고르기](/posts/db-index-design)에, 인덱스가 안 타는 경우는 [인덱스가 안 타는 이유](/posts/db-index-pitfalls)에 있다.
+
+## 2. B-tree: 200만 건에서 세 페이지만 내려간다
+
+16페이지 중 인덱스를 위에서 아래로 내려가는 데 드는 건 3페이지이고, 나머지는 대부분 행을 읽으러 간 테이블 페이지다. PostgreSQL의 기본 인덱스인 B-tree가 3층이라서다. B-tree는 정렬된 키를 8KB 페이지에 나눠 담고, 그 위에 "어느 페이지에 어디부터 어디까지 있다"는 안내 페이지를 층층이 쌓은 균형 트리다. 맨 아래가 잎(leaf), 맨 위가 뿌리(root)이고, 모든 잎이 같은 깊이에 있다. 그래서 어떤 값을 찾든 같은 횟수만 내려간다.
+
+`pageinspect` 확장으로 방금 만든 인덱스를 열어 봤다.
+
+```sql
+CREATE EXTENSION pageinspect;
+SELECT level, root FROM bt_metap('orders_user_created');   -- 뿌리는 211번 페이지, 그 아래 2층
+```
+
+```text
+ level | root
+-------+------
+     2 |  211
+```
+
+`level 2`는 뿌리 아래로 두 층이 더 있다는 뜻이다. 페이지 종류를 세어 보면 잎 7,663장, 중간 38장, 뿌리 1장이다. 뿌리 한 장이 중간 페이지 38장을 가리키고, 중간 페이지 한 장이 잎 200장 남짓을 가리킨다. 4242번 회원을 찾는 길을 실제 페이지 번호로 따라가 보자. 각 페이지의 키는 `bt_page_items`로 읽은 값이다.
+
+<AlgoTrace
+  caption="user_id = 4242를 찾아 B-tree를 내려가는 길 (실제 페이지 번호)"
+  memoryLabel="읽은 페이지"
+  cells={["뿌리 211", "중간 210", "잎 325", "힙 페이지들"]}
+  steps={[
+    { pointer: 0, memory: ["211"], caption: "뿌리에는 38개의 경계값이 있다. 2694 이상 5391 미만은 210번 페이지로 가라고 적혀 있다." },
+    { pointer: 1, memory: ["211", "210"], caption: "중간 페이지 210에는 206개 경계가 있다. 4235 이상 4249 미만은 잎 325번이다." },
+    { pointer: 2, found: [2], memory: ["211", "210", "325"], caption: "잎 325에는 4235~4248번 회원의 항목 262개가 정렬돼 있다. 4242번의 22개가 붙어 있다." },
+    { pointer: 3, found: [2, 3], memory: ["211", "210", "325", "힙 페이지"], caption: "잎의 항목이 가리키는 행 위치로 테이블(힙)에 가서 10건을 읽는다. 인덱스는 3장만 읽었다." },
+  ]}
+/>
+
+이진 트리였다면 200만 개에서 20층 넘게 내려가야 한다. B-tree는 한 페이지에 키를 수백 개 담아 갈래가 수백 개라서 낮다. 직접 계산해 보자. 행 수, 잎 한 장에 들어가는 항목 수, 중간 페이지 하나가 가리키는 자식 수를 받아 `[잎 페이지 수, 층 수]`를 돌려준다. 잎 수는 올림이고, 페이지가 한 장이 될 때까지 갈래 수로 나누며(올림) 층을 센다.
+
+<CodePlayground
+  caption="B-tree는 몇 층일까"
+  functionName="btreeLevels"
+  initialCode={`function btreeLevels(rows, perLeaf, fanout) {
+  // leaf = Math.ceil(rows / perLeaf), 최소 1장
+  // 페이지가 1장이 될 때까지 fanout으로 나누며(올림) 층을 센다
+  return [0, 0];
+}`}
+  solution={`function btreeLevels(rows, perLeaf, fanout) {
+  let pages = Math.max(1, Math.ceil(rows / perLeaf));
+  const leaf = pages;
+  let levels = 1;
+  while (pages > 1) {
+    pages = Math.ceil(pages / fanout);
+    levels++;
+  }
+  return [leaf, levels];
+}`}
+  tests={[
+    { label: "실습 인덱스: 200만 건", args: [2000000, 262, 206], expected: [7634, 3] },
+    { label: "1억 건", args: [100000000, 262, 206], expected: [381680, 4] },
+    { label: "100억 건", args: [10000000000, 262, 206], expected: [38167939, 5] },
+    { label: "100건이면 잎 하나", args: [100, 262, 206], expected: [1, 1] },
+    { label: "갈래가 둘뿐이면", args: [2000000, 4, 2], expected: [500000, 20] },
+  ]}
+/>
+
+첫 테스트의 잎 7,634장은 실제 7,663장과 조금 다르다. 실제 잎은 빈자리를 남겨 두고 채우기 때문이다(B-tree 기본 `fillfactor` 90). 100억 건이 돼도 5층이다. 층 하나가 디스크 읽기 한 번이고 위쪽 층은 거의 늘 메모리에 있으니, 행이 늘어도 찾는 비용은 거의 그대로다.
+
+B-tree는 정렬돼 있어서 같다 비교뿐 아니라 범위, `ORDER BY`, 앞부분 일치 `LIKE 'kim%'`까지 돕는다. 잎끼리 옆으로 이어져 있어 범위의 시작 잎만 찾으면 옆으로 읽어 나간다. 해시 인덱스는 같다 비교만 된다. 대신 값이 무작위로 들어오면(무작위 UUID 기본 키처럼) 꽉 찬 잎이 자꾸 쪼개져 인덱스가 커진다. B-tree의 구조와 MySQL InnoDB의 클러스터드 인덱스 차이는 [인덱스 글](/posts/db-index)의 B-tree 부분에 더 자세히 있다.
+
+## 3. 커넥션 풀: 연결을 미리 열어 두고 돌려 쓴다
+
+쿼리를 0.1ms로 만들었는데 사용자가 늘자 API 지연이 다시 오른다. 코드를 보면 요청마다 DB에 새로 연결하고 닫는다. PostgreSQL은 연결마다 서버 프로세스를 하나씩 새로 띄우고, 인증을 하고, 설정을 읽는다. 쿼리 자체보다 이 준비가 훨씬 비싸다.
+
+<SequenceDiagram
+  caption="새 연결 하나를 여는 데 오가는 것"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "pm", label: "postmaster" },
+    { id: "be", label: "새 백엔드" },
+  ]}
+  steps={[
+    { from: "app", to: "pm", label: "연결 + 시작 메시지", title: "연결을 연다", detail: "TCP(또는 유닉스 소켓) 연결을 맺고 사용자와 DB 이름을 보낸다. TLS를 쓰면 핸드셰이크가 더 붙는다." },
+    { from: "pm", to: "be", label: "fork", title: "프로세스를 하나 띄운다", detail: "PostgreSQL은 연결 하나에 서버 프로세스 하나다. 이 연결만을 위한 프로세스를 새로 만든다." },
+    { from: "be", to: "app", label: "인증 요청", title: "인증을 주고받는다", detail: "SCRAM 방식이면 몇 번 더 왕복한다. pg_hba.conf 규칙에 따라 방식이 정해진다." },
+    { from: "be", to: "app", label: "ReadyForQuery", title: "이제야 쿼리를 받는다", detail: "설정값과 카탈로그를 읽고 준비가 끝났다고 알린다." },
+    { from: "app", to: "be", label: "SELECT 1", title: "쿼리는 순식간이다", detail: "0.1ms짜리 쿼리 하나를 위해 위 과정을 매번 하면 대부분의 시간이 준비에 쓰인다." },
+  ]}
+/>
+
+`pgbench`로 `SELECT 1`만 10초 동안 보내 봤다. 같은 4개 클라이언트로, 연결을 유지할 때와 트랜잭션마다 새로 연결할 때(`-C`)를 비교했다. 접속은 같은 서버 안의 유닉스 소켓이라 네트워크 왕복도 TLS도 없는, 가장 유리한 조건이다.
+
+```bash
+# 연결을 유지한 채 SELECT 1을 10초 동안 보낸다
+sudo -u postgres pgbench -n -c 4 -j 2 -T 10 -f one.sql dbmap_perf
+# 트랜잭션마다 새로 연결한다 (-C)
+sudo -u postgres pgbench -n -C -c 4 -j 2 -T 10 -f one.sql dbmap_perf
+```
+
+```text
+number of transactions actually processed: 476800
+number of failed transactions: 0 (0.000%)
+latency average = 0.084 ms
+initial connection time = 13.641 ms
+tps = 47725.964877 (without initial connection time)
+----
+duration: 10 s
+number of transactions actually processed: 2887
+number of failed transactions: 0 (0.000%)
+latency average = 13.868 ms
+average connection time = 6.868 ms
+tps = 288.427523 (including reconnection times)
+```
+
+초당 47,726건이 288건으로, 165배 차이다. `average connection time = 6.868 ms`가 연결 한 번의 값이다. 0.084ms짜리 일에 6.9ms의 준비를 붙인 셈이다. 다른 서버에서 TCP와 TLS로 붙으면 차이는 더 벌어진다.
+
+커넥션 풀은 연결 몇 개를 미리 열어 두고, 요청이 오면 빌려주고, 끝나면 돌려받는다. 새로 생기는 문제는 둘이다. 하나는 풀 고갈이다. 트랜잭션을 연 채 외부 API를 기다리는 코드가 있으면 연결을 오래 쥐어서 다른 요청이 줄을 선다. 다른 하나는 누수다. 에러 경로에서 연결을 돌려주지 않으면 풀이 조금씩 줄다가 멈춘다. 풀 크기를 너무 크게 잡는 것도 실수다. DB가 동시에 처리할 수 있는 양은 코어 수와 잠금 경합이 정하고, 그보다 많은 연결은 DB 안에서 기다릴 뿐이다. 풀 크기 계산과 PgBouncer는 [커넥션 풀 글](/posts/connection-pool)에 있다.
+
+## 4. 캐시: 같은 답을 다시 계산하지 않는다
+
+관리자 화면에 "이번 달 매출"이 있다. 누를 때마다 한 달 치 주문을 더한다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT sum(total) FROM orders
+WHERE created_at >= '2025-03-01' AND created_at < '2025-04-01';
+```
+
+```text
+ Aggregate  (cost=47089.03..47089.04 rows=1 width=8) (actual time=184.868..184.870 rows=1 loops=1)
+   Buffers: shared read=16667
+   ->  Seq Scan on orders  (cost=0.00..46667.00 rows=168812 width=4) (actual time=24.869..176.259 rows=169863 loops=1)
+         Filter: ((created_at >= '2025-03-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-04-01 00:00:00+00'::timestamp with time zone))
+         Rows Removed by Filter: 1830137
+         Buffers: shared read=16667
+ Execution Time: 184.929 ms
+```
+
+(병렬 작업자를 끈 세션에서 잰 값이다.) 17만 건을 더해야 하니 인덱스로도 크게 줄지 않는다. 그런데 3월 매출은 4월이 되면 거의 안 바뀐다. 이런 결과는 한 번 계산해 캐시에 넣어 두고, 다음에는 캐시에서 꺼낸다. 앱이 먼저 캐시를 보고 없으면 DB에서 계산해 채우는 방식을 cache-aside라고 한다. 캐시에서 꺼내는 값은 얼마나 될까. 같은 서버에 띄운 Redis에 `redis-benchmark`로 작은 값의 GET을 클라이언트 하나로 10만 번 보내 봤다(키는 벤치마크가 만든 것이다).
+
+```bash
+# 클라이언트 하나로 GET을 10만 번 보내고 지연 분포를 본다
+redis-benchmark -p 6391 -t get -n 100000 -c 1
+```
+
+```text
+  latency summary (msec):
+          avg       min       p50       p95       p99       max
+        0.058     0.008     0.063     0.095     0.167     3.895
+```
+
+p50이 0.063ms다. 캐시에 들어 있기만 하면 185ms짜리 집계가 이 정도로 바뀐다. 새로 떠안는 문제는 낡은 값이다. 3월 주문이 4월에 취소되면 캐시의 매출은 틀린 값이 된다. 얼마나 낡아도 되는지로 수명(TTL)을 정하고, 원본이 바뀔 때 키를 지우는 규칙을 둬야 한다. 인기 키의 수명이 끝나는 순간 요청이 한꺼번에 DB로 몰리는 스탬피드도 있다. 쓰기 방식과 무효화, 스탬피드 대처는 [캐시 전략](/posts/caching-strategies)에, 개념 전체의 순서는 [캐시 개념 지도](/posts/caching-concepts-map)에 있다.
+
+## 5. 복제: 읽기를 여러 대로 나눈다
+
+인덱스와 캐시를 다 했는데 DB CPU가 읽기만으로 꽉 찬다. 이때 복제본을 붙인다. 주 DB(프라이머리)는 모든 변경을 WAL(변경 기록)에 쓰는데, 복제본은 이 WAL을 받아 그대로 다시 실행해 같은 데이터를 유지한다. 앱은 쓰기를 주 DB로, 읽기를 복제본으로 보낸다.
+
+<NetworkTopology
+  caption="읽기는 복제본으로, 쓰기가 넘치면 샤드로"
+  width={420}
+  height={260}
+  zones={[
+    { id: "one", label: "샤드 A (user_id 짝수)", x: 150, y: 15, w: 260, h: 110, tone: "private" },
+    { id: "two", label: "샤드 B (user_id 홀수)", x: 150, y: 140, w: 260, h: 110, tone: "public" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱 + 풀", x: 55, y: 130, icon: "server" },
+    { id: "pa", label: "주 DB A", x: 220, y: 70, icon: "db" },
+    { id: "ra", label: "복제본 A", x: 345, y: 70, icon: "db" },
+    { id: "pb", label: "주 DB B", x: 220, y: 195, icon: "db" },
+    { id: "rb", label: "복제본 B", x: 345, y: 195, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "pa" },
+    { from: "app", to: "pb" },
+    { from: "pa", to: "ra", label: "WAL", dashed: true },
+    { from: "pb", to: "rb", label: "WAL", dashed: true },
+    { from: "app", to: "ra", dashed: true },
+    { from: "app", to: "rb", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "pa", "ra"], packet: "INSERT", title: "쓰기는 주 DB로", detail: "새 주문은 주 DB가 받고, 변경 기록이 복제본으로 흘러간다." },
+    { path: ["app", "ra"], packet: "SELECT", title: "읽기는 복제본으로", detail: "주문 내역 조회는 복제본이 받는다. 복제본을 늘리면 읽기 처리량이 늘어난다." },
+    { path: ["app", "ra"], packet: "방금 주문?", highlight: ["pa"], title: "복제본은 조금 늦다", detail: "결제 직후 복제본에서 읽으면 방금 주문이 아직 없을 수 있다. 쓴 사람의 직후 읽기는 주 DB로 보낸다." },
+    { path: ["app", "pb", "rb"], packet: "user 4243", title: "쓰기가 넘치면 샤드로 나눈다", detail: "홀수 회원의 주문은 샤드 B의 주 DB가 받는다. 쓰기 부하가 두 대로 나뉜다." },
+    { path: ["app", "pa"], packet: "전체 매출", highlight: ["pb"], title: "샤드를 넘는 쿼리는 비싸다", detail: "모든 회원의 매출 합계는 샤드마다 물어 앱에서 합쳐야 한다. 한 번의 SQL로 끝나지 않는다." },
+  ]}
+/>
+
+복제가 새로 만드는 문제는 복제 지연이다. 방금 결제한 주문이 "내 주문" 화면에 안 보이는 문의가 그 증상이다. 쓴 사용자의 직후 읽기는 주 DB로 보내거나, 복제본이 그 위치(LSN)까지 따라왔는지 확인하고 읽는다. 복제는 쓰기를 나누지 못한다는 것도 알아 둔다. 모든 쓰기는 여전히 주 DB 한 대가 받고, 복제본도 똑같이 다시 실행해야 한다. 지연을 재는 법과 동기 복제의 선택은 [복제와 샤딩](/posts/db-replication-sharding)에, 주 DB가 죽었을 때의 승격은 [DB 복제 입문](/posts/sd-db-replication-intro)에 있다.
+
+## 6. 파티셔닝: 한 DB 안에서 테이블을 범위로 쪼갠다
+
+주문이 몇 년 치 쌓이면 다른 문제가 온다. 한 달 매출을 구하려고 몇 년 치 테이블을 다 훑고, 3년 지난 주문을 지우는 `DELETE`가 몇 시간 돌면서 테이블을 부풀린다. 파티셔닝은 한 테이블을 안에서 여러 조각으로 나눈다. 앱이 보기에는 테이블 하나지만, 실제로는 달마다 따로 저장된다. 같은 200만 건을 달별 파티션 13개(2026년 1월 칸에는 마지막 1건)에 다시 넣었다.
+
+```sql
+CREATE TABLE orders_p (LIKE orders INCLUDING DEFAULTS) PARTITION BY RANGE (created_at);
+-- 2025-01부터 2026-01까지 달마다 하나씩 (DO 블록으로 만들었다)
+CREATE TABLE orders_p_202503 PARTITION OF orders_p
+  FOR VALUES FROM ('2025-03-01') TO ('2025-04-01');
+INSERT INTO orders_p SELECT * FROM orders;
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT sum(total) FROM orders_p
+WHERE created_at >= '2025-03-01' AND created_at < '2025-04-01';
+```
+
+```text
+ Aggregate  (cost=4388.52..4388.53 rows=1 width=8) (actual time=31.219..31.221 rows=1 loops=1)
+   Buffers: shared hit=1416
+   ->  Seq Scan on orders_p_202503 orders_p  (cost=0.00..3963.94 rows=169829 width=4) (actual time=0.018..22.706 rows=169863 loops=1)
+         Filter: ((created_at >= '2025-03-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-04-01 00:00:00+00'::timestamp with time zone))
+         Buffers: shared hit=1416
+ Execution Time: 31.251 ms
+```
+
+`Seq Scan on orders_p_202503`만 남았다. 플래너가 조건을 보고 3월 파티션만 읽기로 정한 것이다. 이를 파티션 가지치기라고 한다. 16,667페이지가 1,416페이지로, 185ms가 31ms로 줄었다(둘 다 병렬 작업자를 끈 세션의 값이다). 오래된 달은 `DROP TABLE orders_p_202501` 한 번에 지워진다. 행을 하나씩 지우는 것과 달리 순식간이고 테이블이 부풀지 않는다.
+
+대가는 파티션 키가 없는 쿼리다. 회원 번호로만 찾으면 어느 달에 있는지 모르니 전부 연다.
+
+```sql
+EXPLAIN (COSTS OFF) SELECT * FROM orders_p WHERE user_id = 4242;
+```
+
+```text
+ Append
+   ->  Seq Scan on orders_p_202501 orders_p_1
+         Filter: (user_id = 4242)
+   ->  Seq Scan on orders_p_202502 orders_p_2
+         Filter: (user_id = 4242)
+   ...
+   ->  Seq Scan on orders_p_202601 orders_p_13
+         Filter: (user_id = 4242)
+```
+
+`Append` 아래에 파티션 13개가 모두 나온다. 파티션마다 인덱스를 만들면 각각은 빨라지지만 13번 찾는다. 그래서 파티션 키는 거의 모든 쿼리에 들어가는 컬럼으로 고른다. 그리고 파티셔닝은 여전히 서버 한 대 안의 일이다. CPU와 디스크의 한계는 그대로다. 목록·해시 파티션과 오래된 파티션 떼어 내기는 [파티셔닝 글](/posts/db-partitioning)에 있다.
+
+## 7. 블룸 필터: 없는 것은 DB에 묻지 않는다
+
+결제 대행사가 웹훅으로 주문 번호를 보낼 때마다 "이 번호를 이미 처리했나"를 확인한다. 대부분은 새 번호라 DB에서 찾아도 없다. 없는 것을 확인하려고 매번 인덱스를 내려가는 셈이다. 존재하지 않는 id로 마구 조회하는 공격도 같은 모양이다. 캐시에도 없으니 전부 DB까지 간다.
+
+블룸 필터는 "확실히 없다" 또는 "있을 수도 있다"만 답하는 작은 비트 배열이다. 값을 넣을 때 해시 몇 개로 비트 몇 칸에 1을 찍고, 물을 때 그 칸이 모두 1인지 본다. 하나라도 0이면 넣은 적이 없는 것이 확실하다.
+
+<SequenceDiagram
+  caption="블룸 필터를 앞에 두고 주문 번호를 확인하기"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "bf", label: "블룸 필터" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "app", to: "bf", label: "ORD-1000123?", title: "먼저 필터에 묻는다", detail: "해시 7개로 비트 7칸을 본다. 메모리 안의 일이라 마이크로초 단위다." },
+    { from: "bf", to: "app", label: "확실히 없음", title: "하나라도 0이면 끝", detail: "한 칸이라도 0이면 넣은 적이 없다. DB에 가지 않고 새 번호로 처리한다." },
+    { from: "app", to: "bf", label: "ORD-42?", title: "다른 번호를 묻는다", detail: "이번에는 7칸이 모두 1이다." },
+    { from: "bf", to: "app", label: "있을 수도", title: "있다고는 장담 못 한다", detail: "다른 번호들이 찍은 1이 우연히 겹쳤을 수도 있다." },
+    { from: "app", to: "db", label: "SELECT … WHERE id", title: "그때만 DB에 확인한다", detail: "DB가 진짜 답을 준다. 필터는 DB 확인을 대신하지 않고, 줄일 뿐이다." },
+  ]}
+/>
+
+node로 주문 번호 100만 개를 넣고, 넣은 적 없는 번호 10만 개를 물어봤다. 거짓 양성 1%를 목표로 크기를 정했다.
+
+```js
+// bloom.mjs 일부: 목표 오차 p로 비트 수 m과 해시 개수 k를 정한다
+const n = 1_000_000, p = 0.01;
+const m = Math.ceil(-(n * Math.log(p)) / Math.log(2) ** 2);
+const k = Math.round((m / n) * Math.log(2));
+```
+
+```text
+{ m: 9585059, k: 7, kilobytes: 1170 }
+있는 번호 100,000개 중 "없다"고 한 수: 0
+없는 번호 100,000개 중 "있을 수도"라고 한 수: 1005 (1.00%)
+```
+
+1.2MB로 주문 번호 100만 개를 표현했고, 없는 번호 10만 개 중 98,995개는 DB에 가지 않고 끝났다. 있는 번호를 없다고 한 경우는 0이다. 블룸 필터는 이쪽으로는 절대 틀리지 않는다.
+
+새로 생기는 문제는 셋이다. 1,005개처럼 "있을 수도"가 틀리는 경우가 있으니 그때는 반드시 DB로 확인한다. 값을 지울 수 없다. 그리고 계획보다 많이 넣으면 오차가 빠르게 커져서 다시 만들어야 한다. 크기 계산, 지울 수 있는 변형, Redis에서 쓰는 법은 [블룸 필터 글](/posts/bloom-filter)에 있다. LSM 계열 DB가 디스크 파일을 열기 전에 블룸 필터로 거르는 것도 같은 원리다.
+
+## 8. 샤딩: 데이터를 여러 DB 서버에 나눠 담는다
+
+마지막은 쓰기다. 주문이 초당 수만 건이 되어 주 DB 한 대가 받는 쓰기와 디스크가 한계에 닿으면, 복제로는 해결되지 않는다. 복제본도 같은 쓰기를 다 받기 때문이다. 이때 데이터를 서버 여러 대에 나눈다. 위 그림의 샤드 A와 B처럼, 회원 번호로 어느 서버에 둘지 정한다. 각 샤드는 자기 몫만 쓰니 쓰기가 서버 수만큼 나뉜다.
+
+샤드를 고르는 가장 단순한 방법은 `user_id % 샤드 수`다. 고르게 나뉘지만 서버를 늘릴 때 아프다.
+
+```js
+// shard.mjs: user_id로 샤드를 고르고, 4대에서 5대로 늘리면 몇 명이 옮겨 가는지 센다
+for (let u = 1; u <= users; u++) if (u % 4 !== u % 5) moved++;
+```
+
+```text
+4대: 25000 / 25000 / 25000 / 25000
+4대 → 5대: 80000명 이동 (80.0%)
+```
+
+한 대 늘렸는데 회원 80%의 주문을 옮겨야 한다. 그래서 실무에서는 샤드보다 훨씬 많은 논리 조각을 미리 만들어 두고 조각 단위로 옮기거나, 일관된 해싱을 쓴다. 더 큰 대가는 샤드를 넘는 쿼리다. "전체 매출", 다른 회원과의 조인, 샤드를 걸치는 트랜잭션이 모두 어려워진다. 샤드마다 따로 늘어나는 번호도 겹치니 주문 번호를 만드는 방법도 다시 정해야 한다. 그래서 샤딩은 앞의 일곱 개를 다 해 본 뒤에 꺼내는 카드다. 샤드 키 고르기와 재배치는 [샤딩 글](/posts/db-sharding)과 [샤딩 입문](/posts/sd-sharding-intro)에 있다.
+
+## 순서를 건너뛰면 생기는 일
+
+이 여덟 개는 서로를 대신하지 않는다. 앞 단계를 건너뛰고 뒤 단계를 꺼내면 비싼 값을 치르고도 문제가 그대로 남는다.
+
+인덱스가 없는 쿼리에 복제본을 붙이면, 복제본마다 테이블 전체를 읽는다. 서버 비용만 늘고 쿼리는 여전히 77ms다. 실행 계획에서 `Seq Scan`과 큰 `Rows Removed by Filter`를 먼저 본다.
+
+느린 쿼리를 캐시로 덮으면 평소에는 빠르다가, 캐시가 비는 순간(배포, 재시작, 수명 만료) DB가 그 느린 쿼리를 한꺼번에 받는다. 캐시는 빠른 쿼리를 더 빠르게 하는 데 쓰고, 느린 쿼리는 먼저 고친다.
+
+연결 오류가 난다고 `max_connections`를 크게 올리면 연결마다 프로세스와 메모리가 붙어 DB가 오히려 느려진다. 풀 대기 시간과 DB의 활성 연결 수를 같이 보고, 연결을 오래 쥐는 코드를 먼저 찾는다.
+
+파티셔닝을 성능 만능으로 쓰면, 파티션 키 없는 쿼리가 파티션 수만큼 느려진다. 파티셔닝이 가장 확실하게 주는 이득은 범위 조회와 오래된 데이터 정리다.
+
+어떤 단계든 바꾸기 전과 후를 `EXPLAIN (ANALYZE, BUFFERS)`의 `Buffers`와 `Execution Time`, 또는 p99 지연으로 비교한다. 느린 쿼리를 찾는 순서는 [느린 쿼리 찾기](/posts/sql-query-tuning)에 있다. PostgreSQL이 페이지와 프로세스를 어떻게 다루는지 바닥부터 보고 싶다면 [PostgreSQL 구조](/posts/postgres-architecture)가 이 글의 아래층이다.
+
+## 면접에서 나올 만한 질문
+
+### DB가 느리다는 말을 들으면 무엇부터 보나요?
+
+느린 쿼리부터 찾는다. `pg_stat_statements`나 느린 쿼리 로그로 시간을 가장 많이 쓰는 쿼리를 고르고, `EXPLAIN (ANALYZE, BUFFERS)`로 테이블 전체를 읽는지 본다. 대부분은 인덱스로 해결된다. 쿼리가 빠른데도 느리면 연결, 캐시, 서버 대수 순서로 층을 넓혀 본다.
+
+### 인덱스는 많을수록 좋은가요?
+
+아니다. 인덱스는 정렬된 사본이라 쓰기마다 함께 고쳐야 하고 공간도 먹는다. 실습에서 묶음 인덱스 하나가 테이블 130MB의 절반에 가까운 60MB였다. 실제로 쓰이는 쿼리 모양에 맞는 것만 만들고, `pg_stat_user_indexes`에서 안 쓰이는 인덱스를 지운다.
+
+### B-tree는 왜 행이 많아도 빠른가요?
+
+페이지 하나에 키를 수백 개 담아 갈래가 수백 개라 트리가 아주 낮다. 200만 건 인덱스가 뿌리, 중간, 잎의 3층이었고, 같은 계산으로 100억 건도 5층이다. 모든 잎이 같은 깊이라 어떤 값이든 같은 횟수만 내려간다. 정렬돼 있어서 범위 조건과 `ORDER BY`도 돕는다.
+
+### 커넥션 풀이 왜 필요한가요?
+
+PostgreSQL은 연결마다 프로세스를 띄우고 인증을 하는데, 이 준비가 쿼리보다 비싸서다. 같은 서버 안 소켓에서도 연결 한 번이 약 6.9ms였고, 매번 새로 연결하면 초당 처리량이 47,726건에서 288건으로 떨어졌다. 풀은 연결을 미리 열어 두고 돌려 쓴다. 대신 연결을 오래 쥐는 코드가 있으면 풀이 고갈되니 트랜잭션을 짧게 유지한다.
+
+### 복제본을 늘리면 쓰기도 빨라지나요?
+
+아니다. 모든 쓰기는 주 DB 한 대가 받고, 복제본도 같은 변경을 그대로 다시 실행한다. 복제는 읽기를 나누는 장치다. 쓰기가 한 대의 한계를 넘으면 샤딩으로 데이터를 나눠야 한다. 그 전에 배치 쓰기, 불필요한 인덱스 정리 같은 쓰기 비용 줄이기를 먼저 해 본다.
+
+### 파티셔닝과 샤딩은 어떻게 다른가요?
+
+파티셔닝은 한 DB 서버 안에서 테이블을 여러 조각으로 나누고, 샤딩은 데이터를 여러 서버에 나눈다. 파티셔닝은 읽는 범위를 줄이고 오래된 데이터를 통째로 지우게 해 주지만 서버 한 대의 한계는 그대로다. 샤딩은 그 한계를 넘지만 샤드를 넘는 쿼리와 트랜잭션, 재배치라는 운영 비용이 붙는다.
+
+### 블룸 필터는 캐시와 무엇이 다른가요?
+
+캐시는 값을 들고 있다가 돌려주고, 블룸 필터는 값 없이 "확실히 없다"와 "있을 수도 있다"만 답한다. 그래서 훨씬 작다. 실습에서 100만 개를 1.2MB로 표현했다. 없는 값을 찾는 요청을 DB 앞에서 끊는 데 쓰고, "있을 수도"일 때는 반드시 DB로 확인한다.
+
+### 샤드를 4대에서 5대로 늘리면 무슨 일이 생기나요?
+
+`user_id % 샤드 수`로 나눴다면 대부분의 데이터가 다른 샤드로 옮겨 간다. 실습에서 회원 80%가 이동했다. 그래서 처음부터 논리 조각을 샤드보다 훨씬 많이 만들어 두고 조각 단위로 옮기거나, 서버를 늘려도 일부만 옮기는 일관된 해싱을 쓴다.
