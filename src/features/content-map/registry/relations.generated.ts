@@ -2,6 +2,45 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "js-immutability-react": {
+    "links": [
+      "js-array-mutation",
+      "js-shallow-deep-copy",
+      "react-rerender",
+      "client-data-cache",
+      "js-object-methods"
+    ],
+    "mentions": [
+      "js-memory-leak",
+      "js-function-forms",
+      "db-modeling-normalization"
+    ]
+  },
+  "js-shallow-deep-copy": {
+    "links": [
+      "js-primitive-vs-reference",
+      "pattern-prototype",
+      "js-immutability-react",
+      "js-object-methods",
+      "react-rerender"
+    ],
+    "mentions": [
+      "db-types-overview"
+    ]
+  },
+  "js-object-methods": {
+    "links": [
+      "js-primitive-vs-reference",
+      "js-spread-rest",
+      "js-array-transform",
+      "js-immutability-react",
+      "js-shallow-deep-copy"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "pattern-proxy"
+    ]
+  },
   "animation-performance": {
     "links": [
       "animation-patterns",
@@ -275,7 +314,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "js-spread-rest": {
     "links": [
       "js-destructuring",
+      "js-shallow-deep-copy",
+      "js-object-methods",
       "js-function-forms",
+      "js-immutability-react",
       "js-array-mutation"
     ],
     "mentions": []
@@ -283,7 +325,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "js-destructuring": {
     "links": [
       "js-spread-rest",
-      "react-rerender"
+      "react-rerender",
+      "js-object-methods"
     ],
     "mentions": [
       "client-data-cache",
@@ -295,7 +338,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-array-transform",
       "js-primitive-vs-reference",
-      "js-spread-rest"
+      "js-shallow-deep-copy",
+      "js-immutability-react",
+      "js-spread-rest",
+      "js-object-methods"
     ],
     "mentions": []
   },
@@ -305,6 +351,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-equality-coercion",
       "js-promise-combinators",
       "react-rerender",
+      "js-immutability-react",
       "js-spread-rest"
     ],
     "mentions": [
@@ -449,6 +496,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "js-object-methods",
       "js-function-forms"
     ]
   },
@@ -457,7 +505,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-scope-lexical",
       "js-hoisting-tdz",
       "js-closures",
+      "js-object-methods",
       "js-primitive-vs-reference",
+      "js-immutability-react",
       "react-rerender"
     ],
     "mentions": [
@@ -489,8 +539,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-equality-coercion",
       "js-truthy-falsy-typeof",
+      "js-shallow-deep-copy",
       "js-var-let-const",
+      "js-object-methods",
       "react-rerender",
+      "js-immutability-react",
       "js-array-mutation"
     ],
     "mentions": []
@@ -3276,7 +3329,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype",
       "git-internals-basics"
     ],
-    "mentions": []
+    "mentions": [
+      "js-immutability-react",
+      "js-shallow-deep-copy"
+    ]
   },
   "pattern-mediator": {
     "links": [
@@ -3549,6 +3605,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "resilience-patterns",
       "http-versions",
+      "js-immutability-react",
       "js-destructuring",
       "loading-patterns",
       "grpc",
@@ -4124,7 +4181,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-singleton",
       "pattern-prototype"
     ],
-    "mentions": []
+    "mentions": [
+      "js-object-methods"
+    ]
   },
   "pattern-facade": {
     "links": [
@@ -4346,7 +4405,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
-      "db-types-overview"
+      "db-types-overview",
+      "js-immutability-react",
+      "js-shallow-deep-copy"
     ]
   },
   "pattern-builder": {
@@ -4359,6 +4420,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "js-object-methods",
       "resilience-patterns",
       "http-methods"
     ]
@@ -4555,7 +4617,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-builder",
       "pattern-prototype"
     ],
-    "mentions": []
+    "mentions": [
+      "js-object-methods"
+    ]
   },
   "pattern-singleton": {
     "links": [

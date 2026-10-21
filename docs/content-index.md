@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 407편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 410편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -912,7 +912,7 @@
 - 소제목: 같은 주문을 여러 모양으로 저장하기 / 무엇으로 찾는지가 먼저다 / 빠른 이유는 저마다 하나씩 / 질문 여섯 개로 서점의 저장소 고르기 / 원본에서 사본으로 흘러가는 길 / 시리즈 지도 / 모양과 질문을 먼저 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, db-type-time-series, db-type-columnar-olap, db-type-newsql, db-type-embedded, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
 - 키워드 백링크 →: db-index, scaling-horizontal-vertical
-- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series, distributed-transactions-2pc, pattern-prototype
+- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series, distributed-transactions-2pc, js-shallow-deep-copy, pattern-prototype
 
 ### Programming › Database › PostgreSQL (`programming/database/postgresql`)
 
@@ -1182,7 +1182,7 @@
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
 - 키워드 백링크 →: json-crud-http, db-index-design, sqld-entity-attribute-relationship
-- 이 글로 오는 글 ←: ab-testing, cqrs, db-architecture-by-scale, db-keys-denormalization, db-type-relational, edge-caching, elasticsearch-inverted-index, encryption-at-rest, git-ignore-config, git-large-files-secrets, http-message, idempotency-key, ids-ips, lossy-counting, mongodb-document-model, nginx-basics, ray-casting, rendering-ssr, sql-aggregation-pitfalls, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db, waf
+- 이 글로 오는 글 ←: ab-testing, cqrs, db-architecture-by-scale, db-keys-denormalization, db-type-relational, edge-caching, elasticsearch-inverted-index, encryption-at-rest, git-ignore-config, git-large-files-secrets, http-message, idempotency-key, ids-ips, js-immutability-react, lossy-counting, mongodb-document-model, nginx-basics, ray-casting, rendering-ssr, sql-aggregation-pitfalls, sqld-data-modeling, sqld-entity-attribute-relationship, vector-db, waf
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
@@ -1558,6 +1558,7 @@
 - 길이: 422줄
 - 소제목: 저장은 하되 안을 들여다보지 않는다 / 꾸러미를 열 수 있는 쪽은 하나 / 얕은 복사로 떼어 둔 꾸러미는 같이 바뀐다 / 바뀐 곳만 새로 만들면 꾸러미가 싸진다 / 저장한 꾸러미를 지난 버전 코드가 열 때 / 브라우저와 도구에 들어 있는 메멘토 / TS의 private은 꾸러미를 잠그지 못한다 / 꾸러미를 남길까 명령을 남길까 / 되돌리기 직접 만들기 / 면접에서 나올 만한 질문
 - 직접 링크 →: pattern-command, pattern-prototype, git-internals-basics
+- 키워드 백링크 →: js-immutability-react, js-shallow-deep-copy
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-command, pattern-prototype
 
 #### `pattern-observer` — 옵서버 패턴: 바뀌었다고 알리면 알아야 할 쪽이 듣는다
@@ -1635,7 +1636,7 @@
 - 길이: 565줄
 - 소제목: false, false가 무엇인지 아무도 모른다 / 객체 리터럴로 모자라는 순간 / 한 단계씩 쌓고 build에서 검사한다 / GoF의 빌더에는 감독이 있다 / 매일 쓰는 빌더들 / 빌더를 재사용했더니 헤더가 섞였다 / 직접 만들어 보는 쿼리 빌더 / 빠뜨린 단계를 컴파일러가 잡게 하기 / 테스트 데이터를 만드는 빌더 / 빌더가 짐이 되는 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, idempotency-key, pattern-abstract-factory, pattern-factory-method, pattern-prototype, pattern-composite
-- 키워드 백링크 →: resilience-patterns, http-methods
+- 키워드 백링크 →: js-object-methods, resilience-patterns, http-methods
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-factory-method, pattern-prototype
 
 #### `pattern-factory-method` — 팩토리 메서드 패턴: new가 박힌 자리를 바꿔 끼우기
@@ -1646,6 +1647,7 @@
 - 길이: 388줄
 - 소제목: new가 박힌 자리를 메서드로 바꾼다 / 이름이 비슷한 세 가지 / 매일 쓰는 팩토리 메서드 / 상속 대신 함수를 넘기면 / 채널 하나를 추가할 때 고치는 곳 / 모르는 채널은 시작할 때 막는다 / 테스트에서 가짜 채널 끼우기 / 팩토리 메서드가 과한 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-template-method, pattern-iterator, pattern-abstract-factory, pattern-builder, pattern-prototype
+- 키워드 백링크 →: js-object-methods
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-iterator, pattern-prototype, pattern-singleton, pattern-template-method
 
 #### `pattern-prototype` — 프로토타입 패턴: 클래스를 몰라도 복제해서 만든다
@@ -1656,8 +1658,8 @@
 - 길이: 509줄
 - 소제목: 복사할 줄 아는 건 객체 자신이다 / 자바스크립트의 프로토타입과는 다른 이야기 / 얕은 복사가 기본값을 오염시킨다 / 깊은 복사 도구마다 잃어버리는 것 / 클래스 인스턴스는 스스로 복제해야 한다 / 원본을 등록해 두고 꺼내 쓰기 / 복제가 정말 빠른가 / 매일 쓰는 복제 / 직접 만드는 깊은 복사 / 복제가 맞지 않는 객체 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-abstract-factory, browser-fetch, json-crud-http, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
-- 키워드 백링크 →: k8s-pod-basics, db-types-overview
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
+- 키워드 백링크 →: k8s-pod-basics, db-types-overview, js-immutability-react, js-shallow-deep-copy
+- 이 글로 오는 글 ←: design-patterns-overview, js-shallow-deep-copy, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
 
 #### `pattern-singleton` — 싱글턴 패턴: 하나만 만들기보다 어려운 하나 지키기
 
@@ -1734,6 +1736,7 @@
 - 길이: 399줄
 - 소제목: 마커마다 같은 아이콘을 들고 있었다 / 바뀌지 않는 것과 바뀌는 것을 가른다 / 공장이 같은 것을 한 번만 만든다 / 줄어든 메모리를 재 본다 / 하나를 고쳤더니 전부 바뀌었다 / 풀이 끝없이 자랄 때 / 엔진과 언어 안의 플라이웨이트 / 캐시와 무엇이 다른가 / 직접 만드는 스타일 공장 / 플라이웨이트가 필요 없는 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, js-memory-leak, git-internals-basics, caching-strategies, pattern-singleton, pattern-prototype
+- 키워드 백링크 →: js-object-methods
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-prototype
 
 #### `pattern-proxy` — 프록시 패턴: 진짜와 같은 얼굴을 한 대리인
@@ -1744,8 +1747,8 @@
 - 길이: 502줄
 - 소제목: 같은 이름의 네트워크 프록시와 무엇이 같나 / 진짜와 똑같은 얼굴을 한 대리인 / 처음 부를 때 만든다 / 들여보낼지, 저장해 둔 걸 줄지 / 멀리 있는 객체를 가까이 있는 것처럼 / 언어가 내장한 대리인, Proxy 객체 / Vue 3의 reactive는 대리인이 장부를 적는 것이다 / ORM이 건네준 가짜 엔티티 / 대리인을 건너뛰는 호출 / 데코레이터와 같은 코드, 다른 의도 / 직접 만드는 캐싱 프록시 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, pattern-decorator, code-splitting, caching-strategies, timeouts, retries, circuit-breaker, sql-query-rewrite, pattern-adapter, pattern-facade
-- 키워드 백링크 →: json-crud-http, resilience-patterns, http-versions, js-destructuring, loading-patterns, grpc, design-patterns-overview, dns
-- 이 글로 오는 글 ←: core-web-vitals, design-patterns-overview, frontend-browser-cache, http-caching-cdn, loading-patterns, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-adapter, pattern-decorator, react-server-components, sql-query-rewrite
+- 키워드 백링크 →: json-crud-http, resilience-patterns, http-versions, js-immutability-react, js-destructuring, loading-patterns, grpc, design-patterns-overview, dns
+- 이 글로 오는 글 ←: core-web-vitals, design-patterns-overview, frontend-browser-cache, http-caching-cdn, js-object-methods, loading-patterns, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-adapter, pattern-decorator, react-server-components, sql-query-rewrite
 
 ### Programming › Frontend (`programming/frontend`)
 
@@ -1815,7 +1818,7 @@
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: client-data-cache, redis-memory-eviction, js-function-forms, garbage-collection, event-loop, js-closures, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, fault-tolerance, garbage-collection, js-closures, js-first-class-callbacks, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
+- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, fault-tolerance, garbage-collection, js-closures, js-first-class-callbacks, js-immutability-react, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
 
 ### Programming › Frontend › JavaScript › Async (`programming/frontend/javascript/async`)
 
@@ -1894,8 +1897,8 @@
 - 키워드: 원시값, 참조값, call by sharing, 공유 전달
 - 길이: 473줄
 - 소제목: 원시값 일곱 가지, 나머지는 전부 객체 / 변수 칸에 들어 있는 것 / 대입은 칸의 내용을 그대로 복사한다 / 함수에 넘길 때도 같은 규칙이다 / const는 객체를 얼리지 않는다 / 내용이 같아도 다른 객체다 / React가 화면을 바꾸지 않을 때 / 현장에서 이 규칙을 만나는 증상 / 복사할지 공유할지 고르는 기준 / 칸에 든 것만 복사된다 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-var-let-const, react-rerender, js-array-mutation
-- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-truthy-falsy-typeof, js-var-let-const, react-rerender
+- 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-shallow-deep-copy, js-var-let-const, js-object-methods, react-rerender, js-immutability-react, js-array-mutation
+- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-object-methods, js-shallow-deep-copy, js-truthy-falsy-typeof, js-var-let-const, react-rerender
 
 #### `js-scope-lexical` — 스코프와 렉시컬 스코프: 이름은 어디서 찾나
 
@@ -1905,7 +1908,7 @@
 - 길이: 427줄
 - 소제목: 이름은 안쪽부터 바깥으로 찾는다 / 쓴 자리가 바깥을 정한다 / 함수는 태어난 환경을 들고 다닌다 / 엔진은 실행 전에 찾을 곳을 정해 둔다 / 같은 이름으로 가리기 / 선언 없이 대입하면 전역이 생긴다 / 매개변수 기본값에는 따로 범위가 있다 / eval과 with는 규칙을 흐린다 / 개발자 도구에서 스코프 체인 보기 / React에서 컴포넌트 안에 컴포넌트를 쓰면 / 다시 로그인 버그로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-var-let-const, js-hoisting-tdz, js-closures, js-memory-leak, react-rerender
-- 키워드 백링크 →: js-function-forms
+- 키워드 백링크 →: js-object-methods, js-function-forms
 - 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-var-let-const
 
 #### `js-truthy-falsy-typeof` — truthy·falsy와 typeof, null·undefined·NaN 가려내기
@@ -1926,7 +1929,7 @@
 - 키워드: 블록 스코프, prefer-const, 재할당
 - 길이: 488줄
 - 소제목: var는 함수 하나에 상자 하나다 / let은 반복마다 새 i를 만든다 / 같은 이름을 두 번 선언하면 / 전역에서 var는 window의 속성이 된다 / const가 막는 것은 재할당뿐이다 / 무엇을 기본으로 쓸까 / TypeScript에서는 타입까지 달라진다 / React 컴포넌트 안의 const / 오래된 var를 let으로 바꿀 때 / 다시 세 번의 3으로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-scope-lexical, js-hoisting-tdz, js-closures, js-primitive-vs-reference, react-rerender
+- 직접 링크 →: js-scope-lexical, js-hoisting-tdz, js-closures, js-object-methods, js-primitive-vs-reference, js-immutability-react, react-rerender
 - 키워드 백링크 →: js-function-forms
 - 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-primitive-vs-reference, js-scope-lexical
 
@@ -1962,7 +1965,7 @@
 - 소제목: 함수를 만드는 문법들 / 정의보다 위에서 부를 수 있는 함수 / 화살표 함수가 갖지 않는 것 / 이름 있는 함수 표현식을 쓰는 자리 / 매개변수 자리에서 일어나는 일 / arguments 객체와 나머지 매개변수 / React 컴포넌트에서 만나는 함수 모양 / 어떤 모양을 고를까 / 연습: 기본값 규칙 흉내 내기 / 기계적인 변환이 깨뜨린 두 줄 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-spread-rest, js-destructuring
 - 키워드 백링크 →: js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-callback-hell, js-closures, js-first-class-callbacks, js-hoisting-tdz, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-var-let-const, pattern-adapter, react-rerender
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-callback-hell, js-closures, js-first-class-callbacks, js-hoisting-tdz, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-var-let-const, pattern-adapter, react-rerender
 
 ### Programming › Frontend › JavaScript › Objects & Arrays (`programming/frontend/javascript/objects`)
 
@@ -1973,8 +1976,8 @@
 - 키워드: toSorted, toSpliced, 안정 정렬
 - 길이: 488줄
 - 소제목: 원본을 고치는 메서드는 아홉 개다 / sort가 돌려준 배열은 원본이다 / 숫자를 정렬했더니 100이 25보다 앞선다 / 사본을 돌려주는 ES2023 메서드 / React는 같은 배열이면 다시 그리지 않는다 / 렌더링 중에 sort를 부르면 / 큐로 쓴 배열이 느려지는 순간 / 원본을 고치는 실수를 도구에 맡기기 / 할 일 리듀서를 원본을 고치지 않고 만들기 / 고치는 쪽인지 먼저 본다 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-array-transform, js-primitive-vs-reference, js-spread-rest
-- 이 글로 오는 글 ←: js-array-transform, js-primitive-vs-reference, js-spread-rest
+- 직접 링크 →: js-array-transform, js-primitive-vs-reference, js-shallow-deep-copy, js-immutability-react, js-spread-rest, js-object-methods
+- 이 글로 오는 글 ←: js-array-transform, js-immutability-react, js-primitive-vs-reference, js-spread-rest
 
 #### `js-array-transform` — 배열을 바꾸고 고르고 접는 메서드: map, filter, reduce, flatMap
 
@@ -1983,9 +1986,9 @@
 - 키워드: flatMap, Object.groupBy, 희소 배열, reduce 시작값
 - 길이: 595줄
 - 소제목: for 문이 하던 일에 이름을 붙였다 / 콜백은 인자를 세 개 받는다 / 누산기를 따라가 본다 / 답이 나오면 멈추는 메서드 / 중첩을 펴는 flat, 펴면서 바꾸는 flatMap / 빈 칸이 있는 배열 / 콜백 안의 await는 기다려 주지 않는다 / 체인이 길어지면 배열도 늘어난다 / React 컴포넌트에서 이 메서드들이 하는 일 / flat을 직접 만들어 보기 / 다시 장바구니로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-array-mutation, js-equality-coercion, js-promise-combinators, react-rerender, js-spread-rest
+- 직접 링크 →: js-array-mutation, js-equality-coercion, js-promise-combinators, react-rerender, js-immutability-react, js-spread-rest
 - 키워드 백링크 →: pattern-iterator, js-function-forms, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: js-array-mutation, js-first-class-callbacks
+- 이 글로 오는 글 ←: js-array-mutation, js-first-class-callbacks, js-object-methods
 
 #### `js-destructuring` — 구조 분해: 패턴 한 줄이 하는 일
 
@@ -1994,9 +1997,42 @@
 - 키워드: 구조 분해, destructuring, IteratorClose
 - 길이: 542줄
 - 소제목: 꺼내 담는 일을 한 줄로 / 기본값은 undefined일 때만 들어간다 / 배열 패턴은 이터레이터를 돈다 / 매개변수 자리에서 바로 꺼내기 / 이미 있는 변수에 담을 때 생기는 두 가지 함정 / React 코드 곳곳의 구조 분해 / 반복문과 콜백에서 쓰는 패턴 / TypeScript에서 콜론의 뜻이 겹친다 / 옵션 정규화 함수 만들기 / 패턴이 하는 일을 순서대로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-spread-rest, react-rerender
+- 직접 링크 →: js-spread-rest, react-rerender, js-object-methods
 - 키워드 백링크 →: client-data-cache, pattern-iterator, js-primitive-vs-reference
 - 이 글로 오는 글 ←: js-async-await, js-function-forms, js-promise-combinators, js-spread-rest, js-truthy-falsy-typeof, pattern-proxy
+
+#### `js-immutability-react` — React 상태를 불변으로 바꾸기: 중첩 업데이트와 Immer
+
+- 요약: 바깥만 새로 만든 업데이트 때문에 memo 자식이 옛 값을 보이는 버그에서 시작해, 바뀐 길만 새로 만드는 구조 공유, StrictMode가 드러내는 업데이트 함수의 변경, 상태 정규화, Immer의 Proxy 초안과 흔한 에러를 실행 결과로 정리한다.
+- 태그: JavaScript, React, Performance
+- 키워드: 불변 업데이트, 구조 공유, Immer, 상태 정규화
+- 길이: 445줄
+- 소제목: 바깥만 새로 만들면 안쪽 컴포넌트가 놓친다 / 바뀐 길만 새로 만든다 / 업데이트 함수가 두 번 불리는 이유 / 상태를 평평하게 펴면 경로가 짧아진다 / Immer는 초안을 고치게 해 준다 / Immer를 쓰다 만나는 에러들 / 불변으로 다룰지 고르는 기준 / 경로 업데이트 함수 직접 만들기 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-array-mutation, js-shallow-deep-copy, react-rerender, client-data-cache, js-object-methods
+- 키워드 백링크 →: js-memory-leak, js-function-forms, db-modeling-normalization
+- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-object-methods, js-primitive-vs-reference, js-shallow-deep-copy, js-spread-rest, js-var-let-const, pattern-memento, pattern-prototype, pattern-proxy
+
+#### `js-object-methods` — 객체 메서드: 키 순서, 속성 설명자, freeze와 seal
+
+- 요약: Object.keys가 서버가 보낸 순서를 바꾸는 이유에서 시작해, keys·entries·for...in이 보는 속성의 차이, 속성 설명자 네 개, getter와 setter, preventExtensions·seal·freeze 세 단계 잠금을 실행 결과와 함께 정리한다. React 개발 모드가 props를 얼리는 방식과 TypeScript의 Object.keys 타입도 다룬다.
+- 태그: JavaScript, React, TypeScript
+- 키워드: 속성 설명자, Object.freeze, 접근자 속성, Object.hasOwn
+- 길이: 658줄
+- 소제목: 숫자처럼 생긴 키가 먼저 선다 / 꺼내는 함수마다 보는 속성이 다르다 / entries로 풀었다가 fromEntries로 묶는다 / 속성 하나에 스위치가 네 개 붙어 있다 / 읽고 쓸 때 함수를 부르는 속성 / 잠금은 세 단계다 / React 개발 모드는 props를 얼려 둔다 / TypeScript가 Object.keys를 string[]로 두는 이유 / 이런 증상이면 이 함수부터 의심한다 / deepFreeze를 직접 만들어 보기 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-primitive-vs-reference, js-spread-rest, js-array-transform, js-immutability-react, js-shallow-deep-copy
+- 키워드 백링크 →: json-crud-http, pattern-proxy
+- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-immutability-react, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-spread-rest, js-var-let-const, pattern-builder, pattern-factory-method, pattern-flyweight
+
+#### `js-shallow-deep-copy` — 얕은 복사와 깊은 복사: 사본은 어디까지 따로인가
+
+- 요약: 편집 폼에서 취소했는데 원본이 바뀌는 버그에서 시작해, 복사 방법마다 몇 층을 새로 만드는지, structuredClone이 getter·심볼·설명자·에러 필드를 어떻게 바꾸는지, transfer와 깊은 복사의 실제 비용을 잰다. React에서 모듈 상수 초깃값 오염과 깊은 복사가 memo를 무력화하는 문제도 본다.
+- 태그: JavaScript, React, Performance
+- 키워드: 얕은 복사, Transferable, 복사 깊이
+- 길이: 483줄
+- 소제목: 사본의 첫 층만 따로다 / 복사 방법마다 몇 층을 새로 만드나 / structuredClone이 바꿔 놓는 것들 / 복사하지 않고 넘겨주는 transfer / 큰 데이터를 깊게 복사하면 드는 시간 / React 코드에서 복사가 문제를 만드는 곳 / 공유된 객체를 찾는 법 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-primitive-vs-reference, pattern-prototype, js-immutability-react, js-object-methods, react-rerender
+- 키워드 백링크 →: db-types-overview
+- 이 글로 오는 글 ←: js-array-mutation, js-immutability-react, js-object-methods, js-primitive-vs-reference, js-spread-rest, pattern-memento, pattern-prototype
 
 #### `js-spread-rest` — 전개와 나머지 문법: 같은 점 세 개, 반대 방향
 
@@ -2005,8 +2041,8 @@
 - 키워드: 전개 문법, 나머지 매개변수, 나머지 패턴
 - 길이: 524줄
 - 소제목: 같은 점 세 개가 반대 방향으로 일한다 / 배열 전개는 이터레이터에서 꺼낸다 / 객체 전개는 자기 속성만 베낀다 / 뒤에 쓴 것이 이긴다 / Object.assign과 무엇이 다른가 / 나머지 매개변수는 진짜 배열이다 / 빼고 나머지를 넘긴다 / 펼친 만큼 값을 치른다 / React 컴포넌트에서 props를 펼칠 때 / TypeScript는 길이를 모르는 전개를 막는다 / undefined는 건너뛰는 병합 함수 / 세 점 앞에서 물어볼 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-destructuring, js-function-forms, js-array-mutation
-- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-destructuring, js-first-class-callbacks, js-function-forms
+- 직접 링크 →: js-destructuring, js-shallow-deep-copy, js-object-methods, js-function-forms, js-immutability-react, js-array-mutation
+- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-destructuring, js-first-class-callbacks, js-function-forms, js-object-methods
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -2019,7 +2055,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, loading-patterns
-- 이 글로 오는 글 ←: browser-fetch, cqrs, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-async-await, js-destructuring, js-memory-leak, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns, transactional-outbox
+- 이 글로 오는 글 ←: browser-fetch, cqrs, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-async-await, js-destructuring, js-immutability-react, js-memory-leak, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns, transactional-outbox
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -2065,7 +2101,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals, js-function-forms, js-primitive-vs-reference
-- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-closures, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-primitive-vs-reference, js-scope-lexical, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-closures, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -2481,7 +2517,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, api-versioning, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-callback-hell, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-callback-hell, js-object-methods, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -4385,7 +4421,7 @@
 - 요약: 서비스를 쪼개면 독립 배포와 팀 자율성을 얻는 대신 네트워크 호출, 분산 트랜잭션, 데이터 소유권 문제가 생긴다. 바운디드 컨텍스트로 경계를 긋는 법, 동기와 비동기 통신, 사가와 아웃박스, 모듈러 모놀리스와 스트랭글러 피그 이전까지 다룬다.
 - 태그: coupang, MSA, Distributed Systems, System Design · 회사: coupang
 - 키워드: 마이크로서비스, 모놀리스, 사가 패턴, 트랜잭셔널 아웃박스, 스트랭글러 피그
-- 길이: 388줄
+- 길이: 390줄
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼갠 뒤 처음 받는 장애 문의 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, distributed-tracing, distributed-transactions-2pc, saga-pattern, gateway
 - 키워드 백링크 →: db-architecture-by-scale, grpc, modular-monolith, serverless-architecture, observability-basics, db-type-columnar-olap, rabbitmq-basics, client-data-cache, monolith-architecture, event-driven-architecture, pub-sub, db-index-design, http-versions, js-memory-leak, transactional-outbox, kafka-basics, cqrs, http-methods, on-call
@@ -4638,6 +4674,7 @@
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
 - 교착 상태 → `db-locking-deadlock`
 - 구성 드리프트 → `iac-basics`
+- 구조 공유 → `js-immutability-react`
 - 구조 분해 → `js-destructuring`
 - 구조화 로그 → `structured-logging`
 - 굴러가는 창 → `sli-slo`
@@ -4796,6 +4833,7 @@
 - 보수적 갱신 → `count-min-sketch`
 - 보안 그룹 → `security-groups-nacl`
 - 보편 확장성 법칙 → `scaling-horizontal-vertical`
+- 복사 깊이 → `js-shallow-deep-copy`
 - 복원 테스트 → `backup-strategy`
 - 복제 슬롯 → `db-replication-sharding`
 - 복제 지연 → `db-replication-sharding`
@@ -4813,6 +4851,7 @@
 - 분산 추적 → `distributed-tracing`
 - 분산 SQL → `db-type-newsql`
 - 분할 상환 → `big-o-notation`
+- 불변 업데이트 → `js-immutability-react`
 - 불변 인프라 → `iac-basics`
 - 브리지 패턴 → `pattern-bridge`
 - 블라인드 인덱스 → `encryption-at-rest`
@@ -4838,6 +4877,7 @@
 - 사전 배포 버전 → `semantic-versioning`
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상속보다 합성 → `design-patterns-overview`
+- 상태 정규화 → `js-immutability-react`
 - 상태 코드 → `http-status-codes`
 - 상태 패턴 → `pattern-state`
 - 샤드 키 → `mongodb-document-model`
@@ -4867,6 +4907,7 @@
 - 소비자 그룹 → `pub-sub`
 - 소비자 주도 계약 → `api-versioning`
 - 소진 속도 → `error-budgets`
+- 속성 설명자 → `js-object-methods`
 - 쇼백 → `cloud-cost-optimization`
 - 수직 확장 → `scaling-horizontal-vertical`
 - 수평 확장 → `scaling-horizontal-vertical`
@@ -4915,6 +4956,7 @@
 - 애니메이션 패턴 → `animation-patterns`
 - 애니캐스트 → `cdn-edge-anycast`
 - 액세스 토큰 → `token-login`
+- 얕은 복사 → `js-shallow-deep-copy`
 - 얕은 헬스 체크 → `health-checks`
 - 얕은 clone → `git-remote-collaboration`
 - 어댑터 패턴 → `pattern-adapter`
@@ -5023,6 +5065,7 @@
 - 전이 테이블 → `postgres-functions-triggers`
 - 전파 지연 → `latency-bandwidth-throughput`
 - 점프 해시 → `consistent-hashing`
+- 접근자 속성 → `js-object-methods`
 - 접속 URI → `postgres-connections-pg-hba`
 - 정규화 → `db-modeling-normalization`
 - 정상 상태 가설 → `chaos-engineering`
@@ -5584,6 +5627,7 @@
 - imagePullSecrets → `k8s-secret`
 - ImageUpdateAutomation → `gitops-argocd-vs-flux`
 - IMDSv2 → `ssrf`
+- Immer → `js-immutability-react`
 - immutable ConfigMap → `k8s-configmap`
 - impersonatedUser → `k8s-audit-logging`
 - in-place resize → `k8s-in-place-resize`
@@ -5775,7 +5819,9 @@
 - NVL → `sqld-null-functions`
 - OAuth → `oauth`
 - Object Lock → `backup-strategy`
+- Object.freeze → `js-object-methods`
 - Object.groupBy → `js-array-transform`
+- Object.hasOwn → `js-object-methods`
 - observedGeneration → `k8s-api-objects`
 - Observer 패턴 → `pattern-observer`
 - OCI 레지스트리 → `helm-dependencies-oci-gitops`
@@ -6085,6 +6131,7 @@
 - traceroute → `layer-ip-routing-icmp`
 - Transfer-Encoding → `http-message`
 - Transfer-Encoding: chunked → `streaming-ssr-suspense`
+- Transferable → `js-shallow-deep-copy`
 - Transit Gateway → `vpc-peering-transit-privatelink`
 - TrueTime → `db-type-newsql`
 - TRUNCATE → `sql-insert-update-delete`
@@ -6222,6 +6269,14 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `js-immutability-react` ↔ `js-shallow-deep-copy`
+- `js-immutability-react` ↔ `js-object-methods`
+- `js-immutability-react` ↔ `js-array-mutation`
+- `js-shallow-deep-copy` ↔ `js-object-methods`
+- `js-shallow-deep-copy` ↔ `js-primitive-vs-reference`
+- `js-shallow-deep-copy` ↔ `pattern-prototype`
+- `js-object-methods` ↔ `js-spread-rest`
+- `js-object-methods` ↔ `js-primitive-vs-reference`
 - `animation-performance` ↔ `view-transitions-shared-element`
 - `animation-performance` ↔ `spring-animation`
 - `animation-performance` ↔ `animation-patterns`

@@ -151,11 +151,14 @@ import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
 import { JS_FIRST_CLASS_CALLBACKS } from "./js-first-class-callbacks";
 import { JS_FUNCTION_FORMS } from "./js-function-forms";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
+import { JS_IMMUTABILITY_REACT } from "./js-immutability-react";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
+import { JS_OBJECT_METHODS } from "./js-object-methods";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
 import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
 import { JS_PROMISES } from "./js-promises";
 import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
+import { JS_SHALLOW_DEEP_COPY } from "./js-shallow-deep-copy";
 import { JS_SPREAD_REST } from "./js-spread-rest";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
@@ -561,11 +564,14 @@ export const QUESTION_SETS = [
   JS_FIRST_CLASS_CALLBACKS,
   JS_FUNCTION_FORMS,
   JS_HOISTING_TDZ,
+  JS_IMMUTABILITY_REACT,
   JS_MEMORY_LEAK,
+  JS_OBJECT_METHODS,
   JS_PRIMITIVE_VS_REFERENCE,
   JS_PROMISE_COMBINATORS,
   JS_PROMISES,
   JS_SCOPE_LEXICAL,
+  JS_SHALLOW_DEEP_COPY,
   JS_SPREAD_REST,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,

@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "js-immutability-react",
+    title: "React 상태를 불변으로 바꾸기: 중첩 업데이트와 Immer",
+    summary: "바깥만 새로 만든 업데이트 때문에 memo 자식이 옛 값을 보이는 버그에서 시작해, 바뀐 길만 새로 만드는 구조 공유, StrictMode가 드러내는 업데이트 함수의 변경, 상태 정규화, Immer의 Proxy 초안과 흔한 에러를 실행 결과로 정리한다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "Performance"],
+    date: "2026-10-22",
+    keywords: ["불변 업데이트", "구조 공유", "Immer", "상태 정규화"],
+  },
+  {
+    slug: "js-shallow-deep-copy",
+    title: "얕은 복사와 깊은 복사: 사본은 어디까지 따로인가",
+    summary: "편집 폼에서 취소했는데 원본이 바뀌는 버그에서 시작해, 복사 방법마다 몇 층을 새로 만드는지, structuredClone이 getter·심볼·설명자·에러 필드를 어떻게 바꾸는지, transfer와 깊은 복사의 실제 비용을 잰다. React에서 모듈 상수 초깃값 오염과 깊은 복사가 memo를 무력화하는 문제도 본다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "Performance"],
+    date: "2026-10-22",
+    keywords: ["얕은 복사", "Transferable", "복사 깊이"],
+  },
+  {
+    slug: "js-object-methods",
+    title: "객체 메서드: 키 순서, 속성 설명자, freeze와 seal",
+    summary: "Object.keys가 서버가 보낸 순서를 바꾸는 이유에서 시작해, keys·entries·for...in이 보는 속성의 차이, 속성 설명자 네 개, getter와 setter, preventExtensions·seal·freeze 세 단계 잠금을 실행 결과와 함께 정리한다. React 개발 모드가 props를 얼리는 방식과 TypeScript의 Object.keys 타입도 다룬다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "TypeScript"],
+    date: "2026-10-22",
+    keywords: ["속성 설명자", "Object.freeze", "접근자 속성", "Object.hasOwn"],
+  },
+  {
     slug: "animation-performance",
     title: "애니메이션 성능과 접근성: 합성 단계에서 끝내고, 움직임을 줄여 주기",
     summary: "left와 transform의 차이를 성능 트레이스로 재서 레이아웃, 페인트, 합성 단계와 프레임 예산을 따라간다. will-change가 만드는 층, 끊김을 재는 방법, 전정 장애와 prefers-reduced-motion, WCAG 2.3.3까지 다룬다.",
