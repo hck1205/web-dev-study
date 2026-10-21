@@ -2,6 +2,67 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "data-structures-overview": {
+    "links": [
+      "big-o-notation",
+      "ds-trie",
+      "ds-hash-map",
+      "ds-binary-tree-bst",
+      "ds-heap",
+      "ds-stack-queue-deque",
+      "ds-array-matrix",
+      "ds-linked-list",
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "sd-maps-tiles-routing",
+      "bloom-filter"
+    ],
+    "mentions": [
+      "js-memoization",
+      "sd-autocomplete-trie"
+    ]
+  },
+  "ds-union-find": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "data-structures-overview",
+      "ds-heap",
+      "ds-hash-map"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "big-o-notation"
+    ]
+  },
+  "ds-graph-bfs-dfs": {
+    "links": [
+      "ds-trie",
+      "ds-union-find",
+      "data-structures-overview",
+      "ds-stack-queue-deque",
+      "ds-heap",
+      "sd-maps-tiles-routing",
+      "db-type-graph"
+    ],
+    "mentions": [
+      "dom-basics",
+      "js-closures"
+    ]
+  },
+  "ds-trie": {
+    "links": [
+      "sd-autocomplete-trie",
+      "data-structures-overview",
+      "layer-ip-routing-icmp",
+      "ds-binary-tree-bst",
+      "ds-graph-bfs-dfs"
+    ],
+    "mentions": [
+      "js-memory-leak",
+      "ds-hash-map",
+      "big-o-notation"
+    ]
+  },
   "ds-heap": {
     "links": [
       "ds-binary-tree-bst",
@@ -10,7 +71,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "percentile-latency",
       "event-loop",
       "js-timers-accuracy",
-      "sd-maps-tiles-routing"
+      "sd-maps-tiles-routing",
+      "ds-graph-bfs-dfs"
     ],
     "mentions": [
       "db-type-wide-column",
@@ -21,6 +83,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ds-hash-map",
       "ds-heap",
+      "data-structures-overview",
+      "ds-graph-bfs-dfs",
       "dom-basics",
       "ds-stack-queue-deque",
       "db-index",
@@ -37,8 +101,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-stack-queue-deque",
       "ds-binary-tree-bst",
       "ds-heap",
+      "data-structures-overview",
       "js-object-methods",
       "js-memoization",
+      "ds-trie",
       "bloom-filter",
       "consistent-hashing"
     ],
@@ -61,10 +127,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "big-o-notation",
       "message-queue-basics",
       "event-loop",
+      "ds-graph-bfs-dfs",
       "sd-stock-exchange-low-latency",
       "react-rerender",
       "backpressure",
-      "ds-heap"
+      "ds-heap",
+      "data-structures-overview"
     ],
     "mentions": [
       "sd-latency-numbers",
@@ -100,7 +168,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map",
       "js-primitive-vs-reference",
       "ds-heap",
-      "ds-binary-tree-bst"
+      "ds-binary-tree-bst",
+      "data-structures-overview"
     ],
     "mentions": [
       "js-prototype-chain",
@@ -800,6 +869,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-cte-recursive"
     ],
     "mentions": [
+      "ds-graph-bfs-dfs",
       "sqld-top-n-hierarchical-pivot",
       "db-modeling-normalization",
       "vector-db",
@@ -1153,6 +1223,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding",
       "realtime-communication",
       "high-availability",
+      "data-structures-overview",
       "db-type-key-value",
       "db-type-wide-column",
       "event-driven-architecture",
@@ -1633,6 +1704,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "ds-graph-bfs-dfs",
       "sd-object-storage-architecture",
       "ds-heap"
     ]
@@ -1935,7 +2007,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-caching-cdn",
       "debounce-throttle",
       "browser-fetch",
-      "elasticsearch-inverted-index"
+      "elasticsearch-inverted-index",
+      "ds-trie"
     ],
     "mentions": [
       "sd-start-single-server",
@@ -2057,6 +2130,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "nodejs-server-runtime",
+      "ds-graph-bfs-dfs",
       "sd-url-shortener-api-redirect",
       "sd-object-storage-architecture",
       "sd-start-single-server",
@@ -2584,6 +2658,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-set-operators",
+      "ds-graph-bfs-dfs",
       "js-closures"
     ]
   },
@@ -3800,6 +3875,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cqrs"
     ],
     "mentions": [
+      "ds-graph-bfs-dfs",
       "rabbitmq-basics",
       "microservices",
       "pattern-proxy",
@@ -7714,7 +7790,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator"
     ],
     "mentions": [
-      "js-execution-context"
+      "js-execution-context",
+      "ds-graph-bfs-dfs"
     ]
   },
   "dead-letter-queue": {
@@ -9712,6 +9789,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "ds-graph-bfs-dfs",
       "graph-rag",
       "sd-start-single-server",
       "db-type-relational"
@@ -10025,6 +10103,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "ds-graph-bfs-dfs",
       "sqld-group-by-having",
       "sql-cte-recursive",
       "sql-case-when",

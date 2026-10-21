@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "data-structures-overview",
+    title: "자료구조 한눈에 고르기: 면접 단골 13개 지도",
+    summary: "배열부터 유니온 파인드까지 13개 자료구조를 필요한 연산에서 출발해 고르는 법을 정리한다. 연산별 비용표, 문제 문장에 숨은 신호, 여러 구조가 함께 일하는 LRU와 다익스트라, 대표 문제 짝짓기를 담았다.",
+    topic: "programming/algorithms",
+    tags: ["Algorithm", "Data Structure", "JavaScript", "Performance"],
+    date: "2026-10-24",
+    keywords: ["자료구조 선택", "자료구조 면접"],
+  },
+  {
+    slug: "ds-union-find",
+    title: "유니온 파인드: 같은 그룹인지 거의 상수 시간에",
+    summary: "계정 묶기에서 BFS 대신 유니온 파인드를 쓰면 왜 수만 배 빨라지는지 본다. 배열 하나로 만든 숲, 크기 규칙과 경로 압축이 깊이를 묶는 이유, 재귀 find의 함정, 크루스칼과 Redundant Connection, 못 하는 일까지 다룬다.",
+    topic: "programming/algorithms/data-structures",
+    tags: ["Algorithm", "Data Structure", "JavaScript"],
+    date: "2026-10-24",
+    keywords: ["유니온 파인드", "Union-Find", "경로 압축", "크루스칼"],
+  },
+  {
+    slug: "ds-graph-bfs-dfs",
+    title: "그래프와 BFS·DFS: 최단 경로, 사이클, 위상 정렬",
+    summary: "DFS로 구한 최단 경로가 틀린 이유에서 출발해 인접 리스트와 행렬, BFS가 최단 거리를 보장하는 이유, 재귀 깊이 한계, 색 세 가지 사이클 찾기, 칸의 알고리즘, 섬 개수, 가중치가 붙을 때를 Node 22로 재 가며 따라간다.",
+    topic: "programming/algorithms/data-structures",
+    tags: ["Algorithm", "Data Structure", "JavaScript"],
+    date: "2026-10-24",
+    keywords: ["너비 우선 탐색", "깊이 우선 탐색", "위상 정렬", "인접 리스트"],
+  },
+  {
+    slug: "ds-trie",
+    title: "트라이: 접두사를 길로 바꾸는 자료구조",
+    summary: "해시 집합이 답하지 못하는 접두사 질문에서 출발해 트라이를 직접 짜고 지운다. 와일드카드 검색과 Word Search II를 풀고, 10만 단어로 Set·정렬 배열·트라이의 속도와 메모리를 재서 언제 트라이를 고르는지 정리한다.",
+    topic: "programming/algorithms/data-structures",
+    tags: ["Algorithm", "Data Structure", "JavaScript"],
+    date: "2026-10-24",
+    keywords: ["Word Search II", "와일드카드 단어 검색", "래딕스 트리"],
+  },
+  {
     slug: "ds-heap",
     title: "힙과 우선순위 큐: 배열 하나로 가장 작은 것 꺼내기",
     summary: "넣을 때마다 정렬하는 작업 큐가 느려지는 이유에서 시작해 배열로 만든 이진 힙의 올리기·내리기, O(n) heapify, 비교 함수 실수와 같은 우선순위의 순서를 직접 재 본다. 상위 k개, k개 리스트 합치기, 스트림의 중앙값과 Node 타이머 속 힙까지 다룬다.",

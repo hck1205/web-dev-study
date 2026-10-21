@@ -60,6 +60,7 @@ import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
+import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
@@ -106,10 +107,13 @@ import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { DOM_BASICS } from "./dom-basics";
 import { DS_ARRAY_MATRIX } from "./ds-array-matrix";
 import { DS_BINARY_TREE_BST } from "./ds-binary-tree-bst";
+import { DS_GRAPH_BFS_DFS } from "./ds-graph-bfs-dfs";
 import { DS_HASH_MAP } from "./ds-hash-map";
 import { DS_HEAP } from "./ds-heap";
 import { DS_LINKED_LIST } from "./ds-linked-list";
 import { DS_STACK_QUEUE_DEQUE } from "./ds-stack-queue-deque";
+import { DS_TRIE } from "./ds-trie";
+import { DS_UNION_FIND } from "./ds-union-find";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
@@ -630,6 +634,7 @@ export const QUESTION_SETS = [
   CSRF,
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
+  DATA_STRUCTURES_OVERVIEW,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
@@ -676,10 +681,13 @@ export const QUESTION_SETS = [
   DOM_BASICS,
   DS_ARRAY_MATRIX,
   DS_BINARY_TREE_BST,
+  DS_GRAPH_BFS_DFS,
   DS_HASH_MAP,
   DS_HEAP,
   DS_LINKED_LIST,
   DS_STACK_QUEUE_DEQUE,
+  DS_TRIE,
+  DS_UNION_FIND,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
