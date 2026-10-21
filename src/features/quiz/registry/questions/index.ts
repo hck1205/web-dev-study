@@ -388,16 +388,20 @@ import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
 import { SQL_CASE_WHEN } from "./sql-case-when";
+import { SQL_CTE_RECURSIVE } from "./sql-cte-recursive";
 import { SQL_FILTERING_OPERATORS } from "./sql-filtering-operators";
 import { SQL_INJECTION } from "./sql-injection";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_INTERVIEW_PROBLEMS } from "./sql-interview-problems";
 import { SQL_JOINS_IN_PRACTICE } from "./sql-joins-in-practice";
 import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
 import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
+import { SQL_VIEWS_MATERIALIZED } from "./sql-views-materialized";
 import { SQL_VS_NOSQL } from "./sql-vs-nosql";
+import { SQL_WINDOW_FUNCTIONS_PG } from "./sql-window-functions-pg";
 import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
@@ -837,16 +841,20 @@ export const QUESTION_SETS = [
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
   SQL_CASE_WHEN,
+  SQL_CTE_RECURSIVE,
   SQL_FILTERING_OPERATORS,
   SQL_INJECTION,
   SQL_INSERT_UPDATE_DELETE,
+  SQL_INTERVIEW_PROBLEMS,
   SQL_JOINS_IN_PRACTICE,
   SQL_LOGICAL_ORDER,
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
   SQL_SUBQUERIES_EXISTS_LATERAL,
+  SQL_VIEWS_MATERIALIZED,
   SQL_VS_NOSQL,
+  SQL_WINDOW_FUNCTIONS_PG,
   SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,

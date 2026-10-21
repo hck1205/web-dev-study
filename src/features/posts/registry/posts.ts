@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sql-interview-problems",
+    title: "SQL 면접 문제: 두 번째로 큰 값, 그룹별 상위 N, 중복 제거, 누적 합계, 연속 구간",
+    summary: "LIMIT 1 OFFSET 1이 동점에서 틀리는 두 번째로 큰 값부터 그룹별 상위 N개, 할부를 지우지 않는 중복 제거, 누적 합계, 날짜에서 순번을 빼는 연속 구간과 3일 연속 출석까지 같은 데이터로 푼다. 문제마다 흔한 오답과 동점, 빈 결과, NULL, 중복 같은 꼬리 질문을 실제 결과로 확인한다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL"],
+    date: "2026-10-22",
+    keywords: ["gaps and islands", "연속 출석", "두 번째로 큰 값"],
+  },
+  {
+    slug: "sql-views-materialized",
+    title: "뷰와 머티리얼라이즈드 뷰: 의존성, WITH CHECK OPTION, security_barrier, REFRESH 잠금",
+    summary: "뷰 때문에 컬럼 하나 지우는 마이그레이션이 막힌 일에서 출발해 뷰가 조회 때 원래 쿼리로 펼쳐지는 방식, SELECT *가 굳는 이유, 뷰로 쓰기와 WITH CHECK OPTION, 함수로 숨긴 행이 새는 틈을 본다. 머티리얼라이즈드 뷰의 REFRESH가 잡는 잠금을 pg_locks로 확인하고 CONCURRENTLY의 비용을 잰다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Security", "Performance"],
+    date: "2026-10-22",
+    keywords: ["security_barrier", "security_invoker", "REFRESH MATERIALIZED VIEW"],
+  },
+  {
+    slug: "sql-window-functions-pg",
+    title: "PostgreSQL 윈도우 함수 실전: RANGE·GROUPS 프레임, Run Condition, 정렬 비용",
+    summary: "최근 7일 합계가 7일 치가 아니었던 대시보드에서 출발해 ROWS, RANGE, GROUPS 프레임의 차이, EXCLUDE와 WINDOW 절을 본다. 실행 계획에서 WindowAgg와 정렬을 읽고, PostgreSQL 15의 Run Condition으로 상위 N개가 276ms에서 0.074ms가 되는 모습과 동점에서 ROW_NUMBER가 계획마다 다른 행을 고르는 문제를 재현한다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Performance"],
+    date: "2026-10-22",
+    keywords: ["GROUPS 프레임", "Run Condition", "EXCLUDE CURRENT ROW"],
+  },
+  {
+    slug: "sql-cte-recursive",
+    title: "재귀 CTE 실전: 작업 테이블, 여러 길로 닿는 그래프, 고리와 CYCLE 절",
+    summary: "선수 강의를 끝까지 따라가야 하는 화면에서 출발해 재귀 CTE가 작업 테이블로 반복하는 방식, 두 길로 닿은 강의가 두 번 나오는 문제, 고리 하나로 끝나지 않는 쿼리와 PostgreSQL 14의 CYCLE 절을 재현한다. 재귀 쪽에 집계나 LEFT JOIN을 못 쓰는 이유와 20만 개 트리에서 인덱스 하나로 186ms가 5.7ms가 되는 실행 계획까지 본다.",
+    topic: "programming/database/sql",
+    tags: ["Database", "SQL", "PostgreSQL", "Performance"],
+    date: "2026-10-22",
+    keywords: ["작업 테이블", "CYCLE 절", "WorkTable Scan"],
+  },
+  {
     slug: "debounce-throttle",
     title: "디바운스와 스로틀: 멈춘 뒤 한 번, 움직이는 동안 일정하게",
     summary: "디바운스는 멈춘 뒤 한 번, 스로틀은 움직이는 동안 일정하게 실행한다. React에서 디바운스가 망가지는 이유와, 디바운스로 풀리지 않는 응답 순서 문제까지 다룬다.",

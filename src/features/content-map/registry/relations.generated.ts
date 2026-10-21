@@ -2,6 +2,79 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sql-interview-problems": {
+    "links": [
+      "sql-logical-order",
+      "sql-aggregation-pitfalls",
+      "sql-subqueries-exists-lateral",
+      "sql-window-functions-pg",
+      "sqld-window-functions",
+      "sql-cte-recursive",
+      "idempotency-key",
+      "postgres-advanced-sql",
+      "sql-batch-timeout-pool",
+      "sql-filtering-operators",
+      "sql-views-materialized"
+    ],
+    "mentions": [
+      "postgres-data-types",
+      "sqld-correlated-subquery",
+      "sqld-group-by-having",
+      "resilience-patterns",
+      "http-methods",
+      "webhooks"
+    ]
+  },
+  "sql-views-materialized": {
+    "links": [
+      "postgres-reporting-sql",
+      "sql-logical-order",
+      "postgres-functions-triggers",
+      "postgres-roles-security",
+      "sql-window-functions-pg",
+      "caching-strategies",
+      "sql-cte-recursive"
+    ],
+    "mentions": [
+      "sqld-correlated-subquery",
+      "json-crud-http",
+      "zero-downtime-migrations",
+      "postgres-mvcc-vacuum",
+      "sqld-group-by-having",
+      "sqld-window-functions",
+      "sql-basics"
+    ]
+  },
+  "sql-window-functions-pg": {
+    "links": [
+      "sqld-window-functions",
+      "sql-logical-order",
+      "sql-joins-in-practice",
+      "postgres-reporting-sql",
+      "sql-case-when",
+      "sql-subqueries-exists-lateral",
+      "sql-cte-recursive",
+      "sql-interview-problems"
+    ],
+    "mentions": [
+      "sqld-group-by-having"
+    ]
+  },
+  "sql-cte-recursive": {
+    "links": [
+      "sqld-top-n-hierarchical-pivot",
+      "postgres-advanced-sql",
+      "sql-logical-order",
+      "sql-case-when",
+      "sql-joins-in-practice",
+      "sql-window-functions-pg",
+      "sql-views-materialized"
+    ],
+    "mentions": [
+      "sqld-set-operators",
+      "js-closures"
+    ]
+  },
   "debounce-throttle": {
     "links": [
       "js-closures",
@@ -999,6 +1072,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-group-by-having",
       "sql-filtering-operators",
       "sql-aggregation-pitfalls",
+      "sql-window-functions-pg",
       "postgres-reporting-sql",
       "sql-query-rewrite"
     ],
@@ -7193,6 +7267,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sqld-subquery-set-operators",
       "sqld-single-row-functions",
+      "sql-window-functions-pg",
       "sqld-top-n-hierarchical-pivot",
       "sqld-rollup-cube-grouping-sets"
     ],
@@ -7221,6 +7296,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sqld-group-by-having",
+      "sql-cte-recursive",
       "sql-case-when",
       "js-closures"
     ]
