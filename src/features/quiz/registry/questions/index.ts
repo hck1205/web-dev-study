@@ -104,6 +104,12 @@ import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
 import { DOM_BASICS } from "./dom-basics";
+import { DS_ARRAY_MATRIX } from "./ds-array-matrix";
+import { DS_BINARY_TREE_BST } from "./ds-binary-tree-bst";
+import { DS_HASH_MAP } from "./ds-hash-map";
+import { DS_HEAP } from "./ds-heap";
+import { DS_LINKED_LIST } from "./ds-linked-list";
+import { DS_STACK_QUEUE_DEQUE } from "./ds-stack-queue-deque";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
@@ -668,6 +674,12 @@ export const QUESTION_SETS = [
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
   DOM_BASICS,
+  DS_ARRAY_MATRIX,
+  DS_BINARY_TREE_BST,
+  DS_HASH_MAP,
+  DS_HEAP,
+  DS_LINKED_LIST,
+  DS_STACK_QUEUE_DEQUE,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,

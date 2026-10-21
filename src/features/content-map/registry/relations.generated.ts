@@ -2,6 +2,111 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "ds-heap": {
+    "links": [
+      "ds-binary-tree-bst",
+      "ds-hash-map",
+      "js-array-mutation",
+      "percentile-latency",
+      "event-loop",
+      "js-timers-accuracy",
+      "sd-maps-tiles-routing"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-index-design"
+    ]
+  },
+  "ds-binary-tree-bst": {
+    "links": [
+      "ds-hash-map",
+      "ds-heap",
+      "dom-basics",
+      "ds-stack-queue-deque",
+      "db-index",
+      "sd-leaderboard-sorted-set"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "redis-basics"
+    ]
+  },
+  "ds-hash-map": {
+    "links": [
+      "ds-array-matrix",
+      "ds-stack-queue-deque",
+      "ds-binary-tree-bst",
+      "ds-heap",
+      "js-object-methods",
+      "js-memoization",
+      "bloom-filter",
+      "consistent-hashing"
+    ],
+    "mentions": [
+      "js-equality-coercion",
+      "db-index",
+      "sd-latency-numbers",
+      "db-sharding",
+      "event-loop",
+      "big-o-notation"
+    ]
+  },
+  "ds-stack-queue-deque": {
+    "links": [
+      "js-array-mutation",
+      "ds-array-matrix",
+      "ds-linked-list",
+      "js-execution-context",
+      "pattern-command",
+      "big-o-notation",
+      "message-queue-basics",
+      "event-loop",
+      "sd-stock-exchange-low-latency",
+      "react-rerender",
+      "backpressure",
+      "ds-heap"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "centralized-logging-pipeline",
+      "js-memory-leak"
+    ]
+  },
+  "ds-linked-list": {
+    "links": [
+      "ds-array-matrix",
+      "ds-stack-queue-deque",
+      "thread-safety",
+      "ds-heap",
+      "garbage-collection",
+      "caching-strategies",
+      "redis-memory-eviction",
+      "react-rerender",
+      "js-memory-leak"
+    ],
+    "mentions": [
+      "js-memoization",
+      "big-o-notation",
+      "js-array-mutation",
+      "redis-basics"
+    ]
+  },
+  "ds-array-matrix": {
+    "links": [
+      "ds-linked-list",
+      "ds-stack-queue-deque",
+      "js-array-mutation",
+      "big-o-notation",
+      "ds-hash-map",
+      "js-primitive-vs-reference",
+      "ds-heap",
+      "ds-binary-tree-bst"
+    ],
+    "mentions": [
+      "js-prototype-chain",
+      "js-memoization"
+    ]
+  },
   "api-styles-overview": {
     "links": [
       "event-driven-architecture",
@@ -834,6 +939,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "exponential-backoff-jitter",
       "redis-cluster",
+      "ds-linked-list",
       "js-memoization",
       "redis-basics",
       "db-modeling-normalization",
@@ -1124,6 +1230,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "ds-hash-map",
+      "ds-linked-list",
       "sd-start-single-server",
       "sql-query-rewrite"
     ]
@@ -1157,7 +1265,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "system-design-study-path",
       "percentile-latency"
     ],
-    "mentions": []
+    "mentions": [
+      "ds-linked-list"
+    ]
   },
   "sd-wallet-event-sourcing": {
     "links": [
@@ -1523,7 +1633,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
-      "sd-object-storage-architecture"
+      "sd-object-storage-architecture",
+      "ds-heap"
     ]
   },
   "sd-nearby-friends": {
@@ -1846,6 +1957,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-sharding",
+      "ds-hash-map",
       "redis-basics",
       "pub-sub",
       "sql-query-rewrite"
@@ -2089,6 +2201,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding"
     ],
     "mentions": [
+      "ds-hash-map",
       "sd-start-single-server",
       "tail-latency",
       "vpc-basics",
@@ -3564,6 +3677,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-object-methods"
     ],
     "mentions": [
+      "ds-linked-list",
       "js-strict-mode"
     ]
   },
@@ -4639,6 +4753,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "cors",
       "k8s-architecture",
+      "ds-hash-map",
       "layer-ip-addressing",
       "layer-ip-routing-icmp",
       "udp-and-quic",
@@ -6149,6 +6264,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "ds-linked-list",
       "consistency-models",
       "go-concurrency-basics",
       "acid-transactions"
@@ -6408,6 +6524,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-execution-context",
       "db-type-key-value",
+      "ds-heap",
       "sql-filtering-operators"
     ]
   },
@@ -6856,6 +6973,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hyperloglog"
     ],
     "mentions": [
+      "ds-hash-map",
       "sd-mq-storage-partitions",
       "bloom-filter",
       "postgres-architecture",
@@ -6871,6 +6989,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "count-min-sketch"
     ],
     "mentions": [
+      "ds-hash-map",
       "redis-basics",
       "cookie-session-login"
     ]
@@ -6885,6 +7004,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-embedded",
+      "ds-hash-map",
       "js-memoization",
       "cdn-edge-anycast",
       "redis-basics",
@@ -6924,6 +7044,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "express-middleware",
+      "ds-linked-list",
       "sd-payment-flow",
       "event-delegation",
       "http-status-codes"
@@ -9529,6 +9650,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series",
       "mysql-innodb-basics",
       "db-type-key-value",
+      "ds-hash-map",
       "sqld-top-n-hierarchical-pivot",
       "scaling-horizontal-vertical",
       "postgres-architecture",
@@ -9554,6 +9676,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "raft-consensus",
+      "ds-hash-map",
       "sd-mq-storage-partitions",
       "leader-election",
       "dns"
@@ -9642,6 +9765,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "db-migration-tools",
       "db-architecture-by-scale",
+      "ds-hash-map",
       "linux-files-permissions",
       "db-type-relational",
       "postgres-getting-started",
@@ -9970,6 +10094,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-tuning"
     ],
     "mentions": [
+      "ds-hash-map",
       "sqld-top-n-hierarchical-pivot"
     ]
   },
@@ -10088,7 +10213,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "db-index"
     ],
-    "mentions": []
+    "mentions": [
+      "ds-hash-map"
+    ]
   },
   "nginx-basics": {
     "links": [
@@ -10162,6 +10289,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "ds-hash-map",
+      "ds-linked-list",
       "sd-leaderboard-sorted-set",
       "layer-mtu-fragmentation",
       "dns"
@@ -10217,6 +10346,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "redis-cluster",
       "distributed-lock",
+      "ds-hash-map",
+      "ds-linked-list",
       "sd-leaderboard-sorted-set",
       "sd-start-single-server",
       "pub-sub",
@@ -10243,6 +10374,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cache-write-policies",
       "bloom-filter",
       "db-type-columnar-olap",
+      "ds-linked-list",
       "mysql-replication-online-ddl",
       "sd-start-single-server",
       "js-memoization",
@@ -10312,10 +10444,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "ds-binary-tree-bst",
       "js-execution-context",
+      "ds-hash-map",
       "js-memoization",
       "sql-filtering-operators",
-      "event-loop"
+      "event-loop",
+      "ds-array-matrix"
     ]
   },
   "docker-network-volume": {
@@ -10456,6 +10591,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "packet-capture-tcpdump",
       "proxy-reverse-proxy",
+      "ds-hash-map",
       "reverse-proxy-lb-api-gateway",
       "cilium-ebpf",
       "http-versions",
