@@ -1,0 +1,549 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-controllers-reconcile");
+
+Pod 하나를 `kubectl delete`로 지웠다. 1초도 안 돼 이름만 다른 Pod가 다시 떠 있다. 이번에는 컨트롤러 매니저가 몇 분 멈춘 사이에 replicas를 3에서 6, 0, 5로 연달아 바꿨다. 컨트롤러가 돌아오자 중간 값은 건너뛰고 바로 5개를 맞춘다. 6개를 만들었다가 다 지우고 다시 5개를 만드는 일은 일어나지 않는다.
+
+이 두 장면이 쿠버네티스가 일하는 방식을 다 보여 준다. 누가 명령을 하나씩 실행하는 게 아니다. 컨트롤러가 원하는 상태와 지금 상태를 계속 비교하고 차이만 메운다. 이 글은 그 루프(reconcile)가 어떻게 생겼는지 본다. watch와 informer, 작업 큐가 이벤트를 어떻게 모으는지, 왜 이벤트가 아니라 상태를 보고 움직이는지(level-triggered), reconcile을 여러 번 돌려도 같은 결과가 나와야 하는 이유, resourceVersion 충돌(409)을 어떻게 다루는지. 마지막에는 Node로 120줄 남짓한 컨트롤러를 직접 만들어 kwok 실습 클러스터(Kubernetes 1.30)의 진짜 API 서버에 붙여 본다.
+
+이 주제의 다른 글: 컨트롤러가 읽고 쓰는 문서(spec, status, generation, ownerReferences, finalizer)는 [API 오브젝트 글](/posts/k8s-api-objects), 컨트롤러가 대상을 고르는 셀렉터는 [라벨과 셀렉터](/posts/k8s-labels-selectors)에 있다. 직접 만든 리소스 종류에 컨트롤러를 붙이는 일은 [CRD](/posts/k8s-crd)와 [오퍼레이터](/posts/k8s-operators) 글로 이어진다.
+
+## 원하는 상태와 지금 상태
+
+컨트롤러가 하는 일은 한 문장이다. 원하는 상태를 읽고, 지금 상태를 보고, 다르면 고친다. 그리고 이걸 끝없이 반복한다. 방 온도 조절기와 같다. "25도로 해"라고 한 번 정해 두면 조절기는 지금 온도를 재고, 낮으면 켜고 높으면 끈다. 누가 창문을 열어도 다시 맞춘다. 조절기는 "몇 번 켰는지"를 기억하지 않는다. 지금 온도만 본다.
+
+쿠버네티스에서 원하는 상태는 spec이고, 지금 상태는 실제 세계(다른 객체들, 노드, 클라우드)다. 컨트롤러는 그 차이를 줄이는 쪽으로 다른 객체를 만들거나 지우고, 본 것을 status에 적는다. 하나의 `kubectl apply`가 여러 컨트롤러를 차례로 깨운다. 아래 그림에서 다음을 누르면 Deployment 하나가 실제 컨테이너가 되기까지 각 컨트롤러가 무엇을 보고 무엇을 쓰는지 따라간다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="컨트롤러들은 서로 직접 말하지 않는다. 모두 API 서버의 객체를 보고 객체를 쓴다"
+  zones={[
+    { id: "cp", label: "control plane", x: 6, y: 6, w: 388, h: 196, tone: "private" },
+    { id: "node", label: "node-a", x: 6, y: 214, w: 388, h: 100, tone: "public" },
+  ]}
+  nodes={[
+    { id: "user", label: "kubectl", sub: "apply", x: 66, y: 60, icon: "client", w: 96 },
+    { id: "api", label: "apiserver", sub: "etcd 앞", x: 200, y: 60, icon: "server", w: 112 },
+    { id: "dc", label: "deployment", sub: "컨트롤러", x: 334, y: 60, icon: "gateway", w: 104 },
+    { id: "rc", label: "replicaset", sub: "컨트롤러", x: 334, y: 152, icon: "gateway", w: 104 },
+    { id: "sch", label: "scheduler", sub: "nodeName 결정", x: 200, y: 152, icon: "router", w: 112 },
+    { id: "kl", label: "kubelet", sub: "컨테이너 실행", x: 200, y: 264, icon: "container", w: 112 },
+  ]}
+  links={[
+    { from: "user", to: "api" },
+    { from: "api", to: "dc" },
+    { from: "api", to: "rc" },
+    { from: "api", to: "sch" },
+    { from: "api", to: "kl" },
+  ]}
+  steps={[
+    { path: ["user", "api"], packet: "Deploy", title: "원하는 상태를 적는다", detail: "kubectl은 Deployment를 저장하고 끝난다. Pod를 만들라는 명령은 어디에도 없다.", payload: "spec.replicas: 3" },
+    { path: ["api", "dc", "api"], packet: "RS", title: "Deployment 컨트롤러가 ReplicaSet을 쓴다", detail: "watch로 새 Deployment를 받고, 템플릿에 맞는 ReplicaSet이 없으니 만든다." },
+    { path: ["api", "rc", "api"], packet: "Pod ×3", title: "ReplicaSet 컨트롤러가 Pod를 쓴다", detail: "ReplicaSet은 3을 원하는데 맞는 Pod가 0이다. nodeName이 빈 Pod 셋을 만든다." },
+    { path: ["api", "sch", "api"], packet: "bind", title: "스케줄러가 노드를 적는다", detail: "nodeName이 빈 Pod를 보고 노드를 골라 binding을 쓴다. 스케줄러도 컨트롤러의 한 종류다." },
+    { path: ["api", "kl"], packet: "Pod", highlight: ["node"], title: "kubelet이 컨테이너를 띄운다", detail: "자기 노드 이름이 적힌 Pod를 watch로 받아 컨테이너를 띄우고, 결과를 Pod status에 적는다." },
+  ]}
+/>
+
+그림의 화살표는 모두 API 서버를 지난다. Deployment 컨트롤러는 ReplicaSet 컨트롤러를 부르지 않는다. 객체를 하나 쓸 뿐이다. 각 컨트롤러는 자기 관심사의 객체만 지켜보고 자기 몫만 한다. 그래서 하나가 죽어도 나머지는 계속 돌고, 죽은 것이 돌아오면 그때의 상태를 보고 이어서 한다. kube-controller-manager는 이런 컨트롤러 수십 개를 한 프로세스에 묶어 둔 것이다. 실습 클러스터의 로그에서 세어 보니 34개가 떴다.
+
+```bash
+# 컨트롤러 매니저 로그에서 뜬 컨트롤러 이름을 본다 (일부)
+grep 'Started controller' kube-controller-manager.log | head -4
+grep -c 'Started controller' kube-controller-manager.log
+```
+
+```text
+I1021 00:27:11.597761   10063 controllermanager.go:761] "Started controller" controller="serviceaccount-token-controller"
+I1021 00:27:11.598419   10063 controllermanager.go:761] "Started controller" controller="replicaset-controller"
+I1021 00:27:11.598600   10063 controllermanager.go:761] "Started controller" controller="cronjob-controller"
+I1021 00:27:11.600166   10063 controllermanager.go:761] "Started controller" controller="persistentvolume-binder-controller"
+34
+```
+
+## 매번 물어보지 않고 지켜본다, watch
+
+컨트롤러가 "지금 상태"를 알려고 1초마다 모든 Pod 목록을 받아 온다면 API 서버와 etcd가 버티지 못한다. 그래서 목록은 처음에 한 번만 받고, 그 뒤로는 바뀐 것만 흘려 받는다. 이게 watch다. 목록 응답의 `resourceVersion`을 기억해 두었다가 그 번호부터 watch를 걸면 그 사이의 변화를 하나도 놓치지 않는다.
+
+```bash
+# 목록을 받고 그 시점의 resourceVersion을 기억한다
+RV=$(curl -s localhost:18093/api/v1/namespaces/shop/configmaps | jq -r .metadata.resourceVersion); echo "list rv=$RV"
+# 그 번호부터 demo ConfigMap의 변화를 지켜본다 (다른 창에서 두 번 patch, 한 번 delete)
+curl -sN "localhost:18093/api/v1/namespaces/shop/configmaps?watch=1&resourceVersion=$RV&fieldSelector=metadata.name%3Ddemo" \
+  | jq -c '{type, name: .object.metadata.name, rv: .object.metadata.resourceVersion, data: .object.data}'
+```
+
+```text
+list rv=2463
+{"type":"MODIFIED","name":"demo","rv":"2466","data":{"replicas":"2"}}
+{"type":"MODIFIED","name":"demo","rv":"2467","data":{"replicas":"3"}}
+{"type":"DELETED","name":"demo","rv":"2468","data":{"replicas":"3"}}
+```
+
+HTTP 연결 하나가 열린 채로 남고, 변화가 생길 때마다 JSON 한 줄이 온다. 이벤트 종류는 `ADDED`, `MODIFIED`, `DELETED`, 그리고 진행 위치만 알려 주는 `BOOKMARK`가 있다. 이벤트에는 바뀐 필드가 아니라 객체 전체가 실린다.
+
+watch는 영원하지 않다. 연결은 일정 시간이 지나면 끊기고(client-go는 5~10분 사이의 무작위 타임아웃을 건다), etcd는 오래된 revision을 지운다(compaction, API 서버 기본 5분 간격). 끊긴 뒤 마지막 번호로 다시 걸었는데 그 번호가 이미 지워졌으면 410 Gone이 온다. 아래는 그 응답의 모양이다(예시, 실습에서는 재현하지 않았다).
+
+```text
+{"type":"ERROR","object":{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"too old resource version: 1 (2463)","reason":"Expired","code":410}}
+```
+
+이때는 목록을 처음부터 다시 받는다(relist). 다시 받은 목록과 기억하던 것을 비교하면 그 사이 놓친 변화도 알 수 있다. 놓친 이벤트를 되살리는 게 아니라 지금 상태를 다시 보는 것이다. 이 차이가 아래 level-triggered 절의 출발점이다.
+
+## informer와 작업 큐
+
+client-go(쿠버네티스의 Go 클라이언트 라이브러리)는 이 list-watch를 informer로 묶어 준다. 직접 만드는 컨트롤러도, kube-controller-manager의 컨트롤러도 같은 부품을 쓴다.
+
+<ConceptDiagram
+  width={440}
+  height={320}
+  caption="informer는 API 서버의 변화를 로컬 캐시에 비추고, 바뀐 객체의 키만 작업 큐에 넣는다"
+  nodes={[
+    { id: "api", label: "API 서버", sub: "list + watch", x: 90, y: 40, w: 130 },
+    { id: "ref", label: "Reflector", sub: "rv 기억, relist", x: 90, y: 130, w: 130 },
+    { id: "cache", label: "로컬 캐시", sub: "Indexer", x: 90, y: 230, w: 130 },
+    { id: "h", label: "이벤트 핸들러", sub: "add/update/delete", x: 320, y: 130, w: 150 },
+    { id: "q", label: "작업 큐", sub: "ns/name 키", x: 320, y: 230, w: 150 },
+    { id: "w", label: "reconcile", sub: "worker", x: 320, y: 40, w: 130 },
+  ]}
+  edges={[
+    { from: "api", to: "ref", label: "이벤트" },
+    { from: "ref", to: "cache", label: "갱신" },
+    { from: "ref", to: "h" },
+    { from: "h", to: "q", label: "키만" },
+    { from: "q", to: "w", label: "꺼냄" },
+    { from: "w", to: "cache", label: "읽기", dashed: true },
+    { from: "w", to: "api", label: "쓰기" },
+  ]}
+/>
+
+부품을 하나씩 보면 이렇다. Reflector가 list-watch를 하고 끊기면 다시 붙는다. 받은 객체는 로컬 캐시(Indexer)에 넣는다. 그래서 컨트롤러가 "이 ReplicaSet의 Pod 목록"을 읽을 때 API 서버에 묻지 않고 메모리에서 바로 꺼낸다. 이벤트 핸들러는 객체 전체가 아니라 `네임스페이스/이름` 키만 작업 큐에 넣는다. worker는 큐에서 키를 꺼내 reconcile을 돌린다.
+
+작업 큐에는 세 가지 성질이 있다. 같은 키는 한 번만 들어간다. 처리 중인 키는 다른 worker가 동시에 잡지 않는다. 실패한 키는 지수 백오프로 늦춰서 다시 넣는다([지수 백오프](/posts/exponential-backoff-jitter)). 첫 번째 성질 덕분에 Pod 100개가 한꺼번에 바뀌어도 그 주인 ReplicaSet의 reconcile은 한두 번만 돈다. 컨트롤러 매니저는 큐마다 지표를 낸다.
+
+```bash
+# 컨트롤러 매니저의 작업 큐 지표 (일부)
+curl -sk https://127.0.0.1:32762/metrics | grep -E '^workqueue_(adds_total|depth|retries_total)\{name="(deployment|replicaset)"'
+```
+
+```text
+workqueue_adds_total{name="deployment"} 131
+workqueue_adds_total{name="replicaset"} 106
+workqueue_depth{name="deployment"} 0
+workqueue_depth{name="replicaset"} 0
+workqueue_retries_total{name="deployment"} 54
+workqueue_retries_total{name="replicaset"} 0
+```
+
+`workqueue_depth`가 계속 높으면 컨트롤러가 일을 못 따라가는 것이고, `retries_total`이 빠르게 오르면 reconcile이 계속 실패하고 있는 것이다. "Deployment를 고쳤는데 한참 뒤에 반영된다"는 증상이면 이 두 지표와 `workqueue_queue_duration_seconds`(큐에서 기다린 시간)부터 본다. 로그에서는 키 단위로 처리 기록이 남는다.
+
+```text
+I1021 00:28:10.416303   10063 replica_set.go:676] "Finished syncing" logger="replicaset-controller" kind="ReplicaSet" key="shop/web-7b64654bb6" duration="17.661875ms"
+```
+
+`key="shop/web-7b64654bb6"`가 큐에 들어간 키다. reconcile 함수는 이 키 하나를 받아서 일한다. 무슨 이벤트 때문에 깨어났는지는 받지 않는다.
+
+## 이벤트가 아니라 상태를 보고 움직인다
+
+여기서 설계의 갈림길이 나온다. 이벤트를 받을 때마다 그 이벤트 내용대로 움직이는 방식을 edge-triggered라고 한다. "Pod가 하나 지워졌다는 이벤트가 왔으니 하나 만든다." 이벤트가 오면 지금 상태 전체를 다시 보고 차이를 메우는 방식을 level-triggered라고 한다. "깨어났으니 원하는 수와 지금 수를 다시 센다." 회로에서 신호가 바뀌는 순간(edge)에 반응하느냐, 신호의 높이(level)에 반응하느냐에서 온 말이다.
+
+쿠버네티스 컨트롤러는 level-triggered로 만든다. 이벤트는 "다시 볼 때가 됐다"는 알림일 뿐이다. 이유는 이벤트가 사라지고, 겹치고, 늦기 때문이다. 아래 그림은 replicas를 바꾸는 이벤트 넷 중 하나를 놓쳤을 때 두 방식이 어떻게 갈리는지 보여 준다.
+
+<AlgoTrace
+  caption="이벤트 하나를 놓쳤을 때: edge는 틀린 채로 남고, level은 다음에 깨어날 때 맞춘다"
+  memoryLabel="edge 방식 / level 방식"
+  cells={["want 3", "Pod 삭제", "(놓침)", "want 5", "재시작"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["edge: 3개", "level: 3개"], caption: "처음에는 둘 다 3개를 만들었다." },
+    { pointer: 1, found: [1], memory: ["edge: +1 → 3개", "level: 세어 보니 2, 1개 생성 → 3개"], caption: "Pod 하나가 지워졌다. edge는 이벤트대로 하나를 더하고, level은 다시 세어서 하나를 만든다. 결과는 같다." },
+    { pointer: 2, memory: ["edge: 3개 (실제 2개)", "level: 3개 (실제 2개)"], caption: "watch가 끊긴 사이 Pod가 하나 더 지워졌다. 둘 다 이벤트를 받지 못했다." },
+    { pointer: 3, found: [3], memory: ["edge: 3→5, +2 → 실제 4개", "level: 세어 보니 2, 3개 생성 → 5개"], caption: "replicas가 5로 바뀌었다. edge는 차이(+2)만 더해 4개가 된다. level은 다시 세니 맞는다." },
+    { pointer: 4, found: [4], memory: ["edge: 기억이 사라져 처음부터", "level: 세어 보니 5, 할 일 없음"], caption: "컨트롤러가 재시작했다. edge는 지난 이벤트를 다시 받을 수 없다. level은 목록만 다시 보면 된다." },
+  ]}
+/>
+
+level-triggered가 되려면 reconcile이 받는 입력이 "키 하나"뿐이어야 한다. 이벤트의 내용(이전 값, 무엇이 바뀌었는지)을 쓰지 않고, 그 키로 지금 객체를 다시 읽어서 판단한다. 그래서 같은 키에 이벤트가 열 번 와도 큐에서 하나로 합쳐도 되고, 재시작 뒤 목록만 다시 받아도 되고, 몇 시간에 한 번 모든 키를 다시 넣어도(resync) 안전하다.
+
+## 몇 번을 돌려도 같은 결과, 멱등성
+
+level-triggered의 짝이 멱등성이다. reconcile은 같은 상태에서 몇 번을 돌려도 같은 결과를 내야 한다. "Pod 3개를 만들어라"가 아니라 "Pod가 3개가 되게 하라"로 짠다. 이미 3개면 아무것도 하지 않는다. 돌다가 중간에 죽어도 다음에 다시 돌면 남은 부분만 한다.
+
+아래에서 reconcile의 판단 부분만 떼어 짜 볼 수 있다. 원하는 수와 지금 Pod 목록을 받아 무엇을 만들고 지울지 정한다. 이미 지워지는 중인 Pod(`deleting`)는 세지 않는다. ReplicaSet도 Terminating인 Pod는 세지 않는다.
+
+<CodePlayground
+  caption="reconcile 계획 세우기: 몇 개 만들고 무엇을 지우나"
+  functionName="plan"
+  initialCode={`function plan(want, pods) {
+  // pods: [{ name: "web-a", deleting?: true }]
+  // 지워지는 중인 Pod는 세지 않는다
+  // 이름순으로 정렬해 뒤쪽부터 지운다
+  // { create: 숫자, remove: [이름...] } 을 돌려준다
+  return { create: 0, remove: [] };
+}`}
+  solution={`function plan(want, pods) {
+  const alive = pods.filter((p) => !p.deleting).map((p) => p.name).sort();
+  const create = Math.max(0, want - alive.length);
+  const remove = alive.slice(want);
+  return { create, remove };
+}`}
+  tests={[
+    { args: [3, []], expected: { create: 3, remove: [] }, label: "처음" },
+    { args: [3, [{ name: "web-a" }, { name: "web-b" }, { name: "web-c" }]], expected: { create: 0, remove: [] }, label: "이미 맞다: 아무것도 안 한다" },
+    { args: [2, [{ name: "web-d" }, { name: "web-a" }, { name: "web-c" }, { name: "web-b" }]], expected: { create: 0, remove: ["web-c", "web-d"] }, label: "넘친다" },
+    { args: [3, [{ name: "web-a" }, { name: "web-b", deleting: true }]], expected: { create: 2, remove: [] }, label: "지워지는 중인 Pod는 빼고 센다" },
+    { args: [0, [{ name: "web-a" }]], expected: { create: 0, remove: ["web-a"] }, label: "0으로" },
+  ]}
+/>
+
+멱등성을 깨는 흔한 실수가 있다. 첫째, 이름을 매번 새로 만드는 외부 자원이다. reconcile마다 "로드 밸런서 생성"을 부르면 재시도 때마다 하나씩 늘어난다. 외부 자원은 객체의 uid 같은 고정된 값으로 이름을 짓거나 태그를 붙여, 만들기 전에 먼저 있는지 찾는다. 둘째, status를 매번 쓰는 것이다. 값이 같아도 쓰면 resourceVersion이 바뀌고, 그 변화가 다시 이벤트가 되어 자기 자신을 깨운다. 바뀐 게 없으면 쓰지 않는다. 아래 컨트롤러에도 이 검사가 들어 있다. 셋째, 캐시를 믿고 만들기다. 로컬 캐시는 조금 늦다. 방금 Pod 3개를 만들었는데 캐시에 아직 안 보이면 다음 reconcile이 또 3개를 만든다. ReplicaSet 컨트롤러는 이를 막으려고 "내가 만들라고 한 것이 캐시에 보일 때까지 기다린다"는 기대치(expectations)를 따로 센다.
+
+## 409를 만나면 다시 읽는다
+
+컨트롤러는 사람과 다른 컨트롤러와 같은 객체를 동시에 쓴다. 읽은 뒤 쓰기 전에 누가 고치면 낡은 resourceVersion을 실은 update는 409 Conflict로 거절된다([API 오브젝트 글](/posts/k8s-api-objects)의 resourceVersion 절). 이건 에러라기보다 신호다. 정석은 둘 중 하나다. 다시 읽어서 최신 객체에 내 변경을 다시 얹고 쓰거나, 아무것도 하지 않고 키를 큐에 다시 넣는다. level-triggered 컨트롤러라면 뒤쪽이 더 간단하다. 다음 reconcile이 최신 상태를 읽고 다시 판단하니까.
+
+<SequenceDiagram
+  caption="두 쓰기가 겹치면 늦은 쪽이 409를 받고 다시 읽는다"
+  actors={[
+    { id: "ctl", label: "컨트롤러" },
+    { id: "api", label: "API 서버" },
+    { id: "other", label: "다른 쓰기" },
+  ]}
+  steps={[
+    { from: "ctl", to: "api", label: "GET (rv 2601)", title: "객체를 읽는다", detail: "status를 쓰려고 ConfigMap web을 읽었다. resourceVersion은 2601이다." },
+    { from: "other", to: "api", label: "PATCH label", title: "그 사이 다른 쪽이 고친다", detail: "사람이나 다른 컨트롤러가 라벨을 바꿨다. resourceVersion이 새 값이 됐다." },
+    { from: "ctl", to: "api", label: "PUT (rv 2601)", title: "낡은 번호로 덮어쓰려 한다", detail: "읽었던 객체 전체를 rv 2601과 함께 보낸다. 서버의 객체는 이미 그 번호가 아니다.", payload: "409 Conflict: the object has been modified" },
+    { from: "ctl", to: "api", label: "GET", title: "다시 읽는다", detail: "최신 객체를 받아 내 변경(어노테이션)을 그 위에 다시 얹는다. 라벨 변경은 그대로 살아 있다." },
+    { from: "ctl", to: "api", label: "PUT (최신 rv)", title: "다시 쓴다", detail: "이번에는 번호가 맞아 저장된다. 다른 쪽의 변경을 덮어쓰지 않았다.", payload: "status 5 기록 rv=2618" },
+  ]}
+/>
+
+409를 무시하고 resourceVersion을 빼고 강제로 덮어쓰면 다른 쪽의 변경이 사라진다. 바꿀 필드만 보내는 patch나 server-side apply를 쓰면 충돌 자체가 줄어든다. 두 방식의 차이는 [kubectl apply와 SSA](/posts/kubectl-apply-ssa)에서 다룬다.
+
+## Node로 만드는 작은 컨트롤러
+
+이제 직접 만들어 본다. ConfigMap 하나를 "원하는 상태"로 쓴다. `tiny.example.com/managed=true` 라벨이 붙은 ConfigMap의 `data.replicas`만큼 Pod를 맞추는, 아주 작은 ReplicaSet이다. client-go 같은 라이브러리 없이 Node 22의 `fetch`만 쓴다. 인증은 `kubectl proxy`에 맡긴다(로컬 실습 전용, 프로덕션에서는 ServiceAccount 토큰을 쓴다).
+
+```yaml
+# desired.yaml: 원하는 상태
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web
+  namespace: shop
+  labels:
+    tiny.example.com/managed: "true"
+data:
+  replicas: "3"
+  image: nginx:1.27
+```
+
+먼저 list 후 watch를 하는 informer와 작업 큐다. HTTP 요청을 보내는 `req(method, path, body)` 도우미는 `{ status, json }`을 돌려주는 열 줄짜리 fetch 래퍼라 생략했다.
+
+```js
+// list 후 watch. 끊기면 마지막 resourceVersion부터 다시 본다
+async function informer(path, onEvent) {
+  const first = await req("GET", path);
+  let rv = first.json.metadata.resourceVersion;
+  for (const item of first.json.items) onEvent("SYNC", item);
+  log(`list ${path.split("?")[0]} rv=${rv} items=${first.json.items.length}`);
+  for (;;) {
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(`${API}${path}${sep}watch=1&resourceVersion=${rv}&allowWatchBookmarks=true`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "ERROR") { log("watch error", ev.object.code, ev.object.message); return informer(path, onEvent); }
+        rv = ev.object.metadata.resourceVersion;
+        if (ev.type !== "BOOKMARK") onEvent(ev.type, ev.object);
+      }
+    }
+  }
+}
+
+const queue = new Set();          // 같은 키는 한 번만 쌓인다
+let working = false;
+
+function enqueue(key, why) {
+  if (queue.has(key)) { log(`  queue: ${key} 이미 있음 (${why})`); return; }
+  queue.add(key); log(`  queue: + ${key} (${why})`);
+  if (!working) drain();
+}
+
+async function drain() {
+  working = true;
+  while (queue.size) {
+    const [key] = queue; queue.delete(key);
+    try { await reconcile(key); }
+    catch (e) { log("reconcile 실패, 1초 뒤 다시", e.message); setTimeout(() => enqueue(key, "retry"), 1000); }
+  }
+  working = false;
+}
+```
+
+다음은 reconcile과 status 쓰기다. reconcile은 키(ConfigMap 이름)만 받는다. 이벤트 내용을 보지 않고 지금 상태를 다시 읽는다. 만든 Pod에는 ownerReferences로 ConfigMap을 주인으로 적어 둔다. 테스트용 `RACE=1`을 주면 status를 쓰기 직전에 라벨을 한 번 바꿔 일부러 409를 만든다.
+
+```js
+// 이벤트 내용은 보지 않는다. 지금 상태를 다시 읽고 맞춘다 (level-triggered)
+async function reconcile(name) {
+  const cm = await req("GET", `/api/v1/namespaces/${NS}/configmaps/${name}`);
+  if (cm.status === 404) { log(`reconcile ${name}: 원하는 상태가 없다, 할 일 없음`); return; }
+  const want = Number(cm.json.data?.replicas ?? 0);
+  const pods = await req("GET", `/api/v1/namespaces/${NS}/pods?labelSelector=tiny.example.com/owner%3D${name}`);
+  const alive = pods.json.items.filter((p) => !p.metadata.deletionTimestamp);
+  const have = alive.length;
+  log(`reconcile ${name}: want=${want} have=${have}`);
+  for (let i = have; i < want; i++) {
+    const r = await req("POST", `/api/v1/namespaces/${NS}/pods`, {
+      metadata: {
+        generateName: `${name}-`,
+        labels: { "tiny.example.com/owner": name },
+        ownerReferences: [{ apiVersion: "v1", kind: "ConfigMap", name, uid: cm.json.metadata.uid, controller: true }],
+      },
+      spec: { containers: [{ name: "app", image: cm.json.data.image ?? "nginx:1.27" }] },
+    });
+    log(`  create ${r.json.metadata?.name} -> ${r.status}`);
+  }
+  for (const p of alive.slice(want)) {
+    const r = await req("DELETE", `/api/v1/namespaces/${NS}/pods/${p.metadata.name}`);
+    log(`  delete ${p.metadata.name} -> ${r.status}`);
+  }
+  await writeStatus(name, String(want)); // 이 replicas 값까지 반영했다
+}
+
+// 읽은 resourceVersion을 실어 보내고, 409면 다시 읽어서 한 번 더
+async function writeStatus(name, observed, attempt = 1) {
+  const cm = await req("GET", `/api/v1/namespaces/${NS}/configmaps/${name}`);
+  if (process.env.RACE && attempt === 1) {
+    await req("PATCH", `/api/v1/namespaces/${NS}/configmaps/${name}`, { metadata: { labels: { touched: "yes" } } });
+  }
+  const body = cm.json;
+  if (body.metadata.annotations?.["tiny.example.com/observed"] === observed) return; // 같으면 쓰지 않는다
+  body.metadata.annotations = { ...(body.metadata.annotations ?? {}), "tiny.example.com/observed": observed };
+  const r = await req("PUT", `/api/v1/namespaces/${NS}/configmaps/${name}`, body);
+  if (r.status === 409) { log(`  status 쓰기 409 Conflict (rv=${body.metadata.resourceVersion}), 다시 읽는다`); return writeStatus(name, observed, attempt + 1); }
+  log(`  status ${observed} 기록 rv=${r.json.metadata.resourceVersion}`);
+}
+
+// ConfigMap이 바뀌면 그 이름을, Pod가 생기거나 사라지면 주인 이름을 큐에 넣는다
+informer(`/api/v1/namespaces/${NS}/configmaps?labelSelector=${encodeURIComponent(SEL)}`, (type, cm) => {
+  enqueue(cm.metadata.name, `ConfigMap ${type}`);
+});
+informer(`/api/v1/namespaces/${NS}/pods?labelSelector=tiny.example.com%2Fowner`, (type, pod) => {
+  if (type === "SYNC") return;
+  const owner = pod.metadata.labels["tiny.example.com/owner"];
+  if (type === "DELETED" || type === "ADDED") enqueue(owner, `Pod ${type} ${pod.metadata.name}`);
+});
+```
+
+진짜 컨트롤러와 다른 점도 적어 둔다. reconcile이 매번 API 서버에서 직접 읽는다(로컬 캐시가 없다). 실패 재시도가 1초 고정이다(지수 백오프가 아니다). worker가 하나다. 주기적인 resync가 없다. 리더 선출이 없어서 두 개를 띄우면 둘 다 일한다. client-go와 controller-runtime이 이걸 다 채워 준다.
+
+## 돌려 보기: 만들고, 지우고, 다시 맞추기
+
+```bash
+# 프록시를 띄우고, 원하는 상태를 올리고, 컨트롤러를 띄운다
+kubectl proxy --port=18093 &
+kubectl apply -f desired.yaml
+node tiny-controller.mjs
+# 다른 창에서 Pod 하나를 지운다
+kubectl delete pod web-7gz2w -n shop
+```
+
+```text
+00:50:16 list /api/v1/namespaces/shop/pods rv=2556 items=0
+00:50:16   queue: + web (ConfigMap SYNC)
+00:50:16 list /api/v1/namespaces/shop/configmaps rv=2556 items=1
+00:50:16 reconcile web: want=3 have=0
+00:50:16   create web-8bpz6 -> 201
+00:50:16   queue: + web (Pod ADDED web-8bpz6)
+00:50:16   queue: web 이미 있음 (Pod ADDED web-sjdkl)
+00:50:16   create web-sjdkl -> 201
+00:50:16   queue: web 이미 있음 (Pod ADDED web-7gz2w)
+00:50:16   create web-7gz2w -> 201
+00:50:16   queue: web 이미 있음 (ConfigMap MODIFIED)
+00:50:16   status 3 기록 rv=2569
+00:50:16 reconcile web: want=3 have=3
+00:50:19   queue: + web (Pod DELETED web-7gz2w)
+00:50:19 reconcile web: want=3 have=2
+00:50:19   queue: + web (Pod ADDED web-lkqgm)
+00:50:19   create web-lkqgm -> 201
+00:50:19 reconcile web: want=3 have=3
+```
+
+볼 곳이 몇 군데 있다. 첫 reconcile이 Pod 셋을 만드는 동안 ADDED 이벤트 셋과 자기가 쓴 status의 MODIFIED가 왔지만 큐에는 `web` 하나만 남았다("이미 있음"). 그래서 다음 reconcile은 한 번만 돌고 `want=3 have=3`으로 할 일 없이 끝난다. 3초 뒤 Pod를 지우자 DELETED 이벤트가 키를 넣었고, reconcile이 다시 세어 하나를 만들었다. 이벤트가 "하나 지워졌다"고 말해서 만든 게 아니다. 세어 보니 둘이라서 만들었다.
+
+이제 처음 장면을 재현한다. 컨트롤러를 끄고, 그 사이 replicas를 6, 0, 5로 바꾸고, Pod 하나를 지운 뒤 다시 켠다. 이번에는 `RACE=1`로 409도 함께 만든다.
+
+```bash
+# 컨트롤러가 꺼진 동안 원하는 상태를 세 번 바꾸고 Pod 하나를 지운다
+kubectl patch cm web -n shop --type=merge -p '{"data":{"replicas":"6"}}'
+kubectl patch cm web -n shop --type=merge -p '{"data":{"replicas":"0"}}'
+kubectl patch cm web -n shop --type=merge -p '{"data":{"replicas":"5"}}'
+kubectl delete pod web-8bpz6 -n shop
+kubectl get pods -n shop -l tiny.example.com/owner=web
+# 다시 켠다. status를 쓰기 직전에 일부러 다른 쓰기를 끼워 넣는다
+RACE=1 node tiny-controller.mjs
+```
+
+```text
+NAME        READY   STATUS    RESTARTS   AGE
+web-lkqgm   1/1     Running   0          15s
+web-sjdkl   1/1     Running   0          18s
+00:50:34   queue: + web (ConfigMap SYNC)
+00:50:34 list /api/v1/namespaces/shop/configmaps rv=2604 items=1
+00:50:34 list /api/v1/namespaces/shop/pods rv=2604 items=2
+00:50:34 reconcile web: want=5 have=2
+00:50:34   queue: + web (Pod ADDED web-xstqg)
+00:50:34   create web-xstqg -> 201
+00:50:34   queue: web 이미 있음 (Pod ADDED web-ztf4s)
+00:50:34   create web-ztf4s -> 201
+00:50:34   queue: web 이미 있음 (Pod ADDED web-8jkk8)
+00:50:34   create web-8jkk8 -> 201
+00:50:34   queue: web 이미 있음 (ConfigMap MODIFIED)
+00:50:34   status 쓰기 409 Conflict (rv=2601), 다시 읽는다
+00:50:34   status 5 기록 rv=2618
+00:50:34   queue: + web (ConfigMap MODIFIED)
+00:50:34 reconcile web: want=5 have=5
+00:50:34 reconcile web: want=5 have=5
+```
+
+컨트롤러는 6과 0을 모른다. 그 이벤트는 컨트롤러가 꺼져 있을 때 지나갔고 다시 받을 방법도 없다. 상관없다. 켜지자마자 목록을 받아 `want=5 have=2`를 보고 셋을 만들었다. 이게 level-triggered다. status를 쓰려는 순간 끼어든 라벨 변경 때문에 409가 났고, 다시 읽어서 썼다. 끼어든 쪽의 라벨은 그대로 살아 있다.
+
+마지막으로 원하는 상태를 줄이고, 원하는 상태 자체를 지운다.
+
+```bash
+# replicas를 2로 줄인다
+kubectl patch cm web -n shop --type=merge -p '{"data":{"replicas":"2"}}'
+# 원하는 상태(ConfigMap)를 지운다
+kubectl delete cm web -n shop
+kubectl get pods -n shop -l tiny.example.com/owner=web
+```
+
+```text
+00:50:48   queue: + web (ConfigMap MODIFIED)
+00:50:48 reconcile web: want=2 have=5
+00:50:48   delete web-sjdkl -> 200
+00:50:48   delete web-xstqg -> 200
+00:50:48   queue: + web (Pod DELETED web-sjdkl)
+00:50:48   delete web-ztf4s -> 200
+00:50:48   queue: web 이미 있음 (Pod DELETED web-xstqg)
+00:50:48   queue: web 이미 있음 (Pod DELETED web-ztf4s)
+00:50:48   status 2 기록 rv=2645
+00:50:48   queue: + web (ConfigMap MODIFIED)
+00:50:48 reconcile web: want=2 have=2
+00:50:48 reconcile web: want=2 have=2
+00:50:50   queue: + web (ConfigMap DELETED)
+00:50:50 reconcile web: 원하는 상태가 없다, 할 일 없음
+00:50:50   queue: + web (Pod DELETED web-8jkk8)
+00:50:50   queue: + web (Pod DELETED web-lkqgm)
+00:50:50 reconcile web: 원하는 상태가 없다, 할 일 없음
+00:50:50 reconcile web: 원하는 상태가 없다, 할 일 없음
+No resources found in shop namespace.
+```
+
+ConfigMap을 지웠을 때 남은 Pod 둘을 지운 것은 내 컨트롤러가 아니다. 내 reconcile은 "원하는 상태가 없다"며 아무것도 하지 않았다. Pod의 ownerReferences에 ConfigMap이 주인으로 적혀 있어서 컨트롤러 매니저의 가비지 컬렉터가 지웠다. 정리 코드를 따로 짤 필요가 없다는 것이 ownerReferences를 다는 이유다. 클러스터 바깥 자원(클라우드 디스크 등)을 만드는 컨트롤러라면 가비지 컬렉터가 거기까지는 못 지우니 finalizer를 달아 직접 정리한다([API 오브젝트 글](/posts/k8s-api-objects)의 finalizer 절).
+
+## 하나만 일하게 하기, 리더 선출
+
+컨트롤러를 가용성 때문에 둘 띄우면 둘이 같은 키를 동시에 reconcile한다. 둘 다 "2개 부족"을 보고 각자 2개씩 만들 수 있다. 그래서 컨트롤러 매니저와 스케줄러는 여러 개를 띄워도 리더 하나만 일한다. 리더는 Lease 객체를 주기적으로 갱신하고, 갱신이 끊기면 다른 쪽이 Lease를 가져간다.
+
+```bash
+# 컨트롤러 매니저의 리더 Lease
+kubectl get lease kube-controller-manager -n kube-system -o yaml | sed -n '/^spec/,$p'
+```
+
+```text
+spec:
+  acquireTime: "2026-10-21T00:27:09.092283Z"
+  holderIdentity: vm_19edce58-17b3-485a-a2d9-67e2d2108b09
+  leaseDurationSeconds: 15
+  leaseTransitions: 0
+  renewTime: "2026-10-21T00:49:27.047676Z"
+```
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="여러 개를 띄워도 Lease를 쥔 하나만 reconcile한다"
+  nodes={[
+    { id: "a", label: "kcm-a", sub: "리더", x: 70, y: 60, icon: "gateway", w: 100 },
+    { id: "b", label: "kcm-b", sub: "대기", x: 70, y: 190, icon: "gateway", w: 100 },
+    { id: "api", label: "apiserver", sub: "", x: 210, y: 125, icon: "server", w: 104 },
+    { id: "lease", label: "Lease", sub: "15초", x: 340, y: 60, icon: "lock", w: 96 },
+    { id: "rs", label: "ReplicaSet", sub: "reconcile", x: 340, y: 190, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "a", to: "api" },
+    { from: "b", to: "api" },
+    { from: "api", to: "lease" },
+    { from: "api", to: "rs" },
+  ]}
+  steps={[
+    { path: ["a", "api", "lease"], packet: "renew", title: "리더가 Lease를 갱신한다", detail: "kcm-a가 renewTime을 몇 초마다 고쳐 쓴다. holderIdentity가 자기 이름이다." },
+    { path: ["a", "api", "rs"], packet: "sync", title: "리더만 일한다", detail: "kcm-a만 작업 큐를 돌려 ReplicaSet을 맞춘다." },
+    { path: ["b", "api", "lease"], packet: "try", blocked: true, title: "대기 쪽은 가져가지 못한다", detail: "kcm-b도 주기적으로 Lease를 확인하지만 아직 유효하니 기다린다. 이 동안 아무것도 쓰지 않는다." },
+    { path: ["b", "api", "lease"], packet: "acquire", highlight: ["a"], title: "갱신이 끊기면 넘겨받는다", detail: "kcm-a가 죽어 leaseDurationSeconds가 지나면 kcm-b가 holderIdentity를 자기로 바꾸고 일을 시작한다. 목록부터 다시 받는다." },
+  ]}
+/>
+
+리더가 바뀐 직후 새 리더는 목록부터 다시 받는다. 이전 리더가 어디까지 했는지 물려받지 않는다. level-triggered라서 그럴 필요가 없다. Lease 갱신 주기와 시간 설정의 트레이드오프, 갱신이 늦어 리더가 둘이 되는 순간은 [리더 선출 글](/posts/leader-election)에 있다.
+
+## 컨트롤러가 일을 안 할 때 보는 순서
+
+"spec을 바꿨는데 아무 일도 없다"면 컨트롤러 쪽을 이 순서로 본다.
+
+1. 내 변경을 봤나: `generation`과 `status.observedGeneration`을 비교한다. 다르면 컨트롤러가 아직 못 봤거나 처리하지 못했다.
+2. 컨트롤러가 살아 있고 리더가 있나: 컨트롤러 Pod 상태와 Lease의 `renewTime`이 최근인지 본다. 오래 멈춰 있으면 아무도 일하지 않는 것이다.
+3. 큐가 밀리거나 계속 실패하나: `workqueue_depth`, `workqueue_retries_total`, 로그의 에러를 본다. 같은 키가 계속 재시도되면 reconcile 안에서 무언가 늘 실패한다(권한 없음, 웹훅 거절, 쿼터 초과).
+4. 권한이 있나: 컨트롤러 ServiceAccount로 `kubectl auth can-i create pods --as=system:serviceaccount:ns:name`을 확인한다.
+5. 대상이 맞나: 셀렉터가 대상을 고르는지, 이미 다른 컨트롤러가 controller 주인으로 잡고 있지 않은지 본다.
+6. 객체의 conditions와 이벤트: 대부분의 컨트롤러는 실패 이유를 status.conditions나 Event로 남긴다.
+
+반대로 "컨트롤러가 자꾸 무언가를 되돌린다"는 증상도 있다. 사람이 kubectl로 고친 replicas가 몇 초 만에 원래대로 돌아간다면, 그 값을 관리하는 쪽(HPA, ArgoCD, 오퍼레이터)이 따로 있다는 뜻이다. 컨트롤러는 원하는 상태를 끝까지 지키니, 고쳐야 할 곳은 그 컨트롤러가 읽는 원하는 상태(HPA의 min/max, Git 저장소, CR의 spec)다. `metadata.managedFields`의 manager 이름을 보면 누가 그 필드를 썼는지 알 수 있다.
+
+## 루프 하나, 세 가지 규칙
+
+컨트롤러는 원하는 상태와 지금 상태의 차이를 메우는 루프다. list로 시작해 watch로 변화를 받고, 이벤트는 키만 작업 큐에 넣는 알림으로 쓴다. reconcile은 키 하나를 받아 지금 상태를 다시 읽고 판단하니(level-triggered), 이벤트를 놓치거나 재시작해도 결국 맞는다. 그러려면 몇 번을 돌려도 같은 결과가 나와야 하고(멱등), 다른 쓰기와 부딪히면 409를 받고 다시 읽는다. 이 루프를 직접 만든 리소스 종류에 붙이면 오퍼레이터가 된다. 그 이야기는 [CRD](/posts/k8s-crd)와 [오퍼레이터](/posts/k8s-operators) 글에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 컨트롤러는 어떻게 동작하나요?
+
+원하는 상태(spec)와 지금 상태를 비교해 차이를 줄이는 루프다. 처음에 list로 목록을 받고 그 resourceVersion부터 watch로 변화를 받아 로컬 캐시를 유지하며, 바뀐 객체의 키를 작업 큐에 넣는다. worker가 키를 꺼내 reconcile을 돌려 다른 객체를 만들거나 지우고 status를 쓴다. 컨트롤러끼리는 직접 부르지 않고 API 서버의 객체로만 이어진다.
+
+### level-triggered와 edge-triggered의 차이는 무엇이고, 쿠버네티스는 왜 level을 쓰나요?
+
+edge는 이벤트 내용대로 움직이고, level은 이벤트를 깨우는 신호로만 쓰고 지금 상태를 다시 봐서 판단한다. watch는 끊기고 재시작 때 지난 이벤트를 다시 받을 수 없으니, 이벤트에 의존하면 하나만 놓쳐도 틀린 채로 남는다. level 방식은 목록만 다시 받으면 맞출 수 있어서 이벤트 병합, relist, resync가 모두 안전하다.
+
+### reconcile을 멱등하게 짜야 하는 이유와 흔한 실수는요?
+
+같은 키에 reconcile이 여러 번, 중간 실패 후 다시 돌기 때문이다. "3개 만들어라"가 아니라 "3개가 되게 하라"로 짜야 재시도해도 같은 결과가 난다. 흔한 실수는 외부 자원을 매번 새 이름으로 만드는 것, 값이 같은데도 status를 매번 써서 자기 자신을 다시 깨우는 것, 늦은 캐시를 믿고 중복 생성하는 것이다. ReplicaSet은 마지막 문제를 expectations로 막는다.
+
+### 작업 큐는 왜 필요한가요? 이벤트 핸들러에서 바로 처리하면 안 되나요?
+
+큐는 같은 키를 하나로 합치고, 같은 키를 두 worker가 동시에 처리하지 않게 하고, 실패한 키를 백오프로 다시 넣는다. 핸들러에서 바로 처리하면 Pod 100개 변화에 reconcile이 100번 돌고, 동시 처리로 경합이 생기고, 실패 재시도를 따로 짜야 한다. 큐에 키만 넣는 구조가 level-triggered를 자연스럽게 만든다.
+
+### 컨트롤러가 update에서 409를 받으면 어떻게 하나요?
+
+낡은 resourceVersion으로 썼다는 뜻이니 최신 객체를 다시 읽어 변경을 얹고 다시 쓰거나, 키를 큐에 다시 넣어 다음 reconcile에 맡긴다. 409를 피하려고 resourceVersion을 빼고 덮어쓰면 다른 쪽의 변경을 지운다. 바꿀 필드만 보내는 patch나 server-side apply를 쓰면 충돌이 줄어든다.
+
+### watch가 410 Gone을 받으면 무슨 뜻이고 어떻게 처리하나요?
+
+다시 붙으려는 resourceVersion이 etcd compaction으로 이미 지워졌다는 뜻이다. 그 번호부터 이어 받을 수 없으니 목록을 처음부터 다시 받고(relist), 그 목록의 resourceVersion으로 새 watch를 건다. 놓친 이벤트를 복구하는 게 아니라 지금 상태를 다시 보는 것이라 level-triggered 컨트롤러는 그대로 맞출 수 있다.
+
+### 컨트롤러를 여러 개 띄우면 어떻게 되나요?
+
+리더 선출 없이 띄우면 둘이 같은 키를 동시에 처리해 중복 생성이나 서로 되돌리기가 생긴다. 컨트롤러 매니저와 스케줄러는 Lease 객체를 쥔 리더 하나만 일하고, 갱신이 leaseDuration 동안 끊기면 다른 쪽이 넘겨받는다. 새 리더는 이전 진행 상황을 물려받지 않고 목록부터 다시 받는다.
+
+### 사람이 바꾼 replicas가 몇 초 뒤 원래대로 돌아갑니다. 왜 그런가요?
+
+그 값을 원하는 상태로 들고 있는 다른 컨트롤러(HPA, ArgoCD, 오퍼레이터)가 있어서 다시 맞춘 것이다. 컨트롤러는 자기가 읽는 원하는 상태를 끝까지 지키니, 고칠 곳은 그 원천(HPA min/max, Git 저장소, CR spec)이다. managedFields의 manager 이름으로 누가 그 필드를 썼는지 확인할 수 있다.

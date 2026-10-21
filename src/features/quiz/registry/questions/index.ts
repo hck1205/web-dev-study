@@ -131,13 +131,17 @@ import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
+import { K8S_API_OBJECTS } from "./k8s-api-objects";
 import { K8S_ARCHITECTURE } from "./k8s-architecture";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
+import { K8S_CONTROLLERS_RECONCILE } from "./k8s-controllers-reconcile";
 import { K8S_COREDNS } from "./k8s-coredns";
 import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
+import { K8S_FEATURE_MATURITY } from "./k8s-feature-maturity";
 import { K8S_HPA } from "./k8s-hpa";
+import { K8S_LABELS_SELECTORS } from "./k8s-labels-selectors";
 import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
@@ -463,13 +467,17 @@ export const QUESTION_SETS = [
   JS_MEMORY_LEAK,
   JSON_CRUD_HTTP,
   JWT_KEY_ROTATION,
+  K8S_API_OBJECTS,
   K8S_ARCHITECTURE,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
+  K8S_CONTROLLERS_RECONCILE,
   K8S_COREDNS,
   K8S_DEPLOY_PIPELINE_EKS,
   K8S_DEPLOYMENT,
+  K8S_FEATURE_MATURITY,
   K8S_HPA,
+  K8S_LABELS_SELECTORS,
   K8S_NAMESPACE,
   K8S_NETWORK_POLICY,
   K8S_POD_BASICS,

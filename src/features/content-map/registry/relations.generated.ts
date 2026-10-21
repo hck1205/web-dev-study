@@ -2,6 +2,89 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-feature-maturity": {
+    "links": [
+      "k8s-api-objects",
+      "k8s-labels-selectors"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-deployment",
+      "k8s-network-policy",
+      "k8s-service-types",
+      "k8s-pod-basics",
+      "k8s-deploy-pipeline-eks",
+      "cron-jobs",
+      "helm-basics",
+      "kubernetes-ingress",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "k8s-hpa",
+      "webhooks"
+    ]
+  },
+  "k8s-controllers-reconcile": {
+    "links": [
+      "k8s-api-objects",
+      "k8s-labels-selectors",
+      "exponential-backoff-jitter",
+      "leader-election"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-pod-basics",
+      "k8s-configmap",
+      "resilience-patterns",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "http-methods",
+      "webhooks"
+    ]
+  },
+  "k8s-labels-selectors": {
+    "links": [
+      "k8s-api-objects",
+      "k8s-controllers-reconcile",
+      "k8s-service-types",
+      "k8s-deployment",
+      "k8s-pod-scheduling",
+      "k8s-pod-troubleshooting"
+    ],
+    "mentions": [
+      "k8s-network-policy",
+      "k8s-pod-basics",
+      "iptables-nat",
+      "docker-container-basics",
+      "helm-basics",
+      "local-k8s-kind-minikube",
+      "dns"
+    ]
+  },
+  "k8s-api-objects": {
+    "links": [
+      "k8s-controllers-reconcile",
+      "k8s-labels-selectors",
+      "k8s-feature-maturity",
+      "k8s-namespace",
+      "optimistic-locking"
+    ],
+    "mentions": [
+      "k8s-network-policy",
+      "k8s-pod-basics",
+      "k8s-configmap",
+      "docker-container-basics",
+      "cron-jobs",
+      "kubernetes-ingress",
+      "db-locking-deadlock",
+      "what-happens-google-com",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "dns"
+    ]
+  },
   "devops-networking-roadmap": {
     "links": [
       "osi-in-practice",
@@ -88,7 +171,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "k8s-network-policy",
       "k8s-cni-pod-network",
-      "linux-namespaces-cgroups"
+      "linux-namespaces-cgroups",
+      "k8s-feature-maturity"
     ],
     "mentions": [
       "k8s-hpa",
@@ -188,6 +272,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
+      "k8s-api-objects",
       "disaster-recovery",
       "rollback-strategy",
       "security-groups-nacl",
@@ -221,6 +306,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "k8s-architecture": {
     "links": [
+      "k8s-api-objects",
+      "k8s-controllers-reconcile",
       "k8s-pod-scheduling",
       "k8s-pod-lifecycle",
       "optimistic-locking",
@@ -2096,6 +2183,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "k8s-api-objects",
       "browser-fetch",
       "failover",
       "network-partitions",
@@ -2203,6 +2291,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-modules-tfvars",
       "kubernetes-ingress",
       "iptables-nat",
+      "k8s-api-objects",
       "terraform-basics",
       "k8s-service-types",
       "k8s-configmap",
@@ -2460,6 +2549,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret"
     ],
     "mentions": [
+      "k8s-labels-selectors",
       "k8s-architecture",
       "cloud-cost-optimization",
       "vpc-basics",
@@ -3230,6 +3320,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "k8s-service-types",
       "k8s-pv-pvc",
+      "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
       "k8s-cni-pod-network",
@@ -3310,6 +3401,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "curl-for-debugging",
       "k8s-pod-basics",
       "iptables-nat",
+      "k8s-api-objects",
       "db-migration-tools",
       "docker-container-basics",
       "k8s-deploy-pipeline-eks",
@@ -3335,6 +3427,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network",
       "k8s-architecture",
       "kubernetes-ingress",
+      "k8s-labels-selectors",
       "local-k8s-kind-minikube",
       "db-type-key-value"
     ]

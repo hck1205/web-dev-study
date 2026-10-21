@@ -1,0 +1,517 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-labels-selectors");
+
+주문 API의 에러율이 3% 정도로 꾸준히 나온다. 앱 로그에는 에러가 없다. 실패한 요청을 따라가 보니 응답한 Pod가 API가 아니라 같은 네임스페이스의 캐시 Pod였다. 원인은 Service의 셀렉터 한 줄이었다. `app: shop`만 적어 두었는데, 같은 앱 이름을 단 캐시와 스테이징 Pod까지 그 Service의 엔드포인트에 들어가 있었다.
+
+쿠버네티스에서 "이 Pod들"을 가리키는 방법은 이름이 아니라 라벨이다. Service, Deployment, ReplicaSet, NetworkPolicy, PodDisruptionBudget, 스케줄러의 affinity가 모두 라벨 셀렉터로 대상을 고른다. 그래서 셀렉터 한 줄이 틀리면 트래픽이 엉뚱한 곳으로 가고, 남의 Pod가 지워지고, 정책이 엉뚱한 Pod에 걸린다. 이 글은 라벨과 어노테이션의 차이, 셀렉터 문법 두 가지와 그 함정, 셀렉터가 Pod를 고르고 입양하는 방식, 바꿀 수 없는 Deployment 셀렉터, 권장 라벨, 필드 셀렉터를 실습 클러스터(kwok, Kubernetes 1.30)에서 따라간다.
+
+이 주제의 다른 글: 라벨이 들어 있는 metadata 칸과 ownerReferences는 [API 오브젝트 글](/posts/k8s-api-objects), 셀렉터로 대상을 찾아 맞추는 쪽은 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)에서 본다.
+
+## 라벨은 고르려고, 어노테이션은 적어 두려고
+
+라벨과 어노테이션은 둘 다 metadata에 붙는 키-값 쌍이다. 쓰임이 다르다. 라벨은 셀렉터로 고르기 위한 것이라 API 서버가 색인처럼 다룰 수 있게 짧고 엄격하다. 어노테이션은 도구와 사람이 읽을 메모라 길어도 되고 아무 글자나 들어간다. 그 대신 어노테이션으로는 고를 수 없다.
+
+규칙 차이는 직접 넣어 보면 바로 보인다.
+
+```bash
+# 커밋 메시지를 라벨 값으로 넣어 본다 (공백)
+kubectl label pod api-1 -n shop 'git-commit=a3f9c21 fix login'
+# 64자 값을 라벨에 넣어 본다
+kubectl label pod api-1 -n shop "commit-msg=$(printf 'x%.0s' {1..64})"
+# 같은 내용을 어노테이션으로 넣는다
+kubectl annotate pod api-1 -n shop 'example.com/change-cause=a3f9c21 fix login timeout (#482)'
+# 256KiB가 넘는 어노테이션
+kubectl patch pod api-1 -n shop --type=merge --patch-file big.json
+```
+
+```text
+error: invalid label value: "git-commit=a3f9c21 fix login": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')
+error: invalid label value: "commit-msg=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": must be no more than 63 characters
+pod/api-1 annotated
+The Pod "api-1" is invalid: metadata.annotations: Too long: must have at most 262144 bytes
+```
+
+라벨 값은 63자 이하에 영숫자, `-`, `_`, `.`만 쓰고 처음과 끝은 영숫자여야 한다. 빈 값도 된다. 키는 `접두사/이름` 모양이고, 이름 부분이 63자 이하, 접두사는 DNS 서브도메인(253자 이하)이다. `kubernetes.io/`와 `k8s.io/` 접두사는 쿠버네티스 부품이 쓰는 자리라 직접 만든 라벨에는 회사 도메인 같은 접두사를 붙인다(`example.com/team`). 어노테이션은 한 객체의 전체 크기가 256KiB(262144바이트)를 넘지 못한다는 제한 정도만 있다.
+
+그래서 나누는 기준은 하나다. 이걸로 고를 일이 있으면 라벨, 없으면 어노테이션. 앱 이름, 버전 트랙, 환경, 팀은 라벨이다. 커밋 해시 전문, 빌드 URL, 담당자 연락처, 도구 설정(`nginx.ingress.kubernetes.io/...`, `prometheus.io/scrape`)은 어노테이션이다. 버전 번호를 라벨에 넣을 때는 조심한다. Deployment 템플릿 라벨에 `version: 1.4.2`를 넣으면 버전이 바뀔 때마다 템플릿이 바뀌니 그 자체로는 문제가 없지만, 그걸 셀렉터에까지 넣으면 다음 배포에서 셀렉터를 바꿔야 하는데 바꿀 수 없다(아래 절).
+
+## 같다와 다르다로 고르기
+
+셀렉터 문법은 두 가지다. 먼저 등호 기반(equality-based)이다. `=`(또는 `==`)와 `!=`를 쉼표로 이으면 모두 만족해야 한다(AND). OR는 없다. 실습용 Pod 다섯 개에 라벨을 이렇게 붙였다.
+
+```bash
+# 라벨과 함께 목록을 본다
+kubectl get pods -n shop --show-labels
+```
+
+```text
+NAME      READY   STATUS    RESTARTS   AGE   LABELS
+api-1     1/1     Running   0          3s    app=shop,env=prod,tier=api,track=stable
+api-2     1/1     Running   0          3s    app=shop,env=prod,tier=api,track=canary
+api-3     1/1     Running   0          3s    app=shop,env=staging,tier=api,track=stable
+batch-1   1/1     Running   0          3s    app=report,env=prod
+cache-1   1/1     Running   0          3s    app=shop,env=prod,tier=cache
+```
+
+```bash
+# 운영 API만
+kubectl get pods -n shop -l 'tier=api,env=prod'
+# shop 앱 중 API가 아닌 것
+kubectl get pods -n shop -l 'app=shop,tier!=api'
+# 그냥 tier가 api가 아닌 것
+kubectl get pods -n shop -l 'tier!=api'
+```
+
+```text
+NAME    READY   STATUS    RESTARTS   AGE
+api-1   1/1     Running   0          3s
+api-2   1/1     Running   0          3s
+NAME      READY   STATUS    RESTARTS   AGE
+cache-1   1/1     Running   0          3s
+NAME      READY   STATUS    RESTARTS   AGE
+batch-1   1/1     Running   0          13s
+cache-1   1/1     Running   0          13s
+```
+
+세 번째 결과에 `batch-1`이 있다. `batch-1`에는 tier 라벨이 아예 없다. `!=`는 "그 키가 없거나 값이 다르다"는 뜻이다. "tier가 api가 아닌 Pod"를 고르려다 tier 라벨을 달지 않은 다른 앱의 Pod까지 고르게 된다. 조회라면 웃고 넘어가지만 이 셀렉터로 지우면 사고다(아래 "라벨로 지울 때" 절).
+
+## 집합으로 고르기
+
+두 번째는 집합 기반(set-based)이다. `in`, `notin`, 키만 적는 존재 검사, `!키`로 쓰는 부재 검사가 있다.
+
+```bash
+# env가 prod나 staging이고, tier가 cache가 아닌 것
+kubectl get pods -n shop -l 'env in (prod,staging),tier notin (cache)'
+# track 라벨이 있는 것
+kubectl get pods -n shop -l 'track'
+# track 라벨이 없는 것
+kubectl get pods -n shop -l '!track'
+```
+
+```text
+NAME      READY   STATUS    RESTARTS   AGE
+api-1     1/1     Running   0          3s
+api-2     1/1     Running   0          3s
+api-3     1/1     Running   0          3s
+batch-1   1/1     Running   0          3s
+NAME    READY   STATUS    RESTARTS   AGE
+api-1   1/1     Running   0          3s
+api-2   1/1     Running   0          3s
+api-3   1/1     Running   0          3s
+NAME      READY   STATUS    RESTARTS   AGE
+batch-1   1/1     Running   0          3s
+cache-1   1/1     Running   0          3s
+```
+
+`notin`도 `!=`처럼 키가 없는 Pod를 통과시킨다. 첫 결과의 `batch-1`이 그렇다. 반대로 `in`은 키가 있어야 한다. 아래 그림은 첫 번째 셀렉터로 다섯 Pod를 하나씩 검사한다.
+
+<AlgoTrace
+  caption="셀렉터 env in (prod,staging),tier notin (cache) 로 Pod를 하나씩 본다"
+  memoryLabel="통과한 Pod"
+  cells={["api-1", "api-2", "api-3", "batch-1", "cache-1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["api-1"], caption: "env=prod는 집합 안에 있고, tier=api는 cache가 아니다. 통과." },
+    { pointer: 1, found: [0, 1], memory: ["api-1", "api-2"], caption: "track이 canary여도 이 셀렉터는 track을 보지 않는다. 통과." },
+    { pointer: 2, found: [0, 1, 2], memory: ["api-1", "api-2", "api-3"], caption: "env=staging도 집합 안이다. 통과." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["api-1", "api-2", "api-3", "batch-1"], caption: "tier 라벨이 없다. notin은 키가 없어도 참이라 통과한다. 의도한 결과인지 다시 본다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["api-1", "api-2", "api-3", "batch-1"], caption: "tier=cache가 notin 집합에 걸린다. 탈락." },
+  ]}
+/>
+
+YAML에서는 같은 내용을 `matchLabels`와 `matchExpressions`로 쓴다. 둘을 함께 쓰면 AND다. `matchLabels`의 한 쌍은 `operator: In`에 값 하나짜리 식과 같다.
+
+```yaml
+selector:
+  matchLabels:
+    app: shop
+  matchExpressions:
+    - { key: env, operator: In, values: [prod, staging] }
+    - { key: tier, operator: NotIn, values: [cache] }
+    - { key: track, operator: Exists }
+```
+
+어디서 무엇을 쓸 수 있는지가 다르다. Service와 옛 ReplicationController의 `spec.selector`는 키-값 맵이라 등호만 된다. Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, NetworkPolicy, PodDisruptionBudget, affinity는 `matchExpressions`까지 된다. 그리고 빈 셀렉터(`{}`)는 대부분 "전부"를 뜻한다. NetworkPolicy의 `podSelector: {}`가 네임스페이스의 모든 Pod에 걸리는 이유다. [API 오브젝트 글](/posts/k8s-api-objects)에서 본 `kubectl explain`의 "An empty label selector matches all objects"가 이것이다.
+
+아래에서 셀렉터 문자열을 직접 해석해 볼 수 있다. 테스트의 기댓값은 위 kubectl 결과와 같다.
+
+<CodePlayground
+  caption="라벨 셀렉터 해석하기"
+  functionName="matches"
+  initialCode={`function matches(labels, selector) {
+  // labels: { app: "shop", tier: "api" }
+  // selector: "app=shop,tier!=api" / "env in (prod,staging)" / "track" / "!track"
+  // 쉼표로 나눈 조건을 모두 만족하면 true
+  return true;
+}`}
+  solution={`function matches(labels, selector) {
+  if (selector.trim() === "") return true;
+  const parts = selector.match(/[^,(]+(\\([^)]*\\))?/g).map((p) => p.trim());
+  return parts.every((p) => {
+    let m;
+    if ((m = p.match(/^(\\S+)\\s+(in|notin)\\s+\\((.*)\\)$/))) {
+      const vals = m[3].split(",").map((v) => v.trim());
+      const has = m[1] in labels && vals.includes(labels[m[1]]);
+      return m[2] === "in" ? has : !has;
+    }
+    if ((m = p.match(/^(.+?)\\s*!=\\s*(.*)$/))) return labels[m[1]] !== m[2];
+    if ((m = p.match(/^(.+?)\\s*==?\\s*(.*)$/))) return labels[m[1]] === m[2];
+    if (p.startsWith("!")) return !(p.slice(1) in labels);
+    return p in labels;
+  });
+}`}
+  tests={[
+    { args: [{ app: "shop", tier: "api", env: "prod" }, "tier=api,env=prod"], expected: true, label: "api-1, 등호 AND" },
+    { args: [{ app: "shop", tier: "api", env: "staging" }, "tier=api,env=prod"], expected: false, label: "api-3, env가 다르다" },
+    { args: [{ app: "report", env: "prod" }, "tier!=api"], expected: true, label: "batch-1, 키가 없어도 !=는 참" },
+    { args: [{ app: "report", env: "prod" }, "env in (prod,staging),tier notin (cache)"], expected: true, label: "batch-1, notin도 참" },
+    { args: [{ app: "shop", tier: "cache", env: "prod" }, "env in (prod,staging),tier notin (cache)"], expected: false, label: "cache-1" },
+    { args: [{ app: "shop", tier: "cache" }, "!track"], expected: true, label: "부재 검사" },
+    { args: [{ app: "shop" }, "env in (prod)"], expected: false, label: "in은 키가 있어야 한다" },
+    { args: [{ app: "shop" }, ""], expected: true, label: "빈 셀렉터는 전부" },
+  ]}
+/>
+
+## 셀렉터는 URL 쿼리로 간다
+
+셀렉터는 kubectl이 거르는 게 아니다. API 서버에 쿼리 파라미터로 보내고 서버가 거른다. `-v=6`으로 보면 이렇다.
+
+```bash
+# 라벨 셀렉터와 필드 셀렉터를 함께 주고 요청 줄을 본다
+kubectl get pods -n shop -l 'tier=api,env in (prod)' --field-selector status.phase=Running -v=6 2>&1 | grep GET
+```
+
+```text
+I1021 00:48:26.272773   32603 round_trippers.go:553] GET https://127.0.0.1:32764/api/v1/namespaces/shop/pods?fieldSelector=status.phase%3DRunning&labelSelector=tier%3Dapi%2Cenv+in+%28prod%29&limit=500 200 OK in 7 milliseconds
+```
+
+<UrlAnatomy
+  caption="kubectl get -l ... --field-selector ... 가 보내는 쿼리"
+  base="/api/v1/namespaces/shop/pods"
+  params={[
+    { key: "fieldSelector", value: "status.phase%3DRunning", title: "필드 셀렉터", description: "라벨이 아니라 객체의 필드로 거른다. 종류마다 정해진 몇 개의 필드만 된다. %3D는 = 이다.", code: "status.phase=Running" },
+    { key: "labelSelector", value: "tier%3Dapi%2Cenv+in+%28prod%29", title: "라벨 셀렉터", description: "쉼표(%2C)로 이은 조건은 AND다. 공백은 +, 괄호는 %28 %29로 인코딩된다. 서버가 거르니 결과만 받는다.", code: "tier=api,env in (prod)" },
+    { key: "limit", value: "500", title: "페이지 크기", description: "kubectl은 목록을 500개씩 나눠 받는다. 더 있으면 응답의 continue 토큰으로 다음 페이지를 부른다." },
+  ]}
+/>
+
+watch도 같은 쿼리를 받는다. 컨트롤러가 "내 라벨이 붙은 Pod만" 지켜볼 수 있는 이유다. 이 글 뒤편의 [컨트롤러 글](/posts/k8s-controllers-reconcile)에서 만든 작은 컨트롤러도 이 쿼리로 자기 Pod만 본다.
+
+## Service는 셀렉터로 엔드포인트를 만든다
+
+처음의 장애로 가 보자. Service에는 셀렉터만 있고 Pod 목록이 없다. EndpointSlice 컨트롤러가 셀렉터에 맞는 Pod를 찾아 그 IP를 EndpointSlice에 적고, 각 노드의 kube-proxy가 그걸 보고 규칙을 만든다. 그래서 셀렉터가 넓으면 엔드포인트도 넓어진다.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-api
+  namespace: shop
+spec:
+  selector:
+    app: shop        # 앱 이름만 적었다
+  ports:
+    - port: 80
+      targetPort: 8080
+```
+
+```bash
+# Service가 고른 Pod 이름과 IP를 본다
+kubectl get endpointslices -n shop -l kubernetes.io/service-name=shop-api \
+  -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.addresses[0]}{"\n"}{end}' | sort
+```
+
+```text
+api-1	10.0.0.3
+api-2	10.0.0.1
+api-3	10.0.0.4
+cache-1	10.0.0.2
+```
+
+운영 API 둘만 있어야 하는데 스테이징 API(`api-3`)와 캐시(`cache-1`)까지 들어 있다. 요청 넷 중 둘은 엉뚱한 곳으로 간다. 캐시 Pod는 8080에서 듣지 않으니 연결 거부가 나고, 스테이징은 다른 DB를 보고 있으니 데이터가 이상하게 나온다. 아래 그림에서 다음을 누르면 요청이 Pod를 고르는 모습이 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="셀렉터 app=shop 은 캐시와 스테이징 Pod까지 엔드포인트에 넣는다"
+  zones={[
+    { id: "prod", label: "env=prod", x: 6, y: 150, w: 270, h: 140, tone: "private" },
+    { id: "stg", label: "env=staging", x: 284, y: 150, w: 110, h: 140, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "cli", label: "order-web", sub: "호출하는 쪽", x: 80, y: 40, icon: "client" },
+    { id: "svc", label: "shop-api", sub: "app=shop", x: 260, y: 40, icon: "lb", w: 112 },
+    { id: "a1", label: "api-1", sub: "10.0.0.3", x: 46, y: 220, icon: "container", w: 76 },
+    { id: "a2", label: "api-2", sub: "10.0.0.1", x: 138, y: 220, icon: "container", w: 76 },
+    { id: "c1", label: "cache-1", sub: "10.0.0.2", x: 226, y: 220, icon: "db", w: 76 },
+    { id: "a3", label: "api-3", sub: "10.0.0.4", x: 339, y: 220, icon: "container", w: 80 },
+  ]}
+  links={[
+    { from: "cli", to: "svc" },
+    { from: "svc", to: "a1" },
+    { from: "svc", to: "a2" },
+    { from: "svc", to: "c1", dashed: true },
+    { from: "svc", to: "a3", dashed: true },
+  ]}
+  steps={[
+    { path: ["cli", "svc", "a1"], packet: "GET", title: "운이 좋으면 운영 API로 간다", detail: "kube-proxy 규칙은 엔드포인트 넷 중 하나를 고른다. 이번에는 api-1이 받았다." },
+    { path: ["cli", "svc", "c1"], packet: "GET", blocked: true, highlight: ["c1"], title: "캐시 Pod로 가면 연결이 거부된다", detail: "cache-1도 app=shop이라 엔드포인트에 들어 있다. 8080에서 듣는 프로세스가 없으니 연결이 거부된다. 앱 로그에는 아무것도 없다.", payload: "connect: connection refused" },
+    { path: ["cli", "svc", "a3"], packet: "GET", highlight: ["stg"], title: "스테이징 Pod가 운영 요청을 받는다", detail: "api-3은 진짜 API라 응답은 한다. 다만 스테이징 DB를 본다. 에러가 아니라 이상한 데이터로 나타나 더 늦게 발견된다." },
+    { path: ["cli", "svc", "a2"], packet: "GET", highlight: ["prod"], title: "셀렉터를 좁히면 둘만 남는다", detail: "selector에 tier=api, env=prod를 더하면 EndpointSlice에는 api-1과 api-2만 남는다.", payload: "selector: {app: shop, tier: api, env: prod}" },
+  ]}
+/>
+
+셀렉터를 좁히고 다시 보면 둘만 남는다.
+
+```bash
+# 셀렉터에 tier와 env를 더한다
+kubectl patch svc shop-api -n shop --type=merge -p '{"spec":{"selector":{"app":"shop","tier":"api","env":"prod"}}}'
+kubectl get endpointslices -n shop -l kubernetes.io/service-name=shop-api \
+  -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name}{"\t"}{.addresses[0]}{"\n"}{end}' | sort
+kubectl describe svc shop-api -n shop | grep -E 'Selector|Endpoints'
+```
+
+```text
+service/shop-api patched
+api-1	10.0.0.3
+api-2	10.0.0.1
+Selector:                 app=shop,env=prod,tier=api
+Endpoints:                10.0.0.3:8080,10.0.0.1:8080
+```
+
+반대로 셀렉터가 아무것에도 맞지 않으면 엔드포인트가 비고, 연결이 0ms 만에 거절된다. 대소문자도 구분한다(`tier: API`는 `tier: api`와 다르다). 그 증상과 kube-proxy가 REJECT하는 규칙은 [Service 타입 글](/posts/k8s-service-types)에 있다.
+
+이 상황을 현장에서 만나면 순서는 이렇다. 요청 일부만 실패하고 앱 로그에 흔적이 없으면, Service의 셀렉터와 EndpointSlice의 `targetRef.name`을 먼저 본다. 엔드포인트 수가 Deployment의 replicas보다 많으면 셀렉터가 넓은 것이다. `kubectl get pods -l '<Service의 셀렉터>' -L app,tier,env`로 걸린 Pod의 라벨을 한 줄에 보면 누가 끼어들었는지 바로 보인다.
+
+## 셀렉터가 남의 Pod를 고르면
+
+Service는 고르기만 하니 트래픽이 새는 정도로 끝난다. ReplicaSet은 고른 Pod의 수를 맞추니 더 위험하다. ReplicaSet은 셀렉터에 맞는데 주인(controller ownerReference)이 없는 Pod를 보면 자기 것으로 입양한다. 그리고 수가 넘치면 지운다.
+
+디버깅하려고 `app=worker` 라벨로 Pod 셋을 손으로 띄워 둔 상황을 만들고, 같은 라벨의 ReplicaSet(replicas 1)을 apply했다.
+
+```bash
+# 손으로 띄운 Pod 셋 (주인 없음)
+for i in 1 2 3; do kubectl run debug-$i -n shop --image=busybox:1.36 --labels=app=worker; done
+# 셀렉터가 app=worker인 ReplicaSet을 만든다
+kubectl apply -f rs.yaml
+kubectl get pods -n shop -l app=worker -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].name
+kubectl get events -n shop --field-selector involvedObject.name=worker
+```
+
+```text
+replicaset.apps/worker created
+NAME      OWNER    
+debug-1   worker   
+LAST SEEN   TYPE     REASON             OBJECT              MESSAGE
+11s         Normal   SuccessfulDelete   replicaset/worker   Deleted pod: debug-2
+11s         Normal   SuccessfulDelete   replicaset/worker   Deleted pod: debug-3
+```
+
+ReplicaSet은 Pod를 하나도 만들지 않았다. 이미 셋이 있으니 하나를 입양하고 둘을 지웠다. 손으로 띄운 디버그 Pod가 사라진 이유를 이벤트가 알려 준다.
+
+<SequenceDiagram
+  caption="셀렉터에 맞는 주인 없는 Pod는 입양되고, 넘치면 지워진다"
+  actors={[
+    { id: "user", label: "사람" },
+    { id: "api", label: "API 서버" },
+    { id: "rs", label: "ReplicaSet 컨트롤러" },
+  ]}
+  steps={[
+    { from: "user", to: "api", label: "Pod 3개 생성", title: "손으로 Pod를 띄운다", detail: "kubectl run으로 app=worker Pod 셋을 만든다. ownerReferences가 없다." },
+    { from: "user", to: "api", label: "RS 생성", title: "같은 라벨의 ReplicaSet을 만든다", detail: "selector app=worker, replicas 1인 ReplicaSet을 apply한다.", payload: "selector:\n  matchLabels: { app: worker }" },
+    { from: "rs", to: "api", label: "list -l app=worker", title: "셀렉터로 Pod를 찾는다", detail: "셀렉터에 맞는 Pod가 셋 있다. 셋 다 controller 주인이 없다." },
+    { from: "rs", to: "api", label: "PATCH ownerRef", title: "입양한다", detail: "주인 없는 Pod의 ownerReferences에 자기를 controller로 적는다. 이제 셋 다 이 ReplicaSet 소유다." },
+    { from: "rs", to: "api", label: "DELETE ×2", title: "넘치는 만큼 지운다", detail: "원하는 수는 1인데 셋이다. 둘을 지운다. 이벤트에 Deleted pod: debug-2, debug-3이 남는다." },
+  ]}
+/>
+
+Deployment가 만든 ReplicaSet은 셀렉터에 `pod-template-hash`가 더 붙어서 손으로 띄운 Pod를 입양하지 않는다. 그래서 Deployment끼리는 셀렉터가 겹쳐도 평소에는 조용하다. 같은 네임스페이스에 셀렉터가 똑같이 `app: web`인 Deployment 둘(`web`, `web-v2`)을 띄우면 각자 자기 ReplicaSet만 가진다. 문제는 한쪽의 ReplicaSet이 주인을 잃는 순간이다.
+
+```bash
+# web만 지우되 ReplicaSet은 남긴다 (orphan)
+kubectl delete deploy web -n overlap --cascade=orphan
+kubectl get rs -n overlap -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,OWNER:.metadata.ownerReferences[0].name
+kubectl get events -n overlap --field-selector involvedObject.name=web-v2 -o custom-columns=REASON:.reason,MESSAGE:.message
+```
+
+```text
+deployment.apps "web" deleted
+NAME                DESIRED   OWNER
+web-7b64654bb6      0         web-v2
+web-v2-68f449b5c9   2         web-v2
+REASON              MESSAGE
+ScalingReplicaSet   Scaled up replica set web-v2-68f449b5c9 to 2
+ScalingReplicaSet   Scaled down replica set web-7b64654bb6 to 0 from 2
+```
+
+orphan으로 남긴 `web`의 ReplicaSet을 셀렉터가 같은 `web-v2`가 입양했다. 그리고 자기 템플릿과 다르니 옛 리비전으로 보고 0으로 내렸다. "Deployment는 지우되 Pod는 살려 두자"고 한 일이 다른 Deployment 때문에 Pod를 모두 내리는 일이 됐다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="셀렉터가 같은 Deployment 둘: 한쪽이 주인을 잃으면 다른 쪽이 입양해 0으로 내린다"
+  zones={[
+    { id: "ns", label: "namespace overlap", x: 6, y: 6, w: 388, h: 248, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "d1", label: "web", sub: "deploy, 삭제", x: 100, y: 56, icon: "gateway", w: 128 },
+    { id: "d2", label: "web-v2", sub: "deploy app=web", x: 300, y: 56, icon: "gateway", w: 128 },
+    { id: "r1", label: "rs 7b6465", sub: "nginx:1.27", x: 100, y: 150, icon: "server", w: 128 },
+    { id: "r2", label: "rs 68f449", sub: "nginx:1.28", x: 300, y: 150, icon: "server", w: 128 },
+    { id: "p1", label: "Pod ×2", sub: "1.27", x: 100, y: 222, icon: "container", w: 104 },
+    { id: "p2", label: "Pod ×2", sub: "1.28", x: 300, y: 222, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "d1", to: "r1", dashed: true },
+    { from: "d2", to: "r2" },
+    { from: "r1", to: "p1" },
+    { from: "r2", to: "p2" },
+    { from: "d2", to: "r1", dashed: true },
+  ]}
+  steps={[
+    { path: ["d1", "r1", "p1"], title: "처음에는 각자 자기 것만 가진다", detail: "ReplicaSet의 ownerReferences가 주인을 uid로 가리키고, 셀렉터에 pod-template-hash가 붙어 있어 서로 섞이지 않는다." },
+    { path: ["d1"], blocked: true, title: "web을 orphan으로 지운다", detail: "Deployment web만 사라지고 rs 7b64654bb6은 주인 없이 남는다. Pod 둘은 계속 돈다." },
+    { path: ["d2", "r1"], packet: "adopt", highlight: ["r1"], title: "web-v2가 셀렉터로 찾아 입양한다", detail: "rs 7b64654bb6의 라벨 app=web이 web-v2의 셀렉터에 맞고 주인이 없다. web-v2가 자기 것으로 적는다." },
+    { path: ["d2", "r1", "p1"], packet: "scale 0", blocked: true, title: "옛 리비전으로 보고 0으로 내린다", detail: "템플릿이 web-v2와 다르니 옛 ReplicaSet이다. 0으로 줄이고, 살려 두려던 Pod가 모두 내려간다.", payload: "Scaled down replica set web-7b64654bb6 to 0 from 2" },
+  ]}
+/>
+
+이 사고를 막는 방법은 셀렉터를 앱마다 겹치지 않게 짓는 것이다. 한 네임스페이스에 여러 팀과 여러 앱이 있으면 `app: web` 같은 흔한 이름은 반드시 겹친다. 셀렉터에는 앱을 유일하게 가리키는 라벨을 쓴다. 아래 권장 라벨의 `app.kubernetes.io/name`과 `app.kubernetes.io/instance` 조합이 그 역할을 한다.
+
+## Deployment 셀렉터는 왜 바꿀 수 없나
+
+`apps/v1`부터 Deployment, ReplicaSet, StatefulSet, DaemonSet의 `spec.selector`는 만든 뒤 바꿀 수 없다. 바꾸려고 하면 `field is immutable` 에러가 난다(실제 출력은 [Deployment 글](/posts/k8s-deployment)의 "셀렉터는 바꿀 수 없다" 절에 있다). 이유는 위에서 본 입양이다. 셀렉터를 바꾸는 순간 지금 Pod들은 주인의 셀렉터에서 빠지고, 새 셀렉터에 맞는 남의 Pod가 들어올 수 있다. 그 결과를 예측하기 어려우니 아예 막았다. `extensions/v1beta1` 시절에는 셀렉터를 생략하면 템플릿 라벨로 채워졌고 나중에 바꿀 수도 있었다. `apps/v1`은 셀렉터를 반드시 적게 하고 바꿀 수 없게 했다.
+
+셀렉터와 템플릿 라벨은 늘 맞아야 한다. 템플릿 라벨은 셀렉터보다 많아도 되지만, 셀렉터를 만족하지 못하면 만들어지지 않는다.
+
+```bash
+# 템플릿 라벨에 오타를 낸 ReplicaSet
+kubectl apply -f rs-bad.yaml
+```
+
+```text
+The ReplicaSet "worker" is invalid: spec.template.metadata.labels: Invalid value: map[string]string{"app":"wrker"}: `selector` does not match template `labels`
+```
+
+그래서 셀렉터에는 바뀌지 않을 라벨만 넣는다. 버전, 트랙(canary/stable), 커밋 해시처럼 배포마다 바뀌는 값은 템플릿 라벨에만 두고 셀렉터에는 넣지 않는다. 카나리처럼 트랙을 나눠야 하면 Deployment를 둘로 나누고, 둘이 공유하는 라벨만 Service 셀렉터에 둔다. 셀렉터를 꼭 바꿔야 하면 새 이름으로 Deployment를 하나 더 만들어 Service가 두 쪽을 다 고르게 한 뒤, 트래픽이 넘어가면 옛 Deployment를 지운다. Helm 차트를 업그레이드하다 이 에러를 만나는 경우가 많은데, 차트가 셀렉터 라벨을 바꿨기 때문이다.
+
+## 권장 라벨 app.kubernetes.io
+
+라벨 이름을 팀마다 따로 지으면 도구가 앱을 알아볼 수 없다. 쿠버네티스 문서는 공통으로 쓸 라벨 여섯 개를 권한다. Helm 차트가 기본으로 넣고, 대시보드와 ArgoCD 같은 도구가 이 라벨로 앱을 묶어 보여 준다.
+
+```yaml
+metadata:
+  labels:
+    app.kubernetes.io/name: shop-api          # 앱 이름
+    app.kubernetes.io/instance: shop-api-prod # 이 설치본을 가리키는 유일한 이름
+    app.kubernetes.io/version: "1.4.2"        # 앱 버전
+    app.kubernetes.io/component: api          # 구성 요소 (api, cache, worker)
+    app.kubernetes.io/part-of: shop           # 묶음 이름
+    app.kubernetes.io/managed-by: Helm        # 관리 도구
+```
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="권장 라벨은 셀렉터용과 설명용으로 갈린다"
+  nodes={[
+    { id: "part", label: "part-of: shop", sub: "묶음", x: 220, y: 36, w: 150 },
+    { id: "api", label: "name: shop-api", sub: "instance: shop-api-prod", x: 110, y: 130, w: 170 },
+    { id: "cache", label: "name: shop-cache", sub: "instance: shop-cache-prod", x: 330, y: 130, w: 170 },
+    { id: "sel", label: "셀렉터", sub: "name + instance", x: 110, y: 240, w: 150 },
+    { id: "info", label: "설명용", sub: "version, managed-by", x: 330, y: 240, w: 150 },
+  ]}
+  edges={[
+    { from: "part", to: "api" },
+    { from: "part", to: "cache" },
+    { from: "api", to: "sel", label: "고정" },
+    { from: "api", to: "info", label: "바뀐다", dashed: true },
+  ]}
+/>
+
+이 중 셀렉터에 넣는 것은 `name`과 `instance` 정도다. 둘을 합치면 한 클러스터에서 그 설치본 하나를 가리킨다. Helm의 기본 차트 템플릿도 `selectorLabels`에 이 둘만 넣는다. `version`은 바뀌니 셀렉터에 넣지 않는다. 템플릿 라벨에만 두면 `kubectl get pods -L app.kubernetes.io/version`으로 배포 중에 어느 버전이 몇 개 떠 있는지 한 줄로 볼 수 있다. `managed-by`는 누가 이 객체를 고치는지 알려 준다. Helm이 관리하는 객체를 kubectl로 직접 고치면 다음 업그레이드에서 덮어써진다.
+
+라벨은 Pod만의 것도 아니다. 노드에는 `kubernetes.io/hostname`, `topology.kubernetes.io/zone` 같은 라벨이 붙어 있고, nodeSelector와 affinity가 이걸로 노드를 고른다. 그 쪽은 [스케줄링 글](/posts/k8s-pod-scheduling)에서 다뤘다.
+
+## 필드 셀렉터
+
+라벨이 아닌 객체 자체의 필드로 거를 때는 `--field-selector`를 쓴다. 모든 필드가 되지는 않는다. 종류마다 서버가 색인해 둔 몇 개만 되고, `metadata.name`과 `metadata.namespace`는 모든 종류에서 된다. Pod는 `spec.nodeName`, `status.phase`, `spec.serviceAccountName` 같은 것이 된다. 연산자는 `=`, `==`, `!=`뿐이다.
+
+```bash
+# node-a에서 Running인 Pod (노드 장애 때 영향 범위 보기)
+kubectl get pods -A --field-selector spec.nodeName=node-a,status.phase=Running
+# 라벨을 필드 셀렉터로 거르면
+kubectl get pods -n shop --field-selector metadata.labels.app=shop
+# default가 아닌 네임스페이스의 Service
+kubectl get svc -A --field-selector metadata.namespace!=default
+```
+
+```text
+NAMESPACE   NAME      READY   STATUS    RESTARTS   AGE
+shop        api-1     1/1     Running   0          51s
+shop        api-3     1/1     Running   0          51s
+shop        batch-1   1/1     Running   0          51s
+Error from server (BadRequest): Unable to find "/v1, Resource=pods" that match label selector "", field selector "metadata.labels.app=shop": field label not supported: metadata.labels.app
+NAMESPACE   NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+shop        shop-api   ClusterIP   10.0.0.28    <none>        80/TCP    38s
+```
+
+현장에서 자주 쓰는 조합은 노드 이름으로 Pod 찾기(노드를 비우기 전에 무엇이 떠 있는지), `status.phase=Failed`나 `!=Running`으로 비정상 Pod 찾기, 이벤트를 `involvedObject.name`이나 `type=Warning`으로 거르기다. 이벤트 거르기는 [Pod 문제 해결 글](/posts/k8s-pod-troubleshooting)에서 자세히 쓴다.
+
+## 라벨로 지울 때
+
+`kubectl delete -l`은 셀렉터에 맞는 것을 모두 지운다. 앞에서 본 `!=`의 함정이 여기서 터진다. "API가 아닌 Pod를 정리하자"며 `tier!=api`로 지우면 tier 라벨이 없는 다른 앱의 Pod까지 지워진다. 서버 쪽 dry-run으로 먼저 보면 바로 보인다.
+
+```bash
+# 지우지 않고, 서버가 무엇을 지울지만 알려 준다
+kubectl delete pods -n shop -l 'tier!=api' --dry-run=server
+# 앱 이름을 함께 걸면 의도한 것만 남는다
+kubectl delete pods -n shop -l 'app=shop,tier!=api' --dry-run=server
+```
+
+```text
+pod "batch-1" deleted (server dry run)
+pod "cache-1" deleted (server dry run)
+pod "web-7b64654bb6-jgqqd" deleted (server dry run)
+pod "web-7b64654bb6-ppppt" deleted (server dry run)
+
+pod "cache-1" deleted (server dry run)
+```
+
+<Callout kind="warning" title="셀렉터로 지우기 전에">
+`kubectl delete -l`, `kubectl delete --all`, `-A`가 섞인 명령은 먼저 같은 셀렉터로 `kubectl get`을 하거나 `--dry-run=server`를 붙여 목록을 확인한다. `!=`와 `notin`은 키가 없는 객체도 고른다는 걸 기억하고, 앱 이름 같은 긍정 조건을 함께 건다. 지워진 Pod는 컨트롤러가 다시 만들지만 손으로 만든 Pod, Secret, PVC는 되살릴 수 없으니 `kubectl get -o yaml`로 백업해 두는 게 되돌리는 유일한 방법이다.
+</Callout>
+
+## 라벨 한 줄이 정하는 범위
+
+라벨은 고르기 위한 짧은 이름표이고, 고를 일이 없는 정보는 어노테이션에 둔다. 셀렉터는 등호와 집합 두 가지로 쓰며 쉼표는 AND이고, `!=`와 `notin`은 키가 없는 객체도 통과시킨다. Service는 셀렉터로 엔드포인트를 만들고 ReplicaSet은 셀렉터로 주인 없는 Pod를 입양해 수를 맞추니, 셀렉터가 넓으면 트래픽이 새고 남의 Pod가 지워진다. 그래서 셀렉터에는 앱을 유일하게 가리키면서 바뀌지 않는 라벨(`app.kubernetes.io/name`과 `instance`)만 넣는다. 이 셀렉터를 쥐고 상태를 맞추는 쪽이 어떻게 생겼는지는 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)에서 직접 만들어 본다.
+
+## 면접에서 나올 만한 질문
+
+### 라벨과 어노테이션은 어떻게 나눠 쓰나요?
+
+셀렉터로 고를 일이 있으면 라벨, 없으면 어노테이션이다. 라벨은 키 이름 63자, 값 63자에 쓸 수 있는 글자가 정해져 있고 API 서버가 걸러 줄 수 있다. 어노테이션은 객체 전체 256KiB 안에서 아무 글자나 쓸 수 있지만 고르는 데는 못 쓴다. 앱 이름·환경·팀은 라벨, 커밋 메시지·빌드 URL·도구 설정은 어노테이션에 둔다.
+
+### 등호 기반 셀렉터와 집합 기반 셀렉터의 차이는요?
+
+등호 기반은 `=`, `!=`로 값 하나를 비교하고, 집합 기반은 `in`, `notin`, 존재·부재 검사를 쓴다. 쉼표로 이으면 모두 AND이고 OR는 없다. Service의 selector는 키-값 맵이라 등호만 되고, Deployment·Job·NetworkPolicy·affinity는 matchExpressions로 집합 기반까지 된다. `!=`와 `notin`은 그 키가 없는 객체도 통과시킨다는 점을 조심한다.
+
+### Service의 엔드포인트에 엉뚱한 Pod가 들어 있습니다. 왜 그렇고 어떻게 확인하나요?
+
+Service 셀렉터가 다른 앱의 Pod 라벨과도 맞을 만큼 넓기 때문이다. EndpointSlice의 targetRef 이름을 뽑아 보고, 그 셀렉터로 `kubectl get pods -l ... -L`을 해서 끼어든 Pod의 라벨을 본다. 셀렉터에 앱을 유일하게 가리키는 라벨(name과 instance, 필요하면 component)을 더하면 엔드포인트가 바로 줄어든다. 증상은 일부 요청만 실패하고 앱 로그에 흔적이 없는 모습으로 나타난다.
+
+### 손으로 띄운 Pod가 갑자기 사라졌습니다. 무엇을 의심하나요?
+
+셀렉터가 그 Pod의 라벨과 맞는 ReplicaSet이 입양한 뒤 replicas를 넘쳐서 지웠을 수 있다. ReplicaSet은 셀렉터에 맞고 controller 주인이 없는 Pod를 자기 것으로 만들고 수를 맞춘다. 네임스페이스 이벤트에서 `Deleted pod: 이름`을 찾으면 누가 지웠는지 나온다. Deployment가 만든 ReplicaSet은 pod-template-hash 라벨이 셀렉터에 있어 이런 입양을 하지 않는다.
+
+### Deployment의 selector는 왜 바꿀 수 없나요? 바꿔야 하면 어떻게 하나요?
+
+selector를 바꾸면 지금 Pod가 관리 대상에서 빠지고 남의 Pod가 새로 들어올 수 있어서, apps/v1부터 만든 뒤 바꿀 수 없게 막았다. 꼭 바꿔야 하면 새 이름으로 Deployment를 하나 더 띄우고 Service가 양쪽을 고르게 한 뒤 옛 것을 지운다. 그래서 셀렉터에는 처음부터 버전처럼 바뀌는 값을 넣지 않는다.
+
+### 셀렉터가 같은 Deployment 두 개가 있으면 무슨 일이 생기나요?
+
+평소에는 ReplicaSet마다 pod-template-hash가 셀렉터에 있고 ownerReference가 있어 서로의 ReplicaSet을 건드리지 않는다. 하지만 Service처럼 두 Deployment의 Pod를 모두 고르는 쪽이 있고, 한쪽 ReplicaSet이 주인을 잃으면 다른 Deployment가 입양해 옛 리비전으로 보고 0으로 내린다. orphan 삭제나 Deployment 이름 변경 같은 작업에서 터진다. 셀렉터를 앱마다 유일하게 짓는 것이 답이다.
+
+### 필드 셀렉터는 라벨 셀렉터와 무엇이 다른가요?
+
+객체의 필드 값으로 거르며, 종류마다 서버가 정한 몇 개 필드만 쓸 수 있다. 모든 종류에서 metadata.name과 metadata.namespace가 되고, Pod는 spec.nodeName, status.phase 같은 것이 된다. 연산자는 =, ==, !=뿐이고 라벨을 필드 셀렉터로 거르면 field label not supported 에러가 난다. 노드를 비우기 전 그 노드의 Pod를 찾거나, 이벤트를 객체 이름으로 거를 때 쓴다.

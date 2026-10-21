@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-feature-maturity",
+    title: "alpha, beta, GA와 API 폐기: 업그레이드 전에 옛 API 찾기",
+    summary: "기능의 feature gate와 API 버전이 따로 켜지는 방식, 폐기 정책의 기한, extensions/v1beta1과 PodSecurityPolicy가 사라진 과정을 보고, Warning 헤더·지표·감사 로그·pluto·kubectl convert로 업그레이드 전에 옛 API를 찾아 옮기는 법을 정리한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["feature gate", "kubectl convert", "apiserver_requested_deprecated_apis", "pluto", "API 폐기 정책"],
+  },
+  {
+    slug: "k8s-controllers-reconcile",
+    title: "컨트롤러와 reconcile: 이벤트가 아니라 상태를 보고 움직인다",
+    summary: "원하는 상태와 지금 상태를 맞추는 루프를 watch, informer, 작업 큐로 나눠 보고, level-triggered와 멱등성, 409 충돌 처리, 리더 선출을 Node로 만든 작은 컨트롤러를 실습 API 서버에 붙여 확인한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Distributed Systems", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["reconcile 루프", "level-triggered", "informer", "컨트롤 루프"],
+  },
+  {
+    slug: "k8s-labels-selectors",
+    title: "라벨과 셀렉터: 셀렉터 한 줄이 고르는 범위",
+    summary: "라벨과 어노테이션의 차이, 등호·집합 셀렉터와 키가 없어도 통과하는 !=·notin의 함정, Service 엔드포인트가 넓어지는 사고, ReplicaSet과 Deployment가 남의 Pod를 입양하는 모습, 바꿀 수 없는 셀렉터와 권장 라벨, 필드 셀렉터를 실제로 재현한다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["라벨 셀렉터", "matchExpressions", "필드 셀렉터", "app.kubernetes.io/name"],
+  },
+  {
+    slug: "k8s-api-objects",
+    title: "쿠버네티스 API 오브젝트: spec과 status, resourceVersion, finalizer",
+    summary: "매니페스트의 다섯 칸이 각각 누구의 것인지에서 출발해 API 그룹과 버전이 URL로 이어지는 방식, generation과 observedGeneration, resourceVersion과 409, ownerReferences와 가비지 컬렉션, 삭제를 붙잡는 finalizer를 실습 클러스터에서 따라간다.",
+    topic: "programming/server-infra/kubernetes/foundation",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["resourceVersion", "observedGeneration", "ownerReferences", "finalizer"],
+  },
+  {
     slug: "devops-networking-roadmap",
     title: "DevOps 네트워킹 지도: 공부 순서와 증상별로 펼 글",
     summary: "블로그의 네트워크 글 쉰 편 가까이를 기본 개념부터 SDN까지 열 칸으로 나눠 읽는 순서를 정하고, 칸마다 그 글이 답하는 질문과 그 자리에 두는 이유를 붙인다. 502인데 앱 로그가 비었을 때, Pod에서만 이름이 안 풀릴 때처럼 증상에서 처음 펼 글로 가는 길도 정리한다.",
