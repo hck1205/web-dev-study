@@ -25,7 +25,9 @@ export const TOPICS: Topic[] = [
           { id: "api", label: "API Design", description: "페이지네이션, 멱등성, 속도 제한, 배치 처리" },
           { id: "architecture", label: "Architecture", description: "모놀리스, 마이크로서비스, 레이어드, 헥사고날, CQRS, 이벤트 소싱" },
           { id: "auth", label: "Auth", description: "로그인, 세션, 토큰, 권한 위임" },
+          { id: "frameworks", label: "Frameworks", description: "Node.js 런타임, Express 미들웨어, FastAPI" },
           { id: "messaging", label: "Messaging", description: "이벤트 기반 구조, Kafka, RabbitMQ, 전달 보장" },
+          { id: "testing", label: "Testing", description: "단위·통합·E2E 테스트, 테스트 더블, 실제 DB로 테스트" },
         ],
       },
       {
