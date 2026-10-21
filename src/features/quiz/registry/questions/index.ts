@@ -141,10 +141,13 @@ import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
 import { K8S_FEATURE_MATURITY } from "./k8s-feature-maturity";
 import { K8S_HPA } from "./k8s-hpa";
+import { K8S_IN_PLACE_RESIZE } from "./k8s-in-place-resize";
 import { K8S_LABELS_SELECTORS } from "./k8s-labels-selectors";
 import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
+import { K8S_NODE_AUTOSCALING_KARPENTER } from "./k8s-node-autoscaling-karpenter";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
+import { K8S_POD_DISRUPTION_BUDGET } from "./k8s-pod-disruption-budget";
 import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
 import { K8S_POD_MULTICONTAINER } from "./k8s-pod-multicontainer";
 import { K8S_POD_PROBES } from "./k8s-pod-probes";
@@ -159,6 +162,7 @@ import { K8S_SECRET } from "./k8s-secret";
 import { K8S_SECURITY_CONTEXT } from "./k8s-security-context";
 import { K8S_SERVICE_TYPES } from "./k8s-service-types";
 import { K8S_SERVICEACCOUNT_TOKENS } from "./k8s-serviceaccount-tokens";
+import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
@@ -485,10 +489,13 @@ export const QUESTION_SETS = [
   K8S_DEPLOYMENT,
   K8S_FEATURE_MATURITY,
   K8S_HPA,
+  K8S_IN_PLACE_RESIZE,
   K8S_LABELS_SELECTORS,
   K8S_NAMESPACE,
   K8S_NETWORK_POLICY,
+  K8S_NODE_AUTOSCALING_KARPENTER,
   K8S_POD_BASICS,
+  K8S_POD_DISRUPTION_BUDGET,
   K8S_POD_LIFECYCLE,
   K8S_POD_MULTICONTAINER,
   K8S_POD_PROBES,
@@ -503,6 +510,7 @@ export const QUESTION_SETS = [
   K8S_SECURITY_CONTEXT,
   K8S_SERVICE_TYPES,
   K8S_SERVICEACCOUNT_TOKENS,
+  K8S_VPA,
   KAFKA_BASICS,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,

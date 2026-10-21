@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-in-place-resize",
+    title: "재시작 없는 Pod 리소스 변경: resize 하위 리소스와 resizePolicy",
+    summary: "Deployment를 고치면 Pod가 모두 새로 뜨는 문제에서 출발해 1.35에 GA가 된 in-place resize를 resize 하위 리소스로 요청하고, 원하는 값과 실제 값이 갈리는 과정, resizePolicy로 재시작을 고르는 법, 바꿀 수 없는 것들, 스케줄러와 쿼터가 이를 세는 방식을 본다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "Linux", "Performance"],
+    date: "2026-10-22",
+    keywords: ["in-place resize", "resizePolicy", "resize 하위 리소스", "PodResizePending"],
+  },
+  {
+    slug: "k8s-node-autoscaling-karpenter",
+    title: "노드 오토스케일링: Cluster Autoscaler와 Karpenter",
+    summary: "HPA가 늘린 Pod가 Pending으로 남는 장면에서 출발해 Cluster Autoscaler가 노드 그룹을 고르는 expander와 Karpenter가 Pod 묶음에 맞는 인스턴스를 고르는 bin-packing을 비교한다. 빈자리를 모아 노드를 바꾸는 consolidation, 축소를 막는 것들, 스팟 회수, 노드가 붙기까지의 시간, 0까지 줄이기를 실제 Karpenter 로그로 따라간다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "AWS", "Scalability", "Cloud", "DevOps"],
+    date: "2026-10-22",
+    keywords: ["Karpenter", "Cluster Autoscaler", "NodePool", "expander"],
+  },
+  {
+    slug: "k8s-vpa",
+    title: "VPA: 사용 기록으로 requests를 정하는 세 부품",
+    summary: "requests를 얼마로 잡을지 모르는 상황에서 출발해 VPA의 recommender, updater, admission controller가 나눠 맡는 일과 추천값이 히스토그램에서 나오는 방식을 실제로 돌려 본다. updateMode별 동작, 기록이 얇을 때의 함정, HPA와 같은 CPU에 걸면 생기는 일, 운영에서 마주치는 문제를 정리한다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "Performance", "Scalability"],
+    date: "2026-10-22",
+    keywords: ["VPA", "Vertical Pod Autoscaler", "VPA recommender", "updateMode"],
+  },
+  {
+    slug: "k8s-pod-disruption-budget",
+    title: "PodDisruptionBudget: drain이 멈추는 이유와 eviction 429",
+    summary: "노드를 비우다 drain이 끝없이 재시도하는 장면에서 출발해 PDB가 막는 중단과 못 막는 중단, eviction API가 429를 돌려주는 과정, ALLOWED DISRUPTIONS 계산과 퍼센트 올림을 본다. minAvailable과 maxUnavailable 선택, unhealthyPodEvictionPolicy, HPA와 노드 오토스케일러와 함께 쓸 때의 함정까지 실습 클러스터에서 재현한다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "SRE", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["PodDisruptionBudget", "unhealthyPodEvictionPolicy", "자발적 중단", "ALLOWED DISRUPTIONS"],
+  },
+  {
     slug: "k8s-pod-security-admission",
     title: "Pod Security Admission: 네임스페이스 라벨로 거는 보안 수준",
     summary: "dry-run 라벨 두 줄로 네임스페이스의 위반을 미리 보는 데서 출발해 privileged·baseline·restricted의 검사 항목, enforce·warn·audit와 버전 고정, Deployment는 통과하고 Pod만 막히는 이유, 클러스터 기본값과 예외, 감사 로그로 위반 모으기, PodSecurityPolicy에서 옮기는 순서를 실습 클러스터에서 따라간다.",

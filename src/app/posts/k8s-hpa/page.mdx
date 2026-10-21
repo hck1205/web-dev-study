@@ -149,7 +149,7 @@ CPU 사용률이 목표의 두 배면 Pod도 두 배, 절반이면 절반이다.
   ]}
 />
 
-64%인데 안 움직이는 이유가 여기 있다. 64/60은 1.067이라 허용 오차 안이다. 목표 60%는 "60%에 맞춘다"가 아니라 "54%에서 66% 사이면 둔다"는 뜻이다. 허용 오차는 컨트롤러 플래그라서 관리형 클러스터에서는 바꿀 수 없다. HPA마다 다르게 주는 `behavior.scaleUp.tolerance` 필드가 1.33에 알파로 들어왔지만, 이 실습 클러스터(1.30)에서는 모르는 필드라고 거절한다.
+64%인데 안 움직이는 이유가 여기 있다. 64/60은 1.067이라 허용 오차 안이다. 목표 60%는 "60%에 맞춘다"가 아니라 "54%에서 66% 사이면 둔다"는 뜻이다. 허용 오차는 컨트롤러 플래그라서 관리형 클러스터에서는 바꿀 수 없다. HPA마다 다르게 주는 `behavior.scaleUp.tolerance` 필드가 1.33에 알파로 들어왔지만(기능 게이트 `HPAConfigurableTolerance`, 1.35 베타, 1.37 GA), 이 실습 클러스터(1.30)에서는 모르는 필드라고 거절한다.
 
 ## 부하를 올려 보면
 
@@ -342,7 +342,7 @@ The HorizontalPodAutoscaler "zero" is invalid:
 * spec.metrics: Forbidden: must specify at least one Object or External metric to support scaling to zero replicas
 ```
 
-메시지가 두 줄인 게 이유를 말해 준다. 0개가 되면 Pod가 없으니 CPU 사용률을 잴 수 없다. 다시 늘릴 신호가 없는 것이다. 그래서 Object나 External 메트릭(큐 길이처럼 Pod 밖에서 오는 값)이 있을 때만 의미가 있고, 그것도 `HPAScaleToZero` 기능 게이트(1.16부터 알파, 1.30에서도 알파)를 켜야 한다. 관리형 클러스터는 대부분 알파 기능을 켤 수 없다. 실무에서 0까지 내리는 것은 KEDA가 맡는다. KEDA는 활동이 없으면 Deployment를 직접 0으로 내리고, 큐에 메시지가 생기면 1로 올린 뒤 그다음부터 HPA에 넘긴다. 0에서 1로 가는 동안의 첫 요청 지연(콜드 스타트)은 감수해야 한다.
+메시지가 두 줄인 게 이유를 말해 준다. 0개가 되면 Pod가 없으니 CPU 사용률을 잴 수 없다. 다시 늘릴 신호가 없는 것이다. 그래서 Object나 External 메트릭(큐 길이처럼 Pod 밖에서 오는 값)이 있을 때만 의미가 있고, 그것도 `HPAScaleToZero` 기능 게이트를 켜야 한다. 이 게이트는 1.16부터 1.36까지 알파였고 1.37에서 베타가 되며 기본으로 켜졌다. 1.36 이하 관리형 클러스터는 대부분 알파 기능을 켤 수 없다. 노드까지 0으로 내리는 이야기는 [노드 오토스케일링과 Karpenter](/posts/k8s-node-autoscaling-karpenter)에 있다. 실무에서 0까지 내리는 것은 KEDA가 맡는다. KEDA는 활동이 없으면 Deployment를 직접 0으로 내리고, 큐에 메시지가 생기면 1로 올린 뒤 그다음부터 HPA에 넘긴다. 0에서 1로 가는 동안의 첫 요청 지연(콜드 스타트)은 감수해야 한다.
 
 ## 함께 쓰면 부딪히는 것들
 
@@ -381,7 +381,7 @@ The HorizontalPodAutoscaler "zero" is invalid:
 
 이 과정 때문에 노드부터 늘려야 하는 순간에는 반응이 몇 분 걸린다. 트래픽이 예측 가능하다면(매일 점심, 이벤트 시작 시각) 그 전에 minReplicas를 올려 두는 예약 스케일링이 더 확실하다. KEDA의 cron 스케일러나 CronJob으로 HPA의 minReplicas를 고치는 식이다. 노드 쪽 이야기는 [EKS 클러스터 기본](/posts/eks-cluster-basics)과 이어진다.
 
-셋째는 VPA다. VPA(Vertical Pod Autoscaler)는 requests 자체를 바꾼다. HPA가 CPU 사용률로 움직이는데 VPA가 CPU requests를 올리면 사용률이 내려가 HPA가 줄이고, 줄이면 사용률이 올라 VPA가 또 올리는 식으로 서로를 건드린다. 같은 리소스(CPU)에 둘을 함께 걸지 않는다. HPA는 요청 수 같은 커스텀 메트릭으로, VPA는 추천만(`updateMode: "Off"`) 받아 requests를 정하는 데 쓰는 조합이 흔하다.
+셋째는 VPA다. VPA(Vertical Pod Autoscaler)는 requests 자체를 바꾼다([VPA](/posts/k8s-vpa)). HPA가 CPU 사용률로 움직이는데 VPA가 CPU requests를 올리면 사용률이 내려가 HPA가 줄이고, 줄이면 사용률이 올라 VPA가 또 올리는 식으로 서로를 건드린다. 같은 리소스(CPU)에 둘을 함께 걸지 않는다. HPA는 요청 수 같은 커스텀 메트릭으로, VPA는 추천만(`updateMode: "Off"`) 받아 requests를 정하는 데 쓰는 조합이 흔하다.
 
 넷째는 maxReplicas와 쿼터다. 부하를 4000m로 올리면 이렇게 된다.
 
@@ -442,7 +442,7 @@ HPA가 반응해서 새 Pod가 실제로 요청을 받기까지 메트릭 수집
 
 ### HPA로 Pod를 0개까지 줄일 수 있나요?
 
-기본으로는 안 된다. minReplicas는 1 이상이어야 하고, 0을 쓰려면 HPAScaleToZero 알파 기능 게이트와 Object나 External 메트릭이 필요하다. Pod가 0개면 CPU를 잴 수 없어 다시 늘릴 신호가 없기 때문이다. 실무에서는 KEDA가 이벤트 소스를 보고 0과 1 사이를 맡고, 그 위는 HPA에 넘긴다.
+기본으로는 안 된다. minReplicas는 1 이상이어야 하고, 0을 쓰려면 HPAScaleToZero 기능 게이트(1.36까지 알파, 1.37부터 베타로 기본 켜짐)와 Object나 External 메트릭이 필요하다. Pod가 0개면 CPU를 잴 수 없어 다시 늘릴 신호가 없기 때문이다. 실무에서는 KEDA가 이벤트 소스를 보고 0과 1 사이를 맡고, 그 위는 HPA에 넘긴다.
 
 ### HPA를 쓰는 Deployment 매니페스트에 replicas를 적으면 무슨 일이 생기나요?
 

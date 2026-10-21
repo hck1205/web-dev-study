@@ -1,0 +1,381 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-vpa");
+
+새 서비스 매니페스트를 쓰다 보면 `resources.requests`에서 손이 멈춘다. 옆 서비스를 베껴 CPU 1개, 메모리 1Gi를 적고 배포했다. 한 달 뒤 `kubectl top`을 보니 이렇다.
+
+```text
+NAME                      CPU(cores)   MEMORY(bytes)
+orders-69476796fc-4fbtb   351m         300Mi
+orders-69476796fc-gpf5v   350m         300Mi
+```
+
+requests의 3분의 1만 쓰고 있다. 스케줄러는 requests만큼 자리를 잡아 두니([requests와 limits](/posts/k8s-pod-resources)) 노드 셋 중 하나는 빈자리 값이다. 반대로 다른 서비스는 128Mi로 적었다가 OOMKilled가 난다. VPA(Vertical Pod Autoscaler)는 이 숫자를 사람 대신 정해 주려고 만든 도구다. 과거 사용량을 모아 "이 컨테이너에는 requests를 이만큼 주라"는 추천값을 만들고, 원하면 그 값으로 Pod를 바꿔 끼운다.
+
+이 글은 VPA의 세 부품이 나눠 맡는 일, 추천값이 히스토그램에서 나오는 방식, 기록이 쌓이며 범위가 좁아지는 과정, updateMode마다 다른 동작, HPA와 같은 CPU에 걸면 생기는 일, 운영에서 마주치는 함정을 본다. VPA는 쿠버네티스 본체가 아니라 [kubernetes/autoscaler](https://github.com/kubernetes/autoscaler) 저장소의 별도 프로젝트라서 클러스터에 따로 설치해야 한다. 출력은 kwok 실습 클러스터(Kubernetes 1.37.0)에 VPA 1.8.0의 recommender, updater, admission controller를 소스에서 빌드해 붙여 받았다. 세 부품과 metrics-server는 진짜이고, 컨테이너 사용량만 kwok가 Pod 어노테이션 값을 보고하게 해서 흉내 냈다.
+
+이 주제의 다른 글: VPA가 기대는 Pod 재시작 없는 변경은 [재시작 없는 리소스 변경](/posts/k8s-in-place-resize), VPA updater가 지키는 중단 예산은 [PodDisruptionBudget](/posts/k8s-pod-disruption-budget), 수평으로 늘리는 쪽은 [HPA](/posts/k8s-hpa)에 있다.
+
+## 세 부품이 나눠 맡는다
+
+VPA는 프로그램 셋이다. recommender는 사용량을 모아 추천값을 계산해 VPA 오브젝트의 status에 적는다. updater는 그 추천과 지금 Pod의 requests가 많이 다르면 Pod를 바꾼다. admission controller는 Pod가 새로 만들어질 때 끼어들어 requests를 추천값으로 고쳐 쓴다. 아래 그림에서 다음을 누르면 숫자 하나가 Pod에 들어가기까지 따라간다.
+
+<NetworkTopology
+  caption="사용량이 추천이 되고, 추천이 새 Pod의 requests가 된다"
+  width={400}
+  height={270}
+  zones={[
+    { id: "vpa", label: "VPA 부품 (kube-system)", x: 8, y: 10, w: 384, h: 100, tone: "private" },
+    { id: "wl", label: "워크로드", x: 8, y: 150, w: 384, h: 110, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "rec", label: "recommender", sub: "1분마다", x: 70, y: 65, icon: "server", w: 112 },
+    { id: "upd", label: "updater", sub: "1분마다", x: 200, y: 65, icon: "server" },
+    { id: "adm", label: "admission", sub: "webhook", x: 328, y: 65, icon: "gateway" },
+    { id: "ms", label: "metrics-srv", sub: "사용량", x: 70, y: 210, icon: "db" },
+    { id: "pod", label: "billing Pod", sub: "100m/128Mi", x: 200, y: 210, icon: "container", w: 112 },
+    { id: "rs", label: "ReplicaSet", sub: "새 Pod 생성", x: 328, y: 210, icon: "server" },
+  ]}
+  links={[
+    { from: "ms", to: "rec" },
+    { from: "rec", to: "upd", dashed: true },
+    { from: "upd", to: "pod" },
+    { from: "rs", to: "adm" },
+    { from: "adm", to: "rs", dashed: true },
+    { from: "pod", to: "ms", dashed: true },
+  ]}
+  steps={[
+    { path: ["pod", "ms", "rec"], packet: "600m", title: "사용량을 모은다", detail: "recommender가 metrics API에서 컨테이너별 CPU와 메모리를 읽어 히스토그램에 넣는다. 기록은 VerticalPodAutoscalerCheckpoint에 저장한다." },
+    { path: ["rec"], packet: "716m", title: "추천값을 적는다", detail: "VPA 오브젝트의 status.recommendation에 target, lowerBound, upperBound를 쓴다. Off 모드라면 여기서 끝난다." },
+    { path: ["rec", "upd", "pod"], packet: "evict", title: "updater가 Pod를 내보낸다", detail: "requests가 추천 범위 밖이면 eviction API로 Pod를 내보낸다. PDB를 지키고, 한 번에 replicas의 절반까지만 내보낸다." },
+    { path: ["rs", "adm"], packet: "CREATE", title: "새 Pod가 webhook을 지난다", detail: "ReplicaSet이 빈자리를 채우려고 만든 Pod가 API 서버의 mutating webhook을 지난다. 템플릿에는 여전히 100m가 적혀 있다." },
+    { path: ["adm", "rs"], packet: "716m", title: "requests가 바뀐 채로 생긴다", detail: "admission controller가 추천값으로 requests와 limits를 고친다. Deployment 템플릿은 그대로다." },
+  ]}
+/>
+
+마지막 단계가 중요하다. VPA는 Deployment를 고치지 않는다. 바뀌는 것은 Pod뿐이다. 실습에서 updater가 Pod를 바꾼 뒤 둘을 비교했다.
+
+```bash
+# 새로 생긴 Pod의 어노테이션과 requests
+kubectl get pod billing-55558c676d-kxnzl -o jsonpath='{.metadata.annotations}'
+
+# Deployment 템플릿의 resources
+kubectl get deploy billing -o jsonpath='{.spec.template.spec.containers[0].resources}'
+```
+
+```text
+{"kwok.x-k8s.io/usage-cpu":"600m","kwok.x-k8s.io/usage-memory":"700Mi","vpaObservedContainers":"billing","vpaUpdates":"Pod resources updated by billing: container 0: cpu request, memory request, cpu limit, memory limit"}
+{"limits":{"cpu":"200m","memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}
+```
+
+`vpaUpdates` 어노테이션이 admission controller가 고쳤다는 표시다. 템플릿은 100m 그대로다. 그래서 ArgoCD 같은 GitOps 도구와 부딪히지 않는다. 반대로 말하면 admission controller가 죽어 있으면 새 Pod는 템플릿 값 100m로 뜬다. updater도 이걸 알아서, admission controller가 살아 있다는 표시(kube-system의 Lease `vpa-admission-controller`)가 없으면 Pod를 내보내지 않는다(`--use-admission-controller-status`, 기본 true).
+
+## 추천값은 히스토그램에서 나온다
+
+recommender는 평균을 내지 않는다. CPU와 메모리를 다르게 다룬다.
+
+CPU는 샘플을 버킷이 5%씩 커지는 히스토그램에 넣고, 그 90번째 백분위수(P90)를 쓴다. 오래된 샘플일수록 가중치가 줄어드는데, 반감기가 24시간이다(`--cpu-histogram-decay-half-life`). 어제 샘플은 오늘 샘플의 절반만 센다. 메모리는 정해진 구간(기본 24시간)마다 그 구간의 최댓값 하나만 남기고, 그런 구간 8개(8일)를 모은 히스토그램에서 역시 P90을 고른다(`--target-memory-percentile`, 기본 0.9). CPU는 모자라면 느려질 뿐이지만 메모리는 모자라면 OOMKilled로 죽기 때문에, 메모리는 정점을 기준으로 잡는다. 여기에 15% 여유분(`--recommendation-margin-fraction`, 기본 0.15)을 곱한다.
+
+실습에서 Pod 사용량을 CPU 350m, 메모리 300Mi로 고정하고 VPA를 Off 모드로 걸었다.
+
+```bash
+# 추천만 받는 VPA. maxAllowed로 상한을 둔다
+cat <<'EOF' | kubectl apply -f -
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: orders
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orders
+  updatePolicy:
+    updateMode: "Off"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: orders
+      minAllowed: {cpu: 100m, memory: 128Mi}
+      maxAllowed: {cpu: "2", memory: 2Gi}
+      controlledResources: ["cpu", "memory"]
+EOF
+
+# 몇십 초 뒤 추천값
+kubectl get vpa
+kubectl describe vpa orders | sed -n '/Recommendation:/,/Events/p'
+```
+
+```text
+NAME     MODE   CPU    MEM         PROVIDED   AGE
+orders   Off    410m   380258472   True       23s
+  Recommendation:
+    Container Recommendations:
+      Container Name:  orders
+      Lower Bound:
+        Cpu:     100m
+        Memory:  250Mi
+      Target:
+        Cpu:     410m
+        Memory:  380258472
+      Uncapped Target:
+        Cpu:     410m
+        Memory:  380258472
+      Upper Bound:
+        Cpu:     2
+        Memory:  2Gi
+```
+
+350m이 410m가 된 이유를 직접 계산할 수 있다. 첫 버킷 크기가 0.01코어, 버킷마다 5%씩 커지는 히스토그램에서 350m이 들어가는 버킷의 끝값은 357.2m이고, 여기에 1.15를 곱하면 410.8m다. 메모리는 첫 버킷이 10MB(1e7바이트)이고 같은 방식으로 300Mi가 380258472바이트(약 363Mi)가 된다. 메모리가 바이트 그대로 찍혀 보기 불편한데, 예전의 `--humanize-memory`는 VPA 1.5에서 deprecated됐고 지금은 `--round-memory-bytes`로 단위를 맞추는 쪽을 권한다.
+
+<CodePlayground
+  caption="VPA CPU 추천값 계산 (millicores)"
+  functionName="vpaCpuTarget"
+  initialCode={`// usage: 코어 단위 (0.35 = 350m)
+// 버킷 i의 시작 = first * (ratio^i - 1) / (ratio - 1)
+// usage가 속한 버킷의 "끝값"에 (1 + margin)을 곱하고 millicores로 버림한다
+function vpaCpuTarget(usage, margin = 0.15) {
+  const first = 0.01, ratio = 1.05;
+  return 0;
+}`}
+  solution={`function vpaCpuTarget(usage, margin = 0.15) {
+  const first = 0.01, ratio = 1.05;
+  const bucket = Math.floor(Math.log((usage * (ratio - 1)) / first + 1) / Math.log(ratio));
+  const end = (first * (Math.pow(ratio, bucket + 1) - 1)) / (ratio - 1);
+  return Math.floor(end * (1 + margin) * 1000);
+}`}
+  tests={[
+    { label: "350m 사용", args: [0.35], expected: 410 },
+    { label: "700m 사용", args: [0.7], expected: 813 },
+    { label: "600m 사용", args: [0.6], expected: 716 },
+    { label: "여유분 0", args: [0.35, 0], expected: 357 },
+  ]}
+/>
+
+세 값(410m, 813m, 716m)은 실습 클러스터의 recommender가 실제로 낸 값과 같다. lowerBound와 upperBound는 같은 히스토그램의 다른 백분위수(기본 P50과 P95)에 "기록이 얼마나 쌓였나"에 따른 신뢰 배수를 곱한 것이다. 기록이 짧으면 범위가 넓고, 시간이 지날수록 target 쪽으로 좁혀진다. 위 출력에서 upperBound가 maxAllowed인 2코어에 붙어 있는 것도 그래서다.
+
+## 기록이 쌓이는 방식
+
+사용량을 바꿔 가며 같은 VPA를 지켜봤다. CPU 700m, 메모리 900Mi로 1분쯤 올렸다가 다시 350m, 300Mi로 내렸다.
+
+```text
+시각      사용량(Pod당)      CPU 추천   메모리 추천
+00:59:22  350m / 300Mi     410m       380258472
+01:00:20  700m / 900Mi     813m       1102117711
+01:05:16  350m / 300Mi     813m       1102117711
+01:10:54  350m / 300Mi     410m       1102117711
+```
+
+<AlgoTrace
+  caption="CPU는 비중으로 잊고, 메모리는 정점을 붙든다"
+  memoryLabel="CPU 추천 · 메모리 추천"
+  cells={["350m·300Mi", "700m·900Mi", "350m 5분", "350m 10분"]}
+  steps={[
+    { pointer: 0, memory: ["410m", "363Mi"], caption: "처음 몇 샘플로 추천이 생긴다. 사용량의 버킷 끝값에 15%를 더한 값이다." },
+    { pointer: 1, found: [1], memory: ["813m", "1051Mi"], caption: "1분 동안 두 배를 썼다. 높은 샘플이 P90 위로 올라와 CPU 추천이 바로 따라 오른다. 메모리도 정점을 기록한다." },
+    { pointer: 2, found: [1], memory: ["813m", "1051Mi"], caption: "사용량이 내려갔지만 높은 샘플의 비중이 아직 10%를 넘는다. CPU 추천은 그대로다." },
+    { pointer: 3, found: [1], memory: ["410m", "1051Mi"], caption: "낮은 샘플이 쌓여 높은 샘플이 10% 밑으로 묻히자 CPU는 내려온다. 메모리는 8일 창에 정점이 남아 그대로다." },
+  ]}
+/>
+
+1분짜리 메모리 튐 하나가 앞으로 8일 동안 추천에 남는다. 일부러 그렇게 만든 것이다. 배치 작업이 하루 한 번 메모리를 크게 쓰는 서비스라면 그 순간에 맞춰야 OOMKilled가 안 난다. 대신 한 번 튄 값 때문에 requests가 오래 높게 유지된다는 뜻이기도 하다. 메모리 누수로 올라간 값도 똑같이 기억한다. 누수를 VPA로 덮으면 추천값이 계속 올라가 결국 maxAllowed에 붙는다.
+
+기록은 VerticalPodAutoscalerCheckpoint라는 별도 오브젝트에 저장된다. recommender가 재시작해도 이걸 읽어 히스토그램을 다시 세운다.
+
+```bash
+# 체크포인트에 든 CPU 히스토그램
+kubectl get vpacheckpoint orders-orders -o jsonpath='{.status}'
+```
+
+```text
+{"cpuHistogram":{"bucketWeights":{"20":10000,"30":1427},"referenceTimestamp":"2026-10-21T00:00:00Z","totalWeight":4.945867408792249},"firstSampleStart":"2026-10-21T00:59:19Z","lastSampleStart":"2026-10-21T01:05:04Z","lastUpdateTime":"2026-10-21T01:05:07Z","memoryHistogram":{"referenceTimestamp":"2026-10-22T00:00:00Z"},"totalSamplesCount":48,"version":"v3"}
+```
+
+버킷 번호가 압축돼 저장된다. 이 시점에 낮은 쪽 버킷의 가중치를 10000으로 놓으면 높은 쪽(700m 시절)은 1427, 전체의 12.5%다. P90 위로 넘어가 있으니 CPU 추천이 아직 813m인 이유가 숫자로 보인다. 몇 분 더 낮은 샘플이 쌓여 이 비중이 10% 밑으로 떨어지자 410m로 내려왔다. 기본 저장소는 이 체크포인트이고, `--storage=prometheus`로 Prometheus의 과거 데이터를 읽게 할 수도 있다. VPA를 새로 설치한 날 바로 쓸 만한 추천이 필요하면 Prometheus 쪽이 유리하다.
+
+## updateMode마다 적용 시점이 다르다
+
+추천을 실제 Pod에 언제 어떻게 넣을지는 `updatePolicy.updateMode`가 정한다. 설치된 CRD에서 직접 확인했다.
+
+```bash
+kubectl explain verticalpodautoscaler.spec.updatePolicy.updateMode
+```
+
+```text
+FIELD: updateMode <string>
+ENUM:
+    Off
+    Initial
+    Recreate
+    InPlaceOrRecreate
+    InPlace
+    Auto
+
+DESCRIPTION:
+    Controls when autoscaler applies changes to the pod resources.
+    The default is 'Recreate'.
+```
+
+- `Off`: 추천만 계산한다. Pod를 건드리지 않는다. 처음 도입할 때와 HPA와 함께 쓸 때 이걸로 시작한다.
+- `Initial`: Pod가 만들어질 때만 추천을 넣는다. 배포나 재시작으로 새로 생기는 Pod에만 반영되고, 도는 Pod는 그대로 둔다. 갑작스러운 교체가 싫을 때 안전한 중간 단계다.
+- `Recreate`: 추천과 많이 다르면 updater가 Pod를 내보내 새로 만들게 한다. 지금 기본값이다.
+- `InPlaceOrRecreate`: 먼저 Pod를 재시작 없이 고치려 하고([재시작 없는 리소스 변경](/posts/k8s-in-place-resize)), 안 되면 내보낸다. VPA 1.4 알파, 1.5 베타, 1.6에서 GA다. 쿠버네티스 1.33 이상이 필요하다.
+- `InPlace`: 제자리 변경만 하고 절대 내보내지 않는다. VPA 1.7에서 알파로 들어왔고 기능 게이트를 켜야 한다.
+- `Auto`: 예전 기본값이다. 지금은 Recreate와 같고 deprecated다. 오래된 매니페스트에서 자주 보이니 Recreate나 InPlaceOrRecreate로 바꿔 둔다.
+
+## Recreate가 Pod를 갈아 끼우는 순서
+
+requests 100m, 128Mi로 띄운 billing(3개, 실제 사용 600m, 700Mi)에 Recreate VPA와 `maxUnavailable: 1`인 PDB를 걸고 updater를 돌렸다. updater 로그와 이벤트다.
+
+```text
+"Pod accepted for update" pod="default/billing-55558c676d-6clt4" updatePriority=11.611729953289032 processedRecommendations="billing: target: 865937k 716m; uncappedTarget: 865937k 716m;"
+"Evicting pod" pod="default/billing-55558c676d-6clt4"
+"Evicting pod" pod="default/billing-55558c676d-k9g4l"
+"Evicting pod" pod="default/billing-55558c676d-lnwpg"
+
+Normal   EvictedPod     verticalpodautoscaler/billing   VPA Updater evicted Pod billing-55558c676d-6clt4 to apply resource recommendation.
+Normal   EvictedByVPA   pod/billing-55558c676d-6clt4    Pod was evicted by VPA Updater to apply resource recommendation.
+```
+
+세 줄의 Evicting이 15초 간격(실습에서 `--updater-interval=15s`로 줄였다, 기본 1분)으로 하나씩 찍혔다. 셋 다 대상이지만 한 바퀴에 하나만 내보낸다. `--eviction-tolerance`(기본 0.5)가 한 번에 replicas의 절반까지만 허락하고, PDB도 1개만 허락한다. 바뀐 뒤의 Pod는 이렇다.
+
+```text
+NAME                       CPU    MEM         LCPU    LMEM
+billing-55558c676d-kxnzl   716m   865936536   1432m   1731873072
+billing-55558c676d-lpgxq   716m   865936536   1432m   1731873072
+billing-55558c676d-wv5hn   716m   865936536   1432m   1731873072
+```
+
+limits도 바뀌었다. 원래 limits가 requests의 두 배였으니 새 limits도 두 배(1432m, 약 1.6Gi)다. `controlledValues`의 기본값 `RequestsAndLimits`가 이 비율을 유지한다. limits를 손대지 않게 하려면 `RequestsOnly`로 둔다. 아래 그림은 updater가 Pod 하나를 고르고 내보내기까지의 판단이다.
+
+<SequenceDiagram
+  caption="updater 한 바퀴"
+  actors={[
+    { id: "upd", label: "updater" },
+    { id: "vpa", label: "VPA status" },
+    { id: "api", label: "API 서버" },
+    { id: "adm", label: "admission" },
+  ]}
+  steps={[
+    { from: "upd", to: "vpa", label: "추천 읽기", title: "범위를 본다", detail: "lowerBound 250Mi, upperBound 4Gi다. Pod의 메모리 requests 128Mi는 아래로 벗어났다." },
+    { from: "upd", to: "upd", label: "우선순위", title: "얼마나 다른지 점수를 매긴다", detail: "리소스마다 바꿀 비율을 더한 값이 우선순위다. 범위 안이면 Pod가 12시간 넘게 살았고 10% 넘게 다를 때만 대상이 된다." },
+    { from: "upd", to: "upd", label: "제한 확인", title: "몇 개까지 내보낼까", detail: "살아 있는 replicas가 2개 미만이면 하지 않는다. 2개 이상이면 eviction-tolerance만큼, 최소 하나." },
+    { from: "upd", to: "api", label: "POST eviction", title: "PDB를 지나 내보낸다", detail: "drain과 같은 eviction API다. PDB가 허락하지 않으면 429를 받고 다음 바퀴에 다시 본다.", payload: "Evicting pod pod=default/billing-55558c676d-6clt4" },
+    { from: "api", to: "adm", label: "새 Pod CREATE", title: "빈자리를 채우는 Pod", detail: "ReplicaSet이 새 Pod를 만들면 mutating webhook이 불린다." },
+    { from: "adm", to: "api", label: "JSON patch", title: "추천값을 넣는다", detail: "requests를 716m, 865936536으로, limits를 같은 비율로 고친 patch를 돌려준다. Pod는 바뀐 값으로 저장된다." },
+  ]}
+/>
+
+Pod 하나짜리 Deployment는 어떻게 될까. 같은 설정의 solo(replicas 1)를 만들었더니 updater가 이렇게 남기고 손대지 않았다.
+
+```text
+"Too few replicas" kind="ReplicaSet" object="default/solo-7c48cd7f4d" livePods=1 requiredPods=2 globalMinReplicas=2
+```
+
+`--min-replicas`(기본 2)보다 적으면 내보내지 않는다. 하나뿐인 Pod를 내리면 그동안 서비스가 끊기기 때문이다. 이 경우 추천은 다음 배포 때 admission controller가 넣어 준다. VPA 오브젝트의 `updatePolicy.minReplicas`로 앱마다 바꿀 수도 있다.
+
+InPlaceOrRecreate도 걸어 봤다. kwok 노드는 kubelet이 없어 Pod의 status에 실제 리소스를 보고하지 않는다. API 서버는 이런 노드의 Pod를 제자리 변경할 수 없다고 판단한다. 그러자 updater가 바로 eviction으로 넘어갔다.
+
+```text
+"In-place update approved" pod="default/inplace-695d74fc5-lp7st"
+"In-place resize failed, falling back to eviction" error="Pod \"inplace-695d74fc5-lp7st\" is invalid: spec: Forbidden: Pod running on node without support for resize" pod="default/inplace-695d74fc5-lp7st"
+"Evicting pod" pod="default/inplace-695d74fc5-lp7st"
+```
+
+실제 클러스터에서도 노드가 1.33보다 오래된 kubelet이면 같은 일이 생긴다. 문서에 적힌 다른 대체 조건은 제자리 변경이 불가능하다고 나올 때(Infeasible), 5분 넘게 미뤄질 때(Deferred), 1시간 넘게 진행 중일 때, QoS 클래스가 바뀌어야 할 때다. InPlaceOrRecreate라고 Pod가 절대 재시작하지 않는 것은 아니다.
+
+## 처음 몇 분의 추천은 얇다
+
+위 실험에는 의도하지 않은 결과가 하나 더 있었다. inplace VPA를 만든 직후, 샘플이 몇 개 없을 때 updater가 돈 것이다. 그때 추천은 최솟값(CPU 50m, 메모리 250Mi)이었다. recommender는 기록이 거의 없으면 `--pod-recommendation-min-cpu-millicores`(25)와 `--pod-recommendation-min-memory-mb`(250)를 바닥으로 쓰고, 여기서는 minAllowed 50m이 그 위였다.
+
+```text
+NAME                      CPU    MEM
+inplace-695d74fc5-btxmx   50m    250Mi
+inplace-695d74fc5-zr5k2   50m    250Mi
+```
+
+1분 뒤 추천은 716m, 865936536으로 올라왔지만 Pod는 그대로였다. lowerBound가 아직 50m, 250Mi라 지금 requests가 "범위 안"이기 때문이다. 범위 안이면 Pod가 12시간 넘게 살아야 다시 바뀐다(`--in-recommendation-bounds-eviction-lifetime-threshold`). 실제 600m을 쓰는 Pod가 50m requests로 떠 있는 셈이다. 같은 시점에 기록이 더 쌓인 billing VPA의 lowerBound는 308m까지 올라와 있었다. 결국 inplace Pod도 범위가 좁혀지면 한 번 더 교체된다.
+
+교훈은 단순하다. VPA를 새로 걸 때는 Off로 며칠 두고 추천이 안정되는 것을 본 뒤 Initial이나 Recreate로 바꾼다. 도입 첫날 Recreate로 걸면 얇은 추천으로 한 번, 제대로 된 추천으로 또 한 번 Pod가 갈린다.
+
+## HPA와 같은 CPU에 걸면 서로를 흔든다
+
+HPA는 CPU 사용률(사용량 ÷ requests)로 Pod 수를 정한다. VPA는 사용량을 보고 requests를 바꾼다. 둘을 같은 CPU에 걸면 한쪽의 결과가 다른 쪽의 입력을 바꾼다.
+
+<AlgoTrace
+  caption="HPA(목표 60%)와 VPA가 같은 CPU를 볼 때"
+  memoryLabel="replicas · requests · 사용률"
+  cells={["부하 증가", "HPA 늘림", "VPA 줄임", "HPA 다시 늘림"]}
+  steps={[
+    { pointer: 0, memory: ["4개", "500m", "90%"], caption: "Pod당 450m를 쓴다. requests 500m 대비 90%다." },
+    { pointer: 1, memory: ["6개", "500m", "60%"], caption: "HPA가 6개로 늘린다. Pod당 사용량이 300m로 내려가 사용률 60%가 된다." },
+    { pointer: 2, found: [2], memory: ["6개", "345m", "87%"], caption: "VPA는 Pod당 300m 쓰는 걸 보고 requests를 15% 여유만 둔 345m 근처로 줄인다. 같은 사용량인데 사용률이 87%로 뛴다." },
+    { pointer: 3, found: [3], memory: ["9개", "345m", "58%"], caption: "HPA는 부하가 늘었다고 보고 또 늘린다. 실제 부하는 그대로인데 Pod 수와 requests가 계속 움직인다." },
+  ]}
+/>
+
+VPA 문서도 같은 리소스 메트릭(CPU나 메모리)에 HPA와 VPA를 함께 쓰지 말라고 적는다. 실무에서 쓰는 조합은 셋이다. VPA는 Off로 추천만 받아 사람이 requests를 정하고 HPA는 CPU로 돈다. HPA는 초당 요청 수 같은 커스텀 메트릭으로 돌고 VPA가 CPU와 메모리를 맡는다([HPA](/posts/k8s-hpa)의 커스텀 메트릭). 또는 VPA에 `controlledResources: ["memory"]`를 줘 메모리만 맡기고 HPA가 CPU를 맡는다. 마지막 조합은 문서에서도 "다른 리소스 메트릭이면 함께 쓸 수 있다"고 한 경우다.
+
+## 운영에서 VPA가 일으키는 일
+
+추천이 노드보다 커질 수 있다. VPA는 노드 크기를 모른다. 추천 메모리가 가장 큰 노드의 allocatable을 넘으면 새 Pod는 Pending이 된다. maxAllowed로 상한을 두거나 recommender에 `--container-recommendation-max-allowed-memory`를 준다. 노드 오토스케일러가 있으면 더 큰 노드를 띄울 수 있지만, 가장 큰 인스턴스보다 크면 그것도 안 된다([노드 오토스케일링과 Karpenter](/posts/k8s-node-autoscaling-karpenter)).
+
+런타임 힙은 따라오지 않는다. JVM의 `-Xmx2g`나 Node의 `--max-old-space-size`를 고정해 두면 VPA가 메모리를 4Gi로 올려도 앱은 2GB만 쓴다. 추천은 계속 낮게 나오고, 앱은 힙 부족으로 GC만 한다. `-XX:MaxRAMPercentage`처럼 limits에 비례하는 설정으로 바꿔야 VPA와 맞는다.
+
+webhook이 경로 위에 있다. admission controller는 모든 Pod 생성 요청을 받는 mutating webhook이다. 이게 느리거나 죽으면 Pod 생성이 늦어지거나 실패할 수 있다. 기본 failurePolicy는 Ignore라 대개 Pod는 템플릿 값으로 그냥 뜬다. 그러면 "VPA를 걸었는데 왜 requests가 그대로지"라는 질문이 나온다. 이때는 `kubectl get mutatingwebhookconfigurations vpa-webhook-config`와 admission controller 로그부터 본다.
+
+VPA 하나에 Pod 하나다. 같은 Pod를 고르는 VPA가 둘이면 동작이 정의되지 않는다. Helm 차트에서 VPA를 켜 두고 플랫폼 팀이 또 거는 경우가 있다.
+
+GKE는 자체 VPA가 있다. GKE에서 오픈소스 VPA를 따로 돌리면 recommender의 리더 선출 Lease 이름(`vpa-recommender`)이 GKE 시스템 부품과 겹친다. 문서는 `--leader-elect-resource-name`을 바꾸라고 한다.
+
+비용과 PDB도 함께 본다. 추천을 줄이면 노드에 빈자리가 생기고, 노드 오토스케일러가 그걸 모아 노드를 줄여야 비용이 실제로 준다. 그 과정은 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에서 이어진다. Recreate의 교체는 eviction이라 PDB가 0이면 VPA도 멈춘다.
+
+VPA가 Pod를 안 바꿀 때 보는 순서를 정리하면 이렇다.
+
+```bash
+# 1. 추천이 있는지. PROVIDED가 False면 recommender나 metrics-server 문제다
+kubectl get vpa -A
+
+# 2. updater가 왜 건너뛰는지 (Too few replicas, 범위 안, PDB)
+kubectl -n kube-system logs deploy/vpa-updater | grep -E 'Too few|Evicting|accepted'
+
+# 3. 새 Pod에 vpaUpdates 어노테이션이 붙는지. 없으면 webhook 문제다
+kubectl get pod <pod> -o jsonpath='{.metadata.annotations.vpaUpdates}'
+
+# 4. webhook 등록과 admission controller의 Lease
+kubectl get mutatingwebhookconfigurations
+kubectl -n kube-system get lease vpa-admission-controller
+```
+
+## 추천은 기록에서, 적용은 새 Pod에서
+
+VPA는 사용량을 히스토그램으로 모아 CPU는 최근 비중이 큰 P90, 메모리는 8일 동안의 정점에 15%를 더해 requests를 추천한다. 적용은 Pod를 새로 만들 때 webhook이 끼어드는 방식이라 Deployment는 그대로이고, 도는 Pod를 바꾸려면 eviction을 거치거나 제자리 변경을 써야 한다. 그래서 VPA는 Off로 시작해 추천이 안정되는 걸 본 뒤에 적용 모드를 고르고, HPA와 같은 리소스에는 걸지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### VPA는 어떤 부품으로 이뤄져 있나요?
+
+recommender, updater, admission controller 셋이다. recommender가 metrics API의 사용량으로 추천값을 계산해 VPA status에 적고, updater가 추천과 많이 다른 Pod를 eviction API로 내보내거나 제자리에서 고치며, admission controller가 mutating webhook으로 새 Pod의 requests를 추천값으로 바꾼다. Deployment 템플릿은 바꾸지 않는다.
+
+### VPA의 추천값은 어떻게 계산되나요?
+
+평균이 아니라 히스토그램이다. CPU는 반감기 24시간으로 가중치가 줄어드는 히스토그램의 P90, 메모리는 24시간 구간마다의 정점을 8일 모은 히스토그램에서 고른다. 여기에 15% 여유분을 곱한다. 메모리를 정점으로 잡는 이유는 CPU는 모자라면 느려지지만 메모리는 모자라면 OOMKilled로 죽기 때문이다.
+
+### updateMode는 어떻게 고르나요?
+
+도입 초기와 HPA를 함께 쓸 때는 Off로 추천만 본다. 도는 Pod를 갑자기 바꾸기 싫으면 새 Pod에만 반영하는 Initial, 범위를 벗어나면 교체해도 되는 앱은 Recreate나 InPlaceOrRecreate를 쓴다. Auto는 예전 이름이고 지금은 Recreate와 같으며 deprecated다. InPlaceOrRecreate도 제자리 변경이 안 되면 eviction으로 넘어간다.
+
+### HPA와 VPA를 같이 쓰면 왜 문제가 되나요?
+
+같은 CPU를 보면 VPA가 requests를 줄이는 순간 HPA가 보는 사용률이 올라가 Pod를 늘리고, 그러면 Pod당 사용량이 줄어 VPA가 또 requests를 줄이는 식으로 서로를 흔든다. 그래서 VPA는 추천만 받거나 메모리만 맡기고, HPA는 CPU나 커스텀 메트릭을 맡기는 식으로 나눈다.
+
+### VPA를 걸었는데 Pod가 안 바뀌면 무엇을 보나요?
+
+먼저 `kubectl get vpa`에서 추천이 있는지 본다. 있으면 updater 로그에서 replicas가 min-replicas(기본 2)보다 적어 건너뛰는지, requests가 추천 범위 안이라 12시간을 기다리는지, PDB가 막는지 확인한다. 새 Pod에 vpaUpdates 어노테이션이 없으면 admission controller webhook이 동작하지 않는 것이다.
+
+### VPA가 메모리를 너무 크게 추천한다면 이유가 뭘까요?
+
+메모리는 8일 창 안의 정점을 기준으로 하니 하루 한 번의 배치나 잠깐의 튐이 일주일 넘게 남는다. 메모리 누수도 같은 방식으로 기억해 추천을 계속 올린다. maxAllowed로 상한을 두고, 정점이 정상 동작인지 누수인지 앱 쪽에서 먼저 확인한다. 추천이 노드 allocatable을 넘으면 Pod가 Pending이 된다는 점도 함께 본다.
+
+### Pod 하나짜리 Deployment에도 VPA가 동작하나요?
+
+추천은 계산되지만 Recreate 모드의 updater는 기본적으로 내보내지 않는다. 살아 있는 replicas가 `--min-replicas`(기본 2)보다 적으면 "Too few replicas"를 남기고 건너뛴다. 하나뿐인 Pod를 내리면 서비스가 끊기기 때문이다. 이 경우 다음 배포 때 admission controller가 추천을 넣고, 꼭 바로 반영해야 하면 VPA의 updatePolicy.minReplicas를 1로 낮춘다.

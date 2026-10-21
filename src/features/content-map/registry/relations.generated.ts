@@ -2,6 +2,88 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-in-place-resize": {
+    "links": [
+      "k8s-vpa",
+      "k8s-pod-resources",
+      "k8s-node-autoscaling-karpenter",
+      "k8s-hpa"
+    ],
+    "mentions": [
+      "garbage-collection",
+      "k8s-pod-basics",
+      "linux-namespaces-cgroups",
+      "k8s-pod-multicontainer",
+      "k8s-architecture",
+      "k8s-pod-troubleshooting",
+      "local-k8s-kind-minikube"
+    ]
+  },
+  "k8s-node-autoscaling-karpenter": {
+    "links": [
+      "autoscaling",
+      "k8s-hpa",
+      "eks-cluster-basics",
+      "k8s-pod-disruption-budget",
+      "k8s-pod-resources",
+      "cloud-cost-optimization",
+      "k8s-pod-scheduling",
+      "k8s-vpa",
+      "k8s-in-place-resize"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "k8s-api-objects",
+      "k8s-configmap",
+      "k8s-architecture",
+      "k8s-coredns",
+      "security-groups-nacl",
+      "local-k8s-kind-minikube",
+      "vpc-basics"
+    ]
+  },
+  "k8s-vpa": {
+    "links": [
+      "k8s-pod-resources",
+      "k8s-in-place-resize",
+      "k8s-pod-disruption-budget",
+      "k8s-hpa",
+      "k8s-node-autoscaling-karpenter",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "k8s-pod-basics",
+      "k8s-architecture",
+      "helm-basics",
+      "js-memory-leak",
+      "leader-election",
+      "postgres-architecture",
+      "local-k8s-kind-minikube"
+    ]
+  },
+  "k8s-pod-disruption-budget": {
+    "links": [
+      "k8s-vpa",
+      "k8s-in-place-resize",
+      "k8s-node-autoscaling-karpenter",
+      "k8s-pod-resources",
+      "k8s-deployment",
+      "k8s-pod-probes",
+      "eks-cluster-basics",
+      "k8s-hpa",
+      "k8s-pod-scheduling"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-pod-lifecycle",
+      "k8s-pod-basics",
+      "docker-container-basics",
+      "helm-basics",
+      "kafka-basics",
+      "local-k8s-kind-minikube",
+      "db-type-key-value"
+    ]
+  },
   "k8s-pod-security-admission": {
     "links": [
       "k8s-namespace",
@@ -166,6 +248,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-labels-selectors"
     ],
     "mentions": [
+      "k8s-pod-disruption-budget",
+      "k8s-in-place-resize",
       "k8s-architecture",
       "k8s-deployment",
       "k8s-network-policy",
@@ -212,6 +296,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting"
     ],
     "mentions": [
+      "k8s-pod-disruption-budget",
       "k8s-network-policy",
       "k8s-pod-basics",
       "iptables-nat",
@@ -505,6 +590,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs"
     ],
     "mentions": [
+      "k8s-node-autoscaling-karpenter",
       "terraform-basics",
       "db-type-key-value",
       "docker-container-basics",
@@ -1204,7 +1290,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "scaling-horizontal-vertical",
       "k8s-hpa",
+      "k8s-node-autoscaling-karpenter",
       "garbage-collection",
+      "k8s-vpa",
       "cold-starts",
       "db-replication-sharding",
       "db-sharding",
@@ -2081,6 +2169,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks"
     ],
     "mentions": [
+      "k8s-pod-disruption-budget",
+      "k8s-node-autoscaling-karpenter",
       "kubectl-essentials",
       "kubernetes-ingress",
       "network-flow-logs",
@@ -2407,7 +2497,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-namespace",
       "k8s-pod-resources",
       "k8s-pod-multicontainer",
-      "eks-cluster-basics"
+      "k8s-node-autoscaling-karpenter",
+      "eks-cluster-basics",
+      "k8s-vpa"
     ],
     "mentions": [
       "k8s-architecture",
@@ -2435,6 +2527,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
+      "k8s-pod-disruption-budget",
       "canary-release",
       "k8s-service-types",
       "k8s-pv-pvc",
@@ -3525,6 +3618,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting"
     ],
     "mentions": [
+      "k8s-pod-disruption-budget",
       "k8s-pod-basics",
       "k8s-deployment",
       "local-k8s-kind-minikube",
