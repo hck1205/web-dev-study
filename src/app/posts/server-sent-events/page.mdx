@@ -6,7 +6,7 @@ export const metadata = getPostMetadata("server-sent-events");
 
 SSE가 폴링이나 WebSocket과 비교해 어디에 서는지는 [서버가 먼저 말하게 하기](/posts/realtime-communication)에서 봤다. 그 글에 이벤트 스트림 필드와 파서도 있다. 이 글은 SSE를 운영할 때 부딪히는 질문에 답한다. 브라우저가 끊긴 스트림에 실제로 어떻게 다시 붙는지, 어떤 응답에서 영영 포기하는지, HTTP/1.1의 연결 6개 제한이 정말 사이트를 멈추는지, 압축과 프록시가 이벤트를 어디서 붙잡는지, LLM 답변 스트리밍은 왜 `EventSource`를 안 쓰는지를 Chromium 141, Node.js 22, nginx 1.24(Ubuntu 24.04)로 직접 확인했다.
 
-이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [WebSocket 깊게 보기](/posts/websocket-deep-dive) · [롱 폴링](/posts/long-polling)
+이 주제의 다른 글: [실시간 통신 네 가지 비교](/posts/realtime-communication) · [WebSocket 깊게 보기](/posts/websocket-deep-dive) · [롱 폴링](/posts/long-polling) · [HTTP 스트리밍](/posts/http-streaming-sse)
 
 ## 서버가 내려보내는 바이트 그대로 보기
 

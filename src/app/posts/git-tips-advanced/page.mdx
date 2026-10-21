@@ -337,7 +337,7 @@ fatal: 'release/1.0' is already used by worktree at '/home/matt/shop-x'
 fatal: '../shop-x' contains modified or untracked files, use --force to delete it
 ```
 
-폴더를 `rm -rf`로 그냥 지웠다면 `git worktree prune`으로 남은 기록을 정리한다. 각 폴더는 독립된 작업 폴더라 `node_modules`도 따로 설치해야 한다. 그래서 핫픽스, PR 리뷰처럼 잠깐 쓰고 지우는 용도나, 오래 걸리는 테스트를 한 폴더에서 돌리며 다른 폴더에서 일하는 용도에 잘 맞는다. 앞의 [문제 해결 글](/posts/git-troubleshooting)에서 rebase 도중 브랜치를 못 바꿀 때 Git이 `git worktree add`를 권하던 것도 이 때문이다.
+폴더를 `rm -rf`로 그냥 지웠다면 `git worktree prune`으로 남은 기록을 정리한다. 각 폴더는 독립된 작업 폴더라 `node_modules`도 따로 설치해야 한다. 그래서 핫픽스, PR 리뷰처럼 잠깐 쓰고 지우는 용도나, 오래 걸리는 테스트를 한 폴더에서 돌리며 다른 폴더에서 일하는 용도에 잘 맞는다. 앞의 [문제 해결 글](/posts/git-troubleshooting)에서 rebase 도중 브랜치를 못 바꿀 때 Git이 `git worktree add`를 권하던 것도 이 때문이다. AI 코딩 세션 여러 개를 폴더마다 나눠 돌리는 쓰임은 [병렬 세션과 예약 작업](/posts/claude-code-parallel-and-scheduled)에서 다룬다.
 
 ## 이 줄은 누가 왜 바꿨나
 

@@ -1,0 +1,581 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("graphql-basics");
+
+앱의 글 목록 화면은 글 제목과 글쓴이 이름만 보여 준다. 그런데 이 화면을 REST API로 그리려면 `GET /posts`로 글 목록을 받고, 글마다 들어 있는 `authorId`로 `GET /users/1`, `GET /users/2`를 또 불러야 한다. 받아 온 글 객체에는 화면에 안 쓰는 본문 전체가 들어 있다. 화면 하나를 그리려고 요청을 여러 번 보내고, 쓰지도 않을 바이트를 받는다.
+
+GraphQL은 이 문제를 클라이언트가 "이 모양으로 달라"고 적어 보내게 해서 푼다. 이 글은 그 방식이 서버 안에서 어떻게 돌아가는지, 그리고 그 편리함 때문에 생기는 비용(N+1, 캐시, 에러, 보안)을 직접 돌려 보며 따라간다. 데모는 Node.js 22, graphql-js 16.14, GraphQL over HTTP 참조 구현인 graphql-http 1.23으로 만들었다. 데이터는 메모리에 둔 가짜 DB이고, DB 호출마다 2ms를 쉬며 호출 수를 센다.
+
+API 스타일 전체에서 GraphQL이 어디에 서는지는 [API 스타일 한눈에 보기](/posts/api-styles-overview)에, REST 쪽 설계는 [REST API 설계](/posts/rest-api-design)에 있다.
+
+## 화면 하나에 요청 다섯 번, 20KB
+
+글 10개와 글쓴이 4명이 있는 데모 서버에 REST로 목록 화면을 그려 봤다. 글쓴이는 겹치니 클라이언트가 중복을 걸러 네 번만 불렀다고 치자.
+
+```text
+GET /posts 19063 bytes
+GET /users/1 250 bytes
+GET /users/2 250 bytes
+GET /users/3 251 bytes
+GET /users/4 251 bytes
+total requests=5 bytes=20065
+```
+
+같은 화면을 GraphQL 쿼리 하나로 받으면 이렇다.
+
+```graphql
+{ posts(first: 10) { id title author { name } } }
+```
+
+```text
+POST /graphql 546 bytes
+```
+
+요청은 5번에서 1번, 바이트는 20065에서 546으로 줄었다. 두 문제에 이름이 있다. 필요 없는 필드까지 받는 것이 오버페칭(over-fetching)이고, 필요한 것을 한 번에 못 받아 여러 번 부르는 것이 언더페칭(under-fetching)이다. 모바일 네트워크에서는 왕복 한 번이 수십~수백 ms라서 언더페칭 쪽이 더 아프다. 아래 그림에서 단계를 넘기면 REST 클라이언트가 기다리는 순서가 보인다.
+
+<SequenceDiagram
+  caption="목록 화면 하나를 REST로 그릴 때"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "api", label: "REST API" },
+  ]}
+  steps={[
+    { from: "app", to: "api", label: "GET /posts", title: "먼저 목록을 받는다", detail: "글 객체 10개가 본문까지 통째로 온다. 화면은 제목만 쓴다. 이것이 오버페칭이다.", payload: "19063 bytes" },
+    { from: "api", to: "app", label: "authorId 1~4", title: "응답을 봐야 다음 요청을 안다", detail: "글쓴이 이름은 목록 응답에 없다. authorId를 읽은 뒤에야 다음 요청을 만들 수 있으니 순서가 강제된다." },
+    { from: "app", to: "api", label: "GET /users/1..4", title: "글쓴이를 하나씩 묻는다", detail: "병렬로 보내도 왕복 한 번이 더 든다. 화면에 필드 하나가 늘 때마다 이런 계단이 하나씩 생긴다. 이것이 언더페칭이다.", payload: "4 requests, 1002 bytes" },
+    { from: "app", to: "app", label: "조립", title: "화면에 맞게 합친다", detail: "id로 이어 붙이는 일은 클라이언트 몫이다. 웹과 앱이 같은 조립 코드를 따로 갖게 된다." },
+  ]}
+/>
+
+REST에서도 이걸 줄이는 방법은 있다. `fields=id,title`로 필드를 고르고 `expand=author`로 관계를 펼치는 방식이다([REST API 설계](/posts/rest-api-design)의 "필요한 만큼만 받기"). 다만 화면이 많아지면 엔드포인트마다 이 옵션을 다 구현해야 한다. GraphQL은 이걸 엔드포인트 하나와 타입 시스템으로 일반화한 것이다. 2015년 Facebook이 모바일 앱의 뉴스피드처럼 화면마다 데이터 모양이 다른 문제를 풀려고 공개했다.
+
+## 스키마가 먼저 있고, 쿼리는 그 위를 걷는다
+
+GraphQL 서버는 SDL(Schema Definition Language)로 타입을 먼저 선언한다. 데모 서버의 스키마다.
+
+```graphql
+type Query {
+  posts(first: Int = 10): [Post!]!
+  post(id: ID!): Post
+  user(id: ID!): User
+}
+type Mutation {
+  addComment(postId: ID!, body: String!): Comment!
+}
+type Subscription {
+  commentAdded(postId: ID!): Comment!
+}
+type Post {
+  id: ID!
+  title: String!
+  body: String!
+  author: User!
+  comments: [Comment!]!
+}
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  posts: [Post!]!
+}
+type Comment {
+  id: ID!
+  body: String!
+  author: User!
+}
+```
+
+`!`는 null이 될 수 없다는 뜻이고 `[Post!]!`는 "목록 자체도 null이 아니고 안의 원소도 null이 아니다"라는 뜻이다. 이 느낌표가 뒤에서 에러가 퍼지는 방식을 정한다. `Query`, `Mutation`, `Subscription`은 진입점이다. 읽기는 `Query`, 쓰기는 `Mutation`, 서버가 밀어 주는 이벤트는 `Subscription`에서 시작한다.
+
+타입끼리 서로를 필드로 가리키니 스키마는 그래프가 된다. 쿼리는 진입점에서 출발해 이 그래프의 간선을 따라 내려간다. 아래 그림에서 점이 흐르는 방향이 쿼리가 걸을 수 있는 방향이다.
+
+<ConceptDiagram
+  caption="스키마는 타입을 꼭짓점으로 한 그래프다"
+  width={640}
+  height={300}
+  nodes={[
+    { id: "q", label: "Query", sub: "진입점", x: 90, y: 70 },
+    { id: "m", label: "Mutation", sub: "쓰기", x: 90, y: 160 },
+    { id: "s", label: "Subscription", sub: "이벤트", x: 90, y: 250, w: 130 },
+    { id: "p", label: "Post", sub: "title, body", x: 330, y: 70 },
+    { id: "u", label: "User", sub: "name, email", x: 540, y: 150 },
+    { id: "c", label: "Comment", sub: "body", x: 330, y: 230 },
+  ]}
+  edges={[
+    { from: "q", to: "p", label: "posts" },
+    { from: "q", to: "u", label: "user", dashed: true },
+    { from: "m", to: "c", label: "addComment" },
+    { from: "s", to: "c", label: "commentAdded" },
+    { from: "p", to: "u", label: "author" },
+    { from: "p", to: "c", label: "comments" },
+    { from: "c", to: "u", label: "author" },
+    { from: "u", to: "p", label: "posts", dashed: true },
+  ]}
+/>
+
+`User.posts`와 `Post.author`가 서로를 가리키는 고리가 보인다. 이 고리 덕분에 "글쓴이의 다른 글"을 한 번에 받을 수 있지만, 같은 고리를 끝없이 도는 쿼리도 만들 수 있다. 보안 이야기에서 이 고리로 돌아온다.
+
+스키마는 문서이자 계약이다. 서버는 스키마에 없는 필드를 묻는 쿼리를 실행 전에 거절하고, 클라이언트 도구는 스키마를 읽어 자동 완성과 타입을 만든다(GraphQL Code Generator 같은 도구). REST에서 OpenAPI 문서를 따로 관리하던 일이 스키마 하나로 모인다.
+
+## 요청 한 번을 뜯어보면
+
+GraphQL은 HTTP 위에서 보통 `POST /graphql` 하나로 모든 요청을 받는다. 본문은 JSON이고 필드가 정해져 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="GraphQL 요청 본문"
+  base="POST /graphql"
+  separator=" "
+  joiner=" , "
+  params={[
+    { key: "query", display: "\"query\": \"mutation AddComment($p: ID!, $b: String!) …\"", title: "실행할 문서", description: "쿼리 문자열이다. 값을 문자열 안에 직접 끼워 넣지 않고 $p, $b 같은 변수 자리만 둔다. 그래야 서버가 같은 문서를 캐시하고, 사용자 입력이 쿼리 구조를 바꾸지 못한다.", code: "mutation AddComment($p: ID!, $b: String!) {\n  addComment(postId: $p, body: $b) { id body author { name } }\n}", required: true },
+    { key: "variables", display: "\"variables\": { \"p\": \"1\", \"b\": \"좋은 글\" }", title: "변수 값", description: "query에 선언한 변수의 실제 값이다. 서버는 선언한 타입(ID!, String!)과 맞는지 실행 전에 검사한다." },
+    { key: "operationName", display: "\"operationName\": \"AddComment\"", title: "문서 안의 어떤 작업을 실행할지", description: "문서에 작업이 여러 개면 이 이름으로 고른다. 하나뿐이어도 붙여 두면 운영에서 쓸모가 크다. URL이 모두 /graphql이라 로그와 지표를 이 이름으로 나눠 봐야 하기 때문이다." },
+    { key: "extensions", display: "\"extensions\": { \"persistedQuery\": … }", title: "명세 밖의 확장", description: "persisted query의 해시처럼 서버와 클라이언트가 따로 합의한 값을 싣는다. 캐시 이야기에서 다시 쓴다." },
+  ]}
+/>
+
+실제로 보내면 이렇게 온다.
+
+```bash
+# 쓰기는 mutation으로, 값은 variables로 넘긴다
+curl -s http://127.0.0.1:18200/graphql -H 'content-type: application/json' \
+  -d '{"query":"mutation($p: ID!, $b: String!) { addComment(postId: $p, body: $b) { id body author { name } } }","variables":{"p":"1","b":"좋은 글"}}'
+```
+
+```text
+{"data":{"addComment":{"id":"31","body":"좋은 글","author":{"name":"kim"}}}}
+```
+
+쓰기 결과를 받으면서 `author { name }`처럼 관계까지 한 번에 고를 수 있다. 쓰고 나서 화면을 다시 그리려고 따로 조회하지 않아도 된다.
+
+GET으로도 보낼 수 있다. 쿼리를 URL 파라미터에 싣는다. 대신 GET은 읽기 전용이어야 하므로 mutation을 GET으로 보내면 GraphQL over HTTP 명세대로 거절된다. 링크 하나로 쓰기가 일어나는 CSRF 구멍을 막는 규칙이다.
+
+```bash
+curl -s -i -G http://127.0.0.1:18200/graphql \
+  --data-urlencode 'query=mutation { addComment(postId: 1, body: "hi") { id } }' | head -1
+```
+
+```text
+HTTP/1.1 405 Method Not Allowed
+```
+
+## 필드마다 함수가 하나씩
+
+서버가 쿼리를 실행하는 방식은 단순하다. 필드마다 리졸버(resolver)라는 함수가 있고, 실행기는 쿼리 모양대로 위에서 아래로 내려가며 그 함수를 부른다. 리졸버는 네 인자를 받는다. 부모 필드가 돌려준 객체, 이 필드의 인자, 요청 하나 동안 공유하는 context, 쿼리 위치 정보(info)다.
+
+```js
+// 리졸버: (부모 객체, 인자, context) => 값 또는 Promise
+Query.posts = (_, { first }) => db.listPosts(first);
+Post.author = (post) => db.userById(post.authorId);       // 글마다 한 번
+Post.comments = (post) => db.commentsByPost(post.id);     // 글마다 한 번
+Comment.author = (comment) => db.userById(comment.authorId); // 댓글마다 한 번
+```
+
+`Post.author`는 자기 부모인 글 하나만 본다. 옆에 다른 글 9개가 같은 걸 묻고 있다는 사실을 모른다. 그래서 글 목록에 글쓴이와 댓글, 댓글 글쓴이까지 받는 쿼리를 보내면 DB 호출이 이렇게 된다.
+
+```graphql
+{ posts(first: 10) { title author { name } comments { body author { name } } } }
+```
+
+```text
+naive  calls=51 17.1 ms errors=0
+```
+
+글 목록 1번, 글쓴이 10번, 댓글 10번, 댓글 30개의 글쓴이 30번, 합쳐서 51번이다. 이것이 GraphQL의 N+1 문제다. 시간이 17ms밖에 안 걸린 것도 눈여겨볼 만하다. graphql-js는 형제 필드의 Promise를 동시에 기다리므로 51번이 한 줄로 서지 않고 단계마다 병렬로 나간다. 그래서 로컬에서는 느린 줄 모른다. 대신 DB와 커넥션 풀이 그 51번을 다 받는다. 동시 사용자가 늘면 풀이 먼저 바닥난다.
+
+해결책은 같은 틱에 모인 키를 한 번에 묻는 것이다. DataLoader가 그 일을 한다. 원리를 보이려고 20줄짜리 로더를 직접 만들었다.
+
+```js
+// 같은 틱에 load된 키를 모았다가 nextTick에 배치 함수를 한 번 부른다
+function createLoader(batchFn) {
+  const cache = new Map();   // 이 요청 안에서 같은 키는 한 번만
+  let queue = [];
+  function flush() {
+    const batch = queue; queue = [];
+    batchFn(batch.map((b) => b.key)).then(
+      (values) => batch.forEach((b, i) => b.resolve(values[i])),
+      (err) => batch.forEach((b) => b.reject(err)),
+    );
+  }
+  return {
+    load(key) {
+      if (cache.has(key)) return cache.get(key);
+      const p = new Promise((resolve, reject) => {
+        queue.push({ key, resolve, reject });
+        if (queue.length === 1) process.nextTick(flush);
+      });
+      cache.set(key, p);
+      return p;
+    },
+  };
+}
+// 요청마다 새로 만들어 context에 넣는다
+const context = { users: createLoader((ids) => db.usersByIds(ids)) };
+Post.author = (post, _, ctx) => ctx.users.load(post.authorId);
+```
+
+리졸버가 언제 불리고 로더가 언제 배치를 여는지 글 3개짜리 쿼리로 찍어 봤다. 아래 그림에서 단계를 넘기며 대기열이 차고 비는 순간을 보자.
+
+<AlgoTrace
+  caption="리졸버 호출 순서와 로더 대기열 (글 3개)"
+  cells={["posts", "author p1", "comments p1", "author p2", "comments p2", "author p3", "comments p3", "nextTick", "c.author ×9", "nextTick"]}
+  memoryLabel="로더 대기열"
+  steps={[
+    { pointer: 0, memory: [], caption: "posts 리졸버가 글 3개를 돌려준다. DB 호출 1번." },
+    { pointer: 1, memory: ["users:1"], caption: "첫 글의 author 리졸버가 load(1)을 부른다. 쿼리는 아직 안 나가고 Promise만 받는다." },
+    { pointer: 2, memory: ["users:1", "comments:1"], caption: "같은 글의 comments 리졸버도 바로 이어서 불린다. 실행기는 기다리지 않고 형제 필드를 다 부른다." },
+    { pointer: 6, memory: ["users:1,2,3", "comments:1,2,3"], caption: "글 세 개의 리졸버가 모두 불렸다. 지금까지 동기 코드라서 DB에는 한 번도 안 갔다." },
+    { pointer: 7, found: [1, 3, 5, 2, 4, 6], memory: [], caption: "동기 코드가 끝나고 nextTick에서 배치가 열린다. users [1,2,3] 한 번, comments [1,2,3] 한 번." },
+    { pointer: 8, memory: ["users:4"], caption: "댓글 9개의 author가 load를 부른다. 키는 2,3,4,3,4,1,4,1,2인데 1,2,3은 캐시에 있어서 4만 대기열에 들어간다." },
+    { pointer: 9, found: [8], memory: [], caption: "두 번째 배치 users [4]. 이 쿼리의 DB 호출은 모두 4번이다." },
+  ]}
+/>
+
+실제로 찍힌 로그다.
+
+```text
+resolve Post.author (post 1)
+resolve Post.comments (post 1)
+resolve Post.author (post 2)
+resolve Post.comments (post 2)
+resolve Post.author (post 3)
+resolve Post.comments (post 3)
+  batch users [1,2,3]
+  batch comments [1,2,3]
+resolve Comment.author (comment 1)
+...
+resolve Comment.author (comment 9)
+  batch users [4]
+calls 4
+```
+
+글 10개짜리 원래 쿼리도 로더를 쓰면 이렇게 된다.
+
+```text
+naive  calls=51 17.1 ms errors=0
+loader calls= 3 6.9 ms errors=0
+  SELECT * FROM posts LIMIT 10
+  SELECT * FROM users WHERE id IN (1,2,3,4)
+  SELECT * FROM comments WHERE post_id IN (1,2,3,4,5,6,7,8,9,10)
+```
+
+51번이 3번이 됐다. 댓글 글쓴이는 모두 첫 배치에서 가져온 1~4번 회원이라 캐시에서 나왔다. DB 호출 수가 데이터 양이 아니라 쿼리의 깊이를 따라가게 된 것이다.
+
+로더는 반드시 요청마다 새로 만든다. 서버 전역에 하나를 두면 캐시가 사용자 사이에 공유돼서, 권한 검사를 거친 다른 사람의 데이터가 그대로 나갈 수 있다. 배치 함수가 키 순서대로 같은 길이의 배열을 돌려줘야 한다는 규칙, ORM의 지연 로딩과 같은 뿌리라는 이야기는 [N+1 쿼리 깊이 보기](/posts/n-plus-one-queries)에서 PostgreSQL로 재현해 두었다.
+
+## 바꾸기와 구독은 실행 순서가 다르다
+
+Query의 최상위 필드는 동시에 실행될 수 있지만, Mutation의 최상위 필드는 명세상 적힌 순서대로 하나씩 실행된다. `mutation { a: addComment(…) b: addComment(…) }`이면 a가 끝난 뒤 b가 돈다. 쓰기끼리 순서가 섞이면 결과를 예측할 수 없기 때문이다. 다만 둘이 한 트랜잭션으로 묶이지는 않는다. a는 성공하고 b만 실패할 수 있다. 같이 성공하거나 같이 실패해야 하는 쓰기라면 mutation 하나로 설계하고 그 리졸버 안에서 트랜잭션을 연다.
+
+Subscription은 요청 하나에 응답이 여러 번 오는 작업이다. graphql-js의 `subscribe()`는 비동기 이터레이터를 돌려주고, 이벤트가 생길 때마다 선택한 필드로 실행한 결과를 하나씩 내보낸다. 3번 글을 구독해 두고 댓글을 세 번 달아 봤다(두 번째는 4번 글).
+
+```js
+const it = await subscribe({ schema, document: parse(`subscription { commentAdded(postId: 3) { id body } }`) });
+for await (const r of it) console.log("event", JSON.stringify(r));
+```
+
+```text
+event {"data":{"commentAdded":{"id":"31","body":"첫 댓글"}}}
+mutation postId=3
+mutation postId=4
+event {"data":{"commentAdded":{"id":"33","body":"두 번째"}}}
+mutation postId=3
+```
+
+4번 글에 단 댓글은 걸러져 오지 않았다. GraphQL 명세는 구독 결과를 어떻게 실어 나를지 정하지 않는다. 실무에서는 WebSocket 위의 `graphql-ws` 프로토콜이나 SSE 위의 `graphql-sse`를 많이 쓴다. 연결을 오래 쥐는 데서 오는 문제(하트비트, 서버 여러 대로 늘릴 때의 메시지 버스)는 [WebSocket 깊게 보기](/posts/websocket-deep-dive)와 [HTTP 스트리밍](/posts/http-streaming-sse)에서 다룬 것이 그대로 적용된다.
+
+## 에러가 나도 200이 온다
+
+REST에 익숙하면 가장 당황스러운 부분이다. 본인 이메일만 볼 수 있게 `User.email` 리졸버에서 예외를 던지게 해 두고, 1번 사용자로 로그인한 채 1번과 2번의 이메일을 함께 물었다.
+
+```bash
+curl -s -w '\nstatus=%{http_code}\n' http://127.0.0.1:18200/graphql \
+  -H 'content-type: application/json' -H 'x-user: 1' \
+  -d '{"query":"{ a: user(id: 1) { name email } b: user(id: 2) { name email } }"}'
+```
+
+```text
+{"errors":[{"message":"email은 본인만 볼 수 있다","locations":[{"line":1,"column":55}],"path":["b","email"]}],"data":{"a":{"name":"kim","email":"u1@ex.com"},"b":null}}
+status=200
+```
+
+상태 코드는 200이다. 응답 하나에 성공한 부분(`a`)과 실패한 부분(`errors`의 `path: ["b","email"]`)이 함께 들어 있으니 HTTP 상태 하나로는 표현할 수 없다. 이게 부분 성공이다.
+
+더 볼 것은 `b`가 통째로 null이 된 점이다. 에러가 난 건 `email`인데 `name`까지 사라졌다. `email: String!`이 null이 될 수 없으니, 실행기는 null을 한 단계 위로 올려 null이 허용되는 가장 가까운 부모(`user: User`)를 null로 만든다. 그 부모도 `!`였다면 더 위로 올라가서 결국 `data` 전체가 null이 된다. 실패할 수 있는 필드(권한, 외부 서비스 호출)에 `!`를 붙이면 에러 하나가 화면 전체를 지운다. 스키마를 설계할 때 느낌표를 아끼는 이유다.
+
+모든 에러가 200은 아니다. 요청은 파싱, 검증, 실행 세 단계를 지나고, 앞의 두 단계에서 실패하면 실행 자체를 안 한다. 아래 그림에서 단계별로 어떤 응답이 나가는지 보자.
+
+<SequenceDiagram
+  caption="요청이 지나는 세 단계와 실패하는 곳"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "s", label: "GraphQL 서버" },
+    { id: "r", label: "리졸버·DB" },
+  ]}
+  steps={[
+    { from: "c", to: "s", label: "POST /graphql", title: "요청이 도착한다", detail: "Accept에 application/graphql-response+json을 적으면 GraphQL over HTTP 명세의 새 규칙대로 상태 코드를 받는다." },
+    { from: "s", to: "s", label: "parse", title: "문법 검사", detail: "괄호가 안 닫혔으면 여기서 끝난다. 새 미디어 타입이면 400, 예전 방식(application/json)이면 200에 errors만 담긴다.", payload: "Syntax Error: Expected Name, found <EOF>." },
+    { from: "s", to: "s", label: "validate", title: "스키마와 대조", detail: "없는 필드, 타입이 안 맞는 변수, 깊이 제한 같은 규칙을 실행 전에 본다. 여기서 막히면 DB는 한 번도 불리지 않는다.", payload: "Cannot query field \"titel\" on type \"Post\".\nDid you mean \"title\"?" },
+    { from: "s", to: "r", label: "execute", title: "리졸버 실행", detail: "필드마다 리졸버를 부른다. 이 단계의 에러는 해당 필드만 null로 만들고 나머지는 그대로 돌려준다." },
+    { from: "r", to: "s", label: "throw", title: "필드 하나가 실패한다", detail: "null이 non-null 필드를 만나면 허용되는 부모까지 올라가 그 부모를 null로 만든다." },
+    { from: "s", to: "c", label: "200 data+errors", title: "부분 성공으로 응답한다", detail: "data가 하나라도 있으면 200이다. 모니터링은 상태 코드가 아니라 errors 배열을 세야 한다.", payload: "{\"errors\":[…],\"data\":{\"a\":{…},\"b\":null}}" },
+  ]}
+/>
+
+graphql-http로 같은 문법 에러를 두 가지 Accept로 보내 봤다.
+
+```text
+== parse error, new media type
+{"errors":[{"message":"Syntax Error: Expected Name, found <EOF>.","locations":[{"line":1,"column":17}]}]}
+status=400
+== parse error, application/json
+{"errors":[{"message":"Syntax Error: Expected Name, found <EOF>.","locations":[{"line":1,"column":17}]}]}
+status=200
+```
+
+GraphQL over HTTP 명세는 아직 초안이고, 서버 구현마다 따르는 정도가 다르다. 그래서 운영에서는 상태 코드만 보고 에러율을 재면 안 된다. 로드 밸런서 대시보드에는 5xx가 0인데 사용자 화면은 비어 있는 상황이 생긴다. 서버에서 응답의 `errors`를 세어 operationName별로 지표를 남기는 것이 기본이다.
+
+## POST에는 캐시가 붙지 않는다
+
+REST의 `GET /posts/1`은 URL이 곧 캐시 키라서 브라우저, CDN, 리버스 프록시가 아무 설정 없이 캐시한다. GraphQL은 보통 모든 요청이 `POST /graphql`이다. HTTP 캐시는 POST 응답을 저장하지 않으니 이 층이 통째로 빠진다. nginx 캐시를 GraphQL 서버 앞에 두고 확인했다.
+
+```nginx
+location /graphql {
+  proxy_pass http://127.0.0.1:18202;
+  proxy_cache gql;
+  proxy_cache_methods GET HEAD;          # 기본값. POST는 캐시하지 않는다
+  proxy_cache_key $request_method$request_uri;
+  add_header X-Cache-Status $upstream_cache_status;
+}
+```
+
+```text
+HTTP/1.1 200 OK  <- POST 1
+HTTP/1.1 200 OK  <- POST 2
+```
+
+POST 두 번은 캐시 상태 헤더조차 없이 둘 다 서버까지 갔다. GET으로 보내면 캐시할 수 있지만 쿼리 전체가 URL에 들어가서 길어지고, 같은 쿼리도 공백 하나만 달라도 다른 키가 된다. 그래서 나온 방법이 persisted query다. 쿼리 문자열 대신 그 SHA-256 해시만 보낸다. 데모 서버에 Apollo의 APQ(Automatic Persisted Queries) 방식을 흉내 내 넣었다. 아래 그림에서 처음 요청과 두 번째 요청의 경로를 비교해 보자.
+
+<NetworkTopology
+  caption="persisted query가 캐시를 되살리는 경로"
+  width={640}
+  height={260}
+  zones={[
+    { id: "edge", label: "캐시 층 (CDN·nginx)", x: 210, y: 40, w: 200, h: 190, tone: "edge" },
+    { id: "origin", label: "원 서버", x: 440, y: 40, w: 180, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱", x: 90, y: 135, icon: "client" },
+    { id: "cache", label: "nginx cache", x: 310, y: 135, icon: "lb" },
+    { id: "gql", label: "GraphQL", sub: "hash 저장소", x: 530, y: 100, icon: "server" },
+    { id: "db", label: "DB", x: 530, y: 190, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "cache" },
+    { from: "cache", to: "gql" },
+    { from: "gql", to: "db" },
+  ]}
+  steps={[
+    { path: ["app", "cache", "gql"], packet: "POST", title: "POST는 캐시를 지나친다", detail: "nginx는 POST를 캐시하지 않는다. 같은 쿼리를 백 번 보내면 원 서버도 백 번 일한다." },
+    { path: ["app", "cache", "gql"], packet: "GET #hash", blocked: true, title: "처음 보는 해시", detail: "해시만 담은 GET이 왔는데 서버가 이 해시를 모른다. PersistedQueryNotFound로 답한다.", payload: "{\"errors\":[{\"message\":\"PersistedQueryNotFound\"}]}" },
+    { path: ["app", "cache", "gql", "db"], packet: "query+hash", title: "쿼리와 해시를 함께 보내 등록한다", detail: "서버는 쿼리의 SHA-256이 해시와 맞는지 확인하고 저장한다. 맞지 않으면 400으로 거절한다." },
+    { path: ["app", "cache", "gql", "db"], packet: "GET #hash", title: "다음부터는 해시만", detail: "URL이 짧고 항상 같으니 캐시 키가 된다. 첫 GET은 MISS로 원 서버까지 간다.", payload: "X-Cache-Status: MISS" },
+    { path: ["app", "cache"], packet: "GET #hash", highlight: ["cache"], title: "캐시에서 끝난다", detail: "같은 해시는 nginx가 바로 돌려준다. 원 서버 로그에는 아무것도 찍히지 않는다.", payload: "X-Cache-Status: HIT" },
+  ]}
+/>
+
+실제 순서와 출력이다. 앞의 두 줄은 GraphQL 서버에 바로 보냈고, 뒤의 세 줄은 nginx를 거쳐 보냈다.
+
+```text
+== 1) GET hash only
+{"errors":[{"message":"PersistedQueryNotFound"}]}
+status=200
+== 2) POST query+hash
+status=200
+HTTP/1.1 200 OK X-Cache-Status: MISS  <- GET hash 1
+HTTP/1.1 200 OK X-Cache-Status: HIT  <- GET hash 2
+HTTP/1.1 200 OK X-Cache-Status: HIT  <- GET hash 3
+```
+
+여기서 두 가지를 구분해야 한다. 런타임에 아무 클라이언트나 쿼리를 등록할 수 있는 APQ는 대역폭과 캐시를 위한 장치다. 공격자도 자기 쿼리를 등록할 수 있으니 보안 장치가 아니다. 빌드할 때 앱이 쓰는 쿼리만 추출해 서버에 올려 두고 목록에 없는 쿼리는 거절하는 방식(trusted documents, persisted operations라고 부른다)은 허용 목록이라 보안 장치가 된다. 자사 앱만 쓰는 API라면 이쪽이 가장 강한 방어다.
+
+캐시 키를 모든 사용자가 공유하는 것도 조심한다. 로그인한 사용자에 따라 결과가 달라지는 쿼리에 `public` 캐시를 붙이면 남의 데이터가 나간다. HTTP 캐시는 공개 데이터 쿼리에만 쓰고, 개인화된 데이터는 클라이언트 쪽 정규화 캐시(Apollo Client, urql이 `__typename`과 `id`로 객체를 쪼개 저장한다)에 맡긴다. 클라이언트 캐시의 일반적인 원리는 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있다.
+
+## 클라이언트가 쿼리를 쓰니 서버가 막아야 할 것
+
+REST에서는 서버가 엔드포인트마다 일의 양을 정한다. GraphQL에서는 클라이언트가 정한다. 앞에서 본 `User.posts`와 `Post.author`의 고리를 따라가는 쿼리를 한 단계씩 깊게 만들어 깊이 제한 없이 보내 봤다. 글쓴이마다 글이 2~3개씩 있는 작은 데이터다.
+
+```graphql
+{ user(id: 1) { posts { author { posts { author { name } } } } } }
+```
+
+```text
+pairs=1 depth=3 status=200 size=107B time=0.023962s
+pairs=2 depth=5 status=200 size=332B time=0.018645s
+pairs=3 depth=7 status=200 size=1007B time=0.015509s
+pairs=4 depth=9 status=200 size=3032B time=0.018552s
+pairs=5 depth=11 status=200 size=9107B time=0.024263s
+pairs=6 depth=13 status=200 size=27332B time=0.104276s
+```
+
+같은 시간 서버 로그에 찍힌 요청별 DB 호출 수다.
+
+```text
+[srv] POST /graphql -> 200 db=3
+[srv] POST /graphql -> 200 db=6
+[srv] POST /graphql -> 200 db=15
+[srv] POST /graphql -> 200 db=42
+[srv] POST /graphql -> 200 db=123
+[srv] POST /graphql -> 200 db=366
+```
+
+`pairs`는 `posts { author { … } }` 고리를 몇 번 감았는지다. 깊이가 2 늘 때마다 응답과 DB 호출이 약 3배가 된다. 마지막 줄에서는 시간도 0.1초로 뛰었다. DataLoader를 켠 상태인데도 그렇다. 로더는 같은 키를 합칠 뿐, 쿼리가 요구하는 객체 수 자체를 줄이지는 못한다. 실제 서비스처럼 사용자마다 글이 수백 개라면 몇 단계 만에 서버가 멈춘다. 요청 한 번으로 서버를 쓰러뜨리는 DoS가 된다.
+
+첫 번째 방어는 검증 단계에서 깊이를 재는 규칙이다. graphql-js의 `ValidationRule`로 선택 집합의 중첩을 세어 5를 넘으면 거절하게 했다.
+
+```js
+// 선택 집합 중첩이 MAX_DEPTH를 넘으면 실행 전에 거절한다 (fragment도 따라간다)
+function depthLimit(ctx) {
+  const visit = (sel, depth) => {
+    let max = depth;
+    for (const s of sel?.selections ?? []) {
+      if (s.kind === Kind.FIELD) max = Math.max(max, s.selectionSet ? visit(s.selectionSet, depth + 1) : depth);
+      else if (s.kind === Kind.INLINE_FRAGMENT) max = Math.max(max, visit(s.selectionSet, depth));
+      else if (s.kind === Kind.FRAGMENT_SPREAD) max = Math.max(max, visit(ctx.getFragment(s.name.value)?.selectionSet, depth));
+    }
+    return max;
+  };
+  return {
+    OperationDefinition(node) {
+      const d = visit(node.selectionSet, 0);
+      if (d > MAX_DEPTH) ctx.reportError(new GraphQLError(`쿼리 깊이가 ${d}로 한도 ${MAX_DEPTH}를 넘는다`, { nodes: [node] }));
+    },
+  };
+}
+```
+
+```text
+{"errors":[{"message":"쿼리 깊이가 7로 한도 5를 넘는다","locations":[{"line":1,"column":1}]}]}
+status=400
+```
+
+깊이만으로는 부족하다. 깊이 2짜리 `posts(first: 100) { comments(first: 100) { … } }`도 객체 1만 개를 만든다. 그래서 목록 인자를 곱해 비용을 미리 계산하는 복잡도 제한을 같이 둔다. GitHub GraphQL API가 `first`·`last` 인자를 곱해 노드 수를 계산하고 한도를 넘으면 거절하는 방식이 대표적이다. 직접 만들어 보자. 쿼리를 단순한 객체 트리로 받아서 깊이와 비용을 돌려주는 함수다. 객체 필드 하나를 푸는 비용은 1이고, 부모 쪽 목록 크기만큼 곱해진다.
+
+<CodePlayground
+  caption="쿼리 깊이와 비용 계산"
+  functionName="queryCost"
+  initialCode={`function queryCost(tree) {
+  // tree: { posts: { first: 10, fields: { title: true, author: { fields: { name: true } } } } }
+  // true는 스칼라 필드(비용 0). 객체 필드는 { first?, fields }
+  // 객체 필드 하나의 비용 = 위쪽 목록들의 first를 곱한 값 (first가 없으면 1)
+  // depth = 가장 깊은 경로에 있는 객체 필드 수
+  return { depth: 0, cost: 0 };
+}`}
+  solution={`function queryCost(tree) {
+  let depth = 0, cost = 0;
+  const walk = (fields, level, mult) => {
+    for (const v of Object.values(fields)) {
+      if (v === true) continue;              // 스칼라는 세지 않는다
+      depth = Math.max(depth, level);
+      cost += mult;                          // 부모 수만큼 이 필드를 푼다
+      walk(v.fields, level + 1, mult * (v.first ?? 1));
+    }
+  };
+  walk(tree, 1, 1);
+  return { depth, cost };
+}`}
+  tests={[
+    { label: "user 하나", args: [{ user: { fields: { name: true } } }], expected: { depth: 1, cost: 1 } },
+    { label: "글 10개, 댓글 5개씩", args: [{ posts: { first: 10, fields: { title: true, author: { fields: { name: true } }, comments: { first: 5, fields: { body: true, author: { fields: { name: true } } } } } } }], expected: { depth: 3, cost: 71 } },
+    { label: "고리를 두 번 도는 쿼리", args: [{ user: { fields: { posts: { first: 10, fields: { author: { fields: { posts: { first: 10, fields: { author: { fields: { name: true } } } } } } } } } } }], expected: { depth: 5, cost: 122 } },
+    { label: "얕지만 넓은 쿼리", args: [{ a: { first: 100, fields: { b: { first: 100, fields: { c: { fields: { x: true } } } } } } }], expected: { depth: 3, cost: 10101 } },
+    { label: "스칼라만", args: [{ title: true }], expected: { depth: 0, cost: 0 } },
+  ]}
+/>
+
+넷째 테스트가 요점이다. 깊이 3이라 깊이 제한은 통과하는데 비용은 1만이 넘는다. 운영에서는 깊이 한도(보통 7~10)와 비용 한도를 함께 두고, 목록 필드에는 `first`의 최댓값을 스키마 차원에서 강제한다. 별칭으로 같은 필드를 수백 번 부르는 쿼리(`a1: user(id: 1) … a500: user(id: 500)`)나 배열로 여러 작업을 한 번에 보내는 배치 요청도 비용 계산에 넣어야 우회되지 않는다.
+
+두 번째로 볼 것은 introspection이다. `__schema`를 물으면 서버가 스키마 전체를 알려 준다. 개발할 때는 도구가 이걸로 자동 완성을 만들지만, 운영에서는 공격자에게 지도를 주는 셈이다. graphql-js에 들어 있는 `NoSchemaIntrospectionCustomRule`을 운영 모드에서만 검증 규칙에 넣었다.
+
+```js
+validationRules: (req, args, rules) => [...rules, depthLimit, ...(PROD ? [NoSchemaIntrospectionCustomRule] : [])],
+```
+
+```text
+{"errors":[{"message":"GraphQL introspection has been disabled, but the requested query contained the field \"__schema\".","locations":[{"line":1,"column":3}]},{"message":"GraphQL introspection has been disabled, but the requested query contained the field \"types\".","locations":[{"line":1,"column":14}]}]}
+status=400
+```
+
+그런데 introspection을 꺼도 같은 운영 서버가 오타에는 이렇게 답한다.
+
+```text
+{"errors":[{"message":"Cannot query field \"titel\" on type \"Post\". Did you mean \"title\"?","locations":[{"line":1,"column":11}]}]}
+```
+
+"Did you mean" 제안으로 필드 이름을 하나씩 알아낼 수 있다. 이걸 이용해 스키마를 복원하는 도구도 있다. 그래서 introspection 끄기는 정보를 조금 덜 주는 정도로 보고, 진짜 방어는 위의 비용 제한과 허용 목록(trusted documents), 필드 단위 권한 검사에 둔다. 권한은 앞의 `email`처럼 리졸버나 그 아래 비즈니스 계층에서 검사한다. 엔드포인트가 하나뿐이라 URL 기반 권한 규칙(게이트웨이에서 `/admin/*` 막기)이 통하지 않기 때문이다.
+
+<Callout kind="warning">
+GraphQL 서버의 요청 크기, 실행 시간, 깊이·비용에 한도가 하나도 없다면 쿼리 한 번으로 서버를 멈출 수 있는 상태다. 공개된 엔드포인트라면 배포 전에 깊이 한도, 비용 한도, 실행 타임아웃, 요청 본문 크기 제한부터 넣는다.
+</Callout>
+
+## 버전 번호 없이 스키마를 바꾼다
+
+REST는 `/v1`, `/v2`로 버전을 나누는 일이 흔하다. GraphQL은 클라이언트가 받을 필드를 직접 적으니, 서버가 필드를 더해도 기존 쿼리의 응답은 한 바이트도 안 바뀐다. 그래서 새 필드는 더하고, 옛 필드는 `@deprecated(reason: "…")`를 붙여 남겨 두고, 아무도 안 쓰게 되면 지운다. 지울 때 기준은 필드 사용량이다. 서버가 operationName별로 어떤 필드를 썼는지 모아 두면 "이 필드를 쓰는 작업이 30일 동안 0건"을 확인할 수 있다. 실제로 지운 필드에 옛 쿼리를 보냈을 때 검증 단계에서 거절되는 모습, 스키마 비교 도구로 깨는 변경을 배포 전에 잡는 법은 [API 버전 관리](/posts/api-versioning)에서 돌려 봤다.
+
+필드를 지우는 것 말고도 깨는 변경이 있다. null을 허용하던 필드에 `!`를 붙이는 건 응답 쪽에서는 안전하지만, 인자에 `!`를 붙이면 그 인자를 안 보내던 옛 쿼리가 모두 실패한다. 반대로 응답 필드에서 `!`를 떼면 null을 처리하지 않던 클라이언트 코드가 깨질 수 있다.
+
+## REST가 더 나은 곳
+
+GraphQL이 풀어 주는 문제는 "화면마다 데이터 모양이 다르고, 그 화면이 많다"는 것이다. 이 문제가 없으면 비용만 남는다.
+
+공개 API는 대개 REST가 낫다. 처음 보는 외부 개발자가 curl 한 줄로 시험하고, URL 단위로 문서와 요청 수 제한을 걸고, CDN 캐시를 그대로 쓴다. GitHub처럼 두 가지를 다 내는 곳도 있지만 그만큼 운영 비용을 감당하는 것이다. 파일 업로드와 다운로드도 REST가 자연스럽다. GraphQL 명세에는 파일 타입이 없어서 multipart 확장을 쓰거나, 결국 미리 서명된 URL을 GraphQL로 받고 업로드는 HTTP로 따로 한다.
+
+화면이 몇 개 안 되는 CRUD 서비스, 백엔드와 프론트엔드를 한 팀이 같이 고치는 서비스도 REST로 충분하다. 응답 모양이 안 맞으면 엔드포인트를 고치면 되기 때문이다. 서비스끼리의 내부 호출은 [gRPC](/posts/grpc)가 계약과 성능 면에서 더 잘 맞는다.
+
+GraphQL을 고르면 같이 떠안는 것들이 있다. N+1을 막는 로더, 깊이·비용 제한, 상태 코드 대신 errors를 세는 모니터링, POST라서 빠지는 HTTP 캐시, operationName 단위로 나눠 봐야 하는 로그다. 여러 클라이언트(웹, iOS, 안드로이드)가 각자 다른 화면을 빠르게 바꾸는 조직이라면 이 비용을 내고도 남는다. 그래서 GraphQL은 흔히 클라이언트 바로 뒤, 여러 내부 서비스를 묶는 BFF(Backend for Frontend) 자리에 둔다.
+
+## 운영에서 GraphQL이 느려졌을 때
+
+URL이 모두 `/graphql`이라 nginx access log의 요청 시간 분포만으로는 무엇이 느린지 알 수 없다. 처음 할 일은 operationName별 지연과 에러 수를 남기는 것이다. 클라이언트에 operationName 없는 쿼리를 금지하는 린트 규칙을 두면 이 작업이 쉬워진다.
+
+느린 작업을 찾았으면 리졸버 단위로 쪼개 본다. 분산 추적(OpenTelemetry의 GraphQL 계측)을 켜면 필드마다 span이 생기는데, 같은 이름의 span이 수십 개 나란히 있으면 로더가 빠진 N+1이다. 앞의 데모처럼 요청마다 DB 호출 수를 세어 로그에 남기는 것만으로도 51과 3의 차이가 바로 보인다.
+
+화면이 빈다는 신고가 왔는데 에러율 대시보드가 깨끗하면 응답의 `errors`를 의심한다. 앞에서 본 것처럼 필드 하나의 실패가 non-null을 타고 올라가 큰 덩어리를 null로 만들었을 가능성이 높다. 어느 `path`에서 시작했는지가 에러 객체에 들어 있다.
+
+## 화면이 쿼리를 쓰고, 서버는 그 값을 치른다
+
+GraphQL은 화면이 필요한 모양을 쿼리로 적고 서버가 그 모양대로 채워 주는 방식이다. 오버페칭과 언더페칭이 사라지는 대신, 일의 양을 클라이언트가 정하게 된다. 그래서 서버는 같은 틱의 키를 묶어 N+1을 막고, 깊이와 비용을 실행 전에 재고, 상태 코드 대신 errors를 세고, 캐시가 필요하면 쿼리를 해시로 바꿔 GET으로 돌려야 한다. 이 값을 치를 만큼 화면이 다양한지가 GraphQL을 고르는 기준이다.
+
+## 면접에서 나올 만한 질문
+
+### GraphQL은 REST와 무엇이 다른가요?
+
+GraphQL은 클라이언트가 필요한 필드와 관계를 쿼리로 적어 보내고, 서버는 스키마에 맞춰 그 모양대로 응답한다. REST는 서버가 자원마다 응답 모양을 정하므로 필요 없는 필드까지 받거나(오버페칭) 관계를 따라 여러 번 요청해야(언더페칭) 하는 일이 생긴다. GraphQL은 보통 엔드포인트 하나에 POST로 보내고, 타입이 있는 스키마가 계약 역할을 한다. 대신 HTTP 캐시, 상태 코드, URL 단위 권한 같은 HTTP의 기본 도구를 그대로 쓰기 어렵다.
+
+### GraphQL에서 N+1 문제는 왜 생기고 어떻게 막나요?
+
+리졸버가 부모 객체 하나만 받기 때문에, 목록의 원소마다 관계 필드 리졸버가 따로 DB를 부르면서 생긴다. 글 10개와 댓글 30개짜리 쿼리에서 51번이던 DB 호출이 DataLoader로 3번이 됐다. DataLoader는 같은 틱에 load된 키를 모았다가 다음 틱에 배치 함수를 한 번 부르고, 같은 요청 안에서 같은 키를 캐시한다. 로더는 요청마다 새로 만들어야 사용자 사이에 캐시가 섞이지 않는다.
+
+### GraphQL은 에러가 나도 왜 200을 주나요?
+
+응답 하나에 성공한 필드와 실패한 필드가 함께 있을 수 있어서, HTTP 상태 하나로 표현할 수 없기 때문이다. 실행 단계의 에러는 해당 필드를 null로 만들고 errors 배열에 path를 담아 200으로 돌려준다. 문법·검증 에러는 GraphQL over HTTP 명세의 새 미디어 타입을 쓰면 400을 받는다. 그래서 모니터링은 상태 코드가 아니라 errors 배열을 operationName별로 세야 한다.
+
+### non-null 필드에서 에러가 나면 응답은 어떻게 되나요?
+
+null이 될 수 없는 필드가 실패하면 그 null이 위로 전파되어, null을 허용하는 가장 가까운 부모 필드가 null이 된다. 데모에서 `email: String!` 하나가 실패하자 같은 객체의 `name`까지 포함해 `user` 전체가 null이 됐다. 부모들이 모두 non-null이면 data 전체가 null이 된다. 그래서 외부 호출이나 권한 때문에 실패할 수 있는 필드에는 `!`를 붙이지 않는 편이 안전하다.
+
+### GraphQL에서 HTTP 캐시를 쓰려면 어떻게 하나요?
+
+POST는 HTTP 캐시가 저장하지 않으므로 GET으로 보내야 하는데, 쿼리 전체를 URL에 실으면 길고 키가 흔들린다. persisted query로 쿼리 대신 SHA-256 해시를 보내면 URL이 짧고 일정해져 CDN과 프록시가 캐시할 수 있다. 처음 보는 해시면 서버가 NotFound로 답하고, 클라이언트가 쿼리와 해시를 함께 보내 등록한 뒤 다음부터 해시만 보낸다. 개인화된 응답은 공유 캐시에 두지 않고 클라이언트의 정규화 캐시에 맡긴다.
+
+### 악의적인 깊은 쿼리는 어떻게 막나요?
+
+검증 단계에서 깊이와 비용을 계산해 한도를 넘으면 실행 전에 거절한다. 데모에서 고리를 따라가는 쿼리는 깊이가 2 늘 때마다 DB 호출이 약 3배가 됐고, DataLoader로는 줄지 않았다. 깊이만 보면 얕고 넓은 쿼리가 빠져나가므로, `first` 같은 목록 인자를 곱한 비용 한도와 목록 크기 상한, 실행 타임아웃을 함께 둔다. 자사 앱만 쓰는 API라면 빌드 때 뽑은 쿼리만 허용하는 trusted documents가 가장 강한 방어다.
+
+### 운영에서 introspection을 끄면 안전한가요?
+
+정보를 덜 주는 효과는 있지만 그것만으로 안전하지는 않는다. introspection을 꺼도 "Did you mean" 제안으로 필드 이름을 하나씩 알아낼 수 있고, 이를 이용해 스키마를 복원하는 도구도 있다. 진짜 방어는 비용 제한, 허용 목록, 그리고 리졸버나 비즈니스 계층에서 하는 필드 단위 권한 검사다. 엔드포인트가 하나라 URL 기반 권한 규칙이 통하지 않는다는 것도 같이 말한다.
+
+### GraphQL 대신 REST를 고르는 경우는요?
+
+공개 API, 파일 업로드·다운로드, 화면이 적은 CRUD 서비스라면 REST가 낫다. curl로 바로 시험하고, URL 단위로 캐시·요청 수 제한·권한을 걸 수 있으며, 운영 도구가 상태 코드를 그대로 이해한다. GraphQL은 여러 클라이언트가 각자 다른 화면을 자주 바꾸는 조직에서 BFF 자리에 둘 때 비용을 감당할 가치가 생긴다. 서비스끼리의 내부 호출은 gRPC가 더 잘 맞다.

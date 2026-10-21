@@ -2,6 +2,182 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-styles-overview": {
+    "links": [
+      "event-driven-architecture",
+      "message-queue-basics",
+      "rest-api-design",
+      "api-pagination-sorting",
+      "grpc",
+      "graphql-basics",
+      "webhooks",
+      "websocket-deep-dive",
+      "http-streaming-sse",
+      "realtime-communication",
+      "api-versioning",
+      "rate-limiting-in-practice",
+      "microservices",
+      "idempotency-key",
+      "sd-chat-connections"
+    ],
+    "mentions": [
+      "server-sent-events",
+      "osi-in-practice",
+      "rabbitmq-basics",
+      "http-versions",
+      "kafka-basics",
+      "http-status-codes",
+      "ssrf",
+      "sql-query-rewrite",
+      "gateway"
+    ]
+  },
+  "http-streaming-sse": {
+    "links": [
+      "realtime-communication",
+      "server-sent-events",
+      "http-versions",
+      "streaming-ssr-suspense",
+      "backpressure",
+      "loading-patterns",
+      "nginx-reverse-proxy",
+      "timeouts",
+      "websocket-deep-dive",
+      "long-polling"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "elasticsearch-inverted-index",
+      "json-crud-http",
+      "rendering-strategies",
+      "http-status-codes",
+      "what-happens-google-com",
+      "grpc"
+    ]
+  },
+  "graphql-basics": {
+    "links": [
+      "api-styles-overview",
+      "rest-api-design",
+      "n-plus-one-queries",
+      "websocket-deep-dive",
+      "http-streaming-sse",
+      "client-data-cache",
+      "api-versioning",
+      "grpc"
+    ],
+    "mentions": [
+      "edge-caching",
+      "observability-basics",
+      "pattern-iterator",
+      "realtime-communication",
+      "proxy-reverse-proxy",
+      "distributed-tracing",
+      "pattern-proxy",
+      "sql-batch-timeout-pool",
+      "http-status-codes",
+      "cookie-session-login",
+      "sql-query-rewrite",
+      "db-modeling-normalization",
+      "gateway"
+    ]
+  },
+  "docker-commands-workflow": {
+    "links": [
+      "docker-container-basics",
+      "dockerfile-image-layers",
+      "docker-network-volume",
+      "structured-logging",
+      "centralized-logging-pipeline",
+      "k8s-pod-troubleshooting",
+      "linux-processes-signals",
+      "express-middleware",
+      "github-actions-docker-ecr",
+      "network-troubleshooting-by-layer",
+      "docker-compose"
+    ],
+    "mentions": [
+      "k8s-pod-resources",
+      "linux-namespaces-cgroups"
+    ]
+  },
+  "claude-code-fundamentals-map": {
+    "links": [
+      "claude-code-project-structure",
+      "claude-code-extensions",
+      "claude-code-context-window",
+      "claude-code-parallel-and-scheduled"
+    ],
+    "mentions": [
+      "git-tips-advanced",
+      "postgres-architecture"
+    ]
+  },
+  "claude-code-parallel-and-scheduled": {
+    "links": [
+      "git-tips-advanced",
+      "claude-code-context-window",
+      "git-merge-conflict",
+      "claude-code-fundamentals-map"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "docker-compose",
+      "git-branch-merge",
+      "postgres-architecture"
+    ]
+  },
+  "claude-code-context-window": {
+    "links": [
+      "claude-code-project-structure",
+      "claude-code-extensions",
+      "claude-code-parallel-and-scheduled"
+    ],
+    "mentions": [
+      "postgres-architecture"
+    ]
+  },
+  "claude-code-extensions": {
+    "links": [
+      "claude-code-project-structure",
+      "claude-code-context-window",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "git-remote-collaboration",
+      "osi-in-practice"
+    ]
+  },
+  "claude-code-project-structure": {
+    "links": [
+      "claude-code-extensions",
+      "claude-code-context-window",
+      "git-large-files-secrets",
+      "claude-code-fundamentals-map"
+    ],
+    "mentions": [
+      "git-ignore-config",
+      "git-tips-advanced"
+    ]
+  },
+  "kafka-vs-rabbitmq-replay": {
+    "links": [
+      "kafka-basics",
+      "rabbitmq-basics",
+      "sd-mq-storage-partitions",
+      "sd-mq-consumer-groups",
+      "message-delivery-semantics",
+      "event-sourcing",
+      "dead-letter-queue",
+      "transactional-outbox"
+    ],
+    "mentions": [
+      "sd-object-storage-architecture",
+      "pub-sub",
+      "dns",
+      "zero-downtime-migrations"
+    ]
+  },
   "db-performance-map": {
     "links": [
       "db-index",
@@ -2931,6 +3107,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "hydration",
+      "graphql-basics",
       "rendering-strategies"
     ]
   },
@@ -3455,6 +3632,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "api-styles-overview",
       "rendering-strategies",
       "js-function-forms",
       "http-status-codes"
@@ -3489,6 +3667,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-basics",
+      "graphql-basics",
       "sd-start-single-server",
       "http-caching-cdn",
       "sql-batch-timeout-pool",
@@ -3755,6 +3934,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "grafana-dashboards"
     ],
     "mentions": [
+      "docker-commands-workflow",
       "iptables-basics",
       "cron-jobs",
       "centralized-logging-pipeline",
@@ -5000,6 +5180,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "docker-commands-workflow",
       "k8s-cri-cni-csi",
       "iptables-basics",
       "k8s-security-context",
@@ -5040,6 +5221,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
+      "graphql-basics",
       "dockerfile-image-layers",
       "js-hoisting-tdz"
     ]
@@ -5953,6 +6135,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "event-loop",
       "db-architecture-by-scale",
+      "graphql-basics",
       "vpc-basics",
       "sql-batch-timeout-pool",
       "redis-basics"
@@ -6019,6 +6202,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "websocket-deep-dive",
       "long-polling",
+      "http-streaming-sse",
       "http-versions",
       "loading-patterns"
     ],
@@ -6130,6 +6314,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "schema-versioning"
     ],
     "mentions": [
+      "graphql-basics",
       "sd-queue-logging-automation",
       "kafka-basics",
       "http-status-codes",
@@ -6151,6 +6336,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "osi-in-practice",
       "iptables-basics",
+      "graphql-basics",
       "kubernetes-ingress",
       "http-status-codes",
       "k8s-hpa",
@@ -6878,6 +7064,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "blue-green-deployment",
       "k8s-pod-basics",
+      "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
       "osi-in-practice",
@@ -7019,7 +7206,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dead-letter-queue",
       "message-delivery-semantics",
       "event-driven-architecture",
-      "kafka-basics"
+      "kafka-basics",
+      "kafka-vs-rabbitmq-replay"
     ],
     "mentions": [
       "raft-consensus",
@@ -8073,6 +8261,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "http-status-codes",
+      "graphql-basics",
       "sd-start-single-server",
       "nat-traversal",
       "osi-in-practice",
@@ -8364,6 +8553,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc",
       "go-concurrency-basics",
       "k8s-pod-basics",
+      "docker-commands-workflow",
       "linux-namespaces-cgroups",
       "k8s-architecture",
       "local-k8s-kind-minikube"
@@ -8859,6 +9049,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rest-api-design",
+      "graphql-basics",
       "mysql-innodb-basics",
       "loading-patterns",
       "db-index-design",
@@ -9656,6 +9847,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "git-branching-strategy",
       "git-troubleshooting",
+      "claude-code-parallel-and-scheduled",
       "git-merge-conflict"
     ],
     "mentions": [
@@ -10142,6 +10334,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations",
       "proxy-reverse-proxy",
       "layer-link-ethernet-arp",
+      "docker-commands-workflow",
       "k8s-coredns",
       "sdn-vxlan-overlay",
       "redis-basics",
@@ -10161,6 +10354,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-probes",
       "iptables-basics",
       "proxy-reverse-proxy",
+      "docker-commands-workflow",
       "redis-basics",
       "iptables-nat",
       "redis-persistence-ha",
@@ -10170,7 +10364,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "docker-container-basics": {
     "links": [
       "dockerfile-image-layers",
-      "iptables-nat"
+      "iptables-nat",
+      "docker-commands-workflow"
     ],
     "mentions": [
       "linux-namespaces-cgroups",
@@ -10306,6 +10501,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-reverse-proxy"
     ],
     "mentions": [
+      "graphql-basics",
       "json-crud-http",
       "elasticsearch-inverted-index",
       "gateway",
@@ -10403,6 +10599,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-versioning",
       "base64",
       "optimistic-locking",
+      "graphql-basics",
       "loading-patterns",
       "db-locking-deadlock",
       "db-index-design",
@@ -10427,6 +10624,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "https-tls",
       "rest-api-design",
+      "graphql-basics",
       "proxy-reverse-proxy",
       "token-login",
       "sd-start-single-server",

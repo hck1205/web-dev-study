@@ -8,6 +8,7 @@ import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
+import { API_STYLES_OVERVIEW } from "./api-styles-overview";
 import { API_VERSIONING } from "./api-versioning";
 import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview";
 import { ARGOCD_BASICS } from "./argocd-basics";
@@ -35,6 +36,11 @@ import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CLAUDE_CODE_CONTEXT_WINDOW } from "./claude-code-context-window";
+import { CLAUDE_CODE_EXTENSIONS } from "./claude-code-extensions";
+import { CLAUDE_CODE_FUNDAMENTALS_MAP } from "./claude-code-fundamentals-map";
+import { CLAUDE_CODE_PARALLEL_AND_SCHEDULED } from "./claude-code-parallel-and-scheduled";
+import { CLAUDE_CODE_PROJECT_STRUCTURE } from "./claude-code-project-structure";
 import { CLEAN_ARCHITECTURE } from "./clean-architecture";
 import { CLIENT_DATA_CACHE } from "./client-data-cache";
 import { CLOCK_SKEW } from "./clock-skew";
@@ -91,6 +97,7 @@ import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
 import { DISTRIBUTED_TRANSACTIONS_2PC } from "./distributed-transactions-2pc";
 import { DNS } from "./dns";
+import { DOCKER_COMMANDS_WORKFLOW } from "./docker-commands-workflow";
 import { DOCKER_COMPOSE } from "./docker-compose";
 import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
@@ -142,6 +149,7 @@ import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
 import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRAPH_RAG } from "./graph-rag";
+import { GRAPHQL_BASICS } from "./graphql-basics";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -157,6 +165,7 @@ import { HTTP_CACHING_CDN } from "./http-caching-cdn";
 import { HTTP_MESSAGE } from "./http-message";
 import { HTTP_METHODS } from "./http-methods";
 import { HTTP_STATUS_CODES } from "./http-status-codes";
+import { HTTP_STREAMING_SSE } from "./http-streaming-sse";
 import { HTTP_VERSIONS } from "./http-versions";
 import { HTTPS_TLS } from "./https-tls";
 import { HYDRATION } from "./hydration";
@@ -265,6 +274,7 @@ import { K8S_STATEFULSET } from "./k8s-statefulset";
 import { K8S_STORAGECLASS_SNAPSHOTS } from "./k8s-storageclass-snapshots";
 import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
+import { KAFKA_VS_RABBITMQ_REPLAY } from "./kafka-vs-rabbitmq-replay";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
 import { KUBECTL_ESSENTIALS } from "./kubectl-essentials";
@@ -562,6 +572,7 @@ export const QUESTION_SETS = [
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
+  API_STYLES_OVERVIEW,
   API_VERSIONING,
   ARCHITECTURE_PATTERNS_OVERVIEW,
   ARGOCD_BASICS,
@@ -589,6 +600,11 @@ export const QUESTION_SETS = [
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CLAUDE_CODE_CONTEXT_WINDOW,
+  CLAUDE_CODE_EXTENSIONS,
+  CLAUDE_CODE_FUNDAMENTALS_MAP,
+  CLAUDE_CODE_PARALLEL_AND_SCHEDULED,
+  CLAUDE_CODE_PROJECT_STRUCTURE,
   CLEAN_ARCHITECTURE,
   CLIENT_DATA_CACHE,
   CLOCK_SKEW,
@@ -645,6 +661,7 @@ export const QUESTION_SETS = [
   DISTRIBUTED_TRACING,
   DISTRIBUTED_TRANSACTIONS_2PC,
   DNS,
+  DOCKER_COMMANDS_WORKFLOW,
   DOCKER_COMPOSE,
   DOCKER_CONTAINER_BASICS,
   DOCKER_NETWORK_DRIVERS,
@@ -696,6 +713,7 @@ export const QUESTION_SETS = [
   GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
   GRAPH_RAG,
+  GRAPHQL_BASICS,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,
@@ -711,6 +729,7 @@ export const QUESTION_SETS = [
   HTTP_MESSAGE,
   HTTP_METHODS,
   HTTP_STATUS_CODES,
+  HTTP_STREAMING_SSE,
   HTTP_VERSIONS,
   HTTPS_TLS,
   HYDRATION,
@@ -819,6 +838,7 @@ export const QUESTION_SETS = [
   K8S_STORAGECLASS_SNAPSHOTS,
   K8S_VPA,
   KAFKA_BASICS,
+  KAFKA_VS_RABBITMQ_REPLAY,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,
   KUBECTL_ESSENTIALS,

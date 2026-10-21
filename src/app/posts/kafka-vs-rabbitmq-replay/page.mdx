@@ -1,0 +1,613 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kafka-vs-rabbitmq-replay");
+
+포인트 적립 컨슈머에 버그가 있었다. 새벽에 배포한 버전이 주문 금액 대신 0을 읽어서, 그 뒤로 들어온 주문은 전부 0점으로 적립됐다. 코드를 고쳐 다시 배포했다. 이제 남은 일은 버그가 돌던 동안의 주문을 한 번 더 처리하는 것이다. 그런데 그 주문들은 어디에 있나.
+
+브로커가 Kafka였다면 주문은 아직 토픽에 있다. 컨슈머의 책갈피를 버그 배포 시각으로 옮기면 된다. RabbitMQ의 보통 큐였다면 주문은 이미 없다. 컨슈머가 ack하는 순간 브로커가 지웠기 때문이다. 같은 "메시지 브로커"인데 읽은 메시지의 운명이 정반대다. 이 글은 그 차이 하나만 판다. 읽은 메시지가 어디로 가는지, 그래서 다시 처리해야 할 때 무엇을 할 수 있는지, 그 대가로 무엇을 내는지다.
+
+Ubuntu 24.04에서 직접 돌렸다. Kafka는 Apache 공식 tarball 3.9.1을 KRaft 모드 브로커 한 대로 띄웠고(OpenJDK 21), RabbitMQ는 3.12.1(Erlang 25)을 서비스로 등록하지 않고 노드 하나만 따로 띄웠다. RabbitMQ 클라이언트는 Node.js 22의 `amqplib` 0.10.4다.
+
+이 주제의 다른 글: 파티션과 오프셋, 랙, 컴팩션의 기본은 [Kafka 기초](/posts/kafka-basics)에, 익스체인지와 ack, 쿼럼 큐는 [RabbitMQ 기초](/posts/rabbitmq-basics)에 있다. 지우지 않는 로그를 디스크에 어떻게 쌓는지는 [분산 메시지 큐 설계 ①](/posts/sd-mq-storage-partitions), 그룹마다 책갈피를 어디에 두는지는 [분산 메시지 큐 설계 ②](/posts/sd-mq-consumer-groups)에서 다룬다. 여기서는 그 설명을 되풀이하지 않고 "다시 읽기"라는 한 가지 질문으로 둘을 나란히 놓는다.
+
+## 같은 주문 8건을 양쪽에 보냈다
+
+비교를 공정하게 하려고 같은 주문 8건(`o-1`~`o-8`)을 양쪽에 넣었다. 받는 쪽은 메일 발송과 포인트 적립 두 곳이다.
+
+Kafka에는 파티션 하나짜리 `orders` 토픽을 만들고 4건을 넣은 뒤, 몇 초 쉬고 4건을 더 넣었다. 중간에 쉰 이유는 뒤에서 시각으로 되감기를 해 보려고다. 그다음 `email`, `points` 두 소비자 그룹이 각자 8건을 읽었다.
+
+```bash
+# 파티션 하나짜리 토픽
+kafka-topics.sh --bootstrap-server 127.0.0.1:18170 --create --topic orders \
+  --partitions 1 --replication-factor 1
+
+# 넣은 메시지를 오프셋, 키, 생성 시각과 함께 본다
+kafka-console-consumer.sh --bootstrap-server 127.0.0.1:18170 --topic orders \
+  --from-beginning --max-messages 8 \
+  --property print.offset=true --property print.key=true --property print.timestamp=true
+```
+
+```text
+CreateTime:1792610000053	Offset:0	o-1	{"orderId":1,"email":"u1@example.com"}
+CreateTime:1792610000075	Offset:1	o-2	{"orderId":2,"email":"u2@example.com"}
+CreateTime:1792610000075	Offset:2	o-3	{"orderId":3,"email":"u3@example.com"}
+CreateTime:1792610000075	Offset:3	o-4	{"orderId":4,"email":"u4@example.com"}
+CreateTime:1792610007692	Offset:4	o-5	{"orderId":5,"email":"u5@example.com"}
+CreateTime:1792610007708	Offset:5	o-6	{"orderId":6,"email":"u6@example.com"}
+CreateTime:1792610007709	Offset:6	o-7	{"orderId":7,"email":"u7@example.com"}
+CreateTime:1792610007709	Offset:7	o-8	{"orderId":8,"email":"u8@example.com"}
+Processed a total of 8 messages
+```
+
+`CreateTime`은 밀리초 단위 유닉스 시각이다. 앞 4건은 한국 시간 04:13:20, 뒤 4건은 04:13:27에 들어왔다. 두 그룹이 다 읽은 뒤의 상태는 이렇다.
+
+```bash
+# 두 그룹의 책갈피 위치를 본다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --describe --group email --group points
+```
+
+```text
+Consumer group 'email' has no active members.
+
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+email           orders          0          8               8               0               -               -               -
+Consumer group 'points' has no active members.
+
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+points          orders          0          8               8               0               -               -               -
+```
+
+두 그룹 모두 `CURRENT-OFFSET`이 8이다. "다음에는 8번부터 읽겠다"는 뜻이다. 0번부터 7번까지의 주문은 토픽에 그대로 있고, 그룹이 기억하는 건 숫자 하나뿐이다.
+
+RabbitMQ 쪽은 fanout 익스체인지 `orders`에 큐 두 개(`orders.email`, `orders.points`)를 묶고 같은 8건을 발행 확인과 함께 보냈다. 컨슈머가 받기 전과, 하나씩 받아 ack한 뒤를 비교했다.
+
+```bash
+# 큐마다 대기 중인 메시지, 받았지만 ack 안 한 메시지, 컨슈머 수
+rabbitmqctl list_queues name type messages_ready messages_unacknowledged consumers
+```
+
+```text
+-- 받기 전
+name	type	messages_ready	messages_unacknowledged	consumers
+orders.points	classic	8	0	0
+orders.email	classic	8	0	0
+
+-- 두 컨슈머가 8건씩 받아 ack한 뒤
+name	type	messages_ready	messages_unacknowledged	consumers
+orders.points	classic	0	0	0
+orders.email	classic	0	0	0
+```
+
+컨슈머 출력과, 그 뒤에 같은 큐에서 하나를 더 꺼내 보려 한 결과다.
+
+```text
+email 받음: o-1,o-2,o-3,o-4,o-5,o-6,o-7,o-8
+points 받음: o-1,o-2,o-3,o-4,o-5,o-6,o-7,o-8
+orders.email 다시 get: false
+```
+
+`basic.get`이 `false`를 돌려줬다. 큐가 비었다는 뜻이다. 양쪽 컨슈머 모두 8건을 받았다는 결과는 같다. 다른 건 받은 뒤다. Kafka에는 8건이 남아 있고 RabbitMQ에는 0건이 남아 있다.
+
+아래 그림에서 다음을 누르면 한 주문이 양쪽에서 어떻게 처리되는지 따라간다. Kafka 쪽은 컨슈머가 "어디까지 읽었다"를 따로 적고, RabbitMQ 쪽은 "처리했다"는 말이 곧 삭제 명령이다.
+
+<SequenceDiagram
+  caption="Kafka는 책갈피를 옮기고, RabbitMQ는 ack를 받으면 지운다"
+  actors={[
+    { id: "p", label: "주문 서비스" },
+    { id: "k", label: "Kafka" },
+    { id: "r", label: "RabbitMQ" },
+    { id: "c", label: "메일 컨슈머" },
+  ]}
+  steps={[
+    { from: "p", to: "k", label: "o-1 → offset 0", title: "Kafka 로그 끝에 붙는다", detail: "브로커는 o-1을 파티션 로그의 0번 자리에 적는다. 누가 읽든 이 자리는 보관 기간 동안 그대로다." },
+    { from: "p", to: "r", label: "o-1 → 큐", title: "RabbitMQ 큐에 들어간다", detail: "fanout 익스체인지가 묶인 큐마다 한 부씩 넣는다. 큐에 있는 동안은 처리할 일로 남아 있다." },
+    { from: "c", to: "k", label: "fetch offset 0", title: "컨슈머가 0번부터 달라고 한다", detail: "Kafka 컨슈머는 직접 위치를 정해 가져간다. 브로커는 누가 무엇을 가져갔는지 신경 쓰지 않는다." },
+    { from: "c", to: "k", label: "commit 1", title: "책갈피를 1로 옮긴다", detail: "처리한 뒤 다음에 읽을 위치를 커밋한다. 메시지는 그대로 두고 그룹의 숫자만 바뀐다.", payload: "__consumer_offsets: (email, orders, 0) = 1" },
+    { from: "r", to: "c", label: "deliver o-1", title: "RabbitMQ가 메시지를 밀어준다", detail: "브로커가 컨슈머에게 보내고, ack가 올 때까지 unacked로 잡아 둔다." },
+    { from: "c", to: "r", label: "ack", title: "ack가 곧 삭제다", detail: "처리했다는 신호를 받으면 브로커는 큐에서 그 메시지를 지운다. 같은 큐를 다시 읽어도 o-1은 없다." },
+    { from: "c", to: "k", label: "fetch offset 0", title: "Kafka는 다시 읽힌다", detail: "책갈피를 0으로 되돌리면 o-1을 다시 받는다. 되감을 수 있는 범위는 보관 기간이 정한다." },
+    { from: "c", to: "r", label: "basic.get", title: "RabbitMQ는 빈손이다", detail: "큐가 비어 있어 false가 돌아온다. 다시 처리하려면 브로커 밖에 남겨 둔 원본에서 다시 보내야 한다." },
+  ]}
+/>
+
+## 일을 나눠 주는 큐, 일어난 일을 적는 로그
+
+두 설계가 갈린 이유는 메시지를 무엇으로 보느냐에 있다.
+
+RabbitMQ의 클래식 큐에서 메시지는 "해야 할 일"이다. 일은 누군가 끝내면 목록에서 지운다. 할 일 목록에 끝난 일이 남아 있으면 오히려 문제다. 그래서 브로커가 메시지마다 누가 받아 갔는지, ack했는지를 기억하고, ack가 오면 지운다. 같은 주문을 메일과 포인트 둘 다 처리해야 하면 큐를 두 개 만들어 메시지를 두 부로 복사한다.
+
+Kafka의 토픽에서 메시지는 "일어난 일의 기록"이다. 주문이 들어왔다는 사실은 누가 읽었다고 사라지지 않는다. 브로커는 기록을 순서대로 붙이기만 하고, 읽는 쪽 사정은 그룹마다 숫자 하나(오프셋)로만 기억한다. 이 글에서는 이 숫자를 계속 책갈피라고 부르겠다. 책은 하나고 책갈피는 그룹마다 따로다. 메일 그룹이 끝까지 읽었다고 포인트 그룹의 책갈피가 움직이지 않는다.
+
+이 차이는 브로커가 하는 일의 양으로도 나타난다. RabbitMQ는 메시지 하나하나의 상태(대기, 전달됨, ack됨)를 관리하니 메시지 단위의 재전달, 우선순위, TTL, 데드 레터 같은 기능을 붙이기 쉽다. Kafka는 메시지 상태를 관리하지 않는 대신, 같은 기록을 몇 그룹이 읽든 저장은 한 번이고 그룹을 하나 더 붙여도 브로커가 할 일이 거의 늘지 않는다.
+
+아래 그림은 한 토픽에 세 그룹이 붙은 모습이다. 다음을 누르면 각 그룹이 자기 책갈피 위치에서 따로 읽는다.
+
+<NetworkTopology
+  caption="토픽은 하나, 책갈피는 그룹마다 하나"
+  width={400}
+  height={280}
+  zones={[{ id: "broker", label: "Kafka 브로커", x: 120, y: 20, w: 150, h: 240, tone: "private" }]}
+  nodes={[
+    { id: "prod", label: "주문 서비스", x: 52, y: 140, icon: "server", w: 92 },
+    { id: "topic", label: "orders", sub: "offset 0..7", x: 195, y: 80, icon: "db", w: 110 },
+    { id: "offs", label: "책갈피", sub: "__consumer_offsets", x: 195, y: 205, icon: "lock", w: 130 },
+    { id: "email", label: "email", sub: "at 8", x: 340, y: 60, icon: "container", w: 86 },
+    { id: "points", label: "points", sub: "at 4", x: 340, y: 140, icon: "container", w: 86 },
+    { id: "ana", label: "analytics", sub: "new", x: 340, y: 220, icon: "container", w: 86 },
+  ]}
+  links={[
+    { from: "prod", to: "topic", label: "append" },
+    { from: "topic", to: "email" },
+    { from: "topic", to: "points" },
+    { from: "topic", to: "ana" },
+    { from: "offs", to: "email", dashed: true },
+    { from: "offs", to: "points", dashed: true },
+    { from: "offs", to: "ana", dashed: true },
+  ]}
+  steps={[
+    { path: ["prod", "topic"], packet: "o-1..8", title: "주문이 로그 끝에 붙는다", detail: "8건이 오프셋 0부터 7까지 차례로 적힌다. 저장은 한 번뿐이다." },
+    { path: ["topic", "email"], packet: "0..7", title: "메일 그룹이 끝까지 읽는다", detail: "email 그룹의 책갈피는 8이다. 새 주문이 오기 전까지 더 받을 것이 없다." },
+    { path: ["topic", "points"], packet: "4..7", highlight: ["offs"], title: "포인트 그룹만 되감았다", detail: "points 그룹의 책갈피를 4로 옮겼다. 4번부터 다시 받는다. email 그룹은 아무 영향이 없다." },
+    { path: ["topic", "ana"], packet: "0..7", highlight: ["offs"], title: "새 그룹은 처음부터 읽을 수 있다", detail: "analytics 그룹은 책갈피가 없어서 auto.offset.reset이 시작 위치를 정한다. earliest면 0번부터 8건을 받는다." },
+  ]}
+/>
+
+## 버그 난 컨슈머를 배포 시각으로 되감기
+
+처음의 장애로 돌아가자. 버그 난 버전이 04:13:23쯤 배포됐고, 그 뒤 주문(`o-5`~`o-8`)이 0점으로 적립됐다고 하자. 메일은 정상으로 나갔으니 메일 그룹은 건드리면 안 된다. 되감는 건 `points` 그룹 하나다.
+
+Kafka는 시각으로도 오프셋을 찾는다. 세그먼트 파일마다 `.timeindex` 파일이 있어서 "이 시각 이후 첫 메시지가 몇 번인가"를 빠르게 찾는다. 파티션 디렉터리를 보면 `.log`, `.index` 옆에 그 파일이 있다.
+
+```text
+-rw-r--r-- 1 root root 10485760 Oct 21 19:13 00000000000000000000.index
+-rw-r--r-- 1 root root      506 Oct 21 19:13 00000000000000000000.log
+-rw-r--r-- 1 root root 10485756 Oct 21 19:13 00000000000000000000.timeindex
+```
+
+먼저 `kafka-get-offsets.sh`로 시각별 오프셋을 물어볼 수 있다. `-2`는 가장 앞, `-1`은 끝, 양수는 밀리초 시각이다.
+
+```bash
+# 가장 앞, 끝, 04:13:23(KST)에 해당하는 오프셋
+kafka-get-offsets.sh --bootstrap-server 127.0.0.1:18170 --topic orders --time -2
+kafka-get-offsets.sh --bootstrap-server 127.0.0.1:18170 --topic orders --time -1
+kafka-get-offsets.sh --bootstrap-server 127.0.0.1:18170 --topic orders --time 1792610003000
+```
+
+```text
+orders:0:0
+orders:0:8
+orders:0:4
+```
+
+04:13:23 이후 첫 메시지는 4번이다. 이제 책갈피를 옮긴다. 순서는 늘 같다. 지금 위치를 파일로 남기고, `--dry-run`으로 새 위치를 보고, `--execute`로 반영한다.
+
+```bash
+# 1. 지금 책갈피를 CSV로 남긴다. 되돌릴 때 쓴다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --group points --topic orders \
+  --reset-offsets --to-current --dry-run --export > points-before.csv
+
+# 2. 시각으로 옮기면 어디가 되는지 미리 본다. 시간대를 꼭 붙인다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --group points --topic orders \
+  --reset-offsets --to-datetime 2026-10-22T04:13:23.000+09:00 --dry-run
+
+# 3. 실제로 옮긴다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --group points --topic orders \
+  --reset-offsets --to-datetime 2026-10-22T04:13:23.000+09:00 --execute
+```
+
+```text
+$ cat points-before.csv
+orders,0,8
+
+GROUP                          TOPIC                          PARTITION  NEW-OFFSET     points                         orders                         0          4              
+```
+
+3.9.1에서는 머리글 줄과 값 줄이 줄바꿈 없이 이어져 찍힌다. 맨 끝 숫자 4가 새 오프셋이다. `--to-datetime`에 시간대를 붙이지 않으면 명령을 실행한 컴퓨터의 시간대로 읽는다. 서버는 UTC, 사람은 KST로 생각하는 경우가 많아서 9시간 어긋난 위치로 옮기는 실수가 나온다. 시간대를 늘 적는 습관이 안전하다.
+
+반영 뒤 그룹 상태와, 다시 띄운 컨슈머가 받은 것이다.
+
+```text
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+points          orders          0          4               8               4               -               -               -
+
+Offset:4	o-5	{"orderId":5,"email":"u5@example.com"}
+Offset:5	o-6	{"orderId":6,"email":"u6@example.com"}
+Offset:6	o-7	{"orderId":7,"email":"u7@example.com"}
+Offset:7	o-8	{"orderId":8,"email":"u8@example.com"}
+Processed a total of 4 messages
+```
+
+`LAG`이 4가 됐다. 랙이 "앞으로 다시 처리할 양"을 그대로 보여 준다. 실제 운영에서 몇 시간치를 되감으면 랙이 수십만으로 튀어 랙 알람이 울리니, 되감기 전에 알람을 잠시 조정하거나 담당자에게 알려 둔다. 같은 시각에 메일 그룹은 `CURRENT-OFFSET 8`, `LAG 0` 그대로였다.
+
+아래 그림은 points 그룹의 책갈피가 끝까지 갔다가 배포 시각으로 돌아오는 과정이다.
+
+<AlgoTrace
+  caption="points 그룹의 책갈피를 04:13:23로 되감는다"
+  cells={["0 :20", "1 :20", "2 :20", "3 :20", "4 :27", "5 :27", "6 :27", "7 :27"]}
+  memoryLabel="points 그룹"
+  steps={[
+    { caption: "8건이 들어 있다. 칸 아래 숫자는 오프셋과 들어온 초(04:13)다.", memory: ["커밋 0"] },
+    { pointer: 3, found: [0, 1, 2, 3], caption: "0~3번은 정상 버전이 처리했다.", memory: ["커밋 4", "정상 4건"] },
+    { pointer: 7, found: [0, 1, 2, 3], caption: "4~7번은 버그 버전이 0점으로 적립했다. 책갈피는 이미 8이다.", memory: ["커밋 8", "0점 4건"] },
+    { pointer: 4, found: [0, 1, 2, 3], caption: "고친 뒤 --to-datetime 04:13:23로 옮긴다. 그 뒤 첫 메시지는 4번이다.", memory: ["커밋 4", "LAG 4"] },
+    { pointer: 7, found: [0, 1, 2, 3, 4, 5, 6, 7], caption: "4~7번을 다시 받아 제대로 적립한다. 메일 그룹은 그대로 8이다.", memory: ["커밋 8", "재처리 4건"] },
+  ]}
+/>
+
+되감기에는 두 가지 조건이 붙는다. 첫째, 그룹에 살아 있는 컨슈머가 있으면 거절된다. 컨슈머를 띄워 둔 채로 실행했다.
+
+```text
+Error: Assignments can only be reset if the group 'points' is inactive, but the current state is Stable.
+```
+
+배포 도구로 컨슈머 레플리카를 0으로 내리고, 그룹 상태가 `Empty`가 된 뒤 실행한다. 둘째, 다시 처리하는 쪽이 같은 메시지를 두 번 받아도 괜찮아야 한다. 위 예에서 4~7번은 0점이지만 이미 한 번 적립 행이 생겼다. 그대로 다시 적립하면 행이 두 개가 된다. 주문 번호로 적립 행을 덮어쓰거나, 처리한 메시지 id를 기록해 거르는 [인박스 테이블](/posts/message-delivery-semantics) 같은 장치가 있어야 되감기가 안전하다. 메일처럼 밖으로 나가는 부작용은 되돌릴 수 없으니, 그런 일을 하는 그룹은 따로 두고 되감기 대상에서 빼는 게 보통이다.
+
+잘못 옮겼다면 남겨 둔 CSV로 되돌린다. 처음으로 잘못 되감은 뒤 되돌려 봤다.
+
+```bash
+# 실수로 처음으로 옮겼다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --group points --topic orders \
+  --reset-offsets --to-earliest --execute
+
+# 남겨 둔 파일의 위치로 되돌린다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:18170 --group points \
+  --reset-offsets --from-file points-before.csv --execute
+```
+
+```text
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+points          orders          0          0               8               8               -               -               -
+points          orders          0          8               8               0               -               -               -
+```
+
+첫 줄이 `--to-earliest` 직후, 둘째 줄이 CSV로 되돌린 뒤다. 시각 말고 기간으로 옮기는 `--by-duration PT30M`(지금부터 30분 전), 정해진 칸 수만큼 옮기는 `--shift-by`도 있다. `--shift-by`는 [Kafka 기초](/posts/kafka-basics)에서 써 봤다.
+
+## 시각으로 찾은 위치가 생각과 다를 때
+
+`--to-datetime`은 "그 시각 이후에 들어온 메시지만" 돌려주지 않는다. 정확히는 "타임스탬프가 그 시각 이상인 첫 오프셋"을 찾고, 거기서부터 끝까지 다시 읽는다. 오프셋 순서와 타임스탬프 순서가 같으면 둘은 같은 말이다. 다르면 달라진다.
+
+기본 설정(`message.timestamp.type=CreateTime`)에서 타임스탬프는 프로듀서가 정한다. 재시도가 있었거나, 여러 서버가 각자 시계로 찍어 보내거나, 밀린 이벤트를 나중에 몰아 보내면 오프셋 순서와 시각 순서가 어긋난다. `kafkajs`로 타임스탬프를 일부러 섞어 넣고 브로커에 물어봤다.
+
+```js
+// o-1: +0초, o-2: +30초, o-3: +10초, o-4: +40초 순서로 보낸다
+const base = 1792600000000;
+for (const [id, d] of [["o-1", 0], ["o-2", 30000], ["o-3", 10000], ["o-4", 40000]])
+  await producer.send({ topic: "ooo", messages: [{ value: id, timestamp: String(base + d) }] });
+
+// +20초 이후는 몇 번부터인가
+console.log(await admin.fetchTopicOffsetsByTimestamp("ooo", base + 20000));
+```
+
+```text
+[ { partition: 0, offset: '1' } ]
+```
+
++20초 이후 첫 메시지는 1번(`o-2`, +30초)이다. 그 뒤에 있는 `o-3`은 +10초짜리인데도 다시 읽힌다. 되감기는 언제나 "그 위치부터 끝까지"라서 그렇다. 시각을 기준으로 정확하게 걸러야 한다면, 되감은 뒤 컨슈머가 메시지의 타임스탬프나 업무 시각을 보고 건너뛰는 로직을 따로 둔다. 토픽을 `LogAppendTime`으로 두면 브로커가 받은 시각을 찍어서 오프셋 순서와 시각 순서가 맞지만, 원래 이벤트가 일어난 시각은 따로 값에 담아야 한다.
+
+아래에서 직접 만들어 보자. 파티션 하나에 남은 레코드(오프셋 순)와 되감을 시각을 받아, 다시 읽게 될 주문 id를 돌려주는 함수다.
+
+<CodePlayground
+  caption="시각으로 되감으면 무엇을 다시 읽나"
+  functionName="replayFrom"
+  initialCode={`// records: [{ offset, ts, id }] 오프셋 순으로 정렬된, 아직 남아 있는 레코드
+// target: 되감을 시각(ms)
+// 반환: 다시 읽게 될 id 목록 (오프셋 순)
+function replayFrom(records, target) {
+  // 1. 타임스탬프가 target 이상인 첫 레코드를 찾는다
+  // 2. 없으면 끝으로 옮긴 것과 같다
+  // 3. 찾았으면 그 위치부터 끝까지가 다시 읽힌다
+  return [];
+}`}
+  solution={`function replayFrom(records, target) {
+  const start = records.findIndex((r) => r.ts >= target);
+  if (start === -1) return [];
+  return records.slice(start).map((r) => r.id);
+}`}
+  tests={[
+    { label: "사이 시각", args: [[{ offset: 0, ts: 1000, id: "o-1" }, { offset: 1, ts: 1010, id: "o-2" }, { offset: 2, ts: 1020, id: "o-3" }, { offset: 3, ts: 1030, id: "o-4" }], 1015], expected: ["o-3", "o-4"] },
+    { label: "딱 맞는 시각", args: [[{ offset: 0, ts: 1000, id: "o-1" }, { offset: 1, ts: 1010, id: "o-2" }, { offset: 2, ts: 1020, id: "o-3" }, { offset: 3, ts: 1030, id: "o-4" }], 1020], expected: ["o-3", "o-4"] },
+    { label: "맨 앞보다 이른 시각", args: [[{ offset: 0, ts: 1000, id: "o-1" }, { offset: 1, ts: 1010, id: "o-2" }, { offset: 2, ts: 1020, id: "o-3" }, { offset: 3, ts: 1030, id: "o-4" }], 0], expected: ["o-1", "o-2", "o-3", "o-4"] },
+    { label: "끝보다 늦은 시각", args: [[{ offset: 0, ts: 1000, id: "o-1" }, { offset: 1, ts: 1010, id: "o-2" }, { offset: 2, ts: 1020, id: "o-3" }, { offset: 3, ts: 1030, id: "o-4" }], 5000], expected: [] },
+    { label: "시각이 섞인 로그", args: [[{ offset: 0, ts: 1000, id: "o-1" }, { offset: 1, ts: 1030, id: "o-2" }, { offset: 2, ts: 1010, id: "o-3" }, { offset: 3, ts: 1040, id: "o-4" }], 1020], expected: ["o-2", "o-3", "o-4"] },
+    { label: "앞부분이 지워진 로그", args: [[{ offset: 4, ts: 2000, id: "o-5" }, { offset: 5, ts: 2010, id: "o-6" }, { offset: 6, ts: 2020, id: "o-7" }, { offset: 7, ts: 2030, id: "o-8" }], 1500], expected: ["o-5", "o-6", "o-7", "o-8"] },
+    { label: "빈 파티션", args: [[], 1000], expected: [] },
+  ]}
+/>
+
+"시각이 섞인 로그"에서 `o-3`이 결과에 들어가는 게 위 실험과 같은 동작이다. "앞부분이 지워진 로그"는 다음 절의 이야기다. 되감으려는 시각이 남아 있는 가장 앞 레코드보다 이르면, 남은 것 전부를 다시 읽을 뿐 지워진 것은 돌아오지 않는다.
+
+## 나중에 붙은 컨슈머에게 과거를 주는 법
+
+되감기만큼 자주 쓰는 경우가 또 있다. 주문 이벤트로 매출 통계를 만들자는 요구가 석 달 뒤에 생겼다. 새 `analytics` 그룹을 붙이는데, 지금부터 들어오는 주문만이 아니라 지난 주문도 원한다.
+
+책갈피가 없는 그룹이 처음 붙으면 `auto.offset.reset`이 시작 위치를 정한다. 기본값은 `latest`, 즉 끝이다. 두 그룹을 하나는 기본값으로, 하나는 `earliest`로 띄워 봤다.
+
+```bash
+# 기본값(latest)으로 새 그룹을 띄운다
+kafka-console-consumer.sh --bootstrap-server 127.0.0.1:18170 --topic orders \
+  --group analytics-latest --timeout-ms 6000
+
+# earliest로 새 그룹을 띄운다
+kafka-console-consumer.sh --bootstrap-server 127.0.0.1:18170 --topic orders \
+  --group analytics --consumer-property auto.offset.reset=earliest --timeout-ms 6000
+```
+
+```text
+-- analytics-latest
+Processed a total of 0 messages
+
+-- analytics
+{"orderId":1,"email":"u1@example.com"}
+{"orderId":2,"email":"u2@example.com"}
+{"orderId":3,"email":"u3@example.com"}
+{"orderId":4,"email":"u4@example.com"}
+{"orderId":5,"email":"u5@example.com"}
+{"orderId":6,"email":"u6@example.com"}
+{"orderId":7,"email":"u7@example.com"}
+{"orderId":8,"email":"u8@example.com"}
+Processed a total of 8 messages
+```
+
+그 뒤 두 그룹의 상태다.
+
+```text
+GROUP            TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID     HOST            CLIENT-ID
+analytics        orders          0          8               8               0               -               -               -
+analytics-latest orders          0          8               8               0               -               -               -
+```
+
+여기에 흔한 실수가 숨어 있다. `analytics-latest`는 아무것도 읽지 않았는데 책갈피가 8로 커밋됐다. 이제 이 그룹에 `auto.offset.reset=earliest`를 줘서 다시 띄워도 소용없다. 그 설정은 책갈피가 없을 때만 쓰이기 때문이다. "설정을 earliest로 바꿨는데 왜 과거를 안 읽지" 하는 상황이 대개 이것이다. 이미 한 번 떴던 그룹이면 앞 절처럼 `--reset-offsets --to-earliest`로 옮겨야 한다.
+
+반대 방향의 실수도 있다. 오래 꺼 둔 그룹의 책갈피는 영원하지 않다. 그룹에 멤버가 하나도 없는 상태로 `offsets.retention.minutes`(2.0부터 기본 10080분, 7일. 2.1부터는 그룹이 빈 시점부터 센다)가 지나면 브로커가 그 그룹의 커밋 오프셋을 지운다. 열흘 동안 내려 두었던 배치 컨슈머를 다시 띄우면 책갈피가 없는 새 그룹처럼 `auto.offset.reset`을 따른다. 기본값 `latest`면 열흘치를 건너뛰고, `earliest`면 보관 중인 전부를 다시 처리한다. 둘 다 원하던 결과가 아니다.
+
+RabbitMQ 클래식 큐에는 이런 선택지가 없다. 새 큐는 만들어진 순간부터 들어오는 메시지만 받는다. 석 달 치 주문을 주려면 원본 데이터베이스에서 다시 읽어 발행하는 백필(backfill) 작업을 따로 짜야 한다.
+
+## 보관 기간이 끝나면 되감을 곳도 없다
+
+Kafka가 "다시 읽을 수 있다"는 말에는 "보관 기간 안이라면"이 붙는다. `orders` 토픽의 보관 설정이다.
+
+```bash
+# orders 토픽의 보관 관련 설정
+kafka-configs.sh --bootstrap-server 127.0.0.1:18170 --entity-type topics --entity-name orders \
+  --describe --all | grep -E "retention|cleanup.policy|segment\.(ms|bytes)"
+```
+
+```text
+  cleanup.policy=delete sensitive=false synonyms={DEFAULT_CONFIG:log.cleanup.policy=delete}
+  delete.retention.ms=86400000 sensitive=false synonyms={DEFAULT_CONFIG:log.cleaner.delete.retention.ms=86400000}
+  local.retention.bytes=-2 sensitive=false synonyms={DEFAULT_CONFIG:log.local.retention.bytes=-2}
+  local.retention.ms=-2 sensitive=false synonyms={DEFAULT_CONFIG:log.local.retention.ms=-2}
+  retention.bytes=-1 sensitive=false synonyms={DEFAULT_CONFIG:log.retention.bytes=-1}
+  retention.ms=604800000 sensitive=false synonyms={}
+  segment.bytes=1073741824 sensitive=false synonyms={STATIC_BROKER_CONFIG:log.segment.bytes=1073741824, DEFAULT_CONFIG:log.segment.bytes=1073741824}
+  segment.ms=604800000 sensitive=false synonyms={}
+```
+
+`retention.ms=604800000`은 604,800,000ms, 즉 7일이다. `retention.bytes=-1`은 크기 제한 없음이다. 둘을 함께 걸면 먼저 닿는 쪽이 이긴다. `retention.bytes`는 토픽 전체가 아니라 파티션 하나의 한도라는 걸 자주 헷갈린다. 파티션 12개짜리 토픽에 `retention.bytes=10737418240`(10GiB)을 주면 복제본 하나당 최대 120GiB다. 크기 한도는 디스크를 지키는 안전장치로는 좋지만, 유입이 갑자기 늘면 7일 보관이 하루로 줄어드는 일이 조용히 일어난다. 되감을 수 있는 기간이 트래픽에 따라 바뀌는 셈이다.
+
+보관 기간이 지나면 어떻게 되는지 짧은 토픽으로 직접 봤다. `retention.ms=20000`(20초), `segment.ms=5000`으로 두고, 브로커의 보관 검사 주기(`log.retention.check.interval.ms`, 기본 5분)를 데모용으로 5초로 줄였다. 4건을 넣고 `mailer-short` 그룹이 2건만 읽은 뒤 멈췄다. 7초 뒤 4건을 더 넣었다.
+
+```text
+-- 넣은 직후
+orders-short:0:0
+00000000000000000000.log
+00000000000000000004.log
+
+-- 25초 뒤
+orders-short:0:8
+00000000000000000000.log.deleted
+00000000000000000004.log.deleted
+00000000000000000008.log
+```
+
+`kafka-get-offsets.sh --time -2`(가장 앞 오프셋)가 0에서 8로 바뀌었다. 브로커 로그에는 세그먼트를 지울 때마다 시작 오프셋을 올린 기록이 남는다.
+
+```text
+[2026-10-21 19:16:22,993] INFO [UnifiedLog partition=orders-short-0, dir=...] Incremented log start offset to 4 due to segment deletion
+[2026-10-21 19:16:22,995] INFO [UnifiedLog partition=orders-short-0, dir=...] Deleting segment LogSegment(baseOffset=0
+[2026-10-21 19:16:37,993] INFO [UnifiedLog partition=orders-short-0, dir=...] Incremented log start offset to 8 due to segment deletion
+[2026-10-21 19:16:37,993] INFO [UnifiedLog partition=orders-short-0, dir=...] Deleting segment LogSegment(baseOffset=4
+```
+
+지우는 단위가 메시지가 아니라 세그먼트 파일이라는 게 보인다. 이제 멈춰 있던 `mailer-short`를 다시 띄웠다.
+
+```text
+-- 띄우기 전
+mailer-short    orders-short    0          2               8               6               -               -               -
+
+-- 띄운 뒤
+Processed a total of 0 messages
+mailer-short    orders-short    0          8               8               0               -               -               -
+```
+
+책갈피 2가 가리키던 곳은 이미 지워졌다. 컨슈머는 범위를 벗어난 오프셋을 받고 `auto.offset.reset`에 따라 위치를 다시 잡았는데, 남은 것이 없으니 8로 갔다. 2~7번 여섯 건은 이 그룹에게 영영 오지 않았다. 에러 없이 `LAG 0`으로 끝났다는 점이 무섭다. 그래서 랙 알람의 기준은 보관 기간보다 훨씬 짧게 잡는다. 7일 보관이면 랙이 수 분에서 수십 분 넘게 줄지 않을 때 알린다.
+
+<AlgoTrace
+  caption="멈춘 그룹의 책갈피가 지워진 곳을 가리키면"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7"]}
+  memoryLabel="mailer-short / 로그 시작"
+  steps={[
+    { caption: "8건이 두 세그먼트(0~3, 4~7)에 들어 있다.", memory: ["커밋 0", "시작 0"] },
+    { pointer: 1, found: [0, 1], caption: "그룹이 2건만 처리하고 멈춘다. 책갈피는 2다.", memory: ["커밋 2", "시작 0"] },
+    { pointer: 1, found: [0, 1], caption: "보관 기간이 지나 0~3 세그먼트를 파일째 지운다. 시작이 4가 된다.", memory: ["커밋 2", "시작 4"] },
+    { pointer: 1, found: [0, 1], caption: "4~7 세그먼트도 지워진다. 남은 레코드가 없다.", memory: ["커밋 2", "시작 8"] },
+    { pointer: 7, found: [0, 1], caption: "다시 뜬 그룹은 범위 밖 오프셋을 받고 8로 건너뛴다. 2~7번은 오지 않는다.", memory: ["커밋 8", "LAG 0"] },
+  ]}
+/>
+
+토픽을 지우는 방식은 시간과 크기만 있는 게 아니다. `cleanup.policy=compact`로 두면 키마다 마지막 값만 남긴다. 이건 [Kafka 기초](/posts/kafka-basics)에서 실제로 돌려 봤다. 다시 읽기의 관점에서 보면 성격이 다르다. 시간 보관은 "최근 7일 동안 일어난 모든 일"을 다시 읽게 해 주고, 컴팩션은 "키마다 지금 상태"를 처음부터 다시 만들게 해 준다. 컴팩션 토픽을 처음부터 읽으면 사용자 주소 테이블은 되살릴 수 있지만, 그 사용자가 주소를 몇 번 바꿨는지는 알 수 없다. 둘을 함께 쓰는 `compact,delete`도 있다.
+
+<ConceptDiagram
+  caption="무엇을 남기느냐가 무엇을 다시 할 수 있는지를 정한다"
+  width={420}
+  height={300}
+  nodes={[
+    { id: "log", label: "파티션 로그", sub: "세그먼트 파일", x: 210, y: 40, w: 140 },
+    { id: "time", label: "retention.ms", sub: "기본 7일", x: 80, y: 130, w: 130 },
+    { id: "bytes", label: "retention.bytes", sub: "파티션당 한도", x: 210, y: 130, w: 130 },
+    { id: "comp", label: "compact", sub: "키별 마지막 값", x: 340, y: 130, w: 120 },
+    { id: "replay", label: "기간 재처리", sub: "버그 뒤 되감기", x: 110, y: 250, w: 140 },
+    { id: "rebuild", label: "상태 재구성", sub: "처음부터 읽기", x: 310, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "time", to: "log", label: "오래된 세그먼트 삭제" },
+    { from: "bytes", to: "log", label: "넘치면 삭제", dashed: true },
+    { from: "comp", to: "log", label: "옛 값 정리" },
+    { from: "time", to: "replay", label: "얼마나 뒤로" },
+    { from: "bytes", to: "replay", label: "트래픽 따라 줄어듦", dashed: true },
+    { from: "comp", to: "rebuild", label: "이력은 없음" },
+  ]}
+/>
+
+## 오래 두면 디스크 값이 든다
+
+되감을 수 있다는 건 공짜가 아니다. 지운 RabbitMQ 큐는 처리량이 높아도 디스크를 거의 안 쓰지만, Kafka는 처리했든 안 했든 보관 기간 내내 전부를 들고 있다.
+
+계산해 보자. 주문 이벤트가 평균 1KB, 초당 2,000건이고, 보관 7일, 복제 계수 3이다. 7일 동안 2,000 × 86,400 × 7 = 1,209,600,000건이 쌓인다. 1KB씩이면 약 1.21TB이고, 복제본 세 벌이면 약 3.63TB다. 압축(`compression.type`을 프로듀서에서 `lz4`나 `zstd`로)을 켜면 JSON은 몇 배 줄어들지만, 비율은 데이터에 따라 다르니 실제 데이터로 재 봐야 한다. 보관 기간을 30일로 늘리면 디스크는 그대로 네 배를 조금 넘는다.
+
+그래서 보관 기간은 "얼마나 오래 두고 싶은가"가 아니라 "사고가 나고 알아채서 고칠 때까지 얼마나 걸리는가"로 정한다. 금요일 밤에 난 버그를 월요일 아침에 알아챈다면 3일은 넘어야 하고, 여유를 두면 7일이 무난하다. 그보다 긴 이력이 필요하면 브로커 디스크에 두지 않는다. Kafka는 오래된 세그먼트를 S3 같은 객체 저장소로 내리는 계층형 저장소(KIP-405)를 3.6에 얼리 액세스로 넣었고, 위 출력의 `local.retention.ms`가 그 설정이다. 운영에서 쓸 수 있는 수준이 된 시점은 버전과 배포판마다 다르니 쓰는 버전의 문서를 확인한다. 그 밖에 커넥터로 토픽을 객체 저장소에 통째로 떠 두고, 필요할 때 다시 토픽으로 흘리는 방법도 많이 쓴다.
+
+개인정보도 비용이다. 오래 두면 지워야 할 데이터가 오래 남는다. 보관 기간은 세그먼트 단위라 정확히 7일에 지워지지도 않는다. 탈퇴한 회원의 이메일이 이벤트 본문에 들어 있다면, 보관 기간을 줄이기보다 본문에 개인정보를 넣지 않거나 키별 암호화 키를 지우는 방법([이벤트 소싱](/posts/event-sourcing)의 크립토 셰딩)을 먼저 생각한다.
+
+## RabbitMQ로 다시 처리해야 한다면
+
+RabbitMQ를 쓰고 있는데 되감기가 필요해졌다고 Kafka로 옮길 필요는 없다. 무엇을 다시 처리하고 싶은지에 따라 길이 다르다.
+
+처리에 실패한 메시지만 다시 하고 싶다면 [데드 레터 큐](/posts/dead-letter-queue)가 맞다. 컨슈머가 `nack`(requeue 없이)하거나 TTL이 지난 메시지는 데드 레터 익스체인지로 가서 따로 쌓인다. 고친 뒤 원래 큐로 되돌린다. 다만 이건 "실패했다고 말한 메시지"만 살린다. 처음의 장애처럼 버그가 있어도 성공으로 ack한 메시지는 DLQ에 없다.
+
+성공으로 처리한 것까지 다시 하고 싶다면 원본이 브로커 밖에 있어야 한다. 주문 서비스가 주문 테이블에 저장하면서 같은 트랜잭션으로 [아웃박스](/posts/transactional-outbox) 테이블에 이벤트를 남긴다면, 아웃박스를 바로 지우지 않고 며칠 두면 그게 곧 다시 보낼 원본이다. 버그가 돈 시간대의 행을 골라 다시 발행한다. 이벤트를 원본으로 삼는 [이벤트 소싱](/posts/event-sourcing)이라면 이벤트 저장소 전체가 다시 보낼 원본이다. 이때 다시 보낼 대상을 고칠 컨슈머의 큐 하나로만 좁혀야 한다. 익스체인지로 다시 발행하면 메일 큐에도 들어가 메일이 두 번 나간다. 기본 익스체인지에 큐 이름을 라우팅 키로 주면 그 큐에만 넣을 수 있다.
+
+로그처럼 쓰고 싶다면 RabbitMQ에도 길이 있다. 3.9부터 들어온 스트림(stream) 큐는 ack해도 지우지 않는 추가 전용 로그다. 같은 fanout 익스체인지에 `x-queue-type: stream`으로 만든 `orders.stream`을 묶고 같은 8건을 보냈다. 컨슈머는 `x-stream-offset`으로 어디서부터 읽을지 고른다.
+
+```js
+// 스트림 큐: 보관 7일. 읽어도 지워지지 않는다
+await ch.assertQueue("orders.stream", {
+  durable: true,
+  arguments: { "x-queue-type": "stream", "x-max-age": "7D" },
+});
+
+// 스트림을 AMQP 0.9.1로 읽을 때는 prefetch와 수동 ack가 필수다
+await ch.prefetch(100);
+await ch.consume("orders.stream", (msg) => {
+  got.push(`${msg.properties.messageId}@${msg.properties.headers["x-stream-offset"]}`);
+  ch.ack(msg);
+}, { arguments: { "x-stream-offset": "first" } }); // "first", "last", "next", 숫자, 시각
+```
+
+시작 위치를 바꿔 가며 다섯 번 읽었다. 넷째 줄은 5번째 주문을 보내기 직전의 초 단위 시각이다.
+
+```text
+email-replay first     8건 o-1@0 o-2@1 o-3@2 o-4@3 o-5@4 o-6@5 o-7@6 o-8@7
+analytics first        8건 o-1@0 o-2@1 o-3@2 o-4@3 o-5@4 o-6@5 o-7@6 o-8@7
+offset 6               2건 o-7@6 o-8@7
+timestamp 1792610292   4건 o-5@4 o-6@5 o-7@6 o-8@7
+next                   0건
+```
+
+같은 스트림을 두 번 읽어도 8건이 그대로 나오고, 오프셋이나 시각으로 중간부터 읽을 수도 있다. 다 읽은 뒤 큐 목록을 보면 클래식 큐와 차이가 뚜렷하다.
+
+```text
+name	type	messages	arguments
+orders.stream	stream	8	[{"x-queue-type","stream"},{"x-max-age","7D"}]
+orders.points	classic	0	[]
+orders.email	classic	0	[]
+```
+
+스트림을 쓸 때 알아 둘 차이가 있다. AMQP 0.9.1 컨슈머로 읽으면 브로커가 그룹별 책갈피를 저장해 주지 않는다. 다음에 어디서 읽을지는 애플리케이션이 자기 DB에 적어 두고 그 값을 `x-stream-offset`으로 넘겨야 한다. 브로커에 오프셋을 저장하는 기능은 전용 스트림 프로토콜(5552 포트, `rabbitmq_stream` 플러그인)과 그 클라이언트에 있다. 시각으로 읽기는 메시지 묶음(청크) 단위로 시작점을 찾아서, 지정한 시각보다 조금 앞선 메시지가 섞여 나올 수 있다. 이 데모에서는 앞 4건과 뒤 4건 사이에 4초를 쉬어서 섞이지 않았다. 여러 파티션으로 나누는 슈퍼 스트림, 단일 활성 컨슈머 같은 기능은 3.11 이후 버전에 차례로 들어왔으니 쓰는 버전의 문서를 확인한다. 이 데모의 3.12.1에서는 위처럼 동작했다.
+
+아래 그림은 RabbitMQ에서 고를 수 있는 세 갈래다. 다음을 누르면 메시지가 어디에 남는지 따라간다.
+
+<NetworkTopology
+  caption="RabbitMQ에서 다시 처리할 원본을 남기는 세 곳"
+  width={400}
+  height={290}
+  zones={[{ id: "rmq", label: "RabbitMQ", x: 110, y: 20, w: 280, h: 200, tone: "private" }, { id: "db", label: "주문 DB", x: 10, y: 200, w: 150, h: 80, tone: "neutral" }]}
+  nodes={[
+    { id: "svc", label: "주문 서비스", x: 50, y: 110, icon: "server", w: 88 },
+    { id: "ex", label: "orders", sub: "fanout", x: 170, y: 110, icon: "router", w: 84 },
+    { id: "q", label: "points", sub: "classic", x: 300, y: 50, icon: "db", w: 96 },
+    { id: "dlq", label: "points.dlq", sub: "실패만", x: 300, y: 120, icon: "db", w: 104 },
+    { id: "st", label: "orders.stream", sub: "7D", x: 300, y: 190, icon: "db", w: 116 },
+    { id: "ob", label: "outbox", sub: "며칠 보관", x: 85, y: 245, icon: "lock", w: 100 },
+  ]}
+  links={[
+    { from: "svc", to: "ex", label: "publish" },
+    { from: "ex", to: "q" },
+    { from: "q", to: "dlq", label: "nack", dashed: true },
+    { from: "ex", to: "st" },
+    { from: "svc", to: "ob", label: "같은 TX" },
+    { from: "ob", to: "q", label: "재발행", dashed: true },
+  ]}
+  steps={[
+    { path: ["svc", "ex", "q"], packet: "o-5", title: "클래식 큐에 들어간다", detail: "points 컨슈머가 받아 ack하면 지워진다. 버그가 있어도 ack했다면 여기서는 다시 찾을 수 없다." },
+    { path: ["q", "dlq"], packet: "o-5", title: "실패라고 말한 것만 DLQ로", detail: "nack나 TTL 만료처럼 실패로 끝난 메시지만 데드 레터로 간다. 성공으로 처리된 버그 결과는 오지 않는다." },
+    { path: ["svc", "ex", "st"], packet: "o-5", title: "스트림 큐에는 남는다", detail: "읽어도 지우지 않는다. x-stream-offset으로 시각이나 번호를 골라 다시 읽는다. 보관은 x-max-age가 정한다." },
+    { path: ["svc", "ob"], packet: "o-5", highlight: ["db"], title: "원본을 DB에 남긴다", detail: "주문을 저장하는 트랜잭션에서 아웃박스 행도 쓴다. 발행 뒤에도 며칠 지우지 않는다." },
+    { path: ["ob", "q"], packet: "o-5..8", title: "고친 큐에만 다시 보낸다", detail: "버그 시간대의 행을 골라 points 큐로만 발행한다. 익스체인지로 보내면 메일 큐에도 들어간다." },
+  ]}
+/>
+
+## 일을 나누는가, 기록을 나누는가
+
+결국 고르는 기준은 메시지가 "할 일"인지 "일어난 일"인지다. 비교가 필요한 지점만 표로 둔다.
+
+| 상황 | 맞는 쪽 | 이유 |
+|---|---|---|
+| 썸네일 만들기, 메일 보내기 같은 작업 분배 | RabbitMQ 클래식·쿼럼 큐 | 메시지 단위 ack, 재전달, 우선순위, TTL, DLQ가 브로커에 있다 |
+| 같은 이벤트를 여러 팀이 각자 읽음 | Kafka | 저장은 한 번, 그룹마다 책갈피만 따로 둔다 |
+| 버그를 고친 뒤 지난 기간을 다시 처리 | Kafka, RabbitMQ 스트림 | 보관 기간 안이면 위치만 옮긴다 |
+| 나중에 붙을 컨슈머가 과거를 원함 | Kafka, RabbitMQ 스트림 | earliest나 first로 처음부터 읽는다 |
+| 메시지 하나가 오래 걸리고 실패가 잦음 | RabbitMQ | 하나가 막혀도 뒤 메시지를 다른 워커가 처리한다. Kafka 파티션은 막힌 자리에서 기다린다 |
+| 하루 몇천 건, 다시 처리는 DB에서 | 어느 쪽이든, DB 큐도 충분 | 브로커 운영 비용이 이득보다 크다 |
+
+표에 넣지 않은 질문이 하나 더 있다. 다시 처리할 원본을 어디에 두고 싶은가. 원본이 이미 DB에 있고, 거기서 다시 발행하는 길이 있다면 브로커가 되감기를 해 주지 않아도 된다. Kafka를 고르는 이유가 "되감기" 하나라면 그 비용(파티션 설계, 디스크, 브로커 운영)과 아웃박스를 며칠 더 두는 비용을 비교해 본다. 반대로 이벤트를 여러 팀이 구독하고 새 소비자가 계속 붙는 조직이라면, 각 팀이 원본 DB에 백필을 요청하는 것보다 로그를 두는 편이 훨씬 싸다.
+
+## 다시 읽어야 하는 날 현장에서 보는 것
+
+"재처리해 주세요"라는 요청을 받으면 이 순서로 본다.
+
+먼저 원본이 아직 있는지 본다. Kafka라면 `kafka-get-offsets.sh --time -2`로 가장 앞 오프셋을, `--time <버그 시작 시각>`으로 그 시각의 오프셋을 물어본다. 두 값이 같거나 시각 쪽이 `-1`(끝)과 같으면 이미 지워졌거나 해당 시각 이후 메시지가 없다. RabbitMQ라면 스트림 큐가 있는지, 아웃박스나 원본 테이블에 그 기간의 행이 있는지 본다.
+
+다음은 범위를 좁힌다. 되감을 그룹이 하나인지, 그 그룹의 처리가 멱등한지, 밖으로 나가는 부작용(메일, 결제, 외부 API)이 있는지 본다. 부작용이 있는 처리를 되감으면 장애를 하나 더 만든다.
+
+그리고 되감는다. 컨슈머를 0으로 내리고, `--export`로 지금 위치를 남기고, `--dry-run`으로 파티션마다 새 오프셋을 본 뒤 `--execute`한다. 파티션이 여럿이면 `--topic orders`처럼 토픽 전체가 대상이 되니, 특정 파티션만이면 `orders:0,2`처럼 적는다.
+
+마지막으로 랙을 본다. 되감은 직후 랙이 재처리할 양만큼 올랐다가 0으로 내려오는지 본다. 내려오는 속도가 평소 처리량보다 느리면 재처리 때문에 새 주문이 밀리는 중이다. 급하면 재처리용 그룹을 따로 만들어 기간만 처리하게 하고, 원래 그룹은 계속 새 주문을 받게 하는 방법도 있다. 재처리 그룹은 끝 오프셋에 닿으면 멈추게 짠다.
+
+## 읽은 뒤에 남는 것
+
+Kafka는 읽은 메시지를 지우지 않고, 그룹마다 책갈피 하나만 둔다. 그래서 버그 뒤 되감기, 나중에 붙은 컨슈머의 처음부터 읽기가 위치를 옮기는 일로 끝난다. 대신 보관 기간만큼 디스크를 내고, 보관 기간이 끝나면 되감을 곳도 조용히 사라진다. RabbitMQ 클래식 큐는 ack가 곧 삭제라서 다시 처리할 원본을 브로커 밖(아웃박스, 원본 DB)이나 스트림 큐에 따로 남겨야 한다. 어느 쪽이든 다시 처리하는 컨슈머는 같은 메시지를 두 번 받아도 괜찮아야 한다. 그 방법은 [메시지 전달 보장](/posts/message-delivery-semantics)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### Kafka와 RabbitMQ는 메시지를 읽은 뒤 무엇이 다른가요?
+
+Kafka는 읽어도 지우지 않고 RabbitMQ 클래식 큐는 ack를 받으면 지운다. Kafka는 메시지를 로그에 붙이고, 그룹마다 다음에 읽을 오프셋만 커밋하니 같은 메시지를 여러 그룹이 각자 읽고 다시 읽을 수 있다. RabbitMQ는 메시지를 처리할 일로 보고 메시지마다 전달과 ack 상태를 관리하며, 끝난 일은 큐에서 없앤다. 그래서 같은 주문을 두 곳이 처리하려면 RabbitMQ는 큐를 두 개 만들어 복사하고, Kafka는 그룹을 두 개 만든다.
+
+### 컨슈머 버그로 지난 한 시간의 처리가 잘못됐습니다. Kafka에서 어떻게 다시 처리하나요?
+
+그 그룹의 오프셋을 버그 시작 시각으로 옮긴다. 컨슈머를 모두 내리고, `--reset-offsets --to-current --dry-run --export`로 현재 위치를 남긴 뒤, `--to-datetime`에 시간대를 붙여 `--dry-run`으로 확인하고 `--execute`한다. 다른 그룹은 영향이 없다. 처리 쪽이 멱등하지 않으면 같은 결과가 두 번 쌓이니, 주문 번호로 덮어쓰거나 처리한 메시지 id로 거르는 장치가 먼저 있어야 한다.
+
+### 시각으로 되감았는데 그 시각보다 이른 메시지도 다시 처리됐습니다. 왜인가요?
+
+시각 되감기는 타임스탬프가 그 시각 이상인 첫 오프셋을 찾아 거기서부터 끝까지 읽기 때문이다. 기본 `CreateTime`은 프로듀서가 찍으니 재시도나 늦게 보낸 이벤트 때문에 오프셋 순서와 시각 순서가 어긋날 수 있고, 그 뒤에 놓인 이른 시각의 메시지도 함께 읽힌다. 정확한 기간만 처리해야 하면 컨슈머가 메시지의 시각을 보고 건너뛰게 하거나, 토픽을 `LogAppendTime`으로 두고 업무 시각은 값에 담는다.
+
+### 새 소비자 그룹을 붙였는데 과거 메시지를 하나도 받지 못합니다. 어떻게 하나요?
+
+책갈피가 없는 그룹은 `auto.offset.reset`을 따르고 기본값이 `latest`라서 끝에서 시작했다. 처음 띄울 때 `earliest`로 주면 보관 중인 처음부터 읽는다. 이미 한 번 떠서 오프셋이 커밋된 그룹은 설정을 바꿔도 소용없으니, 컨슈머를 내리고 `--reset-offsets --to-earliest`로 옮겨야 한다. 과거 전체를 처리하는 동안 랙이 크게 오르니 알람과 처리량도 함께 본다.
+
+### 보관 기간을 7일로 두었는데, 3일 멈췄던 컨슈머가 일부 메시지를 건너뛰었습니다. 무엇을 의심하나요?
+
+크기 한도와 오프셋 만료를 의심한다. `retention.bytes`는 파티션당 한도라서 유입이 늘면 7일보다 먼저 세그먼트가 지워지고, 커밋된 오프셋이 범위 밖이 되면 `auto.offset.reset`에 따라 조용히 건너뛴다. 그룹이 비어 있는 채로 `offsets.retention.minutes`(기본 7일)를 넘기면 책갈피 자체가 사라지는 것도 같은 증상을 낸다. `kafka-get-offsets.sh --time -2`로 가장 앞 오프셋이 커밋 오프셋보다 커졌는지 확인한다.
+
+### retention.ms, retention.bytes, 로그 컴팩션은 다시 읽기 관점에서 어떻게 다른가요?
+
+`retention.ms`는 최근 일정 기간의 모든 메시지를, 컴팩션은 키마다 마지막 값만 남긴다. 그래서 시간 보관은 "버그가 돈 기간을 다시 처리"에, 컴팩션은 "처음부터 읽어 현재 상태를 다시 만들기"에 쓰이고, 컴팩션 토픽으로는 중간 이력을 재처리할 수 없다. `retention.bytes`는 디스크를 지키는 한도라서, 걸어 두면 되감을 수 있는 기간이 트래픽에 따라 줄어든다는 점을 알고 써야 한다.
+
+### RabbitMQ에서 이미 ack한 메시지를 다시 처리해야 하면 어떻게 하나요?
+
+브로커에는 없으니 브로커 밖에 남긴 원본에서 다시 보낸다. 아웃박스 테이블을 발행 뒤에도 며칠 남겨 두거나 원본 DB에서 기간을 골라, 고칠 컨슈머의 큐 하나로만 재발행한다. DLQ는 실패로 끝난 메시지만 담으니 성공으로 ack된 버그 결과에는 쓸 수 없다. 처음부터 되감기가 필요한 흐름이면 3.9부터 있는 스트림 큐를 붙여 오프셋이나 시각으로 다시 읽게 한다.
+
+### 그럼 언제나 Kafka를 고르면 되지 않나요?
+
+아니다. 되감기의 대가로 보관 기간 내내 전체 데이터를 복제본 수만큼 디스크에 두고, 파티션 수가 병렬성의 상한이 되고, 한 메시지가 막히면 그 파티션 뒤가 기다린다. 메시지마다 재시도와 우선순위가 중요한 작업 큐는 RabbitMQ가 단순하고, 원본이 DB에 있어 거기서 다시 발행할 수 있다면 되감기 때문에 브로커를 바꿀 이유가 약하다. 여러 팀이 같은 이벤트를 구독하고 새 소비자가 자주 붙을 때 로그가 값을 한다.
