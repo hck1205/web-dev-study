@@ -1,0 +1,537 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-subqueries-exists-lateral");
+
+수강생 목록에 "듣고 있는 강의"를 한 칸 붙이려고 `SELECT`에 서브쿼리를 넣었다.
+
+```sql
+SELECT s.name,
+       (SELECT e.course_id FROM enrollments e WHERE e.student_id = s.id) AS course
+FROM students s ORDER BY s.id;
+```
+
+```text
+ERROR:  more than one row returned by a subquery used as an expression
+```
+
+개발 DB에서는 잘 돌았다. 테스트 데이터의 수강생이 모두 강의를 하나씩만 듣고 있었기 때문이다. 운영 데이터에는 강의를 여러 개 듣는 사람이 있었고, 그 사람의 줄을 만드는 순간 쿼리 전체가 에러로 끝났다. 급한 마음에 `LIMIT 1`을 붙이면 에러는 사라진다. 대신 어떤 강의가 나올지 아무도 모르는 쿼리가 된다.
+
+서브쿼리는 쿼리 안에 넣은 쿼리다. 문법은 단순한데, 어디에 넣었는지와 몇 줄을 돌려주는지에 따라 PostgreSQL이 전혀 다른 방식으로 실행한다. 어떤 건 한 번 계산하고 끝나고, 어떤 건 바깥 행마다 다시 돌고, 어떤 건 조인으로 바뀐다. 같은 결과를 내는 쿼리가 0.1ms와 4초로 갈리는 이유가 여기 있다. 이 글은 그 갈림길을 실행 계획으로 따라간다.
+
+서브쿼리를 넣을 수 있는 자리, 단일행·다중행 연산자, `ANY`·`ALL`은 [SQLD 서브쿼리 글](/posts/sqld-subquery-set-operators)에, 상관 서브쿼리와 스칼라 서브쿼리의 개념은 [SQLD 상관 서브쿼리 글](/posts/sqld-correlated-subquery)에 있다. `NOT IN`에 NULL이 섞이면 결과가 사라지는 이유는 [WHERE 연산자 글](/posts/sql-filtering-operators)에서 다뤘다. 여기서는 PostgreSQL 16이 각 모양을 어떤 실행 계획으로 바꾸는지, 그리고 느린 모양을 어떻게 고치는지에 집중한다. 같은 일을 조인으로 하는 방법과 행이 곱해지는 문제는 [조인 실전 글](/posts/sql-joins-in-practice)에 있다.
+
+데이터는 [SELECT의 논리적 처리 순서](/posts/sql-logical-order)부터 이어 온 강의 사이트(`students` 5명, `courses` 5개, `enrollments` 9건)와, 조인 글에서 만든 큰 테이블 `students_big`(10만 명)과 `enrollments_big`(30만 건, `student_id` 인덱스 있음)이다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15, 출력은 모두 실제로 돌린 결과다. 큰 테이블의 시간 비교는 병렬 작업자를 끄고(`SET max_parallel_workers_per_gather = 0`) 쟀다.
+
+## 값 하나 자리에는 값 하나만
+
+`SELECT` 목록이나 `WHERE x > (...)`처럼 값 하나가 들어갈 자리에 넣은 서브쿼리를 스칼라 서브쿼리라고 한다. 규칙은 세 가지다.
+
+- 한 줄을 돌려주면 그 값이 된다.
+- 한 줄도 돌려주지 않으면 NULL이 된다. 에러가 아니다.
+- 두 줄 이상이면 `more than one row returned by a subquery used as an expression` 에러가 난다.
+
+세 번째 규칙은 쿼리를 쓸 때가 아니라 실행 중 그 줄을 만날 때 검사한다. 그래서 위의 쿼리도 결과가 0줄이면 아무 일 없이 돈다. 데이터가 바뀌어야 터지는 에러라서 테스트에서 놓치기 쉽다. "완료한 강의"로 좁혀도 kim은 완료한 강의가 둘이라 같은 에러가 난다. 조건을 더해서 한 줄을 맞추는 건 데이터가 허락하는 동안만 통한다.
+
+`LIMIT 1`을 쓸 거라면 어느 한 줄인지 `ORDER BY`로 정한다. "가장 최근에 신청한 강의"라면 이렇다.
+
+```sql
+SELECT s.name,
+       (SELECT c.title
+          FROM enrollments e JOIN courses c ON c.id = e.course_id
+         WHERE e.student_id = s.id
+         ORDER BY e.enrolled_at DESC
+         LIMIT 1) AS latest
+FROM students s ORDER BY s.id;
+```
+
+```text
+ name |   latest
+------+-------------
+ kim  | React 입문
+ lee  | React 입문
+ park | Docker 실전
+ choi | React 입문
+ jung | (null)
+(5 rows)
+```
+
+수강 기록이 없는 jung은 서브쿼리가 0줄이라 NULL이다. 바깥 줄은 그대로 남는다. 스칼라 서브쿼리는 `LEFT JOIN`처럼 동작한다는 뜻이다. MySQL 8에서도 같은 상황이 `Subquery returns more than 1 row`(1242) 에러가 된다.
+
+## 한 번만 도는 서브쿼리, 행마다 도는 서브쿼리
+
+"전체 평균보다 점수가 높은 수강"을 찾는다.
+
+```sql
+SELECT id, score FROM enrollments
+WHERE score > (SELECT avg(score) FROM enrollments);
+```
+
+```text
+ id | score
+----+-------
+  1 |    90
+  4 |    85
+  6 |    95
+(3 rows)
+```
+
+전체 평균은 80이다. 이 서브쿼리는 바깥 행을 참조하지 않는다. 바깥이 몇 줄이든 답이 하나라서 한 번만 계산하면 된다. 실행 계획에도 그렇게 나온다.
+
+```text
+                     QUERY PLAN
+-----------------------------------------------------
+ Seq Scan on enrollments
+   Filter: ((score)::numeric > $0)
+   InitPlan 1 (returns $0)
+     ->  Aggregate
+           ->  Seq Scan on enrollments enrollments_1
+(5 rows)
+```
+
+`InitPlan`은 본 쿼리보다 먼저 한 번 돌아서 결과를 `$0`에 넣어 두는 계획이다. 본 쿼리의 `Filter`는 그 값을 상수처럼 읽는다.
+
+조건을 "그 강의의 평균보다 높은 수강"으로 바꾸면 이야기가 달라진다. 서브쿼리가 바깥 행의 `course_id`를 참조하는 상관 서브쿼리가 된다.
+
+```sql
+SELECT e.id, e.course_id, e.score
+FROM enrollments e
+WHERE e.score > (SELECT avg(x.score) FROM enrollments x WHERE x.course_id = e.course_id)
+ORDER BY e.id;
+```
+
+```text
+ id | course_id | score
+----+-----------+-------
+  6 |         2 |    95
+(1 row)
+```
+
+강의별 평균은 1번 90, 2번 82.5, 3번 85, 4번 60이다. 점수가 있는 수강이 강의마다 하나뿐인 곳은 자기 점수가 곧 평균이라 "높은" 수강이 없다. 2번 강의의 95점만 남는다. 결과는 맞다. 문제는 30만 건 테이블에서 같은 모양을 돌릴 때다. 앞의 1000건만 검사해 본다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM enrollments_big e
+WHERE e.id <= 1000
+  AND e.score > (SELECT avg(x.score) FROM enrollments_big x WHERE x.course_id = e.course_id);
+```
+
+```text
+ Aggregate (actual time=17155.008..17155.010 rows=1 loops=1)
+   ->  Index Scan using enrollments_big_pkey on enrollments_big e (actual time=378.378..17154.647 rows=166 loops=1)
+         Index Cond: (id <= 1000)
+         Filter: ((score)::numeric > (SubPlan 1))
+         Rows Removed by Filter: 834
+         SubPlan 1
+           ->  Aggregate (actual time=16.934..16.934 rows=1 loops=1000)
+                 ->  Seq Scan on enrollments_big x (actual time=0.001..13.531 rows=60000 loops=1000)
+                       Filter: (course_id = e.course_id)
+                       Rows Removed by Filter: 240000
+ Planning Time: 0.561 ms
+ Execution Time: 17177.883 ms
+(12 rows)
+```
+
+17초가 걸렸다. `SubPlan 1` 아래의 `loops=1000`이 원인이다. 바깥 1000줄마다 30만 건을 처음부터 읽어 평균을 냈다. 강의는 다섯 개뿐이라 평균도 다섯 개면 충분한데, 같은 평균을 1000번 계산했다. 바깥 행이 늘면 시간이 그대로 곱해진다. 아래 그림에서 다음을 누르면 `InitPlan`과 `SubPlan`이 몇 번 도는지 차이가 보인다.
+
+<SequenceDiagram
+  caption="InitPlan은 한 번, 상관 SubPlan은 바깥 행마다 돈다"
+  actors={[
+    { id: "outer", label: "바깥 쿼리" },
+    { id: "sub", label: "서브쿼리" },
+    { id: "tbl", label: "enrollments" },
+  ]}
+  steps={[
+    { from: "sub", to: "tbl", label: "avg(score) 전체", title: "InitPlan: 먼저 한 번", detail: "바깥 행을 참조하지 않으니 본 쿼리 전에 한 번 계산해 $0에 넣는다.", payload: "InitPlan 1 (returns $0)" },
+    { from: "outer", to: "outer", label: "score > $0", title: "본 쿼리는 상수와 비교", detail: "행마다 $0을 읽기만 한다. 서브쿼리는 다시 돌지 않는다." },
+    { from: "outer", to: "sub", label: "course_id = 1", title: "SubPlan: 첫 바깥 행", detail: "상관 서브쿼리는 바깥 행의 값을 받아야 계산할 수 있다. 첫 행의 강의 번호를 넘긴다." },
+    { from: "sub", to: "tbl", label: "30만 건 읽기", title: "평균을 처음부터 계산", detail: "그 강의의 행을 찾으려고 테이블을 다 읽는다. 6만 건을 남기고 24만 건을 버린다." },
+    { from: "outer", to: "sub", label: "course_id = 2", title: "다음 바깥 행", detail: "강의 번호가 이미 계산한 것과 같아도 다시 계산한다. 결과를 기억해 두지 않는다." },
+    { from: "sub", to: "tbl", label: "× 1000번", title: "loops=1000", detail: "바깥 1000줄이면 30만 건 읽기를 1000번 한다. 17초가 여기서 나왔다.", payload: "Aggregate (actual time=16.934..16.934 rows=1 loops=1000)" },
+  ]}
+/>
+
+고치는 방법은 "다섯 개의 평균을 한 번에 만들어 두고 붙이는" 것이다. [조인 글](/posts/sql-joins-in-practice#묶고-나서-붙인다)의 "먼저 묶고 붙인다"와 같은 생각이다.
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM enrollments_big e
+JOIN (SELECT course_id, avg(score) AS avg_score
+      FROM enrollments_big GROUP BY course_id) a
+  ON a.course_id = e.course_id
+WHERE e.id <= 1000 AND e.score > a.avg_score;
+```
+
+```text
+ Aggregate (actual time=93.904..93.907 rows=1 loops=1)
+   ->  Hash Join (actual time=93.360..93.888 rows=166 loops=1)
+         Hash Cond: (e.course_id = enrollments_big.course_id)
+         Join Filter: ((e.score)::numeric > (avg(enrollments_big.score)))
+         Rows Removed by Join Filter: 834
+         ->  Index Scan using enrollments_big_pkey on enrollments_big e (actual time=0.006..0.224 rows=1000 loops=1)
+               Index Cond: (id <= 1000)
+         ->  Hash (actual time=93.326..93.328 rows=5 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 9kB
+               ->  HashAggregate (actual time=93.310..93.315 rows=5 loops=1)
+                     Group Key: enrollments_big.course_id
+                     Batches: 1  Memory Usage: 24kB
+                     ->  Seq Scan on enrollments_big (actual time=0.004..28.704 rows=300000 loops=1)
+ Planning Time: 0.261 ms
+ Execution Time: 93.972 ms
+(15 rows)
+```
+
+94ms다. 30만 건을 한 번 읽어 `HashAggregate`로 평균 다섯 개(`rows=5`)를 만들고 해시 조인으로 붙였다. 결과는 똑같이 166건이다.
+
+윈도 함수 `avg(score) OVER (PARTITION BY course_id)`로도 같은 답을 낼 수 있는데, 여기서는 326ms로 더 느렸다. 윈도 함수는 `WHERE`보다 늦게 계산되기 때문에, `id <= 1000` 조건을 윈도 계산 뒤로 미뤄야 해서 30만 건 전체에 평균을 붙인 다음에야 걸렀다. 윈도 함수의 자리는 [논리 순서 글](/posts/sql-logical-order#윈도-함수는-having보다-늦다)에 있다. 바깥에서 소수만 고르는 쿼리라면 그룹 집계 조인이, 전체에 붙여야 한다면 윈도 함수가 맞는 경우가 많다. 계획으로 확인하고 고른다.
+
+모든 상관 서브쿼리가 이렇게 느린 건 아니다. 학생 10만 명에게 최고 점수를 스칼라 서브쿼리로 붙였더니, 안쪽이 `student_id` 인덱스로 서너 줄만 읽어서 한 번에 0.005ms였다. 그래도 `loops=100000`이라 973ms가 걸렸고, 그룹 집계 조인으로 바꾸니 265ms였다. 안쪽 한 번의 비용 × `loops`가 실제 시간이다. 이 곱셈을 계획에서 읽어 내는 게 전부다.
+
+## IN과 EXISTS는 조인이 된다
+
+"한 번이라도 완료한 수강생"을 `EXISTS`와 `IN`으로 쓴다.
+
+```sql
+SELECT s.name FROM students s
+WHERE EXISTS (SELECT 1 FROM enrollments e
+              WHERE e.student_id = s.id AND e.status = 'completed');
+
+SELECT s.name FROM students s
+WHERE s.id IN (SELECT e.student_id FROM enrollments e WHERE e.status = 'completed');
+```
+
+두 쿼리의 계획은 글자 하나 다르지 않다.
+
+```text
+                     QUERY PLAN
+----------------------------------------------------
+ Hash Semi Join
+   Hash Cond: (s.id = e.student_id)
+   ->  Seq Scan on students s
+   ->  Hash
+         ->  Seq Scan on enrollments e
+               Filter: (status = 'completed'::text)
+(6 rows)
+```
+
+`EXISTS`는 상관 서브쿼리인데도 행마다 돌지 않았다. 플래너가 서브쿼리를 끌어올려(pull-up) 세미 조인으로 바꿨기 때문이다. 세미 조인은 짝이 하나라도 있으면 왼쪽 행을 한 번만 내보내는 조인이라, 완료한 강의가 둘인 kim도 한 번만 나온다. 큰 테이블에서 `EXISTS`, `IN`, `JOIN + DISTINCT`를 비교한 결과는 [쿼리 다시 쓰기 글](/posts/sql-query-rewrite#exists-in-join-중-무엇을-쓰나)에 있다.
+
+이 끌어올리기는 조건이 맞을 때만 일어난다. `EXISTS`가 `OR`의 한쪽에 있으면 조인으로 바꿀 수 없다. "완료한 수강생이거나 대구에 사는 사람"을 찾는다.
+
+```sql
+EXPLAIN (COSTS OFF)
+SELECT s.name FROM students s
+WHERE EXISTS (SELECT 1 FROM enrollments e
+              WHERE e.student_id = s.id AND e.status = 'completed')
+   OR s.city = 'daegu';
+```
+
+```text
+                        QUERY PLAN
+----------------------------------------------------------
+ Seq Scan on students s
+   Filter: ((hashed SubPlan 2) OR (city = 'daegu'::text))
+   SubPlan 2
+     ->  Seq Scan on enrollments e
+           Filter: (status = 'completed'::text)
+(5 rows)
+```
+
+조인 대신 `SubPlan`이 됐다. 여기서는 서브쿼리 결과를 해시 표로 한 번 만들어 두고 행마다 찾는 `hashed SubPlan`이라 괜찮다. 해시 표가 메모리(`work_mem`)에 들어가지 않을 만큼 크면 행마다 서브쿼리를 다시 도는 계획이 된다. `OR`를 `UNION`으로 나누면 양쪽이 각각 세미 조인과 인덱스 조건이 될 수 있다. `OR`가 붙은 서브쿼리 조건이 느리면 먼저 계획에서 `SubPlan`을 찾는다.
+
+## NOT IN은 메모리 설정에 따라 계획이 바뀐다
+
+부정형 둘을 비교한다. "수강 기록이 없는 수강생"을 `NOT IN`과 `NOT EXISTS`로 세는데, 학생 7만 1번부터 7만 100번까지 100명만 본다(이 구간은 모두 기록이 없다).
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM students_big s
+WHERE s.id BETWEEN 70001 AND 70100
+  AND s.id NOT IN (SELECT student_id FROM enrollments_big);
+```
+
+```text
+ Aggregate (actual time=4430.701..4430.704 rows=1 loops=1)
+   ->  Index Only Scan using students_big_pkey on students_big s (actual time=114.932..4430.117 rows=100 loops=1)
+         Index Cond: ((id >= 70001) AND (id <= 70100))
+         Filter: (NOT (SubPlan 1))
+         Heap Fetches: 0
+         SubPlan 1
+           ->  Materialize (actual time=0.003..25.531 rows=300000 loops=100)
+                 ->  Seq Scan on enrollments_big (actual time=0.029..29.661 rows=300000 loops=1)
+ Planning Time: 0.490 ms
+ Execution Time: 4453.983 ms
+(10 rows)
+```
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM students_big s
+WHERE s.id BETWEEN 70001 AND 70100
+  AND NOT EXISTS (SELECT 1 FROM enrollments_big e WHERE e.student_id = s.id);
+```
+
+```text
+ Aggregate (actual time=0.106..0.107 rows=1 loops=1)
+   ->  Nested Loop Anti Join (actual time=0.014..0.098 rows=100 loops=1)
+         ->  Index Only Scan using students_big_pkey on students_big s (actual time=0.010..0.017 rows=100 loops=1)
+               Index Cond: ((id >= 70001) AND (id <= 70100))
+               Heap Fetches: 0
+         ->  Index Only Scan using enrollments_big_student_id_idx on enrollments_big e (actual time=0.001..0.001 rows=0 loops=100)
+               Index Cond: (student_id = s.id)
+               Heap Fetches: 0
+ Planning Time: 0.450 ms
+ Execution Time: 0.141 ms
+(10 rows)
+```
+
+4.4초와 0.14ms다. 결과는 둘 다 100명이다. `NOT EXISTS`는 안티 조인이 되어 학생마다 인덱스를 한 번 찔러 보고 끝났다. `NOT IN`은 학생마다 30만 건 목록(`Materialize`로 메모리에 펼쳐 둔 것)을 처음부터 끝까지 훑었다. 짝이 없는 학생이라 끝까지 가야 "없다"를 확인할 수 있다.
+
+`NOT IN`이 안티 조인이 되지 못하는 이유는 NULL이다. 목록에 NULL이 있으면 `x NOT IN (...)`은 참이 될 수 없고, 바깥 값이 NULL이면 목록이 비어 있지 않은 한 역시 참이 될 수 없다. 안티 조인은 이 규칙을 지킬 수 없어서 플래너가 바꾸지 않는다. PostgreSQL에서 직접 확인한 네 경우다.
+
+```sql
+SELECT NULL::int NOT IN (SELECT 1 WHERE false) AS empty_set,   -- 빈 목록
+       NULL::int NOT IN (1)                    AS one,
+       3 NOT IN (1, 2, NULL)                   AS with_null,
+       1 NOT IN (1, NULL)                      AS hit;
+```
+
+```text
+ empty_set |  one   | with_null | hit
+-----------+--------+-----------+-----
+ t         | (null) | (null)    | f
+(1 row)
+```
+
+빈 목록 앞에서는 NULL도 `NOT IN`이 참이다. 목록에서 같은 값을 찾으면 NULL이 섞여 있어도 거짓이다. 아래 그림에서 다음을 누르면 `3 NOT IN (1, 2, NULL)`이 한 칸씩 비교되는 과정이 보인다.
+
+<AlgoTrace
+  caption="3 NOT IN (1, 2, NULL)은 3 <> 1 AND 3 <> 2 AND 3 <> NULL이다"
+  cells={["1", "2", "NULL"]}
+  memoryLabel="비교 결과 (AND로 묶인다)"
+  steps={[
+    { caption: "NOT IN은 목록의 모든 값과 다르다는 뜻이다. 비교를 AND로 이은 것과 같다." },
+    { pointer: 0, memory: ["참"], caption: "3 <> 1은 참이다. 아직 결론이 안 났다." },
+    { pointer: 1, memory: ["참", "참"], caption: "3 <> 2도 참이다. 여기서 끝나면 참이었을 것이다." },
+    { pointer: 2, memory: ["참", "참", "알 수 없음"], caption: "3 <> NULL은 알 수 없음이다. NULL이 무슨 값인지 모르니 다른지도 모른다." },
+    { found: [2], memory: ["결과: 알 수 없음"], caption: "참 AND 알 수 없음은 알 수 없음이다. WHERE는 참만 통과시키니 이 행은 빠진다." },
+  ]}
+/>
+
+여기에 메모리라는 변수가 하나 더 있다. 처음 이 쿼리를 범위 없이 10만 명 전체로 돌렸더니 2분이 지나도 끝나지 않아 취소했다. 짝 없는 학생 한 명에 44ms꼴이니 3만 명이면 20분이 넘는 계산이다. 30만 건 목록을 해시 표로 만들기에는 기본 `work_mem` 4MB가 모자라서 위와 같은 행마다 훑는 계획이 나온 것이다. 같은 쿼리를 `SET work_mem = '16MB'`로 돌리면 계획이 바뀐다.
+
+```text
+ Aggregate (actual time=149.627..149.629 rows=1 loops=1)
+   ->  Seq Scan on students_big s (actual time=119.004..147.979 rows=30986 loops=1)
+         Filter: (NOT (hashed SubPlan 1))
+         Rows Removed by Filter: 69014
+         SubPlan 1
+           ->  Seq Scan on enrollments_big (actual time=0.014..27.565 rows=300000 loops=1)
+ Planning Time: 0.046 ms
+ Execution Time: 150.482 ms
+(8 rows)
+```
+
+`hashed SubPlan`이 되자 10만 명 전체가 150ms다. 같은 SQL이 메모리 설정 하나로 20분과 0.15초를 오간다. 데이터가 자라서 해시 표가 `work_mem`을 넘는 날, 어제까지 빠르던 `NOT IN`이 갑자기 멈춘다. 이게 `NOT IN`을 피하는 두 번째 이유다. `work_mem`을 올려서 고치는 건 쿼리 하나를 위해 모든 연결의 메모리 한도를 바꾸는 일이라, `NOT EXISTS`로 다시 쓰는 편이 맞다. 같은 비교를 100만 건 주문 테이블로 한 결과는 [쿼리 다시 쓰기 글](/posts/sql-query-rewrite)에도 있다.
+
+## 서브쿼리가 어떤 계획이 되는지 한눈에
+
+지금까지 본 모양을 실행 계획의 이름으로 정리하면 이렇다. 아래 그림에서 각 모양이 어느 노드로 가는지 화살표로 따라가 보면 된다.
+
+<ConceptDiagram
+  caption="서브쿼리 모양별로 PostgreSQL 16이 만드는 계획 노드"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "uncor", label: "비상관 스칼라", sub: "(SELECT avg ...)", x: 80, y: 40, w: 130 },
+    { id: "cor", label: "상관 스칼라", sub: "WHERE x.k = e.k", x: 80, y: 105, w: 130 },
+    { id: "exists", label: "IN · EXISTS", sub: "AND로 연결", x: 80, y: 170, w: 130 },
+    { id: "notex", label: "NOT EXISTS", x: 80, y: 225, w: 130 },
+    { id: "notin", label: "NOT IN · OR", x: 80, y: 280, w: 130 },
+    { id: "init", label: "InitPlan", sub: "한 번", x: 310, y: 40, w: 120 },
+    { id: "sub", label: "SubPlan", sub: "행마다 (loops)", x: 310, y: 120, w: 120 },
+    { id: "semi", label: "Semi Join", x: 310, y: 185, w: 120 },
+    { id: "anti", label: "Anti Join", x: 310, y: 240, w: 120 },
+    { id: "hashed", label: "hashed SubPlan", sub: "work_mem 안", x: 310, y: 285, w: 130 },
+  ]}
+  edges={[
+    { from: "uncor", to: "init" },
+    { from: "cor", to: "sub" },
+    { from: "exists", to: "semi", label: "끌어올림" },
+    { from: "notex", to: "anti", label: "끌어올림" },
+    { from: "notin", to: "hashed", label: "메모리에 들면" },
+    { from: "notin", to: "sub", label: "넘치면", dashed: true },
+  ]}
+/>
+
+계획에서 `SubPlan`을 보면 그 아래 노드의 `loops`를 확인한다. 1이거나 `hashed`면 걱정하지 않아도 되고, 바깥 행 수만큼이면 안쪽 한 번의 비용을 곱해 본다. `Semi Join`이나 `Anti Join`이 보이면 서브쿼리가 조인이 된 것이니 조인 순서와 인덱스를 보면 된다.
+
+## FROM 안에서 바깥을 보는 LATERAL
+
+맨 앞의 "가장 최근 강의"에 신청 시각도 같이 보여 달라는 요청이 왔다. 스칼라 서브쿼리는 값 하나만 돌려주니, 칸 하나에 서브쿼리 하나씩 두 번 써야 한다.
+
+```sql
+SELECT s.name,
+       (SELECT c.title FROM enrollments e JOIN courses c ON c.id = e.course_id
+         WHERE e.student_id = s.id ORDER BY e.enrolled_at DESC LIMIT 1) AS title,
+       (SELECT e.enrolled_at FROM enrollments e
+         WHERE e.student_id = s.id ORDER BY e.enrolled_at DESC LIMIT 1) AS at
+FROM students s ORDER BY s.id;
+```
+
+같은 조건과 정렬을 두 번 쓰고 실행도 두 번 한다. 두 서브쿼리의 정렬 기준이 조금이라도 다르면 제목과 시각이 서로 다른 수강에서 올 수도 있다. 여러 칸이 필요하면 `FROM`에 서브쿼리를 두고 싶은데, `FROM`의 서브쿼리는 원래 옆 테이블을 볼 수 없다.
+
+```sql
+SELECT s.name, t.n
+FROM students s,
+     (SELECT count(*) AS n FROM enrollments e WHERE e.student_id = s.id) t;
+```
+
+```text
+ERROR:  invalid reference to FROM-clause entry for table "s"
+LINE 1: ...unt(*) AS n FROM enrollments e WHERE e.student_id = s.id) t;
+                                                               ^
+DETAIL:  There is an entry for table "s", but it cannot be referenced from this part of the query.
+HINT:  To reference that table, you must mark this subquery with LATERAL.
+```
+
+에러 메시지가 답을 알려 준다. `LATERAL`을 붙이면 `FROM`의 서브쿼리가 왼쪽에 먼저 나온 테이블의 현재 행을 참조할 수 있다. 바깥 행마다 그 서브쿼리를 돌린다는 뜻이고, 여러 줄 여러 칸을 돌려줄 수 있다.
+
+```sql
+SELECT s.name, last.title, last.enrolled_at
+FROM students s
+LEFT JOIN LATERAL (
+  SELECT c.title, e.enrolled_at
+  FROM enrollments e JOIN courses c ON c.id = e.course_id
+  WHERE e.student_id = s.id          -- 왼쪽의 s를 참조한다
+  ORDER BY e.enrolled_at DESC
+  LIMIT 1
+) last ON true
+ORDER BY s.id;
+```
+
+```text
+ name |    title    |      enrolled_at
+------+-------------+------------------------
+ kim  | React 입문  | 2026-10-15 08:00:00+09
+ lee  | React 입문  | 2026-10-12 09:00:00+09
+ park | Docker 실전 | 2026-10-31 23:59:30+09
+ choi | React 입문  | 2026-11-01 00:00:00+09
+ jung | (null)      | (null)
+(5 rows)
+```
+
+`LEFT JOIN LATERAL ... ON true`와 `CROSS JOIN LATERAL`의 차이가 jung에서 드러난다. 같은 쿼리를 `CROSS JOIN LATERAL`로 쓰면 서브쿼리가 0줄인 jung이 빠지고 4줄이 나온다. 0줄일 수 있는 서브쿼리라면 `LEFT JOIN LATERAL`을 쓴다. `ON true`는 짝 조건이 이미 서브쿼리 안에 있으니 더 걸 조건이 없다는 뜻이다. 아래 그림에서 조각을 누르면 각 부분의 역할이 나온다.
+
+<UrlAnatomy
+  caption="LEFT JOIN LATERAL을 조각으로 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "left", display: "LEFT JOIN", title: "0줄이어도 바깥을 남긴다", description: "서브쿼리가 아무것도 돌려주지 않으면 NULL로 채운 한 줄을 만든다. CROSS JOIN LATERAL이면 그 바깥 행이 사라진다.", required: true },
+    { key: "lateral", display: "LATERAL (", title: "왼쪽을 볼 수 있게 한다", description: "이 키워드가 없으면 FROM의 서브쿼리는 같은 FROM의 다른 테이블을 참조할 수 없다. 붙이면 바깥 행마다 서브쿼리가 다시 계산된다.", required: true },
+    { key: "body", display: "... WHERE e.student_id = s.id", title: "바깥 행 참조", description: "s는 왼쪽 테이블이다. 상관 서브쿼리와 같은 모양이라 인덱스가 없으면 행마다 테이블을 다 읽는다.", code: "CREATE INDEX ON enrollments (student_id, enrolled_at DESC);" },
+    { key: "limit", display: "ORDER BY ... LIMIT 1 )", title: "몇 줄을 붙일지", description: "LIMIT 3이면 바깥 행마다 세 줄이 붙는다. 그룹별 상위 N개를 이렇게 구한다." },
+    { key: "on", display: "last ON true", title: "추가 짝 조건 없음", description: "짝을 고르는 조건은 이미 안에 있다. LEFT JOIN은 문법상 ON이 필요해서 true를 적는다." },
+  ]}
+/>
+
+계획에서는 `Nested Loop Left Join` 아래에 서브쿼리가 오른쪽으로 붙는다. 바깥 행마다 오른쪽을 한 번씩 도는 구조라, 상관 서브쿼리와 비용 계산이 같다. 안쪽이 인덱스로 몇 줄만 읽으면 빠르고, 테이블을 다 읽으면 행 수만큼 느려진다. 인덱스 유무에 따라 `LATERAL`과 윈도 함수 중 어느 쪽이 빠른지는 [리포트 SQL 글](/posts/postgres-reporting-sql#사용자마다-최근-주문-세-건)에서 숫자로 비교했다.
+
+`LATERAL`은 계산한 값에 이름을 붙여 다시 쓰는 데도 쓴다. `WHERE`에서는 `SELECT`의 별칭을 못 쓰니 같은 식을 두 번 적게 되는데, 그 식을 `LATERAL`로 빼면 한 번만 쓴다.
+
+```sql
+SELECT e.id, x.adj
+FROM enrollments e
+CROSS JOIN LATERAL (SELECT round(e.score * 1.1) AS adj) x   -- 10% 가산 점수
+WHERE x.adj >= 90
+ORDER BY e.id;
+```
+
+```text
+ id | adj
+----+-----
+  1 |  99
+  4 |  94
+  6 | 105
+(3 rows)
+```
+
+`FROM` 없는 `SELECT` 하나짜리 서브쿼리라 항상 한 줄이고, 플래너가 식으로 펼쳐 넣어서 비용은 거의 없다. MySQL 8은 8.0.14부터 `LATERAL`을 지원한다.
+
+## 느린 서브쿼리를 만나면 보는 것
+
+서브쿼리가 들어간 쿼리가 느리다는 문의를 받으면 `EXPLAIN (ANALYZE)`부터 뜬다. 그다음 순서는 이렇다.
+
+계획에서 `SubPlan`을 찾고 그 아래 노드의 `loops`를 본다. 바깥 행 수와 같다면, 그 노드의 `actual time` × `loops`가 실제 비용이다. 안쪽이 `Seq Scan`이면 인덱스를 만들거나, 바깥과 무관한 계산을 미리 묶어 조인으로 바꾼다. 강의별 평균처럼 결과 종류가 적은데 바깥 행이 많다면 거의 언제나 미리 묶는 쪽이 이긴다.
+
+`NOT IN`이 보이면 `NOT EXISTS`로 바꾼다. 결과가 달라질 수 있는 경우는 서브쿼리 컬럼에 NULL이 있을 때뿐인데, 그때는 `NOT IN`의 결과(0줄)가 원래 의도와 다른 것이다.
+
+`EXISTS`나 `IN`인데도 `SubPlan`이 보이면 `OR`, `CASE` 안, `SELECT` 목록처럼 조인으로 바꿀 수 없는 자리에 있는지 본다. `OR`는 `UNION`으로 나누면 각각 조인이 될 수 있다.
+
+마지막으로 스칼라 서브쿼리에 `LIMIT 1`이 `ORDER BY` 없이 붙어 있으면, 에러를 숨기려고 붙인 것인지 묻는다. 대개는 "어느 한 줄"의 기준이 정해지지 않은 요구사항이 숨어 있다.
+
+## NOT IN을 직접 계산해 보기
+
+SQL의 3값 논리로 `x NOT IN (목록)`을 계산하는 함수를 완성해 보자. 결과는 `true`, `false`, 알 수 없음을 뜻하는 `null` 중 하나다. 목록의 각 값과 `x <> 값`을 계산해 AND로 잇는다. 어느 한쪽이 `null`이면 그 비교는 `null`이고, AND는 `false`가 하나라도 있으면 `false`, 그렇지 않고 `null`이 있으면 `null`, 모두 참이면 `true`다. 테스트의 기대값은 같은 식을 PostgreSQL 16에서 돌린 결과다.
+
+<CodePlayground
+  caption="3값 논리로 NOT IN 계산하기"
+  functionName="notIn"
+  initialCode={`function notIn(x, list) {
+  // true, false, 또는 null(알 수 없음)
+  return true;
+}`}
+  solution={`function notIn(x, list) {
+  let unknown = false;
+  for (const v of list) {
+    if (x === null || v === null) { unknown = true; continue; }   // NULL과의 비교는 알 수 없음
+    if (x === v) return false;                                     // 같은 값이 있으면 확실히 거짓
+  }
+  return unknown ? null : true;                                    // 빈 목록이면 항상 참
+}`}
+  tests={[
+    { label: "3 NOT IN (1, 2)", args: [3, [1, 2]], expected: true },
+    { label: "3 NOT IN (1, 2, NULL)", args: [3, [1, 2, null]], expected: null },
+    { label: "1 NOT IN (1, NULL)", args: [1, [1, null]], expected: false },
+    { label: "NULL NOT IN (1)", args: [null, [1]], expected: null },
+    { label: "NULL NOT IN (빈 목록)", args: [null, []], expected: true },
+  ]}
+/>
+
+## 계획의 이름을 읽는다
+
+서브쿼리는 넣는 자리와 돌려주는 줄 수에 따라 `InitPlan`, `SubPlan`, 세미 조인, 안티 조인 중 하나가 된다. 한 번 도는 `InitPlan`과 조인이 된 서브쿼리는 걱정하지 않아도 되고, 바깥 행마다 도는 `SubPlan`은 `loops`를 곱해 본다. `NOT IN`은 NULL 때문에 조인이 되지 못하고 메모리 설정에 따라 성능이 널뛰니 `NOT EXISTS`로 쓴다. 칸이 여럿이거나 여러 줄을 붙여야 하면 `LATERAL`을 쓰되, 안쪽이 인덱스를 타는지 확인한다. 같은 결과를 조인으로 만드는 방법과 그때의 함정은 [조인 실전 글](/posts/sql-joins-in-practice)에, 조건에 따라 값을 바꾸는 `CASE`는 [CASE WHEN 글](/posts/sql-case-when)에 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 스칼라 서브쿼리가 0줄이나 여러 줄을 돌려주면 어떻게 되나요?
+
+0줄이면 NULL이 되고 바깥 행은 남는다. 두 줄 이상이면 `more than one row returned by a subquery used as an expression` 에러가 나는데, 실행 중 그 행을 만날 때 검사하므로 데이터가 바뀌어야 터진다. `LIMIT 1`로 막을 거라면 `ORDER BY`로 어느 줄인지 정한다.
+
+### 상관 서브쿼리와 비상관 서브쿼리는 실행 방식이 어떻게 다른가요?
+
+비상관 서브쿼리는 바깥과 무관하니 `InitPlan`으로 한 번 계산하고 결과를 상수처럼 쓴다. 상관 서브쿼리는 바깥 행의 값이 필요해서 조인으로 바뀌지 않으면 `SubPlan`으로 바깥 행마다 다시 돈다. 계획의 `loops`가 바깥 행 수와 같으면 안쪽 비용이 그만큼 곱해진다.
+
+### 상관 서브쿼리가 느릴 때 어떻게 고치나요?
+
+먼저 안쪽이 인덱스로 몇 줄만 읽게 할 수 있는지 본다. 결과 종류가 적은 집계라면 미리 `GROUP BY`로 묶은 결과에 조인한다. 강의별 평균 예제에서 이렇게 바꾸니 17초가 94ms가 됐다. 윈도 함수도 대안이지만 바깥 조건을 윈도 계산 뒤에 걸러야 해서 소수만 고를 때는 더 느릴 수 있다.
+
+### IN과 EXISTS 중 무엇이 빠른가요?
+
+PostgreSQL에서 둘은 보통 같은 세미 조인으로 바뀌어 계획이 똑같다. 다만 `OR`의 한쪽에 있거나 조인으로 바꿀 수 없는 자리에 있으면 `SubPlan`이 된다. 문법보다 계획에 `Semi Join`이 나오는지 확인하는 게 맞다.
+
+### NOT IN 대신 NOT EXISTS를 쓰라는 이유는요?
+
+첫째는 결과다. 서브쿼리에 NULL이 하나라도 있으면 `NOT IN`은 참이 될 수 없어 0줄이 된다. 둘째는 성능이다. 그 NULL 규칙 때문에 안티 조인으로 바뀌지 못하고, 해시 표가 `work_mem`에 들어가면 `hashed SubPlan`, 넘치면 행마다 목록을 훑는 계획이 되어 같은 쿼리가 데이터 크기에 따라 갑자기 느려진다. `NOT EXISTS`는 안티 조인이 된다.
+
+### LATERAL은 무엇이고 언제 쓰나요?
+
+`FROM`의 서브쿼리가 왼쪽 테이블의 현재 행을 참조하게 해 주는 키워드다. 바깥 행마다 여러 칸이나 여러 줄을 붙여야 할 때, 예를 들어 사용자별 최근 N건을 구할 때 쓴다. 0줄일 수 있으면 `LEFT JOIN LATERAL ... ON true`로 바깥 행을 남긴다.
+
+### LATERAL은 항상 빠른가요?
+
+아니다. 계획은 `Nested Loop`로 바깥 행마다 오른쪽을 한 번씩 도는 구조라, 안쪽이 인덱스로 몇 줄만 읽을 때 빠르다. 인덱스가 없으면 바깥 행 수만큼 테이블을 다 읽어서 윈도 함수보다 훨씬 느려진다.
+
+### 같은 쿼리가 어느 날부터 갑자기 느려졌습니다. 서브쿼리라면 무엇을 의심하나요?
+
+`NOT IN`처럼 해시 표 크기에 따라 계획이 바뀌는 모양을 먼저 의심한다. 데이터가 자라 해시 표가 `work_mem`을 넘으면 `hashed SubPlan`이 행마다 훑는 `SubPlan`으로 바뀐다. 이 글의 예에서는 150ms짜리 쿼리가 2분이 지나도 끝나지 않았다. `EXPLAIN`에서 `hashed`가 사라졌는지 보고 `NOT EXISTS`로 다시 쓴다.

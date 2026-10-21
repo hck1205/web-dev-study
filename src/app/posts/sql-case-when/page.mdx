@@ -1,0 +1,605 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-case-when");
+
+수강 점수에 등급을 붙이는 쿼리를 받았다. 60점 이상은 C, 80점 이상은 B, 90점 이상은 A다. 요구사항을 적힌 순서대로 옮겼다.
+
+```sql
+SELECT id, score,
+       CASE WHEN score >= 60 THEN 'C'
+            WHEN score >= 80 THEN 'B'
+            WHEN score >= 90 THEN 'A'
+       END AS grade
+FROM enrollments ORDER BY id;
+```
+
+```text
+ id | score  | grade
+----+--------+--------
+  1 |     90 | C
+  2 |     70 | C
+  3 | (null) | (null)
+  4 |     85 | C
+  5 | (null) | (null)
+  6 |     95 | C
+  7 | (null) | (null)
+  8 |     60 | C
+  9 | (null) | (null)
+(9 rows)
+```
+
+95점도 C다. 점수가 없는 수강은 등급이 비어 있다. 에러는 없다. `CASE`는 위에서부터 조건을 보고 처음 참이 된 곳에서 멈추는데, 95점은 첫 줄 `score >= 60`에서 이미 참이라 아래 조건은 보지도 않았다.
+
+`CASE`는 SQL에서 조건에 따라 값을 고르는 유일한 표준 식이다. 단순해 보여서 깊이 생각하지 않고 쓰는데, 조건의 순서, NULL, 결과 타입, 그리고 계산 시점에 각각 함정이 있다. 이 글은 PostgreSQL 16에서 그 함정을 재현하고, `CASE`가 가장 많이 쓰이는 두 자리인 조건부 집계와 피벗(행을 열로 돌리기)을 다룬다. `ORDER BY`, `UPDATE`, `WHERE` 안의 `CASE`도 본다.
+
+같은 데이터로 이어지는 SQL 시리즈다. `CASE`가 집계 안의 에러를 막지 못하는 이유는 [SELECT의 논리적 처리 순서](/posts/sql-logical-order#집계는-case보다-먼저-끝난다)에, `count(CASE ... ELSE 0 END)`가 전부를 세는 실수와 `FILTER` 절은 [집계 함정 글](/posts/sql-aggregation-pitfalls)에 있다. Oracle의 `DECODE`는 [SQLD NULL 함수 글](/posts/sqld-null-functions), Oracle의 `PIVOT` 문법은 [SQLD 피벗 글](/posts/sqld-top-n-hierarchical-pivot)에서 다뤘다. 여기서 쓰는 `payments`(할부·환불이 있는 결제 12건) 테이블은 [조인 실전 글](/posts/sql-joins-in-practice#결제와-후기를-더한-강의-사이트)에서 만들었다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고, 출력은 모두 실제로 돌린 결과다.
+
+## 위에서 아래로, 처음 맞는 곳에서 멈춘다
+
+`CASE`에는 두 가지 모양이 있다. 조건을 하나씩 적는 검색형(`CASE WHEN 조건 THEN ...`)과, 값 하나를 여러 값과 비교하는 단순형(`CASE 값 WHEN 후보 THEN ...`)이다. 둘 다 위에서 아래로 차례로 보고, 처음 맞는 `WHEN`의 `THEN`을 돌려준다. 아무것도 맞지 않으면 `ELSE`를, `ELSE`가 없으면 NULL을 돌려준다.
+
+범위로 나누는 조건은 겹치니까 순서가 곧 의미다. 좁은 조건을 위에, 넓은 조건을 아래에 둔다. NULL도 따로 이름을 붙여 준다.
+
+```sql
+SELECT id, score,
+       CASE WHEN score >= 90 THEN 'A'
+            WHEN score >= 80 THEN 'B'
+            WHEN score >= 60 THEN 'C'
+            WHEN score IS NULL THEN '미채점'
+            ELSE 'F'
+       END AS grade
+FROM enrollments ORDER BY id;
+```
+
+```text
+ id | score  | grade
+----+--------+--------
+  1 |     90 | A
+  2 |     70 | C
+  3 | (null) | 미채점
+  4 |     85 | B
+  5 | (null) | 미채점
+  6 |     95 | A
+  7 | (null) | 미채점
+  8 |     60 | C
+  9 | (null) | 미채점
+(9 rows)
+```
+
+NULL은 `score >= 90`에서 참이 아니라 "알 수 없음"이 된다. `CASE`는 참인 조건만 고르니 NULL은 범위 조건을 모두 지나 아래로 떨어진다. `IS NULL`을 따로 두지 않았다면 `ELSE 'F'`에 걸려 채점 전인 수강이 낙제로 보였을 것이다. 아래 그림에서 다음을 누르면 95점과 NULL이 처음 쿼리와 고친 쿼리에서 어느 줄에 걸리는지 보인다.
+
+<AlgoTrace
+  caption="CASE는 위에서부터 보고 처음 참인 줄에서 멈춘다"
+  cells={["≥ 60 → C", "≥ 80 → B", "≥ 90 → A", "≥ 90 → A", "≥ 80 → B", "≥ 60 → C", "IS NULL", "ELSE F"]}
+  memoryLabel="결과"
+  steps={[
+    { caption: "앞 세 칸은 처음 쿼리, 뒤 다섯 칸은 고친 쿼리다. 95점부터 넣어 본다." },
+    { pointer: 0, found: [0], memory: ["95 → C"], caption: "처음 쿼리: 95 >= 60이 참이라 첫 줄에서 C로 끝난다. 아래 두 줄은 보지 않는다." },
+    { pointer: 3, found: [3], memory: ["95 → C", "95 → A"], caption: "고친 쿼리: 좁은 조건이 위에 있어 95 >= 90에서 A로 끝난다." },
+    { pointer: 5, memory: ["95 → C", "95 → A", "NULL → ?"], caption: "NULL을 넣는다. NULL >= 90, >= 80, >= 60은 모두 알 수 없음이라 참이 아니다." },
+    { pointer: 6, found: [6], memory: ["95 → C", "95 → A", "NULL → 미채점"], caption: "IS NULL에서 참이 된다. 이 줄이 없었다면 ELSE의 F가 됐다." },
+  ]}
+/>
+
+단순형은 내부적으로 `값 = 후보`를 차례로 계산한다. 그래서 NULL을 후보로 적으면 절대 맞지 않는다.
+
+```sql
+SELECT id, score,
+       CASE score WHEN NULL THEN '미채점' ELSE '채점됨' END AS simple_case,
+       CASE WHEN score IS NULL THEN '미채점' ELSE '채점됨' END AS searched
+FROM enrollments WHERE id IN (2, 3) ORDER BY id;
+```
+
+```text
+ id | score  | simple_case | searched
+----+--------+-------------+----------
+  2 |     70 | 채점됨      | 채점됨
+  3 | (null) | 채점됨      | 미채점
+(2 rows)
+```
+
+`score = NULL`은 언제나 알 수 없음이라 NULL인 3번도 `ELSE`로 갔다. NULL을 가려야 하는 `CASE`는 검색형으로 쓰고 `IS NULL`을 쓴다. 값이 NULL일 때 다른 값으로 바꾸는 것만 필요하면 `coalesce`가 짧다.
+
+## THEN마다 타입이 같아야 한다
+
+화면에 점수를 보여 주되 점수가 없으면 "미채점"이라고 쓰고 싶었다.
+
+```sql
+SELECT id, CASE WHEN score IS NULL THEN '미채점' ELSE score END
+FROM enrollments;
+```
+
+```text
+ERROR:  invalid input syntax for type integer: "미채점"
+LINE 1: SELECT id, CASE WHEN score IS NULL THEN '미채점' ELSE score ...
+                                                ^
+```
+
+에러 메시지가 이상하다. 문자열을 정수로 읽으려 했다고 한다. `CASE`의 결과는 칸 하나라서 타입도 하나여야 한다. PostgreSQL은 모든 `THEN`과 `ELSE`를 보고 공통 타입을 정하는데, 따옴표로 쓴 리터럴 `'미채점'`은 아직 타입이 정해지지 않은 값(unknown)으로 취급한다. 그래서 다른 쪽의 타입인 `integer`를 고르고, `'미채점'`을 정수로 바꾸려다 실패했다. 문자열이 `'0'`이었다면 정수 0으로 바뀌어 에러 없이 돌았을 것이다. 반대로 문자열 쪽 타입이 확실하면 메시지가 바뀐다.
+
+```sql
+SELECT id, CASE WHEN score IS NULL THEN 'x'::text ELSE score END FROM enrollments;
+```
+
+```text
+ERROR:  CASE types integer and text cannot be matched
+LINE 1: SELECT id, CASE WHEN score IS NULL THEN 'x'::text ELSE score...
+                                                ^
+```
+
+`integer`와 `text` 사이에는 자동 변환이 없다. 한쪽을 명시적으로 바꿔서 맞춘다.
+
+```sql
+SELECT id, CASE WHEN score IS NULL THEN '미채점' ELSE score::text END AS shown
+FROM enrollments WHERE id IN (2, 3) ORDER BY id;
+```
+
+```text
+ id | shown
+----+--------
+  2 | 70
+  3 | 미채점
+(2 rows)
+```
+
+이러면 결과가 `text`라서 정렬이 문자열 순서가 된다(`'100'`이 `'70'`보다 앞). 화면 표시용으로 바꾼 칸으로 정렬하지 말고 원래 숫자 칸으로 정렬한다. 숫자끼리는 더 넓은 쪽으로 맞춰진다. `THEN 1 ELSE 0.5`는 `numeric`이 되고, `integer`와 `bigint`가 섞이면 `bigint`가 된다. MySQL 8은 숫자와 문자열이 섞이면 문자열로 맞춰 돌려줘서 에러가 나지 않는다. MySQL에서 돌던 `CASE`가 PostgreSQL에서 에러가 나는 흔한 이유다.
+
+## 실행되지 않을 ELSE가 에러를 낸다
+
+`CASE`는 맞은 줄의 `THEN`만 계산한다. 그래서 0으로 나누기 같은 위험한 식을 `CASE`로 감싸 지키는 게 PostgreSQL에서 권장되는 방법이다. 그런데 예외가 있다.
+
+```sql
+SELECT CASE WHEN id > 0 THEN 1 ELSE 1/0 END FROM enrollments LIMIT 1;
+```
+
+```text
+ERROR:  division by zero
+```
+
+`id`는 모두 양수라 `ELSE`에 갈 일이 없다. 그래도 에러가 났다. 범인은 실행이 아니라 계획 단계다. PostgreSQL의 플래너는 쿼리를 실행하기 전에 상수로만 된 식을 미리 계산해 둔다(상수 접기). `1/0`은 컬럼이 하나도 없는 상수식이라, 플래너가 미리 계산하려다 에러가 났다. 행을 한 줄도 읽기 전이다. PostgreSQL 문서도 `CASE` 설명에서 이 예를 들어 경고한다.
+
+<SequenceDiagram
+  caption="상수식은 행을 읽기 전, 계획 단계에서 계산된다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "planner", label: "플래너" },
+    { id: "executor", label: "실행기" },
+  ]}
+  steps={[
+    { from: "client", to: "planner", label: "CASE ... ELSE 1/0", title: "쿼리가 도착한다", detail: "CASE WHEN id > 0 THEN 1 ELSE 1/0 END. 사람이 보기엔 ELSE에 갈 일이 없다." },
+    { from: "planner", to: "planner", label: "상수 접기", title: "상수식을 미리 계산한다", detail: "id > 0은 행마다 달라서 남겨 두지만, 1/0은 컬럼이 없는 상수라 지금 계산해 둔다." },
+    { from: "planner", to: "client", label: "division by zero", title: "실행 전에 실패한다", detail: "실행기는 시작도 하지 않았다. 몇 줄이 있든, 조건이 무엇이든 결과는 같다.", payload: "ERROR:  division by zero" },
+    { from: "client", to: "executor", label: "100 / nullif(qty, 0)", title: "컬럼이 들어간 식은 실행 때 계산된다", detail: "컬럼을 쓰는 식은 행마다 계산되고, CASE가 고른 줄만 계산된다. 상수만 조심하면 된다." },
+  ]}
+/>
+
+실무에서 `1/0`을 직접 쓸 일은 드물지만, 앱이 값을 쿼리 문자열에 그대로 붙여 넣으면 상수식이 생긴다. 이런 식을 `CASE`로 지켰다고 믿으면 안 된다. 집계 함수가 `CASE`보다 먼저 계산되는 문제도 같은 부류다. 이건 [논리 순서 글](/posts/sql-logical-order#집계는-case보다-먼저-끝난다)에 재현해 두었다. 0이 섞일 수 있는 나눗셈은 `nullif(분모, 0)`으로 그 자리에서 막는 편이 확실하다.
+
+## 조건마다 따로 더하기
+
+`CASE`를 집계 함수 안에 넣으면, 같은 행 묶음을 조건별로 나눠 더할 수 있다. 조건부 집계라고 부른다. 수강생마다 상태별 수강 건수를 한 줄로 만든다.
+
+```sql
+SELECT s.name,
+       count(CASE WHEN e.status = 'active'    THEN 1 END) AS active,
+       count(CASE WHEN e.status = 'completed' THEN 1 END) AS completed,
+       count(CASE WHEN e.status = 'refunded'  THEN 1 END) AS refunded
+FROM students s
+LEFT JOIN enrollments e ON e.student_id = s.id
+GROUP BY s.id ORDER BY s.id;
+```
+
+```text
+ name | active | completed | refunded
+------+--------+-----------+----------
+ kim  |      1 |         2 |        0
+ lee  |      1 |         1 |        0
+ park |      1 |         1 |        0
+ choi |      0 |         1 |        1
+ jung |      0 |         0 |        0
+(5 rows)
+```
+
+`CASE`에 `ELSE`가 없어서 조건에 맞지 않는 행은 NULL이 되고, `count`는 NULL을 세지 않는다. 여기에 `ELSE 0`을 붙이면 모든 행을 세게 되는데, 그 실수와 PostgreSQL 9.4부터 쓸 수 있는 `count(*) FILTER (WHERE ...)`는 [집계 함정 글](/posts/sql-aggregation-pitfalls#else-0을-붙인-count는-전부를-센다)에 정리했다. PostgreSQL만 쓴다면 `FILTER`가 읽기 쉽다. `CASE`는 MySQL, SQL Server, Oracle 어디서나 그대로 도는 표준이라 여러 DB를 지원하는 코드나, 조건에 따라 더할 값 자체가 달라지는 경우에 쓴다. 아래 그림에서 조각을 누르면 조건부 집계 한 칸을 나눠 읽을 수 있다.
+
+<UrlAnatomy
+  caption="조건부 집계 한 칸을 조각으로 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "sum", display: "sum(", title: "묶음 안의 값을 더한다", description: "GROUP BY로 묶인 행들이 한 번씩 이 안을 지나간다. NULL은 건너뛴다.", required: true },
+    { key: "when", display: "CASE WHEN p.paid_at >= '2026-10-01' AND p.paid_at < '2026-11-01'", title: "이 칸에 들어갈 행", description: "10월 결제만 고른다. 끝을 < 11월 1일로 둔 반열린 구간이라 10월 31일 밤 결제도 빠지지 않는다.", required: true },
+    { key: "then", display: "THEN p.amount", title: "더할 값", description: "조건에 맞으면 금액을 내놓는다. 1을 내놓으면 개수가 되고, 금액을 내놓으면 합계가 된다." },
+    { key: "end", display: "END)", title: "ELSE가 없다", description: "맞지 않는 행은 NULL이 되어 sum이 건너뛴다. 한 행도 맞지 않으면 결과도 NULL이다.", code: "coalesce(sum(CASE ... END), 0)  -- 빈칸을 0으로" },
+    { key: "alias", display: "AS \"2026-10\"", title: "칸 이름", description: "칸 이름은 쿼리를 쓸 때 정해진다. 11월이 생기면 칸을 손으로 하나 더 써야 한다." },
+  ]}
+/>
+
+## 행을 열로 돌리기
+
+강의별 월 매출을 뽑으면 "강의, 월, 금액"이 한 줄씩인 긴 표가 나온다.
+
+```sql
+SELECT c.title, to_char(p.paid_at, 'YYYY-MM') AS month, sum(p.amount) AS amount
+FROM payments p
+JOIN enrollments e ON e.id = p.enrollment_id
+JOIN courses c     ON c.id = e.course_id
+GROUP BY c.id, c.title, month
+ORDER BY c.id, month;
+```
+
+```text
+      title      |  month  | amount
+-----------------+---------+--------
+ SQL 기초        | 2026-09 |  30000
+ SQL 기초        | 2026-10 |  30000
+ PostgreSQL 튜닝 | 2026-10 | 135000
+ PostgreSQL 튜닝 | 2026-11 |  45000
+ React 입문      | 2026-10 | 100000
+ React 입문      | 2026-11 |      0
+ Docker 실전     | 2026-10 |  35000
+ Docker 실전     | 2026-11 |  35000
+(8 rows)
+```
+
+보고서에는 강의가 행, 월이 열인 넓은 표가 필요하다. 월마다 조건부 집계 칸을 하나씩 만들면 된다. 이것이 `CASE`로 하는 피벗이다.
+
+```sql
+SELECT c.title,
+       sum(CASE WHEN p.paid_at >= '2026-09-01' AND p.paid_at < '2026-10-01' THEN p.amount END) AS "2026-09",
+       sum(CASE WHEN p.paid_at >= '2026-10-01' AND p.paid_at < '2026-11-01' THEN p.amount END) AS "2026-10",
+       sum(CASE WHEN p.paid_at >= '2026-11-01' AND p.paid_at < '2026-12-01' THEN p.amount END) AS "2026-11",
+       sum(p.amount) AS total
+FROM courses c
+LEFT JOIN enrollments e ON e.course_id = c.id
+LEFT JOIN payments p    ON p.enrollment_id = e.id
+GROUP BY c.id, c.title ORDER BY c.id;
+```
+
+```text
+      title      | 2026-09 | 2026-10 | 2026-11 | total
+-----------------+---------+---------+---------+--------
+ SQL 기초        |   30000 |   30000 |  (null) |  60000
+ PostgreSQL 튜닝 |  (null) |  135000 |   45000 | 180000
+ React 입문      |  (null) |  100000 |       0 | 100000
+ Docker 실전     |  (null) |   35000 |   35000 |  70000
+ 100% 실습 Git   |  (null) |  (null) |  (null) | (null)
+(5 rows)
+```
+
+긴 표의 여덟 줄이 넓은 표의 칸 여덟 개로 옮겨 갔다. 수강생이 없는 Git 강의까지 나오도록 `courses`에서 출발해 `LEFT JOIN`했다. 이 쿼리는 결제를 수강에, 수강을 강의에 차례로 붙이는 한 갈래 조인이라 행이 곱해질 걱정이 없다. 다른 자식 테이블을 하나 더 붙인다면 [조인 글](/posts/sql-joins-in-practice#행이-곱해지는-자리를-숫자로-찾는다)에서 본 행 곱하기를 먼저 확인한다. 아래 그림에서 다음을 누르면 긴 표의 행이 넓은 표의 칸으로 옮겨 가는 모습이 보인다.
+
+<GeometryMorph
+  caption="긴 표의 행이 넓은 표의 칸으로 옮겨 간다"
+  width={400}
+  height={240}
+  shapes={[
+    { id: "r1", tone: "series1" }, { id: "r2", tone: "series2" }, { id: "r3", tone: "series2" }, { id: "r4", tone: "series3" },
+    { id: "r5", tone: "series2" }, { id: "r6", tone: "series3" }, { id: "r7", tone: "series2" }, { id: "r8", tone: "series3" },
+  ]}
+  steps={[
+    {
+      title: "긴 표: 강의 × 월이 한 줄씩",
+      detail: "여덟 줄이 세로로 쌓여 있다. 색은 월이다. 9월, 10월, 11월 순서다.",
+      shapes: {
+        r1: [[60, 20], [340, 20], [340, 42], [60, 42]], r2: [[60, 46], [340, 46], [340, 68], [60, 68]],
+        r3: [[60, 72], [340, 72], [340, 94], [60, 94]], r4: [[60, 98], [340, 98], [340, 120], [60, 120]],
+        r5: [[60, 124], [340, 124], [340, 146], [60, 146]], r6: [[60, 150], [340, 150], [340, 172], [60, 172]],
+        r7: [[60, 176], [340, 176], [340, 198], [60, 198]], r8: [[60, 202], [340, 202], [340, 224], [60, 224]],
+      },
+      labels: [
+        { x: 200, y: 35, text: "SQL 09 30000", tone: "text", size: "sm" }, { x: 200, y: 61, text: "SQL 10 30000", tone: "text", size: "sm" },
+        { x: 200, y: 87, text: "PG 10 135000", tone: "text", size: "sm" }, { x: 200, y: 113, text: "PG 11 45000", tone: "text", size: "sm" },
+        { x: 200, y: 139, text: "React 10 100000", tone: "text", size: "sm" }, { x: 200, y: 165, text: "React 11 0", tone: "text", size: "sm" },
+        { x: 200, y: 191, text: "Docker 10 35000", tone: "text", size: "sm" }, { x: 200, y: 217, text: "Docker 11 35000", tone: "text", size: "sm" },
+      ],
+    },
+    {
+      title: "같은 강의끼리 한 줄로",
+      detail: "GROUP BY c.id가 강의별로 묶는다. 각 줄은 자기 월의 칸으로 옆으로 미끄러진다.",
+      shapes: {
+        r1: [[110, 50], [200, 50], [200, 80], [110, 80]], r2: [[205, 50], [295, 50], [295, 80], [205, 80]],
+        r3: [[205, 90], [295, 90], [295, 120], [205, 120]], r4: [[300, 90], [390, 90], [390, 120], [300, 120]],
+        r5: [[205, 130], [295, 130], [295, 160], [205, 160]], r6: [[300, 130], [390, 130], [390, 160], [300, 160]],
+        r7: [[205, 170], [295, 170], [295, 200], [205, 200]], r8: [[300, 170], [390, 170], [390, 200], [300, 200]],
+      },
+      labels: [
+        { x: 155, y: 35, text: "2026-09", tone: "text", size: "sm" }, { x: 250, y: 35, text: "2026-10", tone: "text", size: "sm" }, { x: 345, y: 35, text: "2026-11", tone: "text", size: "sm" },
+        { x: 50, y: 70, text: "SQL", tone: "text", size: "sm" }, { x: 50, y: 110, text: "PG", tone: "text", size: "sm" },
+        { x: 50, y: 150, text: "React", tone: "text", size: "sm" }, { x: 50, y: 190, text: "Docker", tone: "text", size: "sm" },
+        { x: 155, y: 70, text: "30000", tone: "text", size: "sm" }, { x: 250, y: 70, text: "30000", tone: "text", size: "sm" },
+        { x: 250, y: 110, text: "135000", tone: "text", size: "sm" }, { x: 345, y: 110, text: "45000", tone: "text", size: "sm" },
+        { x: 250, y: 150, text: "100000", tone: "text", size: "sm" }, { x: 345, y: 150, text: "0", tone: "text", size: "sm" },
+        { x: 250, y: 190, text: "35000", tone: "text", size: "sm" }, { x: 345, y: 190, text: "35000", tone: "text", size: "sm" },
+      ],
+    },
+    {
+      title: "빈칸은 NULL, 0은 0",
+      detail: "줄이 없던 칸은 NULL이다. React의 11월은 결제와 환불이 상쇄된 진짜 0이다. coalesce로 빈칸을 0으로 채우면 이 둘이 구분되지 않는다.",
+      shapes: {
+        r1: [[110, 50], [200, 50], [200, 80], [110, 80]], r2: [[205, 50], [295, 50], [295, 80], [205, 80]],
+        r3: [[205, 90], [295, 90], [295, 120], [205, 120]], r4: [[300, 90], [390, 90], [390, 120], [300, 120]],
+        r5: [[205, 130], [295, 130], [295, 160], [205, 160]], r6: [[300, 130], [390, 130], [390, 160], [300, 160]],
+        r7: [[205, 170], [295, 170], [295, 200], [205, 200]], r8: [[300, 170], [390, 170], [390, 200], [300, 200]],
+      },
+      labels: [
+        { x: 155, y: 35, text: "2026-09", tone: "text", size: "sm" }, { x: 250, y: 35, text: "2026-10", tone: "text", size: "sm" }, { x: 345, y: 35, text: "2026-11", tone: "text", size: "sm" },
+        { x: 50, y: 70, text: "SQL", tone: "text", size: "sm" }, { x: 50, y: 110, text: "PG", tone: "text", size: "sm" },
+        { x: 50, y: 150, text: "React", tone: "text", size: "sm" }, { x: 50, y: 190, text: "Docker", tone: "text", size: "sm" },
+        { x: 345, y: 70, text: "NULL", tone: "accent", size: "sm" }, { x: 155, y: 110, text: "NULL", tone: "accent", size: "sm" },
+        { x: 155, y: 150, text: "NULL", tone: "accent", size: "sm" }, { x: 155, y: 190, text: "NULL", tone: "accent", size: "sm" },
+        { x: 345, y: 150, text: "0", tone: "accent", size: "sm" },
+      ],
+      focus: ["r6"],
+    },
+  ]}
+/>
+
+빈칸이 NULL인 게 보기 싫어서 `coalesce(sum(...), 0)`으로 감싸면 모든 빈칸이 0이 된다. 그런데 React의 11월 0은 결제 5만 원과 환불 5만 원이 상쇄된 "있었는데 0"이고, SQL 기초의 11월은 "아무 결제도 없음"이다. 둘을 같은 0으로 보여 줘도 되는지는 보고서를 읽는 사람에게 물어서 정한다. 정산 보고서라면 구분하는 쪽이 대체로 안전하다.
+
+피벗의 진짜 한계는 열이 쿼리를 쓸 때 정해진다는 것이다. 12월 결제가 생기면 12월 칸은 쿼리를 고치기 전까지 나오지 않는다. SQL의 결과 칸 수와 이름은 실행 전에 정해져야 하기 때문이다. PostgreSQL에는 확장 `tablefunc`의 `crosstab` 함수가 있지만, 이것도 결과 칸을 호출할 때 적어 줘야 한다. 월이 계속 늘어나는 보고서라면 방법은 둘이다.
+
+- 긴 표 그대로 내보내고 피벗은 앱이나 스프레드시트에서 한다. 가장 단순하고 DB 부담도 적다.
+- 한 칸에 JSON으로 묶어 돌려준다. 키 개수가 자유로워서 칸 수가 고정되는 문제가 사라진다.
+
+```sql
+SELECT c.title, json_object_agg(m.month, m.amount ORDER BY m.month) AS by_month
+FROM (
+  SELECT e.course_id, to_char(p.paid_at, 'YYYY-MM') AS month, sum(p.amount) AS amount
+  FROM payments p JOIN enrollments e ON e.id = p.enrollment_id
+  GROUP BY e.course_id, month
+) m
+JOIN courses c ON c.id = m.course_id
+GROUP BY c.id, c.title ORDER BY c.id;
+```
+
+```text
+      title      |                 by_month
+-----------------+-------------------------------------------
+ SQL 기초        | { "2026-09" : 30000, "2026-10" : 30000 }
+ PostgreSQL 튜닝 | { "2026-10" : 135000, "2026-11" : 45000 }
+ React 입문      | { "2026-10" : 100000, "2026-11" : 0 }
+ Docker 실전     | { "2026-10" : 35000, "2026-11" : 35000 }
+(4 rows)
+```
+
+`json_object_agg`는 PostgreSQL 9.4부터 있고, 집계 안의 `ORDER BY`로 키 순서를 정할 수 있다. 칸을 모르는 상태로 쿼리를 쓸 수 있는 대신, 받는 쪽이 JSON을 풀어야 한다. MySQL 8에는 `JSON_OBJECTAGG`가 있다.
+
+조건부 집계는 테이블을 한 번만 읽는다는 장점도 있다. 월별로 쿼리를 따로 날리면 같은 테이블을 월 수만큼 읽는다. 다만 `CASE` 안의 조건은 인덱스로 읽을 범위를 줄이지 못하니, 전체 기간 중 일부만 필요하면 `WHERE p.paid_at >= '2026-09-01' AND p.paid_at < '2026-12-01'`처럼 바깥에서 먼저 범위를 줄인다.
+
+## ORDER BY와 UPDATE 안의 CASE
+
+정렬 순서가 알파벳이 아닐 때 `CASE`로 순위를 매긴다. 수강 관리 화면에서 진행 중인 수강을 먼저, 그다음 완료, 환불을 맨 뒤에 보여 준다.
+
+```sql
+SELECT id, status, enrolled_at FROM enrollments
+ORDER BY CASE status WHEN 'active' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END,
+         enrolled_at DESC;
+```
+
+```text
+ id |  status   |      enrolled_at
+----+-----------+------------------------
+  7 | active    | 2026-10-31 18:30:00+09
+  5 | active    | 2026-10-15 08:00:00+09
+  3 | active    | 2026-10-05 13:20:00+09
+  8 | completed | 2026-10-31 23:59:30+09
+  6 | completed | 2026-10-20 21:00:00+09
+  4 | completed | 2026-10-12 09:00:00+09
+  2 | completed | 2026-10-01 00:00:00+09
+  1 | completed | 2026-09-28 10:00:00+09
+  9 | refunded  | 2026-11-01 00:00:00+09
+(9 rows)
+```
+
+`ELSE 3`이 있어서 나중에 새 상태가 생겨도 맨 뒤로 간다. 같은 순위 안에서는 두 번째 정렬 기준이 순서를 정하니, 동점을 [논리 순서 글](/posts/sql-logical-order#limit은-맨-끝이고-동점은-정해-주지-않으면-운이다)에서 본 것처럼 운에 맡기지 않는다. 순서 목록을 배열로 들고 있다면 `ORDER BY array_position(ARRAY['active','completed','refunded'], status)`도 같은 결과를 낸다. 이 정렬은 식이라서 인덱스 순서를 쓰지 못하고 정렬을 따로 한다. 큰 목록에서 이 정렬이 자주 필요하면 순위를 담은 컬럼이나 상태 테이블을 두는 게 낫다.
+
+`UPDATE`에서는 여러 조건의 변경을 한 문장으로 묶는다. 카테고리별로 가격을 다르게 조정한다. db 강의는 10% 할인, infra 강의는 5천 원 할인이다. 아래는 모두 트랜잭션 안에서 실행하고 `ROLLBACK`했다.
+
+```sql
+BEGIN;
+UPDATE courses
+SET price = CASE category
+              WHEN 'db'    THEN price * 9 / 10
+              WHEN 'infra' THEN price - 5000
+              ELSE price
+            END;
+```
+
+```text
+UPDATE 5
+```
+
+결과 가격은 맞다(27000, 81000, 50000, 65000, 15000). 그런데 `UPDATE 5`다. 바꿀 필요가 없던 frontend 강의도 `price = price`로 "갱신"됐다. PostgreSQL의 `UPDATE`는 값이 같아도 행의 새 버전을 쓰고, 트리거를 실행하고, 나중에 `VACUUM`이 치울 옛 버전을 남긴다. 몇 줄이면 상관없지만 수백만 줄 테이블에서 일부만 바꾸려던 `UPDATE`라면 디스크와 복제 지연으로 돌아온다. 바꿀 행은 `WHERE`로 고른다.
+
+```sql
+BEGIN;
+UPDATE courses
+SET price = CASE category
+              WHEN 'db'    THEN price * 9 / 10
+              WHEN 'infra' THEN price - 5000
+            END
+WHERE category IN ('db', 'infra');
+```
+
+```text
+UPDATE 4
+```
+
+`ELSE`를 지웠는데 괜찮은 이유는 `WHERE`가 `CASE`에 걸리지 않을 행을 미리 막아 주기 때문이다. 아래 그림에서 다음을 누르면 frontend 강의가 두 쿼리에서 어디까지 가는지 보인다.
+
+<NetworkTopology
+  caption="WHERE가 없으면 바꿀 필요 없는 행도 새로 쓴다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "row", label: "React 입문", sub: "frontend", x: 50, y: 115, icon: "db", w: 84 },
+    { id: "where", label: "WHERE", sub: "db, infra만", x: 150, y: 50, w: 84 },
+    { id: "case", label: "CASE", x: 245, y: 115, w: 64 },
+    { id: "keep", label: "그대로", sub: "새 버전 없음", x: 345, y: 40, w: 84 },
+    { id: "write", label: "새 버전 기록", sub: "price = price", x: 345, y: 115, icon: "db", w: 96 },
+    { id: "nul", label: "NULL 기록", sub: "ELSE 없음", x: 345, y: 195, icon: "db", w: 84 },
+  ]}
+  links={[
+    { from: "row", to: "where" }, { from: "where", to: "case" }, { from: "row", to: "case", dashed: true },
+    { from: "where", to: "keep", dashed: true }, { from: "case", to: "write" }, { from: "case", to: "nul" },
+  ]}
+  steps={[
+    { path: ["row", "case", "write"], packet: "frontend", title: "WHERE 없이 ELSE price", detail: "모든 행이 CASE를 지난다. frontend는 ELSE에서 원래 값을 받지만 행은 새 버전으로 다시 쓰인다.", payload: "UPDATE 5" },
+    { path: ["row", "case", "nul"], packet: "frontend", blocked: true, title: "WHERE 없이 ELSE도 없음", detail: "맞는 WHEN이 없어 NULL이 들어간다. NOT NULL 제약이 있어서 에러로 멈췄지만, 없었다면 가격이 지워졌다." },
+    { path: ["row", "where"], packet: "frontend", blocked: true, highlight: ["keep"], title: "WHERE로 먼저 거른다", detail: "frontend는 WHERE에서 빠져 CASE에 가지 않는다. 행은 손대지 않은 채 남는다.", payload: "UPDATE 4" },
+  ]}
+/>
+
+`WHERE` 없이 `ELSE`만 빠뜨리면 이렇게 된다.
+
+```sql
+BEGIN;
+UPDATE courses SET price = CASE category WHEN 'db' THEN price * 9 / 10 END;
+```
+
+```text
+ERROR:  null value in column "price" of relation "courses" violates not-null constraint
+DETAIL:  Failing row contains (3, React 입문, frontend, null).
+```
+
+`price`에 `NOT NULL`이 있어서 에러로 멈췄다. 제약이 없는 컬럼이었다면 db가 아닌 강의의 가격이 조용히 NULL로 지워졌을 것이다. `UPDATE ... SET x = CASE`를 쓸 때는 `WHERE`와 `CASE`의 조건이 같은 행을 가리키는지, 아니면 `ELSE x`가 있는지 둘 중 하나를 확인한다.
+
+## WHERE 안의 CASE는 인덱스를 막는다
+
+조건을 `CASE`로 감싸서 `WHERE`에 넣는 코드를 가끔 본다. 조건마다 다른 검사를 하고 싶을 때다. 30만 건짜리 `enrollments_big`([조인 글](/posts/sql-joins-in-practice#짝이-없는-행을-찾는-세-가지-모양)에서 만든 테이블)에 `(status, score)` 인덱스를 만들고 비교한다.
+
+```sql
+CREATE INDEX enrollments_big_status_score_idx ON enrollments_big (status, score);
+ANALYZE enrollments_big;
+SET max_parallel_workers_per_gather = 0;
+
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM enrollments_big
+WHERE CASE WHEN status = 'completed' THEN score >= 95 ELSE false END;
+```
+
+```text
+ Aggregate (actual time=24.915..24.917 rows=1 loops=1)
+   ->  Seq Scan on enrollments_big (actual time=0.012..24.139 rows=11800 loops=1)
+         Filter: CASE WHEN (status = 'completed'::text) THEN (score >= 95) ELSE false END
+         Rows Removed by Filter: 288200
+ Planning Time: 0.259 ms
+ Execution Time: 24.944 ms
+(6 rows)
+```
+
+```sql
+EXPLAIN (ANALYZE, COSTS OFF)
+SELECT count(*) FROM enrollments_big
+WHERE status = 'completed' AND score >= 95;
+```
+
+```text
+ Aggregate (actual time=1.558..1.559 rows=1 loops=1)
+   ->  Index Only Scan using enrollments_big_status_score_idx on enrollments_big (actual time=0.045..0.953 rows=11800 loops=1)
+         Index Cond: ((status = 'completed'::text) AND (score >= 95))
+         Heap Fetches: 0
+ Planning Time: 0.132 ms
+ Execution Time: 1.578 ms
+(6 rows)
+```
+
+같은 11800건인데 25ms와 1.6ms다. 플래너는 `CASE` 식 전체를 하나의 덩어리로 보고 그 안의 `status = 'completed'`를 인덱스 조건으로 꺼내지 못한다. 그래서 30만 건을 다 읽고 `Rows Removed by Filter: 288200`을 버렸다. `WHERE`의 `CASE`는 거의 언제나 `AND`와 `OR`로 풀 수 있다. `CASE WHEN a THEN b ELSE c END`는 `(a AND b) OR (NOT a AND c)`이고, `a`가 NULL일 수 있으면 그 경우도 따져야 한다. 위처럼 `ELSE false`라면 `a AND b`가 된다. 계산 순서를 지키려고 `CASE`를 쓴 거라면 그대로 두되, 인덱스로 줄일 수 있는 조건을 `CASE` 밖에 `AND`로 한 번 더 적는다.
+
+## CASE를 리뷰할 때 보는 것
+
+`CASE`가 들어간 쿼리를 리뷰할 때는 이 순서로 본다.
+
+범위 조건이 있으면 위에서 아래로 좁은 것부터 넓은 것 순인지 본다. 겹치지 않게 `score >= 80 AND score < 90`처럼 양쪽을 다 쓰면 순서에 기대지 않아도 되지만 경계가 틀리기 쉽다. 경계값(60, 80, 90)을 넣은 테스트 행을 하나씩 만들어 확인한다.
+
+NULL이 들어올 수 있는 칸이면 `IS NULL` 줄이 있는지, 단순형에 `WHEN NULL`을 쓰지 않았는지 본다. `ELSE`가 없으면 맞지 않는 행이 NULL이 된다는 걸 의도했는지 묻는다. 집계 안에서는 의도된 NULL이 맞고, `UPDATE`의 `SET`에서는 대개 사고다.
+
+`THEN`마다 타입이 같은지 본다. 숫자 칸에 "없음" 같은 글자를 섞으려면 숫자를 `text`로 바꿔야 하고, 그 칸으로는 정렬하지 않는다.
+
+`WHERE`에 `CASE`가 있으면 `AND`와 `OR`로 풀 수 있는지, `UPDATE`에 `CASE`가 있으면 `WHERE`로 바꿀 행을 좁혔는지 본다. 피벗 쿼리라면 칸 목록이 언제 바뀌는지 묻는다. 매달 바뀐다면 SQL 피벗이 아니라 JSON이나 앱 쪽 피벗이 맞다.
+
+## 피벗을 직접 만들어 보기
+
+조건부 집계로 하는 피벗을 손으로 짜 본다. 행 목록과 키 이름, 피벗할 컬럼 이름, 칸이 될 값 목록을 받아서 `[키, 칸1 개수, 칸2 개수, ...]` 배열을 돌려준다. 키는 처음 나온 순서대로 내놓는다. 피벗 컬럼이 `null`인 행(LEFT JOIN에서 짝이 없던 행)도 키는 만들되 어느 칸에도 세지 않는다. 첫 테스트는 본문의 상태별 수강 건수를 PostgreSQL에서 뽑은 결과와 같다.
+
+<CodePlayground
+  caption="조건부 집계로 피벗하기"
+  functionName="pivotCount"
+  initialCode={`function pivotCount(rows, keyCol, pivotCol, columns) {
+  // [[키, columns[0] 개수, columns[1] 개수, ...], ...]
+  return [];
+}`}
+  solution={`function pivotCount(rows, keyCol, pivotCol, columns) {
+  const order = [];
+  const counts = new Map();
+  for (const row of rows) {
+    const key = row[keyCol];
+    if (!counts.has(key)) {               // GROUP BY: 처음 본 키면 줄을 만든다
+      counts.set(key, columns.map(() => 0));
+      order.push(key);
+    }
+    const i = columns.indexOf(row[pivotCol]);   // CASE WHEN status = ... THEN 1 END
+    if (i !== -1) counts.get(key)[i] += 1;      // 맞는 칸이 없으면(NULL 포함) 세지 않는다
+  }
+  return order.map((key) => [key, ...counts.get(key)]);
+}`}
+  tests={[
+    {
+      label: "상태별 수강 건수",
+      args: [
+        [
+          { name: "kim", status: "completed" }, { name: "kim", status: "completed" }, { name: "kim", status: "active" },
+          { name: "lee", status: "active" }, { name: "lee", status: "completed" },
+          { name: "park", status: "active" }, { name: "park", status: "completed" },
+          { name: "choi", status: "completed" }, { name: "choi", status: "refunded" },
+          { name: "jung", status: null },
+        ],
+        "name",
+        "status",
+        ["active", "completed", "refunded"],
+      ],
+      expected: [["kim", 1, 2, 0], ["lee", 1, 1, 0], ["park", 1, 1, 0], ["choi", 0, 1, 1], ["jung", 0, 0, 0]],
+    },
+    { label: "목록에 없는 값은 버린다", args: [[{ k: "a", v: "x" }, { k: "a", v: "z" }], "k", "v", ["x", "y"]], expected: [["a", 1, 0]] },
+    { label: "빈 입력", args: [[], "k", "v", ["x"]], expected: [] },
+  ]}
+/>
+
+## 순서와 타입을 먼저 정한다
+
+`CASE`는 위에서부터 보고 처음 참인 줄에서 멈춘다. 그래서 겹치는 범위는 좁은 조건을 위에 두고, NULL은 따로 `IS NULL`로 잡는다. 결과는 칸 하나라서 `THEN`의 타입이 모두 맞아야 하고, 상수식은 실행 전에 계산되니 `CASE`로 지켜지지 않는다. 집계 안의 `CASE`는 조건부 집계와 피벗을 만들지만 칸은 쿼리를 쓸 때 정해지고, `UPDATE`와 `WHERE` 안의 `CASE`는 바꿀 행과 읽을 행을 줄이는 일을 `WHERE`에 맡겨야 한다. 같은 시리즈의 [서브쿼리 글](/posts/sql-subqueries-exists-lateral)과 [조인 실전 글](/posts/sql-joins-in-practice)이 이 피벗의 재료를 만드는 방법을 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### CASE는 조건을 어떤 순서로 평가하나요?
+
+위에서 아래로 차례로 보고 처음 참이 된 `WHEN`의 `THEN`을 돌려준다. 아무것도 맞지 않으면 `ELSE`, `ELSE`가 없으면 NULL이다. 그래서 범위가 겹치는 조건은 좁은 것부터 써야 하고, 반대로 쓰면 95점이 첫 줄 `>= 60`에서 C가 된다.
+
+### CASE에서 NULL은 어떻게 처리되나요?
+
+NULL과의 비교는 알 수 없음이라 범위 조건을 모두 지나 `ELSE`로 떨어진다. 단순형 `CASE score WHEN NULL`은 `score = NULL`을 계산하니 절대 맞지 않는다. NULL을 따로 다루려면 검색형으로 `WHEN score IS NULL`을 적는다.
+
+### CASE의 THEN에 숫자와 문자열을 섞으면 어떻게 되나요?
+
+PostgreSQL은 결과 타입을 하나로 정해야 해서 에러가 난다. 따옴표 리터럴은 상대 타입으로 바꾸려다 `invalid input syntax for type integer`, 타입이 정해진 `text`면 `CASE types integer and text cannot be matched`가 나온다. 숫자를 `::text`로 바꿔 맞추고, 그 칸으로는 정렬하지 않는다. MySQL은 문자열로 맞춰 에러 없이 돌려준다.
+
+### CASE로 감싸면 0으로 나누기 에러를 항상 막을 수 있나요?
+
+컬럼이 들어간 식은 고른 줄만 계산되니 막을 수 있다. 하지만 `1/0`처럼 상수로만 된 식은 플래너가 실행 전에 미리 계산해서, 실행될 리 없는 `ELSE`에 있어도 에러가 난다. 집계 함수 안의 식도 `CASE`보다 먼저 계산된다. 분모는 `nullif(분모, 0)`으로 그 자리에서 막는다.
+
+### 행을 열로 바꾸는 피벗은 SQL로 어떻게 하나요?
+
+`GROUP BY`로 행 기준을 묶고, 열마다 `sum(CASE WHEN 조건 THEN 값 END)` 같은 조건부 집계 칸을 하나씩 만든다. PostgreSQL에서는 `FILTER`로도 같은 걸 쓸 수 있고, Oracle과 SQL Server에는 `PIVOT` 문법이 있다. 테이블을 한 번만 읽는다는 장점이 있다.
+
+### 피벗할 열이 계속 늘어나면 어떻게 하나요?
+
+SQL의 결과 칸은 실행 전에 정해져야 해서 `CASE` 피벗도 `crosstab`도 칸을 미리 적어야 한다. 칸이 계속 바뀌면 긴 표를 그대로 내보내 앱에서 피벗하거나, `json_object_agg`로 한 칸에 키-값으로 묶어 돌려준다. 동적 SQL로 칸을 만들어 붙이는 방법도 있지만 결과 형태가 매번 바뀌어 받는 쪽이 다루기 어렵다.
+
+### UPDATE에서 CASE를 쓸 때 주의할 점은요?
+
+`WHERE` 없이 `ELSE price`로 쓰면 값이 안 바뀌는 행까지 모두 새 버전을 써서 디스크와 VACUUM, 복제에 부담을 준다. `ELSE`를 빠뜨리면 맞지 않는 행이 NULL로 덮인다. 바꿀 행은 `WHERE`로 고르고, `CASE`의 조건과 `WHERE`가 같은 행을 가리키는지 확인한다.
+
+### WHERE 절에 CASE를 쓰면 왜 느려질 수 있나요?
+
+플래너가 `CASE` 식 전체를 하나의 덩어리로 보고 안의 조건을 인덱스 조건으로 꺼내지 못한다. 이 글의 예에서 `CASE`로 쓴 조건은 30만 건을 다 읽어 25ms, `AND`로 푼 조건은 인덱스로 1.6ms였다. `CASE`는 `AND`와 `OR`로 풀어 쓰고, 순서 보장이 필요하면 인덱스로 줄일 조건을 바깥에 한 번 더 적는다.

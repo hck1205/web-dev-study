@@ -148,7 +148,9 @@ import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
+import { JS_CALL_APPLY_BIND } from "./js-call-apply-bind";
 import { JS_CALLBACK_HELL } from "./js-callback-hell";
+import { JS_CLASSES } from "./js-classes";
 import { JS_CLOSURES } from "./js-closures";
 import { JS_CURRYING_PARTIAL } from "./js-currying-partial";
 import { JS_DESTRUCTURING } from "./js-destructuring";
@@ -166,12 +168,15 @@ import { JS_OPTIONAL_CHAINING_NULLISH } from "./js-optional-chaining-nullish";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
 import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
 import { JS_PROMISES } from "./js-promises";
+import { JS_PROTOTYPE_CHAIN } from "./js-prototype-chain";
 import { JS_PURE_FUNCTIONS } from "./js-pure-functions";
 import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
 import { JS_SHALLOW_DEEP_COPY } from "./js-shallow-deep-copy";
 import { JS_SHORT_CIRCUIT } from "./js-short-circuit";
 import { JS_SPREAD_REST } from "./js-spread-rest";
+import { JS_STRICT_MODE } from "./js-strict-mode";
 import { JS_TEMPLATE_LITERALS } from "./js-template-literals";
+import { JS_THIS_BINDING } from "./js-this-binding";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
@@ -373,13 +378,16 @@ import { SPRING_ANIMATION } from "./spring-animation";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_CASE_WHEN } from "./sql-case-when";
 import { SQL_FILTERING_OPERATORS } from "./sql-filtering-operators";
 import { SQL_INJECTION } from "./sql-injection";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
+import { SQL_JOINS_IN_PRACTICE } from "./sql-joins-in-practice";
 import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
 import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
@@ -578,7 +586,9 @@ export const QUESTION_SETS = [
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
+  JS_CALL_APPLY_BIND,
   JS_CALLBACK_HELL,
+  JS_CLASSES,
   JS_CLOSURES,
   JS_CURRYING_PARTIAL,
   JS_DESTRUCTURING,
@@ -596,12 +606,15 @@ export const QUESTION_SETS = [
   JS_PRIMITIVE_VS_REFERENCE,
   JS_PROMISE_COMBINATORS,
   JS_PROMISES,
+  JS_PROTOTYPE_CHAIN,
   JS_PURE_FUNCTIONS,
   JS_SCOPE_LEXICAL,
   JS_SHALLOW_DEEP_COPY,
   JS_SHORT_CIRCUIT,
   JS_SPREAD_REST,
+  JS_STRICT_MODE,
   JS_TEMPLATE_LITERALS,
+  JS_THIS_BINDING,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,
@@ -803,13 +816,16 @@ export const QUESTION_SETS = [
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
+  SQL_CASE_WHEN,
   SQL_FILTERING_OPERATORS,
   SQL_INJECTION,
   SQL_INSERT_UPDATE_DELETE,
+  SQL_JOINS_IN_PRACTICE,
   SQL_LOGICAL_ORDER,
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
+  SQL_SUBQUERIES_EXISTS_LATERAL,
   SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,

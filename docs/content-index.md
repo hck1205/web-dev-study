@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 427편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 435편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -803,7 +803,7 @@
 - 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 언제 다음 단계로 넘어가나 / 복제는 읽기를 나누고, 늦을 수 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-partitioning, db-sharding, db-index, sql-query-tuning, caching-strategies, failover
 - 키워드 백링크 →: db-consistency-cap, prometheus-basics, db-architecture-by-scale, scaling-horizontal-vertical, sql-batch-timeout-pool, db-type-key-value, disaster-recovery, postgres-architecture, dns
-- 이 글로 오는 글 ←: autoscaling, cache-invalidation, caching-strategies, connection-pool, consistency-models, cqrs, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, monolith-architecture, multi-region, network-partitions, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, saga-pattern, scaling-horizontal-vertical, transactional-outbox, zero-downtime-migrations
+- 이 글로 오는 글 ←: autoscaling, cache-invalidation, caching-strategies, connection-pool, consistency-models, cqrs, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, monolith-architecture, multi-region, network-partitions, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, saga-pattern, scaling-horizontal-vertical, sql-case-when, transactional-outbox, zero-downtime-migrations
 
 #### `db-sharding` — 샤딩: 데이터를 서버 여러 대에 나눠 담기
 
@@ -924,7 +924,7 @@
 - 소제목: 미리 몰랐던 질문에 답하기 / 표와 키로 나눠 담는 이유 / 잘못된 데이터를 DB가 막는다 / 무엇을 원하는지만 쓰면 방법은 DB가 고른다 / 해시 조인을 손으로 따라가기 / 커밋이 끝났다는 건 로그가 디스크에 닿았다는 뜻 / 표 여러 개를 한 번에 바꾸는 트랜잭션 / PostgreSQL, MySQL, Oracle, SQL Server / 한 대를 넘어서면 어려워지는 것 / 다른 DB를 붙여도 원본은 여기에 둔다 / 기본값인 이유와 그 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-modeling-normalization, sql-query-tuning, db-index, db-replication-sharding, db-transaction-isolation, sql-basics, db-type-newsql, db-type-columnar-olap, db-type-graph, db-type-wide-column, mongodb-document-model, caching-strategies, db-architecture-by-scale
 - 키워드 백링크 →: db-type-time-series, db-type-key-value, sqld-top-n-hierarchical-pivot, scaling-horizontal-vertical, postgres-architecture, postgres-jsonb-search, db-partitioning, postgres-getting-started
-- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, mongodb-document-model, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, serverless-limits, sqld-data-modeling
+- 이 글로 오는 글 ←: db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, mongodb-document-model, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, serverless-limits, sql-subqueries-exists-lateral, sqld-data-modeling
 
 #### `db-type-time-series` — 시계열 DB: 시간 순서로 쌓이는 데이터
 
@@ -1069,7 +1069,7 @@
 - 소제목: 앞 글에서 이어지는 서점 데이터 / 그룹마다 한 줄만 남기는 DISTINCT ON / 조건별 집계와 묶어 붙이기 / 주문이 없는 날도 0으로 채우는 리포트 / 계산해서 저장하는 generated column / 이름 붙인 쿼리와 저장해 둔 결과 / 50만 건을 한 번에 넣는 COPY / 사용자마다 최근 주문 세 건 / 대시보드가 멈췄는데 DB는 한가할 때 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-advanced-sql, postgres-functions-triggers, caching-strategies, sqld-window-functions, db-index
 - 키워드 백링크 →: sqld-group-by-having, postgres-getting-started, sql-query-rewrite
-- 이 글로 오는 글 ←: cqrs, db-keys-denormalization, db-type-columnar-olap, postgres-advanced-sql, sql-logical-order, sqld-rollup-cube-grouping-sets, transactional-outbox
+- 이 글로 오는 글 ←: cqrs, db-keys-denormalization, db-type-columnar-olap, postgres-advanced-sql, sql-logical-order, sql-subqueries-exists-lateral, sqld-rollup-cube-grouping-sets, transactional-outbox
 
 #### `postgres-roles-security` — 역할과 권한: 로그인부터 행 단위 보안(RLS)까지
 
@@ -1280,9 +1280,9 @@
 - 키워드: FILTER 절, any_value, ONLY_FULL_GROUP_BY, 정수 나눗셈
 - 길이: 667줄
 - 소제목: 아홉 줄, 점수 다섯 개 / 같은 아홉 줄을 세는 방법이 셋이다 / 평균이 둘로 갈라진 이유 / 행이 하나도 없을 때 / LEFT JOIN 뒤의 `count(*)`는 0을 세지 못한다 / 조건별로 세면 WHERE와 FILTER가 다른 행을 지운다 / ELSE 0을 붙인 count는 전부를 센다 / WHERE에 쓸지 HAVING에 쓸지는 숫자로 정한다 / GROUP BY에는 무엇을 적어야 하나 / NULL도 한 묶음이 되고, 이어 붙이기는 순서를 적어야 한다 / 리포트 숫자가 맞지 않을 때 보는 순서 / 집계 함수를 직접 만들어 보기 / 분모부터 확인한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: sql-logical-order, sql-filtering-operators, sqld-group-by-having
+- 직접 링크 →: sql-logical-order, sql-filtering-operators, sqld-group-by-having, sql-joins-in-practice, sql-case-when
 - 키워드 백링크 →: db-modeling-normalization
-- 이 글로 오는 글 ←: linux-namespaces-cgroups, sql-filtering-operators, sql-logical-order
+- 이 글로 오는 글 ←: linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-joins-in-practice, sql-logical-order
 
 #### `sql-basics` — SQL 기본 명령어: 테이블과 제약 조건 만들기
 
@@ -1306,6 +1306,17 @@
 - 키워드 백링크 →: pessimistic-locking, postgres-mvcc-vacuum, db-architecture-by-scale, postgres-getting-started
 - 이 글로 오는 글 ←: autoscaling, backpressure, batch-processing, blue-green-deployment, canary-release, circuit-breaker, connection-pool, db-architecture-by-scale, db-locking-deadlock, db-replication-sharding, deadlocks, design-patterns-overview, dns, eventual-consistency, failover, garbage-collection, idempotency-key, iptables-nat, latency-bandwidth-throughput, layered-architecture, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, nat-traversal, network-partitions, pattern-abstract-factory, pattern-bridge, pattern-singleton, percentile-latency, pessimistic-locking, ports-and-sockets, postgres-connections-pg-hba, postgres-roles-security, production-incidents, race-conditions, resilience-patterns, rolling-deployment, scaling-horizontal-vertical, secrets-management, service-discovery, sql-query-rewrite, sql-query-tuning, tcp-connection-lifecycle, timeouts
 
+#### `sql-case-when` — CASE WHEN 제대로 쓰기: 조건 순서, 타입, 조건부 집계와 피벗
+
+- 요약: 95점이 C 등급으로 나온 쿼리에서 출발해 CASE가 조건을 읽는 순서, NULL과 단순형 CASE, THEN의 타입 맞추기, 실행되지 않을 ELSE가 에러를 내는 상수 접기를 재현한다. 조건부 집계로 행을 열로 돌리는 피벗, ORDER BY와 UPDATE 안의 CASE, WHERE의 CASE가 인덱스를 막는 모습까지 PostgreSQL 16으로 확인한다.
+- 태그: Database, SQL, PostgreSQL
+- 키워드: CASE WHEN, 조건부 집계, 상수 접기
+- 길이: 606줄
+- 소제목: 위에서 아래로, 처음 맞는 곳에서 멈춘다 / THEN마다 타입이 같아야 한다 / 실행되지 않을 ELSE가 에러를 낸다 / 조건마다 따로 더하기 / 행을 열로 돌리기 / ORDER BY와 UPDATE 안의 CASE / WHERE 안의 CASE는 인덱스를 막는다 / CASE를 리뷰할 때 보는 것 / 피벗을 직접 만들어 보기 / 순서와 타입을 먼저 정한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sqld-null-functions, sqld-top-n-hierarchical-pivot, sql-joins-in-practice, sql-subqueries-exists-lateral
+- 키워드 백링크 →: sqld-group-by-having, sql-filtering-operators, db-replication-sharding
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-subqueries-exists-lateral, sqld-rollup-cube-grouping-sets, sqld-top-n-hierarchical-pivot
+
 #### `sql-filtering-operators` — WHERE 연산자의 함정: NOT IN과 NULL, BETWEEN과 시간대, LIKE와 인덱스
 
 - 요약: 10월 수강 건수가 대시보드와 다르게 나온 일에서 시작해 NOT IN 목록의 NULL, = ANY와 빈 배열, timestamptz에서 BETWEEN이 놓치는 행, 세션 시간대가 바꾸는 범위, LIKE의 와일드카드 이스케이프를 따져 본다. 앞이 정해진 검색과 앞이 열린 검색이 어떤 인덱스를 타는지도 실행 계획으로 비교한다.
@@ -1313,9 +1324,9 @@
 - 키워드: ILIKE, 반열린 구간, BETWEEN 경계
 - 길이: 689줄
 - 소제목: 이 글에서 거르는 행들 / 목록에 NULL 하나가 섞이면 / 10월은 31일 0시에 끝난다 / 같은 쿼리, 다른 시간대 / 날짜로 잘라 비교하면 인덱스를 못 쓴다 / LIKE가 특별하게 읽는 두 글자 / 앞이 열린 검색과 인덱스 / 검색 조건을 리뷰할 때 보는 것 / LIKE를 직접 구현해 보기 / 경계와 특수 문자를 의심한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sql-select-where-null, db-index-pitfalls, sql-injection, postgres-jsonb-search
+- 직접 링크 →: sql-logical-order, sql-aggregation-pitfalls, sql-select-where-null, sql-subqueries-exists-lateral, db-index-pitfalls, sql-injection, postgres-jsonb-search
 - 키워드 백링크 →: db-index, db-index-design
-- 이 글로 오는 글 ←: big-o-notation, quadtree, ray-casting, sql-aggregation-pitfalls, sql-logical-order
+- 이 글로 오는 글 ←: big-o-notation, quadtree, ray-casting, sql-aggregation-pitfalls, sql-case-when, sql-joins-in-practice, sql-logical-order, sql-subqueries-exists-lateral
 
 #### `sql-insert-update-delete` — 행 넣고 고치고 지우기: UPSERT, 트랜잭션, TRUNCATE
 
@@ -1328,6 +1339,17 @@
 - 키워드 백링크 →: postgres-advanced-sql, postgres-operations, postgres-getting-started
 - 이 글로 오는 글 ←: cqrs, db-type-embedded, postgres-roles-security, sql-basics, sql-batch-timeout-pool, sql-select-where-null
 
+#### `sql-joins-in-practice` — 조인 실전: 행이 곱해지는 조인, WHERE가 지운 LEFT JOIN, 안티 조인
+
+- 요약: 강의 리포트의 수강생 수와 매출이 몇 배로 불어난 일에서 출발해 조인이 행을 곱하는 자리를 찾고, 먼저 묶고 붙여서 고친다. WHERE 한 줄이 LEFT JOIN을 INNER JOIN으로 바꾸는 모습, PostgreSQL 16의 Right Anti Join, FULL JOIN 대사와 등호 조건 제약, 셀프 조인을 실행 계획으로 확인한다.
+- 태그: Database, SQL, PostgreSQL, Performance
+- 키워드: 행 곱하기, 안티 조인, Right Anti Join, FULL JOIN
+- 길이: 697줄
+- 소제목: 결제와 후기를 더한 강의 사이트 / 행이 곱해지는 자리를 숫자로 찾는다 / 묶고 나서 붙인다 / WHERE 한 줄이 LEFT JOIN을 지운다 / 짝이 없는 행을 찾는 세 가지 모양 / 결제와 수강 기록 맞춰 보기 / 같은 테이블을 두 번 읽는 조인 / 리포트 숫자가 이상할 때 조인부터 의심하는 순서 / 조인을 손으로 짜 보기 / 행 수를 먼저 센다 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-joins, sql-logical-order, sql-filtering-operators, sql-aggregation-pitfalls, sql-subqueries-exists-lateral
+- 키워드 백링크 →: sql-query-tuning
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-query-rewrite, sql-subqueries-exists-lateral, sqld-subquery-set-operators
+
 #### `sql-logical-order` — SELECT의 논리적 처리 순서: 별칭, 윈도 함수, DISTINCT, LIMIT
 
 - 요약: 월별 리포트가 묶음마다 1로 나온 버그에서 출발해 PostgreSQL이 SELECT를 읽는 여덟 단계를 따라간다. 별칭이 보이는 절, 윈도 함수와 DISTINCT의 자리, 동점과 WITH TIES, 집계가 CASE보다 먼저 끝나는 이유, 실제 실행 계획과의 차이를 실제 출력으로 확인한다.
@@ -1337,7 +1359,7 @@
 - 소제목: 수강생 다섯, 강의 다섯, 수강 기록 아홉 / 한 문장이 여덟 단계를 지난다 / 별칭은 SELECT를 지나야 생긴다 / 같은 이름이면 GROUP BY는 원래 컬럼을 고른다 / 윈도 함수는 HAVING보다 늦다 / DISTINCT는 정렬보다 먼저 겹친 걸 뺀다 / LIMIT은 맨 끝이고, 동점은 정해 주지 않으면 운이다 / 집계는 CASE보다 먼저 끝난다 / 논리 순서와 실제 실행은 다르다 / 에러 메시지에서 단계를 거꾸로 짚기 / 단계를 직접 밟아 보기 / 순서를 알면 에러가 설명된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-select-where-null, sqld-group-by-having, sql-filtering-operators, sql-aggregation-pitfalls, postgres-reporting-sql, sql-query-rewrite
 - 키워드 백링크 →: db-sharding, db-type-columnar-olap, js-short-circuit, postgres-getting-started
-- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-filtering-operators
+- 이 글로 오는 글 ←: sql-aggregation-pitfalls, sql-case-when, sql-filtering-operators, sql-joins-in-practice, sql-subqueries-exists-lateral
 
 #### `sql-query-rewrite` — 쿼리 고쳐 쓰기: sargable 조건, 키셋 페이지네이션, N+1
 
@@ -1347,8 +1369,8 @@
 - 길이: 634줄
 - 소제목: 주문 100만 건과 인덱스 넷 / 필요한 컬럼만 가져온다 / 컬럼은 그대로 두고 값을 바꾼다 / 뒤 페이지로 갈수록 느려지는 OFFSET / 목록 하나에 쿼리 41개 / 전체 개수 세기는 비싸다 / EXISTS, IN, JOIN 중 무엇을 쓰나 / 코드 리뷰에서 먼저 걸러 내는 모양 / 읽는 양을 줄이는 쪽으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index, api-pagination-sorting, n-plus-one-queries, sql-batch-timeout-pool
-- 키워드 백링크 →: rest-api-design, loading-patterns, db-index-design, pattern-proxy, postgres-architecture, db-transaction-isolation
-- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning
+- 키워드 백링크 →: rest-api-design, loading-patterns, db-index-design, sql-subqueries-exists-lateral, sql-joins-in-practice, pattern-proxy, postgres-architecture, db-transaction-isolation
+- 이 글로 오는 글 ←: api-pagination-sorting, big-o-notation, microservices-decomposition, n-plus-one-queries, pattern-proxy, postgres-operations, postgres-reporting-sql, rest-api-design, rolling-deployment, sql-batch-timeout-pool, sql-logical-order, sql-query-tuning, sql-subqueries-exists-lateral
 
 #### `sql-query-tuning` — 느린 쿼리 찾기: pg_stat_statements와 실행 계획 읽기
 
@@ -1358,7 +1380,7 @@
 - 길이: 364줄
 - 소제목: 어떤 쿼리가 시간을 먹는지부터 찾는다 / 느린 쿼리를 로그에 남긴다 / 실행 계획은 안쪽부터 읽는다 / 조인을 처리하는 세 가지 방법 / 찾았으면 고칠 차례 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-rewrite, sql-batch-timeout-pool, db-index
-- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-replication-sharding, db-type-relational, n-plus-one-queries, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, sql-batch-timeout-pool, sql-query-rewrite, sql-select-where-null, sqld-joins
+- 이 글로 오는 글 ←: db-index, db-index-pitfalls, db-replication-sharding, db-type-relational, n-plus-one-queries, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, sql-batch-timeout-pool, sql-joins-in-practice, sql-query-rewrite, sql-select-where-null, sqld-joins
 
 #### `sql-select-where-null` — SELECT와 NULL: 원하는 행만 골라 읽기
 
@@ -1369,7 +1391,18 @@
 - 소제목: 회원 넷, 상품 셋, 주문 다섯 / SELECT 한 문장을 조각으로 읽기 / 원하는 행만 고르는 WHERE / NULL은 값이 아니라 모른다는 표시 / 정렬하고, 겹친 것 빼고, 잘라서 보기 / 리포트 숫자가 안 맞을 때 먼저 보는 것 / 모름을 모름으로 다루기 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-basics, sql-query-tuning, sql-insert-update-delete
 - 키워드 백링크 →: db-index, sqld-group-by-having, postgres-getting-started
-- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-filtering-operators, sql-insert-update-delete, sql-logical-order, sqld-null-functions, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: postgres-data-types, postgres-functions-triggers, sql-basics, sql-filtering-operators, sql-insert-update-delete, sql-logical-order, sql-subqueries-exists-lateral, sqld-null-functions, sqld-subquery-set-operators
+
+#### `sql-subqueries-exists-lateral` — 서브쿼리가 실행되는 방식: 스칼라, EXISTS, NOT IN, LATERAL
+
+- 요약: 개발 DB에서는 돌던 스칼라 서브쿼리가 운영에서 에러를 낸 일에서 시작해, PostgreSQL 16이 서브쿼리를 InitPlan, SubPlan, 세미 조인, 안티 조인 중 무엇으로 바꾸는지 실행 계획으로 따라간다. 17초짜리 상관 서브쿼리를 94ms로 고치고, work_mem에 따라 계획이 바뀌는 NOT IN과 LEFT JOIN LATERAL을 다룬다.
+- 태그: Database, SQL, PostgreSQL, Performance
+- 키워드: InitPlan, SubPlan, 세미 조인, LEFT JOIN LATERAL
+- 길이: 538줄
+- 소제목: 값 하나 자리에는 값 하나만 / 한 번만 도는 서브쿼리, 행마다 도는 서브쿼리 / IN과 EXISTS는 조인이 된다 / NOT IN은 메모리 설정에 따라 계획이 바뀐다 / 서브쿼리가 어떤 계획이 되는지 한눈에 / FROM 안에서 바깥을 보는 LATERAL / 느린 서브쿼리를 만나면 보는 것 / NOT IN을 직접 계산해 보기 / 계획의 이름을 읽는다 / 면접에서 나올 만한 질문
+- 직접 링크 →: sqld-subquery-set-operators, sqld-correlated-subquery, sql-filtering-operators, sql-joins-in-practice, sql-logical-order, sql-query-rewrite, postgres-reporting-sql, sql-case-when
+- 키워드 백링크 →: sql-select-where-null, db-type-relational
+- 이 글로 오는 글 ←: sql-case-when, sql-filtering-operators, sql-joins-in-practice, sql-query-rewrite, sqld-subquery-set-operators
 
 #### `zero-downtime-migrations` — 무중단 스키마 변경: ALTER TABLE의 잠금과 재작성을 재 보기
 
@@ -1393,7 +1426,7 @@
 - 소제목: 예제 데이터 / 바깥 행마다 다시 도는 상관 서브쿼리 / SELECT 절에는 값 하나만 들어간다 / 자주 쓰는 서브쿼리는 뷰로 이름을 붙인다 / 현장에서 상관 서브쿼리가 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-single-row-functions, db-index, sqld-window-functions
 - 키워드 백링크 →: sqld-group-by-having
-- 이 글로 오는 글 ←: sqld-set-operators, sqld-subquery-set-operators, sqld-window-functions
+- 이 글로 오는 글 ←: sql-subqueries-exists-lateral, sqld-set-operators, sqld-subquery-set-operators, sqld-window-functions
 
 #### `sqld-data-modeling` — SQLD 데이터 모델링: 개념·논리·물리와 3단계 스키마
 
@@ -1426,7 +1459,7 @@
 - 소제목: 여러 행을 하나로 줄이는 집계 함수 / 묶어서 세는 GROUP BY / 묶은 다음에 거르는 HAVING / SQL은 적은 순서대로 실행되지 않는다 / ORDER BY에서 헷갈리는 것들 / 행이 없어도 한 줄은 나온다 / CASE를 넣어 가로로 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-joins
 - 키워드 백링크 →: sqld-null-functions
-- 이 글로 오는 글 ←: db-type-time-series, postgres-reporting-sql, sql-aggregation-pitfalls, sql-logical-order, sql-select-where-null, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 이 글로 오는 글 ←: db-type-time-series, postgres-reporting-sql, sql-aggregation-pitfalls, sql-case-when, sql-logical-order, sql-select-where-null, sqld-correlated-subquery, sqld-joins, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-single-row-functions, sqld-subquery-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-joins` — SQLD 조인: EQUI부터 OUTER, Oracle (+)까지
 
@@ -1437,7 +1470,7 @@
 - 소제목: 조인은 짝을 찾는 일이다 / 범위로 짝을 찾는 Non-EQUI JOIN / ANSI 문법으로 쓰는 INNER JOIN / 짝이 없는 행을 살리는 OUTER JOIN / Oracle 전통 문법의 OUTER JOIN 표기 / 모든 조합을 만드는 CROSS JOIN / 자기 자신과 붙이는 SELF JOIN / 세 테이블을 붙이기 / DB가 짝을 찾는 세 가지 방법 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-group-by-having, sql-query-tuning
 - 키워드 백링크 →: sqld-top-n-hierarchical-pivot
-- 이 글로 오는 글 ←: sqld-group-by-having, sqld-subquery-set-operators
+- 이 글로 오는 글 ←: sql-joins-in-practice, sqld-group-by-having, sqld-subquery-set-operators
 
 #### `sqld-null-functions` — SQLD NULL 다루기: NVL, COALESCE, CASE와 DECODE
 
@@ -1448,7 +1481,7 @@
 - 소제목: 이 글에서 쓸 사원 테이블 / 지급액이 빈칸이 된 이유 / NULL은 값이 아니라 빈칸이다 / NULL을 다른 값으로 바꾸는 함수 / 조건에 따라 값을 고르는 CASE와 DECODE / 현장에서 NULL이 바뀐 행을 숨기는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-single-row-functions, sqld-type-conversion, sqld-subquery-set-operators, sqld-group-by-having, sql-select-where-null
 - 키워드 백링크 →: postgres-getting-started
-- 이 글로 오는 글 ←: sqld-group-by-having, sqld-rollup-cube-grouping-sets, sqld-single-row-functions
+- 이 글로 오는 글 ←: sql-case-when, sqld-group-by-having, sqld-rollup-cube-grouping-sets, sqld-single-row-functions
 
 #### `sqld-rollup-cube-grouping-sets` — SQLD ROLLUP, CUBE, GROUPING SETS
 
@@ -1458,7 +1491,7 @@
 - 길이: 571줄
 - 소제목: 출발점은 9개의 묶음 / ROLLUP은 오른쪽부터 하나씩 지운다 / CUBE는 가능한 조합을 전부 만든다 / GROUPING SETS는 원하는 묶음만 적는다 / 소계 줄에 이름표를 붙이는 GROUPING / 일부만 굴리는 부분 ROLLUP / 결과 행 수 세기 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-group-by-having
-- 키워드 백링크 →: json-crud-http, postgres-reporting-sql, sqld-null-functions
+- 키워드 백링크 →: json-crud-http, postgres-reporting-sql, sql-case-when, sqld-null-functions
 - 이 글로 오는 글 ←: sqld-window-functions
 
 #### `sqld-set-operators` — SQLD 집합 연산자: UNION, INTERSECT, MINUS
@@ -1491,8 +1524,8 @@
 - 길이: 596줄
 - 소제목: 예제로 쓸 EMP와 DEPT / 쿼리를 넣을 수 있는 세 자리 / 몇 줄이 돌아오느냐로 연산자가 바뀐다 / ANY와 ALL은 최솟값과 최댓값으로 바꿔 읽는다 / EXISTS는 있는지만 본다 / NOT IN에 NULL이 하나 섞이면 / 현장에서 NOT IN이 느려지는 순간 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-correlated-subquery, sqld-set-operators, sqld-single-row-functions, sqld-joins
-- 키워드 백링크 →: sqld-group-by-having, sql-select-where-null
-- 이 글로 오는 글 ←: sqld-correlated-subquery, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
+- 키워드 백링크 →: sqld-group-by-having, sql-subqueries-exists-lateral, sql-joins-in-practice, sql-select-where-null
+- 이 글로 오는 글 ←: sql-subqueries-exists-lateral, sqld-correlated-subquery, sqld-null-functions, sqld-rollup-cube-grouping-sets, sqld-set-operators, sqld-top-n-hierarchical-pivot, sqld-window-functions
 
 #### `sqld-top-n-hierarchical-pivot` — SQLD Top-N, 계층형 쿼리, PIVOT
 
@@ -1502,8 +1535,8 @@
 - 길이: 787줄
 - 소제목: ROWNUM은 정렬보다 먼저 붙는다 / 동점자까지 보여 주는 WITH TIES / 상사를 따라 내려가는 계층형 쿼리 / 계층형 쿼리가 주는 가상 컬럼 / WHERE에 거는 조건과 CONNECT BY에 거는 조건 / PostgreSQL과 SQL Server는 재귀 CTE로 쓴다 / 행을 열로 돌리는 PIVOT / 열을 행으로 되돌리는 UNPIVOT / 패턴으로 찾는 정규 표현식 함수 / SQLD 시험 포인트 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-subquery-set-operators, sqld-window-functions
-- 키워드 백링크 →: db-index, sqld-group-by-having, js-closures
-- 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sqld-joins, sqld-window-functions
+- 키워드 백링크 →: db-index, sqld-group-by-having, sql-case-when, js-closures
+- 이 글로 오는 글 ←: db-type-graph, db-type-relational, postgres-advanced-sql, sql-case-when, sqld-joins, sqld-window-functions
 
 #### `sqld-type-conversion` — SQLD 형 변환: TO_CHAR 형식과 암시적 형 변환
 
@@ -1537,7 +1570,7 @@
 - 소제목: 반복되는 문제에 붙인 이름 / 스물세 개를 세 갈래로 나눈 기준 / 두 문장으로 줄이면 / 이미 매일 쓰고 있는 패턴 / 함수가 있으면 사라지는 패턴도 있다 / 패턴을 꺼내기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-adapter, pattern-bridge, pattern-composite, pattern-decorator, pattern-facade, pattern-flyweight, pattern-proxy, pattern-chain-of-responsibility, pattern-command, pattern-interpreter, pattern-iterator, pattern-mediator, pattern-memento, pattern-observer, pattern-state, pattern-strategy, pattern-template-method, pattern-visitor, mvc-pattern, resilience-patterns
 - 키워드 백링크 →: loading-patterns, sql-batch-timeout-pool, js-closures
-- 이 글로 오는 글 ←: pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-interpreter, pattern-mediator, pattern-observer, pattern-prototype, pattern-proxy, pattern-singleton, pattern-state, pattern-strategy, pattern-template-method
+- 이 글로 오는 글 ←: js-classes, pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-interpreter, pattern-mediator, pattern-observer, pattern-prototype, pattern-proxy, pattern-singleton, pattern-state, pattern-strategy, pattern-template-method
 
 ### Programming › Design Patterns › Behavioral (`programming/design-patterns/behavioral`)
 
@@ -1694,7 +1727,7 @@
 - 소제목: new가 박힌 자리를 메서드로 바꾼다 / 이름이 비슷한 세 가지 / 매일 쓰는 팩토리 메서드 / 상속 대신 함수를 넘기면 / 채널 하나를 추가할 때 고치는 곳 / 모르는 채널은 시작할 때 막는다 / 테스트에서 가짜 채널 끼우기 / 팩토리 메서드가 과한 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-template-method, pattern-iterator, pattern-abstract-factory, pattern-builder, pattern-prototype
 - 키워드 백링크 →: js-object-methods
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-abstract-factory, pattern-builder, pattern-iterator, pattern-prototype, pattern-singleton, pattern-template-method
+- 이 글로 오는 글 ←: design-patterns-overview, js-classes, pattern-abstract-factory, pattern-builder, pattern-iterator, pattern-prototype, pattern-singleton, pattern-template-method
 
 #### `pattern-prototype` — 프로토타입 패턴: 클래스를 몰라도 복제해서 만든다
 
@@ -1704,8 +1737,8 @@
 - 길이: 509줄
 - 소제목: 복사할 줄 아는 건 객체 자신이다 / 자바스크립트의 프로토타입과는 다른 이야기 / 얕은 복사가 기본값을 오염시킨다 / 깊은 복사 도구마다 잃어버리는 것 / 클래스 인스턴스는 스스로 복제해야 한다 / 원본을 등록해 두고 꺼내 쓰기 / 복제가 정말 빠른가 / 매일 쓰는 복제 / 직접 만드는 깊은 복사 / 복제가 맞지 않는 객체 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-abstract-factory, browser-fetch, json-crud-http, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
-- 키워드 백링크 →: k8s-pod-basics, db-types-overview, js-immutability-react, js-shallow-deep-copy
-- 이 글로 오는 글 ←: design-patterns-overview, js-shallow-deep-copy, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
+- 키워드 백링크 →: k8s-pod-basics, js-prototype-chain, db-types-overview, js-immutability-react, js-shallow-deep-copy
+- 이 글로 오는 글 ←: design-patterns-overview, js-prototype-chain, js-shallow-deep-copy, pattern-builder, pattern-factory-method, pattern-flyweight, pattern-memento
 
 #### `pattern-singleton` — 싱글턴 패턴: 하나만 만들기보다 어려운 하나 지키기
 
@@ -1782,7 +1815,7 @@
 - 길이: 399줄
 - 소제목: 마커마다 같은 아이콘을 들고 있었다 / 바뀌지 않는 것과 바뀌는 것을 가른다 / 공장이 같은 것을 한 번만 만든다 / 줄어든 메모리를 재 본다 / 하나를 고쳤더니 전부 바뀌었다 / 풀이 끝없이 자랄 때 / 엔진과 언어 안의 플라이웨이트 / 캐시와 무엇이 다른가 / 직접 만드는 스타일 공장 / 플라이웨이트가 필요 없는 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, js-memory-leak, git-internals-basics, caching-strategies, pattern-singleton, pattern-prototype
-- 키워드 백링크 →: js-object-methods, js-es-modules
+- 키워드 백링크 →: js-object-methods, js-strict-mode, js-es-modules
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-prototype
 
 #### `pattern-proxy` — 프록시 패턴: 진짜와 같은 얼굴을 한 대리인
@@ -1863,8 +1896,8 @@
 - 키워드: 메모리 누수, 힙 스냅샷, 가비지 컬렉션, WeakMap, detached DOM
 - 길이: 436줄
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
-- 키워드 백링크 →: client-data-cache, redis-memory-eviction, js-memoization, js-function-forms, garbage-collection, event-loop, js-closures, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, fault-tolerance, garbage-collection, js-closures, js-first-class-callbacks, js-immutability-react, js-memoization, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
+- 키워드 백링크 →: client-data-cache, redis-memory-eviction, js-memoization, js-function-forms, garbage-collection, event-loop, js-strict-mode, js-closures, layer-mtu-fragmentation, dns
+- 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, fault-tolerance, garbage-collection, js-call-apply-bind, js-closures, js-first-class-callbacks, js-immutability-react, js-memoization, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
 
 ### Programming › Frontend › JavaScript › Async (`programming/frontend/javascript/async`)
 
@@ -1886,7 +1919,7 @@
 - 키워드: 콜백 지옥, error-first 콜백, util.promisify
 - 길이: 512줄
 - 소제목: 끝나면 이걸 불러 달라는 부탁 / 순서가 있는 일은 안으로 파고든다 / 콜백을 넘기면 제어권도 넘어간다 / 바깥 try가 지나쳐 버린 예외 / 어떤 때는 바로, 어떤 때는 나중에 / 동시에 시작하고 모두 끝나면 / 펴는 방법 두 가지 / 콜백이 여전히 맞는 자리 / 직접 만들어 보는 series / 콜백 지옥을 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-promises, js-async-await, js-promise-combinators, js-first-class-callbacks, event-loop, saga-pattern
+- 직접 링크 →: js-promises, js-async-await, js-promise-combinators, js-first-class-callbacks, event-loop, saga-pattern, js-this-binding
 - 키워드 백링크 →: json-crud-http, message-delivery-semantics, js-function-forms
 - 이 글로 오는 글 ←: js-async-await, js-first-class-callbacks, js-promise-combinators, js-promises
 
@@ -1933,8 +1966,8 @@
 - 길이: 568줄
 - 소제목: 내보낸 것은 값이 아니라 변수다 / default는 이름이 default인 내보내기일 뿐이다 / 실행하기 전에 연결부터 한다 / 브라우저는 import를 만날 때마다 한 번 더 요청한다 / Node에서 두 시스템이 만나는 자리 / TypeScript와 번들러가 바꿔 쓰는 코드 / React 코드에서 모듈 경계를 만나는 순간 / 모듈 오류를 만났을 때 읽는 순서 / 정적인 그래프가 주는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-iife-module-pattern, code-splitting, pattern-singleton, js-hoisting-tdz, js-async-await, rendering-ssr
-- 키워드 백링크 →: rendering-strategies, http-versions, js-destructuring, cors
-- 이 글로 오는 글 ←: code-splitting, event-loop, islands-resumability, js-async-await, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-object-methods, js-pure-functions, js-scope-lexical, js-var-let-const, micro-frontends, pattern-flyweight, pattern-singleton
+- 키워드 백링크 →: rendering-strategies, http-versions, js-strict-mode, js-destructuring, cors
+- 이 글로 오는 글 ←: code-splitting, event-loop, islands-resumability, js-async-await, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-strict-mode, js-this-binding, js-var-let-const, micro-frontends, pattern-flyweight, pattern-singleton
 
 #### `js-hoisting-tdz` — 호이스팅과 TDZ: 선언 전에 이름을 쓰면 생기는 일
 
@@ -1943,9 +1976,9 @@
 - 키워드: 호이스팅, TDZ, Temporal Dead Zone
 - 길이: 510줄
 - 소제목: 실행 전에 이름부터 등록한다 / 선언마다 초기화하는 시점이 다르다 / 오류 문구로 원인을 가른다 / TDZ는 위치가 아니라 시간이다 / 바깥 이름이 있어도 TDZ가 이긴다 / 블록 안의 함수 선언은 모드마다 다르다 / 순환 import가 TDZ를 부른다 / React 파일에서 만나는 경우 / 도구로 미리 잡기 / 다시 formatPrice로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-var-let-const, js-scope-lexical, js-es-modules
+- 직접 링크 →: js-var-let-const, js-scope-lexical, js-strict-mode, js-es-modules
 - 키워드 백링크 →: js-function-forms, code-splitting
-- 이 글로 오는 글 ←: dependency-hell, js-es-modules, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const
+- 이 글로 오는 글 ←: dependency-hell, js-classes, js-es-modules, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const
 
 #### `js-optional-chaining-nullish` — 옵셔널 체이닝과 ??: 어디서 멈추고 무엇을 없음으로 보나
 
@@ -1965,7 +1998,7 @@
 - 길이: 473줄
 - 소제목: 원시값 일곱 가지, 나머지는 전부 객체 / 변수 칸에 들어 있는 것 / 대입은 칸의 내용을 그대로 복사한다 / 함수에 넘길 때도 같은 규칙이다 / const는 객체를 얼리지 않는다 / 내용이 같아도 다른 객체다 / React가 화면을 바꾸지 않을 때 / 현장에서 이 규칙을 만나는 증상 / 복사할지 공유할지 고르는 기준 / 칸에 든 것만 복사된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-pure-functions, js-shallow-deep-copy, js-var-let-const, js-object-methods, react-rerender, js-immutability-react, js-array-mutation
-- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-iife-module-pattern, js-memoization, js-object-methods, js-shallow-deep-copy, js-truthy-falsy-typeof, js-var-let-const, react-rerender
+- 이 글로 오는 글 ←: js-array-mutation, js-call-apply-bind, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-iife-module-pattern, js-memoization, js-object-methods, js-prototype-chain, js-shallow-deep-copy, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, js-var-let-const, react-rerender
 
 #### `js-scope-lexical` — 스코프와 렉시컬 스코프: 이름은 어디서 찾나
 
@@ -1974,9 +2007,9 @@
 - 키워드: 렉시컬 스코프, 스코프 체인, 동적 스코프
 - 길이: 427줄
 - 소제목: 이름은 안쪽부터 바깥으로 찾는다 / 쓴 자리가 바깥을 정한다 / 함수는 태어난 환경을 들고 다닌다 / 엔진은 실행 전에 찾을 곳을 정해 둔다 / 같은 이름으로 가리기 / 선언 없이 대입하면 전역이 생긴다 / 매개변수 기본값에는 따로 범위가 있다 / eval과 with는 규칙을 흐린다 / 개발자 도구에서 스코프 체인 보기 / React에서 컴포넌트 안에 컴포넌트를 쓰면 / 다시 로그인 버그로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-var-let-const, js-hoisting-tdz, js-closures, js-memory-leak, react-rerender
+- 직접 링크 →: js-var-let-const, js-hoisting-tdz, js-this-binding, js-closures, js-memory-leak, js-strict-mode, react-rerender
 - 키워드 백링크 →: js-object-methods, js-function-forms, js-es-modules
-- 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-var-let-const
+- 이 글로 오는 글 ←: js-closures, js-hoisting-tdz, js-strict-mode, js-var-let-const
 
 #### `js-short-circuit` — 단락 평가: &&와 ||는 언제 멈추고 무엇을 돌려주나
 
@@ -2007,9 +2040,9 @@
 - 키워드: falsy, truthy, typeof null, Number.isNaN
 - 길이: 414줄
 - 소제목: 거짓으로 취급되는 값은 여덟 개뿐이다 / if 하나에 숨은 버그들 / React에서 0이 화면에 찍힌다 / typeof가 돌려주는 여덟 가지 / 종류를 정확히 가려내는 조합 / null과 undefined는 어디서 오나 / NaN은 조용히 퍼진다 / 검사 하나가 어디까지 거르는지 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-primitive-vs-reference, js-equality-coercion, js-optional-chaining-nullish, js-short-circuit, js-hoisting-tdz
+- 직접 링크 →: js-primitive-vs-reference, js-equality-coercion, js-optional-chaining-nullish, js-short-circuit, js-hoisting-tdz, js-prototype-chain
 - 키워드 백링크 →: json-crud-http, js-destructuring
-- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-equality-coercion, js-function-forms, js-optional-chaining-nullish, js-primitive-vs-reference, js-short-circuit, yaml-for-k8s
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-equality-coercion, js-function-forms, js-optional-chaining-nullish, js-primitive-vs-reference, js-prototype-chain, js-short-circuit, yaml-for-k8s
 
 #### `js-var-let-const` — var, let, const: 변수 상자는 언제 새로 생기나
 
@@ -2031,8 +2064,8 @@
 - 키워드: 클로저, 오래된 클로저, stale closure, useEffectEvent
 - 길이: 482줄
 - 소제목: 함수는 태어난 자리를 기억한다 / 호출이 끝나도 상자는 남는다 / 값이 아니라 변수를 잡는다 / 반복문 안에서 만든 함수 / 엔진이 실제로 남기는 것 / 클로저로 만드는 것들 / React 컴포넌트에서 오래된 값을 보는 이유 / 현장에서 오래된 값을 찾는 순서 / 연습: 숨긴 상태를 가진 카운터 / 멈춘 타이머가 알려 준 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, react-rerender
-- 이 글로 오는 글 ←: design-patterns-overview, islands-resumability, js-currying-partial, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
+- 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, js-classes, react-rerender
+- 이 글로 오는 글 ←: design-patterns-overview, islands-resumability, js-currying-partial, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sqld-top-n-hierarchical-pivot
 
 #### `js-currying-partial` — 커링과 부분 적용: 인자는 지금, 실행은 나중에
 
@@ -2041,9 +2074,9 @@
 - 키워드: 커링, 부분 적용, currying
 - 길이: 564줄
 - 소제목: 인자를 나눠 받는 두 가지 방법 / 범용 curry는 이렇게 동작한다 / 인자 배열을 같이 쓰면 두 번째 호출이 망가진다 / fn.length를 믿으면 생기는 일 / lodash의 placeholder로 빈자리 남기기 / bind로 하는 부분 적용과 this / 데이터를 마지막 인자에 두는 이유 / 함수가 늘어나는 만큼 드는 비용 / TypeScript에서 커링 타입 잡기 / React에서 커링한 핸들러가 memo를 깬다 / 연습: curry 직접 만들기 / 다시 버튼 목록으로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-first-class-callbacks, js-closures, react-rerender
+- 직접 링크 →: js-first-class-callbacks, js-closures, js-call-apply-bind, react-rerender
 - 키워드 백링크 →: js-function-forms, js-spread-rest, js-destructuring
-- 이 글로 오는 글 ←: hexagonal-architecture, js-closures, js-first-class-callbacks, js-spread-rest
+- 이 글로 오는 글 ←: hexagonal-architecture, js-call-apply-bind, js-closures, js-first-class-callbacks, js-spread-rest
 
 #### `js-first-class-callbacks` — 일급 함수와 콜백: 함수를 넘기면 따라가는 것들
 
@@ -2052,7 +2085,7 @@
 - 키워드: 일급 함수, 고차 함수, 콜백 함수, 함수 래퍼
 - 길이: 498줄
 - 소제목: 함수를 값처럼 다룬다는 말 / 받는 쪽은 함수의 무엇을 보나 / 함수를 감싸는 함수 / 감쌀 때 잃어버리는 것들 / 넘기는 순간 사라지는 this / 모양이 같아도 다른 함수 / React에서 함수를 넘기는 자리 / 연습: 재시도 래퍼 만들기 / 다시 에러 처리기로 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-function-forms, js-closures, js-callback-hell, js-primitive-vs-reference, js-array-transform, js-async-await, pattern-decorator, js-memoization, js-currying-partial, js-memory-leak, react-rerender, retries
+- 직접 링크 →: js-function-forms, js-closures, js-callback-hell, js-primitive-vs-reference, js-array-transform, js-async-await, pattern-decorator, js-memoization, js-currying-partial, js-this-binding, js-call-apply-bind, js-memory-leak, react-rerender, retries
 - 키워드 백링크 →: js-spread-rest
 - 이 글로 오는 글 ←: js-callback-hell, js-closures, js-currying-partial, js-function-forms, pattern-decorator
 
@@ -2063,9 +2096,9 @@
 - 키워드: 함수 선언문, 함수 표현식, 화살표 함수, 기본값 매개변수, arguments 객체
 - 길이: 528줄
 - 소제목: 함수를 만드는 문법들 / 정의보다 위에서 부를 수 있는 함수 / 화살표 함수가 갖지 않는 것 / 이름 있는 함수 표현식을 쓰는 자리 / 매개변수 자리에서 일어나는 일 / arguments 객체와 나머지 매개변수 / React 컴포넌트에서 만나는 함수 모양 / 어떤 모양을 고를까 / 연습: 기본값 규칙 흉내 내기 / 기계적인 변환이 깨뜨린 두 줄 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-optional-chaining-nullish, js-spread-rest, js-destructuring
-- 키워드 백링크 →: js-es-modules, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-callback-hell, js-closures, js-currying-partial, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-var-let-const, pattern-adapter, react-rerender
+- 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-this-binding, js-call-apply-bind, js-optional-chaining-nullish, js-spread-rest, js-strict-mode, js-destructuring
+- 키워드 백링크 →: js-classes, js-es-modules, js-truthy-falsy-typeof
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-var-let-const, pattern-adapter, react-rerender
 
 #### `js-iife-module-pattern` — IIFE와 모듈 패턴: 모듈 시스템이 없던 시절의 스코프
 
@@ -2075,8 +2108,8 @@
 - 길이: 681줄
 - 소제목: 만들자마자 부르는 함수 / 괄호를 빼면 문법 에러가 난다 / 세미콜론 하나가 빠졌을 때 / 숨기고 골라서 내보내는 모듈 패턴 / 공개한 값은 따라오지 않는다 / 반복문마다 새 상자가 필요했던 시절 / 파일 여러 개를 하나의 이름 아래 모으기 / 어디서나 돌아가는 래퍼, UMD / 지금은 모듈 시스템이 같은 일을 한다 / React 코드에 남은 즉시 실행 함수 / 모듈 변수는 프로세스에 하나다 / 연습: 작은 모듈 로더 / 두 위젯이 다시 따로 세기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-closures, js-var-let-const, js-primitive-vs-reference, js-es-modules, pattern-singleton
-- 키워드 백링크 →: browser-fetch, rendering-strategies, js-function-forms
-- 이 글로 오는 글 ←: js-closures, js-es-modules, js-var-let-const
+- 키워드 백링크 →: browser-fetch, js-strict-mode, rendering-strategies, js-function-forms
+- 이 글로 오는 글 ←: js-closures, js-es-modules, js-strict-mode, js-var-let-const
 
 #### `js-memoization` — 메모이제이션: 기억한 답이 틀릴 때
 
@@ -2087,7 +2120,7 @@
 - 소제목: 같은 입력이면 같은 답이라는 약속 / 캐시 키가 결과를 결정한다 / 버리지 않는 캐시는 메모리 누수다 / 객체를 키로 쓸 때는 WeakMap / Promise를 기억하면 요청이 하나로 합쳐진다 / 기억하는 비용이 계산보다 클 때 / useMemo는 칸이 하나뿐인 캐시다 / 연습: 크기 제한이 있는 memoize / 빠르게 틀리지 않으려면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-pure-functions, js-closures, react-rerender, big-o-notation, js-memory-leak, caching-strategies, client-data-cache, js-immutability-react, garbage-collection
 - 키워드 백링크 →: json-crud-http, rendering-strategies, redis-basics, js-primitive-vs-reference, dns
-- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-strategies, client-data-cache, js-array-transform, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-memory-leak, js-pure-functions, react-rerender
+- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-strategies, client-data-cache, js-array-transform, js-call-apply-bind, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-memory-leak, js-pure-functions, react-rerender
 
 #### `js-pure-functions` — 순수 함수와 부수 효과: 같은 입력, 같은 결과, 남지 않는 흔적
 
@@ -2097,7 +2130,7 @@
 - 길이: 470줄
 - 소제목: 같은 입력에 같은 결과, 그리고 흔적 없음 / 숨은 입력은 테스트를 시간에 묶는다 / 숨은 출력은 두 번째 호출에서 드러난다 / 안에서 고치는 건 괜찮다 / 계산은 안쪽, 입출력은 바깥쪽 / 순수하면 얻는 것들 / React가 순수함을 요구하는 세 자리 / 연습: 결제 계산을 순수하게 / 배송비가 한 줄로 돌아오기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, js-shallow-deep-copy, js-immutability-react, js-spread-rest, hexagonal-architecture, js-memoization, message-queue-basics, saga-pattern
-- 키워드 백링크 →: json-crud-http, js-es-modules, http-methods
+- 키워드 백링크 →: json-crud-http, js-strict-mode, js-es-modules, http-methods
 - 이 글로 오는 글 ←: clean-architecture, cors, event-sourcing, frontend-browser-cache, http-methods, js-array-mutation, js-array-transform, js-destructuring, js-immutability-react, js-memoization, js-primitive-vs-reference, js-short-circuit, message-delivery-semantics, message-queue-basics, mvc-pattern, pattern-mediator, pattern-state, react-rerender, schema-versioning, sqld-set-operators
 
 ### Programming › Frontend › JavaScript › Objects & Arrays (`programming/frontend/javascript/objects`)
@@ -2110,6 +2143,7 @@
 - 길이: 488줄
 - 소제목: 원본을 고치는 메서드는 아홉 개다 / sort가 돌려준 배열은 원본이다 / 숫자를 정렬했더니 100이 25보다 앞선다 / 사본을 돌려주는 ES2023 메서드 / React는 같은 배열이면 다시 그리지 않는다 / 렌더링 중에 sort를 부르면 / 큐로 쓴 배열이 느려지는 순간 / 원본을 고치는 실수를 도구에 맡기기 / 할 일 리듀서를 원본을 고치지 않고 만들기 / 고치는 쪽인지 먼저 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-transform, js-primitive-vs-reference, js-shallow-deep-copy, js-immutability-react, js-spread-rest, js-pure-functions, js-object-methods
+- 키워드 백링크 →: js-strict-mode
 - 이 글로 오는 글 ←: js-array-transform, js-immutability-react, js-primitive-vs-reference, js-pure-functions, js-spread-rest
 
 #### `js-array-transform` — 배열을 바꾸고 고르고 접는 메서드: map, filter, reduce, flatMap
@@ -2132,7 +2166,7 @@
 - 소제목: 꺼내 담는 일을 한 줄로 / 기본값은 undefined일 때만 들어간다 / 배열 패턴은 이터레이터를 돈다 / 매개변수 자리에서 바로 꺼내기 / 이미 있는 변수에 담을 때 생기는 두 가지 함정 / React 코드 곳곳의 구조 분해 / 반복문과 콜백에서 쓰는 패턴 / TypeScript에서 콜론의 뜻이 겹친다 / 옵션 정규화 함수 만들기 / 패턴이 하는 일을 순서대로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-spread-rest, js-optional-chaining-nullish, react-rerender, js-memoization, js-object-methods
 - 키워드 백링크 →: client-data-cache, pattern-iterator, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-truthy-falsy-typeof, pattern-proxy
+- 이 글로 오는 글 ←: js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, pattern-proxy
 
 #### `js-immutability-react` — React 상태를 불변으로 바꾸기: 중첩 업데이트와 Immer
 
@@ -2152,9 +2186,9 @@
 - 키워드: 속성 설명자, Object.freeze, 접근자 속성, Object.hasOwn
 - 길이: 658줄
 - 소제목: 숫자처럼 생긴 키가 먼저 선다 / 꺼내는 함수마다 보는 속성이 다르다 / entries로 풀었다가 fromEntries로 묶는다 / 속성 하나에 스위치가 네 개 붙어 있다 / 읽고 쓸 때 함수를 부르는 속성 / 잠금은 세 단계다 / React 개발 모드는 props를 얼려 둔다 / TypeScript가 Object.keys를 string[]로 두는 이유 / 이런 증상이면 이 함수부터 의심한다 / deepFreeze를 직접 만들어 보기 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-primitive-vs-reference, js-spread-rest, js-array-transform, js-immutability-react, js-shallow-deep-copy
+- 직접 링크 →: js-primitive-vs-reference, js-spread-rest, js-prototype-chain, js-array-transform, js-strict-mode, js-classes, js-immutability-react, js-shallow-deep-copy
 - 키워드 백링크 →: json-crud-http, pattern-proxy, js-es-modules
-- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-immutability-react, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-spread-rest, js-var-let-const, pattern-builder, pattern-factory-method, pattern-flyweight
+- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-immutability-react, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-spread-rest, js-strict-mode, js-this-binding, js-var-let-const, pattern-builder, pattern-factory-method, pattern-flyweight
 
 #### `js-shallow-deep-copy` — 얕은 복사와 깊은 복사: 사본은 어디까지 따로인가
 
@@ -2174,8 +2208,65 @@
 - 키워드: 전개 문법, 나머지 매개변수, 나머지 패턴
 - 길이: 524줄
 - 소제목: 같은 점 세 개가 반대 방향으로 일한다 / 배열 전개는 이터레이터에서 꺼낸다 / 객체 전개는 자기 속성만 베낀다 / 뒤에 쓴 것이 이긴다 / Object.assign과 무엇이 다른가 / 나머지 매개변수는 진짜 배열이다 / 빼고 나머지를 넘긴다 / 펼친 만큼 값을 치른다 / React 컴포넌트에서 props를 펼칠 때 / TypeScript는 길이를 모르는 전개를 막는다 / undefined는 건너뛰는 병합 함수 / 세 점 앞에서 물어볼 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-destructuring, js-shallow-deep-copy, js-object-methods, js-currying-partial, js-function-forms, js-immutability-react, js-array-mutation
-- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-currying-partial, js-destructuring, js-first-class-callbacks, js-function-forms, js-object-methods, js-pure-functions
+- 직접 링크 →: js-destructuring, js-shallow-deep-copy, js-prototype-chain, js-object-methods, js-currying-partial, js-function-forms, js-immutability-react, js-array-mutation
+- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-call-apply-bind, js-currying-partial, js-destructuring, js-first-class-callbacks, js-function-forms, js-object-methods, js-prototype-chain, js-pure-functions
+
+### Programming › Frontend › JavaScript › this & OOP (`programming/frontend/javascript/oop`)
+
+#### `js-call-apply-bind` — call, apply, bind: this를 직접 정하기
+
+- 요약: bind를 두 번 불러 떼어지지 않은 keydown 리스너에서 출발해, 세 메서드의 차이와 bind가 만드는 바운드 함수의 정체를 본다. apply와 전개의 인자 수 한계, 메서드 빌려 쓰기와 Object.hasOwn, 다시 묶이지 않는 bind, React에서 render 안 bind의 비용까지 다룬다.
+- 태그: JavaScript, React, Browser, Node.js
+- 키워드: 바운드 함수, bound function, Function.prototype.call
+- 길이: 458줄
+- 소제목: 세 메서드는 같은 일을 다른 때에 한다 / 배열을 펼쳐 넘기던 apply / 남의 메서드를 빌려 쓰기 / bind가 돌려주는 함수의 정체 / 한 번 묶으면 다시 묶이지 않는다 / 인자를 미리 채우는 bind / 떼지 못한 리스너를 고치는 세 가지 / React에서 bind를 쓰는 자리 / 연습: bind 직접 만들기 / 같은 참조를 들고 있는가 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-this-binding, js-prototype-chain, js-currying-partial, js-memory-leak, react-rerender, js-memoization
+- 키워드 백링크 →: js-classes, js-function-forms, js-strict-mode, js-spread-rest, js-primitive-vs-reference
+- 이 글로 오는 글 ←: js-currying-partial, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-this-binding
+
+#### `js-classes` — 클래스와 상속: 문법 아래의 프로토타입
+
+- 요약: 부모 생성자에서 부른 render가 하위 클래스 필드를 undefined로 보는 장면에서 출발해, 클래스가 만드는 함수와 프로토타입, 하위 클래스의 생성 순서, super와 HomeObject, 두 줄로 상속되는 static, #private와 TypeScript private의 차이, useDefineForClassFields 함정, 내장 객체 상속, React 에러 경계를 다룬다.
+- 태그: JavaScript, TypeScript, OOP, React
+- 키워드: 클래스 필드, useDefineForClassFields, HomeObject
+- 길이: 538줄
+- 소제목: 클래스를 벗기면 함수와 프로토타입이 나온다 / 함수 생성자와 다른 점 / 필드는 인스턴스에, 메서드는 프로토타입에 / 하위 클래스는 부모가 먼저 만든다 / super가 찾아가는 곳 / static은 클래스 쪽 체인을 탄다 / 정말로 숨기는 #private / 필드 선언은 대입이 아니다 / 내장 객체 상속하기 / React에 남은 클래스 / 연습: 계좌 클래스 만들기 / 문법 아래에서 일어나는 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-prototype-chain, js-this-binding, design-patterns-overview, js-hoisting-tdz, js-function-forms
+- 키워드 백링크 →: pattern-factory-method, js-strict-mode
+- 이 글로 오는 글 ←: js-call-apply-bind, js-closures, js-function-forms, js-object-methods, js-prototype-chain, js-strict-mode, js-this-binding
+
+#### `js-prototype-chain` — 프로토타입 체인: 없는 속성은 위로 물어본다
+
+- 요약: constructor라는 단어에서 깨지는 단어 세기 함수에서 출발해, [[Prototype]]과 prototype 속성의 차이, 읽기는 올라가고 쓰기는 제자리에 만드는 규칙을 따라간다. in과 hasOwn, 사전 객체와 Map, 프로토타입 오염 공격, instanceof의 동작, 서버 컴포넌트 경계에서 막히는 클래스 인스턴스까지 다룬다.
+- 태그: JavaScript, Security, Performance, React, Node.js
+- 키워드: 프로토타입 체인, 프로토타입 오염, prototype pollution
+- 길이: 527줄
+- 소제목: 객체마다 숨은 연결이 하나 있다 / 함수의 prototype 속성은 따로 있다 / 읽을 때는 올라가고 쓸 때는 올라가지 않는다 / 내 것인지 물려받은 것인지 / 사전으로 쓸 객체는 체인을 끊는다 / 요청 하나가 모든 객체를 바꾸는 법 / 프로토타입에 둔 배열은 모두가 같이 쓴다 / instanceof는 체인을 훑는다 / 체인이 길면 느릴까 / 체인이 끊기는 경계들 / 연습: instanceof 직접 만들기 / 없으면 위에 물어본다 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-this-binding, js-classes, pattern-prototype, js-strict-mode, js-call-apply-bind, json-crud-http, js-truthy-falsy-typeof, js-spread-rest
+- 키워드 백링크 →: rendering-strategies, js-es-modules, js-primitive-vs-reference
+- 이 글로 오는 글 ←: js-call-apply-bind, js-classes, js-object-methods, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, json-crud-http, pattern-prototype
+
+#### `js-strict-mode` — strict 모드: 조용히 넘어가던 실수를 에러로
+
+- 요약: 오타 하나로 합계가 0이 되고 전역 변수가 생기는 CommonJS 코드에서 출발해, 엄격 모드가 켜지는 곳과 꺼진 채 시작하는 곳, 파일을 이어 붙일 때의 사고, 에러로 바뀌는 쓰기와 막히는 문법, arguments와 eval의 변화를 본다. tsconfig의 strict와 React StrictMode가 무엇이 다른지도 정리한다.
+- 태그: JavaScript, TypeScript, React, Node.js
+- 키워드: 엄격 모드, strict mode, use strict
+- 길이: 506줄
+- 소제목: 조용한 실패를 에러로 바꾸는 모드 / 어디서 켜지고 어디서 꺼지나 / 지시어 하나가 남의 코드까지 바꾼다 / 에러로 바뀌는 조용한 실패들 / 파싱 단계에서 막히는 문법 / arguments가 매개변수를 따라 바뀌지 않는다 / 이름만 비슷한 두 strict / 오래된 코드를 엄격 모드로 옮길 때 / 연습: 엄격 모드라면 이 대입이 성공할까 / 실수를 늦게 알 이유가 없다 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-scope-lexical, js-iife-module-pattern, js-object-methods, js-this-binding, js-function-forms, js-prototype-chain
+- 키워드 백링크 →: js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
+- 이 글로 오는 글 ←: build-caching, js-array-mutation, js-call-apply-bind, js-classes, js-es-modules, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-memory-leak, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-this-binding, k8s-crd, pattern-flyweight
+
+#### `js-this-binding` — this 바인딩: 부르는 방식이 this를 정한다
+
+- 요약: 변수에 담거나 setTimeout에 넘기면 터지는 메서드에서 출발해, this가 함수가 아니라 호출에 붙는다는 것과 네 가지 규칙의 우선순위를 따라간다. 점이 사라지는 자리, 콜백 API가 정해 주는 this, React 클래스 컴포넌트의 에러, 스택 트레이스로 호출 자리를 찾는 법까지 다룬다.
+- 태그: JavaScript, React, Node.js, Browser
+- 키워드: this 바인딩, 암시적 바인딩, new 바인딩
+- 길이: 556줄
+- 소제목: this는 함수가 아니라 호출에 붙는다 / 네 가지 규칙 / 규칙끼리 부딪히면 / 점이 사라지는 자리들 / 받는 쪽이 this를 정해 주는 API / 파일 맨 위의 this / React 클래스 컴포넌트에서 사라지던 this / 에러 메시지에서 호출 자리까지 / 연습: 메서드를 한꺼번에 묶기 / 호출 자리를 먼저 본다 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-call-apply-bind, js-function-forms, js-prototype-chain, js-strict-mode, react-rerender, js-closures
+- 키워드 백링크 →: js-object-methods, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
+- 이 글로 오는 글 ←: js-call-apply-bind, js-callback-hell, js-classes, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-scope-lexical, js-strict-mode
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -2234,7 +2325,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals, js-memoization, js-function-forms, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -2323,7 +2414,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, lossy-counting, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-template-literals, loading-patterns, nextjs-static-dynamic-rendering, pattern-observer, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-prototype-chain, js-template-literals, loading-patterns, nextjs-static-dynamic-rendering, pattern-observer, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -2649,8 +2740,8 @@
 - 길이: 804줄
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
-- 키워드 백링크 →: cors, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, api-versioning, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-callback-hell, js-memoization, js-object-methods, js-pure-functions, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
+- 키워드 백링크 →: cors, js-prototype-chain, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, api-versioning, client-data-cache, resilience-patterns, http-caching-cdn
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-callback-hell, js-memoization, js-object-methods, js-prototype-chain, js-pure-functions, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -3178,7 +3269,7 @@
 - 길이: 519줄
 - 소제목: 캐시가 기억하는 것은 입력과 결과의 짝이다 / 의존성 설치는 무엇을 캐시해야 빨라지나 / 캐시 키 한 줄 뜯어보기 / 정확히 맞지 않으면 비슷한 것이라도 / 키는 어떤 순서로 맞춰 보나 / 작업 결과까지 캐시하는 도구들 / 해시에 없는 입력이 만드는 틀린 적중 / 원격 캐시는 팀 전체의 기억이다 / 남이 올린 결과물을 믿어도 되나 / Docker 빌드의 캐시는 어디에 두나 / 캐시가 이상할 때 보는 순서 / 같은 입력이면 같은 결과라는 약속 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, github-actions-docker-ecr, ci-cd-basics, feature-flags, rollback-strategy
-- 키워드 백링크 →: dependency-hell, git-internals-basics
+- 키워드 백링크 →: dependency-hell, git-internals-basics, js-strict-mode
 - 이 글로 오는 글 ←: ci-cd-basics, dependency-hell, git-internals-basics, git-large-files-secrets, k8s-project-structure, merkle-tree, micro-frontends, monolith-architecture, rollback-strategy
 
 #### `canary-release` — 카나리 릴리스: 작게 겪고 지표로 넓힌다
@@ -3861,7 +3952,7 @@
 - 길이: 691줄
 - 소제목: ConfigMap에 적어 둔 설정은 아무도 검사하지 않는다 / CRD 하나가 API 서버에 경로를 연다 / 스키마 한 장 읽기 / 모든 칸에 type이 있어야 한다, 구조적 스키마 / 모르는 필드는 잘려 나간다 / 필드 사이 규칙은 CEL로 / 요청 하나가 거치는 순서 / status는 따로 쓰는 문, 서브리소스 / kubectl get에 보일 칸 고르기 / 버전을 두 개 두면 / 저장 버전 옮기기, storedVersions / CRD를 지우면 CR도 모두 사라진다 / 현장에서 CRD 때문에 막히는 순간 / 설명서를 잘 쓰면 API 서버가 일을 대신한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-api-objects, k8s-controllers-reconcile, k8s-operators, k8s-api-aggregation-schedulers, helm-release-lifecycle, kubectl-apply-ssa, k8s-admission-control, k8s-feature-maturity
-- 키워드 백링크 →: k8s-architecture, kubernetes-ingress, k8s-configmap, k8s-deploy-pipeline-eks, cron-jobs, what-happens-google-com, local-k8s-kind-minikube, db-type-key-value, k8s-hpa, webhooks
+- 키워드 백링크 →: k8s-architecture, kubernetes-ingress, k8s-configmap, k8s-deploy-pipeline-eks, cron-jobs, js-strict-mode, what-happens-google-com, local-k8s-kind-minikube, db-type-key-value, k8s-hpa, webhooks
 - 이 글로 오는 글 ←: argocd-basics, helm-release-lifecycle, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certifications, k8s-controllers-reconcile, k8s-cri-cni-csi, k8s-learning-roadmap, k8s-operators
 
 #### `k8s-cri-cni-csi` — CRI, CNI, CSI: kubelet이 일을 맡기는 세 인터페이스
@@ -5004,6 +5095,7 @@
 - 문자열 인터닝 → `pattern-flyweight`
 - 미들웨어 체인 → `pattern-chain-of-responsibility`
 - 바운드 서비스 어카운트 토큰 → `k8s-serviceaccount-tokens`
+- 바운드 함수 → `js-call-apply-bind`
 - 바운디드 컨텍스트 → `ddd-bounded-context`
 - 반열린 구간 → `sql-filtering-operators`
 - 반열림 → `circuit-breaker`
@@ -5079,6 +5171,7 @@
 - 사전 배포 버전 → `semantic-versioning`
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상속보다 합성 → `design-patterns-overview`
+- 상수 접기 → `sql-case-when`
 - 상태 정규화 → `js-immutability-react`
 - 상태 코드 → `http-status-codes`
 - 상태 패턴 → `pattern-state`
@@ -5100,6 +5193,7 @@
 - 선형화 가능성 → `db-consistency-cap`
 - 선형화 검사기 → `consistency-models`
 - 세대별 가설 → `garbage-collection`
+- 세미 조인 → `sql-subqueries-exists-lateral`
 - 세션 계층 → `upper-layers-session-presentation-app`
 - 세션 보장 → `eventual-consistency`
 - 세션 쿠키 → `cookie-session-login`
@@ -5154,8 +5248,10 @@
 - 안정 정렬 → `js-array-mutation`
 - 안정화 창 → `k8s-hpa`
 - 안티 엔트로피 → `eventual-consistency`
+- 안티 조인 → `sql-joins-in-practice`
 - 알림 피로 → `alerting`
 - 암달의 법칙 → `scaling-horizontal-vertical`
+- 암시적 바인딩 → `js-this-binding`
 - 암시적 형 변환 → `sqld-type-conversion`
 - 애그리거트 → `ddd-bounded-context`
 - 애니메이션 패턴 → `animation-patterns`
@@ -5167,6 +5263,7 @@
 - 어댑터 패턴 → `pattern-adapter`
 - 어드미션 웹훅 → `k8s-admission-control`
 - 언더레이 → `sdn-vxlan-overlay`
+- 엄격 모드 → `js-strict-mode`
 - 업캐스터 → `schema-versioning`
 - 업캐스팅 → `event-sourcing`
 - 에러 예산 → `error-budgets`
@@ -5285,6 +5382,7 @@
 - 정확히 한 번 → `message-delivery-semantics`
 - 제로 트러스트 → `zero-trust-architecture`
 - 제품군 → `pattern-abstract-factory`
+- 조건부 집계 → `sql-case-when`
 - 조정 루프 → `iac-basics`
 - 좀비 프로세스 → `linux-processes-signals`
 - 주식별자 → `sqld-entity-attribute-relationship`
@@ -5373,6 +5471,7 @@
 - 크립토 셰딩 → `event-sourcing`
 - 클라이언트 라우팅 → `rendering-csr-spa`
 - 클라이언트 측 디스커버리 → `service-discovery`
+- 클래스 필드 → `js-classes`
 - 클러스터 업그레이드 → `k8s-cluster-upgrade`
 - 클러스터드 인덱스 → `db-index`
 - 클로저 → `js-closures`
@@ -5426,6 +5525,8 @@
 - 프레임 예산 → `animation-performance`
 - 프로비저닝된 동시성 → `cold-starts`
 - 프로젝트 폴더 구조 → `k8s-project-structure`
+- 프로토타입 오염 → `js-prototype-chain`
+- 프로토타입 체인 → `js-prototype-chain`
 - 프로토타입 패턴 → `pattern-prototype`
 - 프록시 패턴 → `pattern-proxy`
 - 프론트 컨트롤러 → `mvc-pattern`
@@ -5456,6 +5557,7 @@
 - 해시 슬롯 → `redis-cluster`
 - 해시 조인 → `db-type-relational`
 - 해시 트리 → `merkle-tree`
+- 행 곱하기 → `sql-joins-in-practice`
 - 행 단위 보안 → `postgres-roles-security`
 - 험블 오브젝트 → `clean-architecture`
 - 헥사고날 아키텍처 → `hexagonal-architecture`
@@ -5551,6 +5653,7 @@
 - Bloom filter → `bloom-filter`
 - blue-green → `blue-green-deployment`
 - BM25 → `elasticsearch-inverted-index`
+- bound function → `js-call-apply-bind`
 - bridge-nf-call-iptables → `k8s-kube-proxy-modes`
 - BRIN → `db-index-design`
 - bufferbloat → `traffic-shaping-qos`
@@ -5565,6 +5668,7 @@
 - call by sharing → `js-primitive-vs-reference`
 - cannot lock ref → `git-repo-errors`
 - CAP 정리 → `db-consistency-cap`
+- CASE WHEN → `sql-case-when`
 - Cassandra → `db-type-wide-column`
 - cert-manager → `kubernetes-ingress`
 - certbot → `nginx-https-performance`
@@ -5764,7 +5868,9 @@
 - Foundation SDK → `grafana-dashboards`
 - front-proxy → `k8s-certificates-pki`
 - full jitter → `exponential-backoff-jitter`
+- FULL JOIN → `sql-joins-in-practice`
 - full_page_writes → `postgres-architecture`
+- Function.prototype.call → `js-call-apply-bind`
 - functional core → `js-pure-functions`
 - G-Counter → `crdt`
 - gang scheduling → `k8s-api-aggregation-schedulers`
@@ -5828,6 +5934,7 @@
 - histogram_quantile → `metrics-types`
 - History API → `rendering-csr-spa`
 - HNSW → `vector-db`
+- HomeObject → `js-classes`
 - Horizontal Pod Autoscaler → `k8s-hpa`
 - host-local → `k8s-cni-pod-network`
 - host.docker.internal → `docker-network-volume`
@@ -5877,6 +5984,7 @@
 - inhibit_rules → `alerting`
 - init 컨테이너 → `k8s-pod-multicontainer`
 - Init Duration → `cold-starts`
+- InitPlan → `sql-subqueries-exists-lateral`
 - INP → `core-web-vitals`
 - interactive rebase → `git-rebase`
 - Interpreter 패턴 → `pattern-interpreter`
@@ -5952,6 +6060,7 @@
 - Lease 객체 → `leader-election`
 - least request → `load-balancing-algorithms`
 - least_conn → `nginx-reverse-proxy`
+- LEFT JOIN LATERAL → `sql-subqueries-exists-lateral`
 - level-triggered → `k8s-controllers-reconcile`
 - library 차트 → `helm-dependencies-oci-gitops`
 - limit_req → `nginx-https-performance`
@@ -6035,6 +6144,7 @@
 - NetFlow → `network-flow-logs`
 - networkaddress.cache.ttl → `service-discovery`
 - NetworkPolicy → `k8s-network-policy`
+- new 바인딩 → `js-this-binding`
 - NewSQL → `db-type-newsql`
 - nftables 모드 → `k8s-kube-proxy-modes`
 - nginx -s reload → `blue-green-deployment`
@@ -6150,6 +6260,7 @@
 - Promise.any → `js-promise-combinators`
 - protobuf → `grpc`
 - Protocol Buffers → `grpc`
+- prototype pollution → `js-prototype-chain`
 - Proxy 패턴 → `pattern-proxy`
 - PROXY protocol → `proxy-reverse-proxy`
 - proxy_buffering → `streaming-ssr-suspense`
@@ -6216,6 +6327,7 @@
 - revalidateTag → `rendering-ssg-isr`
 - reviver → `json-crud-http`
 - RFC 1918 → `layer-ip-addressing`
+- Right Anti Join → `sql-joins-in-practice`
 - RocksDB → `db-type-embedded`
 - rolling checksum → `rsync-algorithm`
 - rolling deployment → `rolling-deployment`
@@ -6316,10 +6428,12 @@
 - storedVersions → `k8s-crd`
 - STP → `router-vs-switch`
 - Strategy 패턴 → `pattern-strategy`
+- strict mode → `js-strict-mode`
 - String.raw → `js-template-literals`
 - structuredClone → `pattern-prototype`
 - STUN → `nat-traversal`
 - subPath → `k8s-configmap`
+- SubPlan → `sql-subqueries-exists-lateral`
 - SUBSTR → `sqld-single-row-functions`
 - Sunset 헤더 → `api-versioning`
 - suppressHydrationWarning → `hydration`
@@ -6350,6 +6464,7 @@
 - tfvars → `terraform-modules-tfvars`
 - Thanos → `prometheus-basics`
 - thenable → `js-promises`
+- this 바인딩 → `js-this-binding`
 - thundering herd → `exponential-backoff-jitter`
 - TiDB → `db-type-newsql`
 - tied request → `tail-latency`
@@ -6407,7 +6522,9 @@
 - URLSearchParams → `html-form-http`
 - USE 방법 → `monitoring-basics`
 - use client → `react-server-components`
+- use strict → `js-strict-mode`
 - useDeferredValue → `react-rerender`
+- useDefineForClassFields → `js-classes`
 - useEffectEvent → `js-closures`
 - util.promisify → `js-callback-hell`
 - UUID v7 → `postgres-data-types`
@@ -6473,7 +6590,8 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
+- `k8s-pod-basics` ↔ `docker-container-basics` (31%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
+- `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (30%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 스칼라)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (29%: 연산자, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (29%: 붙이는, 행을, sqld, 시험, 포인트)
@@ -6492,6 +6610,7 @@
 - `sqld-set-operators` ↔ `sqld-rollup-cube-grouping-sets` (24%: 붙이는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-top-n-hierarchical-pivot` (24%: 행을, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-group-by-having` (24%: 행을, sqld, 시험, 포인트)
+- `sql-joins-in-practice` ↔ `sql-aggregation-pitfalls` (23%: 행이, 숫자로, left, 지운다, 행을, 리포트, 숫자가, 센다)
 - `csrf` ↔ `cookie-session-login` (23%: 붙는다는, 것의, 대가, 붙는, 정리, cookie, csrf)
 - `redis-cluster` ↔ `db-sharding` (21%: 키를, 데이터를, 나누는, 해시)
 - `sqld-correlated-subquery` ↔ `sqld-type-conversion` (21%: 예제, sqld, 시험, 포인트)
@@ -6504,20 +6623,47 @@
 - `sqld-null-functions` ↔ `sqld-group-by-having` (19%: 행을, sqld, 시험, 포인트, oracle)
 - `sqld-null-functions` ↔ `sqld-joins` (19%: 행을, sqld, 시험, 포인트, oracle)
 - `ci-cd-basics` ↔ `github-actions-docker-ecr` (19%: 커밋, 가는, 빌드하고, 배포가, ci, cd, 뼈대)
+- `animation-patterns` ↔ `loading-patterns` (19%: 누른, ux, frontend, accessibility, 알면, 부탁이)
 - `sql-aggregation-pitfalls` ↔ `sqld-group-by-having` (19%: 세는, 행이, 행을, group, 집계, by)
 - `count-min-sketch` ↔ `lossy-counting` (19%: lossy, 데이터로, 세는, data, structure, probabilistic)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `k8s-statefulset` ↔ `k8s-pv-pvc` (18%: pod마다, 디스크는, 사라진다, 노드가, statefulset은, 디스크, 디스크를)
-- `animation-patterns` ↔ `loading-patterns` (18%: 누른, ux, frontend, accessibility, 알면, 부탁이)
+- `n-plus-one-queries` ↔ `sql-query-tuning` (18%: 쿼리가, 쿼리를, 찾기, 쿼리)
 - `spring-animation` ↔ `animation-patterns` (18%: ux, frontend, animation, css, 애니메이션)
-- `sqld-set-operators` ↔ `sqld-data-modeling` (18%: sqld, 시험, 포인트)
-- `sqld-set-operators` ↔ `sqld-entity-attribute-relationship` (18%: sqld, 시험, 포인트)
-- `sqld-set-operators` ↔ `sqld-single-row-functions` (18%: sqld, 시험, 포인트)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `sql-case-when` ↔ `sql-subqueries-exists-lateral`
+- `sql-case-when` ↔ `sql-aggregation-pitfalls`
+- `sql-case-when` ↔ `sqld-top-n-hierarchical-pivot`
+- `sql-subqueries-exists-lateral` ↔ `sql-joins-in-practice`
+- `sql-subqueries-exists-lateral` ↔ `sql-filtering-operators`
+- `sql-subqueries-exists-lateral` ↔ `sql-query-rewrite`
+- `sql-subqueries-exists-lateral` ↔ `sqld-subquery-set-operators`
+- `sql-joins-in-practice` ↔ `sql-aggregation-pitfalls`
+- `js-strict-mode` ↔ `js-classes`
+- `js-strict-mode` ↔ `js-prototype-chain`
+- `js-strict-mode` ↔ `js-this-binding`
+- `js-strict-mode` ↔ `js-es-modules`
+- `js-strict-mode` ↔ `js-iife-module-pattern`
+- `js-strict-mode` ↔ `js-object-methods`
+- `js-strict-mode` ↔ `js-function-forms`
+- `js-strict-mode` ↔ `js-scope-lexical`
+- `js-classes` ↔ `js-prototype-chain`
+- `js-classes` ↔ `js-this-binding`
+- `js-classes` ↔ `js-function-forms`
+- `js-prototype-chain` ↔ `js-call-apply-bind`
+- `js-prototype-chain` ↔ `js-this-binding`
+- `js-prototype-chain` ↔ `js-spread-rest`
+- `js-prototype-chain` ↔ `js-truthy-falsy-typeof`
+- `js-prototype-chain` ↔ `pattern-prototype`
+- `js-prototype-chain` ↔ `json-crud-http`
+- `js-call-apply-bind` ↔ `js-this-binding`
+- `js-call-apply-bind` ↔ `js-currying-partial`
+- `js-call-apply-bind` ↔ `js-function-forms`
+- `js-this-binding` ↔ `js-function-forms`
 - `networking-essentials-map` ↔ `packet-encapsulation`
 - `nat-traversal` ↔ `router-vs-switch`
 - `nat-traversal` ↔ `iptables-nat`

@@ -1,0 +1,555 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-this-binding");
+
+장바구니 상태를 클래스 하나로 묶었다. 직접 부르면 잘 돈다. 그런데 같은 메서드를 변수에 담아 부르거나 `setTimeout`에 넘기면 터진다.
+
+```js
+class CartStore {
+  items = [];
+  add(item) {
+    this.items.push(item);
+    return this.items.length;
+  }
+}
+const store = new CartStore();
+console.log(store.add("book"));
+const add = store.add;
+try { add("pen"); } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+setTimeout(store.add, 0, "cup");
+```
+
+Node.js 22에서 돌린 출력이다.
+
+```text
+1
+TypeError: Cannot read properties of undefined (reading 'items')
+file:///…/a1.mjs:4
+    this.items.push(item);
+               ^
+
+TypeError: Cannot read properties of undefined (reading 'push')
+    at Timeout.add [as _onTimeout] (file:///…/a1.mjs:4:16)
+    at listOnTimeout (node:internal/timers:590:11)
+    at process.processTimers (node:internal/timers:523:7)
+```
+
+같은 함수인데 세 번 부른 결과가 세 가지다. 처음은 성공했고, 두 번째는 `this`가 `undefined`라서 `items`를 못 읽었고, 세 번째는 `this`가 무언가 있긴 한데 `items`가 없어서 `push`를 못 읽었다. 에러 메시지의 괄호 안 이름(`items`와 `push`)이 다르다는 걸 놓치면 같은 버그로 보인다.
+
+이 글은 `this`가 언제 정해지는지, 그 규칙 네 개와 우선순위, 그리고 규칙이 깨지는 흔한 자리들을 따라간다. 출력은 Node.js 22와 크로미움(React 19.3)에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: `this`를 직접 정해 주는 방법은 [call, apply, bind](/posts/js-call-apply-bind)에, 화살표 함수가 `this`를 갖지 않는 이야기는 [함수 선언문, 표현식, 화살표 함수](/posts/js-function-forms)에, 메서드가 실제로 어디에 사는지는 [프로토타입 체인](/posts/js-prototype-chain)에 있다.
+
+## this는 함수가 아니라 호출에 붙는다
+
+`store.add`라고 쓰면 함수 객체 하나가 나온다. 이 함수는 `store`에 속해 있지 않다. 클래스 메서드는 `CartStore.prototype`에 있고, `store`는 그 함수를 빌려 쓸 뿐이다. 함수 객체 안에는 "내 주인은 `store`"라는 정보가 어디에도 없다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="함수 하나를 여러 자리에서 가리킬 수 있다. this는 함수에 저장되지 않는다"
+  nodes={[
+    { id: "fn", label: "function add", sub: "this 정보 없음", x: 200, y: 200, w: 160 },
+    { id: "proto", label: "프로토타입", sub: "CartStore.prototype", x: 200, y: 50, w: 180 },
+    { id: "store", label: "store", sub: "items: [...]", x: 70, y: 125, w: 110 },
+    { id: "var", label: "const add", x: 330, y: 125, w: 110 },
+  ]}
+  edges={[
+    { from: "proto", to: "fn", label: "add" },
+    { from: "store", to: "proto", label: "[[Prototype]]", dashed: true },
+    { from: "var", to: "fn" },
+  ]}
+/>
+
+그러면 `this`는 언제 정해질까. 함수를 부르는 순간이다. 명세로 보면 `store.add("book")`이라는 식을 평가할 때 엔진은 먼저 `store.add` 부분을 Reference Record로 만든다. 이 기록에는 "어느 객체(base)의 어떤 이름"이 함께 들어 있다. 호출할 때 엔진은 그 base를 꺼내 `this` 값으로 넘긴다. 함수 쪽에서는 `OrdinaryCallBindThis`라는 단계가 받은 값을 함수 실행 컨텍스트의 `this`에 묶는다.
+
+아래는 호출식 하나를 조각으로 나눈 것이다. 조각을 누르면 그 부분이 `this`에 어떤 영향을 주는지 볼 수 있다.
+
+<UrlAnatomy
+  caption='store.add("book") 한 줄이 this를 정하는 과정'
+  separator=""
+  joiner=""
+  params={[
+    { key: "base", display: "store", title: "base 값", description: "점 앞에 있는 객체다. 엔진은 이 값을 기억해 두었다가 호출할 때 this로 넘긴다.", required: true },
+    { key: "dot", display: ".add", title: "속성 이름", description: "store에서 add를 찾는다. store 자신에게 없으니 프로토타입에서 찾는다. 찾은 함수에는 store에 대한 정보가 없다." },
+    { key: "call", display: "(\"book\")", title: "호출", description: "괄호가 붙는 순간 Reference Record의 base가 this가 된다. 괄호가 없으면 함수 객체만 꺼내고 base는 버려진다.", required: true },
+  ]}
+/>
+
+`const add = store.add`가 문제인 이유가 여기서 나온다. 대입은 Reference Record에서 값(함수)만 꺼내 변수에 넣는다. base였던 `store`는 버려진다. 나중에 `add("pen")`을 부르면 점 앞이 없으니 넘길 base도 없다.
+
+## 네 가지 규칙
+
+`this`를 정하는 규칙은 호출 모양에 따라 네 개다. 위에서부터 차례로 본다.
+
+### 점 앞의 객체를 쓴다
+
+`obj.method()`처럼 점(또는 대괄호)으로 꺼내 바로 부르면 점 앞의 객체가 `this`다. 흔히 암시적 바인딩이라고 부른다. 함수가 어느 객체에서 왔는지는 상관없다. 다른 객체에 같은 함수를 붙이면 `this`도 바뀐다.
+
+```js
+const user = {
+  name: "kim",
+  hello() { return this?.name; },
+};
+console.log("1", user.hello());
+console.log("2", (user.hello)());
+console.log("3", (0, user.hello)());
+const { hello } = user;
+console.log("4", hello());
+const other = { name: "lee", hello: user.hello };
+console.log("5", other.hello());
+console.log("7", (user.hello = user.hello)());
+```
+
+```text
+1 kim
+2 kim
+3 undefined
+4 undefined
+5 lee
+7 undefined
+```
+
+2번은 괄호로 감쌌는데도 `kim`이다. 괄호는 Reference Record를 그대로 통과시키기 때문이다. 3번의 쉼표 연산자와 7번의 대입은 값을 꺼내는 연산이라 base가 사라진다. 번들러가 만든 코드에서 `(0, _module.fn)()` 같은 줄을 본 적이 있다면, 바로 이 성질로 `this`를 일부러 떼어 내는 것이다. 4번의 구조 분해도 대입과 같다.
+
+### new로 부르면 새 객체가 this다
+
+`new F()`는 새 객체를 만들고, 그 객체의 `[[Prototype]]`을 `F.prototype`으로 이은 뒤, 그 객체를 `this`로 `F`를 부른다.
+
+```js
+function Point(x) {
+  this.x = x;
+}
+const p = new Point(1);
+console.log("new:", p.x);
+
+function Weird() {
+  this.a = 1;
+  return { b: 2 };
+}
+function Prim() {
+  this.a = 1;
+  return 42;
+}
+console.log("returns object:", new Weird());
+console.log("returns primitive:", new Prim());
+```
+
+```text
+new: 1
+returns object: { b: 2 }
+returns primitive: Prim { a: 1 }
+```
+
+생성자가 객체를 `return`하면 `this`로 만든 객체는 버려지고 그 객체가 결과가 된다. 원시값을 `return`하면 무시된다. `Weird`처럼 쓰는 코드는 드물지만, 싱글턴이나 캐시를 돌려주는 생성자에서 가끔 보인다.
+
+### call, apply, bind로 직접 정한다
+
+함수 쪽 메서드로 `this`를 직접 넘기는 방법이다. 명시적 바인딩이라고 한다. 사용법과 함정은 [call, apply, bind](/posts/js-call-apply-bind)에서 따로 다룬다. 여기서는 우선순위만 본다.
+
+### 아무것도 없으면 기본값
+
+점도, `new`도, `call`도 없는 그냥 호출(`fn()`)이다. 이때 `this`는 모드에 따라 갈린다.
+
+```js
+// 느슨한 모드 (CommonJS 기본)
+function sloppy() { return this === globalThis; }
+function strict() { "use strict"; return this; }
+console.log("sloppy plain call:", sloppy());
+console.log("strict plain call:", strict());
+function boxed() { return typeof this; }
+function raw() { "use strict"; return typeof this; }
+console.log("sloppy call(5):", boxed.call(5));
+console.log("strict call(5):", raw.call(5));
+console.log("sloppy call(null) is global:", sloppy.call(null));
+```
+
+```text
+sloppy plain call: true
+strict plain call: undefined
+sloppy call(5): object
+strict call(5): number
+sloppy call(null) is global: true
+```
+
+느슨한 모드에서는 `this`가 `undefined`나 `null`이면 전역 객체(`globalThis`)로 바꾸고, 원시값이면 래퍼 객체로 감싼다. 엄격 모드는 받은 값을 그대로 쓴다. 클래스 본문과 ES 모듈은 자동으로 엄격 모드라서, 처음 예제의 `add("pen")`은 `undefined`를 받았다. 같은 코드가 느슨한 모드였다면 `this`가 전역 객체가 되어 에러 없이 `globalThis.items`를 찾았을 것이다. 조용히 틀리는 쪽이 더 무섭다. 모드 차이는 [strict 모드](/posts/js-strict-mode)에 더 있다.
+
+아래 그림은 호출식을 보고 규칙을 고르는 순서다. 위에서부터 검사하고 처음 맞는 규칙에서 멈춘다.
+
+<AlgoTrace
+  caption="호출식을 보고 this를 정하는 순서"
+  memoryLabel="this 후보"
+  cells={["new?", "bound?", "call/apply?", "obj.fn()?", "기본값"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "new F()인가. 그렇다면 새로 만든 객체가 this다. 다른 규칙은 보지 않는다." },
+    { pointer: 1, memory: [], caption: "bind로 만든 함수인가. 그렇다면 묶어 둔 값이 this다. call로 다른 값을 줘도 바뀌지 않는다." },
+    { pointer: 2, memory: [], caption: "fn.call(x)나 fn.apply(x)인가. 그렇다면 x가 this다." },
+    { pointer: 3, memory: ["obj"], caption: "점 앞에 객체가 있는 호출인가. 그 객체가 this다." },
+    { pointer: 4, found: [4], memory: ["undefined"], caption: "아무것도 아니면 엄격 모드는 undefined, 느슨한 모드는 globalThis다." },
+  ]}
+/>
+
+## 규칙끼리 부딪히면
+
+한 호출에 규칙이 둘 이상 걸리는 경우가 있다. `bind`로 묶은 함수를 객체 메서드로 붙이거나, `bind`한 생성자를 `new`로 부르는 경우다.
+
+```js
+const target = { tag: "bound" };
+function who() { return this?.tag ?? "none"; }
+const bound = who.bind(target);
+const obj = { tag: "obj", who: bound };
+console.log("bind > implicit:", obj.who());
+console.log("bind > call:", bound.call({ tag: "call" }));
+function Box(v) { this.v = v; this.tag = this.tag ?? "fresh"; }
+const BoundBox = Box.bind({ tag: "ignored" });
+const b = new BoundBox(7);
+console.log("new > bind:", b.v, b.tag, b instanceof Box);
+```
+
+```text
+bind > implicit: bound
+bind > call: bound
+new > bind: 7 fresh true
+```
+
+`bind`는 점 앞의 객체도, `call`이 넘긴 값도 이긴다. 그런데 `new`는 `bind`를 이긴다. `bind`로 묶은 `{ tag: "ignored" }`는 무시되고 새 객체가 만들어졌다. 순서를 정리하면 `new` > `bind` > `call`/`apply` > 점 앞의 객체 > 기본값이다. 화살표 함수는 이 표에 아예 없다. 자기 `this`가 없어서 어떤 규칙으로 불러도 정의할 때 바깥의 `this`를 쓴다.
+
+## 점이 사라지는 자리들
+
+규칙만 보면 단순한데 실제 버그는 점이 눈에 안 띄게 사라질 때 난다. 함수를 값으로 넘기는 모든 곳이 그렇다. 넘겨받은 쪽이 어떻게 부르느냐가 `this`를 정한다.
+
+<SequenceDiagram
+  caption="setTimeout(store.add)에서 this가 바뀌는 과정"
+  actors={[
+    { id: "app", label: "내 코드" },
+    { id: "timer", label: "타이머" },
+    { id: "fn", label: "add 함수" },
+  ]}
+  steps={[
+    { from: "app", to: "app", label: "store.add 평가", title: "함수만 꺼낸다", detail: "괄호가 없으니 호출이 아니다. 함수 객체가 나오고 store는 버려진다." },
+    { from: "app", to: "timer", label: "setTimeout(fn)", title: "함수를 넘긴다", detail: "타이머가 받은 건 함수 하나다. 원래 어느 객체에서 꺼냈는지 모른다." },
+    { from: "timer", to: "fn", label: "Timeout._onTimeout()", title: "타이머가 자기 방식으로 부른다", detail: "Node.js는 함수를 Timeout 객체의 _onTimeout 속성으로 붙여 부른다. 그래서 this가 Timeout이다.", payload: "at Timeout.add [as _onTimeout]" },
+    { from: "fn", to: "fn", label: "this.items", title: "Timeout에는 items가 없다", detail: "this.items가 undefined이고, 그 위에서 push를 찾다가 TypeError가 난다.", payload: "Cannot read properties of undefined (reading 'push')" },
+  ]}
+/>
+
+처음 예제의 스택 트레이스 한 줄 `at Timeout.add [as _onTimeout]`이 이 그림의 세 번째 단계다. V8은 함수 이름(`add`)과 실제로 불린 속성 이름(`_onTimeout`)이 다르면 `[as …]`를 붙이고, 앞에 그때의 `this` 타입(`Timeout`)을 쓴다. 이 한 줄로 "누가 어떤 객체에 붙여서 불렀는지"가 보인다. 브라우저의 `setTimeout`은 HTML 명세대로 콜백의 `this`에 `window`를 넣는다. 크로미움에서 확인해 보니 함수 안에 `"use strict"`를 써도 `window`였다. Node.js는 `Timeout`, 브라우저는 `window`다. 환경마다 다르니 타이머가 주는 `this`에 기대지 않는다.
+
+`this`가 `undefined`가 아니라 엉뚱한 객체가 되는 경우도 있다. 라우트 표에 컨트롤러 메서드를 넣은 코드다.
+
+```js
+class UserController {
+  constructor(repo) { this.repo = repo; }
+  show(req) { return this.repo.find(req.id); }
+}
+const ctrl = new UserController({ find: (id) => ({ id }) });
+const routes = { "/users/1": ctrl.show };
+try { routes["/users/1"]({ id: 1 }); } catch (e) { console.log(e.message); }
+```
+
+```text
+Cannot read properties of undefined (reading 'find')
+```
+
+`routes["/users/1"](...)`도 점 앞에 객체가 있는 호출이다. 그래서 `this`는 `ctrl`이 아니라 `routes`가 됐다. `routes.repo`가 없으니 `find`를 못 읽는다. 배열도 마찬가지다. `[fn][0]()`처럼 부르면 `this`는 그 배열이다.
+
+```js
+const arr = [function () { return this === arr; }];
+console.log("arr[0]() this is arr:", arr[0]());
+```
+
+```text
+arr[0]() this is arr: true
+```
+
+## 받는 쪽이 this를 정해 주는 API
+
+어떤 API는 콜백을 부를 때 `this`를 정해서 넘긴다. 문서에 적혀 있으니 외울 필요는 없지만, 있다는 걸 알면 놀라지 않는다.
+
+```js
+import { EventEmitter } from "node:events";
+const em = new EventEmitter();
+em.on("ping", function () { console.log("emitter listener this === em:", this === em); });
+em.emit("ping");
+```
+
+```text
+emitter listener this === em: true
+```
+
+브라우저의 `addEventListener`도 일반 함수 리스너에 `this`로 `event.currentTarget`(리스너를 단 요소)을 넘긴다. 크로미움에서 돌린 결과다.
+
+```js
+const btn = document.createElement("button");
+document.body.append(btn);
+btn.addEventListener("click", function () { console.log("listener this === btn:", this === btn); });
+btn.addEventListener("click", () => { console.log("arrow listener this === window:", this === window); });
+btn.click();
+```
+
+```text
+listener this === btn: true
+arrow listener this === window: true
+```
+
+화살표 리스너는 받은 `this`를 무시하고 바깥(여기서는 클래식 스크립트 최상위, 즉 `window`)을 쓴다. 이벤트 위임에서 `this`로 요소를 가리키던 오래된 코드를 화살표 함수로 바꾸면 이렇게 깨진다. 요소가 필요하면 `this` 대신 `event.currentTarget`을 쓰는 편이 모양과 상관없이 안전하다.
+
+배열 메서드 `forEach`, `map`, `filter` 같은 것은 두 번째 인자로 `thisArg`를 받는다.
+
+```js
+const report = {
+  title: "주간",
+  rows: [1, 2],
+  print() {
+    this.rows.forEach(function (r) {
+      console.log("inner function:", this?.title, r);
+    });
+    this.rows.forEach((r) => {
+      console.log("inner arrow:", this.title, r);
+    });
+    this.rows.forEach(function (r) {
+      console.log("thisArg:", this.title, r);
+    }, this);
+  },
+};
+report.print();
+```
+
+```text
+inner function: undefined 1
+inner function: undefined 2
+inner arrow: 주간 1
+inner arrow: 주간 2
+thisArg: 주간 1
+thisArg: 주간 2
+```
+
+메서드 안의 중첩 `function`은 바깥 메서드의 `this`를 물려받지 않는다. 자기도 함수라서 자기 호출 방식(`forEach`가 그냥 부름)으로 `this`가 다시 정해진다. 예전에는 `const self = this`로 붙잡아 두었고, 지금은 화살표 함수가 그 자리를 대신한다.
+
+<AlgoTrace
+  caption="report.print() 안에서 this가 몇 번 정해지나"
+  memoryLabel="정해진 this"
+  cells={["report.print()", "function (r)", "(r) => …", "function, this"]}
+  steps={[
+    { pointer: 0, memory: ["print: report"], caption: "점 앞이 report라서 print의 this는 report다." },
+    { pointer: 1, memory: ["print: report", "inner: undefined"], caption: "중첩 function은 forEach가 그냥 부른다. 자기 this가 새로 정해지고 undefined다." },
+    { pointer: 2, memory: ["print: report", "arrow → print"], caption: "화살표 함수는 this를 정하지 않는다. 감싼 print의 this를 그대로 본다." },
+    { pointer: 3, found: [3], memory: ["print: report", "inner: report"], caption: "forEach의 두 번째 인자로 this를 넘기면 forEach가 그 값으로 부른다." },
+  ]}
+/>
+
+## 파일 맨 위의 this
+
+함수 밖, 파일 최상위의 `this`는 파일이 어떤 형식으로 로드됐는지에 따라 다르다.
+
+```js
+// a3.mjs (ES 모듈)
+console.log("top-level this:", this);
+```
+
+```text
+top-level this: undefined
+```
+
+```js
+// a2.cjs (CommonJS)
+console.log("CJS top-level this === module.exports:", this === module.exports);
+```
+
+```text
+CJS top-level this === module.exports: true
+```
+
+브라우저의 클래식 `<script>`에서는 `window`다. 그래서 `this.foo = 1`로 전역을 만들던 옛 코드는 `type="module"`로 옮기는 순간 `undefined`에 속성을 쓰다가 `TypeError`가 난다. 전역 객체가 필요하면 환경과 상관없이 `globalThis`를 쓴다(ES2020부터).
+
+## React 클래스 컴포넌트에서 사라지던 this
+
+함수 컴포넌트가 나오기 전 React 코드에서 가장 흔한 질문이 이것이었다. 크로미움에서 React 19.3으로 돌렸다.
+
+```js
+class Counter extends React.Component {
+  state = { n: 0 };
+  handleClick() {
+    this.setState({ n: this.state.n + 1 });
+  }
+  handleArrow = () => {
+    this.setState({ n: this.state.n + 1 });
+  };
+  render() {
+    return h("div", null,
+      h("button", { id: "a", onClick: this.handleClick }, "unbound"),
+      h("button", { id: "b", onClick: this.handleArrow }, "arrow field"),
+      h("span", { id: "n" }, String(this.state.n)));
+  }
+}
+// 버튼 a를 누르고, 이어서 버튼 b를 누른다
+```
+
+```text
+window error: Uncaught TypeError: Cannot read properties of undefined (reading 'setState')
+n = 1
+```
+
+`onClick={this.handleClick}`은 함수만 넘긴다. React DOM 19.3 소스를 보면 핸들러를 `listener(event)`처럼 그냥 부른다. 클래스 본문은 엄격 모드라 `this`는 `undefined`다. 해결책은 세 가지였다. 생성자에서 `this.handleClick = this.handleClick.bind(this)`로 묶거나, 클래스 필드에 화살표 함수를 두거나(`handleArrow`), JSX에서 `onClick={() => this.handleClick()}`으로 감싼다. 클래스 필드 방식은 인스턴스마다 함수가 하나씩 생기고, 마지막 방식은 렌더링마다 새 함수가 생겨 `memo`된 자식이 매번 다시 그려질 수 있다. 이 비용은 [React 리렌더링](/posts/react-rerender) 글에서 다룬다.
+
+함수 컴포넌트는 `this`를 쓰지 않는다. 상태는 클로저에 있고([클로저](/posts/js-closures)), 핸들러는 그 렌더링의 변수를 직접 본다. 함수 컴포넌트로 넘어오면서 이 질문이 거의 사라진 것도 이 때문이다. 다만 지금도 에러 경계는 클래스로만 만들 수 있고, 외부 SDK 객체(지도, 플레이어, 웹소켓 클라이언트)의 메서드를 `useEffect`에서 콜백으로 넘기는 순간 같은 문제가 다시 생긴다. `map.on("click", sdk.handle)`보다 `map.on("click", (e) => sdk.handle(e))`가 안전하다.
+
+## 에러 메시지에서 호출 자리까지
+
+`this` 버그는 대부분 `TypeError: Cannot read properties of undefined (reading 'X')`로 나타난다. 이 메시지만으로는 `this`가 문제인지 다른 변수가 문제인지 모른다. 순서대로 좁힌다.
+
+먼저 캐럿(`^`)이 가리키는 식을 본다. `this.items.push`에서 `items`를 못 읽었다면 `this`가 `undefined`다. `push`를 못 읽었다면 `this`는 있는데 다른 객체다. 다음으로 스택 트레이스의 맨 위 줄에서 `[as …]`나 `Timeout.`, `EventEmitter.` 같은 접두어를 찾는다. 함수가 원래 이름이 아닌 속성으로 불렸다는 표시다. 마지막으로 그 함수를 넘긴 곳을 찾는다. `.add`나 `.handle` 뒤에 괄호가 없는 자리, 즉 메서드를 값으로 넘긴 곳이 범인이다.
+
+<NetworkTopology
+  caption="메서드가 넘어가는 길과 this가 바뀌는 지점"
+  width={420}
+  height={230}
+  nodes={[
+    { id: "store", label: "store", sub: "items", x: 60, y: 60, icon: "db" },
+    { id: "code", label: "내 코드", sub: "store.add", x: 200, y: 60, icon: "client" },
+    { id: "timer", label: "Timeout", sub: "_onTimeout", x: 340, y: 60, icon: "server" },
+    { id: "wrap", label: "화살표 래퍼", sub: "() => store.add()", x: 200, y: 180, icon: "lock", w: 150 },
+  ]}
+  links={[
+    { from: "store", to: "code" },
+    { from: "code", to: "timer" },
+    { from: "code", to: "wrap", dashed: true },
+    { from: "wrap", to: "timer", dashed: true },
+  ]}
+  steps={[
+    { path: ["store", "code"], packet: "add", title: "함수를 꺼낸다", detail: "store.add에서 함수만 꺼냈다. 이 순간 store와의 연결은 끊긴다." },
+    { path: ["code", "timer"], packet: "fn", blocked: true, title: "Timeout이 this가 된다", detail: "타이머가 자기 속성으로 붙여 부른다. Timeout에는 items가 없어 멈춘다.", payload: "TypeError: … (reading 'push')" },
+    { path: ["code", "wrap", "timer"], packet: "wrap", highlight: ["store"], title: "래퍼로 감싸 넘긴다", detail: "타이머가 래퍼를 부르면, 래퍼 안에서 store.add()를 점과 함께 부른다. this는 다시 store다.", payload: "setTimeout(() => store.add(\"cup\"), 0)" },
+  ]}
+/>
+
+고칠 때는 받는 쪽을 바꾸지 말고 넘기는 쪽에서 `() => store.add(x)`나 `store.add.bind(store)`로 넘긴다. 같은 메서드를 여러 곳에 넘긴다면 클래스 필드 화살표 함수나 생성자에서의 `bind`로 한 번에 해결한다. 타입스크립트를 쓴다면 메서드 첫 매개변수에 `this: CartStore`를 선언해 두면 떼어 낸 호출을 컴파일 단계에서 잡을 수 있다. typescript-eslint에도 `unbound-method` 규칙이 있다.
+
+## 연습: 메서드를 한꺼번에 묶기
+
+클래스 인스턴스를 받아서, 프로토타입 체인에 있는 메서드를 모두 인스턴스에 묶어 주는 `autoBind`를 만들어 본다. React 클래스 컴포넌트 시절에 많이 쓰던 도우미다. 조건은 이렇다.
+
+- `constructor`는 건너뛴다.
+- `Object.prototype`의 메서드(`toString` 등)는 묶지 않는다.
+- 하위 클래스가 덮어쓴 메서드는 하위 클래스 것이 이긴다.
+- getter는 함수로 바꾸지 않고 그대로 둔다.
+- 인스턴스 자신을 돌려준다.
+
+<CodePlayground
+  caption="autoBind: 프로토타입의 메서드를 인스턴스에 묶기"
+  functionName="run"
+  initialCode={`function autoBind(instance) {
+  // 프로토타입을 한 단계씩 올라가며 메서드를 찾는다.
+  // Object.getPrototypeOf, Object.getOwnPropertyNames,
+  // Object.getOwnPropertyDescriptor를 써 보자.
+  return instance;
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(scenario) {
+  class Base {
+    name = "base";
+    hi() { return "hi " + this.name; }
+    who() { return "base"; }
+  }
+  class Child extends Base {
+    name = "child";
+    count = 0;
+    inc() { this.count += 1; return this.count; }
+    who() { return "child"; }
+    get total() { return this.count * 10; }
+  }
+  const c = autoBind(new Child());
+  if (scenario === "detached") { const { inc } = c; inc(); return inc(); }
+  if (scenario === "inherited") { const f = c.hi; return f(); }
+  if (scenario === "override") { const f = c.who; return f(); }
+  if (scenario === "skip") return [Object.hasOwn(c, "constructor"), Object.hasOwn(c, "toString")];
+  if (scenario === "getter") { c.count = 3; return [Object.hasOwn(c, "total"), c.total]; }
+  if (scenario === "same") return autoBind(c) === c;
+}`}
+  solution={`function autoBind(instance) {
+  let proto = Object.getPrototypeOf(instance);
+  while (proto && proto !== Object.prototype) {
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      if (key === "constructor" || Object.hasOwn(instance, key)) continue;
+      const desc = Object.getOwnPropertyDescriptor(proto, key);
+      if (typeof desc.value === "function") {
+        instance[key] = desc.value.bind(instance);
+      }
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+  return instance;
+}
+
+// 아래는 테스트용 코드다. 고치지 않아도 된다.
+function run(scenario) {
+  class Base {
+    name = "base";
+    hi() { return "hi " + this.name; }
+    who() { return "base"; }
+  }
+  class Child extends Base {
+    name = "child";
+    count = 0;
+    inc() { this.count += 1; return this.count; }
+    who() { return "child"; }
+    get total() { return this.count * 10; }
+  }
+  const c = autoBind(new Child());
+  if (scenario === "detached") { const { inc } = c; inc(); return inc(); }
+  if (scenario === "inherited") { const f = c.hi; return f(); }
+  if (scenario === "override") { const f = c.who; return f(); }
+  if (scenario === "skip") return [Object.hasOwn(c, "constructor"), Object.hasOwn(c, "toString")];
+  if (scenario === "getter") { c.count = 3; return [Object.hasOwn(c, "total"), c.total]; }
+  if (scenario === "same") return autoBind(c) === c;
+}`}
+  tests={[
+    { args: ["detached"], expected: 2, label: "떼어 낸 inc를 두 번 부른다" },
+    { args: ["inherited"], expected: "hi child", label: "부모 클래스의 메서드도 묶인다" },
+    { args: ["override"], expected: "child", label: "덮어쓴 메서드는 하위 클래스 것" },
+    { args: ["skip"], expected: [false, false], label: "constructor와 toString은 건너뛴다" },
+    { args: ["getter"], expected: [false, 30], label: "getter는 그대로 계산된다" },
+    { args: ["same"], expected: true, label: "인스턴스 자신을 돌려준다" },
+  ]}
+/>
+
+`Object.hasOwn(instance, key)`로 이미 묶은 이름을 건너뛰는 한 줄이 덮어쓰기 규칙을 해결한다. 아래 클래스부터 올라가니 하위 클래스의 `who`가 먼저 묶이고, 부모의 `who`는 건너뛴다. 값을 `desc.value` 대신 `proto[key]`로 읽으면 getter가 프로토타입을 `this`로 삼아 한 번 실행된다. 여기서는 `NaN`이 나와 함수가 아니니 건너뛰지만, 부작용이 있는 getter라면 엉뚱한 때에 돈다.
+
+## 호출 자리를 먼저 본다
+
+처음 장바구니는 함수가 고장 난 게 아니었다. `this`는 함수를 정의한 곳이 아니라 부른 곳에서 정해지는데, 우리는 정의만 보고 있었다. `this`가 이상하면 함수 본문 대신 그 함수를 부른 줄을 찾는다. 점 앞에 무엇이 있는지, `new`인지, `bind`된 함수인지, 아무것도 없는지. 이 네 가지 중 하나가 답이다.
+
+## 면접에서 나올 만한 질문
+
+### 자바스크립트의 this는 언제 정해지나요?
+
+함수를 부르는 순간 호출 방식으로 정해진다. 정의한 위치와는 상관없다. 같은 함수도 `obj.fn()`으로 부르면 `obj`, 그냥 `fn()`으로 부르면 엄격 모드에서 `undefined`가 된다. 예외는 화살표 함수로, 자기 `this`가 없어서 정의한 자리 바깥의 `this`를 쓴다.
+
+### this 바인딩 규칙과 우선순위를 설명해 주세요.
+
+`new` 바인딩, `bind`로 만든 함수, `call`/`apply`의 명시적 바인딩, 점 앞의 객체를 쓰는 암시적 바인딩, 그리고 기본 바인딩 순이다. `bind`된 함수는 `call`이나 메서드 호출로도 `this`가 바뀌지 않지만, `new`로 부르면 묶어 둔 값이 무시되고 새 객체가 `this`가 된다. 기본 바인딩은 엄격 모드에서 `undefined`, 느슨한 모드에서 `globalThis`다.
+
+### const fn = obj.method; fn()이 왜 this를 잃나요?
+
+`obj.method`는 평가될 때 base가 `obj`인 Reference Record를 만들고, 호출하면 그 base가 `this`로 넘어간다. 대입은 그 기록에서 함수 값만 꺼내 변수에 넣어서 base가 버려진다. 그래서 `fn()`은 점 앞이 없는 기본 바인딩이 된다. 구조 분해, 콜백 인자, 쉼표 연산자 `(0, obj.method)()`도 같은 이유로 `this`를 잃는다.
+
+### 메서드 안의 중첩 함수에서 this가 바뀌는 이유는요?
+
+중첩 `function`도 독립된 함수라서 자기 호출 방식으로 `this`가 다시 정해진다. `forEach` 같은 API가 그냥 부르면 기본 바인딩이 되어 엄격 모드에서 `undefined`다. 화살표 함수로 바꾸면 자기 `this`가 없어 바깥 메서드의 `this`를 쓰고, `forEach`의 두 번째 인자 `thisArg`로 넘기는 방법도 있다.
+
+### addEventListener 리스너에서 this는 무엇인가요?
+
+일반 함수 리스너라면 `event.currentTarget`, 즉 리스너를 등록한 요소다. 화살표 함수 리스너는 이 값을 무시하고 바깥 `this`를 쓴다. 그래서 리스너를 화살표 함수로 바꿀 때는 `this` 대신 `event.currentTarget`을 써야 한다.
+
+### React 클래스 컴포넌트에서 onClick={this.handleClick}이 왜 에러가 났나요?
+
+JSX에 함수 값만 넘기고, React DOM이 나중에 `listener(event)`처럼 점 없이 부르기 때문이다. 클래스 본문은 엄격 모드라 `this`가 `undefined`가 되고 `this.setState`에서 터진다. 생성자에서 `bind`하거나, 클래스 필드 화살표 함수로 만들거나, JSX에서 화살표로 감싸서 고쳤다. 함수 컴포넌트는 `this` 대신 클로저로 상태를 보기 때문에 이 문제가 없다.
+
+### 화살표 함수 클래스 필드로 메서드를 만들면 단점은 없나요?
+
+메서드가 프로토타입에 하나만 있지 않고 인스턴스마다 새 함수로 생긴다. 인스턴스가 많으면 메모리가 늘고, 프로토타입에 없으니 하위 클래스에서 `super.handle()`로 부를 수 없으며 테스트에서 프로토타입을 감시(spy)하기도 어렵다. 콜백으로 넘길 메서드에만 쓰고 나머지는 일반 메서드로 둔다.
+
+### this 관련 TypeError가 났을 때 어떻게 추적하나요?
+
+먼저 메시지의 괄호 속 속성 이름으로 `this`가 `undefined`인지 다른 객체인지 구분한다. 스택 트레이스 맨 위에서 `[as _onTimeout]` 같은 표시를 찾으면 누가 어떤 이름으로 불렀는지 보인다. 그다음 그 메서드를 괄호 없이 넘긴 곳을 찾아 화살표 함수나 `bind`로 감싼다. 타입스크립트의 `this` 매개변수 선언과 `unbound-method` 린트 규칙으로 재발을 막는다.

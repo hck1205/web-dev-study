@@ -2,6 +2,129 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sql-case-when": {
+    "links": [
+      "sql-logical-order",
+      "sql-aggregation-pitfalls",
+      "sqld-null-functions",
+      "sqld-top-n-hierarchical-pivot",
+      "sql-joins-in-practice",
+      "sql-subqueries-exists-lateral"
+    ],
+    "mentions": [
+      "sqld-group-by-having",
+      "sql-filtering-operators",
+      "db-replication-sharding"
+    ]
+  },
+  "sql-subqueries-exists-lateral": {
+    "links": [
+      "sqld-subquery-set-operators",
+      "sqld-correlated-subquery",
+      "sql-filtering-operators",
+      "sql-joins-in-practice",
+      "sql-logical-order",
+      "sql-query-rewrite",
+      "postgres-reporting-sql",
+      "sql-case-when"
+    ],
+    "mentions": [
+      "sql-select-where-null",
+      "db-type-relational"
+    ]
+  },
+  "sql-joins-in-practice": {
+    "links": [
+      "sqld-joins",
+      "sql-logical-order",
+      "sql-filtering-operators",
+      "sql-aggregation-pitfalls",
+      "sql-subqueries-exists-lateral"
+    ],
+    "mentions": [
+      "sql-query-tuning"
+    ]
+  },
+  "js-strict-mode": {
+    "links": [
+      "js-scope-lexical",
+      "js-iife-module-pattern",
+      "js-object-methods",
+      "js-this-binding",
+      "js-function-forms",
+      "js-prototype-chain"
+    ],
+    "mentions": [
+      "js-classes",
+      "js-es-modules",
+      "js-destructuring",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "js-classes": {
+    "links": [
+      "js-prototype-chain",
+      "js-this-binding",
+      "design-patterns-overview",
+      "js-hoisting-tdz",
+      "js-function-forms"
+    ],
+    "mentions": [
+      "pattern-factory-method",
+      "js-strict-mode"
+    ]
+  },
+  "js-prototype-chain": {
+    "links": [
+      "js-this-binding",
+      "js-classes",
+      "pattern-prototype",
+      "js-strict-mode",
+      "js-call-apply-bind",
+      "json-crud-http",
+      "js-truthy-falsy-typeof",
+      "js-spread-rest"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "js-es-modules",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "js-call-apply-bind": {
+    "links": [
+      "js-this-binding",
+      "js-prototype-chain",
+      "js-currying-partial",
+      "js-memory-leak",
+      "react-rerender",
+      "js-memoization"
+    ],
+    "mentions": [
+      "js-classes",
+      "js-function-forms",
+      "js-strict-mode",
+      "js-spread-rest",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "js-this-binding": {
+    "links": [
+      "js-call-apply-bind",
+      "js-function-forms",
+      "js-prototype-chain",
+      "js-strict-mode",
+      "react-rerender",
+      "js-closures"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-classes",
+      "js-es-modules",
+      "js-destructuring",
+      "js-primitive-vs-reference"
+    ]
+  },
   "networking-essentials-map": {
     "links": [
       "what-happens-google-com",
@@ -195,6 +318,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rendering-strategies",
       "http-versions",
+      "js-strict-mode",
       "js-destructuring",
       "cors"
     ]
@@ -265,6 +389,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-strict-mode",
       "js-es-modules",
       "http-methods"
     ]
@@ -273,6 +398,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-first-class-callbacks",
       "js-closures",
+      "js-call-apply-bind",
       "react-rerender"
     ],
     "mentions": [
@@ -291,6 +417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "js-strict-mode",
       "rendering-strategies",
       "js-function-forms"
     ]
@@ -327,7 +454,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-primitive-vs-reference",
       "js-spread-rest",
+      "js-prototype-chain",
       "js-array-transform",
+      "js-strict-mode",
+      "js-classes",
       "js-immutability-react",
       "js-shallow-deep-copy"
     ],
@@ -539,6 +669,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-iife-module-pattern",
       "js-currying-partial",
       "js-memoization",
+      "js-classes",
       "react-rerender"
     ],
     "mentions": []
@@ -554,6 +685,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-decorator",
       "js-memoization",
       "js-currying-partial",
+      "js-this-binding",
+      "js-call-apply-bind",
       "js-memory-leak",
       "react-rerender",
       "retries"
@@ -567,11 +700,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-first-class-callbacks",
       "js-closures",
       "js-hoisting-tdz",
+      "js-this-binding",
+      "js-call-apply-bind",
       "js-optional-chaining-nullish",
       "js-spread-rest",
+      "js-strict-mode",
       "js-destructuring"
     ],
     "mentions": [
+      "js-classes",
       "js-es-modules",
       "js-truthy-falsy-typeof"
     ]
@@ -580,7 +717,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sql-logical-order",
       "sql-filtering-operators",
-      "sqld-group-by-having"
+      "sqld-group-by-having",
+      "sql-joins-in-practice",
+      "sql-case-when"
     ],
     "mentions": [
       "db-modeling-normalization"
@@ -591,6 +730,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-logical-order",
       "sql-aggregation-pitfalls",
       "sql-select-where-null",
+      "sql-subqueries-exists-lateral",
       "db-index-pitfalls",
       "sql-injection",
       "postgres-jsonb-search"
@@ -620,6 +760,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-destructuring",
       "js-shallow-deep-copy",
+      "js-prototype-chain",
       "js-object-methods",
       "js-currying-partial",
       "js-function-forms",
@@ -653,7 +794,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-pure-functions",
       "js-object-methods"
     ],
-    "mentions": []
+    "mentions": [
+      "js-strict-mode"
+    ]
   },
   "js-array-transform": {
     "links": [
@@ -728,7 +871,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-promise-combinators",
       "js-first-class-callbacks",
       "event-loop",
-      "saga-pattern"
+      "saga-pattern",
+      "js-this-binding"
     ],
     "mentions": [
       "json-crud-http",
@@ -800,6 +944,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-var-let-const",
       "js-scope-lexical",
+      "js-strict-mode",
       "js-es-modules"
     ],
     "mentions": [
@@ -811,8 +956,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "js-var-let-const",
       "js-hoisting-tdz",
+      "js-this-binding",
       "js-closures",
       "js-memory-leak",
+      "js-strict-mode",
       "react-rerender"
     ],
     "mentions": [
@@ -843,7 +990,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-equality-coercion",
       "js-optional-chaining-nullish",
       "js-short-circuit",
-      "js-hoisting-tdz"
+      "js-hoisting-tdz",
+      "js-prototype-chain"
     ],
     "mentions": [
       "json-crud-http",
@@ -1374,6 +1522,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "k8s-deploy-pipeline-eks",
       "cron-jobs",
+      "js-strict-mode",
       "what-happens-google-com",
       "local-k8s-kind-minikube",
       "db-type-key-value",
@@ -2939,7 +3088,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "dependency-hell",
-      "git-internals-basics"
+      "git-internals-basics",
+      "js-strict-mode"
     ]
   },
   "ci-cd-basics": {
@@ -4523,6 +4673,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
+      "js-strict-mode",
       "js-es-modules"
     ]
   },
@@ -4749,6 +4900,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "js-prototype-chain",
       "db-types-overview",
       "js-immutability-react",
       "js-shallow-deep-copy"
@@ -5994,6 +6146,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rest-api-design",
       "loading-patterns",
       "db-index-design",
+      "sql-subqueries-exists-lateral",
+      "sql-joins-in-practice",
       "pattern-proxy",
       "postgres-architecture",
       "db-transaction-isolation"
@@ -6758,6 +6912,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-group-by-having",
+      "sql-subqueries-exists-lateral",
+      "sql-joins-in-practice",
       "sql-select-where-null"
     ]
   },
@@ -6781,6 +6937,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "postgres-reporting-sql",
+      "sql-case-when",
       "sqld-null-functions"
     ]
   },
@@ -6792,6 +6949,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sqld-group-by-having",
+      "sql-case-when",
       "js-closures"
     ]
   },
@@ -7159,6 +7317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "js-prototype-chain",
       "optimistic-locking",
       "loading-patterns",
       "upper-layers-session-presentation-app",
@@ -7518,6 +7677,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-function-forms",
       "garbage-collection",
       "event-loop",
+      "js-strict-mode",
       "js-closures",
       "layer-mtu-fragmentation",
       "dns"
