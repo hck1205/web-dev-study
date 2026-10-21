@@ -2,6 +2,84 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "k8s-job-cronjob": {
+    "links": [
+      "cron-jobs",
+      "batch-processing",
+      "k8s-pod-lifecycle",
+      "k8s-pod-disruption-budget",
+      "helm-release-lifecycle",
+      "idempotency-key",
+      "k8s-pod-multicontainer",
+      "k8s-pod-troubleshooting",
+      "kubectl-essentials",
+      "k8s-statefulset",
+      "k8s-daemonset"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "db-architecture-by-scale",
+      "k8s-pod-resources",
+      "k8s-architecture",
+      "message-delivery-semantics",
+      "resilience-patterns",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "http-methods",
+      "dns",
+      "webhooks"
+    ]
+  },
+  "k8s-daemonset": {
+    "links": [
+      "k8s-pod-scheduling",
+      "k8s-pod-resources",
+      "k8s-statefulset",
+      "k8s-job-cronjob",
+      "k8s-node-autoscaling-karpenter",
+      "k8s-pod-troubleshooting",
+      "kubectl-essentials",
+      "k8s-cni-pod-network",
+      "k8s-architecture"
+    ],
+    "mentions": [
+      "k8s-deployment",
+      "iptables-nat",
+      "iptables-basics",
+      "local-k8s-kind-minikube",
+      "eks-cluster-basics"
+    ]
+  },
+  "k8s-statefulset": {
+    "links": [
+      "k8s-deployment",
+      "k8s-pv-pvc",
+      "k8s-storageclass-snapshots",
+      "k8s-service-types",
+      "k8s-coredns",
+      "k8s-pod-disruption-budget",
+      "k8s-pod-troubleshooting",
+      "k8s-daemonset",
+      "k8s-job-cronjob"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "k8s-pod-scheduling",
+      "k8s-pod-basics",
+      "iptables-nat",
+      "db-type-wide-column",
+      "docker-container-basics",
+      "k8s-deploy-pipeline-eks",
+      "k8s-architecture",
+      "rollback-strategy",
+      "kafka-basics",
+      "postgres-operations",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "dns"
+    ]
+  },
   "k8s-storageclass-snapshots": {
     "links": [
       "k8s-pv-pvc",
@@ -9,7 +87,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "gateway",
+      "k8s-statefulset",
       "k8s-pod-scheduling",
+      "k8s-daemonset",
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
@@ -46,6 +126,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-network-policy",
+      "k8s-daemonset",
       "vpc-subnets-route-tables",
       "osi-in-practice",
       "tcp-connection-lifecycle",
@@ -89,6 +170,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-basics",
+      "k8s-daemonset",
       "k8s-api-objects",
       "k8s-configmap",
       "k8s-architecture",
@@ -132,7 +214,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-architecture",
       "k8s-pod-lifecycle",
+      "k8s-statefulset",
       "k8s-pod-basics",
+      "k8s-daemonset",
       "docker-container-basics",
       "helm-basics",
       "kafka-basics",
@@ -148,6 +232,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-serviceaccount-tokens"
     ],
     "mentions": [
+      "k8s-statefulset",
       "k8s-pod-basics",
       "iptables-nat",
       "terraform-basics",
@@ -310,7 +395,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deployment",
       "k8s-network-policy",
       "k8s-service-types",
+      "k8s-statefulset",
       "k8s-pod-basics",
+      "k8s-daemonset",
       "k8s-deploy-pipeline-eks",
       "cron-jobs",
       "helm-basics",
@@ -354,8 +441,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-disruption-budget",
       "k8s-network-policy",
+      "k8s-statefulset",
       "k8s-pod-basics",
       "iptables-nat",
+      "k8s-daemonset",
       "docker-container-basics",
       "helm-basics",
       "local-k8s-kind-minikube",
@@ -1206,7 +1295,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postmortems"
     ],
     "mentions": [
+      "k8s-statefulset",
       "git-undo",
+      "k8s-daemonset",
       "k8s-configmap",
       "postgres-operations",
       "redis-basics",
@@ -1271,6 +1362,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "elasticsearch-inverted-index",
+      "k8s-daemonset",
       "docker-container-basics",
       "event-loop",
       "linux-grep-awk-sed"
@@ -1893,6 +1985,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-batch-timeout-pool",
       "elasticsearch-inverted-index",
+      "k8s-statefulset",
       "db-type-wide-column",
       "browser-fetch",
       "failover",
@@ -2232,6 +2325,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-node-autoscaling-karpenter",
       "kubectl-essentials",
       "kubernetes-ingress",
+      "k8s-daemonset",
       "network-flow-logs",
       "terraform-basics",
       "k8s-configmap",
@@ -2562,6 +2656,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "k8s-statefulset",
       "k8s-pod-basics",
       "cron-jobs",
       "helm-basics",
@@ -2614,6 +2709,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-storageclass-snapshots",
       "terraform-modules-tfvars",
       "kubernetes-ingress",
+      "k8s-statefulset",
       "iptables-nat",
       "k8s-api-objects",
       "terraform-basics",
@@ -2641,7 +2737,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-architecture",
       "k8s-kube-proxy-modes",
+      "k8s-statefulset",
       "iptables-nat",
+      "k8s-daemonset",
       "iptables-basics",
       "ipv6-basics",
       "packet-capture-tcpdump",
@@ -2685,6 +2783,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "layer-ip-routing-icmp",
       "iptables-nat",
+      "k8s-daemonset",
       "iptables-basics",
       "k8s-architecture",
       "eks-cluster-basics",
@@ -2708,6 +2807,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "k8s-statefulset",
+      "k8s-daemonset",
       "db-type-wide-column",
       "iptables-basics",
       "k8s-kube-proxy-modes",
@@ -2878,6 +2979,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-security-admission",
       "k8s-labels-selectors",
       "k8s-storageclass-snapshots",
+      "k8s-statefulset",
+      "k8s-daemonset",
       "k8s-architecture",
       "cloud-cost-optimization",
       "vpc-basics",
@@ -3562,6 +3665,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics"
     ],
     "mentions": [
+      "k8s-statefulset",
       "git-undo",
       "k8s-configmap",
       "semantic-versioning",
@@ -3582,6 +3686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kubernetes-ingress"
     ],
     "mentions": [
+      "k8s-statefulset",
       "k8s-pod-basics",
       "service-mesh",
       "rollback-strategy",
@@ -3625,6 +3730,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-values-secrets"
     ],
     "mentions": [
+      "k8s-statefulset",
       "k8s-pod-basics",
       "k8s-configmap",
       "docker-container-basics",
@@ -3650,6 +3756,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types",
       "k8s-pv-pvc",
       "k8s-storageclass-snapshots",
+      "k8s-statefulset",
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
@@ -3669,6 +3776,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting"
     ],
     "mentions": [
+      "k8s-daemonset",
       "k8s-configmap",
       "k8s-architecture",
       "service-mesh",
@@ -3684,6 +3792,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-disruption-budget",
       "k8s-pod-basics",
+      "k8s-daemonset",
       "k8s-deployment",
       "local-k8s-kind-minikube",
       "dns"
@@ -3730,9 +3839,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-troubleshooting",
       "k8s-service-types",
+      "k8s-statefulset",
       "curl-for-debugging",
       "k8s-pod-basics",
       "iptables-nat",
+      "k8s-daemonset",
       "k8s-api-objects",
       "db-migration-tools",
       "docker-container-basics",
@@ -3755,7 +3866,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics"
     ],
     "mentions": [
+      "k8s-statefulset",
       "k8s-pod-scheduling",
+      "k8s-daemonset",
       "k8s-cni-pod-network",
       "k8s-architecture",
       "kubernetes-ingress",

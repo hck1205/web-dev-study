@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "k8s-job-cronjob",
+    title: "Job과 CronJob: 실패를 세는 법과 놓친 회차",
+    summary: "completions와 parallelism, 10초부터 두 배로 늘어나는 backoffLimit 재시도, activeDeadlineSeconds와 ttlSecondsAfterFinished, Indexed Job과 번호별 재시도, podFailurePolicy로 실패 종류 가르기를 실제 Job 컨트롤러로 따라가고, CronJob이 놓친 회차 중 마지막 하나만 돌린다는 것을 확인한다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "Backend", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["Indexed Job", "podFailurePolicy", "backoffLimitPerIndex", "JOB_COMPLETION_INDEX"],
+  },
+  {
+    slug: "k8s-daemonset",
+    title: "DaemonSet: 노드마다 하나씩 띄우는 에이전트",
+    summary: "노드 수가 곧 replicas인 DaemonSet이 Pod를 놓는 방식과 자동으로 붙는 toleration, control-plane 노드와 나중에 건 taint 때문에 에이전트가 사라지는 일, hostNetwork에서 maxSurge가 멈추는 이유, 노드마다 빠지는 requests와 system-node-critical 선점, drain과 임시 컨테이너 디버깅까지 실습 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "Observability", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["DaemonSet", "노드 에이전트", "system-node-critical", "임시 컨테이너 디버깅"],
+  },
+  {
+    slug: "k8s-statefulset",
+    title: "StatefulSet: 번호, 이름, 디스크를 고정하는 컨트롤러",
+    summary: "Pod마다 고정 번호와 DNS 이름, 디스크를 주는 StatefulSet을 headless Service, volumeClaimTemplates, OrderedReady와 Parallel, partition 롤링 업데이트로 따라간다. 줄인 뒤 남는 PVC와 retention 정책, undo로 풀리지 않는 롤아웃, 노드가 죽었을 때 기다리는 이유, DB를 올릴지 판단하는 기준까지 실제 출력으로 확인한다.",
+    topic: "programming/server-infra/kubernetes/workloads",
+    tags: ["Kubernetes", "DevOps", "Database", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["StatefulSet", "volumeClaimTemplates", "persistentVolumeClaimRetentionPolicy", "partition 롤링 업데이트"],
+  },
+  {
     slug: "k8s-storageclass-snapshots",
     title: "StorageClass와 VolumeSnapshot: 디스크를 고르고, 찍고, 되살리기",
     summary: "만든 뒤 고칠 수 없는 StorageClass를 등급별로 설계하는 법과 기본 class가 둘일 때의 함정을 보고, 실제 CSI 드라이버로 VolumeSnapshot을 찍고 되살린다. 다른 네임스페이스로 넘기는 법, 스냅샷이 백업이 아닌 이유, 1.36에 GA가 된 볼륨 그룹 스냅샷까지 다룬다.",

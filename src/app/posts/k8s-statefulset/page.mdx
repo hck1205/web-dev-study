@@ -1,0 +1,649 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-statefulset");
+
+PostgreSQL 세 대를 Deployment로 띄우면 처음엔 잘 도는 것 같다. 그런데 복제를 붙이려는 순간 막힌다. 복제본은 "primary가 누구인지"를 설정에 적어야 하는데, Pod 이름은 `pg-7d599ff9fb-x2k8q`처럼 매번 바뀌고, Service 뒤에서는 세 대 중 아무나 받는다. PVC를 하나 적으면 세 Pod가 같은 디스크를 나눠 쓰려다 두 대는 붙지도 못한다. Pod를 가축처럼 다루는 Deployment의 방식이 여기서는 그대로 문제가 된다.
+
+StatefulSet은 이 셋을 고정해 준다. Pod 이름(`pg-0`, `pg-1`), 그 이름으로 찾아가는 DNS 주소, Pod마다 따로 붙는 디스크. 이 글은 그 세 가지가 어떻게 만들어지고, 띄우고 줄이고 업데이트할 때 순서가 어떻게 정해지는지, 줄인 뒤 남는 PVC와 멈춰 버린 롤아웃을 어떻게 다루는지를 실습 클러스터의 실제 출력으로 따라간다. 출력은 kwok로 띄운 Kubernetes 1.34.1 클러스터에서 받았다. API 서버와 컨트롤러, 스케줄러는 진짜이고 컨테이너가 실제로 돌지는 않는다. DNS 답은 같은 API 서버에 CoreDNS 1.11.3을 붙여 받았다.
+
+Deployment가 ReplicaSet으로 Pod 수를 맞추는 원리는 [Deployment 글](/posts/k8s-deployment)에, PVC가 PV에 묶이는 규칙은 [PV와 PVC 글](/posts/k8s-pv-pvc)에 있다. 이 글은 그 위에서 StatefulSet이 더하는 것만 본다.
+
+## 이름이 바뀌면 안 되는 앱
+
+StatefulSet이 약속하는 것은 네 가지다. Pod 이름이 `이름-번호`로 정해지고, 그 이름에 DNS 주소가 붙고, 번호마다 PVC가 하나씩 따라다니고, 만들고 지우고 바꾸는 순서가 번호로 정해진다. Pod가 죽어서 다른 노드에 다시 떠도 `pg-1`은 `pg-1`이고, 같은 `data-pg-1` 디스크를 다시 붙인다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="StatefulSet은 번호마다 Pod와 PVC를 짝지어 두고, headless Service가 번호마다 이름을 붙인다"
+  nodes={[
+    { id: "sts", label: "StatefulSet pg", sub: "replicas 3", x: 200, y: 34, w: 150 },
+    { id: "svc", label: "Service pg", sub: "clusterIP: None", x: 330, y: 120, w: 130 },
+    { id: "p0", label: "pg-0", sub: "10.0.0.4", x: 70, y: 150, w: 90 },
+    { id: "p1", label: "pg-1", sub: "10.0.0.5", x: 190, y: 150, w: 90 },
+    { id: "c0", label: "data-pg-0", sub: "pv-local-1", x: 70, y: 245, w: 110 },
+    { id: "c1", label: "data-pg-1", sub: "pv-local-2", x: 190, y: 245, w: 110 },
+  ]}
+  edges={[
+    { from: "sts", to: "p0", label: "번호 0" },
+    { from: "sts", to: "p1", label: "번호 1" },
+    { from: "p0", to: "c0" },
+    { from: "p1", to: "c1" },
+    { from: "svc", to: "p1", dashed: true, label: "pg-1.pg" },
+  ]}
+/>
+
+대신 Deployment가 주던 편함 몇 가지를 내준다. 업데이트할 때 새 Pod를 먼저 띄우는 maxSurge가 없다. 같은 이름의 Pod가 두 개 있으면 안 되니, 옛 `pg-2`가 완전히 지워져야 새 `pg-2`가 생긴다. 그래서 StatefulSet의 롤링 업데이트는 언제나 한 대씩 잠깐 빠지는 방식이다.
+
+## 매니페스트에서 다른 세 줄
+
+Deployment와 거의 같고 세 군데가 다르다. `serviceName`, `volumeClaimTemplates`, 그리고 짝이 되는 headless Service다.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg
+  namespace: data
+spec:
+  clusterIP: None          # headless: VIP 없이 Pod마다 DNS 이름
+  selector: {app: pg}
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg
+  namespace: data
+spec:
+  serviceName: pg          # 위 Service 이름. Pod DNS 이름의 가운데 칸이 된다
+  replicas: 3
+  selector:
+    matchLabels: {app: pg}
+  template:
+    metadata:
+      labels: {app: pg}
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: postgres
+        image: postgres:16.4
+        ports:
+        - {name: postgres, containerPort: 5432}
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:    # 번호마다 이 틀로 PVC를 하나씩 만든다
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-ssd
+      resources:
+        requests: {storage: 10Gi}
+```
+
+실습 클러스터에는 동적 프로비저너가 없어서 `local-ssd` 클래스의 PV 여섯 개를 미리 만들어 두었다. 실제 클러스터라면 StorageClass가 PVC마다 디스크를 만들어 준다. StorageClass와 스냅숏은 [StorageClass 글](/posts/k8s-storageclass-snapshots)에서 다룬다.
+
+`serviceName`에 적은 Service는 StatefulSet이 만들어 주지 않는다. 직접 만들어야 하고, 없으면 Pod는 잘 뜨는데 DNS 이름만 안 생긴다. 흔한 실수다.
+
+## 하나가 Ready가 돼야 다음을 만든다
+
+적용하면서 Pod 변화를 시각과 함께 받아 봤다.
+
+```bash
+# 시각을 붙여 Pod 변화를 지켜본다
+kubectl -n data get pods -w --output-watch-events | while read -r l; do echo "$(date +%T) $l"; done
+# 다른 터미널에서 적용한다
+kubectl apply -f sts.yaml
+```
+
+```text
+00:47:32 ADDED      pg-0   0/1     Pending   0          0s
+00:47:35 MODIFIED   pg-0   0/1     ContainerCreating   0          3s
+00:47:40 MODIFIED   pg-0   1/1     Running             0          8s
+00:47:40 ADDED      pg-1   0/1     Pending             0          0s
+00:47:43 MODIFIED   pg-1   0/1     ContainerCreating   0          3s
+00:47:46 MODIFIED   pg-1   1/1     Running             0          6s
+00:47:46 ADDED      pg-2   0/1     Pending             0          0s
+00:47:49 MODIFIED   pg-2   0/1     ContainerCreating   0          3s
+00:47:52 MODIFIED   pg-2   1/1     Running             0          6s
+```
+
+`pg-1`은 `pg-0`이 Running·Ready가 된 바로 그 초(00:47:40)에 생겼다. 기본 정책인 `podManagementPolicy: OrderedReady`가 이렇게 동작한다. 번호가 작은 Pod가 모두 Ready여야 다음 번호를 만든다. primary가 먼저 떠 있어야 복제본이 붙을 수 있는 DB에는 이 순서가 그대로 쓸모 있다. 아래 그림에서 컨트롤러가 무엇을 기다리는지 따라가 본다.
+
+<SequenceDiagram
+  caption="OrderedReady: 앞 번호가 Ready가 돼야 다음 번호의 PVC와 Pod를 만든다"
+  actors={[
+    { id: "ctl", label: "STS 컨트롤러" },
+    { id: "api", label: "API 서버" },
+    { id: "kubelet", label: "kubelet" },
+  ]}
+  steps={[
+    { from: "ctl", to: "api", label: "PVC data-pg-0", title: "디스크부터 만든다", detail: "번호 0의 PVC가 없으면 volumeClaimTemplates로 만든다. 이미 있으면 그대로 쓴다.", payload: "data-pg-0  Bound  pv-local-1" },
+    { from: "ctl", to: "api", label: "Pod pg-0", title: "그다음 Pod", detail: "hostname은 pg-0, subdomain은 serviceName인 pg로 채운다. 이 둘이 DNS 이름이 된다." },
+    { from: "api", to: "kubelet", label: "스케줄·실행", title: "노드에서 뜬다", detail: "스케줄러가 노드를 고르고 kubelet이 컨테이너를 띄운다. readiness가 통과해야 Ready다." },
+    { from: "kubelet", to: "api", label: "Ready=True", title: "Ready가 올라온다", detail: "Pod 상태가 Ready로 바뀐다. minReadySeconds가 있으면 그만큼 더 기다린다." },
+    { from: "ctl", to: "api", label: "PVC·Pod pg-1", title: "이제 다음 번호", detail: "pg-0이 Ready인 것을 본 뒤에야 번호 1을 만든다. pg-0이 Ready가 안 되면 여기서 영원히 멈춘다." },
+  ]}
+/>
+
+마지막 단계가 장점이자 함정이다. `pg-0`의 readiness가 실패하면 `pg-1`, `pg-2`는 만들어지지도 않는다. replicas를 5로 올려도 그대로다. 장애 중에 늘려서 버티려는 시도가 아무 효과가 없는 이유다.
+
+Pod에는 번호가 라벨로도 붙는다.
+
+```bash
+# StatefulSet이 붙인 라벨을 본다
+kubectl -n data get pods --show-labels
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE   LABELS
+pg-0   1/1     Running   0          49s   app=pg,apps.kubernetes.io/pod-index=0,controller-revision-hash=pg-85d945d9c,statefulset.kubernetes.io/pod-name=pg-0
+pg-1   1/1     Running   0          41s   app=pg,apps.kubernetes.io/pod-index=1,controller-revision-hash=pg-85d945d9c,statefulset.kubernetes.io/pod-name=pg-1
+pg-2   1/1     Running   0          35s   app=pg,apps.kubernetes.io/pod-index=2,controller-revision-hash=pg-85d945d9c,statefulset.kubernetes.io/pod-name=pg-2
+```
+
+`statefulset.kubernetes.io/pod-name` 라벨은 Pod 하나만 고르는 Service를 만들 때 쓴다. 예를 들어 `pg-0`만 바라보는 `pg-primary` Service의 selector에 이 라벨을 넣으면 쓰기 연결을 한 곳으로 모을 수 있다. `apps.kubernetes.io/pod-index`(1.32부터 정식)는 앱이 환경 변수로 자기 번호를 받을 때 편하다. 다만 "0번이 primary"라는 규칙은 처음 띄울 때만 맞는다. 장애 조치로 primary가 바뀐 뒤에도 0번에 쓰기를 보내면 안 되니, 실제 운영에서는 오퍼레이터가 역할 라벨을 따로 붙인다.
+
+## Pod마다 붙는 DNS 이름
+
+headless Service는 VIP를 만들지 않고 DNS 답에 Pod IP를 그대로 내준다. 여기에 StatefulSet이 Pod의 `hostname`과 `subdomain`을 채우면 Pod마다 고정 이름이 생긴다. 이름은 이렇게 읽는다.
+
+<UrlAnatomy
+  caption="StatefulSet Pod의 DNS 이름을 조각으로 나눠 읽는다"
+  separator="."
+  joiner="."
+  base="pg-1"
+  params={[
+    { key: "pg", display: "pg", title: "serviceName", description: "StatefulSet의 serviceName이자 headless Service 이름이다. Pod의 spec.subdomain에 들어간다. 이 Service가 없으면 이름이 생기지 않는다.", required: true },
+    { key: "data", display: "data", title: "네임스페이스", description: "같은 네임스페이스 안에서는 pg-1.pg만 써도 search 도메인이 나머지를 채운다." },
+    { key: "svc", display: "svc", title: "Service 영역", description: "클러스터 DNS에서 Service 이름이 들어가는 영역이다." },
+    { key: "cluster", display: "cluster.local", title: "클러스터 도메인", description: "kubelet의 clusterDomain 값이다. 대부분 cluster.local이지만 바꾼 클러스터도 있으니 설정 파일에 하드코딩하지 않는다." },
+  ]}
+/>
+
+맨 앞 `pg-1`은 Pod의 `spec.hostname`이다. 실제로 그렇게 채워졌는지, EndpointSlice에 이름이 올라갔는지 본다.
+
+```bash
+# Pod의 hostname, subdomain
+kubectl -n data get pod pg-1 -o jsonpath='{.spec.hostname}{" "}{.spec.subdomain}{"\n"}'
+# EndpointSlice에 hostname이 함께 올라간다
+kubectl -n data get endpointslices -o yaml | grep -E 'hostname|- 10\.'
+```
+
+```text
+pg-1 pg
+    - 10.0.0.4
+    hostname: pg-0
+    - 10.0.0.5
+    hostname: pg-1
+    - 10.0.0.6
+    hostname: pg-2
+```
+
+CoreDNS는 이 EndpointSlice를 읽고 답한다. 세 가지 이름으로 물어봤다.
+
+```bash
+# Service 이름: ready인 Pod IP 전부
+dig pg.data.svc.cluster.local +noall +answer
+# Pod 이름: 그 Pod 하나
+dig pg-1.pg.data.svc.cluster.local +noall +answer
+# SRV: 포트 이름 postgres로 묻는다
+dig _postgres._tcp.pg.data.svc.cluster.local SRV +noall +answer
+```
+
+```text
+pg.data.svc.cluster.local. 5	IN	A	10.0.0.4
+pg.data.svc.cluster.local. 5	IN	A	10.0.0.5
+pg.data.svc.cluster.local. 5	IN	A	10.0.0.6
+pg-1.pg.data.svc.cluster.local.	5 IN	A	10.0.0.5
+_postgres._tcp.pg.data.svc.cluster.local. 5 IN SRV 0 33 5432 pg-0.pg.data.svc.cluster.local.
+_postgres._tcp.pg.data.svc.cluster.local. 5 IN SRV 0 33 5432 pg-1.pg.data.svc.cluster.local.
+_postgres._tcp.pg.data.svc.cluster.local. 5 IN SRV 0 33 5432 pg-2.pg.data.svc.cluster.local.
+```
+
+일반 headless Service의 SRV는 대상이 `10-244-1-5.web-headless...`처럼 IP로 만든 이름이었다([Service 글](/posts/k8s-service-types#headless와-externalname-가상-ip-없이-이름만)). StatefulSet에서는 `pg-0.pg...`처럼 고정 이름이 나온다. 멤버 목록을 SRV 하나로 받아 서로 연결하는 클러스터(etcd, Cassandra, Kafka 같은)가 이 이름을 쓴다. 아래 그림은 앱과 복제본이 이 이름들을 어떻게 쓰는지 보여 준다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="쓰기는 pg-0의 이름으로, 읽기는 Service 이름으로. 복제본은 primary를 이름으로 찾는다"
+  zones={[
+    { id: "ns", label: "namespace data", x: 6, y: 120, w: 388, h: 202, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "api", sub: "앱 Pod", x: 90, y: 40, icon: "container" },
+    { id: "dns", label: "CoreDNS", sub: "cluster.local", x: 300, y: 40, icon: "dns" },
+    { id: "p0", label: "pg-0", sub: "10.0.0.4", x: 70, y: 180, icon: "db", w: 96 },
+    { id: "p1", label: "pg-1", sub: "10.0.0.5", x: 200, y: 180, icon: "db", w: 96 },
+    { id: "p2", label: "pg-2", sub: "10.0.0.6", x: 330, y: 180, icon: "db", w: 96 },
+    { id: "v1", label: "data-pg-1", sub: "PVC", x: 200, y: 280, icon: "lock", w: 110 },
+  ]}
+  links={[
+    { from: "app", to: "dns" },
+    { from: "app", to: "p0" },
+    { from: "app", to: "p2", dashed: true },
+    { from: "p1", to: "p0", label: "복제" },
+    { from: "p1", to: "v1" },
+  ]}
+  steps={[
+    { path: ["app", "dns"], packet: "A?", title: "쓰기 대상을 이름으로 묻는다", detail: "앱 설정에는 IP가 아니라 pg-0.pg.data.svc.cluster.local을 적는다. CoreDNS가 지금 pg-0의 Pod IP를 돌려준다.", payload: "pg-0.pg.data.svc.cluster.local. 5 IN A 10.0.0.4" },
+    { path: ["app", "p0"], packet: "INSERT", title: "VIP 없이 Pod로 바로 간다", detail: "headless라 kube-proxy 규칙을 거치지 않는다. 받은 IP로 곧장 연결한다." },
+    { path: ["p1", "p0"], packet: "WAL", title: "복제본도 이름으로 primary를 찾는다", detail: "pg-1의 복제 설정에 primary_conninfo로 pg-0의 이름을 적어 둔다. pg-0이 다른 노드로 옮겨도 설정은 그대로다." },
+    { path: ["app", "dns", "app", "p2"], packet: "SELECT", title: "읽기는 Service 이름으로 흩는다", detail: "pg.data.svc.cluster.local은 ready인 세 Pod IP를 모두 돌려준다. 클라이언트가 그중 하나를 고른다. 어느 것이 primary인지는 구분하지 않는다." },
+    { path: ["p1", "v1"], highlight: ["p1"], title: "다시 떠도 같은 디스크", detail: "pg-1이 지워지고 새로 떠도 PVC 이름은 data-pg-1 그대로라 같은 디스크를 붙인다. 복제가 멈춘 지점부터 이어 간다." },
+  ]}
+/>
+
+Pod를 하나 지워 이름과 디스크가 그대로인지 봤다.
+
+```bash
+# pg-1을 지우고 새로 뜬 Pod의 노드, IP, PVC를 본다
+kubectl -n data delete pod pg-1
+kubectl -n data get pod pg-1 -o wide
+kubectl -n data get pod pg-1 -o jsonpath='{.spec.volumes[0].persistentVolumeClaim.claimName}{"\n"}'
+```
+
+```text
+pod "pg-1" deleted from data namespace
+NAME   READY   STATUS    RESTARTS   AGE   IP         NODE       NOMINATED NODE   READINESS GATES
+pg-1   1/1     Running   0          15s   10.0.0.5   worker-2   <none>           <none>
+data-pg-1
+```
+
+이름과 PVC는 같다. IP는 kwok가 같은 노드에 같은 IP를 다시 줘서 그대로 나왔지만, 실제 CNI에서는 새 Pod가 새 IP를 받는 경우가 많다. 고정되는 것은 이름이지 IP가 아니다.
+
+여기서 현장 문제가 하나 나온다. DNS 답의 TTL은 5초인데(CoreDNS `kubernetes` 플러그인 기본값), 클라이언트가 처음 받은 IP를 오래 들고 있으면 Pod가 다시 뜬 뒤에도 옛 IP로 붙으려 한다. JVM의 DNS 캐시, 연결 풀이 처음 해석한 주소를 계속 쓰는 드라이버가 대표다. "DB Pod가 재시작된 뒤 일부 앱만 계속 연결 시간 초과가 난다"면 앱 쪽 DNS 캐시와 풀의 재연결 설정을 본다. 클러스터 DNS가 답을 만드는 과정은 [CoreDNS 글](/posts/k8s-coredns)에 있다.
+
+## 줄일 때는 큰 번호부터, 디스크는 남는다
+
+replicas를 3에서 1로 줄였다.
+
+```bash
+# 줄이고 Pod 변화를 지켜본다
+kubectl -n data scale sts pg --replicas=1
+kubectl -n data get pvc
+```
+
+```text
+00:49:07 MODIFIED   pg-2   1/1     Terminating   0          81s
+00:49:14 DELETED    pg-2   1/1     Terminating   0          88s
+00:49:14 MODIFIED   pg-1   1/1     Terminating   0          30s
+00:49:23 DELETED    pg-1   1/1     Terminating   0          39s
+NAME        STATUS   VOLUME       CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-pg-0   Bound    pv-local-1   10Gi       RWO            local-ssd      <unset>                 2m20s
+data-pg-1   Bound    pv-local-2   10Gi       RWO            local-ssd      <unset>                 2m12s
+data-pg-2   Bound    pv-local-4   10Gi       RWO            local-ssd      <unset>                 2m6s
+```
+
+`pg-2`가 완전히 사라진(00:49:14) 뒤에야 `pg-1`이 종료를 시작했다. 줄일 때는 만들 때의 반대 순서로 한 대씩이다. 그리고 PVC 셋은 모두 남았다. 다시 3으로 올리면 `pg-1`, `pg-2`가 각자의 PVC를 그대로 붙인다. 실수로 줄였다가 되돌려도 데이터가 살아 있는 이유이고, 동시에 줄인 뒤에도 디스크 비용이 계속 나가는 이유다. 아래 그림에서 Pod와 PVC가 따로 움직이는 모습을 본다.
+
+<AlgoTrace
+  caption="replicas 3 → 1 → 3: Pod는 큰 번호부터 사라지지만 PVC는 그대로 남아 다시 붙는다"
+  cells={["pg-0", "pg-1", "pg-2"]}
+  memoryLabel="남아 있는 PVC"
+  steps={[
+    { found: [0, 1, 2], memory: ["data-pg-0", "data-pg-1", "data-pg-2"], caption: "세 Pod가 각자의 PVC를 붙이고 있다." },
+    { pointer: 2, found: [0, 1], memory: ["data-pg-0", "data-pg-1", "data-pg-2"], caption: "replicas=1. 가장 큰 번호 pg-2부터 지운다. PVC는 지우지 않는다." },
+    { pointer: 1, found: [0], memory: ["data-pg-0", "data-pg-1", "data-pg-2"], caption: "pg-2가 완전히 사라진 뒤 pg-1을 지운다. PVC는 여전히 셋이다." },
+    { pointer: 1, found: [0, 1], memory: ["data-pg-0", "data-pg-1", "data-pg-2"], caption: "다시 replicas=3. pg-1이 data-pg-1을 그대로 붙인다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["data-pg-0", "data-pg-1", "data-pg-2"], caption: "pg-2도 자기 디스크로 돌아온다. 데이터가 이어진다." },
+  ]}
+/>
+
+### 남길지 지울지 정하는 persistentVolumeClaimRetentionPolicy
+
+이 기본 동작을 바꾸는 필드가 `persistentVolumeClaimRetentionPolicy`다(1.27 베타로 기본 켜짐, 1.32부터 정식). `whenDeleted`는 StatefulSet을 지울 때, `whenScaled`는 줄일 때 PVC를 어떻게 할지 정한다. 둘 다 기본은 `Retain`이다. 캐시처럼 다시 만들어도 되는 데이터라면 `whenScaled: Delete`로 디스크 비용을 아낄 수 있다.
+
+```bash
+# 줄일 때 PVC를 지우게 바꾼다
+kubectl -n data patch sts pg --type merge \
+  -p '{"spec":{"persistentVolumeClaimRetentionPolicy":{"whenDeleted":"Retain","whenScaled":"Delete"}}}'
+# 3 → 2로 줄이고, 지워질 PVC의 주인이 누구로 바뀌는지 본다
+kubectl -n data scale sts pg --replicas=2
+kubectl -n data get pvc data-pg-2 -o jsonpath='{range .metadata.ownerReferences[*]}{.kind}/{.name}{"\n"}{end}'
+```
+
+```text
+statefulset.apps/pg patched
+statefulset.apps/pg scaled
+Pod/pg-2
+```
+
+컨트롤러가 직접 PVC를 지우는 게 아니다. 사라질 Pod를 PVC의 주인(ownerReference)으로 적어 두고, Pod가 지워지면 가비지 컬렉터가 PVC를 따라 지운다. 20초 뒤 상태다.
+
+```bash
+# PVC와 그 아래 PV가 어떻게 됐나
+kubectl -n data get pvc
+kubectl get pv pv-local-4
+```
+
+```text
+NAME        STATUS   VOLUME       CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-pg-0   Bound    pv-local-1   10Gi       RWO            local-ssd      <unset>                 3m24s
+data-pg-1   Bound    pv-local-2   10Gi       RWO            local-ssd      <unset>                 3m16s
+NAME         CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS     CLAIM            STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+pv-local-4   10Gi       RWO            Retain           Released   data/data-pg-2   local-ssd      <unset>                          3m25s
+```
+
+PVC는 지워졌고, PV는 회수 정책이 `Retain`이라 `Released`로 남았다. 이제 다시 3으로 올리면 어떻게 될까.
+
+```bash
+# 다시 늘리고 새 data-pg-2가 어느 PV에 묶였나 본다
+kubectl -n data scale sts pg --replicas=3
+kubectl -n data get pvc data-pg-2
+```
+
+```text
+NAME        STATUS   VOLUME       CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data-pg-2   Bound    pv-local-3   10Gi       RWO            local-ssd      <unset>                 15s
+```
+
+같은 이름의 PVC가 새로 생겼지만 옛 디스크(`pv-local-4`)가 아니라 빈 디스크(`pv-local-3`)에 묶였다. `Released` PV는 옛 PVC의 기록(`claimRef`)을 들고 있어서 새 PVC가 가져가지 못한다. `pg-2`는 빈 디스크로 시작한다. DB라면 복제본 하나가 처음부터 다시 데이터를 받아야 한다는 뜻이다.
+
+<Callout kind="warning" title="whenScaled: Delete는 줄이는 순간 데이터를 버린다">
+DB, 메시지 브로커처럼 복제본마다 데이터를 들고 있는 StatefulSet에는 기본값 Retain을 쓴다. HPA나 자동화가 replicas를 건드리는 StatefulSet에 Delete를 걸면 잠깐 줄였다 늘리는 것만으로 복제본 데이터가 사라진다. 잘못 지웠다면 PV의 회수 정책이 Retain인지부터 본다. Retain이면 `kubectl patch pv <이름> --type json -p '[{"op":"remove","path":"/spec/claimRef"}]'`로 claimRef를 비우고, 새 PVC의 `volumeName`에 그 PV를 적어 다시 묶을 수 있다. Delete였다면 스냅숏이나 백업에서 되살리는 수밖에 없다.
+</Callout>
+
+## Parallel로 바꾸면 순서가 사라진다
+
+번호 순서가 필요 없는 앱(서로 독립적인 캐시 노드, 각자 샤드를 맡는 워커)은 `podManagementPolicy: Parallel`로 한꺼번에 띄운다.
+
+```yaml
+spec:
+  podManagementPolicy: Parallel   # 만들 때와 줄일 때 기다리지 않는다
+```
+
+```text
+00:56:53 ADDED      kv-0   0/1     Pending   0          0s
+00:56:53 ADDED      kv-1   0/1     Pending   0          0s
+00:56:53 ADDED      kv-2   0/1     Pending   0          0s
+00:56:57 MODIFIED   kv-1   1/1     Running             0          4s
+00:56:59 MODIFIED   kv-0   1/1     Running             0          6s
+00:57:00 MODIFIED   kv-2   1/1     Running             0          7s
+```
+
+세 Pod가 같은 초에 생겼고 Ready가 되는 순서도 제각각이다. 이름과 PVC는 여전히 고정이다. 오해하기 쉬운 점은 이 정책이 만들고 줄일 때만 적용된다는 것이다. 같은 StatefulSet의 이미지를 바꿔 보면 업데이트는 여전히 한 대씩이다.
+
+```text
+00:57:20 MODIFIED   kv-2   1/1     Terminating   0          27s
+00:57:29 ADDED      kv-2   0/1     Pending       0          0s
+00:57:36 MODIFIED   kv-2   1/1     Running             0          7s
+00:57:36 MODIFIED   kv-1   1/1     Terminating         0          43s
+00:57:44 MODIFIED   kv-1   1/1     Running             0          4s
+00:57:44 MODIFIED   kv-0   1/1     Terminating         0          51s
+00:57:57 MODIFIED   kv-0   1/1     Running             0          7s
+```
+
+이 정책은 만든 뒤에 바꿀 수 없다. 바꾸려 하면 API 서버가 거절하고, 바꿀 수 있는 필드 목록을 알려 준다.
+
+```bash
+# 만든 뒤에 정책이나 디스크 크기를 바꿔 본다
+kubectl -n data patch sts pg --type merge -p '{"spec":{"podManagementPolicy":"Parallel"}}'
+kubectl -n data patch sts pg --type json \
+  -p '[{"op":"replace","path":"/spec/volumeClaimTemplates/0/spec/resources/requests/storage","value":"20Gi"}]'
+```
+
+```text
+The StatefulSet "pg" is invalid: spec: Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', 'revisionHistoryLimit', 'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden
+```
+
+`volumeClaimTemplates`도 목록에 없다. 디스크를 늘리려면 이미 있는 PVC를 하나씩 직접 늘리고(StorageClass가 `allowVolumeExpansion: true`여야 한다), 템플릿은 `kubectl delete sts pg --cascade=orphan`으로 Pod를 남긴 채 StatefulSet만 지운 뒤 새 크기로 다시 만든다. 앞으로 생길 PVC가 새 크기를 따르게 하려는 것이다. PVC 확장 자체는 [PV와 PVC 글](/posts/k8s-pv-pvc#용량-늘리기)에 있다.
+
+## 업데이트는 큰 번호부터 하나씩, partition으로 끊어서
+
+롤링 업데이트는 줄일 때와 같은 순서다. 가장 큰 번호를 지우고, 새 템플릿으로 다시 띄우고, 그 Pod가 Running·Ready가 되면 다음 번호로 내려간다. `partition`을 주면 그 번호 이상만 바꾼다. 카나리처럼 한 대만 먼저 새 버전으로 돌려 볼 때 쓴다.
+
+```bash
+# partition=2: 번호 2 이상만 새 버전으로
+kubectl -n data patch sts pg --type merge \
+  -p '{"spec":{"updateStrategy":{"type":"RollingUpdate","rollingUpdate":{"partition":2}}}}'
+kubectl -n data set image sts/pg postgres=postgres:16.6
+kubectl -n data get pods -L controller-revision-hash
+kubectl -n data rollout status sts/pg
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE    CONTROLLER-REVISION-HASH
+pg-0   1/1     Running   0          4m9s   pg-85d945d9c
+pg-1   1/1     Running   0          101s   pg-85d945d9c
+pg-2   1/1     Running   0          11s    pg-d58c78979
+partitioned roll out complete: 1 new pods have been updated...
+```
+
+`pg-2`만 새 리비전(`pg-d58c78979`)이다. StatefulSet은 Deployment처럼 ReplicaSet을 두지 않고, 템플릿 버전을 ControllerRevision 객체로 남기고 Pod 라벨 `controller-revision-hash`로 구분한다. 상태 필드에도 두 리비전이 따로 보인다.
+
+```bash
+# 현재 리비전과 업데이트 리비전, 리비전 기록
+kubectl -n data get sts pg -o jsonpath='{.status}{"\n"}'
+kubectl -n data get controllerrevisions
+```
+
+```text
+{"availableReplicas":3,"collisionCount":0,"currentReplicas":2,"currentRevision":"pg-85d945d9c","observedGeneration":8,"readyReplicas":3,"replicas":3,"updateRevision":"pg-d58c78979","updatedReplicas":1}
+NAME           CONTROLLER            REVISION   AGE
+pg-85d945d9c   statefulset.apps/pg   1          4m10s
+pg-d58c78979   statefulset.apps/pg   2          21s
+```
+
+partition 아래의 Pod는 지워져도 옛 리비전으로 다시 뜬다. 새 버전 `pg-2`를 지켜본 뒤 문제가 없으면 partition을 0으로 내린다.
+
+```text
+00:51:53 MODIFIED   pg-1   1/1     Terminating   0          113s
+00:52:01 DELETED    pg-1   1/1     Terminating   0          2m1s
+00:52:01 ADDED      pg-1   0/1     Pending       0          0s
+00:52:09 MODIFIED   pg-1   1/1     Running             0          8s
+00:52:10 MODIFIED   pg-0   1/1     Terminating         0          4m37s
+00:52:18 DELETED    pg-0   1/1     Terminating         0          4m46s
+00:52:18 ADDED      pg-0   0/1     Pending             0          0s
+00:52:22 MODIFIED   pg-0   1/1     Running             0          4s
+```
+
+<AlgoTrace
+  caption="partition=2로 pg-2만 먼저 바꾸고, 0으로 내리면 pg-1, pg-0 순서로 한 대씩 바뀐다"
+  cells={["pg-0 16.4", "pg-1 16.4", "pg-2 16.4"]}
+  memoryLabel="새 리비전 d58c78979"
+  steps={[
+    { caption: "세 Pod 모두 옛 리비전 85d945d9c다. 템플릿의 이미지를 16.6으로 바꾼다." },
+    { pointer: 2, memory: ["pg-2"], caption: "partition=2라 번호 2 이상인 pg-2만 지우고 새 리비전으로 띄운다. 0, 1은 그대로다." },
+    { pointer: 2, found: [2], memory: ["pg-2"], caption: "pg-2가 Ready. rollout status는 partitioned roll out complete로 끝난다. 여기서 새 버전을 지켜본다." },
+    { pointer: 1, found: [2], memory: ["pg-2", "pg-1"], caption: "partition=0으로 내린다. 다음 큰 번호 pg-1을 바꾼다." },
+    { pointer: 0, found: [1, 2], memory: ["pg-2", "pg-1", "pg-0"], caption: "pg-1이 Ready가 된 뒤에야 pg-0을 바꾼다. 0번이 primary라면 마지막에 한 번만 끊긴다." },
+    { found: [0, 1, 2], memory: ["pg-2", "pg-1", "pg-0"], caption: "모두 새 리비전. currentRevision이 updateRevision과 같아진다." },
+  ]}
+/>
+
+큰 번호부터 바꾸는 순서는 "0번이 primary" 구성에서 쓸모가 있다. 복제본을 먼저 새 버전으로 올리고 primary는 맨 마지막에 한 번만 재시작된다. PostgreSQL처럼 복제본이 primary보다 높은 버전이어도 되는 경우에 맞는 순서다. 반대로 자동으로 바꾸고 싶지 않다면 `updateStrategy.type: OnDelete`로 두고 Pod를 직접 하나씩 지우며 바꾼다. 오퍼레이터가 장애 조치 순서를 직접 정하는 DB에서 흔한 설정이다.
+
+순서를 계산해 보는 함수를 만들어 두면 partition 값을 정할 때 헷갈리지 않는다.
+
+<CodePlayground
+  caption="replicas와 partition으로 롤링 업데이트에서 바뀌는 번호를 순서대로 구한다"
+  functionName="updateOrder"
+  initialCode={`function updateOrder(replicas, partition) {\n  // 바뀌는 번호를 바뀌는 순서대로 배열로 돌려준다\n  return [];\n}`}
+  solution={`function updateOrder(replicas, partition) {\n  const order = [];\n  for (let i = replicas - 1; i >= Math.max(partition, 0); i--) order.push(i);\n  return order;\n}`}
+  tests={[
+    { args: [3, 0], expected: [2, 1, 0], label: "replicas 3, partition 0" },
+    { args: [3, 2], expected: [2], label: "replicas 3, partition 2" },
+    { args: [5, 3], expected: [4, 3], label: "replicas 5, partition 3" },
+    { args: [3, 5], expected: [], label: "partition이 replicas보다 크면 아무것도 안 바뀐다" },
+  ]}
+/>
+
+한 대씩이라 느리다는 문제는 `maxUnavailable`로 풀려고 하는 중이다. 1.34까지는 알파라 기본으로 꺼져 있다. 실습 클러스터(1.34.1)에서 `maxUnavailable: 2`를 넣고 적용하면 에러 없이 필드가 조용히 사라진다.
+
+```bash
+# maxUnavailable을 넣어 만든 StatefulSet의 updateStrategy를 다시 읽는다
+kubectl -n data get sts kv -o jsonpath='{.spec.updateStrategy}{"\n"}'
+```
+
+```text
+{"rollingUpdate":{"partition":0},"type":"RollingUpdate"}
+```
+
+공식 기능 게이트 표를 보면 1.35에서 베타가 됐는데, 패치 버전에 따라 기본값이 켜졌다 꺼졌다 했다(1.35.0~1.35.3은 켜짐, 1.35.4~1.36은 꺼짐, 1.37부터 다시 켜짐). 이 필드에 기대는 설정이라면 적용한 뒤 위처럼 다시 읽어서 남아 있는지 확인한다.
+
+## 롤아웃이 멈췄을 때
+
+새 리비전에 CPU requests를 8로 올렸다. 4코어짜리 노드에는 들어갈 곳이 없다.
+
+```bash
+# 들어갈 노드가 없는 requests로 템플릿을 바꾼다
+kubectl -n data patch sts pg --type json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"8","memory":"4Gi"}}}]'
+kubectl -n data get pods -L controller-revision-hash
+kubectl -n data rollout status sts/pg --timeout=5s
+kubectl -n data describe pod pg-2 | sed -n '/Events/,$p'
+```
+
+```text
+NAME   READY   STATUS    RESTARTS   AGE   CONTROLLER-REVISION-HASH
+pg-0   1/1     Running   0          40s   pg-dfd9fc4d8
+pg-1   1/1     Running   0          56s   pg-dfd9fc4d8
+pg-2   0/1     Pending   0          17s   pg-7f985b4887
+Waiting for 1 pods to be ready...
+error: timed out waiting for the condition
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  26s   default-scheduler  0/4 nodes are available: 1 node(s) had untolerated taint {node-role.kubernetes.io/control-plane: }, 3 Insufficient cpu. no new claims to deallocate, preemption: 0/4 nodes are available: 4 Preemption is not helpful for scheduling.
+```
+
+`pg-2`는 이미 지워지고 새 리비전으로 Pending이다. 레플리카 하나가 빠진 채로 롤아웃이 멈췄다. 여기까지는 Deployment와 비슷하다. 다른 점은 되돌릴 때 나온다.
+
+```bash
+# 템플릿을 이전 리비전으로 되돌린다
+kubectl -n data rollout undo sts/pg
+kubectl -n data get pods -L controller-revision-hash
+kubectl -n data get sts pg -o jsonpath='{.status.currentRevision} {.status.updateRevision}{"\n"}'
+```
+
+```text
+statefulset.apps/pg rolled back
+NAME   READY   STATUS    RESTARTS   AGE    CONTROLLER-REVISION-HASH
+pg-0   1/1     Running   0          96s    pg-dfd9fc4d8
+pg-1   1/1     Running   0          112s   pg-dfd9fc4d8
+pg-2   0/1     Pending   0          73s    pg-7f985b4887
+pg-dfd9fc4d8 pg-dfd9fc4d8
+```
+
+40초가 지나도 `pg-2`는 깨진 리비전 그대로 Pending이다. 템플릿은 되돌아갔는데(update 리비전이 다시 `pg-dfd9fc4d8`) 컨트롤러는 `pg-2`가 Ready가 되기를 계속 기다린다. 공식 문서도 OrderedReady에서 이렇게 멈출 수 있다고 적고 있고(오래된 이슈 kubernetes#67250), 해법은 사람이 손을 대는 것이다. 템플릿을 되돌린 뒤 깨진 Pod를 지운다.
+
+```bash
+# 깨진 리비전의 Pod를 지우면 되돌린 템플릿으로 다시 뜬다
+kubectl -n data delete pod pg-2
+kubectl -n data get pods -L controller-revision-hash
+```
+
+```text
+pod "pg-2" deleted from data namespace
+NAME   READY   STATUS    RESTARTS   AGE     CONTROLLER-REVISION-HASH
+pg-0   1/1     Running   0          116s    pg-dfd9fc4d8
+pg-1   1/1     Running   0          2m12s   pg-dfd9fc4d8
+pg-2   1/1     Running   0          15s     pg-dfd9fc4d8
+```
+
+이미지 태그 오타로 ImagePullBackOff가 난 경우, 새 버전이 CrashLoopBackOff로 죽는 경우, readiness가 영원히 실패하는 경우가 모두 같다. 배포 파이프라인에 `rollout status --timeout`을 걸어 두고, 실패하면 "되돌리기 + 해당 리비전 Pod 삭제"까지를 한 묶음으로 실행하게 만든다. Helm의 `--atomic`이나 ArgoCD의 자동 롤백도 템플릿만 되돌리니, StatefulSet에서는 이 두 번째 단계가 빠지지 않았는지 본다.
+
+## 노드가 죽으면 StatefulSet은 기다린다
+
+Deployment는 노드가 응답하지 않으면 그 Pod를 포기하고 다른 노드에 새 Pod를 띄운다. 이름이 달라도 상관없으니까. StatefulSet은 그럴 수 없다. 죽은 노드의 `pg-1`이 정말 멈췄는지 모르는 상태에서 다른 노드에 `pg-1`을 또 띄우면, 같은 디스크에 두 프로세스가 쓰거나 primary가 둘이 되는 split brain이 생길 수 있다. 그래서 StatefulSet은 "같은 번호는 언제나 많아야 하나"를 지키려고 기다린다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="노드가 응답을 멈추면 pg-1은 Terminating에 머물고, 사람이 확인해 줘야 다른 노드에 다시 뜬다"
+  zones={[
+    { id: "z2", label: "worker-2 NotReady", x: 6, y: 100, w: 186, h: 190, tone: "edge" },
+    { id: "z1", label: "worker-1", x: 208, y: 100, w: 186, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cp", label: "control", sub: "STS 컨트롤러", x: 200, y: 40, icon: "server", w: 120 },
+    { id: "old", label: "pg-1", sub: "Terminating", x: 99, y: 160, icon: "db", w: 110 },
+    { id: "disk", label: "data-pg-1", sub: "RWO 디스크", x: 200, y: 250, icon: "lock", w: 110 },
+    { id: "new", label: "pg-1", sub: "새 Pod", x: 301, y: 160, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "cp", to: "old", dashed: true },
+    { from: "cp", to: "new" },
+    { from: "old", to: "disk", dashed: true },
+    { from: "new", to: "disk" },
+  ]}
+  steps={[
+    { path: ["cp", "old"], packet: "?", blocked: true, title: "노드가 응답하지 않는다", detail: "kubelet 하트비트가 끊기면 노드는 NotReady가 되고, 약 5분 뒤 taint 기반 축출로 Pod에 삭제 표시가 붙는다. 하지만 지웠다고 알려 줄 kubelet이 없어서 Pod는 Terminating에 머문다." },
+    { path: ["cp"], highlight: ["old"], title: "컨트롤러는 새 pg-1을 만들지 않는다", detail: "옛 pg-1이 API에서 사라지기 전에는 같은 이름을 만들 수 없다. 이 사이 레플리카 하나가 빠진 채로 간다." },
+    { path: ["old", "disk"], highlight: ["z2"], title: "사람이 노드가 꺼졌음을 확인한다", detail: "노드가 정말 꺼졌는지 확인한 뒤 out-of-service taint를 걸거나, 마지막 수단으로 Pod를 강제 삭제한다. 디스크 분리(detach)도 이때 진행된다." },
+    { path: ["cp", "new", "disk"], packet: "attach", title: "다른 노드에서 같은 이름으로", detail: "옛 Pod가 사라지면 pg-1이 worker-1에 뜨고 같은 PVC를 붙인다. 디스크가 다른 존에 있으면 그 존의 노드로만 갈 수 있다." },
+  ]}
+/>
+
+확인 수단은 두 가지다. 노드가 꺼진 게 확실하면 `node.kubernetes.io/out-of-service` taint를 건다(1.28부터 정식인 non-graceful node shutdown). 그러면 그 노드의 Pod가 강제로 지워지고 볼륨 분리도 진행된다. 다른 하나는 `kubectl delete pod pg-1 --grace-period=0 --force`인데, 노드가 사실은 살아서 네트워크만 끊긴 상태라면 옛 `pg-1`이 계속 디스크에 쓰는 동안 새 `pg-1`이 뜰 수 있다. 공유 스토리지를 쓰는 구성에서는 데이터가 깨질 수 있으니 노드 전원이 꺼진 것을 확인한 뒤에만 쓴다. 노드를 계획적으로 비우는 cordon과 drain은 [노드 점검 글](/posts/k8s-node-maintenance)에서, drain할 때 한 번에 몇 대까지 빠져도 되는지 정하는 PDB는 [PodDisruptionBudget 글](/posts/k8s-pod-disruption-budget)에서 다룬다.
+
+## DB를 쿠버네티스에 올릴까
+
+StatefulSet은 이름, 디스크, 순서까지만 준다. 복제를 설정하고, primary가 죽으면 복제본 하나를 승격하고, 백업과 시점 복구를 돌리고, 버전을 올릴 때 순서를 지키는 일은 하지 않는다. "StatefulSet으로 PostgreSQL을 띄웠다"는 말은 사실 "프로세스 세 개에 디스크를 붙였다"에 가깝다. 그 위의 운영 지식을 코드로 만든 것이 오퍼레이터다. CloudNativePG, Zalando Postgres Operator, Percona 오퍼레이터 같은 것들이 StatefulSet(또는 Pod를 직접) 관리하면서 장애 조치와 백업을 맡는다. 오퍼레이터가 무엇을 하는지는 [오퍼레이터 글](/posts/k8s-operators)에서 이어진다.
+
+선택지는 대략 셋이다.
+
+| 방식 | 장점 | 대가 |
+|---|---|---|
+| 관리형 DB (RDS, Cloud SQL) | 장애 조치·백업·패치를 클라우드가 맡는다 | 비용, 클러스터 밖 네트워크, 세부 튜닝 제한 |
+| 오퍼레이터 + StatefulSet | 같은 GitOps 흐름, 환경마다 같은 구성, 비용 | 오퍼레이터 자체를 운영하고 장애를 이해할 사람이 필요 |
+| StatefulSet만 | 가장 단순하다 | 장애 조치와 백업을 사람이 해야 한다. 개발·테스트용 |
+
+판단 기준은 기술보다 팀이다. 디스크가 존에 묶여 Pod가 그 존을 못 벗어나는 문제, 노드 업그레이드 때마다 primary가 옮겨 다니는 문제, 스토리지 지연을 진단하는 일을 누가 맡을지 정해져 있지 않으면 관리형이 싸다. 반대로 환경이 많고(개발자마다 DB 하나) 데이터가 크지 않거나, 클라우드 밖에서 돌아야 한다면 오퍼레이터가 맞다. 어느 쪽이든 StatefulSet만으로 운영 DB를 돌리는 것은 피한다.
+
+## StatefulSet이 이상할 때 보는 순서
+
+증상마다 먼저 볼 곳이 다르다.
+
+```bash
+# 1. 상태 숫자와 두 리비전: currentRevision과 updateRevision이 다르면 롤아웃 중이거나 멈춘 것
+kubectl -n data get sts pg -o jsonpath='{.status}{"\n"}'
+# 2. 어느 Pod가 어느 리비전인지
+kubectl -n data get pods -l app=pg -L controller-revision-hash
+# 3. 멈춘 번호의 이벤트: FailedScheduling, 볼륨 attach, 이미지
+kubectl -n data describe pod pg-2 | sed -n '/Events/,$p'
+# 4. PVC가 Bound인지, 어느 PV인지
+kubectl -n data get pvc
+# 5. DNS 이름이 안 나오면 serviceName의 Service가 있는지, clusterIP가 None인지
+kubectl -n data get svc pg
+```
+
+`pg-1`이 안 생기면 `pg-0`이 Ready인지부터 본다. 줄였는데 디스크가 남았으면 정상 동작이다. 늘렸는데 데이터가 비어 있으면 retention 정책과 PV 상태를 본다. Pod가 Pending인데 이벤트가 "volume node affinity conflict"면 디스크와 다른 존의 노드에 가려는 것이다([PV와 PVC 글](/posts/k8s-pv-pvc#디스크가-다른-존에-있으면-pod가-못-간다)). 셸이 없는 이미지 안을 봐야 하면 `kubectl debug`로 임시 컨테이너를 붙인다. 방법은 [Pod 문제 해결 글](/posts/k8s-pod-troubleshooting)에 있다.
+
+## 번호, 이름, 디스크
+
+StatefulSet은 Pod에 번호를 주고, 번호로 DNS 이름과 PVC를 묶고, 번호 순서로 만들고 지우고 바꾼다. headless Service가 이름을 붙이고, PVC는 Pod보다 오래 살아서 줄였다 늘려도 데이터가 돌아온다. 대신 같은 번호가 둘이 되지 않도록 업데이트는 한 대씩 빠지고, 깨진 리비전에서는 되돌린 뒤 Pod를 지워 줘야 하고, 죽은 노드에서는 사람이 확인해 줘야 한다. 노드마다 하나씩 띄우는 다른 컨트롤러는 [DaemonSet 글](/posts/k8s-daemonset)에서, 끝나는 작업을 맡는 컨트롤러는 [Job과 CronJob 글](/posts/k8s-job-cronjob)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### StatefulSet과 Deployment는 무엇이 다른가요?
+
+StatefulSet은 Pod마다 고정된 번호, 이름, 디스크를 준다. Deployment의 Pod는 서로 바꿔 끼울 수 있는 복제본이라 이름이 무작위이고 PVC를 공유하지만, StatefulSet은 `pg-0`, `pg-1`처럼 번호가 붙고 `volumeClaimTemplates`로 번호마다 PVC를 만든다. 만들 때는 작은 번호부터, 줄이고 업데이트할 때는 큰 번호부터 한 대씩 진행한다. 같은 이름이 둘이 될 수 없어서 maxSurge가 없다.
+
+### headless Service가 왜 필요한가요?
+
+StatefulSet Pod에 `pg-1.pg.data.svc.cluster.local` 같은 DNS 이름을 붙이는 것이 headless Service다. `serviceName`이 Pod의 subdomain이 되고, CoreDNS가 EndpointSlice의 hostname을 보고 Pod마다 A 레코드를 만든다. VIP가 없으니 클라이언트가 특정 Pod를 골라 직접 연결할 수 있다. StatefulSet이 이 Service를 만들어 주지 않아서 빠뜨리면 Pod는 떠도 이름이 생기지 않는다.
+
+### replicas를 줄이면 PVC는 어떻게 되나요?
+
+기본으로는 남는다. 다시 늘리면 같은 번호의 Pod가 그 PVC를 그대로 붙여 데이터가 이어진다. `persistentVolumeClaimRetentionPolicy.whenScaled: Delete`로 바꾸면 사라질 Pod를 PVC의 owner로 걸어 Pod 삭제와 함께 지운다. 다시 늘리면 같은 이름의 빈 PVC가 새로 생기므로 DB에는 Retain을 쓴다.
+
+### partition은 언제 쓰나요?
+
+한 대만 먼저 새 버전으로 바꿔 보는 카나리나 단계적 배포에 쓴다. partition 이상인 번호만 새 템플릿을 받고, 아래 번호는 지워져도 옛 리비전으로 다시 뜬다. 지켜본 뒤 partition을 0으로 내리면 나머지가 큰 번호부터 바뀐다. 0번을 primary로 두는 구성이면 primary가 마지막에 한 번만 재시작된다.
+
+### 잘못된 이미지로 StatefulSet 롤아웃이 멈췄습니다. undo하면 되나요?
+
+undo만으로는 안 된다. OrderedReady에서는 컨트롤러가 깨진 Pod가 Ready가 되기를 계속 기다려서, 템플릿을 되돌려도 그 Pod는 깨진 리비전으로 남는다. 템플릿을 되돌린 뒤 깨진 리비전의 Pod를 직접 지워야 되돌린 템플릿으로 다시 뜬다. 배포 자동화에 이 단계가 들어 있는지 확인한다.
+
+### 노드가 죽었는데 StatefulSet Pod가 다른 노드로 옮겨지지 않습니다. 왜 그런가요?
+
+같은 번호의 Pod가 동시에 둘 뜨지 않게 하려고 옛 Pod가 API에서 사라질 때까지 기다리기 때문이다. kubelet이 응답하지 않으면 Pod는 Terminating에 머문다. 노드가 꺼진 것을 확인한 뒤 out-of-service taint를 걸거나 Pod를 강제 삭제해야 다른 노드에 다시 뜬다. 노드가 살아 있는데 강제 삭제하면 같은 디스크에 두 프로세스가 쓸 수 있어 위험하다.
+
+### 운영 DB를 StatefulSet으로 돌려도 되나요?
+
+StatefulSet만으로는 권하지 않는다. StatefulSet은 이름, 디스크, 순서만 주고 복제 설정, 장애 조치, 백업, 버전 업그레이드는 하지 않는다. 쿠버네티스에서 돌린다면 그 일을 코드로 하는 오퍼레이터를 쓰고, 팀이 스토리지와 오퍼레이터 장애를 다룰 여력이 없으면 관리형 DB가 낫다.
