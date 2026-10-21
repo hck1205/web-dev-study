@@ -5,6 +5,15 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "api-gateway-use-cases",
+    title: "API 게이트웨이가 하는 열 가지 일: 요청에 실제로 하는 것과 서비스에 남기는 것",
+    summary: "게이트웨이 하나에 요청 수 제한, 인증, 분배, 라우팅, TLS 종료, 캐시, XML→JSON 변환, 서킷 브레이커, 로그와 지표, 버전 라우팅을 켜고 일마다 요청이 어떻게 바뀌는지 curl로 확인했다. 서비스에 남겨야 하는 인가와 멱등성, 입구에 몰아넣은 대가, 단계마다 무엇을 켤지도 정리했다.",
+    topic: "programming/backend/api",
+    tags: ["API", "Backend", "Architecture", "Gateway", "System Design"],
+    date: "2026-10-24",
+    keywords: ["API 게이트웨이 사용 사례", "포워드 인증", "토큰 인트로스펙션", "페이로드 변환"],
+  },
+  {
     slug: "git-features-map",
     title: "Git 기능 10가지: 커밋부터 stacked PR까지",
     summary: "매일 쓰는 Git 기능 열 가지를 손에 익는 순서대로 실제 명령 한 줄과 출력으로 짚고, 커밋 그래프 하나 위에서 각 기능이 무엇을 바꾸는지, 상황마다 어떤 기능을 꺼낼지 정리한다.",

@@ -10,6 +10,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "animation-patterns": 6,
   "animation-performance": 7,
   "ansible-network-automation": 7,
+  "api-gateway-use-cases": 7,
   "api-pagination-sorting": 6,
   "api-scaling-ladder": 7,
   "api-styles-overview": 6,

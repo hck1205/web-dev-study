@@ -7,6 +7,7 @@ import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
+import { API_GATEWAY_USE_CASES } from "./api-gateway-use-cases";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_SCALING_LADDER } from "./api-scaling-ladder";
 import { API_STYLES_OVERVIEW } from "./api-styles-overview";
@@ -585,6 +586,7 @@ export const QUESTION_SETS = [
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
+  API_GATEWAY_USE_CASES,
   API_PAGINATION_SORTING,
   API_SCALING_LADDER,
   API_STYLES_OVERVIEW,

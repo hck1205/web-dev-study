@@ -2,6 +2,41 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-gateway-use-cases": {
+    "links": [
+      "gateway",
+      "reverse-proxy-lb-api-gateway",
+      "rate-limiting-algorithms",
+      "rate-limiting-in-practice",
+      "token-login",
+      "jwt-key-rotation",
+      "load-balancing-algorithms",
+      "https-tls",
+      "http-caching-cdn",
+      "api-versioning",
+      "circuit-breaker",
+      "structured-logging",
+      "distributed-tracing",
+      "authn-vs-authz",
+      "idempotency-key",
+      "tail-latency",
+      "high-availability"
+    ],
+    "mentions": [
+      "rest-api-design",
+      "proxy-reverse-proxy",
+      "http-methods",
+      "resilience-patterns",
+      "service-mesh",
+      "build-caching",
+      "vpc-basics",
+      "osi-in-practice",
+      "redis-basics",
+      "http-status-codes",
+      "what-happens-google-com",
+      "oauth"
+    ]
+  },
   "git-features-map": {
     "links": [
       "git-internals-basics",
