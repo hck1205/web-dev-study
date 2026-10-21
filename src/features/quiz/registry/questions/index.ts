@@ -135,6 +135,7 @@ import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
 import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
+import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRAPH_RAG } from "./graph-rag";
 import { GRPC } from "./grpc";
@@ -165,6 +166,7 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JAVA_JVM_MEMORY_GC } from "./java-jvm-memory-gc";
 import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
@@ -678,6 +680,7 @@ export const QUESTION_SETS = [
   GITHUB_ACTIONS_DOCKER_ECR,
   GITOPS_ARGOCD_VS_FLUX,
   GLOBAL_ROLLOUT_LOCALIZATION,
+  GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
   GRAPH_RAG,
   GRPC,
@@ -708,6 +711,7 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JAVA_JVM_MEMORY_GC,
   JAVASCRIPT_ROADMAP,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,

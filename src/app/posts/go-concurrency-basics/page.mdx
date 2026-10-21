@@ -1,0 +1,596 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("go-concurrency-basics");
+
+상품 상세 API를 Go로 짰다. 요청 하나가 재고 서비스를 부르는데, 재고 서비스가 느릴 때를 대비해 10ms 타임아웃을 걸었다. 응답은 잘 나간다. 타임아웃이면 504를 돌려주고 끝난다. 그런데 배포하고 며칠이 지나자 메모리 그래프가 계단처럼 오르기 시작했다. 재시작하면 내려갔다가 다시 오른다. 힙을 열어 보니 큰 객체는 없고, 대신 `runtime.NumGoroutine()`이 요청 수만큼 늘어 있었다.
+
+이 글은 그 고루틴이 어디서 멈춰 있었는지를 따라가며 Go 동시성의 기본기를 정리한다. 고루틴과 스케줄러(G-M-P), 채널과 `select`, `context`로 취소를 전하는 법, 워커 풀과 `errgroup`, 레이스 디텍터, 고루틴 누수를 찾는 법을 직접 돌려 본 출력과 함께 본다. 마지막에는 Node의 이벤트 루프, 자바의 스레드와 무엇이 다른지 비교한다. 환경은 Ubuntu 24.04, Go 1.24.7(컨테이너 관련 동작 하나만 1.26.10), Node 22다.
+
+이 주제의 다른 글: 공유 변수를 고칠 때 생기는 문제는 [경쟁 상태 글](/posts/race-conditions)과 [스레드 안전 글](/posts/thread-safety), 서로 기다리다 멈추는 문제는 [데드락 글](/posts/deadlocks), Go GC의 `GOGC`·`GOMEMLIMIT`은 [가비지 컬렉션 글](/posts/garbage-collection)에서 다룬다. 같은 서버 언어 런타임 글로 [JVM 메모리와 스레드 글](/posts/java-jvm-memory-gc)이 있다.
+
+## 고루틴 수가 줄지 않는다
+
+문제의 코드는 이랬다. 재고 서비스 호출을 고루틴으로 띄우고, 결과와 타임아웃 중 먼저 오는 쪽을 고른다.
+
+```go
+func fetchLeaky(timeout time.Duration) (string, error) {
+	ch := make(chan string) // 버퍼 없음
+	go func() {
+		ch <- callInventory() // 받는 쪽이 떠나면 여기서 영원히 멈춘다
+	}()
+	select {
+	case v := <-ch:
+		return v, nil
+	case <-time.After(timeout):
+		return "", errors.New("timeout")
+	}
+}
+```
+
+`callInventory`는 50ms 걸리게 만들고, 10ms 타임아웃으로 1000번씩 세 번 불렀다. 라운드마다 200ms를 쉬어서 늦게 끝난 호출이 마무리될 시간을 줬다.
+
+```text
+start goroutines: 1
+after 1000 requests: goroutines=1001
+after 2000 requests: goroutines=2001
+after 3000 requests: goroutines=3001
+```
+
+호출 하나에 고루틴이 하나씩 남는다. 타임아웃이 나면 `fetchLeaky`는 돌아가 버리고, `ch`에서 받을 사람은 사라진다. 50ms 뒤 재고 결과를 들고 온 고루틴은 `ch <- ...`에서 받을 사람을 기다리며 멈춘다. 버퍼 없는 채널은 받는 쪽이 와야 보내기가 끝나기 때문이다. 이 고루틴은 아무도 깨우지 않으니 프로세스가 끝날 때까지 남는다. 고루틴이 쥔 스택과, 그 스택이 가리키는 값들도 GC가 치우지 못한다.
+
+고치는 방법은 한 글자다. 채널에 자리를 하나 둔다.
+
+```go
+ch := make(chan string, 1) // 받는 쪽이 없어도 한 번은 보내고 끝난다
+```
+
+```text
+start goroutines: 1
+after 1000 requests: goroutines=1
+after 2000 requests: goroutines=1
+after 3000 requests: goroutines=1
+```
+
+왜 자리 하나로 충분한지, 그리고 더 나은 방법(재고 호출 자체를 멈추게 하는 `context`)이 무엇인지는 아래에서 차례로 본다. 먼저 고루틴이 무엇인지부터.
+
+## 고루틴은 스레드 위에서 돌아가는 작은 일감이다
+
+`go f()`를 쓰면 OS 스레드가 생기지 않는다. Go 런타임이 관리하는 작은 실행 단위, 고루틴이 생긴다. 고루틴은 2KiB 정도의 작은 스택으로 시작하고, 모자라면 런타임이 더 큰 스택으로 복사해 늘린다. 그래서 10만 개를 만들어도 부담이 크지 않다. 직접 재 봤다.
+
+```text
+GOMAXPROCS: 4 CPUs: 4
+start                        goroutines=1      threads=5    stack=0MiB
+100k waiting on channel      goroutines=100001 threads=6    stack=195MiB
+200 in time.Sleep            goroutines=201    threads=6    stack=195MiB
+200 in blocking syscall      goroutines=201    threads=203  stack=204MiB
+```
+
+채널에서 기다리는 고루틴 10만 개가 스택으로 195MiB, 하나에 약 2KiB를 썼다. OS 스레드는 6개뿐이다. `stack` 값이 뒤 줄에서도 195MiB로 남은 건 런타임이 해제한 스택을 바로 OS에 돌려주지 않기 때문이고, 고루틴 수는 이미 201개로 줄었다.
+
+세 줄을 비교하면 런타임이 무엇을 할 줄 아는지 보인다. `time.Sleep`이나 채널에서 기다리는 고루틴은 스레드를 붙잡지 않는다. 런타임이 그 고루틴을 옆에 치워 두고 스레드는 다른 고루틴을 돌린다. 네트워크 I/O도 같다. 런타임 안의 넷폴러(netpoller)가 epoll로 소켓을 지켜보다가 데이터가 오면 고루틴을 다시 줄 세운다. 반면 커널 안에서 그대로 막히는 시스템 콜(여기서는 `syscall.Nanosleep`)은 스레드째로 묶인다. 200개가 막히자 스레드가 203개로 늘었다. 런타임이 막힌 스레드 대신 새 스레드를 띄워 나머지 고루틴을 계속 돌렸기 때문이다. 큰 파일을 읽는 디스크 I/O, cgo 호출이 이런 쪽이다.
+
+이걸 가능하게 하는 구조가 G-M-P다.
+
+- G(goroutine): 실행할 일감. 스택과 지금 어디까지 실행했는지를 들고 있다.
+- M(machine): OS 스레드. 실제로 CPU에서 코드를 돌린다.
+- P(processor): 실행 권한. 각자 실행 대기열(로컬 런 큐, 최대 256개)을 가진다. 개수가 `GOMAXPROCS`다.
+
+M은 P를 하나 쥐어야만 Go 코드를 돌릴 수 있다. 그래서 동시에 Go 코드를 돌리는 스레드 수는 최대 `GOMAXPROCS`개다. 아래 그림에서 화살표를 따라 점이 흐르는 방향이 일감이 흘러가는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="G는 P의 큐에 줄 서고, P를 쥔 M이 하나씩 꺼내 돌린다"
+  nodes={[
+    { id: "gq", label: "전역 런 큐", sub: "넘친 G", x: 200, y: 36, w: 130 },
+    { id: "p1", label: "P1 로컬 큐", sub: "G G G", x: 95, y: 120, w: 130 },
+    { id: "p2", label: "P2 로컬 큐", sub: "비었음", x: 305, y: 120, w: 130 },
+    { id: "m1", label: "M1 스레드", sub: "P1을 쥠", x: 95, y: 205, w: 130 },
+    { id: "m2", label: "M2 스레드", sub: "P2를 쥠", x: 305, y: 205, w: 130 },
+    { id: "cpu", label: "CPU 코어", x: 200, y: 258, w: 120, h: 34 },
+  ]}
+  edges={[
+    { from: "gq", to: "p1", label: "가져오기" },
+    { from: "p1", to: "p2", label: "훔쳐 가기", dashed: true },
+    { from: "p1", to: "m1" },
+    { from: "p2", to: "m2" },
+    { from: "m1", to: "cpu" },
+    { from: "m2", to: "cpu" },
+  ]}
+/>
+
+P2의 큐가 비면 놀지 않고 다른 P의 큐에서 절반을 훔쳐 온다(work stealing). 고루틴이 막히는 시스템 콜에 들어가면 그 M은 P를 내려놓고, 런타임이 P를 다른 M에 넘겨 나머지 G를 계속 돌린다. 앞의 실험에서 스레드가 203개까지 는 이유다.
+
+CPU만 쓰는 루프가 P를 독차지하면 어떻게 될까. Go 1.14부터는 런타임이 신호를 보내 오래 도는 고루틴을 강제로 멈추고 다른 고루틴에게 차례를 넘긴다(비동기 선점). CPU를 태우는 고루틴 20개를 P 4개에서 돌리며 스케줄러 상태를 1초마다 찍어 봤다.
+
+```bash
+GODEBUG=schedtrace=1000 ./sched   # 1초마다 스케줄러 상태를 stderr로 찍는다
+```
+
+```text
+SCHED 0ms: gomaxprocs=4 idleprocs=1 threads=5 spinningthreads=1 needspinning=0 idlethreads=1 runqueue=0 [0 0 0 0]
+SCHED 1002ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=13 [0 3 0 0]
+SCHED 2009ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 needspinning=1 idlethreads=0 runqueue=9 [2 2 1 2]
+done
+```
+
+한 줄의 조각을 눌러 보면 각각 무엇을 뜻하는지 나온다.
+
+<UrlAnatomy
+  caption="schedtrace 한 줄 읽기"
+  base="SCHED 1002ms:"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "gomaxprocs", value: "4", title: "P의 개수", description: "동시에 Go 코드를 돌릴 수 있는 스레드 수다. 기본값은 CPU 수인데, 컨테이너 CPU 한도를 따르는지는 Go 버전에 달렸다." },
+    { key: "idleprocs", value: "0", title: "노는 P", description: "0이면 P 네 개가 모두 일하고 있다. CPU 묶인 작업이 P보다 많다는 신호다." },
+    { key: "threads", value: "5", title: "OS 스레드 수", description: "고루틴이 20개여도 스레드는 5개다. 막히는 시스템 콜이 많으면 이 숫자가 크게 는다." },
+    { key: "runqueue", value: "13", title: "전역 런 큐", description: "어느 P에도 배정되지 않고 기다리는 고루틴 수다. 계속 크면 일이 CPU보다 많다." },
+    { key: "[0 3 0 0]", display: "[0 3 0 0]", title: "P별 로컬 큐", description: "P마다 줄 선 고루틴 수다. 돌고 있는 4개와 13 + 3개를 합치면 20개가 된다." },
+  ]}
+/>
+
+모든 고루틴이 약 2.5초 안에 함께 끝났다. 하나가 P를 끝까지 쥐지 않고 번갈아 돌았다는 뜻이다.
+
+### 컨테이너에서 GOMAXPROCS가 CPU 한도를 모를 때
+
+`GOMAXPROCS`의 기본값은 오랫동안 호스트의 CPU 수였다. 쿠버네티스에서 `limits.cpu: 1.5`를 줘도 노드가 64코어면 P가 64개 생긴다. 고루틴 64개가 1.5코어의 할당량(CFS quota)을 순식간에 써 버리고 남은 시간 동안 통째로 멈추는 CPU 스로틀링이 생긴다. cgroup으로 CPU를 1.5개로 묶고 같은 프로그램을 두 버전으로 빌드해 돌렸다.
+
+```bash
+# CPU 할당량을 100ms마다 150ms, 즉 1.5코어로 묶는다 (cgroup v1)
+sudo mkdir -p /sys/fs/cgroup/cpu/t2go
+echo 100000 | sudo tee /sys/fs/cgroup/cpu/t2go/cpu.cfs_period_us
+echo 150000 | sudo tee /sys/fs/cgroup/cpu/t2go/cpu.cfs_quota_us
+sudo sh -c 'echo $$ > /sys/fs/cgroup/cpu/t2go/cgroup.procs; ./procs124; ./procs126'
+```
+
+```text
+go1.24.7 NumCPU: 4 GOMAXPROCS: 4
+go1.26.10 NumCPU: 4 GOMAXPROCS: 2
+```
+
+Go 1.25부터 런타임이 cgroup CPU 한도를 읽어 `GOMAXPROCS`를 정한다(1.5를 올림해 2). 한도가 바뀌면 실행 중에도 다시 맞춘다. 단, 이 동작은 `go.mod`의 `go` 줄이 1.25 이상일 때 기본으로 켜진다. 처음에 `go 1.24.7`이라 적힌 모듈을 1.26으로 빌드했더니 `GOMAXPROCS: 4`가 나왔다. 옛 버전이라면 `uber-go/automaxprocs`를 import하거나 `GOMAXPROCS` 환경 변수를 한도에 맞춰 직접 준다.
+
+## 채널은 주고받는 순간 만나는 자리다
+
+채널은 고루틴 사이에 값을 넘기는 통로다. 보내는 쪽이 3개를 보내고 `close`하고, 받는 쪽이 하나에 100ms씩 느리게 처리하게 했다. 버퍼 없는 채널과 자리가 3개인 채널을 비교했다.
+
+```go
+func producer(ch chan<- int) {
+	for i := 1; i <= 3; i++ {
+		ch <- i
+		fmt.Println(at(), "sent", i)
+	}
+	close(ch) // 더 보낼 게 없다고 알린다
+}
+
+for v := range ch { // close되고 비면 루프가 끝난다
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println(at(), name, "got", v)
+}
+```
+
+```text
+== unbuffered
+  0ms sent 1
+100ms unbuf got 1
+100ms sent 2
+200ms unbuf got 2
+200ms sent 3
+301ms unbuf got 3
+== buffered(3)
+  0ms sent 1
+  0ms sent 2
+  0ms sent 3
+100ms buf got 1
+200ms buf got 2
+300ms buf got 3
+```
+
+버퍼 없는 채널에서 `sent 2`는 100ms에 찍혔다. 받는 쪽이 첫 값을 처리하고 다시 받으러 올 때까지 보내는 쪽이 기다렸다. 보내기와 받기가 같은 순간에 맞물리는 것, 이게 버퍼 없는 채널의 동기화다. 버퍼가 3이면 보내는 쪽은 0ms에 셋을 다 넣고 떠난다. 버퍼는 보내는 쪽과 받는 쪽의 속도 차이를 그만큼만 흡수한다.
+
+아래 그림은 자리가 2개인 채널이다. 버퍼가 차면 다음 보내기가 기다리고, 하나가 빠지면 그 자리로 들어간다.
+
+<AlgoTrace
+  caption="make(chan int, 2): 버퍼가 찼을 때 보내기는 기다린다"
+  memoryLabel="채널 버퍼"
+  cells={["send 1", "send 2", "send 3", "recv", "recv", "recv", "close", "recv"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "1을 넣는다. 자리가 남아서 바로 끝난다." },
+    { pointer: 1, memory: ["1", "2"], caption: "2를 넣는다. 이제 버퍼가 가득 찼다." },
+    { pointer: 2, memory: ["1", "2"], caption: "3을 넣으려 하지만 자리가 없다. 보내는 고루틴이 여기서 잠든다." },
+    { pointer: 3, memory: ["2", "3"], found: [2], caption: "받는 쪽이 1을 꺼낸다. 빈자리로 3이 들어가고 보내는 쪽이 깨어난다." },
+    { pointer: 4, memory: ["3"], caption: "2를 꺼낸다. 먼저 들어간 것부터 나온다." },
+    { pointer: 5, memory: [], caption: "3을 꺼낸다. 버퍼가 비었다. 여기서 한 번 더 받으면 기다린다." },
+    { pointer: 6, memory: [], caption: "보내는 쪽이 close한다. 더 보낼 값이 없다는 표시다." },
+    { pointer: 7, memory: [], found: [7], caption: "닫히고 빈 채널에서 받으면 기다리지 않고 0, false를 바로 받는다." },
+  ]}
+/>
+
+닫힌 채널의 규칙도 직접 확인했다.
+
+```go
+ch := make(chan int, 1)
+ch <- 7
+close(ch)
+v, ok := <-ch // 남은 값은 그대로 받는다
+v, ok = <-ch  // 비었으면 0, false
+ch <- 8       // 닫힌 채널에 보내면 패닉
+```
+
+```text
+after close: 7 true
+after close: 0 false
+recovered: send on closed channel
+```
+
+여기서 두 가지 규칙이 나온다. 닫는 건 보내는 쪽이 한다. 받는 쪽이 닫으면 아직 보내던 고루틴이 패닉을 낸다. 보내는 고루틴이 여럿이면 `sync.WaitGroup`으로 모두 끝난 걸 확인한 뒤 한 곳에서 닫는다. 그리고 `nil` 채널은 보내기도 받기도 영원히 기다린다. 사고처럼 들리지만 `select` 안에서 어떤 갈래를 잠시 끄고 싶을 때 일부러 채널 변수를 `nil`로 바꾸는 데 쓴다.
+
+이제 처음의 누수가 다시 보인다. 버퍼 없는 채널에서 받는 쪽이 타임아웃으로 떠나면 보내는 쪽은 짝을 영원히 못 만난다. 자리를 하나 두면 보내는 쪽은 버퍼에 넣고 끝나고, 채널과 값은 아무도 참조하지 않게 되어 GC가 치운다.
+
+## select는 먼저 준비된 쪽을 고른다
+
+`select`는 여러 채널 연산 중 먼저 진행할 수 있는 하나를 실행한다. 여럿이 동시에 준비되면 무작위로 고른다. 순서대로 고르지 않는 건 한쪽만 계속 뽑히는 기아를 막으려는 것이다. `default`가 있으면 아무것도 준비되지 않았을 때 기다리지 않고 바로 `default`로 간다.
+
+처음 코드의 흐름을 시간 순서로 그리면 이렇다. 다음을 누르면 타임아웃 뒤에 남겨지는 고루틴이 보인다.
+
+<SequenceDiagram
+  caption="버퍼 없는 채널과 타임아웃: 늦게 온 결과를 받을 사람이 없다"
+  actors={[
+    { id: "h", label: "핸들러" },
+    { id: "g", label: "고루틴" },
+    { id: "inv", label: "재고 서비스" },
+  ]}
+  steps={[
+    { from: "h", to: "g", label: "go func()", title: "고루틴을 띄운다", detail: "핸들러는 재고 호출을 고루틴에 맡기고 select로 결과와 타이머를 함께 기다린다." },
+    { from: "g", to: "inv", label: "GET /stock", title: "재고를 묻는다", detail: "재고 서비스가 오늘따라 50ms 걸린다." },
+    { from: "h", to: "h", label: "10ms 타임아웃", title: "타이머가 먼저 울린다", detail: "select는 time.After 갈래를 고르고 504를 돌려준다. 핸들러는 끝났다." },
+    { from: "inv", to: "g", label: "stock=3", title: "결과가 늦게 온다", detail: "고루틴은 결과를 받아 ch에 보내려 한다." },
+    { from: "g", to: "g", label: "ch <- 멈춤", title: "영원히 기다린다", detail: "버퍼가 없으니 받는 쪽이 와야 끝나는데 핸들러는 이미 떠났다. 이 고루틴은 프로세스가 끝날 때까지 남는다.", payload: "goroutine 45 [chan send]:" },
+  ]}
+/>
+
+`time.After`에도 한 가지 버전 차이가 있다. Go 1.23 전에는 `time.After`가 만든 타이머가 울리기 전까지 GC되지 않아서, 긴 타임아웃을 루프 안에서 계속 만들면 메모리가 쌓였다. 1.23부터는 아무도 참조하지 않는 타이머를 GC가 치운다. 옛 버전이라면 `time.NewTimer`를 만들고 `defer t.Stop()`을 하는 습관이 필요했다.
+
+## context로 취소를 아래까지 전한다
+
+버퍼를 하나 두면 누수는 막지만, 재고 서비스는 여전히 아무도 기다리지 않는 결과를 50ms 동안 만들고 있다. 요청이 포기됐으면 그 아래에서 돌고 있는 일도 멈추는 게 맞다. 그 신호를 전하는 게 `context.Context`다.
+
+`context`는 세 가지를 들고 다닌다. 취소 신호(`Done()` 채널이 닫힌다), 마감 시각(deadline), 그리고 요청 범위의 값(요청 ID 같은 것)이다. 부모를 취소하면 자식이 모두 취소된다. 그래서 HTTP 핸들러의 `r.Context()`를 받아 아래로 계속 넘기면, 클라이언트가 연결을 끊거나 마감이 지났을 때 DB 쿼리와 하류 호출까지 한 번에 멈춘다.
+
+하류 호출 셋을 동시에 부르고, 요청 전체 예산을 80ms로 잡았다. `errgroup.WithContext`는 고루틴 묶음을 기다리면서, 하나라도 에러를 내면 묶음의 context를 취소한다.
+
+```go
+func call(ctx context.Context, name string, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		fmt.Println(at(), name, "ok")
+		return nil
+	case <-ctx.Done():
+		fmt.Println(at(), name, "stopped:", ctx.Err())
+		return ctx.Err()
+	}
+}
+
+ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+defer cancel() // 일찍 끝나도 타이머와 자식 context를 정리한다
+
+g, gctx := errgroup.WithContext(ctx)
+g.Go(func() error { return call(gctx, "price", 30*time.Millisecond) })
+g.Go(func() error { return call(gctx, "stock", 50*time.Millisecond) })
+g.Go(func() error { return call(gctx, "review", 200*time.Millisecond) })
+err := g.Wait()
+```
+
+```text
+ 30ms price ok
+ 50ms stock ok
+ 80ms review stopped: context deadline exceeded
+ 80ms Wait -> context deadline exceeded
+```
+
+두 번째 실험은 마감이 아니라 실패다. 가격 조회가 20ms에 503으로 실패하자 아직 돌던 재고 조회가 `context canceled`로 멈췄다.
+
+```text
+ 20ms price failed
+ 20ms stock stopped: context canceled
+ 20ms Wait -> price: 503
+```
+
+`ctx.Err()`가 두 가지로 나뉜다. `context.DeadlineExceeded`는 시간이 다 됐다는 것이고, `context.Canceled`는 누군가 `cancel()`을 불렀다는 것이다. 로그와 지표에서 이 둘을 나눠 세면 "하류가 느렸다"와 "다른 갈래가 실패해서 접었다"를 구분할 수 있다. 처음의 상품 API라면 이런 모양이 된다.
+
+<SequenceDiagram
+  caption="errgroup.WithContext: 하나가 실패하면 나머지가 같이 멈춘다"
+  actors={[
+    { id: "h", label: "핸들러" },
+    { id: "eg", label: "errgroup" },
+    { id: "p", label: "가격 조회" },
+    { id: "s", label: "재고 조회" },
+  ]}
+  steps={[
+    { from: "h", to: "eg", label: "WithContext(ctx)", title: "묶음을 만든다", detail: "요청 context에서 묶음 전용 context를 하나 만든다. 이 context는 첫 에러가 나면 취소된다." },
+    { from: "eg", to: "p", label: "g.Go", title: "가격을 부른다", detail: "고루틴마다 gctx를 넘긴다." },
+    { from: "eg", to: "s", label: "g.Go", title: "재고를 부른다", detail: "두 호출이 동시에 진행된다." },
+    { from: "p", to: "eg", label: "error 503", title: "가격이 실패한다", detail: "errgroup은 첫 에러를 기억하고 gctx를 취소한다." },
+    { from: "eg", to: "s", label: "ctx.Done()", title: "재고에 취소가 닿는다", detail: "재고 조회는 Done 채널이 닫힌 걸 보고 바로 돌아온다. 쓸모없어진 일에 시간을 쓰지 않는다.", payload: "stock stopped: context canceled" },
+    { from: "eg", to: "h", label: "Wait → 503", title: "첫 에러를 돌려받는다", detail: "Wait는 모든 고루틴이 끝난 뒤 첫 에러를 돌려준다. 핸들러는 그걸로 응답을 정한다." },
+  ]}
+/>
+
+context를 쓸 때 자주 틀리는 곳이 있다.
+
+- `WithTimeout`이나 `WithCancel`이 준 `cancel`을 부르지 않으면 마감까지 타이머와 자식 연결이 남는다. 바로 다음 줄에 `defer cancel()`을 쓴다. `go vet`이 빠뜨린 곳을 `lostcancel`로 잡아 준다.
+- `context.Context`는 첫 번째 인자로 넘기고 구조체 필드에 넣어 두지 않는다. 요청이 끝난 뒤에도 그 context를 계속 쓰는 코드가 생긴다.
+- `ctx.Done()`을 보지 않는 함수에 ctx를 넘겨도 아무 일도 일어나지 않는다. 취소는 협조적이다. 긴 루프라면 중간중간 `ctx.Err()`를 확인해야 한다.
+- 응답을 보낸 뒤 백그라운드에서 이어 할 일에 요청 context를 그대로 넘기면 응답과 함께 취소된다. Go 1.21부터 있는 `context.WithoutCancel(ctx)`로 값만 물려받고 취소는 끊는다.
+
+마감을 하류로 어떻게 나눠 주는지, 남은 시간이 없는데 호출을 시작하지 않는 법은 [타임아웃 글](/posts/timeouts)이 자세히 다룬다.
+
+## 동시에 몇 개까지 돌릴지 정한다
+
+고루틴이 싸다고 일감마다 하나씩 띄우면 다른 곳이 먼저 터진다. 이미지 1만 장을 처리한다고 고루틴 1만 개를 띄우면 DB 커넥션 풀이 바닥나고, 하류 서비스는 갑자기 1만 동시 요청을 받는다. 그래서 동시에 도는 수를 정해 둔다. 고전적인 방법이 워커 풀이다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="워커 풀: 일감 채널 하나를 워커 셋이 나눠 가져간다"
+  zones={[{ id: "pool", label: "워커 3개", x: 140, y: 20, w: 120, h: 220, tone: "private" }]}
+  nodes={[
+    { id: "prod", label: "생산자", sub: "jobs <- id", x: 62, y: 130, icon: "client", w: 96 },
+    { id: "w1", label: "워커 1", x: 200, y: 60, icon: "container", w: 96 },
+    { id: "w2", label: "워커 2", x: 200, y: 130, icon: "container", w: 96 },
+    { id: "w3", label: "워커 3", x: 200, y: 200, icon: "container", w: 96 },
+    { id: "res", label: "결과 채널", sub: "results", x: 338, y: 130, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "prod", to: "w1" },
+    { from: "prod", to: "w2" },
+    { from: "prod", to: "w3" },
+    { from: "w1", to: "res" },
+    { from: "w2", to: "res" },
+    { from: "w3", to: "res" },
+  ]}
+  steps={[
+    { path: ["prod", "w1"], packet: "job 0", title: "놀고 있는 워커가 받는다", detail: "jobs는 버퍼 없는 채널이다. 받을 준비가 된 워커가 있어야 생산자의 보내기가 끝난다." },
+    { path: ["prod", "w2"], packet: "job 1", title: "다음 일은 다른 워커로", detail: "워커 1이 바쁘니 기다리던 워커 2가 받는다." },
+    { path: ["prod", "w3"], packet: "job 2", title: "세 워커가 모두 바쁘다", detail: "이제 생산자는 누군가 일을 끝낼 때까지 job 3을 들고 기다린다. 동시에 도는 수가 3을 넘지 않는다." },
+    { path: ["w2", "res"], packet: "done 1", title: "짧은 일이 먼저 끝난다", detail: "10ms짜리 job 1을 끝낸 워커 2가 결과를 보낸다." },
+    { path: ["prod", "w2"], packet: "job 3", title: "먼저 빈 워커가 다음 일을 가져간다", detail: "누가 어떤 일을 할지 미리 나누지 않는다. 먼저 빈 워커가 가져가니 긴 일에 묶여도 나머지가 계속 돈다." },
+    { path: ["prod"], title: "close(jobs)", detail: "일을 다 넣으면 생산자가 jobs를 닫는다. 워커의 for range가 끝나고 WaitGroup이 0이 되면 results를 닫는다." },
+  ]}
+/>
+
+```go
+jobs := make(chan int)
+results := make(chan result, len(durations))
+var wg sync.WaitGroup
+for w := 0; w < workers; w++ {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for id := range jobs { // jobs가 닫히고 비면 끝난다
+			time.Sleep(time.Duration(durations[id]) * time.Millisecond)
+			results <- result{id, durations[id]}
+		}
+	}()
+}
+for id := range durations {
+	jobs <- id
+}
+close(jobs)
+wg.Wait()
+close(results)
+```
+
+작업 8개의 시간(ms)을 `[40, 10, 30, 20, 50, 10, 20, 30]`으로 두고 워커 수를 바꿔 가며 전체 시간을 쟀다. `errgroup`의 `SetLimit(3)`으로도 같은 일을 하고, 동시에 돈 최대 개수를 셌다.
+
+```text
+workers=1 total=210ms
+workers=2 total=120ms
+workers=3 total=80ms
+workers=8 total=50ms
+errgroup SetLimit(3) total=80ms peak=3
+```
+
+워커가 하나면 합계 210ms, 여덟이면 가장 긴 작업인 50ms가 전체 시간이 된다. 2개에서 3개로 늘릴 때는 크게 줄었는데 그 뒤로는 덜 준다. 이 수치는 `time.Sleep`이라 워커를 늘리는 만큼 빨라지지만, 실제로는 하류 서비스나 DB가 감당하는 동시 요청 수가 상한을 정한다. 보통 DB를 부르는 워커 수는 커넥션 풀 크기를 넘기지 않게 잡는다.
+
+`errgroup`의 `SetLimit(n)`은 워커 풀을 손으로 짜지 않고 같은 효과를 낸다. `g.Go`가 이미 n개가 돌고 있으면 자리가 날 때까지 기다린다. 첫 에러로 나머지를 취소하는 것까지 해 주니 요즘 Go 코드에서는 이쪽을 더 자주 본다. 채널 하나를 세마포어로 쓰는 방법(`sem := make(chan struct{}, n)`에 넣고 빼기)도 흔하다.
+
+한 가지 버전 차이: 위 `SetLimit` 예제의 클로저는 루프 변수 `id`를 그대로 쓴다. Go 1.22부터 `for` 루프 변수가 반복마다 새로 만들어져서 괜찮다. 그 전에는 모든 고루틴이 마지막 `id`를 보는 버그가 흔했고, `id := id`로 복사해 두는 줄이 필요했다. 그리고 Go 1.25부터는 `wg.Add(1)`, `go`, `defer wg.Done()` 세 줄을 `wg.Go(func() { ... })` 한 줄로 쓸 수 있다.
+
+워커 수와 작업 시간이 주어졌을 때 전체 시간이 얼마인지 직접 계산해 보자. 일은 앞에서부터 순서대로, 가장 먼저 빈 워커가 가져간다.
+
+<CodePlayground
+  caption="워커 풀의 전체 처리 시간"
+  functionName="poolTime"
+  initialCode={`function poolTime(durations, workers) {
+  // durations: 작업마다 걸리는 시간(ms), 앞에서부터 순서대로 꺼낸다
+  // workers: 워커 수
+  // 가장 먼저 빈 워커가 다음 작업을 가져간다
+  // 모든 작업이 끝나는 시각을 돌려준다 (작업이 없으면 0)
+  return 0;
+}`}
+  solution={`function poolTime(durations, workers) {
+  const free = Array(Math.min(workers, durations.length)).fill(0);
+  if (free.length === 0) return 0;
+  for (const d of durations) {
+    let i = 0;
+    for (let k = 1; k < free.length; k++) if (free[k] < free[i]) i = k;
+    free[i] += d;
+  }
+  return Math.max(...free);
+}`}
+  tests={[
+    { label: "워커 1개", args: [[40, 10, 30, 20, 50, 10, 20, 30], 1], expected: 210 },
+    { label: "워커 2개", args: [[40, 10, 30, 20, 50, 10, 20, 30], 2], expected: 120 },
+    { label: "워커 3개", args: [[40, 10, 30, 20, 50, 10, 20, 30], 3], expected: 80 },
+    { label: "워커 8개", args: [[40, 10, 30, 20, 50, 10, 20, 30], 8], expected: 50 },
+    { label: "워커가 작업보다 많다", args: [[40, 10, 30, 20, 50, 10, 20, 30], 100], expected: 50 },
+    { label: "작업 없음", args: [[], 3], expected: 0 },
+    { label: "긴 작업 하나가 전체를 정한다", args: [[100, 1, 1, 1, 1], 2], expected: 100 },
+  ]}
+/>
+
+마지막 테스트처럼 긴 작업 하나가 있으면 워커를 아무리 늘려도 그보다 빨라지지 않는다. 동시성으로 줄일 수 있는 건 기다림의 겹침이지 가장 긴 일 하나의 길이가 아니다.
+
+## 레이스 디텍터는 실행된 경로만 본다
+
+고루틴 1000개가 잠금 없이 `hits++`를 했다. 세 번 돌리면 결과가 매번 다르다.
+
+```text
+hits = 1000
+hits = 931
+hits = 1000
+```
+
+`-race`로 빌드하면 런타임이 메모리 접근을 기록해서, 순서가 정해지지 않은 두 접근이 같은 주소를 건드리면 알려 준다.
+
+```bash
+go run -race ./race          # 실행하면서 데이터 경합을 찾는다
+go test -race ./...          # 테스트에서 켜는 것이 보통이다
+```
+
+```text
+==================
+WARNING: DATA RACE
+Read at 0x00c000114078 by goroutine 11:
+  main.main.func1()
+      t2demo/race/main.go:15 +0x84
+
+Previous write at 0x00c000114078 by goroutine 10:
+  main.main.func1()
+      t2demo/race/main.go:15 +0x96
+...
+hits = 939
+Found 2 data race(s)
+```
+
+경합이 하나라도 나오면 종료 코드가 66이 되어 CI가 실패한다. 다만 레이스 디텍터는 실제로 실행된 접근만 본다. 테스트가 동시 경로를 지나지 않으면 경합이 있어도 조용하다. 메모리를 5~10배, 실행 시간을 2~20배 쓰므로 운영 바이너리에는 켜지 않고, 테스트와 스테이징 부하 테스트에서 켠다. 고치는 방법(`sync.Mutex`, `atomic.Int64`, 채널로 소유권 넘기기)과 경합이 왜 생기는지는 [경쟁 상태 글](/posts/race-conditions)과 [스레드 안전 글](/posts/thread-safety)이 다룬다. 같은 맵을 여러 고루틴이 동시에 쓰면 레이스 디텍터 없이도 `fatal error: concurrent map writes`로 프로세스가 죽는다는 것도 거기서 볼 수 있다.
+
+## 멈춘 고루틴을 운영에서 찾는 법
+
+처음 장면으로 돌아가자. 서버가 메모리를 계속 먹을 때, 고루틴 누수인지 확인하는 가장 빠른 길은 pprof다. `net/http/pprof`를 import만 하면 `/debug/pprof/` 아래에 프로파일 경로가 생긴다.
+
+```go
+import _ "net/http/pprof" // DefaultServeMux에 /debug/pprof/를 등록한다
+```
+
+누수 코드를 그대로 HTTP 서버로 만들어 요청 300번을 보내고 고루틴 프로파일을 받았다.
+
+```bash
+for i in $(seq 300); do curl -s -o /dev/null http://127.0.0.1:17981/product; done
+# 같은 자리에서 멈춘 고루틴을 묶어서 개수와 함께 보여 준다
+curl -s 'http://127.0.0.1:17981/debug/pprof/goroutine?debug=1' | head -4
+```
+
+```text
+goroutine profile: total 303
+298 @ 0x47560e 0x40e265 0x40deb7 0x660ac9 0x47cf61
+#	0x660ac8	main.handler.func1+0x48	t2demo/leaksrv/main.go:18
+
+```
+
+첫 줄의 `total`이 전체 고루틴 수, 그 아래 `298 @`이 같은 스택에 멈춘 고루틴 수다. 한 자리에 수백 개가 모여 있으면 거의 누수다. `debug=2`로 받으면 고루틴마다 무엇을 기다리는지가 나온다.
+
+```bash
+curl -s 'http://127.0.0.1:17981/debug/pprof/goroutine?debug=2' | grep -A4 "chan send" | head -5
+```
+
+```text
+goroutine 45 [chan send]:
+main.handler.func1()
+	t2demo/leaksrv/main.go:18 +0x49
+created by main.handler in goroutine 43
+	t2demo/leaksrv/main.go:18 +0x79
+```
+
+대괄호 안이 상태다. `chan send`는 보내기에서, `chan receive`는 받기에서, `select`는 select에서, `semacquire`는 뮤텍스나 WaitGroup에서, `IO wait`는 네트워크에서 기다린다는 뜻이다. 오래 멈춘 고루틴은 `[chan send, 12 minutes]`처럼 기다린 시간도 붙는다. `created by` 줄이 이 고루틴을 띄운 곳이라 고칠 자리를 바로 가리킨다.
+
+시간에 따라 고루틴 수가 어떻게 늘었는지 그리면 누수의 모양이 보인다.
+
+<AlgoTrace
+  caption="누수가 있을 때 요청과 고루틴 수"
+  memoryLabel="남은 고루틴"
+  cells={["요청 1", "타임아웃", "결과 도착", "요청 2", "타임아웃", "결과 도착", "fix: 버퍼 1"]}
+  steps={[
+    { pointer: 0, memory: ["main", "g1"], caption: "요청이 오면 핸들러가 재고 호출용 고루틴 g1을 띄운다." },
+    { pointer: 1, memory: ["main", "g1"], caption: "10ms 타임아웃. 핸들러는 504를 돌려주고 끝났지만 g1은 아직 재고를 기다린다." },
+    { pointer: 2, memory: ["main", "g1 chan send"], caption: "결과가 왔지만 받을 사람이 없다. g1은 chan send에서 멈춘 채 남는다." },
+    { pointer: 3, memory: ["main", "g1 chan send", "g2"], caption: "다음 요청이 g2를 띄운다." },
+    { pointer: 5, memory: ["main", "g1 chan send", "g2 chan send"], caption: "g2도 같은 자리에 멈춘다. 요청 수만큼 고루틴이 쌓인다." },
+    { pointer: 6, found: [6], memory: ["main"], caption: "채널에 자리를 하나 두면 늦은 결과는 버퍼에 들어가고 고루틴이 끝난다. 채널은 GC가 치운다." },
+  ]}
+/>
+
+운영에서는 고루틴 수를 지표로 내보낸다. Prometheus Go 클라이언트를 쓰면 `go_goroutines` 지표가 기본으로 나온다. 트래픽은 일정한데 이 값이 계속 오르면 누수를 의심하고 위 순서로 덤프를 본다. 테스트에서는 `go.uber.org/goleak`의 `goleak.VerifyNone(t)`를 넣어 테스트가 끝날 때 남은 고루틴이 있으면 실패하게 만든다. pprof 경로는 내부 포트에만 열어 둔다. 고루틴 덤프에는 코드 경로가, 힙 프로파일에는 데이터가 담긴다.
+
+누수를 만드는 모양은 몇 가지로 반복된다. 받는 쪽이 먼저 떠나는 버퍼 없는 채널(처음 사례), 닫히지 않는 채널을 `for range`로 도는 워커, context 없이 응답이 오지 않는 외부 호출을 기다리는 고루틴, `select`에서 `ctx.Done()` 갈래를 빠뜨린 루프. 고루틴을 띄울 때마다 "이 고루틴은 언제, 무엇 때문에 끝나나"를 답할 수 있어야 한다.
+
+## Node의 이벤트 루프, 자바의 스레드와 무엇이 다른가
+
+같은 서버를 Node로 짰다면 어떨까. CPU를 2초 태우는 `/spin`을 부르고 0.2초 뒤에 `/ping`을 불러 응답 시간을 쟀다.
+
+```text
+port 17982 /ping while /spin runs: 0.000562s
+port 17983 /ping while /spin runs: 1.815795s
+```
+
+17982가 Go, 17983이 Node다. Go는 `/spin`이 P 하나를 쓰는 동안 다른 P가 `/ping`을 바로 처리했다. 같은 P에 있었더라도 선점으로 차례가 돌아왔을 것이다. Node는 자바스크립트를 메인 스레드 하나에서 돌리기 때문에 `/spin`이 끝날 때까지 `/ping`이 줄 서서 기다렸다. 기다리는 I/O는 Node도 잘 겹치지만, CPU 일은 한 번에 하나다. 왜 그런지는 [이벤트 루프 글](/posts/event-loop)이, Node 서버에서 이걸 재고 워커 스레드로 피하는 법은 [Node.js 서버 런타임 글](/posts/nodejs-server-runtime)이 다룬다.
+
+| | Go | Node.js | Java (플랫폼 스레드) |
+|---|---|---|---|
+| 동시 실행 단위 | 고루틴 (런타임이 스케줄) | 콜백·Promise (이벤트 루프 하나) | OS 스레드 |
+| 한 단위의 비용 | 스택 2KiB부터 | 콜백 객체 | 스택 기본 1MiB 예약 |
+| CPU 일 | 여러 코어에 나눠 돈다 | 메인 스레드를 막는다 | 여러 코어에 나눠 돈다 |
+| 기다리는 I/O | 코드는 막히는 모양, 런타임이 넷폴러로 겹친다 | 비동기 API로 겹친다 | 스레드가 막힌다 (가상 스레드는 예외) |
+| 공유 메모리 | 있다 (경합 주의) | 메인 스레드는 없다 | 있다 (경합 주의) |
+
+Go의 장점은 코드를 동기 코드처럼 위에서 아래로 쓰면서도 기다리는 동안 스레드를 낭비하지 않는다는 데 있다. 대신 공유 메모리가 있으니 경합과 데드락을 직접 챙겨야 하고, 고루틴이 너무 싸서 끝나지 않는 고루틴을 만들기도 쉽다. 자바는 21부터 가상 스레드로 Go와 비슷한 모델을 들여왔다. 그 이야기는 [JVM 메모리와 스레드 글](/posts/java-jvm-memory-gc)에서 이어진다.
+
+## 현장에서 고루틴 문제를 만나는 순간
+
+증상별로 처음 볼 곳을 적어 둔다.
+
+- 메모리가 계단처럼 오르고 힙 프로파일에 큰 객체가 없다. `go_goroutines` 지표를 보고, 오르고 있으면 `/debug/pprof/goroutine?debug=1`에서 개수가 많은 스택을 찾는다.
+- 요청이 끝나지 않고 CPU가 낮다. 고루틴 덤프에서 `semacquire`, `chan receive`가 몰린 자리를 본다. 서로 기다리는 데드락이면 [데드락 글](/posts/deadlocks)의 순서를 따른다. 모든 고루틴이 잠들면 런타임이 `fatal error: all goroutines are asleep - deadlock!`을 내지만, HTTP 서버처럼 accept에서 기다리는 고루틴이 하나라도 있으면 이 메시지는 나오지 않는다.
+- 컨테이너에서 p99가 주기적으로 튀고 CPU 스로틀링 지표(`container_cpu_cfs_throttled_periods_total`)가 오른다. `GOMAXPROCS`가 노드 CPU 수로 잡혀 있는지 본다. 시작 로그에 `runtime.GOMAXPROCS(0)`을 찍어 두면 바로 안다.
+- 하류 서비스가 배포 직후 동시 요청 폭주로 쓰러진다. 일감마다 고루틴을 띄우고 상한을 두지 않았는지 본다. `SetLimit`이나 세마포어로 묶는다.
+- 클라이언트가 끊었는데 DB 쿼리가 계속 돈다. 핸들러에서 `r.Context()`를 DB 호출(`QueryContext`)까지 넘겼는지 본다.
+
+## 다시 계단 모양 메모리로
+
+처음의 그래프는 고루틴 하나가 끝나지 못해서 생겼다. 고루틴은 싸지만 공짜가 아니고, 무엇보다 스스로 끝나지 않는다. 채널은 보내기와 받기가 만나야 진행되고, 짝이 떠나면 남은 쪽이 영원히 기다린다. 그래서 고루틴을 띄울 때는 끝나는 조건을 정하고(버퍼, close, `ctx.Done()`), 동시에 도는 수에 상한을 두고, 운영에서는 고루틴 수를 지표로 지켜본다. 이 세 가지를 지키면 Go의 동시성은 코드를 단순하게 유지하면서 기다림을 잘 겹친다.
+
+## 면접에서 나올 만한 질문
+
+### 고루틴과 OS 스레드는 무엇이 다른가요?
+
+고루틴은 Go 런타임이 스케줄하는 사용자 수준의 실행 단위이고, 스레드는 커널이 스케줄합니다. 고루틴은 약 2KiB 스택으로 시작해 필요하면 늘어나서 10만 개를 띄워도 스택이 200MiB 정도였습니다. 런타임이 적은 수의 OS 스레드 위에 많은 고루틴을 번갈아 올리고, 채널이나 네트워크에서 기다리는 고루틴은 스레드를 붙잡지 않습니다.
+
+### G-M-P 모델을 설명해 주세요.
+
+G는 고루틴, M은 OS 스레드, P는 실행 권한과 로컬 실행 대기열입니다. M은 P를 쥐어야 Go 코드를 돌릴 수 있어서 동시에 도는 스레드 수가 `GOMAXPROCS`로 제한됩니다. P의 큐가 비면 다른 P의 일을 훔쳐 오고, 막히는 시스템 콜에 들어간 M은 P를 내려놓아 다른 M이 나머지 고루틴을 계속 돌립니다. Go 1.14부터는 오래 도는 고루틴도 비동기로 선점합니다.
+
+### 버퍼 있는 채널과 없는 채널은 언제 쓰나요?
+
+버퍼 없는 채널은 보내기와 받기가 같은 순간에 맞물려서 "상대가 받았다"는 동기화를 함께 줍니다. 버퍼 있는 채널은 정해진 개수까지 속도 차이를 흡수합니다. 버퍼를 성능 튜닝으로 키우기보다는 의미로 정합니다. 결과 하나를 넘기고 떠나야 하는 고루틴처럼 받는 쪽이 사라질 수 있으면 버퍼 1을 둬서 누수를 막습니다.
+
+### 고루틴 누수는 왜 생기고 어떻게 찾나요?
+
+고루틴은 스스로 끝나야만 사라지는데, 아무도 받지 않는 채널에 보내거나 닫히지 않는 채널을 기다리면 영원히 남습니다. 운영에서는 `go_goroutines` 지표가 트래픽과 상관없이 오르는 걸 보고, pprof 고루틴 프로파일에서 같은 스택에 몰린 고루틴과 `[chan send]` 같은 상태, `created by` 줄을 봅니다. 테스트에는 goleak을 넣어 남은 고루틴을 실패로 만듭니다.
+
+### context는 무엇을 하고, 쓸 때 주의할 점은요?
+
+취소 신호, 마감 시각, 요청 범위 값을 호출 사슬 아래로 전합니다. 부모가 취소되면 자식이 모두 취소되어 하류 호출과 DB 쿼리가 함께 멈춥니다. `cancel`은 `defer`로 꼭 부르고, context는 첫 인자로 넘기며 구조체에 저장하지 않습니다. 취소는 협조적이라 `ctx.Done()`을 보지 않는 코드는 멈추지 않습니다.
+
+### errgroup은 WaitGroup과 무엇이 다른가요?
+
+WaitGroup은 끝나기만 기다리고 에러를 모르지만, errgroup은 첫 에러를 돌려주고 `WithContext`로 만든 context를 그 순간 취소합니다. 그래서 여러 하류를 동시에 부르다 하나가 실패하면 나머지가 쓸모없는 일을 멈춥니다. `SetLimit`으로 동시 실행 수 상한도 걸 수 있어 워커 풀을 손으로 짜는 일이 줄어듭니다.
+
+### 컨테이너에서 Go 서비스의 CPU 스로틀링이 심합니다. 무엇을 보나요?
+
+`GOMAXPROCS`가 컨테이너 CPU 한도가 아니라 노드 CPU 수로 잡혀 있는지 먼저 봅니다. Go 1.25 이상이고 `go.mod`의 go 버전도 1.25 이상이면 런타임이 cgroup 한도를 따르지만, 그 전이라면 automaxprocs나 환경 변수로 맞춥니다. P가 너무 많으면 짧은 시간에 할당량을 다 쓰고 남은 주기 동안 멈춰 꼬리 지연이 튑니다.
+
+### Go와 Node.js는 동시 요청을 처리하는 방식이 어떻게 다른가요?
+
+둘 다 기다리는 I/O를 잘 겹치지만, Node는 자바스크립트를 스레드 하나에서 돌려 CPU 일이 다른 요청을 모두 막습니다. 실제로 CPU를 2초 쓰는 요청 중에 Node의 ping은 1.8초 걸렸고 Go는 0.6ms였습니다. Go는 여러 코어에서 고루틴을 돌리는 대신 공유 메모리의 경합을 직접 관리해야 합니다.

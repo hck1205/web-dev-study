@@ -2,6 +2,39 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "java-jvm-memory-gc": {
+    "links": [
+      "garbage-collection",
+      "deadlocks",
+      "go-concurrency-basics",
+      "k8s-pod-resources",
+      "resilience-patterns"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "sql-batch-timeout-pool",
+      "connection-pool"
+    ]
+  },
+  "go-concurrency-basics": {
+    "links": [
+      "race-conditions",
+      "thread-safety",
+      "deadlocks",
+      "garbage-collection",
+      "java-jvm-memory-gc",
+      "timeouts",
+      "event-loop",
+      "nodejs-server-runtime"
+    ],
+    "mentions": [
+      "k8s-pod-resources",
+      "abort-controller",
+      "tail-latency",
+      "sql-batch-timeout-pool",
+      "js-closures"
+    ]
+  },
   "release-cutover-hypercare": {
     "links": [
       "enterprise-system-integration",
@@ -5538,6 +5571,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "go-concurrency-basics",
       "dns"
     ]
   },
@@ -5591,6 +5625,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "helm-basics",
+      "java-jvm-memory-gc",
       "event-loop",
       "sql-batch-timeout-pool",
       "layer-mtu-fragmentation"
@@ -5672,6 +5707,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "consistency-models",
+      "go-concurrency-basics",
       "acid-transactions"
     ]
   },
@@ -5687,9 +5723,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-probes",
+      "java-jvm-memory-gc",
       "event-loop",
       "osi-in-practice",
-      "sql-batch-timeout-pool"
+      "sql-batch-timeout-pool",
+      "go-concurrency-basics"
     ]
   },
   "race-conditions": {
@@ -5712,6 +5750,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "redis-basics",
       "resilience-patterns",
+      "go-concurrency-basics",
       "http-methods"
     ]
   },
@@ -8053,6 +8092,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "java-jvm-memory-gc",
+      "go-concurrency-basics",
       "k8s-pod-basics",
       "linux-namespaces-cgroups",
       "k8s-architecture",

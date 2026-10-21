@@ -5,6 +5,26 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "java-jvm-memory-gc",
+    title: "JVM 메모리와 스레드: 힙 밖 메모리, OOM 다섯 가지, 스레드 풀과 가상 스레드",
+    summary: "-Xmx를 한도 바로 아래로 줬는데 로그 없이 OOMKilled가 되는 장면을 재현하고, Native Memory Tracking으로 힙 밖 메모리를 읽는다. OOM 메시지별 원인, 컨테이너에서 MaxRAMPercentage로 힙 몫 정하기, 스레드 풀 고갈과 RUNNABLE로 보이는 대기, Java 21 가상 스레드와 pinning, jcmd로 멈춘 서비스를 뜨는 순서를 다룬다.",
+    topic: "programming/backend/languages",
+    tags: ["Java", "Performance", "Troubleshooting", "Kubernetes", "Backend"],
+    date: "2026-10-23",
+    keywords: ["메타스페이스", "가상 스레드", "Native Memory Tracking", "MaxRAMPercentage", "jcmd"],
+    companies: ["tesla"],
+  },
+  {
+    slug: "go-concurrency-basics",
+    title: "Go 동시성 기본기: 고루틴, 채널, context, 그리고 끝나지 않는 고루틴",
+    summary: "요청마다 하나씩 남는 고루틴에서 출발해 G-M-P 스케줄러, 버퍼 있는 채널과 없는 채널, select와 context 취소, 워커 풀과 errgroup, 레이스 디텍터를 직접 돌려 본다. pprof로 멈춘 고루틴을 찾는 법, 컨테이너에서 GOMAXPROCS가 CPU 한도를 따르는지, Node 이벤트 루프·자바 스레드와 무엇이 다른지도 정리한다.",
+    topic: "programming/backend/languages",
+    tags: ["Go", "Concurrency", "Backend", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["고루틴", "고루틴 누수", "GOMAXPROCS", "errgroup"],
+    companies: ["tesla"],
+  },
+  {
     slug: "release-cutover-hypercare",
     title: "컷오버와 하이퍼케어: 새 시스템을 올리는 밤과 그 뒤 몇 주",
     summary: "컷오버는 시각 관리다. 리허설로 잰 시간을 런북에 적고, 되돌리기 시간에서 거꾸로 단계별 마감을 계산하고, 돌아올 수 없는 지점 앞에 숫자로 된 게이트를 둔다. 이관 데이터는 건수부터 샘플까지 좁혀 가며 검증하고, 연 뒤에는 끝나는 날이 정해진 하이퍼케어로 지킨다.",
