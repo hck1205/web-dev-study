@@ -2,10 +2,127 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "cache-invalidation": {
+    "links": [
+      "caching-strategies",
+      "edge-caching",
+      "http-caching-cdn",
+      "pub-sub"
+    ],
+    "mentions": [
+      "cdn-edge-anycast",
+      "db-replication-sharding",
+      "kafka-basics",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "edge-caching": {
+    "links": [
+      "http-caching-cdn",
+      "cdn-edge-anycast",
+      "cache-invalidation"
+    ],
+    "mentions": [
+      "nginx-https-performance",
+      "cookie-session-login",
+      "proxy-reverse-proxy",
+      "http-status-codes",
+      "db-modeling-normalization"
+    ]
+  },
+  "tail-latency": {
+    "links": [
+      "percentile-latency",
+      "retries",
+      "timeouts",
+      "garbage-collection",
+      "latency-bandwidth-throughput",
+      "exponential-backoff-jitter",
+      "rate-limiting-algorithms",
+      "backpressure",
+      "circuit-breaker",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "grpc",
+      "db-partitioning",
+      "pub-sub",
+      "http-methods"
+    ]
+  },
+  "percentile-latency": {
+    "links": [
+      "latency-bandwidth-throughput",
+      "tail-latency",
+      "metrics-types"
+    ],
+    "mentions": [
+      "tcp-connection-lifecycle",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "http-status-codes",
+      "dns"
+    ]
+  },
+  "ssrf": {
+    "links": [
+      "webhooks",
+      "k8s-network-policy",
+      "security-groups-nacl"
+    ],
+    "mentions": [
+      "csrf",
+      "race-conditions",
+      "layer-ip-addressing",
+      "ipv6-basics",
+      "cookie-session-login",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "sql-injection": {
+    "links": [
+      "xss",
+      "sql-basics",
+      "postgres-roles-security"
+    ],
+    "mentions": [
+      "upper-layers-session-presentation-app"
+    ]
+  },
+  "xss": {
+    "links": [
+      "html-form-http",
+      "cookie-session-login",
+      "csrf"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "sql-injection"
+    ]
+  },
+  "csrf": {
+    "links": [
+      "cookie-session-login",
+      "cors",
+      "xss",
+      "http-methods",
+      "token-login"
+    ],
+    "mentions": [
+      "what-happens-google-com"
+    ]
+  },
   "waf": {
     "links": [
       "ids-ips",
       "rate-limiting-in-practice",
+      "sql-injection",
+      "xss",
+      "csrf",
+      "ssrf",
       "iptables-basics",
       "security-groups-nacl",
       "proxy-reverse-proxy"
@@ -43,7 +160,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "encryption-at-rest": {
     "links": [
-      "encryption-in-transit"
+      "encryption-in-transit",
+      "sql-injection"
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
@@ -207,8 +325,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "monitoring-basics",
       "observability-basics",
+      "percentile-latency",
       "db-type-time-series",
       "network-monitoring",
+      "tail-latency",
       "structured-logging"
     ],
     "mentions": [
@@ -294,6 +414,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "tail-latency",
       "rabbitmq-basics",
       "latency-bandwidth-throughput",
       "http-versions",
@@ -305,7 +426,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "garbage-collection": {
     "links": [
       "js-memory-leak",
-      "k8s-pod-resources"
+      "k8s-pod-resources",
+      "tail-latency"
     ],
     "mentions": [
       "helm-basics",
@@ -474,7 +596,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "exponential-backoff-jitter",
       "pub-sub",
       "load-balancer-basics",
-      "cors"
+      "cors",
+      "csrf"
     ],
     "mentions": [
       "browser-fetch",
@@ -573,6 +696,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "timeouts",
       "message-queue-basics",
       "dead-letter-queue",
+      "ssrf",
       "exponential-backoff-jitter"
     ],
     "mentions": [
@@ -823,6 +947,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cookie-session-login",
       "db-type-wide-column",
+      "csrf",
       "db-type-key-value",
       "mongodb-document-model",
       "sql-batch-timeout-pool",
@@ -1132,6 +1257,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "ipv6-basics",
       "helm-basics",
+      "ssrf",
       "autoscaling",
       "security-groups-nacl",
       "what-happens-google-com",
@@ -1306,6 +1432,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "kubernetes-ingress",
       "retries",
+      "tail-latency",
       "osi-in-practice",
       "http-status-codes",
       "grpc",
@@ -1856,6 +1983,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "service-mesh",
+      "tail-latency",
       "backpressure",
       "grpc"
     ]
@@ -2083,6 +2211,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "iptables-basics",
       "db-locking-deadlock",
+      "tail-latency",
       "resilience-patterns",
       "db-type-key-value",
       "http-methods",
@@ -2274,6 +2403,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "traffic-shaping-qos"
     ],
     "mentions": [
+      "tail-latency",
       "redis-cluster",
       "backpressure",
       "redis-basics"
@@ -2365,6 +2495,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics",
       "iptables-basics",
       "ipv6-basics",
+      "ssrf",
       "layer-link-ethernet-arp",
       "what-happens-google-com",
       "eks-cluster-basics",
@@ -3086,6 +3217,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-basics",
       "packet-capture-tcpdump",
+      "tail-latency",
       "redis-basics",
       "grpc",
       "layer-ip-routing-icmp"
@@ -3228,6 +3360,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "vpc-subnets-route-tables",
       "k8s-cni-pod-network",
+      "ssrf",
       "security-groups-nacl",
       "vpc-basics",
       "eks-cluster-basics",
@@ -3594,6 +3727,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-data-types",
       "db-architecture-by-scale",
+      "sql-injection",
       "sql-insert-update-delete",
       "db-index-design",
       "sql-batch-timeout-pool",
@@ -3976,6 +4110,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "edge-caching",
       "cookie-session-login",
       "security-groups-nacl",
       "what-happens-google-com",
@@ -4061,6 +4196,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-cluster",
       "bloom-filter",
       "db-type-columnar-olap",
+      "tail-latency",
       "db-replication-sharding",
       "dns"
     ]
@@ -4213,6 +4349,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-reverse-proxy"
     ],
     "mentions": [
+      "csrf",
       "rest-api-design",
       "base64",
       "http-versions",
@@ -4293,6 +4430,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "elasticsearch-inverted-index",
       "gateway",
+      "csrf",
       "client-data-cache",
       "what-happens-google-com"
     ]
@@ -4612,6 +4750,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "tail-latency",
       "service-mesh",
       "latency-bandwidth-throughput",
       "backpressure",
@@ -4700,6 +4839,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "csrf",
       "http-status-codes"
     ]
   },
@@ -4711,6 +4851,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "nginx-basics",
+      "ssrf",
+      "csrf",
       "http-versions",
       "what-happens-google-com",
       "cookie-session-login",
@@ -4752,6 +4894,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "html-form-http",
       "load-balancer-basics",
+      "csrf",
       "kubernetes-ingress",
       "redis-basics",
       "what-happens-google-com"
@@ -4763,7 +4906,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "oauth"
     ],
     "mentions": [
-      "base64"
+      "base64",
+      "csrf"
     ]
   },
   "oauth": {

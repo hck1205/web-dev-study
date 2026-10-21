@@ -11,6 +11,7 @@ import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
 import { BUILD_CACHING } from "./build-caching";
+import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
@@ -27,6 +28,7 @@ import { CORS } from "./cors";
 import { COUNT_MIN_SKETCH } from "./count-min-sketch";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
+import { CSRF } from "./csrf";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
 import { DB_INDEX } from "./db-index";
@@ -61,6 +63,7 @@ import { DOCKER_CONTAINER_BASICS } from "./docker-container-basics";
 import { DOCKER_NETWORK_DRIVERS } from "./docker-network-drivers";
 import { DOCKER_NETWORK_VOLUME } from "./docker-network-volume";
 import { DOCKERFILE_IMAGE_LAYERS } from "./dockerfile-image-layers";
+import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
@@ -199,6 +202,7 @@ import { PATTERN_STATE } from "./pattern-state";
 import { PATTERN_STRATEGY } from "./pattern-strategy";
 import { PATTERN_TEMPLATE_METHOD } from "./pattern-template-method";
 import { PATTERN_VISITOR } from "./pattern-visitor";
+import { PERCENTILE_LATENCY } from "./percentile-latency";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
@@ -250,6 +254,7 @@ import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
+import { SQL_INJECTION } from "./sql-injection";
 import { SQL_INSERT_UPDATE_DELETE } from "./sql-insert-update-delete";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
@@ -267,8 +272,10 @@ import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { SSRF } from "./ssrf";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
+import { TAIL_LATENCY } from "./tail-latency";
 import { TCP_CONNECTION_LIFECYCLE } from "./tcp-connection-lifecycle";
 import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
@@ -290,6 +297,7 @@ import { WAF } from "./waf";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
+import { XSS } from "./xss";
 import { ZERO_DOWNTIME_MIGRATIONS } from "./zero-downtime-migrations";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
@@ -308,6 +316,7 @@ export const QUESTION_SETS = [
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
   BUILD_CACHING,
+  CACHE_INVALIDATION,
   CACHING_STRATEGIES,
   CANARY_RELEASE,
   CDN_EDGE_ANYCAST,
@@ -324,6 +333,7 @@ export const QUESTION_SETS = [
   COUNT_MIN_SKETCH,
   CRDT,
   CRON_JOBS,
+  CSRF,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
   DB_INDEX,
@@ -358,6 +368,7 @@ export const QUESTION_SETS = [
   DOCKER_NETWORK_DRIVERS,
   DOCKER_NETWORK_VOLUME,
   DOCKERFILE_IMAGE_LAYERS,
+  EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
@@ -496,6 +507,7 @@ export const QUESTION_SETS = [
   PATTERN_STRATEGY,
   PATTERN_TEMPLATE_METHOD,
   PATTERN_VISITOR,
+  PERCENTILE_LATENCY,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,
@@ -547,6 +559,7 @@ export const QUESTION_SETS = [
   SERVICE_MESH,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
+  SQL_INJECTION,
   SQL_INSERT_UPDATE_DELETE,
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
@@ -564,8 +577,10 @@ export const QUESTION_SETS = [
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  SSRF,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
+  TAIL_LATENCY,
   TCP_CONNECTION_LIFECYCLE,
   TCP_RELIABILITY_CONGESTION,
   TERRAFORM_BASICS,
@@ -587,6 +602,7 @@ export const QUESTION_SETS = [
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
+  XSS,
   ZERO_DOWNTIME_MIGRATIONS,
   ZERO_TRUST_ARCHITECTURE,
 ];

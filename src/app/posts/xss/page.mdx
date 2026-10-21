@@ -1,0 +1,272 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("xss");
+
+검색창에 `<b>hi</b>`를 넣었더니 결과 페이지에서 "hi"가 진짜 굵게 나왔다. 서버가 내가 친 글자를 그대로 HTML에 끼워 넣은 것이다. 여기서 `<b>` 대신 `<img src=x onerror=alert(1)>`를 넣으면 어떻게 될까. 브라우저는 그것도 그대로 HTML로 읽고, `onerror`에 적힌 자바스크립트를 실행한다. 이게 XSS(Cross-Site Scripting), 내 스크립트를 남의 페이지에서 실행시키는 공격이다.
+
+문제의 뿌리는 단순하다. 브라우저는 페이지에 들어 있는 글자가 "데이터"인지 "코드"인지 구분하지 못한다. 그냥 HTML 문법에 맞으면 태그로, `<script>` 안이면 코드로 실행한다. 사용자가 넣은 값이 아무 가공 없이 페이지에 박히면, 그 순간 데이터가 코드가 된다. 이 글은 반사형·저장형·DOM 기반 XSS를 로컬 노드 서버에 실제 크로미움을 붙여 재현하고, 상황별 출력 인코딩·React의 이스케이프·DOMPurify·CSP·Trusted Types로 어떻게 막는지 확인한 결과로 설명한다.
+
+HTML이 HTTP 요청이 되는 과정은 [HTML form은 어떻게 HTTP 요청이 되나](/posts/html-form-http)에, 쿠키의 `HttpOnly`가 왜 중요한지는 [쿠키와 세션](/posts/cookie-session-login)에 있다. 요청 위조 쪽은 [CSRF](/posts/csrf)에서 다뤘고, 이 글은 "스크립트 주입" 쪽이다.
+
+## 데이터가 코드가 되는 세 가지 길
+
+XSS는 공격 코드가 "어디서 들어와서 어디서 실행되나"로 세 종류로 나뉜다. 막는 지점이 달라서 구분이 중요하다.
+
+<ConceptDiagram
+  caption="같은 스크립트 주입이라도 데이터가 들어오는 경로와 실행 지점이 다르다."
+  width={400}
+  height={260}
+  nodes={[
+    { id: "req", label: "요청 파라미터", sub: "?q=...", x: 100, y: 45, w: 150 },
+    { id: "reflected", label: "반사형", sub: "응답에 즉시 반영", x: 300, y: 45, w: 150 },
+    { id: "db", label: "저장소", sub: "DB·게시글", x: 100, y: 130, w: 150 },
+    { id: "stored", label: "저장형", sub: "열람자마다 실행", x: 300, y: 130, w: 150 },
+    { id: "client", label: "브라우저 JS", sub: "location.hash 등", x: 100, y: 215, w: 150 },
+    { id: "dom", label: "DOM 기반", sub: "서버 안 거침", x: 300, y: 215, w: 150 },
+  ]}
+  edges={[
+    { from: "req", to: "reflected", label: "echo" },
+    { from: "db", to: "stored", label: "serve" },
+    { from: "client", to: "dom", label: "innerHTML" },
+  ]}
+/>
+
+**반사형(reflected)**은 요청에 담긴 값이 그 응답에 바로 되비쳐 나온다. 검색어, 오류 메시지 같은 곳이다. 공격 링크를 누른 그 사람에게만 실행되므로 피싱 링크로 유도한다. **저장형(stored)**은 값이 DB에 저장됐다가 그 페이지를 보는 모든 사람에게 다시 그려진다. 댓글, 프로필, 게시글이 대표적이고 피해 범위가 넓다. **DOM 기반**은 서버를 거치지 않는다. 클라이언트 자바스크립트가 `location.hash` 같은 값을 읽어 `innerHTML`에 꽂으면, 서버 응답은 깨끗한데도 브라우저 안에서 스크립트가 실행된다.
+
+저장형이 왜 넓게 퍼지는지는 흐름으로 보면 분명하다. 아래 그림에서 다음을 누르면 댓글 하나가 다른 사람의 브라우저에서 실행되기까지가 보인다.
+
+<SequenceDiagram
+  caption="공격자는 한 번 저장하고, 실행은 그 글을 여는 모든 사람의 브라우저에서 일어난다."
+  actors={[
+    { id: "atk", label: "공격자" },
+    { id: "srv", label: "서버·DB" },
+    { id: "victim", label: "다른 사용자" },
+  ]}
+  steps={[
+    {
+      from: "atk",
+      to: "srv",
+      label: "POST /comment",
+      title: "스크립트가 담긴 댓글을 저장한다",
+      detail: "서버는 입력을 그대로 DB에 넣는다. 이 시점에는 아무 일도 일어나지 않는다.",
+      payload: "text=<img src=y onerror=alert(\"stored\")>",
+    },
+    {
+      from: "victim",
+      to: "srv",
+      label: "GET /stored",
+      title: "다른 사용자가 글을 연다",
+      detail: "평범하게 댓글 목록을 본다. 공격자와 아무 상호작용도 없다.",
+    },
+    {
+      from: "srv",
+      to: "victim",
+      label: "HTML 응답",
+      title: "서버가 댓글을 이스케이프 없이 그린다",
+      detail: "저장된 문자열이 HTML 안에 그대로 박힌다. 브라우저는 그걸 태그로 읽는다.",
+      payload: "<div class=c><img src=y onerror=alert(\"stored\")></div>",
+    },
+    {
+      from: "victim",
+      to: "victim",
+      label: "onerror 실행",
+      title: "피해자의 브라우저에서 스크립트가 돈다",
+      detail: "스크립트는 이 사이트의 권한으로 실행된다. 화면을 바꾸고, 이 사용자로 요청을 보낼 수 있다.",
+    },
+  ]}
+/>
+
+세 종류를 로컬 노드 서버에 올려 두고 크로미움으로 열었다. 서버는 입력을 가공 없이 HTML에 끼워 넣는다. 크로미움이 `alert` 대화상자를 띄우면 스크립트가 실제로 실행된 것이다.
+
+```text
+=== 1. Reflected XSS (raw interpolation) ===
+  alert fired: true | msg: ["1"]
+=== 3. Stored XSS ===
+  alert fired: true | msg: ["stored","stored-img"]
+=== 4. DOM-based XSS (innerHTML from location.hash) ===
+  alert fired: true | msg: ["dom"]
+```
+
+셋 다 실행됐다. 반사형은 `?q=<img src=x onerror=alert(1)>`로, 저장형은 댓글로 `<script>`와 `onerror`를 심어 다시 방문했을 때, DOM 기반은 `#<img src=z onerror=alert("dom")>`를 주소에 붙였을 때 터졌다.
+
+## 나가는 자리에 맞게 이스케이프한다
+
+가장 중요한 방어는 "사용자 값을 페이지에 **출력하는 순간**, 그 자리의 문법에 맞게 특수문자를 바꿔 주는 것"이다. 입력을 받을 때가 아니라 출력할 때가 기준이다. 같은 값이라도 어디에 들어가느냐에 따라 위험한 문자가 다르기 때문이다.
+
+<AlgoTrace
+  memoryLabel="바꿔야 할 문자"
+  caption="같은 사용자 값도 출력되는 자리에 따라 이스케이프 규칙이 다르다"
+  cells={["HTML 본문", "속성값", "<script> 안", "URL 파라미터", "CSS 값"]}
+  steps={[
+    { pointer: 0, memory: ["< > & \" '"], caption: "HTML 본문에서는 < > & 따옴표를 엔티티로 바꾼다. 태그가 열리지 못하게." },
+    { pointer: 1, memory: ["< > & \" '", "따옴표 필수"], caption: "속성값은 따옴표로 감싸고 그 따옴표를 이스케이프한다. 안 그러면 속성을 탈출해 onerror를 붙인다." },
+    { pointer: 2, found: [2], memory: ["< > & \" '", "따옴표 필수", "JS 문자열 인코딩"], caption: "script 안에 값을 넣는 건 피하고, 꼭 넣는다면 JSON.stringify로 JS 문자열 규칙에 맞춘다." },
+    { pointer: 3, memory: ["< > & \" '", "따옴표 필수", "JS 문자열 인코딩", "encodeURIComponent"], caption: "URL에 넣을 땐 퍼센트 인코딩한다. javascript: 스킴은 따로 막는다." },
+    { pointer: 4, found: [2, 4], memory: ["< > & \" '", "따옴표 필수", "JS 문자열 인코딩", "encodeURIComponent", "CSS 이스케이프"], caption: "CSS 값에 넣는 것도 위험하다. 가능한 한 값을 코드 자리에 넣지 않는 게 최선이다." },
+  ]}
+/>
+
+HTML 본문 이스케이프는 가장 자주 쓰는데, 다섯 글자만 바꾸면 된다. 직접 구현해 돌려 보자.
+
+<CodePlayground
+  caption="HTML 본문용 이스케이프: 태그로 해석될 수 있는 문자를 엔티티로 바꾼다"
+  functionName="escapeHtml"
+  initialCode={`function escapeHtml(s) {\n  // & < > " ' 를 각각 HTML 엔티티로 바꾼다\n  // &amp; &lt; &gt; &quot; &#39;\n  return String(s);\n}`}
+  solution={`function escapeHtml(s) {\n  const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };\n  return String(s).replace(/[&<>"']/g, (c) => map[c]);\n}`}
+  tests={[
+    { args: ["<img src=x onerror=alert(1)>"], expected: "&lt;img src=x onerror=alert(1)&gt;", label: "태그 무력화" },
+    { args: ["Tom & \"Jerry's\""], expected: "Tom &amp; &quot;Jerry&#39;s&quot;", label: "앰퍼샌드와 따옴표" },
+    { args: ["safe text"], expected: "safe text", label: "바꿀 것 없음" },
+  ]}
+/>
+
+같은 입력을 이스케이프해서 내보낸 페이지는 크로미움에서 스크립트가 실행되지 않았다. 태그가 글자로 그려질 뿐이다.
+
+```text
+=== 2. Reflected-safe (HTML-encoded output) ===
+  alert fired: false
+  rendered: Results for: &lt;img src=x onerror="alert(1)"&gt;
+```
+
+직접 치환 함수를 쓸 일은 많지 않다. 템플릿 엔진이 기본으로 이스케이프해 주기 때문이다. 문제는 그 자동 이스케이프를 꺼야 하는 자리(HTML을 통째로 넣는 곳)와 애초에 이스케이프가 안 되는 자리(JS·URL 컨텍스트)다.
+
+## React는 왜 비교적 안전한가, 그리고 어디서 뚫리나
+
+React로 화면을 그리면 XSS가 줄어든다. JSX에 꽂는 텍스트를 React가 자동으로 이스케이프하기 때문이다. 서버 렌더링으로 실제 출력을 찍어 봤다.
+
+```text
+text child : <p>Hello &lt;img src=x onerror=alert(1)&gt;</p>
+dangerous  : <p><img src=x onerror=alert(1)></p>
+```
+
+위처럼 `{userInput}`을 텍스트 자식으로 넣으면 `&lt;img...`로 바뀌어 태그가 죽는다. 반면 `dangerouslySetInnerHTML`로 넣으면 React가 손대지 않아 그대로 태그가 산다. 이름에 "dangerously"가 붙은 이유다. 사용자 HTML을 렌더링해야 하는 경우(리치 텍스트 에디터 결과 등)에만, 반드시 정제를 거친 값에만 쓴다. React를 써도 `href={userInput}`에 `javascript:` 스킴이 들어가거나, `dangerouslySetInnerHTML`에 날 값을 넣으면 그대로 뚫린다. 프레임워크가 막아 주는 건 "텍스트 자식" 한 자리뿐이다.
+
+## HTML을 허용해야 한다면 정제한다
+
+댓글에 굵은 글씨나 링크는 허용하고 싶은데 `<script>`는 막고 싶을 때가 있다. 이럴 땐 이스케이프가 아니라 **정제(sanitize)**가 필요하다. 허용 목록 방식으로 안전한 태그·속성만 남기고 나머지를 떼어 낸다. 직접 만들면 거의 반드시 빈틈이 생기므로 검증된 라이브러리를 쓴다. 표준은 DOMPurify다. 실제로 돌려 본 결과다.
+
+```text
+in : <img src=x onerror=alert(1)>
+out: <img src="x">
+
+in : <a href="javascript:alert(1)">click me</a>
+out: <a>click me</a>
+
+in : hello <b>world</b> <script>steal(document.cookie)</script> 
+out: hello <b>world</b>
+
+in : <p onclick="evil()">text</p>
+out: <p>text</p>
+```
+
+`onerror`·`onclick` 같은 이벤트 핸들러 속성, `javascript:` href, `<script>` 태그가 모두 제거됐다. `<b>` 같은 안전한 태그는 살아남는다. 서버 저장 전이든 렌더링 직전이든 한 번은 이 정제를 거쳐야 하고, "입력은 믿지 않는다"는 원칙 그대로 출력 직전에 거는 쪽이 더 안전하다.
+
+<Callout kind="warning">
+직접 만든 정규식 필터로 `<script>`만 지우는 식의 방어는 거의 다 우회된다. `<scr<script>ipt>`, 대소문자, 인코딩, SVG·이벤트 핸들러 등 우회로가 수없이 많다. 블랙리스트 대신 허용 목록 기반의 검증된 파서(DOMPurify)를 쓴다.
+</Callout>
+
+## CSP로 주입돼도 실행을 막는다
+
+이스케이프와 정제를 아무리 해도 코드 어딘가에 빈틈은 남는다. CSP(Content Security Policy)는 그 빈틈을 뚫고 스크립트가 주입돼도 **실행 자체를 막는** 마지막 그물이다. 서버가 응답 헤더로 "어떤 스크립트를 실행해도 되는지"를 선언하면, 브라우저가 그 밖의 스크립트를 거부한다.
+
+<UrlAnatomy
+  caption="nonce 기반 CSP 헤더. 조각을 눌러 보자."
+  base="Content-Security-Policy:"
+  separator=" "
+  joiner="; "
+  params={[
+    {
+      key: "script-src 'nonce-r4nd0m' 'strict-dynamic'",
+      title: "이 nonce가 붙은 스크립트만 실행",
+      description: "서버가 매 응답마다 새 난수(nonce)를 만들어 자기가 심은 script 태그에만 붙인다. 공격자가 주입한 인라인 스크립트는 nonce를 모르니 실행되지 않는다. strict-dynamic은 그 신뢰된 스크립트가 만든 자식 스크립트까지 허용해 준다.",
+    },
+    {
+      key: "object-src 'none'",
+      title: "object·embed 차단",
+      description: "플래시·플러그인 같은 오래된 실행 경로를 막는다.",
+    },
+    {
+      key: "base-uri 'none'",
+      title: "base 태그 주입 차단",
+      description: "공격자가 <base>로 상대 경로의 기준 주소를 바꿔치기하는 우회를 막는다.",
+    },
+    {
+      key: "report-uri /csp-report",
+      title: "위반을 서버로 보고",
+      description: "차단된 스크립트의 정보를 이 주소로 POST한다. 공격 시도와 설정 실수를 로그로 본다.",
+    },
+  ]}
+/>
+
+이 헤더를 건 페이지에 인라인 스크립트(공격자가 주입했다고 치자)와 nonce가 붙은 정상 스크립트를 함께 넣고 크로미움으로 열었다.
+
+```text
+inline-without-nonce changed DOM?: false | #o = "safe"
+nonce script ran?: true
+console: Refused to execute inline script because it violates the following Content Security Policy
+```
+
+nonce 없는 인라인 스크립트는 DOM을 못 바꿨고(`#o`가 그대로 "safe"), nonce가 붙은 스크립트만 실행됐다. 동시에 `report-uri`로 위반 보고가 실제로 들어왔다.
+
+```text
+CSP-REPORT {"csp-report":{"document-uri":"http://127.0.0.1/csp",
+"violated-directive":"script-src-elem","effective-directive":"script-src-elem",
+"original-policy":"script-src 'nonce-r4nd0mNonce' 'strict-dynamic'; object-src 'none'; base-uri 'none'; report-uri /csp-report",
+"disposition":"enforce","blocked-uri":"inline","status-code":200}}
+```
+
+`blocked-uri: inline`이 주입된 인라인 스크립트가 막혔다는 신호다. 처음 도입할 때는 `Content-Security-Policy-Report-Only` 헤더로 먼저 깔아 두면, 차단하지 않고 보고만 받아 어떤 스크립트가 걸리는지 파악한 뒤 정식 적용할 수 있다. 참고로 `'unsafe-inline'`을 넣으면 CSP의 의미가 거의 사라진다. 흔한 실수가 인라인 스크립트가 많아서 귀찮다고 `'unsafe-inline'`을 넣어 버리는 것이다.
+
+## 터져도 피해를 줄이는 장치들
+
+방어가 뚫려 스크립트가 실행됐다고 해도, 할 수 있는 일을 줄여 두면 피해가 작다. 대표가 `HttpOnly` 쿠키다. 세션 쿠키에 `HttpOnly`를 붙이면 자바스크립트가 `document.cookie`로 읽지 못한다. 실험에서 세션 쿠키는 `HttpOnly`로, 테마 쿠키는 일반으로 내려 두고 `document.cookie`를 읽어 봤다.
+
+```text
+document.cookie = "theme=dark"
+```
+
+`session` 쿠키는 보이지 않고 `theme`만 보인다. XSS로 스크립트가 심겨도 세션 쿠키를 긁어 가 계정을 탈취하는 가장 흔한 경로 하나가 막힌다. 다만 스크립트는 여전히 그 페이지의 권한으로 요청을 보낼 수 있으니(쿠키는 브라우저가 알아서 붙인다) `HttpOnly`가 만능은 아니다.
+
+DOM 기반 XSS에는 **Trusted Types**가 있다. `innerHTML` 같은 위험한 싱크(sink)에 문자열을 바로 꽂지 못하게 하고, 반드시 정책을 거친 `TrustedHTML` 객체만 받도록 브라우저 차원에서 강제한다. CSP 헤더에 `require-trusted-types-for 'script'`를 넣어 켠다. 지원 범위는 크롬 계열 중심이고 모든 브라우저가 동일하지 않으므로, 폴리필과 함께 점진 도입한다. 이렇게 하면 "문자열이 코드가 되는" DOM 싱크를 코드 리뷰가 아니라 런타임이 막아 준다.
+
+## 실제로 XSS를 만나는 순간
+
+운영에서 XSS는 보통 사용자 신고나 보안 스캐너로 먼저 드러난다. "특정 게시글을 열면 이상한 팝업이 뜬다", "로그인이 자꾸 풀린다"는 신고가 저장형 XSS의 신호일 수 있다. 확인은 그 페이지에서 사용자 입력이 들어가는 자리를 찾고, 개발자 도구로 그 자리의 실제 HTML을 본다. 입력한 `<`가 `&lt;`로 바뀌어 있으면 이스케이프가 걸린 것이고, 날것 그대로 태그로 들어가 있으면 취약하다.
+
+CSP를 켜 뒀다면 `report-uri`로 들어오는 위반 보고가 가장 빠른 탐지 수단이다. `blocked-uri: inline` 보고가 특정 페이지에서 갑자기 늘면 주입 시도이거나 새로 추가한 인라인 스크립트가 정책에 안 맞는 것이다. 둘을 구분해 전자는 입력 처리를, 후자는 nonce 적용을 고친다.
+
+흔한 실수를 모으면 이렇다. 입력 검증만 하고 출력 이스케이프를 빼먹는 것(저장형은 입력이 멀쩡해 보여도 출력에서 터진다), `innerHTML`을 습관적으로 쓰는 것(`textContent`로 충분한 경우가 대부분이다), 자동 이스케이프를 신뢰해 JS·URL 컨텍스트까지 안전하다고 착각하는 것, `dangerouslySetInnerHTML`에 정제 없이 날 값을 넣는 것. OWASP Top 10에서 XSS는 2017년까지 A7 독립 항목이었다가 2021년부터는 A03 Injection 안으로 합쳐졌다. SQL 주입과 같은 뿌리("데이터가 코드가 된다")로 묶인 것이고, 흔하고 영향이 크다는 평가는 그대로다.
+
+## 정리
+
+XSS는 사용자가 넣은 데이터가 페이지에서 코드로 실행되는 공격이다. 막는 순서는 분명하다. 출력하는 자리의 문법에 맞게 이스케이프하고, HTML을 허용해야 하면 DOMPurify로 정제하고, React의 자동 이스케이프를 믿되 `dangerouslySetInnerHTML`과 URL·JS 컨텍스트는 따로 챙긴다. 그 위에 CSP를 nonce 기반으로 깔아 주입돼도 실행을 막고, `HttpOnly`와 Trusted Types로 터졌을 때의 피해를 줄인다. 한 겹이 아니라 여러 겹이다.
+
+## 면접에서 나올 만한 질문
+
+### 반사형, 저장형, DOM 기반 XSS는 무엇이 다른가
+
+데이터가 들어오는 경로와 실행 지점이 다르다. 반사형은 요청 파라미터가 그 응답에 바로 되비쳐 나와 링크를 누른 사람에게만 실행된다. 저장형은 값이 DB에 저장됐다가 그 페이지를 보는 모든 사람에게 실행돼 피해가 넓다. DOM 기반은 서버를 거치지 않고 클라이언트 JS가 location.hash 같은 값을 innerHTML 싱크에 꽂을 때 터진다. 막는 지점이 서버냐 클라이언트냐가 달라서 구분이 중요하다.
+
+### XSS 방어에서 입력 검증보다 출력 인코딩이 강조되는 이유는
+
+같은 값도 출력되는 자리(HTML 본문, 속성, JS, URL, CSS)마다 위험한 문자가 달라서, 입력 시점에는 어느 자리로 나갈지 알 수 없기 때문이다. 저장형처럼 입력이 멀쩡해 보여도 출력 자리에서 터지는 경우가 많다. 그래서 값을 출력하는 순간 그 자리의 문법에 맞게 이스케이프하는 것이 핵심이고, 입력 검증은 보조 수단이다.
+
+### React를 쓰면 XSS가 없어지나
+
+아니다. React는 JSX 텍스트 자식만 자동 이스케이프한다. 실험에서 텍스트로 넣은 값은 &lt;img&gt;로 죽었지만 dangerouslySetInnerHTML로 넣으면 태그가 그대로 살았다. href에 javascript: 스킴을 넣거나 URL·속성 컨텍스트에 날 값을 넣으면 여전히 뚫린다. 프레임워크가 막아 주는 건 한 자리뿐이고 나머지는 개발자가 챙겨야 한다.
+
+### HTML 입력을 꼭 허용해야 할 때는 어떻게 막나
+
+이스케이프하면 태그가 글자로 보여 버리니, 허용 목록 기반으로 정제한다. DOMPurify 같은 검증된 라이브러리로 안전한 태그·속성만 남기고 onerror·onclick·script·javascript: href를 떼어 낸다. 직접 만든 정규식 블랙리스트는 대소문자·인코딩·중첩 태그로 거의 다 우회되므로 쓰지 않는다. 정제는 출력 직전에 거는 쪽이 안전하다.
+
+### CSP의 nonce 기반 방식은 어떻게 동작하나
+
+서버가 매 응답마다 새 난수를 만들어 자기가 심은 script 태그에만 붙이고, 헤더에 그 nonce를 허용한다고 적는다. 공격자가 주입한 인라인 스크립트는 nonce를 모르니 브라우저가 실행을 거부한다. 실험에서 nonce 없는 인라인 스크립트는 DOM을 못 바꿨고 위반 보고가 report-uri로 들어왔다. strict-dynamic은 신뢰된 스크립트가 동적으로 추가한 스크립트까지 허용해 준다. 'unsafe-inline'을 넣으면 이 보호가 사실상 사라진다.
+
+### HttpOnly 쿠키는 XSS를 막나
+
+막지 못한다. XSS 자체(스크립트 실행)는 그대로 일어난다. 다만 HttpOnly는 자바스크립트가 document.cookie로 세션 쿠키를 읽지 못하게 해서, 쿠키를 긁어 계정을 탈취하는 흔한 경로를 끊는다. 실험에서 HttpOnly 세션 쿠키는 document.cookie에 안 보이고 일반 쿠키만 보였다. 피해를 줄이는 장치이지 예방책은 아니다.
+
+### Trusted Types는 어떤 종류의 XSS를 겨냥하나
+
+DOM 기반 XSS다. innerHTML처럼 문자열을 받아 코드로 만드는 위험한 싱크에, 문자열을 바로 못 꽂게 하고 정책을 거친 TrustedHTML 객체만 받도록 브라우저가 강제한다. 코드 리뷰로 잡아야 했던 "문자열이 싱크로 흘러드는" 실수를 런타임이 막아 준다. CSP에 require-trusted-types-for 'script'로 켜고, 지원이 크롬 계열 중심이라 폴리필과 함께 점진 도입한다.
