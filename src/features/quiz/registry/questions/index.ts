@@ -133,6 +133,7 @@ import { JSON_CRUD_HTTP } from "./json-crud-http";
 import { JWT_KEY_ROTATION } from "./jwt-key-rotation";
 import { K8S_API_OBJECTS } from "./k8s-api-objects";
 import { K8S_ARCHITECTURE } from "./k8s-architecture";
+import { K8S_CLUSTER_UPGRADE } from "./k8s-cluster-upgrade";
 import { K8S_CNI_POD_NETWORK } from "./k8s-cni-pod-network";
 import { K8S_CONFIGMAP } from "./k8s-configmap";
 import { K8S_CONTROLLERS_RECONCILE } from "./k8s-controllers-reconcile";
@@ -140,6 +141,7 @@ import { K8S_COREDNS } from "./k8s-coredns";
 import { K8S_DAEMONSET } from "./k8s-daemonset";
 import { K8S_DEPLOY_PIPELINE_EKS } from "./k8s-deploy-pipeline-eks";
 import { K8S_DEPLOYMENT } from "./k8s-deployment";
+import { K8S_ETCD_BACKUP } from "./k8s-etcd-backup";
 import { K8S_FEATURE_MATURITY } from "./k8s-feature-maturity";
 import { K8S_GATEWAY_API } from "./k8s-gateway-api";
 import { K8S_HPA } from "./k8s-hpa";
@@ -150,6 +152,7 @@ import { K8S_LABELS_SELECTORS } from "./k8s-labels-selectors";
 import { K8S_NAMESPACE } from "./k8s-namespace";
 import { K8S_NETWORK_POLICY } from "./k8s-network-policy";
 import { K8S_NODE_AUTOSCALING_KARPENTER } from "./k8s-node-autoscaling-karpenter";
+import { K8S_NODE_MAINTENANCE } from "./k8s-node-maintenance";
 import { K8S_POD_BASICS } from "./k8s-pod-basics";
 import { K8S_POD_DISRUPTION_BUDGET } from "./k8s-pod-disruption-budget";
 import { K8S_POD_LIFECYCLE } from "./k8s-pod-lifecycle";
@@ -336,6 +339,7 @@ import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
+import { VELERO_BACKUP } from "./velero-backup";
 import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
@@ -487,6 +491,7 @@ export const QUESTION_SETS = [
   JWT_KEY_ROTATION,
   K8S_API_OBJECTS,
   K8S_ARCHITECTURE,
+  K8S_CLUSTER_UPGRADE,
   K8S_CNI_POD_NETWORK,
   K8S_CONFIGMAP,
   K8S_CONTROLLERS_RECONCILE,
@@ -494,6 +499,7 @@ export const QUESTION_SETS = [
   K8S_DAEMONSET,
   K8S_DEPLOY_PIPELINE_EKS,
   K8S_DEPLOYMENT,
+  K8S_ETCD_BACKUP,
   K8S_FEATURE_MATURITY,
   K8S_GATEWAY_API,
   K8S_HPA,
@@ -504,6 +510,7 @@ export const QUESTION_SETS = [
   K8S_NAMESPACE,
   K8S_NETWORK_POLICY,
   K8S_NODE_AUTOSCALING_KARPENTER,
+  K8S_NODE_MAINTENANCE,
   K8S_POD_BASICS,
   K8S_POD_DISRUPTION_BUDGET,
   K8S_POD_LIFECYCLE,
@@ -690,6 +697,7 @@ export const QUESTION_SETS = [
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
+  VELERO_BACKUP,
   VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,

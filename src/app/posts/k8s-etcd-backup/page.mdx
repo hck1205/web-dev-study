@@ -1,0 +1,602 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-etcd-backup");
+
+누군가 운영 클러스터에서 `kubectl delete deploy web`을 쳤다. 잘못된 컨텍스트였다. Deployment 매니페스트는 Git에 있으니 다시 적용하면 되지만, 그 Deployment에 손으로 고쳐 둔 값이 있었는지는 아무도 모른다. 더 나쁜 경우도 있다. 컨트롤 플레인 노드 셋 중 둘의 디스크가 함께 망가지면 API 서버가 아예 쓰기를 못 한다. 두 경우 모두 마지막 기댈 곳은 etcd 스냅숏이다.
+
+쿠버네티스의 모든 객체는 etcd라는 키-값 저장소 하나에 들어 있다. 스냅숏은 그 저장소를 통째로 떠 둔 파일이다. 이 글은 스냅숏을 뜨고(`etcdctl snapshot save`), 확인하고(`etcdutl snapshot status`), 새 데이터 디렉터리로 복원하는(`etcdutl snapshot restore`) 과정을 실제로 해 보고, 복원한 클러스터가 "과거로 돌아가면서" 생기는 resourceVersion 문제, 스냅숏 암호화, 그리고 etcd에 손댈 수 없는 관리형 클러스터에서는 어떻게 하는지를 본다.
+
+실습은 kwok 클러스터(Kubernetes 1.37.0)가 띄운 진짜 etcd 3.5.11 프로세스를 대상으로 했다. etcdctl과 etcdutl도 3.5.11이다. 실습 etcd는 TLS 없이 `http://127.0.0.1:32717`에서 듣는다. kubeadm 클러스터라면 인증서 옵션이 붙는 것만 다르고, 그 명령은 따로 적었다. 기준 OS는 Ubuntu 24.04 LTS다.
+
+이 주제의 다른 글: etcd가 과반으로 쓰기를 정하는 원리는 [Raft 합의](/posts/raft-consensus), 객체 단위로 백업하고 다른 클러스터로 옮기는 쪽은 [Velero 백업](/posts/velero-backup), 업그레이드 직전에 왜 스냅숏을 떠야 하는지는 [클러스터 업그레이드](/posts/k8s-cluster-upgrade)에서 다룬다.
+
+## 클러스터의 기억은 전부 한곳에 있다
+
+API 서버는 상태를 갖지 않는다. Deployment, Pod, Secret, ConfigMap, 노드 정보, RBAC 규칙, 리더 선출용 Lease까지 모든 것을 etcd에 쓰고 etcd에서 읽는다([쿠버네티스 아키텍처](/posts/k8s-architecture)). 그래서 etcd를 잃으면 컨테이너는 노드에서 계속 돌아도 클러스터는 자기가 무엇을 돌리고 있었는지 잊는다.
+
+그렇다고 스냅숏 하나로 모든 것이 돌아오지는 않는다. 아래 그림에서 실선은 스냅숏에 들어 있는 것, 점선은 들어 있지 않은 것이다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="etcd 스냅숏이 담는 것과 담지 않는 것"
+  nodes={[
+    { id: "snap", label: "etcd 스냅숏", sub: "snapshot.db", x: 220, y: 150, w: 140 },
+    { id: "obj", label: "API 객체 전부", sub: "Deployment·Pod…", x: 80, y: 50, w: 140 },
+    { id: "sec", label: "Secret 값", sub: "암호화 안 했으면 평문", x: 220, y: 40, w: 150 },
+    { id: "rv", label: "revision", sub: "resourceVersion", x: 365, y: 50, w: 120 },
+    { id: "pv", label: "PV 안의 데이터", sub: "EBS·디스크", x: 80, y: 255, w: 130 },
+    { id: "pki", label: "인증서·키", sub: "/etc/kubernetes/pki", x: 220, y: 265, w: 150 },
+    { id: "img", label: "이미지·노드 디스크", sub: "레지스트리", x: 365, y: 255, w: 140 },
+  ]}
+  edges={[
+    { from: "obj", to: "snap" },
+    { from: "sec", to: "snap" },
+    { from: "rv", to: "snap" },
+    { from: "pv", to: "snap", dashed: true, arrow: "none" },
+    { from: "pki", to: "snap", dashed: true, arrow: "none" },
+    { from: "img", to: "snap", dashed: true, arrow: "none" },
+  ]}
+/>
+
+PersistentVolume 객체(어떤 디스크를 어디에 붙인다는 기록)는 들어 있지만 그 디스크 안의 데이터는 없다. 컨트롤 플레인 인증서와 저장 시 암호화 키(EncryptionConfiguration 파일)도 노드의 파일이라 따로 백업해야 한다. 특히 암호화 키를 잃으면 스냅숏을 복원해도 Secret을 하나도 읽지 못한다. 반대로 Secret 값은 저장 시 암호화를 켜지 않았다면 스냅숏 안에 평문으로 들어 있다. 이건 뒤에서 직접 확인한다.
+
+## 키 이름으로 보는 etcd 안쪽
+
+etcd 안을 직접 보면 무엇을 백업하는지 감이 온다. kwok 클러스터의 etcd에 붙어 봤다.
+
+```bash
+# 멤버 상태: 버전, DB 크기, 리더 여부, Raft 인덱스
+etcdctl --endpoints=http://127.0.0.1:32717 endpoint status -w table
+
+# /registry 아래 키를 리소스 종류별로 센다
+etcdctl --endpoints=http://127.0.0.1:32717 get /registry --prefix --keys-only \
+  | grep -v '^$' | awk -F/ '{print $3}' | sort | uniq -c | sort -rn | head -6
+```
+
+```text
++------------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+|        ENDPOINT        |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
++------------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+| http://127.0.0.1:32717 | c556ff0bf909e069 |  3.5.11 |  2.3 MB |      true |      false |         2 |       2395 |               2395 |        |
++------------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+     73 clusterroles
+     67 events
+     54 clusterrolebindings
+     22 apiregistration.k8s.io
+     11 flowschemas
+      8 prioritylevelconfigurations
+```
+
+키는 `/registry/{리소스}/{네임스페이스}/{이름}` 모양이다. `/registry/deployments/default/web`, `/registry/secrets/default/db-cred`처럼. 노드만 옛 이름이 남아 `/registry/minions/node-1`이다.
+
+여기서 기억할 숫자가 revision이다. etcd는 쓰기가 일어날 때마다 클러스터 전체에 하나뿐인 revision을 1씩 올린다. 쿠버네티스의 `resourceVersion`이 바로 이 값이다.
+
+```bash
+# etcd의 현재 revision과 web Deployment의 resourceVersion
+etcdctl --endpoints=http://127.0.0.1:32717 endpoint status -w json | python3 -c 'import json,sys; print("revision", json.load(sys.stdin)[0]["Status"]["header"]["revision"])'
+kubectl get deploy web -o jsonpath='{.metadata.resourceVersion}{"\n"}'
+```
+
+```text
+revision 1968
+898
+```
+
+web은 revision 898에서 마지막으로 바뀌었고, 클러스터 전체는 지금 1968까지 왔다. 컨트롤러들은 "나는 1968까지 봤다"를 기억하고 그다음 변경부터 watch한다. 복원할 때 이 숫자가 문제를 일으킨다.
+
+## 스냅숏 뜨기
+
+스냅숏은 살아 있는 멤버 하나에 요청해서 받는다. etcd를 멈출 필요가 없고, 문서도 멤버 성능에 영향이 없다고 적는다.
+
+```bash
+# 스냅숏을 받는다. 받는 동안은 .part 파일에 쓰고 끝나면 이름을 바꾼다
+ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:32717 snapshot save backup/etcd-20261021.db
+ls -l backup
+```
+
+```text
+{"level":"info","ts":"2026-10-21T01:21:46.216301Z","caller":"snapshot/v3_snapshot.go:65","msg":"created temporary db file","path":"backup/etcd-20261021.db.part"}
+{"level":"info","ts":"2026-10-21T01:21:46.217615Z","logger":"client","caller":"v3@v3.5.11/maintenance.go:212","msg":"opened snapshot stream; downloading"}
+{"level":"info","ts":"2026-10-21T01:21:46.256837Z","logger":"client","caller":"v3@v3.5.11/maintenance.go:220","msg":"completed snapshot read; closing"}
+{"level":"info","ts":"2026-10-21T01:21:46.262223Z","caller":"snapshot/v3_snapshot.go:88","msg":"fetched snapshot","endpoint":"http://127.0.0.1:32717","size":"2.3 MB","took":"now"}
+{"level":"info","ts":"2026-10-21T01:21:46.262372Z","caller":"snapshot/v3_snapshot.go:97","msg":"saved","path":"backup/etcd-20261021.db"}
+Snapshot saved at backup/etcd-20261021.db
+total 2228
+-rw------- 1 root root 2277408 Oct 21 01:21 etcd-20261021.db
+```
+
+아래 그림에서 다음을 누르면 이 몇 줄 사이에 일어난 일을 따라간다.
+
+<SequenceDiagram
+  caption="snapshot save가 파일 하나를 만들기까지"
+  actors={[
+    { id: "cli", label: "etcdctl" },
+    { id: "etcd", label: "etcd 멤버" },
+    { id: "bolt", label: "bbolt DB" },
+    { id: "file", label: "백업 파일" },
+  ]}
+  steps={[
+    { from: "cli", to: "file", label: ".part 생성", title: "임시 파일부터 만든다", detail: "중간에 끊겨도 완성된 백업처럼 보이는 파일이 남지 않게 etcd-20261021.db.part에 먼저 쓴다." },
+    { from: "cli", to: "etcd", label: "Snapshot RPC", title: "멤버 하나에 스트림을 연다", detail: "스냅숏은 한 멤버에서만 받는다. --endpoints에 둘 이상을 주면 'snapshot must be requested to one selected node'로 거절한다." },
+    { from: "etcd", to: "bolt", label: "읽기 트랜잭션", title: "DB 파일을 일관된 시점으로 읽는다", detail: "bbolt의 읽기 트랜잭션 하나로 그 순간의 전체 키공간을 읽는다. 쓰기는 계속 받는다." },
+    { from: "etcd", to: "cli", label: "바이트 스트림", title: "DB 내용이 흘러온다", detail: "끝에 내용의 sha256 해시를 붙여 보낸다. 복원할 때 이 해시로 파일이 온전한지 검사한다." },
+    { from: "cli", to: "file", label: "rename", title: "다 받으면 이름을 바꾼다", detail: ".part를 최종 이름으로 바꾸고 'Snapshot saved at'을 찍는다. 권한은 0600이다." },
+  ]}
+/>
+
+kubeadm 클러스터라면 etcd가 TLS를 쓰니 인증서를 붙인다. 경로는 etcd 스태틱 Pod 매니페스트에 있다.
+
+```bash
+# kubeadm 기본 경로의 인증서로 스냅숏을 뜬다 (컨트롤 플레인 노드에서)
+sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save /var/backups/etcd/etcd-$(date +%Y%m%d-%H%M).db
+```
+
+호스트에 etcdctl이 없으면 etcd Pod 안의 것을 쓰거나 같은 버전의 릴리스 압축 파일을 받는다. etcd 서버와 같은 마이너 버전의 도구를 쓰는 것이 안전하다.
+
+## status가 괜찮다고 해도 믿지 않는다
+
+받은 파일을 확인한다. etcd 3.5에서는 `etcdctl snapshot status`가 폐기 예정 경고를 찍고, 3.6부터는 `etcdutl`만 남는다. 둘 다 결과는 같았다.
+
+```bash
+# 오프라인 도구 etcdutl로 스냅숏을 읽는다 (etcd 서버가 필요 없다)
+etcdutl -w table snapshot status backup/etcd-20261021.db
+# 같은 일을 etcdctl로 하면 경고가 붙는다
+etcdctl -w table snapshot status backup/etcd-20261021.db
+```
+
+```text
++----------+----------+------------+------------+
+|   HASH   | REVISION | TOTAL KEYS | TOTAL SIZE |
++----------+----------+------------+------------+
+| 357bed07 |     1978 |        857 |     2.3 MB |
++----------+----------+------------+------------+
+Deprecated: Use `etcdutl snapshot status` instead.
+
++----------+----------+------------+------------+
+|   HASH   | REVISION | TOTAL KEYS | TOTAL SIZE |
++----------+----------+------------+------------+
+| 357bed07 |     1978 |        857 |     2.3 MB |
++----------+----------+------------+------------+
+```
+
+REVISION 1978이 이 스냅숏의 시점이다. TOTAL KEYS가 857로 `get --keys-only`로 센 키(297개)보다 많은 이유는, 아직 압축(compaction)되지 않은 과거 revision의 값까지 세기 때문이다.
+
+그런데 이 표가 "파일이 멀쩡하다"는 보증은 아니다. 스냅숏 복사본 중간의 4바이트를 일부러 망가뜨려 봤다.
+
+```bash
+# 2,000,000번째 바이트부터 4바이트를 0xff로 덮어쓴 복사본을 만든다
+cp backup/etcd-20261021.db backup/flip.db
+printf '\xff\xff\xff\xff' | dd of=backup/flip.db bs=1 seek=2000000 conv=notrunc
+etcdutl -w table snapshot status backup/flip.db
+etcdutl snapshot restore backup/flip.db --data-dir rt
+```
+
+```text
++----------+----------+------------+------------+
+|   HASH   | REVISION | TOTAL KEYS | TOTAL SIZE |
++----------+----------+------------+------------+
+| 357bed07 |     1978 |        857 |     2.3 MB |
++----------+----------+------------+------------+
+Error: expected sha256 [101 40 99 69 175 233 22 1 93 80 16 146 15 212 166 243 114 211 62 160 229 222 55 149 83 151 30 9 186 35 105 94], got [182 156 136 37 127 81 146 139 234 151 181 240 54 132 84 219 ...
+```
+
+status는 원본과 똑같은 표를 보여 줬다. 망가진 곳이 키와 값이 아닌 빈 페이지였기 때문이다. 복원은 파일 끝의 sha256과 맞지 않는다며 거절했다. 파일 끝을 잘라 낸 복사본은 status가 아예 bbolt의 `SIGBUS: bus error`로 죽었다. 결론은 단순하다. 스냅숏이 쓸 만한지는 복원을 해 봐야 안다. 백업 직후 임시 디렉터리에 복원해 보고 지우는 단계를 백업 작업에 넣는다([복원 테스트](/posts/backup-strategy)).
+
+실패한 복원에는 함정이 하나 더 있다. 위에서 실패한 `rt` 디렉터리를 보면 `rt/member/snap/db`가 남아 있다. 정상 스냅숏으로 다시 복원하려 하면 이렇게 거절한다.
+
+```text
+Error: data-dir "rt" not empty or could not be read
+```
+
+복원 대상 디렉터리는 비어 있어야 한다. 실패한 시도의 잔해를 지우고 다시 한다.
+
+## 스냅숏에는 Secret이 그대로 들어 있다
+
+스냅숏을 뜨기 전에 Secret 하나를 만들어 두었다. 파일에서 그 값을 찾아봤다.
+
+```bash
+# 스냅숏 파일 안에서 비밀번호 문자열을 찾는다
+strings backup/etcd-20261021.db | grep -m1 'registry/secrets/default/db-cred'
+strings backup/etcd-20261021.db | grep -m1 -B1 'S3cr3t'
+```
+
+```text
+!/registry/secrets/default/db-cred
+password
+S3cr3t-Pa55w0rd
+```
+
+base64도 아니고 그냥 평문이다. API 서버의 저장 시 암호화를 켜지 않았다면 스냅숏 파일을 손에 넣은 사람은 클러스터의 모든 Secret을 읽는다([Kubernetes Secret](/posts/k8s-secret), [저장 시 암호화](/posts/encryption-at-rest)). 저장 시 암호화를 켰다면 스냅숏 안의 값도 암호문이지만, 그때는 복원에 그 암호화 키가 필요하다. 키를 스냅숏과 같은 곳에 두면 의미가 없고, 키를 잃으면 복원이 의미가 없다.
+
+그래서 스냅숏 파일 자체도 암호화해서 내보낸다. 공개 키로 암호화하는 age를 쓰면 백업을 만드는 노드에는 공개 키만 두고, 개인 키는 복원 담당자만 갖게 할 수 있다.
+
+```bash
+# 복원 담당자가 한 번 만든다. 개인 키는 금고(비밀 관리 도구)에 보관한다
+age-keygen -o backup.key
+# 백업 노드에서는 공개 키만으로 암호화한다
+age -r age1a29dx25sfy0phv0ty00tslekr833g3v6yvdetkvfncd3wynpt9mszf6l8e -o backup/etcd-20261021.db.age backup/etcd-20261021.db
+grep -c 'S3cr3t-Pa55w0rd' backup/etcd-20261021.db.age
+# 복원할 때 개인 키로 풀고, 원본과 해시가 같은지 본다
+age -d -i backup.key -o restored-check.db backup/etcd-20261021.db.age && sha256sum restored-check.db
+```
+
+```text
+Public key: age1a29dx25sfy0phv0ty00tslekr833g3v6yvdetkvfncd3wynpt9mszf6l8e
+0
+100fea0af6bd3fc735998a8cf9ecd73c0814ffaf85263da4a61c41909c7b8cf8  restored-check.db
+```
+
+암호화한 파일에서는 문자열이 0번 나오고, 푼 파일의 해시는 원본(`sha256sum backup/etcd-20261021.db`도 `100fea0a...`였다)과 같다. S3에 올린다면 버킷의 서버 측 암호화와 Object Lock을 함께 건다. 버킷 암호화는 "AWS 디스크에서 훔쳐 가는 것"을 막고, 파일 암호화는 "버킷 읽기 권한을 가진 사람"을 막는다. 막는 대상이 다르다.
+
+## 사고 하나를 되돌려 보기
+
+스냅숏(revision 1978)을 뜬 뒤 사고를 냈다. web Deployment를 지우고, 새 Deployment orders를 만들었다.
+
+```bash
+# 사고: web을 지웠다. 그사이 다른 사람은 orders를 배포했다
+kubectl delete deploy web
+kubectl create deploy orders --image=nginx:1.27 --replicas=2
+kubectl get deploy
+```
+
+```text
+deployment.apps "web" deleted from default namespace
+deployment.apps/orders created
+NAME     READY   UP-TO-DATE   AVAILABLE   AGE
+cache    1/1     1            1           16m
+orders   2/2     2            2           3s
+```
+
+이 시점의 etcd revision은 2049였다. 이제 스냅숏으로 되돌린다. 문서가 정한 순서는 "모든 API 서버를 멈추고, 모든 etcd 멤버를 복원하고, API 서버를 다시 띄운다"이다. 실습에서는 kwok 클러스터 전체를 멈추고 etcd 데이터 디렉터리를 바꿔 끼웠다.
+
+<Callout kind="warning">
+복원은 클러스터 전체를 스냅숏 시점으로 되돌린다. web 하나를 살리려고 복원하면 그 뒤에 배포한 orders와 모든 변경이 함께 사라진다. 한두 객체의 실수라면 Git의 매니페스트나 [Velero](/posts/velero-backup)의 리소스 단위 복원이 먼저다. 복원하기로 했다면 기존 데이터 디렉터리는 지우지 말고 이름만 바꿔 둔다(아래 `etcd.broken`). 복원이 잘못되면 그 디렉터리로 되돌아갈 수 있다.
+</Callout>
+
+```bash
+# 1. API 서버와 etcd를 모두 멈춘다 (kubeadm이면 /etc/kubernetes/manifests에서 매니페스트를 잠시 옮긴다)
+kwokctl stop cluster --name r10-ops
+# 2. 옛 데이터 디렉터리는 지우지 않고 옆으로 치운다
+mv ~/.kwok/clusters/r10-ops/etcd ~/.kwok/clusters/r10-ops/etcd.broken
+# 3. 스냅숏을 새 데이터 디렉터리로 풀어낸다. 이름과 피어 주소는 원래 멤버와 같게 준다
+etcdutl snapshot restore backup/etcd-20261021.db \
+  --data-dir ~/.kwok/clusters/r10-ops/etcd \
+  --name node0 \
+  --initial-cluster node0=http://0.0.0.0:32718 \
+  --initial-advertise-peer-urls http://0.0.0.0:32718
+```
+
+```text
+2026-10-21T01:22:23Z	info	snapshot/v3_snapshot.go:260	restoring snapshot	{"path": "backup/etcd-20261021.db", "wal-dir": "/root/.kwok/clusters/r10-ops/etcd/member/wal", "data-dir": "/root/.kwok/clusters/r10-ops/etcd", "snap-dir": "/root/.kwok/clusters/r10-ops/etcd/member/snap"}
+2026-10-21T01:22:23Z	info	membership/store.go:141	Trimming membership information from the backend...
+2026-10-21T01:22:23Z	info	membership/cluster.go:421	added member	{"cluster-id": "223ace5b0499e115", "local-member-id": "0", "added-peer-id": "c556ff0bf909e069", "added-peer-peer-urls": ["http://0.0.0.0:32718"]}
+2026-10-21T01:22:23Z	info	snapshot/v3_snapshot.go:287	restored snapshot	{"path": "backup/etcd-20261021.db", "wal-dir": "/root/.kwok/clusters/r10-ops/etcd/member/wal", "data-dir": "/root/.kwok/clusters/r10-ops/etcd", "snap-dir": "/root/.kwok/clusters/r10-ops/etcd/member/snap"}
+```
+
+"Trimming membership information"이 중요하다. 복원은 스냅숏 안의 옛 멤버 목록을 버리고, 명령줄로 준 멤버 구성으로 새 클러스터를 만든다. 데이터는 옛것이지만 etcd 입장에서는 새로 태어난 클러스터다. Raft 로그도 새로 시작한다(복원 후 RAFT INDEX가 15였다).
+
+```bash
+# 4. 다시 띄우고 확인한다
+kwokctl start cluster --name r10-ops
+kubectl get deploy
+kubectl get secret db-cred -o jsonpath='{.data.password}' | base64 -d
+```
+
+```text
+NAME    READY   UP-TO-DATE   AVAILABLE   AGE
+cache   1/1     1            1           16m
+web     3/3     3            3           16m
+S3cr3t-Pa55w0rd
+```
+
+web이 돌아왔고 orders는 없다. 스냅숏 시점 그대로다. 실제 클러스터라면 여기서 노드의 kubelet이 자기에게 할당된 Pod 목록을 다시 받아, orders의 컨테이너를 멈추고 web의 Pod를 다시 띄운다. 클러스터의 기록과 노드의 현실이 다시 맞춰지는 과정이다.
+
+kubeadm 클러스터에서는 데이터 디렉터리가 `/var/lib/etcd`이고, etcd가 스태틱 Pod라서 순서가 이렇다. `/etc/kubernetes/manifests/`의 `kube-apiserver.yaml`과 `etcd.yaml`을 다른 곳으로 옮겨 kubelet이 둘을 내리게 하고, `/var/lib/etcd-restore`로 복원한 뒤, `etcd.yaml`의 `etcd-data` hostPath를 새 경로로 바꿔 매니페스트를 되돌려 놓는다. 그다음 kube-controller-manager, kube-scheduler, 각 노드의 kubelet을 재시작한다. 문서가 권하는 단계이고, 왜 그런지는 바로 다음 절에서 본다.
+
+## 되살린 클러스터는 과거로 돌아간다
+
+복원 뒤 etcd의 revision은 다시 1978 근처에서 시작한다. 그런데 복원 전에 떠 있던 컨트롤러나 외부 클라이언트는 "2049까지 봤다"고 기억하고 있다. 그 숫자로 요청하면 어떻게 되는지 봤다.
+
+```bash
+# 복원 전에 본 resourceVersion 2049보다 새로운 목록을 달라고 한다
+kubectl get --raw "/apis/apps/v1/namespaces/default/deployments?resourceVersion=2049&resourceVersionMatch=NotOlderThan"
+```
+
+```text
+Error from server (Timeout): Timeout: Too large resource version: 2049, current: 1978
+```
+
+목록 요청은 기다리다 거절됐다. watch는 더 조용히 틀린다. revision 2049부터 watch를 걸어 둔 클라이언트와 처음부터(0) 걸어 둔 클라이언트를 함께 띄우고, 새 Deployment late를 만들었다.
+
+```bash
+# 옛 기억(2049)으로 거는 watch와 새로 거는 watch를 함께 띄운다
+kubectl get --raw "/apis/apps/v1/namespaces/default/deployments?watch=1&resourceVersion=2049&timeoutSeconds=8" > watch-old.txt &
+kubectl get --raw "/apis/apps/v1/namespaces/default/deployments?watch=1&resourceVersion=0&timeoutSeconds=8" > watch-new.txt &
+kubectl create deploy late --image=nginx:1.27
+# 각 watch가 받은 이벤트의 종류, 이름, resourceVersion
+```
+
+```text
+# watch-new.txt (처음부터 본 쪽)
+ADDED cache 456
+ADDED web 898
+ADDED late 2068
+MODIFIED late 2070
+MODIFIED late 2074
+MODIFIED late 2078
+
+# watch-old.txt (2049부터 본 쪽)
+ADDED late 2068
+MODIFIED late 2070
+MODIFIED late 2074
+MODIFIED late 2078
+```
+
+옛 기억으로 watch한 쪽은 late만 봤다. web이 되살아났다는 것도, orders가 사라졌다는 것도 모른다. 이 클라이언트가 컨트롤러라면 존재하지 않는 orders를 계속 관리하고 web은 없는 줄 안다. revision 1979부터 2049까지의 번호가 복원 전과 다른 변경에 다시 쓰였는데도 클라이언트는 그걸 알 방법이 없다. 아래 그림이 그 번호의 흐름이다.
+
+<AlgoTrace
+  caption="revision이 되감기면 옛 기억을 가진 쪽이 길을 잃는다"
+  memoryLabel="watch를 건 클라이언트의 기억"
+  cells={["1978 스냅숏", "2043 orders 생성", "2049 사고 직후", "복원 → 1978", "2068 late 생성", "+10억 밀기"]}
+  steps={[
+    { pointer: 0, memory: ["RV 1978"], caption: "스냅숏을 떴다. 이 시점에는 web이 있고 orders는 없다." },
+    { pointer: 2, found: [1], memory: ["RV 2049", "orders 있음", "web 없음"], caption: "web을 지우고 orders를 만들었다. 컨트롤러는 2049까지 봤다고 기억한다." },
+    { pointer: 3, memory: ["RV 2049", "orders 있음", "web 없음"], caption: "etcd를 1978로 되돌렸다. 클러스터에는 web이 있고 orders가 없지만, 클라이언트의 기억은 그대로다." },
+    { pointer: 4, memory: ["RV 2078", "orders 있음", "web 없음", "late 있음"], caption: "2049 뒤의 변경만 받으니 late는 보이고 web과 orders의 변화는 끝내 보이지 않는다." },
+    { pointer: 5, found: [5], memory: ["410 Gone", "→ 다시 list"], caption: "복원할 때 revision을 크게 밀고 압축된 것으로 표시하면, 옛 번호로 온 watch가 410을 받고 처음부터 다시 목록을 받는다." },
+  ]}
+/>
+
+문서가 복원 뒤 컨트롤러와 kubelet을 재시작하라고 하는 이유가 이것이다. 재시작하면 처음부터 목록을 다시 받는다. 하지만 클러스터 밖에서 watch하는 도구(Argo CD, 모니터링 에이전트, 직접 만든 오퍼레이터)까지 빠짐없이 재시작하기는 어렵다.
+
+## revision을 앞으로 밀어 두기
+
+etcd 3.5.x의 `etcdutl snapshot restore`에는 이 문제를 위한 옵션이 있다. `--bump-revision`은 복원한 revision을 주어진 수만큼 올리고, `--mark-compacted`는 그 지점까지 압축된 것으로 표시한다. 둘을 함께 쓴다. 같은 스냅숏으로 다시 복원했다.
+
+```bash
+# revision을 10억만큼 앞으로 밀고, 그 아래는 압축된 것으로 표시한다
+etcdutl snapshot restore backup/etcd-20261021.db \
+  --data-dir ~/.kwok/clusters/r10-ops/etcd \
+  --name node0 \
+  --initial-cluster node0=http://0.0.0.0:32718 \
+  --initial-advertise-peer-urls http://0.0.0.0:32718 \
+  --bump-revision 1000000000 --mark-compacted
+```
+
+```text
+2026-10-21T01:24:26Z	info	snapshot/v3_snapshot.go:349	bumping latest revision	{"latest-revision": 1978, "bump-amount": 1000000000, "new-latest-revision": 1000001978}
+2026-10-21T01:24:26Z	info	snapshot/v3_snapshot.go:366	marking revision compacted	{"revision": 1000001978}
+```
+
+클러스터를 다시 띄우고, 복원 전 마지막으로 본 번호(2078)로 watch를 걸어 봤다.
+
+```bash
+# 옛 번호로 watch를 건다
+kubectl get --raw "/apis/apps/v1/namespaces/default/deployments?watch=1&resourceVersion=2078&timeoutSeconds=3"
+# 목록의 resourceVersion
+kubectl get --raw /apis/apps/v1/namespaces/default/deployments | python3 -c 'import json,sys; print(json.load(sys.stdin)["metadata"])'
+```
+
+```text
+{"type":"ERROR","object":{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"too old resource version: 2078 (1000001978)","reason":"Expired","code":410}}
+{'resourceVersion': '1000001986'}
+```
+
+410 Expired는 클라이언트 라이브러리(client-go의 informer)가 "기억을 버리고 처음부터 다시 list하라"로 받아들이는 신호다. 조용히 틀리던 것이 시끄럽게 다시 맞춰진다. 얼마나 밀지는 "복원 전 클러스터가 스냅숏 이후 쓸 수 있었던 최대 쓰기 수"보다 크면 된다. etcd 문서의 예시도 10억(1000000000)을 쓴다. revision은 64비트라 넘칠 걱정은 없다.
+
+## 멤버가 셋일 때의 복원 순서
+
+운영 클러스터의 etcd는 보통 3개나 5개다. 과반(quorum)이 살아 있으면 쓰기가 되므로 3개면 1개, 5개면 2개까지 잃어도 버틴다. 스냅숏 복원이 필요한 것은 과반을 잃었을 때다. 한 멤버만 망가졌다면 복원이 아니라 그 멤버를 `etcdctl member remove`로 빼고 새 멤버를 `member add`로 넣는다. 나머지 멤버가 데이터를 넘겨준다. 아래에서 멤버 수와 잃은 수로 어떻게 대응할지 계산해 볼 수 있다.
+
+<CodePlayground
+  caption="몇 개를 잃으면 스냅숏 복원이 필요한가"
+  functionName="etcdRecovery"
+  initialCode={`// members: 전체 멤버 수, lost: 잃은 멤버 수
+// quorum(과반), tolerance(버틸 수 있는 장애 수),
+// action: "ok" | "replace-member" | "restore-snapshot"
+function etcdRecovery(members, lost) {
+  const quorum = 0; // 여기를 채운다
+  const tolerance = 0;
+  let action = "ok";
+  return { quorum, tolerance, action };
+}`}
+  solution={`function etcdRecovery(members, lost) {
+  const quorum = Math.floor(members / 2) + 1;
+  const tolerance = members - quorum;
+  const alive = members - lost;
+  let action;
+  if (lost === 0) action = "ok";
+  else if (alive >= quorum) action = "replace-member";
+  else action = "restore-snapshot";
+  return { quorum, tolerance, action };
+}`}
+  tests={[
+    { label: "3개 중 1개", args: [3, 1], expected: { quorum: 2, tolerance: 1, action: "replace-member" } },
+    { label: "3개 중 2개", args: [3, 2], expected: { quorum: 2, tolerance: 1, action: "restore-snapshot" } },
+    { label: "5개 중 2개", args: [5, 2], expected: { quorum: 3, tolerance: 2, action: "replace-member" } },
+    { label: "4개 중 2개", args: [4, 2], expected: { quorum: 3, tolerance: 1, action: "restore-snapshot" } },
+    { label: "1개 중 1개", args: [1, 1], expected: { quorum: 1, tolerance: 0, action: "restore-snapshot" } },
+    { label: "6개 중 3개", args: [6, 3], expected: { quorum: 4, tolerance: 2, action: "restore-snapshot" } },
+  ]}
+/>
+
+4개는 3개보다 버티는 수가 늘지 않는다(둘 다 1). 그래서 etcd는 홀수로 둔다. 문서는 운영 클러스터에 5개 고정 구성을 권하고, etcd에 오토스케일링을 걸지 말라고 적는다. 과반이 무엇이고 왜 그 숫자인지는 [Raft 합의](/posts/raft-consensus)에 있다.
+
+과반을 잃어 복원할 때는 모든 멤버를 같은 스냅숏 파일로 복원한다. 아래 그림에서 다음을 누르면 3개짜리 클러스터의 순서를 따라간다.
+
+<NetworkTopology
+  caption="3개짜리 etcd를 같은 스냅숏으로 다시 세운다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "cp", label: "컨트롤 플레인 노드 3대", x: 8, y: 10, w: 384, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a1", label: "apiserver", sub: "cp-1", x: 72, y: 60, icon: "server", w: 100 },
+    { id: "a2", label: "apiserver", sub: "cp-2", x: 200, y: 60, icon: "server", w: 100 },
+    { id: "a3", label: "apiserver", sub: "cp-3", x: 328, y: 60, icon: "server", w: 100 },
+    { id: "e1", label: "etcd-1", sub: "10.0.1.11", x: 72, y: 150, icon: "db", w: 100 },
+    { id: "e2", label: "etcd-2", sub: "10.0.1.12", x: 200, y: 150, icon: "db", w: 100 },
+    { id: "e3", label: "etcd-3", sub: "10.0.1.13", x: 328, y: 150, icon: "db", w: 100 },
+    { id: "s3", label: "백업 버킷", sub: "snapshot.db", x: 200, y: 260, icon: "lock", w: 112 },
+  ]}
+  links={[
+    { from: "a1", to: "e1" },
+    { from: "a2", to: "e2" },
+    { from: "a3", to: "e3" },
+    { from: "e1", to: "e2", dashed: true },
+    { from: "e2", to: "e3", dashed: true },
+    { from: "s3", to: "e1" },
+    { from: "s3", to: "e2" },
+    { from: "s3", to: "e3" },
+  ]}
+  steps={[
+    { path: ["a1"], highlight: ["a2", "a3"], blocked: true, title: "API 서버를 모두 멈춘다", detail: "하나라도 떠 있으면 복원 도중 반쯤 된 etcd에 쓰거나 옛 캐시를 내보낸다. kube-apiserver.yaml을 매니페스트 폴더 밖으로 옮긴다." },
+    { path: ["s3", "e1"], packet: "같은 db", title: "etcd-1을 복원한다", detail: "--name etcd-1, --initial-cluster에 세 멤버 모두, --initial-advertise-peer-urls에 자기 주소를 준다." },
+    { path: ["s3", "e2"], packet: "같은 db", title: "etcd-2와 etcd-3도 같은 파일로", detail: "각자 --name과 피어 주소만 다르게 준다. 서로 다른 시점의 스냅숏을 섞으면 안 된다. --initial-cluster-token도 셋이 같아야 한다." },
+    { path: ["e1", "e2", "e3"], packet: "Raft", title: "etcd를 띄우면 새 리더를 뽑는다", detail: "셋이 새 클러스터로 만나 리더를 뽑는다. etcdctl endpoint status로 리더가 하나이고 revision이 같은지 본다." },
+    { path: ["a1", "e1"], packet: "start", highlight: ["a2", "a3"], title: "API 서버, 컨트롤러, kubelet 순으로 다시 띄운다", detail: "컨트롤러와 kubelet을 재시작해 옛 기억을 버리게 한다. 이후 kubectl get nodes와 주요 Deployment를 확인한다." },
+  ]}
+/>
+
+복원 명령의 플래그를 다시 보면 이렇다.
+
+<UrlAnatomy
+  caption="HA 멤버 하나를 복원하는 명령"
+  base="etcdutl snapshot restore snapshot.db"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "--data-dir", value: "/var/lib/etcd-restore", display: "--data-dir=/var/lib/etcd-restore", title: "새 데이터 디렉터리", description: "비어 있거나 없는 경로여야 한다. 옛 /var/lib/etcd는 지우지 않고 남겨 두면 되돌아갈 길이 생긴다.", required: true },
+    { key: "--name", value: "etcd-1", display: "--name=etcd-1", title: "이 멤버의 이름", description: "etcd 설정의 --name과 같아야 한다. 다르면 etcd가 자기를 멤버 목록에서 찾지 못한다." },
+    { key: "--initial-cluster", value: "etcd-1=https://10.0.1.11:2380,...", display: "--initial-cluster=etcd-1=https://10.0.1.11:2380,...", title: "새 클러스터의 멤버 전체", description: "세 멤버의 이름=피어주소를 모두 적는다. 스냅숏 안의 옛 멤버 정보는 버리고 이걸로 새로 만든다." },
+    { key: "--initial-advertise-peer-urls", value: "https://10.0.1.11:2380", display: "--initial-advertise-peer-urls=https://10.0.1.11:2380", title: "자기 피어 주소", description: "--initial-cluster에 적은 자기 주소와 같아야 한다." },
+    { key: "--bump-revision", value: "1000000000", display: "--bump-revision=1000000000 --mark-compacted", title: "revision을 앞으로 민다", description: "옛 resourceVersion을 기억하는 클라이언트가 410을 받고 다시 list하게 만든다. 세 멤버 모두 같은 값을 준다." },
+  ]}
+/>
+
+## 스냅숏이 맞는 사고와 아닌 사고
+
+etcd 스냅숏은 "클러스터 전체를 어느 시점으로"라는 아주 큰 도구다. 사고마다 맞는 도구가 다르다.
+
+- 컨트롤 플레인 과반을 잃었다, etcd 데이터가 깨졌다: 스냅숏 복원이 유일한 길이다. 잃는 것은 마지막 스냅숏 이후의 변경 전부다. 그래서 백업 주기가 곧 RPO다([재해 복구](/posts/disaster-recovery)).
+- 멤버 하나가 죽었다: 복원하지 않는다. 멤버를 교체한다.
+- 객체 몇 개를 지웠다: 스냅숏은 너무 크다. Git의 매니페스트를 다시 적용하거나 Velero로 그 네임스페이스만 복원한다.
+- 클러스터를 다른 곳으로 옮긴다, 다른 버전의 클러스터로 간다: 스냅숏은 같은 etcd 마이너 버전 사이에서만 복원을 지원하고, 클러스터 구성(인증서, 노드, 서비스 CIDR)까지 같아야 의미가 있다. 이 경우는 Velero처럼 API 객체 단위로 옮기는 쪽이 맞다.
+- 업그레이드 직전: 반드시 뜬다. 컨트롤 플레인 다운그레이드 절차가 없으니 "업그레이드 전 상태"로 돌아갈 유일한 수단이다([클러스터 업그레이드](/posts/k8s-cluster-upgrade)).
+
+## 매일 밤 도는 백업
+
+컨트롤 플레인 노드에서 도는 백업은 스냅숏, 복원 테스트, 암호화, 업로드, 오래된 파일 정리까지가 한 묶음이다. 아래 그림에서 다음을 누르면 파일 하나가 클러스터 밖 금고까지 가는 길을 따라간다.
+
+<NetworkTopology
+  caption="스냅숏이 평문으로 머무는 시간을 줄이며 밖으로 내보낸다"
+  width={400}
+  height={280}
+  zones={[
+    { id: "cp", label: "컨트롤 플레인 노드", x: 8, y: 10, w: 220, h: 260, tone: "private" },
+    { id: "bk", label: "백업 계정", x: 244, y: 10, w: 148, h: 260, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "etcd", label: "etcd", sub: ":2379 TLS", x: 70, y: 60, icon: "db", w: 100 },
+    { id: "job", label: "backup job", sub: "매일 02:00", x: 170, y: 60, icon: "server", w: 100 },
+    { id: "tmp", label: "verify dir", sub: "임시 복원", x: 70, y: 150, icon: "container", w: 100 },
+    { id: "age", label: "age", sub: "공개 키만", x: 170, y: 150, icon: "lock", w: 100 },
+    { id: "s3", label: "S3 버킷", sub: "Object Lock", x: 318, y: 105, icon: "db", w: 112 },
+    { id: "kms", label: "개인 키", sub: "금고", x: 318, y: 225, icon: "lock", w: 112 },
+  ]}
+  links={[
+    { from: "job", to: "etcd" },
+    { from: "job", to: "tmp" },
+    { from: "job", to: "age" },
+    { from: "age", to: "s3" },
+    { from: "kms", to: "s3", dashed: true },
+  ]}
+  steps={[
+    { path: ["job", "etcd"], packet: "save", highlight: ["cp"], title: "스냅숏을 받는다", detail: "인증서를 붙여 멤버 하나에서 받는다. 이 순간의 파일은 Secret을 평문으로 담고 있을 수 있다." },
+    { path: ["job", "tmp"], packet: "restore", title: "임시 디렉터리에 복원해 본다", detail: "sha256 검사가 여기서 일어난다. 실패하면 알림을 보내고 업로드하지 않는다. 끝나면 디렉터리를 지운다." },
+    { path: ["job", "age"], packet: "encrypt", title: "공개 키로 암호화하고 평문을 지운다", detail: "노드에는 공개 키만 있으니 노드가 털려도 지난 백업을 풀 수 없다." },
+    { path: ["age", "s3"], packet: ".age", highlight: ["bk"], title: "다른 계정의 버킷으로 보낸다", detail: "Object Lock으로 보관 기간 동안 지울 수 없게 한다. 클러스터 자격 증명이 털려도 백업은 남는다." },
+    { path: ["kms"], highlight: ["bk"], title: "개인 키는 복원할 때만 꺼낸다", detail: "복원 담당자만 접근한다. 인증서와 EncryptionConfiguration 파일도 같은 방식으로 함께 보관한다." },
+  ]}
+/>
+
+스크립트로 옮기면 대략 이런 모양이 된다.
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/etcd-backup.sh : 컨트롤 플레인 노드 하나에서 매일 실행한다
+set -euo pipefail
+TS=$(date +%Y%m%d-%H%M)
+DIR=/var/backups/etcd
+mkdir -p "$DIR"
+
+# 1. 스냅숏을 뜬다
+ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save "$DIR/etcd-$TS.db"
+
+# 2. 임시 디렉터리에 복원해 보고 지운다 (sha256 검사가 여기서 일어난다)
+TMP=$(mktemp -d "$DIR/verify.XXXX")
+etcdutl snapshot restore "$DIR/etcd-$TS.db" --data-dir "$TMP/data" >/dev/null
+rm -rf "$TMP"
+
+# 3. 공개 키로 암호화하고 평문은 지운다
+age -r "$(cat /etc/etcd-backup/recipient.txt)" -o "$DIR/etcd-$TS.db.age" "$DIR/etcd-$TS.db"
+rm -f "$DIR/etcd-$TS.db"
+
+# 4. 클러스터 밖으로 보낸다 (Object Lock이 걸린 버킷)
+aws s3 cp "$DIR/etcd-$TS.db.age" "s3://etcd-backup-prod/$(hostname)/"
+
+# 5. 노드에는 3일치만 남긴다
+find "$DIR" -name 'etcd-*.db.age' -mtime +3 -delete
+```
+
+인증서와 암호화 설정 파일도 같은 주기로 따로 내보낸다. 스냅숏만 있고 `/etc/kubernetes/pki`와 EncryptionConfiguration이 없으면 다른 노드에서 클러스터를 다시 세울 수 없다. 그리고 이 스크립트가 실패하면 알림이 와야 한다. 조용히 멈춘 백업 작업은 사고가 난 날 처음 발견된다. 마지막 성공 시각을 지표로 내보내고 하루 넘게 갱신되지 않으면 경보를 거는 방식이 흔하다.
+
+## 관리형 컨트롤 플레인에서는
+
+EKS, GKE, AKS에서는 etcd에 접근할 수 없다. 엔드포인트도 인증서도 주지 않으니 `etcdctl snapshot save`를 칠 곳이 없다. 클라우드 사업자가 내부적으로 etcd를 백업하고 장애 시 복구하지만, 그건 사업자가 자기 서비스를 살리기 위한 것이다. "어제 오후 3시로 되돌려 달라"고 요청할 수 있는 기능이 아니다.
+
+그래서 관리형 클러스터의 백업은 두 겹이 된다. 하나는 클러스터의 원하는 상태를 전부 Git에 두는 GitOps다. 클러스터가 통째로 사라져도 새로 만들고 저장소를 다시 적용하면 된다. 다른 하나는 Git에 없는 것(손으로 만든 Secret, 오퍼레이터가 만든 객체, PV의 데이터)을 API 단위로 떠 두는 Velero 같은 도구다. 클라우드마다 자체 도구도 있다(GKE의 Backup for GKE 등). 어느 쪽이든 etcd 스냅숏과 달리 "API 서버를 거쳐 객체를 읽고 쓰는" 방식이라 버전이 다른 클러스터로도 옮길 수 있다. 자세한 비교는 [Velero 백업](/posts/velero-backup)에서 이어진다.
+
+## 스냅숏 하나에 담긴 것
+
+etcd 스냅숏은 클러스터의 모든 API 객체와 revision을 그 시점 그대로 담은 파일이다. 뜨는 것은 쉽고, 어려운 것은 그 뒤다. status 표는 파일이 멀쩡하다는 보증이 아니니 복원을 해 봐야 하고, Secret이 평문으로 들어 있을 수 있으니 파일째 암호화하며, 인증서와 암호화 키는 따로 챙긴다. 복원은 클러스터 전체를 과거로 돌리고 revision을 되감으니, `--bump-revision`과 `--mark-compacted`로 옛 기억을 가진 클라이언트가 다시 list하게 만들고 컨트롤러를 재시작한다. etcd에 손댈 수 없는 관리형 클러스터에서는 GitOps와 객체 단위 백업이 그 자리를 맡는다.
+
+## 면접에서 나올 만한 질문
+
+### etcd 스냅숏에는 무엇이 들어 있고 무엇이 빠져 있나요?
+
+모든 API 객체(Deployment, Pod, Secret, ConfigMap, RBAC, Lease 등)와 그 시점의 revision이 들어 있다. PV 안의 실제 데이터, 컨트롤 플레인 인증서, 저장 시 암호화 키 파일, 컨테이너 이미지는 없다. 그래서 인증서와 암호화 설정은 따로 백업해야 하고, 특히 암호화 키를 잃으면 복원해도 Secret을 읽지 못한다.
+
+### snapshot status가 정상으로 나오면 그 스냅숏은 믿을 수 있나요?
+
+아니다. status는 키와 revision을 읽어 표로 보여 줄 뿐이라, 실습에서 빈 페이지를 망가뜨린 파일도 원본과 같은 표가 나왔다. 복원할 때는 파일 끝의 sha256과 비교하므로 그때서야 거절된다. 그래서 백업 직후 임시 디렉터리에 복원해 보는 단계를 넣고, 실패한 복원 디렉터리는 비우고 다시 한다.
+
+### 스냅숏으로 복원하는 순서를 설명해 주세요.
+
+모든 API 서버를 먼저 멈춘다. 모든 etcd 멤버를 같은 스냅숏 파일로 각자의 새 데이터 디렉터리에 복원하는데, 멤버마다 --name과 피어 주소를 다르게 주고 --initial-cluster는 같게 준다. etcd를 띄워 리더가 하나인지 확인한 뒤 API 서버를 띄우고, 컨트롤러 매니저, 스케줄러, kubelet을 재시작한다. 옛 데이터 디렉터리는 지우지 않고 남겨 둔다.
+
+### 복원 후 resourceVersion에는 어떤 문제가 생기나요?
+
+etcd revision이 스냅숏 시점으로 되감기니, 복원 전에 더 큰 resourceVersion을 본 클라이언트는 그 번호 이후의 변경만 기다린다. 실습에서 옛 번호로 watch한 쪽은 되살아난 web과 사라진 orders를 끝내 보지 못했다. 목록 요청은 'Too large resource version'으로 거절됐다. 그 사이 번호는 다른 변경에 다시 쓰여 클라이언트가 눈치챌 수도 없다.
+
+### --bump-revision과 --mark-compacted는 왜 쓰나요?
+
+복원한 revision을 크게 앞으로 밀고 그 아래를 압축된 것으로 표시해서, 옛 번호로 온 watch가 410 Expired를 받게 하려는 것이다. client-go의 informer는 410을 받으면 기억을 버리고 처음부터 다시 list한다. 조용히 틀리던 클라이언트가 스스로 다시 맞춰진다. 미는 양은 스냅숏 이후 있었을 쓰기 수보다 충분히 크게, 보통 10억 단위로 준다.
+
+### etcd 멤버 하나가 죽었을 때도 스냅숏으로 복원하나요?
+
+아니다. 과반이 살아 있으면 클러스터는 계속 쓰기를 받으니, 죽은 멤버를 member remove로 빼고 새 멤버를 member add로 넣어 나머지에게서 데이터를 받게 한다. 스냅숏 복원은 과반을 잃어 쓰기가 불가능할 때 쓰고, 마지막 스냅숏 이후의 변경을 잃는다. 3개는 1개, 5개는 2개까지 버티고, 4개는 3개보다 나을 것이 없어 홀수로 둔다.
+
+### EKS 같은 관리형 클러스터는 어떻게 백업하나요?
+
+etcd에 접근할 수 없어 스냅숏을 뜰 수 없다. 사업자의 내부 백업은 시점 복구를 요청할 수 있는 기능이 아니다. 그래서 원하는 상태를 Git에 두는 GitOps와, Git에 없는 객체와 PV 데이터를 API 단위로 떠 두는 Velero 같은 도구를 함께 쓴다. API를 거치는 방식이라 버전이 다른 클러스터로 옮길 때도 쓸 수 있다.

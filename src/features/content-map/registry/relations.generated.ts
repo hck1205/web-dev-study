@@ -2,6 +2,104 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "velero-backup": {
+    "links": [
+      "k8s-etcd-backup",
+      "backup-strategy",
+      "disaster-recovery",
+      "k8s-storageclass-snapshots",
+      "k8s-pod-security-admission"
+    ],
+    "mentions": [
+      "k8s-rbac",
+      "k8s-pod-scheduling",
+      "k8s-pod-resources",
+      "k8s-daemonset",
+      "k8s-configmap",
+      "k8s-pod-multicontainer",
+      "docker-container-basics",
+      "k8s-service-types",
+      "k8s-architecture",
+      "kubernetes-ingress",
+      "postgres-architecture",
+      "postgres-operations",
+      "local-k8s-kind-minikube",
+      "eks-cluster-basics",
+      "db-type-key-value",
+      "github-actions-docker-ecr",
+      "dns"
+    ]
+  },
+  "k8s-etcd-backup": {
+    "links": [
+      "raft-consensus",
+      "velero-backup",
+      "k8s-cluster-upgrade",
+      "k8s-architecture",
+      "backup-strategy",
+      "k8s-secret",
+      "encryption-at-rest",
+      "disaster-recovery"
+    ],
+    "mentions": [
+      "k8s-pv-pvc",
+      "k8s-api-objects",
+      "k8s-configmap",
+      "k8s-controllers-reconcile",
+      "docker-container-basics",
+      "db-type-key-value",
+      "autoscaling",
+      "leader-election",
+      "postgres-operations",
+      "local-k8s-kind-minikube",
+      "layer-ip-addressing",
+      "eks-cluster-basics"
+    ]
+  },
+  "k8s-cluster-upgrade": {
+    "links": [
+      "k8s-node-maintenance",
+      "k8s-feature-maturity",
+      "k8s-etcd-backup",
+      "k8s-architecture",
+      "linux-namespaces-cgroups",
+      "k8s-pod-disruption-budget",
+      "eks-cluster-basics",
+      "velero-backup"
+    ],
+    "mentions": [
+      "k8s-pod-security-admission",
+      "k8s-deployment",
+      "kubernetes-ingress",
+      "iptables-nat",
+      "k8s-configmap",
+      "cron-jobs",
+      "k8s-coredns",
+      "helm-basics",
+      "rollback-strategy",
+      "k8s-pod-scheduling",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "k8s-hpa",
+      "webhooks"
+    ]
+  },
+  "k8s-node-maintenance": {
+    "links": [
+      "k8s-pod-disruption-budget",
+      "k8s-cluster-upgrade",
+      "k8s-pod-scheduling"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "k8s-architecture",
+      "k8s-daemonset",
+      "k8s-statefulset",
+      "k8s-pod-basics",
+      "docker-container-basics",
+      "local-k8s-kind-minikube"
+    ]
+  },
   "k8s-job-cronjob": {
     "links": [
       "cron-jobs",
@@ -22,6 +120,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "k8s-architecture",
       "message-delivery-semantics",
+      "k8s-node-maintenance",
       "resilience-patterns",
       "local-k8s-kind-minikube",
       "db-type-key-value",
@@ -37,6 +136,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-statefulset",
       "k8s-job-cronjob",
       "k8s-node-autoscaling-karpenter",
+      "k8s-node-maintenance",
       "k8s-pod-troubleshooting",
       "kubectl-essentials",
       "k8s-cni-pod-network",
@@ -57,6 +157,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-storageclass-snapshots",
       "k8s-service-types",
       "k8s-coredns",
+      "k8s-node-maintenance",
       "k8s-pod-disruption-budget",
       "k8s-pod-troubleshooting",
       "k8s-daemonset",
@@ -95,6 +196,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "k8s-architecture",
       "cron-jobs",
+      "velero-backup",
       "local-k8s-kind-minikube",
       "grpc"
     ]
@@ -209,11 +311,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-probes",
       "eks-cluster-basics",
       "k8s-hpa",
-      "k8s-pod-scheduling"
+      "k8s-pod-scheduling",
+      "k8s-node-maintenance"
     ],
     "mentions": [
       "k8s-architecture",
       "k8s-pod-lifecycle",
+      "k8s-cluster-upgrade",
       "k8s-statefulset",
       "k8s-pod-basics",
       "k8s-daemonset",
@@ -233,6 +337,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-statefulset",
+      "k8s-cluster-upgrade",
       "k8s-pod-basics",
       "iptables-nat",
       "terraform-basics",
@@ -385,6 +490,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "k8s-feature-maturity": {
     "links": [
       "k8s-api-objects",
+      "k8s-cluster-upgrade",
       "k8s-pod-security-admission",
       "k8s-labels-selectors"
     ],
@@ -709,6 +815,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "optimistic-locking",
       "k8s-secret",
       "raft-consensus",
+      "k8s-etcd-backup",
       "leader-election",
       "eks-cluster-basics",
       "k8s-service-types",
@@ -741,6 +848,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "docker-container-basics",
       "rest-api-design",
+      "k8s-node-maintenance",
       "kafka-basics",
       "postgres-architecture",
       "redis-basics",
@@ -907,6 +1015,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "disaster-recovery",
       "failover",
       "postgres-operations",
+      "k8s-etcd-backup",
+      "velero-backup",
       "encryption-at-rest",
       "multi-region"
     ],
@@ -2333,6 +2443,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics",
       "k8s-architecture",
       "helm-basics",
+      "k8s-node-maintenance",
       "iam-basics",
       "ssrf",
       "autoscaling",
@@ -2710,6 +2821,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-modules-tfvars",
       "kubernetes-ingress",
       "k8s-statefulset",
+      "k8s-cluster-upgrade",
       "iptables-nat",
       "k8s-api-objects",
       "terraform-basics",
@@ -2983,6 +3095,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-daemonset",
       "k8s-architecture",
       "cloud-cost-optimization",
+      "k8s-node-maintenance",
       "vpc-basics",
       "local-k8s-kind-minikube",
       "eks-cluster-basics"

@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "velero-backup",
+    title: "Velero: 네임스페이스 단위로 뜨고 다른 이름으로 되살리기",
+    summary: "etcd 스냅숏과 달리 API로 객체를 묶어 두는 Velero의 BackupStorageLocation, 스케줄과 TTL, 백업 훅, 클라우드 스냅숏·CSI 데이터 이동·파일 시스템 백업의 차이, 네임스페이스를 바꾼 복원과 다른 클러스터로의 재해 복구를 다룬다.",
+    topic: "programming/server-infra/kubernetes/operations",
+    tags: ["Kubernetes", "DevOps", "SRE", "AWS", "Resilience"],
+    date: "2026-10-22",
+    keywords: ["Velero", "BackupStorageLocation", "파일 시스템 백업"],
+  },
+  {
+    slug: "k8s-etcd-backup",
+    title: "etcd 백업과 복원: 스냅숏 하나로 클러스터를 되돌리기",
+    summary: "etcdctl로 스냅숏을 뜨고 etcdutl로 확인·복원하며, status가 망가진 파일을 못 잡는 것, Secret이 평문으로 들어 있는 것, 복원 후 resourceVersion이 되감겨 watch가 조용히 틀리는 것과 --bump-revision으로 막는 법, HA 복원 순서와 관리형 클러스터의 대안을 다룬다.",
+    topic: "programming/server-infra/kubernetes/operations",
+    tags: ["Kubernetes", "DevOps", "SRE", "Security", "Distributed Systems"],
+    date: "2026-10-22",
+    keywords: ["etcd 스냅숏", "etcdutl", "bump-revision"],
+  },
+  {
+    slug: "k8s-cluster-upgrade",
+    title: "클러스터 업그레이드: 버전 차이 규칙과 올리는 순서",
+    summary: "부품마다 허용되는 버전 차이에서 업그레이드 순서가 나오는 이유를 보고, kubeadm upgrade plan과 apply가 하는 일, EKS 관리형 노드 그룹이 노드를 갈아 끼우는 순서, 사라진 API, 되돌리기가 어디까지 되는지를 정리한다.",
+    topic: "programming/server-infra/kubernetes/operations",
+    tags: ["Kubernetes", "DevOps", "AWS", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["version skew policy", "kubeadm upgrade", "클러스터 업그레이드", "관리형 노드 그룹 업데이트"],
+  },
+  {
+    slug: "k8s-node-maintenance",
+    title: "노드 점검: cordon, drain, 그리고 꺼지는 노드",
+    summary: "cordon과 drain이 각각 무엇을 막고 내보내는지, drain을 멈춰 세우는 세 가지 Pod와 플래그가 포기하게 하는 것, drained 뒤에도 남는 nodeName Pod와 Pending, PDB를 건너뛰는 NoExecute taint, graceful node shutdown과 out-of-service taint까지 실제 클러스터에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/operations",
+    tags: ["Kubernetes", "DevOps", "Troubleshooting", "Linux"],
+    date: "2026-10-22",
+    keywords: ["cordon", "graceful node shutdown", "out-of-service taint", "노드 점검"],
+  },
+  {
     slug: "k8s-job-cronjob",
     title: "Job과 CronJob: 실패를 세는 법과 놓친 회차",
     summary: "completions와 parallelism, 10초부터 두 배로 늘어나는 backoffLimit 재시도, activeDeadlineSeconds와 ttlSecondsAfterFinished, Indexed Job과 번호별 재시도, podFailurePolicy로 실패 종류 가르기를 실제 Job 컨트롤러로 따라가고, CronJob이 놓친 회차 중 마지막 하나만 돌린다는 것을 확인한다.",
