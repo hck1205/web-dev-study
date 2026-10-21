@@ -1,6 +1,7 @@
 import { AB_TESTING } from "./ab-testing";
 import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
+import { AGENTIC_RAG } from "./agentic-rag";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
@@ -11,6 +12,7 @@ import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview
 import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
+import { BACKEND_ENGINEER_ROADMAP } from "./backend-engineer-roadmap";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
@@ -22,9 +24,12 @@ import { BROWSER_FETCH } from "./browser-fetch";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
+import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
+import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
+import { CENTRALIZED_LOGGING_PIPELINE } from "./centralized-logging-pipeline";
 import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
@@ -46,6 +51,7 @@ import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
+import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
@@ -94,6 +100,7 @@ import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
+import { ENTERPRISE_SYSTEM_INTEGRATION } from "./enterprise-system-integration";
 import { ERROR_BUDGETS } from "./error-budgets";
 import { EVENT_DELEGATION } from "./event-delegation";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
@@ -102,10 +109,13 @@ import { EVENT_PROPAGATION } from "./event-propagation";
 import { EVENT_SOURCING } from "./event-sourcing";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
+import { EXPRESS_MIDDLEWARE } from "./express-middleware";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
+import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
@@ -126,7 +136,10 @@ import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
+import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
+import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
+import { GRAPH_RAG } from "./graph-rag";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -150,11 +163,14 @@ import { IAC_BASICS } from "./iac-basics";
 import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
+import { INTEGRATION_TESTS_REAL_DB } from "./integration-tests-real-db";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JAVA_JVM_MEMORY_GC } from "./java-jvm-memory-gc";
 import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
+import { JENKINS_PIPELINE_BASICS } from "./jenkins-pipeline-basics";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
@@ -284,6 +300,8 @@ import { MONITORING_BASICS } from "./monitoring-basics";
 import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
+import { MYSQL_INNODB_BASICS } from "./mysql-innodb-basics";
+import { MYSQL_REPLICATION_ONLINE_DDL } from "./mysql-replication-online-ddl";
 import { N_PLUS_ONE_QUERIES } from "./n-plus-one-queries";
 import { NAT_TRAVERSAL } from "./nat-traversal";
 import { NETWORK_CONFIG_CICD } from "./network-config-cicd";
@@ -297,14 +315,17 @@ import { NEXTJS_STATIC_DYNAMIC_RENDERING } from "./nextjs-static-dynamic-renderi
 import { NGINX_BASICS } from "./nginx-basics";
 import { NGINX_HTTPS_PERFORMANCE } from "./nginx-https-performance";
 import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
+import { NODEJS_SERVER_RUNTIME } from "./nodejs-server-runtime";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
 import { ON_CALL } from "./on-call";
+import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
+import { PARALLAX_SCROLLYTELLING } from "./parallax-scrollytelling";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -352,6 +373,9 @@ import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
 import { RACE_CONDITIONS } from "./race-conditions";
 import { RAFT_CONSENSUS } from "./raft-consensus";
+import { RAG_CLASSIC_PIPELINE } from "./rag-classic-pipeline";
+import { RAG_PATTERNS_OVERVIEW } from "./rag-patterns-overview";
+import { RAG_RETRIEVAL_QUALITY } from "./rag-retrieval-quality";
 import { RATE_LIMITING_ALGORITHMS } from "./rate-limiting-algorithms";
 import { RATE_LIMITING_IN_PRACTICE } from "./rate-limiting-in-practice";
 import { RAY_CASTING } from "./ray-casting";
@@ -363,6 +387,7 @@ import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
+import { RELEASE_CUTOVER_HYPERCARE } from "./release-cutover-hypercare";
 import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
 import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
 import { RENDERING_SSR } from "./rendering-ssr";
@@ -370,6 +395,7 @@ import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
+import { REVERSE_PROXY_LB_API_GATEWAY } from "./reverse-proxy-lb-api-gateway";
 import { ROLLBACK_STRATEGY } from "./rollback-strategy";
 import { ROLLING_DEPLOYMENT } from "./rolling-deployment";
 import { ROUTER_VS_SWITCH } from "./router-vs-switch";
@@ -377,6 +403,9 @@ import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
+import { SCROLL_DRIVEN_ANIMATIONS } from "./scroll-driven-animations";
+import { SCROLL_PATTERNS_OVERVIEW } from "./scroll-patterns-overview";
+import { SCROLL_TRIGGERED_INTERSECTION_OBSERVER } from "./scroll-triggered-intersection-observer";
 import { SD_AD_CLICK_EXACTLY_ONCE } from "./sd-ad-click-exactly-once";
 import { SD_AD_CLICK_STREAM_WINDOWS } from "./sd-ad-click-stream-windows";
 import { SD_AUTOCOMPLETE_DATA_PIPELINE } from "./sd-autocomplete-data-pipeline";
@@ -446,6 +475,7 @@ import { SERVERLESS_ARCHITECTURE } from "./serverless-architecture";
 import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
+import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
 import { SPRING_ANIMATION } from "./spring-animation";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
@@ -462,6 +492,7 @@ import { SQL_LOGICAL_ORDER } from "./sql-logical-order";
 import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
+import { SQL_STUDY_PATH } from "./sql-study-path";
 import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
 import { SQL_VIEWS_MATERIALIZED } from "./sql-views-materialized";
 import { SQL_VS_NOSQL } from "./sql-vs-nosql";
@@ -490,6 +521,7 @@ import { TCP_RELIABILITY_CONGESTION } from "./tcp-reliability-congestion";
 import { TERRAFORM_BASICS } from "./terraform-basics";
 import { TERRAFORM_MODULES_TFVARS } from "./terraform-modules-tfvars";
 import { TERRAFORM_NETWORK_IAC } from "./terraform-network-iac";
+import { TEST_PYRAMID_UNIT_TESTS } from "./test-pyramid-unit-tests";
 import { THREAD_SAFETY } from "./thread-safety";
 import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
@@ -511,6 +543,7 @@ import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
 import { XSS } from "./xss";
 import { YAML_FOR_K8S } from "./yaml-for-k8s";
+import { YOUTUBE_URL_TO_VIDEO } from "./youtube-url-to-video";
 import { ZERO_DOWNTIME_MIGRATIONS } from "./zero-downtime-migrations";
 import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
@@ -519,6 +552,7 @@ export const QUESTION_SETS = [
   AB_TESTING,
   ABORT_CONTROLLER,
   ACID_TRANSACTIONS,
+  AGENTIC_RAG,
   ALERTING,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
@@ -529,6 +563,7 @@ export const QUESTION_SETS = [
   ARGOCD_BASICS,
   AUTHN_VS_AUTHZ,
   AUTOSCALING,
+  BACKEND_ENGINEER_ROADMAP,
   BACKPRESSURE,
   BACKUP_STRATEGY,
   BASE64,
@@ -540,9 +575,12 @@ export const QUESTION_SETS = [
   BROWSER_STORAGE,
   BUILD_CACHING,
   CACHE_INVALIDATION,
+  CACHE_WRITE_POLICIES,
+  CACHING_CONCEPTS_MAP,
   CACHING_STRATEGIES,
   CANARY_RELEASE,
   CDN_EDGE_ANYCAST,
+  CENTRALIZED_LOGGING_PIPELINE,
   CHAOS_ENGINEERING,
   CI_CD_BASICS,
   CILIUM_EBPF,
@@ -564,6 +602,7 @@ export const QUESTION_SETS = [
   CRDT,
   CRON_JOBS,
   CSRF,
+  CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
@@ -612,6 +651,7 @@ export const QUESTION_SETS = [
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
+  ENTERPRISE_SYSTEM_INTEGRATION,
   ERROR_BUDGETS,
   EVENT_DELEGATION,
   EVENT_DRIVEN_ARCHITECTURE,
@@ -620,10 +660,13 @@ export const QUESTION_SETS = [
   EVENT_SOURCING,
   EVENTUAL_CONSISTENCY,
   EXPONENTIAL_BACKOFF_JITTER,
+  EXPRESS_MIDDLEWARE,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FASTAPI_BASICS,
   FAULT_TOLERANCE,
   FEATURE_FLAGS,
+  FIRST_PAGE_FROM_POWER_ON,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
   GATEWAY,
@@ -644,7 +687,10 @@ export const QUESTION_SETS = [
   GIT_UNDO,
   GITHUB_ACTIONS_DOCKER_ECR,
   GITOPS_ARGOCD_VS_FLUX,
+  GLOBAL_ROLLOUT_LOCALIZATION,
+  GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
+  GRAPH_RAG,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,
@@ -668,11 +714,14 @@ export const QUESTION_SETS = [
   IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
+  INTEGRATION_TESTS_REAL_DB,
   IPTABLES_BASICS,
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JAVA_JVM_MEMORY_GC,
   JAVASCRIPT_ROADMAP,
+  JENKINS_PIPELINE_BASICS,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
@@ -802,6 +851,8 @@ export const QUESTION_SETS = [
   MONOLITH_ARCHITECTURE,
   MULTI_REGION,
   MVC_PATTERN,
+  MYSQL_INNODB_BASICS,
+  MYSQL_REPLICATION_ONLINE_DDL,
   N_PLUS_ONE_QUERIES,
   NAT_TRAVERSAL,
   NETWORK_CONFIG_CICD,
@@ -815,14 +866,17 @@ export const QUESTION_SETS = [
   NGINX_BASICS,
   NGINX_HTTPS_PERFORMANCE,
   NGINX_REVERSE_PROXY,
+  NODEJS_SERVER_RUNTIME,
   OAUTH,
   OBSERVABILITY_BASICS,
   ON_CALL,
+  OPENSEARCH_CLUSTER_OPERATIONS,
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
+  PARALLAX_SCROLLYTELLING,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -870,6 +924,9 @@ export const QUESTION_SETS = [
   RABBITMQ_BASICS,
   RACE_CONDITIONS,
   RAFT_CONSENSUS,
+  RAG_CLASSIC_PIPELINE,
+  RAG_PATTERNS_OVERVIEW,
+  RAG_RETRIEVAL_QUALITY,
   RATE_LIMITING_ALGORITHMS,
   RATE_LIMITING_IN_PRACTICE,
   RAY_CASTING,
@@ -881,6 +938,7 @@ export const QUESTION_SETS = [
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
   REDIS_REPLICATION_SENTINEL,
+  RELEASE_CUTOVER_HYPERCARE,
   RENDERING_CSR_SPA,
   RENDERING_SSG_ISR,
   RENDERING_SSR,
@@ -888,6 +946,7 @@ export const QUESTION_SETS = [
   RESILIENCE_PATTERNS,
   REST_API_DESIGN,
   RETRIES,
+  REVERSE_PROXY_LB_API_GATEWAY,
   ROLLBACK_STRATEGY,
   ROLLING_DEPLOYMENT,
   ROUTER_VS_SWITCH,
@@ -895,6 +954,9 @@ export const QUESTION_SETS = [
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
+  SCROLL_DRIVEN_ANIMATIONS,
+  SCROLL_PATTERNS_OVERVIEW,
+  SCROLL_TRIGGERED_INTERSECTION_OBSERVER,
   SD_AD_CLICK_EXACTLY_ONCE,
   SD_AD_CLICK_STREAM_WINDOWS,
   SD_AUTOCOMPLETE_DATA_PIPELINE,
@@ -964,6 +1026,7 @@ export const QUESTION_SETS = [
   SERVERLESS_LIMITS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
+  SIT_UAT_TESTING,
   SLI_SLO,
   SPRING_ANIMATION,
   SQL_AGGREGATION_PITFALLS,
@@ -980,6 +1043,7 @@ export const QUESTION_SETS = [
   SQL_QUERY_REWRITE,
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
+  SQL_STUDY_PATH,
   SQL_SUBQUERIES_EXISTS_LATERAL,
   SQL_VIEWS_MATERIALIZED,
   SQL_VS_NOSQL,
@@ -1008,6 +1072,7 @@ export const QUESTION_SETS = [
   TERRAFORM_BASICS,
   TERRAFORM_MODULES_TFVARS,
   TERRAFORM_NETWORK_IAC,
+  TEST_PYRAMID_UNIT_TESTS,
   THREAD_SAFETY,
   TIMEOUTS,
   TOKEN_LOGIN,
@@ -1029,6 +1094,7 @@ export const QUESTION_SETS = [
   WHAT_HAPPENS_GOOGLE_COM,
   XSS,
   YAML_FOR_K8S,
+  YOUTUBE_URL_TO_VIDEO,
   ZERO_DOWNTIME_MIGRATIONS,
   ZERO_TRUST_ARCHITECTURE,
 ];

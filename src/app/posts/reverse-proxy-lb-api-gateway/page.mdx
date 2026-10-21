@@ -1,0 +1,693 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("reverse-proxy-lb-api-gateway");
+
+API를 부르다가 이런 응답을 받았다.
+
+```text
+HTTP/1.1 401 Unauthorized
+Server: nginx/1.24.0 (Ubuntu)
+Content-Type: application/json
+Transfer-Encoding: chunked
+x-request-id: f604d890bb772997568b974aff53a69e
+
+{"error":"invalid or missing API key"}
+```
+
+`Server: nginx`라고 적혀 있으니 nginx 설정부터 연다. 그런데 nginx 설정 어디에도 401을 돌려주는 줄이 없다. 이 응답은 nginx 뒤에 있는 게이트웨이가 만들었고, nginx는 그걸 그대로 전달하면서 자기 `Server` 헤더만 얹었다. 요청 하나가 리버스 프록시, 로드 밸런서, API 게이트웨이를 차례로 지나가면 "누가 이 응답을 만들었나"부터 헷갈린다.
+
+셋이 개념적으로 어떻게 다른지는 [프록시 글의 마지막 부분](/posts/proxy-reverse-proxy)과 [게이트웨이 글](/posts/gateway)에서 이미 정리했다. nginx 설정 문법은 [nginx 리버스 프록시 글](/posts/nginx-reverse-proxy), 헬스 체크와 드레이닝은 [로드 밸런서 기초](/posts/load-balancer-basics), 분배 알고리즘은 [로드 밸런싱 알고리즘](/posts/load-balancing-algorithms), 요청 수 제한은 [실무 글](/posts/rate-limiting-in-practice)에 있다. 이 글은 그 조각들을 한 줄로 세운다. 컴퓨터 한 대에 셋을 실제로 겹쳐 띄우고, 같은 요청이 층을 하나 지날 때마다 무엇이 붙고 무엇이 막히는지 본 다음, 실제 서비스에서는 이 층들을 어떻게 쌓고 고르는지, 장애가 났을 때 어느 층의 짓인지 어떻게 가려내는지로 넘어간다.
+
+## 컴퓨터 한 대에 세 겹을 쌓는다
+
+환경은 Ubuntu 24.04, nginx 1.24, HAProxy 2.8, Node 22다. 22.04에서도 apt로 받는 nginx·HAProxy 버전만 조금 다를 뿐 설정은 그대로 된다.
+
+```bash
+sudo apt install -y nginx haproxy   # 둘 다 Ubuntu 기본 저장소에 있다
+nginx -v; haproxy -v | head -1      # 버전 확인
+```
+
+```text
+nginx version: nginx/1.24.0 (Ubuntu)
+HAProxy version 2.8.16-0ubuntu0.24.04.3 2026/06/19 - https://haproxy.org/
+```
+
+뒤쪽 서비스는 받은 요청을 그대로 JSON으로 돌려주는 50줄짜리 Node 서버다. 회원 서비스 `users-a`(17411)와 `users-b`(17412), 주문 서비스 `orders-a`(17421)를 띄운다. 그 앞에 세 층을 얹는다.
+
+- 리버스 프록시: nginx가 17443에서 HTTPS를 받아 TLS를 벗기고 뒤로 넘긴다.
+- API 게이트웨이: 직접 짠 Node 서버(17430)가 API 키를 확인하고, 키마다 요청 수를 세고, 경로를 보고 서비스를 고른다.
+- 로드 밸런서: HAProxy(17440)가 회원 서비스 인스턴스 둘에 요청을 나눈다.
+
+층마다 어디서 왔는지 구분하려고 나가는 주소를 다르게 묶었다. 클라이언트는 `127.0.0.7`, nginx는 `127.0.0.2`, 게이트웨이는 `127.0.0.3`, HAProxy는 `127.0.0.4`에서 출발한다. 루프백 대역 `127.0.0.0/8`은 전부 내 컴퓨터라서 이렇게 골라 쓸 수 있다.
+
+아래 그림에서 다음을 누르면 요청이 세 겹을 지나는 모습과 각 층이 요청을 돌려보내는 자리가 차례로 나온다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="nginx가 TLS를 벗기고, 게이트웨이가 손님을 확인하고, HAProxy가 인스턴스를 고른다"
+  zones={[
+    { id: "edge", label: "엣지", x: 8, y: 8, w: 384, h: 86, tone: "edge" },
+    { id: "inside", label: "내부 (평문 HTTP)", x: 8, y: 104, w: 384, h: 188, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "curl", sub: "127.0.0.7", x: 70, y: 52, icon: "client" },
+    { id: "nginx", label: "nginx", sub: ":17443 TLS", x: 250, y: 52, icon: "lock" },
+    { id: "gw", label: "gateway", sub: ":17430", x: 250, y: 146, icon: "gateway" },
+    { id: "lb", label: "haproxy", sub: ":17440", x: 110, y: 200, icon: "lb" },
+    { id: "ua", label: "users-a", sub: ":17411", x: 50, y: 262, icon: "server" },
+    { id: "ub", label: "users-b", sub: ":17412", x: 170, y: 262, icon: "server" },
+    { id: "oa", label: "orders-a", sub: ":17421", x: 330, y: 240, icon: "server" },
+  ]}
+  links={[
+    { from: "client", to: "nginx", label: "HTTPS" },
+    { from: "nginx", to: "gw" },
+    { from: "gw", to: "lb", label: "/users" },
+    { from: "gw", to: "oa", label: "/orders" },
+    { from: "lb", to: "ua" },
+    { from: "lb", to: "ub" },
+  ]}
+  steps={[
+    { path: ["client", "nginx", "gw", "lb", "ua"], packet: "GET /users/42", title: "네 홉을 지나 users-a에 닿는다", detail: "nginx에서 TLS가 끝나고, 게이트웨이가 키를 확인한 뒤 /users라서 HAProxy로 넘긴다. HAProxy가 users-a를 골랐다.", },
+    { path: ["client", "nginx", "gw", "lb", "ub"], packet: "GET /users/42", title: "다음 요청은 users-b로", detail: "앞의 세 층은 똑같이 지나고, 마지막에 HAProxy만 다른 인스턴스를 고른다. 나누는 일은 로드 밸런서만 한다.", },
+    { path: ["client", "nginx", "gw", "oa"], packet: "GET /orders/7", title: "경로가 다르면 다른 서비스로", detail: "어느 서비스로 갈지는 게이트웨이가 경로를 보고 정한다. 주문 서비스는 인스턴스가 하나라 HAProxy를 거치지 않는다.", },
+    { path: ["client", "nginx", "gw"], packet: "no key", blocked: true, title: "키가 없으면 게이트웨이에서 401", detail: "서비스까지 가지 않는다. 응답은 nginx를 거쳐 나가므로 Server 헤더에는 nginx가 찍힌다.", payload: "401 {\"error\":\"invalid or missing API key\"}", },
+    { path: ["client", "nginx", "gw"], packet: "4번째", blocked: true, title: "한도를 넘으면 429", detail: "같은 키로 연달아 보내면 네 번째부터 막힌다. 게이트웨이는 언제 다시 보내면 되는지 Retry-After로 알려 준다.", payload: "429 retry-after: 1", },
+  ]}
+/>
+
+## 앱만 있을 때 앱이 보는 것
+
+비교의 기준을 먼저 잡는다. 앞에 아무것도 없이 `users-a`를 바로 부른다.
+
+```bash
+curl -s --interface 127.0.0.7 localhost:17411/users/42   # 클라이언트 주소를 127.0.0.7로 고정해서 보낸다
+```
+
+```text
+{
+  "instance": "users-a",
+  "path": "/users/42",
+  "remote": "127.0.0.7:51274",
+  "host": "localhost:17411"
+}
+```
+
+`remote`가 클라이언트 주소 그대로다. 이 앱이 아는 건 TCP 상대방 주소와 `Host` 헤더뿐이다. 이제 층을 하나씩 얹을 때마다 이 JSON이 어떻게 바뀌는지 본다.
+
+## 리버스 프록시는 TLS를 벗기고 손님 정보를 적어 준다
+
+nginx는 HTTPS를 받아 복호화하고, 뒤로는 평문 HTTP로 새 연결을 연다. 새 연결이니 앱이 보는 상대방은 이제 nginx다. 그래서 원래 손님이 누구였고 어떤 스킴으로 왔는지를 헤더로 적어 넘긴다.
+
+```nginx
+server {
+  listen 17443 ssl;
+  server_name api.local;
+  ssl_certificate     api.crt;
+  ssl_certificate_key api.key;
+
+  location / {
+    proxy_pass http://127.0.0.1:17430;               # 게이트웨이로
+    proxy_bind 127.0.0.2;                            # 뒤로 나가는 주소 (실험용)
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-Id      $request_id;  # 요청마다 새 ID
+  }
+}
+```
+
+이 층이 하는 일은 손님을 대신 맞는 것까지다. 손님이 누구인지 확인하지 않고, 서버가 여럿인지도 신경 쓰지 않는다. 대신 인증서, HTTP/2, 압축, 큰 업로드 받아 두기, 느린 클라이언트를 대신 기다려 주기처럼 "연결"에 관한 일을 앱에게서 떼어 간다. 서버가 한 대뿐이어도 리버스 프록시를 두는 이유가 이것이다.
+
+## 로드 밸런서는 같은 서비스 여럿 중 하나를 고른다
+
+HAProxy 설정은 짧다. 회원 서비스 인스턴스 둘을 차례로 돌리고, 1초마다 헬스 체크를 해서 두 번 연속 실패하면 뺀다.
+
+```text
+frontend users_l7
+  bind 127.0.0.1:17440
+  mode http
+  option forwardfor                                  # X-Forwarded-For에 자기가 본 주소를 덧붙인다
+  http-request capture req.hdr(x-request-id) len 40  # 로그에 요청 ID를 남긴다
+  default_backend users
+
+backend users
+  mode http
+  balance roundrobin
+  source 127.0.0.4
+  option httpchk GET /health
+  server users-a 127.0.0.1:17411 check inter 1s fall 2 rise 2
+  server users-b 127.0.0.1:17412 check inter 1s fall 2 rise 2
+```
+
+세 겹을 다 지난 요청을 두 번 보내면 이렇게 나온다.
+
+```bash
+# 이 글의 curl은 모두 같은 옵션을 쓴다: 클라이언트 주소 127.0.0.7, 자체 서명 인증서 신뢰, api.local → 127.0.0.1
+C="curl -s --interface 127.0.0.7 --cacert api.crt --resolve api.local:17443:127.0.0.1"
+$C -H 'X-API-Key: key-alice' -H 'X-User-Id: admin' https://api.local:17443/users/42
+$C -H 'X-API-Key: key-alice' https://api.local:17443/users/42
+```
+
+```text
+{
+  "instance": "users-a",
+  "path": "/users/42",
+  "remote": "127.0.0.4:50902",
+  "host": "api.local",
+  "x-forwarded-for": "127.0.0.7, 127.0.0.2, 127.0.0.3",
+  "x-forwarded-proto": "https",
+  "x-request-id": "fc3036938870b3a86584ea1a2c18606a",
+  "x-user-id": "alice"
+}
+{
+  "instance": "users-b",
+  "path": "/users/42",
+  "remote": "127.0.0.4:56610",
+  "host": "api.local",
+  "x-forwarded-for": "127.0.0.7, 127.0.0.2, 127.0.0.3",
+  "x-forwarded-proto": "https",
+  "x-request-id": "e7aa1edf4a1b0ddaab96ba52fd1afe84",
+  "x-user-id": "alice"
+}
+```
+
+첫 번째는 `users-a`, 두 번째는 `users-b`로 갔다. `remote`는 바로 앞 홉인 HAProxy(`127.0.0.4`)이고, `X-Forwarded-For`에는 지나온 길이 왼쪽부터 쌓였다. 첫 번째 요청에 `X-User-Id: admin`을 몰래 붙였는데 앱에는 `alice`가 도착했다. 게이트웨이가 덮어썼기 때문이다. 아래 그림에서 다음을 누르면 층마다 무엇을 덧붙이는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="같은 요청이 한 홉을 지날 때마다 헤더가 붙고 바뀐다"
+  actors={[
+    { id: "c", label: "curl" },
+    { id: "n", label: "nginx" },
+    { id: "g", label: "gateway" },
+    { id: "h", label: "haproxy" },
+    { id: "a", label: "users-a" },
+  ]}
+  steps={[
+    { from: "c", to: "n", label: "HTTPS GET", title: "암호화된 요청이 엣지에 닿는다", detail: "클라이언트는 API 키와 몰래 넣은 X-User-Id를 함께 보낸다. 이 구간만 TLS다.", payload: "GET /users/42\nX-API-Key: key-alice\nX-User-Id: admin", },
+    { from: "n", to: "g", label: "HTTP + XFF", title: "nginx가 TLS를 벗기고 손님 정보를 적는다", detail: "평문 HTTP로 새 연결을 연다. 원래 주소와 스킴, 요청 ID를 헤더로 붙인다.", payload: "X-Forwarded-For: 127.0.0.7\nX-Forwarded-Proto: https\nX-Request-Id: fc3036…", },
+    { from: "g", to: "g", label: "키 확인", title: "게이트웨이가 손님을 확인한다", detail: "키로 사용자를 찾고, 키의 토큰 버킷에서 하나를 뺀다. 경로가 /users라 회원 서비스로 정한다.", payload: "key-alice → alice, 남은 토큰 2", },
+    { from: "g", to: "h", label: "X-User-Id", title: "키를 지우고 사용자 ID를 붙인다", detail: "뒤쪽 서비스는 API 키를 볼 필요가 없다. 손님이 넣은 X-User-Id는 버리고 확인한 값으로 덮는다.", payload: "X-User-Id: alice\nX-Forwarded-For: 127.0.0.7, 127.0.0.2", },
+    { from: "h", to: "a", label: "roundrobin", title: "HAProxy가 인스턴스를 고른다", detail: "살아 있는 둘 중 차례인 users-a로 보낸다. 자기가 본 게이트웨이 주소를 XFF 끝에 덧붙인다.", payload: "X-Forwarded-For: 127.0.0.7, 127.0.0.2, 127.0.0.3", },
+    { from: "a", to: "c", label: "200", title: "응답은 같은 길을 거꾸로 간다", detail: "각 층은 응답을 그대로 흘려보낸다. 마지막에 nginx가 Server 헤더를 얹고, 게이트웨이가 넣은 x-request-id가 클라이언트까지 온다.", },
+  ]}
+/>
+
+### 같은 연결 위에서 L4와 L7은 다르게 나눈다
+
+같은 HAProxy에 `mode tcp`로 17441 포트를 하나 더 열었다. 이쪽은 HTTP를 해석하지 않는 L4 로드 밸런서다. curl에 URL을 넷 주면 연결 하나를 재사용해서 차례로 보낸다.
+
+```bash
+curl -s --interface 127.0.0.7 localhost:17440/users/[1-4] | grep instance   # L7
+curl -s --interface 127.0.0.7 127.0.0.1:17441/users/[1-4] | grep instance   # L4
+curl -s -o /dev/null -w '%{url} connects=%{num_connects}\n' 127.0.0.1:17441/users/[1-4]
+```
+
+```text
+  "instance": "users-a",
+  "instance": "users-b",
+  "instance": "users-a",
+  "instance": "users-b",
+---
+  "instance": "users-a",
+  "instance": "users-a",
+  "instance": "users-a",
+  "instance": "users-a",
+---
+127.0.0.1:17441/users/1 connects=1
+127.0.0.1:17441/users/2 connects=0
+127.0.0.1:17441/users/3 connects=0
+127.0.0.1:17441/users/4 connects=0
+```
+
+L7은 요청마다 서버를 고르니 한 연결로 와도 번갈아 간다. L4는 연결을 맺을 때 한 번 고르고 그 뒤로는 바이트만 옮기니, 연결이 살아 있는 동안 전부 `users-a`로 간다. L4 쪽 응답에는 `x-forwarded-for`도 없었다. 헤더를 읽지도 쓰지도 않기 때문이다. HTTP/2나 gRPC처럼 연결 하나에 요청을 수천 개 싣는 프로토콜을 L4로 나누면 서버 하나만 바빠지는 이유가 이 장면이다.
+
+<NetworkTopology
+  width={400}
+  height={220}
+  caption="L7은 요청마다 고르고, L4는 연결마다 고른다"
+  nodes={[
+    { id: "c", label: "curl", sub: "연결 1개", x: 60, y: 110, icon: "client" },
+    { id: "l7", label: "L7 :17440", sub: "mode http", x: 200, y: 50, icon: "lb" },
+    { id: "l4", label: "L4 :17441", sub: "mode tcp", x: 200, y: 170, icon: "lb" },
+    { id: "a", label: "users-a", x: 340, y: 70, icon: "server" },
+    { id: "b", label: "users-b", x: 340, y: 150, icon: "server" },
+  ]}
+  links={[
+    { from: "c", to: "l7" },
+    { from: "c", to: "l4" },
+    { from: "l7", to: "a" },
+    { from: "l7", to: "b" },
+    { from: "l4", to: "a" },
+    { from: "l4", to: "b", dashed: true },
+  ]}
+  steps={[
+    { path: ["c", "l7", "a"], packet: "req 1", title: "L7, 첫 요청", detail: "HTTP를 읽고 요청 단위로 고른다. users-a." },
+    { path: ["c", "l7", "b"], packet: "req 2", title: "L7, 같은 연결의 두 번째 요청", detail: "연결은 그대로인데 서버는 바뀐다. 요청마다 다시 고르기 때문이다." },
+    { path: ["c", "l4", "a"], packet: "req 1", title: "L4, 연결을 맺을 때 고른다", detail: "SYN이 올 때 users-a로 정하고 연결을 이어 붙인다." },
+    { path: ["c", "l4", "a"], packet: "req 2", highlight: ["b"], title: "L4, 두 번째 요청도 users-a", detail: "L4는 요청 경계를 모른다. 연결이 끊길 때까지 users-b는 놀고 있다." },
+  ]}
+/>
+
+## 게이트웨이는 누가 부르는지를 본다
+
+리버스 프록시와 로드 밸런서는 손님이 누구인지 모른다. 게이트웨이부터는 "이 키의 주인이 누구고, 이번 초에 몇 번 불렀고, 어느 서비스로 보내야 하나"를 판단한다. 실험용 게이트웨이의 판단 부분만 옮기면 이렇다.
+
+```js
+const user = API_KEYS[req.headers["x-api-key"]];
+if (!user) return reply(401, { error: "invalid or missing API key" });
+
+const retryAfter = takeToken(req.headers["x-api-key"]); // 키마다 토큰 버킷 (3개, 초당 1개 충전)
+if (retryAfter) return reply(429, { error: "rate limited" }, { "retry-after": String(retryAfter) });
+
+const route = matchRoute(new URL(req.url, "http://x").pathname); // "/users" 또는 "/users/..."
+if (!route) return reply(404, { error: "no route" });
+
+const headers = { ...req.headers, "x-request-id": rid, "x-user-id": user }; // 손님이 보낸 x-user-id는 덮어쓴다
+delete headers["x-api-key"];                                                 // 키는 안쪽으로 넘기지 않는다
+```
+
+순서에 의미가 있다. 인증을 먼저 하니 키 없는 요청은 카운터를 건드리지도 못한다. 대신 키 없는 요청을 무한히 보내는 공격은 여기서 못 막는다. 실제 게이트웨이는 인증 앞에 IP 단위 제한을 하나 더 두거나, 그 일을 앞쪽 WAF에 맡긴다. 세 가지 거절을 직접 보낸다.
+
+```bash
+$C -i https://api.local:17443/users/42                                   # 키 없음
+for i in 1 2 3 4 5; do                                                   # 같은 키로 다섯 번 연달아
+  $C -o /dev/null -w "%{http_code} retry-after=%header{retry-after}\n" -H 'X-API-Key: key-bob' https://api.local:17443/orders/7
+done
+$C -H 'X-API-Key: key-alice' https://api.local:17443/payments/1          # 없는 경로
+```
+
+```text
+HTTP/1.1 401 Unauthorized
+Server: nginx/1.24.0 (Ubuntu)
+Content-Type: application/json
+Transfer-Encoding: chunked
+x-request-id: f604d890bb772997568b974aff53a69e
+
+{"error":"invalid or missing API key"}
+---
+200 retry-after=
+200 retry-after=
+200 retry-after=
+429 retry-after=1
+429 retry-after=1
+---
+{"error":"no route"}
+```
+
+토큰 버킷 크기가 3이라서 셋은 통과하고 넷째부터 막혔다. 글 처음의 401이 이 장면이다. 게이트웨이가 만든 응답을 nginx가 전달했을 뿐인데 `Server` 헤더는 nginx다. 응답을 누가 만들었는지는 `Server` 헤더가 아니라 본문 모양과 각 층의 접근 로그로 판단한다.
+
+<Callout kind="warning">
+게이트웨이가 붙여 주는 `X-User-Id`를 서비스가 믿으려면, 서비스가 게이트웨이를 거친 요청만 받아야 한다. 내부망에서 누가 `users-a:17411`을 직접 부를 수 있으면 `X-User-Id: admin`을 그대로 넣을 수 있다. 서비스 포트는 게이트웨이와 로드 밸런서에서 오는 연결만 받도록 보안 그룹이나 네트워크 정책으로 막고, 더 엄격하게는 [mTLS](/posts/https-tls)로 상대를 확인한다.
+</Callout>
+
+## 요청 ID 하나로 네 층의 로그를 꿴다
+
+층이 넷이면 로그도 네 군데다. nginx가 `$request_id`로 만든 값을 모든 층이 그대로 넘기고 로그에 남기게 해 두면, 응답 헤더의 `x-request-id` 하나로 전 구간을 찾을 수 있다.
+
+```bash
+# 응답 헤더에서 요청 ID를 꺼내 네 군데 로그를 모두 grep한다
+R=$($C -D - -o /dev/null -H 'X-API-Key: key-alice' https://api.local:17443/users/42 \
+    | awk 'tolower($1)=="x-request-id:" {print $2}' | tr -d '\r')
+echo "--- nginx";   grep "$R" nginx/logs/rp-access.log
+echo "--- gateway"; grep "$R" gateway.log
+echo "--- haproxy"; grep "$R" haproxy.log
+echo "--- app";     grep -h "$R" users-*.log
+```
+
+```text
+--- nginx
+127.0.0.7 "GET /users/42 HTTP/1.1" 200 rt=0.009 urt=0.008 up=127.0.0.1:17430 rid=f2da00934cd3877eb522629b3fa14331
+--- gateway
+{"rid":"f2da00934cd3877eb522629b3fa14331","method":"GET","path":"/users/42","status":200,"ms":6,"user":"alice","upstream":"17440"}
+--- haproxy
+127.0.0.3:44257 [21/Oct/2026:12:29:49.422] users_l7 users/users-a 0/0/1/2/3 200 402 - - ---- 1/1/0/0/0 0/0 {f2da00934cd3877eb522629b3fa14331} "GET /users/42 HTTP/1.1"
+--- app
+{"instance":"users-a","path":"/users/42","rid":"f2da00934cd3877eb522629b3fa14331"}
+```
+
+nginx는 전체 9ms 중 뒤에서 8ms를 기다렸고, 게이트웨이는 6ms, HAProxy는 3ms였다. 바깥 층의 시간에서 안쪽 층의 시간을 빼면 그 층에서 쓴 시간이 나온다. 서비스끼리 호출이 이어지는 구조라면 요청 ID 대신 W3C 표준 헤더로 구간을 잇는 [분산 추적](/posts/distributed-tracing)으로 넘어간다. 요청 ID는 그 전에 공짜로 할 수 있는 첫 단계다.
+
+## nginx 한 대로 세 역할을 다 해 보면
+
+방금은 일부러 세 프로그램으로 나눴다. 실제로는 nginx 하나가 세 역할을 다 하는 경우가 흔하다. 같은 일을 설정 파일 하나로 해 본다.
+
+```nginx
+upstream users  { server 127.0.0.1:17411; server 127.0.0.1:17412; keepalive 16; }  # 로드 밸런서
+upstream orders { server 127.0.0.1:17421; keepalive 16; }
+
+map $http_x_api_key $api_user {            # API 키 → 사용자. 모르는 키는 빈 값
+  default     "";
+  "key-alice" alice;
+  "key-bob"   bob;
+}
+limit_req_zone $http_x_api_key zone=per_key:10m rate=1r/s;   # 키마다 초당 1개
+
+server {
+  listen 127.0.0.1:17450;
+  location /users/  { include gw.conf; proxy_pass http://users;  }   # 경로 라우팅
+  location /orders/ { include gw.conf; proxy_pass http://orders; }
+  location /        { return 404 '{"error":"no route"}\n'; }
+}
+```
+
+```nginx
+# gw.conf: 두 location이 같이 쓰는 게이트웨이 규칙
+if ($api_user = "") { return 401 '{"error":"invalid or missing API key"}\n'; }
+limit_req zone=per_key burst=2 nodelay;
+limit_req_status 429;                      # 기본값은 503이다
+add_header X-Request-Id $request_id always;
+proxy_http_version 1.1;
+proxy_set_header Connection   "";
+proxy_set_header X-Request-Id $request_id;
+proxy_set_header X-User-Id    $api_user;   # 손님이 보낸 값을 덮어쓴다
+proxy_set_header X-Api-Key    "";          # 빈 값이면 헤더를 아예 안 보낸다
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+```text
+200 200 200 429 429
+{
+  "instance": "users-b",
+  "path": "/users/1",
+  "remote": "127.0.0.1:40702",
+  "host": "users",
+  "x-forwarded-for": "127.0.0.7",
+  "x-request-id": "fe7dddad022cd09d8e87c45d1591bc44",
+  "x-user-id": "bob"
+}
+```
+
+다섯 번 연달아 보내면 셋이 통과하고(초당 1개에 몰림 2개 허용) 둘이 429다. 키를 넣어 보낸 요청에는 `x-user-id`가 붙고 API 키는 빠졌다. 그런데 `host`가 `users`다. `Host`를 따로 지정하지 않으면 nginx는 `proxy_pass`에 적은 upstream 이름을 그대로 Host로 보낸다. 앱이 Host로 링크를 만들거나 가상 호스트를 고르면 여기서 깨진다. `proxy_set_header Host $host;`를 빠뜨리는 실수는 nginx를 여러 역할로 쓸수록 자주 난다.
+
+이 정도면 작은 서비스의 게이트웨이로 충분하다. 한계는 키가 늘어날 때 온다. 키를 추가할 때마다 설정을 고쳐 다시 읽혀야 하고, `limit_req`는 nginx 인스턴스마다 따로 세서 nginx가 셋이면 한도도 세 배가 된다. 고객별 요금제(무료는 분당 60, 유료는 분당 6000), 키 발급과 폐기, 사용량 집계, JWT 서명 검증과 키 교체가 필요해지면 Kong(nginx 위에 Lua로 만든 게이트웨이)이나 Envoy 기반 게이트웨이, 클라우드의 관리형 API 게이트웨이로 넘어간다. 셋을 나누는 기준은 프로그램 이름이 아니라 이런 요구가 생겼느냐다.
+
+## TLS를 어디서 벗길지
+
+리버스 프록시 층에서 가장 먼저 정하는 건 TLS가 끝나는 자리다. 선택지는 셋이다.
+
+엣지에서 끝내기(termination)는 이 실험처럼 맨 앞에서 복호화하고 안쪽은 평문으로 보낸다. 인증서 관리가 한 곳이고, 앞단이 HTTP를 읽을 수 있으니 경로 라우팅, 헤더 추가, WAF 검사가 다 된다. 안쪽 구간이 평문이라는 게 대가다. 규제나 내부 위협 모델 때문에 그게 안 되면 다시 암호화(re-encryption)한다. 앞단이 복호화해서 읽은 다음 뒤로 새 TLS 연결을 연다. 기능은 그대로 쓰고 구간마다 암호화되지만, 홉마다 핸드셰이크와 인증서가 늘어난다. 서비스 메시의 사이드카가 이 일을 자동으로 해 준다.
+
+셋째는 통과(passthrough)다. 앞단은 복호화하지 않고 TCP 그대로 뒤로 넘긴다. 그래도 TLS ClientHello에 평문으로 실려 오는 SNI(접속하려는 호스트 이름)는 볼 수 있어서, L4에서도 호스트별로 나눌 수는 있다. HAProxy를 `mode tcp`로 17460에 하나 더 세워 nginx 앞에 붙였다.
+
+```text
+frontend tls_in
+  bind 127.0.0.1:17460
+  mode tcp
+  tcp-request inspect-delay 5s
+  tcp-request content accept if { req.ssl_hello_type 1 }   # ClientHello가 올 때까지 기다린다
+  use_backend api_nginx if { req.ssl_sni -i api.local }    # SNI가 api.local이면 nginx로
+  default_backend reject
+```
+
+```bash
+curl -s --interface 127.0.0.7 --cacert api.crt --resolve api.local:17460:127.0.0.1 \
+  -H 'X-API-Key: key-alice' -w '%{http_code} cert_subject=%{certs}\n' https://api.local:17460/users/9 \
+  | grep -E '"instance"|x-forwarded-for|^200'   # 필요한 줄만 남긴다
+curl -s -k --resolve other.local:17460:127.0.0.1 -o /dev/null https://other.local:17460/; echo "curl exit=$?"
+```
+
+```text
+  "instance": "users-b",
+  "x-forwarded-for": "127.0.0.1, 127.0.0.2, 127.0.0.3",
+200 cert_subject=Subject:CN = api.local
+---
+curl exit=35
+```
+
+인증서는 여전히 nginx의 것이 왔고, 모르는 호스트 이름은 TLS 단계에서 끊겼다(종료 코드 35는 TLS 연결 실패). 그런데 `x-forwarded-for` 맨 앞이 `127.0.0.7`이 아니라 `127.0.0.1`이다. nginx 입장에서는 HAProxy가 손님이라서 진짜 클라이언트 주소가 사라졌다. L4 층을 앞에 끼우면 PROXY protocol을 양쪽에 켜야 하는 이유다. 자세한 형식은 [프록시 글](/posts/proxy-reverse-proxy)에 있다. 통과 방식은 앱이 인증서를 직접 들고 있어야 하거나(종단 간 암호화, 클라이언트 인증서 검사) HTTP가 아닌 TLS 프로토콜을 다룰 때 고른다.
+
+## 실제 서비스에서는 이렇게 겹친다
+
+클라우드에서 흔한 모양은 이렇다. 사용자 가까이에서 CDN이 정적 파일과 캐시를 맡고, 리전 안에서 ALB 같은 L7 로드 밸런서가 TLS를 끝내며 받고, 그 뒤 쿠버네티스라면 [Ingress](/posts/kubernetes-ingress)나 [Gateway API](/posts/k8s-gateway-api) 컨트롤러, 혹은 API 게이트웨이가 경로와 인증을 맡고, 마지막으로 서비스의 Pod 여럿에 나뉜다. 로드 밸런싱은 사실 여러 번 일어난다. ALB가 Ingress 컨트롤러 Pod 중 하나를 고르고, 컨트롤러가 서비스 Pod 중 하나를 고른다. 아래 그림에서 다음을 누르면 정상 요청과, 각 층이 직접 만들어 내는 오류 응답이 차례로 나온다.
+
+<NetworkTopology
+  width={400}
+  height={330}
+  caption="CDN → ALB → 게이트웨이 → 서비스. 층마다 직접 만들어 내는 상태 코드가 다르다"
+  zones={[
+    { id: "edge", label: "엣지 (CDN)", x: 8, y: 8, w: 384, h: 74, tone: "edge" },
+    { id: "vpc", label: "VPC", x: 8, y: 92, w: 384, h: 230, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "browser", x: 70, y: 45, icon: "client" },
+    { id: "cdn", label: "CDN", sub: "캐시·WAF", x: 260, y: 45, icon: "internet" },
+    { id: "alb", label: "ALB", sub: "TLS 종료", x: 260, y: 130, icon: "lb" },
+    { id: "gw", label: "gateway", sub: "인증·한도", x: 150, y: 195, icon: "gateway" },
+    { id: "p1", label: "orders pod", x: 70, y: 280, icon: "container" },
+    { id: "p2", label: "orders pod", x: 230, y: 280, icon: "container" },
+    { id: "db", label: "DB", x: 345, y: 280, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "cdn" },
+    { from: "cdn", to: "alb" },
+    { from: "alb", to: "gw" },
+    { from: "gw", to: "p1" },
+    { from: "gw", to: "p2" },
+    { from: "p2", to: "db" },
+  ]}
+  steps={[
+    { path: ["user", "cdn", "alb", "gw", "p2", "db"], packet: "GET /orders", title: "정상 요청은 다섯 홉을 지난다", detail: "CDN이 캐시에 없어 원본으로 보내고, ALB가 TLS를 끝내며 게이트웨이 인스턴스를 고르고, 게이트웨이가 키를 확인해 Pod를 고른다.", },
+    { path: ["user", "cdn", "alb", "gw"], packet: "토큰 만료", blocked: true, title: "401과 429는 게이트웨이가 만든다", detail: "서비스 로그에는 아무것도 없다. 게이트웨이 로그에서 키와 사용자로 찾는다.", payload: "401 Unauthorized\n429 Too Many Requests + Retry-After", },
+    { path: ["user", "cdn", "alb", "gw", "p1"], packet: "연결 거부", blocked: true, title: "502는 바로 앞 층이 만든다", detail: "뒤가 연결을 거부했거나 응답 도중 끊었다. 502를 만든 층의 바로 뒤를 본다.", payload: "502 Bad Gateway", },
+    { path: ["user", "cdn", "alb"], packet: "대상 없음", blocked: true, highlight: ["gw"], title: "503은 보낼 곳이 없을 때", detail: "로드 밸런서에 살아 있는 대상이 하나도 없다. 헬스 체크와 배포 상태를 먼저 본다.", payload: "503 Service Unavailable", },
+    { path: ["user", "cdn", "alb", "gw", "p2", "db"], packet: "느린 쿼리", blocked: true, highlight: ["alb", "gw"], title: "504는 시간이 가장 짧은 층이 만든다", detail: "DB가 느리면 타임아웃이 가장 짧은 층이 먼저 포기한다. 어느 층의 시계가 먼저 울렸는지가 504를 만든 층이다.", payload: "504 Gateway Timeout", },
+  ]}
+/>
+
+층을 쌓을 때 가장 흔한 실수는 같은 일을 두 층에서 하는 것이다. ALB에서도 재시도하고 게이트웨이에서도 재시도하고 서비스 클라이언트도 재시도하면, 장애 순간에 요청이 곱절로 불어난다([재시도 글](/posts/retries)). 요청 수 제한을 CDN의 WAF와 게이트웨이 양쪽에 걸어 두면 어느 쪽이 429를 냈는지 헷갈린다. 층마다 맡을 일을 하나씩 정해 둔다. 거친 IP 단위 차단은 엣지, TLS와 인스턴스 분배는 로드 밸런서, 손님 단위 인증과 한도는 게이트웨이, "이 사용자가 이 주문을 볼 수 있나" 같은 인가는 서비스다.
+
+## 관리형이냐 직접 띄우냐
+
+같은 자리에 놓을 수 있는 제품이 많다. 고르는 기준은 무엇을 해석해야 하느냐와 누가 운영하느냐다. AWS를 예로 들면 이렇게 나뉜다.
+
+| 선택지 | 보는 층 | 잘하는 것 | 고를 때 |
+|---|---|---|---|
+| NLB | L4 (TCP·UDP·TLS) | 고정 IP, 클라이언트 IP 보존, 매우 많은 연결 | HTTP가 아닌 프로토콜, TLS 통과, 고정 IP가 필요할 때 |
+| ALB | L7 (HTTP) | 호스트·경로·헤더 규칙, 대상 그룹 헬스 체크, OIDC 로그인 연동 | 컨테이너·EC2 앞의 기본 입구 |
+| API Gateway (관리형) | L7 + API 의미 | API 키와 사용량 계획, 요청 단위 과금, Lambda 연동 | 서버리스, 외부에 공개하는 API, 트래픽이 적거나 들쭉날쭉할 때 |
+| nginx · Kong · Envoy (직접) | L4~L7 | 설정 자유도, 플러그인, 클러스터 안 배치 | 트래픽이 많아 요청당 과금이 부담될 때, 쿠버네티스 안에서 |
+
+비용 구조가 다르다는 게 실무에서 크게 작용한다. ALB는 시간당 기본 요금에 처리량 단위(LCU) 요금이 붙고, 관리형 API Gateway는 요청 건수로 받는다. 글 쓰는 시점 us-east-1 공시 기준으로 HTTP API는 100만 건당 약 1달러, REST API는 약 3.5달러다(리전과 구간마다 다르고 바뀔 수 있다). 초당 100건이 쉬지 않고 오면 한 달에 약 2억 5,920만 건이니 HTTP API로도 월 260달러쯤이다. 트래픽이 커질수록 요청당 과금이 부담되고, 그때 ALB 뒤에 직접 띄운 게이트웨이로 옮기는 팀이 생긴다.
+
+관리형 게이트웨이에는 고정된 한도도 있다. AWS API Gateway는 REST API의 통합 타임아웃 기본값이 29초(2024년부터 리전·프라이빗 API는 늘려 달라고 요청할 수 있다), HTTP API는 최대 30초, 요청 본문은 10MB까지다. 오래 걸리는 내보내기나 큰 파일 업로드를 게이트웨이로 받으려다 막히는 일이 흔하다. 이런 작업은 미리 서명한 URL로 스토리지에 바로 올리게 하거나 비동기 작업으로 돌린다.
+
+ALB에도 직관과 다른 동작이 하나 있다. HAProxy는 살아 있는 대상이 없으면 503을 냈지만, ALB는 대상 그룹의 대상이 전부 비정상이면 헬스 상태를 무시하고 전부에게 보낸다(fail open). 헬스 체크가 잘못 설정돼 전부 빨간불이어도 서비스가 그럭저럭 돌아가는 것처럼 보이는 이유다. 대상이 아예 등록돼 있지 않을 때만 503이 난다.
+
+## 상태 코드로 범인 찾기
+
+장애가 나면 상태 코드와 응답 본문의 모양으로 어느 층이 만든 응답인지부터 가린다. 실험실에서 서비스를 하나씩 죽여 본다.
+
+```bash
+kill <orders-a PID>;  $C -w "%{http_code}\n" -H 'X-API-Key: key-alice' https://api.local:17443/orders/7
+kill <gateway PID>;   $C -i -H 'X-API-Key: key-alice' https://api.local:17443/orders/7
+tail -1 nginx/logs/rp-error.log
+```
+
+```text
+{"error":"connect ECONNREFUSED 127.0.0.1:17421"}
+502
+---
+HTTP/1.1 502 Bad Gateway
+Server: nginx/1.24.0 (Ubuntu)
+Content-Type: text/html
+Content-Length: 166
+
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.24.0 (Ubuntu)</center>
+</body>
+</html>
+---
+2026/10/21 12:30:36 [error] 4295#4295: *47 connect() failed (111: Connection refused) while connecting to upstream, client: 127.0.0.7, server: api.local, request: "GET /orders/7 HTTP/1.1", upstream: "http://127.0.0.1:17430/orders/7", host: "api.local:17443"
+```
+
+둘 다 502인데 본문이 다르다. 첫 번째는 게이트웨이의 JSON이고 뒤의 주문 서비스가 죽었다는 뜻이다. 두 번째는 nginx 기본 오류 페이지이고 게이트웨이 자체가 죽었다는 뜻이다. 502는 "내 바로 뒤가 대답을 안 했다"는 말이라서, 누가 502를 만들었는지 알면 어디를 볼지가 정해진다. 첫 번째 본문에는 내부 주소 `127.0.0.1:17421`이 그대로 새어 나갔다. 실험용이라 놔뒀지만, 실제 게이트웨이는 오류 원인을 로그에만 남기고 밖으로는 요청 ID만 돌려준다.
+
+헷갈리는 건 504다. `users-a`를 죽인 직후, HAProxy 헬스 체크가 아직 눈치채기 전에 보낸 요청이 503이 아니라 504로 돌아왔다. HAProxy 로그의 그 줄을 조각내 보면 이유가 나온다. 조각을 누르면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="죽은 users-a로 간 요청의 HAProxy 로그 한 줄"
+  base="127.0.0.3:37793 [21/Oct/2026:12:30:10.269] users_l7"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "server", display: "users/users-a", title: "고른 서버", description: "헬스 체크가 아직 DOWN으로 바꾸기 전이라 roundrobin 차례대로 users-a를 골랐다." },
+    { key: "timers", display: "0/0/-1/-1/3006", title: "TR/Tw/Tc/Tr/Ta (ms)", description: "요청 받기 0, 대기열 0, 연결 -1(끝내 실패), 서버 응답 -1(못 받음), 전체 3006ms. 연결이 거부될 때마다 1초 쉬고 다시 시도했다.", required: true },
+    { key: "status", display: "503", title: "HAProxy가 낸 상태 코드", description: "3초 동안 재시도하다 포기하고 503을 만들었다. 하지만 이 응답을 받을 손님은 이미 떠났다." },
+    { key: "bytes", display: "217", title: "응답 크기", description: "HAProxy 기본 503 페이지의 크기다." },
+    { key: "cookies", display: "- -", title: "요청·응답 쿠키 캡처", description: "설정하지 않아 비어 있다." },
+    { key: "term", display: "SC--", title: "종료 상태", description: "S는 서버 쪽이 거부했거나 끊었다는 뜻, C는 서버와 연결을 맺는 단계에서 끝났다는 뜻이다.", required: true },
+    { key: "conns", display: "1/1/0/0/3", title: "연결 수와 재시도 횟수", description: "전체/프런트엔드/백엔드/서버 연결 수, 마지막 3은 재시도 횟수다. 기본값 retries 3을 다 썼다.", required: true },
+    { key: "queue", display: "0/0", title: "대기열", description: "서버·백엔드 대기열에 쌓인 요청이 없었다." },
+    { key: "rid", display: "{365d6790…}", title: "캡처한 요청 ID", description: "게이트웨이 로그에서 같은 ID를 찾으면 그쪽은 2003ms에 504로 끝나 있다." },
+  ]}
+/>
+
+HAProxy는 연결이 거부되면 바로 다시 시도하지 않고 `timeout connect`와 1초 중 짧은 시간만큼 쉰 뒤 재시도한다. 기본 재시도 세 번이면 3초다. 그런데 바깥의 게이트웨이는 2초만 기다렸다. 그래서 안쪽에서는 503, 바깥에서는 504가 났고, 사용자가 본 건 504다. 안쪽 층이 바깥 층보다 오래 기다리면, 바깥이 포기한 뒤에도 안쪽은 헛일을 계속하고 진짜 원인은 가려진다. HAProxy에 `option redispatch`를 켜면 마지막 재시도를 다른 서버로 보내서 이 경우도 살릴 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={200}
+  caption="타임아웃은 바깥으로 갈수록 길어야 한다. 안쪽이 더 길면 바깥이 먼저 504를 낸다"
+  nodes={[
+    { id: "c", label: "client", sub: "30s", x: 50, y: 60, w: 76 },
+    { id: "n", label: "nginx", sub: "read 60s", x: 150, y: 60, w: 84 },
+    { id: "g", label: "gateway", sub: "2s", x: 255, y: 60, w: 84 },
+    { id: "h", label: "haproxy", sub: "1s × 3 재시도", x: 350, y: 60, w: 92 },
+    { id: "ok", label: "바깥 > 안쪽", sub: "원인 코드가 그대로 나온다", x: 120, y: 160, w: 170 },
+    { id: "bad", label: "바깥 < 안쪽", sub: "바깥의 504가 원인을 덮는다", x: 300, y: 160, w: 170 },
+  ]}
+  edges={[
+    { from: "c", to: "n" },
+    { from: "n", to: "g" },
+    { from: "g", to: "h", label: "2s < 3s" },
+    { from: "h", to: "bad", dashed: true },
+    { from: "n", to: "ok", dashed: true },
+  ]}
+/>
+
+현장에서 증상별로 먼저 볼 곳은 이렇다.
+
+- 401·403: 게이트웨이(또는 ALB의 인증 규칙)가 만들었다. 서비스 로그를 보지 말고 게이트웨이 로그에서 키·토큰 검증 실패 이유를 찾는다. 시계가 어긋나 JWT `exp` 검증이 실패하는 경우도 있다.
+- 429: 어느 층의 한도인지부터 가린다. 본문 모양과 `Retry-After`, `RateLimit` 계열 헤더가 층마다 다르다. CDN·WAF, 게이트웨이, 서비스 자체 중 누구인지 모르면 클라이언트는 엉뚱한 한도를 피해 다닌다.
+- 502: 만든 층의 바로 뒤가 죽었거나 연결을 끊었다. 트래픽이 적을 때만 가끔 나면 keep-alive 시간이 어긋난 것이다(뒤쪽의 유휴 타임아웃이 앞쪽보다 짧으면 앞쪽이 막 닫힌 연결에 요청을 싣는다).
+- 503: 보낼 대상이 없다. 헬스 체크 경로와 결과, 배포 중 드레이닝 순서를 본다.
+- 504: 각 층의 타임아웃 값을 나란히 적어 보고 어느 층이 가장 먼저 포기했는지 찾는다. 그 층의 로그에 걸린 시간이 정확히 타임아웃 값과 같다면 범인은 그 뒤쪽 전체다.
+
+AWS ALB라면 접근 로그 앞부분에서 같은 판단을 한다. 아래는 형식을 보여 주는 예시다.
+
+```text
+# 예시: ALB 접근 로그 앞부분 (type time elb client:port target:port 세 처리 시간 elb_status target_status)
+https 2026-10-21T12:30:36.112Z app/api-alb/50dc6c495c0c9188 203.0.113.7:51514 10.0.3.21:8080 -1 -1 -1 502 -
+https 2026-10-21T12:30:41.508Z app/api-alb/50dc6c495c0c9188 203.0.113.7:51522 10.0.3.22:8080 0.000 0.012 0.000 502 502
+```
+
+첫 줄은 처리 시간이 모두 `-1`이고 대상 상태 코드가 `-`라서 ALB가 직접 만든 502다. 대상에 연결하지 못했거나 대상이 응답 없이 끊었다. 둘째 줄은 대상이 502를 돌려줬고 ALB는 전달만 했다. 그러니 그 대상 뒤(게이트웨이라면 그 뒤의 서비스)를 본다.
+
+## 한 홉에 얼마나 드나
+
+층을 늘리면 지연이 붙는다. 실험실에서 경로마다 연결을 하나만 열어 재사용(keep-alive)하며, 200번 데운 뒤 요청 3,000개를 차례로 보내고 정렬해서 중앙값(p50)과 p99를 뽑았다.
+
+```text
+app                                  p50=1.47ms p99=2.69ms
+haproxy > app                        p50=1.64ms p99=5.50ms
+gateway > haproxy > app              p50=1.92ms p99=5.21ms
+nginx(TLS) > gateway > haproxy > app p50=2.59ms p99=7.67ms
+```
+
+같은 컴퓨터 안이라 네트워크 시간은 거의 없고, 순수하게 프로그램이 한 번 받아 넘기는 비용만 보인다. 중앙값은 홉마다 0.2~0.7ms씩 늘었고, p99는 세 겹을 지나며 세 배 가까이 됐다. 여러 번 돌리면 p99는 실행마다 몇 ms씩 흔들린다. 층이 늘수록 느린 꼬리가 길어지는 건 각 층의 가끔 느린 순간이 더해지기 때문이다([꼬리 지연 글](/posts/tail-latency)). 실제 클라우드에서는 홉마다 다른 머신, 다른 가용 영역으로 건너가니 홉당 1ms 안팎의 네트워크 시간이 더 붙는다고 보고 잡는다.
+
+연결을 새로 맺을 때는 TLS 핸드셰이크가 더 크다.
+
+```bash
+$C -o /dev/null -H 'X-API-Key: key-alice' \
+  -w 'connect=%{time_connect}s tls_done=%{time_appconnect}s first_byte=%{time_starttransfer}s total=%{time_total}s\n' \
+  https://api.local:17443/users/42
+```
+
+```text
+connect=0.000213s tls_done=0.003838s first_byte=0.007622s total=0.007679s
+connect=0.000171s tls_done=0.003591s first_byte=0.005609s total=0.005640s
+connect=0.000214s tls_done=0.003300s first_byte=0.006344s total=0.006400s
+```
+
+TCP 연결은 0.2ms인데 TLS가 끝나기까지 3~4ms가 걸렸다. 왕복 시간이 0에 가까운 루프백에서도 암호 연산만으로 이만큼이다. 사용자와 서버가 멀면 왕복 시간이 곱해진다. 그래서 TLS는 사용자 가까운 엣지에서 한 번 끝내고, 안쪽 홉은 연결을 오래 재사용하게 둔다. nginx `upstream`의 `keepalive`, Node의 `keepAlive` 에이전트가 그 설정이다. 이걸 빠뜨리면 홉마다 요청마다 새 연결을 맺느라 지연과 포트 고갈이 같이 온다.
+
+## 게이트웨이의 판단을 손으로 따라가기
+
+게이트웨이가 요청 하나를 받았을 때 하는 일은 결국 세 번의 판단이다. 이 키를 아는가, 이 키가 이번 초에 몇 번 불렀나, 어느 서비스의 몇 번째 인스턴스로 보낼까. 아래 그림은 한도가 초당 3인 게이트웨이에 1초 안에 요청 여섯 개가 들어온 장면이다. 다음을 누르면 기억해 둔 카운터와 라운드 로빈 차례가 바뀐다.
+
+<AlgoTrace
+  caption="키마다 1초 카운터, 라우트마다 다음 차례를 기억한다 (한도 초당 3)"
+  memoryLabel="게이트웨이가 기억하는 것"
+  cells={["alice /users/1", "alice /users/2", "nokey /users/3", "alice /orders/1", "alice /users/4", "bob /payments"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["alice 1/3", "users → b"], caption: "키를 알고 한도 안이다. /users의 첫 차례 users-a로 보내고 다음 차례를 b로 넘긴다." },
+    { pointer: 1, found: [0, 1], memory: ["alice 2/3", "users → a"], caption: "같은 라우트라 이번엔 users-b. 카운터는 2가 된다." },
+    { pointer: 2, found: [0, 1], memory: ["alice 2/3", "users → a"], caption: "키가 없다. 401로 끝나고 카운터도 차례도 그대로다." },
+    { pointer: 3, found: [0, 1, 3], memory: ["alice 3/3", "users → a", "orders → a"], caption: "라우트가 다르면 차례도 따로다. orders-a로 가고 alice는 한도를 다 썼다." },
+    { pointer: 4, found: [0, 1, 3], memory: ["alice 3/3", "users → a", "orders → a"], caption: "이번 초에 이미 셋을 썼다. 429를 돌려주고 차례는 넘기지 않는다." },
+    { pointer: 5, found: [0, 1, 3], memory: ["alice 3/3", "bob 1/3", "users → a", "orders → a"], caption: "bob은 따로 센다. 한도는 통과했지만 /payments 라우트가 없어 404다." },
+  ]}
+/>
+
+직접 짜 본다. 아래 함수는 요청 목록과 설정을 받아 각 요청의 결과를 문자열로 돌려준다. 키를 모르면 `"401"`, 그 키가 같은 1초 구간(`Math.floor(t / 1000)`)에 이미 한도만큼 썼으면 `"429"`, 맞는 라우트가 없으면 `"404"`, 통과하면 라우트별 라운드 로빈으로 고른 인스턴스를 `"200 users-a"`처럼 붙인다. 라우트는 경로가 접두어와 같거나 `접두어/`로 시작할 때만 맞는다. `/usersettings`는 `/users`가 아니다. 판단 순서는 위 그림과 같다(404도 한도를 쓴다).
+
+<CodePlayground
+  caption="작은 게이트웨이의 판단"
+  functionName="gatewayDecide"
+  initialCode={`function gatewayDecide(requests, config) {
+  // requests: [{ t: 밀리초, key: "key-alice", path: "/users/1" }, ...]
+  // config: { keys: { "key-alice": "alice" }, limitPerSec: 3, routes: { "/users": ["users-a", "users-b"] } }
+  return requests.map(() => "404");
+}`}
+  solution={`function gatewayDecide(requests, config) {
+  const counts = new Map(); // "키|초" → 그 1초 동안 받은 수
+  const turn = new Map();   // 라우트 → 다음 차례
+  const prefixes = Object.keys(config.routes).sort((a, b) => b.length - a.length);
+  return requests.map(({ t, key, path }) => {
+    if (!config.keys[key]) return "401";
+    const slot = key + "|" + Math.floor(t / 1000);
+    const used = counts.get(slot) ?? 0;
+    if (used >= config.limitPerSec) return "429";
+    counts.set(slot, used + 1);
+    const prefix = prefixes.find((p) => path === p || path.startsWith(p + "/"));
+    if (!prefix) return "404";
+    const pool = config.routes[prefix];
+    const i = turn.get(prefix) ?? 0;
+    turn.set(prefix, i + 1);
+    return "200 " + pool[i % pool.length];
+  });
+}`}
+  tests={[
+    { label: "같은 라우트는 번갈아 간다", args: [ [{ t: 0, key: "key-alice", path: "/users/1" }, { t: 100, key: "key-alice", path: "/users/2" }, { t: 200, key: "key-alice", path: "/users/3" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 5, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["200 users-a", "200 users-b", "200 users-a"], },
+    { label: "모르는 키는 401", args: [ [{ t: 0, key: "", path: "/users/1" }, { t: 0, key: "key-mallory", path: "/users/1" }, { t: 0, key: "key-bob", path: "/orders/1" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 5, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["401", "401", "200 orders-a"], },
+    { label: "한도를 넘으면 429, 다음 초엔 다시 통과", args: [ [{ t: 0, key: "key-alice", path: "/users/1" }, { t: 10, key: "key-alice", path: "/users/1" }, { t: 20, key: "key-alice", path: "/users/1" }, { t: 1000, key: "key-alice", path: "/users/1" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 2, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["200 users-a", "200 users-b", "429", "200 users-a"], },
+    { label: "키마다 따로 센다", args: [ [{ t: 0, key: "key-alice", path: "/orders/1" }, { t: 0, key: "key-bob", path: "/orders/2" }, { t: 500, key: "key-alice", path: "/orders/3" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 1, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["200 orders-a", "200 orders-a", "429"], },
+    { label: "접두어 경계", args: [ [{ t: 0, key: "key-bob", path: "/users" }, { t: 0, key: "key-bob", path: "/usersettings" }, { t: 0, key: "key-bob", path: "/orders/7" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 5, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["200 users-a", "404", "200 orders-a"], },
+    { label: "라우트마다 차례가 따로다", args: [ [{ t: 0, key: "key-bob", path: "/users/1" }, { t: 0, key: "key-bob", path: "/orders/1" }, { t: 0, key: "key-bob", path: "/users/2" }, { t: 0, key: "key-bob", path: "/payments" }], { keys: { "key-alice": "alice", "key-bob": "bob" }, limitPerSec: 10, routes: { "/users": ["users-a", "users-b"], "/orders": ["orders-a"] } }, ], expected: ["200 users-a", "200 orders-a", "200 users-b", "404"], },
+  ]}
+/>
+
+실제 게이트웨이는 고정 1초 구간 대신 토큰 버킷을 쓰고(경계에서 두 배가 새는 문제는 [알고리즘 글](/posts/rate-limiting-algorithms)에 있다), 카운터를 인스턴스 메모리가 아닌 Redis에 둔다. 판단의 순서와 "거절한 요청은 차례를 넘기지 않는다"는 규칙은 같다.
+
+## 박스 이름보다 맡긴 일
+
+리버스 프록시는 연결을 대신 받고, 로드 밸런서는 같은 서비스 여럿 중 하나를 고르고, 게이트웨이는 손님이 누구이고 얼마나 불렀는지를 본다. nginx 한 대가 셋을 다 할 수도 있고, 클라우드에서는 CDN, ALB, 게이트웨이, 쿠버네티스 Service가 겹겹이 나눠 맡는다. 층을 쌓을 때는 일을 겹치지 않게 나누고, 타임아웃은 바깥으로 갈수록 길게 두고, 요청 ID를 모든 층에 흘린다. 장애가 나면 상태 코드와 응답 본문으로 그 응답을 만든 층을 먼저 찾고, 그 층의 바로 뒤를 본다.
+
+## 면접에서 나올 만한 질문
+
+### 리버스 프록시, 로드 밸런서, API 게이트웨이를 한 요청 흐름으로 설명해 보세요.
+
+맡은 일로 나눈다. 리버스 프록시는 서버 대신 연결을 받아 TLS를 끝내고 `X-Forwarded-For`, `X-Forwarded-Proto` 같은 손님 정보를 붙여 넘긴다. 로드 밸런서는 같은 서비스의 여러 인스턴스 중 살아 있는 하나를 헬스 체크와 분배 알고리즘으로 고른다. 게이트웨이는 API 키나 토큰으로 손님을 확인하고, 손님별 요청 수를 제한하고, 경로를 보고 어느 서비스로 보낼지 정한다. 한 프로그램이 셋을 다 할 수도 있어서 제품 이름보다 그 자리의 책임으로 구분한다.
+
+### nginx만으로 API 게이트웨이를 대신할 수 있나요? 언제 별도 게이트웨이가 필요해지나요?
+
+작은 규모라면 된다. `map`으로 키를 사용자로 바꾸고, `limit_req`로 한도를 걸고, `location`으로 라우팅하면 기본 게이트웨이가 된다. 다만 키를 바꿀 때마다 설정을 다시 읽혀야 하고, `limit_req`는 인스턴스마다 따로 세서 nginx가 여러 대면 한도가 곱해진다. 고객별 요금제, 키 발급·폐기, 사용량 집계, JWT 키 교체 같은 요구가 생기면 Kong이나 Envoy 기반 게이트웨이, 관리형 API 게이트웨이로 넘어간다.
+
+### L4와 L7 로드 밸런서는 HTTP/2나 gRPC 트래픽에서 어떻게 다르게 동작하나요?
+
+L4는 연결을 맺을 때 한 번 서버를 고르고, L7은 요청마다 고른다. HTTP/2와 gRPC는 연결 하나에 요청을 많이 싣기 때문에 L4로 나누면 오래 붙어 있는 연결이 있는 서버만 바빠진다. 실험에서도 keep-alive 연결 하나로 보낸 요청 네 개가 L4에서는 전부 같은 인스턴스로, L7에서는 번갈아 갔다. 그래서 gRPC는 L7 로드 밸런서나 클라이언트 쪽 분배를 쓰고, L4를 써야 하면 연결 수명을 짧게 둔다.
+
+### TLS는 어디서 종료하는 게 좋나요?
+
+보통 사용자 가까운 엣지(CDN이나 L7 로드 밸런서)에서 끝낸다. 그래야 그 층이 HTTP를 읽어 라우팅과 WAF 검사를 하고, 핸드셰이크 비용도 사용자와 가까운 곳에서 한 번만 낸다. 안쪽 평문 구간이 문제라면 다시 암호화하거나 메시의 mTLS를 쓴다. 앱이 인증서를 직접 다뤄야 하거나 HTTP가 아니면 L4에서 SNI만 보고 통과시키는데, 그때는 클라이언트 IP가 사라지므로 PROXY protocol을 함께 켠다.
+
+### 502, 503, 504는 각각 어느 층을 먼저 의심하나요?
+
+세 코드 모두 그 응답을 만든 층의 바로 뒤를 본다. 502는 바로 뒤가 연결을 거부했거나 응답 도중 끊은 것이고, 응답 본문 모양으로 어느 층이 만들었는지 가린다. 503은 로드 밸런서에 보낼 대상이 없다는 뜻이라 헬스 체크와 배포 상태를 본다. 504는 타임아웃이 가장 짧은 층이 만들기 때문에 층마다 타임아웃을 나란히 놓고 어디가 먼저 포기했는지 찾는다.
+
+### 안쪽 층의 타임아웃이 바깥보다 길면 어떤 문제가 생기나요?
+
+바깥이 먼저 포기해 504를 내고, 안쪽은 아무도 기다리지 않는 일을 계속한다. 실험에서 HAProxy는 연결 거부에 1초씩 쉬며 세 번 재시도해 3초 뒤 503을 냈지만, 게이트웨이는 2초에 504를 돌려줘서 사용자는 진짜 원인인 "대상 없음"을 볼 수 없었다. 바깥 타임아웃을 안쪽 타임아웃과 재시도 시간의 합보다 길게 잡고, 재시도는 한 층에서만 한다.
+
+### 게이트웨이가 붙인 X-User-Id를 서비스가 믿어도 되나요?
+
+게이트웨이를 거친 요청만 서비스에 닿는다는 보장이 있을 때만 믿는다. 게이트웨이는 손님이 보낸 같은 이름의 헤더를 반드시 덮어써야 하고, 서비스 포트는 게이트웨이나 로드 밸런서에서 오는 연결만 받도록 네트워크에서 막는다. 그 보장이 약하면 mTLS로 호출자를 확인하거나 게이트웨이가 서명한 토큰을 서비스가 다시 검증한다. 어느 경우든 "이 사용자가 이 자원에 접근할 수 있나"라는 인가는 데이터를 가진 서비스가 판단한다.
+
+### 관리형 API Gateway와 ALB 뒤의 직접 운영 게이트웨이 중 무엇을 고르나요?
+
+트래픽 양과 운영 여력으로 고른다. 관리형은 요청 건수로 과금되고 서버 관리가 없어서 트래픽이 적거나 들쭉날쭉한 API, 서버리스 백엔드에 맞다. 트래픽이 꾸준히 크면 요청당 요금이 커지고, 타임아웃(REST 29초 기본)과 본문 크기(10MB) 같은 고정 한도에도 걸린다. 그때는 시간과 처리량으로 과금되는 ALB 뒤에 Kong이나 Envoy 같은 게이트웨이를 직접 띄우는 쪽이 싸고 자유롭지만, 고가용성과 업그레이드를 직접 책임진다.

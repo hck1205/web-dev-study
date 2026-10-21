@@ -1,0 +1,658 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("opensearch-cluster-operations");
+
+로그를 모을 OpenSearch 클러스터를 노드 셋으로 띄우고 첫 문서를 넣었다. 응답이 1분 동안 오지 않다가 이렇게 끝났다.
+
+```text
+{"error":{"root_cause":[{"type":"unavailable_shards_exception","reason":"[raw-logs][0] primary shard is not active Timeout: [1m]"}],"type":"unavailable_shards_exception","reason":"[raw-logs][0] primary shard is not active Timeout: [1m]"},"status":503}
+```
+
+노드는 셋 다 살아 있고 클러스터도 만들어졌다. 그런데 인덱스의 샤드를 놓을 자리가 없었다. 이유를 물어보니(뒤에서 보는 allocation explain) 노드마다 이렇게 답했다.
+
+```text
+"decider" : "disk_threshold",
+"decision" : "NO",
+"explanation" : "the node is above the high watermark cluster setting [cluster.routing.allocation.disk.watermark.high=90%], using more disk space than the maximum allowed [90.0%], actual free: [6.105947826368154%]"
+```
+
+이 실습 기계는 디스크 252GB 중 15GB가 남아 있었다. 사람 눈에는 넉넉한데, 비율로는 6%라 기본 수위 90%를 넘었다. 디스크가 큰 노드에서는 비율 대신 남은 용량으로 수위를 주는 편이 맞다. 그래서 이렇게 바꿨다.
+
+```bash
+# 수위를 "남은 용량"으로 준다: 3GB 아래면 새 샤드 금지, 2GB 아래면 옮기기, 1GB 아래면 쓰기 금지
+curl -s -XPUT localhost:18000/_cluster/settings -H 'Content-Type: application/json' -d '{
+  "persistent": {
+    "cluster.routing.allocation.disk.watermark.low": "3gb",
+    "cluster.routing.allocation.disk.watermark.high": "2gb",
+    "cluster.routing.allocation.disk.watermark.flood_stage": "1gb"
+  }
+}'
+```
+
+실습용이라 값을 작게 잡았고, 운영이라면 하루 색인량과 샤드 이동에 필요한 여유를 보고 정한다. 클러스터는 이렇게 "검색 엔진"보다 "샤드를 어디에 둘지 끊임없이 판단하는 분산 시스템"으로 보는 편이 운영하기 쉽다. 이 글은 로그를 쌓는 OpenSearch 클러스터를 그 눈으로 본다. 노드 역할과 과반수, 프라이머리 샤드 수 정하기, 매핑이 터지는 경우, 인덱스 템플릿과 롤오버, ISM으로 hot에서 warm을 거쳐 지우기까지, 노드가 빠졌을 때와 재시작 순서, 힙과 서킷 브레이커다.
+
+이 주제의 다른 글: 역색인과 분석기, BM25, refresh, 샤드의 기본, yellow/red의 뜻과 디스크 수위 세 단계는 [Elasticsearch 역색인](/posts/elasticsearch-inverted-index)에서 다뤘다. 이 글은 그 위에서 클러스터를 굴리는 쪽을 본다. 로그가 클러스터까지 오는 길은 [중앙 로그 파이프라인](/posts/centralized-logging-pipeline)에 있다.
+
+실습 환경은 Ubuntu 24.04, OpenJDK 21에서 OpenSearch 3.9.0(Maven Central의 배포 zip)과 Index Management 플러그인 3.9.0.0을 노드 셋으로 띄운 것이다. 노드마다 힙 512MB, 한 기계에서 포트만 나눠 돌렸다. 아래 출력은 모두 이 클러스터에서 실제로 받은 것이다. 노드 셋이 디스크 하나를 나눠 쓰는 점은 실제 운영과 다르다.
+
+## 노드마다 맡은 역할
+
+OpenSearch 노드는 역할(role)을 나눠 맡는다.
+
+- cluster_manager: 클러스터 상태(어떤 인덱스가 있고, 매핑이 무엇이고, 어느 샤드가 어느 노드에 있는지)를 관리한다. 예전 이름은 master다. 후보 노드 중 하나가 뽑혀 실제 관리자가 된다.
+- data: 샤드를 들고 색인과 검색을 한다. 디스크와 메모리를 가장 많이 쓴다.
+- ingest: 문서를 넣기 전에 파이프라인(필드 나누기, 날짜 해석)을 돌린다.
+- 아무 역할도 없는 노드(`node.roles: []`)는 요청을 받아 다른 노드에 나눠 주고 결과를 합치는 일만 한다(coordinating only).
+
+실습 클러스터는 세 노드가 모두 `cluster_manager, data, ingest`를 맡았다. 노드마다 `temp` 속성을 붙여 둘은 hot, 하나는 warm으로 표시했다(뒤에서 ISM이 이 표시를 쓴다).
+
+```bash
+curl -s 'localhost:18000/_cat/nodes?v&h=name,node.roles,cluster_manager,heap.percent,heap.max'
+```
+
+```text
+name node.roles                  cluster_manager heap.percent heap.max
+os-3 cluster_manager,data,ingest -                         45    512mb
+os-2 cluster_manager,data,ingest -                         65    512mb
+os-1 cluster_manager,data,ingest *                         57    512mb
+```
+
+`*`가 지금 뽑힌 관리자다. 관리자를 뽑으려면 후보 노드의 과반수가 투표해야 한다. 후보가 셋이면 둘이 있어야 한다. 이 규칙 때문에 네트워크가 둘로 갈라져도 양쪽에서 관리자가 따로 뽑히는 일(split brain)이 없다. 과반수를 잃으면 어떻게 되는지 실제로 노드 둘을 내려 봤다.
+
+```bash
+# os-2, os-3을 PID로 내린 뒤 남은 os-1에 묻는다
+curl -s 'localhost:18000/_cluster/health?timeout=5s'
+```
+
+```text
+{"error":{"root_cause":[{"type":"cluster_manager_not_discovered_exception","reason":null}],"type":"cluster_manager_not_discovered_exception","reason":null},"status":503}
+```
+
+os-1의 로그에는 왜 못 뽑는지가 그대로 적혀 있다.
+
+```text
+[os-1] cluster-manager not discovered or elected yet, an election requires at least 2 nodes with ids from [0q8Ddn6BSLedtV44m-Rpyg, WP_4f0joSViNQoHfFnEJ3g, 2BYdt1KJRiONAJxO2zKNBg], have discovered [{os-1}...]
+```
+
+재미있는 건 이 상태에서도 os-1에 있는 인덱스의 검색과 문서 쓰기는 됐다는 점이다. 관리자가 없을 때 무엇을 막을지는 `cluster.no_cluster_manager_block`이 정하는데, 3.9.0의 기본값은 `metadata_write`였다. 인덱스 만들기나 매핑 바꾸기 같은 메타데이터 변경만 막고, 이미 있는 샤드의 읽기·쓰기는 그 노드에서 계속된다. 이 값을 `write`나 `all`로 바꾸면 더 많이 막는다. 버전마다 기본값이 달랐으니 운영 클러스터에서 직접 확인한다.
+
+```bash
+curl -s 'localhost:18000/_cluster/settings?include_defaults=true&flat_settings=true' \
+  | jq -r '.defaults["cluster.no_cluster_manager_block"]'
+```
+
+```text
+metadata_write
+```
+
+운영에서는 관리자 후보 노드를 데이터 노드와 따로 세 대 둔다(dedicated cluster manager). 데이터 노드가 무거운 검색이나 GC로 멈칫할 때 관리자 노릇까지 같이 멈추면, 클러스터 상태 갱신이 늦어지고 노드가 빠졌다 들어왔다 한다. 관리자 전용 노드는 작아도 된다. 후보를 둘로 두면 하나만 죽어도 과반수를 잃으니 홀수(셋)로 둔다.
+
+아래 그림은 역할 사이의 관계를 보여 준다. 화살표 방향으로 요청과 상태가 흐른다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="관리자는 상태를, 데이터 노드는 샤드를 맡는다"
+  nodes={[
+    { id: "cli", label: "수집기·앱", sub: "_bulk, _search", x: 200, y: 32, w: 132 },
+    { id: "co", label: "coordinating", sub: "나눠 보내고 합침", x: 200, y: 110, w: 148 },
+    { id: "cm", label: "cluster manager", sub: "후보 3대 중 1대", x: 70, y: 200, w: 132 },
+    { id: "hot", label: "data (hot)", sub: "최근 인덱스", x: 230, y: 230, w: 112 },
+    { id: "warm", label: "data (warm)", sub: "오래된 인덱스", x: 340, y: 170, w: 112 },
+  ]}
+  edges={[
+    { from: "cli", to: "co" },
+    { from: "co", to: "hot", label: "샤드별 요청" },
+    { from: "co", to: "warm" },
+    { from: "cm", to: "hot", label: "상태 배포", dashed: true },
+    { from: "cm", to: "warm", dashed: true },
+  ]}
+/>
+
+## 프라이머리 샤드 수는 크기로 정한다
+
+인덱스를 만들 때 프라이머리 샤드 수를 정하고, 그 뒤로는 쉽게 못 바꾼다(이유는 [역색인 글의 샤드 부분](/posts/elasticsearch-inverted-index)에 있다). 그래서 "몇 개로 할까"를 미리 계산한다. 로그 인덱스에서 자주 쓰는 어림셈은 둘이다.
+
+- 샤드 하나가 수십 GB를 넘지 않게 한다. 로그처럼 쓰기가 많고 검색은 범위로 하는 데이터라면 샤드당 30~50GB 정도를 흔히 권한다. 너무 크면 노드가 빠졌을 때 복구에 오래 걸린다.
+- 샤드가 너무 많지 않게 한다. 샤드 하나하나가 힙과 파일 핸들, 클러스터 상태의 한 줄을 쓴다. 예전부터 "힙 1GB당 샤드 20~25개 이하"라는 어림셈을 쓴다. 정확한 한도는 버전과 매핑 크기에 따라 다르니 경향으로 본다.
+
+실습 템플릿은 프라이머리 2개, 복제본 1개였다. hot 노드가 둘이라 프라이머리를 둘로 두면 한 노드에 하나씩 놓인다.
+
+```bash
+curl -s 'localhost:18000/_cat/shards/app-logs-000001?v&h=index,shard,prirep,state,docs,node'
+```
+
+```text
+index           shard prirep state   docs node
+app-logs-000001 0     p      STARTED  524 os-2
+app-logs-000001 0     r      STARTED    0 os-1
+app-logs-000001 1     r      STARTED    0 os-2
+app-logs-000001 1     p      STARTED  460 os-1
+```
+
+문서를 막 넣던 중이라 숫자가 작고, 복제본 쪽 docs는 아직 refresh 전이라 0으로 보인다. 프라이머리와 복제본이 서로 다른 노드에 엇갈려 놓인 것을 본다.
+
+일 단위 인덱스를 쓰는 로그라면 아래처럼 계산해 볼 수 있다. 하루 양을 목표 샤드 크기로 나눠 올림하고, hot 노드 수의 배수로 맞춰 고르게 퍼지게 한다. 보관 일수만큼 인덱스가 쌓이니 전체 샤드 수도 함께 본다.
+
+<CodePlayground
+  caption="일 단위 로그 인덱스의 프라이머리 샤드 수 정하기"
+  functionName="planShards"
+  initialCode={`// dailyGB: 하루 로그 양(프라이머리 기준)
+// opt: { targetShardGB, hotNodes, replicas, retentionDays }
+// 반환: { primaries, shardGB(소수 첫째 자리), totalShards }
+function planShards(dailyGB, opt) {
+  return { primaries: 1, shardGB: dailyGB, totalShards: 0 };
+}`}
+  solution={`function planShards(dailyGB, opt) {
+  let p = Math.max(1, Math.ceil(dailyGB / opt.targetShardGB));
+  p = Math.ceil(p / opt.hotNodes) * opt.hotNodes;
+  return {
+    primaries: p,
+    shardGB: Math.round((dailyGB / p) * 10) / 10,
+    totalShards: p * (1 + opt.replicas) * opt.retentionDays,
+  };
+}`}
+  tests={[
+    { args: [100, { targetShardGB: 40, hotNodes: 3, replicas: 1, retentionDays: 30 }], expected: { primaries: 3, shardGB: 33.3, totalShards: 180 }, label: "하루 100GB, hot 3대" },
+    { args: [300, { targetShardGB: 40, hotNodes: 3, replicas: 1, retentionDays: 30 }], expected: { primaries: 9, shardGB: 33.3, totalShards: 540 }, label: "하루 300GB" },
+    { args: [130, { targetShardGB: 40, hotNodes: 3, replicas: 1, retentionDays: 7 }], expected: { primaries: 6, shardGB: 21.7, totalShards: 84 }, label: "4개면 고르게 안 퍼져서 6개" },
+    { args: [5, { targetShardGB: 40, hotNodes: 3, replicas: 1, retentionDays: 30 }], expected: { primaries: 3, shardGB: 1.7, totalShards: 180 }, label: "하루 5GB인데 샤드 180개" },
+    { args: [5, { targetShardGB: 40, hotNodes: 1, replicas: 1, retentionDays: 30 }], expected: { primaries: 1, shardGB: 5, totalShards: 60 }, label: "노드 배수를 안 맞추면" },
+  ]}
+/>
+
+네 번째 테스트가 흔한 실수다. 하루 5GB인 서비스도 하루마다 인덱스를 만들고 프라이머리 3개에 복제본 1개를 주면, 30일이면 1.7GB짜리 샤드가 180개다. 이런 작은 샤드가 서비스마다 쌓이면 클러스터 상태가 커지고 관리자 노드가 느려진다. 양이 적은 로그는 날짜가 아니라 크기로 인덱스를 넘기는 롤오버(아래)를 쓰면 샤드 크기를 목표에 맞출 수 있다.
+
+## 매핑은 처음에 닫아 둔다
+
+템플릿 없이 로그 한 줄을 넣으면 OpenSearch가 필드 타입을 알아서 정한다(dynamic mapping). 실습 로그 한 줄을 넣고 만들어진 매핑을 봤다.
+
+```bash
+head -1 logs.ndjson | curl -s -XPOST 'localhost:18000/raw-logs/_doc?refresh=true' -H 'Content-Type: application/json' -d @-
+curl -s 'localhost:18000/raw-logs/_mapping' | jq -c '.["raw-logs"].mappings.properties | to_entries[] | {(.key): .value.type, kw: (.value.fields.keyword.type // null)}'
+```
+
+```text
+{"@timestamp":"date","kw":null}
+{"duration_ms":"float","kw":null}
+{"level":"text","kw":"keyword"}
+{"message":"text","kw":"keyword"}
+{"route":"text","kw":"keyword"}
+{"service":"text","kw":"keyword"}
+{"status":"long","kw":null}
+{"trace_id":"text","kw":"keyword"}
+{"user_id":"text","kw":"keyword"}
+```
+
+문자열은 모두 `text`와 `.keyword` 두 벌로 저장됐다. `service`나 `trace_id`를 전문 검색할 일은 없으니 `text` 쪽은 낭비다. 반대로 `message`의 `.keyword`도 거의 쓰지 않는다. `status`는 `long`(8바이트)이 됐는데 상태 코드라면 `short`면 된다.
+
+더 큰 문제는 키가 계속 늘어나는 객체다. 판매자가 정한 속성 이름을 그대로 키로 넣는 로그를 흉내 내 봤다. 문서마다 `attrs` 아래에 새 키가 하나씩 생긴다.
+
+```bash
+# 문서마다 attrs.seller_attr_1, seller_attr_2 ... 새 키 하나씩, 40건
+for i in $(seq 1 40); do
+  curl -s -XPOST 'localhost:18000/raw-logs/_doc' -H 'Content-Type: application/json' \
+    -d "{\"service\":\"catalog\",\"attrs\":{\"seller_attr_$i\":\"v$i\"}}" > /dev/null
+done
+curl -s 'localhost:18000/raw-logs/_mapping' | jq '.["raw-logs"].mappings.properties.attrs.properties | length'
+```
+
+```text
+40
+```
+
+40건 넣었더니 `attrs` 아래 필드가 40개(각각 text와 keyword 두 벌) 생겼다. 필드 수 한도(`index.mapping.total_fields.limit`, 기본 1000)에 닿는 순간을 보려고 한도를 60으로 낮추고 40건을 더 넣었다.
+
+```text
+{"error":{"root_cause":[{"type":"illegal_argument_exception","reason":"Limit of total fields [60] has been exceeded"}],"type":"illegal_argument_exception","reason":"Limit of total fields [60] has been exceeded"},"status":400}
+```
+
+새 키를 가진 문서는 모두 거절됐다. 운영에서 한도를 올려 이 오류를 넘기면 매핑이 클러스터 상태에 실려 모든 노드에 퍼지고, 필드가 수만 개가 되면 관리자 노드가 상태를 갱신할 때마다 느려진다. 고치는 방향은 셋이다.
+
+- `dynamic: false`: 매핑에 없는 필드는 `_source`에만 남기고 색인하지 않는다. 문서는 받지만 그 필드로 검색은 못 한다. 로그 템플릿의 기본값으로 쓰기 좋다.
+- `dynamic: strict`: 매핑에 없는 필드가 오면 문서를 거절한다. 필드 약속을 강하게 지키고 싶을 때 쓰는데, 수집기 쪽에서 거절을 잘 처리해야 한다.
+- `flat_object`(OpenSearch 2.7부터): 객체 전체를 필드 하나로 두고 안쪽 값을 문자열로 색인한다. 키가 몇 개든 매핑에는 필드 하나다.
+
+`flat_object`로 같은 일을 다시 해 봤다. 키가 80개 다른 문서 80건을 넣었다.
+
+```bash
+curl -s -XPUT 'localhost:18000/flat-logs' -H 'Content-Type: application/json' \
+  -d '{"mappings":{"properties":{"service":{"type":"keyword"},"attrs":{"type":"flat_object"}}}}'
+# ... seller_attr_1~80과 color:"black"을 가진 문서 80건 ...
+curl -s 'localhost:18000/flat-logs/_mapping' | jq -c '.["flat-logs"].mappings.properties'
+curl -s 'localhost:18000/flat-logs/_count' -H 'Content-Type: application/json' -d '{"query":{"term":{"attrs.seller_attr_77":"v77"}}}'
+```
+
+```text
+{"attrs":{"type":"flat_object"},"service":{"type":"keyword"}}
+{"count":1,"_shards":{"total":1,"successful":1,"skipped":0,"failed":0}}
+```
+
+매핑은 필드 둘 그대로이고, 점 경로(`attrs.seller_attr_77`)로 정확히 일치하는 검색이 됐다. 대신 안쪽 값은 모두 문자열 취급이라 숫자 범위 검색이 안 되고, 집계에도 제약이 있다. 실습에서 `attrs.color`로 terms 집계를 해 봤더니 엉뚱한 버킷이 섞여 나왔다. 자주 집계할 키는 `flat_object`에 두지 말고 따로 `keyword` 필드로 빼 둔다.
+
+그래서 로그 인덱스는 템플릿에서 매핑을 처음부터 정한다. 실습에서 쓴 템플릿이다.
+
+```json
+{
+  "index_patterns": ["app-logs-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 2,
+      "number_of_replicas": 1,
+      "index.routing.allocation.require.temp": "hot",
+      "plugins.index_state_management.rollover_alias": "app-logs",
+      "refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": "false",
+      "properties": {
+        "@timestamp":  { "type": "date" },
+        "service":     { "type": "keyword" },
+        "level":       { "type": "keyword" },
+        "route":       { "type": "keyword" },
+        "status":      { "type": "short" },
+        "duration_ms": { "type": "float" },
+        "trace_id":    { "type": "keyword" },
+        "user_id":     { "type": "keyword" },
+        "message":     { "type": "text" }
+      }
+    }
+  }
+}
+```
+
+`routing.allocation.require.temp: hot`은 새 인덱스를 hot 노드에만 놓으라는 뜻이다. `rollover_alias`는 아래 롤오버가 쓸 별칭 이름이다. `refresh_interval`을 1초에서 5초로 늘려 색인 부담을 줄였다. 로그는 몇 초 늦게 보여도 괜찮다.
+
+## 크기로 넘기는 롤오버와 ISM
+
+롤오버(rollover)는 쓰기용 별칭이 가리키는 인덱스를 조건에 따라 새 인덱스로 바꿔 끼우는 일이다. 앱과 수집기는 늘 별칭(`app-logs`)에 쓰고, 별칭 뒤의 실제 인덱스는 `app-logs-000001`, `000002`로 바뀐다. 날짜 대신 크기나 문서 수로 넘기면 샤드 크기를 고르게 맞출 수 있다.
+
+ISM(Index State Management)은 OpenSearch의 인덱스 수명 관리 플러그인이다. 인덱스가 거칠 상태(hot, warm, delete)와 상태마다 할 일, 다음 상태로 넘어갈 조건을 정책으로 적어 두면 주기적으로 돌며 실행한다. 실습 정책은 이렇다. 문서 5,000건(또는 1GB)이 되면 넘기고, 만든 지 3분이 지나면 warm으로 옮겨 세그먼트를 합치고, 12분이 지나면 지운다. 실제로는 일·주 단위지만 관찰하려고 분 단위로 줄였다. ISM이 도는 주기(`plugins.index_state_management.job_interval`, 기본 5분)도 1분으로 줄였다.
+
+```json
+{
+  "policy": {
+    "description": "app logs: hot -> warm -> delete",
+    "default_state": "hot",
+    "states": [
+      { "name": "hot",
+        "actions": [ { "rollover": { "min_doc_count": 5000, "min_size": "1gb" } } ],
+        "transitions": [ { "state_name": "warm", "conditions": { "min_index_age": "3m" } } ] },
+      { "name": "warm",
+        "actions": [
+          { "allocation": { "require": { "temp": "warm" }, "wait_for": true } },
+          { "force_merge": { "max_num_segments": 1 } } ],
+        "transitions": [ { "state_name": "delete", "conditions": { "min_index_age": "12m" } } ] },
+      { "name": "delete", "actions": [ { "delete": {} } ] }
+    ],
+    "ism_template": [ { "index_patterns": ["app-logs-*"], "priority": 100 } ]
+  }
+}
+```
+
+```bash
+curl -s -XPUT localhost:18000/_plugins/_ism/policies/app-logs-policy -H 'Content-Type: application/json' -d @policy.json
+curl -s -XPUT localhost:18000/_index_template/app-logs -H 'Content-Type: application/json' -d @template.json
+# 첫 인덱스는 손으로 만들고 쓰기용 별칭을 단다
+curl -s -XPUT localhost:18000/app-logs-000001 -H 'Content-Type: application/json' \
+  -d '{"aliases":{"app-logs":{"is_write_index":true}}}'
+```
+
+그다음 별칭에 1분 남짓 간격으로 로그를 넣으면서 `_plugins/_ism/explain`으로 상태를 1분마다 찍었다. 첫 인덱스의 기록만 모으면 이렇다.
+
+```text
+18:38:22 {"i":"app-logs-000001","state":"hot","action":null,"info":"Successfully initialized policy: app-logs-policy"}
+18:39:39 {"i":"app-logs-000001","state":"hot","action":"rollover","info":"Successfully rolled over index [index=app-logs-000001]"}
+18:40:55 {"i":"app-logs-000001","state":null,"action":null,"info":"Transitioning to warm [index=app-logs-000001]"}
+18:41:56 {"i":"app-logs-000001","state":"warm","action":"force_merge","info":"Successfully set index to read-only [index=app-logs-000001]"}
+18:43:56 {"i":"app-logs-000001","state":"warm","action":"force_merge","info":"Successfully completed force merge [index=app-logs-000001]"}
+18:44:56 {"i":"app-logs-000001","state":"warm","action":"force_merge","info":"Successfully confirmed segments force merged [index=app-logs-000001]"}
+18:45:56 {"i":"app-logs-000001","state":"warm","action":"transition","info":"Evaluating transition conditions [index=app-logs-000001]"}
+18:48:56 {"i":"app-logs-000001","state":null,"action":null,"info":"Transitioning to delete [index=app-logs-000001]"}
+```
+
+이 기록에서 볼 것이 몇 가지 있다. 롤오버는 5,000건을 넘은 즉시가 아니라 ISM이 다음에 돌 때 일어났다. 그사이 문서가 더 들어와 첫 인덱스는 12,000건이 됐다. 롤오버 조건은 "이 값 이상이면 넘긴다"이지 "정확히 이 크기로 자른다"가 아니다. 그리고 force_merge 앞에 인덱스가 읽기 전용이 됐다. 합친 뒤 다시 쓰면 세그먼트가 또 생기니 ISM이 쓰기를 막는다. 롤오버가 끝난 인덱스에는 어차피 쓰지 않으니 문제없다.
+
+새로 쓰기 인덱스가 된 쪽에 문서가 안 들어오면 이런 상태로 머문다.
+
+```text
+{"i":"app-logs-000003","state":"hot","action":"rollover","info":"Pending rollover of index [index=app-logs-000003]"}
+```
+
+조건을 채울 때까지 기다리는 중이라는 뜻이다. 그런데 롤오버를 못 해서 계속 이 상태라면 다음 상태(warm, delete)로도 영영 안 넘어간다. 별칭 설정(`rollover_alias`)이 빠졌거나 `is_write_index`가 없으면 롤오버는 실패로 멈춘다. ISM이 멈춘 인덱스는 `_plugins/_ism/explain`의 `info.message`와 `retry_info`에 이유가 남으니, 디스크가 계속 늘어나는 클러스터라면 이것부터 본다.
+
+아래 그림에서 다음을 누르면 인덱스 하나가 정책을 따라 지나가는 과정이 보인다.
+
+<SequenceDiagram
+  caption="app-logs-000001이 만들어지고 지워지기까지 (실습 시각)"
+  actors={[
+    { id: "col", label: "수집기" },
+    { id: "al", label: "별칭 app-logs" },
+    { id: "ism", label: "ISM" },
+    { id: "idx", label: "000001" },
+  ]}
+  steps={[
+    { from: "col", to: "al", label: "_bulk", title: "별칭에 쓴다", detail: "수집기는 별칭만 안다. 별칭의 쓰기 인덱스가 000001이라 문서가 거기로 간다." },
+    { from: "ism", to: "idx", label: "init", title: "18:38 정책을 붙인다", detail: "ism_template의 패턴과 맞는 새 인덱스에 정책이 자동으로 붙는다. 상태는 hot이다." },
+    { from: "ism", to: "al", label: "rollover", title: "18:39 다음 인덱스로 넘긴다", detail: "문서 수가 5,000을 넘은 뒤 ISM이 돌았을 때 000002를 만들고 쓰기 별칭을 옮긴다. 그사이 들어온 문서까지 000001은 12,000건이 됐다." },
+    { from: "ism", to: "idx", label: "warm", title: "18:40 warm으로 옮긴다", detail: "만든 지 3분이 지나 warm 상태가 된다. allocation 동작이 temp=warm 노드로 샤드를 옮긴다." },
+    { from: "ism", to: "idx", label: "read-only", title: "18:41 쓰기를 막는다", detail: "세그먼트를 합치기 전에 인덱스를 읽기 전용으로 바꾼다." },
+    { from: "idx", to: "idx", label: "force merge", title: "18:43 세그먼트를 하나로 합친다", detail: "작은 세그먼트를 합쳐 검색할 파일 수와 삭제 표시를 줄인다. 디스크와 CPU를 쓰는 작업이라 hot이 아니라 warm에서 한다." },
+    { from: "ism", to: "idx", label: "delete", title: "18:48 지운다", detail: "만든 지 12분이 지나 delete 상태가 되고 인덱스가 사라진다. 보관 기간이 디스크를 정한다." },
+  ]}
+/>
+
+샤드가 실제로 어느 노드를 오가는지는 아래 그림에서 다음을 누르면 보인다. 마지막 단계가 바로 다음에 볼 문제다.
+
+<NetworkTopology
+  width={400}
+  height={290}
+  caption="hot 노드 둘, warm 노드 하나에서 샤드가 옮겨 가는 길"
+  zones={[
+    { id: "hotz", label: "hot (temp=hot)", x: 8, y: 16, w: 240, h: 150, tone: "public" },
+    { id: "warmz", label: "warm (temp=warm)", x: 260, y: 16, w: 132, h: 150, tone: "private" },
+  ]}
+  nodes={[
+    { id: "col", label: "수집기", sub: "app-logs 별칭", x: 128, y: 240, icon: "client", w: 108 },
+    { id: "os1", label: "os-1", sub: "P1 R0", x: 70, y: 90, icon: "db", w: 88 },
+    { id: "os2", label: "os-2", sub: "P0 R1", x: 186, y: 90, icon: "db", w: 88 },
+    { id: "os3", label: "os-3", sub: "warm", x: 326, y: 90, icon: "db", w: 88 },
+  ]}
+  links={[
+    { from: "col", to: "os1" },
+    { from: "col", to: "os2" },
+    { from: "os1", to: "os2", dashed: true },
+    { from: "os2", to: "os3" },
+  ]}
+  steps={[
+    { path: ["col", "os2"], packet: "_bulk", title: "새 인덱스는 hot에만 놓인다", detail: "템플릿의 require.temp: hot 때문에 프라이머리 둘과 복제본 둘이 os-1, os-2에 엇갈려 놓인다. 쓰기는 별칭을 거쳐 여기로 온다." },
+    { path: ["os2", "os1"], packet: "복제", title: "프라이머리가 복제본에 같은 연산을 보낸다", detail: "같은 샤드의 원본과 사본은 다른 노드에 있어야 한다(same_shard). 그래서 hot 노드가 둘이면 복제본 1까지만 둘 수 있다." },
+    { path: ["os2", "os3"], packet: "P0", title: "warm이 되면 샤드를 옮긴다", detail: "ISM의 allocation 동작이 인덱스 설정을 require.temp: warm으로 바꾸고, 프라이머리가 os-3으로 복사된다." },
+    { path: ["os1", "os2", "os3"], packet: "R0", blocked: true, highlight: ["warmz"], title: "복제본은 갈 곳이 없다", detail: "warm 노드는 os-3 하나뿐인데 거기에는 이미 같은 샤드의 프라이머리가 있다. 복제본은 hot에 머물 수도, warm으로 갈 수도 없어 제자리에 남는다." },
+  ]}
+/>
+
+### warm 노드가 하나뿐이면 복제본이 갈 곳이 없다
+
+warm으로 옮긴 뒤 샤드 배치를 보니 이상했다. 프라이머리는 warm 노드(os-3)로 갔는데 복제본은 hot 노드에 그대로 남아 있다.
+
+```text
+app-logs-000001 0 p STARTED 5977 os-3
+app-logs-000001 0 r STARTED 5977 os-1
+app-logs-000001 1 p STARTED 6023 os-3
+app-logs-000001 1 r STARTED 6023 os-2
+```
+
+그 복제본에 이유를 물었다.
+
+```bash
+curl -s 'localhost:18000/_cluster/allocation/explain' -H 'Content-Type: application/json' \
+  -d '{"index":"app-logs-000001","shard":0,"primary":false}'
+```
+
+```text
+"current_node": "os-1",
+"can_remain_on_current_node": "no",
+"can_remain_decisions": [ { "decider": "filter", "decision": "NO",
+  "explanation": "node does not match index setting [index.routing.allocation.require] filters [temp:\"warm\"]" } ],
+"can_move_to_other_node": "no",
+"move_explanation": "cannot move shard to another node, even though it is not allowed to remain on its current node",
+...
+"node": "os-3", "deciders": [ "no", "same_shard: a copy of this shard is already allocated to this node ..." ]
+```
+
+복제본은 hot 노드에 머물면 안 되고(`filter`), 유일한 warm 노드에는 이미 프라이머리가 있어 갈 수 없다(`same_shard`). 그래서 어정쩡하게 제자리에 있다. 이때 클러스터 상태는 green이었다. 샤드가 모두 STARTED이니 green은 맞지만, hot 노드의 디스크를 비우려던 계획은 반만 됐다. 상태 색만 보는 모니터링은 이걸 놓친다. warm 노드를 둘 이상 두거나, warm 상태의 동작에 `{ "replica_count": { "number_of_replicas": 0 } }`을 먼저 넣어 복제본을 줄인 뒤 옮긴다. 복제본을 0으로 두면 그 노드가 죽을 때 오래된 로그를 잃으니, 스냅샷을 객체 저장소에 떠 두는 것과 함께 정한다.
+
+## 노드 하나가 빠졌을 때
+
+노드 os-1을 PID로 내리고 바로 클러스터를 봤다(os-1이 18000 포트를 쓰고 있어서 os-2의 18001로 물었다).
+
+```bash
+curl -s 'localhost:18001/_cluster/health?filter_path=status,number_of_nodes,active_primary_shards,unassigned_shards,delayed_unassigned_shards'
+curl -s 'localhost:18001/_cat/indices?v&h=health,index,pri,rep&s=health' | grep -v '^green'
+```
+
+```text
+{"status":"red","number_of_nodes":2,"active_primary_shards":8,"unassigned_shards":6,"delayed_unassigned_shards":6}
+health index                          pri rep
+red    qlogs                            1   0
+yellow app-logs-000003                  2   1
+yellow raw-logs                         1   1
+yellow .opendistro-job-scheduler-lock   1   1
+yellow flat-logs                        1   1
+```
+
+복제본이 있던 인덱스는 yellow다. 남은 노드의 복제본이 즉시 프라이머리로 올라가서 검색과 쓰기는 계속된다. 복제본이 0인 `qlogs`만 red다. 그 샤드의 유일한 사본이 빠진 노드에 있었기 때문이다.
+
+```text
+{"current_state":"unassigned","reason":"NODE_LEFT","can_allocate":"no_valid_shard_copy","allocate_explanation":"cannot allocate because a previous copy of the primary shard existed but can no longer be found on the nodes in the cluster"}
+{"status":503,"type":"search_phase_execution_exception","reason":null}
+```
+
+두 번째 줄은 그때 `qlogs`를 검색한 결과다. 사본이 없으니 검색이 실패한다. 로그 인덱스에서 비용을 아끼려고 복제본을 0으로 두면, 노드 한 대의 재시작이 곧 그 인덱스의 장애다.
+
+`delayed_unassigned_shards: 6`도 눈여겨본다. 노드가 빠지면 OpenSearch는 바로 다른 노드에 복제본을 새로 만들지 않고 기다린다. 기본 1분(`index.unassigned.node_left.delayed_timeout`)이다. 노드가 잠깐 재시작한 것이라면 돌아온 노드의 디스크에 있는 사본을 다시 쓰는 편이, 수십 GB를 네트워크로 새로 복사하는 것보다 훨씬 싸기 때문이다. os-1을 30초 안에 다시 띄웠더니 복구 기록이 이랬다.
+
+```bash
+curl -s 'localhost:18001/_cat/recovery?v&h=index,shard,type,stage,source_node,target_node,files_percent,time&s=index'
+```
+
+출력 중 세 줄만 옮겼다.
+
+```text
+index                          shard type           stage source_node target_node files_percent time
+qlogs                          0     existing_store done  n/a         os-1        100.0%        269ms
+raw-logs                       0     peer           done  os-3        os-1        0.0%          181ms
+app-logs-000003                1     peer           done  os-2        os-1        0.0%          206ms
+```
+
+`qlogs`는 os-1 디스크의 기존 사본(`existing_store`)으로 살아났다. 복제본들은 `peer` 복구지만 `files_percent`가 0%다. 디스크의 파일이 프라이머리와 같아서 복사할 파일이 없었다는 뜻이다. 노드를 띄우고 2초 만에 green이 됐다.
+
+아래 그림에서 다음을 누르면 노드가 빠지고 돌아오는 동안 샤드 사본이 어떻게 바뀌는지 따라갈 수 있다.
+
+<AlgoTrace
+  caption="os-1이 빠졌다가 30초 안에 돌아올 때"
+  memoryLabel="클러스터 상태"
+  cells={["qlogs P", "raw P", "raw R", "app3 P", "app3 R"]}
+  steps={[
+    { pointer: 0, memory: ["green"], caption: "평소 모습. qlogs는 복제본 없이 os-1에만, raw-logs는 os-1에 프라이머리, os-2에 복제본이 있다." },
+    { pointer: 0, memory: ["red"], caption: "os-1이 빠졌다. qlogs의 유일한 사본이 사라져 red가 된다. 검색하면 503이다." },
+    { pointer: 2, memory: ["red", "R → P 승격"], caption: "raw-logs는 os-2의 복제본이 곧바로 프라이머리가 된다. 쓰기와 검색이 이어진다." },
+    { pointer: 4, memory: ["red", "R → P 승격", "1분 대기"], caption: "새 복제본은 바로 만들지 않는다. delayed_timeout 1분 동안 os-1이 돌아오기를 기다린다." },
+    { pointer: 0, memory: ["yellow", "기존 사본 사용"], caption: "os-1이 돌아왔다. qlogs는 디스크에 남은 사본으로 살아난다(existing_store)." },
+    { pointer: 2, found: [0, 1, 2, 3, 4], memory: ["green", "복사한 파일 0%"], caption: "복제본도 디스크의 파일이 같아서 거의 복사 없이 다시 붙는다. 1분 안에 돌아왔기에 가능했다." },
+  ]}
+/>
+
+### 재시작은 배정을 멈추고 한 대씩
+
+계획된 재시작(설정 변경, 버전 업그레이드)은 이 기다림을 일부러 이용한다. 노드를 내리기 전에 복제본 배정을 멈추고, 디스크에 쓰지 않은 내용을 내려 쓴 뒤(`_flush`), 한 대를 재시작하고, 돌아오면 배정을 다시 켜서 green을 확인하고 다음 노드로 간다.
+
+```bash
+# 1. 프라이머리만 배정하게 한다 (복제본 새로 만들기 멈춤)
+curl -s -XPUT localhost:18000/_cluster/settings -H 'Content-Type: application/json' \
+  -d '{"persistent":{"cluster.routing.allocation.enable":"primaries"}}'
+# 2. 메모리의 내용을 디스크로 내려 쓴다 (돌아온 뒤 복구할 양이 준다)
+curl -s -XPOST localhost:18000/_flush
+# 3. 노드 하나를 내렸다가 다시 띄운다 (여기서는 os-3)
+# 4. 노드가 클러스터에 다시 보이면 배정을 원래대로
+curl -s -XPUT localhost:18000/_cluster/settings -H 'Content-Type: application/json' \
+  -d '{"persistent":{"cluster.routing.allocation.enable":null}}'
+# 5. green이 된 것을 보고 다음 노드로
+curl -s 'localhost:18000/_cluster/health?filter_path=status,unassigned_shards'
+```
+
+```text
+{"cluster":{"routing":{"allocation":{"enable":"primaries"}}}}
+{"total":12,"successful":12,"failed":0}
+{"status":"yellow","unassigned_shards":5}
+{"status":"yellow","unassigned_shards":5}
+true
+{"status":"green","unassigned_shards":0}
+```
+
+출력의 셋째 줄은 os-3을 내린 직후, 넷째 줄은 os-3이 돌아왔지만 배정을 아직 막아 둔 때, 마지막 줄은 배정을 다시 켠 뒤다. 다음 노드로 넘어가기 전에 반드시 green을 본다. yellow인 채로 다음 노드를 내리면, 방금 돌아온 노드의 복제본이 아직 붙지 않은 샤드는 사본이 하나뿐이라 그 노드마저 내려가면 red가 된다.
+
+<Callout kind="warning" title="여러 노드를 한꺼번에 재시작하지 않는다">
+관리자 후보 셋 중 둘을 동시에 내리면 위에서 본 것처럼 과반수를 잃어 관리자를 뽑지 못한다. 쿠버네티스에서 OpenSearch를 StatefulSet으로 돌린다면 PodDisruptionBudget으로 동시에 내려가는 파드를 하나로 묶고, 노드 업그레이드(drain)가 이 순서를 지키는지 확인한다. 디스크가 날아가는 노드 교체라면 1분 기다림의 이점이 없으니, 교체 전에 그 노드의 샤드를 다른 노드로 빼 둔다(`cluster.routing.allocation.exclude._name`).
+</Callout>
+
+## 로그 질의는 filter로 범위부터
+
+로그 질의는 대부분 "어느 서비스, 어느 상태, 어느 시간대"다. 점수가 필요 없으니 조건을 `bool.filter`에 넣는다. filter는 점수를 계산하지 않고 결과를 캐시할 수 있다. 본문 단어로 찾는 조건만 `must`에 둔다. 실습 로그(서비스 셋, 하루치 2만 건)로 checkout의 9시대 5xx 중 "timeout"이 든 것을 찾았다.
+
+```json
+{
+  "size": 2,
+  "_source": ["@timestamp", "service", "status", "duration_ms", "trace_id", "message"],
+  "sort": [{ "@timestamp": "desc" }],
+  "query": {
+    "bool": {
+      "filter": [
+        { "term":  { "service": "checkout" } },
+        { "range": { "status": { "gte": 500 } } },
+        { "range": { "@timestamp": { "gte": "2026-10-22T09:00:00Z", "lt": "2026-10-22T10:00:00Z" } } }
+      ],
+      "must": [ { "match": { "message": "timeout" } } ]
+    }
+  }
+}
+```
+
+```text
+{"took":35,"total":9,"hits":[{"duration_ms":3113.7,"trace_id":"a21b872fb2bb7465bfe163501ff8f910","@timestamp":"2026-10-22T09:54:47.520Z","service":"checkout","message":"upstream timeout","status":504},{"duration_ms":3283.2,"trace_id":"444f074823f87359f699f0eee4d839b9","@timestamp":"2026-10-22T09:49:40.800Z","service":"checkout","message":"upstream timeout","status":504}]}
+```
+
+`sort`를 시각으로 줬기 때문에 점수는 계산하지 않는다(`_score`가 null). 서비스별 오류 수와 p99도 한 번에 물을 수 있다.
+
+```json
+{
+  "size": 0,
+  "aggs": {
+    "by_service": {
+      "terms": { "field": "service", "size": 10 },
+      "aggs": {
+        "errors": { "filter": { "range": { "status": { "gte": 500 } } } },
+        "p99":    { "percentiles": { "field": "duration_ms", "percents": [99] } }
+      }
+    }
+  }
+}
+```
+
+```text
+{"service":"catalog","total":7480,"errors":284,"p99":736.2485646447092}
+{"service":"checkout","total":6571,"errors":421,"p99":3229.4919928385416}
+{"service":"payment","total":5949,"errors":490,"p99":3274.9843732497284}
+```
+
+checkout의 p99를 원본 파일에서 jq로 정확히 계산하면 3283.2다. OpenSearch는 3229.5라고 했다. `percentiles`는 모든 값을 정렬하지 않고 근사 구조(t-digest)로 계산하기 때문이다. 대시보드의 추세로는 충분하지만, 계약서의 SLA를 이 숫자로 따질 때는 근사라는 것을 알고 쓴다. 오류 수 421은 jq로 센 값과 같았다. 개수 집계는 정확하다.
+
+## 힙과 서킷 브레이커
+
+OpenSearch는 JVM 위에서 돈다. 힙은 보통 기계 메모리의 절반 이하로 잡는다. 나머지 절반은 운영체제의 파일 캐시가 쓰고, Lucene은 세그먼트 파일을 이 캐시로 읽어서 검색이 빨라진다. 힙을 메모리 가득 잡으면 오히려 느려진다. 그리고 힙이 약 32GB를 넘으면 JVM이 객체 주소를 압축하는 기법(compressed oops)을 못 써서, 힙을 늘린 만큼 쓸 수 있는 공간이 늘지 않는다. 그래서 큰 기계에서도 힙은 31GB 근처에서 멈추고 노드 수를 늘린다.
+
+```bash
+curl -s 'localhost:18000/_nodes/jvm?filter_path=nodes.*.name,nodes.*.jvm.mem.heap_max_in_bytes,nodes.*.jvm.using_compressed_ordinary_object_pointers,nodes.*.jvm.gc_collectors' | jq -c '.nodes[]' | head -1
+```
+
+```text
+{"name":"os-3","jvm":{"mem":{"heap_max_in_bytes":536870912},"gc_collectors":["G1 Young Generation","G1 Concurrent GC","G1 Old Generation"],"using_compressed_ordinary_object_pointers":"true"}}
+```
+
+힙이 모자라면 노드가 OutOfMemoryError로 죽는다. 서킷 브레이커는 그 전에 요청을 거절하는 장치다. 요청 하나가 쓸 메모리를 미리 어림해서 한도를 넘으면 실행하지 않고 오류를 돌려준다. 노드가 죽는 대신 요청 하나가 실패한다.
+
+```bash
+curl -s 'localhost:18000/_nodes/stats/breaker' | jq -c '.nodes[] | {name, parent: .breakers.parent.limit_size, request: .breakers.request.limit_size, tripped: .breakers.request.tripped}' | head -1
+```
+
+```text
+{"name":"os-3","parent":"486.3mb","request":"307.1mb","tripped":0}
+```
+
+부모 브레이커(parent)는 힙 512MB의 95%, 요청 브레이커(request)는 60%다. 부모 브레이커는 실제 힙 사용량을 보고, 요청 브레이커는 집계 같은 요청이 쓸 구조의 크기를 어림한다. 브레이커가 터지는 모습을 보려고 요청 한도를 1MB로 낮추고, 2만 개의 서로 다른 `trace_id`로 terms 집계를 했다.
+
+```bash
+curl -s -XPUT localhost:18000/_cluster/settings -H 'Content-Type: application/json' \
+  -d '{"transient":{"indices.breaker.request.limit":"1mb"}}'
+curl -s 'localhost:18000/qlogs/_search?size=0' -H 'Content-Type: application/json' \
+  -d '{"aggs":{"t":{"terms":{"field":"trace_id","size":20000}}}}' | jq -c '.status, .error.caused_by.reason'
+```
+
+```text
+429
+"[request] Data too large, data for [<reduce_aggs>] would be [1056804/1mb], which is larger than the limit of [1048576/1mb]"
+```
+
+429가 돌아왔고 노드는 멀쩡하다. 한도를 되돌리자 같은 질의가 242ms 만에 버킷 2만 개를 돌려줬다. 운영에서 이 오류를 보면 한도부터 올리지 않는다. 고유값이 수만 개인 필드(trace_id, user_id)로 큰 `size`의 terms 집계를 하는 질의가 범인인 경우가 많다. 그런 질의는 범위를 좁히거나, `composite` 집계로 나눠 받거나, 애초에 집계 대상이 아닌 필드는 대시보드에서 빼도록 한다. 부모 브레이커가 자주 터진다면 힙 자체가 모자라거나 샤드가 너무 많은 것이다.
+
+## 클러스터가 이상할 때 묻는 순서
+
+증상이 무엇이든 위에서 아래로 묻는다.
+
+```bash
+curl -s 'localhost:18000/_cluster/health?pretty'                       # 색, 노드 수, 배정 안 된 샤드, 대기 중인 작업
+curl -s 'localhost:18000/_cat/nodes?v&h=name,node.roles,cluster_manager,heap.percent,disk.used_percent,cpu'
+curl -s 'localhost:18000/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason,node' | grep -v STARTED
+curl -s 'localhost:18000/_cluster/allocation/explain?pretty'           # 배정 안 된 샤드 하나의 이유
+curl -s 'localhost:18000/_cat/allocation?v'                            # 노드별 디스크
+curl -s 'localhost:18000/_cat/thread_pool/write,search?v&h=node_name,name,active,queue,rejected'
+curl -s 'localhost:18000/_nodes/stats/breaker' | jq '.nodes[].breakers | map_values(.tripped)'
+curl -s 'localhost:18000/_plugins/_ism/explain/app-logs-*?pretty'      # 수명 관리가 멈춘 인덱스
+```
+
+이 중 가장 많은 답을 주는 것이 allocation explain이다. 이 글에서 받은 응답들을 합쳐, 읽을 칸만 골라 보면 아래와 같다. 조각을 누르면 각 칸이 무엇을 말하는지 보인다.
+
+<UrlAnatomy
+  caption="allocation explain 응답에서 읽을 칸 (이 글의 실습 응답에서)"
+  base="{"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "state", display: '"current_state":"unassigned"', title: "지금 어디 있나", description: "unassigned면 아직 자리가 없는 샤드, started면 이미 어딘가에 놓인 샤드다. started인데 explain을 물었다면 왜 못 옮기는지를 보려는 것이다." },
+    { key: "reason", display: '"reason":"NODE_LEFT"', title: "왜 자리를 잃었나", description: "INDEX_CREATED는 새로 만들었는데 못 놓은 것, NODE_LEFT는 노드가 빠진 것, ALLOCATION_FAILED는 놓으려다 실패를 반복한 것이다. 원인 쪽을 가리킨다." },
+    { key: "can", display: '"can_allocate":"no_valid_shard_copy"', title: "놓을 수 있나", description: "no면 규칙이 막은 것, no_valid_shard_copy면 프라이머리로 쓸 사본 자체가 없는 것이다. 후자는 그 노드를 되살리거나 스냅샷에서 복원하는 것 말고 길이 없다." },
+    { key: "remain", display: '"can_remain_on_current_node":"no"', title: "제자리에 있어도 되나", description: "이미 놓인 샤드에만 나온다. no인데 can_move_to_other_node도 no면 warm 복제본처럼 어정쩡하게 남은 상태다." },
+    { key: "decider", display: '"decider":"disk_threshold"', title: "어느 규칙이 막았나", description: "노드마다 막은 규칙과 이유가 문장으로 나온다. disk_threshold(디스크 수위), same_shard(같은 노드에 원본과 사본 금지), filter(노드 속성 조건)를 가장 자주 본다." },
+  ]}
+/>
+
+증상별로 짧게 정리하면 이렇다. 새 인덱스가 안 만들어지면 디스크 수위와 allocation explain. 디스크가 계속 늘면 ISM explain에서 멈춘 롤오버나 삭제. 색인이 429로 거절되면 `thread_pool`의 write `rejected`와 bulk 크기. 검색이 429면 서킷 브레이커의 `tripped`. 노드가 들락날락하면 GC 시간과 관리자 노드의 부하. 모니터링에는 상태 색뿐 아니라 배정 안 된 샤드 수, 노드별 디스크, rejected 수, ISM 실패 수를 함께 건다. warm 복제본 사례처럼 green인데도 일이 덜 된 경우가 있기 때문이다.
+
+## 다시 503 앞에서
+
+처음 본 503은 노드가 죽어서도, 데이터가 깨져서도 아니었다. 샤드를 놓을 자리가 없다는 클러스터의 판단이었고, allocation explain이 그 이유를 한 줄로 알려 줬다. 이 글에서 본 장면이 대부분 그렇다. 롤오버가 늦은 것도, 복제본이 hot에 남은 것도, 노드가 빠져 red가 된 것도 "이 샤드를 어디에 둘 수 있나"의 답이다. 클러스터가 이상하면 샤드 하나를 골라 왜 거기 있는지, 왜 못 가는지부터 묻는다.
+
+## 면접에서 나올 만한 질문
+
+### OpenSearch에서 cluster manager 노드를 따로 두는 이유는 무엇인가요?
+
+클러스터 상태를 관리하는 일이 데이터 노드의 무거운 검색이나 GC 때문에 멈추지 않게 하려는 것이다. 관리자가 늦으면 매핑 변경, 샤드 배정, 노드 합류 처리가 모두 늦어지고 노드가 빠졌다 들어왔다 한다. 관리자 후보는 과반수 투표로 뽑히므로 홀수, 보통 세 대를 둔다.
+
+### 관리자 후보 셋 중 둘이 죽으면 어떻게 되나요?
+
+과반수(둘)를 채우지 못해 관리자를 뽑지 못하고, 클러스터 API는 `cluster_manager_not_discovered_exception`(503)을 돌려준다. 이 덕분에 네트워크가 갈라져도 양쪽에서 관리자가 따로 뽑히지 않는다. 남은 노드에서 기존 샤드의 읽기·쓰기를 계속 받을지는 `cluster.no_cluster_manager_block`이 정하는데, 실습한 3.9.0의 기본값은 메타데이터 변경만 막는 `metadata_write`였다.
+
+### 로그 인덱스의 프라이머리 샤드 수는 어떻게 정하나요?
+
+샤드 하나가 수십 GB(로그라면 30~50GB 정도)를 넘지 않고, 전체 샤드 수가 힙에 비해 너무 많지 않게 정한다. 하루 양을 목표 크기로 나누고 hot 노드 수의 배수로 맞춘다. 양이 적은 로그를 일 단위로 자르면 작은 샤드가 수백 개 생기므로, 크기나 문서 수 조건의 롤오버로 넘기는 편이 낫다.
+
+### 동적 매핑을 그대로 두면 어떤 문제가 생기나요?
+
+문자열마다 text와 keyword 두 벌이 생겨 색인이 커지고, 키가 계속 늘어나는 객체가 들어오면 필드 수가 끝없이 늘어난다. 필드 수 한도(기본 1000)에 닿으면 문서가 거절되고, 한도를 올리면 클러스터 상태가 커져 관리자가 느려진다. 템플릿에서 매핑을 정하고 `dynamic: false`로 닫거나, 키가 자유로운 객체는 `flat_object`로 받는다.
+
+### ISM의 rollover와 delete는 어떻게 동작하나요?
+
+인덱스에 정책이 붙으면 ISM이 주기적으로(기본 5분) 돌며 조건을 본다. rollover는 쓰기 별칭이 가리키는 인덱스가 문서 수·크기·나이 조건을 넘으면 새 인덱스를 만들고 별칭을 옮긴다. 상태 전환 조건(만든 지 며칠)이 채워지면 warm으로 옮겨 세그먼트를 합치고, 마지막에 지운다. 조건은 "이 값 이상"이고 검사 주기 사이에 들어온 문서도 있으니 정확히 그 크기로 잘리지는 않는다.
+
+### 노드 하나가 재시작될 때 바로 복제본을 새로 만들지 않는 이유는요?
+
+잠깐 재시작한 노드라면 디스크의 사본을 다시 쓰는 편이 수십 GB를 네트워크로 복사하는 것보다 훨씬 싸기 때문이다. 기본 1분(`delayed_timeout`) 동안 기다리고, 그 안에 돌아오면 기존 파일로 거의 복사 없이 붙는다. 계획된 재시작은 배정을 `primaries`로 막고 flush한 뒤 한 대씩 하고, 매번 green을 확인한 뒤 다음 노드로 간다.
+
+### 클러스터는 green인데 디스크가 줄지 않습니다. 무엇을 보나요?
+
+ISM explain에서 롤오버나 삭제가 멈춘 인덱스가 있는지 본다. warm으로 옮길 때 warm 노드가 하나뿐이면 복제본이 갈 곳이 없어 hot 노드에 남아 있어도 샤드는 STARTED라 green이다. allocation explain에서 `can_remain_on_current_node: no`, `can_move_to_other_node: no`가 보이면 이 경우다. warm 노드를 늘리거나 옮기기 전에 복제본 수를 줄인다.
+
+### 검색이 circuit_breaking_exception으로 429를 돌려줍니다. 한도를 올리면 되나요?
+
+먼저 어떤 질의가 메모리를 많이 쓰는지 본다. 고유값이 많은 필드로 큰 terms 집계를 하는 질의가 흔한 원인이라, 범위를 좁히거나 composite 집계로 나눈다. 브레이커는 노드가 OOM으로 죽는 대신 요청 하나를 거절하는 안전장치라 한도를 올리면 그 안전장치를 빼는 셈이다. 부모 브레이커가 자주 터지면 힙이나 샤드 수를 다시 본다.

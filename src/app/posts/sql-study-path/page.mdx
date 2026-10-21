@@ -1,0 +1,448 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-study-path");
+
+export const PG_MEMBERS = ["kim", "lee", "park", "choi"].map((name, i) => ({ id: i + 1, name }));
+
+export const toOrders = (rows) => rows.map(([id, member_id, amount, status, ordered_at]) => ({ id, member_id, amount, status, ordered_at }));
+
+export const PG_ORDERS = toOrders([[1, 1, 30000, "paid", "2026-10-02"], [2, 1, 12000, "paid", "2026-10-09"], [3, 2, 50000, "paid", "2026-10-03"], [4, 2, 8000, "cancelled", "2026-10-10"], [5, 3, 20000, "paid", "2026-10-15"], [6, 4, 45000, "paid", "2026-09-28"], [7, 3, 15000, "paid", "2026-10-21"]]);
+
+export const PG_TIE = toOrders([[1, 1, 30000, "paid", "2026-11-01"], [2, 2, 30000, "paid", "2026-11-02"], [3, 3, 10000, "paid", "2026-11-03"], [4, 4, 50000, "cancelled", "2026-11-04"]]);
+
+"10월에 결제를 평균보다 많이 한 회원을 순위와 함께 뽑아 달라"는 요청을 받았다. 답이 되는 쿼리는 스무 줄 남짓이다. 그런데 처음 SQL을 배우는 사람에게 이 쿼리를 통째로 보여 주면 어디서부터 읽어야 할지 모른다. `WITH`, `LEFT JOIN`, `GROUP BY`, 괄호 속 `SELECT`, `OVER`가 한 화면에 다 있다.
+
+이 쿼리는 사실 여섯 가지 도구를 차례로 얹은 것이다. 읽기(SELECT), 거르기(WHERE), 묶기(GROUP BY), 붙이기(JOIN), 안에 넣기(서브쿼리), 행을 남긴 채 계산하기(윈도 함수). SQL을 공부하는 순서도 이 순서가 편하다. 앞의 도구를 알아야 뒤의 도구가 왜 필요한지 보인다.
+
+이 글은 그 여섯 갈래를 지도처럼 묶는다. 작은 데이터 하나에 쿼리 하나를 놓고 한 단계씩 키우면서, 갈래마다 자주 틀리는 자리를 짚고 자세한 글로 넘긴다. 개념 설명은 각 글에 있으니 여기서는 반복하지 않는다. 기준은 Ubuntu 24.04의 PostgreSQL 16.15이고, 출력은 모두 이 환경에서 돌린 결과다. psql에서 `\pset null '(null)'`을 켜 두었다.
+
+## 여섯 갈래를 배우는 순서
+
+아래 그림이 이 글의 길이다. 화살표를 따라 점이 흐르는 방향이 배우는 순서이고, 점선은 앞 갈래의 지식이 뒤 갈래에서 다시 쓰이는 자리다.
+
+<ConceptDiagram
+  caption="앞 도구의 결과가 다음 도구의 입력이 된다"
+  width={400} height={250}
+  nodes={[
+    { id: "select", label: "읽기", sub: "SELECT", x: 70, y: 60, w: 100 },
+    { id: "where", label: "거르기", sub: "WHERE", x: 200, y: 60, w: 100 },
+    { id: "group", label: "묶기", sub: "GROUP BY", x: 330, y: 60, w: 100 },
+    { id: "join", label: "붙이기", sub: "JOIN", x: 330, y: 190, w: 100 },
+    { id: "sub", label: "안에 넣기", sub: "서브쿼리·CTE", x: 200, y: 190, w: 100 },
+    { id: "window", label: "행 남기고 계산", sub: "OVER", x: 70, y: 190, w: 110 },
+  ]}
+  edges={[
+    { from: "select", to: "where" }, { from: "where", to: "group" }, { from: "group", to: "join" },
+    { from: "join", to: "sub" }, { from: "sub", to: "window" },
+    { from: "where", to: "sub", label: "NULL", dashed: true },
+    { from: "group", to: "window", label: "행 수", dashed: true },
+  ]}
+/>
+
+갈래마다 깊게 들어가는 글은 이렇다. 처음이라면 테이블을 만드는 [SQL 기본 명령어 글](/posts/sql-basics)부터 본다.
+
+- 읽기: [SELECT와 NULL](/posts/sql-select-where-null)
+- 거르기: [WHERE 연산자의 함정](/posts/sql-filtering-operators), [SQLD NULL 다루기](/posts/sqld-null-functions)
+- 묶기: [집계 숫자가 틀리는 이유](/posts/sql-aggregation-pitfalls), [SQLD 집계와 GROUP BY](/posts/sqld-group-by-having), [ROLLUP과 CUBE](/posts/sqld-rollup-cube-grouping-sets)
+- 붙이기: [조인 실전](/posts/sql-joins-in-practice), [SQLD 조인](/posts/sqld-joins), [집합 연산자](/posts/sqld-set-operators)
+- 안에 넣기: [서브쿼리가 실행되는 방식](/posts/sql-subqueries-exists-lateral), [SQLD 서브쿼리](/posts/sqld-subquery-set-operators), [상관 서브쿼리](/posts/sqld-correlated-subquery), [재귀 CTE](/posts/sql-cte-recursive)
+- 행 남기고 계산: [PostgreSQL 윈도우 함수 실전](/posts/sql-window-functions-pg), [SQLD 윈도우 함수](/posts/sqld-window-functions), [Top-N과 계층형 쿼리](/posts/sqld-top-n-hierarchical-pivot)
+
+여섯 갈래를 꿰는 실이 하나 있다. DB가 한 문장을 어떤 순서로 처리하느냐다. 이건 [SELECT의 논리적 처리 순서 글](/posts/sql-logical-order)이 따로 다룬다. 아래 단계마다 이 순서가 왜 중요한지 한 번씩 드러난다.
+
+## 회원 넷, 주문 일곱
+
+데이터는 이것뿐이다. 글 끝까지 이 두 테이블만 쓴다. park은 사는 도시를 모르고(NULL), lee는 주문 하나를 취소했고, choi는 9월에만 샀다. 이 세 가지가 뒤에서 하나씩 함정이 된다.
+
+```sql
+CREATE TABLE members (
+  id   integer PRIMARY KEY,
+  name text NOT NULL,
+  city text                       -- 모르면 NULL
+);
+
+CREATE TABLE orders (
+  id         integer PRIMARY KEY,
+  member_id  integer NOT NULL REFERENCES members (id),
+  amount     integer NOT NULL,
+  status     text    NOT NULL,    -- paid, cancelled
+  ordered_at date    NOT NULL
+);
+
+INSERT INTO members VALUES
+  (1, 'kim', 'seoul'), (2, 'lee', 'busan'), (3, 'park', NULL), (4, 'choi', 'seoul');
+
+INSERT INTO orders VALUES
+  (1, 1, 30000, 'paid',      '2026-10-02'),
+  (2, 1, 12000, 'paid',      '2026-10-09'),
+  (3, 2, 50000, 'paid',      '2026-10-03'),
+  (4, 2,  8000, 'cancelled', '2026-10-10'),
+  (5, 3, 20000, 'paid',      '2026-10-15'),
+  (6, 4, 45000, 'paid',      '2026-09-28'),
+  (7, 3, 15000, 'paid',      '2026-10-21');
+```
+
+## 첫 단계는 그냥 읽는다
+
+모든 쿼리는 테이블을 그대로 읽는 데서 시작한다. 필요한 컬럼을 적고, 순서를 정한다.
+
+```sql
+SELECT id, member_id, amount, status, ordered_at
+FROM orders
+ORDER BY id;   -- 순서가 필요하면 반드시 적는다
+```
+
+결과는 위에 넣은 일곱 줄 그대로다. 여기서 흔한 실수는 `ORDER BY` 없이 나온 순서를 믿는 것이다. 지금은 `id` 순서를 적었으니 그대로 나오지만, 적지 않았다면 행이 수정되거나 계획이 바뀔 때 순서도 바뀔 수 있다. 테이블은 순서 없는 집합이라서, 순서는 `ORDER BY`로만 약속된다. 앱 코드에서 `SELECT *`를 쓰면 나중에 컬럼이 늘 때 같이 딸려 오는 문제도 있다. 이런 기초는 [SELECT와 NULL 글](/posts/sql-select-where-null)에 정리돼 있다.
+
+## 결제된 10월 주문만 남기기
+
+요청은 "10월에 결제한" 주문이다. 취소된 주문과 9월 주문을 뺀다.
+
+```sql
+SELECT id, member_id, amount, ordered_at
+FROM orders
+WHERE status = 'paid'
+  AND ordered_at >= '2026-10-01'   -- 10월 1일 포함
+  AND ordered_at <  '2026-11-01'   -- 11월 1일은 빼고
+ORDER BY id;
+```
+
+```text
+ id | member_id | amount | ordered_at
+----+-----------+--------+------------
+  1 |         1 |  30000 | 2026-10-02
+  2 |         1 |  12000 | 2026-10-09
+  3 |         2 |  50000 | 2026-10-03
+  5 |         3 |  20000 | 2026-10-15
+  7 |         3 |  15000 | 2026-10-21
+(5 rows)
+```
+
+기간을 `>=` 시작과 `<` 다음 달 시작으로 쓴 데는 이유가 있다. 컬럼이 `date`가 아니라 `timestamptz`라면 `BETWEEN '2026-10-01' AND '2026-10-31'`은 31일 0시 이후를 놓친다. 그 경계와 시간대 문제는 [WHERE 연산자 글](/posts/sql-filtering-operators)에 실제 출력과 함께 있다.
+
+거르기에서 더 자주 틀리는 건 NULL이다. "서울이 아닌 회원"을 찾으면 park이 빠진다.
+
+```sql
+SELECT name, city FROM members WHERE city <> 'seoul';
+```
+
+```text
+ name | city
+------+-------
+ lee  | busan
+(1 row)
+```
+
+park의 도시는 모른다. 모르는 값과 `'seoul'`을 비교하면 참도 거짓도 아닌 "모름"이 나오고, `WHERE`는 참인 행만 남긴다. 그래서 `city = NULL`은 언제나 0행이고, 목록에 NULL이 하나 섞인 `WHERE city NOT IN ('busan', NULL)`도 0행이 된다. park까지 넣고 싶으면 `city IS DISTINCT FROM 'seoul'`처럼 NULL을 값처럼 비교하는 연산자를 쓴다. 그러면 lee와 park 두 줄이 나온다.
+
+이 "모름" 규칙이 뒤의 서브쿼리 단계에서 다시 나온다. 그림의 첫 번째 점선이 그 자리다.
+
+## 회원마다 한 줄로 묶기
+
+이제 주문 다섯 줄을 회원별 합계로 줄인다. 아래 그림에서 다음을 누르면 주문이 한 줄씩 지나가면서, 남는 줄은 회원 이름의 칸에 더해지고 걸러진 줄은 그냥 지나간다.
+
+<AlgoTrace
+  caption="WHERE를 통과한 줄만 회원별 칸에 더해진다"
+  memoryLabel="회원별 합계"
+  cells={["kim 30k", "kim 12k", "lee 50k", "lee 8k 취소", "park 20k", "choi 9월", "park 15k"]}
+  steps={[
+    { caption: "주문 일곱 줄을 차례로 읽는다. 아직 묶인 것은 없다.", memory: [] },
+    { pointer: 0, found: [0], memory: ["kim 30000"], caption: "kim의 첫 주문이다. kim 칸이 새로 생긴다." },
+    { pointer: 1, found: [0, 1], memory: ["kim 42000"], caption: "같은 kim이라 칸을 새로 만들지 않고 더한다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["kim 42000", "lee 50000"], caption: "lee 칸이 생긴다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["kim 42000", "lee 50000"], caption: "취소된 주문은 WHERE에서 걸러져 묶기 단계까지 오지 못한다." },
+    { pointer: 4, found: [0, 1, 2, 4], memory: ["kim 42000", "lee 50000", "park 20000"], caption: "park 칸이 생긴다." },
+    { pointer: 5, found: [0, 1, 2, 4], memory: ["kim 42000", "lee 50000", "park 20000"], caption: "9월 주문도 걸러진다. choi는 칸이 아예 생기지 않는다." },
+    { pointer: 6, found: [0, 1, 2, 4, 6], memory: ["kim 42000", "lee 50000", "park 35000"], caption: "park에 더한다. 칸 셋이 곧 결과 세 줄이다." },
+  ]}
+/>
+
+```sql
+SELECT member_id, count(*) AS orders, sum(amount) AS total
+FROM orders
+WHERE status = 'paid' AND ordered_at >= '2026-10-01' AND ordered_at < '2026-11-01'
+GROUP BY member_id          -- member_id가 같은 줄끼리 한 칸
+ORDER BY member_id;
+```
+
+```text
+ member_id | orders | total
+-----------+--------+-------
+         1 |      2 | 42000
+         2 |      1 | 50000
+         3 |      2 | 35000
+(3 rows)
+```
+
+묶은 뒤에는 칸마다 한 줄만 남는다. 그래서 묶지 않은 컬럼을 그대로 꺼내면 DB가 어느 값을 보여 줄지 몰라 멈춘다.
+
+```sql
+SELECT member_id, amount, sum(amount) FROM orders GROUP BY member_id;
+```
+
+```text
+ERROR:  column "orders.amount" must appear in the GROUP BY clause or be used in an aggregate function
+LINE 1: SELECT member_id, amount, sum(amount) FROM orders GROUP BY m...
+                          ^
+```
+
+MySQL 8도 기본 설정(`ONLY_FULL_GROUP_BY`)에서는 같은 이유로 막는다. 묶은 결과로 다시 거를 때는 `WHERE`가 아니라 `HAVING`이다. `WHERE`는 묶기 전 한 줄 한 줄을, `HAVING`은 묶은 뒤 칸을 본다. 위 쿼리에 `HAVING sum(amount) >= 40000`을 붙이면 kim(42000)과 lee(50000)만 남는다.
+
+집계에서 진짜 무서운 건 에러가 아니라 조용히 틀린 숫자다. NULL을 건너뛰는 `avg`, 빈 집합의 `sum`이 0이 아니라 NULL인 것, 조건별로 셀 때 쓰는 `FILTER`는 [집계 함정 글](/posts/sql-aggregation-pitfalls)에서 본다. 소계와 총계를 한 번에 내는 방법은 [ROLLUP 글](/posts/sqld-rollup-cube-grouping-sets)에 있다.
+
+## 이름을 붙이면 choi가 돌아온다
+
+결과에 `member_id` 대신 이름이 필요하다. 그리고 요청이 "회원"이니, 10월에 안 산 choi도 0원으로 보여야 맞다. 회원 쪽을 기준으로 `LEFT JOIN`한다.
+
+```sql
+SELECT m.name, count(o.id) AS orders, coalesce(sum(o.amount), 0) AS total
+FROM members m
+LEFT JOIN orders o
+  ON  o.member_id = m.id AND o.status = 'paid'                  -- 주문 쪽 조건은 ON에
+  AND o.ordered_at >= '2026-10-01' AND o.ordered_at < '2026-11-01'
+GROUP BY m.id, m.name ORDER BY m.id;
+```
+
+```text
+ name | orders | total
+------+--------+-------
+ kim  |      2 | 42000
+ lee  |      1 | 50000
+ park |      2 | 35000
+ choi |      0 |     0
+(4 rows)
+```
+
+주문 쪽 조건을 `ON`에 둔 게 포인트다. 습관대로 `WHERE`에 옮기면 choi가 다시 사라진다.
+
+```sql
+SELECT m.name, count(o.id) AS orders, coalesce(sum(o.amount), 0) AS total
+FROM members m LEFT JOIN orders o ON o.member_id = m.id
+WHERE o.status = 'paid' AND o.ordered_at >= '2026-10-01' AND o.ordered_at < '2026-11-01'
+GROUP BY m.id, m.name ORDER BY m.id;
+```
+
+결과는 kim, lee, park 세 줄뿐이다. `LEFT JOIN`은 짝이 없는 choi에게 주문 컬럼이 전부 NULL인 줄을 만들어 준다. 그 뒤에 `WHERE o.status = 'paid'`가 오면 NULL과의 비교는 "모름"이라 그 줄이 지워진다. 그러면 `INNER JOIN`과 같아진다. 거르기 단계의 NULL 규칙이 여기서 다시 나온 셈이다.
+
+`count(*)`와 `count(o.id)`도 이 자리에서 갈린다. choi의 NULL 줄도 한 줄이라, 같은 쿼리에서 `count(*)`로 세면 choi가 0이 아니라 1로 나온다. 그래서 위 쿼리는 주문 쪽 컬럼인 `o.id`를 셌다.
+
+조인의 다른 큰 실수는 행이 곱해지는 것이다. 주문과 후기처럼 한 회원에 여러 줄씩 달린 테이블 둘을 한꺼번에 붙이면 합계가 부풀어 오른다. 그걸 숫자로 찾는 법과 "묶고 나서 붙이기"는 [조인 실전 글](/posts/sql-joins-in-practice)에, 조인 종류와 문법은 [SQLD 조인 글](/posts/sqld-joins)에 있다.
+
+## 평균보다 많이 산 회원만
+
+이제 "평균보다 많이"를 붙인다. 평균은 회원별 합계를 다 낸 다음에야 알 수 있다. 계산한 결과를 다시 재료로 쓰려면 쿼리 안에 쿼리를 넣는다. 같은 결과를 두 번 쓰니 `WITH`(CTE)로 이름을 붙였다.
+
+```sql
+WITH monthly AS (                 -- 앞 단계의 쿼리에 이름을 붙인다
+  SELECT m.name, coalesce(sum(o.amount), 0) AS total
+  FROM members m
+  LEFT JOIN orders o
+    ON  o.member_id = m.id AND o.status = 'paid'
+    AND o.ordered_at >= '2026-10-01' AND o.ordered_at < '2026-11-01'
+  GROUP BY m.id, m.name
+)
+SELECT name, total
+FROM monthly
+WHERE total > (SELECT avg(total) FROM monthly)   -- 값 하나를 돌려주는 서브쿼리
+ORDER BY total DESC;
+```
+
+```text
+ name | total
+------+-------
+ lee  | 50000
+ kim  | 42000
+ park | 35000
+(3 rows)
+```
+
+`FROM (SELECT ...) AS t`처럼 인라인 뷰로 써도 결과는 같다. 다만 그러면 같은 쿼리를 두 번 적어야 한다.
+
+여기서 조심할 건 SQL 문법보다 질문의 뜻이다. 평균에 choi의 0원을 넣었느냐에 따라 기준선이 달라진다.
+
+```sql
+WITH monthly AS ( ... 위와 같다 ... )
+SELECT avg(total),
+       (SELECT avg(total) FROM monthly WHERE total > 0) AS avg_buyers
+FROM monthly;
+```
+
+```text
+        avg         |     avg_buyers
+--------------------+--------------------
+ 31750.000000000000 | 42333.333333333333
+(1 row)
+```
+
+회원 전체 평균이면 31,750원이라 세 명이 남고, 10월에 산 사람만의 평균이면 42,333원이라 lee 한 명만 남는다. 앞 단계에서 `LEFT JOIN`을 골랐기 때문에 생긴 차이다. 쿼리를 짜기 전에 "평균의 분모가 누구냐"를 물어야 한다.
+
+값 하나가 와야 하는 자리에 여러 줄이 오면 에러가 난다. `SELECT name, (SELECT amount FROM orders o WHERE o.member_id = m.id) FROM members m`은 주문이 둘인 kim에서 `more than one row returned by a subquery used as an expression`으로 멈춘다.
+
+평균 서브쿼리처럼 바깥 행과 상관없는 서브쿼리는 실행 계획에 `InitPlan`으로 나오고 한 번만 돈다. 바깥 행마다 다시 도는 `SubPlan`과의 차이, `IN`·`EXISTS`가 조인으로 바뀌는 과정, `NOT IN`이 NULL 때문에 0행이 되는 이유는 [서브쿼리가 실행되는 방식 글](/posts/sql-subqueries-exists-lateral)에서 계획과 함께 본다. 그림의 첫 번째 점선이 바로 그 `NOT IN`이다. 시험 문법 위주의 정리는 [SQLD 서브쿼리 글](/posts/sqld-subquery-set-operators)과 [상관 서브쿼리 글](/posts/sqld-correlated-subquery)에, 깊이를 모르는 트리를 도는 `WITH RECURSIVE`는 [재귀 CTE 글](/posts/sql-cte-recursive)에 있다.
+
+## 줄은 그대로 두고 순위를 붙인다
+
+마지막으로 순위가 필요하다. `GROUP BY`로는 안 된다. 묶으면 줄이 줄어드는데, 순위는 줄마다 하나씩 붙어야 한다. 줄을 남겨 둔 채 다른 줄을 함께 보고 계산하는 도구가 윈도 함수다. 그림의 두 번째 점선이 이 차이다.
+
+```sql
+WITH monthly AS ( ... 위와 같다 ... )
+SELECT name, total,
+       rank() OVER (ORDER BY total DESC)                AS rnk,        -- 순위
+       round(100.0 * total / sum(total) OVER (), 1)     AS share_pct,  -- 남은 줄 합계 대비 비율
+       total - lag(total) OVER (ORDER BY total DESC)    AS gap         -- 바로 위 순위와의 차이
+FROM monthly
+WHERE total > (SELECT avg(total) FROM monthly)
+ORDER BY rnk;
+```
+
+```text
+ name | total | rnk | share_pct |  gap
+------+-------+-----+-----------+--------
+ lee  | 50000 |   1 |      39.4 | (null)
+ kim  | 42000 |   2 |      33.1 |  -8000
+ park | 35000 |   3 |      27.6 |  -7000
+(3 rows)
+```
+
+아래 그림에서 다음을 누르면, `WHERE`까지 끝난 세 줄 위로 창이 움직이며 값이 붙는다. 줄 수는 끝까지 셋이다.
+
+<AlgoTrace
+  caption="윈도 함수는 줄을 지우지 않고 열을 붙인다"
+  memoryLabel="붙는 값"
+  cells={["lee 50k", "kim 42k", "park 35k"]}
+  steps={[
+    { caption: "WHERE가 남긴 세 줄을 total이 큰 순서로 세운다. 이 정렬이 OVER (ORDER BY total DESC)다.", memory: [] },
+    { pointer: 0, memory: ["lee: rnk 1, gap 없음"], caption: "첫 줄은 1위다. 앞 줄이 없으니 lag는 NULL이다." },
+    { pointer: 1, memory: ["lee: rnk 1, gap 없음", "kim: rnk 2, gap -8000"], caption: "kim은 바로 위 lee와 8000원 차이다." },
+    { pointer: 2, memory: ["lee: rnk 1, gap 없음", "kim: rnk 2, gap -8000", "park: rnk 3, gap -7000"], caption: "park까지 순위가 붙는다." },
+    { found: [0, 1, 2], memory: ["창 전체 합 127000", "lee 39.4%", "kim 33.1%", "park 27.6%"], caption: "sum() OVER ()는 창 전체 합을 줄마다 붙인다. choi는 이미 WHERE에서 빠져 합에 없다." },
+  ]}
+/>
+
+`share_pct`의 분모는 127,000원이다. 10월 전체 결제액도 127,000원이라 맞아 보이지만, choi가 0원이라 우연히 같아졌을 뿐이다. 윈도 함수는 `WHERE`가 남긴 줄만 본다. 평균 아래 회원이 돈을 썼다면 분모가 달라진다. 전체 대비 비율을 원하면 `WHERE` 전에, 즉 `monthly` 안에서 계산해야 한다.
+
+윈도 함수 결과로 바로 거를 수도 없다. `SELECT member_id, rank() OVER (ORDER BY amount DESC) AS rnk FROM orders WHERE rnk = 1`은 `column "rnk" does not exist`로 끝난다. 별칭 `rnk`는 `WHERE`보다 늦게 생긴다. 한 겹 감싸서 바깥에서 거른다. `rank() OVER (PARTITION BY member_id ORDER BY amount DESC)`를 안쪽 쿼리에서 계산하고 바깥에서 `WHERE rnk = 1`을 주면 회원마다 가장 큰 결제 하나가 남는다. 면접에 단골로 나오는 "그룹별 상위 N" 모양이고, [SQL 면접 문제 글](/posts/sql-interview-problems)에서 직접 풀어 본다.
+
+동점이 있을 때 `rank`, `dense_rank`, `row_number`가 어떻게 다른지, "최근 7일"이 7일 치가 아닌 프레임 함정, 상위 N을 일찍 멈추는 PostgreSQL 15부터의 최적화는 [윈도우 함수 실전 글](/posts/sql-window-functions-pg)에 있다. 기본 함수 목록은 [SQLD 윈도우 함수 글](/posts/sqld-window-functions)이 더 쉽다.
+
+## 완성된 쿼리를 조각으로 읽기
+
+다 키운 쿼리를 다시 펼쳐 본다. 조각을 누르면 그 조각이 어느 갈래에서 왔는지, 거기서 무엇을 조심했는지 나온다.
+
+<UrlAnatomy
+  caption="여섯 갈래가 한 문장 안에 들어 있다"
+  base="WITH monthly AS (...)"
+  separator=" " joiner=" "
+  params={[
+    { key: "join", display: "members LEFT JOIN orders ON ...", title: "붙이기: 회원 쪽을 기준으로", description: "안 산 회원도 남기려고 LEFT JOIN을 썼다. 주문 쪽 조건(status, 기간)은 ON에 둬야 choi가 지워지지 않는다.", code: "ON o.member_id = m.id AND o.status = 'paid'" },
+    { key: "where", display: "status = 'paid' AND 기간", title: "거르기: 반열린 기간", description: "10월 1일 이상, 11월 1일 미만. 이 조건이 ON 안에 들어가 있어서 거르기와 붙이기가 한 자리에 있다.", code: "o.ordered_at >= '2026-10-01' AND o.ordered_at < '2026-11-01'" },
+    { key: "group", display: "GROUP BY m.id, m.name", title: "묶기: 회원마다 한 줄", description: "sum은 NULL만 있으면 NULL이라 coalesce로 0을 만들었다. 묶지 않은 컬럼은 SELECT에 그냥 쓸 수 없다.", code: "coalesce(sum(o.amount), 0) AS total" },
+    { key: "sub", display: "WHERE total > (SELECT avg ...)", title: "안에 넣기: 값 하나짜리 서브쿼리", description: "평균은 합계를 다 낸 뒤에 나온다. 그래서 CTE 결과를 한 번 더 읽는다. 분모에 0원 회원이 들어가는지 먼저 정한다.", code: "(SELECT avg(total) FROM monthly)" },
+    { key: "window", display: "rank() OVER (ORDER BY total DESC)", title: "행 남기고 계산: 순위", description: "줄을 줄이지 않고 순위를 붙인다. WHERE보다 늦게 계산되므로 WHERE에서 rnk를 쓸 수 없고, 비율의 분모도 남은 줄만의 합이다.", code: "sum(total) OVER ()" },
+    { key: "order", display: "ORDER BY rnk", title: "읽기: 마지막에 순서 약속", description: "ORDER BY는 SELECT 다음이라 별칭 rnk를 쓸 수 있다. 빠뜨리면 순서는 보장되지 않는다." },
+  ]}
+/>
+
+## 줄 수가 바뀌는 자리
+
+긴 쿼리의 숫자가 이상하면 단계마다 줄 수를 세 보는 게 가장 빠르다. 이 쿼리에서 줄 수가 어디서 바뀌는지 따라가 본다. 마지막 단계는 조건을 `WHERE`로 잘못 옮긴 경우다.
+
+<NetworkTopology
+  caption="행이 단계를 지날 때마다 몇 줄이 남는지"
+  width={400} height={240}
+  nodes={[
+    { id: "members", label: "members", sub: "4행", x: 55, y: 55, icon: "db" },
+    { id: "orders", label: "orders", sub: "7행", x: 55, y: 180, icon: "db" },
+    { id: "join", label: "LEFT JOIN", sub: "6행", x: 155, y: 118, w: 80 },
+    { id: "group", label: "GROUP BY", sub: "4행", x: 250, y: 118, w: 80 },
+    { id: "avg", label: "WHERE avg", sub: "3행", x: 345, y: 55, w: 80 },
+    { id: "window", label: "rank()", sub: "3행", x: 345, y: 180, w: 80 },
+  ]}
+  links={[
+    { from: "members", to: "join" }, { from: "orders", to: "join" }, { from: "join", to: "group" },
+    { from: "group", to: "avg" }, { from: "avg", to: "window" },
+  ]}
+  steps={[
+    { path: ["orders", "join"], packet: "7행", title: "주문이 들어온다", detail: "ON 조건이 취소 주문과 9월 주문을 짝에서 뺀다. 짝이 되는 주문은 다섯이다." },
+    { path: ["members", "join"], packet: "4행", title: "회원은 모두 남는다", detail: "kim 2, lee 1, park 2에 짝 없는 choi의 NULL 한 줄을 더해 6행이 된다." },
+    { path: ["members", "join", "group"], packet: "6행", title: "회원마다 한 줄", detail: "6행이 회원 넷의 4행으로 줄어든다. choi는 total 0이다." },
+    { path: ["members", "join", "group", "avg"], packet: "4행", title: "평균으로 거른다", detail: "평균 31750보다 큰 세 명이 남는다. 0원인 choi가 빠진다." },
+    { path: ["members", "join", "group", "avg", "window"], packet: "3행", title: "줄 수는 그대로", detail: "윈도 함수는 rnk, share_pct, gap 열만 붙인다. 3행에서 3행이다." },
+    { path: ["orders", "join", "group"], packet: "choi", blocked: true, highlight: ["members"], title: "조건을 WHERE로 옮기면", detail: "조인 뒤 WHERE o.status = 'paid'가 choi의 NULL 줄을 지운다. GROUP BY에 닿는 회원이 셋으로 준다." },
+  ]}
+/>
+
+이 습관은 리포트 숫자가 안 맞을 때 그대로 쓴다. `WITH`로 단계를 나눠 두면 단계마다 `SELECT count(*) FROM 단계이름`을 돌려 볼 수 있다. 조인 뒤에 줄이 늘었으면 곱해진 것이고, 줄었으면 `WHERE`나 `INNER JOIN`이 무언가를 지운 것이다. 단계가 처리되는 순서 전체는 [논리적 처리 순서 글](/posts/sql-logical-order)이 여덟 단계로 그려 둔다.
+
+## 여섯 갈래 다음에 이어 볼 글
+
+조건에 따라 값을 고르거나 행을 열로 돌리는 건 [CASE WHEN 글](/posts/sql-case-when)이다. 쿼리를 저장해 두고 다시 쓰는 건 [뷰와 머티리얼라이즈드 뷰 글](/posts/sql-views-materialized)에서 본다. 읽기만 했으니 쓰기도 필요하다. 넣고 고치고 지우는 법과 트랜잭션은 [INSERT·UPDATE·DELETE 글](/posts/sql-insert-update-delete)에 있다.
+
+쿼리가 느려지면 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에서 실행 계획 읽는 법을 익히고, [쿼리 고쳐 쓰기 글](/posts/sql-query-rewrite)과 [쿼리 밖의 비용 글](/posts/sql-batch-timeout-pool)로 넘어간다. 앱에서 SQL을 문자열로 이어 붙이고 있다면 [SQL 주입 글](/posts/sql-injection)을 먼저 본다. 면접 준비는 여섯 갈래를 섞어 쓰는 [SQL 면접 문제 글](/posts/sql-interview-problems)로 마무리한다.
+
+## 같은 질문을 코드로 풀어 보기
+
+이 글의 마지막 쿼리를 자바스크립트로 직접 짜 본다. 그 달(`"2026-10"` 같은 문자열)의 paid 주문만 남기고, 주문이 없는 회원도 0원으로 남겨 합계를 낸 뒤, 회원 전체 평균보다 큰 회원만 `[이름, 합계, 순위]`로 돌려준다. 순위는 SQL의 `rank()`처럼 동점이면 같은 순위다. 첫 테스트의 기대값은 위 psql 출력과 같다.
+
+<CodePlayground
+  caption="월별 상위 회원 쿼리를 코드로"
+  functionName="monthlyRanking"
+  initialCode={`function monthlyRanking(members, orders, month) {
+  // 1. 거르기  2. 붙이기와 묶기  3. 평균보다 큰 회원  4. rank()
+  return [];
+}`}
+  solution={`function monthlyRanking(members, orders, month) {
+  // WHERE: 그 달의 paid 주문만
+  const picked = orders.filter((o) => o.status === "paid" && o.ordered_at.startsWith(month));
+  // LEFT JOIN + GROUP BY: 주문이 없는 회원도 0으로 남긴다
+  const totals = members.map((m) => ({
+    name: m.name,
+    total: picked.filter((o) => o.member_id === m.id).reduce((s, o) => s + o.amount, 0),
+  }));
+  // 서브쿼리: 회원 전체 평균보다 큰 사람만
+  const avg = totals.reduce((s, t) => s + t.total, 0) / totals.length;
+  const above = totals.filter((t) => t.total > avg).sort((a, b) => b.total - a.total);
+  // rank(): 나보다 큰 사람 수 + 1
+  return above.map((t) => [t.name, t.total, 1 + above.filter((x) => x.total > t.total).length]);
+}`}
+  tests={[
+    { label: "10월 (psql 결과와 같다)", args: [PG_MEMBERS, PG_ORDERS, "2026-10"], expected: [["lee", 50000, 1], ["kim", 42000, 2], ["park", 35000, 3]] },
+    { label: "9월은 choi 혼자", args: [PG_MEMBERS, PG_ORDERS, "2026-09"], expected: [["choi", 45000, 1]] },
+    { label: "동점은 같은 순위", args: [PG_MEMBERS, PG_TIE, "2026-11"], expected: [["kim", 30000, 1], ["lee", 30000, 1]] },
+    { label: "주문이 없는 달", args: [PG_MEMBERS, PG_ORDERS, "2026-12"], expected: [] },
+  ]}
+/>
+
+## 한 단계씩 얹으면 읽힌다
+
+긴 쿼리는 여섯 도구를 순서대로 얹은 것이다. 읽고, 거르고, 묶고, 붙이고, 결과를 다시 재료로 쓰고, 줄을 남긴 채 계산한다. 갈래마다 틀리는 자리도 거의 정해져 있다. 거르기와 붙이기에서는 NULL이 행을 지우고, 묶기에서는 분모가 바뀌고, 윈도 함수는 `WHERE`보다 늦다. 숫자가 이상하면 단계마다 줄 수를 센다.
+
+## 면접에서 나올 만한 질문
+
+### SELECT 문은 어떤 순서로 처리되나요
+
+적은 순서가 아니라 FROM과 JOIN, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT 순서로 처리된다고 본다. 윈도 함수는 SELECT 단계에서 계산되니 HAVING보다 늦다. 그래서 WHERE에서 SELECT의 별칭이나 윈도 함수 결과를 쓸 수 없고, ORDER BY에서는 별칭을 쓸 수 있다. 실제 실행 순서는 옵티마이저가 바꿀 수 있지만 결과는 이 논리 순서를 따른 것과 같아야 한다.
+
+### WHERE와 HAVING은 어떻게 다른가요
+
+WHERE는 묶기 전에 한 줄씩 거르고, HAVING은 GROUP BY로 묶은 뒤 그룹을 거른다. 그래서 `sum(amount) >= 40000` 같은 집계 조건은 HAVING에만 쓸 수 있다. 집계와 상관없는 조건은 WHERE에 두는 편이 낫다. 묶을 줄 자체가 줄어들기 때문이다.
+
+### LEFT JOIN을 했는데 짝이 없는 행이 사라졌습니다. 왜 그럴까요
+
+오른쪽 테이블 조건을 WHERE에 썼을 가능성이 크다. LEFT JOIN은 짝이 없는 행에 오른쪽 컬럼을 NULL로 채운 줄을 만드는데, WHERE에서 `o.status = 'paid'`처럼 그 컬럼을 비교하면 결과가 "모름"이라 줄이 지워진다. 그러면 INNER JOIN과 같아진다. 오른쪽 조건은 ON에 옮기고, 짝이 없는 행을 찾는 거라면 `o.id IS NULL`처럼 의도를 분명히 쓴다.
+
+### count(*)와 count(컬럼)은 무엇이 다른가요
+
+`count(*)`는 줄 수를 세고, `count(컬럼)`은 그 컬럼이 NULL이 아닌 줄만 센다. LEFT JOIN 뒤에서 차이가 커진다. 주문이 없는 회원도 NULL 줄 하나가 있어서 `count(*)`는 1, `count(o.id)`는 0이 나온다. "주문 수"를 원하면 오른쪽 테이블의 NOT NULL 컬럼을 센다.
+
+### 서브쿼리, CTE, 조인 중 무엇을 쓰나요
+
+결과가 같다면 읽기 쉬운 쪽을 고르고 계획으로 확인한다. PostgreSQL 12부터는 재귀가 아니고 부작용이 없는 CTE를 한 번만 참조하면 바깥 쿼리에 펼쳐 넣는다. 두 번 이상 참조하면 한 번 계산해 두고 재사용하며, `MATERIALIZED`나 `NOT MATERIALIZED`로 직접 정할 수도 있다. IN과 EXISTS는 옵티마이저가 세미 조인으로 바꾸는 경우가 많고, NOT IN은 NULL 때문에 결과가 달라질 수 있어 NOT EXISTS를 먼저 고려한다.
+
+### GROUP BY와 윈도 함수는 어떻게 다른가요
+
+GROUP BY는 줄을 그룹당 한 줄로 줄이고, 윈도 함수는 줄을 그대로 둔 채 같은 창에 있는 다른 줄을 보고 값을 붙인다. 회원별 합계 한 줄이 필요하면 GROUP BY, 줄마다 순위나 누적 합, 전체 대비 비율이 필요하면 윈도 함수다. 둘을 같이 쓰면 GROUP BY가 먼저 끝나고 그 결과 위에서 윈도 함수가 돈다.
+
+### 그룹별 상위 N개는 어떻게 뽑나요
+
+`row_number()`나 `rank()`에 `PARTITION BY 그룹 ORDER BY 기준`을 줘서 순위를 매기고, 한 겹 감싼 바깥 쿼리에서 `WHERE rnk <= N`으로 거른다. 윈도 함수가 WHERE보다 늦게 계산되므로 같은 단계에서는 거를 수 없기 때문이다. 동점을 모두 살릴지에 따라 `rank`와 `row_number`를 고르고, `row_number`라면 동점을 가를 컬럼을 ORDER BY에 더 적어야 결과가 매번 같다.

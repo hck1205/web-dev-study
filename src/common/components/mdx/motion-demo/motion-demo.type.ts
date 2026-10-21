@@ -8,7 +8,19 @@ export type MotionPattern =
   | "ripple"
   | "path-draw"
   | "marquee"
-  | "tilt";
+  | "tilt"
+  | ScrollPattern;
+
+/** 작은 화면이 스스로 스크롤되며 보여 주는 스크롤 패턴 */
+export type ScrollPattern =
+  | "sticky"
+  | "scroll-snap"
+  | "scroll-reveal"
+  | "scroll-progress"
+  | "zoom-on-scroll"
+  | "parallax"
+  | "horizontal-scroll"
+  | "scrollytelling";
 
 export interface MotionDemoProps {
   /** 하나만 주면 큰 카드 하나, 여러 개면 격자로 보여 준다 */

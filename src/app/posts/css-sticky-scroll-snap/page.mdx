@@ -1,0 +1,389 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-sticky-scroll-snap");
+
+주문 목록 표의 머리글에 `position: sticky; top: 0`을 줬다. 데스크톱에서는 머리글이 위에 잘 붙는다. 그런데 휴대폰에서 열면 머리글이 표와 같이 올라가 버린다. 코드는 같다. 다른 점은 하나뿐이다. 모바일에서 표가 화면보다 넓어서 `overflow-x: auto`인 상자로 감싸 뒀다. 이 한 줄이 sticky가 붙는 기준을 바꿔 버린다.
+
+이 글은 스크롤에 맞춰 자리를 정하는 CSS 두 가지, `position: sticky`와 scroll snap이 정확히 어떤 규칙으로 움직이는지 본다. 크로미움 141에서 직접 재 본 숫자와 함께, 붙지 않는 이유와 칸 맞춤이 엉뚱한 곳에 서는 이유를 따라간다. 스크롤 패턴 전체 지도는 [스크롤 패턴 훑어보기](/posts/scroll-patterns-overview)에, sticky 위에 움직임을 얹는 가로 스크롤과 스크롤리텔링은 [패럴랙스와 스크롤리텔링](/posts/parallax-scrollytelling)에 있다.
+
+## sticky는 두 상자 사이에서 움직인다
+
+<ScrollDemo
+  caption="A 머리글이 위에 붙어 있다가, B 섹션이 올라오면 A 섹션의 끝에 걸려 함께 밀려난다."
+  patterns={["sticky"]}
+/>
+
+sticky 요소는 평소에는 `relative`처럼 제자리에 있다. 스크롤해서 `top`으로 정한 선에 닿으면 그 선에 붙는다. 여기까지는 다들 안다. 헷갈리는 건 "어느 선"과 "언제까지"다. 기준이 되는 상자가 두 개 있다.
+
+첫째는 가장 가까운 스크롤 컨테이너다. 조상 중에 스크롤 상자를 가진 요소(`overflow`가 `visible`과 `clip`이 아닌 요소)가 있으면 그 상자가 기준이고, 없으면 문서의 뷰포트가 기준이다. `top: 0`은 "그 스크롤 컨테이너의 보이는 영역 위 가장자리에서 0"이라는 뜻이다.
+
+둘째는 포함 블록(containing block), 보통은 부모 요소다. sticky 요소는 부모 밖으로 나가지 않는다. 부모의 끝이 올라오면 붙어 있던 요소도 함께 밀려 올라간다. 위 그림에서 A가 B에게 밀려나는 것처럼 보이는 건, 실은 A가 자기 섹션의 끝에 걸려 끌려 올라가는 것이다.
+
+아래 그림에서 다음을 누르면 스크롤에 따라 두 상자가 A 머리글을 어디에 두는지 볼 수 있다.
+
+<GeometryMorph
+  caption="테두리는 스크롤 영역, 옅은 상자는 섹션(포함 블록), 진한 띠는 sticky 머리글이다."
+  width={400}
+  height={230}
+  shapes={[{ id: "viewport", tone: "outline" }, { id: "seca", tone: "muted" }, { id: "heada", tone: "accent" }, { id: "secb", tone: "muted" }, { id: "headb", tone: "series2" }]}
+  steps={[
+    {
+      title: "제자리에 있다",
+      detail: "머리글이 아직 top: 0 선에 닿지 않았다. 지금은 relative와 똑같다.",
+      shapes: { viewport: [[40, 30], [360, 30], [360, 210], [40, 210]], seca: [[50, 60], [350, 60], [350, 210], [50, 210]], heada: [[56, 60], [344, 60], [344, 86], [56, 86]] },
+      labels: [{ x: 200, y: 20, text: "top: 0 선", size: "sm" }, { x: 200, y: 150, text: "섹션 A", tone: "text", size: "sm" }],
+      focus: ["heada"],
+    },
+    {
+      title: "선에 닿았다",
+      detail: "30만큼 내리면 머리글 윗변이 스크롤 영역 위 가장자리에 닿는다. 여기서부터 붙는다.",
+      shapes: { viewport: [[40, 30], [360, 30], [360, 210], [40, 210]], seca: [[50, 30], [350, 30], [350, 180], [50, 180]], heada: [[56, 30], [344, 30], [344, 56], [56, 56]], secb: [[50, 190], [350, 190], [350, 210], [50, 210]], headb: [[56, 190], [344, 190], [344, 210], [56, 210]] },
+      labels: [{ x: 200, y: 20, text: "top: 0 선", size: "sm" }],
+      focus: ["heada", "viewport"],
+    },
+    {
+      title: "섹션은 올라가고 머리글은 남는다",
+      detail: "섹션 A는 계속 올라가지만 머리글은 선에 붙어 있다. 섹션 안에 자리가 남아 있는 동안만 그렇다.",
+      shapes: { viewport: [[40, 30], [360, 30], [360, 210], [40, 210]], seca: [[50, 30], [350, 30], [350, 130], [50, 130]], heada: [[56, 30], [344, 30], [344, 56], [56, 56]], secb: [[50, 140], [350, 140], [350, 210], [50, 210]], headb: [[56, 140], [344, 140], [344, 166], [56, 166]] },
+      labels: [{ x: 200, y: 20, text: "top: 0 선", size: "sm" }, { x: 200, y: 100, text: "남은 자리", tone: "text", size: "sm" }],
+      focus: ["heada", "seca"],
+    },
+    {
+      title: "섹션 끝에 걸린다",
+      detail: "섹션 A의 아랫변이 머리글 높이보다 위로 올라오면, 머리글은 섹션 밖으로 나갈 수 없어서 함께 밀려 올라간다.",
+      shapes: { viewport: [[40, 30], [360, 30], [360, 210], [40, 210]], seca: [[50, 30], [350, 30], [350, 50], [50, 50]], heada: [[56, 30], [344, 30], [344, 50], [56, 50]], secb: [[50, 60], [350, 60], [350, 210], [50, 210]], headb: [[56, 60], [344, 60], [344, 86], [56, 86]] },
+      labels: [{ x: 200, y: 20, text: "top: 0 선", size: "sm" }, { x: 200, y: 150, text: "섹션 B", tone: "text", size: "sm" }],
+      focus: ["heada", "headb"],
+    },
+    {
+      title: "다음 머리글이 이어 붙는다",
+      detail: "A는 섹션과 함께 사라지고, B가 같은 규칙으로 선에 붙는다. 머리글끼리 서로 미는 코드는 어디에도 없다.",
+      shapes: { viewport: [[40, 30], [360, 30], [360, 210], [40, 210]], secb: [[50, 30], [350, 30], [350, 180], [50, 180]], headb: [[56, 30], [344, 30], [344, 56], [56, 56]] },
+      labels: [{ x: 200, y: 20, text: "top: 0 선", size: "sm" }],
+      focus: ["headb"],
+    },
+  ]}
+/>
+
+명세는 이 움직임을 "sticky 위치 사각형" 안에 요소를 가두는 것으로 설명한다. 스크롤 컨테이너의 보이는 영역에서 `top` 같은 inset 값만큼 안쪽으로 줄인 사각형이 있고, 요소는 그 사각형과 포함 블록이 함께 허락하는 범위 안에서만 움직인다. 그래서 붙지 않는 이유도 두 갈래로 나뉜다. 기준이 되는 스크롤 컨테이너가 예상과 다르거나, 포함 블록 안에 움직일 자리가 없거나.
+
+## 붙지 않는 경우를 하나씩 재 보면
+
+경우마다 페이지를 만들고, 크로미움에서 맨 위일 때와 300px 내린 뒤의 머리글 위치를 `getBoundingClientRect().top`으로 쟀다. 머리글 위에는 높이 100px짜리 내용이 있어서 원래 위치는 100이다. 붙으면 300px을 내려도 0이고, 안 붙으면 100 - 300 = -200이 나온다.
+
+```js
+// 경우마다 #wrap의 스타일과 머리글 스타일만 바꾼다
+await page.setContent(`
+  <div style="height:100px">intro</div>
+  <div id="wrap" style="${wrapStyle}">
+    <section style="height:1500px">
+      <h2 id="h" style="position: sticky; top: 0; height: 40px">header</h2>
+    </section>
+  </div>`);
+const top = () => page.evaluate(() => document.getElementById("h").getBoundingClientRect().top);
+await page.evaluate(() => scrollTo(0, 0));
+const before = await top();
+await page.evaluate(() => scrollTo(0, 300));
+const after = await top();
+```
+
+```text
+1 기본                         before=100 after=0 scrollY=300
+2 top 없음                     before=100 after=-200 scrollY=300
+3 조상 overflow: hidden        before=100 after=-200 scrollY=300
+4 조상 overflow-x: auto        before=100 after=-200 scrollY=300
+5 조상 overflow-x: clip        before=100 after=0 scrollY=300
+6 body overflow-x: hidden    before=100 after=0 scrollY=300
+7 flex 사이드바 (stretch)        before(top=100 height=2736) after(top=-200 height=2736)
+8 flex 사이드바 align-self: start before(top=100 height=18) after(top=0 height=18)
+```
+
+2번은 inset이 없는 경우다. `position: sticky`만 주고 `top`을 빼면 붙을 선이 없어서 그냥 `relative`처럼 군다.
+
+3번과 4번이 처음 장면의 버그다. 조상에 `overflow: hidden`이나 `overflow-x: auto`가 있으면 그 조상이 가장 가까운 스크롤 컨테이너가 된다. `hidden`도 스크롤 컨테이너를 만든다는 게 의외다. 사용자가 스크롤할 수 없을 뿐 스크립트로는 스크롤되는 상자이기 때문이다. 머리글은 그 상자 기준으로는 제대로 붙어 있다. 다만 그 상자는 세로로 스크롤되지 않고 문서와 함께 통째로 올라가니, 보기에는 안 붙는 것과 같다.
+
+5번이 고치는 방법 중 하나다. `overflow: clip`은 넘치는 부분을 자르기만 하고 스크롤 상자를 만들지 않는다. 그래서 sticky의 기준이 바뀌지 않는다. 가로 넘침을 막으려고 감싼 상자라면 `hidden` 대신 `clip`을 쓴다. 크롬 90, 파이어폭스 81, 사파리 16부터 지원한다.
+
+6번은 반대로 괜찮은 경우다. `body`에 준 `overflow`는 `html`이 `visible`이면 뷰포트로 옮겨 가서 적용되기 때문에 `body`가 따로 스크롤 상자가 되지 않는다. 그래서 "body에 overflow-x: hidden을 주면 sticky가 깨진다"는 말은 이 조건에서는 맞지 않는다. `html`에도 `overflow`를 주면 이야기가 달라지니 둘 다 줬다면 의심한다.
+
+7번은 포함 블록 쪽 문제다. flex 컨테이너의 기본 `align-items`는 `stretch`라서 사이드바가 본문 높이(2736px)만큼 늘어난다. 사이드바가 부모를 꽉 채우니 부모 안에서 움직일 자리가 0이다. 8번처럼 `align-self: flex-start`를 주면 사이드바가 자기 내용 높이(18px)로 줄고, 남은 자리 안에서 붙는다. grid에서도 같은 일이 생기고 `align-self: start`로 푼다.
+
+부모 끝에 걸려 밀리는 모습도 숫자로 확인했다. 높이 400px인 섹션 안에 40px짜리 sticky 머리글을 둔 경우다.
+
+```text
+section 400px, scrollY=0 → h2 top=0
+section 400px, scrollY=200 → h2 top=0
+section 400px, scrollY=360 → h2 top=0
+section 400px, scrollY=380 → h2 top=-20
+section 400px, scrollY=450 → h2 top=-90
+```
+
+360px까지는 붙어 있다. 섹션의 남은 높이가 머리글 높이(400 - 360 = 40)와 같아지는 지점이다. 그 뒤로는 내린 만큼 그대로 밀려 올라간다.
+
+## 붙는 기준을 거슬러 올라가 찾기
+
+머리글이 안 붙으면 조상을 하나씩 열어 보게 된다. 조상이 많으면 눈으로 찾기 어렵다. 브라우저가 하는 일을 그대로 따라 하면 된다. 부모부터 위로 올라가며 `overflow`가 `visible`이나 `clip`이 아닌 첫 요소를 찾는다.
+
+<AlgoTrace
+  caption="th에서 출발해 가장 가까운 스크롤 컨테이너를 찾는다"
+  memoryLabel="계산된 overflow"
+  cells={["th", "tr", "thead", "table", "div.table-wrap", "main", "body"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "sticky 요소 자신은 건너뛰고 부모부터 본다." },
+    { pointer: 1, memory: ["tr: visible"], caption: "tr은 visible이다. 스크롤 상자가 아니니 위로 간다." },
+    { pointer: 2, memory: ["tr: visible", "thead: visible"], caption: "thead도 visible이다." },
+    { pointer: 3, memory: ["tr: visible", "thead: visible", "table: visible"], caption: "table도 통과한다." },
+    { pointer: 4, memory: ["thead: visible", "table: visible", "wrap: x=auto y=auto"], caption: "overflow-x: auto만 줬는데 y도 auto로 계산된다. 여기서 멈춘다." },
+    { pointer: 4, found: [4], memory: ["wrap: x=auto y=auto"], caption: "머리글은 이 상자의 위 가장자리에 붙는다. 이 상자는 세로로 스크롤되지 않으니 문서와 함께 올라간다." },
+  ]}
+/>
+
+네 번째 단계가 이 버그의 숨은 고리다. `overflow-x`와 `overflow-y` 중 한쪽만 `visible`이 아니면, 나머지 `visible`은 `auto`로 계산된다. 가로만 스크롤하게 했는데 계산된 값으로는 세로도 스크롤 상자다. 개발자 도구 콘솔에 아래 함수를 붙여 넣고 sticky 요소를 넘기면 범인을 바로 알려 준다.
+
+```js
+function findScrollParent(el) {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowX, overflowY } = getComputedStyle(p);
+    // visible과 clip이 아니면 스크롤 컨테이너다. hidden도 포함된다
+    if (![overflowX, overflowY].every((v) => v === "visible" || v === "clip")) {
+      return `${p.tagName.toLowerCase()}.${p.className} overflow-x=${overflowX} overflow-y=${overflowY}`;
+    }
+  }
+  return "없음: 문서(뷰포트) 기준으로 붙는다";
+}
+findScrollParent(document.querySelector("thead th"));
+```
+
+표를 감싼 상자의 스타일만 바꿔 가며 크로미움에서 돌린 결과다. 함수를 돌린 뒤 문서를 400px 내리고 `th`의 위치도 함께 쟀다.
+
+```text
+[overflow-x: auto] div.table-wrap overflow-x=auto overflow-y=auto | scrollY=400 → th top=-398
+[overflow-x: clip] 없음: 문서(뷰포트) 기준으로 붙는다 | scrollY=400 → th top=0
+[없음] 없음: 문서(뷰포트) 기준으로 붙는다 | scrollY=400 → th top=0
+```
+
+고치는 길은 둘이다. 가로 스크롤이 필요 없으면 `overflow-x: clip`으로 바꾼다. 가로 스크롤이 꼭 필요하면 문서 대신 그 상자를 세로 스크롤러로 만든다. `max-height: 70vh; overflow: auto`를 주면 머리글은 그 상자 안에서 붙는다. 대신 표 안에서 스크롤과 페이지 스크롤이 겹친다. 모바일에서 손가락이 표 위에 있으면 페이지가 안 내려가는 느낌이 들 수 있으니 높이를 넉넉히 주고, 표가 끝까지 가면 바깥으로 스크롤이 넘어가게 둔다(`overscroll-behavior`를 기본값으로).
+
+## 머리글을 여러 겹 쌓을 때
+
+사이트 헤더가 이미 `position: fixed`로 위에 있다면 그 아래에 붙여야 한다. `top`에 헤더 높이를 준다. 섹션 제목 아래에 소제목까지 붙이려면 둘을 더한다.
+
+```css
+:root {
+  --site-header: 3.5rem;
+  --section-title: 2.5rem;
+}
+.section-title {
+  position: sticky;
+  top: var(--site-header); /* 고정 헤더 바로 아래 */
+  z-index: 2;
+  background: var(--bg); /* 투명하면 아래로 지나가는 글자가 비친다 */
+}
+.subsection-title {
+  position: sticky;
+  top: calc(var(--site-header) + var(--section-title)); /* 섹션 제목 아래 */
+  z-index: 1;
+}
+```
+
+여기서 자주 놓치는 것이 세 가지다. 배경색이 없으면 붙어 있는 머리글 뒤로 본문이 지나가며 겹쳐 보인다. `z-index`가 없으면 뒤에 오는 형제 요소(예: `position: relative`인 카드)가 머리글 위를 덮는다. 그리고 목차의 링크로 이동했을 때 제목이 헤더 밑에 숨는다. 앵커 이동은 sticky를 모르기 때문이다. 스크롤 컨테이너에 `scroll-padding-top`을 주거나 제목마다 `scroll-margin-top`을 줘서 그만큼 띄워 멈추게 한다. 이 블로그도 `html`에 `scroll-padding-top: 5rem`을 줘서 목차를 눌렀을 때 제목이 헤더 아래로 숨지 않게 했다.
+
+붙어 있을 때만 그림자를 넣고 싶을 때가 있다. 예전에는 머리글 바로 위에 1px짜리 감시용 요소를 두고 IntersectionObserver로 그 요소가 사라지는 순간을 잡았다. 크롬 계열에는 이제 CSS만으로 되는 방법이 있다. 머리글을 `scroll-state` 컨테이너로 만들고 `stuck` 상태를 묻는다.
+
+```css
+.bar {
+  position: sticky;
+  top: 0;
+  container-type: scroll-state; /* 붙어 있는지를 자식이 물을 수 있게 한다 */
+}
+@container scroll-state(stuck: top) {
+  .bar > div { box-shadow: 0 2px 8px black; } /* 위에 붙었을 때만 */
+}
+```
+
+```text
+scrollY=0 box-shadow=none
+scrollY=300 box-shadow=rgb(0, 0, 0) 0px 2px 8px 0px
+```
+
+크로미움 141에서는 붙기 전에는 그림자가 없고 붙은 뒤에는 생긴다. 이 기능은 크롬 133부터 들어온 것으로 알려져 있고, 다른 브라우저는 아직 따라오지 않았을 수 있다. 장식이니 지원하지 않으면 그림자 없이 보이게 두면 된다.
+
+## 손을 놓은 뒤 멈출 자리
+
+<ScrollDemo
+  caption="끌다가 놓으면 가장 가까운 칸이 가운데 점선에 맞춰 선다. 아래 점은 지금 선 칸이다."
+  patterns={["scroll-snap"]}
+/>
+
+sticky가 스크롤하는 동안의 자리를 정한다면, scroll snap은 스크롤이 끝나는 자리를 정한다. 스크롤 자체는 브라우저가 평소처럼 처리하고, 끝 위치만 미리 정한 칸들 중 하나로 고친다. 그래서 관성과 키보드, 접근성 도구가 그대로 동작한다. 자바스크립트 카러셀이 터치 이벤트로 위치를 계산하던 방식과 가장 크게 다른 점이다.
+
+설정은 컨테이너와 자식으로 나뉜다. 아래 조각을 눌러 보면 각각이 무엇을 정하는지 나온다.
+
+<UrlAnatomy
+  caption="칸 맞춤 카러셀 한 벌. 앞의 넷은 컨테이너에, 뒤의 둘은 각 칸에 준다."
+  base=".carousel"
+  separator=" { "
+  joiner="; "
+  params={[
+    { key: "overflow-x", value: "auto", display: "overflow-x: auto", title: "스크롤 상자", description: "snap은 스크롤 컨테이너에만 걸린다. 가로로 스크롤할 수 있어야 가로 칸 맞춤이 의미가 있다.", required: true },
+    { key: "scroll-snap-type", value: "x mandatory", display: "scroll-snap-type: x mandatory", title: "축과 강도", description: "x는 가로 축이다. mandatory는 스크롤이 끝나면 반드시 칸에 맞추고, proximity는 칸 근처에서 멈췄을 때만 맞춘다.", required: true },
+    { key: "scroll-padding-inline", value: "1rem", display: "scroll-padding-inline: 1rem", title: "맞출 선을 안쪽으로", description: "칸을 맞추는 기준선을 스크롤 영역 가장자리에서 이만큼 안으로 옮긴다. 고정된 머리글이나 여백이 있을 때 쓴다." },
+    { key: "overscroll-behavior-x", value: "contain", display: "overscroll-behavior-x: contain", title: "끝에서 넘기지 않기", description: "카러셀 끝에 닿았을 때 가로 스와이프가 페이지의 뒤로 가기 제스처나 바깥 스크롤로 넘어가지 않게 한다." },
+    { key: "> * scroll-snap-align", value: "center", display: "> * { scroll-snap-align: center", title: "칸의 어디를 맞추나", description: "start, center, end 중 하나다. 칸의 그 지점을 스크롤 영역의 같은 지점에 맞춘다.", required: true },
+    { key: "scroll-snap-stop", value: "always", display: "scroll-snap-stop: always", title: "건너뛰지 않기", description: "세게 넘겨도 이 칸을 지나치지 못하고 멈춘다. 한 장씩 넘기는 화면에 쓴다." },
+  ]}
+/>
+
+손가락을 놓은 뒤 일어나는 일은 이렇다. 아래 그림에서 다음을 누르며 따라간다.
+
+<SequenceDiagram
+  caption="손을 놓은 뒤 브라우저가 멈출 칸을 고르는 순서"
+  actors={[
+    { id: "user", label: "손가락" },
+    { id: "browser", label: "브라우저" },
+    { id: "scroller", label: "스크롤 상자" },
+    { id: "js", label: "스크립트" },
+  ]}
+  steps={[
+    { from: "user", to: "browser", label: "놓음", title: "손을 뗀다", detail: "브라우저는 손을 뗀 순간의 위치와 속도를 안다." },
+    { from: "browser", to: "browser", label: "끝점 예측", title: "관성이 어디서 끝날지 계산한다", detail: "snap이 없었다면 멈췄을 위치와 방향을 먼저 구한다." },
+    { from: "browser", to: "browser", label: "칸 고르기", title: "그 끝점에 가장 알맞은 칸을 고른다", detail: "mandatory면 늘 하나를 고르고, proximity면 충분히 가까울 때만 고른다. snap-stop: always인 칸은 건너뛰지 못한다." },
+    { from: "browser", to: "scroller", label: "감속 이동", title: "고친 끝점으로 미끄러진다", detail: "관성 움직임의 목표만 바뀐다. 스크롤은 여전히 합성 스레드가 처리한다." },
+    { from: "scroller", to: "js", label: "scrollsnapchange", title: "칸이 바뀌었다고 알려 준다", detail: "크롬 계열은 새 칸이 정해지면 이 이벤트를 보낸다. 인디케이터 점을 바꾸는 데 쓴다.", payload: "scroller.addEventListener(\"scrollsnapchange\", (e) => setActive(e.snapTargetInline))" },
+    { from: "scroller", to: "js", label: "scrollend", title: "움직임이 완전히 끝났다", detail: "멈춘 뒤 한 번 온다. 지원하지 않는 브라우저에서는 scroll 이벤트가 잠잠해질 때를 기다려 대신한다." },
+  ]}
+/>
+
+크로미움 141에는 `onscrollsnapchange`와 `onscrollend`가 모두 있다. `scrollsnapchange`는 크롬 129부터 들어온 것으로 알려져 있어서, 다른 브라우저에서는 `scrollend`나 IntersectionObserver로 현재 칸을 구하는 대체 코드를 함께 둔다.
+
+## mandatory와 proximity를 재 보면
+
+폭 300px인 스크롤 상자에 240px짜리 카드 다섯 장을 20px 간격으로 놓았다. 카드 시작점은 0, 260, 520, 780, 1040이고 `scroll-snap-align: start`다. `scrollTo({ left, behavior: "instant" })`로 보낸 값(→)과 실제로 멈춘 `scrollLeft`를 비교했다.
+
+```text
+none                               →100: 100  →130: 130  →200: 200
+x mandatory                        →100: 0  →130: 0  →200: 260
+x proximity                        →100: 0  →130: 130  →200: 260
+x mandatory + scroll-padding-left:30px →100: 0  →130: 230  →200: 230
+```
+
+첫 줄은 snap이 없을 때라 보낸 값 그대로 선다. 둘째 줄에서 보듯 snap은 손가락 스크롤뿐 아니라 스크립트로 보낸 스크롤에도 걸린다. `scrollTo(130)`은 0과 260의 딱 가운데인데 0으로 갔다. 동점이면 이 경우 앞쪽 칸을 골랐다.
+
+proximity는 130에서 그대로 멈췄다. 양쪽 칸에서 130씩 떨어져 있어 "가깝다"고 보지 않은 것이다. 100과 200은 각각 0과 260에서 100, 60 떨어져 있었고 둘 다 칸으로 끌려갔다. 얼마나 가까워야 끌려가는지는 명세가 정하지 않고 브라우저마다 다르다. 칸 사이에서 멈춰도 괜찮은 긴 목록에는 proximity, 반드시 한 장씩 보여야 하는 카러셀에는 mandatory를 쓴다.
+
+`scroll-padding-left: 30px`을 주면 맞출 선이 30px 안쪽으로 들어온다. 칸 시작점에서 30을 뺀 230, 490이 새 멈춤 자리가 된다. 첫 칸은 0 - 30이 음수라 0에서 멈춘다.
+
+mandatory의 걱정은 화면보다 큰 칸이다. 둘째 카드만 폭을 700px로 키우고(260~960) 같은 실험을 했다.
+
+```text
+mandatory, 카드1 폭 700px             →300: 300  →500: 500  →700: 660  →900: 980
+```
+
+300과 500은 큰 카드가 스크롤 영역을 꽉 채우는 범위 안이라 그대로 멈췄다. 칸이 영역보다 크면 그 안의 어느 위치도 멈춤 자리로 인정한다는 명세 규칙을 크로미움이 따른 것이다. 700은 카드 끝이 영역 오른쪽에 맞는 660으로, 900은 다음 카드의 시작인 980으로 갔다. 큰 칸 안의 내용은 읽을 수 있지만, 이 규칙을 지키지 않는 브라우저도 있을 수 있으니 칸이 화면보다 길어질 수 있는 곳에는 proximity가 안전하다.
+
+나머지 동작도 확인했다.
+
+```text
+mandatory scrollBy(+600) [scrollBy] +600: 520
+mandatory + snap-stop:always scrollBy(+600) +600: 260
+mandatory + ArrowRight x3          260, 520, 780
+none + ArrowRight x3               40, 80, 120
+resnap after layout change { before: 520, after: 380, card2: 380 }
+start 정렬, 맨 끝으로 { scrollLeft: 980, max: 980, card4Start: 1040 }
+```
+
+0에서 600만큼 한 번에 밀면 가장 가까운 520(셋째 카드)에 선다. 모든 칸에 `scroll-snap-stop: always`를 주면 같은 600을 밀어도 260(둘째 카드)에서 멈춘다. 지나가는 첫 칸을 건너뛰지 못하기 때문이다.
+
+방향키는 snap이 없으면 40px씩 가지만, mandatory에서는 한 번에 한 칸(260px)씩 간다. 키보드 사용자를 위해 따로 할 일이 거의 없다는 뜻이다. 스크롤 상자에 `tabindex="0"`을 줘서 포커스를 받을 수 있게만 하면 된다.
+
+`resnap` 줄은 셋째 카드에 서 있는 동안 첫 카드 폭을 100px로 줄인 결과다. 셋째 카드의 시작점이 380으로 당겨지자 `scrollLeft`도 380으로 따라왔다. 레이아웃이 바뀌어도 보던 칸에 다시 맞춘다. 이미지가 늦게 로드되며 카드 폭이 바뀌어도 칸이 어긋나지 않는 이유다.
+
+마지막 줄은 흔한 불만의 원인이다. 마지막 카드 시작점은 1040인데 스크롤할 수 있는 최댓값이 980이라 거기까지 못 간다. `start` 정렬이면 마지막 카드는 왼쪽 끝에 붙지 못하고 오른쪽에 붙어 끝난다. 마지막 카드도 왼쪽에 서게 하려면 트랙 끝에 여백(`padding-inline-end`)을 둬서 최댓값을 늘린다.
+
+## 칸 맞춤을 직접 계산해 보기
+
+브라우저가 고르는 칸을 함수로 흉내 내 본다. 칸 시작점 목록과 지금 스크롤 위치, `scroll-padding`을 받아서 mandatory·start 정렬일 때 멈출 칸의 번호를 돌려준다. 칸의 멈춤 자리는 시작점에서 padding을 뺀 값이고, 0보다 작으면 0이다. 거리가 같으면 앞 칸을 고른다. 위 측정에서 크로미움이 고른 칸과 같은 답이 나와야 한다.
+
+<CodePlayground
+  caption="mandatory, start 정렬에서 멈출 칸의 번호를 구한다"
+  functionName="snapIndex"
+  initialCode={`function snapIndex(starts, scrollLeft, scrollPadding = 0) {
+  // 각 칸의 멈춤 자리 = max(0, 시작점 - padding)
+  // scrollLeft와 가장 가까운 칸의 번호를 돌려준다. 같으면 앞 칸
+  return 0;
+}`}
+  solution={`function snapIndex(starts, scrollLeft, scrollPadding = 0) {
+  let best = 0;
+  let bestDist = Infinity;
+  starts.forEach((start, i) => {
+    const pos = Math.max(0, start - scrollPadding);
+    const d = Math.abs(pos - scrollLeft);
+    if (d < bestDist) { // 같은 거리면 바꾸지 않아서 앞 칸이 남는다
+      best = i;
+      bestDist = d;
+    }
+  });
+  return best;
+}`}
+  tests={[
+    { args: [[0, 260, 520, 780, 1040], 100], expected: 0, label: "→100" },
+    { args: [[0, 260, 520, 780, 1040], 130], expected: 0, label: "→130 (동점)" },
+    { args: [[0, 260, 520, 780, 1040], 200], expected: 1, label: "→200" },
+    { args: [[0, 260, 520, 780, 1040], 600], expected: 2, label: "→600" },
+    { args: [[0, 260, 520, 780, 1040], 130, 30], expected: 1, label: "padding 30, →130" },
+    { args: [[0, 260, 520, 780, 1040], 100, 30], expected: 0, label: "padding 30, →100" },
+    { args: [[0, 260, 520, 780, 1040], 5000], expected: 4, label: "끝을 넘김" },
+    { args: [[0, 300, 320, 900], 310], expected: 1, label: "가운데 동점" },
+    { args: [[40, 300], 0, 60], expected: 0, label: "음수 자리는 0" },
+  ]}
+/>
+
+실제 브라우저는 여기에 방향을 더 따진다. 오른쪽으로 넘겼는데 왼쪽 칸이 조금 더 가까우면, 사용자가 뜻한 방향의 칸을 고르기도 한다. 그래서 이 함수는 `scrollTo`처럼 방향이 없는 이동에 가깝다.
+
+## 현장에서 자주 만나는 증상
+
+"sticky가 안 붙는다"면 순서대로 본다. `top`·`bottom` 같은 inset이 있는지, 위의 `findScrollParent`가 엉뚱한 조상을 가리키는지, 부모가 sticky 요소와 높이가 같지 않은지(flex·grid의 stretch). 이 셋으로 대부분 끝난다. 아주 오래된 iOS 사파리(12 이하)를 지원해야 하면 `position: -webkit-sticky`도 함께 적는다.
+
+"붙긴 하는데 뒤로 글자가 비친다"면 배경색이 없다. "붙은 머리글 위를 카드가 덮는다"면 `z-index`가 없거나 카드 쪽 쌓임 맥락이 더 위에 있다.
+
+"목차를 누르면 제목이 헤더에 가린다"면 `scroll-padding-top`이나 `scroll-margin-top`을 준다. 이건 sticky가 아니라 앵커 이동의 문제다.
+
+"카러셀 마지막 카드가 끝까지 안 온다"면 `start` 정렬에서 스크롤 최댓값이 마지막 칸의 멈춤 자리보다 작은 경우다. 트랙 끝에 여백을 두거나 `end` 정렬을 쓴다.
+
+"카러셀이 스크롤 도중 뚝뚝 끊기며 튄다"면 snap과 자바스크립트 카러셀 라이브러리가 동시에 위치를 정하고 있지 않은지 본다. 스크립트가 `scroll` 이벤트마다 `scrollLeft`를 고치면 브라우저의 칸 맞춤과 싸운다. 버튼으로 다음 칸에 가고 싶으면 위치를 계산하지 말고 `scrollBy({ left: 카드폭, behavior: "smooth" })`만 부르고 멈출 자리는 snap에 맡긴다.
+
+"화면 하나씩 넘기는 세로 페이지(`y mandatory`)에서 긴 섹션 아래쪽을 못 읽는다"는 신고가 오면 그 섹션이 화면보다 긴지 본다. 크로미움은 위 측정처럼 큰 칸 안을 자유롭게 스크롤하게 해 주지만, 기기마다 확인하고 그래도 불안하면 proximity로 바꾼다.
+
+## 두 속성을 고르는 기준
+
+sticky는 스크롤하는 동안 무엇을 남겨 둘지, snap은 스크롤이 끝났을 때 어디에 설지를 정한다. 둘 다 자바스크립트 없이 브라우저의 스크롤을 그대로 쓰기 때문에 관성, 키보드, 확대가 깨지지 않는다. 대신 규칙을 알아야 한다. sticky는 가장 가까운 스크롤 컨테이너와 포함 블록 사이에서만 움직이고, snap은 멈춤 자리 목록과 스크롤 최댓값 안에서만 고른다. 붙지 않거나 엉뚱하게 서면 그 두 상자와 그 목록부터 확인한다.
+
+## 면접에서 나올 만한 질문
+
+### position: sticky는 어떻게 동작하나요?
+
+평소에는 relative처럼 제자리에 있다가, 가장 가까운 스크롤 컨테이너의 보이는 영역에서 `top` 같은 inset 값만큼 들어간 선에 닿으면 그 선에 붙는다. 붙어 있는 동안에도 포함 블록, 보통 부모 밖으로는 나가지 못해서 부모의 끝이 올라오면 함께 밀려 올라간다. inset 값이 하나도 없으면 붙지 않는다.
+
+### 조상에 overflow: hidden이 있으면 왜 sticky가 깨지나요?
+
+`hidden`도 스크롤 컨테이너를 만들기 때문이다. 사용자가 스크롤할 수 없을 뿐 스크립트로는 스크롤되는 상자라서, sticky 요소는 문서가 아니라 그 상자를 기준으로 붙는다. 그 상자는 세로로 스크롤되지 않고 문서와 함께 올라가니 안 붙는 것처럼 보인다. 넘침을 자르기만 하려면 스크롤 상자를 만들지 않는 `overflow: clip`을 쓴다.
+
+### overflow-x: auto만 줬는데 세로 sticky까지 깨지는 이유는요?
+
+한 축만 `visible`이 아니면 다른 축의 `visible`은 `auto`로 계산되기 때문이다. 그래서 가로 스크롤 상자로 감싼 표의 머리글은 그 상자 기준으로 붙는다. 가로 스크롤이 필요 없으면 `clip`으로 바꾸고, 필요하면 그 상자에 높이를 줘서 세로 스크롤러로 만들고 그 안에서 붙게 한다.
+
+### flex 레이아웃의 사이드바에 sticky가 안 먹는 이유는요?
+
+flex의 기본 `align-items: stretch` 때문에 사이드바가 부모 높이만큼 늘어나서 부모 안에서 움직일 자리가 없다. `align-self: flex-start`로 내용 높이만큼 줄이면 남은 자리 안에서 붙는다. grid에서도 같은 이유로 `align-self: start`를 준다.
+
+### scroll-snap-type의 mandatory와 proximity는 언제 고르나요?
+
+mandatory는 스크롤이 끝나면 반드시 칸에 맞추고, proximity는 칸 근처에서 멈췄을 때만 맞춘다. 한 장씩 보여야 하는 카러셀이나 사진 넘기기에는 mandatory, 칸 사이에서 멈춰도 괜찮은 긴 목록이나 칸이 화면보다 길어질 수 있는 곳에는 proximity가 낫다. proximity의 "가깝다"는 거리는 브라우저마다 다르다.
+
+### scroll-padding과 scroll-snap-stop은 각각 무엇을 바꾸나요?
+
+`scroll-padding`은 칸을 맞추는 기준선을 스크롤 영역 안쪽으로 옮긴다. 고정 헤더가 있을 때 칸이나 앵커 대상이 그 밑에 숨지 않게 하는 데 쓴다. `scroll-snap-stop: always`는 세게 넘겨도 그 칸을 건너뛰지 못하게 한다. 크로미움에서 600px을 한 번에 밀었을 때 없으면 셋째 카드까지 가고, 있으면 둘째 카드에서 멈췄다.
+
+### 자바스크립트 카러셀 대신 scroll snap을 쓰면 무엇이 좋아지나요?
+
+스크롤 자체를 브라우저가 처리하니 관성, 방향키와 Tab, 화면 확대, 레이아웃 변화 뒤 다시 맞추기가 그대로 동작한다. 터치 이벤트로 위치를 계산하지 않으니 메인 스레드가 바빠도 스크롤이 끊기지 않는다. 현재 칸 표시는 `scrollsnapchange`나 `scrollend`, IntersectionObserver로 구하고, 버튼 이동은 `scrollBy`만 부른 뒤 멈출 자리는 snap에 맡긴다.

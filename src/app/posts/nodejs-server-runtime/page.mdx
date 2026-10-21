@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-server-runtime");
+
+로그인이 몰리는 시간대에 이상한 그래프가 하나 있다. 로그인 API가 느린 건 이해가 간다. 비밀번호 해시는 원래 무겁다. 그런데 설정 파일을 읽어 주는 API, 외부 결제 서버를 부르는 API까지 같이 0.5초씩 늘었다. 그 와중에 헬스 체크는 2ms로 멀쩡하고, 이벤트 루프 지연 그래프도 평소와 같다. "Node.js는 싱글 스레드라서 하나가 막히면 다 막힌다"는 설명으로는 이 그림이 풀리지 않는다. 막힌 게 다 같이 막혀야 하는데, 어떤 건 멀쩡하기 때문이다.
+
+이 글은 Node.js가 HTTP 요청을 받을 때 이벤트 루프 바깥에서 일어나는 일을 본다. 이벤트 루프의 단계, 마이크로태스크 순서, 루프가 막히는 장면은 [이벤트 루프 글](/posts/event-loop)과 [마이크로태스크 순서 퍼즐](/posts/js-microtask-macrotask)에서 이미 다뤘다. 여기서는 그 루프 옆에 붙어 있는 스레드 풀, 자바스크립트 계산을 다른 스레드로 보내는 `worker_threads`, 프로세스를 여러 개 띄우는 `cluster`를 차례로 본다. 같은 서버를 Express로 짜면 요청이 미들웨어를 어떻게 지나가는지는 [Express 미들웨어 글](/posts/express-middleware), 파이썬으로 같은 서비스를 만들면 무엇이 다른지는 [FastAPI 글](/posts/fastapi-basics)에서 이어 간다.
+
+모든 실행 결과는 Node.js 22.22, 코어 4개짜리 리눅스 컨테이너에서 직접 돌린 것이다.
+
+## 요청 하나가 Node 안에서 지나가는 길
+
+Node.js 프로세스 안에는 스레드가 여러 개 있다. 자바스크립트를 실행하는 메인 스레드는 하나뿐이지만, 그 옆에서 일하는 스레드가 따로 있다. 먼저 아무 요청도 받지 않은 서버의 스레드를 봤다.
+
+```bash
+# 서버 프로세스의 스레드 목록 (SPID는 스레드 번호)
+ps -T -p <PID> -o spid,comm,pcpu
+```
+
+```text
+ SPID COMMAND         %CPU
+ 5336 node             5.8
+ 5338 DelayedTaskSche  0.0
+ 5339 node             0.0
+ 5340 node             0.0
+ 5341 node             0.0
+ 5342 node             0.0
+ 5343 node             0.0
+```
+
+맨 위 5336이 메인 스레드다. 나머지는 V8이 가비지 컬렉션 같은 내부 일에 쓰는 스레드다. 그런데 로그인 요청을 8개 보낸 직후에 다시 보면 줄이 늘어 있다.
+
+```text
+ SPID COMMAND         %CPU
+ 5336 node             5.0
+ ...
+ 5353 libuv-worker     100
+ 5354 libuv-worker    53.3
+ 5355 libuv-worker    53.3
+ 5356 libuv-worker    93.3
+```
+
+`libuv-worker` 네 개가 새로 생겼다. libuv는 Node.js의 이벤트 루프와 비동기 I/O를 맡는 C 라이브러리이고, 이 네 개가 libuv의 스레드 풀이다. 풀은 처음 쓰일 때 만들어지고 기본 크기는 4다. 로그인 해시는 메인 스레드가 아니라 여기서 돌고 있었다. 메인 스레드는 5%밖에 쓰지 않는다.
+
+요청 하나가 들어와서 나가는 길을 그림으로 따라가 보자. 아래 그림에서 다음을 누르면 요청마다 어느 스레드를 거치는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="네트워크는 커널이 기다려 주고, 파일·DNS·해시는 스레드 풀이 대신 한다"
+  zones={[
+    { id: "kernel", label: "OS 커널", x: 8, y: 64, w: 120, h: 228, tone: "edge" },
+    { id: "proc", label: "node 프로세스", x: 140, y: 64, w: 252, h: 228, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Client", x: 68, y: 26, icon: "client" },
+    { id: "epoll", label: "epoll", sub: "소켓 감시", x: 68, y: 130, icon: "switch" },
+    { id: "disk", label: "disk", sub: "config.json", x: 68, y: 240, icon: "db" },
+    { id: "loop", label: "main thread", sub: "이벤트 루프 + JS", x: 266, y: 130, icon: "server", w: 120 },
+    { id: "pool", label: "libuv pool", sub: "스레드 4개", x: 266, y: 240, icon: "container", w: 120 },
+  ]}
+  links={[
+    { from: "client", to: "epoll" },
+    { from: "epoll", to: "loop" },
+    { from: "loop", to: "pool" },
+    { from: "pool", to: "disk" },
+  ]}
+  steps={[
+    { path: ["client", "epoll", "loop"], packet: "GET /ping", title: "소켓은 커널이 지켜본다", detail: "연결과 데이터 도착은 epoll이 알려 준다. 메인 스레드는 poll 단계에서 이벤트를 받아 핸들러를 실행한다. 이 요청은 바로 응답하고 끝난다." },
+    { path: ["client", "epoll", "loop", "pool"], packet: "/login", title: "해시는 풀로 넘긴다", detail: "crypto.pbkdf2는 계산을 풀의 스레드 하나에 맡기고 바로 반환한다. 메인 스레드는 다음 이벤트를 받으러 간다." },
+    { path: ["loop", "pool", "disk"], packet: "/file", title: "파일 읽기도 풀을 쓴다", detail: "리눅스의 일반 파일은 epoll로 기다릴 수 없다. 그래서 libuv는 풀의 스레드가 read를 대신 부르게 한다." },
+    { path: ["pool", "loop"], packet: "done", title: "끝나면 루프로 돌아온다", detail: "풀 스레드는 결과를 완료 큐에 넣고 루프를 깨운다. 콜백은 다시 메인 스레드에서 돈다." },
+    { path: ["loop", "epoll", "client"], packet: "200", title: "응답은 다시 커널로", detail: "res.end로 쓴 데이터는 소켓 버퍼에 들어가고 커널이 보낸다. 자바스크립트는 처음부터 끝까지 한 스레드에서만 돌았다." },
+  ]}
+/>
+
+여기서 중요한 구분이 하나 있다. 네트워크 소켓은 스레드 풀을 쓰지 않는다. 리눅스에서는 epoll, macOS에서는 kqueue처럼 OS가 "이 소켓에 데이터가 왔다"고 알려 주는 기능이 있어서 스레드 하나로 수만 개 연결을 기다릴 수 있다. 일반 파일에는 그런 알림이 쓸 만하게 없다. 그래서 libuv는 파일 I/O를 스레드 풀에서 블로킹 호출로 처리하고, 끝나면 루프에 알린다. libuv 1.45부터 리눅스의 io_uring으로 파일 I/O를 하는 길이 생겼지만, 보안 문제로 Node.js에서는 기본으로 꺼져 있다(`UV_USE_IO_URING`). 이 글의 실험에서도 파일 읽기는 풀을 거쳤다.
+
+## 스레드 풀로 가는 일은 따로 있다
+
+Node.js 공식 문서("Don't Block the Event Loop")가 스레드 풀을 쓰는 API를 정리해 두었다. 외워 둘 만한 목록이다.
+
+- 파일 시스템: `fs`의 비동기 API 대부분. 동기 버전(`readFileSync`)과 `fs.watch`는 빠진다
+- DNS: `dns.lookup()`, `dns.lookupService()`. `dns.resolve*()`는 c-ares가 네트워크로 직접 물어서 풀을 쓰지 않는다
+- 암호화: `crypto.pbkdf2()`, `crypto.scrypt()`, `crypto.randomBytes()`, `crypto.randomFill()`, `crypto.generateKeyPair()`
+- 압축: `zlib`의 비동기 API
+
+`dns.lookup()`이 목록에 있다는 게 실무에서 가장 자주 발목을 잡는다. `http.get("https://api.example.com")`이나 `fetch`가 호스트 이름을 IP로 바꿀 때 기본으로 이 함수를 쓰기 때문이다. OS의 `getaddrinfo`를 부르는데, 이 함수가 블로킹이라 풀에서 돈다. 외부 API를 부르는 코드는 풀과 상관없어 보이지만 이름 풀이 한 단계는 풀의 자리를 기다린다.
+
+네이티브 애드온으로 만든 라이브러리도 비동기 함수를 이 풀에서 돌리는 경우가 많다. `bcrypt` 패키지의 비동기 `hash`가 대표적이다. 라이브러리가 풀을 쓰는지는 문서나 소스에서 확인해야 한다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="같은 비동기라도 기다리는 주체가 다르다"
+  nodes={[
+    { id: "js", label: "JS 코드", sub: "메인 스레드 하나", x: 200, y: 36, w: 150 },
+    { id: "net", label: "TCP·HTTP 소켓", sub: "epoll이 기다림", x: 80, y: 130, w: 140 },
+    { id: "pool", label: "libuv pool", sub: "fs·lookup·crypto·zlib", x: 320, y: 130, w: 150 },
+    { id: "wt", label: "worker_threads", sub: "JS를 다른 스레드에서", x: 100, y: 222, w: 150 },
+    { id: "cl", label: "cluster", sub: "프로세스를 여러 개", x: 300, y: 222, w: 130 },
+  ]}
+  edges={[
+    { from: "js", to: "net", label: "등록" },
+    { from: "js", to: "pool", label: "작업 위임" },
+    { from: "js", to: "wt", label: "postMessage", dashed: true },
+    { from: "cl", to: "js", label: "복제", dashed: true },
+  ]}
+/>
+
+## 풀에 자리가 네 개뿐이다
+
+같은 해시를 동시에 8개 시작하고, 각각 끝난 시각을 찍었다. 반복 횟수 50만 번짜리 PBKDF2라서 한 번에 300ms쯤 걸린다.
+
+```js
+const crypto = require("node:crypto");
+const start = Date.now();
+for (let i = 1; i <= 8; i++) {
+  crypto.pbkdf2("pw", "salt", 500000, 64, "sha512", () => {
+    console.log(`hash ${i} done at ${Date.now() - start}ms`);
+  });
+}
+```
+
+```text
+hash 3 done at 316ms
+hash 1 done at 321ms
+hash 4 done at 325ms
+hash 2 done at 359ms
+hash 6 done at 626ms
+hash 5 done at 628ms
+hash 7 done at 633ms
+hash 8 done at 666ms
+```
+
+두 무리로 갈린다. 앞의 넷이 300ms대에, 뒤의 넷이 600ms대에 끝났다. 5번부터 8번은 처음 300ms 동안 아무 일도 하지 않고 줄을 서 있었다. 풀 안에는 작업 큐가 하나 있고 스레드 넷이 거기서 하나씩 꺼내 가는데, 넷이 다 바쁘면 나머지는 기다린다.
+
+<AlgoTrace
+  caption="풀은 스레드 넷과 그 앞에 늘어선 큐 하나다"
+  memoryLabel="풀 큐 (왼쪽이 먼저)"
+  cells={["T1", "T2", "T3", "T4"]}
+  steps={[
+    { pointer: 0, memory: ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"], caption: "해시 8개가 한꺼번에 큐에 들어간다. 아직 아무것도 돌지 않는다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["h5", "h6", "h7", "h8"], caption: "스레드 넷이 h1부터 h4를 하나씩 가져간다. 나머지 넷은 기다린다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["h5", "h6", "h7", "h8", "read config"], caption: "그 사이 파일 읽기가 들어온다. 1ms면 끝날 일인데 맨 뒤에 선다." },
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["read config"], caption: "약 300ms에 앞의 넷이 끝나고, 스레드가 h5부터 h8을 가져간다." },
+    { pointer: 0, found: [0], memory: [], caption: "약 600ms에야 파일 읽기 차례가 온다. 2ms짜리 일이 600ms를 기다렸다." },
+  ]}
+/>
+
+## 로그인 때문에 파일 읽기가 느려진다
+
+처음 장면을 그대로 만들었다. 서버에 엔드포인트 네 개를 둔다. `/login`은 비동기 PBKDF2, `/file`은 `fs.readFile`, `/dns`는 `dns.lookup("localhost")`, `/ping`은 그냥 응답한다.
+
+```js
+const server = http.createServer((req, res) => {
+  const t0 = performance.now();
+  const done = (body) => {
+    res.end(body);
+    console.log(`${req.url.padEnd(7)} ${(performance.now() - t0).toFixed(0)}ms`);
+  };
+  if (req.url === "/login") {
+    crypto.pbkdf2("pw", "salt", 500000, 64, "sha512", () => done("ok"));
+  } else if (req.url === "/file") {
+    fs.readFile(__dirname + "/config.json", () => done("file"));
+  } else if (req.url === "/dns") {
+    dns.lookup("localhost", () => done("dns"));
+  } else {
+    done("pong"); // 스레드 풀을 쓰지 않는다
+  }
+});
+server.listen(17501);
+```
+
+클라이언트는 먼저 셋을 하나씩 재고, 그다음 로그인 8개를 보낸 뒤 30ms 있다가 셋을 다시 쟀다.
+
+```text
+alone: /ping 3ms | /file 3ms | /dns 6ms
+during: /ping 17ms | /file 580ms | /dns 579ms
+```
+
+`/ping`은 17ms로 거의 그대로다. 이벤트 루프는 한가하기 때문이다. 반면 `/file`과 `/dns`는 580ms 가까이 늘었다. 파일이 큰 것도, DNS 서버가 느린 것도 아니다. 풀의 큐에서 로그인 해시 뒤에 줄을 섰을 뿐이다. 처음 장면의 "결제 API까지 느려졌다"는 결제 서버 이름을 `dns.lookup`으로 바꾸는 단계가 같은 줄에 섰다는 뜻이다.
+
+<SequenceDiagram
+  caption="루프는 비어 있는데 풀 큐에서 기다린다"
+  actors={[
+    { id: "c", label: "Client" },
+    { id: "loop", label: "main thread" },
+    { id: "pool", label: "libuv pool" },
+  ]}
+  steps={[
+    { from: "c", to: "loop", label: "8 × /login", title: "로그인 8개가 들어온다", detail: "핸들러는 pbkdf2를 부르고 바로 끝난다. 메인 스레드는 1ms도 쓰지 않았다." },
+    { from: "loop", to: "pool", label: "pbkdf2 × 8", title: "풀이 꽉 찬다", detail: "넷은 스레드에서 돌고, 넷은 큐에서 기다린다." },
+    { from: "c", to: "loop", label: "GET /ping", title: "/ping은 바로 나간다", detail: "풀을 쓰지 않으니 루프가 곧장 응답한다. 17ms.", payload: "during: /ping 17ms" },
+    { from: "loop", to: "pool", label: "readFile", title: "/file은 큐 맨 뒤로", detail: "파일 읽기 작업이 해시 넷 뒤에 줄을 선다." },
+    { from: "pool", to: "loop", label: "done (580ms)", title: "두 무리가 지나간 뒤에야", detail: "앞의 해시 여덟 개 중 넷이 끝나 자리가 나야 읽기가 시작된다.", payload: "/file 580ms | /dns 579ms" },
+    { from: "loop", to: "c", label: "200", title: "늦게 응답한다", detail: "앱 로그에는 파일 읽기 코드가 580ms 걸렸다고 찍힌다. 코드만 보면 원인을 찾을 수 없다." },
+  ]}
+/>
+
+이 장애가 까다로운 건 지표가 엇갈려서다. 이벤트 루프 지연은 정상이고, CPU는 넷만 바쁘다. 메인 스레드만 보는 지표로는 보이지 않는다. 확인하는 방법은 두 가지다. 위처럼 `ps -T`나 `top -H`로 `libuv-worker` 스레드가 넷 다 100% 근처인지 본다. 그리고 느려진 엔드포인트가 모두 파일, DNS, 암호화 중 하나를 거치는지 본다. 그 둘이 맞으면 풀이 범인이다.
+
+```bash
+# 스레드 단위로 CPU를 본다 (-H). 배치 모드로 한 번만 찍는다
+top -H -b -n1 -p <PID> | head -20
+```
+
+```text
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 5353 root      20   0 1110976  49996  40660 R  70.0   0.3   0:00.33 libuv-wor+
+ 5356 root      20   0 1110976  49996  40660 R  60.0   0.3   0:00.29 libuv-wor+
+ 5354 root      20   0 1110976  49996  40660 R  40.0   0.3   0:00.17 libuv-wor+
+ 5355 root      20   0 1110976  49996  40660 R  40.0   0.3   0:00.17 libuv-wor+
+ 5336 root      20   0 1110976  49996  40660 S  10.0   0.3   0:00.05 node
+```
+
+## UV_THREADPOOL_SIZE를 올리면 생기는 일
+
+풀 크기는 환경 변수 `UV_THREADPOOL_SIZE`로 바꾼다. 같은 서버를 16으로 띄우고 다시 쟀다.
+
+```bash
+UV_THREADPOOL_SIZE=16 node server.js
+```
+
+```text
+alone: /ping 3ms | /file 3ms | /dns 6ms
+during: /ping 9ms | /file 39ms | /dns 19ms
+```
+
+`/file`이 580ms에서 39ms로 줄었다. 해시 8개가 모두 자리를 잡고도 8칸이 남아서 파일 읽기가 줄을 서지 않는다. 그럼 해시는 빨라졌을까. 해시 8개만 다시 돌려 보면 그렇지 않다.
+
+```text
+--- UV_THREADPOOL_SIZE=4
+hash 3 done at 316ms
+...
+hash 8 done at 666ms
+--- UV_THREADPOOL_SIZE=8
+hash 1 done at 454ms
+hash 4 done at 478ms
+hash 3 done at 570ms
+hash 7 done at 600ms
+hash 2 done at 634ms
+hash 6 done at 637ms
+hash 8 done at 643ms
+hash 5 done at 665ms
+```
+
+마지막 해시가 끝난 시각은 666ms와 665ms로 같다. 코어가 넷이니 해시 8개를 동시에 돌려도 CPU 시간은 늘지 않는다. 스레드가 8개면 다 같이 느리게 갈 뿐이다. 첫 해시는 오히려 316ms에서 454ms로 늦어졌다. 풀 크기를 키워서 얻는 건 "짧은 I/O가 긴 계산 뒤에 줄 서지 않는 것"이지 계산 속도가 아니다.
+
+그래서 풀 크기는 이렇게 정한다. 파일·DNS처럼 기다리는 일이 많으면 코어 수보다 크게 잡아도 이득이 있다. 해시처럼 CPU를 쓰는 일은 코어 수가 상한이다. 둘이 섞여 있으면 풀을 키우는 것만으로는 부족하고, 무거운 계산을 따로 떼어 동시 실행 수를 제한하는 편이 낫다. 예를 들어 로그인 해시는 동시에 최대 2개까지만 돌게 세마포어를 걸면, 나머지 두 자리는 항상 파일과 DNS 몫으로 남는다.
+
+설정할 때 실수하기 쉬운 점이 있다. 이 값은 풀이 처음 만들어질 때 한 번 읽힌다. 그래서 프로세스를 띄울 때 환경 변수로 주는 게 안전하다. 코드 안에서 `process.env.UV_THREADPOOL_SIZE = "16"`을 쓰면 풀을 쓰는 첫 호출보다 먼저 실행돼야만 효과가 있다. 어떤 `import`가 먼저 파일을 읽으면 조용히 무시된다. libuv가 받아 주는 최대값은 1024다.
+
+아래에서 풀을 흉내 내 보자. 작업마다 걸리는 시간과 풀 크기를 받아서, 각 작업이 끝나는 시각을 돌려준다. 작업은 들어온 순서대로 가장 먼저 비는 스레드가 가져간다. CPU 코어 수는 따지지 않는 단순한 모델이다.
+
+<CodePlayground
+  caption="스레드 풀 시뮬레이터"
+  functionName="simulatePool"
+  initialCode={`// durations: 작업마다 걸리는 시간(ms), 들어온 순서대로
+// size: 스레드 수
+// 반환: 각 작업이 끝나는 시각(ms) 배열
+function simulatePool(durations, size) {
+  return [];
+}`}
+  solution={`function simulatePool(durations, size) {
+  const free = Array(size).fill(0); // 스레드마다 다음에 비는 시각
+  return durations.map((d) => {
+    let i = 0;
+    for (let k = 1; k < free.length; k++) if (free[k] < free[i]) i = k;
+    free[i] += d;
+    return free[i];
+  });
+}`}
+  tests={[
+    { label: "해시 4개, 풀 4", args: [[300, 300, 300, 300], 4], expected: [300, 300, 300, 300] },
+    { label: "해시 8개, 풀 4", args: [[300, 300, 300, 300, 300, 300, 300, 300], 4], expected: [300, 300, 300, 300, 600, 600, 600, 600] },
+    { label: "해시 8개 뒤의 파일 읽기, 풀 4", args: [[300, 300, 300, 300, 300, 300, 300, 300, 2], 4], expected: [300, 300, 300, 300, 600, 600, 600, 600, 602] },
+    { label: "같은 상황, 풀 16", args: [[300, 300, 300, 300, 300, 300, 300, 300, 2], 16], expected: [300, 300, 300, 300, 300, 300, 300, 300, 2] },
+    { label: "길이가 다른 작업, 풀 2", args: [[100, 50, 10, 10], 2], expected: [100, 50, 60, 70] },
+    { label: "스레드 하나", args: [[5, 5, 5], 1], expected: [5, 10, 15] },
+  ]}
+/>
+
+풀 16의 결과가 실제 측정(해시 665ms)과 다른 이유가 이 모델이 코어 수를 무시해서다. 스레드가 늘어도 코어는 넷이라는 걸 빼먹으면 "풀을 키우면 다 빨라진다"는 잘못된 결론이 나온다.
+
+## Sync를 붙이면 풀 대신 루프가 막힌다
+
+같은 해시를 `crypto.pbkdf2Sync`로 바꾸면 그림이 뒤집힌다. 계산이 풀이 아니라 메인 스레드에서 돈다.
+
+```js
+if (req.url === "/login-sync") {
+  crypto.pbkdf2Sync("pw", "salt", 500000, 64, "sha512"); // 이벤트 루프 위에서 돈다
+  return res.end("ok");
+}
+res.end("pong");
+```
+
+로그인 4개를 보내고 30ms 뒤에 `/ping`을 쟀다.
+
+```text
+alone:  /ping 4ms
+during: /ping 283ms
+/login-sync 314ms | /login-sync 627ms | /login-sync 1000ms | /login-sync 1322ms
+```
+
+이번에는 `/ping`까지 283ms 늦었다. 그리고 로그인 4개가 한 줄로 섰다. 314, 627, 1000, 1322ms로 300ms씩 밀린다. 비동기 버전에서는 4개가 300ms대에 같이 끝났다. 코어가 넷인데 하나만 쓰고 있는 셈이다.
+
+<AlgoTrace
+  caption="Sync 해시는 메인 스레드에서 하나씩 돈다"
+  memoryLabel="소켓에서 기다리는 요청"
+  cells={["0", "300", "600", "900", "1200", "1322ms"]}
+  steps={[
+    { pointer: 0, memory: ["login2", "login3", "login4"], caption: "첫 로그인이 pbkdf2Sync를 시작한다. 나머지는 소켓 버퍼에 있다." },
+    { pointer: 0, memory: ["login2", "login3", "login4", "ping"], caption: "30ms에 /ping이 온다. 루프가 묶여 있어 핸들러가 돌지 못한다." },
+    { pointer: 1, found: [1], memory: ["login2", "login3", "login4"], caption: "314ms에 첫 로그인이 끝나고 루프가 돈다. /ping이 이때 응답된다(283ms)." },
+    { pointer: 3, found: [1, 2, 3], memory: ["login4"], caption: "두 번째, 세 번째 로그인이 차례로 300ms씩 루프를 잡는다." },
+    { pointer: 5, found: [1, 2, 3, 5], memory: [], caption: "마지막 로그인은 1322ms에 끝난다. 비동기였다면 300ms대에 끝났을 일이다." },
+  ]}
+/>
+
+루프가 막히는 걸 지표로 재는 방법(`monitorEventLoopDelay`)은 [이벤트 루프 글](/posts/event-loop#누가-메인-스레드를-붙잡았는지-운영에서-찾기)에 실제 출력과 함께 있다. 두 증상을 나란히 두면 구분이 쉽다. 모든 엔드포인트가 같이 느리고 헬스 체크까지 늦으면 루프가 막힌 것이다. 파일·DNS·암호화를 거치는 엔드포인트만 느리고 `/ping`은 빠르면 풀이 막힌 것이다.
+
+`Sync` 함수가 다 나쁜 건 아니다. 서버가 뜰 때 설정 파일을 한 번 읽는 `readFileSync`는 아무 문제가 없다. 아직 요청을 받기 전이라 막을 대상이 없다. 문제는 요청 핸들러 안의 `Sync`다. 코드 리뷰에서 핸들러 안의 `Sync`, `JSON.parse` 큰 덩어리, 정규식 백트래킹을 따로 찾아보는 이유다.
+
+## 자바스크립트 계산은 worker_threads로
+
+풀은 C++로 짜인 일만 맡는다. 자바스크립트로 짠 계산, 예를 들어 큰 배열 정렬이나 리포트 집계는 풀로 보낼 수 없다. 메인 스레드에서 돌거나, `worker_threads`로 다른 스레드에 띄운 V8 인스턴스에서 돌아야 한다. 리포트를 워커로 옮겼을 때 다른 요청이 어떻게 되는지는 [모놀리스 글](/posts/monolith-architecture)에서 봤다. 여기서는 워커를 어떻게 쓰느냐에 따라 달라지는 비용을 봤다.
+
+```js
+// 1) 작업마다 새 워커를 띄우고 끝나면 종료
+for (let i = 0; i < 20; i++) {
+  const w = new Worker(code, { eval: true });
+  await runOnce(w, 1e5);
+  await w.terminate();
+}
+// 2) 워커 하나를 미리 띄워 두고 재사용
+const w = new Worker(code, { eval: true });
+for (let i = 0; i < 20; i++) await runOnce(w, 1e5);
+```
+
+```text
+new worker per task: 40.8ms/task
+reused worker:       0.5ms/task
+rss main only ~45MB, with 5 workers 111MB
+```
+
+작업 자체는 0.5ms인데 워커를 새로 띄우면 40ms가 든다. 워커마다 V8 엔진과 Node 환경을 새로 만들기 때문이다. 메모리도 늘었다. 워커 다섯 개를 띄워 둔 상태에서 RSS가 45MB에서 111MB가 됐다. 그래서 워커는 요청마다 만들지 않고 서버가 뜰 때 몇 개를 띄워 두고 재사용한다. 이 풀 관리를 직접 짜기 번거로우면 `piscina` 같은 워커 풀 라이브러리를 쓴다. 워커 수는 보통 코어 수에서 메인 스레드 몫 하나를 뺀 정도에서 시작한다.
+
+워커와 주고받는 데이터는 기본이 복사다. `postMessage`로 100MB짜리 배열을 넘기면 구조화된 복제로 100MB를 복사한다. `ArrayBuffer`는 transfer 목록에 넣어 소유권을 넘기면 복사 없이 옮길 수 있고, 진짜 공유는 `SharedArrayBuffer`만 된다. 공유했을 때 생기는 경쟁 상태는 [스레드 안전 글](/posts/thread-safety)에 실험과 함께 있다.
+
+## 코어를 다 쓰려면 프로세스를 늘린다
+
+워커는 계산 한 덩어리를 떼어 낸다. 요청 처리 전체를 여러 코어에 나누려면 프로세스를 늘린다. Node에 들어 있는 `cluster` 모듈은 프로세스 하나(primary)가 자식 프로세스(worker)를 여러 개 띄우고, 같은 포트로 오는 연결을 나눠 준다.
+
+```js
+const cluster = require("node:cluster");
+const http = require("node:http");
+const os = require("node:os");
+
+if (cluster.isPrimary) {
+  console.log(`primary ${process.pid}, availableParallelism=${os.availableParallelism()}`);
+  for (let i = 0; i < 4; i++) cluster.fork();
+  cluster.on("exit", (w, code) => {
+    console.log(`worker ${w.process.pid} died (code ${code}), forking a new one`);
+    cluster.fork();
+  });
+} else {
+  let visits = 0; // 프로세스마다 따로 있는 메모리
+  http.createServer((req, res) => {
+    if (req.url === "/crash") process.exit(1);
+    visits++;
+    res.end(`pid=${process.pid} visits=${visits}\n`);
+  }).listen(17510);
+}
+```
+
+`curl`을 8번 보내고, `/crash`로 워커 하나를 죽인 뒤 한 번 더 보냈다.
+
+```text
+pid=2739 visits=1
+pid=2744 visits=1
+pid=2740 visits=1
+pid=2747 visits=1
+pid=2739 visits=2
+pid=2744 visits=2
+pid=2740 visits=2
+pid=2747 visits=2
+pid=2744 visits=3
+```
+
+```text
+primary 2731, availableParallelism=4
+worker 2739 died (code 1), forking a new one
+```
+
+세 가지가 보인다. 첫째, 요청이 네 프로세스를 돌아가며 갔다. 리눅스에서 `cluster`의 기본 분배 방식은 primary가 연결을 받아 워커에게 차례로 넘기는 라운드 로빈이다(윈도만 예외). 둘째, `visits`가 프로세스마다 따로 센다. 8번 방문했는데 어느 응답도 8이라고 하지 않는다. 셋째, 워커 하나가 죽어도 나머지가 계속 받고 primary가 새로 띄운다.
+
+<NetworkTopology
+  width={400}
+  height={270}
+  caption="같은 포트, 다른 메모리"
+  zones={[
+    { id: "host", label: "서버 한 대 (코어 4)", x: 8, y: 70, w: 384, h: 192, tone: "private" },
+  ]}
+  nodes={[
+    { id: "client", label: "Client", x: 200, y: 28, icon: "client" },
+    { id: "primary", label: "primary", sub: ":17510", x: 200, y: 112, icon: "lb" },
+    { id: "w1", label: "w 2739", sub: "visits 2", x: 56, y: 216, icon: "server" },
+    { id: "w2", label: "w 2744", sub: "visits 3", x: 152, y: 216, icon: "server" },
+    { id: "w3", label: "w 2740", sub: "visits 2", x: 248, y: 216, icon: "server" },
+    { id: "w4", label: "w 2747", sub: "visits 2", x: 344, y: 216, icon: "server" },
+  ]}
+  links={[
+    { from: "client", to: "primary" },
+    { from: "primary", to: "w1" },
+    { from: "primary", to: "w2" },
+    { from: "primary", to: "w3" },
+    { from: "primary", to: "w4" },
+  ]}
+  steps={[
+    { path: ["client", "primary", "w1"], packet: "GET 1", title: "첫 연결은 2739로", detail: "primary가 연결을 받아 워커에게 넘긴다. 요청 처리는 워커가 한다." },
+    { path: ["client", "primary", "w2"], packet: "GET 2", title: "다음 연결은 다음 워커로", detail: "라운드 로빈이다. 네 번째 요청까지 네 워커가 하나씩 받는다." },
+    { path: ["w1"], highlight: ["w2", "w3", "w4"], title: "카운터가 넷으로 갈라진다", detail: "visits는 각 프로세스의 메모리에 있다. 세션, 속도 제한 카운터, 캐시도 똑같이 갈라진다." },
+    { path: ["primary", "w1"], packet: "/crash", blocked: true, title: "워커 하나가 죽는다", detail: "process.exit(1). 나머지 셋은 영향이 없다. 그 워커가 처리 중이던 요청만 실패한다." },
+    { path: ["client", "primary", "w2"], packet: "GET", title: "남은 워커가 받고, 새 워커가 뜬다", detail: "exit 이벤트에서 fork를 다시 부른다. 재시작 정책이 primary 코드에 들어 있다." },
+  ]}
+/>
+
+두 번째 관찰이 실무에서 사고를 낸다. 프로세스 메모리에 로그인 세션을 두면 다음 요청이 다른 워커로 가는 순간 로그아웃된 것처럼 보인다. 메모리에 둔 속도 제한 카운터는 워커 수만큼 한도가 늘어난다. 분당 100회로 막았는데 실제로는 400회까지 통과한다. 이런 상태는 Redis 같은 바깥 저장소로 옮겨야 한다. 프로세스를 늘리는 순간 서버는 이미 "여러 대"가 된 것이고, 서버를 여러 대로 늘릴 때의 규칙이 그대로 적용된다. [상태 없는 서버와 로드 밸런서 글](/posts/sd-load-balancer-stateless)이 그 규칙을 다룬다.
+
+WebSocket이나 Socket.IO의 롱 폴링처럼 같은 클라이언트가 같은 프로세스로 계속 와야 하는 경우에는 라운드 로빈이 오히려 문제가 된다. 이때는 고정 세션(sticky session)을 따로 구성하거나 프로세스 사이에 메시지를 중계하는 어댑터를 둔다. 이 부분은 [WebSocket 글](/posts/websocket-deep-dive)을 참고한다.
+
+## cluster, PM2, 컨테이너 복제본 중에서
+
+프로세스를 여러 개 띄우는 방법은 `cluster`만 있는 게 아니다. 셋을 놓고 비교하면 차이가 분명하다.
+
+| 방법 | 누가 프로세스를 되살리나 | 누가 요청을 나누나 | 어울리는 곳 |
+|---|---|---|---|
+| `cluster` 직접 | primary 코드 | primary (라운드 로빈) | VM 한 대에 직접 띄울 때 |
+| PM2 cluster 모드 | PM2 | PM2 (내부는 `cluster`) | VM에서 무중단 재시작까지 필요할 때 |
+| 컨테이너 복제본 | 쿠버네티스·ECS | Service·로드 밸런서 | 컨테이너 환경 전부 |
+
+컨테이너로 배포한다면 보통 컨테이너 하나에 Node 프로세스 하나를 두고 복제본 수를 늘린다. 프로세스가 죽으면 오케스트레이터가 다시 띄우고, 헬스 체크와 오토스케일링도 그 단위로 붙는다. 컨테이너 안에서 `cluster`까지 쓰면 재시작 책임이 두 군데로 나뉜다. 워커 하나가 계속 죽고 살아나도 primary가 살아 있으니 쿠버네티스 눈에는 멀쩡한 Pod로 보인다. 메모리 한도도 프로세스 여러 개가 나눠 쓰니 OOM이 나면 원인 찾기가 어렵다.
+
+코어 수를 묻는 코드도 조심한다. 위 출력의 `availableParallelism=4`는 이 컨테이너가 볼 수 있는 CPU 개수다. 쿠버네티스에서 `limits.cpu: 1`을 줘도 컨테이너는 노드의 CPU를 모두 "볼" 수 있어서, 이 값만 믿고 워커를 노드 코어 수만큼 띄우면 CPU 할당량 1개를 여러 프로세스가 나눠 쓰다가 스로틀링에 걸린다. Node나 libuv 버전에 따라 cgroup 할당량을 반영하는지가 달라서, 워커 수는 환경 변수로 명시하는 편이 안전하다. 리소스 한도와 스로틀링은 [Pod 리소스 글](/posts/k8s-pod-resources)에서 다룬다.
+
+프로세스가 늘어도 하나가 받아 주는 동시 요청이 무한한 건 아니다. 각 프로세스가 DB 커넥션 풀을 따로 가진다는 것도 잊기 쉽다. 프로세스 4개가 커넥션 20개씩 잡으면 DB 입장에서는 80개다. 복제본을 10개로 늘리면 800개가 되어 DB의 `max_connections`를 넘긴다. [커넥션 풀 글](/posts/connection-pool)에 계산법이 있다.
+
+## 느려졌을 때 어디부터 보나
+
+지금까지 본 걸 증상 순서로 묶으면 이렇다.
+
+모든 엔드포인트가 같이 느리고 헬스 체크까지 늦다면 메인 스레드가 막힌 것이다. 이벤트 루프 지연 지표에서 max가 튀었는지 보고, 그 시각에 들어온 요청 중 큰 JSON, `Sync` 호출, 무거운 정규식을 쓰는 것을 찾는다. `node --cpu-prof`로 프로파일을 떠서 메인 스레드에서 오래 돈 함수를 보는 게 가장 빠르다.
+
+파일, DNS, 암호화, 압축을 거치는 엔드포인트만 느리고 `/ping`은 빠르다면 스레드 풀이다. `top -H`에서 `libuv-worker`가 크기만큼 다 바쁜지 본다. 해시나 압축 같은 무거운 작업의 동시 실행 수를 제한하고, I/O가 많으면 풀 크기를 늘린다. 외부 호출이 느린데 상대 서버의 응답 시간은 짧다면 `dns.lookup` 대기를 의심한다.
+
+CPU가 코어 하나만 100%이고 나머지는 놀고 있다면 프로세스가 하나라서다. 복제본이나 `cluster`로 늘린다. 이때 프로세스 메모리에 둔 상태가 없는지 먼저 확인한다.
+
+워커를 쓰는데 오히려 느려졌다면 요청마다 워커를 새로 만드는지, 큰 데이터를 매번 복사하는지 본다.
+
+마지막으로 흔한 오해 하나. `async` 함수로 감싸거나 `await`를 붙인다고 계산이 다른 스레드로 가지 않는다. 다른 스레드로 가는 건 libuv가 원래 풀로 보내는 API, 그리고 직접 만든 워커뿐이다.
+
+## 한 스레드와 그 주변
+
+Node.js 서버는 자바스크립트를 한 스레드에서 돌리지만 혼자 일하지 않는다. 네트워크는 커널이 기다려 주고, 파일·DNS 조회·해시·압축은 기본 4칸짜리 스레드 풀이 대신 한다. 그래서 막히는 곳도 두 군데다. 메인 스레드가 막히면 모든 요청이 늦고, 풀이 막히면 풀을 쓰는 요청만 늦는다. 처음 장면은 뒤쪽이었다. 자바스크립트 계산은 `worker_threads`로, 요청 처리 전체는 프로세스 복제로 여러 코어에 나눈다. 프로세스를 늘리는 순간부터 메모리 상태는 공유되지 않는다는 것까지 기억하면 된다. 같은 서버 위에 Express를 얹으면 생기는 일은 [Express 미들웨어 글](/posts/express-middleware)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### Node.js가 싱글 스레드라는 말은 정확한가요?
+
+자바스크립트를 실행하는 스레드가 하나라는 뜻이고, 프로세스 전체가 스레드 하나인 건 아니다. libuv 스레드 풀(기본 4개)이 파일 I/O, `dns.lookup`, 일부 암호화와 압축을 처리하고, V8도 가비지 컬렉션용 스레드를 따로 쓴다. 네트워크 I/O는 스레드 없이 epoll 같은 OS 알림으로 기다린다. 그래서 "코드 실행은 한 번에 하나, 기다림은 여럿"이 정확한 표현이다.
+
+### libuv 스레드 풀은 어떤 작업에 쓰이고, 네트워크 요청도 거기서 처리되나요?
+
+`fs`의 비동기 API, `dns.lookup`, `crypto.pbkdf2`·`scrypt`·`randomBytes`, `zlib` 비동기 API가 풀을 쓴다. TCP 소켓을 읽고 쓰는 건 풀을 쓰지 않고 epoll·kqueue로 처리한다. 다만 호스트 이름으로 요청을 보내면 이름 풀이 단계의 `dns.lookup`은 풀을 거친다. 그래서 풀이 꽉 차면 외부 API 호출도 늦어질 수 있다.
+
+### 로그인 트래픽이 몰릴 때 상관없는 파일 읽기 API까지 느려졌습니다. 원인을 어떻게 좁히나요?
+
+이벤트 루프 지연이 정상인데 파일·DNS·암호화를 거치는 요청만 느리면 스레드 풀 포화를 의심한다. `top -H`로 `libuv-worker` 스레드가 넷 다 바쁜지 보면 확인된다. 비밀번호 해시가 풀 네 칸을 다 잡고 있어서 짧은 파일 읽기가 큐에서 기다린 것이다. 해시의 동시 실행 수를 제한하거나 `UV_THREADPOOL_SIZE`를 늘려 짧은 I/O 몫의 자리를 남긴다.
+
+### UV_THREADPOOL_SIZE를 크게 하면 무조건 빨라지나요?
+
+아니다. 기다리는 일(파일, DNS)은 줄을 덜 서서 빨라지지만, CPU를 쓰는 일(해시)은 코어 수가 상한이다. 코어 4개에서 해시 8개를 풀 4와 풀 8로 돌려 보면 마지막이 끝나는 시각이 같고, 첫 해시는 오히려 늦어진다. 그리고 이 값은 풀이 처음 만들어질 때 한 번 읽히므로 프로세스 시작 시 환경 변수로 준다.
+
+### worker_threads와 cluster는 어떻게 다르고 언제 무엇을 쓰나요?
+
+`worker_threads`는 한 프로세스 안에서 V8 인스턴스를 하나 더 띄워 자바스크립트 계산을 다른 스레드에서 돌린다. 리포트 집계처럼 무거운 계산 한 덩어리를 메인 스레드에서 떼어 낼 때 쓴다. `cluster`는 프로세스를 여러 개 띄워 들어오는 연결 자체를 나눈다. 요청 처리량을 코어 수만큼 늘릴 때 쓰고, 컨테이너 환경에서는 보통 그 대신 복제본을 늘린다.
+
+### 워커를 요청마다 만들면 어떤 문제가 있나요?
+
+워커 하나를 띄우는 데 V8과 Node 환경을 새로 만드는 비용이 든다. 직접 재 보니 0.5ms짜리 작업에 생성 비용이 40ms 들었고, 워커마다 메모리도 수십 MB씩 늘었다. 그래서 서버가 뜰 때 워커 풀을 만들어 두고 재사용한다. 큰 데이터는 복사되므로 `ArrayBuffer`를 transfer하거나 데이터를 작게 나눠 보낸다.
+
+### cluster로 프로세스를 4개 띄웠더니 로그인이 자꾸 풀립니다. 왜 그런가요?
+
+세션을 프로세스 메모리에 저장했기 때문이다. 연결이 라운드 로빈으로 다른 워커에 가면 그 워커의 메모리에는 세션이 없다. 속도 제한 카운터나 인메모리 캐시도 같은 이유로 워커마다 따로 센다. Redis 같은 공유 저장소로 옮기거나, 정말 필요하면 고정 세션을 쓴다.
+
+### 쿠버네티스에서 Node 앱에 cluster를 써야 하나요?
+
+보통은 컨테이너 하나에 프로세스 하나를 두고 복제본을 늘리는 쪽을 고른다. 재시작, 헬스 체크, 오토스케일링을 오케스트레이터가 프로세스 단위로 해 주기 때문이다. 컨테이너 안에서 `cluster`를 쓰면 워커가 죽고 사는 걸 쿠버네티스가 모르고, CPU 할당량을 여러 프로세스가 나눠 쓰다 스로틀링에 걸리기 쉽다. CPU 한도 안에서 프로세스를 여러 개 돌려야 하는 특별한 이유가 있을 때만 워커 수를 명시해서 쓴다.
