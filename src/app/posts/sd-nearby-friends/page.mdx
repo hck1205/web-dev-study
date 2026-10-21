@@ -1,0 +1,439 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-nearby-friends");
+
+이 시리즈에서 이 글의 자리: 앞 글 [㉟ 주변 검색 설계](/posts/sd-proximity-service)에서는 움직이지 않는 가게를 칸으로 찾았다. 이 글은 계속 움직이는 친구의 위치를 친구들에게 밀어 주는 문제다. 다음 글은 [㊲ 지도 서비스 ①: 타일과 길 찾기](/posts/sd-maps-tiles-routing)이고, 그 뒤가 [㊳ 지도 서비스 ②: 위치 수집과 ETA](/posts/sd-maps-location-eta)다. 연결을 오래 쥐는 서버 이야기는 [㉖ 채팅 연결](/posts/sd-chat-connections)과 [㉘ 접속 상태](/posts/sd-chat-presence)에서 먼저 봤다.
+
+앱에 "주변 친구" 탭이 있다. 켜 두면 5km 안에 있는 친구가 지도에 점으로 뜨고, 점마다 "1.2km, 10초 전"이 붙는다. 친구가 걸어가면 점도 몇 초 뒤에 따라 움직인다. 면접에서는 "주변 친구 기능을 설계하라"로 나온다. 앞 글과 같은 위치 문제처럼 보이지만, 찾는 대상이 움직인다는 한 가지 차이가 설계를 통째로 바꾼다.
+
+## 친구 위치를 30초마다 물어보면
+
+가장 단순한 버전부터 만든다. 앱이 30초마다 내 위치를 서버에 올리고, 같은 요청의 응답으로 주변 친구 목록을 받는다. 서버는 위치를 DB의 `user_locations` 테이블에 덮어쓰고, 내 친구 목록을 읽어 친구마다 마지막 위치와 거리를 계산한다.
+
+```sql
+-- 사용자마다 마지막 위치 한 줄
+CREATE TABLE user_locations (
+  user_id    bigint PRIMARY KEY,
+  lat        double precision NOT NULL,
+  lng        double precision NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
+-- 내 친구 300명의 마지막 위치를 읽는다 (요청마다)
+SELECT l.user_id, l.lat, l.lng, l.updated_at
+FROM friendships f JOIN user_locations l ON l.user_id = f.friend_id
+WHERE f.user_id = 42 AND l.updated_at > now() - interval '10 minutes';
+```
+
+사용자 몇천 명까지는 이걸로 돌아간다. 깨지는 곳이 두 군데 있다. 하나는 신선도다. 친구가 방금 움직였어도 내가 다음 30초 요청을 보낼 때까지 모른다. 평균 15초, 최악 30초 늦은 위치를 본다. 다른 하나는 낭비다. 요청 한 번마다 친구 300명의 위치를 읽는데, 대부분은 오프라인이거나 멀리 있어 화면에 안 뜬다. 사용자가 늘수록 읽은 것 대부분을 버리는 조회가 DB를 채운다.
+
+## 가게와 달리 계속 움직인다
+
+범위와 숫자를 정한다. 이 글의 가상 서비스는 이렇다.
+
+- 친구 중 반경 5km 안에 있는 사람을 거리와 갱신 시각과 함께 보여 준다. 거리는 직선거리다.
+- 목록은 몇 초 안에 따라 움직인다. 위치 몇 개를 잃는 건 괜찮다. 다음 갱신이 곧 온다.
+- 10분 동안 갱신이 없는 친구는 목록에서 사라진다.
+- 기능을 쓰는 하루 사용자 1,000만 명, 그중 동시에 켜 둔 사람 10%(100만 명). 위치는 30초마다 올린다. 한 사람의 친구는 평균 300명, 그중 동시에 켜 둔 친구는 10%(30명).
+- 위치 이력은 나중에 분석용으로 남긴다.
+
+부하를 어림한다. 동시 사용자 100만 명이 30초마다 올리면 초당 약 33,333건의 위치 갱신이 들어온다. 갱신 하나는 켜 둔 친구 평균 30명에게 가야 하니, 서버가 밀어내야 하는 메시지는 초당 약 100만 건이다. 들어오는 양보다 나가는 양이 30배 많다. 이 비율을 팬아웃(fan-out, 한 메시지를 여러 곳에 퍼뜨리는 정도)이라고 한다. 이 설계의 어려움은 거의 다 이 100만에서 나온다.
+
+앞 글의 가게는 하루 한 번 바뀌어서 밤에 색인을 고치면 됐다. 여기서는 위치가 30초마다 바뀌니 칸 색인을 고쳐 쓰는 방식은 맞지 않는다. 바뀔 때마다 관심 있는 사람에게 바로 알려 주는 쪽으로 간다.
+
+## 서버가 먼저 밀어 준다
+
+친구 위치가 바뀌는 순간 내 앱에 알려 주려면, 서버가 먼저 말을 걸 수 있어야 한다. HTTP 요청·응답만으로는 클라이언트가 묻기 전에 서버가 보낼 방법이 없다. 그래서 연결을 열어 두고 양쪽이 아무 때나 보내는 WebSocket을 쓴다. 위치를 올리는 것도 같은 연결로 하면 요청마다 HTTP 헤더를 다시 보내지 않아도 된다. 폴링, SSE, WebSocket의 차이는 [서버가 먼저 말하게 하기](/posts/realtime-communication)에, 프레임과 하트비트 같은 속사정은 [WebSocket 깊게 보기](/posts/websocket-deep-dive)에 있다.
+
+휴대폰끼리 직접 위치를 주고받는 P2P도 생각할 수 있다. 하지만 휴대폰은 네트워크가 자주 바뀌고, 친구 30명과 연결을 각각 쥐고 있으면 배터리가 빨리 닳는다. 가운데 서버가 받아서 나눠 주는 편이 현실적이다.
+
+## 구성 요소를 한 바퀴 돈다
+
+부품은 일곱 가지다.
+
+- 로드 밸런서: HTTP 요청은 API 서버로, WebSocket 연결은 WebSocket 서버로 보낸다.
+- API 서버: 친구 추가, 프로필 수정처럼 평범한 요청을 받는다. 무상태라 대수만 늘리면 된다.
+- WebSocket 서버: 사용자와 연결을 열어 두고 위치를 받고 보낸다. 누가 자기에게 붙어 있는지 기억하는 상태가 있는(stateful) 서버다.
+- 위치 캐시: 사용자마다 마지막 위치 하나를 담는다. 10분 만료를 걸어 두면 오프라인이 된 사람은 저절로 사라진다. Redis가 잘 맞는다.
+- Pub/Sub: 사용자마다 채널을 두고, 위치가 바뀌면 그 채널에 발행한다. 친구의 WebSocket 서버가 구독하고 있다가 받는다.
+- 사용자 DB: 사용자와 친구 관계. 관계형이든 NoSQL이든 상관없다.
+- 위치 이력 DB: 모든 위치 기록. 쓰기가 아주 많고 읽기는 드물어서, 쓰기에 강한 와이드 컬럼 DB가 어울린다. [와이드 컬럼 DB](/posts/db-type-wide-column) 글에 이유가 있다.
+
+위치 하나가 올라와서 친구 화면에 닿기까지를 따라가 본다.
+
+<NetworkTopology
+  caption="앨리스가 움직이면 친구 밥의 화면까지"
+  width={400}
+  height={260}
+  zones={[
+    { id: "ws", label: "WebSocket 서버", x: 95, y: 10, w: 95, h: 240, tone: "private" },
+    { id: "data", label: "Redis·DB", x: 205, y: 10, w: 115, h: 240, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "alice", label: "앨리스", x: 40, y: 60, icon: "client" },
+    { id: "bob", label: "밥", x: 40, y: 200, icon: "client" },
+    { id: "ws1", label: "ws-1", x: 142, y: 60, icon: "server" },
+    { id: "ws2", label: "ws-2", x: 142, y: 200, icon: "server" },
+    { id: "cache", label: "위치 캐시", x: 262, y: 45, icon: "db" },
+    { id: "ps", label: "Pub/Sub", x: 262, y: 135, icon: "router" },
+    { id: "hist", label: "이력 DB", x: 262, y: 220, icon: "db" },
+    { id: "q", label: "큐", x: 360, y: 220, icon: "container" },
+  ]}
+  links={[
+    { from: "alice", to: "ws1" },
+    { from: "bob", to: "ws2" },
+    { from: "ws1", to: "cache" },
+    { from: "ws1", to: "ps" },
+    { from: "ps", to: "ws2" },
+    { from: "ws1", to: "q", dashed: true },
+    { from: "q", to: "hist" },
+  ]}
+  steps={[
+    { path: ["alice", "ws1"], packet: "위치", title: "위치를 올린다", detail: "앨리스의 앱이 열려 있는 WebSocket 연결로 새 위치를 보낸다." },
+    { path: ["ws1", "cache"], packet: "SET EX 600", title: "마지막 위치를 덮어쓴다", detail: "위치 캐시에 앨리스의 마지막 위치를 10분 만료와 함께 쓴다." },
+    { path: ["ws1", "q", "hist"], packet: "이력", title: "이력은 뒤에서", detail: "이력 기록은 큐에 던지고 넘어간다. 이력 DB가 느려도 전달은 멈추지 않는다." },
+    { path: ["ws1", "ps"], packet: "PUBLISH", title: "앨리스 채널에 발행", detail: "loc:alice 채널에 새 위치를 발행한다. 누가 듣는지는 ws-1이 몰라도 된다." },
+    { path: ["ps", "ws2"], packet: "message", title: "구독한 서버가 받는다", detail: "밥이 붙어 있는 ws-2가 loc:alice를 구독하고 있어서 메시지를 받는다." },
+    { path: ["ws2", "bob"], packet: "1.2km", title: "거리를 재서 보낸다", detail: "ws-2가 밥과 앨리스의 거리를 잰다. 5km 안이라 밥에게 보낸다." },
+  ]}
+/>
+
+이력 기록을 큐 뒤로 뺀 건 전달 경로를 가볍게 두려는 것이다. 이력 DB가 잠깐 느려져도 친구 화면이 멈추면 안 된다. 큐로 떼어 내는 이유는 [⑦ 메시지 큐와 로깅](/posts/sd-queue-logging-automation)에서 봤다.
+
+## 사용자마다 채널을 하나씩 둔다
+
+Pub/Sub(발행·구독)은 보내는 쪽이 받는 쪽을 몰라도 되게 하는 방식이다. 보내는 쪽은 채널 이름에 발행하고, 그 채널을 구독한 쪽이 모두 받는다. 이 설계는 사용자마다 채널 하나를 둔다. 앨리스의 위치는 `loc:alice`에만 발행된다.
+
+구독은 WebSocket 서버가 한다. 밥이 ws-2에 붙으면 ws-2는 밥의 친구들 채널을 구독한다. 캐럴도 ws-2에 붙어 있고 앨리스의 친구라면, ws-2는 `loc:alice`를 한 번만 구독하고 받은 메시지를 밥과 캐럴에게 각각 나눠 준다.
+
+<ConceptDiagram
+  caption="채널은 사용자 단위, 구독은 서버 단위"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "ca", label: "loc:alice", sub: "채널", x: 90, y: 50 },
+    { id: "cb", label: "loc:bob", sub: "채널", x: 90, y: 130 },
+    { id: "ce", label: "loc:erin", sub: "채널", x: 90, y: 210 },
+    { id: "w1", label: "ws-1", sub: "앨리스", x: 310, y: 50 },
+    { id: "w2", label: "ws-2", sub: "밥, 캐럴", x: 310, y: 130 },
+    { id: "w3", label: "ws-3", sub: "데이브, 에린", x: 310, y: 210 },
+  ]}
+  edges={[
+    { from: "ca", to: "w2", label: "구독" },
+    { from: "ca", to: "w3" },
+    { from: "cb", to: "w1" },
+    { from: "cb", to: "w3" },
+    { from: "ce", to: "w2" },
+  ]}
+/>
+
+이 구조의 좋은 점은 발행하는 쪽이 단순하다는 것이다. ws-1은 앨리스의 친구가 누구인지, 어느 서버에 붙어 있는지 몰라도 된다. 채널 하나에 발행하면 끝이다. 받는 쪽도 자기에게 붙은 사용자의 친구 채널만 구독하면 된다.
+
+## 실제로 퍼뜨려 보기
+
+Redis를 비표준 포트 6397에 띄우고, WebSocket 서버 셋을 흉내 낸 Node 프로세스 안의 객체 셋으로 그림과 같은 상황을 만들었다. 서버마다 구독용 연결과 명령용 연결을 하나씩 연다. Redis는 연결이 구독 상태에 들어가면 구독 관련 명령만 받기 때문이다. 클라이언트는 앞 글에서 쓴 50줄짜리 RESP 클라이언트다.
+
+```js
+// friends.js 일부: 사용자별 채널로 위치 갱신을 친구의 서버에 퍼뜨리기 (Redis 7.0, 포트 6397)
+const friends = { alice: ["bob", "carol", "dave"], bob: ["alice", "erin"], carol: ["alice"], dave: ["alice"], erin: ["bob"] };
+const home = { alice: "ws-1", bob: "ws-2", carol: "ws-2", dave: "ws-3", erin: "ws-3" };   // 누가 어느 서버에 붙어 있나
+
+// 서버가 뜨면: 자기 사용자들의 친구 채널을 모아 한 번씩만 구독한다
+const channels = [...new Set(local.flatMap((u) => friends[u]))].map((f) => `loc:${f}`);
+await sub.subscribe(...channels);
+
+// 위치가 올라오면: 캐시에 쓰고 내 채널에 발행한다
+await cmd.cmd("SET", `last:${user}`, m, "EX", 600);
+const n = await cmd.cmd("PUBLISH", `loc:${user}`, m);     // n = 메시지를 받은 구독 연결 수
+
+// 메시지를 받으면: 이 서버의 사용자 중 그 친구를 둔 사람에게만, 5km 안일 때만
+sub.onMessage = (channel, raw) => {
+  const from = channel.slice(4), m = JSON.parse(raw);
+  for (const u of local) {
+    if (!friends[u].includes(from)) continue;
+    const d = haversine(pos[u][0], pos[u][1], m.lat, m.lng);
+    console.log(`  [${name}] ${from} -> ${u}: ${(d / 1000).toFixed(1)}km ${d <= RADIUS ? "SEND" : "drop (too far)"}`);
+  }
+};
+```
+
+```text
+ws-1 users=[alice] subscribed=[loc:bob,loc:carol,loc:dave]
+ws-2 users=[bob,carol] subscribed=[loc:alice,loc:erin]
+ws-3 users=[dave,erin] subscribed=[loc:alice,loc:bob]
+NUMSUB ["loc:alice",2,"loc:bob",2,"loc:erin",1]
+
+alice moves 100m:
+ws-1 PUBLISH loc:alice -> delivered to 2 subscriber connection(s)
+  [ws-3] alice -> dave: 8.0km drop (too far)
+  [ws-2] alice -> bob: 1.2km SEND
+  [ws-2] alice -> carol: 3.2km SEND
+
+erin moves:
+ws-3 PUBLISH loc:erin -> delivered to 1 subscriber connection(s)
+  [ws-2] erin -> bob: 8.7km drop (too far)
+
+location cache:
+  GET last:alice -> hit  TTL 600
+  GET last:dave after 1.5s -> null
+```
+
+몇 군데를 짚어 본다. `PUBSUB NUMSUB`은 채널마다 구독한 연결 수를 알려 준다. `loc:alice`는 2인데, 앨리스의 친구는 셋이지만 밥과 캐럴이 같은 ws-2에 있어서 연결은 둘이다. `PUBLISH`의 반환값도 2다. Redis는 친구 수가 아니라 구독한 서버 수만큼만 보낸다. 같은 서버에 친구가 몰릴수록 Redis가 할 일이 준다.
+
+ws-3에는 데이브와 에린이 있다. 앨리스의 메시지가 왔을 때 ws-3은 에린을 건너뛰었다. 에린은 앨리스의 친구가 아니다. 데이브는 친구지만 8km 떨어져 있어 버렸다. 마지막 두 줄은 위치 캐시의 만료다. 데이브의 기한을 1초로 줄여 두었더니 1.5초 뒤에는 키가 사라졌다. 실제 서비스에서는 10분이다.
+
+Redis Pub/Sub은 그 순간 구독 중인 연결에만 보내고, 끊겨 있던 구독자는 그 메시지를 영영 못 받는다. 위치 몇 개를 잃어도 다음 갱신이 30초 안에 오니 이 기능에는 괜찮다. 채팅 메시지처럼 잃으면 안 되는 데이터라면 Redis Streams 같은 다른 도구가 필요하다. 그 차이와, 느린 구독자가 끊기는 출력 버퍼 한도는 [발행·구독](/posts/pub-sub) 글에 있다.
+
+## 거리는 받는 쪽에서 거른다
+
+친구라고 다 보내지 않는다. 5km 밖이면 버린다. 이 거리 계산을 어디서 할지 고를 수 있다. 발행하는 서버가 친구마다 거리를 재서 가까운 친구에게만 보내려면, 발행할 때마다 친구 300명의 위치를 읽어야 한다. 받는 서버가 재면, 받는 서버는 자기 사용자의 위치를 이미 메모리에 들고 있으니 읽을 게 없다. 그래서 받는 쪽에서 거른다.
+
+<VectorSpace
+  caption="앨리스의 위치가 오면 5km 안의 친구에게만 간다"
+  width={400}
+  height={260}
+  groups={[
+    { id: "friend", label: "앨리스의 친구" },
+    { id: "other", label: "친구 아님" },
+  ]}
+  points={[
+    { id: "bob", label: "밥 1.2km", x: 221, y: 117, group: "friend" },
+    { id: "carol", label: "캐럴 3.2km", x: 255, y: 98, group: "friend" },
+    { id: "dave", label: "데이브 8km", x: 100, y: 12, group: "friend" },
+    { id: "gina", label: "지나 6.5km", x: 330, y: 200, group: "friend", labelAt: "left" },
+    { id: "erin", label: "에린", x: 170, y: 160, group: "other", labelAt: "left" },
+    { id: "hank", label: "행크", x: 60, y: 210, group: "other" },
+  ]}
+  query={{ label: "앨리스", x: 200, y: 130, labelAt: "left" }}
+  steps={[
+    { caption: "앨리스 주변에 사람들이 있다. 색으로 앨리스의 친구와 아닌 사람을 나눴다." },
+    { caption: "앨리스가 새 위치를 올린다. loc:alice를 구독한 서버들이 받는다.", query: true },
+    { caption: "받은 서버는 자기 사용자 중 앨리스의 친구만 본다. 에린과 행크는 가깝더라도 대상이 아니다.", query: true, neighbors: ["bob", "carol", "dave", "gina"] },
+    { caption: "반경 5km 원을 그린다.", query: true, radius: 100, neighbors: ["bob", "carol", "dave", "gina"] },
+    { caption: "원 안의 밥과 캐럴에게만 보낸다. 데이브와 지나에게 간 메시지는 서버에서 버려진다.", query: true, radius: 100, neighbors: ["bob", "carol"] },
+  ]}
+/>
+
+받은 쪽 서버가 하는 일은 결국 "내 사용자와 이 친구 사이 거리가 반경 안인가"다. 아래에서 그 판정을 직접 짜 볼 수 있다. 친구 목록을 받아 반경 안의 친구만 가까운 순으로, 거리는 미터 단위 반올림으로 돌려준다.
+
+<CodePlayground
+  caption="반경 안의 친구만 가까운 순으로 고르기"
+  functionName="nearbyFriends"
+  initialCode={`// me: [위도, 경도]
+// friends: [[이름, 위도, 경도], ...]
+// radiusM: 반경(미터)
+// 반환: [[이름, 거리(m, 반올림)], ...]  반경 안만, 가까운 순
+// 지구 반지름은 6371000m로 하고 하버사인 공식을 쓴다
+function nearbyFriends(me, friends, radiusM) {
+  return [];
+}`}
+  solution={`function nearbyFriends(me, friends, radiusM) {
+  const R = 6371000, r = Math.PI / 180;
+  const dist = (a, b) => {
+    const dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+  return friends
+    .map(([name, lat, lng]) => [name, Math.round(dist(me, [lat, lng]))])
+    .filter(([, d]) => d <= radiusM)
+    .sort((a, b) => a[1] - b[1]);
+}`}
+  tests={[
+    { label: "강남, 5km", args: [[37.4988, 127.0276], [["bob", 37.5045, 127.0393], ["carol", 37.5133, 127.059], ["dave", 37.5547, 126.9707], ["erin", 37.4985, 127.028]], 5000], expected: [["erin", 49], ["bob", 1211], ["carol", 3205]] },
+    { label: "강남, 1km", args: [[37.4988, 127.0276], [["bob", 37.5045, 127.0393], ["carol", 37.5133, 127.059], ["dave", 37.5547, 126.9707], ["erin", 37.4985, 127.028]], 1000], expected: [["erin", 49]] },
+    { label: "시청, 5km", args: [[37.5665, 126.978], [["bob", 37.5045, 127.0393], ["carol", 37.5133, 127.059], ["dave", 37.5547, 126.9707], ["erin", 37.4985, 127.028]], 5000], expected: [["dave", 1461]] },
+    { label: "친구 없음", args: [[37.4988, 127.0276], [], 5000], expected: [] },
+  ]}
+/>
+
+5km 안에서는 지구를 평면으로 보고 피타고라스로 재도 오차가 몇 미터 수준이다. 하지만 위도에 따라 경도 1도의 길이가 달라지는 건 꼭 반영해야 한다. 그걸 빼먹고 위도와 경도 차이를 그대로 제곱해 더하면, 서울에서는 동서 거리를 20% 넘게 크게 잡는다.
+
+## 처음 붙을 때 할 일
+
+앱을 열어 WebSocket이 연결되는 순간에는 받을 메시지가 아직 없다. 친구들이 다음 갱신을 보낼 때까지 최대 30초 동안 빈 지도를 보게 된다. 그래서 연결 직후 서버가 한 번에 채워 준다.
+
+<SequenceDiagram
+  caption="밥이 앱을 열었을 때 ws-2가 하는 일"
+  actors={[
+    { id: "bob", label: "밥" },
+    { id: "ws", label: "ws-2" },
+    { id: "udb", label: "사용자 DB" },
+    { id: "cache", label: "위치 캐시" },
+    { id: "ps", label: "Pub/Sub" },
+  ]}
+  steps={[
+    { from: "bob", to: "ws", label: "연결 + 내 위치", title: "연결하며 위치를 보낸다", detail: "밥이 앱을 열면 WebSocket을 열고 자기 위치를 먼저 보낸다." },
+    { from: "ws", to: "cache", label: "SET 밥", title: "밥의 위치를 쓴다", detail: "밥의 마지막 위치를 캐시에 쓰고, 서버 메모리에도 들고 있는다." },
+    { from: "ws", to: "udb", label: "친구 목록", title: "친구 300명을 읽는다", detail: "밥의 친구 ID를 읽는다. 자주 바뀌지 않으니 캐시해 둬도 된다." },
+    { from: "ws", to: "cache", label: "MGET 300", title: "친구 위치를 한 번에", detail: "친구 300명의 마지막 위치를 한 명령으로 읽는다. 만료된 친구는 비어서 온다.", payload: "MGET last:alice last:erin last:... (300 keys)" },
+    { from: "ws", to: "bob", label: "초기 목록", title: "5km 안만 보낸다", detail: "켜 둔 친구 중 5km 안에 있는 사람만 골라 첫 화면을 채운다." },
+    { from: "ws", to: "ps", label: "SUBSCRIBE", title: "친구 채널을 구독한다", detail: "친구 300명 모두의 채널을 구독한다. 꺼져 있는 친구의 채널은 발행이 없어 조용하다. 이미 듣고 있는 채널은 건너뛴다." },
+  ]}
+/>
+
+끊긴 앱이 다시 붙으면 이 과정을 처음부터 다시 한다. 지하철에서 신호가 오락가락하면 하루에도 수십 번 다시 붙는다. 그래서 다시 붙을 때 지수적으로 늘어나는 대기 시간과 무작위 지연을 둔다. 한 지역의 기지국이 잠깐 끊겼다 돌아오면, 수만 대가 동시에 다시 붙으며 사용자 DB와 캐시를 두드리기 때문이다.
+
+## 마지막 위치는 만료와 함께, 이력은 따로
+
+위치 캐시에는 사용자마다 마지막 위치 하나만 둔다. 키는 `last:{사용자 ID}`, 값은 위도·경도·시각, 만료는 10분이다. 갱신이 올 때마다 덮어쓰며 만료도 10분으로 다시 늘어난다. 앱을 끈 사람은 10분 뒤 저절로 사라지니, 오프라인 처리를 따로 짤 필요가 없다. 메모리도 동시 사용자 수에 묶인다. 100만 명 × 100바이트 정도면 100MB라서 크지 않다.
+
+위치 캐시는 사용자 ID로 쉽게 나눌 수 있다. 키 하나가 사용자 하나라서 서로 엮일 일이 없다. 쓰기가 초당 3만 건을 넘으니 Redis 몇 대에 사용자 ID 해시로 나눈다. [Redis Cluster](/posts/redis-cluster)의 해시 슬롯이 그 일을 한다. 캐시가 날아가도 큰일은 아니다. 30초 안에 모든 사람이 다시 올린다.
+
+이력은 모든 갱신을 쌓는다. 동시 사용자 100만 명이 하루 내내 유지된다고 넉넉히 잡으면 초당 3만 건, 하루 약 29억 건이다. 사용자 ID를 파티션 키로, 시각을 정렬 키로 두면 "이 사람의 어제 동선"을 한 파티션에서 읽는다. 이 데이터는 친구 기능 자체가 아니라 나중의 분석과 추천에 쓰이니, 큐에 담아 천천히 넣는다.
+
+## 친구가 들어오고 나갈 때
+
+구독 목록은 계속 바뀐다. 아래는 ws-2의 구독 목록이 시간에 따라 바뀌는 모습이다.
+
+<AlgoTrace
+  caption="ws-2가 구독하는 채널 목록"
+  cells={["밥 접속", "캐럴 접속", "에린 접속", "밥-프랭크 친구", "밥 종료", "캐럴 종료"]}
+  memoryLabel="ws-2의 구독"
+  steps={[
+    { caption: "밥이 ws-2에 붙는다. 친구 앨리스와 에린의 채널을 구독한다. 에린은 아직 앱을 켜지 않았다.", pointer: 0, memory: ["loc:alice", "loc:erin"] },
+    { caption: "캐럴이 붙는다. 캐럴의 친구는 앨리스뿐인데 이미 구독 중이라 새로 할 일이 없다.", pointer: 1, memory: ["loc:alice ×2", "loc:erin"] },
+    { caption: "에린이 앱을 켰다. ws-2는 loc:erin을 이미 듣고 있어서, 에린의 첫 위치부터 바로 받는다.", pointer: 2, memory: ["loc:alice ×2", "loc:erin"] },
+    { caption: "밥이 프랭크와 친구가 됐다. 앱이 ws-2에 알리고 ws-2가 loc:frank를 구독한다.", pointer: 3, memory: ["loc:alice ×2", "loc:erin", "loc:frank"] },
+    { caption: "밥이 앱을 끈다. 밥만 듣던 erin, frank 채널은 구독을 끊고 alice는 캐럴 몫이 남는다.", pointer: 4, memory: ["loc:alice ×1"] },
+    { caption: "캐럴도 끈다. ws-2의 구독이 비었다.", pointer: 5, found: [5], memory: [] },
+  ]}
+/>
+
+그림의 "×2"는 서버 안에서 그 채널을 필요로 하는 사용자 수다. 서버는 채널마다 이 수를 세어 두고, 0이 될 때만 구독을 끊는다. 하나를 잘못 끊으면 같은 서버의 다른 사용자가 그 친구의 소식을 못 받는다. 친구 추가와 삭제는 앱이 이벤트로 받아 WebSocket 서버에 "이 채널을 구독해, 끊어"라고 알리면 된다.
+
+## 발행·구독 서버 한 대로는 모자라다
+
+Pub/Sub 서버의 부담은 두 가지다. 구독 목록을 담는 메모리와, 메시지를 밀어내는 CPU다. 메모리부터 쟀다. 연결 4개로 채널 10만 개를 구독시키고 Redis 메모리가 얼마나 느는지 봤다.
+
+```js
+// submem.js 일부: 구독 10만 개가 Redis 메모리를 얼마나 쓰나 (연결 4개 × 채널 2.5만)
+for (let k = 0; k < 4; k++) {
+  const s = connect(6397); await s.ready; s.subscribed = true;
+  const jobs = []; for (let i = 0; i < 25000; i++) jobs.push(s.cmd("SUBSCRIBE", `loc:user${k * 25000 + i}`));
+  await Promise.all(jobs);
+}
+```
+
+```text
+PUBSUB NUMPAT/channels: [ 'loc:user0', 1, 'loc:user99999', 1 ]
+100000 subscriptions: +20.8 MiB, 218 bytes each
+```
+
+구독 하나에 약 218바이트다(Redis 7.0에서 잰 값이고 연결 버퍼 몫도 섞여 있다). 이 설계는 접속한 사용자가 친구 300명의 채널을 켜 뒀든 아니든 모두 구독한다. 그래야 친구가 앱을 켜는 순간 따로 알리지 않아도 첫 위치부터 받는다. 동시 사용자 100만 명 × 친구 300명이면 구독은 최대 3억 개, 약 65GB다. 같은 서버 안의 중복 구독이 합쳐져 실제로는 이보다 적지만, 메모리로만 봐도 한 대로는 빠듯하다. 꺼진 친구의 채널은 발행이 없으니 CPU는 쓰지 않는다.
+
+CPU는 더 빠듯하다. 앞에서 계산한 대로 초당 약 100만 건을 밀어내야 한다. Redis는 명령을 한 스레드로 처리해서, 한 대가 밀어낼 수 있는 양에 한계가 있다. 한 대가 초당 10만 건쯤 밀어낸다고 가정하면 최소 10대, 여유를 두면 15대 이상이 필요하다. 이 10만이라는 숫자는 메시지 크기와 장비에 따라 크게 달라서, 실제로는 `redis-benchmark`나 직접 만든 부하로 재서 정해야 한다.
+
+## 채널을 노드에 나누고, 노드를 늘릴 때
+
+Pub/Sub 노드가 여러 대면 "`loc:alice`는 어느 노드에 있나"를 모두가 같은 답으로 알아야 한다. 발행하는 서버와 구독하는 서버가 다른 노드를 보면 메시지가 사라진다. 채널 이름을 해시해서 노드를 정하되, 노드 목록은 etcd나 ZooKeeper 같은 서비스 디스커버리에 두고 모든 WebSocket 서버가 같은 목록을 본다. 디스커버리는 [서비스 디스커버리](/posts/service-discovery) 글에 있다.
+
+노드를 늘릴 때 해시 방식이 중요하다. 채널 10만 개로 노드를 10대에서 11대로 늘리면 몇 채널이 다른 노드로 옮겨 가는지 셌다.
+
+```js
+// ring.js 일부: 노드 10 → 11대일 때 옮겨 가는 채널 수
+const modMoved = channels.filter((c) => h(c) % 10 !== h(c) % 11).length;   // 나머지로 나눌 때
+const r10 = ring(10), r11 = ring(11);                                        // 노드당 가상 노드 100개짜리 해시 링
+const ringMoved = channels.filter((c) => r10(c) !== r11(c)).length;
+```
+
+```text
+hash % N        : 90803 of 100000 channels move (90.8%)
+consistent hash : 9344 of 100000 channels move (9.3%)
+```
+
+나머지 방식은 91%가 움직인다. 채널이 옮겨 가면 그 채널을 구독하던 모든 WebSocket 서버가 새 노드에 다시 구독해야 하고, 그 사이 발행된 위치는 잃는다. 안정 해시(consistent hashing)는 새 노드가 맡을 몫인 약 9%만 옮긴다. 안정 해시가 왜 그렇게 되는지는 [안정 해시](/posts/consistent-hashing)에 있다.
+
+<NetworkTopology
+  caption="노드를 하나 늘리면 옮겨 간 채널만 다시 구독한다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "cluster", label: "Pub/Sub 노드", x: 215, y: 10, w: 175, h: 240, tone: "private" },
+  ]}
+  nodes={[
+    { id: "disc", label: "디스커버리", sub: "etcd", x: 120, y: 30, icon: "dns" },
+    { id: "ws1", label: "ws-1", x: 50, y: 110, icon: "server" },
+    { id: "ws2", label: "ws-2", x: 50, y: 210, icon: "server" },
+    { id: "p1", label: "ps-1", x: 300, y: 50, icon: "router" },
+    { id: "p2", label: "ps-2", x: 300, y: 130, icon: "router" },
+    { id: "p3", label: "ps-3 (새)", x: 300, y: 215, icon: "router" },
+  ]}
+  links={[
+    { from: "disc", to: "ws1", dashed: true },
+    { from: "disc", to: "ws2", dashed: true },
+    { from: "ws1", to: "p1" },
+    { from: "ws1", to: "p2" },
+    { from: "ws2", to: "p2" },
+    { from: "ws2", to: "p3" },
+  ]}
+  steps={[
+    { path: ["ws1", "p1"], packet: "loc:alice", title: "링이 노드를 정한다", detail: "ws-1은 해시 링에서 loc:alice가 ps-1 몫임을 보고 ps-1에 발행한다." },
+    { path: ["p3"], highlight: ["p3"], title: "노드를 하나 늘린다", detail: "부하가 늘어 ps-3을 붙이고 디스커버리의 링을 고친다." },
+    { path: ["disc", "ws2"], packet: "새 링", title: "새 링이 퍼진다", detail: "모든 WebSocket 서버가 바뀐 링을 받는다. 서버마다 메모리에 링을 캐시해 둔다." },
+    { path: ["ws2", "p3"], packet: "SUBSCRIBE", title: "옮긴 채널만 다시", detail: "ps-3으로 옮겨 간 약 9%의 채널만 ps-3에 다시 구독하고 옛 노드에서 끊는다." },
+    { path: ["ws2", "p2"], packet: "위치 몇 개", blocked: true, title: "그 사이 몇 개는 잃는다", detail: "옮기는 동안 옛 노드에 발행된 위치 몇 개는 못 받는다. 다음 갱신이 30초 안에 온다." },
+  ]}
+/>
+
+노드 수는 하루 트래픽 그래프를 보고 미리 넉넉하게 잡는다. 바꿔야 한다면 트래픽이 가장 적은 새벽에 한다. 다시 구독하는 요청이 한꺼번에 몰리고 위치 몇 개가 사라지기 때문이다.
+
+Redis Cluster를 그대로 쓰면 어떨까. Redis Cluster에서 보통의 `PUBLISH`는 클러스터의 모든 노드로 퍼진다. 노드를 늘려도 메시지 하나를 모든 노드가 처리하니 밀어내는 양이 나뉘지 않는다. Redis 7.0부터 생긴 샤드 Pub/Sub(`SPUBLISH`, `SSUBSCRIBE`)은 채널을 키처럼 해시 슬롯에 묶어 그 슬롯의 노드에서만 처리한다. 직접 링을 관리하지 않고 이걸 쓰는 길도 있다.
+
+## WebSocket 서버를 내릴 때
+
+WebSocket 서버도 늘리고 줄인다. 늘리기는 쉽다. 새 서버를 로드 밸런서에 넣으면 새 연결이 그쪽으로 간다. 줄이기가 어렵다. 서버를 바로 끄면 붙어 있던 수만 명이 한꺼번에 끊기고 한꺼번에 다시 붙는다.
+
+그래서 내릴 서버를 먼저 "비우는 중(draining)"으로 표시한다. 로드 밸런서는 그 서버에 새 연결을 보내지 않는다. 서버는 붙어 있는 연결을 몇 분에 걸쳐 조금씩 닫고, 끊긴 앱은 다른 서버에 다시 붙는다. 연결이 다 빠지면 그때 끈다. 배포할 때도 같은 순서로 한 대씩 돈다.
+
+## 친구가 많은 사람, 모르는 사람
+
+친구가 수천 명인 사람이 앱을 켜면 그 사람의 서버는 수천 개 채널을 구독하고, 그 사람이 움직일 때마다 수천 명의 서버로 메시지가 간다. 대부분의 서비스는 친구 수에 상한을 둔다. 상한 안이라면, 이런 사용자는 여러 WebSocket 서버에 고르게 흩어져 있으니 한 서버가 감당하지 못할 정도는 아니다. 친구 수천 명에게 글을 퍼뜨리는 문제는 [㉔ 뉴스 피드 발행](/posts/sd-news-feed-publishing)에서도 나왔다.
+
+면접관이 "친구가 아닌 근처 사람도 가끔 보여 주자"고 바꾸면 채널 단위를 바꾼다. 사용자 채널 대신 지오해시 칸마다 채널을 둔다. 앱은 자기가 있는 칸의 채널에 위치를 발행하고, 같은 칸 채널을 구독해 근처 사람을 받는다. 칸 가장자리에 서 있으면 옆 칸 사람을 놓치니 이웃 칸 채널도 함께 구독한다. 앞 글의 9칸 검색과 같은 이유다. [지오해시](/posts/geohash) 글에 칸 경계 문제가 있다.
+
+## Redis 말고 다른 선택지
+
+Erlang이나 Elixir 같은 액터 기반 런타임에서는 사용자마다 가벼운 프로세스 하나를 띄우고, 프로세스끼리 메시지를 주고받는다. 프로세스 수백만 개를 한 클러스터에 띄울 수 있어서, WebSocket 연결과 채널 구독을 한 런타임 안에서 처리한다. 별도의 Pub/Sub 부품이 없어지는 대신, 그 언어와 런타임을 다룰 줄 아는 사람이 팀에 있어야 한다.
+
+Kafka 같은 로그 기반 메시지 큐는 이 용도에 잘 맞지 않는다. 메시지를 디스크에 남기는 대신 토픽이나 파티션 수를 사용자 수만큼 늘릴 수 없다. 사용자 100만 명에게 각각 토픽을 주는 구조가 아니다. 반대로 위치 이력을 분석 시스템으로 흘려보내는 쪽에는 Kafka가 잘 맞는다. 다음 다음 글에서 그 쓰임을 본다.
+
+## 다음 글
+
+주변 친구는 "찾기"가 아니라 "퍼뜨리기" 문제였다. 위치가 바뀔 때마다 사용자 채널에 발행하고, 친구의 서버가 구독해 받은 뒤 거리를 재서 보낸다. 마지막 위치는 만료가 걸린 캐시에 두어 오프라인 처리를 대신하고, 이력은 큐 뒤로 뺐다. 들어오는 갱신보다 나가는 메시지가 30배 많아서 Pub/Sub은 메모리와 CPU 때문에 여러 대로 나누고, 노드를 늘릴 때 다시 구독하는 양을 줄이려고 안정 해시를 썼다.
+
+다음 글 [㊲ 지도 서비스 ①: 타일과 길 찾기](/posts/sd-maps-tiles-routing)는 위치 위에 지도를 그린다. 지도 그림을 조각내서 나눠 주는 법과, 도로를 그래프로 보고 가장 빠른 길을 찾는 법을 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 폴링 대신 WebSocket을 쓰나요?
+
+친구 위치가 바뀌는 순간 서버가 먼저 보내야 하기 때문이다. 30초 폴링이면 평균 15초 늦은 위치를 보고, 요청마다 친구 300명을 읽고 대부분 버린다. WebSocket은 연결을 열어 두고 양쪽이 아무 때나 보내니, 위치를 올리는 것과 받는 것을 한 연결로 한다. 대신 연결을 쥔 서버가 상태를 갖게 돼서 배포와 축소가 어려워진다.
+
+### 위치 하나가 올라오면 어떤 순서로 친구에게 가나요?
+
+WebSocket 서버가 받아 위치 캐시에 만료와 함께 쓰고, 이력은 큐에 던지고, 그 사용자의 채널에 발행한다. 그 채널을 구독한 친구들의 WebSocket 서버가 받아서, 자기에게 붙은 사용자와의 거리를 잰다. 반경 안이면 그 사용자에게 밀어 준다. 발행하는 쪽은 친구가 어디 있는지 몰라도 된다.
+
+### 거리는 왜 받는 쪽에서 재나요?
+
+받는 서버가 자기 사용자의 위치를 이미 메모리에 들고 있기 때문이다. 발행하는 쪽에서 재려면 발행할 때마다 친구 300명의 위치를 캐시에서 읽어야 한다. 받는 쪽에서 재면 메시지 하나와 메모리의 값으로 끝난다. 반경 밖 메시지가 한 번 날아가는 낭비는 있지만 읽기를 크게 줄인다.
+
+### 사용자가 10배로 늘면 어디가 먼저 터지나요?
+
+Pub/Sub이 내보내는 메시지 수가 먼저 터진다. 들어오는 갱신의 약 30배를 밀어내야 해서 초당 100만 건이 1,000만 건이 된다. 구독 메모리도 수십 GB지만 CPU가 더 빨리 모자라서 노드를 여러 대로 나누고, 채널을 안정 해시로 배치한다. WebSocket 서버와 위치 캐시는 사용자 ID로 나누면 그대로 늘어난다.
+
+### Pub/Sub 노드 하나가 죽으면 어떻게 되나요?
+
+그 노드에 배치된 채널의 위치가 잠깐 안 간다. 디스커버리가 죽은 노드를 링에서 빼면, 그 노드 몫의 채널만 다음 노드로 옮겨 가고 WebSocket 서버들이 그 채널만 다시 구독한다. 그동안 위치 몇 개는 잃지만 30초 안에 다음 갱신이 오니 이 기능에서는 받아들일 수 있다. 잃으면 안 되는 데이터였다면 Redis Pub/Sub이 아니라 기록이 남는 큐를 썼을 것이다.
+
+### 오프라인이 된 친구는 어떻게 목록에서 빼나요?
+
+위치 캐시의 만료로 뺀다. 마지막 위치를 10분 만료로 쓰고 갱신 때마다 기한을 다시 늘리니, 앱을 끈 사람은 10분 뒤 저절로 사라진다. 처음 붙을 때 친구 위치를 한 번에 읽으면 만료된 친구는 빈 값으로 오니 목록에 넣지 않는다. 화면에 이미 떠 있던 친구는 앱이 마지막 갱신 시각을 보고 지운다.
+
+### WebSocket 서버를 배포할 때 사용자가 끊기지 않게 하려면요?
+
+한 대씩 비우는 중으로 표시해 새 연결을 막고, 붙어 있는 연결을 몇 분에 걸쳐 조금씩 닫는다. 앱은 지수적 대기와 무작위 지연을 두고 다른 서버에 다시 붙는다. 다시 붙으면 친구 위치를 한 번에 읽어 화면을 채우고 채널을 다시 구독한다. 한꺼번에 끄면 수만 명이 동시에 다시 붙어 사용자 DB와 캐시가 몰린다.
+
+### 친구가 아닌 근처 사람도 보여 주려면요?
+
+채널 단위를 사용자에서 지오해시 칸으로 바꾼다. 앱은 자기 칸의 채널에 위치를 발행하고, 자기 칸과 이웃 칸의 채널을 구독한다. 칸 경계 근처의 사람을 놓치지 않으려고 이웃 칸까지 듣는다. 사람이 많은 칸은 메시지가 너무 많으니 표본만 보내거나 칸을 더 잘게 나눈다.

@@ -2,6 +2,151 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-mq-replication": {
+    "links": [
+      "sd-mq-storage-partitions",
+      "sd-mq-consumer-groups",
+      "kafka-basics",
+      "sd-kv-store-partition-replication",
+      "raft-consensus",
+      "leader-election",
+      "message-delivery-semantics",
+      "db-replication-sharding"
+    ],
+    "mentions": [
+      "pub-sub",
+      "rolling-deployment",
+      "vpc-basics",
+      "rendering-strategies"
+    ]
+  },
+  "sd-mq-consumer-groups": {
+    "links": [
+      "sd-mq-storage-partitions",
+      "sd-mq-replication",
+      "kafka-basics",
+      "backpressure",
+      "long-polling",
+      "rabbitmq-basics",
+      "raft-consensus",
+      "leader-election",
+      "message-delivery-semantics",
+      "pub-sub",
+      "message-queue-basics"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "deadlocks",
+      "rolling-deployment",
+      "distributed-lock",
+      "redis-basics",
+      "db-type-key-value",
+      "realtime-communication"
+    ]
+  },
+  "sd-mq-storage-partitions": {
+    "links": [
+      "sd-maps-location-eta",
+      "sd-mq-consumer-groups",
+      "sd-mq-replication",
+      "sd-queue-logging-automation",
+      "kafka-basics",
+      "message-queue-basics",
+      "pub-sub",
+      "consistent-hashing",
+      "sd-capacity-estimation",
+      "rabbitmq-basics"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "sd-start-single-server"
+    ]
+  },
+  "sd-maps-location-eta": {
+    "links": [
+      "sd-maps-tiles-routing",
+      "sd-mq-storage-partitions",
+      "sd-proximity-service",
+      "sd-nearby-friends",
+      "sd-capacity-estimation",
+      "sd-kv-store-write-read-path",
+      "db-type-wide-column",
+      "eventual-consistency",
+      "kafka-basics",
+      "percentile-latency",
+      "sd-chat-connections",
+      "websocket-deep-dive"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "pub-sub",
+      "db-type-relational",
+      "redis-basics",
+      "geohash",
+      "dns"
+    ]
+  },
+  "sd-maps-tiles-routing": {
+    "links": [
+      "sd-nearby-friends",
+      "sd-maps-location-eta",
+      "sd-proximity-service",
+      "http-caching-cdn",
+      "db-type-graph"
+    ],
+    "mentions": [
+      "grpc"
+    ]
+  },
+  "sd-nearby-friends": {
+    "links": [
+      "sd-proximity-service",
+      "sd-maps-tiles-routing",
+      "sd-maps-location-eta",
+      "sd-chat-connections",
+      "sd-chat-presence",
+      "realtime-communication",
+      "websocket-deep-dive",
+      "db-type-wide-column",
+      "sd-queue-logging-automation",
+      "pub-sub",
+      "redis-cluster",
+      "service-discovery",
+      "consistent-hashing",
+      "sd-news-feed-publishing",
+      "geohash"
+    ],
+    "mentions": [
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "redis-basics",
+      "db-type-key-value"
+    ]
+  },
+  "sd-proximity-service": {
+    "links": [
+      "sd-file-sync-conflicts",
+      "sd-nearby-friends",
+      "sd-maps-tiles-routing",
+      "sd-maps-location-eta",
+      "geohash",
+      "quadtree",
+      "sd-capacity-estimation",
+      "sd-load-balancer-stateless",
+      "sd-db-replication-intro",
+      "sd-sharding-intro",
+      "caching-strategies",
+      "cache-invalidation",
+      "sd-multi-datacenter"
+    ],
+    "mentions": [
+      "db-index",
+      "sd-start-single-server",
+      "db-types-overview",
+      "redis-basics",
+      "dns"
+    ]
+  },
   "javascript-roadmap": {
     "links": [
       "k8s-learning-roadmap",
@@ -95,6 +240,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "sd-file-sync-conflicts": {
     "links": [
       "sd-file-sync-block-upload",
+      "sd-proximity-service",
       "clock-skew",
       "optimistic-locking",
       "sd-kv-store-versioning",
@@ -113,6 +259,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-video-streaming-cost",
       "sd-file-sync-conflicts",
+      "sd-proximity-service",
       "sd-video-upload-transcoding",
       "sd-load-balancer-stateless",
       "sd-sharding-intro",
@@ -161,7 +308,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-chat-message-storage",
       "sd-autocomplete-trie",
       "websocket-deep-dive",
-      "pub-sub"
+      "pub-sub",
+      "sd-nearby-friends"
     ],
     "mentions": [
       "realtime-communication",
@@ -190,6 +338,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sd-start-single-server",
       "db-type-relational",
+      "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
       "pub-sub"
@@ -1107,6 +1256,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-sharding-intro",
       "db-type-columnar-olap",
       "db-replication-sharding",
+      "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
       "db-modeling-normalization"
@@ -4760,6 +4910,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "mongodb-document-model",
+      "sd-mq-storage-partitions",
+      "sd-proximity-service",
       "db-index-design",
       "redis-basics"
     ]
@@ -5190,6 +5342,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hyperloglog"
     ],
     "mentions": [
+      "sd-mq-storage-partitions",
       "bloom-filter",
       "postgres-architecture",
       "redis-basics",
@@ -5548,6 +5701,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rabbitmq-basics"
     ],
     "mentions": [
+      "sd-mq-replication",
+      "sd-mq-consumer-groups",
+      "sd-mq-storage-partitions",
       "db-type-wide-column"
     ]
   },
@@ -5971,6 +6127,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "db-index-design",
       "resilience-patterns",
+      "sd-mq-storage-partitions",
       "js-pure-functions",
       "realtime-communication",
       "http-methods"
@@ -7380,7 +7537,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding"
     ],
     "mentions": [
-      "sd-start-single-server"
+      "sd-start-single-server",
+      "sd-mq-storage-partitions"
     ]
   },
   "db-index-pitfalls": {
@@ -7780,6 +7938,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "sd-mq-storage-partitions",
       "scaling-horizontal-vertical"
     ]
   },
@@ -7828,6 +7987,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "raft-consensus",
+      "sd-mq-storage-partitions",
       "leader-election",
       "dns"
     ]
@@ -7845,6 +8005,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "db-sharding",
       "db-type-relational",
+      "sd-mq-storage-partitions",
       "bloom-filter",
       "db-index-pitfalls",
       "sd-kv-store-write-read-path",
@@ -7878,6 +8039,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
+      "sd-mq-storage-partitions",
       "db-type-relational",
       "acid-transactions"
     ]
@@ -8274,6 +8436,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "prometheus-basics",
       "db-architecture-by-scale",
       "sd-start-single-server",
+      "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "sql-batch-timeout-pool",
       "db-type-key-value",
@@ -8313,6 +8476,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational",
       "db-type-graph",
       "http-caching-cdn",
+      "sd-mq-storage-partitions",
       "distributed-tracing",
       "kafka-basics",
       "sql-batch-timeout-pool",

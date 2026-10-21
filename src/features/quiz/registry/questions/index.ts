@@ -393,11 +393,18 @@ import { SD_KV_STORE_VERSIONING } from "./sd-kv-store-versioning";
 import { SD_KV_STORE_WRITE_READ_PATH } from "./sd-kv-store-write-read-path";
 import { SD_LATENCY_NUMBERS } from "./sd-latency-numbers";
 import { SD_LOAD_BALANCER_STATELESS } from "./sd-load-balancer-stateless";
+import { SD_MAPS_LOCATION_ETA } from "./sd-maps-location-eta";
+import { SD_MAPS_TILES_ROUTING } from "./sd-maps-tiles-routing";
+import { SD_MQ_CONSUMER_GROUPS } from "./sd-mq-consumer-groups";
+import { SD_MQ_REPLICATION } from "./sd-mq-replication";
+import { SD_MQ_STORAGE_PARTITIONS } from "./sd-mq-storage-partitions";
 import { SD_MULTI_DATACENTER } from "./sd-multi-datacenter";
+import { SD_NEARBY_FRIENDS } from "./sd-nearby-friends";
 import { SD_NEWS_FEED_PUBLISHING } from "./sd-news-feed-publishing";
 import { SD_NEWS_FEED_RETRIEVAL } from "./sd-news-feed-retrieval";
 import { SD_NOTIFICATION_RELIABILITY } from "./sd-notification-reliability";
 import { SD_NOTIFICATION_SYSTEM } from "./sd-notification-system";
+import { SD_PROXIMITY_SERVICE } from "./sd-proximity-service";
 import { SD_QUEUE_LOGGING_AUTOMATION } from "./sd-queue-logging-automation";
 import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
 import { SD_SHARDING_INTRO } from "./sd-sharding-intro";
@@ -883,11 +890,18 @@ export const QUESTION_SETS = [
   SD_KV_STORE_WRITE_READ_PATH,
   SD_LATENCY_NUMBERS,
   SD_LOAD_BALANCER_STATELESS,
+  SD_MAPS_LOCATION_ETA,
+  SD_MAPS_TILES_ROUTING,
+  SD_MQ_CONSUMER_GROUPS,
+  SD_MQ_REPLICATION,
+  SD_MQ_STORAGE_PARTITIONS,
   SD_MULTI_DATACENTER,
+  SD_NEARBY_FRIENDS,
   SD_NEWS_FEED_PUBLISHING,
   SD_NEWS_FEED_RETRIEVAL,
   SD_NOTIFICATION_RELIABILITY,
   SD_NOTIFICATION_SYSTEM,
+  SD_PROXIMITY_SERVICE,
   SD_QUEUE_LOGGING_AUTOMATION,
   SD_RATE_LIMITER_DESIGN,
   SD_SHARDING_INTRO,
