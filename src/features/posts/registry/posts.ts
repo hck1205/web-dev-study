@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "health-checks",
+    title: "헬스 체크 설계: 얕은 검사, 깊은 검사, 그리고 연쇄 장애",
+    summary: "공유 Redis를 확인하는 깊은 검사 때문에 HAProxy 뒤의 서버 세 대가 함께 빠지는 장면을 재현하고, 얕은 검사와 요청 단위 실패로 장애를 줄이는 법, 검사 부하와 타임아웃, 뜰 때 하는 검사, /livez·/readyz 설계를 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "Load Balancer", "DevOps", "Resilience", "Troubleshooting"],
+    date: "2026-10-21",
+    keywords: ["깊은 헬스 체크", "얕은 헬스 체크", "/readyz", "fail open"],
+  },
+  {
+    slug: "error-budgets",
+    title: "에러 예산과 소진 속도: 남은 실패로 배포를 정한다",
+    summary: "에러 예산과 소진 속도를 계산하고, 여러 창 여러 속도 알림을 기록 규칙으로 만들어 promtool로 언제 울리는지 잰다. 28일 이력을 백필한 Prometheus에 남은 예산을 묻는 배포 게이트와 예산 정책까지 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "DevOps", "Resilience"],
+    date: "2026-10-21",
+    keywords: ["에러 예산", "소진 속도", "burn rate", "multiwindow multi-burn-rate"],
+  },
+  {
+    slug: "sli-slo",
+    title: "SLI와 SLO: 사용자가 겪은 일을 숫자 하나로",
+    summary: "nginx 로그에서 가용성과 지연 SLI를 직접 계산해 서버 안에서 잰 숫자와 비교하고, 문턱 안 비율로 재는 지연 SLI, 아홉별 허용 장애 시간, 28일 굴러가는 창, SLA와 SLO의 차이를 정리한다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "DevOps", "Nginx", "Performance"],
+    date: "2026-10-21",
+    keywords: ["SLI", "SLO", "지연 SLI", "굴러가는 창"],
+  },
+  {
+    slug: "alerting",
+    title: "알림 설계: 증상에 걸고, 묶고, 누르고, 런북을 단다",
+    summary: "사람을 깨울 알림과 대시보드에 둘 숫자를 가르는 기준을 세우고, Prometheus 규칙의 for가 창과 더해져 울리는 시점을 promtool로 재 본다. Alertmanager의 묶기, 누르기, 잠재우기와 페이지·티켓 라우팅, 알림 피로를 세는 법까지 실제 출력으로 따라간다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "DevOps", "Troubleshooting", "Linux"],
+    date: "2026-10-21",
+    keywords: ["Alertmanager", "inhibit_rules", "keep_firing_for", "알림 피로", "runbook_url"],
+  },
+  {
     slug: "cache-invalidation",
     title: "캐시 무효화: 퍼지, ban, 태그, 그리고 지운 뒤 다시 들어오는 옛 값",
     summary: "가격 하나가 CDN, 앱 서버 로컬 캐시, Redis에 사본으로 퍼져 있을 때 변경을 모두에게 전하는 법을 다룬다. Varnish로 퍼지와 ban과 태그 무효화를 비교하고, pub/sub 무효화가 빠지는 순간, 삭제 뒤 옛 값이 다시 채워지는 경쟁과 리스, 복제본보다 빠른 CDN 퍼지를 직접 재현한다.",

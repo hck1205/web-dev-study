@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { ALERTING } from "./alerting";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
@@ -68,6 +69,7 @@ import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
+import { ERROR_BUDGETS } from "./error-budgets";
 import { EVENT_DRIVEN_ARCHITECTURE } from "./event-driven-architecture";
 import { EVENT_LOOP } from "./event-loop";
 import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
@@ -93,6 +95,7 @@ import { GIT_TROUBLESHOOTING } from "./git-troubleshooting";
 import { GIT_UNDO } from "./git-undo";
 import { GITHUB_ACTIONS_DOCKER_ECR } from "./github-actions-docker-ecr";
 import { GRPC } from "./grpc";
+import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
 import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
 import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
@@ -252,6 +255,7 @@ import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SERVER_SENT_EVENTS } from "./server-sent-events";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
+import { SLI_SLO } from "./sli-slo";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
 import { SQL_INJECTION } from "./sql-injection";
@@ -304,6 +308,7 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  ALERTING,
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
@@ -373,6 +378,7 @@ export const QUESTION_SETS = [
   ELASTICSEARCH_INVERTED_INDEX,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
+  ERROR_BUDGETS,
   EVENT_DRIVEN_ARCHITECTURE,
   EVENT_LOOP,
   EVENTUAL_CONSISTENCY,
@@ -398,6 +404,7 @@ export const QUESTION_SETS = [
   GIT_UNDO,
   GITHUB_ACTIONS_DOCKER_ECR,
   GRPC,
+  HEALTH_CHECKS,
   HELM_BASICS,
   HELM_CHART_TEMPLATES,
   HELM_DEPENDENCIES_OCI_GITOPS,
@@ -557,6 +564,7 @@ export const QUESTION_SETS = [
   SERVER_SENT_EVENTS,
   SERVICE_DISCOVERY,
   SERVICE_MESH,
+  SLI_SLO,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
   SQL_INJECTION,

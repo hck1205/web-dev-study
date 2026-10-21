@@ -2,6 +2,61 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "health-checks": {
+    "links": [
+      "load-balancer-basics",
+      "k8s-pod-probes",
+      "alerting",
+      "circuit-breaker",
+      "sli-slo"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "resilience-patterns",
+      "event-loop",
+      "vpc-basics",
+      "osi-in-practice",
+      "redis-basics",
+      "http-status-codes"
+    ]
+  },
+  "error-budgets": {
+    "links": [
+      "sli-slo",
+      "alerting"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "zero-downtime-migrations"
+    ]
+  },
+  "sli-slo": {
+    "links": [
+      "alerting",
+      "error-budgets",
+      "monitoring-basics",
+      "metrics-types"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "http-status-codes",
+      "dns"
+    ]
+  },
+  "alerting": {
+    "links": [
+      "monitoring-basics",
+      "sli-slo",
+      "error-budgets",
+      "health-checks",
+      "network-monitoring"
+    ],
+    "mentions": [
+      "cron-jobs",
+      "service-discovery",
+      "webhooks"
+    ]
+  },
   "cache-invalidation": {
     "links": [
       "caching-strategies",
@@ -56,7 +111,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "latency-bandwidth-throughput",
       "tail-latency",
-      "metrics-types"
+      "metrics-types",
+      "sli-slo"
     ],
     "mentions": [
       "tcp-connection-lifecycle",
@@ -249,6 +305,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "zero-downtime-migrations",
       "db-migration-tools",
       "dead-letter-queue",
+      "sli-slo",
+      "error-budgets",
       "canary-release",
       "blue-green-deployment"
     ],
@@ -328,6 +386,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "percentile-latency",
       "db-type-time-series",
       "network-monitoring",
+      "sli-slo",
       "tail-latency",
       "structured-logging"
     ],
@@ -340,7 +399,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "observability-basics",
       "metrics-types",
       "structured-logging",
-      "network-monitoring"
+      "network-monitoring",
+      "alerting",
+      "sli-slo"
     ],
     "mentions": [
       "service-discovery",
@@ -770,6 +831,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "event-driven-architecture",
       "service-mesh",
+      "alerting",
       "network-flow-logs",
       "network-monitoring",
       "timeouts"
@@ -820,6 +882,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool",
       "iptables-basics",
       "k8s-coredns",
+      "alerting",
+      "sli-slo",
       "packet-capture-tcpdump",
       "network-flow-logs",
       "db-type-time-series"
@@ -1797,6 +1861,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rabbitmq-basics",
       "kafka-basics",
       "structured-logging",
+      "alerting",
       "idempotency-key",
       "message-delivery-semantics"
     ],
@@ -2076,6 +2141,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "sql-batch-timeout-pool",
       "what-happens-google-com",
+      "sli-slo",
       "dns"
     ]
   },
@@ -2106,6 +2172,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "ports-and-sockets",
       "tcp-connection-lifecycle",
+      "health-checks",
       "k8s-pod-probes",
       "cdn-edge-anycast"
     ],
@@ -2390,6 +2457,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "http-status-codes",
+      "health-checks",
       "osi-in-practice",
       "redis-basics",
       "ipv6-basics"
@@ -3417,6 +3485,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational"
     ],
     "mentions": [
+      "alerting",
       "metrics-types",
       "db-partitioning",
       "sqld-group-by-having",
@@ -4818,6 +4887,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-in-practice",
       "canary-release",
       "k8s-network-policy",
+      "health-checks",
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",

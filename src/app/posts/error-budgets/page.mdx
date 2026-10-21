@@ -1,0 +1,431 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("error-budgets");
+
+금요일 오후, 기능 팀은 이번 주 배포를 하나 더 하고 싶고 운영을 맡은 사람은 이번 달 장애가 벌써 두 번이니 그만하자고 한다. 둘 다 근거는 "느낌"이다. 기능 팀은 "이번 건 작은 변경"이라고, 운영 쪽은 "요즘 불안하다"고 말한다. 목소리가 큰 쪽이 이긴다.
+
+에러 예산(error budget)은 이 다툼을 숫자 하나로 바꾸려고 생겼다. SLO가 99.9%라면 나머지 0.1%는 실패해도 된다고 미리 합의한 몫이다. 그 몫이 남아 있으면 배포하고 실험해도 되고, 바닥나면 안정성에 시간을 쓴다. 이 글은 예산과 소진 속도(burn rate)를 계산하고, 구글 SRE 워크북이 권하는 여러 창 여러 속도(multiwindow, multi-burn-rate) 알림을 Prometheus 기록 규칙으로 만든 뒤 promtool로 실제로 언제 울리는지 재고, 예산이 바닥났을 때 배포를 막는 게이트까지 돌려 본다.
+
+이 주제의 다른 글: SLI와 SLO를 정의하고 아홉별 허용 시간을 계산하는 [SLI와 SLO](/posts/sli-slo), 알림 규칙과 Alertmanager를 다루는 [알림 설계](/posts/alerting). 여기서는 두 글에서 정한 숫자로 알림과 의사결정을 만드는 쪽만 다룬다.
+
+실습 환경은 Ubuntu 24.04, Prometheus 3.5.0과 promtool이다. 실제 트래픽 대신 promtool 단위 테스트에 며칠치 카운터를 넣었고, 28일치 이력은 OpenMetrics 파일로 만들어 Prometheus에 백필했다.
+
+## 실패해도 되는 몫을 미리 정한다
+
+예산은 단순하다.
+
+```text
+에러 예산 = 1 - SLO
+```
+
+SLO가 99.9%면 예산은 0.1%다. 이걸 개수나 시간으로 바꾸면 손에 잡힌다. 28일 동안 분당 1만 건이 들어오는 API라면 전체 요청은 4억 320만 건, 그중 40만 3,200건까지는 실패해도 SLO를 지킨다. 30일 동안 완전히 멈추는 것으로 치면 43.2분이다. 아홉별 시간은 [SLI와 SLO 글의 계산기](/posts/sli-slo)로 구할 수 있다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="예산이 남았는지가 다음 행동을 정한다"
+  nodes={[
+    { id: "slo", label: "SLO 99.9%", x: 200, y: 36, w: 130 },
+    { id: "eb", label: "에러 예산 0.1%", sub: "28일 40만 건", x: 200, y: 112, w: 150 },
+    { id: "left", label: "남았다", sub: "배포·실험 계속", x: 90, y: 204, w: 140 },
+    { id: "out", label: "바닥났다", sub: "변경 동결, 안정성", x: 310, y: 204, w: 150 },
+  ]}
+  edges={[
+    { from: "slo", to: "eb", label: "1 - SLO" },
+    { from: "eb", to: "left" },
+    { from: "eb", to: "out" },
+    { from: "out", to: "eb", dashed: true, label: "창이 지나며 회복" },
+  ]}
+/>
+
+이 숫자가 바꾸는 건 대화의 주제다. "이번 배포가 위험한가"는 답이 없는 질문이지만, "이번 달 예산이 몇 % 남았나"는 쿼리 한 줄로 답이 나온다. 예산이 넉넉하면 운영 쪽도 배포를 막을 이유가 없고, 바닥났으면 기능 팀도 반박할 거리가 없다. 그리고 예산을 0으로 두지 않는다는 것 자체가 "변경에는 위험이 따르고 그 위험을 일부 받아들인다"는 합의다. 100% SLO는 이 합의를 거부하는 셈이라 변경을 아예 못 하게 만든다.
+
+예산을 쓰는 건 장애만이 아니다. 배포 중 잠깐의 502, 의존 서비스의 짧은 지연, 일부러 하는 장애 실험이 모두 같은 주머니에서 나간다. 아래는 30일 예산 43.2분이 한 달 동안 줄어드는 모습이다.
+
+<AlgoTrace
+  caption="30일 예산 43.2분이 사건마다 줄어든다"
+  memoryLabel="남은 예산"
+  cells={["배포 5분", "평소", "DB 12분", "평소", "설정 30분", "평소"]}
+  steps={[
+    { pointer: 0, memory: ["38.2분"], caption: "배포 중 5분 동안 요청이 실패했다. 예산의 12%를 썼다." },
+    { pointer: 1, memory: ["38.2분"], caption: "조용한 주. 예산이 그대로다. 이럴 때 큰 변경을 내보내기 좋다." },
+    { pointer: 2, memory: ["26.2분"], caption: "DB 장애로 12분. 누적 39%를 썼다." },
+    { pointer: 3, memory: ["26.2분"], caption: "다시 조용하다. 남은 예산이 절반을 넘으니 계획한 배포를 이어 간다." },
+    { pointer: 4, memory: ["-3.8분", "SLO 위반"], caption: "잘못된 설정 배포로 30분. 예산을 넘겼다. 정책에 따라 변경을 멈춘다." },
+    { pointer: 5, memory: ["-3.8분", "동결 중"], caption: "창이 굴러가 오래된 사건이 빠질 때까지, 또는 정책이 정한 기간 동안 안정성 작업만 한다." },
+  ]}
+/>
+
+## 얼마나 빨리 쓰고 있나: 소진 속도
+
+남은 예산만 보면 늦다. 예산이 바닥난 걸 안 순간엔 이미 SLO를 어긴 뒤다. 그래서 "지금 속도로 쓰면 언제 바닥나나"를 본다. 이게 소진 속도다.
+
+```text
+소진 속도 = 지금의 오류율 / (1 - SLO)
+```
+
+소진 속도 1은 창(30일)이 끝나는 날 정확히 예산을 다 쓰는 속도다. 99.9% SLO에서 오류율 0.1%가 이렇다. 오류율 2%면 소진 속도 20, 30일 예산을 36시간 만에 다 쓴다. 오류율이 100%(완전 중단)면 소진 속도 1000, 43분이면 끝난다.
+
+이 숫자가 알림의 문턱이 된다. "한 시간 동안 소진 속도 14.4를 넘으면 페이지"는 "한 시간 만에 한 달 예산의 2%를 썼다"는 뜻이다. 14.4 × 1시간 / 720시간 = 0.02. 고정된 오류율 문턱("5% 넘으면") 대신 이렇게 거는 이유는, 알림의 기준이 사용자에게 약속한 목표에 바로 묶이기 때문이다. SLO를 99.9%에서 99.95%로 바꾸면 알림 문턱도 저절로 따라 바뀐다.
+
+## 창 하나로는 늦거나 시끄럽다
+
+가장 단순한 SLO 알림은 "최근 X 동안의 오류율이 예산을 넘으면"이다. 창 X를 어떻게 잡아도 문제가 남는다.
+
+창이 짧으면(5분) 순간적인 튐에 다 울린다. 5분 동안 1% 실패는 한 달 예산의 0.1%밖에 안 쓰는데도 사람을 깨운다. 창이 길면(1시간) 덜 시끄럽지만 두 가지가 나빠진다. 오류율이 문턱을 살짝 넘는 정도면 알기까지 오래 걸리고, 장애가 끝난 뒤에도 창 안에 실패가 남아 있어서 알림이 한참 안 풀린다.
+
+구글 SRE 워크북의 "Alerting on SLOs" 장은 이걸 두 가지 방법으로 푼다. 하나는 여러 소진 속도(multi-burn-rate)다. 빠르게 타는 불에는 짧은 창과 높은 문턱으로 페이지를, 천천히 새는 물에는 긴 창과 낮은 문턱으로 티켓을 건다. 다른 하나는 창마다 짧은 창을 하나 더 붙이는 것(multiwindow)이다. 긴 창이 "충분히 많이 썼다"를 확인하고, 짧은 창이 "지금도 쓰고 있다"를 확인한다. 워크북이 30일 SLO에 권하는 시작값은 이렇다.
+
+| 알림 | 긴 창 | 짧은 창 | 소진 속도 | 쓴 예산 |
+|---|---|---|---|---|
+| 페이지 | 1시간 | 5분 | 14.4 | 2% |
+| 페이지 | 6시간 | 30분 | 6 | 5% |
+| 티켓 | 3일 | 6시간 | 1 | 10% |
+
+짧은 창은 긴 창의 1/12로 잡는다. 이 숫자들은 출발점이지 정답이 아니다. 워크북도 서비스에 맞춰 조정하라고 한다.
+
+짧은 창이 왜 필요한지는 완전 중단이 끝난 뒤를 보면 알 수 있다.
+
+<AlgoTrace
+  caption="1시간 창과 5분 창: 둘 다 문턱(1.44%)을 넘어야 울린다"
+  memoryLabel="1시간 창 · 5분 창 · 알림"
+  cells={["정상", "중단 시작", "중단 1분", "중단 60분", "복구", "복구 5분", "복구 58분"]}
+  steps={[
+    { pointer: 0, memory: ["0%", "0%", "조용"], caption: "평소. 두 창 모두 문턱 아래다." },
+    { pointer: 1, memory: ["0.1%", "1.7%", "조용"], caption: "중단이 시작됐다. 5분 창은 바로 넘었지만 1시간 창은 아직이다." },
+    { pointer: 2, found: [2], memory: ["1.7%", "20%", "페이지"], caption: "1분 만에 1시간 창도 1.44%를 넘었다. 둘 다 넘었으니 울린다." },
+    { pointer: 3, found: [2, 3], memory: ["100%", "100%", "페이지"], caption: "중단이 1시간 이어졌다. 예산의 140%를 썼다." },
+    { pointer: 4, memory: ["98%", "80%", "페이지"], caption: "복구됐다. 두 창 모두 아직 실패를 담고 있다." },
+    { pointer: 5, memory: ["92%", "0%", "풀림"], caption: "5분 뒤 짧은 창이 비었다. 지금은 더 쓰고 있지 않으니 알림이 풀린다." },
+    { pointer: 6, memory: ["3%", "0%", "조용"], caption: "1시간 창만 있었다면 이때까지 울리고 있었다. 이미 끝난 장애로 사람을 붙잡아 둔다." },
+  ]}
+/>
+
+## 기록 규칙으로 창마다 오류율을 미리 계산한다
+
+알림 식에서 `rate(...[3d])`를 매번 계산하면 무겁다. 그래서 창마다 오류율을 기록 규칙(recording rule)으로 미리 계산해 새 시계열로 저장하고, 알림은 그 시계열만 비교한다. 이름은 Prometheus 문서가 권하는 `level:metric:operations` 꼴을 따른다.
+
+<UrlAnatomy
+  caption="기록 규칙 이름의 세 조각"
+  base=""
+  separator=""
+  joiner=":"
+  params={[
+    { key: "level", display: "job", title: "집계 수준", description: "결과에 남은 레이블. sum by (job)으로 합쳤으니 job이다. 이름만 보고 어떤 레이블로 자를 수 있는지 안다." },
+    { key: "metric", display: "slo_errors_per_request", title: "무엇을 쟀나", description: "요청 하나당 오류 수, 즉 오류율이다. 원래 지표 이름을 바탕으로 짓는다." },
+    { key: "ops", display: "ratio_rate1h", title: "어떤 연산을", description: "1시간 창의 rate로 비율을 냈다. 창이 이름에 있으니 5m, 30m, 6h, 3d가 서로 다른 시계열이 된다." },
+  ]}
+/>
+
+```yaml
+# slo-rules.yml (기록 규칙 부분, 5m·30m·6h·3d도 창만 바꿔 같은 모양)
+groups:
+  - name: slo-recording
+    rules:
+      - record: job:slo_errors_per_request:ratio_rate5m
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[5m]))
+            / sum by (job) (rate(http_requests_total[5m]))
+      - record: job:slo_errors_per_request:ratio_rate1h
+        expr: |
+          sum by (job) (rate(http_requests_total{code=~"5.."}[1h]))
+            / sum by (job) (rate(http_requests_total[1h]))
+```
+
+알림 규칙은 위 표를 그대로 옮긴 것이다. 문턱은 "소진 속도 × 예산"이다.
+
+```yaml
+# slo-rules.yml (알림 부분)
+  - name: slo-alerts
+    rules:
+      # SLO 99.9% -> 에러 예산 0.1%. 문턱 = 소진 속도 x 0.001
+      - alert: ErrorBudgetBurnFast
+        expr: |
+          (
+            job:slo_errors_per_request:ratio_rate1h > (14.4 * 0.001)
+            and
+            job:slo_errors_per_request:ratio_rate5m > (14.4 * 0.001)
+          )
+          or
+          (
+            job:slo_errors_per_request:ratio_rate6h > (6 * 0.001)
+            and
+            job:slo_errors_per_request:ratio_rate30m > (6 * 0.001)
+          )
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} 에러 예산을 빠르게 쓰고 있다"
+          runbook_url: "https://wiki.example.com/runbooks/error-budget-burn"
+      - alert: ErrorBudgetBurnSlow
+        expr: |
+          job:slo_errors_per_request:ratio_rate3d > (1 * 0.001)
+          and
+          job:slo_errors_per_request:ratio_rate6h > (1 * 0.001)
+        labels:
+          severity: ticket
+```
+
+```bash
+# 기록 규칙 5개와 알림 2개를 검사한다
+promtool check rules slo-rules.yml
+```
+
+```text
+Checking slo-rules.yml
+  SUCCESS: 7 rules found
+```
+
+`for`가 없다는 점을 보자. 긴 창이 이미 충분히 오래 버텼는지를 확인하고 있어서, 여기에 `for`를 더하면 늦게 울리기만 한다. [알림 설계 글](/posts/alerting)에서 본 "창 + `for` = 울리기까지의 시간"이 여기서도 그대로다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="카운터에서 페이지까지: 창마다 한 번씩만 계산한다"
+  zones={[
+    { id: "prom", label: "Prometheus", x: 8, y: 8, w: 384, h: 222, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "raw", label: "requests", sub: "카운터", x: 70, y: 60, icon: "db", w: 104 },
+    { id: "r5", label: "rate5m", sub: "짧은 창", x: 200, y: 60, icon: "switch", w: 92 },
+    { id: "r1h", label: "rate1h", sub: "긴 창", x: 320, y: 60, icon: "switch", w: 92 },
+    { id: "r3d", label: "rate3d", sub: "아주 긴 창", x: 320, y: 140, icon: "switch", w: 104 },
+    { id: "fast", label: "BurnFast", sub: "x14.4, x6", x: 120, y: 190, icon: "firewall", w: 112 },
+    { id: "slow", label: "BurnSlow", sub: "x1", x: 290, y: 190, icon: "firewall", w: 104 },
+    { id: "pg", label: "pager", x: 120, y: 280, icon: "client" },
+    { id: "tk", label: "ticket", x: 290, y: 280, icon: "client" },
+  ]}
+  links={[
+    { from: "raw", to: "r5" },
+    { from: "r5", to: "r1h" },
+    { from: "r1h", to: "r3d" },
+    { from: "r5", to: "fast" },
+    { from: "r1h", to: "fast" },
+    { from: "r3d", to: "slow" },
+    { from: "fast", to: "pg" },
+    { from: "slow", to: "tk" },
+  ]}
+  steps={[
+    { path: ["raw", "r5", "r1h", "r3d"], packet: "rule", title: "창마다 미리 계산한다", detail: "평가 주기마다 기록 규칙이 창별 오류율을 새 시계열로 남긴다. 무거운 3일 창도 한 번만 계산된다." },
+    { path: ["r5", "fast"], packet: "20%", title: "짧은 창이 지금을 본다", detail: "완전 중단 1분 뒤, 5분 창은 이미 문턱 1.44%를 한참 넘었다." },
+    { path: ["r1h", "fast", "pg"], packet: "page", title: "긴 창까지 넘으면 페이지", detail: "1시간 창도 1.44%를 넘자 BurnFast가 울린다. 한 시간 예산의 2% 이상을 쓰는 속도라는 뜻이다." },
+    { path: ["r3d", "slow", "tk"], packet: "ticket", title: "천천히 새는 건 티켓으로", detail: "오류율 0.5%처럼 낮게 오래 가는 문제는 3일 창이 넘어서야 잡힌다. 사람을 깨우지 않고 업무 시간에 처리한다." },
+  ]}
+/>
+
+## 언제 울리는지 promtool로 재 본다
+
+표의 숫자가 실제로 어떻게 움직이는지 보려고, 분당 1만 건 요청이 들어오는 카운터를 3일치 깨끗한 이력 뒤에 오류를 섞어 promtool 테스트에 넣었다. 이력을 먼저 채운 이유가 있다. 처음에 이력 없이 0분부터 돌렸더니 2% 오류에 26분 만에 페이지가 울렸다. 6시간 창에 데이터가 86분치밖에 없어서 rate가 그 86분만으로 비율을 냈기 때문이다. 새로 띄운 Prometheus나 새로 생긴 서비스에서 이 알림이 예상보다 예민한 이유가 이것이다.
+
+매 분마다 `exp_alerts: []`를 기대하는 테스트를 수천 개 만들어 돌리면, 실패 메시지가 곧 "그 시각에 울린 알림"이 된다.
+
+```text
+  FAILED:
+    alertname: ErrorBudgetBurnFast, time: 3d1h21m, 
+        exp:[], 
+        got:[
+            0:
+              Labels:{alertname="ErrorBudgetBurnFast", job="api", severity="page"}
+              Annotations:{runbook_url="https://wiki.example.com/runbooks/error-budget-burn", summary="api 에러 예산을 빠르게 쓰고 있다"}
+            ]
+```
+
+오류는 3일 1시간 20분(+0분)에 시작했다. 시나리오별로 처음 울린 시각을 모았다.
+
+```text
+오류율 100%, 60분   BurnFast +1m (끝난 뒤 +88m까지)   BurnSlow +5m
+오류율 2%           BurnFast +44m                    BurnSlow +216m
+오류율 0.5%         BurnFast 없음                    BurnSlow +864m
+오류율 0.15%        BurnFast 없음                    BurnSlow +2880m
+오류율 0.08%        알림 없음
+```
+
+계산과 거의 같다. 2% 오류에서 1시간 창이 1.44%에 닿으려면 60 × 0.0144 / 0.02 = 43.2분이 필요하고, 1분 평가 간격 때문에 44분에 울렸다. 0.5%는 한 시간에 한 달 예산의 2%를 쓰는 속도가 아니라서 페이지는 없고, 3일 창이 0.1%를 넘는 14.4시간(864분) 뒤에 티켓이 됐다. 0.08%는 SLO 안이니 아무 일도 없다. 어떤 알림도 걸리지 않는 영역이 있다는 게 중요하다. 예산 안에서 쓰는 실패로는 아무도 깨지 않는다.
+
+완전 중단이 끝난 뒤 BurnFast가 28분 더 울린 것은 6시간/30분 쌍 때문이다. 30분 창이 빌 때까지 걸리는 시간이다. 짧은 창의 효과를 따로 보려고, 1시간 창 하나만 쓴 규칙과 1시간 + 5분 규칙을 같은 입력에 돌렸다.
+
+```text
+ErrorBudgetBurnFast, first 3d1h21m last 3d3h18m    # 1시간 창만
+ErrorBudgetBurnSlow, first 3d1h21m last 3d2h23m    # 1시간 + 5분 (비교용으로 이름만 빌림)
+```
+
+1시간 창만 쓰면 장애가 끝나고도 58분 동안 울렸고, 5분 창을 붙이니 3분 만에 풀렸다. 페이지를 받은 사람이 복구를 확인하고 바로 손을 뗄 수 있다.
+
+아래에서 오류율, SLO, 소진 속도, 긴 창(시간)을 받아 알림이 울리기까지 걸리는 분을 계산해 보자. 문턱을 못 넘으면 영영 안 울리니 `null`이다.
+
+<CodePlayground
+  caption="소진 속도 알림이 울리기까지 걸리는 시간"
+  functionName="detectMinutes"
+  initialCode={`function detectMinutes(errorRate, slo, burnRate, windowHours) {
+  // 문턱 = burnRate * (1 - slo)
+  // 오류가 갑자기 errorRate로 시작했을 때, 긴 창의 평균이 문턱을 넘기까지 걸리는 분
+  // 문턱을 넘지 못하면 null, 소수 첫째 자리까지 반올림
+  return null;
+}`}
+  solution={`function detectMinutes(errorRate, slo, burnRate, windowHours) {
+  const threshold = burnRate * (1 - slo);
+  if (errorRate <= threshold) return null;
+  return Math.round(windowHours * 60 * threshold / errorRate * 10) / 10;
+}`}
+  tests={[
+    { args: [1, 0.999, 14.4, 1], expected: 0.9, label: "완전 중단, 1시간 x14.4" },
+    { args: [0.02, 0.999, 14.4, 1], expected: 43.2, label: "2%, 1시간 x14.4" },
+    { args: [0.005, 0.999, 14.4, 1], expected: null, label: "0.5%는 페이지 없음" },
+    { args: [0.01, 0.999, 6, 6], expected: 216, label: "1%, 6시간 x6" },
+    { args: [0.005, 0.999, 1, 72], expected: 864, label: "0.5%, 3일 x1" },
+    { args: [0.0008, 0.999, 1, 72], expected: null, label: "SLO 안의 오류" },
+    { args: [0.5, 0.9999, 14.4, 1], expected: 0.2, label: "99.99%에서 50%" },
+  ]}
+/>
+
+마지막 줄이 보여 주듯 SLO가 엄격할수록 문턱이 낮아 더 빨리 울린다. 99.99%에서는 예산 자체가 작아서, 한 시간 동안 0.144%만 실패해도 페이지다.
+
+## 낮은 트래픽과 예산 계산의 함정
+
+소진 속도 알림이 잘 동작하는 건 요청이 충분히 많을 때다. 분당 요청이 10개인 서비스에서 5분 창에는 요청이 50개뿐이다. 하나만 실패해도 2%, 소진 속도 20이다. 워크북도 이 경우를 따로 다룬다. 바깥에서 일정하게 합성 요청을 보내 표본을 늘리거나, 비슷한 서비스를 묶어 하나의 SLO로 보거나, 일정 개수 이상 실패해야 울리게 조건을 더한다.
+
+```yaml
+# 낮은 트래픽 보정: 1시간에 실패가 최소 10건은 있어야 울린다
+expr: |
+  job:slo_errors_per_request:ratio_rate1h > (14.4 * 0.001)
+  and job:slo_errors_per_request:ratio_rate5m > (14.4 * 0.001)
+  and sum by (job) (increase(http_requests_total{code=~"5.."}[1h])) >= 10
+```
+
+또 하나는 새 서비스나 새 Prometheus다. 앞에서 본 것처럼 긴 창에 데이터가 덜 차 있으면 rate는 있는 만큼으로 비율을 내서 예상보다 예민해진다. 첫 며칠은 티켓 알림이 시끄러울 수 있다는 걸 알고 시작한다.
+
+지연 SLO도 같은 틀에 넣을 수 있다. 오류율 대신 "문턱보다 느린 요청의 비율"을 쓰면 된다. 히스토그램에서 `1 - (le="0.3" 칸 / 전체)`가 그 값이다. 문턱이 칸 경계와 같아야 한다는 조건은 [SLI와 SLO 글](/posts/sli-slo)에서 본 그대로다.
+
+## 남은 예산을 묻고 배포를 막는다
+
+예산은 알림에만 쓰이지 않는다. 남은 예산을 배포 파이프라인이 물어보게 하면 "변경 동결"이 사람의 기억이 아니라 시스템의 규칙이 된다.
+
+실습용으로 28일치 이력을 만들었다. 분당 1만 건, 평소 오류율 0.03%, 8일 전에 6시간 동안 10%가 실패한 장애가 있었다. 이 이력을 OpenMetrics 파일로 써서 Prometheus 블록으로 백필했다.
+
+```bash
+# 28일치 카운터를 OpenMetrics로 만든다 (스크립트는 생략)
+python3 gen/hist.py gen/history.om
+# OpenMetrics 파일을 TSDB 블록으로 바꾼다
+promtool tsdb create-blocks-from openmetrics gen/history.om pdata
+# 기본 보관 기간(15일)보다 길게 두고 띄운다
+prometheus --config.file=prom.yml --storage.tsdb.path=pdata --storage.tsdb.retention.time=60d
+```
+
+```text
+samples 80642 total 403210000 errors 479883
+```
+
+게이트는 28일 오류율을 묻고, 남은 예산이 0보다 작으면 실패로 끝나는 스크립트다.
+
+```bash
+#!/usr/bin/env bash
+# budget-gate.sh: 배포 전에 남은 에러 예산을 묻고, 바닥났으면 실패로 끝낸다
+set -euo pipefail
+PROM=${PROM:-http://127.0.0.1:19390}
+SLO=0.999
+Q='sum(increase(http_requests_total{job="api",code=~"5.."}[28d])) / sum(increase(http_requests_total{job="api"}[28d]))'
+err=$(curl -s --get "$PROM/api/v1/query" --data-urlencode "query=$Q" | jq -r '.data.result[0].value[1]')
+left=$(awk -v e="$err" -v s="$SLO" 'BEGIN{printf "%.1f", (1 - e/(1-s))*100}')
+echo "28일 오류율 $err, 남은 에러 예산 ${left}%"
+if awk -v l="$left" 'BEGIN{exit !(l < 0)}'; then
+  echo "에러 예산이 바닥났다. 안정성 수정과 보안 패치만 배포한다." >&2
+  exit 1
+fi
+```
+
+```bash
+# 게이트를 돌리고 종료 코드를 찍는다 (CI에서는 종료 코드 1이면 단계가 실패한다)
+./budget-gate.sh; echo "exit=$?"
+```
+
+```text
+28일 오류율 0.0011902227293020486, 남은 에러 예산 -19.0%
+에러 예산이 바닥났다. 안정성 수정과 보안 패치만 배포한다.
+exit=1
+```
+
+오류 47만 9,883건을 4억 321만 건으로 나눈 0.119%다. 예산 0.1%를 19% 넘겼다. 그중 6시간 장애가 36만 건으로 예산의 89%를 혼자 썼다. 장애 직전 시각으로 같은 쿼리를 돌리면(`time=` 파라미터) 남은 예산은 69.3%였다. 하루 저녁의 장애가 한 달치 여유를 다 가져간 것이다. 이 장애는 굴러가는 28일 창에서 20일 뒤에 빠지고, 그때까지 다른 큰 실패가 없으면 예산이 다시 생긴다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="배포 파이프라인이 예산을 묻는다"
+  zones={[
+    { id: "ci", label: "CI/CD", x: 8, y: 8, w: 250, h: 130, tone: "edge" },
+    { id: "prod", label: "운영", x: 8, y: 160, w: 384, h: 82, tone: "private" },
+  ]}
+  nodes={[
+    { id: "pr", label: "merge", sub: "main", x: 70, y: 70, icon: "client", w: 92 },
+    { id: "gate", label: "budget gate", sub: "28d 오류율", x: 190, y: 70, icon: "firewall", w: 112 },
+    { id: "prom", label: "Prometheus", sub: ":19390", x: 330, y: 70, icon: "db", w: 112 },
+    { id: "k8s", label: "deploy", sub: "order-api", x: 190, y: 204, icon: "container", w: 104 },
+  ]}
+  links={[
+    { from: "pr", to: "gate" },
+    { from: "gate", to: "prom", label: "query" },
+    { from: "gate", to: "k8s" },
+  ]}
+  steps={[
+    { path: ["pr", "gate", "prom"], packet: "query", title: "배포 전에 묻는다", detail: "게이트가 Prometheus API에 28일 오류율을 묻는다. 예산 계산은 게이트가 한다." },
+    { path: ["pr", "gate", "k8s"], packet: "v42", title: "예산이 남았으면 통과", detail: "장애 직전이었다면 남은 예산 69.3%. 배포가 그대로 나간다." },
+    { path: ["pr", "gate"], packet: "v43", blocked: true, title: "바닥났으면 멈춘다", detail: "남은 예산 -19.0%. 스크립트가 exit 1로 끝나 파이프라인이 멈춘다. 안정성 수정은 예외 라벨로 통과시킨다.", payload: "남은 에러 예산 -19.0%\nexit=1" },
+  ]}
+/>
+
+게이트를 만들 때 두 가지를 챙긴다. Prometheus가 응답하지 않을 때 어떻게 할지 정해 둔다. 실패로 보면 모니터링 장애가 배포 장애가 되고, 통과로 보면 게이트가 무력해진다. 보통은 통과시키되 경고를 남긴다. 그리고 예외 경로가 있어야 한다. 예산을 깎아 먹는 버그를 고치는 배포까지 막으면 동결이 장애를 더 길게 만든다.
+
+## 예산 정책: 숫자가 결정을 바꾸는 규칙
+
+숫자를 계산해도, 바닥났을 때 무엇을 할지 미리 합의하지 않으면 다시 목소리 싸움이 된다. 그래서 에러 예산 정책을 문서로 쓴다. 구글 SRE 워크북 부록에 예시 정책이 있는데, 요지는 이렇다. 지난 4주 동안 예산을 넘겼으면 P0 버그와 보안 수정을 빼고 모든 변경과 출시를 멈추고, 서비스가 SLO 안으로 돌아올 때까지 안정성 작업을 한다. 한 사건이 4주 예산의 큰 몫(예시에서는 20%)을 쓰면 포스트모템을 쓰고 가장 중요한 후속 조치를 우선한다. 팀끼리 해석이 갈리면 정해 둔 윗선이 판단한다.
+
+정책은 팀마다 다르게 쓴다. 흔히 넣는 항목은 이런 것들이다.
+
+예산이 50% 아래로 내려가면 큰 변경은 점진 배포로만 내보낸다. 예산을 넘기면 기능 배포를 멈추고, 팀 일정의 일부를 안정성 작업으로 옮긴다. 우리 탓이 아닌 의존 서비스 장애로 예산을 넘겼다면 동결 대신 그 의존성과의 SLO를 다시 이야기한다. 예산이 매번 크게 남는다면 SLO가 너무 느슨하거나 변경을 너무 아끼고 있다는 신호로 보고 배포 속도를 높인다.
+
+마지막 항목을 놓치기 쉽다. 예산은 쓰라고 있는 것이다. 매달 예산의 5%만 쓰는 팀은 사용자가 체감하지 못할 안정성을 위해 기능 개발 속도를 버리고 있는지도 모른다. 이 정책이 팀 결정을 바꾸는 방식이 이것이다. 운영과 개발이 서로 반대편에 서지 않고, 같은 숫자를 보며 "이번 달은 얼마나 위험을 감수할까"를 함께 정한다. 장애 하나가 예산을 많이 썼을 때 무엇을 남길지는 [포스트모템](/posts/postmortems)에서 다룬다.
+
+## 예산이 엉뚱하게 움직일 때
+
+현장에서 예산 숫자를 보다가 자주 만나는 경우가 있다.
+
+예산이 갑자기 회복됐다. 대개 큰 장애가 창에서 빠진 날이다. 굴러가는 창이니 정상이다. 대시보드에 "예산을 가장 많이 쓴 날"을 같이 그려 두면 왜 회복했는지 바로 보인다.
+
+예산 그래프가 끊기거나 0이 됐다. 카운터가 사라졌거나 레이블이 바뀌었다. 배포하면서 지표 이름이나 `job` 레이블이 바뀌면 기록 규칙이 빈 결과를 내고, 소진 속도 알림도 조용해진다. [알림 설계 글](/posts/alerting)의 `absent()` 알림을 기록 규칙에도 걸어 둔다.
+
+페이지가 울렸는데 예산은 넉넉하다. 정상이다. 페이지는 "지금 속도라면 곧 바닥난다"는 뜻이지 이미 바닥났다는 뜻이 아니다. 빨리 끄면 예산을 거의 안 쓰고 끝난다. 반대로 티켓이 몇 주째 열려 있는데 아무도 안 본다면, 그 티켓은 다음 달 SLO 위반의 예고다.
+
+여러 서비스의 예산을 평균 낸다. 서비스마다 요청 수가 달라서 평균은 뜻이 없다. 사용자 여정 하나에 SLO 하나, 예산 하나를 두고 따로 본다.
+
+## 다시 금요일 오후로
+
+"이번 배포를 할까"는 이제 쿼리 한 줄로 답한다. 예산이 남았으면 내보내고, 바닥났으면 게이트가 멈춘다. 알림도 같은 숫자에서 나온다. 한 시간에 한 달 예산의 2%를 쓰는 속도면 사람을 깨우고, 사흘에 10%를 쓰는 속도면 티켓을 남기고, 예산 안의 실패에는 아무도 깨우지 않는다. 짧은 창을 붙이면 장애가 끝난 뒤 알림이 빨리 풀린다. 숫자와 함께 바닥났을 때의 행동을 정책으로 적어 두면, 금요일 오후의 다툼은 같은 그래프를 보는 대화가 된다.
+
+## 면접에서 나올 만한 질문
+
+### 에러 예산이 무엇이고 왜 필요한가요
+
+에러 예산은 1 - SLO, 즉 목표 기간 동안 실패해도 된다고 미리 합의한 몫이다. 99.9% SLO에 28일 동안 4억 건이 들어오면 40만 건 정도다. 예산이 남았는지로 배포를 계속할지 안정성에 집중할지를 정하니, 개발과 운영이 감으로 다투지 않고 같은 숫자로 결정할 수 있다.
+
+### 소진 속도(burn rate)는 어떻게 계산하나요
+
+지금의 오류율을 에러 예산으로 나눈다. 99.9% SLO에서 오류율 0.1%면 1로, 창이 끝나는 날 예산을 딱 다 쓰는 속도다. 오류율 2%면 20이라 30일 예산을 36시간 만에 쓴다. 알림 문턱은 "소진 속도 × 예산"으로 정하고, 소진 속도 × 창 길이 / SLO 기간이 그 창에서 쓴 예산의 비율이다.
+
+### 여러 창 여러 속도 알림을 쓰는 이유는요
+
+창 하나로는 짧으면 시끄럽고 길면 늦고 잘 안 풀린다. 빠르게 타는 문제는 1시간 창 14.4배, 6시간 창 6배로 페이지를, 천천히 새는 문제는 3일 창 1배로 티켓을 건다. 각 창에 1/12 길이의 짧은 창을 같이 걸어 "지금도 쓰고 있다"를 확인하면, 장애가 끝났을 때 알림이 빨리 풀린다. 실습에서 1시간 창만 쓴 규칙은 복구 뒤 58분을 더 울렸고, 5분 창을 붙인 규칙은 3분 만에 풀렸다.
+
+### 오류율 2%가 시작되면 14.4배 1시간 알림은 언제 울리나요
+
+1시간 창의 평균이 1.44%에 닿아야 하니 60 × 0.0144 / 0.02 = 43.2분 정도다. promtool로 재 보니 1분 평가 간격 때문에 44분에 울렸다. 완전 중단이면 1분 안에 울린다. 오류율 0.5%는 이 페이지에는 안 걸리고 3일 창 티켓으로 14.4시간 뒤에 잡힌다.
+
+### 왜 알림 식을 기록 규칙으로 나누나요
+
+3일, 6시간 같은 긴 창의 rate를 알림 평가마다 계산하면 무겁다. 기록 규칙으로 창별 오류율을 한 번 계산해 저장하면, 알림과 대시보드가 같은 시계열을 가볍게 읽는다. 이름은 `job:slo_errors_per_request:ratio_rate1h`처럼 집계 수준, 지표, 연산을 드러내게 짓는다.
+
+### 트래픽이 아주 적은 서비스에는 어떻게 적용하나요
+
+요청이 적으면 실패 하나가 비율을 크게 흔들어 소진 속도 알림이 쉽게 울린다. 합성 요청으로 표본을 늘리거나, 비슷한 서비스를 묶어 하나의 SLO로 보거나, 최소 실패 건수 조건을 알림 식에 더한다. 새로 띄운 서비스처럼 긴 창에 데이터가 덜 찬 경우도 예상보다 예민하니 주의한다.
+
+### 에러 예산을 다 쓰면 팀은 무엇을 하나요
+
+미리 합의한 정책을 따른다. 흔히 P0 버그와 보안 수정 말고는 변경을 멈추고, SLO 안으로 돌아올 때까지 안정성 작업을 우선한다. 한 사건이 예산을 크게 썼으면 포스트모템을 쓴다. 이걸 배포 파이프라인의 게이트로 만들면 사람의 기억에 기대지 않고, 반대로 예산이 늘 남는다면 배포 속도를 높여도 된다는 신호로 읽는다.

@@ -2,6 +2,7 @@
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
+  "alerting": 6,
   "ansible-network-automation": 7,
   "api-pagination-sorting": 6,
   "api-versioning": 6,
@@ -71,6 +72,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "elasticsearch-inverted-index": 8,
   "encryption-at-rest": 7,
   "encryption-in-transit": 7,
+  "error-budgets": 6,
   "event-driven-architecture": 7,
   "event-loop": 7,
   "eventual-consistency": 6,
@@ -96,6 +98,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "git-undo": 6,
   "github-actions-docker-ecr": 7,
   "grpc": 6,
+  "health-checks": 6,
   "helm-basics": 6,
   "helm-chart-templates": 6,
   "helm-dependencies-oci-gitops": 6,
@@ -255,6 +258,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "server-sent-events": 7,
   "service-discovery": 6,
   "service-mesh": 7,
+  "sli-slo": 6,
   "sql-basics": 6,
   "sql-batch-timeout-pool": 5,
   "sql-injection": 7,
