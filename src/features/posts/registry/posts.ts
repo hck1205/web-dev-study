@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sd-email-storage-search",
+    title: "이메일 서비스 설계 ②: 메일 저장소와 검색 색인",
+    summary: "받은 메일을 메타데이터와 본문·첨부로 나누고 user_id로 파티션한다. 안 읽은 메일은 부분 인덱스로, 대화는 References 헤더로 묶고, 첨부는 내용 해시로 한 번만 저장한다. 사용자별 역색인으로 검색하면서 한국어 조사 문제와 비동기 색인 갱신을 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Database", "PostgreSQL", "Search", "NoSQL"],
+    date: "2026-10-22",
+    keywords: ["메일 메타데이터", "메일 검색 색인", "첨부 파일 중복 제거"],
+  },
+  {
+    slug: "sd-email-protocols",
+    title: "이메일 서비스 설계 ①: SMTP, IMAP, MX 레코드와 발신자 인증",
+    summary: "메일이 SMTP로 서버 사이를 오가고 받는 서버를 DNS의 MX로 찾는 과정을 로컬 SMTP 서버와 직접 대화하며 본다. 봉투와 편지의 차이, 4xx와 5xx, POP3와 IMAP, 사칭을 막는 SPF·DKIM·DMARC, 스팸함에 가지 않기 위한 발송 운영을 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Network", "DNS", "Security", "Messaging"],
+    date: "2026-10-22",
+    keywords: ["SMTP", "MX 레코드", "SPF", "DKIM", "DMARC"],
+  },
+  {
+    slug: "sd-hotel-inventory-scaling",
+    title: "호텔 예약 시스템 설계 ②: 객실 유형 재고, 캐시, 서비스 사이의 일관성",
+    summary: "방이 아니라 객실 유형을 날짜별로 세는 재고 테이블을 미리 채우고, 10% 초과 예약을 CHECK 제약으로 넣는다. 결제를 기다리다 만료된 예약 풀기, 사가로 결제 엮기, hotel_id 샤딩, CDC로 따라가는 재고 캐시의 지연까지 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Database", "PostgreSQL", "Redis", "Cache", "MSA"],
+    date: "2026-10-22",
+    keywords: ["객실 유형 재고", "오버부킹", "초과 예약"],
+  },
+  {
+    slug: "sd-hotel-double-booking",
+    title: "호텔 예약 시스템 설계 ①: 같은 방이 두 번 팔리지 않게",
+    summary: "같은 손님의 두 번 누르기는 주문서를 열 때 발급한 예약 id를 기본 키로 두어 막는다. 서로 다른 손님이 마지막 방을 동시에 잡는 경합은 PostgreSQL에서 재현하고, FOR UPDATE, 버전 검사, CHECK 제약을 같은 조건에서 돌려 결과와 응답 시간을 비교한다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Database", "PostgreSQL", "Concurrency", "Transaction"],
+    date: "2026-10-22",
+    keywords: ["이중 예약", "더블 부킹"],
+  },
+  {
     slug: "sd-ad-click-exactly-once",
     title: "광고 클릭 집계 설계 ②: 중복 없이 한 번만 세기와 대사",
     summary: "같은 클릭이 두 번 들어오는 두 길을 실제로 프로세스를 죽여 재현하고, click_id 거르기와 결과·오프셋 한 트랜잭션, 덮어쓰기로 막는다. 스냅샷 복구, 원본으로 다시 세는 대사, 카파 아키텍처의 재계산, 몰리는 광고의 키 쪼개기까지 다룬다.",

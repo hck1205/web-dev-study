@@ -2,9 +2,96 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-email-storage-search": {
+    "links": [
+      "sd-email-protocols",
+      "sd-object-storage-architecture",
+      "sd-capacity-estimation",
+      "sd-unique-id-generator",
+      "db-type-wide-column",
+      "db-index-design",
+      "db-keys-denormalization",
+      "encryption-at-rest",
+      "elasticsearch-inverted-index",
+      "sd-kv-store-write-read-path",
+      "sd-multi-datacenter",
+      "db-consistency-cap"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "db-type-relational",
+      "sd-mq-storage-partitions",
+      "db-partitioning",
+      "db-modeling-normalization"
+    ]
+  },
+  "sd-email-protocols": {
+    "links": [
+      "sd-hotel-inventory-scaling",
+      "sd-email-storage-search",
+      "sd-object-storage-architecture",
+      "dns",
+      "base64",
+      "realtime-communication",
+      "sd-notification-reliability"
+    ],
+    "mentions": [
+      "db-modeling-normalization"
+    ]
+  },
+  "sd-hotel-inventory-scaling": {
+    "links": [
+      "sd-hotel-double-booking",
+      "sd-email-protocols",
+      "db-index",
+      "microservices",
+      "saga-pattern",
+      "distributed-transactions-2pc",
+      "transactional-outbox",
+      "sd-load-balancer-stateless",
+      "sd-sharding-intro",
+      "caching-strategies",
+      "cache-invalidation"
+    ],
+    "mentions": [
+      "db-type-columnar-olap",
+      "sd-start-single-server",
+      "redis-basics",
+      "resilience-patterns",
+      "mongodb-document-model",
+      "acid-transactions",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "sd-hotel-double-booking": {
+    "links": [
+      "sd-ad-click-exactly-once",
+      "sd-hotel-inventory-scaling",
+      "sd-email-protocols",
+      "idempotency-key",
+      "race-conditions",
+      "db-transaction-isolation",
+      "pessimistic-locking",
+      "db-locking-deadlock",
+      "optimistic-locking",
+      "exponential-backoff-jitter",
+      "sd-db-replication-intro"
+    ],
+    "mentions": [
+      "db-migration-tools",
+      "gateway",
+      "sd-ad-click-stream-windows",
+      "postgres-functions-triggers",
+      "sql-basics",
+      "postgres-getting-started",
+      "http-methods"
+    ]
+  },
   "sd-ad-click-exactly-once": {
     "links": [
       "sd-ad-click-stream-windows",
+      "sd-hotel-double-booking",
       "message-delivery-semantics",
       "idempotency-key",
       "kafka-basics",
@@ -22,6 +109,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-metrics-storage-alerting",
       "sd-ad-click-exactly-once",
+      "sd-hotel-double-booking",
       "sd-capacity-estimation",
       "db-type-columnar-olap",
       "sd-metrics-collection",
@@ -122,6 +210,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "sd-object-storage-architecture": {
     "links": [
+      "sd-email-storage-search",
       "sd-object-storage-durability",
       "sd-object-storage-versioning-multipart",
       "sd-load-balancer-stateless",
@@ -615,6 +704,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-web-crawler-politeness-dedup",
       "sd-notification-reliability",
       "sd-news-feed-publishing",
+      "sd-email-protocols",
       "sd-capacity-estimation",
       "message-queue-basics",
       "sd-queue-logging-automation"
@@ -6239,6 +6329,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "resilience-patterns",
       "redis-basics",
+      "sd-email-protocols",
       "http-methods"
     ]
   },
@@ -6282,6 +6373,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "sd-mq-storage-partitions",
       "js-pure-functions",
+      "sd-email-protocols",
       "realtime-communication",
       "http-methods"
     ]
@@ -6350,6 +6442,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "helm-basics",
       "latency-bandwidth-throughput",
+      "sd-email-protocols",
       "local-k8s-kind-minikube",
       "db-type-key-value"
     ]
@@ -6621,7 +6714,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
-      "js-object-methods"
+      "js-object-methods",
+      "sd-email-protocols"
     ]
   },
   "pattern-singleton": {
@@ -7845,6 +7939,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "http-versions",
       "what-happens-google-com",
+      "sd-email-protocols",
       "http-caching-cdn",
       "udp-and-quic"
     ]
@@ -7878,6 +7973,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "router-vs-switch",
       "http-versions",
       "security-groups-nacl",
+      "sd-email-protocols",
       "vlan-basics",
       "ipv6-basics",
       "vpc-basics",
@@ -9430,6 +9526,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-versions",
+      "sd-email-protocols",
       "cdn-edge-anycast",
       "sql-batch-timeout-pool",
       "udp-and-quic",

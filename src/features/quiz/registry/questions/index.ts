@@ -386,8 +386,12 @@ import { SD_CHAT_CONNECTIONS } from "./sd-chat-connections";
 import { SD_CHAT_MESSAGE_STORAGE } from "./sd-chat-message-storage";
 import { SD_CHAT_PRESENCE } from "./sd-chat-presence";
 import { SD_DB_REPLICATION_INTRO } from "./sd-db-replication-intro";
+import { SD_EMAIL_PROTOCOLS } from "./sd-email-protocols";
+import { SD_EMAIL_STORAGE_SEARCH } from "./sd-email-storage-search";
 import { SD_FILE_SYNC_BLOCK_UPLOAD } from "./sd-file-sync-block-upload";
 import { SD_FILE_SYNC_CONFLICTS } from "./sd-file-sync-conflicts";
+import { SD_HOTEL_DOUBLE_BOOKING } from "./sd-hotel-double-booking";
+import { SD_HOTEL_INVENTORY_SCALING } from "./sd-hotel-inventory-scaling";
 import { SD_INTERVIEW_FRAMEWORK } from "./sd-interview-framework";
 import { SD_KV_STORE_FAILURE_HANDLING } from "./sd-kv-store-failure-handling";
 import { SD_KV_STORE_PARTITION_REPLICATION } from "./sd-kv-store-partition-replication";
@@ -890,8 +894,12 @@ export const QUESTION_SETS = [
   SD_CHAT_MESSAGE_STORAGE,
   SD_CHAT_PRESENCE,
   SD_DB_REPLICATION_INTRO,
+  SD_EMAIL_PROTOCOLS,
+  SD_EMAIL_STORAGE_SEARCH,
   SD_FILE_SYNC_BLOCK_UPLOAD,
   SD_FILE_SYNC_CONFLICTS,
+  SD_HOTEL_DOUBLE_BOOKING,
+  SD_HOTEL_INVENTORY_SCALING,
   SD_INTERVIEW_FRAMEWORK,
   SD_KV_STORE_FAILURE_HANDLING,
   SD_KV_STORE_PARTITION_REPLICATION,
