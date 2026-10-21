@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 573편 · 토픽 84개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 575편 · 토픽 84개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -966,7 +966,7 @@
 - 소제목: 세 숫자에 담긴 약속 / 버전 문자열 한 줄 뜯어보기 / 사전 배포 버전은 어떤 순서로 줄을 서나 / 캐럿과 물결표가 실제로 여는 범위 / 0.x에서 캐럿은 한 칸 더 좁아진다 / 범위 안의 사전 배포 버전은 같은 줄에서만 / npm install은 범위에서 하나를 고른다 / dist-tag가 가리키는 곳 / 무엇이 깨지는 변경인가 / 버전 번호를 사람이 고르지 않게 / 현장에서 버전 때문에 깨지는 순간 / 숫자 세 개를 믿을 수 있게 만드는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: dependency-hell, git-branching-strategy, api-versioning, helm-dependencies-oci-gitops
 - 키워드 백링크 →: helm-basics
-- 이 글로 오는 글 ←: dependency-hell, git-branching-strategy, helm-dependencies-oci-gitops
+- 이 글로 오는 글 ←: dependency-hell, git-branching-strategy, git-features-map, helm-dependencies-oci-gitops
 
 #### `yaml-for-k8s` — 쿠버네티스 YAML 함정: 노르웨이 문제부터 들여쓰기 오류까지
 
@@ -989,7 +989,7 @@
 - 길이: 578줄
 - 소제목: 브랜치는 커밋에 붙은 이름표다 / switch와 checkout은 무엇이 다른가 / HEAD가 브랜치를 떠나면 / fast-forward를 막거나 강제하기 / 곧게 이어지지 않으면 세 스냅샷을 비교한다 / 다 쓴 브랜치는 지운다 / 원격 브랜치와 얼마나 차이 나는지 / 현장에서 병합 히스토리를 읽는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-merge-conflict, git-internals-basics, git-staging-area, git-stash-reflog, git-branching-strategy, git-remote-collaboration
-- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-parallel-and-scheduled, git-branching-strategy, git-ignore-config, git-internals-basics, git-merge-conflict, git-rebase, git-remote-collaboration, git-repo-errors, git-tips-advanced, git-troubleshooting, git-undo, sd-file-sync-conflicts
+- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-parallel-and-scheduled, git-branching-strategy, git-features-map, git-ignore-config, git-internals-basics, git-merge-conflict, git-rebase, git-remote-collaboration, git-repo-errors, git-stacked-prs, git-tips-advanced, git-troubleshooting, git-undo, sd-file-sync-conflicts
 
 #### `git-branching-strategy` — 브랜치 전략: Git Flow, GitHub Flow, 트렁크 기반 개발
 
@@ -1000,7 +1000,17 @@
 - 소제목: 전략이 정하는 것은 통합하는 때와 곳이다 / Git Flow는 브랜치를 역할별로 나눈다 / Git Flow로 핫픽스 내보내기 / 릴리스 브랜치의 수정은 cherry-pick으로 돌려보낸다 / GitHub Flow는 main 하나로 버틴다 / GitLab Flow는 환경마다 브랜치를 둔다 / 트렁크 기반 개발은 하루에도 여러 번 합친다 / 무엇을 고를지는 배포 주기가 정한다 / PR을 합치는 세 가지 버튼 / 커밋 메시지에 규칙을 둔다 / 버전 번호와 태그 / main을 지키는 규칙은 서버에 둔다 / 모노레포에서는 브랜치보다 경로가 경계다 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branch-merge, git-remote-collaboration, git-tips-advanced, semantic-versioning
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, ab-testing, api-versioning
-- 이 글로 오는 글 ←: ci-cd-basics, git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-tips-advanced, github-actions-docker-ecr, semantic-versioning
+- 이 글로 오는 글 ←: ci-cd-basics, git-branch-merge, git-features-map, git-internals-basics, git-rebase, git-remote-collaboration, git-stacked-prs, git-tips-advanced, github-actions-docker-ecr, semantic-versioning
+
+#### `git-features-map` — Git 기능 10가지: 커밋부터 stacked PR까지
+
+- 요약: 매일 쓰는 Git 기능 열 가지를 손에 익는 순서대로 실제 명령 한 줄과 출력으로 짚고, 커밋 그래프 하나 위에서 각 기능이 무엇을 바꾸는지, 상황마다 어떤 기능을 꺼낼지 정리한다.
+- 태그: Git, DevOps
+- 키워드: Git 기능 10가지, Git 기능 지도
+- 길이: 410줄
+- 소제목: 열 가지 기능이 만지는 것은 그래프 하나다 / 처음 손에 익는 셋 / 팀에 들어가면 바로 쓰는 셋 / 배포를 시작하면 / 히스토리를 다듬게 되면 / 리뷰가 밀리기 시작하면 / 이럴 땐 이 기능 / 다시 그래프로 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-internals-basics, git-staging-area, git-branch-merge, git-merge-conflict, git-branching-strategy, git-remote-collaboration, git-stash-reflog, semantic-versioning, git-rebase, git-tips-advanced, git-stacked-prs, git-undo, git-troubleshooting
+- 이 글로 오는 글 ←: git-stacked-prs
 
 #### `git-ignore-config` — .gitignore와 git config: 무시 규칙, 세 겹 설정, 줄바꿈
 
@@ -1022,7 +1032,7 @@
 - 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, merkle-tree, git-troubleshooting, git-stash-reflog
 - 키워드 백링크 →: github-actions-docker-ecr, git-tips-advanced, git-branching-strategy, git-large-files-secrets, sd-object-storage-architecture, build-caching
-- 이 글로 오는 글 ←: build-caching, git-branch-merge, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
+- 이 글로 오는 글 ←: build-caching, git-branch-merge, git-features-map, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
 
 #### `git-large-files-secrets` — 커밋에 들어가면 안 되는 것: 큰 파일, 비밀 값, 줄바꿈, 권한
 
@@ -1044,7 +1054,7 @@
 - 소제목: 같은 줄을 둘이 고쳤을 때 / 충돌 중에 Git이 들고 있는 것 / 충돌을 푸는 순서 / 같은 충돌을 두 번 풀지 않게 / 충돌을 덜 만드는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branch-merge, git-rebase
 - 키워드 백링크 →: git-staging-area
-- 이 글로 오는 글 ←: claude-code-parallel-and-scheduled, git-branch-merge, git-rebase, git-staging-area, git-tips-advanced, sd-file-sync-conflicts
+- 이 글로 오는 글 ←: claude-code-parallel-and-scheduled, git-branch-merge, git-features-map, git-rebase, git-staging-area, git-tips-advanced, sd-file-sync-conflicts
 
 #### `git-rebase` — rebase: 커밋을 다시 쓰는 일
 
@@ -1053,9 +1063,9 @@
 - 키워드: interactive rebase, git rebase, autosquash, pull.rebase
 - 길이: 791줄
 - 소제목: rebase는 커밋을 새로 만든다 / merge로 할지 rebase로 할지 / 다시 적용하다 충돌이 나면 / 커밋을 고르고 합치고 고쳐 쓰기 / 고칠 커밋을 미리 표시해 두기 / 브랜치 일부만 다른 곳으로 / 쌓아 올린 브랜치를 한꺼번에 / pull할 때마다 생기는 병합 커밋 / 공유한 커밋은 다시 쓰지 않는다 / rebase를 잘못했을 때 / 병합 커밋까지 옮겨야 할 때 / 다시 정리하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: git-branch-merge, git-branching-strategy, git-merge-conflict, git-remote-collaboration, git-stash-reflog, git-undo
+- 직접 링크 →: git-branch-merge, git-branching-strategy, git-merge-conflict, git-stacked-prs, git-remote-collaboration, git-stash-reflog, git-undo
 - 키워드 백링크 →: git-tips-advanced, git-staging-area
-- 이 글로 오는 글 ←: git-merge-conflict, git-remote-collaboration, git-troubleshooting
+- 이 글로 오는 글 ←: git-features-map, git-merge-conflict, git-remote-collaboration, git-stacked-prs, git-troubleshooting
 
 #### `git-remote-collaboration` — 원격 저장소와 협업: fetch, pull, push
 
@@ -1066,7 +1076,7 @@
 - 소제목: 원격은 주소록에 적힌 다른 저장소다 / SSH 키로 GitHub에 붙기 / 원격 추적 브랜치는 마지막으로 본 원격의 사진이다 / fetch는 가져오기만, pull은 가져와서 합친다 / 갈라진 브랜치를 합치는 세 가지 방법 / upstream과 ahead, behind / 강제 푸시는 남의 커밋을 지운다 / 끝난 브랜치 지우고 정리하기 / 태그는 따로 밀어야 올라간다 / PR 한 건이 머지되기까지 / 포크에서 기여하기 / 리뷰를 주고받을 때 / 비밀번호 대신 토큰과 자격 증명 도우미 / 큰 저장소를 빨리 받기 / 다시 처음의 거절로 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-internals-basics, git-branch-merge, git-rebase, git-branching-strategy, git-troubleshooting
 - 키워드 백링크 →: github-actions-docker-ecr, git-stash-reflog, token-login, what-happens-google-com
-- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-extensions, git-branch-merge, git-branching-strategy, git-rebase, git-repo-errors, git-staging-area, git-troubleshooting
+- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-extensions, git-branch-merge, git-branching-strategy, git-features-map, git-rebase, git-repo-errors, git-stacked-prs, git-staging-area, git-troubleshooting
 
 #### `git-repo-errors` — Git 저장소가 명령을 거부할 때: lock, ref, index, 소유권
 
@@ -1079,6 +1089,17 @@
 - 키워드 백링크 →: git-branch-merge, git-remote-collaboration
 - 이 글로 오는 글 ←: git-troubleshooting
 
+#### `git-stacked-prs` — stacked PR: 큰 기능을 작은 PR로 쌓아 올리기
+
+- 요약: 1,800줄짜리 PR이 리뷰에서 멈춘 장면에서 시작해 기능을 의존하는 브랜치 세 층으로 나누고, base를 아래 브랜치로 거는 법, rebase --update-refs로 한 번에 다시 쌓는 법, 아래 PR이 squash로 합쳐진 뒤의 충돌을 --onto로 푸는 법, 합치는 순서와 층마다 도는 CI까지 실제 출력으로 따라간다.
+- 태그: Git, DevOps
+- 키워드: stacked PR, restack, git range-diff
+- 길이: 638줄
+- 소제목: 1,800줄짜리 PR이 멈추는 이유 / 브랜치를 세 층으로 쌓는다 / PR의 base를 아래 브랜치로 건다 / 아래 층을 고치면 위층이 옛 커밋에 매달린다 / 꼭대기에서 고치고 한 번에 정리하기 / main이 앞서 나가면 꼭대기에서 한 번 / 맨 아래 PR이 squash로 합쳐지면 / 합치는 순서와 층마다 도는 CI / 도구가 대신 해 주는 것 / 쌓지 않는 편이 나을 때 / 처음의 1,800줄로 돌아가면 / 면접에서 나올 만한 질문
+- 직접 링크 →: git-rebase, git-branching-strategy, git-remote-collaboration, git-features-map, git-branch-merge, git-stash-reflog, git-tips-advanced
+- 키워드 백링크 →: github-actions-docker-ecr
+- 이 글로 오는 글 ←: git-features-map, git-rebase
+
 #### `git-staging-area` — 작업 트리, 인덱스, HEAD: add와 commit 사이
 
 - 요약: add한 뒤에 고친 한 줄이 왜 커밋에 안 들어가는지에서 시작해 세 구역과 git status의 두 글자, add -p, 히스토리를 읽는 log 옵션을 실제 출력으로 따라간다. pre-commit 훅이 작업 트리가 아니라 인덱스를 검사해야 하는 이유도 본다.
@@ -1088,7 +1109,7 @@
 - 소제목: 파일은 세 구역을 오간다 / 파일의 상태는 두 글자로 읽는다 / 커밋하고 히스토리를 읽는 명령 / 커밋 직전에 인덱스를 보는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-internals-basics, git-remote-collaboration, git-ignore-config, git-tips-advanced
 - 키워드 백링크 →: git-stash-reflog, git-merge-conflict
-- 이 글로 오는 글 ←: backend-engineer-roadmap, git-branch-merge, git-ignore-config, git-internals-basics, git-large-files-secrets, git-merge-conflict, git-rebase, git-stash-reflog, git-troubleshooting, git-undo, pattern-facade, secrets-management
+- 이 글로 오는 글 ←: backend-engineer-roadmap, git-branch-merge, git-features-map, git-ignore-config, git-internals-basics, git-large-files-secrets, git-merge-conflict, git-rebase, git-stash-reflog, git-troubleshooting, git-undo, pattern-facade, secrets-management
 
 #### `git-stash-reflog` — 치워 두고 되찾기: stash, reflog, 잘못 둔 커밋
 
@@ -1099,7 +1120,7 @@
 - 소제목: 잠깐 치워 두기 / reset --hard 뒤에 사라진 커밋 찾기 / 엉뚱한 브랜치에 커밋했을 때 / 지운 파일을 히스토리에서 꺼내기 / 서랍과 생명줄의 한계 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-undo, git-troubleshooting
 - 키워드 백링크 →: git-tips-advanced, git-staging-area
-- 이 글로 오는 글 ←: git-branch-merge, git-internals-basics, git-rebase, git-remote-collaboration, git-staging-area, git-troubleshooting, git-undo
+- 이 글로 오는 글 ←: git-branch-merge, git-features-map, git-internals-basics, git-rebase, git-remote-collaboration, git-stacked-prs, git-staging-area, git-troubleshooting, git-undo
 
 #### `git-tips-advanced` — 알아 두면 편한 Git 기능: bisect, cherry-pick, worktree, hooks
 
@@ -1110,7 +1131,7 @@
 - 소제목: 200개 커밋을 여덟 번 만에 좁힌다 / 테스트 스크립트로 bisect를 자동으로 돌린다 / 커밋 하나만 가져오는 cherry-pick / 브랜치를 바꾸지 않고 다른 폴더에서 일한다 / 이 줄은 누가 왜 바꿨나 / 코드가 생기고 사라진 커밋을 찾는다 / 저장소 안을 찾고 기여를 센다 / 커밋 전에 규칙을 검사하는 훅 / 파일마다 다른 규칙을 주는 .gitattributes / 서브모듈과 subtree / 저장소를 가볍게 유지하는 gc와 maintenance / 커밋에 서명하기 / 켜 두면 편한 설정과 별칭 / 도구를 꺼낼 때를 아는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branching-strategy, git-troubleshooting, claude-code-parallel-and-scheduled, git-merge-conflict
 - 키워드 백링크 →: git-branch-merge, dockerfile-image-layers
-- 이 글로 오는 글 ←: claude-code-fundamentals-map, claude-code-parallel-and-scheduled, claude-code-project-structure, git-branching-strategy, git-internals-basics, git-rebase, git-repo-errors, git-staging-area, git-stash-reflog, git-troubleshooting
+- 이 글로 오는 글 ←: claude-code-fundamentals-map, claude-code-parallel-and-scheduled, claude-code-project-structure, git-branching-strategy, git-features-map, git-internals-basics, git-rebase, git-repo-errors, git-stacked-prs, git-staging-area, git-stash-reflog, git-troubleshooting
 
 #### `git-troubleshooting` — Git 문제 해결: 푸시 거절부터 잃어버린 커밋까지
 
@@ -1121,7 +1142,7 @@
 - 소제목: 문제가 어디서 났는지부터 가른다 / 푸시가 fetch first로 거절된다 / pull이 divergent branches라며 멈춘다 / refusing to merge unrelated histories / 바꾼 파일이 덮어써진다며 브랜치를 못 바꾼다 / stash pop에서 충돌이 났다 / detached HEAD에서 만든 커밋이 사라졌다 / 브랜치를 실수로 지웠다 / 이미 푸시한 커밋 메시지가 틀렸다 / rebase가 끝나지 않은 채로 남아 있다 / pnpm-lock.yaml에서 충돌이 났다 / 오류를 만났을 때의 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, git-repo-errors, git-undo, git-rebase, git-remote-collaboration, git-tips-advanced
 - 키워드 백링크 →: git-branch-merge, git-ignore-config, dependency-hell, git-staging-area, git-stash-reflog
-- 이 글로 오는 글 ←: git-ignore-config, git-internals-basics, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-stash-reflog, git-tips-advanced, git-undo
+- 이 글로 오는 글 ←: git-features-map, git-ignore-config, git-internals-basics, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-stash-reflog, git-tips-advanced, git-undo
 
 #### `git-undo` — 되돌리기: restore, reset, revert와 히스토리 속 비밀 값
 
@@ -1132,7 +1153,7 @@
 - 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 비밀 값을 커밋했을 때 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-stash-reflog, git-staging-area, git-troubleshooting
 - 키워드 백링크 →: git-large-files-secrets, git-branch-merge, secrets-management
-- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting, gitops-argocd-vs-flux, helm-dependencies-oci-gitops, k8s-deploy-pipeline-eks, rollback-strategy
+- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, git-features-map, git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting, gitops-argocd-vs-flux, helm-dependencies-oci-gitops, k8s-deploy-pipeline-eks, rollback-strategy
 
 ### Programming › Computer Science (`programming/computer-science`)
 
@@ -4004,7 +4025,7 @@
 - 소제목: 워크플로 파일 한 장의 뼈대 / 언제 돌지는 이벤트와 경로가 정한다 / 푸시하기 전에 actionlint로 걸러 낸다 / 오래 사는 키 대신 OIDC로 역할을 잠깐 빌린다 / 신뢰 정책의 sub 조건이 문을 정한다 / ECR에 로그인하고 올리기 / 태그는 커밋 SHA로 붙인다 / buildx 캐시를 Actions 캐시에 둔다 / 올린 이미지를 검사한다 / 같은 브랜치 배포가 겹칠 때 concurrency / secrets와 environment로 운영 배포 앞에 문을 단다 / matrix로 여러 조합을 한 번에 돌린다 / 이미지가 러너에서 노드까지 가는 길 / 실패한 잡 로그에서 먼저 볼 줄 / 키를 저장하지 않는 파이프라인 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, k8s-deploy-pipeline-eks, git-branching-strategy, k8s-project-structure
 - 키워드 백링크 →: k8s-pod-troubleshooting, eks-cluster-basics, terraform-basics, token-login
-- 이 글로 오는 글 ←: backend-engineer-roadmap, build-caching, ci-cd-basics, claude-code-parallel-and-scheduled, cloud-cost-optimization, docker-commands-workflow, dockerfile-image-layers, git-internals-basics, git-remote-collaboration, helm-dependencies-oci-gitops, iam-basics, integration-tests-real-db, jenkins-pipeline-basics, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-secret, k8s-serviceaccount-tokens, kustomize-basics, network-config-cicd, secrets-management, velero-backup, vpc-peering-transit-privatelink, vpc-subnets-route-tables, yaml-for-k8s
+- 이 글로 오는 글 ←: backend-engineer-roadmap, build-caching, ci-cd-basics, claude-code-parallel-and-scheduled, cloud-cost-optimization, docker-commands-workflow, dockerfile-image-layers, git-internals-basics, git-remote-collaboration, git-stacked-prs, helm-dependencies-oci-gitops, iam-basics, integration-tests-real-db, jenkins-pipeline-basics, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-secret, k8s-serviceaccount-tokens, kustomize-basics, network-config-cicd, secrets-management, velero-backup, vpc-peering-transit-privatelink, vpc-subnets-route-tables, yaml-for-k8s
 
 #### `network-config-cicd` — 네트워크 설정 CI/CD: PR에서 plan, 승인, apply, drift 감지까지
 
@@ -7772,6 +7793,8 @@
 - GeoDNS → `sd-multi-datacenter`
 - Geohash → `geohash`
 - GEOSEARCH → `geohash`
+- Git 기능 10가지 → `git-features-map`
+- Git 기능 지도 → `git-features-map`
 - git add -p → `git-staging-area`
 - git bisect → `git-tips-advanced`
 - git blame → `git-tips-advanced`
@@ -7779,6 +7802,7 @@
 - Git Flow → `git-branching-strategy`
 - git fsck → `git-stash-reflog`
 - Git LFS → `git-large-files-secrets`
+- git range-diff → `git-stacked-prs`
 - git rebase → `git-rebase`
 - git reset → `git-undo`
 - git restore → `git-undo`
@@ -8259,6 +8283,7 @@
 - ResourceQuota → `k8s-pod-resources`
 - resourceVersion → `k8s-api-objects`
 - REST API → `rest-api-design`
+- restack → `git-stacked-prs`
 - restore-keys → `build-caching`
 - retention.ms → `kafka-vs-rabbitmq-replay`
 - return await → `js-async-await`
@@ -8373,6 +8398,7 @@
 - sslmode → `encryption-in-transit`
 - SSRF → `ssrf`
 - SSTable → `db-type-wide-column`
+- stacked PR → `git-stacked-prs`
 - stale closure → `js-closures`
 - stale-while-revalidate → `http-caching-cdn`
 - staleTime → `client-data-cache`
@@ -8624,6 +8650,8 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `git-features-map` ↔ `git-stacked-prs`
+- `git-stacked-prs` ↔ `git-rebase`
 - `api-scaling-ladder` ↔ `bullmq-job-queue`
 - `bullmq-job-queue` ↔ `message-queue-basics`
 - `data-structures-overview` ↔ `ds-union-find`

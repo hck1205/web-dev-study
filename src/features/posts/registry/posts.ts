@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "git-features-map",
+    title: "Git 기능 10가지: 커밋부터 stacked PR까지",
+    summary: "매일 쓰는 Git 기능 열 가지를 손에 익는 순서대로 실제 명령 한 줄과 출력으로 짚고, 커밋 그래프 하나 위에서 각 기능이 무엇을 바꾸는지, 상황마다 어떤 기능을 꺼낼지 정리한다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-24",
+    keywords: ["Git 기능 10가지", "Git 기능 지도"],
+  },
+  {
+    slug: "git-stacked-prs",
+    title: "stacked PR: 큰 기능을 작은 PR로 쌓아 올리기",
+    summary: "1,800줄짜리 PR이 리뷰에서 멈춘 장면에서 시작해 기능을 의존하는 브랜치 세 층으로 나누고, base를 아래 브랜치로 거는 법, rebase --update-refs로 한 번에 다시 쌓는 법, 아래 PR이 squash로 합쳐진 뒤의 충돌을 --onto로 푸는 법, 합치는 순서와 층마다 도는 CI까지 실제 출력으로 따라간다.",
+    topic: "programming/common/git",
+    tags: ["Git", "DevOps"],
+    date: "2026-10-24",
+    keywords: ["stacked PR", "restack", "git range-diff"],
+  },
+  {
     slug: "api-scaling-ladder",
     title: "API 확장 사다리: 1K에서 1M까지, 칸을 옮기라는 신호",
     summary: "한 대, 풀과 캐시, 여러 대와 로드 밸런서, 인덱스와 복제본, 비동기 큐, 게이트웨이와 샤딩으로 오르는 사다리를 칸마다 넘어갈 신호와 새로 생기는 장애로 정리한다. 사용자 수를 가정과 함께 RPS로 바꾸고, Fastify 한 대의 한계와 지연이 무릎처럼 꺾이는 지점을 직접 잰다.",

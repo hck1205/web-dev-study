@@ -1,0 +1,409 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-features-map");
+
+새 팀에 들어간 첫 주에 들은 말들이다. "브랜치 따서 PR 올려 주세요." "main 받아서 rebase 한 번 해 주세요." "그 수정은 release 브랜치에 cherry-pick 해야 해요." "배포는 태그 붙이면 나가요." 명령 이름은 다 들어 봤는데, 언제 어느 것을 꺼내야 하는지는 따로 배워야 한다.
+
+이 글은 매일 쓰는 Git 기능 열 가지를 보통 손에 익는 순서대로 하나씩 짚는다. 기능마다 무엇을 하는지 한 문단, 실제로 쳐 볼 한 줄과 그 출력, 자세히 다룬 글 링크를 붙였다. 마지막에는 상황별로 어떤 기능을 꺼낼지 정리했다. 명령은 Ubuntu 24.04의 Git 2.43.0에서 로컬 저장소 두 개(원본과 포크 역할)를 만들어 실행했다. GitHub 화면에서만 하는 일은 출력 없이 명령만 적었다.
+
+## 열 가지 기능이 만지는 것은 그래프 하나다
+
+기능이 열 개라고 저장소 안에 따로 열 가지가 있는 건 아니다. Git이 저장하는 건 커밋들이 부모를 가리키며 이어진 그래프 하나고, 브랜치·태그·HEAD는 그 그래프의 커밋에 붙은 이름표다. 커밋 하나가 무엇을 담는지는 [Git 내부 구조 글](/posts/git-internals-basics)에서 객체를 직접 열어 보며 다룬다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="커밋은 부모를 가리키고, 이름표는 커밋을 가리킨다"
+  nodes={[
+    { id: "c1", label: "6dc7125", sub: "README", x: 60, y: 200, w: 90, h: 40 },
+    { id: "c2", label: "d8c346a", sub: "검색 추가", x: 170, y: 200, w: 90, h: 40 },
+    { id: "c3", label: "c959304", sub: "공백 제거", x: 280, y: 200, w: 90, h: 40 },
+    { id: "c4", label: "44d778f", sub: "태그 목록", x: 340, y: 110, w: 90, h: 40 },
+    { id: "tag", label: "v1.0.0", sub: "태그", x: 170, y: 275, w: 80, h: 34 },
+    { id: "main", label: "main", sub: "브랜치", x: 280, y: 275, w: 80, h: 34 },
+    { id: "feat", label: "feat/tags", sub: "HEAD가 여기", x: 340, y: 30, w: 100, h: 34 },
+  ]}
+  edges={[
+    { from: "c2", to: "c1", label: "부모" },
+    { from: "c3", to: "c2", label: "부모" },
+    { from: "c4", to: "c3", label: "부모" },
+    { from: "tag", to: "c2", dashed: true },
+    { from: "main", to: "c3", dashed: true },
+    { from: "feat", to: "c4", dashed: true },
+  ]}
+/>
+
+이렇게 보면 기능들이 하는 일이 간단해진다. commit은 그래프에 점을 하나 더하고, branch와 tag는 이름표를 붙이고, merge는 두 갈래를 잇는 점을 만들고, rebase와 cherry-pick은 점을 다른 자리에 다시 찍는다. PR과 fork는 이 그래프를 다른 저장소와 주고받는 약속이다.
+
+## 처음 손에 익는 셋
+
+### commit: 스냅샷 한 장을 남긴다
+
+commit은 지금 인덱스(스테이징 영역)에 올려 둔 파일 상태 전체를 한 장의 스냅샷으로 저장하고, 직전 커밋을 부모로 가리킨다. 바뀐 줄만 저장하는 게 아니라 그 순간의 전체 트리를 가리킨다는 점이 이후 모든 기능의 바탕이다. add와 commit 사이에서 무슨 일이 일어나는지는 [스테이징 영역 글](/posts/git-staging-area)에 있다.
+
+```bash
+# 파일을 인덱스에 올리고 커밋한다
+git add README.md
+git commit -m "docs: README 추가"
+```
+
+```text
+[main (root-commit) 6dc7125] docs: README 추가
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+```
+
+대괄호 안의 `root-commit`은 부모가 없는 첫 커밋이라는 뜻이고, `6dc7125`가 이 스냅샷의 이름(해시 앞부분)이다.
+
+### branch: 커밋에 붙인 움직이는 이름표
+
+브랜치는 커밋 하나를 가리키는 이름이다. 그 브랜치에 있을 때 커밋하면 이름표가 새 커밋으로 한 칸 따라간다. 브랜치를 만드는 건 파일 하나 쓰는 정도의 일이라, 작은 작업마다 브랜치를 따도 부담이 없다. 브랜치와 HEAD, detached HEAD는 [브랜치와 병합 글](/posts/git-branch-merge)에서 다룬다.
+
+```bash
+# 새 브랜치를 만들고 바로 옮겨 간다
+git switch -c feat/search
+```
+
+```text
+Switched to a new branch 'feat/search'
+```
+
+### merge: 갈라진 두 줄을 하나로
+
+merge는 다른 브랜치의 커밋을 지금 브랜치로 가져온다. 지금 브랜치가 상대의 조상이면 이름표만 앞으로 옮기는 fast-forward로 끝나고, 둘이 갈라졌으면 부모가 둘인 병합 커밋을 새로 만든다. 같은 줄을 양쪽에서 고쳤다면 충돌로 멈추는데, 푸는 법은 [병합 충돌 글](/posts/git-merge-conflict)에 있다.
+
+```bash
+# main으로 돌아와 검색 브랜치를 합친다
+git switch main
+git merge feat/search
+```
+
+```text
+Updating 6dc7125..d8c346a
+Fast-forward
+ search.js | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 search.js
+```
+
+`Fast-forward`가 보인다. main은 그동안 움직이지 않았으니 main 이름표를 `d8c346a`로 옮기기만 했다. 아래 그림에서 다음을 누르면 세 기능이 그래프를 어떻게 바꾸는지 차례로 보인다.
+
+<AlgoTrace
+  caption="commit, branch, merge가 main의 히스토리를 바꾸는 순서"
+  memoryLabel="main이 가리키는 히스토리"
+  cells={["commit", "switch -c", "commit", "merge (ff)", "merge (3-way)"]}
+  steps={[
+    { pointer: 0, memory: ["README"], caption: "첫 커밋이 생기고 main 이름표가 그 위에 붙는다." },
+    { pointer: 1, memory: ["README"], caption: "feat/search 이름표를 같은 커밋에 하나 더 붙였다. 아직 커밋은 하나다." },
+    { pointer: 2, memory: ["README"], caption: "feat/search에서 커밋하면 그 이름표만 앞으로 간다. main은 그대로 README에 있다." },
+    { pointer: 3, found: [3], memory: ["README", "검색 추가"], caption: "main이 뒤처져 있을 뿐 갈라지지 않았으니 이름표만 앞으로 옮긴다. 새 커밋은 생기지 않는다." },
+    { pointer: 4, found: [4], memory: ["README", "검색 추가", "X", "Y", "Merge"], caption: "양쪽에 각자 커밋(X, Y)이 생겨 갈라졌다면 공통 조상과 두 끝을 비교해 부모가 둘인 병합 커밋을 만든다." },
+  ]}
+/>
+
+merge가 fast-forward로 끝날지 병합 커밋을 만들지는 "지금 브랜치가 상대의 조상인가"로 정해진다. 아래 코드에서 커밋 그래프를 받아 merge 결과를 맞히는 `mergeResult`를 완성해 본다. 상대가 이미 지금 브랜치에 포함돼 있으면 `"up-to-date"`(Git의 `Already up to date.`), 지금 브랜치가 상대의 조상이면 `"fast-forward"`, 둘 다 아니면 `"merge-commit"`이다.
+
+<CodePlayground
+  caption="merge가 어떻게 끝날지 맞히기"
+  functionName="mergeResult"
+  initialCode={`// parents: { 커밋: [부모, ...] }
+// current: 지금 브랜치가 가리키는 커밋, other: 합칠 브랜치가 가리키는 커밋
+function mergeResult(parents, current, other) {
+  return "merge-commit";
+}`}
+  solution={`function mergeResult(parents, current, other) {
+  // from에서 부모를 따라 닿는 커밋을 모두 모은다 (자기 자신 포함)
+  const reach = (from) => {
+    const seen = new Set();
+    const stack = [from];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const p of parents[id] || []) stack.push(p);
+    }
+    return seen;
+  };
+  if (reach(current).has(other)) return "up-to-date";
+  if (reach(other).has(current)) return "fast-forward";
+  return "merge-commit";
+}`}
+  tests={[
+    { label: "뒤처진 main에 합치기", args: [{ a: [], b: ["a"], c: ["b"], d: ["b"], m: ["c", "d"] }, "b", "c"], expected: "fast-forward" },
+    { label: "이미 포함된 브랜치", args: [{ a: [], b: ["a"], c: ["b"], d: ["b"], m: ["c", "d"] }, "c", "b"], expected: "up-to-date" },
+    { label: "갈라진 두 브랜치", args: [{ a: [], b: ["a"], c: ["b"], d: ["b"], m: ["c", "d"] }, "c", "d"], expected: "merge-commit" },
+    { label: "병합 뒤에 다시 합치기", args: [{ a: [], b: ["a"], c: ["b"], d: ["b"], m: ["c", "d"] }, "m", "d"], expected: "up-to-date" },
+    { label: "병합 커밋으로 따라가기", args: [{ a: [], b: ["a"], c: ["b"], d: ["b"], m: ["c", "d"] }, "d", "m"], expected: "fast-forward" },
+  ]}
+/>
+
+## 팀에 들어가면 바로 쓰는 셋
+
+### pull request: 합치기 전에 보여 주는 약속
+
+PR은 Git 자체의 기능이 아니라 GitHub, GitLab 같은 호스팅 서비스의 기능이다(GitLab은 merge request라고 부른다). 내 브랜치를 원격에 올리고 "이 브랜치를 main에 합쳐 달라"고 요청하면, 그 자리에서 diff를 보며 리뷰하고 CI 결과를 확인한 뒤 버튼으로 합친다. 버튼이 merge commit, squash, rebase 세 가지라는 것과 그 차이는 [브랜치 전략 글](/posts/git-branching-strategy)에, 푸시부터 머지까지의 흐름은 [원격 협업 글](/posts/git-remote-collaboration)에 있다.
+
+```bash
+# 브랜치를 원격에 처음 올리면서 upstream을 연결한다
+git push -u origin feat/tags
+
+# gh로 PR을 연다 (출력은 생략)
+gh pr create --base main --fill
+```
+
+```text
+To ../hub-up.git
+ * [new branch]      feat/tags -> feat/tags
+branch 'feat/tags' set up to track 'origin/feat/tags'.
+```
+
+아래 그림에서 다음을 누르면 PR 하나가 열리고 합쳐지기까지가 한 단계씩 진행된다.
+
+<SequenceDiagram
+  caption="브랜치 하나가 PR을 거쳐 main에 들어가기까지"
+  actors={[
+    { id: "dev", label: "작성자" },
+    { id: "gh", label: "GitHub" },
+    { id: "ci", label: "CI" },
+    { id: "rev", label: "리뷰어" },
+  ]}
+  steps={[
+    { from: "dev", to: "gh", label: "git push -u", title: "브랜치를 올린다", detail: "원격에 feat/tags가 생기고 로컬 브랜치와 연결된다.", payload: "git push -u origin feat/tags" },
+    { from: "dev", to: "gh", label: "PR 열기", title: "합쳐 달라고 요청한다", detail: "base는 main, head는 feat/tags다. 화면에는 main..feat/tags 커밋과 diff가 보인다." },
+    { from: "gh", to: "ci", label: "pull_request", title: "CI가 돈다", detail: "PR이 열리거나 새 커밋이 올라올 때마다 빌드와 테스트가 돈다." },
+    { from: "rev", to: "gh", label: "변경 요청", title: "리뷰가 달린다", detail: "고칠 곳에 댓글이 달린다. 작성자는 같은 브랜치에 커밋을 더해 민다." },
+    { from: "dev", to: "gh", label: "git push", title: "고쳐서 다시 민다", detail: "PR은 브랜치를 가리키니 새 커밋이 자동으로 PR에 붙고 CI가 다시 돈다." },
+    { from: "rev", to: "gh", label: "approve", title: "승인한다", detail: "필수 리뷰와 필수 검사를 통과하면 Merge 버튼이 열린다." },
+    { from: "gh", to: "gh", label: "squash merge", title: "main에 합친다", detail: "저장소에서 고른 방식대로 합치고, 다 쓴 브랜치는 지운다." },
+  ]}
+/>
+
+### stash: 하던 일을 잠깐 서랍에 넣는다
+
+급한 리뷰 요청이 와서 브랜치를 바꿔야 하는데 지금 고치던 게 아직 커밋할 상태가 아닐 때 쓴다. 작업 트리와 인덱스의 변경을 임시 커밋으로 떼어 내 스택에 쌓고, 작업 폴더는 깨끗하게 돌려놓는다. 나중에 `pop`으로 다시 꺼낸다. 충돌이 나거나 잃어버렸을 때 찾는 법은 [stash와 reflog 글](/posts/git-stash-reflog)에 있다.
+
+```bash
+# 고치던 걸 메시지를 붙여 치워 두고 목록을 본다
+git stash push -m "태그 기본값 실험"
+git stash list
+```
+
+```text
+Saved working directory and index state On feat/tags: 태그 기본값 실험
+stash@{0}: On feat/tags: 태그 기본값 실험
+```
+
+stash는 이름 그대로 스택이라 나중에 넣은 것이 `stash@{0}`이 되고 앞의 것은 번호가 하나씩 밀린다. 아래 그림에서 넣고 꺼내는 순서를 볼 수 있다.
+
+<AlgoTrace
+  caption="stash는 나중에 넣은 것이 먼저 나오는 스택이다"
+  memoryLabel="stash 목록 (오른쪽이 stash@{0})"
+  cells={["push 실험", "push 리팩터", "pop", "pop"]}
+  steps={[
+    { pointer: 0, memory: ["실험"], caption: "고치던 실험을 치웠다. 작업 폴더는 마지막 커밋 상태로 깨끗해진다." },
+    { pointer: 1, memory: ["실험", "리팩터"], caption: "다른 작업을 하다 또 치웠다. 새것이 stash@{0}, 앞의 실험은 stash@{1}로 밀린다." },
+    { pointer: 2, memory: ["실험"], caption: "pop은 stash@{0}인 리팩터를 꺼내 적용하고 목록에서 지운다." },
+    { pointer: 3, memory: [], caption: "다시 pop하면 실험이 나온다. 무엇이 몇 번인지 헷갈리니 -m으로 이름을 붙여 둔다." },
+  ]}
+/>
+
+### fork: 쓰기 권한이 없는 저장소에 기여하는 길
+
+fork는 원본 저장소를 내 계정 아래로 통째로 복사한 서버 쪽 저장소다. clone이 서버의 저장소를 내 컴퓨터로 받는 것이라면, fork는 GitHub 안에서 복사본을 하나 더 만드는 것이다. 쓰기 권한이 없는 오픈소스에 기여할 때 내 포크에 브랜치를 밀고, 원본으로 PR을 연다. 관례상 내 포크를 `origin`, 원본을 `upstream`이라 부르고, 포크는 원본을 자동으로 따라가지 않으니 원본을 받아 맞춰야 한다. 자세한 동기화는 [원격 협업 글](/posts/git-remote-collaboration)에 있다.
+
+```bash
+# 내 포크를 clone한 뒤 원본을 upstream으로 등록하고 받아 온다
+git remote add upstream ../hub-up.git
+git fetch upstream
+```
+
+```text
+From ../hub-up
+ * [new branch]      feat/tags  -> upstream/feat/tags
+ * [new branch]      main       -> upstream/main
+```
+
+여기서는 로컬 경로로 실험해서 주소가 `../hub-up`으로 나왔다. 실제로는 `https://github.com/원본계정/저장소.git`이 들어간다. 아래 그림에서 다음을 누르면 세 저장소 사이로 커밋이 오가는 순서가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="원본에서 받고, 내 포크로 밀고, PR로 원본에 제안한다"
+  zones={[
+    { id: "github", label: "GitHub", x: 10, y: 10, w: 380, h: 120, tone: "edge" },
+    { id: "pc", label: "내 컴퓨터", x: 110, y: 170, w: 180, h: 100, tone: "private" },
+  ]}
+  nodes={[
+    { id: "up", label: "upstream", sub: "원본 저장소", x: 90, y: 75, icon: "server", w: 110 },
+    { id: "origin", label: "origin", sub: "내 포크", x: 310, y: 75, icon: "server", w: 110 },
+    { id: "local", label: "로컬 저장소", sub: "clone한 곳", x: 200, y: 225, icon: "client", w: 110 },
+  ]}
+  links={[
+    { from: "up", to: "origin", label: "fork", dashed: true },
+    { from: "origin", to: "local" },
+    { from: "up", to: "local" },
+  ]}
+  steps={[
+    { path: ["up", "origin"], packet: "fork", title: "원본을 내 계정으로 복사한다", detail: "GitHub 화면의 Fork 버튼이나 gh repo fork로 만든다. 만든 순간의 사진이다." },
+    { path: ["origin", "local"], packet: "clone", title: "내 포크를 받는다", detail: "clone한 주소가 origin이 된다. 원본은 아직 모른다." },
+    { path: ["up", "local"], packet: "fetch", title: "원본을 upstream으로 받는다", detail: "remote add upstream 뒤 fetch하면 upstream/main이 생긴다. 새 작업은 여기서 딴다." },
+    { path: ["local", "origin"], packet: "push", title: "내 포크로 민다", detail: "원본에는 쓰기 권한이 없으니 브랜치는 내 포크에 올린다." },
+    { path: ["origin", "up"], packet: "PR", title: "원본에 PR을 연다", detail: "head는 내계정:브랜치, base는 원본의 main이다. 원본 관리자가 리뷰하고 합친다." },
+  ]}
+/>
+
+## 배포를 시작하면
+
+### tag: 내보낸 커밋에 움직이지 않는 이름을
+
+tag는 브랜치처럼 커밋에 붙는 이름표지만, 커밋해도 따라 움직이지 않는다. 그래서 "v1.0.0으로 배포한 코드"를 나중에도 정확히 가리킬 수 있다. 이름만 붙이는 가벼운 태그와, 만든 사람·날짜·메시지를 담은 객체를 따로 만드는 annotated 태그가 있고, 릴리스에는 annotated를 쓴다. 태그는 `git push`만으로는 올라가지 않는다는 것, 버전 번호를 매기는 규칙은 [원격 협업 글](/posts/git-remote-collaboration)과 [SemVer 글](/posts/semantic-versioning)에 있다.
+
+```bash
+# 메시지가 있는 annotated 태그를 붙이고, 몇 커밋 뒤 지금 위치를 태그 기준으로 묻는다
+git tag -a v1.0.0 -m "첫 릴리스"
+git describe
+
+# 태그가 따로 객체로 만들어졌는지 확인
+git cat-file -t v1.0.0
+```
+
+```text
+v1.0.0-2-gd139e24
+tag
+```
+
+`git describe` 출력은 빌드 번호로 많이 쓴다. 조각마다 무슨 뜻인지는 아래 그림에서 하나씩 눌러 보면 나온다.
+
+<UrlAnatomy
+  caption="git describe 출력 읽기"
+  separator=""
+  joiner="-"
+  params={[
+    { key: "tag", display: "v1.0.0", title: "가장 가까운 annotated 태그", description: "지금 커밋에서 부모를 따라 내려가다 처음 만나는 annotated 태그다. 가벼운 태그까지 보려면 --tags를 붙인다." },
+    { key: "n", display: "2", title: "태그 뒤로 쌓인 커밋 수", description: "v1.0.0 다음에 커밋 두 개가 더 있다. 지금 커밋에 바로 태그가 붙어 있으면 이 부분 없이 v1.0.0만 나온다." },
+    { key: "hash", display: "gd139e24", title: "g + 지금 커밋 해시", description: "g는 git의 머리글자고 뒤가 지금 커밋의 짧은 해시다. 운영 서버가 정확히 어느 커밋인지 이 값으로 찾는다." },
+  ]}
+/>
+
+## 히스토리를 다듬게 되면
+
+### rebase: 내 커밋을 새 받침 위에 다시 찍는다
+
+rebase는 내 브랜치의 커밋들을 다른 커밋 위로 옮긴다. 정확히는 옮기는 게 아니라 같은 변경을 새 받침 위에 하나씩 다시 적용해 새 커밋을 만든다. main이 앞서 나갔을 때 병합 커밋 없이 내 커밋을 그 뒤에 붙이거나, interactive rebase로 커밋을 합치고 고칠 때 쓴다. 해시가 바뀌니 남과 공유한 브랜치에는 조심해서 쓴다. 충돌, autosquash, `--onto`까지 [rebase 글](/posts/git-rebase)에 있다.
+
+```bash
+# feat/tags의 커밋을 최신 main 뒤로 옮긴다
+git switch feat/tags
+git rebase main
+git log --oneline --graph --decorate --all
+```
+
+```text
+Successfully rebased and updated refs/heads/feat/tags.
+* 93ec194 (origin/feat/tags) feat: 태그 목록
+| * 44d778f (HEAD -> feat/tags) feat: 태그 목록
+| * d139e24 (main) docs: 검색 안내
+| * c959304 fix: 검색어 앞뒤 공백 제거
+|/  
+* d8c346a (tag: v1.0.0, feat/search) feat: 검색 추가
+* 6dc7125 (origin/main) docs: README 추가
+```
+
+같은 메시지의 커밋이 두 개 보인다. 원격에 올려 둔 옛 커밋 `93ec194`는 그대로 있고, 로컬 브랜치는 main 뒤에 새로 만든 `44d778f`를 가리킨다. 이제 이 브랜치를 올리려면 강제 푸시(`--force-with-lease`)가 필요하다.
+
+### cherry-pick: 커밋 하나만 골라서 복사한다
+
+cherry-pick은 다른 브랜치의 커밋 하나가 만든 변경을 지금 브랜치에 다시 적용해 새 커밋을 만든다. 운영 중인 release 브랜치에 버그 수정만 옮길 때 가장 많이 쓴다. `-x`를 붙이면 원본 커밋 해시가 메시지에 남아서 나중에 같은 수정이 어디어디 들어갔는지 추적할 수 있다. 범위 지정과 충돌 처리는 [Git 고급 기능 글](/posts/git-tips-advanced)에, 어느 방향으로 옮길지는 [브랜치 전략 글](/posts/git-branching-strategy)에 있다.
+
+```bash
+# v1.0.0에서 release 브랜치를 따고, main의 버그 수정 하나만 가져온다
+git switch -c release/1.0 v1.0.0
+git cherry-pick -x ":/fix: 검색어"
+git log -1 --format=%B
+```
+
+```text
+[release/1.0 09ea872] fix: 검색어 앞뒤 공백 제거
+ Date: Fri Oct 23 05:53:20 2026 +0900
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+fix: 검색어 앞뒤 공백 제거
+
+(cherry picked from commit c9593049bfdf240744f5fadbae3c53f736a157c2)
+```
+
+`Date:`가 따로 찍힌 건 작성 시각이 원본 커밋의 것으로 유지되기 때문이다. 해시는 `09ea872`로 원본 `c959304`와 다르다. 내용은 같아도 부모가 다른 별개의 커밋이다.
+
+rebase와 cherry-pick은 사실 같은 일을 한다. 커밋의 변경을 다른 자리에 다시 적용한다. rebase는 브랜치 전체를 옮기고 이름표까지 따라 옮기는 것이고, cherry-pick은 고른 커밋만 지금 자리에 붙인다.
+
+## 리뷰가 밀리기 시작하면
+
+### stacked PR: 큰 기능을 의존하는 작은 PR로 쌓는다
+
+기능 하나가 커서 PR이 1,000줄을 넘기면 리뷰가 멈춘다. stacked PR은 그 기능을 모델, API, 화면처럼 서로 의존하는 층으로 나누고, 위 층 PR의 base를 아래 층 브랜치로 건다. 리뷰어는 작은 단위로 보고, 작성자는 아래가 리뷰 중일 때 위에서 계속 일한다. 아래 층이 바뀌면 꼭대기에서 Git 2.38부터 있는 `--update-refs`로 한 번에 다시 쌓는다. 아래 층이 squash로 합쳐진 뒤의 충돌을 푸는 법, 합치는 순서와 CI 설정은 [stacked PR 글](/posts/git-stacked-prs)에서 실제 출력으로 따라간다.
+
+```bash
+# 꼭대기 브랜치에서 한 번. 중간 층 브랜치 이름표도 함께 옮긴다
+git rebase --update-refs main
+```
+
+```text
+Successfully rebased and updated refs/heads/feat/cart-ui.
+Updated the following refs with --update-refs:
+	refs/heads/feat/cart-api
+	refs/heads/feat/cart-model
+```
+
+## 이럴 땐 이 기능
+
+기능 이름보다 상황이 먼저 떠오를 때 찾아보도록 정리했다.
+
+- 작업 단위 하나가 끝났다 → commit. "wip"를 여러 번 남겼다면 올리기 전에 interactive rebase로 합친다.
+- 새 기능이나 버그 수정을 시작한다 → main에서 branch를 딴다. main에 직접 커밋하지 않는다.
+- 내 작업을 팀 코드에 넣고 싶다 → push하고 pull request. 쓰기 권한이 없는 저장소라면 fork부터.
+- 브랜치가 main보다 뒤처졌다 → 아직 나 혼자 쓰는 브랜치면 rebase, 여럿이 같이 쓰는 브랜치면 merge.
+- 커밋하기 애매한 상태에서 급히 브랜치를 바꿔야 한다 → stash. 오래 둘 거라면 차라리 wip 커밋을 하고 나중에 고친다.
+- 다른 브랜치의 수정 하나만 필요하다 → cherry-pick -x. 브랜치 전체가 필요하면 merge다.
+- 이 코드를 배포했다고 표시하고 싶다 → annotated tag를 붙이고 따로 push한다.
+- 운영 서버가 어느 커밋인지 알고 싶다 → 빌드할 때 `git describe` 값을 넣어 둔다.
+- PR이 너무 커서 리뷰가 안 된다 → 서로 독립이면 PR 여러 개로 나눠 각각 main에, 의존하면 stacked PR.
+- 포크한 저장소가 원본보다 뒤처졌다 → upstream을 fetch해서 main을 fast-forward한다.
+
+잘못 쓴 걸 되돌리는 쪽(reset, revert, restore)은 열 가지에 넣지 않았다. 실수가 어디에 있는지에 따라 고르는 법은 [되돌리기 글](/posts/git-undo)에, 자주 만나는 오류 메시지는 [Git 문제 해결 글](/posts/git-troubleshooting)에 모아 두었다.
+
+## 다시 그래프로
+
+열 가지 기능은 결국 커밋 그래프에 점을 더하거나(commit, merge), 이름표를 붙이거나(branch, tag), 점을 다른 자리에 다시 찍거나(rebase, cherry-pick), 잠시 떼어 두거나(stash), 그래프를 다른 저장소와 주고받는 약속(PR, fork, stacked PR)이다. 명령을 치기 전에 `git log --oneline --graph --decorate --all`로 지금 그래프를 보고, 명령 뒤에 그래프가 어떻게 바뀔지 머릿속으로 그려 보면 대부분의 실수가 미리 걸러진다.
+
+## 면접에서 나올 만한 질문
+
+### 브랜치는 무엇인가요? 브랜치를 많이 만들어도 괜찮은 이유는?
+
+브랜치는 커밋 하나를 가리키는 이름표이고, 그 브랜치에서 커밋하면 이름표가 새 커밋으로 따라간다. 내부적으로는 커밋 해시 하나를 적은 작은 파일이라 만들고 지우는 비용이 거의 없다. 파일을 복사하는 게 아니라 이름만 하나 더 생기는 것이라, 작업마다 브랜치를 따는 방식이 자연스럽다.
+
+### merge가 fast-forward로 끝날 때와 병합 커밋을 만들 때는 어떻게 다른가요?
+
+지금 브랜치가 합칠 브랜치의 조상이면, 즉 내 쪽에 새 커밋이 없으면 이름표만 앞으로 옮기는 fast-forward로 끝난다. 양쪽에 각자 커밋이 있어 갈라졌다면 공통 조상과 두 끝을 비교하는 3-way 병합으로 부모가 둘인 병합 커밋을 만든다. 히스토리에 병합 시점을 꼭 남기고 싶으면 `--no-ff`로 fast-forward를 막는다.
+
+### merge와 rebase는 언제 무엇을 쓰나요?
+
+남과 공유하지 않은 내 브랜치를 최신 main에 맞출 때는 rebase, 공유된 브랜치를 합칠 때는 merge를 쓴다. rebase는 커밋을 새로 만들어 히스토리를 일자로 만들지만 해시가 바뀌어서, 이미 받아 간 사람이 있으면 그 사람의 히스토리와 어긋난다. merge는 히스토리를 바꾸지 않는 대신 병합 커밋이 남는다.
+
+### cherry-pick과 rebase는 어떤 관계인가요?
+
+둘 다 커밋이 만든 변경을 다른 받침 위에 다시 적용해 새 커밋을 만든다. cherry-pick은 고른 커밋만 지금 브랜치에 붙이고, rebase는 브랜치의 커밋 묶음 전체를 옮긴 뒤 브랜치 이름표도 옮긴다. 둘 다 원본과 해시가 다른 별개의 커밋을 만들기 때문에, cherry-pick한 수정은 `-x`로 원본 해시를 남겨 추적한다.
+
+### fork와 clone은 무엇이 다른가요?
+
+clone은 원격 저장소를 내 컴퓨터로 받아 로컬 저장소를 만드는 Git 명령이다. fork는 GitHub 같은 호스팅 서비스에서 원본 저장소를 내 계정 아래 서버 쪽 저장소로 복사하는 기능이다. 쓰기 권한이 없는 저장소에 기여할 때 포크에 브랜치를 밀고 원본에 PR을 연다. 포크는 원본을 자동으로 따라가지 않으니 upstream을 등록해서 받아 맞춘다.
+
+### 가벼운 태그와 annotated 태그는 어떻게 다른가요?
+
+가벼운 태그는 커밋을 가리키는 이름만 만들고, annotated 태그는 만든 사람·날짜·메시지를 담은 tag 객체를 따로 만든다. `git describe`는 기본으로 annotated 태그만 보고, 서명도 tag 객체에 붙으니 릴리스에는 annotated를 쓴다. 어느 쪽이든 `git push`만으로는 올라가지 않아 태그를 따로 밀거나 `--follow-tags`를 쓴다.
+
+### stash는 어떻게 동작하고, 무엇을 조심해야 하나요?
+
+작업 트리와 인덱스의 변경을 특별한 커밋으로 저장해 스택에 쌓고 작업 폴더를 깨끗하게 돌려놓는다. 나중에 넣은 것이 `stash@{0}`이 되고 `pop`하면 적용한 뒤 목록에서 지운다. 기본으로는 추적하지 않는 새 파일을 치우지 않으니 `-u`가 필요하고, 쌓아 두면 무엇이 무엇인지 잊기 쉬워 `-m`으로 이름을 붙인다. 오래 둘 작업은 stash보다 wip 커밋이 안전하다.
+
+### stacked PR은 언제 쓰나요?
+
+서로 의존하는 변경이 커서 PR 하나로는 리뷰가 멈출 때 쓴다. 기능을 층으로 나눠 위 층 PR의 base를 아래 층 브랜치로 걸면 리뷰는 작게, 작업은 쉬지 않고 이어 갈 수 있다. 대신 아래가 바뀔 때마다 다시 쌓고 강제 푸시해야 하고, 아래가 squash로 합쳐지면 `--onto`로 위 층을 옮겨야 한다. 변경끼리 독립이면 각각 main에 올리는 편이 낫다.

@@ -143,6 +143,7 @@ import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
 import { GIT_BRANCH_MERGE } from "./git-branch-merge";
 import { GIT_BRANCHING_STRATEGY } from "./git-branching-strategy";
+import { GIT_FEATURES_MAP } from "./git-features-map";
 import { GIT_IGNORE_CONFIG } from "./git-ignore-config";
 import { GIT_INTERNALS_BASICS } from "./git-internals-basics";
 import { GIT_LARGE_FILES_SECRETS } from "./git-large-files-secrets";
@@ -150,6 +151,7 @@ import { GIT_MERGE_CONFLICT } from "./git-merge-conflict";
 import { GIT_REBASE } from "./git-rebase";
 import { GIT_REMOTE_COLLABORATION } from "./git-remote-collaboration";
 import { GIT_REPO_ERRORS } from "./git-repo-errors";
+import { GIT_STACKED_PRS } from "./git-stacked-prs";
 import { GIT_STAGING_AREA } from "./git-staging-area";
 import { GIT_STASH_REFLOG } from "./git-stash-reflog";
 import { GIT_TIPS_ADVANCED } from "./git-tips-advanced";
@@ -719,6 +721,7 @@ export const QUESTION_SETS = [
   GEOHASH,
   GIT_BRANCH_MERGE,
   GIT_BRANCHING_STRATEGY,
+  GIT_FEATURES_MAP,
   GIT_IGNORE_CONFIG,
   GIT_INTERNALS_BASICS,
   GIT_LARGE_FILES_SECRETS,
@@ -726,6 +729,7 @@ export const QUESTION_SETS = [
   GIT_REBASE,
   GIT_REMOTE_COLLABORATION,
   GIT_REPO_ERRORS,
+  GIT_STACKED_PRS,
   GIT_STAGING_AREA,
   GIT_STASH_REFLOG,
   GIT_TIPS_ADVANCED,

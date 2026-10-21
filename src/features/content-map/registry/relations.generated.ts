@@ -2,6 +2,38 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "git-features-map": {
+    "links": [
+      "git-internals-basics",
+      "git-staging-area",
+      "git-branch-merge",
+      "git-merge-conflict",
+      "git-branching-strategy",
+      "git-remote-collaboration",
+      "git-stash-reflog",
+      "semantic-versioning",
+      "git-rebase",
+      "git-tips-advanced",
+      "git-stacked-prs",
+      "git-undo",
+      "git-troubleshooting"
+    ],
+    "mentions": []
+  },
+  "git-stacked-prs": {
+    "links": [
+      "git-rebase",
+      "git-branching-strategy",
+      "git-remote-collaboration",
+      "git-features-map",
+      "git-branch-merge",
+      "git-stash-reflog",
+      "git-tips-advanced"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr"
+    ]
+  },
   "api-scaling-ladder": {
     "links": [
       "sd-start-single-server",
@@ -10056,6 +10088,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branch-merge",
       "git-branching-strategy",
       "git-merge-conflict",
+      "git-stacked-prs",
       "git-remote-collaboration",
       "git-stash-reflog",
       "git-undo"

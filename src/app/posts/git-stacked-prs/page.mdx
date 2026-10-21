@@ -1,0 +1,637 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("git-stacked-prs");
+
+장바구니 기능을 PR 하나로 올렸다. 모델, API, 화면, 테스트까지 다 들어가서 바뀐 줄이 1,800줄을 넘었다. 리뷰어는 사흘째 "오늘 오후에 볼게요"라고 하고, 그사이 main은 계속 앞서 나가서 충돌이 하나씩 늘어난다. 다음 작업은 이 PR 위에서 해야 하니 나도 손을 놓고 기다린다.
+
+이럴 때 쓰는 방법이 stacked PR이다. 기능 하나를 서로 의존하는 작은 PR 여러 개로 나누고, 위 PR의 base를 아래 PR의 브랜치로 건다. 리뷰어는 300줄짜리를 하나씩 보고, 나는 아래 PR이 리뷰를 기다리는 동안 그 위에서 계속 일한다. 대신 Git 쪽 관리가 늘어난다. 아래를 고치면 위를 다시 쌓아야 하고, 아래가 squash로 합쳐지면 위에서 충돌이 난다.
+
+이 글은 그 관리를 실제 명령으로 따라간다. `--onto`와 `--update-refs`가 커밋을 어떻게 옮기는지 자체는 [rebase 글](/posts/git-rebase)에 있으니 여기서는 스택을 운영하는 순서에 집중한다. PR을 합치는 세 버튼의 차이는 [브랜치 전략 글](/posts/git-branching-strategy)에, 강제 푸시를 안전하게 하는 법은 [원격 협업 글](/posts/git-remote-collaboration)에 있다. Git 기능 전체의 지도는 [Git 기능 10가지](/posts/git-features-map)에서 볼 수 있다. 명령은 Ubuntu 24.04의 Git 2.43.0에서 로컬 bare 저장소를 원격 삼아 실행했다. GitHub 화면이나 `gh`로만 할 수 있는 부분은 출력 없이 명령만 적었다.
+
+## 1,800줄짜리 PR이 멈추는 이유
+
+리뷰어 입장에서 큰 PR은 한 번에 끝낼 수 없는 일이다. 30분이 비는 순간에 열어 보기엔 너무 크니 "시간 날 때"로 미루고, 막상 보게 되면 세부보다 전체 모양을 훑게 된다. 리뷰가 늦어지는 동안 작성자는 다음 작업을 시작할 수 없거나, 시작하더라도 리뷰 결과에 따라 갈아엎을 각오를 해야 한다. main은 그사이 계속 움직이니 충돌도 늘어난다.
+
+해결책이 늘 stacked PR인 건 아니다. 서로 의존하지 않는 변경이라면 각각 main에 바로 PR을 올리는 편이 간단하다. 덜 된 기능을 기능 플래그 뒤에 숨기고 작은 PR을 main에 계속 합치는 [트렁크 기반 개발](/posts/git-branching-strategy)도 같은 문제를 푼다. stacked PR이 필요한 건 "API가 들어가야 화면을 만들 수 있다"처럼 뒤 작업이 앞 작업의 코드를 직접 쓰는데, 앞 작업이 아직 리뷰 중일 때다.
+
+장바구니 기능은 이렇게 세 층으로 나눴다. 아래 그림에서 화살표는 "이 PR의 base"를 가리킨다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="위 PR의 base가 아래 PR의 브랜치다. 맨 아래만 main을 향한다"
+  nodes={[
+    { id: "main", label: "main", sub: "배포되는 브랜치", x: 200, y: 290, w: 150, h: 44 },
+    { id: "model", label: "#101 cart-model", sub: "모델과 담기 함수", x: 200, y: 205, w: 170, h: 44 },
+    { id: "api", label: "#102 cart-api", sub: "GET, POST 라우트", x: 200, y: 120, w: 170, h: 44 },
+    { id: "ui", label: "#103 cart-ui", sub: "장바구니 화면", x: 200, y: 35, w: 170, h: 44 },
+  ]}
+  edges={[
+    { from: "model", to: "main", label: "base" },
+    { from: "api", to: "model", label: "base" },
+    { from: "ui", to: "api", label: "base" },
+  ]}
+/>
+
+나누는 기준은 "아래 층만 합쳐도 main이 깨지지 않는가"다. 모델만 들어가도 빌드와 테스트는 통과해야 하고, API만 들어가도 기존 기능은 그대로여야 한다. 층마다 혼자 리뷰할 수 있는 이야기 하나를 담는다.
+
+## 브랜치를 세 층으로 쌓는다
+
+만드는 건 평소와 같다. 아래 브랜치에서 위 브랜치를 딴다.
+
+```bash
+# 맨 아래 층: main에서 딴다
+git switch -c feat/cart-model
+git commit -m "cart: 장바구니 모델"
+git commit -m "cart: 상품 담기"
+
+# 가운데 층: cart-model 위에서 딴다
+git switch -c feat/cart-api
+git commit -m "api: GET /cart"
+git commit -m "api: POST /cart/items"
+
+# 맨 위 층: cart-api 위에서 딴다
+git switch -c feat/cart-ui
+git commit -m "ui: 장바구니 화면"
+
+# 세 브랜치가 한 줄로 쌓였는지 본다
+git log --oneline --graph --decorate --all
+```
+
+```text
+* d4f14b1 (HEAD -> feat/cart-ui) ui: 장바구니 화면
+* b2f6747 (feat/cart-api) api: POST /cart/items
+* 3020023 api: GET /cart
+* 95830ca (feat/cart-model) cart: 상품 담기
+* fc162a5 cart: 장바구니 모델
+* 35149ad (origin/main, main) init
+```
+
+한 줄짜리 히스토리에 브랜치 이름표가 세 군데 붙어 있다. 브랜치는 커밋을 가리키는 이름표일 뿐이라([브랜치와 병합 글](/posts/git-branch-merge)) 스택도 특별한 구조가 아니다. 각 PR이 리뷰어에게 보여 줄 커밋은 "내 브랜치에는 있고 base에는 없는 커밋", 즉 `base..branch`다.
+
+```bash
+# PR마다 리뷰어가 보게 될 커밋
+git log --oneline main..feat/cart-model
+git log --oneline feat/cart-model..feat/cart-api
+git log --oneline feat/cart-api..feat/cart-ui
+```
+
+```text
+95830ca cart: 상품 담기
+fc162a5 cart: 장바구니 모델
+
+b2f6747 api: POST /cart/items
+3020023 api: GET /cart
+
+d4f14b1 ui: 장바구니 화면
+```
+
+아래 그림에서 다음을 누르면 PR마다 어느 커밋이 리뷰 대상이 되는지 차례로 보인다.
+
+<AlgoTrace
+  caption="같은 히스토리를 base만 바꿔서 세 번 자른다"
+  memoryLabel="이 PR의 리뷰 대상"
+  cells={["init", "모델", "담기", "GET", "POST", "화면"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "main은 init에 있다. 세 브랜치 모두 이 커밋에서 출발한다." },
+    { found: [1, 2], memory: ["모델", "담기"], caption: "#101은 base가 main이라 main..feat/cart-model, 모델과 담기 두 커밋만 보인다." },
+    { found: [3, 4], memory: ["GET", "POST"], caption: "#102는 base가 feat/cart-model이다. 아래 층 커밋은 빠지고 API 두 커밋만 남는다." },
+    { found: [5], memory: ["화면"], caption: "#103은 base가 feat/cart-api다. 화면 커밋 하나만 리뷰하면 된다." },
+    { found: [1, 2, 3, 4, 5], memory: ["모델", "담기", "GET", "POST", "화면"], caption: "#103의 base를 main으로 잘못 걸면 다섯 커밋이 전부 보인다. 리뷰어는 다시 1,800줄을 보게 된다." },
+  ]}
+/>
+
+## PR의 base를 아래 브랜치로 건다
+
+세 브랜치를 한 번에 민다. 처음 미는 브랜치라 `-u`로 upstream도 연결한다.
+
+```bash
+# 세 층을 한꺼번에 원격에 올린다
+git push -u origin feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+To ../remote.git
+ * [new branch]      feat/cart-model -> feat/cart-model
+ * [new branch]      feat/cart-api -> feat/cart-api
+ * [new branch]      feat/cart-ui -> feat/cart-ui
+branch 'feat/cart-model' set up to track 'origin/feat/cart-model'.
+branch 'feat/cart-api' set up to track 'origin/feat/cart-api'.
+branch 'feat/cart-ui' set up to track 'origin/feat/cart-ui'.
+```
+
+PR을 열 때 base를 꼭 지정한다. 지정하지 않으면 저장소 기본 브랜치(main)로 열려서 위 그림의 마지막 단계처럼 된다. `gh`로 연다면 이렇다(gh 2.89 기준).
+
+```bash
+# 아래 층부터 연다. 맨 아래만 main을 향한다
+gh pr create --base main --head feat/cart-model --title "cart: 장바구니 모델" --fill
+gh pr create --base feat/cart-model --head feat/cart-api --title "cart: 장바구니 API" --fill
+gh pr create --base feat/cart-api --head feat/cart-ui --title "cart: 장바구니 화면" --fill --draft
+
+# 브랜치마다 base를 기억시켜 두면 --base를 생략할 수 있다
+git config branch.feat/cart-api.gh-merge-base feat/cart-model
+```
+
+PR 설명 맨 위에는 스택 전체를 적어 둔다. "1/3 #101 ← 지금, 2/3 #102, 3/3 #103"처럼 쓰면 리뷰어가 어디서부터 볼지 안다. 맨 위 층은 아래가 정리될 때까지 draft로 두는 경우가 많다.
+
+리뷰부터 합치기까지의 흐름을 그림으로 보면 이렇다. 아래에서 다음을 누르면 한 단계씩 진행된다.
+
+<SequenceDiagram
+  caption="세 층짜리 스택이 리뷰를 거쳐 main에 들어가기까지"
+  actors={[
+    { id: "dev", label: "작성자" },
+    { id: "gh", label: "GitHub" },
+    { id: "ci", label: "CI" },
+    { id: "rev", label: "리뷰어" },
+  ]}
+  steps={[
+    { from: "dev", to: "gh", label: "push 3 branches", title: "세 층을 올린다", detail: "브랜치 셋을 밀고 PR 셋을 연다. base는 main, cart-model, cart-api 순이다." },
+    { from: "gh", to: "ci", label: "PR마다 실행", title: "층마다 CI가 돈다", detail: "각 PR은 자기 base와 합친 결과로 검사한다. 아래 층만 합쳐도 깨지지 않는지 여기서 드러난다." },
+    { from: "rev", to: "gh", label: "#101 변경 요청", title: "아래 층에 리뷰가 달린다", detail: "addItem이 원본 배열을 바꾸지 않게 해 달라는 요청이다. 위 두 층은 이 코드 위에 서 있다." },
+    { from: "dev", to: "dev", label: "fix + restack", title: "고치고 다시 쌓는다", detail: "아래 층에 커밋을 더하고 꼭대기에서 rebase --update-refs로 위 층 이름표까지 옮긴다." },
+    { from: "dev", to: "gh", label: "push --force-with-lease", title: "세 브랜치를 다시 민다", detail: "위 두 층은 커밋이 새로 만들어졌으니 강제 푸시가 필요하다.", payload: "git push --force-with-lease origin \\\n  feat/cart-model feat/cart-api feat/cart-ui" },
+    { from: "rev", to: "gh", label: "#101 approve", title: "아래 층이 승인된다", detail: "squash로 합친다. main에는 두 커밋이 합쳐진 커밋 하나가 생긴다." },
+    { from: "gh", to: "gh", label: "#102 base → main", title: "다음 층의 base가 바뀐다", detail: "합친 브랜치를 지우면 GitHub이 그 브랜치를 base로 쓰던 PR을 main으로 바꿔 준다." },
+    { from: "dev", to: "gh", label: "rebase --onto, push", title: "남은 층을 main 위로", detail: "squash로 사라진 아래 층 커밋을 빼고 API, 화면 커밋만 main 위로 옮긴다." },
+  ]}
+/>
+
+## 아래 층을 고치면 위층이 옛 커밋에 매달린다
+
+리뷰어가 #101에 변경을 요청했다. `addItem`이 받은 장바구니를 직접 바꾸지 말고 새 객체를 돌려 달라는 것이다. 가장 자연스러운 방법은 그 브랜치로 가서 커밋을 하나 더하는 것이다.
+
+```bash
+# 아래 층으로 가서 리뷰를 반영한다
+git switch feat/cart-model
+git commit -am "cart: addItem이 원본을 바꾸지 않게"
+git log --oneline --graph --decorate main feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+* 6fe3b0e (HEAD -> feat/cart-model) cart: addItem이 원본을 바꾸지 않게
+| * d4f14b1 (origin/feat/cart-ui, feat/cart-ui) ui: 장바구니 화면
+| * b2f6747 (origin/feat/cart-api, feat/cart-api) api: POST /cart/items
+| * 3020023 api: GET /cart
+|/  
+* 95830ca (origin/feat/cart-model) cart: 상품 담기
+* fc162a5 cart: 장바구니 모델
+* 35149ad (origin/main, main) init
+```
+
+그래프가 갈라졌다. `feat/cart-api`와 `feat/cart-ui`는 여전히 고치기 전의 `95830ca` 위에 서 있다. 이 상태로 두면 #102 화면에는 큰 문제가 없어 보이지만, 위 층 코드는 고친 `addItem`을 한 번도 만나지 않은 채 리뷰되고 테스트된다. 아래 층이 바뀔 때마다 위 층을 그 위로 다시 쌓아야 한다(restack).
+
+예전에는 층마다 `git rebase`를 따로 하거나, 꼭대기만 rebase한 뒤 `git branch -f`로 중간 이름표를 손으로 옮겼다. Git 2.38부터는 `--update-refs`가 옮기는 범위 안에 걸린 브랜치 이름표를 함께 옮겨 준다. 꼭대기 브랜치에서 한 번만 하면 된다.
+
+```bash
+# 꼭대기 층에서, 고친 아래 층 위로 다시 쌓는다
+git switch feat/cart-ui
+git rebase --update-refs feat/cart-model
+git log --oneline --graph --decorate main feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+Successfully rebased and updated refs/heads/feat/cart-ui.
+Updated the following refs with --update-refs:
+	refs/heads/feat/cart-api
+* d3aaef2 (HEAD -> feat/cart-ui) ui: 장바구니 화면
+* 2c1f4fd (feat/cart-api) api: POST /cart/items
+* f6ff093 api: GET /cart
+* 6fe3b0e (feat/cart-model) cart: addItem이 원본을 바꾸지 않게
+* 95830ca (origin/feat/cart-model) cart: 상품 담기
+* fc162a5 cart: 장바구니 모델
+* 35149ad (origin/main, main) init
+```
+
+`Updated the following refs` 아래에 `feat/cart-api`가 보인다. 꼭대기만 rebase했는데 가운데 이름표도 새 `2c1f4fd`로 따라왔다. rebase가 내부적으로 만든 할 일 목록에 `update-ref` 줄이 끼어 있어서다. 아래 그림에서 다음을 누르면 그 목록이 한 줄씩 실행된다.
+
+<AlgoTrace
+  caption="rebase --update-refs의 할 일 목록을 한 줄씩 실행한다"
+  memoryLabel="새로 만든 커밋"
+  cells={["pick GET", "pick POST", "update-ref api", "pick 화면"]}
+  steps={[
+    { memory: ["6fe3b0e"], caption: "출발점은 고친 feat/cart-model 끝, 6fe3b0e다. 여기서부터 위 층 커밋을 다시 만든다." },
+    { pointer: 0, memory: ["6fe3b0e", "f6ff093"], caption: "GET 커밋의 변경을 새 받침 위에 적용해 f6ff093을 만든다. 내용은 같고 부모가 달라 해시가 바뀐다." },
+    { pointer: 1, memory: ["6fe3b0e", "f6ff093", "2c1f4fd"], caption: "POST 커밋도 같은 식으로 2c1f4fd가 된다." },
+    { pointer: 2, found: [2], memory: ["6fe3b0e", "f6ff093", "2c1f4fd"], caption: "update-ref 줄을 만나면 feat/cart-api 이름표를 지금 커밋 2c1f4fd로 옮겨 두기로 기록한다. 실제 이동은 rebase가 끝날 때 한꺼번에 한다." },
+    { pointer: 3, found: [2, 3], memory: ["6fe3b0e", "f6ff093", "2c1f4fd", "d3aaef2"], caption: "화면 커밋이 d3aaef2이 되고, 지금 브랜치 feat/cart-ui가 여기로 옮겨진다. 세 층이 다시 한 줄이 됐다." },
+  ]}
+/>
+
+매번 옵션을 붙이기 귀찮으면 `git config --global rebase.updateRefs true`로 기본값을 켠다. 꺼야 할 때는 `--no-update-refs`를 준다.
+
+## 꼭대기에서 고치고 한 번에 정리하기
+
+아래 층으로 갔다가 다시 올라오는 일이 잦으면 번거롭다. 꼭대기에 그대로 앉은 채로 고치는 방법도 있다. 고칠 커밋을 지정한 fixup 커밋을 만들고, autosquash rebase로 제자리에 넣는다. #102에 "GET /cart에 테스트를 붙여 달라"는 리뷰가 달렸다고 하자.
+
+```bash
+# 꼭대기 브랜치에서 테스트 파일을 추가하고, "api: GET /cart" 커밋을 고치는 fixup으로 만든다
+git add api.test.js
+git commit --fixup=":/api: GET /cart"
+git log --oneline -3
+```
+
+```text
+8b71e61 fixup! api: GET /cart
+d3aaef2 ui: 장바구니 화면
+2c1f4fd api: POST /cart/items
+```
+
+`:/텍스트`는 메시지에 그 텍스트가 든 가장 최근 커밋을 가리키는 문법이다. 이제 interactive rebase를 `--autosquash --update-refs`로 연다. 편집기에 뜨는 할 일 목록은 이렇다. 여기서는 목록을 확인만 하려고 `GIT_SEQUENCE_EDITOR=cat`으로 그대로 진행시켰다.
+
+```bash
+# fixup 커밋을 제자리로 옮기고, 중간 브랜치 이름표도 함께 옮긴다
+GIT_SEQUENCE_EDITOR=cat git rebase -i --autosquash --update-refs main
+```
+
+```text
+pick fc162a5 cart: 장바구니 모델
+pick 95830ca cart: 상품 담기
+pick 6fe3b0e cart: addItem이 원본을 바꾸지 않게
+update-ref refs/heads/feat/cart-model
+
+pick f6ff093 api: GET /cart
+fixup 8b71e61 fixup! api: GET /cart
+pick 2c1f4fd api: POST /cart/items
+update-ref refs/heads/feat/cart-api
+
+pick d3aaef2 ui: 장바구니 화면
+
+Successfully rebased and updated refs/heads/feat/cart-ui.
+Updated the following refs with --update-refs:
+	refs/heads/feat/cart-api
+	refs/heads/feat/cart-model
+```
+
+(주석 줄은 생략했다.) fixup 커밋이 `api: GET /cart` 바로 아래로 옮겨졌고, 층 경계마다 `update-ref` 줄이 있다. 편집기에서 `update-ref` 줄을 지우면 그 브랜치는 움직이지 않는다. 줄을 위아래로 옮기면 그 층의 경계가 바뀐다. 커밋 하나를 아래 층에서 위 층으로 넘기고 싶을 때 이 줄만 옮기면 된다.
+
+`feat/cart-model`도 "업데이트됐다"고 나오지만 그 층의 커밋은 다시 만들 필요가 없어서 해시가 그대로다. 해시가 바뀐 건 `feat/cart-api`와 `feat/cart-ui`뿐이다.
+
+## main이 앞서 나가면 꼭대기에서 한 번
+
+리뷰를 기다리는 동안 main에 다른 사람의 PR이 들어왔다. 스택 전체를 새 main 위로 옮기는 것도 꼭대기에서 한 번이면 된다.
+
+```bash
+# 로컬 main을 최신으로 맞춘다
+git switch main
+git pull --ff-only
+
+# 꼭대기에서 스택 전체를 그 위로 옮긴다
+git switch feat/cart-ui
+git rebase --update-refs main
+git log --oneline --graph --decorate main feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+Successfully rebased and updated refs/heads/feat/cart-ui.
+Updated the following refs with --update-refs:
+	refs/heads/feat/cart-api
+	refs/heads/feat/cart-model
+* 5e7a74c (HEAD -> feat/cart-ui) ui: 장바구니 화면
+* 9c42dd2 (feat/cart-api) api: POST /cart/items
+* 25ec02e api: GET /cart
+* 26ddbc7 (feat/cart-model) cart: addItem이 원본을 바꾸지 않게
+* 3d1b101 cart: 상품 담기
+* e70a42b cart: 장바구니 모델
+* 0aaa92b (origin/main, main) app: 버전 표시
+* 35149ad init
+```
+
+세 층의 커밋이 모두 새로 만들어졌으니 세 브랜치를 다시 민다. 커밋을 다시 쓴 브랜치는 일반 push가 거절되니 강제 푸시를 하되, 그사이 누가 원격 브랜치에 커밋을 올렸으면 멈추도록 `--force-with-lease`를 쓴다.
+
+```bash
+# 세 층을 한 번에 강제 푸시. 내가 마지막으로 본 원격 위치와 다르면 거절된다
+git push --force-with-lease origin feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+To ../remote.git
+ + b2f6747...9c42dd2 feat/cart-api -> feat/cart-api (forced update)
+ + 95830ca...26ddbc7 feat/cart-model -> feat/cart-model (forced update)
+ + d4f14b1...5e7a74c feat/cart-ui -> feat/cart-ui (forced update)
+```
+
+<Callout kind="warning">
+스택의 한 층을 동료와 같이 고치고 있다면 restack 전에 꼭 알린다. 강제 푸시는 원격 브랜치를 내 커밋으로 덮어서, 동료가 옛 커밋 위에 쌓은 작업이 갈 곳을 잃는다. 이미 덮었다면 동료 쪽에서 `git pull --rebase`나 `git rebase --onto origin/feat/cart-api <옛 끝 해시>`로 자기 커밋만 옮기게 한다. 혼자 쓰는 스택이라도 `--force` 대신 `--force-with-lease`를 쓴다.
+</Callout>
+
+리뷰어 쪽에서는 "강제 푸시 뒤에 뭐가 바뀌었는지"가 궁금하다. 해시가 전부 바뀌었으니 커밋 목록만 봐서는 알 수 없다. `git range-diff`는 옛 커밋 묶음과 새 커밋 묶음을 짝지어서 내용이 달라진 커밋만 짚어 준다. 원격 추적 브랜치의 직전 위치(`@{1}`)를 쓰면 #102의 강제 푸시 전후를 비교할 수 있다.
+
+```bash
+# #102의 커밋 묶음을 강제 푸시 전과 후로 비교한다
+git range-diff --creation-factor=100 \
+  'origin/feat/cart-model@{1}..origin/feat/cart-api@{1}' \
+  feat/cart-model..feat/cart-api
+```
+
+```text
+1:  3020023 ! 1:  25ec02e api: GET /cart
+    @@ api.js (new)
+     @@
+     +import { cart } from "./cart.js";
+     +export const routes = { "GET /cart": () => cart() };
+    +
+    + ## api.test.js (new) ##
+    +@@
+    ++import { routes } from "./api.js";
+    ++test("GET /cart", () => expect(routes["GET /cart"]()).toEqual({ items: [] }));
+2:  b2f6747 = 2:  9c42dd2 api: POST /cart/items
+```
+
+맨 앞 줄의 기호를 읽는 법은 아래 그림에서 조각을 하나씩 누르면 나온다.
+
+<UrlAnatomy
+  caption="range-diff 한 줄 읽기"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "old", display: "1:  3020023", title: "옛 묶음의 몇 번째 커밋", description: "강제 푸시 전 #102의 첫 번째 커밋이 3020023이었다는 뜻이다." },
+    { key: "mark", display: "!", title: "짝은 찾았지만 내용이 다르다", description: "=는 내용이 같은 커밋(해시만 바뀜), !는 짝이지만 변경 내용이 달라진 커밋이다. <는 옛 묶음에만, >는 새 묶음에만 있는 커밋이다." },
+    { key: "new", display: "1:  25ec02e", title: "새 묶음의 짝", description: "지금 #102의 첫 번째 커밋이다. 리뷰어는 이 줄 아래의 diff의 diff만 다시 보면 된다." },
+    { key: "msg", display: "api: GET /cart", title: "커밋 메시지", description: "짝을 찾을 때 메시지보다 변경 내용을 본다. 변경이 많이 달라지면 짝을 못 찾고 <, > 두 줄로 나오는데, 그럴 때 --creation-factor 값을 올린다." },
+  ]}
+/>
+
+`2: ... = 2: ...`는 POST 커밋이 해시만 바뀌고 내용은 그대로라는 뜻이다. 리뷰어는 GET 커밋에 테스트가 붙은 것만 확인하면 된다. GitHub도 강제 푸시 이벤트 옆에 전후를 비교하는 링크를 보여 주지만, 그 비교는 base 변화까지 섞여 나올 때가 있어서 로컬 range-diff가 더 정확하다.
+
+## 맨 아래 PR이 squash로 합쳐지면
+
+#101이 승인됐고 저장소 설정대로 squash로 합쳤다. main에는 #101의 세 커밋을 합친 커밋 하나가 생긴다.
+
+```bash
+# GitHub의 Squash and merge와 같은 일을 로컬에서 재현했다
+git switch main
+git merge --squash feat/cart-model
+git commit -m "cart: 장바구니 모델 (#101)"
+git log --oneline --graph --decorate main feat/cart-model feat/cart-api feat/cart-ui
+```
+
+```text
+* 5e7a74c (HEAD -> feat/cart-ui, origin/feat/cart-ui) ui: 장바구니 화면
+* 9c42dd2 (origin/feat/cart-api, feat/cart-api) api: POST /cart/items
+* 25ec02e api: GET /cart
+* 26ddbc7 (origin/feat/cart-model, feat/cart-model) cart: addItem이 원본을 바꾸지 않게
+* 3d1b101 cart: 상품 담기
+* e70a42b cart: 장바구니 모델
+| * 059ed2d (origin/main, main) cart: 장바구니 모델 (#101)
+|/  
+* 0aaa92b app: 버전 표시
+* 35149ad init
+```
+
+`059ed2d`의 내용은 `26ddbc7`까지와 같지만 Git 입장에서는 전혀 다른 커밋이다. 부모도 다르고, 세 커밋이 아니라 하나다. 그래서 #102의 base가 main으로 바뀌는 순간 PR 화면에는 이미 합쳐진 모델 커밋 세 개가 다시 나타난다.
+
+```bash
+# base가 main으로 바뀐 #102가 보여 줄 커밋
+git log --oneline main..feat/cart-api
+```
+
+```text
+9c42dd2 api: POST /cart/items
+25ec02e api: GET /cart
+26ddbc7 cart: addItem이 원본을 바꾸지 않게
+3d1b101 cart: 상품 담기
+e70a42b cart: 장바구니 모델
+```
+
+여기서 가장 흔한 실수는 늘 하던 대로 `git rebase main`을 치는 것이다.
+
+```bash
+# 꼭대기에서 그냥 main 위로 옮기려고 하면
+git rebase --update-refs main
+git status --short
+```
+
+```text
+Auto-merging cart.js
+CONFLICT (add/add): Merge conflict in cart.js
+error: could not apply e70a42b... cart: 장바구니 모델
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply e70a42b... cart: 장바구니 모델
+AA cart.js
+```
+
+첫 번째 커밋부터 멈췄다. rebase는 `main..feat/cart-ui`에 있는 커밋을 하나씩 다시 적용하는데, 그 목록 맨 앞에 이미 main에 들어간 모델 커밋이 있다. "장바구니 모델" 커밋은 `cart()`만 있는 `cart.js`를 새로 만드는 변경이고, main에는 `addItem`까지 다 들어간 `cart.js`가 이미 있다. 양쪽이 같은 파일을 서로 다른 내용으로 새로 만들었으니 add/add 충돌이다.
+
+```text
+export function cart() {
+  return { items: [] };
+}
+<<<<<<< HEAD
+export function addItem(c, item) {
+  return { ...c, items: [...c.items, item] };
+}
+=======
+>>>>>>> e70a42b (cart: 장바구니 모델)
+```
+
+main 쪽 내용으로 풀고 `--continue`해도 다음 커밋("상품 담기")에서 `CONFLICT (content)`로 또 멈추고, 세 커밋을 다 지나야 겨우 API 커밋에 닿는다. 층이 많고 아래 층 커밋이 많을수록 같은 충돌을 여러 번 푼다. 풀다가 실수하면 이미 리뷰가 끝난 코드가 이상하게 바뀐다.
+
+Git이 이미 들어간 커밋을 못 알아보는 데는 이유가 있다. rebase는 옮길 커밋마다 변경 내용의 지문(patch-id)을 계산해서 upstream에 같은 지문의 커밋이 있으면 건너뛴다. 그래서 아래 층이 "Rebase and merge"로 들어갔다면, 즉 커밋이 하나씩 그대로 다시 만들어졌다면 문제가 없다. 작은 저장소에 같은 모양의 스택을 만들고, 아래 층을 cherry-pick으로 main에 하나씩 옮겨 rebase merge를 흉내 낸 뒤 위 층에서 `git rebase main`을 하면 이렇게 끝난다.
+
+```text
+warning: skipped previously applied commit 88c0701
+warning: skipped previously applied commit bb1e09d
+hint: use --reapply-cherry-picks to include skipped commits
+hint: Disable this message with "git config advice.skippedCherryPicks false"
+Successfully rebased and updated refs/heads/feat/cart-api.
+```
+
+squash는 세 커밋의 변경을 하나로 합치니 어느 커밋의 지문과도 맞지 않는다. 그래서 건너뛰지 못하고 다시 적용하려다 충돌한다.
+
+해결은 "어디서부터 옮길지"를 직접 알려 주는 것이다. 아래 층 브랜치 `feat/cart-model`의 끝까지는 이미 main에 들어갔으니, 그 다음 커밋부터만 main 위로 옮긴다. `--onto`가 이 일을 한다.
+
+```bash
+# 충돌 난 rebase는 취소한다
+git rebase --abort
+
+# feat/cart-model 다음부터 feat/cart-ui까지를 main 위로. 가운데 이름표도 함께 옮긴다
+git rebase --onto main feat/cart-model feat/cart-ui --update-refs
+git log --oneline --graph --decorate main feat/cart-api feat/cart-ui
+
+# 다 들어간 아래 층 브랜치는 지운다 (squash라 -d는 거부할 수 있다)
+git branch -D feat/cart-model
+```
+
+```text
+Successfully rebased and updated refs/heads/feat/cart-ui.
+Updated the following refs with --update-refs:
+	refs/heads/feat/cart-api
+* 000e248 (HEAD -> feat/cart-ui) ui: 장바구니 화면
+* 5981321 (feat/cart-api) api: POST /cart/items
+* e9ffdb7 api: GET /cart
+* 059ed2d (origin/main, main) cart: 장바구니 모델 (#101)
+* 0aaa92b app: 버전 표시
+* 35149ad init
+Deleted branch feat/cart-model (was 26ddbc7).
+```
+
+API 두 커밋과 화면 커밋만 squash 커밋 위로 옮겨졌다. 충돌은 한 번도 나지 않았다. 아래 그림에서 두 방법이 다시 적용하는 커밋을 비교해 볼 수 있다.
+
+<AlgoTrace
+  caption="그냥 rebase와 --onto가 다시 적용하는 커밋"
+  memoryLabel="다시 적용할 목록"
+  cells={["모델", "담기", "addItem 수정", "GET", "POST", "화면"]}
+  steps={[
+    { found: [0, 1, 2], memory: [], caption: "main에는 앞의 세 커밋을 합친 squash 커밋 059ed2d가 있다. 내용은 같지만 커밋은 다르다." },
+    { pointer: 0, memory: ["모델", "담기", "addItem 수정", "GET", "POST", "화면"], caption: "git rebase main은 main..feat/cart-ui를 전부 옮긴다. 이미 들어간 세 커밋도 목록에 있다." },
+    { pointer: 0, memory: ["모델", "담기", "addItem 수정", "GET", "POST", "화면"], caption: "모델 커밋을 적용하는 순간 cart.js가 양쪽에서 새로 생겨 add/add 충돌로 멈춘다." },
+    { found: [3, 4, 5], memory: ["GET", "POST", "화면"], caption: "rebase --onto main feat/cart-model은 feat/cart-model 다음부터만 옮긴다. 목록이 세 커밋으로 줄었다." },
+    { found: [3, 4, 5], memory: [], caption: "세 커밋이 squash 커밋 위에 차례로 붙는다. 이미 리뷰가 끝난 코드는 다시 건드리지 않았다." },
+  ]}
+/>
+
+아래 층 브랜치를 이미 지워 버렸다면 옛 끝 해시를 찾아서 쓴다. 원격 브랜치가 아직 있으면 `origin/feat/cart-model`, 없으면 `git log --oneline main..feat/cart-api`에서 아래 층 마지막 커밋(여기서는 `26ddbc7`)을 보고 `git rebase --onto main 26ddbc7 feat/cart-ui`로 한다. `git rebase -i main`을 열어서 아래 층 커밋 줄을 `drop`으로 바꾸는 방법도 결과는 같다. 지운 브랜치의 끝은 `git reflog`에도 남아 있다([stash와 reflog 글](/posts/git-stash-reflog)).
+
+GitHub 쪽에서는 PR의 base가 어떻게 바뀌는지도 알아 둔다. GitHub 문서 기준으로, PR을 합친 뒤 그 head 브랜치를 지우면 그 브랜치를 base로 쓰던 열린 PR의 base를 합친 PR의 base(여기서는 main)로 자동으로 바꿔 준다. 브랜치를 지우지 않았다면 #102는 계속 `feat/cart-model`을 향하니 직접 바꾼다.
+
+```bash
+# #102의 base를 main으로 바꾸고, 다시 쌓은 두 층을 민다
+gh pr edit 102 --base main
+git push --force-with-lease origin feat/cart-api feat/cart-ui
+```
+
+직접 돌려 보면 감이 온다. 아래 코드에서 커밋 그래프(각 커밋의 부모 목록)와 upstream, 옮길 브랜치를 받아 rebase가 다시 적용할 커밋을 오래된 순서로 돌려주는 `replayList`를 완성해 본다. upstream에서 닿는 커밋은 빼고, 병합 커밋은 기본 rebase처럼 버린다.
+
+<CodePlayground
+  caption="rebase가 다시 적용할 커밋 고르기"
+  functionName="replayList"
+  initialCode={`// parents: { 커밋: [부모, ...] }
+// upstream에서 닿는 커밋은 이미 있는 것으로 보고 뺀다.
+// 남은 커밋을 부모가 먼저 오도록 정렬하고, 부모가 둘 이상인 병합 커밋은 버린다.
+function replayList(parents, upstream, branch) {
+  return [];
+}`}
+  solution={`function replayList(parents, upstream, branch) {
+  // 1) upstream에서 부모를 따라 닿는 커밋을 모두 모은다
+  const inUpstream = new Set();
+  const stack = [upstream];
+  while (stack.length) {
+    const id = stack.pop();
+    if (inUpstream.has(id)) continue;
+    inUpstream.add(id);
+    for (const p of parents[id] || []) stack.push(p);
+  }
+  // 2) branch에서 거꾸로 내려가며, 부모를 먼저 넣는 순서(후위 순회)로 모은다
+  const out = [];
+  const visited = new Set();
+  const visit = (id) => {
+    if (inUpstream.has(id) || visited.has(id)) return;
+    visited.add(id);
+    for (const p of parents[id] || []) visit(p);
+    if ((parents[id] || []).length <= 1) out.push(id);
+  };
+  visit(branch);
+  return out;
+}`}
+  tests={[
+    {
+      label: "rebase main (squash 뒤)",
+      args: [{ init: [], ver: ["init"], m1: ["ver"], m2: ["m1"], m3: ["m2"], get: ["m3"], post: ["get"], ui: ["post"], squash: ["ver"] }, "squash", "ui"],
+      expected: ["m1", "m2", "m3", "get", "post", "ui"],
+    },
+    {
+      label: "rebase --onto main m3 ui",
+      args: [{ init: [], ver: ["init"], m1: ["ver"], m2: ["m1"], m3: ["m2"], get: ["m3"], post: ["get"], ui: ["post"], squash: ["ver"] }, "m3", "ui"],
+      expected: ["get", "post", "ui"],
+    },
+    {
+      label: "맨 위 층만",
+      args: [{ init: [], ver: ["init"], m1: ["ver"], m2: ["m1"], m3: ["m2"], get: ["m3"], post: ["get"], ui: ["post"], squash: ["ver"] }, "post", "ui"],
+      expected: ["ui"],
+    },
+    {
+      label: "이미 upstream에 포함",
+      args: [{ init: [], ver: ["init"], m1: ["ver"], m2: ["m1"], m3: ["m2"], get: ["m3"], post: ["get"], ui: ["post"], squash: ["ver"] }, "ui", "m2"],
+      expected: [],
+    },
+    {
+      label: "병합 커밋은 버린다",
+      args: [{ init: [], ver: ["init"], m1: ["ver"], m2: ["m1"], m3: ["m2"], get: ["m3"], post: ["get"], ui: ["post"], squash: ["ver"], mrg: ["ui", "squash"], after: ["mrg"] }, "squash", "after"],
+      expected: ["m1", "m2", "m3", "get", "post", "ui", "after"],
+    },
+  ]}
+/>
+
+첫 번째와 두 번째 테스트의 차이가 이 절의 전부다. upstream을 main으로 주면 이미 들어간 m1~m3까지 다시 적용하려 하고, upstream을 옛 아래 층 끝(m3)으로 주면 위 층 커밋만 남는다.
+
+## 합치는 순서와 층마다 도는 CI
+
+합치는 순서는 늘 아래에서 위로다. #102를 먼저 승인받았다고 #102의 Merge 버튼을 누르면, #102의 base는 `feat/cart-model`이라 API 커밋이 main이 아니라 `feat/cart-model` 브랜치에 들어간다. main에는 아무것도 안 들어갔는데 PR은 "Merged"로 닫히고, #101의 diff가 갑자기 API까지 커진다. 리뷰어가 위 층부터 승인하는 건 괜찮지만, 합치기는 맨 아래부터 하나씩 한다. 아래가 합쳐질 때마다 위 층을 `--onto`로 정리하고 base를 main으로 바꾼 뒤 다음 것을 합친다.
+
+CI에서 자주 놓치는 것도 base 때문이다. GitHub Actions에서 아래처럼 `pull_request`에 `branches`를 걸면, 이 필터는 PR의 head가 아니라 base 브랜치에 적용된다.
+
+```yaml
+# .github/workflows/ci.yml
+on:
+  pull_request:
+    branches: [main]   # base가 main인 PR에서만 돈다
+```
+
+이러면 #101에서는 CI가 돌지만 base가 `feat/cart-model`인 #102, #103에서는 돌지 않는다. 위 층이 깨진 채로 승인되고, 아래가 합쳐져 base가 main으로 바뀐 뒤에야 빨간불을 본다. 스택을 쓰는 저장소라면 `branches` 필터를 빼거나 `branches: ["**"]`처럼 모든 base를 허용한다. 보호 규칙을 main에만 걸어 뒀다면 필수 검사도 main을 향하는 PR에만 걸린다. 위 층 PR의 초록불은 "자기 base 위에서 통과했다"는 뜻일 뿐이다. 또 base를 바꾸는 것만으로는 기본 설정의 `pull_request` 워크플로가 다시 돌지 않는다(기본 이벤트 종류는 opened, synchronize, reopened다). `--onto`로 정리한 뒤 푸시해야 새 base 기준으로 검사가 돈다.
+
+층마다 CI가 따로 도는 데는 장점도 있다. 각 층이 혼자서도 빌드되고 테스트를 통과한다는 게 확인되니, 나중에 main에서 [bisect](/posts/git-tips-advanced)로 버그를 찾거나 한 층만 revert할 때 중간 상태가 깨져 있지 않다. 반대로 CI가 무겁다면 층 수만큼 비용이 든다. 매번 restack할 때마다 모든 층이 다시 돌기 때문이다.
+
+## 도구가 대신 해 주는 것
+
+지금까지 한 일은 결국 세 가지다. 층마다 브랜치와 PR을 만들고 base를 걸고, 아래가 바뀌면 다시 쌓고, 아래가 합쳐지면 남은 층을 옮기고 base를 바꾼다. `--update-refs`가 두 번째를 많이 줄여 줬지만 첫 번째와 세 번째는 여전히 손이 간다. 이걸 자동으로 해 주는 도구들이 있다. 이름과 방식만 짧게 적는다. 명령과 지원 범위는 버전마다 바뀌니 쓰기 전에 각 도구의 문서를 확인한다.
+
+- `gh`: 2.89 기준으로 스택 전용 명령은 없다. `--base`와 `gh-merge-base` 설정으로 base를 지정하고, `gh pr edit --base`로 바꾸는 정도다.
+- Graphite: `gt`라는 CLI로 브랜치를 쌓고, 스택 전체를 restack하고, 층마다 PR을 만들어 준다. 아래 층이 합쳐지면 남은 층을 정리하는 일도 맡는다. 웹 리뷰 화면을 함께 제공한다.
+- Sapling: Meta가 공개한 Git 호환 소스 관리 도구다. 커밋 하나를 PR 하나로 다루는 방식으로 스택을 올린다.
+- ghstack: 역시 커밋 하나가 PR 하나가 되도록, 커밋마다 별도 브랜치를 만들어 GitHub에 올린다. PyTorch 같은 저장소에서 쓰는 것으로 알려져 있다.
+- git-branchless, spr 같은 오픈소스 도구도 비슷한 일을 한다.
+
+어떤 도구를 쓰든 안에서 일어나는 일은 이 글에서 손으로 한 것과 같다. 도구가 꼬였을 때 `git log --graph`로 스택을 보고 `--onto`로 직접 풀 수 있어야 도구도 믿고 쓸 수 있다.
+
+## 쌓지 않는 편이 나을 때
+
+stacked PR은 리뷰 대기 시간을 줄이는 대신 Git 관리 비용과 강제 푸시를 늘린다. 이 비용이 더 클 때가 있다.
+
+변경끼리 서로 의존하지 않으면 쌓을 이유가 없다. 리팩터링과 새 기능이 다른 파일을 건드린다면 각각 main에 PR을 올린다. 둘 중 하나가 늦어져도 다른 하나는 먼저 들어간다.
+
+아래 층의 설계가 아직 흔들리면 위 층은 기다린다. 아래 층에서 인터페이스가 바뀔 때마다 위 층을 다시 쌓는 것뿐 아니라 고쳐 써야 한다. 이럴 때는 설계를 먼저 문서나 draft PR로 합의하는 편이 싸다.
+
+층이 너무 많아지면 restack 한 번에 충돌 지점도 그만큼 늘어난다. 정해진 숫자는 없지만, 스택이 길어지고 오래 살수록 아래 층부터 하나씩 합쳐서 높이를 줄이는 게 좋다. 맨 아래가 계속 합쳐지지 않는다면 리뷰 문화나 PR을 나누는 단위를 먼저 볼 신호다.
+
+팀이 이미 기능 플래그와 트렁크 기반으로 작은 PR을 main에 바로 합치고 있다면, 의존하는 작업이라도 "API를 플래그 뒤에 먼저 합치고, 화면은 그다음 PR로" 순서대로 main에 넣으면 된다. 쌓는 대신 빨리 합치는 쪽으로 같은 문제를 푸는 셈이다.
+
+## 처음의 1,800줄로 돌아가면
+
+장바구니 기능을 모델, API, 화면 세 층으로 나눠 base를 아래 브랜치로 걸었다. 아래 층에 리뷰가 달리면 고치고 꼭대기에서 `rebase --update-refs` 한 번으로 다시 쌓는다. 아래 층이 squash로 합쳐지면 그냥 `rebase main`이 아니라 `rebase --onto main <옛 아래 층 끝>`으로 위 층 커밋만 옮긴다. 합치는 건 아래부터, CI는 base가 main이 아닌 PR에서도 돌게 한다. 이 네 가지만 지키면 스택은 도구 없이도 굴러간다.
+
+## 면접에서 나올 만한 질문
+
+### stacked PR이 무엇이고 왜 쓰나요?
+
+서로 의존하는 변경을 작은 PR 여러 개로 나누고, 위 PR의 base를 아래 PR의 브랜치로 거는 방식이다. 큰 PR 하나는 리뷰가 늦어지고 그동안 작성자도 다음 작업을 못 하는데, 쌓으면 리뷰어는 작은 단위로 보고 작성자는 아래가 리뷰 중일 때 위에서 계속 일한다. 대가로 아래가 바뀔 때마다 위를 다시 쌓고 강제 푸시하는 관리가 늘어난다. 변경끼리 의존하지 않으면 각각 main에 올리는 편이 낫다.
+
+### 아래 층 PR에 리뷰를 반영했습니다. 위 층은 어떻게 갱신하나요?
+
+꼭대기 브랜치에서 `git rebase --update-refs <아래 층 브랜치>`를 한 번 하고, 바뀐 브랜치들을 `--force-with-lease`로 민다. Git 2.38부터 있는 `--update-refs`는 rebase 범위 안에 걸린 중간 브랜치 이름표도 새 커밋으로 옮겨 준다. 꼭대기에서 `--fixup` 커밋을 만들고 `rebase -i --autosquash --update-refs main`으로 제자리에 넣는 방법도 있다. 그 전에는 층마다 rebase하거나 `git branch -f`로 이름표를 손으로 옮겨야 했다.
+
+### 맨 아래 PR을 squash로 합친 뒤 위 층에서 git rebase main을 하면 왜 충돌하나요?
+
+squash 커밋은 아래 층 커밋들의 변경을 하나로 합친 새 커밋이라, 위 층 브랜치에 남아 있는 아래 층 커밋들과 해시도 변경 단위도 다르다. rebase는 patch-id가 같은 커밋만 이미 들어간 것으로 보고 건너뛰는데, 합친 변경은 어느 커밋의 patch-id와도 맞지 않는다. 그래서 이미 main에 있는 내용을 처음부터 다시 적용하려다 add/add 같은 충돌이 난다. rebase merge로 합쳤다면 커밋 단위가 유지돼 "skipped previously applied commit"으로 건너뛴다.
+
+### 그 상황은 어떻게 풀어야 하나요?
+
+`git rebase --onto main <옛 아래 층 끝> <꼭대기 브랜치> --update-refs`로 아래 층 다음 커밋부터만 main 위로 옮긴다. 옛 아래 층 끝은 로컬 브랜치, `origin/` 원격 추적 브랜치, reflog, `git log main..위층`에서 찾을 수 있다. `rebase -i main`에서 아래 층 커밋을 drop해도 결과는 같다. 그 뒤 위 PR의 base를 main으로 바꾸는데, GitHub은 합친 브랜치를 지우면 이를 자동으로 해 준다.
+
+### 스택은 어떤 순서로 합치나요? 가운데 PR을 먼저 합치면 어떻게 되나요?
+
+맨 아래부터 하나씩 합친다. 가운데 PR의 base는 아래 층 브랜치라서, 먼저 합치면 그 커밋은 main이 아니라 아래 층 브랜치에 들어간다. PR은 Merged로 닫히지만 main에는 아무것도 안 들어갔고, 아래 PR의 diff가 갑자기 커진다. 승인은 순서 상관없이 받아도 되지만 합치기는 아래부터 하고, 하나 합칠 때마다 남은 층을 정리하고 base를 바꾼다.
+
+### 위 층 PR에서만 CI가 안 돕니다. 왜 그럴까요?
+
+GitHub Actions의 `pull_request` 이벤트에 `branches: [main]` 필터가 걸려 있으면 그 필터는 base 브랜치에 적용된다. 위 층 PR은 base가 아래 층 브랜치라 조건에 맞지 않아 워크플로가 돌지 않는다. 필터를 빼거나 모든 base를 허용하도록 바꾼다. main에만 보호 규칙을 걸었다면 필수 검사도 main을 향한 PR에만 걸린다. base만 바꿔서는 워크플로가 다시 돌지 않으니, 정리한 브랜치를 푸시해서 새 base 기준으로 검사를 받는다.
+
+### 강제 푸시 뒤에 리뷰어는 무엇이 바뀌었는지 어떻게 보나요?
+
+`git range-diff 옛base..옛끝 새base..새끝`으로 옛 커밋 묶음과 새 커밋 묶음을 짝지어 비교한다. `=`는 해시만 바뀐 같은 커밋, `!`는 내용이 달라진 커밋이라 `!` 줄의 diff만 다시 보면 된다. 원격 추적 브랜치의 직전 위치 `origin/브랜치@{1}`을 쓰면 푸시 전후를 쉽게 지정할 수 있다. 변경이 커서 짝을 못 찾으면 `--creation-factor`를 올린다.
+
+### stacked PR 대신 쓸 수 있는 방법은 무엇인가요?
+
+트렁크 기반 개발에서 기능 플래그로 덜 된 기능을 숨기고 작은 PR을 main에 바로 합치는 방법이 있다. 의존하는 작업도 순서대로 main에 들어가니 쌓을 필요가 없고 강제 푸시도 줄어든다. 대신 플래그 관리와 정리 비용이 생긴다. 독립적인 변경은 처음부터 각각 main에 올리는 게 가장 간단하다.
