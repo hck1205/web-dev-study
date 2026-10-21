@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "authn-vs-authz",
+    title: "인증과 인가: 누구냐와 해도 되냐는 다른 질문이다",
+    summary: "로그인한 사용자가 주문 번호만 바꿔 남의 주문을 본 IDOR에서 출발해 401·403·404, ACL·RBAC·ABAC·ReBAC(Zanzibar), OPA 정책과 테스트, 게이트웨이와 서비스의 검사 분담, 토큰 속 역할이 낡는 문제, 목록 API의 인가를 Node와 OPA로 재현한다.",
+    topic: "programming/system-design",
+    tags: ["Security", "Authentication", "Authorization", "System Design", "Backend"],
+    date: "2026-10-22",
+    keywords: ["인증과 인가", "객체 수준 인가", "BOLA", "ReBAC", "Zanzibar"],
+  },
+  {
+    slug: "sql-vs-nosql",
+    title: "SQL vs NoSQL: 조인을 언제 하느냐의 선택",
+    summary: "같은 주문을 정규화 테이블과 JSONB 문서로 저장해 두고 상세 조회, 새 집계 질문, 상품 이름 변경, 스키마 어긋남, 파티션 키와 핫 파티션을 실행 결과로 비교한다. 접근 패턴에서 출발해 저장소를 고르는 순서와 잘못 골랐을 때의 신호를 정리한다.",
+    topic: "programming/system-design",
+    tags: ["Database", "NoSQL", "SQL", "PostgreSQL", "System Design"],
+    date: "2026-10-22",
+    keywords: ["SQL vs NoSQL", "스키마 온 리드"],
+  },
+  {
+    slug: "acid-transactions",
+    title: "ACID 트랜잭션: 약속이 끝나는 곳을 직접 깨 보기",
+    summary: "커밋 기록 한 줄이 원자성을 가르는 모습을 크래시와 pg_waldump로 보고, 풀에서 BEGIN이 흩어지는 버그, 트랜잭션 안의 외부 호출, 지연 제약과 배제 제약, synchronous_commit=off로 커밋을 잃는 장면, 응답을 못 받은 커밋과 멱등성까지 PostgreSQL 16에서 재현한다.",
+    topic: "programming/system-design",
+    tags: ["Database", "PostgreSQL", "Transaction", "System Design", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["ACID", "원자성", "지속성", "커밋 결과 불명"],
+  },
+  {
     slug: "sql-case-when",
     title: "CASE WHEN 제대로 쓰기: 조건 순서, 타입, 조건부 집계와 피벗",
     summary: "95점이 C 등급으로 나온 쿼리에서 출발해 CASE가 조건을 읽는 순서, NULL과 단순형 CASE, THEN의 타입 맞추기, 실행되지 않을 ELSE가 에러를 내는 상수 접기를 재현한다. 조건부 집계로 행을 열로 돌리는 피벗, ORDER BY와 UPDATE 안의 CASE, WHERE의 CASE가 인덱스를 막는 모습까지 PostgreSQL 16으로 확인한다.",

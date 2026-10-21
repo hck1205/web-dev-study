@@ -2,6 +2,88 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "authn-vs-authz": {
+    "links": [
+      "cookie-session-login",
+      "token-login",
+      "oauth",
+      "http-status-codes",
+      "iam-basics",
+      "k8s-rbac",
+      "zero-trust-architecture",
+      "high-availability",
+      "fault-tolerance",
+      "k8s-admission-control",
+      "postgres-roles-security",
+      "jwt-key-rotation"
+    ],
+    "mentions": [
+      "health-checks",
+      "rate-limiting-in-practice",
+      "gateway",
+      "clock-skew",
+      "service-mesh",
+      "linux-files-permissions",
+      "security-groups-nacl",
+      "ssrf",
+      "https-tls",
+      "dns"
+    ]
+  },
+  "sql-vs-nosql": {
+    "links": [
+      "db-types-overview",
+      "db-type-relational",
+      "mongodb-document-model",
+      "db-type-key-value",
+      "db-type-wide-column",
+      "db-type-graph",
+      "db-keys-denormalization",
+      "zero-downtime-migrations",
+      "db-sharding",
+      "db-type-newsql",
+      "high-availability",
+      "db-architecture-by-scale",
+      "acid-transactions",
+      "db-consistency-cap",
+      "eventual-consistency",
+      "consistency-models",
+      "postgres-jsonb-search"
+    ],
+    "mentions": [
+      "db-type-columnar-olap",
+      "db-replication-sharding",
+      "scaling-horizontal-vertical",
+      "redis-basics",
+      "db-modeling-normalization"
+    ]
+  },
+  "acid-transactions": {
+    "links": [
+      "db-transaction-isolation",
+      "postgres-architecture",
+      "postgres-mvcc-vacuum",
+      "sql-batch-timeout-pool",
+      "transactional-outbox",
+      "distributed-transactions-2pc",
+      "saga-pattern",
+      "postgres-data-types",
+      "consistency-models",
+      "db-consistency-cap",
+      "db-replication-sharding",
+      "high-availability",
+      "idempotency-key",
+      "fault-tolerance"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "postgres-advanced-sql",
+      "db-architecture-by-scale",
+      "resilience-patterns",
+      "postgres-getting-started",
+      "http-methods"
+    ]
+  },
   "sql-case-when": {
     "links": [
       "sql-logical-order",
@@ -1603,6 +1685,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
+      "authn-vs-authz",
       "what-happens-google-com",
       "high-availability",
       "db-type-key-value"
@@ -2943,6 +3026,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "k8s-architecture",
       "packet-capture-tcpdump",
+      "authn-vs-authz",
       "linux-processes-signals",
       "kafka-basics",
       "redis-basics",
@@ -3327,7 +3411,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
-      "consistency-models"
+      "consistency-models",
+      "acid-transactions"
     ]
   },
   "deadlocks": {
@@ -4239,6 +4324,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "high-availability",
+      "authn-vs-authz",
       "https-tls",
       "vpc-basics",
       "token-login"
@@ -4427,6 +4513,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "db-transaction-isolation",
       "db-replication-sharding",
+      "acid-transactions",
       "dead-letter-queue"
     ]
   },
@@ -4444,7 +4531,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-partitions",
       "kafka-basics",
       "db-types-overview",
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "acid-transactions"
     ]
   },
   "k8s-hpa": {
@@ -5376,7 +5464,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nat-traversal",
       "osi-in-practice",
       "redis-basics",
-      "ipv6-basics"
+      "ipv6-basics",
+      "acid-transactions"
     ]
   },
   "rate-limiting-algorithms": {
@@ -6493,6 +6582,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding",
       "kafka-basics",
       "db-replication-sharding",
+      "acid-transactions",
       "db-index-design"
     ]
   },
@@ -6511,6 +6601,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "raft-consensus",
       "distributed-transactions-2pc",
       "scaling-horizontal-vertical",
+      "acid-transactions",
       "postgres-getting-started",
       "packet-encapsulation"
     ]
@@ -6549,6 +6640,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mongodb-document-model",
       "leader-election",
       "redis-basics",
+      "acid-transactions",
       "crdt"
     ]
   },
@@ -6600,7 +6692,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture",
       "postgres-jsonb-search",
       "db-partitioning",
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "acid-transactions"
     ]
   },
   "db-type-key-value": {
@@ -6666,7 +6759,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
-      "db-type-relational"
+      "db-type-relational",
+      "acid-transactions"
     ]
   },
   "postgres-mvcc-vacuum": {
@@ -7039,6 +7133,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-mvcc-vacuum",
       "sql-basics",
       "bloom-filter",
+      "acid-transactions",
       "postgres-getting-started"
     ]
   },
@@ -7249,6 +7344,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-relational",
       "kafka-basics",
       "db-transaction-isolation",
+      "acid-transactions",
       "dns"
     ]
   },
@@ -7844,6 +7940,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "transactional-outbox",
       "kafka-basics",
       "cqrs",
+      "acid-transactions",
       "http-methods",
       "on-call"
     ]
@@ -7953,6 +8050,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "csrf",
+      "authn-vs-authz",
       "js-pure-functions",
       "http-status-codes"
     ]

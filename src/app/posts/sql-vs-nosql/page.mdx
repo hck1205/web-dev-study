@@ -1,0 +1,531 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sql-vs-nosql");
+
+새 서비스 설계 회의에서 "나중에 트래픽이 많아질 테니 처음부터 NoSQL로 가자"는 말이 나왔다고 하자. 반대쪽에서는 "그래도 기본은 관계형"이라고 한다. 둘 다 틀린 말은 아닌데, 이대로는 결론이 안 난다. 비교의 기준이 없어서다.
+
+면접에서도 "SQL과 NoSQL의 차이"는 단골 질문이다. "스키마가 있고 없고, 수직 확장과 수평 확장"으로 답하면 꼬리 질문에서 막힌다. 스키마가 없으면 무엇이 좋은지, 관계형은 왜 수평 확장이 어렵다고 하는지, 그럼 언제 무엇을 고르는지를 물어 오기 때문이다.
+
+이 글은 같은 주문 데이터를 두 모양으로 저장해 두고, 서비스가 자라면서 생기는 요구를 하나씩 던져 본다. 어느 쪽이 어떤 질문에 강하고 어떤 질문에 약한지를 실행 결과로 보고 나면, 고르는 순서가 자연스럽게 나온다. 기준은 PostgreSQL 16이고, 문서 모델은 PostgreSQL의 JSONB로 흉내 냈다. MongoDB와 저장 구조는 다르지만 "한 덩어리로 넣었을 때 생기는 일"을 보기에는 충분하다.
+
+이 주제의 다른 글: DB 종류별 특징은 [DB 종류 한눈에](/posts/db-types-overview)와 그 아래 종류별 글에, 관계형이 기본값인 이유는 [관계형 DB](/posts/db-type-relational)에, 문서 모델의 내장·참조 기준은 [MongoDB 문서 모델](/posts/mongodb-document-model)에 있다. 이 글은 그 글들을 반복하지 않고, 둘 중 하나를 고르는 판단에만 집중한다.
+
+## NoSQL은 한 종류가 아니다
+
+"SQL 대 NoSQL"이라는 말부터 조금 이상하다. SQL은 질의 언어이고, NoSQL은 "관계형이 아닌 것"을 한데 묶은 이름이다. 그 안에는 성격이 전혀 다른 DB들이 들어 있다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="NoSQL은 '관계형이 아닌 것'의 묶음이다"
+  nodes={[
+    { id: "q", label: "무엇으로 찾나", sub: "접근 패턴", x: 200, y: 36, w: 150 },
+    { id: "rel", label: "관계형", sub: "아무 열로나 조합", x: 80, y: 120, w: 130 },
+    { id: "doc", label: "문서", sub: "한 덩어리째", x: 320, y: 120, w: 130 },
+    { id: "kv", label: "키-값", sub: "키 하나로", x: 70, y: 220, w: 120 },
+    { id: "wide", label: "와이드 컬럼", sub: "파티션 키로", x: 200, y: 260, w: 130 },
+    { id: "graph", label: "그래프", sub: "관계를 따라", x: 330, y: 220, w: 120 },
+  ]}
+  edges={[
+    { from: "q", to: "rel" },
+    { from: "q", to: "doc" },
+    { from: "q", to: "kv", dashed: true },
+    { from: "q", to: "wide", dashed: true },
+    { from: "q", to: "graph", dashed: true },
+  ]}
+/>
+
+키-값 저장소(Redis, DynamoDB)는 키를 알면 값을 꺼내 주는 것이 거의 전부다. 문서 DB(MongoDB)는 JSON 같은 덩어리를 통째로 저장하고 그 안의 필드로도 찾을 수 있다. 와이드 컬럼(Cassandra)은 파티션 키로 묶인 행들을 정렬해 두고 그 범위를 빠르게 읽는다. 그래프 DB(Neo4j)는 관계를 따라가는 질문에 강하다. 하나하나의 내부는 [키-값](/posts/db-type-key-value), [와이드 컬럼](/posts/db-type-wide-column), [그래프](/posts/db-type-graph) 글에 있다.
+
+그래서 이 글의 비교는 주로 관계형과 문서 모델 사이에서 한다. 실무에서 "NoSQL로 갈까"라고 할 때 대부분 이 둘 사이의 고민이고, 키-값과 와이드 컬럼은 문서 모델의 성질(미리 정한 키로만 빠르다)을 더 극단으로 밀어붙인 것이라 같은 논리가 그대로 통한다.
+
+## 같은 주문을 두 모양으로
+
+주문 20만 건, 주문당 상품 약 3개, 상품 1000개를 만들었다. 관계형 쪽은 세 테이블로 나눴다.
+
+```sql
+CREATE TABLE products (
+  product_id int PRIMARY KEY,
+  name       text NOT NULL,
+  category   text NOT NULL,
+  price      int  NOT NULL
+);
+CREATE TABLE orders (
+  order_id   int PRIMARY KEY,
+  user_id    int NOT NULL,
+  ordered_at timestamptz NOT NULL
+);
+CREATE TABLE order_items (
+  order_id   int NOT NULL REFERENCES orders,
+  product_id int NOT NULL REFERENCES products,
+  qty        int NOT NULL,
+  unit_price int NOT NULL,              -- 산 시점의 가격
+  PRIMARY KEY (order_id, product_id)
+);
+```
+
+문서 쪽은 주문 하나를 한 줄로, 상품 이름과 분류까지 주문 안에 복사해 넣었다.
+
+```sql
+CREATE TABLE order_docs (order_id int PRIMARY KEY, user_id int NOT NULL, doc jsonb NOT NULL);
+SELECT jsonb_pretty(doc) FROM order_docs WHERE order_id = 123456;
+```
+
+```text
+                 jsonb_pretty
+-----------------------------------------------
+ {                                            +
+     "items": [                               +
+         {                                    +
+             "qty": 2,                        +
+             "name": "product-146",           +
+             "category": "toy",               +
+             "product_id": 146,               +
+             "unit_price": 27000              +
+         },                                   +
+         {                                    +
+             "qty": 3,                        +
+             "name": "product-151",           +
+             "category": "food",              +
+             "product_id": 151,               +
+             "unit_price": 2000               +
+         },                                   +
+         {                                    +
+             "qty": 2,                        +
+             "name": "product-239",           +
+             "category": "food",              +
+             "product_id": 239,               +
+             "unit_price": 30000              +
+         }                                    +
+     ],                                       +
+     "ordered_at": "2026-08-26T18:44:00+00:00"+
+ }
+(1 row)
+```
+
+이 차이가 이 글 전체를 끌고 간다. 관계형은 "각 사실을 한 곳에만 둔다"(정규화)에서 출발하고, 읽을 때 조인으로 다시 모은다. 문서는 "함께 읽히는 것을 함께 둔다"에서 출발하고, 쓸 때 미리 모아 둔다. 조인을 읽는 시점에 할지 쓰는 시점에 할지의 차이다.
+
+## 정해 둔 질문에는 한 덩어리가 빠르다
+
+주문 상세 화면은 주문 한 건과 그 안의 상품들을 보여 준다. 두 모양에서 실행 계획을 비교했다.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT o.order_id, o.ordered_at, p.name, i.qty, i.unit_price
+FROM orders o
+JOIN order_items i ON i.order_id = o.order_id
+JOIN products p ON p.product_id = i.product_id
+WHERE o.order_id = 123456;
+
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT doc FROM order_docs WHERE order_id = 123456;
+```
+
+```text
+ Nested Loop (actual time=0.122..0.246 rows=3 loops=1)
+   Buffers: shared hit=16
+   ->  Index Scan using orders_pkey on orders o (actual time=0.023..0.024 rows=1 loops=1)
+         Index Cond: (order_id = 123456)
+         Buffers: shared hit=4
+   ->  Hash Join (actual time=0.096..0.219 rows=3 loops=1)
+         Hash Cond: (p.product_id = i.product_id)
+         Buffers: shared hit=12
+         ->  Seq Scan on products p (actual time=0.007..0.073 rows=1000 loops=1)
+               Buffers: shared hit=8
+         ->  Hash (actual time=0.048..0.049 rows=3 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 9kB
+               Buffers: shared hit=4
+               ->  Index Scan using order_items_pkey on order_items i (actual time=0.031..0.033 rows=3 loops=1)
+                     Index Cond: (order_id = 123456)
+                     Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=261
+ Planning Time: 1.465 ms
+ Execution Time: 0.328 ms
+
+ Index Scan using order_docs_pkey on order_docs (actual time=0.037..0.037 rows=1 loops=1)
+   Index Cond: (order_id = 123456)
+   Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=60
+ Planning Time: 0.229 ms
+ Execution Time: 0.056 ms
+```
+
+봐야 할 줄은 맨 위 `Buffers`와 `Execution Time`이다. 관계형은 세 테이블을 돌며 페이지 16개를 읽었고, 문서는 인덱스 하나를 타고 페이지 4개로 끝났다. 상품 테이블이 1000행뿐이라 플래너가 통째로 읽어 해시 조인을 고른 것도 보인다.
+
+그런데 숫자 자체는 0.33ms 대 0.06ms다. 한 서버 안에서는 조인이 비싸지 않다. 이 차이가 커지는 건 세 테이블이 서로 다른 서버에 나뉘어 있을 때다. 아래 그림에서 다음을 누르면 요청 하나가 어디를 다녀오는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="같은 화면, 다른 왕복 횟수"
+  zones={[
+    { id: "rel", label: "관계형 (나뉜 경우)", x: 150, y: 12, w: 240, h: 150, tone: "private" },
+    { id: "doc", label: "문서", x: 150, y: 176, w: 240, h: 76, tone: "public" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", x: 50, y: 130, icon: "server" },
+    { id: "o", label: "orders", x: 205, y: 60, icon: "db" },
+    { id: "i", label: "items", x: 280, y: 120, icon: "db" },
+    { id: "p", label: "products", x: 345, y: 60, icon: "db" },
+    { id: "d", label: "order_docs", x: 270, y: 215, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "o" },
+    { from: "app", to: "i" },
+    { from: "app", to: "p" },
+    { from: "app", to: "d" },
+  ]}
+  steps={[
+    { path: ["app", "o"], packet: "id=123456", title: "주문을 읽는다", detail: "주문 번호로 한 줄. 인덱스로 바로 찾는다." },
+    { path: ["app", "i"], packet: "order_id", title: "주문 상품을 읽는다", detail: "같은 주문 번호로 세 줄. 한 서버라면 DB가 조인하고, 나뉘어 있으면 앱이 한 번 더 왕복한다." },
+    { path: ["app", "p"], packet: "146,151,239", title: "상품 이름을 읽는다", detail: "세 상품의 이름을 또 가져온다. 서버가 나뉘면 왕복이 세 번이 된다." },
+    { path: ["app", "d"], packet: "id=123456", highlight: ["doc"], title: "문서는 한 번에 끝난다", detail: "필요한 게 다 한 덩어리 안에 있다. 몇 대로 나뉘든 주문 번호가 가리키는 한 곳만 간다." },
+  ]}
+/>
+
+문서 모델이 수평 확장에 유리하다는 말은 여기서 나온다. 한 요청이 필요로 하는 것이 한 덩어리, 한 서버 안에 있으면 서버를 늘려도 요청 하나의 비용은 그대로다. 단, "주문 상세"라는 질문을 미리 알고 그 모양대로 저장했기 때문에 얻은 이득이다.
+
+## 미리 몰랐던 질문이 오면
+
+반년 뒤 기획팀이 "8월 카테고리별 매출"을 묻는다. 관계형이라면 SQL 한 문장이다.
+
+```sql
+SELECT p.category, sum(i.qty * i.unit_price) AS revenue
+FROM orders o
+JOIN order_items i ON i.order_id = o.order_id
+JOIN products p ON p.product_id = i.product_id
+WHERE o.ordered_at >= '2026-08-01 00:00+09' AND o.ordered_at < '2026-09-01 00:00+09'
+GROUP BY p.category ORDER BY p.category;
+```
+
+```text
+ category |  revenue
+----------+------------
+ book     | 1495436000
+ food     | 1597126000
+ music    | 1600822000
+ toy      | 1498235000
+(4 rows)
+
+Time: 95.106 ms
+```
+
+문서 쪽도 PostgreSQL의 JSONB라서 SQL로 같은 답을 낼 수 있다. 배열을 펼치고(`jsonb_array_elements`), 문자열을 숫자와 시각으로 바꾸면서 모은다.
+
+```sql
+SELECT item->>'category' AS category,
+       sum((item->>'qty')::int * (item->>'unit_price')::int) AS revenue
+FROM order_docs d, jsonb_array_elements(d.doc->'items') AS item
+WHERE (d.doc->>'ordered_at')::timestamptz >= '2026-08-01 00:00+09'
+  AND (d.doc->>'ordered_at')::timestamptz <  '2026-09-01 00:00+09'
+GROUP BY 1 ORDER BY 1;
+```
+
+```text
+ category |  revenue
+----------+------------
+ book     | 1495436000
+ food     | 1597126000
+ music    | 1600822000
+ toy      | 1498235000
+(4 rows)
+
+Time: 185.192 ms
+```
+
+답은 같고 두 배쯤 느리다. 사실 이건 문서 모델에게 가장 유리한 경우다. PostgreSQL 안에 있어서 SQL과 플래너를 그대로 쓸 수 있었기 때문이다. MongoDB라면 집계 파이프라인으로 비슷하게 할 수 있다. DynamoDB나 Cassandra라면 사정이 다르다. 파티션 키 없이 묻는 질문은 테이블 전체를 읽는 Scan이나 `ALLOW FILTERING`이 되고, 운영 테이블에서 그걸 돌리면 읽기 용량을 다 써서 서비스 요청까지 느려진다. 그래서 보통 데이터를 분석용 저장소로 내보내서 거기서 묻는다.
+
+<SequenceDiagram
+  caption="키로만 찾는 저장소에 새 질문이 오면"
+  actors={[
+    { id: "pm", label: "기획" },
+    { id: "app", label: "개발자" },
+    { id: "kv", label: "운영 저장소" },
+    { id: "dw", label: "분석 저장소" },
+  ]}
+  steps={[
+    { from: "pm", to: "app", label: "카테고리별 매출", title: "새 질문이 온다", detail: "주문을 저장할 때는 생각하지 않았던 질문이다." },
+    { from: "app", to: "kv", label: "Scan?", title: "키 없이 물으면 전체를 읽는다", detail: "파티션 키가 user_id라 카테고리로는 찾을 수 없다. 운영 테이블을 통째로 읽으면 서비스가 느려진다." },
+    { from: "kv", to: "dw", label: "export / CDC", title: "분석용으로 옮긴다", detail: "변경 스트림이나 주기적 내보내기로 컬럼형 저장소에 복사한다. 파이프라인이 하나 생긴다." },
+    { from: "app", to: "dw", label: "SQL", title: "거기서 SQL로 묻는다", detail: "결국 아무 열로나 조합하는 질문은 SQL을 쓰는 곳에서 답한다." },
+    { from: "dw", to: "pm", label: "어제까지 숫자", title: "답은 늦게 온다", detail: "복사 주기만큼 늦은 숫자다. 오늘 매출을 보려면 파이프라인을 더 촘촘히 해야 한다." },
+  ]}
+/>
+
+관계형의 진짜 강점은 이 지점이다. 데이터를 저장할 때 어떤 질문이 올지 몰라도 된다. 조인과 플래너가 그때그때 모아 주기 때문이다. 문서·키-값 모델은 질문을 미리 알고 그 모양대로 저장하는 대가로 빠르다. 질문 목록이 자주 바뀌는 초기 서비스에서는 이 대가가 생각보다 크다.
+
+## 복사해 둔 값은 함께 고쳐야 한다
+
+상품 146의 이름이 바뀌었다. 관계형은 한 줄을 고치면 끝이다. 문서 쪽은 그 상품이 담긴 주문 문서를 전부 찾아 고쳐야 한다. 실험이 끝나면 되돌리도록 트랜잭션 안에서 해 봤다.
+
+```sql
+BEGIN;
+UPDATE products SET name = 'product-146 (2nd ed.)' WHERE product_id = 146;
+UPDATE order_docs d
+SET doc = jsonb_set(d.doc, '{items}', (
+      SELECT jsonb_agg(CASE WHEN it->>'product_id' = '146'
+                            THEN jsonb_set(it, '{name}', '"product-146 (2nd ed.)"')
+                            ELSE it END)
+      FROM jsonb_array_elements(d.doc->'items') it))
+WHERE d.doc->'items' @> '[{"product_id": 146}]';
+ROLLBACK;
+```
+
+```text
+BEGIN
+UPDATE 1
+Time: 1.425 ms
+UPDATE 624
+Time: 199.510 ms
+ROLLBACK
+```
+
+한 줄과 624줄, 1.4ms와 200ms다. 상품이 잘 팔릴수록 고칠 문서가 늘어난다. 아래 그림은 복사본을 하나씩 찾아 고치는 과정이다.
+
+<AlgoTrace
+  caption="정규화하면 한 곳, 복사해 두면 복사한 만큼"
+  cells={["products 146", "doc 412", "doc 9031", "doc 51277", "…", "doc 199870"]}
+  memoryLabel="고친 곳"
+  steps={[
+    { pointer: 0, memory: ["products"], caption: "관계형은 여기서 끝이다. 주문들은 이름을 product_id로 가리킬 뿐이다." },
+    { pointer: 1, memory: ["doc 412"], caption: "문서 모델은 이름을 복사해 뒀으니 146이 든 주문을 찾아간다." },
+    { pointer: 2, memory: ["doc 412", "doc 9031"], caption: "하나씩 고친다. 문서 하나를 고칠 때마다 통째로 새로 쓴다." },
+    { pointer: 3, memory: ["doc 412", "doc 9031", "doc 51277"], caption: "여러 서버에 흩어져 있으면 고치는 도중에 옛 이름과 새 이름이 섞여 보인다." },
+    { pointer: 5, found: [1, 2, 3, 5], memory: ["624개"], caption: "624개를 다 고쳐야 끝난다. 하나라도 빠지면 그 문서만 옛 이름이다." },
+  ]}
+/>
+
+그런데 꼭 고쳐야 할까. 주문은 "그때 무엇을 얼마에 샀나"의 기록이다. 가격은 관계형 설계에서도 `unit_price`로 복사해 뒀다. 산 뒤에 가격이 바뀌어도 주문서의 금액은 바뀌면 안 되기 때문이다. 상품 이름도 영수증에는 산 당시 이름이 남는 게 맞을 수 있다. 복사가 버그인지 기능인지는 그 값의 의미가 정한다. 바뀌면 모든 곳이 따라 바뀌어야 하는 값(사용자 닉네임, 상품 분류)을 복사했다면 이렇게 고치는 비용을 계속 낸다. 그때 본 값을 남겨야 하는 값(가격, 배송 주소)이라면 복사가 오히려 맞다. 이 판단은 [키와 비정규화 글](/posts/db-keys-denormalization)에서 더 자세히 다룬다.
+
+## 스키마가 없다는 건 읽을 때 검사한다는 뜻
+
+앱 v2가 필드 이름을 `unit_price`에서 `price`로 바꿔 넣었고, 다른 경로로 들어온 문서에는 금액이 `"2,000"` 같은 문자열로 들어왔다고 하자. 문서 테이블은 둘 다 그냥 받는다.
+
+```sql
+INSERT INTO order_docs VALUES (900001, 7, '{"ordered_at": "2026-10-01T10:00:00+09:00",
+  "items": [{"product_id": 146, "name": "product-146", "category": "toy", "qty": 1, "price": 27000}]}');
+INSERT INTO order_docs VALUES (900002, 8, '{"ordered_at": "2026-10-01T11:00:00+09:00",
+  "items": [{"product_id": 151, "name": "product-151", "category": "food", "qty": 2, "unit_price": "2,000"}]}');
+
+SELECT d.order_id, sum((it->>'qty')::int * (it->>'unit_price')::int) AS total
+FROM order_docs d, jsonb_array_elements(d.doc->'items') it
+WHERE d.order_id = 900001 GROUP BY 1;
+
+SELECT d.order_id, sum((it->>'qty')::int * (it->>'unit_price')::int) AS total
+FROM order_docs d, jsonb_array_elements(d.doc->'items') it
+WHERE d.order_id IN (900001, 900002) GROUP BY 1;
+```
+
+```text
+INSERT 0 1
+INSERT 0 1
+ order_id | total
+----------+-------
+   900001 |
+(1 row)
+
+ERROR:  invalid input syntax for type integer: "2,000"
+```
+
+첫 번째는 오류도 없이 금액이 빈칸이다. `unit_price`가 없으니 NULL이 됐고, 매출 합계에서 조용히 빠진다. 두 번째는 집계 쿼리 전체가 터진다. 둘 다 넣을 때가 아니라 읽을 때 드러났다. 몇 달 뒤 월말 정산 배치에서 발견될 수도 있다. 같은 실수를 관계형 테이블에 하면 넣는 순간 막힌다.
+
+```sql
+INSERT INTO order_items (order_id, product_id, qty, price) VALUES (1, 146, 1, 27000);
+INSERT INTO order_items (order_id, product_id, qty, unit_price) VALUES (1, 151, 2, '2,000');
+```
+
+```text
+ERROR:  column "price" of relation "order_items" does not exist
+LINE 1: ...SERT INTO order_items (order_id, product_id, qty, price) VAL...
+                                                             ^
+ERROR:  invalid input syntax for type integer: "2,000"
+LINE 1: ...d, product_id, qty, unit_price) VALUES (1, 151, 2, '2,000');
+                                                              ^
+```
+
+이걸 schema-on-write(쓸 때 검사)와 스키마 온 리드(schema-on-read, 읽을 때 해석)라고 부른다. "스키마가 없다"는 말은 정확하지 않다. 스키마는 늘 있고, 그걸 DB가 들고 있느냐 읽는 코드 곳곳에 흩어져 있느냐의 차이다. 스키마 온 리드가 편한 건 필드를 추가할 때다. `ALTER TABLE` 없이 새 필드를 넣기 시작하면 된다. 대신 옛 모양과 새 모양을 둘 다 읽을 줄 아는 코드가 계속 쌓인다.
+
+그래서 실무에서는 문서 DB에도 스키마를 건다. MongoDB는 컬렉션에 `$jsonSchema` 검증기를 붙이고([MongoDB 글](/posts/mongodb-document-model)), PostgreSQL의 JSONB라면 `CHECK` 제약으로 필수 키와 타입을 검사할 수 있다. 반대로 관계형에서도 PostgreSQL 11부터는 기본값이 있는 열 추가가 테이블을 다시 쓰지 않아서, 필드 추가의 부담이 예전만큼 크지 않다([무중단 스키마 변경](/posts/zero-downtime-migrations)).
+
+## 수평 확장은 키를 하나 고르는 대가다
+
+"NoSQL은 수평 확장이 된다"는 말의 속뜻은 이렇다. 데이터를 파티션 키로 나눠 여러 서버에 흩고, 요청이 파티션 키를 들고 오면 한 서버만 찾아간다. 키-값 저장소의 키를 조각내 보면 이 설계가 보인다.
+
+<UrlAnatomy
+  caption="DynamoDB 식 단일 테이블 설계의 키 한 쌍"
+  separator=""
+  joiner="  "
+  params={[
+    { key: "PK", value: "USER#42", title: "파티션 키", description: "이 값의 해시가 저장될 서버(파티션)를 정한다. 같은 사용자의 데이터는 한 파티션에 모인다.", required: true },
+    { key: "SK", value: "ORDER#2026-08-26#123456", title: "정렬 키", description: "파티션 안에서 이 순서로 정렬된다. 날짜를 앞에 두면 '최근 주문 10개'가 범위 읽기 한 번으로 끝난다.", required: true },
+    { key: "GSI1PK", value: "PRODUCT#146", title: "보조 인덱스 키", description: "상품으로도 찾아야 하면 인덱스를 따로 만든다. 사실상 같은 데이터를 다른 키로 한 벌 더 저장하는 것이고, 비동기로 갱신된다." },
+  ]}
+/>
+
+키를 고르면 그 키로 묻는 질문은 빨라지고, 다른 질문은 모든 파티션을 뒤져야 한다. Node로 주문 20만 건을 파티션 8개에 나눠 담아 봤다.
+
+```js
+// shard.js 일부: md5 해시로 파티션을 고르고, 질문마다 몇 개의 파티션을 건드리는지 센다
+const part = (key) => crypto.createHash("md5").update(String(key)).digest().readUInt32BE(0) % N;
+const touched = (pred) => new Set(orders.filter(pred).map((o) => part(o.userId))).size;
+```
+
+```text
+partition key = user_id    24419 24515 25365 25163 24795 25052 25731 24960  max/avg 1.03
+partition key = seller_id  78605 19614 17062 17181 16323 18435 15932 16848  max/avg 3.14
+orders of user 42      -> partitions touched: 1
+orders with product 146 (214) -> partitions touched: 8
+```
+
+두 가지가 보인다. 첫째, 사용자 42의 주문은 파티션 하나만 보면 되지만, 상품 146이 든 주문 214건은 8개 파티션 모두에 흩어져 있다. 파티션 키가 아닌 조건으로 물으면 모든 서버에 묻고 결과를 합쳐야 한다(scatter-gather). 서버가 100대면 100번 묻는다. 둘째, 파티션 키를 판매자로 잡으면 주문의 30%를 차지하는 큰 판매자 하나 때문에 첫 파티션이 평균의 3.14배를 받는다. 그 파티션 하나가 처리량 한도에 걸리면 나머지가 놀고 있어도 그 판매자의 요청은 거절된다(DynamoDB라면 `ProvisionedThroughputExceededException`이나 스로틀링 지표로 보인다). 이게 핫 파티션이다.
+
+관계형이 수평 확장이 어렵다는 말도 같은 이유다. 아무 열로나 조인하고 묻는 자유를 주려면 데이터가 한 곳에 있어야 편하다. 관계형도 샤딩할 수 있지만([샤딩 글](/posts/db-sharding)), 샤드 키를 고르는 순간 같은 제약이 생긴다. Citus나 Vitess 같은 도구, Spanner·CockroachDB 같은 [NewSQL](/posts/db-type-newsql)은 SQL을 유지한 채 나누는 쪽을 택했는데, 여기서도 샤드 키를 잘못 고르면 분산 조인과 분산 트랜잭션 비용을 낸다. 공짜로 수평 확장되는 DB는 없다. 키를 정하고, 그 키로 묻지 않는 질문을 포기하거나 따로 준비하는 대가를 낸다.
+
+그리고 대부분의 서비스는 그 대가가 필요해지기 한참 전에 끝난다. PostgreSQL 한 대에 읽기 복제본과 캐시를 붙이면 꽤 큰 서비스까지 버틴다. 나누는 이유가 처리량이 아니라 "한 대가 죽으면 끝"이라는 걱정이라면, 그건 샤딩보다 복제와 장애 조치로 푸는 문제다([고가용성](/posts/high-availability)). 넘어가는 신호는 [규모별 DB 설계](/posts/db-architecture-by-scale)에 숫자로 정리돼 있다.
+
+## 트랜잭션과 일관성은 어디까지 되나
+
+"NoSQL은 트랜잭션이 없다"도 반쯤 옛말이다.
+
+- MongoDB는 문서 하나 안의 변경은 늘 원자적이고, 여러 문서에 걸친 트랜잭션은 4.0(복제 세트)과 4.2(샤드 클러스터)부터 된다. 다만 여러 샤드에 걸치면 비용이 커서, 한 문서 안에서 끝나게 설계하는 게 기본이다.
+- DynamoDB는 `TransactWriteItems`로 최대 100개 항목을 한 번에 쓴다. 읽기는 기본이 최종 일관성이고, 강한 일관성 읽기는 옵션이며 글로벌 보조 인덱스에서는 쓸 수 없다.
+- Cassandra는 조건부 쓰기(경량 트랜잭션, LWT)가 있지만 Paxos 왕복이 들어가 일반 쓰기보다 훨씬 느리다. 여러 파티션을 묶는 트랜잭션은 없다.
+
+관계형은 여러 테이블을 묶는 트랜잭션과 외래 키, `UNIQUE`, `CHECK`가 기본이다. 송금, 재고, 예약처럼 "두 곳이 함께 바뀌어야 하고 규칙이 깨지면 안 되는" 데이터라면 이 차이가 결정적이다. 그 약속이 어디까지인지는 [ACID 글](/posts/acid-transactions)에, 복제본에서 옛 값이 보이는 문제는 [CAP과 PACELC](/posts/db-consistency-cap)와 [최종 일관성](/posts/eventual-consistency)에, "최종 일관성"과 "강한 일관성" 사이의 단계들은 [일관성 모델](/posts/consistency-models)에 있다.
+
+## 직접 짜 보기: 주문을 문서로 접기
+
+정규화된 세 목록을 주문 문서로 접는 함수를 짜 보자. 문서 모델로 옮길 때 실제로 하는 일, 즉 조인을 쓰는 시점으로 옮기는 일이다.
+
+- `orders`: `{ id, userId }` 목록
+- `items`: `{ orderId, productId, qty, unitPrice }` 목록. 순서는 섞여 있다
+- `products`: `{ id, name }` 목록
+
+결과는 `orders` 순서대로 `{ orderId, userId, items, total }`이다. `items`의 각 항목은 `{ productId, name, qty, unitPrice }`이고 입력에 나온 순서를 지킨다. 상품 목록에 없는 상품이면 `name`은 `null`, `total`은 `qty × unitPrice`의 합이다.
+
+<CodePlayground
+  caption="세 목록을 주문 문서로 접기"
+  functionName="toOrderDocs"
+  initialCode={`function toOrderDocs(orders, items, products) {
+  return [];
+}`}
+  solution={`function toOrderDocs(orders, items, products) {
+  // 상품은 id로 바로 찾게 Map으로
+  const productById = new Map(products.map((p) => [p.id, p]));
+  // 주문 번호별로 항목을 모은다 (입력 순서 유지)
+  const itemsByOrder = new Map();
+  for (const it of items) {
+    if (!itemsByOrder.has(it.orderId)) itemsByOrder.set(it.orderId, []);
+    const p = productById.get(it.productId);
+    itemsByOrder.get(it.orderId).push({
+      productId: it.productId,
+      name: p ? p.name : null,
+      qty: it.qty,
+      unitPrice: it.unitPrice,
+    });
+  }
+  return orders.map((o) => {
+    const list = itemsByOrder.get(o.id) || [];
+    return {
+      orderId: o.id,
+      userId: o.userId,
+      items: list,
+      total: list.reduce((s, it) => s + it.qty * it.unitPrice, 0),
+    };
+  });
+}`}
+  tests={[
+    {
+      label: "주문 하나, 상품 하나",
+      args: [[{ id: 1, userId: 7 }], [{ orderId: 1, productId: 146, qty: 2, unitPrice: 27000 }], [{ id: 146, name: "keyboard" }, { id: 151, name: "coffee" }, { id: 239, name: "lamp" }]],
+      expected: [{ orderId: 1, userId: 7, items: [{ productId: 146, name: "keyboard", qty: 2, unitPrice: 27000 }], total: 54000 }],
+    },
+    {
+      label: "섞인 항목을 주문별로",
+      args: [[{ id: 1, userId: 7 }, { id: 2, userId: 8 }], [{ orderId: 2, productId: 151, qty: 3, unitPrice: 2000 }, { orderId: 1, productId: 239, qty: 1, unitPrice: 30000 }, { orderId: 2, productId: 146, qty: 1, unitPrice: 27000 }], [{ id: 146, name: "keyboard" }, { id: 151, name: "coffee" }, { id: 239, name: "lamp" }]],
+      expected: [{ orderId: 1, userId: 7, items: [{ productId: 239, name: "lamp", qty: 1, unitPrice: 30000 }], total: 30000 }, { orderId: 2, userId: 8, items: [{ productId: 151, name: "coffee", qty: 3, unitPrice: 2000 }, { productId: 146, name: "keyboard", qty: 1, unitPrice: 27000 }], total: 33000 }],
+    },
+    {
+      label: "항목 없는 주문",
+      args: [[{ id: 5, userId: 9 }], [], [{ id: 146, name: "keyboard" }]],
+      expected: [{ orderId: 5, userId: 9, items: [], total: 0 }],
+    },
+    {
+      label: "없는 상품은 name null",
+      args: [[{ id: 3, userId: 1 }], [{ orderId: 3, productId: 999, qty: 1, unitPrice: 500 }], [{ id: 146, name: "keyboard" }]],
+      expected: [{ orderId: 3, userId: 1, items: [{ productId: 999, name: null, qty: 1, unitPrice: 500 }], total: 500 }],
+    },
+    {
+      label: "주문이 없으면 빈 배열",
+      args: [[], [{ orderId: 1, productId: 146, qty: 1, unitPrice: 27000 }], [{ id: 146, name: "keyboard" }]],
+      expected: [],
+    },
+  ]}
+/>
+
+항목마다 상품 목록을 처음부터 훑으면 항목 수 × 상품 수만큼 돈다. `Map`으로 바꾸면 한 번씩만 돈다. DB가 해시 조인으로 하는 일과 같다. 이 함수를 쓰기 시점에 한 번 돌려 두는 게 문서 모델이고, 읽을 때마다 돌리는 게 관계형이다.
+
+## 고르는 순서
+
+결국 비교 축은 다섯 개로 정리된다. 표로 놓으면 이렇다.
+
+| 축 | 관계형 | 문서·키-값 |
+|---|---|---|
+| 질문 | 미리 몰라도 SQL로 조합 | 미리 정한 키·모양으로만 빠름 |
+| 중복 | 한 곳에 두고 조인 | 함께 읽을 것을 복사해 둠 |
+| 스키마 | 쓸 때 DB가 검사 | 읽는 코드가 해석 (검증기를 따로 붙임) |
+| 트랜잭션 | 여러 테이블을 묶는 게 기본 | 한 문서·한 항목 단위가 기본 |
+| 확장 | 한 대를 크게, 나누려면 샤드 키 | 파티션 키로 처음부터 나눔 |
+
+고를 때는 이 순서로 묻는다.
+
+1. 화면과 API가 데이터를 읽는 방식을 목록으로 적는다. "사용자 ID로 최근 주문 20개", "주문 번호로 상세", "카테고리별 매출" 같은 식이다. 목록이 짧고 거의 안 바뀌며 모두 하나의 키로 시작한다면 문서·키-값이 잘 맞는다. 목록이 길거나 아직 모르면 관계형이다.
+2. 함께 바뀌어야 하는 데이터가 있는지 본다. 돈, 재고, 예약처럼 여러 곳을 한 번에 바꾸고 규칙을 지켜야 하면 관계형 트랜잭션이 가장 싸다.
+3. 숫자로 규모를 본다. 쓰기가 초당 수만 건을 넘고 한 대로 감당할 수 없으며, 접근이 키 하나로 잘 나뉜다면 처음부터 파티션되는 저장소가 맞다. 세션, 장바구니, IoT 이벤트, 채팅 메시지가 대표적이다.
+4. 둘 다 쓰는 길을 먼저 생각한다. 원본은 관계형에 두고, 캐시는 Redis, 검색은 검색 엔진, 분석은 컬럼형 저장소로 흘려보내는 구성이 흔하다. PostgreSQL의 JSONB로 일부만 문서처럼 두는 것도 방법이다([JSONB 검색 글](/posts/postgres-jsonb-search)).
+
+## 잘못 골랐을 때 보이는 신호
+
+고른 뒤에도 신호를 보면 방향을 고칠 수 있다.
+
+- MongoDB 쿼리마다 `$lookup`이 붙는다: 조인이 필요한 데이터를 문서 DB에 넣었다. 자주 함께 읽는 것만 내장하고, 나머지는 관계형으로 옮기는 걸 검토한다.
+- Cassandra 쿼리에 `ALLOW FILTERING`이 늘어난다, DynamoDB 비용에서 Scan이 큰 비중을 차지한다: 파티션 키로 답할 수 없는 질문을 운영 테이블에 던지고 있다. 질문용 테이블을 하나 더 만들거나 분석 저장소로 보낸다.
+- 특정 파티션만 스로틀링된다: 핫 파티션이다. 키에 접미사를 붙여 흩거나(쓰기 샤딩), 키를 다시 고른다.
+- PostgreSQL 테이블이 `id`와 `data jsonb` 두 열뿐이다: 관계형의 장점(제약, 플래너 통계, 타입)을 다 버렸다. 자주 걸러 내고 조인하는 필드는 열로 꺼낸다.
+- 정산 배치가 가끔 NULL 합계를 낸다: 스키마 온 리드의 대가다. 쓰는 쪽에 검증기를 붙이고, 옛 문서를 새 모양으로 옮기는 작업을 따로 돌린다.
+
+## 질문 목록이 먼저다
+
+SQL이냐 NoSQL이냐는 기술의 우열이 아니라 조인을 언제 하느냐의 선택이다. 읽을 때 하면 질문이 자유롭고, 쓸 때 해 두면 정해 둔 질문이 빠르고 나누기 쉽다. 그래서 고르기 전에 질문 목록부터 적는다. 목록이 아직 흐릿하면 관계형으로 시작하고, 특정 질문이 한 대로 감당이 안 될 때 그 질문만 다른 저장소로 떼어 낸다.
+
+## 면접에서 나올 만한 질문
+
+### SQL DB와 NoSQL DB의 차이를 설명해 주세요.
+
+가장 큰 차이는 조인을 언제 하느냐다. 관계형은 사실을 한 곳에 두고 읽을 때 조인으로 모아서 미리 몰랐던 질문에도 답할 수 있고, 문서·키-값은 함께 읽을 것을 쓸 때 한 덩어리로 모아 둬서 정해 둔 키로 묻는 질문이 빠르고 서버를 나누기 쉽다. 스키마 검사 시점, 트랜잭션 범위, 확장 방식의 차이도 여기서 나온다.
+
+### NoSQL은 스키마가 없어서 좋다고 하는데 정말인가요?
+
+스키마가 없는 게 아니라 DB가 검사하지 않을 뿐이다. 필드를 추가할 때 마이그레이션 없이 바로 넣을 수 있는 대신, 잘못된 모양의 데이터가 들어와도 넣는 순간에는 모르고 읽을 때 NULL이나 오류로 드러난다. 그래서 MongoDB에도 `$jsonSchema` 검증기를 붙이고, 읽는 코드가 옛 모양과 새 모양을 함께 처리해야 한다.
+
+### 관계형 DB는 왜 수평 확장이 어렵다고 하나요?
+
+아무 열로나 조인하고 여러 테이블을 묶어 트랜잭션하는 자유가 데이터가 한 곳에 있다는 전제에 기대기 때문이다. 나누려면 샤드 키를 정해야 하고, 그 키를 벗어나는 조인과 트랜잭션은 여러 서버를 오가야 해서 비싸진다. NoSQL도 같은 제약을 처음부터 받아들인 것이지, 공짜로 나뉘는 건 아니다.
+
+### 파티션 키는 어떻게 고르나요?
+
+가장 자주 오는 질문이 들고 오는 값이면서, 값이 고르게 퍼지는 것을 고른다. 사용자 ID처럼 요청마다 있고 수가 많은 값이 흔한 선택이다. 큰 판매자처럼 한 값에 데이터가 몰리면 그 파티션만 한도에 걸리는 핫 파티션이 생기므로, 접미사를 붙여 흩거나 다른 키를 쓴다.
+
+### 문서에 데이터를 복사해 두면 생기는 문제는 무엇인가요?
+
+원본이 바뀔 때 복사본을 모두 찾아 고쳐야 한다. 실험에서는 상품 이름 하나에 문서 624개를 고쳤고, 여러 서버에 흩어져 있으면 고치는 도중에 옛 값과 새 값이 섞여 보인다. 다만 주문 당시의 가격처럼 그때 값을 남겨야 하는 데이터라면 복사가 오히려 맞다.
+
+### MongoDB도 트랜잭션이 되지 않나요?
+
+된다. 문서 하나 안의 변경은 늘 원자적이고, 4.0부터 복제 세트에서, 4.2부터 샤드 클러스터에서 여러 문서 트랜잭션을 지원한다. 다만 여러 샤드에 걸친 트랜잭션은 비용이 커서, 함께 바뀌는 데이터를 한 문서에 두는 설계가 여전히 기본이다.
+
+### 새 서비스를 시작할 때 무엇을 고르겠나요?
+
+읽는 방식의 목록이 아직 흐릿하면 관계형, 보통 PostgreSQL로 시작한다. 질문이 바뀌어도 SQL로 답할 수 있고, 트랜잭션과 제약이 데이터를 지켜 주며, 캐시와 복제본으로 꽤 오래 버틴다. 접근이 키 하나로 깔끔히 나뉘고 쓰기가 한 대로 감당이 안 되는 부분이 보이면 그 부분만 키-값이나 와이드 컬럼으로 떼어 낸다.

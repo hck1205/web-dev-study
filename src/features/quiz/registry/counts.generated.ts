@@ -2,6 +2,7 @@
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
   "ab-testing": 8,
+  "acid-transactions": 7,
   "alerting": 6,
   "animation-patterns": 6,
   "animation-performance": 7,
@@ -9,6 +10,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "api-pagination-sorting": 6,
   "api-versioning": 6,
   "argocd-basics": 7,
+  "authn-vs-authz": 7,
   "autoscaling": 6,
   "backpressure": 6,
   "backup-strategy": 7,
@@ -391,6 +393,7 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "sql-query-tuning": 5,
   "sql-select-where-null": 6,
   "sql-subqueries-exists-lateral": 7,
+  "sql-vs-nosql": 6,
   "sqld-correlated-subquery": 5,
   "sqld-data-modeling": 7,
   "sqld-entity-attribute-relationship": 7,

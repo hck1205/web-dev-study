@@ -1,4 +1,5 @@
 import { AB_TESTING } from "./ab-testing";
+import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ALERTING } from "./alerting";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
@@ -6,6 +7,7 @@ import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
 import { ARGOCD_BASICS } from "./argocd-basics";
+import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
@@ -388,6 +390,7 @@ import { SQL_QUERY_REWRITE } from "./sql-query-rewrite";
 import { SQL_QUERY_TUNING } from "./sql-query-tuning";
 import { SQL_SELECT_WHERE_NULL } from "./sql-select-where-null";
 import { SQL_SUBQUERIES_EXISTS_LATERAL } from "./sql-subqueries-exists-lateral";
+import { SQL_VS_NOSQL } from "./sql-vs-nosql";
 import { SQLD_CORRELATED_SUBQUERY } from "./sqld-correlated-subquery";
 import { SQLD_DATA_MODELING } from "./sqld-data-modeling";
 import { SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP } from "./sqld-entity-attribute-relationship";
@@ -437,6 +440,7 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
   AB_TESTING,
+  ACID_TRANSACTIONS,
   ALERTING,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
@@ -444,6 +448,7 @@ export const QUESTION_SETS = [
   API_PAGINATION_SORTING,
   API_VERSIONING,
   ARGOCD_BASICS,
+  AUTHN_VS_AUTHZ,
   AUTOSCALING,
   BACKPRESSURE,
   BACKUP_STRATEGY,
@@ -826,6 +831,7 @@ export const QUESTION_SETS = [
   SQL_QUERY_TUNING,
   SQL_SELECT_WHERE_NULL,
   SQL_SUBQUERIES_EXISTS_LATERAL,
+  SQL_VS_NOSQL,
   SQLD_CORRELATED_SUBQUERY,
   SQLD_DATA_MODELING,
   SQLD_ENTITY_ATTRIBUTE_RELATIONSHIP,

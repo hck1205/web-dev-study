@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("authn-vs-authz");
+
+주문 상세 API에 이런 제보가 들어왔다. 로그인한 상태에서 주소창의 `/orders/1002`를 `/orders/1001`로 바꿨더니 다른 사람의 주문이 보인다는 것이다. 코드를 열어 보면 로그인 확인은 분명히 있다. 토큰이 없으면 401도 잘 돌려준다. 빠진 건 "이 주문이 이 사람 것인가"를 묻는 한 줄이었다.
+
+인증(authentication, 줄여서 authn)과 인가(authorization, authz)는 이름이 비슷해서 한 덩어리로 생각하기 쉽다. 하지만 둘은 다른 질문에 답한다. 인증은 "너는 누구냐", 인가는 "그 사람이 이걸 해도 되냐"다. 위 제보는 첫 번째 질문만 하고 두 번째 질문을 잊은 경우다.
+
+이 글은 그 두 질문을 갈라 놓고, 인가 쪽을 깊게 본다. 어떤 모델로 권한을 표현하는지(ACL, RBAC, ABAC, ReBAC), 판정을 코드 밖으로 빼는 정책 엔진(OPA), 검사를 게이트웨이에 둘지 서비스에 둘지, 그리고 토큰에 적힌 역할이 언제 낡는지를 Node 22로 만든 작은 API와 OPA 0.70으로 직접 돌려 본다.
+
+이 주제의 다른 글: 로그인 상태를 유지하는 방법은 [쿠키와 세션](/posts/cookie-session-login)과 [토큰 로그인](/posts/token-login)에, 권한을 위임하는 규칙은 [OAuth 2.0](/posts/oauth)에 있다. 401과 403 상태 코드 자체는 [HTTP 상태 코드](/posts/http-status-codes)에서, 클라우드와 쿠버네티스의 권한 판정은 [IAM 기본](/posts/iam-basics)과 [쿠버네티스 RBAC](/posts/k8s-rbac)에서 다룬다.
+
+## 누구냐와 해도 되냐는 다른 질문이다
+
+요청 하나가 서버에 들어와 데이터에 닿기까지 두 개의 문을 지난다. 첫 문은 요청에 붙은 쿠키나 토큰을 보고 신원을 확정한다. 여기서 실패하면 "누군지 모르겠다"는 뜻의 401이다. 두 번째 문은 그 신원과 요청한 동작, 대상 자원을 함께 보고 허락할지 정한다. 여기서 실패하면 403, 또는 자원이 있다는 사실조차 숨기고 싶으면 404다.
+
+<SequenceDiagram
+  caption="요청 하나가 지나는 두 개의 문"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "n", label: "인증" },
+    { id: "z", label: "인가" },
+    { id: "h", label: "핸들러" },
+  ]}
+  steps={[
+    { from: "c", to: "n", label: "GET /orders/1001", title: "토큰을 들고 온다", detail: "Authorization 헤더나 세션 쿠키에 신원 증명이 실려 있다.", payload: "Authorization: Bearer eyJhbGciOi..." },
+    { from: "n", to: "c", label: "401", title: "증명이 틀리면 여기서 끝난다", detail: "서명이 안 맞거나 만료됐다. 다시 로그인하면 풀릴 수 있는 실패다.", payload: "WWW-Authenticate: Bearer realm=\"orders\"" },
+    { from: "n", to: "z", label: "sub=u2", title: "신원이 확정된다", detail: "이제 '이 요청은 u2가 보냈다'는 사실만 넘긴다. 무엇을 해도 되는지는 아직 모른다." },
+    { from: "z", to: "z", label: "u2 → 1001?", title: "주체, 동작, 자원을 함께 본다", detail: "1001번 주문의 주인은 u1이다. u2는 상담원도 아니다." },
+    { from: "z", to: "c", label: "404", title: "허락하지 않는다", detail: "다시 로그인해도 결과가 같다. 남의 주문이 있다는 사실도 알리지 않으려고 404를 준다." },
+    { from: "z", to: "h", label: "allow", title: "허락된 요청만 내려간다", detail: "핸들러는 이미 판정을 통과한 요청만 받는다." },
+  ]}
+/>
+
+인증은 요청마다 한 번, 대개 같은 방식으로 끝난다. 인가는 그렇지 않다. 판정에 필요한 재료가 자원마다 다르다. 주문은 주인이 누구인지, 문서는 어느 폴더에 있고 그 폴더를 누가 공유받았는지, 환불은 금액과 시각이 필요하다. 그래서 인증은 미들웨어 하나로 끝나는데, 인가는 코드 곳곳에 흩어지기 쉽고 빠뜨리기도 쉽다.
+
+용어를 하나 정리하면, OAuth 2.0은 이름과 달리 인가 쪽 규칙이다. 앱이 내 자원에 어디까지 접근해도 되는지를 토큰의 범위(scope)로 위임한다. "구글로 로그인"처럼 사용자가 누구인지 알려 주는 부분은 그 위에 얹은 OpenID Connect가 맡는다.
+
+## 주소의 숫자만 바꿨을 뿐인데
+
+처음 제보를 재현했다. 인증만 하고 인가는 하지 않는 `v1`, 주인인지 확인하는 `v2`를 나란히 띄웠다. bob(u2)으로 로그인한 토큰을 쓴다.
+
+```js
+// server.js 일부
+const who = authenticate(req);                       // 서명과 만료를 확인해 { sub, role }을 꺼낸다
+if (!who) return send(res, 401, { error: "unauthenticated" }, { "www-authenticate": 'Bearer realm="orders"' });
+const order = orders[id];
+
+if (ver === "v1") {                                  // 인증만 한다
+  if (!order) return send(res, 404, { error: "not_found" });
+  return send(res, 200, order);
+}
+if (ver === "v2") {                                  // 이 주문을 읽어도 되는지 묻는다
+  if (!order || !canReadOrder(who.sub, who.role, order)) return send(res, 404, { error: "not_found" });
+  return send(res, 200, order);
+}
+
+function canReadOrder(subject, role, order) {
+  if (role === "support") return true;
+  return order.ownerId === subject;
+}
+```
+
+```bash
+# 토큰 없이
+curl -s -i http://127.0.0.1:8081/v1/orders/1001
+# bob의 토큰으로 내 주문, 남의 주문
+curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $BOB" http://127.0.0.1:8081/v1/orders/1002
+curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $BOB" http://127.0.0.1:8081/v1/orders/1001
+# 인가를 넣은 v2
+curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $BOB" http://127.0.0.1:8081/v2/orders/1001
+curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $BOB" http://127.0.0.1:8081/v2/orders/9999
+```
+
+```text
+HTTP/1.1 401 Unauthorized
+www-authenticate: Bearer realm="orders"
+{"error":"unauthenticated"}
+{"id":1002,"ownerId":"u2","item":"coffee","total":6000} 200
+{"id":1001,"ownerId":"u1","item":"keyboard","total":54000} 200
+{"error":"not_found"} 404
+{"error":"not_found"} 404
+```
+
+세 번째 줄이 제보 그대로다. bob은 정상적으로 로그인했고 토큰도 유효하다. 서버는 "로그인한 사람"이라는 것만 확인하고 alice의 주문을 내줬다. 이 버그를 IDOR(Insecure Direct Object Reference) 또는 BOLA(Broken Object Level Authorization)라고 부르고, OWASP API Security Top 10(2023)의 첫 번째 항목이 바로 이것이다. 객체 수준 인가, 즉 "이 사람이 이 객체에 이 동작을 해도 되나"를 요청마다 묻지 않으면 생긴다.
+
+`v2`의 마지막 두 줄을 보면 남의 주문(1001)과 없는 주문(9999)에 똑같이 404를 줬다. 403을 주면 "1001번 주문은 존재한다"는 정보가 샌다. 주문 번호가 순서대로 매겨진다면 공격자는 403과 404를 세서 하루 주문 수까지 짐작할 수 있다. 반대로 관리 화면처럼 사용자가 권한 부족을 알아야 하는 곳에서는 403이 낫다. 기준은 "존재 자체가 비밀인가"다.
+
+ID를 UUID로 바꾸면 해결된다고 생각하기 쉽다. 추측이 어려워질 뿐이다. UUID는 공유 링크, 로그, 리퍼러, 브라우저 기록으로 새어 나가고, 새어 나간 순간 같은 버그가 된다. 해법은 ID를 숨기는 게 아니라 매 요청 인가하는 것이다.
+
+OWASP는 비슷한 실수를 두 개 더 따로 꼽는다. 일반 사용자가 `/admin/refunds` 같은 관리 기능을 그냥 호출할 수 있는 경우(함수 수준 인가 누락), 그리고 `PATCH /users/me`에 `{"role": "admin"}`을 끼워 넣으면 그대로 저장되는 경우(속성 수준 인가 누락, 흔히 mass assignment)다. 셋 다 같은 질문, "이 사람이 이걸 해도 되나"를 한 단계에서 빠뜨린 것이다.
+
+## 권한을 표현하는 네 가지 방식
+
+"누가 무엇을 해도 되나"를 저장하는 방법은 크게 네 갈래다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="권한을 어디에 붙이느냐로 모델이 갈린다"
+  nodes={[
+    { id: "acl", label: "ACL", sub: "객체마다 명단", x: 95, y: 50, w: 150 },
+    { id: "rbac", label: "RBAC", sub: "사람 → 역할 → 권한", x: 305, y: 50, w: 150 },
+    { id: "abac", label: "ABAC", sub: "속성으로 계산", x: 95, y: 200, w: 150 },
+    { id: "rebac", label: "ReBAC", sub: "관계를 따라간다", x: 305, y: 200, w: 150 },
+    { id: "q", label: "allow?", x: 200, y: 125, w: 90 },
+  ]}
+  edges={[
+    { from: "acl", to: "q" },
+    { from: "rbac", to: "q" },
+    { from: "abac", to: "q" },
+    { from: "rebac", to: "q" },
+    { from: "acl", to: "rebac", label: "명단을 그래프로", dashed: true },
+  ]}
+/>
+
+ACL(Access Control List)은 객체마다 "누가 무엇을 할 수 있나" 명단을 붙인다. 리눅스 파일 권한, S3 객체 ACL이 그렇다. 객체 하나를 볼 때는 명확한데, "alice가 접근할 수 있는 것 전부"를 묻거나 퇴사자를 모든 명단에서 지우려면 전체를 뒤져야 한다.
+
+RBAC(Role-Based Access Control)는 사람에게 역할을 주고 역할에 권한을 붙인다. "상담원은 모든 주문을 읽는다"처럼 직무 단위 규칙에 잘 맞고 감사도 쉽다. 약점은 객체 단위 규칙을 못 담는다는 것이다. "자기 주문만 읽는다"는 역할로 표현이 안 되고 결국 코드에 `ownerId === subject` 같은 조건이 들어간다. 이걸 역할로 풀려고 "프로젝트 A 편집자", "프로젝트 B 편집자"를 만들다 보면 역할이 곱으로 늘어난다.
+
+ABAC(Attribute-Based Access Control)는 주체·자원·환경의 속성을 비교하는 규칙으로 판정한다. "상담원은 10만 원 이하 주문을 업무 시간에만 환불할 수 있다" 같은 규칙이다. 표현력이 좋은 대신, "누가 이 주문을 환불할 수 있나"를 규칙만 보고 답하기 어렵다. AWS IAM의 태그 조건이 대표적이고, 그 장단점은 [IAM 글](/posts/iam-basics)에 있다.
+
+ReBAC(Relationship-Based Access Control)는 권한을 객체 사이의 관계 그래프로 본다. "이 문서는 eng 폴더 안에 있고, eng 폴더는 eng 그룹에 공유됐고, bob은 eng 그룹의 멤버다. 그러니 bob은 이 문서를 볼 수 있다." 구글 드라이브처럼 공유와 상속이 핵심인 서비스에 맞는다. 구글이 2019년 논문으로 공개한 사내 권한 시스템 Zanzibar가 이 방식이고, OpenFGA와 SpiceDB가 그 설계를 따른 오픈소스다.
+
+실무에서는 하나만 쓰지 않는다. 큰 틀은 RBAC(관리자, 상담원, 고객), 객체 소유와 공유는 ReBAC나 코드의 소유자 조건, 금액·시간 같은 조건은 ABAC 규칙으로 섞는다.
+
+## 관계를 따라가는 인가
+
+Zanzibar에서는 모든 권한 사실을 관계 튜플 한 줄로 저장한다. 한 줄을 조각내 보면 이렇다.
+
+<UrlAnatomy
+  caption="관계 튜플 한 줄: 객체#관계@주체"
+  separator=""
+  joiner=""
+  params={[
+    { key: "object", display: "folder:eng", title: "객체", description: "타입과 ID로 쓴다. 문서, 폴더, 그룹, 조직 모두 객체다.", required: true },
+    { key: "relation", display: "#viewer", title: "관계", description: "객체와 주체 사이의 관계 이름이다. 스키마에서 owner면 editor이고 editor면 viewer라는 식으로 관계끼리 포함 관계를 정한다.", required: true },
+    { key: "subject", display: "@group:eng#member", title: "주체 (사용자 집합)", description: "user:bob처럼 사람 하나일 수도 있고, 이처럼 'eng 그룹의 멤버 전원'이라는 집합일 수도 있다. 집합이면 그 집합을 다시 따라가서 푼다.", code: "group:eng#member@user:bob\ngroup:eng#member@group:sre#member" },
+  ]}
+/>
+
+"dan이 doc:plan을 볼 수 있나"를 판정하려면 튜플을 따라 그래프를 탐색한다. 아래에서 다음을 누르면 탐색 경로가 그려진다.
+
+<VectorSpace
+  caption="dan이 doc:plan을 볼 수 있는지 관계를 따라가 본다"
+  groups={[
+    { id: "user", label: "사용자" },
+    { id: "group", label: "그룹" },
+    { id: "res", label: "폴더·문서" },
+  ]}
+  points={[
+    { id: "dan", label: "user:dan", x: 40, y: 215, group: "user" },
+    { id: "bob", label: "user:bob", x: 120, y: 60, group: "user" },
+    { id: "alice", label: "user:alice", x: 300, y: 215, group: "user", labelAt: "left" },
+    { id: "sre", label: "group:sre", x: 120, y: 150, group: "group" },
+    { id: "eng", label: "group:eng", x: 200, y: 105, group: "group" },
+    { id: "folder", label: "folder:eng", x: 285, y: 70, group: "res", labelAt: "left" },
+    { id: "doc", label: "doc:plan", x: 340, y: 150, group: "res", labelAt: "left" },
+  ]}
+  edges={[
+    ["dan", "sre"],
+    ["sre", "eng"],
+    ["bob", "eng"],
+    ["eng", "folder"],
+    ["folder", "doc"],
+    ["alice", "doc"],
+  ]}
+  steps={[
+    { showEdges: true, caption: "튜플 여섯 줄이 그래프가 된다. alice는 문서의 owner, eng 그룹은 폴더의 viewer, 문서의 parent는 폴더다." },
+    { showEdges: true, path: ["doc", "alice"], caption: "doc:plan의 viewer를 묻는다. 직접 붙은 건 owner인 alice뿐이고, owner는 viewer를 포함한다. dan은 아니다." },
+    { showEdges: true, path: ["doc", "folder"], caption: "문서의 parent인 folder:eng의 viewer도 문서의 viewer다. 폴더로 올라간다." },
+    { showEdges: true, path: ["doc", "folder", "eng"], caption: "폴더의 viewer는 group:eng#member, 즉 eng 그룹 멤버 전원이다." },
+    { showEdges: true, path: ["doc", "folder", "eng", "sre", "dan"], caption: "eng의 멤버에는 sre 그룹 멤버 전원이 들어 있고, dan은 sre의 멤버다. 허락이다." },
+  ]}
+/>
+
+이 방식의 장점은 공유와 상속을 데이터로 다룬다는 것이다. 폴더를 그룹에 공유하면 튜플 한 줄이 생기고, 그 안의 문서 수천 개에 따로 권한을 쓰지 않아도 된다. 반대 방향 질문, "dan이 볼 수 있는 문서 전부"도 같은 그래프를 거꾸로 따라가면 된다. 대가는 탐색 비용과 일관성이다. 그래프가 깊어지면 판정 한 번에 튜플 조회가 여러 번 필요해서 캐시가 필수이고, 캐시 때문에 "방금 공유를 취소했는데 아직 보이는" 문제가 생긴다. Zanzibar는 이를 막으려고 변경 시점을 담은 일관성 토큰(논문에서는 zookie)을 객체와 함께 저장하고, 판정할 때 그 시점 이후의 데이터로 보게 한다.
+
+## 직접 짜 보기: 관계 튜플로 판정하기
+
+위 그림의 판정을 함수로 짜 보자. `tuples`는 `[객체, 관계, 주체]` 배열의 목록이다. 주체는 `"user:bob"`처럼 사람 하나이거나 `"group:eng#member"`처럼 집합이다. 규칙은 세 가지다.
+
+- 관계 포함: `owner`는 `editor`를, `editor`는 `viewer`를 포함한다. `viewer`를 물으면 `editor`, `owner` 튜플도 본다.
+- 집합 풀기: 주체가 `객체#관계` 꼴이면 그 객체의 그 관계를 다시 판정한다(그룹 안의 그룹도 된다).
+- 상속: `[문서, "parent", 폴더]` 튜플이 있으면, 폴더에서 같은 관계를 가진 사람은 문서에서도 그 관계를 가진다.
+
+그룹이 서로를 멤버로 가리키는 순환이 있어도 멈춰야 한다.
+
+<CodePlayground
+  caption="ReBAC 판정기"
+  functionName="check"
+  initialCode={`function check(tuples, object, relation, user) {
+  // tuples: [["doc:plan", "owner", "user:alice"], ...]
+  return false;
+}`}
+  solution={`function check(tuples, object, relation, user) {
+  const implied = {
+    viewer: ["viewer", "editor", "owner"],
+    editor: ["editor", "owner"],
+    owner: ["owner"],
+    member: ["member"],
+  };
+  const seen = new Set(); // 순환을 끊는다
+  function has(obj, rel) {
+    const key = obj + "#" + rel;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    // 1) 직접 붙은 관계와 그 관계를 포함하는 관계
+    for (const r of implied[rel] || [rel]) {
+      for (const [o, tr, subject] of tuples) {
+        if (o !== obj || tr !== r) continue;
+        if (subject === user) return true;
+        if (subject.includes("#")) {
+          const [so, sr] = subject.split("#");
+          if (has(so, sr)) return true; // 2) 집합이면 다시 판정
+        }
+      }
+    }
+    // 3) 부모 객체에서 같은 관계를 물려받는다
+    if (rel !== "member") {
+      for (const [o, tr, parent] of tuples) {
+        if (o === obj && tr === "parent" && has(parent, rel)) return true;
+      }
+    }
+    return false;
+  }
+  return has(object, relation);
+}`}
+  tests={[
+    { label: "owner는 viewer다", args: [[["doc:plan", "owner", "user:alice"]], "doc:plan", "viewer", "user:alice"], expected: true },
+    { label: "폴더 공유로 bob이 본다", args: [[["doc:plan", "owner", "user:alice"], ["doc:plan", "parent", "folder:eng"], ["folder:eng", "viewer", "group:eng#member"], ["group:eng", "member", "user:bob"]], "doc:plan", "viewer", "user:bob"], expected: true },
+    { label: "viewer는 editor가 아니다", args: [[["doc:plan", "parent", "folder:eng"], ["folder:eng", "viewer", "group:eng#member"], ["group:eng", "member", "user:bob"]], "doc:plan", "editor", "user:bob"], expected: false },
+    { label: "그룹 안의 그룹", args: [[["doc:plan", "parent", "folder:eng"], ["folder:eng", "viewer", "group:eng#member"], ["group:eng", "member", "group:sre#member"], ["group:sre", "member", "user:dan"]], "doc:plan", "viewer", "user:dan"], expected: true },
+    { label: "폴더 editor는 문서 owner가 아니다", args: [[["doc:plan", "parent", "folder:eng"], ["folder:eng", "editor", "user:erin"]], "doc:plan", "owner", "user:erin"], expected: false },
+    { label: "모르는 사람", args: [[["doc:plan", "owner", "user:alice"], ["doc:plan", "parent", "folder:eng"], ["folder:eng", "viewer", "group:eng#member"], ["group:eng", "member", "user:bob"]], "doc:plan", "viewer", "user:mallory"], expected: false },
+    { label: "순환이 있어도 멈춘다", args: [[["group:a", "member", "group:b#member"], ["group:b", "member", "group:a#member"], ["doc:x", "viewer", "group:a#member"]], "doc:x", "viewer", "user:z"], expected: false },
+  ]}
+/>
+
+마지막 테스트가 실무에서 중요하다. 그룹 중첩을 허용하면 누군가 실수로 순환을 만든다. 방문 기록 없이 재귀하면 판정 한 번이 스택을 다 먹고 서버가 죽는다. OpenFGA 같은 구현은 순환 검사와 함께 탐색 깊이에도 상한을 둔다.
+
+## 판정을 코드 밖으로 꺼내기
+
+`canReadOrder` 같은 함수가 서비스 열 개에 흩어지면 같은 규칙이 조금씩 다르게 구현된다. 정책 엔진은 판정 규칙을 별도 언어로 써서 한곳에서 관리하고, 서비스는 "이 요청 허락해?"만 묻게 한다. 판정하는 쪽을 PDP(Policy Decision Point), 묻고 집행하는 쪽을 PEP(Policy Enforcement Point)라고 부르는데, 이 구조는 [제로 트러스트 글](/posts/zero-trust-architecture)에서도 나온다.
+
+OPA(Open Policy Agent)의 Rego로 위의 규칙과 환불 규칙을 썼다.
+
+```rego
+package orders.authz
+
+import rego.v1
+
+default allow := false
+
+# 자기 주문은 읽을 수 있다
+allow if {
+	input.action == "read"
+	input.resource.owner_id == input.subject.id
+}
+
+# 상담원은 모든 주문을 읽을 수 있다
+allow if {
+	input.action == "read"
+	"support" in input.subject.roles
+}
+
+# 상담원은 10만 원 이하 주문만, 업무 시간에만 환불할 수 있다
+allow if {
+	input.action == "refund"
+	"support" in input.subject.roles
+	input.resource.total <= 100000
+	input.context.hour >= 9
+	input.context.hour < 18
+}
+```
+
+`allow` 규칙이 여러 개면 하나라도 참일 때 참이다. 아무것도 맞지 않으면 `default allow := false`로 거부된다. 기본 거부가 정책의 첫 줄에 있다는 게 중요하다. 판정에 쓸 입력은 서비스가 만들어 보낸다.
+
+```json
+{
+  "action": "refund",
+  "subject": { "id": "u9", "roles": ["support"] },
+  "resource": { "type": "order", "id": 1001, "owner_id": "u1", "total": 54000 },
+  "context": { "hour": 14 }
+}
+```
+
+```bash
+./opa eval -d policy.rego -i input.json 'data.orders.authz.allow' -f pretty   # hour 14
+./opa eval -d policy.rego -i input.json 'data.orders.authz.allow' -f pretty   # hour 22로 바꾼 뒤
+./opa test policy.rego policy_test.rego -v
+```
+
+```text
+true
+false
+policy_test.rego:
+data.orders.authz_test.test_owner_can_read: PASS (437.137µs)
+data.orders.authz_test.test_other_customer_cannot_read: PASS (310.685µs)
+data.orders.authz_test.test_support_refund_limit: PASS (223.018µs)
+data.orders.authz_test.test_support_refund_after_hours: PASS (422.586µs)
+--------------------------------------------------------------------------------
+PASS: 4/4
+```
+
+정책에 단위 테스트가 붙는다는 것이 코드 안의 `if`와 가장 큰 차이다. "다른 고객은 못 읽는다", "밤에는 환불 못 한다" 같은 거부 사례를 테스트로 박아 두면, 규칙을 고치다가 구멍을 내는 걸 배포 전에 잡는다. 서비스에서는 보통 OPA를 같은 호스트나 사이드카로 띄우고 HTTP로 묻는다.
+
+```bash
+./opa run --server --addr 127.0.0.1:8181 policy.rego &
+curl -s -w ' %{http_code} %{time_total}s\n' -X POST http://127.0.0.1:8181/v1/data/orders/authz/allow \
+  -H 'content-type: application/json' -d "{\"input\": $(cat input.json)}"
+```
+
+```text
+{"result":true}
+ 200 0.001747s
+```
+
+로컬 호출이라 2ms가 안 걸렸다. 정책 엔진을 원격 서비스 하나로 두면 모든 요청에 네트워크 왕복이 붙고, 그 서비스가 [단일 장애 지점](/posts/high-availability)이 된다. 그래서 정책은 중앙에서 배포하되 판정은 각 서비스 옆에서 하는 구성이 흔하다. 판정을 받지 못했을 때는 거부(fail closed)가 기본이다. 권한 서비스가 죽었다고 모두에게 열어 주면(fail open) 장애가 보안 사고로 번진다. 대신 거부가 장애로 번지지 않게 짧은 캐시와 타임아웃을 두는데, 이 균형은 [내결함성 글](/posts/fault-tolerance)의 우아한 성능 저하와 같은 이야기다. 한계도 있다. "1001번 주문의 주인이 u1"이라는 사실은 정책 엔진이 모른다. 서비스가 DB에서 읽어 입력에 넣어 줘야 한다. 그래서 OPA는 규칙 계산(ABAC)에 강하고, 관계 데이터 자체를 들고 있어야 하는 ReBAC는 OpenFGA·SpiceDB처럼 튜플을 저장하는 시스템이 맡는 경우가 많다. AWS가 공개한 Cedar도 같은 자리를 노리는 정책 언어다. 쿠버네티스에서 OPA를 어드미션 컨트롤러로 쓰는 Gatekeeper는 [어드미션 컨트롤 글](/posts/k8s-admission-control)에 있다.
+
+## 검사는 어디에 두나
+
+API 게이트웨이가 토큰을 확인해 주면 뒤의 서비스는 인증을 안 해도 될까. 게이트웨이가 토큰을 검증하고 `X-User-Id` 헤더를 붙여 넘기며, 주문 서비스는 그 헤더만 믿는 구성을 만들어 봤다.
+
+```bash
+# 게이트웨이를 거치면
+curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $BOB" http://127.0.0.1:8080/orders/1001
+curl -s -w ' %{http_code}\n' http://127.0.0.1:8080/orders/1001
+# 주문 서비스에 직접 붙어서 헤더를 지어내면
+curl -s -w ' %{http_code}\n' -H "X-User-Id: u1" http://127.0.0.1:8082/orders/1001
+```
+
+```text
+{"error":"not_found"} 404
+{"error":"unauthenticated"} 401
+{"id":1001,"ownerId":"u1","item":"keyboard","total":54000} 200
+```
+
+게이트웨이를 지나는 길은 잘 막혔다. 그런데 서비스 포트에 직접 닿을 수 있으면 헤더 한 줄로 아무나 될 수 있다. 같은 클러스터의 다른 파드, 잘못 연 보안 그룹, SSRF 취약점이 있는 내부 서비스가 모두 그 경로다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="게이트웨이만 믿으면 옆문이 열린다"
+  zones={[
+    { id: "inside", label: "내부망", x: 140, y: 12, w: 252, h: 226, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "bob", x: 50, y: 70, icon: "client" },
+    { id: "evil", label: "other pod", sub: "침해됨", x: 200, y: 200, icon: "container" },
+    { id: "gw", label: "gateway", sub: ":8080", x: 200, y: 70, icon: "gateway" },
+    { id: "svc", label: "orders", sub: ":8082", x: 335, y: 70, icon: "server" },
+    { id: "db", label: "db", x: 335, y: 190, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "gw" },
+    { from: "gw", to: "svc" },
+    { from: "svc", to: "db" },
+    { from: "evil", to: "svc", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "gw"], packet: "Bearer", title: "게이트웨이가 토큰을 확인한다", detail: "서명과 만료를 보고 sub=u2를 꺼낸다. 토큰이 없으면 여기서 401이다." },
+    { path: ["user", "gw", "svc"], packet: "X-User-Id", title: "헤더로 신원을 넘긴다", detail: "주문 서비스는 u2가 보냈다고 믿고 소유자를 비교해 404를 준다." },
+    { path: ["evil", "svc"], packet: "u1", highlight: ["evil"], title: "옆문으로 들어오면", detail: "내부망 어딘가에서 서비스에 바로 붙어 X-User-Id: u1을 지어낸다. 서비스는 확인할 방법이 없다." },
+    { path: ["evil", "svc", "db"], packet: "200", title: "alice의 주문이 나간다", detail: "실험에서 실제로 200과 함께 주문이 나왔다. 게이트웨이의 검사는 이 길에 없다." },
+  ]}
+/>
+
+막는 방법은 세 갈래다. 서비스도 토큰을 직접 검증한다(게이트웨이는 원래 토큰을 그대로 넘기고, 서비스가 서명과 `aud`를 본다). 또는 게이트웨이가 넘기는 신원을 서명된 내부 토큰으로 만들어 지어낼 수 없게 한다. 그리고 네트워크 정책이나 서비스 메시의 mTLS로 게이트웨이 말고는 서비스 포트에 닿지 못하게 한다. 보통 셋을 겹쳐 쓴다. 게이트웨이가 클라이언트의 `X-User-Id` 헤더를 지우지 않고 그대로 넘기는 설정 실수도 같은 결과를 낳으니, 신원 헤더는 게이트웨이에서 항상 덮어쓰게 한다.
+
+검사의 역할도 나눈다. 게이트웨이는 토큰이 유효한지, 이 클라이언트가 이 API 묶음을 부를 범위(scope)가 있는지 같은 거친 검사를 맡는다. "이 주문이 이 사람 것인가"는 주문 데이터를 가진 서비스만 답할 수 있다. 객체 수준 인가를 게이트웨이로 올리면 게이트웨이가 모든 서비스의 데이터를 알아야 해서 결국 무너진다.
+
+## 토큰에 적힌 역할은 언제 낡나
+
+토큰에 역할을 넣어 두면 요청마다 DB를 안 봐도 돼서 편하다. 그 대가를 재 봤다. 상담원 carol(u9)에게 `role: support` 토큰을 발급하고, 관리자가 carol의 역할을 고객으로 바꾼 뒤 같은 토큰으로 다시 물었다. `v2`는 토큰의 역할을 쓰고, `v3`은 요청마다 DB에서 역할을 다시 읽는다.
+
+```text
+--- carol before
+{"id":1001,"ownerId":"u1","item":"keyboard","total":54000} 200
+--- demote
+{"u9":"customer"}
+--- carol after, v2 (token role)
+{"id":1001,"ownerId":"u1","item":"keyboard","total":54000} 200
+--- carol after, v3 (db role)
+{"error":"not_found"} 404
+```
+
+강등된 뒤에도 `v2`는 남의 주문을 내준다. 토큰은 발급 순간의 사진이라, 만료될 때까지 그 사진대로 통한다. 서명이 있으니 내용을 고칠 수도 없다. bob이 토큰의 `role`을 `support`로 바꿔 보내면 `{"error":"unauthenticated"} 401`이 돌아왔다. 변조는 막지만, 낡는 것은 못 막는다.
+
+<AlgoTrace
+  caption="토큰 속 역할과 DB 속 역할이 갈라지는 구간"
+  cells={["토큰 발급", "요청 1", "역할 강등", "요청 2", "토큰 만료"]}
+  memoryLabel="토큰 / DB"
+  steps={[
+    { pointer: 0, memory: ["support", "support"], caption: "로그인할 때 DB의 역할을 토큰에 복사한다. 둘이 같다." },
+    { pointer: 1, memory: ["support", "support"], caption: "토큰만 보고 허락한다. DB를 안 봐도 되니 빠르다." },
+    { pointer: 2, memory: ["support", "customer"], caption: "관리자가 역할을 바꿨다. DB만 바뀌고 이미 나간 토큰은 그대로다." },
+    { pointer: 3, found: [3], memory: ["support", "customer"], caption: "토큰을 믿는 서버는 여전히 상담원으로 대한다. 실험의 v2가 이 상태였다." },
+    { pointer: 4, memory: ["만료", "customer"], caption: "토큰이 만료되고 새로 받을 때 비로소 맞춰진다. 그때까지가 위험 구간이다." },
+  ]}
+/>
+
+이 구간을 줄이는 방법은 몇 가지가 있고, 하나씩 비용이 있다. 액세스 토큰 수명을 5~15분으로 짧게 두고 리프레시할 때 역할을 다시 읽는다. 권한을 줄이는 이벤트(강등, 퇴사, 계정 잠금)가 생기면 그 사용자의 세션과 리프레시 토큰을 즉시 폐기한다. 관리 기능처럼 위험한 동작은 토큰의 역할을 쓰지 않고 요청마다 DB나 권한 서비스에 묻는다(실험의 `v3`). 토큰에는 바뀌지 않는 신원(`sub`)만 넣고 권한은 매번 조회하는 설계도 흔하다. 조회 비용은 짧은 TTL 캐시로 줄인다. 토큰 자체의 구조와 폐기 문제는 [토큰 로그인](/posts/token-login)에서 다룬다.
+
+## 목록과 검색에도 인가가 필요하다
+
+주문 하나를 읽는 API는 막아 놓고, "내 주문 목록"이나 검색에서 새는 경우가 많다. 목록에서 흔한 실수는 먼저 20개를 가져온 뒤 권한 없는 것을 걸러 내는 것이다.
+
+```js
+// 잘못된 순서: 페이지를 먼저 자르고 나중에 거른다
+const page = await db.query("SELECT * FROM orders ORDER BY id DESC LIMIT 20 OFFSET $1", [offset]);
+return page.rows.filter((o) => canReadOrder(user.id, user.role, o));
+```
+
+이러면 페이지마다 개수가 들쭉날쭉하고(20개를 달랬는데 3개), 전체 개수나 다음 페이지 유무로 남의 데이터 양이 드러난다. 인가 조건은 쿼리 안으로 넣는다.
+
+```sql
+-- 인가 조건을 WHERE에 넣고 나서 자른다
+SELECT order_id, item, total
+FROM orders
+WHERE owner_id = $1               -- 고객이면 자기 것만
+ORDER BY order_id DESC
+LIMIT 20;
+```
+
+역할마다 조건이 다르면 이 `WHERE`를 만드는 함수를 한곳에 둔다. 앱 코드가 조건을 빠뜨려도 막히게 하려면 PostgreSQL의 행 단위 보안(RLS)을 쓸 수 있다. 세션에 사용자 ID를 넣어 두면 DB가 모든 쿼리에 조건을 붙인다. 설정 방법은 [역할과 권한 글](/posts/postgres-roles-security)에 있다. 검색 엔진도 같은 문제를 가진다. 색인에 문서별 접근 가능 그룹을 함께 넣고 검색 쿼리에 그 필터를 거는 방식이 보통이고, 공유가 바뀌면 색인도 다시 써야 한다는 부담이 따른다.
+
+## 인가 구멍을 찾는 순서
+
+인가 버그는 기능 테스트로 잘 안 잡힌다. 정상 사용자는 자기 데이터만 보기 때문이다. 일부러 남의 것을 건드리는 테스트를 만든다.
+
+- 엔드포인트 × 역할 × 소유 관계로 표를 만든다. "고객 A가 고객 B의 주문을 읽기/수정/삭제", "고객이 관리 API 호출", "상담원이 한도 넘는 환불"처럼 거부돼야 할 칸을 테스트로 쓴다. 허락 테스트보다 거부 테스트가 중요하다.
+- 요청 본문의 필드도 본다. 수정 API에 `owner_id`, `role`, `price`를 끼워 보내서 저장되는지 확인한다. 받을 필드를 명시적으로 고르는 것(허용 목록)이 해법이다.
+- 판정을 로그로 남긴다. "누가, 무엇을, 어디에, 허락/거부, 어느 규칙 때문에"를 남기면 사고 뒤에 범위를 셀 수 있고, 거부가 갑자기 늘면 공격이나 배포 실수의 신호가 된다.
+- 401과 403의 비율을 지표로 본다. 배포 직후 401이 치솟으면 인증(키 교체, 시계 어긋남, 쿠키 도메인)을, 403이 치솟으면 권한 데이터나 정책 변경을 의심한다. 키 교체 직후의 401은 [JWT 키 교체 글](/posts/jwt-key-rotation)에 사례가 있다.
+- 기본값을 확인한다. 새 엔드포인트를 추가했을 때 아무 설정이 없으면 열리는 구조인지 닫히는 구조인지. 라우터 수준에서 "인가 규칙이 없는 핸들러는 거부"로 두면 빠뜨린 한 줄이 사고가 되지 않는다.
+
+## 두 번째 질문을 매번 묻는다
+
+인증은 요청을 보낸 사람이 누구인지 확정하고, 인가는 그 사람이 이 자원에 이 동작을 해도 되는지 정한다. 인증은 한곳에서 한 번이면 되지만 인가는 자원마다, 요청마다, 목록과 검색까지 물어야 한다. 그래서 인가는 기본 거부로 두고, 객체를 가진 서비스가 직접 판정하며, 규칙이 커지면 정책 엔진이나 관계 그래프로 꺼내 테스트를 붙인다. 토큰에 적힌 권한은 언젠가 낡는다는 것도 함께 기억한다.
+
+## 면접에서 나올 만한 질문
+
+### 인증과 인가의 차이는 무엇인가요?
+
+인증은 요청한 사람이 누구인지 확인하는 것이고, 인가는 확인된 그 사람이 특정 자원에 특정 동작을 해도 되는지 판정하는 것이다. 인증이 먼저고, 실패하면 401이다. 인가는 신원, 동작, 자원, 상황을 함께 보고 실패하면 403이나 404를 준다.
+
+### 401과 403은 어떻게 구분하고, 404를 주는 경우는 언제인가요?
+
+401은 누군지 모른다는 뜻이라 다시 로그인하면 풀릴 수 있고, 403은 누군지 알지만 허락하지 않는다는 뜻이라 다시 로그인해도 같다. 자원이 존재한다는 사실 자체가 정보가 되는 경우, 예를 들어 남의 주문이나 비공개 저장소라면 403 대신 404를 줘서 존재를 숨긴다.
+
+### IDOR(BOLA)는 무엇이고 어떻게 막나요?
+
+로그인한 사용자가 요청의 ID만 바꿔 다른 사람의 객체에 접근하는 취약점이다. 인증만 하고 "이 객체가 이 사람 것인가"를 묻지 않아서 생긴다. ID를 UUID로 바꾸는 건 추측을 어렵게 할 뿐이고, 객체를 읽고 쓰는 모든 곳에서 소유나 관계를 확인하는 객체 수준 인가가 해법이다. 거부 사례를 테스트로 박아 두면 회귀를 막는다.
+
+### RBAC와 ABAC, ReBAC의 차이와 고르는 기준은요?
+
+RBAC는 역할에 권한을 붙여 직무 단위 규칙에 강하지만, 자기 것만 같은 객체 단위 규칙을 못 담아 역할이 폭증하기 쉽다. ABAC는 주체·자원·환경의 속성으로 계산해 금액이나 시간 같은 조건에 강하지만 누가 무엇을 할 수 있는지 한눈에 보기 어렵다. ReBAC는 객체 사이 관계를 따라가 공유와 상속이 핵심인 서비스에 맞는다. 보통 큰 틀은 RBAC, 객체 공유는 ReBAC, 조건은 ABAC로 섞는다.
+
+### 게이트웨이에서 인증했으면 서비스는 검사를 안 해도 되나요?
+
+안 된다. 서비스 포트에 게이트웨이를 거치지 않고 닿는 경로가 하나라도 있으면 신원 헤더를 지어내 아무나 될 수 있고, 실험에서도 헤더 한 줄로 남의 주문이 나왔다. 서비스도 토큰을 검증하거나 서명된 내부 토큰을 쓰고, mTLS나 네트워크 정책으로 경로를 막는다. 게이트웨이는 토큰 유효성과 scope 같은 거친 검사를, 객체 수준 인가는 데이터를 가진 서비스가 맡는다.
+
+### JWT에 역할을 넣으면 생기는 문제는요?
+
+토큰은 발급 시점의 사진이라, 역할을 바꾸거나 계정을 잠가도 만료 전까지 옛 역할로 통한다. 액세스 토큰 수명을 짧게 두고 리프레시할 때 다시 읽거나, 권한을 줄이는 이벤트에서 세션과 리프레시 토큰을 폐기하고, 위험한 동작은 요청마다 권한을 조회한다. 토큰에는 바뀌지 않는 신원만 넣는 설계도 많이 쓴다.
+
+### OPA 같은 정책 엔진을 쓰면 무엇이 좋고 무엇을 조심해야 하나요?
+
+판정 규칙을 한곳에 모아 여러 서비스가 같은 규칙을 쓰고, 정책에 단위 테스트를 붙여 거부 사례를 배포 전에 검증할 수 있다. 대신 판정에 필요한 데이터(소유자, 관계)는 서비스가 입력으로 넣어 줘야 하고, 원격 호출로 두면 지연과 단일 장애 지점이 생기므로 사이드카나 라이브러리로 가까이 둔다. 정책이 없을 때 거부하는 기본값을 꼭 둔다.
+
+### 목록 API에서 인가는 어떻게 하나요?
+
+가져온 뒤 거르지 말고 인가 조건을 쿼리의 WHERE 안에 넣는다. 나중에 거르면 페이지 크기가 들쭉날쭉하고 전체 개수로 남의 데이터 양이 드러난다. 조건 생성을 한곳에 모으고, 빠뜨려도 막히게 하려면 PostgreSQL의 행 단위 보안을 쓴다.
