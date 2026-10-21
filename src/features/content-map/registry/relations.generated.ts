@@ -2,6 +2,69 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-stock-exchange-low-latency": {
+    "links": [
+      "sd-stock-exchange-order-book",
+      "sd-wallet-event-sourcing",
+      "sd-latency-numbers",
+      "sd-mq-storage-partitions",
+      "tail-latency",
+      "message-delivery-semantics",
+      "garbage-collection",
+      "leader-election",
+      "raft-consensus",
+      "udp-and-quic",
+      "sd-rate-limiter-design"
+    ],
+    "mentions": [
+      "js-memory-leak",
+      "sd-start-single-server",
+      "event-loop",
+      "kafka-basics"
+    ]
+  },
+  "sd-stock-exchange-order-book": {
+    "links": [
+      "sd-wallet-event-sourcing",
+      "sd-stock-exchange-low-latency",
+      "percentile-latency"
+    ],
+    "mentions": []
+  },
+  "sd-wallet-event-sourcing": {
+    "links": [
+      "sd-wallet-transfer",
+      "sd-stock-exchange-order-book",
+      "event-sourcing",
+      "raft-consensus",
+      "cqrs",
+      "sd-stock-exchange-low-latency"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "db-type-embedded",
+      "db-type-key-value",
+      "event-driven-architecture",
+      "db-type-wide-column",
+      "sd-kv-store-write-read-path"
+    ]
+  },
+  "sd-wallet-transfer": {
+    "links": [
+      "sd-wallet-event-sourcing",
+      "sd-stock-exchange-order-book",
+      "acid-transactions",
+      "idempotency-key",
+      "sd-sharding-intro",
+      "distributed-transactions-2pc",
+      "saga-pattern"
+    ],
+    "mentions": [
+      "event-driven-architecture",
+      "redis-basics",
+      "http-methods"
+    ]
+  },
   "sd-email-storage-search": {
     "links": [
       "sd-email-protocols",

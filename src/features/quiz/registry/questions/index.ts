@@ -421,11 +421,15 @@ import { SD_RATE_LIMITER_DESIGN } from "./sd-rate-limiter-design";
 import { SD_SHARDING_INTRO } from "./sd-sharding-intro";
 import { SD_SPLIT_WEB_AND_DB } from "./sd-split-web-and-db";
 import { SD_START_SINGLE_SERVER } from "./sd-start-single-server";
+import { SD_STOCK_EXCHANGE_LOW_LATENCY } from "./sd-stock-exchange-low-latency";
+import { SD_STOCK_EXCHANGE_ORDER_BOOK } from "./sd-stock-exchange-order-book";
 import { SD_UNIQUE_ID_GENERATOR } from "./sd-unique-id-generator";
 import { SD_URL_SHORTENER_API_REDIRECT } from "./sd-url-shortener-api-redirect";
 import { SD_URL_SHORTENER_KEY_GENERATION } from "./sd-url-shortener-key-generation";
 import { SD_VIDEO_STREAMING_COST } from "./sd-video-streaming-cost";
 import { SD_VIDEO_UPLOAD_TRANSCODING } from "./sd-video-upload-transcoding";
+import { SD_WALLET_EVENT_SOURCING } from "./sd-wallet-event-sourcing";
+import { SD_WALLET_TRANSFER } from "./sd-wallet-transfer";
 import { SD_WEB_CRAWLER_ARCHITECTURE } from "./sd-web-crawler-architecture";
 import { SD_WEB_CRAWLER_POLITENESS_DEDUP } from "./sd-web-crawler-politeness-dedup";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
@@ -929,11 +933,15 @@ export const QUESTION_SETS = [
   SD_SHARDING_INTRO,
   SD_SPLIT_WEB_AND_DB,
   SD_START_SINGLE_SERVER,
+  SD_STOCK_EXCHANGE_LOW_LATENCY,
+  SD_STOCK_EXCHANGE_ORDER_BOOK,
   SD_UNIQUE_ID_GENERATOR,
   SD_URL_SHORTENER_API_REDIRECT,
   SD_URL_SHORTENER_KEY_GENERATION,
   SD_VIDEO_STREAMING_COST,
   SD_VIDEO_UPLOAD_TRANSCODING,
+  SD_WALLET_EVENT_SOURCING,
+  SD_WALLET_TRANSFER,
   SD_WEB_CRAWLER_ARCHITECTURE,
   SD_WEB_CRAWLER_POLITENESS_DEDUP,
   SDN_VXLAN_OVERLAY,

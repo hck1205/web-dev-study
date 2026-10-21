@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sd-stock-exchange-low-latency",
+    title: "증권 거래소 설계 ②: 시퀀서와 단일 스레드 루프, 결정적 재생",
+    summary: "도착 순서만 달라도 체결 결과가 바뀌고, 주 엔진이 죽으면 호가창을 똑같이 되살려야 한다. 시퀀서와 일지로 결정적 재생과 대기 엔진 인계, 순번 빈자리 재전송을 직접 돌려 보고, 링 버퍼와 postMessage의 지연, GC 멈춤, /dev/shm 일지, 멀티캐스트 시장 데이터를 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Performance", "Node.js", "Concurrency"],
+    date: "2026-10-22",
+    keywords: ["시퀀서", "결정적 재생", "바쁜 대기"],
+  },
+  {
+    slug: "sd-stock-exchange-order-book",
+    title: "증권 거래소 설계 ①: 호가창과 매칭 엔진, 가격-시간 우선으로 체결하기",
+    summary: "같은 가격인데 남의 주문이 먼저 체결되는 이유에서 시작한다. 매수·매도 호가와 메이커·테이커 같은 용어부터 풀고, 가격 단계마다 FIFO 줄을 둔 호가창과 매칭 엔진을 Node로 만들어 체결 기록, 취소 경합, 큰 주문의 호가 훑기, 지갑 정산, 봉 차트를 직접 뽑아 본다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Node.js", "Performance", "Backend"],
+    date: "2026-10-22",
+    keywords: ["호가창", "매칭 엔진", "가격-시간 우선"],
+  },
+  {
+    slug: "sd-wallet-event-sourcing",
+    title: "디지털 지갑 설계 ②: 잔액 대신 사건을 남기고, 재생과 스냅숏으로 되살리기",
+    summary: "잔액 칸을 덮어쓰면 그때 잔액도, 코드가 바뀐 뒤의 계산도 증명할 수 없다. 사건 35만 건을 결정적으로 재생해 지난 시점 잔액을 다시 계산하고, 두 버전 코드를 같은 기록에 돌려 처음 어긋나는 사건을 찾고, 스냅숏과 그룹 커밋, Raft 복제로 한 노드를 빠르고 안전하게 만든다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Architecture", "Node.js", "Backend"],
+    date: "2026-10-22",
+    keywords: ["결정적 상태 기계", "재생 검증"],
+  },
+  {
+    slug: "sd-wallet-transfer",
+    title: "디지털 지갑 설계 ①: 샤드가 갈린 두 지갑 사이의 송금, 2PC와 TC/C와 사가",
+    summary: "두 지갑이 서로 다른 DB에 있으면 커밋 두 번 사이에서 돈이 사라지거나 생긴다. PostgreSQL에서 그 틈을 직접 만들어 보고, 2PC와 TC/C의 묶어 두는 돈(hold)과 빈 취소, 사가의 보상 단계를 같은 지갑에 붙여 비교한다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Distributed Systems", "Transaction", "PostgreSQL", "Backend"],
+    date: "2026-10-22",
+    keywords: ["TC/C", "Try-Confirm-Cancel", "빈 취소", "매달린 Try"],
+  },
+  {
     slug: "sd-email-storage-search",
     title: "이메일 서비스 설계 ②: 메일 저장소와 검색 색인",
     summary: "받은 메일을 메타데이터와 본문·첨부로 나누고 user_id로 파티션한다. 안 읽은 메일은 부분 인덱스로, 대화는 References 헤더로 묶고, 첨부는 내용 해시로 한 번만 저장한다. 사용자별 역색인으로 검색하면서 한국어 조사 문제와 비동기 색인 갱신을 다룬다.",
