@@ -22,6 +22,8 @@ import { BROWSER_FETCH } from "./browser-fetch";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
+import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
+import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
@@ -542,6 +544,8 @@ export const QUESTION_SETS = [
   BROWSER_STORAGE,
   BUILD_CACHING,
   CACHE_INVALIDATION,
+  CACHE_WRITE_POLICIES,
+  CACHING_CONCEPTS_MAP,
   CACHING_STRATEGIES,
   CANARY_RELEASE,
   CDN_EDGE_ANYCAST,

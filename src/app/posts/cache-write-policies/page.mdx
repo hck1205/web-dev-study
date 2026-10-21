@@ -1,0 +1,522 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cache-write-policies");
+
+상품 페이지가 열릴 때마다 `UPDATE products SET views = views + 1 WHERE id = 1001`을 하는 서비스가 있다고 하자. 평소에는 아무 문제가 없다. 그런데 1001번 무선 이어폰이 타임세일에 걸려 초당 수천 명이 들어오면, 모든 요청이 같은 행 하나를 고치려고 줄을 선다. 조회수 하나 올리는 일 때문에 상품 페이지 응답이 느려진다.
+
+흔히 나오는 답은 "조회수는 Redis에서 세고 DB에는 모아서 쓰자"다. write-back이라고 부르는 방식이다. 이 말 한 줄 안에 꽤 많은 결정이 숨어 있다. 모아 둔 값을 언제 내려 보내나, 내려 보내는 순간 들어온 쓰기는 어떻게 되나, 프로세스가 죽으면 무엇을 잃나, 누가 DB를 직접 고치면 어떻게 되나.
+
+세 가지 쓰기 방식(write-through, write-back, write-around)의 정의와 비교표는 [캐시 전략 글](/posts/caching-strategies)의 "쓰기는 어디로 먼저 보내나"에 있다. 이 글은 그 다음 질문을 다룬다. 같은 상품 테이블에 세 방식을 직접 붙여 보고, 쓰기 지연을 재고, 프로세스를 죽여서 잃는 양을 센다. 캐시를 지우는 방법 자체는 [캐시 무효화 글](/posts/cache-invalidation)에, 12가지 캐시 개념을 한 번에 훑는 지도는 [캐시 개념 지도](/posts/caching-concepts-map)에 있다.
+
+실험 환경은 Ubuntu 24.04, Node.js 22, Redis 7.0, PostgreSQL 16이다. 앱, Redis, DB가 모두 한 서버에 있어서 네트워크 왕복이 거의 없다. 그래서 아래 숫자는 절대값보다 서로의 비율로 읽어야 한다.
+
+```sql
+-- 글 끝까지 쓰는 예제 테이블
+CREATE TABLE products (
+  id      int PRIMARY KEY,
+  name    text NOT NULL,
+  price   int  NOT NULL CHECK (price >= 0),  -- 음수 가격은 DB가 거절한다
+  views   bigint NOT NULL DEFAULT 0,          -- 조회수
+  version int  NOT NULL DEFAULT 1             -- 고칠 때마다 1씩 올린다
+);
+INSERT INTO products (id, name, price) VALUES
+  (1001, '무선 이어폰', 39000),
+  (1002, '보조배터리', 25000),
+  (1003, 'USB-C 케이블', 9000);
+```
+
+```text
+  id  |     name     | price | views | version
+------+--------------+-------+-------+---------
+ 1001 | 무선 이어폰  | 39000 |     0 |       1
+ 1002 | 보조배터리   | 25000 |     0 |       1
+ 1003 | USB-C 케이블 |  9000 |     0 |       1
+(3 rows)
+```
+
+## 세 방식은 성공을 돌려주는 시점이 다르다
+
+세 방식을 가르는 질문은 하나다. 사용자에게 "저장됐다"고 답하기 전에 무엇까지 끝내 두나. 아래 그림에서 다음을 누르면 같은 가격 수정이 세 경로로 흘러간다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="같은 쓰기, 세 갈래 길"
+  zones={[
+    { id: "mem", label: "메모리", x: 130, y: 20, w: 140, h: 220, tone: "edge" },
+    { id: "disk", label: "디스크", x: 290, y: 20, w: 100, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱 서버", sub: "PUT /price", x: 60, y: 130, icon: "server", w: 96 },
+    { id: "redis", label: "Redis", sub: "캐시", x: 200, y: 80, icon: "db", w: 100 },
+    { id: "flusher", label: "플러셔", sub: "1초마다", x: 200, y: 190, icon: "container", w: 100 },
+    { id: "pg", label: "PostgreSQL", sub: "원본", x: 340, y: 130, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "app", to: "redis" },
+    { from: "app", to: "pg" },
+    { from: "redis", to: "flusher", dashed: true },
+    { from: "flusher", to: "pg", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "pg"], packet: "UPDATE", title: "write-around: DB에만 쓴다", detail: "DB 커밋이 끝나야 성공을 돌려준다. 캐시는 지우거나 그냥 둔다." },
+    { path: ["app", "redis"], packet: "DEL", highlight: ["pg"], title: "write-around의 짝: 캐시 삭제", detail: "다음 읽기가 미스가 나서 DB의 새 값으로 다시 채운다." },
+    { path: ["app", "pg"], packet: "UPDATE", highlight: ["redis"], title: "write-through: DB부터 쓴다", detail: "커밋이 끝난 뒤에 캐시에도 새 값을 넣는다. 두 곳이 다 끝나야 성공이다." },
+    { path: ["app", "redis"], packet: "SET", title: "write-through: 캐시도 새 값으로", detail: "쓰고 바로 읽어도 히트가 난다. 대신 응답은 DB만큼 느리다." },
+    { path: ["app", "redis"], packet: "HSET", title: "write-back: 캐시에만 쓰고 끝", detail: "Redis에 쓰고 더티 표시만 남긴 채 바로 성공을 돌려준다. DB는 아직 옛 값이다." },
+    { path: ["redis", "flusher", "pg"], packet: "batch", title: "write-back: 나중에 모아서", detail: "플러셔가 더티 키를 모아 한 번에 DB로 내려 보낸다. 이 사이에 죽으면 잃는다." },
+  ]}
+/>
+
+이름은 CPU 캐시에서 왔다. CPU의 L1·L2 캐시는 대부분 write-back이다. 캐시 줄에 더티 비트를 켜 두고, 그 줄이 밀려날 때만 메모리에 쓴다. 쓰기 미스가 났을 때 캐시에 줄을 새로 올리느냐(write-allocate) 말고 메모리에 바로 쓰느냐(no-write-allocate)를 따로 고르는데, 뒤쪽이 write-around와 같은 생각이다. 비유는 여기까지만 쓴다. CPU는 전원이 나가면 메모리도 같이 날아가니 "잃는다"는 걱정이 없지만, 응용 캐시는 DB가 살아 있는데 캐시만 죽을 수 있다. 이 글의 고민은 대부분 그 차이에서 나온다.
+
+## 쓰기 한 번에 걸리는 시간
+
+세 방식으로 1001번 가격을 2,000번씩 고치고 한 번에 걸린 시간을 쟀다. 앞의 200번은 연결과 JIT를 데우는 데 쓰고 버렸다.
+
+```js
+async function writeAround(id, price) {          // DB만 고치고 캐시는 지운다
+  await db.query("UPDATE products SET price = $1 WHERE id = $2", [price, id]);
+  await redis.del(`cache:product:${id}`);
+}
+async function writeThrough(id, price) {         // DB를 고치고 캐시에도 새 값을 쓴다
+  const { rows } = await db.query(
+    "UPDATE products SET price = $1 WHERE id = $2 RETURNING id, name, price", [price, id]);
+  await redis.set(`cache:product:${id}`, JSON.stringify(rows[0]), { EX: 300 });
+}
+async function writeBack(id, price) {            // 캐시에만 쓰고 더티 표시. DB는 나중에
+  await redis.multi()
+    .hSet(`wb:product:${id}`, "price", price)
+    .sAdd("dirty:products", String(id))
+    .exec();
+}
+```
+
+```text
+write-around  p50 0.556 ms  p99 4.506 ms
+write-through p50 0.563 ms  p99 4.242 ms
+write-back    p50 0.049 ms  p99 1.218 ms
+```
+
+같은 스크립트를 세 번 돌렸고 매번 비슷했다. 읽을 곳은 두 군데다.
+
+write-through와 write-around는 거의 같다. 둘 다 DB 커밋을 기다리기 때문이다. PostgreSQL은 `synchronous_commit = on`(기본값)이면 커밋 기록(WAL)이 디스크에 닿을 때까지 답하지 않는다. Redis 명령 하나는 그에 비하면 작다. "write-through는 두 곳에 쓰니 두 배 느리다"는 설명은 틀리진 않지만, 실제로는 느린 쪽 하나가 시간을 거의 다 먹는다.
+
+write-back은 열 배 안팎으로 빠르다. 디스크를 기다리지 않으니까. 앱과 Redis가 다른 서버에 있으면 네트워크 왕복(같은 데이터센터에서 보통 수백 µs)이 더해지지만, DB 커밋을 기다리지 않는다는 차이는 그대로다. 이 속도를 사는 값이 이 글의 나머지다.
+
+## 쓰기 2만 번이 UPDATE 9번이 된다
+
+write-back의 진짜 이득은 지연보다 합치기(write coalescing)에 있다. 같은 키에 쓰기가 백 번 와도 버퍼에는 "1001번 +100" 하나만 남는다. DB는 그걸 한 번 받는다.
+
+아래 그림은 조회 이벤트가 버퍼에 쌓이고 내려 보낼 때 비는 과정이다. 다음을 누르면 한 칸씩 진행된다.
+
+<AlgoTrace
+  caption="같은 키는 버퍼에서 하나로 합쳐진다"
+  memoryLabel="views:pending"
+  cells={["1001", "1001", "1002", "1001", "flush", "1003", "1001"]}
+  steps={[
+    { pointer: 0, memory: ["1001:1"], caption: "1001 조회. 버퍼에 1001:1이 생긴다." },
+    { pointer: 1, memory: ["1001:2"], caption: "또 1001. 새 항목이 아니라 숫자만 오른다." },
+    { pointer: 2, memory: ["1001:2", "1002:1"], caption: "1002는 처음이라 항목이 하나 는다." },
+    { pointer: 3, memory: ["1001:3", "1002:1"], caption: "쓰기 네 번, 항목은 두 개다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: [], caption: "flush. UPDATE 두 번으로 네 번의 조회를 내려 보낸다." },
+    { pointer: 5, memory: ["1003:1"], caption: "비운 버퍼에 다음 쓰기가 쌓인다." },
+    { pointer: 6, memory: ["1003:1", "1001:1"], caption: "다음 flush까지 이 둘은 Redis에만 있다." },
+  ]}
+/>
+
+실제로 돌려 봤다. 8개의 동시 요청이 상품 세 개에 조회 20,000건을 넣고, 플러셔는 200ms마다 버퍼를 비운다.
+
+```text
+rename: 조회 20000건 (417 ms), DB UPDATE 9번, DB 합계 20000, 사라진 조회 0
+```
+
+20,000번의 `UPDATE`가 9번이 됐다. PostgreSQL에서 이 차이는 숫자보다 크다. `UPDATE` 한 번마다 행의 새 버전이 생기고(MVCC, 자세한 건 [MVCC와 VACUUM 글](/posts/postgres-mvcc-vacuum)), WAL이 쌓이고, 같은 행을 고치려는 트랜잭션끼리 행 잠금을 기다린다. 합치면 이 셋이 한꺼번에 준다.
+
+Hazelcast 같은 데이터 그리드는 이걸 설정으로 제공한다. `MapStore`에 `write-delay-seconds`를 주면 write-behind가 되고, `write-coalescing`을 켜면 같은 키의 쓰기 중 마지막 것만 내려 보낸다. 직접 짜든 제품을 쓰든 아래 문제들은 똑같이 생긴다.
+
+## 더티 표시를 지우는 사이에 사라지는 조회
+
+위 결과의 이름이 `rename`인 데는 이유가 있다. 처음 떠올리기 쉬운 플러셔는 이렇게 생겼다.
+
+```js
+// 순진한 플러셔: 읽고, DB에 더하고, 0으로 되돌린다
+for (const id of await redis.sMembers("dirty:views")) {
+  const n = Number(await redis.get(`views:${id}`) ?? 0);   // 1) 읽고
+  await db.query("UPDATE products SET views = views + $1 WHERE id = $2", [n, id]);
+  await redis.set(`views:${id}`, 0);                        // 2) 0으로 (그 사이 INCR은?)
+  await redis.sRem("dirty:views", String(id));
+}
+```
+
+같은 조건으로 두 번 돌렸다.
+
+```text
+naive: 조회 20000건 (626 ms), DB UPDATE 9번, DB 합계 19943, 사라진 조회 57
+naive: 조회 20000건 (831 ms), DB UPDATE 12번, DB 합계 19912, 사라진 조회 88
+```
+
+조회 수십 건이 어디에도 남지 않았다. 1)의 `GET`과 2)의 `SET 0` 사이는 DB 왕복 한 번만큼 벌어져 있고, 그 사이에 들어온 `INCR`은 `SET 0`에 덮인다. 아래 그림에서 다음을 누르면 그 순간이 보인다.
+
+<AlgoTrace
+  caption="GET과 SET 0 사이에 들어온 INCR이 덮인다"
+  memoryLabel="Redis views:1001 / DB views"
+  cells={["GET", "INCR", "UPDATE", "SET 0"]}
+  steps={[
+    { memory: ["Redis 5", "DB 0"], caption: "버퍼에 조회 5건이 쌓여 있다." },
+    { pointer: 0, memory: ["Redis 5", "DB 0", "n=5"], caption: "플러셔가 GET으로 5를 읽는다." },
+    { pointer: 1, memory: ["Redis 6", "DB 0", "n=5"], caption: "그 사이 사용자 조회가 INCR로 6을 만든다." },
+    { pointer: 2, memory: ["Redis 6", "DB 5"], caption: "플러셔가 읽어 둔 5만 DB에 더한다." },
+    { pointer: 3, memory: ["Redis 0", "DB 5"], caption: "SET 0. 방금 들어온 1건이 사라졌다." },
+  ]}
+/>
+
+고치는 방법은 "읽기"와 "비우기"를 한 명령으로 만드는 것이다. 키 하나라면 `GETDEL`(Redis 6.2부터)이 그 일을 한다. 키가 여럿이면 버퍼를 해시 하나에 모으고, 내려 보낼 때 `RENAME`으로 통째로 떼어 낸다. `RENAME`은 원자적이라 그 뒤의 `HINCRBY`는 새로 생긴 `views:pending`에 쌓인다.
+
+```bash
+redis-cli -p 17800 HINCRBY views:pending 1001 1    # 조회가 들어올 때마다
+redis-cli -p 17800 HINCRBY views:pending 1001 1
+redis-cli -p 17800 HINCRBY views:pending 1002 1
+redis-cli -p 17800 HGETALL views:pending
+redis-cli -p 17800 RENAME views:pending views:flushing   # 플러셔: 통째로 떼어 낸다
+redis-cli -p 17800 HINCRBY views:pending 1001 1    # 그 직후 들어온 조회
+redis-cli -p 17800 HGETALL views:flushing          # 플러셔가 내려 보낼 묶음
+redis-cli -p 17800 DEL views:flushing              # DB 커밋이 끝난 뒤에 지운다
+```
+
+```text
+1
+2
+1
+1001
+2
+1002
+1
+OK
+1
+1001
+2
+1002
+1
+1
+```
+
+`RENAME` 직후의 `HINCRBY`가 `1`을 돌려준 데 주목한다. 새 버퍼에 첫 번째로 쌓였다는 뜻이고, 떼어 낸 묶음(`1001` 2건, `1002` 1건)과 섞이지 않았다. 이 해시가 곧 더티 목록이기도 하다. 따로 `dirty:` 집합을 두면 집합과 값을 맞추는 일이 하나 더 생긴다.
+
+## 내려 보내다 죽으면 두 번 더해진다
+
+`views:flushing`을 DB 커밋 뒤에 지우는 건 일부러다. 커밋 전에 죽으면 다음 플러셔가 남은 `views:flushing`을 보고 다시 처리한다. 잃지는 않는다.
+
+반대 경우가 문제다. 커밋은 됐는데 `DEL` 직전에 죽으면, 다음 플러셔가 같은 묶음을 또 더한다. 조회수 120을 두 번 더해 240이 된다. 묶음마다 이름을 붙이고, 그 이름을 같은 트랜잭션 안에서 DB에 기록해 두면 두 번째는 건너뛸 수 있다.
+
+```sql
+CREATE TABLE applied_batches (
+  batch_id   text PRIMARY KEY,           -- 같은 묶음은 한 번만 들어간다
+  applied_at timestamptz DEFAULT now()
+);
+
+BEGIN;
+INSERT INTO applied_batches (batch_id) VALUES ('b-1792585940815')
+  ON CONFLICT DO NOTHING;                 -- 0행이면 이미 반영된 묶음이다 → ROLLBACK
+UPDATE products SET views = views + 120 WHERE id = 1001;
+UPDATE products SET views = views + 30  WHERE id = 1002;
+COMMIT;
+```
+
+커밋 뒤 `DEL` 전에 죽은 상황을 만들고 플러셔를 다시 돌렸다.
+
+```text
+--- 묶음 이름 없이
+  COMMIT 뒤, DEL 전에 죽었다고 치자
+1001: 240, 1002: 60 (정답 1001: 120, 1002: 30)
+--- 묶음 이름으로 한 번만
+  COMMIT 뒤, DEL 전에 죽었다고 치자
+  b-1792585940815는 이미 반영됨, 건너뜀
+1001: 120, 1002: 30 (정답 1001: 120, 1002: 30)
+```
+
+메시지 큐 소비자가 같은 메시지를 두 번 받는 문제와 같은 모양이다. "최소 한 번" 전달에 멱등한 반영을 더해 "정확히 한 번처럼" 만든다. 묶음 이름은 `RENAME`과 같은 `MULTI` 안에서 붙여야 "이름 없는 묶음"이 생기지 않는다. `applied_batches`는 계속 쌓이니 며칠 지난 행은 지운다.
+
+## 어디가 죽느냐에 따라 잃는 양이 다르다
+
+이제 정말로 죽여 본다. 조회수를 받는 작은 HTTP 서버를 띄우고, 4개의 동시 요청을 쏟다가 2.5초에 `SIGKILL`을 보낸다. 플러셔는 1초마다 돈다. 성공 응답(200)을 받은 수와, 재시작 뒤 DB에 남은 합계를 비교한다.
+
+버퍼를 앱 프로세스 메모리(`Map`)에 둔 경우와 Redis에 둔 경우, 그리고 Redis를 죽인 경우를 나눴다. Redis를 죽인 두 번은 위가 `appendonly no`, 아래가 `appendonly yes`(`appendfsync everysec`)다.
+
+```text
+memory 버퍼, app 프로세스를 2499ms에 SIGKILL. 성공 응답 40611건
+재시작 후 DB 합계 30763, 사라진 조회 9848
+
+redis 버퍼, app 프로세스를 2499ms에 SIGKILL. 성공 응답 15116건
+재시작 후 DB 합계 15116, 사라진 조회 0
+
+redis 버퍼, redis 프로세스를 2500ms에 SIGKILL. 성공 응답 20196건
+재시작 후 DB 합계 12919, 사라진 조회 7277
+
+redis 버퍼, redis 프로세스를 2499ms에 SIGKILL. 성공 응답 26966건
+재시작 후 DB 합계 26966, 사라진 조회 0
+```
+
+첫 줄이 write-back의 기본 위험이다. 마지막 flush 뒤 약 0.5초 동안 받은 조회 9,848건이 프로세스와 함께 사라졌다. 사용자는 전부 200을 받았다. 잃는 양은 대략 "flush 간격 × 초당 쓰기"다.
+
+두 번째 줄은 버퍼를 프로세스 밖(Redis)에 두면 앱이 죽어도 잃지 않는다는 걸 보여 준다. 앱 서버를 배포로 자주 내리고 올리는 환경이라면 이 차이가 크다. 같은 이유로 버퍼를 앱 메모리에 둔다면 종료 신호(`SIGTERM`)를 받았을 때 마지막 flush를 하고 내려가야 한다. 쿠버네티스는 `SIGTERM`을 보내고 기본 30초(`terminationGracePeriodSeconds`)를 기다린 뒤 `SIGKILL`을 보낸다. 그 안에 끝내지 못하면 첫 줄과 같은 일이 생긴다. 파드 종료 순서는 [파드 생명주기 글](/posts/k8s-pod-lifecycle)에 있다.
+
+세 번째와 네 번째 줄은 버퍼가 있는 Redis를 죽인 경우다. 영속성이 꺼져 있으면 아직 내려 보내지 않은 7,277건이 사라진다. AOF를 켜면 0건이다. 그런데 이 0을 그대로 믿으면 안 된다. `appendfsync everysec`에서 Redis는 쓰기마다 AOF 파일에 `write()`를 하고, 디스크로 밀어 넣는 `fsync`만 1초마다 한다. 프로세스가 죽어도 커널의 페이지 캐시에 있는 내용은 디스크에 기록되니 잃지 않는다. 서버 전원이 나가거나 커널이 죽으면 최대 약 1초분을 잃는다. 이 실험은 프로세스만 죽였으니 그 경우를 보여 주지 못한다. AOF와 RDB가 각각 무엇을 지키는지는 [Redis 영속성 글](/posts/redis-persistence-ha)에서 자세히 다룬다.
+
+아래 그림은 잃는 창이 언제 열리고 닫히는지를 순서대로 보여 준다.
+
+<SequenceDiagram
+  caption="성공 응답과 DB 반영 사이가 잃는 창이다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "app", label: "앱" },
+    { id: "redis", label: "Redis" },
+    { id: "pg", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "user", to: "app", label: "POST /view", title: "조회가 들어온다", detail: "상품 페이지가 열릴 때마다 조회 이벤트를 보낸다." },
+    { from: "app", to: "redis", label: "HINCRBY", title: "버퍼에 더한다", detail: "Redis가 답하면 이 조회는 버퍼에 들어간 것이다.", payload: "HINCRBY views:pending 1001 1\n(integer) 3" },
+    { from: "app", to: "user", label: "200 OK", title: "여기서 성공이라고 답한다", detail: "DB에는 아직 없다. 이 순간부터 잃는 창이 열린다." },
+    { from: "redis", to: "redis", label: "AOF write()", title: "AOF를 켰다면 파일에 적는다", detail: "fsync는 1초마다라서 전원이 나가면 그 1초분은 위험하다." },
+    { from: "app", to: "redis", label: "RENAME", title: "플러셔가 묶음을 떼어 낸다", detail: "새 조회는 새 버퍼에 쌓인다.", payload: "RENAME views:pending views:flushing" },
+    { from: "app", to: "pg", label: "COMMIT", title: "DB에 한 번에 더한다", detail: "묶음 이름과 함께 한 트랜잭션으로 반영한다. 이제 창이 닫힌다." },
+    { from: "app", to: "redis", label: "DEL", title: "떼어 낸 묶음을 지운다", detail: "커밋 뒤에 지운다. 순서를 바꾸면 커밋 실패 시 잃는다.", payload: "DEL views:flushing" },
+  ]}
+/>
+
+<Callout kind="warning" title="잃으면 안 되는 쓰기에 write-back을 쓰지 않는다">
+주문, 결제, 포인트, 재고 차감처럼 "성공했다고 답했는데 사라지면" 돈이나 신뢰가 걸린 쓰기는 DB 커밋을 기다린 뒤에 답한다. AOF와 복제를 켜도 Redis는 그런 데이터의 유일한 원본으로 설계된 저장소가 아니다. 이런 쓰기를 빠르게 하고 싶다면 캐시가 아니라 DB 쪽(배치 커밋, 파티셔닝)이나 [트랜잭셔널 아웃박스](/posts/transactional-outbox) 같은 구조에서 답을 찾는다.
+</Callout>
+
+## 운영자가 고친 가격이 되돌아간다
+
+조회수는 더하기라서 순서가 바뀌어도 합계는 같다. 가격처럼 "덮어쓰는" 값은 다르다. write-back으로 가격을 받는 시스템에서, 플러셔가 돌기 전에 누군가 DB를 직접 고치면 어떻게 될까.
+
+<SequenceDiagram
+  caption="늦게 내려온 캐시 값이 운영자의 수정을 덮는다"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "redis", label: "Redis" },
+    { id: "ops", label: "운영자" },
+    { id: "pg", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "redis", label: "HSET 37000", title: "앱이 캐시에 쓴다", detail: "읽어 온 버전 1에 1을 더해 버전 2로 적는다. DB는 아직 39000이다.", payload: "HSET wb:product:1001 price 37000 version 2" },
+    { from: "ops", to: "pg", label: "UPDATE 35000", title: "운영자가 DB를 직접 고친다", detail: "관리 화면이나 SQL로 바로 고쳤다. DB 버전도 2가 된다." },
+    { from: "redis", to: "pg", label: "flush 37000", title: "플러셔가 더티 키를 내려 보낸다", detail: "조건 없이 덮어쓰면 운영자의 35000이 37000으로 바뀐다." },
+    { from: "pg", to: "pg", label: "version < 2 ?", title: "버전 조건이 있으면 막힌다", detail: "DB 버전이 이미 2라서 0행이 바뀐다. 플러셔는 졌다는 걸 안다." },
+    { from: "app", to: "redis", label: "DEL", title: "진 쪽은 캐시를 버린다", detail: "다음 읽기가 DB의 35000을 가져온다. 37000 수정은 충돌로 기록한다." },
+  ]}
+/>
+
+실제로 돌린 결과다. 위는 조건 없이 덮어쓴 경우, 아래는 `WHERE version < $2`를 붙인 경우다.
+
+```text
+--- 그냥 덮어쓰기
+앱이 캐시에 37000 → DB 39000 (v1)  캐시 37000 (v2)
+운영자가 DB에 35000 → DB 35000 (v2)  캐시 37000 (v2)
+플러셔 (1행 반영) → DB 37000 (v2)  캐시 37000 (v2)
+--- 버전 조건
+앱이 캐시에 37000 → DB 39000 (v1)  캐시 37000 (v2)
+운영자가 DB에 35000 → DB 35000 (v2)  캐시 37000 (v2)
+플러셔 (0행 반영) → DB 35000 (v2)  캐시 -
+```
+
+```sql
+-- 플러셔가 쓰는 조건부 UPDATE. 캐시가 들고 있는 버전이 DB보다 새로울 때만 반영한다
+UPDATE products
+   SET price = $1, version = $2
+ WHERE id = 1001
+   AND version < $2;   -- 0행이면 누군가 먼저 고쳤다
+```
+
+버전 조건은 덮어쓰기를 막아 줄 뿐 충돌을 풀어 주지는 않는다. 위 결과에서 앱이 받은 37000 수정은 어디에도 반영되지 않았다. 사용자에게는 이미 성공이라고 답했으니, 충돌을 로그나 알림으로 남기고 누가 이겨야 하는지 정책을 정해야 한다. 이게 [낙관적 잠금](/posts/optimistic-locking)과 같은 구조다. 결국 덮어쓰는 값에 write-back을 쓰려면 "DB를 고치는 길은 캐시 하나뿐"이라는 규칙을 지키거나, 지는 쪽을 감당할 수 있어야 한다. 대부분은 그 비용이 아까워서 가격 같은 값에는 write-back을 쓰지 않는다.
+
+여러 플러셔가 같은 키를 나눠 처리할 때도 같은 일이 생긴다. 플러셔 A가 버전 2를, B가 버전 3을 들고 있는데 B가 먼저 커밋하면, 조건이 없을 때 A의 옛 값이 마지막에 남는다. 키 단위로 한 플러셔에만 맡기거나(키 해시로 나누기) 버전 조건을 건다.
+
+## write-around로 쓰고 바로 읽으면
+
+write-around는 DB에만 쓴다. 캐시를 지우는 짝(cache-aside)과 함께 쓰는 게 보통인데, 정말로 캐시를 건드리지 않으면 어떻게 되는지 TTL 3초로 확인했다. 가격을 35,000원으로 고친 직후부터 1초마다 읽는다.
+
+```text
+읽기 {"from":"DB","price":39000}
++0s 읽기 {"from":"캐시","price":39000}
++1s 읽기 {"from":"캐시","price":39000}
++2s 읽기 {"from":"캐시","price":39000}
++3s 읽기 {"from":"DB","price":35000}
+```
+
+DB는 이미 35,000원인데 TTL이 끝날 때까지 캐시가 39,000원을 준다. 가장 곤란한 사람은 방금 가격을 고친 운영자다. 저장 버튼을 누르고 화면을 다시 열었는데 옛 가격이 보이면 버그로 신고한다. 이걸 "자기가 쓴 걸 자기가 읽기"(read-your-writes) 보장이 깨졌다고 한다. 일관성 모델 쪽 설명은 [CAP와 일관성 글](/posts/db-consistency-cap)에 있다.
+
+막는 방법은 세 가지 정도다.
+
+- 쓰고 나서 캐시를 지운다. [캐시 전략 글](/posts/caching-strategies)의 기본 조합이고, 지운 직후 옛 값이 다시 들어오는 경쟁도 그 글에서 다룬다.
+- 방금 쓴 사람만 몇 초 동안 캐시를 건너뛴다. 세션에 "마지막으로 쓴 시각"을 두고, 그로부터 TTL 안쪽이면 DB에서 읽는다. 다른 사용자에게는 몇 초 늦은 값이 보여도 된다는 판단이다.
+- 이 데이터는 원래 그렇게 늦어도 된다고 정한다. 대량 입력, 로그, 통계처럼 쓰고 한참 뒤에 읽는 데이터에서 write-around가 빛나는 이유다. 쓸 때 캐시를 채우지 않으니 한 번도 안 읽힐 값이 메모리를 차지하지 않는다.
+
+## write-through도 순서를 틀리면 없는 값을 보여 준다
+
+write-through는 "캐시가 늘 DB와 같다"가 장점인데, 그건 DB를 먼저 쓸 때 이야기다. 캐시를 먼저 쓰고 DB가 거절하면 어떻게 되나. 가격 −1,000원을 넣어 `CHECK (price >= 0)`에 걸리게 했다.
+
+```js
+await redis.set(key, JSON.stringify({ price: -1000 }), { EX: 3 }); // 캐시 먼저
+await db.query("UPDATE products SET price = -1000 WHERE id = 1001");  // DB가 거절한다
+```
+
+```text
+읽기 {"from":"DB","price":39000}
+DB 거절: new row for relation "products" violates check constraint "products_price_check"
++0s 읽기 {"from":"캐시","price":-1000}
++1s 읽기 {"from":"캐시","price":-1000}
++2s 읽기 {"from":"캐시","price":-1000}
++3s 읽기 {"from":"DB","price":39000}
+```
+
+DB에 한 번도 존재한 적 없는 가격이 3초 동안 모든 사용자에게 보였다. 제약 조건 위반뿐 아니라 트랜잭션 롤백, 데드락으로 인한 재시도, 타임아웃 모두 같은 결과를 낸다. 그래서 write-through는 DB 커밋이 끝난 뒤에 캐시에 쓴다. 커밋 뒤 캐시 쓰기가 실패하면 그 키를 지우고(지우기도 실패하면 TTL이 안전망이다), 동시에 두 요청이 같은 키를 쓸 때 캐시 쓰기 순서가 커밋 순서와 달라지는 문제는 [캐시 전략 글](/posts/caching-strategies)의 "고칠 때 캐시를 지울까, 같이 고칠까"에서 다룬다. 실무에서 write-through 대신 "DB 커밋 뒤 삭제"를 더 많이 쓰는 이유가 그 경쟁이다.
+
+## 데이터의 성격으로 고른다
+
+지금까지 본 걸 데이터 종류에 대 보면 이렇다. 그림의 화살표는 "이 데이터는 이 방식으로"를 뜻한다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="잃어도 되는가, 덮어쓰는가로 나눈다"
+  nodes={[
+    { id: "views", label: "조회수·좋아요", sub: "더하기, 조금 잃어도 됨", x: 100, y: 40, w: 160 },
+    { id: "cart", label: "장바구니", sub: "잃으면 불편", x: 100, y: 120, w: 160 },
+    { id: "price", label: "상품 가격", sub: "덮어쓰기", x: 100, y: 200, w: 160 },
+    { id: "money", label: "주문·잔액", sub: "잃으면 안 됨", x: 100, y: 270, w: 160 },
+    { id: "wb", label: "write-back", x: 310, y: 40, w: 130 },
+    { id: "wt", label: "write-through", x: 310, y: 120, w: 130 },
+    { id: "wa", label: "DB 후 삭제", x: 310, y: 200, w: 130 },
+    { id: "db", label: "DB만, 캐시 X", x: 310, y: 270, w: 130 },
+  ]}
+  edges={[
+    { from: "views", to: "wb" },
+    { from: "cart", to: "wt" },
+    { from: "price", to: "wa" },
+    { from: "money", to: "db" },
+  ]}
+/>
+
+조회수, 좋아요 수, 재생 횟수처럼 더하기로만 바뀌고 몇 건 틀려도 아무도 모르는 숫자가 write-back이 가장 잘 맞는 곳이다. 합치기 이득이 크고, 더하기는 순서가 바뀌어도 결과가 같다. 버퍼는 앱 메모리보다 Redis에 두고, `RENAME`이나 `GETDEL`로 떼어 내고, 묶음 이름으로 두 번 더하기를 막는다.
+
+장바구니는 쓰고 곧바로 읽는다. 담고 나서 장바구니 아이콘의 숫자가 바로 바뀌어야 한다. write-through가 자연스럽다. 아예 Redis를 장바구니의 원본으로 쓰고(AOF와 복제를 켜고) 주문할 때 DB로 옮기는 설계도 흔하다. 이건 캐시라기보다 저장소를 하나 더 둔 것이니, 잃었을 때 사용자 경험이 어떤지를 기준으로 고른다.
+
+상품 가격, 프로필처럼 덮어쓰는 값이고 운영 도구나 배치처럼 고치는 길이 여럿이면, DB를 먼저 커밋하고 캐시를 지운다. 앞의 두 실험(운영자 덮어쓰기, 캐시 먼저 쓰기)이 다른 방식의 위험을 보여 준다.
+
+주문, 결제, 잔액은 캐시로 쓰기를 빠르게 하지 않는다. 읽기 캐시를 두더라도 결제 직전에는 DB에서 다시 확인한다.
+
+## 운영 중에 보이는 신호
+
+write-back을 운영하면 문제가 조용히 쌓인다. 에러가 아니라 숫자가 조금씩 어긋나는 모양으로 나타난다. 이런 증상이 보이면 다음을 본다.
+
+배포할 때마다 조회수가 조금씩 빈다면, 버퍼가 앱 메모리에 있고 종료 시 flush가 없거나 유예 시간 안에 못 끝나는 것이다. `SIGTERM` 처리 코드와 파드의 `terminationGracePeriodSeconds`를 본다.
+
+버퍼가 계속 커진다면 플러셔가 멈췄거나 DB 쓰기가 밀리는 것이다. 버퍼 크기와 떼어 낸 묶음이 남아 있는지를 본다.
+
+```bash
+redis-cli -p 17800 HLEN views:pending      # 아직 내려 보내지 않은 키 수. 계속 늘면 플러셔를 의심한다
+redis-cli -p 17800 EXISTS views:flushing   # 1이 오래 유지되면 내려 보내다 멈춘 묶음이 있다
+redis-cli -p 17800 CONFIG GET appendonly   # 버퍼가 있는 Redis에 영속성이 켜져 있는가
+```
+
+```text
+0
+0
+appendonly
+yes
+```
+
+운영자가 고친 값이 몇 초 뒤에 되돌아간다면, 덮어쓰는 값에 write-back이 걸려 있고 버전 조건이 없는 것이다. 앞 절의 조건부 `UPDATE`로 바꾸고 충돌 로그를 남긴다.
+
+DB에 없는 값(음수 가격, 롤백된 상태)이 잠깐 보인다면, write-through의 순서가 뒤집혔다. 캐시를 쓰는 코드가 트랜잭션 커밋 전에 실행되는지 본다. ORM의 트랜잭션 블록 안에서 캐시를 쓰면 커밋 전에 실행되기 쉽다. 커밋 뒤 훅(after-commit)으로 옮긴다.
+
+## 직접 짜 보는 write-back 버퍼
+
+조회 이벤트를 버퍼에 모으고, `flush`에서 DB로 내려 보내고, `crash`에서 버퍼를 잃는 함수를 짜 본다. 반환값의 `writes`는 DB에 쓴 횟수(내려 보낼 때 키 하나당 1번), `lost`는 crash로 잃은 조회 수다.
+
+<CodePlayground
+  caption="write-back 버퍼: 합치기와 잃는 창"
+  functionName="writeBack"
+  initialCode={`function writeBack(ops) {
+  // ops: ["view", id] | ["flush"] | ["crash"]
+  const db = {};          // DB에 반영된 조회수
+  const pending = new Map(); // 아직 내려 보내지 않은 조회수
+  let writes = 0;
+  let lost = 0;
+  for (const [op, id] of ops) {
+    // 여기를 채운다
+  }
+  return { db, writes, lost };
+}`}
+  solution={`function writeBack(ops) {
+  const db = {};
+  const pending = new Map();
+  let writes = 0;
+  let lost = 0;
+  for (const [op, id] of ops) {
+    if (op === "view") {
+      pending.set(id, (pending.get(id) ?? 0) + 1); // 같은 키는 숫자만 오른다
+    } else if (op === "flush") {
+      for (const [k, n] of pending) {
+        db[k] = (db[k] ?? 0) + n; // 키 하나에 DB 쓰기 한 번
+        writes++;
+      }
+      pending.clear();
+    } else if (op === "crash") {
+      for (const n of pending.values()) lost += n; // 내려 보내지 못한 만큼 잃는다
+      pending.clear();
+    }
+  }
+  return { db, writes, lost };
+}`}
+  tests={[
+    { label: "세 번 조회, 한 번 flush", args: [[["view", "1001"], ["view", "1001"], ["view", "1002"], ["flush"]]], expected: { db: { "1001": 2, "1002": 1 }, writes: 2, lost: 0 } },
+    { label: "flush 두 번에 걸쳐", args: [[["view", "1001"], ["view", "1001"], ["view", "1001"], ["flush"], ["view", "1001"], ["flush"]]], expected: { db: { "1001": 4 }, writes: 2, lost: 0 } },
+    { label: "flush 사이에 crash", args: [[["view", "1001"], ["flush"], ["view", "1001"], ["view", "1002"], ["crash"], ["view", "1002"], ["flush"]]], expected: { db: { "1001": 1, "1002": 1 }, writes: 2, lost: 2 } },
+    { label: "빈 버퍼 flush", args: [[["flush"], ["flush"]]], expected: { db: {}, writes: 0, lost: 0 } },
+    { label: "flush 전에 crash", args: [[["view", "1001"], ["view", "1002"], ["view", "1001"], ["crash"]]], expected: { db: {}, writes: 0, lost: 3 } },
+  ]}
+/>
+
+세 번째 테스트가 이 글의 요약이다. 조회 다섯 건 중 DB에 남은 건 두 건, crash 사이에 버퍼에 있던 두 건은 사라졌고, 쓰기 횟수는 조회 수보다 적다. 합치기와 잃는 창은 같은 버퍼에서 나온다.
+
+## 빠른 쓰기의 값은 잃는 창으로 치른다
+
+write-through와 write-around는 DB 커밋을 기다리니 느리지만 성공이라고 답한 쓰기는 남는다. write-back은 DB를 기다리지 않아 열 배 안팎으로 빠르고 같은 키의 쓰기를 하나로 합치지만, 성공 응답과 DB 반영 사이에 잃는 창이 생긴다. 그 창의 크기는 flush 간격과 버퍼를 어디에 두느냐로 정해진다. 그래서 고르는 기준은 속도가 아니라 "이 쓰기를 잃으면 누가 알아채나"와 "이 값은 더하기인가 덮어쓰기인가"다. 캐시를 언제 지울지는 [캐시 무효화 글](/posts/cache-invalidation)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### write-through, write-back, write-around의 차이를 설명해 주세요.
+
+성공을 돌려주기 전에 무엇까지 끝내 두느냐가 다르다. write-through는 DB와 캐시 양쪽에 쓰고 답해서 캐시가 늘 최신이다. write-back은 캐시에만 쓰고 바로 답한 뒤 DB에는 나중에 모아서 쓴다. write-around는 DB에만 쓰고 캐시는 건드리지 않거나 지운다. 측정해 보면 write-through와 write-around는 둘 다 DB 커밋을 기다리니 지연이 비슷하고, write-back만 크게 빠르다.
+
+### write-back은 왜 빠르고, 대가는 무엇인가요?
+
+디스크에 커밋 기록이 닿기를 기다리지 않고, 같은 키의 쓰기를 버퍼에서 하나로 합치기 때문이다. 로컬 실험에서 쓰기 지연(p50)이 열 배 안팎으로 줄었고, 조회 2만 건이 DB `UPDATE` 9번으로 줄었다. 대가는 성공 응답과 DB 반영 사이의 유실 창이다. 그 사이 버퍼가 사라지면 사용자는 성공을 받았는데 데이터가 없다. 그래서 조회수처럼 잃어도 되는 더하기 값에만 쓴다.
+
+### write-back 버퍼를 비울 때 데이터를 잃지 않으려면 어떻게 하나요?
+
+읽기와 비우기를 원자적으로 해야 한다. `GET` 후 `SET 0`처럼 나눠 하면 그 사이 들어온 증가분이 덮여 사라진다. 키 하나면 `GETDEL`, 여러 키면 해시 하나에 모았다가 `RENAME`으로 통째로 떼어 내면 이후 쓰기는 새 버퍼에 쌓인다. 떼어 낸 묶음은 DB 커밋이 끝난 뒤에 지워서 커밋 전에 죽어도 다시 처리할 수 있게 한다.
+
+### 그러면 커밋 뒤에 죽으면 두 번 반영되지 않나요?
+
+그렇다. 커밋은 됐는데 묶음을 지우기 전에 죽으면 재시작한 플러셔가 같은 묶음을 또 더한다. 묶음마다 이름을 붙이고 그 이름을 같은 DB 트랜잭션에서 기본 키가 있는 테이블에 넣어 두면, 두 번째는 충돌로 건너뛸 수 있다. 최소 한 번 전달에 멱등한 반영을 더하는 방식이고, 메시지 소비자의 중복 처리와 같은 구조다.
+
+### Redis에 AOF를 켜면 write-back이 안전해지나요?
+
+프로세스가 죽는 경우에는 거의 지켜 준다. `appendfsync everysec`이어도 쓰기마다 `write()`는 하므로 커널 페이지 캐시에 남은 내용은 디스크로 간다. 하지만 서버 전원이나 커널이 죽으면 마지막 `fsync` 뒤 최대 약 1초분을 잃는다. `always`로 바꾸면 쓰기마다 `fsync`라 그만큼 느려져 write-back을 쓰는 이유가 줄어든다. 그리고 앱 메모리에 버퍼를 두면 AOF와 상관없이 앱이 죽을 때 잃는다.
+
+### 가격 같은 값에 write-back을 쓰면 어떤 문제가 생기나요?
+
+덮어쓰는 값은 순서가 결과를 바꾼다. 플러셔가 돌기 전에 운영자가 DB를 직접 고치면, 늦게 내려온 캐시 값이 그 수정을 덮는다. `WHERE version < $2` 같은 조건으로 덮어쓰기는 막을 수 있지만, 그러면 캐시 쪽 수정이 반영되지 못하고 충돌로 남는다. 사용자에게는 이미 성공이라고 답했으니 충돌 정책이 필요하다. 그래서 보통 덮어쓰는 값은 DB 커밋 뒤 캐시 삭제로 처리한다.
+
+### write-through에서 캐시와 DB 중 무엇을 먼저 쓰나요?
+
+DB를 먼저 커밋하고 캐시에 쓴다. 캐시를 먼저 쓰고 DB가 제약 조건이나 롤백으로 거절하면, DB에 한 번도 없던 값이 TTL 동안 모두에게 보인다. 커밋 뒤 캐시 쓰기가 실패하면 키를 지우고 TTL을 안전망으로 둔다. 동시 쓰기에서 캐시 쓰기 순서가 커밋 순서와 엇갈리는 문제 때문에 실무에서는 갱신 대신 삭제를 더 많이 고른다.
+
+### write-around는 언제 쓰고, 쓰고 바로 읽을 때 문제는 없나요?
+
+쓰고 한동안 안 읽히는 데이터(대량 입력, 로그)에 맞는다. 쓰기가 캐시를 채우지 않아서 안 읽힐 값이 메모리를 차지하지 않는다. 대신 캐시를 지우지 않으면 쓴 사람도 TTL 동안 옛 값을 읽어 read-your-writes가 깨진다. 쓴 뒤 캐시를 지우거나, 방금 쓴 사용자만 잠깐 DB에서 읽게 해서 막는다.

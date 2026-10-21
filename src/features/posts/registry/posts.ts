@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "caching-concepts-map",
+    title: "캐시 개념 지도: 히트부터 핫 키까지 12가지",
+    summary: "상품 페이지 하나를 따라가며 히트와 미스, TTL과 상한 데이터, LRU 축출, cache-aside, 쓰기 방식, 무효화, CDN, 스탬피드, 핫 키를 배우는 순서대로 잇는다. 증상에서 개념과 해결책을 거꾸로 찾는 표와 깊게 다룬 글로 가는 길도 함께 둔다.",
+    topic: "programming/system-design",
+    tags: ["Cache", "Redis", "CDN", "System Design", "Performance"],
+    date: "2026-10-23",
+    keywords: ["캐시 개념 지도", "콜드 미스", "평균 메모리 접근 시간"],
+  },
+  {
+    slug: "cache-write-policies",
+    title: "캐시 쓰기 방식: write-through, write-back, write-around를 직접 재 보기",
+    summary: "세 쓰기 방식을 같은 상품 테이블에 붙여 쓰기 지연을 재고, write-back 프로세스와 Redis를 죽여 잃는 양을 센다. 쓰기 합치기, 버퍼를 비울 때 사라지는 증가분, 두 번 반영, 운영자 수정이 덮이는 순서 문제, write-around의 쓰고 바로 읽기까지 다룬다.",
+    topic: "programming/system-design",
+    tags: ["Cache", "Redis", "PostgreSQL", "System Design", "Performance"],
+    date: "2026-10-23",
+    keywords: ["write-back", "write-around", "write coalescing"],
+  },
+  {
     slug: "reverse-proxy-lb-api-gateway",
     title: "리버스 프록시, 로드 밸런서, API 게이트웨이를 한 줄로 세우기",
     summary: "nginx, HAProxy, 직접 짠 게이트웨이를 한 컴퓨터에 겹쳐 띄우고 같은 요청이 층마다 어떻게 바뀌고 어디서 막히는지 본다. 실제 서비스에서 층을 쌓고 고르는 기준과, 502·503·504·429를 만든 층을 가려내는 법까지 다룬다.",

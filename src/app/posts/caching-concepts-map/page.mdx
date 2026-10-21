@@ -1,0 +1,318 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("caching-concepts-map");
+
+캐시 이야기를 하다 보면 단어가 한꺼번에 쏟아진다. 히트율, TTL, LRU, cache-aside, write-back, 무효화, CDN, 스탬피드, 핫 키, 상한 데이터. 하나하나는 어렵지 않은데, 어떤 순서로 연결되는지 모르면 면접에서 "캐시 써 보셨어요?"라는 질문 하나에 이 단어들이 뒤죽박죽 나온다.
+
+이 글은 그 12개를 배우는 순서대로 한 줄에 꿴다. 예제는 처음부터 끝까지 상품 상세 페이지 하나다. 1001번 무선 이어폰 페이지가 열릴 때 캐시가 어디서 어떻게 일하는지를 따라가면 12개가 차례로 나온다. 개념마다 짧게만 설명하고, 깊은 내용은 그 주제를 다룬 글로 넘긴다.
+
+| 순서 | 개념 | 한 줄로 | 깊게 다룬 글 |
+|---|---|---|---|
+| 1·2 | 히트, 미스 | 캐시에 있었나 없었나 | 이 글, [캐시 계층 설계](/posts/sd-cache-and-cdn-tier) |
+| 3·4 | TTL, 상한 데이터 | 얼마나 믿을까, 믿은 결과 | [캐시 전략](/posts/caching-strategies), [HTTP 캐시](/posts/http-caching-cdn) |
+| 5 | LRU 축출 | 꽉 차면 무엇을 버리나 | [Redis 메모리와 축출](/posts/redis-memory-eviction) |
+| 6 | cache-aside | 누가 캐시를 채우나 | [캐시 전략](/posts/caching-strategies) |
+| 7·8 | write-through, write-back | 쓰기를 어디로 먼저 | [캐시 쓰기 방식](/posts/cache-write-policies) |
+| 9 | 무효화 | 바뀐 값을 어떻게 알리나 | [캐시 무효화](/posts/cache-invalidation) |
+| 10 | CDN | 사용자 가까이에 두기 | [엣지 캐싱](/posts/edge-caching), [CDN 엣지](/posts/cdn-edge-anycast) |
+| 11·12 | 스탬피드, 핫 키 | 요청이 한곳에 몰릴 때 | [캐시 전략](/posts/caching-strategies) |
+
+## 상품 페이지 하나에 캐시가 네 겹이다
+
+먼저 지도를 그린다. 상품 페이지를 열면 이미지와 JS는 CDN에서, 상품 정보 API는 앱 서버를 거쳐 Redis나 DB에서 온다. 아래 그림에서 다음을 누르면 요청이 어디까지 가는지 단계별로 보인다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="상품 1001 페이지의 요청 경로"
+  zones={[
+    { id: "edge", label: "CDN 엣지", x: 90, y: 20, w: 90, h: 210, tone: "edge" },
+    { id: "dc", label: "데이터센터", x: 190, y: 20, w: 200, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "br", label: "브라우저", sub: "HTTP 캐시", x: 45, y: 125, icon: "client", w: 80 },
+    { id: "cdn", label: "CDN", sub: "s-maxage", x: 135, y: 125, icon: "router", w: 80 },
+    { id: "app", label: "앱 서버", sub: "로컬 캐시", x: 240, y: 125, icon: "server", w: 84 },
+    { id: "redis", label: "Redis", sub: "TTL 300s", x: 340, y: 70, icon: "db", w: 84 },
+    { id: "db", label: "PostgreSQL", sub: "원본", x: 340, y: 185, icon: "db", w: 90 },
+  ]}
+  links={[
+    { from: "br", to: "cdn" },
+    { from: "cdn", to: "app" },
+    { from: "app", to: "redis" },
+    { from: "app", to: "db" },
+  ]}
+  steps={[
+    { path: ["br", "cdn"], packet: "img.jpg", title: "이미지는 CDN에서 끝난다", detail: "엣지에 사본이 있으면 히트다. 데이터센터까지 가지 않는다." },
+    { path: ["br", "cdn", "app"], packet: "GET /api", title: "상품 API는 오리진까지 간다", detail: "가격과 재고가 들어 있어 엣지에 오래 두지 않는다." },
+    { path: ["app", "redis"], packet: "GET", title: "Redis 히트", detail: "cache:product:1001이 있으면 1ms 안쪽으로 답한다." },
+    { path: ["app", "redis"], packet: "(nil)", blocked: true, title: "Redis 미스", detail: "키가 없거나 TTL이 지났다. 원본으로 가야 한다." },
+    { path: ["app", "db"], packet: "SELECT", title: "DB에서 읽어 채운다", detail: "30ms 걸리는 조회를 하고 결과를 Redis에 넣는다. cache-aside다." },
+  ]}
+/>
+
+네 겹 모두 같은 질문에 답한다. 이 사본을 언제까지 믿을까, 꽉 차면 무엇을 버릴까, 원본이 바뀌면 어떻게 알까. 아래 12개는 그 질문을 순서대로 나눈 것이다.
+
+## 1. 히트와 2. 미스
+
+캐시에서 찾으면 히트, 없어서 원본까지 가면 미스다. 미스에는 이유가 있다. 처음이라 아직 없다(콜드 미스), 있었는데 수명이 끝났다(만료), 자리가 모자라 쫓겨났다(축출). 미스가 늘었을 때 이 셋 중 무엇인지부터 가르면 원인이 반쯤 나온다.
+
+Redis로 직접 보면 이렇다. 내가 띄운 Redis(포트 17800)에서 통계를 지우고 시작했다.
+
+```bash
+redis-cli -p 17800 CONFIG RESETSTAT                                  # 통계를 0으로
+redis-cli -p 17800 GET cache:product:1001                            # 처음이라 없다 → 미스
+redis-cli -p 17800 SET cache:product:1001 '{"price":39000}' EX 300   # DB에서 읽었다 치고 넣는다
+redis-cli -p 17800 GET cache:product:1001                            # 이번엔 있다 → 히트
+redis-cli -p 17800 TTL cache:product:1001                            # 남은 수명(초)
+redis-cli -p 17800 INFO stats | grep -E '^keyspace_(hits|misses)'
+```
+
+```text
+(nil)
+OK
+"{\"price\":39000}"
+(integer) 298
+keyspace_hits:2
+keyspace_misses:1
+```
+
+`GET`은 두 번 했는데 히트가 2다. `TTL`도 키를 찾아봤으니 히트로 센다. Redis의 히트율은 서버 전체에서 키를 찾아본 모든 명령의 합이라, 캐시 조회만의 히트율을 알고 싶으면 응용 쪽에서 따로 센다. 이 함정은 [캐시 전략 글](/posts/caching-strategies)의 "캐시가 일하는지 숫자로 본다"에서도 짚는다.
+
+히트율이 중요한 이유는 평균 응답 시간이 미스 쪽에 끌려가기 때문이다. 히트가 1ms, 미스가 50ms라면 평균은 이렇게 된다.
+
+```text
+히트율 80% → 0.8 × 1 + 0.2 × 50 = 10.8 ms
+히트율 95% → 0.95 × 1 + 0.05 × 50 = 3.45 ms
+히트율 99% → 0.99 × 1 + 0.01 × 50 = 1.49 ms
+```
+
+95%에서 99%로 4%p 오르면 평균은 절반 이하가 되고 DB로 가는 요청은 다섯 분의 일이 된다. CPU 캐시에서 평균 메모리 접근 시간(AMAT)을 계산하는 식과 똑같다. 숫자를 늘 이 식으로 읽는다.
+
+## 3. TTL과 4. 상한 데이터
+
+TTL(Time To Live)은 사본에 붙이는 유통기한이다. 위에서 `EX 300`이 5분짜리 TTL이고, 5분이 지나면 Redis가 키를 지운다. 유통기한이 지나기 전이라도 원본이 바뀌었을 수 있다. 그 사이에 캐시가 내주는 옛 값이 상한 데이터(stale data)다.
+
+둘은 한 쌍이다. TTL을 길게 잡으면 히트율이 오르고 상한 데이터를 오래 보여 준다. 짧게 잡으면 반대다. 그래서 TTL은 "이 데이터가 최악의 경우 얼마나 낡아도 괜찮은가"로 정한다. 가격은 수 분, 인기 순위는 수십 초, 카테고리 목록은 수십 분처럼 데이터마다 다르다. 같은 시각에 채운 키가 같은 시각에 만료되지 않게 무작위 값(지터)을 섞는 것까지 [캐시 전략 글](/posts/caching-strategies)의 TTL 절에 있다.
+
+상한 데이터가 늘 나쁜 건 아니다. HTTP에는 상한 사본을 일부러 내주면서 뒤에서 새로 받아 오는 `stale-while-revalidate`가 있다. 사용자는 기다리지 않고, 원본은 한 번만 일한다. 규칙은 [HTTP 캐시 글](/posts/http-caching-cdn)에, 엣지에서 어떻게 쓰는지는 [엣지 캐싱 글](/posts/edge-caching)에 있다.
+
+## 5. 꽉 차면 LRU로 버린다
+
+메모리는 한정돼 있다. 꽉 차면 무언가를 버려야 하고(축출, eviction), 가장 흔한 기준이 LRU(Least Recently Used), 가장 오래 안 쓴 것부터 버리기다. 최근에 쓴 건 곧 또 쓸 가능성이 높다는 가정이다.
+
+용량이 3인 캐시에 상품 번호가 차례로 들어온다. 아래 그림에서 다음을 누르면 한 칸씩 진행되고, 오른쪽 상자의 왼쪽 끝이 가장 오래 안 쓴 키다.
+
+<AlgoTrace
+  caption="용량 3인 LRU: 왼쪽 끝이 다음에 버려질 키"
+  memoryLabel="캐시 (오래된 → 최근)"
+  cells={["1001", "1002", "1001", "1003", "1004", "1001", "1002", "1001"]}
+  steps={[
+    { pointer: 0, memory: ["1001"], caption: "미스. 비어 있으니 넣는다." },
+    { pointer: 1, memory: ["1001", "1002"], caption: "미스. 아직 자리가 있다." },
+    { pointer: 2, found: [2], memory: ["1002", "1001"], caption: "히트. 1001이 가장 최근 쪽으로 옮겨 간다." },
+    { pointer: 3, memory: ["1002", "1001", "1003"], caption: "미스. 이제 꽉 찼다." },
+    { pointer: 4, memory: ["1001", "1003", "1004"], caption: "미스. 가장 오래 안 쓴 1002를 버리고 1004를 넣는다." },
+    { pointer: 5, found: [5], memory: ["1003", "1004", "1001"], caption: "히트. 1001은 자주 쓰여서 살아남았다." },
+    { pointer: 6, memory: ["1004", "1001", "1002"], caption: "미스. 버렸던 1002가 다시 와서 1003이 밀려난다." },
+    { pointer: 7, found: [2, 5, 7], memory: ["1004", "1002", "1001"], caption: "히트. 8번 중 3번 히트, 37.5%다." },
+  ]}
+/>
+
+Redis는 `maxmemory`를 넘으면 정책(`maxmemory-policy`)대로 키를 버린다. 내 Redis에 2MB 상한과 `allkeys-lru`를 걸고 700바이트짜리 값 3,000개를 넣었다.
+
+```bash
+redis-cli -p 17800 CONFIG SET maxmemory 2mb
+redis-cli -p 17800 CONFIG SET maxmemory-policy allkeys-lru
+# cache:product:1 ~ 3000에 700바이트 값을 넣은 뒤
+redis-cli -p 17800 DBSIZE
+redis-cli -p 17800 INFO stats | grep evicted_keys
+```
+
+```text
+(integer) 1287
+evicted_keys:1743
+```
+
+넣은 3,000개 중 1,287개만 남고 1,743개가 쫓겨났다. `evicted_keys`가 계속 오르면 아직 쓸 키까지 버리고 있다는 뜻이고, 히트율이 떨어지는 흔한 원인이다. Redis의 LRU는 모든 키를 줄 세우지 않고 몇 개를 뽑아 그중 가장 오래된 걸 버리는 근사 방식이다. 기본 정책은 `noeviction`이라 꽉 차면 쓰기가 실패한다. 이 둘은 [Redis 메모리 글](/posts/redis-memory-eviction)에서 다룬다. LRU를 `Map`으로 직접 짜는 코드는 [캐시 전략 글](/posts/caching-strategies)에 있다.
+
+## 6. 누가 채우나: cache-aside
+
+지금까지 캐시를 누가 채웠는지는 말하지 않았다. 가장 흔한 답이 cache-aside다. 앱이 캐시를 먼저 보고, 미스면 DB에서 읽어 TTL과 함께 넣는다. 실제로 요청된 것만 캐시에 들어가고, Redis가 죽어도 DB로 서비스할 수 있다. 첫 요청은 늘 느리고, 이 로직이 앱 코드 곳곳에 퍼진다. 캐시 층이 대신 채우는 read-through와의 차이까지 [캐시 전략 글](/posts/caching-strategies) 첫 절에 있다.
+
+## 7. write-through와 8. write-back
+
+읽기를 정했으니 쓰기다. 1001번 가격을 고치거나 조회수를 올릴 때 캐시와 DB 중 어디에 먼저 쓰나.
+
+write-through는 DB와 캐시 양쪽에 쓴 뒤에 성공을 돌려준다. 캐시가 늘 최신이지만 쓰기가 DB만큼 느리다. write-back은 캐시에만 쓰고 바로 성공을 돌려준 뒤, DB에는 나중에 모아서 쓴다. 같은 키의 쓰기가 합쳐져 조회수 2만 건이 DB `UPDATE` 몇 번으로 줄지만, 내려 보내기 전에 버퍼가 사라지면 성공이라고 답한 쓰기를 잃는다. 그래서 조회수 같은 더하기 값에만 쓴다.
+
+쓰기 지연을 재고, 프로세스를 죽여서 잃는 양을 세고, 운영자 수정이 덮이는 장면까지 직접 돌려 본 건 [캐시 쓰기 방식 글](/posts/cache-write-policies)이다. 실무에서 가장 많이 쓰는 건 둘 중 하나가 아니라 세 번째, DB만 고치고 캐시는 지우는 방식(write-around와 cache-aside의 조합)이다.
+
+## 9. 바뀐 값을 알리는 무효화
+
+TTL만 믿으면 가격을 내린 뒤 최대 5분 동안 옛 가격이 보인다. 그래서 바뀐 순간 사본을 지운다. 이게 무효화(invalidation)다.
+
+Redis 키 하나라면 `DEL` 한 줄이다. 어려운 건 사본이 여러 곳에 있다는 점이다. 1001번 가격은 상품 페이지 캐시, 카테고리 목록 캐시, 앱 서버마다 있는 로컬 캐시, CDN에 각각 들어 있다. 하나라도 빠뜨리면 그곳에서 상한 데이터가 나온다. 지운 직후 느린 읽기가 옛 값을 다시 넣는 경쟁도 있다. 태그로 묶어 지우기, 키에 버전을 넣어 지울 필요를 없애기, 변경 이벤트로 알리기는 [캐시 무효화 글](/posts/cache-invalidation)에서 다룬다.
+
+## 10. 사용자 가까이에 두는 CDN
+
+CDN은 전 세계 곳곳의 엣지 서버에 사본을 두는 캐시다. 상품 이미지와 JS 번들처럼 모두에게 같은 파일은 엣지에서 끝나니, 서울 사용자가 미국 오리진까지 갈 필요가 없다. 원리는 앞의 개념과 같다. 엣지에도 히트와 미스가 있고, `Cache-Control: s-maxage`가 엣지의 TTL이며, 퍼지(purge)가 엣지의 무효화다.
+
+엣지만의 문제는 캐시 키다. URL 뒤에 `?utm_campaign=...`이 붙으면 같은 상품 페이지가 다른 사본으로 갈라져 히트율이 떨어진다. 로그인한 사람의 페이지를 공유 캐시에 두면 남의 정보가 보인다. 이건 [엣지 캐싱 글](/posts/edge-caching)에, 사용자가 어떻게 가까운 엣지로 가는지는 [CDN 엣지와 애니캐스트 글](/posts/cdn-edge-anycast)에 있다.
+
+## 11. 만료 순간의 스탬피드와 12. 핫 키
+
+마지막 둘은 요청이 한곳에 몰리는 문제다.
+
+1001번이 타임세일에 걸려 초당 수천 번 읽힌다고 하자. 평소에는 Redis가 다 받아 준다. 그런데 TTL이 끝나는 순간 그 키가 사라지고, 그 순간 들어온 요청 수백 개가 모두 미스를 보고 동시에 DB로 간다. 이게 캐시 스탬피드(thundering herd)다. 아래 그림에서 다음을 누르면 그 순간과 막는 방법이 차례로 나온다.
+
+<SequenceDiagram
+  caption="만료 순간 몰린 미스를 한 요청만 처리하게 한다"
+  actors={[
+    { id: "reqs", label: "요청 수백 개" },
+    { id: "redis", label: "Redis" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "redis", to: "redis", label: "TTL 0", title: "인기 키가 만료된다", detail: "300초가 지나 cache:product:1001이 사라진다." },
+    { from: "reqs", to: "redis", label: "GET ×500", title: "모두 미스를 본다", detail: "같은 순간 들어온 요청들이 전부 (nil)을 받는다." },
+    { from: "reqs", to: "db", label: "SELECT ×500", title: "막지 않으면 DB로 쏟아진다", detail: "같은 쿼리 500개가 동시에 간다. DB CPU가 튀고 응답이 밀린다." },
+    { from: "reqs", to: "redis", label: "SET NX lock", title: "한 요청만 락을 잡는다", detail: "락을 잡은 하나만 DB에 가고 나머지는 잠깐 기다리거나 옛 값을 받는다.", payload: "SET lock:product:1001 1 NX PX 3000" },
+    { from: "reqs", to: "db", label: "SELECT ×1", title: "DB에는 한 번만", detail: "읽어 온 값을 캐시에 넣으면 기다리던 요청들이 히트로 끝난다." },
+  ]}
+/>
+
+핫 키는 만료와 상관없이 평소에도 키 하나에 요청이 몰리는 문제다. Redis Cluster로 노드를 열 대 두어도 키 하나는 노드 하나에 있다. 그 노드의 CPU와 네트워크가 먼저 찬다. 앱 서버에 수 초짜리 로컬 캐시를 두거나, 같은 값을 여러 키로 복제해 무작위로 읽게 해서 나눈다.
+
+스탬피드의 세 가지 방어(락, 요청 합치기, 확률적 조기 갱신)와 핫 키를 찾는 법은 [캐시 전략 글](/posts/caching-strategies)에 있다. CDN에서 같은 키의 미스를 하나로 모으는 방법은 [엣지 캐싱 글](/posts/edge-caching)의 "같은 키의 미스를 하나로 모은다"에 있다.
+
+## 12개가 서로 묶이는 모양
+
+순서대로 봤지만 실제로는 서로 맞물린다. 아래 그림은 개념 사이의 인과다. 화살표는 "이것이 저것을 낳거나 정한다"로 읽는다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="캐시 개념들의 인과 관계"
+  nodes={[
+    { id: "ttl", label: "TTL", sub: "유통기한", x: 80, y: 40, w: 110 },
+    { id: "lru", label: "LRU 축출", sub: "자리 부족", x: 320, y: 40, w: 110 },
+    { id: "miss", label: "미스", sub: "히트율 하락", x: 200, y: 110, w: 110 },
+    { id: "stale", label: "상한 데이터", sub: "옛 값", x: 80, y: 180, w: 110 },
+    { id: "storm", label: "스탬피드", sub: "미스가 몰림", x: 320, y: 180, w: 110 },
+    { id: "inv", label: "무효화", sub: "write 후 삭제", x: 80, y: 280, w: 110 },
+    { id: "hot", label: "핫 키", sub: "요청이 한 키에", x: 320, y: 280, w: 110 },
+  ]}
+  edges={[
+    { from: "ttl", to: "miss", label: "만료" },
+    { from: "lru", to: "miss", label: "축출" },
+    { from: "ttl", to: "stale", label: "길수록" },
+    { from: "inv", to: "stale", label: "줄인다" },
+    { from: "miss", to: "storm", label: "동시에" },
+    { from: "hot", to: "storm", label: "키운다" },
+  ]}
+/>
+
+이렇게 보면 대부분의 캐시 결정은 두 힘의 줄다리기다. 히트율을 올리려면(TTL을 길게, 메모리를 크게) 상한 데이터를 감수하고, 상한 데이터를 줄이려면(TTL을 짧게, 자주 무효화) 미스와 그로 인한 몰림을 감수한다. 쓰기 방식과 CDN은 이 줄다리기를 어느 층에서 하느냐의 문제다.
+
+## 증상으로 거꾸로 찾기
+
+운영 중에는 개념이 아니라 증상이 먼저 온다. 증상에서 개념으로 거꾸로 가는 표다.
+
+| 증상 | 의심할 개념 | 먼저 볼 것 | 고치는 방향 |
+|---|---|---|---|
+| 가격을 고쳤는데 몇 분째 옛 값 | 상한 데이터, 무효화 | `redis-cli TTL 키`, CDN 응답의 `Age` 헤더 | 쓰기 뒤 삭제, 빠진 사본 층 찾기 |
+| 정각마다 DB CPU가 튄다 | TTL(동시 만료), 스탬피드 | 미스 그래프의 주기 | TTL 지터, 채우기 락 |
+| 히트율이 서서히 떨어진다 | LRU 축출 | `INFO stats`의 `evicted_keys` | 메모리 늘리기, 값 줄이기 |
+| 클러스터 노드 하나만 CPU가 높다 | 핫 키 | `redis-cli --hotkeys`(LFU 정책일 때), 앱의 키별 카운터 | 로컬 캐시, 키 복제 |
+| CDN 히트율이 50%대 | CDN 캐시 키 | 엣지 로그의 URL, 쿼리 문자열 | 키 정규화, 쿼리 제외 |
+| 배포 뒤 조회수가 비었다 | write-back | 종료 시 flush 여부 | 버퍼를 Redis로, `SIGTERM` 처리 |
+| 남의 이름이 내 화면에 | CDN, 공유 캐시 | 응답의 `Cache-Control`, `Vary` | `private`, 개인화는 엣지 밖에서 |
+| Redis가 느려지자 서비스 전체가 멈춤 | cache-aside의 의존 | 캐시 클라이언트 타임아웃 설정 | 짧은 타임아웃, DB로 폴백 |
+
+마지막 줄은 개념 목록에 없지만 꼭 기억해 둘 만하다. 캐시는 빠르게 하려고 넣은 것인데, 타임아웃 없이 기다리면 캐시가 장애의 원인이 된다. 이건 [캐시 전략 글](/posts/caching-strategies)과 [장애 대응 패턴 글](/posts/resilience-patterns)에서 이어진다.
+
+## 히트율과 평균 응답 시간을 직접 계산하기
+
+용량 `capacity`인 LRU 캐시에 `requests`를 차례로 넣고, 히트 수와 미스 수, 히트율, 평균 응답 시간을 돌려주는 함수를 짜 본다. 히트는 `hitMs`, 미스는 `missMs`가 걸린다고 친다. 히트율과 평균은 소수 둘째 자리에서 반올림(`Math.round(x * 100) / 100`)하고, 요청이 없으면 둘 다 0이다.
+
+<CodePlayground
+  caption="LRU 시뮬레이션으로 히트율과 평균 지연 구하기"
+  functionName="cacheStats"
+  initialCode={`function cacheStats(capacity, requests, hitMs, missMs) {
+  const cache = new Map(); // 넣은 순서를 기억한다. 앞이 가장 오래된 키
+  let hits = 0;
+  let misses = 0;
+  for (const key of requests) {
+    // 여기를 채운다
+  }
+  const hitRatio = 0; // 소수 둘째 자리
+  const avgMs = 0;    // 소수 둘째 자리
+  return { hits, misses, hitRatio, avgMs };
+}`}
+  solution={`function cacheStats(capacity, requests, hitMs, missMs) {
+  const cache = new Map();
+  let hits = 0;
+  let misses = 0;
+  for (const key of requests) {
+    if (cache.has(key)) {
+      hits++;
+      cache.delete(key); // 지웠다가 다시 넣으면 가장 최근 쪽으로 간다
+      cache.set(key, true);
+    } else {
+      misses++;
+      cache.set(key, true);
+      if (cache.size > capacity) cache.delete(cache.keys().next().value); // 가장 오래 안 쓴 키
+    }
+  }
+  const total = hits + misses;
+  const round = (x) => Math.round(x * 100) / 100;
+  const hitRatio = total === 0 ? 0 : round(hits / total);
+  const avgMs = total === 0 ? 0 : round((hits * hitMs + misses * missMs) / total);
+  return { hits, misses, hitRatio, avgMs };
+}`}
+  tests={[
+    { label: "위 그림의 순서", args: [3, ["1001", "1002", "1001", "1003", "1004", "1001", "1002", "1001"], 1, 50], expected: { hits: 3, misses: 5, hitRatio: 0.38, avgMs: 31.63 } },
+    { label: "용량이 넉넉하면", args: [3, ["a", "b", "c", "a", "b", "c", "a", "b", "c"], 1, 50], expected: { hits: 6, misses: 3, hitRatio: 0.67, avgMs: 17.33 } },
+    { label: "용량이 하나 모자라면", args: [2, ["a", "b", "c", "a", "b", "c"], 1, 50], expected: { hits: 0, misses: 6, hitRatio: 0, avgMs: 50 } },
+    { label: "핫 키 하나", args: [1, ["p", "p", "p", "p"], 2, 30], expected: { hits: 3, misses: 1, hitRatio: 0.75, avgMs: 9 } },
+    { label: "섞인 순서", args: [2, ["a", "b", "a", "c", "b", "a"], 1, 50], expected: { hits: 1, misses: 5, hitRatio: 0.17, avgMs: 41.83 } },
+    { label: "요청 없음", args: [2, [], 1, 50], expected: { hits: 0, misses: 0, hitRatio: 0, avgMs: 0 } },
+  ]}
+/>
+
+두 번째와 세 번째 테스트를 나란히 보면 LRU의 약점이 보인다. 키 세 개를 돌아가며 읽을 때 용량이 3이면 히트율 67%인데, 2로 하나만 줄이면 0%가 된다. 매번 다음에 쓸 키를 막 버린 참이기 때문이다. 순서대로 한 번씩 훑는 배치 작업이 LRU 캐시를 망가뜨리는 이유가 이것이고, 그래서 접근 빈도를 보는 LFU나 둘을 섞은 정책이 따로 있다.
+
+## 처음 질문에 답하려면
+
+"캐시 써 보셨어요?"라는 질문에는 이 순서대로 답하면 된다. 무엇을 어디에 캐시했고(CDN, Redis, 로컬), 히트율이 얼마였고, TTL은 데이터가 얼마나 낡아도 되는지로 정했고, 꽉 차면 무엇을 버렸고, 쓸 때는 어떻게 맞췄고(무효화나 쓰기 방식), 몰릴 때는 어떻게 막았는지. 각 단계의 꼬리 질문은 위 표의 링크된 글에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 캐시 히트율이 왜 중요한가요?
+
+평균 응답 시간과 DB 부하가 미스 쪽에 끌려가기 때문이다. 히트 1ms, 미스 50ms면 히트율 95%의 평균은 3.45ms, 99%는 1.49ms다. 4%p 차이로 평균이 절반 이하가 되고 DB로 가는 요청은 다섯 분의 일이 된다. 다만 Redis의 `keyspace_hits`는 `TTL` 같은 명령까지 세는 서버 전체 값이라, 캐시 조회만의 히트율은 앱에서 따로 센다.
+
+### 캐시 미스는 어떤 이유로 생기나요?
+
+처음이라 아직 없는 콜드 미스, TTL이 지난 만료, 메모리가 모자라 쫓겨난 축출로 나눈다. 배포나 재시작 직후에 늘면 콜드 미스, 일정한 주기로 튀면 동시 만료, `evicted_keys`와 함께 늘면 축출이다. 원인에 따라 미리 채우기, TTL 지터, 메모리 증설로 대응이 달라진다.
+
+### TTL은 어떻게 정하나요?
+
+이 데이터가 최악의 경우 얼마나 낡아도 괜찮은지로 정한다. 쓸 때 캐시를 지우더라도 삭제가 실패하거나 빠질 수 있으니 TTL이 상한 데이터의 최대 수명이 된다. 길면 히트율이 오르지만 옛 값을 오래 보이고, 짧으면 미스가 는다. 같은 시각에 만료되지 않도록 무작위 지터를 섞는다.
+
+### LRU는 어떻게 구현하고, 어떤 경우에 약한가요?
+
+해시맵과 이중 연결 리스트로, 자바스크립트라면 넣은 순서를 기억하는 `Map` 하나로 `get`과 `put`을 O(1)에 한다. 읽을 때마다 가장 최근 쪽으로 옮기고, 꽉 차면 가장 오래된 쪽을 버린다. 용량보다 조금 큰 집합을 순서대로 반복해 읽으면 매번 다음에 쓸 키를 버려 히트율이 0이 된다. 그래서 한 번 훑는 배치 접근에는 LFU 같은 빈도 기반 정책이 낫다.
+
+### cache-aside와 write-through는 어떻게 다른가요?
+
+cache-aside는 읽기 패턴이다. 앱이 캐시를 보고 미스면 DB에서 읽어 채운다. write-through는 쓰기 패턴으로, 쓸 때 DB와 캐시를 함께 갱신해 캐시를 늘 최신으로 둔다. 둘을 같이 쓸 수도 있지만, 실무에서는 cache-aside 읽기에 "DB 커밋 뒤 캐시 삭제"를 짝짓는 경우가 가장 많다. 동시 쓰기에서 캐시 갱신 순서가 꼬이는 문제가 삭제에는 없기 때문이다.
+
+### 상한 데이터를 일부러 보여 주는 경우도 있나요?
+
+있다. HTTP의 `stale-while-revalidate`는 수명이 막 끝난 사본을 바로 내주면서 뒤에서 새로 받아 온다. 사용자는 기다리지 않고 원본에는 요청이 하나만 간다. 스탬피드 방어에서도 락을 못 잡은 요청에게 옛 값을 주는 방식을 쓴다. 몇 초 늦어도 되는 데이터에서만 고르고, 결제처럼 정확해야 하는 단계에서는 원본을 다시 확인한다.
+
+### 캐시 스탬피드와 핫 키는 무엇이 다른가요?
+
+스탬피드는 인기 키가 만료되는 순간 미스가 동시에 몰려 같은 쿼리가 DB로 쏟아지는 문제이고, 락이나 요청 합치기로 한 요청만 원본에 가게 해서 막는다. 핫 키는 만료와 상관없이 평소에 키 하나로 요청이 몰려 그 키를 가진 캐시 노드가 먼저 차는 문제다. 로컬 캐시로 호출을 줄이거나 키를 복제해 여러 노드로 나눈다. 핫 키가 만료되면 스탬피드가 겹쳐 가장 크게 터진다.

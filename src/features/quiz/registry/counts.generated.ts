@@ -25,6 +25,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "browser-storage": 7,
   "build-caching": 7,
   "cache-invalidation": 6,
+  "cache-write-policies": 7,
+  "caching-concepts-map": 6,
   "caching-strategies": 8,
   "canary-release": 6,
   "cdn-edge-anycast": 6,

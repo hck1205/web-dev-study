@@ -2,6 +2,48 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "caching-concepts-map": {
+    "links": [
+      "sd-cache-and-cdn-tier",
+      "caching-strategies",
+      "http-caching-cdn",
+      "redis-memory-eviction",
+      "cache-write-policies",
+      "cache-invalidation",
+      "edge-caching",
+      "cdn-edge-anycast",
+      "resilience-patterns"
+    ],
+    "mentions": [
+      "exponential-backoff-jitter",
+      "redis-cluster",
+      "js-memoization",
+      "redis-basics",
+      "db-modeling-normalization",
+      "dns"
+    ]
+  },
+  "cache-write-policies": {
+    "links": [
+      "caching-strategies",
+      "cache-invalidation",
+      "caching-concepts-map",
+      "postgres-mvcc-vacuum",
+      "k8s-pod-lifecycle",
+      "redis-persistence-ha",
+      "transactional-outbox",
+      "optimistic-locking",
+      "db-consistency-cap"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "consistency-models",
+      "redis-basics",
+      "db-partitioning",
+      "db-transaction-isolation",
+      "dns"
+    ]
+  },
   "reverse-proxy-lb-api-gateway": {
     "links": [
       "proxy-reverse-proxy",
@@ -9260,6 +9302,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "exponential-backoff-jitter",
       "redis-cluster",
+      "cache-write-policies",
       "bloom-filter",
       "db-type-columnar-olap",
       "sd-start-single-server",
