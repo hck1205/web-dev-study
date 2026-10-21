@@ -2,6 +2,56 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "centralized-logging-pipeline": {
+    "links": [
+      "structured-logging",
+      "opensearch-cluster-operations",
+      "distributed-tracing",
+      "observability-basics",
+      "elasticsearch-inverted-index",
+      "alerting"
+    ],
+    "mentions": [
+      "k8s-daemonset",
+      "k8s-pod-resources",
+      "docker-container-basics",
+      "sd-payment-flow",
+      "sd-object-storage-architecture",
+      "sd-metrics-storage-alerting",
+      "kafka-basics",
+      "osi-in-practice",
+      "postgres-architecture"
+    ]
+  },
+  "opensearch-cluster-operations": {
+    "links": [
+      "elasticsearch-inverted-index",
+      "centralized-logging-pipeline"
+    ],
+    "mentions": [
+      "k8s-pod-disruption-budget",
+      "k8s-statefulset",
+      "sd-mq-storage-partitions",
+      "resilience-patterns",
+      "sd-object-storage-architecture",
+      "db-types-overview",
+      "http-status-codes"
+    ]
+  },
+  "jenkins-pipeline-basics": {
+    "links": [
+      "ci-cd-basics",
+      "github-actions-docker-ecr",
+      "build-caching",
+      "webhooks"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "docker-container-basics",
+      "proxy-reverse-proxy",
+      "eks-cluster-basics"
+    ]
+  },
   "backend-engineer-roadmap": {
     "links": [
       "javascript-roadmap",
@@ -3612,6 +3662,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-basics",
       "cron-jobs",
+      "centralized-logging-pipeline",
       "sd-object-storage-architecture",
       "sdn-vxlan-overlay",
       "grpc",
@@ -4028,6 +4079,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "k8s-configmap",
       "docker-container-basics",
+      "centralized-logging-pipeline",
       "k8s-architecture",
       "osi-in-practice",
       "http-status-codes",
@@ -4163,6 +4215,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-statefulset",
       "k8s-pod-basics",
       "docker-container-basics",
+      "centralized-logging-pipeline",
       "local-k8s-kind-minikube"
     ]
   },
@@ -4213,6 +4266,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deployment",
+      "centralized-logging-pipeline",
       "iptables-nat",
       "iptables-basics",
       "cilium-ebpf",
@@ -4422,6 +4476,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics",
       "docker-container-basics",
       "k8s-cri-cni-csi",
+      "centralized-logging-pipeline",
       "local-k8s-kind-minikube",
       "db-type-key-value",
       "eks-cluster-basics",
@@ -4946,11 +5001,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-architecture",
+      "opensearch-cluster-operations",
       "k8s-node-autoscaling-karpenter",
       "terraform-basics",
       "db-type-key-value",
       "docker-container-basics",
       "rest-api-design",
+      "centralized-logging-pipeline",
       "sd-start-single-server",
       "k8s-node-maintenance",
       "kafka-basics",
@@ -5602,6 +5659,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "elasticsearch-inverted-index",
+      "centralized-logging-pipeline",
       "k8s-daemonset",
       "docker-container-basics",
       "event-loop",
@@ -6631,6 +6689,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-node-autoscaling-karpenter",
       "kubectl-essentials",
       "kubernetes-ingress",
+      "centralized-logging-pipeline",
       "k8s-daemonset",
       "network-flow-logs",
       "terraform-basics",
@@ -6696,6 +6755,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "proxy-reverse-proxy",
+      "centralized-logging-pipeline",
       "sd-start-single-server",
       "osi-in-practice",
       "http-status-codes"
@@ -7148,6 +7208,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "k8s-kube-proxy-modes",
       "local-k8s-kind-minikube",
+      "centralized-logging-pipeline",
       "http-versions",
       "kafka-basics",
       "security-groups-nacl",
@@ -7335,6 +7396,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cri-cni-csi",
       "k8s-architecture",
       "cloud-cost-optimization",
+      "centralized-logging-pipeline",
       "k8s-node-maintenance",
       "vpc-basics",
       "local-k8s-kind-minikube",
@@ -8177,6 +8239,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-daemonset",
       "k8s-configmap",
       "k8s-architecture",
+      "centralized-logging-pipeline",
       "service-mesh",
       "osi-in-practice",
       "local-k8s-kind-minikube"
@@ -8192,6 +8255,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics",
       "k8s-daemonset",
       "k8s-deployment",
+      "centralized-logging-pipeline",
       "local-k8s-kind-minikube",
       "dns"
     ]
@@ -8272,6 +8336,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network",
       "k8s-architecture",
       "kubernetes-ingress",
+      "centralized-logging-pipeline",
       "k8s-labels-selectors",
       "local-k8s-kind-minikube",
       "db-type-key-value"
@@ -8824,6 +8889,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-basics",
       "packet-capture-tcpdump",
+      "centralized-logging-pipeline",
       "tail-latency",
       "redis-basics",
       "grpc",
@@ -9338,6 +9404,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture"
     ],
     "mentions": [
+      "opensearch-cluster-operations",
       "webhooks",
       "db-index-design",
       "sd-db-replication-intro"
@@ -9688,6 +9755,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "db-type-time-series",
       "postgres-advanced-sql",
+      "opensearch-cluster-operations",
       "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
       "db-migration-tools",
@@ -10399,7 +10467,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "elasticsearch-inverted-index": {
     "links": [
-      "vector-db"
+      "vector-db",
+      "opensearch-cluster-operations"
     ],
     "mentions": [
       "db-index",

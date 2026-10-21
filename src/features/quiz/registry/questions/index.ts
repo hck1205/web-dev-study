@@ -29,6 +29,7 @@ import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
+import { CENTRALIZED_LOGGING_PIPELINE } from "./centralized-logging-pipeline";
 import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
@@ -169,6 +170,7 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JAVA_JVM_MEMORY_GC } from "./java-jvm-memory-gc";
 import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
+import { JENKINS_PIPELINE_BASICS } from "./jenkins-pipeline-basics";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
@@ -317,6 +319,7 @@ import { NODEJS_SERVER_RUNTIME } from "./nodejs-server-runtime";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
 import { ON_CALL } from "./on-call";
+import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
@@ -577,6 +580,7 @@ export const QUESTION_SETS = [
   CACHING_STRATEGIES,
   CANARY_RELEASE,
   CDN_EDGE_ANYCAST,
+  CENTRALIZED_LOGGING_PIPELINE,
   CHAOS_ENGINEERING,
   CI_CD_BASICS,
   CILIUM_EBPF,
@@ -717,6 +721,7 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JAVA_JVM_MEMORY_GC,
   JAVASCRIPT_ROADMAP,
+  JENKINS_PIPELINE_BASICS,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
@@ -865,6 +870,7 @@ export const QUESTION_SETS = [
   OAUTH,
   OBSERVABILITY_BASICS,
   ON_CALL,
+  OPENSEARCH_CLUSTER_OPERATIONS,
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,

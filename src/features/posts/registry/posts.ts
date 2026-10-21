@@ -5,6 +5,36 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "centralized-logging-pipeline",
+    title: "중앙 로그 파이프라인: 수집기에서 검색 가능한 저장소까지",
+    summary: "앱의 표준 출력이 수집기, 가공, 버퍼를 거쳐 저장소에 들어가기까지를 Vector와 OpenSearch로 직접 돌려 보고, 여러 줄 로그 묶기, 저장소 장애 때의 유실, 색인형과 레이블형 저장소, 보관 비용, 로그 알림을 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "DevOps", "Elasticsearch", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["Fluent Bit", "로그 수집기", "디스크 버퍼", "로그 보관 기간"],
+    companies: ["tesla"],
+  },
+  {
+    slug: "opensearch-cluster-operations",
+    title: "OpenSearch 클러스터 운영: 샤드 배치, 롤오버, ISM, 노드 장애",
+    summary: "로그를 쌓는 OpenSearch 클러스터를 3노드로 띄워 노드 역할과 과반수, 샤드 수 정하기, 매핑 폭발과 flat_object, 롤오버와 ISM, 노드가 빠졌을 때의 복구와 재시작 순서, 힙과 서킷 브레이커를 실제 출력으로 따라간다.",
+    topic: "programming/database",
+    tags: ["Elasticsearch", "Search", "Database", "DevOps", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["OpenSearch", "ISM 정책", "flat_object", "dedicated cluster manager"],
+    companies: ["tesla"],
+  },
+  {
+    slug: "jenkins-pipeline-basics",
+    title: "Jenkins 파이프라인: Jenkinsfile부터 multibranch와 에이전트까지",
+    summary: "컨트롤러와 에이전트, 선언형 Jenkinsfile의 when·parallel·post, GitHub 웹훅과 상태 체크로 도는 multibranch pipeline, 비밀값과 shared library를 다루고 빌드가 멈췄을 때 보는 순서를 정리한다.",
+    topic: "programming/server-infra/ci-cd/jenkins",
+    tags: ["CI/CD", "DevOps", "Git", "Security", "Troubleshooting"],
+    date: "2026-10-23",
+    keywords: ["Jenkinsfile", "multibranch pipeline", "Jenkins shared library", "Jenkins 에이전트"],
+    companies: ["tesla"],
+  },
+  {
     slug: "backend-engineer-roadmap",
     title: "백엔드 엔지니어 로드맵: 여섯 층을 아래부터 쌓는 순서",
     summary: "느린 주문 API 하나를 쫓다 보면 HTTP부터 분산 시스템까지 여섯 층을 다 지난다. 층마다 왜 그 자리에 있는지, 먼저 읽을 글, 직접 만들어 볼 것, 다 됐다고 볼 기준을 적고 증상에서 층을 거꾸로 찾는 표를 둔다.",

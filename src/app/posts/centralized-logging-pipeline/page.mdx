@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("centralized-logging-pipeline");
+
+결제 오류 문의가 들어왔다. 주문 서비스 파드가 12개라 어느 파드가 그 요청을 받았는지 모른다. `kubectl logs`를 파드마다 돌려 grep하는 사이, 문제의 파드는 메모리 초과로 재시작됐고 그 전 로그는 `--previous`로 한 번 전 컨테이너 것만 볼 수 있다. 그 전에 한 번 더 재시작했다면 단서는 사라졌다.
+
+로그를 한곳에 모으는 이유는 단순하다. 로그를 만든 기계보다 로그가 오래 살아야 하고, 수십 대의 로그를 한 번에 물어볼 수 있어야 한다. 그런데 "모은다"는 말 안에는 정할 것이 많다. 누가 읽어 가는지, 여러 줄짜리 스택은 어떻게 한 건으로 묶는지, 저장소가 멈추면 그동안의 로그는 어디에 두는지, 단어마다 찾아보기를 만들지 아니면 묶어서 압축만 할지, 얼마나 오래 둘지.
+
+이 글은 앱의 표준 출력에서 검색 가능한 로그 플랫폼까지 가는 길을 칸별로 따라간다. 수집기는 Vector 0.50.0을 이 환경에서 직접 돌렸고, 저장소는 3노드 OpenSearch 3.9.0 클러스터를 띄워 실제로 넣고 물었다. Splunk의 SPL과 Loki의 LogQL 예는 그 제품을 돌리지 못해 문법에 맞춰 적은 예시다. 실습은 Ubuntu 24.04, Node.js 22에서 했다.
+
+이 주제의 다른 글: 앱에서 로그 한 줄을 어떻게 남길지(필드, 레벨, 개인정보 가리기, 샘플링)는 [구조화 로그](/posts/structured-logging), 저장소 쪽 클러스터 운영(샤드, 롤오버, ISM)은 [OpenSearch 클러스터 운영](/posts/opensearch-cluster-operations), 로그와 trace를 잇는 법은 [분산 추적](/posts/distributed-tracing), 지표·로그·trace의 역할 나누기는 [관측 가능성 기본](/posts/observability-basics)에 있다. 여기서는 앱 바깥, 로그가 지나가는 길과 저장소 고르기에 집중한다.
+
+## 로그가 지나가는 다섯 칸
+
+앱이 로그를 남긴 뒤 사람이 검색창에서 찾기까지 로그는 다섯 칸을 지난다. 수집(노드에서 읽기), 가공(파싱과 다듬기), 버퍼(잠깐 쌓아 두기), 저장(색인하거나 압축하기), 조회와 알림이다. 칸마다 실패하는 방식이 다르고, 증상은 모두 "로그가 안 보인다"로 같다.
+
+아래 그림에서 다음을 누르면 로그 한 줄이 칸을 지나가는 모습과, 저장소가 멈췄을 때 어디서 막히는지가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="표준 출력에서 검색창까지, 로그 한 줄의 길"
+  zones={[
+    { id: "node", label: "노드", x: 8, y: 16, w: 186, h: 270, tone: "private" },
+    { id: "plat", label: "로그 플랫폼", x: 206, y: 16, w: 186, h: 270, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "app", label: "app pod", sub: "stdout", x: 60, y: 70, icon: "container", w: 92 },
+    { id: "file", label: "pod logs", sub: "/var/log/pods", x: 60, y: 230, icon: "db", w: 104 },
+    { id: "col", label: "Vector", sub: "DaemonSet", x: 150, y: 150, icon: "router", w: 84 },
+    { id: "buf", label: "buffer", sub: "디스크", x: 260, y: 230, icon: "db", w: 88 },
+    { id: "os", label: "OpenSearch", sub: "색인", x: 300, y: 130, icon: "db", w: 112 },
+    { id: "ui", label: "검색 화면", sub: "Dashboards", x: 300, y: 50, icon: "client", w: 104 },
+  ]}
+  links={[
+    { from: "app", to: "file", dashed: true },
+    { from: "file", to: "col" },
+    { from: "col", to: "buf" },
+    { from: "buf", to: "os" },
+    { from: "os", to: "ui" },
+  ]}
+  steps={[
+    { path: ["app", "file"], packet: "JSON", title: "앱은 표준 출력에 쓴다", detail: "컨테이너 런타임이 줄마다 시각과 stdout/stderr 표시를 붙여 노드의 파일로 받는다. 파일 돌리기와 지우기는 런타임 몫이다." },
+    { path: ["file", "col"], packet: "tail", title: "수집기가 파일 끝을 따라 읽는다", detail: "어디까지 읽었는지(체크포인트)를 data_dir에 적어 두고, 재시작하면 그 자리부터 읽는다. 여러 줄 스택은 여기서 한 건으로 묶는다." },
+    { path: ["col", "buf"], packet: "parse", title: "다듬어서 버퍼에 넣는다", detail: "JSON을 풀고, 개인정보를 가리고, debug 줄을 버린다. 보낼 준비가 된 이벤트는 버퍼에서 차례를 기다린다." },
+    { path: ["buf", "os"], packet: "_bulk", title: "묶어서 저장소로 보낸다", detail: "수십~수천 건을 한 번의 bulk 요청으로 보낸다. 저장소는 필드마다 찾아보기를 만들어 검색할 수 있게 연다." },
+    { path: ["buf", "os"], packet: "_bulk", blocked: true, title: "저장소가 멈추면 버퍼에 쌓인다", detail: "보내기가 실패하면 수집기는 다시 시도하며 버퍼에 쌓는다. 디스크 버퍼면 꽤 버티고, 메모리 버퍼가 차면 정책에 따라 버리거나 읽기를 멈춘다." },
+    { path: ["os", "ui"], packet: "query", title: "사람은 검색창에서 묻는다", detail: "서비스, 레벨, 시간 범위로 좁히고 trace_id로 한 요청의 줄을 모은다. 같은 질의를 알림 규칙에도 건다." },
+  ]}
+/>
+
+## 수집기는 노드마다 하나
+
+앱이 로그 저장소로 직접 보내는 방법도 있다. 로거에 HTTP 전송을 붙이면 된다. 하지만 저장소가 느려지면 앱의 요청 처리까지 느려지고, 저장소 주소나 인증이 바뀔 때마다 모든 앱을 다시 배포해야 한다. 그래서 보통은 앱은 표준 출력에만 쓰고, 노드마다 수집기를 하나씩(쿠버네티스라면 DaemonSet) 두어 그 노드의 모든 컨테이너 로그 파일을 읽게 한다.
+
+수집기를 파드 안에 사이드카로 하나씩 붙이는 방식도 있다. 앱이 표준 출력이 아니라 파일에만 쓰는 오래된 프로그램일 때나, 테넌트마다 설정을 완전히 나눠야 할 때 쓴다. 파드마다 수집기가 하나씩 뜨니 자원이 그만큼 든다.
+
+수집기 후보는 몇 개로 좁혀진다.
+
+- Fluent Bit: C로 짠 가벼운 수집기. 메모리를 적게 쓰고 쿠버네티스 메타데이터 붙이기가 잘 돼 있어 노드 수집기로 널리 쓴다.
+- Vector: Rust로 짠 수집기. VRL이라는 작은 언어로 가공 규칙을 쓰고, 버퍼와 재시도 설정이 세밀하다. 이 글의 실습이 Vector다.
+- OpenTelemetry Collector: 지표, trace, 로그를 한 수집기로 받는다. 이미 trace를 OTel로 보내고 있다면 로그도 같은 길로 보내 trace_id를 붙이기 쉽다.
+- Logstash: 가공 기능이 많지만 JVM이라 무겁다. 노드마다 두기보다 중앙에서 가공하는 자리에 둔다.
+
+어느 것을 쓰든 수집기가 지켜야 할 약속은 같다. 읽은 위치를 기록해 재시작 후 이어 읽고, 파일이 돌아가도(rotate) 놓치지 않고, 저장소가 느릴 때 앱이 아니라 자기 쪽에서 버틴다.
+
+파일 돌리기에서 로그가 사라지는 경우가 하나 있다. 파일을 복사한 뒤 원본을 0바이트로 자르는 방식(logrotate의 `copytruncate`)은 복사와 자르기 사이에 쓰인 줄을 잃을 수 있고, 수집기가 잘린 파일을 새 파일로 오해하기도 한다. 쿠버네티스의 컨테이너 로그는 런타임이 이름을 바꾸는 방식으로 돌려서 이 문제가 없지만, VM에서 앱이 직접 파일을 쓰는 경우는 돌리기 방식을 확인한다.
+
+## 여러 줄짜리 오류를 한 건으로 묶기
+
+수집기는 기본으로 줄 하나를 이벤트 하나로 본다. 로거를 거치지 않고 찍힌 스택 트레이스는 여러 줄이라 조각난다. 실습 앱은 JSON 로그 여섯 줄과, 로거를 거치지 않은 오류 두 건(각 4줄)을 썼다.
+
+```text
+{"time":"2026-10-22T09:00:03.000Z","service":"checkout","trace_id":"43a03299a3c3fed3d8ce7b820f3aca81","level":"debug","msg":"order created","user_email":"kim3@example.com","amount":39003}
+2026-10-22T09:00:04.000Z ERROR unhandled rejection
+Error: connect ECONNREFUSED 10.0.3.12:5432
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+    at async createOrder (/app/src/order.js:41:5)
+```
+
+아무 설정 없이 Vector로 읽으면 이벤트가 몇 개 나오는지 세어 봤다.
+
+```bash
+# 파일을 처음부터 읽어 이벤트를 JSON으로 찍는 설정 (v1.yaml), 10초 뒤 종료
+timeout 10 vector --config v1.yaml > v1.out
+wc -l < v1.out
+jq -c '{message}' v1.out | sed -n 4,7p
+```
+
+```text
+14
+{"message":"2026-10-22T09:00:04.000Z ERROR unhandled rejection"}
+{"message":"Error: connect ECONNREFUSED 10.0.3.12:5432"}
+{"message":"    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)"}
+{"message":"    at async createOrder (/app/src/order.js:41:5)"}
+```
+
+8건이어야 할 로그가 14건이 됐다. 저장소에서 "ECONNREFUSED"로 찾으면 원인 줄만 나오고 어느 함수에서 났는지는 다른 문서로 흩어진다. 오류 건수를 세면 네 배로 잡힌다.
+
+묶는 규칙은 "새 이벤트는 어떤 줄로 시작하나"를 정규식으로 주는 것이다. 이 앱의 이벤트는 `{` 아니면 ISO 시각으로 시작한다. 그 패턴이 나오기 전까지의 줄은 앞 이벤트에 붙인다.
+
+```yaml
+sources:
+  app:
+    type: file
+    include: ["/var/log/app/app.log"]
+    multiline:
+      start_pattern: '^(\{|\d{4}-\d{2}-\d{2}T)'      # 이벤트의 첫 줄
+      mode: halt_before                              # 다음 첫 줄이 나오기 전까지 묶는다
+      condition_pattern: '^(\{|\d{4}-\d{2}-\d{2}T)'
+      timeout_ms: 1000                               # 다음 줄이 1초 안 오면 지금까지로 끊는다
+```
+
+이렇게 하면 14건이 8건이 된다(아래 다듬기까지 거친 결과에서 다시 본다). `timeout_ms`가 있는 이유는 마지막 이벤트 때문이다. 다음 첫 줄이 와야 앞 이벤트가 끝난 줄 아는데, 파일의 마지막 이벤트는 다음 줄이 영영 안 올 수 있다. 실습에서도 마지막 오류 이벤트만 다른 것보다 정확히 1초 늦게 나왔다.
+
+가장 좋은 해결은 묶을 일을 만들지 않는 것이다. 처리하지 않은 예외도 로거가 받아 JSON 한 줄(스택은 `stack` 필드)로 쓰게 하면 수집기는 줄 하나만 보면 된다. 여러 줄 규칙은 앱을 고칠 수 없을 때의 차선이다. 규칙이 틀리면 정상 로그가 엉뚱한 이벤트에 붙어 수 MB짜리 이벤트가 생기기도 한다.
+
+## 수집기에서 다듬기
+
+앱마다 로그 모양이 조금씩 다르니, 저장소에 넣기 전에 한 모양으로 맞춘다. Vector에서는 `remap` 단계에 VRL로 규칙을 쓴다. 실습에서는 JSON이면 풀고, JSON이 아니면 "시각 레벨 메시지 + 스택" 모양으로 정규식 파싱을 하고, 이메일 앞부분을 가리고, debug를 버렸다.
+
+```yaml
+transforms:
+  parse:
+    type: remap
+    inputs: ["app"]
+    source: |
+      structured, err = parse_json(.message)
+      if err == null {
+        . = merge!(., structured)                 # JSON 필드를 최상위로 올린다
+      } else {
+        p, err2 = parse_regex(.message, r'^(?P<time>\S+) (?P<level>[A-Z]+) (?P<msg>[^\n]*)\n?(?s)(?P<stack>.*)$')
+        if err2 == null {
+          . = merge(., p)
+          .level = downcase(string!(.level))
+        } else {
+          .level = "unknown"                      # 어느 모양도 아니면 버리지 말고 표시만
+          .msg = .message
+        }
+      }
+      del(.message)
+      .env = "lab"
+      if exists(.user_email) {
+        .user_email = replace(string!(.user_email), r'^[^@]+', "***")
+      }
+  drop_debug:
+    type: filter
+    inputs: ["parse"]
+    condition: '.level != "debug"'
+```
+
+```bash
+vector validate --no-environment v2.yaml      # 설정 문법과 VRL을 미리 검사한다
+timeout 10 vector --quiet --config v2.yaml > v2.out
+wc -l < v2.out; sed -n 2,3p v2.out
+```
+
+```text
+6
+{"amount":39002,"env":"lab","host":"vm","level":"info","msg":"order created","service":"checkout","source_type":"file","time":"2026-10-22T09:00:02.000Z","timestamp":"2026-10-21T18:44:56.757083522Z","trace_id":"1b267619c4812cc46ee281747884ca50","user_email":"***@example.com"}
+{"env":"lab","host":"vm","level":"error","msg":"unhandled rejection","source_type":"file","stack":"Error: connect ECONNREFUSED 10.0.3.12:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)\n    at async createOrder (/app/src/order.js:41:5)","time":"2026-10-22T09:00:04.000Z","timestamp":"2026-10-21T18:44:56.757532085Z"}
+```
+
+8건 중 debug 2건이 빠져 6건이 남았다. 아래 그림에서 오류 이벤트의 필드를 하나씩 눌러 보면, 다듬은 결과에서 봐야 할 것이 보인다.
+
+<UrlAnatomy
+  caption="수집기를 거친 오류 이벤트 하나 (실습 값)"
+  base="{"
+  separator=""
+  joiner=","
+  params={[
+    { key: "time", display: '"time":"2026-10-22T09:00:04Z"', title: "사건이 일어난 시각", description: "앱이 로그를 쓴 시각이다. 저장소에서 시간 범위로 찾을 때, 대시보드의 x축에 쓸 값이 이것이다. 저장소의 @timestamp에는 이 값을 넣는다." },
+    { key: "ts", display: '"timestamp":"2026-10-21T18:44:56Z"', title: "수집기가 읽은 시각", description: "Vector가 줄을 읽은 시각이다. 실습에서는 앱 시각을 일부러 다른 날로 찍어서 하루 넘게 차이 난다. 실제로는 이 차이가 수집 지연이다. 이 값을 @timestamp로 쓰면 늦게 도착한 로그가 엉뚱한 시간대에 꽂힌다." },
+    { key: "level", display: '"level":"error"', title: "대문자를 소문자로", description: "JSON 로그는 error, 평문 로그는 ERROR였다. 한쪽으로 맞추지 않으면 level:error로 찾을 때 절반이 빠진다." },
+    { key: "stack", display: '"stack":"Error: connect ECONNREFUSED…"', title: "한 건으로 묶인 스택", description: "여러 줄 규칙으로 묶은 뒤 정규식으로 메시지와 스택을 나눴다. 스택은 검색어로 찾기보다 열어서 읽는 필드라 전문 검색 색인을 끄기도 한다." },
+    { key: "missing", display: "(service, trace_id 없음)", title: "로거를 거치지 않은 줄", description: "평문 오류 줄에는 service도 trace_id도 없다. 수집기가 아무리 다듬어도 앱이 안 남긴 값은 만들 수 없다. 쿠버네티스 메타데이터로 파드·네임스페이스는 붙일 수 있지만 요청을 잇는 ID는 앱만 안다." },
+  ]}
+/>
+
+수집기 가공은 편하지만 비용이 있다. 정규식 파싱은 CPU를 쓰고, 수집기는 앱과 같은 노드에서 돈다. 로그가 초당 수만 줄인 노드에서 무거운 정규식을 돌리면 수집기가 밀려 지연이 생긴다. 앱이 처음부터 JSON으로 쓰게 하면 수집기는 `parse_json`만 하면 된다. 개인정보도 앱에서 먼저 가리고 수집기는 한 겹 더 막는 자리로 쓴다. 그 이유와 방법은 [구조화 로그](/posts/structured-logging) 글에 있다.
+
+## 저장소가 멈추면 로그는 어디에 쌓이나
+
+저장소는 언젠가 멈춘다. 업그레이드 중일 수도 있고, 디스크가 차서 쓰기를 막았을 수도 있다. 그동안 수집기가 무엇을 하는지는 버퍼 설정이 정한다. Vector에는 두 가지가 있다.
+
+- 메모리 버퍼: 빠르다. 대신 크기가 작고, 수집기가 죽으면 안의 이벤트가 사라진다. 가득 차면 `block`(읽기를 멈추고 기다림) 또는 `drop_newest`(새 이벤트를 버림) 중 하나를 고른다.
+- 디스크 버퍼: 노드 디스크에 쌓는다. 크게 잡을 수 있고 수집기가 재시작해도 남는다. 조금 느리고 디스크를 쓴다.
+
+실험해 봤다. 앱 흉내 스크립트가 50ms마다 한 줄씩 600줄을 쓰고, 수집기는 작은 HTTP 수신기(저장소 흉내)로 보낸다. 10초쯤에 수신기를 죽이고 10초 뒤에 다시 띄운 다음, 쓴 줄과 받은 줄을 비교했다. 버퍼 상태는 Vector가 스스로 내보내는 지표(`internal_metrics`를 Prometheus 형식으로 연 것)로 봤다.
+
+```yaml
+sinks:
+  store:
+    type: http
+    uri: "http://127.0.0.1:18030/ingest"
+    batch: { max_events: 50, timeout_secs: 1 }
+    buffer: { type: disk, max_size: 268435488, when_full: block }   # 실험 1
+    # buffer: { type: memory, max_events: 100, when_full: drop_newest }  # 실험 2
+```
+
+```bash
+./bp.sh disk    # 디스크 버퍼
+./bp.sh mem     # 메모리 100건, 차면 새 것을 버림
+```
+
+```text
+t=10s 저장소 정지 (pid 11119)
+t=20s 저장소가 멈춘 지 10초, 받은 줄: 149
+    vector_buffer_events{} 166
+t=20s 저장소 재시작
+t=40s 쓴 줄: 600, 받은 줄: 600
+    vector_buffer_events{} 0
+t=10s 저장소 정지 (pid 11415)
+t=20s 저장소가 멈춘 지 10초, 받은 줄: 145
+    vector_buffer_discarded_events_total{} 11
+    vector_buffer_events{} 100
+t=20s 저장소 재시작
+t=40s 쓴 줄: 600, 받은 줄: 533
+    vector_buffer_discarded_events_total{} 67
+    vector_buffer_events{} 0
+```
+
+지표 이름 뒤의 레이블은 읽기 쉽게 줄였다. 디스크 버퍼는 멈춘 동안 166건을 쌓아 두었다가 저장소가 돌아오자 모두 보냈다. 600줄을 다 받았다. 메모리 버퍼는 100건에서 가득 찼고 그 뒤로 들어온 것을 버렸다. 버린 수 67이 600 - 533과 정확히 같다. 지표가 거짓말을 하지 않으니, `vector_buffer_discarded_events_total`이 0보다 커지면 알림을 거는 것이 로그 유실을 알아채는 가장 확실한 방법이다.
+
+아래 그림에서 다음을 누르면 메모리 버퍼에서 일어난 일을 따라갈 수 있다.
+
+<AlgoTrace
+  caption="메모리 버퍼 100칸, 저장소가 10초 멈췄을 때"
+  memoryLabel="버퍼"
+  cells={["정상", "정지", "가득 참", "정지 10초", "재시작", "끝"]}
+  steps={[
+    { pointer: 0, memory: ["비어 있음"], caption: "저장소가 받는 대로 보낸다. 배치 50건 또는 1초마다 한 번 bulk로 나간다." },
+    { pointer: 1, memory: ["쌓이는 중"], caption: "저장소가 멈췄다. 보내기가 실패하면 다시 시도하는 동안 새 줄이 버퍼에 쌓인다." },
+    { pointer: 2, memory: ["100/100"], caption: "100칸이 찼다. when_full: drop_newest라 이제 들어오는 줄을 버린다." },
+    { pointer: 3, memory: ["100/100", "버림 11"], caption: "멈춘 지 10초. 버린 줄이 지표에 11로 잡혔다. block이었다면 수집기가 파일 읽기를 멈추고 기다렸을 것이다." },
+    { pointer: 4, memory: ["비우는 중", "버림 67"], caption: "저장소가 돌아왔다. 버퍼를 비우는 동안에도 밀린 줄이 계속 들어와 버린 수가 67까지 늘었다." },
+    { pointer: 5, found: [5], memory: ["비어 있음", "버림 67"], caption: "쓴 600줄 중 533줄만 도착했다. 600 - 533 = 67, 지표의 버린 수와 같다." },
+  ]}
+/>
+
+`block`은 버리지 않는 대신 수집기가 파일 읽기를 멈춘다. 그동안 노드의 로그 파일은 계속 돌아가니, 저장소가 오래 멈추면 수집기가 아직 안 읽은 파일이 지워지면서 결국 잃는다. 버리는 지점이 버퍼에서 노드 디스크로 옮겨 갈 뿐이다. 그래서 로그를 잃으면 안 되는 곳은 디스크 버퍼를 넉넉히 두고, 더 길게 버텨야 하면 수집기와 저장소 사이에 Kafka 같은 큐를 둔다. 큐는 며칠 치를 쌓아 둘 수 있고, 저장소 쪽 소비자를 늘려 밀린 것을 따라잡는다. 대신 운영할 시스템이 하나 늘고 지연이 조금 늘어난다.
+
+## 찾아보기를 만들까, 묶어서 압축할까
+
+저장소는 크게 두 갈래다.
+
+색인형(OpenSearch·Elasticsearch, Splunk)은 넣을 때 필드마다 찾아보기를 만든다. 아무 필드로나, 본문의 단어로나 빠르게 찾고 집계한다. 대신 넣을 때 CPU를 쓰고, 찾아보기가 저장 공간을 먹는다. 역색인이 어떻게 생겼는지는 [Elasticsearch 역색인](/posts/elasticsearch-inverted-index) 글에 있다.
+
+색인을 거의 안 하는 쪽(Loki가 대표적이다)은 몇 개의 레이블(app, namespace, level)로만 찾아보기를 만들고, 본문은 시간순으로 묶어 압축한 덩어리로 객체 저장소(S3 같은 곳)에 둔다. 찾을 때는 레이블로 덩어리를 고른 뒤 그 덩어리를 풀어 훑는다. 넣기는 싸고 저장도 싸다. 대신 넓은 범위를 본문 검색으로 훑으면 느리고, 질의할 때 CPU를 많이 쓴다.
+
+같은 로그로 크기 차이를 재 봤다. 서비스 셋, 하루치 2만 건의 JSON 로그(4.4MB)를 OpenSearch에 명시적 매핑으로 넣고 세그먼트를 하나로 합친 뒤 크기를 봤다. 색인을 거의 안 하는 저장소의 크기는 gzip으로 압축한 크기로 어림했다. Loki의 실제 덩어리 압축(기본 snappy 등)과 레이블 색인 크기는 이것과 다르니 경향만 본다.
+
+```bash
+ls -l logs.ndjson | awk '{print $5}'          # 원본 바이트
+gzip -9 -c logs.ndjson | wc -c                # 압축만 했을 때
+# 기본 코덱과 best_compression 코덱으로 넣은 인덱스 (복제본 0, 세그먼트 1개)
+curl -s 'localhost:18000/_cat/indices/qlogs*?v&h=index,docs.count,pri.store.size&bytes=kb&s=index'
+```
+
+```text
+4421258
+659848
+index    docs.count pri.store.size
+qlogs         20000           3119
+qlogs-bc      20000           2558
+```
+
+원본 4,318KB가 OpenSearch 기본 코덱에서 3,119KB(원본의 72%), `index.codec: best_compression`에서 2,558KB(59%)가 됐다. 압축만 한 쪽은 644KB(15%)다. 복제본을 하나 두면 OpenSearch 쪽은 두 배가 된다. 로그가 하루 수백 GB가 되면 이 차이가 저장 비용의 차이가 된다.
+
+아래 그림은 두 갈래가 무엇을 내주고 무엇을 받는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="넣을 때 일을 할지, 찾을 때 일을 할지"
+  nodes={[
+    { id: "log", label: "로그 이벤트", sub: "JSON 한 줄", x: 200, y: 36, w: 120 },
+    { id: "idx", label: "색인형", sub: "OpenSearch·Splunk", x: 100, y: 130, w: 150 },
+    { id: "lbl", label: "레이블만 색인", sub: "Loki", x: 300, y: 130, w: 130 },
+    { id: "fast", label: "아무 필드나 빠름", sub: "저장·색인 비쌈", x: 100, y: 235, w: 140 },
+    { id: "cheap", label: "저장 쌈", sub: "넓은 본문 검색 느림", x: 300, y: 235, w: 150 },
+  ]}
+  edges={[
+    { from: "log", to: "idx", label: "필드마다" },
+    { from: "log", to: "lbl", label: "레이블 몇 개" },
+    { from: "idx", to: "fast" },
+    { from: "lbl", to: "cheap" },
+  ]}
+/>
+
+고르는 기준은 무엇을 자주 묻느냐다. 보안 조사나 감사처럼 몇 달 치를 아무 필드로나 찾아야 하면 색인형이 맞다. 장애 때 서비스와 시간대를 먼저 좁힌 뒤 본문을 훑는 사용이 대부분이면 레이블형이 훨씬 싸다. Splunk는 색인형이면서 상용 라이선스가 하루 수집량(GB/일)이나 계산 자원 기준으로 매겨지는 경우가 많아서, 무엇을 넣을지 고르는 일이 곧 비용 관리다. 여러 저장소를 섞는 팀도 있다. 감사 로그는 색인형에 오래, 앱 로그는 레이블형에 짧게 두는 식이다.
+
+색인형에서 자주 겪는 일 하나를 더 본다. 같은 필드에 타입이 다른 값이 들어오면 그 문서는 거절된다. 명시적 매핑에서 `status`를 숫자(short)로 정해 둔 인덱스에 문자열을 넣어 봤다.
+
+```bash
+curl -s -H 'Content-Type: application/json' -XPOST 'localhost:18000/qlogs/_doc' \
+  -d '{"@timestamp":"2026-10-22T10:00:00Z","service":"checkout","status":"OK","message":"done"}'
+```
+
+```text
+{"status":400,"type":"mapper_parsing_exception","reason":"failed to parse field [status] of type [short] in document with id 'Ws_KX6EBsVT6JLe5mv8a'. Preview of field's value: 'OK'"}
+```
+
+수집기가 bulk로 보내면 이 오류는 bulk 응답 안의 해당 항목에만 적히고 요청 전체는 200으로 끝난다. 수집기 로그나 오류 지표를 보지 않으면 "어떤 서비스의 로그만 조용히 사라지는" 일이 된다. 필드 이름과 타입은 서비스 사이의 약속으로 정해 두고(같은 `status`는 어디서든 숫자), 어기는 로그는 수집기에서 별도 인덱스로 돌려 모은다.
+
+## 보관 기간이 비용을 정한다
+
+로그 비용은 대략 "하루 양 × 압축 후 비율 × 복제 수 × 보관 일수 × 단가"다. 이 중 가장 손대기 쉬운 것이 보관 일수와 단가다. 최근 며칠은 빠른 디스크(hot)에 복제본을 두고, 그 뒤는 느리고 싼 노드(warm)로 옮기며 복제본을 줄이고, 더 지나면 객체 저장소에 압축해 두거나(cold, archive) 지운다. OpenSearch에서 이 이동을 자동으로 하는 ISM 정책과 롤오버는 [OpenSearch 클러스터 운영](/posts/opensearch-cluster-operations)에서 실제로 돌려 봤다.
+
+아래에서 단계별 보관 비용을 계산해 본다. `tiers`의 각 항목은 그 단계에 두는 일수, 원본 대비 저장 비율, 복제본 수, GB당 월 단가다. 하루 양이 같으면 정상 상태에서 단계마다 "하루 양 × 비율 × (1 + 복제본) × 일수"만큼 쌓여 있다. 답은 소수 첫째 자리로 반올림한다. 단가는 계산 연습을 위해 가정한 값이고 실제 클라우드 가격이 아니다.
+
+<CodePlayground
+  caption="보관 단계별로 쌓여 있는 양과 월 비용"
+  functionName="retention"
+  initialCode={`// dailyGB: 하루 원본 로그 양
+// tiers: [{ days, ratio, replicas, pricePerGB }]
+// 반환: { gb, cost } (소수 첫째 자리 반올림)
+function retention(dailyGB, tiers) {
+  return { gb: 0, cost: 0 };
+}`}
+  solution={`function retention(dailyGB, tiers) {
+  let gb = 0, cost = 0;
+  for (const t of tiers) {
+    const g = dailyGB * t.ratio * (1 + t.replicas) * t.days;
+    gb += g;
+    cost += g * t.pricePerGB;
+  }
+  return { gb: Math.round(gb * 10) / 10, cost: Math.round(cost * 10) / 10 };
+}`}
+  tests={[
+    { args: [100, [{ days: 7, ratio: 0.7, replicas: 1, pricePerGB: 0.1 }]], expected: { gb: 980, cost: 98 }, label: "hot 7일, 복제본 1" },
+    { args: [100, [{ days: 7, ratio: 0.7, replicas: 1, pricePerGB: 0.1 }, { days: 23, ratio: 0.58, replicas: 0, pricePerGB: 0.05 }]], expected: { gb: 2314, cost: 164.7 }, label: "hot 7일 + warm 23일" },
+    { args: [100, [{ days: 30, ratio: 0.7, replicas: 1, pricePerGB: 0.1 }]], expected: { gb: 4200, cost: 420 }, label: "30일 내내 hot" },
+    { args: [100, [{ days: 30, ratio: 0.15, replicas: 0, pricePerGB: 0.02 }]], expected: { gb: 450, cost: 9 }, label: "압축해서 객체 저장소 30일" },
+    { args: [100, [{ days: 7, ratio: 0.7, replicas: 1, pricePerGB: 0.1 }, { days: 23, ratio: 0.58, replicas: 0, pricePerGB: 0.05 }, { days: 335, ratio: 0.15, replicas: 0, pricePerGB: 0.02 }]], expected: { gb: 7339, cost: 265.2 }, label: "1년 보관 (hot·warm·archive)" },
+    { args: [0, [{ days: 7, ratio: 0.7, replicas: 1, pricePerGB: 0.1 }]], expected: { gb: 0, cost: 0 }, label: "로그가 없으면 0" },
+  ]}
+/>
+
+세 번째와 다섯 번째 테스트를 나란히 보면 감이 온다. 30일 내내 hot에 두는 비용(420)보다, hot 7일과 warm 23일에 335일 아카이브까지 붙여 1년을 보관하는 비용(265.2)이 싸다. 보관 기간을 정할 때는 "장애 조사에 실제로 며칠 전 로그까지 봤나"를 먼저 세어 본다. 대부분 일주일 안쪽이다. 그 너머는 규정(감사, 보안 사고 조사)이 요구하는 기간만큼 싼 곳에 둔다. 아카이브에서 꺼내는 데 시간이 걸린다는 것과, 꺼내는 비용이 따로 든다는 것도 같이 적어 둔다.
+
+양 자체를 줄이는 방법은 [구조화 로그](/posts/structured-logging)의 샘플링 이야기와 같다. 오류와 느린 요청은 다 남기고 성공 요청만 고른다. 수집기에서 debug를 버리는 위의 필터도 그 한 갈래다. 헬스 체크 요청 로그처럼 아무도 안 보는 줄은 수집기에서 버리는 것만으로 양이 눈에 띄게 준다.
+
+## 같은 질문을 세 저장소에 묻기
+
+장애 때 실제로 던지는 질문은 비슷하다. "checkout 서비스의 9시대 5xx가 10분마다 몇 건인가." OpenSearch에서는 쿼리 DSL로 이렇게 묻는다. 조건은 점수가 필요 없으니 모두 `filter`에 넣는다.
+
+```bash
+curl -s -H 'Content-Type: application/json' 'localhost:18000/qlogs/_search' -d '{
+  "size": 0,
+  "query": { "bool": { "filter": [
+    { "term":  { "service": "checkout" } },
+    { "range": { "status": { "gte": 500 } } },
+    { "range": { "@timestamp": { "gte": "2026-10-22T09:00:00Z", "lt": "2026-10-22T10:00:00Z" } } } ] } },
+  "aggs": { "per_10m": { "date_histogram": { "field": "@timestamp", "fixed_interval": "10m" },
+    "aggs": { "by_status": { "terms": { "field": "status" } } } } }
+}' | jq -r '.aggregations.per_10m.buckets[] | "\(.key_as_string)  \(.doc_count)  " + ([.by_status.buckets[] | "\(.key)=\(.doc_count)"] | join(" "))'
+```
+
+```text
+2026-10-22T09:00:00.000Z  2  504=2
+2026-10-22T09:10:00.000Z  4  500=3 504=1
+2026-10-22T09:20:00.000Z  2  504=2
+2026-10-22T09:30:00.000Z  4  500=3 504=1
+2026-10-22T09:40:00.000Z  2  504=2
+2026-10-22T09:50:00.000Z  3  500=2 504=1
+```
+
+같은 질문을 Splunk의 SPL로 쓰면 이런 모양이다(예시, 이 환경에 Splunk가 없어 돌리지 못했다).
+
+```text
+index=app service=checkout status>=500 earliest="10/22/2026:09:00:00" latest="10/22/2026:10:00:00"
+| timechart span=10m count by status
+```
+
+Loki의 LogQL로는 이렇다(예시). 레이블로 스트림을 먼저 좁히고, 본문을 JSON으로 푼 뒤 필드로 거른다. LogQL을 실제로 돌린 결과는 [구조화 로그](/posts/structured-logging) 글에 있다.
+
+```text
+sum by (status) (count_over_time({app="checkout"} | json | status >= 500 [10m]))
+```
+
+세 언어는 생김새가 다르지만 순서는 같다. 범위(인덱스, 레이블, 시간)를 먼저 좁히고, 필드 조건으로 거르고, 마지막에 시간 단위로 센다. 느린 질의는 대개 이 순서를 어긴 것이다. 시간 범위 없이 전체 인덱스를 훑거나, 본문 전문 검색을 필드 조건보다 앞에 둔다.
+
+특정 요청 하나를 따라갈 때는 trace_id로 찾는다. `trace_id`를 `keyword`로 매핑해 두면 정확히 일치하는 term 질의가 된다.
+
+```bash
+curl -s -H 'Content-Type: application/json' 'localhost:18000/qlogs/_search?filter_path=hits.total,hits.hits._source' \
+  -d '{"query":{"term":{"trace_id":"a21b872fb2bb7465bfe163501ff8f910"}}}' | jq -c .
+```
+
+```text
+{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_source":{"@timestamp":"2026-10-22T09:54:47.520Z","service":"checkout","level":"error","route":"/api/orders","status":504,"duration_ms":3113.7,"trace_id":"a21b872fb2bb7465bfe163501ff8f910","user_id":"u482","message":"upstream timeout"}}]}}
+```
+
+여러 서비스가 같은 이름(`trace_id`)과 같은 타입으로 남겨야 이 질의 하나로 모든 서비스의 줄이 모인다. 한 서비스가 `traceId`, 다른 서비스가 `trace.id`로 남기면 질의가 세 개가 된다. trace 화면에서 이 로그로 건너가는 연결은 [분산 추적](/posts/distributed-tracing) 글에서 다룬다.
+
+## 로그로 알림을 걸 때
+
+로그에 알림을 걸 수는 있지만 먼저 지표로 바꿀 수 있는지 본다. "5xx가 분당 10건 넘으면"은 로그를 세는 것보다 앱이 내보내는 요청 지표로 거는 편이 싸고 정확하다. 로그는 샘플링되거나 수집 중에 버려질 수 있어서, 로그 건수로 비율을 재면 틀린 값이 나온다. 알림 규칙을 짜는 원칙은 [알림 설계](/posts/alerting) 글에 있다.
+
+로그 알림이 맞는 경우는 지표가 없는 사건이다. 특정 오류 메시지("certificate has expired"), 관리자 계정 로그인, 결제 대행사가 돌려준 특정 오류 코드처럼 드물고 의미가 분명한 사건이다. 이런 규칙은 두 가지를 챙긴다.
+
+- 수집 지연만큼 창을 늦춘다. 로그가 저장소에 들어오기까지 30초 걸린다면 "최근 5분"을 지금 기준으로 세면 마지막 30초가 늘 비어 있다. 끝을 1분 전으로 당기거나 창을 넉넉히 잡는다.
+- 로그가 아예 안 들어오는 것도 알림으로 건다. 서비스의 로그 건수가 0으로 떨어지면 서비스가 조용한 게 아니라 수집이 끊긴 것일 가능성이 크다. 수집기의 버린 수 지표와 함께, "최근 10분 로그 0건"을 경고로 둔다.
+
+실습 데이터로 알림 규칙이 볼 숫자를 세어 봤다. 9시 55분부터 5분간 5xx가 4건이다. 원본 파일을 jq로 센 값도 4로 같았다.
+
+```bash
+curl -s -H 'Content-Type: application/json' 'localhost:18000/qlogs/_count' -d '{"query":{"bool":{"filter":[
+  {"range":{"status":{"gte":500}}},
+  {"range":{"@timestamp":{"gte":"2026-10-22T09:55:00Z","lt":"2026-10-22T10:00:00Z"}}}]}}}'
+```
+
+```text
+{"count":4,"_shards":{"total":1,"successful":1,"skipped":0,"failed":0}}
+```
+
+## 로그가 안 보인다는 문의를 받았을 때
+
+증상별로 칸을 거슬러 올라간다.
+
+최근 몇 분 로그만 없다. 수집 지연이다. 수집기가 밀렸는지(버퍼에 쌓인 수), 저장소가 bulk를 거절하고 있는지(429, `rejected_execution_exception`) 본다. 저장소 쪽에서 `@timestamp`와 들어온 시각의 차이를 재 두면 지연을 숫자로 볼 수 있다.
+
+어떤 서비스 로그만 없다. 그 서비스의 로그 모양이 바뀌었을 가능성이 크다. 필드 타입 충돌(`mapper_parsing_exception`)이나 파싱 실패다. 수집기의 오류 로그와 `component_errors_total` 지표를 본다. 파싱에 실패한 이벤트를 버리지 않고 `level: unknown`처럼 표시해 넣는 위의 규칙이 여기서 도움이 된다.
+
+특정 노드의 로그만 없다. 그 노드의 수집기가 죽었거나(메모리 제한으로 OOMKilled), 노드 디스크가 차서 버퍼에 못 쓰는 것이다. DaemonSet 파드의 재시작 횟수와 노드 디스크를 본다.
+
+```bash
+# 수집기 파드의 재시작 횟수와 마지막 종료 이유
+kubectl -n logging get pods -l app=vector -o wide
+kubectl -n logging describe pod vector-7xk2p | grep -A3 'Last State'
+```
+
+로그는 있는데 시간대가 이상하다. `@timestamp`에 수집 시각을 넣었거나, 앱이 시간대 없는 시각(`2026-10-22 09:00:04`)을 써서 저장소가 UTC로 해석한 것이다. 앱은 UTC에 `Z`를 붙여 쓰고, 수집기는 앱 시각을 `@timestamp`로 옮긴다.
+
+여러 줄 오류가 조각나 있다. 여러 줄 규칙이 없거나 첫 줄 패턴이 이 서비스의 로그 모양과 맞지 않는다. 가장 좋은 해결은 위에서 말한 대로 앱이 예외를 JSON 한 줄로 쓰게 하는 것이다.
+
+## 다시 열두 개의 파드 앞에서
+
+처음 장면에서 필요했던 건 파드보다 오래 사는 로그와, 열두 개를 한 번에 묻는 질의였다. 그걸 얻으려면 노드마다 수집기를 두고, 여러 줄을 묶고, 한 모양으로 다듬고, 저장소가 멈춰도 버틸 버퍼를 두고, 묻는 방식에 맞는 저장소와 보관 기간을 고른다. 그리고 각 칸이 로그를 버린 순간을 지표로 알 수 있게 해 둔다. 로그 플랫폼에서 가장 나쁜 장애는 로그가 조용히 사라지는 것이다.
+
+## 면접에서 나올 만한 질문
+
+### 로그를 중앙에 모으는 이유는 무엇인가요?
+
+로그를 만든 기계나 컨테이너보다 로그가 오래 살아야 하고, 여러 인스턴스의 로그를 한 번에 물어볼 수 있어야 하기 때문이다. 컨테이너는 재시작되면 이전 로그가 사라지고, 인스턴스가 수십 개면 하나씩 접속해 찾을 수 없다. 모아 두면 서비스, 시간, trace_id로 한 번에 좁혀 찾을 수 있다.
+
+### 앱이 저장소로 직접 보내지 않고 노드 수집기를 두는 이유는요?
+
+저장소가 느리거나 멈출 때 그 영향이 앱의 요청 처리로 번지지 않게 하려는 것이다. 앱은 표준 출력에만 쓰고, 버퍼링·재시도·가공·전송은 수집기가 맡는다. 저장소 주소나 인증이 바뀌어도 앱을 다시 배포하지 않아도 된다.
+
+### 스택 트레이스가 여러 문서로 쪼개져 저장됩니다. 어떻게 하나요?
+
+수집기에 여러 줄 규칙을 둔다. 새 이벤트가 시작하는 줄의 패턴(JSON의 `{`나 ISO 시각)을 정하고, 그 패턴이 다시 나오기 전까지의 줄을 앞 이벤트에 붙인다. 마지막 이벤트를 위해 타임아웃도 둔다. 근본적으로는 앱이 예외를 로거로 받아 스택을 필드에 담은 JSON 한 줄로 쓰게 하는 것이 낫다.
+
+### 로그 저장소가 한동안 멈추면 로그는 어떻게 되나요?
+
+수집기의 버퍼 설정이 정한다. 디스크 버퍼는 노드 디스크에 쌓아 두었다가 저장소가 돌아오면 보내고, 메모리 버퍼는 작아서 금방 차고 정책에 따라 새 이벤트를 버리거나 읽기를 멈춘다. 읽기를 멈춰도 노드의 로그 파일이 돌아가 지워지면 결국 잃으므로, 길게 버텨야 하면 Kafka 같은 큐를 사이에 둔다. 어느 쪽이든 버린 수 지표에 알림을 걸어 유실을 알아챈다.
+
+### OpenSearch 같은 색인형과 Loki 같은 레이블형은 어떻게 고르나요?
+
+색인형은 넣을 때 필드마다 찾아보기를 만들어 아무 필드로나 빠르게 찾지만 저장과 색인 비용이 크다. 레이블형은 레이블 몇 개만 색인하고 본문은 압축해 객체 저장소에 두어 싸지만, 넓은 범위의 본문 검색은 느리다. 몇 달 치를 아무 필드로 뒤지는 보안·감사 용도면 색인형, 서비스와 시간을 먼저 좁히는 장애 조사 위주면 레이블형이 맞다.
+
+### 로그 비용을 줄이려면 어디부터 보나요?
+
+양과 보관 기간이다. 헬스 체크나 debug처럼 아무도 안 보는 로그를 수집기에서 버리고, 성공 요청은 샘플링한다. 보관은 최근 며칠만 빠른 저장소에 복제본과 함께 두고, 그 뒤는 복제본을 줄인 싼 노드나 객체 저장소로 옮긴 뒤 규정 기간이 지나면 지운다.
+
+### 일부 서비스의 로그만 저장소에 안 들어옵니다. 무엇을 의심하나요?
+
+로그 모양이 바뀌어 필드 타입이 충돌했을 가능성이 크다. 같은 필드에 숫자 대신 문자열이 오면 그 문서는 `mapper_parsing_exception`으로 거절되고, bulk 요청 전체는 성공으로 끝나서 눈에 띄지 않는다. 수집기 오류 지표와 bulk 응답의 항목별 오류를 보고, 필드 이름과 타입을 서비스 간 약속으로 정해 둔다.
+
+### 로그로 알림을 걸 때 주의할 점은 무엇인가요?
+
+먼저 지표로 바꿀 수 있는지 본다. 로그는 샘플링되거나 버려질 수 있어 비율 계산에 약하다. 로그 알림이 맞는 드문 사건에 걸 때는 수집 지연만큼 창을 늦추고, 로그가 0건으로 떨어지는 것도 수집이 끊긴 신호로 함께 알림을 건다.
