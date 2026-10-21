@@ -6,6 +6,7 @@ import { ConceptDiagram } from "./concept-diagram";
 import { GeometryMorph } from "./geometry-morph";
 import { LoadingDemo } from "./loading-demo";
 import { MdxTable } from "./mdx-table";
+import { MotionDemo } from "./motion-demo";
 import { NetworkTopology } from "./network-topology";
 import { SequenceDiagram } from "./sequence-diagram";
 import { UrlAnatomy } from "./url-anatomy";
@@ -26,4 +27,5 @@ export const mdxComponents: MDXComponents = {
   GeometryMorph,
   NetworkTopology,
   LoadingDemo,
+  MotionDemo,
 };

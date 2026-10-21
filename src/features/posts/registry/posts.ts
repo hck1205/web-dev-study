@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "animation-performance",
+    title: "애니메이션 성능과 접근성: 합성 단계에서 끝내고, 움직임을 줄여 주기",
+    summary: "left와 transform의 차이를 성능 트레이스로 재서 레이아웃, 페인트, 합성 단계와 프레임 예산을 따라간다. will-change가 만드는 층, 끊김을 재는 방법, 전정 장애와 prefers-reduced-motion, WCAG 2.3.3까지 다룬다.",
+    topic: "programming/ui-ux",
+    tags: ["UX", "Frontend", "Performance", "Animation", "Accessibility", "Browser"],
+    date: "2026-10-22",
+    keywords: ["합성 스레드", "will-change", "prefers-reduced-motion", "프레임 예산"],
+  },
+  {
+    slug: "view-transitions-shared-element",
+    title: "View Transitions와 FLIP: 카드가 상세 화면으로 이어지게",
+    summary: "목록 카드가 상세의 큰 사진이 되는 공유 요소 전환을 FLIP으로 직접 계산하고, View Transitions API로 브라우저에 맡겨 본다. 이름이 겹칠 때의 오류, 문서 간 전환, 지원 범위, React의 ViewTransition과 Next.js, 움직임 줄이기까지 크로미움에서 확인한다.",
+    topic: "programming/ui-ux",
+    tags: ["UX", "Frontend", "Animation", "Browser", "React", "Next.js"],
+    date: "2026-10-22",
+    keywords: ["View Transitions API", "공유 요소 전환", "FLIP 기법", "view-transition-name"],
+  },
+  {
+    slug: "spring-animation",
+    title: "스프링 애니메이션: 시간 대신 힘으로 움직이기",
+    summary: "열다가 바로 닫으면 끊기는 메뉴에서 출발해 stiffness, damping, mass가 감쇠비 하나로 묶이는 과정과 넘침 계산, 목표가 바뀔 때 속도가 이어지는 이유를 직접 적분해 본다. cubic-bezier와 linear()로 흉내 내는 법과 그 한계도 다룬다.",
+    topic: "programming/ui-ux",
+    tags: ["UX", "Frontend", "Animation", "CSS", "JavaScript"],
+    date: "2026-10-22",
+    keywords: ["스프링 애니메이션", "감쇠비", "linear() 이징", "overshoot"],
+  },
+  {
+    slug: "animation-patterns",
+    title: "애니메이션 패턴: 이름을 알면 부탁이 정확해진다",
+    summary: "Gooey, Slide in, Spring pop, Stagger, Shared element, Ripple, Path draw, Marquee, Tilt까지 아홉 가지 UI 애니메이션을 피드백, 방향 안내, 연속성, 즐거움 중 무슨 일을 하는지로 나눠 본다. 언제 돕고 언제 방해하는지, 부탁할 때 쓸 이름과 최소한의 CSS·JS를 함께 정리한다.",
+    topic: "programming/ui-ux",
+    tags: ["UX", "Frontend", "Animation", "CSS", "Accessibility"],
+    date: "2026-10-22",
+    keywords: ["애니메이션 패턴", "Gooey 효과", "스태거 애니메이션", "리플 효과"],
+  },
+  {
     slug: "serverless-architecture",
     title: "서버리스 아키텍처: 트리거가 부르는 방식과 실패의 행방",
     summary: "서버리스 구조를 트리거 중심으로 본다. 동기·비동기·폴링 호출의 재시도, 배치 부분 실패, 재귀 고리, 팬아웃과 워크플로, 비용 계산을 다룬다.",

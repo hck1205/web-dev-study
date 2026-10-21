@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 403편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 407편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -1805,7 +1805,7 @@
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-memory-leak, js-promise-combinators, js-promises, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
+- 이 글로 오는 글 ←: animation-performance, autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, fault-tolerance, garbage-collection, health-checks, js-async-await, js-callback-hell, js-memory-leak, js-promise-combinators, js-promises, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -2041,7 +2041,7 @@
 - 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, code-splitting, event-loop
 - 키워드 백링크 →: ab-testing, loading-patterns, pattern-proxy, cors, dns
-- 이 글로 오는 글 ←: ab-testing, code-splitting, event-loop, frontend-browser-cache, hydration, loading-patterns, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, animation-performance, code-splitting, event-loop, frontend-browser-cache, hydration, loading-patterns, react-rerender, rendering-csr-spa, rendering-ssr, rendering-strategies, streaming-ssr-suspense
 
 #### `frontend-browser-cache` — 프런트엔드에서 쓰는 캐시: 브라우저 캐시부터 Service Worker까지
 
@@ -2367,7 +2367,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, webhooks, http-versions, cdn-edge-anycast, http-status-codes, ipv6-basics, udp-and-quic
-- 이 글로 오는 글 ←: base64, cookie-session-login, core-web-vitals, csrf, curl-for-debugging, devops-networking-roadmap, dns, eks-cluster-basics, encryption-in-transit, frontend-browser-cache, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, local-custom-domain, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, webhooks
+- 이 글로 오는 글 ←: animation-performance, base64, cookie-session-login, core-web-vitals, csrf, curl-for-debugging, devops-networking-roadmap, dns, eks-cluster-basics, encryption-in-transit, frontend-browser-cache, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, local-custom-domain, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, proxy-reverse-proxy, tcp-connection-lifecycle, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, webhooks
 
 ### Programming › Network › Cloud Networking (`programming/network/cloud`)
 
@@ -4514,6 +4514,26 @@
 
 ### Programming › UI/UX (`programming/ui-ux`)
 
+#### `animation-patterns` — 애니메이션 패턴: 이름을 알면 부탁이 정확해진다
+
+- 요약: Gooey, Slide in, Spring pop, Stagger, Shared element, Ripple, Path draw, Marquee, Tilt까지 아홉 가지 UI 애니메이션을 피드백, 방향 안내, 연속성, 즐거움 중 무슨 일을 하는지로 나눠 본다. 언제 돕고 언제 방해하는지, 부탁할 때 쓸 이름과 최소한의 CSS·JS를 함께 정리한다.
+- 태그: UX, Frontend, Animation, CSS, Accessibility
+- 키워드: 애니메이션 패턴, Gooey 효과, 스태거 애니메이션, 리플 효과
+- 길이: 411줄
+- 소제목: 움직임이 화면에서 맡는 일 / 누른 자리에서 대답하기 / 어디서 왔는지 보여 주기 / 하나씩 차례로 들어오기 / 선이 그려지는 동안 읽게 하기 / 눈길을 끄는 장식 셋 / 부탁 한 문장에 넣을 것 / 넣기 전에 걸러 보는 질문 / 면접에서 나올 만한 질문
+- 직접 링크 →: loading-patterns, spring-animation, view-transitions-shared-element, animation-performance
+- 이 글로 오는 글 ←: animation-performance, loading-patterns, spring-animation, view-transitions-shared-element
+
+#### `animation-performance` — 애니메이션 성능과 접근성: 합성 단계에서 끝내고, 움직임을 줄여 주기
+
+- 요약: left와 transform의 차이를 성능 트레이스로 재서 레이아웃, 페인트, 합성 단계와 프레임 예산을 따라간다. will-change가 만드는 층, 끊김을 재는 방법, 전정 장애와 prefers-reduced-motion, WCAG 2.3.3까지 다룬다.
+- 태그: UX, Frontend, Performance, Animation, Accessibility, Browser
+- 키워드: 합성 스레드, will-change, prefers-reduced-motion, 프레임 예산
+- 길이: 398줄
+- 소제목: 한 프레임에 쓸 수 있는 시간 / 속성마다 깨우는 단계가 다르다 / 합성 단계에서 끝나는 애니메이션 / will-change는 층을 미리 만든다 / 끊김을 재는 방법 / 움직임이 불편한 사람들 / 현장에서 버벅임을 좁히는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: animation-patterns, spring-animation, view-transitions-shared-element, what-happens-google-com, event-loop, core-web-vitals
+- 이 글로 오는 글 ←: animation-patterns, spring-animation, view-transitions-shared-element
+
 #### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
 
 - 요약: 스피너, 스켈레톤, 프로그레스 바, 낙관적 UI, 무한 스크롤까지 로딩 패턴 열두 가지를 기다리는 시간, 진행률을 아는지, 모양을 아는지, 누가 시작했는지에 따라 고른다. 스피너 깜빡임, 가짜 진행률, 접근성 같은 실수도 짚는다.
@@ -4521,9 +4541,29 @@
 - 키워드: 스켈레톤 UI, 무한 스크롤, 지연 로딩, Optimistic UI
 - 길이: 412줄
 - 소제목: 기다리는 시간이 표시를 정한다 / 얼마나 남았는지 아는가 / 무엇이 올지 모양을 아는가 / 스피너가 깜빡이면 더 느려 보인다 / 버튼을 누른 사람에게 먼저 답한다 / 내용이 조각으로 도착할 때 / 손가락으로 당겨서 새로고침 / 모든 로딩 표시에 같이 챙길 것 / 이름을 알면 부탁이 짧아진다 / 면접에서 나올 만한 질문
-- 직접 링크 →: core-web-vitals, streaming-ssr-suspense, rendering-strategies, client-data-cache, realtime-communication, rest-api-design, code-splitting
+- 직접 링크 →: core-web-vitals, streaming-ssr-suspense, rendering-strategies, client-data-cache, realtime-communication, rest-api-design, code-splitting, animation-patterns
 - 키워드 백링크 →: pattern-proxy
-- 이 글로 오는 글 ←: client-data-cache, core-web-vitals, design-patterns-overview, elasticsearch-inverted-index, frontend-browser-cache, http-caching-cdn, json-crud-http, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-proxy, react-server-components, rest-api-design, server-sent-events, sql-query-rewrite
+- 이 글로 오는 글 ←: animation-patterns, client-data-cache, core-web-vitals, design-patterns-overview, elasticsearch-inverted-index, frontend-browser-cache, http-caching-cdn, json-crud-http, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-proxy, react-server-components, rest-api-design, server-sent-events, sql-query-rewrite
+
+#### `spring-animation` — 스프링 애니메이션: 시간 대신 힘으로 움직이기
+
+- 요약: 열다가 바로 닫으면 끊기는 메뉴에서 출발해 stiffness, damping, mass가 감쇠비 하나로 묶이는 과정과 넘침 계산, 목표가 바뀔 때 속도가 이어지는 이유를 직접 적분해 본다. cubic-bezier와 linear()로 흉내 내는 법과 그 한계도 다룬다.
+- 태그: UX, Frontend, Animation, CSS, JavaScript
+- 키워드: 스프링 애니메이션, 감쇠비, linear() 이징, overshoot
+- 길이: 350줄
+- 소제목: 매 프레임 힘을 다시 계산한다 / 세 숫자가 정하는 성격 / 얼마나 넘치나 / 중간에 목표가 바뀌는 순간 / CSS만으로 흉내 내기 / 라이브러리마다 부르는 이름 / 스프링이 맞지 않는 자리 / 시간표를 쓸지 힘을 쓸지 / 면접에서 나올 만한 질문
+- 직접 링크 →: animation-patterns, view-transitions-shared-element, animation-performance
+- 이 글로 오는 글 ←: animation-patterns, animation-performance, view-transitions-shared-element
+
+#### `view-transitions-shared-element` — View Transitions와 FLIP: 카드가 상세 화면으로 이어지게
+
+- 요약: 목록 카드가 상세의 큰 사진이 되는 공유 요소 전환을 FLIP으로 직접 계산하고, View Transitions API로 브라우저에 맡겨 본다. 이름이 겹칠 때의 오류, 문서 간 전환, 지원 범위, React의 ViewTransition과 Next.js, 움직임 줄이기까지 크로미움에서 확인한다.
+- 태그: UX, Frontend, Animation, Browser, React, Next.js
+- 키워드: View Transitions API, 공유 요소 전환, FLIP 기법, view-transition-name
+- 길이: 472줄
+- 소제목: 두 화면에 같은 물체가 있다는 착각 / FLIP: 처음과 끝만 재고 사이를 transform으로 메운다 / FLIP이 어려워지는 곳 / 브라우저가 찍어서 이어 주는 View Transitions / 이름이 겹치면 전환은 통째로 건너뛴다 / 페이지 이동에도 붙는 문서 간 전환 / 어디까지 지원하나 / React와 Next.js에서 쓰기 / 움직임 줄이기 설정은 저절로 반영되지 않는다 / 전환이 안 보일 때 보는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: animation-patterns, spring-animation, animation-performance
+- 이 글로 오는 글 ←: animation-patterns, animation-performance, spring-animation
 
 ### 자기개발 › 수학 (`self-development/math`)
 
@@ -4570,6 +4610,7 @@
 - 가용 영역 → `vpc-basics`
 - 가중 라운드 로빈 → `load-balancing-algorithms`
 - 감는 수 → `ray-casting`
+- 감쇠비 → `spring-animation`
 - 같은 출처 정책 → `cors`
 - 개념적 모델링 → `sqld-data-modeling`
 - 갱신 손실 → `db-transaction-isolation`
@@ -4587,6 +4628,7 @@
 - 고차 컴포넌트 → `pattern-decorator`
 - 고차 함수 → `js-first-class-callbacks`
 - 공간 복잡도 → `big-o-notation`
+- 공유 요소 전환 → `view-transitions-shared-element`
 - 공유 전달 → `js-primitive-vs-reference`
 - 공통 원인 고장 → `high-availability`
 - 과반 쿼럼 → `network-partitions`
@@ -4695,6 +4737,7 @@
 - 리버스 프록시 → `proxy-reverse-proxy`
 - 리틀의 법칙 → `latency-bandwidth-throughput`
 - 리프레시 토큰 → `token-login`
+- 리플 효과 → `animation-patterns`
 - 릴리스 리비전 → `helm-basics`
 - 링크 로컬 주소 → `ipv6-basics`
 - 마이그레이션 도구 → `db-migration-tools`
@@ -4837,11 +4880,13 @@
 - 스코프 체인 → `js-scope-lexical`
 - 스크러빙 → `ddos-protection`
 - 스키마 레지스트리 → `schema-versioning`
+- 스태거 애니메이션 → `animation-patterns`
 - 스테이징 영역 → `git-staging-area`
 - 스트랭글러 피그 → `microservices`
 - 스트리밍 복제 → `db-replication-sharding`
 - 스트리밍 SSR → `rendering-strategies`
 - 스팟 인스턴스 → `cloud-cost-optimization`
+- 스프링 애니메이션 → `spring-animation`
 - 스플릿 브레인 → `leader-election`
 - 슬라이딩 로그 → `rate-limiting-algorithms`
 - 슬라이딩 윈도 카운터 → `rate-limiting-algorithms`
@@ -4867,6 +4912,7 @@
 - 알림 피로 → `alerting`
 - 암달의 법칙 → `scaling-horizontal-vertical`
 - 암시적 형 변환 → `sqld-type-conversion`
+- 애니메이션 패턴 → `animation-patterns`
 - 애니캐스트 → `cdn-edge-anycast`
 - 액세스 토큰 → `token-login`
 - 얕은 헬스 체크 → `health-checks`
@@ -5114,6 +5160,7 @@
 - 표현 문제 → `pattern-visitor`
 - 풀 고갈 → `connection-pool`
 - 프라이빗 서브넷 → `vpc-subnets-route-tables`
+- 프레임 예산 → `animation-performance`
 - 프로비저닝된 동시성 → `cold-starts`
 - 프로젝트 폴더 구조 → `k8s-project-structure`
 - 프로토타입 패턴 → `pattern-prototype`
@@ -5139,6 +5186,7 @@
 - 함수 선언문 → `js-function-forms`
 - 함수 종속 → `db-modeling-normalization`
 - 함수 표현식 → `js-function-forms`
+- 합성 스레드 → `animation-performance`
 - 핫 키 → `caching-strategies`
 - 핫 파티션 → `db-type-key-value`
 - 해를 따라 넘기는 교대 → `on-call`
@@ -5429,6 +5477,7 @@
 - first-parent → `git-branch-merge`
 - Flannel → `k8s-cni-pod-network`
 - flatMap → `js-array-transform`
+- FLIP 기법 → `view-transitions-shared-element`
 - Flux CD → `gitops-argocd-vs-flux`
 - Flyway → `db-migration-tools`
 - flyway_schema_history → `db-migration-tools`
@@ -5472,6 +5521,7 @@
 - GoF → `design-patterns-overview`
 - GOMEMLIMIT → `garbage-collection`
 - goodput → `latency-bandwidth-throughput`
+- Gooey 효과 → `animation-patterns`
 - graceful node shutdown → `k8s-node-maintenance`
 - Grafana 알림 → `grafana-dashboards`
 - grafonnet → `grafana-dashboards`
@@ -5628,6 +5678,7 @@
 - library 차트 → `helm-dependencies-oci-gitops`
 - limit_req → `nginx-https-performance`
 - LimitRange → `k8s-pod-resources`
+- linear() 이징 → `spring-animation`
 - listen_addresses → `postgres-connections-pg-hba`
 - LISTEN/NOTIFY → `postgres-functions-triggers`
 - ListenerSet → `k8s-gateway-api`
@@ -5749,6 +5800,7 @@
 - OTel Collector → `observability-basics`
 - out-of-service taint → `k8s-node-maintenance`
 - OUTER JOIN → `sqld-joins`
+- overshoot → `spring-animation`
 - OWASP CRS → `waf`
 - ownerReferences → `k8s-api-objects`
 - P2C → `load-balancing-algorithms`
@@ -5797,6 +5849,7 @@
 - Power of Two Choices → `load-balancing-algorithms`
 - Pre-Vote → `raft-consensus`
 - prefer-const → `js-var-let-const`
+- prefers-reduced-motion → `animation-performance`
 - preflight → `cors`
 - PREPARE TRANSACTION → `distributed-transactions-2pc`
 - presigned URL → `serverless-limits`
@@ -6070,6 +6123,8 @@
 - Velero → `velero-backup`
 - version skew policy → `k8s-cluster-upgrade`
 - Vertical Pod Autoscaler → `k8s-vpa`
+- View Transitions API → `view-transitions-shared-element`
+- view-transition-name → `view-transitions-shared-element`
 - visibility map → `postgres-mvcc-vacuum`
 - Visitor 패턴 → `pattern-visitor`
 - VLAN → `vlan-basics`
@@ -6092,6 +6147,7 @@
 - WeakMap → `js-memory-leak`
 - WebSocket → `realtime-communication`
 - WebSocket 프레임 → `websocket-deep-dive`
+- will-change → `animation-performance`
 - WireGuard → `vpn-ipsec-wireguard`
 - Wireshark → `packet-capture-tcpdump`
 - WITH CHECK OPTION → `sqld-correlated-subquery`
@@ -6123,6 +6179,7 @@
 
 - `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
+- `animation-performance` ↔ `animation-patterns` (25%: 애니메이션, 움직임이, ux, frontend, animation, accessibility, 주기)
 - `server-sent-events` ↔ `long-polling` (25%: 다음, 붙잡는, 장애를, 만났을, 가장, 깊게, 재연결)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (25%: 예제, 느려지는, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (25%: 연산자, 느려지는, 시험, 포인트)
@@ -6134,8 +6191,8 @@
 - `sqld-null-functions` ↔ `sqld-type-conversion` (22%: 테이블, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (22%: 테이블, 시험, 포인트, oracle)
 - `redis-cluster` ↔ `db-sharding` (21%: 키를, 데이터를, 나누는, 해시)
+- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (21%: 서브쿼리, 느려지는, 시험, 포인트)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
-- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (20%: 서브쿼리, 느려지는, 시험, 포인트)
 - `sql-aggregation-pitfalls` ↔ `sqld-group-by-having` (19%: 세는, 행이, 행을, group, 집계, by)
 - `edge-caching` ↔ `http-caching-cdn` (19%: 상한, 오리진이, 사람마다, 공유, 엣지에서, cache)
 - `ci-cd-basics` ↔ `github-actions-docker-ecr` (19%: 커밋, 가는, 빌드하고, 배포가, ci, cd, 뼈대)
@@ -6148,6 +6205,8 @@
 - `sqld-set-operators` ↔ `sqld-group-by-having` (19%: 행을, 시험, 포인트)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
 - `k8s-statefulset` ↔ `k8s-pv-pvc` (18%: pod마다, 디스크는, 사라진다, 노드가, statefulset은, 디스크, 디스크를)
+- `animation-patterns` ↔ `loading-patterns` (18%: 누른, ux, frontend, accessibility, 알면, 부탁이)
+- `spring-animation` ↔ `animation-patterns` (18%: ux, frontend, animation, css, 애니메이션)
 - `multi-region` ↔ `git-merge-conflict` (18%: 않게, 충돌을, 충돌)
 - `velero-backup` ↔ `k8s-etcd-backup` (17%: etcd, 백업, 매일, 이름으로, sre)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (17%: 밖에서, 확인하기, 요청마다, next.js, rendering, ssr)
@@ -6158,14 +6217,18 @@
 - `sqld-correlated-subquery` ↔ `sqld-type-conversion` (17%: 예제, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-rollup-cube-grouping-sets` (17%: 적는다, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-group-by-having` (17%: 시험, 포인트, oracle)
-- `sqld-type-conversion` ↔ `sqld-joins` (17%: 시험, 포인트, oracle)
-- `db-type-key-value` ↔ `db-type-graph` (17%: 맞는, 곳과, 아닌, 관계형, nosql)
-- `semantic-versioning` ↔ `api-versioning` (16%: 약속, 버전, 배포, 버전은, 깨지는, 때문에)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `animation-performance` ↔ `view-transitions-shared-element`
+- `animation-performance` ↔ `spring-animation`
+- `animation-performance` ↔ `animation-patterns`
+- `view-transitions-shared-element` ↔ `spring-animation`
+- `view-transitions-shared-element` ↔ `animation-patterns`
+- `spring-animation` ↔ `animation-patterns`
+- `animation-patterns` ↔ `loading-patterns`
 - `serverless-architecture` ↔ `cloud-cost-optimization`
 - `serverless-architecture` ↔ `serverless-limits`
 - `serverless-architecture` ↔ `cold-starts`

@@ -1,5 +1,7 @@
 import { AB_TESTING } from "./ab-testing";
 import { ALERTING } from "./alerting";
+import { ANIMATION_PATTERNS } from "./animation-patterns";
+import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
 import { API_PAGINATION_SORTING } from "./api-pagination-sorting";
 import { API_VERSIONING } from "./api-versioning";
@@ -347,6 +349,7 @@ import { SERVERLESS_LIMITS } from "./serverless-limits";
 import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SLI_SLO } from "./sli-slo";
+import { SPRING_ANIMATION } from "./spring-animation";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
@@ -388,6 +391,7 @@ import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
 import { VELERO_BACKUP } from "./velero-backup";
+import { VIEW_TRANSITIONS_SHARED_ELEMENT } from "./view-transitions-shared-element";
 import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
@@ -406,6 +410,8 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 export const QUESTION_SETS = [
   AB_TESTING,
   ALERTING,
+  ANIMATION_PATTERNS,
+  ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
   API_PAGINATION_SORTING,
   API_VERSIONING,
@@ -753,6 +759,7 @@ export const QUESTION_SETS = [
   SERVICE_DISCOVERY,
   SERVICE_MESH,
   SLI_SLO,
+  SPRING_ANIMATION,
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
@@ -794,6 +801,7 @@ export const QUESTION_SETS = [
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
   VELERO_BACKUP,
+  VIEW_TRANSITIONS_SHARED_ELEMENT,
   VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,

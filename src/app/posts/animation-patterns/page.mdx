@@ -1,0 +1,410 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("animation-patterns");
+
+목록에서 카드를 누르면 상세 화면이 뜬다. 그런데 화면이 툭 바뀌어서 방금 누른 게 어디로 갔는지 눈이 잠깐 헤맨다. AI 도구에 "넘어갈 때 좀 자연스럽게 해 줘"라고 부탁했더니 화면 전체에 페이드가 붙어 왔다. 틀린 답은 아니다. 다만 내가 원한 건 누른 카드의 사진이 그대로 커지면서 상세 화면의 큰 사진이 되는 움직임이었다. 이 움직임에는 shared element transition이라는 이름이 있다.
+
+[로딩 패턴](/posts/loading-patterns)에서처럼 애니메이션도 이름을 알면 부탁이 짧아진다. 아래는 자주 쓰는 아홉 가지다. 카드마다 한 바퀴씩 계속 돈다. 이 글은 각 패턴이 언제 도움이 되고 언제 방해가 되는지, 부탁할 때 쓸 이름, 그리고 그 움직임을 만드는 최소한의 코드를 짧게 훑는다.
+
+<MotionDemo
+  caption="UI 애니메이션 패턴 아홉 가지. 이름이 곧 명세다."
+  patterns={["gooey", "slide-in", "spring-pop", "stagger", "shared-element", "ripple", "path-draw", "marquee", "tilt"]}
+/>
+
+깊게 들어갈 주제는 따로 썼다. 튀어나왔다 자리 잡는 움직임의 물리는 [스프링 애니메이션](/posts/spring-animation)에서, 카드가 상세 화면이 되는 구현은 [View Transitions와 FLIP](/posts/view-transitions-shared-element)에서, 버벅이지 않게 만드는 법과 움직임 줄이기 설정은 [애니메이션 성능과 접근성](/posts/animation-performance)에서 다룬다.
+
+## 움직임이 화면에서 맡는 일
+
+애니메이션을 "예쁘게"라는 말로 부탁하면 결과도 장식이 된다. 움직임을 넣기 전에 그 움직임이 무슨 일을 하는지부터 정하면 고를 패턴이 줄어든다. 대개 네 가지 중 하나다.
+
+- 피드백: 내 입력을 화면이 받았다고 알린다. 누른 자리에서 퍼지는 물결, 숫자가 바뀌며 톡 튀는 배지.
+- 방향 안내: 새로 나타난 것이 어디서 왔고 어디로 돌아가는지 보여 준다. 아래에서 올라오는 시트는 아래로 내리면 닫힌다는 걸 미리 알려 준다.
+- 연속성: 화면이 바뀌어도 같은 물체가 이어진다는 걸 보여 준다. 사용자는 새 화면을 처음부터 다시 읽지 않아도 된다.
+- 즐거움: 정보는 없지만 브랜드의 느낌을 만든다. 많아지면 가장 먼저 짜증의 원인이 된다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="패턴마다 주로 맡는 일. 즐거움 쪽은 적게 쓸수록 오래 버틴다."
+  nodes={[
+    { id: "fb", label: "피드백", sub: "입력을 받았다", x: 80, y: 40, w: 120 },
+    { id: "or", label: "방향 안내", sub: "어디서 왔나", x: 210, y: 40, w: 120 },
+    { id: "co", label: "연속성", sub: "같은 물체다", x: 330, y: 40, w: 110 },
+    { id: "ripple", label: "Ripple", x: 50, y: 150, w: 80 },
+    { id: "pop", label: "Spring pop", x: 140, y: 150, w: 90 },
+    { id: "slide", label: "Slide in", x: 240, y: 150, w: 80 },
+    { id: "shared", label: "Shared element", x: 345, y: 150, w: 100 },
+    { id: "stagger", label: "Stagger", x: 280, y: 215, w: 80 },
+    { id: "fun", label: "즐거움", sub: "gooey · marquee · tilt · path", x: 110, y: 215, w: 190 },
+  ]}
+  edges={[
+    { from: "ripple", to: "fb" },
+    { from: "pop", to: "fb" },
+    { from: "slide", to: "or" },
+    { from: "shared", to: "co" },
+    { from: "shared", to: "or", dashed: true },
+    { from: "stagger", to: "co", dashed: true },
+    { from: "pop", to: "fun", dashed: true },
+  ]}
+/>
+
+해가 되는 경우도 공통점이 있다. 사용자가 기다려야 다음 행동을 할 수 있는 움직임, 같은 화면에서 수십 번 반복되는 움직임, 사용자가 시작하지 않았는데 크게 움직이는 것들이다. 그리고 운영체제에서 움직임 줄이기를 켠 사람에게는 어떤 패턴이든 줄이거나 꺼야 한다.
+
+## 누른 자리에서 대답하기
+
+버튼을 눌렀는데 아무 변화가 없으면 사용자는 한 번 더 누른다. 가장 작은 피드백은 누른 순간 그 자리가 반응하는 것이다.
+
+<MotionDemo
+  caption="Ripple은 누른 좌표에서 퍼지고, Spring pop은 목표 크기를 살짝 지나쳤다가 돌아온다."
+  patterns={["ripple", "spring-pop"]}
+/>
+
+### Ripple
+
+누른 지점을 중심으로 원이 커지며 사라진다. 머티리얼 디자인이 퍼뜨린 패턴이라 "Material ripple from the touch point"라고 하면 대부분 알아듣는다. 버튼 가운데가 아니라 손가락이 닿은 좌표에서 시작해야 의미가 있다. 손가락이 닿은 걸 화면이 봤다는 증거이기 때문이다.
+
+```css
+.button {
+  position: relative;
+  overflow: hidden; /* 원이 버튼 밖으로 나가지 않게 자른다 */
+}
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: currentColor;
+  translate: -50% -50%;
+  pointer-events: none;
+  animation: ripple 600ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes ripple {
+  from { scale: 0; opacity: 0.3; }
+  to { scale: 1; opacity: 0; }
+}
+```
+
+```js
+button.addEventListener("pointerdown", (e) => {
+  const r = button.getBoundingClientRect();
+  // 어느 모서리에서 눌러도 반대쪽 모서리까지 덮도록 대각선의 두 배를 지름으로 쓴다
+  const size = Math.hypot(r.width, r.height) * 2;
+  const dot = document.createElement("span");
+  dot.className = "ripple";
+  dot.style.cssText = `left:${e.clientX - r.left}px; top:${e.clientY - r.top}px; width:${size}px; height:${size}px`;
+  button.append(dot);
+  dot.addEventListener("animationend", () => dot.remove()); // 다 퍼진 원은 지운다
+});
+```
+
+방해가 되는 경우는 두 가지다. 먼저 키보드다. 크로미움에서 버튼에 포커스를 두고 Enter와 Space를 눌러 이벤트를 찍어 보면 이렇게 나온다.
+
+```text
+click detail=0 clientX=0 clientY=0
+click detail=0 clientX=0 clientY=0
+```
+
+`pointerdown`은 아예 오지 않고 `click`만 온다. 그래서 위 코드는 키보드 사용자에게 물결을 보여 주지 않는다. `click`으로 옮기면 이번엔 좌표가 0이라 원이 화면 왼쪽 위 기준으로 엉뚱한 데서 퍼진다. `click`에서 `e.detail === 0`이면 키보드 입력으로 보고 버튼 가운데에서 시작하게 한다. 다른 하나는 정리다. 다 퍼진 원을 지우지 않으면 누를 때마다 `span`이 쌓인다. 위 코드의 `animationend` 정리가 빠지는 실수가 흔하다.
+
+### Spring pop
+
+알림 배지, 좋아요 하트, 장바구니 숫자처럼 새로 생기거나 바뀐 작은 것이 0에서 커지며 목표 크기를 살짝 넘겼다가 돌아온다. "scale-in with spring overshoot"라고 부탁한다. 넘쳤다 돌아오는 그 순간이 눈을 끈다.
+
+```css
+.badge {
+  scale: 0;
+  transition: scale 200ms cubic-bezier(0.65, 0, 0.35, 1); /* 사라질 때는 담백하게 */
+}
+.badge.is-shown {
+  scale: 1;
+  /* y 제어점이 1을 넘으면 중간에 1을 지나친다. 이 곡선은 시간의 57% 지점에서 약 1.098까지 간다 */
+  transition: scale 450ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+```
+
+위 곡선이 넘치는 양은 직접 계산해 봤다. 베지어 곡선의 y 값을 촘촘히 훑으면 최댓값이 1.0978이고 그때 시간 비율이 0.573이다. 10%쯤 넘쳤다가 한 번에 돌아오는 셈이다. 진짜 스프링처럼 몇 번 출렁이게 하려면 cubic-bezier로는 안 되고 스프링 계산이나 CSS `linear()`가 필요하다. 그 차이는 [스프링 애니메이션](/posts/spring-animation)에 숫자로 정리했다.
+
+방해가 되는 곳은 크고 자주 보는 요소다. 모달 전체나 페이지 본문이 출렁이면 읽기 전에 멀미부터 난다. 넘침은 작은 요소에만 쓴다.
+
+## 어디서 왔는지 보여 주기
+
+새로 나타난 것이 아무 데서나 뿅 생기면 사용자는 그게 무엇과 연결된 화면인지 추측해야 한다. 들어오는 방향이 그 답을 대신한다.
+
+<MotionDemo
+  caption="Slide in은 가장자리에서, Shared element는 누른 물체에서 다음 화면이 시작된다."
+  patterns={["slide-in", "shared-element"]}
+/>
+
+### Slide in
+
+바텀 시트, 사이드 드로어, 토스트처럼 화면 가장자리에서 미끄러져 들어온다. 들어온 방향이 곧 닫는 방향이라는 약속이 생긴다. 아래에서 올라온 시트는 아래로 끌어내리면 닫힐 것 같고, 실제로 그렇게 만들어야 한다. 부탁할 때는 "bottom sheet that slides in from the bottom edge, with a dimmed backdrop"처럼 어느 가장자리인지까지 말한다.
+
+```css
+.sheet {
+  transform: translateY(100%);
+  transition: transform 300ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.sheet[data-open="true"] {
+  transform: translateY(0);
+  transition: transform 450ms cubic-bezier(0.34, 1.56, 0.64, 1); /* 들어올 때만 살짝 지나쳤다 멈춘다 */
+}
+```
+
+`display: none`이던 요소가 나타날 때는 처음 상태가 없어서 transition이 돌지 않는다. 예전엔 한 프레임 미뤘다가 클래스를 붙이는 꼼수를 썼는데, 지금은 `@starting-style`로 "처음 그려질 때의 값"을 적을 수 있다. 크롬 117, 사파리 17.5, 파이어폭스 129 무렵부터 지원한다.
+
+```css
+.toast {
+  transform: translateX(0);
+  transition: transform 300ms ease-out;
+}
+@starting-style {
+  .toast {
+    transform: translateX(110%); /* 처음 그려질 때 오른쪽 밖에서 출발한다 */
+  }
+}
+```
+
+방향을 아무렇게나 섞으면 이 약속이 깨진다. 같은 앱에서 어떤 시트는 아래에서, 어떤 시트는 오른쪽에서 오면 닫는 제스처를 매번 다시 배워야 한다. 그리고 들어오는 시간이 길면 그동안 사용자는 내용을 못 읽는다. 들어오는 데 300~450ms면 충분하다.
+
+### Shared element
+
+글 처음의 장면이다. 목록의 썸네일과 상세 화면의 큰 사진을 같은 물체로 보고, 앞 화면의 자리와 크기에서 뒷 화면의 자리와 크기로 이어서 움직인다. 이름은 "shared element transition", 웹에서는 "View Transitions API로 `view-transition-name`을 같게 준다"고 하면 구현까지 정해진다.
+
+<SequenceDiagram
+  caption="같은 이름표를 단 두 요소를 브라우저가 이어 준다."
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "list", label: "목록 화면" },
+    { id: "browser", label: "브라우저" },
+    { id: "detail", label: "상세 화면" },
+  ]}
+  steps={[
+    { from: "user", to: "list", label: "카드 누름", title: "카드를 누른다", detail: "누른 카드의 썸네일에 hero라는 이름표를 붙인다. 다른 카드에는 붙이지 않는다." },
+    { from: "list", to: "browser", label: "옛 화면 찍기", title: "지금 화면을 사진으로 찍어 둔다", detail: "startViewTransition이 불리면 브라우저는 바뀌기 전 화면과 hero의 위치·크기를 기억한다." },
+    { from: "browser", to: "detail", label: "DOM 바꾸기", title: "상세 화면으로 바꾼다", detail: "콜백 안에서 DOM을 상세 화면으로 바꾼다. 상세의 큰 사진에도 같은 hero 이름표가 있다." },
+    { from: "detail", to: "browser", label: "새 화면 찍기", title: "바뀐 화면도 찍는다", detail: "새 hero의 위치·크기를 잰다. 이제 처음과 끝을 모두 안다." },
+    { from: "browser", to: "user", label: "hero 이어 붙이기", title: "썸네일이 큰 사진으로 자란다", detail: "hero는 옛 자리에서 새 자리로 움직이며 커지고, 나머지 화면은 겹쳐서 바뀐다." },
+  ]}
+/>
+
+```js
+function openDetail(card) {
+  const img = card.querySelector("img");
+  img.style.viewTransitionName = "hero"; // 누른 카드에만 이름을 단다. 둘 이상이면 전환이 통째로 건너뛰어진다
+  if (!document.startViewTransition) return renderDetail(card.dataset.id); // 지원하지 않으면 그냥 바꾼다
+  document.startViewTransition(() => renderDetail(card.dataset.id));
+}
+```
+
+이름표가 둘 이상 겹치면 전환이 아예 일어나지 않고, 화면만 바뀐다. 크로미움에서 직접 확인한 오류와 지원 범위, 직접 계산하는 FLIP 방식은 [View Transitions와 FLIP](/posts/view-transitions-shared-element)에 정리했다. 방해가 되는 경우는 연결이 없는 화면끼리 억지로 잇는 것이다. 설정 화면에서 프로필 사진이 날아다니면 연속성이 아니라 소음이다.
+
+## 하나씩 차례로 들어오기
+
+목록 다섯 줄이 동시에 나타나면 눈은 어디부터 볼지 모른다. 위에서부터 60~80ms씩 늦춰서 들어오게 하면 시선이 위에서 아래로 끌려간다. 이 시차를 stagger라고 부른다. 부탁은 "staggered fade-up, 60ms apart, cap at 8 items"처럼 간격과 상한을 같이 말한다.
+
+<MotionDemo
+  caption="Stagger는 순서를, Path draw는 선의 방향을 보여 준다."
+  patterns={["stagger", "path-draw"]}
+/>
+
+```css
+.item {
+  opacity: 0;
+  translate: 0 8px;
+  animation: fade-up 400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--i) * 60ms); /* i번째 줄은 i × 60ms 늦게 시작한다 */
+}
+@keyframes fade-up {
+  to { opacity: 1; translate: 0 0; }
+}
+```
+
+```tsx
+import type { CSSProperties } from "react";
+
+export function StaggerList({ items }: { items: { id: string; title: string }[] }) {
+  return (
+    <ul>
+      {items.map((item, i) => (
+        // 8번째부터는 같은 시각에 들어온다. 긴 목록에서 마지막 줄이 한참 늦게 뜨는 걸 막는다
+        <li key={item.id} className="item" style={{ "--i": Math.min(i, 8) } as CSSProperties}>
+          {item.title}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+상한을 두는 이유는 계산하면 바로 보인다. 30줄에 60ms씩이면 마지막 줄은 29 × 60 = 1,740ms 뒤에 출발해서 2,140ms에 다 보인다. 사용자는 2초 동안 목록이 덜 그려진 화면을 본다. 줄마다 지연을 계산하는 함수를 직접 만들어 보자.
+
+<CodePlayground
+  caption="상한이 있는 stagger 지연 계산"
+  functionName="staggerDelays"
+  initialCode={`function staggerDelays(count, gapMs, cap) {
+  // i번째 줄(0부터)의 지연은 min(i, cap) * gapMs
+  // 반환: 길이 count인 지연(ms) 배열
+  return [];
+}`}
+  solution={`function staggerDelays(count, gapMs, cap) {
+  return Array.from({ length: count }, (_, i) => Math.min(i, cap) * gapMs);
+}`}
+  tests={[
+    { label: "5줄, 60ms, 상한 8", args: [5, 60, 8], expected: [0, 60, 120, 180, 240] },
+    { label: "10줄이면 9, 10번째 줄은 480ms에서 멈춘다", args: [10, 60, 8], expected: [0, 60, 120, 180, 240, 300, 360, 420, 480, 480] },
+    { label: "간격 0이면 동시에", args: [3, 0, 8], expected: [0, 0, 0] },
+    { label: "빈 목록", args: [0, 60, 8], expected: [] },
+  ]}
+/>
+
+상한 8이면 30줄이어도 마지막 줄은 480ms에 출발해 880ms에 다 보인다. 무한 스크롤로 새 페이지가 붙을 때마다 stagger를 다시 돌리는 것도 흔한 실수다. 이미 본 목록 아래에 붙는 줄은 그냥 나타나는 편이 낫다.
+
+## 선이 그려지는 동안 읽게 하기
+
+차트의 선, 체크 표시, 서명처럼 선이 스스로 그려지는 패턴이다. "SVG line drawing with stroke-dashoffset"이라고 부탁한다. 선이 그려지는 방향이 곧 시간의 방향이라서, 차트라면 왼쪽에서 오른쪽으로 흐름을 따라 읽게 된다.
+
+```html
+<svg viewBox="0 0 120 70">
+  <!-- pathLength="1"이면 실제 길이와 상관없이 선 전체 길이를 1로 본다 -->
+  <path class="draw" pathLength="1" d="M10 56 L30 42 L48 48 L70 26 L90 32 L110 12" />
+</svg>
+<style>
+  .draw {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 3;
+    stroke-dasharray: 1;      /* 길이 1짜리 선과 길이 1짜리 빈칸이 반복된다 */
+    stroke-dashoffset: 1;     /* 빈칸부터 보이게 밀어 둔다 */
+    animation: draw 900ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+</style>
+```
+
+예전에는 `getTotalLength()`로 길이를 재서 `stroke-dasharray`에 넣었다. `pathLength="1"`을 쓰면 그 계산이 필요 없다. 방해가 되는 경우는 사용자가 값을 빨리 읽어야 하는 대시보드다. 새로고침할 때마다 선이 1초씩 다시 그려지면 그 1초 동안 숫자를 못 읽는다. 처음 한 번만 그리거나, 데이터가 바뀐 부분만 움직인다.
+
+## 눈길을 끄는 장식 셋
+
+나머지 셋은 정보보다 분위기를 만든다. 하나씩은 좋지만 한 화면에 셋이 다 있으면 무엇이 중요한지 알 수 없다.
+
+<MotionDemo
+  caption="Gooey, Marquee, Tilt는 장식이다. 적게, 짧게, 끌 수 있게 쓴다."
+  patterns={["gooey", "marquee", "tilt"]}
+/>
+
+### Gooey
+
+가까운 덩어리끼리 녹아 붙는 효과다. 메뉴 버튼이 펼쳐지며 작은 버튼들이 떨어져 나오는 장면에 자주 쓴다. "gooey effect with an SVG blur and alpha threshold filter"라고 부탁한다. 원리는 두 단계다. 먼저 흐리게 번지게 해서 가까운 덩어리의 가장자리가 겹치게 만든다. 그다음 투명도를 높은 대비로 다시 잘라 날카로운 경계를 만든다. 겹친 부분은 투명도가 높아서 살아남으니 다리처럼 이어진다.
+
+```html
+<svg width="0" height="0" aria-hidden="true">
+  <filter id="goo">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur" />
+    <!-- 마지막 행: 새 알파 = 20 × 알파 − 8. 알파 0.4 이하는 0, 0.45 이상은 1로 잘린다 -->
+    <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8" />
+  </filter>
+</svg>
+<div class="blobs" style="filter: url(#goo)">
+  <span class="blob"></span>
+  <span class="blob"></span>
+</div>
+```
+
+`values`의 마지막 행이 알파를 다시 자르는 부분이다. 원래 알파가 0.4면 20 × 0.4 − 8 = 0, 0.45면 20 × 0.45 − 8 = 1이다. 그 사이의 좁은 구간에서만 반투명이 남으니 흐렸던 가장자리가 다시 또렷해진다. 방해가 되는 지점은 두 가지다. 필터 그룹 안의 글자도 같이 뭉개지니 글자는 필터 바깥에 둔다. 그리고 SVG 필터는 매 프레임 다시 그려야 해서 합성 단계에서 끝나는 `transform`보다 훨씬 비싸다. 큰 영역에 걸면 저사양 폰에서 바로 티가 난다.
+
+### Marquee
+
+로고 띠나 공지처럼 옆으로 끝없이 흐른다. "infinite marquee, pauses on hover and focus"라고 부탁한다. 같은 목록을 두 번 이어 붙이고 절반만큼 옮긴 뒤 처음으로 돌아가면 이음매가 보이지 않는다.
+
+```css
+.track {
+  display: flex;
+  width: max-content;
+  animation: marquee 20s linear infinite;
+}
+.marquee:hover .track,
+.marquee:focus-within .track {
+  animation-play-state: paused; /* 읽으려는 사람을 위해 멈춘다 */
+}
+@keyframes marquee {
+  to { transform: translateX(-50%); } /* 두 벌 중 한 벌만큼 가면 처음과 같은 모습이 된다 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .track { animation: none; }
+}
+```
+
+복제한 두 번째 벌에는 `aria-hidden="true"`를 붙여 스크린 리더가 같은 내용을 두 번 읽지 않게 한다. 접근성 기준으로는 WCAG 2.2.2가 걸린다. 저절로 시작해서 5초 넘게 움직이고 다른 내용과 함께 보이는 움직임은 멈출 방법이 있어야 한다. hover 멈춤만으로는 터치 사용자가 멈출 수 없으니 일시정지 버튼을 두는 편이 안전하다.
+
+### Tilt
+
+카드가 커서 쪽으로 살짝 기울어 입체감이 생긴다. "3D tilt on hover with perspective, disabled on touch"라고 부탁한다. 커서 위치를 −0.5~0.5로 바꿔 각도에 곱하면 된다.
+
+```js
+const MAX = 12; // 최대 기울기(도)
+card.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") return; // 손가락은 hover가 없다
+  const r = card.getBoundingClientRect();
+  const px = (e.clientX - r.left) / r.width - 0.5;
+  const py = (e.clientY - r.top) / r.height - 0.5;
+  // 부모에 perspective: 600px 이 있어야 입체로 보인다. 커서 쪽 가장자리가 보는 사람 쪽으로 다가온다
+  card.style.transform = `rotateX(${py * 2 * MAX}deg) rotateY(${-px * 2 * MAX}deg)`;
+});
+card.addEventListener("pointerleave", () => (card.style.transform = ""));
+```
+
+이 블로그의 데모 카드도 같은 식이다. 크로미움에서 카드 왼쪽 위 모서리 근처로 마우스를 옮기고 인라인 스타일을 읽어 보면 다음 값이 나온다.
+
+```text
+rotateX(-10.87deg) rotateY(11.41deg)
+```
+
+위쪽이라 rotateX가 음수(위 가장자리가 앞으로), 왼쪽이라 rotateY가 양수(왼쪽 가장자리가 앞으로)다. 터치 기기에는 hover가 없으니 기능이 사라진다. 그래서 위 데모는 마우스가 없을 때 가짜 커서가 원을 그리며 대신 움직인다. 실제 서비스라면 터치에서는 그냥 끄는 편이 낫다. 기울기 센서(`DeviceOrientationEvent`)로 대신하는 방법도 있지만 iOS 사파리는 사용자 제스처 안에서 권한을 따로 받아야 한다.
+
+## 부탁 한 문장에 넣을 것
+
+이름만으로는 부족하고 몇 가지를 붙여야 원하는 결과가 한 번에 나온다. 대상, 패턴 이름, 시간과 곡선, 되돌아갈 때, 움직임 줄이기다. 아래 문장을 조각으로 나눠 보면 각 조각이 무엇을 정하는지 보인다.
+
+<UrlAnatomy
+  caption="공유 요소 전환을 부탁하는 한 문장"
+  base="shared element transition"
+  separator=": "
+  joiner=", "
+  params={[
+    { key: "target", display: "목록 썸네일 → 상세 히어로", title: "대상", description: "무엇이 무엇으로 이어지는지. 이게 빠지면 화면 전체 페이드가 온다.", required: true },
+    { key: "how", display: "View Transitions API", title: "구현 방식", description: "웹이면 view-transition-name, 라이브러리를 쓰면 그 이름을 적는다. 지원하지 않는 브라우저에서는 그냥 바뀌게 해 달라고 붙인다." },
+    { key: "timing", display: "400ms ease-in-out", title: "시간과 곡선", description: "옮겨 가는 움직임은 400ms 안팎의 ease-in-out이 무난하다. 튀는 느낌을 원하면 spring이라고 적는다." },
+    { key: "back", display: "뒤로 가면 역방향", title: "되돌아갈 때", description: "상세에서 뒤로 가면 큰 사진이 다시 썸네일 자리로 줄어들어야 한다. 말하지 않으면 한 방향만 만들어 오는 경우가 많다." },
+    { key: "a11y", display: "reduced-motion이면 crossfade", title: "움직임 줄이기", description: "운영체제 설정을 켠 사람에게는 이동 없이 겹쳐 바뀌게 한다. 이 조각은 거의 항상 빠져서 온다." },
+  ]}
+/>
+
+디자이너와 이야기할 때도 같다. "부드럽게"보다 "shared element, 400ms, 뒤로 가면 역방향"이 훨씬 빨리 합의된다.
+
+## 넣기 전에 걸러 보는 질문
+
+마지막으로 패턴을 넣기 전에 스스로 묻는 것들이다. 이 움직임이 네 가지 일(피드백, 방향 안내, 연속성, 즐거움) 중 무엇을 하나. 사용자가 이 움직임이 끝나길 기다려야 다음 행동을 할 수 있나. 하루에 몇 번 보나. 열 번째 보는 사람에게도 괜찮은가. 움직임 줄이기를 켠 사람에게는 무엇이 보이나. 그리고 `transform`과 `opacity`만으로 만들 수 있나. 마지막 질문은 성능 이야기라서 [애니메이션 성능과 접근성](/posts/animation-performance)에서 실제 측정값과 함께 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### UI 애니메이션은 왜 넣나요? 장식 아닌가요?
+
+잘 쓴 애니메이션은 정보를 전달한다. 입력을 받았다는 피드백, 새 화면이 어디서 왔는지 알려 주는 방향 안내, 화면이 바뀌어도 같은 물체임을 보여 주는 연속성이 그렇다. 장식인 경우도 있지만 그건 적게 쓰고 끌 수 있어야 한다. 넣기 전에 이 움직임이 어떤 일을 하는지부터 정하면 고를 패턴이 정해진다.
+
+### stagger를 쓸 때 주의할 점은요?
+
+간격과 상한을 같이 정해야 한다. 30줄을 60ms씩 늦추면 마지막 줄은 2초가 넘어서야 보여서 목록이 덜 그려진 것처럼 느껴진다. 그래서 8개쯤에서 지연을 멈추고, 무한 스크롤로 붙는 줄에는 다시 적용하지 않는다. 처음 진입할 때 시선을 위에서 아래로 끌어 주는 용도로만 쓴다.
+
+### Ripple을 직접 만들 때 흔한 실수는요?
+
+세 가지다. 버튼에 `overflow: hidden`과 `position: relative`를 빼먹어 원이 밖으로 나간다. 다 퍼진 `span`을 지우지 않아 누를 때마다 쌓인다. 키보드로 누르면 `pointerdown` 없이 좌표가 0인 `click`만 와서 물결이 없거나 엉뚱한 데서 퍼진다. 각각 스타일, `animationend` 정리, `e.detail === 0`이면 가운데에서 시작하는 처리로 막는다.
+
+### Marquee 같은 자동 움직임은 접근성에서 무엇이 문제인가요?
+
+WCAG 2.2.2에 걸린다. 저절로 시작해서 5초 넘게 움직이고 다른 내용과 같이 보이면 멈추거나 숨길 수 있어야 한다. hover로 멈추는 것만으로는 터치 사용자가 멈출 수 없으니 일시정지 버튼을 두고, 움직임 줄이기 설정이면 처음부터 멈춰 둔다. 복제한 내용에는 `aria-hidden`을 붙여 두 번 읽히지 않게 한다.
+
+### Gooey 효과는 어떻게 만들고, 성능에서 무엇을 조심하나요?
+
+SVG 필터로 흐리게 번지게 한 뒤 `feColorMatrix`로 알파를 높은 대비로 다시 자른다. 가까운 덩어리는 번진 부분이 겹쳐 알파가 높게 남으니 서로 이어진다. 다만 필터는 매 프레임 다시 그려야 해서 `transform`만 바꾸는 애니메이션보다 훨씬 비싸다. 작은 영역에만 쓰고 글자는 필터 밖에 둔다.
+
+### AI 도구나 디자이너에게 애니메이션을 부탁할 때 무엇을 말해야 하나요?
+
+대상, 패턴 이름, 시간과 곡선, 되돌아갈 때의 동작, 움직임 줄이기 설정에서의 동작이다. "자연스럽게"라고만 하면 화면 전체 페이드 같은 가장 무난한 답이 온다. "목록 썸네일에서 상세 히어로로 shared element transition, 400ms ease-in-out, 뒤로 가면 역방향, reduced-motion이면 crossfade"처럼 말하면 한 번에 원하는 결과에 가까워진다.

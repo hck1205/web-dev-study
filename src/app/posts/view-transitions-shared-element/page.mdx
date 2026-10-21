@@ -1,0 +1,471 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("view-transitions-shared-element");
+
+상품 목록에서 세 번째 카드를 눌렀다. 상세 화면이 뜨고 위에 큰 사진이 있다. 같은 사진인데 화면이 툭 바뀌어서 사용자는 "방금 누른 그거 맞나" 하고 한 번 더 확인한다. 원하는 건 누른 카드의 사진이 그 자리에서 커지며 상세 화면의 큰 사진이 되는 움직임이다. [애니메이션 패턴](/posts/animation-patterns)에서 shared element transition이라고 부른 것이다.
+
+<MotionDemo
+  caption="목록의 타일이 그대로 자라 상세 화면의 큰 사진이 된다."
+  patterns={["shared-element"]}
+/>
+
+웹에서 이걸 만드는 방법은 두 갈래다. 직접 위치를 재서 `transform`으로 메우는 FLIP 기법, 그리고 브라우저가 앞뒤 화면을 찍어서 이어 주는 View Transitions API다. 둘 다 원리를 알아야 안 될 때 고칠 수 있으니 차례로 본다. 실험은 크로미움 141(Playwright)에서 직접 돌렸다. 움직임 곡선은 [스프링 애니메이션](/posts/spring-animation)에서, 왜 `transform`만 움직여야 하는지는 [애니메이션 성능과 접근성](/posts/animation-performance)에서 따로 다룬다.
+
+## 두 화면에 같은 물체가 있다는 착각
+
+목록의 썸네일과 상세의 큰 사진은 DOM에서는 서로 다른 요소다. 둘이 같은 물체처럼 보이려면 움직임이 "앞 화면의 위치와 크기"에서 출발해 "뒤 화면의 위치와 크기"에 도착하면 된다. 그 사이를 매 프레임 레이아웃을 다시 계산하며 옮기면 비싸다. 그래서 두 방법 모두 같은 요령을 쓴다. 레이아웃은 한 번에 바꾸고, 그 사이의 움직임은 `transform`으로만 그린다.
+
+## FLIP: 처음과 끝만 재고 사이를 transform으로 메운다
+
+FLIP은 Paul Lewis가 붙인 이름으로 네 단계의 머리글자다.
+
+- First: 바뀌기 전 요소의 상자(위치, 크기)를 잰다.
+- Last: 레이아웃을 바꾸고 새 상자를 잰다.
+- Invert: 새 자리에 있는 요소를 `transform`으로 옛 자리, 옛 크기처럼 보이게 되돌린다.
+- Play: 그 `transform`을 풀면서 새 자리로 미끄러지게 한다.
+
+화면 폭 390px에서 카드 세 개 중 세 번째를 펼치는 경우를 크로미움에서 그대로 재 봤다.
+
+```js
+const card = document.querySelectorAll(".card")[2];
+const box = (r) => ({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+
+const first = card.getBoundingClientRect();                      // F
+document.getElementById("app").classList.add("detail");         // 레이아웃을 바꾼다
+const last = card.getBoundingClientRect();                       // L
+const dx = first.left - last.left, dy = first.top - last.top;    // I
+const sx = first.width / last.width, sy = first.height / last.height;
+const anim = card.animate(                                       // P
+  [
+    { transformOrigin: "top left", transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
+    { transformOrigin: "top left", transform: "none" },
+  ],
+  { duration: 400, easing: "cubic-bezier(0.65, 0, 0.35, 1)" },
+);
+
+// 확인용: 멈춰 놓고 시점별 상자를 잰다
+anim.pause();
+anim.currentTime = 0;
+const atStart = card.getBoundingClientRect();
+anim.currentTime = 200;
+const mid = card.getBoundingClientRect();
+anim.finish();
+console.log({ first: box(first), last: box(last), invert: `translate(${dx}px, ${dy}px) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`,
+  atStart: box(atStart), mid: box(mid), end: box(card.getBoundingClientRect()) });
+```
+
+```text
+{
+  first: { x: 224, y: 8, w: 100, h: 70 },
+  last: { x: 8, y: 8, w: 316, h: 220 },
+  invert: 'translate(216px, 0px) scale(0.316, 0.318)',
+  atStart: { x: 224, y: 8, w: 100, h: 70 },
+  mid: { x: 116, y: 8, w: 208, h: 145 },
+  end: { x: 8, y: 8, w: 316, h: 220 }
+}
+```
+
+`atStart`가 `first`와 같다는 게 Invert의 뜻이다. 레이아웃은 이미 펼친 상태인데 눈에는 아직 작은 카드로 보인다. 애니메이션을 200ms 지점에 멈춰 재면 절반쯤 자란 208×145이고, 끝나면 `last`와 같다.
+
+<GeometryMorph
+  caption="FLIP 네 단계. 점선 상자는 레이아웃상의 진짜 자리다."
+  width={340}
+  height={260}
+  shapes={[{ id: "others", tone: "muted" }, { id: "last", tone: "outline" }, { id: "card", tone: "series1" }]}
+  steps={[
+    {
+      title: "First: 세 번째 카드를 잰다",
+      detail: "x 224, 너비 100, 높이 70. 아직 아무것도 바꾸지 않았다.",
+      shapes: { others: [[8, 28], [208, 28], [208, 98], [8, 98]], card: [[224, 28], [324, 28], [324, 98], [224, 98]] },
+      labels: [{ x: 274, y: 120, text: "100 × 70", size: "sm" }],
+      focus: ["card"],
+    },
+    {
+      title: "Last: 레이아웃을 한 번에 바꾼다",
+      detail: "클래스 하나로 카드가 316 × 220이 된다. 이 상태로 그리면 툭 바뀐다.",
+      shapes: { last: [[8, 28], [324, 28], [324, 248], [8, 248]], card: [[8, 28], [324, 28], [324, 248], [8, 248]] },
+      labels: [{ x: 166, y: 140, text: "316 × 220", size: "md" }],
+      focus: ["last"],
+    },
+    {
+      title: "Invert: transform으로 옛 모습처럼 되돌린다",
+      detail: "translate(216px, 0) scale(0.316, 0.318). 레이아웃은 큰데 눈에는 작은 카드다. 화면에 그리기 전에 끝내서 깜빡이지 않는다.",
+      shapes: { last: [[8, 28], [324, 28], [324, 248], [8, 248]], card: [[224, 28], [324, 28], [324, 98], [224, 98]] },
+      labels: [{ x: 166, y: 160, text: "레이아웃은 이미 큰 상자", size: "sm" }],
+      focus: ["card"],
+    },
+    {
+      title: "Play: 200ms 지점",
+      detail: "transform만 풀어 가는 중이다. 208 × 145. 이 동안 레이아웃 계산은 다시 하지 않는다.",
+      shapes: { last: [[8, 28], [324, 28], [324, 248], [8, 248]], card: [[116, 28], [324, 28], [324, 173], [116, 173]] },
+      labels: [{ x: 220, y: 195, text: "208 × 145", size: "sm" }],
+      focus: ["card"],
+    },
+    {
+      title: "Play: 끝",
+      detail: "transform이 none이 되면 진짜 레이아웃과 겹친다. 이제 움직임이 끝났다.",
+      shapes: { last: [[8, 28], [324, 28], [324, 248], [8, 248]], card: [[8, 28], [324, 28], [324, 248], [8, 248]] },
+      labels: [{ x: 166, y: 140, text: "316 × 220", size: "md" }],
+      focus: ["card"],
+    },
+  ]}
+/>
+
+Invert에 쓰는 네 숫자를 구하는 부분만 떼어 직접 써 보자. 테스트의 첫 줄은 위에서 크로미움으로 잰 값 그대로다.
+
+<CodePlayground
+  caption="First와 Last 상자로 Invert 값 구하기"
+  functionName="flipInvert"
+  initialCode={`function flipInvert(first, last) {
+  // first, last: { x, y, w, h }
+  // dx, dy: 옛 위치 - 새 위치
+  // sx, sy: 옛 크기 / 새 크기, 소수 셋째 자리로 반올림 (Math.round(v * 1000) / 1000)
+  // 반환: [dx, dy, sx, sy]
+  return [0, 0, 1, 1];
+}`}
+  solution={`function flipInvert(first, last) {
+  const r = (v) => Math.round(v * 1000) / 1000;
+  return [first.x - last.x, first.y - last.y, r(first.w / last.w), r(first.h / last.h)];
+}`}
+  tests={[
+    { label: "세 번째 카드를 펼칠 때", args: [{ x: 224, y: 8, w: 100, h: 70 }, { x: 8, y: 8, w: 316, h: 220 }], expected: [216, 0, 0.316, 0.318] },
+    { label: "다시 접을 때", args: [{ x: 8, y: 8, w: 316, h: 220 }, { x: 224, y: 8, w: 100, h: 70 }], expected: [-216, 0, 3.16, 3.143] },
+    { label: "자리만 옮길 때", args: [{ x: 0, y: 0, w: 50, h: 50 }, { x: 100, y: 40, w: 50, h: 50 }], expected: [-100, -40, 1, 1] },
+    { label: "그대로일 때", args: [{ x: 8, y: 8, w: 100, h: 70 }, { x: 8, y: 8, w: 100, h: 70 }], expected: [0, 0, 1, 1] },
+  ]}
+/>
+
+이 블로그의 `MotionDemo` 데모도 같은 식이다. `useLayoutEffect`에서 First는 이전 렌더에서 재 둔 값을 쓰고, Last를 잰 뒤 브라우저가 화면을 그리기 전에 Invert까지 끝낸다. React에서 `useEffect`로 하면 한 프레임 동안 펼친 상태가 그려졌다가 되돌아가서 깜빡인다.
+
+## FLIP이 어려워지는 곳
+
+원리는 간단한데 실제 화면에서는 몇 군데서 막힌다.
+
+`scale`은 안에 든 것까지 늘린다. 글자가 납작해지고 `border-radius`가 찌그러진다. 자식에 반대 비율(1/sx, 1/sy)을 걸어 상쇄하거나, 글자는 따로 나타나게 하고 사진처럼 늘어나도 괜찮은 부분만 FLIP한다.
+
+목록과 상세가 서로 다른 컴포넌트면 같은 요소가 아니다. 목록 쪽 요소는 사라지고 상세 쪽 요소가 새로 생긴다. 이때는 사라지기 전에 First를 따로 기록해 두었다가 새 요소에 적용해야 한다. 라우트가 바뀌면 그 값을 들고 갈 곳도 필요하다.
+
+스크롤도 함정이다. `getBoundingClientRect()`는 화면 기준 좌표라서, First를 잰 뒤 스크롤이 움직이면 엉뚱한 거리만큼 날아간다. 부모 기준 좌표로 바꿔 재거나 스크롤을 고정한다.
+
+그리고 진행 중에 다시 바뀌면 지금 `transform`이 섞인 상자를 First로 재게 된다. 이전 애니메이션을 끝내거나 취소한 뒤에 재야 한다. 이런 일을 브라우저가 대신 하게 만든 게 다음 API다.
+
+## 브라우저가 찍어서 이어 주는 View Transitions
+
+`document.startViewTransition(callback)`을 부르면 브라우저가 FLIP의 대부분을 대신한다. 다른 점은 요소 자체를 움직이지 않고, 앞뒤 화면을 사진(스냅숏)으로 찍어 그 사진들을 움직인다는 것이다.
+
+<SequenceDiagram
+  caption="startViewTransition 한 번에 일어나는 일"
+  actors={[
+    { id: "code", label: "내 코드" },
+    { id: "browser", label: "브라우저" },
+    { id: "dom", label: "DOM" },
+    { id: "pseudo", label: "의사 요소" },
+  ]}
+  steps={[
+    { from: "code", to: "browser", label: "startViewTransition", title: "전환을 시작한다", detail: "콜백을 넘긴다. 아직 DOM은 그대로다.", payload: "document.startViewTransition(() => openDetail())" },
+    { from: "browser", to: "dom", label: "옛 화면 찍기", title: "바뀌기 전을 찍는다", detail: "화면 전체(root)와 view-transition-name이 있는 요소를 따로 찍고 위치·크기를 기억한다. 렌더링은 잠시 멈춘다." },
+    { from: "browser", to: "code", label: "콜백 실행", title: "DOM을 바꾸게 한다", detail: "콜백이 상세 화면으로 DOM을 바꾼다. Promise를 돌려주면 끝날 때까지 기다린다." },
+    { from: "browser", to: "dom", label: "새 화면 찍기", title: "바뀐 뒤를 잰다", detail: "같은 이름의 요소를 새 화면에서 찾고 새 위치·크기를 잰다. 이건 사진이 아니라 실시간 화면이다." },
+    { from: "browser", to: "pseudo", label: "의사 요소 트리", title: "사진들을 맨 위에 쌓는다", detail: "페이지 위에 ::view-transition 트리를 만든다. 이름마다 group이 생기고, 그 안에 옛 사진과 새 화면이 겹친다." },
+    { from: "pseudo", to: "code", label: "ready, finished", title: "움직이고 끝난다", detail: "group은 옛 상자에서 새 상자로 크기와 위치가 바뀌고, 옛 사진은 사라지고 새 화면은 나타난다. 끝나면 트리가 지워지고 finished가 풀린다." },
+  ]}
+/>
+
+공유 요소로 만들 요소에는 이름을 붙인다. 목록 쪽 썸네일과 상세 쪽 큰 사진에 같은 이름을 주면 브라우저가 둘을 한 물체로 본다.
+
+```js
+function openDetail(card) {
+  card.style.viewTransitionName = "hero"; // 누른 카드에만 단다
+  if (!document.startViewTransition) {
+    renderDetail(card.dataset.id); // 지원하지 않는 브라우저는 그냥 바꾼다
+    return;
+  }
+  document.startViewTransition(() => renderDetail(card.dataset.id));
+}
+```
+
+```css
+/* 상세 쪽 큰 사진 */
+.detail-hero {
+  view-transition-name: hero;
+}
+/* 기본 길이와 곡선을 바꾼다 */
+::view-transition-group(hero) {
+  animation-duration: 400ms;
+  animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+}
+```
+
+크로미움에서 전환이 시작된 직후(`ready`) `document.getAnimations()`를 찍어 보면 브라우저가 만든 애니메이션이 그대로 보인다.
+
+```text
+::view-transition-group(root) -ua-view-transition-group-anim-root 250ms
+::view-transition-group(hero) -ua-view-transition-group-anim-hero 250ms
+::view-transition-new(root) -ua-view-transition-fade-in 250ms
+::view-transition-new(root) -ua-mix-blend-mode-plus-lighter 250ms
+::view-transition-old(root) -ua-view-transition-fade-out 250ms
+::view-transition-old(root) -ua-mix-blend-mode-plus-lighter 250ms
+::view-transition-new(hero) -ua-view-transition-fade-in 250ms
+::view-transition-new(hero) -ua-mix-blend-mode-plus-lighter 250ms
+::view-transition-old(hero) -ua-view-transition-fade-out 250ms
+::view-transition-old(hero) -ua-mix-blend-mode-plus-lighter 250ms
+```
+
+이름이 없는 나머지 화면은 `root`라는 이름으로 겹쳐 바뀌고(fade-out과 fade-in), `hero` 쪽은 group 애니메이션이 위치와 크기를 옮긴다. 기본 길이는 250ms였고, 호출부터 `finished`까지는 290ms가 걸렸다. 의사 요소 트리 모양은 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="이름마다 group이 생기고, 그 안에서 옛 사진과 새 화면이 겹친다."
+  nodes={[
+    { id: "root", label: "::view-transition", sub: "페이지 맨 위 덮개", x: 200, y: 30, w: 170 },
+    { id: "groot", label: "group(root)", sub: "이름 없는 나머지", x: 105, y: 105, w: 140 },
+    { id: "ghero", label: "group(hero)", sub: "위치·크기가 바뀐다", x: 295, y: 105, w: 150 },
+    { id: "pair", label: "image-pair(hero)", sub: "둘을 겹쳐 담는다", x: 295, y: 165, w: 150 },
+    { id: "old", label: "old(hero)", sub: "옛 사진, 사라짐", x: 240, y: 225, w: 110 },
+    { id: "new", label: "new(hero)", sub: "새 화면, 나타남", x: 355, y: 225, w: 100 },
+  ]}
+  edges={[
+    { from: "root", to: "groot" },
+    { from: "root", to: "ghero" },
+    { from: "ghero", to: "pair" },
+    { from: "pair", to: "old" },
+    { from: "pair", to: "new" },
+  ]}
+/>
+
+옛 쪽은 정지된 사진이라서, 크기가 많이 다른 두 요소를 이으면 중간에 옛 사진이 늘어나며 흐려 보인다. 사진처럼 비율이 같은 요소끼리 이을 때 가장 자연스럽다.
+
+전환 중에는 이 덮개가 페이지 위에 있다. 전환 길이를 2초로 늘려 놓고 도중에 버튼을 눌러 봤다.
+
+```text
+전환 전 클릭 1회 후 전환 중 클릭: 1 elementFromPoint: HTML
+전환이 끝난 뒤 클릭: 2
+```
+
+전환 중의 클릭은 버튼에 닿지 않았고(횟수가 1에서 그대로), 그 좌표의 요소는 `HTML`로 잡혔다. 끝난 뒤에야 다시 눌린다. 전환을 길게 잡으면 그만큼 화면이 입력을 먹는 셈이다.
+
+## 이름이 겹치면 전환은 통째로 건너뛴다
+
+가장 흔한 실수다. 목록의 모든 카드에 CSS로 `view-transition-name: hero`를 걸어 두면 같은 이름이 여러 개가 된다. 크로미움에서 카드 세 개에 같은 이름을 주고 전환을 돌린 결과다.
+
+```text
+{
+  ready: 'InvalidStateError: Transition was aborted because of invalid state',
+  finished: 'resolved',
+  domChanged: 'grid detail'
+}
+```
+
+`ready`는 실패하지만 콜백은 실행되어 DOM은 바뀐다(`domChanged`가 `grid detail`). 사용자 눈에는 애니메이션 없이 화면만 툭 바뀐다. 오류는 콘솔에만 남으니 "가끔 전환이 안 된다"는 제보로 돌아온다. 이름은 누른 요소에만 그 순간에 붙이거나, 요소마다 다르게(`card-42`처럼 id를 붙여서) 준다.
+
+전환이 진행 중일 때 새 전환을 시작해도 앞의 것이 끊긴다.
+
+```text
+{
+  firstReady: 'AbortError: Transition was skipped',
+  firstFinished: 'resolved',
+  second: 'finished'
+}
+```
+
+앞 전환의 `ready`가 `AbortError`로 실패하고, 앞의 `finished`는 풀리고, 뒤의 전환만 끝까지 간다. 빠르게 두 번 누르는 사용자에게 흔한 경우다. `ready` 실패를 잡지 않으면 처리되지 않은 Promise 거부가 콘솔에 쌓인다.
+
+```js
+const vt = document.startViewTransition(update);
+vt.ready.catch(() => {}); // 건너뛴 전환은 오류가 아니라 정상적인 경우로 본다
+await vt.finished;        // 건너뛰어도 DOM 변경은 끝났다
+```
+
+## 페이지 이동에도 붙는 문서 간 전환
+
+여기까지는 한 문서 안에서 DOM을 바꾸는 SPA 방식이다. 같은 출처(origin)의 다른 HTML로 이동하는 MPA에도 같은 효과를 붙일 수 있다. 두 페이지 모두에 CSS 한 줄을 넣고, 이을 요소에 같은 이름을 준다.
+
+```css
+@view-transition {
+  navigation: auto;
+}
+.thumb { view-transition-name: hero; } /* list.html */
+.hero  { view-transition-name: hero; } /* detail.html */
+```
+
+로컬 서버에 두 페이지를 띄우고 크로미움에서 링크를 눌렀다. 새 페이지에서 `pagereveal` 이벤트의 `viewTransition`을 확인하고, 준비되면 애니메이션을 찍었다.
+
+```text
+{
+  reveal: 'viewTransition 있음',
+  anims: [
+    '::view-transition-group(root) -ua-view-transition-group-anim-root',
+    '::view-transition-group(hero) -ua-view-transition-group-anim-hero',
+    '::view-transition-new(root) -ua-view-transition-fade-in',
+    '::view-transition-new(root) -ua-mix-blend-mode-plus-lighter',
+    '::view-transition-old(root) -ua-view-transition-fade-out',
+    '::view-transition-old(root) -ua-mix-blend-mode-plus-lighter',
+    '::view-transition-new(hero) -ua-view-transition-fade-in',
+    '::view-transition-new(hero) -ua-mix-blend-mode-plus-lighter',
+    '::view-transition-old(hero) -ua-view-transition-fade-out',
+    '::view-transition-old(hero) -ua-mix-blend-mode-plus-lighter'
+  ]
+}
+```
+
+같은 문서 전환과 똑같은 애니메이션 목록이다. 쓰는 쪽에서 보면 `startViewTransition`을 부르는 대신 내비게이션 자체가 전환을 시작한다는 점만 다르다.
+
+<NetworkTopology
+  caption="문서 간 전환. 옛 페이지가 떠나기 직전에 찍고, 새 페이지가 처음 보이기 직전에 잇는다."
+  width={400}
+  height={240}
+  zones={[
+    { id: "origin", label: "같은 출처 localhost:4711", x: 10, y: 20, w: 380, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "list", label: "list.html", sub: "썸네일 hero", x: 80, y: 80, icon: "client" },
+    { id: "browser", label: "브라우저", sub: "스냅숏 보관", x: 200, y: 160, icon: "server" },
+    { id: "detail", label: "detail.html", sub: "큰 사진 hero", x: 320, y: 80, icon: "client" },
+  ]}
+  links={[
+    { from: "list", to: "browser" },
+    { from: "browser", to: "detail" },
+    { from: "list", to: "detail", dashed: true, label: "링크 이동" },
+  ]}
+  steps={[
+    { path: ["list"], title: "링크를 누른다", detail: "같은 출처로 가는 일반 내비게이션이다. 두 페이지 모두 @view-transition을 켜 두었다." },
+    { path: ["list", "browser"], packet: "옛 사진", title: "떠나기 직전에 찍는다", detail: "옛 페이지에서 pageswap 이벤트가 나고, 화면과 hero 요소를 찍어 둔다." },
+    { path: ["browser", "detail"], packet: "새 HTML", title: "새 페이지를 그릴 준비", detail: "새 문서를 받아 첫 렌더링 직전까지 간다. 여기서 pagereveal 이벤트가 나고 e.viewTransition이 있다." },
+    { path: ["list", "browser", "detail"], packet: "hero", title: "같은 이름끼리 잇는다", detail: "옛 hero 사진이 새 hero 자리로 움직이고 나머지는 겹쳐 바뀐다." },
+    { path: ["list", "detail"], packet: "다른 출처", blocked: true, title: "다른 출처면 안 된다", detail: "다른 사이트로 가는 이동에는 전환이 붙지 않는다. 같은 출처끼리만이다." },
+  ]}
+/>
+
+## 어디까지 지원하나
+
+내가 확인한 범위를 적는다. 버전은 MDN과 각 브라우저 릴리스 노트에서 본 값이고, 쓰기 전에 다시 확인하는 편이 안전하다.
+
+| 기능 | 크롬·엣지 | 사파리 | 파이어폭스 |
+|---|---|---|---|
+| 같은 문서 전환 (`startViewTransition`) | 111부터 | 18부터 | 144부터 (2025년 10월) |
+| 문서 간 전환 (`@view-transition`) | 126부터 | 18.2부터 | 아직 없음 |
+| `view-transition-class`, 전환 types | 125부터 | 18.2 무렵 | 확인하지 못했다 |
+
+이 글의 실험을 돌린 크로미움 141에서는 아래처럼 나왔다.
+
+```text
+{
+  startViewTransition: 'function',
+  'view-transition-name': true,
+  'view-transition-class': true,
+  CSSViewTransitionRule: 'function',
+  activeViewTransition: false,
+  types: true,
+  linearEasing: true
+}
+```
+
+`document.activeViewTransition`처럼 최근에 논의된 속성은 141에 아직 없었다. 지원 범위가 이렇게 갈리기 때문에 View Transitions는 꼭 점진적 향상으로 쓴다. `startViewTransition`이 없으면 콜백만 바로 실행하고, CSS의 `@view-transition`은 모르는 브라우저가 무시한다. 전환이 없어도 기능은 그대로 돌아가야 한다.
+
+## React와 Next.js에서 쓰기
+
+React에서 그냥 `document.startViewTransition(() => setOpen(true))`라고 쓰면 대개 전환이 안 보인다. `setState`는 바로 DOM을 바꾸지 않고 나중에 몰아서 커밋하는데, 브라우저는 콜백이 끝난 시점의 DOM을 새 화면으로 찍기 때문이다. 오래전부터 쓰던 해법은 `flushSync`로 콜백 안에서 커밋을 강제하는 것이다.
+
+```tsx
+import { flushSync } from "react-dom";
+
+function open(id: string) {
+  if (!document.startViewTransition) return setSelected(id);
+  document.startViewTransition(() => {
+    flushSync(() => setSelected(id)); // 콜백이 끝나기 전에 DOM까지 바꿔 둔다
+  });
+}
+```
+
+React에는 이 연결을 직접 다루는 `<ViewTransition>` 컴포넌트가 들어왔다. 이 블로그 프로젝트에 설치된 React 19.3.1의 `react` 패키지에서 `ViewTransition`과 `addTransitionType`이 export되고, 타입 정의 주석은 이 전환이 `startTransition`, `useDeferredValue`, Action, Suspense가 내용을 드러낼 때 같은 비동기 업데이트에서만 일어난다고 적는다. 실제로 그런지 크로미움에서 같은 컴포넌트를 두 방식으로 바꿔 봤다.
+
+```tsx
+<button id="sync" onClick={() => setOpen((o) => !o)}>sync</button>
+<button id="transition" onClick={() => startTransition(() => setOpen((o) => !o))}>transition</button>
+{open ? (
+  <ViewTransition name="hero"><div className="big" /></ViewTransition>
+) : (
+  <ViewTransition name="hero"><div className="small" /></ViewTransition>
+)}
+```
+
+```text
+setState만: []
+startTransition 안에서: ["::view-transition-group(root) | ::view-transition-group(hero) | ::view-transition-new(root) | ::view-transition-new(root) | ::view-transition-old(root) | ::view-transition-old(root) | ::view-transition-new(hero) | ::view-transition-new(hero) | ::view-transition-old(hero) | ::view-transition-old(hero)"]
+```
+
+그냥 `setState`로 바꾸면 브라우저의 전환이 아예 시작되지 않았다. `startTransition` 안에서 바꾸자 `hero` group이 생겼다. "ViewTransition을 감쌌는데 아무 일도 안 일어난다"면 먼저 그 업데이트가 transition 안에서 일어나는지 본다. 이름을 같게 준 두 `<ViewTransition>`이 하나는 사라지고 하나는 생기면 공유 요소로 이어지고, `share`, `enter`, `exit` prop으로 상황마다 다른 `view-transition-class`를 줄 수 있다.
+
+Next.js App Router의 화면 이동은 원래 transition 안에서 일어나서 `<ViewTransition>`과 잘 맞는다. 이 블로그가 쓰는 Next 16.4.1의 `Link` 타입에는 `transitionTypes` prop이 있어서, 이동할 때 `addTransitionType`으로 넘길 이름을 정할 수 있다. 앞으로 가기와 뒤로 가기에 다른 방향의 슬라이드를 주는 식이다. Next 15 무렵에는 `next.config`의 `experimental.viewTransition`을 켜야 했는데, 16.4.1의 설정 타입에는 그 항목이 보이지 않았다. 버전마다 바뀐 부분이라 쓰는 버전의 문서를 기준으로 한다.
+
+```tsx
+import Link from "next/link";
+
+// 이동할 때 "forward" 타입을 붙인다. CSS에서 :active-view-transition-type(forward)로 방향을 나눈다
+<Link href={`/products/${id}`} transitionTypes={["forward"]}>
+  <ViewTransition name={`product-${id}`}>
+    <img src={thumb} alt={name} />
+  </ViewTransition>
+</Link>
+```
+
+목록에서는 상품마다 `product-${id}`처럼 다른 이름을 줘야 한다는 점은 React에서도 같다. 같은 이름이 여러 개면 위에서 본 대로 전환이 통째로 건너뛰어진다.
+
+## 움직임 줄이기 설정은 저절로 반영되지 않는다
+
+운영체제에서 움직임 줄이기를 켠 상태를 Playwright로 흉내 내고 같은 전환을 돌렸다.
+
+```text
+{ reduce: true, anims: 10 }
+```
+
+미디어 쿼리는 `reduce`인데 애니메이션은 똑같이 10개가 붙었다. 브라우저가 알아서 꺼 주지 않는다. 큰 위치 이동은 어지럼을 일으킬 수 있으니 직접 줄인다.
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none; /* 이동 없이 바로 바뀐다. 짧은 크로스페이드만 남겨도 된다 */
+  }
+}
+```
+
+화면이 바뀐 뒤 포커스도 챙긴다. 전환은 눈에 보이는 효과일 뿐이라, 키보드나 스크린 리더 사용자에게는 새 화면의 제목으로 포커스를 옮겨 주는 일이 따로 필요하다.
+
+## 전환이 안 보일 때 보는 순서
+
+현장에서 "전환이 가끔 안 된다"는 말을 들으면 이 순서로 본다. 콘솔에 `InvalidStateError: Transition was aborted because of invalid state`가 있으면 이름이 겹친 것이다. 개발자 도구의 Elements에서 `view-transition-name`을 가진 요소가 하나뿐인지 본다. `AbortError: Transition was skipped`면 앞 전환이 끝나기 전에 새 전환이 시작된 것이다. 오류는 없는데 움직임이 없으면, React라면 업데이트가 transition 밖에서 일어났는지, 바닐라라면 콜백 안에서 DOM이 실제로 바뀌는지(비동기 작업을 기다리지 않고 콜백이 먼저 끝났는지) 본다. 이름 붙인 요소가 `display: none`이거나 화면에 없으면 그 요소는 이어지지 않는다. 그리고 해당 브라우저가 지원하는지, 문서 간 전환이라면 같은 출처인지 확인한다.
+
+애니메이션 자체는 개발자 도구의 Animations 패널에서 느리게 재생해 보면 group이 어디서 어디로 가는지 눈으로 확인할 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### FLIP 기법이 무엇이고 왜 쓰나요?
+
+First, Last, Invert, Play의 약자다. 바뀌기 전과 후의 상자만 재고, 레이아웃은 한 번에 바꾼 뒤 그 차이를 `transform`으로 되돌렸다가 풀면서 움직인다. 매 프레임 `width`나 `top`을 바꾸면 레이아웃을 계속 다시 계산하지만, FLIP은 레이아웃 계산이 처음 한 번뿐이고 움직이는 동안에는 합성 단계에서 끝나는 `transform`만 바뀐다. 그래서 부드럽고 싸다.
+
+### FLIP을 React에서 구현할 때 useEffect가 아니라 useLayoutEffect를 쓰는 이유는요?
+
+Invert를 브라우저가 화면을 그리기 전에 끝내야 하기 때문이다. `useEffect`는 그린 뒤에 실행되어서 펼친 상태가 한 프레임 보였다가 되돌아가는 깜빡임이 생긴다. `useLayoutEffect`는 DOM 변경 직후, 그리기 전에 동기로 실행되므로 Last를 재고 바로 transform을 걸 수 있다.
+
+### View Transitions API는 FLIP과 무엇이 다른가요?
+
+FLIP은 실제 요소를 transform으로 움직이고, View Transitions는 브라우저가 앞뒤 화면을 스냅숏으로 찍어 의사 요소 트리에서 움직인다. 그래서 사라지는 요소와 새로 생기는 요소처럼 서로 다른 DOM끼리도 이름만 같으면 이어지고, 페이지 이동(MPA)에도 쓸 수 있다. 대신 옛 쪽은 정지된 사진이라 크기 차이가 크면 흐려지고, 전환 중에는 페이지가 입력을 받지 않는다.
+
+### 같은 view-transition-name이 두 개 있으면 어떻게 되나요?
+
+전환이 통째로 건너뛰어진다. 크로미움에서 재현하면 `ready`가 `InvalidStateError`로 실패하고, 콜백은 실행되어 DOM은 바뀐다. 사용자에게는 애니메이션 없이 툭 바뀐 화면만 보이고 오류는 콘솔에만 남는다. 누른 요소에만 그 순간 이름을 붙이거나 id를 넣어 요소마다 다른 이름을 준다.
+
+### React에서 startViewTransition 안에서 setState를 했는데 전환이 안 보입니다. 왜 그런가요?
+
+브라우저는 콜백이 끝난 시점의 DOM을 새 화면으로 찍는데, `setState`는 그때까지 커밋되지 않을 수 있다. 콜백 안에서 `flushSync`로 감싸 커밋을 강제하면 된다. React의 `<ViewTransition>`을 쓴다면 업데이트를 `startTransition` 안에서 일으켜야 한다. 직접 확인해 보니 그냥 `setState`로는 전환이 시작조차 되지 않았다.
+
+### 지원하지 않는 브라우저와 움직임 줄이기 설정은 어떻게 처리하나요?
+
+점진적 향상으로 쓴다. `document.startViewTransition`이 없으면 콜백만 바로 실행하고, `@view-transition` 규칙은 모르는 브라우저가 무시하니 그대로 둔다. 움직임 줄이기는 브라우저가 알아서 꺼 주지 않아서, `prefers-reduced-motion: reduce`일 때 `::view-transition-group(*)`과 old, new의 애니메이션을 직접 끄거나 짧은 크로스페이드로 바꾼다.
+
+### 문서 간 전환은 어떤 조건에서 동작하나요?
+
+같은 출처의 페이지 이동이어야 하고, 떠나는 페이지와 도착하는 페이지 모두 `@view-transition { navigation: auto; }`로 켜야 한다. 이을 요소에는 양쪽에서 같은 `view-transition-name`을 준다. 도착한 페이지의 `pagereveal` 이벤트에서 `e.viewTransition`으로 전환 객체를 받아 types를 붙이거나 건너뛸 수 있다. 크롬 126, 사파리 18.2 무렵부터 지원하고 파이어폭스는 내가 확인한 시점에 아직 없었다.

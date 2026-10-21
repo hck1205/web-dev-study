@@ -2,6 +2,42 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "animation-performance": {
+    "links": [
+      "animation-patterns",
+      "spring-animation",
+      "view-transitions-shared-element",
+      "what-happens-google-com",
+      "event-loop",
+      "core-web-vitals"
+    ],
+    "mentions": []
+  },
+  "view-transitions-shared-element": {
+    "links": [
+      "animation-patterns",
+      "spring-animation",
+      "animation-performance"
+    ],
+    "mentions": []
+  },
+  "spring-animation": {
+    "links": [
+      "animation-patterns",
+      "view-transitions-shared-element",
+      "animation-performance"
+    ],
+    "mentions": []
+  },
+  "animation-patterns": {
+    "links": [
+      "loading-patterns",
+      "spring-animation",
+      "view-transitions-shared-element",
+      "animation-performance"
+    ],
+    "mentions": []
+  },
   "serverless-architecture": {
     "links": [
       "serverless-limits",
@@ -4890,7 +4926,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "realtime-communication",
       "rest-api-design",
-      "code-splitting"
+      "code-splitting",
+      "animation-patterns"
     ],
     "mentions": [
       "pattern-proxy"
