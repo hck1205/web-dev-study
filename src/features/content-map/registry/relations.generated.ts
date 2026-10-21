@@ -2,10 +2,225 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-chat-presence": {
+    "links": [
+      "sd-chat-connections",
+      "sd-chat-message-storage",
+      "sd-autocomplete-trie",
+      "websocket-deep-dive",
+      "pub-sub"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "browser-fetch",
+      "db-type-key-value",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "sd-chat-message-storage": {
+    "links": [
+      "sd-chat-connections",
+      "sd-chat-presence",
+      "sd-autocomplete-trie",
+      "db-type-wide-column",
+      "sd-kv-store-partition-replication",
+      "sd-unique-id-generator",
+      "sd-news-feed-publishing",
+      "idempotency-key",
+      "message-delivery-semantics",
+      "sd-kv-store-failure-handling"
+    ],
+    "mentions": [
+      "db-sharding",
+      "realtime-communication",
+      "db-type-key-value",
+      "sd-start-single-server",
+      "db-type-relational",
+      "scaling-horizontal-vertical",
+      "redis-basics",
+      "pub-sub"
+    ]
+  },
+  "sd-chat-connections": {
+    "links": [
+      "sd-news-feed-retrieval",
+      "sd-chat-message-storage",
+      "sd-chat-presence",
+      "sd-autocomplete-trie",
+      "realtime-communication",
+      "long-polling",
+      "websocket-deep-dive",
+      "sd-load-balancer-stateless",
+      "sd-notification-system",
+      "service-discovery",
+      "pub-sub",
+      "sd-capacity-estimation"
+    ],
+    "mentions": [
+      "osi-in-practice",
+      "sd-start-single-server",
+      "redis-basics",
+      "db-type-key-value"
+    ]
+  },
+  "sd-autocomplete-data-pipeline": {
+    "links": [
+      "sd-autocomplete-trie",
+      "sd-queue-logging-automation",
+      "kafka-basics",
+      "batch-processing",
+      "lossy-counting",
+      "count-min-sketch",
+      "consistent-hashing",
+      "sd-sharding-intro"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "db-type-key-value",
+      "sqld-group-by-having",
+      "redis-basics",
+      "db-modeling-normalization"
+    ]
+  },
+  "sd-autocomplete-trie": {
+    "links": [
+      "sd-chat-presence",
+      "sd-autocomplete-data-pipeline",
+      "http-caching-cdn",
+      "debounce-throttle",
+      "browser-fetch",
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "lossy-counting",
+      "osi-in-practice",
+      "db-modeling-normalization"
+    ]
+  },
+  "sd-news-feed-retrieval": {
+    "links": [
+      "sd-news-feed-publishing",
+      "sd-chat-connections",
+      "caching-strategies",
+      "sd-latency-numbers",
+      "api-pagination-sorting",
+      "realtime-communication",
+      "long-polling"
+    ],
+    "mentions": [
+      "db-sharding",
+      "redis-basics",
+      "pub-sub",
+      "sql-query-rewrite"
+    ]
+  },
+  "sd-news-feed-publishing": {
+    "links": [
+      "sd-notification-reliability",
+      "sd-news-feed-retrieval",
+      "sd-chat-connections",
+      "redis-basics",
+      "sd-sharding-intro",
+      "sd-queue-logging-automation",
+      "db-type-graph",
+      "pub-sub",
+      "message-delivery-semantics",
+      "idempotency-key",
+      "sd-unique-id-generator",
+      "caching-strategies"
+    ],
+    "mentions": [
+      "db-sharding",
+      "sd-start-single-server",
+      "db-type-relational",
+      "http-methods"
+    ]
+  },
+  "sd-notification-reliability": {
+    "links": [
+      "sd-notification-system",
+      "sd-news-feed-publishing",
+      "transactional-outbox",
+      "message-queue-basics",
+      "message-delivery-semantics",
+      "exponential-backoff-jitter",
+      "dead-letter-queue",
+      "circuit-breaker",
+      "retries",
+      "xss",
+      "sd-rate-limiter-design",
+      "rate-limiting-in-practice",
+      "alerting",
+      "metrics-types"
+    ],
+    "mentions": [
+      "microservices",
+      "resilience-patterns",
+      "redis-basics",
+      "http-methods",
+      "webhooks"
+    ]
+  },
+  "sd-notification-system": {
+    "links": [
+      "sd-web-crawler-politeness-dedup",
+      "sd-notification-reliability",
+      "sd-news-feed-publishing",
+      "sd-capacity-estimation",
+      "message-queue-basics",
+      "sd-queue-logging-automation"
+    ],
+    "mentions": [
+      "https-tls",
+      "sd-start-single-server",
+      "http-versions",
+      "token-login",
+      "oauth"
+    ]
+  },
+  "sd-web-crawler-politeness-dedup": {
+    "links": [
+      "sd-web-crawler-architecture",
+      "sd-notification-system",
+      "rate-limiting-in-practice",
+      "exponential-backoff-jitter",
+      "bloom-filter"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "client-data-cache",
+      "http-caching-cdn",
+      "dns"
+    ]
+  },
+  "sd-web-crawler-architecture": {
+    "links": [
+      "sd-url-shortener-key-generation",
+      "sd-web-crawler-politeness-dedup",
+      "sd-notification-system",
+      "timeouts",
+      "dns",
+      "rendering-csr-spa",
+      "sd-capacity-estimation",
+      "consistent-hashing",
+      "message-queue-basics"
+    ],
+    "mentions": [
+      "sd-url-shortener-api-redirect",
+      "sd-start-single-server",
+      "db-sharding",
+      "bloom-filter",
+      "redis-basics",
+      "client-data-cache"
+    ]
+  },
   "sd-url-shortener-key-generation": {
     "links": [
       "sd-url-shortener-api-redirect",
       "sd-unique-id-generator",
+      "sd-web-crawler-architecture",
       "bloom-filter",
       "base64",
       "caching-strategies",
@@ -24,6 +239,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-unique-id-generator",
       "sd-url-shortener-key-generation",
+      "sd-web-crawler-architecture",
       "http-status-codes",
       "http-caching-cdn",
       "sd-sharding-intro",
@@ -238,6 +454,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-type-key-value",
       "postgres-data-types",
+      "sd-news-feed-publishing",
       "db-type-newsql",
       "scaling-horizontal-vertical",
       "redis-basics",
@@ -525,6 +742,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "sd-autocomplete-trie",
       "pattern-proxy"
     ]
   },
@@ -4204,6 +4422,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "exponential-backoff-jitter",
       "pub-sub",
       "load-balancer-basics",
+      "sd-chat-connections",
       "cors",
       "csrf"
     ],

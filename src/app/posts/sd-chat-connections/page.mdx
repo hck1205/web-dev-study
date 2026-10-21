@@ -1,0 +1,406 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("sd-chat-connections");
+
+이 시리즈에서 이 글의 자리: [㉕ 뉴스 피드 ②](/posts/sd-news-feed-retrieval)에서 피드를 빠르게 읽어 오는 법을 봤고, 이 글부터 세 편은 채팅 시스템을 설계한다. 이 글은 메시지가 오가는 길, 즉 연결을 다룬다. 같은 장의 [㉗ 채팅 시스템 ②: 메시지 저장과 기기 동기화](/posts/sd-chat-message-storage)는 메시지를 어디에 어떤 번호로 쌓을지, [㉘ 채팅 시스템 ③: 접속 상태 표시](/posts/sd-chat-presence)는 친구 이름 옆 초록 점을 다룬다. 그다음은 [㉙ 검색어 자동완성 ①](/posts/sd-autocomplete-trie)이다.
+
+팀 단체방에 "점심 뭐 먹어?"를 보냈다. 옆자리 동료 화면에는 바로 떴는데, 다른 동료는 2초쯤 뒤에야 봤다고 한다. 둘 다 같은 앱인데 왜 다를까. 받는 쪽 앱이 서버에 "새 메시지 있어?"라고 몇 초마다 묻는 방식이라면, 묻는 순간이 언제였느냐에 따라 늦게 보는 사람이 생긴다.
+
+면접의 "채팅 시스템을 설계하라"는 이 지점에서 시작한다. HTTP는 클라이언트가 묻고 서버가 답하는 구조인데, 채팅은 서버가 먼저 말해야 하는 일이다. 이 글은 서버 한 대로 만든 단체방에서 출발해서, 받는 방법을 고르고, 연결을 붙잡은 서버를 여러 대로 늘리고, 그중 하나가 죽었을 때까지 따라간다.
+
+## 서버 한 대로 만든 단체방
+
+가장 작은 채팅은 API 두 개면 된다. 보낼 때는 `POST /messages`로 메시지를 올리고, 받을 때는 `GET /messages?after=12`처럼 "12번 다음 메시지를 달라"고 묻는다. 서버는 메시지를 메모리 배열이나 테이블 하나에 쌓는다.
+
+여기서 일부러 정해 두는 범위가 있다. 1:1 대화와 100명까지의 단체방, 글자 메시지, 한 사람이 휴대폰과 노트북을 함께 쓰는 경우, 앱이 꺼져 있으면 푸시 알림. 사진·영상과 종단간 암호화는 이번 범위 밖이다. 면접에서도 이 정도를 먼저 물어 확인하고 시작한다.
+
+<NetworkTopology
+  caption="서버 한 대짜리 채팅: 보낼 때 올리고, 받을 때 묻는다"
+  width={420}
+  height={220}
+  zones={[
+    { id: "srv", label: "서버 한 대", x: 150, y: 20, w: 130, h: 180, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "민지", sub: "보내는 쪽", x: 60, y: 60, icon: "client" },
+    { id: "b", label: "준호", sub: "받는 쪽", x: 60, y: 165, icon: "client" },
+    { id: "app", label: "app", sub: ":8080", x: 215, y: 70, icon: "server" },
+    { id: "db", label: "messages", sub: "표 하나", x: 215, y: 160, icon: "db" },
+    { id: "c", label: "서연", sub: "받는 쪽", x: 365, y: 110, icon: "client" },
+  ]}
+  links={[
+    { from: "a", to: "app" },
+    { from: "b", to: "app" },
+    { from: "c", to: "app" },
+    { from: "app", to: "db" },
+  ]}
+  steps={[
+    { path: ["a", "app"], packet: "POST", title: "메시지를 올린다", detail: "민지가 POST /messages로 \"점심 뭐 먹어?\"를 보낸다." },
+    { path: ["app", "db"], packet: "INSERT", title: "표에 쌓는다", detail: "서버가 13번이라는 번호를 붙여 저장한다." },
+    { path: ["b", "app"], packet: "GET ?after=12", title: "준호 앱이 묻는다", detail: "마침 준호 앱이 물을 차례였다. 13번을 바로 받는다." },
+    { path: ["c", "app"], packet: "GET ?after=12", title: "서연 앱은 조금 늦게 묻는다", detail: "서연 앱은 직전에 물었기 때문에 다음 차례까지 기다렸다가 받는다. 이 기다림이 늦게 보는 이유다." },
+  ]}
+/>
+
+이 구조는 사용자 몇십 명까지는 잘 돈다. 깨지는 곳은 받는 쪽이다. 묻는 간격을 줄이면 서버가 빈 질문에 시달리고, 늘리면 메시지가 늦게 보인다. 받는 방법부터 바꿔 보자. 세 방법의 HTTP 수준 동작은 [서버가 먼저 말하게 하기](/posts/realtime-communication)에 정리해 뒀으니, 여기서는 채팅 서버를 설계하는 사람 눈으로 숫자를 본다.
+
+## 묻기만 하는 앱과 붙잡아 두는 응답
+
+짧은 폴링(polling)은 앱이 정해진 간격마다 "새 메시지 있어?"를 묻는 방식이다. 새 메시지가 없어도 요청 하나가 오가고, 서버는 그때마다 로그인 확인과 조회를 한다. 롱 폴링(long polling)은 같은 질문을 하되 서버가 답할 게 생길 때까지 응답을 붙잡아 둔다. 메시지가 오면 그때 답하고, 앱은 답을 받자마자 다시 묻는다.
+
+아래 그림에서 다음을 누르면 두 방식이 한 메시지를 어떻게 받는지 차례로 볼 수 있다.
+
+<SequenceDiagram
+  caption="같은 메시지를 짧은 폴링과 롱 폴링으로 받기"
+  actors={[
+    { id: "p", label: "폴링 앱" },
+    { id: "s", label: "채팅 서버" },
+    { id: "l", label: "롱 폴링 앱" },
+  ]}
+  steps={[
+    { from: "p", to: "s", label: "GET ?after=12", title: "1초마다 묻는다", detail: "새 메시지가 없어도 요청이 한 번 오간다." },
+    { from: "s", to: "p", label: "[] 빈 응답", title: "빈손으로 돌아간다", detail: "서버는 인증 확인과 조회를 하고 빈 배열을 돌려준다. 이런 응답이 대부분이다." },
+    { from: "l", to: "s", label: "GET ?after=12", title: "롱 폴링도 묻는다", detail: "묻는 모양은 같지만 서버가 바로 답하지 않는다." },
+    { from: "s", to: "s", label: "응답 붙잡기", title: "답할 게 생길 때까지 기다린다", detail: "최대 20초쯤 붙잡는다. 그동안 메시지가 없으면 빈 응답으로 끝내고 앱이 다시 묻는다." },
+    { from: "s", to: "l", label: "[13번]", title: "메시지가 오면 바로 답한다", detail: "13번이 저장되는 순간 붙잡아 둔 응답으로 내보낸다. 지연이 몇 밀리초다." },
+    { from: "p", to: "s", label: "GET ?after=12", title: "폴링 앱은 다음 차례에 받는다", detail: "13번이 생기고 나서 폴링 앱이 다음에 묻는 순간까지 기다려야 한다. 최대 1초 늦는다." },
+  ]}
+/>
+
+롱 폴링은 빈 질문을 크게 줄이지만 대가가 있다. 기다리는 동안 응답 하나가 서버에 계속 열려 있고, 붙잡는 시간은 경로에 있는 프록시와 로드 밸런서의 타임아웃 중 가장 짧은 값에 묶인다. 응답을 받고 다시 묻기 전의 짧은 틈에 생긴 메시지를 놓치지 않으려면 `after=13`처럼 커서를 들고 다녀야 한다. 이 부분은 [롱 폴링 깊게 보기](/posts/long-polling)에서 직접 재 봤다.
+
+채팅에서 더 아픈 점은 보내는 쪽이다. 롱 폴링은 받는 길만 해결한다. 보낼 때는 여전히 새 HTTP 요청을 만들고, 그 요청이 받는 연결과 다른 서버에 도착할 수도 있다.
+
+## 같은 10초를 세 방법으로 받아 보기
+
+말로 비교하면 감이 안 와서 Node 22로 서버 하나에 세 방법을 다 붙이고, 같은 10초 동안 메시지 세 개를 보냈다. 짧은 폴링 앱은 1초마다 묻고, 롱 폴링 앱은 최대 20초를 기다리고, WebSocket 앱은 한 번 연결해서 기다린다. WebSocket 서버는 `ws` 8.18 패키지, 클라이언트는 Node 22에 들어 있는 `WebSocket`을 썼다.
+
+```js
+// counts.mjs 일부: 메시지가 생기면 붙잡아 둔 롱 폴링 응답과 WebSocket 연결로 내보낸다
+function publish(text) {
+  const m = { id: msgs.length + 1, text, at: now() };
+  msgs.push(m);
+  for (const w of waiters) { clearTimeout(w.timer); waiters.delete(w); w.res.end(JSON.stringify([m])); }
+  for (const c of wss.clients) { stats.ws.frames++; c.send(JSON.stringify(m)); }
+}
+
+setTimeout(() => publish("점심 뭐 먹어?"), 1500);
+setTimeout(() => publish("김치찌개"), 6200);
+setTimeout(() => publish("12시에 1층"), 8000);
+```
+
+```bash
+# 세 방법을 동시에 돌리고 10초 뒤에 센 값을 출력한다
+node counts.mjs
+```
+
+```text
+10초 동안 메시지 3개
+짧은 폴링  요청 10번, 빈 응답 7번, 지연(ms) 520, 832, 35
+롱 폴링    요청 4번(1개는 대기 중), 빈 응답 0번, 지연(ms) 2, 3, 1
+WebSocket  연결 1번, 서버가 보낸 프레임 3개, 지연(ms) 3, 4, 2
+```
+
+짧은 폴링은 열 번 물어서 일곱 번을 빈손으로 돌아갔다. 지연은 메시지가 생긴 순간과 다음 질문 사이의 거리라서 35ms부터 832ms까지 들쭉날쭉하다. 간격이 1초면 최악은 1초다. 롱 폴링과 WebSocket은 둘 다 몇 밀리초 안에 받았다. 차이는 요청 수다. 롱 폴링은 메시지마다 요청이 하나씩 새로 생기고, WebSocket은 연결 한 번 뒤로는 메시지만 오간다.
+
+<AlgoTrace
+  caption="10초 동안 각 방법이 서버에 남긴 흔적"
+  cells={["0s", "1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s"]}
+  memoryLabel="지금까지 센 요청"
+  steps={[
+    { pointer: 0, memory: ["폴링 1", "롱 1", "WS 연결 1"], caption: "셋 다 처음 한 번은 서버에 닿는다. WebSocket은 이 연결을 끝까지 쓴다." },
+    { pointer: 1, memory: ["폴링 2", "롱 1", "WS 연결 1"], caption: "폴링 앱은 1초마다 빈 질문을 보낸다. 롱 폴링 요청은 아직 서버에 붙잡혀 있다." },
+    { pointer: 2, found: [1], memory: ["폴링 3", "롱 2", "WS 연결 1"], caption: "1.5초에 첫 메시지가 생겼다. 롱 폴링은 바로 받고 다시 묻는다. WebSocket은 프레임 하나로 받는다. 폴링은 2초 질문에서야 받는다." },
+    { pointer: 6, found: [1, 6], memory: ["폴링 7", "롱 3", "WS 연결 1"], caption: "6.2초 메시지. 폴링은 그사이 빈 질문을 네 번 더 했고, 이 메시지는 7초 질문에서야 받는다." },
+    { pointer: 8, found: [1, 6, 8], memory: ["폴링 9", "롱 4", "WS 연결 1"], caption: "8초 메시지. 롱 폴링은 메시지마다 요청이 하나씩 늘고, WebSocket은 그대로다." },
+    { pointer: 9, found: [1, 6, 8], memory: ["폴링 10", "롱 4", "WS 연결 1"], caption: "끝. 메시지는 셋인데 폴링은 열 번 물었다. 앱이 하루 종일 켜져 있으면 이 차이가 하루 86,400번 대 1번이 된다." },
+  ]}
+/>
+
+## 한 번 열고 계속 쓰는 WebSocket
+
+WebSocket은 HTTP 요청 하나로 시작해서 "이 연결을 WebSocket으로 바꾸자"는 업그레이드를 한 뒤, 같은 TCP 연결 위에서 양쪽이 아무 때나 메시지를 보내는 방식이다. 서버가 먼저 보낼 수 있고, 보내는 쪽도 같은 연결을 쓴다. 그래서 채팅 앱은 보통 받기와 보내기를 모두 WebSocket으로 한다. 업그레이드 헤더와 프레임 구조, 핑으로 죽은 연결을 찾는 법은 [WebSocket 깊게 보기](/posts/websocket-deep-dive)에 있다.
+
+<SequenceDiagram
+  caption="WebSocket으로 보내고 받기"
+  actors={[
+    { id: "a", label: "민지 앱" },
+    { id: "s", label: "채팅 서버" },
+    { id: "b", label: "준호 앱" },
+  ]}
+  steps={[
+    { from: "b", to: "s", label: "GET Upgrade", title: "한 번 연결한다", detail: "준호 앱이 로그인 직후 업그레이드 요청을 보낸다.", payload: "GET /chat HTTP/1.1\nUpgrade: websocket\nConnection: Upgrade" },
+    { from: "s", to: "b", label: "101", title: "연결이 바뀐다", detail: "101 Switching Protocols 뒤로는 HTTP가 아니라 WebSocket 프레임이 오간다. 이 연결은 앱이 켜져 있는 동안 계속 열려 있다." },
+    { from: "a", to: "s", label: "send 프레임", title: "보낼 때도 같은 길", detail: "민지 앱도 자기 연결로 메시지 프레임을 보낸다. 새 HTTP 요청이 필요 없다.", payload: "{\"to\":\"room-7\",\"text\":\"점심 뭐 먹어?\"}" },
+    { from: "s", to: "s", label: "번호 붙여 저장", title: "서버가 저장한다", detail: "번호를 붙이고 저장한 뒤에 전달한다. 저장은 다음 글에서 자세히 본다." },
+    { from: "s", to: "b", label: "push 프레임", title: "서버가 먼저 보낸다", detail: "준호 앱이 묻지 않았는데도 서버가 열린 연결로 바로 밀어 준다." },
+    { from: "s", to: "a", label: "ack 13", title: "보낸 쪽에 확인을 준다", detail: "저장이 끝났다는 확인과 붙은 번호를 돌려준다. 앱은 이걸 받아야 전송 중 표시를 지운다." },
+  ]}
+/>
+
+보내는 길까지 HTTP로 남겨 두는 설계도 있다. 보내기는 `POST`로 하고 받기만 WebSocket으로 하면, 보내기 요청은 평범한 상태 없는 API 서버가 처리하니 로드 밸런서, 인증, 요청 수 제한을 그대로 쓸 수 있다. 대신 받기 연결이 있는 서버로 메시지를 다시 넘기는 단계가 하나 늘고, 앱은 "내가 보낸 메시지가 저장됐다"는 확인을 HTTP 응답에서, 남이 보낸 메시지는 WebSocket에서 따로 받게 된다. 둘 다 쓰이는 설계다. 이 글은 둘 다 WebSocket인 쪽으로 간다.
+
+롱 폴링이 아주 사라지지는 않는다. 회사망 프록시가 업그레이드를 막거나, 연결 수를 감당할 서버가 없는 작은 서비스라면 롱 폴링이 더 싸고 단순하다. 많은 실시간 라이브러리가 WebSocket이 안 되면 롱 폴링으로 내려가는 것도 같은 이유다.
+
+## 연결을 쥔 서버는 상태를 가진다
+
+WebSocket을 고르는 순간 서버의 성격이 바뀐다. 평범한 API 서버는 요청 하나를 처리하고 잊는다. 그래서 어느 서버로 가도 같은 답이 나오고, 로드 밸런서가 아무 데나 보내도 된다. 이런 서버를 상태가 없다(stateless)고 한다. 이 이야기는 [③ 로드 밸런서와 상태 없는 웹 계층](/posts/sd-load-balancer-stateless)에서 했다.
+
+채팅 서버는 다르다. 준호의 연결은 chat-2라는 특정 서버의 메모리에 소켓으로 붙어 있다. 준호에게 메시지를 보내려면 반드시 chat-2를 거쳐야 한다. 이렇게 "누가 어디에 붙어 있는지"를 쥐고 있는 서버를 상태가 있다(stateful)고 한다. 그래서 채팅 시스템은 보통 두 무리로 나눈다.
+
+<ConceptDiagram
+  caption="상태 없는 무리와 상태 있는 무리"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "app", label: "앱", x: 60, y: 125 },
+    { id: "lb", label: "로드 밸런서", x: 175, y: 60 },
+    { id: "api", label: "API 서버", sub: "로그인·프로필", x: 320, y: 60, w: 120 },
+    { id: "chat", label: "채팅 서버", sub: "연결을 쥔다", x: 320, y: 160, w: 120 },
+    { id: "push", label: "알림 서버", sub: "앱이 꺼졌을 때", x: 175, y: 215, w: 120 },
+  ]}
+  edges={[
+    { from: "app", to: "lb", label: "HTTP" },
+    { from: "lb", to: "api" },
+    { from: "app", to: "chat", label: "WebSocket", arrow: "both" },
+    { from: "chat", to: "push", dashed: true },
+  ]}
+/>
+
+상태 없는 무리는 로그인, 회원 가입, 프로필 수정, 그리고 "어느 채팅 서버에 붙을지" 알려 주는 일을 맡는다. 아무 서버나 늘리고 줄여도 된다. 상태 있는 무리는 연결을 붙잡고 메시지를 주고받는다. 늘리기는 쉽지만 줄이거나 배포할 때는 붙어 있는 사람들을 다른 서버로 옮겨야 한다. 앱이 꺼진 사람에게는 [알림 시스템](/posts/sd-notification-system)이 푸시를 보낸다.
+
+연결 하나를 쥐는 데 드는 비용도 재 봤다. 아무 말도 하지 않는 WebSocket 연결을 2,000개씩 늘리며 서버 프로세스의 메모리를 쟀다. 압축(`perMessageDeflate`)은 껐고, 앱 상태는 하나도 담지 않았다.
+
+```text
+연결 수   RSS(MB)  heap(MB)
+     0     63.0      5.3
+  2000     77.2     10.4
+  4000     87.5     15.0
+  8000    112.2     23.9
+```
+
+8,000개에서 49MB가 늘었으니 연결 하나에 6KB 남짓이다. 여기에 커널이 소켓마다 잡는 송수신 버퍼는 들어 있지 않고, 실제 서비스는 사용자 정보와 구독 목록, TLS 상태까지 들고 있으니 이보다 커진다. 어림할 때는 넉넉히 10~20KB로 잡는다. 연결 10만 개면 1~2GB다. 메모리보다 먼저 막히는 경우가 많은 건 파일 디스크립터 한도와 CPU다. 연결 하나가 파일 디스크립터 하나를 쓰기 때문이다.
+
+## 어느 채팅 서버에 붙을지 정하기
+
+채팅 서버가 여러 대면 앱은 어디에 붙어야 할까. 로드 밸런서가 아무 데나 보내도 연결은 되지만, 서버마다 붙은 사람 수가 금방 기운다. 연결은 몇 시간씩 유지되는데, 로드 밸런서는 연결을 맺는 순간만 보고 고르기 때문이다. 새로 띄운 서버는 한참 비어 있고, 오래된 서버는 꽉 찬다.
+
+그래서 서버 목록을 들고 있는 곳에 물어서 고른다. 각 채팅 서버가 "나는 chat-1, 주소는 이것, 지금 연결 31,000개"를 주기적으로 등록하고, 앱이 로그인하면 API 서버가 그 목록에서 가까운 지역의 덜 붐비는 서버를 골라 준다. 이 목록을 관리하는 것이 서비스 디스커버리다. 등록이 사는 방식과 목록이 낡는 경우는 [서비스 디스커버리](/posts/service-discovery)에서 etcd와 Consul로 돌려 봤다. ZooKeeper나 etcd처럼 등록한 서버가 죽으면 등록도 함께 사라지는 저장소를 주로 쓴다.
+
+<NetworkTopology
+  caption="로그인하고 채팅 서버를 배정받기까지"
+  width={420}
+  height={260}
+  zones={[
+    { id: "sl", label: "상태 없음", x: 130, y: 15, w: 150, h: 100, tone: "public" },
+    { id: "sf", label: "상태 있음", x: 130, y: 135, w: 280, h: 110, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "준호 앱", x: 55, y: 130, icon: "client" },
+    { id: "api", label: "API 서버", x: 205, y: 65, icon: "server" },
+    { id: "zk", label: "서버 목록", sub: "디스커버리", x: 350, y: 65, icon: "db" },
+    { id: "c1", label: "chat-1", sub: "31k 연결", x: 205, y: 195, icon: "server" },
+    { id: "c2", label: "chat-2", sub: "12k 연결", x: 340, y: 195, icon: "server" },
+  ]}
+  links={[
+    { from: "app", to: "api" },
+    { from: "api", to: "zk" },
+    { from: "c1", to: "zk", dashed: true },
+    { from: "c2", to: "zk", dashed: true },
+    { from: "app", to: "c2" },
+  ]}
+  steps={[
+    { path: ["c1", "zk"], packet: "등록", highlight: ["c2"], title: "채팅 서버가 스스로 등록한다", detail: "각 채팅 서버가 주소와 연결 수를 몇 초마다 갱신한다. 갱신이 끊기면 목록에서 빠진다." },
+    { path: ["app", "api"], packet: "POST /login", title: "로그인은 상태 없는 쪽으로", detail: "앱은 먼저 평범한 HTTP로 로그인한다. 로드 밸런서 뒤 아무 API 서버나 받아도 된다." },
+    { path: ["api", "zk"], packet: "목록?", title: "덜 붐비는 서버를 고른다", detail: "API 서버가 목록을 보고 같은 지역에서 연결이 적은 chat-2를 고른다." },
+    { path: ["api", "app"], packet: "chat-2", title: "주소와 접속 토큰을 준다", detail: "앱에 chat-2 주소와 짧게 사는 접속 토큰을 돌려준다.", payload: "{ \"chatServer\": \"wss://chat-2.example\", \"token\": \"…\" }" },
+    { path: ["app", "c2"], packet: "Upgrade", title: "배정받은 서버에 붙는다", detail: "앱이 chat-2에 WebSocket을 연다. 이제부터 메시지는 이 연결로 오간다." },
+  ]}
+/>
+
+앱에 서버 주소를 직접 알려 주면 그 주소가 바깥에 드러난다. 큰 서비스는 앞단에 L4 로드 밸런서나 게이트웨이를 두고 "chat-2로 보내라"는 정보를 토큰에 담아 앞단이 해석하게 하기도 한다. 어느 쪽이든 배정은 연결 수를 아는 쪽이 하고, 한 번 정한 연결은 그 서버에 묶인다.
+
+## 다른 서버에 있는 친구에게 보내기
+
+이제 민지는 chat-1에, 준호는 chat-2에 붙어 있다. 민지가 준호에게 보내면 chat-1은 준호가 어디 있는지 알아야 한다. 그래서 "사용자 → 붙어 있는 채팅 서버"를 적은 표를 모두가 볼 수 있는 곳에 둔다. 실제로는 Redis 같은 빠른 저장소다. 연결할 때 적고, 끊길 때 지운다.
+
+Node로 채팅 서버 두 대를 한 프로세스에 띄워 확인했다. 서버 목록과 접속 위치 표는 `Map`으로 흉내 냈고, 서버끼리는 내부 HTTP로 메시지를 넘긴다.
+
+```js
+// cluster.mjs 일부: 받는 사람이 어디 있는지 보고 바로 보내거나, 그 서버로 넘기거나, 푸시로 돌린다
+ws.on("message", async (raw) => {
+  const m = { from: user, ...JSON.parse(raw) };
+  const target = where.get(m.to);                     // 접속 위치 표
+  if (!target) return log(`  [${id}] ${m.to} 오프라인 → 푸시 알림 서버로 넘김`);
+  if (target === id) return local.get(m.to).send(JSON.stringify(m));
+  await fetch(`http://127.0.0.1:${registry.get(target).port}/`, { method: "POST", body: JSON.stringify(m) });
+});
+```
+
+```text
+alice → chat-1에 연결 (chat-1: 1개, chat-2: 0개)
+bob → chat-2에 연결 (chat-1: 1개, chat-2: 1개)
+carol → chat-1에 연결 (chat-1: 2개, chat-2: 1개)
+
+alice → bob
+  [chat-1] bob의 위치: chat-2 → chat-2로 넘김
+  bob 받음: "회의 10분 뒤" (보낸 사람 alice)
+
+alice → carol
+  [chat-1] carol의 위치: chat-1(여기) → 바로 보냄
+  carol 받음: "자료 봤어?" (보낸 사람 alice)
+
+alice → dave
+  [chat-1] dave 오프라인 → 푸시 알림 서버로 넘김
+```
+
+배정은 연결 수가 적은 쪽으로 번갈아 갔다. 같은 서버에 있는 carol에게는 바로 보내고, 다른 서버의 bob에게는 한 번 넘겨서 보내고, 어디에도 없는 dave에게는 푸시로 돌렸다. 세 갈래가 채팅 전달의 전부다.
+
+<NetworkTopology
+  caption="민지(chat-1)가 준호(chat-2)에게 보낼 때"
+  width={420}
+  height={250}
+  zones={[
+    { id: "z", label: "채팅 서버 무리", x: 110, y: 15, w: 200, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "a", label: "민지", x: 50, y: 70, icon: "client" },
+    { id: "c1", label: "chat-1", x: 165, y: 70, icon: "server" },
+    { id: "c2", label: "chat-2", x: 165, y: 185, icon: "server" },
+    { id: "where", label: "접속 위치", sub: "Redis", x: 265, y: 125, icon: "db" },
+    { id: "b", label: "준호", x: 50, y: 185, icon: "client" },
+    { id: "push", label: "알림 서버", x: 370, y: 125, icon: "gateway" },
+  ]}
+  links={[
+    { from: "a", to: "c1" },
+    { from: "c1", to: "where" },
+    { from: "c1", to: "c2" },
+    { from: "c2", to: "b" },
+    { from: "c1", to: "push", dashed: true },
+  ]}
+  steps={[
+    { path: ["a", "c1"], packet: "to: 준호", title: "자기 서버로 보낸다", detail: "민지 앱은 자기가 붙은 chat-1로만 보낸다. 준호가 어디 있는지 모른다." },
+    { path: ["c1", "where"], packet: "준호?", title: "위치를 찾는다", detail: "chat-1이 접속 위치 표에서 준호를 찾는다. chat-2라고 나온다." },
+    { path: ["c1", "c2"], packet: "넘김", title: "그 서버로 넘긴다", detail: "chat-1이 chat-2로 메시지를 넘긴다. 내부 HTTP나 서버 사이 메시지 버스를 쓴다." },
+    { path: ["c2", "b"], packet: "push 프레임", title: "열린 연결로 내려보낸다", detail: "chat-2가 준호의 WebSocket으로 메시지를 보낸다." },
+    { path: ["c1", "push"], packet: "알림", title: "위치가 없으면 푸시로", detail: "표에 없으면 앱이 꺼진 것이다. 알림 서버에 넘겨 휴대폰 알림으로 보낸다." },
+  ]}
+/>
+
+서버끼리 넘기는 방법은 두 가지가 흔하다. 하나는 위 데모처럼 접속 위치 표를 보고 그 서버에 직접 넘기는 것이다. 다른 하나는 사용자마다 채널을 두고 [발행·구독](/posts/pub-sub)으로 넘기는 것이다. chat-2가 준호와 연결되면 `user:준호` 채널을 구독하고, chat-1은 그 채널에 발행만 한다. 위치 표가 필요 없고 서버가 늘어도 구조가 같다는 장점이 있지만, Redis PUB/SUB처럼 그 순간 듣던 구독자에게만 가는 방식이면 연결이 바뀌는 찰나의 메시지가 사라진다. 어느 쪽이든 메시지를 먼저 저장하고 전달하면, 전달이 빠져도 나중에 저장소에서 다시 가져올 수 있다. 저장이 먼저인 이유는 다음 글에서 이어 간다.
+
+## 채팅 서버 한 대가 죽으면
+
+데모에서 chat-2를 죽이고 bob이 다시 연결하게 했다.
+
+```text
+chat-2가 죽는다
+bob의 접속 위치: 없음
+bob → chat-1에 연결 (chat-1: 3개, chat-2: -개)
+
+alice → bob (다시 연결한 뒤)
+  [chat-1] bob의 위치: chat-1(여기) → 바로 보냄
+  bob 받음: "다시 보여?" (보낸 사람 alice)
+```
+
+연결이 끊기자 접속 위치가 지워졌고, 서버 목록에서도 chat-2가 빠졌으니 bob은 남은 chat-1로 배정됐다. 여기까지는 깔끔하다. 실제 서비스에서는 세 가지가 더 문제가 된다.
+
+첫째, 한꺼번에 다시 붙는다. chat-2에 10만 명이 붙어 있었다면 10만 개의 앱이 같은 순간 로그인과 배정을 다시 요청한다. 앱은 다시 붙기 전에 1~30초 사이 무작위 시간을 기다리고, 실패할 때마다 기다림을 늘린다. 이 무작위 지연을 지터(jitter)라고 한다. 배포 때도 같은 일이 생기니 서버를 내릴 때는 새 연결을 받지 않게 목록에서 먼저 빼고, 붙어 있는 연결을 몇 분에 걸쳐 나눠 끊는다.
+
+둘째, 끊긴 사이 메시지가 빠진다. bob이 다시 붙기 전 몇 초 동안 온 메시지는 연결로 전달되지 못했다. 그래서 앱은 다시 연결하면 "내가 마지막으로 받은 번호 다음부터 달라"고 저장소에 묻는다. 이 번호를 어떻게 매기는지가 [㉗ 채팅 시스템 ②](/posts/sd-chat-message-storage)의 주제다.
+
+셋째, 죽은 줄 모르는 연결이 남는다. 서버가 깔끔하게 내려가면 앱도 바로 알지만, 네트워크가 중간에 끊기면 양쪽 다 한동안 연결이 살아 있다고 믿는다. 핑이나 하트비트로 주기적으로 확인해야 하고, 같은 장치가 [㉘ 접속 상태 표시](/posts/sd-chat-presence)의 바탕이 된다.
+
+## 연결 수에서 서버 수까지 어림하기
+
+규모를 어림할 때 채팅은 QPS보다 동시 연결 수가 먼저다. 하루 사용자 중 같은 순간 앱을 켜 둔 비율을 곱해 동시 연결 수를 구하고, 서버 한 대가 안전하게 쥘 연결 수로 나눈다. 서버가 하나 죽으면 그 연결이 남은 서버로 몰리니 꽉 채우지 않고 여유를 둔다. 같은 사용자를 짧은 폴링으로 받았다면 초당 몇 번의 요청이 생기는지도 함께 구해 보자.
+
+<CodePlayground
+  caption="동시 연결, 채팅 서버 수, 메모리, 폴링이었다면 생길 QPS"
+  functionName="chatCapacity"
+  initialCode={`function chatCapacity(a) {
+  // a: { dau, concurrentRatio, connsPerServer, headroom, kbPerConn, pollIntervalSec }
+  // concurrent: 동시 연결 수 (반올림)
+  // servers: 서버 한 대를 headroom 비율까지만 채울 때 필요한 대수 (올림)
+  // memoryGB: 연결 메모리 합계, 1GB = 1,000,000KB (반올림)
+  // pollQps: 같은 사용자가 짧은 폴링을 했다면 초당 요청 수 (반올림)
+  return { concurrent: 0, servers: 0, memoryGB: 0, pollQps: 0 };
+}`}
+  solution={`function chatCapacity(a) {
+  const concurrent = Math.round(a.dau * a.concurrentRatio);
+  const servers = Math.ceil(concurrent / (a.connsPerServer * a.headroom));
+  const memoryGB = Math.round((concurrent * a.kbPerConn) / 1e6);
+  const pollQps = Math.round(concurrent / a.pollIntervalSec);
+  return { concurrent, servers, memoryGB, pollQps };
+}`}
+  tests={[
+    { label: "하루 1,000만 명, 20%가 동시 접속", args: [{ dau: 10000000, concurrentRatio: 0.2, connsPerServer: 100000, headroom: 0.6, kbPerConn: 10, pollIntervalSec: 2 }], expected: { concurrent: 2000000, servers: 34, memoryGB: 20, pollQps: 1000000 } },
+    { label: "하루 5,000만 명, 10%, 5초 폴링", args: [{ dau: 50000000, concurrentRatio: 0.1, connsPerServer: 100000, headroom: 0.6, kbPerConn: 10, pollIntervalSec: 5 }], expected: { concurrent: 5000000, servers: 84, memoryGB: 50, pollQps: 1000000 } },
+    { label: "작은 서비스 30만 명", args: [{ dau: 300000, concurrentRatio: 0.3, connsPerServer: 50000, headroom: 0.5, kbPerConn: 20, pollIntervalSec: 1 }], expected: { concurrent: 90000, servers: 4, memoryGB: 2, pollQps: 90000 } },
+  ]}
+/>
+
+동시 접속 200만이면 서버 한 대를 6만 연결까지만 채워도 34대면 된다. 같은 사람들이 2초마다 폴링했다면 초당 100만 요청이 빈 질문으로 쏟아진다. 연결을 유지하는 비용이 메모리 20GB라면 훨씬 싸다. 실제 숫자는 서버 사양과 메시지 양에 따라 크게 다르니, 한 대가 몇 연결까지 버티는지는 부하 시험으로 정한다. 숫자 어림의 기본기는 [⑩ 용량 어림](/posts/sd-capacity-estimation)에 있다.
+
+## 현장에서 연결 문제를 좁히는 순서
+
+"채팅이 가끔 늦게 온다"는 신고는 대개 연결이 조용히 끊겼다가 다시 붙는 사이에 생긴다. 먼저 서버가 쥔 연결 수가 기대와 맞는지 본다. 위 데모 서버에 연결 3,000개를 붙이고 Ubuntu에서 흔히 쓰는 명령으로 확인했다.
+
+```bash
+# 18751 포트에서 연결이 맺어진(ESTABLISHED) TCP 연결 수를 센다
+ss -Htn state established '( sport = :18751 )' | wc -l
+# 서버 프로세스가 연 파일 디스크립터 수 (연결 하나가 하나씩 쓴다)
+ls /proc/<PID>/fd | wc -l
+# 그 프로세스가 열 수 있는 최대 개수
+grep 'open files' /proc/<PID>/limits
+```
+
+```text
+3000
+3023
+Max open files            20000                20000                files
+```
+
+연결 3,000개에 파일 디스크립터가 3,023개다. 나머지 23개는 표준 입출력, 리슨 소켓, 런타임이 쓰는 것이다. 한도에 닿으면 새 연결이 `EMFILE` 오류로 거절된다. Node는 시작할 때 soft 한도를 hard 한도까지 올리지만, 다른 런타임이나 앞단 nginx는 한도를 직접 올려야 하는 경우가 많다. Ubuntu 셸의 기본 soft 한도는 보통 1024라 테스트 환경에서 먼저 걸린다.
+
+연결 수가 정상인데 정확히 1분마다 끊긴다면 중간 프록시의 유휴 타임아웃이다. nginx의 `proxy_read_timeout` 기본값이 60초라서 그 안에 아무것도 오가지 않으면 연결을 닫는다. 핑 간격을 그보다 짧게 잡으면 풀린다. 업그레이드가 아예 안 되고 400이나 426이 돌아온다면 프록시가 `Upgrade`, `Connection` 헤더를 넘기지 않는 것이다. 이 두 증상은 [WebSocket 깊게 보기](/posts/websocket-deep-dive)에서 재현해 뒀다. 배포 직후 로그인 API가 몰려 느려진다면 재연결에 지터가 없는 것이다.
+
+## 다음에 읽을 글
+
+받는 방법은 정해졌다. 짧은 폴링은 빈 질문이 많고 늦다. 롱 폴링은 빠르지만 받는 길만 해결한다. WebSocket은 연결 하나로 보내고 받지만, 그 연결을 쥔 채팅 서버가 상태를 갖게 된다. 그래서 상태 없는 API 서버와 상태 있는 채팅 서버를 나누고, 서비스 디스커버리로 배정하고, 접속 위치 표로 서버 사이를 잇는다.
+
+연결은 언젠가 끊긴다. 끊긴 사이의 메시지를 되찾으려면 메시지가 먼저 어딘가에 순서대로 쌓여 있어야 한다. [㉗ 채팅 시스템 ②: 메시지 저장과 기기 동기화](/posts/sd-chat-message-storage)에서 저장소를 고르고 메시지 번호를 매긴다.
+
+## 면접에서 나올 만한 질문
+
+### 채팅에서 받는 쪽은 어떤 방식으로 구현하나요?
+
+WebSocket을 기본으로 쓴다. 짧은 폴링은 새 메시지가 없어도 요청이 계속 생기고 간격만큼 늦는다. 롱 폴링은 지연은 짧지만 메시지마다 요청이 새로 생기고 보내는 길은 따로 만들어야 한다. WebSocket은 연결 한 번으로 양방향을 쓰니 채팅에 맞고, 업그레이드가 막힌 환경을 위해 롱 폴링을 대체 수단으로 둔다.
+
+### 보내기도 WebSocket으로 하나요, HTTP로 하나요?
+
+둘 다 가능하고 트레이드오프가 다르다. 보내기를 HTTP로 하면 기존 로드 밸런서, 인증, 요청 수 제한을 그대로 쓰고 응답으로 저장 확인을 받는다. 대신 받는 연결이 있는 서버로 한 번 더 넘겨야 한다. WebSocket으로 하면 경로가 하나라 단순하고 빠르지만, 요청 수 제한과 확인 메시지를 직접 설계해야 한다.
+
+### 채팅 서버는 왜 상태가 있다고 하나요? 그래서 무엇이 달라지나요?
+
+특정 사용자의 연결이 특정 서버 메모리에 붙어 있어서, 그 사용자에게 보내려면 반드시 그 서버를 거쳐야 하기 때문이다. 그래서 아무 서버로나 보낼 수 없고 사용자별 접속 위치를 어딘가에 적어 둬야 한다. 서버를 내리거나 배포할 때는 연결을 다른 서버로 옮겨야 하고, 로그인 같은 상태 없는 기능은 별도 API 서버로 떼어 낸다.
+
+### 앱은 어느 채팅 서버에 붙어야 하는지 어떻게 아나요?
+
+채팅 서버가 서비스 디스커버리 저장소에 주소와 연결 수를 주기적으로 등록하고, 로그인 때 API 서버가 그 목록에서 가까운 지역의 덜 붐비는 서버를 골라 준다. 로드 밸런서는 연결을 맺는 순간만 보고 고르는데 연결은 몇 시간씩 유지되니, 연결 수를 아는 쪽이 배정해야 서버 사이가 고르게 찬다. 등록이 끊기면 목록에서 빠지는 ZooKeeper나 etcd를 주로 쓴다.
+
+### 받는 사람이 다른 채팅 서버에 붙어 있으면 메시지는 어떻게 가나요?
+
+사용자와 채팅 서버를 짝지은 접속 위치 표를 Redis 같은 공유 저장소에 두고, 보낸 사람의 서버가 그 표를 보고 받는 사람의 서버로 넘긴다. 다른 방법은 사용자마다 채널을 두고 받는 쪽 서버가 구독하게 하는 발행·구독이다. 표에 없으면 앱이 꺼진 것이니 푸시 알림으로 돌린다. 어느 경우든 저장을 먼저 하고 전달해야 넘기다 빠진 메시지를 나중에 되찾을 수 있다.
+
+### 채팅 서버 한 대가 죽으면 어떻게 되나요?
+
+그 서버의 연결이 모두 끊기고, 앱들이 다시 로그인해 남은 서버로 배정받는다. 이때 10만 개의 앱이 동시에 몰리지 않게 재연결에 무작위 지연과 점점 늘어나는 대기를 넣는다. 끊긴 사이 메시지는 앱이 마지막으로 받은 메시지 번호를 보내 저장소에서 다시 가져온다. 남은 서버가 연결을 받을 수 있게 평소에 여유를 남겨 둔다.
+
+### 사용자가 10배로 늘면 어디부터 보나요?
+
+동시 연결 수를 다시 어림해 채팅 서버 대수를 늘리고, 파일 디스크립터 한도와 연결당 메모리를 확인한다. 채팅 서버는 늘리기 쉬우니 병목은 오히려 공유 저장소 쪽에서 먼저 온다. 접속 위치 표와 서버 사이 메시지 버스를 샤딩하고, 배정을 지역별로 나눠 다른 지역 서버로 넘기는 일을 줄인다.
+
+### 배포할 때 연결을 어떻게 다루나요?
+
+내릴 서버를 먼저 디스커버리 목록에서 빼서 새 연결을 받지 않게 하고, 붙어 있는 연결은 몇 분에 걸쳐 나눠 끊는다. 앱은 끊기면 지터를 두고 다시 배정받는다. 한 번에 모든 서버를 바꾸지 않고 몇 대씩 굴려야 재연결이 한꺼번에 몰리지 않는다.
