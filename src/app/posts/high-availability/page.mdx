@@ -1,0 +1,514 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("high-availability");
+
+API 서버를 두 대로 늘리고 로드 밸런서 뒤에 붙였다. 이제 한 대가 죽어도 괜찮다고 생각했다. 그런데 한 대를 강제로 죽여 보니 2초 동안 요청 절반이 503으로 떨어졌고, 로드 밸런서 프로세스를 죽이자 두 대가 멀쩡한데도 요청이 전부 실패했다. 서버를 늘리는 것과 가용성이 올라가는 것 사이에는 계산과 확인이 몇 단계 끼어 있다.
+
+가용성(availability)은 "사용자가 쓰려고 할 때 쓸 수 있었던 비율"이다. 고가용성(high availability, HA)은 이 비율을 높게 유지하도록 구조를 짜는 일인데, 실제로는 세 가지 질문으로 나뉜다. 부품의 가용성을 어떻게 조합하면 전체 숫자가 나오나, 어느 부품 하나가 전체를 멈추게 하나(단일 장애 지점), 고장 난 부품을 얼마나 빨리 빼고 되돌리나.
+
+이 글은 그 계산을 Node로 직접 해 보고, Ubuntu 24.04에서 네트워크 네임스페이스 다섯 개와 HAProxy 2.8로 작은 이중화 구성을 만들어 서버와 로드 밸런서를 하나씩 죽여 본다.
+
+이 주제의 다른 글: 아홉 하나가 허용하는 장애 시간과 SLO 정하기는 [SLI와 SLO](/posts/sli-slo), 죽은 DB를 대기 서버로 넘기는 과정은 [장애 조치](/posts/failover), 리전째 사라지는 경우는 [멀티 리전](/posts/multi-region)과 [재해 복구](/posts/disaster-recovery)에 있다. 고장이 났을 때 그 고장을 안쪽에 가두는 설계는 [내결함성](/posts/fault-tolerance)에서 이어서 다룬다.
+
+## 가용성은 두 시간의 비율이다
+
+가용성을 재는 방법은 두 가지다. 사용자 쪽에서 "성공한 요청 ÷ 전체 요청"을 세는 방법이 SLI이고([SLI와 SLO](/posts/sli-slo)), 설계 단계에서 부품 하나의 가용성을 어림할 때는 시간으로 센다.
+
+- MTBF(Mean Time Between Failures): 고장과 고장 사이에 평균 얼마나 버티나
+- MTTR(Mean Time To Repair 또는 Recover): 고장 나면 평균 얼마 만에 되돌리나
+
+가용성 = MTBF ÷ (MTBF + MTTR)다. 한 달에 한 번 고장 나는 서버를 두고 숫자를 바꿔 보자.
+
+```js
+// availability.js 일부
+for (const [mtbfH, mttrMin] of [[720, 60], [720, 5], [168, 5]]) {
+  const a = mtbfH / (mtbfH + mttrMin / 60);
+  console.log(`MTBF ${mtbfH}h, MTTR ${mttrMin}min -> ${pct(a)} (${minPerMonth(a)})`);
+}
+```
+
+```text
+== 1. MTBF / MTTR
+MTBF 720h, MTTR 60min -> 99.8613% (59.9 min/30d)
+MTBF 720h, MTTR 5min -> 99.9884% (5.0 min/30d)
+MTBF 168h, MTTR 5min -> 99.9504% (21.4 min/30d)
+```
+
+두 번째 줄과 세 번째 줄을 비교하면 이 글 전체의 방향이 보인다. 고장이 한 달에 한 번에서 일주일에 한 번으로 네 배 넘게 잦아져도, 5분 만에 되돌리면 한 시간씩 걸려 고치는 서버보다 가용성이 높다. 고장을 아예 없애는 건 어렵고 비싸다. 고장 난 것을 빨리 빼고 빨리 되돌리는 쪽이 대개 싸다. 고가용성 설계의 대부분은 MTTR을 줄이는 장치다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="가용성을 올리는 두 갈래: 덜 고장 나게, 빨리 되돌리게"
+  nodes={[
+    { id: "a", label: "가용성", sub: "MTBF ÷ (MTBF+MTTR)", x: 200, y: 36, w: 180 },
+    { id: "mtbf", label: "MTBF 늘리기", sub: "좋은 부품, 덜 바꾸기", x: 95, y: 130, w: 160 },
+    { id: "mttr", label: "MTTR 줄이기", sub: "감지·전환·복구", x: 305, y: 130, w: 160 },
+    { id: "red", label: "이중화", sub: "고장을 가린다", x: 200, y: 214, w: 140 },
+  ]}
+  edges={[
+    { from: "mtbf", to: "a" },
+    { from: "mttr", to: "a" },
+    { from: "red", to: "mttr", label: "전환 시간만 남김" },
+  ]}
+/>
+
+이중화는 MTTR을 "고치는 시간"에서 "고장 난 쪽을 빼는 시간"으로 바꾸는 장치로 볼 수 있다. 서버를 고치는 데 한 시간이 걸려도, 2초 만에 빼고 나머지가 받으면 사용자에게 보이는 MTTR은 2초다. 다만 그 2초가 정말 2초인지는 재 봐야 안다. 뒤에서 잰다.
+
+## 줄로 이으면 곱해진다
+
+요청 하나가 로드 밸런서, 앱 서버, Redis, DB를 차례로 거친다고 하자. 이 중 하나만 죽어도 요청은 실패한다. 이렇게 모두가 살아 있어야 하는 연결을 직렬(serial)이라 하고, 부품이 서로 독립적으로 고장 난다면 전체 가용성은 각 가용성의 곱이다.
+
+```js
+const chain = { lb: 0.9999, app: 0.999, redis: 0.999, db: 0.9995 };
+let s = 1;
+for (const [k, v] of Object.entries(chain)) { s *= v; console.log(`x ${k.padEnd(5)} ${pct(v, 2).padStart(7)} -> ${pct(s)}`); }
+console.log(`serial total: ${pct(s)} (${minPerMonth(s)})`);
+```
+
+```text
+== 2. serial (every part must be up)
+x lb     99.99% -> 99.9900%
+x app    99.90% -> 99.8900%
+x redis  99.90% -> 99.7901%
+x db     99.95% -> 99.7402%
+serial total: 99.7402% (112.2 min/30d)
+```
+
+부품 하나하나는 99.9% 이상인데 합치면 99.74%, 한 달에 112분이다. 가장 약한 부품보다 전체가 더 약하다. 아래 그림에서 다음을 누르면 곱이 한 칸씩 쌓인다.
+
+<AlgoTrace
+  caption="직렬 연결의 가용성은 곱으로 쌓인다"
+  cells={["LB 99.99", "app 99.9", "redis 99.9", "db 99.95"]}
+  memoryLabel="누적 가용성"
+  steps={[
+    { pointer: 0, memory: ["99.9900%"], caption: "로드 밸런서 하나만 있으면 99.99%다." },
+    { pointer: 1, memory: ["99.9900%", "99.8900%"], caption: "앱 서버를 곱한다. 이미 앱 서버 하나보다 낮다." },
+    { pointer: 2, memory: ["99.9900%", "99.8900%", "99.7901%"], caption: "Redis가 죽어도 요청이 실패하면 Redis도 곱한다." },
+    { pointer: 3, memory: ["99.9900%", "99.8900%", "99.7901%", "99.7402%"], caption: "DB까지 곱하면 99.74%. 한 달에 112분 멈춘다." },
+    { found: [1, 2], memory: ["99.7402%"], caption: "가장 큰 손실은 99.9%짜리 두 칸이다. 여기부터 이중화한다." },
+  ]}
+/>
+
+여기서 바로 나오는 실무 판단이 두 가지 있다. 첫째, 의존성을 하나 늘릴 때마다 곱할 숫자도 하나 는다. "캐시가 죽으면 DB에서 바로 읽게" 만들어 두면 Redis는 직렬 사슬에서 빠지고, 요청은 느려질 뿐 실패하지 않는다. 둘째, 내 서비스가 약속할 수 있는 숫자의 상한은 의존성의 곱이다. 99.9%짜리 외부 결제 API를 반드시 거치는 기능에 99.95%를 약속할 수는 없다.
+
+## 나란히 두면 실패 확률이 곱해진다
+
+이번엔 같은 앱 서버 두 대를 나란히 두고, 하나만 살아 있어도 되게 하자. 병렬(parallel) 연결이다. 둘 다 죽어야 실패하니, 이번엔 가용성이 아니라 실패 확률을 곱한다. 가용성은 1 − (1 − a)ⁿ이다.
+
+```js
+for (const n of [1, 2, 3]) {
+  const a = 1 - (1 - 0.999) ** n;
+  console.log(`n=${n} each 99.9% -> unavailable ${(1 - a).toExponential(0)} (${((1 - a) * 30 * 24 * 3600).toFixed(4)} s/30d)`);
+}
+const appPair = 1 - (1 - 0.999) ** 2;
+const s2 = 0.9999 * appPair * 0.999 * 0.9995;
+console.log(`app doubled, redis/db single: ${pct(s2)} (${minPerMonth(s2)})`);
+```
+
+```text
+== 3. parallel (one of n is enough)
+n=1 each 99.9% -> unavailable 1e-3 (2592.0000 s/30d)
+n=2 each 99.9% -> unavailable 1e-6 (2.5920 s/30d)
+n=3 each 99.9% -> unavailable 1e-9 (0.0026 s/30d)
+app doubled, redis/db single: 99.8400% (69.1 min/30d)
+```
+
+두 대면 한 달에 2.6초, 세 대면 0.003초다. 계산만 보면 두 대로 충분하다. 그런데 마지막 줄을 보면 앱 서버를 두 대로 만들어도 전체는 99.74%에서 99.84%로 오를 뿐이다. 이중화하지 않은 Redis와 DB가 여전히 사슬에 남아 있어서다. 가장 약한 칸을 놔두고 다른 칸을 두껍게 해 봐야 효과가 작다.
+
+그리고 이 2.6초는 두 가지 가정 위에 서 있다. 하나가 죽으면 즉시 다른 하나로 넘어간다는 가정, 두 대가 서로 상관없이 고장 난다는 가정이다. 둘 다 현실에서는 잘 깨진다. 하나씩 깨 보자.
+
+## 독립이라는 가정이 깨질 때
+
+두 서버가 같은 랙, 같은 가용 영역(AZ), 같은 배포 파이프라인을 쓰면 함께 죽는 일이 생긴다. 이렇게 한 원인이 여러 부품을 동시에 쓰러뜨리는 고장을 공통 원인 고장(common-mode failure)이라고 한다. 계산식에는 없는 이 고장이 실제 가용성을 정한다.
+
+100년치를 1분 단위로 시뮬레이션했다. 서버는 30일에 한 번 고장 나서 43분 동안 죽어 있고(혼자서 약 99.9%), 가용 영역은 1년에 한 번 4시간 사라지고, 잘못된 배포는 60일에 한 번 모든 서버를 20분 동안 쓰러뜨린다.
+
+```js
+// correlated.js 일부: 고장원(source)은 분마다 1/MTBF 확률로 고장 나고 repair분 동안 죽어 있다
+const server = (r) => source(r, 30 * DAY, 43);
+const az = (r) => source(r, 365 * DAY, 240);
+const deploy = (r) => source(r, 60 * DAY, 20);
+
+run("2 servers, same AZ", (r) => { const a = server(r), b = server(r), z = az(r);
+  return () => { const zu = z(), au = a(), bu = b(); return zu && (au || bu); }; });
+run("2 servers, 2 AZs", (r) => { const a = server(r), b = server(r), za = az(r), zb = az(r);
+  return () => { const x = za(), y = zb(), au = a(), bu = b(); return (x && au) || (y && bu); }; });
+```
+
+```text
+$ node correlated.js
+1 server                           99.8980%  down 44.1 min/30d
+1 server + its AZ                  99.8517%  down 64.1 min/30d
+2 servers, same AZ                 99.9475%  down 22.7 min/30d
+2 servers, 2 AZs                   99.9998%  down 0.1 min/30d
+2 servers, 2 AZs, shared deploy    99.9770%  down 9.9 min/30d
+```
+
+같은 AZ에 두 대를 두면 한 달에 22.7분 멈춘다. 계산상 2.6초였던 것이 500배 넘게 커졌다. 서버끼리는 서로를 가려 주지만, 둘이 함께 기대는 AZ는 아무도 가려 주지 않기 때문이다. AZ를 나누면 0.1분으로 떨어진다. 그런데 배포를 두 대에 한꺼번에 하면 다시 9.9분으로 오른다. 이번에는 AZ가 아니라 배포 파이프라인이 공통 원인이다.
+
+공통 원인은 생각보다 많다. 같은 버전의 코드(같은 버그), 같은 설정 파일, 같은 인증서 만료일, 같은 DNS, 같은 클라우드 계정의 할당량, 같은 시각에 도는 크론 작업이 그렇다. Google SRE 책은 장애의 약 70%가 운영 중인 시스템을 바꾸는 변경에서 나온다고 적었다. 그래서 고가용성 구성에서도 배포는 한 대씩, 한 AZ씩 나눠서 하고([롤링 배포](/posts/rolling-deployment)), 설정 변경도 일부에만 먼저 적용한다. 서버를 나란히 두는 것만으로는 부족하고, 나란히 둔 것들이 함께 바뀌지 않게 해야 병렬 계산이 들어맞는다.
+
+## 요청 길을 따라 단일 장애 지점 찾기
+
+단일 장애 지점(SPOF, Single Point of Failure)은 혼자 고장 나도 전체가 멈추는 부품이다. 직렬 사슬에서 이중화되지 않은 칸이다. 찾는 방법은 단순하다. 사용자의 요청 하나가 지나는 길을 처음부터 끝까지 그리고, 칸마다 "이게 지금 죽으면?"을 묻는다. 아래 그림에서 다음을 누르면 요청이 한 칸씩 지나간다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="요청 길 위의 칸마다 '이게 죽으면?'을 묻는다"
+  zones={[
+    { id: "za", label: "AZ a", x: 120, y: 120, w: 130, h: 170, tone: "private" },
+    { id: "zb", label: "AZ b", x: 262, y: 120, w: 130, h: 170, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "user", x: 40, y: 40, icon: "client" },
+    { id: "dns", label: "DNS", x: 150, y: 40, icon: "dns" },
+    { id: "lb", label: "LB", sub: "1대", x: 280, y: 40, icon: "lb" },
+    { id: "app1", label: "app 1", x: 185, y: 165, icon: "server" },
+    { id: "app2", label: "app 2", x: 327, y: 165, icon: "server" },
+    { id: "redis", label: "redis", sub: "1대", x: 185, y: 250, icon: "db" },
+    { id: "db", label: "db", sub: "primary", x: 327, y: 250, icon: "db" },
+  ]}
+  links={[
+    { from: "user", to: "dns", dashed: true },
+    { from: "user", to: "lb" },
+    { from: "lb", to: "app1" },
+    { from: "lb", to: "app2" },
+    { from: "app1", to: "redis" },
+    { from: "app2", to: "redis" },
+    { from: "app1", to: "db" },
+    { from: "app2", to: "db" },
+  ]}
+  steps={[
+    { path: ["user", "dns"], packet: "A?", title: "이름부터 푼다", detail: "DNS가 죽으면 서버가 다 살아 있어도 못 들어온다. 네임서버가 둘 이상인지, TTL은 얼마인지 본다." },
+    { path: ["user", "lb"], packet: "GET", highlight: ["lb"], title: "로드 밸런서가 한 대다", detail: "앱 서버 둘을 가려 주던 LB 자신은 아무도 가려 주지 않는다. 첫 번째 SPOF다." },
+    { path: ["lb", "app1"], packet: "GET", title: "앱 서버는 두 대다", detail: "AZ도 다르다. 한 대가 죽으면 LB가 빼는 데 걸리는 시간만 남는다." },
+    { path: ["app1", "redis"], packet: "GET k", highlight: ["redis"], title: "Redis가 한 대다", detail: "캐시가 죽을 때 요청이 실패하면 SPOF, DB로 돌아가 느려지기만 하면 SPOF가 아니다." },
+    { path: ["app2", "db"], packet: "SELECT", highlight: ["db", "za"], title: "DB 프라이머리도 한 곳이다", detail: "스탠바이가 있어도 승격이 자동인지, 몇 초 걸리는지 재 봐야 이중화라고 부를 수 있다." },
+    { path: ["user", "lb", "app2", "db"], packet: "200", title: "그림 밖의 칸도 센다", detail: "인증서, 설정 저장소, 배포 파이프라인, 비밀 값 저장소, 외부 결제 API도 이 길 위에 있다." },
+  ]}
+/>
+
+그림에 그린 상자만 세면 SPOF를 놓친다. 실제로 자주 놓치는 것들은 이렇다.
+
+- 사람이 직접 하는 단계: 승격 스크립트를 사람이 눌러야 하면 MTTR에 "알림 받고 노트북 여는 시간"이 들어간다.
+- 설정과 비밀: 앱 서버는 여러 대인데 기동할 때마다 한 대뿐인 설정 서버에서 값을 받는다면, 그 서버가 죽은 동안에는 새 서버를 띄울 수 없다.
+- 이름과 인증서: 인증서 하나가 만료되면 모든 서버가 동시에 실패한다. 공통 원인이자 SPOF다.
+- 관리 경로: 로드 밸런서는 둘인데 그 설정을 바꾸는 API는 하나라면, 장애 중에 설정을 못 바꾼다.
+
+SPOF를 모두 없앨 필요는 없다. 없애는 데 드는 비용과 그 칸이 깎는 가용성을 견줘서 고른다. 다만 목록으로 적어 두고 "이건 알고 남겨 둔 SPOF"라고 표시해 두면, 장애가 났을 때 놀라지 않는다.
+
+## 실험실: 서버 둘, 로드 밸런서 하나
+
+계산을 실제 구성에서 확인해 보자. 네임스페이스 다섯 개를 브리지 하나에 붙였다. 클라이언트(`10.71.0.10`), HAProxy(`10.71.0.2`), 앱 서버 a(`10.71.0.11`), b(`10.71.0.12`)다. 앱 서버는 자기 이름만 돌려주는 Node 서버다.
+
+```bash
+# 브리지 역할을 할 네임스페이스와 그 안의 br0
+sudo ip netns add sd1br
+sudo ip netns exec sd1br ip link add br0 type bridge
+sudo ip netns exec sd1br ip link set br0 up
+# 노드마다 네임스페이스 하나, veth 한 쌍 (a 하나만 예로 든다. c, lb, b도 같은 방식)
+sudo ip netns add sd1a
+sudo ip link add va type veth peer name pa
+sudo ip link set va netns sd1a
+sudo ip link set pa netns sd1br
+sudo ip netns exec sd1br ip link set pa master br0
+sudo ip netns exec sd1br ip link set pa up
+sudo ip netns exec sd1a ip addr add 10.71.0.11/24 dev va
+sudo ip netns exec sd1a ip link set va up
+# 앱 서버 a 띄우기
+sudo ip netns exec sd1a node backend.js a 8080 &
+```
+
+HAProxy 설정은 둘을 준비했다. 1초마다 `/health`를 묻고 세 번 연속 실패하면 빼는 건 같고, 재시도만 다르다.
+
+```text
+# hap-plain.cfg 일부 (재시도 없음)
+defaults
+    mode http
+    timeout connect 1s
+    timeout client 5s
+    timeout server 5s
+    retries 0
+backend web
+    balance roundrobin
+    option httpchk GET /health
+    server a 10.71.0.11:8080 check inter 1s fall 3 rise 2
+    server b 10.71.0.12:8080 check inter 1s fall 3 rise 2
+
+# hap-retry.cfg 는 retries 0 대신 아래 두 줄
+    retries 2
+    option redispatch 1
+```
+
+```bash
+sudo ip netns exec sd1lb haproxy -db -f hap-plain.cfg &          # 로드 밸런서
+sudo ip netns exec sd1c node client.js http://10.71.0.2/ 9000 50   # 50ms마다 요청, 9초 동안
+```
+
+클라이언트는 실패한 요청과 500ms 넘게 걸린 요청만 한 줄씩 찍고, 끝에 합계를 낸다. 요청을 시작하고 3초 뒤에 장애를 넣는다. 장애는 세 가지다. 앱 서버 프로세스가 죽는 경우, 앱 서버 호스트가 통째로 응답을 멈추는 경우, 로드 밸런서가 죽는 경우다.
+
+## 서버 한 대가 죽었을 때 실제로 잃는 것
+
+먼저 재시도가 없는 설정에서 앱 서버 a를 `kill -9`로 죽였다.
+
+```text
+07:55:01.737 kill -9 backend a
+--- client
+07:55:01.749 fail 503 1ms
+07:55:01.849 fail 503 2ms
+...
+07:55:03.758 fail 503 1ms
+summary ok=157 fail=21 slow(>500ms)=0 by={"b":128,"a":29}
+--- haproxy
+2026-10-21T07:55:03.828525+00:00 Server web/a is DOWN, reason: Layer4 connection problem, info: "Connection refused", check duration: 0ms. 1 active and 0 backup servers left. 0 sessions active, 0 requeued, 0 remaining in queue.
+```
+
+a가 죽고 HAProxy가 a를 `DOWN`으로 표시하기까지 2.09초 걸렸다. 1초 간격 검사를 세 번 실패해야 빼는 설정이니 계산과 맞다. 그 사이 라운드 로빈이 a에 보낸 요청 21개가 전부 503이었다. 실패 시각이 100ms 간격인 것도 눈여겨볼 만하다. 50ms마다 보낸 요청 중 하나 걸러 하나가 a로 갔다는 뜻이다. 서버가 두 대여도 "고장 난 서버를 빼기 전까지"는 고장 난 비율만큼 요청을 잃는다.
+
+같은 실험을 재시도 설정으로 다시 했다.
+
+```text
+07:54:39.212 kill -9 backend a
+--- client
+summary ok=178 fail=0 slow(>500ms)=0 by={"b":149,"a":29}
+```
+
+실패가 0이다. 프로세스가 죽은 호스트는 연결 요청에 곧바로 RST를 돌려준다(`Connection refused`). HAProxy는 연결 단계에서 실패한 요청을 `option redispatch` 덕분에 b로 다시 보냈고, 그 시간이 1ms 단위라 사용자는 알아채지 못한다. 이 재시도는 연결을 맺지 못한 요청에만 걸린다. 요청을 서버에 보낸 뒤 실패한 경우까지 다시 보내려면 `retry-on`으로 따로 정해야 하고, 그때는 그 요청이 두 번 실행돼도 되는지부터 따져야 한다([재시도는 공짜가 아니다](/posts/retries)).
+
+이번에는 프로세스가 아니라 호스트가 통째로 사라진 경우다. 전원이 나가거나 네트워크가 끊기면 RST조차 오지 않는다. a 네임스페이스에서 들어오고 나가는 패킷을 모두 버려 흉내 냈다.
+
+```bash
+# 호스트 a가 응답을 멈춘다: 모든 패킷을 버린다
+sudo ip netns exec sd1a iptables -A INPUT -j DROP
+sudo ip netns exec sd1a iptables -A OUTPUT -j DROP
+```
+
+```text
+# 재시도 없음
+07:56:03.012 host a vanishes (DROP all)
+summary ok=126 fail=51 slow(>500ms)=0 by={"a":29,"b":97}
+2026-10-21T07:56:08.126113+00:00 Server web/a is DOWN, reason: Layer4 timeout, check duration: 1001ms. 1 active and 0 backup servers left. 10 sessions active, 0 requeued, 0 remaining in queue.
+
+$ grep " fail " client.log | awk '{print $3}' | cut -d: -f1 | sort | uniq -c
+     19 503
+      1 TimeoutError
+     31 TypeError
+
+# 재시도 있음
+07:55:39.108 host a vanishes (DROP all)
+07:55:40.232 ok b 1004ms
+07:55:40.331 ok b 1003ms
+...
+07:55:42.130 fail TimeoutError 3003ms
+...
+summary ok=177 fail=1 slow(>500ms)=57 by={"b":148,"a":29}
+2026-10-21T07:55:44.206648+00:00 Server web/a is DOWN, reason: Layer4 timeout, check duration: 1000ms. 1 active and 0 backup servers left. 12 sessions active, 0 requeued, 0 remaining in queue.
+```
+
+`DOWN`이 되기까지 2.09초가 아니라 5.1초가 걸렸다. 검사 하나가 1초 타임아웃을 다 채운 뒤에야 실패로 세지기 때문이다. 재시도가 없으면 그 5초 동안 a로 간 요청 51개가 실패했다. 50개는 1초 남짓 기다린 끝에 503을 받거나 연결이 끊겼고(`TypeError`), 1개는 클라이언트의 3초 제한에 걸렸다. 재시도를 켜면 실패는 하나로 줄지만, 57개 요청이 1초씩 느려졌다. 실패가 지연으로 바뀐 것이다. 가용성 숫자는 지켰지만 지연 SLO는 그 5초 동안 깨졌다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="같은 고장, 다른 결과: 프로세스 종료와 호스트 소실"
+  zones={[
+    { id: "lab", label: "10.71.0.0/24", x: 110, y: 10, w: 282, h: 232, tone: "private" },
+  ]}
+  nodes={[
+    { id: "c", label: "client", sub: ".10", x: 50, y: 125, icon: "client" },
+    { id: "lb", label: "haproxy", sub: ".2", x: 180, y: 125, icon: "lb" },
+    { id: "a", label: "app a", sub: ".11", x: 320, y: 60, icon: "server" },
+    { id: "b", label: "app b", sub: ".12", x: 320, y: 190, icon: "server" },
+  ]}
+  links={[
+    { from: "c", to: "lb" },
+    { from: "lb", to: "a" },
+    { from: "lb", to: "b" },
+  ]}
+  steps={[
+    { path: ["c", "lb", "a"], packet: "GET", title: "평소에는 번갈아 보낸다", detail: "라운드 로빈이라 요청의 절반이 a로 간다." },
+    { path: ["lb", "a"], packet: "SYN", blocked: true, title: "프로세스가 죽으면 RST가 온다", detail: "연결이 1ms 만에 거절된다. 재시도가 없으면 그 요청은 바로 503이다.", payload: "fail 503 1ms  (2.09초 동안 21건)" },
+    { path: ["c", "lb", "b"], packet: "GET", title: "redispatch가 b로 다시 보낸다", detail: "연결 단계 실패라 다른 서버로 넘겨도 안전하다. 사용자는 아무것도 못 느낀다.", payload: "fail=0" },
+    { path: ["lb", "a"], packet: "SYN", blocked: true, highlight: ["a"], title: "호스트가 사라지면 아무 답도 없다", detail: "connect 타임아웃 1초를 다 기다린다. 헬스 체크도 매번 1초씩 기다려서 빼는 데 5.1초가 걸렸다." },
+    { path: ["c", "lb", "b"], packet: "1004ms", title: "실패가 지연으로 바뀐다", detail: "재시도로 b가 받아 주지만, a에서 1초를 버린 뒤다. 57건이 1초 넘게 걸렸다.", payload: "ok b 1004ms" },
+    { path: ["c", "lb"], packet: "SYN", blocked: true, highlight: ["lb"], title: "로드 밸런서가 죽으면 끝이다", detail: "a와 b는 멀쩡한데 모든 요청이 연결 거절된다. LB가 SPOF다." },
+  ]}
+/>
+
+이 실험에서 나온 숫자를 설정으로 옮기면 이렇다. 서버를 빼는 데 걸리는 시간은 대략 `inter × fall`이고, 응답이 아예 없는 고장이라면 검사 타임아웃만큼 더 걸린다. 그 사이 잃는 요청의 비율은 "고장 난 서버 수 ÷ 전체 서버 수"다. 연결 단계 재시도는 프로세스 종료를 거의 완전히 가려 주지만, 호스트 소실은 지연으로 바꿀 뿐이다. 그래서 `timeout connect`는 같은 데이터센터 안이라면 수백 ms 정도로 짧게 잡는 일이 많다. 너무 짧으면 잠깐 바쁜 서버를 죽었다고 판단해 멀쩡한 서버를 빼는 반대 실수가 생긴다. 이 저울질은 [헬스 체크 설계](/posts/health-checks)와 [로드 밸런서 기본](/posts/load-balancer-basics)에서 더 자세히 다룬다.
+
+감지 과정을 시간 순서로 그리면 이렇다.
+
+<SequenceDiagram
+  caption="inter 1s, fall 3: 빼기까지 세 번 묻는다"
+  actors={[
+    { id: "lb", label: "haproxy" },
+    { id: "a", label: "app a" },
+    { id: "b", label: "app b" },
+  ]}
+  steps={[
+    { from: "lb", to: "a", label: "GET /health", title: "평소의 검사", detail: "1초마다 묻고 200을 받는다. a는 UP이다." },
+    { from: "a", to: "a", label: "kill -9", title: "a가 죽는다", detail: "07:55:01.737. 이 순간부터 a로 가는 요청은 거절된다." },
+    { from: "lb", to: "a", label: "check 1 ✗", title: "첫 번째 실패", detail: "아직 UP이다. 한 번 실패로 빼면 순간적인 끊김에도 서버가 빠진다." },
+    { from: "lb", to: "a", label: "check 2 ✗", title: "두 번째 실패", detail: "그 사이 라운드 로빈은 여전히 a에 요청을 보낸다. 재시도가 없으면 503이다." },
+    { from: "lb", to: "a", label: "check 3 ✗", title: "세 번째 실패, DOWN", detail: "07:55:03.828. 2.09초 만에 a를 뺐다.", payload: "Server web/a is DOWN ... 1 active and 0 backup servers left." },
+    { from: "lb", to: "b", label: "GET /", title: "이제 b만 받는다", detail: "a가 돌아와도 rise 2, 즉 두 번 연속 성공해야 다시 넣는다." },
+  ]}
+/>
+
+## 로드 밸런서를 이중화한다는 것
+
+마지막 실험에서 HAProxy를 죽였다.
+
+```text
+07:56:27.782 kill -9 haproxy
+--- client
+07:56:27.804 fail TypeError:ECONNREFUSED 2ms
+07:56:27.853 fail TypeError:ECONNREFUSED 1ms
+...
+summary ok=58 fail=120 slow(>500ms)=0 by={"b":29,"a":29}
+```
+
+죽인 뒤의 요청 120개가 하나도 빠짐없이 실패했다. 앱 서버를 이중화하려고 둔 로드 밸런서가 새 SPOF가 됐다. 이중화 장치는 그 자신도 이중화해야 한다. 흔한 방법은 세 가지다.
+
+- 가상 IP(VIP)를 두 대가 주고받는다: keepalived의 VRRP처럼 평소엔 한 대가 VIP를 쥐고, 죽으면 다른 대가 가져간다. 같은 L2 네트워크 안에서 쓴다([로드 밸런서 기본](/posts/load-balancer-basics)).
+- DNS에 여러 주소를 둔다: 클라이언트가 한 주소에 실패하면 다른 주소로 가는데, 그 동작은 클라이언트 구현에 달려 있고 TTL 동안 죽은 주소가 남는다([DNS](/posts/dns)).
+- 관리형 로드 밸런서: AWS ALB나 NLB는 여러 AZ에 노드를 두고 그 이중화를 클라우드가 맡는다. 대신 사용자는 그 서비스의 SLA를 곱해야 한다.
+
+애니캐스트로 같은 IP를 여러 곳에서 광고하는 방법도 있다. CDN과 공개 DNS가 쓰는 방법이다([CDN과 애니캐스트](/posts/cdn-edge-anycast)).
+
+## 둘 다 일하기, 하나는 기다리기
+
+이중화한 두 대를 어떻게 쓰느냐에 따라 두 가지로 나뉜다.
+
+액티브-액티브(active-active)는 둘 다 평소에 요청을 받는다. 위 실험의 앱 서버가 이랬다. 놀고 있는 장비가 없고, 한 대가 죽어도 이미 다른 대가 일하고 있으니 넘어가는 데 준비 시간이 없다. 대신 각 서버의 여유 용량이 문제가 된다.
+
+액티브-패시브(active-passive, 또는 액티브-스탠바이)는 한 대만 받고 다른 대는 기다린다. DB 프라이머리와 스탠바이, VRRP의 백업 로드 밸런서가 이렇다. 쓰기 주인을 하나로 유지해야 하는 상태 있는 부품에 주로 쓴다. 대신 넘어가는 과정(감지, 승격, 연결 전환)이 따로 있고, 그 시간이 곧 MTTR이다([장애 조치](/posts/failover)). 기다리던 쪽이 정말 일할 수 있는 상태인지 평소에 확인하지 않으면, 정작 넘어갔을 때 설정이 낡아 있거나 디스크가 꽉 차 있는 일이 생긴다.
+
+액티브-액티브의 함정은 용량이다. 두 대가 각각 CPU 70%로 일하다가 한 대가 죽으면, 남은 한 대에 140%가 걸린다. 그 서버도 곧 느려지고, 헬스 체크에 실패해 빠지고, 전체가 멈춘다. 이중화가 장애를 두 배로 키운 셈이다.
+
+```js
+// 한 대를 잃어도 남은 서버가 80%를 넘지 않으려면, 평소 서버당 사용률은 몇 %까지?
+console.log("headroom: max safe utilization per node if one dies, target 80%");
+for (const n of [2, 3, 4, 6]) console.log(`N=${n}: ${((n - 1) / n * 0.8 * 100).toFixed(1)}%`);
+```
+
+```text
+headroom: max safe utilization per node if one dies, target 80%
+N=2: 40.0%
+N=3: 53.3%
+N=4: 60.0%
+N=6: 66.7%
+```
+
+두 대짜리 액티브-액티브는 평소 40%까지만 써야 안전하다. 장비 절반을 놀리는 셈이라 액티브-패시브와 비용이 비슷하다. 세 대, 네 대로 늘리면 한 대가 차지하는 몫이 작아져 여유가 줄어도 된다. 한 대를 잃어도 버티는 구성을 `N+1`, 한 대를 점검하는 중에 다른 한 대가 죽어도 버티는 구성을 `N+2`라고 부른다. AZ 단위로 생각하면 "AZ 하나가 사라져도 나머지 AZ의 서버로 피크를 받을 수 있나"를 묻게 된다. 오토스케일링이 빈자리를 채워 주긴 하지만, 새 서버가 뜨는 몇 분 동안은 남은 서버가 버텨야 한다([오토스케일링](/posts/autoscaling)).
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="두 대 액티브-액티브에서 한 대를 잃으면 남은 쪽의 부하가 두 배가 된다"
+  zones={[
+    { id: "za", label: "AZ a", x: 200, y: 14, w: 192, h: 110, tone: "private" },
+    { id: "zb", label: "AZ b", x: 200, y: 136, w: 192, h: 110, tone: "private" },
+  ]}
+  nodes={[
+    { id: "u", label: "users", x: 50, y: 130, icon: "internet" },
+    { id: "lb", label: "LB", x: 140, y: 130, icon: "lb" },
+    { id: "a", label: "app a", sub: "70%", x: 300, y: 70, icon: "server" },
+    { id: "b", label: "app b", sub: "70%", x: 300, y: 190, icon: "server" },
+  ]}
+  links={[
+    { from: "u", to: "lb" },
+    { from: "lb", to: "a" },
+    { from: "lb", to: "b" },
+  ]}
+  steps={[
+    { path: ["u", "lb", "a"], packet: "50%", title: "평소에는 반씩 나눠 받는다", detail: "둘 다 CPU 70%. 겉보기에는 여유가 있다." },
+    { path: ["a"], highlight: ["za"], title: "AZ a가 사라진다", detail: "a가 받던 몫이 갈 곳을 잃는다." },
+    { path: ["u", "lb", "b"], packet: "100%", highlight: ["b"], title: "b에 140%가 걸린다", detail: "응답이 느려지고 큐가 쌓인다. 헬스 체크까지 늦어지면 b도 빠진다." },
+    { path: ["u", "lb"], packet: "503", blocked: true, title: "이중화가 장애를 키웠다", detail: "두 대가 각각 40% 이하였다면 b 혼자 80%로 버텼다. 여유 용량도 이중화의 일부다." },
+  ]}
+/>
+
+## 직접 계산해 보기: 직렬과 병렬을 섞은 구성
+
+실제 구성은 직렬과 병렬이 섞여 있다. 숫자 하나는 부품 하나, `{ type: "serial", parts }`는 모두 살아야 하는 묶음, `{ type: "parallel", parts }`는 하나만 살아도 되는 묶음이다. 부품이 서로 독립이라고 보고 전체 가용성을 소수 여섯째 자리로 반올림해 돌려주는 함수를 짜 보자.
+
+<CodePlayground
+  caption="섞인 구성의 가용성"
+  functionName="availability"
+  initialCode={`function availability(node) {
+  // node: 숫자(부품 하나) | { type: "serial" | "parallel", parts: node[] }
+  // 결과는 Number(x.toFixed(6))로 반올림한다
+  return 0;
+}`}
+  solution={`function availability(node) {
+  const calc = (n) => {
+    if (typeof n === "number") return n;
+    const parts = n.parts.map(calc);
+    if (n.type === "serial") return parts.reduce((acc, a) => acc * a, 1);
+    return 1 - parts.reduce((acc, a) => acc * (1 - a), 1);
+  };
+  return Number(calc(node).toFixed(6));
+}`}
+  tests={[
+    { label: "부품 하나", args: [0.999], expected: 0.999 },
+    { label: "LB·app·redis·db 직렬", args: [{ type: "serial", parts: [0.9999, 0.999, 0.999, 0.9995] }], expected: 0.997402 },
+    { label: "app 두 대 병렬", args: [{ type: "parallel", parts: [0.999, 0.999] }], expected: 0.999999 },
+    { label: "app만 이중화한 사슬", args: [{ type: "serial", parts: [0.9999, { type: "parallel", parts: [0.999, 0.999] }, 0.999, 0.9995] }], expected: 0.9984 },
+    { label: "사슬 두 벌을 병렬로", args: [{ type: "parallel", parts: [{ type: "serial", parts: [0.999, 0.999] }, { type: "serial", parts: [0.999, 0.999] }] }], expected: 0.999996 },
+    { label: "90%짜리 세 대", args: [{ type: "parallel", parts: [0.9, 0.9, 0.9] }], expected: 0.999 },
+  ]}
+/>
+
+마지막 테스트가 재미있다. 90%짜리 싸구려 서버도 세 대를 나란히 두면 99.9%가 된다. 계산상으로는 그렇다. 하지만 세 대가 같은 버그를 갖고 있다면 앞 절의 시뮬레이션처럼 숫자는 금방 무너진다. 이 함수의 답은 독립을 가정한 상한이고, 실제 값은 공통 원인만큼 낮다.
+
+## 가용성이 계산보다 낮게 나올 때
+
+설계 문서에는 99.99%라고 적었는데 SLI는 99.8%가 나온다. 이럴 때 보는 순서가 있다.
+
+먼저 지난 장애를 원인별로 나눈다. 장애 기록([포스트모템](/posts/postmortems))에서 "부품 하나가 죽었는데 이중화가 가려 주지 못한 경우"와 "여러 부품이 함께 죽은 경우"를 나눠 세면, 뒤쪽이 많은 경우가 흔하다. 배포, 설정 변경, 인증서 만료, 공유 의존성 장애가 여기 들어간다. 이건 서버를 더 늘려도 안 줄어든다.
+
+다음은 MTTR을 토막 낸다. 감지(알림이 울리기까지), 판단(사람이 원인을 짐작하기까지), 조치(빼거나 되돌리기까지)로 나눠 가장 긴 토막을 줄인다. 위 실험에서 감지 시간은 설정값 `inter × fall`과 타임아웃으로 거의 결정됐다. 사람의 판단이 끼는 단계는 분 단위라서, 99.99%를 노린다면 사람 없이 끝나는 경로가 있어야 한다.
+
+마지막으로 이중화가 실제로 동작하는지 정기적으로 확인한다. 쓰지 않는 스탠바이, 한 번도 넘어가 본 적 없는 VIP, 꺼 본 적 없는 AZ는 필요할 때 동작하지 않을 가능성이 크다. 일부러 하나를 꺼 보는 연습이 [카오스 엔지니어링](/posts/chaos-engineering)이고, 쿠버네티스에서는 파드를 노드와 AZ에 흩뿌리는 설정([파드 스케줄링](/posts/k8s-pod-scheduling))과 점검 중에도 최소 개수를 지키는 설정([PodDisruptionBudget](/posts/k8s-pod-disruption-budget))이 같은 목적이다.
+
+<Callout kind="warning">
+이중화한 부품을 일부러 꺼 보는 실험은 운영 중인 서비스에서 할 때 남은 쪽의 여유 용량부터 확인한다. 위의 140% 상황처럼, 확인 없이 하나를 끄면 실험이 곧 장애가 된다. 트래픽이 적은 시간에 한 대씩, 바로 되돌릴 수 있는 방법(서버를 다시 켜는 명령, LB에 다시 넣는 명령)을 손에 쥐고 시작한다.
+</Callout>
+
+## 더 많이가 아니라 덜 함께
+
+고가용성은 서버의 수보다 고장의 모양에 달려 있다. 직렬로 이어진 칸은 곱해서 약해지고, 병렬로 둔 칸은 실패 확률이 곱해져 강해지지만, 함께 죽는 원인이 하나라도 있으면 그 계산은 성립하지 않는다. 그래서 요청 길에서 SPOF를 찾아 지우고, 나란히 둔 것들을 서로 다른 AZ와 다른 배포 시점에 두고, 고장 난 것을 빼는 시간을 재서 줄인다. 다음으로 볼 것은 고장이 났을 때 그 영향이 다른 곳으로 번지지 않게 가두는 방법이다([내결함성](/posts/fault-tolerance)).
+
+## 면접에서 나올 만한 질문
+
+### 가용성은 어떻게 계산하나요?
+
+부품 하나라면 MTBF ÷ (MTBF + MTTR)로 어림한다. 운영 중인 서비스는 성공한 요청 ÷ 전체 요청 같은 SLI로 잰다. 고장 간격을 늘리는 것보다 복구 시간을 줄이는 쪽이 대개 효과가 크고 싸다. 한 달에 한 번 고장 나도 5분 만에 되돌리면 99.99%에 가깝다.
+
+### 직렬 구성과 병렬 구성의 가용성은 어떻게 다른가요?
+
+모두 살아야 하는 직렬은 가용성을 곱하므로 부품이 늘수록 약해진다. 99.9%짜리 둘을 이으면 99.8%다. 하나만 살면 되는 병렬은 실패 확률을 곱하므로 99.9%짜리 둘이면 99.9999%가 된다. 다만 병렬 계산은 두 부품이 독립적으로 고장 나고 전환이 즉시 일어난다는 가정 위에 있다.
+
+### 서버를 두 대로 늘렸는데 왜 계산만큼 가용성이 오르지 않나요?
+
+두 대가 함께 죽는 공통 원인 때문이다. 같은 AZ, 같은 배포, 같은 설정, 같은 인증서가 그렇다. 시뮬레이션에서 같은 AZ의 두 대는 한 달에 22.7분 멈췄고, 독립이라는 계산은 2.6초였다. AZ와 배포 시점을 나눠야 계산에 가까워진다. 또 이중화하지 않은 다른 칸(DB, 캐시, LB)이 직렬로 남아 있으면 상한이 그 칸에서 정해진다.
+
+### 단일 장애 지점은 어떻게 찾나요?
+
+사용자 요청 하나가 지나는 길을 DNS부터 DB까지 그리고, 칸마다 이게 지금 죽으면 요청이 실패하는지 묻는다. 그림 밖의 칸, 즉 인증서, 설정 저장소, 비밀 값, 배포 파이프라인, 사람의 수동 단계도 센다. 모두 없앨 필요는 없고, 남겨 둘 SPOF는 이유와 함께 목록으로 남긴다.
+
+### 액티브-액티브와 액티브-패시브는 언제 고르나요?
+
+상태가 없거나 여러 곳에서 써도 충돌하지 않는 부품(앱 서버, 캐시 읽기)은 액티브-액티브가 자연스럽다. 전환 시간이 없고 장비를 놀리지 않는다. 쓰기 주인이 하나여야 하는 부품(DB 프라이머리, 리더)은 액티브-패시브로 두고 전환 과정을 자동화한다. 액티브-액티브라도 한 대가 빠졌을 때 남은 쪽이 받을 여유가 있어야 하는데, 두 대라면 평소 40% 안팎까지만 쓴다.
+
+### 서버가 죽었을 때 로드 밸런서는 얼마나 빨리 빼나요? 그동안 요청은 어떻게 되나요?
+
+대략 검사 간격 × 실패 횟수이고, 응답 없이 사라진 경우에는 검사 타임아웃이 더해진다. 실험에서 프로세스 종료는 2.09초, 호스트 소실은 5.1초가 걸렸다. 그동안 고장 난 서버로 간 요청은 실패하는데, 연결 단계 재시도(HAProxy `retries`와 `redispatch`)를 켜면 프로세스 종료는 거의 다 가려진다. 호스트 소실은 실패 대신 connect 타임아웃만큼의 지연으로 바뀐다.
+
+### 99.99%를 목표로 하면 무엇이 달라지나요?
+
+한 달에 4분 남짓이라 사람이 알림을 받고 대응하는 시간이 들어갈 자리가 없다. 감지와 전환이 자동이어야 하고, 배포와 설정 변경은 일부에 먼저 적용해 공통 원인 고장을 막아야 한다. 의존하는 외부 서비스의 가용성 곱이 99.99%보다 낮으면 그 기능은 그 의존성 없이도 동작하게(캐시, 대체 경로) 바꿔야 한다.

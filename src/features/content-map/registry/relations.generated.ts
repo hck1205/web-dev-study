@@ -2,6 +2,79 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "consistency-models": {
+    "links": [
+      "db-consistency-cap",
+      "eventual-consistency",
+      "leader-election",
+      "distributed-lock",
+      "thread-safety",
+      "clock-skew",
+      "multi-region",
+      "crdt",
+      "db-transaction-isolation"
+    ],
+    "mentions": [
+      "mongodb-document-model",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "db-replication-sharding",
+      "redis-basics"
+    ]
+  },
+  "fault-tolerance": {
+    "links": [
+      "high-availability",
+      "resilience-patterns",
+      "circuit-breaker",
+      "chaos-engineering",
+      "raft-consensus",
+      "network-partitions",
+      "merkle-tree",
+      "k8s-pod-lifecycle",
+      "multi-region",
+      "retries",
+      "exponential-backoff-jitter",
+      "feature-flags",
+      "backpressure",
+      "js-memory-leak"
+    ],
+    "mentions": [
+      "timeouts",
+      "k8s-architecture",
+      "event-loop",
+      "osi-in-practice",
+      "db-type-key-value",
+      "http-methods"
+    ]
+  },
+  "high-availability": {
+    "links": [
+      "sli-slo",
+      "failover",
+      "multi-region",
+      "disaster-recovery",
+      "fault-tolerance",
+      "rolling-deployment",
+      "retries",
+      "health-checks",
+      "load-balancer-basics",
+      "dns",
+      "cdn-edge-anycast",
+      "autoscaling",
+      "postmortems",
+      "chaos-engineering",
+      "k8s-pod-scheduling",
+      "k8s-pod-disruption-budget"
+    ],
+    "mentions": [
+      "timeouts",
+      "k8s-deploy-pipeline-eks",
+      "vpc-basics",
+      "osi-in-practice",
+      "redis-basics"
+    ]
+  },
   "js-closures": {
     "links": [
       "js-function-forms",
@@ -882,6 +955,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
       "what-happens-google-com",
+      "high-availability",
       "db-type-key-value"
     ]
   },
@@ -1745,7 +1819,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "kubernetes-ingress",
       "cilium-ebpf",
-      "osi-in-practice"
+      "osi-in-practice",
+      "high-availability"
     ]
   },
   "cloud-cost-optimization": {
@@ -1767,6 +1842,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "postgres-architecture",
       "redis-basics",
+      "high-availability",
       "github-actions-docker-ecr",
       "vpc-basics"
     ]
@@ -1997,6 +2073,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "git-staging-area",
       "sql-batch-timeout-pool",
+      "high-availability",
       "db-type-key-value",
       "dns",
       "token-login"
@@ -2590,7 +2667,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "connection-pool"
     ],
-    "mentions": []
+    "mentions": [
+      "consistency-models"
+    ]
   },
   "deadlocks": {
     "links": [
@@ -3044,6 +3123,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "csrf",
       "db-type-key-value",
       "mongodb-document-model",
+      "consistency-models",
       "sql-batch-timeout-pool",
       "postgres-architecture",
       "dns"
@@ -3487,6 +3567,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ids-ips"
     ],
     "mentions": [
+      "high-availability",
       "https-tls",
       "vpc-basics",
       "token-login"
@@ -3644,6 +3725,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-partitions",
       "rolling-deployment",
       "kafka-basics",
+      "high-availability",
       "local-k8s-kind-minikube",
       "db-type-key-value",
       "dns"
@@ -4698,6 +4780,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ssrf",
       "layer-link-ethernet-arp",
       "what-happens-google-com",
+      "high-availability",
       "eks-cluster-basics",
       "dns"
     ]
@@ -5375,7 +5458,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "distributed-transactions-2pc",
       "scaling-horizontal-vertical",
-      "redis-basics"
+      "redis-basics",
+      "high-availability"
     ]
   },
   "db-partitioning": {
@@ -5733,6 +5817,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-transaction-isolation",
       "db-type-newsql",
       "db-replication-sharding",
+      "consistency-models",
       "eventual-consistency",
       "db-type-wide-column",
       "redis-replication-sentinel"
@@ -6457,6 +6542,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cold-starts",
       "tail-latency",
       "db-replication-sharding",
+      "high-availability",
       "dns"
     ]
   },

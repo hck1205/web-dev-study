@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "consistency-models",
+    title: "일관성 모델: 선형화, 순차, 인과를 실행 기록으로 판정하기",
+    summary: "답장이 질문보다 먼저 보이는 복제본 시뮬레이션에서 출발해, 일관성 모델을 허용되는 히스토리의 규칙으로 정의하고 작은 검사기로 선형화와 순차 일관성을 판정한다. 쿼럼을 맞춰도 선형화가 깨지는 장면과 동기 읽기 복구, 벡터 시계로 인과 순서를 지키는 법, 직렬화 가능성과의 차이를 다룬다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Distributed Systems", "Database", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["일관성 모델", "순차 일관성", "인과 일관성", "선형화 검사기"],
+  },
+  {
+    slug: "fault-tolerance",
+    title: "내결함성: 결함을 가리고, 빨리 멈추게 하고, 작은 칸에 가둔다",
+    summary: "검색어 하나가 재시도를 타고 서버 세 대를 차례로 죽이는 장면을 재현하고, 결함·오류·장애의 구분과 장애 모델별 필요한 노드 수, 체크섬과 다수결, 재시작 한도가 있는 슈퍼바이저, 요청 단위 격리와 셔플 샤딩, 독이 든 요청 격리로 피해 반경을 줄이는 법을 다룬다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Resilience", "Distributed Systems", "Node.js", "Troubleshooting"],
+    date: "2026-10-22",
+    keywords: ["내결함성", "장애 모델", "비잔틴 장애", "셔플 샤딩", "우아한 성능 저하"],
+  },
+  {
+    slug: "high-availability",
+    title: "고가용성: 아홉을 곱하고, 단일 장애 지점을 찾고, 빼는 시간을 잰다",
+    summary: "부품 가용성을 직렬은 곱하고 병렬은 실패 확률을 곱해 계산한 뒤, 같은 AZ와 같은 배포 같은 공통 원인이 그 계산을 어떻게 무너뜨리는지 100년 시뮬레이션으로 본다. HAProxy 앞뒤에서 서버와 로드 밸런서를 죽여 빼기까지의 시간과 잃은 요청을 재고, 액티브-액티브의 여유 용량을 계산한다.",
+    topic: "programming/system-design",
+    tags: ["System Design", "Resilience", "Distributed Systems", "Load Balancer", "SRE"],
+    date: "2026-10-22",
+    keywords: ["고가용성", "단일 장애 지점", "SPOF", "공통 원인 고장"],
+  },
+  {
     slug: "js-closures",
     title: "클로저: 함수가 기억하는 것",
     summary: "1에서 멈추는 React 타이머에서 출발해, 클로저가 값이 아니라 변수를 잡는다는 것과 호출마다 새 환경이 생긴다는 것을 따라간다. 상태 숨기기와 클래스 private 필드의 비용 차이, 오래된 클로저를 업데이터·의존성·useEffectEvent로 고치는 법과 현장에서 찾는 순서까지 다룬다.",

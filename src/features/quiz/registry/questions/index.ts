@@ -28,6 +28,7 @@ import { CLOUD_COST_OPTIMIZATION } from "./cloud-cost-optimization";
 import { CODE_SPLITTING } from "./code-splitting";
 import { COLD_STARTS } from "./cold-starts";
 import { CONNECTION_POOL } from "./connection-pool";
+import { CONSISTENCY_MODELS } from "./consistency-models";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
@@ -87,6 +88,7 @@ import { EVENTUAL_CONSISTENCY } from "./eventual-consistency";
 import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
@@ -116,6 +118,7 @@ import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
 import { HELM_DEPENDENCIES_OCI_GITOPS } from "./helm-dependencies-oci-gitops";
 import { HELM_RELEASE_LIFECYCLE } from "./helm-release-lifecycle";
 import { HELM_VALUES_SECRETS } from "./helm-values-secrets";
+import { HIGH_AVAILABILITY } from "./high-availability";
 import { HOSTS_FILE } from "./hosts-file";
 import { HTML_FORM_HTTP } from "./html-form-http";
 import { HTTP_CACHING_CDN } from "./http-caching-cdn";
@@ -427,6 +430,7 @@ export const QUESTION_SETS = [
   CODE_SPLITTING,
   COLD_STARTS,
   CONNECTION_POOL,
+  CONSISTENCY_MODELS,
   CONSISTENT_HASHING,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
@@ -486,6 +490,7 @@ export const QUESTION_SETS = [
   EXPONENTIAL_BACKOFF_JITTER,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FAULT_TOLERANCE,
   FEATURE_FLAGS,
   FRONTEND_BROWSER_CACHE,
   GARBAGE_COLLECTION,
@@ -515,6 +520,7 @@ export const QUESTION_SETS = [
   HELM_DEPENDENCIES_OCI_GITOPS,
   HELM_RELEASE_LIFECYCLE,
   HELM_VALUES_SECRETS,
+  HIGH_AVAILABILITY,
   HOSTS_FILE,
   HTML_FORM_HTTP,
   HTTP_CACHING_CDN,

@@ -1,0 +1,463 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("consistency-models");
+
+단체 채팅방에서 "10시요"라는 답장이 먼저 보이고, 3초쯤 뒤에 그 답장의 질문인 "내일 회의 몇 시?"가 위에 끼어들었다. 데이터가 사라진 것도 아니고 결국엔 둘 다 보였다. 그런데 보는 사람은 잠깐이나마 맥락 없는 답을 봤다. 이건 버그일까, 아니면 이 저장소가 원래 약속한 범위 안의 동작일까. 그걸 판단하려면 저장소가 무엇을 약속했는지부터 알아야 한다.
+
+일관성 모델(consistency model)은 그 약속이다. 여러 클라이언트가 동시에 읽고 쓸 때 "어떤 결과는 나와도 되고 어떤 결과는 나오면 안 되는지"를 정한 규칙이다. 이 글은 대표적인 모델인 선형화, 순차 일관성, 인과 일관성을 하나씩 규칙으로 적고, Node로 복제본을 흉내 낸 시뮬레이션과 작은 검사기로 실제 실행 기록이 어느 모델을 지키는지 판정해 본다.
+
+이 주제의 다른 글: 네트워크가 끊겼을 때 일관성과 가용성 중 무엇을 포기하는지, DB마다 어느 단계에 서 있는지는 [CAP과 PACELC](/posts/db-consistency-cap)에 있다. 한 사용자 시점의 보장(내 쓰기 읽기, 단조 읽기)을 PostgreSQL 복제본으로 재현하고 막는 법은 [최종 일관성과 세션 보장](/posts/eventual-consistency)에서 다룬다. 이 글은 그 사이, 모델 각각이 정확히 무엇을 금지하는지와 그걸 어떻게 확인하는지에 집중한다.
+
+## 답장이 질문보다 먼저 보였다
+
+장면을 Node로 옮겼다. 복제본 A, B, C가 있고 쓰기는 각자 가까운 복제본에 한 뒤 비동기로 나머지에 퍼진다. A에서 C로 가는 길만 300ms로 느리고 나머지는 20~50ms다. 시간은 실제 시계가 아니라 시뮬레이션 안의 가상 시간이다.
+
+```js
+// causal.js 일부: 쓰기는 받은 복제본에 바로 반영하고, 다른 복제본에는 지연 뒤 도착한다
+const delay = { "A>B": 20, "A>C": 300, "B>A": 20, "B>C": 50, "C>A": 20, "C>B": 20 };
+write(0, "A", "alice: 내일 회의 몇 시?");
+read(30, "B", "bob");
+write(40, "B", "bob ↳ 10시요");   // bob은 질문을 보고 답한다
+read(100, "C", "carol");
+read(320, "C", "carol");
+```
+
+```text
+$ node causal.js
+t=  0ms  A <- write "alice: 내일 회의 몇 시?"
+t=  0ms  A applies "alice: 내일 회의 몇 시?"
+t= 20ms  B applies "alice: 내일 회의 몇 시?"
+t= 30ms  bob reads B: alice: 내일 회의 몇 시?
+t= 40ms  B <- write "bob ↳ 10시요"
+t= 40ms  B applies "bob ↳ 10시요"
+t= 60ms  A applies "bob ↳ 10시요"
+t= 90ms  C applies "bob ↳ 10시요"
+t=100ms  carol reads C: bob ↳ 10시요
+t=300ms  C applies "alice: 내일 회의 몇 시?"
+t=320ms  carol reads C: bob ↳ 10시요 | alice: 내일 회의 몇 시?
+```
+
+100ms에 carol은 답장만 본다. 320ms에는 둘 다 보지만 순서가 뒤집혀 있다. 모든 복제본이 결국 같은 두 메시지를 갖게 되니 최종 일관성(eventual consistency)은 지켰다. 하지만 bob의 답장은 alice의 질문을 읽고 쓴 것이다. 원인(질문)이 결과(답장)보다 늦게 보이는 이 결과를 금지하는 모델이 인과 일관성이다. 아래 그림에서 다음을 누르면 두 메시지가 어느 길로 C에 도착하는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="질문은 느린 길로, 답장은 빠른 길로 C에 도착한다"
+  zones={[
+    { id: "za", label: "replica A", x: 10, y: 10, w: 130, h: 100, tone: "private" },
+    { id: "zb", label: "replica B", x: 260, y: 10, w: 130, h: 100, tone: "private" },
+    { id: "zc", label: "replica C", x: 135, y: 170, w: 130, h: 100, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "alice", label: "alice", x: 40, y: 140, icon: "client" },
+    { id: "bob", label: "bob", x: 360, y: 140, icon: "client" },
+    { id: "carol", label: "carol", x: 330, y: 240, icon: "client" },
+    { id: "a", label: "A", x: 75, y: 60, icon: "db" },
+    { id: "b", label: "B", x: 325, y: 60, icon: "db" },
+    { id: "c", label: "C", x: 200, y: 220, icon: "db" },
+  ]}
+  links={[
+    { from: "alice", to: "a" },
+    { from: "bob", to: "b" },
+    { from: "carol", to: "c" },
+    { from: "a", to: "b", label: "20ms" },
+    { from: "a", to: "c", label: "300ms", dashed: true },
+    { from: "b", to: "c", label: "50ms" },
+  ]}
+  steps={[
+    { path: ["alice", "a"], packet: "질문", title: "alice가 A에 질문을 쓴다", detail: "t=0. A는 바로 반영하고 B와 C로 퍼뜨린다." },
+    { path: ["a", "b"], packet: "질문", title: "B에는 20ms 만에 도착한다", detail: "C로 가는 길은 300ms라 아직 가는 중이다." },
+    { path: ["bob", "b"], packet: "답장", title: "bob이 질문을 읽고 답한다", detail: "t=40. 답장은 질문을 본 뒤에 쓴 것이다. 둘 사이에 인과가 생겼다." },
+    { path: ["b", "c"], packet: "답장", highlight: ["zc"], title: "답장이 먼저 C에 도착한다", detail: "t=90. B에서 C로는 50ms다. C는 받은 순서대로 반영한다." },
+    { path: ["carol", "c"], packet: "read", highlight: ["c"], title: "carol은 맥락 없는 답을 본다", detail: "t=100. 답장만 있다. 질문은 t=300에야 도착한다.", payload: "carol reads C: bob ↳ 10시요" },
+  ]}
+/>
+
+## 모델은 허용되는 결과의 목록이다
+
+"일관성이 강하다, 약하다"는 말을 정확히 하려면 실행을 기록으로 남겨야 한다. 각 연산마다 누가(프로세스), 무엇을(읽기나 쓰기, 값), 언제 시작해 언제 응답받았는지를 적은 목록을 히스토리(history)라고 부른다. 일관성 모델은 히스토리를 받아 "허용"이나 "금지"를 판정하는 규칙이다.
+
+규칙은 모두 같은 질문 하나로 쓸 수 있다. 이 히스토리의 연산들을 한 줄로 세워서, 마치 저장소가 한 대뿐이고 하나씩 실행한 것처럼 설명할 수 있나? 줄을 세울 때 어떤 순서를 반드시 지켜야 하느냐가 모델마다 다르다.
+
+- 선형화(linearizability): 실제 시간 순서를 지킨다. A가 끝난 뒤 B가 시작했다면 줄에서도 A가 B 앞이다.
+- 순차 일관성(sequential consistency): 프로세스마다의 순서만 지킨다. 같은 클라이언트가 한 연산끼리는 그 순서대로지만, 서로 다른 클라이언트의 연산끼리는 실제 시각과 상관없이 섞어도 된다. 단, 모두가 같은 줄 하나를 본다.
+- 인과 일관성(causal consistency): 원인과 결과의 순서만 지킨다. 서로 상관없는(동시인) 쓰기는 관찰자마다 다른 순서로 봐도 된다. 줄이 하나일 필요가 없다.
+- 최종 일관성: 순서에 대한 약속이 없다. 쓰기가 멈추면 언젠가 같아진다는 것만 약속한다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="모델마다 줄을 세울 때 지켜야 하는 순서가 다르다"
+  nodes={[
+    { id: "lin", label: "선형화", sub: "실제 시간 순서", x: 90, y: 40, w: 140 },
+    { id: "seq", label: "순차 일관성", sub: "프로세스 순서 + 줄 하나", x: 300, y: 40, w: 170 },
+    { id: "cau", label: "인과 일관성", sub: "원인 → 결과만", x: 300, y: 130, w: 150 },
+    { id: "ses", label: "세션 보장", sub: "한 사용자의 시야", x: 90, y: 130, w: 140 },
+    { id: "ev", label: "최종 일관성", sub: "결국 같아짐", x: 200, y: 215, w: 150 },
+  ]}
+  edges={[
+    { from: "lin", to: "seq", label: "시계를 빼면" },
+    { from: "seq", to: "cau", label: "줄 하나를 빼면" },
+    { from: "cau", to: "ses", label: "한 사람만 보면" },
+    { from: "cau", to: "ev" },
+    { from: "ses", to: "ev" },
+  ]}
+/>
+
+이 규칙을 그대로 코드로 옮긴 것이 검사기다. 단일 값 레지스터(초깃값 0) 하나를 놓고, 가능한 줄을 전부 시도하면서 "지켜야 할 순서"와 "읽기는 바로 앞의 쓰기 값을 돌려준다"를 만족하는 줄이 하나라도 있는지 찾는다.
+
+```js
+// checker.js: 무차별 대입 검사기. op = { p, f: "w" | "r", v, s(시작), e(끝) }
+function search(ops, mustPrecede) {
+  const n = ops.length, used = new Array(n).fill(false), order = [];
+  function rec(val) {
+    if (order.length === n) return true;
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      if (ops.some((o, j) => !used[j] && j !== i && mustPrecede(o, ops[i]))) continue; // 앞에 와야 할 것이 남아 있다
+      const op = ops[i];
+      if (op.f === "r" && op.v !== val) continue;                                    // 읽기는 현재 값과 같아야 한다
+      used[i] = true; order.push(i);
+      if (rec(op.f === "w" ? op.v : val)) return true;
+      used[i] = false; order.pop();
+    }
+    return false;
+  }
+  return rec(0) ? order.map((i) => fmt(ops[i])) : null;
+}
+const realTime = (a, b) => a.e < b.s;                       // 선형화: a가 끝난 뒤 b가 시작했다
+const programOrder = (a, b) => a.p === b.p && a.e < b.s;   // 순차: 같은 프로세스 안에서만
+```
+
+검사기의 뼈대는 두 모델이 같고, `mustPrecede` 한 줄만 다르다. 모델의 차이가 정확히 그 한 줄로 드러난다.
+
+## 선형화: 끝난 쓰기는 모두에게 끝났다
+
+선형화는 각 연산이 시작과 응답 사이의 어느 한 순간에 원자적으로 일어난 것처럼 보이게 한다. 그 순간을 선형화 지점이라고 부른다. 쓰기가 응답을 돌려줬다면 그 이후 시작하는 모든 읽기는, 누가 어느 복제본에서 하든 그 값 이상을 본다.
+
+네 가지 짧은 히스토리를 검사기에 넣었다.
+
+```js
+report("H1 stale read after write finished", [
+  { p: "P1", f: "w", v: 1, s: 0, e: 10 },
+  { p: "P2", f: "r", v: 0, s: 20, e: 25 },
+]);
+report("H2 writer reads old value", [
+  { p: "P1", f: "w", v: 1, s: 0, e: 10 },
+  { p: "P1", f: "r", v: 0, s: 20, e: 25 },
+]);
+report("H3 read concurrent with write", [
+  { p: "P1", f: "w", v: 1, s: 0, e: 30 },
+  { p: "P2", f: "r", v: 0, s: 10, e: 15 },
+]);
+report("H4 readers see writes in different orders", [
+  { p: "P1", f: "w", v: 1, s: 0, e: 5 },
+  { p: "P2", f: "w", v: 2, s: 0, e: 5 },
+  { p: "P3", f: "r", v: 1, s: 10, e: 12 }, { p: "P3", f: "r", v: 2, s: 20, e: 22 },
+  { p: "P4", f: "r", v: 2, s: 10, e: 12 }, { p: "P4", f: "r", v: 1, s: 20, e: 22 },
+]);
+```
+
+```text
+$ node checker.js
+H1 stale read after write finished
+  linearizable: NO
+  sequential  : yes  P2:r(0) -> P1:w(1)
+H2 writer reads old value
+  linearizable: NO
+  sequential  : NO
+H3 read concurrent with write
+  linearizable: yes  P2:r(0) -> P1:w(1)
+  sequential  : yes  P2:r(0) -> P1:w(1)
+H4 readers see writes in different orders
+  linearizable: NO
+  sequential  : NO
+```
+
+H3이 먼저 눈에 띈다. 읽기가 쓰기와 시간상 겹치면 옛 값 0을 읽어도 선형화를 지킨다. 겹치는 동안에는 쓰기가 아직 일어나지 않았다고 볼 수 있기 때문이다. 선형화는 "항상 최신 값"이 아니라 "끝난 쓰기보다 옛 값은 안 된다"는 약속이다.
+
+H1은 쓰기가 10에 끝났는데 20에 시작한 다른 사람의 읽기가 0을 봤다. 비동기 복제본에서 읽으면 흔히 나오는 장면이고, 선형화가 금지하는 대표적인 결과다. 그런데 순차 일관성 칸은 `yes`다. 검사기가 찾은 줄은 `P2:r(0) -> P1:w(1)`, 즉 P2의 읽기를 P1의 쓰기보다 앞에 세웠다. 실제 시각으로는 쓰기가 먼저 끝났지만, 순차 일관성은 다른 프로세스 사이의 실제 시각을 보지 않으니 이 줄이 허용된다.
+
+이 차이가 실제로 문제가 되는 순간은 시스템 바깥에 다른 통로가 있을 때다. P1이 쓰기를 마치고 메신저로 P2에게 "바꿨어"라고 알렸는데 P2가 0을 읽는다면, 사람 입장에서는 명백히 틀렸다. 저장소는 메신저를 모르니 순차 일관성 안에서는 잘못이 없다. 재고 차감, 분산 락, 리더 선출처럼 "끝났다는 사실"을 다른 경로로 전달하는 일에는 선형화가 필요하다([리더 선출](/posts/leader-election), [분산 락](/posts/distributed-lock)).
+
+## 순차 일관성: 줄은 하나, 시계는 없다
+
+H2는 같은 프로세스가 자기 쓰기 뒤에 옛 값을 읽었다. 프로세스 순서조차 어겼으니 순차 일관성도 아니다. 한 사용자 입장에서 "내가 쓴 게 안 보인다"는 순차 일관성보다도 아래, 세션 보장 중 내 쓰기 읽기(read-your-writes)가 깨진 것이다.
+
+H4는 쓰기 두 개(1과 2)가 거의 동시에 일어났고, P3은 1 다음 2를, P4는 2 다음 1을 봤다. 각자의 순서는 그럴듯하지만, 둘을 동시에 설명하는 줄 하나가 없다. 줄이 하나라면 마지막 값이 하나로 정해져야 하는데 P3은 2, P4는 1을 마지막으로 봤다. 아래 그림에서 다음을 누르면 두 독자가 서로 다른 순서를 보는 과정이 나온다.
+
+<SequenceDiagram
+  caption="H4: 동시 쓰기 두 개를 두 독자가 반대 순서로 본다"
+  actors={[
+    { id: "p1", label: "P1" },
+    { id: "p2", label: "P2" },
+    { id: "st", label: "저장소" },
+    { id: "p3", label: "P3" },
+    { id: "p4", label: "P4" },
+  ]}
+  steps={[
+    { from: "p1", to: "st", label: "w(1)", title: "P1이 1을 쓴다", detail: "0~5ms. P2의 쓰기와 시간이 겹친다. 둘 사이에 인과는 없다." },
+    { from: "p2", to: "st", label: "w(2)", title: "P2가 2를 쓴다", detail: "같은 0~5ms. 어느 쪽이 먼저인지 정할 근거가 없다." },
+    { from: "st", to: "p3", label: "1 → 2", title: "P3은 1, 2 순서로 본다", detail: "10ms에 1, 20ms에 2를 읽었다. P3에게 최종 값은 2다." },
+    { from: "st", to: "p4", label: "2 → 1", title: "P4는 2, 1 순서로 본다", detail: "P4에게 최종 값은 1이다. 둘을 함께 설명하는 줄 하나가 없다." },
+    { from: "st", to: "st", label: "판정", title: "순차는 금지, 인과는 허용", detail: "모두가 같은 순서를 봐야 하는 순차 일관성은 깨졌다. 동시 쓰기의 순서를 자유롭게 두는 인과 일관성은 이 결과를 허용한다.", payload: "linearizable: NO\nsequential  : NO" },
+  ]}
+/>
+
+순차 일관성을 구현하는 전형적인 방법은 모든 쓰기를 하나의 순서로 정한 뒤(리더 하나, 또는 합의로 정한 로그) 모든 복제본이 그 순서대로 반영하게 하고, 클라이언트는 한 복제본에 붙어서 읽게 하는 것이다. 복제본마다 진도가 달라 옛 값을 볼 수는 있지만, 모두가 같은 순서의 앞부분을 보고 있으니 순서가 뒤집히지는 않는다. 클라이언트가 복제본을 옮겨 다니면 단조 읽기가 깨지니, 옮길 때는 "마지막으로 본 위치"를 들고 가야 한다([최종 일관성과 세션 보장](/posts/eventual-consistency)).
+
+순차 일관성은 원래 분산 DB가 아니라 멀티프로세서 메모리를 위해 1979년 Lamport가 정의한 말이다. 지금도 CPU와 언어의 메모리 모델에서 이 말이 쓰인다. x86 CPU조차 기본적으로는 순차 일관성을 주지 않아서, 자바의 `volatile`이나 C++의 `memory_order_seq_cst`, 자바스크립트 `Atomics`처럼 명시적인 장치가 있어야 스레드 사이에서 이 수준을 얻는다([스레드 안전성](/posts/thread-safety)).
+
+선형화와 순차 일관성 사이에는 하나 더 중요한 차이가 있다. 선형화는 합성이 된다. 레지스터 x와 y가 각각 선형화를 지키면 둘을 함께 쓰는 시스템도 선형화를 지킨다(1990년 Herlihy와 Wing의 결과). 순차 일관성은 그렇지 않다. x와 y가 각각 순차 일관성을 지켜도, 둘을 합친 히스토리를 설명하는 줄 하나가 없을 수 있다. 저장소를 샤드로 나눌 때 샤드마다 순차 일관성을 지킨다고 전체가 순차 일관성이 되지 않는 이유다.
+
+## 쿼럼을 맞춰도 선형화가 안 되는 순간
+
+리더 없는 저장소에서 N=3, W=2, R=2로 맞추면 R + W > N이라 읽는 복제본과 쓴 복제본이 적어도 하나 겹친다. 그래서 흔히 "최신 값을 읽는다"고 말한다. 정말 선형화가 되는지 시뮬레이션해 봤다. 쓰기 하나가 진행 중인 동안 alice와 bob이 차례로 읽는다. 쓰기 패킷이 r1에는 5ms, r2와 r3에는 40ms 넘게 걸리는 상황이다.
+
+```text
+$ node quorum.js
+t= 0  writer  w(1) start, sends to r1 r2 r3
+t= 5  r1    stores 1
+t=10  alice  r() start, asks r1 r2
+t=12  alice  got r1=1 r2=0 -> newest 1
+t=14  alice  r() returns 1
+t=20  bob    r() start, asks r2 r3
+t=22  bob    got r2=0 r3=0 -> newest 0
+t=24  bob    r() returns 0
+t=40  r2    stores 1
+t=42  writer  w(1) done (2 acks)
+t=45  r3    stores 1
+history: alice:r(1)[10,14]  bob:r(0)[20,24]  writer:w(1)[0,42]
+linearizable: NO | sequential: yes
+```
+
+alice는 14ms에 1을 받았고, bob은 그 뒤인 20ms에 읽기를 시작해 0을 받았다. 쓰기는 42ms까지 진행 중이었으니 각자의 읽기만 보면 둘 다 그럴듯하다. 하지만 alice가 1을 봤다는 건 선형화 지점이 14ms 이전이라는 뜻이고, 그 뒤에 시작한 bob은 1 이상을 봐야 한다. 쿼럼 겹침은 "끝난 쓰기"를 놓치지 않게 해 줄 뿐, 진행 중인 쓰기를 누가 먼저 봤는지까지 맞춰 주지는 않는다.
+
+<NetworkTopology
+  width={400}
+  height={270}
+  caption="N=3, W=2, R=2: 진행 중인 쓰기를 alice는 보고 bob은 못 본다"
+  zones={[
+    { id: "rs", label: "replicas", x: 150, y: 10, w: 110, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "w", label: "writer", sub: "w(1)", x: 50, y: 50, icon: "client" },
+    { id: "al", label: "alice", sub: "t=10", x: 50, y: 135, icon: "client" },
+    { id: "bo", label: "bob", sub: "t=20", x: 350, y: 205, icon: "client" },
+    { id: "r1", label: "r1", sub: "5ms", x: 205, y: 50, icon: "db" },
+    { id: "r2", label: "r2", sub: "40ms", x: 205, y: 135, icon: "db" },
+    { id: "r3", label: "r3", sub: "45ms", x: 205, y: 220, icon: "db" },
+  ]}
+  links={[
+    { from: "w", to: "r1" },
+    { from: "w", to: "r2", dashed: true },
+    { from: "w", to: "r3", dashed: true },
+    { from: "al", to: "r1" },
+    { from: "al", to: "r2" },
+    { from: "bo", to: "r2" },
+    { from: "bo", to: "r3" },
+  ]}
+  steps={[
+    { path: ["w", "r1"], packet: "x=1", title: "쓰기가 r1에만 먼저 닿는다", detail: "t=5. r2, r3로 가는 패킷은 아직 길 위에 있다. 쓰기는 응답 전이다." },
+    { path: ["al", "r1"], packet: "read", highlight: ["r2"], title: "alice는 r1과 r2에 묻는다", detail: "r1=1, r2=0. 더 새로운 1을 고른다.", payload: "alice r() returns 1  (t=14)" },
+    { path: ["bo", "r2"], packet: "read", highlight: ["r3"], title: "bob은 r2와 r3에 묻는다", detail: "t=20, alice의 읽기가 끝난 뒤다. 둘 다 아직 0이다.", payload: "bob r() returns 0  (t=24)" },
+    { path: ["bo"], highlight: ["bo", "al"], title: "시간이 거꾸로 갔다", detail: "먼저 끝난 alice는 1, 뒤에 시작한 bob은 0. 검사기가 linearizable: NO를 낸다." },
+    { path: ["al", "r2"], packet: "repair", title: "읽은 값을 돌려놓고 답한다", detail: "alice가 응답 전에 r2를 1로 고쳐 두면, 뒤에 r2를 묻는 bob도 1을 본다." },
+  ]}
+/>
+
+고치는 방법은 그림의 마지막 단계다. 읽는 쪽이 복제본마다 값이 다르면 가장 새 값을 옛 값을 가진 복제본에 써 넣고, 그 쓰기가 끝난 뒤에 응답한다. 동기 읽기 복구(synchronous read repair)다.
+
+```text
+$ node quorum.js repair
+t= 0  writer  w(1) start, sends to r1 r2 r3
+t= 5  r1    stores 1
+t=10  alice  r() start, asks r1 r2
+t=12  alice  got r1=1 r2=0 -> newest 1
+t=14  r2    repaired to 1 by alice
+t=16  alice  r() returns 1
+t=20  bob    r() start, asks r2 r3
+t=22  bob    got r2=1 r3=0 -> newest 1
+t=24  r3    repaired to 1 by bob
+t=26  bob    r() returns 1
+t=40  r2    stores 1
+t=42  writer  w(1) done (2 acks)
+t=45  r3    stores 1
+history: alice:r(1)[10,16]  bob:r(1)[20,26]  writer:w(1)[0,42]
+linearizable: yes | sequential: yes
+```
+
+alice의 읽기가 2ms 늦어진 대신 bob도 1을 본다. 읽기 한 번이 왕복 두 번이 됐다. 이것이 쿼럼 위에서 선형화 레지스터를 만드는 고전적인 방법(ABD 알고리즘)의 뼈대다. 다만 이 시뮬레이션은 쓰기 타임스탬프가 하나뿐인 단순한 경우다. 실제 저장소에서는 실패한 쓰기가 일부 복제본에만 남거나, 시계로 정한 타임스탬프가 어긋나거나([시계 어긋남](/posts/clock-skew)), 노드 장애 중에 임시 노드가 쓰기를 받는 경로(힌트 핸드오프)가 끼면서 이 보장이 다시 깨진다. Cassandra는 QUORUM 읽기에서 복제본 값이 다르면 응답 전에 고쳐 쓰는 읽기 복구를 하지만, 그것만으로 모든 상황의 선형화를 약속하지는 않는다. 비교 후 교체 같은 연산에 선형화가 필요하면 Cassandra도 Paxos 기반의 경량 트랜잭션(`IF` 조건이 붙은 쓰기)을 따로 쓴다.
+
+검사기가 실제로 어떤 줄을 시도하다 막히는지 따라가 보자. 아래 그림의 칸은 읽기 복구가 없는 히스토리의 연산 세 개다.
+
+<AlgoTrace
+  caption="검사기는 실제 시간 순서를 지키는 줄을 모두 시도한다"
+  cells={["alice r(1) [10,14]", "bob r(0) [20,24]", "writer w(1) [0,42]"]}
+  memoryLabel="지금까지 세운 줄"
+  steps={[
+    { pointer: 0, memory: [], caption: "alice를 맨 앞에? 값이 아직 0인데 1을 읽었으니 안 된다." },
+    { pointer: 1, memory: [], caption: "bob을 맨 앞에? alice가 14에 끝났고 bob은 20에 시작했으니 alice보다 앞에 설 수 없다." },
+    { pointer: 2, memory: ["w(1)"], caption: "쓰기를 맨 앞에 세운다. 쓰기는 0~42라 누구와도 겹쳐서 어디든 설 수 있다. 값이 1이 된다." },
+    { pointer: 0, memory: ["w(1)", "alice r(1)"], caption: "alice는 1을 읽었으니 맞다." },
+    { pointer: 1, memory: ["w(1)", "alice r(1)", "bob r(0)?"], caption: "bob은 0을 읽었는데 값은 1이다. 막혔다. 다른 줄도 모두 막힌다." },
+    { found: [1], memory: ["linearizable: NO"], caption: "줄이 하나도 없다. 프로세스 순서만 보는 순차 검사는 bob을 쓰기 앞에 세워 통과한다." },
+  ]}
+/>
+
+이 검사기는 연산 수가 늘면 경우의 수가 폭발해서 몇십 개가 한계다. 실제 시스템을 검사할 때는 탐색을 줄이는 기법을 쓴 도구를 쓴다. Jepsen의 Knossos, Go로 짠 Porcupine이 선형화 검사기이고, Jepsen의 Elle은 트랜잭션 격리 수준을 검사한다. 쓰는 방법은 위 실험과 같다. 여러 클라이언트로 읽고 쓰면서 시작과 끝 시각을 기록하고, 장애를 섞은 뒤, 히스토리를 검사기에 넣는다.
+
+## 직접 짜 보기: 선형화 검사기
+
+단일 레지스터(초깃값 0)의 히스토리를 받아 선형화 가능하면 `true`를 돌려주는 함수를 짜 보자. 연산은 `{ type: "write" | "read", value, start, end }`이다. 아직 줄에 세우지 않은 연산 중 "다른 미배치 연산이 이 연산의 `start`보다 먼저 `end`했다면" 이 연산은 아직 앞에 설 수 없다.
+
+<CodePlayground
+  caption="선형화 검사기"
+  functionName="isLinearizable"
+  initialCode={`function isLinearizable(history) {
+  // history: [{ type: "write" | "read", value, start, end }]
+  // 레지스터 초깃값은 0
+  return true;
+}`}
+  solution={`function isLinearizable(history) {
+  const n = history.length, used = new Array(n).fill(false);
+  function rec(count, value) {
+    if (count === n) return true;
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      const op = history[i];
+      const blocked = history.some((o, j) => !used[j] && j !== i && o.end < op.start);
+      if (blocked) continue;
+      if (op.type === "read" && op.value !== value) continue;
+      used[i] = true;
+      if (rec(count + 1, op.type === "write" ? op.value : value)) return true;
+      used[i] = false;
+    }
+    return false;
+  }
+  return rec(0, 0);
+}`}
+  tests={[
+    { label: "쓰고 나서 읽기", args: [[{ type: "write", value: 1, start: 0, end: 10 }, { type: "read", value: 1, start: 20, end: 25 }]], expected: true },
+    { label: "끝난 쓰기 뒤의 옛 값", args: [[{ type: "write", value: 1, start: 0, end: 10 }, { type: "read", value: 0, start: 20, end: 25 }]], expected: false },
+    { label: "겹친 읽기의 옛 값", args: [[{ type: "write", value: 1, start: 0, end: 30 }, { type: "read", value: 0, start: 10, end: 15 }]], expected: true },
+    { label: "쿼럼, 읽기 복구 없음", args: [[{ type: "read", value: 1, start: 10, end: 14 }, { type: "read", value: 0, start: 20, end: 24 }, { type: "write", value: 1, start: 0, end: 42 }]], expected: false },
+    { label: "쿼럼, 동기 읽기 복구", args: [[{ type: "read", value: 1, start: 10, end: 16 }, { type: "read", value: 1, start: 20, end: 26 }, { type: "write", value: 1, start: 0, end: 42 }]], expected: true },
+    { label: "쓴 적 없는 값", args: [[{ type: "write", value: 1, start: 0, end: 10 }, { type: "read", value: 2, start: 20, end: 25 }]], expected: false },
+    { label: "겹친 두 쓰기", args: [[{ type: "write", value: 1, start: 0, end: 10 }, { type: "write", value: 2, start: 5, end: 15 }, { type: "read", value: 1, start: 20, end: 25 }]], expected: true },
+    { label: "새 값 본 뒤 옛 값", args: [[{ type: "write", value: 1, start: 0, end: 10 }, { type: "write", value: 2, start: 20, end: 30 }, { type: "read", value: 2, start: 35, end: 40 }, { type: "read", value: 1, start: 45, end: 50 }]], expected: false },
+  ]}
+/>
+
+"겹친 두 쓰기"가 `true`인 이유를 생각해 보면 선형화가 손에 잡힌다. 두 쓰기가 5~10ms에 겹쳤으니 2를 먼저, 1을 나중에 세울 수 있고, 그러면 마지막 값이 1이다. 동시에 일어난 쓰기는 어느 순서든 하나로 정하기만 하면 된다.
+
+## 인과 일관성: 원인이 먼저 보이기만 하면 된다
+
+처음의 채팅 장면으로 돌아가자. 인과 일관성은 "A를 보고 B를 했다면, B를 보는 사람은 A도 이미 봤어야 한다"를 지킨다. 인과 관계는 세 가지로 생긴다. 같은 프로세스 안의 앞뒤, 읽은 값을 보고 한 쓰기, 그리고 이 둘의 연쇄다. 서로 모르는 상태에서 한 쓰기(앞의 H4)는 동시(concurrent)이고, 순서를 정하지 않아도 된다.
+
+구현은 쓰기마다 "이 쓰기가 무엇을 보고 만들어졌는지"를 붙여 보내는 것이다. 흔히 벡터 시계를 쓴다. 복제본마다 칸이 하나씩 있는 숫자 배열로, `[1,1,0]`은 "A의 첫 쓰기와 B의 첫 쓰기를 본 뒤의 쓰기"라는 뜻이다([시계 어긋남](/posts/clock-skew)의 벡터 시계). 받는 복제본은 그 쓰기가 기대는 쓰기를 아직 반영하지 않았으면 반영을 미루고 버퍼에 둔다.
+
+```js
+// 인과 전달 규칙: 보낸 복제본 칸은 내가 아는 것보다 정확히 하나 많고, 나머지 칸은 내가 이미 본 범위 안이어야 한다
+function deliverable(r, w) {
+  return w.vc.every((v, i) => (i === w.origin ? v === r.vc[i] + 1 : v <= r.vc[i]));
+}
+```
+
+```text
+$ node causal.js causal
+t=  0ms  A <- write "alice: 내일 회의 몇 시?"
+t=  0ms  A applies "alice: 내일 회의 몇 시?"  vc=[1,0,0]
+t= 20ms  B applies "alice: 내일 회의 몇 시?"  vc=[1,0,0]
+t= 30ms  bob reads B: alice: 내일 회의 몇 시?
+t= 40ms  B <- write "bob ↳ 10시요"
+t= 40ms  B applies "bob ↳ 10시요"  vc=[1,1,0]
+t= 60ms  A applies "bob ↳ 10시요"  vc=[1,1,0]
+t= 90ms  C buffers "bob ↳ 10시요" (needs vc=[1,1,0], has [0,0,0])
+t=100ms  carol reads C: (empty)
+t=300ms  C applies "alice: 내일 회의 몇 시?"  vc=[1,0,0]
+t=300ms  C applies "bob ↳ 10시요"  vc=[1,1,0]
+t=320ms  carol reads C: alice: 내일 회의 몇 시? | bob ↳ 10시요
+```
+
+90ms에 답장이 도착했지만 C는 반영하지 않고 버퍼에 넣었다. 답장의 벡터 `[1,1,0]`이 "A의 첫 쓰기를 봤다"고 말하는데 C는 A의 쓰기를 하나도 못 봤기 때문이다(`[0,0,0]`). 그래서 100ms에 carol은 빈 화면을 본다. 맥락 없는 답장보다 아무것도 없는 쪽이 낫다는 게 인과 일관성의 선택이다. 300ms에 질문이 도착하자 C는 질문을 반영하고, 버퍼를 다시 훑어 답장도 반영했다.
+
+<AlgoTrace
+  caption="복제본 C: 기대는 쓰기가 오기 전까지 답장을 미룬다"
+  cells={["t=90 답장 도착", "t=100 carol 읽기", "t=300 질문 도착", "t=300 버퍼 확인"]}
+  memoryLabel="C의 버퍼 / 반영"
+  steps={[
+    { pointer: 0, memory: ["버퍼: 답장 [1,1,0]"], caption: "답장은 A의 첫 쓰기에 기댄다. C의 시계는 [0,0,0]이라 아직 반영할 수 없다." },
+    { pointer: 1, memory: ["버퍼: 답장 [1,1,0]", "화면: (empty)"], caption: "carol은 아무것도 못 본다. 답장만 보이는 것보다 낫다." },
+    { pointer: 2, memory: ["반영: 질문 [1,0,0]"], caption: "질문이 도착했다. A 칸이 정확히 하나 많으니 바로 반영한다." },
+    { pointer: 3, memory: ["반영: 질문 [1,0,0]", "반영: 답장 [1,1,0]"], caption: "버퍼를 다시 본다. 이제 답장이 기대는 것을 다 봤으니 반영한다." },
+    { found: [2, 3], memory: ["화면: 질문 | 답장"], caption: "320ms에 carol은 질문과 답장을 올바른 순서로 본다." },
+  ]}
+/>
+
+대가는 두 가지다. 하나는 지연이다. 질문이 느린 길로 오는 동안 답장까지 함께 늦게 보인다. 다른 하나는 메타데이터다. 벡터 시계는 복제본(또는 클라이언트) 수만큼 커지고, 버퍼는 기대는 쓰기가 사라지면 영원히 기다릴 수 있다. 실제 시스템은 의존성을 복제본 단위로 줄이거나, 기대는 쓰기를 직접 나열하거나(COPS 같은 연구 시스템), 세션 단위로만 추적해서 이 비용을 줄인다. MongoDB의 인과 일관성 세션은 세션 안의 읽기와 쓰기에서 내 쓰기 읽기, 단조 읽기, 단조 쓰기, 읽은 뒤 쓰기 순서를 보장하고, 이를 위해 세션이 마지막으로 본 클러스터 시각을 들고 다닌다. 문서상 쓰기에는 `majority` write concern, 읽기에는 `majority` read concern을 함께 써야 장애 중에도 이 보장이 유지된다.
+
+인과 일관성이 자주 거론되는 이유가 하나 더 있다. 네트워크가 끊겨도 모든 복제본이 계속 응답하면서 지킬 수 있는 모델 가운데 가장 강한 축에 든다는 결과(2011년 Mahajan 등)가 있다. 선형화와 순차 일관성은 분할 중에 한쪽이 응답을 멈춰야 지킬 수 있다. 오프라인에서도 동작해야 하는 앱, 리전마다 쓰기를 받는 구성에서 인과 일관성을 목표로 잡는 이유다([멀티 리전](/posts/multi-region), [CRDT](/posts/crdt)).
+
+## 직렬화 가능성과 헷갈리지 않기
+
+일관성 모델과 이름이 비슷한 것이 트랜잭션 격리 수준이다. 둘은 다른 질문에 답한다.
+
+- 선형화는 객체 하나(키 하나, 레지스터 하나)에 대한 연산 하나하나의 약속이다. 실제 시간을 본다.
+- 직렬화 가능성(serializability)은 여러 객체를 건드리는 트랜잭션 묶음에 대한 약속이다. 트랜잭션들이 어떤 순서로 하나씩 실행된 것과 같은 결과를 낸다. 그 순서가 실제 시간과 맞아야 한다는 말은 없다([트랜잭션 격리 수준](/posts/db-transaction-isolation)).
+- 둘을 함께 지키는 것이 엄격한 직렬화 가능성(strict serializability)이다. 트랜잭션의 순서가 실제 시간과도 맞는다. Google Spanner가 외부 일관성(external consistency)이라는 이름으로 이것을 약속한다.
+
+그래서 "PostgreSQL을 SERIALIZABLE로 돌리니 선형화된다"는 말은 맞지 않는다. 프라이머리 한 대 안에서는 커밋된 것을 바로 보니 실제로 선형화처럼 동작하지만, 그건 서버가 한 대라서다. 비동기 복제본에서 읽는 순간 SERIALIZABLE이어도 옛 값을 본다. 반대로 선형화된 키-값 저장소(etcd)도 키 두 개를 원자적으로 바꾸는 트랜잭션이 없으면 직렬화 가능성을 말할 수 없다. etcd는 여러 키를 묶는 트랜잭션(`txn`)을 따로 제공한다. 이름 때문에 헷갈리는 곳이 하나 더 있다. etcd의 `--consistency=s`는 "serializable" 읽기라고 부르지만 실제로는 리더 확인 없이 받은 멤버의 로컬 값을 읽는, 낡을 수 있는 읽기다. 기본값 `l`(linearizable)은 리더가 자신이 아직 리더인지 과반에게 확인(ReadIndex)한 뒤 답한다.
+
+## 옛 값이 보인다는 문의를 모델로 번역하기
+
+"가끔 데이터가 이상하게 보인다"는 문의가 오면, 먼저 어떤 결과가 나왔는지를 히스토리 모양으로 바꿔 적는다. 그러면 어느 약속이 깨졌는지, 그리고 그 약속을 이 시스템이 원래 했는지가 갈린다.
+
+- "방금 저장한 게 새로고침하면 없다": 같은 사용자의 쓰기 뒤 읽기다. 내 쓰기 읽기가 깨졌다. 쓰기 직후에는 프라이머리에서 읽거나, 커밋 위치를 들고 다닌다([최종 일관성과 세션 보장](/posts/eventual-consistency)).
+- "봤던 글이 새로고침하니 사라졌다가 다시 나온다": 단조 읽기가 깨졌다. 읽는 복제본이 바뀌었다. 사용자를 복제본에 고정하거나 마지막으로 본 위치를 들고 다닌다.
+- "답글이 원글보다 먼저 보인다", "권한을 뺐는데 그 뒤에 올린 글이 권한 없는 사람에게 보인다": 인과 일관성이 깨졌다. 두 번째 사례가 더 위험하다. 권한 변경과 글 쓰기가 다른 복제본에서 다른 속도로 퍼지면 생긴다. 관련된 쓰기를 같은 파티션, 같은 순서의 로그에 넣거나, 의존성을 실어 보낸다.
+- "마지막 한 개 남은 재고를 두 사람이 샀다", "락을 두 프로세스가 동시에 잡았다": 선형화가 필요한 곳에서 그보다 약한 저장소를 썼다. 비교 후 교체(compare-and-set)를 선형화를 약속하는 저장소(프라이머리 DB의 조건부 UPDATE, etcd 트랜잭션)로 옮긴다.
+
+확인할 때는 증상을 재현한 히스토리를 남기는 게 가장 확실하다. 테스트 환경에서 클라이언트 여러 개로 같은 키를 읽고 쓰면서 시작·끝 시각과 결과를 기록하고, 복제 지연이나 노드 종료를 섞은 뒤 위의 검사기 같은 도구로 판정한다. 운영 DB 설정은 DB마다 다르니 문서에서 그 설정이 약속하는 모델의 이름을 확인한다. 같은 "강한 일관성"이라는 말도 DynamoDB의 `ConsistentRead`(한 리전 안의 테이블 읽기, 전역 보조 인덱스에는 쓸 수 없다), MongoDB의 `readConcern: "linearizable"`(프라이머리에서 한 문서 읽기), etcd의 기본 읽기처럼 범위가 서로 다르다.
+
+<Callout kind="tip">
+모델을 고를 때는 데이터마다 따로 고른다. 한 서비스 안에서도 재고 수량과 락은 선형화, 댓글과 피드는 인과, 조회수와 좋아요 수는 최종 일관성으로 충분한 경우가 많다. 전부를 가장 강한 모델에 맞추면 가장 느린 경로에 전체가 묶인다.
+</Callout>
+
+## 줄 하나로 설명할 수 있나
+
+일관성 모델은 결국 "이 실행을 저장소 한 대가 하나씩 처리한 것처럼 설명할 수 있나, 설명할 때 어떤 순서를 지켜야 하나"라는 질문이다. 실제 시간까지 지키면 선형화, 프로세스 순서와 줄 하나만 지키면 순차 일관성, 원인과 결과만 지키면 인과 일관성이다. 강한 모델일수록 프로그램을 짜기 쉽고, 그 대신 조율 비용(왕복 횟수, 리더 확인, 버퍼링)과 분할 중의 가용성을 낸다. 그래서 데이터마다 필요한 만큼만 고르고, 고른 모델을 정말 지키는지는 히스토리를 검사해서 확인한다. 분할 중에 무엇을 포기하는지는 [CAP과 PACELC](/posts/db-consistency-cap)에서, 사용자 한 명의 시야를 지키는 실전 장치는 [최종 일관성과 세션 보장](/posts/eventual-consistency)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### 일관성 모델이란 무엇인가요?
+
+여러 클라이언트가 동시에 읽고 쓸 때 어떤 결과가 허용되는지 정한 규칙이다. 실행 기록(히스토리)을 받아서 이것을 저장소 한 대가 하나씩 처리한 줄로 설명할 수 있는지, 그 줄이 어떤 순서를 지켜야 하는지로 정의한다. 모델이 강할수록 허용되는 결과가 적다.
+
+### 선형화와 순차 일관성의 차이는 무엇인가요?
+
+둘 다 모두가 보는 줄 하나가 있어야 하지만, 선형화는 그 줄이 실제 시간 순서와 맞아야 하고 순차 일관성은 프로세스 각자의 순서만 맞으면 된다. 그래서 쓰기가 끝난 뒤 다른 사람이 옛 값을 읽는 히스토리는 순차 일관성은 지키고 선형화는 어긴다. 또 선형화는 객체별로 지키면 합쳐도 지켜지지만 순차 일관성은 그렇지 않다.
+
+### 선형화는 항상 최신 값을 읽는다는 뜻인가요?
+
+아니다. 끝난 쓰기보다 옛 값을 읽지 않는다는 뜻이다. 쓰기와 시간이 겹친 읽기는 옛 값이든 새 값이든 허용된다. 다만 누군가 새 값을 봤다면, 그 뒤에 시작한 읽기는 모두 새 값 이상을 봐야 한다.
+
+### R + W > N으로 쿼럼을 맞추면 선형화가 되나요?
+
+그것만으로는 안 된다. 진행 중인 쓰기를 먼저 읽은 사람은 새 값을, 뒤에 읽은 사람은 아직 반영 안 된 복제본에서 옛 값을 볼 수 있다. 시뮬레이션에서 alice가 1을 본 뒤 시작한 bob이 0을 받았다. 읽은 값을 옛 복제본에 써 넣고 응답하는 동기 읽기 복구를 더하면 이 경우는 막지만, 실패한 쓰기와 시계 어긋남, 힌트 핸드오프가 끼면 다시 깨질 수 있다.
+
+### 인과 일관성은 어떻게 구현하나요?
+
+쓰기마다 그 쓰기가 무엇을 보고 만들어졌는지를 벡터 시계나 의존성 목록으로 붙여 보낸다. 받는 복제본은 기대는 쓰기를 아직 반영하지 않았으면 반영을 미뤄 버퍼에 둔다. 동시인 쓰기는 순서를 강제하지 않으니 복제본마다 다른 순서로 반영해도 된다. 대가는 메타데이터 크기와 버퍼링에 따른 지연이다.
+
+### 인과 일관성을 고르는 이유는 뭔가요?
+
+분할 중에도 모든 복제본이 응답하면서 지킬 수 있는 모델 중 가장 강한 축에 들기 때문이다. 선형화와 순차 일관성은 분할 중에 한쪽이 멈춰야 한다. 답글과 원글, 권한 변경과 그 뒤의 쓰기처럼 사람이 이상하다고 느끼는 대부분의 순서 문제는 인과만 지켜도 사라진다.
+
+### 직렬화 가능성과 선형화는 어떻게 다른가요?
+
+직렬화 가능성은 여러 객체를 건드리는 트랜잭션들이 어떤 순서로 하나씩 실행된 것과 같다는 약속이고, 그 순서가 실제 시간과 맞을 필요는 없다. 선형화는 객체 하나의 연산마다 실제 시간 순서를 지키는 약속이다. 둘을 함께 지키는 것이 엄격한 직렬화 가능성이고, Spanner가 외부 일관성이라는 이름으로 제공한다.
+
+### 우리 서비스의 데이터에 어떤 모델이 필요한지 어떻게 정하나요?
+
+데이터마다 틀렸을 때 무슨 일이 생기는지로 정한다. 재고, 잔액, 락처럼 끝난 사실을 다른 경로로 전달하거나 비교 후 교체를 하는 데이터는 선형화가 필요하다. 댓글과 피드처럼 순서가 뒤집히면 이상한 데이터는 인과, 조회수처럼 잠깐 틀려도 되는 데이터는 최종 일관성이면 된다. 고른 뒤에는 장애를 섞은 테스트에서 히스토리를 기록해 검사기로 확인한다.
