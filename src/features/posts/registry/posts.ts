@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "js-promise-combinators",
+    title: "Promise.all, allSettled, race, any 고르기",
+    summary: "위젯 하나의 실패가 대시보드 전체를 죽인 상황에서 출발해 네 조합 함수가 각각 어떤 질문에 답하는지 비교한다. race 타임아웃이 아무것도 멈추지 않는 이유, AggregateError, 빈 배열의 함정, 동시 요청이 너무 많을 때와 Promise.all 직접 구현까지 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js", "React"],
+    date: "2026-10-22",
+    keywords: ["Promise.allSettled", "Promise.any", "AggregateError"],
+  },
+  {
+    slug: "js-async-await",
+    title: "async/await: 멈췄다가 이어서 실행되는 함수",
+    summary: "forEach 안의 await가 기다리지 않는 버그에서 출발해 async 함수가 await에서 어떻게 빠졌다가 돌아오는지 본다. 차례대로와 동시 실행, 동시성 제한, 미리 시작한 Promise의 처리되지 않은 거부, try 안의 return await, 최상위 await, React effect에서 쓰는 법까지 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js", "React"],
+    date: "2026-10-22",
+    keywords: ["async/await", "return await", "최상위 await"],
+  },
+  {
+    slug: "js-promises",
+    title: "Promise: 상태, then 체인, 에러 전파",
+    summary: "Promise가 상태를 한 번만 정하고 핸들러를 항상 나중에 부르는 상자라는 데서 출발해 then이 새 Promise를 돌려주는 규칙과 에러가 체인을 타고 내려가는 방식을 따라간다. 처리되지 않은 거부가 Node.js와 브라우저에서 어떻게 다뤄지는지, new Promise로 감쌀 때 흔한 실수와 React에서 만나는 자리도 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js", "React"],
+    date: "2026-10-22",
+    keywords: ["unhandledRejection", "thenable", "처리되지 않은 거부"],
+  },
+  {
+    slug: "js-callback-hell",
+    title: "콜백 지옥: 들여쓰기보다 무서운 것",
+    summary: "비동기 콜백을 이어 붙일 때 생기는 진짜 문제를 응답을 두 번 보내는 서버 버그에서 출발해 본다. 제어의 역전, try/catch가 끊기는 이유, 동기와 비동기가 섞이는 콜백, util.promisify로 Promise로 옮기는 방법까지 다룬다.",
+    topic: "programming/frontend/javascript/async",
+    tags: ["JavaScript", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["콜백 지옥", "error-first 콜백", "util.promisify"],
+  },
+  {
     slug: "layered-architecture",
     title: "레이어드 아키텍처: 층을 건널 때 해야 하는 일",
     summary: "프레젠테이션, 비즈니스, 퍼시스턴스로 층을 쌓고 위에서 아래로만 부른다. 계층과 티어의 차이, DB 에러를 층마다 번역하는 법, 트랜잭션 경계, 닫힌 계층과 싱크홀, 의존을 뒤집어 헥사고날로 넘어가는 신호까지 다룬다.",

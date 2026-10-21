@@ -2,6 +2,62 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "js-promise-combinators": {
+    "links": [
+      "js-callback-hell",
+      "js-promises",
+      "js-async-await",
+      "idempotency-key",
+      "client-data-cache",
+      "timeouts"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "streaming-ssr-suspense",
+      "rendering-strategies",
+      "event-loop"
+    ]
+  },
+  "js-async-await": {
+    "links": [
+      "js-promises",
+      "js-callback-hell",
+      "js-promise-combinators",
+      "event-loop",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "js-truthy-falsy-typeof"
+    ]
+  },
+  "js-promises": {
+    "links": [
+      "js-callback-hell",
+      "js-async-await",
+      "js-promise-combinators",
+      "event-loop",
+      "browser-fetch",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "http-status-codes"
+    ]
+  },
+  "js-callback-hell": {
+    "links": [
+      "js-promises",
+      "js-async-await",
+      "js-promise-combinators",
+      "event-loop",
+      "saga-pattern"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "message-delivery-semantics"
+    ]
+  },
   "layered-architecture": {
     "links": [
       "modular-monolith",
@@ -2864,6 +2920,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator"
     ],
     "mentions": [
+      "js-promises",
       "rendering-strategies",
       "design-patterns-overview"
     ]

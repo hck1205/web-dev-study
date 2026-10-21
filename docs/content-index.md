@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 382편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 386편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -241,7 +241,7 @@
 - 소제목: 확인하고 넣으면 둘 다 통과한다 / 키 한 줄에 담는 것 / 선점하고, 작업하고, 응답을 적는다 / 키 하나가 거치는 상태 / 처리 도중에 서버가 죽으면 / 트랜잭션 하나로 묶으면 기다리게 된다 / 바깥 결제사를 부르는 단계가 끼면 / 어떤 응답을 저장할지 / 키는 누가, 언제 만드나 / 키 말고도 중복을 막는 방법 / 운영에서 이런 증상을 보면 / 키 저장소가 정확해야 재시도가 안전하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, http-methods, rest-api-design, distributed-lock, sql-batch-timeout-pool, message-delivery-semantics
 - 키워드 백링크 →: postgres-advanced-sql, service-mesh, redis-basics, http-status-codes, db-modeling-normalization
-- 이 글로 오는 글 ←: batch-processing, circuit-breaker, cron-jobs, curl-for-debugging, dead-letter-queue, distributed-lock, distributed-transactions-2pc, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, pattern-builder, pattern-command, pattern-decorator, pattern-facade, race-conditions, rate-limiting-in-practice, resilience-patterns, retries, rolling-deployment, saga-pattern, serverless-limits, service-mesh, webhooks
+- 이 글로 오는 글 ←: batch-processing, circuit-breaker, cron-jobs, curl-for-debugging, dead-letter-queue, distributed-lock, distributed-transactions-2pc, js-promise-combinators, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, pattern-builder, pattern-command, pattern-decorator, pattern-facade, race-conditions, rate-limiting-in-practice, resilience-patterns, retries, rolling-deployment, saga-pattern, serverless-limits, service-mesh, webhooks
 
 #### `rate-limiting-in-practice` — 요청 수 제한을 API에 붙이기: 키, 429, 장애 대응
 
@@ -378,7 +378,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, k8s-job-cronjob, kafka-basics, long-polling, message-queue-basics, rabbitmq-basics, saga-pattern, schema-versioning
+- 이 글로 오는 글 ←: crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, long-polling, message-queue-basics, rabbitmq-basics, saga-pattern, schema-versioning
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -1490,7 +1490,7 @@
 - 길이: 469줄
 - 소제목: 바뀌었다고 알리는 쪽, 등록해 두는 쪽 / 값을 실어 보낼까, 꺼내 가게 할까 / 클래스 대신 구독 함수 하나 / 알리는 도중에 구독을 끊으면 / 동기 알림은 예외도 동기로 돌아온다 / 리스너 열한 개째의 경고 / 하나를 바꿨는데 두 번 알린다 / 옵서버, 중재자, 발행·구독을 나란히 놓으면 / 이벤트 이미터 직접 만들기 / 면접에서 나올 만한 질문
 - 직접 링크 →: react-rerender, pub-sub, js-memory-leak, event-loop, pattern-mediator, pattern-iterator
-- 키워드 백링크 →: rendering-strategies, design-patterns-overview
+- 키워드 백링크 →: js-promises, rendering-strategies, design-patterns-overview
 - 이 글로 오는 글 ←: design-patterns-overview, mvc-pattern, pattern-chain-of-responsibility, pattern-command, pattern-mediator
 
 #### `pattern-state` — 상태 패턴: 상태마다 바뀌는 동작을 객체로 꺼내기
@@ -1716,7 +1716,7 @@
 - 소제목: 500이 와도 fetch는 성공한다 / 본문은 한 번만 읽힌다 / fetch 옵션 하나씩 / 페이지를 닫을 때 보내는 요청 / 늦게 온 응답이 화면을 덮는다 / 지난 요청은 취소한다 / 실패하면 다시 보낼까 / 에러를 한 곳에서 다룬다 / XHR, fetch, axios / 같은 요청을 두 번 보내지 않으려면 / 에러 수집기에 Failed to fetch만 쌓일 때 / 다시 처음 코드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-status-codes, cors, cookie-session-login, http-methods, resilience-patterns, rest-api-design, http-caching-cdn, network-troubleshooting-by-layer
 - 키워드 백링크 →: html-form-http, client-data-cache, json-crud-http, frontend-browser-cache, rendering-csr-spa, race-conditions, dns
-- 이 글로 오는 글 ←: chaos-engineering, client-data-cache, distributed-lock, failover, html-form-http, http-versions, json-crud-http, leader-election, load-balancer-basics, network-partitions, nginx-reverse-proxy, pattern-adapter, pattern-decorator, pattern-prototype, race-conditions, service-discovery, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard, websocket-deep-dive
+- 이 글로 오는 글 ←: chaos-engineering, client-data-cache, distributed-lock, failover, html-form-http, http-versions, js-async-await, js-promise-combinators, js-promises, json-crud-http, leader-election, load-balancer-basics, network-partitions, nginx-reverse-proxy, pattern-adapter, pattern-decorator, pattern-prototype, race-conditions, service-discovery, tcp-connection-lifecycle, timeouts, vpc-subnets-route-tables, vpn-ipsec-wireguard, websocket-deep-dive
 
 #### `event-loop` — 자바스크립트 이벤트 루프: 브라우저와 Node.js
 
@@ -1727,7 +1727,7 @@
 - 소제목: 콜 스택은 하나뿐이다 / 기다리는 일은 브라우저가 대신 한다 / 출력 순서 퍼즐 풀기 / 마이크로태스크는 끝까지 비운다 / await 뒤는 then 안으로 들어간다 / 화면은 태스크 사이에서만 그려진다 / 50ms가 넘으면 긴 작업이다 / 긴 작업을 쪼개는 방법들 / 이벤트 루프를 직접 흉내 내 보기 / Node.js는 단계를 돈다 / nextTick은 Promise보다 먼저다 / 누가 메인 스레드를 붙잡았는지 운영에서 찾기 / 다시 멈춘 스피너로 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals
 - 키워드 백링크 →: osi-in-practice
-- 이 글로 오는 글 ←: autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, garbage-collection, health-checks, js-memory-leak, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
+- 이 글로 오는 글 ←: autoscaling, big-o-notation, core-web-vitals, deadlocks, distributed-tracing, garbage-collection, health-checks, js-async-await, js-callback-hell, js-memory-leak, js-promise-combinators, js-promises, k8s-pod-probes, long-polling, monitoring-basics, monolith-architecture, n-plus-one-queries, network-monitoring, nginx-basics, pattern-observer, percentile-latency, race-conditions, redis-basics, rendering-ssr, structured-logging, thread-safety
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -1738,6 +1738,52 @@
 - 소제목: 쓰레기의 기준은 닿을 수 있느냐다 / 루트에서 출발해 표시하고 치운다 / 대부분의 객체는 금방 죽는다 / 누수는 잊어버린 참조다 / 페이지를 떠나도 남는 리스너 / 문서에서 떨어진 DOM / 클로저는 생각보다 많이 잡는다 / 끝없이 자라는 캐시 / 약하게 잡아 두는 방법 / 크롬 개발자 도구로 범인 찾기 / Node.js 서버가 점점 무거워질 때 / 다시 느려지는 탭으로 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: client-data-cache, redis-memory-eviction, garbage-collection, event-loop, layer-mtu-fragmentation, dns
 - 이 글로 오는 글 ←: canary-release, client-data-cache, crdt, garbage-collection, js-scope-lexical, k8s-vpa, microservices, monolith-architecture, pattern-flyweight, pattern-observer, rendering-ssr
+
+### Programming › Frontend › JavaScript › Async (`programming/frontend/javascript/async`)
+
+#### `js-async-await` — async/await: 멈췄다가 이어서 실행되는 함수
+
+- 요약: forEach 안의 await가 기다리지 않는 버그에서 출발해 async 함수가 await에서 어떻게 빠졌다가 돌아오는지 본다. 차례대로와 동시 실행, 동시성 제한, 미리 시작한 Promise의 처리되지 않은 거부, try 안의 return await, 최상위 await, React effect에서 쓰는 법까지 다룬다.
+- 태그: JavaScript, Node.js, React
+- 키워드: async/await, return await, 최상위 await
+- 길이: 466줄
+- 소제목: async 함수는 부르는 즉시 Promise를 준다 / forEach는 반환값을 버린다 / 하나씩 기다릴까, 한꺼번에 보낼까 / 미리 시작해 둔 Promise가 먼저 실패하면 / return과 return await는 try 안에서 다르다 / 최상위 await는 모듈 로딩을 멈춘다 / React effect에는 async를 바로 넘기지 않는다 / 직접 해 보기: 동시성을 제한하면 몇 ms 걸리나 / 처음 코드로 돌아가면 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-promises, js-callback-hell, js-promise-combinators, event-loop, client-data-cache
+- 키워드 백링크 →: browser-fetch, js-truthy-falsy-typeof
+- 이 글로 오는 글 ←: js-callback-hell, js-promise-combinators, js-promises
+
+#### `js-callback-hell` — 콜백 지옥: 들여쓰기보다 무서운 것
+
+- 요약: 비동기 콜백을 이어 붙일 때 생기는 진짜 문제를 응답을 두 번 보내는 서버 버그에서 출발해 본다. 제어의 역전, try/catch가 끊기는 이유, 동기와 비동기가 섞이는 콜백, util.promisify로 Promise로 옮기는 방법까지 다룬다.
+- 태그: JavaScript, Node.js
+- 키워드: 콜백 지옥, error-first 콜백, util.promisify
+- 길이: 512줄
+- 소제목: 끝나면 이걸 불러 달라는 부탁 / 순서가 있는 일은 안으로 파고든다 / 콜백을 넘기면 제어권도 넘어간다 / 바깥 try가 지나쳐 버린 예외 / 어떤 때는 바로, 어떤 때는 나중에 / 동시에 시작하고 모두 끝나면 / 펴는 방법 두 가지 / 콜백이 여전히 맞는 자리 / 직접 만들어 보는 series / 콜백 지옥을 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-promises, js-async-await, js-promise-combinators, event-loop, saga-pattern
+- 키워드 백링크 →: json-crud-http, message-delivery-semantics
+- 이 글로 오는 글 ←: js-async-await, js-promise-combinators, js-promises
+
+#### `js-promise-combinators` — Promise.all, allSettled, race, any 고르기
+
+- 요약: 위젯 하나의 실패가 대시보드 전체를 죽인 상황에서 출발해 네 조합 함수가 각각 어떤 질문에 답하는지 비교한다. race 타임아웃이 아무것도 멈추지 않는 이유, AggregateError, 빈 배열의 함정, 동시 요청이 너무 많을 때와 Promise.all 직접 구현까지 다룬다.
+- 태그: JavaScript, Node.js, React
+- 키워드: Promise.allSettled, Promise.any, AggregateError
+- 길이: 449줄
+- 소제목: 네 함수가 답하는 질문 / 하나가 실패하면 all은 바로 포기한다 / 부분 실패를 받아들이는 allSettled / race로 건 타임아웃은 아무것도 멈추지 않는다 / any는 첫 성공을 기다린다 / 빈 배열을 넣으면 생기는 일 / 한꺼번에 너무 많이 넣을 때 / Promise.all을 직접 만들어 보면 / 대시보드는 결국 어떻게 고쳤나 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-callback-hell, js-promises, js-async-await, idempotency-key, client-data-cache, timeouts
+- 키워드 백링크 →: browser-fetch, streaming-ssr-suspense, rendering-strategies, event-loop
+- 이 글로 오는 글 ←: js-async-await, js-callback-hell, js-promises
+
+#### `js-promises` — Promise: 상태, then 체인, 에러 전파
+
+- 요약: Promise가 상태를 한 번만 정하고 핸들러를 항상 나중에 부르는 상자라는 데서 출발해 then이 새 Promise를 돌려주는 규칙과 에러가 체인을 타고 내려가는 방식을 따라간다. 처리되지 않은 거부가 Node.js와 브라우저에서 어떻게 다뤄지는지, new Promise로 감쌀 때 흔한 실수와 React에서 만나는 자리도 다룬다.
+- 태그: JavaScript, Node.js, React
+- 키워드: unhandledRejection, thenable, 처리되지 않은 거부
+- 길이: 475줄
+- 소제목: 결과를 담을 상자를 먼저 받는다 / then이 돌려주는 건 새 상자다 / 실패는 다음 catch까지 미끄러진다 / 아무도 받지 않은 거부 / 상자를 하나 더 씌울 때 흔한 실수 / resolve에 Promise를 넘기면 늦어진다 / React에서 Promise를 만나는 자리 / 직접 만들어 보는 체인 판정기 / 처음 버그를 다시 보면 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-callback-hell, js-async-await, js-promise-combinators, event-loop, browser-fetch, client-data-cache
+- 키워드 백링크 →: rendering-strategies, http-status-codes
+- 이 글로 오는 글 ←: js-async-await, js-callback-hell, js-promise-combinators, pattern-observer
 
 ### Programming › Frontend › JavaScript › Basics (`programming/frontend/javascript/basics`)
 
@@ -1792,7 +1838,7 @@
 - 소제목: 거짓으로 취급되는 값은 여덟 개뿐이다 / if 하나에 숨은 버그들 / React에서 0이 화면에 찍힌다 / typeof가 돌려주는 여덟 가지 / 종류를 정확히 가려내는 조합 / null과 undefined는 어디서 오나 / NaN은 조용히 퍼진다 / 검사 하나가 어디까지 거르는지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-primitive-vs-reference, js-equality-coercion, js-hoisting-tdz
 - 키워드 백링크 →: json-crud-http
-- 이 글로 오는 글 ←: js-equality-coercion, js-primitive-vs-reference, yaml-for-k8s
+- 이 글로 오는 글 ←: js-async-await, js-equality-coercion, js-primitive-vs-reference, yaml-for-k8s
 
 #### `js-var-let-const` — var, let, const: 변수 상자는 언제 새로 생기나
 
@@ -1815,7 +1861,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, loading-patterns
-- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-memory-leak, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
+- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-async-await, js-memory-leak, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -1950,7 +1996,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, lossy-counting, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, pattern-observer, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
+- 이 글로 오는 글 ←: ab-testing, client-data-cache, code-splitting, html-form-http, hydration, islands-resumability, js-promise-combinators, js-promises, loading-patterns, nextjs-static-dynamic-rendering, pattern-observer, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, streaming-ssr-suspense
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -1961,7 +2007,7 @@
 - 소제목: 응답을 끝내지 않고 열어 둔다 / 셸이 먼저 나가고 경계 안쪽이 뒤따른다 / 늦게 온 조각이 제자리를 찾는 방법 / React 19는 교체를 모아서 한다 / 셸만 기다릴까, 전부 기다릴까 / 상태 코드는 첫 조각과 함께 떠난다 / 중간에서 모아 버리는 것들 / 봇과 링크 미리보기가 보는 HTML / Next.js에서는 loading.tsx가 경계다 / 경계를 어디에 두나 / 운영에서 스트리밍이 안 될 때 보는 순서 / 다시 운영 주소로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-strategies, rendering-ssr, hydration, nginx-reverse-proxy, react-server-components, core-web-vitals
 - 키워드 백링크 →: proxy-reverse-proxy, http-versions, http-status-codes
-- 이 글로 오는 글 ←: hydration, islands-resumability, loading-patterns, nextjs-static-dynamic-rendering, react-server-components, rendering-ssr, rendering-strategies, server-sent-events
+- 이 글로 오는 글 ←: hydration, islands-resumability, js-promise-combinators, loading-patterns, nextjs-static-dynamic-rendering, react-server-components, rendering-ssr, rendering-strategies, server-sent-events
 
 ### Programming › In Practice (`programming/in-practice`)
 
@@ -2255,7 +2301,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / access.log에서 5xx를 갈라 보기 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, nginx-reverse-proxy, network-troubleshooting-by-layer, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, proxy-reverse-proxy, token-login, db-locking-deadlock, http-versions, osi-in-practice, what-happens-google-com, dns
-- 이 글로 오는 글 ←: api-versioning, browser-fetch, canary-release, cors, curl-for-debugging, db-type-time-series, devops-networking-roadmap, distributed-tracing, edge-caching, grafana-dashboards, grpc, health-checks, html-form-http, http-message, http-methods, http-versions, iam-basics, idempotency-key, json-crud-http, k8s-audit-logging, k8s-gateway-api, kubernetes-ingress, layer-mtu-fragmentation, layered-architecture, linux-grep-awk-sed, mvc-pattern, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, observability-basics, optimistic-locking, osi-in-practice, pattern-adapter, pattern-chain-of-responsibility, percentile-latency, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, realtime-communication, rendering-csr-spa, rendering-ssr, rendering-strategies, rest-api-design, server-sent-events, service-mesh, sli-slo, sqld-entity-attribute-relationship, streaming-ssr-suspense, what-happens-google-com
+- 이 글로 오는 글 ←: api-versioning, browser-fetch, canary-release, cors, curl-for-debugging, db-type-time-series, devops-networking-roadmap, distributed-tracing, edge-caching, grafana-dashboards, grpc, health-checks, html-form-http, http-message, http-methods, http-versions, iam-basics, idempotency-key, js-promises, json-crud-http, k8s-audit-logging, k8s-gateway-api, kubernetes-ingress, layer-mtu-fragmentation, layered-architecture, linux-grep-awk-sed, mvc-pattern, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, nginx-basics, nginx-reverse-proxy, observability-basics, optimistic-locking, osi-in-practice, pattern-adapter, pattern-chain-of-responsibility, percentile-latency, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, realtime-communication, rendering-csr-spa, rendering-ssr, rendering-strategies, rest-api-design, server-sent-events, service-mesh, sli-slo, sqld-entity-attribute-relationship, streaming-ssr-suspense, what-happens-google-com
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -2277,7 +2323,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, api-versioning, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
+- 이 글로 오는 글 ←: browser-fetch, cors, db-modeling-normalization, http-methods, js-callback-hell, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, upper-layers-session-presentation-app, xss
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -4218,7 +4264,7 @@
 - 소제목: 되돌리지 않고 반대로 한다 / 단계는 세 종류로 나뉜다 / 지휘하는 쪽이 순서를 쥐는 오케스트레이션 / 보상 도중에 오케스트레이터가 죽으면 / 지휘자 없이 이벤트로 잇는 코레오그래피 / 중간 상태가 남에게 보인다 / 상태를 바꾸고 알리는 일을 한 번에: 아웃박스 / 워크플로 엔진에 맡길 때 / 사가가 꼬였을 때 현장에서 보는 것 / 사가가 약속하는 것과 하지 않는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: microservices, distributed-transactions-2pc, event-driven-architecture, optimistic-locking, message-delivery-semantics, idempotency-key
 - 키워드 백링크 →: postgres-advanced-sql, db-architecture-by-scale, db-type-columnar-olap, db-locking-deadlock, distributed-tracing, kafka-basics, db-transaction-isolation, db-replication-sharding, dead-letter-queue
-- 이 글로 오는 글 ←: db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, microservices, monolith-architecture, pattern-command, pattern-mediator
+- 이 글로 오는 글 ←: db-locking-deadlock, distributed-transactions-2pc, event-driven-architecture, js-callback-hell, microservices, monolith-architecture, pattern-command, pattern-mediator
 
 #### `scaling-horizontal-vertical` — 수평 확장과 수직 확장: 더 큰 서버냐, 더 많은 서버냐
 
@@ -4273,7 +4319,7 @@
 - 소제목: 요청 하나에 기다림이 여섯 번 있다 / 연결이 안 될 때는 커널이 2분 넘게 기다린다 / 읽기 타임아웃은 전체 시간이 아니다 / 계층마다 걸려 있는 한도 / 앞에서 포기해도 뒤에서는 계속 일한다 / 바깥이 안쪽보다 길어야 한다 / 남은 시간을 넘겨주는 데드라인 전파 / keep-alive 유휴 시간이 어긋나면 생기는 502 / 값을 고르는 순서 / 504와 끝나지 않는 요청을 만났을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, retries, exponential-backoff-jitter, nginx-reverse-proxy, chaos-engineering, sql-batch-timeout-pool
 - 키워드 백링크 →: browser-fetch, packet-capture-tcpdump, deadlocks, what-happens-google-com, grpc, postgres-getting-started, dns
-- 이 글로 오는 글 ←: chaos-engineering, curl-for-debugging, deadlocks, devops-networking-roadmap, distributed-tracing, exponential-backoff-jitter, grpc, long-polling, network-partitions, osi-in-practice, pattern-decorator, pattern-proxy, production-incidents, resilience-patterns, retries, serverless-limits, tail-latency, tcp-connection-lifecycle, webhooks, websocket-deep-dive
+- 이 글로 오는 글 ←: chaos-engineering, curl-for-debugging, deadlocks, devops-networking-roadmap, distributed-tracing, exponential-backoff-jitter, grpc, js-promise-combinators, long-polling, network-partitions, osi-in-practice, pattern-decorator, pattern-proxy, production-incidents, resilience-patterns, retries, serverless-limits, tail-latency, tcp-connection-lifecycle, webhooks, websocket-deep-dive
 
 ### Programming › UI/UX (`programming/ui-ux`)
 
@@ -4746,8 +4792,10 @@
 - 참조 카운팅 → `garbage-collection`
 - 참조값 → `js-primitive-vs-reference`
 - 책임 연쇄 패턴 → `pattern-chain-of-responsibility`
+- 처리되지 않은 거부 → `js-promises`
 - 청크 단위 처리 → `batch-processing`
 - 체크포인트 → `postgres-architecture`
+- 최상위 await → `js-async-await`
 - 최장 접두사 일치 → `layer-ip-routing-icmp`
 - 최종 일관성 → `db-consistency-cap`
 - 추상 팩토리 → `pattern-abstract-factory`
@@ -4784,6 +4832,7 @@
 - 코레오그래피 → `event-driven-architecture`
 - 콘텐츠 협상 → `http-message`
 - 콜드 스타트 → `cold-starts`
+- 콜백 지옥 → `js-callback-hell`
 - 쿠버네티스 감사 로그 → `k8s-audit-logging`
 - 쿠버네티스 네임스페이스 → `k8s-namespace`
 - 쿠버네티스 로드맵 → `k8s-learning-roadmap`
@@ -4895,6 +4944,7 @@
 - AdminNetworkPolicy → `k8s-network-policy`
 - advisory lock → `pessimistic-locking`
 - aggregated ClusterRole → `k8s-rbac`
+- AggregateError → `js-promise-combinators`
 - Alertmanager → `alerting`
 - allkeys-lru → `redis-memory-eviction`
 - ALLOWED DISRUPTIONS → `k8s-pod-disruption-budget`
@@ -4924,6 +4974,7 @@
 - ARP → `layer-link-ethernet-arp`
 - AssumeRole → `iam-basics`
 - Astro → `islands-resumability`
+- async/await → `js-async-await`
 - AsyncLocalStorage → `rendering-ssr`
 - audit-policy-file → `k8s-audit-logging`
 - automountServiceAccountToken → `k8s-serviceaccount-tokens`
@@ -5109,6 +5160,7 @@
 - equal jitter → `exponential-backoff-jitter`
 - ERD → `sqld-data-modeling`
 - ERESOLVE → `dependency-hell`
+- error-first 콜백 → `js-callback-hell`
 - ESR 규칙 → `mongodb-document-model`
 - ETag → `http-caching-cdn`
 - etcd → `db-type-key-value`
@@ -5514,6 +5566,8 @@
 - process.nextTick → `event-loop`
 - ProgressDeadlineExceeded → `k8s-deploy-pipeline-eks`
 - projected 토큰 → `k8s-serviceaccount-tokens`
+- Promise.allSettled → `js-promise-combinators`
+- Promise.any → `js-promise-combinators`
 - protobuf → `grpc`
 - Protocol Buffers → `grpc`
 - Proxy 패턴 → `pattern-proxy`
@@ -5572,6 +5626,7 @@
 - resourceVersion → `k8s-api-objects`
 - REST API → `rest-api-design`
 - restore-keys → `build-caching`
+- return await → `js-async-await`
 - RETURNING → `postgres-advanced-sql`
 - revalidatePath → `rendering-ssg-isr`
 - revalidateTag → `rendering-ssg-isr`
@@ -5702,6 +5757,7 @@
 - text/event-stream → `server-sent-events`
 - tfvars → `terraform-modules-tfvars`
 - Thanos → `prometheus-basics`
+- thenable → `js-promises`
 - thundering herd → `exponential-backoff-jitter`
 - TiDB → `db-type-newsql`
 - tied request → `tail-latency`
@@ -5740,6 +5796,7 @@
 - UDP → `udp-and-quic`
 - UdpRcvbufErrors → `udp-and-quic`
 - umask → `linux-files-permissions`
+- unhandledRejection → `js-promises`
 - unhealthyPodEvictionPolicy → `k8s-pod-disruption-budget`
 - UNION ALL → `sqld-set-operators`
 - uniq -c → `linux-grep-awk-sed`
@@ -5752,6 +5809,7 @@
 - USE 방법 → `monitoring-basics`
 - use client → `react-server-components`
 - useDeferredValue → `react-rerender`
+- util.promisify → `js-callback-hell`
 - UUID v7 → `postgres-data-types`
 - UUIDv7 → `db-sharding`
 - VACUUM FULL → `postgres-mvcc-vacuum`
@@ -5811,16 +5869,16 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `k8s-pod-basics` ↔ `docker-container-basics` (31%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
+- `k8s-pod-basics` ↔ `docker-container-basics` (32%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (28%: 글에서, 사원, 테이블, 함수, 시험, 포인트, oracle)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
-- `server-sent-events` ↔ `long-polling` (25%: 다음, 붙잡는, 장애를, 만났을, 가장, 깊게, 재연결)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (25%: 예제, 느려지는, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (25%: 연산자, 느려지는, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (25%: 붙이는, 행을, 시험, 포인트)
 - `db-index-pitfalls` ↔ `db-index-design` (24%: 100만, 인덱스, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (24%: 100만, 인덱스, 인덱스가, 인덱스를, index)
 - `csrf` ↔ `cookie-session-login` (23%: 붙는다는, 것의, 대가, 붙는, 정리, cookie, csrf)
+- `server-sent-events` ↔ `long-polling` (22%: 붙잡는, 장애를, 만났을, 가장, 깊게, 재연결)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (22%: 테이블, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (22%: 테이블, 시험, 포인트, oracle)
 - `redis-cluster` ↔ `db-sharding` (21%: 키를, 데이터를, 나누는, 해시)
@@ -5856,6 +5914,12 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `js-promise-combinators` ↔ `js-async-await`
+- `js-promise-combinators` ↔ `js-promises`
+- `js-promise-combinators` ↔ `js-callback-hell`
+- `js-async-await` ↔ `js-promises`
+- `js-async-await` ↔ `js-callback-hell`
+- `js-promises` ↔ `js-callback-hell`
 - `layered-architecture` ↔ `modular-monolith`
 - `layered-architecture` ↔ `monolith-architecture`
 - `modular-monolith` ↔ `monolith-architecture`

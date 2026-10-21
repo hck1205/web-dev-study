@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-promises");
+
+글 편집기에 "저장 후 미리보기" 버튼을 만들었다. 초안을 저장하고, 저장된 글을 다시 불러와 미리보기에 띄운다.
+
+```js
+saveDraft({ title: "제목" })
+  .then((draft) => {
+    fetchPost(draft.id); // 저장한 글을 다시 가져온다
+  })
+  .then((post) => {
+    console.log("post:", post);
+  });
+```
+
+```text
+post: undefined
+```
+
+에러도 없이 `undefined`가 나온다. 첫 번째 `then`에서 `fetchPost`를 부르긴 했는데 그 결과를 `return`하지 않았다. 중괄호를 쓴 화살표 함수는 `return`이 없으면 `undefined`를 돌려준다. 그러면 두 번째 `then`은 `fetchPost`가 끝나기를 기다리지 않고 바로 `undefined`를 받는다. 게다가 `fetchPost`가 실패하면 그 에러는 체인 어디에도 연결되지 않아 그냥 사라지거나, Node.js라면 프로세스를 죽인다.
+
+이 글은 Promise가 어떤 상자인지, `then`이 무엇을 돌려주는지, 에러가 체인을 어떻게 타고 내려가는지, 아무도 받지 않은 거부가 어디로 가는지를 차례로 본다. 이 버그는 그 규칙 두 개만 알면 바로 보인다.
+
+이 주제의 다른 글: [콜백 지옥](/posts/js-callback-hell) · [async/await](/posts/js-async-await) · [Promise 조합 함수](/posts/js-promise-combinators)
+
+## 결과를 담을 상자를 먼저 받는다
+
+[콜백 지옥](/posts/js-callback-hell)에서 본 문제는 "이어서 할 일"을 남의 함수에 넘긴 데서 시작했다. Promise는 방향을 뒤집는다. 비동기 함수가 콜백을 받는 대신, 나중에 채워질 결과를 담은 객체를 바로 돌려준다. 이어서 할 일은 그 객체에 내가 붙인다.
+
+이 글에서는 Promise를 "결과가 들어올 상자"로 부르겠다. 상자는 세 상태 중 하나다.
+
+- pending: 아직 비어 있다.
+- fulfilled: 값이 들어왔다(이행).
+- rejected: 실패 이유가 들어왔다(거부).
+
+fulfilled나 rejected가 되면 settled(확정)라고 부르고, 그 뒤로는 절대 바뀌지 않는다. 명세로 보면 Promise 객체는 `[[PromiseState]]`, `[[PromiseResult]]` 같은 내부 슬롯을 갖고, 아직 pending일 때 붙인 핸들러는 `[[PromiseFulfillReactions]]`, `[[PromiseRejectReactions]]` 목록에 모아 둔다. 상태가 정해지는 순간 그 목록의 핸들러를 하나씩 잡(job)으로 만들어 마이크로태스크 큐에 넣는다.
+
+```js
+const p = new Promise((resolve, reject) => {
+  console.log("1. executor는 바로 실행된다");
+  resolve("첫 값");
+  resolve("두 번째 값"); // 무시
+  reject(new Error("늦은 실패")); // 무시
+  console.log("2. resolve 뒤에도 코드는 계속 돈다");
+});
+p.then((v) => console.log("4. then:", v));
+console.log("3. 동기 코드 끝");
+```
+
+```text
+1. executor는 바로 실행된다
+2. resolve 뒤에도 코드는 계속 돈다
+3. 동기 코드 끝
+4. then: 첫 값
+```
+
+세 가지를 확인할 수 있다. `new Promise`에 넘긴 함수(executor)는 그 자리에서 동기로 실행된다. 처음 한 번의 `resolve`만 효과가 있고 나머지는 조용히 무시된다. `resolve`는 `return`이 아니라서 그 뒤 코드도 계속 돈다. 그리고 이미 값이 정해졌는데도 `then` 콜백은 동기 코드가 다 끝난 뒤에 실행된다.
+
+<AlgoTrace
+  caption="상태는 한 번만 바뀌고, 핸들러는 항상 나중에 불린다"
+  memoryLabel="상자 [상태 · 값]"
+  cells={["new Promise", "resolve 첫 값", "resolve 두 번째", "reject", "then 등록", "동기 끝", "잡 실행"]}
+  steps={[
+    { pointer: 0, memory: ["pending"], caption: "executor가 바로 실행된다. 상자는 비어 있다." },
+    { pointer: 1, memory: ["fulfilled", "첫 값"], caption: "첫 resolve로 상태가 정해진다. 이제 바뀌지 않는다." },
+    { pointer: 2, memory: ["fulfilled", "첫 값"], caption: "두 번째 resolve는 무시된다. 에러도 나지 않는다." },
+    { pointer: 3, memory: ["fulfilled", "첫 값"], caption: "reject도 무시된다. 상자는 이미 닫혔다." },
+    { pointer: 4, memory: ["fulfilled", "첫 값", "잡: then"], caption: "이미 이행된 상자에 then을 붙이면 핸들러가 바로 잡 큐에 들어간다. 실행은 아직이다." },
+    { pointer: 5, memory: ["fulfilled", "첫 값", "잡: then"], caption: "동기 코드가 끝날 때까지 잡은 기다린다." },
+    { pointer: 6, found: [6], memory: ["fulfilled", "첫 값"], caption: "콜 스택이 비면 잡이 실행되어 '첫 값'이 찍힌다." },
+  ]}
+/>
+
+"한 번만"과 "항상 나중에"가 콜백에서 아팠던 두 문제를 그대로 막는다. 콜백이 두 번 불릴까 걱정할 필요가 없고, 캐시 적중 여부에 따라 실행 순서가 바뀌지도 않는다. 이 "나중에"가 정확히 언제인지는 [이벤트 루프](/posts/event-loop) 글의 마이크로태스크 이야기와 이어진다.
+
+## then이 돌려주는 건 새 상자다
+
+처음 버그로 돌아가자. `p.then(fn)`은 `p`를 고치지 않는다. 새 Promise를 하나 만들어 돌려준다. 그 새 상자에 무엇이 담길지는 `fn`이 무엇을 하느냐로 정해진다.
+
+- `fn`이 값을 돌려주면 새 상자는 그 값으로 이행된다.
+- `fn`이 Promise(또는 `then` 메서드가 있는 객체)를 돌려주면 새 상자는 그 Promise가 끝날 때까지 기다렸다가 같은 결과를 따른다.
+- `fn`이 던지면 새 상자는 그 에러로 거부된다.
+- 아무것도 돌려주지 않으면 `undefined`로 이행된다.
+
+처음 코드는 네 번째 경우였다. `fetchPost(draft.id)` 앞에 `return`을 붙이면 두 번째 경우가 되어, 다음 `then`이 글을 받을 때까지 기다린다.
+
+<ConceptDiagram
+  width={400}
+  height={240}
+  caption="then을 붙일 때마다 새 Promise가 생기고, 핸들러의 반환값이 다음 상자를 채운다"
+  nodes={[
+    { id: "p0", label: "p0", sub: "saveDraft()", x: 70, y: 50, w: 110 },
+    { id: "p1", label: "p1", sub: ".then(A)", x: 200, y: 50, w: 100 },
+    { id: "p2", label: "p2", sub: ".then(B)", x: 330, y: 50, w: 100 },
+    { id: "a", label: "A의 반환값", sub: "fetchPost Promise", x: 135, y: 170, w: 140 },
+    { id: "b", label: "B의 반환값", sub: "값 · throw", x: 280, y: 170, w: 120 },
+  ]}
+  edges={[
+    { from: "p0", to: "p1", label: "이행되면 A" },
+    { from: "p1", to: "p2", label: "이행되면 B" },
+    { from: "a", to: "p1", label: "따라간다", dashed: true },
+    { from: "b", to: "p2", label: "채운다", dashed: true },
+  ]}
+/>
+
+`then` 안에서 Promise를 돌려주면 기다려 준다는 규칙 덕분에 체인은 위에서 아래로 읽힌다. 반대로 `then` 안에 다시 `then`을 중첩해 쓰면 콜백 지옥이 그대로 돌아온다. 중첩이 필요해 보이는 건 대개 앞 단계의 값 두 개를 함께 써야 할 때인데, 이건 [async/await](/posts/js-async-await)로 쓰면 변수로 자연스럽게 해결된다.
+
+Promise만 따라가는 게 아니다. `then` 메서드만 있으면 어떤 객체든 Promise처럼 대접받는다. 이런 객체를 thenable이라고 한다.
+
+```js
+const thenable = {
+  then(onFulfilled) {
+    console.log("then이 불렸다");
+    setTimeout(() => onFulfilled(42), 10);
+  },
+};
+Promise.resolve(thenable).then((v) => console.log("값:", v));
+(async () => console.log("await:", await thenable))();
+```
+
+```text
+then이 불렸다
+then이 불렸다
+값: 42
+await: 42
+```
+
+jQuery의 Deferred나 옛 Promise 라이브러리 객체가 표준 Promise와 섞여 돌 수 있는 이유가 이것이다. 반대로 우연히 `then`이라는 이름의 메서드를 가진 객체를 `resolve`하면 엉뚱하게 그 메서드가 불린다. 값 객체에 `then`이라는 속성 이름은 피하는 게 좋다.
+
+## 실패는 다음 catch까지 미끄러진다
+
+체인 중간에서 거부되면 그 뒤의 성공 핸들러는 전부 건너뛰고, 거부를 받는 첫 핸들러까지 내려간다. `catch(fn)`은 `then(undefined, fn)`의 줄임말이다. `catch`가 값을 돌려주면 체인은 다시 이행 상태로 돌아온다. `finally`는 성공이든 실패든 실행되지만, 반환값은 무시하고 앞의 결과를 그대로 넘긴다.
+
+```js
+const step = (label) => () => console.log(label);
+
+Promise.reject(new Error("네트워크"))
+  .then(step("A 건너뜀"))
+  .then(step("B 건너뜀"))
+  .catch((e) => {
+    console.log("catch:", e.message);
+    return "기본값";
+  })
+  .then((v) => { console.log("C:", v); return v + "!"; })
+  .finally(() => console.log("finally"))
+  .then((v) => console.log("D:", v));
+```
+
+```text
+catch: 네트워크
+C: 기본값
+finally
+D: 기본값!
+```
+
+아래 그림에서 다음을 누르면 거부가 어떤 칸을 건너뛰는지 보인다.
+
+<AlgoTrace
+  caption="거부는 성공 핸들러를 건너뛰고 첫 catch에서 멈춘다"
+  memoryLabel="지금 상자의 상태"
+  cells={["reject", "then A", "then B", "catch", "then C", "finally", "then D"]}
+  steps={[
+    { pointer: 0, memory: ["rejected", "네트워크"], caption: "출발점이 거부 상태다." },
+    { pointer: 1, memory: ["rejected", "네트워크"], caption: "then A는 성공 핸들러만 있다. 실행하지 않고 거부를 그대로 넘긴다." },
+    { pointer: 2, memory: ["rejected", "네트워크"], caption: "then B도 같다. 새 상자도 같은 이유로 거부된다." },
+    { pointer: 3, found: [3], memory: ["fulfilled", "기본값"], caption: "catch가 거부를 받아 값을 돌려준다. 체인이 성공 상태로 돌아왔다." },
+    { pointer: 4, memory: ["fulfilled", "기본값!"], caption: "then C가 실행되고 새 값을 돌려준다." },
+    { pointer: 5, memory: ["fulfilled", "기본값!"], caption: "finally는 실행되지만 반환값은 버린다. 앞 결과를 통과시킨다." },
+    { pointer: 6, found: [3, 6], memory: ["fulfilled", "기본값!"], caption: "D는 finally 앞의 값을 받는다." },
+  ]}
+/>
+
+여기서 면접 꼬리 질문으로 자주 나오는 차이가 있다. `then(onFulfilled, onRejected)`의 두 번째 인자와 그 뒤에 붙인 `catch`는 같지 않다.
+
+```js
+const parse = (text) => Promise.resolve(text).then((t) => JSON.parse(t));
+
+parse("{oops").then(
+  (data) => { throw new Error("성공 핸들러에서 터짐"); },
+  (err) => console.log("두 번째 인자:", err.name),
+);
+
+parse('{"ok":true}').then(
+  (data) => { throw new Error("성공 핸들러에서 터짐"); },
+  (err) => console.log("이건 안 찍힌다"),
+).catch((err) => console.log("뒤의 catch:", err.message));
+```
+
+```text
+두 번째 인자: SyntaxError
+뒤의 catch: 성공 핸들러에서 터짐
+```
+
+두 번째 인자는 앞 상자의 거부만 받는다. 같은 `then`의 첫 번째 인자가 던진 에러는 못 받는다. 그 에러는 `then`이 새로 만든 상자를 거부하기 때문이다. 그래서 첫 번째 `parse`에서 성공 핸들러가 던졌다면 그 에러는 아무도 받지 않는다. 체인 끝에 `catch`를 두는 습관이 여기서 나온다.
+
+체인 하나를 보통 이렇게 쓴다. 조각을 눌러 각 단계가 무엇을 받는지 보자.
+
+<UrlAnatomy
+  base="fetch(url)"
+  separator="."
+  joiner="."
+  caption="흔한 Promise 체인 한 줄"
+  params={[
+    { key: "then1", display: "then(checkStatus)", title: "응답 상태 확인", description: "fetch는 404나 500에서도 이행된다. res.ok가 false면 여기서 던져야 아래 catch로 간다.", code: "const checkStatus = (res) => {\n  if (!res.ok) throw new Error(`HTTP ${res.status}`);\n  return res;\n};" },
+    { key: "then2", display: "then((r) => r.json())", title: "본문 파싱", description: "r.json()이 Promise를 돌려주므로 return하면 다음 단계가 파싱 결과를 기다린다. 중괄호를 쓰면 return을 꼭 붙인다." },
+    { key: "then3", display: "then(render)", title: "화면 그리기", description: "render가 던져도 아래 catch가 받는다. then의 두 번째 인자였다면 못 받는다." },
+    { key: "catch", display: "catch(showError)", title: "위의 모든 실패", description: "네트워크 실패, 상태 코드, JSON 파싱, render의 에러가 모두 여기로 온다. 값을 돌려주면 체인은 다시 이행된다.", required: true },
+    { key: "finally", display: "finally(hideSpinner)", title: "어느 쪽이든 정리", description: "스피너 끄기처럼 결과와 상관없이 해야 하는 일을 둔다. 반환값은 무시되지만 여기서 던지면 체인이 그 에러로 거부된다." },
+  ]}
+/>
+
+fetch가 500에서도 이행되는 이유와 응답 처리 습관은 [fetch 글](/posts/browser-fetch)에 자세히 있다.
+
+## 아무도 받지 않은 거부
+
+거부된 Promise에 핸들러가 하나도 없으면 런타임이 이를 알린다. 브라우저와 Node.js가 다르게 반응한다.
+
+Node.js는 15부터 기본 동작이 `--unhandled-rejections=throw`다. 처리되지 않은 거부를 잡히지 않은 예외처럼 다뤄서 프로세스를 끝낸다. 분석 이벤트를 보내는 함수를 "어차피 실패해도 상관없으니" 기다리지 않고 불렀다고 해 보자.
+
+```js
+async function sendAnalytics() {
+  throw new Error("analytics 503");
+}
+sendAnalytics(); // 기다리지도, catch하지도 않는다
+setTimeout(() => console.log("1초 뒤 작업"), 1000);
+```
+
+```text
+/app/p5.js:2
+  throw new Error("analytics 503");
+        ^
+
+Error: analytics 503
+    at sendAnalytics (/app/p5.js:2:9)
+    at Object.<anonymous> (/app/p5.js:4:1)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49
+
+Node.js v22.22.0
+```
+
+종료 코드는 1이고 "1초 뒤 작업"은 끝내 실행되지 않는다(경로는 `/app`으로 줄였다). 운영 서버라면 들어와 있던 다른 요청까지 함께 끊긴다. "중요하지 않은 호출이 서버를 죽였다"는 장애가 이렇게 생긴다. 실패해도 괜찮은 호출이라면 실패를 무시한다는 뜻을 코드로 적는다.
+
+```js
+sendAnalytics().catch((err) => logger.warn({ err }, "analytics 실패, 무시"));
+```
+
+Node.js가 "처리되지 않았다"고 판단하는 시점은 거부된 뒤 마이크로태스크 큐가 다 비었을 때다. 그때까지 핸들러가 붙지 않으면 `unhandledRejection` 이벤트가 난다. 나중에라도 핸들러가 붙으면 `rejectionHandled`가 따로 온다.
+
+```js
+process.on("unhandledRejection", (reason) => console.log("unhandledRejection:", reason.message));
+process.on("rejectionHandled", () => console.log("rejectionHandled: 나중에 처리됨"));
+const p = Promise.reject(new Error("늦게 잡힘"));
+setTimeout(() => {
+  p.catch((e) => console.log("catch:", e.message));
+}, 100);
+```
+
+```text
+unhandledRejection: 늦게 잡힘
+catch: 늦게 잡힘
+rejectionHandled: 나중에 처리됨
+```
+
+<SequenceDiagram
+  caption="거부부터 경고까지: 판단은 마이크로태스크가 빈 뒤에 한다"
+  actors={[
+    { id: "code", label: "내 코드" },
+    { id: "p", label: "Promise" },
+    { id: "q", label: "잡 큐" },
+    { id: "rt", label: "런타임" },
+  ]}
+  steps={[
+    { from: "code", to: "p", label: "reject(err)", title: "거부된다", detail: "상태가 rejected로 정해진다. 붙은 핸들러가 없으니 잡 큐에 넣을 것도 없다." },
+    { from: "p", to: "rt", label: "핸들러 없음", title: "런타임에 표시", detail: "명세의 HostPromiseRejectionTracker가 '핸들러 없이 거부됨'을 런타임에 알린다." },
+    { from: "q", to: "q", label: "큐 비우기", title: "마이크로태스크가 빌 때까지 기다린다", detail: "같은 틱 안에서 catch가 붙으면 아무 일도 없던 걸로 친다." },
+    { from: "rt", to: "code", label: "unhandledRejection", title: "아직도 없으면 알린다", detail: "Node 15부터는 리스너가 없으면 예외로 바꿔 프로세스를 끝낸다. 브라우저는 unhandledrejection 이벤트를 내고 콘솔에 Uncaught (in promise)를 찍는다." },
+    { from: "code", to: "p", label: "catch(fn)", title: "뒤늦게 핸들러를 붙인다", detail: "리스너를 달아 프로세스가 살아 있었다면 이제야 처리된다." },
+    { from: "rt", to: "code", label: "rejectionHandled", title: "처리됐다고 다시 알린다", detail: "모니터링 도구는 이 둘을 짝지어 진짜로 버려진 거부만 센다." },
+  ]}
+/>
+
+브라우저는 탭을 죽이지 않는다. 콘솔에 `Uncaught (in promise)`가 찍히고 `window`에 `unhandledrejection` 이벤트가 온다. Sentry 같은 에러 수집기는 이 이벤트를 듣고 있다. 그래서 "에러 수집기에는 쌓이는데 사용자는 아무것도 못 봤다"는 경우가 생긴다. 실패했는데 화면은 로딩 상태로 멈춰 있는 것이다.
+
+```js
+window.addEventListener("unhandledrejection", (event) => {
+  report(event.reason); // 수집기로 보낸다
+  // event.preventDefault()를 부르면 콘솔의 기본 에러 출력을 막는다
+});
+```
+
+이 리스너는 마지막 안전망이다. 여기서 화면 상태를 복구할 수는 없다. 실패를 보여 줘야 하는 곳은 체인 안의 `catch`다.
+
+## 상자를 하나 더 씌울 때 흔한 실수
+
+이미 Promise를 돌려주는 함수를 `new Promise`로 다시 감싸는 코드가 자주 보인다. 명시적 생성자 안티패턴(explicit construction antipattern)이라고 부른다.
+
+```js
+function getUser(id) {
+  return new Promise((resolve) => {
+    fetchJson(`/users/${id}`).then((u) => resolve(u)); // reject를 빠뜨렸다
+  });
+}
+
+const p = getUser(1);
+p.then(() => console.log("성공"), () => console.log("실패"));
+setTimeout(() => console.log("1초 뒤 상태:", util.inspect(p)), 1000);
+```
+
+`fetchJson`이 404로 거부되게 하고 `unhandledRejection` 리스너를 달아 돌리면 이렇게 나온다.
+
+```text
+unhandledRejection: 404
+1초 뒤 상태: Promise { <pending> }
+```
+
+바깥 상자는 영원히 pending이다. "성공"도 "실패"도 찍히지 않는다. 안쪽 거부는 아무도 받지 않았다. 화면이라면 스피너가 영원히 돈다. 고치는 방법은 감싸지 않는 것이다. `return fetchJson(...)`이면 끝난다.
+
+`new Promise`가 정말 필요한 건 콜백이나 이벤트 기반 API를 Promise로 바꿀 때뿐이다. 그때도 지켜야 할 게 있다.
+
+- 실패 경로마다 `reject`를 부른다. 이벤트 기반이면 `error` 이벤트도 듣는다.
+- executor 안에서 동기로 던진 에러는 자동으로 거부가 된다. 하지만 executor 안의 `setTimeout` 콜백에서 던진 에러는 그렇지 않다. 그건 다른 스택이다.
+- `new Promise(async (resolve) => { ... })`처럼 executor를 `async`로 만들지 않는다. 안에서 던진 에러가 바깥 Promise로 가지 않고 버려진다.
+
+## resolve에 Promise를 넘기면 늦어진다
+
+꼬리 질문으로 실행 순서를 묻기도 한다. `resolve`에 Promise를 넘기면 그 Promise를 따라가느라 잡이 두 번 더 돈다. `Promise.resolve(p)`는 `p`가 이미 진짜 Promise면 새 상자를 만들지 않고 `p`를 그대로 돌려준다.
+
+```js
+const inner = Promise.resolve("값");
+
+new Promise((resolve) => resolve(inner)).then(() => console.log("A: resolve(promise)"));
+Promise.resolve().then(() => console.log("B: tick 1"))
+  .then(() => console.log("C: tick 2"))
+  .then(() => console.log("D: tick 3"));
+Promise.resolve(inner).then(() => console.log("E: Promise.resolve(promise)"));
+console.log("동기 끝", Promise.resolve(inner) === inner);
+```
+
+```text
+동기 끝 true
+B: tick 1
+E: Promise.resolve(promise)
+C: tick 2
+A: resolve(promise)
+D: tick 3
+```
+
+`A`는 `inner`가 이미 이행돼 있는데도 세 번째 틱에야 실행된다. `resolve(inner)`가 `inner.then`을 부르는 잡을 하나 만들고(1틱), 그 `then`의 콜백이 바깥 상자를 채우고(2틱), 그다음에야 `A`가 실행된다(3틱). 실무에서 이 몇 틱이 문제가 되는 일은 거의 없다. 다만 마이크로태스크 순서에 기대는 코드를 짜면 이런 차이에 바로 깨진다는 걸 보여 주는 예다. 순서가 중요하면 순서를 코드로 명시한다.
+
+## React에서 Promise를 만나는 자리
+
+React 컴포넌트에서 Promise를 직접 다루는 곳은 크게 이벤트 핸들러와 effect다.
+
+이벤트 핸들러에서 생긴 거부는 에러 바운더리가 잡지 않는다. 에러 바운더리는 렌더링 중에 던진 에러만 받는다. 그래서 아래 코드는 저장이 실패해도 화면에 아무 표시가 없고, 콘솔과 에러 수집기에만 흔적이 남는다.
+
+```jsx
+<button onClick={() => save(form).then(() => setSaved(true))}>저장</button>
+```
+
+`catch`에서 에러 상태를 세팅해 직접 보여 줘야 한다.
+
+```jsx
+const onSave = () => {
+  setStatus("saving");
+  save(form)
+    .then(() => setStatus("saved"))
+    .catch((err) => setStatus({ error: err.message }));
+};
+```
+
+effect 안에서는 Promise가 끝나기 전에 컴포넌트가 사라지거나 의존성이 바뀌는 경우를 생각해야 한다. Promise는 결과를 한 번 정하면 그만이고 "더 이상 필요 없다"는 걸 알 방법이 없다. 그래서 cleanup에서 무시 플래그를 세우거나 요청을 취소한다. 늦게 온 응답이 최신 결과를 덮는 문제는 [AbortController](/posts/abort-controller)에서 이어서 다룬다.
+
+React 19의 `use(promise)`는 Promise를 렌더링 중에 읽게 해 준다. 끝나지 않았으면 가장 가까운 Suspense가 대신 보여지고, 거부되면 에러 바운더리로 간다. 조건이 하나 있다. 렌더링할 때마다 새 Promise를 만들면 매번 다시 기다리게 되므로, Promise는 서버 컴포넌트에서 넘겨받거나 캐시된 것을 써야 한다. 데이터 요청 Promise를 캐시하고 공유하는 이야기는 [클라이언트 데이터 캐시](/posts/client-data-cache) 글에 있다.
+
+## 직접 만들어 보는 체인 판정기
+
+`then`, `catch`, `finally`가 상태를 어떻게 바꾸는지 손으로 판정하는 함수를 짜 보자. 실제 Promise를 쓰지 않고 규칙만으로 체인의 최종 결과를 계산한다.
+
+- `start`는 `{ state, value }`로 출발 상태를 준다.
+- 핸들러는 `{ type: "then" | "catch" | "finally", returns?, throws? }`다. `throws`가 있으면 그 값을 던지고, 없으면 `returns`(없으면 `null`)를 돌려준다.
+- 결과는 `{ state, value, ran }`이다. `ran`은 실제로 실행된 핸들러 수다.
+
+테스트의 기대값은 같은 체인을 진짜 Promise로 만들어 돌린 결과와 똑같다.
+
+<CodePlayground
+  caption="Promise 체인의 최종 상태 계산하기"
+  functionName="runChain"
+  initialCode={`function runChain(start, handlers) {
+  let state = start.state;
+  let value = start.value;
+  let ran = 0;
+  for (const h of handlers) {
+    // then은 이행일 때만, catch는 거부일 때만, finally는 항상 실행된다
+    // 던지면 거부, 돌려주면 이행. finally는 던지지 않으면 앞 결과를 통과시킨다
+  }
+  return { state, value, ran };
+}`}
+  solution={`function runChain(start, handlers) {
+  let state = start.state;
+  let value = start.value;
+  let ran = 0;
+  for (const h of handlers) {
+    const runs =
+      h.type === "finally" ||
+      (h.type === "then" && state === "fulfilled") ||
+      (h.type === "catch" && state === "rejected");
+    if (!runs) continue; // 해당 없는 핸들러는 상태를 그대로 넘긴다
+    ran += 1;
+    if (h.throws !== undefined) {
+      state = "rejected";
+      value = h.throws;
+      continue;
+    }
+    if (h.type === "finally") continue; // 반환값은 버린다
+    state = "fulfilled";
+    value = h.returns ?? null;
+  }
+  return { state, value, ran };
+}`}
+  tests={[
+    { label: "then 두 번", args: [{ state: "fulfilled", value: 1 }, [{ type: "then", returns: 2 }, { type: "then", returns: 3 }]], expected: { state: "fulfilled", value: 3, ran: 2 } },
+    { label: "거부가 catch에서 회복된다", args: [{ state: "rejected", value: "E" }, [{ type: "then", returns: 2 }, { type: "catch", returns: 0 }, { type: "then", returns: 5 }]], expected: { state: "fulfilled", value: 5, ran: 2 } },
+    { label: "then에서 던지면 뒤 then은 건너뛴다", args: [{ state: "fulfilled", value: 1 }, [{ type: "then", throws: "boom" }, { type: "then", returns: 9 }, { type: "finally", returns: 7 }]], expected: { state: "rejected", value: "boom", ran: 2 } },
+    { label: "finally는 값을 통과시킨다", args: [{ state: "fulfilled", value: 1 }, [{ type: "catch", returns: 0 }, { type: "finally" }]], expected: { state: "fulfilled", value: 1, ran: 1 } },
+    { label: "catch에서 다시 던지기", args: [{ state: "rejected", value: "E" }, [{ type: "catch", throws: "E2" }, { type: "catch", returns: "ok" }]], expected: { state: "fulfilled", value: "ok", ran: 2 } },
+    { label: "finally에서 던지면 결과가 바뀐다", args: [{ state: "fulfilled", value: 1 }, [{ type: "finally", throws: "F" }, { type: "then", returns: 2 }]], expected: { state: "rejected", value: "F", ran: 1 } },
+  ]}
+/>
+
+## 처음 버그를 다시 보면
+
+`then` 안에서 `return`을 빠뜨리면 새 상자는 `undefined`로 바로 이행되고, 안에서 시작한 Promise는 체인에서 떨어져 나간다. 결과도 기다리지 않고 실패도 아무도 받지 않는다. Promise는 상태가 한 번만 정해지고 핸들러를 항상 나중에 부르는 상자이며, `then`은 핸들러의 반환값으로 채워질 새 상자를 돌려준다. 이 두 줄로 체인의 동작은 거의 다 설명된다. 같은 체인을 동기 코드처럼 읽히게 쓰는 방법은 [async/await](/posts/js-async-await)에서, 여러 Promise를 한 번에 기다리는 방법은 [Promise 조합 함수](/posts/js-promise-combinators)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### Promise의 상태에는 무엇이 있고 어떻게 바뀌나요?
+
+pending, fulfilled, rejected 세 가지다. pending에서 한 번 fulfilled나 rejected로 바뀌면 settled라고 하고 그 뒤로는 바뀌지 않는다. 그래서 `resolve`나 `reject`를 여러 번 불러도 처음 한 번만 효과가 있다. 콜백 방식에서 콜백이 두 번 불리던 문제를 이 규칙이 막는다.
+
+### then은 무엇을 반환하나요?
+
+항상 새 Promise를 반환한다. 핸들러가 값을 돌려주면 그 값으로 이행되고, Promise를 돌려주면 그 결과를 따라가며, 던지면 거부된다. 아무것도 돌려주지 않으면 `undefined`로 이행되므로, 다음 단계가 기다려야 하는 Promise는 반드시 `return`해야 한다.
+
+### 이미 이행된 Promise에 then을 붙이면 콜백이 바로 실행되나요?
+
+아니다. 콜백은 마이크로태스크로 예약되어 현재 실행 중인 동기 코드가 모두 끝난 뒤에 실행된다. 그래서 같은 코드가 상황에 따라 동기로도 비동기로도 실행되는 문제가 생기지 않는다. 다만 마이크로태스크라서 다음 태스크나 렌더링보다는 먼저 실행된다.
+
+### then의 두 번째 인자와 catch는 무엇이 다른가요?
+
+`then(a, b)`의 `b`는 앞 Promise의 거부만 받고, 같은 `then`의 `a`가 던진 에러는 받지 못한다. `a`가 던진 에러는 `then`이 만든 새 Promise를 거부하므로 그 뒤의 `catch`가 받는다. 그래서 체인 끝에 `catch`를 두는 편이 빠짐없이 잡는다. 두 번째 인자는 "앞 단계 실패만 따로 처리하고 내 성공 핸들러의 실패는 위로 보낸다"는 의도가 분명할 때 쓴다.
+
+### 처리되지 않은 거부는 어떻게 되나요?
+
+브라우저는 콘솔에 `Uncaught (in promise)`를 찍고 `unhandledrejection` 이벤트를 낸다. Node.js는 15부터 기본으로 이를 잡히지 않은 예외처럼 다뤄서 프로세스를 종료한다. 판단은 거부 후 마이크로태스크 큐가 빈 시점에 하고, 나중에 핸들러가 붙으면 `rejectionHandled`가 온다. 실패해도 되는 호출이라도 `.catch`로 무시한다는 걸 명시해야 한다.
+
+### finally는 반환값을 바꾸나요?
+
+바꾸지 않는다. `finally` 콜백은 인자를 받지 않고 반환값도 무시되며, 앞 단계의 이행 값이나 거부 이유가 그대로 다음으로 넘어간다. 예외는 `finally` 안에서 던지거나 거부된 Promise를 돌려줄 때로, 그러면 체인이 그 에러로 거부된다. 그래서 정리 작업에서 실패할 수 있는 일을 할 때는 원래 에러를 덮어쓰지 않게 주의한다.
+
+### Promise를 반환하는 함수를 new Promise로 감싸면 왜 안 좋나요?
+
+거부 경로를 빠뜨리기 쉽기 때문이다. 안쪽 Promise가 거부돼도 바깥에서 `reject`를 부르지 않으면 바깥 Promise는 영원히 pending이고, 안쪽 거부는 처리되지 않은 거부가 된다. 이미 Promise가 있으면 그대로 `return`하거나 `then`으로 이어 붙이면 된다. `new Promise`는 콜백이나 이벤트 API를 감쌀 때만 쓴다.
+
+### resolve에 Promise를 넘기는 것과 Promise.resolve에 넘기는 것은 같은가요?
+
+결과는 같지만 시점이 다르다. `Promise.resolve(p)`는 `p`가 같은 생성자의 Promise면 새로 만들지 않고 `p`를 그대로 돌려준다. `new Promise((r) => r(p))`는 `p.then`을 부르는 잡을 거쳐 따라가므로 마이크로태스크가 두 번 더 돈다. 실무에서 몇 틱 차이가 문제 되는 일은 드물지만, 마이크로태스크 순서에 기대는 코드가 위험하다는 예로 자주 나온다.

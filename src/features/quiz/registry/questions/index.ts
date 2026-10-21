@@ -134,10 +134,14 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JS_ASYNC_AWAIT } from "./js-async-await";
+import { JS_CALLBACK_HELL } from "./js-callback-hell";
 import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
 import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
+import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
+import { JS_PROMISES } from "./js-promises";
 import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
@@ -519,10 +523,14 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JS_ASYNC_AWAIT,
+  JS_CALLBACK_HELL,
   JS_EQUALITY_COERCION,
   JS_HOISTING_TDZ,
   JS_MEMORY_LEAK,
   JS_PRIMITIVE_VS_REFERENCE,
+  JS_PROMISE_COMBINATORS,
+  JS_PROMISES,
   JS_SCOPE_LEXICAL,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,
