@@ -376,6 +376,8 @@ import { RSYNC_ALGORITHM } from "./rsync-algorithm";
 import { SAGA_PATTERN } from "./saga-pattern";
 import { SCALING_HORIZONTAL_VERTICAL } from "./scaling-horizontal-vertical";
 import { SCHEMA_VERSIONING } from "./schema-versioning";
+import { SD_AD_CLICK_EXACTLY_ONCE } from "./sd-ad-click-exactly-once";
+import { SD_AD_CLICK_STREAM_WINDOWS } from "./sd-ad-click-stream-windows";
 import { SD_AUTOCOMPLETE_DATA_PIPELINE } from "./sd-autocomplete-data-pipeline";
 import { SD_AUTOCOMPLETE_TRIE } from "./sd-autocomplete-trie";
 import { SD_CACHE_AND_CDN_TIER } from "./sd-cache-and-cdn-tier";
@@ -395,6 +397,8 @@ import { SD_LATENCY_NUMBERS } from "./sd-latency-numbers";
 import { SD_LOAD_BALANCER_STATELESS } from "./sd-load-balancer-stateless";
 import { SD_MAPS_LOCATION_ETA } from "./sd-maps-location-eta";
 import { SD_MAPS_TILES_ROUTING } from "./sd-maps-tiles-routing";
+import { SD_METRICS_COLLECTION } from "./sd-metrics-collection";
+import { SD_METRICS_STORAGE_ALERTING } from "./sd-metrics-storage-alerting";
 import { SD_MQ_CONSUMER_GROUPS } from "./sd-mq-consumer-groups";
 import { SD_MQ_REPLICATION } from "./sd-mq-replication";
 import { SD_MQ_STORAGE_PARTITIONS } from "./sd-mq-storage-partitions";
@@ -876,6 +880,8 @@ export const QUESTION_SETS = [
   SAGA_PATTERN,
   SCALING_HORIZONTAL_VERTICAL,
   SCHEMA_VERSIONING,
+  SD_AD_CLICK_EXACTLY_ONCE,
+  SD_AD_CLICK_STREAM_WINDOWS,
   SD_AUTOCOMPLETE_DATA_PIPELINE,
   SD_AUTOCOMPLETE_TRIE,
   SD_CACHE_AND_CDN_TIER,
@@ -895,6 +901,8 @@ export const QUESTION_SETS = [
   SD_LOAD_BALANCER_STATELESS,
   SD_MAPS_LOCATION_ETA,
   SD_MAPS_TILES_ROUTING,
+  SD_METRICS_COLLECTION,
+  SD_METRICS_STORAGE_ALERTING,
   SD_MQ_CONSUMER_GROUPS,
   SD_MQ_REPLICATION,
   SD_MQ_STORAGE_PARTITIONS,

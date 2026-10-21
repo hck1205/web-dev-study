@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "sd-ad-click-exactly-once",
+    title: "광고 클릭 집계 설계 ②: 중복 없이 한 번만 세기와 대사",
+    summary: "같은 클릭이 두 번 들어오는 두 길을 실제로 프로세스를 죽여 재현하고, click_id 거르기와 결과·오프셋 한 트랜잭션, 덮어쓰기로 막는다. 스냅샷 복구, 원본으로 다시 세는 대사, 카파 아키텍처의 재계산, 몰리는 광고의 키 쪼개기까지 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Messaging", "Distributed Systems", "Transaction", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["카파 아키텍처", "람다 아키텍처"],
+  },
+  {
+    slug: "sd-ad-click-stream-windows",
+    title: "광고 클릭 집계 설계 ①: 이벤트 시간, 워터마크, 윈도",
+    summary: "하루 10억 클릭을 1분 단위로 미리 세는 스트림 집계를 설계한다. 처리 시간으로 세면 늦은 클릭이 다음 칸으로 밀리는 것을 확인하고, 워터마크와 허용 지연으로 정확성과 지연 사이를 숫자로 고르며, 텀블링과 미끄러지는 창으로 상위 N개를 만든다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Messaging", "Distributed Systems", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["이벤트 시간", "텀블링 윈도", "허용 지연", "광고 클릭 집계"],
+  },
+  {
+    slug: "sd-metrics-storage-alerting",
+    title: "지표 모니터링 시스템 설계 ②: 1년치를 줄여 담고, 묻고, 알림 보내기",
+    summary: "1년치 지표를 원본·1분·1시간 세 해상도로 나눠 담는 작은 저장소를 만들고, 패널 폭에 맞춰 읽을 단계를 고르는 조회와 칸 단위 캐시를 재 본다. 알림 상태를 바깥에 두고 같은 사건 키로 중복을 거르는 법, 알림 시스템 자체를 지켜보는 법까지 다룬다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Observability", "Database", "Cache", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["알림 저장소", "알림 평가기", "보관 단계"],
+  },
+  {
+    slug: "sd-metrics-collection",
+    title: "지표 모니터링 시스템 설계 ①: pull과 push로 모으고 큐로 나르기",
+    summary: "서버 1만 대, 시계열 1,000만 개의 지표를 모으는 쪽을 설계한다. pull과 push가 각각 어떻게 깨지는지 직접 돌려 보고, 수집기를 해시 링으로 나누고, 저장소가 멈춰도 잃지 않게 큐를 두고 파티션 키를 고른다.",
+    topic: "programming/system-design/case-studies",
+    tags: ["System Design", "Observability", "Messaging", "Distributed Systems", "Node.js"],
+    date: "2026-10-22",
+    keywords: ["지표 수집기", "push 수집기", "지표 모니터링 시스템"],
+  },
+  {
     slug: "sd-object-storage-versioning-multipart",
     title: "객체 저장소 설계 ③: 버전, 멀티파트 업로드, 가비지 컬렉션",
     summary: "덮어쓴 객체를 되돌리는 버전 관리와 삭제 마커, 큰 파일을 조각으로 받아 합치는 멀티파트 업로드를 만든다. 그 과정에서 생긴 고아 조각과 지운 객체를 컴팩션으로 안전하게 치운다.",

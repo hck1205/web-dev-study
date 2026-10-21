@@ -2,6 +2,92 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "sd-ad-click-exactly-once": {
+    "links": [
+      "sd-ad-click-stream-windows",
+      "message-delivery-semantics",
+      "idempotency-key",
+      "kafka-basics",
+      "bloom-filter",
+      "batch-processing",
+      "hyperloglog"
+    ],
+    "mentions": [
+      "db-type-embedded",
+      "postgres-architecture",
+      "http-methods"
+    ]
+  },
+  "sd-ad-click-stream-windows": {
+    "links": [
+      "sd-metrics-storage-alerting",
+      "sd-ad-click-exactly-once",
+      "sd-capacity-estimation",
+      "db-type-columnar-olap",
+      "sd-metrics-collection",
+      "kafka-basics",
+      "clock-skew",
+      "count-min-sketch",
+      "message-delivery-semantics"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "sd-object-storage-architecture",
+      "sd-mq-storage-partitions",
+      "batch-processing"
+    ]
+  },
+  "sd-metrics-storage-alerting": {
+    "links": [
+      "sd-metrics-collection",
+      "sd-ad-click-stream-windows",
+      "db-type-time-series",
+      "alerting",
+      "metrics-types",
+      "prometheus-basics",
+      "message-delivery-semantics",
+      "grafana-dashboards"
+    ],
+    "mentions": [
+      "cron-jobs",
+      "db-type-wide-column",
+      "db-type-key-value",
+      "sd-object-storage-architecture",
+      "db-type-relational",
+      "kafka-basics",
+      "webhooks"
+    ]
+  },
+  "sd-metrics-collection": {
+    "links": [
+      "sd-mq-replication",
+      "sd-metrics-storage-alerting",
+      "sd-ad-click-stream-windows",
+      "metrics-types",
+      "monitoring-basics",
+      "prometheus-basics",
+      "structured-logging",
+      "distributed-tracing",
+      "db-type-time-series",
+      "sd-capacity-estimation",
+      "service-discovery",
+      "consistent-hashing",
+      "load-balancer-basics",
+      "k8s-daemonset",
+      "udp-and-quic",
+      "kafka-basics",
+      "sd-sharding-intro"
+    ],
+    "mentions": [
+      "sd-queue-logging-automation",
+      "db-type-key-value",
+      "sd-start-single-server",
+      "autoscaling",
+      "db-type-relational",
+      "sd-mq-storage-partitions",
+      "webhooks"
+    ]
+  },
   "sd-object-storage-versioning-multipart": {
     "links": [
       "sd-object-storage-architecture",
@@ -59,6 +145,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-mq-storage-partitions",
       "sd-mq-consumer-groups",
+      "sd-metrics-collection",
       "kafka-basics",
       "sd-kv-store-partition-replication",
       "raft-consensus",
@@ -77,6 +164,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-mq-storage-partitions",
       "sd-mq-replication",
+      "sd-metrics-collection",
       "kafka-basics",
       "backpressure",
       "long-polling",
