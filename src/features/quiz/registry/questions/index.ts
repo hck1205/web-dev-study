@@ -134,8 +134,11 @@ import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
 import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
+import { JS_ARRAY_MUTATION } from "./js-array-mutation";
+import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
 import { JS_ASYNC_AWAIT } from "./js-async-await";
 import { JS_CALLBACK_HELL } from "./js-callback-hell";
+import { JS_DESTRUCTURING } from "./js-destructuring";
 import { JS_EQUALITY_COERCION } from "./js-equality-coercion";
 import { JS_HOISTING_TDZ } from "./js-hoisting-tdz";
 import { JS_MEMORY_LEAK } from "./js-memory-leak";
@@ -143,6 +146,7 @@ import { JS_PRIMITIVE_VS_REFERENCE } from "./js-primitive-vs-reference";
 import { JS_PROMISE_COMBINATORS } from "./js-promise-combinators";
 import { JS_PROMISES } from "./js-promises";
 import { JS_SCOPE_LEXICAL } from "./js-scope-lexical";
+import { JS_SPREAD_REST } from "./js-spread-rest";
 import { JS_TRUTHY_FALSY_TYPEOF } from "./js-truthy-falsy-typeof";
 import { JS_VAR_LET_CONST } from "./js-var-let-const";
 import { JSON_CRUD_HTTP } from "./json-crud-http";
@@ -523,8 +527,11 @@ export const QUESTION_SETS = [
   IPTABLES_NAT,
   IPV6_BASICS,
   ISLANDS_RESUMABILITY,
+  JS_ARRAY_MUTATION,
+  JS_ARRAY_TRANSFORM,
   JS_ASYNC_AWAIT,
   JS_CALLBACK_HELL,
+  JS_DESTRUCTURING,
   JS_EQUALITY_COERCION,
   JS_HOISTING_TDZ,
   JS_MEMORY_LEAK,
@@ -532,6 +539,7 @@ export const QUESTION_SETS = [
   JS_PROMISE_COMBINATORS,
   JS_PROMISES,
   JS_SCOPE_LEXICAL,
+  JS_SPREAD_REST,
   JS_TRUTHY_FALSY_TYPEOF,
   JS_VAR_LET_CONST,
   JSON_CRUD_HTTP,

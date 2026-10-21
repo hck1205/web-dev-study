@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "js-spread-rest",
+    title: "전개와 나머지 문법: 같은 점 세 개, 반대 방향",
+    summary: "Math.max(...prices)가 13만 개에서 스택을 넘긴 사고에서 출발해 전개와 나머지가 각각 무엇을 하는지 따라간다. 이터레이터를 도는 배열 전개와 자기 속성만 베끼는 객체 전개, 뒤에 쓴 것이 이기는 규칙과 undefined 덮어쓰기, Object.assign과의 차이, reduce 안 전개의 n² 비용, React props 펼치기와 TypeScript 튜플까지 다룬다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "TypeScript", "Performance"],
+    date: "2026-10-22",
+    keywords: ["전개 문법", "나머지 매개변수", "나머지 패턴"],
+  },
+  {
+    slug: "js-destructuring",
+    title: "구조 분해: 패턴 한 줄이 하는 일",
+    summary: "옵션을 안 넘기거나 null을 넘기면 터지는 함수에서 출발해 구조 분해가 값을 꺼내는 순서를 따라간다. undefined에만 반응하는 기본값, 이터레이터를 도는 배열 패턴, 중첩 패턴과 ASI 함정, React의 useState 튜플과 props 기본값 {}가 만드는 무한 effect, TypeScript 콜론 혼동까지 다룬다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "TypeScript"],
+    date: "2026-10-22",
+    keywords: ["구조 분해", "destructuring", "IteratorClose"],
+  },
+  {
+    slug: "js-array-mutation",
+    title: "배열을 고치는 메서드와 사본을 주는 메서드: sort 함정과 toSorted",
+    summary: "push 후 setItems를 불렀는데 화면이 안 바뀌는 버그에서 출발해, 원본을 고치는 아홉 개 메서드와 sort의 문자열 비교·비교 함수 약속·안정 정렬을 따라간다. ES2023의 toSorted, toSpliced, with, React가 참조만 비교하는 이유, shift 큐의 비용, readonly로 실수를 막는 법까지 다룬다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "TypeScript", "Performance"],
+    date: "2026-10-22",
+    keywords: ["toSorted", "toSpliced", "안정 정렬"],
+  },
+  {
+    slug: "js-array-transform",
+    title: "배열을 바꾸고 고르고 접는 메서드: map, filter, reduce, flatMap",
+    summary: "빈 장바구니에서 터진 reduce에서 출발해 map, filter, reduce, find, some, every, flat, flatMap이 각각 무엇을 돌려주는지 따라간다. 시작값 없는 reduce, map(parseInt), 빈 배열의 every, 희소 배열, async 콜백, 체인의 비용과 이터레이터 헬퍼, React 목록 렌더링까지 다룬다.",
+    topic: "programming/frontend/javascript/objects",
+    tags: ["JavaScript", "React", "Performance"],
+    date: "2026-10-22",
+    keywords: ["flatMap", "Object.groupBy", "희소 배열", "reduce 시작값"],
+  },
+  {
     slug: "js-promise-combinators",
     title: "Promise.all, allSettled, race, any 고르기",
     summary: "위젯 하나의 실패가 대시보드 전체를 죽인 상황에서 출발해 네 조합 함수가 각각 어떤 질문에 답하는지 비교한다. race 타임아웃이 아무것도 멈추지 않는 이유, AggregateError, 빈 배열의 함정, 동시 요청이 너무 많을 때와 Promise.all 직접 구현까지 다룬다.",

@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 386편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 390편 · 토픽 77개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -1459,7 +1459,7 @@
 - 소제목: 돌 줄 아는 것과 도는 것을 나눈다 / for await가 실제로 부르는 것 / 제너레이터가 위치를 대신 들고 있다 / 필요한 만큼만 꺼내는 게으른 반복 / 도는 중에 컬렉션이 바뀌면 / 한 번 돌면 끝나는 반복자 / 안에서 도는 반복자, 밖에서 당기는 반복자 / 반복자를 꺼내지 않아도 될 때 / 게으른 take 직접 만들기 / 면접에서 나올 만한 질문
 - 직접 링크 →: pattern-factory-method
 - 키워드 백링크 →: kafka-basics
-- 이 글로 오는 글 ←: design-patterns-overview, pattern-composite, pattern-factory-method, pattern-observer, pattern-visitor
+- 이 글로 오는 글 ←: design-patterns-overview, js-array-transform, js-destructuring, pattern-composite, pattern-factory-method, pattern-observer, pattern-visitor
 
 #### `pattern-mediator` — 중재자 패턴: 서로 부르던 부품들 사이에 규칙 하나를 두기
 
@@ -1666,7 +1666,7 @@
 - 길이: 502줄
 - 소제목: 같은 이름의 네트워크 프록시와 무엇이 같나 / 진짜와 똑같은 얼굴을 한 대리인 / 처음 부를 때 만든다 / 들여보낼지, 저장해 둔 걸 줄지 / 멀리 있는 객체를 가까이 있는 것처럼 / 언어가 내장한 대리인, Proxy 객체 / Vue 3의 reactive는 대리인이 장부를 적는 것이다 / ORM이 건네준 가짜 엔티티 / 대리인을 건너뛰는 호출 / 데코레이터와 같은 코드, 다른 의도 / 직접 만드는 캐싱 프록시 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, pattern-decorator, code-splitting, caching-strategies, timeouts, retries, circuit-breaker, sql-query-rewrite, pattern-adapter, pattern-facade
-- 키워드 백링크 →: json-crud-http, resilience-patterns, http-versions, loading-patterns, grpc, design-patterns-overview, dns
+- 키워드 백링크 →: json-crud-http, resilience-patterns, http-versions, js-destructuring, loading-patterns, grpc, design-patterns-overview, dns
 - 이 글로 오는 글 ←: core-web-vitals, design-patterns-overview, frontend-browser-cache, http-caching-cdn, loading-patterns, modular-monolith, mvc-pattern, n-plus-one-queries, pattern-adapter, pattern-decorator, react-server-components, sql-query-rewrite
 
 ### Programming › Frontend (`programming/frontend`)
@@ -1749,7 +1749,7 @@
 - 길이: 466줄
 - 소제목: async 함수는 부르는 즉시 Promise를 준다 / forEach는 반환값을 버린다 / 하나씩 기다릴까, 한꺼번에 보낼까 / 미리 시작해 둔 Promise가 먼저 실패하면 / return과 return await는 try 안에서 다르다 / 최상위 await는 모듈 로딩을 멈춘다 / React effect에는 async를 바로 넘기지 않는다 / 직접 해 보기: 동시성을 제한하면 몇 ms 걸리나 / 처음 코드로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-promises, js-callback-hell, js-promise-combinators, event-loop, client-data-cache
-- 키워드 백링크 →: browser-fetch, js-truthy-falsy-typeof
+- 키워드 백링크 →: browser-fetch, js-truthy-falsy-typeof, js-destructuring
 - 이 글로 오는 글 ←: js-callback-hell, js-promise-combinators, js-promises
 
 #### `js-callback-hell` — 콜백 지옥: 들여쓰기보다 무서운 것
@@ -1771,8 +1771,8 @@
 - 길이: 449줄
 - 소제목: 네 함수가 답하는 질문 / 하나가 실패하면 all은 바로 포기한다 / 부분 실패를 받아들이는 allSettled / race로 건 타임아웃은 아무것도 멈추지 않는다 / any는 첫 성공을 기다린다 / 빈 배열을 넣으면 생기는 일 / 한꺼번에 너무 많이 넣을 때 / Promise.all을 직접 만들어 보면 / 대시보드는 결국 어떻게 고쳤나 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-callback-hell, js-promises, js-async-await, idempotency-key, client-data-cache, timeouts
-- 키워드 백링크 →: browser-fetch, streaming-ssr-suspense, rendering-strategies, event-loop
-- 이 글로 오는 글 ←: js-async-await, js-callback-hell, js-promises
+- 키워드 백링크 →: browser-fetch, streaming-ssr-suspense, rendering-strategies, event-loop, js-destructuring
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-callback-hell, js-promises
 
 #### `js-promises` — Promise: 상태, then 체인, 에러 전파
 
@@ -1796,7 +1796,7 @@
 - 소제목: 자바스크립트에는 같음이 네 종류 있다 / 느슨한 비교가 값을 바꾸는 순서 / 객체가 원시값으로 바뀌는 길 / 더하기만 다르게 행동한다 / 크다 작다도 타입을 바꾼다 / 값이 경계를 넘을 때마다 문자열이 된다 / NaN과 -0, 엄격한 비교의 구멍 / 느슨한 비교를 써도 되는 곳은 한 군데 / 비교 하나에 담긴 결정 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-primitive-vs-reference, js-truthy-falsy-typeof, react-rerender
 - 키워드 백링크 →: sql-injection
-- 이 글로 오는 글 ←: js-primitive-vs-reference, js-truthy-falsy-typeof
+- 이 글로 오는 글 ←: js-array-transform, js-primitive-vs-reference, js-truthy-falsy-typeof
 
 #### `js-hoisting-tdz` — 호이스팅과 TDZ: 선언 전에 이름을 쓰면 생기는 일
 
@@ -1816,8 +1816,8 @@
 - 키워드: 원시값, 참조값, call by sharing, 공유 전달
 - 길이: 473줄
 - 소제목: 원시값 일곱 가지, 나머지는 전부 객체 / 변수 칸에 들어 있는 것 / 대입은 칸의 내용을 그대로 복사한다 / 함수에 넘길 때도 같은 규칙이다 / const는 객체를 얼리지 않는다 / 내용이 같아도 다른 객체다 / React가 화면을 바꾸지 않을 때 / 현장에서 이 규칙을 만나는 증상 / 복사할지 공유할지 고르는 기준 / 칸에 든 것만 복사된다 / 면접에서 나올 만한 질문
-- 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-var-let-const, react-rerender
-- 이 글로 오는 글 ←: js-equality-coercion, js-truthy-falsy-typeof, js-var-let-const, react-rerender
+- 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-var-let-const, react-rerender, js-array-mutation
+- 이 글로 오는 글 ←: js-array-mutation, js-destructuring, js-equality-coercion, js-truthy-falsy-typeof, js-var-let-const, react-rerender
 
 #### `js-scope-lexical` — 스코프와 렉시컬 스코프: 이름은 어디서 찾나
 
@@ -1837,8 +1837,8 @@
 - 길이: 414줄
 - 소제목: 거짓으로 취급되는 값은 여덟 개뿐이다 / if 하나에 숨은 버그들 / React에서 0이 화면에 찍힌다 / typeof가 돌려주는 여덟 가지 / 종류를 정확히 가려내는 조합 / null과 undefined는 어디서 오나 / NaN은 조용히 퍼진다 / 검사 하나가 어디까지 거르는지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-primitive-vs-reference, js-equality-coercion, js-hoisting-tdz
-- 키워드 백링크 →: json-crud-http
-- 이 글로 오는 글 ←: js-async-await, js-equality-coercion, js-primitive-vs-reference, yaml-for-k8s
+- 키워드 백링크 →: json-crud-http, js-destructuring
+- 이 글로 오는 글 ←: js-array-transform, js-async-await, js-equality-coercion, js-primitive-vs-reference, yaml-for-k8s
 
 #### `js-var-let-const` — var, let, const: 변수 상자는 언제 새로 생기나
 
@@ -1849,6 +1849,50 @@
 - 소제목: var는 함수 하나에 상자 하나다 / let은 반복마다 새 i를 만든다 / 같은 이름을 두 번 선언하면 / 전역에서 var는 window의 속성이 된다 / const가 막는 것은 재할당뿐이다 / 무엇을 기본으로 쓸까 / TypeScript에서는 타입까지 달라진다 / React 컴포넌트 안의 const / 오래된 var를 let으로 바꿀 때 / 다시 세 번의 3으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-scope-lexical, js-hoisting-tdz, js-primitive-vs-reference, react-rerender
 - 이 글로 오는 글 ←: js-hoisting-tdz, js-primitive-vs-reference, js-scope-lexical
+
+### Programming › Frontend › JavaScript › Objects & Arrays (`programming/frontend/javascript/objects`)
+
+#### `js-array-mutation` — 배열을 고치는 메서드와 사본을 주는 메서드: sort 함정과 toSorted
+
+- 요약: push 후 setItems를 불렀는데 화면이 안 바뀌는 버그에서 출발해, 원본을 고치는 아홉 개 메서드와 sort의 문자열 비교·비교 함수 약속·안정 정렬을 따라간다. ES2023의 toSorted, toSpliced, with, React가 참조만 비교하는 이유, shift 큐의 비용, readonly로 실수를 막는 법까지 다룬다.
+- 태그: JavaScript, React, TypeScript, Performance
+- 키워드: toSorted, toSpliced, 안정 정렬
+- 길이: 488줄
+- 소제목: 원본을 고치는 메서드는 아홉 개다 / sort가 돌려준 배열은 원본이다 / 숫자를 정렬했더니 100이 25보다 앞선다 / 사본을 돌려주는 ES2023 메서드 / React는 같은 배열이면 다시 그리지 않는다 / 렌더링 중에 sort를 부르면 / 큐로 쓴 배열이 느려지는 순간 / 원본을 고치는 실수를 도구에 맡기기 / 할 일 리듀서를 원본을 고치지 않고 만들기 / 고치는 쪽인지 먼저 본다 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-array-transform, js-primitive-vs-reference, js-spread-rest
+- 이 글로 오는 글 ←: js-array-transform, js-primitive-vs-reference, js-spread-rest
+
+#### `js-array-transform` — 배열을 바꾸고 고르고 접는 메서드: map, filter, reduce, flatMap
+
+- 요약: 빈 장바구니에서 터진 reduce에서 출발해 map, filter, reduce, find, some, every, flat, flatMap이 각각 무엇을 돌려주는지 따라간다. 시작값 없는 reduce, map(parseInt), 빈 배열의 every, 희소 배열, async 콜백, 체인의 비용과 이터레이터 헬퍼, React 목록 렌더링까지 다룬다.
+- 태그: JavaScript, React, Performance
+- 키워드: flatMap, Object.groupBy, 희소 배열, reduce 시작값
+- 길이: 595줄
+- 소제목: for 문이 하던 일에 이름을 붙였다 / 콜백은 인자를 세 개 받는다 / 누산기를 따라가 본다 / 답이 나오면 멈추는 메서드 / 중첩을 펴는 flat, 펴면서 바꾸는 flatMap / 빈 칸이 있는 배열 / 콜백 안의 await는 기다려 주지 않는다 / 체인이 길어지면 배열도 늘어난다 / React 컴포넌트에서 이 메서드들이 하는 일 / flat을 직접 만들어 보기 / 다시 장바구니로 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-array-mutation, js-equality-coercion, js-promise-combinators, react-rerender, js-spread-rest
+- 키워드 백링크 →: pattern-iterator, js-truthy-falsy-typeof
+- 이 글로 오는 글 ←: js-array-mutation
+
+#### `js-destructuring` — 구조 분해: 패턴 한 줄이 하는 일
+
+- 요약: 옵션을 안 넘기거나 null을 넘기면 터지는 함수에서 출발해 구조 분해가 값을 꺼내는 순서를 따라간다. undefined에만 반응하는 기본값, 이터레이터를 도는 배열 패턴, 중첩 패턴과 ASI 함정, React의 useState 튜플과 props 기본값 {}가 만드는 무한 effect, TypeScript 콜론 혼동까지 다룬다.
+- 태그: JavaScript, React, TypeScript
+- 키워드: 구조 분해, destructuring, IteratorClose
+- 길이: 542줄
+- 소제목: 꺼내 담는 일을 한 줄로 / 기본값은 undefined일 때만 들어간다 / 배열 패턴은 이터레이터를 돈다 / 매개변수 자리에서 바로 꺼내기 / 이미 있는 변수에 담을 때 생기는 두 가지 함정 / React 코드 곳곳의 구조 분해 / 반복문과 콜백에서 쓰는 패턴 / TypeScript에서 콜론의 뜻이 겹친다 / 옵션 정규화 함수 만들기 / 패턴이 하는 일을 순서대로 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-spread-rest, react-rerender
+- 키워드 백링크 →: client-data-cache, pattern-iterator, js-primitive-vs-reference
+- 이 글로 오는 글 ←: js-async-await, js-promise-combinators, js-spread-rest, js-truthy-falsy-typeof, pattern-proxy
+
+#### `js-spread-rest` — 전개와 나머지 문법: 같은 점 세 개, 반대 방향
+
+- 요약: Math.max(...prices)가 13만 개에서 스택을 넘긴 사고에서 출발해 전개와 나머지가 각각 무엇을 하는지 따라간다. 이터레이터를 도는 배열 전개와 자기 속성만 베끼는 객체 전개, 뒤에 쓴 것이 이기는 규칙과 undefined 덮어쓰기, Object.assign과의 차이, reduce 안 전개의 n² 비용, React props 펼치기와 TypeScript 튜플까지 다룬다.
+- 태그: JavaScript, React, TypeScript, Performance
+- 키워드: 전개 문법, 나머지 매개변수, 나머지 패턴
+- 길이: 524줄
+- 소제목: 같은 점 세 개가 반대 방향으로 일한다 / 배열 전개는 이터레이터에서 꺼낸다 / 객체 전개는 자기 속성만 베낀다 / 뒤에 쓴 것이 이긴다 / Object.assign과 무엇이 다른가 / 나머지 매개변수는 진짜 배열이다 / 빼고 나머지를 넘긴다 / 펼친 만큼 값을 치른다 / React 컴포넌트에서 props를 펼칠 때 / TypeScript는 길이를 모르는 전개를 막는다 / undefined는 건너뛰는 병합 함수 / 세 점 앞에서 물어볼 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: js-destructuring, js-array-mutation
+- 이 글로 오는 글 ←: js-array-mutation, js-array-transform, js-destructuring
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -1861,7 +1905,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, loading-patterns
-- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-async-await, js-memory-leak, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
+- 이 글로 오는 글 ←: browser-fetch, exponential-backoff-jitter, frontend-browser-cache, html-form-http, http-methods, http-status-codes, js-async-await, js-destructuring, js-memory-leak, js-promise-combinators, js-promises, json-crud-http, layered-architecture, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, pattern-state, pattern-strategy, react-rerender, rendering-csr-spa, rendering-ssr, resilience-patterns
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -1907,7 +1951,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals, js-primitive-vs-reference
-- 이 글로 오는 글 ←: client-data-cache, js-equality-coercion, js-primitive-vs-reference, js-scope-lexical, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
+- 이 글로 오는 글 ←: client-data-cache, js-array-transform, js-destructuring, js-equality-coercion, js-primitive-vs-reference, js-scope-lexical, js-var-let-const, local-k8s-kind-minikube, pattern-bridge, pattern-decorator, pattern-observer, rendering-strategies
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -4402,6 +4446,7 @@
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
 - 교착 상태 → `db-locking-deadlock`
 - 구성 드리프트 → `iac-basics`
+- 구조 분해 → `js-destructuring`
 - 구조화 로그 → `structured-logging`
 - 굴러가는 창 → `sli-slo`
 - 굴리는 체크섬 → `rsync-algorithm`
@@ -4416,6 +4461,8 @@
 - 깨는 변경 → `api-versioning`
 - 꼬리 샘플링 → `distributed-tracing`
 - 꼬리 지연 → `tail-latency`
+- 나머지 매개변수 → `js-spread-rest`
+- 나머지 패턴 → `js-spread-rest`
 - 낙관적 업데이트 → `client-data-cache`
 - 낙관적 잠금 → `db-locking-deadlock`
 - 내부 CA → `encryption-in-transit`
@@ -4653,6 +4700,7 @@
 - 아웃라이어 감지 → `circuit-breaker`
 - 아일랜드 아키텍처 → `islands-resumability`
 - 안전한 메서드 → `http-methods`
+- 안정 정렬 → `js-array-mutation`
 - 안정화 창 → `k8s-hpa`
 - 안티 엔트로피 → `eventual-consistency`
 - 알림 피로 → `alerting`
@@ -4750,6 +4798,7 @@
 - 재할당 → `js-var-let-const`
 - 재해 복구 → `disaster-recovery`
 - 저장 데이터 암호화 → `encryption-at-rest`
+- 전개 문법 → `js-spread-rest`
 - 전략 패턴 → `pattern-strategy`
 - 전략적 병합 패치 → `kustomize-basics`
 - 전방향 안전성 → `https-tls`
@@ -4926,6 +4975,7 @@
 - 황금 신호 → `monitoring-basics`
 - 흐름 로그 → `network-flow-logs`
 - 흐름 제어 → `tcp-reliability-congestion`
+- 희소 배열 → `js-array-transform`
 - 히스토그램 버킷 → `metrics-types`
 - 힌트 핸드오프 → `eventual-consistency`
 - 힙 스냅샷 → `js-memory-leak`
@@ -5114,6 +5164,7 @@
 - DENSE_RANK → `sqld-window-functions`
 - dependency-cruiser → `modular-monolith`
 - depends_on → `docker-compose`
+- destructuring → `js-destructuring`
 - detached DOM → `js-memory-leak`
 - detached HEAD → `git-branch-merge`
 - DeviceClass → `k8s-gpu-dra`
@@ -5191,6 +5242,7 @@
 - finalizer → `k8s-api-objects`
 - first-parent → `git-branch-merge`
 - Flannel → `k8s-cni-pod-network`
+- flatMap → `js-array-transform`
 - Flux CD → `gitops-argocd-vs-flux`
 - Flyway → `db-migration-tools`
 - flyway_schema_history → `db-migration-tools`
@@ -5329,6 +5381,7 @@
 - IsLooselyEqual → `js-equality-coercion`
 - ISR → `rendering-strategies`
 - Iterator 패턴 → `pattern-iterator`
+- IteratorClose → `js-destructuring`
 - JOB_COMPLETION_INDEX → `k8s-job-cronjob`
 - JobSet → `k8s-batch-kueue`
 - journalctl → `linux-systemd-systemctl`
@@ -5484,6 +5537,7 @@
 - NVL → `sqld-null-functions`
 - OAuth → `oauth`
 - Object Lock → `backup-strategy`
+- Object.groupBy → `js-array-transform`
 - observedGeneration → `k8s-api-objects`
 - Observer 패턴 → `pattern-observer`
 - OCI 레지스트리 → `helm-dependencies-oci-gitops`
@@ -5610,6 +5664,7 @@
 - Redis Sentinel → `redis-replication-sentinel`
 - Redlock → `distributed-lock`
 - redrive → `dead-letter-queue`
+- reduce 시작값 → `js-array-transform`
 - ReferenceGrant → `gateway`
 - Reflect → `pattern-proxy`
 - reflog → `git-stash-reflog`
@@ -5775,6 +5830,8 @@
 - TooManyRequestsException → `serverless-limits`
 - topologySpreadConstraints → `k8s-pod-scheduling`
 - ToPrimitive → `js-equality-coercion`
+- toSorted → `js-array-mutation`
+- toSpliced → `js-array-mutation`
 - Toxiproxy → `chaos-engineering`
 - TP2 → `operational-transform`
 - traceparent → `distributed-tracing`
@@ -5869,16 +5926,16 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `k8s-pod-basics` ↔ `docker-container-basics` (32%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
-- `sqld-null-functions` ↔ `sqld-single-row-functions` (28%: 글에서, 사원, 테이블, 함수, 시험, 포인트, oracle)
+- `k8s-pod-basics` ↔ `docker-container-basics` (29%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
+- `server-sent-events` ↔ `long-polling` (25%: 다음, 붙잡는, 장애를, 만났을, 가장, 깊게, 재연결)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (25%: 예제, 느려지는, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (25%: 연산자, 느려지는, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (25%: 붙이는, 행을, 시험, 포인트)
+- `sqld-null-functions` ↔ `sqld-single-row-functions` (25%: 글에서, 사원, 테이블, 시험, 포인트, oracle)
 - `db-index-pitfalls` ↔ `db-index-design` (24%: 100만, 인덱스, 인덱스는, 인덱스를, index)
 - `db-index-pitfalls` ↔ `db-index` (24%: 100만, 인덱스, 인덱스가, 인덱스를, index)
 - `csrf` ↔ `cookie-session-login` (23%: 붙는다는, 것의, 대가, 붙는, 정리, cookie, csrf)
-- `server-sent-events` ↔ `long-polling` (22%: 붙잡는, 장애를, 만났을, 가장, 깊게, 재연결)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (22%: 테이블, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (22%: 테이블, 시험, 포인트, oracle)
 - `redis-cluster` ↔ `db-sharding` (21%: 키를, 데이터를, 나누는, 해시)
@@ -5894,26 +5951,30 @@
 - `sqld-set-operators` ↔ `sqld-top-n-hierarchical-pivot` (19%: 행을, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-group-by-having` (19%: 행을, 시험, 포인트)
 - `postgres-operations` ↔ `redis-persistence-ha` (19%: 백업과, 복원, 백업은, 복원해, 봐야, 백업이다)
-- `sqld-null-functions` ↔ `sqld-top-n-hierarchical-pivot` (19%: 함수, 따라, 행을, 시험, 포인트)
-- `sqld-null-functions` ↔ `sqld-group-by-having` (19%: 함수, 행을, 시험, 포인트, oracle)
 - `k8s-statefulset` ↔ `k8s-pv-pvc` (18%: pod마다, 디스크는, 사라진다, 노드가, statefulset은, 디스크, 디스크를)
-- `n-plus-one-queries` ↔ `sql-query-tuning` (18%: 쿼리가, 쿼리를, 찾기, 쿼리)
-- `multi-region` ↔ `git-merge-conflict` (18%: 않게, 충돌을, 충돌)
+- `n-plus-one-queries` ↔ `sql-query-tuning` (17%: 쿼리가, 쿼리를, 찾기, 쿼리)
 - `velero-backup` ↔ `k8s-etcd-backup` (17%: etcd, 백업, 매일, 이름으로, sre)
 - `nextjs-static-dynamic-rendering` ↔ `rendering-strategies` (17%: 밖에서, 확인하기, 요청마다, next.js, rendering, ssr)
 - `network-config-cicd` ↔ `terraform-basics` (17%: plan은, 코드로, 막히는, terraform, iac, plan, apply)
 - `k8s-certifications` ↔ `sqld-type-conversion` (17%: 시험, 형식, 형식과)
+- `k8s-node-autoscaling-karpenter` ↔ `k8s-pod-scheduling` (17%: pending, 노드를, pod를, 노드가, 어느)
+- `multi-region` ↔ `git-merge-conflict` (17%: 않게, 충돌을, 충돌)
 - `ansible-network-automation` ↔ `git-ignore-config` (17%: diff, 파일은, 전체를)
 - `sqld-correlated-subquery` ↔ `sqld-type-conversion` (17%: 예제, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-rollup-cube-grouping-sets` (17%: 적는다, 시험, 포인트)
 - `sqld-type-conversion` ↔ `sqld-group-by-having` (17%: 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-joins` (17%: 시험, 포인트, oracle)
 - `db-type-key-value` ↔ `db-type-graph` (17%: 맞는, 곳과, 아닌, 관계형, nosql)
+- `semantic-versioning` ↔ `api-versioning` (16%: 약속, 버전, 배포, 버전은, 깨지는, 때문에)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `js-spread-rest` ↔ `js-destructuring`
+- `js-spread-rest` ↔ `js-array-mutation`
+- `js-array-mutation` ↔ `js-array-transform`
+- `js-array-mutation` ↔ `js-primitive-vs-reference`
 - `js-promise-combinators` ↔ `js-async-await`
 - `js-promise-combinators` ↔ `js-promises`
 - `js-promise-combinators` ↔ `js-callback-hell`

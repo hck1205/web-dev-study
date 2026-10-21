@@ -1,0 +1,523 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-spread-rest");
+
+통계 화면에서 가격 배열의 최댓값을 구하는 코드가 있었다.
+
+```js
+const highest = Math.max(...prices);
+```
+
+몇 달 동안 문제가 없다가 데이터가 쌓인 어느 날 이 줄에서 에러가 났다.
+
+```text
+RangeError: Maximum call stack size exceeded
+```
+
+재귀 함수도 없는데 콜 스택이 넘쳤다. 원소 수를 바꿔 가며 Node 22에서 돌려 보니 경계가 보였다.
+
+```js
+for (const n of [100_000, 120_000, 125_000, 130_000, 150_000, 200_000, 1_000_000]) {
+  const prices = Array.from({ length: n }, (_, i) => i);
+  try {
+    console.log(n, "ok", Math.max(...prices));
+  } catch (e) {
+    console.log(n, `${e.name}: ${e.message}`);
+  }
+}
+```
+
+```text
+100000 ok 99999
+120000 ok 119999
+125000 ok 124999
+130000 RangeError: Maximum call stack size exceeded
+150000 RangeError: Maximum call stack size exceeded
+200000 RangeError: Maximum call stack size exceeded
+1000000 RangeError: Maximum call stack size exceeded
+```
+
+12만 5천 개는 되고 13만 개부터 터진다. `...`는 짧은 문법이지만 하는 일은 공짜가 아니다. 이 글은 `...`가 전개(spread)로 쓰일 때와 나머지(rest)로 쓰일 때 각각 무엇을 하는지, 어디서 비용과 함정이 생기는지 따라간다.
+
+패턴으로 값을 꺼내는 문법 전반은 [구조 분해](/posts/js-destructuring)에서, 전개로 만든 사본이 왜 얕은지는 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 다룬다.
+
+## 같은 점 세 개가 반대 방향으로 일한다
+
+`...`는 놓인 자리에 따라 정반대 일을 한다. 값이 들어갈 자리(함수 호출의 인자, 배열 리터럴, 객체 리터럴)에 있으면 묶음을 펼치는 전개다. 이름이 들어갈 자리(함수 매개변수, 구조 분해 패턴)에 있으면 남은 것을 모으는 나머지다.
+
+```js
+const nums = [1, 2, 3];
+Math.max(...nums); // 전개: 인자 자리에 펼친다
+const copy = [...nums, 4]; // 전개: 배열 리터럴 안에 펼친다
+const merged = { ...a, ...b }; // 전개: 객체 리터럴 안에 펼친다
+
+function log(level, ...messages) {} // 나머지: 남은 인자를 배열로 모은다
+const [head, ...tail] = nums; // 나머지: 남은 원소를 배열로 모은다
+const { id, ...others } = user; // 나머지: 남은 속성을 객체로 모은다
+```
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="값 자리의 ...는 펼치고, 이름 자리의 ...는 모은다."
+  nodes={[
+    { id: "bundle", label: "묶음", sub: "[1, 2, 3]", x: 200, y: 40, w: 120 },
+    { id: "call", label: "f(...arr)", sub: "인자 3개", x: 70, y: 135, w: 110 },
+    { id: "arr", label: "[...arr, 4]", sub: "새 배열", x: 200, y: 135, w: 110 },
+    { id: "obj", label: "{ ...obj }", sub: "새 객체", x: 330, y: 135, w: 110 },
+    { id: "param", label: "(...args)", sub: "매개변수", x: 110, y: 220, w: 120 },
+    { id: "pattern", label: "[a, ...rest]", sub: "구조 분해", x: 290, y: 220, w: 130 },
+  ]}
+  edges={[
+    { from: "bundle", to: "call", label: "전개" },
+    { from: "bundle", to: "arr" },
+    { from: "bundle", to: "obj" },
+    { from: "param", to: "bundle", label: "나머지", dashed: true },
+    { from: "pattern", to: "bundle", dashed: true },
+  ]}
+/>
+
+배열 전개와 나머지 매개변수는 ES2015, 객체 전개와 객체 나머지는 ES2018에 들어왔다. 같은 점 세 개라도 배열 쪽과 객체 쪽의 동작 원리가 다르다. 그 차이에서 이 글의 함정 대부분이 나온다.
+
+## 배열 전개는 이터레이터에서 꺼낸다
+
+배열 리터럴이나 함수 호출에서의 전개는 오른쪽 값의 이터레이터를 끝까지 돌며 값을 하나씩 꺼낸다. 배열 구조 분해가 이터레이터를 도는 것과 같은 프로토콜이다. 그래서 배열이 아니어도 이터러블이면 펼칠 수 있고, 이터러블이 아니면 배열처럼 생겨도 못 펼친다.
+
+```js
+console.log([..."한글"]);
+console.log([...new Set([1, 1, 2])]);
+console.log([...new Map([["a", 1]])]);
+console.log([...{ a: 1 }]); // TypeError
+console.log([...null]); // TypeError
+```
+
+```text
+[ '한', '글' ]
+[ 1, 2 ]
+[ [ 'a', 1 ] ]
+TypeError: {(intermediate value)} is not iterable
+TypeError: null is not iterable
+```
+
+(에러 두 줄은 `try...catch`로 감싸 메시지만 찍은 결과다.) 아래 그림에서 다음을 누르면 `[...new Set([1, 1, 2]), ..."ab"]`가 결과 배열을 채우는 순서를 본다.
+
+<AlgoTrace
+  caption="전개할 때마다 그 값의 이터레이터를 done까지 돈다."
+  memoryLabel="결과 배열"
+  cells={["Set {1, 2}", "\"ab\""]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "Set의 이터레이터에서 next(). 중복은 Set이 이미 지웠으니 1이 나온다." },
+    { pointer: 0, memory: ["1", "2"], caption: "다음 next()가 2를 준다. 그다음은 done이라 Set은 끝이다." },
+    { pointer: 1, memory: ["1", "2", "\"a\""], caption: "문자열의 이터레이터는 코드 포인트 단위로 글자를 준다." },
+    { pointer: 1, memory: ["1", "2", "\"a\"", "\"b\""], caption: "\"b\"를 담고 done이 나온다." },
+    { found: [0, 1], memory: ["1", "2", "\"a\"", "\"b\""], caption: "결과는 [1, 2, \"a\", \"b\"]. 원소 수만큼 next()를 부른 셈이다." },
+  ]}
+/>
+
+실무에서 이 성질은 두 군데서 쓸모가 있다. 하나는 중복 제거다. `[...new Set(ids)]`는 순서를 지키며 중복을 지우는 가장 짧은 방법이다. 다른 하나는 배열처럼 생긴 것을 진짜 배열로 바꾸는 일이다. `document.querySelectorAll`이 주는 NodeList는 이터러블이라 `[...nodes].map(...)`이 된다. 반면 `{ length: 2, 0: "a", 1: "b" }` 같은 유사 배열 객체는 이터러블이 아니라 펼칠 수 없다. 그럴 땐 `Array.from`을 쓴다. `Array.from`은 이터러블과 유사 배열을 둘 다 받는다.
+
+문자열 전개는 코드 포인트 단위로 쪼갠다. `"😀".length`는 2(UTF-16 코드 단위 두 개)지만 `[..."😀"].length`는 1이다. 글자 수를 셀 때 `length`보다 전개가 사람의 감각에 가깝다. 다만 국기나 피부색이 붙은 이모지처럼 코드 포인트 여러 개가 한 글자로 보이는 경우는 전개로도 쪼개진다. 그럴 땐 `Intl.Segmenter`를 쓴다.
+
+## 객체 전개는 자기 속성만 베낀다
+
+객체 리터럴 안의 전개는 이터레이터를 쓰지 않는다. 오른쪽 객체의 자기 속성(own property) 중 열거 가능한(enumerable) 것을 하나씩 읽어 새 객체에 정의한다. 문자열 키와 심볼 키 둘 다 포함한다. 이 규칙에서 여러 결과가 나온다.
+
+```js
+console.log({ ...null, ...undefined });
+console.log({ ..."hi" });
+console.log({ ...[1, 2] });
+console.log({ ...123 });
+
+const sym = Symbol("id");
+const proto = { inherited: true };
+const o = Object.create(proto); // proto를 상속하는 객체
+o.own = 1;
+o[sym] = 2;
+Object.defineProperty(o, "hidden", { value: 3, enumerable: false });
+console.log({ ...o });
+```
+
+```text
+{}
+{ '0': 'h', '1': 'i' }
+{ '0': 1, '1': 2 }
+{}
+{ own: 1, [Symbol(id)]: 2 }
+```
+
+배열 전개와 달리 `null`과 `undefined`를 펼쳐도 에러가 나지 않고 그냥 무시된다. 그래서 `{ ...defaults, ...options }`는 `options`가 없어도 안전하다. 문자열과 배열은 인덱스 키를 가진 객체처럼 펼쳐지고, 숫자는 자기 속성이 없어 빈 객체가 된다. 상속받은 `inherited`와 열거할 수 없는 `hidden`은 빠졌다.
+
+상속을 따라가지 않는다는 규칙이 클래스 인스턴스에서 문제를 만든다.
+
+```js
+class User {
+  constructor(name) { this.name = name; }
+  greet() { return `hi ${this.name}`; }
+}
+const u = new User("kim");
+const cu = { ...u };
+console.log(cu, typeof cu.greet, cu instanceof User);
+
+console.log({ ...new Date(0) });
+console.log({ ...new Map([["a", 1]]) });
+
+const withGetter = { get now() { return "computed"; } };
+console.log(Object.getOwnPropertyDescriptor({ ...withGetter }, "now"));
+```
+
+```text
+{ name: 'kim' } undefined false
+{}
+{}
+{
+  value: 'computed',
+  writable: true,
+  enumerable: true,
+  configurable: true
+}
+```
+
+메서드는 프로토타입에 있으니 사라지고, 결과는 `User`도 아닌 평범한 객체다. `Date`와 `Map`은 데이터를 내부 슬롯에 들고 있어서 자기 속성이 없으니 빈 객체가 된다. 상태에 `Date`나 `Map`을 넣고 `{ ...state }`로 복사했다가 날짜가 사라지는 버그가 이렇게 생긴다. getter는 펼치는 순간 한 번 불리고 그 결과값이 일반 속성으로 박힌다. 더 이상 계산되지 않는다. 프로토타입이 무엇인지는 [프로토타입 체인](/posts/js-prototype-chain)에서 본다.
+
+## 뒤에 쓴 것이 이긴다
+
+객체 리터럴 안에서는 같은 키가 여러 번 나오면 나중 값이 앞 값을 덮어쓴다. 전개도 마찬가지다. 그래서 순서가 곧 우선순위다.
+
+```js
+const defaults = { retry: 3, timeoutMs: 5000 };
+console.log({ ...defaults, ...{ retry: 0 } }); // 옵션이 기본값을 덮는다
+console.log({ ...{ retry: 0 }, ...defaults }); // 기본값이 옵션을 덮는다
+console.log({ ...defaults, ...{ retry: undefined } });
+console.log({ a: 1, ...{ b: 2, a: 9 }, c: 3 });
+```
+
+```text
+{ retry: 0, timeoutMs: 5000 }
+{ retry: 3, timeoutMs: 5000 }
+{ retry: undefined, timeoutMs: 5000 }
+{ a: 9, b: 2, c: 3 }
+```
+
+아래 그림에서 다음을 누르면 마지막 줄의 객체가 만들어지는 순서를 본다. 키의 자리는 처음 나온 곳에 고정되고, 값만 바뀐다.
+
+<AlgoTrace
+  caption="{ a: 1, ...{ b: 2, a: 9 }, c: 3 }: 키 자리는 처음 정한 곳, 값은 마지막에 쓴 것."
+  memoryLabel="만들어지는 객체"
+  cells={["a: 1", "...{ b: 2, a: 9 }", "c: 3"]}
+  steps={[
+    { pointer: 0, memory: ["a: 1"], caption: "a를 1로 정의한다. a의 자리가 첫 번째로 정해진다." },
+    { pointer: 1, memory: ["a: 1", "b: 2"], caption: "전개를 시작한다. 펼칠 객체의 키 순서대로 b부터 정의한다." },
+    { pointer: 1, memory: ["a: 9", "b: 2"], caption: "이어서 a: 9. 이미 있는 키라 자리는 그대로 두고 값만 9로 바꾼다." },
+    { pointer: 2, memory: ["a: 9", "b: 2", "c: 3"], caption: "c를 맨 뒤에 정의한다." },
+    { found: [0, 1, 2], memory: ["a: 9", "b: 2", "c: 3"], caption: "결과는 { a: 9, b: 2, c: 3 }. 키 순서는 a, b, c다." },
+  ]}
+/>
+
+세 번째 줄이 실무에서 가장 자주 사고를 낸다. 옵션 객체에 키가 있고 값이 `undefined`면 "값이 없다"가 아니라 "`undefined`로 덮어라"로 동작한다. 폼에서 비어 있는 필드를 `{ retry: form.retry }`처럼 그대로 담아 넘기면 기본값이 `undefined`로 지워진다. 구조 분해의 기본값이 `undefined`일 때만 들어가는 것과 정반대라서 둘을 섞어 쓸 때 헷갈린다. 이 문제를 푸는 함수는 글 뒤쪽에서 직접 만든다.
+
+## Object.assign과 무엇이 다른가
+
+`{ ...a, ...b }`와 `Object.assign({}, a, b)`는 결과가 거의 같다. 차이는 두 가지다. `Object.assign`은 첫 인자인 대상 객체를 고친다. 그리고 대상에 대입(set)을 하니 대상에 setter가 있으면 setter가 불린다. 전개는 항상 새 객체를 만들고 속성을 정의(define)하니 setter가 불리지 않는다.
+
+```js
+const target = { set name(v) { console.log("  setter 호출:", v); this._n = v; } };
+const assigned = Object.assign(target, { name: "kim" });
+console.log("assign 결과 === target:", assigned === target, Object.keys(target));
+
+const spread = { ...target, ...{ name: "lee" } };
+console.log("spread 결과 키:", Object.keys(spread), Object.getOwnPropertyDescriptor(spread, "name"));
+```
+
+```text
+  setter 호출: kim
+assign 결과 === target: true [ 'name', '_n' ]
+spread 결과 키: [ 'name', '_n' ] { value: 'lee', writable: true, enumerable: true, configurable: true }
+```
+
+`Object.assign`은 setter를 통과시켰고 결과가 원본 `target` 자신이다. 전개 결과의 `name`은 setter가 아니라 평범한 값 속성이 됐다. 대상 객체를 일부러 고쳐야 할 때(클래스 생성자에서 `Object.assign(this, props)` 같은)는 `assign`, 새 객체가 필요한 대부분의 경우는 전개를 쓴다. 객체의 속성 설명자(writable, enumerable 같은)는 [객체 메서드](/posts/js-object-methods)에서 자세히 본다.
+
+## 나머지 매개변수는 진짜 배열이다
+
+함수 매개변수의 `...`는 남은 인자를 진짜 배열로 모은다. 예전에는 `arguments` 객체를 썼는데, 이건 배열처럼 생긴 유사 배열이라 `map` 같은 메서드가 없다.
+
+```js
+function sum(label, ...nums) {
+  return `${label}: ${nums.reduce((s, n) => s + n, 0)} (${Array.isArray(nums)})`;
+}
+console.log(sum("합계", 1, 2, 3), sum("빈"));
+
+function old() {
+  return [Array.isArray(arguments), arguments.length, typeof arguments.map];
+}
+console.log(old(1, 2));
+console.log(((a, b, ...rest) => 0).length, ((a, b = 1, c) => 0).length);
+```
+
+```text
+합계: 6 (true) 빈: 0 (true)
+[ false, 2, 'undefined' ]
+2 1
+```
+
+인자가 없으면 나머지 매개변수는 `undefined`가 아니라 빈 배열이다. 그래서 바로 `reduce`를 불러도 안전하다. 화살표 함수에는 `arguments`가 없으니 나머지 매개변수가 유일한 방법이다. 함수의 `length`는 나머지 매개변수와 기본값이 있는 매개변수부터는 세지 않는다. 커링처럼 `fn.length`로 인자 개수를 판단하는 코드에서는 이 점이 결과를 바꾼다([커링과 부분 적용](/posts/js-currying-partial)에서 다룬다). 함수를 선언하는 여러 방식과 `arguments`의 다른 특징은 [함수를 만드는 세 가지 방법](/posts/js-function-forms)에 정리했다.
+
+나머지는 항상 맨 끝에만 올 수 있다. "남은 것"이라는 뜻이니 뒤에 무언가 있으면 말이 안 된다.
+
+```text
+SyntaxError: Rest parameter must be last formal parameter
+SyntaxError: Rest element must be last element
+SyntaxError: Rest element must be last element
+```
+
+차례로 `function f(...a, b)`, `const [...a, b] = [1, 2]`, `const { ...a, b } = {}`를 실행한 결과다. 전개는 이런 제약이 없어서 `[0, ...a, 5, ...b]`처럼 어디든 몇 번이든 쓸 수 있다.
+
+## 빼고 나머지를 넘긴다
+
+객체 나머지 패턴은 "몇 개만 빼고 전부"를 표현할 때 쓴다. 사용자 정보를 응답으로 보내기 전에 비밀번호 해시와 토큰을 빼는 코드가 대표적이다.
+
+```js
+const user = { id: 1, name: "kim", password: "hash", token: "t" };
+const { password, token, ...safe } = user;
+console.log(safe);
+
+const omitKey = "token";
+const { [omitKey]: _, ...noToken } = user; // 뺄 키가 변수에 있을 때
+console.log(noToken);
+```
+
+```text
+{ id: 1, name: 'kim' }
+{ id: 1, name: 'kim', password: 'hash' }
+```
+
+<UrlAnatomy
+  caption="빼고 남기는 구조 분해 한 줄"
+  base="const"
+  separator=" { "
+  joiner=", "
+  params={[
+    { key: "password", display: "password", title: "빼낼 키", description: "이 키는 password라는 변수로 꺼내지고 나머지 객체에서 빠진다. 변수를 쓰지 않으면 린터가 '안 쓰는 변수'로 경고할 수 있다." },
+    { key: "token", display: "token", title: "하나 더 빼기", description: "빼낼 키를 쉼표로 이어 적는다. 계산된 키 [name]: _도 쓸 수 있다." },
+    { key: "rest", display: "...safe }", title: "나머지를 새 객체로", description: "앞에서 꺼내지 않은 자기 속성, 열거 가능한 속성을 새 객체에 모은다. 원본 user는 그대로다.", required: true },
+    { key: "src", display: "= user", title: "원본", description: "safe는 얕은 사본이다. user.address 같은 중첩 객체는 원본과 같은 객체를 가리킨다." },
+  ]}
+/>
+
+이 방식은 "빼는 쪽"을 적는 블랙리스트다. 나중에 누가 `user`에 `resetCode` 같은 민감한 필드를 추가하면 그 필드는 `safe`에 그대로 실려 나간다. 외부로 나가는 응답이라면 `{ id, name }`처럼 내보낼 필드만 고르는 쪽(화이트리스트)이 안전하다. 편한 쪽과 안전한 쪽이 다르다는 걸 알고 고른다.
+
+## 펼친 만큼 값을 치른다
+
+맨 앞의 `Math.max` 문제로 돌아가자. 함수 호출에서 배열을 전개하면 원소 하나하나가 별개의 인자가 된다. 인자는 호출할 때 스택에 올라간다. V8의 기본 스택 크기(Node 22에서 약 1MB)를 인자들이 채워 버리면 재귀가 없어도 스택이 넘친다.
+
+<SequenceDiagram
+  caption="함수 호출의 전개는 원소마다 인자 하나를 스택에 올린다."
+  actors={[
+    { id: "code", label: "호출 코드" },
+    { id: "engine", label: "엔진" },
+    { id: "stack", label: "콜 스택" },
+    { id: "max", label: "Math.max" },
+  ]}
+  steps={[
+    { from: "code", to: "engine", label: "Math.max(...prices)", title: "전개 호출", detail: "prices의 이터레이터를 돌며 인자 목록을 만든다." },
+    { from: "engine", to: "stack", label: "인자 125,000개", title: "인자를 스택에 올린다", detail: "원소 하나가 인자 하나다. 12만 5천 개는 스택 안에 들어간다." },
+    { from: "stack", to: "max", label: "호출", title: "정상 실행", detail: "Math.max가 인자를 훑어 최댓값을 돌려준다.", payload: "125000 ok 124999" },
+    { from: "engine", to: "stack", label: "인자 130,000개", title: "스택이 모자란다", detail: "인자를 올리다가 스택 한도를 넘는다. 함수 본문은 시작도 못 했다." },
+    { from: "stack", to: "code", label: "RangeError", title: "스택 넘침", detail: "재귀가 없어도 같은 에러가 난다. 경계는 엔진과 스택 크기 설정에 따라 다르다.", payload: "RangeError: Maximum call stack size exceeded" },
+  ]}
+/>
+
+경계 숫자는 고정된 값이 아니다. `node --stack-size=2000`으로 스택을 키우면 13만 개도 통과했다. 브라우저마다, 그리고 호출하는 위치의 스택 깊이에 따라서도 달라진다. 그러니 "몇 개까지 괜찮다"를 외울 게 아니라, 크기가 정해지지 않은 배열은 함수 인자로 펼치지 않는다는 규칙으로 기억한다. 같은 이유로 `Math.max.apply(null, big)`도, `arr.push(...big)`도 같은 에러를 낸다.
+
+```js
+const big = Array.from({ length: 1_000_000 }, (_, i) => i);
+// 스택을 쓰지 않는 방법
+console.log(big.reduce((m, n) => (n > m ? n : m), -Infinity));
+let m = -Infinity;
+for (const n of big) if (n > m) m = n;
+console.log(m);
+```
+
+```text
+999999
+999999
+```
+
+### 누산기를 매번 펼치면
+
+두 번째 비용은 더 조용하다. `reduce`로 객체나 배열을 모으면서 매번 새로 펼치는 코드다. 불변으로 쓰려는 좋은 의도에서 나온다.
+
+```js
+const rows = (n) => Array.from({ length: n }, (_, i) => ({ id: `u${i}`, score: i }));
+
+// 매번 새 객체에 지금까지의 속성을 전부 복사한다
+const spreadIndex = (list) => list.reduce((acc, r) => ({ ...acc, [r.id]: r }), {});
+// 누산기를 직접 고친다 (reduce 안에서만 쓰는 객체라 안전하다)
+const mutateIndex = (list) => list.reduce((acc, r) => { acc[r.id] = r; return acc; }, {});
+const fromEntries = (list) => Object.fromEntries(list.map((r) => [r.id, r]));
+// 배열 버전
+const spreadArr = (list) => list.reduce((acc, r) => [...acc, r.score], []);
+const pushArr = (list) => list.reduce((acc, r) => { acc.push(r.score); return acc; }, []);
+```
+
+Node 22에서 행 수를 늘려 가며 쟀다.
+
+```text
+1000  spreadIndex=265.2ms  mutateIndex=1.5ms  fromEntries=1.6ms  spreadArr=2.7ms  pushArr=0.1ms
+5000  spreadIndex=6196.4ms  mutateIndex=0.6ms  fromEntries=6.3ms  spreadArr=48.3ms  pushArr=0.5ms
+10000  spreadIndex=26186.4ms  mutateIndex=2.8ms  fromEntries=10.8ms  spreadArr=98.6ms  pushArr=0.4ms
+```
+
+행 1만 개에 26초다. 행이 두 배가 되면 시간이 네 배 가까이 는다. k번째 단계에서 지금까지의 k개를 전부 복사하니 합치면 1 + 2 + … + n, 즉 n²/2번 복사한다. 아래 그림에서 다음을 누르면 복사 횟수가 쌓이는 모습을 본다.
+
+<AlgoTrace
+  caption="매번 펼치면 k번째 단계에서 k개를 복사한다. 다 합치면 n²/2번이다."
+  memoryLabel="누적 복사 횟수"
+  cells={["u0", "u1", "u2", "u3", "u4"]}
+  steps={[
+    { pointer: 0, memory: ["u0: 0개 복사 + 1"], caption: "빈 객체를 펼치고 u0을 넣는다. 복사할 게 없다." },
+    { pointer: 1, memory: ["u0: 0개 복사 + 1", "u1: 1개 복사 + 1"], caption: "새 객체에 u0을 복사하고 u1을 넣는다." },
+    { pointer: 2, memory: ["누적 3", "u2: 2개 복사 + 1"], caption: "u0, u1을 다시 복사한다. 지난번에 복사한 것을 또 복사한다." },
+    { pointer: 3, memory: ["누적 6", "u3: 3개 복사 + 1"], caption: "단계마다 복사량이 하나씩 는다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["누적 10", "n = 1만이면 약 5천만"], caption: "다섯 개에 10번. 1만 개면 5천만 번이고, 객체 키는 배열 원소보다 복사가 훨씬 비싸다." },
+  ]}
+/>
+
+객체 버전이 배열 버전보다 훨씬 느린 건, 키가 계속 늘어나는 객체를 매번 새로 만들면 V8이 속성 구조(hidden class)를 새로 잡거나 키가 많은 객체를 사전(dictionary) 모드로 다루면서 키 하나를 복사하는 비용이 배열 원소보다 커지기 때문으로 보인다. 고치는 방법은 두 가지다. 누산기는 `reduce`가 처음 만든 새 객체라 바깥에서 아무도 보지 않으니 직접 고쳐도 불변성이 깨지지 않는다. 아니면 `Object.fromEntries`로 한 번에 만든다. 불변으로 쓰는 이유는 "남과 함께 쓰는 값을 몰래 바꾸지 않으려는 것"이지, 함수 안에서 막 만든 값까지 매번 복사하자는 게 아니다.
+
+## React 컴포넌트에서 props를 펼칠 때
+
+React에서 전개와 나머지는 props를 다룰 때 가장 많이 쓴다. 디자인 시스템의 버튼처럼 몇 개 props만 직접 쓰고 나머지는 DOM 요소에 그대로 넘기는 패턴이다. React 19.1 개발 빌드의 `renderToStaticMarkup`으로 돌려 본 결과다.
+
+```jsx
+function Button({ variant = "primary", ...rest }) {
+  return <button className={`btn btn-${variant}`} {...rest} />;
+}
+function BadButton(props) {
+  return <button className="btn" {...props} />;
+}
+
+<Button variant="ghost" type="submit" aria-label="저장">저장</Button>
+<BadButton isActive type="button">저장</BadButton>
+<Button className="wide">덮어쓰기</Button>
+```
+
+```text
+<button class="btn btn-ghost" type="submit" aria-label="저장">저장</button>
+React does not recognize the `isActive` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `isactive` instead. If you accidentally passed it from a parent component, remove it from the DOM element.
+<button class="btn" type="button">저장</button>
+<button class="wide">덮어쓰기</button>
+```
+
+첫 줄이 의도한 모양이다. `variant`는 꺼내서 썼으니 DOM으로 가지 않고, `type`과 `aria-label`은 `rest`에 담겨 그대로 넘어갔다. 두 번째는 props를 통째로 펼쳐서 컴포넌트 전용 prop인 `isActive`까지 DOM에 넘기려다 경고가 났다(개발 빌드에서만 보인다). 쓰는 prop은 나머지 패턴으로 먼저 꺼내야 한다.
+
+세 번째가 조용한 버그다. `{...rest}`를 `className` 뒤에 펼쳤으니 호출하는 쪽의 `className="wide"`가 컴포넌트의 `btn btn-primary`를 덮어써 버렸다. 객체 전개와 같은 "뒤에 쓴 것이 이긴다" 규칙이다. 덮어쓰면 안 되는 prop은 펼친 뒤에 쓰고, 합쳐야 하는 prop은 직접 합친다.
+
+```jsx
+function Button({ variant = "primary", className, ...rest }) {
+  return <button {...rest} className={`btn btn-${variant} ${className ?? ""}`} />;
+}
+```
+
+상태를 갱신할 때도 전개를 쓴다. 폼 필드 하나를 바꾸면서 나머지는 그대로 두는 코드다.
+
+```jsx
+const onChange = (e) => setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+```
+
+`...prev`로 이전 값을 복사하고 바뀐 키 하나만 덮어쓴다. 바깥 한 겹만 새로 만드니, 중첩된 객체를 바꿀 때는 경로마다 펼쳐야 한다. 그 이야기는 [React 상태를 불변으로 다루기](/posts/js-immutability-react)에서 이어 간다. 배열 상태에서 쓰는 `[...prev, item]` 같은 모양은 [배열을 고치는 메서드와 사본을 주는 메서드](/posts/js-array-mutation)에 모아 두었다.
+
+## TypeScript는 길이를 모르는 전개를 막는다
+
+```ts
+function move(x: number, y: number) { return x + y; }
+
+const pos = [10, 20];
+move(...pos); // 에러
+
+const tuple = [10, 20] as const;
+move(...tuple); // 통과
+
+function log(level: "info" | "warn", ...args: [message: string, code?: number]) {
+  return [level, ...args];
+}
+log("info", "start");
+log("warn", "slow", 504);
+log("info", 1); // 에러
+```
+
+```text
+tss.ts(3,6): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+tss.ts(9,13): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+```
+
+`[10, 20]`의 타입은 `number[]`라서 길이를 모른다. 0개일 수도 3개일 수도 있으니 정확히 두 개를 받는 함수에 펼치는 걸 막는다. `as const`로 길이가 정해진 튜플로 만들면 통과한다. 나머지 매개변수에 튜플 타입을 붙이면 "첫 인자는 문자열, 두 번째는 선택적 숫자" 같은 모양을 강제할 수 있고, `message`, `code` 같은 이름은 에디터의 인자 힌트에 그대로 보인다.
+
+## undefined는 건너뛰는 병합 함수
+
+앞에서 본 문제를 직접 풀어 보자. `{ ...defaults, ...options }`는 `undefined` 값으로 기본값을 지운다. 기본값 객체 하나와 옵션 객체 여러 개를 받아, 값이 `undefined`인 키는 건너뛰고 병합하는 함수를 만든다. `null`은 의도한 값으로 보고 덮어쓴다. 옵션 자리에 `null`이나 `undefined`가 와도 터지면 안 된다. 처음 코드는 지금의 문제를 그대로 가진 단순 버전이다.
+
+<CodePlayground
+  caption="undefined를 건너뛰는 mergeDefined"
+  functionName="mergeDefined"
+  initialCode={`function mergeDefined(defaults, ...sources) {
+  // 지금은 전개와 똑같이 동작한다. undefined 값이 기본값을 지운다.
+  return Object.assign({}, defaults, ...sources);
+}`}
+  solution={`function mergeDefined(defaults, ...sources) {
+  const result = { ...defaults };
+  for (const source of sources) {
+    for (const [key, value] of Object.entries(source ?? {})) {
+      if (value !== undefined) result[key] = value;
+    }
+  }
+  return result;
+}`}
+  tests={[
+    { args: [{ retry: 3, timeoutMs: 5000 }, { retry: 0 }], expected: { retry: 0, timeoutMs: 5000 }, label: "0은 덮어쓴다" },
+    { args: [{ retry: 3, timeoutMs: 5000 }, { retry: undefined }], expected: { retry: 3, timeoutMs: 5000 }, label: "undefined는 건너뛴다" },
+    { args: [{ retry: 3, lang: "ko" }, { lang: null }], expected: { retry: 3, lang: null }, label: "null은 덮어쓴다" },
+    { args: [{ a: 1 }, { b: 2 }, { a: undefined, c: 3 }], expected: { a: 1, b: 2, c: 3 }, label: "여러 옵션" },
+    { args: [{ a: 1 }, null, undefined], expected: { a: 1 }, label: "옵션이 null, undefined" },
+    { args: [{ a: 1 }], expected: { a: 1 }, label: "옵션 없음" },
+  ]}
+/>
+
+풀이는 나머지 매개변수로 옵션 객체 여러 개를 배열로 받고, 결과 객체는 기본값을 전개해 새로 만든 뒤 그 안에서만 고친다. 바깥에서 받은 `defaults`는 건드리지 않는다. 앞 절의 "함수 안에서 막 만든 객체는 고쳐도 된다"를 그대로 쓴 것이다.
+
+## 세 점 앞에서 물어볼 것
+
+`...`를 볼 때마다 두 가지를 묻는다. 펼치는가 모으는가(값 자리인가 이름 자리인가), 그리고 배열 쪽인가 객체 쪽인가. 배열 쪽은 이터레이터를 돌고 이터러블이 아니면 터진다. 객체 쪽은 자기 속성 중 열거 가능한 것만 베끼고, `null`은 무시하고, 뒤에 쓴 값이 이긴다. 함수 인자로 펼치면 원소마다 스택을 쓰니 크기를 모르는 배열은 펼치지 않는다. 맨 앞의 `Math.max(...prices)`는 `reduce`나 `for` 문으로 바꾸면 100만 개에서도 돈다.
+
+## 면접에서 나올 만한 질문
+
+### 전개와 나머지는 어떻게 구분하나?
+
+같은 `...`이지만 놓인 자리로 구분한다. 함수 호출 인자, 배열 리터럴, 객체 리터럴처럼 값이 들어갈 자리면 묶음을 펼치는 전개다. 매개변수나 구조 분해 패턴처럼 이름이 들어갈 자리면 남은 것을 배열이나 객체로 모으는 나머지다. 나머지는 항상 맨 끝에 하나만 올 수 있고, 전개는 어디든 여러 번 쓸 수 있다.
+
+### `[...obj]`와 `{...obj}`는 내부적으로 무엇이 다른가?
+
+배열 전개는 이터레이터 프로토콜로 값을 꺼내니 이터러블(배열, 문자열, Set, Map, NodeList)만 펼칠 수 있고 일반 객체나 `null`은 TypeError다. 객체 전개는 자기 속성 중 열거 가능한 것(심볼 키 포함)을 읽어 새 객체에 정의한다. `null`과 `undefined`는 무시하고, 프로토타입의 속성은 가져오지 않는다.
+
+### 클래스 인스턴스를 `{ ...instance }`로 복사하면 어떻게 되나?
+
+자기 속성만 복사되니 프로토타입에 있는 메서드가 사라지고 `instanceof`도 false가 된다. `Date`와 `Map`처럼 데이터를 내부 슬롯에 두는 객체는 빈 객체가 된다. getter는 복사하는 순간의 값으로 박힌다. 인스턴스를 복사하려면 클래스에 복사 메서드를 두거나 `structuredClone`(클래스 정보는 역시 잃는다) 같은 다른 방법을 쓴다.
+
+### `{ ...defaults, ...options }`에서 주의할 점은?
+
+뒤에 쓴 것이 이기니 순서가 우선순위다. 그리고 `options`에 키가 있고 값이 `undefined`면 기본값을 `undefined`로 덮어쓴다. 폼 값처럼 빈 필드가 `undefined`로 실려 오는 경우 기본값이 사라진다. `undefined`를 걸러 내는 병합 함수를 쓰거나 옵션을 만들 때 키를 빼야 한다.
+
+### 전개와 Object.assign의 차이는?
+
+`Object.assign`은 첫 인자인 대상 객체를 고치고 그 객체를 돌려준다. 대상에 대입하는 방식이라 대상의 setter가 불린다. 전개는 항상 새 객체를 만들고 속성을 정의하니 setter가 불리지 않는다. 새 객체가 필요하면 전개, 기존 객체를 일부러 고쳐야 하면 assign을 쓴다.
+
+### `Math.max(...arr)`가 큰 배열에서 실패하는 이유는?
+
+함수 호출에서 전개하면 원소마다 인자 하나가 되어 스택에 올라가기 때문이다. Node 22 기본 설정에서는 12만 5천 개는 되고 13만 개에서 `RangeError: Maximum call stack size exceeded`가 났다. 경계는 엔진과 스택 크기에 따라 다르다. 크기를 모르는 배열은 `reduce`나 `for` 문으로 처리하고, `push(...big)`, `apply`도 같은 문제가 있다.
+
+### reduce 안에서 `{ ...acc, [k]: v }`를 쓰면 왜 느린가?
+
+단계마다 지금까지 모은 것을 전부 새 객체에 복사하니 전체 복사량이 n²/2가 된다. 실제로 행 1만 개에 26초가 걸렸고, 누산기를 직접 고친 버전은 3ms였다. 누산기는 reduce가 막 만든 객체라 바깥에서 아무도 보지 않으니 고쳐도 불변성이 깨지지 않는다. `Object.fromEntries`로 한 번에 만드는 방법도 있다.
+
+### React에서 `{...props}`를 DOM 요소에 펼칠 때 주의할 점은?
+
+컴포넌트 전용 prop까지 DOM에 넘어가면 React가 개발 모드에서 알 수 없는 prop이라고 경고하고, 잘못된 속성이 HTML에 실릴 수 있다. 쓰는 prop은 나머지 패턴으로 먼저 꺼내고 `rest`만 펼친다. 또 펼치는 위치에 따라 호출하는 쪽 값이 컴포넌트의 `className` 같은 값을 덮어쓰니, 지켜야 하는 prop은 전개 뒤에 쓰고 합쳐야 하는 prop은 직접 합친다.

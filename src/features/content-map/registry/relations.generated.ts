@@ -2,6 +2,45 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "js-spread-rest": {
+    "links": [
+      "js-destructuring",
+      "js-array-mutation"
+    ],
+    "mentions": []
+  },
+  "js-destructuring": {
+    "links": [
+      "js-spread-rest",
+      "react-rerender"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "pattern-iterator",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "js-array-mutation": {
+    "links": [
+      "js-array-transform",
+      "js-primitive-vs-reference",
+      "js-spread-rest"
+    ],
+    "mentions": []
+  },
+  "js-array-transform": {
+    "links": [
+      "js-array-mutation",
+      "js-equality-coercion",
+      "js-promise-combinators",
+      "react-rerender",
+      "js-spread-rest"
+    ],
+    "mentions": [
+      "pattern-iterator",
+      "js-truthy-falsy-typeof"
+    ]
+  },
   "js-promise-combinators": {
     "links": [
       "js-callback-hell",
@@ -15,7 +54,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "streaming-ssr-suspense",
       "rendering-strategies",
-      "event-loop"
+      "event-loop",
+      "js-destructuring"
     ]
   },
   "js-async-await": {
@@ -28,7 +68,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
-      "js-truthy-falsy-typeof"
+      "js-truthy-falsy-typeof",
+      "js-destructuring"
     ]
   },
   "js-promises": {
@@ -145,7 +186,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-hoisting-tdz"
     ],
     "mentions": [
-      "json-crud-http"
+      "json-crud-http",
+      "js-destructuring"
     ]
   },
   "js-equality-coercion": {
@@ -163,7 +205,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-equality-coercion",
       "js-truthy-falsy-typeof",
       "js-var-let-const",
-      "react-rerender"
+      "react-rerender",
+      "js-array-mutation"
     ],
     "mentions": []
   },
@@ -3199,6 +3242,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "resilience-patterns",
       "http-versions",
+      "js-destructuring",
       "loading-patterns",
       "grpc",
       "design-patterns-overview",
